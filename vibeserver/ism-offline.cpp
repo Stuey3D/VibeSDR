@@ -116,7 +116,10 @@ int main(int argc, char** argv) {
                                        : "LoRa · sync 0x" + vibelora::crypto::toHex(&m.sync, 1, true) + " · " + std::to_string(m.len) + " bytes";
                 std::printf("%8.3f s  %9.4f MHz  SF%d %5.1f kHz CR4/%d  SNR %5.1f dB  %s\n", t + double(n) / rate, h.f.freqHz / 1e6, h.f.sf,
                             h.f.bw / 1e3, 4 + h.f.cr, h.f.snrDb, line.c_str());
-                mesh.accept(m, t);
+                std::vector<vibelora::Event> ev;
+                mesh.accept(m, t, galLog ? &ev : nullptr);
+                capT = t;
+                for (const auto& e : ev) { Heard hd; hd.kind = e.kind; hd.name = e.name; hd.line = e.line; hd.freqHz = e.freqHz; galLog->heard(hd); }
             }
         }
         t += n / rate;

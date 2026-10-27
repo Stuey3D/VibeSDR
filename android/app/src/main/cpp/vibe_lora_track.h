@@ -77,9 +77,10 @@ public:
             while (r.msgs.size() > 5) r.msgs.pop_front();
             ++texts_;
             news = true;
-            if (ev) ev->push_back({m.proto, x.from.empty() ? std::string(m.proto == "meshcore" ? "MeshCore" : "Meshtastic") : x.from,
+            // ★ the gallery keeps each public message as its own row ("meshmsg", vibe_ism_gallery.h)
+            if (ev) ev->push_back({"meshmsg", x.from.empty() ? std::string(m.proto == "meshcore" ? "MeshCore" : "Meshtastic") : x.from,
                                    (m.proto == "meshcore" ? std::string("MeshCore") : std::string("Meshtastic")) + mkDot() + (x.channel.empty() ? "" : x.channel + mkDot())
-                                   + (x.from.empty() ? "" : x.from + ": ") + x.text, m.freqHz});
+                                   + (x.from.empty() ? "" : x.from + ": ") + "\xe2\x80\x9c" + x.text + "\xe2\x80\x9d", m.freqHz});
         }
         if (m.what == "position" || m.what == "advert" || m.what == "nodeinfo") news = news || fresh;
         r.line = lineOf(r);
