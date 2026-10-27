@@ -426,6 +426,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    audio panel's STEREO switch, no toggle where the owner switched it off. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-vfo-ab.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ GitHub #57 / Stuart's hard rule: the waterfall through a LOCKED tune (the tuner following), zooms and a fast spin
+#    stays one continuous trail (no torn rows, on the wire and on the canvas), and a resize keeps the history. Headless
+#    Edge, --mute-audio, the real server. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-web-waterfall-history.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
@@ -786,6 +791,9 @@ if node --no-warnings scripts/test_blindTuneGate.ts; then pass=$((pass+1)); else
 #    a Retina 60 Hz panel is a steady 30 rows/s (it flipped 1 <-> 2 on the 1.5 knife-edge: Stuart's
 #    "sticky" Safari waterfall, 2026-10-20), never two rows in a frame, Sharp on a cadence too.
 if node --no-warnings scripts/test_wf_pacing.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ GitHub #57 / Stuart's hard rule: the APP's waterfall history — each row placed once against its view, a locked tune
+#    and a zoom draw one continuous (bending / fanning) trail, nothing older is ever rewritten. Pure logic.
+if node --no-warnings scripts/test_wf_row_place.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE ROW TARGET FOLLOWS THE FEED (src/assets/wfRowTarget.ts, Stuart 10-20): Default min(20, 3x), Smooth min(60, 6x),
 #    snapped to a divisor of 60 — the app, the web client and the native engine (wf_row_target.h) share the rule.
 if node --no-warnings scripts/test_wf_row_target.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
