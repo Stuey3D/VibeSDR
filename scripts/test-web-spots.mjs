@@ -8,6 +8,8 @@
 //   • the MAP is coloured by MODE: every marker's fill and letter is its mode's (src/utils/digiModes.ts), and the legend
 //     lists the modes this server decodes;
 //   • the box header carries a chip per mode (V12 Band governor: active / light / idle / shed / off);
+//   • the box header SCROLLS at 1440 px and 375 px (wheel, trackpad, finger, the › arrow; ✕ reachable), its title is one
+//     line, and its MAP key opens the spots map (2026-10-27);
 //   • at PHONE WIDTH (390 px) nothing scrolls sideways; no exception on the page.
 //   Screenshots go to VIBE_SHOT_DIR (default: the OS temp folder).
 // ★ SILENT: headless Edge with --mute-audio and --disable-audio-output.
@@ -55,6 +57,14 @@ const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port),
                   { env, stdio: ['ignore', fs.openSync(logPath, 'w'), fs.openSync(logPath, 'a')] });
 const prof = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-webspots-edge-'));
 let edge = null;
+// ★ A watchdog: a CDP call that never answers must FAIL the run, never leave Edge, the server and the fake radio running.
+const watchdog = setTimeout(() => { console.log('   FAIL driver: no answer within 300 s');
+  for (const c of [edge, srv, rtl]) { try { c?.kill('SIGKILL'); } catch { /* gone */ } }
+  try { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(prof, { recursive: true, force: true }); } catch { /* best effort */ }
+  process.exit(1); }, 300000);
+// ★ And a memory ceiling for the driver itself.
+const rssGuard = setInterval(() => { if (process.memoryUsage().rss > 1024 * 1024 * 1024) { console.log('   FAIL driver RSS over 1 GB'); clearTimeout(watchdog);
+  for (const c of [edge, srv, rtl]) { try { c?.kill('SIGKILL'); } catch { /* gone */ } } process.exit(1); } }, 2000);
 try {
   for (let i = 0; i < 150; i++) {
     if (await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); })) break;
@@ -105,6 +115,20 @@ try {
   };
   const chan = () => ev(`(() => { const c = document.getElementById('mChan'); return c && !c.hidden ? c.textContent : ''; })()`);
 
+  /* ★★ THE MODE MENU DRAWS NO DEAD WHOLE-RADIO MODES (Stuart, 2026-10-27, his RSP1B: "those dead buttons can be hidden").
+   *  ADS-B / ISM / NDB / AIS are drawn exactly where vibeserver.json says the mode can run (true); a refusal (false, with
+   *  its reason) and an older server's silence both draw nothing. This server runs at 0.96 MS/s, below ADS-B's 2.4. */
+  console.log('── the mode menu: no dead modes ──');
+  await ev(`document.getElementById('mMode').click()`);
+  ok(await until(`!!document.querySelector('#mModeMenu .mModeOpt')`, 4000), 'the mode menu opened');
+  const opts = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#mModeMenu .mModeOpt')].map(b => b.textContent.trim()))`));
+  for (const [k, label] of [['adsb', 'ADS-B'], ['ism', 'ISM'], ['ndb', 'NDB'], ['ais', 'AIS']]) {
+    ok(opts.includes(label) === (st[k] === true), `${label}: ${st[k] === true ? 'can run here — drawn' : `refused or absent (${st[k]}${st[k + 'Why'] ? ': ' + st[k + 'Why'] : ''}) — not drawn`}`);
+  }
+  ok(await ev(`!document.querySelector('#mModeMenu .mModeOpt.dis')`), `nothing in the menu is drawn greyed (${opts.join(' ')})`);
+  await ev(`(() => { const m = document.getElementById('mModeMenu'); const x = m && [...m.querySelectorAll('button')].find(b => /CLOSE|DONE|✕/.test(b.textContent)); if (x) x.click(); else m?.remove(); })()`);
+  await sleep(300);
+
   console.log('── the two buttons ──');
   ok(await until(`!document.getElementById('spotsBandBtn').hidden`, 8000), 'DIGITAL SPOTS: BAND is offered (this radio reaches 20 m)');
   ok(await ev(`document.getElementById('spotsBtn').textContent.trim()`) === 'DIGITAL SPOTS: SINGLE MODE', 'the old button is DIGITAL SPOTS: SINGLE MODE');
@@ -139,6 +163,97 @@ try {
   ok(chips.some((c) => c.m === 'FT8' && (c.st === 'active' || c.st === 'light')) && chips.some((c) => c.m === 'WSPR' && c.st === 'idle'),
      'FT8 (stations on air) decoding, WSPR (nothing in its window) idle');
   const shotBand = await shot('spots-band-desktop.png');
+
+  /* ★★ THE BOX HEADER (Stuart, 2026-10-27: "i also cannot scroll the header" — Band's mode chips ran off the end of a
+   *  560 px box, which only became a scroller below 420 px, so they, MINIMISE and ✕ were cut off; and "the header needs
+   *  a map button too"). At a wide window AND a phone: the row is a scroller, the title is one line, a WHEEL, the ›
+   *  arrow and (phone) a finger all move it, the last control (✕) can be scrolled into the box, and MAP is there and
+   *  opens the spots map. Screenshots go to SHOTS. */
+  console.log('── the box header scrolls; MAP in it ──');
+  /** A CDP call with a deadline: null if the browser has not answered by then (never hang the run). */
+  const sendT = (method, params, ms) => Promise.race([send(method, params), sleep(ms).then(() => null)]);
+  // ★ A HIDDEN headless page runs no smooth scroll and no scroll gesture (visibilityState was 'hidden' here): bring it
+  //   to the front, or the › arrow and a finger drag "fail" for a reason that is the browser's, not the page's.
+  await sendT('Page.bringToFront', {}, 5000);
+  await sendT('Emulation.setFocusEmulationEnabled', { enabled: true }, 5000);
+  await sleep(300);
+  const head = async () => JSON.parse(await ev(`JSON.stringify((() => { const h = document.getElementById('decBoxHead'), b = document.getElementById('decBox').getBoundingClientRect(),
+      t = document.getElementById('decTitle').getBoundingClientRect(), x = document.getElementById('decHide').getBoundingClientRect(), m = document.getElementById('sfMap');
+      return { ox: getComputedStyle(h).overflowX, sw: h.scrollWidth, cw: h.clientWidth, sl: h.scrollLeft, titleH: t.height, lineH: parseFloat(getComputedStyle(document.getElementById('decTitle')).lineHeight) || 16,
+               xIn: x.left >= b.left - 1 && x.right <= b.right + 1, map: !!m && !m.hidden && !!m.offsetParent, boxW: b.width,
+               mid: { x: (h.getBoundingClientRect().left + h.getBoundingClientRect().right) / 2, y: (h.getBoundingClientRect().top + h.getBoundingClientRect().bottom) / 2 } }; })())`));
+  const headerAt = async (w, h, mobile, tag) => {
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: mobile ? 2 : 1, mobile });
+    await send('Emulation.setTouchEmulationEnabled', { enabled: mobile, maxTouchPoints: mobile ? 5 : 1 });
+    await sleep(1200);
+    await ev(`document.getElementById('decBoxHead').scrollLeft = 0`);
+    await sleep(200);
+    let s = await head();
+    ok(s.ox === 'auto' && s.sw > s.cw + 20, `${tag}: the header is a scroller and has more than fits (box ${Math.round(s.boxW)} px, row ${s.sw} > ${s.cw})`);
+    ok(s.titleH <= s.lineH * 1.5, `${tag}: the title is one line (${Math.round(s.titleH)} px; it stood one word per line)`);
+    ok(s.map, `${tag}: MAP is in the header (spots with grids are listed)`);
+    await shot(`spots-header-${w}.png`);
+    if (!mobile) {
+      // ★ The wheel as a page event: headless Edge's Input.dispatchMouseEvent 'mouseWheel' never answered here (it waits
+      //   for a compositor ack), and a hung driver is worse than a narrower test. The handler is what is under test.
+      await ev(`document.getElementById('decBoxHead').dispatchEvent(new WheelEvent('wheel', { deltaY: 240, bubbles: true, cancelable: true }))`);
+      await sleep(300);
+      const s2 = await head();
+      ok(s2.sl > 50, `${tag}: a mouse wheel scrolls it sideways (scrollLeft 0 → ${Math.round(s2.sl)})`);
+      await ev(`document.getElementById('decBoxHead').scrollLeft = 0`);
+      // ★ A trackpad's sideways swipe: the browser's own scrolling, which only works on a real scroll container.
+      const g = await sendT('Input.synthesizeScrollGesture', { x: Math.round(s.mid.x), y: Math.round(s.mid.y), xDistance: -240, yDistance: 0, gestureSourceType: 'mouse', speed: 1600 }, 15000);
+      await sleep(400);
+      if (g === null) console.log(`   (not run — ${tag}: the browser did not answer a sideways scroll gesture)`);
+      else ok((await head()).sl > 50, `${tag}: a sideways (trackpad) scroll moves it (scrollLeft ${Math.round((await head()).sl)})`);
+    } else {
+      // ★ A real finger through the input pipeline: down, eight moves leftward, up.
+      const fy = Math.round(s.mid.y), fx0 = Math.round(s.mid.x + 120);
+      await sendT('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: fx0, y: fy }] }, 5000);
+      for (let i = 1; i <= 8; i++) { await sendT('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: fx0 - i * 30, y: fy }] }, 5000); await sleep(16); }
+      await sendT('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, 5000);
+      await sleep(400);
+      ok((await head()).sl > 50, `${tag}: a finger drag scrolls it (scrollLeft ${Math.round((await head()).sl)})`);
+    }
+    await ev(`document.getElementById('decBoxHead').scrollLeft = 0`);
+    await sleep(300);
+    const arrDiag = await ev(`(() => { const a = document.querySelector('.decHeadArr.right'), r = a.getBoundingClientRect(), e = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return document.getElementById('decHeadWrap').className + ' disp=' + getComputedStyle(a).display + ' at=' + (e ? e.tagName + '.' + e.className + '#' + e.id : 'none'); })()`);
+    await trustedClick('.decHeadArr.right');
+    await sleep(1500);
+    ok((await head()).sl > 50, `${tag}: the › arrow scrolls it (scrollLeft ${Math.round((await head()).sl)}; ${arrDiag})`);
+    await ev(`(() => { const h = document.getElementById('decBoxHead'); h.scrollLeft = h.scrollWidth; })()`);
+    await sleep(300);
+    ok((await head()).xIn, `${tag}: scrolled to the end, ✕ (the last control) is inside the box`);
+    await shot(`spots-header-${w}-end.png`);
+    await ev(`document.getElementById('decBoxHead').scrollLeft = 0`);
+  };
+  await headerAt(1440, 900, false, '1440 px');
+  await headerAt(375, 812, true, '375 px');
+  // ★ The listener's control colours (MENU › CONTROLS): a green key, white text, fully solid — MAP must match its neighbours.
+  await ev(`(() => { const c = (id, i) => document.querySelectorAll('#' + id + ' button')[i]?.click(); c('ctlBtnSw', 1); c('ctlFontSw', 1);
+      const s = document.getElementById('ctlSolid'); s.value = '100'; s.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await sleep(500);
+  ok(await ev(`(() => { const a = getComputedStyle(document.getElementById('sfMap')), b = getComputedStyle(document.getElementById('sfAge'));
+      return a.backgroundColor === b.backgroundColor && a.color === b.color && a.borderColor === b.borderColor && a.fontFamily === b.fontFamily; })()`),
+     'with the listener\'s own control colours, MAP looks exactly like its neighbours (same background, text, border, font)');
+  await shot('spots-header-375-colours.png');
+  await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await sleep(800);
+  await shot('spots-header-1440-colours.png');
+  await ev(`document.getElementById('ctlReset').click()`);
+  // ★ MAP in the header opens the spots map (a real click: the browser lets only a gesture open a window).
+  {
+    const before2 = new Set((await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json())).map((t) => t.id));
+    await trustedClick('#sfMap');
+    let t2 = null;
+    for (let i = 0; i < 40 && !t2; i++) { await sleep(250); t2 = (await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json())).find((t) => t.type === 'page' && !before2.has(t.id)); }
+    ok(!!t2, `the header's MAP opened the spots map${t2 ? ` ("${t2.title || t2.url}")` : ''}`);
+    if (t2) await fetch(`http://127.0.0.1:${cdp}/json/close/${t2.id}`).catch(() => {});
+  }
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  await sleep(800);
 
   console.log('── the arrows step bands ──');
   await trustedClick('#mVfoUp');
@@ -217,6 +332,7 @@ try {
   ok(errs.length === 0, `no exception on the page${errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''}`);
   console.log(`   screenshots: ${[shotBand, path.join(SHOTS, 'spots-map-by-mode.png'), shotPhone].join('  ')}`);
 } finally {
+  clearTimeout(watchdog); clearInterval(rssGuard);
   try { edge?.kill('SIGTERM'); } catch {}
   srv.kill('SIGTERM'); rtl.kill('SIGTERM');
   await sleep(300);

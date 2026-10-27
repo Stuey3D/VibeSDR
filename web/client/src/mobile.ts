@@ -332,9 +332,16 @@ export function initMobileControls(deps: MobileDeps) {
     /* ★★ ADS-B beside DAB — the other whole-radio mode. When the server says it cannot run here the entry
      *  is still drawn, greyed, and a tap says WHY (the server's own words) — a hidden entry teaches nobody
      *  that the receiver could do it at 2.4 MS/s; a disabled <button> would swallow the tap on a phone,
-     *  where there is no tooltip to read. */
+     *  where there is no tooltip to read.
+     *  ★★★ SUPERSEDED (Stuart, 2026-10-27, on his RSP1B — ADS-B, ISM, NDB and AIS all drawn dashed: "those dead buttons
+     *      can be hidden"). A REFUSED whole-radio mode is now NOT DRAWN, here and for ISM / NDB / AIS below. Every reason
+     *      the server gives (vsAdsbWhyNot and its siblings: the owner switched it off, the owner locked the centre on a
+     *      shared radio, the radio cannot tune there, the capture rate is below what the mode needs) is something a
+     *      listener cannot change from this menu — the owner changes it in Setup, which says why there. None of them is
+     *      a benchmark / load choice, so "the benchmark sets the default, never hides" is not in play. A mode that is ON
+     *      is always drawn, so it can always be left. AGENTS.md: a control that cannot work here is not there. */
     const ac = deps.adsbCap();
-    if (ac) {
+    if (ac && (ac.ok || deps.adsbOn())) {
       const adsbRow = document.createElement('button');
       adsbRow.className = 'mModeOpt' + (deps.adsbOn() ? ' on' : '') + (ac.ok ? '' : ' dis');
       adsbRow.textContent = 'ADS-B';
@@ -346,7 +353,7 @@ export function initMobileControls(deps: MobileDeps) {
     /* ★★ ISM beside ADS-B — the third whole-radio mode, the same three states. Absent where the radio reaches no ISM band
      *  (an HF+): a control that cannot work on this radio is not drawn (AGENTS.md). */
     const ic = deps.ismCap();
-    if (ic) {
+    if (ic && (ic.ok || deps.ismOn())) {   // ★ refused = not drawn (see ADS-B above)
       const ismRow = document.createElement('button');
       ismRow.className = 'mModeOpt' + (deps.ismOn() ? ' on' : '') + (ic.ok ? '' : ' dis');
       ismRow.textContent = 'ISM';
@@ -358,7 +365,7 @@ export function initMobileControls(deps: MobileDeps) {
     /* ★★ NDB beside them — the LF beacon skimmer. Absent where the radio reaches no LF (an RTL without direct sampling,
      *  a HackRF, an Airspy R2): a control that cannot work on this radio is not drawn (AGENTS.md). */
     const nc = deps.ndbCap();
-    if (nc) {
+    if (nc && (nc.ok || deps.ndbOn())) {   // ★ refused = not drawn (see ADS-B above)
       const ndbRow = document.createElement('button');
       ndbRow.className = 'mModeOpt' + (deps.ndbOn() ? ' on' : '') + (nc.ok ? '' : ' dis');
       ndbRow.textContent = 'NDB';
@@ -369,7 +376,7 @@ export function initMobileControls(deps: MobileDeps) {
     }
     /* ★★ AIS beside ISM — the fourth whole-radio mode, the same three states; absent where the radio cannot reach 162 MHz. */
     const aic = deps.aisCap();
-    if (aic) {
+    if (aic && (aic.ok || deps.aisOn())) {   // ★ refused = not drawn (see ADS-B above)
       const aisRow = document.createElement('button');
       aisRow.className = 'mModeOpt' + (deps.aisOn() ? ' on' : '') + (aic.ok ? '' : ' dis');
       aisRow.textContent = 'AIS';
