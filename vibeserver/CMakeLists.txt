@@ -930,6 +930,11 @@ add_test(NAME agc-record COMMAND test-agc-record)
 add_executable(test-diag-scrub "${CMAKE_CURRENT_SOURCE_DIR}/test-diag-scrub.cpp")
 vibe_sanitize(test-diag-scrub)
 add_test(NAME diag-scrub COMMAND test-diag-scrub)
+# ★★★ The tunnel address (tunnel_url.h, 2026-10-27): cloudflared's "failed to request quick Tunnel: Post
+#     \"https://api.trycloudflare.com/tunnel\"" line is never an address (Kiko's TV box recycled on it every 15 s).
+add_executable(test-tunnel-url "${CMAKE_CURRENT_SOURCE_DIR}/test-tunnel-url.cpp")
+vibe_sanitize(test-tunnel-url)
+add_test(NAME tunnel-url COMMAND test-tunnel-url)
 # ★ The fatal-signal record (crash_report.h, 2026-10-06): a fault on a named thread is reported with its
 #   thread, PC as an exe offset and version, and the process still dies of the same signal. Linux only
 #   (prints SKIP elsewhere).
