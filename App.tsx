@@ -55,6 +55,7 @@ import { useDeepLinks }     from './src/linking/useDeepLinks';
 import { crumb }            from './src/services/crumbs';
 import { initMacAudio }     from './src/services/macAudio';
 import { initChatLanguage } from './src/services/chatLangNative';
+import { loadListenerId }   from './src/services/listenerId';
 
 // ★★ The canned chat speaks the listener's language (dialChat.ts chatLangChoice): the device's list now, the drawer's
 //    remembered pick when storage answers, the server's country when a shared dial says it. Once, at launch.
@@ -323,6 +324,10 @@ export default function App() {
   // Install the global JS crash guard once — flaky SDR servers must never abort
   // the whole app; recover to the picker with a server-attributed message.
   useEffect(() => { installCrashGuard(navigationRef); }, []);
+
+  // ★ The listener id (listenerIdCore.ts) read once at start-up, so every VibeServer socket has it to hand — the web's
+  //   `bid`, which lets the server judge the app exactly as it judges a browser (Stuart 2026-10-27).
+  useEffect(() => { void loadListenerId(); }, []);
 
   // ── High Detail Maps: asked ONCE (Stuart, 2026-09-27) ──────────────────────
   //    On first launch — which includes the first launch after updating from an older build, since

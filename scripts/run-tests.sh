@@ -416,6 +416,10 @@ VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 VFO A/B through the real server: lower VFO left / higher right in ONE stream, B's own squelch, the window refusal,
 #    the listener-slot yield, an old client untouched, a shared dial's private stream. Same VIBESERVER_BIN rule.
+# ★★★ THE APP'S LISTENER ID through two real radio processes: the app's second radio gets the web's answer under every owner
+#    setting (maxRadiosPerIp default/2/0/1); two installs behind one address are two listeners. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-listener-id.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-vfo-ab.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 a FREE VFO walking across the tuner's DC (vibe_vfo_dc.h, GitHub #57): the DC moved out of the passband, one retune
@@ -502,6 +506,9 @@ if node --no-warnings scripts/test_faceplate.ts; then pass=$((pass+1)); else fai
 if node --no-warnings scripts/test_mpx_power.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ LOCKED VFO CENTRE (tuneWindow.ts): every app tune clamps into the owner's window, the server's own rule (Stuart 2026-10-18: the app tuned into the black).
 if node --no-warnings scripts/test_tune_window.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE APP'S LISTENER ID (listenerIdCore.ts): the web's `bid`, one per install, on every VibeServer socket — so the server's
+#    radios-per-listener rule judges the app exactly as a browser (Stuart 2026-10-27, two radios on one server).
+if node --no-warnings scripts/test_listener_id.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ V12 THE SCANNER ENGINE (scanner.ts, docs/v12/SCANNER.md): fake backends of every family — hang cancel on an over-change,
 #     noiseRef thresholds, ignores, priority, OWRX hijack PAUSED/resume, no tune ever outside the span (fuzzed), spikes never stop it.
 if node --no-warnings scripts/test_scanner.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
