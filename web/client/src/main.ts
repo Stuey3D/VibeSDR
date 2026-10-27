@@ -41,6 +41,7 @@ import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAu
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
 import { stepsForFreq } from '../../../src/services/sdrTypes';
 import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindow';
+import { buildBookmarkHoverIndex, bookmarkAt, newBookmarkHit, type BookmarkHoverIndex } from '../../../src/utils/bookmarkHover';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
 import { parseDabScan, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
@@ -18717,6 +18718,12 @@ function initPointerFreq(c: HTMLCanvasElement) {
   ptrFreqOn = prefs()['ptrFreq'] !== false;
   const mEl = el.querySelector('.m') as HTMLElement, fEl = el.querySelector('.f') as HTMLElement,
         uEl = el.querySelector('.u') as HTMLElement;
+  const bnEl = el.querySelector('.bn') as HTMLElement | null, bxEl = el.querySelector('.bx') as HTMLElement | null;
+  // ★ GitHub #60 — the bookmark under the pointer (src/utils/bookmarkHover). The index is rebuilt only when either
+  //   list is replaced (search.ts swaps the array on every load, save, import and delete), checked by identity.
+  let bmIdx: BookmarkHoverIndex | null = null, bmUser: unknown = null, bmServer: unknown = null;
+  const bmHit = newBookmarkHit();
+  let shownBm = '', shownMore = -1;
   let px = 0, py = 0, over = false, held = false, raf = 0;
   let rect: DOMRect | null = null, cw = 0;              // canvas rect + clientWidth, cached
   let measure = false;                                  // label text changed: re-read its size next frame
@@ -18759,6 +18766,18 @@ function initPointerFreq(c: HTMLCanvasElement) {
       }
     }
     if (t.out !== shownOut) { shownOut = t.out; el.classList.toggle('out', t.out); }
+    if (bnEl) {
+      const u = getBookmarks(), sv = getServerBookmarks();
+      if (u !== bmUser || sv !== bmServer) { bmUser = u; bmServer = sv; bmIdx = buildBookmarkHoverIndex(u, sv); }
+      bookmarkAt(bmIdx, t.hz, bmHit);
+      if (bmHit.name !== shownBm || bmHit.more !== shownMore) {
+        if (!!bmHit.name !== !!shownBm) el.classList.toggle('hasBm', !!bmHit.name);
+        shownBm = bmHit.name; shownMore = bmHit.more;
+        bnEl.textContent = bmHit.name;
+        if (bxEl) bxEl.textContent = bmHit.more > 0 ? `+${bmHit.more} more` : '';
+        measure = true;
+      }
+    }
     // Below-right of the tip, clear of the cursor; flipped to the other side near the right or bottom edge.
     const GAP_X = 14, GAP_Y = 18;
     let nx = x + GAP_X, ny = y + GAP_Y;

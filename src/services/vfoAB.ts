@@ -110,6 +110,15 @@ export function watchOffered(hwinfo: Record<string, unknown> | null | undefined)
   return n > 0 ? Math.floor(n) : 0;
 }
 
+/** ★★★ TWO SERVERS OR VFO A/B — NEVER BOTH (Stuart, GitHub #57: "There will only be 2 channels at a time, either A/B on
+ *  one server or Server 1 and Server 2, otherwise this gets far too complex for a little touchscreen to navigate let
+ *  alone a game controller or TV remote."). While a two-server pairing exists (`dualPhase` not 'off' — picking the second
+ *  counts: the first is already in an ear), the server's offer is IGNORED: no A/B row on the frequency card, no STEREO
+ *  row, no VFO B colour — no dead controls. Unpairing gives the offer back exactly as the server made it. */
+export function abOfferNow(offered: number, dualPhase: string): number {
+  return dualPhase === 'off' ? offered : 0;
+}
+
 /** ★★ The `watch` STATE's `max` — the same offer, sent again whenever it changes without an hwinfo (the server's
  *  watchTellMax: a listener's own mode into or out of DRM, which takes VFO B away and gives it back). The web reads it
  *  (spectrum.ts `if (w.max >= 0) this.watchMax = w.max`); the app read hwinfo only, so an offer the server re-stated

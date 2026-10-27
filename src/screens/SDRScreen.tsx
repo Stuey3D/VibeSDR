@@ -169,8 +169,9 @@ import ServersChip from '../components/ServersChip';
 import DualServerCard from '../components/DualServerCard';
 import { canListenSecond, dualHolds, dualSupported, dualTransport, foregroundEnded, leaveForeground, listenSecond,
          noteStatus, returnParams, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
+         isFirstRadio, backToFirstRadio,
          useDualShape } from '../services/dualServer';
-import { dualEligible } from '../services/dualMix';
+import { dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
 import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
@@ -217,7 +218,7 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
-import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, vfoATune, DoorSeq, decStartVfo, decTagFor, type VfoABInfo, type VfoId } from '../services/vfoAB';
+import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, vfoATune, DoorSeq, decStartVfo, decTagFor, abOfferNow, type VfoABInfo, type VfoId } from '../services/vfoAB';
 import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
          type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
@@ -616,6 +617,21 @@ export default function SDRScreen({ route, navigation }: Props) {
   const dualCan = dualSupported && dualEligible(route.params);
   /** This screen's side id for code that runs outside a render (cleanups) — set once sessionUuid exists. */
   const dualIdRef = useRef<string | null>(null);
+  /* ★★ PAIRING IS PER RADIO (Gesiima's two dongles on one VibeServer, #57 — Stuart: "Yup they are treated as separate
+   *  instances"). A second screen on the SAME server opens its radio list; adopting a radio passes through here first,
+   *  and the radio the first side is already playing is not a second side — the screen goes back to it (its audio never
+   *  started: the radio list holds the connect). Returns true when it went back. */
+  const bounceIfFirstRadio = (base: string): boolean => {
+    if (!dualSideId || !isFirstRadio(dualSideId, route.params as never, radioKeyOf(base))) return false;
+    const p = backToFirstRadio(dualSideId);
+    if (p) {
+      navigation.reset({ index: 1, routes: [
+        { name: 'InstancePicker', params: { noAutoConnect: true } },
+        { name: 'SDR', params: p },
+      ] } as never);
+    }
+    return true;
+  };
   /* ★★ BACK TO THIS DOOR'S RADIO LIST (src/utils/doorReturn.ts): the visit the screen before this one handed over —
    *  the radio it left (the chooser starts on it) and the PINs and admin credential typed at this door. Taken once. */
   const visitRef = useRef<DoorVisit | null | undefined>(undefined);
@@ -707,6 +723,7 @@ export default function SDRScreen({ route, navigation }: Props) {
          * ★ Setting radioBase to the address we are already on is the honest statement of that: the
          *   radio is chosen, and it is this one. connectBase was going to use it regardless. */
         const namesRadio = /\/r\/[^/]+$/.test(baseUrl);
+        if (namesRadio && bounceIfFirstRadio(baseUrl)) return;   // ★★ the radio already playing — see bounceIfFirstRadio
         if (namesRadio) setRadioBase(baseUrl);
         if (occ && (occ.antenna || occ.landingMessage)) {
           setDoor({
@@ -747,6 +764,7 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  its card says IN USE BY ANOTHER APP and the line under it says why. */
       if (d.radios.length === 1 && !worthReading && d.radios[0].pinLocked !== true
           && d.radios[0].inUseElsewhere !== true) {
+        if (bounceIfFirstRadio(radioBaseUrl(baseUrl, d.radios[0].id))) return;
         setRadioBase(radioBaseUrl(baseUrl, d.radios[0].id));
       }
       setDoorPending(false);
@@ -1033,6 +1051,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   machine-wide PIN path this screen has always used.
    */
   const chooseRadio = useCallback(async (id: string) => {
+    if (bounceIfFirstRadio(radioBaseUrl(baseUrl, id))) return;   // ★★ the radio already playing in the other ear
     chosenFromListRef.current = id;   // ★ Back from it comes back to this list (onBackToPicker)
     const pin = radioPins.current[id];
     if (pin) {
@@ -3145,7 +3164,11 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Turned on and off ONLY from the frequency card (FreqModal — the step sheet until build 498). PER SESSION: a
    *    reconnect starts with one VFO, but what the screen shows is the SERVER'S word (its watch state), never a local
    *    flag a socket reopen or a rotation resets (vfoAB.ts PER SESSION). Offered only where hwinfo says `watch` > 0. */
-  const [abOffered, setAbOffered] = useState(0);
+  const [abOfferedSrv, setAbOffered] = useState(0);
+  /* ★★★ TWO SERVERS OR VFO A/B — NEVER BOTH (Stuart, GitHub #57: "There will only be 2 channels at a time, either A/B on
+   *  one server or Server 1 and Server 2"). While a pairing exists the server's offer is ignored — the A/B row, its
+   *  STEREO row and B's colour go, on BOTH servers' screens; unpairing gives them back (vfoAB.ts abOfferNow). */
+  const abOffered = abOfferNow(abOfferedSrv, dualShape.phase);
   const [abInfo, setAbInfo] = useState<VfoABInfo | null>(null);
   const abOn = !!abInfo?.on;
   const abActive: VfoId = abInfo?.active ?? 'A';
@@ -11870,25 +11893,39 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Its card facts — what it plays, its time limit — are copied into the pairing while it is in front, so the card
    *    can show them the moment it goes to the background. The pairing ignores them while there is no pairing. */
   const dualEndsAt = sessionEndsAt != null && !adminOk ? sessionEndsAt : null;
+  /* ★★ PER RADIO: which radio on its server this side is (`/r/<id>`, '' = the address is the radio), and the card's name
+   *  for it — "server · radio" when the server has more than one radio to tell apart (Gesiima's two dongles, #57). */
+  const dualRadioKey = radioKeyOf(radioBase);
+  const dualName = sideName(instanceName ?? baseUrl, door && door.radios.length > 1 ? chosenRadio?.label : null);
   useEffect(() => {
     if (!dualMyId || dualShape.phase === 'off') return;
     noteStatus(dualMyId, { freqHz: status.frequency, mode: String(status.mode), endsAt: dualEndsAt,
-                           soft: limitSoft || borrowed, name: instanceName ?? baseUrl });
-  }, [dualMyId, dualShape.phase, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed, instanceName, baseUrl]);
+                           soft: limitSoft || borrowed, name: dualName, radioKey: dualRadioKey }, radioBase);
+  }, [dualMyId, dualShape.phase, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed, dualName, dualRadioKey,
+      radioBase]);
   // ★ The server ended THIS one (its refusal is on screen): the background server keeps playing.
   useEffect(() => { if (refusal && dualMyId) foregroundEnded(dualMyId); }, [refusal, dualMyId]);
   // ★ Gone while still in front without saying so (a crash reset, an alert's "Back to Servers"): it LEFT.
   useEffect(() => () => { if (dualIdRef.current) screenGone(dualIdRef.current); }, []);
   /** "Listen to a 2nd server": this one goes to the background and keeps playing; back to the list as ‹ Back does —
    *  but always to the SERVER LIST, never a door's radio list (a door's other radio is picked from the list too). */
+  /* ★★★ TWO SERVERS OR VFO A/B — NEVER BOTH (dualMix.pairingStart): VFO B on is closed FIRST — the ordinary B-off, on
+   *  this person's own tap — and the server list says so. What goes to the card is VFO A's tuning (abDoor), the channel
+   *  that plays on once B has gone, not B's if B was the one selected. */
   const onListenSecond = useCallback(() => {
     if (!dualMyId) return;
     setMenuOpen(false);
-    listenSecond({ id: dualMyId, name: instanceName ?? baseUrl, params: returnParams(route.params as never),
-                   freqHz: status.frequency, mode: String(status.mode), endsAt: dualEndsAt, soft: limitSoft || borrowed });
+    const start = pairingStart(abOn);
+    if (start.closeB) onVfoAB(false);
+    // ★★ Its return address names its RADIO when it is one behind a front door, so coming back never stops at the list.
+    const back = returnParams(route.params as never);
+    if (dualRadioKey && radioBase) back.baseUrl = radioBase;
+    listenSecond({ id: dualMyId, name: dualName, params: back, radioKey: dualRadioKey,
+                   freqHz: abDoor.frequency, mode: String(abDoor.mode), endsAt: dualEndsAt, soft: limitSoft || borrowed },
+                 start.note);
     navigation.goBack();
-  }, [dualMyId, instanceName, baseUrl, route.params, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed,
-      navigation]);
+  }, [dualMyId, dualName, dualRadioKey, radioBase, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt,
+      limitSoft, borrowed, navigation]);
   /** TAP the card: the background server's screen comes up; both keep playing, ears unmoved. A reset with the server
    *  list beneath — the one way this app lands on a VibeServer (connectVibeServer's note on why not navigate). */
   const onDualSwap = useCallback(() => {
@@ -12391,7 +12428,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    screen"). Verified against FreqModal (the row above CANCEL / TUNE, VibeServer only), TunerKeys, DrumWheel and
     //    AudioSheet (VFO STEREO) — the whole card, not just the new sentence (2026-10-27).
     { id: 'freq', title: 'Set the frequency, your bookmarks, and VFO A/B',
-      body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears); VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast.',
+      body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears); VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
       body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
@@ -12408,7 +12445,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. On a VibeServer it can also keep this one playing while you add a second: Listen to a 2nd server.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. On a VibeServer it can also keep this one playing while you add a second server, or a second radio on this one: Listen to a 2nd server. Two servers or VFO A/B, never both — with VFO B on, that closes B first, and VFO A/B comes back when you are down to one server.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.
@@ -13710,6 +13747,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // ★★ V12 two servers — only on a server that can (no dead row), and only while there is no pairing.
           onListenSecond={dualMyId && !refusal && canListenSecond(route.params) && dualShape.phase === 'off'
             ? onListenSecond : undefined}
+          closesVfoB={abOn}
           otherName={dualBg?.name}
           onStopOther={dualBg ? stopBackground : undefined}
           openToken={serversToken}

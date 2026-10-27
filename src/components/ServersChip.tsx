@@ -33,6 +33,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import SectionIcon from './SectionIcon';
 import { useGlassTheme } from './PopupShell';
 import { screenNavRef } from './ScreenNav';
+import { secondServerHint } from '../services/dualMix';
 
 type Props = {
   /** Bump to open the menu from outside (keyboard Esc). */
@@ -61,6 +62,8 @@ type Props = {
    *  the difference is the audio keeps playing"). Absent ⇒ not drawn — only on a server that can (dualMix.dualEligible),
    *  never as a dead row. */
   onListenSecond?: () => void;
+  /** ★★ V12: VFO B is on — the row stays, and says that it will close B (two servers OR VFO A/B, never both). */
+  closesVfoB?: boolean;
   /** ★★ V12: while two servers play, the one in the background — "Stop listening to <name>". Absent ⇒ not drawn. */
   otherName?: string;
   onStopOther?: () => void;
@@ -79,7 +82,7 @@ const SCRIM        = 'rgba(4,3,1,0.9)';       // …softened by the watchOS-styl
 export default function ServersChip({
   top, left, isFavourite, isDefault,
   onBack, onToggleFavourite, onSetDefault, canFavourite = true, anchorRef, onRefresh,
-  onListenSecond, otherName, onStopOther,
+  onListenSecond, closesVfoB = false, otherName, onStopOther,
   openToken = 0,
   closeToken = 0,
   onExpandedChange,
@@ -124,6 +127,9 @@ export default function ServersChip({
   // ★ V12: both close as they fire — one leaves the screen, the other changes what is playing.
   const onSecondRow = useCallback(() => { setExpanded(false); onListenSecond?.(); }, [onListenSecond]);
   const onStopOtherRow = useCallback(() => { setExpanded(false); onStopOther?.(); }, [onStopOther]);
+  /** ★ What "Listen to a 2nd server" does, said where it is chosen (also its spoken hint) — with VFO B on, that it
+   *  closes B first (two servers OR VFO A/B, never both: dualMix.pairingStart). */
+  const secondHint = secondServerHint(closesVfoB);
 
   // Soft watchOS-style shading behind the collapsed chip: a dark radial that fades
   // to transparent so the chip blends into the waterfall instead of floating as a
@@ -253,11 +259,11 @@ export default function ServersChip({
             {onListenSecond && (
               <Pressable onPress={onSecondRow} style={[styles.row, styles.rowTop, rowFocus(at.second)]}
                 accessibilityRole="button" accessibilityLabel="Listen to a 2nd server"
-                accessibilityHint={SECOND_HINT}>
+                accessibilityHint={secondHint}>
                 <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>◐</Text>
                 <View style={styles.rowCol}>
                   <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Listen to a 2nd server</Text>
-                  <Text style={[styles.rowSub, { color: pt.ink.textDim, fontFamily: font }]}>{SECOND_HINT}</Text>
+                  <Text style={[styles.rowSub, { color: pt.ink.textDim, fontFamily: font }]}>{secondHint}</Text>
                 </View>
               </Pressable>
             )}
@@ -284,8 +290,6 @@ export default function ServersChip({
   );
 }
 
-/** ★ V12: what "Listen to a 2nd server" does, said where it is chosen (also its spoken hint). */
-const SECOND_HINT = 'This server keeps playing while you pick another: this one in your left ear, the next in your right (Audio menu, TWO SERVERS, for both in both ears).';
 
 /** The row's description — exact wording agreed with Stuart, 2026-10-01. Also its spoken hint. */
 const REFRESH_HINT = 'Use this if you are experiencing odd connection related issues, most can be '

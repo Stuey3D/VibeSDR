@@ -49,7 +49,8 @@ export function backToDoor(o: { hasDoor: boolean; choseFromList: boolean; radioI
 export function doorReturnParams<P extends Record<string, unknown>>(params: P, freshLocalGen: () => number): P {
   const out: Record<string, unknown> = { ...params, doorReturn: true };
   // ★ A link's tune, and a takeover, belonged to the first connect — never to a radio chosen afterwards.
-  for (const k of ['deepLink', 'initialFreq', 'initialMode', 'initialZoom', 'autoTakeover']) delete out[k];
+  // ★★ V12 two servers: `dualSide` too — another radio is a new listener (a new session), never the side just left.
+  for (const k of ['deepLink', 'initialFreq', 'initialMode', 'initialZoom', 'autoTakeover', 'dualSide']) delete out[k];
   // ★ A NEW local generation, so the screen being left cannot stop the shim under the one replacing it
   //   (services/localSession.ts — the same guard switching servers relies on).
   if (typeof params.localGen === 'number') out.localGen = freshLocalGen();
