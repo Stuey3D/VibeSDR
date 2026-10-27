@@ -31,6 +31,7 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <cstddef>
 #if defined(__ARM_NEON)
@@ -106,8 +107,8 @@ public:
         for (int p = 0; p < kL; ++p)
             for (int i = 0; i < kTaps; ++i)
                 hr_[size_t(p) * kTaps + size_t(i)] = h_[size_t(p) + size_t(kTaps - 1 - i) * size_t(kL)];
-        re_.assign(kCap * 2, 0.0f);
-        im_.assign(kCap * 2, 0.0f);
+        re_.assign(kHist + kBlock, 0.0f);
+        im_.assign(kHist + kBlock, 0.0f);
     }
 
     /** Push interleaved complex input; appends interleaved complex output. */
@@ -130,12 +131,12 @@ public:
      *     - The taps are stored BRANCH-MAJOR and TIME-REVERSED: hr_[p][i] is what multiplies the
      *       (kTaps-1-i)th newest sample, so one output is a plain 16-long dot product of the branch
      *       against a contiguous window of history.
-     *     - The history is SPLIT (re[], im[]) and DOUBLED: each sample is written at k and k+kCap,
-     *       so the 16 newest samples are always contiguous in memory whatever the ring position.
-     *       No masking inside the loop; the mask happens once, to find the window's base.
-     *     - The first 15 outputs read ring slots that have never been written; they are zero from
-     *       construction and from reset(), so the product is exactly the "break: wrapped past the
-     *       start" of the old code. Same numbers, no branch.
+     *     - The history is SPLIT (re[], im[]) and FLAT: 16 samples of history, then a block of
+     *       input, so every window is a plain offset (2026-10-27 — it was a doubled ring; see
+     *       process() for why that was slow on a Pi 2).
+     *     - The first outputs read history that was never written; it is zero from construction
+     *       and from reset(), so the product is exactly the "break: wrapped past the start" of the
+     *       old code. Same numbers, no branch.
      *
      *  ★ SAME FILTER, SAME COEFFICIENTS, SAME RATIO. test-dab-resample.cpp still pins every tone
      *    within 1 dB and above 40 dB SNDR, and dab-offline decodes the same capture to the same
@@ -150,26 +151,55 @@ public:
         const size_t at = out.size();
         out.resize(at + ((nSamples + size_t(kTaps)) * size_t(kL)) / size_t(kM) * 2 + 8);
         float* o = out.data() + at;
-        for (size_t i = 0; i < nSamples; ++i) {
-            const size_t k = size_t(inCount_ & (kCap - 1));
-            re_[k] = re_[k + kCap] = in[2 * i];
-            im_[k] = im_[k + kCap] = in[2 * i + 1];
-            ++inCount_;
-            /* ★ The output position advances by kM/kL input samples each time: n0 by whole
-             *  samples, phase_ by the remainder. Kept incrementally rather than as
-             *  (outCount*kM)/kL per output — a 64-bit multiply and divide per output was the
-             *  second-largest cost left after the taps were vectorised. Exact, because kM and
-             *  kL are integers: the phase is periodic in 75 outputs and cannot drift. */
-            while (n0_ + 1 < inCount_) {
-                const size_t base = size_t((n0_ - uint64_t(kTaps - 1)) & (kCap - 1));
-                dot16(&re_[base], &im_[base], &hr_[size_t(phase_) * kTaps], o);
-                o += 2;
-                ++outCount_;
-                phase_ += kM;
-                n0_    += uint64_t(phase_ / kL);
-                phase_ %= kL;                                // kL is 64: a mask
+        /* ★★ A STRAIGHT BLOCK, NOT A RING, AND TWO OUTPUTS AT A TIME (2026-10-27). On a Pi 2 this
+         *  converter cost 191 ns an output — ~172 cycles for 32 multiply-adds, 40 % of a core —
+         *  and the multiply-adds were not why. Per input it wrote four scalar floats (the doubled
+         *  ring); per output it masked ring positions and walked 64-bit counters that a 32-bit
+         *  core keeps in register PAIRS, which ran out of registers and spilled to the stack
+         *  every time round; and a Cortex-A7 is in-order, so it then sat out the latency of one
+         *  dependent multiply-add chain after another.
+         *  ★ Now a block of input is de-interleaved into a flat history that starts with the 16
+         *    samples before it, every output's window is a plain offset into that, the loop state
+         *    is 32-bit and local, and two independent outputs are formed side by side (dot16x2).
+         *  ★★ The NUMBERS ARE THE SAME: each output is the same dot16 of the same 16 samples
+         *     against the same branch, in the same order; the samples before the first input are
+         *     zero, as the ring's never-written slots were. dab-prof's digest of a 60 s capture is
+         *     identical before and after, on arm64, armhf and x86. */
+        float* re = re_.data();
+        float* im = im_.data();
+        uint32_t phase = uint32_t(phase_);
+        uint64_t outs  = 0;
+        size_t i0 = 0;
+        while (i0 < nSamples) {
+            const size_t nb = std::min(kBlock, nSamples - i0);
+            const float* src = in + 2 * i0;
+            for (size_t j = 0; j < nb; ++j) { re[kHist + j] = src[2 * j]; im[kHist + j] = src[2 * j + 1]; }
+            /* re[0] holds input inCount_ - kHist. The next output is centred on n0_ >= inCount_ - 1,
+             *  so its window [n0_ - 15, n0_] begins at offset r = n0_ - inCount_ + 1 >= 0; it is
+             *  ready once n0_ + 1 < inCount_ + nb, i.e. r < nb — the old per-sample test exactly. */
+            uint32_t r = uint32_t(n0_ + 1 - inCount_);
+            while (r < nb) {
+                const float* h = &hr_[size_t(phase) * kTaps];
+                const uint32_t r1 = r;
+                phase += uint32_t(kM); r += phase >> 6; phase &= uint32_t(kL - 1);     // kL is 64
+                if (r < nb) {                                // ★ the next one is ready too: both together
+                    dot16x2(re + r1, im + r1, h, re + r, im + r, &hr_[size_t(phase) * kTaps], o);
+                    o += 4; outs += 2;
+                    phase += uint32_t(kM); r += phase >> 6; phase &= uint32_t(kL - 1);
+                } else {
+                    dot16(re + r1, im + r1, h, o);
+                    o += 2; outs += 1;
+                }
             }
+            inCount_ += nb;
+            n0_ = inCount_ + r - nb - 1;
+            // the last kHist samples become the history in front of the next block
+            std::memmove(re, re + nb, kHist * sizeof(float));
+            std::memmove(im, im + nb, kHist * sizeof(float));
+            i0 += nb;
         }
+        phase_ = int(phase);
+        outCount_ += outs;
         out.resize(size_t(o - out.data()));
     }
     void reset() {
@@ -180,7 +210,8 @@ public:
     }
 
 private:
-    static constexpr size_t kCap = 64;            ///< power of two, > kTaps
+    static constexpr size_t kHist  = kTaps;       ///< samples kept in front of each block (an output may reach back 16)
+    static constexpr size_t kBlock = 256;         ///< input samples de-interleaved per block
 
     /** One output: the branch's 16 reversed taps against the 16 newest samples, written as
      *  (re, im) straight to `o`. On NEON the two horizontal sums are folded into one pairwise
@@ -222,9 +253,31 @@ private:
 #endif
     }
 
+    /** Two outputs, each exactly as dot16 forms it, with their instructions interleaved so an
+     *  in-order core always has an independent multiply-add to issue (see process()). */
+    static inline void dot16x2(const float* r, const float* q, const float* h,
+                               const float* r2, const float* q2, const float* g, float* o) {
+#if defined(__ARM_NEON)
+        const float32x4_t h0 = vld1q_f32(h), g0 = vld1q_f32(g);
+        float32x4_t ar = vmulq_f32(vld1q_f32(r), h0),  ai = vmulq_f32(vld1q_f32(q), h0);
+        float32x4_t br = vmulq_f32(vld1q_f32(r2), g0), bi = vmulq_f32(vld1q_f32(q2), g0);
+        for (int t = 4; t < kTaps; t += 4) {
+            const float32x4_t hv = vld1q_f32(h + t), gv = vld1q_f32(g + t);
+            ar = vmlaq_f32(ar, vld1q_f32(r + t),  hv);  ai = vmlaq_f32(ai, vld1q_f32(q + t),  hv);
+            br = vmlaq_f32(br, vld1q_f32(r2 + t), gv);  bi = vmlaq_f32(bi, vld1q_f32(q2 + t), gv);
+        }
+        const float32x2_t pr = vpadd_f32(vget_low_f32(ar), vget_high_f32(ar)), pi = vpadd_f32(vget_low_f32(ai), vget_high_f32(ai));
+        const float32x2_t qr = vpadd_f32(vget_low_f32(br), vget_high_f32(br)), qi = vpadd_f32(vget_low_f32(bi), vget_high_f32(bi));
+        vst1q_f32(o, vcombine_f32(vpadd_f32(pr, pi), vpadd_f32(qr, qi)));
+#else
+        dot16(r, q, h, o);                           // an out-of-order x86 overlaps these itself
+        dot16(r2, q2, g, o + 2);
+#endif
+    }
+
     std::vector<float> h_;                        ///< prototype, tap-major (kept for inspection)
     std::vector<float> hr_;                       ///< branch-major, time-reversed: hr_[p*kTaps+i]
-    std::vector<float> re_, im_;                  ///< split history, doubled — see process()
+    std::vector<float> re_, im_;                  ///< split history: kHist samples, then the block — see process()
     uint64_t           inCount_ = 0, outCount_ = 0;
     uint64_t           n0_ = 0;                   ///< input index the NEXT output is centred on
     int                phase_ = 0;                ///< its polyphase branch, 0..kL-1

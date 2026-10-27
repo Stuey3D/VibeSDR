@@ -115,7 +115,7 @@ private:
         for (auto& t : taps_) t.reset();
         rx_.setCentreHz(double(kBandIII[idx].centreHz));
         publishQuality_();                                          // ★ a new block is not locked yet
-        iq_.clear();
+        iq_.clear(); iqHead_ = 0;
         { std::lock_guard<std::mutex> ik(inM_); inQ_.clear(); }   // ★ queued IQ is the OLD block
         { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
@@ -396,7 +396,7 @@ public:
                 settleDrop_ -= drop;
                 preTuneDropped_ += uint32_t(drop);
                 if (settleDrop_ == 0) {
-                    rx_.reset(); iq_.clear(); lsfPend_.clear();
+                    rx_.reset(); iq_.clear(); iqHead_ = 0; lsfPend_.clear();
                     publishQuality_();
                     /* ★★★ THE SELECTION MUST BE RE-APPLIED AFTER THE RESET. rx_.reset() empties the
                      *  ensemble and with it the receiver's chosen service — but sid_ still said it
@@ -445,7 +445,7 @@ private:
         const size_t need = size_t(modeI().frameSamples) * 2;
         while (!stop_) {
             // ★ Wait for input WITHOUT holding m_ — see feed(). Everything queued is taken at once.
-            if (iq_.size() < need) {
+            if (iq_.size() - iqHead_ < need) {
                 lk.unlock();
                 uint64_t took = 0; uint32_t lost = 0;
                 {
@@ -459,16 +459,23 @@ private:
                 if (stop_) break;
                 samplesIn_ += took; dropped_ += lost;
                 if (!admitInput_(inTake_)) continue;
+                /* ★★ CONSUMED FRAMES ARE SKIPPED, NOT MOVED (2026-10-27). Each frame used to be erased from
+                 *  the front as soon as it was decoded — a memmove of the 1.5-3 MB still waiting, ten
+                 *  times a second, ~3 ms a frame on a Pi 2's memory. Now iqHead_ walks forward and the
+                 *  dead front is cut away here, once it is a whole decode window long: half as many
+                 *  moves, each of no more than what is waiting. The samples pushed are the same. */
+                if (iqHead_ >= need) { iq_.erase(iq_.begin(), iq_.begin() + long(iqHead_)); iqHead_ = 0; }
                 iq_.insert(iq_.end(), inTake_.begin(), inTake_.end());
-                if (iq_.size() > need * 4) {
-                    dropped_ += uint32_t(iq_.size() - need * 2);
+                if (iq_.size() - iqHead_ > need * 4) {
+                    dropped_ += uint32_t(iq_.size() - iqHead_ - need * 2);
                     iq_.erase(iq_.begin(), iq_.end() - long(need * 2));
+                    iqHead_ = 0;
                 }
                 continue;
             }
-        while (iq_.size() >= need) {
+        while (iq_.size() - iqHead_ >= need) {
             ++pushCalls_;
-            if (rx_.push(iq_.data(), need)) ++pushOk_;
+            if (rx_.push(iq_.data() + iqHead_, need)) ++pushOk_;
             publishQuality_();
             /* ★★★ TRACK ACROSS THE BOUNDARY — DO NOT RE-ACQUIRE EVERY FRAME.
              *  This used to call resetSync() here, throwing the lock away and acquiring afresh on
@@ -505,7 +512,7 @@ private:
              *  ★ The 20% shortfall is REAL and still unexplained — see the frame-rate measurement
              *    in the 4.1.88 message. It is not this. Measure where the samples go before
              *    changing this line again. */
-            iq_.erase(iq_.begin(), iq_.begin() + long(modeI().frameSamples));
+            iqHead_ += size_t(modeI().frameSamples);      // ★ skipped, not erased — see above
 
             if (want_ && sid_ != want_ && rx_.ensemble().services.count(want_))
                 if (rx_.selectService(want_)) sid_ = want_;
@@ -536,7 +543,7 @@ private:
             std::this_thread::yield();
             lk.lock();
             if (stop_) break;
-        }   // while (iq_.size() >= need)
+        }   // while (iq_.size() - iqHead_ >= need)
         }   // while (!stop_)
     }
 
@@ -2725,6 +2732,7 @@ private:
     DabReceiver rx_{kRateHz};
     Mp2Decoder  mp2_;
     std::vector<Cplx> iq_;
+    size_t iqHead_ = 0;      ///< iq_[0, iqHead_) is decoded and dead — cut away in workerLoop
     std::deque<float> pcm_;
     /** ★ Guards pcm_ ONLY — never held while taking m_. See takePcm for why it exists. */
     mutable std::mutex pm_;

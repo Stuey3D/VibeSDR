@@ -79,8 +79,9 @@ inline float offsetHz(float fractional, const Mode& m) { return fractional * flo
 /** De-rotate `n` samples by `cyclesPerSample` (a fraction of a cycle per sample).
  *  ★ Recurrence rather than a sin/cos per sample: at 2.048 MSPS a trig call per sample is the
  *    difference between real time and not on a Pi. Renormalised every 1024 steps because the
- *    recurrence drifts in magnitude, which would otherwise scale the constellation slowly. */
-inline void derotate(Cplx* x, size_t n, double cyclesPerSample) {
+ *    recurrence drifts in magnitude, which would otherwise scale the constellation slowly.
+ *  ★ Reads `in`, writes `x`; they may be the same buffer (each sample is read before it is written). */
+inline void derotate(const Cplx* in, Cplx* x, size_t n, double cyclesPerSample) {
     /* ★ Float, not double: this walks every sample of every frame (2 M a second), and the
      *  renormalisation every 1024 samples already bounds the drift a float oscillator has —
      *  the double version bought precision the renorm then threw away. The step itself is
@@ -102,7 +103,7 @@ inline void derotate(Cplx* x, size_t n, double cyclesPerSample) {
 #if defined(__ARM_NEON)
         float32x4_t vr = vld1q_f32(pr), vi = vld1q_f32(pi);
         for (; i + 4 <= n; i += 4) {
-            const float32x4x2_t v = vld2q_f32(reinterpret_cast<const float*>(x + i));
+            const float32x4x2_t v = vld2q_f32(reinterpret_cast<const float*>(in + i));
             float32x4x2_t o;
             o.val[0] = vmlsq_f32(vmulq_f32(v.val[0], vr), v.val[1], vi);
             o.val[1] = vmlaq_f32(vmulq_f32(v.val[0], vi), v.val[1], vr);
@@ -123,8 +124,8 @@ inline void derotate(Cplx* x, size_t n, double cyclesPerSample) {
         __m128 vr = _mm_loadu_ps(pr), vi = _mm_loadu_ps(pi);
         const __m128 c4v = _mm_set1_ps(c4), s4v = _mm_set1_ps(s4);
         for (; i + 4 <= n; i += 4) {
-            const __m128 a = _mm_loadu_ps(reinterpret_cast<const float*>(x + i));
-            const __m128 b = _mm_loadu_ps(reinterpret_cast<const float*>(x + i) + 4);
+            const __m128 a = _mm_loadu_ps(reinterpret_cast<const float*>(in + i));
+            const __m128 b = _mm_loadu_ps(reinterpret_cast<const float*>(in + i) + 4);
             const __m128 xr = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0)), xi = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
             const __m128 orr = _mm_sub_ps(_mm_mul_ps(xr, vr), _mm_mul_ps(xi, vi));
             const __m128 oi  = _mm_add_ps(_mm_mul_ps(xr, vi), _mm_mul_ps(xi, vr));
@@ -143,7 +144,7 @@ inline void derotate(Cplx* x, size_t n, double cyclesPerSample) {
     }
 #endif
     for (; i < n; ++i) {
-        const float xr = x[i].re, xi = x[i].im;
+        const float xr = in[i].re, xi = in[i].im;
         x[i].re = xr * cr - xi * ci;
         x[i].im = xr * ci + xi * cr;
         const float nr = cr * cs - ci * sn, ni = cr * sn + ci * cs;
@@ -154,6 +155,9 @@ inline void derotate(Cplx* x, size_t n, double cyclesPerSample) {
         }
     }
 }
+/** In place — the same arithmetic as the copying form above, which is what lets push() fold the
+ *  frame copy into the first de-rotation (see there). */
+inline void derotate(Cplx* x, size_t n, double cyclesPerSample) { derotate(x, x, n, cyclesPerSample); }
 
 /** ★★ DQPSK: the phase DIFFERENCE between the same carrier in consecutive symbols carries two
  *  bits. ETSI EN 300 401 maps them so that the pair is Gray-coded around the circle, which is why

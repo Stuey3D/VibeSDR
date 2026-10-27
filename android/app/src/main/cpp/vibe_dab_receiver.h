@@ -105,6 +105,7 @@ struct DabStats {
     int    fibsTotal     = 0;
     double fibRate       = 0.0;    ///< running pass rate, 0..1
     int    prsReanchors  = 0;      ///< times the PRS reference was re-anchored after a level step
+    int    shiftFullSearches = 0;  ///< near-window integer-offset searches that were not conclusive and ran in full
     int    framesSeen    = 0;
     int    intOffsetCarriers = 0;   ///< whole carriers of offset, from the phase reference
     /** ★ Frames handed to the decoders as ERASURES because the phase reference said the window
@@ -194,13 +195,20 @@ public:
          *  the frame's soft bits afresh EVERY frame — ten times a second of malloc, page-fault and
          *  free on a phone. assign() reuses the capacity; the contents are what they were. */
         VDAB_T_LAP(0);
+        /* ★★ THE COPY IS THE FIRST DE-ROTATION (2026-10-27). The offset is measured on the input in
+         *  place, and the de-rotation then writes the frame into `work` as it goes — one pass over
+         *  the frame's 1.5 MB instead of a copy and then a rotate in place. Same arithmetic, same
+         *  bits; on a Pi 2, whose memory moves well under a gigabyte a second, a whole-frame pass
+         *  is ~3 ms of every 96. */
         std::vector<Cplx>& work = work_;
-        work.assign(iq + start, iq + start + symLen * size_t(mode_->symbolsPerFrame));
+        const size_t frameN = symLen * size_t(mode_->symbolsPerFrame);
+        work.resize(frameN);
         VDAB_T_LAP(1);
-        const float frac = fractionalOffset(work.data(), work.size(), *mode_, mode_->symbolsPerFrame);
+        const float frac = fractionalOffset(iq + start, frameN, *mode_, mode_->symbolsPerFrame);
         stats_.freqOffsetHz  = offsetHz(frac, *mode_);
         stats_.freqOffsetPpm = float(double(stats_.freqOffsetHz) / centreHz_ * 1e6);
-        if (std::fabs(frac) > 1e-6f) derotate(work.data(), work.size(), double(frac) / double(fft_));
+        if (std::fabs(frac) > 1e-6f) derotate(iq + start, work.data(), frameN, double(frac) / double(fft_));
+        else                         std::memcpy(work.data(), iq + start, frameN * sizeof(Cplx));
         VDAB_T_LAP(2);
 
         const int K = mode_->carriers;
@@ -264,19 +272,43 @@ public:
             }
             float best = -1.0f; int bestShift = 0;
             const int span = 48;                       // ±48 carriers ≈ ±48 kHz ≈ ±210 ppm
-            for (int d = -span; d <= span; ++d) {
-                double re = 0, im = 0;
-                for (int k = 0; k + 1 < K; ++k) {
-                    const int src = k + d;
-                    if (src < 0 || src + 1 >= K) continue;
-                    const C32 a2 = D[size_t(src)];
-                    const C32 b2 = prsDiff_[size_t(k)];
-                    re += double(a2.real()) * b2.real() + double(a2.imag()) * b2.imag();
-                    im += double(a2.imag()) * b2.real() - double(a2.real()) * b2.imag();
+            auto searchShifts = [&](int lo, int hi) {
+                for (int d = lo; d <= hi; ++d) {
+                    double re = 0, im = 0;
+                    for (int k = 0; k + 1 < K; ++k) {
+                        const int src = k + d;
+                        if (src < 0 || src + 1 >= K) continue;
+                        const C32 a2 = D[size_t(src)];
+                        const C32 b2 = prsDiff_[size_t(k)];
+                        re += double(a2.real()) * b2.real() + double(a2.imag()) * b2.imag();
+                        im += double(a2.imag()) * b2.real() - double(a2.real()) * b2.imag();
+                    }
+                    const float mag = float(std::sqrt(re * re + im * im));
+                    if (mag > best) { best = mag; bestShift = d; }
                 }
-                const float mag = float(std::sqrt(re * re + im * im));
-                if (mag > best) { best = mag; bestShift = d; }
+            };
+            /* ★★ SEARCH NEAR LAST FRAME'S ANSWER FIRST (2026-10-27). The full ±48 search is 97
+             *  correlations of 1535 carriers in double — 9 ms of every 96 on a Pi 2, the second
+             *  heaviest stage after the 77 transforms — to re-find a number that, once locked, does
+             *  not move: a crystal does not drift a carrier (1 kHz) in 96 ms. So ±3 around the last
+             *  shift is tried, and kept ONLY when it is unambiguous: the peak strictly inside the
+             *  window (not still climbing at its edge) and at least half the running reference — a
+             *  real phase reference stands ~10x above the correlation anywhere else, so a peak that
+             *  strong cannot be beaten outside the window. Anything less — a fade, a burst, a
+             *  retune (reset() clears the reference), no reference yet — runs the full search
+             *  exactly as before, and so does every 64th frame regardless. The figure kept is the
+             *  same correlation, computed the same way, so the erasure test downstream sees the
+             *  same number. */
+            const bool tryNear = prsRef_ > 0.0f && (++shiftFrames_ & 63u) != 0;
+            bool found = false;
+            if (tryNear) {
+                const int lo = std::max(-span, intShift_ - 3), hi = std::min(span, intShift_ + 3);
+                searchShifts(lo, hi);
+                const bool inside = (bestShift > lo || lo == -span) && (bestShift < hi || hi == span);
+                found = inside && best / float(K) >= 0.5f * prsRef_;
+                if (!found) { best = -1.0f; bestShift = 0; ++stats_.shiftFullSearches; }
             }
+            if (!found) searchShifts(-span, span);
             intShift_ = bestShift;
             stats_.intOffsetCarriers = bestShift;
             stats_.freqOffsetHz += float(bestShift) * float(mode_->spacingHz);
@@ -367,9 +399,8 @@ public:
         VDAB_T_LAP(4);
         for (int sym = 0; sym < mode_->symbolsPerFrame; ++sym) {
             const Cplx* p = work.data() + size_t(sym) * symLen + winOff;
-            dft(p, spec.data());
-            carriersFromFft(spec.data(), int(fft_), K, cur.data());
-            if (sym == 0) { prev = cur; continue; }          // the phase reference — not data
+            carriersFromFft(dftView(p), int(fft_), K, cur.data());
+            if (sym == 0) { std::swap(prev, cur); continue; }   // the phase reference — not data (★ swap: cur is rewritten whole next symbol)
             /* ★★★ THE 2K BITS ARE NOT INTERLEAVED — THE FIRST K ARE THE REAL PARTS.
              *
              *  EN 300 401 clause 14.5, verbatim:
@@ -397,7 +428,6 @@ public:
              *  de-interleave is applied last, as a byte scatter, which is all it ever needed to be.
              *  ★ cur/prev hold the carriers in DAB order (-768..-1, +1..+768) at indices 0..1535,
              *    which is exactly the `src` index the old loop computed from carrierFor(). */
-            std::vector<int8_t> di(size_t(K) * 2);
             prod_.resize(size_t(K));
             mag_.resize(size_t(K));
             softRe_.resize(size_t(K));
@@ -409,8 +439,10 @@ public:
                                                         softRe_.data(), softIm_.data());
             {
                 const int* toCarrier = fi_.carrierTable();
-                int8_t* dre = di.data();
-                int8_t* dim = di.data() + K;
+                /* ★ Straight into this symbol's place in the frame — it was a fresh 3 KB vector per
+                 *  symbol, copied in afterwards (2026-10-27). */
+                int8_t* dre = frameBits.data() + size_t(sym - 1) * size_t(K) * 2;
+                int8_t* dim = dre + K;
                 for (int nIdx = 0; nIdx < K; ++nIdx) {
                     const int kk  = toCarrier[nIdx];
                     const int src = kk < 0 ? kk + 768 : kk + 767;
@@ -435,9 +467,7 @@ public:
                 }
                 merErr_ = 0.0; merN_ = 0;
             }
-            std::copy(di.begin(), di.end(),
-                      frameBits.begin() + long(size_t(sym - 1) * size_t(K) * 2));
-            prev = cur;
+            std::swap(prev, cur);
         }
 
         /* ★★★ A FRAME WE DO NOT TRUST IS AN ERASURE, NOT A GUESS.
@@ -587,6 +617,7 @@ public:
 
     static constexpr float kIrConfirm = 4.5f;   ///< see the lock decision in push()
     float prsRef_ = 0.0f;      ///< running reference for the phase-reference correlation
+    unsigned shiftFrames_ = 0; ///< frames through the integer-offset search — every 64th runs it in full
     int   untrustedRun_ = 0;   ///< consecutive frames under the erasure fraction — see the re-anchor
     long lastAt_ = -1;
 
@@ -776,10 +807,22 @@ private:
      *  in a transform. That paid off — the bugs were in bit ordering, not the maths — and now the
      *  transform can be fast: 2048 points radix-2, ~11 000 operations instead of 4.2 million. */
     void dft(const Cplx* in, C32* out) {
-        buf_.assign(fft_, C32{});
-        for (size_t i = 0; i < fft_; ++i) buf_[i] = C32(in[i].re, in[i].im);
-        fftp_->forward(buf_.data());
-        for (size_t i = 0; i < fft_; ++i) out[i] = buf_[i];
+        const C32* b = dftView(in);
+        std::memcpy(out, b, fft_ * sizeof(C32));
+    }
+    /** ★★ THE SAME TRANSFORM, WITHOUT THE FOUR COPIES (2026-10-27). dft() zero-filled its buffer,
+     *  converted into it, and copied out — and the buffer, a std::vector, is only 8-byte aligned
+     *  on 32-bit ARM, so PFFFT copied it to an aligned scratch and back as well. On a Pi 2 that was
+     *  ~90 us of a 320 us symbol, 77 symbols a frame. Here the input goes straight into a 16-byte
+     *  aligned buffer (Cplx and C32 are the same two floats), PFFFT runs in place, and the caller
+     *  reads the spectrum where it lies. Valid until the next call. */
+    const C32* dftView(const Cplx* in) {
+        static_assert(sizeof(Cplx) == sizeof(C32), "Cplx and C32 must share a layout");
+        if (buf_.size() != fft_ + 2) buf_.assign(fft_ + 2, C32{});      // +2: room to round up to 16 bytes
+        C32* b = reinterpret_cast<C32*>((reinterpret_cast<uintptr_t>(buf_.data()) + 15u) & ~uintptr_t(15u));
+        std::memcpy(b, in, fft_ * sizeof(C32));
+        fftp_->forward(b);
+        return b;
     }
 
     /** One CIF: pull our sub-channel's capacity units out, deinterleave, decode. */
