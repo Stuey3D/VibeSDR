@@ -93,7 +93,7 @@ import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
-import { VfoABCore, watchOffered, vfoB, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
+import { VfoABCore, watchOffered, watchMaxOf, vfoB, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs } from './dialChat';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
@@ -903,7 +903,17 @@ export abstract class VibeServerWsClient {
     if (this.ab.reset()) this.callbacks.onStatus({ ...this.status });
     this._abNotify();
   }
+  /** ★★ The offer — from hwinfo `watch` AND from the watch state's `max` (see watchMaxOf), as the web reads both.
+   *  A withdrawn offer resets to one VFO (A restored if B was tuned) and says so; a changed one redraws the toggle. */
+  private _abOffer(n: number) {
+    const wasOn = this.ab.on, wasB = this.ab.bTuned;
+    if (!this.ab.setOffered(n)) return;
+    this.callbacks.onWatchOffered?.(this.ab.offered);
+    if (wasB && !this.ab.bTuned) this.callbacks.onStatus({ ...this.status });
+    if (wasOn && !this.ab.on) this._abNotify();
+  }
   private _onWatch(msg: Record<string, unknown>) {
+    { const m = watchMaxOf(msg); if (m !== null) this._abOffer(m); }
     const o = this.ab.onWatch(msg);
     for (const n of o.notes) this.callbacks.onRefused?.(n);   // ★ the server's own sentence, the notice path
     if (o.meterDb !== undefined) { this.sigChanDb = o.meterDb; this.sigAt = Date.now(); }
@@ -2738,12 +2748,7 @@ export abstract class VibeServerWsClient {
     if (msg.type === 'hwinfo') {
       this.squelchSpeaksOn = msg.sqlOn === true;   // ★ see setSquelchDb / vibeSquelch.ts
       // ★★ V12 VFO A/B: does this server offer a VFO B? 0/absent = no — the toggle is not drawn (no dead control).
-      { const wasOn = this.ab.on, wasB = this.ab.bTuned;
-        if (this.ab.setOffered(watchOffered(msg))) {
-          this.callbacks.onWatchOffered?.(this.ab.offered);
-          if (wasB && !this.ab.bTuned) this.callbacks.onStatus({ ...this.status });
-          if (wasOn && !this.ab.on) this._abNotify();
-        } }
+      this._abOffer(watchOffered(msg));
       if (typeof msg.autoDs === 'boolean')
         this.callbacks.onHwDirectSampling?.(msg.autoDs, Number(msg.dsBelowHz) || 0, Number(msg.ds) || 0);
       // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.
