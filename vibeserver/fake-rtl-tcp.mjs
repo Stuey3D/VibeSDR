@@ -35,6 +35,9 @@ const PORT  = arg('port', 1234);
 let   RATE  = arg('rate', 2_400_000);
 const TONES = arg('tones', 3);
 const WFM_HZ = arg('wfm', 0) * 1e6;
+// ★ --carrier HZ --carrier-amp A: an UNMODULATED carrier at that ABSOLUTE frequency, A counts — it stays put in RF however
+//   the server moves the tuner (scripts/test-web-waterfall-history.mjs, GitHub #57; the same option as V12's fake).
+const CARRIER_HZ = arg('carrier', 0), CARRIER_A = arg('carrier-amp', 8);
 const dabArg = (() => { const i = process.argv.indexOf('--dab'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const DAB_IQ = dabArg ? fs.readFileSync(dabArg) : null;
 if (DAB_IQ) console.log(`[fake-rtl-tcp] DAB clip ${dabArg}: ${(DAB_IQ.length / 2 / 2.048e6).toFixed(2)} s at 2.048 MS/s`);
@@ -63,6 +66,7 @@ const srv = net.createServer((sock) => {
   let dabPos = 0;         // replay position in DAB_IQ (bytes)
   // WFM stereo generator state (see --wfm)
   let fmPhase = 0, pilotPh = 0, lPh = 0, rPh = 0;
+  let carRe = 1, carIm = 0;   // ★ --carrier's phasor
 
   // ── Pacing ────────────────────────────────────────────────────────────────
   // ★ DEADLINE-BASED, not sleep-based. The original did `generate 50ms of IQ`
@@ -110,6 +114,7 @@ const srv = net.createServer((sock) => {
     if (rate !== RATE) retune();
     const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
     const buf = Buffer.allocUnsafe(n * 2);
+    const wcT = (2 * Math.PI * (CARRIER_HZ - centreHz)) / (rate || RATE), ccwT = Math.cos(wcT), cswT = Math.sin(wcT), caT = CARRIER_A / 127;
     if (DAB_IQ && centreHz >= 174e6 && centreHz <= 240e6) {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, DAB_IQ.length - dabPos);
@@ -125,6 +130,10 @@ const srv = net.createServer((sock) => {
         re += env * c.re;
         im += env * c.im;
         advance(a); advance(c);
+      }
+      if (CARRIER_HZ) {
+        re += caT * carRe; im += caT * carIm;
+        const cr = carRe * ccwT - carIm * cswT; carIm = carRe * cswT + carIm * ccwT; carRe = cr;
       }
       if (WFM_HZ) {
         const off = WFM_HZ - centreHz;

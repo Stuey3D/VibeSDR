@@ -81,6 +81,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
+import { rowViewOffset, writeRow } from '../utils/wfRowPlace';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -1010,26 +1011,16 @@ function WaterfallView({
     // data flows leaves a slight kink where the alignment changed rather than
     // today's smooth-but-wrong re-labelling. In-flight offsets are a few bins, so
     // the vacated edge strip is invisible.
+    //
+    // ★★★ THE HARD RULE — Stuart, 2026-10-27, quoted in full in utils/wfRowPlace.ts: tuning, zooming, resizing and
+    //     rotating must NEVER lose or tear the history; signals glide in from the sides and settle, and a zoom fans
+    //     them in and out. Each row is placed ONCE, here, against the view it lands in, and the ring is never
+    //     rewritten. GitHub #57's torn trails were rows the SERVER cropped against the wrong tuner position
+    //     (local_sdr_shim.cpp onSpectrum); scripts/test_wf_row_place.ts guards this half, scripts/test-web-waterfall-history.mjs the server's.
+    // ★ Only a frame at the SAME bin scale may be shifted (rowViewOffset) — one from a different span is drawn as it came.
     const slot = (frameCount.current % RING_ROWS) * n;
     const v = viewRef.current;
-    let off = 0;
-    if (rowHzPerBin > 0 && rowCenterHz > 0 && v.centerHz > 0 && v.bwHz > 0) {
-      // ★ Only a frame at the SAME bin scale may be shifted. Shifting one from a
-      // different span silently draws the right signal at the wrong width, so a
-      // mismatch is drawn unshifted (as it is today) rather than moved.
-      const viewHzPerBin = v.bwHz / n;
-      if (Math.abs(rowHzPerBin - viewHzPerBin) <= viewHzPerBin * 1e-6) {
-        off = Math.round((rowCenterHz - v.centerHz) / rowHzPerBin);
-        if (Math.abs(off) >= n) off = 0;   // no overlap at all — nothing to place
-      }
-    }
-    if (off === 0) {
-      idxBuf.current.set(row, slot);
-    } else {
-      idxBuf.current.fill(0, slot, slot + n);           // vacated edge = floor
-      if (off > 0) idxBuf.current.set(row.subarray(0, n - off), slot + off);
-      else         idxBuf.current.set(row.subarray(-off), slot);
-    }
+    writeRow(idxBuf.current, slot, row, n, rowViewOffset(rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz, n));
     frameCount.current += 1;
     // ★★ COVERED (an opaque full-screen overlay — the map, recordings, About): the ROW is kept, the
     //   PICTURE is not made. History stays continuous — closing the map shows what passed while it was
