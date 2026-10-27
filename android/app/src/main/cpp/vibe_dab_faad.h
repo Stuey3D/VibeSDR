@@ -47,6 +47,42 @@ void vibedab_NeAACDecClose(NeAACDecHandle);
 
 namespace vibedab {
 
+/** ★ Four outputs of ONE polyphase branch whose windows start 2 inputs apart — the 2:3 resampler's natural block (every
+ *  third output shares a branch, and three outputs consume two inputs). acc[q] = sum_m t[m] * x[2q + m], m < K (even K):
+ *  each de-interleaving load gives the even-offset and odd-offset inputs of all four windows at once, so there is no
+ *  horizontal sum and no tap reload per output. NEON (ARMv7 + AArch64) / SSE2 / scalar, as vibedsp. */
+static inline void dabDot4Stride2(const float* t, const float* x, int K, float* o4) {
+#if defined(__ARM_NEON) && !defined(VIBE_FORCE_SCALAR)
+    // ★ four taps per vector load, applied by lane (vmla by scalar lane) — no scalar tap loads in the loop (K % 4 == 0)
+    float32x4_t a0 = vdupq_n_f32(0.0f), a1 = vdupq_n_f32(0.0f);
+    for (int m = 0; m < K; m += 4) {
+        const float32x4_t tq = vld1q_f32(t + m);
+        const float32x2_t lo = vget_low_f32(tq), hi = vget_high_f32(tq);
+        const float32x4x2_t v0 = vld2q_f32(x + m), v1 = vld2q_f32(x + m + 2);
+        a0 = vmlaq_lane_f32(a0, v0.val[0], lo, 0);
+        a1 = vmlaq_lane_f32(a1, v0.val[1], lo, 1);
+        a0 = vmlaq_lane_f32(a0, v1.val[0], hi, 0);
+        a1 = vmlaq_lane_f32(a1, v1.val[1], hi, 1);
+    }
+    vst1q_f32(o4, vaddq_f32(a0, a1));
+#elif (defined(__x86_64__) || defined(_M_X64) || defined(__SSE2__)) && !defined(VIBE_FORCE_SCALAR)
+    __m128 a0 = _mm_setzero_ps(), a1 = _mm_setzero_ps();
+    for (int m = 0; m < K; m += 2) {
+        const __m128 p = _mm_loadu_ps(x + m), q = _mm_loadu_ps(x + m + 4);
+        const __m128 ev = _mm_shuffle_ps(p, q, _MM_SHUFFLE(2, 0, 2, 0)), od = _mm_shuffle_ps(p, q, _MM_SHUFFLE(3, 1, 3, 1));
+        a0 = _mm_add_ps(a0, _mm_mul_ps(ev, _mm_set1_ps(t[m])));
+        a1 = _mm_add_ps(a1, _mm_mul_ps(od, _mm_set1_ps(t[m + 1])));
+    }
+    _mm_storeu_ps(o4, _mm_add_ps(a0, a1));
+#else
+    for (int q = 0; q < 4; ++q) {
+        float a0 = 0, a1 = 0;
+        for (int m = 0; m < K; m += 2) { a0 += t[m] * x[2 * q + m]; a1 += t[m + 1] * x[2 * q + m + 1]; }
+        o4[q] = a0 + a1;
+    }
+#endif
+}
+
 /** ★ 32 kHz → 48 kHz (and any other small L/M), stereo, polyphase windowed-sinc. HE-AAC on a 16 kHz core decodes to
  *  32 kHz and its SBR band reaches ~15 kHz, so the filter must pass that — a generic audio resampler cut at 0.9 × ¼ of
  *  the up-sampled rate would dull the top octave.
@@ -84,7 +120,7 @@ public:
             for (int m = 0; m < kP; ++m) rb_[size_t(b2) * kP + size_t(m)] = float(h[size_t(b2 + (kP - 1 - m) * L_)] * L_ / sum);
         reset();
     }
-    void reset() { std::fill(buf_, buf_ + 2 * kCap, 0.0f); s_ = 0; w_ = kP - 1; ph_ = 0; }
+    void reset() { std::fill(buf_, buf_ + 2 * kCap, 0.0f); s_ = 0; w_ = kP - 1; base_ = 0; br_ = 0; }
     /** Interleaved stereo in (n frames) → interleaved stereo appended to out. Passes straight through when in == out.
      *  `mono`: L and R are the same signal (filter once). */
     void process(const float* in, size_t n, std::vector<float>& out, bool mono = false) {
@@ -103,25 +139,45 @@ private:
     static constexpr size_t kCap = 8192;                  ///< history per channel; a unit is ≤ 2048 frames
     static constexpr double kBeta = 7.0, kCut = 0.975;
     static double bessel0(double x) { double s = 1, t = 1; for (int k = 1; k < 30; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); s += t; } return s; }
-    /** Every output whose window [base, base + kP) is filled. ph_ counts up-sampled positions from s_. */
+    /** Every output whose window [base, base + kP) is filled: base_ (inputs from s_) and br_ (the polyphase branch) step
+     *  by M per output — ★ NO DIVISION. The first version kept one 64-bit phase and divided it by L twice per output; on
+     *  32-bit ARM that is a library call (__aeabi_ldivmod), and it made this resampler cost MORE than FAAD2's whole
+     *  decode on the Pi 2 (qemu-arm: 1.3 G of 2.15 G guest instructions for 59 s of programme). */
     void run_(std::vector<float>& out, bool mono) {
         const size_t have = w_ - s_;
-        const size_t o0 = out.size();
-        // outputs available: base = ph_/L, need base + kP <= have
-        size_t nOut = 0;
-        { long long p = ph_; while (size_t(p / L_) + kP <= have) { ++nOut; p += M_; } }
-        out.resize(o0 + 2 * nOut);
-        float* o = out.data() + o0;
-        for (size_t j = 0; j < nOut; ++j) {
-            const size_t base = size_t(ph_ / L_);
-            const float* t = &rb_[size_t(ph_ % L_) * kP];
-            const float* x = buf_ + s_ + base;
-            if (mono) { const float y = vibedsp::dotReal(t, x, kP); o[2 * j] = y; o[2 * j + 1] = y; }
-            else vibedsp::dotReal2(t, x, kP, int(kCap), o[2 * j], o[2 * j + 1]);   // ★ R is kCap after L
-            ph_ += M_;
+        /* ★★ 2:3 (32 → 48 kHz, the HE-AAC v2 case): twelve outputs at a time — the three branches, four outputs each, by
+         *  dabDot4Stride2 (windows 2 inputs apart); a block needs base_ + 7 + kP inputs (the furthest window starts at
+         *  most 1 + 6 past base_). Same taps and inputs as the one-at-a-time path below. */
+        if (L_ == 3 && M_ == 2) {
+            while (base_ + 7 + size_t(kP) <= have) {
+                const size_t o0 = out.size();
+                out.resize(o0 + 24);
+                float* o = out.data() + o0;
+                size_t bb = base_; int rr = br_;
+                for (int k = 0; k < 3; ++k) {
+                    const float* t = &rb_[size_t(rr) * kP];
+                    alignas(16) float l4[4], r4[4];
+                    dabDot4Stride2(t, buf_ + s_ + bb, kP, l4);
+                    if (mono) { for (int q = 0; q < 4; ++q) r4[q] = l4[q]; }
+                    else dabDot4Stride2(t, buf_ + kCap + s_ + bb, kP, r4);
+                    for (int q = 0; q < 4; ++q) { o[2 * (k + 3 * q)] = l4[q]; o[2 * (k + 3 * q) + 1] = r4[q]; }
+                    rr += 2; if (rr >= 3) { rr -= 3; ++bb; }
+                }
+                base_ += 8;                                // twelve outputs = eight inputs; the branch is back where it began
+            }
         }
-        const long long used = ph_ / L_;                   // inputs no output will need again
-        s_ += size_t(used); ph_ -= used * L_;
+        // one output at a time (other ratios, and the end of each block of input)
+        while (base_ + size_t(kP) <= have) {
+            const float* t = &rb_[size_t(br_) * kP];
+            const float* x = buf_ + s_ + base_;
+            float l, r;
+            if (mono) { l = r = vibedsp::dotReal(t, x, kP); }
+            else vibedsp::dotReal2(t, x, kP, int(kCap), l, r);   // ★ R is kCap after L
+            out.push_back(l); out.push_back(r);
+            br_ += M_;
+            while (br_ >= L_) { br_ -= L_; ++base_; }
+        }
+        s_ += base_; base_ = 0;                            // inputs no output will need again
     }
     void compact_() {
         const size_t keep = w_ - s_;
@@ -129,9 +185,8 @@ private:
         std::memmove(buf_ + kCap, buf_ + kCap + s_, keep * sizeof(float));
         s_ = 0; w_ = keep;
     }
-    int in_ = 0, out_ = 0, L_ = 1, M_ = 1;
-    long long ph_ = 0;
-    size_t s_ = 0, w_ = kP - 1;
+    int in_ = 0, out_ = 0, L_ = 1, M_ = 1, br_ = 0;
+    size_t s_ = 0, w_ = kP - 1, base_ = 0;
     std::vector<float> rb_;
     float buf_[2 * kCap] = {};
 };
@@ -232,6 +287,25 @@ private:
         const size_t frames = fi.samples / fi.channels;
         st.resize(frames * 2);
         float peak = 0;
+        static_assert(kScale == 1.0f, "the stereo fast path below copies FAAD2's samples unscaled");
+        if (fi.channels == 2) {
+            /* ★ the common case (stereo or PS): FAAD2's samples ARE the interleaved stereo — a copy, and the peak four
+             *  samples at a time (NEON / SSE2 / scalar). The ARMv7 compiler leaves a float max loop scalar. */
+            std::memcpy(st.data(), f, frames * 2 * sizeof(float));
+            size_t i = 0;
+#if defined(__ARM_NEON) && !defined(VIBE_FORCE_SCALAR)
+            float32x4_t m = vdupq_n_f32(0.0f);
+            for (; i + 4 <= frames * 2; i += 4) m = vmaxq_f32(m, vabsq_f32(vld1q_f32(f + i)));
+            const float32x2_t h = vpmax_f32(vget_low_f32(m), vget_high_f32(m));
+            peak = std::max(vget_lane_f32(h, 0), vget_lane_f32(h, 1));
+#elif (defined(__x86_64__) || defined(_M_X64) || defined(__SSE2__)) && !defined(VIBE_FORCE_SCALAR)
+            __m128 m = _mm_setzero_ps(); const __m128 sign = _mm_set1_ps(-0.0f);
+            for (; i + 4 <= frames * 2; i += 4) m = _mm_max_ps(m, _mm_andnot_ps(sign, _mm_loadu_ps(f + i)));
+            alignas(16) float mm[4]; _mm_store_ps(mm, m);
+            peak = std::max(std::max(mm[0], mm[1]), std::max(mm[2], mm[3]));
+#endif
+            for (; i < frames * 2; ++i) peak = std::max(peak, std::fabs(f[i]));
+        } else
         for (size_t i = 0; i < frames; ++i) {
             const float l = f[i * fi.channels], r = f[i * fi.channels + (fi.channels > 1 ? 1 : 0)];
             st[2 * i] = l * kScale; st[2 * i + 1] = r * kScale;
