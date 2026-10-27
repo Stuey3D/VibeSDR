@@ -26,6 +26,20 @@ export interface MapGLKit {
   detail: boolean;
 }
 
+/* ★★ THE RENDERER'S SCRIPTS CARRY THEIR CONTENT HASH (2026-10-27). The server sends /mapgl/ with a day's
+ *  max-age (vibe_mapgl.h), so after an upgrade a browser that had opened a map that day ran YESTERDAY'S
+ *  vibemapgl-compat.js under today's page — the same staleness that hid the DIGITAL SPOTS MAP's mode letters
+ *  in the app (scripts/lib/mapgl-manifest.mjs). build-web.mjs hashes the web/mapkit files the page loads and
+ *  hands it here; `?r=` makes a changed file a new URL (the server strips the query). Unchanged files keep
+ *  their URL, so nothing is fetched again for nothing. */
+declare const __VS_MAPGL_REV__: string;
+const MAPGL_REV: string = typeof __VS_MAPGL_REV__ !== 'undefined' ? __VS_MAPGL_REV__ : '';
+
+/** A renderer script or stylesheet under /mapgl/vendor/, with its content revision. */
+export function mapglVendor(base: string, file: string): string {
+  return base + 'vendor/' + file + (MAPGL_REV ? '?r=' + MAPGL_REV : '');
+}
+
 /** Absolute URL of this server's /mapgl/ directory, or '' where the page has no http(s) origin. */
 export function mapglBase(): string {
   if (typeof location === 'undefined' || !/^https?:$/.test(location.protocol)) return '';
@@ -100,13 +114,13 @@ export function loadMapGLScripts(base: string): Promise<boolean> {
   scriptsPending = new Promise<boolean>((resolve) => {
     const css = document.createElement('link');
     css.rel = 'stylesheet';
-    css.href = base + 'vendor/maplibre-gl.css';
+    css.href = mapglVendor(base, 'maplibre-gl.css');
     document.head.appendChild(css);
     const files = ['maplibre-gl.js', 'pmtiles.js', 'vibemapgl.js', 'vibemapgl-compat.js'];
     let left = files.length, failed = false;
     for (const f of files) {
       const s = document.createElement('script');
-      s.src = base + 'vendor/' + f;
+      s.src = mapglVendor(base, f);
       s.async = false;                    // ★ execute in THIS order: each one needs the one before it
       s.onload = () => { if (--left === 0 && !failed) resolve(true); };
       s.onerror = () => {

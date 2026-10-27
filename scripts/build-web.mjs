@@ -116,10 +116,20 @@ async function leafletFiles() {
   return out;
 }
 
+/** ★ The content revision of the GPU map's scripts the pages load from /mapgl/vendor/ (web/client/src/mapgl.ts
+ *  mapglVendor — why). The server serves directory/public/mapgl, which check-map-overlay.mjs holds equal to these. */
+async function mapglRev() {
+  const h = createHash('sha1');
+  for (const f of ['web/mapkit/vendor/maplibre-gl.js', 'web/mapkit/vendor/maplibre-gl.css', 'web/mapkit/vendor/pmtiles.js',
+                   'web/mapkit/vibemapgl.js', 'web/mapkit/vibemapgl-compat.js']) h.update(await readFile(path.join(root, f)));
+  return h.digest('hex').slice(0, 10);
+}
+
 async function bundle() {
   const leaflet = await leafletFiles();
   const res = await build({
     define: {
+      __VS_MAPGL_REV__: JSON.stringify(await mapglRev()),
       __VS_LEAFLET__: JSON.stringify({ js: JS_DIR + leaflet.js.name, css: JS_DIR + leaflet.css.name,
                                        jsSri: leaflet.js.sri, cssSri: leaflet.css.sri }),
     },

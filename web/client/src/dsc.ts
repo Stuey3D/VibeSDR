@@ -13,7 +13,7 @@
  * ★ The channel keys tune the DSC frequencies as a DSC receiver does: USB with the dial 1.7 kHz below (2185.8 for
  *   2187.5), or channel 70 in NFM — only those this radio can reach.
  */
-import type { MapGLKit } from './mapgl';
+import { mapglVendor, type MapGLKit } from './mapgl';
 
 export interface DscCall {
   id: number; utc: number; rf: number; repeat: number;
@@ -141,11 +141,11 @@ export function dscMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string, pins: DscPi
                            leaflet: { js: string; css: string; jsSri: string; cssSri: string } | null, dataBase: string): string {
   const ES = '<' + '/script>';
   const safe = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c');
-  const glHead = kit ? `<link rel="stylesheet" href="${kit.base}vendor/maplibre-gl.css">
-<script src="${kit.base}vendor/maplibre-gl.js">${ES}
-<script src="${kit.base}vendor/pmtiles.js">${ES}
-<script src="${kit.base}vendor/vibemapgl.js">${ES}
-<script src="${kit.base}vendor/vibemapgl-compat.js">${ES}` : '';
+  const glHead = kit ? `<link rel="stylesheet" href="${mapglVendor(kit.base, 'maplibre-gl.css')}">
+<script src="${mapglVendor(kit.base, 'maplibre-gl.js')}">${ES}
+<script src="${mapglVendor(kit.base, 'pmtiles.js')}">${ES}
+<script src="${mapglVendor(kit.base, 'vibemapgl.js')}">${ES}
+<script src="${mapglVendor(kit.base, 'vibemapgl-compat.js')}">${ES}` : '';
   const clean = pins.filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon) && Math.abs(p.lat) <= 90 && Math.abs(p.lon) <= 180)
     .slice(0, 200).map((p) => ({ lat: p.lat, lon: p.lon, label: String(p.label).slice(0, 400), colour: PIN_COLOUR[Math.max(0, Math.min(3, p.level))] }));
   return `<!doctype html><meta charset="utf-8"><title>VibeSDR — DSC positions</title>
