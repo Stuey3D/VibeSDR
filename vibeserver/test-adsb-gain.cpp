@@ -1,32 +1,228 @@
-// test-adsb-gain.cpp — the ADS-B gain rule (vibe_adsb_service.h GainRule), after Stuart's FlightAware box (dump1090-fa
-// --gain 60 --adaptive-range, ADAPTIVE_BURST=no): the top of the list, down only for dynamic range, never for strong
-// aircraft; an SDRplay (levelHeld) only down, and only for replies clipping.
+// test-adsb-gain.cpp — the ADS-B gain rule (vibe_adsb_service.h): GainControl (the noise ceiling, its hysteresis,
+// strong-reply pressure, the plateau/cliff stops, the SDRplay's look-down-only rule, the "hearing little" warning) on
+// model feeds built from real measurements — Stuart's FlightAware Pi (filtered LNA, the 10-24 clip's floor), the Pi 500
+// V4L (wideband LaNA, its beta13 message curve), the Pi 2's bare antenna, the May–June 2025 antenna fault — then
+// GainTrial and GainSearch on their own.
 #include "vibe_adsb_service.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <functional>
+#include <random>
 #include <vector>
 #include <utility>
 
 static int fails = 0, passes = 0;
 static void ok(bool c, const char* what) { if (c) passes++; else { fails++; std::printf("FAIL %s\n", what); } }
-static vibeadsb::Health H(double noise, double strong, bool valid = true) {
-    vibeadsb::Health h; h.noiseDbfs = noise; h.strongFrac = strong; h.valid = valid; h.msgsPerSec = 300; return h;
+
+// the R820T's list, tenths of a dB — what an RTL reports
+static const std::vector<int> kRtl = {0, 9, 14, 27, 37, 77, 87, 125, 144, 157, 166, 197, 207, 229, 254, 280, 297, 328, 338,
+                                      364, 372, 386, 402, 421, 434, 439, 445, 480, 496};
+static int idxOf(double db) { for (size_t i = 0; i < kRtl.size(); ++i) if (std::fabs(kRtl[i] / 10.0 - db) < 0.05) return int(i); return -1; }
+
+/** A model feed: at gain g dB, the floor (dBFS on Demod's scale), believed msg/s, the strong share, the furthest NM. */
+struct Feed {
+    std::function<double(double)> floor, msgs, strong = [](double) { return 0.08; }, far = [](double) { return 180.0; };
+    double floorJitter = 0.3;   ///< dB, per tick
+    bool poisson = true;
+};
+struct Run { std::vector<int> idx; int changes = 0; int settledChanges = 0; std::vector<std::string> whys; std::string warn; int maxIdx = 0; int lastSettled = -1; };
+/** Run the rule for `secs` at the shim's 2 s tick. `from`: begin() at t = 0. */
+static Run sim(vibeadsb::GainControl& c, const Feed& f, double secs, bool held = false, bool begin = true, double t0 = 0,
+               std::function<void(double, vibeadsb::GainControl&)> each = nullptr) {
+    static uint64_t total = 0;
+    std::mt19937 rng(1234);
+    std::normal_distribution<double> nd(0, 1);
+    Run r;
+    int at = begin ? c.begin(kRtl, held, t0) : c.index();
+    r.maxIdx = at;
+    for (double t = t0 + 2; t <= t0 + secs; t += 2) {
+        const double g = kRtl[size_t(at)] / 10.0;
+        const double rate = std::max(0.0, f.msgs(g));
+        double got = rate * 2;
+        if (f.poisson && got > 0) got = std::max(0.0, got + nd(rng) * std::sqrt(got));
+        total += uint64_t(std::lround(got));
+        vibeadsb::Health h;
+        h.valid = true; h.msgsTotal = total; h.msgsPerSec = got / 2;
+        h.noiseDbfs = f.floor(g) + nd(rng) * f.floorJitter;
+        h.strongFrac = f.strong(g); h.farNm = f.far(g); h.aircraft = int(rate / 8);
+        const int nx = c.tick(t, h);
+        if (nx != at) ++r.changes;
+        if (!c.busy()) { if (r.lastSettled >= 0 && nx != r.lastSettled && t > t0 + 120) ++r.settledChanges; r.lastSettled = nx; }
+        at = nx; r.idx.push_back(at); r.maxIdx = std::max(r.maxIdx, at);
+        if (r.whys.empty() || r.whys.back() != c.why()) r.whys.push_back(c.why());
+        if (each) each(t, c);
+    }
+    r.warn = c.warning();
+    return r;
 }
 
 int main() {
-    vibeadsb::GainRule r;
-    ok(r.decide(H(-25, 0)) == -1, "noise -25 dBFS (25 dB of range, under 30) -> down");
-    ok(r.decide(H(-30.5, 0)) == 0, "noise -30.5 (the FlightAware box's settled -30.6) -> stay");
-    ok(r.decide(H(-31.7, 0.08)) == 0, "the Pi 500 V4L's -31.7 with 8 % strong -> stay (strong is no reason to cut)");
-    ok(r.decide(H(-42, 0.11)) == +1, "the Pi 2's -42 at 11 % strong -> up (the shim clamps at the top)");
-    ok(r.decide(H(-32, 0)) == 0, "-32: inside the 3 dB of spare -> stay, no climb");
-    ok(r.decide(H(-25, 0, false)) == 0, "no evidence yet -> stay");
-    ok(r.decide(H(-20, 0.60)) == -1, "a hot front end is cut for its noise floor, whatever the strong share");
-
-    vibeadsb::GainRule s; s.levelHeld = true;
-    ok(s.decide(H(-43, 0.02)) == 0, "SDRplay: quiet and clean -> stay (never climbs)");
-    ok(s.decide(H(-43, 0.10)) == -1, "SDRplay: 10 % clipping -> down");
-    ok(s.decide(H(-20, 0.0)) == 0, "SDRplay: its noise floor is its AGC's, not ours -> stay");
+    // ★★★ THE FLIGHTAWARE PI: filtered LNA feed. Floor from the 10-24 clip (−21.6 dBFS at 49.6, dB for dB with the gain);
+    //     messages CREEP UP with gain to the top (the A/B: +5.8 % at 49.6) — the shape that pinned the old rule there.
+    {
+        Feed fa;
+        fa.floor = [](double g) { return -21.6 + (g - 49.6); };
+        fa.msgs = [](double g) { return 1250 + 4.0 * g; };
+        fa.strong = [](double g) { return g > 45 ? 0.5 : 0.11; };
+        vibeadsb::GainControl c;
+        Run r = sim(c, fa, 3600);
+        const double settled = kRtl[size_t(r.lastSettled)] / 10.0;
+        std::printf("   FlightAware Pi model: settled %.1f dB (dump1090-fa: 38.6-40.2), %d settled changes after the ramp in an hour, why: %s\n", settled, r.settledChanges, c.why().c_str());
+        ok(settled >= 38.5 && settled <= 40.3, "the FlightAware Pi's filtered LNA feed settles at 38.6-40.2 dB, where dump1090-fa sits — not 49.6");
+        ok(r.maxIdx <= idxOf(43.4), "  ...the ramp never goes past the first rung over the ceiling (43.4)");
+        ok(c.why().find("noise floor at its target") != std::string::npos, "  ...and says why: the noise floor is at its target");
+        ok(r.warn.empty(), "  ...and no feed warning");
+        ok(r.settledChanges <= 1, "  ...and holds: the settled gain does not move after the ramp (the ten-minute looks each return)");
+        // the old message-only climb on the same feed (GainSearch, no ceiling) — the bug, measured
+        vibeadsb::GainSearch old; double t = 0; uint64_t tot = 0;
+        std::vector<int> up; for (int i = 14; i < 29; i += 2) up.push_back(i);
+        int at = old.start(up, t, true);
+        for (int i = 0; i < 400 && old.active(); ++i) { t += 2; tot += uint64_t(fa.msgs(kRtl[size_t(at)] / 10.0) * 2); at = old.step(t, tot); }
+        ok(old.result() == 28, "  (the old rule, messages only, on this feed: 49.6 dB — the A/B's finding reproduced)");
+    }
+    // ★★★ THE PI 500 V4L: YouLoop + a WIDEBAND LaNA, no 1090 filter — the beta13 curve with its cliff at 44.5 dB
+    {
+        auto v4lMsgs = [](double g) {
+            const double pts[][2] = {{25.4, 52}, {29.7, 85}, {33.8, 155}, {37.2, 182}, {40.2, 196}, {43.4, 196}, {44.5, 52}, {49.6, 8}};
+            if (g <= pts[0][0]) return pts[0][1] * g / 25.4;
+            for (int i = 0; i < 7; ++i) if (g <= pts[i + 1][0]) {
+                const double u = (g - pts[i][0]) / (pts[i + 1][0] - pts[i][0]); return pts[i][1] + u * (pts[i + 1][1] - pts[i][1]); }
+            return 8.0;
+        };
+        Feed v; v.msgs = v4lMsgs;
+        v.floor = [](double g) { return -31.7 + 1.5 * (g - 40.2); };   // the noted −31.7 near 40 dB, −16.9 at the top
+        v.far = [](double) { return 63.0; };
+        vibeadsb::GainControl c;
+        Run r = sim(c, v, 3600);
+        const double settled = kRtl[size_t(r.lastSettled)] / 10.0;
+        std::printf("   Pi 500 V4L model (floor -31.7 @ 40.2): settled %.1f dB (Stuart's screen: 40.2), why: %s\n", settled, c.why().c_str());
+        ok(std::fabs(settled - 40.2) < 0.05, "the V4L on its general aerial settles at 40.2 dB, as it does today");
+        ok(r.maxIdx < idxOf(44.5), "  ...and never tries the cliff at 44.5 (nor the dead top)");
+        ok(r.warn.empty(), "  ...no warning: it is not at full gain (63 NM is that aerial, not a fault)");
+        Feed q = v; q.floor = [](double g) { return -38 + (g - 40.2); };   // a quieter floor: the cliff alone must stop it
+        vibeadsb::GainControl c2;
+        Run r2 = sim(c2, q, 3600);
+        ok(std::fabs(kRtl[size_t(r2.lastSettled)] / 10.0 - 40.2) < 0.05, "  ...and with a quiet floor (no ceiling), the message cliff alone still lands it at 40.2");
+        ok(c2.why().find("decodes the most") != std::string::npos || c2.why().find("fell away") != std::string::npos
+           || c2.why().find("checked one step") != std::string::npos, "  ...saying it is the messages that chose");
+    }
+    // ★★ THE PI 2: a bare antenna, no LNA — the floor never reaches the ceiling, more gain hears more
+    {
+        Feed p; p.floor = [](double g) { return -42 - 0.5 * (49.6 - g); }; p.msgs = [](double g) { return 100 + 4 * g; };
+        p.far = [](double) { return 150.0; };
+        vibeadsb::GainControl c;
+        Run r = sim(c, p, 3600);
+        ok(r.lastSettled == 28, "the Pi 2's bare antenna: the top (49.6)");
+        ok(c.why().find("top of the radio") != std::string::npos || c.why().find("checked one step") != std::string::npos, "  ...because it is the top and the floor has room");
+        ok(r.warn.empty(), "  ...hearing 150 NM: no warning");
+    }
+    // ★★★ THE MAY–JUNE 2025 FAULT: full gain, the floor 8 dB under the ceiling, 17–41 aircraft out to 41–70 NM
+    {
+        Feed d; d.floor = [](double g) { return -38 + (g - 49.6); }; d.msgs = [](double g) { return 60 + 3 * g; };
+        d.far = [](double) { return 55.0; }; d.strong = [](double) { return 0.0; };
+        vibeadsb::GainControl c;
+        bool earlyWarn = false;
+        Run r = sim(c, d, 1800, false, true, 0, [&](double t, vibeadsb::GainControl& k) { if (t < 300 && !k.warning().empty()) earlyWarn = true; });
+        ok(r.lastSettled == 28, "the faulty antenna: the rule climbs to the top (there is nothing else to do)");
+        ok(!r.warn.empty() && r.warn.find("hearing little") != std::string::npos && r.warn.find("55 NM") != std::string::npos,
+           "  ...and after ten minutes says so plainly: full gain, hearing little, nothing beyond 55 NM");
+        std::printf("   warning: %s\n", r.warn.c_str());
+        ok(!earlyWarn, "  ...but not in its first minutes (the ramp, then 10 min at the top)");
+        // repaired: the floor comes back to normal → the rule comes down, the warning clears
+        Feed fixed; fixed.floor = [](double g) { return -21.6 + (g - 49.6); }; fixed.msgs = [](double g) { return 1250 + 4 * g; };
+        Run r2 = sim(c, fixed, 1200, false, false, 1800);
+        ok(r2.warn.empty(), "  ...repaired: the warning clears");
+        ok(kRtl[size_t(r2.lastSettled)] / 10.0 <= 40.3, "  ...and the noise guard brings the gain down to the target without a new ramp");
+        // no position: judged by the counts
+        Feed np = d; np.far = [](double) { return -1.0; };
+        vibeadsb::GainControl c3; Run r3 = sim(c3, np, 1800);
+        ok(!r3.warn.empty() && r3.warn.find("NM") == std::string::npos, "  ...a server with no position of its own warns on the counts (under 40 aircraft, 400 msg/s)");
+        Feed busy = np; busy.msgs = [](double) { return 900.0; };
+        vibeadsb::GainControl c4; Run r4 = sim(c4, busy, 1800);
+        ok(r4.warn.empty(), "  ...but not with 900 msg/s coming in (a busy sky is no dead feed)");
+    }
+    // ★★ A HOT FEED: the middle is already over the ceiling — it steps DOWN until it is under
+    {
+        Feed h; h.floor = [](double g) { return -20 + (g - 25.4); }; h.msgs = [](double) { return 300.0; };
+        vibeadsb::GainControl c;
+        Run r = sim(c, h, 600);
+        const double f = -20 + (kRtl[size_t(r.lastSettled)] / 10.0 - 25.4);
+        ok(f <= -29.5 && f > -34, "a hot feed (the middle at -20 dBFS): descends until the floor is under -30 (as measured, ±0.3 dB)");
+    }
+    // ★★ HYSTERESIS — no hunting on a floor that sits on the line
+    {
+        Feed e; e.floor = [](double g) { return -30.4 + (g - 40.2); }; e.msgs = [](double) { return 800.0; }; e.floorJitter = 0.8;
+        vibeadsb::GainControl c;
+        Run r = sim(c, e, 3 * 3600);
+        std::printf("   on the line (-30.4 at 40.2, +-0.8 dB jitter): %d settled changes in 3 h after the ramp\n", r.settledChanges);
+        ok(kRtl[size_t(r.lastSettled)] / 10.0 == 40.2, "a floor 0.4 dB under the ceiling with 0.8 dB of jitter: stays at 40.2");
+        ok(r.settledChanges <= 1, "  ...three hours with no hunting (the ten-minute looks each return)");
+        // over by 0.5 dB (inside the 1 dB hysteresis): stays; over by 2 dB: one rung down after 10 s
+        vibeadsb::GainControl d;
+        Feed in = e; in.floorJitter = 0.1;
+        sim(d, in, 600);
+        const int at = d.index();
+        Feed over = in; over.floor = [](double g) { return -29.5 + (g - 40.2); };
+        Run r2 = sim(d, over, 120, false, false, 600);
+        ok(r2.lastSettled == at, "  over the target by 0.5 dB (inside the hysteresis): stays");
+        Feed over2 = in; over2.floor = [](double g) { return -28.0 + (g - 40.2); };
+        int firstMove = -1;
+        Run r3 = sim(d, over2, 60, false, false, 720, [&](double t, vibeadsb::GainControl& k) { if (firstMove < 0 && k.index() != at) firstMove = int(t - 720); });
+        ok(r3.lastSettled == at - 1, "  over by 2 dB: one rung down");
+        ok(firstMove >= 10 && firstMove <= 16, "  ...after the 10 s change delay, not at once");
+    }
+    // ★★ STRONG-REPLY PRESSURE
+    {
+        Feed s; s.floor = [](double g) { return -45 + 0.3 * (g - 49.6); }; s.msgs = [](double) { return 600.0; };
+        s.strong = [](double g) { return g > 45 ? 0.45 : 0.1; };
+        vibeadsb::GainControl c;
+        Run r = sim(c, s, 2400);
+        ok(kRtl[size_t(r.lastSettled)] / 10.0 <= 44.5, "45 % of replies clipping at the top: backed off below it");
+        bool said = false; for (auto& w : r.whys) if (w.find("strong replies") != std::string::npos) said = true;
+        ok(said, "  ...and said why (strong replies clipping)");
+        Feed mild = s; mild.strong = [](double) { return 0.12; };
+        vibeadsb::GainControl c2; Run r2 = sim(c2, mild, 2400);
+        ok(r2.lastSettled == 28, "  12 % strong (the FlightAware Pi's healthy share) is no reason to come down");
+        Feed lose = s; lose.msgs = [](double g) { return g > 49 ? 600.0 : 400.0; };
+        vibeadsb::GainControl c3; Run r3 = sim(c3, lose, 2400);
+        ok(r3.lastSettled == 28, "  ...and a cut that clearly loses messages is refused even under pressure");
+    }
+    // ★ AN EMPTY SKY: the noise rule alone
+    {
+        Feed q; q.floor = [](double g) { return -21.6 + (g - 49.6); }; q.msgs = [](double) { return 0.3; };
+        vibeadsb::GainControl c; Run r = sim(c, q, 600);
+        ok(std::fabs(kRtl[size_t(r.lastSettled)] / 10.0 - 40.2) < 0.05, "an empty sky on the FlightAware feed: the noise rule alone still picks 40.2");
+        ok(c.why().find("too few aircraft") != std::string::npos, "  ...and says that is why");
+    }
+    // ★★ AN SDRplay (levelHeld): its IF AGC holds the floor; it never climbs above where it starts, and only looks down
+    {
+        std::vector<int> rsp; for (int g = 0; g <= 490; g += 10) rsp.push_back(g);
+        (void)rsp;
+        Feed r; r.floor = [](double) { return -43.0; }; r.msgs = [](double) { return 400.0; };
+        vibeadsb::GainControl c;
+        Run x = sim(c, r, 3 * 3600, true);
+        const int start = int(kRtl.size()) * 3 / 4;
+        ok(x.maxIdx <= start, "SDRplay: three hours, never above where it started (three-quarters up)");
+        std::printf("   SDRplay flat curve, 3 h: settled at index %d (start %d)\n", x.lastSettled, start);
+        ok(x.lastSettled >= start - 2, "  ...a flat curve stays at (or within counting noise of) the start — no ratchet down");
+        ok(c.why().find("holds its own level") != std::string::npos || c.why().find("checked one step") != std::string::npos, "  ...and says the radio holds its own level");
+        ok(c.warning().empty(), "  ...never the feed warning (its floor is its AGC's)");
+        Feed hot = r; hot.strong = [](double) { return 0.5; };
+        vibeadsb::GainControl c2; Run y = sim(c2, hot, 1200, true);
+        ok(y.lastSettled < start, "  ...replies clipping: steps the LNA down");
+        Feed low = r; low.msgs = [start](double g) { return g < kRtl[size_t(start)] / 10.0 - 3 ? 500.0 : 400.0; };
+        vibeadsb::GainControl c3; Run z = sim(c3, low, 1200, true);
+        ok(z.lastSettled < start, "  ...a lower LNA state that clearly decodes more is found by the look down");
+    }
+    // ★ the up-look is blocked by the ceiling's prediction: at 40.2 (−31 dBFS), 42.1 would be −29.1
+    {
+        Feed fa; fa.floor = [](double g) { return -21.6 + (g - 49.6); }; fa.msgs = [](double g) { return g > 41 ? 2000.0 : 1300.0; };
+        fa.floorJitter = 0.05;
+        vibeadsb::GainControl c; Run r = sim(c, fa, 3 * 3600);
+        ok(r.maxIdx <= idxOf(43.4) && kRtl[size_t(r.lastSettled)] / 10.0 <= 40.3,
+           "a rung over the ceiling is never kept for its messages (the dynamic range is the ceiling, messages choose under it)");
+    }
 
     // ★★★ GainTrial — a proposed step is kept only for more messages (the Pi 500 V4L: 250 -> 170 msg/s after a cut)
     {
