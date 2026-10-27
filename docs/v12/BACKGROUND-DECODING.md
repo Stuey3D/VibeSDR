@@ -284,6 +284,107 @@ quiet band the gate decodes nothing. A busy band's engines cost what a listener'
   (648 kHz with Nick's profile, tune away and back, a decoder claim, switched off, a locked radio),
   `test-setup-bg-tiers.mjs`.
 
+## The held session: a suspended phone keeps its place (2026-10-27, v12-session-hold)
+
+Stuart: *"rather than a 60 second grace period as that doesnt leave the user much time to do what they are doing in
+their messaging app or whatever, maybe a 3 minute grace period and when the OS suspends the app we send a little
+notification … your session on the server is held for 3 minutes all decoders are still running for this period and no
+data is missed."* And: *"obviously if the user hits a hard time limit within that grace period then that is the hard
+rule and user gets disconnected as normal".*
+
+iOS suspends VibeSDR a few seconds after it goes to the background **whenever nothing is playing**: ADS-B, NDB, ISM and
+AIS send no audio, so the app releases the audio session there (`setQuiet`). The sockets go with the suspension. Before
+this change the server treated that listener as gone. Now it **holds** them. Background decoding waits for the hold to
+end before its own wait begins: a held listener is somebody here.
+
+**What a hold keeps** (local_sdr_shim.cpp, "THE HELD SESSION"). It starts when the last spectrum or audio socket of a
+session closes:
+- the whole-radio mode (ADS-B, NDB, ISM, AIS, DAB) and the dial. The radio is not left, parked or released, and
+  background decoding does not take it;
+- their channel on a per-VFO radio (VFO, mode, filter, AGC, effects), kept running and adopted back on return;
+- their decoders (text, image, CW/PSK skimmers, digital spots, Single or Band), still running and still in the gallery;
+- VFO B (the watch channel) and its squelch;
+- their place, counted. The listener count and "busy" include held sessions. "Ask before tuning" does not: nobody can
+  ask a phone that is suspended;
+- their turn clock. It keeps running through the hold, so a hold never buys extra time.
+
+**How long.** `kSessionHoldS` = 180 s, capped by the owner's "Let go after" (idle grace): 30 s or 1 minute holds that
+long, and *Immediately* (0) holds nothing, which is the old quick release. The hold is cut short:
+- **at a hard limit**: at the session time limit (and never started for a session already at it), or at the idle limit
+  on a per-VFO radio. When the limit ends a hold, the turn is spent and the address cools down, exactly as
+  `enforceSessionLimit` does to a connected listener. Coming back is met by the same cooldown and borrowed-time rules;
+- **for a session ended for a reason**: the time limit, a kick, a ban, an eviction, the idle check, or `{"type":"leave"}`
+  (the app sends it when you leave a server; the web page sends it on `pagehide` when the tab really goes). These are
+  never held;
+- **when it would turn somebody away**: on a one-listener radio, anybody else arriving takes it at once. On a full shared
+  radio the oldest held place is released for them. On a shared dial a newcomer simply has the dial; the held listener
+  rejoins as a listener of wherever the radio then is, by the server's decision and never by a client tune.
+
+**Coming back.** The same session id carries straight on. Nothing is rebuilt, nothing is landed ("back from its hold —
+landing skipped"), and the map never closed. After the hold, the old path applies: the mode is left at once (recorded),
+and `mode_resume` may still give it back to a listener who returns to an untouched radio. The app then says the session
+ended.
+
+**Nothing missed, mode by mode.** The modes keep running through the hold. What the returning app or page gets:
+
+| Mode | Kept on the server | On return |
+|---|---|---|
+| ADS-B | the whole table, messages counted, trails per aircraft | full table in the next report; trails fetched on demand (unchanged) |
+| NDB | heard list, stats, the 10-minute and hourly cards | full report; `ndb_stats` as before |
+| ISM (incl. wM-Bus meters) | the full sensor and meter list with history | the full list (every report is whole) |
+| AIS | ships and tracks | full report; `ais_trail` on demand |
+| CW / NAVTEX / RTTY / PSK / JTTY / DSC / APRS text, CW and PSK skimmer lists | **the gap log** (new): the last ~384 KB / 4000 messages of output | replayed after the re-attach, paced, then live |
+| Digital spots (Single and Band) | the gap log, spots kind | replayed after the re-subscribe |
+| SSTV / WEFAX | the picture in progress (`replay_`, as before) | the picture so far. **A picture completed and a new one started during the hold is only in the gallery** (when the owner keeps listeners' decodes) |
+
+The gap log (`DecoderHost` in vibe_decoder_host.h) stamps every text frame, decoder JSON and spot with a sequence number.
+The shim notes the number when a session's decoder socket closes, and replays what came after it once that session
+re-attaches the same decoder (`Joined`) or re-subscribes spots. A new run of a decoder clears its own entries. A
+decoder socket closing while its decoder still runs is no longer an immediate stop. If the owner is held, or is still
+connected (the three sockets of a suspension close in any order), it is kept, and the house tick stops it once the
+session is gone without a hold, or after 30 s if the session stays but its decoder socket does not return.
+
+**The notice (iOS app).** It is sent only in the quiet modes, because iOS does not suspend an app with live audio. Stuart:
+*"if audio playing the app will happily stay all day in the background so nobody ever sees that notification"*. It is
+posted 4 s after going to the background. Native code checks once more as it posts: a running engine that is not quiet,
+or the silent keep-alive, means no note. Coming back cancels it, pending or shown.
+
+> **VibeSDR paused**
+> iOS pauses apps that aren't playing sound. Your place on *Pi 500* is held for 3 minutes and its decoders keep running,
+> so nothing is missed. Come back by 14:03 to carry on.
+
+If a hard limit comes first: *"Your session on Pi 500 reaches its time limit at 14:01, so it is held until then, with
+its decoders still running. Come back before 14:01 to carry on."* The terms come from hwinfo: `holdS`, and `holdHardS`
+(seconds to a hard limit, −1 = none; a soft limit or borrowed time is not one).
+
+Permission is asked once, the first time it matters: a quiet mode on a server that holds sessions, after a line of our
+own ("Know when your place is held"). It is never asked at launch. If it is refused, nothing else changes. Tapping the
+note brings a suspended app back where it was. If iOS had ended the app, the tap opens that server (the note carries
+its `vibesdr://` link).
+
+**A closed squelch is not quiet.** Stuart: *"if a user has a signal in squelch mode waiting to hear an incoming we must
+not allow the OS to kill the app in the background, that is the one time where silence is justified".* The server sends
+a squelched listener silence packets in step with the stream (`silencePending_`), manual or AUTO, VFO A or B. The engine
+plays them, so the session stays live. The only things that release the session for silence are the four map modes
+(`audioQuietFor`). The test reads SDRScreen's rule and the iOS `setSquelchOpen` to keep it that way.
+
+**Android** does not suspend the app in these modes. Its `mediaPlayback` foreground service (VibeStreamService) keeps the
+process and its audio socket alive; foreground-service apps keep their network in Doze, and Android has no `setQuiet`.
+So no notice is shown there. The server hold still covers a dropped link.
+
+**The web page on a phone** cannot post a notice. A backgrounded tab's sockets go and the hold keeps everything. The same
+page coming back (same session id) carries on, its decoders' gaps replayed. A discarded tab that reloads is a new
+session.
+
+Tests: `scripts/test-server-session-hold.mjs` (real server, about 8 minutes, `VIBESERVER_SLOW=1`):
+- ADS-B held 180 s; back at 100 s, still in ADS-B, nothing re-entered, messages counted in the gap; the hold running out
+  at 180 s, the mode left, then `mode_resume`;
+- a full radio and a one-listener radio giving way; `leave` never held;
+- the CW skimmer, dial and VFO B through a hold, with the gap replayed;
+- a 1-minute limit cutting the hold, released at the limit, and refused as normal on return.
+
+`scripts/test_sessionHoldNotice.ts` covers the notice decision, its words and the squelch rule.
+
 ## NAVTEX: which station sent it (2026-10-22, beta 4)
 
 A NAVTEX header names its transmitter by one letter (`ZCZC BA10` is station B), and a dozen stations round the world

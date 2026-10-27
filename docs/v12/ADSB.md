@@ -107,6 +107,10 @@ B7 space vehicle · C1 emergency surface vehicle · C2 service surface vehicle �
     has tuned it since, answering `{"type":"mode_resume","mode":…,"ok":1|0,"why":…}`. A refusal (or no answer from an
     older server) closes the map with the reason. The web client does the same for a backgrounded tab. Tests:
     `scripts/test_wholeModeResume.ts`, `scripts/test-server-mode-resume.mjs`.
+  - **Since v12-session-hold (2026-10-27) the server HOLDS the suspended listener's session for 3 minutes** (capped by
+    the owner's idle grace, cut short by a hard limit). The mode, dial, decoders and VFO B carry on, the place stays
+    counted, and on iOS a "VibeSDR paused" note says until when. The 60 s grace and `mode_resume` above are what applies
+    after the hold. See BACKGROUND-DECODING.md, "The held session".
   - **Apple TV** has no WebView: there the old box (`AdsbPanel`, AircraftPanel list, EXIT ADS-B, no MAP key) is the
     interface. Android TV has one and gets the map (`IS_APPLE_TV`, src/utils/tv.ts).
 - **The web client (2026-10-24): the map IS the view too** — full screen over the page, EXIT ADS-B in a top bar,
