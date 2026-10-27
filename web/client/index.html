@@ -1209,7 +1209,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #adsbFeedWarn span { flex: 1 1 auto; min-width: 0; }
 #adsbFeedWarn button { flex: 0 0 auto; background: none; border: 0; color: var(--text-dim); font-size: 16px; line-height: 1;
   padding: 0 2px; cursor: pointer; }
-@media (max-width: 520px) { #adsbFeedWarn { flex-wrap: wrap; } #adsbFeedWarn b { flex: 1 0 auto; } }
+/* ★ under 1000 px it would meet the map's own toolbar and the SERVER HEALTH pill (fixed, z 60) — it drops below both;
+ *   on a phone the title and × share the first line and the words wrap under them */
+@media (max-width: 1000px) { #adsbFeedWarn { top: 100px; } }
+@media (max-width: 520px) { #adsbFeedWarn { flex-wrap: wrap; } #adsbFeedWarn b { flex: 1 0 auto; order: 0; }
+  #adsbFeedWarn button { order: 1; } #adsbFeedWarn span { order: 2; flex-basis: 100%; } }
 /* ★ The map's own chrome in the bar's amber (as the popup map had it): the zoom keys and the credits. */
 #adsbView .maplibregl-ctrl-group { background: rgba(9, 6, 2, 0.92) !important; border: 1px solid rgba(255, 160, 0, 0.30); }
 #adsbView .maplibregl-ctrl-group button + button { border-top: 1px solid rgba(255, 160, 0, 0.20); }
