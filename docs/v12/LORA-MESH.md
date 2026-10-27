@@ -41,7 +41,7 @@ for field numbers only.
 | Hamming (8,4)/(7,4) and the 4/5, 4/6 parity codes; diagonal interleaver; Gray step; the header's 5-bit checksum; header and LDRO symbols carry SF−2 bits | Tapparel et al.; Robyns et al. (2018) | literature |
 | Payload CRC = CRC-16/CCITT (init 0) of all but the last two bytes, XOR those two; sent low byte first | Tapparel et al. §III | literature |
 | Sync symbols = each nibble of the sync word × 8 (0x34 → 24, 32) | Knight & Seeber; gr-lora_sdr's documentation | literature |
-| **ASSUMED**: the exact bit order of the Hamming codeword (data bits LSB-first, then p0…p3), the header checksum's five masks (`0xF00, 0x8E1, 0x49A, 0x257, 0x12F` over n0·n1·n2), the +1 symbol offset and the reduced-rate symbol at 4·g+1 | reconstructed from the literature's descriptions | **not yet confirmed on air** — see §6. A wrong guess fails the header checksum or the CRC: it can only lose frames, never show wrong ones |
+| **ASSUMED**: the exact bit order of the Hamming codeword (data bits LSB-first, then p0…p3), the header checksum's five masks (`0xF00, 0x8E1, 0x49A, 0x257, 0x12F` over n0·n1·n2), the +1 symbol offset and the reduced-rate symbol at 4·g+1 | reconstructed from the literature's descriptions | **confirmed on air** (§6: 31 real MeshCore frames pass header checksum and CRC) |
 
 ### 1.2 LoRaWAN
 
@@ -192,13 +192,28 @@ core**; everything (13 channels, 42 detectors) **4.0 %** (SF11/12 search every o
 
 ## 6. Real traffic — status
 
-Recordings from Stuart's Pi 500 (2026-10-27): 48002 (V4 Lite #00000004) at 868.8 and 867.5 MHz, 2.4 MS/s, both at the
-server's AGC gain (8.7 dB) and again at 33.8 dB set for the session (restored to AUTO): **pure noise** — a max-hold over
-2 minutes never rose 8 dB above the median, not even the wM-Bus meters — and 0 LoRa preambles in 6 + 5 + 2 minutes. The
-dongle Stuart watches for 868 is 48004; at the time it was in background ADS-B, and then had a listener. **So the PHY's
-assumed bit-level conventions (§1.1) and the Meshtastic / MeshCore crypto assumptions (§1.3–1.4) are proven only against
-our own encoder.** `ism-offline <capture.u8> <rate> <centre>` prints every frame, and per detector the preambles, SFDs,
-bad headers and bad CRCs — the first real capture will show at once whether headers check (bit order) and CRCs pass.
+Recordings from Stuart's Pi 500, 2026-10-27 (session gain 33.8 dB, restored to AUTO; background ADS-B left with his OK
+and it took the radio back afterwards):
+
+- **48002** (V4 Lite #00000004), 868.8 and 867.5 MHz at 2.4 MS/s: pure noise — a max-hold never rose 8 dB above the
+  median in 2 minutes, not even wM-Bus — and 0 preambles. That dongle does not hear 868 where it is.
+- **48004** (V4 Lite #00000001, the one Stuart watches), 250 kS/s slices. ★ At 250 kS/s the raw IQ out on that
+  single-listener radio is the listener's **passband**, not the capture: in NFM it carried ±7 kHz of signal inside
+  250 kHz of nothing (`iqCb`, direct mode — the RxPipeline channel after the mode's filter; the listener path widens
+  its channel for raw IQ, the direct path apparently does not). Recorded in **WFM** instead (±100 kHz).
+  - **869.618 MHz, 5 min: 20 MeshCore frames, CRC good** (59 preambles, 35 SFDs, 3 bad CRCs, 0 bad headers): adverts
+    (a repeater with a position), group messages on other channels (header only — none on the Public channel, whose
+    hash is 0x11; these were 0x3D, 0x55, 0x84, 0x12, 0xD9), direct messages, requests, responses and path packets,
+    1–42 hops, SNR −12.8 … 0 dB (below the noise, as LoRa should be), sync word read as **0x12**.
+  - **869.525 MHz, 2 × 5 min:** 2 + 9 more MeshCore frames on the 869.618 channel at the passband's edge (incl. a room
+    server's advert with a position); **no Meshtastic** frames (and its 250 kHz is wider than the WFM passband).
+  - **868.3 / 868.1 MHz (LoRaWAN), 150 + 40 s:** no LoRaWAN frames; 868.3 is busy with other bursts (~9 % of the time).
+- **What that proves:** the whole bit-level chain of §1.1 — Gray step and offset, reduced-rate header symbols, the
+  interleaver, the Hamming bit order, the header checksum masks, the whitening and the CRC — is right on real chips:
+  frames with CR 4/8 and lengths 25–135 bytes pass header and CRC. MeshCore's header / path / advert layout parses on
+  real packets. **Still unconfirmed on air:** Meshtastic (no traffic heard), the MeshCore Public channel's MAC/cipher
+  (no Public message heard in 10 min), LoRaWAN headers. `ism-offline <capture.u8> <rate> <centre>` shows every frame
+  and the per-detector counts.
 
 ## 7. Not done / next
 
