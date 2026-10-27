@@ -70,8 +70,9 @@ const STEPS: Step[] = [
         + (abOffered()
           ? ' The step button\u2019s menu also turns on VFO A/B: a second VFO on the same radio, heard at the same '
             + 'time — the lower frequency in your left ear, the higher in your right. While it is on, the A/B key between '
-            + '[[‹]] and [[›]] picks which VFO these controls tune (or tap the other needle; V on a keyboard). The decoders '
-            + 'and spots run on VFO A, so you can decode on A and listen on B. Not on FM broadcast.'
+            + '[[‹]] and [[›]] picks which VFO these controls tune (or tap the other needle; V on a keyboard). A decoder '
+            + 'or the spots run on the VFO selected when you start them, so you can decode on one and listen on the other; '
+            + 'the decoding VFO says DEC on its needle. Not on FM broadcast.'
           : ''),
   },
   {

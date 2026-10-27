@@ -18,11 +18,16 @@ frequencies per radio, like VFO A/B on a rig. Two dongles at once is a later ste
   NOISE margin is one slider for both. With B off the Audio menu is exactly as before.
 - **Mute a VFO (round 3).** Each row has a MUTE. A muted VFO fades out over the same 400 ms ramp and the other glides to
   the middle — both ears; unmuting reverses it. A muted VFO keeps decoding and its meter keeps moving. Per session.
-- **Decode on A, listen on B (round 3).** A listener's decoders and digital spots (Single and Band) are fed VFO A's own
-  audio or IQ, before the mix — so VFO B, or muting A, never reaches them. Anything the decoder box tunes (starting a
-  decoder or spots, a band, a station or spot tapped in the box) switches the controls to VFO A first; the A/B key then
-  goes back to B to listen. In Band the arrows step bands only while A is tuned. With B on, Band mutes VFO A in the mix
-  rather than the speaker (which carries B).
+- **Decode on either VFO (2026-10-27).** Stuart: *"That seems like a weird limitations surely it doesnt matter which VFO
+  is listen and which is decode?"* A decoder, Single or Band digital spots, or a skimmer runs on **the VFO selected when
+  it is started**, fed that VFO's own audio or IQ before the mix — so the other VFO, or muting the decoding one, never
+  reaches it. Selecting the other VFO afterwards moves nothing. Anything the decoder box tunes (a station, signal or spot
+  tapped in it, a JTTY dial, a DSC channel, APRS's channel, Band's band) tunes **that** VFO, whichever the controls are
+  on. In Band the arrows step bands, the readout names the band and the band's span is drawn only while the controls
+  tune the VFO Band runs on; with B on, Band mutes **that VFO** in the mix rather than the speaker. The decoding VFO
+  says **DEC** after its letter on its needle label and its squelch row. Switching B off (or B yielding to a listener,
+  FM broadcast, a whole-radio mode) stops what was decoding on it, with the reason in words. (Round 3 had the decoders
+  on A only and switched the controls to A to start one — a server without `decB` still gets that from the clients.)
 - **Both are heard at once, each with its own squelch.** With **Stereo** on (the default, in the Audio menu beside
   Binaural) the **lower** frequency is in the **left** ear and the **higher** in the right — whichever is A or B, so the
   waterfall and the ears always agree. Stereo off, or a mono output: both VFOs in both ears.
@@ -76,6 +81,10 @@ frequencies per radio, like VFO A/B on a rig. Two dongles at once is a later ste
 | mute (a source out of the mix, the other home to both ears) | `vibe_watch.h` `PanMixer::Src::muted`; shim `WatchSet::muteA`, `WatchChannel::setMuted` |
 | the RF centre for two VFOs on a personal receiver | `vibe_watch.h` `fitCentre`; shim `watchCentreFollows`, `watchMoveCentre`, `retune` (A's recentre), `dongleForView` (B as a limit) |
 | B's level for its squelch row | shim `sig` → `chanB` |
+| decode on either VFO: B's own decoder host (`<session>#B` in the router), its dial and mode | shim `watchDecBKey`, `decoderEnv` (`onB`), `watchBOf`, the decoder socket's `takeHostB` / `syncPeerA` (`acceptDxcluster`) |
+| …fed B's audio, before the mix | `vibe_watch.h` `WatchChannel::setAudioTap`; shim `handleWatch` (installed when B is made) |
+| …fed B's IQ (skimmers, Band) | shim `feedWatchFromBins` → `feedSkimFromBins` + `WatchSet::skimB` (range-locked); `watchSkimTapB` + `WatchSet::bTap` (one pipeline) |
+| …stopped, said in words, when B goes | shim `watchRemove` → `watchStopDecoderB` |
 
 **Hand-back with no step.** The mixer's equal-power law is normalised so the centre is 1.0 in each ear — exactly what a
 listener with one VFO hears today — and a hard-panned source is √2 (+3 dB) in one ear (the AGC's 0.25 setpoint leaves
@@ -97,7 +106,16 @@ Client → server (spectrum socket):
 {"type":"watch","id":1,"off":true}                        remove (fades; A is unmuted as B goes)
 ```
 
-Server → client: `{"type":"watch","max":1,"lo":Hz,"hi":Hz,"follow":bool,"stereo":true,"monoOut":false,"muteA":false,
+Decoder socket (`/ws/dxcluster`), decode on either VFO:
+
+```
+{"type":"audio_extension_attach","extension_name":"wefax",…,"vfo":"B"}   the decoder runs on VFO B (absent = A, as ever)
+{"type":"subscribe_digital_spots","scope":"band","vfo":"B"}              Single or Band spots on VFO B
+{"type":"audio_extension_attached","vfo":"B"}                            the server's yes
+{"type":"decoder_refused","what":"decoder"|"spots","reason":"vfo","vfo":"B","message":"…"}   no VFO B, or B went
+```
+
+Server → client: `{"type":"watch","max":1,"lo":Hz,"hi":Hz,"follow":bool,"decB":true,"stereo":true,"monoOut":false,"muteA":false,
 "chans":[{"id":1,"freq":..,"mode":"am","bw":..,"sqlOn":..,"sql":..,"open":true,"since":<wall ms>,"lvl":dB,"parked":false,
 "mute":false}]}` on every change and twice a second; plus `"refused":"outside|apart|band|full|off|mode|id|session",
 "note":"…"` when it says no. hwinfo: `"watch":N`. `sig` gains `"chanB":dB` (VFO B's level, every frame) for a listener
@@ -140,16 +158,36 @@ on WFM about 25–33 %. On the Pi 2 a WFM VFO B on top of WFM VFO A is the case 
 channel use Gesiima describes) are cheap. Nothing at all runs for a listener with VFO B off — the per-block gate is one
 relaxed atomic read.
 
-## Decode on B — not built (round 3)
+## Decode on either VFO (2026-10-27)
 
-Decoders run on VFO A only. Decoding on B would mean: a per-session "decoder VFO" choice; B's demodulated audio teed
-from its `WatchChannel` (its audio callback, before the FIFO) into the session's `DecoderHost` instead of A's
-(`onClientAudio`'s `feedSession` on a range-locked radio; on a one-pipeline radio the host is the radio's shared one,
-fed from the shared pipeline, so B there would need a per-session host of its own); the host's `dialHz` / `rfOfAudio`
-reading B's frequency and mode so spots are filed on B's RF; and Band / the skimmers cut their IQ slices around B's
-dial rather than A's (`feedOneClient`). About a day's work and one more decoder slot's worth of CPU per listener who
-used it — no new DSP. "Decode on A, listen on B" covers both of Stuart's examples (Band digital modes on A with SSB on
-B; WEFAX on A, muted, with SSB on B).
+**How.** A decoder socket's attach or subscribe carrying `"vfo":"B"` goes to this listener's **VFO B host** — a
+`DecoderHost` of its own in the router, keyed `<session>#B` — on **every** kind of radio, personal receiver, range-locked
+and shared dial alike:
+
+- **Audio**: B's `WatchChannel` hands its demodulated audio (mono, 48 kHz, before the FIFO and the mix) to the host
+  through `setAudioTap` — exactly where VFO A's decoder is fed A's. B's mute and squelch never reach it; a parked B feeds
+  nothing.
+- **IQ** (a CW/PSK skimmer, Band spots): on a range-locked radio, B's slices of the shared forward FFT on the listener's
+  own thread (`feedSkimFromBins`, the same cut A's skimmer gets, with B's own scratch); on a one-pipeline radio, B's own
+  `WideTap` off the full-rate capture (`watchSkimTapB` — `skimTapFeed`'s cut, centred on B's dial).
+- **Dial and mode**: `decoderEnv` reads B's for a `#B` host, so spots, CW/PSK RF and the gallery's cards are filed on
+  B's RF.
+- **Governance** is the box's, as for any decoder: the decoder slots and Band's benchmark budget, refused in words when
+  full. A socket starting a decoder on one VFO stops its own decoder on the other (the same for spots), so a listener
+  still holds one decoder and one spots run; a socket decoding B is a peer of its A host only while it also uses it.
+  The admin status lists a B host's run with `"vfo":"B"`; the time limit and the orphan reaper count it as its
+  listener's.
+
+**Not a role swap.** The design discussed for a personal receiver was to swap which VFO sits on the main pipeline while
+B decodes, to save CPU. It saves nothing: B's demodulator runs whether anything decodes it or not, so a decoder costs
+the same on either VFO — while a swap would have had every reader of the shared dial (the config, `sig`, the S meter,
+RDS, a recording, the band defaults, VibeAGC) translated back into A/B terms and the swap itself made glitch-free. One
+path on all three radios instead.
+
+**Cost, measured** (test-server-vfo-ab §6b; the whole vibeserver process, personal receiver, this Mac, 2.4 MS/s, A and
+B both on): nothing decoding 3.0 % of a core · WEFAX on A 5.5 % · on B 5.2 % · Band (40 m) on A 6.3 % · on B 6.0 %. The
+difference is inside the noise of the measurement: a decoder on B costs what it costs on A. Pi 2: the same as the
+decoder on A (BACKGROUND-DECODING.md, DIGITAL-SPOTS.md).
 
 ## Known limits
 
@@ -160,3 +198,7 @@ B; WEFAX on A, muted, with SSB on B).
   the only discontinuity.
 - The shared path trims AM by 6 dB and a listener's own channel does not (an older inconsistency); B takes whichever
   trim A has, so the two always match.
+- **Band spots on VFO B**: the tuner is not moved to keep its DC spike out of B's band slices — `bandDcTick` places it
+  for the one-pipeline host's Band, which is A's dial. The RF centre for two VFOs keeps the DC out of both passbands
+  (`fitCentre`'s clearance), not out of a whole band's slice, so on a dongle with a DC spike it can sit inside one of B's
+  mode windows. Not built: Stuart may want `bandDcTick` to follow a Band running on B as well.

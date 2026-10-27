@@ -18916,7 +18916,7 @@ function abMenuRow(close: () => void): HTMLElement | null {
   b.textContent = spec.abOn ? 'ON' : 'OFF';
   b.style.cssText = 'background:none;border:1px solid ' + (spec.abOn ? '#ffe566' : '#666') + ';color:'
     + (spec.abOn ? '#ffe566' : '#ddd') + ';padding:5px 12px;border-radius:5px;cursor:pointer;font:inherit';
-  b.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and the decoders run on VFO A. Not on FM broadcast.';
+  b.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and a decoder or the spots run on the VFO selected when you start them (it says DEC). Not on FM broadcast.';
   b.onclick = () => { spec?.setAB(!spec.abOn); close(); };
   row.append(lbl, b);
   return row;
