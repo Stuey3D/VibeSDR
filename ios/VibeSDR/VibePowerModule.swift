@@ -5,6 +5,31 @@ import MediaPlayer
 import UIKit
 import AppIntents
 import Network
+import UserNotifications
+
+/// ★★ V12 HELD SESSION — the "VibeSDR paused" note's delegate (set in AppDelegate at launch, so a tap that LAUNCHES us is
+/// delivered too). In the foreground the note is never shown (the listener is here); a tap is remembered for JS
+/// (takeHoldNoticeLink) and used only when it launched the app cold — a suspended app simply comes back where it was.
+final class VibeHoldNotice: NSObject, UNUserNotificationCenterDelegate {
+  static let shared = VibeHoldNotice()
+  static let id = "vibesdr.session-hold"
+  /// Main thread. The vibesdr:// link of the server the tapped note was about.
+  static var pendingLink: String?
+
+  func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                              withCompletionHandler done: @escaping (UNNotificationPresentationOptions) -> Void) {
+    done([])
+  }
+
+  func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                              withCompletionHandler done: @escaping () -> Void) {
+    if response.notification.request.identifier == VibeHoldNotice.id,
+       let link = response.notification.request.content.userInfo["link"] as? String {
+      DispatchQueue.main.async { VibeHoldNotice.pendingLink = link }
+    }
+    done()
+  }
+}
 
 // Classic RCT bridge module — accessible via NativeModules.VibePowerModule.
 // Owns the audio WebSocket natively so audio survives JS suspension (background).
@@ -1207,6 +1232,86 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
         if !self.isMuted, self.audioEngine?.isRunning == true { self.playerNode?.play() }
       }
       self.updateNowPlaying()
+    }
+  }
+
+  // MARK: - V12 held session: "VibeSDR paused" (src/services/sessionHoldNotice.ts, docs/v12/BACKGROUND-DECODING.md, "The held session")
+  //
+  // ★★★ Stuart: "when the OS suspends the app we send a little notification to advise the user that due to lack of
+  //     background audio playing the OS has suspended the app for powersaving, your session on the server is held for 3
+  //     minutes". JS decides the words as the app goes to the background (a QUIET mode only); this posts them.
+  // ★★★ NEVER WHILE AUDIO IS LIVE (Stuart: "if audio playing the app will happily stay all day in the background so
+  //     nobody ever sees that notification"): a running engine that is not quiet — a closed squelch plays the server's
+  //     gated silence, and that is exactly such a running engine — or the silent keep-alive running = no note.
+  // ★ A local notification on a time trigger, added inside a background-task window so the add completes before iOS
+  //   suspends us; the trigger then fires whether we are suspended or not. Cancelled (pending AND delivered) on return.
+  // ★ No new dependency: UserNotifications is the system framework (no expo-notifications).
+
+  /// Is anything keeping iOS from suspending us? Main thread.
+  private var audioKeepsUsAwake: Bool {
+    (!quiet && (audioEngine?.isRunning ?? false)) || vibeSilentAudioRunning()
+  }
+
+  @objc func scheduleHoldNotice(_ title: String, body: String, delayS: NSNumber, link: String) {
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      if self.audioKeepsUsAwake {
+        self.notePath("session hold: no note — audio is live, iOS keeps the app running")
+        return
+      }
+      let app = UIApplication.shared
+      var task: UIBackgroundTaskIdentifier = .invalid
+      let finish = { if task != .invalid { app.endBackgroundTask(task); task = .invalid } }
+      task = app.beginBackgroundTask(withName: "vibesdr.session-hold-notice") { finish() }
+      let c = UNMutableNotificationContent()
+      c.title = title
+      c.body = body
+      c.threadIdentifier = VibeHoldNotice.id
+      c.userInfo = ["link": link]
+      if #available(iOS 15.0, *) { c.interruptionLevel = .active }
+      let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1.0, delayS.doubleValue), repeats: false)
+      let req = UNNotificationRequest(identifier: VibeHoldNotice.id, content: c, trigger: trigger)
+      UNUserNotificationCenter.current().add(req) { err in
+        DispatchQueue.main.async {
+          self.notePath(err == nil ? "session hold: \"VibeSDR paused\" scheduled in \(delayS) s"
+                                   : "session hold: note not scheduled — \(err!.localizedDescription)")
+          finish()
+        }
+      }
+    }
+  }
+
+  /// Back in the foreground (or the receiver closed): the note is moot — never shown late, never left on the screen.
+  @objc func cancelHoldNotice() {
+    let c = UNUserNotificationCenter.current()
+    c.removePendingNotificationRequests(withIdentifiers: [VibeHoldNotice.id])
+    c.removeDeliveredNotifications(withIdentifiers: [VibeHoldNotice.id])
+    DispatchQueue.main.async { VibeHoldNotice.pendingLink = nil }
+  }
+
+  /// "granted" / "denied" / "undetermined".
+  @objc func holdNoticeStatus(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    UNUserNotificationCenter.current().getNotificationSettings { s in
+      switch s.authorizationStatus {
+      case .authorized, .provisional, .ephemeral: resolve("granted")
+      case .denied: resolve("denied")
+      case .notDetermined: resolve("undetermined")
+      @unknown default: resolve("unknown")
+      }
+    }
+  }
+
+  /// iOS's own prompt — JS asks only after saying why, in the app, the first time it matters.
+  @objc func requestHoldNotice(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, _ in resolve(granted) }
+  }
+
+  /// The server a tap on the note should reopen when that tap LAUNCHED us (iOS had ended the suspended app) — read once.
+  @objc func takeHoldNoticeLink(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
+    DispatchQueue.main.async {
+      let l = VibeHoldNotice.pendingLink
+      VibeHoldNotice.pendingLink = nil
+      resolve(l)
     }
   }
 

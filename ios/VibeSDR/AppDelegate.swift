@@ -3,6 +3,7 @@ import React
 import ReactAppDependencyProvider
 import AVFoundation
 import UIKit
+import UserNotifications
 
 @main
 class AppDelegate: ExpoAppDelegate {
@@ -33,6 +34,11 @@ class AppDelegate: ExpoAppDelegate {
      * ★ The rule this belongs to: never take a shared resource before you have a use for it. A
      *   headless launch must be inaudible and invisible to the rest of the phone. */
     try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+
+    /* ★★ V12 HELD SESSION — the "VibeSDR paused" note's delegate, set HERE so a tap that launches us is delivered
+     *  (VibeHoldNotice in VibePowerModule.swift). Setting a delegate asks the user nothing: permission is requested only
+     *  in the app, the first time a quiet mode on a holding server needs it. */
+    UNUserNotificationCenter.current().delegate = VibeHoldNotice.shared
 
     /* ★★★ THE FIRST CRUMB, AND THE MOST IMPORTANT ONE. A watch-woken launch is HEADLESS: the
      *   state here is `B`, and every theory about the black screen turns on whether that is so.

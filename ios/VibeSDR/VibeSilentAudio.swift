@@ -4,6 +4,10 @@ private var _audioEngine:  AVAudioEngine?
 private var _playerNode:   AVAudioPlayerNode?
 private var _silentBuffer: AVAudioPCMBuffer?
 
+/// ★ V12 held session: is the silent keep-alive running? Then iOS is not about to suspend us, and the "VibeSDR paused"
+/// note would be untrue (VibePowerModule.audioKeepsUsAwake). Main thread.
+func vibeSilentAudioRunning() -> Bool { _audioEngine?.isRunning == true }
+
 func vibeStartSilentAudio() {
   _setupObservers()
   _startEngine()

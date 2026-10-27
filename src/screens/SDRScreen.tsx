@@ -63,6 +63,9 @@ import IsmPanel from '../components/IsmPanel';
 import { ismNeighbours, type IsmCap, type IsmReport } from '../services/ism';
 import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../services/wholeModeResume';
+// ★ V12 held session: the "VibeSDR paused" note (docs/v12/BACKGROUND-DECODING.md, "The held session")
+import { audioQuietFor, noticePlan, shouldAskPermission, endedWhy, NOTICE_DELAY_S, PERMISSION_TITLE, PERMISSION_BODY,
+         type HoldTerms } from '../services/sessionHoldNotice';
 // ★ V12 AIS + APRS (docs/v12/AIS-APRS.md) — the web's tracks.ts rules for the app
 import { aisItems, aisListRows, aisSafetyLines, aisStatus, AIS_EMPTY, aprsApplyPacket, aprsBoxRows, aprsItems, aprsListRows,
          aprsLogPush, aprsMessageLines, aprsPacketSanitise, aprsSanitise, aprsStatus, aprsTuneFor, aprsBaudOf, APRS_EMPTY,
@@ -2600,13 +2603,82 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ V12 QUIET — ADS-B lets go of the audio output while it runs (the AirPods followed silence; the web's syncAudioQuiet,
    *  1f0b204a). One rule for every mode with nothing to hear — see audioQuiet. Released when the screen goes. */
   const quietSaid = useRef(false);
-  const audioQuiet = adsbOn || ismOn || ndbOn || aisOn;   // ★ V12 NDB and AIS too: the server sends no audio there
+  // ★ V12 NDB and AIS too: the server sends no audio there. ★★ NEVER a squelch (sessionHoldNotice.audioQuietFor): a closed
+  //   squelch plays the server's gated silence and must keep the session — "the one time where silence is justified".
+  const audioQuiet = audioQuietFor({ adsb: adsbOn, ism: ismOn, ndb: ndbOn, ais: aisOn });
   useEffect(() => {
     if (audioQuiet === quietSaid.current) return;
     quietSaid.current = audioQuiet;
     setNativeQuiet(audioQuiet, audioQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : 'AIS') : 'left ADS-B / ISM / NDB / AIS');
   }, [audioQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (quietSaid.current) setNativeQuiet(false, 'receiver closed'); }, []);
+
+  /* ★★★ V12 HELD SESSION — "VibeSDR paused" (sessionHoldNotice.ts, docs/v12/BACKGROUND-DECODING.md, "The held session"). Stuart: "when the OS
+   *  suspends the app we send a little notification to advise the user that due to lack of background audio playing the
+   *  OS has suspended the app for powersaving, your session on the server is held for 3 minutes all decoders are still
+   *  running for this period and no data is missed."
+   *  ★ Going to the background in a QUIET mode (iOS will suspend us within seconds): the note is scheduled NOTICE_DELAY_S
+   *    out — native posts it inside a background-task window and checks once more that no audio is running — and
+   *    cancelled (and cleared from the screen) the moment we are back. Its deadline is the server's hold or a hard
+   *    limit, whichever is first; coming back after it, the 8b63720b9 resume path says the session ended.
+   *  ★ iOS only: Android's media service keeps the app running (docs/v12/BACKGROUND-DECODING.md, "The held session"). */
+  type HoldNative = {
+    scheduleHoldNotice?: (title: string, body: string, delayS: number, link: string) => void;
+    cancelHoldNotice?: () => void;
+    holdNoticeStatus?: () => Promise<string>;
+    requestHoldNotice?: () => Promise<boolean>;
+  };
+  const audioQuietRef = useRef(audioQuiet);
+  audioQuietRef.current = audioQuiet;
+  const holdDeadlineRef = useRef(0);
+  /** When we came back, and whether that was after the hold had ended — what a lapse straight after says. */
+  const holdReturnRef = useRef<{ at: number; late: boolean }>({ at: 0, late: false });
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || !isVibeServer) return;
+    const P = NativeModules.VibePowerModule as HoldNative | undefined;
+    const sub = AppState.addEventListener('change', (st: string) => {
+      if (st === 'background') {
+        const terms: HoldTerms | null = (client.current as { sessionHoldTerms?: () => HoldTerms | null } | null)?.sessionHoldTerms?.() ?? null;
+        const plan = noticePlan({
+          platform: Platform.OS, isVibeServer, terms, quiet: audioQuietRef.current, now: Date.now(),
+          serverName: instanceName || '',
+          clock: (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        });
+        holdDeadlineRef.current = plan.post ? plan.deadline : 0;
+        if (plan.post) {
+          noteAudioEvent(`session hold: "VibeSDR paused" in ${NOTICE_DELAY_S} s (held until ${new Date(plan.deadline).toISOString()}${plan.byLimit ? ', by the time limit' : ''})`);
+          try { P?.scheduleHoldNotice?.(plan.title, plan.body, NOTICE_DELAY_S, buildShareLink({ baseUrl: connectBase, serverType: 'vibeserver' })); } catch { /* an older build */ }
+        }
+      } else if (st === 'active') {
+        const d = holdDeadlineRef.current;
+        holdReturnRef.current = { at: Date.now(), late: d > 0 && Date.now() > d };
+        holdDeadlineRef.current = 0;
+        try { P?.cancelHoldNotice?.(); } catch { /* an older build */ }
+      }
+    });
+    return () => { sub.remove(); try { P?.cancelHoldNotice?.(); } catch { /* gone */ } };
+  }, [isVibeServer]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ ASK ONCE, WHEN IT FIRST MATTERS — the first quiet mode on a server that holds sessions, with a line of our own
+   *   first; never at launch, never again after (granted, denied or "Not now"). Denied = no note, nothing else changes. */
+  useEffect(() => {
+    if (Platform.OS !== 'ios' || !isVibeServer || !audioQuiet) return;
+    const P = NativeModules.VibePowerModule as HoldNative | undefined;
+    if (!P?.holdNoticeStatus || !P.requestHoldNotice) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {   // ★ after the map is up and the server's terms (hwinfo) are in
+      const terms: HoldTerms | null = (client.current as { sessionHoldTerms?: () => HoldTerms | null } | null)?.sessionHoldTerms?.() ?? null;
+      const askedBefore = (await AsyncStorage.getItem('vsdr_hold_notice_asked').catch(() => null)) === '1';
+      const raw = await P.holdNoticeStatus!().catch(() => 'unknown');
+      const status = raw === 'granted' || raw === 'denied' || raw === 'undetermined' ? raw : 'unknown';
+      if (cancelled || !shouldAskPermission({ platform: Platform.OS, isVibeServer, quiet: audioQuietRef.current, terms, status, askedBefore })) return;
+      AsyncStorage.setItem('vsdr_hold_notice_asked', '1').catch(() => {});
+      appAlert(PERMISSION_TITLE, PERMISSION_BODY, [
+        { text: 'Not now', style: 'cancel' },
+        { text: 'Continue', onPress: () => { P.requestHoldNotice!().catch(() => false); } },
+      ]);
+    }, 2500);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [audioQuiet, isVibeServer]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { adsbViewOpenRef.current = adsbViewOpen; }, [adsbViewOpen]);
   /** ★ Everything ADS-B leaves behind, in one place — every door out (EXIT, the key, a mode pick, the server's
    *  adsb_off, a lapsed hold) ends here, so none can leave a stale table on the wrist. */
@@ -10200,7 +10272,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     client.current?.wholeForget?.(kind);
     if (kind === 'adsb') adsbUiOff(); else if (kind === 'ndb') ndbUiOff(); else if (kind === 'ism') ismUiOff(); else aisUiOff();
     // ★ After the map's modal has gone — iOS drops an alert presented over a modal that is still being dismissed.
-    setTimeout(() => { if (!destroyed.current) appAlert(`${WHOLE_LABEL[kind]} ended`, why); }, 450);
+    // ★ V12 held session: back after the hold had ended — say THAT, plainly, rather than a bare "left while you were away"
+    const r = holdReturnRef.current;
+    const said = r.late && Date.now() - r.at < 30_000 ? endedWhy(WHOLE_LABEL[kind]) : why;
+    setTimeout(() => { if (!destroyed.current) appAlert(`${WHOLE_LABEL[kind]} ended`, said); }, 450);
   }, [adsbUiOff, ndbUiOff, ismUiOff, aisUiOff]);
   const wholeResumeStep = useCallback((st: ResumeStep) => {
     if (st.do === 'ask') {

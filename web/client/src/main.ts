@@ -2879,6 +2879,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   if (location.hash === '#admin' && inAdminMode()) openAdmin(currentHost, adminPassword);
   window.addEventListener('resize', () => { wf!.resize(); });
   window.addEventListener('beforeunload', saveTuned);
+  /* ★★ V12 HELD SESSION: a tab CLOSED (or navigated away, not kept in the back-forward cache) is a listener leaving on
+   *  purpose — say so, or the server holds their place and runs their decoders for three minutes for nobody. A phone
+   *  tab merely backgrounded fires no pagehide: its sockets go, the server holds the session, and the same page coming
+   *  back (same session id) carries straight on — the whole-radio mode, the dial, the decoders' gap replayed. */
+  window.addEventListener('pagehide', (e) => { if (!(e as PageTransitionEvent).persisted) { try { spec?.send({ type: 'leave' }); } catch { /* going */ } } });
   requestAnimationFrame(loop);
 }
 

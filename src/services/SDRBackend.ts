@@ -297,6 +297,9 @@ export interface SDRBackend {
    *  or paused), the last report of a mode, the ASK for a mode the server left while we were away (false = could not be
    *  asked), and letting a hold go without telling the server. VibeServer only. */
   spectrumOpenSince?(): number;
+  /** ★★ V12 HELD SESSION: how long the server holds our place if the phone suspends us, and when a hard limit ends that
+   *  sooner (hardAt, Date.now() ms; 0 = none). null until the server has said — an older server never does. */
+  sessionHoldTerms?(): { holdS: number; hardAt: number } | null;
   wholeReportAt?(kind: 'adsb' | 'ndb' | 'ism' | 'ais'): number;
   modeResume?(kind: 'adsb' | 'ndb' | 'ism' | 'ais'): boolean;
   wholeForget?(kind: 'adsb' | 'ndb' | 'ism' | 'ais'): void;
