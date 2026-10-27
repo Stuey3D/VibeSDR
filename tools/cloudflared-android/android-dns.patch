@@ -1,99 +1,89 @@
 diff --git a/cmd/cloudflared/dns_android.go b/cmd/cloudflared/dns_android.go
 new file mode 100644
-index 0000000..6039044
+index 0000000..bcec090
 --- /dev/null
 +++ b/cmd/cloudflared/dns_android.go
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,29 @@
 +//go:build android
 +
 +package main
 +
 +// ★★★ ANDROID HAS NO /etc/resolv.conf, AND THAT IS WHY cloudflared FAILS ON A PHONE.
 +//
-+// Go's pure-Go resolver (the only one available with CGO_ENABLED=0) reads /etc/resolv.conf to
-+// discover a nameserver. Android does not ship that file, so every lookup of the tunnel edge
-+// (region1.v2.argotunnel.com and friends) fails with "connection refused" and the tunnel never
-+// dials. See cloudflared issue #425.
++// Go's pure-Go resolver (the only one that can look up the SRV record cloudflared's edge discovery
++// needs) reads /etc/resolv.conf to find a nameserver. Android does not ship that file, so every lookup
++// of the tunnel edge fails and the tunnel never dials. See cloudflared issue #425.
 +//
 +// ★★★ THE CIRCULATING FIX IS TO HEX-PATCH THE SHIPPED BINARY — replacing the "/etc/resolv.conf"
 +//     string with a same-length path fed on stdin. We do not do that: cloudflared is Apache-2.0
 +//     and we compile it ourselves, so the resolver is fixed HERE, in source, where it can be
 +//     reviewed and survives a version bump.
++//
++// ★★★ AND NOT TO HARD-CODED PUBLIC SERVERS ALONE (Kiko, Android 6.0.1, 2026-10-26): his network drops
++//     outbound UDP 53 to the internet, so 1.1.1.1:53 timed out and the tunnel never came up. The app
++//     now hands over the device's own DNS servers (VIBE_DNS_SERVERS), which are tried first; public
++//     UDP/TCP 53 next; verified DNS-over-TLS last. See vibedns/resolver.go for the ladder.
 +
 +import (
-+	"context"
 +	"net"
-+	"time"
++
++	"github.com/cloudflare/cloudflared/vibedns"
 +)
 +
-+// Public resolvers, tried in order. Cloudflare's own first — we are dialling Cloudflare's edge.
-+var androidNameservers = []string{
-+	"1.1.1.1:53",
-+	"1.0.0.1:53",
-+	"8.8.8.8:53",
-+}
-+
 +func init() {
-+	net.DefaultResolver = &net.Resolver{
-+		// ★ Must be true: this Dial is only consulted by the pure-Go resolver.
-+		PreferGo: true,
-+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-+			// ★ Ignore the address Go worked out from resolv.conf — there isn't one. The
-+			//   network ("udp"/"tcp") is honoured so TCP retry for truncated replies works.
-+			var lastErr error
-+			for _, ns := range androidNameservers {
-+				d := net.Dialer{Timeout: 5 * time.Second}
-+				conn, err := d.DialContext(ctx, network, ns)
-+				if err == nil {
-+					return conn, nil
-+				}
-+				lastErr = err
-+				if ctx.Err() != nil {
-+					break
-+				}
-+			}
-+			return nil, lastErr
-+		},
-+	}
++	net.DefaultResolver = vibedns.New(vibedns.DefaultConfig(vibedns.SystemServers())).Resolver()
 +}
 diff --git a/ingress/origins/dns.go b/ingress/origins/dns.go
-index c09c581..73c9e71 100644
+index c09c581..ddeec36 100644
 --- a/ingress/origins/dns.go
 +++ b/ingress/origins/dns.go
-@@ -39,6 +39,11 @@ var (
+@@ -39,6 +39,11 @@
  	VirtualDNSServiceAddr = netip.AddrPortFrom(netip.MustParseAddr("2606:4700:0cf1:2000:0000:0000:0000:0001"), 53)
  
  	defaultResolverAddr = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), defaultResolverPort)
 +
-+	// VIBESDR PATCH: how the peek resolver dials a nameserver. A package-level var so that
-+	// platforms without an /etc/resolv.conf (Android) can point it somewhere that exists.
-+	// Unchanged on every other platform.
-+	resolverDialFunc netDial = net.Dial
++	// VIBESDR PATCH: resolvers a platform NAMES rather than leaves to be discovered. Non-empty only on
++	// Android (dns_android.go), which has no /etc/resolv.conf to discover a local resolver from.
++	// Returns nil on every other platform, so the service behaves exactly as upstream.
++	platformResolverAddrs = func() []netip.AddrPort { return nil }
  )
  
  type netDial func(network string, address string) (net.Conn, error)
-@@ -58,7 +63,7 @@ func NewDNSResolverService(dialer ingress.OriginDialer, logger *zerolog.Logger,
- 	return &DNSResolverService{
+@@ -55,13 +60,19 @@
+ }
+ 
+ func NewDNSResolverService(dialer ingress.OriginDialer, logger *zerolog.Logger, metrics Metrics) *DNSResolverService {
+-	return &DNSResolverService{
++	s := &DNSResolverService{
  		addresses: []netip.AddrPort{defaultResolverAddr},
  		dialer:    dialer,
--		resolver:  &resolver{dialFunc: net.Dial},
-+		resolver:  &resolver{dialFunc: resolverDialFunc},
+ 		resolver:  &resolver{dialFunc: net.Dial},
  		logger:    logger,
  		metrics:   metrics,
  	}
++	// VIBESDR PATCH: a platform that names its resolvers gets a static service, as --dns-resolver-addrs would.
++	if addrs := platformResolverAddrs(); len(addrs) > 0 {
++		s.addresses = addrs
++		s.static = true
++	}
++	return s
+ }
+ 
+ func NewStaticDNSResolverService(resolverAddrs []netip.AddrPort, dialer ingress.OriginDialer, logger *zerolog.Logger, metrics Metrics) *DNSResolverService {
 diff --git a/ingress/origins/dns_android.go b/ingress/origins/dns_android.go
 new file mode 100644
-index 0000000..5107a86
+index 0000000..b076917
 --- /dev/null
 +++ b/ingress/origins/dns_android.go
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,35 @@
 +//go:build android
 +
 +package origins
 +
 +import (
-+	"net"
 +	"net/netip"
++
++	"github.com/cloudflare/cloudflared/vibedns"
 +)
 +
 +// ★★★ ANDROID HAS NO LOCAL DNS RESOLVER TO DISCOVER.
@@ -106,39 +96,1074 @@ index 0000000..5107a86
 +// falls back to 127.0.0.1:53, which is equally absent.
 +//
 +// ★★ HARMLESS FOR VIBESERVER, WHICH NEVER SERVES DNS THROUGH THE TUNNEL — the tunnel's own edge
-+//    discovery uses net.DefaultResolver and is fixed separately in cmd/cloudflared/dns_android.go.
-+//    But it puts a red ERR in front of an operator on every start, and leaves the service pointed
-+//    at an address that cannot answer. Both are cheap to fix honestly.
++//    discovery uses net.DefaultResolver and is fixed in cmd/cloudflared/dns_android.go. But it puts
++//    a red ERR in front of an operator on every start, and leaves the service pointed at an address
++//    that cannot answer.
 +//
-+// So on Android we do not try to discover a local resolver: we name one. The peek then succeeds
-+// against a real nameserver, the error disappears, and the service is left pointing somewhere
-+// that can actually answer a query.
++// ★★ So on Android the service is NAMED its resolvers rather than left to discover them: the device's
++//    own DNS servers as the app handed them over (VIBE_DNS_SERVERS), or Cloudflare's when there are
++//    none. Static, exactly as `--dns-resolver-addrs` would make it — no peek, no refresh, no ERR.
++//    The earlier version of this patch redirected the peek's dial instead, but the address the
++//    service then RECORDED was still the bogus loopback Go handed to the peek.
 +
 +func init() {
-+	// Where the fallback lands when no address has been discovered.
-+	defaultResolverAddr = netip.AddrPortFrom(netip.MustParseAddr("1.1.1.1"), defaultResolverPort)
++	targets := vibedns.ForwardTargets(vibedns.SystemServers())
++	defaultResolverAddr = targets[0]
++	platformResolverAddrs = func() []netip.AddrPort { return targets }
++}
+diff --git a/vibedns/resolver.go b/vibedns/resolver.go
+new file mode 100644
+index 0000000..4ccbe0b
+--- /dev/null
++++ b/vibedns/resolver.go
+@@ -0,0 +1,572 @@
++// Package vibedns is a VIBESDR PATCH: the DNS resolver cloudflared uses on Android, where Go has no
++// /etc/resolv.conf to read and the platform's resolver cannot be asked for an SRV record. It builds on
++// every platform so its tests run on a development machine; only the android files elsewhere in this
++// patch install it.
++package vibedns
 +
-+	// ★ And how the peek itself dials. Go hands us the address it worked out from resolv.conf —
-+	//   on Android that is the bogus [::1]:53 — so we ignore it and dial a resolver that exists.
-+	//   The port is kept from the caller only when it named a real one.
-+	resolverDialFunc = func(network, address string) (net.Conn, error) {
-+		if isUnusableResolver(address) {
-+			address = defaultResolverAddr.String()
-+		}
-+		return net.Dial(network, address)
++/*
++ ★★★ THE FAULT IT FIXES (Kiko, BTV B9 TV box, Android 6.0.1, 2026-10-26). The first version of this patch
++     replaced the resolver with three hard-coded public servers on port 53. His network drops outbound
++     UDP 53 to the internet, so every lookup — the edge SRV record and api.trycloudflare.com — timed out,
++     and the tunnel never came up. Pointing DNS at his own router fixed it at once. And the "fallbacks"
++     never fell back: a UDP Dial cannot fail (there is no handshake), so the loop only ever used 1.1.1.1
++     and waited out Go's 5 s timeout on it, four times over.
++
++ ★★ THE ORDER, AND WHY:
++  1. THE DEVICE'S OWN DNS SERVERS, handed over by the app in VIBE_DNS_SERVERS (read from Android's
++     LinkProperties at every launch). They are what every other app on the network uses, so they are
++     what the network permits — a router, a captive portal, a filtering school or office resolver.
++  2. Public resolvers over UDP, then TCP, port 53 — what the patch did before, for a device whose own
++     servers did not answer or were not handed over.
++  3. DNS-over-TLS to Cloudflare and Google on 853 — it needs nothing but an outbound TCP connection.
++     Certificates are VERIFIED (system roots plus the issuing roots in roots.go, which an old phone's
++     store predates); a server that cannot prove it is cloudflare-dns.com / dns.google is not used.
++  Tiers are STAGGERED, not serial: each starts TierDelay after the previous one (or at once when every
++  attempt so far has already failed), and the first good answer wins. A blocked path therefore costs
++  under a second, not Go's 5 s per server per attempt. The tier that answered last starts first next
++  time, so a network where only DoT works is not made to wait for it on every lookup.
++
++ ★★ HOW IT PLUGS IN. Go's resolver dials a "server" for every exchange and, for a conn that is not a
++    net.PacketConn, speaks DNS-over-TCP framing to it (net/dnsclient_unix.go, Resolver.exchange →
++    dnsStreamRoundTrip; checked in the Go 1.27.3 source). Dial returns an in-memory conn that takes that
++    framed query, runs the ladder, and hands back the framed answer — so Go's own parsing, search lists
++    and A/AAAA pairing are kept exactly as they are, and only WHERE the question goes is changed.
++*/
++
++import (
++	"context"
++	"crypto/tls"
++	"crypto/x509"
++	"encoding/binary"
++	"errors"
++	"fmt"
++	"io"
++	"log"
++	"net"
++	"net/netip"
++	"os"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"time"
++)
++
++// EnvServers names the device's DNS servers, comma-separated ("10.1.1.1,fe80::1%wlan0"), set by the app.
++const EnvServers = "VIBE_DNS_SERVERS"
++
++// Transport is how one upstream is asked.
++type Transport int
++
++const (
++	UDP Transport = iota // falls back to TCP on the same server for a truncated answer
++	TCP
++	TLS // DNS-over-TLS (RFC 7858), certificate verified against ServerName
++)
++
++func (t Transport) String() string {
++	switch t {
++	case UDP:
++		return "udp"
++	case TCP:
++		return "tcp"
++	default:
++		return "tls"
 +	}
 +}
 +
-+// ★ Loopback is what Go falls back to when it can find no nameserver, and on Android that is
-+//   never a real resolver. Anything else the platform genuinely told us about is left alone.
-+func isUnusableResolver(address string) bool {
-+	host, _, err := net.SplitHostPort(address)
-+	if err != nil {
-+		return true
++// Upstream is one server to ask, and how.
++type Upstream struct {
++	Addr       netip.AddrPort
++	Transport  Transport
++	ServerName string // TLS only: the name its certificate must carry
++}
++
++func (u Upstream) String() string { return u.Transport.String() + "://" + u.Addr.String() }
++
++// Config is the ladder: Tiers in priority order, each a set of upstreams started together.
++type Config struct {
++	Tiers [][]Upstream
++	// TierDelay is how long a tier is given before the next is started alongside it.
++	TierDelay time.Duration
++	// AttemptTimeout bounds one upstream's attempt (dial, handshake, query and answer).
++	AttemptTimeout time.Duration
++	// RootCAs verifies DNS-over-TLS servers. Nil means the system roots plus BundledRoots.
++	RootCAs *x509.CertPool
++	// Logf, when set, is told when the answering tier changes — once per change, not per lookup.
++	Logf func(format string, args ...any)
++}
++
++var (
++	PublicUDP = []netip.AddrPort{ap("1.1.1.1:53"), ap("1.0.0.1:53"), ap("8.8.8.8:53")}
++	PublicTCP = []netip.AddrPort{ap("1.1.1.1:53"), ap("8.8.8.8:53")}
++	PublicDoT = []Upstream{
++		{Addr: ap("1.1.1.1:853"), Transport: TLS, ServerName: "cloudflare-dns.com"},
++		{Addr: ap("8.8.8.8:853"), Transport: TLS, ServerName: "dns.google"},
 +	}
-+	addr, err := netip.ParseAddr(host)
-+	if err != nil {
-+		return true
++)
++
++func ap(s string) netip.AddrPort { return netip.MustParseAddrPort(s) }
++
++// ParseServers reads a VIBE_DNS_SERVERS value: addresses with or without a port (53 when absent);
++// anything unparsable, unspecified (0.0.0.0, ::) or duplicated is dropped.
++func ParseServers(v string) []netip.AddrPort {
++	var out []netip.AddrPort
++	seen := map[netip.AddrPort]bool{}
++	for _, f := range strings.Split(v, ",") {
++		f = strings.TrimSpace(f)
++		if f == "" {
++			continue
++		}
++		var a netip.AddrPort
++		if p, err := netip.ParseAddrPort(f); err == nil {
++			a = p
++		} else if ip, err := netip.ParseAddr(strings.Trim(f, "[]")); err == nil {
++			a = netip.AddrPortFrom(ip, 53)
++		} else {
++			continue
++		}
++		a = netip.AddrPortFrom(a.Addr().Unmap(), a.Port())
++		if a.Addr().IsUnspecified() || a.Port() == 0 || seen[a] {
++			continue
++		}
++		seen[a] = true
++		out = append(out, a)
 +	}
-+	return addr.IsLoopback() || addr.IsUnspecified()
++	return out
++}
++
++// SystemServers is the device's own DNS servers as the app handed them over (may be empty).
++func SystemServers() []netip.AddrPort { return ParseServers(os.Getenv(EnvServers)) }
++
++// DefaultConfig is the ladder described at the top of this file, with `system` as tier 1.
++func DefaultConfig(system []netip.AddrPort) Config {
++	var tiers [][]Upstream
++	if len(system) > 0 {
++		var t []Upstream
++		for _, a := range system {
++			t = append(t, Upstream{Addr: a, Transport: UDP})
++		}
++		tiers = append(tiers, t)
++	}
++	var udp, tcp []Upstream
++	for _, a := range PublicUDP {
++		udp = append(udp, Upstream{Addr: a, Transport: UDP})
++	}
++	for _, a := range PublicTCP {
++		tcp = append(tcp, Upstream{Addr: a, Transport: TCP})
++	}
++	tiers = append(tiers, udp, tcp, PublicDoT)
++	return Config{
++		Tiers:          tiers,
++		TierDelay:      700 * time.Millisecond,
++		AttemptTimeout: 2500 * time.Millisecond,
++		Logf:           log.Printf,
++	}
++}
++
++// ForwardTargets is where cloudflared's DNS-over-tunnel service should send queries: the device's own
++// servers when the app named any, otherwise Cloudflare's. Plain DNS only — that service relays packets.
++func ForwardTargets(system []netip.AddrPort) []netip.AddrPort {
++	if len(system) > 0 {
++		return system
++	}
++	return []netip.AddrPort{ap("1.1.1.1:53")}
++}
++
++// Ladder runs Config. Safe for concurrent use; one per process is enough.
++type Ladder struct {
++	cfg     Config
++	roots   *x509.CertPool
++	lastWin atomic.Int32 // tier index that answered last; -1 before the first answer
++}
++
++func New(cfg Config) *Ladder {
++	l := &Ladder{cfg: cfg, roots: cfg.RootCAs}
++	if l.roots == nil {
++		l.roots = SystemPlusBundledRoots()
++	}
++	if l.cfg.TierDelay <= 0 {
++		l.cfg.TierDelay = 700 * time.Millisecond
++	}
++	if l.cfg.AttemptTimeout <= 0 {
++		l.cfg.AttemptTimeout = 2500 * time.Millisecond
++	}
++	l.lastWin.Store(-1)
++	return l
++}
++
++// Resolver is a net.Resolver that sends every question through the ladder.
++func (l *Ladder) Resolver() *net.Resolver {
++	return &net.Resolver{
++		// ★ Must be true: Dial is only consulted by the pure-Go resolver.
++		PreferGo: true,
++		Dial:     l.Dial,
++	}
++}
++
++// Dial ignores the server Go chose (on Android, the loopback it falls back to with no resolv.conf) and
++// returns a conn that answers through the ladder. The network ("udp"/"tcp") does not matter: the conn is
++// stream-framed either way, and a truncated UDP answer is retried over TCP inside the ladder.
++func (l *Ladder) Dial(ctx context.Context, _, _ string) (net.Conn, error) {
++	// ★ The caller's own cancellation still ends the lookup; Go also sets the deadline on the conn.
++	cctx, cancel := context.WithCancel(ctx)
++	c := &ladderConn{l: l, ctx: cctx, cancel: cancel, done: make(chan struct{})}
++	if d, ok := ctx.Deadline(); ok {
++		c.deadline = d
++	}
++	return c, nil
++}
++
++// Exchange sends one DNS message (no length prefix) up the ladder and returns the answer.
++func (l *Ladder) Exchange(ctx context.Context, query []byte) ([]byte, error) {
++	if len(query) < 12 {
++		return nil, errors.New("vibedns: query too short")
++	}
++	ctx, cancel := context.WithCancel(ctx)
++	defer cancel()
++
++	type result struct {
++		tier int
++		up   Upstream
++		msg  []byte
++		err  error
++	}
++	tiers := l.cfg.Tiers
++	total := 0
++	for _, t := range tiers {
++		total += len(t)
++	}
++	results := make(chan result, total) // ★ every attempt can report without blocking, even after we return
++	started := make([]bool, len(tiers))
++	pending := 0
++	start := func(t int) {
++		if started[t] {
++			return
++		}
++		started[t] = true
++		for _, u := range tiers[t] {
++			pending++
++			go func(t int, u Upstream) {
++				actx, acancel := context.WithTimeout(ctx, l.cfg.AttemptTimeout)
++				defer acancel()
++				m, err := l.ask(actx, u, query)
++				results <- result{t, u, m, err}
++			}(t, u)
++		}
++	}
++	// ★ The tier that answered last goes first, alongside tier 0's normal start.
++	first := int(l.lastWin.Load())
++	if first >= 0 && first < len(tiers) {
++		start(first)
++	}
++	next := 0
++	start(next)
++	timer := time.NewTimer(l.cfg.TierDelay)
++	defer timer.Stop()
++
++	var fallback []byte // a SERVFAIL/REFUSED, returned only if nothing better arrives
++	var lastErr error
++	advance := func() bool {
++		for next+1 < len(tiers) {
++			next++
++			if !started[next] {
++				start(next)
++				return true
++			}
++		}
++		return false
++	}
++	for {
++		if pending == 0 && !advance() {
++			if fallback != nil {
++				return fallback, nil
++			}
++			if lastErr == nil {
++				lastErr = errors.New("vibedns: no upstream configured")
++			}
++			return nil, lastErr
++		}
++		select {
++		case <-ctx.Done():
++			if fallback != nil {
++				return fallback, nil
++			}
++			return nil, ctx.Err()
++		case <-timer.C:
++			advance()
++			timer.Reset(l.cfg.TierDelay)
++		case r := <-results:
++			pending--
++			if r.err != nil {
++				lastErr = r.err
++				continue
++			}
++			switch rcode(r.msg) {
++			case 0, 3: // NOERROR, NXDOMAIN: an answer, whatever it says
++				if prev := l.lastWin.Swap(int32(r.tier)); prev != int32(r.tier) && l.cfg.Logf != nil {
++					l.cfg.Logf("vibedns: DNS answered by %s (tier %d of %d)", r.up, r.tier+1, len(tiers))
++				}
++				return r.msg, nil
++			default:
++				fallback = r.msg
++				lastErr = fmt.Errorf("vibedns: %s answered rcode %d", r.up, rcode(r.msg))
++			}
++		}
++	}
++}
++
++func rcode(m []byte) int { return int(m[3] & 0x0f) }
++
++// ask puts one question to one upstream.
++func (l *Ladder) ask(ctx context.Context, u Upstream, q []byte) ([]byte, error) {
++	switch u.Transport {
++	case UDP:
++		m, err := askUDP(ctx, u.Addr, q)
++		if err == nil && m[2]&0x02 != 0 { // TC: the answer did not fit — ask the same server over TCP
++			return askStream(ctx, u, q, nil)
++		}
++		return m, err
++	case TCP:
++		return askStream(ctx, u, q, nil)
++	default:
++		return askStream(ctx, u, q, l.roots)
++	}
++}
++
++// askUDP sends the query on a connected socket (so only that server's packets arrive), resends once
++// half-way through the attempt, and accepts only a reply to THIS question.
++func askUDP(ctx context.Context, addr netip.AddrPort, q []byte) ([]byte, error) {
++	var d net.Dialer
++	c, err := d.DialContext(ctx, "udp", addr.String())
++	if err != nil {
++		return nil, err
++	}
++	defer c.Close()
++	stop := context.AfterFunc(ctx, func() { c.SetDeadline(time.Now()) })
++	defer stop()
++	if dl, ok := ctx.Deadline(); ok {
++		c.SetDeadline(dl)
++		go func() {
++			// ★ One resend half-way: a single lost datagram should not cost the whole attempt.
++			t := time.NewTimer(time.Until(dl) / 2)
++			defer t.Stop()
++			select {
++			case <-t.C:
++				c.Write(q)
++			case <-ctx.Done():
++			}
++		}()
++	}
++	if _, err := c.Write(q); err != nil {
++		return nil, err
++	}
++	buf := make([]byte, 65535)
++	for {
++		n, err := c.Read(buf)
++		if err != nil {
++			return nil, err
++		}
++		if answers(q, buf[:n]) {
++			return append([]byte(nil), buf[:n]...), nil
++		}
++	}
++}
++
++// askStream is DNS over TCP (roots == nil) or over TLS (roots != nil): a 2-byte length, then the message.
++func askStream(ctx context.Context, u Upstream, q []byte, roots *x509.CertPool) ([]byte, error) {
++	var d net.Dialer
++	raw, err := d.DialContext(ctx, "tcp", u.Addr.String())
++	if err != nil {
++		return nil, err
++	}
++	var c net.Conn = raw
++	defer func() { c.Close() }()
++	stop := context.AfterFunc(ctx, func() { raw.SetDeadline(time.Now()) })
++	defer stop()
++	if dl, ok := ctx.Deadline(); ok {
++		raw.SetDeadline(dl)
++	}
++	if u.Transport == TLS {
++		// ★★★ VERIFIED. ServerName is checked against the certificate and the chain against roots;
++		//     InsecureSkipVerify is never set. A server that cannot prove who it is answers nothing.
++		tc := tls.Client(raw, &tls.Config{ServerName: u.ServerName, RootCAs: roots, MinVersion: tls.VersionTLS12})
++		if err := tc.HandshakeContext(ctx); err != nil {
++			return nil, err
++		}
++		c = tc
++	}
++	msg := make([]byte, 2+len(q))
++	binary.BigEndian.PutUint16(msg, uint16(len(q)))
++	copy(msg[2:], q)
++	if _, err := c.Write(msg); err != nil {
++		return nil, err
++	}
++	var hdr [2]byte
++	if _, err := io.ReadFull(c, hdr[:]); err != nil {
++		return nil, err
++	}
++	m := make([]byte, binary.BigEndian.Uint16(hdr[:]))
++	if _, err := io.ReadFull(c, m); err != nil {
++		return nil, err
++	}
++	if !answers(q, m) {
++		return nil, fmt.Errorf("vibedns: %s sent an answer to a different question", u)
++	}
++	return m, nil
++}
++
++// answers: same ID, QR set, and the same question section (names compared without case). Go checks
++// all of this again; it is checked here so a stray reply cannot win the race for a real one.
++func answers(q, m []byte) bool {
++	if len(m) < 12 || m[0] != q[0] || m[1] != q[1] || m[2]&0x80 == 0 {
++		return false
++	}
++	end := questionEnd(q)
++	if end < 0 || len(m) < end || binary.BigEndian.Uint16(m[4:]) != binary.BigEndian.Uint16(q[4:]) {
++		return false
++	}
++	return strings.EqualFold(string(q[12:end]), string(m[12:end]))
++}
++
++// questionEnd is the offset just past the question section of q, or -1.
++func questionEnd(q []byte) int {
++	n := int(binary.BigEndian.Uint16(q[4:]))
++	i := 12
++	for ; n > 0; n-- {
++		for {
++			if i >= len(q) {
++				return -1
++			}
++			l := int(q[i])
++			if l == 0 {
++				i++
++				break
++			}
++			if l&0xc0 != 0 { // a query's names are never compressed
++				return -1
++			}
++			i += 1 + l
++		}
++		i += 4 // QTYPE, QCLASS
++	}
++	if i > len(q) {
++		return -1
++	}
++	return i
++}
++
++// ladderConn is what Go's resolver "dials": it writes a framed query, the ladder answers, it reads a
++// framed reply. Not a net.PacketConn, on purpose — that is what makes Go use stream framing.
++type ladderConn struct {
++	l      *Ladder
++	ctx    context.Context
++	cancel context.CancelFunc
++
++	mu       sync.Mutex
++	deadline time.Time
++	wbuf     []byte
++	rbuf     []byte
++	sent     bool
++	done     chan struct{}
++	err      error
++	closed   bool
++}
++
++func (c *ladderConn) Write(b []byte) (int, error) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.closed {
++		return 0, net.ErrClosed
++	}
++	if c.sent {
++		return 0, errors.New("vibedns: one query per conn")
++	}
++	c.wbuf = append(c.wbuf, b...)
++	if len(c.wbuf) >= 2 {
++		n := int(binary.BigEndian.Uint16(c.wbuf))
++		if len(c.wbuf) >= 2+n {
++			c.sent = true
++			q := append([]byte(nil), c.wbuf[2:2+n]...)
++			ctx, dl := c.ctx, c.deadline
++			go func() {
++				var cancel context.CancelFunc = func() {}
++				if !dl.IsZero() {
++					ctx, cancel = context.WithDeadline(ctx, dl)
++				}
++				defer cancel()
++				m, err := c.l.Exchange(ctx, q)
++				c.mu.Lock()
++				if err == nil {
++					c.rbuf = make([]byte, 2+len(m))
++					binary.BigEndian.PutUint16(c.rbuf, uint16(len(m)))
++					copy(c.rbuf[2:], m)
++				}
++				c.err = err
++				c.mu.Unlock()
++				close(c.done)
++			}()
++		}
++	}
++	return len(b), nil
++}
++
++func (c *ladderConn) Read(b []byte) (int, error) {
++	c.mu.Lock()
++	dl := c.deadline
++	c.mu.Unlock()
++	var expire <-chan time.Time
++	if !dl.IsZero() {
++		t := time.NewTimer(time.Until(dl))
++		defer t.Stop()
++		expire = t.C
++	}
++	select {
++	case <-c.done:
++	case <-expire:
++		return 0, &net.OpError{Op: "read", Net: "vibedns", Err: os.ErrDeadlineExceeded}
++	case <-c.ctx.Done():
++		select {
++		case <-c.done: // finished in the same instant: prefer the answer
++		default:
++			return 0, &net.OpError{Op: "read", Net: "vibedns", Err: c.ctx.Err()}
++		}
++	}
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.err != nil {
++		return 0, &net.OpError{Op: "read", Net: "vibedns", Err: c.err}
++	}
++	if len(c.rbuf) == 0 {
++		return 0, io.EOF
++	}
++	n := copy(b, c.rbuf)
++	c.rbuf = c.rbuf[n:]
++	return n, nil
++}
++
++func (c *ladderConn) Close() error {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if !c.closed {
++		c.closed = true
++		c.cancel()
++	}
++	return nil
++}
++
++func (c *ladderConn) SetDeadline(t time.Time) error {
++	c.mu.Lock()
++	c.deadline = t
++	c.mu.Unlock()
++	return nil
++}
++func (c *ladderConn) SetReadDeadline(t time.Time) error  { return c.SetDeadline(t) }
++func (c *ladderConn) SetWriteDeadline(t time.Time) error { return nil }
++
++type ladderAddr struct{}
++
++func (ladderAddr) Network() string { return "vibedns" }
++func (ladderAddr) String() string  { return "vibedns" }
++
++func (c *ladderConn) LocalAddr() net.Addr  { return ladderAddr{} }
++func (c *ladderConn) RemoteAddr() net.Addr { return ladderAddr{} }
+diff --git a/vibedns/resolver_test.go b/vibedns/resolver_test.go
+new file mode 100644
+index 0000000..d020af5
+--- /dev/null
++++ b/vibedns/resolver_test.go
+@@ -0,0 +1,369 @@
++package vibedns
++
++// VIBESDR PATCH — the ladder, proved on a development machine (the package has no build tag; only the
++// android files install it). Local fake servers on 127.0.0.1 for the ordering and timing; the REAL
++// 1.1.1.1:853 and 8.8.8.8:853 for DNS-over-TLS (skipped with -short). Silent: nothing is played, and
++// every wait is bounded by a context.
++
++import (
++	"context"
++	"crypto/x509"
++	"net"
++	"net/netip"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"golang.org/x/net/dns/dnsmessage"
++)
++
++type behaviour int
++
++const (
++	answer behaviour = iota
++	silent
++	servfail
++	truncate
++)
++
++// fakeDNS answers every A question with ip (or misbehaves as told) on UDP, and on TCP when tcp is set,
++// on one 127.0.0.1 port. It counts the questions it saw.
++type fakeDNS struct {
++	addr netip.AddrPort
++	seen atomic.Int32
++}
++
++func reply(t *testing.T, q []byte, ip string, b behaviour) []byte {
++	var p dnsmessage.Parser
++	h, err := p.Start(q)
++	if err != nil {
++		t.Errorf("fake: bad query: %v", err)
++		return nil
++	}
++	qs, _ := p.AllQuestions()
++	h.Response = true
++	h.RecursionAvailable = true
++	switch b {
++	case servfail:
++		h.RCode = dnsmessage.RCodeServerFailure
++	case truncate:
++		h.Truncated = true
++	}
++	bld := dnsmessage.NewBuilder(nil, h)
++	bld.StartQuestions()
++	for _, x := range qs {
++		bld.Question(x)
++	}
++	bld.StartAnswers()
++	if b == answer {
++		for _, x := range qs {
++			if x.Type == dnsmessage.TypeA {
++				a := netip.MustParseAddr(ip).As4()
++				bld.AResource(dnsmessage.ResourceHeader{Name: x.Name, Class: dnsmessage.ClassINET, TTL: 60},
++					dnsmessage.AResource{A: a})
++			}
++		}
++	}
++	out, err := bld.Finish()
++	if err != nil {
++		t.Errorf("fake: build: %v", err)
++	}
++	return out
++}
++
++func startFake(t *testing.T, ip string, udpB behaviour, tcp bool, tcpIP string) *fakeDNS {
++	t.Helper()
++	f := &fakeDNS{}
++	var ln net.Listener
++	var pc net.PacketConn
++	for i := 0; i < 20; i++ { // ★ one port for both UDP and TCP
++		l, err := net.Listen("tcp", "127.0.0.1:0")
++		if err != nil {
++			t.Fatal(err)
++		}
++		p, err := net.ListenPacket("udp", l.Addr().String())
++		if err == nil {
++			ln, pc = l, p
++			break
++		}
++		l.Close()
++	}
++	if pc == nil {
++		t.Fatal("no free port pair")
++	}
++	f.addr = netip.MustParseAddrPort(pc.LocalAddr().String())
++	t.Cleanup(func() { pc.Close(); ln.Close() })
++	go func() {
++		buf := make([]byte, 4096)
++		for {
++			n, from, err := pc.ReadFrom(buf)
++			if err != nil {
++				return
++			}
++			f.seen.Add(1)
++			if udpB == silent {
++				continue
++			}
++			pc.WriteTo(reply(t, buf[:n], ip, udpB), from)
++		}
++	}()
++	go func() {
++		for {
++			c, err := ln.Accept()
++			if err != nil {
++				return
++			}
++			if !tcp {
++				c.Close() // ★ "refused" as fast as a real closed port
++				continue
++			}
++			go func(c net.Conn) {
++				defer c.Close()
++				c.SetDeadline(time.Now().Add(5 * time.Second))
++				var hdr [2]byte
++				if _, err := c.Read(hdr[:]); err != nil {
++					return
++				}
++				q := make([]byte, int(hdr[0])<<8|int(hdr[1]))
++				if _, err := readFull(c, q); err != nil {
++					return
++				}
++				f.seen.Add(1)
++				m := reply(t, q, tcpIP, answer)
++				c.Write(append([]byte{byte(len(m) >> 8), byte(len(m))}, m...))
++			}(c)
++		}
++	}()
++	return f
++}
++
++func readFull(c net.Conn, b []byte) (int, error) {
++	n := 0
++	for n < len(b) {
++		k, err := c.Read(b[n:])
++		n += k
++		if err != nil {
++			return n, err
++		}
++	}
++	return n, nil
++}
++
++func udp(f *fakeDNS) Upstream { return Upstream{Addr: f.addr, Transport: UDP} }
++
++// cfg uses the SHIPPED timings, so the timing assertions are about what a phone will actually do.
++func cfg(tiers ...[]Upstream) Config {
++	d := DefaultConfig(nil)
++	d.Tiers = tiers
++	d.Logf = nil
++	return d
++}
++
++func lookup(t *testing.T, l *Ladder, name string) ([]netip.Addr, time.Duration, error) {
++	t.Helper()
++	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
++	defer cancel()
++	t0 := time.Now()
++	ips, err := l.Resolver().LookupNetIP(ctx, "ip4", name)
++	return ips, time.Since(t0), err
++}
++
++func has(ips []netip.Addr, want ...string) bool {
++	for _, ip := range ips {
++		for _, w := range want {
++			if ip.String() == w {
++				return true
++			}
++		}
++	}
++	return false
++}
++
++func TestSystemServersAreAskedFirst(t *testing.T) {
++	sys := startFake(t, "10.0.0.1", answer, false, "")
++	pub := startFake(t, "10.0.0.2", answer, false, "")
++	l := New(cfg([]Upstream{udp(sys)}, []Upstream{udp(pub)}))
++	ips, took, err := lookup(t, l, "tunnel.vibedns.test.")
++	if err != nil || !has(ips, "10.0.0.1") {
++		t.Fatalf("want the system server's answer 10.0.0.1, got %v %v", ips, err)
++	}
++	if n := pub.seen.Load(); n != 0 {
++		t.Fatalf("the public server was asked %d times although the system server answered", n)
++	}
++	t.Logf("system server answered in %v; public server never asked", took.Round(time.Millisecond))
++}
++
++func TestDeadUDPPathFallsThroughQuickly(t *testing.T) {
++	dead := startFake(t, "", silent, false, "") // ★ Kiko's network: the packet goes out, nothing comes back
++	pub := startFake(t, "10.0.0.2", answer, false, "")
++	c := cfg([]Upstream{udp(dead)}, []Upstream{udp(pub)})
++	l := New(c)
++	ips, took, err := lookup(t, l, "edge.vibedns.test.")
++	if err != nil || !has(ips, "10.0.0.2") {
++		t.Fatalf("want the next tier's answer 10.0.0.2, got %v %v", ips, err)
++	}
++	if dead.seen.Load() == 0 {
++		t.Fatal("the dead server was never tried — the order is wrong")
++	}
++	if took > c.TierDelay+600*time.Millisecond {
++		t.Fatalf("a dead UDP path cost %v — it must cost about one TierDelay (%v), not Go's 5 s", took, c.TierDelay)
++	}
++	t.Logf("dead UDP path cost %v (TierDelay %v)", took.Round(time.Millisecond), c.TierDelay)
++
++	// ★ And the tier that answered goes first next time: no TierDelay paid again.
++	_, took2, err := lookup(t, l, "edge2.vibedns.test.")
++	if err != nil || took2 > 300*time.Millisecond {
++		t.Fatalf("second lookup took %v (%v) — the winning tier should have started first", took2, err)
++	}
++	t.Logf("second lookup, winner first: %v", took2.Round(time.Millisecond))
++}
++
++func TestServfailFallsThroughAtOnce(t *testing.T) {
++	bad := startFake(t, "", servfail, false, "")
++	pub := startFake(t, "10.0.0.2", answer, false, "")
++	l := New(cfg([]Upstream{udp(bad)}, []Upstream{udp(pub)}))
++	ips, took, err := lookup(t, l, "sf.vibedns.test.")
++	if err != nil || !has(ips, "10.0.0.2") {
++		t.Fatalf("want 10.0.0.2 after a SERVFAIL, got %v %v", ips, err)
++	}
++	if took > 400*time.Millisecond {
++		t.Fatalf("a SERVFAIL should move on at once, took %v", took)
++	}
++}
++
++func TestTruncatedUDPRetriesOverTCP(t *testing.T) {
++	f := startFake(t, "10.0.0.9", truncate, true, "10.0.0.3")
++	l := New(cfg([]Upstream{udp(f)}))
++	ips, _, err := lookup(t, l, "big.vibedns.test.")
++	if err != nil || !has(ips, "10.0.0.3") {
++		t.Fatalf("want the TCP answer 10.0.0.3 after TC, got %v %v", ips, err)
++	}
++}
++
++func TestEverythingDeadFailsWithinTheDeadline(t *testing.T) {
++	dead := startFake(t, "", silent, false, "")
++	l := New(cfg([]Upstream{udp(dead)}))
++	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
++	defer cancel()
++	t0 := time.Now()
++	_, err := l.Resolver().LookupNetIP(ctx, "ip4", "none.vibedns.test.")
++	if err == nil {
++		t.Fatal("a lookup with every path dead succeeded")
++	}
++	t.Logf("all paths dead: failed in %v with %v", time.Since(t0).Round(time.Millisecond), err)
++}
++
++func TestParseServers(t *testing.T) {
++	got := ParseServers(" 10.1.1.1, fe80::1%wlan0 ,bogus,0.0.0.0,::,10.1.1.1,[2001:db8::53]:5353,192.168.1.1:53,::ffff:10.0.0.7")
++	want := []string{"10.1.1.1:53", "[fe80::1%wlan0]:53", "[2001:db8::53]:5353", "192.168.1.1:53", "10.0.0.7:53"}
++	if len(got) != len(want) {
++		t.Fatalf("got %v want %v", got, want)
++	}
++	for i := range want {
++		if got[i].String() != want[i] {
++			t.Fatalf("got %v want %v", got, want)
++		}
++	}
++	if len(ParseServers("")) != 0 {
++		t.Fatal("empty must parse to nothing")
++	}
++	d := DefaultConfig(nil)
++	if len(d.Tiers) != 3 || d.Tiers[0][0].Addr.String() != "1.1.1.1:53" {
++		t.Fatalf("with no system servers the ladder starts at the public tier: %v", d.Tiers)
++	}
++	d = DefaultConfig(got[:1])
++	if len(d.Tiers) != 4 || d.Tiers[0][0].Addr.String() != "10.1.1.1:53" || d.Tiers[3][0].Transport != TLS {
++		t.Fatalf("system first, DoT last: %v", d.Tiers)
++	}
++	if ForwardTargets(nil)[0].String() != "1.1.1.1:53" || ForwardTargets(got[:1])[0].String() != "10.1.1.1:53" {
++		t.Fatal("ForwardTargets")
++	}
++}
++
++// ── the real thing, over the network ──────────────────────────────────────────────────────────────
++
++func needNet(t *testing.T) {
++	if testing.Short() {
++		t.Skip("network test (-short)")
++	}
++}
++
++func TestDoTCloudflareWhenUDPAndTCP53AreDead(t *testing.T) {
++	needNet(t)
++	dead := startFake(t, "", silent, false, "") // UDP: silent; TCP on the same port: closed at once
++	c := cfg([]Upstream{udp(dead)}, []Upstream{{Addr: dead.addr, Transport: TCP}}, []Upstream{PublicDoT[0]})
++	l := New(c)
++	ips, took, err := lookup(t, l, "one.one.one.one.")
++	if err != nil || !has(ips, "1.1.1.1", "1.0.0.1") {
++		t.Fatalf("DoT to 1.1.1.1:853 failed: %v %v", ips, err)
++	}
++	t.Logf("UDP dead, TCP 53 refused → DoT 1.1.1.1:853 answered %v in %v", ips, took.Round(time.Millisecond))
++
++	// ★ The record cloudflared's edge discovery needs, through the same ladder.
++	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
++	defer cancel()
++	_, srv, err := l.Resolver().LookupSRV(ctx, "v2-origintunneld", "tcp", "argotunnel.com")
++	if err != nil || len(srv) == 0 {
++		t.Fatalf("SRV _v2-origintunneld._tcp.argotunnel.com over DoT failed: %v %v", srv, err)
++	}
++	t.Logf("SRV _v2-origintunneld._tcp.argotunnel.com over DoT: %d record(s), e.g. %s:%d", len(srv), srv[0].Target, srv[0].Port)
++}
++
++func TestDoTGoogle(t *testing.T) {
++	needNet(t)
++	l := New(cfg([]Upstream{PublicDoT[1]}))
++	ips, took, err := lookup(t, l, "dns.google.")
++	if err != nil || !has(ips, "8.8.8.8", "8.8.4.4") {
++		t.Fatalf("DoT to 8.8.8.8:853 failed: %v %v", ips, err)
++	}
++	t.Logf("DoT 8.8.8.8:853 answered %v in %v", ips, took.Round(time.Millisecond))
++}
++
++func TestDoTOnAnOldPhoneStore(t *testing.T) {
++	needNet(t)
++	// ★★ Only the bundled roots — as if the system store had nothing Cloudflare or Google chain to.
++	p := x509.NewCertPool()
++	for _, pem := range BundledRoots {
++		if !p.AppendCertsFromPEM([]byte(pem)) {
++			t.Fatal("a bundled root does not parse")
++		}
++	}
++	for _, u := range PublicDoT {
++		c := cfg([]Upstream{u})
++		c.RootCAs = p
++		if _, _, err := lookup(t, New(c), "one.one.one.one."); err != nil {
++			t.Fatalf("%s with the bundled roots alone: %v", u, err)
++		}
++	}
++}
++
++func TestDoTRefusesTheWrongCertificate(t *testing.T) {
++	needNet(t)
++	// ★★★ VERIFICATION IS ON: 1.1.1.1 cannot prove it is example.com, so it is not believed.
++	wrong := Upstream{Addr: PublicDoT[0].Addr, Transport: TLS, ServerName: "example.com"}
++	// ★ And an empty pool trusts nothing at all.
++	empty := cfg([]Upstream{PublicDoT[0]})
++	empty.RootCAs = x509.NewCertPool()
++	for name, c := range map[string]Config{"wrong ServerName": cfg([]Upstream{wrong}), "no trusted roots": empty} {
++		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
++		q := query(t, "one.one.one.one.")
++		_, err := New(c).Exchange(ctx, q)
++		cancel()
++		if err == nil || !strings.Contains(err.Error(), "certificate") {
++			t.Fatalf("%s: want a certificate error, got %v", name, err)
++		}
++		t.Logf("%s: refused (%v)", name, err)
++	}
++}
++
++func query(t *testing.T, name string) []byte {
++	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: 0x5eed, RecursionDesired: true})
++	b.StartQuestions()
++	b.Question(dnsmessage.Question{Name: dnsmessage.MustNewName(name), Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET})
++	m, err := b.Finish()
++	if err != nil {
++		t.Fatal(err)
++	}
++	return m
++}
+diff --git a/vibedns/roots.go b/vibedns/roots.go
+new file mode 100644
+index 0000000..20ecda0
+--- /dev/null
++++ b/vibedns/roots.go
+@@ -0,0 +1,97 @@
++package vibedns
++
++// VIBESDR PATCH — the roots DNS-over-TLS needs on a phone whose store predates them.
++//
++// ★★★ ADDED TO THE SYSTEM'S TRUST, NEVER INSTEAD OF IT — the same rule as the app's VibeTls.kt. A chain the
++//     system trusts is accepted as before; these only let an OLD store verify the two DoT servers we ask,
++//     with the full chain, dates and ServerName still checked by crypto/tls.
++// ★★ WHICH, AND WHY (chains checked with `openssl s_client -showcerts`, 2026-10-27):
++//    • SSL.com Root Certification Authority ECC — 1.1.1.1:853 / cloudflare-dns.com (leaf ← SSL.com SSL
++//      Intermediate CA ECC R2 ← this root). Not in Android 6's store, so without it Cloudflare's DoT
++//      could not be verified on Kiko's box at all.
++//    • GTS Root R4 / R1 — 8.8.8.8:853 / dns.google (leaf ← WE2 ← GTS Root R4, today cross-signed by
++//      GlobalSign Root CA, which every Android has but which EXPIRES 28 Jan 2028).
++//  ★ Copied from the macOS system root store; SHA-256 of each in the comment above it.
++
++import (
++	"crypto/x509"
++)
++
++// SystemPlusBundledRoots is the platform's pool with BundledRoots appended (BundledRoots alone if the
++// platform has none, as a stripped image might).
++func SystemPlusBundledRoots() *x509.CertPool {
++	p, err := x509.SystemCertPool()
++	if err != nil || p == nil {
++		p = x509.NewCertPool()
++	}
++	for _, pem := range BundledRoots {
++		p.AppendCertsFromPEM([]byte(pem))
++	}
++	return p
++}
++
++var BundledRoots = []string{
++	// SSL.com Root Certification Authority ECC — SHA-256 3417BB06CC6007DA1B961C920B8AB4CE3FAD820E4AA30B9ACBC4A74EBDCEBC65
++	`-----BEGIN CERTIFICATE-----
++MIICjTCCAhSgAwIBAgIIdebfy8FoW6gwCgYIKoZIzj0EAwIwfDELMAkGA1UEBhMC
++VVMxDjAMBgNVBAgMBVRleGFzMRAwDgYDVQQHDAdIb3VzdG9uMRgwFgYDVQQKDA9T
++U0wgQ29ycG9yYXRpb24xMTAvBgNVBAMMKFNTTC5jb20gUm9vdCBDZXJ0aWZpY2F0
++aW9uIEF1dGhvcml0eSBFQ0MwHhcNMTYwMjEyMTgxNDAzWhcNNDEwMjEyMTgxNDAz
++WjB8MQswCQYDVQQGEwJVUzEOMAwGA1UECAwFVGV4YXMxEDAOBgNVBAcMB0hvdXN0
++b24xGDAWBgNVBAoMD1NTTCBDb3Jwb3JhdGlvbjExMC8GA1UEAwwoU1NMLmNvbSBS
++b290IENlcnRpZmljYXRpb24gQXV0aG9yaXR5IEVDQzB2MBAGByqGSM49AgEGBSuB
++BAAiA2IABEVuqVDEpiM2nl8ojRfLliJkP9x6jh3MCLOicSS6jkm5BBtHllirLZXI
++7Z4INcgn64mMU1jrYor+8FsPazFSY0E7ic3s7LaNGdM0B9y7xgZ/wkWV7Mt/qCPg
++CemB+vNH06NjMGEwHQYDVR0OBBYEFILRhXMw5zUE044CkvvlpNHEIejNMA8GA1Ud
++EwEB/wQFMAMBAf8wHwYDVR0jBBgwFoAUgtGFczDnNQTTjgKS++Wk0cQh6M0wDgYD
++VR0PAQH/BAQDAgGGMAoGCCqGSM49BAMCA2cAMGQCMG/n61kRpGDPYbCWe+0F+S8T
++kdzt5fxQaxFGRrMcIQBiu77D5+jNB5n5DQtdcj7EqgIwH7y6C+IwJPt8bYBVCpk+
++gA0z5Wajs6O7pdWLjwkspl1+4vAHCGht0nxpbl/f5Wpl
++-----END CERTIFICATE-----`,
++	// GTS Root R4 — SHA-256 349DFA4058C5E263123B398AE795573C4E1313C83FE68F93556CD5E8031B3C7D
++	`-----BEGIN CERTIFICATE-----
++MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD
++VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG
++A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw
++WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz
++IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi
++AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi
++QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR
++HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW
++BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D
++9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8
++p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD
++-----END CERTIFICATE-----`,
++	// GTS Root R1 — SHA-256 D947432ABDE7B7FA90FC2E6B59101B1280E0E1C7E4E40FA3C6887FFF57A7F4CF
++	`-----BEGIN CERTIFICATE-----
++MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw
++CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU
++MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw
++MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp
++Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEBAQUA
++A4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaMf/vo
++27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7w
++Cl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjw
++TcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0Pfybl
++qAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtcvfaH
++szVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4Zor8
++Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUspzBmk
++MiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc92
++wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70p
++aDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVrN
++VjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQID
++AQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E
++FgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBAJ+qQibb
++C5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe
++QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuy
++h6f88/qBVRRiClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM4
++7HLwEXWdyzRSjeZ2axfG34arJ45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8J
++ZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYciNuaCp+0KueIHoI17eko8cdLiA6Ef
++MgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5meLMFrUKTX5hgUvYU/
++Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJFfbdT
++6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ
++0E6yove+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm
++2tIMPNuzjsmhDYAPexZ3FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bb
++bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c
++-----END CERTIFICATE-----`,
 +}
