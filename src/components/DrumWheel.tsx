@@ -66,6 +66,8 @@ import { notchOrder } from '../constants/drumWell';
 import { WellFace, WellEdge, DrumPool } from './DrumWell';
 import { getControlHaptics } from './controlHaptics';
 import DisplayFontText from './DisplayFontText';
+import { DomeKey } from './DomeKey';
+import { keyLightReach } from '../constants/keyLight';
 
 // ── Drum haptics (menu ✦ HAPTICS toggle) ──────────────────────────────────────
 // ★ The switch lives in controlHaptics.ts now (DomeKey needs it, and DrumWheel draws with DomeKey's
@@ -118,9 +120,11 @@ interface Props {
    *  (memory: disabled_control_reads_as_absent). The gesture, haptics and onDelta are untouched. */
   lampOff?: boolean;
   /** ★★ V12 VFO A/B (tune drum only): the VFO the drum tunes while A/B is on. The radio glyph SHIFTS OVER and this
-   *  letter sits beside it in the window; off (null) = the glyph exactly where it always was. */
+   *  letter sits beside it in the window — ON A KEY when `onTrapHold` is given (a tap switches, see `abKey` below);
+   *  off (null) = the glyph exactly where it always was. */
   vfoLetter?: 'A' | 'B' | null;
-  /** A BRIEF press-and-hold on the window switches VFO (short haptic). Only while `vfoLetter` is set. */
+  /** Switches VFO: a TAP on the A/B key in the window, or a BRIEF press-and-hold anywhere else in the window (short
+   *  haptic). Only while `vfoLetter` is set. */
   onTrapHold?: () => void;
 }
 
@@ -420,9 +424,29 @@ export default function DrumWheel({
   }, [drumTop, drumH]);
 
   const iconSz   = Math.max(7, Math.round(drumTop * 0.52));
-  // ★★ V12 VFO A/B: the glyph moves left by half its width so glyph + letter sit centred in the window together.
+  // ★★ V12 VFO A/B: the glyph moves left so glyph + letter sit centred in the window together.
   const abOn   = type === 'vfo' && !!vfoLetter;
-  const iconCx = abOn ? cx - iconSz * 0.45 : cx;
+  /* ★★★ THE LETTER IS A KEY — "not seeing the button for the B vfo" (Stuart, build 497, iPhone). The web's tune
+   *  control is two buttons with an A/B KEY between them; the app's DEFAULT tune control is this drum, and here the
+   *  letter was only a label with a hidden press-and-hold, so on a phone (drums are the default) VFO A/B came on and
+   *  there was no button to switch with. The window sits between the drum's − and +, which is exactly where the web
+   *  puts its key, so the key goes here: a small dome key carrying the letter, a tap switches. The hold stays for the
+   *  rest of the window. Drawn only while A/B is on (no dead control when it is off or not offered).
+   *  ★ Sized to the window, never past it: at the narrowest drum (SE, Display Zoom) the key and glyph together are
+   *    well inside the trapezoid's width at the key's lowest edge. Touch slop reaches over the panel edge above and a
+   *    little into the gaps — not down into the wheel, so a drag that starts on the drum still turns it. */
+  const abKey  = abOn && !!onTrapHold;
+  const abKh   = Math.max(16, Math.min(30, Math.round(drumTop * 0.78)));
+  const abKy   = Math.max(1, Math.round(drumTop * 0.48 - abKh / 2));
+  const abGap  = Math.max(3, Math.round(iconSz * 0.3));
+  // ★ The window narrows downwards: what is left of it three-quarters of the way down the key (less 2 pt each side)
+  //   caps the width, so a narrow landscape drum (minWidth 80) gets a narrower key; only its rounded lower corners
+  //   may then touch the slanted edges. Every phone/iPad/Mac width clears it (checked 130–500 pt wide drums).
+  const abRoom = trapWT - (trapWT - trapWB) * Math.min(1, (abKy + abKh * 0.75) / Math.max(1, drumTop)) - 4;
+  const abKw   = Math.max(18, Math.min(44, Math.round(abKh * 1.45), Math.floor(abRoom - iconSz - abGap)));
+  const abLeft = cx - (iconSz + abGap + abKw) / 2;   // glyph + gap + key, centred as one
+  const abKx   = abLeft + iconSz + abGap;
+  const iconCx = abKey ? abLeft + iconSz / 2 : abOn ? cx - iconSz * 0.45 : cx;
   const iconPath = useMemo(
     () => buildIconPath(type === 'vfo', iconCx, drumTop * 0.48, iconSz),
     [type, iconCx, drumTop, iconSz]);
@@ -618,6 +642,8 @@ export default function DrumWheel({
     .maxDistance(10)
     .onStart(e => {
       if (e.y > drumTop || e.y < 0) return;
+      // ★ On the A/B key the TAP is the switch — a hold there must not switch a second time on release.
+      if (abKey && e.x >= abKx - 6 && e.x <= abKx + abKw + 6 && e.y <= abKy + abKh + 2) return;
       const half = (trapWT - (trapWT - trapWB) * (e.y / Math.max(1, drumTop))) / 2;
       if (Math.abs(e.x - cx) > half) return;
       if (getControlHaptics()) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
@@ -650,8 +676,27 @@ export default function DrumWheel({
         <Canvas pointerEvents="none" style={StyleSheet.absoluteFill}>{aboveEl}</Canvas>
         </>)}
 
-        {/* ── ★★ V12 VFO A/B: the tuned VFO's letter beside the glyph, lit like it (display font) ── */}
-        {abOn && (
+        {/* ── ★★ V12 VFO A/B: the A/B KEY in the window — the tuned VFO's letter, lit; a tap switches (see abKey) ── */}
+        {abKey && (
+          <View style={{ position: 'absolute', left: abKx, top: abKy, width: abKw, height: abKh }}>
+            <DomeKey height={abKh} radius={Math.max(3, Math.round(abKh / 4))} style={{ width: abKw }}
+              onPress={onTrapHold} hitSlop={{ top: abKy + 4, bottom: 2, left: 6, right: 6 }}
+              lightReach={lampOff ? 0 : keyLightReach(3)}
+              accessibilityLabel={`VFO ${vfoLetter}`} accessibilityHint="Switches which VFO the tune drum moves">
+              {() => (
+                <DisplayFontText keepColor
+                  style={{ color: ink(0.95), fontSize: Math.max(10, Math.min(Math.round(abKh * 0.62), 18)), fontWeight: '700',
+                           includeFontPadding: false,
+                           ...(lampOff ? null : { textShadowColor: light(0.6), textShadowRadius: 4,
+                                                  textShadowOffset: { width: 0, height: 0 } }) }}>
+                  {vfoLetter as string}
+                </DisplayFontText>
+              )}
+            </DomeKey>
+          </View>
+        )}
+        {/* ── The plain letter: A/B on but nothing to switch with (no handler) — a label only ── */}
+        {abOn && !abKey && (
           <View pointerEvents="none"
                 style={{ position: 'absolute', left: cx + iconSz * 0.1, top: drumTop * 0.48 - letterSz * 0.62,
                          height: letterSz * 1.24, justifyContent: 'center' }}>

@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
  *
  * Proves:
  *   • parseWatch: the server's state sanitised (NaN, junk channels, control characters, long notes), refusals kept;
- *   • watchOffered: hwinfo `watch` → the toggle exists only when the server says so (absent / 0 = none);
+ *   • watchOffered: hwinfo `watch` → the toggle exists only when the server says so (absent / 0 = none); watchMaxOf:
+ *     the watch state's `max` re-states it (leaving DRM gives VFO B back) — junk leaves the offer alone;
  *   • the messages: on (with stereo + monoOut), off, aim (integers, a passband only when it is one), squelch (the app's
  *     -999 = off rule), stereo, monoOut;
  *   • THE SLOTS: on → B starts at A's tuning, A stays selected; select B → the status IS B's (so every control drives
@@ -21,7 +22,7 @@ import { fileURLToPath } from 'node:url';
  * Run: node --no-warnings scripts/test_vfoAB.ts   (silent: no audio anywhere)
  */
 import {
-  parseWatch, watchOffered, vfoB, msgOn, msgOff, msgAim, msgSquelch, msgStereo, msgMonoOut, EarOrder, VfoABCore,
+  parseWatch, watchOffered, watchMaxOf, vfoB, msgOn, msgOff, msgAim, msgSquelch, msgStereo, msgMonoOut, EarOrder, VfoABCore,
   SWAP_HZ, SAME_HZ, otherVfo, type TuneStatus,
 } from '../src/services/vfoAB.ts';
 
@@ -42,6 +43,13 @@ console.log('── the wire ──');
   ok(parseWatch({ type: 'watch', chans: [{ id: 1, freq: 7e6, lvl: 'x', bw: -5 }] })!.chans[0].lvl === -200, 'a non-number level → the floor, never NaN');
   ok(watchOffered({ type: 'hwinfo', watch: 1 }) === 1 && watchOffered({ type: 'hwinfo' }) === 0 && watchOffered({ type: 'hwinfo', watch: 0 }) === 0,
      'hwinfo watch: 1 → offered; absent or 0 → no toggle');
+  // ★★ The watch STATE re-states the offer (watchTellMax: into / out of DRM) — the web reads it, and now the app does.
+  ok(watchMaxOf({ type: 'watch', max: 1, chans: [] }) === 1 && watchMaxOf({ type: 'watch', max: 0 }) === 0,
+     'watch state max: 1 → offered, 0 → withdrawn');
+  ok(watchMaxOf({ type: 'watch' }) === null && watchMaxOf({ type: 'watch', max: 'x' }) === null
+     && watchMaxOf({ type: 'watch', max: NaN }) === null && watchMaxOf({ type: 'watch', max: -1 }) === null
+     && watchMaxOf({ type: 'hwinfo', max: 1 }) === null && watchMaxOf(null) === null,
+     'watch state with no usable max (absent, junk, negative, not a watch) → null: the offer is left as it was');
   const on = msgOn(false, true);
   ok(on.type === 'watch' && on.id === 1 && on.on === true && on.stereo === false && on.monoOut === true, 'on carries stereo and monoOut');
   ok(msgOff().off === true && msgOff().id === 1, 'off');
@@ -145,6 +153,22 @@ ok(vfoB(parseWatch({ type: 'watch', chans: [{ id: 1, freq: 1e6 }] }))?.freq === 
   const scr = readFileSync(fileURLToPath(new URL('../src/screens/SDRScreen.tsx', import.meta.url)), 'utf8');
   ok(/if \(type === 'scanner'\) onVfoAB\(false\);/.test(scr), 'scanner: opening it switches VFO B off');
   ok(/activeDecoder !== 'scanner' \? onVfoAB : undefined/.test(scr), 'scanner: no A/B toggle in the tuning menu while it is open');
+}
+// ★★★ A BUTTON ON EVERY TUNE CONTROL (Stuart, build 497: "not seeing the button for the B vfo" — iPhone, drums, the
+//     default). The keys always had an A/B key; the drum had only a letter and a hidden hold. Source checks.
+{
+  const src = (f: string) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
+  const drum = src('../src/components/DrumWheel.tsx');
+  ok(/const abKey\s*=\s*abOn && !!onTrapHold;/.test(drum) && /\{abKey && \([\s\S]{0,200}<DomeKey[\s\S]{0,200}onPress=\{onTrapHold\}/.test(drum),
+     'drum: an A/B KEY in the window while A/B is on (a tap switches)');
+  const bar = src('../src/components/ControlsBar.tsx');
+  ok((bar.match(/vfoLetter=\{vfoAB\} onTrapHold=\{onVfoSwap\}/g) ?? []).length === 2
+     && (bar.match(/abLetter=\{vfoAB\} onAbPress=\{onVfoSwap\}/g) ?? []).length === 2,
+     'both bars (portrait + landscape) hand the switch to the drum AND the keys');
+  const ws = src('../src/services/VibeServerWsClient.ts');
+  ok(/private _onWatch\(msg[^)]*\) \{\s*\{ const m = watchMaxOf\(msg\); if \(m !== null\) this\._abOffer\(m\); \}/.test(ws)
+     && /this\._abOffer\(watchOffered\(msg\)\)/.test(ws),
+     'the client takes the offer from hwinfo AND the watch state\'s max (as the web does)');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

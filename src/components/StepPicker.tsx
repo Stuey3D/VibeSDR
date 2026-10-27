@@ -146,7 +146,8 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
           )}
           {onVfoAB && (
             <Text style={[st.abNote, { color: pt.ink.section, fontFamily: t.font }]}>
-              {vfoAB ? 'Switch VFO with the A/B key, or press and hold the tune drum\'s window'
+              {/* ★ Both tune controls carry the A/B key now — the keys between < and >, the drum in its window. */}
+              {vfoAB ? 'Switch VFO with the A/B key — between the tune keys, or in the tune drum\'s window'
                      : 'Listen to a second frequency on this radio at the same time'}
             </Text>
           )}
