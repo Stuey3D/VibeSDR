@@ -2,3 +2,10 @@
 # Applied in this order by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh (patch -p1, in the FAAD2
 # source tree). FAAD2 is GPL-2.0-or-later; these patches are too, and are published with it. Each patch's header says
 # what it changes, why, and what it was measured against (output vs stock FAAD2 on real DAB+ unit logs).
+0001-cmake-ffloat-store-only-for-x87.patch
+0002-vibe-simd4f-header.patch
+0003-dct4-kernel-simd.patch
+0004-qmf-analysis-synthesis-simd.patch
+0005-ps-decorrelate-mix-simd.patch
+0006-sbr-hfgen-simd.patch
+0007-sbr-hfadj-simd.patch

@@ -1,0 +1,199 @@
+Subject: [PATCH 4/7] sbr_qmf: 32-band analysis and 64-band synthesis four lanes at a time
+
+VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
+as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh
+in the order of faad2-patches/series. Measured on real off-air DAB+ unit logs (HE-AAC v2, 21 logs, 1909 s):
+output against stock FAAD2 2.11.3 built with its own flags — see each header for the figures.
+
+The same steps as stock, four samples or subbands per instruction: analysis — the reversed input copy into the double
+ring buffer, the 5-tap window (its even taps by a de-interleaving load), the DCT-IV reorder; synthesis — the input
+reorder and 1/64 scale (one 4-way de-interleaving load per eight subbands), the interleaving ring-buffer write and the
+10-tap window. The analysis output uses 2.0f where stock wrote the double constant 2. (a power of two: identical
+products, no float<->double conversions). Synthesis output is bit-identical to the stock arithmetic.
+
+--- a/libfaad/sbr_qmf.c
++++ b/libfaad/sbr_qmf.c
+@@ -65,9 +65,90 @@
+     }
+ }
+ 
++#if !defined(FIXED_POINT) && !defined(SBR_LOW_POWER) && !defined(VIBE_FAAD_STOCK)
++/* VibeSDR (2026-10-26): the 32-band QMF analysis four lanes at a time (vibe_simd4f.h) — the same arithmetic as the
++ * stock version below: the reversed input copy into the double ring buffer, the 5-tap window (the window's even taps
++ * fetched with a de-interleaving load), the DCT-IV reorder, the kernel, and the output (with float 2.0f in place of the
++ * stock double 2.0 — a power of two, so the products are identical). */
++#include "vibe_simd4f.h"
+ void sbr_qmf_analysis_32(sbr_info *sbr, qmfa_info *qmfa, const real_t *input,
+                          qmf_t X[MAX_NTSRHFG][64], uint8_t offset, uint8_t kx)
+ {
++    ALIGN real_t u[68];
++    ALIGN real_t in_real[32], in_imag[32], out_real[32], out_imag[32];
++    uint32_t in = 0;
++    uint8_t l;
++    int n;
++
++    u[64] = u[65] = u[66] = u[67] = 0;
++    for (l = 0; l < sbr->numTimeSlotsRate; l++)
++    {
++        real_t *x = qmfa->x + qmfa->x_index;
++        v4f e0, e1, e2, e3, e4, dummy;
++        /* x[31 - m] = input[m], into both halves of the ring buffer */
++        for (n = 0; n < 32; n += 4)
++        {
++            const v4f v = v4_rev(v4_ld(input + in + n));
++            v4_st(x + 28 - n, v); v4_st(x + 320 + 28 - n, v);
++        }
++        in += 32;
++
++        /* window: u[n] = sum over five taps of x[n + 64 j] * qmf_c[2 (n + 64 j)] */
++        for (n = 0; n < 64; n += 4)
++        {
++            v4f acc;
++            v4_ld2(qmf_c + 2 * n,         e0, dummy);
++            v4_ld2(qmf_c + 2 * (n + 64),  e1, dummy);
++            v4_ld2(qmf_c + 2 * (n + 128), e2, dummy);
++            v4_ld2(qmf_c + 2 * (n + 192), e3, dummy);
++            v4_ld2(qmf_c + 2 * (n + 256), e4, dummy);
++            acc = v4_mul(v4_ld(x + n), e0);
++            acc = v4_mla(acc, v4_ld(x + n + 64), e1);
++            acc = v4_mla(acc, v4_ld(x + n + 128), e2);
++            acc = v4_mla(acc, v4_ld(x + n + 192), e3);
++            acc = v4_mla(acc, v4_ld(x + n + 256), e4);
++            v4_st(u + n, acc);
++        }
++
++        qmfa->x_index -= 32;
++        if (qmfa->x_index < 0)
++            qmfa->x_index = (320-32);
++
++        /* reorder (moved out of DCT_IV in the stock code): in_imag[31-n] = u[n+1]; in_real[n] = -u[64-n], in_real[0] = u[0] */
++        for (n = 0; n < 32; n += 4)
++        {
++            v4_st(in_imag + n, v4_rev(v4_ld(u + 29 - n)));          /* in_imag[j] = u[32 - j] */
++            v4_st(in_real + n, v4_neg(v4_rev(v4_ld(u + 61 - n))));  /* in_real[j] = -u[64 - j] */
++        }
++        in_real[0] = u[0];
++
++        dct4_kernel(in_real, in_imag, out_real, out_imag);
++
++        for (n = 0; n < 16; n++) {
++            if (2*n+1 < kx) {
++                QMF_RE(X[l + offset][2*n])   = 2.f * out_real[n];
++                QMF_IM(X[l + offset][2*n])   = 2.f * out_imag[n];
++                QMF_RE(X[l + offset][2*n+1]) = -2.f * out_imag[31-n];
++                QMF_IM(X[l + offset][2*n+1]) = -2.f * out_real[31-n];
++            } else {
++                if (2*n < kx) {
++                    QMF_RE(X[l + offset][2*n])   = 2.f * out_real[n];
++                    QMF_IM(X[l + offset][2*n])   = 2.f * out_imag[n];
++                }
++                else {
++                    QMF_RE(X[l + offset][2*n]) = 0;
++                    QMF_IM(X[l + offset][2*n]) = 0;
++                }
++                QMF_RE(X[l + offset][2*n+1]) = 0;
++                QMF_IM(X[l + offset][2*n+1]) = 0;
++            }
++        }
++    }
++}
++#else
++void sbr_qmf_analysis_32(sbr_info *sbr, qmfa_info *qmfa, const real_t *input,
++                         qmf_t X[MAX_NTSRHFG][64], uint8_t offset, uint8_t kx)
++{
+     ALIGN real_t u[64];
+ #ifndef SBR_LOW_POWER
+     ALIGN real_t in_real[32], in_imag[32], out_real[32], out_imag[32];
+@@ -185,6 +266,7 @@
+ #endif
+     }
+ }
++#endif
+ 
+ static const complex_t qmf32_pre_twiddle[] =
+ {
+@@ -453,9 +535,77 @@
+     }
+ }
+ 
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++/* VibeSDR (2026-10-26): the 64-band QMF synthesis four lanes at a time (vibe_simd4f.h). The same three parts as the stock
++ * version below, the same arithmetic in each: the input reorder and 1/64 scale (one 4-way de-interleaving load per
++ * eight subbands), the two DCT-IV kernels, the ring-buffer write (interleaving stores), and the 10-tap window — four
++ * output samples per pass. Runs once per channel per QMF slot: with parametric stereo, twice per slot. */
++#include "vibe_simd4f.h"
+ void sbr_qmf_synthesis_64(sbr_info *sbr, qmfs_info *qmfs, qmf_t X[MAX_NTSRHFG][64],
+                           real_t *output)
+ {
++    ALIGN real_t in_real1[32], in_imag1[32], out_real1[32], out_imag1[32];
++    ALIGN real_t in_real2[32], in_imag2[32], out_real2[32], out_imag2[32];
++    const v4f scale = v4_dup(1.f/64.f);
++    int32_t n, k, out = 0;
++    uint8_t l;
++
++    for (l = 0; l < sbr->numTimeSlotsRate; l++)
++    {
++        const real_t *px = (const real_t *)X[l];
++        real_t *pb1, *pb3;
++        /* reorder: block b holds X[8b..8b+7] — even re / even im / odd re / odd im */
++        for (k = 0; k < 8; k++)
++        {
++            v4f re_e, im_e, re_o, im_o;
++            v4_ld4(px + 16 * k, re_e, im_e, re_o, im_o);
++            v4_st(in_real1 + 4 * k, v4_mul(scale, re_e));                 /* in_real1[j] = RE(X[2j]) */
++            v4_st(in_imag2 + 4 * k, v4_mul(scale, im_e));                 /* in_imag2[j] = IM(X[2j]) */
++            v4_st(in_imag1 + 28 - 4 * k, v4_rev(v4_mul(scale, re_o)));    /* in_imag1[31-j] = RE(X[2j+1]) */
++            v4_st(in_real2 + 28 - 4 * k, v4_rev(v4_mul(scale, im_o)));    /* in_real2[j] = IM(X[63-2j]) */
++        }
++
++        dct4_kernel(in_real1, in_imag1, out_real1, out_imag1);
++        dct4_kernel(in_real2, in_imag2, out_real2, out_imag2);
++
++        pb1 = qmfs->v + qmfs->v_index;
++        pb3 = pb1 + 1280;
++        for (n = 0; n < 32; n += 4)
++        {
++            const v4f r1 = v4_ld(out_real1 + n), r2 = v4_ld(out_real2 + n);
++            const v4f i1 = v4_rev(v4_ld(out_imag1 + 28 - n)), i2 = v4_rev(v4_ld(out_imag2 + 28 - n));   /* [31-n … 28-n] */
++            const v4f a = v4_sub(r2, r1), b = v4_add(i2, i1);              /* → pb[2n], pb[2n+1] */
++            const v4f c = v4_add(r2, r1), d = v4_sub(i2, i1);              /* → pb[127-2n], pb[126-2n] */
++            v4_st2(pb1 + 2 * n, a, b); v4_st2(pb3 + 2 * n, a, b);
++            v4_st2(pb1 + 120 - 2 * n, v4_rev(d), v4_rev(c)); v4_st2(pb3 + 120 - 2 * n, v4_rev(d), v4_rev(c));
++        }
++
++        /* window: 64 output samples, four at a time */
++        for (k = 0; k < 64; k += 4)
++        {
++            v4f acc = v4_mul(v4_ld(pb1 + k), v4_ld(qmf_c + k));
++            acc = v4_mla(acc, v4_ld(pb1 + k + 192),          v4_ld(qmf_c + k + 64));
++            acc = v4_mla(acc, v4_ld(pb1 + k + 256),          v4_ld(qmf_c + k + 128));
++            acc = v4_mla(acc, v4_ld(pb1 + k + (256 + 192)),  v4_ld(qmf_c + k + 192));
++            acc = v4_mla(acc, v4_ld(pb1 + k + 512),          v4_ld(qmf_c + k + 256));
++            acc = v4_mla(acc, v4_ld(pb1 + k + (512 + 192)),  v4_ld(qmf_c + k + 320));
++            acc = v4_mla(acc, v4_ld(pb1 + k + 768),          v4_ld(qmf_c + k + 384));
++            acc = v4_mla(acc, v4_ld(pb1 + k + (768 + 192)),  v4_ld(qmf_c + k + 448));
++            acc = v4_mla(acc, v4_ld(pb1 + k + 1024),         v4_ld(qmf_c + k + 512));
++            acc = v4_mla(acc, v4_ld(pb1 + k + (1024 + 192)), v4_ld(qmf_c + k + 576));
++            v4_st(output + out + k, acc);
++        }
++        out += 64;
++
++        qmfs->v_index -= 128;
++        if (qmfs->v_index < 0)
++            qmfs->v_index = (1280 - 128);
++    }
++}
++#else
++void sbr_qmf_synthesis_64(sbr_info *sbr, qmfs_info *qmfs, qmf_t X[MAX_NTSRHFG][64],
++                          real_t *output)
++{
+ //    ALIGN real_t x1[64], x2[64];
+ #ifndef SBR_LOW_POWER
+     ALIGN real_t in_real1[32], in_imag1[32], out_real1[32], out_imag1[32];
+@@ -631,5 +781,6 @@
+     }
+ }
+ #endif
++#endif
+ 
+ #endif

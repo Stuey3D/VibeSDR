@@ -1,0 +1,283 @@
+Subject: [PATCH 5/7] ps_dec: parametric stereo's decorrelator and mixing four subbands (or bands) at a time
+
+VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
+as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh
+in the order of faad2-patches/series. Measured on real off-air DAB+ unit logs (HE-AAC v2, 21 logs, 1909 s):
+output against stock FAAD2 2.11.3 built with its own flags — see each header for the figures.
+
+Parametric stereo's decorrelator runs every QMF subband up to nr_allpass_bands through a three-link fractional all-pass
+chain, one time slot after another. Every subband sees the same delay-index sequence (each starts from saved_delay /
+delay_buf_index_ser), so four adjacent subbands run as four lanes sharing their indices; each lane keeps its own
+phasors, decay slope and transient ratio (its own parameter band). The arithmetic per lane is the stock loop's; the
+subbands done here are skipped by the stock loop, which still does the rest (the hybrid bands and any remainder of
+fewer than four). Also four at a time: the plain 14-slot delay above nr_allpass_bands (lanes sharing the delay's length
+and position), a QMF group's energy per time slot (summed in lanes, then added: a different float addition order, within
+rounding), the transient ratio per parameter band (each band's recursion as stock; its divide a true divide on SSE2 and
+AArch64, a twice-refined reciprocal on ARMv7, ~2 ulp), and the mixing of a group's subbands with the group's H.
+
+--- a/libfaad/ps_dec.c
++++ b/libfaad/ps_dec.c
+@@ -35,6 +35,9 @@
+ #include <stdlib.h>
+ #include <stdio.h>
+ #include "ps_dec.h"
++#if !defined(FIXED_POINT)
++#include "vibe_simd4f.h"
++#endif
+ #include "ps_tables.h"
+ 
+ /* constants */
+@@ -1045,6 +1048,10 @@
+     const complex_t *Phi_Fract_SubQmf;
+     uint8_t temp_delay_ser[NO_ALLPASS_LINKS];
+     real_t P_SmoothPeakDecayDiffNrg, nrg;
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++    uint8_t vibe_sb_first, vibe_sb_end;
++    uint8_t vibe_d_first, vibe_d_last, vibe_d_done[64];
++#endif
+     real_t P[32][34];
+     real_t G_TransientRatio[32][34] = {{0}};
+     complex_t inputLeft;
+@@ -1076,6 +1083,30 @@
+         /* select the upper subband border for this group */
+         maxsb = (gr < ps->num_hybrid_groups) ? ps->group_border[gr]+1 : ps->group_border[gr+1];
+ 
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++        /* VibeSDR (2026-10-26): a QMF group's energy four subbands at a time, per time slot (the sum over the group's
++         * subbands is formed in lanes and then added to P — a different order of float additions from the stock
++         * subband-by-subband accumulation, within float rounding). Hybrid groups (one band each) as stock. */
++        if (gr >= ps->num_hybrid_groups && maxsb - ps->group_border[gr] >= 4)
++        {
++            for (n = ps->border_position[0]; n < ps->border_position[ps->num_env]; n++)
++            {
++                v4f acc = v4_dup(0);
++                real_t e = 0;
++                for (sb = ps->group_border[gr]; sb + 4 <= maxsb; sb += 4)
++                {
++                    v4f xr, xi;
++                    v4_ld2(X_left[n][sb], xr, xi);
++                    acc = v4_add(acc, v4_add(v4_mul(xr, xr), v4_mul(xi, xi)));
++                }
++                e = v4_hsum(acc);
++                for (; sb < maxsb; sb++)
++                    e += MUL_R(QMF_RE(X_left[n][sb]),QMF_RE(X_left[n][sb])) + MUL_R(QMF_IM(X_left[n][sb]),QMF_IM(X_left[n][sb]));
++                P[n][bk] += e;
++            }
++            continue;
++        }
++#endif
+         for (sb = ps->group_border[gr]; sb < maxsb; sb++)
+         {
+             for (n = ps->border_position[0]; n < ps->border_position[ps->num_env]; n++)
+@@ -1124,10 +1155,33 @@
+ #endif
+ 
+     /* calculate transient reduction ratio for each parameter band b(k) */
+-    for (bk = 0; bk < ps->nr_par_bands; bk++)
++    bk = 0;
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++    /* VibeSDR (2026-10-26): four parameter bands at a time — each band's own recursion over the time slots, as stock;
++     * the ratio's divide is a true divide on SSE2 / AArch64 and a twice-refined reciprocal on ARMv7 (~2 ulp). */
++    for (; bk + 4 <= ps->nr_par_bands; bk += 4)
+     {
++        const v4f decay = v4_dup(ps->alpha_decay), smooth = v4_dup(ps->alpha_smooth), gamma = v4_dup(COEF_CONST(1.5)), one = v4_dup(REAL_CONST(1.0));
++        v4f peak = v4_ld(ps->P_PeakDecayNrg + bk), sprev = v4_ld(ps->P_SmoothPeakDecayDiffNrg_prev + bk), pprev = v4_ld(ps->P_prev + bk);
+         for (n = ps->border_position[0]; n < ps->border_position[ps->num_env]; n++)
+         {
++            const v4f pn = v4_ld(&P[n][bk]);
++            v4f sm, nrg, sg;
++            peak = v4_max(v4_mul(peak, decay), pn);
++            sm = v4_add(sprev, v4_mul(v4_sub(v4_sub(peak, pn), sprev), smooth));
++            sprev = sm;
++            nrg = v4_add(pprev, v4_mul(v4_sub(pn, pprev), smooth));
++            pprev = nrg;
++            sg = v4_mul(sm, gamma);
++            v4_st(&G_TransientRatio[n][bk], v4_sel_le_nonneg(sg, nrg, one, v4_div(nrg, sg)));
++        }
++        v4_st(ps->P_PeakDecayNrg + bk, peak); v4_st(ps->P_SmoothPeakDecayDiffNrg_prev + bk, sprev); v4_st(ps->P_prev + bk, pprev);
++    }
++#endif
++    for (; bk < ps->nr_par_bands; bk++)
++    {
++        for (n = ps->border_position[0]; n < ps->border_position[ps->num_env]; n++)
++        {
+             const real_t gamma = COEF_CONST(1.5);
+ 
+             ps->P_PeakDecayNrg[bk] = MUL_F(ps->P_PeakDecayNrg[bk], ps->alpha_decay);
+@@ -1164,7 +1218,124 @@
+ #else
+             printf("%d %d: %f\n", n, bk, G_TransientRatio[n][bk]);
+ #endif
++        }
++    }
++#endif
++
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++    /* VibeSDR (2026-10-26): the QMF subbands that take the all-pass decorrelator, FOUR SUBBANDS AT A TIME (vibe_simd4f.h).
++     * Every subband sees the same delay-index sequence (each starts from ps->saved_delay / delay_buf_index_ser), so four
++     * adjacent ones share their indices and run as four lanes; each lane keeps its own fractional-delay phasors, decay
++     * slope and transient ratio (its own parameter band). The arithmetic per lane is the stock loop's, step for step.
++     * The subbands handled here are skipped by the stock loop below; any left over (fewer than four) go through it. */
++    vibe_sb_first = ps->group_border[ps->num_hybrid_groups];
++    vibe_sb_end = vibe_sb_first;
++    if (ps->nr_allpass_bands + 1 > vibe_sb_first)
++        vibe_sb_end = vibe_sb_first + (((ps->nr_allpass_bands + 1) - vibe_sb_first) & ~3);
++    for (sb = vibe_sb_first; sb < vibe_sb_end; sb += 4)
++    {
++        ALIGN real_t phr[4], phi[4], qr[NO_ALLPASS_LINKS][4], qi[NO_ALLPASS_LINKS][4], gf[NO_ALLPASS_LINKS][4], G[4];
++        uint8_t bkl[4], tds[NO_ALLPASS_LINKS], td, j, m;
++        v4f vphr, vphi, vqr[NO_ALLPASS_LINKS], vqi[NO_ALLPASS_LINKS], vgf[NO_ALLPASS_LINKS];
++        for (j = 0; j < 4; j++)
++        {
++            const uint8_t s_ = sb + j;
++            real_t g_DecaySlope;
++            uint8_t g2;
++            /* its parameter band: the QMF group that holds it */
++            bkl[j] = 0;
++            for (g2 = ps->num_hybrid_groups; g2 < ps->num_groups; g2++)
++                if (s_ >= ps->group_border[g2] && s_ < ps->group_border[g2 + 1]) { bkl[j] = (uint8_t)((~NEGATE_IPD_MASK) & ps->map_group2bk[g2]); break; }
++            if (s_ <= ps->decay_cutoff)
++            {
++                g_DecaySlope = FRAC_CONST(1.0);
++            } else {
++                int8_t decay = ps->decay_cutoff - s_;
++                if (decay <= -20 /* -1/DECAY_SLOPE */)
++                    g_DecaySlope = 0;
++                else
++                    g_DecaySlope = FRAC_CONST(1.0) + DECAY_SLOPE * decay;
++            }
++            for (m = 0; m < NO_ALLPASS_LINKS; m++)
++            {
++                gf[m][j] = MUL_F(g_DecaySlope, filter_a[m]);
++                qr[m][j] = RE(Q_Fract_allpass_Qmf[s_][m]);
++                qi[m][j] = IM(Q_Fract_allpass_Qmf[s_][m]);
++            }
++            phr[j] = RE(Phi_Fract_Qmf[s_]);
++            phi[j] = IM(Phi_Fract_Qmf[s_]);
++        }
++        vphr = v4_ld(phr); vphi = v4_ld(phi);
++        for (m = 0; m < NO_ALLPASS_LINKS; m++) { vqr[m] = v4_ld(qr[m]); vqi[m] = v4_ld(qi[m]); vgf[m] = v4_ld(gf[m]); }
++        td = ps->saved_delay;
++        for (m = 0; m < NO_ALLPASS_LINKS; m++) tds[m] = ps->delay_buf_index_ser[m];
++        for (n = ps->border_position[0]; n < ps->border_position[ps->num_env]; n++)
++        {
++            v4f inr, ini, t0r, t0i, Rr, Ri;
++            v4_ld2(X_left[n][sb], inr, ini);
++            v4_ld2(ps->delay_Qmf[td][sb], t0r, t0i);
++            v4_st2(ps->delay_Qmf[td][sb], inr, ini);
++            /* z^(-2) * Phi_Fract[k] — ComplexMult: (x1 c1 + x2 c2, x2 c1 - x1 c2) */
++            Rr = v4_mla(v4_mul(t0r, vphr), t0i, vphi);
++            Ri = v4_mls(v4_mul(t0i, vphr), t0r, vphi);
++            for (m = 0; m < NO_ALLPASS_LINKS; m++)
++            {
++                v4f tr, ti;
++                real_t *dl = ps->delay_Qmf_ser[m][tds[m]][sb];
++                v4_ld2(dl, t0r, t0i);
++                tr = v4_mla(v4_mul(t0r, vqr[m]), t0i, vqi[m]);
++                ti = v4_mls(v4_mul(t0i, vqr[m]), t0r, vqi[m]);
++                tr = v4_mls(tr, vgf[m], Rr);
++                ti = v4_mls(ti, vgf[m], Ri);
++                v4_st2(dl, v4_mla(Rr, vgf[m], tr), v4_mla(Ri, vgf[m], ti));
++                Rr = tr; Ri = ti;
++            }
++            for (j = 0; j < 4; j++) G[j] = G_TransientRatio[n][bkl[j]];
++            {
++                const v4f g = v4_ld(G);
++                v4_st2(X_right[n][sb], v4_mul(g, Rr), v4_mul(g, Ri));
++            }
++            if (++td >= 2) td = 0;
++            for (m = 0; m < NO_ALLPASS_LINKS; m++)
++                if (++tds[m] >= ps->num_sample_delay_ser[m]) tds[m] = 0;
++        }
++    }
++
++    /* VibeSDR (2026-10-26): ... and the QMF subbands ABOVE nr_allpass_bands, which only take a plain delay (14 slots, or
++     * 1 at the top) and the transient ducking — four at a time where the four share the delay's length and position
++     * (they start together at 0 and step together, so in practice always). Same arithmetic as the stock loop. */
++    vibe_d_first = (uint8_t)(ps->nr_allpass_bands + 1);
++    if (vibe_d_first < ps->group_border[ps->num_hybrid_groups]) vibe_d_first = ps->group_border[ps->num_hybrid_groups];
++    vibe_d_last = ps->group_border[ps->num_groups];   /* one past the last QMF subband */
++    memset(vibe_d_done, 0, sizeof(vibe_d_done));
++    for (sb = vibe_d_first; sb + 4 <= vibe_d_last; sb += 4)
++    {
++        ALIGN real_t G[4];
++        uint8_t bkl[4], j, g2, idx = ps->delay_buf_index_delay[sb];
++        const uint8_t D = ps->delay_D[sb];
++        if (ps->delay_D[sb + 1] != D || ps->delay_D[sb + 2] != D || ps->delay_D[sb + 3] != D ||
++            ps->delay_buf_index_delay[sb + 1] != idx || ps->delay_buf_index_delay[sb + 2] != idx ||
++            ps->delay_buf_index_delay[sb + 3] != idx)
++            continue;   /* the stock loop takes these */
++        for (j = 0; j < 4; j++)
++        {
++            const uint8_t s_ = sb + j;
++            bkl[j] = 0;
++            for (g2 = ps->num_hybrid_groups; g2 < ps->num_groups; g2++)
++                if (s_ >= ps->group_border[g2] && s_ < ps->group_border[g2 + 1]) { bkl[j] = (uint8_t)((~NEGATE_IPD_MASK) & ps->map_group2bk[g2]); break; }
+         }
++        for (n = ps->border_position[0]; n < ps->border_position[ps->num_env]; n++)
++        {
++            v4f inr, ini, tr, ti, g;
++            v4_ld2(X_left[n][sb], inr, ini);
++            v4_ld2(ps->delay_Qmf[idx][sb], tr, ti);
++            v4_st2(ps->delay_Qmf[idx][sb], inr, ini);
++            for (j = 0; j < 4; j++) G[j] = G_TransientRatio[n][bkl[j]];
++            g = v4_ld(G);
++            v4_st2(X_right[n][sb], v4_mul(g, tr), v4_mul(g, ti));
++            if (++idx >= D) idx = 0;
++        }
++        for (j = 0; j < 4; j++) { ps->delay_buf_index_delay[sb + j] = idx; vibe_d_done[sb + j] = 1; }
+     }
+ #endif
+ 
+@@ -1181,6 +1352,11 @@
+         {
+             real_t g_DecaySlope;
+             real_t g_DecaySlope_filt[NO_ALLPASS_LINKS];
++
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++            if (gr >= ps->num_hybrid_groups && ((sb >= vibe_sb_first && sb < vibe_sb_end) || vibe_d_done[sb]))
++                continue;   /* done four at a time above */
++#endif
+ 
+             /* g_DecaySlope: [0..1] */
+             if (gr < ps->num_hybrid_groups || sb <= ps->decay_cutoff)
+@@ -1823,8 +1999,38 @@
+                 }
+ 
+                 /* channel is an alias to the subband */
+-                for (sb = ps->group_border[gr]; sb < maxsb; sb++)
++                sb = ps->group_border[gr];
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++                /* VibeSDR (2026-10-26): every subband of a group is mixed with the same H — four subbands at a time
++                 * (QMF groups reach 29 subbands), the stock arithmetic per lane; the remainder below as stock. */
++                if (gr >= ps->num_hybrid_groups)
+                 {
++                    const v4f h11r = v4_dup(RE(H11)), h12r = v4_dup(RE(H12)), h21r = v4_dup(RE(H21)), h22r = v4_dup(RE(H22));
++                    const v4f h11i = v4_dup(IM(H11)), h12i = v4_dup(IM(H12)), h21i = v4_dup(IM(H21)), h22i = v4_dup(IM(H22));
++                    const int rot = (ps->enable_ipdopd) && (bk < nr_ipdopd_par);
++                    for (; sb + 4 <= maxsb; sb += 4)
++                    {
++                        v4f lr, li, rr, ri, tlr, tli, trr, tri;
++                        v4_ld2(X_left[n][sb], lr, li);
++                        v4_ld2(X_right[n][sb], rr, ri);
++                        tlr = v4_add(v4_mul(h11r, lr), v4_mul(h21r, rr));
++                        tli = v4_add(v4_mul(h11r, li), v4_mul(h21r, ri));
++                        trr = v4_add(v4_mul(h12r, lr), v4_mul(h22r, rr));
++                        tri = v4_add(v4_mul(h12r, li), v4_mul(h22r, ri));
++                        if (rot)
++                        {
++                            tlr = v4_sub(tlr, v4_add(v4_mul(h11i, li), v4_mul(h21i, ri)));
++                            tli = v4_add(tli, v4_add(v4_mul(h11i, lr), v4_mul(h21i, rr)));
++                            trr = v4_sub(trr, v4_add(v4_mul(h12i, li), v4_mul(h22i, ri)));
++                            tri = v4_add(tri, v4_add(v4_mul(h12i, lr), v4_mul(h22i, rr)));
++                        }
++                        v4_st2(X_left[n][sb], tlr, tli);
++                        v4_st2(X_right[n][sb], trr, tri);
++                    }
++                }
++#endif
++                for (; sb < maxsb; sb++)
++                {
+                     complex_t inLeft, inRight;  // precision_of in(Left|Right) == precision_of X_(left|right)
+ 
+                     /* load decorrelated samples */

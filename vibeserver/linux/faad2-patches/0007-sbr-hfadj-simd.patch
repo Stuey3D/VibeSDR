@@ -1,0 +1,87 @@
+Subject: [PATCH 7/7] sbr_hfadj: hf_assembly four QMF bands at a time
+
+VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
+as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh
+in the order of faad2-patches/series. Measured on real off-air DAB+ unit logs (HE-AAC v2, 21 logs, 1909 s):
+output against stock FAAD2 2.11.3 built with its own flags — see each header for the figures.
+
+The smoothed gains (one five-slot ring for every band), the noise floor from V[] (each band its own index), the
+Q = 0 rule where a band carries a sinusoid, and the sinusoid itself, for four bands per pass with the stock arithmetic
+per lane. The remainder of fewer than four, and the bitstream's extension 3/42 case, run the stock loop.
+
+--- a/libfaad/sbr_hfadj.c
++++ b/libfaad/sbr_hfadj.c
+@@ -40,6 +40,9 @@
+ #include "sbr_hfadj.h"
+ 
+ #include "sbr_noise.h"
++#if !defined(FIXED_POINT)
++#include "vibe_simd4f.h"
++#endif
+ 
+ 
+ /* static function declarations */
+@@ -1631,8 +1634,62 @@
+             memcpy(sbr->G_temp_prev[ch][sbr->GQ_ringbuf_index[ch]], adj->G_lim_boost[l], sbr->M*sizeof(real_t));
+             memcpy(sbr->Q_temp_prev[ch][sbr->GQ_ringbuf_index[ch]], adj->Q_M_lim_boost[l], sbr->M*sizeof(real_t));
+ 
+-            for (m = 0; m < sbr->M; m++)
++            m = 0;
++#if !defined(FIXED_POINT) && !defined(SBR_LOW_POWER) && !defined(VIBE_FAAD_STOCK)
++            /* VibeSDR (2026-10-26): four QMF bands at a time — the smoothed gains (the same five-slot ring for every band),
++             * the noise floor from V[] (each band its own index), and the sinusoid — the stock arithmetic per lane.
++             * The remainder of fewer than four, and the bitstream's 3/42 extension case, as stock below. */
++            if (!(sbr->bs_extension_id == 3 && sbr->bs_extension_data == 42))
+             {
++                const v4f vphr = v4_dup((real_t)phi_re[fIndexSine]);
++                const v4f vphi = v4_dup((real_t)phi_im[fIndexSine]);
++                for (; m + 4 <= sbr->M; m += 4)
++                {
++                    ALIGN real_t vr[4], vi[4], qz[4], rv[4];
++                    v4f g, q, xr, xi, smb;
++                    uint8_t j;
++                    real_t *px = Xsbr[i + sbr->tHFAdj][m + sbr->kx];
++                    if (h_SL != 0)
++                    {
++                        uint8_t ri = sbr->GQ_ringbuf_index[ch];
++                        g = v4_dup(0); q = v4_dup(0);
++                        for (n = 0; n <= 4; n++)
++                        {
++                            const v4f hs = v4_dup(h_smooth[n]);
++                            ri++;
++                            if (ri >= 5)
++                                ri -= 5;
++                            g = v4_add(g, v4_mul(v4_ld(sbr->G_temp_prev[ch][ri] + m), hs));
++                            q = v4_add(q, v4_mul(v4_ld(sbr->Q_temp_prev[ch][ri] + m), hs));
++                        }
++                    } else {
++                        g = v4_ld(sbr->G_temp_prev[ch][sbr->GQ_ringbuf_index[ch]] + m);
++                        q = v4_ld(sbr->Q_temp_prev[ch][sbr->GQ_ringbuf_index[ch]] + m);
++                    }
++                    for (j = 0; j < 4; j++)
++                    {
++                        const uint16_t f = (uint16_t)((fIndexNoise + 1 + j) & 511);
++                        vr[j] = RE(V[f]); vi[j] = IM(V[f]);
++                        qz[j] = (adj->S_M_boost[l][m + j] != 0 || no_noise) ? 0.f : 1.f;
++                        rv[j] = (((m + j + sbr->kx) & 1) ? -1.f : 1.f);
++                    }
++                    fIndexNoise = (fIndexNoise + 4) & 511;
++                    {   /* Q_filt = 0 where the band carries a sinusoid (or no noise here): a select, not a product */
++                        ALIGN real_t qq[4];
++                        v4_st(qq, q);
++                        for (j = 0; j < 4; j++) if (qz[j] == 0.f) qq[j] = 0;
++                        q = v4_ld(qq);
++                    }
++                    v4_ld2(px, xr, xi);
++                    smb = v4_ld(adj->S_M_boost[l] + m);
++                    xr = v4_add(v4_add(v4_mul(g, xr), v4_mul(q, v4_ld(vr))), v4_mul(smb, vphr));
++                    xi = v4_add(v4_add(v4_mul(g, xi), v4_mul(q, v4_ld(vi))), v4_mul(v4_mul(v4_ld(rv), smb), vphi));
++                    v4_st2(px, xr, xi);
++                }
++            }
++#endif
++            for (; m < sbr->M; m++)
++            {
+                 qmf_t psi;
+ 
+                 G_filt = 0;

@@ -1,0 +1,133 @@
+Subject: [PATCH 3/7] sbr_dct: dct4_kernel four lanes at a time, the 32-point FFT in registers
+
+VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
+as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh
+in the order of faad2-patches/series. Measured on real off-air DAB+ unit logs (HE-AAC v2, 21 logs, 1909 s):
+output against stock FAAD2 2.11.3 built with its own flags — see each header for the figures.
+
+dct4_kernel (the DCT-IV under the SBR QMF banks; five calls per QMF slot in HE-AAC v2) keeps its three steps and
+table entries: pre-modulation, a 32-point radix-2 decimation-in-frequency FFT, post-modulation with the bit-reversal.
+Stages 1-3 run four butterflies per instruction; stages 4-5 run on 4x4-transposed registers; the bit-reversal is one
+lane transpose of the two halves (element n = b4..b0 sits in half b4, vector b1b0, lane b3b2; its reversed position
+is vector b0b1b2, lane b3b4). The only arithmetic difference: stage 3's two diagonal twiddles are applied as a general
+complex product (one rounding apart). armhf instructions in dct4_kernel: 512 M -> 123 M (59 s, with patch 1).
+
+--- a/libfaad/sbr_dct.c
++++ b/libfaad/sbr_dct.c
+@@ -1895,6 +1895,7 @@
+ // FFT decimation in frequency
+ // 4*16*2+16=128+16=144 multiplications
+ // 6*16*2+10*8+4*16*2=192+80+128=400 additions
++#if defined(FIXED_POINT) || defined(VIBE_FAAD_STOCK)   /* VibeSDR: the vector dct4_kernel below has its own FFT */
+ static void fft_dif(real_t * Real, real_t * Imag)
+ {
+     real_t w_real, w_imag; // For faster access
+@@ -2119,6 +2120,7 @@
+     FFTReorder(Real, Imag);
+ #endif // #ifdef REORDER_IN_FFT
+ }
++#endif
+ #undef n
+ #undef log2n
+ 
+@@ -2222,8 +2224,92 @@
+ };
+ 
+ /* size 64 only! */
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++/* VibeSDR (2026-10-26): dct4_kernel four lanes at a time (vibe_simd4f.h — NEON on ARMv7/AArch64, SSE2, plain C).
++ * The same three steps as the stock kernel below, in the same order with the same table entries: the pre-modulation,
++ * a 32-point radix-2 decimation-in-frequency FFT (output in bit-reversed order), and the post-modulation with the
++ * bit-reversal. Stages 1-3 run four butterflies per instruction; stages 4 and 5 (spans 2 and 1) run on 4x4 transposed
++ * blocks. Every butterfly computes what the stock one does; the only difference is that stage 3's two diagonal
++ * twiddles are applied as a general complex product (one rounding apart). Called five times per QMF slot in HE-AAC v2
++ * (one analysis, two synthesis per channel) — on a Pi 2 the largest single function in the stock decoder. */
++#include "vibe_simd4f.h"
++/* (ar + i ai)(wr + i wi) → or, oi (lvalues) */
++#define vibe_cmul4(ar, ai, wr, wi, or_, oi) do { const v4f ar_ = (ar), ai_ = (ai), wr_ = (wr), wi_ = (wi); \
++    (or_) = v4_mls(v4_mul(ar_, wr_), ai_, wi_); (oi) = v4_mla(v4_mul(ar_, wi_), ai_, wr_); } while (0)
+ void dct4_kernel(real_t * in_real, real_t * in_imag, real_t * out_real, real_t * out_imag)
+ {
++    /* stage 2 and 3 twiddles: w[2j] (j < 8) and w[4j] (j < 4) of w_array_* (the same values) */
++    ALIGN static const real_t W2r[8] = { FRAC_CONST(1.000000000000000), FRAC_CONST(0.923879528329380), FRAC_CONST(0.707106765732237), FRAC_CONST(0.382683402077046), FRAC_CONST(0.000000000000000), FRAC_CONST(-0.382683482845162), FRAC_CONST(-0.707106827549476), FRAC_CONST(-0.923879561784627) };
++    ALIGN static const real_t W2i[8] = { FRAC_CONST(0.000000000000000), FRAC_CONST(-0.382683442461104), FRAC_CONST(-0.707106796640858), FRAC_CONST(-0.923879545057005), FRAC_CONST(-1.000000000000000), FRAC_CONST(-0.923879511601754), FRAC_CONST(-0.707106734823616), FRAC_CONST(-0.382683361692986) };
++    ALIGN static const real_t W4r[4] = { FRAC_CONST(1.000000000000000), FRAC_CONST(0.707106765732237), FRAC_CONST(0.000000000000000), FRAC_CONST(-0.707106827549476) };
++    ALIGN static const real_t W4i[4] = { FRAC_CONST(0.000000000000000), FRAC_CONST(-0.707106796640858), FRAC_CONST(-1.000000000000000), FRAC_CONST(-0.707106734823616) };
++    v4f R[8], I[8], t0, t1;
++    int k;
++
++    /* Step 2: modulate, into registers: R[k]/I[k] hold elements 4k..4k+3 */
++    for (k = 0; k < 8; k++)
++    {
++        const v4f xr = v4_ld(in_real + 4 * k), xi = v4_ld(in_imag + 4 * k);
++        const v4f t = v4_mul(v4_add(xr, xi), v4_ld(dct4_64_tab + 4 * k));
++        R[k] = v4_mla(t, xi, v4_ld(dct4_64_tab + 4 * k + 64));
++        I[k] = v4_mla(t, xr, v4_ld(dct4_64_tab + 4 * k + 32));
++    }
++    /* Step 3: the FFT (DIF, radix 2) — stages 1-3 on whole vectors */
++#define VIBE_BFLY(a, b, WR, WI) do { const v4f dr_ = v4_sub(R[a], R[b]), di_ = v4_sub(I[a], I[b]); \
++        R[a] = v4_add(R[a], R[b]); I[a] = v4_add(I[a], I[b]); vibe_cmul4(dr_, di_, (WR), (WI), R[b], I[b]); } while (0)
++    for (k = 0; k < 4; k++) VIBE_BFLY(k, k + 4, v4_ld(w_array_real + 4 * k), v4_ld(w_array_imag + 4 * k));   /* span 16 */
++    for (k = 0; k < 8; k += 4) {                                                                                /* span 8 */
++        VIBE_BFLY(k, k + 2, v4_ld(W2r), v4_ld(W2i));
++        VIBE_BFLY(k + 1, k + 3, v4_ld(W2r + 4), v4_ld(W2i + 4));
++    }
++    t0 = v4_ld(W4r); t1 = v4_ld(W4i);
++    for (k = 0; k < 8; k += 2) VIBE_BFLY(k, k + 1, t0, t1);                                                    /* span 4 */
++#undef VIBE_BFLY
++    /* stages 4 + 5 (spans 2 and 1) after a 4x4 transpose of each half: vector j then holds lane j of every block */
++    for (k = 0; k < 8; k += 4)
++    {
++        v4f s0r, s0i, s1r, s1i, d0r, d0i, d1r, d1i;
++        v4_transpose(R[k], R[k + 1], R[k + 2], R[k + 3]);
++        v4_transpose(I[k], I[k + 1], I[k + 2], I[k + 3]);
++        s0r = v4_add(R[k], R[k + 2]); s0i = v4_add(I[k], I[k + 2]);
++        d0r = v4_sub(R[k], R[k + 2]); d0i = v4_sub(I[k], I[k + 2]);
++        s1r = v4_add(R[k + 1], R[k + 3]); s1i = v4_add(I[k + 1], I[k + 3]);
++        d1r = v4_sub(I[k + 1], I[k + 3]); d1i = v4_sub(R[k + 3], R[k + 1]);          /* (x1 - x3) * (-i) */
++        R[k] = v4_add(s0r, s1r); R[k + 1] = v4_sub(s0r, s1r); R[k + 2] = v4_add(d0r, d1r); R[k + 3] = v4_sub(d0r, d1r);
++        I[k] = v4_add(s0i, s1i); I[k + 1] = v4_sub(s0i, s1i); I[k + 2] = v4_add(d0i, d1i); I[k + 3] = v4_sub(d0i, d1i);
++    }
++    /* Step 4: bit reversal IN REGISTERS. Element n = b4..b0 now sits in half b4, vector b1b0, lane b3b2; its
++     * bit-reversed position m = b0b1b2b3b4 is vector b0b1b2, lane b3b4 — one trn of the two halves' vectors. Then the
++     * post-modulation, as the stock kernel does it. */
++    for (k = 0; k < 4; k++)
++    {
++        const int o = ((k & 1) << 2) | ((k >> 1) << 1);
++        v4f pr, qr, pi, qi;
++        v4_trn(R[k], R[k + 4], pr, qr);
++        v4_trn(I[k], I[k + 4], pi, qi);
++        {
++            const v4f t = v4_mul(v4_add(pr, pi), v4_ld(dct4_64_tab + 4 * o + 3 * 32));
++            v4_st(out_real + 4 * o, v4_mla(t, pi, v4_ld(dct4_64_tab + 4 * o + 5 * 32)));
++            v4_st(out_imag + 4 * o, v4_mla(t, pr, v4_ld(dct4_64_tab + 4 * o + 4 * 32)));
++        }
++        {
++            const int o1 = o + 1;
++            const v4f t = v4_mul(v4_add(qr, qi), v4_ld(dct4_64_tab + 4 * o1 + 3 * 32));
++            v4_st(out_real + 4 * o1, v4_mla(t, qi, v4_ld(dct4_64_tab + 4 * o1 + 5 * 32)));
++            v4_st(out_imag + 4 * o1, v4_mla(t, qr, v4_ld(dct4_64_tab + 4 * o1 + 4 * 32)));
++        }
++    }
++    {
++        /* i = 16 (i_rev = 1) as the stock kernel has it: element 1 is lane 0 of R[1]/I[1] after the transpose */
++        float r1[4], i1[4];
++        v4_st(r1, R[1]); v4_st(i1, I[1]);
++        out_imag[16] = MUL_C(i1[0] - r1[0], dct4_64_tab[16 + 3*32]);
++        out_real[16] = MUL_C(r1[0] + i1[0], dct4_64_tab[16 + 3*32]);
++    }
++}
++#else
++void dct4_kernel(real_t * in_real, real_t * in_imag, real_t * out_real, real_t * out_imag)
++{
+     // Tables with bit reverse values for 5 bits, bit reverse of i at i-th position
+     const uint8_t bit_rev_tab[32] = { 0,16,8,24,4,20,12,28,2,18,10,26,6,22,14,30,1,17,9,25,5,21,13,29,3,19,11,27,7,23,15,31 };
+     uint32_t i, i_rev;
+@@ -2273,6 +2359,7 @@
+     }
+ 
+ }
++#endif
+ 
+ #endif
+ 
