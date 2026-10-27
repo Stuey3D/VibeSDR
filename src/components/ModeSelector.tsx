@@ -229,6 +229,13 @@ function RttySettingsRows({ s, onChange }: { s: RttySettings; onChange: (s: Rtty
   );
 }
 
+/** ★★ V12 beta25 — the DC spike, explained for listeners (the web's mode menu carries the same words). */
+export const DC_SPIKE_EXPLAINED =
+  'Your radio converts the frequency it is tuned to down to zero hertz (DC). Small imperfections in the radio \u2014 its ' +
+  'own oscillator leaking through and tiny offsets in its electronics \u2014 leave a steady level there, which shows as a ' +
+  'spike at that exact frequency whatever is on air. It is not a real signal. VibeServer tunes the radio 15 kHz away from ' +
+  'what you are listening to, and in free tuning it moves the radio\u2019s centre out of the way if you tune onto the spike.';
+
 interface ModeSelectorProps {
   visible:  boolean;
   current:  Mode;
@@ -240,6 +247,9 @@ interface ModeSelectorProps {
   activeDecoder?: string;
   onSelect: (mode: Mode) => void;
   onClose:  () => void;
+  /** ★★ V12 beta25: FREE tuning with the red "DC Spike" label on screen (SDRScreen dcSpikeOnScreen) — draws a "WHAT IS THE
+   *  DC SPIKE?" key under the Signal ID Wiki key, with a short explanation for listeners. Hidden otherwise (no dead key). */
+  dcSpikeOnScreen?: boolean;
   /** ★★★ THE QUICK-ACCESS GAIN SLIDER WAS REMOVED (2026-07-30). It only ever spoke ONE radio's
    *  gain model — the RTL's list of discrete tuner gains — and three are supported: the Airspy HF+
    *  has no variable gain at all (fixed front end, +6 dB preamp, 0-48 dB attenuator in 6 dB steps)
@@ -390,8 +400,9 @@ interface ModeSelectorProps {
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose,
   filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, bwEdgeMin = 0, onFilterBoth,
   showServerMaps = false, onServerMap, owrxPages,
-  decoderControls, spotsControls, transcribeControls, blocked }: ModeSelectorProps) {
+  decoderControls, spotsControls, transcribeControls, blocked, dcSpikeOnScreen = false }: ModeSelectorProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
+  const [dcInfoOpen, setDcInfoOpen] = useState(false);   // ★ V12 beta25 — the DC spike's explanation, opened by its key
   const isBlocked = (id: string) => !!blocked && blocked.has(id);
   /* The client decoders this receiver both runs and allows — the same filter the row applies. */
   const clientDecs = (['rtty', 'navtex', 'wefax', 'sstv', 'time'] as DecId[]).filter(k => {
@@ -1521,6 +1532,27 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>SIGNAL ID WIKI ↗</Text>
               </TouchableOpacity>)}</NavItem>
             </View></NavRow>
+            {/* ★★ V12 beta25 — WHAT IS THE DC SPIKE? Only while the red "DC Spike" label is on screen (FREE tuning on a radio
+                with a real spike): a short explanation for listeners, opened in place under its key. */}
+            {dcSpikeOnScreen && (
+              <NavRow><View style={[st.grid, { marginTop: 8 }]}>
+                <NavItem key="dcspike" onPress={() => setDcInfoOpen(o => !o)}>{(nf, nr) => pt.metal ? (
+                  <MetalKey navRef={nr} focused={nf} label="WHAT IS THE DC SPIKE?" onPress={() => setDcInfoOpen(o => !o)} />
+                ) : (
+                <TouchableOpacity ref={nr as any}
+                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                          nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+                  onPress={() => setDcInfoOpen(o => !o)} activeOpacity={0.8}
+                  accessibilityLabel="What is the DC spike?" accessibilityState={{ expanded: dcInfoOpen }}>
+                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>WHAT IS THE DC SPIKE?</Text>
+                </TouchableOpacity>)}</NavItem>
+              </View></NavRow>
+            )}
+            {dcSpikeOnScreen && dcInfoOpen && (
+              <Text style={[secLbl, { marginTop: 8, fontSize: 13, lineHeight: 18, letterSpacing: 0, textTransform: 'none', fontWeight: 'normal' }]}>
+                {DC_SPIKE_EXPLAINED}
+              </Text>
+            )}
           </View>
         )}
 

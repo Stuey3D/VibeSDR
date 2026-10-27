@@ -275,6 +275,9 @@ export interface WaterfallViewProps {
   centerMarkerHz?:    number;
   showCenterMarker?:  boolean;
   centerMarkerColor?: string;     // default desaturated cyan
+  /** ★★ V12 beta25: the radio's DC spike (Hz; 0 = none) — a small red "DC Spike / Not a real signal" label at it. The
+   *  caller decides when (FREE tuning on a radio with a real spike — SDRScreen dcSpikeShown). */
+  dcSpikeHz?: number;
   /**
    * ★★ THE OPAQUE CONTROL DECK, in WINDOW coordinates (x, y, w, h, corner radius) — or null when nothing opaque
    * covers the waterfall (Transparency on, the deck hidden, mid-rotation). The waterfall shader is then drawn only
@@ -410,7 +413,7 @@ function WaterfallView({
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
-  centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0',
+  centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0,
   deckOcclusion = null,
 }: WaterfallViewProps) {
 
@@ -2138,6 +2141,13 @@ function WaterfallView({
     return { x, dashes };
   }, [showCenterMarker, centerMarkerHz, hzToX, width, height, bwHz]);
 
+  // ★ V12 beta25: the DC spike's x, or null when there is none or it is off screen
+  const dcSpikeX = useMemo(() => {
+    if (!(dcSpikeHz > 0) || !(bwHz > 0)) return null;
+    const x = hzToX(dcSpikeHz);
+    return x >= 0 && x <= width ? x : null;
+  }, [dcSpikeHz, hzToX, width, bwHz]);
+
   // ── Visible tiles (deckOcclusion) ───────────────────────────────────────────
   // The deck arrives in WINDOW coordinates; this view's own window origin turns it into canvas coordinates.
   const rootRef = useRef<View | null>(null);
@@ -2628,6 +2638,20 @@ function WaterfallView({
           </Text>
         )}
 
+        {/* ★★ V12 beta25 — THE DC SPIKE, LABELLED (Stuart, 2026-10-27: "put a little red label on the DC spike, we know where
+            it should be"; his wording, two lines). Small and to the LEFT of the spike so it never sits on the RF-centre
+            label, which reads to the right of the same place on a dongle. A short red tick marks the exact frequency. */}
+        {dcSpikeX !== null && (
+          <View pointerEvents="none" accessible accessibilityLabel="DC Spike. Not a real signal."
+                style={{ position: 'absolute', left: Math.max(0, dcSpikeX - 92), top: markerLabelBase - 44, width: 92 }}>
+            <Text style={[styles.tickLabel, styles.dcSpikeTop, { fontFamily }]}>DC Spike</Text>
+            <Text style={[styles.tickLabel, styles.dcSpikeSub, { fontFamily }]}>Not a real signal</Text>
+          </View>
+        )}
+        {dcSpikeX !== null && (
+          <View pointerEvents="none" style={[styles.dcSpikeTick, { left: dcSpikeX - 0.5, top: markerLabelBase - 44 }]} />
+        )}
+
         {/* Wall labels — an unlabelled line is just clutter: say WHICH edge of the
             captured band it is, and at what frequency. (Web-client parity.) */}
         {wallOverlay?.loX != null && (
@@ -2749,6 +2773,12 @@ const styles = StyleSheet.create({
   },
   // ★★ V12 VFO A/B — a needle's letter and ear ("A L", "B R"); a dark halo so it reads over any palette.
   vfoTag: { width: 34, textAlign: 'left', fontSize: 10, textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
+  // ★★ V12 beta25 — the DC spike's label: red, small, a dark halo so it reads over any palette (as vfoTag); in flow inside its box
+  dcSpikeTop: { position: 'relative', width: 90, textAlign: 'right', fontSize: 9, fontWeight: 'bold', color: '#ff4d4d',
+                textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
+  dcSpikeSub: { position: 'relative', width: 90, textAlign: 'right', fontSize: 8, fontWeight: 'normal', color: 'rgba(255,110,110,0.9)',
+                textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
+  dcSpikeTick: { position: 'absolute', width: 1, height: 22, backgroundColor: '#ff4d4d' },
   dbLabel: {
     position: 'absolute', left: 4,
     fontSize: 11, fontWeight: 'bold', color: 'rgba(255,180,60,0.90)',

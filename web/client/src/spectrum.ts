@@ -578,6 +578,8 @@ export interface SpectrumCallbacks {
    *  positional wrong and nothing complains. */
   /** ★ ifCap: the owner's per-band IF ceiling in Hz at the tuned frequency, -1 for none.
    *  Carried here rather than in onHwInfo's positional list, which is long enough already. */
+  /** ★★ V12 beta25: the radio's DC spike (Hz; 0 = none to show) and its centre, from hwinfo and the `dc` message. */
+  onDcSpike?: (dcHz: number, rfCentreHz: number) => void;
   onTunerBw?: (hz: number, rfCentreHz: number, auto: boolean, ifCap: number,
                /** ★ The manual widths the server can set (hwinfo `tunerBws`), null from an older
                 *  server — then the page's own <option>s stand. */
@@ -1569,7 +1571,13 @@ export class SpectrumClient {
                             token: typeof msg.token === 'string' ? msg.token : undefined, public: msg.public === true, full: msg.full === true,
                             why: typeof msg.why === 'string' ? msg.why : undefined });
         break;
+      /* ★★ V12 beta25 — THE RADIO MOVED ITS CENTRE (a DC nudge in FREE tuning, a recentre): where the centre and the DC
+       *  spike are now, so the RF-centre line and the red "DC Spike" label follow the radio itself. */
+      case 'dc':
+        this.cb.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);
+        break;
       case 'hwinfo':
+        this.cb.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);   // ★ V12 beta25 — absent dcHz = no spike to show
         this.cb.onDabScanOk?.(msg.dabScan === true);   // ★ absent (an older server, a shared radio) = no SCAN key
         // ★★ V12 VFO A/B: how many watch channels a listener may add here. Absent (an older server) = 0 = no toggle.
         { const wm = Number(msg.watch) || 0;
@@ -2410,6 +2418,9 @@ export class SpectrumClient {
     if (!p.frequency || !p.binBandwidth) return;
     this.pendingView = null;
     this.lastSendAt = performance.now();
-    this._send({ type: 'zoom', frequency: p.frequency, binBandwidth: p.binBandwidth });
+    /* ★★★ V12 beta25 — SAY THE VFO CENTRE IS FREE (local_sdr_shim.cpp viewFree_). Stuart: "the RF centre is following the
+     *  VFO when in free mode and kinda kills the whole free tuning mode". With `free` the server leaves the radio's centre
+     *  where it is while the view moves inside the capture; it moves only when the view walks off it, or for the DC spike. */
+    this._send({ type: 'zoom', frequency: p.frequency, binBandwidth: p.binBandwidth, ...(this.followVfo ? {} : { free: 1 }) });
   }
 }

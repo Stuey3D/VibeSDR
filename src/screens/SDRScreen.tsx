@@ -1271,6 +1271,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [hwSampleRate,  setHwSampleRate]  = useState(2_400_000);
   /** ★ The radio's own centre and the owner's lock, from hwinfo — see localRf. */
   const [hwRfCentre,     setHwRfCentre]     = useState(0);
+  const [hwDcHz,         setHwDcHz]         = useState(0);   // ★ V12 beta25: the DC spike (0 = none) — see dcSpikeShown
   const [hwLockedCentre, setHwLockedCentre] = useState(0);
   /** ★ Storms about (server-decided): flashes per minute and seconds since the last. */
   const [storms, setStorms] = useState<{ rate: number; ago: number } | null>(null);
@@ -4384,6 +4385,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** This receiver shares ONE tuner between its listeners — the only state in which the chat
    *  means anything, and the only one in which anybody but the owner may turn the dial. */
   const sharedDial = !!dialState && dialState.mode !== 'exclusive';
+  /* ★★ V12 beta25 — THE RED "DC Spike / Not a real signal" LABEL. Stuart, 2026-10-27: "only in free tuning mode put a
+   *  little red label on the DC spike, we know where it should be". FREE tuning only — with the VFO LOCKED the spike always
+   *  sits 15 kHz from the dial and is never in the way — and never on a shared dial or an owner's locked window (not the
+   *  listener's to move). The server sends no `dcHz` for a radio without a real spike. */
+  const dcSpikeShown = isLocal && !vfoLocked && !(hwLockedCentre > 0) && !sharedDial && hwDcHz > 0;
+  const dcSpikeOnScreen = dcSpikeShown && status.bwHz > 0
+    && hwDcHz >= status.centerHz - status.bwHz / 2 && hwDcHz <= status.centerHz + status.bwHz / 2;
+
   const [chatOpen,     setChatOpen]     = useState(false);
   /* ★★ The chat's language (dialChat chatLangChoice) as STATE, so a pick in the drawer or the server's country arriving
    *  redraws the pad, the transcript and the shared-tuner banner at once. */
@@ -6554,6 +6563,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       // remote client can't query the hardware natively).
       onHwGains: (gains: number[]) => { if (!destroyed.current && gains.length) setHwGains(gains); },
       onRfCentre: (rf, locked) => { if (destroyed.current) return; setHwRfCentre(rf); setHwLockedCentre(locked); },
+      onDcSpike: (dc, rf) => { if (destroyed.current) return; setHwDcHz(dc); if (rf > 0) setHwRfCentre(rf); },
       /* ★★★ `lx` RIDES EVERY SPECTRUM TICK — ~20 a second — and every one with storms about built a
        *  fresh object: TWENTY WHOLE-SCREEN RENDERS A SECOND for as long as anyone listened below
        *  10 MHz with sferics in the air (MW at night: 28-33 a minute measured), to draw a badge
@@ -12385,7 +12395,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears); VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -12861,6 +12871,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         centerMarkerHz={localRf?.rf ?? status.centerHz}
         deckOcclusion={deckOcclusion}
         showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
+        dcSpikeHz={dcSpikeShown ? hwDcHz : 0}
       />
       </PanelBoundary>
       </View>
@@ -14183,6 +14194,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       <PanelBoundary name="Mode selector" onClose={() => setModeSelOpen(false)} resetKey={modeSelOpen}>
       <ModeSelector
         visible={modeSelOpen}
+        dcSpikeOnScreen={dcSpikeOnScreen}
         current={status.mode}
         /* ★★★ MINUS WHATEVER THE OWNER SWITCHED OFF. A blocked mode is not shown at all rather
          *  than shown and refused: on an HF-only RSP1B, WFM is not a broken button, it is a mode

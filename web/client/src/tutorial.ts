@@ -82,7 +82,8 @@ const STEPS: Step[] = [
     ids: ['mMode'],
     title: 'The demodulator button',
     body: 'The demodulator button [[@mMode]] opens the audio modes and the decoders — how you listen, '
-        + 'plus things like RTTY and weather fax.',
+        + 'plus things like RTTY and weather fax. With the VFO FREE, a small red DC Spike label marks the radio\u2019s DC '
+        + 'spike, and WHAT IS THE DC SPIKE? under the Signal ID Wiki link in this menu explains it.',
   },
   {
     ids: ['mMenu'],

@@ -553,6 +553,10 @@ export interface SDRCallbacks {
   /** ★ The RADIO's centre and the owner's locked centre (0 = not locked), off hwinfo. The one
    *  figure the walls and the RF-centre marker must be drawn from — the view centre is not it. */
   onRfCentre?: (rfHz: number, lockedHz: number) => void;
+  /** ★★ V12 beta25: where the radio's DC spike is (Hz; 0 = this radio has no spike to show — an HF+, a SpyServer, an Icom,
+   *  a relayed rtl_tcp stream, a whole-radio mode). From hwinfo's `dcHz` and the `dc` message the server sends whenever the
+   *  centre moves (a DC nudge, a recentre); `rfHz` with it is the radio's centre at that moment. */
+  onDcSpike?: (dcHz: number, rfHz: number) => void;
   /** ★★★ ONE RADIO PER ADDRESS — you are already listening on another radio of THIS server.
    *  Deliberate policy, added after one visitor held both single-user radios of the demo at once by
    *  opening a tab on each (Stuart, 2026-08-21). ★★ It is NOT a queue and must never be presented
