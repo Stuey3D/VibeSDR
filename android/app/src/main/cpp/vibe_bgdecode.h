@@ -29,6 +29,9 @@
 //    never audio anywhere else — and while this runs there is, by construction, nobody listening.
 #pragma once
 #include "vibe_bgdecode_config.h"   // ★ the profiles, validate(), attachMsg()
+#include "vibe_bgdecode_band.h"     // ★ V12: a Band digital-spots VFO's span (installBandSpan)
+#include "vibe_band_slice.h"        // ★ …and its slices: sized, tapered and placed as a listener's Band (one rule)
+#include "vibe_clock.h"             // ★ the capture time a Band slice's slots are cut by
 #include "vibe_decoder_host.h"
 #include "vibe_gallery.h"
 #include "vibe_station_log.h"      // ★ V12 APRS: the day's packets + the station card (StationTap)
@@ -907,6 +910,16 @@ public:
         /** ★ Started at a centre the profile did not choose (a listener's dial): the VFOs inside it carry on, and the log
          *  says so rather than "profile N, RF centre <someone else's>". */
         bool inRangeOnly = false;
+        /** ★★ V12 2026-10-27 — a BAND digital-spots VFO runs the listener's own Band governor (decoders/digi_governor.h):
+         *  the owner's word per mode (Setup → Modes and decoders), the benchmark's budget in FT8 units (∞ = none) — SHARED
+         *  between the profile's Band VFOs, never each given the whole box — and the server's load (engines go light).
+         *  `bandWhyNot` non-empty = Band is switched off on this receiver (the owner, or the benchmark's default on a box
+         *  that measured it red — Stuart's rule: the benchmark sets the default, the owner can tick it back): the VFO is
+         *  shown paused with the reason, never run behind the owner's back. All may be empty (the tests). */
+        std::function<int(const std::string& mode)> bandOverride;
+        std::function<double()> bandBudgetUnits;
+        std::function<bool()> loaded;
+        std::function<std::string()> bandWhyNot;
     };
     BgRunner() = default;
     ~BgRunner() { stop(false); }
@@ -915,21 +928,39 @@ public:
     void start(const Params& p) {
         stop(false);
         p_ = p;
-        if (!chan_ || chan_->fftSize() != p_.fftSize) chan_.reset(new vibedsp::Channelizer(p_.fftSize));
+        if (!chan_ || chan_->fftSize() != p_.fftSize) { chan_.reset(new vibedsp::Channelizer(p_.fftSize)); fedIn_ = 0; }
         chans_.clear();
+        installBandSpan();
+        // ★ The benchmark's Band budget is the BOX's: shared between this profile's Band VFOs, never each given the lot.
+        int nBand = 0;
+        for (const auto& v : p_.profile.vfos) if (isBandSpots(v)) ++nBand;
         for (size_t i = 0; i < p_.profile.vfos.size(); i++) {
             auto c = std::make_unique<Chan>();
             c->owner = this; c->vfo = p_.profile.vfos[i]; c->index = (int)i;
             // ★ A CW SKIMMER takes the channel's IQ itself — its slice just wide enough for the segment (the outer 3 % is
             //   the channel filter's), and no demodulator at all.
             c->skim = isSkimmer(c->vfo);
+            /* ★★ A BAND VFO (V12 2026-10-27) is fed IQ too: the band's main slice, centred where its modes are (the span's
+             *  centre, whatever frequency in the band was typed), sized and tapered exactly as a listener's Band slice
+             *  (vibe_band_slice.h — flat over 7/8 of its rate), and its extra slices cut off the same forward FFT. */
+            c->band = isBandSpots(c->vfo);
+            BandSpan span;
+            if (c->band) {
+                if (bandSpan(c->vfo.hz, span)) {
+                    c->bandCentre = span.centreHz; c->bandName = span.name;
+                    c->bandHalf = std::max(span.centreHz - span.loHz, span.hiHz - span.centreHz);
+                }
+                else { c->bandCentre = c->vfo.hz; c->blockWhy = "not in a band the digital modes use"; }
+                if (p_.bandWhyNot) { const std::string w = p_.bandWhyNot(); if (!w.empty()) c->blockWhy = w; }
+            }
             const double need = c->skim ? passbandHz(c->vfo) / 0.92 : std::max(passbandHz(c->vfo) * 2.5, 24000.0);
             int b = 64;
             while (b < p_.fftSize && p_.sampleRate * (double)b / (double)p_.fftSize < need) b <<= 1;
             c->bins = std::min(b, p_.fftSize);
+            if (c->band) c->bins = bandSliceBins(p_.sampleRate, p_.fftSize, std::min(DecoderHostBandWidth(c->bandCentre), p_.sampleRate * 0.8));
             c->rate = p_.sampleRate * (double)c->bins / (double)p_.fftSize;
             c->slice.assign((size_t)c->bins, cf32{0.0f, 0.0f});
-            if (!c->skim) {
+            if (!c->skim && !c->band) {
                 c->rx.reset(new vibedsp::RxPipeline());
                 vibedsp::RxPipeline::Callbacks cb{};
                 cb.ctx = c.get();
@@ -941,8 +972,15 @@ public:
             DecoderHost::Env env;
             env.log = p_.log;
             env.slots = p_.slots;
-            const double dialHz = c->vfo.hz;
+            // ★ A Band VFO's "dial" is its span's centre: the host sizes the slice and finds the band's extra slices by it.
+            const double dialHz = c->band ? c->bandCentre : c->vfo.hz;
             env.dialHz = [dialHz] { return dialHz; };
+            if (c->band) {
+                env.bandOverride = p_.bandOverride;
+                env.loaded = p_.loaded;
+                auto bu = p_.bandBudgetUnits; const int share = std::max(1, nBand);
+                env.bandBudgetUnits = [bu, share] { const double u = bu ? bu() : NAN; return std::isfinite(u) && u > 0 ? u / share : u; };
+            }
             // ★ An audio tone → RF by the VFO's sideband (DSC names the frequency it heard: 2185.8 USB + 1700 = 2187.5).
             const bool lsbV = c->vfo.mode == "lsb";
             env.rfOfAudio = [dialHz, lsbV](double a) { return lsbV ? dialHz - a : dialHz + a; };
@@ -986,9 +1024,12 @@ public:
                     m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;
                     return std::make_shared<Ft8SummaryTap>(*st, m, la, lo);
                 };
-                env.spotTap = [st, v, pi, la, lo, lo2, last2, ls, lc](bool) -> DecoderTapPtr {
+                // ★ FT8/FT4 on its dial — or, on a Band VFO, ONE card for the whole band (decoder "ft8band", the band's
+                //   centre as its frequency: the card's first line names the band, as a listener's Band card does).
+                const bool bandV = c->band; const double bandC = c->bandCentre;
+                env.spotTap = [st, v, pi, la, lo, lo2, last2, ls, lc, bandV, bandC](bool) -> DecoderTapPtr {
                     gallery::Meta m;
-                    m.kind = "ft8"; m.origin = "background"; m.freqHz = v.hz; m.mode = v.mode; m.decoder = "ft8";
+                    m.kind = "ft8"; m.origin = "background"; m.freqHz = bandV ? bandC : v.hz; m.mode = v.mode; m.decoder = bandV ? "ft8band" : "ft8";
                     m.profile = "Profile " + std::to_string(pi + 1);
                     m.listenerOn = lo2;
                     m.lastItemAt = last2; m.liveSpots = ls; m.liveCountries = lc;
@@ -1004,7 +1045,7 @@ public:
         startDecoders();
         publish();
         run_.store(true);
-        { std::lock_guard<std::mutex> lk(qm_); q_.clear(); qSamples_ = 0; gap_ = false; }
+        { std::lock_guard<std::mutex> lk(qm_); q_.clear(); qSamples_ = 0; gap_ = false; gapSamples_ = 0; }
         th_ = std::thread([this] { loop(); });
         running_.store(true);
         int inWin = 0; for (auto& c : chans_) if (c->inWindow) ++inWin;
@@ -1068,17 +1109,22 @@ public:
     uint64_t fedSamples() const { uint64_t n = 0; for (auto& c : chans_) if (c->host) n += c->host->fedSamples(); return n; }
 
     /** ★ THE DSP THREAD'S WHOLE COST: a copy into a bounded queue. Never waits; past half a second the oldest goes. */
-    void feedIq(const cf32* iq, int n) {
+    /** ★ V12 2026-10-27: `captureUtc` — when the chunk's LAST sample was captured, stamped HERE on the DSP thread (NaN =
+     *  now): a Band VFO's FT8/WSPR slots are cut by it, never by when this thread got round to the block (the queue may
+     *  hold half a second). A test passes its own clock. */
+    void feedIq(const cf32* iq, int n, double captureUtc = NAN) {
         if (!running_.load(std::memory_order_relaxed) || n <= 0) return;
-        std::vector<cf32> v(iq, iq + n);
+        QItem it; it.v.assign(iq, iq + n);
+        it.utc = std::isfinite(captureUtc) ? captureUtc : vibeUtcNow();
         {
             std::lock_guard<std::mutex> lk(qm_);
-            q_.push_back(std::move(v));
+            q_.push_back(std::move(it));
             qSamples_ += (size_t)n;
             const size_t cap = (size_t)std::max(65536.0, p_.sampleRate * 0.5);
             while (qSamples_ > cap && q_.size() > 1) {
-                qSamples_ -= q_.front().size();
-                dropped_.fetch_add(q_.front().size(), std::memory_order_relaxed);
+                qSamples_ -= q_.front().v.size();
+                dropped_.fetch_add(q_.front().v.size(), std::memory_order_relaxed);
+                gapSamples_ += q_.front().v.size();   // ★ the oldest go — so the hole is just before the new front
                 q_.pop_front();
                 gap_ = true;
             }
@@ -1129,6 +1175,8 @@ public:
                + "\",\"state\":\"" + state + "\",\"why\":\"" + gallery::jsonEsc(state == "paused" ? c.pauseWhy : std::string())
                + "\",\"lock\":\"" + lock + "\",\"last\":" + std::to_string((long long)c.lastItem->load(std::memory_order_relaxed))
                + ",\"cpuPct\":" + pct(cur.vfo[i], base ? base->vfo[i] : 0)
+               // ★ V12: a Band VFO names its band and what its governor runs now ("FT8 7.074, FT4 7.0475 …")
+               + (c.band ? ",\"band\":\"" + gallery::jsonEsc(c.bandName) + "\",\"modes\":\"" + gallery::jsonEsc(c.decoding && c.host ? c.host->spotsDescribe() : std::string()) + "\"" : std::string())
                // ★ FT8/FT4: the summary's running count, so a quiet card is not read as "no decodes"
                + (d && (!*d->ext || d->widthHz > 0) ? ",\"spots\":" + std::to_string((unsigned long long)c.liveSpots->load(std::memory_order_relaxed))
                                 + ",\"countries\":" + std::to_string((unsigned long long)c.liveCountries->load(std::memory_order_relaxed)) : std::string())
@@ -1149,6 +1197,15 @@ private:
         std::unique_ptr<vibedsp::RxPipeline> rx;     // ★ null for a CW skimmer (fed IQ)
         std::shared_ptr<DecoderHost> host;
         bool skim = false;
+        // ★ V12 2026-10-27: a Band digital-spots VFO — its span's centre (where the main slice is cut), the band's name,
+        //   why it cannot run here ("" = it can), the slice's bins' power (Band's activity gate) and its extra slices.
+        bool band = false;
+        double bandCentre = 0, bandHalf = 0;   // ★ the span's centre and half its width (its modes' edges)
+        std::string bandName, blockWhy;
+        std::vector<float> pw;
+        struct Extra { std::vector<cf32> slice; std::vector<float> pw; vibedsp::Channelizer::ExtractCtx ctx; double gapCarry = 0; };
+        Extra bx[kMaxExtraSlices];
+        double gapCarry = 0;
         double sliceRf = 0;                          // ★ the RF frequency at the centre of this VFO's slice
         bool decoding = false;
         bool inWindow = true;    // ★ inside what the radio captures now (a listener's dial may have moved it away)
@@ -1164,8 +1221,11 @@ private:
     /** Cut this VFO's channel against the current centre, and say whether it is inside the window at all. */
     void place(Chan& c) {
         const double binHz = p_.sampleRate / (double)p_.fftSize;
-        const double off = c.vfo.hz - p_.centreHz - p_.hwOffsetHz;
-        c.inWindow = std::fabs(c.vfo.hz - p_.centreHz) <= halfWindowHz(p_.sampleRate);
+        const double at = c.band ? c.bandCentre : c.vfo.hz;
+        const double off = at - p_.centreHz - p_.hwOffsetHz;
+        c.inWindow = std::fabs(at - p_.centreHz) <= halfWindowHz(p_.sampleRate);
+        // ★ A Band VFO is in the window only when its whole main slice is (the same guard the save checks)
+        if (c.band) c.inWindow = std::fabs(at - p_.centreHz) + c.bandHalf <= halfWindowHz(p_.sampleRate) + 3000.0;
         c.centreBin = (int)std::lround(off / binHz);
         const double resid = off - c.centreBin * binHz;
         // ★ A skimmer's slice is centred where its centre bin is: the VFO less the residual (its spots are RF anyway).
@@ -1187,6 +1247,8 @@ private:
         started_ = 0;
         for (auto& c : chans_) {
             if (!c->inWindow) continue;
+            // ★ A Band VFO the owner (or the benchmark's default) has switched off here: said once, never started
+            if (!c->blockWhy.empty()) { c->pauseWhy = c->blockWhy; say("background decoding: VFO " + name(*c) + " not started \xe2\x80\x94 " + c->blockWhy); continue; }
             if (runningCount() >= budget()) { c->pauseWhy = "waiting \xe2\x80\x94 every user slot of this radio is taken (listeners come first)"; say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 every user slot of this radio is taken (listeners come first)"); continue; }
             startOne(*c);
             if (c->decoding) ++started_;
@@ -1195,9 +1257,11 @@ private:
     }
     void startOne(Chan& c) {
         const DecoderDef* d = decoderDef(c.vfo.dec);
-        if (!d || !c.host) return;
-        // ★ FT8/FT4 is the host's spotter (its own slot), every other decoder its audio-extension decoder.
-        const auto r = *d->ext ? c.host->start(d->ext, attachMsg(c.vfo)) : c.host->startSpots();
+        if (!d || !c.host || !c.blockWhy.empty()) return;
+        // ★ FT8/FT4 is the host's spotter (its own slot), every other decoder its audio-extension decoder — and a Band
+        //   VFO the same spotter in Band scope (every mode on the band, behind the governor).
+        const auto r = *d->ext ? c.host->start(d->ext, attachMsg(c.vfo))
+                     : c.host->startSpots(c.band ? DecoderHost::SpotScope::Band : DecoderHost::SpotScope::Single);
         c.decoding = r == DecoderHost::Start::Ok || r == DecoderHost::Start::Joined;
         c.pauseWhy = c.decoding ? "" : "waiting for a decoder slot (listeners come first)";
     }
@@ -1218,7 +1282,7 @@ private:
     void publish() {
         if (!p_.registry) return;
         std::vector<std::pair<int, bool>> v;
-        for (auto& c : chans_) if (c->inWindow) v.push_back({ c->index + 1, c->decoding });   // ★ out of the window = not waiting
+        for (auto& c : chans_) if (c->inWindow && c->blockWhy.empty()) v.push_back({ c->index + 1, c->decoding });   // ★ out of the window (or switched off here) = not waiting
         p_.registry->publish(v);
     }
     /** ★★ The slot housekeeping, on the worker thread twice a second: listeners' pause requests first (lowest rank
@@ -1247,7 +1311,7 @@ private:
         else if (force || now - lastResume_ > std::chrono::seconds(3)) {
             lastResume_ = now;
             for (auto& c : chans_) {
-                if (c->decoding || !c->inWindow) continue;
+                if (c->decoding || !c->inWindow || !c->blockWhy.empty()) continue;
                 if (!p_.slots || p_.slots->inUse() >= p_.slots->max() || runningCount() >= budget()) break;
                 const int best = p_.registry ? BgRegistry::bestPaused(p_.registry->dir()) : 0;
                 if (best && c->index + 1 > best) break;             // ★ a higher-ranked VFO on another radio is waiting
@@ -1266,12 +1330,15 @@ private:
         vibeDecoderThread("vibe-bgdsp");
         auto lastYieldCheck = std::chrono::steady_clock::now();
         for (;;) {
-            std::vector<cf32> buf; bool gap = false;
+            std::vector<cf32> buf; bool gap = false; double bufUtc = 0; size_t gapN = 0;
             {
                 std::unique_lock<std::mutex> lk(qm_);
                 qcv_.wait_for(lk, std::chrono::milliseconds(500), [this] { return !q_.empty() || !run_.load(); });
                 if (!run_.load()) return;
-                if (!q_.empty()) { buf = std::move(q_.front()); q_.pop_front(); qSamples_ -= buf.size(); gap = std::exchange(gap_, false); }
+                if (!q_.empty()) {
+                    buf = std::move(q_.front().v); bufUtc = q_.front().utc; q_.pop_front(); qSamples_ -= buf.size();
+                    gap = std::exchange(gap_, false); gapN = std::exchange(gapSamples_, (size_t)0);
+                }
             }
             const auto now = std::chrono::steady_clock::now();
             /* ★★ DROPS, INTO THE LOG, once a minute when there were any (2026-10-22): the IQ queue (this thread fell behind
@@ -1300,18 +1367,32 @@ private:
             if (buf.empty()) continue;
             if (gap) for (auto& c : chans_) if (c->rx) c->rx->noteInputGap();
             std::lock_guard<std::mutex> cl(chanMtx_);
+            // ★ V12: a hole this queue dropped is BRIDGED in every Band VFO's engines (zeros of exactly its length, as the
+            //   listener's tap does — DecoderHost::feedIq with no samples), so a slot with a hole in it still completes.
+            if (gapN > 0) for (auto& c : chans_) if (c->band && c->decoding) bridgeBand(*c, gapN, bufUtc - (double)buf.size() / p_.sampleRate);
             // ★ V12 beta 4: what this thread costs, on its OWN clock — the shared FFT, and each VFO's cut + demodulator.
             const uint64_t t0 = vibeThreadCpuNs();
             uint64_t perVfo = 0;
+            /* ★ THE CAPTURE TIME OF EACH BLOCK (vibe_wide_tap.h's rule): the channeliser completes block j when its
+             *  (j+1)·hop-th input sample is in, and this chunk's last sample was captured at bufUtc — so a block ending k
+             *  samples before the chunk's end was captured k / rate earlier. Only a Band VFO reads it. */
+            const long long inStart = fedIn_, inEnd = fedIn_ + (long long)buf.size();
+            fedIn_ = inEnd;
+            const long long hop = chan_->hop();
             chan_->feed(buf.data(), (int)buf.size(), [&](const cf32* bins, int) {
                 const long long bi = chan_->blockIndex();
+                const long long endIdx = std::min(inEnd, std::max(inStart, (bi + 1) * hop));
+                const double utc = bufUtc - (double)(inEnd - endIdx) / p_.sampleRate;
                 for (auto& c : chans_) {
                     if (!c->decoding) continue;          // ★ a paused or out-of-window channel costs nothing
                     const uint64_t a = vibeThreadCpuNs();
+                    if (c->band) feedBand(*c, bins, bi, utc);
+                    else {
                     const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
                     if (got > 0) {
                         if (c->rx) c->rx->feed(c->slice.data(), got);
                         else if (c->host) c->host->feedIq(c->slice.data(), got, c->rate, c->sliceRf);
+                    }
                     }
                     const uint64_t d = vibeThreadCpuNs() - a;
                     c->demodNs.fetch_add(d, std::memory_order_relaxed); perVfo += d;
@@ -1322,14 +1403,70 @@ private:
         }
     }
 
+    /** ★★ A BAND VFO's block (V12 2026-10-27) — exactly what a listener's Band gets (local_sdr_shim.cpp feedOneClient):
+     *  the main slice off this SAME forward FFT with a sixteenth's roll-off, its bins' power for the activity gate (one
+     *  multiply-add a bin, no transform), then each extra slice the capture holds — one small inverse FFT each. */
+    void feedBand(Chan& c, const cf32* bins, long long bi, double utc) {
+        if (!c.host) return;
+        const double binHz = p_.sampleRate / (double)p_.fftSize;
+        const int got = chan_->extract(bins, c.centreBin, c.bins, c.slice.data(), c.ectx, bi, kBandTaperDiv);
+        if (got <= 0) return;
+        const float* pw = nullptr;
+        if (c.host->wantsBins()) {
+            c.pw.resize((size_t)c.bins);
+            digi::slicePower(bins, p_.fftSize, c.centreBin, c.bins, c.pw.data());
+            pw = c.pw.data();
+        }
+        c.host->feedIq(c.slice.data(), got, c.rate, c.sliceRf, pw, pw ? c.bins : 0, binHz, utc, 0);
+        const double hwC = p_.centreHz + p_.hwOffsetHz;
+        ExtraSlice xs[kMaxExtraSlices];
+        const int nx = c.host->iqExtraSlices(xs);
+        for (int k = 0; k < nx; ++k) {
+            const int eb = bandSliceBins(p_.sampleRate, p_.fftSize, xs[k].widthHz);
+            const int ecb = (int)std::lround((xs[k].centreHz - hwC) / binHz);
+            const double erate = p_.sampleRate * (double)eb / (double)p_.fftSize, ecentre = hwC + ecb * binHz;
+            if (!captureHolds(p_.sampleRate, hwC, ecentre, erate)) continue;   // ★ beyond this capture: not decoded
+            Chan::Extra& x = c.bx[k];
+            if ((int)x.slice.size() != eb) x.slice.assign((size_t)eb, cf32{0.0f, 0.0f});
+            const int eg = chan_->extract(bins, ecb, eb, x.slice.data(), x.ctx, bi, kBandTaperDiv);
+            if (eg <= 0) continue;
+            const float* epw = nullptr;
+            if (pw) { x.pw.resize((size_t)eb); digi::slicePower(bins, p_.fftSize, ecb, eb, x.pw.data()); epw = x.pw.data(); }
+            c.host->feedIq(x.slice.data(), eg, erate, ecentre, epw, epw ? eb : 0, binHz, utc, k + 1);
+        }
+    }
+    /** ★ `n` capture samples this queue dropped, ending at `endUtc`: each slice told how many of ITS samples are missing. */
+    void bridgeBand(Chan& c, size_t n, double endUtc) {
+        if (!c.host) return;
+        const double binHz = p_.sampleRate / (double)p_.fftSize, hwC = p_.centreHz + p_.hwOffsetHz;
+        auto gapTo = [&](double& carry, double rate, double centre, int slice) {
+            const double want = (double)n * rate / p_.sampleRate + carry;
+            const int k = (int)std::floor(want);
+            carry = want - k;
+            if (k > 0) c.host->feedIq(nullptr, k, rate, centre, nullptr, 0, binHz, endUtc, slice);
+        };
+        gapTo(c.gapCarry, c.rate, c.sliceRf, 0);
+        ExtraSlice xs[kMaxExtraSlices];
+        const int nx = c.host->iqExtraSlices(xs);
+        for (int k = 0; k < nx; ++k) {
+            const int eb = bandSliceBins(p_.sampleRate, p_.fftSize, xs[k].widthHz);
+            const int ecb = (int)std::lround((xs[k].centreHz - hwC) / binHz);
+            const double erate = p_.sampleRate * (double)eb / (double)p_.fftSize, ecentre = hwC + ecb * binHz;
+            if (captureHolds(p_.sampleRate, hwC, ecentre, erate)) gapTo(c.bx[k].gapCarry, erate, ecentre, k + 1);
+        }
+    }
+
     Params p_;
     std::unique_ptr<vibedsp::Channelizer> chan_;
+    long long fedIn_ = 0;                 // ★ samples fed to chan_ since it was made (each block's capture time)
     std::vector<std::unique_ptr<Chan>> chans_;
     std::thread th_;
     std::mutex qm_;
     std::condition_variable qcv_;
-    std::deque<std::vector<cf32>> q_;
+    struct QItem { std::vector<cf32> v; double utc = 0; };
+    std::deque<QItem> q_;
     size_t qSamples_ = 0;
+    size_t gapSamples_ = 0;               // ★ dropped since the worker last took a chunk (bridged for Band VFOs)
     bool gap_ = false;
     std::atomic<bool> run_{false}, running_{false};
     std::chrono::steady_clock::time_point lastResume_{};

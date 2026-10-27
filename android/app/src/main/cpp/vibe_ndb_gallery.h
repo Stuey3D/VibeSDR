@@ -8,6 +8,19 @@
 //    true from it), range rings, the country outlines from the server's own map pack when it is installed, and every
 //    beacon heard that day as a dot and its ident. Written with the card, at most every ten minutes, and when NDB stops.
 //
+//  • ★★ V12 2026-10-27 — THE FT8 SUMMARY'S TWO CARDS, FOR NDB (Stuart: "I'd like to add NDB to the background decoding
+//    as my SDRPlay on the Lenovo already decodes Navtex and 160M FT8 in the background"): beside the day's log,
+//      – LAST 10 MINUTES — ONE standing card ("NDB last 10 min · 23 beacons · furthest KER 412 km"), the rolling last ten
+//        minutes, rewritten at most once a minute and only when the window changed, moved to the top, found again by the
+//        next run (Store::adoptSlot); when the run ends it is written once more "to 20:20 UTC" and kept;
+//      – HOURLY — one card per UTC clock hour ("NDB 19:00–20:00 UTC · 41 beacons · furthest KER 412 km · best 31 dB WOD"),
+//        written when the hour closes and NEVER rewritten; a run that began or ended inside the hour writes the part it
+//        heard, marked partial, with its minutes. Evicted oldest first like everything else.
+//    Each lists the beacons heard with their idents, kHz, how many minutes each was heard, best SNR, distance and
+//    bearing, country and station. Fed by the SAME heard() the day's log is (the service's confirmed beacons, at most
+//    once a minute each) — no second store of NDB readings. The cost, stated as FT8's: each last-10 rewrite rewrites
+//    index.jsonl whole, at most once a minute; the hourly cards are one small append each.
+//
 // ★★ NEVER A WRITE PER BEACON (the RAM-buffered rule of every continuous decoder here, ISM's included): the card is
 //    rewritten at most once a minute and only when something changed; the map at most every ten minutes. A power cut
 //    loses at most that. ★ A RESTART reads the day's card back (Store::adoptSlot + readItem), so the day carries on.
@@ -22,6 +35,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -133,7 +147,13 @@ public:
         bool havePos = false; double lat = 0, lon = 0;
         std::function<int64_t()> clock;
     };
-    DayLog(gallery::Store& store, Options o) : store_(store), o_(std::move(o)) { std::lock_guard<std::mutex> lk(m_); openDay(now() / 86400); }
+    static constexpr int64_t kWindowSec = 10 * 60, kRefreshSec = 60, kHourSec = 3600;
+    static constexpr size_t kMaxRecent = 20000;   // ★ heard events held for the window (each beacon at most once a minute)
+    DayLog(gallery::Store& store, Options o) : store_(store), o_(std::move(o)) {
+        std::lock_guard<std::mutex> lk(m_);
+        openDay(now() / 86400);
+        start_ = hourFrom_ = rollWrite_ = now();
+    }
     ~DayLog() override { finish(); }
 
     void heard(const vibendb::HeardBeacon& b, int64_t t) override {
@@ -146,6 +166,16 @@ public:
         r.last = t; r.ident = b.ident; r.hz = b.hz; r.best = r.first == t ? b.snrDb : std::max(r.best, b.snrDb);
         if (b.listed) { r.name = b.name; r.cc = b.cc; r.km = b.km; r.deg = b.deg; r.lat = b.lat; r.lon = b.lon; }
         dirty_ = true;
+        // ★★ …and the hour's card and the last 10 minutes (the FT8 summary's two cards, V12 2026-10-27)
+        closeHourIfDue(t);
+        Heard h; h.key = key; h.ident = b.ident; h.hz = b.hz; h.snr = b.snrDb; h.t = t;
+        if (b.listed) { h.name = b.name; h.cc = b.cc; h.km = b.km; h.deg = b.deg; }
+        HourRow& hr = hour_[key];
+        if (hr.n == 0) { hr.first = t; hr.best = h.snr; }
+        hr.info = h; hr.best = std::max(hr.best, h.snr); hr.last = t; ++hr.n;
+        recent_.push_back(h);
+        if (recent_.size() > kMaxRecent) recent_.pop_front();
+        lastHeard_ = t; rollDirty_ = true;
     }
     void tick() override {
         std::lock_guard<std::mutex> lk(m_);
@@ -154,6 +184,9 @@ public:
         rollIfNewDay(t);
         if (dirty_ && t - cardAt_ >= kCardSec) writeCard(t);
         if (newBeacon_ && t - mapAt_ >= kMapSec) writeMap(t);
+        closeHourIfDue(t);
+        trim(t);
+        if (rollDirty_ && t - rollWrite_ >= kRefreshSec) writeRolling(t, false);
     }
     void finish() override {
         std::lock_guard<std::mutex> lk(m_);
@@ -164,7 +197,16 @@ public:
         if (newBeacon_ || (mapName_.empty() && !rows_.empty())) writeMap(t);
         if (!cardName_.empty()) store_.close(cardName_);
         if (!mapName_.empty()) store_.close(mapName_);
+        // ★ the hour so far (partial, with its minutes) and the last 10 minutes "to HH:MM", kept
+        closeHourIfDue(t);
+        writeHour(t);
+        trim(t);
+        writeRolling(t, true);
+        if (!rollName_.empty()) store_.close(rollName_);
     }
+    // ── test seams for the two summary cards ──
+    std::string rollingName() const { std::lock_guard<std::mutex> lk(m_); return rollName_; }
+    std::string hourText(int64_t to) const { std::lock_guard<std::mutex> lk(m_); return hourBody(to); }
     // ── test seams / the admin line ──
     size_t beacons() const { std::lock_guard<std::mutex> lk(m_); return rows_.size(); }
     std::string cardText() const { std::lock_guard<std::mutex> lk(m_); return body(now()); }
@@ -324,6 +366,122 @@ private:
         return png::encode(W, H, 3, c.px.data());
     }
 
+    // ── ★★ the hour's card and the last 10 minutes (V12 2026-10-27) ──────────────────────────────────────────────────
+    /** One heard() — what the cards need of it, copied (the day's rows are cleared at midnight; an hour or a window is
+     *  not cut there). */
+    struct Heard { std::string key, ident, name, cc; double hz = 0, km = -1, deg = 0; float snr = 0; int64_t t = 0; };
+    struct HourRow { Heard info; float best = -99; int n = 0; int64_t first = 0, last = 0; };
+    /** One beacon's line on a summary card: ident · kHz · heard N min · best SNR · distance · bearing · country · station. */
+    static std::string line(const HourRow& r) {
+        char b[400];
+        const Heard& h = r.info;
+        const std::string dist = h.km >= 0 ? std::to_string((long long)std::lround(h.km)) + " km" : std::string("-");
+        const std::string brg = h.km >= 0 ? std::to_string((long long)std::lround(h.deg)) + "\xc2\xb0 " + vibendb::compass(h.deg) : std::string("-");
+        std::snprintf(b, sizeof b, "%-6s%s%.3f kHz%sheard %d min%sbest %.0f dB%s%s%s%s%s%s%s%s", h.ident.c_str(), kDot, h.hz / 1e3, kDot, r.n, kDot,
+                      r.best, kDot, dist.c_str(), kDot, brg.c_str(), kDot, h.cc.empty() ? "-" : h.cc.c_str(), kDot,
+                      h.name.empty() ? "(not in the published list)" : h.name.c_str());
+        return b;
+    }
+    /** The figures and the list for a set of beacons (an hour's, or the window's). */
+    std::string figures(const std::map<std::string, HourRow>& rows) const {
+        std::string o;
+        const HourRow* far = nullptr; const HourRow* best = nullptr;
+        for (const auto& kv : rows) {
+            if (kv.second.info.km >= 0 && (!far || kv.second.info.km > far->info.km)) far = &kv.second;
+            if (!best || kv.second.best > best->best) best = &kv.second;
+        }
+        char b[300];
+        std::snprintf(b, sizeof b, "Beacons heard:     %zu\n", rows.size()); o += b;
+        if (far) { std::snprintf(b, sizeof b, "Furthest:          %s %s \xe2\x80\x94 %.0f km %s\n", far->info.ident.c_str(), far->info.name.c_str(), far->info.km, vibendb::compass(far->info.deg)); o += b; }
+        else if (!o_.havePos) o += "Furthest:          (this server has no position set \xe2\x80\x94 add a locator in Setup)\n";
+        if (best) { std::snprintf(b, sizeof b, "Best SNR:          %s %.0f dB\n", best->info.ident.c_str(), best->best); o += b; }
+        std::vector<const HourRow*> v; for (const auto& kv : rows) v.push_back(&kv.second);
+        std::sort(v.begin(), v.end(), [](const HourRow* a, const HourRow* c) { return a->info.hz != c->info.hz ? a->info.hz < c->info.hz : a->info.ident < c->info.ident; });
+        o += "\nEach beacon, lowest frequency first (ident \xc2\xb7 kHz \xc2\xb7 minutes heard \xc2\xb7 best SNR \xc2\xb7 distance \xc2\xb7 bearing \xc2\xb7 country \xc2\xb7 station):\n";
+        for (const HourRow* r : v) { o += line(*r); o += "\n"; }
+        return o;
+    }
+    /** "41 beacons · furthest KER 412 km · best WOD 31 dB" */
+    static std::string headline(const std::map<std::string, HourRow>& rows) {
+        const HourRow* far = nullptr; const HourRow* best = nullptr;
+        for (const auto& kv : rows) {
+            if (kv.second.info.km >= 0 && (!far || kv.second.info.km > far->info.km)) far = &kv.second;
+            if (!best || kv.second.best > best->best) best = &kv.second;
+        }
+        std::string t = std::to_string(rows.size()) + (rows.size() == 1 ? " beacon" : " beacons");
+        char b[120];
+        if (far) { std::snprintf(b, sizeof b, "%sfurthest %s %.0f km", kDot, far->info.ident.c_str(), far->info.km); t += b; }
+        if (best) { std::snprintf(b, sizeof b, "%sbest %s %.0f dB", kDot, best->info.ident.c_str(), best->best); t += b; }
+        return t;
+    }
+    std::string where() const {
+        return std::string("NDB summary") + kDot + "190\xe2\x80\x93" "535 kHz" + kDot
+             + (o_.origin == "background" ? "background decoding" + (o_.profile.empty() ? std::string() : " (" + o_.profile + ")") : std::string("a listener in NDB mode")) + "\n";
+    }
+    gallery::Meta cardMeta(int64_t utc) const {
+        gallery::Meta m;
+        m.kind = "ndb"; m.origin = o_.origin; m.freqHz = kSlotHz; m.mode = ""; m.decoder = "ndb"; m.profile = o_.profile; m.utc = utc;
+        return m;
+    }
+    std::string hourBody(int64_t to) const {
+        const int64_t mins = (to - hourFrom_ + 30) / 60;
+        const bool whole = hourFrom_ % kHourSec == 0 && to - hourFrom_ >= kHourSec;
+        std::string o = where() + gallery::utcStamp(hourFrom_, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + gallery::utcStamp(to, "%H:%M UTC");
+        o += whole ? std::string(" \xc2\xb7 the hour\n\n") : " \xc2\xb7 " + std::to_string((long long)mins) + " of the hour's 60 minutes\n\n";
+        return o + figures(hour_);
+    }
+    /** The clock hour closed: its card (never rewritten), and a fresh tally from the hour's start. */
+    void closeHourIfDue(int64_t t) {
+        if (t / kHourSec == hourFrom_ / kHourSec) return;
+        writeHour((hourFrom_ / kHourSec + 1) * kHourSec);
+        hour_.clear();
+        hourFrom_ = t / kHourSec * kHourSec;
+    }
+    void writeHour(int64_t to) {
+        if (hour_.empty()) return;   // ★ nothing written for a stretch that heard nothing
+        gallery::Meta m = cardMeta(hourFrom_);
+        m.partial = !(hourFrom_ % kHourSec == 0 && to - hourFrom_ >= kHourSec);
+        m.title = "NDB " + gallery::utcStamp(hourFrom_, "%H:%M") + "\xe2\x80\x93" + gallery::utcStamp(to, "%H:%M UTC") + kDot + headline(hour_);
+        m.dlName = "NDB " + gallery::utcStamp(hourFrom_, "%Y-%m-%d %H%M") + " UTC.txt";
+        store_.add(m, "txt", hourBody(to));
+    }
+    void trim(int64_t t) {
+        while (!recent_.empty() && recent_.front().t <= t - kWindowSec) { recent_.pop_front(); rollDirty_ = true; }
+    }
+    /** The standing card, rewritten whole (or created, or adopted from an earlier run). `last`: the run is over. */
+    void writeRolling(int64_t t, bool last) {
+        rollWrite_ = t; rollDirty_ = false;
+        if (recent_.empty() && rollName_.empty() && lastHeard_ == 0) return;   // ★ never heard anything: no card
+        std::map<std::string, HourRow> w;
+        for (const Heard& h : recent_) {
+            HourRow& r = w[h.key];
+            if (r.n == 0) { r.first = h.t; r.best = h.snr; }
+            r.info = h; r.best = std::max(r.best, h.snr); r.last = h.t; ++r.n;
+        }
+        const int64_t from = std::max(start_, t - kWindowSec);
+        gallery::Meta m = cardMeta(from);
+        m.slot = "ndblast10";
+        m.dlName = "NDB last 10 min.txt";
+        const std::string to = gallery::utcStamp(t, "%H:%M UTC");
+        std::string body = where();
+        if (last) body += "The last 10 minutes of the run, to " + to + " (" + gallery::utcStamp(from, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + to + ")\n\n";
+        else body += "The last 10 minutes: " + gallery::utcStamp(from, "%Y-%m-%d %H:%M") + " \xe2\x80\x93 " + to + " (refreshed every minute; the hourly cards are the record)\n\n";
+        if (!w.empty()) {
+            body += figures(w);
+            m.title = std::string("NDB last 10 min") + (last ? " to " + to : std::string()) + kDot + headline(w);
+        } else {
+            const std::string ls = lastHeard_ ? gallery::utcStamp(lastHeard_, "%H:%M UTC") : std::string();
+            body += "Nothing heard in the last 10 minutes" + (ls.empty() ? std::string() : " (the last beacon was at " + ls + ")") + ".\n";
+            m.title = std::string("NDB last 10 min") + (last ? " to " + to : std::string()) + kDot + "nothing heard"
+                    + (ls.empty() ? std::string() : " since " + gallery::utcStamp(lastHeard_, "%H:%M"));
+        }
+        if (rollName_.empty()) rollName_ = store_.adoptSlot(m);
+        if (rollName_.empty() || !store_.replace(rollName_, m, body, /*toNewest=*/true)) {
+            if (!rollName_.empty()) store_.close(rollName_);
+            rollName_ = store_.create(m, "txt", body);
+        }
+    }
+
     gallery::Store& store_;
     Options o_;
     mutable std::mutex m_;
@@ -331,6 +489,12 @@ private:
     int64_t day_ = 0, cardAt_ = 0, mapAt_ = 0;
     std::string cardName_, mapName_;
     std::map<std::string, Row> rows_;
+    // ★ the summary cards
+    int64_t start_ = 0, hourFrom_ = 0, rollWrite_ = 0, lastHeard_ = 0;
+    std::map<std::string, HourRow> hour_;
+    std::deque<Heard> recent_;
+    bool rollDirty_ = false;
+    std::string rollName_;
 };
 
 } // namespace ndbgal

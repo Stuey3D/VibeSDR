@@ -84,6 +84,10 @@ mode / passband / zoom / rate / IF filter ignored with a log line. One whole-rad
 
 **Gallery**: per UTC day, the heard log (a card rewritten at most once a minute, read back after a restart) and a MAP
 (PNG, azimuthal equidistant about the receiver, range rings, the map pack's country outlines when installed, the idents).
+★ 2026-10-27: and the FT8 summary's two cards — a standing **last 10 minutes** card and one card per **UTC hour** (never
+rewritten; partial with its minutes where the run began or ended inside it): beacons with idents, minutes heard, best
+SNR, the furthest. Fed by the same `heard()` as the day's log (docs/v12/BACKGROUND-DECODING.md, "NDB and Band digital
+spots").
 Gallery chip NDB.
 
 **Background decoding** (2026-10-27): an **NDB profile** ("Decodes: NDB beacons — the whole LF beacon band" in the setup

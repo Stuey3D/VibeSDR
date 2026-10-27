@@ -223,6 +223,70 @@ int main(int argc, char** argv) {
         std::string cmd = "rm -rf '" + dir + "'"; if (std::system(cmd.c_str()) != 0) std::printf("  (could not remove %s)\n", dir.c_str());
     }
 
+    /* ★★ V12 2026-10-27 — THE FT8 SUMMARY'S TWO CARDS, FOR NDB (an NDB background profile on the Lenovo's RSP): the
+     *  standing last-10-minutes card (at most once a minute, only when the window changed, adopted by the next run) and one
+     *  card per UTC hour (partial where the run began or ended inside it, never rewritten). On a test clock. */
+    std::printf("\n── the NDB summary cards (last 10 minutes, each UTC hour) ──\n");
+    {
+        char t[256]; std::snprintf(t, sizeof t, "%s/ndbsum-XXXXXX", std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
+        const std::string dir = mkdtemp(t) ? t : "/tmp";
+        const int64_t h0 = 498056LL * 3600;      // an hour boundary
+        int64_t clk = h0 + 40 * 60;              // the run starts at :40
+        auto count = [](const std::string& j, const std::string& what) { size_t n = 0; for (size_t at = 0; (at = j.find(what, at)) != std::string::npos; ++at) ++n; return n; };
+        gallery::Store st; st.setDir(dir); st.setLimitBytes(50ull << 20);
+        auto beacon = [](const char* id, double hz, float snr, double km, const char* name) {
+            vibendb::HeardBeacon b; b.ident = id; b.hz = hz; b.snrDb = snr;
+            if (km >= 0) { b.listed = true; b.km = km; b.deg = 135; b.name = name; b.cc = "GB"; }
+            return b;
+        };
+        {
+            ndbgal::DayLog::Options o; o.origin = "background"; o.profile = "Profile 2"; o.havePos = true; o.lat = 52.29; o.lon = -0.85;
+            o.clock = [&] { return clk; };
+            ndbgal::DayLog d(st, o);
+            d.heard(beacon("WOD", 352000, 26, 94, "Woodley"), clk);
+            d.heard(beacon("KER", 334000, 12, 412, "Kerry"), clk);
+            d.heard(beacon("XYZ", 400000, 8, -1, ""), clk);
+            d.tick();
+            ok(d.rollingName().empty(), "no last-10 card in the run's first minute (at most once a minute)");
+            clk += 60; d.tick();
+            std::string l = st.listJson("ndb", 50);
+            ok(!d.rollingName().empty() && l.find("NDB last 10 min \xc2\xb7 3 beacons \xc2\xb7 furthest KER 412 km \xc2\xb7 best WOD 26 dB") != std::string::npos,
+               "the last-10 card: 3 beacons, furthest KER 412 km, best WOD 26 dB");
+            std::string body; st.readItem(d.rollingName(), body);
+            ok(body.find("Profile 2") != std::string::npos && body.find("KER") < body.find("WOD") && body.find("XYZ") != std::string::npos
+               && body.find("not in the published list") != std::string::npos && body.find("heard 1 min") != std::string::npos,
+               "…its body lists the beacons lowest first, an unlisted one by its ident alone");
+            const size_t items1 = count(l, "\"f\":");
+            clk += 60; d.tick();
+            ok(count(st.listJson("ndb", 50), "\"f\":") == items1, "a minute with nothing new and nothing aged out: not rewritten");
+            // ★ :43 → 1:05 — every 2 minutes WOD again; KER and XYZ age out of the window; the hour closes at :00
+            for (int m = 0; m < 11; ++m) { clk += 120; d.heard(beacon("WOD", 352000, 20 + m, 94, "Woodley"), clk); d.tick(); }
+            l = st.listJson("ndb", 50);
+            ok(l.find("NDB last 10 min \xc2\xb7 1 beacon \xc2\xb7 furthest WOD 94 km") != std::string::npos, "the window rolled: KER and XYZ aged out, WOD stays");
+            ok(count(l, "\"title\":\"NDB last 10 min") == 1, "still ONE standing card");
+            const std::string hh = gallery::utcStamp(h0 + 40 * 60, "%H:%M") + "\xe2\x80\x93" + gallery::utcStamp(h0 + 3600, "%H:%M UTC");
+            ok(l.find("NDB " + hh + " \xc2\xb7 3 beacons") != std::string::npos, "the first hour's card on the hour: " + hh + ", 3 beacons");
+            ok(l.find("\"partial\":true") != std::string::npos, "…marked partial (the run began at :40)");
+            // a whole hour, then the run ends at 2:15
+            while (clk < h0 + 2 * 3600 + 15 * 60) { clk += 300; d.heard(beacon("WOD", 352000, 25, 94, "Woodley"), clk); d.tick(); }
+            d.finish();
+        }
+        const std::string l = st.listJson("ndb", 50);
+        const std::string whole = "NDB " + gallery::utcStamp(h0 + 3600, "%H:%M") + "\xe2\x80\x93" + gallery::utcStamp(h0 + 7200, "%H:%M UTC") + " \xc2\xb7 1 beacon";
+        ok(l.find(whole) != std::string::npos, "the whole hour's card: " + whole);
+        ok(l.find("NDB last 10 min to ") != std::string::npos, "the run ended: the last-10 card is written once more, \"to HH:MM\", and kept");
+        ok(count(l, "NDB " + gallery::utcStamp(h0 + 7200, "%H:%M") + "\xe2\x80\x93") == 1, "…and the hour it ended in, partial");
+        // ★ the next run finds the standing card again, never a second one
+        {
+            ndbgal::DayLog::Options o; o.origin = "background"; o.profile = "Profile 2"; o.clock = [&] { return clk; };
+            ndbgal::DayLog d(st, o);
+            clk += 120; d.heard(beacon("CAM", 333000, 15, 60, "Cambridge"), clk); clk += 60; d.tick();
+            d.finish();
+        }
+        ok(count(st.listJson("ndb", 50), "\"title\":\"NDB last 10 min") == 1, "a restart adopts the standing card (Store::adoptSlot) — still one");
+        std::string cmd = "rm -rf '" + dir + "'"; if (std::system(cmd.c_str()) != 0) std::printf("  (could not remove %s)\n", dir.c_str());
+    }
+
     std::printf("\n── the background-decoding NDB profile ──\n");
     {
         vibe::bg::Config c; std::string err;

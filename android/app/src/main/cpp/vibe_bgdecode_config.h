@@ -10,6 +10,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -94,6 +95,12 @@ inline const std::vector<DecoderDef>& decoders() {
         //    found by the decoder; VHF channel 70 on NFM. Kept as the day's log + an item per distress/urgency call.
         { "dsc",          "DSC (MF/HF)",                  "dsc",    "dsc",   "usb,lsb", 1700, 170, 100,   false, false, 0 },
         { "dsc-vhf",      "DSC (VHF channel 70)",         "dsc",    "dsc",   "nfm",     0,    0,   1200,  false, false, 0 },
+        // ★★ V12 2026-10-27 — DIGITAL SPOTS: BAND (Stuart: "Also full band digital modes too"). Every digital mode on the
+        //    band the VFO's frequency is in — FT8, FT4, WSPR, JS8, FT2, JTTY, PSK on their own dials, the listener's own
+        //    Band mode (decoders/digi_spotter.h) with its CPU governor — kept as ONE summary for the band, as FT8's is.
+        //    The frequency only NAMES the band (7074 = 40 m): the slice is cut where the band's modes are (bandSpan).
+        //    "usb" only because a VFO row has a demodulator — none runs (it is fed IQ, as a skimmer is).
+        { "spots-band",   "Digital spots: Band (summary)", "",      "ft8",   "usb",     0,    0,   0,     false, false, 0 },
     };
     return d;
 }
@@ -119,6 +126,18 @@ inline double passbandHz(const Vfo& v) {
 }
 /** ★ A CW skimmer VFO (fed IQ, no demodulator). */
 inline bool isSkimmer(const Vfo& v) { const DecoderDef* d = decoderDef(v.dec); return d && d->widthHz > 0; }
+/** ★ A Band digital-spots VFO (V12 2026-10-27): fed the band's IQ slices, no demodulator. */
+inline bool isBandSpots(const Vfo& v) { return v.dec == "spots-band"; }
+
+/** ★★ WHERE A BAND VFO'S SLICE GOES — the registered modes' span of the band `hz` is in (digi::spanOf: its RF edges and
+ *  centre — the main slice's; the extra slices are the host's to cut where the capture holds them). The registry of
+ *  modes lives with the decoders (decoders/digi_modes.cpp), and this header is read by the daemon's save path without
+ *  them — so the span comes through this hook, installed by vibe_bgdecode.h wherever the decoders are linked (the
+ *  server, the tests that run the runner). Unset (a test of the config alone): a band VFO is checked by its frequency
+ *  only. Returns false when `hz` is on no band a registered mode uses. */
+struct BandSpan { double loHz = 0, hiHz = 0, centreHz = 0; std::string name; };
+inline std::function<bool(double hz, BandSpan& out)>& bandSpanHook() { static std::function<bool(double, BandSpan&)> f; return f; }
+inline bool bandSpan(double hz, BandSpan& out) { auto& f = bandSpanHook(); return f && f(hz, out); }
 
 /** The signal frequency a VFO is listening for (NAVTEX at 517.5 USB → 518.0). */
 inline double signalHz(const Vfo& v) {
@@ -306,6 +325,31 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
                 for (auto& c : m) c = (char)std::toupper((unsigned char)c);
                 err = vn + ": " + std::string(decoderDef(v.dec)->label) + " does not work on " + m + " \xe2\x80\x94 it needs " + need;
                 return false;
+            }
+            /* ★★ A BAND VFO: its frequency must name a band the digital modes use, and the band's main slice (the cluster
+             *  round FT8, up to 48 kHz) must sit inside the window — checked like a skimmer's segment, from the span's own
+             *  centre. Its extra slices (40 m's JTTY at 7.090 …) are cut only where the capture holds them, as for a
+             *  listener's Band; one beyond it is simply not decoded. */
+            if (isBandSpots(v) && bandSpanHook()) {
+                BandSpan sp;
+                if (!bandSpan(v.hz, sp)) {
+                    err = vn + ": " + khz(v.hz) + " is not in a band the digital modes use \xe2\x80\x94 type a frequency inside the "
+                          "band, e.g. 7074 for 40 m or 14074 for 20 m";
+                    return false;
+                }
+                if (rate > 0) {
+                    const double half = halfWindowHz(rate) + 3000.0;
+                    const double off = std::max(std::fabs(sp.loHz - centre), std::fabs(sp.hiHz - centre));
+                    if (off > half) {
+                        char b[400];
+                        std::snprintf(b, sizeof b, "%s: the %s band's digital modes (%.4f\xe2\x80\x93%.4f MHz) are not all inside this radio's "
+                                      "window \xe2\x80\x94 at %.0f kS/s it sees about \xc2\xb1%s around %s. %s",
+                                      vn.c_str(), sp.name.c_str(), sp.loHz / 1e6, sp.hiHz / 1e6, rate / 1e3, khz(half).c_str(),
+                                      khz(centre).c_str(), lockCentre > 0 ? "On a locked radio they must sit inside it." : "Move the RF centre nearer the band.");
+                        err = b; return false;
+                    }
+                }
+                continue;
             }
             if (rate > 0) {
                 // ★ A skimmer needs its whole segment inside the window, not a 3 kHz passband.

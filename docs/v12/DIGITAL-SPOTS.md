@@ -196,6 +196,10 @@ where it is too heavy it is already off.
 ### Gallery
 The summary cards count each mode separately (`Ft8Tally::byMode`). Card titles name the modes heard, most first:
 "FT8+FT4 18:05–19:00 UTC · …", "WSPR+FT8 last 10 min · …". A Band run's card begins "Digital spots summary · Band 20 m".
+★ 2026-10-27: a background-decoding profile can run Band too — a VFO with "Digital spots: Band (summary)" (any frequency in
+the band; the slice is cut on the band's span, its extra slices where the capture holds them, behind this governor with
+the benchmark's budget shared between the profile's Band VFOs). Its cards are the same, labelled background
+(docs/v12/BACKGROUND-DECODING.md, "NDB and Band digital spots").
 
 ### Map: coloured by mode
 The style table is `src/utils/digiModes.ts`. It uses Okabe–Ito fills with a dark rim (`#1A1A1A`). Each mode has its own

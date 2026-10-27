@@ -38,6 +38,7 @@ Nick's case: centre 500 kHz; VFO 1 489.5 kHz USB NAVTEX; VFO 2 517.5 kHz USB NAV
 | SSTV | USB, NFM | dial | one PNG per picture |
 | FT8 / FT4 | USB | dial | a **summary**, not the spots: a standing "last 10 minutes" card + one card per UTC hour |
 | DSC (MF/HF) · DSC (VHF ch 70) | USB, LSB · NFM | 1700 Hz · dial | the day's log per DSC frequency + one item per distress/urgency call, pinned at its position (docs/v12/DSC.md); **+ DSC watch** fills the VFOs |
+| Digital spots: Band (summary) | USB | — (the frequency names the band) | the FT8 summary's two cards for the whole band, every mode counted (2026-10-27, below) |
 
 ★★ **LSB inverts mark and space.** NickB asked for LSB so he could dodge local interference. An FSK decoder on an LSB VFO
 is started with `inverted` flipped, so the same signal decodes identically on either sideband. `test-bgdecode` proves this
@@ -181,6 +182,80 @@ session — a listener's or background's — keeps the day's readings as a .txt 
 docs/v12/ISM-DECODER.md, "The gallery". In short: ISM runs only with nobody here (a whole-capture mode has nothing "in
 range" of a listener), through the listener's own ISM mode, and a listener arriving ends it through ISM's own door.
 
+## NDB and Band digital spots (2026-10-27)
+
+Stuart (2026-10-27): *"I'd like to add NDB to the background decoding as my SDRPlay on the Lenovo already decodes Navtex
+and 160M FT8 in the background NDB would be within its range too. Also full band digital modes too."*
+
+### NDB profiles keep the FT8 summary's cards
+
+The NDB profile (`"ndb":true`, "Decodes: NDB beacons — the whole LF beacon band"; docs/v12/NDB-SKIMMER.md) was already
+there: the listener's NDB mode run with nobody here, the whole 190–535 kHz band skimmed, each UTC day's heard log and map
+in the gallery. It now also keeps what an FT8 VFO keeps (`vibe_ndb_gallery.h`, `DayLog`):
+
+- **Last 10 minutes** — ONE standing card, "NDB last 10 min · 23 beacons · furthest KER 412 km · best WOD 26 dB", the
+  rolling last ten minutes; rewritten at most once a minute and only when the window changed, moved to the top, adopted
+  by the next run (`Store::adoptSlot`, slot `ndblast10`), written once more "to 20:20 UTC" when the run ends and kept.
+- **Hourly** — one card per UTC clock hour, "NDB 19:00–20:00 UTC · 41 beacons · furthest KER 412 km · best WOD 31 dB",
+  written when the hour closes and never rewritten; partial with its minutes where the run began or ended inside it.
+- Both list every beacon heard, lowest frequency first: ident · kHz · minutes heard · best SNR · distance · bearing ·
+  country · station (an unlisted beacon by its ident alone). Nothing is written for a stretch that heard nothing.
+- **One store.** The cards are fed by the same `heard()` the day's log is (the service's confirmed beacons, at most once a
+  minute each); there is no second record of NDB readings. A listener's NDB session gets the same cards, labelled live.
+- The RSP reaches LF (the API tunes from 1 kHz; the band constant is `vibendb::kBandLoHz`/`kBandHiHz`, 190–535 kHz). The Lenovo's
+  RSP is offered NDB by its driver at the save and by hwinfo `ndbHw` on the page.
+
+### A Band digital-spots VFO
+
+A VFO row can now choose **Digital spots: Band (summary)** (`"dec":"spots-band"`, USB rows only): every digital mode on the
+band the VFO's frequency is in — FT8, FT4, WSPR, JS8, FT2, JTTY and PSK on their own dials — through the listener's own Band
+mode (`digi::Spotter`, Band scope) and its CPU governor (`digi_governor.h`), kept as ONE summary for the band.
+
+- **The frequency names the band** (7074 = 40 m). The slice is cut on the band's span (`digi::spanOf` — the cluster round
+  FT8, ≤ 48 kHz), not on the typed frequency, sized and tapered exactly as a listener's Band slice (`vibe_band_slice.h`),
+  off the runner's SAME forward FFT; the band's extra slices (40 m's JTTY at 7.090 …) are cut where the capture holds them.
+  Each block carries its CAPTURE time, stamped on the DSP thread (`BgRunner::feedIq`), so FT8/WSPR slots are cut by when
+  the signal was heard, not when the runner got to it; a hole the queue dropped is bridged with zeros (`bridgeBand`).
+- **The card** is the FT8 summary (`Ft8SummaryTap`, decoder `ft8band`, the band's centre as its frequency): "Digital
+  spots summary · Band 40 m · background decoding (Profile 1)", spots per mode, stations, countries, the furthest; the
+  standing last-10 card and one per UTC hour, as an FT8 VFO's. Under the gallery's FT8 filter in the web and the app.
+- **The governor, as for a listener.** The owner's word per mode (Setup → Modes and decoders → Digital spots: Band), the
+  activity gate (an empty mode window is never decoded), engines told to go light when the server is loaded, and the
+  benchmark's Band budget (`vsBandBudgetUnits`, from the `dec_ft8band` row) — **shared** between the profile's Band VFOs,
+  never each given the whole box. One decoder slot per Band VFO, like any VFO; listeners still win it.
+- **Where Band is switched off on this radio** (the owner, or the benchmark's default on a box that measured it red —
+  Stuart's rule: the benchmark sets the default, it never hides) the VFO is shown **paused, with the reason**, takes no
+  slot and is never started behind the owner's back; the setup page draws its row in red saying so. On an Icom, or a
+  radio that reaches no band (hwinfo `spotBands` empty — an RTL without direct sampling), the choice is not offered.
+- **The DC.** A zero-IF radio's DC sits at centre + `hwOffsetHz()`. When a profile with a Band VFO moves the radio, the
+  centre is moved the smallest step that keeps the DC out of the Band VFO's slices (else off its modes —
+  `vibe::bandDcCentre`, the listener's own rule), but only if every VFO of the profile stays in the window; otherwise the
+  owner's centre stands and the log says so once.
+- **Refused at the save, in words** (`validate`, with the span from `vibe_bgdecode_band.h installBandSpan()` — the daemon's
+  save path links the registry): a frequency on no band ("6500.0 kHz is not in a band the digital modes use — type a
+  frequency inside the band, e.g. 7074 for 40 m"), and a band whose modes are not all inside the window ("the 40 m band's
+  digital modes (7.0396–7.0816 MHz) are not all inside this radio's window … Move the RF centre nearer the band").
+- **The admin line**: "7074.0 Digital spots: Band 40 m · running · 212 spots, 31 countries so far · 2.1 %", and the status
+  JSON carries the band and what the governor runs now ("WSPR 7.0386 idle, … FT8 7.0740 active, … JTTY 7.0900 idle").
+- **Priority unchanged**: a listener arriving stops background decoding and gets the radio (`bgStopForListener`); with
+  "keep decoding in range" a Band VFO whose span is still inside the listener's window carries on, re-cut; the RSP
+  keepalive is still held off while a profile is due or running.
+
+**Measured CPU** (`test-bg-band`, M5 Pro, the whole process as % of one core): at 250 kS/s, 40 m with two FT8 stations
+0.4–1.1 %; at 2.4 MS/s with the runner's 65536-point FFT and a quiet band, one FT8/FT4 VFO 2.7 %, one Band VFO 2.9 %, Band +
+a NAVTEX VFO 3.4 % — the shared FFT is most of it; the Band slice adds one small inverse FFT a block per slice, and on a
+quiet band the gate decodes nothing. A busy band's engines cost what a listener's Band does (docs/v12/DIGITAL-SPOTS.md
+"The Band governor"), capped by the box's budget. Not measured on the Pi 2 or the Lenovo yet.
+
+**Stuart's Lenovo RSP, step by step** (Setup → Radio → the RSP's tab → Background Decoding, on):
+1. *NDB*: Profile 1 → **Decodes: NDB beacons — the whole LF beacon band** → set its hours (e.g. 18:00–06:00 UTC).
+2. *40 m Band*: "Want to add another background decoding profile?" → Profile 2 → Decodes: Stations on VFOs → **RF Centre
+   7000** kHz (the RSP at 2 MS/s or more holds 6.0–8.0 MHz) → VFO 1 **7074** kHz, USB, **Digital spots: Band (summary)**
+   (the line beneath says "40 m: WSPR, PSK, FT4, FT2, FT8, JS8, JTTY on 7.0396–7.0816 MHz …") → its hours (06:00–18:00).
+   Or keep the existing NAVTEX + 160 m profile and change its 1840 FT8 row to Band: with a centre of ~1.2 MHz and a rate
+   of 2 MS/s the 160 m span and 490/518 kHz NAVTEX fit one window.
+3. Save. The save refuses overlapping hours, a band outside the window, or NDB/Band where the radio cannot run them.
+
 ## Listeners first: priority, in range, locked radios (2026-10-22, beta3)
 
 - **Priority is the VFO order.** The setup page shows a tier list (rank numbers, a drag handle, ▲/▼ for keyboard and pad)
@@ -275,7 +350,7 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 |---|---|---|
 | `vibeserver/test-bgdecode.cpp` | 200 | Config, validation and the clock; LSB inversion (RTTY and NAVTEX); the NAVTEX cutter; the store (eviction, path safety); a listener tap; Nick's profile end to end on synthetic IQ (USB **and** LSB VFOs file the same message); WEFAX/SSTV complete, partial and noise; PNG; the FT8 summary — the last-10 card (one card, a minute's cadence, the window rolling, moved to the top, adopted by the next run) and the hourly cards (partial and whole hours) on a test clock; the NAVTEX station rule. |
 | `vibeserver/test-config-radios.cpp` | — | `bgDecode` and the gallery fields round-trip, and nothing leaks into the radio's own fields. |
-| `scripts/test-bg-decode.mjs` | 41 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals, the save applied live. |
+| `scripts/test-bg-decode.mjs` | 43 | A real server on fake-rtl-tcp: wait → move, profile boundary, arrival → stop + dial restored, a decoder socket on its own, gallery HTTP and path traversal, config API round-trip and refusals (a Band VFO on no band, or outside the window — 2026-10-27), the save applied live. |
 | `scripts/test-bg-decode-frontdoor.mjs` | 12 | Front door + a radio process: a save through the door reaches the radio, no park/release once due, an unrelated save restarts nothing. |
 | `scripts/test-setup-bgdecode.mjs` | 20 | The setup page's real editor against a DOM stand-in. |
 | `scripts/test_navtex.ts` | 187 | The NAVTEX cutter (fades, gap markers) and the station rule — the Lenovo's letters, positions, DX, "or"; Mondolfo, a self-named station the table lacks, Niton's French T. (beta 4, 2026-10-23) |
@@ -286,6 +361,9 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 | `vibeserver/test-ism-gallery.cpp` | 56 | ISM's day log and summary card, an ISM profile's config (2026-10-25). |
 | `scripts/test-server-ism-gallery.mjs` | 33 | ISM in the gallery and an ISM profile through the real server (2026-10-25). |
 | `scripts/test-setup-bg-ism.mjs` | 18 | The setup editor's ISM profile (2026-10-25). |
+| `vibeserver/test-bg-band.cpp` | 28 | A Band digital-spots VFO: the config and the save's refusals, 40 m end to end on synthetic IQ through BgRunner (two FT8 stations → "Digital spots summary · Band 40 m", Japan furthest), the admin line, a quiet band all idle, switched off here (paused with why, no slot, NAVTEX beside it runs), the CPU at 2.4 MS/s. (2026-10-27) |
+| `vibeserver/test-ndb.cpp` (summary cards) | +10 | NDB's last-10 card (once a minute, only on change, one standing card, adopted by the next run) and hourly cards (partial and whole). (2026-10-27) |
+| `scripts/test-setup-bg-band.mjs` | 16 | The editor's Band VFO: offered only where it can run, the band and its modes named, red where it cannot, saved and read back. (2026-10-27) |
 | `scripts/test_gallery_translate.ts` | 27 | TRANSLATE's rule: the lines sent and kept, the Mondolfo text as Italian, Niton's French, the station hint, no key in the target language, the layout put back. (2026-10-23) |
 
 The live test uses two test-only environment variables:
