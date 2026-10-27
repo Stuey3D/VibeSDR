@@ -7971,6 +7971,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *      encode for this session's audio socket, which is taken out of the shared fan-out while the set is active
      *      (sendAudioPcmSquelchAware). The dial still belongs to the server — the set only listens inside the window.
      *  ★ Locks: `m` is a LEAF — nothing else is ever taken while it is held, and it is never taken under clientMtx. */
+    /** ★ The IQ slices a skimmer or Band spots cuts off the shared forward FFT for ONE decoder host — the main slice and
+     *  Band's extra ones, each with its own extract scratch (see Channelizer::ExtractCtx). One per listener's VFO A
+     *  (ClientDsp::skim) and, since decoders run on either VFO (2026-10-27), one per VFO B (WatchSet::skimB). Only ever
+     *  touched on the thread that feeds that listener. */
+    struct SkimCut {
+        vibedsp::Channelizer::ExtractCtx sctx;
+        std::vector<cf32> skimSlice;
+        std::vector<cf32> bandX[vibe::kMaxExtraSlices];
+        vibedsp::Channelizer::ExtractCtx bandXctx[vibe::kMaxExtraSlices];
+        std::vector<float> bandXpw;
+    };
     struct WatchSet {
         std::string session;
         std::mutex m;
@@ -7992,12 +8003,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<float> mainMono, outLR;
         std::vector<std::vector<float>> chanPcm;
         bool mixing = false;               // true from the first add until the hand-back to the ordinary path
+        // ── A decoder on VFO B that wants IQ (a CW/PSK skimmer, Band spots) — see watchDecBKey ──
+        SkimCut skimB;                     // range-locked: B's slices of the shared FFT (the listener's thread only)
+        vibe::WideTap bTap;                // one pipeline: B's slice cut off the full-rate capture, on its own thread
         // ── One-pipeline radio only ──
         vibewatch::FullRateFeeder feeder;
 #ifdef VIBE_HAVE_OPUS
         vibe::OpusAudioEncoder opus;       // ★ its own stream: the shared one is ONE encode for everybody
 #endif
-        ~WatchSet() { feeder.stop(); }
+        ~WatchSet() { bTap.stop(); feeder.stop(); }
         /** Anything to mix? (`m` held) */
         bool activeLocked() const { return !chans.empty() || !fading.empty(); }
     };
@@ -8186,13 +8200,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /** ★ This listener's own extract scratch — see Channelizer::ExtractCtx. Sharing one made
          *  every listener's channel land somewhere other than it asked for. */
         vibedsp::Channelizer::ExtractCtx ectx, vectx;
-        /** ★ V12: a CW skimmer's slice of the same FFT (its own scratch, as above). */
-        vibedsp::Channelizer::ExtractCtx sctx;
-        std::vector<cf32> skimSlice;
-        /** ★ V12 Band spots' EXTRA slices (vibe_band_slice.h): one buffer and extract context each. This thread only. */
-        std::vector<cf32> bandX[vibe::kMaxExtraSlices];
-        vibedsp::Channelizer::ExtractCtx bandXctx[vibe::kMaxExtraSlices];
-        std::vector<float> bandXpw;
+        /** ★ V12: a CW skimmer's slice of the same FFT (its own scratch, as above), and Band spots' EXTRA slices
+         *  (vibe_band_slice.h): one buffer and extract context each. This thread only. */
+        SkimCut skim;
         /** ★★ V12 VFO A/B: this listener's watch channels, cached from the registry by generation (watchGen_) so the
          *  per-block cost with VFO B off is one relaxed atomic read. Read and written on THIS listener's thread only. */
         std::shared_ptr<WatchSet> watch;
@@ -25219,7 +25229,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return md;
     }
     /** A host's view of this server: where its dial is, where it logs, whose slots it takes. */
-    DecoderHost::Env decoderEnv(const std::string& session) {
+    DecoderHost::Env decoderEnv(const std::string& key) {
+        // ★★ V12: a host keyed `<session>#B` decodes that listener's VFO B (watchDecBKey) — its dial, its mode.
+        std::string session = key;
+        const bool onB = watchDecBSplit(key, session);
         DecoderHost::Env e;
         e.log = [](const std::string& t) { LOGI("%s", t.c_str()); };
         // ★ The decoder-only sidecar decodes a network radio's audio for the app on this phone — it
@@ -25232,18 +25245,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         e.bandBudgetUnits = [] { return vsBandBudgetUnits(); };
         /* ★★ CW (V12 2026-10-25): a listener's AUDIO frequency → RF, by their mode — USB dial + a, LSB dial − a, and this
          *  server's CW (a USB demodulator tuned so a carrier ON the dial is a 600 Hz tone: buildAudio's -bw/2) dial + a − 600. */
-        e.rfOfAudio = [this, session](double a) {
-            double dial = audioFreq.load();
-            if (!session.empty()) {
-                std::lock_guard<std::mutex> lk(clientMtx);
-                for (auto& kv : clientDsp) if (kv.second && kv.second->session == session) { dial = kv.second->vfoHz; break; }
-            }
-            const std::string md = sessionMode(session);
-            if (md == "lsb") return dial - a;
-            if (md == "cw" || md == "cwu" || md == "cwl" || md == "cwr") return dial + a - paramsFor(md).bandwidth * 0.5;
-            return dial + a;
+        /* ★★ THE MODE THE DECODER HEARS THROUGH: VFO A's (the listener's own channel, or the radio's) — or, for a VFO B
+         *  host, B's own (Stuart, 2026-10-27: "surely it doesnt matter which VFO is listen and which is decode?"). */
+        std::function<std::string()> modeOf;
+        if (onB) modeOf = [this, session] { double hz = 0; std::string md; return watchBOf(session, hz, md) ? md : sessionMode(session); };
+        else modeOf = [this, session] { return sessionMode(session); };
+        if (onB) e.dialHz = [this, session] {
+            // ★★ VFO B's dial: every spot is filed on B's RF, not A's.
+            double hz = 0; std::string md;
+            return watchBOf(session, hz, md) ? hz : audioFreq.load();
         };
-        if (session.empty()) e.dialHz = [this] { return audioFreq.load(); };
+        else if (session.empty()) e.dialHz = [this] { return audioFreq.load(); };
         else e.dialHz = [this, session] {
             // ★ THIS listener's dial. A spot's RF frequency is dial + audio offset, and on a per-VFO
             //   radio the shared audioFreq is somebody else's — every spot would be filed wrong.
@@ -25251,13 +25263,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (auto& kv : clientDsp) if (kv.second && kv.second->session == session) return kv.second->vfoHz;
             return audioFreq.load();
         };
+        {
+            auto dialOf = e.dialHz;
+            e.rfOfAudio = [this, dialOf, modeOf](double a) {
+                const double dial = dialOf();
+                const std::string md = modeOf();
+                if (md == "lsb") return dial - a;
+                if (md == "cw" || md == "cwu" || md == "cwl" || md == "cwr") return dial + a - paramsFor(md).bandwidth * 0.5;
+                return dial + a;
+            };
+        }
         /* ★★ V12: A LISTENER'S DECODES GO TO THE GALLERY TOO (Stuart, 2026-10-22: "decodes from a listener who manually
          *  ran a decoder are saved to the gallery too"), labelled live — unless the owner switched that off, or this is
          *  the decoder-only sidecar decoding a NETWORK radio for this phone's own app. The dial is followed: a listener
          *  who retunes mid-message starts another (as the box clears NAVTEX on a retune). */
         if (!decoderOnly) {
             auto dial = e.dialHz;
-            e.tap = [this, session, dial](const std::string& ext, const std::string& msg) -> vibe::DecoderTapPtr {
+            e.tap = [dial, modeOf](const std::string& ext, const std::string& msg) -> vibe::DecoderTapPtr {
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
                 vibe::gallery::Meta m;
                 m.kind = vibe::bg::galleryKindFor(ext, msg);
@@ -25265,29 +25287,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 m.origin = "live";
                 m.decoder = ext == "fsk" ? (msg.find("\"auto\":true") != std::string::npos ? "rtty-auto" : "rtty") : ext;
                 m.freqHz = dial ? dial() : 0.0;
-                std::string md;
-                { std::lock_guard<std::mutex> lk(clientMtx);
-                  for (auto& kv : clientDsp) if (kv.second && kv.second->session == session && !session.empty()) { md = kv.second->mode; break; } }
-                if (md.empty()) { std::lock_guard<std::recursive_mutex> ml(modeMtx); md = mode; }
-                m.mode = md;
+                m.mode = modeOf();
                 m.lat = g_bgLat.load(); m.lon = g_bgLon.load();   // ★ names a NAVTEX station (vibe_navtex_stations.h)
                 return vibe::bg::makeGalleryTap(vibe::gallery::shared(), m, dial);
             };
             // ★★ …and a listener's CW (V12 2026-10-25): the same summary of its spots, labelled CW.
-            e.cwSpotTap = [this, session, dial](bool skimmer) -> vibe::DecoderTapPtr {
+            e.cwSpotTap = [dial, modeOf](bool skimmer) -> vibe::DecoderTapPtr {
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
                 vibe::gallery::Meta m;
                 m.kind = "cw"; m.origin = "live"; m.decoder = skimmer ? "cwskim" : "cw";
-                m.mode = sessionMode(session);
+                m.mode = modeOf();
                 m.freqHz = dial ? dial() : 0.0;
                 return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
             };
             // ★★ …and a listener's PSK (V12 2026-10-26): the same summary, labelled PSK.
-            e.pskSpotTap = [this, session, dial](bool skimmer) -> vibe::DecoderTapPtr {
+            e.pskSpotTap = [dial, modeOf](bool skimmer) -> vibe::DecoderTapPtr {
                 if (!g_gallerySaveLive.load() || !vibe::gallery::shared().enabled()) return nullptr;
                 vibe::gallery::Meta m;
                 m.kind = "psk"; m.origin = "live"; m.decoder = skimmer ? "pskskim" : "psk";
-                m.mode = sessionMode(session);
+                m.mode = modeOf();
                 m.freqHz = dial ? dial() : 0.0;
                 return std::make_shared<vibe::bg::Ft8SummaryTap>(vibe::gallery::shared(), m, g_bgLat.load(), g_bgLon.load());
             };
@@ -25339,6 +25357,43 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("dxcluster (decoder) WS connected%s%s", perVfo ? " — own decoders" : (mirror ? " (mirror)" : ""),
              perVfo && sess.empty() ? " — NO SESSION, decoders refused" : "");
         bool rdsHere = false;
+        /* ★★★ DECODE ON EITHER VFO (V12, 2026-10-27 — see watchDecBKey). "vfo":"B" on an attach or a subscribe = this
+         *  listener's VFO B host. What THIS socket runs where, so starting on one VFO stops its own run on the other (one
+         *  decoder and one spots run per listener, as before) and the socket hears only the hosts it is using. */
+        const std::string bSess = sess.empty() ? session : sess;
+        std::shared_ptr<DecoderHost> hostB;
+        bool textA = false, spotsA = false, textB = false, spotsB = false;
+        bool peerOnA = true;   // ★ every decoder socket starts as a peer of its A host (a mirror on a shared dial — as before)
+        auto wantsB = [](const std::string& p) { const std::string v = jsonStr(p, "vfo"); return v == "B" || v == "b"; };
+        /** VFO B's host, made on first use, this socket a peer of it — or null (no VFO B, no session: refused by the caller). */
+        auto takeHostB = [&]() -> std::shared_ptr<DecoderHost> {
+            double hz = 0; std::string md;
+            if (decoderOnly || bSess.empty() || !watchBOf(bSess, hz, md)) return nullptr;
+            hostB = decoders_.hostFor(watchDecBKey(bSess), true);
+            hostB->addPeer(peer);
+            return hostB;
+        };
+        /** ★ A peer of the A host only while this socket uses it, or uses nothing on B (then it is the mirror it always
+         *  was): a socket decoding on B must not ALSO be handed somebody else's decoder off a shared dial's host. */
+        auto syncPeerA = [&] {
+            if (!host) return;
+            const bool want = textA || spotsA || !(textB || spotsB);
+            if (want && !peerOnA) host->addPeer(peer);
+            if (!want && peerOnA) host->removePeer(peer.get());
+            peerOnA = want;
+        };
+        /** This socket's own text decoder on A stops (it is starting one on B). On a shared dial only when nobody else is
+         *  watching it — somebody else's mirror is theirs to keep. */
+        auto stopTextA = [&] {
+            if (!textA || !host) { textA = false; return; }
+            if (perVfo || host->peerCount() <= 1) host->stop();
+            textA = false;
+        };
+        auto stopSpotsA = [&] {
+            if (!spotsA || !host) { spotsA = false; return; }
+            if (perVfo || host->peerCount() <= 1) host->stopSpots();
+            spotsA = false;
+        };
         while (serverRunning.load() && sock->isOpen()) {
             std::string payload;
             /* ★★★ PINGED WHEN QUIET (Stuart, 2026-10-10: Safari's console "as long as my arm" with
@@ -25375,11 +25430,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     continue;
                 }
                 if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
+                // ★★★ ON VFO B (decode on either VFO): this listener's VFO B host, fed B's own audio / IQ.
+                if (wantsB(payload)) {
+                    std::shared_ptr<DecoderHost> hb = takeHostB();
+                    if (!hb) {
+                        sendDecoderRefusal(sock, "decoder", ext, "vfo", "VFO B is not on \xe2\x80\x94 switch it on, or start the decoder on VFO A.");
+                        continue;
+                    }
+                    stopTextA();
+                    auto rb = hb->start(ext, payload, peer);
+                    if (rb == DecoderHost::Start::Refused && bgYieldForListener()) rb = hb->start(ext, payload, peer);
+                    if (rb == DecoderHost::Start::Refused) {
+                        LOGI("decoder %s on VFO B refused — all %d decoder slots on this server are in use", ext.c_str(), vsDecoderSlots().max());
+                        sendDecoderRefusal(sock, "decoder", ext, "limit", decoderLimitMessage(vsDecoderSlots().max()));
+                        textB = false; syncPeerA();
+                        continue;
+                    }
+                    if (rb == DecoderHost::Start::Unknown) continue;
+                    textB = true; syncPeerA();
+                    LOGI("decoder %s on VFO B for session %.8s", ext.c_str(), bSess.c_str());
+                    sendText(sock, "{\"type\":\"audio_extension_attached\",\"vfo\":\"B\"}");
+                    continue;
+                }
+                if (textB && hostB) { hostB->stop(); textB = false; }   // ★ back to A: this socket's B decoder stops
                 if (!host) {
                     sendDecoderRefusal(sock, "decoder", ext, "no_session",
                         "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
                     continue;
                 }
+                syncPeerA();
                 auto r = host->start(ext, payload, peer);
                 // ★★ V12: never refused because the box is busy decoding for NOBODY — background decoding on every radio
                 //    of this machine gives its slots back, and the listener's decoder is tried again.
@@ -25390,6 +25469,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     continue;
                 }
                 if (r == DecoderHost::Start::Unknown) continue;
+                textA = true; syncPeerA();
                 // ★★★ AND WHO STARTED IT, for the admin table — on the one-pipeline host only; a
                 //     listener's own host is theirs by construction.
                 if (!perVfo && !session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
@@ -25404,7 +25484,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (r == DecoderHost::Start::Joined) dxGapReplay(sess, host, peer, false);
             } else if (type == "audio_extension_detach") {
                 if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
-                if (host) host->stop();
+                if (textB && hostB) { hostB->stop(); textB = false; }   // ★ the decoder this socket runs on VFO B
+                else if (host) host->stop();
+                textA = false; syncPeerA();
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
             } else if (type == "subscribe_digital_spots") {
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
@@ -25413,6 +25495,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  button there always was — so an older client gets exactly what it got before. */
                 const bool band = jsonStr(payload, "scope") == "band";
                 const auto scope = band ? DecoderHost::SpotScope::Band : DecoderHost::SpotScope::Single;
+                // ★ Spots asked for on VFO A: any this socket runs on VFO B stop first (one spots run per listener).
+                if (!wantsB(payload) && spotsB && hostB) { hostB->stopSpots(); spotsB = false; syncPeerA(); }
                 if (vsModeBlocked("spots")) {
                     LOGI("digital spots refused — the server owner has switched them off on this receiver");
                 } else if (band && (vsSpotSpans().empty() || !vsSpotsBandWhyNot().empty())) {
@@ -25420,6 +25504,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                                                   : vsSpotsBandWhyNot();
                     LOGI("digital spots (band) refused — %s", why.c_str());
                     sendDecoderRefusal(sock, "spots", "ft8band", "blocked", "Band spots are not available: " + why + ".");
+                } else if (wantsB(payload)) {
+                    // ★★★ SPOTS ON VFO B (Single on B's audio; Band on B's slice of the band, B's dial) — see watchDecBKey.
+                    std::shared_ptr<DecoderHost> hb = takeHostB();
+                    if (!hb) {
+                        sendDecoderRefusal(sock, "spots", band ? "ft8band" : "ft8", "vfo", "VFO B is not on \xe2\x80\x94 switch it on, or start the spots on VFO A.");
+                    } else {
+                        stopSpotsA();
+                        if (hb->startSpots(scope) == DecoderHost::Start::Refused
+                            && (!bgYieldForListener() || hb->startSpots(scope) == DecoderHost::Start::Refused)) {
+                            LOGI("digital spots on VFO B refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
+                            sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
+                            spotsB = false;
+                        } else {
+                            spotsB = true;
+                            LOGI("digital spots (%s) on VFO B for session %.8s", band ? "band" : "single", bSess.c_str());
+                        }
+                        syncPeerA();
+                    }
                 } else if (!host) {
                     sendDecoderRefusal(sock, "spots", "ft8", "no_session",
                         "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
@@ -25430,6 +25532,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         LOGI("digital spots refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
                         sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
                     } else {
+                        spotsA = true; syncPeerA();
                         if (!perVfo) {
                             if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
                             resumeCaptureIdle();       // ★ the spotter is a consumer too — see the decoder start above
@@ -25439,7 +25542,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     }
                 }
             } else if (type == "unsubscribe_digital_spots") {
-                if (host) host->stopSpots();
+                if (spotsB && hostB) { hostB->stopSpots(); spotsB = false; }   // ★ the spots this socket runs on VFO B
+                else if (host) host->stopSpots();
+                spotsA = false; syncPeerA();
             }
             // chat / cw-spot / subscribe_chat messages are ignored (no server here).
         }
@@ -25450,6 +25555,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     Counting the host's open sockets is that guard: the reconnected one is already there.
         if (rdsHere) rdsxDecoderSub(sock.get(), "", false);
         { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.erase(sock); dxSockSession.erase(sock.get()); }
+        // ★★ VFO B's host: the same rule as A's below — torn down only when no socket of this listener is left on it.
+        if (hostB && hostB->removePeer(peer.get()) == 0) decoders_.drop(watchDecBKey(bSess));
         const size_t left = host ? host->removePeer(peer.get()) : 0;
         // ★★ V12: where this listener's decoder output had got to — what comes after it is theirs when they are back
         //    (the gap log: dxGapReplay at the next attach / subscribe). Kept whoever else is still watching.
@@ -26151,6 +26258,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         snprintf(b, sizeof b, ",\"lo\":%.0f,\"hi\":%.0f", lo, hi); j += b;
         // ★ Round 3: the radio moves to hold both VFOs here (a personal receiver) — `lo`/`hi` are then where it IS, not a wall
         j += std::string(",\"follow\":") + (watchCentreFollows() ? "true" : "false");
+        // ★★ Decoders run on either VFO here ("vfo":"B" on the decoder socket — watchDecBKey). A round-3 server never says
+        //    so and would decode A whatever it was asked: the clients then keep the old rule (switch to A first).
+        j += ",\"decB\":true";
         if (w) {
             std::lock_guard<std::mutex> lk(w->m);
             j += std::string(",\"stereo\":") + (w->stereo ? "true" : "false") + ",\"monoOut\":" + (w->monoOut ? "true" : "false")
@@ -26174,15 +26284,76 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto& sk : specSocksOfSession(session)) sendText(sk, body);
     }
 
-    /** Take a watch channel out (it fades from the mix, then goes). `m` NOT held. */
-    void watchRemove(const std::shared_ptr<WatchSet>& w, int id) {
+    // ══ ★★★ DECODE ON EITHER VFO (Stuart, 2026-10-27: "That seems like a weird limitations surely it doesnt matter which
+    //     VFO is listen and which is decode?") ══════════════════════════════════════════════════════════════════════════
+    /* A decoder (or digital spots, Single or Band, or a skimmer) started while VFO B is selected runs on VFO B: the
+     * decoder socket's attach / subscribe carries "vfo":"B", and it goes to this listener's VFO B HOST — a DecoderHost
+     * of its own in the router, keyed `<session>#B`, on EVERY kind of radio:
+     *   · AUDIO: B's own demodulated audio, mono, before the mix (WatchChannel::setAudioTap) — exactly where VFO A's
+     *     decoder is fed A's, so neither B's mute nor its squelch reaches it.
+     *   · IQ (a CW/PSK skimmer, Band spots): B's slices of the shared forward FFT on a range-locked radio
+     *     (feedWatchFromBins → feedSkimFromBins, B's own SkimCut), or B's own WideTap off the full-rate capture on a
+     *     one-pipeline radio (watchFeedFull) — the same cut VFO A's skimmer gets, centred on B's dial.
+     *   · ITS DIAL AND MODE are B's (decoderEnv): every spot, every gallery card is filed on B's RF.
+     * ★★ WHY NOT SWAP THE VFOs' ROLES on a personal receiver (the main pipeline carrying B while B is decoded): B's
+     *    demodulator already runs whether anything decodes it or not, so the swap would save nothing — the decoder
+     *    costs the same on either VFO — while every reader of the shared dial (the config, `sig`, the S meter, RDS, a
+     *    recording, the band defaults, VibeAGC) would have to be translated back to A/B terms and the swap itself made
+     *    glitch-free. Measured instead: test-server-vfo-ab §6 (the CPU of a decoder on B against the same decoder on A).
+     * ★★ The SLOTS are the box's, as for any decoder (vsDecoderSlots, the benchmark's Band budget): a listener's decoder
+     *    on B takes the slot it would have taken on A, and this socket's own decoder on A stops when it starts one on B
+     *    (one decoder panel at a time — the clients run one), so a listener still holds at most one decoder and one
+     *    spots run. Refused in words, as on A, when the box is full.
+     * ★ B GOING (switched off, a listener needing its place, FM broadcast, a whole-radio mode) stops B's decoders and
+     *   says so on the decoder socket (decoder_refused, reason "vfo") — a decoder never silently loses its audio. */
+    static std::string watchDecBKey(const std::string& session) { return session + "#B"; }
+    /** Is `key` a VFO B host's key? Then `session` is set to the listener's session. */
+    static bool watchDecBSplit(const std::string& key, std::string& session) {
+        if (key.size() > 2 && key.compare(key.size() - 2, 2, "#B") == 0) { session = key.substr(0, key.size() - 2); return true; }
+        session = key;
+        return false;
+    }
+    static std::string watchDecSessionOf(const std::string& key) { std::string s; watchDecBSplit(key, s); return s; }
+    /** This listener's VFO B — its frequency and mode — if there is one. Leaf locks only (watchMtx, the set's `m`, the
+     *  channel's own): safe from a decode thread and a socket thread. */
+    bool watchBOf(const std::string& session, double& hz, std::string& md) {
+        std::shared_ptr<WatchSet> w = watchFind(session);
+        if (!w) return false;
         std::lock_guard<std::mutex> lk(w->m);
-        for (auto it = w->chans.begin(); it != w->chans.end(); ++it)
-            if ((*it)->id() == id) { w->fading.push_back(*it); w->chans.erase(it); break; }
-        // ★ Round 3: with one VFO there is no per-VFO mute — A fades back in (over the same ramp) as B fades out, and the
-        //   hand-back waits until it is home at unity (PanMixer::restingMono).
-        if (w->chans.empty()) w->muteA = false;
-        watchGen_.fetch_add(1, std::memory_order_release);
+        for (auto& ch : w->chans) if (ch->id() == 1) { const auto wd = ch->wanted(); hz = wd.hz; md = wd.mode; return true; }
+        return false;
+    }
+    /** VFO B has gone: its decoders stop, and the decoder socket is told why, in words. `m` NOT held. */
+    void watchStopDecoderB(const std::string& session, const std::string& why) {
+        std::shared_ptr<DecoderHost> h = decoders_.find(watchDecBKey(session));
+        if (!h) return;
+        const std::string ext = h->name();
+        const bool spots = h->spotsOn();
+        if (ext.empty() && !spots) return;
+        h->stop();
+        h->stopSpots();
+        const std::string msg = vibeadmin::esc(why + " \xe2\x80\x94 its decoder stopped. Start it again on VFO A, or switch VFO B back on.");
+        if (!ext.empty())
+            h->broadcastText("{\"type\":\"decoder_refused\",\"what\":\"decoder\",\"ext\":\"" + vibeadmin::esc(ext)
+                             + "\",\"reason\":\"vfo\",\"vfo\":\"B\",\"max\":" + std::to_string(vsDecoderSlots().max()) + ",\"message\":\"" + msg + "\"}");
+        if (spots)
+            h->broadcastText("{\"type\":\"decoder_refused\",\"what\":\"spots\",\"ext\":\"ft8\",\"reason\":\"vfo\",\"vfo\":\"B\",\"max\":"
+                             + std::to_string(vsDecoderSlots().max()) + ",\"message\":\"" + msg + "\"}");
+        LOGI("VFO B decoders of session %.8s stopped: %s", session.c_str(), why.c_str());
+    }
+
+    /** Take a watch channel out (it fades from the mix, then goes). `m` NOT held. */
+    void watchRemove(const std::shared_ptr<WatchSet>& w, int id, const std::string& why = "VFO B was closed") {
+        {
+            std::lock_guard<std::mutex> lk(w->m);
+            for (auto it = w->chans.begin(); it != w->chans.end(); ++it)
+                if ((*it)->id() == id) { (*it)->setAudioTap(nullptr); w->fading.push_back(*it); w->chans.erase(it); break; }
+            // ★ Round 3: with one VFO there is no per-VFO mute — A fades back in (over the same ramp) as B fades out, and the
+            //   hand-back waits until it is home at unity (PanMixer::restingMono).
+            if (w->chans.empty()) w->muteA = false;
+            watchGen_.fetch_add(1, std::memory_order_release);
+        }
+        if (id == 1) watchStopDecoderB(w->session, why);   // ★ decode on either VFO: B's decoders go with B, said in words
     }
 
     /** ★★ {"type":"watch", "id":1, "frequency":…, "mode":…, "bandwidthLow/High" | "bandwidth", "sql":dB, "sqlOn":bool,
@@ -26233,7 +26404,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (jsonOn(msg, "off")) {
             if (w) {
-                watchRemove(w, id);
+                watchRemove(w, id, "VFO B was switched off");
                 if (hasStereo) { std::lock_guard<std::mutex> lk(w->m); w->stereo = stereoOn; }
             }
             sendText(sock, watchStateJson(w.get()));
@@ -26323,6 +26494,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 watchSetCount_.store((int)watchSets.size(), std::memory_order_release);
             }
             ch = std::make_shared<vibewatch::WatchChannel>(id);
+            /* ★★ DECODE ON EITHER VFO: B's audio, before the mix, to this listener's VFO B decoder host whenever one is
+             *  decoding (DecoderHost::feed copies and returns — queued, never decoded on the feeding thread). Looked up per
+             *  block so a host made later, or remade, is found; with nothing decoding B it is one map lookup a block. */
+            if (id == 1) {
+                const std::string key = watchDecBKey(sess);
+                ch->setAudioTap([this, key](const float* pcm, int frames) {
+                    if (std::shared_ptr<DecoderHost> h = decoders_.find(key)) h->feed(pcm, frames, 1);
+                });
+            }
             {
                 std::lock_guard<std::mutex> lk(w->m);
                 if (hasStereo) w->stereo = stereoOn;
@@ -26411,6 +26591,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int cb = (int)std::lround(off / binHz);
             const int got = chan_->extract(bins, cb, want, sl->buf.data(), sl->ctx, blockIndex);
             if (got > 0) ch->feed(sl->buf.data(), got, sampleRate * (double)want / (double)fftSize, off - cb * binHz);
+            // ★★ A skimmer or Band spots DECODING VFO B: B's slices of this same forward FFT, centred on B's dial — the
+            //    cut VFO A's gets in feedOneClient, with B's own scratch. The atomic first: nothing skimming, nothing looked up.
+            if (ch->id() == 1 && DecoderHost::skimmersRunning().load(std::memory_order_relaxed) > 0) {
+                std::shared_ptr<DecoderHost> h = decoders_.find(watchDecBKey(w->session));
+                if (h && h->wantsIq()) feedSkimFromBins(h.get(), w->skimB, bins, cb, blockIndex);
+            }
         }
         w->slices.erase(std::remove_if(w->slices.begin(), w->slices.end(), [&](const WatchSet::Slice& s) {
             return std::none_of(chs.begin(), chs.end(), [&](const std::shared_ptr<vibewatch::WatchChannel>& c) { return c->id() == s.id; });
@@ -26436,7 +26622,41 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }, [] { vibeAudioThread("vibe-watch"); });   // ★ somebody's audio: AUDIO priority
             }
             w->feeder.feed(iq, n, sampleRate);
+            watchSkimTapB(w.get(), iq, n);
         }
+    }
+    /** ★★ A one-pipeline radio's VFO B skimmer / Band spots: B's own WideTap — the same cut skimTapFeed makes for VFO A,
+     *  centred on B's dial, on a thread of its own at spectrum priority; the DSP thread only copies. Stopped as soon as
+     *  nothing on B wants IQ (the WideTap's FFT is the cost — VFO-AB.md, Cost). */
+    void watchSkimTapB(WatchSet* w, const cf32* iq, int n) {
+        std::shared_ptr<DecoderHost> h;
+        double bHz = 0; bool parked = true;
+        if (DecoderHost::skimmersRunning().load(std::memory_order_relaxed) > 0) {
+            h = decoders_.find(watchDecBKey(w->session));
+            if (h && !h->wantsIq()) h.reset();
+            if (h) {
+                std::lock_guard<std::mutex> lk(w->m);
+                for (auto& ch : w->chans) if (ch->id() == 1) { bHz = ch->wanted().hz; parked = ch->parked(); }
+            }
+        }
+        if (!h || parked) { if (w->bTap.running()) w->bTap.stop(); return; }
+        if (!w->bTap.running()) {
+            std::weak_ptr<DecoderHost> wh = h;
+            w->bTap.start(vibe::WideTap::BandSink([wh](const cf32* x, int k, double rate, double centre, const float* pw, int nb, double binHz,
+                                                       double utc, int slice) {
+                if (auto hh = wh.lock()) hh->feedIq(x, k, rate, centre, pw, nb, binHz, utc, slice);
+            }));
+        }
+        vibe::WideTap::Geometry g;
+        g.sampleRate = sampleRate; g.hwCentreHz = rtlCenter.load() + hwOffsetHz(); g.wantCentreHz = bHz;
+        g.widthHz = std::min(h->iqWidthHz(), sampleRate * 0.8); g.fftSize = fftSize;
+        g.bins = h->wantsBins();
+        g.band = true;
+        vibe::ExtraSlice xs[vibe::kMaxExtraSlices];
+        g.nExtras = h->iqExtraSlices(xs);
+        for (int k = 0; k < g.nExtras; ++k) g.extras[k] = xs[k];
+        w->bTap.aim(g);
+        w->bTap.feed(iq, n, vibeUtcNow());   // ★ stamped on the DSP thread: the capture time of the chunk's last sample
     }
 
     /** ★★ THE MIX. `mainPcm` = `frames` mono samples of VFO A, already through the listener's own squelch. Fills `out`
@@ -26685,44 +26905,48 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    atomic first, so a radio with no skimmer never looks for a host.
         if (DecoderHost::skimmersRunning().load(std::memory_order_relaxed) > 0) {
             std::shared_ptr<DecoderHost> h = decoders_.find(c->session);
-            if (h && h->wantsIq()) {
-                const double w = std::min(h->iqWidthHz(), sampleRate * 0.8);
-                // ★★ V12 (2026-10-27): sized for the slice's FLAT part, cut with a sixteenth's roll-off (vibe_band_slice.h —
-                //    it was sized for 4 % and cut with a quarter: 40 m's ends sat 2–3 dB down at 960 kS/s, JTTY 17 dB).
-                const int b = vibe::bandSliceBins(sampleRate, fftSize, w);
-                if ((int)c->skimSlice.size() != b) c->skimSlice.assign((size_t)b, cf32{0.0f, 0.0f});
-                const int cb = clientCentreBin(c.get());
-                const int gs = chan_->extract(bins, cb, b, c->skimSlice.data(), c->sctx, blockIndex, vibe::kBandTaperDiv);
-                const double binHz = sampleRate / (double)fftSize;
-                /* ★★ V12 BAND SPOTS' ACTIVITY GATE (decoders/digi_activity.h): the slice's bins' power, read off this SAME
-                 *  forward FFT — one multiply-add per bin, no transform — so Band can leave an empty mode window undecoded. */
-                const float* pw = nullptr;
-                if (gs > 0 && h->wantsBins()) {
-                    thread_local std::vector<float> pwBuf;
-                    pwBuf.resize((size_t)b);
-                    vibe::digi::slicePower(bins, fftSize, cb, b, pwBuf.data());
-                    pw = pwBuf.data();
-                }
-                const double hwC = rtlCenter.load() + hwOffsetHz();
-                if (gs > 0) h->feedIq(c->skimSlice.data(), gs, sampleRate * (double)b / (double)fftSize,
-                                      hwC + cb * binHz, pw, pw ? b : 0, binHz);
-                // ★★ Band's EXTRA slices (40 m's JTTY, 6 m's JTTY, 15/10 m's FT4 …): one more small inverse FFT each, off
-                //    this SAME forward FFT — only those this capture holds; the rest show as "out" chips (vibe_decoder_host.h).
-                vibe::ExtraSlice xs[vibe::kMaxExtraSlices];
-                const int nx = gs > 0 ? h->iqExtraSlices(xs) : 0;
-                for (int k = 0; k < nx; ++k) {
-                    const int eb = vibe::bandSliceBins(sampleRate, fftSize, xs[k].widthHz);
-                    const int ecb = (int)std::lround((xs[k].centreHz - hwC) / binHz);
-                    const double erate = sampleRate * (double)eb / (double)fftSize, ecentre = hwC + ecb * binHz;
-                    if (!vibe::captureHolds(sampleRate, hwC, ecentre, erate)) continue;
-                    if ((int)c->bandX[k].size() != eb) c->bandX[k].assign((size_t)eb, cf32{0.0f, 0.0f});
-                    const int eg = chan_->extract(bins, ecb, eb, c->bandX[k].data(), c->bandXctx[k], blockIndex, vibe::kBandTaperDiv);
-                    if (eg <= 0) continue;
-                    const float* epw = nullptr;
-                    if (pw) { c->bandXpw.resize((size_t)eb); vibe::digi::slicePower(bins, fftSize, ecb, eb, c->bandXpw.data()); epw = c->bandXpw.data(); }
-                    h->feedIq(c->bandX[k].data(), eg, erate, ecentre, epw, epw ? eb : 0, binHz, NAN, k + 1);
-                }
-            }
+            if (h && h->wantsIq()) feedSkimFromBins(h.get(), c->skim, bins, clientCentreBin(c.get()), blockIndex);
+        }
+    }
+
+    /** ★ One decoder host's IQ slices off the shared forward FFT, centred on bin `cb` (its VFO's dial): the main slice
+     *  (a CW/PSK skimmer's segment, or Band's) and Band's extra ones. VFO A's (feedOneClient) and VFO B's
+     *  (feedWatchFromBins) are the same cut, each with its own scratch. */
+    void feedSkimFromBins(DecoderHost* h, SkimCut& sc, const cf32* bins, int cb, long long blockIndex) {
+        const double w = std::min(h->iqWidthHz(), sampleRate * 0.8);
+        // ★★ V12 (2026-10-27): sized for the slice's FLAT part, cut with a sixteenth's roll-off (vibe_band_slice.h —
+        //    it was sized for 4 % and cut with a quarter: 40 m's ends sat 2–3 dB down at 960 kS/s, JTTY 17 dB).
+        const int b = vibe::bandSliceBins(sampleRate, fftSize, w);
+        if ((int)sc.skimSlice.size() != b) sc.skimSlice.assign((size_t)b, cf32{0.0f, 0.0f});
+        const int gs = chan_->extract(bins, cb, b, sc.skimSlice.data(), sc.sctx, blockIndex, vibe::kBandTaperDiv);
+        const double binHz = sampleRate / (double)fftSize;
+        /* ★★ V12 BAND SPOTS' ACTIVITY GATE (decoders/digi_activity.h): the slice's bins' power, read off this SAME
+         *  forward FFT — one multiply-add per bin, no transform — so Band can leave an empty mode window undecoded. */
+        const float* pw = nullptr;
+        if (gs > 0 && h->wantsBins()) {
+            thread_local std::vector<float> pwBuf;
+            pwBuf.resize((size_t)b);
+            vibe::digi::slicePower(bins, fftSize, cb, b, pwBuf.data());
+            pw = pwBuf.data();
+        }
+        const double hwC = rtlCenter.load() + hwOffsetHz();
+        if (gs > 0) h->feedIq(sc.skimSlice.data(), gs, sampleRate * (double)b / (double)fftSize,
+                              hwC + cb * binHz, pw, pw ? b : 0, binHz);
+        // ★★ Band's EXTRA slices (40 m's JTTY, 6 m's JTTY, 15/10 m's FT4 …): one more small inverse FFT each, off
+        //    this SAME forward FFT — only those this capture holds; the rest show as "out" chips (vibe_decoder_host.h).
+        vibe::ExtraSlice xs[vibe::kMaxExtraSlices];
+        const int nx = gs > 0 ? h->iqExtraSlices(xs) : 0;
+        for (int k = 0; k < nx; ++k) {
+            const int eb = vibe::bandSliceBins(sampleRate, fftSize, xs[k].widthHz);
+            const int ecb = (int)std::lround((xs[k].centreHz - hwC) / binHz);
+            const double erate = sampleRate * (double)eb / (double)fftSize, ecentre = hwC + ecb * binHz;
+            if (!vibe::captureHolds(sampleRate, hwC, ecentre, erate)) continue;
+            if ((int)sc.bandX[k].size() != eb) sc.bandX[k].assign((size_t)eb, cf32{0.0f, 0.0f});
+            const int eg = chan_->extract(bins, ecb, eb, sc.bandX[k].data(), sc.bandXctx[k], blockIndex, vibe::kBandTaperDiv);
+            if (eg <= 0) continue;
+            const float* epw = nullptr;
+            if (pw) { sc.bandXpw.resize((size_t)eb); vibe::digi::slicePower(bins, fftSize, ecb, eb, sc.bandXpw.data()); epw = sc.bandXpw.data(); }
+            h->feedIq(sc.bandX[k].data(), eg, erate, ecentre, epw, epw ? eb : 0, binHz, NAN, k + 1);
         }
     }
 
@@ -29726,8 +29950,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::set<std::string> decodingSessions;
         std::string sharedBy;
         { std::lock_guard<std::mutex> lk(clientMtx); sharedBy = sharedDecoderBy_; }
-        for (auto& kv : decoders_.all())
-            if (kv.second->wantsAudio()) decodingSessions.insert(kv.first.empty() ? sharedBy : kv.first);
+        for (auto& kv : decoders_.all())   // ★ a VFO B host counts for its listener (watchDecSessionOf)
+            if (kv.second->wantsAudio()) decodingSessions.insert(kv.first.empty() ? sharedBy : watchDecSessionOf(kv.first));
         decodingSessions.erase(std::string());
 
         std::vector<std::pair<std::shared_ptr<ClientDsp>, bool>> act;   // client, isTimeUp
@@ -31162,7 +31386,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  third, and a slot held by nobody is one somebody else is refused. 20 s of grace, so a
      *  reconnecting spectrum socket does not throw away a ten-minute WEFAX chart. */
     void reapDecoderOrphans() {
-        decoders_.reapOrphans([this](const std::string& s) {
+        decoders_.reapOrphans([this](const std::string& key) {
+            const std::string s = watchDecSessionOf(key);   // ★ a VFO B host (`<session>#B`) lives as long as its listener
             std::lock_guard<std::mutex> lk(clientMtx);
             for (auto& kv : clientDsp) if (kv.second && kv.second->session == s) return true;
             for (auto& kv : sockSession) if (kv.second == s) return true;
@@ -32386,12 +32611,17 @@ std::string LocalSdrShim::adminStatusJson() {
             const bool sp = h->spotsOn();
             if (nm.empty() && !sp) continue;
             if (!running.empty()) running += ',';
-            running += "{\"session\":\"" + vibeadmin::esc(kv.first.empty() ? sharedBy : kv.first) + "\""
+            std::string who;
+            const bool onB = p->watchDecBSplit(kv.first, who);   // ★ V12: a decoder on the listener's VFO B
+            running += "{\"session\":\"" + vibeadmin::esc(kv.first.empty() ? sharedBy : who) + "\""
                      + ",\"shared\":" + (kv.first.empty() ? "true" : "false")
+                     + ",\"vfo\":\"" + (onB ? "B" : "A") + "\""
                      + ",\"decoder\":\"" + vibeadmin::esc(nm) + "\",\"spots\":" + (sp ? "true" : "false")
                      // ★ V12: which digital spots ("single" / "band") and what they read ("FT8 14.0740, FT4 14.0800")
                      + ",\"spotsScope\":\"" + h->spotsScope() + "\",\"spotsRun\":\"" + vibeadmin::esc(h->spotsDescribe()) + "\""
-                     + ",\"slots\":" + std::to_string(h->slotsHeld()) + "}";
+                     + ",\"slots\":" + std::to_string(h->slotsHeld())
+                     // ★ V12: is THIS host being fed (audio or IQ samples since it was made) — a decoder on VFO B too
+                     + ",\"fed\":" + std::to_string((unsigned long long)h->fedSamples()) + "}";
         }
         j += std::string(",\"decoderAttached\":") + (attached ? "true" : "false")
            + ",\"decoderFedSamples\":" + std::to_string((unsigned long long)fed)
@@ -32495,8 +32725,12 @@ std::string LocalSdrShim::adminSessionsJson() {
             std::string nm = kv.second->name();
             if (kv.second->spotsOn()) { const std::string f = kv.second->spotsScope() == "band" ? "ft8band" : "ft8"; nm += nm.empty() ? f : "+" + f; }
             if (nm.empty()) continue;
-            const std::string who = kv.first.empty() ? sharedBy : kv.first;
-            if (!who.empty()) decBySession[who] = nm;
+            // ★ V12: a decoder on the listener's VFO B is theirs too — named with its VFO beside one on A
+            std::string bs;
+            const bool onB = p->watchDecBSplit(kv.first, bs);
+            const std::string who = kv.first.empty() ? sharedBy : bs;
+            if (onB) nm = "B:" + nm;
+            if (!who.empty()) { auto& d = decBySession[who]; d = d.empty() ? nm : (onB ? d + "+" + nm : nm + "+" + d); }
         }
         std::lock_guard<std::mutex> rl(p->rdsxMtx);
         for (auto& kv : p->rdsxDx)    if (!kv.second.empty()) { auto& d = decBySession[kv.second]; if (d.find("rds") == std::string::npos) d += d.empty() ? "rds" : "+rds"; }

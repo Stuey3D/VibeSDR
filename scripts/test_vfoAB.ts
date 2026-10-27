@@ -32,12 +32,19 @@ import { fileURLToPath } from 'node:url';
  *     NAME whichever is tuned (A's never as `watch`, B's never without a B); setMute only while B is on; info carries
  *     both squelches and both mutes; SqlAutoTrack (B's auto squelch) — seeds from the neighbours, rises only while shut,
  *     opens above the margin, holds OFF through the hang, re-judges on a new channel, sends only on a change; and the
- *     screen's wiring (source checks): Band mutes VFO A with B on, the decoder box tunes VFO A.
+ *     screen's wiring (source checks): Band mutes the VFO it runs on with B on;
+ *   • ★★★ DECODE ON EITHER VFO (2026-10-27): the watch state's decB; decStartVfo — the selected VFO, or on a server
+ *     that cannot decode B (no decB) A with the controls switched to it first; decTagFor — DEC only with two VFOs, on the
+ *     VFO a decoder or the spots run on; tuneOtherB — B moved in its slot while A is selected, as `watch`, the controls
+ *     left on A, nothing without a B or with B selected; and the screen's wiring: a decoder / spots / Band start on the
+ *     selected VFO, the box tunes the decoding VFO (abTuneVfo), Band's arrows are its VFO's, both needles and both
+ *     squelch rows carry DEC.
  *
  * Run: node --no-warnings scripts/test_vfoAB.ts   (silent: no audio anywhere)
  */
 import {
   parseWatch, watchOffered, watchMaxOf, vfoB, msgOn, msgOff, msgAim, msgSquelch, msgStereo, msgMonoOut, EarOrder, VfoABCore,
+  decStartVfo, decTagFor,
   SWAP_HZ, SAME_HZ, otherVfo, vfoATune, DoorSeq, RESYNC_MS, edgesForWidth, autoVfoBColour, vfoBNeedle, VFO_B_AUTO,
   type TuneStatus,
 } from '../src/services/vfoAB.ts';
@@ -390,13 +397,54 @@ console.log('── round 3: mutes, each VFO\'s squelch by name, B\'s auto squel
   ok(nk === -78, `a new channel (key): reseeded there (${nk})`);
   ok(new SqlAutoTrack().tick(NaN, 'k', 0, 12, 0) === null, 'no level: nothing sent');
 }
+console.log('── decode on either VFO ──');
+{
+  ok(parseWatch({ type: 'watch', max: 1, decB: true, chans: [] })!.decB === true && parseWatch({ type: 'watch', max: 1, chans: [] })!.decB === false
+     && parseWatch({ type: 'watch', decB: 'yes', chans: [] })!.decB === false, 'decB: true only when the server says so (a round-3 server: false)');
+  let s = decStartVfo(true, 'B', true);
+  ok(s.vfo === 'B' && !s.selectA, 'B selected on a server that decodes B: the decoder runs on B, the controls stay');
+  s = decStartVfo(true, 'B', false);
+  ok(s.vfo === 'A' && s.selectA, 'B selected on a round-3 server: on A, the controls go to A first (its rule)');
+  ok(decStartVfo(true, 'A', true).vfo === 'A' && !decStartVfo(false, 'B', true).selectA && decStartVfo(false, 'B', true).vfo === 'A',
+     'A selected, or one VFO: A');
+  ok(decTagFor('B', true, 'B', null) === 'DEC' && decTagFor('A', true, 'B', null) === '' && decTagFor('A', true, null, 'A') === 'DEC',
+     'DEC on the VFO a decoder or the spots run on, not the other');
+  ok(decTagFor('A', false, 'A', 'A') === '', 'one VFO: no DEC (nothing to tell apart)');
+  // tuneOtherB — B moved while A is selected
+  const status: TuneStatus = { frequency: 7074000, mode: 'usb', bandwidthLow: 100, bandwidthHigh: 2800 };
+  const sent: Record<string, unknown>[] = [];
+  const adopt = (mode: string, t: TuneStatus) => { if (t.mode !== mode) { t.mode = mode; t.bandwidthLow = mode === 'am' ? -5000 : 100; t.bandwidthHigh = mode === 'am' ? 5000 : 2800; } };
+  const ab = new VfoABCore(() => status, (m) => sent.push(m), adopt, () => 5000);
+  ab.tuneOtherB(7080000);
+  ok(sent.length === 0, 'tuneOtherB with no VFO B: nothing sent');
+  ab.setOffered(1); ab.setOn(true);
+  sent.length = 0;
+  ab.tuneOtherB(7040000, 'am');
+  ok(status.frequency === 7074000 && status.mode === 'usb' && ab.active === 'A', 'tuneOtherB: the controls stay on A, A untouched');
+  ok(ab.info().other!.frequency === 7040000 && ab.info().other!.mode === 'am' && ab.info().other!.bandwidthHigh === 5000, '…B moved in its slot, its mode\'s passband with it');
+  ok(sent.length === 1 && sent[0].type === 'watch' && sent[0].frequency === 7040000 && sent[0].mode === 'am', '…sent as B\'s `watch` aim, never a `tune`');
+  ab.select('B');
+  sent.length = 0;
+  ab.tuneOtherB(7050000);
+  ok(sent.length === 0 && status.frequency === 7040000, 'with B selected tuneOtherB does nothing (the ordinary tune is B\'s)');
+}
 {
   const src = (f: string) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
   const scr = src('../src/screens/SDRScreen.tsx');
-  ok(/const wantSpk = spotsBandOn && !abOn, wantA = spotsBandOn && abOn;/.test(scr) && /abSetMute\?\.\('A', true\)/.test(scr),
-     'Band with VFO B on mutes VFO A in the mix, not the speaker');
-  ok(/onTuneHz=\{onDecTuneHz\}/.test(scr) && /else abDecodeOnA\(\);/.test(scr) && /abDecodeOnA\(\);   \/\/ ★★ VFO A\/B round 3: Band is VFO A's dial/.test(scr),
-     'the decoder box tunes VFO A: its taps, a decoder started, Band');
+  const ws = src('../src/services/VibeServerWsClient.ts'), dc = src('../src/services/DecoderClient.ts');
+  ok(/const wantSpk = spotsBandOn && !abOn, wantA = spotsBandOn && abOn;/.test(scr) && /abSetMute\?\.\(spotsVfo, true\)/.test(scr),
+     'Band with VFO B on mutes the VFO it runs on in the mix, not the speaker');
+  ok(!/abDecodeOnA/.test(scr), 'the forced switch to VFO A is gone');
+  ok(/onTuneHz=\{onDecTuneHz\}/.test(scr) && /tuneVfoHz\(decVfoRef\.current, hz, mode\)/.test(scr) && /tuneVfoHz\(spotsVfoRef\.current, hz, 'usb' as SDRMode\)/.test(scr),
+     'the decoder box tunes the VFO its decoder runs on; Band tunes the VFO it runs on');
+  ok(/decoderClient\.current\.vfo = decVfoRef\.current/.test(scr) && /startSpots\(k, 'single', v\)/.test(scr) && /startSpots\('digi', 'band', v\)/.test(scr),
+     'a decoder, Single spots and Band each start on the VFO chosen when started (abStartVfo)');
+  ok(/abActiveRef\.current !== spotsVfoRef\.current\) return false/.test(scr), 'Band\'s arrows step bands only while its own VFO is tuned');
+  ok(/dec: !!abDecTag\(otherVfo\(abActive\)\)/.test(scr) && /dec: !!abDecTag\(abActive\)/.test(scr) && /decA: !!abDecTag\('A'\), decB: !!abDecTag\('B'\)/.test(scr),
+     'both needles and both squelch rows carry DEC');
+  ok(/abTuneVfo\(v: VfoId, frequency: number/.test(ws) && /this\.ab\.tuneOtherB\(frequency, mode\)/.test(ws), 'the client tunes a named VFO (abTuneVfo)');
+  ok(/\.\.\.\(this\.vfo === 'B' \? \{ vfo: 'B' \} : \{\}\)/.test(dc) && /this\.spotsVfo === 'B' \? \{ vfo: 'B' \} : \{\}/.test(dc),
+     'the decoder socket says "vfo":"B" on an attach and a subscribe (and nothing for A — an older server is unchanged)');
   ok(/vfoRows=\{abOn && isLocal && !icom \?/.test(scr), 'the Audio menu gets a row per VFO only while B is on');
   ok(!/setHwSquelch\(info\.activeSquelchDb\)/.test(scr), 'the squelch slider no longer follows a switch (it is VFO A\'s row)');
 }

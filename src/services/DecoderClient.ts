@@ -314,6 +314,12 @@ export class DecoderClient {
    *  PIN, 2026-10-04: "All of our decoders are fucked"). The web client always sent it (withAuth). */
   private authSuffix = '';
 
+  /** ★★ V12 — WHICH VFO the decoder and the spots run on (decode on either VFO, 2026-10-27): set by the screen when it
+   *  STARTS one, re-asserted with it on a reconnect and on a re-attach for new settings. 'B' goes on the wire as
+   *  "vfo":"B"; A sends nothing — exactly what every older server understands. */
+  vfo: 'A' | 'B' = 'A';
+  spotsVfo: 'A' | 'B' = 'A';
+
   /** Start a decoder. Replaces any running one (server enforces one/session). */
   start(name: DecoderName) {
     this.active = name;
@@ -365,7 +371,8 @@ export class DecoderClient {
   private spotsScope: 'single' | 'band' = 'single';
   get spotsBandScope(): boolean { return !!this.spotsKind && this.spotsScope === 'band'; }
 
-  startSpots(kind: SpotsKind, scope: 'single' | 'band' = 'single') {
+  startSpots(kind: SpotsKind, scope: 'single' | 'band' = 'single', vfo?: 'A' | 'B') {
+    if (vfo) this.spotsVfo = vfo;
     this.spotsKind = kind;
     this.spotsScope = kind === 'digi' ? scope : 'single';
     this._idleCheck();
@@ -388,8 +395,9 @@ export class DecoderClient {
 
   private _subscribeSpots() {
     if (!this.ws || !this.spotsKind) return;
+    const v = this.spotsVfo === 'B' ? { vfo: 'B' } : {};
     this.ws.send(JSON.stringify(this.spotsKind === 'digi'
-      ? (this.spotsScope === 'band' ? { type: 'subscribe_digital_spots', scope: 'band' } : { type: 'subscribe_digital_spots' })
+      ? (this.spotsScope === 'band' ? { type: 'subscribe_digital_spots', scope: 'band', ...v } : { type: 'subscribe_digital_spots', ...v })
       : { type: 'subscribe_cw_spots' }));
   }
 
@@ -709,7 +717,7 @@ export class DecoderClient {
     if (!this.ws || !this.active) return;
     const { extension_name, params } = this._paramsFor(this.active);
     this.ws.send(JSON.stringify({
-      type: 'audio_extension_attach', extension_name, params,
+      type: 'audio_extension_attach', extension_name, params, ...(this.vfo === 'B' ? { vfo: 'B' } : {}),
     }));
     this.cb.onStatus('attached');
     this.cb.onDot('idle');

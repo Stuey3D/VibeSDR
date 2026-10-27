@@ -200,6 +200,10 @@ export class DecoderClient {
   private spotsOn = false;
   /** ★ V12: 'single' (the listener's audio, FT8 + FT4 as ever) or 'band' (the band's IQ slice, every mode on its dial). */
   private spotScope: 'single' | 'band' = 'single';
+  /** ★★ V12 — WHICH VFO each runs on (decode on either VFO, 2026-10-27): fixed when it is started, re-asserted with it on
+   *  a reconnect. 'B' goes on the wire as "vfo":"B"; A sends nothing, exactly what every older server understands. */
+  private decVfo: 'A' | 'B' = 'A';
+  private spotsVfo: 'A' | 'B' = 'A';
   /** connect() has been called (the page is live) — the socket itself opens only when wanted, see _sync. */
   private enabled = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -303,11 +307,13 @@ export class DecoderClient {
   }
 
   private _sendAttach(mode: Exclude<DecoderMode, null>, params: DecoderParams = {}) {
-    this._send({ type: 'audio_extension_attach', extension_name: EXT[mode], ...params });
+    this._send({ type: 'audio_extension_attach', extension_name: EXT[mode], ...params, ...(this.decVfo === 'B' ? { vfo: 'B' } : {}) });
   }
 
-  /** Attach a decoder (detaching whatever was running). */
-  attach(mode: Exclude<DecoderMode, null>, params: DecoderParams = {}) {
+  /** Attach a decoder (detaching whatever was running). `vfo` — the VFO it runs on (V12 VFO A/B); omitted = the one it
+   *  already runs on (a re-attach for new settings stays where it is). */
+  attach(mode: Exclude<DecoderMode, null>, params: DecoderParams = {}, vfo?: 'A' | 'B') {
+    if (vfo) this.decVfo = vfo;
     this.mode = mode;
     // ★ Remembered so a reconnect can re-assert the SAME decoder, not the default one.
     this.params = params;
@@ -326,13 +332,15 @@ export class DecoderClient {
   /** FT8/FT4 spots run independently of the text/image decoders. */
   /** ★ The subscribe message. Single sends no scope at all — exactly what every older server understands. */
   private _spotsMsg() {
-    return this.spotScope === 'band' ? { type: 'subscribe_digital_spots', scope: 'band' } : { type: 'subscribe_digital_spots' };
+    const v = this.spotsVfo === 'B' ? { vfo: 'B' } : {};
+    return this.spotScope === 'band' ? { type: 'subscribe_digital_spots', scope: 'band', ...v } : { type: 'subscribe_digital_spots', ...v };
   }
-  setSpots(on: boolean, scope: 'single' | 'band' = 'single') {
-    if (this.spotsOn === on && (!on || this.spotScope === scope)) return;
+  /** `vfo` — the VFO the spots run on (V12 VFO A/B); omitted = where they already run. */
+  setSpots(on: boolean, scope: 'single' | 'band' = 'single', vfo?: 'A' | 'B') {
+    if (this.spotsOn === on && (!on || (this.spotScope === scope && (!vfo || vfo === this.spotsVfo)))) return;
     const was = this.spotsOn;
     this.spotsOn = on;
-    if (on) this.spotScope = scope;
+    if (on) { this.spotScope = scope; if (vfo) this.spotsVfo = vfo; }
     // ★ Single ↔ Band: one subscribe with the new scope — the server replaces the run and keeps the slot.
     if (this.ws?.readyState === WebSocket.OPEN) this._send(on ? this._spotsMsg() : { type: 'unsubscribe_digital_spots' });
     void was;
@@ -340,6 +348,9 @@ export class DecoderClient {
   }
 
   get attached(): DecoderMode { return this.mode; }
+  /** ★ V12: the VFO the decoder / the spots run on (meaningful only while they run). */
+  get decoderVfo(): 'A' | 'B' { return this.decVfo; }
+  get spotsVfoNow(): 'A' | 'B' { return this.spotsVfo; }
   get spotsEnabled(): boolean { return this.spotsOn; }
   /** 'single' / 'band' while spots run, null otherwise. */
   get spotsScope(): 'single' | 'band' | null { return this.spotsOn ? this.spotScope : null; }

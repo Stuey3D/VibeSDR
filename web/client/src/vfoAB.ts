@@ -22,6 +22,8 @@ export interface WatchState {
   muteA: boolean;
   /** ★ Round 3: the radio moves to hold both VFOs (a personal receiver) — lo/hi are where it is now, not a wall. */
   follow: boolean;
+  /** ★★ Decoders run on either VFO ("vfo":"B" on the decoder socket). Absent (a round-3 server) = A only. */
+  decB: boolean;
   chans: WatchChan[]; refused?: string; note?: string;
 }
 
@@ -37,10 +39,25 @@ export function watchSanitise(m: any): WatchState | null {
   })).filter((c: WatchChan) => c.freq > 0) : [];
   return {
     max: num(m.max, -1), lo: num(m.lo), hi: num(m.hi), stereo: m.stereo !== false, monoOut: m.monoOut === true,
-    muteA: m.muteA === true, follow: m.follow === true, chans,
+    muteA: m.muteA === true, follow: m.follow === true, decB: m.decB === true, chans,
     refused: typeof m.refused === 'string' ? m.refused : undefined,
     note: typeof m.note === 'string' && m.note ? m.note.slice(0, 200) : undefined,
   };
+}
+
+/* ★★★ DECODE ON EITHER VFO (Stuart, 2026-10-27: "That seems like a weird limitations surely it doesnt matter which VFO is
+ *  listen and which is decode?"). A decoder — or digital spots, Single or Band — runs on the VFO SELECTED when it is
+ *  started; what the decoder box tunes moves THAT VFO; selecting the other VFO later moves nothing. A server that cannot
+ *  decode B (round 3: no `decB` in its watch state) keeps the old rule — the controls go to A first. */
+/** Which VFO a decoder started now runs on, and whether the controls must go to A first (an older server). */
+export function decStartVfo(abOn: boolean, sel: 'A' | 'B', decB: boolean): { vfo: 'A' | 'B'; selectA: boolean } {
+  if (!abOn || sel === 'A') return { vfo: 'A', selectA: false };
+  return decB ? { vfo: 'B', selectA: false } : { vfo: 'A', selectA: true };
+}
+/** The 'DEC' tag on a VFO's needle label and squelch row: that VFO is decoding (a decoder or spots run on it). Only with
+ *  two VFOs — with one there is nothing to tell apart. */
+export function decTagFor(v: 'A' | 'B', abOn: boolean, decoderOn: 'A' | 'B' | null, spotsOn: 'A' | 'B' | null): string {
+  return abOn && (decoderOn === v || spotsOn === v) ? 'DEC' : '';
 }
 
 export const SAME_HZ = 5;      // vibe_watch.h kSameHz

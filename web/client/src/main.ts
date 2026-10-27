@@ -34,7 +34,7 @@ import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
-import { earTags, needleAlpha } from './vfoAB';
+import { earTags, needleAlpha, decStartVfo, decTagFor } from './vfoAB';
 import { FrameClock, renderEvery } from './wfPacing';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
@@ -3361,7 +3361,7 @@ function renderFrame(frameTs: number) {
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (V12, 2026-10-26) — the extra-wide passband the server cuts and every
    *  mode's decoder reads its own dial from, drawn where it is (it need not be centred: an exact frequency typed inside
    *  the band moves the dial, the span stays on the modes). Drawn only, never sent, as the skimmer's. */
-  const bp = bandSpots && spotBandCap && !abBTuned() ? bandPassband(spotBandCap.bands, spec.frequency) : null;   // ★ A's needle only
+  const bp = bandHere() && spotBandCap ? bandPassband(spotBandCap.bands, spec.frequency) : null;   // ★ the Band VFO's needle only
   wf.filterLow = bp ? bp[0] : skim ? -segW / 2 : spec.bandwidthLow;
   wf.filterHigh = bp ? bp[1] : skim ? segW / 2 : spec.bandwidthHigh;
   abDraw();   // ★★ V12 VFO A/B — the other needle, the labels, the brightness
@@ -5346,8 +5346,8 @@ function sqlRowsPaint() {
   const blockB = document.getElementById('sqlBlockB');
   if (blockB) blockB.hidden = !ab;
   const tagA = document.getElementById('sqlVfoA'), tagB = document.getElementById('sqlVfoB');
-  if (tagA) { tagA.hidden = !ab; tagA.style.setProperty('--abcol', abColourOf('A')); }
-  if (tagB) tagB.style.setProperty('--abcol', abColourOf('B'));
+  if (tagA) { tagA.hidden = !ab; tagA.style.setProperty('--abcol', abColourOf('A')); tagA.textContent = abDecTag('A') ? 'VFO A · DEC' : 'VFO A'; }
+  if (tagB) { tagB.style.setProperty('--abcol', abColourOf('B')); tagB.textContent = abDecTag('B') ? 'VFO B · DEC' : 'VFO B'; }
   const mA = document.getElementById('sqlMuteA') as HTMLButtonElement | null;
   const mB = document.getElementById('sqlMuteB') as HTMLButtonElement | null;
   if (mA) { mA.hidden = !ab; mA.classList.toggle('on', !!spec?.abMuteA); mA.textContent = spec?.abMuteA ? 'MUTED' : 'MUTE'; }
@@ -10902,22 +10902,24 @@ let bandMutedFrom: boolean | null = null;
  *  digital modes on 40M whilst VFO B listens to SSB on 40"). The speaker carries B too, so muting it would silence the
  *  VFO being listened to; A is taken out of the mix instead (the server pans B home to both ears) and put back when Band
  *  ends. B turned on or off during Band moves the mute between the two (bandMuteFollowAB). */
-let bandMutedA = false;
+/* ★★ DECODE ON EITHER VFO (2026-10-27): Band mutes the VFO BAND RUNS ON — A or B — not always A ("with Band + B on, Band
+ *  mutes the decoding VFO in the mix"). Remembered by letter, so the right one is unmuted when Band ends. */
+let bandMutedV: 'A' | 'B' | null = null;
 function bandMuteEnter() {
-  if (spec?.abOn) { bandMutedA = true; spec.setAbMute('A', true); return; }
+  if (spec?.abOn) { bandMutedV = spotsVfo; spec.setAbMute(spotsVfo, true); return; }
   if (audio) { bandMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
 }
 function bandMuteLeave() {
-  if (bandMutedA) { bandMutedA = false; if (spec?.abOn) spec.setAbMute('A', false); }
+  if (bandMutedV) { const v = bandMutedV; bandMutedV = null; if (spec?.abOn) spec.setAbMute(v, false); }
   if (bandMutedFrom !== null) { setMuted(bandMutedFrom); bandMutedFrom = null; updateMediaSession(); }
 }
 function bandMuteFollowAB() {
   if (!bandSpots || !spec) return;
   if (spec.abOn && bandMutedFrom !== null) {
     setMuted(bandMutedFrom); bandMutedFrom = null; updateMediaSession();
-    bandMutedA = true; spec.setAbMute('A', true);
-  } else if (!spec.abOn && bandMutedA) {
-    bandMutedA = false;
+    bandMutedV = spotsVfo; spec.setAbMute(spotsVfo, true);
+  } else if (!spec.abOn && bandMutedV) {
+    bandMutedV = null;
     if (audio) { bandMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
   }
 }
@@ -10926,6 +10928,7 @@ function bandSpotsUi(on: boolean) {
   bandSpots = on && !!spotBandCap;
   if (bandSpots && !was) bandMuteEnter();
   else if (!bandSpots && was) bandMuteLeave();
+  sqlRowsPaint();   // ★★ V12: the DEC tag follows the spots onto (and off) their VFO
   if (!bandSpots) { spotModeStates = []; bandSpotsPending = null; }
   renderSpotModeChips();
   spotsBandRender();
@@ -10981,7 +10984,7 @@ function renderSpotModeChips() {
  *  decode on whichever of their dials the listener is on) · "DIGITAL SPOTS · 20 m BAND" (Band). */
 function spotsTitle(): string {
   if (bandSpots && spotBandCap && spec) {
-    const b = spotBandAt(spotBandCap.bands, spec.frequency);
+    const b = spotBandAt(spotBandCap.bands, vfoNow(spotsVfo).frequency);   // ★ the VFO Band runs on
     return b ? `DIGITAL SPOTS \u00b7 ${b.name.toUpperCase()} BAND` : 'DIGITAL SPOTS \u00b7 BAND';
   }
   return spotModes.length > 0 && spotModes.length <= 2 ? spotModes.join(' / ') + ' SPOTS' : 'DIGITAL SPOTS';
@@ -11029,11 +11032,10 @@ function bandSpotsApplyPending() {
 /** Put the dial on band `b`'s centre, in USB — a listener's own tune (a user action: the shared-dial contract holds). */
 function bandSpotsGo(b: SpotBand) {
   if (!spec) return;
-  abDecodeOnA();   // ★★ V12 VFO A/B round 3: Band is VFO A's dial
   savePref('spotBand', b.id);
   // ★ Out of DAB / ADS-B / ISM / AIS / NDB first — see bandSpotsPending. (Asked-before-tuning: tune() below asks.)
   if (!spec.isTuneLocked() && bandSpotsLeaveHeld()) { bandSpotsPending = b; renderFreq(); return; }
-  spec.tune(clampTune(b.hz), 'usb', { recenter: true, retarget: true });
+  spec.tuneVfo(spotsVfo, clampTune(b.hz), 'usb', { recenter: true, retarget: true });   // ★★ Band's dial is the VFO it runs on
   renderFreq();
   if ($('decBox').classList.contains('open')) $('decTitle').textContent = spotsTitle();
 }
@@ -11334,8 +11336,7 @@ function jttyPinWatch(body: HTMLElement | null) {
 /** ★ Tap a row or a spot: USB, the dial 1500 Hz below the station's tone 0 (its tones then sit mid-passband). */
 function jttyTune(rfHz: number) {
   if (!spec || !(rfHz > 0)) return;
-  abDecodeOnA();
-  spec.tune(clampTune(jttyTuneFor(rfHz)), 'usb' as SDRMode, { recenter: true, retarget: true });
+  decTune(clampTune(jttyTuneFor(rfHz)), 'usb' as SDRMode);
   renderFreq();
 }
 /** ★ The announced JTTY calling frequencies this radio can reach — the rest are not drawn (AGENTS.md: no dead controls). */
@@ -11348,7 +11349,7 @@ function initJttyDials() {
     const b = document.createElement('button');
     b.className = 'btn'; b.textContent = d.label;
     b.title = `${(d.hz / 1e6).toFixed(3)} MHz USB — announced for JTTY in the WSJT-X 3.2 release candidates (preliminary)`;
-    b.onclick = () => { if (!spec) return; abDecodeOnA(); spec.tune(d.hz, 'usb' as SDRMode, { recenter: true, retarget: true }); renderFreq(); };
+    b.onclick = () => { if (!spec) return; decTune(d.hz, 'usb' as SDRMode); renderFreq(); };
     host.appendChild(b);
   }
 }
@@ -11365,9 +11366,8 @@ function renderDsc() {
 /** ★ A channel key: tune it as a DSC receiver does, and re-attach so the decoder's tones follow. */
 function dscTune(ch: { hz: number; vhf: boolean }) {
   if (!spec) return;
-  abDecodeOnA();
   const t = dscTuneFor(ch);
-  spec.tune(clampTune(t.hz), t.mode as SDRMode, { recenter: true, retarget: true });
+  decTune(clampTune(t.hz), t.mode as SDRMode);
   renderFreq();
   reattachIf('dsc');
 }
@@ -11430,7 +11430,8 @@ function kbSkimOn(): boolean { return (activeDec === 'cw' && cwSkim) || (activeD
 /** The middle of the listener's passband, audio Hz — ONE SIGNAL's cursor for PSK (USB 200–2800 → 1500). */
 function passbandCentreHz(): number {
   if (!spec) return 1500;
-  const c = Math.abs((spec.bandwidthLow + spec.bandwidthHigh) / 2);
+  const p = vfoNow(decVfo);   // ★ the decoding VFO's passband (decode on either VFO)
+  const c = Math.abs((p.bandwidthLow + p.bandwidthHigh) / 2);
   return c >= 300 && c <= 3500 ? Math.round(c) : 1500;
 }
 /** The extension a decoder button attaches — CW's and PSK's depend on their view. */
@@ -11450,11 +11451,11 @@ function cwFreq(sg: { hz: number; audio: number }): string {
  *  signal in the middle of the passband (LSB if the listener is in LSB), so it is the one ONE SIGNAL decodes. */
 function cwTune(hz: number) {
   if (!spec || !(hz > 0)) return;
-  abDecodeOnA();
   if (activeDec === 'psk') {
-    const lsb = spec.mode === 'lsb', c = lsb || spec.mode === 'usb' ? passbandCentreHz() : 1500;
-    spec.tune(clampTune(Math.round(lsb ? hz + c : hz - c)), lsb ? 'lsb' : 'usb', { recenter: true, retarget: true });
-  } else spec.tune(clampTune(Math.round(hz)), 'cwu', { recenter: true, retarget: true });
+    const md = vfoNow(decVfo).mode;
+    const lsb = md === 'lsb', c = lsb || md === 'usb' ? passbandCentreHz() : 1500;
+    decTune(clampTune(Math.round(lsb ? hz + c : hz - c)), lsb ? 'lsb' : 'usb');
+  } else decTune(clampTune(Math.round(hz)), 'cwu');
   renderFreq();
 }
 function renderCw() {
@@ -11689,7 +11690,7 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'cw') return cwSkim ? { width: cwWidth } : {};
   if (mode === 'psk') return pskSkim ? { width: pskWidth } : { centre: passbandCentreHz() };
   if (mode === 'aprs') return { baud_rate: aprsBaud };
-  if (mode === 'dsc') return dscParams(spec?.frequency ?? 0, String(spec?.mode ?? ''));
+  if (mode === 'dsc') { const v = vfoNow(decVfo); return dscParams(v.frequency, String(v.mode ?? '')); }   // ★ the decoding VFO's dial
   return {};
 }
 
@@ -11972,10 +11973,11 @@ function initDecoders(host: string, auth: AuthState) {
     b.onclick = () => {
       const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
-      abDecodeOnA();   // ★★ V12 VFO A/B round 3: the decoders are VFO A's
+      // ★★★ V12: the decoder runs on the VFO selected NOW (decode on either VFO) — Advanced RDS is always A's (no VFO B on FM)
+      decVfo = mode === 'rds' ? 'A' : abStartVfo();
       activeDec = mode;
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
-      decoders!.attach(decExt(mode), decParams(mode));
+      decoders!.attach(decExt(mode), decParams(mode), decVfo);
       if (mode === 'rds') spec?.rdsxLight(true);   // ★ the lighter eye stream — see SpectrumClient.rdsxLight
       showDecBox(mode);
       syncDecButtons();
@@ -12062,8 +12064,8 @@ function initDecoders(host: string, auth: AuthState) {
   spotsBtn.onclick = () => {
     // ★ SINGLE MODE: the button there always was. From Band it switches (one subscribe; the server keeps the slot).
     const on = decoders!.spotsScope !== 'single';
-    if (on) abDecodeOnA();   // ★★ V12 VFO A/B round 3: the spots are VFO A's
-    decoders!.setSpots(on, 'single');
+    if (on) spotsVfo = abStartVfo();   // ★★★ V12: the spots run on the VFO selected now (decode on either VFO)
+    decoders!.setSpots(on, 'single', on ? spotsVfo : undefined);
     bandSpotsUi(false);
     spotsBtn.classList.toggle('on', on);
     if (on) showDecBox('spots'); else if (!activeDec) hideDecBox();
@@ -12078,7 +12080,10 @@ function initDecoders(host: string, auth: AuthState) {
     if (on) {
       const b = landingSpotBand(spotBandCap.bands, heldMode() ? 0 : spec?.frequency ?? 0, prefs()['spotBand'] as string ?? null);
       if (!b) return;
-      decoders!.setSpots(true, 'band');
+      // ★★★ V12: Band runs on the VFO selected now — its dial, its arrows, its span, its mute (decode on either VFO)
+      if (bandSpots) bandSpotsUi(false);   // ★ a Band already running elsewhere ends first (its mute goes back)
+      spotsVfo = abStartVfo();
+      decoders!.setSpots(true, 'band', spotsVfo);
       bandSpotsUi(true);
       /* ★★ THE PRESS PUTS THE DIAL ON THE BAND'S PLACE, ALWAYS (Stuart, beta22: "should snap the VFO to the correct position
        *  in the band and start running … it only snaps … if i tune once then back"). It used to stay put when the dial was
@@ -12115,10 +12120,9 @@ function initDecoders(host: string, auth: AuthState) {
   $('aprsMapBtn').onclick = () => aprsMapOpen();
   segButtons('aprsBaud', 'aprsbaud', (v) => { aprsBaud = Number(v) === 300 ? 300 : 1200; aprsHintSync(); if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; renderAprs(); reattachIf('aprs'); } });
   $('aprsTune').onclick = () => {
-    abDecodeOnA();
     if (!spec) return;
-    if (aprsBaud === 300) spec.tune(clampTune(10147600), 'usb', { recenter: true, retarget: true });
-    else spec.tune(clampTune(Math.round(aprsHz)), 'nfm', { recenter: true, retarget: true });
+    if (aprsBaud === 300) decTune(clampTune(10147600), 'usb');
+    else decTune(clampTune(Math.round(aprsHz)), 'nfm');
     renderFreq();
   };
   aprsHintSync();
@@ -12545,6 +12549,7 @@ function syncDecButtons() {
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.classList.toggle('on', b.dataset.dec === activeDec);
   }
+  sqlRowsPaint();   // ★★ V12: the DEC tag on the decoding VFO's squelch row
   $('rttySettings').hidden = activeDec !== 'rtty';
   $('wefaxSettings').hidden = activeDec !== 'wefax';
   $('timeSettings').hidden = activeDec !== 'time';
@@ -17154,8 +17159,8 @@ function nudge(hz: number) {
   if (ismOn) { ismStep(hz < 0 ? -1 : 1); return; }
   /* ★★★ IN BAND SPOTS THE ARROWS STEP BANDS (V12, 2026-10-26) — every arrow, key, wheel, knob, pad and game-controller
    *  press ends here, as DAB's blocks and ISM's bands do. A typed or long-pressed frequency is still exact. */
-  // ★★ V12 VFO A/B round 3: only while the controls tune VFO A — with B selected the arrows tune B, as ever.
-  if (bandSpots && !abBTuned()) { bandSpotsStep(hz < 0 ? -1 : 1); return; }
+  // ★★ V12 VFO A/B: only while the controls tune the VFO Band runs on — the other VFO's arrows tune it, as ever.
+  if (bandHere()) { bandSpotsStep(hz < 0 ? -1 : 1); return; }
   if (adsbOn || aisOn) return;   // ★ held on 1090 MHz (ADS-B) or AIS's two fixed channels — the arrows are greyed (wholeRadioLock); keys and the wheel end here
   // Snap to the step grid so repeated nudges stay on round frequencies.
   // ★★ Through airbandStepFrom: the 8.33 kHz step is 25000/3 exactly (no drift), and in the airband
@@ -17231,9 +17236,9 @@ function cardFreqText(): { main: string; fine: string; unit: string; chan?: stri
     const hz = ismReport.centre || spec.frequency;
     return { main: (hz / 1e6).toFixed(3), fine: '', unit: 'MHz', chan: ismReport.custom ? 'ISM' : `ISM ${ismReport.band ?? ''}`.trim() };
   }
-  /* ★★ IN BAND SPOTS THE READOUT NAMES THE BAND ("20 m BAND") beside the dial — what the arrows now step. (VFO A's
-   *  readout only — with VFO B tuned the readout is B's frequency.) */
-  if (bandSpots && spotBandCap && !abBTuned()) {
+  /* ★★ IN BAND SPOTS THE READOUT NAMES THE BAND ("20 m BAND") beside the dial — what the arrows now step. (The Band
+   *  VFO's readout only — with the other VFO tuned the readout is that VFO's frequency.) */
+  if (bandHere() && spotBandCap) {
     const b = spotBandAt(spotBandCap.bands, spec.frequency);
     const r = cardFreqPlain(Math.round(spec.frequency));
     return r && { ...r, chan: b ? `${b.name} BAND` : 'NO DIGITAL BAND' };
@@ -18790,15 +18795,40 @@ function abBColour(): string {
   return mx - mn > 0.2 && h > 150 && h < 230 ? '#ffb020' : AB_B_COLOUR;
 }
 function abColourOf(v: 'A' | 'B'): string { return v === 'A' ? (wf?.vfoColor || '#ff2020') : abBColour(); }
-/** The controls are tuning VFO B right now. */
-function abBTuned(): boolean { return !!spec?.abOn && spec.abSel === 'B'; }
-/** ★★★ ROUND 3 — THE DECODERS ARE VFO A'S (Stuart, 2026-10-27: "run a decoder on VFO A whilst VFO B can listen to the
- *  audio. For example VFO A set to full band digital modes on 40M whilst VFO B listens to SSB on 40"). The server feeds
- *  a listener's decoder from their OWN channel — VFO A — before the mix (decoders_.feedSession / feedShared), so nothing
- *  B does reaches it and a muted A still decodes. What the decoder box TUNES must therefore be A too: starting a decoder
- *  or spots, a band, a station or a spot tapped in the box switches the controls to VFO A first — otherwise it would
- *  retune B (the selected VFO) while the decoder went on reading A. Then the A/B key goes back to B to listen. */
-function abDecodeOnA() { if (abBTuned()) spec!.selectVfo('A'); }
+/* ★★★ DECODE ON EITHER VFO (Stuart, 2026-10-27: "That seems like a weird limitations surely it doesnt matter which VFO is
+ *  listen and which is decode?"). Round 3 made the decoders VFO A's and switched the controls to A to start one; now a
+ *  decoder — or the spots, Single or Band — runs on the VFO SELECTED when it is started ("vfo":"B" on the decoder socket;
+ *  the server feeds it B's own audio or IQ, before the mix). What the decoder box tunes moves THAT VFO (decTune), Band's
+ *  arrows, readout and span are that VFO's (bandHere), Band mutes that VFO (bandMuteEnter), and selecting the other VFO
+ *  later moves nothing. The decoding VFO carries a DEC tag on its needle label and its squelch row. A server too old to
+ *  decode B (no `decB`) keeps round 3's rule: the controls go to A first. */
+let decVfo: 'A' | 'B' = 'A';
+let spotsVfo: 'A' | 'B' = 'A';
+/** The VFO a decoder started NOW runs on (vfoAB.ts decStartVfo) — and on an older server, the controls go to A first. */
+function abStartVfo(): 'A' | 'B' {
+  if (!spec) return 'A';
+  const s = decStartVfo(spec.abOn, spec.abSel, !!spec.watchState?.decB);
+  if (s.selectA) spec.selectVfo('A');
+  return s.vfo;
+}
+/** VFO `v`'s frequency, mode and passband, wherever it is held right now (one VFO: the live fields). */
+function vfoNow(v: 'A' | 'B'): { frequency: number; mode: SDRMode; bandwidthLow: number; bandwidthHigh: number } {
+  if (!spec) return { frequency: 0, mode: 'usb' as SDRMode, bandwidthLow: 0, bandwidthHigh: 0 };
+  if (!spec.abOn) return { frequency: spec.frequency, mode: spec.mode as SDRMode, bandwidthLow: spec.bandwidthLow, bandwidthHigh: spec.bandwidthHigh };
+  return v === 'B' ? spec.vfoB() : spec.vfoA();
+}
+/** A tune FROM THE DECODER BOX: the VFO its decoder runs on, whichever VFO the controls tune. */
+function decTune(hz: number, mode?: SDRMode) {
+  if (!spec) return;
+  spec.tuneVfo(spec.abOn ? decVfo : 'A', hz, mode, { recenter: true, retarget: true });
+}
+/** Band spots act here: Band is on and the controls tune the VFO it runs on (one VFO: always). */
+function bandHere(): boolean { return bandSpots && (!spec?.abOn || spec.abSel === spotsVfo); }
+/** 'DEC' when VFO `v` is decoding (a decoder or spots run on it) — its needle label and its squelch row say so. */
+function abDecTag(v: 'A' | 'B'): string {
+  return decTagFor(v, !!spec?.abOn, activeDec && activeDec !== 'rds' ? decVfo : null,
+                   decoders?.spotsEnabled ? spotsVfo : null);
+}
 
 /** Every frame: the second needle, the labels, the brightness cross-fade. */
 function abDraw() {
@@ -18809,7 +18839,10 @@ function abDraw() {
   const stereoTags = spec.abStereo && !spec.abMonoOut;
   const ears = earTags(a.frequency, b.frequency, stereoTags, abEarOrder);
   abEarOrder = ears.aFirst;
-  const tag = (v: 'A' | 'B') => { const t = v === 'A' ? ears.a : ears.b; return t ? ` · ${t}` : ''; };
+  const tag = (v: 'A' | 'B') => {
+    const t = v === 'A' ? ears.a : ears.b, d = abDecTag(v);   // ★ the ear, then DEC on the VFO that is decoding
+    return (t ? ` · ${t}` : '') + (d ? ` · ${d}` : '');
+  };
   const al = needleAlpha(performance.now() - abSwitchAt);
   const o = spec.abOther;
   const parked = !!spec.watchState?.chans.find((c) => c.id === 1)?.parked;
@@ -18888,7 +18921,7 @@ function abMenuRow(close: () => void): HTMLElement | null {
   b.textContent = spec.abOn ? 'ON' : 'OFF';
   b.style.cssText = 'background:none;border:1px solid ' + (spec.abOn ? '#ffe566' : '#666') + ';color:'
     + (spec.abOn ? '#ffe566' : '#ddd') + ';padding:5px 12px;border-radius:5px;cursor:pointer;font:inherit';
-  b.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and the decoders run on VFO A. Not on FM broadcast.';
+  b.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and a decoder or the spots run on the VFO selected when you start them (it says DEC). Not on FM broadcast.';
   b.onclick = () => { spec?.setAB(!spec.abOn); close(); };
   row.append(lbl, b);
   return row;

@@ -58,6 +58,8 @@ export interface WatchState {
   monoOut: boolean;
   /** ★ Round 3: VFO A muted in this listener's mix. */
   muteA: boolean;
+  /** ★★ Decoders run on either VFO here ("vfo":"B" on the decoder socket). Absent (a round-3 server) = A only. */
+  decB: boolean;
   chans: WatchChan[];
   /** Set when the server refused the last request — outside | full | off | mode | band | apart | id | session. */
   refused?: string;
@@ -95,7 +97,7 @@ export function parseWatch(msg: Record<string, unknown> | null | undefined): Wat
   }
   const st: WatchState = {
     max: Math.max(0, Math.floor(num(msg.max))), lo: num(msg.lo), hi: num(msg.hi),
-    stereo: msg.stereo !== false, monoOut: msg.monoOut === true, muteA: msg.muteA === true, chans,
+    stereo: msg.stereo !== false, monoOut: msg.monoOut === true, muteA: msg.muteA === true, decB: msg.decB === true, chans,
   };
   const r = text(msg.refused, 16); if (r) st.refused = r;
   const n = text(msg.note, 200); if (n) st.note = n;
@@ -115,6 +117,22 @@ export function watchOffered(hwinfo: Record<string, unknown> | null | undefined)
 export function watchMaxOf(msg: Record<string, unknown> | null | undefined): number | null {
   if (!msg || msg.type !== 'watch' || typeof msg.max !== 'number' || !Number.isFinite(msg.max) || msg.max < 0) return null;
   return Math.floor(msg.max);
+}
+
+/* ★★★ DECODE ON EITHER VFO (Stuart, 2026-10-27: "That seems like a weird limitations surely it doesnt matter which VFO is
+ *  listen and which is decode?"). A decoder — or digital spots, Single or Band — runs on the VFO SELECTED when it is
+ *  started; what the decoder box tunes moves THAT VFO; selecting the other VFO later moves nothing. A server that cannot
+ *  decode B (round 3: no `decB` in its watch state) keeps the old rule — the controls go to A first. The web's vfoAB.ts
+ *  has the same two functions. */
+/** Which VFO a decoder started now runs on, and whether the controls must go to A first (an older server). */
+export function decStartVfo(abOn: boolean, sel: VfoId, decB: boolean): { vfo: VfoId; selectA: boolean } {
+  if (!abOn || sel === 'A') return { vfo: 'A', selectA: false };
+  return decB ? { vfo: 'B', selectA: false } : { vfo: 'A', selectA: true };
+}
+/** The 'DEC' tag on a VFO's needle label and squelch row: that VFO is decoding (a decoder or spots run on it). Only with
+ *  two VFOs — with one there is nothing to tell apart. */
+export function decTagFor(v: VfoId, abOn: boolean, decoderOn: VfoId | null, spotsOn: VfoId | null): string {
+  return abOn && (decoderOn === v || spotsOn === v) ? 'DEC' : '';
 }
 
 /** VFO B, from a state (undefined when it is off). */
@@ -407,6 +425,16 @@ export class VfoABCore {
   // ── The controls, while B is tuned (the client asks bTuned first; status is already B's) ──
   tuneB(frequency?: number, mode?: string) {
     const s = this.status();
+    if (frequency) s.frequency = frequency;
+    if (mode) this.adoptMode(mode, s);
+    this.localAt = this.now();
+    this.send(msgAim({ frequency, mode }));
+  }
+  /** ★★ Decode on either VFO — tune VFO B while A is selected (a tap in the decoder box when its decoder runs on B):
+   *  B's slot is moved where it is held and B's `watch` aim sent; the controls stay on A. */
+  tuneOtherB(frequency?: number, mode?: string) {
+    if (!this.on || this.active !== 'A' || !this.stash) return;
+    const s = this.stash;
     if (frequency) s.frequency = frequency;
     if (mode) this.adoptMode(mode, s);
     this.localAt = this.now();

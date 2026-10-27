@@ -832,6 +832,37 @@ export class SpectrumClient {
     this.cb.onWatch?.();
   }
   swapVfo() { this.selectVfo(this.abSel === 'A' ? 'B' : 'A'); }
+  /** ★★★ TUNE VFO `v` WHICHEVER VFO THE CONTROLS TUNE (decode on either VFO, 2026-10-27). The decoder box tunes the VFO
+   *  its decoder runs on — a station or spot tapped in it, a channel key, a band — and selecting the other VFO later
+   *  must not make those taps move the wrong one. The selected VFO is simply tune(); the other is moved where it is held
+   *  (abOther) with its own wire message, and the controls stay where they were. A's tune is still a user action on the
+   *  room's dial, so it asks before tuning and respects a held mode exactly as tune() does. */
+  tuneVfo(v: 'A' | 'B', frequency: number, mode?: SDRMode, opts?: { recenter?: boolean; retarget?: boolean }) {
+    if (!this.abOn || v === this.abSel) { this.tune(frequency, mode, opts); return; }
+    const o = this.abOther;
+    const newMode = !!mode && mode !== o.mode;
+    if (v === 'A') {
+      if (this.askBlocked()) return;
+      if (this.dabHeld || this.adsbHeld || this.ismHeld || this.aisHeld || this.ndbHeld) return;
+      this.lastLocalTuneAt = performance.now();
+    }
+    if (frequency) o.frequency = Math.round(frequency);
+    if (newMode) {
+      o.mode = mode!;
+      const bw = MODE_BANDWIDTHS[mode!];
+      if (bw) { o.bandwidthLow = bw[0]; o.bandwidthHigh = bw[1]; }
+    }
+    if (v === 'B') {
+      this.lastLocalWatchAt = performance.now();
+      this._send({ type: 'watch', id: 1, frequency: o.frequency, ...(newMode ? { mode: o.mode } : {}),
+                   bandwidthLow: o.bandwidthLow, bandwidthHigh: o.bandwidthHigh });
+    } else if (newMode) {
+      // ★ as setMode: the shim ignores bandwidth fields on a tune that also changes mode — mode, then bandwidth
+      this._send({ type: 'tune', frequency: o.frequency, mode: o.mode });
+      this._send({ type: 'bandwidth', bandwidthLow: o.bandwidthLow, bandwidthHigh: o.bandwidthHigh });
+    } else this._send({ type: 'tune', frequency: o.frequency, mode: o.mode });
+    this.cb.onWatch?.();
+  }
   setAbStereo(on: boolean) { this.abStereo = on; if (this.abOn) this._send({ type: 'watch', stereo: on }); }
   setAbMonoOut(on: boolean) { if (on === this.abMonoOut) return; this.abMonoOut = on; if (this.abOn) this._send({ type: 'watch', monoOut: on }); }
   /** B's frequency/mode/passband out — latest wins, at most every 40 ms (a held step key is dozens a second). */
