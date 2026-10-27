@@ -160,6 +160,8 @@ public:
     /** ★ DAB+ units FAAD2's own thread could not take in time (concealed, never waited for) — monotonic; the health
      *  pill's "TOO HEAVY" reads it (vibehealth::BehindWatch). An atomic: no lock. */
     uint64_t aacDropped() const { return aac_.dropped(); }
+    /** ★ TEST HOOK (dab-unitlog VIBE_UNITLOG_FAST): IQ samples fed but not yet taken by the DAB worker. */
+    uint64_t inputPendingForTest() { std::lock_guard<std::mutex> ik(inM_); return inSamples_; }
     int  channel()   const { return channel_; }
     /** ★ The block's NAME ("11A"), for anything that has to describe the tuning to a person —
      *  the admin page's listener table, which showed "216.928 MHz WFM" for a receiver that was
