@@ -414,6 +414,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  decoders section is dropped and DAB is drawn with the demodulators. */
   /* ★ ADS-B is the same kind of key as DAB, so it goes wherever DAB goes — together in the grid, or together in
    *  the decoders row. */
+  /* ★ (2026-10-27) SDRScreen no longer passes a REFUSED whole-radio key as available (Stuart: "those dead buttons can be
+   *  hidden"), so the dimmed-with-reason drawing below is reached only by a caller that still asks for it. */
   const adsbShown = !!decoderControls?.adsbAvail;
   const ismShown = !!decoderControls?.ismAvail && !isBlocked('ism');
   const ndbShown = !!decoderControls?.ndbAvail && !isBlocked('ndb');   // ★ V12 NDB

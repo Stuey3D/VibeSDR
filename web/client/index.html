@@ -2318,7 +2318,22 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decBoxHead {
   display: flex; align-items: center; gap: 8px; padding: 7px 10px;
   border-bottom: 1px solid var(--bar-border); font-size: 12px;
+  /* ★★★ A SCROLLER AT EVERY WIDTH, NOT ONLY ON A PHONE (Stuart, 2026-10-27: "i also cannot scroll the header").
+   *  This used to switch on only below a 420 px BOX (the @container rule further down) — but the box is 560 px on any
+   *  window wider than ~1220 px, and V12 Band's mode chips (FT8 · FT4 · FT2 · JS8 · WSPR · JTTY · PSK) made the row far
+   *  wider than that. Above 420 px the row was not a scroll container at all, so #decBox's overflow:hidden simply cut
+   *  it off: the chips past PSK, MINIMISE and ✕ were unreachable, wheel / trackpad / drag moved nothing, and the ›
+   *  arrow lit (scrollWidth > clientWidth holds for a visible overflow too) while its scrollBy() had nothing to move.
+   *  The items SHRANK to fit as well, which is what stood the title up one word per line.
+   *  ★ Scroll rather than wrap, for the reason given below: a wrapping header grows into the list it sits over. */
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch; scrollbar-width: none; flex-wrap: nowrap;
 }
+#decBoxHead::-webkit-scrollbar { display: none; }
+/* ★ Everything keeps its own width and scrolls; only the status line is elastic. The title never wraps. */
+#decBoxHead > * { flex: 0 0 auto; }
+#decTitle { white-space: nowrap; }
+#decStatus { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ★★★ SAY THAT THE HEADER SCROLLS, BECAUSE NOTHING ELSE DOES.
  *
  *  The strip below scrolls on a narrow box and the scrollbar is deliberately hidden, so the only
@@ -2553,19 +2568,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
       elastic part, so it gives up its space first and the buttons keep their size.
    ★ Momentum scrolling and no scrollbar furniture: on a phone this should feel like the app's
      control strip, not like a web page with a scrollbar in it. */
-@container decbox (max-width: 420px) {
-  #decBoxHead {
-    overflow-x: auto; overflow-y: hidden;
-    -webkit-overflow-scrolling: touch; scrollbar-width: none;
-    /* Anything that would otherwise be squeezed keeps its size and scrolls instead. */
-    flex-wrap: nowrap;
-  }
-  #decBoxHead::-webkit-scrollbar { display: none; }
-  #decBoxHead > * { flex: 0 0 auto; }
-  /* ★ The status line is the only elastic member: let it shrink to nothing before the buttons do,
-     because a truncated status is readable-later and a missing button is not reachable at all. */
-  #decStatus { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-}
+/* ★ (2026-10-27) The rules that lived here — scroll, keep every item's width, let only the status line shrink (a
+   truncated status is readable-later and a missing button is not reachable at all) — now sit on #decBoxHead itself
+   and apply at EVERY box width: a wide box overflowed just the same once V12 Band's mode chips arrived. */
 /* ★★★ DAB: THE MULTIPLEX SUMMARY GETS ITS OWN LINE UNDER THE BUTTONS ON A PHONE.
    DAB carries the most header buttons of any decoder (bookmarks, size, SIGNAL, EXIT DAB, minimise),
    so the elastic status above was squeezed to nothing: Stuart's iPhone, 2026-09-29, drew
@@ -3932,6 +3937,10 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="sfAge" title="Age filter">AGE</button>
       <!-- ★ EXPAND / COLLAPSE, as the app has: one line to scan, two to read. -->
       <button class="btn" id="sfExpand" title="Show grid, bearing and exact time">EXPAND</button>
+      <!-- ★★ V12 MAP, IN THE HEADER (Stuart, 2026-10-27: "the header needs a map button too"). The listed stations on the
+           spots map — openSpotsMap, the same window as the decoders panel's MAP. Drawn only while a listed spot has a
+           grid that places it (main.ts syncSpotsMapKey): a map with nothing on it is a dead control (AGENTS.md). -->
+      <button class="btn" id="sfMap" title="The decoded stations on the map (opens in a new tab)" hidden>MAP</button>
     </span>
     <!-- ★ V12 Band: which modes are decoding (active / light), idle, shed over budget, or off (main.ts renderSpotModeChips). -->
     <span id="spotModeChips" hidden></span>

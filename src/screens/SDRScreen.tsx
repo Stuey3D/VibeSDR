@@ -12013,7 +12013,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS, which take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
       target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
@@ -13874,8 +13874,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           /* ★★ V12 ADS-B, beside DAB. Drawn whenever the server STATES a capability (an older server states none and
            *  gets no key); a refusal is drawn DISABLED WITH THE SERVER'S REASON and a press says it again — never
            *  hidden, because a missing key reads as a missing feature (ADSB.md). While the mode runs the key always
-           *  works, so it can always be left. */
-          adsbAvail: adsbCap !== undefined || adsbOn,
+           *  works, so it can always be left.
+           *  ★★★ SUPERSEDED (Stuart, 2026-10-27, his RSP1B: ADS-B, ISM, NDB and AIS all dimmed — "those dead buttons can
+           *      be hidden"). A REFUSED key is now not drawn, here and for ISM / NDB / AIS below, as in the web's mode
+           *      menu (web/client/src/mobile.ts). Every reason the server gives — the owner's switch, the owner's centre
+           *      lock on a shared radio, a radio that cannot tune there, a capture rate below the mode's — is one a
+           *      listener cannot change from this sheet (the owner changes it in Setup); none is a benchmark / load
+           *      choice. ON = always drawn, so the mode can always be left. */
+          adsbAvail: adsbCap?.ok === true || adsbOn,
           adsbWhy: !adsbOn && adsbCap && !adsbCap.ok ? adsbCap.why : undefined,
           adsbOn,
           onAdsb: () => {
@@ -13895,7 +13901,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  server, or the owner's switch off, draws no key: AGENTS.md, no dead control). */
           cwAvail: cwCapable && !!(client.current as any)?.isVibe,
           /* ★★ V12 ISM, beside ADS-B — the same three states (absent / greyed with the server's reason / live). */
-          ismAvail: ismCap !== undefined || ismOn,
+          ismAvail: ismCap?.ok === true || ismOn,   // ★ refused = not drawn (see ADS-B above)
           ismWhy: !ismOn && ismCap && !ismCap.ok ? ismCap.why : undefined,
           ismOn,
           onIsm: () => {
@@ -13906,7 +13912,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           },
           /* ★★ V12 NDB, beside ISM — the same three states (absent / greyed with the server's reason / live); never on Apple
            *  TV, which has no WebView for the map that IS the mode (a key that opened nothing would be a dead control). */
-          ndbAvail: !IS_APPLE_TV && (ndbCap !== undefined || ndbOn),
+          ndbAvail: !IS_APPLE_TV && (ndbCap?.ok === true || ndbOn),   // ★ refused = not drawn (see ADS-B above)
           ndbWhy: !ndbOn && ndbCap && !ndbCap.ok ? ndbCap.why : undefined,
           ndbOn,
           onNdb: () => {
@@ -13929,7 +13935,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onDscChan: (ch: { hz: number; vhf: boolean }) => { markInteract(); onDscTune(ch); },
           tunedHz: status.frequency,
           /* ★★ V12 AIS, beside ISM — the same three states; never on Apple TV (no map there: the mode's screen is the map). */
-          aisAvail: !IS_APPLE_TV && (aisCap !== undefined || aisOn),
+          aisAvail: !IS_APPLE_TV && (aisCap?.ok === true || aisOn),   // ★ refused = not drawn (see ADS-B above)
           aisWhy: !aisOn && aisCap && !aisCap.ok ? aisCap.why : undefined,
           aisOn,
           onAis: () => {

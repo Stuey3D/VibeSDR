@@ -11829,6 +11829,7 @@ function initDecoders(host: string, auth: AuthState) {
   };
   spotsBandRender();
   $('mapBtn').onclick = openSpotsMap;
+  $('sfMap').onclick = openSpotsMap;   // ★ the same map, from the spots box's header (syncSpotsMapKey)
   initGallery();   // ★★ V12: the GALLERY key in this menu — see initGallery
 
 
@@ -11928,10 +11929,25 @@ function initDecHeadScroll(): void {
   }
 
   strip.addEventListener('scroll', update, { passive: true });
+  /* ★★ A MOUSE WHEEL SCROLLS IT TOO (2026-10-27). A trackpad's sideways swipe and a finger already move a horizontal
+   *  scroller; an ordinary wheel only turns up/down, which a one-row strip has no use for — so turn it sideways while
+   *  the strip actually overflows, and leave it alone otherwise (and at the ends, so a page or list under it is not
+   *  held hostage). A gesture that is mostly sideways is the browser's own and is not touched. */
+  strip.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    const max = strip.scrollWidth - strip.clientWidth;
+    if (max <= 1) return;
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * strip.clientWidth : e.deltaY;
+    if ((dy < 0 && strip.scrollLeft <= 0) || (dy > 0 && strip.scrollLeft >= max - 1)) return;
+    e.preventDefault();
+    strip.scrollLeft += dy;
+  }, { passive: false });
   try {
     new ResizeObserver(update).observe(strip);
     new MutationObserver(update).observe(strip, { childList: true, subtree: true,
-                                                  attributes: true, attributeFilter: ['style'] });
+                                                  // ★ + hidden / class: the spot filters show by class, MAP and
+                                                  //   Band's mode chips by `hidden` — none of them a style change
+                                                  attributes: true, attributeFilter: ['style', 'hidden', 'class'] });
   } catch { /* older browsers simply keep the arrows hidden — no worse than before */ }
   window.addEventListener('resize', update);
   update();
@@ -14240,6 +14256,17 @@ function renderSpots() {
     };
     host.appendChild(row);
   }
+  syncSpotsMapKey();
+}
+
+/** ★★ V12 THE HEADER'S MAP KEY (Stuart, 2026-10-27: "the header needs a map button too"). Drawn while at least one spot
+ *  the list shows (the filters applied, as the map applies them) has a grid that places it — the map's own test
+ *  (spotsMapPoints: parse, then keep). Before the first located spot there is nothing to show, and a MAP that opens on
+ *  an empty map reads as a broken map (AGENTS.md). */
+function syncSpotsMapKey(): void {
+  const key = document.getElementById('sfMap');
+  if (!key) return;
+  key.hidden = !filteredSpots().some((s) => !!s.grid && gridToLatLon(s.grid) != null);
 }
 
 /** Header cyclers. ★★ THE APP NO LONGER CYCLES — v10 replaced these with popup menus ("a step-rate
