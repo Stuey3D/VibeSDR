@@ -101,6 +101,12 @@ public:
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return -1.0; }  ///< inside the OS's media service — not ours to measure
     bool switchPending() const { return false; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
     int64_t concealed() const { return 0; }
     const char* backend() const { return "AMediaCodec"; }
     AacDecoder() = default;
@@ -455,6 +461,12 @@ public:
     void conceal(int, AacPcm&) {}
     int unitFrames() const { return 0; }
     bool switchPending() const { return false; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
     int64_t concealed() const { return 0; }
     /** ★ The CHILD's CPU (user + system), so the DAB panel can show what the decoder costs: /proc/<pid>/stat on Linux,
      *  proc_pid_rusage on macOS. Cumulative for the current child; -1 when there is none. */
@@ -663,6 +675,12 @@ public:
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return useFf_ ? ff_.cpuSeconds() : -1.0; }
     bool switchPending() const { return false; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
     int64_t concealed() const { return 0; }
     /** ★ VIBE_AAC_APPLE=1 forces AudioToolbox — read once, here, so dab-offline can measure both. */
     AacDecoderPlatform() : useFf_(ff_.available() && !getenv("VIBE_AAC_APPLE")) {}
@@ -695,26 +713,43 @@ class AacDecoder {
 public:
     static constexpr bool kExactFrames = false;    ///< not ALWAYS exact — ask exactFrames()
     AacDecoder() { useFaad_ = want(); }
+    /* ★★★ FAAD2 RUNS ON ITS OWN THREAD (vibe-faad2 — AacDecoderFaadAsync): its decode and conceal calls return at once
+     *  and the PCM arrives through the sink. FFmpeg (a child process) and the others decode in the call, as before.
+     *  ★ VIBE_DAB_FAAD_INLINE=1: FAAD2 decodes in the call instead, on the DAB thread, exactly as before the codec had a
+     *    thread of its own — the A/B for measuring what the thread moves off the demodulator (and a way back). */
+    static bool inlineFaad() { static const bool v = [] { const char* e = std::getenv("VIBE_DAB_FAAD_INLINE"); return e && e[0] == '1'; }(); return v; }
+    bool async() const { return useFaad_ && !inlineFaad(); }
+    uint64_t inFlightFrames() const { return async() ? faad_.inFlightFrames() : 0; }
+    uint64_t dropped() const { return faad_.dropped(); }
+    uint32_t generation() const { return faad_.generation(); }
+    void setSink(AacDecoderFaadAsync::Sink s) { faad_.setSink(std::move(s)); }
+    void stop() { faad_.stop(); }
+    double cpuDecodeSeconds() const { return !useFaad_ ? -1.0 : inlineFaad() ? sync_.cpuDecodeSeconds() : faad_.cpuDecodeSeconds(); }
+    double cpuResampleSeconds() const { return !useFaad_ ? -1.0 : inlineFaad() ? sync_.cpuResampleSeconds() : faad_.cpuResampleSeconds(); }
     bool exactFrames() const { return useFaad_; }
     bool canConceal() const { return useFaad_; }
-    void conceal(int n, AacPcm& out) { if (useFaad_) faad_.conceal(n, out); }
-    int unitFrames() const { return useFaad_ ? faad_.unitFrames() : 0; }
-    double cpuSeconds() const { return useFaad_ ? faad_.cpuSeconds() : plat_.cpuSeconds(); }
+    void conceal(int n, AacPcm& out) { if (!useFaad_) return; if (inlineFaad()) sync_.conceal(n, out); else faad_.conceal(n, out); }
+    int unitFrames() const { return !useFaad_ ? 0 : inlineFaad() ? sync_.unitFrames() : faad_.unitFrames(); }
+    double cpuSeconds() const { return !useFaad_ ? plat_.cpuSeconds() : inlineFaad() ? sync_.cpuSeconds() : faad_.cpuSeconds(); }
     bool switchPending() const { return want() != useFaad_; }
     bool available() const { return useFaad_ ? true : plat_.available(); }
-    const char* backend() const { return useFaad_ ? faad_.backend() : plat_.backend(); }
-    int restarts() const { return useFaad_ ? faad_.restarts() : plat_.restarts(); }
-    bool decode(const uint8_t* adts, size_t n, AacPcm& out) { return useFaad_ ? faad_.decode(adts, n, out) : plat_.decode(adts, n, out); }
-    void drain(AacPcm& out) { if (useFaad_) faad_.drain(out); else plat_.drain(out); }
-    void close() { faad_.close(); plat_.close(); }
-    void reset() { useFaad_ = want(); faad_.reset(); plat_.reset(); }
-    int rateHz()   const { return useFaad_ ? faad_.rateHz()   : plat_.rateHz(); }
-    int channels() const { return useFaad_ ? faad_.channels() : plat_.channels(); }
-    int64_t concealed() const { return faad_.concealed(); }
+    const char* backend() const { return useFaad_ ? "FAAD2" : plat_.backend(); }
+    int restarts() const { return !useFaad_ ? plat_.restarts() : inlineFaad() ? sync_.restarts() : faad_.restarts(); }
+    bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
+        if (!useFaad_) return plat_.decode(adts, n, out);
+        return inlineFaad() ? sync_.decode(adts, n, out) : faad_.decode(adts, n, out);
+    }
+    void drain(AacPcm& out) { if (!useFaad_) plat_.drain(out); }
+    void close() { faad_.close(); sync_.close(); plat_.close(); }
+    void reset() { useFaad_ = want(); faad_.reset(); sync_.reset(); plat_.reset(); }
+    int rateHz()   const { return !useFaad_ ? plat_.rateHz()   : inlineFaad() ? sync_.rateHz()   : faad_.rateHz(); }
+    int channels() const { return !useFaad_ ? plat_.channels() : inlineFaad() ? sync_.channels() : faad_.channels(); }
+    int64_t concealed() const { return inlineFaad() ? sync_.concealed() : faad_.concealed(); }
 private:
     static bool want() { const int e = dabAacEnvChoice(); return (e >= 0 ? e : dabAacChoice().load(std::memory_order_relaxed)) == 1; }
     AacDecoderPlatform plat_;
-    AacDecoderFaad faad_;
+    AacDecoderFaadAsync faad_;
+    AacDecoderFaad sync_;      ///< only with VIBE_DAB_FAAD_INLINE=1
     bool useFaad_ = false;
 };
 #else
@@ -736,6 +771,12 @@ public:
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return -1.0; }
     bool switchPending() const { return false; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
     int64_t concealed() const { return 0; }
     bool available() const { return false; }
     const char* backend() const { return "none"; }

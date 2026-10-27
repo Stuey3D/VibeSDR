@@ -67,7 +67,16 @@ inline bool dabScanLabelsOn() {
 
 class DabService {
 public:
-        ~DabService() { stopWorker(); }
+        /* ★★ FAAD2's PCM comes back from its own thread (vibe-faad2 — AacDecoderFaadAsync) into the same entry point the
+         *  inline decoders use. A block of an older generation (a reset happened since it was queued) is dropped under pm_,
+         *  the lock every reset path takes to clear pcm_, so the old service's audio never lands after the new one began. */
+        DabService() {
+            aac_.setSink([this](uint32_t gen, const float* pcm, size_t n) {
+                if (gen != aac_.generation()) return;
+                pushPcm48Stereo(pcm, n, 2, int(kAudioRateHz), gen);
+            });
+        }
+        ~DabService() { stopWorker(); aac_.stop(); }
 
 /** The rate every listener socket is fed at, whatever the service was coded at. */
     static constexpr uint32_t kAudioRateHz = 48000;
@@ -134,7 +143,7 @@ private:
         cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();   // ★ and the gallery it belonged to
         spiSid_ = 0; packets_.reset(); carousel_.reset(); spiLogoRefs_.clear(); spiSeen_ = 0; cacheLoadedEid_ = 0;   // ★ a new multiplex, a new carousel
         // ★ A new programme starts a new clock; catching up on the old one would be a wall of silence.
-        pcmOwed_ = 0; pcmPushed_ = 0;
+        pcmOwed_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); pcmPushed_ = 0; }   // ★ under pm_: vibe-faad2 pushes without m_; after aac_.reset(), so a block that slipped in before the new generation goes too
         resampleReset();
     }
 public:
@@ -148,6 +157,11 @@ public:
         settleDrop_ = size_t(seconds * rate);
     }
 
+    /** ★ DAB+ units FAAD2's own thread could not take in time (concealed, never waited for) — monotonic; the health
+     *  pill's "TOO HEAVY" reads it (vibehealth::BehindWatch). An atomic: no lock. */
+    uint64_t aacDropped() const { return aac_.dropped(); }
+    /** ★ TEST HOOK (dab-unitlog VIBE_UNITLOG_FAST): IQ samples fed but not yet taken by the DAB worker. */
+    uint64_t inputPendingForTest() { std::lock_guard<std::mutex> ik(inM_); return inSamples_; }
     int  channel()   const { return channel_; }
     /** ★ The block's NAME ("11A"), for anything that has to describe the tuning to a person —
      *  the admin page's listener table, which showed "216.928 MHz WFM" for a receiver that was
@@ -172,7 +186,7 @@ public:
         lsfOrphans_ = 0; aacDecoded_ = 0; aacPcmPerAu_ = 0;
         sfFrames_ = sfBadLen_ = sfTried_ = sfOk_ = 0; ausOut_ = 0;
         rsCorrected_ = rsUncorrected_ = 0; sfInvalid_ = 0; sfFireBad_ = 0; auIn_ = auBad_ = 0;
-        pcmFilled_ = 0; pcmPushed_ = 0;
+        pcmFilled_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcmPushed_ = 0; }
     }
     void setService(uint32_t sid) {
         std::lock_guard<std::mutex> lk(m_);
@@ -200,7 +214,7 @@ public:
         { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); }
         pad_.reset();
         slide_ = Slide{}; cats_.clear(); slideAlert_ = 0; slideClickUrl_.clear();
-        pcmOwed_ = 0; pcmPushed_ = 0;
+        pcmOwed_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); pcmPushed_ = 0; }   // ★ under pm_: vibe-faad2 pushes without m_; after aac_.reset(), so a block that slipped in before the new generation goes too
         resampleReset();
         /* ★★★ AND DROP ANY HELD HALF-FRAME. lsfPend_ carries the first half of a 24 kHz Layer II
          *  frame between calls; a service or multiplex change mid-pair would otherwise join it to
@@ -396,7 +410,7 @@ public:
                     requestMp2Reset_(); aac_.reset(); pad_.reset(); { std::lock_guard<std::mutex> ak(adtsM_); adts_.clear(); } sf_.clear();
                     aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
                     { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); }
-                    pcmOwed_ = 0; pcmPushed_ = 0; resampleReset();
+                    pcmOwed_ = 0; { std::lock_guard<std::mutex> plk(pm_); pcm_.clear(); pcmPushed_ = 0; } resampleReset();
                 }
                 return false;      // ★ as before: a block that meets the settle is discarded whole
             }
@@ -409,6 +423,7 @@ public:
         inCv_.notify_all();
         if (worker_.joinable()) worker_.join();
         stopMp2_();
+        aac_.stop();   // ★ vibe-faad2 — started again by the next DAB+ unit
         started_ = false;
     }
 
@@ -871,11 +886,11 @@ public:
          *  numbers side by side that is indistinguishable from "DAB does not decode here". */
         /* ★ pcm_ belongs to pm_, not m_ (see takePcm): the audio thread pops it while this runs.
          *  ThreadSanitizer, replaying the bench multiplex (2026-10-06). m_ then pm_ is the allowed order. */
-        size_t pcmAvailNow = 0;
-        { std::lock_guard<std::mutex> plk(pm_); pcmAvailNow = pcm_.size() / 2; }
+        size_t pcmAvailNow = 0; uint64_t pcmPushedNow = 0;
+        { std::lock_guard<std::mutex> plk(pm_); pcmAvailNow = pcm_.size() / 2; pcmPushedNow = pcmPushed_; }
         const int nb = snprintf(b, sizeof b,
                  ",\"channel\":\"%s\",\"centreHz\":%u,\"scf\":[%u,%u,%u,%u,%u],\"mp2Crc\":%u,\"mp2In\":%u,\"mp2Bad\":%u,\"mp2Out\":%u,\"mp2Concealed\":%u,\"mp2BerGated\":%u,\"scfConcealed\":%u,\"scfClamped\":%u,\"mp2HdrBad\":%u,\"mp2CrcBad\":%u,\"mp2NoSync\":%u,\"mp2TooLong\":%u,\"lsfOrphans\":%u,\"noSyncGaps\":\"%s\",\"aacDecoded\":%u,\"aacServerSide\":%s,\"aacRateHz\":%d,\"aacCh\":%d,\"aacPcmPerAu\":%u,\"pcmPushed\":%llu,\"pcmAvail\":%u,\"pcmFilled\":%u,\"syncJumps\":%u,\"samplesIn\":%llu,\"pushCalls\":%u,\"pushOk\":%u,\"dropped\":%u,\"sfFrames\":%u,\"sfBadLen\":%u,\"sfTried\":%u,\"sfOk\":%u,\"aus\":%u,\"rfCentreHz\":%.0f,\"rfRateHz\":%.0f,\"label\":\"%s\",\"eid\":%u",
-                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2BerGated_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushed_, (unsigned)pcmAvailNow, pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_.load(std::memory_order_relaxed), rfRate_.load(std::memory_order_relaxed),
+                 channel_ >= 0 ? kBandIII[channel_].name : "", centreHz(), scfChecked_, scfOk_[0], scfOk_[1], scfOk_[2], scfOk_[3], mp2WithCrc_, mp2In_, mp2Bad_, mp2Out_, mp2Concealed_, mp2BerGated_, mp2_.scfConcealed(), mp2_.scfClamped(), mp2_.hdrBad(), mp2_.crcBad(), mp2_.hdrNoSync(), mp2_.hdrTooLong(), lsfOrphans_, mp2_.noSyncGaps().c_str(), aacDecoded_, aac_.available() ? "true" : "false", aac_.rateHz(), aac_.channels(), aacPcmPerAu_, (unsigned long long)pcmPushedNow, (unsigned)pcmAvailNow, pcmFilled_, syncJumps_, (unsigned long long)samplesIn_, pushCalls_, pushOk_, dropped_, sfFrames_, sfBadLen_, sfTried_, sfOk_, ausOut_, rfCentre_.load(std::memory_order_relaxed), rfRate_.load(std::memory_order_relaxed),
                  esc(e.label).c_str(), unsigned(e.eid));
         j += b;
         const int nb2 = snprintf(b, sizeof b,
@@ -1196,6 +1211,8 @@ public:
                 snprintf(cb, sizeof cb, ",\"aacConcealed\":%lld,\"aacChoice\":%s", (long long)aac_.concealed(),
                          dabFaad2Built() ? (aac_.exactFrames() && aac_.canConceal() ? "\"faad2\"" : "\"platform\"") : "null");
                 j += cb;
+                // ★ units the codec's own thread could not take in time (concealed, never waited for) — vibe-faad2
+                if (aac_.async()) { snprintf(cb, sizeof cb, ",\"aacDropped\":%llu", (unsigned long long)aac_.dropped()); j += cb; }
             }
             const auto& ir = rx_.impulseResponse();
             scA = j.size();
@@ -1665,7 +1682,7 @@ private:
         static const bool on = std::getenv("VIBE_DAB_SCAN_HOLD") && std::getenv("VIBE_DAB_SCAN_HOLD")[0] == '1';
         if (!on) return;
         scanHoldUntil_ = nowSec() + kScanHoldS;
-        scanHoldPcm_ = pcmPushed_;
+        { std::lock_guard<std::mutex> plk(pm_); scanHoldPcm_ = pcmPushed_; }
         for (size_t i = 0; i < kScanSlots && i < rx_.scanSlots(); ++i) rx_.scanSelect(i, 0);
         scanIdled_ = true;
     }
@@ -1684,7 +1701,8 @@ private:
         /* ★★ NOT WHILE A STATION IS STARTING. The slots were idled by holdScanForNewService_(); leave them so
          *  until the new service has pushed audio (it is playing) or the hold expires. */
         if (scanHoldUntil_ > 0) {
-            if (pcmPushed_ > scanHoldPcm_ || nowSec() > scanHoldUntil_) scanHoldUntil_ = 0;
+            uint64_t pushedNow; { std::lock_guard<std::mutex> plk(pm_); pushedNow = pcmPushed_; }
+            if (pushedNow > scanHoldPcm_ || nowSec() > scanHoldUntil_) scanHoldUntil_ = 0;
             else return;
         }
         scanIdled_ = false;
@@ -2005,9 +2023,10 @@ private:
      *  rather than splicing two different pieces of audio together. */
     void resampleReset() { rsPrimed_ = false; rsPhase_ = 0.0; rsPrevL_ = rsPrevR_ = 0.0f; rsRate_ = 0; }
 
-    void pushPcm48Stereo(const float* data, size_t nSamples, int nch, int srHz) {
+    void pushPcm48Stereo(const float* data, size_t nSamples, int nch, int srHz, int64_t aacGen = -1) {
         if (!data || nch <= 0 || srHz <= 0) return;
         std::lock_guard<std::mutex> plk(pm_);        // ★ see takePcm — pcm_ has its own lock
+        if (aacGen >= 0 && uint32_t(aacGen) != aac_.generation()) return;   // ★ vibe-faad2: a block from before a reset
         // ★ The carried state belongs to ONE rate. A service that changes it starts again.
         /* ★★★ A RATE CHANGE IS NOT A RESTART. This reset the interpolator whenever the input rate
          *  moved — and during the DAB+ start-up glide the measured rate moves on every access
@@ -2104,20 +2123,23 @@ private:
          *  stopping dead, and — because the decoder now knows there was a hole — the next good unit fades back in.
          *  unitsOut_ advances with them, so pumpDabPlus does not conceal the same stretch twice when audio returns.
          *  Called with m_ held (pumpDabPlus's Hold), which is what guards aac_. */
+        /* ★★ AND AUDIO IN FLIGHT IS NOT AUDIO MISSING (vibe-faad2): units queued for the codec's own thread are owed
+         *  but on their way — counted as pushed, or a busy moment over there would be "filled" twice. */
+        const uint64_t inFlight = aac_.inFlightFrames();
         if (aac_.canConceal() && aac_.unitFrames() > 0 && unitsOut_ >= 0) {
-            uint64_t pushed; { std::lock_guard<std::mutex> plk(pm_); pushed = pcmPushed_; }
+            uint64_t pushed; { std::lock_guard<std::mutex> plk(pm_); pushed = pcmPushed_ + inFlight; }
             if (pcmOwed_ <= pushed + kLagFrames) return;
             const uint64_t need = std::min<uint64_t>(pcmOwed_ - pushed - kLagFrames, kMaxFillPer);
             const int uf = aac_.unitFrames(), units = int((need + uint64_t(uf) - 1) / uint64_t(uf));
             AacPcm c; aac_.conceal(units, c);
             unitsOut_ += units;
-            pcmFilled_ += uint32_t(c.interleaved.size() / 2);
+            pcmFilled_ += aac_.async() ? uint32_t(units * uf) : uint32_t(c.interleaved.size() / 2);   // ★ vibe-faad2: queued
             pushPcm48Stereo(c.interleaved.data(), c.interleaved.size(), 2, int(kAudioRateHz));
             return;
         }
         std::lock_guard<std::mutex> plk(pm_);        // ★ see takePcm
-        if (pcmOwed_ <= pcmPushed_ + kLagFrames) return;
-        uint64_t need = pcmOwed_ - pcmPushed_ - kLagFrames;
+        if (pcmOwed_ <= pcmPushed_ + inFlight + kLagFrames) return;
+        uint64_t need = pcmOwed_ - pcmPushed_ - inFlight - kLagFrames;
         if (need > kMaxFillPer) need = kMaxFillPer;
         for (uint64_t i = 0; i < need; ++i) { pcm_.push_back(0.0f); pcm_.push_back(0.0f); }
         pcmPushed_ += need;
@@ -2258,6 +2280,10 @@ private:
                  *  write yields one unit's worth, so the count starts there. */
                 if (s.fmt.accessUnits > 0 && aacPrimed_) aacAuAcc_ += 1;
                 if (conceal) { const int64_t at = unit0 + (auK < s.auSlot.size() ? s.auSlot[auK] : int(auK)); unitsOut_ = std::max(unitsOut_, at) + 1; }
+                /* ★★★ FAAD2 DECODES ON vibe-faad2 (AacDecoderFaadAsync): the unit is queued and its PCM reaches pcm_
+                 *  through the sink. Nothing below applies to it — it is exact (no rate to learn), it conceals what it
+                 *  cannot decode (never "dry"), and its errors never fall back to ADTS on the wire. */
+                if (aac_.async()) { aac_.decode(pkt.data(), pkt.size(), dec); ++aacDecoded_; continue; }
                 const bool aacGot = aac_.decode(pkt.data(), pkt.size(), dec);
                 /* ★★★ A DECODER THAT STOPS ANSWERING IS REBUILT, NOT WAITED ON (Sony TV, 2026-09-19). After a
                  *  multiplex change Android's AAC decoder (OMX SoftAAC2) took units for a few seconds and then

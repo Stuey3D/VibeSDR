@@ -33013,6 +33013,9 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
     if (g_ism.running()) watch.note("ism", "ISM", g_ism.droppedBlocks(), nowMs);
     if (g_ndb.running()) watch.note("ndb", "NDB skimmer", g_ndb.droppedBlocks(), nowMs);
     if (g_ais.running()) watch.note("ais", "AIS", g_ais.droppedBlocks(), nowMs);
+    /* ★★ V12: DAB+ through FAAD2 decodes on its own thread (vibe-faad2) behind a drop-never-wait ring; a unit it could
+     *  not take in time is concealed — this box is too light for the decode on top of the multiplex. Monotonic. */
+    watch.note("dab:aac", "DAB+ audio decoder", g_dab.aacDropped(), nowMs);
     return watch.behind(nowMs);
 }
 

@@ -193,6 +193,25 @@ mkdir -p "$PREFIX/share/licences" && cp "$WORK/faad/COPYING" "$PREFIX/share/lice
 #     in libfaad_dab.a must carry the prefix, or a DRM and a DAB+ decoder in one process would share code by accident.
 #     vibe_dab_faad.h declares the six entry points it calls under their prefixed names. Same GPL-2.0-or-later licence
 #     and COPYING as the DRM build above; same float decoder, DRC off, no CLI.
+# ★★ V12 (2026-10-26, Stuart's Pi 2 — "FAAD2 · 11.9 % of a core" against FFmpeg's 6–10 %): THE DAB+ BUILD IS OPTIMISED.
+#   1. -funsafe-math-optimizations: GCC will not put float loops on ARMv7 NEON without it (NEON flushes denormals, so
+#      it is "not IEEE"), and reassociation lets reductions vectorise everywhere. Measured on the real unit logs: armhf
+#      guest instructions −23.5 %; output against the stock build max |diff| 1.6e-6, SNR 132.5 dB, level and every
+#      third octave identical to 0.0001 dB (docs/v12/DRM-AUDIO-ROUTES.md "DAB+ on its own thread").
+#   2. VibeSDR's FAAD2 PATCH SERIES (faad2-patches/series): NEON (ARMv7 + AArch64) / SSE2 / scalar versions of the hot
+#      stages, each documented in its own header, applied here in order — published with the source, never a silent
+#      fork. Applied to the plain (DAB+) build only, AFTER the DRM build above has been made from the untouched tree.
+FAAD_DAB_OPT="-funsafe-math-optimizations"
+FAAD_PATCHES="$(cd "$(dirname "$0")" && pwd)/faad2-patches"
+FAAD_SERIES=""
+if [ -f "$FAAD_PATCHES/series" ]; then
+  while IFS= read -r p; do
+    case "$p" in ""|\#*) continue ;; esac
+    patch -d "$WORK/faad" -p1 -s --no-backup-if-mismatch < "$FAAD_PATCHES/$p" || { echo "!! FAAD2 patch $p did not apply"; exit 1; }
+    FAAD_SERIES="$FAAD_SERIES $p"
+  done < "$FAAD_PATCHES/series"
+fi
+echo "==> FAAD2 (DAB+): $FAAD_DAB_OPT; patches:${FAAD_SERIES:- none}"
 # ★ TWO PASSES: the plain build defines globals the DRM one does not (LTP, MAIN prediction — measured on the Mac), so
 #   the list is read off a first, unprefixed plain build; the second, prefixed build is the one kept.
 cmake -S "$WORK/faad" -B "$WORK/faad/b0" -DCMAKE_BUILD_TYPE=Release "${CMAKE_TC[@]}" \
@@ -207,7 +226,7 @@ cmake -S "$WORK/faad" -B "$WORK/faad/b0" -DCMAKE_BUILD_TYPE=Release "${CMAKE_TC[
 [ "$(count '^#define' "$WORK/faad_dab_prefix.h")" -gt 50 ] || { echo "!! FAAD2 symbol list is short — refusing"; exit 1; }
 # ★ The forced include goes in through the ENVIRONMENT's CFLAGS (which CMake ADDS to a toolchain's own flags), not
 #   -DCMAKE_C_FLAGS (which REPLACES them): the ARMv6 toolchain carries --target there, and replacing it built x86 objects.
-CFLAGS="$CFLAGS -include $WORK/faad_dab_prefix.h" \
+CFLAGS="$CFLAGS $FAAD_DAB_OPT -include $WORK/faad_dab_prefix.h" \
 cmake -S "$WORK/faad" -B "$WORK/faad/bd" -DCMAKE_BUILD_TYPE=Release "${CMAKE_TC[@]}" \
       $([ "$PROFILE" = native ] && echo "-DCMAKE_C_COMPILER=$CC_ONLY") \
       -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF \
@@ -240,7 +259,7 @@ done
   echo "libopus $OPUS_VER sha256 $OPUS_SHA ${OPUS_EXTRA[*]}"
   echo "librtlsdr osmocom/rtl-sdr $RTL_SHA (DETACH_KERNEL_DRIVER)"
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_drm, float, GPL-2.0-or-later)"
-  echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_dab: the plain build, globals prefixed vibedab_, float, GPL-2.0-or-later)"
+  echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_dab: the plain build, globals prefixed vibedab_, float, GPL-2.0-or-later; $FAAD_DAB_OPT; VibeSDR patches:${FAAD_SERIES:- none})"
   echo "profile $PROFILE, CFLAGS '$CFLAGS', $CCVER"; } > "$PREFIX/BUILT-FROM"
 ls -l "$PREFIX/lib"
 echo "==> deps ($PROFILE): done"

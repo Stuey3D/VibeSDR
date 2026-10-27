@@ -1,0 +1,163 @@
+Subject: [PATCH 8/8] cfft, mdct, filtbank: the AAC core's inverse transform four lanes at a time
+
+VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
+as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh
+in the order of faad2-patches/series. Measured on real off-air DAB+ unit logs (HE-AAC v2, 21 logs, 1909 s):
+output against stock FAAD2 2.11.3 built with its own flags — see each header for the figures.
+
+The AAC-LC core every DAB+ service runs (alone on a 48 kHz AAC-LC service, under SBR on HE-AAC): the radix-4 complex
+FFT pass (passf4pos, along ido), the iMDCT's pre- and post-twiddles (faad_imdct), and the long window's overlap-add
+(ifilter_bank) — four lanes per instruction with the stock products and sums; ifilter_bank's 8 KB scratch buffer is no
+longer zeroed on every call (every window sequence's iMDCTs write all of it before it is read). Measured on a 60 s
+48 kHz AAC-LC stereo stream (1024-sample frames): armhf guest instructions stock 1519 M -> 770 M (patch 1 + flags)
+-> 537 M with this patch; output against stock max |diff| 3.0e-7, SNR 140.1 dB, level/spectrum/side-mid identical.
+
+--- a/libfaad/cfft.c
++++ b/libfaad/cfft.c
+@@ -43,6 +43,9 @@
+ #include <stdlib.h>
+ 
+ #include "cfft.h"
++#if !defined(FIXED_POINT)
++#include "vibe_simd4f.h"
++#endif
+ #include "cfft_tab.h"
+ 
+ 
+@@ -368,8 +371,32 @@
+             ac = 4*k*ido;
+             ah = k*ido;
+ 
+-            for (i = 0; i < ido; i++)
++            i = 0;
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++            /* VibeSDR (2026-10-26): four butterflies at a time along ido (vibe_simd4f.h), the stock arithmetic per lane */
++            for (; i + 4 <= ido; i += 4)
+             {
++                v4f ar, ai, br, bi, cr, ci, dr, di, t1r, t1i, t2r, t2i, t3r, t3i, t4r, t4i, c2r, c2i, c3r, c3i, c4r, c4i, wr, wi;
++                v4_ld2(cc[ac+i], ar, ai);
++                v4_ld2(cc[ac+i+ido], br, bi);
++                v4_ld2(cc[ac+i+2*ido], cr, ci);
++                v4_ld2(cc[ac+i+3*ido], dr, di);
++                t2r = v4_add(ar, cr); t1r = v4_sub(ar, cr); t2i = v4_add(ai, ci); t1i = v4_sub(ai, ci);
++                t3r = v4_add(br, dr); t4i = v4_sub(br, dr); t3i = v4_add(di, bi); t4r = v4_sub(di, bi);
++                c2r = v4_add(t1r, t4r); c4r = v4_sub(t1r, t4r); c2i = v4_add(t1i, t4i); c4i = v4_sub(t1i, t4i);
++                c3r = v4_sub(t2r, t3r); c3i = v4_sub(t2i, t3i);
++                v4_st2((real_t *)(ch + ah + i), v4_add(t2r, t3r), v4_add(t2i, t3i));
++                /* ComplexMult(&IM(y), &RE(y), IM(c), RE(c), RE(w), IM(w)): IM(y) = c_i w_r + c_r w_i, RE(y) = c_r w_r - c_i w_i */
++                v4_ld2((const real_t *)(wa1 + i), wr, wi);
++                v4_st2((real_t *)(ch + ah + i + l1*ido), v4_sub(v4_mul(c2r, wr), v4_mul(c2i, wi)), v4_add(v4_mul(c2i, wr), v4_mul(c2r, wi)));
++                v4_ld2((const real_t *)(wa2 + i), wr, wi);
++                v4_st2((real_t *)(ch + ah + i + 2*l1*ido), v4_sub(v4_mul(c3r, wr), v4_mul(c3i, wi)), v4_add(v4_mul(c3i, wr), v4_mul(c3r, wi)));
++                v4_ld2((const real_t *)(wa3 + i), wr, wi);
++                v4_st2((real_t *)(ch + ah + i + 3*l1*ido), v4_sub(v4_mul(c4r, wr), v4_mul(c4i, wi)), v4_add(v4_mul(c4i, wr), v4_mul(c4r, wi)));
++            }
++#endif
++            for (; i < ido; i++)
++            {
+                 complex_t c2, c3, c4, t1, t2, t3, t4;
+ 
+                 RE(t2) = RE(cc[ac+i]) + RE(cc[ac+i+2*ido]);
+--- a/libfaad/mdct.c
++++ b/libfaad/mdct.c
+@@ -56,6 +56,9 @@
+ 
+ #include "cfft.h"
+ #include "mdct.h"
++#if !defined(FIXED_POINT)
++#include "vibe_simd4f.h"
++#endif
+ #include "mdct_tab.h"
+ 
+ 
+@@ -155,7 +158,20 @@
+ #endif
+ 
+     /* pre-IFFT complex multiplication */
+-    for (k = 0; k < N4; k++)
++    k = 0;
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++    /* VibeSDR (2026-10-26): four at a time (vibe_simd4f.h) — ComplexMult's products and sums per lane */
++    for (; k + 4 <= N4; k += 4)
++    {
++        v4f x1, odd, lo, x2, cr, ci;
++        v4_ld2(X_in + 2*k, x1, odd);                     /* X_in[2k], [2k+2], [2k+4], [2k+6] */
++        v4_ld2(X_in + N2 - 8 - 2*k, lo, odd);            /* odd: X_in[N2-7-2k] … [N2-1-2k] */
++        x2 = v4_rev(odd);                                /* X_in[N2-1-2k], [N2-3-2k], … */
++        v4_ld2((const real_t *)(sincos + k), cr, ci);
++        v4_st2((real_t *)(Z1 + k), v4_sub(v4_mul(x2, cr), v4_mul(x1, ci)), v4_add(v4_mul(x1, cr), v4_mul(x2, ci)));
++    }
++#endif
++    for (; k < N4; k++)
+     {
+         ComplexMult(&IM(Z1[k]), &RE(Z1[k]),
+             X_in[2*k], X_in[N2 - 1 - 2*k], RE(sincos[k]), IM(sincos[k]));
+@@ -173,8 +189,18 @@
+ #endif
+ 
+     /* post-IFFT complex multiplication */
+-    for (k = 0; k < N4; k++)
++    k = 0;
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++    for (; k + 4 <= N4; k += 4)
+     {
++        v4f xr, xi, cr, ci;
++        v4_ld2((const real_t *)(Z1 + k), xr, xi);
++        v4_ld2((const real_t *)(sincos + k), cr, ci);
++        v4_st2((real_t *)(Z1 + k), v4_sub(v4_mul(xr, cr), v4_mul(xi, ci)), v4_add(v4_mul(xi, cr), v4_mul(xr, ci)));
++    }
++#endif
++    for (; k < N4; k++)
++    {
+         RE(x) = RE(Z1[k]);
+         IM(x) = IM(Z1[k]);
+         ComplexMult(&IM(Z1[k]), &RE(Z1[k]),
+--- a/libfaad/filtbank.c
++++ b/libfaad/filtbank.c
+@@ -39,6 +39,9 @@
+ #endif
+ 
+ #include "filtbank.h"
++#if !defined(FIXED_POINT)
++#include "vibe_simd4f.h"
++#endif
+ #include "syntax.h"
+ #include "kbd_win.h"
+ #include "sine_win.h"
+@@ -167,7 +170,13 @@
+                   uint8_t object_type, uint16_t frame_len)
+ {
+     int16_t i;
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++    /* VibeSDR: not zeroed — every window sequence's iMDCT(s) write all 2*frame_len samples read below (8 KB of memset
++     * per channel per frame was ~4 % of the decoder on a Pi 2) */
++    ALIGN real_t transf_buf[2*1024];
++#else
+     ALIGN real_t transf_buf[2*1024] = {0};
++#endif
+ 
+     const real_t *window_long = NULL;
+     const real_t *window_long_prev = NULL;
+@@ -219,6 +228,14 @@
+         /* perform iMDCT */
+         imdct_long(fb, freq_in, transf_buf, 2*nlong);
+ 
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++        /* VibeSDR (2026-10-26): the long window's overlap-add and the next overlap four samples at a time
++         * (vibe_simd4f.h) — the same products and sums; the compiler could not vectorise them (possible aliasing). */
++        for (i = 0; i < nlong; i+=4)
++            v4_st(time_out + i, v4_add(v4_ld(overlap + i), v4_mul(v4_ld(transf_buf + i), v4_ld(window_long_prev + i))));
++        for (i = 0; i < nlong; i+=4)
++            v4_st(overlap + i, v4_mul(v4_ld(transf_buf + nlong + i), v4_rev(v4_ld(window_long + nlong - 4 - i))));
++#else
+         /* add second half output of previous frame to windowed output of current frame */
+         for (i = 0; i < nlong; i+=4)
+         {
+@@ -236,6 +253,7 @@
+             overlap[i+2] = MUL_F(transf_buf[nlong+i+2],window_long[nlong-3-i]);
+             overlap[i+3] = MUL_F(transf_buf[nlong+i+3],window_long[nlong-4-i]);
+         }
++#endif
+         break;
+ 
+     case LONG_START_SEQUENCE:

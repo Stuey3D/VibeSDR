@@ -65,7 +65,10 @@ int main(int argc, char** argv) {
             static bool flipped = false;
             if (!flipped && fed >= std::atof(sw)) { flipped = true; vibedab::dabAacChoice().store(1 - vibedab::dabAacChoice().load()); std::printf("   [%.1f s] switch flipped\n", fed); }
         }
-        std::this_thread::sleep_until(t0 + microseconds((long long)(fed * 1e6)));
+        // ★ VIBE_UNITLOG_FAST=1: no real-time pacing — as fast as the machine goes (per-thread instruction counts under qemu)
+        static const bool fast = std::getenv("VIBE_UNITLOG_FAST") != nullptr;
+        if (!fast) std::this_thread::sleep_until(t0 + microseconds((long long)(fed * 1e6)));
+        else for (int w = 0; w < 20000 && svc.inputPendingForTest() > 0; ++w) std::this_thread::sleep_for(microseconds(200));   // ★ back-pressure: never ahead of the worker
         if (list && fed > (std::getenv("VIBE_LIST_SECS") ? std::atof(std::getenv("VIBE_LIST_SECS")) : 12.0)) break;
     }
     std::fclose(fp);

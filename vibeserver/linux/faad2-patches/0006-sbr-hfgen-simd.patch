@@ -1,0 +1,211 @@
+Subject: [PATCH 6/8] sbr_hfgen: prediction coefficients and the patch recursion four bands at a time
+
+VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
+as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh
+in the order of faad2-patches/series. Measured on real off-air DAB+ unit logs (HE-AAC v2, 21 logs, 1909 s):
+output against stock FAAD2 2.11.3 built with its own flags — see each header for the figures.
+
+The covariance sums behind calc_prediction_coef for four adjacent source bands at once (the same sums in the same
+order per lane), the coefficients from them exactly as calc_prediction_coef computes them, filled before patching
+(any band not covered is computed by the stock call); and the patch's second-order recursion for four adjacent target
+bands at once where all four are filtered (bw^2 > 0), each lane with its own a0/a1.
+
+--- a/libfaad/sbr_hfgen.c
++++ b/libfaad/sbr_hfgen.c
+@@ -37,6 +37,10 @@
+ 
+ #include "sbr_syntax.h"
+ #include "sbr_hfgen.h"
++#if !defined(FIXED_POINT)
++#include "vibe_simd4f.h"
++#include <string.h>
++#endif
+ #include "sbr_fbt.h"
+ 
+ /* static function declarations */
+@@ -45,6 +49,9 @@
+                                     complex_t *alpha_0, complex_t *alpha_1, real_t *rxx);
+ static void calc_aliasing_degree(sbr_info *sbr, real_t *rxx, real_t *deg);
+ #else
++#if !defined(FIXED_POINT) && !defined(SBR_LOW_POWER) && !defined(VIBE_FAAD_STOCK)
++static void vibe_alphas4(sbr_info *sbr, qmf_t Xlow[MAX_NTSRHFG][64], complex_t *alpha_0, complex_t *alpha_1, uint8_t *vibe_have);
++#endif
+ static void calc_prediction_coef(sbr_info *sbr, qmf_t Xlow[MAX_NTSRHFG][64],
+                                  complex_t *alpha_0, complex_t *alpha_1, uint8_t k);
+ #endif
+@@ -64,6 +71,9 @@
+ #ifdef SBR_LOW_POWER
+     ALIGN real_t rxx[64];
+ #endif
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++    uint8_t vibe_have[64];
++#endif
+ 
+     uint8_t offset = sbr->tHFAdj;
+     uint8_t first = sbr->t_E[ch][0];
+@@ -84,11 +94,50 @@
+     calc_aliasing_degree(sbr, rxx, deg);
+ #endif
+ 
++#if !defined(FIXED_POINT) && !defined(SBR_LOW_POWER) && !defined(VIBE_FAAD_STOCK)
++    /* VibeSDR: every source band a patch reads, its prediction coefficients four bands at a time (vibe_acorr4); any
++     * left over are done by the stock call in the loop below */
++    vibe_alphas4(sbr, Xlow, alpha_0, alpha_1, vibe_have);
++#endif
+     /* actual HF generation */
+     for (i = 0; i < sbr->noPatches; i++)
+     {
+-        for (x = 0; x < sbr->patchNoSubbands[i]; x++)
++        x = 0;
++#if !defined(FIXED_POINT) && !defined(SBR_LOW_POWER) && !defined(VIBE_FAAD_STOCK)
++        /* VibeSDR (2026-10-26): four adjacent bands of a patch at a time where all four are filtered (bw2 > 0) and
++         * their coefficients are ready — the stock recursion per lane, each lane with its own a0/a1. */
++        for (; x + 4 <= sbr->patchNoSubbands[i]; x += 4)
+         {
++            ALIGN real_t A0r[4], A0i[4], A1r[4], A1i[4];
++            uint8_t q, j, k0 = sbr->kx + x, p0 = sbr->patchStartSubband[i] + x, ok = 1;
++            for (q = 0; q < i; q++) k0 += sbr->patchNoSubbands[q];
++            if (k0 + 4 > 64 || p0 + 4 > 64) break;
++            for (j = 0; j < 4; j++)
++            {
++                const real_t bw = sbr->bwArray[ch][sbr->table_map_k_to_g[k0 + j]], bw2 = MUL_C(bw, bw);
++                if (!(bw2 > 0) || !vibe_have[p0 + j]) { ok = 0; break; }
++                A0r[j] = MUL_C(RE(alpha_0[p0 + j]), bw); A1r[j] = MUL_C(RE(alpha_1[p0 + j]), bw2);
++                A0i[j] = MUL_C(IM(alpha_0[p0 + j]), bw); A1i[j] = MUL_C(IM(alpha_1[p0 + j]), bw2);
++            }
++            if (!ok) break;   /* the stock loop below takes it from here */
++            {
++                const v4f a0r = v4_ld(A0r), a0i = v4_ld(A0i), a1r = v4_ld(A1r), a1i = v4_ld(A1i);
++                v4f t1r, t1i, t2r, t2i, t3r, t3i;
++                v4_ld2(Xlow[first - 2 + offset][p0], t2r, t2i);
++                v4_ld2(Xlow[first - 1 + offset][p0], t3r, t3i);
++                for (l = first; l < last; l++)
++                {
++                    t1r = t2r; t1i = t2i; t2r = t3r; t2i = t3i;
++                    v4_ld2(Xlow[l + offset][p0], t3r, t3i);
++                    v4_st2(Xhigh[l + offset][k0],
++                           v4_add(t3r, v4_sub(v4_add(v4_sub(v4_mul(a0r, t2r), v4_mul(a0i, t2i)), v4_mul(a1r, t1r)), v4_mul(a1i, t1i))),
++                           v4_add(t3i, v4_add(v4_add(v4_add(v4_mul(a0i, t2r), v4_mul(a0r, t2i)), v4_mul(a1i, t1r)), v4_mul(a1r, t1i))));
++                }
++            }
++        }
++#endif
++        for (; x < sbr->patchNoSubbands[i]; x++)
++        {
+             real_t a0_r, a0_i, a1_r, a1_i;
+             real_t bw, bw2;
+             uint8_t q, p, k, g;
+@@ -120,6 +169,9 @@
+                 real_t temp1_r, temp2_r, temp3_r;
+ #ifndef SBR_LOW_POWER
+                 real_t temp1_i, temp2_i, temp3_i;
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++                if (!vibe_have[p])
++#endif
+                 calc_prediction_coef(sbr, Xlow, alpha_0, alpha_1, p);
+ #endif
+ 
+@@ -473,11 +525,103 @@
+         (MUL_R(RE(alpha_1[k]),RE(alpha_1[k])) + MUL_R(IM(alpha_1[k]),IM(alpha_1[k])) <= REAL_CONST(16)))
+         return;
+     /* Fallback */
++    RE(alpha_0[k]) = 0;
++    IM(alpha_0[k]) = 0;
++    RE(alpha_1[k]) = 0;
++    IM(alpha_1[k]) = 0;
++}
++
++#if !defined(FIXED_POINT) && !defined(VIBE_FAAD_STOCK)
++/* VibeSDR (2026-10-26): the covariance sums of auto_correlation for FOUR adjacent QMF bands at once (vibe_simd4f.h) —
++ * the same sums in the same order per lane — and the prediction coefficients from them exactly as calc_prediction_coef
++ * computes them. hf_generation fills its alpha tables four bands at a time with these before patching. */
++static void vibe_acorr4(sbr_info *sbr, acorr_coef ac[4], qmf_t buffer[MAX_NTSRHFG][64], uint8_t bd, uint8_t len)
++{
++    const real_t rel = 1 / (1 + 1e-6f);
++    const uint8_t offset = sbr->tHFAdj;
++    v4f r01r = v4_dup(0), r01i = v4_dup(0), r02r = v4_dup(0), r02i = v4_dup(0), r11r = v4_dup(0);
++    v4f t1r, t1i, t2r, t2i, t3r, t3i, t4r, t4i, t5r, t5i, x, y;
++    ALIGN real_t o[13][4];
++    int8_t j;
++    uint8_t q;
++    v4_ld2(buffer[offset - 2][bd], t2r, t2i);
++    v4_ld2(buffer[offset - 1][bd], t3r, t3i);
++    t4r = t2r; t4i = t2i; t5r = t3r; t5i = t3i;
++    t1r = t1i = v4_dup(0);
++    for (j = offset; j < len + offset; j++)
++    {
++        t1r = t2r; t1i = t2i; t2r = t3r; t2i = t3i;
++        v4_ld2(buffer[j][bd], t3r, t3i);
++        r01r = v4_add(r01r, v4_add(v4_mul(t3r, t2r), v4_mul(t3i, t2i)));
++        r01i = v4_add(r01i, v4_sub(v4_mul(t3i, t2r), v4_mul(t3r, t2i)));
++        r02r = v4_add(r02r, v4_add(v4_mul(t3r, t1r), v4_mul(t3i, t1i)));
++        r02i = v4_add(r02i, v4_sub(v4_mul(t3i, t1r), v4_mul(t3r, t1i)));
++        r11r = v4_add(r11r, v4_add(v4_mul(t2r, t2r), v4_mul(t2i, t2i)));
++    }
++    x = v4_add(v4_sub(r01r, v4_add(v4_mul(t3r, t2r), v4_mul(t3i, t2i))), v4_add(v4_mul(t5r, t4r), v4_mul(t5i, t4i)));
++    y = v4_add(v4_sub(r01i, v4_sub(v4_mul(t3i, t2r), v4_mul(t3r, t2i))), v4_sub(v4_mul(t5i, t4r), v4_mul(t5r, t4i)));
++    v4_st(o[0], x); v4_st(o[1], y);
++    v4_st(o[2], v4_add(v4_sub(r11r, v4_add(v4_mul(t2r, t2r), v4_mul(t2i, t2i))), v4_add(v4_mul(t4r, t4r), v4_mul(t4i, t4i))));
++    v4_st(o[3], r01r); v4_st(o[4], r01i); v4_st(o[5], r02r); v4_st(o[6], r02i); v4_st(o[7], r11r);
++    for (q = 0; q < 4; q++)
++    {
++        RE(ac[q].r12) = o[0][q]; IM(ac[q].r12) = o[1][q]; RE(ac[q].r22) = o[2][q];
++        RE(ac[q].r01) = o[3][q]; IM(ac[q].r01) = o[4][q];
++        RE(ac[q].r02) = o[5][q]; IM(ac[q].r02) = o[6][q];
++        RE(ac[q].r11) = o[7][q];
++        ac[q].det = MUL_R(RE(ac[q].r11), RE(ac[q].r22)) - MUL_F(rel, (MUL_R(RE(ac[q].r12), RE(ac[q].r12)) + MUL_R(IM(ac[q].r12), IM(ac[q].r12))));
++    }
++}
++/** calc_prediction_coef's arithmetic, from a ready acorr_coef */
++static void vibe_alpha_from_ac(const acorr_coef *pac, complex_t *alpha_0, complex_t *alpha_1, uint8_t k)
++{
++    real_t tmp;
++    const acorr_coef ac = *pac;
++    if (ac.det == 0)
++    {
++        RE(alpha_1[k]) = 0;
++        IM(alpha_1[k]) = 0;
++    } else {
++        tmp = REAL_CONST(1.0) / ac.det;
++        RE(alpha_1[k]) = (MUL_R(RE(ac.r01), RE(ac.r12)) - MUL_R(IM(ac.r01), IM(ac.r12)) - MUL_R(RE(ac.r02), RE(ac.r11))) * tmp;
++        IM(alpha_1[k]) = (MUL_R(IM(ac.r01), RE(ac.r12)) + MUL_R(RE(ac.r01), IM(ac.r12)) - MUL_R(IM(ac.r02), RE(ac.r11))) * tmp;
++    }
++    if (RE(ac.r11) == 0)
++    {
++        RE(alpha_0[k]) = 0;
++        IM(alpha_0[k]) = 0;
++    } else {
++        tmp = 1.0f / RE(ac.r11);
++        RE(alpha_0[k]) = -(RE(ac.r01) + MUL_R(RE(alpha_1[k]), RE(ac.r12)) + MUL_R(IM(alpha_1[k]), IM(ac.r12))) * tmp;
++        IM(alpha_0[k]) = -(IM(ac.r01) + MUL_R(IM(alpha_1[k]), RE(ac.r12)) - MUL_R(RE(alpha_1[k]), IM(ac.r12))) * tmp;
++    }
++    if ((MUL_R(RE(alpha_0[k]),RE(alpha_0[k])) + MUL_R(IM(alpha_0[k]),IM(alpha_0[k])) <= REAL_CONST(16)) &&
++        (MUL_R(RE(alpha_1[k]),RE(alpha_1[k])) + MUL_R(IM(alpha_1[k]),IM(alpha_1[k])) <= REAL_CONST(16)))
++        return;
+     RE(alpha_0[k]) = 0;
+     IM(alpha_0[k]) = 0;
+     RE(alpha_1[k]) = 0;
+     IM(alpha_1[k]) = 0;
+ }
++/** hf_generation's prediction coefficients for every source band its patches read, four bands at a time */
++static void vibe_alphas4(sbr_info *sbr, qmf_t Xlow[MAX_NTSRHFG][64], complex_t *alpha_0, complex_t *alpha_1, uint8_t *vibe_have)
++{
++    uint8_t i;
++    memset(vibe_have, 0, 64);
++    for (i = 0; i < sbr->noPatches; i++)
++    {
++        uint8_t p0 = sbr->patchStartSubband[i], pn = sbr->patchNoSubbands[i], pp;
++        for (pp = p0; pp + 4 <= p0 + pn && pp + 4 <= 64; pp += 4)
++        {
++            acorr_coef ac4[4];
++            uint8_t q;
++            if (vibe_have[pp] && vibe_have[pp + 1] && vibe_have[pp + 2] && vibe_have[pp + 3]) continue;
++            vibe_acorr4(sbr, ac4, Xlow, pp, sbr->numTimeSlotsRate + 6);
++            for (q = 0; q < 4; q++) { vibe_alpha_from_ac(&ac4[q], alpha_0, alpha_1, (uint8_t)(pp + q)); vibe_have[pp + q] = 1; }
++        }
++    }
++}
++#endif
+ #else
+ static void calc_prediction_coef_lp(sbr_info *sbr, qmf_t Xlow[MAX_NTSRHFG][64],
+                                     complex_t *alpha_0, complex_t *alpha_1, real_t *rxx)

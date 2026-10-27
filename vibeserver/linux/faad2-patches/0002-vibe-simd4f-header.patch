@@ -1,0 +1,155 @@
+Subject: [PATCH 2/8] vibe_simd4f.h: four floats at a time — NEON (ARMv7, AArch64), SSE2, plain C
+
+VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
+as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh
+in the order of faad2-patches/series. Measured on real off-air DAB+ unit logs (HE-AAC v2, 21 logs, 1909 s):
+output against stock FAAD2 2.11.3 built with its own flags — see each header for the figures.
+
+A small header the later patches are written in: load/store, add/sub/mul, multiply-accumulate (non-fused, as the
+scalar code), lane reverse, 2- and 4-way de-interleaving loads/stores, a 4x4 transpose and a lane transpose.
+VIBE_FAAD_SCALAR builds the plain-C path anywhere; VIBE_FAAD_STOCK compiles the stock functions instead of the patched
+ones (for comparison). Float build only: FIXED_POINT builds keep the stock code throughout.
+
+--- a/libfaad/vibe_simd4f.h
++++ b/libfaad/vibe_simd4f.h
+@@ -0,0 +1,140 @@
++/* vibe_simd4f.h — four floats at a time for FAAD2's SBR / PS / transform hot loops: NEON (ARMv7 and AArch64), SSE2,
++ * or plain C. Added by VibeSDR (2026-10-26) for its DAB+ build of FAAD2 2.11.3; not part of upstream FAAD2.
++ * GPL-2.0-or-later, as FAAD2.
++ *
++ * Why: on a Raspberry Pi 2 (Cortex-A7, the minimum VibeServer runs on) the stock float decoder runs every loop on the
++ * scalar VFP unit — GCC will not auto-vectorise float on ARMv7 NEON — and an HE-AAC v2 DAB+ service cost ~12 % of a
++ * core. These helpers are what the patched kernels are written in; each patched loop keeps the stock arithmetic
++ * (the same products and sums), only four lanes at a time, so the output stays within float rounding of stock FAAD2.
++ * VIBE_FAAD_SCALAR builds the plain-C path anywhere: how the vector paths are checked against it.
++ * Only for the float build (not FIXED_POINT). */
++#ifndef VIBE_SIMD4F_H
++#define VIBE_SIMD4F_H
++
++#if (defined(__ARM_NEON) || defined(__ARM_NEON__)) && !defined(VIBE_FAAD_SCALAR)
++#include <arm_neon.h>
++#define VIBE_V4_NEON 1
++#elif (defined(__SSE2__) || defined(_M_X64)) && !defined(VIBE_FAAD_SCALAR)
++#include <emmintrin.h>
++#define VIBE_V4_SSE2 1
++#endif
++
++#if VIBE_V4_NEON
++typedef float32x4_t v4f;
++static inline v4f v4_ld(const float *p) { return vld1q_f32(p); }
++static inline void v4_st(float *p, v4f v) { vst1q_f32(p, v); }
++static inline v4f v4_dup(float x) { return vdupq_n_f32(x); }
++static inline v4f v4_add(v4f a, v4f b) { return vaddq_f32(a, b); }
++static inline v4f v4_sub(v4f a, v4f b) { return vsubq_f32(a, b); }
++static inline v4f v4_mul(v4f a, v4f b) { return vmulq_f32(a, b); }
++static inline v4f v4_mla(v4f acc, v4f a, v4f b) { return vmlaq_f32(acc, a, b); }   /* acc + a*b */
++static inline v4f v4_mls(v4f acc, v4f a, v4f b) { return vmlsq_f32(acc, a, b); }   /* acc - a*b */
++static inline v4f v4_neg(v4f a) { return vnegq_f32(a); }
++/** lanes reversed: [a3 a2 a1 a0] */
++static inline v4f v4_rev(v4f a) { const float32x4_t r = vrev64q_f32(a); return vcombine_f32(vget_high_f32(r), vget_low_f32(r)); }
++/** p[0..7] interleaved re,im → re, im */
++#define v4_ld2(p, re, im) do { const float32x4x2_t t_ = vld2q_f32(p); (re) = t_.val[0]; (im) = t_.val[1]; } while (0)
++static inline void v4_st2(float *p, v4f re, v4f im) { float32x4x2_t t; t.val[0] = re; t.val[1] = im; vst2q_f32(p, t); }
++/** p[0..15] → four vectors of every fourth element (a 4x4 transpose on load), and back */
++#define v4_ld4(p, a, b, c, d) do { const float32x4x4_t t_ = vld4q_f32(p); (a) = t_.val[0]; (b) = t_.val[1]; (c) = t_.val[2]; (d) = t_.val[3]; } while (0)
++static inline void v4_st4(float *p, v4f a, v4f b, v4f c, v4f d) { float32x4x4_t t; t.val[0] = a; t.val[1] = b; t.val[2] = c; t.val[3] = d; vst4q_f32(p, t); }
++static inline float v4_hsum(v4f a) { const float32x2_t s = vadd_f32(vget_low_f32(a), vget_high_f32(a)); return vget_lane_f32(vpadd_f32(s, s), 0); }
++/** [a0 b0 a2 b2], [a1 b1 a3 b3] */
++#define v4_trn(a, b, p, q) do { const float32x4x2_t t_ = vtrnq_f32((a), (b)); (p) = t_.val[0]; (q) = t_.val[1]; } while (0)
++/** 4x4 transpose in registers: rows a..d become columns (lvalues, updated in place) */
++#define v4_transpose(a, b, c, d) do { const float32x4x2_t t0_ = vtrnq_f32((a), (b)), t1_ = vtrnq_f32((c), (d)); \
++    (a) = vcombine_f32(vget_low_f32(t0_.val[0]), vget_low_f32(t1_.val[0])); \
++    (b) = vcombine_f32(vget_low_f32(t0_.val[1]), vget_low_f32(t1_.val[1])); \
++    (c) = vcombine_f32(vget_high_f32(t0_.val[0]), vget_high_f32(t1_.val[0])); \
++    (d) = vcombine_f32(vget_high_f32(t0_.val[1]), vget_high_f32(t1_.val[1])); } while (0)
++/** lane-wise max */
++static inline v4f v4_max(v4f a, v4f b) { return vmaxq_f32(a, b); }
++/** lane = (a <= b) ? t : f, for NON-NEGATIVE finite a, b: compared as signed integers (their bit patterns order the
++ *  same way), because GCC on ARMv7 turns a NEON float compare into four VFP compares unless -ffast-math */
++static inline v4f v4_sel_le_nonneg(v4f a, v4f b, v4f t, v4f f) {
++    return vbslq_f32(vcleq_s32(vreinterpretq_s32_f32(a), vreinterpretq_s32_f32(b)), t, f);
++}
++#if defined(__aarch64__)
++static inline v4f v4_div(v4f a, v4f b) { return vdivq_f32(a, b); }
++#else
++/** ARMv7 NEON has no divide: a reciprocal estimate refined twice (within ~2 ulp of a true divide) */
++static inline v4f v4_div(v4f a, v4f b) {
++    float32x4_t r = vrecpeq_f32(b);
++    r = vmulq_f32(r, vrecpsq_f32(b, r));
++    r = vmulq_f32(r, vrecpsq_f32(b, r));
++    return vmulq_f32(a, r);
++}
++#endif
++#elif VIBE_V4_SSE2
++typedef __m128 v4f;
++static inline v4f v4_ld(const float *p) { return _mm_loadu_ps(p); }
++static inline void v4_st(float *p, v4f v) { _mm_storeu_ps(p, v); }
++static inline v4f v4_dup(float x) { return _mm_set1_ps(x); }
++static inline v4f v4_add(v4f a, v4f b) { return _mm_add_ps(a, b); }
++static inline v4f v4_sub(v4f a, v4f b) { return _mm_sub_ps(a, b); }
++static inline v4f v4_mul(v4f a, v4f b) { return _mm_mul_ps(a, b); }
++static inline v4f v4_mla(v4f acc, v4f a, v4f b) { return _mm_add_ps(acc, _mm_mul_ps(a, b)); }
++static inline v4f v4_mls(v4f acc, v4f a, v4f b) { return _mm_sub_ps(acc, _mm_mul_ps(a, b)); }
++static inline v4f v4_neg(v4f a) { return _mm_xor_ps(a, _mm_set1_ps(-0.0f)); }
++static inline v4f v4_rev(v4f a) { return _mm_shuffle_ps(a, a, _MM_SHUFFLE(0, 1, 2, 3)); }
++static inline void v4_ld2_(const float *p, v4f *re, v4f *im) {
++    const __m128 a = _mm_loadu_ps(p), b = _mm_loadu_ps(p + 4);
++    *re = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0)); *im = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
++}
++static inline void v4_st2(float *p, v4f re, v4f im) { _mm_storeu_ps(p, _mm_unpacklo_ps(re, im)); _mm_storeu_ps(p + 4, _mm_unpackhi_ps(re, im)); }
++static inline void v4_ld4_(const float *p, v4f *a, v4f *b, v4f *c, v4f *d) {
++    __m128 r0 = _mm_loadu_ps(p), r1 = _mm_loadu_ps(p + 4), r2 = _mm_loadu_ps(p + 8), r3 = _mm_loadu_ps(p + 12);
++    _MM_TRANSPOSE4_PS(r0, r1, r2, r3); *a = r0; *b = r1; *c = r2; *d = r3;
++}
++static inline void v4_st4(float *p, v4f a, v4f b, v4f c, v4f d) {
++    _MM_TRANSPOSE4_PS(a, b, c, d); _mm_storeu_ps(p, a); _mm_storeu_ps(p + 4, b); _mm_storeu_ps(p + 8, c); _mm_storeu_ps(p + 12, d);
++}
++static inline float v4_hsum(v4f a) { __m128 t = _mm_add_ps(a, _mm_movehl_ps(a, a)); t = _mm_add_ss(t, _mm_shuffle_ps(t, t, 1)); return _mm_cvtss_f32(t); }
++static inline void v4_trn_(v4f a, v4f b, v4f *p, v4f *q) {
++    const __m128 e = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0)), o = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
++    *p = _mm_shuffle_ps(e, e, _MM_SHUFFLE(3, 1, 2, 0)); *q = _mm_shuffle_ps(o, o, _MM_SHUFFLE(3, 1, 2, 0));
++}
++static inline void v4_transpose_(v4f *a, v4f *b, v4f *c, v4f *d) { _MM_TRANSPOSE4_PS(*a, *b, *c, *d); }
++static inline v4f v4_max(v4f a, v4f b) { return _mm_max_ps(a, b); }
++static inline v4f v4_sel_le_nonneg(v4f a, v4f b, v4f t, v4f f) { const __m128 m = _mm_cmple_ps(a, b); return _mm_or_ps(_mm_and_ps(m, t), _mm_andnot_ps(m, f)); }
++static inline v4f v4_div(v4f a, v4f b) { return _mm_div_ps(a, b); }
++#else
++typedef struct { float v[4]; } v4f;
++static inline v4f v4_ld(const float *p) { v4f r; int i; for (i = 0; i < 4; ++i) r.v[i] = p[i]; return r; }
++static inline void v4_st(float *p, v4f a) { int i; for (i = 0; i < 4; ++i) p[i] = a.v[i]; }
++static inline v4f v4_dup(float x) { v4f r; int i; for (i = 0; i < 4; ++i) r.v[i] = x; return r; }
++static inline v4f v4_add(v4f a, v4f b) { int i; for (i = 0; i < 4; ++i) a.v[i] += b.v[i]; return a; }
++static inline v4f v4_sub(v4f a, v4f b) { int i; for (i = 0; i < 4; ++i) a.v[i] -= b.v[i]; return a; }
++static inline v4f v4_mul(v4f a, v4f b) { int i; for (i = 0; i < 4; ++i) a.v[i] *= b.v[i]; return a; }
++static inline v4f v4_mla(v4f acc, v4f a, v4f b) { int i; for (i = 0; i < 4; ++i) acc.v[i] += a.v[i] * b.v[i]; return acc; }
++static inline v4f v4_mls(v4f acc, v4f a, v4f b) { int i; for (i = 0; i < 4; ++i) acc.v[i] -= a.v[i] * b.v[i]; return acc; }
++static inline v4f v4_neg(v4f a) { int i; for (i = 0; i < 4; ++i) a.v[i] = -a.v[i]; return a; }
++static inline v4f v4_rev(v4f a) { v4f r; int i; for (i = 0; i < 4; ++i) r.v[i] = a.v[3 - i]; return r; }
++static inline void v4_ld2_(const float *p, v4f *re, v4f *im) { int i; for (i = 0; i < 4; ++i) { re->v[i] = p[2 * i]; im->v[i] = p[2 * i + 1]; } }
++static inline void v4_st2(float *p, v4f re, v4f im) { int i; for (i = 0; i < 4; ++i) { p[2 * i] = re.v[i]; p[2 * i + 1] = im.v[i]; } }
++static inline void v4_ld4_(const float *p, v4f *a, v4f *b, v4f *c, v4f *d) { int i; for (i = 0; i < 4; ++i) { a->v[i] = p[4 * i]; b->v[i] = p[4 * i + 1]; c->v[i] = p[4 * i + 2]; d->v[i] = p[4 * i + 3]; } }
++static inline void v4_st4(float *p, v4f a, v4f b, v4f c, v4f d) { int i; for (i = 0; i < 4; ++i) { p[4 * i] = a.v[i]; p[4 * i + 1] = b.v[i]; p[4 * i + 2] = c.v[i]; p[4 * i + 3] = d.v[i]; } }
++static inline float v4_hsum(v4f a) { return (a.v[0] + a.v[1]) + (a.v[2] + a.v[3]); }
++static inline void v4_trn_(v4f a, v4f b, v4f *p, v4f *q) {
++    p->v[0] = a.v[0]; p->v[1] = b.v[0]; p->v[2] = a.v[2]; p->v[3] = b.v[2];
++    q->v[0] = a.v[1]; q->v[1] = b.v[1]; q->v[2] = a.v[3]; q->v[3] = b.v[3];
++}
++static inline void v4_transpose_(v4f *a, v4f *b, v4f *c, v4f *d) {
++    float m[16]; int i; v4_st(m, *a); v4_st(m + 4, *b); v4_st(m + 8, *c); v4_st(m + 12, *d);
++    for (i = 0; i < 4; ++i) { a->v[i] = m[4 * i]; b->v[i] = m[4 * i + 1]; c->v[i] = m[4 * i + 2]; d->v[i] = m[4 * i + 3]; }
++}
++#endif
++
++#if !VIBE_V4_NEON && !VIBE_V4_SSE2
++static inline v4f v4_max(v4f a, v4f b) { int i; for (i = 0; i < 4; ++i) a.v[i] = a.v[i] > b.v[i] ? a.v[i] : b.v[i]; return a; }
++static inline v4f v4_sel_le_nonneg(v4f a, v4f b, v4f t, v4f f) { int i; for (i = 0; i < 4; ++i) t.v[i] = a.v[i] <= b.v[i] ? t.v[i] : f.v[i]; return t; }
++static inline v4f v4_div(v4f a, v4f b) { int i; for (i = 0; i < 4; ++i) a.v[i] /= b.v[i]; return a; }
++#endif
++#if !VIBE_V4_NEON
++#define v4_ld2(p, re, im) v4_ld2_((p), &(re), &(im))
++#define v4_ld4(p, a, b, c, d) v4_ld4_((p), &(a), &(b), &(c), &(d))
++#define v4_trn(a, b, p, q) v4_trn_((a), (b), &(p), &(q))
++#define v4_transpose(a, b, c, d) v4_transpose_(&(a), &(b), &(c), &(d))
++#endif
++
++#endif

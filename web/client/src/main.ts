@@ -7242,7 +7242,9 @@ function dabRender() {
      *  the owner's choice in setup). Concealed = units FAAD2 filled in for ones that never arrived. */
     + (d.auIn && d.aacDec ? row('AAC decoder', escapeHtml(d.aacDec === 'ffmpeg' ? 'FFmpeg' : d.aacDec)
         + (d.aacCpu !== undefined ? ` · ${d.aacCpu.toFixed(2)} % of a core` : '')
-        + (d.aacConcealed ? ` · ${d.aacConcealed} units concealed` : '')) : '')
+        + (d.aacConcealed ? ` · ${d.aacConcealed} units concealed` : '')
+        // ★ V12: FAAD2 decodes on its own thread; a unit it could not take in time is concealed, never waited for
+        + (d.aacDropped ? ` · ${d.aacDropped} too late (decoder behind)` : '')) : '')
     + (d.sfTried ? row('Reed-Solomon', tl(`${d.rsFixed ?? 0} fixed, ${d.rsLost ?? 0} lost`, !(d.rsLost ?? 0) ? 'ok' : (d.rsLost ?? 0) / Math.max(1, d.sfTried) < 0.05 ? 'warn' : 'bad')) : '')
     + (d.aacRateHz ? row('AAC', `${d.aacRateHz} Hz, ${d.aacCh} ch${d.aacServerSide ? ', decoded on the server' : ''}`) : '')
     + (d.spi && d.spi.sid ? row('Service information', tl(`${d.spi.logoSvcs} services with logos · ${d.spi.complete} of ${d.spi.named} files · ${d.spi.groups} groups, ${d.spi.crcFail} bad, ${d.spi.lost} lost`, !d.spi.crcFail && !d.spi.lost ? 'ok' : (d.spi.crcFail + d.spi.lost) < Math.max(1, d.spi.groups) / 10 ? 'warn' : 'bad')) : '')
