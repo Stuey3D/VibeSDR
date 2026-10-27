@@ -14,7 +14,7 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
-import { IsmBox, type IsmReport, type IsmBand } from './ism';
+import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
@@ -8359,7 +8359,7 @@ function ismUiOn() {
   ismOn = true;
   syncAudioQuiet();
   if (spec) spec.ismHeld = true;
-  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d));
+  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d), () => ismMapOpen(), () => myPos());
   ismBox.show();
   ismLockControls(true);
   if (wf) wf.vfoHidden = true;   // ★ no LISTEN needle on a band capture
@@ -8371,6 +8371,7 @@ function ismUiOff() {
   ismReport = null;
   if (spec) spec.ismHeld = false;
   ismBox?.hide();
+  ismMapView?.hide();   // ★ the map is ISM's view: leaving ISM closes it
   ismLockControls(false);
   if (wf) wf.vfoHidden = false;
   setTimeout(syncDialTips, 0);
@@ -8484,7 +8485,27 @@ function onIsmReport(r: IsmReport | null) {
   audio?.holdHealing(8000);   // ★ nothing to hear on a band: the server sends no audio (as in ADS-B)
   const n = ismNeighbours();
   ismBox?.update(r, { down: !!n.prev, up: !!n.next });
+  ismMapRender();
   if (bandChanged) { syncDialTips(); renderFreq(); }
+}
+/* ★★ V12 THE ISM MAP (Stuart, 2026-10-27: "add a map button to the ISM decoder to switch to a Map view for the nodes etc").
+ *  The box's MAP opens the shared map view (tracks.ts TrackView, APRS's) with everything ISM lists that has a position —
+ *  Meshtastic and MeshCore nodes today — the receiver and range rings; CLOSE MAP goes back to the list. ISM carries on
+ *  under it either way. */
+let ismMapView: TrackView | null = null;
+function ismMapOpen() {
+  if (!ismMapView) ismMapView = new TrackView({
+    title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(),
+    icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()),
+  });
+  ismMapView.show(myPos());
+  ismMapRender();
+}
+function ismMapRender() {
+  if (!ismMapView?.open) return;
+  const r = ismReport;
+  const items = r ? r.devices.filter(ismOnMap) : [];
+  ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
 }
 
 /* ★★★ AIS MODE (V12, docs/v12/AIS-APRS.md) — ADS-B's shape on the page: the map IS the mode. The server puts the whole radio

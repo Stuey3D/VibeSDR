@@ -63,7 +63,11 @@ public:
         if (m.proto == "lora") r.lineLora = "LoRa" + mkDot() + "SF" + std::to_string(m.sf) + mkDot() + f1(m.bw / 1e3, m.bw < 1e5 ? 1 : 0) + " kHz"
                                            + mkDot() + "sync 0x" + hex2(m.sync) + mkDot() + std::to_string(m.len) + " bytes";
         bool news = fresh;
-        if (!m.text.empty()) {
+        /* ★ ONE MESSAGE, ONCE: a mesh floods every message, so the same text from the same sender arrives again from each
+         *  relay in range (and a sender retries). The same sender + text inside 10 minutes is the same message. */
+        bool dup = false;
+        for (const Text& x : msgs_) if (x.net == m.proto && x.text == m.text && (x.node == m.node || (m.proto == "meshcore" && x.from == m.from)) && t - x.t < 600) dup = true;
+        if (!m.text.empty() && !dup) {
             Text x; x.t = t; x.net = m.proto; x.node = m.node; x.text = m.text; x.channel = m.channel;
             x.from = m.proto == "meshcore" ? m.from : (r.longName.empty() ? m.node : r.longName);
             x.freq = m.freqHz;

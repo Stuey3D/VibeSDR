@@ -18,7 +18,16 @@ export interface IsmDevice {
   mfr?: string; wm?: string; ver?: number; devType?: number; sec?: number; secText?: string; encBlocks?: number; encLen?: number;
   acc?: number; every?: number; rx?: number; sts?: number; via?: string; vol?: number; energy?: number; flow?: number;
   damaged?: number; auth?: number; records?: IsmRecord[];
+  /** ★ V12 LoRa (kinds meshtastic / meshcore / lorawan / lora — docs/v12/LORA-MESH.md). Mesh nodes publish their names,
+   *  hardware and positions; LoRaWAN is header only (`encLen` = how long the encrypted payload was, never its bytes). */
+  node?: string; short?: string; long?: string; hw?: string; role?: string; chan?: string; net?: string; mtype?: string; what?: string;
+  lat?: number; lon?: number; posAge?: number; prec?: number; alt?: number; battPct?: number; volt?: number; chUtil?: number;
+  hops?: number; fcnt?: number; fport?: number; priv?: number; sf?: number; bw?: number; cr?: number; sync?: string;
+  msgs?: IsmMsg[];
 }
+/** A public mesh message (Meshtastic's default channel, MeshCore's Public channel — nothing else is ever sent). */
+export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number }
+export interface IsmLora { chans: number; plan: number; dets: number; frames: number; badCrc: number; texts: number; mapped: number; dropped: number }
 export interface IsmRecord { q: string; v?: number; u?: string; t?: string; st: number; fn: string; tariff?: number; qual?: number }
 export interface IsmBand { id: string; name: string; hz: number }
 export interface IsmReport {
@@ -28,6 +37,8 @@ export interface IsmReport {
   /** ★ V12 meters (868 band only): how many are listed, frames whose later block failed, collectors' frames, and
    *  wmGap = 1 when the capture cannot hold 868.95 MHz's meters (0.9 MS/s). */
   meters?: number; damaged?: number; collector?: number; wmGap?: number;
+  /** ★ V12 LoRa: the engine's status and the public messages, newest first (vibe_ism_service.h report()). */
+  lora?: IsmLora; msgs?: IsmMsg[];
   devices: IsmDevice[];
 }
 export interface IsmUnits { mph: boolean; pressure: 'psi' | 'kpa' | 'bar' }
@@ -37,7 +48,11 @@ export const ISM_KINDS: Array<{ id: string; label: string }> = [
   { id: 'all', label: 'ALL' }, { id: 'weather', label: 'WEATHER' }, { id: 'tpms', label: 'TPMS' },
   { id: 'sensor', label: 'SENSOR' }, { id: 'doorbell', label: 'DOORBELL' }, { id: 'energy', label: 'ENERGY' },
   { id: 'keyfob', label: 'KEY FOB' }, { id: 'meter', label: 'METER' },
+  // ★ V12 LoRa (868 / 433 / 915 bands): the mesh networks, LoRaWAN (with any LoRa frame we cannot name), the public messages
+  { id: 'meshtastic', label: 'MESHTASTIC' }, { id: 'meshcore', label: 'MESHCORE' }, { id: 'lorawan', label: 'LORAWAN' },
+  { id: 'msgs', label: 'MESSAGES' },
 ];
+export const LORA_KINDS = ['meshtastic', 'meshcore', 'lorawan', 'lora'];
 
 /** A report from the wire, sanitised: only plain fields of the types we read, at most 300 devices. */
 export function ismSanitise(msg: any): IsmReport | null {
@@ -57,15 +72,81 @@ export function ismSanitise(msg: any): IsmReport | null {
       freq: num(d.freq) ?? 0, level: num(d.level) ?? -99, snr: num(d.snr) ?? 0, seen: num(d.seen) ?? 0, age: num(d.age) ?? 0,
       count: num(d.count) ?? 1,
       ...(d.kind === 'meter' ? meterFields(d, num, str) : {}),
+      ...(LORA_KINDS.includes(d.kind) ? loraFields(d, num, str) : {}),
     });
   }
+  const msgsOf = (a: any): IsmMsg[] => (Array.isArray(a) ? a.slice(0, 60) : []).filter((m: any) => m && typeof m.text === 'string')
+    .map((m: any) => ({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '', net: str(m.net, 12), node: str(m.node, 16), ch: str(m.ch, 20), freq: num(m.freq) }));
+  const lo = msg.lora && typeof msg.lora === 'object' ? msg.lora : null;
   return {
     type: 'ism', band: str(msg.band, 8), bandName: str(msg.bandName, 40), centre: num(msg.centre) ?? 0, custom: num(msg.custom),
     rate: num(msg.rate), now: num(msg.now), bursts: num(msg.bursts), decoded: num(msg.decoded), unknown: num(msg.unknown),
     noise: num(msg.noise), dropped: num(msg.dropped), capture: num(msg.capture), gain: num(msg.gain), gainAuto: num(msg.gainAuto),
     meters: num(msg.meters), damaged: num(msg.damaged), collector: num(msg.collector), wmGap: num(msg.wmGap),
+    lora: lo ? { chans: num(lo.chans) ?? 0, plan: num(lo.plan) ?? 0, dets: num(lo.dets) ?? 0, frames: num(lo.frames) ?? 0, badCrc: num(lo.badCrc) ?? 0,
+                 texts: num(lo.texts) ?? 0, mapped: num(lo.mapped) ?? 0, dropped: num(lo.dropped) ?? 0 } : undefined,
+    msgs: lo ? msgsOf(msg.msgs) : undefined,
     devices,
   };
+}
+/** ★ V12 LoRa: a mesh node's / LoRaWAN device's own fields, sanitised. A position must be a real one. */
+function loraFields(d: any, num: (v: any) => number | undefined, str: (v: any, n?: number) => string | undefined): Partial<IsmDevice> {
+  const lat = num(d.lat), lon = num(d.lon);
+  const pos = lat !== undefined && lon !== undefined && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && !(lat === 0 && lon === 0);
+  const msgs: IsmMsg[] = [];
+  for (const m of Array.isArray(d.msgs) ? d.msgs.slice(0, 5) : []) if (m && typeof m.text === 'string') msgs.push({ ago: num(m.ago) ?? 0, from: str(m.from, 40) ?? '', text: str(m.text, 240) ?? '' });
+  return {
+    node: str(d.node, 16), short: str(d.short, 8), long: str(d.long, 40), hw: str(d.hw, 40), role: str(d.role, 20), chan: str(d.chan, 20),
+    net: str(d.net, 30), mtype: str(d.mtype, 24), what: str(d.what, 24), lat: pos ? lat : undefined, lon: pos ? lon : undefined,
+    posAge: num(d.posAge), prec: num(d.prec), alt: num(d.alt), battPct: num(d.battPct), volt: num(d.volt), chUtil: num(d.chUtil), hops: num(d.hops),
+    fcnt: num(d.fcnt), fport: num(d.fport), encLen: num(d.encLen), priv: num(d.priv), sf: num(d.sf), bw: num(d.bw), cr: num(d.cr), sync: str(d.sync, 2),
+    temp: num(d.temp), hum: num(d.hum), baro: num(d.baro), msgs: msgs.length ? msgs : undefined,
+  };
+}
+/** ★ V12 LoRa: does this row go on the map? */
+export function ismOnMap(d: IsmDevice): boolean { return d.lat !== undefined && d.lon !== undefined; }
+/** The network's name as the list says it. */
+export function ismNetName(kind: string): string { return kind === 'meshtastic' ? 'Meshtastic' : kind === 'meshcore' ? 'MeshCore' : kind === 'lorawan' ? 'LoRaWAN' : 'LoRa'; }
+
+/** ★ A LoRa row's detail (the hover / tap): the radio side, then what the node published, then its recent public messages. */
+export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | null): string[] {
+  const out: string[] = [];
+  const head: string[] = [`${(d.freq / 1e6).toFixed(3)} MHz`];
+  if (d.sf) head.push(`SF${d.sf}`);
+  if (d.bw) head.push(`${d.bw >= 1e5 ? Math.round(d.bw / 1e3) : (d.bw / 1e3).toFixed(1)} kHz`);
+  if (d.cr) head.push(`CR 4/${4 + d.cr}`);
+  head.push(`SNR ${d.snr.toFixed(1)} dB`);
+  if (d.hops !== undefined) head.push(d.hops === 0 ? 'heard first-hand' : `${d.hops} ${d.hops === 1 ? 'hop' : 'hops'}`);
+  out.push(head.join(' · '));
+  const me: string[] = [];
+  if (d.node) me.push(d.kind === 'lorawan' ? `DevAddr ${d.node}` : d.kind === 'meshcore' ? `key ${d.node}…` : d.node);
+  if (d.hw) me.push(d.hw);
+  if (d.role) me.push(d.role);
+  if (d.chan) me.push(`channel ${d.chan}`);
+  if (d.net) me.push(d.net);
+  if (d.battPct !== undefined) me.push(d.battPct > 100 ? 'powered' : `battery ${d.battPct} %`);
+  if (d.volt !== undefined) me.push(`${d.volt.toFixed(2)} V`);
+  if (d.chUtil !== undefined) me.push(`channel use ${d.chUtil.toFixed(0)} %`);
+  if (me.length) out.push(me.join(' · '));
+  if (d.lat !== undefined && d.lon !== undefined) {
+    let p = `${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}`;
+    if (d.alt !== undefined) p += ` · ${Math.round(d.alt)} m`;
+    if (rx) { const k = rangeKm(rx, d.lat, d.lon); p += ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}`; }
+    if (d.prec && d.prec < 32) p += ' · position deliberately approximate';
+    out.push(p);
+  }
+  if (d.kind === 'lorawan') out.push('Payload encrypted by the network — its length is shown, never its bytes.');
+  if (d.priv && !d.msgs) out.push(d.kind === 'meshtastic' ? 'Heard on a private channel — only its header is shown.' : 'Encrypted traffic — only headers are shown.');
+  for (const m of d.msgs ?? []) out.push(`${ismAgo(m.ago)} ago${m.from ? ' · ' + m.from : ''}: “${m.text}”`);
+  return out;
+}
+/** Range and bearing from the receiver (great circle). */
+export function rangeKm(rx: { lat: number; lon: number }, lat: number, lon: number): { km: number; brg: number } {
+  const r = Math.PI / 180, p1 = rx.lat * r, p2 = lat * r, dl = (lon - rx.lon) * r;
+  const a = Math.sin((p2 - p1) / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  const km = 12742 * Math.asin(Math.min(1, Math.sqrt(a)));
+  const brg = (Math.atan2(Math.sin(dl) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl)) / r + 360) % 360;
+  return { km, brg };
 }
 /** A meter's own fields, sanitised. */
 function meterFields(d: any, num: (v: any) => number | undefined, str: (v: any, n?: number) => string | undefined): Partial<IsmDevice> {
@@ -118,7 +199,7 @@ export function compass(deg: number): string { return COMPASS[Math.floor((((deg 
  *  is the server's own line, which is used as sent. */
 export function ismLine(d: IsmDevice, u: IsmUnits): string {
   if (!u.mph && u.pressure === 'psi') return d.line;
-  if (d.kind === 'meter') return d.line;   // ★ a meter's line has no unit choice (m³, kWh)
+  if (d.kind === 'meter' || LORA_KINDS.includes(d.kind)) return d.line;   // ★ a meter's / a LoRa row's line has no unit choice
   const secret = d.kind === 'tpms' || d.kind === 'keyfob' || d.kind === 'doorbell' || d.kind === 'suspectfob';
   const p: string[] = [d.name];
   if (secret && d.kind === 'tpms' && d.model) p.push(d.model);
@@ -166,6 +247,8 @@ export function ismStatus(r: IsmReport): string {
   if (r.meters) parts.push(`${r.meters} ${r.meters === 1 ? 'meter' : 'meters'}`);
   if (r.wmGap === 1 && r.rate) parts.push(`868.95 not covered at ${(r.rate / 1e6).toFixed(r.rate % 1e6 ? 1 : 0)} MS/s`);
   if (r.bursts !== undefined) parts.push(`${r.bursts} bursts${r.unknown ? ` (${r.unknown} unidentified)` : ''}`);
+  // ★ V12 LoRa: frames decoded, and how many of the band's LoRa channels this capture holds
+  if (r.lora) parts.push(`LoRa ${r.lora.frames} ${r.lora.frames === 1 ? 'frame' : 'frames'} · ${r.lora.chans} of ${r.lora.plan} channels`);
   /* ★ THE GAIN ISM IS ACTUALLY USING (Stuart, 2026-10-25: "the gain is indicating 0dB but I know that not to be the case").
    *  ISM sets the radio's gain itself (vibe_ism_service.h GainRule: 60 % up the radio's own list, down only on clipping)
    *  and the dongle AGC off, so the ordinary gain readout has nothing true to say — the report's `gain` is the figure. */
@@ -177,15 +260,18 @@ export function ismStatus(r: IsmReport): string {
 function esc(s: string): string { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 
 /** The list's HTML: newest first (the server's order), filtered by kind. */
-export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey = ''): string {
-  // ★ KEY FOB shows the suspected ones too (vibe_ism_service.h FobWatch): a car key we cannot name is still a key fob
-  const rows = r.devices.filter((d) => filter === 'all' || d.kind === filter || (filter === 'keyfob' && d.kind === 'suspectfob'));
+export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey = '', rx: { lat: number; lon: number } | null = null): string {
+  if (filter === 'msgs') return ismMsgsHtml(r);
+  // ★ KEY FOB shows the suspected ones too (vibe_ism_service.h FobWatch): a car key we cannot name is still a key fob;
+  //   LORAWAN shows the LoRa frames we cannot name as well
+  const rows = r.devices.filter((d) => filter === 'all' || d.kind === filter || (filter === 'keyfob' && d.kind === 'suspectfob')
+                                        || (filter === 'lorawan' && d.kind === 'lora'));
   if (!rows.length) return `<div class="ismEmpty">${esc(ismEmptyText(filter))}</div>`;
   return rows.map((d) => {
     const mhz = (d.freq / 1e6).toFixed(3);
     const heard = `heard ${d.count} ${d.count === 1 ? 'time' : 'times'}`;
     // ★ a meter's detail is its hover AND, on a tap (touch has no hover), a block under its row
-    const detail = d.kind === 'meter' ? ismMeterDetail(d) : [];
+    const detail = d.kind === 'meter' ? ismMeterDetail(d) : LORA_KINDS.includes(d.kind) ? ismLoraDetail(d, rx) : [];
     const tip = detail.length ? [...detail, heard].join('\n') : `${mhz} MHz · ${d.snr.toFixed(0)} dB over the noise · ${heard}`;
     const open = detail.length && openKey === d.key;
     return `<div class="ismRow k-${esc(d.kind)}${detail.length ? ' ismTap' : ''}" data-key="${esc(d.key)}" title="${esc(tip)}">`
@@ -193,9 +279,19 @@ export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey =
          + (open ? `<span class="ismDetail">${detail.map(esc).join('<br>')}</span>` : '') + `</span></div>`;
   }).join('');
 }
+/** ★ V12 LoRa: the public messages, newest first — "12 s · Meshtastic LongFast · Bob: hello". */
+export function ismMsgsHtml(r: IsmReport): string {
+  const m = r.msgs ?? [];
+  if (!m.length) return `<div class="ismEmpty">${esc(ismEmptyText('msgs'))}</div>`;
+  return m.map((x) => `<div class="ismRow k-msg"><span class="ismAgo">${esc(ismAgo(x.ago))}</span><span class="ismTxt">`
+    + `${esc(ismNetName(x.net || ''))}${x.ch ? ' ' + esc(x.ch) : ''} · <b>${esc(x.from || x.node || '?')}</b>: ${esc(x.text)}</span></div>`).join('');
+}
 /** What an empty list says (the app's ismEmptyText — the same words). */
 export function ismEmptyText(filter: string): string {
   if (filter === 'meter') return 'No meters heard yet — they send every 16 s to a few minutes, on the 868 MHz band only.';
+  if (filter === 'meshtastic' || filter === 'meshcore') return 'No mesh nodes heard yet — most send their name every few hours and their position every 15 min to an hour.';
+  if (filter === 'lorawan') return 'No LoRaWAN heard yet — devices send every few minutes to an hour. Payloads are encrypted; only headers are shown.';
+  if (filter === 'msgs') return "No public messages yet — only the mesh networks’ public channels are shown; private channels and direct messages never are.";
   return `${filter === 'all' ? 'No sensors heard yet' : 'Nothing of that kind heard yet'} — most send every 30–60 s; tyres only while the car moves.`;
 }
 
@@ -248,8 +344,10 @@ export class IsmBox {
   private prefs = loadPrefs();
   private lastHtml = '';
   private openKey = '';   // ★ the meter row whose detail is open (a tap toggles it)
-  /** EXIT ISM, and the band steps (±1). The page decides what they send. */
-  constructor(private onExit: () => void, private onStep: (d: number) => void) {}
+  /** EXIT ISM, and the band steps (±1). The page decides what they send. ★ V12 LoRa: `onMap` opens the map of everything
+   *  with a position (main.ts ismMapOpen); `rx` is the receiver's position, for range and bearing in a row's detail. */
+  constructor(private onExit: () => void, private onStep: (d: number) => void, private onMap: () => void = () => {},
+              private rx: () => { lat: number; lon: number } | null = () => null) {}
 
   private mount(): HTMLElement {
     if (this.el) return this.el;
@@ -262,12 +360,16 @@ export class IsmBox {
     el.setAttribute('data-navbox', '');
     el.innerHTML = `<div id="ismHead"><button id="ismExit" title="Leave ISM — the receiver goes back to where it was">EXIT ISM</button>`
       + `<button id="ismDown" title="Previous band" aria-label="Previous band">◀</button><span id="ismBandName"></span>`
-      + `<button id="ismUp" title="Next band" aria-label="Next band">▶</button><span id="ismStat"></span></div>`
+      + `<button id="ismUp" title="Next band" aria-label="Next band">▶</button><span id="ismStat"></span>`
+      // ★★ V12 MAP (Stuart, 2026-10-27: "add a map button to the ISM decoder to switch to a Map view for the nodes"): drawn
+      //    only while something listed has a position — the spots MAP's rule, no dead button
+      + `<button id="ismMap" hidden title="Everything heard with a position, on a map">MAP</button></div>`
       + `<div id="ismChips"></div><div id="ismList" aria-live="polite"></div>`;
     document.body.appendChild(el);
     (el.querySelector('#ismExit') as HTMLButtonElement).onclick = () => this.onExit();
     (el.querySelector('#ismDown') as HTMLButtonElement).onclick = () => this.onStep(-1);
     (el.querySelector('#ismUp') as HTMLButtonElement).onclick = () => this.onStep(1);
+    (el.querySelector('#ismMap') as HTMLButtonElement).onclick = () => this.onMap();
     (el.querySelector('#ismList') as HTMLElement).onclick = (e) => {
       const row = (e.target as HTMLElement).closest('.ismTap') as HTMLElement | null;
       if (!row) return;
@@ -339,13 +441,60 @@ export class IsmBox {
     (el.querySelector('#ismStat') as HTMLElement).textContent = ismStatus(r);
     (el.querySelector('#ismDown') as HTMLButtonElement).disabled = !can.down;
     (el.querySelector('#ismUp') as HTMLButtonElement).disabled = !can.up;
+    (el.querySelector('#ismMap') as HTMLButtonElement).hidden = !r.devices.some(ismOnMap);
     this.place();
     this.drawList();
   }
   private drawList() {
     if (!this.el || !this.last) return;
     const r = ismAged(this.last, Math.floor((Date.now() - this.at) / 1000));
-    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey);
+    const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey, this.rx());
     if (html !== this.lastHtml) { (this.el.querySelector('#ismList') as HTMLElement).innerHTML = html; this.lastHtml = html; }
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★ V12 THE ISM MAP — every row with a position (Meshtastic and MeshCore nodes today; any ISM kind that ever carries
+//  one), on the shared map view (tracks.ts TrackView, as APRS's map). These are what the page hands it.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+const MAP_COLOURS: Record<string, string> = { meshtastic: '#67ea94', meshcore: '#ff9f43', lorawan: '#7ab8ff', lora: '#b9a7ff' };
+function escM(s: string): string { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
+/** The marker: a dot in the network's colour with its first letter; a node heard in the last 15 min is solid. */
+export function ismMapIcon(d: IsmDevice): { html: string; w: number; h: number } {
+  const c = MAP_COLOURS[d.kind] || '#ffb833';
+  const fresh = d.seen < 900;
+  const letter = d.kind === 'meshtastic' ? 'T' : d.kind === 'meshcore' ? 'C' : d.kind === 'lorawan' ? 'W' : '•';
+  return { html: `<div style="width:18px;height:18px;border-radius:50%;background:${fresh ? c : 'rgba(20,16,8,0.9)'};border:2px solid ${c};`
+    + `color:${fresh ? '#111' : c};font:bold 10px/18px ui-monospace,Menlo,monospace;text-align:center;box-shadow:0 0 0 1px #111">${letter}</div>`, w: 22, h: 22 };
+}
+export function ismMapLabel(d: IsmDevice): string { return d.short || d.long || d.name || d.node || d.key; }
+/** The card: the name, the network and what it said about itself, range and bearing, and its recent public messages. */
+export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null): string {
+  const lines = ismLoraDetail(d, rx);
+  return `<div class="pop"><b>${escM(d.long || d.name)}</b>${d.short ? ` (${escM(d.short)})` : ''}<br>`
+    + `${escM(ismNetName(d.kind))} · heard ${escM(ismAgo(d.seen))}${d.seen >= 2 ? ' ago' : ''} · ${d.count} ${d.count === 1 ? 'packet' : 'packets'}<br>`
+    + lines.map(escM).join('<br>') + '</div>';
+}
+/** The map's list: nearest first when the receiver's position is known, else newest first. */
+export function ismMapRows(r: IsmReport, rx: { lat: number; lon: number } | null): string {
+  const items = r.devices.filter(ismOnMap);
+  if (!items.length) return `<div class="trkEmpty">Nothing heard with a position yet — mesh nodes send theirs every 15 min to an hour.</div>`;
+  const withKm = items.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat!, d.lon!) : null }));
+  if (rx) withKm.sort((a, b) => a.k!.km - b.k!.km);
+  return withKm.map(({ d, k }) => `<div class="trkRow" tabindex="0" data-key="${escM(d.key)}"><b>${escM(ismMapLabel(d))}</b> `
+    + `<span style="opacity:.75">${escM(ismNetName(d.kind))}${k ? ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}` : ''}`
+    + ` · ${escM(ismAgo(d.seen))}${d.hops !== undefined ? ` · ${d.hops === 0 ? 'first-hand' : d.hops + ' hop' + (d.hops === 1 ? '' : 's')}` : ''}`
+    + `${d.battPct !== undefined && d.battPct <= 100 ? ` · ${d.battPct} %` : ''} · ${d.snr.toFixed(0)} dB</span></div>`).join('');
+}
+/** The map's status line: how many on the map, the furthest. */
+export function ismMapStatus(r: IsmReport | null, rx: { lat: number; lon: number } | null): string {
+  if (!r) return '';
+  const items = r.devices.filter(ismOnMap);
+  let far = '';
+  if (rx && items.length) {
+    let best = 0, who = '';
+    for (const d of items) { const k = rangeKm(rx, d.lat!, d.lon!).km; if (k > best) { best = k; who = ismMapLabel(d); } }
+    far = ` · furthest ${who} ${best < 10 ? best.toFixed(1) : Math.round(best)} km`;
+  }
+  return `${items.length} on the map${far}${r.msgs && r.msgs.length ? ` · ${r.msgs.length} public ${r.msgs.length === 1 ? 'message' : 'messages'}` : ''}`;
 }
