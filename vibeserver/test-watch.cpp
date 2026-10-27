@@ -266,6 +266,26 @@ int main() {
         ok(f.pop(big.data(), 3000) == 2000 && f.underruns() == 1, "an underrun is counted and zero-filled");
         f.push(x.data(), 300);
         ok(f.pop(o.data(), 300) == 0, "…and it re-primes before playing again");
+        /* ★★ V12 beta24 — THE CUSHION. The mix asks for ~491 frames a block and the channel delivers ~491, each varying by a
+         *  frame, and on a multi-core server the channel's demodulator is a worker thread, a hand-off behind. Primed at one
+         *  block (the old 480) every short block underran; primed at kWatchPrimeFrames it never does, even with the
+         *  producer a whole 2-block burst late now and then. */
+        auto run = [](size_t prime) {
+            PcmFifo q(prime, 9600);
+            std::vector<float> in(1000, 0.5f), out(1000);
+            int under = 0;
+            for (int k = 0; k < 2000; k++) {
+                const size_t give = 491 + (k % 3 == 0), take = 491 + (k % 2 == 0);
+                const bool late = (k % 97) == 50;                       // ★ the worker late: nothing this block…
+                if (!late) q.push(in.data(), (k % 97) == 51 ? 0 : give);
+                if ((k % 97) == 51) { q.push(in.data(), give); q.push(in.data(), give); }   // …then two at once
+                if (q.pop(out.data(), take) < take && k > 10) under++;
+            }
+            return under;
+        };
+        const int u480 = run(480), uNow = run(kWatchPrimeFrames);
+        ok(u480 > 20, std::string("primed at one block (480), a mix block of 491-492 underruns again and again (" + std::to_string(u480) + " of 2000)").c_str());
+        ok(uNow == 0, std::string("primed at kWatchPrimeFrames (" + std::to_string(kWatchPrimeFrames) + "): never (" + std::to_string(uNow) + ")").c_str());
     }
     std::printf("── 10. MUTE (round 3): the muted VFO fades out and the other pans home to both ears; unmuting reverses it ──\n");
     {
@@ -335,6 +355,47 @@ int main() {
         ok(std::fabs(f.centre - 7.000e6) <= lim && std::fabs(f.centre - 7.010e6) <= lim, "…still inside both limits");
         f = fitCentre(0, 7.0e6, lim, 7.0e6 + 2 * lim, lim, clr);
         ok(f.ok && std::fabs(f.centre - (7.0e6 + lim)) < 1, "exactly 2 × lim apart: the one centre that holds both");
+    }
+
+    std::printf("── 11b. …and the DC is PHYSICAL: logical centre + the tuner's offset, out of BOTH passbands (V12 beta24) ──\n");
+    {
+        // ★ A dongle: the spike 15 kHz above the logical centre. A on AM 7.000 MHz (±5 kHz), B on USB.
+        const double lim = 955e3, clr = 20e3, off = 15000;
+        const vibe::VfoDcZone za = vibe::vfoDcZone(7.000e6, -5000, 5000, off);
+        auto zb = [&](double bHz) { return vibe::vfoDcZone(bHz, 0, 2700, off); };
+        auto clearOf = [&](double c, const vibe::VfoDcZone& z) { const double d = c + off; return d <= z.lo || d >= z.hi; };
+        // BEFORE (no offset given): B tuned to 7.015 MHz with the centre on A — both fit, nothing moves, and the
+        // spike (7.015) sits on B's carrier. The fault the brief names.
+        CentreFit f = fitCentre(7.000e6, 7.000e6, lim, 7.015e6, lim, clr);
+        ok(f.ok && !f.moved && !clearOf(f.centre, zb(7.015e6)), "before: B tuned onto the spike (centre on A + 15 kHz) — fitCentre left it there");
+        // AFTER: the same tune moves the radio, the smallest move, the DC out of B's zone AND A's
+        f = fitCentre(7.000e6, 7.000e6, lim, 7.015e6, lim, clr, off, za, zb(7.015e6));
+        ok(f.ok && f.moved && clearOf(f.centre, zb(7.015e6)) && clearOf(f.centre, za),
+           ("after: the DC leaves B's passband and stays off A's (centre " + std::to_string(f.centre) + ", DC " + std::to_string(f.centre + off) + ")").c_str());
+        ok(std::fabs(f.centre - 7.000e6) < 20e3, "…by a few kHz, not a recentre (the view barely moves)");
+        // the hold: the DC goes kVfoDcHoldMinHz beyond the zone's edge, so B nudged 100 Hz does not ask again
+        const CentreFit g = fitCentre(f.centre, 7.000e6, lim, 7.0151e6, lim, clr, off, za, zb(7.0151e6));
+        ok(g.ok && !g.moved, "B nudged 100 Hz: no second move (the hysteresis)");
+        // A's own zone: B tuned so that the CURRENT centre's DC is on A (the centre had been moved off A for some reason)
+        f = fitCentre(6.985e6, 7.000e6, lim, 7.300e6, lim, clr, off, za, zb(7.300e6));
+        ok(f.ok && f.moved && clearOf(f.centre, za) && clearOf(f.centre, zb(7.300e6)), "a centre whose DC is on A is moved off it too");
+        // a decisive move (B far): clear of both by `clr`, measured from the PHYSICAL DC
+        // B on 7.010 USB: its zone 7.0075–7.0152 MHz holds the DC at 7.015 — moved, though both VFOs fit
+        f = fitCentre(7.0e6, 7.000e6, lim, 7.010e6, lim, clr, off, za, zb(7.010e6));
+        ok(f.ok && f.moved && clearOf(f.centre, za) && clearOf(f.centre, zb(7.010e6)), "B's USB passband + guard reaching the DC: moved, though both fit");
+        // B on 7.020 USB: the DC (7.015) is 2.5 kHz below B's carrier — outside its zone (7.0175–7.0252): nothing moves
+        f = fitCentre(7.0e6, 7.000e6, lim, 7.020e6, lim, clr, off, za, zb(7.020e6));
+        ok(f.ok && !f.moved, "B on 7.020 USB, the DC below its zone: the radio stays put");
+        f = fitCentre(8.0e6, 7.000e6, lim, 7.010e6, lim, clr, off, za, zb(7.010e6));
+        ok(f.ok && f.moved && std::fabs(f.centre + off - 7.000e6) >= clr && std::fabs(f.centre + off - 7.010e6) >= clr
+           && clearOf(f.centre, za) && clearOf(f.centre, zb(7.010e6)), "a decisive move keeps the PHYSICAL DC clr from both and out of both zones");
+        // WFM-like width on A (the zone shrinks to ±off, never stricter than the locked VFO): A's own lock-step offset is fine
+        const vibe::VfoDcZone wide = vibe::vfoDcZone(7.000e6, -100e3, 100e3, off);
+        f = fitCentre(7.000e6, 7.000e6, lim, 7.300e6, lim, clr, off, wide, zb(7.300e6));
+        ok(f.ok && !f.moved, "a wide A: the spike at the locked VFO's own 15 kHz is not chased (never stricter than locked)");
+        // no offset (an HF+, a SpyServer): exactly the old answers
+        const CentreFit o1 = fitCentre(8.0e6, 7.000e6, lim, 7.010e6, lim, clr), o2 = fitCentre(8.0e6, 7.000e6, lim, 7.010e6, lim, clr, 0.0, za, zb(7.010e6));
+        ok(o1.centre == o2.centre && o1.moved == o2.moved, "no offset: the old placement, unchanged");
     }
 
     std::printf("\n%d passed, %d failed\n", pass, fail);

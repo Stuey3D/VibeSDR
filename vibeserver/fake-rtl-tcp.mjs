@@ -38,7 +38,7 @@
 //               constant one-bin spike (-45 dBFS ≈ 0.7 counts); the server's capture cleaner removes that.
 //   --dc-skirt HZ --dc-skirt-amp A   …and a DIRTY DC region: complex noise of A counts RMS low-passed to ±HZ round the
 //               tuned centre (a 1/f skirt, a DC that wanders with gain) — the stress model, not a measurement.
-//   --carrier HZ --carrier-amp A   (with --hf) a steady carrier at that ABSOLUTE frequency, A counts — a second listener's
+//   --carrier HZ --carrier-amp A   (with --hf, or the synthetic stations) a steady carrier at that ABSOLUTE frequency, A counts — a second listener's
 //               SSB/AM channel to measure to the hertz while the server moves the tuner.
 //   --stall-at HZ  a dongle that FALLS OVER at a rate: while the server has asked for HZ or more, send nothing at all
 //               (the socket stays open, the samples just stop) — the boosted-rate guard's bench (vibe_rate_guard.h,
@@ -227,6 +227,9 @@ const srv = net.createServer((sock) => {
     if (rate !== RATE || (TONES_AT && oscAt !== centreHz)) retune();
     const keyedOff = KEY_S > 0 && Math.floor(Date.now() / 1000 / KEY_S) % 2 === 1;
     const n = Math.max(1024, Math.round(rate * CHUNK_MS / 1000));
+    // ★ --carrier in the synthetic-station path too: an UNMODULATED tone (test-server-vfo-ab §6 decodes WEFAX off it — a
+    //   pure tone is one grey, where an AM station's sidebands make a picture whose brightness rides on millihertz)
+    const wcT = (2 * Math.PI * (CARRIER_HZ - centreHz)) / (rate || RATE), ccwT = Math.cos(wcT), cswT = Math.sin(wcT), caT = CARRIER_A / 127;
     const buf = Buffer.allocUnsafe(n * 2);
     if (HF_IQ && HF_UTC && !hfAnchored) {
       hfAnchored = true;
@@ -320,6 +323,10 @@ const srv = net.createServer((sock) => {
         im += env * c.im;
         advance(a); advance(c);
       }
+      if (CARRIER_HZ) {
+        re += caT * carRe; im += caT * carIm;
+        const cr = carRe * ccwT - carIm * cswT; carIm = carRe * cswT + carIm * ccwT; carRe = cr;
+      }
       if (WFM_HZ) {
         const off = WFM_HZ - centreHz;
         if (Math.abs(off) < rate / 2) {
@@ -338,6 +345,7 @@ const srv = net.createServer((sock) => {
     }
     for (const o of osc)  renorm(o);
     for (const o of aosc) renorm(o);
+    { const mc = 1.5 - 0.5 * (carRe * carRe + carIm * carIm); carRe *= mc; carIm *= mc; }
 
     nextDue += CHUNK_MS;
     // If we fell badly behind (debugger, laptop sleep), give up on catching up

@@ -39,7 +39,10 @@ frequencies per radio, like VFO A/B on a rig. Two dongles at once is a later ste
   accordingly so that both VFO's can be tuned as if they have the full 2.4MSPS window"). A B that no longer fits beside
   A, or an A tuned past the window, moves the radio to where both are inside (`vibewatch::fitCentre`: each VFO allows
   the centre within the usable half-span less the edge margin less half its passband — dongleForView's own figure — and
-  the centre goes to the middle of the room both allow, never with the DC spike inside either passband); a pan cannot
+  the centre goes to the middle of the room both allow, never with the DC spike inside either passband — the PHYSICAL
+  spike, the logical centre + the tuner's offset (15 kHz on a dongle), kept out of each VFO's passband + 2.5 kHz guard
+  (`vibe_vfo_dc.h`'s zone, never stricter than the locked VFO); a B tuned onto the spike moves the radio a few kHz for
+  that alone, as A's tune does (V12 beta24)); a pan cannot
   slide B out again (dongleForView keeps B as a second limit). Only VFOs further apart than one window holds — about
   1.91 MHz at 2.4 MS/s — are refused (`apart`), nothing moved. The state carries `"follow":true` there, so the web
   page drops its own wall for B. **Everywhere else** (a shared dial, a range-locked radio, an owner's locked centre)
@@ -170,6 +173,10 @@ and shared dial alike:
 - **IQ** (a CW/PSK skimmer, Band spots): on a range-locked radio, B's slices of the shared forward FFT on the listener's
   own thread (`feedSkimFromBins`, the same cut A's skimmer gets, with B's own scratch); on a one-pipeline radio, B's own
   `WideTap` off the full-rate capture (`watchSkimTapB` — `skimTapFeed`'s cut, centred on B's dial).
+- **The tuner's DC under Band on B** (V12 beta24): on a personal receiver, Band running on B moves the tuner's DC spike
+  out of B's band slices (`bandDcSafeFor` keyed on B's dial, `bandDcBHz_` set by `watchSkimTapB`) and off A's passband
+  as well (`bandDcCentre`'s `also` zone); Band on A keeps it off B's passband the same way. A shared dial is never moved
+  for B's Band (the shared-dial contract).
 - **Dial and mode**: `decoderEnv` reads B's for a `#B` host, so spots, CW/PSK RF and the gallery's cards are filed on
   B's RF.
 - **Governance** is the box's, as for any decoder: the decoder slots and Band's benchmark budget, refused in words when
@@ -198,7 +205,3 @@ decoder on A (BACKGROUND-DECODING.md, DIGITAL-SPOTS.md).
   the only discontinuity.
 - The shared path trims AM by 6 dB and a listener's own channel does not (an older inconsistency); B takes whichever
   trim A has, so the two always match.
-- **Band spots on VFO B**: the tuner is not moved to keep its DC spike out of B's band slices — `bandDcTick` places it
-  for the one-pipeline host's Band, which is A's dial. The RF centre for two VFOs keeps the DC out of both passbands
-  (`fitCentre`'s clearance), not out of a whole band's slice, so on a dongle with a DC spike it can sit inside one of B's
-  mode windows. Not built: Stuart may want `bandDcTick` to follow a Band running on B as well.

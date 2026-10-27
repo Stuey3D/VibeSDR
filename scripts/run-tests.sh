@@ -97,6 +97,9 @@ flags_for() {
     # ★★ V12 Band spots and the dongle's DC (vibe_band_slice.h bandDcCentre, 2026-10-27): where the DC fell on every band,
     #    and that the placement keeps it off every mode and out of every slice. Needs the registry (the engines link in).
     test-band-dc)          echo "-O2 -I $VDSP -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
+    # ★★ V12 a FREE VFO and the tuner's DC (vibe_vfo_dc.h vfoDcZone/vfoDcCentre, 2026-10-27): the zone per mode, never
+    #    stricter than the locked VFO, one retune per crossing, the limits and VFO B's zone honoured. Header-only, no deps.
+    test-vfo-dc)           echo "-O2" ;;
     # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
     test-bgdecode|test-bg-priority|test-bg-band|test-cw|test-dsc|test-psk|test-jtty) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
@@ -410,6 +413,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 # ★★ V12 VFO A/B through the real server: lower VFO left / higher right in ONE stream, B's own squelch, the window refusal,
 #    the listener-slot yield, an old client untouched, a shared dial's private stream. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-vfo-ab.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 a FREE VFO walking across the tuner's DC (vibe_vfo_dc.h, GitHub #57): the DC moved out of the passband, one retune
+#    per crossing, never on a range-locked radio, a shared dial moved only by a person's tune. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-server-vfo-dc.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 VFO A/B in the WEB client (headless Edge, --mute-audio): the tuning-menu toggle, the A/B key, B's needle, the
 #    audio panel's STEREO switch, no toggle where the owner switched it off. Same VIBESERVER_BIN rule.

@@ -138,14 +138,19 @@ inline int bandDcWhere(double sampleRate, int fftSize, double dialHz, double dcH
 /** ★★ THE PLACEMENT: the logical centre (rtlCenter) to use instead of `centreHz` while Band runs on `dialHz`, so that the DC
  *  (centre + `hwOffsetHz`) is clear — see the note above. `loHz`/`hiHz`: where the caller's own rules allow the centre to be
  *  (the VFO captured, the view inside the capture); honoured if any clear place lies within them, else waived (the DC
- *  matters more than a view edge). Returns `centreHz` unchanged off a band, or when it is already clear. Idempotent. */
+ *  matters more than a view edge). Returns `centreHz` unchanged off a band, or when it is already clear. Idempotent.
+ *  ★★ `alsoLoHz`..`alsoHiHz` (V12 beta24, VFO A/B): ONE MORE place the DC must not be — the OTHER VFO's passband + guard
+ *  (absolute Hz; empty when lo >= hi) when Band runs on one VFO and somebody listens on the other. It joins every tier, so a
+ *  DC on that passband is moved as a DC on a slice is, and no way out lands on it. */
 inline double bandDcCentre(double sampleRate, int fftSize, double dialHz, double centreHz, double hwOffsetHz,
-                           double loHz = -INFINITY, double hiHz = INFINITY) {
+                           double loHz = -INFINITY, double hiHz = INFINITY, double alsoLoHz = 0.0, double alsoHiHz = 0.0) {
     if (!(sampleRate > 0) || !vibe::digi::bandAt(dialHz)) return centreHz;
     const std::vector<BandDcZone> slices = bandDcSlices(sampleRate, fftSize, dialHz);
     if (slices.empty()) return centreHz;
     std::vector<BandDcZone> modes;
     for (const BandDcPassband& p : bandDcPassbands(dialHz)) modes.push_back({ p.loHz, p.hiHz });
+    std::vector<BandDcZone> cut = slices;
+    if (alsoLoHz < alsoHiHz) { cut.push_back({ alsoLoHz, alsoHiHz }); modes.push_back({ alsoLoHz, alsoHiHz }); }
     const double dc = centreHz + hwOffsetHz;
     // the union of the zones, each widened by the guard, merged
     auto merged = [](std::vector<BandDcZone> z) {
@@ -168,7 +173,7 @@ inline double bandDcCentre(double sampleRate, int fftSize, double dialHz, double
             if (!captureHolds(sampleRate, p, 0.5 * (s.loHz + s.hiHz), s.hiHz - s.loHz)) return false;
         return true;
     };
-    const std::vector<BandDcZone> tiers[2] = { merged(slices), merged(modes) };
+    const std::vector<BandDcZone> tiers[2] = { merged(cut), merged(modes) };
     for (int pass = 0; pass < 2; ++pass) {              // ★ pass 0 inside the caller's bounds, pass 1 without them
         for (const std::vector<BandDcZone>& z : tiers) {
             const BandDcZone* in = inside(z, dc);

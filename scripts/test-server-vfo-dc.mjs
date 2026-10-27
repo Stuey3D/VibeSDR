@@ -132,8 +132,16 @@ async function sweep(S, L, from, to) {
   const n0 = S.tunes.length;
   const dir = Math.sign(to - from);
   for (let f = from; dir > 0 ? f <= to : f >= to; f += dir * STEP) {
+    const n = S.tunes.length;
     L.spec.send({ type: 'tune', frequency: f, mode: 'am' });
     await sleep(90);
+    /* ★★ A RETUNE THE SERVER HAS MADE BUT THE FAKE HAS NOT PRINTED YET IS NOT "ON THE DC". The tuner command crosses a
+     *  socket to the fake and comes back through its stdout pipe; under load that took more than the 90 ms step, and the
+     *  step that CAUSED the move (dial 7000.0, DC 6993.0 — 7.0 kHz, inside the ±7.5 kHz zone) was read with the DC
+     *  still where it had been: ~3 runs in 4 under an Xcode build. The server's zone never varied (its own log: 6.9925–
+     *  7.0075 MHz every run). So a step that reads inside the zone waits — with a deadline — for a retune to arrive;
+     *  a real fault (no retune) still fails. */
+    if (Math.abs(S.dcNow() - f) < ZONE - 100) await until(() => S.tunes.length > n, 1500);
     out.push({ dial: f, dc: S.dcNow() });
   }
   return { steps: out, retunes: S.tunes.length - n0, onDc: out.filter((s) => Math.abs(s.dc - s.dial) < ZONE - 100) };   // ★ the fake prints 100 Hz

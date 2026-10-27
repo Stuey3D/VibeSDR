@@ -39,6 +39,7 @@
 //   shared transform to slice. Nothing at all runs for a listener with VFO B off. Measured in test-watch-cost.
 #pragma once
 #include "vibedsp/vibedsp.h"
+#include "vibe_vfo_dc.h"   // ★ fitCentre keeps the PHYSICAL DC out of both passbands (vfoDcZone, kVfoDcHoldMinHz)
 
 #include <algorithm>
 #include <atomic>
@@ -133,6 +134,18 @@ private:
     uint64_t underruns_ = 0, dropped_ = 0;
 };
 
+/** ★★★ THE WATCH CHANNEL'S CUSHION: 50 ms (V12 beta24, 2026-10-27). It was 480 frames — 10 ms, LESS than one block of
+ *  the mix (≈491 frames a 10 ms block at 48 kHz, the count varying by a frame as the resampler goes). Priming at 480 left
+ *  no cushion at all: a block of 491 in and 492 asked for was an underrun, silence and a re-prime, and the next block the
+ *  same. Worse, every RxPipeline on a multi-core server demodulates on its own worker thread (VIBE_DSP_THREADS, the
+ *  2026-10-16 split), so B's audio reaches the FIFO a hand-off LATER than A's is mixed: on a loaded box (an Xcode and a
+ *  Gradle build beside the server) B lost over half of a second — test-server-vfo-ab's "A and B at matching levels"
+ *  read B at 0.08 against A's 0.18, and the listener would have heard B stutter. 50 ms is five blocks: the worker's
+ *  hand-off and a scheduler's hiccup on a Pi 2 both fit, and VFO B a twentieth of a second behind VFO A is not
+ *  something an ear can place (they are different stations in different ears). Decoders on B are fed BEFORE the FIFO
+ *  (the audio tap), so they never wait for it. */
+constexpr size_t kWatchPrimeFrames = 2400;
+
 // ── One watch channel ───────────────────────────────────────────────────────────────────────────────────────────────
 /** What the listener asked for. Written by the control thread through WatchChannel::want(), applied by the feeding
  *  thread at its next block — so a retune never races a feed. */
@@ -147,7 +160,7 @@ struct Wanted {
 
 class WatchChannel {
 public:
-    explicit WatchChannel(int id) : id_(id), fifo_(480, 9600) {}
+    explicit WatchChannel(int id) : id_(id), fifo_(kWatchPrimeFrames, 9600) {}
     ~WatchChannel() { std::lock_guard<std::mutex> lk(feedMtx_); if (rx_) rx_->stop(); }
     int id() const { return id_; }
 
@@ -425,25 +438,61 @@ private:
  *    shuffling (the next nudge would need another retune) — but never with the capture's centre (the DC spike a
  *    dongle carries there) inside `clearHz` of either VFO: the nearest point outside both clearances is taken instead.
  *  · No overlap: `ok` false — the VFOs are further apart than one capture can hold, and the caller refuses.
+ *  ★★★ THE DC IS PHYSICAL (V12 beta24, 2026-10-27). A zero-IF radio's spike sits at the capture's PHYSICAL centre, the
+ *  logical centre + `dcOffHz` (hwOffsetHz(): 15 kHz on a dongle) — not at `cur`. This rule used to keep the LOGICAL
+ *  centre clear, so a B tune that moved the radio could put the spike exactly on A or B (centre 15 kHz below a VFO).
+ *  Now, given `dcOffHz` > 0 and each VFO's zone (vibe::vfoDcZone — its passband + the 2.5 kHz guard, never stricter
+ *  than the locked VFO), every answer keeps centre + `dcOffHz` out of BOTH zones:
+ *    · inside the room with the DC in a zone → the smallest move that clears it, the DC `hold` beyond the zone's edge
+ *      (vibe_vfo_dc.h's hysteresis, so a VFO hovering at the edge does not ask again a step later);
+ *    · a decisive move → `clearHz` is measured from the physical DC, and a zone is never landed in.
+ *  With `dcOffHz` 0 (an HF+, a SpyServer, the rule switched off) it is exactly the old placement.
  *  Pure, so test-watch checks it. */
 struct CentreFit { bool ok = false; bool moved = false; double centre = 0; double lo = 0, hi = 0; };   // lo..hi: the room both allow
-inline CentreFit fitCentre(double cur, double aHz, double aLim, double bHz, double bLim, double clearHz) {
+inline CentreFit fitCentre(double cur, double aHz, double aLim, double bHz, double bLim, double clearHz,
+                           double dcOffHz = 0.0, vibe::VfoDcZone aZone = {}, vibe::VfoDcZone bZone = {}) {
     CentreFit f; f.centre = cur;
     const double lo = std::max(aHz - aLim, bHz - bLim), hi = std::min(aHz + aLim, bHz + bLim);
     f.lo = lo; f.hi = hi;
     if (lo > hi) return f;
     f.ok = true;
-    if (cur >= lo && cur <= hi) return f;
-    auto clear = [&](double x) { return std::fabs(x - aHz) >= clearHz && std::fabs(x - bHz) >= clearHz; };
-    double c = 0.5 * (lo + hi);
-    if (!clear(c)) {
-        double best = c, bestD = 1e300; bool found = false;
-        for (double x : { aHz - clearHz, aHz + clearHz, bHz - clearHz, bHz + clearHz }) {
-            if (x < lo || x > hi || !clear(x)) continue;
-            const double d = std::fabs(x - c);
-            if (d < bestD) { bestD = d; best = x; found = true; }
+    const double off = dcOffHz > 0.0 ? dcOffHz : 0.0;
+    auto inZone = [&](const vibe::VfoDcZone& z, double c) { const double d = c + off; return off > 0.0 && z.lo < z.hi && d > z.lo && d < z.hi; };
+    auto onDc = [&](double c) { return inZone(aZone, c) || inZone(bZone, c); };
+    auto inRoom = [&](double c) { return c >= lo && c <= hi; };
+    // ★ the ways out of the zones: the DC `hold` beyond either edge of each (vibe_vfo_dc.h's figure)
+    std::vector<double> edges;
+    for (const vibe::VfoDcZone* z : { &aZone, &bZone }) {
+        if (off <= 0.0 || !(z->lo < z->hi)) continue;
+        const double hold = std::max(vibe::kVfoDcHoldMinHz, 0.5 * (z->hi - z->lo));
+        edges.push_back(z->lo - hold - off);
+        edges.push_back(z->hi + hold - off);
+    }
+    auto nearest = [&](const std::vector<double>& xs, double to, const std::function<bool(double)>& good, double& out) {
+        bool found = false; double bestD = 1e300;
+        for (double x : xs) {
+            if (!inRoom(x) || !good(x)) continue;
+            const double d = std::fabs(x - to);
+            if (d < bestD) { bestD = d; out = x; found = true; }
         }
-        if (found) c = best;
+        return found;
+    };
+    if (inRoom(cur)) {
+        if (!onDc(cur)) return f;                       // ★ the commonest case by far: no retune, no PLL relock
+        double c = cur;
+        if (nearest(edges, cur, [&](double x) { return !onDc(x); }, c)) { f.moved = true; f.centre = c; return f; }
+        // nowhere close clears it — fall through to the decisive placement
+    }
+    // ★ the DC (PHYSICAL) kept `clearHz` from both VFOs when the centre has to move anyway
+    auto clear = [&](double x) { return std::fabs(x + off - aHz) >= clearHz && std::fabs(x + off - bHz) >= clearHz; };
+    double c = 0.5 * (lo + hi);
+    if (!clear(c) || onDc(c)) {
+        std::vector<double> xs = { aHz - clearHz - off, aHz + clearHz - off, bHz - clearHz - off, bHz + clearHz - off };
+        xs.insert(xs.end(), edges.begin(), edges.end());
+        double best = c;
+        if (nearest(xs, c, [&](double x) { return clear(x) && !onDc(x); }, best)
+            || nearest(xs, c, [&](double x) { return !onDc(x); }, best))
+            c = best;
     }
     f.moved = true; f.centre = c;
     return f;
