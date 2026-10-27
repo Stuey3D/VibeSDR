@@ -502,6 +502,9 @@ if node --no-warnings scripts/test_blindTuneGate.ts; then pass=$((pass+1)); else
 #    a Retina 60 Hz panel is a steady 30 rows/s (it flipped 1 <-> 2 on the 1.5 knife-edge: Stuart's
 #    "sticky" Safari waterfall, 2026-10-20), never two rows in a frame, Sharp on a cadence too.
 if node --no-warnings scripts/test_wf_pacing.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ GitHub #57 / Stuart's hard rule: the APP's waterfall history — each row placed once against its view, a locked tune
+#    and a zoom draw one continuous (bending / fanning) trail, nothing older is ever rewritten. Pure logic.
+if node --no-warnings scripts/test_wf_row_place.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE ROW TARGET FOLLOWS THE FEED (src/assets/wfRowTarget.ts, Stuart 10-20): Default min(20, 3x), Smooth min(60, 6x),
 #    snapped to a divisor of 60 — the app, the web client and the native engine (wf_row_target.h) share the rule.
 if node --no-warnings scripts/test_wf_row_target.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
