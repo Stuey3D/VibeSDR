@@ -9165,21 +9165,12 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ── Mode / filter / tune ──────────────────────────────────────────────────
 
-  const onMode = useCallback((m: SDRMode) => {
-    const c = client.current; if (!c) return;
-    // ★★ ask before tuning; re-picking changes nothing — except in ADS-B, where any pick gives the radio back
-    if ((m !== c.getStatus().mode || adsbOnRef.current || ismOnRef.current || ndbOnRef.current || aisOnRef.current) && askGate()) return;
-    /* ★★★ CHOOSING ANOTHER DEMODULATOR IS HOW YOU LEAVE DAB. DAB is a MODE the phone enters, not
-     *  a demodulator the server switches to — so while it is on, the server refuses an ordinary
-     *  mode change and this sent one anyway. The only exit was the Exit button ON the DAB screen,
-     *  which is fine until that screen is not in front of you: Stuart, 2026-09-11, on the wrist —
-     *  "its stuck in DAB mode with no way of changing it as the DAB window isnt showing."
-     *  ★★ FIXED HERE, NOT IN THE WRIST'S PICKER, because every client reaches this one handler —
-     *     the phone's own mode grid, Buddy's Demod list, and anything added later. A way out that
-     *     exists in only one menu is the same trap one menu along.
-     *  ★ An exit is not a mode change to send: toggleDab() tears the ensemble down and restores the
-     *    demodulator the listener was on before it, so the request is complete without setMode. */
-    if (dabOnRef.current && m !== ('dab' as SDRMode)) {
+  /** ★★ LEAVE WHICHEVER WHOLE-RADIO MODE HOLDS THE DIAL — DAB, ADS-B, ISM, NDB, AIS — as a listener's own press. The
+   *  server refuses a tune or a mode change in any of them, so a press that means "give me the radio back on THIS" (a
+   *  demodulator picked — onMode — or a band chosen in Band spots — bandSpotsGo) leaves first and then sends its own.
+   *  ★ Never on recovery or a reconnect: only those two presses call it (the shared-dial contract). */
+  const leaveWholeRadio = useCallback((c: SDRBackend, leaveDab = true) => {
+    if (leaveDab && dabOnRef.current) {
       /* ★★ NOT toggleDab(). That button means "show me that again" when the box is shut — it
        *  REOPENS the window rather than leaving the mode, which is exactly what Stuart asked for on
        *  2026-09-08 and exactly the wrong answer to "put me on AM". Leave DAB outright here, then
@@ -9210,6 +9201,23 @@ export default function SDRScreen({ route, navigation }: Props) {
       c.ais?.(false);
       aisUiOff();
     }
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onMode = useCallback((m: SDRMode) => {
+    const c = client.current; if (!c) return;
+    // ★★ ask before tuning; re-picking changes nothing — except in ADS-B, where any pick gives the radio back
+    if ((m !== c.getStatus().mode || adsbOnRef.current || ismOnRef.current || ndbOnRef.current || aisOnRef.current) && askGate()) return;
+    /* ★★★ CHOOSING ANOTHER DEMODULATOR IS HOW YOU LEAVE DAB. DAB is a MODE the phone enters, not
+     *  a demodulator the server switches to — so while it is on, the server refuses an ordinary
+     *  mode change and this sent one anyway. The only exit was the Exit button ON the DAB screen,
+     *  which is fine until that screen is not in front of you: Stuart, 2026-09-11, on the wrist —
+     *  "its stuck in DAB mode with no way of changing it as the DAB window isnt showing."
+     *  ★★ FIXED HERE, NOT IN THE WRIST'S PICKER, because every client reaches this one handler —
+     *     the phone's own mode grid, Buddy's Demod list, and anything added later. A way out that
+     *     exists in only one menu is the same trap one menu along.
+     *  ★ An exit is not a mode change to send: toggleDab() tears the ensemble down and restores the
+     *    demodulator the listener was on before it, so the request is complete without setMode. */
+    leaveWholeRadio(c, m !== ('dab' as SDRMode));
     userTuneSeq.current++;   // ★ a PERSON asked (mode) — see the note on userTuneSeq
     c.setMode(m); // client mirrors the server's per-mode bandwidth defaults
     setStatus({ ...c.getStatus() });
@@ -9593,18 +9601,30 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  In Band the tuning controls step BANDS (every gesture through bandSpotsStepRef), the title names the band and the
    *  drawn VFO is the band's span. Greyed with the server's reason (the owner's switch, the benchmark's default) — a press
    *  says why and starts nothing. */
+  /* ★★★ AND OUT OF DAB FIRST (Stuart, 2026-10-27, beta22 on the Pi 2): "switching to full band digital spots whilst in DAB
+   *  mode doesnt retune to a band, and when i do try to tune all it does is move dab multiplex rather than jumping to the
+   *  bands". DAB (ADS-B, ISM, NDB, AIS too) holds the dial — VibeServerWsClient.tune() returns under dabHeld and the server
+   *  refuses a `tune` in DAB — so the band's tune went nowhere and every arrow still reached stepDabBlock. A band chosen is
+   *  "give me the radio back on THIS", the same press as a demodulator picked: leave by onMode's door (leaveWholeRadio),
+   *  then tune. Both go out on the spectrum socket in that order, and the server finishes leaving before it reads the tune.
+   *  ★ The web's bandSpotsGo, the same rule. */
   const bandSpotsGo = useCallback((hz: number, id: string) => {
+    const c = client.current;
+    if (c && !askLocked(dialStateRef.current)) leaveWholeRadio(c);   // ★ asked-before-tuning: onTuneHz asks, nothing leaves
     onTuneHz(hz, 'usb' as SDRMode);   // ★ a listener's own tune (a user action: the shared-dial contract holds)
     AsyncStorage.setItem('lsv_spot_band' + radioKeySuffix, id).catch(() => {});
-  }, [onTuneHz, radioKeySuffix]);
+  }, [onTuneHz, leaveWholeRadio, radioKeySuffix]);
   const onSpotsBand = useCallback(() => {
     const cap = spotsBandCapRef.current;
     if (!cap) return;
     markInteract();
     if (!cap.ok) { appAlert('Band spots unavailable', cap.why); return; }
-    if (spotsBandOnRef.current) { stopSpots(); return; }
+    /* ★★ From DAB (ADS-B, ISM, NDB, AIS) a press is "take me to a band", even with Band already lit — the radio is not on
+     *  one, so stopping Band there would answer the wrong question. A held mode's dial never counts as a band. */
+    const held = dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current || aisOnRef.current;
+    if (spotsBandOnRef.current && !held) { stopSpots(); return; }
     void AsyncStorage.getItem('lsv_spot_band' + radioKeySuffix).catch(() => null).then((last) => {
-      const dial = client.current?.getStatus().frequency ?? 0;
+      const dial = held ? 0 : client.current?.getStatus().frequency ?? 0;
       const b = landingSpotBand(cap.bands, dial, last ?? null);
       if (!b) return;
       closeDecoder();
@@ -9612,7 +9632,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       spotsKindRef.current = 'digi'; setSpotsKind('digi');
       spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]);
       decoderClient.current?.startSpots('digi', 'band');
-      if (!spotBandAt(cap.bands, dial)) bandSpotsGo(b.hz, b.id);   // ★ on a band already: stay where you are
+      if (held || !spotBandAt(cap.bands, dial)) bandSpotsGo(b.hz, b.id);   // ★ on a band already: stay where you are
     });
   }, [stopSpots, closeDecoder, startSpotFlush, bandSpotsGo, radioKeySuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** One band up or down — clamped at the ends, never wrapped (DAB's and ISM's rule); at an end it says so. */
