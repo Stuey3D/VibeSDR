@@ -77,6 +77,9 @@ export interface DualState extends DualCore<DualSide> {
   output: DualOutput;
   /** −1 = all server 1 … 0 even … +1 = all server 2. */
   balance: number;
+  /** ★ What starting the pairing did that the listener should hear about — "VFO B closed" (dualMix.pairingStart).
+   *  Shown in the server list's banner while picking; gone with the pairing. */
+  note?: string | null;
 }
 
 let state: DualState = { ...(DUAL_OFF as DualCore<DualSide>), output: 'stereo', balance: 0 };
@@ -405,7 +408,8 @@ export function returnParams(p: Record<string, unknown>): Record<string, unknown
   return out;
 }
 
-/** May this screen offer "Listen to a 2nd server"? Only on a VibeServer, only with no pairing yet. */
+/** May this screen offer "Listen to a 2nd server"? Only on a VibeServer, only with no pairing yet. ★ VFO B on does NOT
+ *  take the row away — it says it will close B (dualMix.secondServerHint), and the screen closes it first. */
 export function canListenSecond(params: DualRouteLike): boolean {
   return dualSupported && state.phase === 'off' && dualEligible(params);
 }
@@ -414,9 +418,9 @@ export function canListenSecond(params: DualRouteLike): boolean {
  * "Listen to a 2nd server" — the screen in front goes to the background and keeps playing. The caller then goes back
  * to the server list exactly as ‹ Back to server list does.
  */
-export function listenSecond(side: Omit<DualSide, 'transport' | 'ended' | 'asking'>) {
+export function listenSecond(side: Omit<DualSide, 'transport' | 'ended' | 'asking'>, note: string | null = null) {
   if (!links.has(side.id)) return;   // ★ its audio never started — nothing to keep playing
-  set({ ...state, ...beginPicking(state, { ...side, transport: 'native', ended: null, asking: null }) });
+  set({ ...state, ...beginPicking(state, { ...side, transport: 'native', ended: null, asking: null }), note });
 }
 
 /**

@@ -54,6 +54,15 @@ frequencies per radio, like VFO A/B on a rig. Two dongles at once is a later ste
   takes VFO B away — closed with the reason, and the toggle vanishes (`max` 0) until A leaves the band; VFO B may
   neither pick WFM nor be tuned into 87.5–108 MHz (refused `mode` / `band`). Japan's 76–95 MHz is covered by the WFM
   rule rather than a second band table.
+- **Two servers OR VFO A/B — never both (app, 2026-10-27).** Stuart on #57: *"There will only be 2 channels at a time,
+  either A/B on one server or Server 1 and Server 2, otherwise this gets far too complex for a little touchscreen to
+  navigate let alone a game controller or TV remote."* While the app's two-server pairing exists (picking the second
+  counts), the server's `watch` offer is ignored on both screens — no A/B row on the frequency card, no VFO STEREO row,
+  no B colour (`vfoAB.ts abOfferNow`). "Listen to a 2nd server" stays in the Servers menu; with VFO B on it says it
+  will close B, and choosing it sends the ordinary B-off (`{"type":"watch","id":1,"off":true}`) first, on that tap (`dualMix.ts
+  pairingStart`), and the server list notes "VFO B closed — two servers use both ears." Unpairing gives the offer
+  back. So the two-server mix never carries an A/B pair: the earlier fold of a panned A/B pair to mono in one server's
+  ear is gone (each server's own audio is still folded to mono — WFM stereo — before it is placed in its ear).
 
 ## Owner
 

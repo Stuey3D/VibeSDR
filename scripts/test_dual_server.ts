@@ -23,7 +23,8 @@ import { readFileSync } from 'node:fs';
 import {
   Ramp, earGains, balanceGains, dualTargets, earIcon, countdownStage, shouldPopOut, fmtLeft, dualEligible, sameServer,
   DUAL_OFF, beginPicking, attachSecond, swap, endSide, markEnded, holds, transportFor, bgSide, terminalWhy,
-  TERMINAL_WHY, DUAL_RAMP_SEC, clampBalance, type DualCore, type DualSideCore,
+  TERMINAL_WHY, DUAL_RAMP_SEC, clampBalance, pairingStart, secondServerHint, VFO_B_CLOSED_NOTE,
+  type DualCore, type DualSideCore,
 } from '../src/services/dualMix.ts';
 
 let fails = 0;
@@ -216,6 +217,30 @@ console.log('source checks');
   ok(/VibeDualAudioModule\(ctx\)/.test(pkg), 'Android: the module is registered');
   const jni = readFileSync('android/app/src/main/cpp/vibe_localsdr_jni.cpp', 'utf8');
   ok((jni.match(/nativeOpusDecodeAux/g) ?? []).length === 2, 'Android: a second Opus decoder (and its no-Opus stub)');
+}
+
+console.log('two servers OR VFO A/B, never both (Stuart, #57: "There will only be 2 channels at a time")');
+{
+  const off = pairingStart(false), on = pairingStart(true);
+  ok(!off.closeB && off.note === null, 'VFO B off: the pairing starts as before, nothing said');
+  ok(on.closeB && on.note === VFO_B_CLOSED_NOTE, 'VFO B on: B is closed first, and the server list says so');
+  ok(/VFO B closed/.test(VFO_B_CLOSED_NOTE) && /both ears/.test(VFO_B_CLOSED_NOTE), 'the note: "VFO B closed — two servers use both ears"');
+  ok(!/VFO B/.test(secondServerHint(false)), 'the row\'s hint does not mention B when B is off');
+  ok(/^VFO B will close/.test(secondServerHint(true)) && secondServerHint(true).endsWith(secondServerHint(false)),
+     'with B on the row stays, and its hint says first that it will close B');
+  const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  ok(/closesVfoB=\{abOn\}/.test(sdr), 'the Servers menu is told when B is on');
+  ok(/onListenSecond=\{dualMyId && !refusal && canListenSecond\(route\.params\) && dualShape\.phase === 'off'\s*\? onListenSecond : undefined\}/.test(sdr),
+     '"Listen to a 2nd server" is NOT hidden by VFO B (the row stays available)');
+  ok(/freqHz: abDoor\.frequency, mode: String\(abDoor\.mode\)/.test(sdr), 'the card is given VFO A\'s tuning — the channel that plays on');
+  const chip = readFileSync('src/components/ServersChip.tsx', 'utf8');
+  ok(/secondServerHint\(closesVfoB\)/.test(chip) && !/SECOND_HINT/.test(chip), 'the chip draws the one hint rule');
+  const ds = readFileSync('src/services/dualServer.ts', 'utf8');
+  ok(/beginPicking\(state, [^)]*\), note \}\)/.test(ds), 'the note rides the picking state');
+  const pick = readFileSync('src/screens/InstancePickerScreen.tsx', 'utf8');
+  ok(/dual\.note \?/.test(pick), 'the server list\'s banner shows it');
+  const mix = readFileSync('src/services/dualMix.ts', 'utf8');
+  ok(!/a VFO A\/B pair the\s*\*\s*server has already panned/.test(mix), 'the old "fold a VFO A/B pair to mono" rule is gone from the notes');
 }
 
 console.log(fails ? `\n✗ ${fails} failed` : '\n✓ all passed');

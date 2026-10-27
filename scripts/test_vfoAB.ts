@@ -44,7 +44,7 @@ import { fileURLToPath } from 'node:url';
  */
 import {
   parseWatch, watchOffered, watchMaxOf, vfoB, msgOn, msgOff, msgAim, msgSquelch, msgStereo, msgMonoOut, EarOrder, VfoABCore,
-  decStartVfo, decTagFor,
+  decStartVfo, decTagFor, abOfferNow,
   SWAP_HZ, SAME_HZ, otherVfo, vfoATune, DoorSeq, RESYNC_MS, edgesForWidth, autoVfoBColour, vfoBNeedle, VFO_B_AUTO,
   type TuneStatus,
 } from '../src/services/vfoAB.ts';
@@ -447,6 +447,25 @@ console.log('── decode on either VFO ──');
      'the decoder socket says "vfo":"B" on an attach and a subscribe (and nothing for A — an older server is unchanged)');
   ok(/vfoRows=\{abOn && isLocal && !icom \?/.test(scr), 'the Audio menu gets a row per VFO only while B is on');
   ok(!/setHwSquelch\(info\.activeSquelchDb\)/.test(scr), 'the squelch slider no longer follows a switch (it is VFO A\'s row)');
+}
+
+console.log('── two servers OR VFO A/B, never both (Stuart, #57) ──');
+{
+  ok(abOfferNow(1, 'off') === 1, 'no pairing: the server\'s offer stands');
+  ok(abOfferNow(1, 'picking') === 0, 'picking the second server: A/B not offered (the first is already in an ear)');
+  ok(abOfferNow(1, 'paired') === 0, 'two servers playing: A/B not offered');
+  ok(abOfferNow(0, 'off') === 0, 'a server that does not offer it still does not');
+  ok(abOfferNow(2, 'paired') === 0 && abOfferNow(2, 'off') === 2, 'unpairing gives back exactly what the server offered');
+  const src = (f: string) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
+  const scr = src('../src/screens/SDRScreen.tsx');
+  ok(/const abOffered = abOfferNow\(abOfferedSrv, dualShape\.phase\);/.test(scr), 'the screen\'s offer is gated on the pairing');
+  ok(/onVfoAB=\{abOffered > 0 && /.test(scr) && /onVfoStereo=\{abOffered > 0 && /.test(scr) && /onVfoNeedleB=\{abOffered > 0 \?/.test(scr),
+     'the A/B row, its STEREO row and B\'s colour all read the gated offer (no dead controls)');
+  ok(!/\babOfferedSrv > 0/.test(scr), 'nothing reads the raw offer to draw a control');
+  // A pairing started with VFO B on closes B through the ordinary off message (the client's abSetOn(false)).
+  ok(JSON.stringify(msgOff()) === JSON.stringify({ type: 'watch', id: 1, off: true }), 'B-off is the ordinary watch off');
+  ok(/const start = pairingStart\(abOn\);\s*if \(start\.closeB\) onVfoAB\(false\);\s*listenSecond\(/.test(scr),
+     '"Listen to a 2nd server" closes VFO B BEFORE the pairing begins');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

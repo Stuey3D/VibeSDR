@@ -17,9 +17,14 @@
  *   Ramp is written three times — here (for the tests), VibeDualAudio.swift and VibeDualAudio.kt — ONE RULE, THREE
  *   READERS: change all three.
  *
- * ★ Each server's own audio is FOLDED TO MONO before it is placed, whatever it is (WFM stereo, or a VFO A/B pair the
- *   server has already panned): a server owns ONE ear here, and its own stereo inside that ear would be half lost
- *   anyway — the other half would land in the other server's ear.
+ * ★ Each server's own audio is FOLDED TO MONO before it is placed, whatever it is (WFM stereo): a server owns ONE ear
+ *   here, and its own stereo inside that ear would be half lost anyway — the other half would land in the other
+ *   server's ear.
+ * ★★★ TWO SERVERS OR VFO A/B — NEVER BOTH (Stuart, GitHub #57: "There will only be 2 channels at a time, either A/B on
+ *     one server or Server 1 and Server 2, otherwise this gets far too complex for a little touchscreen to navigate let
+ *     alone a game controller or TV remote."). So there is no VFO A/B pair to fold: starting a pairing with VFO B on
+ *     closes B first (pairingStart), and while the pairing lasts A/B is not offered on either server (vfoAB.ts
+ *     abOfferNow). Unpairing gives it back.
  */
 
 /** Every pan and fade, as VFO A/B (vibe_watch.h kRampSec). */
@@ -157,6 +162,22 @@ export function dualEligible(p: DualRouteLike | null | undefined): boolean {
   if (p.serverType !== 'vibeserver' || !p.isLocal || p.isTcp) return false;
   // ★ connectVibeServer always sets localHost; the on-device radio (connectLocal) never does.
   return !!p.localHost && p.localPort != null;
+}
+
+/** The note the server list shows when "Listen to a 2nd server" closed VFO B. */
+export const VFO_B_CLOSED_NOTE = 'VFO B closed — two servers use both ears.';
+
+/** "Listen to a 2nd server", said where it is chosen (also its spoken hint) — and, with VFO B on, that B will close. */
+export function secondServerHint(abOn: boolean): string {
+  const base = 'This server keeps playing while you pick another: this one in your left ear, the next in your right '
+             + '(Audio menu, TWO SERVERS, for both in both ears).';
+  return abOn ? `VFO B will close — two servers use both ears. ${base}` : base;
+}
+
+/** ★★★ Starting a pairing: VFO B on ⇒ close it FIRST (the ordinary B-off, sent on the person's own tap of "Listen to a
+ *  2nd server" — THE SHARED-DIAL CONTRACT: a user action) and say so. Two channels at a time, never three. */
+export function pairingStart(abOn: boolean): { closeB: boolean; note: string | null } {
+  return abOn ? { closeB: true, note: VFO_B_CLOSED_NOTE } : { closeB: false, note: null };
 }
 
 /** Two listings are the SAME server when host and port agree (the picker can list one server twice). */
