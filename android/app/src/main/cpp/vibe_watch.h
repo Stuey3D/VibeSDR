@@ -203,6 +203,18 @@ public:
     void setMuted(bool m) { muted_.store(m, std::memory_order_relaxed); }
     bool muted() const { return muted_.load(std::memory_order_relaxed); }
 
+    /** ★★ DECODE ON EITHER VFO (Stuart, 2026-10-27: "surely it doesnt matter which VFO is listen and which is decode?").
+     *  This channel's demodulated audio — mono, 48 kHz, BEFORE the mix (so neither its mute nor its squelch reaches it),
+     *  exactly where a listener's own decoder is fed VFO A's — handed to whatever decodes VFO B. Called on the feeding
+     *  thread inside the demodulator's callback; the tap must copy and return (DecoderHost::feed queues, never decodes).
+     *  Unset = one relaxed atomic read a block. */
+    using AudioTap = std::function<void(const float* pcm, int frames)>;
+    void setAudioTap(AudioTap t) {
+        std::lock_guard<std::mutex> lk(tapMtx_);
+        tap_ = std::move(t);
+        hasTap_.store((bool)tap_, std::memory_order_release);
+    }
+
     /** ★ Outside the capture window: the channel is kept (the listener's choice survives a radio move) but silent. */
     void setParked(bool p) { if (p && !parked_.load()) flush(); parked_.store(p); }
     bool parked() const { return parked_.load(); }
@@ -213,11 +225,19 @@ private:
     static void audioCb(void* ctx, const float* pcm, int frames, int ch, int) {
         auto* self = static_cast<WatchChannel*>(ctx);
         if (self->parked_.load(std::memory_order_relaxed) || frames <= 0) return;
-        if (ch == 1) { self->fifo_.push(pcm, (size_t)frames); return; }
-        // ★ Stereo cannot happen (setStereoEnabled(false)) — folded anyway, so a future WFM change cannot swap ears.
-        std::vector<float> m((size_t)frames);
-        for (int i = 0; i < frames; i++) m[i] = 0.5f * (pcm[2 * i] + pcm[2 * i + 1]);
-        self->fifo_.push(m.data(), m.size());
+        const float* mono = pcm;
+        std::vector<float> m;
+        if (ch != 1) {
+            // ★ Stereo cannot happen (setStereoEnabled(false)) — folded anyway, so a future WFM change cannot swap ears.
+            m.resize((size_t)frames);
+            for (int i = 0; i < frames; i++) m[i] = 0.5f * (pcm[2 * i] + pcm[2 * i + 1]);
+            mono = m.data();
+        }
+        self->fifo_.push(mono, (size_t)frames);
+        if (self->hasTap_.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lk(self->tapMtx_);
+            if (self->tap_) self->tap_(mono, frames);
+        }
     }
     const int id_;
     mutable std::mutex wantMtx_;
@@ -225,7 +245,9 @@ private:
     Wanted want_;
     bool dirty_ = true;
     SquelchGate gate_;
-    std::atomic<bool> open_{true}, parked_{false}, muted_{false};
+    std::atomic<bool> open_{true}, parked_{false}, muted_{false}, hasTap_{false};
+    std::mutex tapMtx_;
+    AudioTap tap_;
     std::atomic<float> levelDb_{-200.0f};
     std::unique_ptr<vibedsp::RxPipeline> rx_;
     double rate_ = 0, lastOff_ = 1e300;

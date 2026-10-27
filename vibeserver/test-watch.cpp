@@ -11,7 +11,9 @@
 //   8. the squelch: hysteresis, tail, open/closed with the time it changed; a closed gate silences ITS channel only;
 //   9. the FIFO primes, bounds its latency and re-primes after an underrun;
 //  10. MUTE (round 3): a muted VFO fades out over the same 400 ms ramp and the other pans home to both ears; unmute reverses;
-//  11. the RF centre for two VFOs on a personal receiver (fitCentre): stays put, moves to fit both, refuses too far apart.
+//  11. the RF centre for two VFOs on a personal receiver (fitCentre): stays put, moves to fit both, refuses too far apart;
+//  12. DECODE ON EITHER VFO (run inside 1, on its channel): the audio tap a decoder on VFO B is fed — every frame, the
+//      same samples the mix gets, still while MUTED, nothing while PARKED or once removed.
 // SILENT: nothing is played.
 #include "../android/app/src/main/cpp/vibe_watch.h"
 
@@ -93,6 +95,36 @@ int main() {
         w.flush();
         a = run(-30000.0);
         ok(goertzel(a.data(), 24000, 1, 600, 48000) > 20 * goertzel(a.data(), 24000, 1, 1100, 48000), "re-aimed (channel stepping), it hears the other carrier");
+
+        std::printf("── 12. decode on either VFO: the channel's audio tap (2026-10-27) ──\n");
+        // ★ What a decoder on VFO B is fed: the SAME demodulated audio the FIFO gets, mono, frame for frame — and it is not
+        //   the mix, so a MUTED channel still feeds it; a PARKED one (outside the window) feeds nothing; no tap, no cost.
+        std::vector<float> tapped, popped;
+        w.setAudioTap([&](const float* p, int k) { tapped.insert(tapped.end(), p, p + k); });
+        w.flush();
+        w.setMuted(true);
+        std::vector<float> o(960);
+        for (int i = 0; i + 4800 <= n; i += 4800) {
+            w.feed(iq.data() + i, 4800, fs, -30000.0);
+            const size_t got = w.fifo().pop(o.data(), 960);
+            popped.insert(popped.end(), o.begin(), o.begin() + (long)got);
+        }
+        std::printf("      tapped %zu frames, the FIFO gave %zu\n", tapped.size(), popped.size());
+        ok(tapped.size() > 140000, "the tap is handed every frame the channel makes (3 s of 48 kHz)");
+        // ★ nothing dropped (fed and drained in step), so what the mix popped is the tap's stream from its start
+        ok(popped.size() > 100000 && popped.size() <= tapped.size() && std::equal(popped.begin(), popped.end(), tapped.begin()),
+           "…the same samples the mix is given (the FIFO's, frame for frame)");
+        const std::vector<float> last(tapped.end() - 24000, tapped.end());
+        ok(goertzel(last.data(), 24000, 1, 600, 48000) > 20 * goertzel(last.data(), 24000, 1, 1100, 48000),
+           "the tap hears the channel's own carrier — MUTED in the mix, and still decoding");
+        const size_t before = tapped.size();
+        w.setParked(true);
+        for (int i = 0; i + 4800 <= 48000; i += 4800) w.feed(iq.data() + i, 4800, fs, -30000.0);
+        ok(tapped.size() == before, "a PARKED channel (outside the window) feeds the decoder nothing");
+        w.setParked(false);
+        w.setAudioTap(nullptr);
+        for (int i = 0; i + 4800 <= 48000; i += 4800) w.feed(iq.data() + i, 4800, fs, -30000.0);
+        ok(tapped.size() == before, "the tap removed: nothing more handed on");
     }
 
     std::printf("── 2+3. lower left, higher right; adding B pans A from centre with B fading in ──\n");

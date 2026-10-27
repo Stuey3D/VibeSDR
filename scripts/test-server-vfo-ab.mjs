@@ -16,6 +16,11 @@
 //      the old window keeps B inside, and a B too far away is refused "apart"; and NO DUAL VFO ON FM BROADCAST — A on
 //      WFM in the FM band closes B with the reason and takes the toggle away (max 0), it comes back off the band, and B
 //      may neither pick WFM nor be tuned into 87.5–108 MHz.
+//   DECODE ON EITHER VFO (2026-10-27), §6 on all three kinds of radio: a decoder started on VFO B is fed B's own audio
+//      (WEFAX's picture follows B's dial, not A's), A is heard meanwhile, nothing is swapped, muting B leaves it
+//      decoding, Single and Band spots run on B (Band reads B's band and is fed B's IQ, as is a CW skimmer on B), a
+//      listener holds one decoder across both VFOs, and B going off stops its decoders with the reason; §6b measures
+//      what a decoder on B costs against the same decoder on A.
 // Silent: audio frames are analysed in memory, never played.
 //   VIBESERVER_BIN=…/vibeserver node scripts/test-server-vfo-ab.mjs
 import net from 'node:net';
@@ -23,7 +28,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -132,7 +137,7 @@ async function server(args, tag, radioExtra = {}) {
   await until(async () => !!(await status()), 15000);
   // ★ The scratch directory goes with the server unless something failed (then its server.log is the evidence).
   const failAtStart = fail;
-  return { port, dir, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM');
+  return { port, dir, pid: srv.pid, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM');
                                     if (fail === failAtStart) setTimeout(() => fs.rmSync(dir, { recursive: true, force: true }), 300); }, log: () => fs.readFileSync(path.join(dir, 'server.log'), 'utf8') };
 }
 async function listener(port, sid, f, opus = false) {
@@ -145,6 +150,11 @@ async function listener(port, sid, f, opus = false) {
   await sleep(500);
   return L;
 }
+const adminStatus = async (port) => {
+  const n = (await fetch(`http://127.0.0.1:${port}/vibeserver/auth`).then((r) => r.json())).nonce;
+  const q = `vs_admin_nonce=${n}&vs_admin_auth=${crypto.createHmac('sha256', 'vfoab-test-admin').update(n).digest('hex')}`;
+  return fetch(`http://127.0.0.1:${port}/vibeserver/admin/status?${q}`, { signal: AbortSignal.timeout(3000) }).then((r) => r.json());
+};
 const hwWatch = (L) => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[h.length - 1].watch : undefined; };
 
 // ── 1. One-pipeline radio ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -423,6 +433,171 @@ for (const [label, args] of [['range-locked (users 2)', ['--users', '2', '--lock
     ok(l1 - l0 >= 2, `with VFO B on and VFO A MUTED, A's decoder keeps decoding (${l1 - l0} more lines)`);
     ok(a.L[400] > 0.002 && a.R[400] > 0.002 && Math.abs(a.L[400] - a.R[400]) < 0.1 * a.L[400] && a.L[840] < 0.0005 && a.R[840] < 0.0005,
        `VFO B's station in both ears, nothing of A's (L ${fmt(a.L)} · R ${fmt(a.R)})`);
+    dx.close(); L.spec.close(); L.aud.close();
+  } finally { S.stop(); }
+}
+// ── 6. Decode on EITHER VFO (2026-10-27) ──────────────────────────────────────────────────────────────────────────────
+/* ★★★ Stuart, 2026-10-27: "That seems like a weird limitations surely it doesnt matter which VFO is listen and which is
+ *  decode?" A decoder started on VFO B ("vfo":"B" on the attach) runs on this listener's VFO B host, fed B's OWN audio
+ *  (before the mix) and filed on B's dial — on all three kinds of radio. WEFAX is the instrument: its pixel is the audio
+ *  frequency (1500 Hz black … 2300 Hz white), so B in USB 2200 Hz below the 400 Hz station (its carrier a 2200 Hz tone)
+ *  draws LIGHT lines while VFO A (AM on the 620 Hz station: its audio all below 1500 Hz) would draw BLACK ones; moving
+ *  B's dial 700 Hz (the carrier to 1500 Hz) darkens the picture, moving A's does not. Meanwhile A is heard in its ear, the labels and ears never move, muting B
+ *  leaves its decoder decoding, Band on B reads B's band (A sits on no band at all), and B going off stops B's decoder
+ *  with the reason in words. */
+const pixMean = (bins) => {
+  const ls = bins.filter((b) => b.length === 9 + 1809).slice(-2);
+  if (!ls.length) return NaN;
+  let s = 0, n = 0;
+  for (const b of ls) for (let i = 9; i < b.length; i++) { s += b[i]; n++; }
+  return s / n;
+};
+const B_USB = A_HZ - 2200;   // ★ B's USB dial: the 400 Hz station's carrier a 2200 Hz tone (light grey) (the decoder auto-levels, so the picture is judged by how it MOVES)
+for (const [label, args, sid] of [['personal receiver (users 1)', ['--users', '1'], 'vfoabdb1'],
+                                  ['range-locked (users 2)', ['--users', '2', '--lock-freq', String(CENTRE)], 'vfoabdb2'],
+                                  ['shared dial (users 3)', ['--users', '3'], 'vfoabdb3']]) {
+  console.log(`── 6. decode on VFO B — ${label} ──`);
+  const S = await server(args, sid);
+  try {
+    const shared = label.startsWith('shared');   // ★ a shared dial's listeners are sent Opus (§3) — counted, not analysed
+    const L = await listener(S.port, sid, MID_HZ, shared);
+    const dx = ws(S.port, `/ws/dxcluster?user_session_id=${sid}`);
+    dx.keepBin = true;
+    await sleep(400);
+    const wef = { type: 'audio_extension_attach', extension_name: 'wefax', lpm: 120, image_width: 1809, carrier: 1900, deviation: 400, use_phasing: false };
+    // no VFO B yet: refused in words
+    dx.send({ ...wef, vfo: 'B' });
+    await until(() => jsons(dx, 'decoder_refused').length > 0, 2000);
+    const nr = jsons(dx, 'decoder_refused')[0];
+    ok(nr && nr.reason === 'vfo' && /VFO B is not on/.test(nr.message), `a decoder on B with no VFO B: refused "vfo" (${nr && nr.message})`);
+    L.spec.send({ type: 'watch', id: 1, frequency: B_USB, mode: 'usb' });
+    await until(() => lastWatch(L.spec) && lastWatch(L.spec).chans.length === 1, 3000);
+    await sleep(1500);   // ★ B's AGC settles
+    dx.txt.length = 0; dx.bin.length = 0;
+    dx.send({ ...wef, vfo: 'B' });
+    await until(() => jsons(dx, 'audio_extension_attached').length > 0, 2000);
+    ok(jsons(dx, 'audio_extension_attached').some((m) => m.vfo === 'B'), 'WEFAX attached on VFO B');
+    await sleep(5000);   // ★ the first lines are the decoder settling — the last two are judged
+    const lines = () => dx.bin.filter((b) => b.length === 9 + 1809).length;
+    const m0 = pixMean(dx.bin);
+    ok(lines() >= 4 && m0 > 60, `WEFAX on B draws B's picture — light, not A's black (${lines()} lines, mean pixel ${m0.toFixed(0)})`);
+    // A retuned: B's picture does not care
+    L.spec.send({ type: 'tune', frequency: KEY_HZ, mode: 'am' });
+    await sleep(2500);
+    const m1 = pixMean(dx.bin);
+    ok(Math.abs(m1 - m0) < 25, `VFO A retuned: B's picture unchanged (mean ${m1.toFixed(0)})`);
+    L.spec.send({ type: 'tune', frequency: MID_HZ, mode: 'am' });
+    // B's dial 700 Hz up: the carrier falls to 1500 Hz — dark
+    L.spec.send({ type: 'watch', id: 1, frequency: B_USB + 700 });
+    await sleep(3000);
+    const m2 = pixMean(dx.bin);
+    ok(m2 < m0 - 25, `B's dial moved 700 Hz: B's picture follows it (mean ${m0.toFixed(0)} → ${m2.toFixed(0)})`);
+    L.spec.send({ type: 'watch', id: 1, frequency: B_USB });
+    await sleep(1500);
+    // A heard meanwhile, in its own ear (A 7.03 is the higher: RIGHT); the labels never moved
+    let a = await listen(L.aud, 1600);
+    const wst = lastWatch(L.spec);
+    if (shared) ok(a.st2 > 20, `the listener's own stereo stream plays on while B decodes (${a.st2} stereo Opus packets)`);
+    else ok(a.ch === 2 && a.R[620] > 0.002 && a.R[620] > 30 * a.L[620], `VFO A heard in its ear while B decodes (R 620 ${a.R[620].toFixed(4)}, L ${a.L[620].toFixed(5)})`);
+    ok(wst && wst.chans[0] && wst.chans[0].freq === B_USB && wst.chans[0].mode === 'usb', 'VFO B is still B: its frequency and mode on the watch state, nothing swapped');
+    // mute the decoding VFO: its decoder decodes on, A comes home to both ears
+    L.spec.send({ type: 'watch', id: 1, mute: true });
+    await sleep(1500);
+    const l0 = lines();
+    a = await listen(L.aud, 1600);
+    const l1 = lines();
+    ok(l1 - l0 >= 2, `B (decoding) MUTED: its decoder keeps decoding (${l1 - l0} more lines)`);
+    if (!shared) ok(a.L[620] > 0.002 && a.R[620] > 0.002 && Math.abs(a.L[620] - a.R[620]) < 0.1 * a.L[620], `…and A is in both ears (L ${fmt(a.L)} · R ${fmt(a.R)})`);
+    L.spec.send({ type: 'watch', id: 1, mute: false });
+    // ★ Digital spots on B — Single, then Band on B's band (A sits on 6.91 MHz, on no band at all)
+    dx.send({ type: 'subscribe_digital_spots', vfo: 'B' });
+    await until(() => /digital spots \(single\) on VFO B/.test(S.log()), 2000);
+    await sleep(1500);
+    ok(/digital spots \(single\) on VFO B/.test(S.log()), 'Single digital spots started on VFO B');
+    ok(lines() > l1, 'the WEFAX decoder on B runs on beside them');
+    L.spec.send({ type: 'tune', frequency: A_HZ, mode: 'am' });
+    L.spec.send({ type: 'watch', id: 1, frequency: 7074000, mode: 'usb' });
+    await sleep(800);
+    dx.txt.length = 0;
+    dx.send({ type: 'subscribe_digital_spots', scope: 'band', vfo: 'B' });
+    await until(() => jsons(dx, 'digital_spots_status').length > 0 || jsons(dx, 'decoder_refused').length > 0, 8000);
+    const bs = jsons(dx, 'digital_spots_status').pop();
+    const modes = bs ? bs.data.modes.map((m) => m.mode) : [];
+    ok(modes.includes('FT8') || modes.includes('ft8'), `Band on B reads B's band, 40 m (${modes.join(' ') || JSON.stringify(jsons(dx, 'decoder_refused')[0])})`);
+    // ★ …and is FED: B's slice of the band (the shared FFT on a range-locked radio, B's own WideTap on a one-pipeline one)
+    const runB = async () => ((await adminStatus(S.port)).decoders.running || []).find((r) => r.vfo === 'B' && r.session === sid);
+    const f0 = (await runB()) || {};
+    await sleep(2000);
+    const f1 = (await runB()) || {};
+    ok(f1.spotsScope === 'band' && /7\.07/.test(f1.spotsRun || '') && f1.fed > (f0.fed || 0) + 100000,
+       `Band on B is fed B's IQ, on B's dial (admin: ${f1.spotsRun}, ${(f1.fed || 0) - (f0.fed || 0)} samples in 2 s)`);
+    // ★ a CW skimmer on B (IQ, not audio) replaces B's WEFAX — this socket's one decoder — and is fed
+    dx.send({ type: 'audio_extension_attach', extension_name: 'cwskim', width: 6000, vfo: 'B' });
+    await sleep(1500);
+    const c0 = (await runB()) || {};
+    await sleep(2000);
+    const c1 = (await runB()) || {};
+    ok(c1.decoder === 'cwskim' && c1.fed > (c0.fed || 0) + 50000, `a CW skimmer on B is fed B's IQ (${c1.decoder}, ${(c1.fed || 0) - (c0.fed || 0)} samples in 2 s)`);
+    // ★ one decoder per listener: WEFAX on A replaces the skimmer on B, and back
+    dx.send(wef);
+    await sleep(800);
+    let run = (await adminStatus(S.port)).decoders.running || [];
+    const mine = (v) => run.find((r) => r.vfo === v && r.decoder && (r.session === sid || r.shared));
+    ok(mine('A') && mine('A').decoder === 'wefax' && !(mine('B') && mine('B').decoder), `a decoder started on A stops this listener's decoder on B (${JSON.stringify(run.map((r) => [r.vfo, r.decoder]))})`);
+    dx.send({ ...wef, vfo: 'B' });
+    await sleep(800);
+    run = (await adminStatus(S.port)).decoders.running || [];
+    ok(mine('B') && mine('B').decoder === 'wefax' && !(mine('A') && mine('A').decoder), `…and one started on B stops the one on A (${JSON.stringify(run.map((r) => [r.vfo, r.decoder]))})`);
+    // B off: its decoders stop, said in words
+    dx.txt.length = 0;
+    L.spec.send({ type: 'watch', id: 1, off: true });
+    await until(() => jsons(dx, 'decoder_refused').length >= 2, 3000);
+    const gone = jsons(dx, 'decoder_refused');
+    ok(gone.some((m) => m.what === 'decoder' && m.reason === 'vfo') && gone.some((m) => m.what === 'spots' && m.reason === 'vfo'),
+       `VFO B off: its decoder and its spots stop, with the reason (${gone[0] && gone[0].message})`);
+    dx.bin.length = 0;
+    await sleep(1500);
+    ok(lines() === 0, 'nothing more decodes from a VFO B that has gone');
+    dx.close(); L.spec.close(); L.aud.close();
+  } finally { S.stop(); }
+}
+// ── 6b. What a decoder on B costs (personal receiver) ─────────────────────────────────────────────────────────────────
+/* ★ STATED, NOT ASSUMED (Stuart: "state the trade-off first"): the whole vibeserver process's CPU with VFO B on and the
+ *  same decoder running on A, then on B. B's demodulator runs either way, so the decoder costs the same on either VFO;
+ *  Band on a one-pipeline radio cuts its slice with a WideTap either way (A's skimTap_ or B's own). */
+{
+  console.log('── 6b. the CPU of a decoder on VFO B against VFO A (personal receiver) ──');
+  const S = await server(['--users', '1'], 'deccost');
+  try {
+    const cpu = () => {
+      const t = String(execFileSync('ps', ['-o', 'time=', '-p', String(S.pid)])).trim();   // [[hh:]mm:]ss.cc
+      return t.split(':').reduce((acc, v) => acc * 60 + parseFloat(v), 0);
+    };
+    const sid = 'vfoabcost';
+    const L = await listener(S.port, sid, 7074000);
+    L.spec.send({ type: 'tune', frequency: 7074000, mode: 'usb' });
+    L.spec.send({ type: 'watch', id: 1, frequency: 7074000, mode: 'usb' });
+    await until(() => lastWatch(L.spec) && lastWatch(L.spec).chans.length === 1, 3000);
+    const dx = ws(S.port, `/ws/dxcluster?user_session_id=${sid}`);
+    await sleep(1500);
+    const measure = async (msgOn, msgOff, ms = 10000) => {
+      dx.send(msgOn); await sleep(2500);
+      const c0 = cpu(), t0 = Date.now();
+      await sleep(ms);
+      const pct = 100 * (cpu() - c0) / ((Date.now() - t0) / 1000);
+      dx.send(msgOff); await sleep(1500);
+      return pct;
+    };
+    const idle = await (async () => { const c0 = cpu(), t0 = Date.now(); await sleep(6000); return 100 * (cpu() - c0) / ((Date.now() - t0) / 1000); })();
+    const wef = { type: 'audio_extension_attach', extension_name: 'wefax', lpm: 120, image_width: 1809, carrier: 1900, deviation: 400, use_phasing: false };
+    const wA = await measure(wef, { type: 'audio_extension_detach' });
+    const wB = await measure({ ...wef, vfo: 'B' }, { type: 'audio_extension_detach' });
+    const bA = await measure({ type: 'subscribe_digital_spots', scope: 'band' }, { type: 'unsubscribe_digital_spots' }, 16000);
+    const bB = await measure({ type: 'subscribe_digital_spots', scope: 'band', vfo: 'B' }, { type: 'unsubscribe_digital_spots' }, 16000);
+    console.log(`      whole process, % of one core: A+B, nothing decoding ${idle.toFixed(1)} · WEFAX on A ${wA.toFixed(1)} · on B ${wB.toFixed(1)}`
+              + ` · Band (40 m) on A ${bA.toFixed(1)} · on B ${bB.toFixed(1)}`);
+    ok(wB < wA * 1.5 + 2, `a WEFAX decoder on B costs what it costs on A (${wB.toFixed(1)} vs ${wA.toFixed(1)} %)`);
+    ok(bB < bA * 1.5 + 3, `Band on B costs what it costs on A (${bB.toFixed(1)} vs ${bA.toFixed(1)} %)`);
     dx.close(); L.spec.close(); L.aud.close();
   } finally { S.stop(); }
 }
