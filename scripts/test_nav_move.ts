@@ -66,4 +66,18 @@ console.log(fails ? `test_nav_move: ${fails} FAILED` : 'test_nav_move: all ok');
   const b = tuneCardItems({ tabs: false, vts: false, lockUnit: false, profiles: false, actions: { share: false } });
   ok(!b.items.some((x) => x.k === 'act:share') && b.items.some((x) => x.k === 'act:tune'), 'no SHARE stop when sharing is off');
 }
+// ★★ V12 VFO A/B's ON/OFF (moved from the tuning-step sheet, build 498): its own line between the profile and the actions.
+{
+  const c = tuneCardItems({ tabs: true, vts: false, lockUnit: false, profiles: true, vfoAB: true, actions: { share: true } });
+  const ab = c.items.findIndex((x) => x.k === 'vfo:ab');
+  const rows = c.items.map((x) => x.row);
+  ok(ab >= 0 && c.items[ab - 1].k === 'profile' && c.items[ab + 1].k === 'act:cancel', 'VFO A/B: after the profile, before CANCEL');
+  ok(rows.every((r, i) => i === 0 || rows[i - 1] <= r) && rows.filter((r) => r === c.items[ab].row).length === 1,
+     'VFO A/B: a line of its own, in screen order');
+  ok(navMove(rows, ab, 'ArrowDown', false) === ab + 1 && navMove(rows, ab + 1, 'ArrowUp', false) === ab,
+     'Down from VFO A/B is CANCEL, Up from CANCEL is VFO A/B');
+  ok(c.items[c.start].k === 'field', 'still starts on the frequency box');
+  ok(!tuneCardItems({ tabs: true, vts: false, lockUnit: false, profiles: true, actions: { share: true } }).items.some((x) => x.k === 'vfo:ab'),
+     'no VFO A/B stop where the server does not offer it');
+}
 process.exit(fails ? 1 : 0);

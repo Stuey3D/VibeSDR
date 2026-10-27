@@ -207,7 +207,7 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
-import { EarOrder, INACTIVE_INTENSITY, otherVfo, type VfoABInfo, type VfoId } from '../services/vfoAB';
+import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, vfoATune, DoorSeq, type VfoABInfo, type VfoId } from '../services/vfoAB';
 import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
          type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
@@ -360,13 +360,6 @@ const NFM_VOICE_KEY = 'lsv_nfm_voice';
 const BINAURAL_KEY = 'lsv_binaural';
 /** ★★ V12 VFO A/B's STEREO switch (lower VFO left / higher right) — remembered per device like binaural; absent = ON. */
 const VFO_STEREO_KEY = 'lsv_vfo_stereo';
-/** ★★ VFO B's needle colour: a contrast to the listener's own (A's) — cyan, or amber when A's is already blue-ish. */
-function vfoBColour(a: string): string {
-  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(a || '');
-  if (!m) return '#38c8ff';
-  const r = parseInt(m[1], 16), g = parseInt(m[2], 16), b = parseInt(m[3], 16);
-  return b > 140 && b > r + 30 ? '#ffb020' : '#38c8ff';
-}
 const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
 
 /** The server's health levels arrive as plain numbers off the wire (ServerHealth) and the pill's own
@@ -3052,8 +3045,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  VFO B a second one on the same radio, both heard at once — the server mixes them into the one stream, the LOWER
    *  frequency in the LEFT ear and the HIGHER in the RIGHT (the STEREO switch, audio menu, default on). The client
    *  holds the slots: whichever VFO is selected IS `status`, so every control on this screen tunes it unchanged.
-   *  ★ Turned on and off ONLY from the tuning menu; PER SESSION (a reconnect starts with one VFO — the server forgets
-   *    B with the session, and so does the client). Offered only where hwinfo says `watch` > 0 (VibeServer). */
+   *  ★ Turned on and off ONLY from the frequency card (FreqModal — the step sheet until build 498). PER SESSION: a
+   *    reconnect starts with one VFO, but what the screen shows is the SERVER'S word (its watch state), never a local
+   *    flag a socket reopen or a rotation resets (vfoAB.ts PER SESSION). Offered only where hwinfo says `watch` > 0. */
   const [abOffered, setAbOffered] = useState(0);
   const [abInfo, setAbInfo] = useState<VfoABInfo | null>(null);
   const abOn = !!abInfo?.on;
@@ -3116,6 +3110,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                             vfoStereo, abInfo?.state?.monoOut === true)
     : null;
   const abParked = abOn && !!abInfo?.state?.chans.find((c) => c.id === 1)?.parked;
+  /** ★★★ VFO A's tuning, for the AUDIO SOCKET — the listener's own channel, never B (vfoAB.ts vfoATune: handing it the
+   *  selected VFO's status is what snapped A onto B on a switch, build 498). */
+  const abDoor = vfoATune(status, abInfo);
+  const [doorSeq] = useState(() => new DoorSeq());
 
   /* ★★ V12 BINAURAL TUNING — the audio leans toward the ear on the side the signal lies and comes back to the
    *  middle of the head as you tune onto it (services/binauralOffset.ts, vibedsp/binaural.h). ONE setting, in the
@@ -3475,6 +3473,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ The "still listening?" card is CENTRED, not stacked, so it contributes nothing here.
   const noticeStackH = (showIdleTerms ? NOTICE_PILL_H : 0) + (antNoticeH ? antNoticeH + 6 : 0);
   const [vfoNeedle,     setVfoNeedle]     = useState('#ffffff');   // production default
+  /** ★★ V12 VFO B's needle colour — 'auto' (a contrast to A's, the default) or the listener's swatch. Saved with A's,
+   *  in the same display blob (this server / global), and reset with it. */
+  const [vfoNeedleB,    setVfoNeedleB]    = useState<string>(VFO_B_AUTO);
   // Needle/glow brightness 1-10 (5 = original look) — bright palettes can
   // swallow the needle whatever colour it is (Stuart 2026-06-12 eve)
   const [vfoIntensity,  setVfoIntensity]  = useState(5);
@@ -4041,6 +4042,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           if (p.signalMode === 'snr' || p.signalMode === 'smeter' || p.signalMode === 'dbfs') setSignalMode(p.signalMode);
           if (typeof p.colormap === 'string')  setColormap(p.colormap);
           if (typeof p.vfoNeedle === 'string') setVfoNeedle(p.vfoNeedle);
+          if (typeof p.vfoNeedleB === 'string') setVfoNeedleB(p.vfoNeedleB);
           num('vfoIntensity', setVfoIntensity);
           num('vfoFrost', setVfoFrost);
           num('bgOpacity', (v: number) => { setBgOpacity(v); bgOpacityUserSet.current = true; });
@@ -4056,7 +4058,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const json = JSON.stringify({
       dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoNeedleB, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape, avgFrames,
     });
     latestPrefsJson.current = json;
@@ -4069,7 +4071,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     return () => clearTimeout(t);
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
-      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
+      autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoNeedleB, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
       specRatioPortrait, specRatioLandscape, avgFrames, baseUrl]);
 
   // Display-panel save row (skin parity): RESET = defaults + drop the server
@@ -4083,7 +4085,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setSpecPeakScale(10); setPeakHold(true);
     setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
     setAutoContrast(5); setSpatialSmooth(true); setWfCoarse('auto');
-    setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
+    setVfoNeedle('#ffffff'); setVfoNeedleB(VFO_B_AUTO); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
     setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
     appAlert('Display Reset', 'Display settings restored to defaults.');
   }, [baseUrl]);
@@ -7825,6 +7827,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
     }, () => converterRef.current), password, !!route.params.isLocal), () => converterRef.current);
     client.current = c;
+    // ★★ V12 VFO A/B: a NEW client knows no VFO B until the server says so (it adopts one the session still holds —
+    //    vfoAB.ts PER SESSION), so the screen starts from the new client's word, not the old one's.
+    abActiveRef.current = 'A'; earOrder.current.reset(); setAbInfo(null);
     /* ★★★ TELL THE WATCH THIS RECEIVER IS EXCLUSIVE UNTIL IT SAYS OTHERWISE. Buddy learns about a
      *   shared dial ONLY from a `dial` message, and it keeps what it was last told for the life of
      *   the app — nothing resets it. So arriving on a receiver that has no shared dial left the
@@ -12041,8 +12046,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ Bookmarks were RELOCATED here from the menu (see FreqModal: "relocated from MenuSheet
     //   §4.2"), and nothing said so — they are behind a Tune | Bookmarks header on this same card,
     //   which nobody finds by accident. The tour is the only place most people will meet them.
-    { id: 'freq', title: 'Set the frequency, and your bookmarks',
-      body: 'Tap the frequency readout to type one in directly (kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them.',
+    // ★★ V12 VFO A/B's ON/OFF moved HERE from the step sheet (Stuart, build 498: "it needs to be in the frequency entry
+    //    screen"). Verified against FreqModal (the row above CANCEL / TUNE, VibeServer only), TunerKeys, DrumWheel and
+    //    AudioSheet (VFO STEREO) — the whole card, not just the new sentence (2026-10-27).
+    { id: 'freq', title: 'Set the frequency, your bookmarks, and VFO A/B',
+      body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. VFO STEREO under the speaker button puts both in both ears instead.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
       body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
@@ -12050,10 +12058,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
-    // ★★ V12 VFO A/B lives in this same sheet (StepPicker) — said here because the step key is the last place anybody
-    //    would look for a second VFO. Verified against StepPicker, TunerKeys, DrumWheel and AudioSheet (2026-10-27).
-    { id: 'step', title: 'Step rate, and VFO A/B',
-      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change. On a VibeServer the same sheet has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. VFO STEREO under the speaker button puts both in both ears instead.',
+    // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
+    { id: 'step', title: 'Step rate',
+      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change.',
       target: tourRef('stepBtn') },
     // ★ The 'back' step ("no back-swipe here") was FOLDED INTO the servers-chip step
     //   in V10 rather than kept: on its own it explained an ABSENCE, which is a whole
@@ -12095,6 +12102,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    FreqModal once more — unchanged.
     //    ★ Again 2026-10-27 for V12 VFO STEREO (a new AudioSheet row beside BINAURAL): the whole sentence re-read against
     //      AudioSheet, MenuSheet and FreqModal — VFO A/B itself is in the STEP sheet, said on the 'step' card.
+    //    ★ Again 2026-10-27 (build 498) when VFO A/B moved to the frequency card and VFO B gained its own needle colour
+    //      (MenuSheet, display settings, beside VFO A's): this card names neither, so nothing here pointed at them.
     { id: 'menu', title: 'Everything else: the settings cog',
       body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
       target: tourRef('menuBtn') },
@@ -12489,13 +12498,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
-        needleColor={abOn && abActive === 'B' ? vfoBColour(vfoNeedle) : vfoNeedle}
+        needleColor={abOn && abActive === 'B' ? vfoBNeedle(vfoNeedle, vfoNeedleB) : vfoNeedle}
         /* ★★ V12 VFO A/B: the other VFO beside the tuned one — its own colour (A = the listener's needle colour, B a
-           contrasting one), its letter, its ear by frequency (null = both ears / stereo off). Greyed while parked. */
+           contrasting one by default, or the listener's VFO B colour), its letter, its ear by frequency (null = both ears / stereo off). Greyed while parked. */
         secondVfo={abOther ? {
           hz: abOther.frequency, filterLow: abOther.bandwidthLow, filterHigh: abOther.bandwidthHigh,
           letter: otherVfo(abActive), ear: abEars ? abEars[otherVfo(abActive)] : null,
-          color: abActive === 'A' ? vfoBColour(vfoNeedle) : vfoNeedle, parked: abParked && abActive === 'A',
+          color: abActive === 'A' ? vfoBNeedle(vfoNeedle, vfoNeedleB) : vfoNeedle, parked: abParked && abActive === 'A',
         } : null}
         activeVfo={abOn ? { letter: abActive, ear: abEars ? abEars[abActive] : null } : null}
         needleIntensity={vfoIntensity}
@@ -13632,7 +13641,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setSpecPeakScale(10); setPeakHold(true);
           setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
           setAutoContrast(5); setSpatialSmooth(true);
-          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ffffff'); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3);
+          setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ffffff'); setVfoNeedleB(VFO_B_AUTO); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3);
           setSpecRatioPortrait(0.28); setSpecRatioLandscape(0.20);
           onNrMode('off'); onNb(false);
           onSnrSquelch(-999); onFmSquelch(-999);
@@ -13655,6 +13664,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         }}
         onSpecRatio={() => { setMenuOpen(false); setRatioOverlayOpen(true); }}
         vfoNeedle={vfoNeedle}           onVfoNeedle={setVfoNeedle}
+        /* ★★ V12: VFO B's colour beside A's — only where this server offers VFO A/B (else a dead control). */
+        vfoNeedleB={vfoNeedleB}         onVfoNeedleB={abOffered > 0 ? setVfoNeedleB : undefined}
         vfoIntensity={vfoIntensity}       onVfoIntensity={setVfoIntensity}
         vfoFrost={vfoFrost}               onVfoFrost={setVfoFrost}
         bgOpacity={bgOpacity}             onBgOpacity={(v: number) => { bgOpacityUserSet.current = true; setBgOpacity(v); }}
@@ -13818,9 +13829,6 @@ export default function SDRScreen({ route, navigation }: Props) {
         steps={stepsForFreq(status.frequency, ituRegion)}
         onSelect={hz => { airStepSeq.current++; setStep(hz); }}
         onClose={() => setStepOpen(false)}
-        /* ★★ V12 VFO A/B — turned on and off HERE only, and only where the server offers it (hwinfo `watch`). */
-        vfoAB={abOn}
-        onVfoAB={abOffered > 0 && !dabOn && !icom && activeDecoder !== 'scanner' ? onVfoAB : undefined}
       />
       </PanelBoundary>
 
@@ -14494,6 +14502,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         onAddServerBookmark={adminAuthQ ? onAddServerBookmark : undefined}
         onImportToServer={adminAuthQ ? onImportToServer : undefined}
         onPickImportFileToServer={adminAuthQ ? onPickImportFileToServer : undefined}
+        /* ★★ V12 VFO A/B — turned on and off HERE only (moved from the tuning-step sheet — Stuart, build 498: "it needs
+         *  to be in the frequency entry screen"), and only where the server offers it (hwinfo `watch`). */
+        vfoAB={abOn}
+        onVfoAB={abOffered > 0 && !dabOn && !icom && activeDecoder !== 'scanner' ? onVfoAB : undefined}
       />
       </PanelBoundary>
 
@@ -14639,10 +14651,14 @@ export default function SDRScreen({ route, navigation }: Props) {
            *   radio speaks hardware, and everything above speaks true RF.
            * ★ A no-op with no converter fitted (toHardware is the identity), so nothing changes for
            *   the overwhelming majority of local sessions. */
-          frequency={convToHardware(status.frequency, converterRef.current)}
-          mode={status.mode}
-          bandwidthLow={status.bandwidthLow}
-          bandwidthHigh={status.bandwidthHigh}
+          /* ★★★ V12 VFO A/B: VFO A's tuning, WHICHEVER VFO IS SELECTED. This socket's `tune` tunes the listener's
+           *  channel — VFO A. Handed `status` (which IS VFO B while B is selected) it re-tuned A onto B on every switch
+           *  and dragged A along with every tune of B (Stuart, build 498: "they would often snap to the frequency the
+           *  other was on"). B is tuned by `watch` messages on the spectrum socket alone. See vfoAB.ts vfoATune. */
+          frequency={convToHardware(abDoor.frequency, converterRef.current)}
+          mode={abDoor.mode as SDRMode}
+          bandwidthLow={abDoor.bandwidthLow}
+          bandwidthHigh={abDoor.bandwidthHigh}
           instanceName={instanceName}
           host={route.params.localHost}
           // ★★★ THE RADIO'S OWN ADDRESS, AS A ws URL. connectBase carries the scheme (https on a
@@ -14669,7 +14685,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     count travels with the new frequency or mode in the SAME render. If a future
           //     caller ever bumps it without touching status, the prop will not update and the
           //     tune will be silently dropped — bump state, not just the ref, if that day comes.
-          userTuneSeq={userTuneSeq.current + tuneAssertNonce}
+          // ★★ …and a bump made while VFO B is tuned was a person tuning B, not A — see vfoAB.ts DoorSeq.
+          userTuneSeq={doorSeq.next(userTuneSeq.current + tuneAssertNonce, abOn && abActive === 'B')}
           /* ★★★ THE SERVER'S OWN DIAL, from the same status as `frequency` and in the same HARDWARE Hz — a value
            *  equal to it is this screen adopting the room's dial, and is never sent back (audioTuneForward.ts:
            *  the V12 iPhone echoed every step Safari took on the Lenovo, 2026-10-22). */

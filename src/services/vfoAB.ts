@@ -107,7 +107,7 @@ export function watchOffered(hwinfo: Record<string, unknown> | null | undefined)
 /** ★★ The `watch` STATE's `max` — the same offer, sent again whenever it changes without an hwinfo (the server's
  *  watchTellMax: a listener's own mode into or out of DRM, which takes VFO B away and gives it back). The web reads it
  *  (spectrum.ts `if (w.max >= 0) this.watchMax = w.max`); the app read hwinfo only, so an offer the server re-stated
- *  here never reached the tuning menu. Null = this message does not say (absent or junk — keep what we have). */
+ *  here never reached the toggle. Null = this message does not say (absent or junk — keep what we have). */
 export function watchMaxOf(msg: Record<string, unknown> | null | undefined): number | null {
   if (!msg || msg.type !== 'watch' || typeof msg.max !== 'number' || !Number.isFinite(msg.max) || msg.max < 0) return null;
   return Math.floor(msg.max);
@@ -167,6 +167,20 @@ export class EarOrder {
   }
 }
 
+/** ★★ VFO B's needle colour. 'auto' (the default, and anything unreadable) = a contrast to A's: cyan, or amber when
+ *  A's is already blue-ish — what B has drawn in since it shipped. Otherwise the listener's own pick (Stuart, build 498:
+ *  "the ability for the user to choose a VFO B colour alongside the main VFO colour picker would be good"). */
+export const VFO_B_AUTO = 'auto';
+export function autoVfoBColour(a: string): string {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i.exec(a || '');
+  if (!m) return '#38c8ff';
+  const r = parseInt(m[1], 16), b = parseInt(m[3], 16);
+  return b > 140 && b > r + 30 ? '#ffb020' : '#38c8ff';
+}
+export function vfoBNeedle(aColour: string, chosen: string | null | undefined): string {
+  return typeof chosen === 'string' && /^#[0-9a-f]{6}$/i.test(chosen) ? chosen : autoVfoBColour(aColour);
+}
+
 /** The other one. */
 export const otherVfo = (v: VfoId): VfoId => (v === 'A' ? 'B' : 'A');
 
@@ -193,6 +207,59 @@ export interface VfoABInfo {
 /** The four fields of the client's status that ARE a VFO's tuning. */
 export interface TuneStatus { frequency: number; mode: string; bandwidthLow: number; bandwidthHigh: number }
 
+/**
+ * ★★★ THE AUDIO SOCKET IS VFO A'S DOOR — NEVER B'S. (Stuart, build 498: "if i switched between VFO's they would often
+ * snap to the frequency the other was on rather than staying put".)
+ *
+ * On a VibeServer the app's audio socket (LocalAudioPlayer → Vibe.sendLocalTune) says `tune` whenever the frequency,
+ * mode or passband it is handed changes — it is how the LISTENER'S CHANNEL is tuned. It was handed the screen's
+ * `status`, and while B is selected `status` IS B (that is the whole design of the slots: every control works on the
+ * selected VFO unchanged). So the moment you switched to B, B's frequency arrived at the audio socket as a change, was
+ * not the server's dial (that is A's), and went out as a tune of VFO A: A jumped onto B. Every tune of B after that
+ * dragged A along with it. Switching back looked like the snap had happened the other way round.
+ * ★ So the door is handed VFO A's tuning whichever VFO is selected — the inactive slot while B is tuned.
+ */
+export function vfoATune(status: TuneStatus, info: Pick<VfoABInfo, 'on' | 'active' | 'other'> | null | undefined): TuneStatus {
+  if (info?.on && info.active === 'B' && info.other) {
+    const a = info.other;
+    return { frequency: a.frequency, mode: a.mode, bandwidthLow: a.bandwidthLow, bandwidthHigh: a.bandwidthHigh };
+  }
+  return { frequency: status.frequency, mode: status.mode, bandwidthLow: status.bandwidthLow, bandwidthHigh: status.bandwidthHigh };
+}
+
+/**
+ * ★★ …AND ITS "A PERSON ASKED" COUNTER. The audio socket treats a bump of the screen's userTuneSeq as a person asking
+ * and re-asserts its tune even when nothing changed (audioTuneForward.ts). A bump made while B is tuned was a person
+ * tuning B — which went out as a `watch` — so it must not reach A's door as a re-assert of A (on a shared dial that
+ * is a transmit nobody asked for: the shared-dial contract). This counter advances only with bumps made while A is
+ * selected. Pure; one per screen.
+ */
+export class DoorSeq {
+  private raw: number | null = null;
+  private out = 0;
+  next(raw: number, bTuned: boolean): number {
+    if (this.raw === null) { this.raw = raw; this.out = raw; return raw; }
+    if (!bTuned) this.out += raw - this.raw;
+    this.raw = raw;
+    return this.out;
+  }
+}
+
+/** ★ How long a fresh spectrum socket waits for the server's VFO B state before deciding the session has none — four
+ *  of the server's half-second beats, and room for a slow link. */
+export const RESYNC_MS = 2500;
+/** After our own OFF, a state with B in it is the echo of the old one, not a B to adopt. */
+export const ADOPT_AFTER_OFF_MS = 1500;
+
+/** ★ A passband `width` Hz wide in the SHAPE of the mode's default edges (the server reports only B's width): a
+ *  sideband stays on its side of the carrier, anything straddling it stays centred. Unusable width = the defaults. */
+export function edgesForWidth(low: number, high: number, width: number): [number, number] {
+  if (!(width > 0) || !(high > low) || Math.abs((high - low) - width) < 1) return [low, high];
+  if (low >= 0) return [low, Math.round(low + width)];
+  if (high <= 0) return [Math.round(high - width), high];
+  return [Math.round(-width / 2), Math.round(width / 2)];
+}
+
 /** What one `watch` message did, for the client to act on. */
 export interface WatchOutcome {
   /** The ACTIVE VFO's tuning changed (B adopted from the server while B is selected) — emit onStatus. */
@@ -203,6 +270,8 @@ export interface WatchOutcome {
   reset: boolean;
   /** B's level, when B is selected — the meter's reading. */
   meterDb?: number;
+  /** The server holds a VFO B this client did not know about, and it has been taken on (A still selected). */
+  adopted?: boolean;
 }
 
 /**
@@ -210,8 +279,15 @@ export interface WatchOutcome {
  * bookmark on the screen works on whichever VFO is selected without knowing there are two — and the INACTIVE one waits
  * in `stash`. A switch swaps them. While B is selected, what the server says about its dial (config: VFO A's) goes to
  * A's slot (aSlot()), and tune / mode / passband / squelch go out as `watch` messages instead of moving the radio.
- * ★★ PER SESSION: a reconnect is a new session on the server, which forgets VFO B, so the client calls reset() on a
- *    fresh socket — "a reconnect starts with one VFO".
+ * ★★ PER SESSION — AND THE SERVER SAYS WHICH. A new session on the server has no VFO B, so a reconnect starts with
+ *    one VFO. But a fresh SPECTRUM SOCKET is not a fresh session: the client reopens it on its own (the frames-stale
+ *    and pong watchdogs — a rotation freezes the JS thread for a second or two —, a network path change, the app
+ *    coming back to the front) under the SAME session id, and the server keeps VFO B and keeps mixing it into the
+ *    audio. Resetting on every socket open is what left Stuart with one VFO on the screen and two in his ears after
+ *    turning the phone (build 498: "the 2 vfo's disappeared off screen as if I had gone back to one but I still had 2
+ *    sets of audio one in each ear"). So the client tells the core a socket opened (socketOpened) and the SERVER'S
+ *    STATE decides: a state carrying B keeps — or, for a client that had lost it, ADOPTS — VFO B; a state without it,
+ *    or silence from a server that beats its VFO B state twice a second (expireIfSilent), means one VFO.
  * PURE: the client hands in its status, a sender and its mode-adopt rule; scripts/test_vfoAB.ts drives it in node.
  */
 export class VfoABCore {
@@ -226,6 +302,10 @@ export class VfoABCore {
   private sqlB = -999;
   private onAt = 0;
   private localAt = 0;
+  /** When the listener last turned B OFF here — a state already on its way with B in it must not bring B back. */
+  private offAt = 0;
+  /** A spectrum socket opened at this time and no `watch` state has been heard on it since (0 = not waiting). */
+  private openAt = 0;
   private status: () => TuneStatus;
   private send: (m: Record<string, unknown>) => void;
   private adoptMode: (mode: string, t: TuneStatus) => void;
@@ -256,7 +336,7 @@ export class VfoABCore {
     if (n <= 0 && this.on) this.reset();
     return true;
   }
-  /** The tuning menu's toggle. Returns false when VFO A/B is not offered here. Status may change (off with B tuned). */
+  /** The frequency card's toggle. Returns false when VFO A/B is not offered here. Status may change (off with B tuned). */
   setOn(on: boolean): boolean {
     if (on === this.on) return true;
     if (on) {
@@ -269,6 +349,7 @@ export class VfoABCore {
     }
     this.send(msgOff());
     this.reset();
+    this.offAt = this.now();
     return true;
   }
   /** Which VFO the controls tune — a swap of the two slots; nothing is sent (both already are where they are). Returns
@@ -281,6 +362,17 @@ export class VfoABCore {
     this.stash = cur;
     this.active = v;
     return true;
+  }
+  /** VFO B as the server runs it, taken on as ours — A selected (the status stays A's), B in the stash. */
+  private adoptB(b: WatchChan) {
+    const slot: VfoSlot = { frequency: b.freq, mode: '', bandwidthLow: 0, bandwidthHigh: 0, squelchDb: -999 };
+    this.adoptMode(b.mode, slot);   // ★ the mode's own passband shape…
+    const [lo, hi] = edgesForWidth(slot.bandwidthLow, slot.bandwidthHigh, b.bw);   // ★ …at the width the server runs
+    slot.bandwidthLow = lo; slot.bandwidthHigh = hi;
+    this.on = true; this.active = 'A'; this.onAt = this.now();
+    this.stash = slot;
+    this.sqlB = b.sqlOn ? b.sql : -999;
+    slot.squelchDb = this.sqlB;
   }
   /** Back to one VFO, A selected, without a word to the server. Returns true when the status changed (B was tuned). */
   reset(): boolean {
@@ -322,14 +414,38 @@ export class VfoABCore {
   setStereo(on: boolean) { this.stereo = on; if (this.on) this.send(msgStereo(on)); }
   setMonoOut(on: boolean) { if (on === this.monoOut) return; this.monoOut = on; if (this.on) this.send(msgMonoOut(on)); }
 
+  /** ★★ A spectrum socket has opened. Nothing is reset: the server's next `watch` state says whether this session still
+   *  has VFO B (see PER SESSION above). */
+  socketOpened() { this.openAt = this.now(); }
+  /** ★ The server beats its VFO B state twice a second (shim watchTick) to every spectrum socket of the session, so a
+   *  socket open for RESYNC_MS with B on here and not one state heard means the server has no B for us (a new session).
+   *  Returns true when that turned B off — the client emits status if `active` was B (statusChanged via reset()). */
+  expireIfSilent(): { expired: boolean; statusChanged: boolean } {
+    if (!this.openAt || !this.on || this.now() - this.openAt < RESYNC_MS) return { expired: false, statusChanged: false };
+    this.openAt = 0;
+    return { expired: true, statusChanged: this.reset() };
+  }
+
   /** The server's `watch` message. */
   onWatch(msg: Record<string, unknown>): WatchOutcome {
     const out: WatchOutcome = { statusChanged: false, notes: [], reset: false };
     const st = parseWatch(msg);
     if (!st) return out;
+    this.openAt = 0;   // ★ the server has spoken on this socket — its state, not a timer, decides from here
     this.state = st;
     if (st.refused && st.note) out.notes.push(st.note);   // ★ the server's own sentence
-    if (!this.on) return out;
+    if (!this.on) {
+      // ★★★ THE SERVER HOLDS A VFO B FOR THIS SESSION AND WE DO NOT KNOW IT — a client made afresh under the same
+      //     session (the screen rebuilt it), or a state that arrived after a timer gave up. Its audio is already in
+      //     the listener's ears; the screen must show it. ADOPTED, never asked for: nothing is sent (the shared-dial
+      //     contract — the server sends full state, the client has no vote). A not on its way back from our own OFF.
+      const b0 = vfoB(st);
+      if (b0 && !st.refused && this.offered > 0 && this.now() - this.offAt > ADOPT_AFTER_OFF_MS) {
+        this.adoptB(b0);
+        out.adopted = true;
+      }
+      return out;
+    }
     const b = vfoB(st);
     if (!b) {
       // ★ VFO B has gone without us (the radio filled and B yielded to a listener; a mode with no room for it; the

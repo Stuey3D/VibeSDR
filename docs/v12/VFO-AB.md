@@ -6,7 +6,7 @@ frequencies per radio, like VFO A/B on a rig. Two dongles at once is a later ste
 
 ## What the listener gets
 
-- **Tuning menu → VFO A/B** (on/off). On creates VFO B at VFO A's frequency, mode and width; off removes it. Per
+- **Frequency card (tap the readout) → VFO A/B** (on/off; in the tuning-step sheet until V12 build 498). On creates VFO B at VFO A's frequency, mode and width; off removes it. Per
   session: a reconnect starts with one VFO.
 - **Switching which VFO the controls tune**: the A/B key between the tune buttons (buttons mode); press-and-hold the
   radio trapezoid on the drum (drum mode); a pad/keyboard shortcut. Everything — frequency, mode, passband, squelch,

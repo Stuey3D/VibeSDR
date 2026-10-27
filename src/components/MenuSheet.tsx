@@ -71,6 +71,7 @@ import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import type { Textures } from '../constants/assetDensity';
 import { appAlert } from './AppAlert';
+import { autoVfoBColour, VFO_B_AUTO } from '../services/vfoAB';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -297,6 +298,10 @@ export interface MenuSheetProps {
   // Display settings panel props
   vfoNeedle?:         string;
   onVfoNeedle?:       (hex: string) => void;
+  /** ★★ V12 VFO B's needle colour — 'auto' (a contrast to A's) or a swatch. Passed only where the server offers
+   *  VFO A/B (hwinfo `watch`); absent = no row (a colour for a VFO this radio cannot have is a dead control). */
+  vfoNeedleB?:        string;
+  onVfoNeedleB?:      (hex: string) => void;
   /** Needle/glow brightness 1–10 (5 = original look). */
   vfoIntensity?:      number;
   onVfoIntensity?:    (v: number) => void;
@@ -604,7 +609,15 @@ function Btn({ label, active, danger, onPress, full, style, icon, skipNav, pip, 
   );
 }
 
-function SwatchBtn({ hex, active, onPress }: { hex: string; active: boolean; onPress: () => void }) {
+/** The VFO needle swatches — one palette for A and B. */
+const VFO_NEEDLE_SWATCHES = [
+  {hex:'#ff2020',label:'Red'},    {hex:'#00ff44',label:'Green'},
+  {hex:'#4499ff',label:'Blue'},   {hex:'#ffdd00',label:'Yellow'},
+  {hex:'#00eeff',label:'Cyan'},   {hex:'#ff8800',label:'Orange'},
+  {hex:'#ffffff',label:'White'},  {hex:'#cc44ff',label:'Purple'},
+] as const;
+
+function SwatchBtn({ hex, active, onPress, label }: { hex: string; active: boolean; onPress: () => void; label?: string }) {
   const styles = usePopupStyles(makeStyles);
   const C = menuC(usePopupTheme());
   const { focused, viewRef } = useNavButton(onPress);
@@ -614,9 +627,14 @@ function SwatchBtn({ hex, active, onPress }: { hex: string; active: boolean; onP
               active && styles.swatchActive,
               // Focus outranks the active ring, or you cannot see where you are on the
               // colour you already have selected.
-              focused && { borderColor: C.focus, borderWidth: 3 }]}
+              focused && { borderColor: C.focus, borderWidth: 3 },
+              !!label && styles.swatchLabelled]}
       onPress={onPress}
-    />
+      accessibilityLabel={label}
+    >
+      {/* ★ VFO B's AUTO swatch: drawn in the colour AUTO gives now, with the word on it (dark — every auto colour is light). */}
+      {!!label && <Text style={styles.swatchLabel}>{label}</Text>}
+    </TouchableOpacity>
   );
 }
 
@@ -1292,7 +1310,7 @@ function MenuSheetBody({
   spotsKind = null, onSpotsToggle, onSpotsMap,
   rttySettings, onRttySettings,
   wefaxLpm = 120, onWefaxLpm,
-  vfoNeedle = '#ffffff', onVfoNeedle,
+  vfoNeedle = '#ffffff', onVfoNeedle, vfoNeedleB = VFO_B_AUTO, onVfoNeedleB,
   vfoIntensity = 5, onVfoIntensity,
   vfoFrost = 0, onVfoFrost,
   bgOpacity = 3, onBgOpacity, hasBgImage = false,
@@ -1767,16 +1785,25 @@ function MenuSheetBody({
                 {/* ★ The swatches are a ROW of choices, so they register as one NavRow and
                     left/right walks them — they were bare Touchables that focus skipped. */}
                 <NavRow><View style={styles.swatchRow}>
-                  {([
-                    {hex:'#ff2020',label:'Red'},    {hex:'#00ff44',label:'Green'},
-                    {hex:'#4499ff',label:'Blue'},   {hex:'#ffdd00',label:'Yellow'},
-                    {hex:'#00eeff',label:'Cyan'},   {hex:'#ff8800',label:'Orange'},
-                    {hex:'#ffffff',label:'White'},  {hex:'#cc44ff',label:'Purple'},
-                  ]).map(c => (
+                  {VFO_NEEDLE_SWATCHES.map(c => (
                     <SwatchBtn key={c.hex} hex={c.hex} active={vfoNeedle === c.hex}
                                onPress={() => onVfoNeedle?.(c.hex)} />
                   ))}
                 </View></NavRow>
+
+                {/* ★★ V12 VFO B's needle colour — beside A's, the same swatches, plus AUTO (the default: a contrast to
+                    A's, cyan or amber — what B has always drawn in). Only where the server offers VFO A/B. */}
+                {!!onVfoNeedleB && (<>
+                  <SubLabel label="VFO B Needle Colour" />
+                  <NavRow><View style={styles.swatchRow}>
+                    <SwatchBtn hex={autoVfoBColour(vfoNeedle)} active={!/^#[0-9a-f]{6}$/i.test(vfoNeedleB)}
+                               label="AUTO" onPress={() => onVfoNeedleB(VFO_B_AUTO)} />
+                    {VFO_NEEDLE_SWATCHES.map(c => (
+                      <SwatchBtn key={c.hex} hex={c.hex} active={vfoNeedleB === c.hex}
+                                 onPress={() => onVfoNeedleB(c.hex)} />
+                    ))}
+                  </View></NavRow>
+                </>)}
 
                 {/* VFO Intensity — needle + glow brightness; bright palettes
                     can swallow the needle whatever colour it is */}
@@ -2511,6 +2538,8 @@ const makeStyles = (pt: PopupTokens) => { const C = menuC(pt); return StyleSheet
 
   swatchRow:  { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingVertical: 4 },
   swatch:     { width: 32, height: 32, borderRadius: 16, borderWidth: 3, borderColor: 'transparent' },
+  swatchLabelled: { width: 52, alignItems: 'center', justifyContent: 'center' },
+  swatchLabel: { fontSize: 9, fontWeight: '700', letterSpacing: 0.5, color: '#101010' },
   swatchActive: onMetal(pt, { borderColor: '#fff' }, { borderColor: pt.legendLit }),
   cmapStrip:          { gap: 6, flexDirection: 'row', paddingBottom: 4 },
   cmapPill:           { backgroundColor: C.btnBg, borderWidth: 1, borderColor: C.border, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 },

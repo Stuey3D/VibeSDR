@@ -140,6 +140,13 @@ interface FreqModalProps {
   onPickShare?: (b: { name: string; frequency: number; mode?: string | null;
                       bandwidth_low?: number | null; bandwidth_high?: number | null;
                       sid?: number | null; eid?: number | null }) => void;
+  /** ★★ V12 VFO A/B — THE one place it is turned on and off. It lived in the tuning-step sheet, where Stuart had to hunt
+   *  for it (build 498: "The button for some reason is in the step rate which took me a while to find it, it needs to
+   *  be in the frequency entry screen"). A second FREQUENCY belongs with the frequency. The SWITCH between the two
+   *  stays on the tune controls (the A/B key between < and >, the drum's window). Passed only where the server offers
+   *  it (VibeServer, hwinfo `watch`) and nothing else forbids it (DAB, an Icom, the scanner); absent = no row. */
+  vfoAB?:   boolean;
+  onVfoAB?: (on: boolean) => void;
 }
 
 function toDisplay(hz: number, unit: Unit): string {
@@ -225,7 +232,7 @@ export default function FreqModal({
   currentMode = 'usb', onSearchTune, searchBookmarks = [], serverBookmarks = [], searchBands = [], topInset,
   eibiEnabled = true, onEibiToggle, userBookmarks = [],
   onAddBookmark, onDeleteBookmark, onToggleBookmarkSync, onExportBookmarks, onImportBookmarks, onPickImportFile,
-  onPickShare,
+  onPickShare, vfoAB = false, onVfoAB,
 }: FreqModalProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const picking = !!onPickShare;
@@ -496,10 +503,12 @@ export default function FreqModal({
   // ★★ A GRID IN THE ORDER IT IS DRAWN (src/utils/freqCardNav.ts — why: the field used to hide after the units, where
   //    no arrow went). Opened from the keyboard, the highlight starts on the frequency box.
   const hasVtsSkip = !!(onVtsPrev && onVtsNext);
+  // ★ VFO A/B: a stop on its own line above CANCEL / TUNE; Enter flips it and leaves the card open (as it did in the sheet).
+  const abShown = !!onVfoAB && !picking;
   const tuneLayout = useMemo(
     () => tuneCardItems({ tabs: hasBookmarks && !picking, vts: hasVtsSkip, lockUnit: !!lockUnit, profiles: profiles.length > 0,
-                          actions: { share: !!onShare && !shareOffReason } }),
-    [hasBookmarks, picking, hasVtsSkip, lockUnit, profiles.length, !!onShare, !!shareOffReason]);   // eslint-disable-line react-hooks/exhaustive-deps
+                          vfoAB: abShown, actions: { share: !!onShare && !shareOffReason } }),
+    [hasBookmarks, picking, hasVtsSkip, lockUnit, profiles.length, abShown, !!onShare, !!shareOffReason]);   // eslint-disable-line react-hooks/exhaustive-deps
   const tuneRun = (k: TuneCardKey) => {
     switch (k) {
       case 'tab:tune': setCardMode('tune'); break;
@@ -508,6 +517,7 @@ export default function FreqModal({
       case 'vts:next': onVtsNext?.(); break;
       case 'field': freqField.open(); break;
       case 'profile': setProfileToggle(n => n + 1); break;
+      case 'vfo:ab': onVfoAB?.(!vfoAB); break;
       case 'act:cancel': onClose(); break;
       case 'act:share': doShareRef.current(); break;
       case 'act:tune': confirmRef.current(); break;
@@ -926,6 +936,38 @@ export default function FreqModal({
             </View>
           )}
 
+          {/* ── ★★ V12 VFO A/B: a second VFO on the same radio, heard at once (lower frequency in the left ear) ── */}
+          {abShown && (
+            <View style={st.abBlock}>
+              <View style={st.abRow}>
+                <Text style={[st.abLabel, { color: pt.ink.section, fontFamily: ff },
+                              pt.metal && { ...engraveText(pt), fontWeight: '700' }]}>VFO A/B</Text>
+                {pt.metal ? (
+                  <PopupKey label={vfoAB ? 'ON' : 'OFF'} active={vfoAB} pip focused={tuneOn('vfo:ab')}
+                    height={34} fontSize={12} onPress={() => onVfoAB?.(!vfoAB)} hitSlop={4} style={{ width: 96 }}
+                    accessibilityLabel="VFO A/B" />
+                ) : (
+                  <TouchableOpacity
+                    style={[st.unitBtn, st.abKey, { borderColor: bdrDim, paddingVertical: btnPadY },
+                            vfoAB && { borderColor: bdrBrt, backgroundColor: pt.ink.keyBgAct },
+                            tuneOn('vfo:ab') && { borderColor: focusC.ring, borderWidth: 2 }]}
+                    onPress={() => onVfoAB?.(!vfoAB)} hitSlop={4} activeOpacity={0.75}
+                    accessibilityRole="switch" accessibilityState={{ checked: vfoAB }}
+                    accessibilityLabel="VFO A/B" accessibilityHint="A second frequency on the same radio, heard at the same time">
+                    <Text style={[st.unitBtnText, { fontFamily: t.font, color: vfoAB ? keyOn : dimText }]}>
+                      {vfoAB ? 'ON' : 'OFF'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Text style={[st.abNote, { color: pt.metal ? pt.note : unitText, fontFamily: ff }]}>
+                {/* ★ Both tune controls carry the A/B key — the keys between < and >, the drum in its window. */}
+                {vfoAB ? 'Switch VFO with the A/B key — between the tune keys, or in the tune drum\'s window'
+                       : 'Listen to a second frequency on this radio at the same time'}
+              </Text>
+            </View>
+          )}
+
           {pt.metal ? (
             // ★ §10.3: CANCEL and SHARE are plain keys; TUNE ▶ is the primary action, its legend lit.
             <View style={st.actions}>
@@ -1293,6 +1335,11 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   unitBtnText:  { fontSize: 11 },
   actions:      { flexDirection: 'row', gap: 10 },
   profiles:     { marginBottom: 12 },
+  abBlock:      { marginBottom: 14 },
+  abRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  abLabel:      { fontSize: 10, letterSpacing: 3 },
+  abKey:        { flex: 0, width: 96 },
+  abNote:       { fontSize: 10, opacity: 0.85, marginTop: 6, textAlign: 'right' },
   magicRow:     { marginTop: 8 },
   // ★ Default chassis: the box's edge in the CONTROLS colour, what is typed in the TEXT colour (2026-10-12).
   magicInput:   onMetal(pt, { borderWidth: 1, borderColor: pt.ink.keyBorder, borderRadius: 6,
