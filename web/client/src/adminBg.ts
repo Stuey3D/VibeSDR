@@ -13,6 +13,8 @@ export interface BgVfo {
   why?: string; lock?: string; last?: number; cpuPct?: number | null;
   /** FT8/FT4 only: the run's summary so far (rewritten in the gallery every 10 min). */
   spots?: number; countries?: number;
+  /** ★ V12 2026-10-27: a Band digital-spots VFO — its band ("40 m") and what the governor runs now. */
+  band?: string; modes?: string;
 }
 export interface BgStatus {
   state: 'off' | 'idle' | 'waiting' | 'running' | 'listener' | 'paused' | 'busy' | 'blocked';
@@ -47,7 +49,8 @@ export function bgVfoLine(v: BgVfo): string {
   // ★ An FT8/FT4 summary VFO is "FT8" on this line (its menu label "FT8 / FT4 (summary)" is the setup page's); a CW
   //   skimmer sends spots too, and is "CW skimmer" (V12 2026-10-25) — it read "FT8" until then.
   //   And a PSK skimmer (2026-10-26) is "PSK skimmer".
-  const name = v.dec === 'cwskim' ? 'CW skimmer' : v.dec === 'pskskim' ? 'PSK skimmer' : typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase();
+  // ★ V12 2026-10-27: a Band digital-spots VFO is "Digital spots: Band 40 m" (every mode on the band, one summary).
+  const name = v.dec === 'spots-band' ? `Digital spots: Band${v.band ? ' ' + v.band : ''}` : v.dec === 'cwskim' ? 'CW skimmer' : v.dec === 'pskskim' ? 'PSK skimmer' : typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase();
   const parts = [`${khz(v.hz)} ${name}`];
   if (v.state === 'out') parts.push("out of range (outside the listener's window)");
   else if (v.state === 'paused') parts.push(`paused (${v.why || 'a listener needed the decoder slot'})`);

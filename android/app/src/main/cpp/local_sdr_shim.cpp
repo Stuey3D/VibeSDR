@@ -27706,7 +27706,46 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  refused or told "full" because of it; the lowest VFO gives up its channel the moment one is needed. Read from
          *  the cached listener count: lock-free, safe on the runner's thread. */
         if (bgLocked()) p.channelBudget = [] { return std::max(0, g_vsMaxUsers.load() - s_listenersCached.load(std::memory_order_relaxed)); };
+        /* ★★ V12 2026-10-27 — A BAND DIGITAL-SPOTS VFO (Stuart: "Also full band digital modes too") runs behind the SAME
+         *  governor a listener's Band does: the owner's word per mode, the benchmark's budget (shared between the
+         *  profile's Band VFOs by the runner), engines told to go light when the server is loaded — and not at all where
+         *  the owner (or the benchmark's default on a box that measured it red) has switched Band off here. */
+        p.bandOverride = [](const std::string& m) { return vsBandOverride(m); };
+        p.bandBudgetUnits = [] { return vsBandBudgetUnits(); };
+        p.loaded = [this] { return vibetune::paceMs(serverLoad()) > 0; };
+        p.bandWhyNot = [] { return vsSpotsBandWhyNot(); };
         return p;
+    }
+    /** ★★ V12 2026-10-27: where a profile with a Band digital-spots VFO puts the capture. A zero-IF radio's DC sits at
+     *  centre + hwOffsetHz() — on a mode's passband it costs that mode (vibe_band_slice.h, "THE DONGLE'S DC"). The owner's
+     *  RF centre is moved the SMALLEST step that clears every Band VFO's slices (else its modes), and only if every VFO of
+     *  the profile still sits inside the window there; otherwise the owner's centre stands, said once in the log. */
+    double bgBandCentre(const vibe::bg::Profile& prof, double centre) {
+        vibe::bg::installBandSpan();
+        const double half = vibe::bg::halfWindowHz(sampleRate);
+        double lo = -INFINITY, hi = INFINITY; bool any = false;
+        for (const auto& v : prof.vfos) {
+            double at = v.hz, w = 0;
+            vibe::bg::BandSpan sp;
+            if (vibe::bg::isBandSpots(v) && vibe::bg::bandSpan(v.hz, sp)) { at = sp.centreHz; w = std::max(sp.centreHz - sp.loHz, sp.hiHz - sp.centreHz); any = true; }
+            lo = std::max(lo, at + w - half - 3000.0); hi = std::min(hi, at - w + half + 3000.0);
+        }
+        if (!any || !(sampleRate > 0)) return centre;
+        int n = 4096; while (n < 65536 && n < sampleRate / 40.0) n <<= 1;   // ★ the runner's own FFT (bgParams)
+        double c = centre;
+        for (const auto& v : prof.vfos) {
+            vibe::bg::BandSpan sp;
+            if (!vibe::bg::isBandSpots(v) || !vibe::bg::bandSpan(v.hz, sp)) continue;
+            c = vibe::bandDcCentre(sampleRate, n, sp.centreHz, c, hwOffsetHz(), lo, hi);
+        }
+        if (c < lo || c > hi) {
+            LOGI("background decoding: the radio's DC at %.3f kHz may sit on a Band VFO's slice \xe2\x80\x94 no centre nearby clears it and keeps every VFO in the window; the profile's centre is kept",
+                 (centre + hwOffsetHz()) / 1e3);
+            return centre;
+        }
+        if (std::fabs(c - centre) > 1) LOGI("background decoding: the RF centre is %.3f kHz rather than %.3f, so the radio's DC stays off the Band VFO's digital modes",
+                                            c / 1e3, centre / 1e3);
+        return c;
     }
     /** Start profile `idx`. `move`: put the radio on the profile centre first (nobody here, unlocked); otherwise run the
      *  VFOs inside the window the radio has NOW (a listener is on, or the window is locked). Caller holds bgOpMtx_. */
@@ -27739,7 +27778,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 LOGI("background decoding: moving the radio to the profile %d centre %.3f kHz (it goes back to %.3f kHz when somebody arrives)",
                      idx + 1, prof.centreHz / 1e3, bgSaved_.audio / 1e3);
             }
-            bgPlace(prof.centreHz, prof.centreHz, prof.centreHz);
+            { const double pc = bgBandCentre(prof, prof.centreHz); bgPlace(pc, pc, pc); }   // ★ V12: a Band VFO keeps the DC off its modes
         }
         auto params = bgParams(cfg, idx, listenerOn);
         params.inRangeOnly = !move && !bgLocked();     // ★ carrying on at someone else's centre — not "the profile started here"
@@ -28065,7 +28104,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             bgSaved_ = { true, rtlCenter.load(), viewCenter.load(), audioFreq.load() };
             LOGI("background decoding: nobody here for %.0f s — moving the radio from %.3f kHz (dial %.3f) to the profile %d centre %.3f kHz",
                  wait, bgSaved_.centre / 1e3, bgSaved_.audio / 1e3, want + 1, prof.centreHz / 1e3);
-            bgPlace(prof.centreHz, prof.centreHz, prof.centreHz);
+            { const double pc = bgBandCentre(prof, prof.centreHz); bgPlace(pc, pc, pc); }   // ★ V12: a Band VFO keeps the DC off its modes
             bgRun_.retarget(rtlCenter.load(), hwOffsetHz(), false);
             bgMoved_ = true;
             return;

@@ -5730,7 +5730,41 @@ const BG_DECODERS = [
   //    is found), VHF channel 70 (156.525 MHz) on NFM. The "+ DSC watch" key below fills these in.
   { id: "dsc",          label: "DSC (MF/HF)",                  tone: 1700, modes: ["usb", "lsb"] },
   { id: "dsc-vhf",      label: "DSC (VHF channel 70)",         tone: 0,    modes: ["nfm"] },
+  // ★★ V12 2026-10-27 — DIGITAL SPOTS: BAND (Stuart: "Also full band digital modes too"): every digital mode on the band
+  //    the VFO's frequency is in (7074 = 40 m), the listener's own Band mode behind its CPU governor, ONE summary card
+  //    for the band. Offered only where this radio has a band at all and Band is not switched off here (bgBandOk).
+  { id: "spots-band",   label: "Digital spots: Band (summary)", tone: 0,   modes: ["usb"], band: true },
 ];
+/* ★★ V12 2026-10-27 — may a VFO here run Band digital spots? Not on an Icom (a transceiver's audio, no IQ), not where the
+ *  owner has switched digital spots or Band off for this radio (Setup → Modes and decoders — the benchmark's default on a
+ *  box that measured it red, which the owner can tick back), and only where the radio reaches a band at all (HW.spotBands,
+ *  the radio's own list; unknown = offered, and the server's save says if the band is out of reach). */
+function bgBandOk() {
+  const r0 = bgRadio || {};
+  if (String(r0.driver || "") === "icom") return false;
+  try { if (typeof modeBlockSet === "function") { const b = modeBlockSet(); if (b.has("spots") || b.has("spotsband")) return false; } } catch (e) { /* no mode list */ }
+  const hw = typeof HW !== "undefined" ? HW : null;
+  if (hw && !hw.offline && Array.isArray(hw.spotBands)) return hw.spotBands.length > 0;
+  return true;
+}
+/** The band a Band VFO's frequency names, from the radio's own list (HW.spotBands) — or null. */
+function bgSpotBand(hz) {
+  const hw = typeof HW !== "undefined" ? HW : null;
+  if (!hw || hw.offline || !Array.isArray(hw.spotBands) || !(hz > 0)) return null;
+  return hw.spotBands.filter(function (b) { return hz >= b.bandLo && hz <= b.bandHi; })[0] || null;
+}
+/** The line under a Band VFO: what it decodes there, or why it cannot. */
+function bgBandHint(v) {
+  if (!bgBandOk()) return { bad: true, text: "Band digital spots are switched off on this radio (Modes and decoders) \u2014 choose another decoder or switch Band back on." };
+  if (!(v.hz > 0)) return { bad: false, text: "Type any frequency in the band \u2014 7074 for 40 m, 14074 for 20 m. Every digital mode on that band is decoded into one summary card an hour." };
+  const b = bgSpotBand(v.hz);
+  const hw = typeof HW !== "undefined" ? HW : null;
+  if (!b) return hw && !hw.offline && Array.isArray(hw.spotBands)
+    ? { bad: true, text: (v.hz / 1e3).toFixed(1) + " kHz is not in a band the digital modes use on this radio \u2014 e.g. 7074 for 40 m." }
+    : { bad: false, text: "Every digital mode on this frequency\u2019s band, in one summary card an hour." };
+  return { bad: false, text: b.name + ": " + (b.modes || []).join(", ") + " on " + (b.lo / 1e6).toFixed(4) + "\u2013" + (b.hi / 1e6).toFixed(4)
+    + " MHz \u2014 the RF centre must hold all of it. One summary card an hour; quiet modes cost nothing (the Band governor)." };
+}
 /* ★★ DSC WATCH (V12, 2026-10-26): the GMDSS DSC distress and safety frequencies (ITU RR Appendix 15) — as many as this
  *  radio's window can hear around the profile's RF centre become VFOs at once (the dial 1.7 kHz below on USB). A radio
  *  that cannot hold several in one window (an RTL at 2.4 MS/s sees ±0.8 MHz; the HF+ less) gets the one nearest its
@@ -5974,7 +6008,7 @@ function bgRender() {
       card.appendChild(el("div", { class: "hint bgNdbNote", style: ndbOk ? "" : "color:#ff8a7d" }, ndbOk
         ? "NDB takes the whole radio onto the LF beacon band (190\u2013535 kHz, as much as its rate holds) and skims every beacon "
           + "in it \u2014 so it runs only while nobody is listening, and stops the moment anybody connects. Each day\u2019s heard "
-          + "log and a map go to the gallery."
+          + "log and map, a card for every UTC hour and a last-10-minutes card go to the gallery."
         : "This profile skims NDBs, which this radio cannot do" + (locked ? " \u2014 its range is locked, and background decoding never moves a locked radio."
           : " (an RTL needs direct sampling).") + " Choose \u201cStations on VFOs\u201d or delete the profile."));
     } else if (p.ism) {
@@ -6055,7 +6089,9 @@ function bgRender() {
       // ★ Only the decoders that make sense for this demodulator (Stuart) — refilled when the demodulator changes.
       const fillDec = function () {
         dc.innerHTML = "";
-        const fit = BG_DECODERS.filter(function (d) { return d.modes.indexOf(md.value) >= 0; });
+        // ★ Band digital spots only where this radio can run it — or on a row that already has it (said why, below)
+        const bandOk = bgBandOk();
+        const fit = BG_DECODERS.filter(function (d) { return d.modes.indexOf(md.value) >= 0 && (!d.band || bandOk || v.dec === d.id); });
         fit.forEach(function (d) { dc.appendChild(el("option", { value: d.id }, d.label)); });
         if (!fit.some(function (d) { return d.id === v.dec; })) v.dec = fit.length ? fit[0].id : "";
         dc.value = v.dec;
@@ -6066,11 +6102,27 @@ function bgRender() {
       row.appendChild(rm);
       // ★ No per-VFO "Listening for … kHz" line (Stuart, 2026-10-22: "they arent needed, and would look odd to
       //   someone setting up wefax or rtty"). The frequency typed is the dial, as a listener would type it.
-      const upd = function () {
-        v.hz = Math.round((parseFloat(fi.value) || 0) * 1e3); v.mode = md.value; v.dec = dc.value;
+      // ★★ V12: a Band VFO says which band its frequency names and what is decoded there (or why it cannot run)
+      let bh = null;
+      const paintBand = function () {
+        if (!bh) return;
+        const h = bgBandHint(v);
+        bh.textContent = h.text;
+        bh.style.color = h.bad ? "#ff8a7d" : "";
       };
-      fi.oninput = upd; md.onchange = function () { v.mode = md.value; fillDec(); upd(); }; dc.onchange = upd;
+      const upd = function () {
+        const wasBand = v.dec === "spots-band";
+        v.hz = Math.round((parseFloat(fi.value) || 0) * 1e3); v.mode = md.value; v.dec = dc.value;
+        if (wasBand !== (v.dec === "spots-band")) bgRender(); else paintBand();
+      };
+      fi.oninput = upd; dc.onchange = upd;
+      md.onchange = function () {
+        const wasBand = v.dec === "spots-band";
+        v.mode = md.value; fillDec(); upd();
+        if (wasBand !== (v.dec === "spots-band")) bgRender();
+      };
       card.appendChild(row);
+      if (v.dec === "spots-band") { bh = el("div", { class: "hint bgBandNote" }); card.appendChild(bh); paintBand(); }
     });
     // ★ One radio: rows past the box's decoders are KEPT (a box that went from several radios back to one) but said
     //   plainly not to run; the server refuses a save with more, in words.

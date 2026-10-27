@@ -209,6 +209,13 @@ try {
      `★ overlapping profiles refused, named: "${overlap.j.error}"`);
   const far = await post(withBg({ on: true, waitMin: 5, profiles: [{ ...NICK, vfos: [...NICK.vfos, { hz: 2500000, mode: 'usb', dec: 'navtex' }] }] }));
   ok(far.status === 400 && /VFO 3 \(2500\.0 kHz\).*2048 kS\/s/.test(far.j.error || ''), `★ a VFO the radio cannot see is refused, saying why: "${far.j.error}"`);
+  // ★★ V12 2026-10-27: a Band digital-spots VFO is checked against its band's REAL span at the save (the registry is
+  //    linked into the daemon's save path — vibe_bgdecode_band.h): a frequency on no band, and a band outside the window.
+  const noBand = await post(withBg({ on: true, waitMin: 5, profiles: [{ centre: 6500000, from: '00:00', to: '00:00', vfos: [{ hz: 6500000, mode: 'usb', dec: 'spots-band' }] }] }));
+  ok(noBand.status === 400 && /not in a band the digital modes use/.test(noBand.j.error || ''), `★ a Band VFO on no band: refused, in words: "${noBand.j.error}"`);
+  const bandFar = await post(withBg({ on: true, waitMin: 5, profiles: [{ centre: 6000000, from: '00:00', to: '00:00', vfos: [{ hz: 7074000, mode: 'usb', dec: 'spots-band' }] }] }));
+  ok(bandFar.status === 400 && /the 40 m band's digital modes .* are not all inside this radio's window/.test(bandFar.j.error || ''),
+     `★ the band's modes outside the window: refused, saying why: "${bandFar.j.error}"`);
   // ★★ A single-radio server: a profile may have no more VFOs than the box has decoder slots (decoderMax 4 here).
   const five = await post(withBg({ on: true, waitMin: 5, keepInRange: false, profiles: [{ ...NICK, to: '00:00',
     vfos: [0, 1, 2, 3, 4].map((i) => ({ hz: 489500 + i * 2000, mode: 'usb', dec: 'navtex' })) }] }));

@@ -72,6 +72,7 @@
 #include <netinet/in.h>
 #include "vibeserver_config.h"
 #include "vibe_bgdecode_config.h"   // ★★ V12 background decoding: the save-time validation
+#include "vibe_bgdecode_band.h"     // ★ …and where a Band digital-spots VFO's slice goes (the registry is linked here)
 #include "vibe_gallery.h"           // ★★ V12 the gallery's disk figures for the setup page
 #include "vibe_bands.h"
 #include "vibe_dab_channels.h"   // ★ the Band III list the setup page's DAB landing offers
@@ -2430,6 +2431,7 @@ int main(int argc, char** argv) {
             int enabledRadios = 0;
             for (const auto& r : next.radios) if (r.enabled) ++enabledRadios;
             const int slotCap = enabledRadios <= 1 ? (next.decoderMax > 0 ? next.decoderMax : LocalSdrShim::decoderDefaultMax()) : 0;
+            vibe::bg::installBandSpan();   // ★ V12: a Band spots VFO is checked against its band's real span
             for (const auto& r : next.radios) {
                 if (r.bgDecode.empty()) continue;
                 vibe::bg::Config bc; std::string be;
