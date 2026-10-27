@@ -133,6 +133,18 @@ private:
     uint64_t underruns_ = 0, dropped_ = 0;
 };
 
+/** ★★★ THE WATCH CHANNEL'S CUSHION: 50 ms (V12 beta24, 2026-10-27). It was 480 frames — 10 ms, LESS than one block of
+ *  the mix (≈491 frames a 10 ms block at 48 kHz, the count varying by a frame as the resampler goes). Priming at 480 left
+ *  no cushion at all: a block of 491 in and 492 asked for was an underrun, silence and a re-prime, and the next block the
+ *  same. Worse, every RxPipeline on a multi-core server demodulates on its own worker thread (VIBE_DSP_THREADS, the
+ *  2026-10-16 split), so B's audio reaches the FIFO a hand-off LATER than A's is mixed: on a loaded box (an Xcode and a
+ *  Gradle build beside the server) B lost over half of a second — test-server-vfo-ab's "A and B at matching levels"
+ *  read B at 0.08 against A's 0.18, and the listener would have heard B stutter. 50 ms is five blocks: the worker's
+ *  hand-off and a scheduler's hiccup on a Pi 2 both fit, and VFO B a twentieth of a second behind VFO A is not
+ *  something an ear can place (they are different stations in different ears). Decoders on B are fed BEFORE the FIFO
+ *  (the audio tap), so they never wait for it. */
+constexpr size_t kWatchPrimeFrames = 2400;
+
 // ── One watch channel ───────────────────────────────────────────────────────────────────────────────────────────────
 /** What the listener asked for. Written by the control thread through WatchChannel::want(), applied by the feeding
  *  thread at its next block — so a retune never races a feed. */
@@ -147,7 +159,7 @@ struct Wanted {
 
 class WatchChannel {
 public:
-    explicit WatchChannel(int id) : id_(id), fifo_(480, 9600) {}
+    explicit WatchChannel(int id) : id_(id), fifo_(kWatchPrimeFrames, 9600) {}
     ~WatchChannel() { std::lock_guard<std::mutex> lk(feedMtx_); if (rx_) rx_->stop(); }
     int id() const { return id_; }
 

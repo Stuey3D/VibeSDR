@@ -266,6 +266,26 @@ int main() {
         ok(f.pop(big.data(), 3000) == 2000 && f.underruns() == 1, "an underrun is counted and zero-filled");
         f.push(x.data(), 300);
         ok(f.pop(o.data(), 300) == 0, "…and it re-primes before playing again");
+        /* ★★ V12 beta24 — THE CUSHION. The mix asks for ~491 frames a block and the channel delivers ~491, each varying by a
+         *  frame, and on a multi-core server the channel's demodulator is a worker thread, a hand-off behind. Primed at one
+         *  block (the old 480) every short block underran; primed at kWatchPrimeFrames it never does, even with the
+         *  producer a whole 2-block burst late now and then. */
+        auto run = [](size_t prime) {
+            PcmFifo q(prime, 9600);
+            std::vector<float> in(1000, 0.5f), out(1000);
+            int under = 0;
+            for (int k = 0; k < 2000; k++) {
+                const size_t give = 491 + (k % 3 == 0), take = 491 + (k % 2 == 0);
+                const bool late = (k % 97) == 50;                       // ★ the worker late: nothing this block…
+                if (!late) q.push(in.data(), (k % 97) == 51 ? 0 : give);
+                if ((k % 97) == 51) { q.push(in.data(), give); q.push(in.data(), give); }   // …then two at once
+                if (q.pop(out.data(), take) < take && k > 10) under++;
+            }
+            return under;
+        };
+        const int u480 = run(480), uNow = run(kWatchPrimeFrames);
+        ok(u480 > 20, std::string("primed at one block (480), a mix block of 491-492 underruns again and again (" + std::to_string(u480) + " of 2000)").c_str());
+        ok(uNow == 0, std::string("primed at kWatchPrimeFrames (" + std::to_string(kWatchPrimeFrames) + "): never (" + std::to_string(uNow) + ")").c_str());
     }
     std::printf("── 10. MUTE (round 3): the muted VFO fades out and the other pans home to both ears; unmuting reverses it ──\n");
     {
