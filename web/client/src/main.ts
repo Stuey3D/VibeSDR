@@ -128,7 +128,7 @@ import { RecordBufferAnchor, parseRecordBufferSeconds } from '../../../src/servi
 /* ★ The shared vector-basemap renderer, carried as a string — see ensureVibeMap(). ★★ FETCHED ONLY
  *  WHEN A MAP OPENS (openSpotsMap): ~98 KB that most listeners never use, so it is its own file and
  *  the page does not carry it (build-web.mjs splits every import() into one). */
-import { probeMapGL, type MapGLKit } from './mapgl';
+import { mapglVendor, probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
@@ -14535,11 +14535,11 @@ function spotsMapHtml(kit: MapGLKit | null, VIBEMAP_JS: string): string {
   const ST = '<' + '/style>';
 
   // ★ The GPU map's files from THIS server, loaded by the parser in order before the page's script.
-  const glHead = kit ? `<link rel="stylesheet" href="${kit.base}vendor/maplibre-gl.css">
-<script src="${kit.base}vendor/maplibre-gl.js">${ES}
-<script src="${kit.base}vendor/pmtiles.js">${ES}
-<script src="${kit.base}vendor/vibemapgl.js">${ES}
-<script src="${kit.base}vendor/vibemapgl-compat.js">${ES}` : '';
+  const glHead = kit ? `<link rel="stylesheet" href="${mapglVendor(kit.base, 'maplibre-gl.css')}">
+<script src="${mapglVendor(kit.base, 'maplibre-gl.js')}">${ES}
+<script src="${mapglVendor(kit.base, 'pmtiles.js')}">${ES}
+<script src="${mapglVendor(kit.base, 'vibemapgl.js')}">${ES}
+<script src="${mapglVendor(kit.base, 'vibemapgl-compat.js')}">${ES}` : '';
   const safe = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c');
 
   return `<!doctype html><meta charset="utf-8"><title>VibeSDR — Digital Spots Map</title>

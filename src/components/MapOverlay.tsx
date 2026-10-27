@@ -409,6 +409,9 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   #legbody::-webkit-scrollbar-track{background:transparent;}
   #legbody::-webkit-scrollbar-thumb{background:rgba(${T.k},0.40);border-radius:2px;}
   .lg-row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px;}
+  /* ★ The mode letter on the LEAFLET FALLBACK spots map (no WebGL 2 / no GPU pack) — see drawLetters. As the web's .mkl. */
+  .mkl{pointer-events:none}
+  .mkl b{display:block;width:12px;height:12px;font:bold 9px/12px ui-monospace,Menlo,monospace;text-align:center}
   .lg-dot{display:inline-block;width:12px;height:12px;border-radius:50%;flex-shrink:0;}
   .lg-mk{width:15px;height:15px;font:bold 9px/15px monospace;text-align:center;box-shadow:0 0 0 1.2px ${DIGI_MARKER_RIM};}
   .lg-sec{font-size:11px;letter-spacing:1.5px;color:rgba(${T.x},0.40);margin:6px 0 3px;}
@@ -1610,11 +1613,31 @@ if(KIND==='digi'||KIND==='cw'){
     else{markers[k]=L.circleMarker([s.lat,s.lon],style(s)).bindPopup(popup(s),{maxWidth:200}).addTo(map);}
   }
   function updateCount(){cnt.textContent=Object.keys(markers).length;}
+  /* ★★ THE LETTER ON THE LEAFLET FALLBACK (2026-10-27, as the web client's drawMarkers): Leaflet's canvas circles carry
+   *  no text, so with no GPU map the newest 200 shown spots get a small non-interactive letter above them — a mode is
+   *  never told by colour alone, whichever renderer drew the map. Capped, because each is a DOM node on the phone
+   *  doing the viewing; past 200 the legend and the colours carry it. Redrawn at most twice a second, never per spot. */
+  var letters=[], lettersT=null;
+  function drawLetters(){
+    lettersT=null;
+    letters.forEach(function(m){try{map.removeLayer(m);}catch(e){}});
+    letters=[];
+    if(isCW||window.__GL)return;
+    var shown=spots.filter(function(s){return markers[key(s)];}).slice(0,200);
+    shown.forEach(function(s){
+      var ms=modeStyle(s.mode), ink=/^#[0-9a-fA-F]{3,8}$/.test(String(ms.ink))?ms.ink:'#000000';
+      if(!ms.letter)return;
+      letters.push(L.marker([s.lat,s.lon],{interactive:false,keyboard:false,icon:L.divIcon({className:'mkl',iconSize:[12,12],
+        html:'<b style="color:'+ink+'">'+esc(ms.letter)+'</b>'})}).addTo(map));
+    });
+  }
+  function queueLetters(){if(!isCW&&!window.__GL&&!lettersT)lettersT=setTimeout(drawLetters,500);}
   function rebuild(){
     Object.keys(markers).forEach(function(k){try{map.removeLayer(markers[k]);}catch(e){}});
     markers={};
     spots.forEach(function(s){upsert(s);});
     updateCount();
+    queueLetters();
     if(statsOpen)updateStats();
   }
   [fMode,fBand,fAge].forEach(function(el){if(el)el.onchange=rebuild;});
@@ -1721,6 +1744,7 @@ if(KIND==='digi'||KIND==='cw'){
     spots.unshift(s);
     upsert(s);
     updateCount();
+    queueLetters();
     showSpotToast(s);
     if(statsOpen)updateStats();
   }

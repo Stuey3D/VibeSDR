@@ -135,5 +135,21 @@ if (stray.length) {
   else ok('GPU-map asset copies match web/mapkit');
 }
 
+/* ★★★ …AND THE MANIFEST. The copies above can all match while src/generated/mapglAssets.ts still describes the OLD
+ *  pack — and the manifest's version is the only thing that makes an installed app copy the pack again
+ *  (mapglPack.ts). On 2026-10-27 exactly that hid the DIGITAL SPOTS MAP's mode letters on every iPhone/iPad
+ *  that already had the pack: compat re-synced, manifest not. Fix: node scripts/sync-mapgl-assets.mjs --scripts */
+{
+  const { readFileSync } = await import('node:fs');
+  const { mapglManifest } = await import('./lib/mapgl-manifest.mjs');
+  const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const want = mapglManifest(path.join(repo, 'assets/mapgl'));
+  const have = readFileSync(path.join(repo, 'src/generated/mapglAssets.ts'), 'utf8');
+  if (have !== want.text) {
+    const v = (have.match(/MAPGL_VERSION = "([^"]*)"/) || [])[1] || '(none)';
+    fail(`src/generated/mapglAssets.ts is STALE (version ${v}, assets/mapgl is ${want.version}) — installed apps would keep the old pack; run node scripts/sync-mapgl-assets.mjs --scripts`);
+  } else ok(`GPU-map manifest matches assets/mapgl (${want.version})`);
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

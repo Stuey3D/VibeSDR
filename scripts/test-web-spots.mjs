@@ -6,7 +6,8 @@
 //     column in each mode's colour and letter — FT8, FT4, FT2 and JS8 from their own dials;
 //   • the tuning arrow steps BANDS (20 m → 17 m: the dial moves to 17 m's centre, the readout follows) and back;
 //   • the MAP is coloured by MODE: every marker's fill and letter is its mode's (src/utils/digiModes.ts), and the legend
-//     lists the modes this server decodes;
+//     lists the modes this server decodes; each circle's letter is DRAWN (queryRenderedFeatures), on a second opening
+//     of the map too, and the renderer's scripts carry their content revision (2026-10-27);
 //   • the box header carries a chip per mode (V12 Band governor: active / light / idle / shed / off);
 //   • the box header SCROLLS at 1440 px and 375 px (wheel, trackpad, finger, the › arrow; ✕ reachable), its title is one
 //     line, and its MAP key opens the spots map (2026-10-27);
@@ -50,8 +51,13 @@ const rtlPort = await freePort(), port = await freePort(), cdp = await freePort(
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
                                      '--hf', CLIP, '--hf-centre', String(CENTRE), '--hf-utc'], { stdio: 'ignore' });
 await sleep(400);
-// ★ The GPU map's files from the repo (as the .deb installs them), so the map window can run its GPU renderer here too.
-const env = { ...process.env, VIBESERVER_MAPGL_DIR: path.join(root, 'directory/public/mapgl'), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
+// ★ The GPU map's files from the repo, laid out AS THE .deb INSTALLS THEM (vibeserver/CMakeLists.txt): directory/public/mapgl
+//   plus the style from web/mapkit. ★★ Without the style the server answered 404 for /mapgl/vibemap-style.json, the page
+//   fell back to Leaflet, and the GPU map — the renderer every real browser gets — was never tested here (2026-10-27).
+const MAPGL = path.join(dir, 'mapgl'); fs.mkdirSync(MAPGL);
+for (const n of fs.readdirSync(path.join(root, 'directory/public/mapgl'))) fs.symlinkSync(path.join(root, 'directory/public/mapgl', n), path.join(MAPGL, n));
+fs.copyFileSync(path.join(root, 'web/mapkit/vibemap-style.json'), path.join(MAPGL, 'vibemap-style.json'));
+const env = { ...process.env, VIBESERVER_MAPGL_DIR: MAPGL, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const logPath = path.join(dir, 'server.log');
 const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), '--freq', String(CENTRE), '--mode', 'usb', '--users', '1'],
                   { env, stdio: ['ignore', fs.openSync(logPath, 'w'), fs.openSync(logPath, 'a')] });
@@ -265,47 +271,71 @@ try {
   ok(await until(`/20 m BAND/.test((document.getElementById('mChan')||{}).textContent||'')`, 5000), `▼: back to 20 m ("${await chan()}")`);
   ok(Math.abs((await freqHz()) - CENTRE) <= 20, `the dial is 20 m's centre again (${await freqHz()})`);
 
-  console.log('── the map, coloured by mode ──');
+  console.log('── the map, coloured by mode — opened, closed and opened AGAIN ──');
+  // ★★ 2026-10-27 (Stuart, the app's DIGITAL SPOTS MAP: "dots are missing their numbers, i saw them once but then never
+  //    again"): the letters are asserted as RENDERED (queryRenderedFeatures on the letter layer — glyphs loaded and
+  //    drawn), not only as a layer that exists, and on a SECOND opening of the map too. The renderer's scripts must
+  //    carry their content revision (?r=), so a browser cannot run a cached day-old vibemapgl-compat.js.
+  for (let round = 1; round <= 2; round++) {
   const before = new Set((await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json())).map((t) => t.id));
-  await ev(`document.getElementById('mapBtn').click()`);
+  // ★ As a user gesture (CDP userGesture): window.open needs the user's activation, and a plain scripted click only
+  //   had it the first time (the START press's activation, consumed by the first popup).
+  await send('Runtime.evaluate', { expression: `document.getElementById('mapBtn').click()`, userGesture: true });
   let mapT = null;
   for (let i = 0; i < 40 && !mapT; i++) { await sleep(250); mapT = (await fetch(`http://127.0.0.1:${cdp}/json/list`).then((r) => r.json())).find((t) => t.type === 'page' && !before.has(t.id)); }
-  ok(!!mapT, 'the map window opened');
+  ok(!!mapT, `map #${round}: the map window opened`);
   if (mapT) {
     const mws = new WebSocket(mapT.webSocketDebuggerUrl);
     let mid = 0; const mp = new Map();
     mws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.id && mp.has(m.id)) { mp.get(m.id)(m); mp.delete(m.id); } };
-    await new Promise((r) => { mws.onopen = r; });
-    const msend = (method, params = {}) => new Promise((res) => { const i = ++mid; mp.set(i, res); mws.send(JSON.stringify({ id: i, method, params })); });
+    await Promise.race([new Promise((r) => { mws.onopen = r; }), sleep(5000)]);
+    const msend = (method, params = {}) => Promise.race([new Promise((res) => { const i = ++mid; mp.set(i, res); mws.send(JSON.stringify({ id: i, method, params })); }),
+                                                         sleep(10000).then(() => ({}))]);
     const mev = async (x) => (await msend('Runtime.evaluate', { expression: x, returnByValue: true })).result?.result?.value;
     for (let i = 0; i < 40; i++) { if (await mev(`typeof spots !== 'undefined' && document.querySelectorAll('#legend .lrow[data-mode]').length >= 7`)) break; await sleep(250); }
     const pts = JSON.parse(await mev(`JSON.stringify(spots.map(s => ({ m: s.mode, c: s.colour, l: s.letter })))`) || '[]');
     ok(pts.length >= 3 && pts.every((p) => styleOf(p.m) && p.c.toUpperCase() === styleOf(p.m).colour && p.l === styleOf(p.m).letter),
-       `every marker is its MODE's colour and letter (${pts.map((p) => `${p.m}:${p.c}:${p.l}`).join(' ')})`);
-    const legend = JSON.parse(await mev(`JSON.stringify([...document.querySelectorAll('#legend .lrow[data-mode]')].map(r => ({ m: r.dataset.mode, l: r.querySelector('.mk').textContent, bg: getComputedStyle(r.querySelector('.mk')).backgroundColor })))`) || '[]');
-    ok(legend.map((x) => x.m).join(' ') === 'FT8 FT4 FT2 JS8 WSPR JTTY PSK' && legend.every((x) => x.l === STYLE[x.m].letter && hex(x.bg) === STYLE[x.m].colour),
-       `the legend lists the server's modes with their colours and letters (${legend.map((x) => `${x.m}/${x.l}/${hex(x.bg)}`).join(' ')})`);
-    ok(/BY MODE/.test(await mev(`document.getElementById('stats').textContent`)), 'the stats panel counts BY MODE');
+       `map #${round}: every marker is its MODE's colour and letter (${pts.map((p) => `${p.m}:${p.c}:${p.l}`).join(' ')})`);
+    if (round === 1) {
+      const legend = JSON.parse(await mev(`JSON.stringify([...document.querySelectorAll('#legend .lrow[data-mode]')].map(r => ({ m: r.dataset.mode, l: r.querySelector('.mk').textContent, bg: getComputedStyle(r.querySelector('.mk')).backgroundColor })))`) || '[]');
+      ok(legend.map((x) => x.m).join(' ') === 'FT8 FT4 FT2 JS8 WSPR JTTY PSK' && legend.every((x) => x.l === STYLE[x.m].letter && hex(x.bg) === STYLE[x.m].colour),
+         `the legend lists the server's modes with their colours and letters (${legend.map((x) => `${x.m}/${x.l}/${hex(x.bg)}`).join(' ')})`);
+      ok(/BY MODE/.test(await mev(`document.getElementById('stats').textContent`)), 'the stats panel counts BY MODE');
+    }
     // ★ On the GPU map the letter rides the circle layer (vibemapgl-compat 'lc-circle-labels'); on the Leaflet fallback (no
-    //   WebGL 2 in this headless browser) the legend and the colours are the cue.
+    //   WebGL 2 in this headless browser) small DOM letters ride above the circles.
     const glKit = await mev(`typeof GL !== 'undefined' && !!GL`);
     for (let i = 0; glKit && i < 40; i++) { if (await mev(`typeof vm !== 'undefined' && !!vm && !!vm.map && !!vm.map.getLayer('lc-circle-labels')`)) break; await sleep(250); }
     const gl = glKit && await mev(`typeof vm !== 'undefined' && !!vm && !!vm.map && !!vm.map.getLayer('lc-circle-labels')`);
     if (glKit) {
-      ok(gl, 'GPU map: the letter layer (lc-circle-labels) is on the map');
-      const feats = JSON.parse(await mev(`JSON.stringify((vm.map.getSource('lc-circles')._data.features || []).map(f => [f.properties.fillColor, f.properties.label, f.properties.labelColor]))`) || '[]');
+      ok(gl, `map #${round}: GPU map: the letter layer (lc-circle-labels) is on the map`);
+      const srcs = JSON.parse(await mev(`JSON.stringify([...document.querySelectorAll('script[src*="/mapgl/vendor/"]')].map(s => s.getAttribute('src')))`) || '[]');
+      ok(srcs.length >= 4 && srcs.every((u) => /\?r=[0-9a-f]{10}$/.test(u)), `map #${round}: the renderer's scripts carry their content revision (${srcs.map((u) => u.replace(/^.*\/vendor\//, '')).join(' ')})`);
+      // ★★ RENDERED: the symbol layer placed a glyph for every circle that is on screen (fonts fetched and drawn).
+      let drawn = [], onScreen = 0;
+      for (let i = 0; i < 40; i++) {
+        drawn = JSON.parse(await mev(`JSON.stringify(vm.map.queryRenderedFeatures({ layers: ['lc-circle-labels'] }).map(f => f.properties.label))`) || '[]');
+        onScreen = await mev(`vm.map.queryRenderedFeatures({ layers: ['lc-circles'] }).length`) || 0;
+        if (onScreen > 0 && drawn.length >= onScreen) break;
+        await sleep(250);
+      }
+      ok(onScreen >= 3 && drawn.length >= onScreen && drawn.every((l) => Object.values(STYLE).some((st) => st.letter === l)),
+         `map #${round}: GPU map: a letter is DRAWN on every circle in view (${drawn.length} letters on ${onScreen} circles: ${[...new Set(drawn)].join(' ')})`);
+      // ★ The circles as DRAWN (the source's private _data is not a stable shape across MapLibre versions; this check had
+      //   never run until the GPU map came up in this test, and failed on it).
+      const feats = JSON.parse(await mev(`JSON.stringify(vm.map.queryRenderedFeatures({ layers: ['lc-circles'] }).map(f => [f.properties.fillColor, f.properties.label, f.properties.labelColor]))`) || '[]');
       ok(feats.length >= 3 && feats.every(([c, l]) => Object.values(STYLE).some((st) => st.colour === String(c).toUpperCase() && st.letter === l)),
-         `GPU map: every circle carries its mode's fill and letter (${feats.map((f) => f.join('/')).join(' ')})`);
+         `map #${round}: GPU map: every circle carries its mode's fill and letter (${feats.map((f) => f.join('/')).join(' ')})`);
     } else {
-      // ★ The Leaflet fallback (no WebGL 2 in this headless browser): its canvas circles carry no text, so the letters ride
-      //   small non-interactive markers above them.
       const ls = JSON.parse(await mev(`JSON.stringify([...document.querySelectorAll('.mkl b')].map(b => [b.textContent, getComputedStyle(b).color]))`) || '[]');
-      ok(ls.length >= 3 && ls.every(([l]) => Object.values(STYLE).some((st) => st.letter === l)), `Leaflet fallback: each marker carries its mode's letter (${ls.map((x) => x[0]).join(' ')})`);
+      ok(ls.length >= 3 && ls.every(([l]) => Object.values(STYLE).some((st) => st.letter === l)), `map #${round}: Leaflet fallback: each marker carries its mode's letter (${ls.map((x) => x[0]).join(' ')})`);
     }
     const r = await msend('Page.captureScreenshot', { format: 'png' });
-    fs.writeFileSync(path.join(SHOTS, 'spots-map-by-mode.png'), Buffer.from(r.result.data, 'base64'));
+    if (r.result) fs.writeFileSync(path.join(SHOTS, `spots-map-by-mode${round === 1 ? '' : '-2'}.png`), Buffer.from(r.result.data, 'base64'));
     mws.close();
     await fetch(`http://127.0.0.1:${cdp}/json/close/${mapT.id}`).catch(() => {});
+    await sleep(800);
+  }
   }
 
   console.log('── phone width, 390 px ──');
