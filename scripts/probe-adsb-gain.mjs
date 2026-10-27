@@ -2,7 +2,7 @@
 // gain, whether the rule is still trying steps (gainBusy), its reason (gainWhy) and any feed warning (feedWarn).
 // Prints one line per change and a final "settled" line. No audio socket (nothing to hear, and tests are silent).
 // ★ A deadline on everything; nothing retained but the last report.
-const base = process.argv[2], secs = Number(process.argv[3] || 120);
+const base = process.argv[2], secs = Number(process.argv[3] || 120), stay = process.argv.includes('--stay');   // --stay: leave ADS-B on (a reconnect test)
 const sid = crypto.randomUUID();
 const ws = new WebSocket(base.replace('http', 'ws') + `/ws/user-spectrum?user_session_id=${sid}&mode=binary8&bins=256&proto=1`);
 let last = null, lastKey = '', reports = 0;
@@ -30,6 +30,6 @@ if (last) {
   console.log(`why: ${last.gainWhy || ''}`);
   console.log(`feedWarn: ${last.feedWarn || ''}`);
 }
-try { ws.send(JSON.stringify({ type: 'adsb', on: 0 })); } catch {}
+if (!stay) { try { ws.send(JSON.stringify({ type: 'adsb', on: 0 })); } catch {} }
 await new Promise(r => setTimeout(r, 800));
 clearInterval(ping); ws.close(); process.exit(last ? 0 : 1);

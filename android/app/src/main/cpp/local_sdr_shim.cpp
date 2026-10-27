@@ -23869,7 +23869,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★ Rule 0 reaches the plain landing too: on a shared dial the first listener since the start
              *   is put on it (the capture usually already sits there — the server starts on it — but a
              *   scan or a remembered multiplex may have moved the radio before anyone arrived). */
-            if (!landOnDab && !landOnAdsb && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
+            /* ★★★ NOT WHILE ADS-B HOLDS THE RECEIVER (2026-10-26). A listener who reconnects inside ADS-B's 5 s grace
+             *  ("listener returned within 5 s — ADS-B kept") arrived as a NEW session, and this plain landing retuned
+             *  the tuner to 96.1 MHz under a mode that was still on: no aircraft, a noise floor 13 dB up (the FM band),
+             *  and the gain rule — rightly reading a hot floor — walking the gain down for nothing. Found by the gain
+             *  A/B script's own reconnect. ADS-B owns the dial until it is left (EXIT ADS-B lands them properly). */
+            const bool adsbHolds = g_adsbMode.load(std::memory_order_relaxed);
+            if (adsbHolds && !landOnAdsb && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
+                && (!sharedDialNow || startLanding))
+                LOGI("new session — the receiver is in ADS-B, so the plain landing waits for EXIT ADS-B");
+            if (!landOnDab && !landOnAdsb && !adsbHolds && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
                 && (!sharedDialNow || startLanding)) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from

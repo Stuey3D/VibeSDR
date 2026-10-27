@@ -17,13 +17,19 @@ sleep 1
 VIBESERVER_CONFIG="$T/config.json" VIBESERVER_DATA_DIR="$T/data" nice -n 15 "$BIN" \
   --tcp 127.0.0.1:47341 --port 47342 --rate 2400000 --freq 96100000 > "$T/server.log" 2>&1 & SRV=$!
 for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:47342/ && break; sleep 0.5; done
-OUT=$(node --max-old-space-size=256 scripts/probe-adsb-gain.mjs http://127.0.0.1:47342 "${VIBE_ADSB_GAIN_SECS:-90}")
+OUT=$(node --max-old-space-size=256 scripts/probe-adsb-gain.mjs http://127.0.0.1:47342 "${VIBE_ADSB_GAIN_SECS:-90}" --stay)
 echo "$OUT"
+# ★★ A RECONNECT INSIDE THE 5 s GRACE (2026-10-26): the new session's plain landing retuned the tuner to 96.1 MHz under a
+#    mode still on — the floor 13 dB up, no aircraft, the gain walked down. The second visit must find the sky as it was.
+OUT2=$(node --max-old-space-size=256 scripts/probe-adsb-gain.mjs http://127.0.0.1:47342 15)
+echo "$OUT2" | sed 's/^/   reconnect: /'
+POS2=$(echo "$OUT2" | sed -n 's/^settled: .* pos \([0-9]*\) .*/\1/p')
 grep -E "\[ADS-B\] gain" "$T/server.log" | sed 's/^/   server: /'
 G=$(echo "$OUT" | sed -n 's/^settled: gain \([0-9.]*\) busy 0 .*/\1/p')
 POS=$(echo "$OUT" | sed -n 's/^settled: .* pos \([0-9]*\) .*/\1/p')
 if [ -n "$G" ] && awk -v g="$G" 'BEGIN{exit !(g>=38.5 && g<=40.3)}' && echo "$OUT" | grep -q "^why: noise floor at its target" \
-   && echo "$OUT" | grep -q "^feedWarn: $" && [ "${POS:-0}" -gt 50 ]; then
+   && echo "$OUT" | grep -q "^feedWarn: $" && [ "${POS:-0}" -gt 50 ] && [ "${POS2:-0}" -gt 50 ] \
+   && grep -q "the receiver is in ADS-B, so the plain landing waits" "$T/server.log"; then
   echo "test-adsb-gain-e2e: ok (settled $G dB)"; rm -rf "$T"; exit 0
 fi
 echo "test-adsb-gain-e2e: FAIL (logs in $T)"; exit 1
