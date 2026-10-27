@@ -169,6 +169,7 @@ public:
             for (int sf : c->sfs) {
                 Demod::Cfg k; k.sf = sf; k.bw = c->bw; k.invertIq = c->inv; k.carrierHz = c->hz; k.syncs = c->syncs; k.name = c->name;
                 k.minPreamble = 4;
+                k.searchStride = sf >= 11 ? 2 : 1;   // ★ SF11/12 search every other window: half their search cost, no loss (test-lora)
                 demods_.push_back({std::unique_ptr<Demod>(new Demod(k)), size_t(si), c});
             }
         }

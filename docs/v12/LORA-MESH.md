@@ -164,10 +164,10 @@ So the 50 % point sits about 1–2 dB below the datasheet's figure. test-lora as
 looping clip, overlapping Meshtastic and MeshCore frames in the same 250 kHz decode both. 20 s of noise through every
 channel → 0 frames.
 
-**CPU (Mac, this machine, server build: PFFFT, -O3), 2.4 MS/s:** default set (5 channels, 20 detectors) **2.3 % of one
-core**; everything (13 channels, 42 detectors) **4.4 %**. Header-only build (radix-2 FFT): 5.0 / 8.7 %.
+**CPU (Mac, this machine, server build: PFFFT, -O3), 2.4 MS/s:** default set (5 channels, 20 detectors) **2.1 % of one
+core**; everything (13 channels, 42 detectors) **4.0 %** (SF11/12 search every other window — no loss in the sweep). Header-only build (radix-2 FFT): 5.0 / 8.7 %.
 **Pi 2 — not measured** (not to be touched): at the ~10–15× per-core ratio used for ISM and wM-Bus, the default set is
-**~25–35 % of one Pi 2 core** on top of the ISM front end (10–20 %), so the governor keeps a Pi 2 at the default set.
+**~20–30 % of one Pi 2 core** on top of the ISM front end (10–20 %), so the governor keeps a Pi 2 at the default set.
 `scripts/run-tests.sh` on the Pi 2 prints test-lora's CPU rows; the benchmark's `dec_lora` row measures it in place.
 
 ---
@@ -203,7 +203,6 @@ bad headers and bad CRCs — the first real capture will show at once whether he
 ## 7. Not done / next
 
 - Implicit-header frames (none of the three networks needs them).
-- Detection decimation for SF11/12 (search every other window) — would roughly halve their search cost on the Pi 2.
 - A per-hour node count and "furthest" on the gallery card (the service does not know the receiver's position).
 - A Setup-page control for `lora+all`.
 - Soft-decision decoding for CR 4/5–4/6 (~1 dB more).

@@ -322,6 +322,9 @@ public:
         int minPreamble = 4;               ///< windows in a row that must agree
         std::vector<uint8_t> syncs;        ///< accepted sync words (empty = any)
         int ldro = -1;                     ///< -1 = by the datasheet rule, 0 off, 1 on
+        /** ★ Search every Nth window (1 = all). 2 halves the search cost of SF11/12 — a preamble of 8 still gives ≥ 3
+         *  windows to agree; the frame itself is still demodulated symbol by symbol. The governor sets it on weak boxes. */
+        int searchStride = 1;
         std::string name;
     };
     Demod(const Cfg& c) : c_(c), N_(1 << c.sf), fft_(1 << c.sf) {
@@ -331,6 +334,7 @@ public:
             up_[size_t(n)] = cf(float(std::cos(ph)), float(std::sin(ph)));
         }
         ldro_ = c.ldro < 0 ? ldroFor(c.sf, c.bw) : c.ldro == 1;
+        stride_ = std::max(1, c.searchStride);
     }
     const Cfg& cfg() const { return c_; }
     int N() const { return N_; }
@@ -417,10 +421,10 @@ private:
         const Peak p = window(s, pos_, true);
         hist_.push_back({pos_, p.bin, p.pk > kSearchRatio * p.mean});
         if (hist_.size() > 8) hist_.pop_front();
-        pos_ += N_;
+        pos_ += int64_t(N_) * stride_;
         // ★ K of the last K+1 windows agree with the newest to ±1 bin (one window lost to noise is forgiven: at the
         //   sensitivity limit a single symbol's peak dips under the threshold often enough to cost ~1 dB otherwise)
-        const int K = c_.minPreamble;
+        const int K = stride_ > 1 ? 3 : c_.minPreamble;   // ★ every other window: 3 of the last 4 seen span ~7 symbols
         if (int(hist_.size()) < K) return true;
         const auto& last = hist_.back();
         if (!last.ok) return true;
@@ -432,6 +436,8 @@ private:
         if (agree < K) return true;
         // ★ a preamble: put the grid back by its bin so the CFO is folded into the timing (see the class comment)
         alignStart_ = last.w - last.bin;
+        // ★ striding, the newest window may be the preamble's last: start the walk two symbols back
+        if (stride_ > 1 && alignStart_ - 2 * int64_t(N_) >= s.oldest()) alignStart_ -= 2 * int64_t(N_);
         if (alignStart_ < s.oldest()) { hist_.clear(); return true; }
         st_ = ALIGN; ai_ = 0; aw_.clear(); hist_.clear(); lastPre_ = 0; ++pre_;
         return true;
@@ -646,6 +652,7 @@ private:
     std::vector<cf> up_, buf_;
     std::vector<float> mag_;
     bool ldro_ = false;
+    int stride_ = 1;
     St st_ = SEARCH;
     int64_t pos_ = -1;
     struct H { int64_t w; int bin; bool ok; };

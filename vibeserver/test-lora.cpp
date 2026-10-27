@@ -107,7 +107,7 @@ static bool roundTrip(int sf, double bw, int cr, double snr, double cfo, std::mt
     Channeliser ch(fs);
     Stream s(bw, 19);
     ch.add(0, bw, &s);
-    Demod::Cfg c; c.sf = sf; c.bw = bw; c.carrierHz = 868e6;
+    Demod::Cfg c; c.sf = sf; c.bw = bw; c.carrierHz = 868e6; c.searchStride = sf >= 11 ? 2 : 1;   // ★ as the engine runs them
     Demod d(c);
     bool got = false;
     for (size_t i = 0; i < sig.size(); i += 16384) {
