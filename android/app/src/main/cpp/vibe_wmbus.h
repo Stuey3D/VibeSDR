@@ -675,11 +675,11 @@ inline std::vector<Run> preambles(const std::vector<double>& cr, double R, const
     }
     return out;
 }
-/** Every chip from `B0` on as a soft value (+ = the higher tone), with a timing loop on the transitions. */
-inline std::vector<float> readChips(const Disc& d, double B0, double T, int L, size_t maxChips) {
+/** ★ `start`, never `B0`: Android's termios headers define B0 as a macro, and it broke the app's native build. Every chip from `start` on as a soft value (+ = the higher tone), with a timing loop on the transitions. */
+inline std::vector<float> readChips(const Disc& d, double start, double T, int L, size_t maxChips) {
     std::vector<float> s;
     const double end = double(d.size() - 1);
-    double B = B0, Tc = T;
+    double B = start, Tc = T;
     float prev = 0;
     const double T0 = T;
     while (B + Tc <= end && s.size() < maxChips) {
