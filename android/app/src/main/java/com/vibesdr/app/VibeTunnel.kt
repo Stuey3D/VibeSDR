@@ -259,10 +259,12 @@ object VibeTunnel {
                         var line = r.readLine()
                         var announced = false
                         while (line != null) {
-                            val m = HOSTNAME.find(line)
-                            if (m != null && !announced) {
+                            // ★★★ ONLY THE LINE THAT ANNOUNCES IT — see VibeQuickTunnelUrl. Any URL anywhere
+                            //     took api.trycloudflare.com out of cloudflared's own failure line (Kiko).
+                            val m = if (announced) null else VibeQuickTunnelUrl.fromLogLine(line)
+                            if (m != null) {
                                 announced = true
-                                tunnelUrl = m.value
+                                tunnelUrl = m
                                 urlBornAt = System.currentTimeMillis()
                                 probeFails = 0
                                 Log.i(TAG, "quick tunnel up: $tunnelUrl")
@@ -306,8 +308,6 @@ object VibeTunnel {
             onReady(null)
         }
     }
-
-    private val HOSTNAME = Regex("""https://[a-z0-9-]+\.trycloudflare\.com""")
 
     /**
      * ★★★ THE TUNNEL MAKES EVERY LISTENER 127.0.0.1, AND THIS HAS ALREADY BITTEN US.

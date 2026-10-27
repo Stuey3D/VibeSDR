@@ -840,6 +840,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── certificate pins, Android (VibePinnedTls) ──\033[0m\n'
 bash scripts/test-tls-pin-android.sh; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE TUNNEL ADDRESS, ANDROID (VibeQuickTunnelUrl.kt, 2026-10-27): cloudflared's failure line is never an address —
+#     Kiko's TV box read api.trycloudflare.com out of it and recycled every 15 s. Same lines as test-tunnel-url.cpp.
+printf '\n\033[1m── tunnel address, Android (VibeQuickTunnelUrl) ──\033[0m\n'
+bash scripts/test-tunnel-url-android.sh; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ ONE VERSION, EVERYWHERE IT IS WRITTEN DOWN. app.json does NOT reach the iOS build — the
 #     pbxproj owns MARKETING_VERSION and only `expo prebuild` would copy it across, which this

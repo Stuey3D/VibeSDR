@@ -1,6 +1,7 @@
 #include "directory.h"
 #include "solar.h"   // ★ gridToLatLon — the locator is validated HERE, see worker()
 #include "vibe_hwinfo.h"   // ★ the machine, for the listing
+#include "tunnel_url.h"    // ★ which cloudflared line is the address (never its error lines)
 
 #include <atomic>
 #include <chrono>
@@ -864,15 +865,13 @@ std::string startTunnel(int port) {
 
     std::string found;
     char line[1024];
+    /* ★★★ ONLY THE LINE THAT ANNOUNCES THE TUNNEL. This was "any https:// with .trycloudflare.com after it", which took
+     *     https://api.trycloudflare.com out of cloudflared's own FAILURE line ("failed to request quick Tunnel: Post
+     *     \"https://api.trycloudflare.com/tunnel\": context deadline exceeded") and published Cloudflare's API as our
+     *     address (Kiko, 2026-10-26, seen on Android; this scrape had the same flaw). See tunnel_url.h. */
     for (int i = 0; i < 400 && fgets(line, sizeof line, f); i++) {
-        const char* p = strstr(line, "https://");
-        if (p && strstr(p, ".trycloudflare.com")) {
-            std::string u(p);
-            size_t e = u.find(".trycloudflare.com");
-            u = u.substr(0, e + strlen(".trycloudflare.com"));
-            found = trim(u);
-            break;
-        }
+        found = vstunnel::quickTunnelUrl(line);
+        if (!found.empty()) break;
     }
 
     /** ★★★ KEEP READING FOR THE PROCESS'S WHOLE LIFE. NOBODY DID, AND THAT ALONE WEDGED IT.

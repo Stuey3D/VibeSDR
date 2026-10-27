@@ -175,6 +175,8 @@ tasks.matching { it.name == 'assembleRelease' }.configureEach { finalizedBy 'sig
 //    here. Anything that imports React or Expo stays out.
 def SHARED = ['VibeLocalSDR.kt', 'VibeServerBoot.kt', 'VibeServerRestore.kt', 'RtlTcpServerService.kt',
               'VibeTunnel.kt', 'VibeGeoData.kt', 'VibeHttp.kt', 'VibeWifiLock.kt',
+              // ★★ Which cloudflared line is the tunnel's address — VibeTunnel cannot compile without it (2026-10-27).
+              'VibeQuickTunnelUrl.kt',
               // ★★ Modern roots for old phones' HTTPS (B10: a Lite on Android 5.1 had no RIPE/APNIC data).
               //    Every downloader above uses it — without this line none of them compiles.
               'VibeTls.kt',
