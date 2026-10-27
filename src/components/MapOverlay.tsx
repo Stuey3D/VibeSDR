@@ -134,6 +134,8 @@ interface MapOverlayProps {
   adsbAircraft?: AdsbAircraftRaw[] | null;
   /** ★ kind 'adsb': the receiver is dropping samples (adsbTypes adsbCaptureWarning), or null. */
   adsbCapture?: { short: string; rest: string } | null;
+  /** ★★ kind 'adsb': the server's feed warning (AdsbReport.feedWarn — full gain and hearing little), or empty. */
+  adsbFeedWarn?: string;
   /** ★ kind 'adsb': the same report in the app's shape, ranged from the receiver — the live list's rows. */
   adsbList?: Aircraft[];
   /** kind 'adsb': a report has arrived (the list then says "no aircraft yet", not "taking the receiver to 1090"). */
@@ -265,6 +267,14 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
   /* ★★ ADS-B: the receiver dropping samples (adsbCaptureWarning) — red, before the count; a phone keeps only "capture N %". */
   #capwarn{flex:0 1 auto;min-width:0;font-size:11px;letter-spacing:0.5px;color:#ff6b5e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   @media (max-width:520px){#capwarn .w{display:none;}}
+  /* ★★ The feed warning (AdsbReport.feedWarn): red-edged, at the top of the map, wraps; × hides it until it changes. */
+  #feedwarn{position:absolute;left:10px;right:10px;top:8px;z-index:900;max-width:640px;margin:0 auto;display:flex;gap:10px;align-items:flex-start;
+    padding:8px 10px 8px 12px;border-radius:8px;background:rgba(8,6,2,0.96);border:1px solid #ff6b5e;font-size:12px;letter-spacing:0.3px;
+    line-height:1.4;color:rgba(${T.x},0.92);}
+  #feedwarn b{color:#ff6b5e;white-space:nowrap;letter-spacing:0.8px;}
+  #feedwarn span{flex:1 1 auto;min-width:0;}
+  #feedwarn button{flex:0 0 auto;background:none;border:0;color:rgba(${T.x},0.6);font-size:18px;line-height:1;padding:0 2px;font-family:inherit;}
+  @media (max-width:520px){#feedwarn{flex-wrap:wrap;}#feedwarn b{flex:1 0 auto;}}
   #snap{background:rgba(${T.k},0.08);border:1px solid rgba(${T.k},0.30);border-radius:8px;
     color:rgba(${T.kt},0.60);font-size:12px;letter-spacing:0.5px;padding:5px 7px;cursor:pointer;
     font-family:inherit;-webkit-tap-highlight-color:transparent;touch-action:manipulation;line-height:1.2;text-align:center;flex-shrink:0;}
@@ -476,6 +486,7 @@ ${isSpots ? `
 </div>` : ''}
 <div id="map">
   <div id="lmap"></div>
+  ${isAdsb ? '<div id="feedwarn" role="alert" style="display:none"><b>CHECK THE ANTENNA</b><span></span><button type="button" aria-label="Hide">&times;</button></div>' : ''}
   <div id="legend">
     <div id="legbtn" title="Legend">&#9432;</div>
     <div id="legbody">
@@ -1418,6 +1429,14 @@ if(KIND==='adsb'){
     el.firstChild.textContent=String(w[0]);el.lastChild.textContent=String(w[1]||'');el.title=String(w[0])+String(w[1]||'');
     el.style.display='';
   };
+  /* ★★ The feed warning, as a text node (never HTML): a string, or '' to hide it. × hides it until the wording changes. */
+  window.__adsbFeedWarn=function(w){
+    var el=document.getElementById('feedwarn');if(!el)return;
+    w=String(w||'');
+    if(!w||el.getAttribute('data-x')===w){el.style.display='none';return;}
+    el.children[1].textContent=w;el.style.display='';
+    el.children[2].onclick=function(){el.setAttribute('data-x',w);el.style.display='none';};
+  };
   window.__adsbRx=function(lat,lon){RX_LAT=lat;RX_LON=lon;if(adsbLayer&&adsbLayer.setReceiver)adsbLayer.setReceiver(lat,lon);};
   /* ★ The live list (React Native, over this page): a row chosen = the layer's own focus (select, open the card, pan only
    *  if it is off screen); and the list's width, so the attribution keeps clear of it (the CSS above). */
@@ -1758,7 +1777,7 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbGain, ndb, trk, safeInsets, spotModes }:
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -1920,6 +1939,12 @@ export default function MapOverlay(
       `window.__adsbCapture&&window.__adsbCapture(${JSON.stringify(adsbCapture ? [adsbCapture.short, adsbCapture.rest] : null)});true;`);
   };
   useEffect(() => { if (visible) pushCap(); }, [kind, visible, capKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ★★ The feed warning (AdsbReport.feedWarn) — JSON literal, never source; only on a change.
+  const pushFeedWarn = () => {
+    if (kind !== 'adsb') return;
+    webRef.current?.injectJavaScript(`window.__adsbFeedWarn&&window.__adsbFeedWarn(${JSON.stringify(adsbFeedWarn ?? '')});true;`);
+  };
+  useEffect(() => { if (visible) pushFeedWarn(); }, [kind, visible, adsbFeedWarn]); // eslint-disable-line react-hooks/exhaustive-deps
   /* ★ The live list's two calls into the page. The hex is the report's cleaned address (/^~?[0-9a-f]{6}$/, adsbTypes),
    *  and JSON.stringify makes it a string literal whatever it is — never source. The width is kept, so a page that
    *  (re)loads after the list measured itself still gets it (onLoadEnd). */
@@ -2073,7 +2098,7 @@ export default function MapOverlay(
           domStorageEnabled
           allowsInlineMediaPlayback
           setSupportMultipleWindows={false}
-          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft); pushCap(); pushNdb();
+          onLoadEnd={() => { injected.current = new Set(); pushSpots(spots); pushAdsb(adsbAircraft); pushCap(); pushFeedWarn(); pushNdb();
                              if (kind === 'adsb') adsbFootprint(adsbListW.current, adsbListH.current);
                              if (kind === 'ndb') ndbJs('__ndbListW', adsbListW.current);
                              if (isTrkKind) { pushTrk(trkRef.current?.items); trkFootprint(trkListW.current, trkListH.current);

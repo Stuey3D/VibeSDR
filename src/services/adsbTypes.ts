@@ -64,6 +64,10 @@ export interface AdsbReport {
   /** ★ V12 (19f2d603): the gain ADS-B is at (dB), whether the server is choosing it (gainAuto 1) and still measuring
    *  (gainBusy 1 — the ramp or the ten-minute look trying steps). Absent on an older server: no GAIN key. */
   gain?: number; gainAuto?: number; gainBusy?: number;
+  /** ★ V12 (2026-10-26): why the server's rule chose this gain, a short line (vibeadsb::GainControl::why). */
+  gainWhy?: string;
+  /** ★★ the owner's warning: at full gain and hearing little — the antenna or feed may be faulty (GainControl::warning). */
+  feedWarn?: string;
 }
 
 /** ★★★ THE CAPTURE WARNING for the map's top bar (Stuart, 2026-10-24): under 97 % the receiver is dropping samples
@@ -129,6 +133,7 @@ export function parseAdsbMessage(msg: Record<string, unknown>): AdsbReport {
     rate: num(msg.rate), noise: num(msg.noise), msgRate: num(msg.msgRate), dropped: num(msg.dropped),
     capture: num(msg.capture),
     gain: num(msg.gain), gainAuto: num(msg.gainAuto), gainBusy: num(msg.gainBusy),
+    gainWhy: cleanText(msg.gainWhy, 200) || undefined, feedWarn: cleanText(msg.feedWarn, 400) || undefined,
   };
 }
 
@@ -257,7 +262,7 @@ export function nearestGainIdx(gains: readonly number[], tenthDb: number): numbe
   for (let i = 0; i < gains.length; i++) { const d = Math.abs(gains[i] - tenthDb); if (d < bd) { bd = d; best = i; } }
   return best;
 }
-export function adsbGainView(r: Pick<AdsbReport, 'gain' | 'gainAuto' | 'gainBusy'> | null | undefined,
+export function adsbGainView(r: Pick<AdsbReport, 'gain' | 'gainAuto' | 'gainBusy' | 'gainWhy'> | null | undefined,
                              gains: readonly number[], locked: boolean, capTenthDb = -1): AdsbGainView | null {
   if (!r || typeof r.gain !== 'number' || !Number.isFinite(r.gain) || gains.length <= 1 || locked) return null;
   const auto = r.gainAuto === 1, busy = r.gainBusy === 1;
@@ -266,9 +271,10 @@ export function adsbGainView(r: Pick<AdsbReport, 'gain' | 'gainAuto' | 'gainBusy
     key: `GAIN ${r.gain.toFixed(1)}${auto ? ' · AUTO' : ' dB'}`,
     auto, training: auto && busy, now: `${r.gain.toFixed(1)} dB`,
     idx: Math.min(maxIdx, Math.max(0, nearestGainIdx(gains, Math.round(r.gain * 10)))), maxIdx,
+    /* ★★ WHY THIS GAIN — the server's own reason (the web's adsbGainRender says the same; ONE RULE, TWO READERS) */
     note: auto
-      ? (busy ? 'Finding the gain that decodes the most — trying each step for a few seconds.'
-              : 'Automatic: chosen by messages decoded, and checked again every ten minutes.')
+      ? (busy ? 'Finding the gain: the noise floor must stay 30 dB under full scale, and under that the step that decodes the most wins — each step tried for a few seconds.'
+              : `Automatic: ${r.gainWhy || 'chosen by the noise floor and messages decoded'}. Checked again every ten minutes.`)
       : 'Set by hand. AUTO hands it back.',
   };
 }

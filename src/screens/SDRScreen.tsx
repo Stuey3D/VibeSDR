@@ -14328,6 +14328,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         spotModes={shownMap === 'digi' ? spotModesSrv : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}
         adsbCapture={shownMap === 'adsb' ? adsbCaptureWarning(adsbReport) : undefined}
+        adsbFeedWarn={shownMap === 'adsb' ? adsbReport?.feedWarn ?? '' : ''}
         /* ★★ V12 the ADS-B GAIN key — only where the radio has a gain list the owner has not fixed (adsbGainView says null
          *  otherwise: an HF+, a fixed gain, an older server). AUTO hands it back to the server's ramp (19f2d603). */
         adsbGain={shownMap === 'adsb' ? {

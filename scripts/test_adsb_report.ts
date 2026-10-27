@@ -124,8 +124,22 @@ eq('prefs unparseable', parseAdsbMapPrefs('{'), ADSB_MAP_PREFS_DEFAULT);
   eq('+ clamps at the ceiling', adsbGainStep(adsbGainView({ gain: 30, gainAuto: 0 }, rtl, false, 300)!, null, 0, 1), rtl.indexOf(297));
   // ★ ONE RULE, TWO READERS: the notes are the web's words
   const main = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
-  for (const n of [v.note, adsbGainView({ gain: 1, gainAuto: 1, gainBusy: 0 }, rtl, false)!.note, hv.note])
+  for (const n of [v.note, hv.note])
     eq(`note is the web's: ${n.slice(0, 30)}…`, main.includes(`'${n}'`), true);
+  // ★★ the settled note carries the server's reason (GainControl::why) — the same template on both readers
+  const why = 'noise floor at its target (-31 dBFS, 30 dB under full scale) — more gain would only fill the ADC with noise';
+  const wr = parseAdsbMessage({ type: 'adsb', aircraft: [], gain: 40.2, gainAuto: 1, gainBusy: 0, gainWhy: why });
+  eq('the report carries the reason', wr.gainWhy, why);
+  const settled = adsbGainView(wr, rtl, false)!.note;
+  eq('the settled note says why', settled, `Automatic: ${why}. Checked again every ten minutes.`);
+  eq('the web uses the same template', main.includes('`Automatic: ${why || \'chosen by the noise floor and messages decoded\'}. Checked again every ten minutes.`'), true);
+  eq('no reason (an older server): the fallback', adsbGainView({ gain: 1, gainAuto: 1, gainBusy: 0 }, rtl, false)!.note,
+     'Automatic: chosen by the noise floor and messages decoded. Checked again every ten minutes.');
+  // ★★ the feed warning: a cleaned string, absent when the server sends none
+  const fw = 'The receiver is at full gain and hearing little: its noise floor is 8 dB below where a working ADS-B feed sits.';
+  eq('feedWarn carried', parseAdsbMessage({ aircraft: [], feedWarn: fw }).feedWarn, fw);
+  eq('no feedWarn: absent', parseAdsbMessage({ aircraft: [] }).feedWarn, undefined);
+  eq('junk feedWarn: absent', parseAdsbMessage({ aircraft: [], feedWarn: 42 }).feedWarn, undefined);
 }
 
 console.log(`test_adsb_report: ${passes} passed, ${fails} failed`);
