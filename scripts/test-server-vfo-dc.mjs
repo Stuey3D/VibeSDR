@@ -13,6 +13,12 @@
 //   3. RANGE-LOCKED (users 2, --lock-freq): the same sweep moves nothing — the window is the owner's;
 //   4. SHARED DIAL (users 3, unlocked): the owner's LANDING on the DC (not a person's tune) does NOT move the radio; the
 //      first tune by a person does; a second listener joining moves nothing and reads the same dial.
+//   5. (beta25) FREE TUNING WITH THE APP'S OWN MESSAGES — its recentre zooms and edge pans, "free":1 — zoomed (60 kHz) and
+//      full span, auto IF and manual: 9 kHz steps and 500 Hz sweeps across the DC, up and back. The centre moves only for
+//      the DC, ≤ one nudge's reach, once per crossing, never back onto the dial (no "deferred retune"), and a small pan
+//      moves nothing. On beta24 (da9dc130f) the zoomed auto-IF case retunes 14 times for one crossing and ends on the dial;
+//   6. LOCKED VFO (a zoom onto the dial every tune): unchanged — auto IF keeps the tuner on the dial;
+//   7. the clients are told where the spike is: hwinfo `dcHz` on connect, a `dc` message after the nudge.
 // Silent: audio frames are analysed in memory, never played. Every child is killed in a finally.
 //   VIBESERVER_BIN=…/vibeserver node --max-old-space-size=512 scripts/test-server-vfo-dc.mjs
 import net from 'node:net';
@@ -40,7 +46,7 @@ const kHz = (h) => (h / 1e3).toFixed(1);
 function ws(port, pathq) {
   const key = crypto.randomBytes(16).toString('base64');
   const s = net.connect(port, '127.0.0.1');
-  const st = { bin: [], txt: [], open: false, keepBin: false };
+  const st = { bin: [], txt: [], other: [], open: false, keepBin: false };
   let hs = false, buf = Buffer.alloc(0);
   s.on('connect', () => s.write(`GET ${pathq} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
   s.on('error', () => {});
@@ -56,7 +62,11 @@ function ws(port, pathq) {
       const p = buf.subarray(off, off + len); buf = buf.subarray(off + len);
       if (op === 0x9) { const q = Buffer.alloc(6 + p.length); q[0] = 0x8a; q[1] = 0x80 | p.length; q.writeUInt32BE(0, 2); p.copy(q, 6); s.write(q); continue; }
       if (op === 0x2 && st.keepBin) st.bin.push(Buffer.from(p));
-      if (op === 0x1) { const t = p.toString(); if (t.includes('"type":"config"')) { st.txt.push(t); if (st.txt.length > 2000) st.txt.splice(0, 500); } }
+      if (op === 0x1) {
+        const t = p.toString();
+        if (t.includes('"type":"config"')) { st.txt.push(t); if (st.txt.length > 2000) st.txt.splice(0, 500); }
+        else if (t.startsWith('{"type":"dc"') || t.startsWith('{"type":"hwinfo"')) { try { st.other.push(JSON.parse(t)); } catch {} if (st.other.length > 500) st.other.splice(0, 100); }
+      }
     }
   });
   st.send = (o) => {
@@ -146,6 +156,54 @@ async function sweep(S, L, from, to) {
   }
   return { steps: out, retunes: S.tunes.length - n0, onDc: out.filter((s) => Math.abs(s.dc - s.dial) < ZONE - 100) };   // ★ the fake prints 100 Hz
 }
+/* ★★★ V12 beta25 — THE APP'S OWN MESSAGES IN FREE TUNING, not "only tune". Stuart, beta24 on the Pi 500: "the RF centre is
+ *  following the VFO when in free mode and kinda kills the whole free tuning mode". What the app really sends
+ *  (src/services/VibeServerWsClient.ts tune(), src/screens/SDRScreen.tsx keepVfoAtEdge):
+ *    · `tune` every step;
+ *    · FREE: a `zoom` back onto the dial once the dial is past 45 % of the VIEW span from the view's centre (`beyondCapture`
+ *      reads status.bwHz, which is the view's span) or past half of it (`beyondView`); LOCKED: that zoom on EVERY tune;
+ *    · then, FREE only, keepVfoAtEdge: a pan to dial ∓ 92 % of the half-span if the dial is still beyond it.
+ *  Every view message carries binBandwidth (pan() sends the current one). `hint` adds `"free":1`, as the app and the web
+ *  now say (viewFree_ in the shim); without it this is the app as shipped up to beta24. */
+function appClient(L, cfg, { free = true, hint = true, spanHz = 60000 } = {}) {
+  const n = cfg.binCount;
+  const A = { view: { c: cfg.centerFreq, bb: Math.min(spanHz, cfg.maxBandwidth) / n }, dial: cfg.vfo || cfg.centerFreq };
+  const sendView = (c, bb) => { A.view = { c: Math.round(c), bb }; L.spec.send({ type: 'zoom', frequency: Math.round(c), binBandwidth: bb, ...(free && hint ? { free: 1 } : {}) }); };
+  A.zoom = (c) => sendView(c, A.view.bb);
+  A.tune = (f) => {
+    const prev = A.dial; A.dial = f;
+    L.spec.send({ type: 'tune', frequency: f, mode: 'am' });
+    if (Math.abs(f - prev) < 1) return;
+    const span = A.view.bb * n, ref = A.view.c;
+    const beyond = Math.abs(f - ref) > span * 0.45 || Math.abs(f - ref) > span * 0.5;
+    if (!free || beyond) A.zoom(f);
+    if (!free) return;
+    const lim = (span / 2) * 0.92, off = f - A.view.c;            // ★ keepVfoAtEdge
+    if (Math.abs(off) <= lim) return;
+    const target = f - Math.sign(off) * lim;
+    if (Math.abs(target - A.view.c) < A.view.bb) return;
+    A.zoom(target);
+  };
+  return A;
+}
+/** A sweep through appClient: after every step, the tuner (the fake's last tune) and the dial. */
+async function appSweep(S, A, from, to, step, ms = 120) {
+  const out = [];
+  const n0 = S.tunes.length, log0 = S.log().length;
+  const dir = Math.sign(to - from);
+  for (let f = from; dir > 0 ? f <= to : f >= to; f += dir * Math.abs(step)) {
+    const n = S.tunes.length;
+    A.tune(f);
+    await sleep(ms);
+    if (Math.abs(S.dcNow() - f) < ZONE - 100) await until(() => S.tunes.length > n, 1500);
+    out.push({ dial: f, dc: S.dcNow() });
+  }
+  await sleep(400);   // ★ a deferred move (the pan cooldown, 120 ms) has had every chance to land
+  const tail = S.log().slice(log0);
+  return { steps: out, retunes: S.tunes.length - n0, moves: S.tunes.slice(n0), settled: S.dcNow(),
+           onDc: out.filter((s) => Math.abs(s.dc - s.dial) < ZONE - 100),
+           nudges: (tail.match(/VFO free: DC/g) || []).length, deferred: (tail.match(/deferred retune applied/g) || []).length };
+}
 async function tone(L, ms = 2000) {
   L.aud.bin.length = 0; L.aud.keepBin = true;
   await sleep(ms);
@@ -155,6 +213,7 @@ async function tone(L, ms = 2000) {
   return { n: y.length, t620: goertzel(y, 620), t400: goertzel(y, 400), t840: goertzel(y, 840) };
 }
 
+setTimeout(() => { console.log('   FAIL the whole test passed its 9-minute deadline'); for (const c of children) { try { c.kill('SIGKILL'); } catch {} } process.exit(1); }, 540000).unref();
 try {
   {
     console.log('── 1. BEFORE (VIBE_VFO_DC=0): a FREE VFO walks onto the DC ──');
@@ -236,6 +295,79 @@ try {
       const bc = configs(B.spec).slice(-1)[0];
       ok(bc && bc.vfo === dialNow, `…and reads the shared dial (${bc ? kHz(bc.vfo) : '-'} kHz)`);
       A.close(); B.close();
+    } finally { S.stop(); }
+  }
+  /* ★★★ 5. FREE TUNING WITH THE APP'S OWN MESSAGES (beta25). The centre stays put — "the RF centre can be off screen in free
+   *  mode it is fine" (Stuart) — and moves only for the DC, by no more than a nudge, and the nudge sticks: no "deferred
+   *  retune" putting the tuner back on the dial. */
+  const freeCase = async (tag, { spanHz, ifHz = 0, from, to, step, back }) => {
+    const S = await server(tag, ['--users', '1']);
+    try {
+      const L = await listener(S.port, `vfodc${tag}`.slice(0, 12).padEnd(12, '0'), CENTRE);
+      if (ifHz) { L.spec.send({ type: 'tunerbw', value: ifHz }); await sleep(300); }
+      const cfg = configs(L.spec).slice(-1)[0];
+      const A = appClient(L, cfg, { spanHz });
+      A.zoom(CENTRE);
+      await sleep(700);
+      const c0 = S.dcNow() - OFF;
+      const ifNote = ifHz ? `IF ${ifHz / 1e3} kHz manual` : 'auto IF';
+      const check = (r, what, maxRetunes) => {
+        ok(r.onDc.length === 0, `${what}: ${r.steps.length} tunes, the DC never inside ±${ZONE / 1e3} kHz of the dial`);
+        ok(r.retunes <= maxRetunes, `${what}: ${r.retunes} retune(s) (≤ ${maxRetunes} — one per crossing; ${r.moves.map(kHz).join(', ') || 'none'})`);
+        ok(r.retunes === r.nudges && r.deferred === 0, `${what}: every move a DC nudge (${r.nudges} nudge(s), ${r.deferred} deferred retune(s) — none undoing it)`);
+        const last = r.steps[r.steps.length - 1];
+        ok(r.settled === last.dc && Math.abs((r.settled - OFF) - last.dial) > 1000, `${what}: the centre is NOT on the dial at the end, and nothing moved it after (centre ${kHz(r.settled - OFF)}, dial ${kHz(last.dial)})`);
+      };
+      const up = await appSweep(S, A, from, to, step);
+      check(up, `${tag} up (${spanHz >= cfg.maxBandwidth ? 'full span' : `${spanHz / 1e3} kHz view`}, ${ifNote})`, 1);
+      if (up.retunes) ok(Math.abs(up.moves[0] - OFF - c0) <= 25000, `${tag}: the nudge moved the centre ${kHz(Math.abs(up.moves[0] - OFF - c0))} kHz (≤ a nudge's reach)`);
+      const down = await appSweep(S, A, to, back, -step);
+      check(down, `${tag} down`, 1);
+      // ★ a small pan of the view (the web's FREE, or a finger): the centre stays where the nudge left it
+      const n1 = S.tunes.length;
+      A.zoom(A.view.c + 2000);
+      await sleep(500);
+      ok(S.tunes.length === n1, `${tag}: a 2 kHz pan moves nothing (${S.tunes.length - n1} tune(s))`);
+      L.close();
+    } finally { S.stop(); }
+  };
+  console.log('── 5. FREE tuning, the app\'s own messages (tune + its recentre zooms + edge pans, "free":1) ──');
+  await freeCase('freezoom', { spanHz: 60000, from: DC0 - 40000, to: DC0 + 230000, step: 9000, back: DC0 - 40000 });
+  await freeCase('freefull', { spanHz: 1e9, from: CENTRE, to: TONES_AT, step: STEP, back: CENTRE - 10000 });
+  await freeCase('freeman', { spanHz: 60000, ifHz: 1500000, from: DC0 - 40000, to: DC0 + 230000, step: 9000, back: DC0 - 40000 });
+  {
+    console.log('── 6. LOCKED VFO (the app zooms onto the dial every tune): unchanged — auto IF keeps the tuner on the dial ──');
+    const S = await server('lockedvfo', ['--users', '1']);
+    try {
+      const L = await listener(S.port, 'vfodclkvfo01', CENTRE);
+      const A = appClient(L, configs(L.spec).slice(-1)[0], { free: false, spanHz: 60000 });
+      A.zoom(CENTRE);
+      await sleep(700);
+      const r = await appSweep(S, A, DC0 - 40000, DC0 + 100000, 9000);
+      ok(r.onDc.length === 0, `${r.steps.length} tunes: the DC never inside ±${ZONE / 1e3} kHz of the dial`);
+      const last = r.steps[r.steps.length - 1];
+      ok(r.retunes >= r.steps.length / 2 && Math.abs((r.settled - OFF) - last.dial) <= 1000,
+         `the tuner follows the dial as before (${r.retunes} retunes for ${r.steps.length} tunes; centre ${kHz(r.settled - OFF)}, dial ${kHz(last.dial)})`);
+      L.close();
+    } finally { S.stop(); }
+  }
+  {
+    console.log('── 7. the DC is told to the clients (hwinfo dcHz, and a `dc` message when the centre moves) ──');
+    const S = await server('dctold', ['--users', '1']);
+    try {
+      const L = await listener(S.port, 'vfodcdctold1', CENTRE);
+      const hw0 = L.spec.other.filter((m) => m.type === 'hwinfo' && m.dcHz).map((m) => m.dcHz);
+      ok(hw0.length >= 1 && hw0[hw0.length - 1] === S.dcNow(), `hwinfo carries dcHz on connect (${hw0.length ? kHz(hw0[hw0.length - 1]) : '-'}; the tuner at ${kHz(S.dcNow())} kHz)`);
+      const A = appClient(L, configs(L.spec).slice(-1)[0], { spanHz: 60000 });
+      A.zoom(CENTRE);
+      await sleep(500);
+      L.spec.other.length = 0;
+      const r = await appSweep(S, A, DC0 - 8000, DC0 + 4000, STEP);
+      const dcs = L.spec.other.filter((m) => m.type === 'dc');
+      const lastDc = dcs.length ? dcs[dcs.length - 1] : null;
+      ok(r.retunes >= 1 && lastDc && lastDc.dcHz === S.dcNow() && lastDc.rfCentre === S.dcNow(),
+         `after the nudge a \`dc\` message says where the spike is now: ${lastDc ? kHz(lastDc.dcHz) : '-'} kHz (the tuner at ${kHz(S.dcNow())}; ${dcs.length} message(s))`);
+      L.close();
     } finally { S.stop(); }
   }
 } catch (e) {
