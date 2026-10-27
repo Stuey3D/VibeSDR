@@ -15,6 +15,7 @@
 #include "vibe_ism_bands.h"    // the four bands, reachability, the landing band
 #include "vibe_ism_sink.h"     // ★ V12 2026-10-25: the gallery's copy of every new reading (vibe_ism_gallery.h)
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B
+#include "vibe_lora_track.h"      // ★ V12 2026-10-27: LoRa — LoRaWAN, Meshtastic, MeshCore (docs/v12/LORA-MESH.md)
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -365,14 +366,22 @@ public:
      *  one must not take a name the day has already used. */
     void reserveNicks(const std::string& kind, int floor) { int& n = nextNick_[kind]; if (floor > n) n = floor; }
 
-    /** The device list, newest first: [{…}, …] */
-    std::string json(double t) const {
+    /** The device list, newest first: [{…}, …]. ★ V12 LoRa: `extra` rows (vibe_lora_track.h — mesh nodes, LoRaWAN
+     *  devices), each with its last-heard time, are merged in by that time. */
+    std::string json(double t, const std::vector<std::pair<double, std::string>>* extra = nullptr) const {
         std::vector<const Dev*> v;
         for (const auto& kv : devs_) v.push_back(&kv.second);
         std::sort(v.begin(), v.end(), [](const Dev* a, const Dev* b) { return a->last > b->last; });
+        std::vector<std::pair<double, std::string>> more;
+        if (extra) { more = *extra; std::sort(more.begin(), more.end(), [](const auto& a, const auto& b) { return a.first > b.first; }); }
+        size_t mi = 0;
         std::string o = "[";
         bool first = true;
+        auto flushMore = [&](double before) {
+            while (mi < more.size() && more[mi].first >= before) { if (!first) o += ','; first = false; o += more[mi++].second; }
+        };
         for (const Dev* d : v) {
+            flushMore(d->last);
             const Reading& r = d->r;
             if (!first) o += ',';
             first = false;
@@ -400,6 +409,7 @@ public:
                           r.freqHz, r.levelDb, r.snrDb, std::max(0.0, t - d->last), std::max(0.0, t - d->first), d->count);
             o += b;
         }
+        flushMore(-1e300);
         return o + "]";
     }
 
@@ -540,13 +550,22 @@ public:
         fobs_.clear();   // ★ a new FrontEnd restarts burst time at 0
         cap_.reset(rateHz, now());
         health_ = Health{};
+        // ★ V12 LoRa (vibe_lora_service.h): its own thread and queue; the band's channel plan, only what the capture
+        //   holds, as many detectors as the owner's choice and the benchmark allow. Not on a typed frequency.
+        if (!keepList) mesh_.clear();
+        loraChans_ = 0;
+        if (loraOn_ && customHz <= 0) loraChans_ = lora_.start(band.id, hwCentreHz, rateHz, loraBudget_);
         run_ = true;
         worker_ = std::thread([this] { loop(); });
     }
+    /** ★ V12 LoRa: on/off (the owner's switch) and the detector budget in vibelora::detCost units (∞ = every plan
+     *  channel the capture holds; the default tier always runs while LoRa is on). Takes effect at the next start(). */
+    void setLora(bool on, double budgetUnits) { std::lock_guard<std::mutex> lk(mtx_); loraOn_ = on; loraBudget_ = budgetUnits; }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
         cv_.notify_all();
         if (worker_.joinable()) worker_.join();
+        lora_.stop();
         // ★ The worker is gone, so nothing else touches the sink: its buffer is written here, once.
         std::shared_ptr<Sink> s;
         { std::lock_guard<std::mutex> lk(mtx_); s.swap(sink_); }
@@ -562,6 +581,7 @@ public:
     /** From the DSP thread: copy and return. Never blocks on the decoder. */
     void feed(const cf* iq, size_t n) {
         if (!run_.load(std::memory_order_relaxed) || !n) return;
+        lora_.feed(iq, n);   // ★ its own copy and queue — returns at once
         std::vector<cf> b(iq, iq + n);
         {
             std::lock_guard<std::mutex> lk(mtx_);
@@ -586,7 +606,18 @@ public:
                       (unsigned long long)bursts_, (unsigned long long)tracker_.decoded(), (unsigned long long)unknown_,
                       health_.noiseDb, (unsigned long long)dropped_, cap_.percent(t));
         o += b;
-        o += tracker_.json(t);
+        const auto loraRows = mesh_.rowsJson(t);
+        o += tracker_.json(t, &loraRows);
+        // ★ V12 LoRa: how many plan channels the capture holds and run, what was heard, and the public messages
+        if (lora_.running()) {
+            uint64_t ok = 0, bh = 0, bc = 0;
+            lora_.counts(ok, bh, bc);
+            std::snprintf(b, sizeof b, ",\"lora\":{\"chans\":%zu,\"plan\":%zu,\"dets\":%zu,\"frames\":%llu,\"badCrc\":%llu,\"texts\":%llu,"
+                          "\"mapped\":%zu,\"dropped\":%llu}", loraChans_, lora_.planSize(), lora_.detectors(), (unsigned long long)ok,
+                          (unsigned long long)bc, (unsigned long long)mesh_.texts(), mesh_.nodesWithPosition(), (unsigned long long)lora_.dropped());
+            o += b;
+            o += ",\"msgs\":" + mesh_.msgsJson(t);
+        }
         // ★ V12 wM-Bus: frames whose later block failed its CRC (the meter is still listed), and the capture too narrow
         //   to hold 868.95's upper tone (0.9 MS/s): the clients say "868.95 not covered at 0.9 MS/s"
         if (meters_) {
@@ -605,7 +636,7 @@ public:
      *  ±45 % of the rate around where the radio is tuned. At 0.9 MS/s around 868.6 it reaches 869.005. */
     bool wmGap() const { return meters_ && hwCentre_ + 0.45 * rate_ < 869.05e6; }
     Health health() { std::lock_guard<std::mutex> lk(mtx_); return health_; }
-    size_t deviceCount() { std::lock_guard<std::mutex> lk(mtx_); return tracker_.size(); }
+    size_t deviceCount() { std::lock_guard<std::mutex> lk(mtx_); return tracker_.size() + mesh_.size(); }
 
     /** ★★ ONE FRAME, TWO CHANNELS. A T1/C1 burst is ~200 kHz wide, and the detector can open a second channel on its
      *  skirt; both may decode the same frame. Of the copies of one meter's frame heard within 0.2 s, keep the one best
@@ -700,6 +731,22 @@ private:
                 // ★ The gallery's copy OUTSIDE the lock: a report() asked for meanwhile never waits on a file.
                 if (!heard.empty()) { auto s = sink_; lk.unlock(); for (const auto& h : heard) s->heard(h); lk.lock(); }
             }
+            // ★ V12 LoRa: what the LoRa thread decoded since the last look — into the list, and news to the gallery
+            if (lora_.running()) {
+                lk.unlock();
+                auto lh = lora_.take();
+                lk.lock();
+                if (!lh.empty()) {
+                    const double tl = now();
+                    std::vector<vibelora::Event> ev;
+                    for (const auto& h : lh) mesh_.accept(h.m, tl, sink_ ? &ev : nullptr);
+                    if (!ev.empty() && sink_) {
+                        auto s = sink_; lk.unlock();
+                        for (const auto& e : ev) { Heard hd; hd.kind = e.kind; hd.name = e.name; hd.line = e.line; hd.freqHz = e.freqHz; s->heard(hd); }
+                        lk.lock();
+                    }
+                }
+            }
             const double t = now();
             if (t - winStart >= 1.0 && sink_) { auto s = sink_; lk.unlock(); s->tick(); lk.lock(); }
             if (t - winStart >= 1.0 && fe_) {
@@ -732,6 +779,12 @@ private:
     bool meters_ = false;
     wmbus::Stats wm_;
     std::shared_ptr<Sink> sink_;   // ★ only the worker reads it while running; start()/stop() swap it with the worker stopped
+    // ★ V12 LoRa
+    vibelora::Engine lora_;
+    vibelora::MeshTable mesh_;
+    bool loraOn_ = true;
+    double loraBudget_ = INFINITY;
+    size_t loraChans_ = 0;
 };
 
 /** ★ ISM's gain rule. Sensors are short strong bursts over a quiet band, like ADS-B, so it is not VibeAGC: start

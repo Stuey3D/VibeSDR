@@ -259,6 +259,30 @@ struct Frame {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  ONE CHANNEL'S SAMPLE STREAM — a ring the demodulators read by absolute sample index (one sample per chip)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** A fractional-delay interpolator: 8-tap Blackman-windowed sinc at 256 phases, taps at −3 … +4 around the point.
+ *  Flat and linear-phase to ~0.4 cycles/sample. Used by the channeliser (to the chip rate) and the demodulator (to put a
+ *  symbol's window on its exact, fractional start — see Demod). */
+static constexpr int kTaps = 8, kPhases = 256;
+inline const std::vector<float>& sincTable() {
+    static const std::vector<float> t = [] {
+        std::vector<float> v(size_t(kPhases) * kTaps);
+        for (int ph = 0; ph < kPhases; ++ph) {
+            const double mu = double(ph) / kPhases;
+            double sum = 0;
+            for (int k = 0; k < kTaps; ++k) {
+                const double x = k - (kTaps / 2 - 1) - mu;
+                const double s = std::fabs(x) < 1e-12 ? 1.0 : std::sin(M_PI * x) / (M_PI * x);
+                const double u = (x + kTaps / 2.0) / kTaps;
+                const double w = 0.42 - 0.5 * std::cos(2 * M_PI * u) + 0.08 * std::cos(4 * M_PI * u);
+                v[size_t(ph * kTaps + k)] = float(s * w); sum += s * w;
+            }
+            for (int k = 0; k < kTaps; ++k) v[size_t(ph * kTaps + k)] = float(v[size_t(ph * kTaps + k)] / sum);
+        }
+        return v;
+    }();
+    return t;
+}
+
 class Stream {
 public:
     explicit Stream(double rate, size_t ringPow2 = 17) : rate_(rate), ring_(size_t(1) << ringPow2), mask_(ring_.size() - 1) {}
@@ -319,6 +343,8 @@ public:
     uint64_t preambles() const { return pre_; }
     uint64_t sfds() const { return sfd_; }
     bool busy() const { return st_ != SEARCH; }
+    /** The last frame's symbols as demodulated (header included) — for the tests' diagnostics. */
+    const std::vector<int>& lastSymbols() const { return lastSyms_; }
 
     /** Process everything the stream holds. `emit(Frame&&)` for each frame decoded (its CRC good, or no CRC). */
     template <class F> void run(const Stream& s, F&& emit) {
@@ -333,13 +359,25 @@ public:
 
     // ★ Public for the tests: dechirp the N samples at `w` (up = expect upchirps), FFT, return the peak.
     struct Peak { int bin = 0; float pk = 0, mean = 0; cf a{0, 0}, b{0, 0}, c{0, 0}; };
-    Peak window(const Stream& s, int64_t w, bool up, double fracBins = 0) {
+    /** `startFrac` (0…1): the window starts that far past sample `w` — the samples are interpolated (sincTable). */
+    Peak window(const Stream& s, int64_t w, bool up, double fracBins = 0, double startFrac = 0) {
         const bool inv = c_.invertIq;
         // ★ invertIq: conjugating the samples turns a down-chirp frame into an up-chirp one
         cf rot(1, 0), inc(1, 0);
         if (fracBins != 0) { const double a = -2 * M_PI * fracBins / N_; inc = cf(float(std::cos(a)), float(std::sin(a))); }
+        const float* h = nullptr;
+        if (startFrac > 1.0 / (2 * kPhases)) {
+            const int ph = std::min(kPhases - 1, int(startFrac * kPhases + 0.5));
+            h = &sincTable()[size_t(ph * kTaps)];
+        }
         for (int n = 0; n < N_; ++n) {
-            cf x = s.at(w + n);
+            cf x;
+            if (h) {
+                float re = 0, im = 0;
+                const int64_t b = w + n - (kTaps / 2 - 1);
+                for (int k = 0; k < kTaps; ++k) { const cf& v = s.at(b + k); re += v.real() * h[k]; im += v.imag() * h[k]; }
+                x = cf(re, im);
+            } else x = s.at(w + n);
             if (inv) x = std::conj(x);
             const cf r = up ? std::conj(up_[size_t(n)]) : up_[size_t(n)];
             buf_[size_t(n)] = x * r * rot;
@@ -423,7 +461,12 @@ private:
                 const Peak& d2 = a.d;
                 const bool down1 = c1.d.pk > c1.u.pk && c1.d.pk > kSearchRatio * c1.d.mean;
                 const bool down2 = d2.pk > a.u.pk && d2.pk > kSearchRatio * d2.mean;
-                if (down1 && down2 && std::abs(wrapSigned(c1.d.bin - d2.bin)) <= 1) { alignAt(s, ic, d2); return true; }
+                if (down1 && down2 && std::abs(wrapSigned(c1.d.bin - d2.bin)) <= 1) {
+                    // ★ the corrected grid can sit up to N/4 later: wait until the second downchirp is in on it too
+                    if (alignStart_ + int64_t(ic + 2) * N_ + N_ / 2 + kTaps > s.written()) { --ai_; aw_.pop_back(); return false; }
+                    alignAt(s, ic, d2);
+                    return true;
+                }
             }
             if (ai_ - lastPre_ > 5) {   // the preamble ended and no SFD followed
 #ifdef VIBE_LORA_DEBUG
@@ -453,14 +496,14 @@ private:
                 const int64_t g = alignStart_ + shift;                      // the corrected grid
                 const int64_t sfd = g + int64_t(ic) * N_;                   // where the first downchirp starts
                 // re-measure the preamble on the corrected grid: the offset every symbol carries
-                double o = 0; int no = 0; float mn = 0, sg = 0;
+                double o = 0, iSum = 0; int no = 0; float mn = 0, sg = 0;
                 for (int i = ic - 3; i >= 0 && i >= ic - 7; --i) {
                     const int64_t wi = g + int64_t(i) * N_;
                     if (wi < s.oldest()) break;
                     const Peak q = window(s, wi, true);
                     const int b = wrapSigned(q.bin);
                     if (std::abs(b - shift) > 1) continue;
-                    o += b + frac3(q); ++no; mn += q.mean;
+                    o += b + frac3(q); iSum += i; ++no; mn += q.mean;
                     sg += std::norm(q.a) + q.pk + std::norm(q.c) - 3 * q.mean;   // ★ a fractional peak spills into its neighbours
                 }
                 if (!no) { abort(w + 2 * N_); return; }
@@ -474,11 +517,44 @@ private:
                 }
                 sync_ = uint8_t(sw[0] << 4 | sw[1]);
                 if (!c_.syncs.empty() && std::find(c_.syncs.begin(), c_.syncs.end(), sync_) == c_.syncs.end()) { abort(sfd + 2 * N_); return; }
-                off_ = o;
-                cfoHz_ = cfo * c_.bw / N_;
+                /* ★★★ CFO AND TIMING, BOTH TO A FRACTION. On this (nearly aligned) grid the preamble's up-dechirp is at
+                 *  CFO + δ and the second downchirp's down-dechirp at CFO − δ (δ = how late the grid is). A fractional δ
+                 *  must NOT be treated as a frequency offset: inside each symbol the chirp wraps from +BW/2 to −BW/2, and
+                 *  sampled δ off the chip grid that wrap is a PHASE JUMP of 2πδ — the tone splits between two bins by an
+                 *  amount that depends on the symbol's value. At one sample per chip with no channel filter the jump is
+                 *  invisible (test-lora's first round trips); through the channeliser every SF11 frame with a few kHz of
+                 *  CFO lost symbols at 40 dB SNR. So δ is measured and each symbol's window is INTERPOLATED onto its
+                 *  exact start (window(…, startFrac)); only the true CFO is removed as a frequency. */
+                const Peak d2g = window(s, g + int64_t(ic + 1) * N_, false);
+                const double kdg = wrapSigned(d2g.bin) + frac3(d2g);
+                const double iAvg = iSum / no;
+                double cfoB = 0.5 * (o + kdg);
+                for (int it = 0; it < 2; ++it) {
+                    // ★ the chips slid between the preamble windows and the SFD: N·CFO/f per symbol (see nEff_)
+                    const double slide = N_ * (cfoB * c_.bw / N_) / c_.carrierHz;
+                    cfoB = 0.5 * (o + kdg + (ic + 1 - iAvg) * slide);
+                }
+                cfoHz_ = cfoB * c_.bw / N_;
                 // ★ the chip clock: a transmitter whose carrier is high by CFO runs its chips fast by the same ppm
                 nEff_ = N_ * (1.0 - cfoHz_ / c_.carrierHz);
-                t0_ = double(sfd) + 2.25 * N_;
+                const double delta = (o - cfoB) + (ic - iAvg) * (N_ - nEff_);   // lateness of the grid at the SFD
+                off_ = cfoB;
+                t0_ = double(sfd) - delta + 2.25 * nEff_;
+                /* ★ SNR from the preamble re-dechirped WITH its fraction removed: a tone half a bin off leaks ~19 % of
+                 *  its energy past its neighbours, and an estimate from the raw windows topped out near 6 dB however
+                 *  strong the signal (test-lora, a 30 dB frame read 1.7 dB). */
+                {
+                    float spk = 0, smn = 0; int ns = 0;
+                    for (int i = ic - 3; i >= 0 && i >= ic - 6; --i) {
+                        const int64_t wi = g + int64_t(i) * N_;
+                        if (wi < s.oldest()) break;
+                        const double oi = o + (i - iSum / no) * (N_ - nEff_);
+                        const Peak q = window(s, wi, true, oi - std::lround(oi));
+                        if (std::abs(wrapSigned(q.bin - int(std::lround(oi)))) > 0) continue;
+                        spk += q.pk; smn += q.mean; ++ns;
+                    }
+                    if (ns) { sg = (spk - smn) / ns; mn = smn / ns; }
+                }
                 // ★ SNR in the bandwidth, the chips' own definition: the tone holds the signal's energy N·N·A², each bin
                 //   the noise's N·σ² — so A²/σ² = signal ÷ (mean bin · N). Level = the channel's power, dBFS.
                 snr_ = mn > 0 ? float(10 * std::log10(std::max(1e-6, double(sg) / (double(mn) * N_)))) : 0;
@@ -493,13 +569,16 @@ private:
     template <class F> bool symbols(const Stream& s, F&& emit) {
         while (k_ < nSyms_) {
             const double t = t0_ + k_ * nEff_;
-            const int64_t w = int64_t(std::lround(t));
-            if (w + N_ > s.written()) return false;
-            if (w < s.oldest()) { reset(w); return true; }
-            const double o = off_ + (double(w) - t);     // ★ the sub-sample remainder, as a frequency offset
+            const int64_t w = int64_t(std::floor(t));
+            if (w + N_ + kTaps > s.written()) return false;
+            if (w - kTaps < s.oldest()) { reset(w); return true; }
+            const double o = off_;
             const long oi = std::lround(o);
-            const Peak q = window(s, w, true, o - double(oi));
+            const Peak q = window(s, w, true, o - double(oi), t - double(w));   // ★ on its exact start (see alignAt)
             syms_.push_back(int(((q.bin - oi) % N_ + N_) % N_));
+#ifdef VIBE_LORA_DEBUG
+            std::fprintf(stderr, "sym %d frac %+.3f o %+.3f\n", k_, frac3(q), o);
+#endif
             ++k_;
             if (st_ == HEADER && k_ == 8) {
                 if (!header()) { ++badHdr_; abort(w + N_); return true; }
@@ -508,6 +587,7 @@ private:
         }
         // the whole frame is in
         Frame f;
+        lastSyms_ = syms_;
         if (finish(f)) { emit(std::move(f)); }
         const int64_t end = int64_t(std::lround(t0_ + k_ * nEff_));
         reset(end);
@@ -578,7 +658,7 @@ private:
     uint8_t sync_ = 0;
     int k_ = 0, nSyms_ = 0, len_ = 0, cr_ = 1, fixes_ = 0;
     bool crcOn_ = false, hdrOk_ = false;
-    std::vector<int> syms_, nib_;
+    std::vector<int> syms_, nib_, lastSyms_;
     uint64_t ffts_ = 0, found_ = 0, badHdr_ = 0, badCrc_ = 0, pre_ = 0, sfd_ = 0;
 };
 
@@ -634,8 +714,8 @@ public:
         fft_->forward(h.data());
         c.H.resize(size_t(c.Lc));
         for (int m = -c.Lc / 2; m < c.Lc / 2; ++m) c.H[size_t((m + c.Lc) % c.Lc)] = h[size_t((m + L_) % L_)] * (1.0f / float(L_));
-        c.pend.assign(2, cf(0, 0));
-        c.t = 1.0;
+        c.pend.assign(size_t(kTaps / 2 - 1), cf(0, 0));
+        c.t = kTaps / 2 - 1;
         ch_.push_back(std::move(c));
     }
     size_t channels() const { return ch_.size(); }
@@ -692,18 +772,22 @@ private:
         fill_ = L_ - S_;
         ++blocks_;
     }
-    /** Cubic (4-point Lagrange) from the channel's decimated rate to exactly its chip rate. */
+    /** From the channel's decimated rate to exactly its chip rate: the 8-tap windowed sinc (sincTable). ★ Not a cubic:
+     *  a 4-point Lagrange's phase is visibly non-linear at 0.2 cycles/sample (a 250 kHz channel at 600 kS/s). */
     static void resample(Ch& c) {
         auto& p = c.pend;
-        while (c.t + 2.0 < double(p.size())) {
+        const std::vector<float>& tab = sincTable();
+        while (c.t + kTaps / 2 < double(p.size())) {
             const int i = int(c.t);
-            const float mu = float(c.t - i);
-            const float cm = -mu * (mu - 1) * (mu - 2) / 6, c0 = (mu + 1) * (mu - 1) * (mu - 2) / 2;
-            const float c1 = -(mu + 1) * mu * (mu - 2) / 2, c2 = (mu + 1) * mu * (mu - 1) / 6;
-            c.dst->push(p[size_t(i - 1)] * cm + p[size_t(i)] * c0 + p[size_t(i + 1)] * c1 + p[size_t(i + 2)] * c2);
+            const int ph = std::min(kPhases - 1, int((c.t - i) * kPhases + 0.5));
+            const float* h = &tab[size_t(ph * kTaps)];
+            const cf* x = &p[size_t(i - (kTaps / 2 - 1))];
+            float re = 0, im = 0;
+            for (int k = 0; k < kTaps; ++k) { re += x[k].real() * h[k]; im += x[k].imag() * h[k]; }
+            c.dst->push(cf(re, im));
             c.t += c.step;
         }
-        const int drop = int(c.t) - 1;
+        const int drop = int(c.t) - (kTaps / 2 - 1);
         if (drop > 0) { p.erase(p.begin(), p.begin() + drop); c.t -= drop; }
     }
 
