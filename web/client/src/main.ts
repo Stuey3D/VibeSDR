@@ -16926,7 +16926,9 @@ function hardwareCanReach(hz: number): boolean {
 function clampTune(hz: number): number {
   const want = Math.round(hz);
   // ★★ V12 VFO B lives INSIDE the radio's window and never moves the radio — the edge is a wall, and it says so.
-  if (spec?.abOn && spec.abSel === 'B' && spec.watchState && spec.watchState.hi > spec.watchState.lo) {
+  // ★★ Round 3: except on a radio that is this listener's alone (`follow`), where the server moves the radio to hold both
+  //    VFOs — no wall here; the server refuses only VFOs further apart than one window holds ("apart"), and says so.
+  if (spec?.abOn && spec.abSel === 'B' && spec.watchState && !spec.watchState.follow && spec.watchState.hi > spec.watchState.lo) {
     const { lo, hi } = spec.watchState;
     if (want < lo || want > hi) {
       if (Date.now() - abNoteAt > 3000) { abNoteAt = Date.now(); showPill(`VFO B must stay inside the radio's window, ${(lo / 1e6).toFixed(3)} to ${(hi / 1e6).toFixed(3)} MHz`, 5000); }
@@ -18840,7 +18842,7 @@ function abMenuRow(close: () => void): HTMLElement | null {
   b.textContent = spec.abOn ? 'ON' : 'OFF';
   b.style.cssText = 'background:none;border:1px solid ' + (spec.abOn ? '#ffe566' : '#666') + ';color:'
     + (spec.abOn ? '#ffe566' : '#ddd') + ';padding:5px 12px;border-radius:5px;cursor:pointer;font:inherit';
-  b.title = 'VFO A/B: a second VFO inside the radio\'s window, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune.';
+  b.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and the decoders run on VFO A. Not on FM broadcast.';
   b.onclick = () => { spec?.setAB(!spec.abOn); close(); };
   row.append(lbl, b);
   return row;

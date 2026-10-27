@@ -102,6 +102,7 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   await click('#abToggle');
   ok(await until(`${sentWatch}.some(m => m.on === true && m.id === 1)`, 3000), `ON sends {watch, id:1, on:true} (${JSON.stringify(await ev(`${sentWatch}[0]`))})`);
   ok(await until(`${AB}.state && ${AB}.state.chans.length === 1`, 4000), 'the server reports VFO B');
+  ok((await ev(`${AB}.state.follow`)) === true, 'a personal receiver: the state says the radio follows both VFOs (no client-side wall for B)');
   ok(await ev(`!document.getElementById('mAbKey').hidden && document.getElementById('mAbKey').textContent === 'A' && document.getElementById('mTuneGlyph').hidden`),
      'the A/B key appears between the tune buttons, labelled A; the glyph steps aside');
   const aHz = await ev(`${AB}.a.frequency`);

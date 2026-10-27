@@ -20,6 +20,8 @@ export interface WatchState {
   max: number; lo: number; hi: number; stereo: boolean; monoOut: boolean;
   /** ★ Round 3: VFO A muted in this listener's mix. */
   muteA: boolean;
+  /** ★ Round 3: the radio moves to hold both VFOs (a personal receiver) — lo/hi are where it is now, not a wall. */
+  follow: boolean;
   chans: WatchChan[]; refused?: string; note?: string;
 }
 
@@ -35,7 +37,7 @@ export function watchSanitise(m: any): WatchState | null {
   })).filter((c: WatchChan) => c.freq > 0) : [];
   return {
     max: num(m.max, -1), lo: num(m.lo), hi: num(m.hi), stereo: m.stereo !== false, monoOut: m.monoOut === true,
-    muteA: m.muteA === true, chans,
+    muteA: m.muteA === true, follow: m.follow === true, chans,
     refused: typeof m.refused === 'string' ? m.refused : undefined,
     note: typeof m.note === 'string' && m.note ? m.note.slice(0, 200) : undefined,
   };

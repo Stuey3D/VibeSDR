@@ -68,9 +68,10 @@ const STEPS: Step[] = [
         // ★★ V12 VFO A/B — WHERE IT IS (AGENTS.md copy rule): switched on in the step button's menu, switched between with
         //    the A/B key that then sits between ‹ and ›, the ears by frequency.
         + (abOffered()
-          ? ' The step button\u2019s menu also turns on VFO A/B: a second VFO inside the radio\u2019s window, heard at the same '
+          ? ' The step button\u2019s menu also turns on VFO A/B: a second VFO on the same radio, heard at the same '
             + 'time — the lower frequency in your left ear, the higher in your right. While it is on, the A/B key between '
-            + '[[‹]] and [[›]] picks which VFO these controls tune (or tap the other needle; V on a keyboard).'
+            + '[[‹]] and [[›]] picks which VFO these controls tune (or tap the other needle; V on a keyboard). The decoders '
+            + 'and spots run on VFO A, so you can decode on A and listen on B. Not on FM broadcast.'
           : ''),
   },
   {
@@ -100,8 +101,9 @@ const STEPS: Step[] = [
       ? 'The speaker button [[@mAudio]] holds the audio tools: noise reduction and notch filters, working on the radio\u2019s own audio.'
       : 'The speaker button [[@mAudio]] holds the audio tools: noise reduction, notch filters and '
         + 'squelch — and raw IQ output where the receiver offers it.'
-        + (abOffered() ? ' Its VFO A/B STEREO switch puts the lower VFO in your left ear and the higher in your right; off, '
-          + 'both VFOs play in both ears.' : ''),
+        + (abOffered() ? ' With VFO B on, each VFO has its own squelch row there, with its own AUTO SQUELCH and a MUTE (the '
+          + 'other VFO moves to both ears). Its VFO A/B STEREO switch puts the lower VFO in your left ear and the higher '
+          + 'in your right; off, both VFOs play in both ears.' : ''),
   },
   {
     ids: ['mChat'],

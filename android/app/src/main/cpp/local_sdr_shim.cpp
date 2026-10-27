@@ -26033,6 +26033,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string j = "{\"type\":\"watch\",\"max\":" + std::to_string(maxOverride >= 0 ? maxOverride : watchMaxPerListener());
         char b[512];
         snprintf(b, sizeof b, ",\"lo\":%.0f,\"hi\":%.0f", lo, hi); j += b;
+        // ★ Round 3: the radio moves to hold both VFOs here (a personal receiver) — `lo`/`hi` are then where it IS, not a wall
+        j += std::string(",\"follow\":") + (watchCentreFollows() ? "true" : "false");
         if (w) {
             std::lock_guard<std::mutex> lk(w->m);
             j += std::string(",\"stereo\":") + (w->stereo ? "true" : "false") + ",\"monoOut\":" + (w->monoOut ? "true" : "false")
@@ -26181,7 +26183,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 refuse("apart", b);
                 return;
             }
-            if (f.moved) watchMoveCentre(f, sess);
+            if (f.moved) watchMoveCentre(f, sess, wd.hz);
         } else if (wd.hz < wlo || wd.hz > whi) {
             char b[160];
             snprintf(b, sizeof b, "VFO B must stay inside the radio's window, %.3f to %.3f MHz", wlo / 1e6, whi / 1e6);
@@ -26252,7 +26254,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★ Move a personal receiver's capture to `f` for VFO B — the same placement retune() makes when VFO A leaves the
      *  window (modeMtx across the store + tuneHw + the main channel's re-offset, so A's audio has no more of a gap than
      *  an ordinary recentre), Band spots' DC rule honoured inside the room both VFOs allow, and the new centre told. */
-    void watchMoveCentre(const vibewatch::CentreFit& f, const std::string& sess) {
+    void watchMoveCentre(const vibewatch::CentreFit& f, const std::string& sess, double viewHz) {
         double c = 0;
         {
             std::lock_guard<std::recursive_mutex> lk(modeMtx);
@@ -26261,7 +26263,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             lastDongleMoveMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
             rtlCenter.store(c);
-            viewCenter.store(c);
+            viewCenter.store(viewHz);   // ★ the view goes to the VFO being tuned, as retune() sends it to A's dial
             tuneHw(c);
             rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
         }
