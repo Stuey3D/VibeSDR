@@ -24643,9 +24643,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           // clear an occupancy it never held.
           const bool specGone  = !specClient  || !specClient->isOpen();
           const bool audioGone = !audioClient || !audioClient->isOpen();
+          /* ★★★ …AND BOTH OF THEIR CLOSES HAVE RUN (V12 beta24, 2026-10-27). A listener whose spectrum and audio sockets
+           *  drop together (the app suspended, a tab closed) runs this handler twice, at once. The FIRST saw both sockets
+           *  already shut (isOpen() is false the moment the peer goes) and cleared the occupant here — and the SECOND,
+           *  the one that starts the session's hold (holdStartLocked waits for the last socket), then read the hard
+           *  time limit from an occupant that was no longer there: -1, "no limit", so a listener with 45 s left was held
+           *  for the full 3 minutes and came back past their limit (test-server-session-hold §4, two runs in three).
+           *  The sibling's own close is still to come while the session has another socket registered, so the occupant
+           *  is cleared by the LAST of them — after the hold has read it. */
+          bool siblingPending = false;
+          if (!session.empty())
+              for (const auto& kv : sockSession) if (kv.first != sock.get() && kv.second == session) { siblingPending = true; break; }
           // ★ The occupant left of their own accord. Any soft-limit handover dies with them —
           //   leaving it set would start the next listener already 60 seconds into a notice.
-          if (specGone && audioGone) { occupantSession.clear(); g_vsHandoverAt = 0; bothGone = true; } }
+          if (specGone && audioGone && !siblingPending) { occupantSession.clear(); g_vsHandoverAt = 0; bothGone = true; } }
         if (stopDirectIq) iqStopDirect();   // ★ clientMtx is released — see the note where it was decided
         // ★★★ clientMtx is released: NOW the connection log (see LogClose).
         if (logClose.due)
