@@ -237,7 +237,10 @@ cp "$WORK/faad/bd/libfaad.a" "$PREFIX/lib/libfaad_dab.a"
 # ★ The FEATURE: the prefixed entry point is there, and NOTHING it defines is unprefixed.
 [ "$("$NM" "$PREFIX/lib/libfaad_dab.a" 2>/dev/null | count 'T vibedab_NeAACDecDecode$')" -gt 0 ] \
   || { echo "!! libfaad_dab.a has no vibedab_NeAACDecDecode — refusing"; exit 1; }
-unpref="$("$NM" -g --defined-only "$PREFIX/lib/libfaad_dab.a" 2>/dev/null | awk 'NF >= 3 && $2 ~ /^[TDBSRC]$/ && $3 !~ /^vibedab_/ {print $3}')"
+# ★ i386 (2026-10-27): GCC's PIC helpers __x86.get_pc_thunk.{ax,bx,cx,dx,si,di,bp} are emitted into EVERY 32-bit x86
+#   object as identical hidden COMDAT copies the linker folds into one — they cannot collide, so they are not FAAD2's to
+#   prefix. Without this the i386 image refused to build and beta22 published nothing.
+unpref="$("$NM" -g --defined-only "$PREFIX/lib/libfaad_dab.a" 2>/dev/null | awk 'NF >= 3 && $2 ~ /^[TDBSRC]$/ && $3 !~ /^vibedab_/ && $3 !~ /^__x86\.get_pc_thunk\./ {print $3}')"
 [ -z "$unpref" ] || { echo "!! libfaad_dab.a defines unprefixed globals (they would collide with libfaad_drm.a):"; echo "$unpref" | head; exit 1; }
 
 # ── every object for the architecture the profile promises ───────────────────────────────────
