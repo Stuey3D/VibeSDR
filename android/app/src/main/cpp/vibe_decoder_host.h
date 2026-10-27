@@ -317,7 +317,11 @@ public:
      *     second window onto it (a mirror on a shared dial, or a reconnect). It is left running and
      *     `joiner` is caught up on the picture so far, rather than restarting a ten-minute WEFAX
      *     chart because somebody else opened the panel. */
-    Start start(const std::string& ext, const std::string& msg, const DecoderPeerPtr& joiner = nullptr) {
+    static constexpr uint64_t kNoCatchUp = ~0ull;
+    /** `catchUpSince`: the gap mark taken when THIS joiner's decoder socket went (a held session coming back) — the
+     *  pictures finished since then are replayed before the one in progress (replayTo). kNoCatchUp = a plain join. */
+    Start start(const std::string& ext, const std::string& msg, const DecoderPeerPtr& joiner = nullptr,
+                uint64_t catchUpSince = kNoCatchUp) {
         if (!knownExt(ext)) return Start::Unknown;
         const std::string key = ext + "|" + paramsOf(msg);
         {
@@ -345,7 +349,7 @@ public:
                 return Start::Ok;
             }
         }
-        if (joiner) replayTo(joiner);
+        if (joiner) replayTo(joiner, catchUpSince);
         // ★ APRS: a second window (a mirror, a reconnect) gets the whole station list with its tracks at once
         if (joiner) { std::string l; { std::lock_guard<std::mutex> lk(decMtx_); if (aprs_) l = aprs_->listJson(true); } if (!l.empty()) joiner->text(l); }
         return Start::Joined;
@@ -607,7 +611,12 @@ public:
      *    are not "missed" by the NAVTEX you opened. Status frames (state bytes, chips) are not kept — they are re-sent. */
     enum : uint8_t { GapDecoder = 0, GapSpots = 1 };
     /** The sequence number of the newest entry — everything up to it was sent while the socket was there. */
-    uint64_t gapMark() { std::lock_guard<std::mutex> gl(gapMtx_); return gapSeq_; }
+    uint64_t gapMark() {
+        // ★★ somebody's decoder socket has gone while this decoder runs: from now the pictures it finishes are kept for
+        //    them (see THE PICTURES FINISHED WHILE AWAY), for as long as a gap mark is honoured (the shim's 15 minutes)
+        { std::lock_guard<std::mutex> rl(replayMtx_); awayUntil_ = steadySecs() + kAwayKeepS; }
+        std::lock_guard<std::mutex> gl(gapMtx_); return gapSeq_;
+    }
     /** Send `p` every entry of `kind` after `since`, paced on a thread of its own. @return how many. */
     size_t replayGap(const DecoderPeerPtr& p, uint64_t since, uint8_t kind) {
         std::vector<GapEntry> out;
@@ -642,10 +651,19 @@ public:
      *  backlog (1006) before its own attach was read, and the client's 3-s reconnect then did it
      *  again, for ever (Pi 500, 2026-09-30: 1042 frames replayed, closed, repeated). So it goes at
      *  the pace the socket drains, on a thread of its own, and gives up if the socket closes. */
-    void replayTo(const DecoderPeerPtr& p) {
+    void replayTo(const DecoderPeerPtr& p, uint64_t since = kNoCatchUp) {
         std::vector<std::vector<uint8_t>> frames;
-        { std::lock_guard<std::mutex> rl(replayMtx_); frames = replay_; }
+        size_t pics = 0;
+        { std::lock_guard<std::mutex> rl(replayMtx_);
+          // ★★ the pictures FINISHED while this listener was away, oldest first, each ending in its own "complete" frame —
+          //    so every client files it exactly as it files one finished live — then the one in progress
+          if (since != kNoCatchUp)
+              for (const DonePic& d : done_)
+                  if (d.seq > since) { frames.insert(frames.end(), d.frames.begin(), d.frames.end()); ++pics; }
+          frames.insert(frames.end(), replay_.begin(), replay_.end()); }
         if (frames.empty() || !p || !p->open()) return;
+        if (pics) log("decoder rejoined — replaying " + std::to_string(pics) + (pics == 1 ? " picture" : " pictures")
+                      + " finished while the listener was away, then the one in progress");
         log("decoder joined — replaying " + std::to_string(frames.size()) + " frames of the image so far");
         std::lock_guard<std::mutex> tl(replayThrMtx_);
         replayThreads_.erase(std::remove_if(replayThreads_.begin(), replayThreads_.end(),
@@ -756,7 +774,7 @@ private:
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
         active_.store(false, std::memory_order_relaxed);
         imageKind_.store(0, std::memory_order_relaxed);
-        { std::lock_guard<std::mutex> rl(replayMtx_); replay_.clear(); replayBytes_ = 0; }
+        { std::lock_guard<std::mutex> rl(replayMtx_); replay_.clear(); replayBytes_ = 0; replayDoneSeq_ = 0; done_.clear(); doneBytes_ = 0; }
         gapClear(GapDecoder);   // ★ a new run — see the gap log
     }
     void log(const std::string& s) { if (env_.log) env_.log(s); }
@@ -776,11 +794,55 @@ private:
         const int kind = imageKind_.load(std::memory_order_relaxed);
         if (kind == 0) return;
         std::lock_guard<std::mutex> rl(replayMtx_);
-        if (kind == 1 && n == 1 && d[0] == 0x02) { replay_.clear(); replayBytes_ = 0; }
-        if (kind == 2 && n >= 9 && d[0] == 0x07) { replay_.clear(); replayBytes_ = 0; }
-        if (replayBytes_ + n > kReplayMax) return;
+        const bool starts = (kind == 1 && n == 1 && d[0] == 0x02) || (kind == 2 && n >= 9 && d[0] == 0x07);
+        if (starts) { archiveLocked_(kind); replay_.clear(); replayBytes_ = 0; replayDoneSeq_ = 0; }
+        // ★ WEFAX 0x03 "transmission complete", SSTV 0x05 "image complete": the picture is finished — stamped now, so a
+        //   listener who left AFTER it finished is not sent it again
+        const bool ends = (kind == 1 && n == 1 && d[0] == 0x03) || (kind == 2 && d[0] == 0x05);
+        if (ends) { std::lock_guard<std::mutex> gl(gapMtx_); replayDoneSeq_ = ++gapSeq_; }
+        if (replayBytes_ + n > kReplayMax && !ends) return;   // ★ the end marker always goes in (it is a byte or two)
         replay_.emplace_back(d, d + n);
         replayBytes_ += n;
+    }
+    /* ── ★★★ THE PICTURES FINISHED WHILE AWAY (V12 beta24, 2026-10-27) ─────────────────────────────────────────────────
+     *  The held session promises "no data is missed" (d93ad592d). The gap log carries text and spots, and replay_ the
+     *  picture in progress — but a picture FINISHED during the hold, with the next one already started, was cleared by
+     *  that start and lost: a returning listener got the new chart and never the one before it. So while somebody is
+     *  away (a gap mark taken in the last kAwayKeepS — gapMark), the picture a new start would clear is MOVED (no copy)
+     *  into done_, stamped with the gap sequence at which it finished; a joiner coming back with its mark (start's
+     *  catchUpSince) is sent the ones finished after it, oldest first, then the one in progress.
+     *  ★ THE CAP: the last kDoneMax (2) pictures and at most kReplayMax (4 MB) between them, forgotten after kAwayKeepS.
+     *    A 3-minute hold finishes at most one WEFAX chart (they run 10–20 minutes; the one finishing may have started long
+     *    before) or a few SSTV pictures (36 s–4 min, ~250 KB each), so two covers it. Only while somebody is away: a host
+     *    everybody is watching keeps nothing extra. Against a 1 GB Pi 2 (or a 32-bit 1 GB phone serving its own app) that
+     *    is 4 MB beside the 4 MB the picture in progress may already hold — per image decoder that has an absent listener,
+     *    and a single-listener radio has at most one. Memory goes back the moment the run stops (clearLocked_). */
+    struct DonePic { uint64_t seq = 0; double at = 0; size_t bytes = 0; std::vector<std::vector<uint8_t>> frames; };
+    static constexpr size_t kDoneMax = 2;
+    static constexpr double kAwayKeepS = 900.0;   // ★ the shim forgets a gap mark after 15 minutes (dxGapNote)
+    static double steadySecs() {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    /** replayMtx_ held: the picture in replay_ is about to be cleared by a new start — keep it if somebody is away. */
+    void archiveLocked_(int kind) {
+        const double now = steadySecs();
+        while (!done_.empty() && now - done_.front().at > kAwayKeepS) { doneBytes_ -= done_.front().bytes; done_.pop_front(); }
+        if (replay_.empty() || now >= awayUntil_) return;
+        DonePic p;
+        if (replayDoneSeq_) p.seq = replayDoneSeq_;
+        else {
+            // ★ ended by the next start, not by its own end marker: one is added, so the client files it as finished
+            std::lock_guard<std::mutex> gl(gapMtx_); p.seq = ++gapSeq_;
+            replay_.push_back({ (uint8_t)(kind == 1 ? 0x03 : 0x05) });
+            replayBytes_ += 1;
+        }
+        p.at = now; p.bytes = replayBytes_; p.frames = std::move(replay_);
+        replay_.clear();
+        doneBytes_ += p.bytes;
+        done_.push_back(std::move(p));
+        while (!done_.empty() && (done_.size() > kDoneMax || doneBytes_ > kReplayMax)) {
+            doneBytes_ -= done_.front().bytes; done_.pop_front();
+        }
     }
     void textFrame(const std::string& text) {
         std::vector<uint8_t> m(13 + text.size());
@@ -1443,6 +1505,10 @@ private:
     std::mutex replayMtx_;
     std::vector<std::vector<uint8_t>> replay_;
     size_t replayBytes_ = 0;
+    uint64_t replayDoneSeq_ = 0;                 // ★ the gap sequence at which replay_'s picture finished (0 = not yet)
+    std::deque<DonePic> done_;                   // ★ pictures finished while somebody was away (replayMtx_)
+    size_t doneBytes_ = 0;
+    double awayUntil_ = 0;                       // ★ steadySecs() until which a finished picture is kept (replayMtx_)
     std::mutex replayThrMtx_;
     std::vector<std::unique_ptr<ReplayJob>> replayThreads_;
     std::atomic<bool> replayStop_{false};

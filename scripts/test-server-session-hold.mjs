@@ -15,6 +15,10 @@
 //        is back — the same dial, VFO B still open, the skimmer NOT restarted, and what it decoded in the gap REPLAYED.
 //     4. ★ THE HARD LIMIT (Stuart's rule): --session-limit 1 from the LAN address (loopback is exempt): hwinfo states
 //        holdHardS; the hold is cut to the limit, released AT it, and the returning listener is ended as normal.
+//     5. ★ A PICTURE FINISHED DURING THE HOLD (V12 beta24): WEFAX off a generated clip (start tone, chart, stop tone,
+//        start tone, chart); the sockets go mid-chart 1; chart 1 FINISHES and chart 2 STARTS while away; back, the same
+//        decoder is joined and the returning socket is sent chart 1 whole — ending in its "transmission complete", the
+//        frame every client files a finished chart on — then chart 2 so far. Before, only chart 2 came back.
 // ★ SILENT: audio sockets are opened only so the listener has audio; their frames are counted, never played.
 // ★ SLOW (~8 minutes: two 3-minute holds and a 1-minute limit) — run-tests.sh runs it with VIBESERVER_SLOW=1.
 //
@@ -37,7 +41,7 @@ if (!BIN || !fs.existsSync(BIN) || !CLIP || !fs.existsSync(CLIP)) {
   console.log('   not run — set VIBESERVER_BIN to a vibeserver built from this tree and VIBE_ADSB_CLIP to a 2.4 MS/s 1090 MHz recording');
   process.exit(3);
 }
-const ONLY = (process.env.HOLD_PARTS || '1234').split('');
+const ONLY = (process.env.HOLD_PARTS || '12345').split('');
 let lan = process.env.LAN_IP || '';
 if (!lan) for (const list of Object.values(os.networkInterfaces())) for (const a of list || []) if (a.family === 'IPv4' && !a.internal && !lan) lan = a.address;
 
@@ -57,7 +61,7 @@ deadline.unref();
 function ws(port, pathq, host = '127.0.0.1') {
   const key = crypto.randomBytes(16).toString('base64');
   const s = net.connect(port, host);
-  const st = { txt: [], bin: 0, open: false, closed: false, t0: Date.now() };
+  const st = { txt: [], bin: 0, bins: null, open: false, closed: false, t0: Date.now() };   // ★ bins: an array to KEEP binary frames
   let hs = false, buf = Buffer.alloc(0);
   s.on('connect', () => s.write(`GET ${pathq} HTTP/1.1\r\nHost: ${host}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n\r\n`));
   s.on('error', () => {});
@@ -73,7 +77,7 @@ function ws(port, pathq, host = '127.0.0.1') {
       if (buf.length < off + len) break;
       const p = buf.subarray(off, off + len); buf = buf.subarray(off + len);
       if (op === 0x9) { const q = Buffer.alloc(6 + p.length); q[0] = 0x8a; q[1] = 0x80 | p.length; q.writeUInt32BE(0, 2); p.copy(q, 6); s.write(q); continue; }
-      if (op === 0x2) st.bin++;
+      if (op === 0x2) { st.bin++; if (st.bins) st.bins.push(Buffer.from(p)); }
       if (op === 0x1) st.txt.push({ t: Date.now() - st.t0, s: p.toString() });
     }
   });
@@ -311,6 +315,86 @@ try {
         B.close(); Ba.close(); await sleep(300);
       } finally { S.stop(); }
     }
+  }
+  // ── 5. a WEFAX chart finished during the hold ───────────────────────────────────────────────────────────────────
+  if (ONLY.includes('5')) {
+    console.log('\n5. ★ A WEFAX chart that FINISHES while the listener is away (generated clip, one-pipeline radio)');
+    /* ★ The clip: USB audio as IQ — an FM tone whose frequency IS the pixel (1500 black … 2300 white, IOC 576 at 120 lpm),
+     *  the dial at the clip's centre, so audio f sits at +f. 240 kS/s keeps 75 s of it to 36 MB. Start tone = 300 Hz
+     *  black/white, stop tone = 450 Hz (the decoder's own IOC 576 figures, wefax_decoder.h), each 6 s — 12 lines, where
+     *  the decoder wants 7 of its last 10. */
+    const RATE = 240000, FS = 48000, CENTRE = 7100000, SPL = FS / 2;
+    const plan = [['idle', 6], ['start', 6], ['chart', 12], ['stop', 6], ['idle', 4], ['start', 6], ['chart', 35]];
+    const total = plan.reduce((a, [, sec]) => a + sec, 0);
+    const clip = path.join(os.tmpdir(), `vs-hold-wefax-${process.pid}.cu8`);
+    {
+      const n = total * RATE, out = Buffer.alloc(2 * n);
+      let i = 0, ph = 0, rnd = 1;
+      for (const [part, sec] of plan) {
+        for (let k = 0; k < sec * RATE; k++, i++) {
+          const a = Math.floor(k * FS / RATE);                         // the audio sample this IQ sample belongs to
+          let f;
+          if (part === 'idle') f = 1900;
+          else if (part === 'start') f = ((a * 300 * 2 / FS) | 0) & 1 ? 2300 : 1500;
+          else if (part === 'stop') f = ((a * 450 * 2 / FS) | 0) & 1 ? 2300 : 1500;
+          else { const x = (a % SPL) / SPL, line = (a / SPL) | 0; f = (x > 0.2 && x < 0.3) || line % 8 === 0 ? 1500 : 2300; }
+          ph += 2 * Math.PI * f / RATE; if (ph > 1e4) ph -= 2 * Math.PI * Math.floor(ph / (2 * Math.PI));
+          rnd = (rnd * 1103515245 + 12345) & 0x7fffffff;
+          const nz = ((rnd >> 8) & 3) - 1.5;
+          out[2 * i] = Math.round(127.5 + 60 * Math.cos(ph) + nz);
+          out[2 * i + 1] = Math.round(127.5 + 60 * Math.sin(ph) + nz);
+        }
+      }
+      fs.writeFileSync(clip, out);
+    }
+    const S = await server('wefax', ['--users', '1', '--freq', String(CENTRE), '--mode', 'usb', '--idle-grace', '300'],
+                           { adsb: false, hf: { clip, centre: CENTRE, rate: RATE } });
+    const t0 = Date.now();
+    try {
+      const sid = crypto.randomUUID();
+      const WEF = { type: 'audio_extension_attach', extension_name: 'wefax', lpm: 120, image_width: 1809, carrier: 1900, deviation: 400,
+                    use_phasing: false, auto_start: true, auto_stop: true };
+      const L = { spec: spectrum(S.port, sid) };
+      await sleep(400);
+      L.aud = audio(S.port, sid); L.dx = ws(S.port, `/ws/dxcluster?user_session_id=${sid}`); L.dx.bins = [];
+      await sleep(500);
+      L.spec.send({ type: 'tune', frequency: CENTRE, mode: 'usb' });
+      await sleep(300);
+      L.dx.send(WEF);
+      const isStart = (b) => b.length === 1 && b[0] === 0x02, isDone = (b) => b.length === 1 && b[0] === 0x03;
+      const isLine = (b) => b.length === 9 + 1809 && b[0] === 0x01;
+      await waitFor(() => L.dx.bins.some(isStart) && L.dx.bins.filter(isLine).length >= 4, 30_000);
+      const before = L.dx.bins.filter(isLine).length;
+      ok(L.dx.bins.some(isStart) && before >= 4, `chart 1 started and drawing before the listener goes (${before} lines at ${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+      for (const k of ['spec', 'aud', 'dx']) L[k].drop();
+      await waitFor(() => /HELD for/.test(S.log()), 6000);
+      ok(/HELD for/.test(S.log()) && /decoder kept running/.test(S.log()), 'all three sockets gone → held, WEFAX kept running');
+      // ★ chart 1's stop tone, then chart 2's start tone — both while away (the decoder's own words in the log)
+      await waitFor(() => (S.log().match(/wefax: start tone on/g) || []).length >= 2, 45_000);
+      const stops = (S.log().match(/wefax: stop tone on/g) || []).length, starts = (S.log().match(/wefax: start tone on/g) || []).length;
+      ok(stops >= 1 && starts >= 2, `while away: chart 1 finished (stop tone) and chart 2 started (${stops} stop, ${starts} start tones)`);
+      await sleep(4000);   // ★ a few lines of chart 2
+      const R = { spec: spectrum(S.port, sid) };
+      await sleep(400);
+      R.aud = audio(S.port, sid); R.dx = ws(S.port, `/ws/dxcluster?user_session_id=${sid}`); R.dx.bins = [];
+      await waitFor(() => parsed(R.spec, 'config').length > 0, 4000);
+      await sleep(400);
+      R.dx.send(WEF);
+      await waitFor(() => /picture finished while the listener was away/.test(S.log()), 4000);
+      ok(/replaying 1 picture finished while the listener was away/.test(S.log()), '★ the server replays the chart finished in the gap');
+      await waitFor(() => { const d = R.dx.bins.findIndex(isDone); return d >= 0 && R.dx.bins.slice(d).some(isStart); }, 8000);
+      await sleep(1500);
+      const got = R.dx.bins, iDone = got.findIndex(isDone), iStart1 = got.findIndex(isStart);
+      const iStart2 = iDone >= 0 ? got.findIndex((b, i) => i > iDone && isStart(b)) : -1;
+      const chart1 = iStart1 >= 0 && iDone > iStart1 ? got.slice(iStart1, iDone).filter(isLine).length : 0;
+      const chart2 = iStart2 >= 0 ? got.slice(iStart2).filter(isLine).length : 0;
+      ok(iStart1 >= 0 && iDone > iStart1 && chart1 >= 15,
+         `★ chart 1 arrives WHOLE — its start, ${chart1} lines and its "transmission complete" (0x03): the frame a client files a finished chart on`);
+      ok(iStart2 > iDone && chart2 >= 2, `★ …then chart 2 from its start (${chart2} lines so far), in that order`);
+      ok((S.log().match(/decoder attached: wefax/g) || []).length === 1, 'the decoder was joined, not restarted');
+      for (const k of ['spec', 'aud', 'dx']) R[k].close();
+      await sleep(300);
+    } finally { S.stop(); try { fs.rmSync(clip, { force: true }); } catch {} }
   }
 } finally {
   killAll();

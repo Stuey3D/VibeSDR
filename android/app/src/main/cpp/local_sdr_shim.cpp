@@ -25470,7 +25470,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     continue;
                 }
                 syncPeerA();
-                auto r = host->start(ext, payload, peer);
+                // ★★ V12 beta24: a held session's decoder socket coming back names where it left (its gap mark), so the
+                //    pictures finished while it was away come before the one in progress (DecoderHost::replayTo)
+                auto r = host->start(ext, payload, peer, dxGapPeek(sess));
                 // ★★ V12: never refused because the box is busy decoding for NOBODY — background decoding on every radio
                 //    of this machine gives its slots back, and the listener's decoder is tried again.
                 if (r == DecoderHost::Start::Refused && !decoderOnly && bgYieldForListener()) r = host->start(ext, payload, peer);
@@ -28986,6 +28988,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         for (auto it = dxGap_.begin(); it != dxGap_.end(); ) it = now - it->second.at > 900.0 ? dxGap_.erase(it) : std::next(it);
         if (dxGap_.size() > 256) return;
         dxGap_[sess] = DxGap{ mark, now, false, false };
+    }
+    /** ★ The decoder gap mark a returning socket of `sess` left at, not yet replayed — or DecoderHost::kNoCatchUp. */
+    uint64_t dxGapPeek(const std::string& sess) {
+        if (sess.empty()) return DecoderHost::kNoCatchUp;
+        std::lock_guard<std::mutex> gl(dxGapMtx_);
+        auto it = dxGap_.find(sess);
+        if (it == dxGap_.end() || it->second.text || nowSecs() - it->second.at > 900.0) return DecoderHost::kNoCatchUp;
+        return it->second.mark;
     }
     void dxGapReplay(const std::string& sess, const std::shared_ptr<DecoderHost>& host, const DecoderPeerPtr& peer, bool spots) {
         if (sess.empty() || !host) return;
