@@ -226,9 +226,10 @@ export interface WaterfallViewProps {
   /** ★★ V12 VFO A/B: the INACTIVE VFO — a second needle + passband in its own colour, slightly dimmer (the active one
    *  is the ordinary needle above), labelled with its letter and the ear it is heard in (null = both / stereo off). */
   secondVfo?: { hz: number; filterLow: number; filterHigh: number; letter: string; ear: string | null;
-                color: string; parked?: boolean } | null;
-  /** ★★ V12 VFO A/B: the ACTIVE VFO's letter and ear while A/B is on — labelled beside the main needle. */
-  activeVfo?: { letter: string; ear: string | null } | null;
+                color: string; parked?: boolean; dec?: boolean } | null;
+  /** ★★ V12 VFO A/B: the ACTIVE VFO's letter and ear while A/B is on — labelled beside the main needle. `dec` (both):
+   *  this VFO is decoding — "DEC" after its letter (decode on either VFO, 2026-10-27). */
+  activeVfo?: { letter: string; ear: string | null; dec?: boolean } | null;
   /** ★ V12 ISM: no LISTEN needle, passband or label (the web's wf.vfoHidden) — a band capture has nothing to listen to. */
   needleHidden?:   boolean;
   /** Needle/glow brightness 1–10 (5 = original look) — bright palettes can
@@ -2667,15 +2668,15 @@ function WaterfallView({
         {activeVfo && needle && needle.nX >= 0 && needle.nX <= width && (
           <Text pointerEvents="none" numberOfLines={1}
                 style={[styles.tickLabel, styles.vfoTag, { fontFamily, color: needleColor,
-                  left: Math.max(0, Math.min(width - 34, needle.nX + 3)), top: specTop + 2 }]}>
-            {activeVfo.letter + (activeVfo.ear ? ' ' + activeVfo.ear : '')}
+                  left: Math.max(0, Math.min(width - (activeVfo.dec ? 64 : 34), needle.nX + 3)), top: specTop + 2 }]}>
+            {activeVfo.letter + (activeVfo.ear ? ' ' + activeVfo.ear : '') + (activeVfo.dec ? ' DEC' : '')}
           </Text>
         )}
         {secondVfo && second && second.nX >= 0 && second.nX <= width && (
           <Text pointerEvents="none" numberOfLines={1}
                 style={[styles.tickLabel, styles.vfoTag, { fontFamily, color: secondCol, opacity: INACTIVE_INTENSITY,
-                  left: Math.max(0, Math.min(width - 34, second.nX + 3)), top: specTop + 2 }]}>
-            {secondVfo.letter + (secondVfo.ear ? ' ' + secondVfo.ear : '')}
+                  left: Math.max(0, Math.min(width - (secondVfo.dec ? 64 : 34), second.nX + 3)), top: specTop + 2 }]}>
+            {secondVfo.letter + (secondVfo.ear ? ' ' + secondVfo.ear : '') + (secondVfo.dec ? ' DEC' : '')}
           </Text>
         )}
 

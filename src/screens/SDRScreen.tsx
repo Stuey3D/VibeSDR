@@ -209,7 +209,7 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
-import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, vfoATune, DoorSeq, type VfoABInfo, type VfoId } from '../services/vfoAB';
+import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, vfoATune, DoorSeq, decStartVfo, decTagFor, type VfoABInfo, type VfoId } from '../services/vfoAB';
 import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
          type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
@@ -3049,6 +3049,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const abOn = !!abInfo?.on;
   const abActive: VfoId = abInfo?.active ?? 'A';
   const abActiveRef = useRef<VfoId>('A');
+  /* ★★★ DECODE ON EITHER VFO (Stuart, 2026-10-27: "That seems like a weird limitations surely it doesnt matter which VFO
+   *  is listen and which is decode?"). The VFO the decoder runs on, and the VFO the digital spots run on — each fixed when
+   *  it is STARTED (the VFO selected then: abStartVfo), never moved by selecting the other VFO afterwards. The decoder
+   *  box's taps tune that VFO (onDecTuneHz), Band's arrows, span and mute are that VFO's, and it carries a DEC tag. */
+  const decVfoRef = useRef<VfoId>('A');
+  const spotsVfoRef = useRef<VfoId>('A');
+  const [decVfo, setDecVfo] = useState<VfoId>('A');
+  const [spotsVfo, setSpotsVfo] = useState<VfoId>('A');
   const earOrder = useRef(new EarOrder());
   const [vfoStereo, setVfoStereoState] = useState(true);
   const vfoStereoRef = useRef(true);
@@ -3124,11 +3132,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     const t = setTimeout(() => setAbAudio(false), 450);
     return () => clearTimeout(t);
   }, [abOn]);
-  /* ★ Band muting — see preBandMuteRef. ★★ V12 VFO A/B round 3: WITH VFO B ON, BAND MUTES VFO A IN THE MIX, NOT THE
+  /* ★ Band muting — see preBandMuteRef. ★★ V12 VFO A/B round 3: WITH VFO B ON, BAND MUTES ITS VFO IN THE MIX, NOT THE
    *  SPEAKER (Stuart, 2026-10-27: "VFO A set to full band digital modes on 40M whilst VFO B listens to SSB on 40") — the
-   *  speaker carries B, the VFO being listened to; the server pans B home to both ears. B coming or going during Band
-   *  moves the mute between the two; leaving Band puts back whichever it took. */
-  const bandMutedARef = useRef(false);
+   *  speaker carries the other VFO, the one being listened to; the server pans it home to both ears. ★★ Decode on either
+   *  VFO: the VFO muted is the one BAND RUNS ON (spotsVfo), A or B. B coming or going during Band moves the mute between
+   *  the VFO and the speaker; leaving Band puts back whichever it took. */
+  const bandMutedARef = useRef<VfoId | null>(null);
   useEffect(() => {
     const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
     const wantSpk = spotsBandOn && !abOn, wantA = spotsBandOn && abOn;
@@ -3137,16 +3146,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     } else if (!wantSpk && preBandMuteRef.current !== null) {
       const back = preBandMuteRef.current; preBandMuteRef.current = null; VM?.setMuted?.(back); setIsMuted(back);
     }
-    if (wantA && !bandMutedARef.current) { bandMutedARef.current = true; abClient()?.abSetMute?.('A', true); }
-    else if (!wantA && bandMutedARef.current) { bandMutedARef.current = false; if (abOn) abClient()?.abSetMute?.('A', false); }
-  }, [spotsBandOn, abOn, abClient]);   // eslint-disable-line react-hooks/exhaustive-deps
-  /** ★★★ ROUND 3 — THE DECODERS ARE VFO A'S (Stuart, 2026-10-27: "run a decoder on VFO A whilst VFO B can listen to the
-   *  audio"). The server feeds a listener's decoder from their own channel — VFO A — before the mix, so nothing B does
-   *  reaches it and a muted A still decodes. What the decoder box TUNES must therefore be A too: starting a decoder or
-   *  spots, a band, a station or a spot tapped in the box switches the controls to VFO A first — otherwise it would retune
-   *  B (the selected VFO) while the decoder read A. The A/B key then goes back to B to listen. The web's abDecodeOnA. */
-  const abDecodeOnA = useCallback(() => {
-    if (abActiveRef.current === 'B') abClient()?.abSelect?.('A');
+    const mv = bandMutedARef.current;
+    if (wantA && mv !== spotsVfo) {
+      if (mv) abClient()?.abSetMute?.(mv, false);
+      bandMutedARef.current = spotsVfo; abClient()?.abSetMute?.(spotsVfo, true);
+    } else if (!wantA && mv) { bandMutedARef.current = null; if (abOn) abClient()?.abSetMute?.(mv, false); }
+  }, [spotsBandOn, abOn, abClient, spotsVfo]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★★★ The VFO a decoder (or the spots) started NOW runs on — the selected one (vfoAB.ts decStartVfo). A server too old
+   *  to decode B (no `decB` in its watch state) keeps round 3's rule: the controls go to A first. The web's abStartVfo. */
+  const abStartVfo = useCallback((): VfoId => {
+    const c = abClient();
+    const info = c?.abInfo?.();
+    const s = decStartVfo(!!info?.on, info?.active ?? 'A', !!info?.state?.decB);
+    if (s.selectA) c?.abSelect?.('A');
+    return s.vfo;
   }, [abClient]);
   /** The inactive VFO, as the waterfall draws it — with the ears both needles are in (null tags = both everywhere). */
   const abOther = abOn && abInfo?.other ? abInfo.other : null;
@@ -5764,7 +5777,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ SCANNER OPEN = VFO B OFF (Stuart, 2026-10-27: "when the scanner is open we disable VFO B simple as that"). The
     //    scanner tunes the one VFO; B is switched off as the box opens and its toggle is absent until the box closes.
     if (type === 'scanner') onVfoAB(false);
-    else abDecodeOnA();   // ★★ VFO A/B round 3: the decoders are VFO A's
+    // ★★★ A server decoder runs on the VFO selected NOW (decode on either VFO); TRANSCRIBE hears the app's own audio — both
+    //     VFOs as mixed — so it belongs to neither and carries no DEC tag.
+    else if (type && type !== 'transcribe') { const v = abStartVfo(); decVfoRef.current = v; setDecVfo(v); }
     if (type === 'transcribe') setTxHeard('');
     if (type === 'transcribe' && activeDecRef.current && activeDecRef.current !== 'transcribe') decoderClient.current?.stop();
     setActiveDecoder(type);
@@ -5836,8 +5851,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       decoderClient.current.dscParams = dscParams(st?.frequency ?? 0, String(st?.mode ?? ''));
     }
     tuneHintText.current = '';   // ★ a fresh attach starts with no tuning guide
+    if (decoderClient.current) decoderClient.current.vfo = decVfoRef.current;   // ★★ "vfo":"B" when it runs on B
     decoderClient.current?.start(type);
-  }, [status.frequency, timeStationPref, onVfoAB, aprsReset]);
+  }, [status.frequency, timeStationPref, onVfoAB, aprsReset, abStartVfo]);
 
   /**
    * ★★★ THE STATION FOLLOWS THE DIAL WHILE THE DECODER IS RUNNING. It was chosen ONCE, at attach —
@@ -5883,6 +5899,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     spotsBandOnRef.current = false; setSpotsBandOn(false); setSpotModeStates([]);
     stopSpotFlush();
   }, [stopSpotFlush]);
+  /* ★★ VFO B GONE WITH SPOTS ON IT (switched off, a listener needing its place, FM broadcast): the server has stopped them
+   *  and said why (decoder_refused "vfo") — the screen stops them too, so Band's arrows do not go on stepping bands on A
+   *  for spots that no longer run. A decoder on B keeps its box, showing the server's reason. */
+  useEffect(() => {
+    if (!abOn && spotsVfoRef.current === 'B' && spotsKindRef.current) stopSpots();
+  }, [abOn]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** 'DEC' when VFO `v` is decoding — a server decoder or the digital spots run on it (vfoAB.ts decTagFor). */
+  const abDecTag = (v: VfoId) => decTagFor(v, abOn,
+    activeDecoder && activeDecoder !== 'transcribe' && activeDecoder !== 'scanner' && activeDecoder !== 'ft8' ? decVfo : null,
+    spotsKind === 'digi' ? spotsVfo : null);
 
   // The panel's X. Closing the box must STOP the decoder, not just hide the box — a decoder still
   // running behind a dismissed panel is invisible CPU and a confusing menu state.
@@ -5935,15 +5961,17 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (spotsKindRef.current === k) {
       stopSpots();
     } else {
-      abDecodeOnA();   // ★★ VFO A/B round 3: the spots are VFO A's
+      // ★★★ the spots run on the VFO selected NOW (decode on either VFO); CW spots are the cluster's, no VFO's
+      const v = k === 'digi' ? abStartVfo() : 'A';
+      spotsVfoRef.current = v; setSpotsVfo(v);
       closeDecoder();
       setSpots([]);
       spotsKindRef.current = k;
       setSpotsKind(k);
       startSpotFlush();
-      decoderClient.current?.startSpots(k);
+      decoderClient.current?.startSpots(k, 'single', v);
     }
-  }, [closeDecoder, stopSpots, startSpotFlush]);
+  }, [closeDecoder, stopSpots, startSpotFlush, abStartVfo]);
 
   // RTTY settings — applying requires a re-attach (server reads params at attach)
   const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.auto });
@@ -6031,8 +6059,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const skimDrawn = (activeDecoder === 'cw' && cwSkim) || (activeDecoder === 'psk' && pskSkim);
   const skimDrawnW = activeDecoder === 'psk' ? pskWidth : cwWidth;
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (the web's renderFrame) — drawn where it is, never sent. */
-  // ★★ VFO A/B round 3: Band is VFO A's — drawn on A's needle only (with B tuned, `status` is B's)
-  const bandDrawn = spotsBandOn && spotsBandCap && abActive !== 'B' ? bandPassband(spotsBandCap.bands, status.frequency) : null;
+  // ★★ VFO A/B: drawn on the needle of the VFO Band runs on only (with the other VFO tuned, `status` is that one's)
+  const bandDrawn = spotsBandOn && spotsBandCap && (!abOn || abActive === spotsVfo) ? bandPassband(spotsBandCap.bands, status.frequency) : null;
   /* ★ V12 PSK: the same two settings, remembered apart from CW's (6/12/24 kHz, not 24/48/96). */
   const pskSkimRef = useRef(false);
   const pskWidthRef = useRef<number>(PSK_DEFAULT_WIDTH);
@@ -9714,8 +9742,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★ V12 DSC: a channel key tunes it as a DSC receiver does (USB 1.7 kHz below, or channel 70 in NFM) and, while DSC runs,
    *  re-attaches so the decoder's tones follow — from the TARGET, not the status (the tune has not landed yet). The web's
    *  dscTune. */
-  /** ★★ VFO A/B round 3 — a tune FROM THE DECODER BOX: VFO A's (abDecodeOnA), then the ordinary tune. */
-  const onDecTuneHz = useCallback((hz: number, mode?: SDRMode) => { abDecodeOnA(); onTuneHz(hz, mode); }, [abDecodeOnA, onTuneHz]);
+  /** ★★★ A tune of a NAMED VFO (decode on either VFO): the selected one is the ordinary tune (onTuneHz); the other is
+   *  moved where it is held (VibeServerWsClient.abTuneVfo) and the controls stay on the selected one. */
+  const tuneVfoHz = useCallback((v: VfoId, hz: number, mode?: SDRMode) => {
+    const c = client.current as unknown as { abTuneVfo?: (v: VfoId, f: number, m?: SDRMode, o?: { recenter?: boolean }) => void } | null;
+    if (!abInfoRef.current?.on || v === abActiveRef.current || !c?.abTuneVfo) { onTuneHz(hz, mode); return; }
+    markInteract();
+    const st = client.current;
+    const [loHz, hiHz] = st ? tuneBoundsOf(st) : [hz, hz];
+    userTuneSeq.current++;   // ★ a PERSON asked — see the note on userTuneSeq
+    c.abTuneVfo(v, Math.max(loHz, Math.min(hiHz, hz)), mode, { recenter: true });
+  }, [onTuneHz]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★★ A tune FROM THE DECODER BOX moves the VFO its decoder runs on, whichever VFO the controls tune. */
+  const onDecTuneHz = useCallback((hz: number, mode?: SDRMode) => { tuneVfoHz(decVfoRef.current, hz, mode); }, [tuneVfoHz]);
   const onDscTune = useCallback((ch: { hz: number; vhf: boolean }) => {
     const t = dscTuneFor(ch);
     onDecTuneHz(t.hz, t.mode as SDRMode);
@@ -9737,12 +9776,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  then tune. Both go out on the spectrum socket in that order, and the server finishes leaving before it reads the tune.
    *  ★ The web's bandSpotsGo, the same rule. */
   const bandSpotsGo = useCallback((hz: number, id: string) => {
-    abDecodeOnA();   // ★★ VFO A/B round 3: Band is VFO A's dial
     const c = client.current;
     if (c && !askLocked(dialStateRef.current)) leaveWholeRadio(c);   // ★ asked-before-tuning: onTuneHz asks, nothing leaves
-    onTuneHz(hz, 'usb' as SDRMode);   // ★ a listener's own tune (a user action: the shared-dial contract holds)
+    // ★ a listener's own tune (a user action: the shared-dial contract holds) — ★★ of the VFO Band runs on
+    tuneVfoHz(spotsVfoRef.current, hz, 'usb' as SDRMode);
     AsyncStorage.setItem('lsv_spot_band' + radioKeySuffix, id).catch(() => {});
-  }, [onTuneHz, leaveWholeRadio, radioKeySuffix, abDecodeOnA]);
+  }, [tuneVfoHz, leaveWholeRadio, radioKeySuffix]);
   const onSpotsBand = useCallback(() => {
     const cap = spotsBandCapRef.current;
     if (!cap) return;
@@ -9758,18 +9797,22 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!b) return;
       closeDecoder();
       if (spotsKindRef.current !== 'digi') { setSpots([]); startSpotFlush(); }
+      // ★★★ Band runs on the VFO selected NOW — its dial, its arrows, its span, its mute (decode on either VFO)
+      const v = abStartVfo();
+      spotsVfoRef.current = v; setSpotsVfo(v);
       spotsKindRef.current = 'digi'; setSpotsKind('digi');
       spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]);
-      decoderClient.current?.startSpots('digi', 'band');
+      decoderClient.current?.startSpots('digi', 'band', v);
       // ★★ Always onto the band's place, as the web does — see spotsBandBtn in web/client/src/main.ts (Stuart, beta22).
       bandSpotsGo(b.hz, b.id);
     });
-  }, [stopSpots, closeDecoder, startSpotFlush, bandSpotsGo, radioKeySuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [stopSpots, closeDecoder, startSpotFlush, bandSpotsGo, radioKeySuffix, abStartVfo]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** One band up or down — clamped at the ends, never wrapped (DAB's and ISM's rule); at an end it says so. */
   bandSpotsStepRef.current = (dir: number) => {
     const cap = spotsBandCapRef.current;
     if (!cap || !spotsBandOnRef.current) return false;
-    if (abActiveRef.current === 'B') return false;   // ★★ VFO A/B round 3: with B tuned the arrows tune B, as ever
+    // ★★ VFO A/B: only while the controls tune the VFO Band runs on — the other VFO's arrows tune it, as ever
+    if (abInfoRef.current?.on && abActiveRef.current !== spotsVfoRef.current) return false;
     const dial = client.current?.getStatus().frequency ?? 0;
     const i = stepSpotBand(cap.bands, dial, dir);
     if (i < 0) return true;
@@ -12644,8 +12687,9 @@ export default function SDRScreen({ route, navigation }: Props) {
           hz: abOther.frequency, filterLow: abOther.bandwidthLow, filterHigh: abOther.bandwidthHigh,
           letter: otherVfo(abActive), ear: abEars ? abEars[otherVfo(abActive)] : null,
           color: abActive === 'A' ? vfoBNeedle(vfoNeedle, vfoNeedleB) : vfoNeedle, parked: abParked && abActive === 'A',
+          dec: !!abDecTag(otherVfo(abActive)),
         } : null}
-        activeVfo={abOn ? { letter: abActive, ear: abEars ? abEars[abActive] : null } : null}
+        activeVfo={abOn ? { letter: abActive, ear: abEars ? abEars[abActive] : null, dec: !!abDecTag(abActive) } : null}
         needleIntensity={vfoIntensity}
         needleFrost={vfoFrost}
         bgImageUrl={bgImageUrl}
@@ -14285,6 +14329,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         vfoRows={abOn && isLocal && !icom ? {
           colourA: vfoNeedle, colourB: vfoBNeedle(vfoNeedle, vfoNeedleB),
           muteA: !!abInfo?.muteA, muteB: !!abInfo?.muteB, onMute: onAbMute,
+          decA: !!abDecTag('A'), decB: !!abDecTag('B'),
           onDragB: onSquelchDragB, autoB: sqlBAuto, onAutoB: setSquelchAutoB, autoOkB: sqlAutoOk,
         } : undefined}
         deemph={hwDeemph}   onDeemph={icom ? undefined : askWrap(onHwDeemph)}   /* ★ an Icom has no WFM chain to de-emphasise */

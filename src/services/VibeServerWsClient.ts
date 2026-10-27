@@ -922,6 +922,18 @@ export abstract class VibeServerWsClient {
     this.callbacks.onStatus({ ...this.status });
     this._abNotify();
   }
+  /** ★★★ TUNE VFO `v` WHICHEVER VFO THE CONTROLS TUNE (decode on either VFO, 2026-10-27). The decoder box tunes the VFO
+   *  its decoder runs on — a station or spot tapped in it, a channel key, a band — and selecting the other VFO later must
+   *  not make those taps move the wrong one. The selected VFO is simply tune(). B unselected is moved in its slot with
+   *  its `watch` aim. A unselected is A's ordinary tune (it asks before tuning, a held mode refuses it, the pacer sends
+   *  it) run with A's slot live for that instant — the pacer takes the frequency and mode by value — then back to B. */
+  abTuneVfo(v: VfoId, frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
+    if (!this.ab.on || v === this.ab.active) { this.tune(frequency, mode, opts); return; }
+    if (v === 'B') { this.ab.tuneOtherB(frequency, mode); this._abNotify(); return; }
+    this.ab.select('A');
+    try { this.tune(frequency, mode, opts); } finally { this.ab.select('B'); }
+    this._abNotify();
+  }
   /** The audio menu's STEREO switch (lower VFO left / higher right). Sent while B is on, and with B's `on`. */
   abSetStereo(on: boolean) { this.ab.setStereo(on); }
   /** ★ The output is mono (a phone speaker, a mono headset): the server then puts both VFOs in both ears. */
