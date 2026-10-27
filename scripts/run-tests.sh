@@ -293,7 +293,7 @@ deps_for() {
     test-drm|test-drm-faad|test-drm-signal) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
     test-dab-faad|test-dab-faad-queue) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
     test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
-                              $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C)
+                              $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
     *)                  echo "" ;;
   esac
 }
