@@ -349,6 +349,15 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 /* Over dead space (outside what this radio or its owner allows) — the frequency is still true, but a
    click parks on the edge instead of tuning there, so it is shown as not-a-destination. */
 #ptrFreq.out { opacity: 0.6; }
+/* ★ GitHub #60 (Stuart: "a little bookmark on the mouse tooltip alongside the frequency … I do not want to crowd the
+   waterfall with labels"): the bookmark under the pointer, named in this label — never drawn on the scale. Hidden by
+   display, not visibility, so a label over no bookmark is exactly the frequency it always was. */
+#ptrFreq .bm { display: none; margin-left: 0.6em; padding-left: 0.6em; border-left: 1px solid var(--btn-border);
+  color: var(--btn-text); }
+#ptrFreq.hasBm .bm { display: inline; }
+#ptrFreq .bm svg { vertical-align: -1px; margin-right: 0.35em; opacity: 0.8; }
+#ptrFreq .bx { margin-left: 0.45em; color: var(--text-dim); }
+#ptrFreq .bn { display: inline-block; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 
 /* Receiver identity badge — top-right of the spectrum, like UberSDR.
    pointer-events:none so it never steals a click-to-tune or a pan gesture. */
@@ -3869,7 +3878,7 @@ select.btn { padding: 6px 8px; }
   <!-- ★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16: "like OpenWebRX"). Follows a MOUSE over the
        waterfall and spectrum and reads the frequency a click there would tune to. Mouse only — a
        touch has no hover, so a label would stick wherever the finger lifted. See initPointerFreq. -->
-  <div id="ptrFreq" aria-hidden="true"><span class="m"></span><span class="f"></span><span class="u"></span></div>
+  <div id="ptrFreq" aria-hidden="true"><span class="m"></span><span class="f"></span><span class="u"></span><span class="bm"><svg viewBox="0 0 10 12" width="8" height="10"><path d="M1 0.5h8v11L5 8.2 1 11.5z" fill="currentColor"/></svg><span class="bn"></span><span class="bx"></span></span></div>
   <!-- ★★ HONEST DEAD SPACE. Near a band edge, half the window is frequencies the radio cannot
        reach — an Airspy HF+ has nothing between 31 and 60 MHz. The FFT still produces SOMETHING
        there (noise, and the mirror of what is below), and drawing it as spectrum would be a
