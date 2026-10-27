@@ -9,6 +9,7 @@ Stuart, 2026-10-07: "this is now a V12 feature when we build the decoders into t
 | [RADIO-ROLES.md](RADIO-ROLES.md) | Public / Private / Dedicated radios, task scheduler, live governor |
 | [ANTENNA-SWITCH-ROTATOR.md](ANTENNA-SWITCH-ROTATOR.md) | UberSDR switch + rotator in the clients (API read from M9PSY), VibeServer's own external switch and rotctld rotator, dummy-hardware tests |
 | [ISM-DECODER.md](ISM-DECODER.md) | ISM sensors as a whole-radio mode (branch `v12-ism`, 2026-10-25): readable weather/sensor/doorbell/TPMS lines, clean-room decoders, the privacy rule, the arrows step bands |
+| [LORA-MESH.md](LORA-MESH.md) | LoRa inside ISM mode (branch `v12-lora-mesh`, 2026-10-27): LoRaWAN headers, Meshtastic and MeshCore nodes and public messages, the MAP; sources, privacy rules, sensitivity, CPU |
 | [CW-SKIMMER.md](CW-SKIMMER.md) | CW (branch `v12-cw`, 2026-10-25): one SIMD filterbank, a listener's decoder and a skimmer, human-fist timing, CER/CPU measured |
 | [FTX-SENSITIVITY.md](FTX-SENSITIVITY.md) | FT8/FT4/FT2/JS8 sensitivity (branch `v12-ftx-sensitivity`, 2026-10-26): the second look (matched filter, multi-symbol likelihoods), a-priori decoding for a receiver, OSD pairs, the guards; decodes and CPU against jt9 on the same audio |
 | [DSC.md](DSC.md) | Maritime DSC (branch `v12-dsc`, 2026-10-26): ITU-R M.493 MF/HF + VHF ch 70, soft DX/RX combining, the ECC correcting, MID table, background decoding + DSC watch, the gallery's day log and pinned distress items, 248 real calls from 12 h of UberSDR audio |
