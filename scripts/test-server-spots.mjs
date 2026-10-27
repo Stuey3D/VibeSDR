@@ -79,7 +79,7 @@ function ws(port, pathq) {
 const jsons = (st, type) => st.txt.filter((t) => t.includes(`"type":"${type}"`)).map((t) => JSON.parse(t));
 const cwText = (st) => st.bin.filter((b) => b[0] === 0x01 && b.length >= 13).map((b) => b.subarray(13, 13 + b.readUInt32BE(9)).toString()).join('');
 
-async function server(args, tag, radioExtra = {}, clip = CLIP, centre = CENTRE) {
+async function server(args, tag, radioExtra = {}, clip = CLIP, centre = CENTRE, rate = RATE) {
   const dir = fs.mkdtempSync(path.join(tmp, `${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
@@ -87,13 +87,13 @@ async function server(args, tag, radioExtra = {}, clip = CLIP, centre = CENTRE) 
     radios: [{ serial: 'spots-test', label: 'Test radio', enabled: true, configured: true, ...radioExtra }],
   }));
   const rtlPort = await freePort(), port = await freePort();
-  const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
+  const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(rate),
                                        '--hf', clip, '--hf-centre', String(centre), '--hf-utc'], { stdio: 'ignore' });
   await sleep(400);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
                 VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
-  const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), ...args], { env, stdio: ['ignore', log, log] });
+  const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(rate), ...args], { env, stdio: ['ignore', log, log] });
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   await until(async () => !!(await status()), 15000);
   return { port, dir, status, log: () => fs.readFileSync(path.join(dir, 'server.log'), 'utf8'), stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); } };
@@ -196,6 +196,21 @@ try {
       const sts = jsons(L.dx, 'digital_spots_status'); const last = sts.length ? sts[sts.length - 1].data : null;
       const jc = last && last.modes.find((m) => m.mode === 'JTTY');
       ok(!!jc && ['active', 'light', 'idle'].includes(jc.state), `${layout}: JTTY has its chip in the Band row (${last ? last.modes.map((m) => m.mode + ' ' + m.state).join(', ') : 'none'})`);
+      for (const k of ['spec', 'aud', 'dx']) L[k].close();
+    } finally { S.stop(); }
+  }
+  {
+    // ★★ V12 2026-10-27: a NARROW capture (300 kS/s) on 6 m — JTTY's 50.160 is 153 kHz from the FT8 cluster, beyond what
+    //    the radio holds round the dial: its chip says "out", never silently missing
+    console.log('── a 300 kS/s radio on 6 m: JTTY\'s slice beyond the capture → an "out" chip ──');
+    const C6 = 50317300;
+    const S = await server(['--freq', String(C6), '--mode', 'usb', '--users', '1'], 'six', {}, CLIP, CENTRE, 300000);
+    try {
+      const L = await listener(S.port, 'sp6m0001', C6, 'usb');
+      L.dx.send({ type: 'subscribe_digital_spots', scope: 'band' });
+      const chip = () => { const st = jsons(L.dx, 'digital_spots_status'); const last = st.length ? st[st.length - 1].data : null; return last && last.modes.find((m) => m.mode === 'JTTY'); };
+      ok(await until(() => !!chip(), 25000) && chip().state === 'out',
+         `6 m at 300 kS/s: JTTY's chip is "out" (${(() => { const st = jsons(L.dx, 'digital_spots_status'); const last = st.length ? st[st.length - 1].data : null; return last ? last.modes.map((m) => m.mode + ' ' + m.state).join(', ') : 'no chips'; })()})`);
       for (const k of ['spec', 'aud', 'dx']) L[k].close();
     } finally { S.stop(); }
   }
