@@ -82,12 +82,13 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
 
 // ── 4. The governor's status frame and its words ──
 {
-  const body = cut(/(const ok = \['active', 'light', 'idle', 'shed', 'off'\];\n[\s\S]*?shed: n\(m\.shed\), live: n\(m\.live\) \}\)\);)/, 'digital_spots_status parse');
+  const body = cut(/(const ok = \['active', 'light', 'idle', 'shed', 'off', 'out'\];[^\n]*\n[\s\S]*?shed: n\(m\.shed\), live: n\(m\.live\) \}\)\);)/, 'digital_spots_status parse');
   if (body) {
     const web = new Function('msg', `${body.replace(/: unknown/g, '').replace(/\(m: any\)/g, '(m)')}\n return modes;`) as (msg: any) => unknown;
     const data = { scope: 'band', budget: 20, modes: [
       { mode: 'FT8', state: 'active', dials: 1, idle: 0, shed: 0, live: 3 }, { mode: 'WSPR', state: 'idle', dials: 1, idle: 4.7, shed: -1 },
       { mode: 'JT<9>', state: 'shed', shed: 3 }, { mode: 'PSK', state: 'asleep' }, null, { mode: 9, state: 'off' }, { mode: 'JTTY', state: 'off' },
+      { mode: 'FT4', state: 'out', dials: 0 },   // ★ V12 2026-10-27: its slice beyond the capture
     ] };
     eq('status frame parsed as the web', parseSpotsStatus(J(data)), web({ data: J(data) }));
     eq('not a status frame', parseSpotsStatus({}), null);
@@ -100,7 +101,7 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
      "FT4: signals there, but over this server's CPU budget — not decoded (1 period shed)");
   // The web's chip text, cut out of renderSpotModeChips.
   const ct = cut(/chip\.title = (`\$\{m\.mode\}: [\s\S]*?: ''\));/, 'the chip title');
-  if (ct) for (const m of [{ mode: 'FT8', state: 'active', shed: 0 }, { mode: 'FT4', state: 'shed', shed: 2 }, { mode: 'JS8', state: 'off', shed: 1 }])
+  if (ct) for (const m of [{ mode: 'FT8', state: 'active', shed: 0 }, { mode: 'FT4', state: 'shed', shed: 2 }, { mode: 'JS8', state: 'off', shed: 1 }, { mode: 'JTTY', state: 'out', shed: 0 }])
     eq(`chip text ${m.mode}`, spotChipText({ ...m, dials: 0, idle: 0, live: 0 } as any),
        new Function('m', 'SPOT_STATE_WORDS', `return ${ct};`)(m, SPOT_STATE_WORDS));
 }

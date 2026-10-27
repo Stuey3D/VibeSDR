@@ -32683,8 +32683,20 @@ static std::string vsTunableJson() {
                 std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"hz\":%.0f,\"lo\":%.0f,\"hi\":%.0f,\"bandLo\":%.0f,\"bandHi\":%.0f,\"modes\":[",
                               first ? "" : ",", sp.band->id, sp.band->name, sp.centreHz, sp.loHz, sp.hiHz, sp.band->loHz, sp.band->hiHz);
                 j += e; first = false;
-                for (size_t k = 0; k < sp.modes.size(); ++k) j += std::string(k ? "," : "") + "\"" + sp.modes[k] + "\"";
-                j += "]}";
+                // ★ V12 (2026-10-27): every mode Band decodes on the band — the main slice's AND its extra slices' (40 m JTTY)
+                const std::vector<std::string> all = sp.allModes();
+                for (size_t k = 0; k < all.size(); ++k) j += std::string(k ? "," : "") + "\"" + all[k] + "\"";
+                j += "]";
+                // ★ …and where the extra slices are (RF lo/hi), for a client that draws them; older clients ignore it
+                if (!sp.extras.empty()) {
+                    j += ",\"extra\":[";
+                    for (size_t k = 0; k < sp.extras.size(); ++k) {
+                        char x[64]; std::snprintf(x, sizeof x, "%s[%.0f,%.0f]", k ? "," : "", sp.extras[k].loHz, sp.extras[k].hiHz);
+                        j += x;
+                    }
+                    j += "]";
+                }
+                j += "}";
             }
             j += "]";
         }
@@ -32977,6 +32989,10 @@ std::vector<std::string> LocalSdrShim::decodersBehind(int64_t nowMs) {
             if (hst->spotsOn() && hst->spotsScope() == "band")
                 watch.note("spotshed:" + kv.first, "Digital spots: Band (modes shed)", hst->spotPeriodsShed(), nowMs);
         }
+        /* ★★ V12 (2026-10-27, Stuart's Pi 2): the one-pipeline radio's slice tap (vibe_wide_tap.h) drops the radio's IQ when
+         *  it falls half a second behind — Band then loses whole slots without a single "slot skipped". Named here too. */
+        if (p->skimTap_.running())
+            watch.note("bandtap", "Digital spots / skimmer slice (radio-rate tap)", p->skimTap_.droppedBlocks(), nowMs);
         if (p->bgRun_.running()) watch.note("bg", "Background decoding", p->bgRun_.droppedSamples(), nowMs);
         // ★ V12 DRM: each DRM receiver's queue drops its oldest IQ rather than make the pipeline wait — counted here
         {

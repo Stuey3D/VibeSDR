@@ -1587,7 +1587,8 @@ export default function DecoderPanel({
               return (
                 <View key={m.mode} accessible accessibilityLabel={spotChipText(m)}
                       style={[dp.chip, { borderColor: m.state === 'shed' ? '#E8A23A' : tk.divider },
-                              (m.state === 'idle' || m.state === 'off') && { opacity: m.state === 'off' ? 0.45 : 0.55 }]}>
+                              (m.state === 'idle' || m.state === 'off' || m.state === 'out') && { opacity: m.state === 'idle' ? 0.55 : 0.45 },
+                              m.state === 'out' && { borderStyle: 'dashed' }]}>
                   <Text style={[dp.chipDot, { backgroundColor: st.colour, color: st.ink, fontFamily: FONT }]}>{st.letter}</Text>
                   <Text style={[dp.chipTxt, { color: tk.value, fontFamily: FONT },
                                 m.state === 'off' && { textDecorationLine: 'line-through' }]}>{m.mode}</Text>

@@ -165,6 +165,7 @@ struct Interp {
         dph = 2 * M_PI * shiftHz / (inRate * L);
     }
     void run(const cf32* in, int n, std::vector<cf32>& out) {
+        if (L == 1 && dph == 0) { out.assign(in, in + n); return; }
         out.resize((size_t)n * L);
         for (int i = 0; i < n; ++i) {
             std::memmove(hist.data() + 1, hist.data(), (size_t)(K - 1) * sizeof(cf32));
@@ -180,10 +181,11 @@ struct Interp {
     }
 };
 
+static std::map<std::string, std::set<std::string>> g_lastCalls;   // ★ the last runReal's calls per mode (the regression)
 static int runReal(int argc, char** argv) {
     const char* path = argv[2];
     const double utc0 = std::atof(argv[3]), recCentre = std::atof(argv[4]), dial = std::atof(argv[5]);
-    int L = 25; double hwOff = 15000; bool direct = false, chan = false, live = false, oldStamp = false; double secs = 1e9, stallMs = 0;
+    int L = 25; double hwOff = 15000; bool direct = false, chan = false, live = false, oldStamp = false, oldSlice = false; double secs = 1e9, stallMs = 0;
     for (int i = 6; i < argc; ++i) {
         if (!std::strncmp(argv[i], "L=", 2)) L = std::atoi(argv[i] + 2);
         if (!std::strncmp(argv[i], "hw=", 3)) hwOff = std::atof(argv[i] + 3);
@@ -191,12 +193,23 @@ static int runReal(int argc, char** argv) {
         if (!std::strcmp(argv[i], "direct")) direct = true;
         if (!std::strcmp(argv[i], "chan")) chan = true;
         if (!std::strcmp(argv[i], "live")) live = true;
-        if (!std::strcmp(argv[i], "oldstamp")) oldStamp = true;                         // ★ real time, stamped as the server stamps
+        if (!std::strcmp(argv[i], "oldstamp")) oldStamp = true;
+        if (!std::strcmp(argv[i], "oldslice")) oldSlice = true;   // ★ the tap as before 2026-10-27: w/0.92, a quarter's roll-off, no extras                         // ★ real time, stamped as the server stamps
         if (!std::strncmp(argv[i], "stall=", 6)) stallMs = std::atof(argv[i] + 6);   // ★ the tap starved after each slot
     }
     std::vector<cf32> x; uint32_t rate = 0;
-    if (!loadIq(path, x, rate)) { std::printf("cannot read %s\n", path); return 3; }
-    if (x.size() > secs * rate) x.resize((size_t)(secs * rate));
+    const size_t pl = std::strlen(path);
+    if (pl > 4 && !std::strcmp(path + pl - 4, ".cu8")) {
+        // ★ a server test's clip (test-digi-spots clip): 8-bit I/Q at fs=<rate>, looped `loops=` times (UTC-anchored at utc0)
+        FILE* f = std::fopen(path, "rb"); if (!f) return 3;
+        std::vector<uint8_t> u; { uint8_t b[65536]; size_t k; while ((k = std::fread(b, 1, sizeof b, f)) > 0) u.insert(u.end(), b, b + k); }
+        std::fclose(f);
+        rate = 960000; int loops = 4;
+        for (int i = 6; i < argc; ++i) { if (!std::strncmp(argv[i], "fs=", 3)) rate = (uint32_t)std::atof(argv[i] + 3); if (!std::strncmp(argv[i], "loops=", 6)) loops = std::atoi(argv[i] + 6); }
+        for (int l = 0; l < loops; ++l) for (size_t i = 0; i + 1 < u.size(); i += 2) x.push_back(cf32((u[i] - 127.5f) / 128.0f, (u[i + 1] - 127.5f) / 128.0f));
+        L = 1;
+    } else if (!loadIq(path, x, rate)) { std::printf("cannot read %s\n", path); return 3; }
+    if (!live && x.size() > secs * rate) x.resize((size_t)(secs * rate));
     std::map<std::string, std::set<std::string>> calls; std::map<std::string, int> per; std::mutex gm;
     digi::Spotter sp(digi::Spotter::Scope::Band, digi::modes(), [&](const digi::Spot& s, double) {
         std::lock_guard<std::mutex> lk(gm); per[s.mode]++; calls[s.mode].insert(s.call); }, nullptr, nullptr);
@@ -224,7 +237,23 @@ static int runReal(int argc, char** argv) {
          *  producer is the DSP thread and stamps each chunk with it when it is captured. `oldstamp`: the stamp taken when
          *  the tap HANDS a block over, as DecoderHost::feedIq did before 2026-10-27. `stall`: the tap thread held off for
          *  that long once a slot (the slot's decodes waking on a small box), its queue filling meanwhile. */
-        auto clk = [&] { return utc0 + std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
+        /* ★ `live` plays the recording on the REAL clock, as a server hears the air: it starts at the point of the recording
+         *  whose UTC, moved on by whole two-minute steps (every mode's slots line up), is now — so the engines' wall-clock
+         *  pass budgets see a live slot, not a recording hours old. */
+        double shift = 0; size_t from = 0;
+        if (live) {
+            shift = std::floor((vibeUtcNow() - utc0) / 120.0) * 120.0;
+            from = (size_t)((vibeUtcNow() - utc0 - shift) * rate);
+            if (from + (size_t)(30 * rate) > x.size()) { shift += 120.0; from = 0; }   // too near the end: wait for the next lap
+            while (vibeUtcNow() < utc0 + shift + (double)from / rate) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            x.erase(x.begin(), x.begin() + (std::ptrdiff_t)from);
+            if (x.size() > secs * rate) x.resize((size_t)(secs * rate));
+            std::printf("live from %.1f s into the recording, %.0f s\n", from / (double)rate, x.size() / (double)rate);
+        }
+        const double base = utc0 + shift + (double)from / rate;
+        const double wall0 = vibeUtcNow();
+        auto clk = [&] { return base + (vibeUtcNow() - wall0); };
+        const auto tp = std::chrono::steady_clock::now();   // ★ the pacing starts after the wait
         double lastStallSlot = -1;
         auto sink = [&](const cf32* s, int k, double r, double c, const float* p, int nb, double bh, double utc, int slice) {
             if (slice == 0) consumed.fetch_add((uint64_t)std::llround(k * fs / r));
@@ -237,7 +266,7 @@ static int runReal(int argc, char** argv) {
         if (!chan) {
             tap.start(WideTap::BandSink(sink));
             WideTap::Geometry g; g.sampleRate = fs; g.hwCentreHz = hwCentre; g.wantCentreHz = dial; g.widthHz = width; g.fftSize = fft; g.bins = true;
-            g.band = true; g.nExtras = (int)std::min<size_t>(extras.size(), kMaxExtraSlices);
+            g.band = !oldSlice; g.nExtras = oldSlice ? 0 : (int)std::min<size_t>(extras.size(), kMaxExtraSlices);
             for (int k = 0; k < g.nExtras; ++k) g.extras[k] = extras[(size_t)k];
             tap.aim(g);
         }
@@ -248,7 +277,7 @@ static int runReal(int argc, char** argv) {
             const int k = (int)std::min<size_t>((size_t)chunk, x.size() - o);
             ip.run(&x[o], k, up);
             produced += up.size();
-            const double chunkUtc = live ? clk() : utc0 + (double)produced / fs;
+            const double chunkUtc = live ? clk() : base + (double)produced / fs;
             if (chan) {
                 long long inEnd = (long long)produced, inStart = inEnd - (long long)up.size();
                 ch.feed(up.data(), (int)up.size(), [&](const cf32* b, int) {
@@ -270,7 +299,7 @@ static int runReal(int argc, char** argv) {
                 });
             } else {
                 tap.feed(up.data(), (int)up.size(), chunkUtc);
-                if (live) { std::this_thread::sleep_until(t0 + std::chrono::microseconds((int64_t)(1e6 * (double)produced / fs))); continue; }
+                if (live) { std::this_thread::sleep_until(tp + std::chrono::microseconds((int64_t)(1e6 * (double)produced / fs))); continue; }
                 // ★ back-pressure: the tap drops what is more than half a second behind, as on a server that cannot keep up
                 while (produced > consumed.load() + (uint64_t)(fs * 0.2)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
@@ -285,6 +314,7 @@ static int runReal(int argc, char** argv) {
     for (auto& m : sp.status())
         std::printf("  status %-5s %-6s dials %d  periods: live %llu idle %llu shed %llu\n", m.mode.c_str(), digi::stateWord(m.state), m.dials,
                     (unsigned long long)m.live, (unsigned long long)m.idle, (unsigned long long)m.shed);
+    g_lastCalls = calls;
     if (const char* f = getenv("VIBE_CALLS_OUT")) {
         FILE* o = std::fopen(f, "w");
         if (o) { for (auto& kv : calls) for (auto& c : kv.second) std::fprintf(o, "%s %s\n", kv.first.c_str(), c.c_str()); std::fclose(o); }
@@ -450,6 +480,34 @@ int main(int argc, char** argv) {
         const Resp up = toneThrough(fs, fft, bins, 0, 10000), dn = toneThrough(fs, fft, bins, 0, -10000);
         char t[200]; std::snprintf(t, sizeof t, "+10 kHz: %.2f dB at +10, %.1f dB at −10; −10 kHz: %.2f dB at −10", up.db, up.mirrorDb, dn.db);
         ok(up.db > -0.5 && up.mirrorDb < -60 && dn.db > -0.5, t);
+    }
+
+    std::printf("── the real 40 m recording: Band through the server's slice route vs the same IQ straight in ──\n");
+    {
+        std::string dir = getenv("VIBE_TEST_AUDIO") ? getenv("VIBE_TEST_AUDIO") : std::string(getenv("HOME") ? getenv("HOME") : "") + "/VibeSDR-test-audio";
+        const std::string wav = dir + "/bandall/band_40m_7066600_iq96_20261026T1738.wav";
+        if (FILE* f = std::fopen(wav.c_str(), "rb")) {
+            std::fclose(f);
+            std::setvbuf(stdout, nullptr, _IOLBF, 0);
+            auto run = [&](std::vector<std::string> extra) {
+                std::vector<std::string> a = { "x", "real", wav, "1793036293.537", "7066600", "7060600", "secs=90" };
+                a.insert(a.end(), extra.begin(), extra.end());
+                std::vector<char*> av; for (auto& x : a) av.push_back(&x[0]);
+                runReal((int)av.size(), av.data());
+                return g_lastCalls;
+            };
+            const auto direct = run({ "direct" });
+            const auto tap = run({});
+            const auto chan = run({ "chan" });
+            const size_t d = direct.count("FT8") ? direct.at("FT8").size() : 0;
+            const size_t t = tap.count("FT8") ? tap.at("FT8").size() : 0, c = chan.count("FT8") ? chan.at("FT8").size() : 0;
+            char m[220];
+            std::snprintf(m, sizeof m, "FT8 calls in 90 s: straight in %zu, one-pipeline tap %zu, range-locked extract %zu — the slice within 10 %%", d, t, c);
+            ok(d > 40 && t >= d * 0.9 && c >= d * 0.9, m);
+            const size_t d4 = direct.count("FT4") ? direct.at("FT4").size() : 0, t4 = tap.count("FT4") ? tap.at("FT4").size() : 0;
+            std::snprintf(m, sizeof m, "FT4 calls: straight in %zu, tap %zu", d4, t4);
+            ok(t4 + 2 >= d4 * 0.9, m);
+        } else std::printf("  (not run — %s is not here)\n", wav.c_str());
     }
 
     std::printf("%s\n", fails ? "SOME TESTS FAILED" : "all passed");
