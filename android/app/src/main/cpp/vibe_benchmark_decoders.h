@@ -30,6 +30,7 @@ extern "C" {
 #include "ft8/constants.h"
 }
 #include "vibe_clock.h"
+#include "vibe_lora_service.h"   // ★ V12: the LoRa row (ISM mode's 868 default channels)
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -308,6 +309,20 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
             }
             rows.push_back({ "dec_ft8band", std::string("Decoder: digital spots, Band (") + best->band->name + ")", pct, got.load() });
         }
+    }
+    {
+        /* ★★ V12 LoRa (vibe_lora_service.h): ISM mode's 868 default channels (LoRaWAN ×3 at SF7-12, Meshtastic LongFast,
+         *  MeshCore) searching 4 s of a 2.4 MS/s capture — the search is the cost; a frame adds one FFT per symbol. It sets
+         *  how many more channels run (vibelora::budgetFromBench); the default set is never hidden by it. */
+        if (step) step("Decoder: LoRa (868 default channels)");
+        const double rate = 2.4e6, secs = std::max(4.0, seconds);
+        std::vector<vibelora::cf> x(size_t(rate * secs));
+        uint32_t r = 12345;
+        for (auto& v : x) { r = r * 1664525u + 1013904223u; const float a = float(int(r >> 16 & 255) - 128), b = float(int(r >> 24) - 128); v = vibelora::cf(a, b) * (1.0f / 2048); }
+        vibelora::Engine e;
+        e.startInline("868", 868.6e6, rate, 0);
+        const double pct = timeIt(secs, [&] { for (size_t o = 0; o < x.size(); o += 65536) e.process(&x[o], std::min<size_t>(65536, x.size() - o)); }, [] {});
+        rows.push_back({ "dec_lora", "Decoder: LoRa (868 default channels)", pct, 0 });
     }
     return rows;
 }

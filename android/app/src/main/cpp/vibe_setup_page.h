@@ -2646,6 +2646,9 @@ const BLOCKABLE = [
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
   { id: "ism",    label: "ISM sensors and meters" },
+  /* ★ V12 LoRa inside ISM mode (docs/v12/LORA-MESH.md) — LoRaWAN devices, Meshtastic and MeshCore nodes, and the mesh
+   *  networks' PUBLIC messages. Its own switch: an owner may want the weather stations and not the mesh chat. */
+  { id: "lora",   label: "LoRa / Meshtastic / MeshCore" },
   /* ★ V12 PSK31/63 — the listener's decoder and the skimmer (docs/v12/PSK.md), one switch. */
   { id: "psk",    label: "PSK31/63" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */

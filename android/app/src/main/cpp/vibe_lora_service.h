@@ -102,6 +102,24 @@ inline std::vector<const PlanCh*> choose(const std::vector<PlanCh>& plan, double
     return out;
 }
 
+/** ★★ THE BENCHMARK SETS THE DEFAULT, NEVER HIDES (Stuart's rule). `pctDefault`: the benchmark's dec_lora row — the 868
+ *  default tier's cost, % of one core. The default tier always runs while LoRa is on; further tiers are added while the
+ *  whole LoRa engine would stay under kCorePct of one core. No benchmark yet: every tier on 64-bit machines, the default
+ *  tier only on 32-bit ARM (the Pi 2 — the minimum spec). The owner can force everything ("lora+all") or switch LoRa off. */
+static constexpr double kCorePct = 25.0;
+inline double budgetFromBench(double pctDefault) {
+    double units = 0;
+    for (const auto& c : planFor("868")) if (c.tier == 0) units += chanCost(c);
+    if (!(pctDefault > 0)) {
+#if defined(__arm__)
+        return 0;
+#else
+        return INFINITY;
+#endif
+    }
+    return units * (kCorePct / pctDefault);
+}
+
 /** One decoded frame with what it said. */
 struct Heard { Frame f; Msg m; };
 

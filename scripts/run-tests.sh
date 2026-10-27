@@ -172,6 +172,10 @@ flags_for() {
     #    sensitivity sweep, noise and carriers = nothing, the privacy rule (serial yes, ciphertext never), the day-log
     #    throttle, a busy street. VIBE_WMBUS_REC=<868.6 MHz u8 at 2.4 MS/s> also replays a real capture (0 meters).
     test-wmbus)            echo "-O2 -lpthread" ;;
+    # ★★ V12 LoRa (vibe_lora*.h, vibe_meshtastic.h, vibe_meshcore.h, vibe_lorawan.h, 2026-10-27): AES/SHA/HMAC vectors, the
+    #    codec, 96 round trips through the channeliser, the sensitivity sweep against Semtech's table (~1 min; LORA_QUICK=1
+    #    skips it), the whole 868 band at once, the parsers, the privacy rule on the JSON, noise → nothing, CPU rows.
+    test-lora)             echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
@@ -1218,6 +1222,19 @@ if [ -x "$OUT/test-ism" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   rm -f "$OUT/ism-clip.u8" "$OUT/wmbus-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-ism build'; notrun=$((notrun+1))
+fi
+# ★★ V12 LoRa (docs/v12/LORA-MESH.md): the 868 band through the real server — Meshtastic, MeshCore and LoRaWAN rows, the
+#    public messages, positions for the map, and the privacy rule on the wire; then the web client's chips, rows and MAP.
+printf '\n\033[1m── LoRa in ISM mode (end to end: server, then the web client) ──\033[0m\n'
+if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
+  "$OUT/test-lora" --write-clip "$OUT/lora-clip.u8" 868600000 2400000 >/dev/null
+  VIBE_LORA_CLIP="$OUT/lora-clip.u8" node scripts/test-server-lora.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  VIBE_LORA_CLIP="$OUT/lora-clip.u8" node scripts/test-web-lora.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/lora-clip.u8"
+else
+  echo '   not run — needs VIBESERVER_BIN and the test-lora build'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): the real server on a fake rtl_tcp replaying synthetic clips made by

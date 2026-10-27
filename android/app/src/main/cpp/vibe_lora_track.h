@@ -157,7 +157,7 @@ private:
         if (r.batt > 100) s += d + "powered";
         else if (r.batt >= 0) s += d + "battery " + std::to_string(r.batt) + " %";
         if (r.temp == r.temp) s += d + f1(r.temp, 1) + " \xc2\xb0" "C";
-        if (r.hops >= 0) s += d + (r.hops == 0 ? std::string("direct") : std::to_string(r.hops) + (r.hops == 1 ? " hop" : " hops"));
+        if (r.hops >= 0) s += d + (r.hops == 0 ? std::string("heard first-hand") : std::to_string(r.hops) + (r.hops == 1 ? " hop" : " hops"));
         if (!r.msgs.empty()) s += d + "\xe2\x80\x9c" + r.msgs.back().text + "\xe2\x80\x9d";
         else if (r.priv && !r.open) s += d + "private channel";
         return s;
