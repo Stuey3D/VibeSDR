@@ -207,7 +207,7 @@ import { fetchFrontDoor, radioBaseUrl, describeRadio,
          type VibeRadio, type VibeFrontDoor } from '../services/vibeserverRadios';
 import { tidyStationName } from '../services/stationLogo';
 import { isWholeProfileMode } from '../services/dataModes';
-import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, type VfoABInfo, type VfoId } from '../services/vfoAB';
+import { EarOrder, INACTIVE_INTENSITY, otherVfo, vfoBNeedle, VFO_B_AUTO, vfoATune, DoorSeq, type VfoABInfo, type VfoId } from '../services/vfoAB';
 import { BinauralTracker, binauralModeOk, BIN_STEREO_LOCKED, BIN_STEREO_MONO, BIN_STEREO_UNKNOWN,
          type BinauralSink } from '../services/binauralOffset';
 import { isoToFlag, validIso } from '../services/rdsCountry';
@@ -3045,8 +3045,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  VFO B a second one on the same radio, both heard at once — the server mixes them into the one stream, the LOWER
    *  frequency in the LEFT ear and the HIGHER in the RIGHT (the STEREO switch, audio menu, default on). The client
    *  holds the slots: whichever VFO is selected IS `status`, so every control on this screen tunes it unchanged.
-   *  ★ Turned on and off ONLY from the tuning menu; PER SESSION (a reconnect starts with one VFO — the server forgets
-   *    B with the session, and so does the client). Offered only where hwinfo says `watch` > 0 (VibeServer). */
+   *  ★ Turned on and off ONLY from the frequency card (FreqModal — the step sheet until build 498). PER SESSION: a
+   *    reconnect starts with one VFO, but what the screen shows is the SERVER'S word (its watch state), never a local
+   *    flag a socket reopen or a rotation resets (vfoAB.ts PER SESSION). Offered only where hwinfo says `watch` > 0. */
   const [abOffered, setAbOffered] = useState(0);
   const [abInfo, setAbInfo] = useState<VfoABInfo | null>(null);
   const abOn = !!abInfo?.on;
@@ -3109,6 +3110,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                             vfoStereo, abInfo?.state?.monoOut === true)
     : null;
   const abParked = abOn && !!abInfo?.state?.chans.find((c) => c.id === 1)?.parked;
+  /** ★★★ VFO A's tuning, for the AUDIO SOCKET — the listener's own channel, never B (vfoAB.ts vfoATune: handing it the
+   *  selected VFO's status is what snapped A onto B on a switch, build 498). */
+  const abDoor = vfoATune(status, abInfo);
+  const [doorSeq] = useState(() => new DoorSeq());
 
   /* ★★ V12 BINAURAL TUNING — the audio leans toward the ear on the side the signal lies and comes back to the
    *  middle of the head as you tune onto it (services/binauralOffset.ts, vibedsp/binaural.h). ONE setting, in the
@@ -7822,6 +7827,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       },
     }, () => converterRef.current), password, !!route.params.isLocal), () => converterRef.current);
     client.current = c;
+    // ★★ V12 VFO A/B: a NEW client knows no VFO B until the server says so (it adopts one the session still holds —
+    //    vfoAB.ts PER SESSION), so the screen starts from the new client's word, not the old one's.
+    abActiveRef.current = 'A'; earOrder.current.reset(); setAbInfo(null);
     /* ★★★ TELL THE WATCH THIS RECEIVER IS EXCLUSIVE UNTIL IT SAYS OTHERWISE. Buddy learns about a
      *   shared dial ONLY from a `dial` message, and it keeps what it was last told for the life of
      *   the app — nothing resets it. So arriving on a receiver that has no shared dial left the
@@ -14643,10 +14651,14 @@ export default function SDRScreen({ route, navigation }: Props) {
            *   radio speaks hardware, and everything above speaks true RF.
            * ★ A no-op with no converter fitted (toHardware is the identity), so nothing changes for
            *   the overwhelming majority of local sessions. */
-          frequency={convToHardware(status.frequency, converterRef.current)}
-          mode={status.mode}
-          bandwidthLow={status.bandwidthLow}
-          bandwidthHigh={status.bandwidthHigh}
+          /* ★★★ V12 VFO A/B: VFO A's tuning, WHICHEVER VFO IS SELECTED. This socket's `tune` tunes the listener's
+           *  channel — VFO A. Handed `status` (which IS VFO B while B is selected) it re-tuned A onto B on every switch
+           *  and dragged A along with every tune of B (Stuart, build 498: "they would often snap to the frequency the
+           *  other was on"). B is tuned by `watch` messages on the spectrum socket alone. See vfoAB.ts vfoATune. */
+          frequency={convToHardware(abDoor.frequency, converterRef.current)}
+          mode={abDoor.mode as SDRMode}
+          bandwidthLow={abDoor.bandwidthLow}
+          bandwidthHigh={abDoor.bandwidthHigh}
           instanceName={instanceName}
           host={route.params.localHost}
           // ★★★ THE RADIO'S OWN ADDRESS, AS A ws URL. connectBase carries the scheme (https on a
@@ -14673,7 +14685,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           //     count travels with the new frequency or mode in the SAME render. If a future
           //     caller ever bumps it without touching status, the prop will not update and the
           //     tune will be silently dropped — bump state, not just the ref, if that day comes.
-          userTuneSeq={userTuneSeq.current + tuneAssertNonce}
+          // ★★ …and a bump made while VFO B is tuned was a person tuning B, not A — see vfoAB.ts DoorSeq.
+          userTuneSeq={doorSeq.next(userTuneSeq.current + tuneAssertNonce, abOn && abActive === 'B')}
           /* ★★★ THE SERVER'S OWN DIAL, from the same status as `frequency` and in the same HARDWARE Hz — a value
            *  equal to it is this screen adopting the room's dial, and is never sent back (audioTuneForward.ts:
            *  the V12 iPhone echoed every step Safari took on the Lenovo, 2026-10-22). */

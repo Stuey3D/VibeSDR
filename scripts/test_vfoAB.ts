@@ -17,14 +17,26 @@ import { fileURLToPath } from 'node:url';
  *     by an older echo; the meter follows B while B is tuned;
  *   • off with B tuned → A restored; the offer withdrawn (hwinfo watch 0) → reset; reset() for a fresh session;
  *   • THE EARS: lower L / higher R whichever is A or B; 100 Hz of hysteresis (no flutter); within 5 Hz both; stereo off
- *     or a mono output → no tags — the server's PanMixer rule exactly.
+ *     or a mono output → no tags — the server's PanMixer rule exactly;
+ *   • ★★★ THE AUDIO SOCKET IS VFO A'S DOOR (build 498: "they would often snap to the frequency the other was on"): driven
+ *     through audioTuneForward's own decision, switching A↔B and tuning B never sends a `tune` — the door is handed
+ *     vfoATune(), not the selected VFO's status (which DID send: proven below, so the test cannot pass vacuously); a
+ *     userTuneSeq bump made while B is tuned does not reach A's door (DoorSeq);
+ *   • ★★★ A FRESH SOCKET IS NOT A FRESH SESSION (build 498, landscape → portrait: one VFO on screen, two in the ears): a
+ *     socket reopen keeps VFO B while the server's state carries it; silence for RESYNC_MS → one VFO; a client that does
+ *     not know about a B the server holds ADOPTS it (A selected, nothing sent, the mode's passband shape at the
+ *     server's width); not the echo of our own OFF, not a refusal; the client's onopen no longer resets;
+ *   • the A/B ON/OFF lives on the frequency card (FreqModal + its nav stop), not the tuning-step sheet;
+ *   • VFO B's colour: AUTO (the contrast rule B has always drawn in) or the listener's swatch.
  *
  * Run: node --no-warnings scripts/test_vfoAB.ts   (silent: no audio anywhere)
  */
 import {
   parseWatch, watchOffered, watchMaxOf, vfoB, msgOn, msgOff, msgAim, msgSquelch, msgStereo, msgMonoOut, EarOrder, VfoABCore,
-  SWAP_HZ, SAME_HZ, otherVfo, type TuneStatus,
+  SWAP_HZ, SAME_HZ, otherVfo, vfoATune, DoorSeq, RESYNC_MS, edgesForWidth, autoVfoBColour, vfoBNeedle, VFO_B_AUTO,
+  type TuneStatus,
 } from '../src/services/vfoAB.ts';
+import { shouldForwardTune } from '../src/services/audioTuneForward.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -123,6 +135,156 @@ console.log('── the slots ──');
   ab.setStereo(false);
   sent.length = 0; ab.setStereo(true);
   ok(sent.length === 0, 'stereo is remembered, sent only while B is on');
+}
+
+console.log('── the audio socket is VFO A\'s door (the snap, build 498) ──');
+{
+  // The server's dial (config) is VFO A: 7.074 USB. B starts there too.
+  const status: TuneStatus = { frequency: 7074000, mode: 'usb', bandwidthLow: 100, bandwidthHigh: 2800 };
+  const serverDial = { frequency: 7074000, mode: 'usb' };
+  let t = 10_000;
+  const sent: Record<string, unknown>[] = [];
+  const adopt = (mode: string, s: TuneStatus) => { if (s.mode !== mode) s.mode = mode; };
+  const ab = new VfoABCore(() => status, (m) => sent.push(m), adopt, () => t);
+  ab.setOffered(1); ab.setOn(true);
+  t += 200;
+  ab.onWatch({ type: 'watch', max: 1, chans: [{ id: 1, freq: 7074000, mode: 'usb', bw: 2700, open: true }] });
+  // LocalAudioPlayer's forwarding effect, as a function of the props it is handed (unsealed: a person has tuned before).
+  const door = (pick: () => TuneStatus) => {
+    let last = JSON.stringify(pick());
+    const tunes: number[] = [];
+    return {
+      tunes,
+      render() {
+        const asked = pick(); const j = JSON.stringify(asked);
+        if (j === last) return;   // the effect's deps did not change: it does not run
+        last = j;
+        const d = shouldForwardTune({ asked, serverDial, seqAdvanced: false, sealed: false, helloTune: '', askedJson: j,
+                                      msSinceSend: Infinity });
+        if (d.send) tunes.push(asked.frequency);
+      },
+    };
+  };
+  const fixed = door(() => vfoATune(status, ab.info()));
+  const naive = door(() => ({ ...status }));   // what the screen handed it before: the SELECTED VFO's status
+  const step = (f: () => void) => { f(); t += 2000; fixed.render(); naive.render(); };
+  step(() => ab.select('B'));
+  step(() => ab.tuneB(7080000));
+  step(() => ab.tuneB(7085000));
+  step(() => ab.select('A'));
+  step(() => ab.select('B'));
+  step(() => ab.select('A'));
+  ok(naive.tunes.includes(7080000),
+     `the OLD door (status) sent VFO B's frequency as VFO A's tune: ${naive.tunes.join(', ')} — the snap`);
+  ok(fixed.tunes.length === 0, `the door (vfoATune) sends nothing across switches and tunes of B (sent: ${fixed.tunes.join(', ') || 'none'})`);
+  ok(status.frequency === 7074000 && ab.info().other!.frequency === 7085000,
+     'each VFO stayed put: A on 7.074, B where it was tuned (7.085)');
+  ok(vfoATune(status, null).frequency === status.frequency && vfoATune(status, { on: true, active: 'A', other: null }).frequency === 7074000,
+     'vfoATune: one VFO, or A selected → the status');
+  // A tune of A still goes out (A selected, a real change).
+  status.frequency = 7075000; fixed.render();
+  ok(fixed.tunes.length === 1 && fixed.tunes[0] === 7075000, 'a tune of VFO A still reaches the audio socket');
+  // userTuneSeq as A's door sees it
+  const ds = new DoorSeq();
+  const s0 = ds.next(5, false);
+  ok(ds.next(6, true) === s0 && ds.next(8, true) === s0, 'DoorSeq: bumps made while B is tuned do not advance A\'s counter');
+  ok(ds.next(8, false) === s0 && ds.next(9, false) === s0 + 1, 'DoorSeq: switching back to A is not a bump; a tune of A is');
+  // the screen hands the door vfoATune / DoorSeq (source check)
+  const scr = readFileSync(fileURLToPath(new URL('../src/screens/SDRScreen.tsx', import.meta.url)), 'utf8');
+  const lap = scr.slice(scr.indexOf('<LocalAudioPlayer'), scr.indexOf('<LocalAudioPlayer') + 6000);
+  ok(/frequency=\{convToHardware\(abDoor\.frequency, converterRef\.current\)\}/.test(lap) && /mode=\{abDoor\.mode/.test(lap)
+     && /bandwidthLow=\{abDoor\.bandwidthLow\}/.test(lap) && /userTuneSeq=\{doorSeq\.next\(/.test(lap)
+     && !/frequency=\{convToHardware\(status\.frequency/.test(lap),
+     'SDRScreen: LocalAudioPlayer is handed VFO A\'s tuning (abDoor) and DoorSeq, never the selected VFO\'s status');
+}
+
+console.log('── a fresh socket is not a fresh session (the rotation, build 498) ──');
+{
+  const status: TuneStatus = { frequency: 7074000, mode: 'usb', bandwidthLow: 100, bandwidthHigh: 2800 };
+  let t = 50_000;
+  const sent: Record<string, unknown>[] = [];
+  const adopt = (mode: string, s: TuneStatus) => {
+    if (s.mode === mode) return;
+    s.mode = mode;
+    const d: Record<string, [number, number]> = { usb: [100, 2800], lsb: [-2800, -100], am: [-5000, 5000], nfm: [-6000, 6000] };
+    if (d[mode]) { s.bandwidthLow = d[mode][0]; s.bandwidthHigh = d[mode][1]; }
+  };
+  const beatB = (freq: number, extra: Record<string, unknown> = {}) =>
+    ({ type: 'watch', max: 1, chans: [{ id: 1, freq, mode: 'usb', bw: 2700, open: true, lvl: -90 }], ...extra });
+  const ab = new VfoABCore(() => status, (m) => sent.push(m), adopt, () => t);
+  ab.setOffered(1); ab.setOn(true); t += 200;
+  ab.onWatch(beatB(7074000));
+  ab.select('B'); ab.tuneB(7090000); t += 2000;
+  ab.onWatch(beatB(7090000));
+  // The watchdog reopens the socket (a rotation stalled the JS thread) — same session, the server still mixes B.
+  sent.length = 0;
+  ab.socketOpened();
+  t += 400;
+  const o = ab.onWatch(beatB(7090000));
+  ok(ab.on && ab.active === 'B' && status.frequency === 7090000 && !o.reset && sent.length === 0,
+     'socket reopened, the server\'s beat carries B: still two VFOs, B still selected, nothing sent');
+  t += RESYNC_MS * 2;
+  ok(!ab.expireIfSilent().expired && ab.on, 'heard on the new socket: no timer can take B away afterwards');
+  // A NEW session (the server forgot B): silence on the new socket → one VFO, A restored.
+  ab.socketOpened();
+  t += RESYNC_MS - 100;
+  ok(!ab.expireIfSilent().expired && ab.on, `silence for under ${RESYNC_MS} ms: still waiting`);
+  t += 200;
+  const ex = ab.expireIfSilent();
+  ok(ex.expired && ex.statusChanged && !ab.on && ab.active === 'A' && status.frequency === 7074000,
+     `silence for ${RESYNC_MS} ms after a reopen: the session has no B — one VFO, A restored`);
+  // A client that does not know about the B the server holds (rebuilt under the same session) ADOPTS it.
+  const st2: TuneStatus = { frequency: 145500000, mode: 'nfm', bandwidthLow: -6000, bandwidthHigh: 6000 };
+  const sent2: Record<string, unknown>[] = [];
+  let t2 = 1_000_000;
+  const fresh = new VfoABCore(() => st2, (m) => sent2.push(m), adopt, () => t2);
+  fresh.onWatch({ type: 'watch', max: 1, chans: [{ id: 1, freq: 145600000, mode: 'nfm', bw: 9000, sqlOn: true, sql: -80, open: false }] });
+  ok(!fresh.on, 'not offered (yet): a B is not adopted');
+  fresh.setOffered(1);
+  const ad = fresh.onWatch({ type: 'watch', max: 1, chans: [{ id: 1, freq: 145600000, mode: 'nfm', bw: 9000, sqlOn: true, sql: -80, open: false }] });
+  const oth = fresh.info().other!;
+  ok(ad.adopted === true && fresh.on && fresh.active === 'A' && st2.frequency === 145500000 && sent2.length === 0,
+     'the server holds a B this client did not know: ADOPTED — A stays selected and tuned, nothing sent');
+  ok(oth.frequency === 145600000 && oth.mode === 'nfm' && oth.bandwidthLow === -4500 && oth.bandwidthHigh === 4500 && oth.squelchDb === -80,
+     'the adopted B: its frequency, mode, the server\'s width in the mode\'s shape, its own squelch');
+  // …but not the echo of our own OFF, and not a refusal.
+  fresh.setOn(false);
+  t2 += 300;
+  fresh.onWatch({ type: 'watch', max: 1, chans: [{ id: 1, freq: 145600000, mode: 'nfm', bw: 9000, open: true }] });
+  ok(!fresh.on, 'a state with B already on its way when we turned B off does not bring it back');
+  t2 += 5000;
+  fresh.onWatch({ type: 'watch', max: 1, refused: 'outside', note: 'x', chans: [{ id: 1, freq: 145600000, mode: 'nfm', bw: 9000, open: true }] });
+  ok(!fresh.on, 'a refusal is not an adoption');
+  ok(JSON.stringify(edgesForWidth(100, 2800, 2400)) === '[100,2500]' && JSON.stringify(edgesForWidth(-2800, -100, 2400)) === '[-2500,-100]'
+     && JSON.stringify(edgesForWidth(-5000, 5000, 6000)) === '[-3000,3000]' && JSON.stringify(edgesForWidth(100, 2800, 0)) === '[100,2800]',
+     'edgesForWidth: a sideband keeps its side, a straddling passband stays centred, no width = the defaults');
+  // The client no longer resets on a socket open (source check).
+  const ws = readFileSync(fileURLToPath(new URL('../src/services/VibeServerWsClient.ts', import.meta.url)), 'utf8');
+  const open = ws.slice(ws.indexOf('ws.onopen = () => {'), ws.indexOf('ws.onopen = () => {') + 2500);
+  ok(/this\.ab\.socketOpened\(\)/.test(open) && /this\.ab\.expireIfSilent\(\)/.test(open) && !/this\.ab\.reset\(\)|_abReset/.test(open),
+     'the client\'s onopen asks the server\'s state (socketOpened / expireIfSilent) and never resets to one VFO on its own');
+}
+
+console.log('── where the A/B switch lives, and VFO B\'s colour ──');
+{
+  const src = (f: string) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
+  const fm = src('../src/components/FreqModal.tsx'), sp = src('../src/components/StepPicker.tsx'), scr = src('../src/screens/SDRScreen.tsx');
+  ok(/case 'vfo:ab': onVfoAB\?\.\(!vfoAB\)/.test(fm) && /focused=\{tuneOn\('vfo:ab'\)\}/.test(fm) && /tuneOn\('vfo:ab'\) && \{ borderColor: focusC\.ring/.test(fm),
+     'the frequency card has the VFO A/B key, a highlight stop (pad / keyboard) on both chassis styles');
+  ok(!/onVfoAB|VFO A\/B<|abIdx/.test(sp), 'the tuning-step sheet no longer has it');
+  const fmTag = scr.slice(scr.indexOf('<FreqModal'), scr.indexOf('<FreqModal') + 6000);
+  ok(/vfoAB=\{abOn\}/.test(fmTag) && /onVfoAB=\{abOffered > 0 && !dabOn && !icom && activeDecoder !== 'scanner' \? onVfoAB : undefined\}/.test(fmTag),
+     'SDRScreen hands the toggle to the frequency card, under the same gates');
+  ok(!/id: 'step', title: 'Step rate, and VFO A\/B'/.test(scr) && /VFO A\/B/.test(scr.slice(scr.indexOf("id: 'freq'"), scr.indexOf("id: 'mode'"))),
+     'the tour says VFO A/B is on the frequency card, not under STEP');
+  ok(autoVfoBColour('#ffffff') === '#38c8ff' && autoVfoBColour('#4499ff') === '#ffb020' && autoVfoBColour('junk') === '#38c8ff',
+     'AUTO: cyan, amber against a blue VFO A — what B has always drawn in');
+  ok(vfoBNeedle('#ffffff', VFO_B_AUTO) === '#38c8ff' && vfoBNeedle('#ffffff', '#cc44ff') === '#cc44ff' && vfoBNeedle('#ffffff', 'nonsense') === '#38c8ff',
+     'VFO B\'s colour: the listener\'s swatch, AUTO otherwise (and for anything unreadable)');
+  const ms = src('../src/components/MenuSheet.tsx');
+  ok(/label="VFO B Needle Colour"/.test(ms) && /onVfoNeedleB=\{abOffered > 0 \? setVfoNeedleB : undefined\}/.test(scr)
+     && /vfoNeedle, vfoNeedleB, vfoIntensity/.test(scr),
+     'the VFO B colour row sits beside VFO A\'s, only where VFO A/B is offered, saved in the display blob');
 }
 
 console.log('── the ears ──');

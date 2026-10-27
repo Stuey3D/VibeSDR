@@ -93,7 +93,7 @@ import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
-import { VfoABCore, watchOffered, watchMaxOf, vfoB, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
+import { VfoABCore, watchOffered, watchMaxOf, vfoB, RESYNC_MS, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs } from './dialChat';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
@@ -657,6 +657,7 @@ export abstract class VibeServerWsClient {
     const a = this.aSlot;
     if (frequency) a.frequency = frequency;
     if (mode)      this._adoptMode(mode, a);   // ★ see _adoptMode
+    this._abSlotMoved();
   }
 
   /* ★★★ A MODE IS NEVER JUST A MODE — IT CARRIES ITS PASSBAND. setMode() has always mirrored
@@ -878,7 +879,11 @@ export abstract class VibeServerWsClient {
   protected get abActive(): VfoId { return this.ab.active; }
   abInfo(): VfoABInfo { return this.ab.info(); }
   private _abNotify() { this.callbacks.onWatch?.(this.ab.info()); }
-  /** The tuning menu's VFO A/B toggle (VibeServer only). False = not offered here. */
+  /** ★★ VFO A's slot moved while B is selected (the server's dial, the room's mode or passband, the lock screen): the
+   *  screen draws A — its needle AND the audio socket's tune (vfoAB.ts vfoATune) — from abInfo().other, so tell it. A
+   *  stale `other` would hand the audio socket an old A, and the next change of it would send that old A back. */
+  private _abSlotMoved() { if (this.ab.bTuned) this._abNotify(); }
+  /** The frequency card's VFO A/B toggle (VibeServer only). False = not offered here. */
   abSetOn(on: boolean): boolean {
     const wasB = this.ab.bTuned;
     const ok = this.ab.setOn(on);
@@ -899,10 +904,6 @@ export abstract class VibeServerWsClient {
   abSetStereo(on: boolean) { this.ab.setStereo(on); }
   /** ★ The output is mono (a phone speaker, a mono headset): the server then puts both VFOs in both ears. */
   abSetMonoOut(on: boolean) { this.ab.setMonoOut(on); }
-  private _abReset() {
-    if (this.ab.reset()) this.callbacks.onStatus({ ...this.status });
-    this._abNotify();
-  }
   /** ★★ The offer — from hwinfo `watch` AND from the watch state's `max` (see watchMaxOf), as the web reads both.
    *  A withdrawn offer resets to one VFO (A restored if B was tuned) and says so; a changed one redraws the toggle. */
   private _abOffer(n: number) {
@@ -1649,9 +1650,21 @@ export abstract class VibeServerWsClient {
 
     let specMsgCount = 0;
     ws.onopen = () => {
-      // ★★ V12 VFO A/B is per SESSION: a fresh socket is a fresh session, and the server has no VFO B for it.
-      if (this.ab.on) this._abReset();
       if (this.destroyed) { ws.close(); return; }
+      /* ★★★ V12 VFO A/B is per SESSION — and a fresh SOCKET is not a fresh session. This used to reset to one VFO on
+       *  every open, but the watchdogs reopen the spectrum socket under the SAME session (a rotation stalls the JS
+       *  thread long enough to trip them), the server keeps VFO B and keeps mixing it in, and the screen went back to
+       *  one VFO with two in the listener's ears (Stuart, build 498, landscape → portrait). The server's own state now
+       *  decides (vfoAB.ts PER SESSION): it beats B's state twice a second, so B either comes back on this socket or,
+       *  after RESYNC_MS of silence, the session has none and we go to one VFO. */
+      this.ab.socketOpened();
+      setTimeout(() => {
+        if (this.destroyed) return;
+        const r = this.ab.expireIfSilent();
+        if (!r.expired) return;
+        if (r.statusChanged) this.callbacks.onStatus({ ...this.status });
+        this._abNotify();
+      }, RESYNC_MS + 50);
       this.dbg('Spectrum WS open');
       this.callbacks.onConnect();
       /* ★★★ THE VIEW IS NOT RESTORED HERE ANY MORE — IT WAITS FOR THE SERVER'S FIRST `config`
@@ -3127,6 +3140,7 @@ export abstract class VibeServerWsClient {
             if (bb) this.zoom(sv, bb); else this.pan(sv);
           }
           this.callbacks.onStatus({ ...this.status });
+          this._abSlotMoved();
         }
         /* ★★★ THE ROOM'S MODE AND PASSBAND, WHETHER OR NOT THE DIAL MOVED (2026-10-17). Stuart: "on
          *  shared VFO, if a user changes the bandwidth sliders I am hearing them but they aren't
@@ -3159,7 +3173,7 @@ export abstract class VibeServerWsClient {
           aR.bandwidthHigh = pb[1];
           roomChanged = true;
         }
-        if (roomChanged) this.callbacks.onStatus({ ...this.status });
+        if (roomChanged) { this.callbacks.onStatus({ ...this.status }); this._abSlotMoved(); }
       }
       if (this.wantTune) {
         const want = this.wantTune;
