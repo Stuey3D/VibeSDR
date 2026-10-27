@@ -63,6 +63,7 @@ import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, gallery
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
+import { SqlAutoTrack } from '../../../src/utils/sqlAutoTrack';
 import { VS_SQL_OFF, vsSqlOn, vsSqlRestore } from '../../../src/services/vibeSquelch';
 
 /** The fastest an RTL-SDR can actually sustain over USB. Above this the dongle DROPS
@@ -1314,10 +1315,17 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       syncNfmVoiceRow();
       // ★ Auto squelch's reference: how far the channel stands above its empty neighbours on THIS
       //   view (squelchNeighbours.ts). Only worked out while auto is on — it is a scan of the frame.
+      // ★★ V12 VFO A/B round 3: always VFO A's channel (the A row), whichever VFO the controls tune — and B's for B's row.
       if (sqlAuto && spec) {
-        sqlNearExcess = channelExcessDb(bins, centerHz, bwHz, spec.frequency, spec.bandwidthLow, spec.bandwidthHigh);
+        const va = spec.vfoA();
+        sqlNearExcess = channelExcessDb(bins, centerHz, bwHz, va.frequency, va.bandwidthLow, va.bandwidthHigh);
         sqlNearAt = performance.now();
         sqlNearKey = sqlChannelKey();
+      }
+      if (sqlBAuto && spec?.abOn) {
+        const vb = spec.vfoB();
+        sqlBNear = { excess: channelExcessDb(bins, centerHz, bwHz, vb.frequency, vb.bandwidthLow, vb.bandwidthHigh),
+                     at: performance.now(), key: sqlBKey() };
       }
       // ★★ PAINT THE CARD'S METER ON THE FRAME, not on the card's 250 ms poll. Everything else in
       //    that poll describes something a human changes (frequency, mode, recording) and 4 Hz is
@@ -2417,14 +2425,21 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
                                : `AGC ${(hwGainNow / 10).toFixed(1)} dB${ifText()}${pkText()}`);
       setClass(chip, 'fault', adcClipPct >= 0.01);
     },
-    onSigStat: (chan, floor) => {
+    onSigStat: (chan, floor, chanB) => {
       if (!Number.isFinite(chan) || !Number.isFinite(floor)) return;
-      // ★★ V12: with VFO B selected, the meter and the squelch bar read B's own channel level (its watch state).
-      const bLvl = spec?.abOn && spec.abSel === 'B' ? spec.watchState?.chans.find((c) => c.id === 1)?.lvl : undefined;
-      srvChanDb = typeof bLvl === 'number' && bLvl > -150 ? bLvl : chan; srvFloorDb = floor; srvSigValid = true;
+      // ★★ V12 VFO A/B round 3: `chan` is ALWAYS VFO A's (the listener's own channel) and `chanB` VFO B's, the same
+      //    measurement every frame — each squelch row reads its own. The S METER follows the selected VFO (B's own
+      //    level while B is tuned; its 2 Hz watch-state figure from a server too old to send chanB).
+      srvChanADb = chan;
+      const bLvl = typeof chanB === 'number' && Number.isFinite(chanB) ? chanB
+        : spec?.abOn ? spec.watchState?.chans.find((c) => c.id === 1)?.lvl : undefined;
+      srvChanBDb = typeof bLvl === 'number' && bLvl > -150 ? bLvl : NaN;
+      srvChanDb = spec?.abOn && spec.abSel === 'B' && Number.isFinite(srvChanBDb) ? srvChanBDb : chan;
+      srvFloorDb = floor; srvSigValid = true;
       // ★ Auto squelch steers from THIS figure and nothing else, so recompute exactly when it
       //   changes — a timer would either lag it or spin between messages.
       autoSquelchTick();
+      autoSquelchTickB();
     },
     onRdsX: (x) => {
       const now = Date.now();
@@ -3341,7 +3356,7 @@ function renderFrame(frameTs: number) {
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (V12, 2026-10-26) — the extra-wide passband the server cuts and every
    *  mode's decoder reads its own dial from, drawn where it is (it need not be centred: an exact frequency typed inside
    *  the band moves the dial, the span stays on the modes). Drawn only, never sent, as the skimmer's. */
-  const bp = bandSpots && spotBandCap ? bandPassband(spotBandCap.bands, spec.frequency) : null;
+  const bp = bandSpots && spotBandCap && !abBTuned() ? bandPassband(spotBandCap.bands, spec.frequency) : null;   // ★ A's needle only
   wf.filterLow = bp ? bp[0] : skim ? -segW / 2 : spec.bandwidthLow;
   wf.filterHigh = bp ? bp[1] : skim ? segW / 2 : spec.bandwidthHigh;
   abDraw();   // ★★ V12 VFO A/B — the other needle, the labels, the brightness
@@ -4752,6 +4767,9 @@ let snrSmooth = 0;
  *  the frame-derived fallback. (This client only ever talks to a VibeServer — the multi-backend
  *  Kiwi/OpenWebRX/SpyServer world is the APP's, not this one's.) */
 let srvChanDb = -160, srvFloorDb = -120, srvSigValid = false;
+/** ★★ V12 VFO A/B round 3: VFO A's own channel level (`sig.chan`) and VFO B's (`sig.chanB`, NaN = none) — each squelch
+ *  row's figure. `srvChanDb` above is the METER's (the selected VFO's). */
+let srvChanADb = -160, srvChanBDb = NaN;
 
 /** ★★ AN ICOM'S S-METER IS THE RADIO'S OWN (`15 02` via the status line), in S-units / S9+dB. The SPEC bins are
  *  relative to the radio's REF level, not dBFS, so a meter derived from them would be a number that means
@@ -4879,6 +4897,20 @@ function updateSignal(bins: Float32Array, centerHz: number, bwHz: number) {
   // Feed the squelch control the same live scale and signal the main meter is drawing, so the ball
   // sits on exactly the level the fill is showing.
   sqlScaleMin = dbMin; sqlScaleMax = dbMax; sqlSigNorm = sigSmooth;
+  // ★★ V12 VFO A/B round 3: with two VFOs each row draws ITS OWN level (the meter is the selected VFO's) — the same
+  //    smoothing as the bar, applied to each figure. One VFO: exactly as before.
+  if (spec?.abOn && srvSigValid) {
+    const nA = Math.max(0, Math.min(1, (srvChanADb - dbMin) / (dbMax - dbMin)));
+    sqlNormA += (nA - sqlNormA) * (nA > sqlNormA ? 0.30 : 0.12);
+    sqlSigNorm = sqlNormA;
+    if (Number.isFinite(srvChanBDb)) {
+      const nB = Math.max(0, Math.min(1, (srvChanBDb - dbMin) / (dbMax - dbMin)));
+      sqlNormB += (nB - sqlNormB) * (nB > sqlNormB ? 0.30 : 0.12);
+    }
+    drawSquelchBar(srvChanADb);
+    drawSquelchBarB();
+    return;
+  }
   drawSquelchBar(sigDb);
 }
 
@@ -4889,7 +4921,8 @@ let squelchDb = VS_SQL_OFF;
  *  the spec call the client could not tell a closed gate from a muted tab. */
 function applySquelch(db: number, persist = true) {
   squelchDb = db;
-  spec?.setSquelch(db);
+  // ★★ V12 VFO A/B round 3: this bar is VFO A's — whichever VFO the controls tune (B has its own row, applySquelchB).
+  spec?.setSquelchVfo('A', db);
   if (audio) audio.squelchDb = db;
   // The plain slider used to persist under 'squelch'; the restore path still reads that key, so the
   // bar must keep writing it or a reload loses the setting AND resurrects the false muted-tab
@@ -5089,7 +5122,9 @@ let sqlNearRef = NaN;
 /** The channel we are currently judging: frequency, mode and passband. Any change makes the old
  *  baseline meaningless. */
 function sqlChannelKey(): string {
-  return spec ? `${Math.round(spec.frequency)}|${spec.mode}|${spec.bandwidthLow}|${spec.bandwidthHigh}` : '';
+  if (!spec) return '';
+  const a = spec.vfoA();   // ★★ V12 VFO A/B round 3: VFO A's channel, whichever VFO is selected (B: sqlBKey)
+  return `${Math.round(a.frequency)}|${a.mode}|${a.bandwidthLow}|${a.bandwidthHigh}`;
 }
 
 function autoSquelchTick() {
@@ -5107,7 +5142,7 @@ function autoSquelchTick() {
    *  seeded the old tracker on the signal and held the gate shut for the whole over (Stuart, 2 m,
    *  2026-09-27). Stale or from another channel = not used. */
   const nearInst = (Number.isFinite(sqlNearExcess) && sqlNearKey === key
-                    && performance.now() - sqlNearAt < 1000) ? srvChanDb - sqlNearExcess : NaN;
+                    && performance.now() - sqlNearAt < 1000) ? srvChanADb - sqlNearExcess : NaN;
   if (Number.isFinite(nearInst)) {
     sqlNearRef = Number.isFinite(sqlNearRef) ? sqlNearRef + (nearInst - sqlNearRef) * SQL_NEAR_SMOOTH : nearInst;
     // ★ SEED FROM IT, never from a channel that may be carrying the signal.
@@ -5142,9 +5177,9 @@ function autoSquelchTick() {
    *  ★ The lesson is the ordering, not the NaN: a sentinel that means "not known yet" has to be
    *    resolved before the first reader, or every reader needs to know about it. */
   const openish = (nowMs - sqlOpenAt) < SQL_AUTO_HANG_MS;
-  const a = srvChanDb < sqlFloorEwma ? SQL_AUTO_FALL : (openish ? 0 : SQL_AUTO_RISE);
-  sqlFloorEwma = Number.isFinite(sqlFloorEwma) ? sqlFloorEwma + (srvChanDb - sqlFloorEwma) * a
-                                               : srvChanDb;
+  const a = srvChanADb < sqlFloorEwma ? SQL_AUTO_FALL : (openish ? 0 : SQL_AUTO_RISE);
+  sqlFloorEwma = Number.isFinite(sqlFloorEwma) ? sqlFloorEwma + (srvChanADb - sqlFloorEwma) * a
+                                               : srvChanADb;
   /* ★★ AND IT IS A CEILING. The tracker is kept exactly as measured and tuned — the neighbours only
    *  stop it believing a level that empty channels beside it do not have. Without this, a baseline
    *  learned while a carrier was up (auto switched on mid-over, or no view to measure from yet) stays
@@ -5152,7 +5187,7 @@ function autoSquelchTick() {
   if (Number.isFinite(sqlNearRef) && sqlFloorEwma > sqlNearRef + SQL_NEAR_CEIL_DB)
     sqlFloorEwma = sqlNearRef + SQL_NEAR_CEIL_DB;
   const decide = sqlFloorEwma + sqlAutoMargin - (openish ? SQL_AUTO_HYST_DB : 0);
-  if (srvChanDb >= decide) sqlOpenAt = nowMs;
+  if (srvChanADb >= decide) sqlOpenAt = nowMs;
   const gateOpen = (nowMs - sqlOpenAt) < SQL_AUTO_HANG_MS;
   /* ★★★ WHAT THE RED LINE SHOWS IS THE SETTING, NOT WHAT IS MOMENTARILY APPLIED. During a hang the
    *  applied threshold is at the bottom of the scale (that is how the gate is held open), so drawing
@@ -5254,6 +5289,91 @@ function setupSquelchBar() {
   bar.addEventListener('pointerup', up);
   bar.addEventListener('pointercancel', up);
 }
+/* ══ ★★ V12 VFO A/B ROUND 3 — VFO B'S OWN SQUELCH ROW, AND A MUTE ON EACH ═════════════════════════════════════════════
+ *  Stuart, 2026-10-27: "the 2 VFO's can they have their own squelch and auto squelch options which show in the audio
+ *  menu when the 2nd VFO is active" — and "the ability to mute a VFO that is decoding". With VFO B on, the SQUELCH
+ *  block above is VFO A's (labelled, in A's colour) and #sqlBlockB is B's: the same live bar, ball and AUTO SQUELCH,
+ *  on B's own level (sig.chanB) and B's own threshold (a `watch` squelch). Each label line carries that VFO's MUTE.
+ *  B's auto squelch is A's algorithm run on B's figure (src/utils/sqlAutoTrack.ts); the ABOVE NOISE margin is the one
+ *  slider, shared. B off: the B row is hidden and the A block is exactly as it always was. Per session, like VFO B. */
+let sqlNormA = 0, sqlNormB = 0;
+let sqlBAuto = false;
+const sqlBTrack = new SqlAutoTrack();
+let sqlBNear: { excess: number; at: number; key: string } = { excess: NaN, at: 0, key: '' };
+function sqlBKey(): string {
+  if (!spec) return '';
+  const b = spec.vfoB();
+  return `${Math.round(b.frequency)}|${b.mode}|${b.bandwidthLow}|${b.bandwidthHigh}`;
+}
+/** VFO B's threshold, from wherever its slot is. */
+function sqlBDb(): number { return spec ? spec.sqlDbOf('B') : SQL_OFF; }
+function applySquelchB(db: number) { spec?.setSquelchVfo('B', db); }
+function autoSquelchTickB() {
+  if (!sqlBAuto || !spec?.abOn || !Number.isFinite(srvChanBDb)) return;
+  const key = sqlBKey();
+  const near = sqlBNear.key === key && performance.now() - sqlBNear.at < 1000 ? sqlBNear.excess : NaN;
+  const want = sqlBTrack.tick(srvChanBDb, key, near, sqlAutoMargin, performance.now(), sqlScaleMax);
+  if (want !== null && want !== sqlBDb()) applySquelchB(want);
+}
+function setSquelchAutoB(on: boolean) {
+  sqlBAuto = on && !!spec?.abOn;
+  if (sqlBAuto) { sqlBTrack.reset(sqlBKey()); autoSquelchTickB(); }
+  else applySquelchB(SQL_OFF);   // ★ B has no remembered manual value (per session): auto off = squelch off, as it started
+  drawSquelchBarB();
+}
+function drawSquelchBarB() {
+  const bar = document.getElementById('sqlBarB');
+  if (!bar || !spec?.abOn) return;
+  const db = sqlBDb(), on = vsSqlOn(db);
+  setClass(bar, 'on', on);
+  setStyle(document.getElementById('sqlFillB') as HTMLElement | null, 'width', `${(Math.max(0, Math.min(1, sqlNormB)) * 100).toFixed(1)}%`);
+  const n = document.getElementById('sqlNeedleB') as HTMLElement | null;
+  const span = Math.max(1, sqlScaleMax - sqlScaleMin);
+  const shown = sqlBAuto && Number.isFinite(sqlBTrack.shown) ? sqlBTrack.shown : db;
+  setStyle(n, 'left', on || sqlBAuto ? `${(Math.max(0, Math.min(1, (shown - sqlScaleMin) / span)) * 100).toFixed(1)}%` : '0%');
+  setClass(bar, 'closed', on && Number.isFinite(srvChanBDb) && srvChanBDb < db);
+  setClass(bar, 'auto', sqlBAuto);
+  setClass(document.getElementById('sqlAutoB'), 'on', sqlBAuto);
+}
+/** The two label lines (VFO A / VFO B, each in its needle colour) and their MUTE keys — on every watch change. */
+function sqlRowsPaint() {
+  const ab = !!spec?.abOn;
+  const blockB = document.getElementById('sqlBlockB');
+  if (blockB) blockB.hidden = !ab;
+  const tagA = document.getElementById('sqlVfoA'), tagB = document.getElementById('sqlVfoB');
+  if (tagA) { tagA.hidden = !ab; tagA.style.setProperty('--abcol', abColourOf('A')); }
+  if (tagB) tagB.style.setProperty('--abcol', abColourOf('B'));
+  const mA = document.getElementById('sqlMuteA') as HTMLButtonElement | null;
+  const mB = document.getElementById('sqlMuteB') as HTMLButtonElement | null;
+  if (mA) { mA.hidden = !ab; mA.classList.toggle('on', !!spec?.abMuteA); mA.textContent = spec?.abMuteA ? 'MUTED' : 'MUTE'; }
+  if (mB) { mB.classList.toggle('on', !!spec?.abMuteB); mB.textContent = spec?.abMuteB ? 'MUTED' : 'MUTE'; }
+  if (!ab && sqlBAuto) { sqlBAuto = false; sqlBTrack.reset(); }
+  drawSquelchBarB();
+}
+function setupSquelchRowB() {
+  const bar = document.getElementById('sqlBarB');
+  if (bar) {
+    const applyFromX = (clientX: number) => {
+      if (sqlBAuto) setSquelchAutoB(false);   // ★ as A's bar: a drag means "I want manual"
+      const r = bar.getBoundingClientRect();
+      const frac = (clientX - r.left) / Math.max(1, r.width);
+      if (frac < -0.04) { applySquelchB(SQL_OFF); drawSquelchBarB(); return; }
+      const f = Math.max(0, Math.min(1, frac));
+      applySquelchB(Math.round(sqlScaleMin + f * (sqlScaleMax - sqlScaleMin)));
+      drawSquelchBarB();
+    };
+    let dragging = false;
+    bar.addEventListener('pointerdown', (e) => { dragging = true; bar.setPointerCapture(e.pointerId); applyFromX(e.clientX); e.preventDefault(); });
+    bar.addEventListener('pointermove', (e) => { if (dragging) { applyFromX(e.clientX); e.preventDefault(); } });
+    const up = (e: PointerEvent) => { dragging = false; try { bar.releasePointerCapture(e.pointerId); } catch {} };
+    bar.addEventListener('pointerup', up);
+    bar.addEventListener('pointercancel', up);
+  }
+  document.getElementById('sqlAutoB')?.addEventListener('click', () => setSquelchAutoB(!sqlBAuto));
+  document.getElementById('sqlMuteA')?.addEventListener('click', () => { if (spec) spec.setAbMute('A', !spec.abMuteA); });
+  document.getElementById('sqlMuteB')?.addEventListener('click', () => { if (spec) spec.setAbMute('B', !spec.abMuteB); });
+}
+
 /** The live meter scale, updated each frame — the squelch bar drag maps pointer x through it. */
 let sqlScaleMin = -100, sqlScaleMax = -20;
 /** The last smoothed signal fraction (0..1), so the bar can colour the fill red when gated. */
@@ -10773,11 +10893,34 @@ function spotsBandRender() {
  *  anyway"). The dial sits on a whole band's worth of digital modes — nothing there is listenable. Muted on the way in,
  *  and on the way out put back as it was before Band (a listener who unmutes during Band may; it is their speaker). */
 let bandMutedFrom: boolean | null = null;
+/* ★★ V12 VFO A/B round 3 — WITH TWO VFOs, BAND MUTES VFO A, NOT THE SPEAKER (Stuart, 2026-10-27: "VFO A set to full band
+ *  digital modes on 40M whilst VFO B listens to SSB on 40"). The speaker carries B too, so muting it would silence the
+ *  VFO being listened to; A is taken out of the mix instead (the server pans B home to both ears) and put back when Band
+ *  ends. B turned on or off during Band moves the mute between the two (bandMuteFollowAB). */
+let bandMutedA = false;
+function bandMuteEnter() {
+  if (spec?.abOn) { bandMutedA = true; spec.setAbMute('A', true); return; }
+  if (audio) { bandMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
+}
+function bandMuteLeave() {
+  if (bandMutedA) { bandMutedA = false; if (spec?.abOn) spec.setAbMute('A', false); }
+  if (bandMutedFrom !== null) { setMuted(bandMutedFrom); bandMutedFrom = null; updateMediaSession(); }
+}
+function bandMuteFollowAB() {
+  if (!bandSpots || !spec) return;
+  if (spec.abOn && bandMutedFrom !== null) {
+    setMuted(bandMutedFrom); bandMutedFrom = null; updateMediaSession();
+    bandMutedA = true; spec.setAbMute('A', true);
+  } else if (!spec.abOn && bandMutedA) {
+    bandMutedA = false;
+    if (audio) { bandMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
+  }
+}
 function bandSpotsUi(on: boolean) {
   const was = bandSpots;
   bandSpots = on && !!spotBandCap;
-  if (bandSpots && !was && audio) { bandMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
-  else if (!bandSpots && was && bandMutedFrom !== null) { setMuted(bandMutedFrom); bandMutedFrom = null; updateMediaSession(); }
+  if (bandSpots && !was) bandMuteEnter();
+  else if (!bandSpots && was) bandMuteLeave();
   if (!bandSpots) { spotModeStates = []; bandSpotsPending = null; }
   renderSpotModeChips();
   spotsBandRender();
@@ -10881,6 +11024,7 @@ function bandSpotsApplyPending() {
 /** Put the dial on band `b`'s centre, in USB — a listener's own tune (a user action: the shared-dial contract holds). */
 function bandSpotsGo(b: SpotBand) {
   if (!spec) return;
+  abDecodeOnA();   // ★★ V12 VFO A/B round 3: Band is VFO A's dial
   savePref('spotBand', b.id);
   // ★ Out of DAB / ADS-B / ISM / AIS / NDB first — see bandSpotsPending. (Asked-before-tuning: tune() below asks.)
   if (!spec.isTuneLocked() && bandSpotsLeaveHeld()) { bandSpotsPending = b; renderFreq(); return; }
@@ -11185,6 +11329,7 @@ function jttyPinWatch(body: HTMLElement | null) {
 /** ★ Tap a row or a spot: USB, the dial 1500 Hz below the station's tone 0 (its tones then sit mid-passband). */
 function jttyTune(rfHz: number) {
   if (!spec || !(rfHz > 0)) return;
+  abDecodeOnA();
   spec.tune(clampTune(jttyTuneFor(rfHz)), 'usb' as SDRMode, { recenter: true, retarget: true });
   renderFreq();
 }
@@ -11198,7 +11343,7 @@ function initJttyDials() {
     const b = document.createElement('button');
     b.className = 'btn'; b.textContent = d.label;
     b.title = `${(d.hz / 1e6).toFixed(3)} MHz USB — announced for JTTY in the WSJT-X 3.2 release candidates (preliminary)`;
-    b.onclick = () => { if (!spec) return; spec.tune(d.hz, 'usb' as SDRMode, { recenter: true, retarget: true }); renderFreq(); };
+    b.onclick = () => { if (!spec) return; abDecodeOnA(); spec.tune(d.hz, 'usb' as SDRMode, { recenter: true, retarget: true }); renderFreq(); };
     host.appendChild(b);
   }
 }
@@ -11215,6 +11360,7 @@ function renderDsc() {
 /** ★ A channel key: tune it as a DSC receiver does, and re-attach so the decoder's tones follow. */
 function dscTune(ch: { hz: number; vhf: boolean }) {
   if (!spec) return;
+  abDecodeOnA();
   const t = dscTuneFor(ch);
   spec.tune(clampTune(t.hz), t.mode as SDRMode, { recenter: true, retarget: true });
   renderFreq();
@@ -11299,6 +11445,7 @@ function cwFreq(sg: { hz: number; audio: number }): string {
  *  signal in the middle of the passband (LSB if the listener is in LSB), so it is the one ONE SIGNAL decodes. */
 function cwTune(hz: number) {
   if (!spec || !(hz > 0)) return;
+  abDecodeOnA();
   if (activeDec === 'psk') {
     const lsb = spec.mode === 'lsb', c = lsb || spec.mode === 'usb' ? passbandCentreHz() : 1500;
     spec.tune(clampTune(Math.round(lsb ? hz + c : hz - c)), lsb ? 'lsb' : 'usb', { recenter: true, retarget: true });
@@ -11820,6 +11967,7 @@ function initDecoders(host: string, auth: AuthState) {
     b.onclick = () => {
       const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
+      abDecodeOnA();   // ★★ V12 VFO A/B round 3: the decoders are VFO A's
       activeDec = mode;
       decTuneHint = '';   // ★ a fresh attach starts with no tuning guide
       decoders!.attach(decExt(mode), decParams(mode));
@@ -11909,6 +12057,7 @@ function initDecoders(host: string, auth: AuthState) {
   spotsBtn.onclick = () => {
     // ★ SINGLE MODE: the button there always was. From Band it switches (one subscribe; the server keeps the slot).
     const on = decoders!.spotsScope !== 'single';
+    if (on) abDecodeOnA();   // ★★ V12 VFO A/B round 3: the spots are VFO A's
     decoders!.setSpots(on, 'single');
     bandSpotsUi(false);
     spotsBtn.classList.toggle('on', on);
@@ -11961,6 +12110,7 @@ function initDecoders(host: string, auth: AuthState) {
   $('aprsMapBtn').onclick = () => aprsMapOpen();
   segButtons('aprsBaud', 'aprsbaud', (v) => { aprsBaud = Number(v) === 300 ? 300 : 1200; aprsHintSync(); if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; renderAprs(); reattachIf('aprs'); } });
   $('aprsTune').onclick = () => {
+    abDecodeOnA();
     if (!spec) return;
     if (aprsBaud === 300) spec.tune(clampTune(10147600), 'usb', { recenter: true, retarget: true });
     else spec.tune(clampTune(Math.round(aprsHz)), 'nfm', { recenter: true, retarget: true });
@@ -15756,6 +15906,7 @@ function buildMenu() {
 
   // ── Audio (server-side DSP in the shim) ──────────────────────────────────
   setupSquelchBar();
+  setupSquelchRowB();   // ★★ V12 VFO A/B round 3
   setupSquelchAuto();
   setupSquelchAutoMargin();
 
@@ -16816,7 +16967,9 @@ function hardwareCanReach(hz: number): boolean {
 function clampTune(hz: number): number {
   const want = Math.round(hz);
   // ★★ V12 VFO B lives INSIDE the radio's window and never moves the radio — the edge is a wall, and it says so.
-  if (spec?.abOn && spec.abSel === 'B' && spec.watchState && spec.watchState.hi > spec.watchState.lo) {
+  // ★★ Round 3: except on a radio that is this listener's alone (`follow`), where the server moves the radio to hold both
+  //    VFOs — no wall here; the server refuses only VFOs further apart than one window holds ("apart"), and says so.
+  if (spec?.abOn && spec.abSel === 'B' && spec.watchState && !spec.watchState.follow && spec.watchState.hi > spec.watchState.lo) {
     const { lo, hi } = spec.watchState;
     if (want < lo || want > hi) {
       if (Date.now() - abNoteAt > 3000) { abNoteAt = Date.now(); showPill(`VFO B must stay inside the radio's window, ${(lo / 1e6).toFixed(3)} to ${(hi / 1e6).toFixed(3)} MHz`, 5000); }
@@ -16996,7 +17149,8 @@ function nudge(hz: number) {
   if (ismOn) { ismStep(hz < 0 ? -1 : 1); return; }
   /* ★★★ IN BAND SPOTS THE ARROWS STEP BANDS (V12, 2026-10-26) — every arrow, key, wheel, knob, pad and game-controller
    *  press ends here, as DAB's blocks and ISM's bands do. A typed or long-pressed frequency is still exact. */
-  if (bandSpots) { bandSpotsStep(hz < 0 ? -1 : 1); return; }
+  // ★★ V12 VFO A/B round 3: only while the controls tune VFO A — with B selected the arrows tune B, as ever.
+  if (bandSpots && !abBTuned()) { bandSpotsStep(hz < 0 ? -1 : 1); return; }
   if (adsbOn || aisOn) return;   // ★ held on 1090 MHz (ADS-B) or AIS's two fixed channels — the arrows are greyed (wholeRadioLock); keys and the wheel end here
   // Snap to the step grid so repeated nudges stay on round frequencies.
   // ★★ Through airbandStepFrom: the 8.33 kHz step is 25000/3 exactly (no drift), and in the airband
@@ -17072,8 +17226,9 @@ function cardFreqText(): { main: string; fine: string; unit: string; chan?: stri
     const hz = ismReport.centre || spec.frequency;
     return { main: (hz / 1e6).toFixed(3), fine: '', unit: 'MHz', chan: ismReport.custom ? 'ISM' : `ISM ${ismReport.band ?? ''}`.trim() };
   }
-  /* ★★ IN BAND SPOTS THE READOUT NAMES THE BAND ("20 m BAND") beside the dial — what the arrows now step. */
-  if (bandSpots && spotBandCap) {
+  /* ★★ IN BAND SPOTS THE READOUT NAMES THE BAND ("20 m BAND") beside the dial — what the arrows now step. (VFO A's
+   *  readout only — with VFO B tuned the readout is B's frequency.) */
+  if (bandSpots && spotBandCap && !abBTuned()) {
     const b = spotBandAt(spotBandCap.bands, spec.frequency);
     const r = cardFreqPlain(Math.round(spec.frequency));
     return r && { ...r, chan: b ? `${b.name} BAND` : 'NO DIGITAL BAND' };
@@ -18630,6 +18785,15 @@ function abBColour(): string {
   return mx - mn > 0.2 && h > 150 && h < 230 ? '#ffb020' : AB_B_COLOUR;
 }
 function abColourOf(v: 'A' | 'B'): string { return v === 'A' ? (wf?.vfoColor || '#ff2020') : abBColour(); }
+/** The controls are tuning VFO B right now. */
+function abBTuned(): boolean { return !!spec?.abOn && spec.abSel === 'B'; }
+/** ★★★ ROUND 3 — THE DECODERS ARE VFO A'S (Stuart, 2026-10-27: "run a decoder on VFO A whilst VFO B can listen to the
+ *  audio. For example VFO A set to full band digital modes on 40M whilst VFO B listens to SSB on 40"). The server feeds
+ *  a listener's decoder from their OWN channel — VFO A — before the mix (decoders_.feedSession / feedShared), so nothing
+ *  B does reaches it and a muted A still decodes. What the decoder box TUNES must therefore be A too: starting a decoder
+ *  or spots, a band, a station or a spot tapped in the box switches the controls to VFO A first — otherwise it would
+ *  retune B (the selected VFO) while the decoder went on reading A. Then the A/B key goes back to B to listen. */
+function abDecodeOnA() { if (abBTuned()) spec!.selectVfo('A'); }
 
 /** Every frame: the second needle, the labels, the brightness cross-fade. */
 function abDraw() {
@@ -18694,17 +18858,17 @@ function abOnWatch(note?: string) {
   if (spec.abSel !== abLastSel) {
     abLastSel = spec.abSel;
     abSwitchAt = performance.now();
-    // ★ Everything the controls show follows the selected VFO: the readout, the mode, the passband, the squelch.
+    // ★ Everything the controls show follows the selected VFO: the readout, the mode, the passband.
+    // ★★ Round 3: NOT the squelch any more — the Audio menu has a row for each VFO (sqlRowsPaint), so the A bar stays A's.
     setMode(spec.mode, false, true);
     syncBw();
-    applySquelchUi(spec.sqlDb);
   }
   renderFreq();
   abPaint();
+  sqlRowsPaint();
+  bandMuteFollowAB();
   if (note && Date.now() - abNoteAt > 1500) { abNoteAt = Date.now(); showPill(note, 6000); }
 }
-/** The squelch bar shows the SELECTED VFO's threshold — drawn, and sent once for that VFO (harmless if unchanged). */
-function applySquelchUi(db: number) { applySquelch(db, false); }
 
 /** The step menu's VFO A/B row (the web's tuning menu). Only where the server offers it — no dead control. */
 function abMenuRow(close: () => void): HTMLElement | null {
@@ -18719,7 +18883,7 @@ function abMenuRow(close: () => void): HTMLElement | null {
   b.textContent = spec.abOn ? 'ON' : 'OFF';
   b.style.cssText = 'background:none;border:1px solid ' + (spec.abOn ? '#ffe566' : '#666') + ';color:'
     + (spec.abOn ? '#ffe566' : '#ddd') + ';padding:5px 12px;border-radius:5px;cursor:pointer;font:inherit';
-  b.title = 'VFO A/B: a second VFO inside the radio\'s window, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune.';
+  b.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and the decoders run on VFO A. Not on FM broadcast.';
   b.onclick = () => { spec?.setAB(!spec.abOn); close(); };
   row.append(lbl, b);
   return row;

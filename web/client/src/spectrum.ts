@@ -568,7 +568,7 @@ export interface SpectrumCallbacks {
   /** Channel power and noise floor in the engine's dBFS, measured on the FULL-RATE FFT and so
    *  independent of zoom, view and bin width. The meter must prefer these over anything it
    *  derives from a spectrum frame — a frame's resolution is whatever the user zoomed to. */
-  onSigStat?: (chanDb: number, floorDb: number) => void;
+  onSigStat?: (chanDb: number, floorDb: number, chanBDb?: number) => void;
   /** ★ The CONVERTER, once a second — see the 'adc' message. `clip` is the percentage of samples
    *  ON THE RAIL, which is the figure that decides harm; the peak can read a comfortable -1 dBFS
    *  a moment before the front end is 7% railed. */
@@ -764,6 +764,9 @@ export class SpectrumClient {
   abStereo = true;
   /** The output is mono (main.ts decides — a mono stream asked for, or a mono device). */
   abMonoOut = false;
+  /** ★★ Round 3: each VFO muted in this listener's mix (the server's word, from its watch state). Per session. */
+  abMuteA = false;
+  abMuteB = false;
   private lastLocalWatchAt = -Infinity;
   private watchTimer: number | null = null;
   private swapLive() {
@@ -795,9 +798,29 @@ export class SpectrumClient {
     } else {
       if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; }
       this.abOn = false;
+      this.abMuteA = this.abMuteB = false;
       this._send({ type: 'watch', id: 1, off: true });
     }
     this.cb.onWatch?.();
+  }
+  /** ★★ Round 3 — MUTE A VFO (Stuart, 2026-10-27: "mute a VFO that is decoding so for WEFAX no need to hear the WEFAX
+   *  noises whilst listening to SSB"). The server takes it out of the mix and pans the other home to both ears; the
+   *  muted VFO keeps decoding and metering. Only while VFO B exists. */
+  setAbMute(v: 'A' | 'B', on: boolean) {
+    if (!this.abOn) return;
+    this.lastLocalWatchAt = performance.now();
+    if (v === 'A') { this.abMuteA = on; this._send({ type: 'watch', muteA: on }); }
+    else { this.abMuteB = on; this._send({ type: 'watch', id: 1, mute: on }); }
+    this.cb.onWatch?.();
+  }
+  /** ★★ Round 3 — each VFO's squelch row: VFO `v`'s threshold, wherever its slot is right now. */
+  sqlDbOf(v: 'A' | 'B'): number { return !this.abOn || v === this.abSel ? this.sqlDb : this.abOther.sqlDb; }
+  /** ★★ Round 3 — set VFO `v`'s squelch whichever VFO the controls tune (the Audio menu has a row for each). */
+  setSquelchVfo(v: 'A' | 'B', db: number) {
+    if (!this.abOn || v === this.abSel) { this.setSquelch(db); return; }
+    this.abOther.sqlDb = db;
+    if (v === 'B') { this.lastLocalWatchAt = performance.now(); this._send({ type: 'watch', id: 1, sql: db, sqlOn: vsSqlOn(db) }); }
+    else this._send(vsSquelchMsg(db));
   }
   /** Which VFO the controls tune — the A/B key, a needle tap, the pad's swap key. */
   selectVfo(v: 'A' | 'B') {
@@ -831,6 +854,9 @@ export class SpectrumClient {
     if (w.max >= 0) this.watchMax = w.max;
     if (typeof msg.stereo === 'boolean') this.abStereo = msg.stereo;
     const ch = w.chans.find((c) => c.id === 1);
+    // ★ Round 3: the mutes are the server's (it unmutes A itself when B goes)
+    this.abMuteA = !!ch && w.muteA;
+    this.abMuteB = !!ch && ch.mute;
     const recent = performance.now() - this.lastLocalWatchAt < 900;
     if (ch && !this.abOn && !recent) {
       // ★ The server still has VFO B for this session (the socket reconnected) — adopt it rather than orphan it.
@@ -1783,7 +1809,8 @@ export class SpectrumClient {
       case 'sig':
         // Channel power and noise floor, both measured server-side on the full-rate FFT so
         // they do NOT move with the view. See onSpectrum's signal-meter note.
-        this.cb.onSigStat?.(Number(msg.chan), Number(msg.floor));
+        // ★★ V12 VFO A/B round 3: `chanB` = VFO B's own level, the same measurement (absent = no VFO B / older server).
+        this.cb.onSigStat?.(Number(msg.chan), Number(msg.floor), typeof msg.chanB === 'number' ? msg.chanB : undefined);
         break;
       case 'adc':
         this.cb.onAdcStat?.(Number(msg.peak), Number(msg.clip));

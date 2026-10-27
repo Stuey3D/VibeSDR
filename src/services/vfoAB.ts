@@ -44,6 +44,8 @@ export interface WatchChan {
   lvl: number;
   /** Outside the radio's capture window — kept, but silent until it is back inside. */
   parked: boolean;
+  /** ★ Round 3: muted in this listener's mix (absent from an older server = false). */
+  mute: boolean;
 }
 
 export interface WatchState {
@@ -54,8 +56,10 @@ export interface WatchState {
   hi: number;
   stereo: boolean;
   monoOut: boolean;
+  /** ★ Round 3: VFO A muted in this listener's mix. */
+  muteA: boolean;
   chans: WatchChan[];
-  /** Set when the server refused the last request — outside | full | off | mode | id | session. */
+  /** Set when the server refused the last request — outside | full | off | mode | band | apart | id | session. */
   refused?: string;
   /** The server's sentence, shown as it is. */
   note?: string;
@@ -85,13 +89,13 @@ export function parseWatch(msg: Record<string, unknown> | null | undefined): Wat
       chans.push({
         id, freq, mode: text(o.mode, 12) || 'am', bw: Math.max(0, num(o.bw)),
         sqlOn: o.sqlOn === true, sql: num(o.sql, -100), open: o.open !== false, since: num(o.since),
-        lvl: num(o.lvl, -200), parked: o.parked === true,
+        lvl: num(o.lvl, -200), parked: o.parked === true, mute: o.mute === true,
       });
     }
   }
   const st: WatchState = {
     max: Math.max(0, Math.floor(num(msg.max))), lo: num(msg.lo), hi: num(msg.hi),
-    stereo: msg.stereo !== false, monoOut: msg.monoOut === true, chans,
+    stereo: msg.stereo !== false, monoOut: msg.monoOut === true, muteA: msg.muteA === true, chans,
   };
   const r = text(msg.refused, 16); if (r) st.refused = r;
   const n = text(msg.note, 200); if (n) st.note = n;
@@ -143,6 +147,12 @@ export function msgSquelch(db: number): Record<string, unknown> {
   return { type: 'watch', id: VFO_B_ID, sql: on ? Math.round(db * 10) / 10 : -100, sqlOn: on };
 }
 export function msgStereo(on: boolean): Record<string, unknown> { return { type: 'watch', stereo: on }; }
+/** ★★ Round 3 — MUTE A VFO in this listener's mix (Stuart, 2026-10-27: "the ability to mute a VFO that is decoding …
+ *  when the 2nd VFO is muted the audio from the first one pans back to mono so both ears are in play"). The server
+ *  fades it out and pans the other to the middle; the muted VFO keeps decoding and metering. */
+export function msgMute(v: VfoId, on: boolean): Record<string, unknown> {
+  return v === 'A' ? { type: 'watch', muteA: on } : { type: 'watch', id: VFO_B_ID, mute: on };
+}
 export function msgMonoOut(on: boolean): Record<string, unknown> { return { type: 'watch', monoOut: on }; }
 
 // ── The ears ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -202,6 +212,12 @@ export interface VfoABInfo {
   activeSquelchDb: number;
   /** The server's last state (null before the first). */
   state: WatchState | null;
+  /** ★★ Round 3: each VFO's own squelch (the Audio menu draws a row for each while B is on), VS_SQL_OFF = off. */
+  squelchA: number;
+  squelchB: number;
+  /** ★★ Round 3: each VFO muted in the mix — the server's word. */
+  muteA: boolean;
+  muteB: boolean;
 }
 
 /** The four fields of the client's status that ARE a VFO's tuning. */
@@ -325,9 +341,12 @@ export class VfoABCore {
              bandwidthHigh: Number(s.bandwidthHigh), squelchDb: sql };
   }
   info(): VfoABInfo {
+    const b = this.on ? vfoB(this.state) : undefined;
     return { offered: this.offered, on: this.on, active: this.active,
              other: this.on && this.stash ? { ...this.stash, squelchDb: this.active === 'A' ? this.sqlB : this.sqlA } : null,
-             activeSquelchDb: this.active === 'A' ? this.sqlA : this.sqlB, state: this.state };
+             activeSquelchDb: this.active === 'A' ? this.sqlA : this.sqlB, state: this.state,
+             squelchA: this.sqlA, squelchB: this.sqlB,
+             muteA: !!b && this.state?.muteA === true, muteB: !!b && b.mute };
   }
   /** hwinfo's `watch`. Returns true when the offer CHANGED. A withdrawn offer resets (no dead VFO B). */
   setOffered(n: number): boolean {
@@ -406,11 +425,19 @@ export class VfoABCore {
     this.send(msgAim({ low, high }));
   }
   /** A squelch change, on whichever VFO is tuned. Returns true when it was B's (sent as `watch`). */
-  squelch(db: number): boolean {
-    if (this.active === 'B') { this.sqlB = db; this.send(msgSquelch(db)); return true; }
+  squelch(db: number): boolean { return this.squelchFor(this.active, db); }
+  /** ★★ Round 3 — a squelch change on a NAMED VFO (the Audio menu has a row for each). Returns true when it was B's
+   *  (sent here as `watch`); A's goes out as the ordinary squelch by the client. */
+  squelchFor(v: VfoId, db: number): boolean {
+    if (v === 'B') {
+      if (!this.on) return true;   // ★ no VFO B: nothing to set, and never A's squelch by mistake
+      this.sqlB = db; this.localAt = this.now(); this.send(msgSquelch(db)); return true;
+    }
     this.sqlA = db;
     return false;
   }
+  /** ★★ Round 3 — mute VFO `v` in the mix. Only while B is on (the server ignores it otherwise). */
+  setMute(v: VfoId, on: boolean) { if (this.on) this.send(msgMute(v, on)); }
   setStereo(on: boolean) { this.stereo = on; if (this.on) this.send(msgStereo(on)); }
   setMonoOut(on: boolean) { if (on === this.monoOut) return; this.monoOut = on; if (this.on) this.send(msgMonoOut(on)); }
 

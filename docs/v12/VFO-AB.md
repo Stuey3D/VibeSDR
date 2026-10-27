@@ -9,24 +9,53 @@ frequencies per radio, like VFO A/B on a rig. Two dongles at once is a later ste
 - **Frequency card (tap the readout) → VFO A/B** (on/off; in the tuning-step sheet until V12 build 498). On creates VFO B at VFO A's frequency, mode and width; off removes it. Per
   session: a reconnect starts with one VFO.
 - **Switching which VFO the controls tune**: the A/B key between the tune buttons (buttons mode); press-and-hold the
-  radio trapezoid on the drum (drum mode); a pad/keyboard shortcut. Everything — frequency, mode, passband, squelch,
-  the readout — follows the selected VFO. The other is drawn as a second needle and passband, slightly dimmer.
+  radio trapezoid on the drum (drum mode); a pad/keyboard shortcut. Everything — frequency, mode, passband, the
+  readout, the S meter — follows the selected VFO. The other is drawn as a second needle and passband, slightly dimmer.
+- **Each VFO's own squelch row (round 3).** While B is on, the Audio menu (the speaker button; the web's AUDIO panel)
+  has a SQUELCH row for each VFO, labelled with its letter in its needle colour: its own live bar (A's from `sig.chan`,
+  B's from `sig.chanB`), its own threshold and its own AUTO SQUELCH, whichever VFO the controls are tuning. B's auto
+  squelch is A's algorithm run on B's level (`src/utils/sqlAutoTrack.ts`, shared by the app and the web); the ABOVE
+  NOISE margin is one slider for both. With B off the Audio menu is exactly as before.
+- **Mute a VFO (round 3).** Each row has a MUTE. A muted VFO fades out over the same 400 ms ramp and the other glides to
+  the middle — both ears; unmuting reverses it. A muted VFO keeps decoding and its meter keeps moving. Per session.
+- **Decode on A, listen on B (round 3).** A listener's decoders and digital spots (Single and Band) are fed VFO A's own
+  audio or IQ, before the mix — so VFO B, or muting A, never reaches them. Anything the decoder box tunes (starting a
+  decoder or spots, a band, a station or spot tapped in the box) switches the controls to VFO A first; the A/B key then
+  goes back to B to listen. In Band the arrows step bands only while A is tuned. With B on, Band mutes VFO A in the mix
+  rather than the speaker (which carries B).
 - **Both are heard at once, each with its own squelch.** With **Stereo** on (the default, in the Audio menu beside
   Binaural) the **lower** frequency is in the **left** ear and the **higher** in the right — whichever is A or B, so the
   waterfall and the ears always agree. Stereo off, or a mono output: both VFOs in both ears.
 - Every move is smooth: adding B pans A from the middle to its ear while B fades in; removing B fades it out and pans
   A home; tuning one across the other swaps the ears. 400 ms, raised-cosine, equal-power (no loudness dip, no click),
   100 Hz of hysteresis so a needle wobbling over the other does not flutter, within 5 Hz = both in both ears.
-- Both VFOs must lie **inside the radio's current window**. A frequency outside it is refused with the window in the
-  note — never honoured by moving the radio. If the radio moves (VFO A's own tune on a personal receiver, the shared
-  dial, the owner) and leaves B outside, B is parked silent with a note until it is back inside.
+- **Where B may go (round 3).** On a radio that is the listener's alone — a personal receiver: one listener, no
+  owner-locked centre — **the RF centre follows both VFOs** (Stuart: "in Dual VFO mode the RF centre should move
+  accordingly so that both VFO's can be tuned as if they have the full 2.4MSPS window"). A B that no longer fits beside
+  A, or an A tuned past the window, moves the radio to where both are inside (`vibewatch::fitCentre`: each VFO allows
+  the centre within the usable half-span less the edge margin less half its passband — dongleForView's own figure — and
+  the centre goes to the middle of the room both allow, never with the DC spike inside either passband); a pan cannot
+  slide B out again (dongleForView keeps B as a second limit). Only VFOs further apart than one window holds — about
+  1.91 MHz at 2.4 MS/s — are refused (`apart`), nothing moved. The state carries `"follow":true` there, so the web
+  page drops its own wall for B. **Everywhere else** (a shared dial, a range-locked radio, an owner's locked centre)
+  both VFOs must lie inside the radio's current window: a frequency outside it is refused with the window in the note
+  — never honoured by moving the radio (B never moves a shared dial). If the radio moves and leaves B outside (the
+  shared dial, the owner, or on a personal receiver an A tuned further from B than one window holds), B is parked
+  silent with a note until it is back inside.
+- **No dual VFO on FM broadcast (round 3).** VFO A on WFM (anywhere), or VFO A's dial inside 87.5–108 MHz in any mode,
+  takes VFO B away — closed with the reason, and the toggle vanishes (`max` 0) until A leaves the band; VFO B may
+  neither pick WFM nor be tuned into 87.5–108 MHz (refused `mode` / `band`). Japan's 76–95 MHz is covered by the WFM
+  rule rather than a second band table.
 
 ## Owner
 
 - **Setup page → "Let listeners use VFO A/B"** (config `vfoB`, per radio: 1 default, 0 off). Android: the same key in
   the server config (VibeServerBoot → `VibeLocalSDR.setVfoB`). Live: `{"type":"vfoB","on":0|1}` (admin).
-- Off, or a radio/mode where it cannot run (an Icom — one physical receiver; a SpyServer source; DAB, ADS-B, ISM, AIS),
-  hwinfo says `"watch":0` and no client offers the toggle. Older servers do not send `watch` at all: same thing.
+- Off, or a radio/mode where it cannot run (an Icom — one physical receiver; a SpyServer source; DAB, ADS-B, ISM, AIS,
+  NDB; a listener in DRM, on WFM or on the FM broadcast band), hwinfo says `"watch":0` and no client offers the toggle.
+  A change of that while connected (a tune onto the FM band, a whole-radio mode) is re-told in the watch state's `max`
+  within a second (`watchRecheckMax`), so the toggle vanishes and comes back without a reconnect. Older servers do not
+  send `watch` at all: same thing.
 - **Slots**: on a radio with a listener limit a VFO B takes a listener's place (it costs about one listener). A VFO B
   asked for on a full radio is refused; a *listener* arriving at a full radio closes the newest VFO B, with a note — a
   person always beats a second channel.
@@ -43,6 +72,10 @@ frequencies per radio, like VFO A/B on a rig. Two dongles at once is a later ste
 | mix into the listener's own stream (no second socket, no second Opus stream to decode) | shim `watchMix`; `onClientAudio` (range-locked); `watchDivertShared` → `watchSendPrivate` (one pipeline: the session leaves the shared encode while mixing and gets its own) |
 | levels, squelch, window — off the same averaged wide row as the listener's own squelch and S meter | shim `watchOnFrame` (from `onSpectrum`) |
 | control, refusal, slot accounting, housekeeping | shim `handleWatch`, `watchHousekeep` |
+| who may have a VFO B (mode, DRM, WFM / FM band), the toggle re-told on a change | shim `watchWhyNotFor`, `watchMaxFor`, `watchRecheckMax` |
+| mute (a source out of the mix, the other home to both ears) | `vibe_watch.h` `PanMixer::Src::muted`; shim `WatchSet::muteA`, `WatchChannel::setMuted` |
+| the RF centre for two VFOs on a personal receiver | `vibe_watch.h` `fitCentre`; shim `watchCentreFollows`, `watchMoveCentre`, `retune` (A's recentre), `dongleForView` (B as a limit) |
+| B's level for its squelch row | shim `sig` → `chanB` |
 
 **Hand-back with no step.** The mixer's equal-power law is normalised so the centre is 1.0 in each ear — exactly what a
 listener with one VFO hears today — and a hard-panned source is √2 (+3 dB) in one ear (the AGC's 0.25 setpoint leaves
@@ -59,12 +92,16 @@ Client → server (spectrum socket):
 {"type":"watch","id":1,"sql":-80,"sqlOn":true}            B's own squelch
 {"type":"watch","stereo":false}                           the Stereo switch (any time, ramps)
 {"type":"watch","monoOut":true}                           the client's output is mono
-{"type":"watch","id":1,"off":true}                        remove (fades)
+{"type":"watch","muteA":true}                             mute VFO A in the mix (round 3; only while B exists)
+{"type":"watch","id":1,"mute":true}                       mute VFO B in the mix (round 3)
+{"type":"watch","id":1,"off":true}                        remove (fades; A is unmuted as B goes)
 ```
 
-Server → client: `{"type":"watch","max":1,"lo":Hz,"hi":Hz,"stereo":true,"monoOut":false,"chans":[{"id":1,"freq":..,
-"mode":"am","bw":..,"sqlOn":..,"sql":..,"open":true,"since":<wall ms>,"lvl":dB,"parked":false}]}` on every change and
-twice a second; plus `"refused":"outside|full|off|mode|id|session","note":"…"` when it says no. hwinfo: `"watch":N`.
+Server → client: `{"type":"watch","max":1,"lo":Hz,"hi":Hz,"follow":bool,"stereo":true,"monoOut":false,"muteA":false,
+"chans":[{"id":1,"freq":..,"mode":"am","bw":..,"sqlOn":..,"sql":..,"open":true,"since":<wall ms>,"lvl":dB,"parked":false,
+"mute":false}]}` on every change and twice a second; plus `"refused":"outside|apart|band|full|off|mode|id|session",
+"note":"…"` when it says no. hwinfo: `"watch":N`. `sig` gains `"chanB":dB` (VFO B's level, every frame) for a listener
+with a VFO B.
 
 Old clients never send `watch` and are untouched; a new client on an old server sees no `watch` in hwinfo and offers
 nothing.
@@ -102,6 +139,17 @@ so a VFO B on AM/SSB/NFM costs about 5–8 % of one Pi 2 core on a personal rece
 on WFM about 25–33 %. On the Pi 2 a WFM VFO B on top of WFM VFO A is the case to avoid; the narrow modes (the calling-
 channel use Gesiima describes) are cheap. Nothing at all runs for a listener with VFO B off — the per-block gate is one
 relaxed atomic read.
+
+## Decode on B — not built (round 3)
+
+Decoders run on VFO A only. Decoding on B would mean: a per-session "decoder VFO" choice; B's demodulated audio teed
+from its `WatchChannel` (its audio callback, before the FIFO) into the session's `DecoderHost` instead of A's
+(`onClientAudio`'s `feedSession` on a range-locked radio; on a one-pipeline radio the host is the radio's shared one,
+fed from the shared pipeline, so B there would need a per-session host of its own); the host's `dialHz` / `rfOfAudio`
+reading B's frequency and mode so spots are filed on B's RF; and Band / the skimmers cut their IQ slices around B's
+dial rather than A's (`feedOneClient`). About a day's work and one more decoder slot's worth of CPU per listener who
+used it — no new DSP. "Decode on A, listen on B" covers both of Stuart's examples (Band digital modes on A with SSB on
+B; WEFAX on A, muted, with SSB on B).
 
 ## Known limits
 

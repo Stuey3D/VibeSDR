@@ -6,7 +6,11 @@
 //   • with B selected the tune buttons move B (watch messages) and not A; B is drawn as a second needle, the active one
 //     full brightness and the other at 75 % after a ~200 ms cross-fade; the needle labels carry L / R by frequency;
 //   • the AUDIO panel's STEREO switch sends stereo:false and the L/R tags go;
-//   • no toggle and no stereo row on a server whose owner switched VFO A/B off (hwinfo watch:0).
+//   • no toggle and no stereo row on a server whose owner switched VFO A/B off (hwinfo watch:0);
+//   • ROUND 3: with B on the AUDIO panel has a squelch row for EACH VFO (labelled, coloured) — B's row hidden with B off;
+//     each row's MUTE sends its own watch message and the server says so; B's bar sets B's squelch (a watch sql) and
+//     never A's; B's AUTO SQUELCH sends B's threshold; the A row's bar stays A's whichever VFO is selected; starting a
+//     decoder with B selected switches the controls to A (the decoders are VFO A's).
 // Screenshots to $VFOAB_SHOTS (default $TMPDIR) as web-*.png.
 //   VIBESERVER_BIN=…/vibeserver node scripts/test-web-vfo-ab.mjs
 import net from 'node:net';
@@ -98,6 +102,7 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   await click('#abToggle');
   ok(await until(`${sentWatch}.some(m => m.on === true && m.id === 1)`, 3000), `ON sends {watch, id:1, on:true} (${JSON.stringify(await ev(`${sentWatch}[0]`))})`);
   ok(await until(`${AB}.state && ${AB}.state.chans.length === 1`, 4000), 'the server reports VFO B');
+  ok((await ev(`${AB}.state.follow`)) === true, 'a personal receiver: the state says the radio follows both VFOs (no client-side wall for B)');
   ok(await ev(`!document.getElementById('mAbKey').hidden && document.getElementById('mAbKey').textContent === 'A' && document.getElementById('mTuneGlyph').hidden`),
      'the A/B key appears between the tune buttons, labelled A; the glyph steps aside');
   const aHz = await ev(`${AB}.a.frequency`);
@@ -144,7 +149,45 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   ok(await ev(`(() => { try { return JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k => /pref/i.test(k)) || '{}').abStereo === false; } catch { return 'n/a'; } })()`) !== false,
      'remembered on this device');
   await click('#abStereoBtn');
+  // ── ★★ ROUND 3: a squelch row for each VFO, each with its MUTE (B is selected here)
+  ok(await ev(`!document.getElementById('sqlBlockB').hidden && !document.getElementById('sqlVfoA').hidden && !document.getElementById('sqlMuteA').hidden`),
+     'with B on, the AUDIO panel has VFO A\'s squelch row AND VFO B\'s, each with a MUTE');
+  ok(await ev(`getComputedStyle(document.getElementById('sqlVfoB')).getPropertyValue('--abcol').trim() === ${AB}.liveColor`), 'B\'s row is labelled in B\'s colour');
+  await shot('audio-two-squelch');
+  await click('#sqlMuteB');
+  ok(await until(`${sentWatch}.some(m => m.id === 1 && m.mute === true)`, 2000), 'B\'s MUTE sends {watch, id:1, mute:true}');
+  ok(await until(`${AB}.state.chans[0].mute === true && document.getElementById('sqlMuteB').textContent === 'MUTED'`, 3000), 'the server mutes B, and the key says MUTED');
+  await click('#sqlMuteB');
+  ok(await until(`${AB}.state.chans[0].mute === false`, 3000), 'pressed again: B unmuted');
+  await click('#sqlMuteA');
+  ok(await until(`${sentWatch}.some(m => m.muteA === true) && ${AB}.state.muteA === true`, 3000), 'A\'s MUTE sends {watch, muteA:true}; the server mutes A');
+  await click('#sqlMuteA');
+  ok(await until(`${AB}.state.muteA === false`, 3000), 'pressed again: A unmuted');
+  const sqlA0 = await ev(`window.__sent.filter(s => s.includes('"type":"squelch"')).length`);
+  await click('#sqlBarB');
+  ok(await until(`${sentWatch}.some(m => m.id === 1 && typeof m.sql === 'number' && m.sqlOn === true)`, 2000), 'B\'s bar sets B\'s squelch (a watch sql)');
+  ok(await until(`${AB}.state.chans[0].sqlOn === true`, 3000), 'the server has B\'s squelch on');
+  ok((await ev(`window.__sent.filter(s => s.includes('"type":"squelch"')).length`)) === sqlA0, '…and A\'s squelch was not touched');
+  await click('#sqlAutoB');
+  ok(await until(`document.getElementById('sqlAutoB').classList.contains('on') && document.getElementById('sqlBarB').classList.contains('auto')`, 2000), 'B\'s AUTO SQUELCH is on, its bar in auto');
+  const nB = await ev(`${sentWatch}.filter(m => m.id === 1 && 'sql' in m).length`);
+  ok(await until(`${sentWatch}.filter(m => m.id === 1 && 'sql' in m).length > ${nB} || ${sentWatch}.some(m => m.id === 1 && m.sqlOn === false)`, 4000),
+     'B\'s auto squelch drives B\'s threshold from B\'s own level');
+  await click('#sqlAutoB');
+  ok(await until(`${AB}.state.chans[0].sqlOn === false`, 3000), 'B\'s auto off: B\'s squelch back off');
+  await click('#sqlBar');
+  ok(await until(`window.__sent.filter(s => s.includes('"type":"squelch"')).length > ${sqlA0}`, 2000), 'A\'s bar sets A\'s squelch while B is the selected VFO');
+  ok((await ev(`${AB}.state.chans[0].sqlOn`)) === false, '…and leaves B\'s alone');
   await ev(`document.getElementById('audioClose')?.click()`);
+  // ── ★★ ROUND 3: the decoders are VFO A's — starting one with B selected switches the controls to A
+  await click('#mAbKey');
+  if ((await ev(`${AB}.sel`)) !== 'B') await click('#mAbKey');
+  ok((await ev(`${AB}.sel`)) === 'B', 'B selected before the decoder');
+  await ev(`document.querySelector('[data-dec="wefax"]')?.click()`);
+  ok(await until(`${AB}.sel === 'A'`, 2000), 'starting a decoder (WEFAX) with B selected switches the controls to VFO A');
+  await ev(`document.querySelector('[data-dec="wefax"]')?.click()`);
+  await click('#mAbKey');
+  ok(await until(`${AB}.sel === 'B'`, 2000), 'and the A/B key goes back to B to listen');
   // ── control colours: each background swatch, and solid
   const nSw = await ev(`document.querySelectorAll('#ctlBgSw > *').length`);
   for (let k = 0; k < Math.min(3, nSw || 0); k++) {
@@ -175,6 +218,8 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   ok(await until(`!${AB}.on && ${AB}.sel === 'A' && document.getElementById('mAbKey').hidden && !document.getElementById('mTuneGlyph').hidden`, 3000), 'back to one VFO: A selected, key gone, glyph back');
   ok((await ev(`${AB}.a.frequency`)) === aHz, `A is where it was (${aHz})`);
   ok(await until(`${AB}.state && ${AB}.state.chans.length === 0`, 3000), 'the server has no VFO B');
+  ok(await ev(`document.getElementById('sqlBlockB').hidden && document.getElementById('sqlMuteA').hidden && document.getElementById('sqlVfoA').hidden`),
+     'one VFO: B\'s squelch row and the MUTE keys are gone — the squelch block is exactly as before');
 });
 
 console.log('── a server whose owner switched VFO A/B off ──');

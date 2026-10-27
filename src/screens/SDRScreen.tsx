@@ -19,6 +19,7 @@ import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, ic
          icomWatchState, sMeter, type IcomStatus } from '../services/icomRadio';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../services/squelchNeighbours';
 import { VS_SQL_OFF, vsSqlOn, vsSqlEffective, vsSqlRestore } from '../services/vibeSquelch';
+import { SqlAutoTrack } from '../utils/sqlAutoTrack';
 import { APP_PROTO } from '../constants/version';
 import { scrollLane, scrollLaneOutset } from '../constants/popupTokens';
 import React, {
@@ -1965,7 +1966,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     const speaksOn = rc ? ((client.current as { squelchSpeaksOn?: () => boolean } | null)?.squelchSpeaksOn?.() ?? false) : true;
     const eff = vsSqlEffective(db, speaksOn);
     setHwSquelch(eff); hwSquelchRef.current = eff;
-    if (rc) rc.setSquelchDb?.(eff); else LocalHw?.setSquelch?.(vsSqlOn(eff), eff);
+    // ★★ V12 VFO A/B round 3: this is VFO A's squelch whichever VFO is tuned (B has its own row) — said by name.
+    const named = (client.current as { setSquelchVfo?: (v: 'A' | 'B', db: number) => void } | null)?.setSquelchVfo;
+    if (rc && named) named.call(client.current, 'A', eff);
+    else if (rc) rc.setSquelchDb?.(eff); else LocalHw?.setSquelch?.(vsSqlOn(eff), eff);
   }, [LocalHw, hwClient]);
   const onLocalNR = useCallback((level: number) => {
     setHwNrLevel(level);
@@ -2448,14 +2452,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   spotsBandCapRef.current = spotsBandCap;
   /** Band running (the subscription's scope is 'band'), and the governor's per-mode chips. */
   const [spotsBandOn, setSpotsBandOn] = useState(false);
-  useEffect(() => {
-    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
-    if (spotsBandOn && preBandMuteRef.current === null) {
-      preBandMuteRef.current = isMutedRef.current; VM?.setMuted?.(true); setIsMuted(true);
-    } else if (!spotsBandOn && preBandMuteRef.current !== null) {
-      const back = preBandMuteRef.current; preBandMuteRef.current = null; VM?.setMuted?.(back); setIsMuted(back);
-    }
-  }, [spotsBandOn]);   // ★ Band muting — see preBandMuteRef
+  // ★ Band muting — see preBandMuteRef; the effect sits below VFO A/B's state (round 3: with B on it mutes VFO A, not the speaker)
   const spotsBandOnRef = useRef(false);
   const [spotModeStates, setSpotModeStates] = useState<SpotModeState[]>([]);
   /** Band's step, set where tuning lives (below) — true when it took the gesture. A ref: the gestures are built earlier. */
@@ -3060,7 +3057,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   const abClient = useCallback(() => client.current as unknown as {
     abSetOn?: (on: boolean) => boolean; abSelect?: (v: VfoId) => void; abSetStereo?: (on: boolean) => void;
-    abSetMonoOut?: (on: boolean) => void; abInfo?: () => VfoABInfo } | null, []);
+    abSetMonoOut?: (on: boolean) => void; abInfo?: () => VfoABInfo;
+    // ★★ Round 3: a named VFO's squelch, its mute, and its own level (VibeServerWsClient)
+    setSquelchVfo?: (v: VfoId, db: number) => void; abSetMute?: (v: VfoId, on: boolean) => void;
+    channelLevelVfoDb?: (v: VfoId, maxAgeMs?: number) => number } | null, []);
   const onVfoStereo = useCallback((on: boolean) => {
     vfoStereoRef.current = on; setVfoStereoState(on);
     AsyncStorage.setItem(VFO_STEREO_KEY, on ? '1' : '0').catch(() => {});
@@ -3084,15 +3084,38 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [abClient]);
   // ★★ The pad's swap — a START tap, or △ on a stick pad (padActions); does nothing while A/B is off.
   useEffect(() => { const sub = addSwapVfoListener(() => onVfoSwap()); return () => sub.remove(); }, [onVfoSwap]);
-  // ★ Each VFO has its OWN squelch: on a switch the slider shows the newly tuned one's (nothing is sent — it is already set).
+  /* ★★ Each VFO has its OWN squelch — and from round 3 its own ROW in the Audio menu (Stuart, 2026-10-27: "the 2 VFO's can
+   *  they have their own squelch and auto squelch options which show in the audio menu when the 2nd VFO is active"). So
+   *  the squelch slider no longer follows a switch: hwSquelch is VFO A's whichever VFO is tuned, B's is its own row. */
+  const abInfoRef = useRef<VfoABInfo | null>(null);
   const onWatchInfo = useCallback((info: VfoABInfo) => {
-    if (info.active !== abActiveRef.current) {
-      abActiveRef.current = info.active;
-      setHwSquelch(info.activeSquelchDb); hwSquelchRef.current = info.activeSquelchDb;
-    }
+    if (info.active !== abActiveRef.current) abActiveRef.current = info.active;
     if (!info.on) earOrder.current.reset();
+    abInfoRef.current = info;
     setAbInfo(info);
   }, []);
+  /* ══ ★★ V12 VFO A/B ROUND 3 — VFO B's SQUELCH ROW, ITS AUTO SQUELCH, AND A MUTE ON EACH VFO ═════════════════════════
+   *  B's threshold lives in the client's VFO A/B core (abInfo.squelchB); B's AUTO is A's algorithm run on B's own level
+   *  (src/utils/sqlAutoTrack.ts — the same steps, a class so it runs per VFO), in the frame emit, sending B's `watch`
+   *  squelch; the ABOVE NOISE margin is the one slider, shared. MUTE: the server takes the VFO out of the mix and pans the
+   *  other home to both ears; a muted VFO keeps decoding and metering ("the ability to mute a VFO that is decoding"). */
+  const [sqlBAuto, setSqlBAutoState] = useState(false);
+  const sqlBAutoRef = useRef(false);
+  const sqlBTrack = useRef(new SqlAutoTrack());
+  const abRefreshInfo = useCallback(() => { const i = abClient()?.abInfo?.(); if (i) onWatchInfo(i); }, [abClient, onWatchInfo]);
+  const onSquelchB = useCallback((db: number) => {
+    abClient()?.setSquelchVfo?.('B', db);
+    abRefreshInfo();
+  }, [abClient, abRefreshInfo]);
+  const setSquelchAutoB = useCallback((on: boolean) => {
+    const was = sqlBAutoRef.current;
+    sqlBAutoRef.current = on; setSqlBAutoState(on);
+    if (on) sqlBTrack.current.reset();
+    else if (was) onSquelchB(VS_SQL_OFF);   // ★ B has no remembered manual value (per session): auto off = off, as it began
+  }, [onSquelchB]);
+  const onAbMute = useCallback((v: VfoId, on: boolean) => { abClient()?.abSetMute?.(v, on); }, [abClient]);
+  // ★ B gone: its auto goes with it (a new VFO B starts with its squelch off, as the server makes it).
+  useEffect(() => { if (!abOn && sqlBAutoRef.current) { sqlBAutoRef.current = false; setSqlBAutoState(false); } }, [abOn]);
   // ★★ BINAURAL STANDS ASIDE WHILE VFO B IS ON — it would re-pan the server's L/R mix. Back when B goes, a little after
   //    the server's 400 ms fade, so A ends wherever binaural places it, with binaural's own smoothing.
   const [abAudio, setAbAudio] = useState(false);
@@ -3101,6 +3124,30 @@ export default function SDRScreen({ route, navigation }: Props) {
     const t = setTimeout(() => setAbAudio(false), 450);
     return () => clearTimeout(t);
   }, [abOn]);
+  /* ★ Band muting — see preBandMuteRef. ★★ V12 VFO A/B round 3: WITH VFO B ON, BAND MUTES VFO A IN THE MIX, NOT THE
+   *  SPEAKER (Stuart, 2026-10-27: "VFO A set to full band digital modes on 40M whilst VFO B listens to SSB on 40") — the
+   *  speaker carries B, the VFO being listened to; the server pans B home to both ears. B coming or going during Band
+   *  moves the mute between the two; leaving Band puts back whichever it took. */
+  const bandMutedARef = useRef(false);
+  useEffect(() => {
+    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
+    const wantSpk = spotsBandOn && !abOn, wantA = spotsBandOn && abOn;
+    if (wantSpk && preBandMuteRef.current === null) {
+      preBandMuteRef.current = isMutedRef.current; VM?.setMuted?.(true); setIsMuted(true);
+    } else if (!wantSpk && preBandMuteRef.current !== null) {
+      const back = preBandMuteRef.current; preBandMuteRef.current = null; VM?.setMuted?.(back); setIsMuted(back);
+    }
+    if (wantA && !bandMutedARef.current) { bandMutedARef.current = true; abClient()?.abSetMute?.('A', true); }
+    else if (!wantA && bandMutedARef.current) { bandMutedARef.current = false; if (abOn) abClient()?.abSetMute?.('A', false); }
+  }, [spotsBandOn, abOn, abClient]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★★★ ROUND 3 — THE DECODERS ARE VFO A'S (Stuart, 2026-10-27: "run a decoder on VFO A whilst VFO B can listen to the
+   *  audio"). The server feeds a listener's decoder from their own channel — VFO A — before the mix, so nothing B does
+   *  reaches it and a muted A still decodes. What the decoder box TUNES must therefore be A too: starting a decoder or
+   *  spots, a band, a station or a spot tapped in the box switches the controls to VFO A first — otherwise it would retune
+   *  B (the selected VFO) while the decoder read A. The A/B key then goes back to B to listen. The web's abDecodeOnA. */
+  const abDecodeOnA = useCallback(() => {
+    if (abActiveRef.current === 'B') abClient()?.abSelect?.('A');
+  }, [abClient]);
   /** The inactive VFO, as the waterfall draws it — with the ears both needles are in (null tags = both everywhere). */
   const abOther = abOn && abInfo?.other ? abInfo.other : null;
   const abEars = abOther
@@ -3925,6 +3972,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    quality, the network quality and the rung, so an undecided rung simply does not pull it
    *    down. There was nothing to hide. */
   const meterSmooth = useRef({ level: 0, peak: 0, hold: 0 });
+  /** ★★ V12 VFO A/B round 3: each VFO's squelch-row bar, smoothed as the meter is. */
+  const abRowSmooth = useRef({ a: 0, b: 0 });
   /* ★★ THE SIGNAL READING PACED TO THE FEED (2026-10-13, Stuart: Moto and iPhone "a little burst of juddery frames" at
    *  the same moment, when the status read 21 fps for a second — network jitter: one frame late, the next early, both
    *  arriving together). Each reading went to the bus the moment it arrived, so a bunched pair moved the needle twice in
@@ -5715,6 +5764,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ SCANNER OPEN = VFO B OFF (Stuart, 2026-10-27: "when the scanner is open we disable VFO B simple as that"). The
     //    scanner tunes the one VFO; B is switched off as the box opens and its toggle is absent until the box closes.
     if (type === 'scanner') onVfoAB(false);
+    else abDecodeOnA();   // ★★ VFO A/B round 3: the decoders are VFO A's
     if (type === 'transcribe') setTxHeard('');
     if (type === 'transcribe' && activeDecRef.current && activeDecRef.current !== 'transcribe') decoderClient.current?.stop();
     setActiveDecoder(type);
@@ -5885,6 +5935,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (spotsKindRef.current === k) {
       stopSpots();
     } else {
+      abDecodeOnA();   // ★★ VFO A/B round 3: the spots are VFO A's
       closeDecoder();
       setSpots([]);
       spotsKindRef.current = k;
@@ -5980,7 +6031,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const skimDrawn = (activeDecoder === 'cw' && cwSkim) || (activeDecoder === 'psk' && pskSkim);
   const skimDrawnW = activeDecoder === 'psk' ? pskWidth : cwWidth;
   /* ★★ …AND BAND SPOTS' VFO IS THE BAND'S SPAN (the web's renderFrame) — drawn where it is, never sent. */
-  const bandDrawn = spotsBandOn && spotsBandCap ? bandPassband(spotsBandCap.bands, status.frequency) : null;
+  // ★★ VFO A/B round 3: Band is VFO A's — drawn on A's needle only (with B tuned, `status` is B's)
+  const bandDrawn = spotsBandOn && spotsBandCap && abActive !== 'B' ? bandPassband(spotsBandCap.bands, status.frequency) : null;
   /* ★ V12 PSK: the same two settings, remembered apart from CW's (6/12/24 kHz, not 24/48/96). */
   const pskSkimRef = useRef(false);
   const pskWidthRef = useRef<number>(PSK_DEFAULT_WIDTH);
@@ -7495,6 +7547,15 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  below, and the audio, behave exactly as before. See visualGain. */
           const vg = visualGainRef.current;
           const levelDbm = (owrxDbm ?? chDbfs) + vg;
+          /* ★★ V12 VFO A/B ROUND 3 — EACH VFO'S OWN LEVEL. The meter (chDbfs) is the SELECTED VFO's; the squelch rows are
+           *  each VFO's own (sig.chan = A, sig.chanB = B), so A's gate and A's auto squelch judge A's level even while B
+           *  is tuned. One VFO: chA is chDbfs exactly. */
+          const abNow = isLocal ? abInfoRef.current : null;
+          const abRows = !!abNow?.on;
+          const abc = abRows ? (client.current as { channelLevelVfoDb?: (v: 'A' | 'B') => number } | null) : null;
+          const chA0 = abRows ? (abc?.channelLevelVfoDb?.('A') ?? NaN) : NaN;
+          const chA = Number.isFinite(chA0) ? chA0 : chDbfs;
+          const chB = abRows ? (abc?.channelLevelVfoDb?.('B') ?? NaN) : NaN;
           // Bar source follows the meter mode: SNR uses the compression curve
           // (sigNorm, calibrated for honest 0–50 dB); S-meter/dBFS use the
           // absolute level mapping off the dBm level. OWRX's smeter dB spans
@@ -7559,7 +7620,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  the raw value is reconstructed for the comparison. */
           const rawLevelDbm = levelDbm - vg;
           const gate = isKiwi  ? (kiwiSqDbmRef.current > -130 ? rawLevelDbm < kiwiSqDbmRef.current : false)
-            : isLocal          ? (vsSqlOn(hwSquelchRef.current) ? chDbfs   < hwSquelchRef.current : false)
+            : isLocal          ? (vsSqlOn(hwSquelchRef.current) ? chA      < hwSquelchRef.current : false)
             : owrxDbm != null  ? undefined
             : (snrSquelchRef.current > -999 ? snrDb < snrSquelchRef.current : false);
           /* ── AUTO SQUELCH ────────────────────────────────────────────────────────────────────
@@ -7577,7 +7638,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            * ★ True OWRX gates SERVER-side and has no bar to drive: no channel figure we may steer
            *   from, so `autoChan` is NaN and the toggle is offered disabled with the reason. */
           const autoChan = isKiwi ? rawLevelDbm
-            : isLocal            ? chDbfs
+            : isLocal            ? chA
             : owrxDbm != null    ? NaN
             : snrDb;
           /* ★ THE dBFS-MODE BRANCH NEEDS A SETTLED FLOOR, because its position map is the one that
@@ -7594,7 +7655,10 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  path including the ones nobody has written yet. Without it, arriving somewhere noisier
              *  with the gate open blocks the slow rise for ever and the only escape was toggling auto
              *  off and on (Stuart, MW → 40 m LSB, 2026-09-25). */
-            const key = `${Math.round(s.frequency)}|${s.mode}|${s.bandwidthLow}|${s.bandwidthHigh}`;
+            // ★★ VFO A/B round 3: A's channel even while B is tuned (A waits in `other` then; the bins are the view's).
+            const aSl = abRows && abActiveRef.current === 'B' && abNow?.other ? abNow.other : null;
+            const key = aSl ? `${Math.round(aSl.frequency)}|${aSl.mode}|${aSl.bandwidthLow}|${aSl.bandwidthHigh}`
+              : `${Math.round(s.frequency)}|${s.mode}|${s.bandwidthLow}|${s.bandwidthHigh}`;
             if (key !== trk.key) { trk.key = key; trk.base = NaN; trk.near = NaN; }
             /* ★★★ THE REFERENCE THE SIGNAL CANNOT BE IN — squelchNeighbours.ts, shared with the web
              *  client. What `autoChan` would read if this channel were empty: the channel figure minus
@@ -7603,7 +7667,9 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  tuning ONTO a voice seeded the baseline on the voice and held the gate shut for the
              *  whole over (Stuart, 2 m NFM, 2026-09-27 — found in the web client; same algorithm here).
              *  ★ Same geometry as `peak` above: the VFO at the middle of `newBins`, spanning s.bwHz. */
-            const excess = channelExcessDb(newBins, s.frequency, s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
+            const excess = aSl
+              ? channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.bwHz, aSl.frequency, aSl.bandwidthLow, aSl.bandwidthHigh)
+              : channelExcessDb(newBins, s.frequency, s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
             const nearInst = Number.isFinite(excess) ? autoChan - excess : NaN;
             if (Number.isFinite(nearInst)) {
               trk.near = Number.isFinite(trk.near) ? trk.near + (nearInst - trk.near) * SQL_NEAR_SMOOTH : nearInst;
@@ -7725,13 +7791,46 @@ export default function SDRScreen({ route, navigation }: Props) {
           // re-renders a React leaf per frame, and per-frame React commits in the
           // background are exactly what starved the audio DSP in v6. Nobody can
           // see the phone's meter anyway — the watch gets its level above.
+          /* ★★ V12 VFO A/B ROUND 3 — VFO B's ROW: its level, its threshold, its gate, and its AUTO SQUELCH — A's algorithm on
+           *  B's own level (SqlAutoTrack), against B's channel on this frame's bins. The local (dBFS) bar map, trimmed like
+           *  everything the listener sees. And the METER's red line follows the selected VFO, as its level does. */
+          let abEmit: { aLevel: number; aRaw: number; aSql: number; aGate: boolean;
+                        bLevel: number; bRaw: number; bSql: number; bGate: boolean } | undefined;
+          let mSql = sqlN, mSqlVal = sqlVal, mGate = gate;
+          if (abRows && abNow) {
+            const bSl = abActiveRef.current === 'B' ? s : abNow.other;
+            if (sqlBAutoRef.current && Number.isFinite(chB) && bSl) {
+              const bKey = `${Math.round(bSl.frequency)}|${bSl.mode}|${bSl.bandwidthLow}|${bSl.bandwidthHigh}`;
+              const bEx = channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.bwHz, bSl.frequency, bSl.bandwidthLow, bSl.bandwidthHigh);
+              const want = sqlBTrack.current.tick(chB, bKey, bEx, sqlAutoMarginRef.current, Date.now(), 90 - 130 - vg);
+              if (want !== null && want !== abNow.squelchB) {
+                (client.current as { setSquelchVfo?: (v: 'A' | 'B', db: number) => void } | null)?.setSquelchVfo?.('B', want);
+              }
+            }
+            const sqB = abNow.squelchB;
+            const bPos = (db: number) => Math.max(0, Math.min(1, (db + vg + 130) / 90));
+            const nB = Number.isFinite(chB) ? bPos(chB) : 0;
+            const nA = bPos(chA);
+            const sab = abRowSmooth.current;
+            sab.a += (nA > sab.a ? 0.85 : 0.35) * (nA - sab.a);
+            sab.b += (nB > sab.b ? 0.85 : 0.35) * (nB - sab.b);
+            const bSqlN = sqlBAutoRef.current && Number.isFinite(sqlBTrack.current.shown) ? bPos(sqlBTrack.current.shown)
+              : vsSqlOn(sqB) ? bPos(sqB) : -1;
+            const bGate = vsSqlOn(sqB) && Number.isFinite(chB) && chB < sqB;
+            abEmit = { aLevel: sab.a, aRaw: nA, aSql: sqlN, aGate: !!gate, bLevel: sab.b, bRaw: nB, bSql: bSqlN, bGate };
+            if (abActiveRef.current === 'B') {
+              mSql = bSqlN; mGate = bGate;
+              mSqlVal = bSqlN < 0 ? NaN : signalModeRef.current !== 'snr' ? bSqlN * 90 - 130 : (bSqlN * 90 - 130) - levelDbm + snrDb;
+            }
+          }
           if (appActiveRef.current) {
             pacedSignalEmit({
               level: sm.level, peak: sm.peak, snr: snrDb, dbfs: levelDbm,
               // ★ The unsmoothed level, for the faceplate meters (the needle springs from it).
               raw: norm,
               active: owrxDbm != null ? owrxDbm > -110 : snrDb > 6,
-              sql: sqlN, sqlVal, gate,
+              sql: mSql, sqlVal: mSqlVal, gate: mGate,
+              ...(abEmit ? { ab: abEmit } : {}),
             });
           }
         }
@@ -9489,6 +9588,13 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  after one mode switch the automatic threshold would be inverted through the old map. */
   const sqlDragRef = useRef(onSquelchDrag);
   sqlDragRef.current = onSquelchDrag;
+  /** ★★ V12 VFO A/B round 3 — VFO B's squelch bar: the local (dBFS) map onSquelchDrag uses for A, trim taken back off.
+   *  A drag means "I want manual", as on A's bar. */
+  const onSquelchDragB = useCallback((x: number) => {
+    sqlDraggingRef.current = true;
+    if (sqlBAutoRef.current) setSquelchAutoB(false);
+    onSquelchB(x < 0 ? VS_SQL_OFF : Math.max(0, Math.min(1, x)) * 90 - 130 - visualGainRef.current);
+  }, [onSquelchB, setSquelchAutoB]);
 
   // ── FM squelch ────────────────────────────────────────────────────────────
   const onFmSquelch = useCallback((db: number) => {
@@ -9608,14 +9714,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★ V12 DSC: a channel key tunes it as a DSC receiver does (USB 1.7 kHz below, or channel 70 in NFM) and, while DSC runs,
    *  re-attaches so the decoder's tones follow — from the TARGET, not the status (the tune has not landed yet). The web's
    *  dscTune. */
+  /** ★★ VFO A/B round 3 — a tune FROM THE DECODER BOX: VFO A's (abDecodeOnA), then the ordinary tune. */
+  const onDecTuneHz = useCallback((hz: number, mode?: SDRMode) => { abDecodeOnA(); onTuneHz(hz, mode); }, [abDecodeOnA, onTuneHz]);
   const onDscTune = useCallback((ch: { hz: number; vhf: boolean }) => {
     const t = dscTuneFor(ch);
-    onTuneHz(t.hz, t.mode as SDRMode);
+    onDecTuneHz(t.hz, t.mode as SDRMode);
     if (activeDecRef.current === 'dsc' && decoderClient.current) {
       decoderClient.current.dscParams = dscParams(t.hz, t.mode);
       decoderClient.current.start('dsc');
     }
-  }, [onTuneHz]);
+  }, [onDecTuneHz]);
   /* ★★★ V12 DIGITAL SPOTS: BAND (docs/v12/DIGITAL-SPOTS.md; the web's spotsBandBtn / bandSpotsGo / bandSpotsStep). A whole
    *  band's digital frequencies at once — the server cuts one extra-wide slice and every mode's decoder reads its own dial.
    *  In Band the tuning controls step BANDS (every gesture through bandSpotsStepRef), the title names the band and the
@@ -9629,11 +9737,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  then tune. Both go out on the spectrum socket in that order, and the server finishes leaving before it reads the tune.
    *  ★ The web's bandSpotsGo, the same rule. */
   const bandSpotsGo = useCallback((hz: number, id: string) => {
+    abDecodeOnA();   // ★★ VFO A/B round 3: Band is VFO A's dial
     const c = client.current;
     if (c && !askLocked(dialStateRef.current)) leaveWholeRadio(c);   // ★ asked-before-tuning: onTuneHz asks, nothing leaves
     onTuneHz(hz, 'usb' as SDRMode);   // ★ a listener's own tune (a user action: the shared-dial contract holds)
     AsyncStorage.setItem('lsv_spot_band' + radioKeySuffix, id).catch(() => {});
-  }, [onTuneHz, leaveWholeRadio, radioKeySuffix]);
+  }, [onTuneHz, leaveWholeRadio, radioKeySuffix, abDecodeOnA]);
   const onSpotsBand = useCallback(() => {
     const cap = spotsBandCapRef.current;
     if (!cap) return;
@@ -9660,6 +9769,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   bandSpotsStepRef.current = (dir: number) => {
     const cap = spotsBandCapRef.current;
     if (!cap || !spotsBandOnRef.current) return false;
+    if (abActiveRef.current === 'B') return false;   // ★★ VFO A/B round 3: with B tuned the arrows tune B, as ever
     const dial = client.current?.getStatus().frequency ?? 0;
     const i = stepSpotBand(cap.bands, dial, dir);
     if (i < 0) return true;
@@ -12079,7 +12189,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    screen"). Verified against FreqModal (the row above CANCEL / TUNE, VibeServer only), TunerKeys, DrumWheel and
     //    AudioSheet (VFO STEREO) — the whole card, not just the new sentence (2026-10-27).
     { id: 'freq', title: 'Set the frequency, your bookmarks, and VFO A/B',
-      body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. VFO STEREO under the speaker button puts both in both ears instead.',
+      body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears); VFO STEREO there puts both in both ears instead. Decoders and spots run on VFO A, so you can decode on A and listen on B. Not on FM broadcast.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
       body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. CLIENT DECODERS below holds the decoders, including CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls, with the channels to tune) and APRS (packet stations, with MAP in its box) where the server has them, and the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Where the server offers it, SPOTS: BAND beside DIGITAL SPOTS reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations.',
@@ -12134,7 +12244,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    ★ Again 2026-10-27 (build 498) when VFO A/B moved to the frequency card and VFO B gained its own needle colour
     //      (MenuSheet, display settings, beside VFO A's): this card names neither, so nothing here pointed at them.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch, binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch (one row for each VFO, with its MUTE, while VFO B is on), binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
@@ -12706,7 +12816,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onMorseQuality={onMorseQuality}
           spotsKind={spotsKind}
           spots={spots}
-          onTuneHz={onTuneHz}
+          onTuneHz={onDecTuneHz}
           /* ★ V12 CW: the list + spots, and a tap tunes to that signal in CW (the web's cwTune: recentred). */
           /* ★ V12 APRS: the stations, messages and packets; MAP opens the station map (on a station, for a row). No map on
            *  Apple TV: the rows are read there. */
@@ -12715,15 +12825,15 @@ export default function SDRScreen({ route, navigation }: Props) {
             baud: aprsBaud,
             onMap: IS_APPLE_TV ? null : (key?: string) => { markInteract(); setAprsFocus(key ?? ''); setAprsMapOpen(true); },
           } : null}
-          cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onTuneHz(hz, 'cwu' as SDRMode); } } : null}
+          cw={activeDecoder === 'cw' ? { skim: cwSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => { if (hz > 0) onDecTuneHz(hz, 'cwu' as SDRMode); } } : null}
           /* ★ V12 PSK: the same list; a tap = USB with the signal in the middle of the passband (LSB if in LSB — pskTuneFor). */
           psk={activeDecoder === 'psk' ? { skim: pskSkim, list: cwList, spots: cwSpots, onTune: (hz: number) => {
             if (!(hz > 0)) return;
             const t = pskTuneFor(hz, String(status.mode), status.bandwidthLow, status.bandwidthHigh);
-            onTuneHz(t.hz, t.mode as SDRMode);
+            onDecTuneHz(t.hz, t.mode as SDRMode);
           } } : null}
           /* ★ V12 JTTY: a tap = USB, the dial 1500 Hz below the station (jttyTuneFor). */
-          jtty={activeDecoder === 'jtty' ? { list: jttyList, spots: jttySpots, onTune: (rf: number) => { if (rf > 0) onTuneHz(jttyTuneFor(rf), 'usb' as SDRMode); } } : null}
+          jtty={activeDecoder === 'jtty' ? { list: jttyList, spots: jttySpots, onTune: (rf: number) => { if (rf > 0) onDecTuneHz(jttyTuneFor(rf), 'usb' as SDRMode); } } : null}
           /* ★ V12 DSC: the calls; MAP for a position (dscMapOpen — the server's own map). */
           dsc={activeDecoder === 'dsc' ? { calls: dscCalls, onMap: onDscMap } : null}
           /* ★ V12 digital spots: this server's modes (the MODE filter), Band's title and the governor's chips. */
@@ -14017,7 +14127,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  dial on the region's channel in NFM, or 10.1476 MHz USB — a listener's own tune. */
           aprsAvail: aprsCap.on && !!(client.current as any)?.isVibe,
           aprsBaud, aprsHz: aprsCap.hz, onAprsBaud,
-          onAprsTune: () => { const t = aprsTuneFor(aprsBaudRef.current, aprsCap.hz); markInteract(); onTuneHz(t.hz, t.mode as SDRMode); },
+          onAprsTune: () => { const t = aprsTuneFor(aprsBaudRef.current, aprsCap.hz); markInteract(); onDecTuneHz(t.hz, t.mode as SDRMode); },
         } : null}
         transcribeControls={txCaps?.available ? {
           active: activeDecoder === 'transcribe',
@@ -14171,6 +14281,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         vfoStereo={vfoStereo}
         onVfoStereo={abOffered > 0 && !icom ? onVfoStereo : undefined}
         vfoABOn={abOn}
+        /* ★★ V12 VFO A/B round 3 — a squelch row for each VFO, with its MUTE, while VFO B is on (VibeServer only). */
+        vfoRows={abOn && isLocal && !icom ? {
+          colourA: vfoNeedle, colourB: vfoBNeedle(vfoNeedle, vfoNeedleB),
+          muteA: !!abInfo?.muteA, muteB: !!abInfo?.muteB, onMute: onAbMute,
+          onDragB: onSquelchDragB, autoB: sqlBAuto, onAutoB: setSquelchAutoB, autoOkB: sqlAutoOk,
+        } : undefined}
         deemph={hwDeemph}   onDeemph={icom ? undefined : askWrap(onHwDeemph)}   /* ★ an Icom has no WFM chain to de-emphasise */
         stereo={hwStereo}   onStereo={icom ? undefined : askWrap(onHwStereo)}
         fmNr={fmNr}   onFmNr={vibeFmDsp && !icom ? askWrap(onFmNr) : undefined}

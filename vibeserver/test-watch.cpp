@@ -9,7 +9,9 @@
 //   6. STEREO OFF = both centre; the live toggle ramps; a MONO output centres everything;
 //   7. removing B fades it out and pans A back to centre — then the mixer is exactly today's mono (hand-back, no step);
 //   8. the squelch: hysteresis, tail, open/closed with the time it changed; a closed gate silences ITS channel only;
-//   9. the FIFO primes, bounds its latency and re-primes after an underrun.
+//   9. the FIFO primes, bounds its latency and re-primes after an underrun;
+//  10. MUTE (round 3): a muted VFO fades out over the same 400 ms ramp and the other pans home to both ears; unmute reverses;
+//  11. the RF centre for two VFOs on a personal receiver (fitCentre): stays put, moves to fit both, refuses too far apart.
 // SILENT: nothing is played.
 #include "../android/app/src/main/cpp/vibe_watch.h"
 
@@ -233,6 +235,76 @@ int main() {
         f.push(x.data(), 300);
         ok(f.pop(o.data(), 300) == 0, "…and it re-primes before playing again");
     }
+    std::printf("── 10. MUTE (round 3): the muted VFO fades out and the other pans home to both ears; unmuting reverses it ──\n");
+    {
+        // DC sources, B silent while measuring A's place: A (0.25) left, B right — then B muted.
+        Bench b;
+        auto SM = [](int key, double hz, bool muted) { PanMixer::Src s = S(key, hz); s.muted = muted; return s; };
+        for (int i = 0; i < settle / blk; i++) b.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 600}, {0.25f, 0.25f});
+        ok(std::fabs(b.tail(1)[0] - 0.25f * 1.41421356f) < 2e-3, "before: A hard left (√2 in the left ear; B's tone alone in the right)");
+        const size_t mark = b.out.size() / 2;
+        for (int i = 0; i < settle / blk; i++) b.run({S(0, 7.0e6), SM(1, 7.01e6, true)}, blk, {0, 600}, {0.25f, 0.25f});
+        const float* t = b.tail(blk * 8);
+        ok(goertzel(t + 1, blk * 8, 2, 600, kOutRate) < 1e-6 && goertzel(t, blk * 8, 2, 600, kOutRate) < 1e-6, "B muted: B is gone from both ears");
+        // A's own DC: back in the middle at unity, both ears — "pans back to mono so both ears are in play"
+        double lA = 0, rA = 0; for (int i = 0; i < blk * 8; i++) { lA += t[2 * i]; rA += t[2 * i + 1]; }
+        lA /= blk * 8; rA /= blk * 8;
+        std::printf("      A after B muted: L %.4f R %.4f\n", lA, rA);
+        ok(std::fabs(lA - 0.25) < 2e-3 && std::fabs(rA - 0.25) < 2e-3, "A is centre at unity — today's mono, both ears");
+        // A's power constant through the move home (equal-power): DC only, B's tone muted so it adds nothing once faded —
+        // measured on A alone by re-running with B silent
+        Bench d;
+        for (int i = 0; i < settle / blk; i++) d.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.0f});
+        const size_t n0 = d.out.size() / 2;
+        for (int i = 0; i < settle / blk; i++) d.run({S(0, 7.0e6), SM(1, 7.01e6, true)}, blk, {0, 0}, {0.25f, 0.0f});
+        double pmin = 1e9, pmax = 0;
+        for (size_t i = n0; i < d.out.size() / 2; i++) { const double p = d.out[2 * i] * d.out[2 * i] + d.out[2 * i + 1] * d.out[2 * i + 1]; pmin = std::min(pmin, p); pmax = std::max(pmax, p); }
+        ok(pmax / pmin < 1.0001, "equal power: A's loudness is constant all the way home");
+        ok(d.maxStep(settle) < 0.25 * 3.0 / (kRampSec * kOutRate), "the move home has no step");
+        // the fade itself takes kRampSec: half way through, B is still partly there
+        Bench h;
+        for (int i = 0; i < settle / blk; i++) h.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.0f, 0.25f});
+        const int half = (int)(kRampSec * kOutRate / 2);
+        h.run({S(0, 7.0e6), SM(1, 7.01e6, true)}, half, {0, 0}, {0.0f, 0.25f});
+        const float rHalf = h.tail(1)[1];
+        ok(rHalf > 0.05f && rHalf < 0.25f * 1.41421356f - 0.05f, "B's fade is a ramp (half way: part way down), not a cut");
+        ok(h.maxStep(half) < 0.25 * 1.41421356 * 3.0 / (kRampSec * kOutRate), "…with no click");
+        // unmute: back out — A left, B right again
+        for (int i = 0; i < settle / blk; i++) b.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 600}, {0.25f, 0.25f});
+        ok(b.tail(1)[0] > 0.3f && goertzel(b.tail(blk * 8) + 1, blk * 8, 2, 600, kOutRate) > 0.1, "unmuted: A back left, B back right");
+        (void)mark;
+        // mute A instead: B (the higher) goes to the middle
+        Bench a;
+        for (int i = 0; i < settle / blk; i++) a.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.25f});
+        for (int i = 0; i < settle / blk; i++) a.run({SM(0, 7.0e6, true), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.25f});
+        ok(std::fabs(a.tail(1)[0] - 0.25f) < 2e-3 && std::fabs(a.tail(1)[1] - 0.25f) < 2e-3, "A muted: B alone, centre, both ears at unity");
+        ok(!a.mx.restingMono(), "…and that is NOT a hand-back (A is silent, B still mixed)");
+        // B removed while A was muted: the shim unmutes A as B goes; the hand-back waits for A to be home AND at unity
+        for (int i = 0; i < 3; i++) a.run({S(0, 7.0e6), S(1, 7.01e6, false)}, blk, {0, 0}, {0.25f, 0.0f});
+        ok(!a.mx.restingMono(), "B removed, A unmuted: not resting while A fades back in");
+        for (int i = 0; i < settle / blk; i++) a.run({S(0, 7.0e6), S(1, 7.01e6, false)}, blk, {0, 0}, {0.25f, 0.0f});
+        ok(a.mx.restingMono() && std::fabs(a.tail(1)[0] - 0.25f) < 1e-4, "…then resting: A centre at unity, the ordinary path takes over with no step");
+    }
+
+    std::printf("── 11. the RF centre for two VFOs (fitCentre) ──\n");
+    {
+        const double lim = 955e3, clr = 20e3;
+        CentreFit f = fitCentre(7.0e6, 7.0e6, lim, 7.5e6, lim, clr);
+        ok(f.ok && !f.moved && f.centre == 7.0e6, "both inside: the radio stays put");
+        f = fitCentre(7.0e6, 7.0e6, lim, 8.2e6, lim, clr);
+        ok(f.ok && f.moved && std::fabs(f.centre - 7.6e6) < 1, "B 1.2 MHz away: the centre moves to the middle of the room both allow");
+        ok(std::fabs(f.centre - 7.0e6) <= lim && std::fabs(f.centre - 8.2e6) <= lim, "…where both are inside their limits");
+        f = fitCentre(7.0e6, 7.0e6, lim, 9.0e6, lim, clr);
+        ok(!f.ok && f.centre == 7.0e6, "2 MHz apart (> 2 × lim): refused, nothing moves");
+        // close together, centre far away: the middle would put DC between two narrow passbands 10 kHz apart
+        f = fitCentre(8.0e6, 7.000e6, lim, 7.010e6, lim, clr);
+        ok(f.ok && f.moved && std::fabs(f.centre - 7.000e6) >= clr && std::fabs(f.centre - 7.010e6) >= clr,
+           "close VFOs: the centre lands clear of both passbands (no DC spike in either)");
+        ok(std::fabs(f.centre - 7.000e6) <= lim && std::fabs(f.centre - 7.010e6) <= lim, "…still inside both limits");
+        f = fitCentre(0, 7.0e6, lim, 7.0e6 + 2 * lim, lim, clr);
+        ok(f.ok && std::fabs(f.centre - (7.0e6 + lim)) < 1, "exactly 2 × lim apart: the one centre that holds both");
+    }
+
     std::printf("\n%d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }
