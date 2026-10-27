@@ -2454,6 +2454,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   spotsBandCapRef.current = spotsBandCap;
   /** Band running (the subscription's scope is 'band'), and the governor's per-mode chips. */
   const [spotsBandOn, setSpotsBandOn] = useState(false);
+  useEffect(() => {
+    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
+    if (spotsBandOn && preBandMuteRef.current === null) {
+      preBandMuteRef.current = isMutedRef.current; VM?.setMuted?.(true); setIsMuted(true);
+    } else if (!spotsBandOn && preBandMuteRef.current !== null) {
+      const back = preBandMuteRef.current; preBandMuteRef.current = null; VM?.setMuted?.(back); setIsMuted(back);
+    }
+  }, [spotsBandOn]);   // ★ Band muting — see preBandMuteRef
   const spotsBandOnRef = useRef(false);
   const [spotModeStates, setSpotModeStates] = useState<SpotModeState[]>([]);
   /** Band's step, set where tuning lives (below) — true when it took the gesture. A ref: the gestures are built earlier. */
@@ -3504,6 +3512,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [keyHelpOpen,   setKeyHelpOpen]   = useState(false);
   const [recordingsOpen, setRecordingsOpen] = useState(false);
   const [galleryOpen, setGalleryOpen] = useState(false);   // ★★ V12: the server's GALLERY (GalleryOverlay)
+  /* ★★ BAND MUTES THE SPEAKER, as on the web (Stuart, 2026-10-27: "you cannot hear anything anyway"): muted when Band
+   *  starts, and put back as it was when Band ends. Declared after spotsBandOn — see the effect below it. */
+  const preBandMuteRef = useRef<boolean | null>(null);
   // Mute the live SDR while a recording plays so they don't fight over the audio
   // session; restore the prior mute state when the browser closes.
   const preRecMuteRef = useRef(false);
@@ -9632,7 +9643,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       spotsKindRef.current = 'digi'; setSpotsKind('digi');
       spotsBandOnRef.current = true; setSpotsBandOn(true); setSpotModeStates([]);
       decoderClient.current?.startSpots('digi', 'band');
-      if (held || !spotBandAt(cap.bands, dial)) bandSpotsGo(b.hz, b.id);   // ★ on a band already: stay where you are
+      // ★★ Always onto the band's place, as the web does — see spotsBandBtn in web/client/src/main.ts (Stuart, beta22).
+      bandSpotsGo(b.hz, b.id);
     });
   }, [stopSpots, closeDecoder, startSpotFlush, bandSpotsGo, radioKeySuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** One band up or down — clamped at the ends, never wrapped (DAB's and ISM's rule); at an end it says so. */

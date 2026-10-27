@@ -1353,6 +1353,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       dabNoteNonDab();
       adsbApplyPending();          // ★ a mode picked while in ADS-B, spent on the dial the server gave back
       bandSpotsApplyPending();     // ★ a band chosen from DAB / ADS-B / ISM / AIS / NDB — see bandSpotsPending
+      freqApplyPending();          // ★ a frequency typed in DAB / ADS-B / NDB — see freqPending
 
       /* ★★★ THE FIRST CONFIG OF THE CONNECTION, not "while the frequency is zero". SpectrumClient adopts
        *  cfg.serverVfo BEFORE calling us, so on every server that reports its dial this block never ran:
@@ -10727,8 +10728,15 @@ function spotsBandRender() {
   const w = document.getElementById('spotsBandWhy');
   if (w) { w.hidden = !spotBandCap || spotBandCap.ok || b.hidden; w.textContent = spotBandCap && !spotBandCap.ok ? spotBandCap.why : ''; }
 }
+/* ★★ BAND MUTES THE SPEAKER (Stuart, 2026-10-27: "in band mode may as well mute the audio too … you cannot hear anything
+ *  anyway"). The dial sits on a whole band's worth of digital modes — nothing there is listenable. Muted on the way in,
+ *  and on the way out put back as it was before Band (a listener who unmutes during Band may; it is their speaker). */
+let bandMutedFrom: boolean | null = null;
 function bandSpotsUi(on: boolean) {
+  const was = bandSpots;
   bandSpots = on && !!spotBandCap;
+  if (bandSpots && !was && audio) { bandMutedFrom = audio.muted; setMuted(true); updateMediaSession(); }
+  else if (!bandSpots && was && bandMutedFrom !== null) { setMuted(bandMutedFrom); bandMutedFrom = null; updateMediaSession(); }
   if (!bandSpots) { spotModeStates = []; bandSpotsPending = null; }
   renderSpotModeChips();
   spotsBandRender();
@@ -10795,6 +10803,19 @@ function bandSpotsLeaveHeld(): boolean {
   if (aisOn) { aisSetMode(false); return true; }
   if (ndbOn) { ndbSetMode(false); return true; }
   return false;
+}
+/** ★ A frequency typed while DAB (ADS-B, NDB) held the dial — tuned on the first config out of it, as bandSpotsPending. */
+let freqPending: { hz: number; air: AirDesig | null } | null = null;
+function freqApplyPending() {
+  if (!freqPending || !spec || heldMode()) return;
+  const p = freqPending; freqPending = null;
+  const jumpMode = bandJumpDefaults(spec.frequency, p.hz, String(spec.mode ?? ''), ituRegion()).mode;
+  spec.tune(p.hz, jumpMode, { recenter: true, retarget: true });
+  if (jumpMode) setMode(jumpMode, false);
+  airDesig = p.air;
+  applyBandStep(p.hz);
+  airbandFollowPassband();
+  renderFreq();
 }
 /** Spend the parked band on the first config out of the held mode (see bandSpotsPending). */
 function bandSpotsApplyPending() {
@@ -11850,8 +11871,12 @@ function initDecoders(host: string, auth: AuthState) {
       if (!b) return;
       decoders!.setSpots(true, 'band');
       bandSpotsUi(true);
-      // ★ on a band already: stay where you are. A held mode's dial (a DAB multiplex, ISM's 433.92) never counts as one.
-      if (spec && (heldMode() || !spotBandAt(spotBandCap.bands, spec.frequency))) bandSpotsGo(b);
+      /* ★★ THE PRESS PUTS THE DIAL ON THE BAND'S PLACE, ALWAYS (Stuart, beta22: "should snap the VFO to the correct position
+       *  in the band and start running … it only snaps … if i tune once then back"). It used to stay put when the dial was
+       *  already inside a band, so Band ran from wherever the dial happened to be and the tuner was only laid out for the
+       *  band on the next step. Pressing Band is the listener's own action; the band it lands on is the one the dial is in
+       *  (landingSpotBand), so this never jumps somewhere else. A held mode's dial (a DAB multiplex) never counts as one. */
+      if (spec) bandSpotsGo(b);
       spotsBtn.classList.remove('on');
       showDecBox('spots');
     } else {
@@ -17103,6 +17128,13 @@ function initFreqEntry() {
      *  door, the device list is kept, and the arrows still step bands from wherever the server says it now is. */
     if (ismOn) { spec!.ism(true, { hz: got }); closePanels(); return; }
     if (aisOn) { showPill('AIS listens on its two channels — leave AIS to tune elsewhere', 5000); closePanels(); return; }
+    /* ★★ A FREQUENCY TYPED IN DAB (ADS-B, NDB) LEAVES IT AND GOES THERE (2026-10-27). The server ignores a tune while a
+     *  whole-radio mode holds the dial, so the box did nothing at all. Typing a number is the listener's own action: out of
+     *  the held mode first, and the tune is parked until the first config from outside it (see bandSpotsPending). */
+    if (!spec!.isTuneLocked() && heldMode() && bandSpotsLeaveHeld()) {
+      freqPending = { hz: got, air: air && air.ok ? { hz: air.hz, spacing: air.spacing } : null };
+      renderFreq(); closePanels(); return;
+    }
     const jumpMode = bandJumpDefaults(spec!.frequency, got, String(spec!.mode ?? ''), ituRegion()).mode;
     spec!.tune(got, jumpMode, { recenter: true, retarget: true });
     if (jumpMode) setMode(jumpMode, false);
