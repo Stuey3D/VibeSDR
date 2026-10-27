@@ -12053,7 +12053,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ V12 VFO A/B lives in this same sheet (StepPicker) — said here because the step key is the last place anybody
     //    would look for a second VFO. Verified against StepPicker, TunerKeys, DrumWheel and AudioSheet (2026-10-27).
     { id: 'step', title: 'Step rate, and VFO A/B',
-      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change. On a VibeServer the same sheet has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key between the tune keys (or a press and hold on the tune drum\'s window) chooses which one the controls tune. VFO STEREO under the speaker button puts both in both ears instead.',
+      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change. On a VibeServer the same sheet has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. VFO STEREO under the speaker button puts both in both ears instead.',
       target: tourRef('stepBtn') },
     // ★ The 'back' step ("no back-swipe here") was FOLDED INTO the servers-chip step
     //   in V10 rather than kept: on its own it explained an ABSENCE, which is a whole
@@ -13114,7 +13114,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  `vfoKeys` untouched — the preference is never written. */
           vfoKeys={vfoKeys || dabOn}
           vfoMuxLabel={dabOn ? (dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '—') : undefined}
-          /* ★★ V12 VFO A/B: the A/B key between the tune keys / the letter in the drum's window (hold = switch). */
+          /* ★★ V12 VFO A/B: the A/B key between the tune keys / the A/B key in the drum's window (tap; a hold elsewhere in it too). */
           vfoAB={abOn ? abActive : null}
           onVfoSwap={onVfoSwap}
           zoomKeys={zoomKeys}

@@ -104,6 +104,15 @@ export function watchOffered(hwinfo: Record<string, unknown> | null | undefined)
   return n > 0 ? Math.floor(n) : 0;
 }
 
+/** ★★ The `watch` STATE's `max` — the same offer, sent again whenever it changes without an hwinfo (the server's
+ *  watchTellMax: a listener's own mode into or out of DRM, which takes VFO B away and gives it back). The web reads it
+ *  (spectrum.ts `if (w.max >= 0) this.watchMax = w.max`); the app read hwinfo only, so an offer the server re-stated
+ *  here never reached the tuning menu. Null = this message does not say (absent or junk — keep what we have). */
+export function watchMaxOf(msg: Record<string, unknown> | null | undefined): number | null {
+  if (!msg || msg.type !== 'watch' || typeof msg.max !== 'number' || !Number.isFinite(msg.max) || msg.max < 0) return null;
+  return Math.floor(msg.max);
+}
+
 /** VFO B, from a state (undefined when it is off). */
 export function vfoB(st: WatchState | null | undefined): WatchChan | undefined {
   return st?.chans.find((c) => c.id === VFO_B_ID);
