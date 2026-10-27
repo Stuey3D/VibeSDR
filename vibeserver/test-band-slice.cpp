@@ -325,14 +325,16 @@ static int runReal(int argc, char** argv) {
 /** `tapcost [rate]`: the WideTap's own CPU per second of capture (noise in, the slice dropped), process CPU minus the
  *  generator's. */
 static double cpuNow() { rusage u{}; getrusage(RUSAGE_SELF, &u); return u.ru_utime.tv_sec + u.ru_utime.tv_usec / 1e6 + u.ru_stime.tv_sec + u.ru_stime.tv_usec / 1e6; }
-static int tapCost(double fs) {
+static int tapCost(double fs, bool band) {
     const int fft = fftSizeForRate(fs);
     std::vector<cf32> x((size_t)(fs / 10));
     uint32_t r = 1; for (auto& v : x) { r = r * 1664525u + 1013904223u; const float a = (float)(r >> 8) / 16777216.0f - 0.5f; r = r * 1664525u + 1013904223u; v = cf32(a, (float)(r >> 8) / 16777216.0f - 0.5f); }
     std::atomic<uint64_t> got{0};
     WideTap tap;
-    tap.start(WideTap::BinSink([&](const cf32*, int k, double, double, const float*, int, double) { got += (uint64_t)k; }));
+    tap.start(WideTap::BandSink([&](const cf32*, int k, double, double, const float*, int, double, double, int) { got += (uint64_t)k; }));
     WideTap::Geometry g; g.sampleRate = fs; g.hwCentreHz = 7075600; g.wantCentreHz = 7060600; g.widthHz = 41900; g.fftSize = fft; g.bins = true;
+    // ★ `tapcost <rate> band`: as Band runs it on 40 m — the flat sizing and 40 m's extra slice (JTTY)
+    if (band) { g.band = true; const auto e = bandExtraSlices(7060600); g.nExtras = (int)e.size(); for (size_t k = 0; k < e.size(); ++k) g.extras[k] = e[k]; }
     tap.aim(g);
     const int secs = 30;
     const double c0 = cpuNow(); const auto t0 = std::chrono::steady_clock::now();
@@ -349,7 +351,7 @@ static int tapCost(double fs) {
 }
 
 int main(int argc, char** argv) {
-    if (argc > 1 && !std::strcmp(argv[1], "tapcost")) return tapCost(argc > 2 ? std::atof(argv[2]) : 2400000);
+    if (argc > 1 && !std::strcmp(argv[1], "tapcost")) return tapCost(argc > 2 ? std::atof(argv[2]) : 2400000, argc > 3 && !std::strcmp(argv[3], "band"));
     if (argc > 5 && !std::strcmp(argv[1], "real")) return runReal(argc, argv);
     const bool verbose = argc > 1 && !std::strcmp(argv[1], "-v");
 
