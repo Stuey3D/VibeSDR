@@ -16918,8 +16918,6 @@ function openStepMenu(anchor?: HTMLElement) {
     b.onclick = () => { setStep(v); close(); };
     m.appendChild(b);
   }
-  // ★★ V12 VFO A/B — THE ON/OFF, here in the tuning menu and nowhere else (Stuart's spec).
-  { const ab = abMenuRow(() => close()); if (ab) m.appendChild(ab); }
   document.body.appendChild(m);
 
   // Anchor ABOVE the button when there is no room below — the VFO sits at the
@@ -17346,6 +17344,7 @@ function openFreqEntry() {
   if (adsbOn) { showTuneGapMsg('Frequency is locked in ADS-B — the receiver is held on 1090 MHz. Press EXIT ADS-B to tune.'); return; }
   // ★ ISM: the box stays open — a typed frequency puts the capture there for an odd device (see go() below)
   togglePanel('freqPanel');
+  abRowPaint();
   const el = $<HTMLInputElement>('freqInput');
   el.value = (spec!.frequency / UNIT_DIV[freqUnit]).toFixed(UNIT_DP[freqUnit]);
   $('freqMsg').textContent = '';
@@ -18824,7 +18823,7 @@ function initPointerFreq(c: HTMLCanvasElement) {
 
 // ══ ★★ V12 VFO A/B (GitHub discussion #57; docs/v12/VFO-AB.md; the state lives in SpectrumClient, the pure rules in
 //    vfoAB.ts) ═══════════════════════════════════════════════════════════════════════════════════════════════════════
-// Stuart's spec, 2026-10-27: on and off ONLY from the tuning menu (the step menu here); while on, a small A/B key between
+// Stuart's spec, 2026-10-27: on and off ONLY from the FREQUENCY card (#freqAbRow, as the app's FreqModal); while on, a small A/B key between
 // the tune buttons says which VFO the controls tune and switches it; the lower VFO is heard in the LEFT ear and the
 // higher in the RIGHT (STEREO, in the audio menu, default on); the active needle full brightness, the other ~75 %.
 // ★ PER SESSION: the toggle is not saved — a reload starts with one VFO (see SpectrumClient.abOn).
@@ -18924,6 +18923,7 @@ Object.defineProperty(window, '__vibeWf', { configurable: true, get: () => () =>
 /** The key's label and light, the stereo row, the mono hint — on every watch change and selection. */
 function abPaint() {
   if (!spec) return;
+  abRowPaint();
   const key = document.getElementById('mAbKey') as HTMLButtonElement | null;
   const glyph = document.getElementById('mTuneGlyph');
   const on = spec.abOn;
@@ -18967,29 +18967,27 @@ function abOnWatch(note?: string) {
   if (note && Date.now() - abNoteAt > 1500) { abNoteAt = Date.now(); showPill(note, 6000); }
 }
 
-/** The step menu's VFO A/B row (the web's tuning menu). Only where the server offers it — no dead control. */
-function abMenuRow(close: () => void): HTMLElement | null {
-  if (!spec || spec.watchMax < 1) return null;
-  const row = document.createElement('div');
-  row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 10px 4px;'
-    + 'margin-top:4px;border-top:1px solid rgba(255,160,0,.35);color:#ddd';
-  const lbl = document.createElement('span');
-  lbl.textContent = 'VFO A/B';
-  const b = document.createElement('button');
-  b.id = 'abToggle';
-  b.textContent = spec.abOn ? 'ON' : 'OFF';
-  b.style.cssText = 'background:none;border:1px solid ' + (spec.abOn ? '#ffe566' : '#666') + ';color:'
-    + (spec.abOn ? '#ffe566' : '#ddd') + ';padding:5px 12px;border-radius:5px;cursor:pointer;font:inherit';
-  b.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and a decoder or the spots run on the VFO selected when you start them (it says DEC). Not on FM broadcast.';
-  b.onclick = () => { spec?.setAB(!spec.abOn); close(); };
-  row.append(lbl, b);
-  return row;
+/** The frequency card's VFO A/B row — only where the server offers it, no dead control. It moved from the step menu
+ *  (Stuart, 2026-10-27: the app had it on the frequency card already); flipping it leaves the card open, as the app does. */
+function abRowPaint() {
+  const row = document.getElementById('freqAbRow');
+  const b = document.getElementById('abToggle') as HTMLButtonElement | null;
+  if (!row || !b) return;
+  row.hidden = !spec || spec.watchMax < 1;
+  const on = !!spec?.abOn;
+  b.textContent = on ? 'ON' : 'OFF';
+  b.classList.toggle('on', on);
 }
 
 /** Wired once: the A/B key, the stereo switch, the remembered stereo choice, the mono-output watch. */
 function initVfoAB() {
   const key = document.getElementById('mAbKey');
   key?.addEventListener('click', () => spec?.swapVfo());
+  const t = document.getElementById('abToggle');
+  if (t) {
+    t.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and a decoder or the spots run on the VFO selected when you start them (it says DEC). Not on FM broadcast.';
+    t.addEventListener('click', () => { spec?.setAB(!spec.abOn); abRowPaint(); });
+  }
   document.getElementById('abStereoBtn')?.addEventListener('click', () => {
     if (!spec) return;
     spec.setAbStereo(!spec.abStereo);

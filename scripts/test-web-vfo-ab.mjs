@@ -97,12 +97,18 @@ console.log('── VFO A/B in the web client ──');
 await session('on', {}, async ({ ev, send, shot, until, click }) => {
   ok(await until(`${AB} && ${AB}.max === 1`, 8000), `hwinfo offers VFO A/B (max ${await ev(`${AB}?.max`)})`);
   ok(await ev(`document.getElementById('mAbKey').hidden && !document.getElementById('mTuneGlyph').hidden`), 'off: no A/B key, the radio glyph between the tune buttons');
-  // ── on, from the tuning menu
+  // ── on, from the frequency card (moved from the step menu 2026-10-27, as the app)
   await click('#mStep');
-  ok(await until(`document.getElementById('abToggle')?.textContent === 'OFF'`, 3000), 'the tuning (step) menu carries VFO A/B: OFF');
-  await shot('step-menu');
+  await sleep(300);
+  ok(await ev(`!!document.getElementById('stepMenu') && !document.getElementById('stepMenu').textContent.includes('VFO A/B')`), 'the step menu no longer carries VFO A/B');
+  await ev(`document.getElementById('stepMenu')?.remove(), 0`);
+  await click('#mFreqBox');
+  ok(await until(`!document.getElementById('freqAbRow').hidden && document.getElementById('abToggle')?.textContent === 'OFF'`, 3000), 'the frequency card carries VFO A/B: OFF');
+  await shot('freq-card');
   await click('#abToggle');
   ok(await until(`${sentWatch}.some(m => m.on === true && m.id === 1)`, 3000), `ON sends {watch, id:1, on:true} (${JSON.stringify(await ev(`${sentWatch}[0]`))})`);
+  ok(await until(`document.getElementById('abToggle').textContent === 'ON' && document.getElementById('freqPanel').classList.contains('open')`, 3000), 'the card stays open and reads ON');
+  await click('#freqClose');
   ok(await until(`${AB}.state && ${AB}.state.chans.length === 1`, 4000), 'the server reports VFO B');
   ok((await ev(`${AB}.state.follow`)) === true, 'a personal receiver: the state says the radio follows both VFOs (no client-side wall for B)');
   ok(await ev(`!document.getElementById('mAbKey').hidden && document.getElementById('mAbKey').textContent === 'A' && document.getElementById('mTuneGlyph').hidden`),
@@ -248,9 +254,9 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   await shot('ab-on-phone');
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
   await sleep(600);
-  // ── off, from the tuning menu
-  await click('#mStep');
-  ok(await until(`document.getElementById('abToggle')?.textContent === 'ON'`, 3000), 'the toggle reads ON');
+  // ── off, from the frequency card
+  await click('#mFreqBox');
+  ok(await until(`!document.getElementById('freqAbRow').hidden && document.getElementById('abToggle')?.textContent === 'ON'`, 3000), 'the toggle reads ON');
   await click('#abToggle');
   ok(await until(`${sentWatch}.some(m => m.off === true)`, 2000), 'OFF sends {watch, id:1, off:true}');
   ok(await until(`!${AB}.on && ${AB}.sel === 'A' && document.getElementById('mAbKey').hidden && !document.getElementById('mTuneGlyph').hidden`, 3000), 'back to one VFO: A selected, key gone, glyph back');
@@ -265,9 +271,9 @@ await session('off', { vfoB: 0 }, async ({ ev, until, click }) => {
   await until(`${AB} && ${AB}.max === 0`, 5000);
   await sleep(800);
   ok((await ev(`${AB}.max`)) === 0, 'hwinfo says watch:0');
-  await click('#mStep');
+  await click('#mFreqBox');
   await sleep(500);
-  ok(await ev(`!!document.getElementById('stepMenu') && !document.getElementById('abToggle')`), 'no VFO A/B toggle in the tuning menu');
+  ok(await ev(`document.getElementById('freqAbRow').hidden`), 'no VFO A/B row on the frequency card');
   ok(await ev(`document.getElementById('abStereoRow').hidden`), 'no STEREO row in the audio panel');
 });
 console.log(`${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);

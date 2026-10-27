@@ -4831,6 +4831,11 @@ select.btn { padding: 6px 8px; }
       <button class="btn on" data-unit="mhz">MHz</button>
     </div>
   </div>
+  <!-- ★★ V12 VFO A/B lives on the frequency card, as in the app (Stuart, 2026-10-27) — hidden where the server offers none. -->
+  <div class="mrow" id="freqAbRow" hidden>
+    <label>VFO A/B</label>
+    <button class="btn" id="abToggle">OFF</button>
+  </div>
   <!-- ★★ SEARCH AND BOOKMARKS LIVE WITH FREQUENCY ENTRY, exactly as the app does — AGENTS.md
        records the move ("Bookmarks moved to the frequency card") and FreqModal says so in its
        own comment. On the card they had a row to themselves and ate a third of its height for
