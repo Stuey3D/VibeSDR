@@ -370,6 +370,7 @@ public:
             if (spotsSlot_ < 0) return Start::Refused;
         }
         stopSpotterLocked_(false);
+        gapClear(GapSpots);   // ★ a new run: the last one's spots are not "missed" by it (the gap log)
         diagAt_ = 0;   // ★ Band's minute line starts again with the new run
         /* ★★ EXTRA FT8 PASSES ONLY ON SPARE CPU (2026-10-05): the server says it is loaded, or this host's own
          *  queue is a second behind (the decode thread is not keeping up) — either way, one pass. */
@@ -587,7 +588,54 @@ public:
         record(d, n);
         if (DecoderTapPtr t = tap()) t->frame(d, n);
     }
-    void broadcastText(const std::string& s) { for (auto& p : snapshotPeers()) p->text(s); }
+    /** `gap`: which gap log keeps it for a listener coming back (GapDecoder / GapSpots), or -1 = not kept (a status frame
+     *  that is re-sent anyway). */
+    void broadcastText(const std::string& s, int gap = 0 /* GapDecoder */) {
+        for (auto& p : snapshotPeers()) p->text(s);
+        if (gap >= 0) gapNote((uint8_t)gap, false, s.data(), s.size());
+    }
+
+    /* ── ★★★ THE GAP LOG — WHAT A LISTENER WHO WAS AWAY MISSED (V12 held session, 2026-10-27) ──────────────────────────
+     *  Stuart: "when the OS suspends the app … your session on the server is held for 3 minutes all decoders are still
+     *  running for this period and no data is missed". The decoders DO keep running through the hold (the shim keeps the
+     *  host) — but every line, spot and call they produced went to sockets that were not there, and nothing kept them:
+     *  the image stream has always had `replay_`, text never did. So the last few minutes of output are kept here, each
+     *  stamped with a sequence number; the shim notes the number when a listener's decoder socket goes (gapMark) and,
+     *  once it is back and has re-attached, sends what came after it (replayGap), paced like the image replay.
+     *  ★ Bounded (kGapMaxBytes / kGapMaxEntries, oldest out first) — three minutes of a busy Band FT8 run fits.
+     *  ★ A NEW run of a decoder clears its own entries (clearLocked_ / a new spotter): the lines of the RTTY you closed
+     *    are not "missed" by the NAVTEX you opened. Status frames (state bytes, chips) are not kept — they are re-sent. */
+    enum : uint8_t { GapDecoder = 0, GapSpots = 1 };
+    /** The sequence number of the newest entry — everything up to it was sent while the socket was there. */
+    uint64_t gapMark() { std::lock_guard<std::mutex> gl(gapMtx_); return gapSeq_; }
+    /** Send `p` every entry of `kind` after `since`, paced on a thread of its own. @return how many. */
+    size_t replayGap(const DecoderPeerPtr& p, uint64_t since, uint8_t kind) {
+        std::vector<GapEntry> out;
+        { std::lock_guard<std::mutex> gl(gapMtx_);
+          for (const auto& e : gap_) if (e.seq > since && e.kind == kind) out.push_back(e); }
+        if (out.empty() || !p || !p->open()) return 0;
+        const size_t n = out.size();
+        log(std::string("decoder rejoined — replaying ") + std::to_string(n) + (kind == GapSpots ? " spots" : " decoder messages")
+            + " sent while the listener was away");
+        std::lock_guard<std::mutex> tl(replayThrMtx_);
+        replayThreads_.erase(std::remove_if(replayThreads_.begin(), replayThreads_.end(),
+            [](std::unique_ptr<ReplayJob>& j) { if (j->done.load()) { if (j->th.joinable()) j->th.join(); return true; } return false; }),
+            replayThreads_.end());
+        auto job = std::make_unique<ReplayJob>();
+        ReplayJob* jp = job.get();
+        jp->th = std::thread([this, p, out = std::move(out), jp] {
+            vibeDecoderThread("vibe-gap");
+            for (auto& e : out) {
+                for (int w = 0; w < 500 && p->open() && p->backlog() > kReplayBacklog && !replayStop_.load(); ++w)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                if (!p->open() || replayStop_.load()) break;
+                if (e.bin) p->binary((const uint8_t*)e.data.data(), e.data.size()); else p->text(e.data);
+            }
+            jp->done.store(true);
+        });
+        replayThreads_.push_back(std::move(job));
+        return n;
+    }
 
     /** ★★★ CATCH A LATE ARRIVAL UP ON THE PICTURE SO FAR — PACED. A full WEFAX chart is ~2 MB of
      *  lines, four times a listener's whole outbox; sending it in one go dropped the joiner for
@@ -620,6 +668,28 @@ public:
 
 private:
     struct ReplayJob { std::thread th; std::atomic<bool> done{false}; };
+    struct GapEntry { uint64_t seq; uint8_t kind; bool bin; std::string data; };
+    static constexpr size_t kGapMaxBytes = 384u * 1024, kGapMaxEntries = 4000;
+    std::mutex gapMtx_;
+    std::deque<GapEntry> gap_;
+    size_t gapBytes_ = 0;
+    uint64_t gapSeq_ = 0;
+    void gapNote(uint8_t kind, bool bin, const void* d, size_t n) {
+        if (!n || n > 64u * 1024) return;
+        std::lock_guard<std::mutex> gl(gapMtx_);
+        gap_.push_back(GapEntry{ ++gapSeq_, kind, bin, std::string((const char*)d, n) });
+        gapBytes_ += n;
+        while (!gap_.empty() && (gapBytes_ > kGapMaxBytes || gap_.size() > kGapMaxEntries)) {
+            gapBytes_ -= gap_.front().data.size(); gap_.pop_front();
+        }
+    }
+    /** A new run of `kind`: its predecessor's output is not "missed" by it. */
+    void gapClear(uint8_t kind) {
+        std::lock_guard<std::mutex> gl(gapMtx_);
+        for (auto it = gap_.begin(); it != gap_.end(); ) {
+            if (it->kind == kind) { gapBytes_ -= it->data.size(); it = gap_.erase(it); } else ++it;
+        }
+    }
     static constexpr size_t kMaxFrames = 48000 * 4;          // 4 s of audio behind = drop
     static constexpr size_t kReplayMax = 4u * 1024 * 1024;
     static constexpr size_t kReplayBacklog = 128u * 1024;    // pace a replay below this backlog
@@ -687,6 +757,7 @@ private:
         active_.store(false, std::memory_order_relaxed);
         imageKind_.store(0, std::memory_order_relaxed);
         { std::lock_guard<std::mutex> rl(replayMtx_); replay_.clear(); replayBytes_ = 0; }
+        gapClear(GapDecoder);   // ★ a new run — see the gap log
     }
     void log(const std::string& s) { if (env_.log) env_.log(s); }
     std::vector<DecoderPeerPtr> snapshotPeers() {
@@ -721,6 +792,7 @@ private:
         m[9] = (uint8_t)(len >> 24); m[10] = (uint8_t)(len >> 16); m[11] = (uint8_t)(len >> 8); m[12] = (uint8_t)len;
         std::memcpy(m.data() + 13, text.data(), text.size());
         for (auto& p : snapshotPeers()) p->binary(m.data(), m.size());
+        gapNote(GapDecoder, true, m.data(), m.size());   // ★ the gap log — for a listener coming back
         if (DecoderTapPtr t = tap()) t->text(text);
     }
     static void put32(std::vector<uint8_t>& v, uint32_t x) {
@@ -1087,7 +1159,7 @@ private:
             "{\"type\":\"digital_spot\",\"data\":{\"mode\":\"%s\",\"callsign\":\"%s\","
             "\"snr\":%d,\"frequency\":%.0f,\"band\":\"%s\",\"grid\":\"%s\",\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%llu}}",
             m.c_str(), c.c_str(), sp.snr, rfHz, bandFor(rfHz), g.c_str(), how.c_str(), ctry.c_str(), (unsigned long long)ts);
-        if (n > 0) broadcastText(std::string(buf, (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1));
+        if (n > 0) broadcastText(std::string(buf, (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1), GapSpots);
     }
     /** ★ Band's mode chips as JSON (spotsMtx_ held). */
     std::string statusJsonLocked_() {
@@ -1127,7 +1199,7 @@ private:
         const uint64_t seq = spotter_->statusSeq();
         if (seq == statusSent_ ? utc - statusAt_ < 15.0 : utc - statusAt_ < 1.0) return;
         statusSent_ = seq; statusAt_ = utc;
-        broadcastText(statusJsonLocked_());
+        broadcastText(statusJsonLocked_(), -1);   // ★ re-sent every 15 s — not kept for a returning listener
     }
     /** Stop the run (spotsMtx_ held). `finishTap`: a real stop, not a scope change — the gallery's summary is written. */
     void stopSpotterLocked_(bool finishTap) {

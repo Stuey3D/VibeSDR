@@ -137,14 +137,14 @@ try {
     try {
       const sid = crypto.randomUUID();
       ok(await enterAndVanish(S, sid), 'in ADS-B, then the socket goes');
-      await waitFor(() => /last listener left — ADS-B stays up for 30 s/.test(S.log()), 4000);
-      ok(/last listener left — ADS-B stays up for 30 s/.test(S.log()), '★ "stays up for 30 s" — not 5');
+      await waitFor(() => /last listener left — ADS-B stays up for 30 s|HELD for 30 s/.test(S.log()), 4000);
+      ok(/last listener left — ADS-B stays up for 30 s|HELD for 30 s/.test(S.log()), '★ "stays up for 30 s" — not 5 (since v12-session-hold: the session is HELD for the 30 s grace)');
       await sleep(10_000);
       ok(!gaveBack(S), '★ still in ADS-B 10 s after the last socket went (the old grace gave it back at 5 s)');
       const A2 = spectrum(S.port, sid);
       await waitFor(() => parsed(A2, 'adsb').length > 0, 2500);
       ok(parsed(A2, 'adsb').length > 0, 'the same session back: reports at once');
-      ok(/listener returned within 30 s — ADS-B kept/.test(S.log()), '…the leave cancelled, logged');
+      ok(/listener returned within 30 s — ADS-B kept|held session \S+ returned after/.test(S.log()), '…the leave cancelled (the hold ended), logged');
       ok(entries(S) === 1, `…and nothing was re-entered (${entries(S)} entry)`);
       A2.close(); await sleep(300);
     } finally { S.stop(); }

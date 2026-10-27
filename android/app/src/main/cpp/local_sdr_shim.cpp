@@ -9811,6 +9811,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //   socket also sits in audioExtra would be counted twice.
             if (!specOpen && audioOpen && !(!c->session.empty() && audioOnly.count(c->session))) ++n;
         }
+        // ★★ V12: AND EVERY HELD SESSION — a listener the phone suspended keeps their place (Stuart: "their listener slot
+        //    stays counted"). They have no socket open, so nothing above counted them; a held session that is back
+        //    has already stopped being held (holdArrivalLocked).
+        n += heldCountLocked();
         s_listenersCached.store(n, std::memory_order_relaxed);
         return n;
     }
@@ -10062,7 +10066,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::map<net::Socket*, double> askStateAt;
 
     /** Is the lock in force right now? Switch on, a shared dial, company. Call WITH clientMtx held. */
-    bool askInForceLocked() { return g_vsAskBeforeTuning.load() && vsSharedDial() && specListenerCountLocked() > 1; }
+    /* ★ A HELD session (V12) is not company here: nobody can ask a listener whose phone is suspended, so the one person
+     *   actually present has the dial as normal. */
+    bool askInForceLocked() { return g_vsAskBeforeTuning.load() && vsSharedDial() && specListenerCountLocked() - heldCountLocked() > 1; }
 
     /** ★★ THE ROOM, AS THE RULE NEEDS IT. Call WITH clientMtx held.
      *  ★★ "LONGEST-CONNECTED" IS askSeniority — keyed on the browser and address like the turn clock, so a reload
@@ -17495,6 +17501,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "ais") { aisControl(sock, msg); return; }
         // ★★ A returning listener asking for the whole-radio mode it left in back — see modeResume
         if (type == "mode_resume") { modeResume(sock, msg); return; }
+        // ★★ V12: the listener is leaving ON PURPOSE (back to the server list, the tab closed) — their sockets closing is
+        //    the end of the visit, not a suspended phone: never held (see "THE HELD SESSION"). Not gated: it moves nothing.
+        if (type == "leave") {
+            if (sock) { std::lock_guard<std::mutex> lk(clientMtx); noHoldSockLocked(sock.get(), "the listener left on purpose"); }
+            return;
+        }
         // ★ AIS: one ship's track (the map's tapped ship) — a read, to the asker only
         if (type == "ais_trail") { double m = 0; if (sock && jsonNum(msg, "mmsi", m) && m > 0) sendText(sock, g_ais.trailJson(uint32_t(m))); return; }
         if (type == "adsb") {
@@ -19619,7 +19631,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           j += ",\"sessionLimitMin\":" + std::to_string(g_vsSessionLimitMin.load());
           j += ",\"sessionSecsLeft\":" + std::to_string(left);
           // ★ B10: kept until somebody else wants the radio — see borrowedFor(). Absent = not borrowed.
-          if (left >= 0 && borrowedFor(sock)) j += ",\"borrowed\":true"; }
+          const bool borrowed = left >= 0 && borrowedFor(sock);
+          if (borrowed) j += ",\"borrowed\":true";
+          /* ★★ V12 HELD SESSION — what the app tells its listener when the phone suspends it ("held for 3 minutes … come
+           *  back by HH:MM"): `holdS` = how long this server holds a session whose sockets have gone (0 = it does not —
+           *  the owner's grace is 0, or an older server, which sends nothing), and `holdHardS` = seconds to the HARD
+           *  limit that ends a hold sooner (-1 = none: no limit, exempt, soft, or borrowed time). The app takes the
+           *  earlier, and says which (src/services/sessionHoldNotice.ts). */
+          j += ",\"holdS\":" + std::to_string((int)sessionHoldS());
+          j += ",\"holdHardS\":" + std::to_string(left >= 0 && !borrowed && !g_vsSessionLimitSoft.load() ? left : -1); }
         // A pinned rate is advertised so the client can HIDE its rate picker and say
         // who set it, rather than offering a control whose every use is silently
         // dropped. 0 = client-controlled (the default).
@@ -23046,6 +23066,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★★★ ...Locked — WE ALREADY HOLD clientMtx HERE. Calling the locking form
             //     deadlocked this thread against itself and froze the whole server for
             //     every listener. See specListenerCountLocked().
+            // ★★ V12 HELD SESSIONS: the held listener coming back carries on; anybody else takes a held place that would
+            //    otherwise turn them away — before "full" is judged (holdArrivalLocked).
+            holdArrivalLocked(session, sock.get());
             bool occupied = isFullLocked(me);
             // ★★★ AND ARE THEY ALREADY ON ANOTHER RADIO HERE? Occupancy is per radio and each
             //     radio is its own process, so nothing had a view across the machine — one address
@@ -23175,6 +23198,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         { sendWs(specClient,  0x1, (const uint8_t*)kEvict, strlen(kEvict)); outboxClose(specClient,  100); }
                     if (audioClient && audioClient->isOpen())
                         { sendWs(audioClient, 0x1, (const uint8_t*)kEvict, strlen(kEvict)); outboxClose(audioClient, 100); }
+                    noHoldLocked(occupantSession, "evicted by the owner");   // ★ V12: ended for a reason — never held
                     occupantSession.clear();
                     g_vsHandoverAt = 0;   // ★ evicted by an admin — no handover is running now
                     // ★ NOT put on cooldown. They were evicted by the owner, not caught
@@ -23685,7 +23709,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             //     for someone who has NOT.
             bool preTuned;
             { std::lock_guard<std::mutex> lk(clientMtx);
-              preTuned = !session.empty() && preTunedSession == session; }
+              preTuned = !session.empty() && preTunedSession == session;
+              // ★★ V12: a listener back from a HELD session is not landed — they never left (holdArrivalLocked)
+              if (!preTuned && holdReturnedRecentlyLocked(session)) {
+                  preTuned = true;
+                  LOGI("session [%s] is back from its hold — landing skipped, it carries on where it was", session.c_str());
+              } }
             if (preTuned)
                 LOGI("session [%s] already tuned to %.3f kHz %s — landing skipped",
                      session.c_str(), audioFreq.load() / 1e3, mode.c_str());
@@ -24189,6 +24218,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   if (kv.first != sock.get() && kv.second == session) { sibling = true; break; }
               if (!sibling) sessionLastAppMs.erase(session);
           } }
+        // ★★ V12 HELD SESSION: this listener's HARD time limit, read now (it takes clientMtx) for holdStartLocked below —
+        //    the hold never outlasts it. -1 = none: no limit, exempt, a soft limit, or already on borrowed time (those
+        //    end only when somebody else wants the radio, which holdArrivalLocked already answers).
+        int holdHardLeft = -1;
+        if (!session.empty() && sessionHoldS() > 0.0 && g_vsSessionLimitMin.load() > 0 && !g_vsSessionLimitSoft.load()
+            && !borrowedFor(sock))
+            holdHardLeft = secsLeftFor(sock);
+        bool heldNow = false;
         bool bothGone = false;
         bool stopDirectIq = false;        // ★ this socket owned the direct/full-rate IQ stream — stopped OUTSIDE clientMtx
         bool rdsxGone = false;            // ★ an Advanced RDS subscriber left — recompute OUTSIDE clientMtx
@@ -24206,6 +24243,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::shared_ptr<ClientDsp> goneDsp;
         std::shared_ptr<ClientDsp> keptDsp;   // ★ see "THE CHANNEL OUTLIVES ITS SPECTRUM SOCKET"
         { std::lock_guard<std::mutex> lk(clientMtx);
+          // ★★ V12: the session's LAST socket going — hold it (see "THE HELD SESSION"), decided before anything of it is
+          //    forgotten below; its channel is then kept rather than retired.
+          heldNow = holdStartLocked(session, sock.get(), holdHardLeft, sock->peerAddress());
           if (specClient == sock) {
               // Promote the next listener so the survivors keep their stream — every path that
               // uses `specClient` would otherwise go dark for everyone when the first one leaves.
@@ -24417,6 +24457,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (audioLives && !twin) {
                     clientDsp[c->audio.get()] = c;
                     keptDsp = c;
+                } else if (heldNow && !twin && c && c->spec) {
+                    /* ★★ V12 HELD SESSION: no socket of theirs is left, but the session is held — the channel (VFO, mode,
+                     *  filter, AGC, its decoder host's feed, its turn clock) keeps running, keyed by its own closed spectrum
+                     *  socket (alive in c->spec, so the key cannot be reused), and adoptChannel hands it back on return. */
+                    clientDsp[c->spec.get()] = c;
+                    LOGI("listener %s held — their channel keeps running at %.3f kHz", c->session.c_str(), c->vfoHz / 1e3);
                 } else {
                     if (twin && (!twin->audio || !twin->audio->isOpen())) {
                         twin->audio = c->audio;
@@ -24447,7 +24493,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               if (!ses.empty()) {
                   bool left = false;
                   for (auto& kv : sockSession) if (kv.second == ses) { left = true; break; }
-                  if (!left) sessionSquelch.erase(ses);
+                  if (!left && !heldNow) sessionSquelch.erase(ses);   // ★ V12: a HELD listener keeps their squelch
               }
           }
           sockSince.erase(sock.get());
@@ -24592,10 +24638,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  dropped those the same way. So the leave WAITS modeLeaveGraceS(); anyone arriving cancels it
              *  (resumeCaptureIdle, the same early connect step that cancels the idle park), and the park is armed only
              *  once the leave has happened — a 3 s RELEASE under a running DAB pipeline is the one thing it cannot survive. */
-            if (stillEmpty && !stopping.load() && (g_dabMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)
-                                                   || (g_ndbMode.load(std::memory_order_relaxed) && ndbOrigin_ != "background")
-                                                   || g_aisMode.load(std::memory_order_relaxed)
-                                                   || (g_adsbMode.load(std::memory_order_relaxed) && !adsbKeepHolds()))) {
+            if (stillEmpty && !stopping.load() && wholeModeLeavesWhenEmpty()) {
                 modeLeaveDueAt.store(nowSecs() + modeLeaveGraceS());
                 LOGI("last listener left — %s stays up for %.0f s in case they are only reconnecting",
                      g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : g_ndbMode.load() ? "NDB" : g_aisMode.load() ? "AIS" : "ADS-B", modeLeaveGraceS());
@@ -24603,6 +24646,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             else if (stillEmpty && !stopping.load() && g_adsbMode.load(std::memory_order_relaxed))
                 LOGI("[ADS-B] last listener left — staying in ADS-B (kept running when nobody is connected)");
             if (stillEmpty && !stopping.load() && modeLeaveDueAt.load() == 0.0) armIdlePark();
+            else if (!stillEmpty && heldNow) { /* ★ V12: held — the radio stays exactly as it is (logged by holdStartLocked) */ }
             else if (!stillEmpty) LOGI("not parking — a new listener arrived while this socket was closing");
 
         }
@@ -25263,6 +25307,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //    arriving listener does. A no-op when the capture is running (2026-10-07).
                 if (!perVfo) resumeCaptureIdle();
                 sendText(sock, "{\"type\":\"audio_extension_attached\"}");
+                // ★★ V12: the same decoder, still running (a held session back, a socket blip) — what it decoded while
+                //    this listener's socket was away follows, after the attach (the gap log).
+                if (r == DecoderHost::Start::Joined) dxGapReplay(sess, host, peer, false);
             } else if (type == "audio_extension_detach") {
                 if (rdsHere) { rdsxDecoderSub(sock.get(), "", false); rdsHere = false; }
                 if (host) host->stop();
@@ -25284,13 +25331,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else if (!host) {
                     sendDecoderRefusal(sock, "spots", "ft8", "no_session",
                         "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
-                } else if (host->startSpots(scope) == DecoderHost::Start::Refused
-                           && (decoderOnly || !bgYieldForListener() || host->startSpots(scope) == DecoderHost::Start::Refused)) {
-                    LOGI("digital spots refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
-                    sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
-                } else if (!perVfo) {
-                    if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
-                    resumeCaptureIdle();       // ★ the spotter is a consumer too — see the decoder start above
+                } else {
+                    DecoderHost::Start sr = host->startSpots(scope);
+                    if (sr == DecoderHost::Start::Refused && !decoderOnly && bgYieldForListener()) sr = host->startSpots(scope);
+                    if (sr == DecoderHost::Start::Refused) {
+                        LOGI("digital spots refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
+                        sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
+                    } else {
+                        if (!perVfo) {
+                            if (!session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); sharedDecoderBy_ = session; }
+                            resumeCaptureIdle();       // ★ the spotter is a consumer too — see the decoder start above
+                        }
+                        // ★★ V12: the same run, still going — the spots heard while this listener was away (the gap log)
+                        if (sr == DecoderHost::Start::Joined) dxGapReplay(sess, host, peer, true);
+                    }
                 }
             } else if (type == "unsubscribe_digital_spots") {
                 if (host) host->stopSpots();
@@ -25305,13 +25359,28 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (rdsHere) rdsxDecoderSub(sock.get(), "", false);
         { std::lock_guard<std::mutex> lk(clientMtx); dxSocks.erase(sock); dxSockSession.erase(sock.get()); }
         const size_t left = host ? host->removePeer(peer.get()) : 0;
+        // ★★ V12: where this listener's decoder output had got to — what comes after it is theirs when they are back
+        //    (the gap log: dxGapReplay at the next attach / subscribe). Kept whoever else is still watching.
+        if (host) dxGapNote(sess, host->gapMark());
+        bool keptForHold = false;
         if (host && left == 0) {
-            // ★ A listener's own host goes with them, slots and all — freed at once for the next.
-            if (perVfo) decoders_.drop(sess);
+            /* ★★★ V12 HELD SESSION: a decoder whose listener is held — or is still here, and whose other sockets may be
+             *  about to go the same way (a suspension takes all three, in any order) — is KEPT running (decHeld_), and
+             *  decoderHoldTick decides: held = it runs on; gone without a hold = stopped, exactly as here before.
+             *  ★ A decoder the listener closed is detached first (audio_extension_detach / unsubscribe), so a socket
+             *    closing with one still running is not somebody switching it off. */
+            std::string owner = sess;
+            if (!perVfo) { std::lock_guard<std::mutex> lk(clientMtx); owner = sharedDecoderBy_.empty() ? sess : sharedDecoderBy_; }
+            if (decoderKeepForHold(owner, host)) {
+                keptForHold = true;
+                std::lock_guard<std::mutex> dl(decHoldMtx_);
+                decHeld_[perVfo ? sess : std::string()] = DecHeld{ owner, nowSecs() };
+            } else if (perVfo) decoders_.drop(sess);   // ★ a listener's own host goes with them, slots and all
             else { host->stop(); host->stopSpots(); }
         }
         outboxClose(sock);
-        LOGI("dxcluster WS disconnected%s", host && left ? " (others still watching — kept decoder)" : "");
+        LOGI("dxcluster WS disconnected%s", host && left ? " (others still watching — kept decoder)"
+                                          : keptForHold ? " — decoder kept running: its listener's session may be held" : "");
     }
 
     // ── IQ producer (runs on the libusb/socket reader thread) ───────────────
@@ -26320,7 +26389,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<std::pair<std::string, std::shared_ptr<WatchSet>>> sets;
         { std::lock_guard<std::mutex> lk(watchMtx); for (auto& kv : watchSets) sets.emplace_back(kv.first, kv.second); }
         std::set<std::string> alive;
-        { std::lock_guard<std::mutex> lk(clientMtx); for (auto& kv : sockSession) alive.insert(kv.second); }
+        { std::lock_guard<std::mutex> lk(clientMtx); for (auto& kv : sockSession) alive.insert(kv.second);
+          for (auto& kv : heldSessions_) alive.insert(kv.first); }   // ★ V12: a HELD listener's VFO B stays (see "THE HELD SESSION")
         const bool avail = watchAvailable();
         std::vector<std::string> drop;
         for (auto& [sess, w] : sets) {
@@ -27498,6 +27568,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (sharedDecoderNeedsAudio()) return false;
         // ★ …or a CW skimmer, which takes the capture's IQ rather than its audio (V12).
         if (!perClientDsp() && decoders_.sharedWantsIq()) return false;
+        // ★★★ …or a HELD session (V12): a listener the phone has suspended is still here for sessionHoldS() — so the
+        //     whole-radio mode is not left, the radio is not parked, and background decoding does not take it.
+        if (!heldSessions_.empty()) return false;
         return true;
     }
 
@@ -28132,6 +28205,305 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     static double modeLeaveGraceS() {
         const double g = g_vsIdleGraceSec.load();
         return std::max(5.0, std::min(60.0, std::isfinite(g) ? g : 5.0));
+    }
+
+    // ══ ★★★ THE HELD SESSION (V12, 2026-10-27, branch v12-session-hold — docs/v12/BACKGROUND-DECODING.md, "The held session") ═══════════════════
+    /* Stuart: "rather than a 60 second grace period as that doesnt leave the user much time to do what they are doing in
+     *  their messaging app or whatever, maybe a 3 minute grace period and when the OS suspends the app we send a little
+     *  notification … your session on the server is held for 3 minutes all decoders are still running for this period
+     *  and no data is missed."
+     *  iOS suspends VibeSDR seconds after it goes to the background whenever nothing is playing (ADS-B, NDB, ISM, AIS
+     *  release the audio session — setQuiet), and its sockets go with it. Until now the server then treated that listener
+     *  as GONE: the whole-radio mode left after modeLeaveGraceS, the decoders stopped with their socket, VFO B closed, the
+     *  slot was freed. A HELD session is a listener whose sockets have all dropped but who is still THERE for
+     *  sessionHoldS(): everything they had keeps running exactly as if they were connected — the mode, the dial, their
+     *  channel on a per-VFO radio, their decoders (whose output is kept for them: DecoderHost's gap log), VFO B — and
+     *  their place is counted. The same session id coming back carries on; nothing is rebuilt and nothing is landed.
+     *  ★★★ THE HOLD NEVER BENDS A RULE (Stuart: "obviously if the user hits a hard time limit within that grace period then
+     *      that is the hard rule and user gets disconnected as normal"). It ends at the session time limit if that comes
+     *      first (and is not even started for a session already at it), at the idle limit likewise; a session ended FOR
+     *      A REASON — the limit, a kick, a ban, an eviction, the idle check, or the listener leaving on purpose (`leave`)
+     *      — is never held (noHoldLocked). Ending a hold is exactly the disconnect it postponed (finishHold).
+     *  ★★ IT YIELDS TO A PERSON WHO IS HERE. Another listener arriving where the held place would turn them away takes it:
+     *     a one-listener radio is theirs at once, a full shared radio frees its oldest held place first
+     *     (holdArrivalLocked). On a shared dial the held listener does not count for "ask before tuning" — nobody can
+     *     ask somebody who is not there — so a newcomer has the dial as normal, and the held listener rejoins as a
+     *     listener of wherever the radio now is (the shared-dial contract: rejoining is the server's decision, never a
+     *     client's tune).
+     *  ★ The owner's idle grace still caps it ("Let go after" 30 s / 1 min holds that long), and grace 0 holds nothing —
+     *    the old quick release. After the hold the 8b63720b9 path applies: the mode is left, and `mode_resume` may still
+     *    give it back to a listener who returns to an untouched radio. */
+    static constexpr double kSessionHoldS = 180.0;
+    static double sessionHoldS() {
+        const double g = g_vsIdleGraceSec.load();
+        if (!std::isfinite(g) || g <= 0.0) return 0.0;
+        return std::min(kSessionHoldS, g);
+    }
+    struct HeldSession { double since = 0, until = 0; std::string addr; const char* cut = ""; };
+    std::map<std::string, HeldSession> heldSessions_;      // ★ clientMtx
+    std::map<std::string, double>      noHoldUntil_;       // ★ clientMtx — sessions ended for a reason: never held
+    std::vector<std::string>           holdsEnded_;        // ★ clientMtx — released under the lock, finished by holdTick
+    std::map<std::string, double>      holdReturnedAt_;    // ★ clientMtx — back from a hold: never landed (see preTuned)
+
+    int  heldCountLocked() const { return (int)heldSessions_.size(); }
+    bool isHeldLocked(const std::string& s) const { return !s.empty() && heldSessions_.count(s) > 0; }
+    bool sessionHasSocketLocked(const std::string& s) const {
+        if (s.empty()) return false;
+        for (const auto& kv : sockSession) if (kv.second == s) return true;
+        return false;
+    }
+    void releaseHoldLocked(const std::string& s, const char* why) {
+        auto it = heldSessions_.find(s);
+        if (it == heldSessions_.end()) return;
+        LOGI("held session %.8s released after %.0f s — %s", s.c_str(), nowSecs() - it->second.since, why);
+        heldSessions_.erase(it);
+        holdsEnded_.push_back(s);
+    }
+    /** ★★★ This session's departure is FINAL — ended for a reason. Never held; a hold already running ends now.
+     *  Call WITH clientMtx held. */
+    void noHoldLocked(const std::string& s, const char* why) {
+        if (s.empty()) return;
+        const double now = nowSecs();
+        if (noHoldUntil_.size() > 512)
+            for (auto it = noHoldUntil_.begin(); it != noHoldUntil_.end(); ) it = it->second <= now ? noHoldUntil_.erase(it) : std::next(it);
+        noHoldUntil_[s] = now + 120.0;
+        releaseHoldLocked(s, why);
+    }
+    void noHoldSockLocked(const net::Socket* sk, const char* why) {
+        auto it = sockSession.find(const_cast<net::Socket*>(sk));
+        if (it != sockSession.end()) noHoldLocked(it->second, why);
+    }
+    bool noHoldPendingLocked(const std::string& s, double now) const {
+        auto it = noHoldUntil_.find(s);
+        return it != noHoldUntil_.end() && it->second > now;
+    }
+    bool holdReturnedRecentlyLocked(const std::string& s) const {
+        auto it = holdReturnedAt_.find(s);
+        return it != holdReturnedAt_.end() && nowSecs() - it->second < 60.0;
+    }
+    /** ★★ SOMEBODY ARRIVES (acceptWs, clientMtx held, before isFullLocked). The held session itself coming back carries on
+     *  where it was. Anybody else: a held place that would turn them away is theirs (see the note above). */
+    void holdArrivalLocked(const std::string& session, const net::Socket* arriving) {
+        if (!session.empty()) noHoldUntil_.erase(session);   // ★ a new visit: its departure is judged afresh
+        if (heldSessions_.empty()) return;
+        auto it = heldSessions_.find(session);
+        if (!session.empty() && it != heldSessions_.end()) {
+            LOGI("held session %.8s returned after %.0f s — everything it left running carries on", session.c_str(),
+                 nowSecs() - it->second.since);
+            heldSessions_.erase(it);
+            holdReturnedAt_[session] = nowSecs();
+            return;
+        }
+        // ★ A second socket of a session already here is not a new person.
+        for (const auto& kv : sockSession) if (kv.first != arriving && !session.empty() && kv.second == session) return;
+        const int maxUsers = g_vsMaxUsers.load();
+        if (maxUsers <= 1) {
+            std::vector<std::string> all;
+            for (const auto& kv : heldSessions_) all.push_back(kv.first);
+            for (const auto& s : all) releaseHoldLocked(s, "another listener arrived at this one-listener radio");
+            return;
+        }
+        while (!heldSessions_.empty() && specListenerCountLocked() >= maxUsers) {
+            auto oldest = heldSessions_.begin();
+            for (auto h = heldSessions_.begin(); h != heldSessions_.end(); ++h) if (h->second.since < oldest->second.since) oldest = h;
+            const std::string s = oldest->first;
+            releaseHoldLocked(s, "another listener arrived at a full radio — the held place is theirs");
+        }
+    }
+    /** ★★ THE LAST SOCKET OF A SESSION IS CLOSING (the spectrum/audio close path, clientMtx held, BEFORE this socket is
+     *  forgotten). Hold it? `hardLeftS` = seconds to this listener's hard session limit, -1 = none (taken before the lock).
+     *  @return true when the session is now held. */
+    bool holdStartLocked(const std::string& sess, const net::Socket* closing, int hardLeftS, const std::string& addr) {
+        if (sess.empty() || stopping.load() || frontDoorOnly || decoderOnly) return false;
+        const double holdS = sessionHoldS();
+        if (holdS <= 0.0) return false;
+        const double now = nowSecs();
+        if (noHoldPendingLocked(sess, now)) return false;
+        for (const auto& kv : sockSession) if (kv.first != closing && kv.second == sess) return false;   // still here
+        double until = now + holdS;
+        const char* cut = "";
+        if (hardLeftS >= 0) {
+            if (hardLeftS <= 1) return false;          // ★ at the limit already — ended as normal
+            if (now + hardLeftS < until) { until = now + hardLeftS; cut = "the session time limit"; }
+        }
+        // ★ The idle limit (per-VFO radios: enforceIdleListeners) — where it would have ended them, the hold ends.
+        const int idleMin = g_vsIdleKickMin.load();
+        if (idleMin > 0 && g_vsMaxUsers.load() > 1 && !vsSharedDial()) {
+            auto h = decoders_.find(sess);
+            const bool decoding = h && h->wantsAudio();   // ★ decoding IS using the radio — the idle rule's own exception
+            if (!decoding)
+                for (const auto& kv : clientDsp) {
+                    const auto& c = kv.second;
+                    if (!c || c->session != sess || c->lastAsk <= 0 || c->adminOk.load()) continue;
+                    const double d = c->idleAskAt > 0 ? c->idleAskAt : c->lastAsk + idleMin * 60.0 + kIdleAnswerSec;
+                    if (d < until) { until = std::max(now + 1.0, d); cut = "the idle limit"; }
+                }
+        }
+        heldSessions_[sess] = HeldSession{ now, until, addr, cut };
+        LOGI("listener %.8s's sockets have all gone — their session is HELD for %.0f s%s%s (mode, dial, decoders and VFO B "
+             "carry on; their place stays counted)", sess.c_str(), until - now, *cut ? " — until " : "", cut);
+        return true;
+    }
+    /** ★★ A HELD SESSION THAT HAS ENDED (expired, given way, kicked) — now do the disconnect it postponed: its channel
+     *  retired, its decoders stopped, and an empty radio left and parked exactly as when its last socket went. House
+     *  thread, no lock held. A session that came back in the meantime is left alone. */
+    void finishHold(const std::string& sess) {
+        std::vector<std::shared_ptr<ClientDsp>> gone;
+        bool live;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          if (heldSessions_.count(sess)) return;
+          live = sessionHasSocketLocked(sess);
+          if (!live) {
+              const double nowS = nowSecs();
+              for (auto it = clientDsp.begin(); it != clientDsp.end(); ) {
+                  auto c = it->second;
+                  const bool open = c && ((c->spec && c->spec->isOpen()) || (c->audio && c->audio->isOpen()));
+                  if (c && c->session == sess && !open) {
+                      gone.push_back(c);
+                      // ★ remember where they were, as the ordinary close does (sessionVfo)
+                      if (c->vfoHz > 0 && (sessionVfo.size() < kSessionVfoMax || sessionVfo.count(sess)))
+                          sessionVfo[sess] = SessionVfo{ c->vfoHz, c->bwHz, nowS, c->mode };
+                      it = clientDsp.erase(it);
+                  } else ++it;
+              }
+          } }
+        if (live) return;
+        for (auto& c : gone) { if (c->iq) iqStop(c.get()); stopClientThread(c); }
+        if (!gone.empty()) rdsResweep();
+        if (auto h = decoders_.find(sess); h && h->peerCount() == 0) decoders_.drop(sess);
+        std::string by;
+        { std::lock_guard<std::mutex> lk(clientMtx); by = sharedDecoderBy_; }
+        if (by == sess)
+            if (auto h = decoders_.shared(); h && h->peerCount() == 0) { h->stop(); h->stopSpots(); }
+        { std::lock_guard<std::mutex> dl(decHoldMtx_);
+          for (auto it = decHeld_.begin(); it != decHeld_.end(); ) it = it->second.owner == sess ? decHeld_.erase(it) : std::next(it); }
+        broadcastUsersSafe();
+        // ★ An empty radio now: what its last socket's close would have done, with the whole-radio mode left AT ONCE —
+        //   they have had their three minutes (the leave still records itself, so mode_resume can give it back).
+        radioEmptied(0.0);
+    }
+    /** House thread, every pass: holds that have run out end; ended holds are finished; kept decoders are judged. */
+    void holdTick() {
+        std::vector<std::string> ended;
+        { std::lock_guard<std::mutex> lk(clientMtx);
+          const double now = nowSecs();
+          std::vector<std::pair<std::string, const char*>> due;
+          for (const auto& kv : heldSessions_) {
+              // ★★ THE TURN CLOCK RUNS THROUGH A HOLD. The turn book charges nothing for time AWAY (startFor moves the
+              //    start on by it) — but a held listener is not away, they are "connected" as far as everything else is
+              //    concerned, so their turn is kept seen exactly as a live one is: the hold never buys extra time.
+              auto tk = sessionTurnKey.find(kv.first);
+              if (tk != sessionTurnKey.end()) turnBook.touch(tk->second, now);
+              if (now >= kv.second.until) due.push_back({ kv.first, kv.second.cut });
+          }
+          for (auto& d : due) {
+              // ★★★ ENDED BY THE LIMIT = ENDED AS THE LIVE SESSION WOULD HAVE BEEN (Stuart: "that is the hard rule and user
+              //     gets disconnected as normal"): the turn is spent and the address cools down, as enforceSessionLimit
+              //     does to a connected listener — so coming back is met by the same cooldown / borrowed-time rules.
+              if (std::strcmp(d.second, "the session time limit") == 0) {
+                  auto tk = sessionTurnKey.find(d.first);
+                  if (tk != sessionTurnKey.end()) turnBook.markSpent(tk->second, now);
+                  const std::string addr = heldSessions_[d.first].addr;
+                  if (!addr.empty() && !isLoopback(addr)) cooldownUntil[addr] = now + kSessionCooldownSec;
+                  noHoldLocked(d.first, "it reached the session time limit — ended as a live session would be");
+                  continue;
+              }
+              releaseHoldLocked(d.first, !*d.second ? "the hold ran out" : "it reached the idle limit — ended as a live session would be");
+          }
+          ended.swap(holdsEnded_);
+          for (auto it = holdReturnedAt_.begin(); it != holdReturnedAt_.end(); ) it = now - it->second > 60.0 ? holdReturnedAt_.erase(it) : std::next(it);
+          for (auto it = noHoldUntil_.begin(); it != noHoldUntil_.end(); ) it = it->second <= now ? noHoldUntil_.erase(it) : std::next(it); }
+        for (const auto& s : ended) finishHold(s);
+        decoderHoldTick();
+    }
+
+    /* ── ★★ A DECODER KEPT FOR A SESSION THAT MAY BE HELD ───────────────────────────────────────────────────────────────
+     *  A decoder socket closing with nobody else on its host stopped the decoder at once. When the app is suspended its
+     *  three sockets go in no particular order — the decoder's may well be first, while the spectrum or audio socket is
+     *  still open and the session is not yet held. So a decoder whose owner is held, or still here, is KEPT
+     *  (decoderKeepForHold) and judged on the house thread: held = runs on; gone without a hold (or ended for a reason) =
+     *  stopped; still here with no decoder socket back after 30 s = stopped, as the old close would have. */
+    struct DecHeld { std::string owner; double since = 0; };
+    std::mutex decHoldMtx_;
+    std::map<std::string, DecHeld> decHeld_;   // ★ host key ("" = the one-pipeline host) → its owner — decHoldMtx_
+    bool decoderKeepForHold(const std::string& owner, const std::shared_ptr<DecoderHost>& host) {
+        if (owner.empty() || !host || sessionHoldS() <= 0.0 || stopping.load() || decoderOnly) return false;
+        if (!host->wantsAudio() && !host->wantsIq()) return false;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        if (noHoldPendingLocked(owner, nowSecs())) return false;
+        return isHeldLocked(owner) || sessionHasSocketLocked(owner);
+    }
+    void decoderHoldTick() {
+        std::vector<std::pair<std::string, DecHeld>> list;
+        { std::lock_guard<std::mutex> dl(decHoldMtx_); for (auto& kv : decHeld_) list.push_back(kv); }
+        const double now = nowSecs();
+        for (auto& [key, d] : list) {
+            auto host = key.empty() ? decoders_.shared() : decoders_.find(key);
+            bool done = !host || host->peerCount() > 0 || (!host->wantsAudio() && !host->wantsIq());
+            bool stop = false;
+            if (!done) {
+                bool held, live, nohold;
+                { std::lock_guard<std::mutex> lk(clientMtx);
+                  held = isHeldLocked(d.owner); live = sessionHasSocketLocked(d.owner); nohold = noHoldPendingLocked(d.owner, now); }
+                if (!held && (!live || nohold || now - d.since > 30.0)) stop = done = true;
+                // ★ While held, the 30 s for its decoder socket to come back starts only when the listener does.
+                if (held) { std::lock_guard<std::mutex> dl(decHoldMtx_); auto it = decHeld_.find(key); if (it != decHeld_.end()) it->second.since = now; }
+            }
+            if (stop) {
+                LOGI("decoder kept for listener %.8s stopped — %s", d.owner.c_str(),
+                     now - d.since > 30.0 ? "their decoder socket did not come back" : "they left without a hold");
+                if (key.empty()) { host->stop(); host->stopSpots(); } else decoders_.drop(key);
+            }
+            if (done) { std::lock_guard<std::mutex> dl(decHoldMtx_); decHeld_.erase(key); }
+        }
+    }
+    /* ── ★★ WHAT A RETURNING DECODER SOCKET MISSED — the gap log's other half (DecoderHost::replayGap). The newest entry's
+     *  number when a session's decoder socket closed; after it re-attaches (the decoder Joined, still running) or
+     *  re-subscribes to spots, everything after that number goes to it. Once per kind; forgotten after 15 minutes. */
+    struct DxGap { uint64_t mark = 0; double at = 0; bool text = false, spots = false; };
+    std::mutex dxGapMtx_;
+    std::map<std::string, DxGap> dxGap_;
+    void dxGapNote(const std::string& sess, uint64_t mark) {
+        if (sess.empty()) return;
+        std::lock_guard<std::mutex> gl(dxGapMtx_);
+        const double now = nowSecs();
+        for (auto it = dxGap_.begin(); it != dxGap_.end(); ) it = now - it->second.at > 900.0 ? dxGap_.erase(it) : std::next(it);
+        if (dxGap_.size() > 256) return;
+        dxGap_[sess] = DxGap{ mark, now, false, false };
+    }
+    void dxGapReplay(const std::string& sess, const std::shared_ptr<DecoderHost>& host, const DecoderPeerPtr& peer, bool spots) {
+        if (sess.empty() || !host) return;
+        uint64_t mark;
+        { std::lock_guard<std::mutex> gl(dxGapMtx_);
+          auto it = dxGap_.find(sess);
+          if (it == dxGap_.end() || nowSecs() - it->second.at > 900.0) return;
+          bool& done = spots ? it->second.spots : it->second.text;
+          if (done) return;
+          done = true;
+          mark = it->second.mark;
+          if (it->second.text && it->second.spots) dxGap_.erase(it); }
+        host->replayGap(peer, mark, spots ? DecoderHost::GapSpots : DecoderHost::GapDecoder);
+    }
+
+    /** ★ Does a whole-radio mode leave when the radio empties? (DAB, ISM, NDB not background's, AIS, ADS-B not kept.) */
+    bool wholeModeLeavesWhenEmpty() {
+        return g_dabMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)
+            || (g_ndbMode.load(std::memory_order_relaxed) && ndbOrigin_ != "background")
+            || g_aisMode.load(std::memory_order_relaxed)
+            || (g_adsbMode.load(std::memory_order_relaxed) && !adsbKeepHolds());
+    }
+    /** ★ The radio may just have emptied (a held session finished): leave the whole-radio mode after `leaveGraceS`, and
+     *  park once that has happened — what the last socket's close does. Call WITHOUT clientMtx. */
+    void radioEmptied(double leaveGraceS) {
+        bool empty;
+        { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+        if (!empty || stopping.load()) return;
+        if (wholeModeLeavesWhenEmpty()) {
+            modeLeaveDueAt.store(nowSecs() + leaveGraceS);
+            LOGI("the held session ended with nobody here — %s is left now",
+                 g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : g_ndbMode.load() ? "NDB" : g_aisMode.load() ? "AIS" : "ADS-B");
+        }
+        if (modeLeaveDueAt.load() == 0.0) armIdlePark();
     }
     /** ★★ WHAT THE LAST LISTENER LEFT BEHIND — the whole-radio mode the leave below ended because nobody was here, and
      *  the dial it gave back. Read by modeResume: the same listener coming back may have it again, as long as the radio
@@ -28867,6 +29239,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::shared_ptr<net::Socket> sp, au; std::string addr;
         { std::lock_guard<std::mutex> lk(clientMtx);
           sp = victim->spec; au = victim->audio; victim->handoverAt = 0; victim->since = 0;
+          noHoldLocked(victim->session, "the session time limit ended it");   // ★ V12: ended for a reason — never held
           addr = sp && sp->isOpen() ? sp->peerAddress() : (au ? au->peerAddress() : std::string());
           if (!addr.empty()) {
               cooldownUntil[addr] = now + kSessionCooldownSec;
@@ -29011,6 +29384,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::vector<std::shared_ptr<net::Socket>> auds;
         { std::lock_guard<std::mutex> lk(clientMtx);
           sockHandover.erase(victim.sk.get());
+          noHoldLocked(victim.session, "the session time limit ended it");   // ★ V12: ended for a reason — never held
           sockSince.erase(victim.sk.get());              // ★ not a candidate again while it drains
           askRankLeaveLocked(victim.sk.get(), now);      // ★ ended by the limit: gone from the order too
           if (!addr.empty()) {
@@ -29125,7 +29499,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             { std::lock_guard<std::mutex> lk(clientMtx);
               addr = (c->spec && c->spec->isOpen()) ? c->spec->peerAddress()
                    : (c->audio ? c->audio->peerAddress() : std::string());
-              c->idleAskAt = 0; c->lastAsk = 0; }
+              c->idleAskAt = 0; c->lastAsk = 0;
+              noHoldLocked(c->session, "the idle check ended it"); }   // ★ V12: ended for a reason — never held
             LOGI("idle disconnect — %s answered nothing in %ds", addr.c_str(), kIdleAnswerSec);
             sendWs(sk, 0x1, (const uint8_t*)kGone, strlen(kGone));
             outboxClose(sk);
@@ -29252,6 +29627,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     anybody's idea of the current occupant.
         { std::lock_guard<std::mutex> lk(clientMtx);
           if (occupantSession != sess || occupantSince != since) return;   // already handled
+          noHoldLocked(sess, "the session time limit ended it");   // ★ V12: ended for a reason — never held
           cooldownUntil[addr] = Impl::nowSecs() + kSessionCooldownSec;
           turnBook.markSpent(occupantKeyLocked(), Impl::nowSecs());   // ★ back later = borrowed time (B10)
           occupantSession.clear(); occupantSince = 0; occupantWarned = 0; occupantAddr.clear();
@@ -30509,7 +30885,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::mutex> lk(clientMtx);
             for (auto& kv : clientDsp) if (kv.second && kv.second->session == s) return true;
             for (auto& kv : sockSession) if (kv.second == s) return true;
-            return false;
+            return isHeldLocked(s);   // ★ V12: a held listener's decoders run on (see "THE HELD SESSION")
         }, nowSecs(), 20.0);
     }
     void startHousekeeping() {
@@ -30525,6 +30901,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 enforceAdminIdle();
                 enforceIdleListeners();
                 reapDecoderOrphans();
+                holdTick();            // ★ V12: held sessions that have run out, given way or been ended — finished
                 askTick();             // ★ ask before tuning: the 15 s window, the 5-minute NO, people coming and going
             }
         });
@@ -32203,11 +32580,27 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
             doomed.push_back(c->spec);
             if (c->audio) doomed.push_back(c->audio);
             logged.emplace_back(addr, c->session);
+            p->noHoldLocked(c->session, "kicked by the owner");   // ★ V12: ended for a reason — never held
             if (p->occupantSession == c->session) {
                 p->occupantSession.clear(); p->occupantSince = 0; p->occupantAddr.clear();
                 g_vsHandoverAt = 0;
             }
         }
+        // ★★ V12: and a HELD session it names — a kick ends it as it would a connected one (finished by holdTick). Any
+        //    socket of the session that is open is closed below with the rest.
+        std::vector<std::string> heldHit;
+        for (const auto& kv : p->heldSessions_)
+            if ((!session.empty() && kv.first == session) || (session.empty() && !ip.empty() && kv.second.addr == ip))
+                heldHit.push_back(kv.first);
+        for (const auto& s : heldHit) {
+            const std::string a = p->heldSessions_[s].addr;
+            p->noHoldLocked(s, "kicked by the owner");
+            if (std::none_of(logged.begin(), logged.end(), [&](const std::pair<std::string, std::string>& e) { return e.second == s; }))
+                logged.emplace_back(a, s);
+        }
+        if (!session.empty()) p->noHoldLocked(session, "kicked by the owner");
+        for (auto& kv : p->sockSession)
+            if (!ip.empty() && kv.first && kv.first->peerAddress() == ip) p->noHoldLocked(kv.second, "kicked by the owner");
     }
     // ★★ TELL THEM, THEN CLOSE — and OUTSIDE clientMtx. A blocking send under the lock the DSP
     //    thread needs is the shape of the freeze that took a whole session to find (see the
@@ -32264,6 +32657,11 @@ int LocalSdrShim::adminKickMatching(const std::string& cidr) {
             }
             if (hit) hits.push_back(c->session);
         }
+        // ★ V12: and a HELD session at an address the rule now names — a ban ends it as it ends a connected one
+        if (!rule.asn)
+            for (const auto& kv : p->heldSessions_)
+                if (vibeadmin::matches(rule, kv.second.addr) && std::find(hits.begin(), hits.end(), kv.first) == hits.end())
+                    hits.push_back(kv.first);
     }
     int n = 0;
     for (auto& s : hits) n += adminKick(s, "");
