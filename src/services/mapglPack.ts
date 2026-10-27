@@ -10,20 +10,24 @@
  * ★★ The marker file is the whole correctness story, exactly as in mapPack.ts: written LAST, after
  *    every file has landed, so a copy killed halfway leaves no marker and is simply redone next open.
  *    A marker written first would latch a half-copied pack as complete and nothing would retry.
- * ★★ VERSION is derived from the manifest (total bytes + file count), never hand-maintained, so a
- *    regenerated pack replaces the stale one on its own.
+ * ★★ VERSION is the manifest's CONTENT HASH (MAPGL_VERSION — scripts/lib/mapgl-manifest.mjs), never hand-
+ *    maintained, so a regenerated pack replaces the stale one on its own.
+ * ★★★ IT WAS BYTES + COUNT, AND THE MANIFEST WENT STALE (2026-10-27): vibemapgl-compat.js gained the spots
+ *    map's mode-letter layer, its asset copy was re-synced, the manifest was not — so the version did not
+ *    move and every device that already had the pack kept the old compat. Letters on a fresh install
+ *    ("i saw them once"), never again after. check-map-overlay.mjs now fails on a stale manifest.
  * ★ ensureMapglPack() runs on every GPU-map open; the already-copied path is one marker read.
  */
 import { Asset } from 'expo-asset';
 import { Directory, File, Paths } from 'expo-file-system';
 import { NativeModules, Platform } from 'react-native';
-import { MAPGL_BYTES, MAPGL_FILES } from '../generated/mapglAssets';
+import { MAPGL_FILES, MAPGL_VERSION } from '../generated/mapglAssets';
 
 const DIR = 'mapgl';
 const MARKER = '.copied';
 
 function packVersion(): string {
-  return `${MAPGL_BYTES}-${MAPGL_FILES.length}`;
+  return MAPGL_VERSION;
 }
 
 /** The pack directory. Does NOT touch the filesystem. */
