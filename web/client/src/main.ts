@@ -137,6 +137,7 @@ import { DSC_CHANNELS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor,
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
 } from '../../../src/services/vtsLine';
+import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../../../src/services/wholeModeResume';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
  *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
@@ -1679,6 +1680,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onAisError: (why: string) => { showPill(why, 7000); if (aisOn && !aisReport) aisUiOff(); },
     onAisTrail: (mmsi, pts) => { const cb = aisTrailWait.get(mmsi); aisTrailWait.delete(mmsi); cb?.(pts); },
     onAdsbError: (why: string) => { showPill(why, 7000); if (adsbOn && !adsbReport) adsbUiOff(); },
+    // ★★ The answer to our mode_resume (wholeResumeTick): yes = the reports follow; no = the mode goes, and why is said
+    onModeResume: (kind, ok, why) => wholeResumeDo(wholeResume.answered(kind, ok, why, Date.now())),
     onDabScan: (m: unknown) => dabScanOnMessage(m),
     onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); },
     onDab: (d: DabState) => {
@@ -2867,6 +2870,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   if (NO_DEC) console.warn('[bisect] decoders disabled by #nodec');
   else initDecoders(host, auth);
   initIdleThrottle();
+  initWholeResume();     // ★ V12: coming back to ADS-B / NDB / ISM / AIS after the tab was away (wholeModeResume.ts)
   initAdminUnlock();
   void initPocketConn();   // ★ Portable Wi-Fi — draws nothing unless this is a pocket box, on its own network
   initAdmin(() => currentHost, () => adminPassword);
@@ -7957,6 +7961,43 @@ function adsbUiOn() {
   populateHw();                // ★ the rate picker is held — see populateHw
   adsbViewShow();
   updateVts();
+}
+
+/* ★★★ A HOLD NOBODY LIFTED — AND COMING BACK TO IT (src/services/wholeModeResume.ts; Stuart, 2026-10-27, on the app: "I
+ *  was in the map view for NDB or ADS-B and when I moved to another app … when I switched back the map dropped back to a
+ *  waterfall view on the previous frequency"). A phone's browser is suspended with its tab and its socket dies with it;
+ *  once nobody is here the server gives the radio back and tells nobody — so this page kept the mode (map up, the dial
+ *  locked) with no report ever coming. Now: silence counted only while the tab is visible on an open socket; a lapse
+ *  ASKS the server for the mode back (`mode_resume` — granted only if nobody else is on the radio and nobody has tuned it
+ *  since: a question, never a re-entry of ours, so the shared-dial contract holds); a refusal or no answer lets the mode
+ *  go and says why. The app's rule exactly — one module, two readers. */
+const wholeResume = new WholeModeResume();
+let wholeVisibleSince = Date.now();
+function wholeResumeDo(st: ResumeStep) {
+  if (st.do === 'ask') {
+    if (spec?.modeResume(st.kind)) return;   // ★ asked — the answer (or its absence) decides
+    st = wholeResume.sendFailed(st.kind);
+  }
+  if (st.do !== 'giveUp') return;
+  if (st.kind === 'adsb') { if (adsbOn) adsbUiOff(); }
+  else if (st.kind === 'ndb') { if (ndbOn) ndbUiOff(); }
+  else if (st.kind === 'ism') { if (ismOn) ismUiOff(); }
+  else if (aisOn) aisUiOff();
+  showPill(`${WHOLE_LABEL[st.kind]} ended — ${st.why}`, 9000);
+}
+function wholeResumeTick() {
+  const kind: WholeKind | null = adsbOn ? 'adsb' : ndbOn ? 'ndb' : ismOn ? 'ism' : aisOn ? 'ais' : null;
+  if (!kind || !spec) { wholeResume.reset(); return; }
+  const now = Date.now();
+  const sock = document.hidden ? 0 : spec.spectrumOpenSince();
+  const openSince = sock > 0 ? Math.max(sock, wholeVisibleSince) : 0;
+  const lapsed = holdLapsed({ kind, now, lastReportAt: spec.wholeReportAt(kind), openSince });
+  wholeResumeDo(wholeResume.step(kind, lapsed, now, sock));
+}
+function initWholeResume() {
+  // ★ A tab coming back starts the clock afresh: its silence while hidden (suspended) was ours, not the server's.
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) wholeVisibleSince = Date.now(); });
+  window.setInterval(wholeResumeTick, 1000);
 }
 
 /** The UI half of leaving ADS-B — the map gone, every control given back. */

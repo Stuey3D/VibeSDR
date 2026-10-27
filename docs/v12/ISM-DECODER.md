@@ -270,7 +270,7 @@ ISM takes the whole capture, so it runs **only with nobody here**: after the wai
 mode on the band (`bgIsmStartLocked` → `ismEnter`, the radio's state saved exactly as the ISM button saves it); a
 listener arriving ends it through `ismLeave`, which gives the radio back exactly as found — the newcomer lands on the
 radio's own dial, never on the band. Never on a locked radio (refused at the save; background never moves one), never
-over another whole-radio mode (a listener's ISM or ADS-B in its 5 s leave grace — it waits), never where ISM cannot run
+over another whole-radio mode (a listener's ISM or ADS-B in its leave grace — it waits), never where ISM cannot run
 (`vsIsmWhyNot`: blocked, < 0.9 MS/s, the band outside the allowed ranges — the admin line says "cannot run — why", tried
 again every minute, and the idle park is not held off for it). Kept-running ADS-B still owns the idle radio. Time slots
 mix freely: NAVTEX by day, ISM 868 by night.

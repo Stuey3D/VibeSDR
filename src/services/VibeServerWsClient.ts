@@ -1390,6 +1390,16 @@ export abstract class VibeServerWsClient {
    *  previous `!this.spectrumWs` guard would skip the reopen and leave the
    *  waterfall frozen. Callers sequence this AFTER the native audio revive so the
    *  spectrum subscribes to a session that exists again (see SDRScreen AppState). */
+  /** ★ When the spectrum socket now OPEN opened (Date.now()), or 0 when none is — paused by the app (backgrounded), or
+   *  still reconnecting. A whole-radio mode's report silence is measured from here (wholeModeResume.ts holdLapsed): the
+   *  silence while WE had the socket closed is ours, not the server's, and judging it as the server's dropped the
+   *  ADS-B / NDB map the moment the app came back (Stuart, 2026-10-27). */
+  spectrumOpenSince(): number {
+    if (this.pausedByApp || this.destroyed || !this.spectrumWs || this.spectrumWs.readyState !== WebSocket.OPEN) return 0;
+    return this.specOpenAt;
+  }
+  private specOpenAt = 0;
+
   resumeSpectrum() {
     this.pausedByApp = false;
     if (this.destroyed) return;
@@ -1651,6 +1661,7 @@ export abstract class VibeServerWsClient {
     let specMsgCount = 0;
     ws.onopen = () => {
       if (this.destroyed) { ws.close(); return; }
+      if (this.spectrumWs === ws) this.specOpenAt = Date.now();   // ★ see spectrumOpenSince
       /* ★★★ V12 VFO A/B is per SESSION — and a fresh SOCKET is not a fresh session. This used to reset to one VFO on
        *  every open, but the watchdogs reopen the spectrum socket under the SAME session (a rotation stalls the JS
        *  thread long enough to trip them), the server keeps VFO B and keeps mixing it in, and the screen went back to

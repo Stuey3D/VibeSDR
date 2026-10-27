@@ -97,6 +97,16 @@ B7 space vehicle · C1 emergency surface vehicle · C2 service surface vehicle �
     so the D-pad/keyboard reach it through PanelNav (a pad is never seen by the WebView on iOS/Mac). The page moves its
     ⓘ legend to the top-left in ADS-B and narrows the attribution to the room right of the list (`__adsbListW`).
   - A refusal (`adsb_error`) closes the map and shows the reason as an alert.
+  - **Coming back to it (2026-10-27 — Stuart: the map "dropped back to a waterfall view on the previous frequency" after
+    a switch to another app).** With nothing to hear the app releases the audio session, so iOS suspends it soon after
+    it goes to the background and its sockets go with it. The server holds a whole-radio mode (ADS-B, NDB, ISM, AIS,
+    DAB) after its last listener for the owner's idle grace, capped at 60 s (never under the old 5 s — `modeLeaveGraceS`
+    in the shim). Past that it gives the radio back and records the leave; the returning app — whose report silence is
+    now counted only while a spectrum socket is open (`src/services/wholeModeResume.ts`) — sends
+    `{"type":"mode_resume","mode":"adsb"}`, and the server re-enters **only** if nobody else is on the radio and nobody
+    has tuned it since, answering `{"type":"mode_resume","mode":…,"ok":1|0,"why":…}`. A refusal (or no answer from an
+    older server) closes the map with the reason. The web client does the same for a backgrounded tab. Tests:
+    `scripts/test_wholeModeResume.ts`, `scripts/test-server-mode-resume.mjs`.
   - **Apple TV** has no WebView: there the old box (`AdsbPanel`, AircraftPanel list, EXIT ADS-B, no MAP key) is the
     interface. Android TV has one and gets the map (`IS_APPLE_TV`, src/utils/tv.ts).
 - **The web client (2026-10-24): the map IS the view too** — full screen over the page, EXIT ADS-B in a top bar,
@@ -266,7 +276,7 @@ is what told the two apart** — both have an LNA; only the unfiltered one has a
 **Tests**: `vibeserver/test-adsb-gain.cpp` (model feeds built from the FA clip, the V4L's beta13 curve, the Pi 2's bare
 antenna, the 2025 fault, hysteresis, strong pressure, SDRplay), `scripts/test-adsb-gain-e2e.sh` (the real server on
 the FA clip with `fake-rtl-tcp --adsb-gain`: 25.4=1043/−42 … 40.2=1388/−31, 43.4=1367/−28 → **40.2 dB**, plus a
-reconnect inside the 5 s grace).
+reconnect inside the leave grace).
 
 **A/B on real hardware**: `scripts/ab-adsb-gain.py` — arms (dump1090-fa, a VibeServer build) alternated in windows on
 the one dongle, one CSV row per window (the 10-25 `fa.csv` columns + `noise_med`, `why`, `warn`). Stdlib only.

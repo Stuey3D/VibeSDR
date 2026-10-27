@@ -732,6 +732,10 @@ if node --no-warnings scripts/test_tune_hint.ts >/dev/null; then pass=$((pass+1)
 # ★★★ A REOPENED SPECTRUM SOCKET CARRIES THE LISTENER'S OWN VFO BACK on a per-listener dial, and NEVER on a
 #     shared one (2026-10-05: the RSP on a locked range reset to its landing on every resume from background).
 if node --no-warnings scripts/test_reopenTune.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_reopenTune.ts"; fi
+# ★★★ BACK TO THE WHOLE-RADIO MODE AFTER THE APP WAS AWAY (2026-10-27, Stuart: the ADS-B / NDB map "dropped back to a
+#     waterfall view on the previous frequency" after a switch to another app): no lapse while our own socket is closed,
+#     one mode_resume ask per lapse, refusals said in words, an old server's silence given up on.
+if node --no-warnings scripts/test_wholeModeResume.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_wholeModeResume.ts"; fi
 # ★ The directory Worker against real SQLite: dead-address pages, and the 90-day retention (PRIVACY.md, Play form).
 for t in directory/scripts/test-gone.mjs directory/scripts/test-retention.mjs; do
   if node --no-warnings "$t" >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ $t"; fi
@@ -1138,6 +1142,13 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     a radio that cannot run ADS-B falls back. Needs VIBESERVER_BIN and VIBE_ADSB_CLIP (exit 3 = not run).
 printf '\n\033[1m── ADS-B landing + keep running (end to end) ──\033[0m\n'
 node scripts/test-server-adsb-landing.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ V12 BACK TO THE WHOLE-RADIO MODE (2026-10-27): the leave grace follows the owner's idle grace (≤ 60 s), and a
+#     returning listener's mode_resume is granted alone on an untouched radio — refused (and NOT entered) with somebody
+#     else on it, after a retune, or with nothing to resume. Needs VIBESERVER_BIN and VIBE_ADSB_CLIP (exit 3 = not run).
+printf '\n\033[1m── Whole-radio mode resume (end to end) ──\033[0m\n'
+node scripts/test-server-mode-resume.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 THE ADS-B GAIN RULE end to end (2026-10-26): Stuart's FlightAware clip (filtered LNA feed) replayed so that it

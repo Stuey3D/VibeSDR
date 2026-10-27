@@ -413,6 +413,9 @@ export interface SDRCallbacks {
   /** ★ V12 AIS, VIBESERVER-ONLY: a report about once a second while the receiver is in AIS (its arrival MEANS AIS is on);
    *  null = it ended (`ais_off`); `err` = the refusal (`ais_error`). */
   onAis?:       (r: AisReport | null, err?: string) => void;
+  /** ★★ V12, VIBESERVER-ONLY: the answer to modeResume (wholeModeResume.ts) — may this listener have the whole-radio mode
+   *  the server left while they were away back? `why` = the refusal, in words. */
+  onModeResume?: (kind: 'adsb' | 'ndb' | 'ism' | 'ais', ok: boolean, why?: string) => void;
   /** ★ V12 AIS: one ship's track, asked for by aisTrail (the map's card) — [lat, lon] oldest first. */
   onAisTrail?:  (mmsi: number, pts: [number, number][]) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
