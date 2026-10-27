@@ -13,6 +13,12 @@
 # ★★ Verified on a Moto g35 5G (arm64-v8a), 2026-08-22: a stock build fails exactly as issue #425
 #    describes, this build creates a live Quick Tunnel and serves real traffic through it.
 #
+# ★★★ THE RESOLVER IS A LADDER, NOT THREE PUBLIC SERVERS (2026-10-27, Kiko's TV box: outbound UDP 53 to the
+#     internet dropped, so 1.1.1.1:53 timed out and the tunnel never came up). The patch adds vibedns/: the
+#     device's own DNS servers first (the app passes them in VIBE_DNS_SERVERS), then public UDP/TCP 53, then
+#     certificate-verified DNS-over-TLS. Its tests run on THIS machine before the cross-compile, so a broken
+#     ladder never reaches an APK. VIBE_CF_SKIP_NET_TESTS=1 runs them with -short (no 1.1.1.1:853 / 8.8.8.8:853).
+#
 # Usage:  ./build.sh [output-path]
 set -euo pipefail
 
@@ -37,6 +43,11 @@ git -C "$WORK/src" checkout --quiet "$PINNED"
 echo "==> applying android-dns.patch"
 # ★ --3way so a moved line in a newer upstream is a conflict to look at, not a silent no-op.
 git -C "$WORK/src" apply --3way "$HERE/android-dns.patch"
+
+echo "==> testing the DNS ladder (vibedns) on the host"
+# ★ Two CPUs at most, niced: this runs on the development Mac. Every wait in the tests is bounded.
+SHORT=""; [ "${VIBE_CF_SKIP_NET_TESTS:-0}" = "1" ] && SHORT="-short"
+( cd "$WORK/src" && GOTOOLCHAIN=local GOMAXPROCS=2 nice go test -p 1 -count=1 -timeout 120s $SHORT ./vibedns/ )
 
 ARCH="${VIBE_CF_ARCH:-arm64}"
 echo "==> building android/$ARCH"
@@ -65,4 +76,6 @@ echo "==> $(ls -lh "$OUT" | awk '{print $5}')  ->  $OUT"
 # ★★ Needs useLegacyPackaging / extractNativeLibs so it lands on disk as a real file rather than
 #    staying compressed inside the APK.
 echo
-echo "Next: place at app/src/main/jniLibs/arm64-v8a/libcloudflared.so"
+# ★ Where the two builds pick it up (both gitignored): android/app/build.gradle and lite/android/app/build.gradle.
+echo "Next: place at android/app/src/main/cpp/cloudflared/arm64-v8a/libcloudflared.so (main app, arm64)"
+echo "   or lite/native/cloudflared/armeabi-v7a/libcloudflared.so (VibeServer Lite, VIBE_CF_ARCH=arm)"

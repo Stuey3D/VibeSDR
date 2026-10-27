@@ -1,6 +1,8 @@
 package com.vibesdr.app
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.util.Log
 import okhttp3.MediaType.Companion.toMediaType
@@ -187,6 +189,47 @@ object VibeTunnel {
 
     fun isSupported(ctx: Context): Boolean = binary(ctx).exists()
 
+    /**
+     * ★★★ THE DEVICE'S OWN DNS SERVERS, FOR cloudflared (VIBE_DNS_SERVERS).
+     *
+     * cloudflared is a Go program with no /etc/resolv.conf on Android, so it cannot find these itself — and
+     * the patched resolver's public fallbacks (1.1.1.1:53 …) are exactly what Kiko's network drops (BTV B9,
+     * Android 6.0.1, 2026-10-26: every lookup timed out; pointing DNS at his router fixed it at once). The
+     * servers every other app on this network uses are the ones the network allows, so they go first; see
+     * tools/cloudflared-android (vibedns) for the rest of the ladder.
+     *
+     * ★★ READ FRESH AT EVERY LAUNCH. Every drop, recycle and reconnect goes through startTunnel, so a tunnel
+     *    that outlives a network change picks the new network's servers up on its next restart — and until
+     *    then a stale server simply does not answer and the ladder moves on in well under a second.
+     * ★ The ACTIVE network first, then any other connected one (a TV box can have Ethernet and Wi-Fi).
+     *   getActiveNetwork is API 23; on 21/22 (Lite on a Fire 7) the active network is found by matching
+     *   activeNetworkInfo's type among allNetworks. Nothing found = an empty list, and the ladder starts at
+     *   the public servers exactly as before.
+     */
+    @Suppress("DEPRECATION")
+    private fun deviceDnsServers(ctx: Context): List<String> {
+        val out = LinkedHashSet<String>()
+        try {
+            val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            fun addFrom(n: Network?) {
+                if (n == null) return
+                cm.getLinkProperties(n)?.dnsServers?.forEach { a -> a.hostAddress?.let { out.add(it) } }
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                addFrom(cm.activeNetwork)
+            } else {
+                val active = cm.activeNetworkInfo
+                if (active != null) cm.allNetworks.filter { n ->
+                    cm.getNetworkInfo(n)?.let { it.type == active.type && it.isConnected } == true
+                }.forEach { addFrom(it) }
+            }
+            for (n in cm.allNetworks) if (cm.getNetworkInfo(n)?.isConnected == true) addFrom(n)
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not read the device's DNS servers: ${t.message}")
+        }
+        return out.toList()
+    }
+
     /** ★ Is the tunnel up? Asked by the boot path, which must re-apply loopback trust after a
      *  restart or the session limit silently stops applying — see VibeServerBoot. */
     fun isTunnelRunning(): Boolean = running.get()
@@ -245,6 +288,10 @@ object VibeTunnel {
                 // ★ Quieter than the default, and we only need the line carrying the hostname.
                 "--loglevel", "info"
             ).redirectErrorStream(true)
+            // ★★★ The device's own DNS servers first — see deviceDnsServers. Fresh on every launch.
+            val dns = deviceDnsServers(ctx)
+            pb.environment()["VIBE_DNS_SERVERS"] = dns.joinToString(",")
+            Log.i(TAG, "cloudflared DNS: ${if (dns.isEmpty()) "none from the device — public resolvers" else dns.joinToString(", ")}")
             val p = pb.start()
             proc = p
             running.set(true)
