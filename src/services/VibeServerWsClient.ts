@@ -69,6 +69,9 @@ import { LinkManager, LADDERS, type LinkMode } from './vibeLinkManager';
 export const LADDERS_FOR = LADDERS;
 import { USER_AGENT, APP_PROTO } from '../constants/version';
 import { NativeSpecSocket, nativeSpecSocketAvailable } from './nativeSpecSocket';
+// ★★★ `&bid=` — the web's per-browser id, the app's per-install one (listenerIdCore.ts): the server's radios-per-listener
+//     rule then judges the app exactly as it judges a browser (Stuart 2026-10-27, two radios on one server).
+import { loadListenerId, listenerIdQuery } from './listenerId';
 
 /**
  * ★★★ NAME OURSELVES IN THE QUERY, because the header is not ours to set. React Native's WebSocket
@@ -460,6 +463,11 @@ export abstract class VibeServerWsClient {
     // somewhere else it has to be told — otherwise the readout shows one frequency while the audio
     // plays another.
     if (opts?.allowServerDefault) this.callbacks.onStatus({ ...this.status });
+
+    // ★★ The listener id BEFORE any socket — the spectrum and the audio socket must carry the same one, or the server
+    //    files this listener under two keys (the address for one, the id for the other). A storage read; never fails.
+    await loadListenerId();
+    if (this.destroyed) return;
 
     try {
       await this._checkConnection();
@@ -1660,7 +1668,7 @@ export abstract class VibeServerWsClient {
    *  socket when the phone locks — same URL this client uses in _openSpectrumWs. Handed to
    *  VibeWatchModule.startWatchSpectrum so the native forwarder never re-implements auth. */
   watchSpectrumUrl(): string {
-    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
+    return this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}${listenerIdQuery()}`);
   }
 
   /** ★ At least one `config` has arrived on this client, so the next open is a REOPEN. */
@@ -1679,7 +1687,7 @@ export abstract class VibeServerWsClient {
       pending: this.wantTune, frequency: Number(this.status.frequency), mode: this.status.mode,
     });
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}${listenerIdQuery()}`);
     // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
     //     WS upgrade, and React Native's WebSocket sends none by default — so every app session
     //     appeared in the owner's log as "—", indistinguishable from a bot or a bare script, while

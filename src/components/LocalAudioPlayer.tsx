@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NativeEventEmitter, NativeModules, Platform } from 'react-native';
 import { decodeVibeAdpcmFrame } from '../services/imaAdpcm';
 import { noteAudioEvent } from '../services/audioPathLog';
 import { guard, noteFault } from '../services/faultLog';
 import { shouldForwardTune, type ServerDial } from '../services/audioTuneForward';
+import { listenerIdNow, loadListenerId } from '../services/listenerId';
 import { auxClose, auxIsOpenFor, auxOpen, auxSend, claimNative, dualHolds, linkFor, nativeOwnedBy, noteLink,
          releaseNative, sameLink, setAuxOnBytes } from '../services/dualServer';
 
@@ -212,12 +213,24 @@ export default function LocalAudioPlayer(
   /** When this socket last said `tune` (ms epoch) — a match inside OWN_TUNE_WINDOW_MS is a person going back. */
   const lastSendAt = useRef(-Infinity);
   tune.current = { frequency, mode, bandwidthLow, bandwidthHigh };
+  /** ★★★ THE LISTENER ID (listenerIdCore.ts) — `&bid=`, as the web's audio socket carries it, so the server judges this
+   *  listener exactly as it judges a browser. Already loaded by the time a socket opens (start-up, and the spectrum
+   *  client's connect awaits it); the gate below only covers the moment it is not, so the audio socket never opens
+   *  under a different key from the spectrum socket beside it. */
+  const [listenerId, setListenerId] = useState(listenerIdNow);
+  useEffect(() => {
+    if (listenerId) return;
+    let live = true;
+    loadListenerId().then((id) => { if (live) setListenerId(id); }).catch(() => {});
+    return () => { live = false; };
+  }, [listenerId]);
 
   useEffect(() => {
     // ★ THE MOST IMPORTANT LINE IN THE REPORT. A null port means the socket was never opened at
     //   all — the gate closed — and the server has nothing to log because nothing arrived. That
     //   silence is what four separate diagnoses were built on top of.
     if (port == null) { noteAudioEvent('NOT STARTED — port gate closed (refusal or tune not loaded)'); return; }
+    if (!listenerId) { noteAudioEvent('waiting for the listener id'); return; }
     const { frequency: f, mode: m, bandwidthLow: bl, bandwidthHigh: bh } = tune.current;
     startTune.current = tuneJson(f, m, bl, bh);
     lastSeq.current = userTuneSeq;
@@ -258,6 +271,7 @@ export default function LocalAudioPlayer(
     //    and did not check. An assumption stated confidently in a comment is not evidence.
     const adminQ = !adminAuth || adminAuth.startsWith('&') ? (adminAuth || '') : `&${adminAuth}`;
     const combinedSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
+      + `&bid=${encodeURIComponent(listenerId)}`
       + (raw ? '' : '&codec=opus') + authSuffix + adminQ;
 
     /* ★★ V12 TWO SERVERS: the run's facts. `firstRun` — this mount's first open, the only one that may ADOPT. `fromAux` —
@@ -460,7 +474,8 @@ export default function LocalAudioPlayer(
   //    built from.
   // ★ restartKey: a reconnect asked for a NEW socket — see the prop.
   // ★ V12: `transport` too — a server left playing alone on the second voice moves to the main pump (dualServer.ts).
-  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune, restartKey, transport, dualId]);
+  // ★ listenerId: only ever '' → the id, once, and the effect does not open a socket until it has it.
+  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune, restartKey, transport, dualId, listenerId]);
 
   /* Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
    * JS branch remains for the fallback reader.

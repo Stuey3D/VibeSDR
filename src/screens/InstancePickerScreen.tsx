@@ -149,6 +149,7 @@ import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import { appAlert } from '../components/AppAlert';
 import { abandon as abandonDual, isSolo, returnToSolo, useDual } from '../services/dualServer';
+import { forgetListenerId } from '../services/listenerId';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
 // mixes OWRX + Kiwi, so the row icon tells them apart at a glance).
@@ -1822,6 +1823,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           const bms = await loadUserBookmarks().catch(() => [] as UserBookmark[]);
           const wipe = async (keepBms: boolean) => {
             await AsyncStorage.clear().catch(() => {});
+            forgetListenerId();   // ★ a fresh install has a fresh listener id (listenerIdCore.ts)
             if (keepBms && bms.length) await saveUserBookmarks(bms).catch(() => {});
             navigation.replace('InstancePicker');
           };
