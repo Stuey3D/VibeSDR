@@ -13,6 +13,7 @@
 #include "decoders/digi_bands.h"
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <vector>
 
 namespace vibe {
@@ -66,3 +67,125 @@ inline double DecoderHostBandWidth(double dialHz) {
     if (!sp.ok) return 24000.0;
     return std::max(4000.0, 2.0 * std::max(std::fabs(sp.hiHz - dialHz), std::fabs(dialHz - sp.loHz)));
 }
+
+// ── ★★★ THE DONGLE'S DC, KEPT OFF BAND'S PASSBANDS (V12, 2026-10-27, branch v12-band-dc) ─────────────────────────────────
+//
+// ★★★ THE FAULT. A zero-IF radio's DC sits at the capture's PHYSICAL centre: rtlCenter + hwOffsetHz() (the R820T/R828D's
+//     15 kHz offset tuning, the HackRF's 250 kHz, an RSP's 15 kHz — or rtlCenter itself on an rtl_tcp dongle, which gets no
+//     offset). Single mode never meets it: the offset exists precisely to keep it off the listener's channel. Band mode does,
+//     because the dial IS the slice's centre and the slice is up to 75 kHz wide: on Stuart's Pi 2 (V4, 2.048 MS/s) 40 m's
+//     dial 7.0606 put the DC at 7.0756 — in the middle of FT8 (7.0742–7.0770), where every station is.
+// ★★ THE FIX MOVES THE CAPTURE, NOT THE OFFSET. hwOffsetHz() is read in ~60 places and copied into half a dozen (the raw-IQ
+//    rotation, the background runner, a pending pan, DAB's RF centre …) — the one number that once shipped 15.00 kHz wrong
+//    because two readers disagreed (Radio Caroline on 648 reading 663). Changing it for Band would re-open exactly that. The
+//    capture's LOGICAL centre (rtlCenter), on the other hand, already moves away from the dial on every minimal-movement pan,
+//    and every consumer derives what it needs from rtlCenter + hwOffsetHz() at the moment it uses it. So in Band the tuner is
+//    placed — by the same placement code a pan uses — where its DC falls OUTSIDE the band's slices (main and extras), and
+//    hwOffsetHz() never changes. Band off → the ordinary placement again (in auto IF, the tuner follows the dial).
+// ★ PREFERENCE ORDER: outside every slice (the channeliser then never sees the spike at all) → else outside every mode's
+//   passband (the tuners filter it out) → else where it was. Each with kBandDcGuardHz of clearance, the smallest move, and
+//   every slice still inside the capture (captureHolds).
+// ★ MEASURED, AND SAID PLAINLY: Stuart's V4 at 7.150 MHz (~/VibeSDR-test-audio/iq/v4l_40m_7150000_2400k.cu8) shows a DC of
+//   −45 dBFS one FFT bin wide (±50 Hz), constant to 0.0001 over 30 s — the capture cleaner's slow mean removes it, and the
+//   40 m recording through the slice route with that DC on FT8 lost no FT8 calls (80 of 80; 78 of 80 at −25 dBFS). So a CLEAN
+//   spike costs little; a dongle whose DC region is dirty (1/f skirt, a DC that steps with every gain change) costs the whole
+//   sub-band. Moving it out of the slice costs one retune at Band start, on a band step, and at Band stop.
+
+namespace vibe {
+
+/** Clearance the DC keeps from a slice's edge or a mode's passband edge. */
+constexpr double kBandDcGuardHz = 3000.0;
+
+struct BandDcZone { double loHz = 0, hiHz = 0; };
+
+/** The RF extents of the slices a Band run on `dialHz` cuts (main, then the extras), as the tap and the per-listener
+ *  extract size them (bandSliceBins of their flat width) — or nothing off a band. */
+inline std::vector<BandDcZone> bandDcSlices(double sampleRate, int fftSize, double dialHz) {
+    std::vector<BandDcZone> z;
+    if (!(sampleRate > 0) || fftSize < 64 || !vibe::digi::bandAt(dialHz)) return z;
+    const double w = std::min(::DecoderHostBandWidth(dialHz), sampleRate * 0.8);
+    const double r = sampleRate * vibe::bandSliceBins(sampleRate, fftSize, w) / fftSize;
+    z.push_back({ dialHz - r / 2, dialHz + r / 2 });
+    for (const vibe::ExtraSlice& e : vibe::bandExtraSlices(dialHz)) {
+        const double er = sampleRate * vibe::bandSliceBins(sampleRate, fftSize, e.widthHz) / fftSize;
+        z.push_back({ e.centreHz - er / 2, e.centreHz + er / 2 });
+    }
+    return z;
+}
+
+/** Every registered mode's passband on the band `dialHz` is on (main slice and extras), with the mode's name. */
+struct BandDcPassband { double loHz = 0, hiHz = 0; std::string mode; };
+inline std::vector<BandDcPassband> bandDcPassbands(double dialHz) {
+    std::vector<BandDcPassband> o;
+    const vibe::digi::Band* b = vibe::digi::bandAt(dialHz);
+    if (!b) return o;
+    for (const vibe::digi::ModeDef& m : vibe::digi::modes())
+        for (double d : vibe::digi::dialsOf(m, b->id)) o.push_back({ d + m.audioLoHz, d + m.audioHiHz, m.name });
+    return o;
+}
+
+/** Where a DC at `dcHz` sits for a Band run on `dialHz`: 0 = outside every slice, 1 = inside a slice but clear of every
+ *  passband (by `guardHz`), 2 = on a mode (its name in `*onMode`). */
+inline int bandDcWhere(double sampleRate, int fftSize, double dialHz, double dcHz, std::string* onMode = nullptr,
+                       double guardHz = 0.0) {
+    for (const BandDcPassband& p : bandDcPassbands(dialHz))
+        if (dcHz >= p.loHz - guardHz && dcHz <= p.hiHz + guardHz) { if (onMode) *onMode = p.mode; return 2; }
+    for (const BandDcZone& s : bandDcSlices(sampleRate, fftSize, dialHz))
+        if (dcHz >= s.loHz && dcHz <= s.hiHz) return 1;
+    return 0;
+}
+
+/** ★★ THE PLACEMENT: the logical centre (rtlCenter) to use instead of `centreHz` while Band runs on `dialHz`, so that the DC
+ *  (centre + `hwOffsetHz`) is clear — see the note above. `loHz`/`hiHz`: where the caller's own rules allow the centre to be
+ *  (the VFO captured, the view inside the capture); honoured if any clear place lies within them, else waived (the DC
+ *  matters more than a view edge). Returns `centreHz` unchanged off a band, or when it is already clear. Idempotent. */
+inline double bandDcCentre(double sampleRate, int fftSize, double dialHz, double centreHz, double hwOffsetHz,
+                           double loHz = -INFINITY, double hiHz = INFINITY) {
+    if (!(sampleRate > 0) || !vibe::digi::bandAt(dialHz)) return centreHz;
+    const std::vector<BandDcZone> slices = bandDcSlices(sampleRate, fftSize, dialHz);
+    if (slices.empty()) return centreHz;
+    std::vector<BandDcZone> modes;
+    for (const BandDcPassband& p : bandDcPassbands(dialHz)) modes.push_back({ p.loHz, p.hiHz });
+    const double dc = centreHz + hwOffsetHz;
+    // the union of the zones, each widened by the guard, merged
+    auto merged = [](std::vector<BandDcZone> z) {
+        for (BandDcZone& x : z) { x.loHz -= kBandDcGuardHz; x.hiHz += kBandDcGuardHz; }
+        std::sort(z.begin(), z.end(), [](const BandDcZone& a, const BandDcZone& b) { return a.loHz < b.loHz; });
+        std::vector<BandDcZone> m;
+        for (const BandDcZone& x : z) {
+            if (!m.empty() && x.loHz <= m.back().hiHz) m.back().hiHz = std::max(m.back().hiHz, x.hiHz);
+            else m.push_back(x);
+        }
+        return m;
+    };
+    auto inside = [](const std::vector<BandDcZone>& m, double f) {
+        for (const BandDcZone& x : m) if (f > x.loHz && f < x.hiHz) return &x;
+        return (const BandDcZone*)nullptr;
+    };
+    // a DC at `p` must leave every slice inside the capture (the slices are cut from it)
+    auto holds = [&](double p) {
+        for (const BandDcZone& s : slices)
+            if (!captureHolds(sampleRate, p, 0.5 * (s.loHz + s.hiHz), s.hiHz - s.loHz)) return false;
+        return true;
+    };
+    const std::vector<BandDcZone> tiers[2] = { merged(slices), merged(modes) };
+    for (int pass = 0; pass < 2; ++pass) {              // ★ pass 0 inside the caller's bounds, pass 1 without them
+        for (const std::vector<BandDcZone>& z : tiers) {
+            const BandDcZone* in = inside(z, dc);
+            if (!in) return centreHz;                    // ★ already clear at this tier
+            // the two ways out of the zone the DC is in, on whole 100 Hz (outward, so the rounding never steps back in)
+            const double cand[2] = { std::floor(in->loHz / 100.0) * 100.0, std::ceil(in->hiHz / 100.0) * 100.0 };
+            double best = NAN;
+            for (double p : cand) {
+                const double c = p - hwOffsetHz;
+                if (pass == 0 && (c < loHz || c > hiHz)) continue;
+                if (!holds(p)) continue;
+                if (!std::isfinite(best) || std::fabs(p - dc) < std::fabs(best - dc)) best = p;
+            }
+            if (std::isfinite(best)) return best - hwOffsetHz;
+        }
+    }
+    return centreHz;
+}
+
+} // namespace vibe
