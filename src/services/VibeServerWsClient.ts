@@ -1253,6 +1253,12 @@ export abstract class VibeServerWsClient {
     // Server treats zoom and pan as one case; binBandwidth ≤ 0 = keep current.
     const msg: Record<string, unknown> = { type: 'zoom', frequency: p.frequency };
     if (p.binBandwidth > 0) msg.binBandwidth = p.binBandwidth;
+    /* ★★★ V12 beta25 — SAY THE VFO CENTRE IS FREE. Stuart, beta24: "the RF centre is following the VFO when in free mode and
+     *  kinda kills the whole free tuning mode". A FREE view still recentres on the dial when the dial nears its edge, and to
+     *  the server that zoom looked exactly like a LOCKED one, so auto IF pulled the tuner onto the dial every time. `free`
+     *  tells it the view is the listener's own: the centre stays put (it may sit off screen) and moves only when the view
+     *  walks off the capture, or to move the DC spike out of the way (local_sdr_shim.cpp viewFree_). */
+    if (!this.followVfo) msg.free = 1;
     this.spectrumWs.send(JSON.stringify(msg));
     this.lastResubAt = Date.now();   // frames pause across this — not a bad link
     this._armSettle();
@@ -1505,6 +1511,7 @@ export abstract class VibeServerWsClient {
       type:         'zoom',
       frequency:    Math.round(this.view.centerHz || this.status.centerHz || this.status.frequency),
       binBandwidth: this.view.binBandwidth || this.status.binBandwidth || 100,
+      ...(this.followVfo ? {} : { free: 1 }),   // ★ V12 beta25 — see _flushView
     }));
   }
 
@@ -2822,6 +2829,12 @@ export abstract class VibeServerWsClient {
       });
       return;
     }
+    /* ★★ V12 beta25 — THE RADIO MOVED ITS CENTRE (a DC nudge in FREE tuning, a recentre): where the centre and the DC
+     *  spike are now, so the RF-centre line and the red "DC Spike" label follow the radio itself. */
+    if (msg.type === 'dc') {
+      this.callbacks.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);
+      return;
+    }
     if (msg.type === 'hwinfo') {
       this.squelchSpeaksOn = msg.sqlOn === true;   // ★ see setSquelchDb / vibeSquelch.ts
       // ★★ V12 VFO A/B: does this server offer a VFO B? 0/absent = no — the toggle is not drawn (no dead control).
@@ -3012,6 +3025,8 @@ export abstract class VibeServerWsClient {
       }
       if (msg.rfCentre !== undefined || msg.lockedCentre !== undefined)
         this.callbacks.onRfCentre?.(Number(msg.rfCentre) || 0, Number(msg.lockedCentre) || 0);
+      // ★ V12 beta25: the DC spike's place (absent = none to show). See the `dc` message.
+      this.callbacks.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);
       // ★ Only the VibeServer shim sends hwinfo, and it carries the owner's FRAME-RATE CEILING.
       // Feed it to the controller: without it we would ask for the ladder's top rate, receive the
       // permitted one, and read the difference as a failing link — stepping down forever chasing a

@@ -18,6 +18,13 @@ import { SIGID_HOME } from '../../../src/services/dialChat';
 import { pushBack } from './gamepad';
 import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
 
+/** ★★ V12 beta25 — the DC spike, explained for listeners (the app's ModeSelector carries the same words). */
+export const DC_SPIKE_EXPLAINED =
+  'Your radio converts the frequency it is tuned to down to zero hertz (DC). Small imperfections in the radio \u2014 its ' +
+  'own oscillator leaking through and tiny offsets in its electronics \u2014 leave a steady level there, which shows as a ' +
+  'spike at that exact frequency whatever is on air. It is not a real signal. VibeServer tunes the radio 15 kHz away from ' +
+  'what you are listening to, and in free tuning it moves the radio\u2019s centre out of the way if you tune onto the spike.';
+
 export type MobileDeps = {
   /** ★★ The RECEIVER's clock: its UTC offset (minutes) and zone abbreviation, null until the server says
    *  (an older build) — then the deck shows the browser's time as before. */
@@ -61,6 +68,9 @@ export type MobileDeps = {
   openMenu: () => void;
   openAudio: () => void;
   openDecoders: () => void;
+  /** ★★ V12 beta25: true while FREE tuning shows the red "DC Spike" label on screen — the mode picker then offers a
+   *  "WHAT IS THE DC SPIKE?" key with a short explanation for listeners. Absent / false = no key. */
+  dcSpikeOnScreen?: () => boolean;
   /** ★ The one decoder left when the owner has blocked all the others (and the spots) — drawn
    *  here in place of DECODERS… so a single button does not hide behind a door. See main.ts. */
   soleDecoder: () => { label: string; on: boolean; press: () => void } | null;
@@ -419,6 +429,21 @@ export function initMobileControls(deps: MobileDeps) {
     wiki.textContent = 'SIGNAL ID WIKI ↗';
     wiki.title = 'Not sure what a signal is? Search the Signal Identification Wiki';
     menu.appendChild(wiki);
+    // ★★ V12 beta25 — WHAT IS THE DC SPIKE? Only while the red label is on screen; the explanation opens in place under it.
+    if (deps.dcSpikeOnScreen?.()) {
+      const dcKey = document.createElement('button');
+      dcKey.className = 'mModeClose';
+      dcKey.textContent = 'WHAT IS THE DC SPIKE?';
+      dcKey.title = 'What is the DC spike?';
+      dcKey.setAttribute('aria-expanded', 'false');
+      const dcText = document.createElement('div');
+      dcText.className = 'mModeDcInfo';
+      dcText.hidden = true;
+      dcText.textContent = DC_SPIKE_EXPLAINED;
+      dcKey.onclick = () => { dcText.hidden = !dcText.hidden; dcKey.setAttribute('aria-expanded', String(!dcText.hidden)); };
+      menu.appendChild(dcKey);
+      menu.appendChild(dcText);
+    }
 
     const closeRow = document.createElement('button');
     closeRow.className = 'mModeClose';

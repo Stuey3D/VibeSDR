@@ -190,6 +190,8 @@ export class Waterfall {
   wallLoHz: number | null = null;
   wallHiHz: number | null = null;
   rfCenterHz: number | null = null;
+  /** ★★ V12 beta25: the radio's DC spike — a small red "DC Spike / Not a real signal" label (main.ts decides when). */
+  dcSpikeHz: number | null = null;
   /** Edges of the CAPTURED band right now (dongle ± Fs/2). Distinct from the
    *  walls: the walls are how far you may ever pan, this is what the radio is
    *  actually receiving at this moment — outside it there is no spectrum, and
@@ -953,6 +955,7 @@ export class Waterfall {
       this._drawCapture(ctx, W, H);
       this._drawWalls(ctx, W, H);
       this._drawRfCentre(ctx, W, H);
+      this._drawDcSpike(ctx, W, H);
       ctx.restore();
     }
 
@@ -1163,6 +1166,36 @@ export class Waterfall {
     this.markerLabel(ctx, x, W, this.markerLabelY(H, 1),
       `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M${this.rfCenterNote}`,
       'rgba(120,200,255,0.95)');
+    ctx.restore();
+  }
+
+  /** ★★ V12 beta25 — THE DC SPIKE, LABELLED (Stuart, 2026-10-27: "put a little red label on the DC spike, we know where it
+   *  should be"; his wording, two lines). A short red tick at the exact frequency and the label to its LEFT, so it never
+   *  sits on the RF CENTRE label, which reads to the right of the same place on a dongle. */
+  private _drawDcSpike(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    if (this.dcSpikeHz == null) return;
+    const x = this.hzToX(this.dcSpikeHz, W);
+    if (x < 0 || x > W) return;
+    const dpr = renderDpr();
+    const y = this.markerLabelY(H, 3);
+    ctx.save();
+    ctx.fillStyle = 'rgba(255,77,77,0.95)';
+    ctx.fillRect(Math.round(x), y - 10 * dpr, 1 * dpr, 24 * dpr);
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    const top = 'DC Spike', sub = 'Not a real signal';
+    const topFont = `bold ${10 * dpr}px ui-monospace, Menlo, monospace`, subFont = `${8.5 * dpr}px ui-monospace, Menlo, monospace`;
+    ctx.font = subFont; const sw = ctx.measureText(sub).width;
+    ctx.font = topFont; const tw = ctx.measureText(top).width;
+    const w = Math.max(sw, tw);
+    const lx = x - 6 * dpr - w >= 0 ? x - 6 * dpr - w : x + 6 * dpr;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(lx - 3 * dpr, y - 9 * dpr, w + 6 * dpr, 24 * dpr);
+    ctx.fillStyle = 'rgba(255,77,77,0.98)';
+    ctx.fillText(top, lx + w - tw, y);
+    ctx.font = subFont;
+    ctx.fillStyle = 'rgba(255,130,130,0.92)';
+    ctx.fillText(sub, lx + w - sw, y + 11 * dpr);
     ctx.restore();
   }
 

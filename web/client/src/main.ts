@@ -1587,6 +1587,12 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★★★ SOMEBODY ELSE MOVED THE DIAL — REDRAW WHAT THEY MOVED. The readout, the mode and the
     //     VFO marker are all drawn from values this client chose, and on a shared receiver it
     //     chose none of them. Without this the audio followed and the screen did not.
+    onDcSpike: (dcHz, rfCentreHz) => {
+      if (dcHz === hwDcHz && (!(rfCentreHz > 0) || rfCentreHz === hwRfCentre)) return;
+      hwDcHz = dcHz;
+      if (rfCentreHz > 0) hwRfCentre = rfCentreHz;
+      updateViewOverlays();
+    },
     onDialMoved: (hz, mode) => {
       renderFreq();
       // ★ false: adopting, not commanding. ★★ And KEEP the passband: SpectrumClient already reset it if the
@@ -3020,6 +3026,7 @@ function maybeExplainRtlAutomation() {
 let hwTunerBw = 0;
 let hwTunerAuto = false;
 let hwRfCentre = 0;
+let hwDcHz = 0;   // ★ V12 beta25: the radio's DC spike (0 = none) — see updateViewOverlays
 /* ★★★ THE CONVERTER'S OWN FIGURES, AND THE CHIP SHOWS THE ONE THAT MATTERS. It reported `pk` and
  *     nothing else — a PEAK, which we established on 2026-08-24 is not the harm: 96.1 sounds its
  *     best at -1.2 dBFS with nothing on the rail, while 104.2 at 7.7 dB reads 0.0 dBFS with 28% of
@@ -9002,6 +9009,10 @@ function buildControls() {
     openMenu:      () => togglePanel('menu'),
     openAudio:     () => togglePanel('audioPanel'),
     openDecoders:  () => togglePanel('decodersPanel'),
+    dcSpikeOnScreen: () => {   // ★ V12 beta25 — the red label is drawn (updateViewOverlays) and inside the view
+      const dc = wf?.dcSpikeHz; const sp = wf?.spanHz || 0;
+      return !!dc && sp > 0 && Math.abs(dc - wf!.displayCenterHz()) <= sp / 2;
+    },
     soleDecoder,
     anyDecoderLeft,
     dabCapable:    () => dabCapable,
@@ -9208,6 +9219,10 @@ function updateViewOverlays() {
   //     edges are fixed context every listener needs — this is the window you are inside, and the
   //     one thing you cannot move. UberSDR does the same, showing its RF centre (15 MHz) whatever
   //     the listener's view mode (Stuart, 2026-08-02).
+  /* ★★ V12 beta25 — THE RED "DC Spike / Not a real signal" LABEL. Stuart, 2026-10-27: "only in free tuning mode put a little
+   *  red label on the DC spike, we know where it should be". FREE tuning only, never on a shared dial or an owner's locked
+   *  window (not the listener's to move); the server sends no dcHz for a radio without a real spike. */
+  wf.dcSpikeHz = (!spec.followVfo && !hwLockedCentre && !srvShared && !srvSharedDial && hwDcHz > 0) ? hwDcHz : null;
   if (spec.followVfo && !hwLockedCentre) {
     wf.wallLoHz = wf.wallHiHz = wf.rfCenterHz = null;   // free-running dongle: nothing fixed to show
     return;
