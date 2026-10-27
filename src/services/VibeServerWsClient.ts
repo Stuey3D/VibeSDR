@@ -1429,7 +1429,18 @@ export abstract class VibeServerWsClient {
     this._openSpectrumWs();
   }
 
+  /** ★★ V12 HELD SESSION — the server's terms (hwinfo holdS / holdHardS): null until it has said (an older server never
+   *  does). `hardAt` = Date.now() at which a hard session limit ends a hold sooner, 0 = none. */
+  private holdTerms: { holdS: number; hardAt: number } | null = null;
+  sessionHoldTerms(): { holdS: number; hardAt: number } | null { return this.holdTerms; }
+
   destroy() {
+    /* ★★ V12: LEAVING ON PURPOSE — said before the sockets close, so the server does not HOLD a session that has ended
+     *  (a held place is counted and its decoders run on for three minutes). A suspended phone never gets here; that is
+     *  the case the hold is for. VibeServer only: an UberSDR does not know the message. */
+    if (this.isVibe && !this.destroyed && this.spectrumWs?.readyState === WebSocket.OPEN) {
+      try { this.spectrumWs.send(JSON.stringify({ type: 'leave' })); } catch { /* going anyway */ }
+    }
     this.destroyed = true;
     // ★ A tune still held by the pacer goes NOW — the last tune is never dropped (tunePace.ts).
     this.tunePacer.flush();
@@ -2892,6 +2903,12 @@ export abstract class VibeServerWsClient {
         // ★ Borrowed FIRST, so the clock paints in the right words the moment it starts (B10).
         if (msg.borrowed === true) this.callbacks.onBorrowed?.();
         this.callbacks.onSessionWarning?.(Number(msg.sessionSecsLeft));
+      }
+      // ★★ V12 HELD SESSION — how long this server holds our place if the phone suspends us, and when a hard limit would
+      //    end that sooner (sessionHoldNotice.ts). Absent = an older server: no hold, and no notice is promised.
+      if (typeof msg.holdS === 'number') {
+        const hard = Number(msg.holdHardS);
+        this.holdTerms = { holdS: Math.max(0, Number(msg.holdS) || 0), hardAt: hard >= 0 ? Date.now() + hard * 1000 : 0 };
       }
       // ★★★ THE SERVER'S WORD ON ITS OWN DSP. These are sticky AND shared, so what this phone last
       //     asked for is irrelevant — only the radio knows, and a control that misreports it is

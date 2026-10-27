@@ -738,6 +738,9 @@ if node --no-warnings scripts/test_reopenTune.ts >/dev/null; then pass=$((pass+1
 #     waterfall view on the previous frequency" after a switch to another app): no lapse while our own socket is closed,
 #     one mode_resume ask per lapse, refusals said in words, an old server's silence given up on.
 if node --no-warnings scripts/test_wholeModeResume.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_wholeModeResume.ts"; fi
+# ★★★ V12 HELD SESSION — "VibeSDR paused" (2026-10-27): the note only in a quiet map mode on iOS, its words and deadline
+#     (the hold, or a hard limit sooner), the permission asked once — and a CLOSED SQUELCH NEVER QUIET (read from source).
+if node --no-warnings scripts/test_sessionHoldNotice.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_sessionHoldNotice.ts"; fi
 # ★ The directory Worker against real SQLite: dead-address pages, and the 90-day retention (PRIVACY.md, Play form).
 for t in directory/scripts/test-gone.mjs directory/scripts/test-retention.mjs; do
   if node --no-warnings "$t" >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ $t"; fi
@@ -1151,6 +1154,18 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     else on it, after a retune, or with nothing to resume. Needs VIBESERVER_BIN and VIBE_ADSB_CLIP (exit 3 = not run).
 printf '\n\033[1m── Whole-radio mode resume (end to end) ──\033[0m\n'
 node scripts/test-server-mode-resume.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ V12 THE HELD SESSION (2026-10-27): a suspended listener's mode, dial, decoders (their gap replayed) and VFO B held
+#     for 180 s; a held place giving way; `leave` never held; a hard 1-minute limit cutting the hold and ending it as a
+#     live session. ~8 minutes, so only with VIBESERVER_SLOW=1. Needs VIBESERVER_BIN, VIBE_ADSB_CLIP (VIBE_CW_CLIP for the
+#     decoder part).
+printf '\n\033[1m── The held session (end to end) ──\033[0m\n'
+if [ "${VIBESERVER_SLOW:-0}" = "1" ]; then
+  node scripts/test-server-session-hold.mjs; rc=$?
+else
+  echo '   not run — ~8 minutes; set VIBESERVER_SLOW=1'; rc=3
+fi
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 THE ADS-B GAIN RULE end to end (2026-10-26): Stuart's FlightAware clip (filtered LNA feed) replayed so that it

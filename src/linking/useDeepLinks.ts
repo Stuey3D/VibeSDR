@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { Alert, Linking, ToastAndroid, Platform } from 'react-native';
+import { Alert, Linking, NativeModules, ToastAndroid, Platform } from 'react-native';
 import { CommonActions } from '@react-navigation/native';
 
 import { navigationRef } from '../../App';
@@ -165,6 +165,13 @@ export function useDeepLinks(ready: boolean) {
   // checked — including on null/throw, which is the common "no link" case.
   useEffect(() => {
     Linking.getInitialURL()
+      /* ★ V12 held session: a tap on "VibeSDR paused" that LAUNCHED the app (iOS had ended it while suspended) reopens
+       *  that server — the note carries its vibesdr:// link (VibeHoldNotice). A suspended app tapped back simply resumes
+       *  where it was, and the link is cleared without being used (cancelHoldNotice). */
+      .then(async (u) => u ?? (Platform.OS === 'ios'
+        ? await ((NativeModules.VibePowerModule as { takeHoldNoticeLink?: () => Promise<string | null> } | undefined)
+            ?.takeHoldNoticeLink?.() ?? Promise.resolve(null)).catch(() => null)
+        : null))
       .then(handle)
       .catch(() => {})
       .finally(markInitialLinkChecked);

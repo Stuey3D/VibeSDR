@@ -34,6 +34,12 @@ RCT_EXTERN_METHOD(revive)
 RCT_EXTERN_METHOD(holdHealing:(nonnull NSNumber *)ms)
 // ★★ V12: ADS-B / ISM release the audio output (AirPods followed silence) — VibePowerModule.setQuiet.
 RCT_EXTERN_METHOD(setQuiet:(BOOL)on)
+// ★★ V12 held session — the "VibeSDR paused" note (VibePowerModule.swift; src/services/sessionHoldNotice.ts).
+RCT_EXTERN_METHOD(scheduleHoldNotice:(NSString *)title body:(NSString *)body delayS:(nonnull NSNumber *)delayS link:(NSString *)link)
+RCT_EXTERN_METHOD(cancelHoldNotice)
+RCT_EXTERN_METHOD(holdNoticeStatus:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(requestHoldNotice:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
+RCT_EXTERN_METHOD(takeHoldNoticeLink:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(audioStaleness:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)
 // ★ B19 perf overlay (src/constants/perfOverlay.ts)
 RCT_EXTERN_METHOD(perfStats:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject)

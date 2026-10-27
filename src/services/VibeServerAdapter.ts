@@ -354,4 +354,6 @@ export class VibeServerAdapter implements SDRBackend {
   wholeReportAt(kind: WholeKind): number { return this.vibe.wholeReportAt(kind); }
   modeResume(kind: WholeKind): boolean { return this.vibe.modeResume(kind); }
   wholeForget(kind: WholeKind): void { this.vibe.wholeForget(kind); }
+  /** ★★ V12 held session — the server's terms (sessionHoldNotice.ts). */
+  sessionHoldTerms(): { holdS: number; hardAt: number } | null { return this.vibe.sessionHoldTerms(); }
 }
