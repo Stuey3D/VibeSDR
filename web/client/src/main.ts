@@ -10770,8 +10770,22 @@ function renderSpotModeChips() {
     const dot = document.createElement('i');
     dot.style.background = st.colour; dot.style.color = st.ink; dot.textContent = st.letter;
     chip.append(dot, document.createTextNode(m.mode + ' '), Object.assign(document.createElement('b'), { textContent: m.state.toUpperCase() }));
+    /* ★★ TAP A CHIP TO SHOW ONLY THAT MODE, TAP AGAIN FOR ALL (Stuart, 2026-10-27). The chip sets the same mode filter
+     *  as the header's mode cycler (sfMode), so the two can never disagree; a mode the cycler does not list is left alone. */
+    const fi = SF_MODES.findIndex((x) => x.toUpperCase() === digiModeFamily(m.mode, spotModes));
+    chip.classList.toggle('sel', fi > 0 && sfMode === fi);
+    chip.setAttribute('role', 'button');
+    chip.title += fi > 0 ? (sfMode === fi ? ' — tap to show every mode' : ' — tap to show only this mode') : '';
+    chip.onclick = () => {
+      if (fi <= 0) return;
+      sfMode = sfMode === fi ? 0 : fi;
+      const b = document.getElementById('sfMode');
+      if (b) { b.textContent = SF_MODES[sfMode]; b.classList.toggle('on', sfMode !== 0); }
+      renderSpots(); renderSpotModeChips();
+    };
     host.append(chip);
   }
+  host.classList.toggle('filtered', SF_MODES[sfMode] !== 'ALL' && spotModeStates.some((m) => digiModeFamily(m.mode, spotModes) === SF_MODES[sfMode].toUpperCase()));
 }
 
 /** "FT8 / FT4 SPOTS" (Single, a server with those two) · "DIGITAL SPOTS" (Single, a server with more: FT2, JS8 …
@@ -14355,7 +14369,7 @@ function initSpotFilters() {
     el.onclick = () => { set((get() + 1) % labels.length); paint(); renderSpots(); };
     paint();
   };
-  cycle('sfMode', () => sfMode, (i) => { sfMode = i; }, SF_MODES);
+  cycle('sfMode', () => sfMode, (i) => { sfMode = i; renderSpotModeChips(); }, SF_MODES);   // ★ the chips show the filter too
   cycle('sfBand', () => sfBand, (i) => { sfBand = i; }, SF_BANDS);
   cycle('sfAge', () => sfAge, (i) => { sfAge = i; }, SF_AGES.map(a => a.label));
 }

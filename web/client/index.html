@@ -3263,6 +3263,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #spotModeChips .smc.shed b { color: #E8A23A; }
 #spotModeChips .smc.off { opacity: .45; text-decoration: line-through; }
 #spotModeChips .smc.out { opacity: .45; border-style: dashed; }
+/* ★ A chip is also the list's mode filter (Stuart, 2026-10-27): tap once to show only that mode, again for all. The chosen
+ *  one is lit in the theme's accent, the others dim a little, so the list's filter is visible where it was set. */
+#spotModeChips .smc { cursor: pointer; }
+#spotModeChips.filtered .smc:not(.sel) { opacity: .4; }
+#spotModeChips .smc.sel { opacity: 1; border-color: var(--accent, #E8A23A); box-shadow: 0 0 0 1px var(--accent, #E8A23A) inset; }
 /* ★ The expanded second line — dimmer than line 1 on purpose: context to READ, not to scan.
    Spans the full row width beneath the columns. */
 #spotList .sdetail { grid-column: 1 / -1; color: var(--text-dim); font-size: 11px;

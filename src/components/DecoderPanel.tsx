@@ -18,6 +18,7 @@ import {
   Animated,
   FlatList,
   Platform,
+  Pressable,
   ScrollView,
   Share,
   StyleSheet,
@@ -1584,10 +1585,20 @@ export default function DecoderPanel({
             {spotModeStates.map((m) => {
               const st = digiModeStyle(m.mode);
               const live = m.state === 'active' || m.state === 'light';
+              /* ★★ TAP A CHIP TO SHOW ONLY THAT MODE, TAP AGAIN FOR ALL (Stuart, 2026-10-27) — the same sfMode the MODE
+               *  key sets, so the two never disagree; the web's chips do the same. Others dim while one is chosen. */
+              const fam = sfModes.find((f) => f !== 'ALL' && spotModeMatches(m.mode, f, spotModes ?? SF_MODES_UBERSDR));
+              const sel = !!fam && sfMode === fam;
+              const dimmed = sfMode !== 'ALL' && !sel;
               return (
-                <View key={m.mode} accessible accessibilityLabel={spotChipText(m)}
-                      style={[dp.chip, { borderColor: m.state === 'shed' ? '#E8A23A' : tk.divider },
+                <Pressable key={m.mode} accessibilityRole="button"
+                      accessibilityLabel={spotChipText(m) + (fam ? (sel ? ', showing only this mode — tap for every mode' : ', tap to show only this mode') : '')}
+                      accessibilityState={{ selected: sel }}
+                      disabled={!fam} hitSlop={4}
+                      onPress={() => { if (fam) setSfMode(sel ? 'ALL' : fam); }}
+                      style={[dp.chip, { borderColor: sel ? tk.accent : m.state === 'shed' ? '#E8A23A' : tk.divider },
                               (m.state === 'idle' || m.state === 'off' || m.state === 'out') && { opacity: m.state === 'idle' ? 0.55 : 0.45 },
+                              dimmed && { opacity: 0.4 },
                               m.state === 'out' && { borderStyle: 'dashed' }]}>
                   <Text style={[dp.chipDot, { backgroundColor: st.colour, color: st.ink, fontFamily: FONT }]}>{st.letter}</Text>
                   <Text style={[dp.chipTxt, { color: tk.value, fontFamily: FONT },
@@ -1595,7 +1606,7 @@ export default function DecoderPanel({
                   <Text style={[dp.chipState, { fontFamily: FONT, color: live ? '#5BE36B' : m.state === 'shed' ? '#E8A23A' : tk.muted }]}>
                     {m.state.toUpperCase()}
                   </Text>
-                </View>
+                </Pressable>
               );
             })}
           </View>
