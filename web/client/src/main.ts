@@ -1352,6 +1352,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       dabApplyRestore();
       dabNoteNonDab();
       adsbApplyPending();          // ★ a mode picked while in ADS-B, spent on the dial the server gave back
+      bandSpotsApplyPending();     // ★ a band chosen from DAB / ADS-B / ISM / AIS / NDB — see bandSpotsPending
 
       /* ★★★ THE FIRST CONFIG OF THE CONNECTION, not "while the frequency is zero". SpectrumClient adopts
        *  cfg.serverVfo BEFORE calling us, so on every server that reports its dial this block never ran:
@@ -10728,7 +10729,7 @@ function spotsBandRender() {
 }
 function bandSpotsUi(on: boolean) {
   bandSpots = on && !!spotBandCap;
-  if (!bandSpots) spotModeStates = [];
+  if (!bandSpots) { spotModeStates = []; bandSpotsPending = null; }
   renderSpotModeChips();
   spotsBandRender();
   if ($('decBox').classList.contains('open') && decoders?.spotsEnabled) $('decTitle').textContent = spotsTitle();
@@ -10774,11 +10775,40 @@ function spotsTitle(): string {
   }
   return spotModes.length > 0 && spotModes.length <= 2 ? spotModes.join(' / ') + ' SPOTS' : 'DIGITAL SPOTS';
 }
+/* ★★★ BAND SPOTS FROM A WHOLE-RADIO MODE (Stuart, 2026-10-27, beta22 on the Pi 2): "switching to full band digital spots
+ *  whilst in DAB mode doesnt retune to a band, and when i do try to tune all it does is move dab multiplex rather than
+ *  jumping to the bands". DAB (and ADS-B, ISM, AIS, NDB) HOLDS the dial — SpectrumClient.tune() returns early under
+ *  dabHeld, and the server refuses a `tune` in DAB as well — so bandSpotsGo's tune went nowhere, the radio stayed on the
+ *  multiplex, and every arrow press still reached dabTune (nudge checks DAB before Band).
+ *  ★★ So a band jump LEAVES the held mode first, as the listener's own press (the shared-dial contract: a press may send),
+ *     and the band is a LATCH spent on the first config out of it — the same shape as dabRestore and adsbPendingMode, and
+ *     for the same reason: a tune sent beside `dab:0` races the config the server sends on leaving. DAB's own restore is
+ *     dropped — the band IS where this listener asked to go back to.
+ *  ★ Never on recovery: only bandSpotsGo (a press of Band, an arrow, a band chosen) parks a band here. */
+let bandSpotsPending: SpotBand | null = null;
+function heldMode(): boolean { return dabOn || adsbOn || ismOn || aisOn || ndbOn; }
+/** Leave whichever whole-radio mode holds the dial (a user action). False when none does. */
+function bandSpotsLeaveHeld(): boolean {
+  if (dabOn) { dabSetMode(false); dabRestore = null; return true; }
+  if (adsbOn) { adsbPendingMode = null; adsbSetMode(false); return true; }
+  if (ismOn) { ismSetMode(false); return true; }
+  if (aisOn) { aisSetMode(false); return true; }
+  if (ndbOn) { ndbSetMode(false); return true; }
+  return false;
+}
+/** Spend the parked band on the first config out of the held mode (see bandSpotsPending). */
+function bandSpotsApplyPending() {
+  if (!bandSpotsPending || !spec || heldMode()) return;
+  const b = bandSpotsPending; bandSpotsPending = null;
+  if (bandSpots) bandSpotsGo(b);   // ★ Band ended in the meantime: nothing to go to
+}
 /** Put the dial on band `b`'s centre, in USB — a listener's own tune (a user action: the shared-dial contract holds). */
 function bandSpotsGo(b: SpotBand) {
   if (!spec) return;
-  spec.tune(clampTune(b.hz), 'usb', { recenter: true, retarget: true });
   savePref('spotBand', b.id);
+  // ★ Out of DAB / ADS-B / ISM / AIS / NDB first — see bandSpotsPending. (Asked-before-tuning: tune() below asks.)
+  if (!spec.isTuneLocked() && bandSpotsLeaveHeld()) { bandSpotsPending = b; renderFreq(); return; }
+  spec.tune(clampTune(b.hz), 'usb', { recenter: true, retarget: true });
   renderFreq();
   if ($('decBox').classList.contains('open')) $('decTitle').textContent = spotsTitle();
 }
@@ -11812,13 +11842,16 @@ function initDecoders(host: string, auth: AuthState) {
     if (!spotBandCap) return;
     // ★ Greyed with the server's reason (the owner switched it off, or the benchmark's default) — say it, start nothing.
     if (!spotBandCap.ok) { showPill(spotBandCap.why, 7000); return; }
-    const on = decoders!.spotsScope !== 'band';
+    /* ★★ From DAB (ADS-B, ISM, AIS, NDB) a press is "take me to a band", even with Band already lit — the radio is not on
+     *  one, so turning Band OFF there would answer the wrong question (see bandSpotsPending). */
+    const on = decoders!.spotsScope !== 'band' || heldMode();
     if (on) {
-      const b = landingSpotBand(spotBandCap.bands, spec?.frequency ?? 0, prefs()['spotBand'] as string ?? null);
+      const b = landingSpotBand(spotBandCap.bands, heldMode() ? 0 : spec?.frequency ?? 0, prefs()['spotBand'] as string ?? null);
       if (!b) return;
       decoders!.setSpots(true, 'band');
       bandSpotsUi(true);
-      if (spec && !spotBandAt(spotBandCap.bands, spec.frequency)) bandSpotsGo(b);   // ★ on a band already: stay where you are
+      // ★ on a band already: stay where you are. A held mode's dial (a DAB multiplex, ISM's 433.92) never counts as one.
+      if (spec && (heldMode() || !spotBandAt(spotBandCap.bands, spec.frequency))) bandSpotsGo(b);
       spotsBtn.classList.remove('on');
       showDecBox('spots');
     } else {

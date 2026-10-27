@@ -1310,6 +1310,9 @@ if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-digi-spots" ]; then
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_DIGI_BIN="$OUT/test-digi-spots" node scripts/test-web-spots.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★ Band chosen while in DAB leaves DAB and tunes the band; the arrows then step bands, not multiplexes (2026-10-27)
+  VIBE_DIGI_BIN="$OUT/test-digi-spots" node --max-old-space-size=512 scripts/test-web-spots-from-dab.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 else
   echo '   not run — needs VIBESERVER_BIN (and test-digi-spots built above)'; notrun=$((notrun+1))
 fi
