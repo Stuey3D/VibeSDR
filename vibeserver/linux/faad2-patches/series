@@ -9,3 +9,4 @@
 0005-ps-decorrelate-mix-simd.patch
 0006-sbr-hfgen-simd.patch
 0007-sbr-hfadj-simd.patch
+0008-aac-imdct-filterbank-simd.patch

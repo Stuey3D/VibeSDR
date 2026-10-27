@@ -1,4 +1,4 @@
-Subject: [PATCH 5/7] ps_dec: parametric stereo's decorrelator and mixing four subbands (or bands) at a time
+Subject: [PATCH 5/8] ps_dec: parametric stereo's decorrelator and mixing four subbands (or bands) at a time
 
 VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
 as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh

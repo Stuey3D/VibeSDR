@@ -77,6 +77,7 @@ unsigned char vibedab_NeAACDecSetConfiguration(NeAACDecHandle, NeAACDecConfigura
 char vibedab_NeAACDecInit2(NeAACDecHandle, unsigned char*, unsigned long, unsigned long*, unsigned char*);
 void* vibedab_NeAACDecDecode(NeAACDecHandle, NeAACDecFrameInfo*, unsigned char*, unsigned long);
 void vibedab_NeAACDecClose(NeAACDecHandle);
+long vibedab_NeAACDecInit(NeAACDecHandle, unsigned char*, unsigned long, unsigned long*, unsigned char*);
 }
 static int cmdRaw(int argc, char** argv) {
     const char* out = nullptr; std::vector<const char*> logs; int repeat = 1;
@@ -229,8 +230,35 @@ static int cmdResamp(int argc, char** argv) {
     return 0;
 }
 
+/** adts <file.aac> [--out f.f32]: a plain ADTS AAC file (1024-sample frames — e.g. AAC-LC from ffmpeg) through FAAD2:
+ *  the AAC-LC core's cost (DAB+'s 48 kHz AAC-LC services run this path with 960-sample frames, no SBR, no PS). */
+static int cmdAdts(int argc, char** argv) {
+    if (argc < 1) return 2;
+    const char* out = nullptr; for (int i = 1; i < argc; ++i) if (!std::strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
+    FILE* f = std::fopen(argv[0], "rb"); if (!f) return 2;
+    std::vector<uint8_t> d; { uint8_t b[65536]; size_t n; while ((n = std::fread(b, 1, sizeof b, f)) > 0) d.insert(d.end(), b, b + n); } std::fclose(f);
+    NeAACDecHandle h = vibedab_NeAACDecOpen(); NeAACDecConfigurationPtr c = vibedab_NeAACDecGetCurrentConfiguration(h);
+    c->outputFormat = FAAD_FMT_FLOAT; c->downMatrix = 0; vibedab_NeAACDecSetConfiguration(h, c);
+    unsigned long sr = 0; unsigned char ch = 0;
+    long used = vibedab_NeAACDecInit(h, d.data(), (unsigned long)d.size(), &sr, &ch);
+    size_t pos = used > 0 ? size_t(used) : 0; double cpu = 0, secs = 0; long frames = 0; std::vector<float> all;
+    while (pos + 7 < d.size()) {
+        NeAACDecFrameInfo fi{}; const double c0 = cpuNow();
+        float* pcm = static_cast<float*>(vibedab_NeAACDecDecode(h, &fi, d.data() + pos, (unsigned long)(d.size() - pos)));
+        cpu += cpuNow() - c0;
+        if (!fi.bytesconsumed) break;
+        pos += fi.bytesconsumed; ++frames;
+        if (pcm && !fi.error && fi.samples) { secs += double(fi.samples / fi.channels) / double(fi.samplerate); if (out) all.insert(all.end(), pcm, pcm + fi.samples); }
+    }
+    vibedab_NeAACDecClose(h);
+    std::printf("ADTS %lu Hz %u ch: %ld frames, %.1f s, %.1f us/frame, %.3f %% of a core\n", sr, ch, frames, secs, 1e6 * cpu / double(frames), 100 * cpu / secs);
+    if (out) writeF32(out, all);
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    if (argc < 2) { std::printf("usage: dab-faad-bench run|raw|cmp|resamp …\n"); return 2; }
+    if (argc < 2) { std::printf("usage: dab-faad-bench run|raw|cmp|resamp|adts …\n"); return 2; }
+    if (std::string(argv[1]) == "adts") return cmdAdts(argc - 2, argv + 2);
     const std::string c = argv[1];
     if (c == "run") return cmdRun(argc - 2, argv + 2);
     if (c == "raw") return cmdRaw(argc - 2, argv + 2);

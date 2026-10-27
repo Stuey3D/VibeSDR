@@ -1,4 +1,4 @@
-Subject: [PATCH 3/7] sbr_dct: dct4_kernel four lanes at a time, the 32-point FFT in registers
+Subject: [PATCH 3/8] sbr_dct: dct4_kernel four lanes at a time, the 32-point FFT in registers
 
 VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
 as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh

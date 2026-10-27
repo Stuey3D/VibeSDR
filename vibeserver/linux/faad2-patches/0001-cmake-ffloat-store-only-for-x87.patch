@@ -1,4 +1,4 @@
-Subject: [PATCH 1/7] CMake: -ffloat-store only for 32-bit x86 doing float maths on the x87
+Subject: [PATCH 1/8] CMake: -ffloat-store only for 32-bit x86 doing float maths on the x87
 
 VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
 as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh

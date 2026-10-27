@@ -1,4 +1,4 @@
-Subject: [PATCH 2/7] vibe_simd4f.h: four floats at a time — NEON (ARMv7, AArch64), SSE2, plain C
+Subject: [PATCH 2/8] vibe_simd4f.h: four floats at a time — NEON (ARMv7, AArch64), SSE2, plain C
 
 VibeSDR patch for FAAD2 2.11.3 (the plain build VibeServer links for DAB+ audio, libfaad_dab.a). GPL-2.0-or-later,
 as FAAD2. Written for VibeSDR, 2026-10-26; applied by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh
