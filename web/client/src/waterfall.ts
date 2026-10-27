@@ -736,6 +736,16 @@ export class Waterfall {
 
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, W, specH);
+    // ★★★ THE HARD RULE (Stuart, 2026-10-27, verbatim): "the waterfall is what I always wanted to make sure was perfect, it
+    //     was a fully buffered waterfall which when rotated or resized never lost any content it expanded or shrunk as
+    //     needed. Zooming and tuning also never lost the history and it was seemless to the history too so signals always
+    //     glided in from the sides and settled and when zooming in and out you had a cool fanning in and out of the
+    //     signals. Those 2 things were the major things that we nailed in our first native build and I made a hard rule
+    //     that these must be preserved at all costs".
+    //     That look IS this blit: every row drawn once against the view it arrived in, the history never rewritten, so a
+    //     trail bends while the dial moves and settles straight after. GitHub #57's torn trails were rows the SERVER
+    //     cropped against the wrong tuner position (local_sdr_shim.cpp onSpectrum) — scripts/test-web-waterfall-history.mjs
+    //     guards both halves (tune/zoom continuity and resize keeping the history) against the real server.
     // Straight blit, in BIN space — exactly what the app does (its shader maps
     // display x directly to bins: tx = xy.x / uDrawW * uTexW). No pan offset, no
     // frequency-indexed history, no re-alignment. Old rows keep their old bins

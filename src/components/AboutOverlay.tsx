@@ -58,6 +58,8 @@ const VERSION_HISTORY: { v: string; detail: string }[] = [
   //    control on screen that does nothing on their radio: they conclude the FEATURE is broken,
   //    not that it was never theirs. Same rule as AGENTS.md's "a control that only works on one
   //    radio should not be there".
+  // ★ 11.0.15 (2026-10-27): the waterfall draws one continuous trail through a tune again (GitHub #57, Gesiima); rtl_tcp offset tuning.
+  { v: 'V11.0.15', detail: 'The waterfall is whole again while you tune: with the IF filter on Auto, rows captured just before the radio moved were drawn as if they came from after it, so a station\u2019s trail broke into a zig-zag instead of bending smoothly into its new place. Each row is now drawn at the frequency it was captured on. Radios reached over rtl_tcp now get the same 15 kHz offset tuning as a USB dongle, so the DC spike never sits on the station you are listening to. Thanks to Gesiima for the report.' },
   // ★ 11.0.14 (2026-10-27): public listing on networks that block outside DNS, and an error line no longer read as the address (Kiko).
   { v: 'V11.0.14', detail: 'Public listing on VibeSDR.net now works on networks that block outside DNS servers: the Android app’s server mode asks the phone’s own DNS servers first, then public ones, then encrypted DNS. On every VibeServer, a failed listing attempt is no longer mistaken for a listing address, which on some networks left the listing restarting every 15 seconds. Thanks to Kiko for the report and the testing.' },
   // ★ 11.0.13 is a security release (2026-10-26): the bundled cloudflared, nothing else. The iPhone/iPad app has no copy.
