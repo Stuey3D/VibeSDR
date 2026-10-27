@@ -61,9 +61,9 @@ export function spotsBandHint(cap: SpotsBandCap): string {
  *  something in it and the box has the CPU (decoders/digi_governor.h) — so the header says, per mode, what it is doing.
  *  {"type":"digital_spots_status","data":{scope:"band",modes:[{mode,state,dials,idle,shed,live}],budget}} — when a state
  *  changes and every 15 s. */
-export type SpotModeStateName = 'active' | 'light' | 'idle' | 'shed' | 'off';
+export type SpotModeStateName = 'active' | 'light' | 'idle' | 'shed' | 'off' | 'out';
 export interface SpotModeState { mode: string; state: SpotModeStateName; dials: number; idle: number; shed: number; live: number }
-const STATES: readonly string[] = ['active', 'light', 'idle', 'shed', 'off'];
+const STATES: readonly string[] = ['active', 'light', 'idle', 'shed', 'off', 'out'];   // ★ 'out': its slice is beyond the capture
 /** The status frame's modes, checked as the web's decoders.ts: a state not in the five is dropped, at most 16. null = not one. */
 export function parseSpotsStatus(d: any): SpotModeState[] | null {
   if (!d || !Array.isArray(d.modes)) return null;
@@ -76,6 +76,7 @@ export function parseSpotsStatus(d: any): SpotModeState[] | null {
 export const SPOT_STATE_WORDS: Record<SpotModeStateName, string> = {
   active: 'decoding', light: 'decoding, one pass — the server is busy', idle: 'nothing in its window just now — not decoded',
   shed: 'signals there, but over this server\'s CPU budget — not decoded', off: 'switched off for Band by the server owner',
+  out: 'its dial is further from this band\'s others than this radio\'s capture reaches — not decoded here',
 };
 /** A chip's spoken / long text: "FT8: decoding" (+ " (3 periods shed)"). */
 export function spotChipText(m: SpotModeState): string {

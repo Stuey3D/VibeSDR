@@ -513,7 +513,7 @@ The next saving is the tuners (one per dial; a shared channeliser for neighbouri
 75 kHz (flat ≈ 37 kHz, span 27.6 — fine), but 40 m's 41.9 kHz span has its ends (WSPR, JS8) in the taper, and on a
 960 kS/s radio the 20 m slice is only 30 kHz. Signal and noise are attenuated alike, but the PSK skimmer's floor is
 band-relative, so a PSK signal deep in the taper can be missed (the server test's PSK station was moved 1.2 kHz inward).
-Owed: size Band's slice for the flat half.
+Owed: size Band's slice for the flat half. **Done 2026-10-27 — see "The slice, the clock and the extra slices" below.**
 
 ### Tests
 `test-digi-spots` (139 checks): JTTY/PSK registry and dials, no JTTY dial in another mode's window, priority order,
@@ -524,10 +524,63 @@ with real engines. `test-server-spots` (46): JTTY and PSK in the clip, both radi
 owner's `spotsband-psk,spotsband+wspr`. `test-web-spots` (31): six modes in the list, chips in colour and letter, WSPR
 idle, legend with T and P, 390 px, chips gone in Single. `test_digi_modes.ts`: styles, CVD distances, families.
 
+## The slice, the clock and the extra slices (2026-10-27, branch `v12-band-fix`)
+
+**The fault.** Stuart's Pi 2 (RTL-SDR Blog V4, HF, a one-pipeline radio), 40 m in Band, 23:03–23:10 UTC: the chips said
+FT8/JS8/WSPR/PSK LIGHT and nothing was decoded for minutes, while Single at 7.074 on the same radio decoded 13+ stations
+in its first slot, and STUEY3D logged 166 FT8 spots on 40 m in the same quarter of an hour. No JTTY chip either.
+
+**What was measured** (`test-band-slice`, the server's own route: the 96 kHz 40 m recording interpolated to a 2.4 MS/s
+capture → the channeliser → `vibe_wide_tap.h` / the per-listener extract → the Spotter, live on the real clock):
+- *Orientation and taper: cleared as the cause.* A +10 kHz tone comes out at +10 kHz (mirror −89 dB, every mode's edge on
+  every band: mirror below −97 dB). The old taper cost 40 m's ends 2–3 dB at 960 kS/s and JTTY 8–17 dB at 2.4 MS/s —
+  signal and noise alike, so FT8 at +14…+16.5 kHz was untouched (−0.08 dB).
+- *The stamp: the cause.* The tap's blocks were stamped when the tap handed them over, not when they were captured. The tap
+  ran at decoder priority beside the engines' workers, and a tap held off once a slot hands over a late burst; the FT8
+  engine reads a stamp a second late as lost audio and re-anchors, never cutting the slot. Same recording, FT8 spots in
+  120 s live: tap never held off 310 (old stamp) / 313 (new); held 0.45 s a slot 329 / 330; held 1.2 s a slot (0.7 s
+  of it dropped by the tap's half-second queue) **0** / 156. That is the symptom exactly: every chip lit, nothing out.
+  Measured on a Mac; the Pi 2's actual hold-off was not observed from here (its logs are not readable) — the new
+  `Digital spots / skimmer slice (radio-rate tap)` health line will show tap drops if it happens again.
+
+**What changed.**
+- The DSP thread stamps each chunk it hands the tap (the capture time of its last sample); each block's capture time
+  follows from the sample count. `DecoderHost::feedIq` takes that stamp (NaN = now, for the per-listener extract, which
+  runs on the DSP thread).
+- The tap runs at **spectrum** priority (it is the radio-rate front end, bounded work: 0.67 % of an M5 core at 2.4 MS/s,
+  ≈ 13–20 % of a Pi 2 core estimated by the 20–30× factor) — no longer starved by the decoders it feeds.
+- `Channelizer::extract(…, taperDiv)`: Band's slice rolls off over a sixteenth of its bins a side and is sized for its flat
+  7/8 (`vibe_band_slice.h`, one rule for the shim, the tap and `DigiTuner::fits`). Every mode's passband edge on every
+  band at 2.4 M / 2.048 M / 1.024 M / 960 k / 300 kS/s is within 0.07 dB. A narrow roll-off is made **causal** (a linear
+  phase of half the overlap) — the zero-phase response's anti-causal half had wrapped onto the samples overlap-save keeps:
+  block-rate spurs −63 dB → −105 dB. (The listeners' channels keep a quarter's roll-off and measure −68 dB the same way;
+  the same causal shift would improve them, left for a separate change since it moves every listener's latency.)
+- **Extra slices** (Stuart: *"we need to get JTTY to the full band decoder mode"*). A band's dials beyond its 48 kHz
+  cluster get a slice of their own off the same forward FFT (`digi::Span::extras`, at least 24 kHz wide): 40 m JTTY
+  (7.0798–7.1038), 6 m JTTY (153 kHz from FT8), 15 m and 10 m FT4/FT2, 10/4/2 m WSPR. The Spotter plans per slice (each
+  dial on the slice it sits deepest in; a gate floor per slice); a slice not fed for 3 s has gone, and a new one at the
+  same rate within a quarter of an old one is that one moved (a fine retune keeps its engines). A mode whose slice the
+  capture cannot hold (a 300 kS/s radio and 6 m's JTTY) is a chip in a sixth state, **out**, never silently missing.
+  `vibeserver.json` `spotBands[].modes` lists every mode Band decodes on the band, and `extra` the extra slices' RF.
+
+**Cost.** At 2.4 MS/s the main slice's size did not change on any band (40 m: 1024 bins = 75 kHz before and after). At
+960 kS/s 20 m's and 40 m's main slices go 30 → 60 kHz: the inverse FFT goes 512 → 1024 points per block (negligible) but
+the tuners run at the slice rate, so their stage-1 mix and decimation double — the tuners were ≈ 25 % of Band's Pi 2 work
+(71 G instructions / 230 s on 20 m), so that box's Band rises by roughly a quarter there (estimate). An extra slice is one
+more inverse FFT of 256–512 points per block off the existing FFT plus one tuner at 18–38 kHz: ≈ 1 % of a Pi 2 core
+(estimate). The modes it brings in are governed like any other (JTTY ≈ 12 FT8 units, priority after FT2 — on a Pi 2
+whose budget is short, JTTY is the one shed first after PSK, and its chip says SHED).
+
+**Tests.** `test-band-slice` (registered by the run-tests glob): tones at every mode's passband edges on every band at
+five capture rates (main and extra slices, within 0.5 dB), nothing at the mirror, spurs, a +10 kHz tone at +10 kHz,
+and a JTTY CQ on each of its six dials decoded in Band through the slice route with every other mode still running.
+`test-band-slice real <wav> <utc> <rec centre> <dial> [live] [stall=ms] [oldstamp] [oldslice] [chan]` replays a recording.
+`test-server-spots` adds 40 m on both radio layouts: JTTY at 7.0915 on its extra slice, at its RF, with its chip.
+
 ## Not done / owed
 - **Band governor (2026-10-27):** the app (React Native) now has the Band key and the chips (2026-10-26 parity pass) but no per-mode owner setting in
-  its server screen (the setup page has it); a steady carrier holds a window open; Band's slice is not sized for the
-  channeliser's flat half (above); the costVsFt8 figures are the Mac's (JTTY is relatively heavier on the Pi 2 build);
+  its server screen (the setup page has it); a steady carrier holds a window open; ~~Band's slice is not sized for the
+  channeliser's flat half~~ (fixed 2026-10-27, below); the costVsFt8 figures are the Mac's (JTTY is relatively heavier on the Pi 2 build);
   the benchmark's Band row now includes JTTY (0.77 % on the Mac vs 0.12 % before) — a Pi 2 measuring it amber would
   start with Band off by the existing rule, although the governor keeps it in budget (rule left as it was; owner can tick).
 - **The app's own Band mode** — BUILT 2026-10-26 (APP-PARITY-2026-10-26.md): SPOTS: BAND beside SPOTS: SINGLE in the

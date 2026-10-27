@@ -205,6 +205,24 @@ static digi::ModeDef dummyMode(const char* name, float lo, float hi) {
  *  t plays at UTC ≡ t (mod 15) under fake-rtl-tcp --hf-utc — for scripts/test-server-spots.mjs. FT8 at +0.5 s, FT4 at
  *  +0.5 and +8.0 s, one FT8 station on the lower sideband of the FT8 dial, a JS8 Normal heartbeat on the JS8 dial,
  *  an FT2 CQ on the FT2 dial, a JTTY CQ on 14.090 and a PSK31 CQ on 14.070. */
+/** ★ V12 (2026-10-27) `clip40`: 40 m — an FT8 CQ on the main slice and a JTTY CQ on 7.090, which is on 40 m's EXTRA slice
+ *  (beyond the 48 kHz cluster: digi_bands.h Span::extras), so the server's extra-slice route is driven end to end. */
+static int writeClip40(const char* path, double rate, double centre) {
+    std::vector<cf32> x((size_t)(rate * 15.0), cf32(0, 0));
+    addTx(x, rate, 7074600 - centre, 0.5, tonesFor("CQ G4ABC IO92", false), false, 4.0);
+    addJtty(x, rate, 7091500 - centre, 2.0, "CQ G4JTY CQ", 4.0);
+    addNoise(x, 5.0, 23);
+    std::vector<uint8_t> u(x.size() * 2);
+    for (size_t i = 0; i < x.size(); ++i) {
+        u[2 * i] = (uint8_t)std::max(0.0, std::min(255.0, std::round(127.5 + x[i].real())));
+        u[2 * i + 1] = (uint8_t)std::max(0.0, std::min(255.0, std::round(127.5 + x[i].imag())));
+    }
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 1;
+    std::fwrite(u.data(), 1, u.size(), f);
+    std::fclose(f);
+    return 0;
+}
 static int writeClip(const char* path, double rate, double centre) {
     std::vector<cf32> x((size_t)(rate * 15.0), cf32(0, 0));
     struct Tx { const char* msg; bool ft4; double rf, start; };
@@ -337,6 +355,7 @@ static int runRealUsb(const char* path, double startUtc, double dial, bool live)
 int main(int argc, char** argv) {
     if (argc > 4 && std::strcmp(argv[1], "realusb") == 0) return runRealUsb(argv[2], std::atof(argv[3]), std::atof(argv[4]), argc > 5 && !std::strcmp(argv[5], "live"));
     if (argc > 4 && std::strcmp(argv[1], "clip") == 0) return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
+    if (argc > 4 && std::strcmp(argv[1], "clip40") == 0) return writeClip40(argv[2], std::atof(argv[3]), std::atof(argv[4]));
     if (argc > 4 && std::strcmp(argv[1], "real") == 0) {
         bool swap = false, live = false, gate = false; double budget = INFINITY, maxSec = 1e9;
         for (int i = 5; i < argc; ++i) {
