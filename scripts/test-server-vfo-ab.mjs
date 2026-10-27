@@ -10,6 +10,12 @@
 //      a VFO B asked for on the full radio is refused "full".
 //   3. SHARED DIAL (users 2, unlocked, Opus): VFO B's listener gets its OWN stereo stream; the other listener's stream is
 //      untouched; nothing moves the dial.
+//   ROUND 3 (2026-10-27), in 1: MUTE — B muted puts A back in both ears and unmuting puts it back out; A muted puts B in
+//      both ears; `sig` carries B's own level (chanB) for B's squelch row and its auto squelch; the RF CENTRE FOLLOWS
+//      BOTH VFOs on a personal receiver — a B 1.6 MHz from A moves the radio to hold both (A still heard), A tuned past
+//      the old window keeps B inside, and a B too far away is refused "apart"; and NO DUAL VFO ON FM BROADCAST — A on
+//      WFM in the FM band closes B with the reason and takes the toggle away (max 0), it comes back off the band, and B
+//      may neither pick WFM nor be tuned into 87.5–108 MHz.
 // Silent: audio frames are analysed in memory, never played.
 //   VIBESERVER_BIN=…/vibeserver node scripts/test-server-vfo-ab.mjs
 import net from 'node:net';
@@ -174,6 +180,33 @@ const hwWatch = (L) => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[
     ok(a.L[400] > 0.002 && a.R[400] > 0.002 && a.L[620] > 0.002 && a.R[620] > 0.002 && Math.abs(a.L[620] - a.R[620]) < 0.1 * a.L[620],
        `STEREO OFF: both VFOs in both ears (L ${fmt(a.L)} · R ${fmt(a.R)})`);
     L.spec.send({ type: 'watch', stereo: true });
+    await sleep(1200);
+    // ★★ ROUND 3 — `sig` carries B's own level, every frame, for B's squelch row
+    L.spec.txt.length = 0;
+    await sleep(600);
+    const sigs = jsons(L.spec, 'sig');
+    ok(sigs.length > 5 && sigs.every((m) => typeof m.chanB === 'number'), `sig carries chanB while B is on (${sigs.length} sig, chanB ${sigs.length && sigs[sigs.length - 1].chanB})`);
+    // ★★ ROUND 3 — MUTE B: A (now 7.03, the higher) comes home to BOTH ears; B's 400 Hz gone
+    L.spec.send({ type: 'watch', id: 1, mute: true });
+    await sleep(1200);
+    a = await listen(L.aud, 1600);
+    const mw = lastWatch(L.spec);
+    ok(mw && mw.chans[0] && mw.chans[0].mute === true && mw.muteA === false, `the state says B is muted (${JSON.stringify(mw && { muteA: mw.muteA, mute: mw.chans[0] && mw.chans[0].mute })})`);
+    ok(a.L[620] > 0.002 && a.R[620] > 0.002 && Math.abs(a.L[620] - a.R[620]) < 0.1 * a.L[620] && a.L[400] < 0.0005 && a.R[400] < 0.0005,
+       `B muted: A in both ears, B silent (L ${fmt(a.L)} · R ${fmt(a.R)})`);
+    L.spec.send({ type: 'watch', id: 1, mute: false });
+    await sleep(1200);
+    a = await listen(L.aud, 1600);
+    ok(only(a, 400, 'L') && only(a, 620, 'R'), `B unmuted: back out — B left, A right (L ${fmt(a.L)} · R ${fmt(a.R)})`);
+    // ★★ MUTE A: B (6.91) in both ears
+    L.spec.send({ type: 'watch', muteA: true });
+    await sleep(1200);
+    a = await listen(L.aud, 1600);
+    ok(lastWatch(L.spec).muteA === true, 'the state says A is muted');
+    ok(a.L[400] > 0.002 && a.R[400] > 0.002 && Math.abs(a.L[400] - a.R[400]) < 0.1 * a.L[400] && a.L[620] < 0.0005 && a.R[620] < 0.0005,
+       `A muted: B in both ears, A silent (L ${fmt(a.L)} · R ${fmt(a.R)})`);
+    L.spec.send({ type: 'watch', muteA: false });
+    await sleep(1200);
     // B's own squelch on the keyed station
     L.spec.send({ type: 'tune', frequency: A_HZ, mode: 'am' });
     L.spec.send({ type: 'watch', id: 1, frequency: KEY_HZ });
@@ -203,20 +236,79 @@ const hwWatch = (L) => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[
     await until(() => phase() > 0.7 && phase() < 0.9, 7000);
     a = await listen(L.aud, 1000);
     ok(a.R[840] > 0.002, `B open: heard in its ear (R 840 ${a.R[840].toFixed(4)})`);
-    // refusal outside the window — and the radio does not move
+    // ★★ ROUND 3 — THE RF CENTRE FOLLOWS BOTH on this personal receiver. Unsquelch B first (its keyed station is behind us).
+    L.spec.send({ type: 'watch', id: 1, sql: -150, sqlOn: false });
+    const winMid = (m) => (m.lo + m.hi) / 2;
+    const FAR_B = A_HZ + 1600000;   // 1.6 MHz above A — outside today's window (±1.2 MHz), inside one capture beside A
     L.spec.txt.length = 0;
-    L.spec.send({ type: 'watch', id: 1, frequency: 12000000 });
+    L.spec.send({ type: 'watch', id: 1, frequency: FAR_B });
+    await sleep(1500);
+    let wm = lastWatch(L.spec);
+    ok(!jsons(L.spec, 'watch').some((m) => m.refused), 'B 1.6 MHz from A is NOT refused on a personal receiver');
+    ok(wm && wm.chans[0] && wm.chans[0].freq === FAR_B && !wm.chans[0].parked && wm.lo < A_HZ && wm.hi > FAR_B,
+       `the radio moved to hold both: window ${(wm.lo / 1e6).toFixed(3)}–${(wm.hi / 1e6).toFixed(3)} MHz, centre ${(winMid(wm) / 1e6).toFixed(3)}`);
+    ok(Math.abs(winMid(wm) - (A_HZ + FAR_B) / 2) < 150000, 'the centre sits between them');
+    await sleep(1500);
+    a = await listen(L.aud, 1600);
+    ok(a.L[400] > 0.002 && a.L[400] > 30 * a.R[400], `VFO A still heard after the move (L 400 ${a.L[400].toFixed(4)})`);
+    // A tuned past the old window: the radio goes where it holds both (it would have parked B before)
+    const FAR_A = FAR_B + 1500000;
+    L.spec.txt.length = 0;
+    L.spec.send({ type: 'tune', frequency: FAR_A, mode: 'am' });
+    await sleep(1500);
+    wm = lastWatch(L.spec);
+    ok(wm && wm.chans[0] && !wm.chans[0].parked && wm.lo < FAR_B && wm.hi > FAR_A, `A tuned 1.5 MHz past B: both still inside (${(wm.lo / 1e6).toFixed(3)}–${(wm.hi / 1e6).toFixed(3)} MHz), B not parked`);
+    // too far apart for one capture: refused "apart", nothing moves
+    L.spec.txt.length = 0;
+    const before = winMid(wm);
+    L.spec.send({ type: 'watch', id: 1, frequency: 14000000 });
     await until(() => jsons(L.spec, 'watch').some((m) => m.refused), 2000);
     const rf = jsons(L.spec, 'watch').find((m) => m.refused);
-    ok(rf && rf.refused === 'outside' && rf.lo < KEY_HZ && rf.hi > KEY_HZ && /window/.test(rf.note), `12 MHz refused "outside" with the window (${rf && rf.note})`);
-    ok(rf && rf.chans[0].freq === KEY_HZ, 'VFO B stays where it was');
-    const cfgs = jsons(L.spec, 'config');
-    ok(!/retune|tuneHw.*12\.0/.test('') && !cfgs.some((c) => c.center_freq && Math.abs(c.center_freq - 12e6) < 2e6), 'the radio did not move');
+    ok(rf && rf.refused === 'apart' && /too far apart/.test(rf.note), `14 MHz refused "apart" (${rf && rf.note})`);
+    ok(rf && rf.chans[0].freq === FAR_B, 'VFO B stays where it was');
+    ok(rf && Math.abs(winMid(rf) - before) < 1, 'the radio did not move');
+    // back home for the rest
+    L.spec.send({ type: 'tune', frequency: A_HZ, mode: 'am' });
+    await sleep(600);
+    L.spec.send({ type: 'watch', id: 1, frequency: KEY_HZ });
+    await sleep(1200);
     // off: back to mono
     L.spec.send({ type: 'watch', id: 1, off: true });
     await sleep(1000);
     a = await listen(L.aud, 1500);
     ok(a.same && a.L[400] > 0.002 && a.L[840] < 0.0005, `VFO B off: plain mono again, A only (${a.ch} ch)`);
+    L.spec.txt.length = 0;
+    await sleep(600);
+    ok(!jsons(L.spec, 'sig').some((m) => 'chanB' in m), 'no chanB with VFO B off');
+    // ★★ ROUND 3 — NO DUAL VFO ON FM BROADCAST
+    L.spec.send({ type: 'watch', id: 1, on: true });
+    await until(() => lastWatch(L.spec) && lastWatch(L.spec).chans.length === 1, 3000);
+    L.spec.txt.length = 0;
+    L.spec.send({ type: 'tune', frequency: 98000000, mode: 'wfm' });
+    await until(() => jsons(L.spec, 'watch').some((m) => m.max === 0 && m.chans.length === 0), 4000);
+    const fmw = jsons(L.spec, 'watch').find((m) => m.max === 0 && m.chans.length === 0);
+    ok(!!fmw && /FM broadcast/.test(fmw.note || ''), `A on 98 MHz WFM: B closed with the reason, toggle gone (max 0) (${fmw && fmw.note})`);
+    L.spec.txt.length = 0;
+    L.spec.send({ type: 'watch', id: 1, on: true });
+    await until(() => jsons(L.spec, 'watch').some((m) => m.refused), 2000);
+    const fr = jsons(L.spec, 'watch').find((m) => m.refused);
+    ok(fr && fr.refused === 'off' && fr.max === 0 && fr.chans.length === 0, `asked for anyway on FM broadcast: refused (${fr && fr.note})`);
+    L.spec.txt.length = 0;
+    L.spec.send({ type: 'tune', frequency: A_HZ, mode: 'am' });
+    await until(() => jsons(L.spec, 'watch').some((m) => m.max === 1), 3000);
+    ok(jsons(L.spec, 'watch').some((m) => m.max === 1), 'back on 7 MHz AM: the toggle comes back (max 1), unasked');
+    L.spec.send({ type: 'watch', id: 1, on: true });
+    await until(() => lastWatch(L.spec) && lastWatch(L.spec).chans.length === 1, 3000);
+    L.spec.txt.length = 0;
+    L.spec.send({ type: 'watch', id: 1, mode: 'wfm' });
+    await until(() => jsons(L.spec, 'watch').some((m) => m.refused), 2000);
+    ok((jsons(L.spec, 'watch').find((m) => m.refused) || {}).refused === 'mode', 'VFO B may not pick WFM');
+    L.spec.txt.length = 0;
+    L.spec.send({ type: 'watch', id: 1, frequency: 95000000, mode: 'nfm' });
+    await until(() => jsons(L.spec, 'watch').some((m) => m.refused), 2000);
+    const br = jsons(L.spec, 'watch').find((m) => m.refused);
+    ok(br && br.refused === 'band' && br.chans[0].freq === A_HZ, `VFO B may not be tuned into 87.5–108 MHz (${br && br.note})`);
+    L.spec.send({ type: 'watch', id: 1, off: true });
     L.spec.close(); L.aud.close();
   } finally { S.stop(); }
 }
@@ -278,6 +370,12 @@ const hwWatch = (L) => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[
     L.spec.send({ type: 'watch', id: 1, frequency: 12e6 });
     await until(() => jsons(L.spec, 'watch').some((m) => m.refused === 'outside'), 2000);
     ok(jsons(L.spec, 'watch').some((m) => m.refused === 'outside'), 'outside the window: refused, the shared dial untouched');
+    // ★★ ROUND 3: what moves the radio on a personal receiver (1.6 MHz from A) is still refused here — B never moves a shared dial
+    L.spec.txt.length = 0;
+    L.spec.send({ type: 'watch', id: 1, frequency: A_HZ + 1600000 });
+    await until(() => jsons(L.spec, 'watch').some((m) => m.refused), 2000);
+    const sr = jsons(L.spec, 'watch').find((m) => m.refused);
+    ok(sr && sr.refused === 'outside' && Math.abs((sr.lo + sr.hi) / 2 - CENTRE) < 2e6 && sr.lo > A_HZ - 1.3e6, `1.6 MHz from A on a shared dial: refused "outside", the window where it was (${sr && sr.note})`);
     L.spec.close(); L.aud.close(); M.spec.close(); M.aud.close();
   } finally { S.stop(); }
 }
@@ -294,6 +392,38 @@ const hwWatch = (L) => { const h = jsons(L.spec, 'hwinfo'); return h.length ? h[
     const r = jsons(L.spec, 'watch').find((m) => m.refused);
     ok(r && r.refused === 'off' && r.chans.length === 0, `a VFO B asked for anyway is refused "off" (${r && r.note})`);
     L.spec.close(); L.aud.close();
+  } finally { S.stop(); }
+}
+// ── 5. Decode on A, listen on B (round 3) ─────────────────────────────────────────────────────────────────────────────
+/* ★★★ Stuart, 2026-10-27: "run a decoder on VFO A whilst VFO B can listen to the audio … Also the ability to mute a VFO
+ *  that is decoding so for WEFAX no need to hear the WEFAX noises whilst listening to SSB". A listener's decoder is fed
+ *  VFO A's own audio BEFORE the mix (onClientAudio's decoders_.feedSession; the shared path's feedShared), so neither VFO
+ *  B nor A's mute can reach it. Proven on both kinds of radio: WEFAX on A draws its lines while B is on and A is muted,
+ *  and B's station is in both ears. */
+for (const [label, args] of [['range-locked (users 2)', ['--users', '2', '--lock-freq', String(CENTRE)]], ['personal receiver (users 1)', ['--users', '1']]]) {
+  console.log(`── 5. decode on VFO A, listen on VFO B — ${label} ──`);
+  const S = await server(args, label.startsWith('range') ? 'declock' : 'decone');
+  try {
+    const sid = label.startsWith('range') ? 'vfoabdec1' : 'vfoabdec2';
+    const L = await listener(S.port, sid, KEY_HZ);
+    const dx = ws(S.port, `/ws/dxcluster?user_session_id=${sid}`);
+    dx.keepBin = true;
+    await sleep(400);
+    dx.send({ type: 'audio_extension_attach', extension_name: 'wefax', lpm: 120, image_width: 1809, carrier: 1900, deviation: 400, use_phasing: false });
+    await sleep(2000);
+    const lines = () => dx.bin.filter((b) => b.length === 9 + 1809).length;
+    ok(lines() >= 2, `WEFAX on VFO A is drawing (${lines()} lines)`);
+    L.spec.send({ type: 'watch', id: 1, frequency: A_HZ, mode: 'am' });
+    await until(() => lastWatch(L.spec) && lastWatch(L.spec).chans.length === 1, 3000);
+    L.spec.send({ type: 'watch', muteA: true });
+    await sleep(2500);
+    const l0 = lines();
+    const a = await listen(L.aud, 2000);
+    const l1 = lines();
+    ok(l1 - l0 >= 2, `with VFO B on and VFO A MUTED, A's decoder keeps decoding (${l1 - l0} more lines)`);
+    ok(a.L[400] > 0.002 && a.R[400] > 0.002 && Math.abs(a.L[400] - a.R[400]) < 0.1 * a.L[400] && a.L[840] < 0.0005 && a.R[840] < 0.0005,
+       `VFO B's station in both ears, nothing of A's (L ${fmt(a.L)} · R ${fmt(a.R)})`);
+    dx.close(); L.spec.close(); L.aud.close();
   } finally { S.stop(); }
 }
 console.log(`\n${pass} passed, ${fail} failed`);

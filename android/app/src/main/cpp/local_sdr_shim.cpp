@@ -7272,6 +7272,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // The VFO must stay inside the usable capture.
         double lo = vfo - lim;
         double hi = vfo + lim;
+        /* ★★★ V12 VFO A/B round 3 — AND SO MUST VFO B, on a personal receiver (watchCentreFollows): a pan or the view
+         *  following the dial must not slide B out of the capture the B tune (or A's recentre) just placed it in. A second
+         *  hard limit beside A's — used only while the two overlap (they always do once handleWatch has placed B; if A
+         *  has since been tuned beyond them, A wins and B waits parked, exactly as before). */
+        double hardLo = lo, hardHi = hi;
+        {
+            double bHz = 0, bBw = 0;
+            if (watchCentreFollows() && watchPersonalB(bHz, bBw)) {
+                const double bl = watchVfoLim(bBw);
+                const double nlo = std::max(lo, bHz - bl), nhi = std::min(hi, bHz + bl);
+                if (nlo <= nhi) { lo = hardLo = nlo; hi = hardHi = nhi; }
+            }
+        }
 
         // ...and so must the whole visible window, or we'd be showing the band
         // edge / rolloff. (Half-span, less the same anti-alias margin.)
@@ -7285,7 +7298,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // A span wider than the capture can't satisfy both — keep the VFO captured.
         // ★★ V12 (2026-10-27): every answer below goes through bandDcSafe — while Band spots run, the tuner is placed so
         //    its DC is outside Band's slices (vibe_band_slice.h bandDcCentre); a no-op otherwise.
-        if (lo > hi) return bandDcSafe(std::min(vfo + lim, std::max(vfo - lim, view)), vfo - lim, vfo + lim);
+        if (lo > hi) return bandDcSafe(std::min(hardHi, std::max(hardLo, view)), hardLo, hardHi);
 
         /* ★★★ IN AUTO, THE TUNER FOLLOWS THE LISTENER. The IF filter is centred here, so a centre
          *     left behind by "minimal movement" puts the VFO in the filter's skirt — 663 kHz with
@@ -7952,6 +7965,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /** ★ The client says its OUTPUT is mono (a phone speaker, a mono headset) — the server cannot see that. Then every
          *  VFO goes to both ears at unity, so the speaker plays both and nothing is lost. */
         bool monoOut = false;
+        /** ★★ Round 3: VFO A muted in this listener's mix (the listener's own channel, source 0 of the PanMixer). Only
+         *  while VFO B exists — B's removal unmutes A, which fades back in before the hand-back (PanMixer::restingMono). */
+        bool muteA = false;
         uint64_t order = 0;                                             // creation order — the newest yields first
         /** The per-channel slice state on a range-locked radio (the listener's thread only). */
         struct Slice { int id = 0; int bins = 0; vibedsp::Channelizer::ExtractCtx ctx; std::vector<cf32> buf; };
@@ -8979,7 +8995,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ V12 DRM: the receiver needs ≥ 24 kHz of channel; a new one for a new tune (it re-acquires anyway)
         if (c->mode == "drm") { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->rx->setIqMinRate(24000.0); }
         else if (c->drm) { c->drm.reset(); c->rx->setIqMinRate(0.0); }
-        if (c->drmOn.exchange(c->mode == "drm") != (c->mode == "drm")) drmWatchDirty_.store(true);   // ★ VFO B allowance changed
+        c->drmOn.store(c->mode == "drm");
+        // ★ VFO B allowance may have changed: DRM, WFM, or a dial into / out of the FM broadcast band (watchMaxFor)
+        watchAllowDirty_.store(true, std::memory_order_relaxed);
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
         // ★ After the pipeline exists, so setRdsEnabled has something to act on. A FULL resweep,
         //   because this listener moving can free a frequency somebody else is sitting on — see
@@ -12884,8 +12902,25 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *    tuned signal, this is the receiver. Unknown types are ignored by every
                      *    client, so nothing has to change to keep working. */
                     char sb[192];
-                    snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
-                             mine, floorDb);
+                    /* ★★ V12 VFO A/B round 3: `chanB` — VFO B's level, measured this same frame on this same row
+                     *  (watchOnFrame, above) — so each VFO's squelch row has its own live bar and AUTO squelch runs for B
+                     *  exactly as it runs for A, client-side off a figure at the meter's own rate (Stuart, 2026-10-27:
+                     *  "the 2 VFO's can they have their own squelch and auto squelch options"). Only for a listener with
+                     *  a VFO B; one atomic read for everybody else. */
+                    float chanB = -1e9f;
+                    if (watchSetCount_.load(std::memory_order_relaxed) > 0) {
+                        const std::string ss = p.dsp ? p.dsp->session : sessionOfSock(p.sock.get());
+                        if (std::shared_ptr<WatchSet> ws = watchFind(ss)) {
+                            std::lock_guard<std::mutex> wl(ws->m);
+                            for (auto& ch : ws->chans) if (ch->id() == 1 && !ch->parked()) chanB = ch->levelDb();
+                        }
+                    }
+                    if (chanB > -1e8f)
+                        snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f,\"chanB\":%.1f}",
+                                 mine, floorDb, (double)chanB);
+                    else
+                        snprintf(sb, sizeof sb, "{\"type\":\"sig\",\"chan\":%.1f,\"floor\":%.1f}",
+                                 mine, floorDb);
                     sendText(p.sock, sb, Out::Sig);
                     /* ★★ `adc` AND `lx` GO ON THIS LISTENER'S OWN FRAME CLOCK; `sig` DOES NOT
                      *  (efficiency audit 2026-10-03). Both were sent on EVERY ENGINE frame to every
@@ -15713,7 +15748,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         vfoBwHz.store(mp.bandwidth);
         {   // ★ V12 DRM on the shared dial (perClientDsp() radios build theirs per listener in clientRetune)
             std::lock_guard<std::mutex> lk(drmSharedMtx);
-            if ((mode == "drm") != bool(drmShared)) drmWatchDirty_.store(true);   // ★ VFO B allowance changed
+            watchAllowDirty_.store(true, std::memory_order_relaxed);   // ★ VFO B allowance may have changed (watchMaxFor)
             if (mode == "drm") { drmShared = std::make_shared<vibe::DrmListener>(); drmSharedVer = 0; rx.setIqMinRate(std::max(24000.0, iqDirectRate())); }
             else if (drmShared) { drmShared.reset(); rx.setIqMinRate(iqDirectRate()); }
         }
@@ -15959,6 +15994,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //    they need opposite fixes.
         LOGI("retune -> %.3f kHz (was %.3f, centre %.3f)",
              freq / 1e3, audioFreq.load() / 1e3, rtlCenter.load() / 1e3);
+        watchAllowDirty_.store(true, std::memory_order_relaxed);   // ★ V12 VFO A/B: the FM broadcast band rule (watchMaxFor)
         // ★★★ A DIFFERENT STATION IS A DIFFERENT WORLD, and what the AGC learned about the last one
         //     is worse than nothing there — see agcForget(). Only for a real move: a nudge across a
         //     station's own passband is still the same signal and the same neighbours, and forgetting
@@ -16121,7 +16157,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // on it so we don't end up showing dead air.
             // ★★ V12 (2026-10-27): ON it, unless Band spots run — then where the DC is outside the band's slices
             //    (bandDcSafe; a band step lands here). The view still goes to the dial.
-            const double centre = bandDcSafe(freq, freq - limit, freq + limit);
+            double centre = bandDcSafe(freq, freq - limit, freq + limit);
+            /* ★★★ V12 VFO A/B round 3 — WITH A VFO B ON A PERSONAL RECEIVER, WHERE BOTH FIT (Stuart, 2026-10-27: "the RF
+             *  centre should move accordingly so that both VFO's can be tuned as if they have the full 2.4MSPS window").
+             *  A recentre ON A would leave B behind, parked and silent; instead the capture goes where it holds both
+             *  (vibewatch::fitCentre). Further apart than one capture can hold: A wins — on A as before, B parked with
+             *  its note until it is back inside. */
+            {
+                double bHz = 0, bBw = 0;
+                if (watchCentreFollows() && watchPersonalB(bHz, bBw)) {
+                    const double aLim = watchVfoLim(rxBwHz), bLim = watchVfoLim(bBw);
+                    vibewatch::CentreFit f = vibewatch::fitCentre(rtlCenter.load(), freq, aLim, bHz, bLim, watchDcClearHz(rxBwHz, bBw));
+                    if (f.ok) centre = bandDcSafeFor(freq, f.centre, f.lo, f.hi);
+                }
+            }
             rtlCenter.store(centre);
             // On SpyServer the display is the server's WIDE FFT, which the narrow IQ
             // window slides underneath. Moving viewCenter here would yank the
@@ -25875,34 +25924,64 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // ══ ★★ V12 VFO A/B — a listener's watch channels (vibe_watch.h, docs/v12/VFO-AB.md) ══════════════════════════════
     /** Can a watch channel run on this radio, in this mode, right now? ★ No dead control: when this says no, hwinfo says
      *  `"watch":0` and no client offers the toggle. An Icom is ONE physical receiver (its audio is the rig's); a SpyServer
-     *  decimates to the listener's own passband, so there is no window to put a second channel in; DAB, ADS-B, ISM and AIS
-     *  take the whole chain. */
+     *  decimates to the listener's own passband, so there is no window to put a second channel in; DAB, ADS-B, ISM, AIS
+     *  and NDB take the whole chain.
+     *  ★ Round 3: NDB was missing — its map mode holds the whole beacon band and sends no audio at all (onAudio's return),
+     *    so a VFO B there was a toggle that made nothing. */
     bool watchAvailable() const {
         if (!g_vsVfoB.load(std::memory_order_relaxed)) return false;
         if (useIcom() || useSpy()) return false;
         if (g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
-            || g_ismMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed)) return false;
+            || g_ismMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed)
+            || g_ndbMode.load(std::memory_order_relaxed)) return false;
         return true;
+    }
+    /** ★★★ NO DUAL VFO ON FM BROADCAST (round 3 — Stuart, 2026-10-27: "obviously no dual VFO on the FM Broadcast band and
+     *  DAB etc."). A WFM channel is 200 kHz of stereo programme with RDS — a second VFO beside it is a second
+     *  programme folded to mono over the first, and on the Pi 2 the most expensive case there is (VFO-AB.md, Cost).
+     *  ★ DECIDED: blocked when VFO A is WFM (anywhere — the mode is the programme) or VFO A's dial is inside 87.5–108 MHz
+     *    in any mode (the band is the broadcast band, whatever a listener demodulates it with); and VFO B may neither
+     *    pick WFM nor be tuned into 87.5–108 MHz. Japan's 76–95 MHz is covered by the mode rule (WFM) rather than by a
+     *    second band table. */
+    static constexpr double kFmBandLoHz = 87.5e6, kFmBandHiHz = 108.0e6;
+    static bool watchFmBroadcast(const std::string& md, double hz) {
+        return md == "wfm" || (hz >= kFmBandLoHz && hz <= kFmBandHiHz);
+    }
+    /** Why THIS listener may not have a VFO B right now ("" = they may). The words go on the wire as the note. */
+    std::string watchWhyNotFor(const std::shared_ptr<net::Socket>& sock) {
+        if (!watchAvailable()) return !g_vsVfoB.load() ? "VFO A/B is switched off on this server"
+                                                       : "VFO A/B is not available in this mode on this radio";
+        double hz = 0, bw = 0; std::string md;
+        watchMainOf(sock, hz, md, bw);
+        if (md == "drm") return "VFO B is not available in DRM";
+        if (watchFmBroadcast(md, hz)) return "VFO A/B is not available on FM broadcast";
+        return std::string();
     }
     int watchMaxPerListener() const { return watchAvailable() ? vibewatch::kMaxPerListener : 0; }
     /** ★★ V12 DRM: no VFO B while a listener's OWN mode is DRM — its audio is the decoded programme, which nothing may be
      *  mixed into (as DAB/ADS-B/ISM, but per listener: DRM is a listener mode). 0 = no toggle for this socket. */
     int watchMaxFor(const std::shared_ptr<net::Socket>& sock) {
-        double hz = 0, bw = 0; std::string md;
-        watchMainOf(sock, hz, md, bw);
-        return md == "drm" ? 0 : watchMaxPerListener();
+        return watchWhyNotFor(sock).empty() ? vibewatch::kMaxPerListener : 0;
     }
-    /** ★ V12 DRM: tell a session (or every listener, session empty) its VFO B allowance after a mode change into or out of
-     *  DRM — the watch state's "max" is what the clients draw the A/B toggle from. Leaving DRM gives it back. */
-    void watchTellMax(const std::string& session) {
+    /** ★ Tell every listener whose VFO B allowance CHANGED (DRM, WFM, the dial into or out of the FM broadcast band, a
+     *  whole-radio mode) — the watch state's "max" is what the clients draw the A/B toggle from, so the toggle VANISHES
+     *  rather than staying as a dead control, and comes back when it can be used again. Only on a change: an hwinfo
+     *  carried the first value. Called on the spectrum path (watchOnFrame) when something flagged it, and once a second. */
+    std::map<const net::Socket*, int> watchToldMax_;   // spectrum thread only
+    void watchRecheckMax() {
         std::vector<std::shared_ptr<net::Socket>> socks;
-        if (session.empty()) { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
-        else socks = specSocksOfSession(session);
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        std::map<const net::Socket*, int> next;
         for (auto& sk : socks) {
-            const std::string sess = sessionOfSock(sk.get());
-            std::shared_ptr<WatchSet> w = watchFind(sess);
-            sendText(sk, watchStateJson(w.get(), "", watchMaxFor(sk)));
+            if (!sk || !sk->isOpen() || next.count(sk.get())) continue;
+            const int m = watchMaxFor(sk);
+            next[sk.get()] = m;
+            auto it = watchToldMax_.find(sk.get());
+            if (it == watchToldMax_.end() || it->second == m) continue;   // ★ first sight: hwinfo said it
+            std::shared_ptr<WatchSet> w = watchFind(sessionOfSock(sk.get()));
+            sendText(sk, watchStateJson(w.get(), "", m));
         }
+        watchToldMax_.swap(next);
     }
     static double wallMs() {
         return (double)std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -25956,15 +26035,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         snprintf(b, sizeof b, ",\"lo\":%.0f,\"hi\":%.0f", lo, hi); j += b;
         if (w) {
             std::lock_guard<std::mutex> lk(w->m);
-            j += std::string(",\"stereo\":") + (w->stereo ? "true" : "false") + ",\"monoOut\":" + (w->monoOut ? "true" : "false") + ",\"chans\":[";
+            j += std::string(",\"stereo\":") + (w->stereo ? "true" : "false") + ",\"monoOut\":" + (w->monoOut ? "true" : "false")
+               + ",\"muteA\":" + (w->muteA ? "true" : "false") + ",\"chans\":[";
             bool first = true;
             for (auto& ch : w->chans) {
                 const auto wd = ch->wanted();
                 const auto g = ch->gate();
                 snprintf(b, sizeof b, "%s{\"id\":%d,\"freq\":%.0f,\"mode\":\"%s\",\"bw\":%.0f,\"sqlOn\":%s,\"sql\":%.1f,"
-                                      "\"open\":%s,\"since\":%.0f,\"lvl\":%.1f,\"parked\":%s}",
+                                      "\"open\":%s,\"since\":%.0f,\"lvl\":%.1f,\"parked\":%s,\"mute\":%s}",
                          first ? "" : ",", ch->id(), wd.hz, jsonEscape(wd.mode).c_str(), wd.bwHz, g.on ? "true" : "false",
-                         (double)g.db, g.open ? "true" : "false", g.changedAt, (double)ch->levelDb(), ch->parked() ? "true" : "false");
+                         (double)g.db, g.open ? "true" : "false", g.changedAt, (double)ch->levelDb(), ch->parked() ? "true" : "false",
+                         ch->muted() ? "true" : "false");
                 j += b; first = false;
             }
             j += "]";
@@ -25980,14 +26061,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::lock_guard<std::mutex> lk(w->m);
         for (auto it = w->chans.begin(); it != w->chans.end(); ++it)
             if ((*it)->id() == id) { w->fading.push_back(*it); w->chans.erase(it); break; }
+        // ★ Round 3: with one VFO there is no per-VFO mute — A fades back in (over the same ramp) as B fades out, and the
+        //   hand-back waits until it is home at unity (PanMixer::restingMono).
+        if (w->chans.empty()) w->muteA = false;
         watchGen_.fetch_add(1, std::memory_order_release);
     }
 
     /** ★★ {"type":"watch", "id":1, "frequency":…, "mode":…, "bandwidthLow/High" | "bandwidth", "sql":dB, "sqlOn":bool,
      *  "stereo":bool, "off":true}. Creates the channel on first use (at VFO A's frequency, mode and width unless told
      *  otherwise), re-aims it after, removes it with off:true. Not admin-gated: it changes only what THIS listener hears.
-     *  ★★★ THE SHARED-DIAL CONTRACT: nothing here moves the radio. A frequency outside the capture window is REFUSED with
-     *      the window in the reply — never honoured by retuning under VFO A or anybody else. */
+     *  ★★★ THE SHARED-DIAL CONTRACT: on a shared dial, a range-locked radio or an owner's locked centre nothing here moves
+     *      the radio. A frequency outside the capture window is REFUSED with the window in the reply — never honoured by
+     *      retuning under VFO A or anybody else.
+     *  ★★★ ROUND 3 — ON A PERSONAL RECEIVER THE CENTRE FOLLOWS BOTH (watchCentreFollows; Stuart, 2026-10-27: "in Dual VFO
+     *      mode the RF centre should move accordingly so that both VFO's can be tuned as if they have the full 2.4MSPS
+     *      window"). The dial is this listener's alone there, so a B that no longer fits beside A moves the radio to hold
+     *      both (vibewatch::fitCentre) — refused only when the two are further apart than one capture can hold.
+     *  ★ Round 3 also: {"muteA":bool} and {"id":1,"mute":bool} — a VFO out of the mix, the other home to both ears. */
     void handleWatch(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         const std::string sess = sessionOfSock(sock.get());
         auto refuse = [&](const char* why, const std::string& note) {
@@ -26000,8 +26090,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                             : "VFO A/B is not available in this mode on this radio");
             return;
         }
-        if (watchMaxFor(sock) < 1) {   // ★ V12 DRM: this listener's own mode is DRM
-            sendText(sock, watchStateJson(watchFind(sess).get(), ",\"refused\":\"off\",\"note\":\"VFO B is not available in DRM\"", 0));
+        if (const std::string why = watchWhyNotFor(sock); !why.empty()) {   // ★ DRM, FM broadcast (watchWhyNotFor)
+            sendText(sock, watchStateJson(watchFind(sess).get(), ",\"refused\":\"off\",\"note\":\"" + jsonEscape(why) + "\"", 0));
             return;
         }
         double idV = 1; jsonNum(msg, "id", idV);
@@ -26016,6 +26106,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const bool hasMonoOut = msg.find("\"monoOut\":") != std::string::npos;
         const bool monoOutV = jsonOn(msg, "monoOut");
         if (hasMonoOut && w) { std::lock_guard<std::mutex> lk(w->m); w->monoOut = monoOutV; }
+        // ★★ Round 3: MUTE A VFO — out of the mix, decoding and metering on (PanMixer::Src::muted). Per listener session.
+        const bool hasMuteA = msg.find("\"muteA\":") != std::string::npos;
+        const bool hasMute = msg.find("\"mute\":") != std::string::npos;
+        if (hasMuteA && w) {
+            std::lock_guard<std::mutex> lk(w->m);
+            w->muteA = jsonOn(msg, "muteA") && !w->chans.empty();   // ★ only beside a VFO B (no mute of the only VFO here)
+        }
         if (jsonOn(msg, "off")) {
             if (w) {
                 watchRemove(w, id);
@@ -26027,12 +26124,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         std::shared_ptr<vibewatch::WatchChannel> ch;
         if (w) { std::lock_guard<std::mutex> lk(w->m); for (auto& c : w->chans) if (c->id() == id) ch = c; }
+        if (hasMute && ch) ch->setMuted(jsonOn(msg, "mute"));
         // only the stereo switch? then that is all
         const bool aims = msg.find("\"frequency\"") != std::string::npos || msg.find("\"mode\"") != std::string::npos
                        || msg.find("\"bandwidth") != std::string::npos || msg.find("\"sql") != std::string::npos
                        || jsonOn(msg, "on");   // ★ {"on":true} = create at VFO A's frequency
         if (hasStereo && w) { std::lock_guard<std::mutex> lk(w->m); w->stereo = stereoOn; }
-        if (!aims && !ch) {   // ★ settings only (stereo, monoOut): never creates a channel
+        if (!aims) {   // ★ settings only (stereo, monoOut, mute): never creates a channel, never re-aims one
             if (!w) sendText(sock, watchStateJson(nullptr, std::string(",\"stereo\":") + (stereoOn ? "true" : "false")));
             else sendText(sock, watchStateJson(w.get()));
             return;
@@ -26047,6 +26145,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string m = jsonStr(msg, "mode");
         if (!m.empty()) {
             if (m == "dab" || m == "drm" || vsModeRefused(m)) { refuse("mode", "VFO B cannot use that mode here"); return; }
+            if (m == "wfm") { refuse("mode", "VFO A/B is not available on FM broadcast"); return; }   // ★ round 3
             if (m != wd.mode) { wd.mode = m; wd.bwHz = paramsFor(m).bandwidth; }
         }
         double v = 0, lo = 0, hi = 0, bw = 0;
@@ -26063,8 +26162,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         { const double cap = g_vsMaxBandwidth.load(); if (g_serveOnLan.load() && cap > 0 && wd.bwHz > cap) wd.bwHz = cap; }
         wd.rxMode = rxModeFor(mp.kind);
         wd.bwHz = vibedsp::RxPipeline::clampBwHz(wd.rxMode, wd.bwHz);
+        // ★★★ Round 3: no VFO B on the FM broadcast band (watchFmBroadcast) — B may not be tuned into it either.
+        if (wd.hz >= kFmBandLoHz && wd.hz <= kFmBandHiHz) {
+            refuse("band", "VFO B cannot be tuned into the FM broadcast band (87.5 to 108 MHz)");
+            return;
+        }
         double wlo = 0, whi = 0; watchWindow(wlo, whi);
-        if (wd.hz < wlo || wd.hz > whi) {
+        if (watchCentreFollows()) {
+            // ★★★ A PERSONAL RECEIVER: the centre moves to hold both (see the note above) — or B is refused, A untouched.
+            double aHz = 0, aBw = 0; std::string amd;
+            watchMainOf(sock, aHz, amd, aBw);
+            const double aLim = watchVfoLim(aBw), bLim = watchVfoLim(wd.bwHz);
+            const vibewatch::CentreFit f = vibewatch::fitCentre(rtlCenter.load(), aHz, aLim, wd.hz, bLim, watchDcClearHz(aBw, wd.bwHz));
+            if (!f.ok) {
+                char b[200];
+                snprintf(b, sizeof b, "VFO A and VFO B are too far apart for one window of this radio \xe2\x80\x94 at most %.2f MHz between them",
+                         (aLim + bLim) / 1e6);
+                refuse("apart", b);
+                return;
+            }
+            if (f.moved) watchMoveCentre(f, sess);
+        } else if (wd.hz < wlo || wd.hz > whi) {
             char b[160];
             snprintf(b, sizeof b, "VFO B must stay inside the radio's window, %.3f to %.3f MHz", wlo / 1e6, whi / 1e6);
             refuse("outside", b);
@@ -26103,6 +26221,53 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         ch->setParked(false);
         watchGen_.fetch_add(1, std::memory_order_release);
         sendText(sock, watchStateJson(w.get()));
+    }
+
+    /** ★★★ Round 3: does the RF centre follow BOTH VFOs here? Only where the dial is this listener's alone — a personal
+     *  receiver (one listener, no owner-locked centre). Never on a shared dial (B must never move a shared dial — the
+     *  shared-dial contract), never on a range-locked radio or an owner's locked centre (the window is the owner's), never
+     *  on an Icom or a SpyServer (no window of ours to move). */
+    bool watchCentreFollows() const {
+        return g_vsMaxUsers.load() <= 1 && g_vsLockedCentre.load() <= 0.0 && !useIcom() && !useSpy() && !perClientDsp();
+    }
+    /** How far from a VFO of passband `bw` the capture's centre may sit — dongleForView's own figure for VFO A (the
+     *  usable half-span, less the edge margin, less half the passband), so neither VFO's passband is ever in the roll-off. */
+    double watchVfoLim(double bw) {
+        return std::max(sampleRate * 0.05, usableSpan() / 2.0 - viewDongleMargin() - bw * 0.5);
+    }
+    /** How far the capture's centre (a dongle's DC spike) is kept from either VFO when it has to move. */
+    static double watchDcClearHz(double aBw, double bBw) { return std::max(aBw, bBw) * 0.5 + 10000.0; }
+    /** A personal receiver's VFO B, if there is one (the dial is one listener's, so there is at most one set that
+     *  matters). Takes watchMtx then the set's `m` — never called with either held. */
+    bool watchPersonalB(double& hz, double& bw) {
+        if (watchSetCount_.load(std::memory_order_relaxed) <= 0) return false;
+        std::vector<std::shared_ptr<WatchSet>> sets;
+        { std::lock_guard<std::mutex> lk(watchMtx); for (auto& kv : watchSets) sets.push_back(kv.second); }
+        for (auto& w : sets) {
+            std::lock_guard<std::mutex> lk(w->m);
+            for (auto& ch : w->chans) { const auto wd = ch->wanted(); hz = wd.hz; bw = wd.bwHz; return true; }
+        }
+        return false;
+    }
+    /** ★ Move a personal receiver's capture to `f` for VFO B — the same placement retune() makes when VFO A leaves the
+     *  window (modeMtx across the store + tuneHw + the main channel's re-offset, so A's audio has no more of a gap than
+     *  an ordinary recentre), Band spots' DC rule honoured inside the room both VFOs allow, and the new centre told. */
+    void watchMoveCentre(const vibewatch::CentreFit& f, const std::string& sess) {
+        double c = 0;
+        {
+            std::lock_guard<std::recursive_mutex> lk(modeMtx);
+            c = bandDcSafe(f.centre, f.lo, f.hi);
+            pendingDongle = 0.0;
+            lastDongleMoveMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            rtlCenter.store(c);
+            viewCenter.store(c);
+            tuneHw(c);
+            rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        }
+        applyAutoIf();   // ★ the IF filter follows the capture, as after any retune
+        LOGI("VFO B moved the radio to %.3f MHz (session %.8s) — both VFOs in one window", c / 1e6, sess.c_str());
+        for (auto& sk : specSocksOfSession(sess)) sendConfig(sk);
     }
 
     /** ★ Per listener, on a range-locked radio: one more slice of the shared FFT per watch channel, on THIS listener's
@@ -26171,7 +26336,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (w->chanPcm.size() < nch) w->chanPcm.resize(nch);
         std::vector<vibewatch::PanMixer::Src> srcs;
         srcs.reserve(nch + 1);
-        { vibewatch::PanMixer::Src s; s.key = 0; s.hz = mainHz; s.pcm = mainPcm; srcs.push_back(s); }
+        { vibewatch::PanMixer::Src s; s.key = 0; s.hz = mainHz; s.pcm = mainPcm; s.muted = w->muteA; srcs.push_back(s); }
         size_t k = 0;
         auto add = [&](const std::shared_ptr<vibewatch::WatchChannel>& ch, bool present) {
             auto& buf = w->chanPcm[k++];
@@ -26182,7 +26347,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (sharedTrim && ch->wanted().rxMode == vibewatch::Mode::AM) for (auto& v : buf) v *= 0.5f;
             vibewatch::PanMixer::Src s;
             s.key = ch->id(); s.hz = ch->wanted().hz; s.present = present;
-            s.gateOpen = ch->open() && !ch->parked(); s.pcm = buf.data();
+            s.gateOpen = ch->open() && !ch->parked(); s.muted = present && ch->muted(); s.pcm = buf.data();
             srcs.push_back(s);
         };
         for (auto& ch : w->chans) add(ch, true);
@@ -26271,12 +26436,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★ Every spectrum frame (onSpectrum, the averaged wide row): each watch channel's level in ITS passband — the same
      *  measurement, on the same row, as a listener's own squelch and S meter — its squelch, and whether it still lies in
      *  the window. A change goes to the listener at once; the levels twice a second. Then the 1 Hz housekeeping. */
-    double watchLastBeat_ = 0, watchLastHouse_ = 0;
+    double watchLastBeat_ = 0, watchLastHouse_ = 0, watchLastRecheck_ = 0;
     void watchOnFrame(const std::function<float(int)>& dbAt, double binHz) {
-        // ★ V12 DRM: before the no-watch-sets return — a listener with no VFO B still needs its toggle hidden/shown
-        if (drmWatchDirty_.exchange(false)) watchTellMax("");
-        if (watchSetCount_.load(std::memory_order_relaxed) <= 0) return;
+        // ★ Before the no-watch-sets return — a listener with no VFO B still needs its toggle hidden/shown (DRM, WFM, the
+        //   FM broadcast band, a whole-radio mode): at once when a tune flagged it, and once a second regardless.
         const double now = wallMs();
+        if (watchAllowDirty_.exchange(false, std::memory_order_relaxed) || now - watchLastRecheck_ >= 1000.0) {
+            watchLastRecheck_ = now;
+            watchRecheckMax();
+        }
+        if (watchSetCount_.load(std::memory_order_relaxed) <= 0) return;
         const bool beat = now - watchLastBeat_ >= 500.0;
         if (beat) watchLastBeat_ = now;
         double lo = 0, hi = 0; watchWindow(lo, hi);
@@ -26311,9 +26480,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** 1 Hz: a gone session's set goes; a mode with no room for VFO B closes them all; a radio over its listener limit
      *  closes the NEWEST VFO B first (a listener always beats a VFO B); a set with nothing left to mix goes. */
-    /** ★ V12 DRM: a mode change into or out of DRM happened somewhere — the next housekeeping pass re-tells every listener
-     *  its VFO B allowance (deferred so the mode paths, which hold their own locks, never take the watch ones). */
-    std::atomic<bool> drmWatchDirty_{false};
+    /** ★ A listener's VFO B allowance may have changed (a mode into or out of DRM or WFM, a dial into or out of the FM
+     *  broadcast band) — the next spectrum frame re-checks every listener (watchRecheckMax), deferred so the tune and
+     *  mode paths, which hold their own locks, never take the watch ones. */
+    std::atomic<bool> watchAllowDirty_{false};
     void watchHousekeep() {
         std::vector<std::pair<std::string, std::shared_ptr<WatchSet>>> sets;
         { std::lock_guard<std::mutex> lk(watchMtx); for (auto& kv : watchSets) sets.emplace_back(kv.first, kv.second); }
@@ -26329,11 +26499,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 watchRemove(w, 1);
                 watchTell(sess, watchStateJson(w.get(), ",\"note\":\"VFO A/B is not available in this mode\""));
             } else if (hasChans) {
-                // ★ V12 DRM: a listener who went into DRM loses VFO B (its audio is the decoded programme)
+                // ★ A listener who went into DRM (its audio is the decoded programme), into WFM or onto the FM broadcast
+                //   band loses VFO B — closed cleanly, with the reason, and the toggle goes with it (max 0).
                 const auto socks = specSocksOfSession(sess);
-                if (!socks.empty() && watchMaxFor(socks.front()) < 1) {
+                const std::string why = socks.empty() ? std::string() : watchWhyNotFor(socks.front());
+                if (!why.empty()) {
                     watchRemove(w, 1);
-                    for (auto& sk : socks) sendText(sk, watchStateJson(w.get(), ",\"note\":\"VFO B is not available in DRM\"", 0));
+                    for (auto& sk : socks) sendText(sk, watchStateJson(w.get(), ",\"note\":\"" + jsonEscape(why) + "\"", 0));
                 }
             }
             std::lock_guard<std::mutex> lk(w->m);

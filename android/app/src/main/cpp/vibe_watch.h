@@ -198,6 +198,11 @@ public:
     bool  open() const { return open_.load(std::memory_order_relaxed); }
     float levelDb() const { return levelDb_.load(std::memory_order_relaxed); }
 
+    /** ★★ Round 3: muted in the listener's mix (PanMixer::Src::muted). Everything else carries on — the demodulator, the
+     *  level, the squelch — so a VFO decoding while muted loses nothing. */
+    void setMuted(bool m) { muted_.store(m, std::memory_order_relaxed); }
+    bool muted() const { return muted_.load(std::memory_order_relaxed); }
+
     /** ★ Outside the capture window: the channel is kept (the listener's choice survives a radio move) but silent. */
     void setParked(bool p) { if (p && !parked_.load()) flush(); parked_.store(p); }
     bool parked() const { return parked_.load(); }
@@ -220,7 +225,7 @@ private:
     Wanted want_;
     bool dirty_ = true;
     SquelchGate gate_;
-    std::atomic<bool> open_{true}, parked_{false};
+    std::atomic<bool> open_{true}, parked_{false}, muted_{false};
     std::atomic<float> levelDb_{-200.0f};
     std::unique_ptr<vibedsp::RxPipeline> rx_;
     double rate_ = 0, lastOff_ = 1e300;
@@ -259,6 +264,13 @@ public:
         double hz = 0;
         bool   present = true;     // false = fading out (being removed)
         bool   gateOpen = true;    // its squelch (the main channel's is applied before the mixer)
+        /** ★★ MUTED (round 3 — Stuart, 2026-10-27: "the ability to mute a VFO that is decoding so for WEFAX no need to
+         *  hear the WEFAX noises whilst listening to SSB … when the 2nd VFO is muted the audio from the first one pans
+         *  back to mono so both ears are in play"). A muted source FADES OUT over kRampSec and gives up its place in the
+         *  head: the ranking below sees only the sources that are heard, so one left alone goes to the middle — both
+         *  ears — on the same raised-cosine, equal-power move as everything else. Unmuting is the reverse. Only the
+         *  MIX forgets it: its demodulator, its level, its squelch and anything decoding from it carry on untouched. */
+        bool   muted = false;
         const float* pcm = nullptr;
     };
     explicit PanMixer(int rate = kOutRate) : rate_(rate) {}
@@ -279,7 +291,7 @@ public:
         for (auto& s : srcs) {
             State& x = stateFor(s.key);
             x.seen = true;
-            x.gain.aim(s.present ? 1.0f : 0.0f, dur);
+            x.gain.aim(s.present && !s.muted ? 1.0f : 0.0f, dur);
             x.gate.aim(s.gateOpen ? 1.0f : 0.0f, gdur);
             st.push_back(&x);
         }
@@ -308,10 +320,15 @@ public:
         return true;
     }
     /** Is everything at rest with only source 0 left, centre and at unity — i.e. the mixer would output exactly
-     *  today's mono-in-both-ears? Then the caller can hand back to the ordinary path with no step. */
+     *  today's mono-in-both-ears? Then the caller can hand back to the ordinary path with no step.
+     *  ★ AT UNITY too: a VFO A that was muted is still fading back in when B goes (the shim unmutes A as B is removed),
+     *    and handing back mid-fade would jump it to full level. */
     bool restingMono() const {
         for (auto& x : states_) {
-            if (x.key == 0) { if (x.pos.moving() || std::fabs(x.pos.cur - 0.5f) > 1e-6f) return false; }
+            if (x.key == 0) {
+                if (x.pos.moving() || std::fabs(x.pos.cur - 0.5f) > 1e-6f) return false;
+                if (x.gain.moving() || x.gain.cur < 1.0f) return false;
+            }
             else if (x.gain.moving() || x.gain.cur > 0.0f) return false;
         }
         return true;
@@ -335,7 +352,8 @@ private:
      *  its place. Sources fading out keep the place they had. */
     void aimPositions(const std::vector<Src>& srcs, int dur) {
         std::vector<const Src*> live;
-        for (auto& s : srcs) if (s.present) live.push_back(&s);
+        // ★ A muted source is not heard, so it takes no place: the one left alone goes to the middle (see Src::muted).
+        for (auto& s : srcs) if (s.present && !s.muted) live.push_back(&s);
         // previous order first, newcomers appended
         std::vector<const Src*> ord;
         for (int key : order_) for (auto* s : live) if (s->key == key) ord.push_back(s);
@@ -373,6 +391,41 @@ private:
     std::vector<State> states_;
     std::vector<int> order_;
 };
+
+// ── Where the radio sits for TWO VFOs ───────────────────────────────────────────────────────────────────────────────
+/** ★★★ THE RF CENTRE FOLLOWS BOTH VFOs (round 3 — Stuart, 2026-10-27: "in Dual VFO mode the RF centre should move
+ *  accordingly so that both VFO's can be tuned as if they have the full 2.4MSPS window"). On a radio whose dial is THIS
+ *  listener's own (a personal receiver), each VFO allows the centre anywhere within `lim` of itself — `lim` is the
+ *  shim's own figure for a VFO (dongleForView: the usable half-span, less the edge margin, less half its passband), so
+ *  neither passband ever sits in the roll-off. Both fit while those two ranges overlap.
+ *  · Already inside both: the centre stays (no retune, no PLL relock — the commonest case by far).
+ *  · Otherwise: DECISIVELY to the middle of the room both allow — the same reason dongleForView recentres rather than
+ *    shuffling (the next nudge would need another retune) — but never with the capture's centre (the DC spike a
+ *    dongle carries there) inside `clearHz` of either VFO: the nearest point outside both clearances is taken instead.
+ *  · No overlap: `ok` false — the VFOs are further apart than one capture can hold, and the caller refuses.
+ *  Pure, so test-watch checks it. */
+struct CentreFit { bool ok = false; bool moved = false; double centre = 0; double lo = 0, hi = 0; };   // lo..hi: the room both allow
+inline CentreFit fitCentre(double cur, double aHz, double aLim, double bHz, double bLim, double clearHz) {
+    CentreFit f; f.centre = cur;
+    const double lo = std::max(aHz - aLim, bHz - bLim), hi = std::min(aHz + aLim, bHz + bLim);
+    f.lo = lo; f.hi = hi;
+    if (lo > hi) return f;
+    f.ok = true;
+    if (cur >= lo && cur <= hi) return f;
+    auto clear = [&](double x) { return std::fabs(x - aHz) >= clearHz && std::fabs(x - bHz) >= clearHz; };
+    double c = 0.5 * (lo + hi);
+    if (!clear(c)) {
+        double best = c, bestD = 1e300; bool found = false;
+        for (double x : { aHz - clearHz, aHz + clearHz, bHz - clearHz, bHz + clearHz }) {
+            if (x < lo || x > hi || !clear(x)) continue;
+            const double d = std::fabs(x - c);
+            if (d < bestD) { bestD = d; best = x; found = true; }
+        }
+        if (found) c = best;
+    }
+    f.moved = true; f.centre = c;
+    return f;
+}
 
 // ── A one-pipeline radio's feeder ───────────────────────────────────────────────────────────────────────────────────
 /** ★★ On a radio with no channeliser running (one pipeline — a personal receiver, or a shared dial) there is no
