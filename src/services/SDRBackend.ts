@@ -293,6 +293,13 @@ export interface SDRBackend {
   /** ms since the last ADS-B report while held (0 when not in ADS-B) — and letting a lapsed hold go. */
   adsbSilentMs?(): number;
   adsbForget?(): void;
+  /** ★★ V12 COMING BACK TO A WHOLE-RADIO MODE (wholeModeResume.ts): when the open spectrum socket opened (0 = none open
+   *  or paused), the last report of a mode, the ASK for a mode the server left while we were away (false = could not be
+   *  asked), and letting a hold go without telling the server. VibeServer only. */
+  spectrumOpenSince?(): number;
+  wholeReportAt?(kind: 'adsb' | 'ndb' | 'ism' | 'ais'): number;
+  modeResume?(kind: 'adsb' | 'ndb' | 'ism' | 'ais'): boolean;
+  wholeForget?(kind: 'adsb' | 'ndb' | 'ism' | 'ais'): void;
   /** ★ V12 ISM on a VibeServer (docs/v12/ISM-DECODER.md): the whole radio to an ISM band, sensors decoded on the server.
    *  No band = where ISM last was, else the server's landing band; `step` ±1 moves one band (clamped); `hz` puts the
    *  capture on an exact frequency. Tune/zoom are refused while it runs, as in ADS-B. */

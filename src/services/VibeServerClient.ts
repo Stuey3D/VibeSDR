@@ -27,6 +27,7 @@ import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
 import { drmSanitise } from './drm';   // ★ V12 DRM
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseDabScan } from './dabBandScan';
+import type { WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 
 export {
   MODE_BANDWIDTHS,
@@ -173,6 +174,26 @@ export class VibeServerClient extends VibeServerWsClient {
   /** Drop the hold WITHOUT telling the server — it is not in ADS-B; we were merely told nothing. */
   adsbForget() { this.adsbHeld = false; }
 
+  /* ── ★★★ COMING BACK TO A WHOLE-RADIO MODE (wholeModeResume.ts — Stuart, 2026-10-27: the ADS-B / NDB map "dropped back
+   *  to a waterfall view on the previous frequency" after a switch to another app). ── */
+  /** Date.now() of the last report of each whole-radio mode — what the screen's lapsed-hold check reads (holdLapsed). */
+  private wholeLastAt: Record<WholeKind, number> = { adsb: 0, ndb: 0, ism: 0, ais: 0 };
+  wholeReportAt(kind: WholeKind): number { return kind === 'adsb' ? this.adsbLastAt : this.wholeLastAt[kind]; }
+  /** ★★ ASK for a whole-radio mode back after the server left it while we were away. A QUESTION, not an entry: the server
+   *  grants it only if nobody else is on the radio and nobody has tuned it since (shim modeResume), and answers
+   *  `mode_resume` either way. @return false if it could not be asked (no socket, or the dial is somebody else's). */
+  modeResume(kind: WholeKind): boolean {
+    if (this.askBlocked()) return false;   // ★★ ask before tuning — it would move everybody's radio
+    return this.sendSpectrum({ type: 'mode_resume', mode: kind });
+  }
+  /** Drop a whole-radio hold WITHOUT telling the server (adsbForget's rule) — it has left the mode; nobody told us. */
+  wholeForget(kind: WholeKind) {
+    if (kind === 'adsb') this.adsbHeld = false;
+    else if (kind === 'ndb') this.ndbHeld = false;
+    else if (kind === 'ism') this.ismHeld = false;
+    else this.aisHeld = false;
+  }
+
   /* ── ISM (V12, docs/v12/ISM-DECODER.md) — ADS-B's pattern: a mode entered and left by name, the server owns the band
    *  (the shared-dial contract: a press sends a step, the next report says where the radio is). ── */
   /** ★ Reports after our own `ism off` are ghosts (DabExitGuard, as for DAB and ADS-B). */
@@ -188,6 +209,7 @@ export class VibeServerClient extends VibeServerWsClient {
     if (on) { this.ismExit.entered(); this.cancelPacedTune(); }
     else this.ismExit.left(Date.now());
     this.ismHeld = on;
+    if (on) this.wholeLastAt.ism = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
     const m: Record<string, unknown> = { type: 'ism', on: on ? 1 : 0 };
     if (on && o.band) m.band = o.band;
     if (on && o.step) m.step = o.step > 0 ? 1 : -1;
@@ -208,6 +230,7 @@ export class VibeServerClient extends VibeServerWsClient {
     if (on) { this.ndbExit.entered(); this.cancelPacedTune(); }
     else this.ndbExit.left(Date.now());
     this.ndbHeld = on;
+    if (on) this.wholeLastAt.ndb = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
     this.sendSpectrum({ type: 'ndb', on: on ? 1 : 0 });
   }
   /** Find NDB — published beacons nearest the receiver first (in or out of the mode); answered by `ndb_found`. */
@@ -227,6 +250,7 @@ export class VibeServerClient extends VibeServerWsClient {
     if (on) { this.aisExit.entered(); this.cancelPacedTune(); }
     else this.aisExit.left(Date.now());
     this.aisHeld = on;
+    if (on) this.wholeLastAt.ais = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
     this.sendSpectrum({ type: 'ais', on: on ? 1 : 0 });
   }
   /** One ship's track (the map's card) — a read, answered to the asker only (`ais_trail`). */
@@ -334,6 +358,7 @@ export class VibeServerClient extends VibeServerWsClient {
           holdNativeHealing(VibeServerClient.ISM_HOLD_MS, this.ismHeld ? 'ISM running' : 'server reports ISM', this.ismHeld);
         }
         this.ismHeld = true;            // ★ arrival = the receiver is in ISM, whoever put it there
+        this.wholeLastAt.ism = now;
         this.callbacks.onIsm?.(r);
         return true;
       }
@@ -358,6 +383,7 @@ export class VibeServerClient extends VibeServerWsClient {
           holdNativeHealing(VibeServerClient.NDB_HOLD_MS, this.ndbHeld ? 'NDB running' : 'server reports NDB', this.ndbHeld);
         }
         this.ndbHeld = true;            // ★ arrival = the receiver is in NDB, whoever put it there
+        this.wholeLastAt.ndb = now;
         this.callbacks.onNdb?.(r);
         return true;
       }
@@ -388,6 +414,7 @@ export class VibeServerClient extends VibeServerWsClient {
           holdNativeHealing(VibeServerClient.AIS_HOLD_MS, this.aisHeld ? 'AIS running' : 'server reports AIS', this.aisHeld);
         }
         this.aisHeld = true;
+        this.wholeLastAt.ais = now;
         this.callbacks.onAis?.(r);
         return true;
       }
@@ -401,6 +428,14 @@ export class VibeServerClient extends VibeServerWsClient {
         this.aisHeld = false;
         this.callbacks.onAis?.(null, dabSafeText(msg.why, 200) || 'AIS is not available on this receiver');
         return true;
+      /* ★★ The answer to modeResume: ok = the server is in the mode (or going back in — its reports follow); otherwise
+       *  `why`, in words, to this listener only. */
+      case 'mode_resume': {
+        const k = String(msg.mode);
+        if (k !== 'adsb' && k !== 'ndb' && k !== 'ism' && k !== 'ais') return true;
+        this.callbacks.onModeResume?.(k, Number(msg.ok) === 1, typeof msg.why === 'string' ? dabSafeText(msg.why, 200) : undefined);
+        return true;
+      }
       case 'ais_trail': {
         const t = aisTrailSanitise(msg);
         if (t) this.callbacks.onAisTrail?.(t.mmsi, t.pts);

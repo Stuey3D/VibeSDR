@@ -33,6 +33,7 @@ import { parseIcomStatus, icomControlMsg, nearestSpanIndex, spanStep,
          type IcomStatus, type IcomRadio, type IcomControlFields } from '../../../src/services/icomRadio';
 
 import type { DrmState } from './drm';
+import type { WholeKind } from '../../../src/services/wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm';
 
 /** The server applies these on every mode change and never reports bandwidth
@@ -661,6 +662,9 @@ export interface SpectrumCallbacks {
   onAisError?: (why: string) => void;
   /** ★ AIS: one ship's track, asked for when the map's card opens (aisTrail). */
   onAisTrail?: (mmsi: number, pts: [number, number][]) => void;
+  /** ★★ The answer to modeResume (src/services/wholeModeResume.ts): may this listener have the whole-radio mode the
+   *  server left while they were away back? `why` = the refusal, in words. */
+  onModeResume?: (kind: WholeKind, ok: boolean, why?: string) => void;
   /** ★ Raw IQ out: the server's answer to iqOut() — where the stream is, or why not. */
   onIqOut?: (m: { on: boolean; rate?: number; host?: string; port?: number; code?: string; token?: string; public?: boolean; full?: boolean; why?: string }) => void;
   /** Somebody said one of the canned phrases. `id` is a phrase id, never text. */
@@ -931,6 +935,7 @@ export class SpectrumClient {
 
     ws.onopen = () => {
       this.cb.onStatus?.('open');
+      if (this.ws === ws) this.specOpenAt = Date.now();   // ★ see spectrumOpenSince
       // Ask for the view we want (server echoes a config back).
       if (this.view.centerHz && this.view.binBandwidth) {
         this._flushView();
@@ -976,6 +981,7 @@ export class SpectrumClient {
 
     ws.onclose = (e) => {
       this._stopTimers();
+      if (this.ws === ws) this.specOpenAt = 0;
       this.cb.onStatus?.('closed', e.code === 1006 ? 'connection lost' : `closed (${e.code})`);
       if (!this.closedByUs && !this.refused) {
         // ★ Clear the handle as it fires: it is now also read as "a reconnect is already pending"
@@ -1103,6 +1109,7 @@ export class SpectrumClient {
       case 'adsb': {
         if (Date.now() < this.adsbQuietUntil) return;
         this.adsbHeld = true;           // ★ arrival = the receiver is in ADS-B, whoever put it there
+        this.wholeLastAt.adsb = Date.now();
         const list = Array.isArray(msg.aircraft) ? msg.aircraft.filter((a: any) => a && typeof a === 'object' && typeof a.hex === 'string') : [];
         // ★ each aircraft with what it IS (registration, type, operator, route) — sent once, kept here per hex
         this.cb.onAdsb?.({ ...msg, aircraft: this.adsbInfo.apply(list.slice(0, 2000)) } as AdsbReport);
@@ -1131,6 +1138,7 @@ export class SpectrumClient {
         const r = ismSanitise(msg);
         if (!r) return;
         this.ismHeld = true;            // ★ arrival = the receiver is in ISM, whoever put it there
+        this.wholeLastAt.ism = Date.now();
         this.cb.onIsm?.(r);
         return;
       }
@@ -1150,6 +1158,7 @@ export class SpectrumClient {
         const r = ndbSanitise(msg);
         if (!r) return;
         this.ndbHeld = true;
+        this.wholeLastAt.ndb = Date.now();
         this.cb.onNdb?.(r);
         return;
       }
@@ -1171,6 +1180,7 @@ export class SpectrumClient {
         const r = aisSanitise(msg);
         if (!r) return;
         this.aisHeld = true;            // ★ arrival = the receiver is in AIS, whoever put it there
+        this.wholeLastAt.ais = Date.now();
         this.cb.onAis?.(r);
         return;
       }
@@ -1179,6 +1189,13 @@ export class SpectrumClient {
         const now = Date.now();
         if (this.aisQuietUntil > now) this.aisQuietUntil = Math.min(this.aisQuietUntil, now + 1500);
         this.cb.onAis?.(null);
+        return;
+      }
+      /* ★★ The answer to modeResume — ok = the server is in the mode (or going back in: its reports follow). */
+      case 'mode_resume': {
+        const k = String(msg.mode);
+        if (k !== 'adsb' && k !== 'ndb' && k !== 'ism' && k !== 'ais') return;
+        this.cb.onModeResume?.(k, Number(msg.ok) === 1, typeof msg.why === 'string' ? msg.why.slice(0, 200) : undefined);
         return;
       }
       case 'ais_error':
@@ -2102,6 +2119,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.adsbQuietUntil = on ? 0 : Date.now() + 5000;
     this.adsbHeld = on;
+    if (on) this.wholeLastAt.adsb = Date.now();   // ★ the silence clock starts at the ask (wholeModeResume.holdLapsed)
     this._send({ type: 'adsb', on: on ? 1 : 0 });
   }
 
@@ -2118,6 +2136,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.ndbQuietUntil = on ? 0 : Date.now() + 5000;
     this.ndbHeld = on;
+    if (on) this.wholeLastAt.ndb = Date.now();
     this._send({ type: 'ndb', on: on ? 1 : 0 });
   }
   ndbFind(q: string, limit = 60) { this._send({ type: 'ndb_find', q: String(q).slice(0, 40), limit }); }
@@ -2128,6 +2147,7 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.ismQuietUntil = on ? 0 : Date.now() + 5000;
     this.ismHeld = on;
+    if (on) this.wholeLastAt.ism = Date.now();
     const m: Record<string, unknown> = { type: 'ism', on: on ? 1 : 0 };
     if (on && o.band) m.band = o.band;
     if (on && o.step) m.step = o.step > 0 ? 1 : -1;
@@ -2143,10 +2163,29 @@ export class SpectrumClient {
     if (on) this.tunePacer.cancel();
     this.aisQuietUntil = on ? 0 : Date.now() + 5000;
     this.aisHeld = on;
+    if (on) this.wholeLastAt.ais = Date.now();
     this._send({ type: 'ais', on: on ? 1 : 0 });
   }
   /** One ship's track (the map's card) — a read; the answer arrives as onAisTrail. */
   aisTrail(mmsi: number) { if (mmsi > 0) this._send({ type: 'ais_trail', mmsi }); }
+
+  /* ── ★★★ COMING BACK TO A WHOLE-RADIO MODE (src/services/wholeModeResume.ts — the app's rule, one reader each side). A
+   *  phone's browser that backgrounds the tab is suspended like the app, and its socket dies with it; the server gives
+   *  the radio back once nobody is here, telling nobody — so the page held the mode (map up, dial locked) for ever. ── */
+  /** When the socket now OPEN opened (Date.now()), 0 = none open. Report silence is measured from here. */
+  private specOpenAt = 0;
+  spectrumOpenSince(): number { return this.ws && this.ws.readyState === WebSocket.OPEN ? this.specOpenAt : 0; }
+  /** Date.now() of the last report of each whole-radio mode. */
+  private wholeLastAt: Record<WholeKind, number> = { adsb: 0, ndb: 0, ism: 0, ais: 0 };
+  wholeReportAt(kind: WholeKind): number { return this.wholeLastAt[kind]; }
+  /** ★★ ASK for the mode back — a QUESTION the server answers (granted only if nobody else is on the radio and nobody has
+   *  tuned it since). @return false if it could not be asked (no open socket, or the dial is somebody else's). */
+  modeResume(kind: WholeKind): boolean {
+    if (this.askBlocked()) return false;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    this._send({ type: 'mode_resume', mode: kind });
+    return true;
+  }
 
   /* ★★★ ASK BEFORE TUNING (docs/TUNING-ETIQUETTE.md) — the server said this listener may not move the shared dial yet
    *  (dial.tuneLocked, read by dialChat.parseAsk — the app's reader, one file). THE ONE GATE for every way this page

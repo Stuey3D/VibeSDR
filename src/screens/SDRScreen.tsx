@@ -62,6 +62,7 @@ import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import { ismNeighbours, type IsmCap, type IsmReport } from '../services/ism';
 import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
+import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../services/wholeModeResume';
 // ★ V12 AIS + APRS (docs/v12/AIS-APRS.md) — the web's tracks.ts rules for the app
 import { aisItems, aisListRows, aisSafetyLines, aisStatus, AIS_EMPTY, aprsApplyPacket, aprsBoxRows, aprsItems, aprsListRows,
          aprsLogPush, aprsMessageLines, aprsPacketSanitise, aprsSanitise, aprsStatus, aprsTuneFor, aprsBaudOf, APRS_EMPTY,
@@ -2560,7 +2561,6 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [ndbFound, setNdbFound] = useState<NdbFound[]>([]);
   const [ndbFindResult, setNdbFindResult] = useState<{ q: string; pos?: boolean; list: NdbFound[] } | null>(null);
   const [ndbStats, setNdbStats] = useState<NdbStats | null>(null);
-  const ndbLastAt = useRef(0);
   useEffect(() => { ndbOnRef.current = ndbOn; }, [ndbOn]);
   useEffect(() => { ndbViewOpenRef.current = ndbViewOpen; }, [ndbViewOpen]);
   /** ★ Everything NDB leaves behind, in one place — EXIT NDB, the key, a mode pick, another whole-radio mode, ndb_off. */
@@ -2877,7 +2877,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (aisOnRef.current) aisUiOff();   // ★ V12 AIS: one whole-radio mode at a time
     setNdbReport(null); ndbTracks.current.clear();
     setNdbViewOpen(true);
-    ndbLastAt.current = Date.now();
     c.ndb(true);
     c.ndbFind?.('', 300);      // ★ the published beacons for the map's faint "unheard" markers (the web's show())
     ndbOnRef.current = true;
@@ -6532,7 +6531,6 @@ export default function SDRScreen({ route, navigation }: Props) {
           return;
         }
         if (!r) { ndbUiOff(); return; }
-        ndbLastAt.current = Date.now();
         if (!ndbOnRef.current) {
           ndbOnRef.current = true; setNdbViewOpen(!IS_APPLE_TV);
           client.current?.ndbFind?.('', 300);
@@ -6564,6 +6562,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (!aisOnRef.current) { aisOnRef.current = true; if (!IS_APPLE_TV) setAisViewOpen(true); }
         setAisOn(true);
         setAisReport(r);
+      },
+      /* ★★ The server's answer to our `mode_resume` (wholeModeResume.ts): yes = its reports follow under the map that
+       *  never closed; no = the mode goes, and the reason is said. */
+      onModeResume: (kind, ok, why) => {
+        if (destroyed.current) return;
+        wholeResumeStepRef.current(wholeResume.current.answered(kind, ok, why, Date.now()));
       },
       onAisTrail: (mmsi, pts) => {
         const done = aisTrailWait.current.get(mmsi);
@@ -10179,25 +10183,50 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [adsbReport, serverPos, recvLoc]);
   // ★ The wrist's ADS-B map plots around the receiver — a VibeServer's is serverPos (recvLoc is Kiwi / this device's).
   useEffect(() => { if (serverPos) watchProvider.sendReceiver(serverPos.lat, serverPos.lon); }, [serverPos]);
-  /* ★★ A HOLD NOBODY LIFTED. A radio that left ADS-B while we were away (its last listener's socket closed and the
-   *  server gave the receiver back, telling nobody) sends no adsb_off to the socket that returns — so the dial would
-   *  stay locked here for ever. Ten seconds without a report while we believe we are in it: let the hold go, quietly.
-   *  If the server IS still in ADS-B its next report puts us straight back (the transition opens the box). */
+  /* ★★★ A HOLD NOBODY LIFTED — AND COMING BACK TO IT (wholeModeResume.ts; Stuart, 2026-10-27, iPhone: "I was in the map
+   *  view for NDB or ADS-B and when I moved to another app … when I switched back the map dropped back to a waterfall
+   *  view on the previous frequency").
+   *  A radio that left a whole-radio mode while we were away (its last listener's socket closed and the server gave the
+   *  receiver back, telling nobody) sends no x_off to the socket that returns, so a hold would stay here for ever. This
+   *  used to let it go after ten seconds without a report — measured across the time the APP had the spectrum socket
+   *  closed (backgrounded), so the map was dropped the instant the app came back, before the reopened socket could
+   *  say anything. ★ Now: silence counts only while a socket is open (holdLapsed); a lapse ASKS the server for the mode
+   *  back (`mode_resume` — granted only if nobody else is on the radio and nobody has tuned it since: a question, never
+   *  a re-entry of our own, so the shared-dial contract holds); its reports then carry on under a map that never
+   *  closed. A refusal, or no answer from an older server, lets the mode go and says why. ADS-B, NDB, ISM and AIS
+   *  alike — every whole-radio mode the server leaves on an empty radio. */
+  const wholeResume = useRef(new WholeModeResume());
+  const wholeGiveUp = useCallback((kind: WholeKind, why: string) => {
+    client.current?.wholeForget?.(kind);
+    if (kind === 'adsb') adsbUiOff(); else if (kind === 'ndb') ndbUiOff(); else if (kind === 'ism') ismUiOff(); else aisUiOff();
+    // ★ After the map's modal has gone — iOS drops an alert presented over a modal that is still being dismissed.
+    setTimeout(() => { if (!destroyed.current) appAlert(`${WHOLE_LABEL[kind]} ended`, why); }, 450);
+  }, [adsbUiOff, ndbUiOff, ismUiOff, aisUiOff]);
+  const wholeResumeStep = useCallback((st: ResumeStep) => {
+    if (st.do === 'ask') {
+      if (client.current?.modeResume?.(st.kind)) return;   // ★ asked — the answer (or its absence) decides
+      // ★ Could not ask: the dial is somebody else's (ask before tuning), or the socket went between the check and the send.
+      const r = wholeResume.current.sendFailed(st.kind, askLocked(dialStateRef.current)
+        ? `The receiver left ${WHOLE_LABEL[st.kind]} while you were away, and somebody else has the dial now.` : undefined);
+      if (r.do === 'giveUp') wholeGiveUp(r.kind, r.why);
+    } else if (st.do === 'giveUp') wholeGiveUp(st.kind, st.why);
+  }, [wholeGiveUp]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const wholeResumeStepRef = useRef(wholeResumeStep);
+  wholeResumeStepRef.current = wholeResumeStep;
   useEffect(() => {
-    if (!adsbOn) return;
+    if (!adsbOn && !ndbOn && !ismOn && !aisOn) { wholeResume.current.reset(); return; }
     const t = setInterval(() => {
       const c = client.current;
-      if ((c?.adsbSilentMs?.() ?? 0) > 10_000) { c?.adsbForget?.(); adsbUiOff(); }
-    }, 2000);
+      const kind: WholeKind | null = adsbOnRef.current ? 'adsb' : ndbOnRef.current ? 'ndb' : ismOnRef.current ? 'ism'
+        : aisOnRef.current ? 'ais' : null;
+      if (!c || !kind) return;
+      const now = Date.now();
+      const openSince = c.spectrumOpenSince?.() ?? 0;
+      const lapsed = holdLapsed({ kind, now, lastReportAt: c.wholeReportAt?.(kind) ?? 0, openSince });
+      wholeResumeStep(wholeResume.current.step(kind, lapsed, now, openSince));
+    }, 1000);
     return () => clearInterval(t);
-  }, [adsbOn, adsbUiOff]);
-  /* ★ V12 NDB: the same lapsed hold — a report a second; ten seconds of none while we believe the radio is in NDB (its
-   *  last listener left and it was given back, telling nobody) lets the map go. The next report puts it straight back. */
-  useEffect(() => {
-    if (!ndbOn) return;
-    const t = setInterval(() => { if (Date.now() - ndbLastAt.current > 10_000) ndbUiOff(); }, 2000);
-    return () => clearInterval(t);
-  }, [ndbOn, ndbUiOff]);
+  }, [adsbOn, ndbOn, ismOn, aisOn, wholeResumeStep]);
   const ituRegion = useMemo(
     () => deriveItuRegion(route.params.serverLongitude ?? recvLon),
     [recvLon],   // eslint-disable-line react-hooks/exhaustive-deps

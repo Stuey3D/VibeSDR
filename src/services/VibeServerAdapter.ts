@@ -12,6 +12,7 @@ import type { SDRMode, SDRStatus } from './sdrProtocol';
 import { WFM_MIN_BW_HZ } from './sdrProtocol';
 import type { BackendCallbacks, BackendCapabilities, BackendKind, SDRBackend } from './SDRBackend';
 import { toHttpUrl } from '../utils/serverUrl';
+import type { WholeKind } from './wholeModeResume';
 
 const VIBESERVER_CAPS: BackendCapabilities = {
   profiles:       false,
@@ -348,4 +349,9 @@ export class VibeServerAdapter implements SDRBackend {
   /** ★ See VibeServerClient.adsbSilentMs — the screen lets a lapsed hold go. */
   adsbSilentMs(): number { return this.vibe.adsbSilentMs(); }
   adsbForget(): void { this.vibe.adsbForget(); }
+  /** ★★ See wholeModeResume.ts — coming back to a whole-radio mode after the app was away. */
+  spectrumOpenSince(): number { return this.vibe.spectrumOpenSince(); }
+  wholeReportAt(kind: WholeKind): number { return this.vibe.wholeReportAt(kind); }
+  modeResume(kind: WholeKind): boolean { return this.vibe.modeResume(kind); }
+  wholeForget(kind: WholeKind): void { this.vibe.wholeForget(kind); }
 }
