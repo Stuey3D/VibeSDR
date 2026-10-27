@@ -11,7 +11,7 @@ One CSV row per window, the same columns as the 10-25 run (fa.csv) plus the Vibe
   ★ A VibeServer arm is measured over its own websocket as an ordinary listener; with `"enter": true` it asks for ADS-B
     (a radio whose landing is ADS-B, or kept running, is in it already).
 
-Arms come from a JSON file, e.g. for the FlightAware Pi (see docs/v12/ADSB-GAIN.md for the exact commands):
+Arms come from a JSON file, e.g. for the FlightAware Pi (docs/v12/ADSB.md, "The gain rule"):
   [
     {"name": "D",    "kind": "dump1090", "start": "sudo systemctl start dump1090-fa", "stop": "sudo systemctl stop dump1090-fa",
      "json": "/run/dump1090-fa"},
