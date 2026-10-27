@@ -172,6 +172,9 @@ let audio: AudioPlayer | null = null;
 //   stopped. Kept current by the getter below rather than copied at construction.
 Object.defineProperty(window, '__vibeAudio', { get: () => audio, configurable: true });
 let wf: Waterfall | null = null;
+// ★ The same for the waterfall (scripts/test-web-waterfall-history.mjs): the renderer and the spectrum client, so a
+//   driver can tune / zoom exactly as the controls do and read where each history row put a station (GitHub #57).
+Object.defineProperty(window, '__vibeWf', { configurable: true, get: () => () => (spec && wf ? { wf, spec } : null) });
 /** Last config's frequency window — see onConfig, for the stale-history wipe. */
 let lastWindow: { lo: number; hi: number } | null = null;
 

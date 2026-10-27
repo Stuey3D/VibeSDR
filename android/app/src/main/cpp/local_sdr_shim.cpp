@@ -6065,6 +6065,19 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     struct SlowAvg { std::deque<std::vector<float>> ring; std::vector<float> out; };
     SlowAvg wideSlow_, zoomSlow_;
     double zoomSlowCentre_ = 0.0;   // the centre zoomSlow_'s rows were built for — see onZoomSpectrum
+    /** ★ The tuner position (rtlCenter + hwOffset) fftAccum and wideSlow_ are anchored at, and the end of the
+     *  settle after it last moved — see onSpectrum, GitHub #57. DSP thread only. */
+    double accumCentre_ = 0.0;
+    double tuneSettleUntil_ = 0.0;
+    /** Slide a row of FFT bins by `d` (new[i] = old[i + d]) — the tuner went UP by d bins, so everything in it
+     *  sits d bins LOWER from the new DC. Vacated bins repeat the nearest edge; they lie at the very edge of the
+     *  capture, which the crop already treats as the band's limit. */
+    static void slideBins(std::vector<float>& v, int d) {
+        const int n = (int)v.size();
+        if (!n || !d) return;
+        if (d > 0) { std::memmove(v.data(), v.data() + d, sizeof(float) * (size_t)(n - d)); std::fill(v.begin() + (n - d), v.end(), v[n - d - 1]); }
+        else       { d = -d; std::memmove(v.data() + d, v.data(), sizeof(float) * (size_t)(n - d)); std::fill(v.begin(), v.begin() + d, v[d]); }
+    }
     std::vector<float> wideRowAvg_;
     void slowPush(SlowAvg& a, const float* row, int n) {
         a.ring.emplace_back(row, row + n);
@@ -10526,7 +10539,61 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ The crossover cannot announce itself from the tuner thread — see g_dsAnnounce.
         drainDirectSamplingAnnounce();
         if ((int)fftAccum.size() != bins) { fftAccum.assign(bins, 0.0f); accumCount = 0; }
-        for (int i = 0; i < bins; i++) fftAccum[i] += db[i];
+        /* ★★★ THE ROW IS CROPPED AGAINST THE TUNER POSITION ITS SAMPLES CAME FROM (GitHub #57, Gesiima; Stuart
+         *  2026-10-27: "the waterfall is getting broken up rather than one continuous bending line as you tune").
+         *  Every wide row is an average — FFT_AVG engine frames in fftAccum, and up to kSlowAvgMax rows more in
+         *  wideSlow_ for a slower listener — and the crop below measures every bin from rtlCenter AT SEND TIME.
+         *  Since the IF filter went to Auto by default (38b2d1d74, 2026-09-27) the tuner FOLLOWS THE LISTENER on
+         *  every tune over 1 kHz (dongleForView), so a locked VFO tuned in steps retunes the hardware on nearly
+         *  every step — and the row out next was mostly frames taken at the OLD position, cropped as if from
+         *  the new one. Measured (fake rtl_tcp, 1 kHz steps, 200 kHz view): 9 rows in 31 had the carrier a whole
+         *  tuner move off, alternating with correct rows — the trail torn into two interleaved, skewed pieces.
+         *  With the IF filter manual (no tuner moves) the same tune drew every row right. The zoom path learned
+         *  the same lesson on 2026-10-02 (builtCentre, below); the wide path never had it.
+         *  ★ So the averages are kept IN RF, not in tuner bins: when the tuner moves, what is already summed is
+         *    slid by the move (whole FFT bins — ~75 Hz) and the sum carries on, re-anchored at the new position.
+         *    Nothing is thrown away and no row is skipped, so the waterfall keeps its pace through a tune.
+         *  ★★ AND THE FIRST FEW MILLISECONDS AFTER A MOVE ARE STILL THE OLD STATION. Samples already in the USB
+         *     transfers / the rtl_tcp socket were captured before the PLL moved; an engine frame finishing inside
+         *     kTuneSettleS of the move is not trusted to be either position, so it contributes the average it
+         *     would have joined (already slid into place) instead of its own bins. A frame, not a row: the row
+         *     still comes out on time.
+         *  ★★★ STUART'S HARD RULE for the waterfall (quoted in full in web/client/src/waterfall.ts draw() and
+         *      src/utils/wfRowPlace.ts): "Zooming and tuning also never lost the history and it was seemless to the history
+         *      too so signals always glided in from the sides and settled ... these must be preserved at all costs". The
+         *      clients can only keep that promise with rows that are true to their centre — this block is the server's
+         *      half. Guarded by scripts/test-web-waterfall-history.mjs (the real server, a locked tune, zooms, a fast spin). */
+        {
+            static constexpr double kTuneSettleS = 0.06;
+            const double dataCentre = rtlCenter.load() + hwOffsetHz();
+            const double binHzW = sampleRate / (double)bins;
+            const double nowS = std::chrono::duration<double>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            if (dataCentre != accumCentre_) {
+                const double moved = accumCentre_ > 0.0 && binHzW > 0.0 ? (dataCentre - accumCentre_) / binHzW : 0.0;
+                const long long d = llround(moved);
+                if (accumCentre_ > 0.0 && std::llabs(d) >= bins) {
+                    // ★ A jump with no overlap: nothing summed is about the new window.
+                    std::fill(fftAccum.begin(), fftAccum.end(), 0.0f); accumCount = 0;
+                    wideSlow_.ring.clear();
+                } else if (d != 0) {
+                    slideBins(fftAccum, (int)d);
+                    for (auto& r : wideSlow_.ring) if ((int)r.size() == bins) slideBins(r, (int)d);
+                }
+                accumCentre_ = dataCentre;
+                if (accumCentre_ > 0.0 && moved != 0.0) tuneSettleUntil_ = nowS + kTuneSettleS;
+            }
+            if (nowS < tuneSettleUntil_ && (accumCount > 0 || !wideSlow_.ring.empty())) {
+                // ★ Settling: the sum's own mean, or the last row (both already in the new position).
+                const float* src = nullptr; float k = 1.0f;
+                if (accumCount > 0) { src = fftAccum.data(); k = 1.0f / (float)accumCount; }
+                else if ((int)wideSlow_.ring.back().size() == bins) src = wideSlow_.ring.back().data();
+                if (src) { for (int i = 0; i < bins; i++) fftAccum[i] += src[i] * k; }
+                else     { for (int i = 0; i < bins; i++) fftAccum[i] += db[i]; }
+            } else {
+                for (int i = 0; i < bins; i++) fftAccum[i] += db[i];
+            }
+        }
         if (++accumCount < FFT_AVG) return;
         float inv = 1.0f / (float)accumCount;
         // Averaged dB at a signed bin offset from DC (DC = bins/2 in fftshifted).
@@ -10786,7 +10853,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // centre (rtlCenter) — shift the crop by their difference so the user
             // can pan the view across the captured band while the dongle (and the
             // tuned VFO) stay put. dbAt clamps past the capture edge → floor.
-            const double viewOffsetBin = (view.centre - rtlCenter.load()) * (double)bins / sampleRate;
+            // ★ accumCentre_ — the position the row's sums are anchored at (see the top of onSpectrum, #57); equal to
+            //   rtlCenter + hwOffset here, read once so the crop and the anchor cannot disagree.
+            const double viewOffsetBin = (view.centre - (accumCentre_ - hwOffsetHz())) * (double)bins / sampleRate;
             uint64_t f = (uint64_t)llround(view.centre);         // display centre = THIS view's centre
             std::memcpy(&frame[14], &f, 8);
             // ★★★ NOTHING IS RENDERED OUTSIDE THE CAPTURED BAND — u8 0 MEANS "NO DATA".
