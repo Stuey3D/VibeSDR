@@ -9,8 +9,10 @@
 //   • no toggle and no stereo row on a server whose owner switched VFO A/B off (hwinfo watch:0);
 //   • ROUND 3: with B on the AUDIO panel has a squelch row for EACH VFO (labelled, coloured) — B's row hidden with B off;
 //     each row's MUTE sends its own watch message and the server says so; B's bar sets B's squelch (a watch sql) and
-//     never A's; B's AUTO SQUELCH sends B's threshold; the A row's bar stays A's whichever VFO is selected; starting a
-//     decoder with B selected switches the controls to A (the decoders are VFO A's).
+//     never A's; B's AUTO SQUELCH sends B's threshold; the A row's bar stays A's whichever VFO is selected;
+//   • DECODE ON EITHER VFO (2026-10-27): a decoder started with B selected attaches on B ("vfo":"B"), the controls stay on
+//     B, B's needle and squelch row say DEC, and selecting A afterwards moves nothing; Band started on B subscribes on B,
+//     puts B on the band, mutes B (not A), and with A selected the arrows tune A.
 // Screenshots to $VFOAB_SHOTS (default $TMPDIR) as web-*.png.
 //   VIBESERVER_BIN=…/vibeserver node scripts/test-web-vfo-ab.mjs
 import net from 'node:net';
@@ -179,15 +181,51 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   ok(await until(`window.__sent.filter(s => s.includes('"type":"squelch"')).length > ${sqlA0}`, 2000), 'A\'s bar sets A\'s squelch while B is the selected VFO');
   ok((await ev(`${AB}.state.chans[0].sqlOn`)) === false, '…and leaves B\'s alone');
   await ev(`document.getElementById('audioClose')?.click()`);
-  // ── ★★ ROUND 3: the decoders are VFO A's — starting one with B selected switches the controls to A
+  // ── ★★★ DECODE ON EITHER VFO (2026-10-27): a decoder runs on the VFO selected when it is started, and stays there
   await click('#mAbKey');
   if ((await ev(`${AB}.sel`)) !== 'B') await click('#mAbKey');
   ok((await ev(`${AB}.sel`)) === 'B', 'B selected before the decoder');
+  ok(await ev(`${AB}.state.decB === true`), 'the server says it decodes either VFO (watch state decB)');
+  const attaches = `window.__sent.filter(s => s.includes('"audio_extension_attach"')).map(s => JSON.parse(s))`;
   await ev(`document.querySelector('[data-dec="wefax"]')?.click()`);
-  ok(await until(`${AB}.sel === 'A'`, 2000), 'starting a decoder (WEFAX) with B selected switches the controls to VFO A');
-  await ev(`document.querySelector('[data-dec="wefax"]')?.click()`);
+  ok(await until(`${attaches}.some(m => m.extension_name === 'wefax' && m.vfo === 'B')`, 3000), 'WEFAX started with B selected attaches on VFO B ("vfo":"B")');
+  ok((await ev(`${AB}.sel`)) === 'B', '…and the controls stay on B (no switch to A)');
+  ok(await until(`/ · DEC/.test(${AB}.liveLabel) && !/DEC/.test(${AB}.other.label)`, 2000), `B's needle says DEC, A's does not ("${await ev(`${AB}.liveLabel`)}")`);
+  ok(await ev(`document.getElementById('sqlVfoB').textContent === 'VFO B · DEC' && document.getElementById('sqlVfoA').textContent === 'VFO A'`), 'B\'s squelch row says DEC');
+  const nAtt = await ev(`${attaches}.length`);
   await click('#mAbKey');
-  ok(await until(`${AB}.sel === 'B'`, 2000), 'and the A/B key goes back to B to listen');
+  ok(await until(`${AB}.sel === 'A'`, 2000), 'the A/B key goes to A to listen');
+  ok(await until(`/DEC/.test(${AB}.other.label) && !/DEC/.test(${AB}.liveLabel)`, 2000) && (await ev(`${attaches}.length`)) === nAtt,
+     `selecting A moves nothing: no new attach, the DEC tag stays on B's needle ("${await ev(`${AB}.other.label`)}" / "${await ev(`${AB}.liveLabel`)}")`);
+  await ev(`document.querySelector('[data-dec="wefax"]')?.click()`);
+  ok(await until(`window.__sent.some(s => s.includes('"audio_extension_detach"')) && !/DEC/.test(${AB}.other.label)`, 2000), 'stopped: detached, the DEC tag gone');
+  // ── Band on B: started with B selected — its dial is B's, it mutes B (not A), A is untouched
+  await click('#mAbKey');
+  ok(await until(`${AB}.sel === 'B'`, 2000), 'B selected again');
+  const aBefore = await ev(`${AB}.a.frequency`);
+  const hasBand = await ev(`!!document.getElementById('spotsBandBtn') && !document.getElementById('spotsBandBtn').hidden`);
+  if (hasBand) {
+    await ev(`document.getElementById('spotsBandBtn').click()`);
+    ok(await until(`window.__sent.some(s => s.includes('"subscribe_digital_spots"') && s.includes('"scope":"band"') && s.includes('"vfo":"B"'))`, 3000), 'Band with B selected subscribes on VFO B');
+    ok(await until(`${AB}.state.chans[0].mute === true && ${AB}.state.muteA === false`, 3000), 'Band mutes B in the mix — the VFO it runs on — and not A');
+    // ★ The band it lands on is the one remembered (this device's last), wherever that is — B is aimed there (a watch
+    //   message, USB); if it is further from A than one capture holds the server refuses "apart" and B stays. A is never
+    //   sent a tune.
+    const bandAim = `window.__sent.map(s => JSON.parse(s)).filter(m => m.type === 'watch' && m.mode === 'usb' && m.frequency > 0).pop()`;
+    ok(await until(`!!(${bandAim})`, 3000) && (await ev(`${AB}.a.frequency`)) === aBefore
+       && !(await ev(`window.__sent.slice(-12).some(s => s.includes('"type":"tune"'))`)),
+       `Band aimed B at the band's place (${await ev(`(${bandAim}).frequency`)} USB) and left A where it was`);
+    await click('#mAbKey');
+    ok(await until(`${AB}.sel === 'A'`, 2000), 'A selected while Band runs on B');
+    const bNow = await ev(`${AB}.b.frequency`);
+    await click('#mVfoUp');
+    await sleep(500);
+    ok((await ev(`${AB}.a.frequency`)) !== aBefore && (await ev(`${AB}.b.frequency`)) === bNow, 'with A selected the arrows tune A, not B\'s band');
+    await click('#mVfoDown');   // ★ A back where it was, for the checks below
+    await sleep(400);
+    await ev(`document.getElementById('spotsBandBtn').click()`);
+    ok(await until(`window.__sent.some(s => s.includes('"unsubscribe_digital_spots"')) && ${AB}.state.chans[0].mute === false`, 3000), 'Band off: unsubscribed, B unmuted');
+  } else ok(true, 'no Band on this server — skipped');
   // ── control colours: each background swatch, and solid
   const nSw = await ev(`document.querySelectorAll('#ctlBgSw > *').length`);
   for (let k = 0; k < Math.min(3, nSw || 0); k++) {
