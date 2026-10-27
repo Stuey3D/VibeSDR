@@ -346,6 +346,10 @@ export interface AdsbReport {
   capture?: number;
   /** ★ the gain ADS-B is at (dB), whether the server is choosing it (gainAuto 1) and still measuring (gainBusy 1) */
   gain?: number; gainAuto?: number; gainBusy?: number;
+  /** ★ why the server's rule chose this gain, a short line (vibeadsb::GainControl::why) — only while it is automatic */
+  gainWhy?: string;
+  /** ★★ the owner's warning: at full gain and hearing little — the antenna or feed may be faulty (GainControl::warning) */
+  feedWarn?: string;
 }
 
 /** What the server reports about a DAB multiplex. Every field is MEASURED — see briefs/BRIEF-dab.md;

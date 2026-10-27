@@ -137,6 +137,8 @@ flags_for() {
     # ★★ V12 aircraft data: builder/reader/enrichment/logo zip installer on vibeserver/testdata-adsb (VIBE_ADSB_RAW
     #    = a folder with the real downloads also checks known aircraft and routes — scripts/build-adsb-data.sh)
     test-adsb-data)        echo "-O2 -lpthread" ;;
+    # ★★★ the updater's detached thread while exit() tears the statics down (the Pi 2's settings-save SIGSEGV, 10-26)
+    test-adsb-data-exit)   echo "-O2 -lpthread" ;;
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
@@ -1133,6 +1135,14 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     a radio that cannot run ADS-B falls back. Needs VIBESERVER_BIN and VIBE_ADSB_CLIP (exit 3 = not run).
 printf '\n\033[1m── ADS-B landing + keep running (end to end) ──\033[0m\n'
 node scripts/test-server-adsb-landing.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ V12 THE ADS-B GAIN RULE end to end (2026-10-26): Stuart's FlightAware clip (filtered LNA feed) replayed so that it
+#     follows the gain the server writes (fake-rtl-tcp --adsb-gain); the ramp must end at 38.6–40.2 dB (where dump1090-fa
+#     holds it), not 49.6, the reason naming the noise floor, no feed warning, and a reconnect inside the 5 s grace finds the sky as it was. ~2.5 min. Needs VIBESERVER_BIN and
+#     VIBE_ADSB_CLIP (exit 3 = not run).
+printf '\n\033[1m── ADS-B gain rule (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-vibeserver/build/vibeserver}" bash scripts/test-adsb-gain-e2e.sh; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★★ V12 ISM MODE (docs/v12/ISM-DECODER.md): the real server on a fake rtl_tcp replaying a synthetic 433 MHz clip made by

@@ -8440,9 +8440,15 @@ function adsbGainRender() {
   sl.max = gMain?.max || String(hwGains.length - 1);   // ★ the owner's per-band ceiling (applyGainCap) holds here too
   // ★ the slider follows the radio, except for a moment after the listener moved it (the report lags a second)
   if (performance.now() - adsbGainTouchAt > 2500) sl.value = String(Math.max(0, nearestGainIdx(Math.round(r!.gain! * 10))));
+  /* ★★ WHY THIS GAIN (2026-10-26): the server's own reason — the noise floor at its target, the top of the range, the
+   *  messages' peak or cliff, strong replies clipping — so the number is never a mystery. */
+  const why = typeof r!.gainWhy === 'string' && r!.gainWhy ? r!.gainWhy : '';
   $('adsbGainNote').textContent = auto
-    ? (busy ? 'Finding the gain that decodes the most — trying each step for a few seconds.' : 'Automatic: chosen by messages decoded, and checked again every ten minutes.')
+    ? (busy ? 'Finding the gain: the noise floor must stay 30 dB under full scale, and under that the step that decodes the most wins — each step tried for a few seconds.'
+        : `Automatic: ${why || 'chosen by the noise floor and messages decoded'}. Checked again every ten minutes.`)
     : 'Set by hand. AUTO hands it back.';
+  if (auto && why && !busy) key.title = `Gain chosen automatically: ${why}`;
+  else key.title = 'The receiver\'s gain in ADS-B — automatic, or set it yourself';
 }
 
 /** The bar's count and rate, and the list. */
@@ -8465,6 +8471,16 @@ function adsbRender() {
     put('adsbLong', lg ? adsbChipHtml('LONGEST TRACKED', `${Math.round(lg.nm)} NM`, lg.name) : '');
   }
   adsbGainRender();
+  {
+    /* ★★ THE FEED WARNING (GainControl::warning): full gain, a noise floor far under where a working ADS-B feed sits,
+     *  and a thin sky — the FlightAware Pi's May–June 2025 antenna fault, which nobody knew of for two months. Plain
+     *  words over the map; × hides it until the server's wording changes. */
+    const w = typeof adsbReport?.feedWarn === 'string' ? adsbReport.feedWarn : '';
+    const el = $('adsbFeedWarn');
+    const show = !!w && el.dataset.dismissed !== w;
+    el.hidden = !show;
+    if (show && $('adsbFeedWarnTx').textContent !== w) $('adsbFeedWarnTx').textContent = w;
+  }
   {
     // ★★ The receiver dropping samples — said in red beside the rate (adsbCaptureWarning). Built from text nodes.
     const w = adsbCaptureWarning(adsbReport), el = $('adsbCapture');
@@ -8855,6 +8871,10 @@ function buildControls() {
   $('adsbLong').onclick = () => { if (adsbLongHex) adsbMap?.focus(adsbLongHex); };
   $('adsbGain').onclick = () => { const p = $('adsbGainPop'); p.hidden = !p.hidden; adsbGainRender(); };
   $('adsbGainAuto').onclick = () => { adsbGainTouchAt = 0; spec?.setHwGain(0, true); };
+  $('adsbFeedWarnX').onclick = () => {
+    const el = $('adsbFeedWarn');
+    el.dataset.dismissed = adsbReport?.feedWarn ?? ''; el.hidden = true;
+  };
   ($('adsbGainSl') as HTMLInputElement).oninput = () => {
     adsbGainTouchAt = performance.now();
     const i = Number(($('adsbGainSl') as HTMLInputElement).value);

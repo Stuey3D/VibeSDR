@@ -227,3 +227,46 @@ nobody is connected that way a new connection instantly sees a list of planes an
   marker written just before the boost. Either way the rate switch is OFF (persisted) and the setup page and the
   app's server screen say so in red beside it until the owner clears it (`/vibeserver/rate-guard?clear=1`).
   `scripts/test-rate-guard.mjs` drives both through the real server.
+
+## The gain rule (2026-10-26) — `vibeadsb::GainControl`, `vibe_adsb_service.h`
+
+**Why it changed.** From 10-24 the rule was messages only: ramp from the middle of the gain list, a higher rung kept
+unless clearly worse, stopped by a cliff. On the Pi 500's V4L (YouLoop → wideband Nooelec LaNA, no 1090 filter) the
+cliff is real — out-of-band energy overloads the tuner at 43.4 → 44.5 dB — and it settles at 40.2. On Stuart's
+FlightAware Pi (an LNA **and** a 1090 MHz filter) nothing out of band reaches the tuner, so there is no cliff and the
+message count creeps up to the top: it pinned 49.6 dB. The 12.5-hour A/B against dump1090-fa (10-25) on that Pi: +5.8 %
+messages, −2.3 % positioned aircraft; our best runs were where the climb happened to stop at 37–43 dB. Messages are
+dominated by near aircraft; past the point where the noise fills the ADC, gain buys their replies with clipping (57 %
+of replies within 3 dB of full scale at 49.6 on the 10-24 clip) and costs the distant ones. **The filter, not the LNA,
+is what told the two apart** — both have an LNA; only the unfiltered one has a cliff to stop the climb.
+
+**The rule.**
+- **A noise ceiling**: our floor (`Demod::noiseDbfs`, the quietest 256-sample block of the last 16, ×1.1) must stay at
+  or under **−30 dBFS**. Mapped on the FlightAware clip with the gain lowered in steps: ours sits 0.3–0.7 dB above the
+  40th-percentile power (what dump1090-fa's adaptive range judges, 30 dB target on an RTL) and **11.3 dB under
+  graphs1090's "noise"** (the mean power of everything not decoded, fruit included). So dump1090-fa's 30 dB of range ≈
+  our −30, and its graphs1090 "−20 dBFS" ≈ our −31.
+- **Entry ramp**: middle up, every other rung, ~6.5 s each, measuring messages *and* the floor. Stops at the first rung
+  over the ceiling (choice made among the rungs below), at a message cliff, or two rungs past the peak; the rung above
+  the choice is then tried A/B. **One step over the ceiling is allowed only on a clear message win** (3 % and 2σ, A/B):
+  −30 is calibrated on one filtered feed, and an unfiltered one whose floor sits a little higher (a V4L whose limit is
+  its cliff) must not be cut below its best for it; the FlightAware feed's next rung adds ~1.5 % and never earns it.
+  A middle already over the ceiling steps down a rung every 4 s. An empty sky: the highest rung under the ceiling.
+- **Steady**: floor (smoothed) over the ceiling by more than 1 dB for 10 s → one rung down. Every ten minutes one rung
+  either side, kept only if it clearly decodes more — and up only when the rung above is predicted under the ceiling.
+- **Strong-reply pressure**: > 30 % of replies within 3 dB of full scale for 30 s proposes a rung down (A/B, taken
+  unless it clearly loses); then no climbing for 30 min. (FlightAware Pi healthy: ~11 %; V4L ~8 %.)
+- **SDRplay (IF AGC on)**: no ceiling (its floor is the AGC's); starts three-quarters up, only looks down, never above
+  the start; strong pressure steps the LNA down.
+- **Shown**: `gainWhy` in the report (the GAIN card, web and app); `feedWarn` when at the top rung for 10 min with the
+  floor 6 dB or more under the ceiling and a thin sky (nothing past 100 NM, or without a position < 40 aircraft and
+  < 400 msg/s) — a red CHECK THE ANTENNA banner over the map. Replayed on 2.5 years of the FlightAware Pi's graphs1090:
+  121 of the 126 fault-month rows at full gain (May–June 2025), 0 of 2 249 healthy rows.
+
+**Tests**: `vibeserver/test-adsb-gain.cpp` (model feeds built from the FA clip, the V4L's beta13 curve, the Pi 2's bare
+antenna, the 2025 fault, hysteresis, strong pressure, SDRplay), `scripts/test-adsb-gain-e2e.sh` (the real server on
+the FA clip with `fake-rtl-tcp --adsb-gain`: 25.4=1043/−42 … 40.2=1388/−31, 43.4=1367/−28 → **40.2 dB**, plus a
+reconnect inside the 5 s grace).
+
+**A/B on real hardware**: `scripts/ab-adsb-gain.py` — arms (dump1090-fa, a VibeServer build) alternated in windows on
+the one dongle, one CSV row per window (the 10-25 `fa.csv` columns + `noise_med`, `why`, `warn`). Stdlib only.

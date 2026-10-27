@@ -13292,10 +13292,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     } adsbSaved_;
     std::vector<int> adsbGains_;
     int adsbGainIdx_ = -1, adsbGainSet_ = -999;
-    vibeadsb::GainSearch adsbSearch_;                 // the ramp at entry — see adsbTick
-    vibeadsb::GainTrial adsbTrial_;                   // the ten-minute look either side — see adsbTick
-    bool adsbSearchDown_ = false, adsbExploreUp_ = false, adsbManual_ = false, adsbNeedSearch_ = false;
-    double adsbExploreAt_ = 0;
+    vibeadsb::GainControl adsbCtl_;                   // ★ the whole gain rule (vibe_adsb_service.h) — see adsbTick
+    bool adsbManual_ = false, adsbNeedSearch_ = false;
+    std::string adsbLoggedWhy_, adsbLoggedWarn_;
     double adsbLastReport_ = 0, adsbLastGain_ = 0;
     std::atomic<bool> rateBoostFellBack_{false};       // ★ the watchdog's boosted-rate recovery ran — see rateBoostStalled
     /** ★ When rtl_tcp last delivered (tcpReadLoop). lastIqAt is the USB/driver sources' — an rtl_tcp radio never
@@ -13340,10 +13339,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const int curG = g_gainTarget.load(std::memory_order_relaxed);
         const int shownG = curG >= 0 && curG != adsbGainSet_ ? curG : adsbGainSet_;   // ★ a listener's gain, the moment it is set
         if (shownG >= 0 && !r.empty() && r.back() == '}') {
+            const bool autoG = !(shownG != adsbGainSet_ || adsbManual_);
             char g[96];
-            std::snprintf(g, sizeof g, ",\"gain\":%.1f,\"gainAuto\":%d,\"gainBusy\":%d}", shownG / 10.0, shownG != adsbGainSet_ || adsbManual_ ? 0 : 1,
-                          adsbSearch_.active() || adsbTrial_.active() ? 1 : 0);
+            std::snprintf(g, sizeof g, ",\"gain\":%.1f,\"gainAuto\":%d,\"gainBusy\":%d", shownG / 10.0, autoG ? 1 : 0,
+                          adsbCtl_.busy() ? 1 : 0);
             r.pop_back(); r += g;
+            /* ★★ WHY THIS GAIN, and the owner's warning when the feed looks dead (vibeadsb::GainControl) — strings with
+             *  no quotes or controls of their own, escaped all the same. */
+            auto put = [&](const char* k, const std::string& v) {
+                r += ",\""; r += k; r += "\":\"";
+                for (char c : v) { if (c == '"' || c == '\\') r += '\\'; if ((unsigned char)c >= 0x20) r += c; }
+                r += '"';
+            };
+            if (autoG && !adsbCtl_.why().empty()) put("gainWhy", adsbCtl_.why());
+            const std::string w = adsbCtl_.warning();
+            if (!w.empty()) put("feedWarn", w);
+            r += '}';
         }
         std::vector<std::shared_ptr<net::Socket>> socks;
         { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
@@ -13405,10 +13416,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  steps down (levelHeld), and its top LNA state is the one most likely to overload. */
         adsbGains_ = LocalSdrShim::instance().getTunerGains();
         adsbGainIdx_ = -1; adsbGainSet_ = -999;
-        adsbSearch_.cancel(); adsbTrial_.cancel(); adsbSearchDown_ = false; adsbManual_ = false; adsbNeedSearch_ = true;
-        adsbExploreAt_ = 0;
+        adsbCtl_.cancel(); adsbManual_ = false; adsbNeedSearch_ = true;
+        adsbLoggedWhy_.clear(); adsbLoggedWarn_.clear();
         if (!adsbGains_.empty()) {
-            adsbGainIdx_ = int(adsbGains_.size()) / 2;   // ★ the MIDDLE — the ramp climbs from here (adsbTick)
+            // ★ where the rule starts (adsbTick → GainControl::begin): the middle on an RTL, three-quarters on an SDRplay
+            adsbGainIdx_ = useSdrplay() ? std::min(int(adsbGains_.size()) - 1, int(adsbGains_.size()) * 3 / 4) : int(adsbGains_.size()) / 2;
             adsbGainSet_ = adsbGains_[size_t(adsbGainIdx_)];
             // ★ written below, once g_adsbMode is up — written here, the gain-step smoother (off in ADS-B) still
             //   ran on the blocks in between and held the capture down for its ~1 s glide at every entry
@@ -13599,11 +13611,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (cur >= 0 && cur != adsbGainSet_) {
             // a person's gain: theirs until they press AUTO again (-1), and any search or look under way is void
             if (!adsbManual_) LOGI("[ADS-B] gain %.1f dB set by a listener — automatic gain paused", cur / 10.0);
-            adsbManual_ = true; adsbSearch_.cancel(); adsbTrial_.cancel();
+            adsbManual_ = true; adsbCtl_.cancel();
             return;
         }
         if (adsbManual_ && cur < 0) {          // ★ AUTO pressed again: ramp afresh from the middle
-            adsbManual_ = false; adsbNeedSearch_ = true; adsbSearchDown_ = false;
+            adsbManual_ = false; adsbNeedSearch_ = true;
             LOGI("[ADS-B] automatic gain handed back — ramping from the middle");
         }
         if (adsbManual_) return;
@@ -13615,66 +13627,41 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             adsbGainSet_ = adsbGains_[size_t(i)];
             LocalSdrShim::instance().setGain(adsbGainSet_);
         };
-        /* ★★★ THE RAMP — MIDDLE UP, BY MESSAGES (Stuart, 2026-10-24). Locked at the top his V4L + LaNA on a YouLoop
-         *  decoded nothing ("completely dead"); by hand 42.1 dB looked best; his FlightAware box's dump1090-fa sits at
-         *  40.2 on its own filtered LNA; the Pi 2's bare antenna wants the top. So: "start in the middle and ramp up".
-         *  Every other rung from the middle to the top, ~8 s each, counting believed messages; it stops two rungs
-         *  past the peak and lands on the best (vibeadsb::GainSearch, climbing: a plateau climbs on). If the middle
-         *  itself was best it looks DOWN the same way. An empty sky proves nothing: three-quarters up, then the looks.
-         *  ★ No noise-floor rule at all — that is what walked the V4L down before (GainRule stays, tested, unused). */
-        const int n = int(adsbGains_.size()), mid = n / 2;
-        if (adsbNeedSearch_ && !adsbSearch_.active()) {
+        /* ★★★ THE RULE IS vibeadsb::GainControl (vibe_adsb_service.h): the ramp from the middle by messages UNDER A NOISE
+         *  CEILING (the FlightAware Pi's filtered LNA feed pinned 49.6 dB on messages alone, 2026-10-26), the steady
+         *  noise guard with hysteresis, strong-reply pressure, the ten-minute looks, an SDRplay only ever looking down,
+         *  and the "hearing little" warning. This only writes what it decides and logs it. */
+        if (adsbNeedSearch_) {
             adsbNeedSearch_ = false;
-            std::vector<int> order;
-            for (int i = mid; i < n; i += 2) order.push_back(i);
-            if (order.back() != n - 1) order.push_back(n - 1);
-            LOGI("[ADS-B] gain ramp: %zu gains from %.1f up to %.1f dB, counting messages at each", order.size(),
-                 adsbGains_[size_t(order.front())] / 10.0, adsbGains_[size_t(order.back())] / 10.0);
-            setIdx(adsbSearch_.start(order, t, true));
+            const bool held = useSdrplay();
+            LOGI("[ADS-B] gain: %s from %.1f dB (%zu steps, %.1f-%.1f dB), noise ceiling %.0f dBFS%s", held ? "looking down" : "ramp",
+                 adsbGains_[size_t(held ? std::min(int(adsbGains_.size()) - 1, int(adsbGains_.size()) * 3 / 4) : int(adsbGains_.size()) / 2)] / 10.0,
+                 adsbGains_.size(), adsbGains_.front() / 10.0, adsbGains_.back() / 10.0, vibeadsb::GainTarget::kFloorDbfs,
+                 held ? " (not used: the radio holds its own level)" : "");
+            setIdx(adsbCtl_.begin(adsbGains_, held, t));
             return;
         }
-        if (adsbSearch_.active()) {
-            setIdx(adsbSearch_.step(t, h.msgsTotal));
-            if (adsbSearch_.active()) return;
+        const bool wasSearching = adsbCtl_.search().active();
+        setIdx(adsbCtl_.tick(t, h));
+        if (wasSearching && !adsbCtl_.search().active()) {
+            const vibeadsb::GainSearch& s = adsbCtl_.search();
             std::string tried;
-            for (size_t k = 0; k < adsbSearch_.order().size() && adsbSearch_.rates()[k] >= 0; ++k) {
-                char b[48]; std::snprintf(b, sizeof b, "%s%.1f=%.0f", k ? " " : "", adsbGains_[size_t(adsbSearch_.order()[k])] / 10.0, adsbSearch_.rates()[k]);
+            for (size_t k = 0; k < s.order().size() && s.rates()[k] >= 0; ++k) {
+                char b[64]; std::snprintf(b, sizeof b, "%s%.1f=%.0f/%.0f", k ? " " : "", adsbGains_[size_t(s.order()[k])] / 10.0, s.rates()[k], s.floors()[k]);
                 tried += b;
             }
-            if (!adsbSearch_.found()) {
-                setIdx(std::min(n - 1, mid + (n - mid) / 2));
-                LOGI("[ADS-B] gain %s (dB=msg/s): %s -> too few aircraft to judge, %.1f dB", adsbSearchDown_ ? "look down" : "ramp",
-                     tried.c_str(), adsbGainSet_ / 10.0);
-            } else if (!adsbSearchDown_ && adsbSearch_.result() == adsbSearch_.order().front() && mid >= 2) {
-                // the middle was the best: the peak may be below it — look down the same way, from the middle
-                LOGI("[ADS-B] gain ramp (dB=msg/s): %s -> the middle was best, looking down", tried.c_str());
-                adsbSearchDown_ = true;
-                std::vector<int> order;
-                for (int i = mid; i >= 0; i -= 2) order.push_back(i);
-                setIdx(adsbSearch_.start(order, t, false));
-                return;
-            } else {
-                setIdx(adsbSearch_.result());
-                LOGI("[ADS-B] gain %s (dB=msg/s): %s -> %.1f dB", adsbSearchDown_ ? "look down" : "ramp", tried.c_str(), adsbGainSet_ / 10.0);
-            }
-            adsbExploreAt_ = t + 600.0;
-            return;
+            if (adsbCtl_.trial().active())
+                LOGI("[ADS-B] gain search (dB=msg/s/floor dBFS): %s -> %.1f dB, then %.1f dB tried against it A/B", tried.c_str(),
+                     adsbGains_[size_t(adsbCtl_.trial().current())] / 10.0, adsbGains_[size_t(adsbCtl_.trial().proposed())] / 10.0);
+            else LOGI("[ADS-B] gain search (dB=msg/s/floor dBFS): %s -> %.1f dB", tried.c_str(), adsbGainSet_ / 10.0);
         }
-        if (adsbTrial_.active()) {
-            setIdx(adsbTrial_.step(t, h.msgsTotal));
-            if (adsbTrial_.active()) return;
-            LOGI("[ADS-B] gain look: %.1f dB %.0f msg/s vs %.1f dB %.0f msg/s -> %.1f dB",
-                 adsbGains_[size_t(adsbTrial_.proposed())] / 10.0, adsbTrial_.rate(1),
-                 adsbGains_[size_t(adsbTrial_.current())] / 10.0, adsbTrial_.rate(0), adsbGainSet_ / 10.0);
-            adsbExploreAt_ = t + 600.0;
-            return;
+        if (adsbCtl_.why() != adsbLoggedWhy_ && !adsbCtl_.busy()) {
+            adsbLoggedWhy_ = adsbCtl_.why();
+            LOGI("[ADS-B] gain %.1f dB: %s", adsbGainSet_ / 10.0, adsbLoggedWhy_.c_str());
         }
-        // ★ every ten minutes, one rung either side (alternately), kept only if it clearly decodes more
-        if (adsbExploreAt_ > 0 && t >= adsbExploreAt_) {
-            adsbExploreAt_ = t + 600.0;
-            adsbExploreUp_ = !adsbExploreUp_;
-            const int nb = adsbGainIdx_ + (adsbExploreUp_ ? 1 : -1);
-            if (nb >= 0 && nb < n) { setIdx(adsbTrial_.start(adsbGainIdx_, nb, t, false)); return; }
+        {
+            const std::string w = adsbCtl_.warning();
+            if (w != adsbLoggedWarn_) { adsbLoggedWarn_ = w; LOGI("[ADS-B] %s", w.empty() ? "feed warning cleared" : w.c_str()); }
         }
         if (cur < 0) setIdx(adsbGainIdx_);   // ★ re-assert after anything that dropped it
     }
@@ -23889,7 +23876,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             /* ★ Rule 0 reaches the plain landing too: on a shared dial the first listener since the start
              *   is put on it (the capture usually already sits there — the server starts on it — but a
              *   scan or a remembered multiplex may have moved the radio before anyone arrived). */
-            if (!landOnDab && !landOnAdsb && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
+            /* ★★★ NOT WHILE ADS-B HOLDS THE RECEIVER (2026-10-26). A listener who reconnects inside ADS-B's 5 s grace
+             *  ("listener returned within 5 s — ADS-B kept") arrived as a NEW session, and this plain landing retuned
+             *  the tuner to 96.1 MHz under a mode that was still on: no aircraft, a noise floor 13 dB up (the FM band),
+             *  and the gain rule — rightly reading a hot floor — walking the gain down for nothing. Found by the gain
+             *  A/B script's own reconnect. ADS-B owns the dial until it is left (EXIT ADS-B lands them properly). */
+            const bool adsbHolds = g_adsbMode.load(std::memory_order_relaxed);
+            if (adsbHolds && !landOnAdsb && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
+                && (!sharedDialNow || startLanding))
+                LOGI("new session — the receiver is in ADS-B, so the plain landing waits for EXIT ADS-B");
+            if (!landOnDab && !landOnAdsb && !adsbHolds && firstOfSession && landedSession != session && !adminOk.load() && !preTuned
                 && (!sharedDialNow || startLanding)) {
                 landedSession = session;
                 // ★ See the loopback warning in the watchdog: a proxy or tunnel connects from

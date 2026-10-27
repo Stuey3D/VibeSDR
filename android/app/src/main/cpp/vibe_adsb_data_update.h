@@ -71,7 +71,12 @@ private:
 
 class Updater {
 public:
-    static Updater& get() { static Updater u; return u; }
+    /** ★★★ NEVER DESTROYED (Stuart's Pi 2, 2026-10-26 23:53 UTC: SIGSEGV in `vibe-adsbdata` during a settings save's
+     *  restart). The job runs on a DETACHED thread, and a settings save ends the server with `return 0` from main —
+     *  exit() then runs the static destructors while that thread is still waiting on cv_ or working inside runOnce():
+     *  it locked a destroyed mutex and read freed strings. A heap object that is never deleted outlives every thread
+     *  that can touch it; the process ending reclaims it. test-adsb-data-exit. */
+    static Updater& get() { static Updater* u = new Updater; return *u; }
 
     /** `<data dir>/adsb`. Creates it; also points the reader there. */
     void setDir(const std::string& d) {

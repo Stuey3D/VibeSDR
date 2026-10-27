@@ -419,8 +419,10 @@ private:
 
 class Db {
 public:
-    static Db& get() { static Db d; return d; }
-    static Images& images() { static Images i; return i; }
+    /** ★★★ NEVER DESTROYED, as Updater::get(): the updater's detached thread calls refresh() and the decoder thread
+     *  looks aircraft up — either can still be running while exit() tears the statics down (test-adsb-data-exit). */
+    static Db& get() { static Db* d = new Db; return *d; }
+    static Images& images() { static Images* i = new Images; return *i; }
 
     /** `<data dir>/adsb` — where vrs.vad and mic.vad live (written by the updater). */
     void setDir(const std::string& d) { std::lock_guard<std::mutex> lk(m_); dir_ = d; checked_ = 0; }

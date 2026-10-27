@@ -157,7 +157,8 @@ console.log('\nADS-B as the landing, keep running OFF');
     ok(/\[ADS-B\] new session — landing in ADS-B/.test(S.log()), '★ the first client lands in ADS-B (logged with the reason)');
     ok(parsed(A, 'adsb').length > 0, 'and gets aircraft reports without asking');
     A.close();
-    await waitFor(() => /\[ADS-B\] last listener left — the receiver goes back/.test(S.log()), 5000);
+    // ★ the server holds ADS-B up for 5 s after the last listener (a reconnect keeps it) — wait past that grace
+    await waitFor(() => /\[ADS-B\] last listener left — the receiver goes back/.test(S.log()), 9000);
     ok(/\[ADS-B\] last listener left — the receiver goes back/.test(S.log()), 'the last listener leaving gives the receiver back');
     await sleep(3000);
     ok(!/\[ADS-B\] keep running/.test(S.log()), 'and nothing keeps it running');

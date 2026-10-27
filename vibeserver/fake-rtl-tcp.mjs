@@ -23,6 +23,8 @@
 //   --adsb FILE while the dongle is tuned within 2 MHz of 1090 MHz, replay FILE (unsigned 8-bit IQ, as
 //               rtl_sdr writes it, at the rate the server asked for — record it at that rate) on a loop:
 //               real aircraft for ADS-B mode on the bench (V12, 2026-10-24).
+//   --adsb-gain with --adsb: the clip follows the gain the server writes (recorded at 49.6 dB; lower = scaled and
+//               re-quantised) — the ADS-B gain rule's end-to-end test (scripts/test-adsb-gain-e2e.sh).
 //   --ism FILE  while the dongle is tuned within 2 MHz of 434 MHz, replay FILE (unsigned 8-bit IQ at the rate the server
 //               asked for, centred where ISM mode puts the radio) on a loop: sensors for ISM mode on the bench (V12,
 //               2026-10-25 — `test-ism --write-clip` makes one, scripts/test-server-ism.mjs uses it).
@@ -104,6 +106,19 @@ const GAUSS = (() => { const n = 1 << 20, g = new Float32Array(n); for (let i = 
 const adsbArg = (() => { const i = process.argv.indexOf('--adsb'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const ADSB_IQ = adsbArg ? fs.readFileSync(adsbArg) : null;
 if (ADSB_IQ) console.log(`[fake-rtl-tcp] ADS-B clip ${adsbArg}: ${ADSB_IQ.length / 2} samples`);
+/* ★★ --adsb-gain (2026-10-26, the ADS-B gain rule): the clip OBEYS THE GAIN the server writes. It was recorded at the
+ *  top (49.6 dB), so a lower gain G scales every sample by 10^((G − 49.6)/20) about the ADC's centre and re-quantises it
+ *  to 8 bits — noise and replies together, as an LNA-fed feed behaves. A gain above 49.6 cannot be made: it replays as
+ *  recorded. Samples that clipped in the recording stay clipped (scaled): the model is kind to high gains, never harsh. */
+const ADSB_GAIN = process.argv.includes('--adsb-gain');
+let adsbLutFor = -1, adsbLut = new Uint8Array(256);
+function adsbLutAt(gainTenths) {
+  if (gainTenths === adsbLutFor) return adsbLut;
+  const g = Math.min(1, Math.pow(10, (gainTenths / 10 - 49.6) / 20));
+  for (let b = 0; b < 256; b++) adsbLut[b] = Math.max(0, Math.min(255, Math.round((b - 127.4) * g + 127.4)));
+  adsbLutFor = gainTenths;
+  return adsbLut;
+}
 const ismArg = (() => { const i = process.argv.indexOf('--ism'); return i >= 0 ? process.argv[i + 1] : ''; })();
 const ISM_IQ = ismArg ? fs.readFileSync(ismArg) : null;
 const ism868Arg = (() => { const i = process.argv.indexOf('--ism868'); return i >= 0 ? process.argv[i + 1] : ''; })();
@@ -236,6 +251,7 @@ const srv = net.createServer((sock) => {
       for (let k = 0; k < n * 2; ) {
         const take = Math.min(n * 2 - k, ADSB_IQ.length - adsbPos);
         ADSB_IQ.copy(buf, k, adsbPos, adsbPos + take);
+        if (ADSB_GAIN) { const lut = adsbLutAt(gainTenths); for (let q = k; q < k + take; q++) buf[q] = lut[buf[q]]; }
         k += take; adsbPos = (adsbPos + take) % ADSB_IQ.length;
       }
     } else if (MUX && centreHz >= 170e6 && centreHz <= 245e6) {
