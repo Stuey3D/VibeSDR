@@ -117,7 +117,7 @@ const fmt = (t) => `400:${t[400].toFixed(4)} 620:${t[620].toFixed(4)} 840:${t[84
 /** Tone `f` wholly in ear `e` ('L' or 'R') — at least 30 dB above it in the other ear. */
 const only = (a, f, e) => { const o = e === 'L' ? 'R' : 'L'; return a[e][f] > 0.002 && a[e][f] > 30 * a[o][f]; };
 
-async function server(args, tag, radioExtra = {}) {
+async function server(args, tag, radioExtra = {}, fakeExtra = [], extraEnv = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-vfoab-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
@@ -126,10 +126,14 @@ async function server(args, tag, radioExtra = {}) {
   }));
   const rtlPort = await freePort(), port = await freePort();
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
-                                       '--tones', '3', '--tones-at', String(TONES_AT), '--key', '3'], { stdio: 'ignore' });
+                                       '--tones', '3', '--tones-at', String(TONES_AT), '--key', '3', ...fakeExtra], { stdio: ['ignore', 'pipe', 'ignore'] });
+  // ★ every tune the fake is sent — the tuner's frequency IS where a dongle's DC is (§7)
+  const tunes = [];
+  rtl.stdout.on('data', (d) => { for (const m of d.toString().matchAll(/tune ([0-9.]+) MHz/g)) { tunes.push(Math.round(Number(m[1]) * 1e6)); if (tunes.length > 200) tunes.shift(); } });
   await sleep(400);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
-                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
+                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run'), ...extraEnv };
+  delete env.VIBE_TCP_DC_OFFSET_HZ;   // ★ the R820T header decides the offset (15 kHz), as on a real rtl_tcp dongle
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), '--freq', String(CENTRE), '--mode', 'am', ...args],
                     { env, stdio: ['ignore', log, log] });
@@ -137,7 +141,7 @@ async function server(args, tag, radioExtra = {}) {
   await until(async () => !!(await status()), 15000);
   // ★ The scratch directory goes with the server unless something failed (then its server.log is the evidence).
   const failAtStart = fail;
-  return { port, dir, pid: srv.pid, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM');
+  return { port, dir, pid: srv.pid, tunes, dcNow: () => (tunes.length ? tunes[tunes.length - 1] : NaN), stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM');
                                     if (fail === failAtStart) setTimeout(() => fs.rmSync(dir, { recursive: true, force: true }), 300); }, log: () => fs.readFileSync(path.join(dir, 'server.log'), 'utf8') };
 }
 async function listener(port, sid, f, opus = false) {
@@ -440,8 +444,8 @@ for (const [label, args] of [['range-locked (users 2)', ['--users', '2', '--lock
 /* ★★★ Stuart, 2026-10-27: "That seems like a weird limitations surely it doesnt matter which VFO is listen and which is
  *  decode?" A decoder started on VFO B ("vfo":"B" on the attach) runs on this listener's VFO B host, fed B's OWN audio
  *  (before the mix) and filed on B's dial — on all three kinds of radio. WEFAX is the instrument: its pixel is the audio
- *  frequency (1500 Hz black … 2300 Hz white), so B in USB 2200 Hz below the 400 Hz station (its carrier a 2200 Hz tone)
- *  draws LIGHT lines while VFO A (AM on the 620 Hz station: its audio all below 1500 Hz) would draw BLACK ones; moving
+ *  frequency (1500 Hz black … 2300 Hz white), so B in USB 2200 Hz below a plain carrier (a 2200 Hz tone) draws LIGHT
+ *  lines while VFO A (AM on the 620 Hz station: its audio all below 1500 Hz) would draw BLACK ones; moving
  *  B's dial 700 Hz (the carrier to 1500 Hz) darkens the picture, moving A's does not. Meanwhile A is heard in its ear, the labels and ears never move, muting B
  *  leaves its decoder decoding, Band on B reads B's band (A sits on no band at all), and B going off stops B's decoder
  *  with the reason in words. */
@@ -452,12 +456,18 @@ const pixMean = (bins) => {
   for (const b of ls) for (let i = 9; i < b.length; i++) { s += b[i]; n++; }
   return s / n;
 };
-const B_USB = A_HZ - 2200;   // ★ B's USB dial: the 400 Hz station's carrier a 2200 Hz tone (light grey) (the decoder auto-levels, so the picture is judged by how it MOVES)
+/* ★★ B decodes an UNMODULATED carrier (the fake's --carrier, 15 kHz below the 400 Hz station), not an AM station. With
+ *  the dongle offset-tuned 15 kHz (37139747d) the radio's centre sits at 7.015 MHz, and B's channel lands its carrier
+ *  7 mHz off 2200 Hz (the NCO's float step at −107 kHz — inaudible); on an AM station's carrier-plus-sidebands that
+ *  millihertz walks the line's phase, and the decoder's line mean swung 65…111 with a 5.5 s period whatever A did — the
+ *  "A retuned" check failed ~2 runs in 3 on a one-pipeline radio. A pure tone is one grey at any phase. */
+const B_CARRIER = A_HZ - 15000;
+const B_USB = B_CARRIER - 2200;   // ★ B's USB dial: the carrier a 2200 Hz tone (light grey) (the decoder auto-levels, so the picture is judged by how it MOVES)
 for (const [label, args, sid] of [['personal receiver (users 1)', ['--users', '1'], 'vfoabdb1'],
                                   ['range-locked (users 2)', ['--users', '2', '--lock-freq', String(CENTRE)], 'vfoabdb2'],
                                   ['shared dial (users 3)', ['--users', '3'], 'vfoabdb3']]) {
   console.log(`── 6. decode on VFO B — ${label} ──`);
-  const S = await server(args, sid);
+  const S = await server(args, sid, {}, ['--carrier', String(B_CARRIER), '--carrier-amp', '20']);
   try {
     const shared = label.startsWith('shared');   // ★ a shared dial's listeners are sent Opus (§3) — counted, not analysed
     const L = await listener(S.port, sid, MID_HZ, shared);
