@@ -169,8 +169,9 @@ import ServersChip from '../components/ServersChip';
 import DualServerCard from '../components/DualServerCard';
 import { canListenSecond, dualHolds, dualSupported, dualTransport, foregroundEnded, leaveForeground, listenSecond,
          noteStatus, returnParams, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
+         isFirstRadio, backToFirstRadio,
          useDualShape } from '../services/dualServer';
-import { dualEligible, pairingStart, secondServerHint } from '../services/dualMix';
+import { dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
 import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
@@ -616,6 +617,21 @@ export default function SDRScreen({ route, navigation }: Props) {
   const dualCan = dualSupported && dualEligible(route.params);
   /** This screen's side id for code that runs outside a render (cleanups) — set once sessionUuid exists. */
   const dualIdRef = useRef<string | null>(null);
+  /* ★★ PAIRING IS PER RADIO (Gesiima's two dongles on one VibeServer, #57 — Stuart: "Yup they are treated as separate
+   *  instances"). A second screen on the SAME server opens its radio list; adopting a radio passes through here first,
+   *  and the radio the first side is already playing is not a second side — the screen goes back to it (its audio never
+   *  started: the radio list holds the connect). Returns true when it went back. */
+  const bounceIfFirstRadio = (base: string): boolean => {
+    if (!dualSideId || !isFirstRadio(dualSideId, route.params as never, radioKeyOf(base))) return false;
+    const p = backToFirstRadio(dualSideId);
+    if (p) {
+      navigation.reset({ index: 1, routes: [
+        { name: 'InstancePicker', params: { noAutoConnect: true } },
+        { name: 'SDR', params: p },
+      ] } as never);
+    }
+    return true;
+  };
   /* ★★ BACK TO THIS DOOR'S RADIO LIST (src/utils/doorReturn.ts): the visit the screen before this one handed over —
    *  the radio it left (the chooser starts on it) and the PINs and admin credential typed at this door. Taken once. */
   const visitRef = useRef<DoorVisit | null | undefined>(undefined);
@@ -707,6 +723,7 @@ export default function SDRScreen({ route, navigation }: Props) {
          * ★ Setting radioBase to the address we are already on is the honest statement of that: the
          *   radio is chosen, and it is this one. connectBase was going to use it regardless. */
         const namesRadio = /\/r\/[^/]+$/.test(baseUrl);
+        if (namesRadio && bounceIfFirstRadio(baseUrl)) return;   // ★★ the radio already playing — see bounceIfFirstRadio
         if (namesRadio) setRadioBase(baseUrl);
         if (occ && (occ.antenna || occ.landingMessage)) {
           setDoor({
@@ -747,6 +764,7 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  its card says IN USE BY ANOTHER APP and the line under it says why. */
       if (d.radios.length === 1 && !worthReading && d.radios[0].pinLocked !== true
           && d.radios[0].inUseElsewhere !== true) {
+        if (bounceIfFirstRadio(radioBaseUrl(baseUrl, d.radios[0].id))) return;
         setRadioBase(radioBaseUrl(baseUrl, d.radios[0].id));
       }
       setDoorPending(false);
@@ -1033,6 +1051,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *   machine-wide PIN path this screen has always used.
    */
   const chooseRadio = useCallback(async (id: string) => {
+    if (bounceIfFirstRadio(radioBaseUrl(baseUrl, id))) return;   // ★★ the radio already playing in the other ear
     chosenFromListRef.current = id;   // ★ Back from it comes back to this list (onBackToPicker)
     const pin = radioPins.current[id];
     if (pin) {
@@ -11874,11 +11893,16 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  ★ Its card facts — what it plays, its time limit — are copied into the pairing while it is in front, so the card
    *    can show them the moment it goes to the background. The pairing ignores them while there is no pairing. */
   const dualEndsAt = sessionEndsAt != null && !adminOk ? sessionEndsAt : null;
+  /* ★★ PER RADIO: which radio on its server this side is (`/r/<id>`, '' = the address is the radio), and the card's name
+   *  for it — "server · radio" when the server has more than one radio to tell apart (Gesiima's two dongles, #57). */
+  const dualRadioKey = radioKeyOf(radioBase);
+  const dualName = sideName(instanceName ?? baseUrl, door && door.radios.length > 1 ? chosenRadio?.label : null);
   useEffect(() => {
     if (!dualMyId || dualShape.phase === 'off') return;
     noteStatus(dualMyId, { freqHz: status.frequency, mode: String(status.mode), endsAt: dualEndsAt,
-                           soft: limitSoft || borrowed, name: instanceName ?? baseUrl });
-  }, [dualMyId, dualShape.phase, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed, instanceName, baseUrl]);
+                           soft: limitSoft || borrowed, name: dualName, radioKey: dualRadioKey }, radioBase);
+  }, [dualMyId, dualShape.phase, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed, dualName, dualRadioKey,
+      radioBase]);
   // ★ The server ended THIS one (its refusal is on screen): the background server keeps playing.
   useEffect(() => { if (refusal && dualMyId) foregroundEnded(dualMyId); }, [refusal, dualMyId]);
   // ★ Gone while still in front without saying so (a crash reset, an alert's "Back to Servers"): it LEFT.
@@ -11893,12 +11917,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     setMenuOpen(false);
     const start = pairingStart(abOn);
     if (start.closeB) onVfoAB(false);
-    listenSecond({ id: dualMyId, name: instanceName ?? baseUrl, params: returnParams(route.params as never),
+    // ★★ Its return address names its RADIO when it is one behind a front door, so coming back never stops at the list.
+    const back = returnParams(route.params as never);
+    if (dualRadioKey && radioBase) back.baseUrl = radioBase;
+    listenSecond({ id: dualMyId, name: dualName, params: back, radioKey: dualRadioKey,
                    freqHz: abDoor.frequency, mode: String(abDoor.mode), endsAt: dualEndsAt, soft: limitSoft || borrowed },
                  start.note);
     navigation.goBack();
-  }, [dualMyId, instanceName, baseUrl, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt, limitSoft,
-      borrowed, navigation]);
+  }, [dualMyId, dualName, dualRadioKey, radioBase, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt,
+      limitSoft, borrowed, navigation]);
   /** TAP the card: the background server's screen comes up; both keep playing, ears unmoved. A reset with the server
    *  list beneath — the one way this app lands on a VibeServer (connectVibeServer's note on why not navigate). */
   const onDualSwap = useCallback(() => {
@@ -12418,7 +12445,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. On a VibeServer it can also keep this one playing while you add a second: Listen to a 2nd server. Two servers or VFO A/B, never both — with VFO B on, that closes B first, and VFO A/B comes back when you are down to one server.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. On a VibeServer it can also keep this one playing while you add a second server, or a second radio on this one: Listen to a 2nd server. Two servers or VFO A/B, never both — with VFO B on, that closes B first, and VFO A/B comes back when you are down to one server.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.

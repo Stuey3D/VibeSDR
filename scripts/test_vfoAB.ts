@@ -464,7 +464,7 @@ console.log('── two servers OR VFO A/B, never both (Stuart, #57) ──');
   ok(!/\babOfferedSrv > 0/.test(scr), 'nothing reads the raw offer to draw a control');
   // A pairing started with VFO B on closes B through the ordinary off message (the client's abSetOn(false)).
   ok(JSON.stringify(msgOff()) === JSON.stringify({ type: 'watch', id: 1, off: true }), 'B-off is the ordinary watch off');
-  ok(/const start = pairingStart\(abOn\);\s*if \(start\.closeB\) onVfoAB\(false\);\s*listenSecond\(/.test(scr),
+  ok(/const start = pairingStart\(abOn\);\s*if \(start\.closeB\) onVfoAB\(false\);[\s\S]{0,400}?listenSecond\(/.test(scr),
      '"Listen to a 2nd server" closes VFO B BEFORE the pairing begins');
 }
 console.log(`\n${pass} passed, ${fail} failed`);

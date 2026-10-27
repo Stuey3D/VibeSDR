@@ -2738,7 +2738,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           <Text style={{ fontFamily: F, fontSize: fs(13), color: dualSolo.ended ? C.bad : C.text, lineHeight: fs(18) }}>
             {dualSolo.ended
               ? `${dualSolo.name} has ended — ${dualSolo.ended}.`
-              : `${dual.note ? `${dual.note} ` : ''}${dualSolo.name} is still playing. Pick another VibeServer to hear both — this one in your left ear, the new one in your right.`}
+              : `${dual.note ? `${dual.note} ` : ''}${dualSolo.name} is still playing. Pick another VibeServer${dualSolo.radioKey ? ', or this one again for another of its radios,' : ''} to hear both — this one in your left ear, the new one in your right.`}
           </Text>
           {!dualSolo.ended && (
             <View style={{ flexDirection: 'row', gap: 18, marginTop: 8 }}>

@@ -169,8 +169,8 @@ export const VFO_B_CLOSED_NOTE = 'VFO B closed — two servers use both ears.';
 
 /** "Listen to a 2nd server", said where it is chosen (also its spoken hint) — and, with VFO B on, that B will close. */
 export function secondServerHint(abOn: boolean): string {
-  const base = 'This server keeps playing while you pick another: this one in your left ear, the next in your right '
-             + '(Audio menu, TWO SERVERS, for both in both ears).';
+  const base = 'This server keeps playing while you pick another — or another radio on this one: this one in your left '
+             + 'ear, the next in your right (Audio menu, TWO SERVERS, for both in both ears).';
   return abOn ? `VFO B will close — two servers use both ears. ${base}` : base;
 }
 
@@ -184,6 +184,55 @@ export function pairingStart(abOn: boolean): { closeB: boolean; note: string | n
 export function sameServer(a: DualRouteLike & { baseUrl?: string }, b: DualRouteLike & { baseUrl?: string }): boolean {
   if (a.localHost && b.localHost) return a.localHost === b.localHost && a.localPort === b.localPort;
   return !!a.baseUrl && a.baseUrl === b.baseUrl;
+}
+
+/* ───────────────────────── two RADIOS on one server (Gesiima, #57) ───────────────────────── */
+
+/**
+ * ★★★ PAIRING IS PER RADIO, NOT PER SERVER. Gesiima runs ONE VibeServer with TWO RTL dongles and asked whether "Listen to
+ *     a 2nd server" works for two radios on it; Stuart: "Yup they are treated as separate instances" — "that is how I
+ *     expected it to be". A radio behind a front door is addressed as `<base>/r/<id>`; this is the `/r/<id>` part, or ''
+ *     for an address that IS the radio (a single-radio server, or a per-radio port). Two sides are the SAME RADIO only
+ *     when the server AND this key agree — so the second radio on the same server is a second side like any other.
+ */
+export function radioKeyOf(base: string | null | undefined): string {
+  if (!base) return '';
+  const i = base.lastIndexOf('/r/');
+  return i >= 0 ? base.slice(i).replace(/\/+$/, '') : '';
+}
+
+/** One side as far as "is it the same radio?" is concerned: its route (host and port) and its radio key. */
+export interface RadioRef { params: DualRouteLike & { baseUrl?: string }; radioKey: string }
+
+/** The same radio: the same server and the same radio behind it. */
+export function sameRadio(a: RadioRef, b: RadioRef): boolean {
+  return sameServer(a.params, b.params) && a.radioKey === b.radioKey;
+}
+
+/**
+ * The server list, picking the server that is ALREADY playing (the picking phase's one side):
+ *  · 'back'   — its address is the radio itself (no `/r/<id>`): there is nothing else on it to choose, so go back to it
+ *               (a second session on the same radio would take a second slot for the same person);
+ *  · 'radios' — it is one radio behind a front door: open the server, whose radio list is where a DIFFERENT radio is
+ *               chosen. Choosing the one already playing there goes back to it (isFirstRadio).
+ *  · 'other'  — a different server altogether.
+ */
+export function pickSameServer(solo: RadioRef | null, picked: DualRouteLike & { baseUrl?: string }): 'back' | 'radios' | 'other' {
+  if (!solo || !sameServer(solo.params, picked)) return 'other';
+  return solo.radioKey ? 'radios' : 'back';
+}
+
+/** The joining side chose the radio the FIRST side is already on: it is not a second side after all. Back to picking with
+ *  the first side alone, nothing of the joiner's left (its audio never started — the radio list holds the connect). */
+export function detachSecond<S extends DualSideCore>(st: DualCore<S>, id: string): DualCore<S> {
+  if (st.phase !== 'paired' || st.sides.length !== 2 || st.sides[1].id !== id) return st;
+  return { phase: 'picking', sides: [{ ...st.sides[0], transport: 'native' }], fg: null };
+}
+
+/** The card's name for a side: "server · radio" when the server has more than one radio to tell apart. */
+export function sideName(server: string, radio: string | null | undefined): string {
+  const r = (radio ?? '').trim();
+  return r && r !== server ? `${server} · ${r}` : server;
 }
 
 /* ─────────────────────────────── the pairing's state machine ─────────────────────────────── */

@@ -31,7 +31,7 @@ import { decodeVibeAdpcmFrame } from './imaAdpcm';
 import { noteFault } from './faultLog';
 import {
   DUAL_OFF, attachSecond, beginPicking, bgSide, clampBalance, dualEligible, dualTargets, endSide, holds,
-  markEnded, sameServer, swap, terminalWhy, transportFor,
+  markEnded, sameServer, sameRadio, swap, terminalWhy, transportFor, detachSecond, pickSameServer,
   type DualCore, type DualOutput, type DualRouteLike, type DualSideCore, type Transport,
 } from './dualMix';
 
@@ -71,6 +71,9 @@ export interface DualSide extends DualSideCore {
   soft: boolean;
   /** The server asked "still listening?" — the deadline it gave (ms epoch). */
   asking: number | null;
+  /** ★★ WHICH RADIO on its server — `/r/<id>`, or '' when its address is the radio (dualMix.radioKeyOf). Pairing is per
+   *  RADIO: two radios on one VibeServer are two sides (Gesiima, #57). Set by its screen once the radio is chosen. */
+  radioKey?: string;
 }
 
 export interface DualState extends DualCore<DualSide> {
@@ -438,11 +441,14 @@ export function roleOnMount(params: Record<string, unknown> & DualRouteLike & { 
   }
   if (state.phase === 'off') return null;
   if (state.phase !== 'picking' || !dualEligible(params)
-      || state.sides.some((s) => sameServer(s.params as DualRouteLike, params))) {
+      || state.sides.some((s) => sameServer(s.params as DualRouteLike, params) && !s.radioKey)) {
     /* ★★★ A RECEIVER SCREEN THAT IS NOT PART OF THE PAIRING ENDS IT — before its own audio starts on the same engine.
-     *  Somewhere the second voice cannot go (an UberSDR, a Kiwi, local hardware), the same server again (the picker
+     *  Somewhere the second voice cannot go (an UberSDR, a Kiwi, local hardware), the same RADIO again (the picker
      *  should have caught that), or a screen that arrived from outside the pairing altogether (the watch, a link, the
-     *  crash guard). Leaving either server playing under it would put two streams into one player. */
+     *  crash guard). Leaving either server playing under it would put two streams into one player.
+     *  ★★ The same SERVER is not the same radio: a server whose playing side is one radio behind its front door
+     *     (`radioKey`) is opened again so its radio list can offer the OTHER radio (Gesiima, #57). Choosing the radio
+     *     already playing there goes back to it (isFirstRadio). */
     abandon(true);
     return null;
   }
@@ -455,11 +461,33 @@ export function roleOnMount(params: Record<string, unknown> & DualRouteLike & { 
 }
 
 /** The screen in front keeps its side's card facts current (cheap: only on change). */
-export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mode' | 'endsAt' | 'soft' | 'name'>>) {
+export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mode' | 'endsAt' | 'soft' | 'name' | 'radioKey'>>,
+                           radioBase?: string | null) {
   const s = state.sides.find((x) => x.id === id);
   if (!s) return;
-  if ((Object.keys(p) as (keyof typeof p)[]).every((k) => s[k] === p[k])) return;
-  patchSide(id, p);
+  /* ★★ A side on one radio behind a front door comes BACK to that radio (a swap, the server list's ‹ Back): its return
+   *  address names it (`<base>/r/<id>`), which the screen adopts straight through — never the door's radio list, where
+   *  a returning screen would sit waiting for a choice already made. */
+  const wantBase = p.radioKey && radioBase ? radioBase : null;
+  const baseOk = !wantBase || s.params.baseUrl === wantBase;
+  if (baseOk && (Object.keys(p) as (keyof typeof p)[]).every((k) => s[k] === p[k])) return;
+  patchSide(id, baseOk ? p : { ...p, params: { ...s.params, baseUrl: wantBase } });
+}
+
+/** ★★ The joining screen's radio is the one the FIRST side is already playing (same server, same radio)? */
+export function isFirstRadio(myId: string | null, params: DualRouteLike & { baseUrl?: string }, radioKey: string): boolean {
+  if (!myId || state.phase !== 'paired' || state.sides[1]?.id !== myId) return false;
+  const first = state.sides[0];
+  return !!first && sameRadio({ params: first.params as DualRouteLike, radioKey: first.radioKey ?? '' }, { params, radioKey });
+}
+
+/** …then it is not a second side: drop it and go back to the first (its screen adopts the audio still playing). Returns
+ *  the params that bring the first side's screen up — the caller navigates, as for returnToSolo. */
+export function backToFirstRadio(myId: string): Record<string, unknown> | null {
+  if (state.phase !== 'paired' || state.sides[1]?.id !== myId) return null;
+  auxClose(myId);   // ★ belt and braces: the radio list held the connect, so nothing should be open
+  set({ ...state, ...detachSecond(state, myId) });
+  return returnToSolo();
 }
 
 /** Where each listener's audio socket goes, by session — so the pairing can reopen a survivor on the main pump.
@@ -557,10 +585,13 @@ export function abandon(quiet = false) {
   set({ ...(DUAL_OFF as DualCore<DualSide>), output: state.output, balance: state.balance }, quiet);
 }
 
-/** Is the picked server the one already playing? Then the picker goes BACK to it rather than open a second session. */
+/** Is the picked server the RADIO already playing? Then the picker goes BACK to it rather than open a second session.
+ *  ★★ Not when that side is one radio behind the server's front door: the server opens again and its radio list offers
+ *     the other radio (dualMix.pickSameServer — Gesiima's two dongles on one VibeServer, #57). */
 export function isSolo(params: DualRouteLike & { baseUrl?: string }): boolean {
   const s = soloSide();
-  return !!s && sameServer(s.params as DualRouteLike, params);
+  if (!s) return false;
+  return pickSameServer({ params: s.params as DualRouteLike, radioKey: s.radioKey ?? '' }, params) === 'back';
 }
 
 /** The card's answer to STILL LISTENING? — a TAP, a person's own action. `ping` is the smallest message there is:

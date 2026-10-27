@@ -24,6 +24,7 @@ import {
   Ramp, earGains, balanceGains, dualTargets, earIcon, countdownStage, shouldPopOut, fmtLeft, dualEligible, sameServer,
   DUAL_OFF, beginPicking, attachSecond, swap, endSide, markEnded, holds, transportFor, bgSide, terminalWhy,
   TERMINAL_WHY, DUAL_RAMP_SEC, clampBalance, pairingStart, secondServerHint, VFO_B_CLOSED_NOTE,
+  radioKeyOf, sameRadio, pickSameServer, detachSecond, sideName,
   type DualCore, type DualSideCore,
 } from '../src/services/dualMix.ts';
 
@@ -241,6 +242,50 @@ console.log('two servers OR VFO A/B, never both (Stuart, #57: "There will only b
   ok(/dual\.note \?/.test(pick), 'the server list\'s banner shows it');
   const mix = readFileSync('src/services/dualMix.ts', 'utf8');
   ok(!/a VFO A\/B pair the\s*\*\s*server has already panned/.test(mix), 'the old "fold a VFO A/B pair to mono" rule is gone from the notes');
+}
+
+console.log('pairing is per RADIO (Gesiima\'s two dongles on one VibeServer, #57 — Stuart: "treated as separate instances")');
+{
+  const vs = { serverType: 'vibeserver', isLocal: true, localHost: '192.168.1.5', localPort: 8073 };
+  ok(radioKeyOf('http://192.168.1.5:8073/r/rtl0') === '/r/rtl0' && radioKeyOf('http://192.168.1.5:8073/r/rtl0/') === '/r/rtl0',
+     'the radio key is the /r/<id> part of the address');
+  ok(radioKeyOf('http://192.168.1.5:8073') === '' && radioKeyOf(null) === '', 'an address that IS the radio has none');
+  const r0 = { params: vs, radioKey: '/r/rtl0' }, r1 = { params: vs, radioKey: '/r/rtl1' };
+  ok(sameRadio(r0, { params: { ...vs }, radioKey: '/r/rtl0' }), 'same server + same radio = the same radio');
+  ok(!sameRadio(r0, r1), 'two dongles on ONE server are two radios');
+  ok(!sameRadio(r0, { params: { ...vs, localPort: 8074 }, radioKey: '/r/rtl0' }), 'the same id on another server is another radio');
+  // The server list, the server already playing picked again:
+  ok(pickSameServer(r0, vs) === 'radios', 'a radio behind a front door → open the server: its radio list offers the other radio');
+  ok(pickSameServer({ params: vs, radioKey: '' }, vs) === 'back', 'a single-radio server → back to it (nothing else on it to choose)');
+  ok(pickSameServer(r0, { ...vs, localHost: '10.0.0.2' }) === 'other' && pickSameServer(null, vs) === 'other', 'another server → a second side as ever');
+  // The radio list on the joining screen chose the radio ALREADY playing: not a second side.
+  type S = DualSideCore;
+  const A: S = { id: 'A', transport: 'native', ended: null };
+  const paired: DualCore<S> = attachSecond(beginPicking(DUAL_OFF as DualCore<S>, A), { id: 'B', transport: 'aux', ended: null });
+  const back = detachSecond(paired, 'B');
+  ok(back.phase === 'picking' && back.sides.length === 1 && back.sides[0].id === 'A' && back.fg === null,
+     'detachSecond: back to picking with the first radio alone (its screen then adopts the audio still playing)');
+  ok(detachSecond(paired, 'A') === paired && detachSecond(back, 'B') === back, '…only the JOINING side, only while paired');
+  ok(sideName('Gesiima Pi', 'RTL 2') === 'Gesiima Pi · RTL 2' && sideName('Gesiima Pi', null) === 'Gesiima Pi'
+     && sideName('Pi', 'Pi') === 'Pi', 'the card says "server · radio" when there is a radio to name');
+  // ★ The two sessions never collide: each side IS its own session id (a uuid per radio screen), and the singleton guards
+  //   (claimNative / releaseNative / dualHolds / the aux socket) are keyed by that id, never by host.
+  const ds = readFileSync('src/services/dualServer.ts', 'utf8');
+  ok(/export function releaseNative\(id: string\)/.test(ds) && /export function dualHolds\(id: string \| null\)/.test(ds)
+     && /aux\.id === id/.test(ds) && !/releaseNative\([^)]*[Hh]ost/.test(ds), 'the pump and the second voice are owned by SESSION, not host');
+  ok(/sameServer\(s\.params as DualRouteLike, params\) && !s\.radioKey/.test(ds),
+     'a screen on the same server is turned away only when the side playing there is the server\'s only radio');
+  ok(/pickSameServer\(\{ params: s\.params as DualRouteLike, radioKey: s\.radioKey \?\? '' \}, params\) === 'back'/.test(ds),
+     'the server list goes back only to a single-radio server');
+  const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  const adopts = sdr.match(/setRadioBase\((?!null)/g) ?? [];
+  const guarded = (sdr.match(/bounceIfFirstRadio\((baseUrl|radioBaseUrl\(baseUrl, (id|d\.radios\[0\]\.id)\))\)\) return/g) ?? []).length;
+  ok(adopts.length === 3 && guarded === 3, `every radio adoption (chosen, door of one, an address naming its radio) passes the first-radio check first (${guarded}/${adopts.length})`);
+  ok(/noteStatus\(dualMyId, \{[^}]*name: dualName, radioKey: dualRadioKey \}, radioBase\)/.test(sdr), 'the card is told the radio and its name');
+  ok(/if \(dualRadioKey && radioBase\) back\.baseUrl = radioBase;/.test(sdr) && /baseUrl: wantBase/.test(ds),
+     'a side returns to its RADIO\'s address (adopted straight through), never the radio list');
+  const dr = readFileSync('src/utils/doorReturn.ts', 'utf8');
+  ok(/'autoTakeover', 'dualSide'\]/.test(dr), 'back to the radio list is a new listener: the old side\'s session does not ride along');
 }
 
 console.log(fails ? `\n✗ ${fails} failed` : '\n✓ all passed');
