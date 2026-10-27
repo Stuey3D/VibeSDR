@@ -18862,6 +18862,10 @@ Object.defineProperty(window, '__vibeAB', { configurable: true, get: () => () =>
   otherX: wf.vfo2 ? wf.hzToX(wf.vfo2.hz, ($("wf") as HTMLCanvasElement).clientWidth) : null,
 } : null });
 
+// ★ The same for the waterfall (scripts/test-web-waterfall-history.mjs): the renderer and the spectrum client, so a
+//   driver can tune / zoom exactly as the controls do and read where each history row put a station (GitHub #57).
+Object.defineProperty(window, '__vibeWf', { configurable: true, get: () => () => (spec && wf ? { wf, spec } : null) });
+
 /** The key's label and light, the stereo row, the mono hint — on every watch change and selection. */
 function abPaint() {
   if (!spec) return;
