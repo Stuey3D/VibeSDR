@@ -10122,7 +10122,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   rate, RDS subscriptions, raw IQ and everything already behind the admin password.
         //   ★ ONE LIST, TWO READERS: the clients' copy is src/services/dialChat.ts ASK_SHARED_SETTINGS.
         static const std::set<std::string> kGated = {
-            "tune", "mode", "bandwidth", "dab", "dab_service", "adsb", "ism", "ndb", "ais", "iqtune",
+            "tune", "mode", "bandwidth", "dab", "dab_service", "adsb", "ism", "ndb", "ais", "mode_resume", "iqtune",
             "gain", "agc", "rsp_control", "rsp_agc_restart", "ahf_control", "airspy_control", "hackrf_control", "antenna",
             "tunerbw", "sampleRate", "directSampling",
             "nr", "notch", "deemph", "stereo", "nfmvoice", "wsp", "nb", "nbx", "ceq", "ims", "autobw",
@@ -17493,6 +17493,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         if (type == "ndb_stats") { if (sock && g_ndb.running()) sendText(sock, g_ndb.stats()); return; }
         if (type == "ais") { aisControl(sock, msg); return; }
+        // ★★ A returning listener asking for the whole-radio mode it left in back — see modeResume
+        if (type == "mode_resume") { modeResume(sock, msg); return; }
         // ★ AIS: one ship's track (the map's tapped ship) — a read, to the asker only
         if (type == "ais_trail") { double m = 0; if (sock && jsonNum(msg, "mmsi", m) && m > 0) sendText(sock, g_ais.trailJson(uint32_t(m))); return; }
         if (type == "adsb") {
@@ -24587,16 +24589,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  the beta16 start landed on 9A as configured, a second socket of the SAME session connected, the first
              *  closed — "last listener left" — DAB torn down, the radio back on 96.6, all in one second. The returning
              *  socket was the same session, so it was neither landed again nor resumed. A page reload in ADS-B or ISM
-             *  dropped those the same way. So the leave WAITS kModeLeaveGraceS; anyone arriving cancels it
+             *  dropped those the same way. So the leave WAITS modeLeaveGraceS(); anyone arriving cancels it
              *  (resumeCaptureIdle, the same early connect step that cancels the idle park), and the park is armed only
              *  once the leave has happened — a 3 s RELEASE under a running DAB pipeline is the one thing it cannot survive. */
             if (stillEmpty && !stopping.load() && (g_dabMode.load(std::memory_order_relaxed) || g_ismMode.load(std::memory_order_relaxed)
                                                    || (g_ndbMode.load(std::memory_order_relaxed) && ndbOrigin_ != "background")
                                                    || g_aisMode.load(std::memory_order_relaxed)
                                                    || (g_adsbMode.load(std::memory_order_relaxed) && !adsbKeepHolds()))) {
-                modeLeaveDueAt.store(nowSecs() + kModeLeaveGraceS);
+                modeLeaveDueAt.store(nowSecs() + modeLeaveGraceS());
                 LOGI("last listener left — %s stays up for %.0f s in case they are only reconnecting",
-                     g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : g_ndbMode.load() ? "NDB" : g_aisMode.load() ? "AIS" : "ADS-B", kModeLeaveGraceS);
+                     g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : g_ndbMode.load() ? "NDB" : g_aisMode.load() ? "AIS" : "ADS-B", modeLeaveGraceS());
             }
             else if (stillEmpty && !stopping.load() && g_adsbMode.load(std::memory_order_relaxed))
                 LOGI("[ADS-B] last listener left — staying in ADS-B (kept running when nobody is connected)");
@@ -28074,9 +28076,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
 
     /** ★★★ The deferred leave of a whole-radio mode — see "A WHOLE-RADIO MODE OUTLIVES A SOCKET SWAP" at the
-     *  disconnect site. Run from the tick once kModeLeaveGraceS has passed with nobody here. */
-    static constexpr double kModeLeaveGraceS = 5.0;
+     *  disconnect site. Run from the tick once modeLeaveGraceS() has passed with nobody here. */
     std::atomic<double> modeLeaveDueAt{0.0};
+    /** ★★★ HOW LONG A WHOLE-RADIO MODE WAITS FOR ITS LAST LISTENER TO COME BACK (2026-10-27). It was a flat 5 s — written
+     *  for a socket SWAP — and a phone switching apps is longer than that. Stuart, iPhone, V12 498/499: "I was in the map
+     *  view for NDB or ADS-B and when I moved to another app … when I switched back the map dropped back to a waterfall
+     *  view on the previous frequency." ADS-B, NDB, ISM and AIS send no audio, so the app lets go of the audio session
+     *  (setQuiet) and iOS suspends it within seconds of going to the background; its sockets go with it (at once on a
+     *  poor cellular link), and five seconds later the radio was given back.
+     *  ★★ So it waits as long as the idle park would — the owner's grace period, the same "somebody may be coming
+     *     back" judgement — capped at 60 s: a quick look at another app keeps the mode, and a radio nobody returns to
+     *     is still given back (and then parked, or handed to background decoding) within a minute. Never below the old
+     *     5 s, which is what a socket swap needs; an owner who parks at once (grace 0) gets exactly the old behaviour.
+     *  ★ A longer absence is answered by `mode_resume` (modeResume): the returning listener's app asks, and the server
+     *    re-enters only if nobody else is here and nobody has touched the radio since. */
+    static double modeLeaveGraceS() {
+        const double g = g_vsIdleGraceSec.load();
+        return std::max(5.0, std::min(60.0, std::isfinite(g) ? g : 5.0));
+    }
+    /** ★★ WHAT THE LAST LISTENER LEFT BEHIND — the whole-radio mode the leave below ended because nobody was here, and
+     *  the dial it gave back. Read by modeResume: the same listener coming back may have it again, as long as the radio
+     *  is still exactly where the leave put it (nobody has tuned it since) and nobody else is on it. Written on the
+     *  housekeeping thread, read on a socket's reader, hence the lock. */
+    struct ModeAutoLeft { std::string kind; double at = 0, audio = 0, rtl = 0; };
+    std::mutex   modeAutoLeftMtx_;
+    ModeAutoLeft modeAutoLeft_;
+    void noteModeAutoLeft(const char* kind) {
+        std::lock_guard<std::mutex> lk(modeAutoLeftMtx_);
+        modeAutoLeft_ = { kind, nowSecs(), audioFreq.load(), rtlCenter.load() };
+    }
     void leaveWholeRadioModesNow() {
         if (g_dabMode.load(std::memory_order_relaxed)) {
                 /* ★★★ REMEMBER THE DIAL, THEN HAND THE HARDWARE BACK CLEANLY.
@@ -28119,6 +28147,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!bgOwns) {
                 LOGI("[NDB] last listener left — the receiver goes back to where it was");
                 ndbLeave(false);
+                noteModeAutoLeft("ndb");
             }
         }
         if (g_ismMode.load(std::memory_order_relaxed)) {
@@ -28128,6 +28157,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!bgOwns) {
                 LOGI("[ISM] last listener left — the receiver goes back to where it was");
                 ismLeave(false);
+                noteModeAutoLeft("ism");
             }
         }
         if (g_aisMode.load(std::memory_order_relaxed)) {
@@ -28137,6 +28167,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!bgOwns) {
                 LOGI("[AIS] last listener left — the receiver goes back to where it was");
                 aisLeave(false);
+                noteModeAutoLeft("ais");
             }
         }
         if (g_adsbMode.load(std::memory_order_relaxed)) {
@@ -28145,8 +28176,62 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             else {
                 LOGI("[ADS-B] last listener left — the receiver goes back to where it was");
                 adsbLeave(false);
+                noteModeAutoLeft("adsb");
             }
         }
+    }
+
+    /** ★★★ `mode_resume` — A LISTENER COMING BACK TO THE WHOLE-RADIO MODE THEY LEFT IN (2026-10-27, Stuart's iPhone: the
+     *  NDB / ADS-B map "dropped back to a waterfall view on the previous frequency" after a switch to another app).
+     *  Past the grace (modeLeaveGraceS) the radio has been given back, telling nobody — nobody was here. The returning
+     *  app, which was in the mode when it went, asks for it again: a restoration of that listener's own last action,
+     *  so it is granted ONLY where nobody could be disturbed by it —
+     *    · the leave was ours, for want of listeners (modeAutoLeft_), and of this mode;
+     *    · nobody has moved the radio since: it is still on the dial the leave gave back, in no other whole-radio mode;
+     *    · nobody else is on it now (the shared-dial contract: a returning listener never yanks a room into ADS-B).
+     *  Anything else is refused IN WORDS, to the asker only, and the app says why. Still in the mode (inside the grace)
+     *  is a plain yes — the reports carry on. ★ Gated by "ask before tuning" at the reader like the mode keys (kGated).
+     *  ★ An older server ignores the unknown type, and the app gives up after a few seconds: never a blind re-entry. */
+    void modeResume(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (!sock) return;
+        const std::string kind = jsonStr(msg, "mode");
+        const char* name = kind == "adsb" ? "ADS-B" : kind == "ndb" ? "NDB" : kind == "ism" ? "ISM" : kind == "ais" ? "AIS" : nullptr;
+        if (!name) return;
+        auto answer = [&](bool ok, const std::string& why) {
+            sendText(sock, "{\"type\":\"mode_resume\",\"mode\":\"" + kind + "\",\"ok\":" + (ok ? "1" : "0")
+                           + (why.empty() ? std::string() : ",\"why\":\"" + dabEscape(why) + "\"") + "}");
+        };
+        const bool adsb = g_adsbMode.load(), ndb = g_ndbMode.load(), ism = g_ismMode.load(), ais = g_aisMode.load();
+        if ((kind == "adsb" && adsb) || (kind == "ndb" && ndb) || (kind == "ism" && ism) || (kind == "ais" && ais)) {
+            answer(true, "");
+            return;
+        }
+        ModeAutoLeft rec;
+        { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); rec = modeAutoLeft_; }
+        int here;
+        { std::lock_guard<std::mutex> lk(clientMtx); here = specListenerCountLocked(); }
+        std::string why;
+        if (rec.kind != kind || rec.at <= 0.0)
+            why = std::string("The receiver is no longer in ") + name + " \xe2\x80\x94 it has been restarted or used since you left.";
+        else if (adsb || ndb || ism || ais || g_dabMode.load())
+            why = std::string("The receiver left ") + name + " while you were away and is in another mode now.";
+        else if (std::fabs(audioFreq.load() - rec.audio) > 1.0 || std::fabs(rtlCenter.load() - rec.rtl) > 1.0)
+            why = std::string("The receiver left ") + name + " while you were away, and somebody has tuned it since.";
+        else if (here > 1)
+            why = std::string("The receiver left ") + name + " while you were away, and somebody else is listening now "
+                  "\xe2\x80\x94 it was not moved under them.";
+        if (!why.empty()) {
+            LOGI("[%s] a returning listener asked for it back \xe2\x80\x94 refused: %s", name, why.c_str());
+            answer(false, why);
+            return;
+        }
+        { std::lock_guard<std::mutex> lk(modeAutoLeftMtx_); modeAutoLeft_ = {}; }
+        LOGI("[%s] a returning listener asked for it back %.0f s after the last listener left \xe2\x80\x94 nobody else is "
+             "here and the radio is where it was left, so it goes back in", name, nowSecs() - rec.at);
+        answer(true, "");
+        // ★ Through the mode's own entry, exactly as its key — every refusal there (a blocked mode, a rate it cannot run
+        //   at) still answers with its own x_error.
+        handleControl(sock, "{\"type\":\"" + kind + "\",\"on\":1}");
     }
 
     void armIdlePark() {
@@ -28191,9 +28276,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (idleParkDueAt.exchange(0.0) > 0.0)
             LOGI("%s", fromBg ? "background decoding takes the radio — idle park cancelled"
                               : "listener returned within the grace period — idle park cancelled");
-        // ★ and the deferred leave of DAB / ISM / ADS-B — they come back to the mode they left (see kModeLeaveGraceS)
+        // ★ and the deferred leave of DAB / ISM / ADS-B — they come back to the mode they left (see modeLeaveGraceS)
         if (!fromBg && modeLeaveDueAt.exchange(0.0) > 0.0)
-            LOGI("listener returned within %.0f s — %s kept", kModeLeaveGraceS,
+            LOGI("listener returned within %.0f s — %s kept", modeLeaveGraceS(),
                  g_dabMode.load() ? "DAB" : g_ismMode.load() ? "ISM" : g_aisMode.load() ? "AIS" : "ADS-B");
         // ★★ TAKE THE RADIO BACK FIRST, because everything below assumes a device. If another
         //    program has it we carry on WITHOUT one rather than failing the connection: the
@@ -29458,7 +29543,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //    working picture is worth risking (Stuart, 2026-08-08: "I'd rather not break
                 //    something that works"). The COST is real and is now stated on the toggle that
                 //    chooses it, which is where an owner can weigh it.
-                // ── ★ The deferred leave of a whole-radio mode (kModeLeaveGraceS) — re-justified now, then the park ──
+                // ── ★ The deferred leave of a whole-radio mode (modeLeaveGraceS) — re-justified now, then the park ──
                 if (const double due = modeLeaveDueAt.load(); due > 0.0 && nowSecs() >= due && !stopping.load()) {
                     bool empty;
                     { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
