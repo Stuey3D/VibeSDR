@@ -186,7 +186,16 @@ static int runReal(int argc, char** argv) {
     const char* path = argv[2];
     const double utc0 = std::atof(argv[3]), recCentre = std::atof(argv[4]), dial = std::atof(argv[5]);
     int L = 25; double hwOff = 15000; bool direct = false, chan = false, live = false, oldStamp = false, oldSlice = false; double secs = 1e9, stallMs = 0;
+    /* ★ V12 2026-10-27 (v12-band-dc) — THE RADIO'S OWN FRONT END, modelled: `dc=<dBFS>` a dongle's DC at the capture centre,
+     *  `wn=<dBFS>` white noise over the whole capture, `u8=<gain>` the RTL's 8-bit ADC (×gain, rounded, clamped), `clean`
+     *  the server's own capture cleaner (vibedsp::IqCleaner — the slow DC mean and the I/Q imbalance — and the wide
+     *  impulse blanker, which is on by default below 30 MHz), in that order, as the server's DSP thread sees it. */
+    double dcDb = NAN, wnDb = NAN, u8Gain = 0; bool clean = false;
     for (int i = 6; i < argc; ++i) {
+        if (!std::strncmp(argv[i], "dc=", 3)) dcDb = std::atof(argv[i] + 3);
+        if (!std::strncmp(argv[i], "wn=", 3)) wnDb = std::atof(argv[i] + 3);
+        if (!std::strncmp(argv[i], "u8=", 3)) u8Gain = std::atof(argv[i] + 3);
+        if (!std::strcmp(argv[i], "clean")) clean = true;
         if (!std::strncmp(argv[i], "L=", 2)) L = std::atoi(argv[i] + 2);
         if (!std::strncmp(argv[i], "hw=", 3)) hwOff = std::atof(argv[i] + 3);
         if (!std::strncmp(argv[i], "secs=", 5)) secs = std::atof(argv[i] + 5);
@@ -273,9 +282,23 @@ static int runReal(int argc, char** argv) {
         uint64_t produced = 0;
         const int chunk = (int)rate / 20;
         std::vector<cf32> xb[kMaxExtraSlices]; vibedsp::Channelizer::ExtractCtx xc[kMaxExtraSlices]; std::vector<float> xp;
+        vibedsp::IqCleaner cleaner; vibedsp::ImpulseBlanker nb;
+        if (clean) { cleaner.configure(fs); nb.configure(fs); }
+        std::mt19937 rng(7); std::normal_distribution<float> nd(0.0f, 1.0f);
+        const cf32 dcV = std::isfinite(dcDb) ? std::polar((float)std::pow(10.0, dcDb / 20.0), 0.7f) : cf32(0, 0);
+        const float wnS = std::isfinite(wnDb) ? (float)std::pow(10.0, wnDb / 20.0) / std::sqrt(2.0f) : 0.0f;
         for (size_t o = 0; o < x.size(); o += (size_t)chunk) {
             const int k = (int)std::min<size_t>((size_t)chunk, x.size() - o);
             ip.run(&x[o], k, up);
+            if (dcV != cf32(0, 0) || wnS > 0 || u8Gain > 0) for (cf32& z : up) {
+                z += dcV;
+                if (wnS > 0) z += cf32(wnS * nd(rng), wnS * nd(rng));
+                if (u8Gain > 0) {
+                    auto q = [&](float v) { return (std::min(255.0f, std::max(0.0f, std::round(v * (float)u8Gain * 127.5f + 127.5f))) - 127.5f) / 127.5f; };
+                    z = cf32(q(z.real()), q(z.imag()));
+                }
+            }
+            if (clean) { cleaner.process(up.data(), (int)up.size()); nb.process(up.data(), (int)up.size()); }
             produced += up.size();
             const double chunkUtc = live ? clk() : base + (double)produced / fs;
             if (chan) {
