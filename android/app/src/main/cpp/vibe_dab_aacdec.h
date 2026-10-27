@@ -35,7 +35,10 @@
 #elif defined(__unix__) || defined(__APPLE__)
 #if defined(__APPLE__)
 #include <AudioToolbox/AudioToolbox.h>   // ★ outside the namespace below — system headers must not be wrapped in it
-#include <libproc.h>                     // ★ proc_pid_rusage: the FFmpeg child's CPU for the DAB panel
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <libproc.h>                     // ★ proc_pid_rusage: the FFmpeg child's CPU for the DAB panel — macOS only:
+#endif                                   //   the iOS SDK has no libproc, and iOS never runs an FFmpeg child (build_ios.sh)
 #include <mach/mach_time.h>
 #endif
 #include <cerrno>
@@ -472,7 +475,9 @@ public:
      *  proc_pid_rusage on macOS. Cumulative for the current child; -1 when there is none. */
     double cpuSeconds() const {
         if (pid_ <= 0) return -1.0;
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !TARGET_OS_OSX
+        return -1.0;                     // ★ iOS: no child process to measure
+#elif defined(__APPLE__)
         rusage_info_v2 ri{};
         if (proc_pid_rusage(pid_, RUSAGE_INFO_V2, reinterpret_cast<rusage_info_t*>(&ri)) != 0) return -1.0;
         static const double tick = [] { mach_timebase_info_data_t tb{}; mach_timebase_info(&tb); return double(tb.numer) / double(tb.denom) * 1e-9; }();
