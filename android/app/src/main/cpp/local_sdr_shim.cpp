@@ -13646,7 +13646,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 char b[64]; std::snprintf(b, sizeof b, "%s%.1f=%.0f/%.0f", k ? " " : "", adsbGains_[size_t(s.order()[k])] / 10.0, s.rates()[k], s.floors()[k]);
                 tried += b;
             }
-            LOGI("[ADS-B] gain search (dB=msg/s/floor dBFS): %s -> %.1f dB", tried.c_str(), adsbGainSet_ / 10.0);
+            if (adsbCtl_.trial().active())
+                LOGI("[ADS-B] gain search (dB=msg/s/floor dBFS): %s -> %.1f dB, then %.1f dB tried against it A/B", tried.c_str(),
+                     adsbGains_[size_t(adsbCtl_.trial().current())] / 10.0, adsbGains_[size_t(adsbCtl_.trial().proposed())] / 10.0);
+            else LOGI("[ADS-B] gain search (dB=msg/s/floor dBFS): %s -> %.1f dB", tried.c_str(), adsbGainSet_ / 10.0);
         }
         if (adsbCtl_.why() != adsbLoggedWhy_ && !adsbCtl_.busy()) {
             adsbLoggedWhy_ = adsbCtl_.why();

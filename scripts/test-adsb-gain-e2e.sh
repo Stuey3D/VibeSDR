@@ -17,7 +17,7 @@ sleep 1
 VIBESERVER_CONFIG="$T/config.json" VIBESERVER_DATA_DIR="$T/data" nice -n 15 "$BIN" \
   --tcp 127.0.0.1:47341 --port 47342 --rate 2400000 --freq 96100000 > "$T/server.log" 2>&1 & SRV=$!
 for i in $(seq 1 40); do curl -s -o /dev/null http://127.0.0.1:47342/ && break; sleep 0.5; done
-OUT=$(node --max-old-space-size=256 scripts/probe-adsb-gain.mjs http://127.0.0.1:47342 "${VIBE_ADSB_GAIN_SECS:-90}" --stay)
+OUT=$(node --max-old-space-size=256 scripts/probe-adsb-gain.mjs http://127.0.0.1:47342 "${VIBE_ADSB_GAIN_SECS:-130}" --stay)
 echo "$OUT"
 # ★★ A RECONNECT INSIDE THE 5 s GRACE (2026-10-26): the new session's plain landing retuned the tuner to 96.1 MHz under a
 #    mode still on — the floor 13 dB up, no aircraft, the gain walked down. The second visit must find the sky as it was.

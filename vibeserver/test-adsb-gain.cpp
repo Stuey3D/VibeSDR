@@ -106,6 +106,15 @@ int main() {
         ok(std::fabs(kRtl[size_t(r2.lastSettled)] / 10.0 - 40.2) < 0.05, "  ...and with a quiet floor (no ceiling), the message cliff alone still lands it at 40.2");
         ok(c2.why().find("decodes the most") != std::string::npos || c2.why().find("fell away") != std::string::npos
            || c2.why().find("checked one step") != std::string::npos, "  ...saying it is the messages that chose");
+        // ★★ a V4L whose floor is a little HIGHER (−29 at 40.2: over the ceiling) — the ceiling would cut it to 37.2
+        //    (182 msg/s against 196); one rung over is kept because the sky clearly says so
+        Feed hi = v; hi.floor = [](double g) { return -29.0 + 1.5 * (g - 40.2); };
+        vibeadsb::GainControl c3;
+        Run r3 = sim(c3, hi, 3600);
+        std::printf("   V4L with its floor at -29 dBFS @ 40.2: settled %.1f dB, why: %s\n", kRtl[size_t(r3.lastSettled)] / 10.0, c3.why().c_str());
+        ok(std::fabs(kRtl[size_t(r3.lastSettled)] / 10.0 - 40.2) < 0.05, "  ...a V4L whose floor sits over the ceiling at 40.2 still keeps 40.2: one rung over, earned in messages");
+        ok(r3.settledChanges <= 1, "  ...and the noise guard does not take it back down (the ceiling moved with it)");
+        ok(r3.maxIdx < idxOf(44.5), "  ...and still never the cliff");
     }
     // ★★ THE PI 2: a bare antenna, no LNA — the floor never reaches the ceiling, more gain hears more
     {
@@ -220,8 +229,11 @@ int main() {
         Feed fa; fa.floor = [](double g) { return -21.6 + (g - 49.6); }; fa.msgs = [](double g) { return g > 41 ? 2000.0 : 1300.0; };
         fa.floorJitter = 0.05;
         vibeadsb::GainControl c; Run r = sim(c, fa, 3 * 3600);
-        ok(r.maxIdx <= idxOf(43.4) && kRtl[size_t(r.lastSettled)] / 10.0 <= 40.3,
-           "a rung over the ceiling is never kept for its messages (the dynamic range is the ceiling, messages choose under it)");
+        std::printf("   a feed whose messages jump +54 %% one ramp step over the ceiling: settled %.1f dB, why: %s\n", kRtl[size_t(r.lastSettled)] / 10.0, c.why().c_str());
+        ok(r.maxIdx <= idxOf(43.4), "a feed that decodes far more one step over the ceiling: never further than that one step, in 3 h");
+        ok(kRtl[size_t(r.lastSettled)] / 10.0 <= 43.5 && c.why().find("one step over") != std::string::npos,
+           "  ...and when it keeps that step it says why (one step over the target, earned in messages)");
+        // the FlightAware shape (+~0.3 %% a rung) never earns it — checked above (settles 40.2)
     }
 
     // ★★★ GainTrial — a proposed step is kept only for more messages (the Pi 500 V4L: 250 -> 170 msg/s after a cut)

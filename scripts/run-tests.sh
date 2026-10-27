@@ -1133,7 +1133,7 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 
 # ★★★ V12 THE ADS-B GAIN RULE end to end (2026-10-26): Stuart's FlightAware clip (filtered LNA feed) replayed so that it
 #     follows the gain the server writes (fake-rtl-tcp --adsb-gain); the ramp must end at 38.6–40.2 dB (where dump1090-fa
-#     holds it), not 49.6, the reason naming the noise floor, no feed warning. ~1.5 min. Needs VIBESERVER_BIN and
+#     holds it), not 49.6, the reason naming the noise floor, no feed warning, and a reconnect inside the 5 s grace finds the sky as it was. ~2.5 min. Needs VIBESERVER_BIN and
 #     VIBE_ADSB_CLIP (exit 3 = not run).
 printf '\n\033[1m── ADS-B gain rule (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-vibeserver/build/vibeserver}" bash scripts/test-adsb-gain-e2e.sh; rc=$?

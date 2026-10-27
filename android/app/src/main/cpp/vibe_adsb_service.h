@@ -512,6 +512,11 @@ private:
  *    the last good one and the one over the ceiling is then tried A/B (the ramp skips every other rung).
  *    ★ The middle already over the ceiling (a hot feed): DESCEND, a rung every 4 s, until the floor is under it.
  *    ★ An empty sky: the noise rule alone — the highest rung the ramp found under the ceiling.
+ *    ★★ ONE RUNG OVER, IF THE SKY CLEARLY SAYS SO. The rung just above the choice is then tried A/B even when it is over
+ *       the ceiling, and kept only if it CLEARLY decodes more (3 % and two standard deviations) — the ceiling is then
+ *       raised to that rung's floor for this run (`allowDb_`), and the reason says so. −30 dBFS is calibrated on one
+ *       filtered feed; an unfiltered one whose floor sits a little higher (the V4L — its cliff, not its floor, is its
+ *       limit) is not cut below its best for it. The FlightAware feed's next rung adds ~1.5 % — inside the margin.
  *  STEADY: the floor (smoothed, α 0.3 a 2-s tick, and only once a gain write has settled) more than 1 dB over the
  *    ceiling for 10 s → one rung down, at once (dump1090-fa's change delay; the half-step hysteresis of its range rule
  *    is our 1 dB, about half a rung at the top of an R820T's list). Every ten minutes one rung either side, alternately,
@@ -547,7 +552,7 @@ public:
     int begin(const std::vector<int>& gains, bool levelHeld, double t) {
         gains_ = gains; held_ = levelHeld; trial_.cancel(); search_.cancel();
         floorEma_ = NAN; strongEma_ = 0; overSince_ = strongSince_ = warnSince_ = clearSince_ = -1;
-        upInhibit_ = 0; strongRetryAt_ = 0; exploreAt_ = 0; exploreUp_ = false; warn_ = false; farLog_.clear(); trialForStrong_ = false;
+        upInhibit_ = 0; strongRetryAt_ = 0; exploreAt_ = 0; allowDb_ = 0; trialOver_ = false; exploreUp_ = false; warn_ = false; farLog_.clear(); trialForStrong_ = false;
         const int n = int(gains_.size());
         if (n == 0) { idx_ = -1; phase_ = Phase::Off; return -1; }
         const int mid = n / 2;
@@ -652,7 +657,10 @@ private:
         char b[200];
         const double g = gainDb(idx_), f = floorShown();
         switch (r) {
-        case Reason::Target: std::snprintf(b, sizeof b, "noise floor at its target (%.0f dBFS, 30 dB under full scale) — more gain would only fill the ADC with noise", f); break;
+        case Reason::Target:
+            if (allowDb_ > 0) std::snprintf(b, sizeof b, "noise floor %.0f dBFS, one step over its target because the sky clearly decodes more there", f);
+            else std::snprintf(b, sizeof b, "noise floor at its target (%.0f dBFS, 30 dB under full scale) — more gain would only fill the ADC with noise", f);
+            break;
         case Reason::Top:    std::snprintf(b, sizeof b, "the top of the radio's range — the noise floor (%.0f dBFS) still has room", f); break;
         case Reason::Cliff:  std::snprintf(b, sizeof b, "messages fell away above %.1f dB — the front end overloads there", g); break;
         case Reason::Peak:   std::snprintf(b, sizeof b, "decodes the most messages here, noise floor %.0f dBFS", f); break;
@@ -709,13 +717,24 @@ private:
             setWhy(s.ceilingAt() >= 0 ? Reason::Target : s.cliff() ? Reason::Cliff : idx_ == n - 1 ? Reason::Top : Reason::Peak);
         }
         lookedDown_ = false;
-        // ★ the ramp skips every other rung: the one between the choice and the rung over the ceiling is tried A/B
-        if (s.ceilingAt() > 0) {
-            const int over = s.order()[size_t(s.ceilingAt())];
-            if (idx_ + 1 < over && predictedFloor(idx_ + 1) <= GainTarget::kFloorDbfs) {
+        // ★ the ramp skips every other rung: the one above the choice is tried A/B — under the ceiling, or one over it
+        //   (kept then only on a clear win: see the class note)
+        if (s.ceilingAt() > 0 && s.found()) {   // ★ an empty sky cannot judge a step: the noise rule's choice stands
+            const size_t k = size_t(s.ceilingAt());
+            const int over = s.order()[k];
+            double rBest = 0;
+            for (size_t j = 0; j < k; ++j) if (s.order()[j] == idx_) rBest = s.rates()[j];
+            if (s.rates()[k] > 1.05 * rBest && rBest >= GainSearch::kQuietMsgs && over - idx_ <= 2) {
+                // the rung over the ceiling read clearly better in the ramp: it gets its A/B
+                trialOver_ = true; overFloor_ = s.floors()[k];
+                idx_ = trial_.start(idx_, over, t, false);
+            } else if (idx_ + 1 < over) {
+                const double pf = predictedFloor(idx_ + 1);
+                trialOver_ = pf == pf && pf > GainTarget::kFloorDbfs;
+                overFloor_ = pf;
                 idx_ = trial_.start(idx_, idx_ + 1, t, false);
-                trialForStrong_ = false;
             }
+            trialForStrong_ = false;
         }
     }
 
@@ -733,14 +752,23 @@ private:
             if (trialForStrong_ && trial_.proposedWon()) { setWhy(Reason::Strong); upInhibit_ = t + kStrongInhibitS; }
             // ★ pressure whose cut CLEARLY lost messages is not tried again for ten minutes — no dips every 30 s
             else if (trialForStrong_) strongRetryAt_ = t + kExploreS;
+            else if (trialOver_ && trial_.proposedWon()) {
+                // ★★ one rung over the ceiling, earned in messages: the ceiling moves up to it for this run
+                allowDb_ = std::max(allowDb_, overFloor_ - GainTarget::kFloorDbfs + 0.5);
+                char b[200];
+                std::snprintf(b, sizeof b, "one step over the noise target (%.0f dBFS): it clearly decodes more here (%.0f against %.0f msg/s)",
+                              overFloor_, trial_.rate(1), trial_.rate(0));
+                why_ = b; reason_ = Reason::Moved;
+            }
             else setWhy(trial_.proposedWon() ? Reason::Moved : Reason::Kept);
-            if (!held_ && (reason_ == Reason::Kept || reason_ == Reason::Moved) && floorShown() == floorShown() &&
-                predictedFloor(std::min(n - 1, idx_ + 1)) > GainTarget::kFloorDbfs && idx_ < n - 1) setWhy(Reason::Target);
-            trialForStrong_ = false;
+            if (!held_ && !(trialOver_ && trial_.proposedWon()) && (reason_ == Reason::Kept || reason_ == Reason::Moved) &&
+                floorShown() == floorShown() && predictedFloor(std::min(n - 1, idx_ + 1)) > GainTarget::kFloorDbfs && idx_ < n - 1)
+                setWhy(Reason::Target);
+            trialForStrong_ = false; trialOver_ = false;
             return;
         }
         // ★★ THE NOISE CEILING, with hysteresis: over by more than 1 dB for 10 s → one rung down, no trial
-        if (!held_ && floorEma_ == floorEma_ && floorEma_ > GainTarget::kFloorDbfs + GainTarget::kDownHystDb) {
+        if (!held_ && floorEma_ == floorEma_ && floorEma_ > GainTarget::kFloorDbfs + allowDb_ + GainTarget::kDownHystDb) {
             if (overSince_ < 0) overSince_ = t;
             if (t - overSince_ >= GainTarget::kChangeDelayS && t - changedAt_ >= GainTarget::kChangeDelayS && idx_ > 0) {
                 --idx_; setWhy(Reason::Target); return;
@@ -750,7 +778,7 @@ private:
         if (strongEma_ > kStrongMax && h.msgsPerSec >= 5 && t >= strongRetryAt_) {
             if (strongSince_ < 0) strongSince_ = t;
             if (t - strongSince_ >= kStrongHoldS && idx_ > 0) {
-                strongSince_ = -1; trialForStrong_ = true;
+                strongSince_ = -1; trialForStrong_ = true; trialOver_ = false;
                 idx_ = trial_.start(idx_, idx_ - 1, t, true);
                 return;
             }
@@ -763,7 +791,7 @@ private:
             const bool upOk = up < n && t >= upInhibit_ &&
                               (held_ ? up <= start_ : (floorShown() == floorShown() && predictedFloor(up) <= GainTarget::kFloorDbfs));
             const int nb = exploreUp_ ? (upOk ? up : -1) : dn;
-            if (nb >= 0 && nb < n) { trialForStrong_ = false; idx_ = trial_.start(idx_, nb, t, false); }
+            if (nb >= 0 && nb < n) { trialForStrong_ = false; trialOver_ = false; idx_ = trial_.start(idx_, nb, t, false); }
         }
     }
 
@@ -789,6 +817,8 @@ private:
 
     std::vector<int> gains_;
     bool held_ = false, exploreUp_ = false, warn_ = false, trialForStrong_ = false, lookedDown_ = false, haveFar_ = false;
+    bool trialOver_ = false;      ///< the trial running is the one rung over the ceiling
+    double allowDb_ = 0, overFloor_ = NAN;   ///< how far over the ceiling a clear message win has earned (this run)
     int idx_ = -1, start_ = 0, aircraft_ = 0;
     Phase phase_ = Phase::Off;
     Reason reason_ = Reason::Peak;

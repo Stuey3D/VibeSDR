@@ -247,9 +247,11 @@ is what told the two apart** — both have an LNA; only the unfiltered one has a
   graphs1090's "noise"** (the mean power of everything not decoded, fruit included). So dump1090-fa's 30 dB of range ≈
   our −30, and its graphs1090 "−20 dBFS" ≈ our −31.
 - **Entry ramp**: middle up, every other rung, ~6.5 s each, measuring messages *and* the floor. Stops at the first rung
-  over the ceiling (choice made among the rungs below), at a message cliff, or two rungs past the peak; the skipped rung
-  below the ceiling is then tried A/B. A middle already over the ceiling steps down a rung every 4 s. An empty sky: the
-  highest rung under the ceiling.
+  over the ceiling (choice made among the rungs below), at a message cliff, or two rungs past the peak; the rung above
+  the choice is then tried A/B. **One step over the ceiling is allowed only on a clear message win** (3 % and 2σ, A/B):
+  −30 is calibrated on one filtered feed, and an unfiltered one whose floor sits a little higher (a V4L whose limit is
+  its cliff) must not be cut below its best for it; the FlightAware feed's next rung adds ~1.5 % and never earns it.
+  A middle already over the ceiling steps down a rung every 4 s. An empty sky: the highest rung under the ceiling.
 - **Steady**: floor (smoothed) over the ceiling by more than 1 dB for 10 s → one rung down. Every ten minutes one rung
   either side, kept only if it clearly decodes more — and up only when the rung above is predicted under the ceiling.
 - **Strong-reply pressure**: > 30 % of replies within 3 dB of full scale for 30 s proposes a rung down (A/B, taken
