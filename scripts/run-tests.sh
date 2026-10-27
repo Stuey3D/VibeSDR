@@ -94,6 +94,9 @@ flags_for() {
     # ★★ V12 Band spots through the SERVER'S route: the channeliser slice (vibe_wide_tap.h / the per-listener extract) — tones at
     #    every mode's passband edges on every band at five capture rates, and the slice the right way up (2026-10-27).
     test-band-slice)       echo "-O2 -I $VDSP -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
+    # ★★ V12 Band spots and the dongle's DC (vibe_band_slice.h bandDcCentre, 2026-10-27): where the DC fell on every band,
+    #    and that the placement keeps it off every mode and out of every slice. Needs the registry (the engines link in).
+    test-band-dc)          echo "-O2 -I $VDSP -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
     # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
     test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
@@ -278,7 +281,7 @@ deps_for() {
     test-ftx-sensitivity) echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-js8)           echo "android/app/src/main/cpp/decoders/digimodes/js8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/digimodes/js8_ldpc.cpp android/app/src/main/cpp/decoders/digimodes/js8_message.cpp" ;;
     test-ft2)           echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
-    test-band-slice) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
+    test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
     test-decoder-hosts|test-bench-decoders|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
@@ -300,7 +303,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-band-slice|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty)
+    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-cw|test-dsc|test-psk|test-jtty)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
@@ -1281,6 +1284,19 @@ if [ -n "${VIBESERVER_BIN:-}" ] && scripts/test-jtty.sh clip "$OUT/jtty-clip.cu8
   rm -f "$OUT/jtty-clip.cu8"
 else
   echo '   not run — needs VIBESERVER_BIN (and the bench to build: scripts/test-jtty.sh)'; notrun=$((notrun+1))
+fi
+
+# ★★★ V12 BAND SPOTS AND THE TUNER'S DC (2026-10-27, v12-band-dc): a fake rtl_tcp with the dongle's 15 kHz offset tuning
+#     (VIBE_TCP_DC_OFFSET_HZ), a dirty DC at its tuned centre and six FT8 stations round 40 m's 7.0756 — BEFORE
+#     (VIBE_BAND_DC=0) the DC sits on FT8 and Band decodes nothing; AFTER the tuner moves the DC outside the slices, all six
+#     are spotted at their RF, a second listener's USB tone stays within 1 Hz through Band on and off, and Band off puts
+#     the tuner back. Needs VIBESERVER_BIN.
+printf '\n\033[1m── Band spots and the tuner DC (end to end) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && [ -x "$OUT/test-digi-spots" ] && [ -x "$OUT/test-band-dc" ]; then
+  VIBE_DIGI_BIN="$OUT/test-digi-spots" VIBE_DC_BIN="$OUT/test-band-dc" node --max-old-space-size=512 scripts/test-server-band-dc.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+else
+  echo '   not run — needs VIBESERVER_BIN (and test-digi-spots / test-band-dc built above)'; notrun=$((notrun+1))
 fi
 
 # ★★★ V12 DIGITAL SPOTS end to end (2026-10-26): a UTC-anchored 20 m clip (test-digi-spots clip) through the real server —

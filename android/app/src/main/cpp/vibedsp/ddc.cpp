@@ -5,6 +5,7 @@
 #include "simd_internal.h"   // dotReal/dotCplx (NEON), fastAtan2
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 
 namespace vibedsp {
 
@@ -437,6 +438,161 @@ int RealFir::process(const float* in, int n, float* out) {
     }
     std::copy(buf_.begin() + n, buf_.begin() + used, buf_.begin());
     return outn;
+}
+
+
+// ── HalfbandDecimator (see vibedsp.h) ─────────────────────────────────────────────────────────────────────────────
+
+#if VIBE_NEON
+/* ★ The half-band's NEON loop with the tap count a CONSTANT (dispatched below). ARMv7's vld1 has no immediate offset, so
+ *  2P unaligned loads cost 2P address adds too (the generic loop: 18 instructions a tap pair; one load per tap: 12). So
+ *  the 2P+3 odd samples four outputs need are loaded ONCE as consecutive quads ([r]! post-increment) and every shifted
+ *  view is a VEXT of two of them: per tap pair, two VEXTs (or none), an add and a multiply-accumulate. */
+template <int T> static inline float32x4_t hbAt(const float32x4_t* q) {
+    if constexpr (T % 4 == 0) return q[T / 4]; else return vextq_f32(q[T / 4], q[T / 4 + 1], T % 4);
+}
+template <int P, int J> struct HbAcc {   // acc += h_J · (o[m−J] + o[m+J−1]) — window index of o[m+x] is P + x
+    static inline float32x4_t run(float32x4_t acc, const float32x4_t* q, const float32x4_t* hv) {
+        acc = vmlaq_f32(acc, vaddq_f32(hbAt<P - J>(q), hbAt<P + J - 1>(q)), hv[J]);
+        return HbAcc<P, J - 1>::run(acc, q, hv);
+    }
+};
+template <int P> struct HbAcc<P, 0> { static inline float32x4_t run(float32x4_t acc, const float32x4_t*, const float32x4_t*) { return acc; } };
+template <int P>
+static void hbNeon(const float* er, const float* ei, const float* orr, const float* oi, const float* h,
+                   int& m, int last, float* o, int& k) {
+    constexpr int Q = (2 * P + 2) / 4 + 1;   // quads covering window indices 0 … 2P+2
+    float32x4_t hv[P + 1];
+    for (int j = 0; j <= P; ++j) hv[j] = vdupq_n_f32(h[j]);
+    // ★ one rail at a time (re, then im): Q window quads + P+1 taps + an accumulator stay in the 16 q registers
+    auto rail = [&](const float* w, const float* e) {
+        float32x4_t q[Q];
+        for (int t = 0; t < Q; ++t) q[t] = vld1q_f32(w + 4 * t);
+        return HbAcc<P, P>::run(vmulq_f32(vld1q_f32(e), hv[0]), q, hv);
+    };
+    for (; m + 4 <= last + 1; m += 4, k += 4) {
+        float32x4x2_t y;
+        y.val[0] = rail(orr + m - P, er + m);
+        y.val[1] = rail(oi + m - P, ei + m);
+        vst2q_f32(o + 2 * k, y);
+    }
+}
+#endif
+int HalfbandDecimator::halfTapsFor(double trans) {
+    const int n = (int)std::ceil(5.5 / std::max(trans, 1e-3));   // designLowpass's Blackman rule
+    return std::max(2, (n + 1 + 3) / 4);
+}
+
+HalfbandDecimator::HalfbandDecimator(int halfTaps) : P_(std::max(1, halfTaps)) {
+    const int n = 4 * P_ - 1;
+    const double mid = (n - 1) / 2.0;
+    std::vector<double> full((size_t)n);
+    double sum = 0;
+    for (int i = 0; i < n; ++i) {
+        const double k = i - mid;
+        const double sinc = k == 0.0 ? 0.5 : std::sin(M_PI * k / 2.0) / (M_PI * k);
+        const double t = 2.0 * M_PI * i / (n - 1);
+        full[(size_t)i] = sinc * (0.42 - 0.5 * std::cos(t) + 0.08 * std::cos(2.0 * t));
+        sum += full[(size_t)i];
+    }
+    h_.assign((size_t)P_ + 1, 0.0f);
+    h_[0] = (float)(full[(size_t)mid] / sum);
+    for (int j = 1; j <= P_; ++j) h_[(size_t)j] = (float)(full[(size_t)(mid + 2 * j - 1)] / sum);
+    // ★ P pairs of history either side: start with P zero pairs (the filter's own start-up, not a signal)
+    eR_.assign((size_t)P_ + 64, 0.0f); eI_.assign((size_t)P_ + 64, 0.0f); oR_.assign((size_t)P_ + 64, 0.0f); oI_.assign((size_t)P_ + 64, 0.0f);
+    len_ = (size_t)P_;
+}
+
+int HalfbandDecimator::process(const cf32* in, int n, cf32* out) {
+    if (n <= 0) return 0;
+    // 1. split into planar even / odd streams, after the history (a sample carried from the last block first)
+    const size_t base = len_;
+    const int total = n + (carry_ ? 1 : 0);
+    const int pairs = total / 2;
+    if (pairs == 0) { carry_ = true; carried_ = in[0]; return 0; }   // one sample, held for its partner
+    if (eR_.size() < base + (size_t)pairs + 4) {                     // ★ grow only (a resize per call zero-filled: memset 6 %)
+        const size_t cap = 2 * (base + (size_t)pairs) + 8;
+        eR_.resize(cap); eI_.resize(cap); oR_.resize(cap); oI_.resize(cap);
+    }
+    float* const er = eR_.data(); float* const ei = eI_.data(); float* const orr = oR_.data(); float* const oi = oI_.data();
+    int i = 0, p = 0;
+    if (carry_) {
+        er[base] = carried_.real(); ei[base] = carried_.imag(); orr[base] = in[0].real(); oi[base] = in[0].imag();
+        i = 1; p = 1;
+    }
+    const float* f = reinterpret_cast<const float*>(in);
+#if VIBE_NEON
+    for (; p + 4 <= pairs; p += 4, i += 8) {
+        const float32x4x4_t v = vld4q_f32(f + 2 * i);   // re0 re2 re4 re6 | im0 im2 … | re1 re3 … | im1 im3 …
+        vst1q_f32(er + base + p, v.val[0]); vst1q_f32(ei + base + p, v.val[1]);
+        vst1q_f32(orr + base + p, v.val[2]); vst1q_f32(oi + base + p, v.val[3]);
+    }
+#endif
+    for (; p < pairs; ++p, i += 2) {
+        er[base + p] = f[2 * i]; ei[base + p] = f[2 * i + 1]; orr[base + p] = f[2 * i + 2]; oi[base + p] = f[2 * i + 3];
+    }
+    carry_ = (total & 1) != 0;
+    if (carry_) carried_ = in[n - 1];
+    len_ = base + (size_t)pairs;
+
+    // 2. outputs m = P … A−P (A = pairs held): y[m] = c·e[m] + Σ_j h_j·(o[m−j] + o[m+j−1])
+    const int P = P_;
+    const int last = (int)len_ - P;         // the highest m with o[m+P−1] present
+    int m = P, k = 0;
+    const float c = h_[0];
+    const float* const h = h_.data();
+    float* o = reinterpret_cast<float*>(out);
+#if VIBE_NEON
+    switch (P) {   // ★ the common lengths unrolled; others take the generic loop just below
+        case 3: hbNeon<3>(er, ei, orr, oi, h, m, last, o, k); break;
+        case 4: hbNeon<4>(er, ei, orr, oi, h, m, last, o, k); break;
+        case 5: hbNeon<5>(er, ei, orr, oi, h, m, last, o, k); break;
+        case 6: hbNeon<6>(er, ei, orr, oi, h, m, last, o, k); break;
+        case 7: hbNeon<7>(er, ei, orr, oi, h, m, last, o, k); break;
+        case 8: hbNeon<8>(er, ei, orr, oi, h, m, last, o, k); break;
+        default: break;
+    }
+    for (; m + 4 <= last + 1; m += 4, k += 4) {
+        const float* lr = orr + m; const float* li = oi + m;       // o[m−j] = lr[−j], o[m+j−1] = lr[j−1]
+        float32x4_t ar = vmulq_n_f32(vld1q_f32(er + m), c), ai = vmulq_n_f32(vld1q_f32(ei + m), c);
+        for (int j = 1; j <= P; ++j) {
+            const float hj = h[j];
+            ar = vmlaq_n_f32(ar, vaddq_f32(vld1q_f32(lr - j), vld1q_f32(lr + j - 1)), hj);
+            ai = vmlaq_n_f32(ai, vaddq_f32(vld1q_f32(li - j), vld1q_f32(li + j - 1)), hj);
+        }
+        float32x4x2_t y; y.val[0] = ar; y.val[1] = ai;
+        vst2q_f32(o + 2 * k, y);
+    }
+#elif VIBE_SSE
+    for (; m + 4 <= last + 1; m += 4, k += 4) {
+        const float* lr = orr + m; const float* li = oi + m;
+        const __m128 cc = _mm_set1_ps(c);
+        __m128 ar = _mm_mul_ps(_mm_loadu_ps(er + m), cc), ai = _mm_mul_ps(_mm_loadu_ps(ei + m), cc);
+        for (int j = 1; j <= P; ++j) {
+            const __m128 hj = _mm_set1_ps(h[j]);
+            ar = _mm_add_ps(ar, _mm_mul_ps(_mm_add_ps(_mm_loadu_ps(lr - j), _mm_loadu_ps(lr + j - 1)), hj));
+            ai = _mm_add_ps(ai, _mm_mul_ps(_mm_add_ps(_mm_loadu_ps(li - j), _mm_loadu_ps(li + j - 1)), hj));
+        }
+        sseStore2(o + 2 * k, ar, ai);
+    }
+#endif
+    for (; m <= last; ++m, ++k) {
+        float ar = c * er[m], ai = c * ei[m];
+        for (int j = 1; j <= P; ++j) {
+            ar += h[j] * (orr[m - j] + orr[m + j - 1]);
+            ai += h[j] * (oi[m - j] + oi[m + j - 1]);
+        }
+        out[k] = cf32(ar, ai);
+    }
+    // 3. keep the pairs from (next m − P) on — the next call's m starts at P again
+    const size_t drop = (size_t)std::max(0, m - P);
+    if (drop) {
+        const size_t keep = len_ - drop;
+        std::memmove(er, er + drop, keep * sizeof(float)); std::memmove(ei, ei + drop, keep * sizeof(float));
+        std::memmove(orr, orr + drop, keep * sizeof(float)); std::memmove(oi, oi + drop, keep * sizeof(float));
+        len_ = keep;
+    }
+    return k;
 }
 
 } // namespace vibedsp

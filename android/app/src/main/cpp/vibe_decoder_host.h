@@ -370,6 +370,7 @@ public:
             if (spotsSlot_ < 0) return Start::Refused;
         }
         stopSpotterLocked_(false);
+        diagAt_ = 0;   // ★ Band's minute line starts again with the new run
         /* ★★ EXTRA FT8 PASSES ONLY ON SPARE CPU (2026-10-05): the server says it is loaded, or this host's own
          *  queue is a second behind (the decode thread is not keeping up) — either way, one pass. */
         auto loaded = [this] {
@@ -485,7 +486,10 @@ public:
                 const float* binPow = nullptr, int nb = 0, double binHz = 0, double captureUtc = NAN, int slice = 0) {
         if (n <= 0 || !wantsIq() || !(rate > 0)) return;
         if (slice > 0 && !bandIq_.load(std::memory_order_relaxed)) return;
-        IqBlock b; b.v.assign(iq, iq + n); b.rate = rate; b.centre = centreRfHz; b.slice = slice;
+        IqBlock b; b.rate = rate; b.centre = centreRfHz; b.slice = slice;
+        // ★ V12 2026-10-27: a NULL block is a GAP the tap dropped — `n` samples to bridge with zeros (Spotter::feedGap)
+        if (!iq) { if (!bandIq_.load(std::memory_order_relaxed)) return; b.gapN = n; binPow = nullptr; }
+        else b.v.assign(iq, iq + n);
         if (binPow && nb > 0 && binHz > 0 && wantsBins()) { b.pw.assign(binPow, binPow + nb); b.binHz = binHz; }
         // ★ Band spots cut UTC slots by it — the CAPTURE time, never when the block reached here or was decoded
         b.utc = std::isfinite(captureUtc) ? captureUtc : vibeUtcNow();
@@ -494,13 +498,13 @@ public:
             std::lock_guard<std::mutex> lk(qM_);
             if (!qThread_.joinable()) { qStop_ = false; replayStop_.store(false); qThread_ = std::thread([this] { loop_(); }); }
             qiFrames_ += b.v.size();
-            if (slice == 0) qiMainSec_ += (double)n / rate;
+            if (slice == 0) qiMainSec_ += (double)n / rate;   // ★ a gap counts: bridging it is work too
             qi_.push_back(std::move(b));
             // ★ DROP, NEVER WAIT — two seconds of the main slice behind and the oldest goes (extra slices with it).
             while (qi_.size() > 1 && qiMainSec_ > 2.0) {
                 const IqBlock& f = qi_.front();
                 qiFrames_ -= f.v.size();
-                if (f.slice == 0) qiMainSec_ -= (double)f.v.size() / f.rate;
+                if (f.slice == 0) qiMainSec_ -= (double)(f.v.size() + (size_t)f.gapN) / f.rate;
                 dropped_.fetch_add(f.v.size(), std::memory_order_relaxed);
                 iqDropped_.fetch_add(1, std::memory_order_relaxed);
                 qi_.pop_front();
@@ -1047,6 +1051,7 @@ private:
     /** ★ One spot out: to the gallery's summary and, as {"type":"digital_spot"}, to every decoder socket. `mode` is the
      *  engine's name (V12: any registered mode, not FT8-or-FT4). */
     void emitSpot(const digi::Spot& sp, double rfHz) {
+        { std::lock_guard<std::mutex> dl(diagMtx_); diagSpots_[sp.mode]++; }   // ★ Band's minute line (bandDiagLocked_)
         /* ★★ STAMPED WITH ITS SLOT'S START (2026-10-26, M7EIW via Stuart): the time WSJT-X shows, so the clients' HH:MM:SS
          *  names the transmission block it was heard in (UberSDR stamps its spots the same way). An engine that does not
          *  know its slot (NaN): the moment it was decoded, as before. */
@@ -1164,20 +1169,24 @@ private:
                 IqBlock b = std::move(qi_.front());
                 qi_.pop_front();
                 qiFrames_ -= b.v.size();
-                if (b.slice == 0) qiMainSec_ = std::max(0.0, qiMainSec_ - (double)b.v.size() / b.rate);
+                if (b.slice == 0) qiMainSec_ = std::max(0.0, qiMainSec_ - (double)(b.v.size() + (size_t)b.gapN) / b.rate);
                 lk.unlock();
                 const uint64_t c0 = vibeThreadCpuNs();
                 {
                     std::lock_guard<std::mutex> dl(decMtx_);
-                    if (b.slice == 0 && cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
-                    if (b.slice == 0 && psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.gapN == 0 && b.slice == 0 && cw_ && cw_->skimmer()) cw_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+                    if (b.gapN == 0 && b.slice == 0 && psk_ && psk_->skimmer()) psk_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre);
                 }
                 {
                     std::lock_guard<std::mutex> sl(spotsMtx_);
                     if (spotter_ && spotter_->scope() == SpotScope::Band) {
+                        if (b.gapN > 0) { spotter_->feedGap(b.gapN, b.rate, b.centre, b.utc); }
+                        else {
                         spotter_->feedIq(b.v.data(), (int)b.v.size(), b.rate, b.centre, b.utc,
                                          b.pw.empty() ? nullptr : b.pw.data(), (int)b.pw.size(), b.binHz);
                         maybeSendStatusLocked_(b.utc);
+                        bandDiagLocked_(b);
+                        }
                         // ★ The slice is centred on the dial: the next blocks are cut to the span of the band it is on now
                         //   (a band step is followed within a block or two). Cached per centre — the table walk is cheap but not free.
                         if (b.slice == 0 && std::fabs(b.centre - bandWidthDial_.load(std::memory_order_relaxed)) > 0.5) {
@@ -1301,7 +1310,7 @@ private:
     double queuedIqSec() {
         std::lock_guard<std::mutex> lk(qM_);
         double s = 0;
-        for (auto& b : qi_) if (b.rate > 0) s += (double)b.v.size() / b.rate;
+        for (auto& b : qi_) if (b.rate > 0) s += (double)(b.v.size() + (size_t)b.gapN) / b.rate;
         return s;
     }
 
@@ -1370,7 +1379,40 @@ private:
     std::condition_variable qCv_;
     std::deque<std::vector<float>> q_;
     std::deque<double> qUtc_;            // ★ each block's capture time (feed), in step with q_
-    struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; std::vector<float> pw; double binHz = 0; int slice = 0; };
+    struct IqBlock { std::vector<std::complex<float>> v; double rate = 0, centre = 0, utc = 0; std::vector<float> pw; double binHz = 0; int slice = 0;
+                     int gapN = 0; };   // ★ gapN > 0: no samples, a gap of that many to bridge
+    /* ★★ BAND'S MINUTE LINE (V12 2026-10-27, for the Pi 2's "every chip light, nothing decoded"): what the decode thread was
+     *  fed (seconds of each slice per minute of capture — 60 means it kept up), how far behind the capture it ran (now −
+     *  the block's capture UTC: FT8 cuts its slots by that stamp), what was dropped, slots decoded / skipped, spots per mode
+     *  and the chips. One line a minute, decode thread, spotsMtx_ held. */
+    std::mutex diagMtx_;
+    std::map<std::string, int> diagSpots_;
+    double diagAt_ = 0, diagMain_ = 0, diagExtra_ = 0, diagLagMin_ = 1e9, diagLagMax_ = -1e9;
+    double diagCentre_ = 0, diagRate_ = 0;
+    uint64_t diagDrop0_ = 0, diagSlots0_ = 0, diagSkip0_ = 0, diagBridge0_ = 0;
+    void bandDiagLocked_(const IqBlock& b) {
+        const double lag = vibeUtcNow() - b.utc;
+        if (b.slice == 0) { diagMain_ += (double)b.v.size() / b.rate; diagCentre_ = b.centre; diagRate_ = b.rate; }
+        else diagExtra_ += (double)b.v.size() / b.rate;
+        diagLagMin_ = std::min(diagLagMin_, lag); diagLagMax_ = std::max(diagLagMax_, lag);
+        if (diagAt_ <= 0) { diagAt_ = b.utc; diagDrop0_ = iqBlocksDropped(); diagSlots0_ = spotter_->slotsDecoded(); diagSkip0_ = spotter_->slotsSkipped(); diagBridge0_ = spotter_->usBridged(); return; }
+        if (b.utc - diagAt_ < 60.0) return;
+        std::string spots, chips;
+        { std::lock_guard<std::mutex> dl(diagMtx_); for (auto& kv : diagSpots_) spots += " " + kv.first + " " + std::to_string(kv.second); diagSpots_.clear(); }
+        for (const auto& m : spotter_->status()) chips += " " + m.mode + ":" + digi::stateWord(m.state);
+        char line[640];
+        std::snprintf(line, sizeof line,
+                      "Band decode, last %.0f s of capture: main slice %.1f s fed (%.0f S/s at %.4f MHz), extra slices %.1f s; "
+                      "decode %.2f-%.2f s behind the capture; IQ blocks dropped %llu; gaps bridged %.2f s (all slices); slots decoded %llu, skipped %llu; spots:%s; chips:%s",
+                      b.utc - diagAt_, diagMain_, diagRate_, diagCentre_ / 1e6, diagExtra_, diagLagMin_, diagLagMax_,
+                      (unsigned long long)(iqBlocksDropped() - diagDrop0_), (double)(spotter_->usBridged() - diagBridge0_) / 1e6,
+                      (unsigned long long)(spotter_->slotsDecoded() - diagSlots0_),
+                      (unsigned long long)(spotter_->slotsSkipped() - diagSkip0_), spots.empty() ? " none" : spots.c_str(), chips.c_str());
+        log(line);
+        diagAt_ = b.utc; diagMain_ = diagExtra_ = 0; diagLagMin_ = 1e9; diagLagMax_ = -1e9;
+        diagDrop0_ = iqBlocksDropped(); diagSlots0_ = spotter_->slotsDecoded(); diagSkip0_ = spotter_->slotsSkipped(); diagBridge0_ = spotter_->usBridged();
+    }
+
     double qiMainSec_ = 0;               // ★ seconds of the MAIN slice queued (qM_)
     std::atomic<uint64_t> iqDropped_{0};
     std::deque<IqBlock> qi_;             // ★ a CW skimmer's IQ (feedIq), served before audio by the same thread

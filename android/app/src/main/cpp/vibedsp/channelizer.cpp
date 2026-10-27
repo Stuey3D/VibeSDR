@@ -78,6 +78,12 @@ int Channelizer::extract(const cf32* bins, int centreBin, int chanBins, cf32* ou
     //    this wrong does not fail loudly — it produces a channel tuned somewhere else, which is
     //    why test_channelizer checks the recovered tone's FREQUENCY and not just its presence.
     const int half = chanBins / 2;
+    /* ★ V12 (2026-10-27): a power-of-two FFT wraps with a MASK. The `%` per bin was 6 % of the Band tap's instructions on
+     *  the Pi 2's build (ARMv7 has no integer divide in the -march=armv7-a baseline: __divsi3 / __aeabi_idivmod calls). */
+    if ((n_ & (n_ - 1)) == 0) {
+        const int m = n_ - 1;
+        for (int k = 0; k < chanBins; ++k) ctx.slice[k] = bins[(centreBin + ((k < half) ? k : k - chanBins)) & m];
+    } else
     for (int k = 0; k < chanBins; ++k) {
         // k: 0..half-1 = positive offsets, half..chanBins-1 = negative offsets
         const int off = (k < half) ? k : k - chanBins;

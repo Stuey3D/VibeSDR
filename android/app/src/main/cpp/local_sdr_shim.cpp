@@ -6753,7 +6753,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          * ★★ Re-try only after auditing every reader of hwOffsetHz for driver assumptions. The
          *    failure is silent on a waterfall — the peak is still drawn in the right place. */
         if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
-        return (useAirspyHf() || useTcp() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
+        /* ★ TEST ONLY (V12 2026-10-27, scripts/test-server-band-dc.mjs): VIBE_TCP_DC_OFFSET_HZ gives an rtl_tcp source the
+         *  dongle's own offset tuning, so a fake rtl_tcp stands in for a USB dongle exactly as the Pi 2's V4 is tuned. Read
+         *  once; unset (every real server) = 0 as before. */
+        if (useTcp()) {
+            static const double kTcpTestOff = [] { const char* e = std::getenv("VIBE_TCP_DC_OFFSET_HZ"); return e ? std::atof(e) : 0.0; }();
+            return kTcpTestOff;
+        }
+        return (useAirspyHf() || useSpy()) ? 0.0 : HW_OFFSET_HZ;
     }
 
     // Physical DC of the FFT = rtlCenter + HW_OFFSET_HZ, so the VFO (at audioFreq)
@@ -7276,7 +7283,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
 
         // A span wider than the capture can't satisfy both — keep the VFO captured.
-        if (lo > hi) return std::min(vfo + lim, std::max(vfo - lim, view));
+        // ★★ V12 (2026-10-27): every answer below goes through bandDcSafe — while Band spots run, the tuner is placed so
+        //    its DC is outside Band's slices (vibe_band_slice.h bandDcCentre); a no-op otherwise.
+        if (lo > hi) return bandDcSafe(std::min(vfo + lim, std::max(vfo - lim, view)), vfo - lim, vfo + lim);
 
         /* ★★★ IN AUTO, THE TUNER FOLLOWS THE LISTENER. The IF filter is centred here, so a centre
          *     left behind by "minimal movement" puts the VFO in the filter's skirt — 663 kHz with
@@ -7285,12 +7294,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *     the two disagree. */
         if (g_tunerBwAuto.load(std::memory_order_relaxed)
             && g_vsLockedCentre.load() <= 0.0) {
-            const double want = std::max(lo, std::min(hi, vfo));
+            const double want = bandDcSafe(std::max(lo, std::min(hi, vfo)), lo, hi);
             if (std::fabs(want - cur) > 1000.0) return want;
         }
         // Still legal where we are? Then DON'T MOVE: no retune, no PLL relock, and
         // the pan is a pure crop of spectrum we already have.
-        if (cur >= lo && cur <= hi) return cur;
+        // ★ …unless Band's slices are on the DC there (bandDcSafe returns `cur` itself when it is clear).
+        if (cur >= lo && cur <= hi) return bandDcSafe(cur, lo, hi);
 
         // We DO have to move. Move DECISIVELY: recentre the dongle on the view
         // (clamped so the VFO stays captured) rather than shuffling it the minimum
@@ -7302,7 +7312,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // the DSP thread (audio drops out) and the waterfall crawls. Recentring
         // buys a whole capture's worth of headroom, so the following hundred pan
         // steps are free crops again.
-        return std::min(hi, std::max(lo, view));
+        return bandDcSafe(std::min(hi, std::max(lo, view)), lo, hi);
     }
 
     // Tune the radio to (logical centre + HW_OFFSET_HZ).
@@ -15982,7 +15992,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool   leaves    = lockC <= 0.0 && std::fabs(freq - centreNow) > winLimit;
             const bool   follows   = lockC <= 0.0 && g_tunerBwAuto.load(std::memory_order_relaxed)
                                      && std::fabs(freq - centreNow) > 1000.0;
-            const double centreNew = lockC > 0.0 ? lockC : ((leaves || follows) ? freq : centreNow);
+            const double centreNew = lockC > 0.0 ? lockC : ((leaves || follows) ? bandDcSafeFor(freq, freq) : centreNow);   // ★ Band: see bandDcSafe
             const double tunerNew  = centreNew - convOffsetHz.load(std::memory_order_relaxed) + hwOffsetHz();
             const double ifEff     = vibeagc::agcIfEffectiveHz((double)g_tunerBwHz.load(std::memory_order_relaxed),
                                                                sampleRate);
@@ -16109,13 +16119,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (std::fabs(freq - rtlCenter.load()) > limit) {
             // The VFO has tuned outside the captured window — recentre the capture
             // on it so we don't end up showing dead air.
-            rtlCenter.store(freq);
+            // ★★ V12 (2026-10-27): ON it, unless Band spots run — then where the DC is outside the band's slices
+            //    (bandDcSafe; a band step lands here). The view still goes to the dial.
+            const double centre = bandDcSafe(freq, freq - limit, freq + limit);
+            rtlCenter.store(centre);
             // On SpyServer the display is the server's WIDE FFT, which the narrow IQ
             // window slides underneath. Moving viewCenter here would yank the
             // waterfall sideways on every recentre; the view only follows when the
             // VFO leaves the FFT span entirely (handled in the zoom/pan path).
             if (!useSpy()) viewCenter.store(freq);
-            tuneHw(freq);
+            tuneHw(centre);
             // USB/rtl_tcp path: the capture just recentred, but tuneHw only pushes
             // a fresh config to the spectrum client on the SpyServer path. A LOCAL
             // client self-tracks the centre natively; a REMOTE VibeServer client
@@ -26763,6 +26776,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      audioFreq.load() / 1e6, rtlCenter.load() / 1e6);
             }
             flushPendingDongle();     // a retune the pan cooldown postponed — never dropped
+            bandDcTick();             // ★ V12: Band spots on/off/stepped — the tuner's DC off the band's slices (bandDcSafe)
             // ★★★ IS THE DSP KEEPING REAL TIME? The only measure that matters under load, and the
             //     one nothing was watching: a probe that counts frames cannot tell "smooth" from
             //     "stuttered, then caught up" — which is exactly the difference between a passing
@@ -27500,9 +27514,90 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★★ V12 2026-10-25: a CW skimmer on a one-pipeline radio (no ClientDsp, no channeliser) — see vibe_wide_tap.h. Fed
      *  on the DSP thread only while the shared host's skimmer runs; started and stopped there too (a rare event). */
     vibe::WideTap skimTap_;
+
+    // ── ★★★ BAND SPOTS AND THE TUNER'S DC (V12, 2026-10-27, v12-band-dc) — vibe_band_slice.h bandDcCentre ───────────────
+    // ★★★ Stuart's Pi 2 (V4, 2.048 MS/s) on 40 m in Band: dial 7.0606, tuner 7.0756 — the DC in the middle of FT8. While
+    //     Band's slice is cut on this radio, every placement of the tuner (a pan's dongleForView, retune's recentre, and
+    //     bandDcTick for Band starting, stepping and stopping) goes through bandDcSafe, which moves the LOGICAL centre so
+    //     rtlCenter + hwOffsetHz() — the DC — lands outside the band's slices. hwOffsetHz() itself never changes, so no
+    //     consumer of it can disagree with another (the 15.00 kHz error of 2026-08-09); rtlCenter moving off the dial is
+    //     what every minimal-movement pan already does, and every reader derives from it at the moment it reads.
+    // ★★ A shared dial: the other listeners hear the same demodulator, re-tuned by rx.setTune(vfoOffsetNow()) in the same
+    //    move — one retune blip, never a frequency error. A locked radio (per-listener channels) never moves: its DC is
+    //    where the owner's centre puts it.
+    std::atomic<bool> bandDcOn_{false};    // ★ Band's slice is cut on this one-pipeline radio (set on the DSP thread)
+    bool   bandDcMoved_ = false;           // ★ bandDcTick moved the tuner for Band (DSP thread, modeMtx)
+    double bandDcKeyDial_ = 0, bandDcKeyCentre_ = 0, bandDcKeyRate_ = 0;   // ★ the last placement bandDcTick checked
+    double bandDcLogAt_ = 0;
+    /** Does this radio put a DC spike at its capture's physical centre? A dongle (and its rtl_tcp cousin, which gets no
+     *  offset), a HackRF, an RSP — every radio that offsets its tuning to dodge one. Not the HF+ (libairspyhf's IF shift
+     *  removes it), not a SpyServer or an Icom (not our tuner). */
+    bool dcAtCaptureCentre() const { return !useSpy() && !useIcom() && !useAirspyHf() && (hwOffsetHz() > 0.0 || useTcp()); }
+    /** ★ The logical centre to use instead of `centre` for a Band run on `dialHz` (its slices around that dial). */
+    double bandDcSafeFor(double dialHz, double centre, double lo = -INFINITY, double hi = INFINITY) const {
+        // ★ VIBE_BAND_DC=0 switches the rule off (the placement exactly as before it — A/B, and the e2e test's "before")
+        static const bool kOff = [] { const char* e = std::getenv("VIBE_BAND_DC"); return e && *e == '0'; }();
+        if (kOff || !bandDcOn_.load(std::memory_order_relaxed) || !dcAtCaptureCentre()) return centre;
+        if (g_vsLockedCentre.load() > 0.0 || g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
+            || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed))
+            return centre;
+        return vibe::bandDcCentre(sampleRate, fftSize, dialHz, centre, hwOffsetHz(), lo, hi);
+    }
+    /** ★ The same for the dial as it is now (audioFreq). `lo`/`hi`: where the caller's own rules allow the centre. */
+    double bandDcSafe(double centre, double lo = -INFINITY, double hi = INFINITY) const {
+        return bandDcSafeFor(audioFreq.load(), centre, lo, hi);
+    }
+    /** ★★ The DSP loop's backstop, beside flushPendingDongle (modeMtx held): Band starting (the tuner was on the dial), a
+     *  dial moved inside the window (retune does not recentre), and Band stopping (back to the ordinary placement — in auto
+     *  IF the tuner follows the dial again). Checked only when the dial, the centre or the rate changed; one retune, under
+     *  the pan's own 120 ms cooldown, never with a pan's move still pending. */
+    void bandDcTick() {
+        const bool on = bandDcOn_.load(std::memory_order_relaxed);
+        if (!on && !bandDcMoved_) return;
+        if (pendingDongle > 0.0) return;                   // ★ a pan's move first (it went through bandDcSafe already)
+        const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (nowMs - lastDongleMoveMs < 120) return;
+        const double cur = rtlCenter.load(), dial = audioFreq.load();
+        double want = cur;
+        const char* why = "";
+        if (on) {
+            if (dial == bandDcKeyDial_ && cur == bandDcKeyCentre_ && sampleRate == bandDcKeyRate_) return;
+            bandDcKeyDial_ = dial; bandDcKeyCentre_ = cur; bandDcKeyRate_ = sampleRate;
+            // ★ the VFO must stay captured, as dongleForView's own limit says
+            const double lim = std::max(sampleRate * 0.05, usableSpan() / 2.0 - viewDongleMargin() - rxBwHz * 0.5);
+            want = bandDcSafe(cur, dial - lim, dial + lim);
+            if (std::fabs(want - cur) <= 1.0) return;
+            bandDcMoved_ = true;
+            why = "Band spots: the tuner's DC moved off the band's slices";
+        } else {
+            bandDcMoved_ = false; bandDcKeyDial_ = 0;
+            if (!g_tunerBwAuto.load(std::memory_order_relaxed) || g_vsLockedCentre.load() > 0.0) return;   // ★ manual IF: stay put
+            want = dongleForView(viewCenter.load(), displaySpan() / zoomFactor.load());   // ★ the ordinary placement
+            if (std::fabs(want - cur) <= 1.0) return;
+            why = "Band spots off: the tuner back on the ordinary placement";
+        }
+        lastDongleMoveMs = nowMs;
+        std::string m;
+        const int where = vibe::bandDcWhere(sampleRate, fftSize, dial, cur + hwOffsetHz(), &m);
+        LOGI("%s — dial %.4f MHz: centre %.4f -> %.4f MHz, DC %.4f -> %.4f MHz (was %s)", why, dial / 1e6, cur / 1e6, want / 1e6,
+             (cur + hwOffsetHz()) / 1e6, (want + hwOffsetHz()) / 1e6,
+             where == 2 ? ("ON " + m).c_str() : where == 1 ? "inside a slice" : "outside the slices");
+        rtlCenter.store(want);
+        tuneHw(want);
+        rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);   // ★ the shared demodulator: every listener's audio, exactly where it was
+        updateZoomView();                              // ★ the zoom channel is measured from rtlCenter + hwOffsetHz()
+        applyAutoIf();
+        rx.requestStereoReport();
+    }
+
     void skimTapFeed(const cf32* iq, int n) {
         const bool want = DecoderHost::skimmersRunning().load(std::memory_order_relaxed) > 0 && decoders_.sharedWantsIq();
-        if (!want) { if (skimTap_.running()) skimTap_.stop(); return; }
+        if (!want) {
+            bandDcOn_.store(false, std::memory_order_relaxed);
+            if (skimTap_.running()) skimTap_.stop();
+            return;
+        }
         if (!skimTap_.running()) {
             std::weak_ptr<DecoderHost> wh = decoders_.shared();
             // ★★ V12 (2026-10-27): each block with its CAPTURE time and its slice (vibe_wide_tap.h's file note — Stuart's Pi 2)
@@ -27524,6 +27619,22 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         skimTap_.aim(g);
         skimTap_.feed(iq, n, vibeUtcNow());   // ★ stamped HERE, on the DSP thread: the capture time of the chunk's last sample
+        if (g.bins && !bandDcOn_.load(std::memory_order_relaxed)) bandDcLogAt_ = Impl::nowSecs() - 50.0;   // ★ first line 10 s in, once placed
+        bandDcOn_.store(g.bins, std::memory_order_relaxed);   // ★ Band (not the CW/PSK skimmer) — bandDcTick acts on it
+        /* ★★ ONE LINE A MINUTE while Band's slice is cut (V12 2026-10-27, for the Pi 2's "nothing decodes"): where the tuner
+         *  and its DC are against the band's slices, and what the tap has had to drop — read off the live radio, not believed. */
+        if (g.bins) {
+            const double now = Impl::nowSecs();
+            if (now - bandDcLogAt_ >= 60.0) {
+                bandDcLogAt_ = now;
+                std::string m;
+                const int where = vibe::bandDcWhere(sampleRate, fftSize, g.wantCentreHz, g.hwCentreHz, &m);
+                LOGI("Band slice: dial %.4f MHz, tuner centre %.4f MHz, DC %.4f MHz (%s), %.3f MS/s FFT %d, %d extra slice(s), "
+                     "front end ÷%d, tap dropped %llu block(s) so far", g.wantCentreHz / 1e6, rtlCenter.load() / 1e6, g.hwCentreHz / 1e6,
+                     where == 2 ? ("ON " + m).c_str() : where == 1 ? "inside a slice, clear of every mode" : "outside every slice",
+                     sampleRate / 1e6, fftSize, g.nExtras, skimTap_.decimation(), (unsigned long long)skimTap_.droppedBlocks());
+            }
+        }
     }
     vibe::bg::BgRegistry bgReg_;                // ★ this radio's background VFOs, as the box sees them (pause / resume)
     std::mutex         bgOpMtx_;                // ★ one start/stop at a time — the tick, an arrival

@@ -186,7 +186,18 @@ static int runReal(int argc, char** argv) {
     const char* path = argv[2];
     const double utc0 = std::atof(argv[3]), recCentre = std::atof(argv[4]), dial = std::atof(argv[5]);
     int L = 25; double hwOff = 15000; bool direct = false, chan = false, live = false, oldStamp = false, oldSlice = false; double secs = 1e9, stallMs = 0;
+    /* ★ V12 2026-10-27 (v12-band-dc) — THE RADIO'S OWN FRONT END, modelled: `dc=<dBFS>` a dongle's DC at the capture centre,
+     *  `wn=<dBFS>` white noise over the whole capture, `u8=<gain>` the RTL's 8-bit ADC (×gain, rounded, clamped), `clean`
+     *  the server's own capture cleaner (vibedsp::IqCleaner — the slow DC mean and the I/Q imbalance — and the wide
+     *  impulse blanker, which is on by default below 30 MHz), in that order, as the server's DSP thread sees it. */
+    double dcDb = NAN, wnDb = NAN, u8Gain = 0; bool clean = false;
+    double dropMs = 0;   // ★ `drop=<ms>`: that much capture never reaches the tap once a 15 s slot (as the Pi 2's tap dropped)
     for (int i = 6; i < argc; ++i) {
+        if (!std::strncmp(argv[i], "dc=", 3)) dcDb = std::atof(argv[i] + 3);
+        if (!std::strncmp(argv[i], "wn=", 3)) wnDb = std::atof(argv[i] + 3);
+        if (!std::strncmp(argv[i], "u8=", 3)) u8Gain = std::atof(argv[i] + 3);
+        if (!std::strcmp(argv[i], "clean")) clean = true;
+        if (!std::strncmp(argv[i], "drop=", 5)) dropMs = std::atof(argv[i] + 5);
         if (!std::strncmp(argv[i], "L=", 2)) L = std::atoi(argv[i] + 2);
         if (!std::strncmp(argv[i], "hw=", 3)) hwOff = std::atof(argv[i] + 3);
         if (!std::strncmp(argv[i], "secs=", 5)) secs = std::atof(argv[i] + 5);
@@ -273,9 +284,23 @@ static int runReal(int argc, char** argv) {
         uint64_t produced = 0;
         const int chunk = (int)rate / 20;
         std::vector<cf32> xb[kMaxExtraSlices]; vibedsp::Channelizer::ExtractCtx xc[kMaxExtraSlices]; std::vector<float> xp;
+        vibedsp::IqCleaner cleaner; vibedsp::ImpulseBlanker nb;
+        if (clean) { cleaner.configure(fs); nb.configure(fs); }
+        std::mt19937 rng(7); std::normal_distribution<float> nd(0.0f, 1.0f);
+        const cf32 dcV = std::isfinite(dcDb) ? std::polar((float)std::pow(10.0, dcDb / 20.0), 0.7f) : cf32(0, 0);
+        const float wnS = std::isfinite(wnDb) ? (float)std::pow(10.0, wnDb / 20.0) / std::sqrt(2.0f) : 0.0f;
         for (size_t o = 0; o < x.size(); o += (size_t)chunk) {
             const int k = (int)std::min<size_t>((size_t)chunk, x.size() - o);
             ip.run(&x[o], k, up);
+            if (dcV != cf32(0, 0) || wnS > 0 || u8Gain > 0) for (cf32& z : up) {
+                z += dcV;
+                if (wnS > 0) z += cf32(wnS * nd(rng), wnS * nd(rng));
+                if (u8Gain > 0) {
+                    auto q = [&](float v) { return (std::min(255.0f, std::max(0.0f, std::round(v * (float)u8Gain * 127.5f + 127.5f))) - 127.5f) / 127.5f; };
+                    z = cf32(q(z.real()), q(z.imag()));
+                }
+            }
+            if (clean) { cleaner.process(up.data(), (int)up.size()); nb.process(up.data(), (int)up.size()); }
             produced += up.size();
             const double chunkUtc = live ? clk() : base + (double)produced / fs;
             if (chan) {
@@ -298,6 +323,10 @@ static int runReal(int argc, char** argv) {
                     }
                 });
             } else {
+                if (dropMs > 0) {   // ★ the chunk lost if it starts within dropMs after +5 s of a slot
+                    const double t0c = chunkUtc - (double)up.size() / fs, inSlot = t0c - 15.0 * std::floor(t0c / 15.0);
+                    if (inSlot >= 5.0 && inSlot < 5.0 + dropMs / 1000.0) { tap.feedDropped(up.size()); continue; }   // ★ as the tap's own overflow
+                }
                 tap.feed(up.data(), (int)up.size(), chunkUtc);
                 if (live) { std::this_thread::sleep_until(tp + std::chrono::microseconds((int64_t)(1e6 * (double)produced / fs))); continue; }
                 // ★ back-pressure: the tap drops what is more than half a second behind, as on a server that cannot keep up
@@ -325,7 +354,7 @@ static int runReal(int argc, char** argv) {
 /** `tapcost [rate]`: the WideTap's own CPU per second of capture (noise in, the slice dropped), process CPU minus the
  *  generator's. */
 static double cpuNow() { rusage u{}; getrusage(RUSAGE_SELF, &u); return u.ru_utime.tv_sec + u.ru_utime.tv_usec / 1e6 + u.ru_stime.tv_sec + u.ru_stime.tv_usec / 1e6; }
-static int tapCost(double fs, bool band) {
+static int tapCost(double fs, bool band, bool drain = false, int secs = 30) {
     const int fft = fftSizeForRate(fs);
     std::vector<cf32> x((size_t)(fs / 10));
     uint32_t r = 1; for (auto& v : x) { r = r * 1664525u + 1013904223u; const float a = (float)(r >> 8) / 16777216.0f - 0.5f; r = r * 1664525u + 1013904223u; v = cf32(a, (float)(r >> 8) / 16777216.0f - 0.5f); }
@@ -334,12 +363,13 @@ static int tapCost(double fs, bool band) {
     tap.start(WideTap::BandSink([&](const cf32*, int k, double, double, const float*, int, double, double, int) { got += (uint64_t)k; }));
     WideTap::Geometry g; g.sampleRate = fs; g.hwCentreHz = 7075600; g.wantCentreHz = 7060600; g.widthHz = 41900; g.fftSize = fft; g.bins = true;
     // ★ `tapcost <rate> band`: as Band runs it on 40 m — the flat sizing and 40 m's extra slice (JTTY)
-    if (band) { g.band = true; const auto e = bandExtraSlices(7060600); g.nExtras = (int)e.size(); for (size_t k = 0; k < e.size(); ++k) g.extras[k] = e[k]; }
+    if (band) { g.band = true; g.hwCentreHz = 7110800;   /* ★ where the DC rule puts 40 m at 2.048 MS/s (test-band-dc) */ const auto e = bandExtraSlices(7060600); g.nExtras = (int)e.size(); for (size_t k = 0; k < e.size(); ++k) g.extras[k] = e[k]; }
     tap.aim(g);
-    const int secs = 30;
     const double c0 = cpuNow(); const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < secs * 10; ++i) {
         tap.feed(x.data(), (int)x.size());
+        // ★ `drain`: wait for the tap to finish each chunk (an emulator's instruction count — nothing dropped)
+        if (drain) { while (tap.queuedSamples() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(2)); continue; }
         std::this_thread::sleep_until(t0 + std::chrono::milliseconds(25 * (i + 1)));   // 4× real time: never behind on a Mac
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -350,8 +380,58 @@ static int tapCost(double fs, bool band) {
     return 0;
 }
 
+/** ★ V12 (2026-10-27, v12-band-dc): tones through the REAL WideTap with Band's geometry — its decimating front end
+ *  (Pre) included. Returns, per tone, the level found in the slice that holds it (dB re the tone; NaN if none holds it)
+ *  and the leakage into every slice from tones NO slice holds (dB re the tone: aliasing through the FIR cascade). */
+struct TapTone { double rf, levelDb = NAN; int slice = -1; };
+static double tapToneRun(double fs, double hw, double dial, std::vector<TapTone>& tones, int* decimOut = nullptr) {
+    const int fft = fftSizeForRate(fs);
+    std::map<int, std::vector<cf32>> got; std::map<int, double> centre, rate; std::mutex m;
+    WideTap tap;
+    tap.start(WideTap::BandSink([&](const cf32* x, int k, double r, double c, const float*, int, double, double, int sl) {
+        std::lock_guard<std::mutex> lk(m); auto& v = got[sl]; v.insert(v.end(), x, x + k); centre[sl] = c; rate[sl] = r; }));
+    WideTap::Geometry g; g.sampleRate = fs; g.hwCentreHz = hw; g.wantCentreHz = dial; g.fftSize = fft; g.bins = true; g.band = true;
+    g.widthHz = std::min(DecoderHostBandWidth(dial), fs * 0.8);
+    const auto e = bandExtraSlices(dial); g.nExtras = (int)std::min<size_t>(e.size(), kMaxExtraSlices);
+    for (int k = 0; k < g.nExtras; ++k) g.extras[k] = e[(size_t)k];
+    tap.aim(g);
+    double worstLeak = -300;
+    for (TapTone& t : tones) {
+        { std::lock_guard<std::mutex> lk(m); got.clear(); }
+        const size_t N = (size_t)(fs * 0.6);
+        std::vector<cf32> x(N);
+        const double w = 2 * M_PI * (t.rf - hw) / fs;
+        for (size_t i = 0; i < N; ++i) x[i] = std::polar(1.0f, (float)std::fmod(w * (double)i, 2 * M_PI));
+        for (size_t o = 0; o < N; o += 20480) { tap.feed(&x[o], (int)std::min<size_t>(20480, N - o)); while (tap.queuedSamples() > 0) std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        std::lock_guard<std::mutex> lk(m);
+        t.levelDb = NAN; t.slice = -1;
+        for (auto& kv : got) {
+            const std::vector<cf32>& v = kv.second; const double r = rate[kv.first], c = centre[kv.first];
+            if (v.size() < 4000) continue;
+            const size_t a = v.size() / 3;   // ★ past the cascade's and the channeliser's start
+            const bool holds = std::fabs(t.rf - c) < 0.5 * r * kBandFlatFrac;
+            double p = 0; cf32 acc(0, 0);
+            for (size_t i = a; i < v.size(); ++i) {
+                p += std::norm(v[i]);
+                acc += v[i] * std::polar(1.0f, (float)std::fmod(-2 * M_PI * (t.rf - c) * (double)(i - a) / r, 2 * M_PI));
+            }
+            const double n = (double)(v.size() - a);
+            if (holds) { t.levelDb = 20 * std::log10(std::abs(acc) / n + 1e-30); t.slice = kv.first; }
+            else worstLeak = std::max(worstLeak, 10 * std::log10(p / n + 1e-30));
+        }
+    }
+    if (decimOut) *decimOut = tap.decimation();
+    tap.stop();
+    return worstLeak;
+}
+
 int main(int argc, char** argv) {
-    if (argc > 1 && !std::strcmp(argv[1], "tapcost")) return tapCost(argc > 2 ? std::atof(argv[2]) : 2400000, argc > 3 && !std::strcmp(argv[3], "band"));
+    if (argc > 1 && !std::strcmp(argv[1], "tapcost")) {
+        bool drain = false; int secs = 30;
+        for (int i = 4; i < argc; ++i) { if (!std::strcmp(argv[i], "drain")) drain = true; if (!std::strncmp(argv[i], "secs=", 5)) secs = std::atoi(argv[i] + 5); }
+        return tapCost(argc > 2 ? std::atof(argv[2]) : 2400000, argc > 3 && !std::strcmp(argv[3], "band"), drain, secs);
+    }
     if (argc > 5 && !std::strcmp(argv[1], "real")) return runReal(argc, argv);
     const bool verbose = argc > 1 && !std::strcmp(argv[1], "-v");
 
@@ -476,6 +556,27 @@ int main(int argc, char** argv) {
         }
     }
 
+    std::printf("── the REAL WideTap with Band's decimating front end: 40 m at 2.048 MS/s, where the DC rule puts the tuner ──\n");
+    {
+        const double fs = 2048000, dial = 7060600, hw = 7110800;
+        std::vector<TapTone> in, out;
+        for (const auto& d : digi::modes()) for (double f : digi::dialsOf(d, "40m")) { in.push_back({ f + d.audioLoHz }); in.push_back({ f + d.audioHiHz }); }
+        double worstIn = 0, bestIn = -300; int D = 0;
+        tapToneRun(fs, hw, dial, in, &D);
+        ok(D == 16, "the front end decimates 2.048 MS/s by " + std::to_string(D) + " (to 128 kS/s, a 2048-point channeliser)");
+        bool all = true;
+        for (const TapTone& t : in) { if (!std::isfinite(t.levelDb)) all = false; else { worstIn = std::min(worstIn, t.levelDb); bestIn = std::max(bestIn, t.levelDb); } }
+        ok(all && worstIn > -0.5 && bestIn < 0.5, "every 40 m mode's passband edge comes through the decimated tap within 0.5 dB (" + std::to_string(worstIn) + " … " + std::to_string(bestIn) + " dB)");
+        // ★ tones NO slice holds, where each halving folds onto the slices (mid ± k·rate/2^s, ± the slices' reach) — and far ones
+        const double mid = 7068200;
+        for (double r = fs / 2; r >= 128000; r /= 2) for (double sgn : { -1.0, 1.0 }) for (double dlt : { -38000.0, 0.0, 38000.0 }) {
+            const double f = mid + sgn * r + dlt;
+            if (std::fabs(f - hw) < fs * 0.49) out.push_back({ f });
+        }
+        out.push_back({ hw - 900000 }); out.push_back({ hw + 900000 }); out.push_back({ 7140000 }); out.push_back({ 7000000 });
+        const double leak = tapToneRun(fs, hw, dial, out);
+        ok(leak < -70, "nothing from outside the slices folds in through the cascade (worst " + std::to_string(leak) + " dB re the tone, " + std::to_string(out.size()) + " tones)");
+    }
     std::printf("── a +10 kHz tone comes out at +10 kHz (orientation) ──\n");
     {
         const double fs = 2400000; const int fft = fftSizeForRate(fs); const int bins = vibe::bandSliceBins(fs, fft, 42000);
@@ -509,6 +610,12 @@ int main(int argc, char** argv) {
             const size_t d4 = direct.count("FT4") ? direct.at("FT4").size() : 0, t4 = tap.count("FT4") ? tap.at("FT4").size() : 0;
             std::snprintf(m, sizeof m, "FT4 calls: straight in %zu, tap %zu", d4, t4);
             ok(t4 + 2 >= d4 * 0.9, m);
+            // ★★ V12 2026-10-27 (the Pi 2, 0~band2: its tap dropped ≈ 15 % of the radio): 0.7 s lost to the tap every slot, at
+            //    the DC rule's geometry (tuner 50.2 kHz above the dial) — bridged with zeros, the slots still complete
+            const auto lost = run({ "hw=50200", "drop=700" });
+            const size_t lb = lost.count("FT8") ? lost.at("FT8").size() : 0;
+            std::snprintf(m, sizeof m, "0.7 s a slot lost to the tap: FT8 %zu calls with the gaps bridged (of %zu with none lost)", lb, t);
+            ok(lb >= t * 0.85, m);
         } else std::printf("  (not run — %s is not here)\n", wav.c_str());
     }
 
