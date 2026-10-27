@@ -21,6 +21,10 @@
 //      decoding, Single and Band spots run on B (Band reads B's band and is fed B's IQ, as is a CW skimmer on B), a
 //      listener holds one decoder across both VFOs, and B going off stops its decoders with the reason; §6b measures
 //      what a decoder on B costs against the same decoder on A.
+//   THE TUNER'S DC WHEN VFO B MOVES THE RADIO (V12 beta24), §7: a personal receiver, the dongle offset-tuned 15 kHz; A at
+//      the top of the window and B tuned just past it — the radio must move to hold both. BEFORE (VIBE_VFO_DC=0, the
+//      placement as it was, keeping the LOGICAL centre clear) the spike lands EXACTLY on A's dial; AFTER it is out of A's
+//      passband and B's (each + the 2.5 kHz guard).
 // Silent: audio frames are analysed in memory, never played.
 //   VIBESERVER_BIN=…/vibeserver node scripts/test-server-vfo-ab.mjs
 import net from 'node:net';
@@ -611,5 +615,35 @@ for (const [label, args, sid] of [['personal receiver (users 1)', ['--users', '1
     dx.close(); L.spec.close(); L.aud.close();
   } finally { S.stop(); }
 }
+// ── 7. The tuner's DC when VFO B moves the radio (V12 beta24) ──────────────────────────────────────────────────────────
+/* ★★ fitCentre kept the LOGICAL centre `clr` from both VFOs, but a dongle's spike is 15 kHz above it. A at the top of the
+ *  window (950 kHz above the centre — inside A's 955 kHz, so A's own tune moves nothing) and B 10 kHz above A: B is
+ *  outside its room, the radio must move, the middle of the room is between the two, and the old rule's way out was
+ *  "A − clr" — the spike then sits exactly on A's dial. */
+for (const [label, env] of [['BEFORE (VIBE_VFO_DC=0, the old placement)', { VIBE_VFO_DC: '0' }], ['AFTER', {}]]) {
+  console.log(`── 7. the tuner's DC when VFO B moves the radio — ${label} ──`);
+  const S = await server(['--users', '1'], 'vfoabdc', {}, [], env);
+  try {
+    const aHz = CENTRE + 950000, bHz = aHz + 10000;
+    const L = await listener(S.port, 'vfoabdc01', aHz);
+    await sleep(600);
+    const n0 = S.tunes.length;
+    ok(Math.abs(S.dcNow() - (CENTRE + 15000)) < 200, `A at ${(aHz / 1e6).toFixed(3)} MHz: the radio has not moved (tuner ${(S.dcNow() / 1e6).toFixed(4)} MHz)`);
+    L.spec.send({ type: 'watch', id: 1, frequency: bHz, mode: 'am' });
+    await until(() => S.tunes.length > n0 && lastWatch(L.spec) && lastWatch(L.spec).chans.length === 1, 4000);
+    await sleep(300);
+    const dc = S.dcNow();
+    const onA = Math.abs(dc - aHz) < 5000 + 2500, onB = Math.abs(dc - bHz) < 5000 + 2500;
+    console.log(`      B on at ${(bHz / 1e6).toFixed(3)} MHz moved the radio: tuner (the DC) ${(dc / 1e6).toFixed(4)} MHz — ${(dc - aHz) / 1e3} kHz from A, ${(dc - bHz) / 1e3} kHz from B`);
+    if (env.VIBE_VFO_DC === '0') ok(onA, `the fault reproduces: the DC within A's passband + guard (${(dc - aHz) / 1e3} kHz from its dial)`);
+    else {
+      ok(!onA && !onB, `★ the DC out of BOTH passbands + guard (${(dc - aHz) / 1e3} kHz from A, ${(dc - bHz) / 1e3} kHz from B)`);
+      ok(/VFO B moved the radio to/.test(S.log()), 'the server says B moved the radio');
+    }
+    L.spec.send({ type: 'watch', id: 1, off: true });
+    L.spec.close(); L.aud.close();
+  } finally { S.stop(); }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -136,6 +136,29 @@ int main(int argc, char** argv) {
         const double c30 = bandDcCentre(r, fft, 10137700, 10137700, 15000);
         okv(bandDcWhere(r, fft, 10137700, c30 + 15000) == 0, "30 m (a step from 40 m): outside 30 m's slices");
     }
+    std::printf("── Band on ONE VFO, somebody listening on the OTHER (V12 beta24, VFO A/B) ──\n");
+    {
+        // ★ Band on B's 40 m (dial 7.074), A listening on AM 7.100 MHz (±5 kHz + 2.5 kHz guard). The plain rule would take
+        //   the DC up out of the slices — and could land it on A. With A's zone as `also`, it never does.
+        const double r = 2048000, off = 15000, bDial = 7074000; const int fft = fftFor(r);
+        const double aLo = 7100000 - 7500, aHi = 7100000 + 7500;
+        int bad = 0, onA = 0;
+        for (double centre = 7000000; centre <= 7150000; centre += 500) {
+            const double c = bandDcCentre(r, fft, bDial, centre, off, -INFINITY, INFINITY, aLo, aHi);
+            const double dc = c + off;
+            if (bandDcWhere(r, fft, bDial, dc) != 0) bad++;
+            if (dc > aLo && dc < aHi) onA++;
+        }
+        okv(bad == 0, "every starting centre 7.000–7.150 MHz: the DC ends outside B's band's slices (" + std::to_string(bad) + " not)");
+        okv(onA == 0, "…and never on A's passband + guard (" + std::to_string(onA) + " on it)");
+        // a DC outside the slices but ON A's passband is moved as well
+        const double c = bandDcCentre(r, fft, bDial, 7100000 - off, off, -INFINITY, INFINITY, aLo, aHi);
+        okv(c + off <= aLo || c + off >= aHi, "a DC on A (outside B's slices) is moved off A");
+        okv(bandDcWhere(r, fft, bDial, c + off) == 0, "…and not into B's slices");
+        // no `also`: exactly the old placement
+        okv(bandDcCentre(r, fft, bDial, 7074000, off) == bandDcCentre(r, fft, bDial, 7074000, off, -INFINITY, INFINITY, 0, 0),
+            "with no other VFO: the placement as before");
+    }
     std::printf("\n%s — %d checks, %d failed\n", fails ? "FAILED" : "all passed", checks, fails);
     return fails ? 1 : 0;
 }

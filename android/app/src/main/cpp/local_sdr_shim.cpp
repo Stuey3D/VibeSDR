@@ -16198,15 +16198,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  (vibewatch::fitCentre). Further apart than one capture can hold: A wins — on A as before, B parked with
              *  its note until it is back inside. */
             {
-                double bHz = 0, bBw = 0;
-                if (watchCentreFollows() && watchPersonalB(bHz, bBw)) {
+                double bHz = 0, bBw = 0; vibedsp::RxPipeline::Mode bMode = vibedsp::RxPipeline::Mode::AM;
+                if (watchCentreFollows() && watchPersonalB(bHz, bBw, &bMode)) {
                     const double aLim = watchVfoLim(rxBwHz), bLim = watchVfoLim(bBw);
-                    vibewatch::CentreFit f = vibewatch::fitCentre(rtlCenter.load(), freq, aLim, bHz, bLim, watchDcClearHz(rxBwHz, bBw));
+                    // ★★ V12 beta24: the PHYSICAL DC out of both passbands (fitCentre's note) — the zones vfoDcPlace keeps
+                    const double off = vfoDcOff(person);
+                    vibewatch::CentreFit f = vibewatch::fitCentre(rtlCenter.load(), freq, aLim, bHz, bLim, watchDcClearHz(rxBwHz, bBw),
+                                                                  off, mainDcZone(freq, off), watchDcZone(bHz, bMode, bBw, off));
                     if (f.ok) centre = bandDcSafeFor(freq, f.centre, f.lo, f.hi);
                 }
             }
-            // ★★ V12 (2026-10-27, v12-dc-nudge): and never with the DC on the dial — fitCentre keeps the LOGICAL centre clear
-            //    of A, but the spike is hwOffsetHz() above it (vibe_vfo_dc.h; a no-op for the ordinary recentre ON the dial).
+            // ★★ V12 (2026-10-27, v12-dc-nudge): and never with the DC on the dial (vibe_vfo_dc.h) — a no-op after fitCentre,
+            //    which keeps the PHYSICAL DC out of both passbands itself (beta24), and for the ordinary recentre ON the dial.
             centre = vfoDcPlace(centre, freq, prevDial, person);
             rtlCenter.store(centre);
             // On SpyServer the display is the server's WIDE FFT, which the narrow IQ
@@ -26475,7 +26478,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             double aHz = 0, aBw = 0; std::string amd;
             watchMainOf(sock, aHz, amd, aBw);
             const double aLim = watchVfoLim(aBw), bLim = watchVfoLim(wd.bwHz);
-            const vibewatch::CentreFit f = vibewatch::fitCentre(rtlCenter.load(), aHz, aLim, wd.hz, bLim, watchDcClearHz(aBw, wd.bwHz));
+            /* ★★ V12 beta24: B's tune is a person's tune on their own radio — the PHYSICAL DC (logical centre + hwOffsetHz())
+             *  is kept out of BOTH passbands, and the radio moves for that alone if it has to (a B dialled onto the spike
+             *  moves the spike, as A's tune does — vfoDcPlace). Before, this placement kept only the LOGICAL centre clear
+             *  and moved nothing while B fitted, so B's tune could land the spike exactly on A or on B. */
+            const double dcOff = vfoDcOff(/*person*/ true);
+            const vibewatch::CentreFit f = vibewatch::fitCentre(rtlCenter.load(), aHz, aLim, wd.hz, bLim, watchDcClearHz(aBw, wd.bwHz),
+                                                                dcOff, mainDcZone(aHz, dcOff), watchDcZone(wd.hz, wd.rxMode, wd.bwHz, dcOff));
             if (!f.ok) {
                 char b[200];
                 snprintf(b, sizeof b, "VFO A and VFO B are too far apart for one window of this radio \xe2\x80\x94 at most %.2f MHz between them",
@@ -26550,13 +26559,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     static double watchDcClearHz(double aBw, double bBw) { return std::max(aBw, bBw) * 0.5 + 10000.0; }
     /** A personal receiver's VFO B, if there is one (the dial is one listener's, so there is at most one set that
      *  matters). Takes watchMtx then the set's `m` — never called with either held. */
-    bool watchPersonalB(double& hz, double& bw) {
+    bool watchPersonalB(double& hz, double& bw, vibedsp::RxPipeline::Mode* mode = nullptr) {
         if (watchSetCount_.load(std::memory_order_relaxed) <= 0) return false;
         std::vector<std::shared_ptr<WatchSet>> sets;
         { std::lock_guard<std::mutex> lk(watchMtx); for (auto& kv : watchSets) sets.push_back(kv.second); }
         for (auto& w : sets) {
             std::lock_guard<std::mutex> lk(w->m);
-            for (auto& ch : w->chans) { const auto wd = ch->wanted(); hz = wd.hz; bw = wd.bwHz; return true; }
+            for (auto& ch : w->chans) { const auto wd = ch->wanted(); hz = wd.hz; bw = wd.bwHz; if (mode) *mode = wd.rxMode; return true; }
         }
         return false;
     }
@@ -26618,13 +26627,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
     /** ★ A one-pipeline radio: the DSP thread COPIES the block to each active set's own feeder and goes. */
     void watchFeedFull(const cf32* iq, int n) {
-        if (watchSetCount_.load(std::memory_order_relaxed) <= 0 || perClientDsp()) return;
+        // ★ B's Band DC dial (bandDcBHz_) is cleared whenever no VFO B is fed — B gone means the rule is A's alone again
+        auto noBandB = [this] { if (bandDcBHz_.load(std::memory_order_relaxed) > 0.0) bandDcBHz_.store(0.0, std::memory_order_relaxed); };
+        if (watchSetCount_.load(std::memory_order_relaxed) <= 0 || perClientDsp()) { noBandB(); return; }
         std::vector<std::shared_ptr<WatchSet>> sets;
         { std::lock_guard<std::mutex> lk(watchMtx); for (auto& kv : watchSets) sets.push_back(kv.second); }
+        bool tapped = false;
         for (auto& w : sets) {
             bool active;
             { std::lock_guard<std::mutex> lk(w->m); active = w->activeLocked(); }
             if (!active) continue;
+            tapped = true;
             if (!w->feeder.running()) {
                 WatchSet* raw = w.get();
                 w->feeder.start([this, raw](const cf32* x, int k) {
@@ -26637,6 +26650,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             w->feeder.feed(iq, n, sampleRate);
             watchSkimTapB(w.get(), iq, n);
         }
+        if (!tapped) noBandB();
     }
     /** ★★ A one-pipeline radio's VFO B skimmer / Band spots: B's own WideTap — the same cut skimTapFeed makes for VFO A,
      *  centred on B's dial, on a thread of its own at spectrum priority; the DSP thread only copies. Stopped as soon as
@@ -26652,6 +26666,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 for (auto& ch : w->chans) if (ch->id() == 1) { bHz = ch->wanted().hz; parked = ch->parked(); }
             }
         }
+        // ★★ V12 beta24: B's Band (not a skimmer) on a personal receiver — Band's DC rule follows B's band (bandDcSafeFor)
+        const bool bandB = h && !parked && h->wantsBins() && watchCentreFollows();
+        if (bandB) bandDcBHz_.store(bHz, std::memory_order_relaxed);
+        else if (bandDcBHz_.load(std::memory_order_relaxed) > 0.0) bandDcBHz_.store(0.0, std::memory_order_relaxed);
         if (!h || parked) { if (w->bTap.running()) w->bTap.stop(); return; }
         if (!w->bTap.running()) {
             std::weak_ptr<DecoderHost> wh = h;
@@ -28057,25 +28075,52 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     //    move — one retune blip, never a frequency error. A locked radio (per-listener channels) never moves: its DC is
     //    where the owner's centre puts it.
     std::atomic<bool> bandDcOn_{false};    // ★ Band's slice is cut on this one-pipeline radio (set on the DSP thread)
+    /** ★★ V12 beta24 — BAND ON VFO B (decode on either VFO, 36c77c156): a personal receiver's VFO B running Band spots, its
+     *  dial (0 = none). Set on the DSP thread by watchSkimTapB while B's host cuts Band's slices; the rule below then keeps
+     *  the DC off B's band — B's slices, not A's dial — and off A's passband as well. Only where the radio follows both
+     *  VFOs (watchCentreFollows): on a shared dial B never moves the radio (the shared-dial contract). */
+    std::atomic<double> bandDcBHz_{0.0};
+    /** Band's DC rule is in force — for VFO A's Band (the one-pipeline host) or a personal receiver's VFO B's. */
+    bool bandDcActive() const { return bandDcOn_.load(std::memory_order_relaxed) || bandDcBHz_.load(std::memory_order_relaxed) > 0.0; }
     bool   bandDcMoved_ = false;           // ★ bandDcTick moved the tuner for Band (DSP thread, modeMtx)
-    double bandDcKeyDial_ = 0, bandDcKeyCentre_ = 0, bandDcKeyRate_ = 0;   // ★ the last placement bandDcTick checked
+    double bandDcKeyDial_ = 0, bandDcKeyBDial_ = 0, bandDcKeyCentre_ = 0, bandDcKeyRate_ = 0;   // ★ the last placement bandDcTick checked
     double bandDcLogAt_ = 0;
     /** Does this radio put a DC spike at its capture's physical centre? A dongle (and its rtl_tcp cousin, which gets no
      *  offset), a HackRF, an RSP — every radio that offsets its tuning to dodge one. Not the HF+ (libairspyhf's IF shift
      *  removes it), not a SpyServer or an Icom (not our tuner). */
     bool dcAtCaptureCentre() const { return !useSpy() && !useIcom() && !useAirspyHf() && (hwOffsetHz() > 0.0 || useTcp()); }
     /** ★ The logical centre to use instead of `centre` for a Band run on `dialHz` (its slices around that dial). */
-    double bandDcSafeFor(double dialHz, double centre, double lo = -INFINITY, double hi = INFINITY) const {
+    double bandDcSafeFor(double dialHz, double centre, double lo = -INFINITY, double hi = INFINITY) {
         // ★ VIBE_BAND_DC=0 switches the rule off (the placement exactly as before it — A/B, and the e2e test's "before")
         static const bool kOff = [] { const char* e = std::getenv("VIBE_BAND_DC"); return e && *e == '0'; }();
-        if (kOff || !bandDcOn_.load(std::memory_order_relaxed) || !dcAtCaptureCentre()) return centre;
+        if (kOff || !bandDcActive() || !dcAtCaptureCentre()) return centre;
         if (g_vsLockedCentre.load() > 0.0 || g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
             || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed))
             return centre;
-        return vibe::bandDcCentre(sampleRate, fftSize, dialHz, centre, hwOffsetHz(), lo, hi);
+        /* ★★ WHOSE BAND (V12 beta24). `dialHz` is VFO A's. Band on A: A's band, and — on a personal receiver with a VFO B —
+         *  the DC kept off B's passband too. Band on B: B's band (its own dial), and the DC kept off A's passband. Before,
+         *  Band on B was placed by A's dial, so the spike could sit in one of B's mode windows (VFO-AB.md's old limit). */
+        const double off = hwOffsetHz();
+        double bandDial = dialHz;
+        vibe::VfoDcZone also;
+        double bHz = 0, bBw = 0; vibedsp::RxPipeline::Mode bMode = vibedsp::RxPipeline::Mode::AM;
+        const bool personalB = watchCentreFollows() && watchPersonalB(bHz, bBw, &bMode);
+        if (bandDcOn_.load(std::memory_order_relaxed)) {
+            if (personalB) also = watchDcZone(bHz, bMode, bBw, off);
+        } else {
+            const double bBand = bandDcBHz_.load(std::memory_order_relaxed);
+            if (!(bBand > 0.0) || !personalB) return centre;
+            bandDial = bHz;   // ★ B's dial as it is now (bandDcBHz_ is a block behind a B tune)
+            also = mainDcZone(dialHz, off);
+            // ★ and the room both VFOs allow, inside the caller's
+            const double bl = watchVfoLim(bBw);
+            lo = std::max(lo, bHz - bl); hi = std::min(hi, bHz + bl);
+            if (lo > hi) return centre;
+        }
+        return vibe::bandDcCentre(sampleRate, fftSize, bandDial, centre, off, lo, hi, also.lo, also.hi);
     }
     /** ★ The same for the dial as it is now (audioFreq). `lo`/`hi`: where the caller's own rules allow the centre. */
-    double bandDcSafe(double centre, double lo = -INFINITY, double hi = INFINITY) const {
+    double bandDcSafe(double centre, double lo = -INFINITY, double hi = INFINITY) {
         return bandDcSafeFor(audioFreq.load(), centre, lo, hi);
     }
 
@@ -28100,34 +28145,60 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     //    rx.setTune(vfoOffsetNow()) in the same move — one PLL relock, never a frequency error.
     // ★ VIBE_VFO_DC=0 switches it off (the placement exactly as before — the e2e test's "before").
     // `viewSpan` — the view being placed for (dongleForView's), else the one on screen.
-    double vfoDcPlace(double centre, double dialHz, double prevDialHz, bool person, double viewSpan = 0.0) {
+    /** ★ The offset this rule keeps the DC away by — hwOffsetHz() where it applies (see WHO and WHEN above), else 0. Shared
+     *  by vfoDcPlace and the two-VFO placement (fitCentre), so the two can never disagree about whether there IS a spike
+     *  to dodge. `person`: a person's tune or pan (a shared dial moves for nothing else). */
+    double vfoDcOff(bool person) const {
         static const bool kOff = [] { const char* e = std::getenv("VIBE_VFO_DC"); return e && *e == '0'; }();
         const double off = hwOffsetHz();
-        if (kOff || !(centre > 0.0) || off <= 0.0 || !dcAtCaptureCentre()) return centre;
+        if (kOff || off <= 0.0 || !dcAtCaptureCentre()) return 0.0;
         if (g_vsLockedCentre.load() > 0.0 || g_dabMode.load(std::memory_order_relaxed) || g_adsbMode.load(std::memory_order_relaxed)
             || g_ismMode.load(std::memory_order_relaxed) || g_ndbMode.load(std::memory_order_relaxed) || g_aisMode.load(std::memory_order_relaxed)
-            || bandDcOn_.load(std::memory_order_relaxed))
-            return centre;
-        if (vsSharedDial() && !person) return centre;
-        // ★ the passband about the dial, as the demodulator cuts it (buildAudio's demodOffset; USB/CW pass 0..+bw of the
-        //   channel, LSB −bw..0, the rest ±bw/2)
+            || bandDcActive())
+            return 0.0;
+        if (vsSharedDial() && !person) return 0.0;
+        return off;
+    }
+    /** ★ A passband about its dial, Hz from the dial, by mode: USB 0..+bw, LSB −bw..0, CW ±bw (where a channel puts its
+     *  CW passband is the demodulator's business — both sides is the safe answer), the rest ±bw/2. VFO B's. */
+    static void vfoPassband(vibedsp::RxPipeline::Mode m, double bw, double& lo, double& hi) {
+        using M = vibedsp::RxPipeline::Mode;
+        if (m == M::SSB_USB)      { lo = 0.0; hi = bw; }
+        else if (m == M::SSB_LSB) { lo = -bw; hi = 0.0; }
+        else if (m == M::CW)      { lo = -bw; hi = bw; }
+        else                      { lo = -bw * 0.5; hi = bw * 0.5; }
+    }
+    /** ★ VFO A's zone at `dialHz` — the ordinary listening channel's passband as the demodulator cuts it (buildAudio's
+     *  demodOffset; USB/CW pass 0..+bw of the channel, LSB −bw..0, the rest ±bw/2), widened by the guard. */
+    vibe::VfoDcZone mainDcZone(double dialHz, double off) const {
         const double bw = rxBwHz, ch = demodOffset;
         double pbLo = ch - bw * 0.5, pbHi = ch + bw * 0.5;
         if (rxMode == vibedsp::RxPipeline::Mode::SSB_USB || rxMode == vibedsp::RxPipeline::Mode::CW) { pbLo = ch; pbHi = ch + bw; }
         else if (rxMode == vibedsp::RxPipeline::Mode::SSB_LSB)                                      { pbLo = ch - bw; pbHi = ch; }
-        const vibe::VfoDcZone zone = vibe::vfoDcZone(dialHz, pbLo, pbHi, off);
+        return vibe::vfoDcZone(dialHz, pbLo, pbHi, off);
+    }
+    /** ★ VFO B's zone (its own mode and width). */
+    static vibe::VfoDcZone watchDcZone(double bHz, vibedsp::RxPipeline::Mode m, double bBw, double off) {
+        double lo = 0, hi = 0; vfoPassband(m, bBw, lo, hi);
+        return vibe::vfoDcZone(bHz, lo, hi, off);
+    }
+    double vfoDcPlace(double centre, double dialHz, double prevDialHz, bool person, double viewSpan = 0.0) {
+        const double off = vfoDcOff(person);
+        if (!(centre > 0.0) || off <= 0.0) return centre;
+        const vibe::VfoDcZone zone = mainDcZone(dialHz, off);
         // ★ where the centre MAY go: the VFO still captured (dongleForView's own limit) — and, on a personal receiver, VFO B
-        //   too, with the DC off B as well (its mode is not known here, so ±its whole width: the safe side)
+        //   too, with the DC off B's passband as well (its own mode and width)
+        const double bw = rxBwHz;
         const double lim = watchVfoLim(bw);
         double lo = dialHz - lim, hi = dialHz + lim;
         vibe::VfoDcZone avoid;
         {
-            double bHz = 0, bBw = 0;
-            if (watchCentreFollows() && watchPersonalB(bHz, bBw)) {
+            double bHz = 0, bBw = 0; vibedsp::RxPipeline::Mode bMode = vibedsp::RxPipeline::Mode::AM;
+            if (watchCentreFollows() && watchPersonalB(bHz, bBw, &bMode)) {
                 const double bl = watchVfoLim(bBw);
                 const double nlo = std::max(lo, bHz - bl), nhi = std::min(hi, bHz + bl);
                 if (nlo <= nhi) { lo = nlo; hi = nhi; }
-                avoid = vibe::vfoDcZone(bHz, -bBw, bBw, off);
+                avoid = watchDcZone(bHz, bMode, bBw, off);
             }
         }
         // ★ where it SHOULD go: the whole view still inside the capture
@@ -28145,24 +28216,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  IF the tuner follows the dial again). Checked only when the dial, the centre or the rate changed; one retune, under
      *  the pan's own 120 ms cooldown, never with a pan's move still pending. */
     void bandDcTick() {
-        const bool on = bandDcOn_.load(std::memory_order_relaxed);
+        const bool on = bandDcActive();
         if (!on && !bandDcMoved_) return;
         if (pendingDongle > 0.0) return;                   // ★ a pan's move first (it went through bandDcSafe already)
         const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         if (nowMs - lastDongleMoveMs < 120) return;
         const double cur = rtlCenter.load(), dial = audioFreq.load();
+        // ★ V12 beta24: the Band's own dial — VFO B's when Band runs on B (bandDcSafeFor) — keys the check and names the log
+        const double bDial = bandDcOn_.load(std::memory_order_relaxed) ? 0.0 : bandDcBHz_.load(std::memory_order_relaxed);
+        const double bandDial = bDial > 0.0 ? bDial : dial;
         double want = cur;
         const char* why = "";
         if (on) {
-            if (dial == bandDcKeyDial_ && cur == bandDcKeyCentre_ && sampleRate == bandDcKeyRate_) return;
-            bandDcKeyDial_ = dial; bandDcKeyCentre_ = cur; bandDcKeyRate_ = sampleRate;
+            if (dial == bandDcKeyDial_ && bDial == bandDcKeyBDial_ && cur == bandDcKeyCentre_ && sampleRate == bandDcKeyRate_) return;
+            bandDcKeyDial_ = dial; bandDcKeyBDial_ = bDial; bandDcKeyCentre_ = cur; bandDcKeyRate_ = sampleRate;
             // ★ the VFO must stay captured, as dongleForView's own limit says
             const double lim = std::max(sampleRate * 0.05, usableSpan() / 2.0 - viewDongleMargin() - rxBwHz * 0.5);
             want = bandDcSafe(cur, dial - lim, dial + lim);
             if (std::fabs(want - cur) <= 1.0) return;
             bandDcMoved_ = true;
-            why = "Band spots: the tuner's DC moved off the band's slices";
+            why = bDial > 0.0 ? "Band spots on VFO B: the tuner's DC moved off B's band's slices" : "Band spots: the tuner's DC moved off the band's slices";
         } else {
             bandDcMoved_ = false; bandDcKeyDial_ = 0;
             if (!g_tunerBwAuto.load(std::memory_order_relaxed) || g_vsLockedCentre.load() > 0.0) return;   // ★ manual IF: stay put
@@ -28172,8 +28246,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         lastDongleMoveMs = nowMs;
         std::string m;
-        const int where = vibe::bandDcWhere(sampleRate, fftSize, dial, cur + hwOffsetHz(), &m);
-        LOGI("%s — dial %.4f MHz: centre %.4f -> %.4f MHz, DC %.4f -> %.4f MHz (was %s)", why, dial / 1e6, cur / 1e6, want / 1e6,
+        const int where = vibe::bandDcWhere(sampleRate, fftSize, bandDial, cur + hwOffsetHz(), &m);
+        LOGI("%s — dial %.4f MHz: centre %.4f -> %.4f MHz, DC %.4f -> %.4f MHz (was %s)", why, bandDial / 1e6, cur / 1e6, want / 1e6,
              (cur + hwOffsetHz()) / 1e6, (want + hwOffsetHz()) / 1e6,
              where == 2 ? ("ON " + m).c_str() : where == 1 ? "inside a slice" : "outside the slices");
         rtlCenter.store(want);

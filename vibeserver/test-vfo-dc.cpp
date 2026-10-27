@@ -152,6 +152,28 @@ int main() {
         ok(p.moved && p.centre + off > dial, "the DC is never handed to VFO B: the other side");
     }
 
+    std::printf("── 6. VFO B's zone by ITS mode, and the hold the two-VFO placement uses (V12 beta24, fitCentre) ──\n");
+    {
+        // ★ The shim's watchDcZone: USB 0..+bw, LSB −bw..0, CW ±bw, the rest ±bw/2 — then vfoDcZone's guard and its
+        //   never-stricter-than-locked rule, exactly as A's.
+        const double off = 15000, b = 7.074e6;
+        VfoDcZone z = vfoDcZone(b, 0, 2700, off);
+        ok(z.lo == b - 2500 && z.hi == b + 2700 + 2500, "B on USB: carrier − guard … top of the passband + guard");
+        ok(!(b + off > z.lo && b + off < z.hi), "…so B's own locked offset (dial + 15 kHz) is clear of it: a USB B never chases");
+        z = vfoDcZone(b, -500, 500, off);
+        ok(z.lo == b - 3000 && z.hi == b + 3000, "B on CW (±bw): 3 kHz either side");
+        z = vfoDcZone(b, -20000, 20000, off);   // a wide AM B: 40 kHz, its locked offset inside → shrinks to ±off
+        ok(z.lo == b - off && z.hi == b + off, "a wide AM B: never stricter than the locked VFO (±15 kHz)");
+        // ★ the hold beyond the edge (fitCentre's edge candidates): the DC placed there is outside the zone, and the dial can
+        //   travel `hold` further before it is inside again
+        z = vfoDcZone(b, 0, 2700, off);
+        const double hold = std::max(kVfoDcHoldMinHz, 0.5 * (z.hi - z.lo));
+        const double below = z.lo - hold, above = z.hi + hold;
+        ok(below < z.lo && above > z.hi, "the hold candidates sit outside the zone");
+        const VfoDcZone moved = vfoDcZone(b - hold + 100, 0, 2700, off);   // B walks down by (hold - 100) Hz
+        ok(!(below > moved.lo && below < moved.hi), "…and B can walk almost `hold` towards the DC before it is inside again");
+    }
+
     std::printf("\n   %d passed, %d failed\n", pass, fail);
     return fail ? 1 : 0;
 }
