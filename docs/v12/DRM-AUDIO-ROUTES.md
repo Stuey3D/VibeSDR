@@ -228,3 +228,47 @@ spectrum is closer to a true 960 decode than today's, the stereo image matches, 
 edge where today cuts, latency and CPU and memory are lower. Not sample-identical to today — today is not a 960 decode.
 Not covered: AAC-LC or HE-AAC v1 stereo services (none on the muxes received), and a real "slowly fading" weak mux
 (10D was a cliff). **Stuart listens (Desktop/DAB-FAAD2-vs-FFmpeg) and decides; FFmpeg stays the default until then.**
+
+## DAB+ on its own thread, and a lighter FAAD2 (2026-10-26/27, Stuart's Pi 2)
+
+**Why.** With FAAD2 on, the Pi 2 (Cortex-A7, the minimum spec) broke up: FAAD2 and its 32→48 kHz resampler ran
+inline on `vibe-dab`, the thread that already carries the OFDM front end, FIC and Viterbi (~90 % of a core on its own),
+and it read "FAAD2 · 11.9 % of a core" against FFmpeg's 6–10 %.
+
+**The thread.** `AacDecoderFaadAsync` (vibe_dab_faad.h): `vibe-faad2`, nice −17 (one rung below the −19 chain that
+feeds it, far above spectrum and decoders). DabService's decode/conceal/reset calls become jobs on a 32-slot SPSC ring;
+the PCM comes back through a sink into `pushPcm48Stereo`. Drop-never-wait: a full ring (or > 500 ms queued) makes the
+unit a missing one, concealed in its place when the next job fits — counted (`aacDropped`: the DAB panel's "too late",
+the health pill's "DAB+ audio decoder: TOO HEAVY"). Resets are generations: stale jobs never run, stale PCM is dropped
+under `pm_`. `holdTimeline` counts audio in flight as pushed. `VIBE_DAB_FAAD_INLINE=1` restores the inline layout.
+Proof (armhf, qemu-arm per-thread instruction counts, 12B C229, full DabService, nothing dropped): inline → vibe-dab
+33.41 G; threaded → vibe-dab 29.57 G + vibe-faad2 3.83 G. The Pi 2 A/B (faad4, 9A) confirmed vibe-dab ~90–100 % with
+either decoder — the demodulator's own load.
+
+**Where FAAD2's armhf cost was, and what was done** (armhf guest instructions, qemu-arm + a block-counting plugin; a
+proxy, not cycles — NEON q-ops count once):
+
+| Step | HE-AAC v2 12B, 59 s | AAC-LC 48 kHz stereo, 60 s | vs stock FAAD2 |
+|---|---|---|---|
+| stock 2.11.3, its own flags | 3209 M | 1519 M | — |
+| `-funsafe-math-optimizations` (GCC puts no float loop on ARMv7 NEON without it) | 2455 M | 1360 M | 132.5 dB |
+| + patch 1: no `-ffloat-store` (FAAD2's CMake adds it for every GCC: every float temporary through the stack) | 1241 M | 770 M | 132.5 dB |
+| + patches 2–7 (SBR: DCT-IV kernel, QMF analysis/synthesis, HF generation/adjustment; PS: decorrelator, energy, transients, mixing) | 843 M | 770 M | 132.3 dB |
+| + patch 8 (AAC core: radix-4 FFT pass, iMDCT twiddles, long-window overlap, no per-call 8 KB zeroing) | 816 M | 537 M | 131.7 / 140.1 dB |
+
+"vs stock": SNR of the stock output against the difference; max |diff| ≤ 2.4e-6; level, every third octave 63 Hz–16 kHz
+and side/mid identical to 0.0001 dB. Mac (21 real logs, 1909 s): 134.1 dB NEON path, 134.3 dB scalar path.
+**Our resampler** was the other half: 64-bit division per output (a library call on 32-bit ARM) — 1.3 G of the
+decoder thread's 2.15 G. Now 32 taps a branch, no division, the 2:3 case twelve outputs at a time: 0.18 G.
+**The decoder thread end to end** (12B, armhf): 3.83 G (faad3/faad4) → 1.10 G. Pi 2 estimate by proportion (an
+estimate): HE-AAC v2 ≈ 3–4 % of a core, 48 kHz AAC-LC ≈ 5 % (faad4 measured 11.9 % there; FFmpeg 8.7 %).
+
+**The patches** live in `vibeserver/linux/faad2-patches/` (series order, each documented in its header), applied by
+both deps builders to the plain (DAB+) build only; the DRM build stays stock. GPL-2.0-or-later, published with FAAD2.
+Not measured on: real AAC-LC or HE-AAC v1 DAB+ recordings (none received here — the AAC-LC row is a 1024-sample
+ffmpeg stream), the 34-band PS configuration.
+
+**Setup page — the switch would not stay off.** The page saves through the front door; the radio's own process kept
+the old `dabFaad2` in g_runtimeConfig, and its next self-persist (the DAB block, as the last listener left) folded every
+per-radio field from that copy back into config.json. The live-persist handler now folds its patch into the radio's
+entry as it is on disk (vibeserver/main.cpp). scripts/test-setup-dab-faad2.mjs (headless muted Edge) reproduces it.
