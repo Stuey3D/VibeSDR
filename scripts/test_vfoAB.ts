@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 /**
  * V12 VFO A/B — the app's half (src/services/vfoAB.ts): the wire, the A/B slots, and the L/R tags.
  *
@@ -139,7 +141,8 @@ ok(vfoB(parseWatch({ type: 'watch', chans: [{ id: 1, freq: 1e6 }] }))?.freq === 
 
 // ★★ Scanner open = VFO B off (Stuart): opening the scanner turns B off and the tuning menu offers no A/B toggle (source checks).
 {
-  const scr = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/screens/SDRScreen.tsx'), 'utf8');
+  // ★ ESM: no require/__dirname here (the scanner check came in from a CommonJS habit and stopped the whole file loading).
+  const scr = readFileSync(fileURLToPath(new URL('../src/screens/SDRScreen.tsx', import.meta.url)), 'utf8');
   ok(/if \(type === 'scanner'\) onVfoAB\(false\);/.test(scr), 'scanner: opening it switches VFO B off');
   ok(/activeDecoder !== 'scanner' \? onVfoAB : undefined/.test(scr), 'scanner: no A/B toggle in the tuning menu while it is open');
 }

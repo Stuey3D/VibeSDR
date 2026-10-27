@@ -696,6 +696,7 @@ export default function DabPanel(p: DabPanelProps) {
         {!scanRows.length && !!st?.running && <Text style={[s.notice, { color: C.muted }]}>Nothing found yet {'\u2014'} each empty block takes about three seconds.</Text>}
         {scanRows.map((h) => {
           const q = dabScanQuality(h), open = scanOpen.has(h.block), at = idx();
+          // nav-registered: scanItems { k: 'ens' } — the pad walks it by index (navHl) and Enter runs runScanItem.
           return (
             <View key={h.block}>
               <TouchableOpacity onPress={() => setScanOpen((o) => dabScanToggle(o, h.block))} style={[s.scanHd, navHl(at)]}
@@ -710,6 +711,7 @@ export default function DabPanel(p: DabPanelProps) {
               </TouchableOpacity>
               {open && [{ sid: 0, label: `\u25b6 Tune to ${h.block}` }, ...h.services].map((sv) => {
                 const si = idx();
+                // nav-registered: scanItems { k: 'svc' } — walked by index (navHl), Enter runs runScanItem.
                 return (
                   <TouchableOpacity key={sv.sid} onPress={() => scanTune(h.channel, sv.sid || undefined)} style={[s.scanSvc, navHl(si)]} accessibilityRole="button">
                     <Text style={s.svcDls} numberOfLines={1}>{sv.label}</Text>
