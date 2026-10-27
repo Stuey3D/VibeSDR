@@ -13,9 +13,13 @@
 export interface WatchChan {
   id: number; freq: number; mode: string; bw: number;
   sqlOn: boolean; sql: number; open: boolean; since: number; lvl: number; parked: boolean;
+  /** ★ Round 3: muted in this listener's mix (absent from an older server = false). */
+  mute: boolean;
 }
 export interface WatchState {
   max: number; lo: number; hi: number; stereo: boolean; monoOut: boolean;
+  /** ★ Round 3: VFO A muted in this listener's mix. */
+  muteA: boolean;
   chans: WatchChan[]; refused?: string; note?: string;
 }
 
@@ -27,10 +31,11 @@ export function watchSanitise(m: any): WatchState | null {
   const chans: WatchChan[] = Array.isArray(m.chans) ? m.chans.slice(0, 8).map((c: any) => ({
     id: num(c?.id, 1), freq: num(c?.freq), mode: typeof c?.mode === 'string' ? c.mode : 'am', bw: num(c?.bw, 10000),
     sqlOn: c?.sqlOn === true, sql: num(c?.sql, -100), open: c?.open !== false, since: num(c?.since),
-    lvl: num(c?.lvl, -200), parked: c?.parked === true,
+    lvl: num(c?.lvl, -200), parked: c?.parked === true, mute: c?.mute === true,
   })).filter((c: WatchChan) => c.freq > 0) : [];
   return {
-    max: num(m.max, -1), lo: num(m.lo), hi: num(m.hi), stereo: m.stereo !== false, monoOut: m.monoOut === true, chans,
+    max: num(m.max, -1), lo: num(m.lo), hi: num(m.hi), stereo: m.stereo !== false, monoOut: m.monoOut === true,
+    muteA: m.muteA === true, chans,
     refused: typeof m.refused === 'string' ? m.refused : undefined,
     note: typeof m.note === 'string' && m.note ? m.note.slice(0, 200) : undefined,
   };

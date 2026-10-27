@@ -1731,6 +1731,14 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
    reach, and it parks at the left when squelch is off. Field-proven design — see the phone. */
 .sqlBlock { padding: 7px 0; }
 .sqlBlock > label { color: var(--btn-text); font-size: 12px; display: block; margin-bottom: 6px; }
+/* ★★ V12 VFO A/B round 3 — each VFO's squelch row: the label line carries the VFO's letter in its needle colour
+   (--abcol, main.ts sqlRowsPaint) and that VFO's MUTE key, right-aligned. Hidden entirely with one VFO. */
+.sqlHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.sqlHead > label { color: var(--btn-text); font-size: 12px; }
+.sqlVfoTag { margin-left: 6px; color: var(--abcol, var(--btn-text)); font-weight: 700; text-shadow: 0 0 5px var(--abcol, transparent); }
+.sqlMute { flex: none; padding: 3px 10px; font-size: 11px; }
+.sqlMute.on { color: #ff6b6b; border-color: #ff6b6b; }
+#sqlBlockB { border-top: 1px solid rgba(255,160,0,.25); }
 /* ★ The BAR is a TALL, TRANSPARENT HIT AREA — 14px of clearance above a 22px visual track. The ball
    sits in that top clearance, so it is INSIDE the clickable box: the cursor becomes a hand ON the
    ball, and a drag can start on it. (Before, the hit area was just the 22px track, so the ball
@@ -4871,7 +4879,11 @@ select.btn { padding: 6px 8px; }
        signal move underneath it, so "just above the noise" is something you SEE rather than a
        figure you guess. Drag fully left to switch squelch off. -->
   <div class="sqlBlock icomHide">
-    <label>SQUELCH</label>
+    <!-- ★★ V12 VFO A/B round 3 (Stuart: "the 2 VFO's can they have their own squelch and auto squelch options which show
+         in the audio menu when the 2nd VFO is active"): with VFO B on, this block is VFO A's — the letter and the MUTE key
+         appear on its label line — and #sqlBlockB below is VFO B's. One VFO: exactly as it always was. -->
+    <div class="sqlHead"><label>SQUELCH<span class="sqlVfoTag" id="sqlVfoA" hidden>VFO A</span></label>
+      <button class="btn sqlMute" id="sqlMuteA" hidden title="Mute VFO A — it keeps decoding and its meter keeps moving; VFO B comes to the middle, both ears. Press again to hear it.">MUTE</button></div>
     <div id="sqlBar" class="sqlBar" title="Drag the ball to set the squelch; drag fully left for OFF">
       <div class="sqlTrack"><div id="sqlFill" class="sqlFill"></div></div>
       <div id="sqlNeedle" class="sqlNeedle"><span class="sqlBall"></span></div>
@@ -4897,6 +4909,21 @@ select.btn { padding: 6px 8px; }
       </span>
     </div>
     <div class="sqlNote" id="sqlNote">Off — audio always passes.</div>
+  </div>
+  <!-- ★★ V12 VFO A/B round 3 — VFO B's own squelch: its live level, its threshold (sent as B's watch squelch), its own
+       AUTO SQUELCH (A's algorithm on B's level — src/utils/sqlAutoTrack.ts; the ABOVE NOISE margin above is shared) and
+       its MUTE. Shown only while VFO B is on. -->
+  <div class="sqlBlock icomHide" id="sqlBlockB" hidden>
+    <div class="sqlHead"><label>SQUELCH<span class="sqlVfoTag" id="sqlVfoB">VFO B</span></label>
+      <button class="btn sqlMute" id="sqlMuteB" title="Mute VFO B — it keeps decoding and its meter keeps moving; VFO A comes to the middle, both ears. Press again to hear it.">MUTE</button></div>
+    <div id="sqlBarB" class="sqlBar" title="VFO B's squelch: drag the ball to set it; drag fully left for OFF">
+      <div class="sqlTrack"><div id="sqlFillB" class="sqlFill"></div></div>
+      <div id="sqlNeedleB" class="sqlNeedle"><span class="sqlBall"></span></div>
+      <div class="sqlAutoTag">AUTO SQUELCH ACTIVE</div>
+    </div>
+    <div class="sqlAutoRow">
+      <button class="btn sqlAutoBtn" id="sqlAutoB" title="VFO B's own auto squelch — it tracks B's channel noise the same way VFO A's does, with the same ABOVE NOISE margin">AUTO SQUELCH</button>
+    </div>
   </div>
   <!-- ★ Only shown when the operator has set "listener's choice" — on any other setting the
        row is hidden entirely rather than disabled, because an inert control still reads as an
