@@ -104,7 +104,11 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
             //   at all before that, so a socket that never connected was indistinguishable from
             //   one that was never started — and the server cannot see either. A whole night of
             //   diagnosis was built on that silence (2026-08-16).
-            "VibeLocalAudioState"]
+            "VibeLocalAudioState",
+            // ★★ V12 TWO SERVERS: the server's TEXT on the local audio socket (STILL LISTENING?, its endings). With its
+            //   screen gone, the background server's audio socket is the only thing it can say anything on
+            //   (src/services/dualServer.ts watchNativeText).
+            "VibeLocalAudioText"]
   }
 
   override static func requiresMainQueueSetup() -> Bool { return false }
@@ -1872,6 +1876,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     // ★ Any explicit mute or unmute settles who muted us — see interruptMuted.
     interruptMuted = false
     isMuted = muted
+    VibeDualAudio.primaryMuted = muted   // ★ V12 two servers: ⏸ pauses BOTH — the second voice follows this one
     sendEvent(withName: "VibeMuted", body: ["muted": muted])
     // FM-DX power-saving pause: STOP the MP3 audio stream + release the audio
     // route so it isn't draining battery/network in the background (AirPods out /
@@ -2011,6 +2016,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   @objc func setMacOutputGain(_ gain: NSNumber) {
     let g = VibePowerModule.runsOnMac ? Float(max(0, min(1, gain.doubleValue))) : 1
+    VibeDualAudio.masterGain = g   // ★ V12 two servers: the Mac fader is the second voice's level too
     onMain {
       self.macOutputGain = g
       if !self.pageDucked && self.pageFade == nil { self.audioEngine?.mainMixerNode.outputVolume = g }
@@ -2232,6 +2238,9 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     if ringOn, let chans = buf.floatChannelData {
       recRing.append(left: chans[0], right: buf.format.channelCount > 1 ? chans[1] : nil, frames: Int(buf.frameLength))
     }
+    // ★★ V12 TWO SERVERS (VibeDualAudio.swift): this server folded to mono and placed in its ear — AFTER the recorder and
+    //   the record buffer, so a recording is this server as it is, not half of a pair. One Bool read when not paired.
+    if !isMuted { VibeDualAudio.primary.process(buf) }
     if !isMuted { scheduleOut(buf) }
   }
 
@@ -2762,6 +2771,15 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     }
   }
 
+  /// ★★ V12 TWO SERVERS: say something on the local audio socket WITHOUT it becoming the tune a reopen repeats — the
+  /// card's "I'm still here" (a ping) on a background server. A person's tap, never automatic.
+  @objc func sendLocalText(_ json: String) {
+    guard let conn = laConn, let data = json.data(using: .utf8) else { return }
+    let meta = NWProtocolWebSocket.Metadata(opcode: .text)
+    let ctx  = NWConnection.ContentContext(identifier: "text", metadata: [meta])
+    conn.send(content: data, contentContext: ctx, isComplete: true, completion: .contentProcessed { _ in })
+  }
+
   @objc func sendLocalTune(_ json: String) {
     laTune = json
     guard let conn = laConn, let data = json.data(using: .utf8) else { return }
@@ -2798,6 +2816,10 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
                 as? NWProtocolWebSocket.Metadata)?.opcode
       // ★ The shim explains a refusal in TEXT on this socket before it closes — note it, so the
       //   close that follows is not retried (laTerminalTypes).
+      // ★★ V12 TWO SERVERS: every text frame to JS too — rare (refusals, STILL LISTENING?), never audio.
+      if op == .text, let data, data.count < 4096, let txt = String(data: data, encoding: .utf8) {
+        self.sendEvent(withName: "VibeLocalAudioText", body: ["text": txt])
+      }
       if op == .text, let data,
          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
          let type = obj["type"] as? String, Self.laTerminalTypes.contains(type) {

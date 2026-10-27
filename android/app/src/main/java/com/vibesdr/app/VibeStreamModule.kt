@@ -277,6 +277,10 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun sendLocalTune(json: String) { VibeStreamService.instance?.sendLocalTune(json) }
 
+    /** ★ V12 two servers: a text frame that is NOT remembered as the tune (VibeStreamService.sendLocalText). */
+    @ReactMethod
+    fun sendLocalText(json: String) { VibeStreamService.instance?.sendLocalText(json) }
+
     @ReactMethod
     fun stopLocalAudio() { localRestart = null; VibeStreamService.instance?.stopLocalAudio() }
 

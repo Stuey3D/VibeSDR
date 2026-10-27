@@ -147,6 +147,13 @@ object VibeLocalSDR {
     }
     private external fun nativeOpusDecode(packet: ByteArray, rate: Int, channels: Int): ShortArray?
 
+    /** ★★ V12 two servers: the SECOND server's Opus, on a decoder of its own (VibeDualAudio.kt). The decoder above
+     *  carries the main server's state between packets — the other server's packets must never pass through it. */
+    fun opusDecodeAux(packet: ByteArray, rate: Int, channels: Int): ShortArray? {
+        ensureLoaded(); return nativeOpusDecodeAux(packet, rate, channels)
+    }
+    private external fun nativeOpusDecodeAux(packet: ByteArray, rate: Int, channels: Int): ShortArray?
+
     // ─── FULL MODE ────────────────────────────────────────────────────────────────────────
     //
     // ★★★ THE APP IS THE RADIO; THE CHILD PROCESS IS THE FRONT DOOR. Inverted relative to Linux,

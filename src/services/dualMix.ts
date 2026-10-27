@@ -1,0 +1,290 @@
+/**
+ * ★★ V12 TWO SERVERS AT ONCE — THE PURE RULES (GitHub discussion #57; Stuart's design, 2026-10-27).
+ *
+ * Stuart: "we use the server chip. We add a new option in the servers chip menu connect 2nd Server? … you then find
+ * your next server and connect to that, then server 1 moves to left ear, server 2 right ear." — and a pop-out card
+ * under ‹ Servers for the one in the background: its frequency, which ear it is in, its time limit, TAP to swap, HOLD
+ * for the balance.
+ *
+ * Everything here is pure — no React Native import — so scripts/test_dual_server.ts runs it under plain node. The
+ * orchestration (sockets, navigation, the native voices) is src/services/dualServer.ts; the card is
+ * src/components/DualServerCard.tsx.
+ *
+ * ★★★ THE PAN LAW AND THE GLIDE ARE VFO A/B's, NOT NEW ONES (android/app/src/main/cpp/vibe_watch.h PanMixer / Ramp):
+ *   position 0 = hard left, 0.5 = centre, 1 = hard right; L = v·√2·cos(pos·π/2), R = v·√2·sin(pos·π/2) — equal power,
+ *   unity in each ear at the centre; every move a 400 ms raised cosine (zero slope at both ends, so no click), and a
+ *   move re-aimed mid-glide starts FROM WHERE IT IS. "a nice transition, ~300-500 ms" (Stuart, on VFO A/B). The same
+ *   Ramp is written three times — here (for the tests), VibeDualAudio.swift and VibeDualAudio.kt — ONE RULE, THREE
+ *   READERS: change all three.
+ *
+ * ★ Each server's own audio is FOLDED TO MONO before it is placed, whatever it is (WFM stereo, or a VFO A/B pair the
+ *   server has already panned): a server owns ONE ear here, and its own stereo inside that ear would be half lost
+ *   anyway — the other half would land in the other server's ear.
+ */
+
+/** Every pan and fade, as VFO A/B (vibe_watch.h kRampSec). */
+export const DUAL_RAMP_SEC = 0.4;
+
+/** How the two servers share the ears — the Audio menu's TWO SERVERS row. Remembered per device. */
+export type DualOutput = 'stereo' | 'mono';
+
+/** Where a voice is headed: position 0..1 (0 left, 0.5 centre, 1 right) and its level (0..1). */
+export interface VoiceTarget { pos: number; gain: number }
+
+/** A raised-cosine glide from one value to another over `dur` steps (vibe_watch.h Ramp, verbatim). */
+export class Ramp {
+  from = 0; to = 0; cur = 0; t = 1; dur = 1;
+  constructor(v = 0) { this.set(v); }
+  set(v: number) { this.from = this.to = this.cur = v; this.t = this.dur = 1; }
+  aim(v: number, durSteps: number) {
+    if (v === this.to) return;
+    this.from = this.cur; this.to = v; this.t = 0; this.dur = Math.max(1, Math.round(durSteps));
+  }
+  moving() { return this.t < this.dur; }
+  step(): number {
+    if (this.t < this.dur) {
+      this.t++;
+      const u = this.t / this.dur;
+      const e = 0.5 - 0.5 * Math.cos(Math.PI * u);
+      this.cur = this.from + (this.to - this.from) * e;
+    }
+    return this.cur;
+  }
+}
+
+/** The equal-power law (vibe_watch.h PanMixer::mix): what one mono sample becomes in each ear. */
+export function earGains(pos: number, gain: number): { l: number; r: number } {
+  const th = Math.max(0, Math.min(1, pos)) * (Math.PI / 2);
+  return { l: gain * Math.SQRT2 * Math.cos(th), r: gain * Math.SQRT2 * Math.sin(th) };
+}
+
+/** Clamp a balance to −1 (all server 1) … 0 (even) … +1 (all server 2). NaN → even. */
+export function clampBalance(b: number): number {
+  return Number.isFinite(b) ? Math.max(-1, Math.min(1, b)) : 0;
+}
+
+/**
+ * ★ THE BALANCE NEVER RAISES ANYONE — it only lowers the server you are leaning AWAY from (cos taper, so the middle of
+ *   the travel is gentle and the ends are decisive). Even = both at their own level, exactly as with no balance at all;
+ *   a full lean silences the other server without disconnecting it.
+ * ★ Small dead zone round the middle: a finger lifting off a slider always moves it a hair, and "nearly even" should be
+ *   EVEN, not 0.999.
+ */
+export function balanceGains(balance: number): { s1: number; s2: number } {
+  let b = clampBalance(balance);
+  if (Math.abs(b) < 0.04) b = 0;
+  const taper = (x: number) => Math.cos(x * (Math.PI / 2));
+  return { s1: b > 0 ? taper(b) : 1, s2: b < 0 ? taper(-b) : 1 };
+}
+
+/**
+ * Where each of the two servers should be. `alive` false = that server has gone (fades out where it is — it keeps
+ * its place so nothing swings across the head on its way out); the one left alone goes to the CENTRE at unity, both
+ * ears, as Stuart asked ("leaving one server should leave the other playing centred").
+ * ★★ EARS BELONG TO SERVERS, NOT TO THE SCREEN: server 1 is left and server 2 right whichever is in front — a swap
+ *    changes the picture, never the sound.
+ */
+export function dualTargets(o: { output: DualOutput; balance: number; s1Alive: boolean; s2Alive: boolean }):
+    { s1: VoiceTarget; s2: VoiceTarget } {
+  const bg = balanceGains(o.balance);
+  const both = o.s1Alive && o.s2Alive;
+  const stereo = o.output === 'stereo';
+  const s1: VoiceTarget = !o.s1Alive ? { pos: stereo && o.s2Alive ? 0 : 0.5, gain: 0 }
+                        : both ? { pos: stereo ? 0 : 0.5, gain: bg.s1 } : { pos: 0.5, gain: 1 };
+  const s2: VoiceTarget = !o.s2Alive ? { pos: stereo && o.s1Alive ? 1 : 0.5, gain: 0 }
+                        : both ? { pos: stereo ? 1 : 0.5, gain: bg.s2 } : { pos: 0.5, gain: 1 };
+  return { s1, s2 };
+}
+
+/** The card's ear icon: which speaker is lit — 'L' / 'R', or 'mono' (one speaker that follows the audio level). */
+export function earIcon(output: DualOutput, index: 0 | 1): 'L' | 'R' | 'mono' {
+  if (output === 'mono') return 'mono';
+  return index === 0 ? 'L' : 'R';
+}
+
+/* ─────────────────────────────── the background server's clock ─────────────────────────────── */
+
+/**
+ * ★ The SAME stages as the app's own countdown card (SDRScreen useCountdownStage): 0 normal, 1 YELLOW under five
+ *   minutes, 2 RED under two — hard limits only; a soft limit is a guarantee, never a warning. One rule for both
+ *   clocks, so the background server's card turns colour exactly when the front one would.
+ */
+export function countdownStage(leftMs: number | null, soft: boolean): 0 | 1 | 2 {
+  if (leftMs == null || soft) return 0;
+  return leftMs < 120_000 ? 2 : leftMs < 300_000 ? 1 : 0;
+}
+
+/**
+ * ★★ "if the backgrounded servers time limit is approaching the card pops out to show you" (Stuart). It pops out when
+ *   the stage RISES — at five minutes and again at two, the moments the front card changes colour — and on anything
+ *   the server asks of the listener (STILL LISTENING?) or an ending. Once per rise: tucking it again is respected
+ *   until the next one.
+ */
+export function shouldPopOut(prev: { stage: number; asking: boolean; ended: boolean },
+                             now: { stage: number; asking: boolean; ended: boolean }): boolean {
+  return now.stage > prev.stage || (now.asking && !prev.asking) || (now.ended && !prev.ended);
+}
+
+/** m:ss, never negative. */
+export function fmtLeft(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/* ─────────────────────────────── which servers can take part ─────────────────────────────── */
+
+/** The route params the eligibility test reads (a subset of RootStackParamList['SDR']). */
+export interface DualRouteLike {
+  serverType?: string; isLocal?: boolean; isTcp?: boolean; localHost?: string; localPort?: number | null;
+  compatOnly?: boolean; instanceName?: string;
+}
+
+/**
+ * ★★★ VIBESERVER ONLY — AND THAT IS NOT A PREFERENCE, IT IS WHAT THE OTHERS' CLIENTS CAN DO (AGENTS.md: "a control
+ *     that only works in one scenario should not be there"). The row is not drawn anywhere else.
+ *   · VibeServer — its audio is ONE socket (/ws/audio) the server keeps feeding with the spectrum socket closed (that is
+ *     how the app already plays with the screen locked), and tuning rides that same socket. An audio-only background
+ *     session is exactly what the server already serves every locked phone.
+ *   · UberSDR — its native audio engine and the VibeServer pump feed ONE player; a second stream would interleave
+ *     with the first. Not without a second engine of its own.
+ *   · KiwiSDR / Web-888 / OpenWebRX — their audio is decoded by the same JavaScript adapter that draws the waterfall;
+ *     it does not outlive the screen.
+ *   · Local hardware and RTL-TCP — the radio is in THIS device and is closed when its screen goes.
+ *   · FM-DX — its own screen and its own native MP3 path into the same player.
+ */
+export function dualEligible(p: DualRouteLike | null | undefined): boolean {
+  if (!p || p.compatOnly) return false;
+  if (p.serverType !== 'vibeserver' || !p.isLocal || p.isTcp) return false;
+  // ★ connectVibeServer always sets localHost; the on-device radio (connectLocal) never does.
+  return !!p.localHost && p.localPort != null;
+}
+
+/** Two listings are the SAME server when host and port agree (the picker can list one server twice). */
+export function sameServer(a: DualRouteLike & { baseUrl?: string }, b: DualRouteLike & { baseUrl?: string }): boolean {
+  if (a.localHost && b.localHost) return a.localHost === b.localHost && a.localPort === b.localPort;
+  return !!a.baseUrl && a.baseUrl === b.baseUrl;
+}
+
+/* ─────────────────────────────── the pairing's state machine ─────────────────────────────── */
+
+export type DualPhase = 'off' | 'picking' | 'paired';
+export type Transport = 'native' | 'aux';
+
+/** One server in the pairing. `id` IS its session id — the server's own name for this listener. */
+export interface DualSideCore {
+  id: string;
+  transport: Transport;
+  /** null = playing; a sentence = the server ended it (shown on the card a moment, then the side goes). */
+  ended: string | null;
+}
+
+export interface DualCore<S extends DualSideCore = DualSideCore> {
+  phase: DualPhase;
+  /** Index 0 = server 1 (LEFT), 1 = server 2 (RIGHT). picking: exactly one. */
+  sides: S[];
+  /** The side whose screen is in front; null while picking (the server list is in front). */
+  fg: string | null;
+}
+
+export const DUAL_OFF: DualCore = { phase: 'off', sides: [], fg: null };
+
+/** The side in the background — what the card shows. */
+export function bgSide<S extends DualSideCore>(st: DualCore<S>): S | null {
+  if (st.phase !== 'paired') return null;
+  return st.sides.find((s) => s.id !== st.fg) ?? null;
+}
+
+/**
+ * ★★★ MAY A SCREEN THAT IS GOING AWAY LEAVE ITS AUDIO PLAYING? Only when the pairing still wants it AND it is not the
+ *     one in front — a swap or "Listen to a 2nd server" moves `fg` BEFORE navigating, so the screen that leaves is
+ *     already in the background when its cleanup asks. A screen that leaves while still in front (Back, a crash reset,
+ *     an alert's "Back to Servers") is LEAVING, and its audio stops as it always has.
+ */
+export function holds(st: DualCore, id: string): boolean {
+  if (st.phase === 'off') return false;
+  const s = st.sides.find((x) => x.id === id);
+  return !!s && !s.ended && st.fg !== id;
+}
+
+/** The transport a screen on side `id` must use. Outside a pairing: the ordinary native pump, always. */
+export function transportFor(st: DualCore, id: string | null): Transport {
+  if (!id || st.phase === 'off') return 'native';
+  return st.sides.find((x) => x.id === id)?.transport ?? 'native';
+}
+
+/** Begin: the server in front goes to the background and keeps playing; the server list comes up. */
+export function beginPicking<S extends DualSideCore>(st: DualCore<S>, side: S): DualCore<S> {
+  if (st.phase !== 'off') return st;
+  return { phase: 'picking', sides: [{ ...side, transport: 'native', ended: null }], fg: null };
+}
+
+/** A second server's screen arrives while picking: it becomes server 2 (RIGHT), on the second voice, in front. */
+export function attachSecond<S extends DualSideCore>(st: DualCore<S>, side: S): DualCore<S> {
+  if (st.phase !== 'picking' || st.sides.length !== 1) return st;
+  return { phase: 'paired', sides: [st.sides[0], { ...side, transport: 'aux', ended: null }], fg: side.id };
+}
+
+/** TAP the card: the background server comes to the front. Ears and transports do not move. */
+export function swap<S extends DualSideCore>(st: DualCore<S>): DualCore<S> {
+  const bg = bgSide(st);
+  if (!bg || bg.ended) return st;
+  return { ...st, fg: bg.id };
+}
+
+/** What `endSide` asks of the caller, beyond the new state. */
+export interface EndEffects {
+  /** Stop this side's transport. */
+  stop: { id: string; transport: Transport } | null;
+  /** The lone survivor is on the second voice with no screen in front of it: move it to the main pump now. */
+  moveToNative: string | null;
+}
+
+/**
+ * A side ends — the listener stopped it, left its screen, or the server ended it. The other plays on, CENTRED.
+ *  · survivor in front (its screen is up) → pairing OFF; that screen's player moves itself to the main pump if it was
+ *    on the second voice (transportFor now says 'native').
+ *  · survivor in the background (the server list is up, or the ended side's own screen with its refusal) → back to
+ *    PICKING with the survivor as the one playing, so a new second server can be chosen; moved to the main pump first
+ *    if it was on the second voice, because only the main pump has the lock-screen card and the Android service.
+ */
+export function endSide<S extends DualSideCore>(st: DualCore<S>, id: string): { st: DualCore<S>; fx: EndEffects } {
+  const gone = st.sides.find((s) => s.id === id);
+  if (st.phase === 'off' || !gone) return { st, fx: { stop: null, moveToNative: null } };
+  const stop = { id, transport: gone.transport };
+  const rest = st.sides.filter((s) => s.id !== id && !s.ended);
+  if (!rest.length) return { st: DUAL_OFF as DualCore<S>, fx: { stop, moveToNative: null } };
+  const sur = rest[0];
+  if (st.phase === 'paired' && st.fg === sur.id) {
+    return { st: DUAL_OFF as DualCore<S>, fx: { stop, moveToNative: null } };
+  }
+  const moved = sur.transport === 'aux';
+  return { st: { phase: 'picking', sides: [{ ...sur, transport: 'native' }], fg: null },
+           fx: { stop, moveToNative: moved ? sur.id : null } };
+}
+
+/** Mark a side ENDED by the server (the card says why for a moment before endSide removes it). */
+export function markEnded<S extends DualSideCore>(st: DualCore<S>, id: string, why: string): DualCore<S> {
+  if (st.phase === 'off') return st;
+  return { ...st, sides: st.sides.map((s) => (s.id === id ? { ...s, ended: why } : s)) };
+}
+
+/**
+ * ★ WHY THE SERVER ENDED A BACKGROUND SERVER, in the card's words. The types are the shim's terminal set on the audio
+ *   socket (VibePowerModule laTerminalTypes / VibeStreamService LA_TERMINAL_TYPES) — one list, three readers.
+ */
+export const TERMINAL_WHY: Record<string, string> = {
+  session_expired: 'its time limit was reached',
+  cooldown: 'its time limit was reached',
+  idle_closed: 'nobody answered "still listening?"',
+  kicked: 'the owner ended the session',
+  banned: 'the owner ended the session',
+  evicted: 'somebody else took the radio',
+  busy: 'the radio is busy',
+  elsewhere: 'the radio is in use elsewhere',
+  needs_codec: 'this server needs a newer app',
+};
+
+/** null = not an ending. */
+export function terminalWhy(type: string): string | null {
+  return Object.prototype.hasOwnProperty.call(TERMINAL_WHY, type) ? TERMINAL_WHY[type] : null;
+}

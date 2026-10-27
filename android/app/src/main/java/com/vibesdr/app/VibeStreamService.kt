@@ -663,6 +663,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         //   land after that and erase it.
         focusMuted = false
         muted = m
+        VibeDualMix.primaryMuted = m   // ★ V12 two servers: ⏸ pauses BOTH — the second voice follows this one
         if (m) packetQueue.clear()
         emitEvent("VibeMuted") { it.putBoolean("muted", m) }
         // FM-DX power-saving pause: STOP the MP3 audio stream (close the /audio WS)
@@ -1002,6 +1003,9 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                  *  so the close that follows is not retried (LA_TERMINAL_TYPES). */
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     if (gen != laGen.get()) return
+                    // ★★ V12 TWO SERVERS: every text frame to JS too — rare (refusals, STILL LISTENING?), never audio. With
+                    //   its screen gone, a background server can say nothing anywhere else (dualServer.ts watchNativeText).
+                    if (text.length < 4096) emitEvent("VibeLocalAudioText") { it.putString("text", text) }
                     val type = try { JSONObject(text).optString("type", "") } catch (_: Exception) { "" }
                     if (type in LA_TERMINAL_TYPES) {
                         Log.i(TAG, "local audio socket: the server said '$type' — will not reopen")
@@ -1262,6 +1266,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
      *  setNowPlaying is debounced and Android throttles its timers when backgrounded,
      *  so the title would otherwise lag. JS still refines it (station name) on the
      *  next foreground tick. Mirrors the UberSDR tuneByStep behaviour. */
+    /** ★★ V12 TWO SERVERS: say something on the local audio socket WITHOUT it becoming the tune a reopen repeats — the
+     *  card's "I'm still here" (a ping) to a background server. A person's tap, never automatic. */
+    fun sendLocalText(json: String) { localAudioWs?.send(json) }
+
     fun sendLocalTune(json: String) {
         lastLocalTune = json
         localAudioWs?.send(json)
@@ -1484,6 +1492,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             var mine: AudioTrack? = null
             var myRate = 0; var myCh = 0
             var binOut = ShortArray(0)   // ★ V12 binaural: this writer's own stereo buffer (two writers may overlap)
+            var dualOut = ShortArray(0)  // ★ V12 two servers: this writer's own placed copy (VibeDualAudio.kt)
             try {
                 while (running && externalAudio && gen == extGen) {
                     /* ★ Hold back until the cushion exists. Only while a bursty mode is
@@ -1507,7 +1516,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                      *  (mono is duplicated first, in VibeBinaural). Toggling it rebuilds the track once, here, like a
                      *  rate change; off, this is the original path exactly. */
                     val bin = VibeBinaural.on
-                    val outCh = if (bin) 2 else item.second
+                    // ★★ V12 TWO SERVERS (VibeDualAudio.kt): while paired — or gliding back to the middle after — this
+                    //   server is folded to mono and placed in its ear, so the track is stereo. Read ONCE per buffer.
+                    val dual = VibeDualMix.primary.engaged()
+                    val outCh = if (bin || dual) 2 else item.second
                     if (mine == null || myRate != item.first || myCh != outCh) {
                         mine?.release()
                         mine = buildExtTrack(item.first, outCh, item.second)
@@ -1532,8 +1544,17 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         }
                     }
                     if (!muted) {
+                        // ★★ V12 two servers: placed AFTER the recorder's copy is chosen (pcm stays as heard on its own),
+                        //   so a recording is this server as it is, not half of a pair.
+                        var playPcm = pcm; var playN = pcmN
+                        if (dual) {
+                            val frames = pcmN / pcmCh
+                            if (dualOut.size < frames * 2) dualOut = ShortArray(frames * 2)
+                            playN = VibeDualMix.primary.process(pcm, pcmN, pcmCh, item.first, dualOut)
+                            playPcm = dualOut
+                        }
                         // ★ A track released under us (it should no longer happen) ends THIS writer, not the app.
-                        try { mine?.write(pcm, 0, pcmN) }  // blocking = backpressure
+                        try { mine?.write(playPcm, 0, playN) }  // blocking = backpressure
                         catch (e: IllegalStateException) { Log.w(TAG, "ext AudioTrack gone mid-write: ${e.message}"); break }
                     }
                     // ★ V12: the on-device transcriber — squelch applied (muted audio skips the gate above, so say so).
@@ -1591,6 +1612,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     /** The listener's volume times the page duck (below). Every track's level comes from here. */
     private fun applyVolume() {
         val v = volume * pageGain
+        VibeDualMix.masterVolume = v   // ★ V12 two servers: the second voice plays at the same level
         track?.setVolume(v)
         extTrack?.setVolume(v)
     }

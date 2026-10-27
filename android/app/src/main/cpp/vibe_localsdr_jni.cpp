@@ -1079,10 +1079,54 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecode(JNIEnv* env, jobject,
     if (out) env->SetShortArrayRegion(out, 0, outLen, (const jshort*)pcm.data());
     return out;
 }
+
+/* ★★ V12 TWO SERVERS AT ONCE — THE SECOND SERVER'S DECODER (VibeDualAudio.kt). Its own state, its own lock: an Opus
+ *  decoder predicts each packet from the last, so the other server's packets through the decoder above would corrupt
+ *  BOTH streams. The same rebuild-on-failure rule as above. */
+namespace {
+std::mutex      g_opusAuxMtx;
+OpusDecoder*    g_opusAux      = nullptr;
+int             g_opusAuxRate  = 0;
+int             g_opusAuxCh    = 0;
+}
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecodeAux(JNIEnv* env, jobject,
+                                                      jbyteArray packet, jint rate, jint channels) {
+    if (!packet || rate <= 0 || (channels != 1 && channels != 2)) return nullptr;
+    const jsize n = env->GetArrayLength(packet);
+    if (n <= 0) return nullptr;
+    std::vector<jbyte> buf((size_t)n);
+    env->GetByteArrayRegion(packet, 0, n, buf.data());
+    std::lock_guard<std::mutex> lk(g_opusAuxMtx);
+    if (!g_opusAux || g_opusAuxRate != rate || g_opusAuxCh != channels) {
+        if (g_opusAux) opus_decoder_destroy(g_opusAux);
+        int err = OPUS_OK;
+        g_opusAux = opus_decoder_create(rate, channels, &err);
+        if (!g_opusAux || err != OPUS_OK) { g_opusAux = nullptr; LOGE("aux opus_decoder_create failed: %d", err); return nullptr; }
+        g_opusAuxRate = rate; g_opusAuxCh = channels;
+    }
+    const int maxSamples = rate / 1000 * 120;
+    std::vector<opus_int16> pcm((size_t)maxSamples * channels);
+    const int got = opus_decode(g_opusAux, (const unsigned char*)buf.data(), (opus_int32)n, pcm.data(), maxSamples, 0);
+    if (got <= 0) {
+        LOGE("aux opus_decode failed (%d) — rebuilding the decoder", got);
+        opus_decoder_destroy(g_opusAux);
+        g_opusAux = nullptr; g_opusAuxRate = 0; g_opusAuxCh = 0;
+        return nullptr;
+    }
+    const jsize outLen = (jsize)got * channels;
+    jshortArray out = env->NewShortArray(outLen);
+    if (out) env->SetShortArrayRegion(out, 0, outLen, (const jshort*)pcm.data());
+    return out;
+}
 #else
 extern "C" JNIEXPORT jshortArray JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecode(JNIEnv*, jobject, jbyteArray, jint, jint) {
     return nullptr;   // no encoder in this build either — the client will not ask for Opus
+}
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeOpusDecodeAux(JNIEnv*, jobject, jbyteArray, jint, jint) {
+    return nullptr;
 }
 #endif
 

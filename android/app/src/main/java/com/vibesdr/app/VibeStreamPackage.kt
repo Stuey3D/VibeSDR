@@ -9,6 +9,7 @@ class VibeStreamPackage : ReactPackage {
     override fun createNativeModules(ctx: ReactApplicationContext): List<NativeModule> =
         listOf(VibeStreamModule(ctx), VibeLocalSdrModule(ctx), VibeMdnsModule(ctx), VibeSpecSocketModule(ctx),
                VibeTranscriberModule(ctx),
+               VibeDualAudioModule(ctx),   // ★ V12 two servers at once — the second voice
                VibeTlsTrustModule(ctx))
     override fun createViewManagers(ctx: ReactApplicationContext): List<ViewManager<*, *>> =
         emptyList()

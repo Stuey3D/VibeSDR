@@ -42,6 +42,7 @@ import { FMDX_TUNE_LO, FMDX_TUNE_HI, FMDX_DIAL_VIEW_LO, FMDX_DIAL_VIEW_HI } from
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
+import { abandon as abandonDual } from '../services/dualServer';
 
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
 // demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
@@ -114,6 +115,9 @@ let fmdxNoticeShownThisSession = false;
 export default function TunerScreen({ route, navigation }: Props) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const { baseUrl, instanceName } = route.params;
+  // ★★ V12 two servers: FM-DX plays through the same native player — a pairing still playing ends BEFORE this screen's
+  //   own audio starts (dualServer.abandon; first render, ahead of every effect).
+  useState(() => { abandonDual(true); return 0; });
   /** ★ How a recording made here is filed in Recordings: the server's name, else its host. */
   const recServerName = instanceName || String(baseUrl ?? '').replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
   const { theme: baseTheme } = useTheme();

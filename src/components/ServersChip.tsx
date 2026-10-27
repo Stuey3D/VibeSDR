@@ -14,6 +14,8 @@
  *                   ♡ Favourite this server  (toggles in place, stays open)
  *                   ☆ Set as default         (toggles in place, stays open)
  *                   ↻ Connection Refresh     (rebuilds every connection, closes the menu)
+ *                   ◐ Listen to a 2nd server (V12 — this one keeps playing; back to the list)
+ *                   ✕ Stop listening to <the other server> (V12, while two are playing)
  *                   ⌃ collapse handle
  * A stray tap only opens a dismissable panel — nothing destructive happens until a
  * second, deliberate tap on a labelled row. Dismiss: the collapse chevron, or a tap
@@ -54,6 +56,14 @@ type Props = {
    *  services/connectionRefresh.ts). Absent ⇒ the row is not drawn: the parent passes it only where
    *  a refresh can do something (canRefreshConnection), never as a dead row. */
   onRefresh?: () => void;
+  /** ★★ V12 TWO SERVERS AT ONCE (src/services/dualServer.ts; Stuart: "We add a new option in the servers chip menu
+   *  connect 2nd Server? When tapped it takes us back to the previous page the same as tapping back to directory does
+   *  the difference is the audio keeps playing"). Absent ⇒ not drawn — only on a server that can (dualMix.dualEligible),
+   *  never as a dead row. */
+  onListenSecond?: () => void;
+  /** ★★ V12: while two servers play, the one in the background — "Stop listening to <name>". Absent ⇒ not drawn. */
+  otherName?: string;
+  onStopOther?: () => void;
   /** Coachmark target — attached to the collapsed chip anchor so the first-run
    *  tour can spotlight it (tourRef from the parent). */
   anchorRef?: React.Ref<View>;
@@ -69,6 +79,7 @@ const SCRIM        = 'rgba(4,3,1,0.9)';       // …softened by the watchOS-styl
 export default function ServersChip({
   top, left, isFavourite, isDefault,
   onBack, onToggleFavourite, onSetDefault, canFavourite = true, anchorRef, onRefresh,
+  onListenSecond, otherName, onStopOther,
   openToken = 0,
   closeToken = 0,
   onExpandedChange,
@@ -110,6 +121,9 @@ export default function ServersChip({
   // ★ Closes as it fires: the refresh replaces what is on screen, and a menu left open over the
   //   reconnect would read as the refresh not having happened.
   const onRefreshRow = useCallback(() => { setExpanded(false); onRefresh?.(); }, [onRefresh]);
+  // ★ V12: both close as they fire — one leaves the screen, the other changes what is playing.
+  const onSecondRow = useCallback(() => { setExpanded(false); onListenSecond?.(); }, [onListenSecond]);
+  const onStopOtherRow = useCallback(() => { setExpanded(false); onStopOther?.(); }, [onStopOther]);
 
   // Soft watchOS-style shading behind the collapsed chip: a dark radial that fades
   // to transparent so the chip blends into the waterfall instead of floating as a
@@ -142,9 +156,12 @@ export default function ServersChip({
     if (canFavourite) add('fav', onToggleFavourite);
     add('default', onSetDefault);
     if (onRefresh) add('refresh', onRefreshRow);
+    if (onListenSecond) add('second', onSecondRow);
+    if (onStopOther) add('stopOther', onStopOtherRow);
     add('collapse', collapse);
     return { rows: r, at: k };
-  }, [canFavourite, onHeader, onToggleFavourite, onSetDefault, onRefresh, onRefreshRow, collapse]);
+  }, [canFavourite, onHeader, onToggleFavourite, onSetDefault, onRefresh, onRefreshRow, onListenSecond, onSecondRow,
+      onStopOther, onStopOtherRow, collapse]);
 
   // Idle-close: a stray key must not leave this sitting over the waterfall with the phone
   // face-down. Touch cancels it — see PanelNav.
@@ -231,6 +248,29 @@ export default function ServersChip({
               </>
             )}
 
+            {/* ★★ V12 TWO SERVERS — below their own separator: these change what you HEAR, not this connection. */}
+            {(onListenSecond || onStopOther) && <View style={[styles.sep, { backgroundColor: sep }]} />}
+            {onListenSecond && (
+              <Pressable onPress={onSecondRow} style={[styles.row, styles.rowTop, rowFocus(at.second)]}
+                accessibilityRole="button" accessibilityLabel="Listen to a 2nd server"
+                accessibilityHint={SECOND_HINT}>
+                <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>◐</Text>
+                <View style={styles.rowCol}>
+                  <Text style={[styles.rowText, { color: amber, fontFamily: font }]}>Listen to a 2nd server</Text>
+                  <Text style={[styles.rowSub, { color: pt.ink.textDim, fontFamily: font }]}>{SECOND_HINT}</Text>
+                </View>
+              </Pressable>
+            )}
+            {onStopOther && (
+              <Pressable onPress={onStopOtherRow} style={[styles.row, rowFocus(at.stopOther)]}
+                accessibilityRole="button" accessibilityLabel={`Stop listening to ${otherName ?? 'the other server'}`}>
+                <Text style={[styles.rowGlyph, { color: amber, fontFamily: font }]}>✕</Text>
+                <Text style={[styles.rowText, styles.rowCol, { color: amber, fontFamily: font }]} numberOfLines={2}>
+                  Stop listening to {otherName ?? 'the other server'}
+                </Text>
+              </Pressable>
+            )}
+
             {/* Collapse handle — the non-exit escape from an accidental open */}
             <Pressable onPress={collapse} style={[styles.collapse, rowFocus(at.collapse)]} hitSlop={8}
               accessibilityRole="button" accessibilityLabel="Close server menu">
@@ -243,6 +283,9 @@ export default function ServersChip({
     </View>
   );
 }
+
+/** ★ V12: what "Listen to a 2nd server" does, said where it is chosen (also its spoken hint). */
+const SECOND_HINT = 'This server keeps playing while you pick another: this one in your left ear, the next in your right (Audio menu, TWO SERVERS, for both in both ears).';
 
 /** The row's description — exact wording agreed with Stuart, 2026-10-01. Also its spoken hint. */
 const REFRESH_HINT = 'Use this if you are experiencing odd connection related issues, most can be '

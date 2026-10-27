@@ -166,6 +166,11 @@ import { usePadField } from '../components/ControllerKeyboard';
 import { addKeyListener, SCREEN_PRIORITY, keyDirOf, openPadGuide, addSwapVfoListener } from '../utils/hardwareKeys';
 import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
+import DualServerCard from '../components/DualServerCard';
+import { canListenSecond, dualHolds, dualSupported, dualTransport, foregroundEnded, leaveForeground, listenSecond,
+         noteStatus, returnParams, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
+         useDualShape } from '../services/dualServer';
+import { dualEligible } from '../services/dualMix';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
 import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
@@ -601,6 +606,16 @@ function appendDecoderText(prev: string, add: string): string {
 
 export default function SDRScreen({ route, navigation }: Props) {
   const { baseUrl, instanceName, password } = route.params;
+  /* ★★ V12 TWO SERVERS AT ONCE (src/services/dualServer.ts; Stuart's design, GitHub discussion #57). Which side of a
+   *  pairing this screen is, decided on its FIRST RENDER — before any child's effect — because a second server's audio
+   *  player must open the second voice from its very first run: opened on the main pump even once, it would replace
+   *  server 1's socket. null = an ordinary screen (and, on a VibeServer, a possible server 1: see dualMyId). */
+  const [dualSideId] = useState<string | null>(() => roleOnMount(route.params as never, uuidv4));
+  /** The pairing's shape (who is where) — NOT its card facts, so this screen does not re-render on them. */
+  const dualShape = useDualShape();
+  const dualCan = dualSupported && dualEligible(route.params);
+  /** This screen's side id for code that runs outside a render (cleanups) — set once sessionUuid exists. */
+  const dualIdRef = useRef<string | null>(null);
   /* ★★ BACK TO THIS DOOR'S RADIO LIST (src/utils/doorReturn.ts): the visit the screen before this one handed over —
    *  the radio it left (the chooser starts on it) and the PINs and admin credential typed at this door. Taken once. */
   const visitRef = useRef<DoorVisit | null | undefined>(undefined);
@@ -1113,7 +1128,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!route.params.isLocal) return;
     return () => {
-      if (localSessionGen() === myLocalGen) (NativeModules as any).VibeLocalSDR?.stopSpectrum?.();
+      // ★ V12: not while this server keeps playing in the background (two servers at once).
+      if (localSessionGen() === myLocalGen && !dualHolds(dualIdRef.current)) (NativeModules as any).VibeLocalSDR?.stopSpectrum?.();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -2314,7 +2330,16 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★ Keyed on connectBase, so moving to another radio behind the same door is a new session,
    *   which it genuinely is.
    */
-  const sessionUuid = useMemo(() => uuidv4(), [connectBase]);
+  /* ★★ V12 TWO SERVERS: a screen coming back to a server that never stopped playing (a swap, a return from the server
+   *  list) comes back as the SAME listener — `dualSide` carries the session — so the server matches the new spectrum
+   *  socket to the audio socket it has been feeding all along, and the player adopts it instead of reopening it. */
+  const sessionUuid = useMemo(() => dualSideId
+    ?? (typeof route.params.dualSide === 'string' && route.params.dualSide ? route.params.dualSide : null)
+    ?? uuidv4(), [connectBase]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /** ★ V12: this screen's side of a pairing — its own id if it joined as server 2, else its session (a possible
+   *  server 1). null where two servers cannot work at all (dualMix.dualEligible): the audio path is then untouched. */
+  const dualMyId = dualCan ? (dualSideId ?? sessionUuid) : null;
+  dualIdRef.current = dualMyId;
 
 
   // ── SDR state ─────────────────────────────────────────────────────────────
@@ -4270,9 +4295,18 @@ export default function SDRScreen({ route, navigation }: Props) {
    *    dead button; the next tap then landed as stop-then-start and left a stray file. Now the button shows
    *    recording AT ONCE, taps are ignored while a start or stop is in flight, and a failed start puts it back. */
   const recBusy = useRef(false);
+  const dualRecRef = useRef<{ onAux: boolean; first: string; swap: () => void }>({ onAux: false, first: '', swap: () => {} });
   const toggleRecording = useCallback(() => {
     // ★ Every press is written down (Diagnostics → audio path), so a press that never arrived is provable.
     if (recBusy.current) { noteAudioEvent('REC press ignored — a start/stop is in flight'); return; }
+    /* ★★ V12 TWO SERVERS: the recorder sits on the MAIN audio path, which is the FIRST server's. Pressed on the second
+     *  server's screen it would record the other server — so it says so and offers the way to what it CAN record,
+     *  rather than make a file of the wrong station. */
+    if (!isRecording && dualRecRef.current.onAux) {
+      appAlert('Recording', `While two servers are playing, recordings are taken from the first one — ${dualRecRef.current.first}. Switch to it to record.`,
+        [{ text: 'Cancel', style: 'cancel' }, { text: 'Switch', onPress: () => dualRecRef.current.swap() }]);
+      return;
+    }
     if (!isRecording) {
       recBusy.current = true;
       const tapAt = Date.now();
@@ -11808,8 +11842,11 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  from THAT list is ‹ SERVERS, as before. See src/utils/doorReturn.ts. */
   const doorBackRef = useRef({ hasDoor: false });
   doorBackRef.current = { hasDoor: !!door };
+  // ★★ V12 two servers: leaving the server in FRONT ends it; the one in the background plays on, centred, and the
+  //   server list offers a new second server (dualServer.leaveForeground). No pairing: nothing happens.
   const onBackToPicker = useCallback(() => {
     setMenuOpen(false);
+    if (dualIdRef.current) leaveForeground(dualIdRef.current);
     const radioId = chosenFromListRef.current;
     if (backToDoor({ hasDoor: doorBackRef.current.hasDoor, choseFromList: radioId !== null, radioId })) {
       doorVisit.stash({ base: baseUrl, radioId: radioId!, pins: radioPins.current, adminAuthQ: adminAuthQRef.current });
@@ -11819,6 +11856,44 @@ export default function SDRScreen({ route, navigation }: Props) {
     navigation.goBack();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* ★★ V12 TWO SERVERS AT ONCE — this screen's part (src/services/dualServer.ts).
+   *  ★ Its card facts — what it plays, its time limit — are copied into the pairing while it is in front, so the card
+   *    can show them the moment it goes to the background. The pairing ignores them while there is no pairing. */
+  const dualEndsAt = sessionEndsAt != null && !adminOk ? sessionEndsAt : null;
+  useEffect(() => {
+    if (!dualMyId || dualShape.phase === 'off') return;
+    noteStatus(dualMyId, { freqHz: status.frequency, mode: String(status.mode), endsAt: dualEndsAt,
+                           soft: limitSoft || borrowed, name: instanceName ?? baseUrl });
+  }, [dualMyId, dualShape.phase, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed, instanceName, baseUrl]);
+  // ★ The server ended THIS one (its refusal is on screen): the background server keeps playing.
+  useEffect(() => { if (refusal && dualMyId) foregroundEnded(dualMyId); }, [refusal, dualMyId]);
+  // ★ Gone while still in front without saying so (a crash reset, an alert's "Back to Servers"): it LEFT.
+  useEffect(() => () => { if (dualIdRef.current) screenGone(dualIdRef.current); }, []);
+  /** "Listen to a 2nd server": this one goes to the background and keeps playing; back to the list as ‹ Back does —
+   *  but always to the SERVER LIST, never a door's radio list (a door's other radio is picked from the list too). */
+  const onListenSecond = useCallback(() => {
+    if (!dualMyId) return;
+    setMenuOpen(false);
+    listenSecond({ id: dualMyId, name: instanceName ?? baseUrl, params: returnParams(route.params as never),
+                   freqHz: status.frequency, mode: String(status.mode), endsAt: dualEndsAt, soft: limitSoft || borrowed });
+    navigation.goBack();
+  }, [dualMyId, instanceName, baseUrl, route.params, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed,
+      navigation]);
+  /** TAP the card: the background server's screen comes up; both keep playing, ears unmoved. A reset with the server
+   *  list beneath — the one way this app lands on a VibeServer (connectVibeServer's note on why not navigate). */
+  const onDualSwap = useCallback(() => {
+    const p = swapToBackground();
+    if (!p) return;
+    navigation.reset({ index: 1, routes: [
+      { name: 'InstancePicker', params: { noAutoConnect: true } },
+      { name: 'SDR', params: p },
+    ] } as never);
+  }, [navigation]);
+  const dualBg = dualShape.phase === 'paired' && dualShape.fg === dualMyId
+    ? dualShape.sides.find((x) => x.id !== dualMyId) ?? null : null;
+  const dualOnAux = !!dualMyId && dualShape.phase === 'paired' && dualTransport(dualMyId) === 'aux';
+  dualRecRef.current = { onAux: dualOnAux, first: dualShape.sides[0]?.name ?? '', swap: onDualSwap };
 
   // Stable handlers — inline lambdas defeat the React.memo on ControlsBar.
   const onStepOpen  = useCallback(() => setStepOpen(true), []);
@@ -12324,7 +12399,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. On a VibeServer it can also keep this one playing while you add a second: Listen to a 2nd server.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.
@@ -13623,11 +13698,25 @@ export default function SDRScreen({ route, navigation }: Props) {
           onSetDefault={onSetDefault}
           // ★ Only where a refresh can do something — never a dead row (AGENTS.md).
           onRefresh={canRefresh ? onConnectionRefresh : undefined}
+          // ★★ V12 two servers — only on a server that can (no dead row), and only while there is no pairing.
+          onListenSecond={dualMyId && !refusal && canListenSecond(route.params) && dualShape.phase === 'off'
+            ? onListenSecond : undefined}
+          otherName={dualBg?.name}
+          onStopOther={dualBg ? stopBackground : undefined}
           openToken={serversToken}
           closeToken={serversCloseToken}
           onExpandedChange={setServersOpen}
           onChipWidth={setServersChipW}
         />
+        </PanelBoundary>
+      )}
+      {/* ★★ V12 THE BACKGROUND SERVER'S CARD — under ‹ Servers (Stuart: "just under the < Servers button is a little pop
+          out card the same as the health and timer chips"). Draws nothing unless this screen is in front of a pair. ★ It
+          stays when the furniture is hidden, as the clock card does: a server you cannot see is still in your ear. */}
+      {/* ★ Not while the Servers menu is open: the menu drops down over exactly this spot. */}
+      {!!dualMyId && dualShape.phase === 'paired' && !serversOpen && (
+        <PanelBoundary name="Second server">
+          <DualServerCard myId={dualMyId} top={insets.top + 46 + 44} onSwap={onDualSwap} boxOpen={anyBoxOpen} />
         </PanelBoundary>
       )}
 
@@ -14399,6 +14488,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★★ V12 VFO A/B's STEREO switch — beside binaural; only where the server offers VFO A/B. */
         vfoStereo={vfoStereo}
         onVfoStereo={abOffered > 0 && !icom ? onVfoStereo : undefined}
+        // ★★ V12 two servers: the TWO SERVERS row, only while two are playing.
+        dualStereo={dualShape.output === 'stereo'}
+        onDualStereo={dualShape.phase === 'paired' ? (on: boolean) => setDualOutput(on ? 'stereo' : 'mono') : undefined}
         vfoABOn={abOn}
         /* ★★ V12 VFO A/B round 3 — a squelch row for each VFO, with its MUTE, while VFO B is on (VibeServer only). */
         vfoRows={abOn && isLocal && !icom ? {
@@ -14937,6 +15029,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           authSuffix={radioAuthSuffix || route.params.authSuffix}
           adminAuth={adminAuthWire}
           sessionId={sessionUuid}
+          // ★★ V12 two servers: which voice this server's audio rides (null = the ordinary path, untouched).
+          dual={dualMyId ? { id: dualMyId, transport: dualTransport(dualMyId) } : null}
           // ★★★ A RECONNECT REOPENS THIS SOCKET TOO — see the prop, and fullReconnect.
           restartKey={connEpoch}
           // ★★★ NOT ON A SHARED DIAL. This socket says `tune` as it opens, with whatever the screen

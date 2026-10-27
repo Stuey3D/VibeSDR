@@ -148,6 +148,7 @@ import { exportLogs, EXPORT_LOGS_LABEL } from '../components/ExportLogs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import { appAlert } from '../components/AppAlert';
+import { abandon as abandonDual, isSolo, returnToSolo, useDual } from '../services/dualServer';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
 // mixes OWRX + Kiwi, so the row icon tells them apart at a glance).
@@ -894,6 +895,22 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     }
   }, [navigation, viewMode]);
 
+  /* ★★ V12 TWO SERVERS AT ONCE — "Listen to a 2nd server" brought us here with the first one still playing
+   *  (src/services/dualServer.ts). The banner at the top says so, and offers the way back to it and the way to stop it.
+   *  Picking another VIBESERVER makes it server 2; picking anything else ends the first (its screen does, as it opens). */
+  const dual = useDual();
+  const dualSolo = dual.phase === 'picking' ? dual.sides[0] ?? null : null;
+  /** Back to the server still playing — its screen comes back as the same listener and adopts the running audio. */
+  const backToSolo = useCallback(() => {
+    const p = returnToSolo();
+    if (!p) return;
+    // ★ No restorePlace: only connectVibeServer's reset builds a restoring picker (test_picker_return.ts).
+    navigation.reset({ index: 1, routes: [
+      { name: 'InstancePicker', params: { noAutoConnect: true } },
+      { name: 'SDR', params: p },
+    ] } as never);
+  }, [navigation]);
+
   // Connect to a remote VibeServer (a shim shared over the LAN). Same client
   // wiring as Local Hardware (spectrum via /ws/user-spectrum, audio via /ws/audio)
   // but pointed at a LAN host, with the PIN resolved to an auth suffix. No local
@@ -909,6 +926,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
      *  it reads the SAME cached status the SERVING pill draws from, so the two cannot disagree
      *  about whether this address is us. */
     host = loopbackIfSelf(host, port);
+    // ★★ V12 two servers: the server already playing in the background, picked again — go BACK to it. A second
+    //   session on the same receiver would be a second listener taking a second slot for the same person.
+    if (isSolo({ localHost: host, localPort: port })) { setConnecting(false); backToSolo(); return; }
     // ★ The probed address wins — see the note in the router. `http://host:port` is only the
     //   fallback for the paths that never probed (mDNS discovery on a LAN).
     //   ★ ...except when we just rewrote the host to loopback: `base` was probed over the LAN and
@@ -987,7 +1007,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           } },
       ],
     } as never);
-  }, [navigation, viewMode]);
+  }, [navigation, viewMode, backToSolo]);
 
   /* ★★★ LISTEN TO OUR OWN RUNNING SERVER, OVER 127.0.0.1.
    *
@@ -2712,6 +2732,30 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: C.bg }]}
                     onTouchStart={() => { setKbHint(false); noteTouchInteraction(); }}>
+      {/* ★★ V12 TWO SERVERS — the first server is still in your ear while you pick the second. */}
+      {!!dualSolo && (
+        <View style={[styles.dualBanner, { borderColor: C.borderBright }]} accessibilityLiveRegion="polite">
+          <Text style={{ fontFamily: F, fontSize: fs(13), color: dualSolo.ended ? C.bad : C.text, lineHeight: fs(18) }}>
+            {dualSolo.ended
+              ? `${dualSolo.name} has ended — ${dualSolo.ended}.`
+              : `${dualSolo.name} is still playing. Pick another VibeServer to hear both — this one in your left ear, the new one in your right.`}
+          </Text>
+          {!dualSolo.ended && (
+            <View style={{ flexDirection: 'row', gap: 18, marginTop: 8 }}>
+              <TouchableOpacity onPress={backToSolo} hitSlop={8} accessibilityRole="button"
+                                style={[{ borderRadius: 6, paddingHorizontal: 4 }, slotRing(chooserSlot(backToSolo))]}
+                                accessibilityLabel={`Back to ${dualSolo.name}`}>
+                <Text style={{ fontFamily: F, fontSize: fs(14), color: C.key }} numberOfLines={1}>‹ Back to {dualSolo.name}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => abandonDual()} hitSlop={8} accessibilityRole="button"
+                                style={[{ borderRadius: 6, paddingHorizontal: 4 }, slotRing(chooserSlot(() => abandonDual()))]}
+                                accessibilityLabel={`Stop listening to ${dualSolo.name}`}>
+                <Text style={{ fontFamily: F, fontSize: fs(14), color: C.key }}>✕ Stop</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      )}
       <IdentModal
         visible={!!identModal}
         initial={identPrefill}
@@ -3492,6 +3536,9 @@ const styles = StyleSheet.create({
   kbHint: { fontSize: 10, letterSpacing: 0.5, opacity: 0.85,
             paddingHorizontal: 12, paddingTop: 4, paddingBottom: 2 },
   safe:          { flex: 1 },
+  // ★ V12 two servers: the "still playing" banner — the directory's own card look (dark, bordered in the KEYS colour).
+  dualBanner:    { marginHorizontal: 12, marginTop: 8, marginBottom: 4, paddingHorizontal: 12, paddingVertical: 10,
+                   borderRadius: 10, borderWidth: 1, backgroundColor: 'rgba(20,14,4,0.92)' },
   flex:          { flex: 1 },
   header:        { flexDirection: 'row', alignItems: 'center', padding: 16, paddingBottom: 8, borderBottomWidth: 1 },
   headerLeft:    { flex: 1, flexDirection: 'row', alignItems: 'baseline', gap: 8 },

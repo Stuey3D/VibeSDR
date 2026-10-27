@@ -222,6 +222,10 @@ export type RootStackParamList = {
     /** ★★ Back from a radio chosen at this server's front door: show the door's radio list again, starting on the
      *  radio just left, with this visit's PINs and admin credential (src/utils/doorReturn.ts — never in params). */
     doorReturn?:     boolean;
+    /** ★★ V12 TWO SERVERS AT ONCE: this screen is coming back to a server that never stopped playing (a swap from the
+     *  card, or back from the server list) — its SESSION id, so it returns as the same listener and adopts the audio
+     *  already playing (src/services/dualServer.ts). Never set by anything else. */
+    dualSide?:       string;
   };
   // Server mode (Android): pick a sharing protocol (VibeServer / RTL-TCP) for
   // this device's USB dongle, with shared PIN + auto-discovery options.
