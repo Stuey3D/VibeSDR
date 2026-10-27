@@ -631,6 +631,37 @@ dongle's offset (`VIBE_TCP_DC_OFFSET_HZ`, test only), `--dc 6 --dc-skirt 1500 --
 it tunes 7109.8 kHz once, 6 of 6 are spotted at their RF to the hertz, a second listener's USB tone on the shared dial reads
 1000.000 Hz before, during and after Band, its readout never moves, and Band off puts the tuner back at dial + 15 kHz.
 
+### The tap could not keep up on the Pi 2 (0~band2, 2026-10-27) — decimate first, bridge what is still lost
+
+**Measured on the Pi 2 with 0~band2** (the DC rule working: tuner 7.0958, DC 7.1108 outside every slice): `tap dropped 87 → 435 →
+724 blocks`, the main slice fed 47.5 / 50.9 s a minute, 0 then 2 slots decoded, every chip LIGHT. The tap was the bottleneck.
+
+**Profiled on the Pi 2's own build** (armhf -O3 -mfpu=neon-vfpv4 under qemu-arm with a per-address instruction counter,
+`test-band-slice tapcost 2048000 band drain`, 40 m, FFT 32768, the JTTY extra slice): **197 M instructions a second of
+capture** — the 32768-point forward FFT 72 %, memcpy of the carried overlap 8 %, integer division 6 % (`%` per bin: ARMv7 has
+no divide instruction), the slices' inverse FFTs and taper 3 %, the gate's bin power 2.5 %. A transform of the whole 2 MHz to
+keep 80 kHz of it.
+
+**Fixed** (vibe_wide_tap.h `Pre`, vibedsp `HalfbandDecimator`): for Band the tap first mixes the slices' union (40 m:
+7.0286–7.1078) to 0 Hz and halves the rate in half-band stages down to the smallest power of two that holds the union inside
+35 % (2.048 MS/s → 128 kS/s, ÷16), then runs the channeliser there at fftSize/16 points — the same bin width, so every slice
+keeps exactly its bins, taper, rate and centre. The NCO runs where the next half-band would need long taps (512 kS/s, not
+2 MS/s). The half-band kernel is NEON with the tap count a template constant, the taps in registers and every shifted view a
+VEXT of quads loaded once (a first generic version spent 18 instructions a tap pair on address arithmetic and reloaded taps);
+SSE2 and scalar paths beside it. The gathers' `%` became masks. Result: **65 M instructions a second, 3.0× less** (≈ 10–15 %
+of a Pi 2 core, estimated). Every 40 m passband edge within 0.003 dB through the tap; tones outside the slices fold in at
+−80.6 dB or less (an RTL's 8-bit ADC has ~50 dB of spurious-free range).
+
+**And a gap is bridged, not fatal.** When the tap's half-second queue still overflows, the next chunk carries how many capture
+samples were dropped; each slice is handed a null block of exactly that many of its samples, and `digi::Spotter::feedGap`
+feeds the engines zeros on a continuous clock. Before, the next block's stamp jumped, read as lost audio, the slot re-anchored
+and was never cut. `test-band-slice real … drop=700` (0.7 s lost to the tap every 15 s slot, the DC rule's geometry): FT8 **77 of
+80** calls bridged, **2** without (`VIBE_BAND_BRIDGE=0`). Stamps are never second-guessed: a stamp-based bridge was tried first
+and misfired on a live server (the DSP thread's chunk stamps jitter by milliseconds — it bridged 78 s a minute of nothing).
+
+Band's minute line now also says `gaps bridged X s` and the tap's `front end ÷D`. Target on the Pi 2: `tap dropped` flat and
+`main slice ≥ 58 s fed` a minute.
+
 ## Not done / owed
 - **Band governor (2026-10-27):** the app (React Native) now has the Band key and the chips (2026-10-26 parity pass) but no per-mode owner setting in
   its server screen (the setup page has it); a steady carrier holds a window open; ~~Band's slice is not sized for the

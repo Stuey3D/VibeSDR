@@ -27630,9 +27630,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::string m;
                 const int where = vibe::bandDcWhere(sampleRate, fftSize, g.wantCentreHz, g.hwCentreHz, &m);
                 LOGI("Band slice: dial %.4f MHz, tuner centre %.4f MHz, DC %.4f MHz (%s), %.3f MS/s FFT %d, %d extra slice(s), "
-                     "tap dropped %llu block(s) so far", g.wantCentreHz / 1e6, rtlCenter.load() / 1e6, g.hwCentreHz / 1e6,
+                     "front end ÷%d, tap dropped %llu block(s) so far", g.wantCentreHz / 1e6, rtlCenter.load() / 1e6, g.hwCentreHz / 1e6,
                      where == 2 ? ("ON " + m).c_str() : where == 1 ? "inside a slice, clear of every mode" : "outside every slice",
-                     sampleRate / 1e6, fftSize, g.nExtras, (unsigned long long)skimTap_.droppedBlocks());
+                     sampleRate / 1e6, fftSize, g.nExtras, skimTap_.decimation(), (unsigned long long)skimTap_.droppedBlocks());
             }
         }
     }

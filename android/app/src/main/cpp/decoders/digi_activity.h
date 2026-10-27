@@ -43,7 +43,9 @@ namespace digi {
 inline void slicePower(const std::complex<float>* bins, int fftSize, int centreBin, int nb, float* out) {
     if (!bins || fftSize <= 0 || nb <= 0) return;
     const float g = 1.0f / ((float)fftSize * (float)fftSize);
-    auto at = [&](int k) { int i = (centreBin + k) % fftSize; if (i < 0) i += fftSize; return bins[i]; };
+    // ★ a mask for a power-of-two FFT (ARMv7's -march=armv7-a has no integer divide: `%` was a library call per bin)
+    const bool p2 = (fftSize & (fftSize - 1)) == 0;
+    auto at = [&](int k) { int i; if (p2) i = (centreBin + k) & (fftSize - 1); else { i = (centreBin + k) % fftSize; if (i < 0) i += fftSize; } return bins[i]; };
     const int half = nb / 2;
     for (int k = 0; k < nb; ++k) {
         const int off = k - half;

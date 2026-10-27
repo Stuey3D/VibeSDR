@@ -91,6 +91,16 @@ public:
     /** Slots skipped by every engine so far (monotonic — the health pill's BehindWatch reads it). */
     uint64_t slotsSkipped() const;
     uint64_t slotsDecoded() const;
+    /** ★★ A GAP, BRIDGED (V12 2026-10-27 — the Pi 2's tap dropped ≈ 15 % of the radio): `n` samples of this slice that
+     *  never arrived, ending at `captureUtc`, fed to its engines as ZEROS of exactly that length, so their clocks stay
+     *  continuous and a slot with a hole in it still completes — what it heard whole is decoded (as DRM bridges a lost
+     *  frame). Without it the next block's stamp jumped, read as lost audio, the slot re-anchored and was never cut:
+     *  test-band-slice, 0.7 s lost a slot — FT8 2 calls of 80 → 77 bridged. The producer that dropped the samples calls
+     *  this (it alone knows how many); stamps are never second-guessed — they jitter by milliseconds on a live box.
+     *  VIBE_BAND_BRIDGE=0 switches it off (A/B). */
+    void feedGap(int n, double rate, double centreHz, double captureUtc);
+    /** Microseconds of zeros bridged into gaps, summed over the slices (monotonic) — Band's minute line. */
+    uint64_t usBridged() const { return bridgedTotal_.load(std::memory_order_relaxed); }
     /** What runs now: "FT8 14.074, FT4 14.080" — the admin page. */
     std::string describe() const;
     /** How many engines run now (tests). */
@@ -141,8 +151,13 @@ private:
         SliceFloor floor;
         uint64_t blocks = 0;          // ★ blocks with bins (the gate looks every 8th)
         int gNb = 0; double gBinHz = 0, gCentre = 0;   // the windows' placement
+        double endUtc = NAN;          // ★ the capture time of the last sample fed (gap bridging)
+        int lastGated = 0;            // ★ the gate's state on the last real block (a bridged gap keeps it)
+        uint64_t bridged = 0;         // ★ samples of zeros put into gaps
     };
     static constexpr double kSliceGoneSec = 3.0;
+    std::vector<cf32> zeros_;
+    void feedChans(long long key, Slice& S, const cf32* x, int n, double rate, double centreHz, double captureUtc, int gated);
     void plan();
     void planSingle(double dialHz);
     void wire(Run& r);
@@ -180,6 +195,7 @@ private:
     BandBudget budget_;
     bool loadedNow_ = false;
     std::atomic<uint64_t> statusSeq_{0};
+    std::atomic<uint64_t> bridgedTotal_{0};
     uint64_t retiredIdle_ = 0, retiredShed_ = 0;
 
     mutable std::mutex statMtx_;          // ★ the stats readers are on other threads; the engine set changes here

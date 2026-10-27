@@ -275,6 +275,34 @@ private:
     void buildBank_();
 };
 
+// ── Half-band decimator (complex, by 2) ─────────────────────────────────────────────────────────────────────────
+/** ★ V12 (2026-10-27, v12-band-dc): Band's tap front end on the Pi 2 — see vibe_wide_tap.h. A HALF-BAND low-pass (cutoff
+ *  at a quarter of the input rate) has every even-offset tap but the centre at ZERO, so y[m] = c·x[2m] +
+ *  Σ_j h_j·(x[2m−(2j−1)] + x[2m+(2j−1)]): the odd input samples form one stream, the even another, and four outputs are
+ *  computed at once with contiguous loads (NEON on both ARMs, SSE2 on x86, scalar elsewhere) — no horizontal sums, half
+ *  the multiplies of a plain FIR. FirDecimator's per-output dot product of 13–31 taps was 66 instructions per input
+ *  sample on the Pi 2's build; this is a few.
+ *  `halfTaps` P = non-zero taps either side of the centre (the filter is 4P−1 long, Blackman-windowed: ~74 dB). Streams:
+ *  an odd-length block keeps its last sample for the next. */
+class HalfbandDecimator {
+public:
+    explicit HalfbandDecimator(int halfTaps);
+    /** P for a transition `trans` (cycles/sample of the INPUT, centred on 0.25): the same length rule as designLowpass. */
+    static int halfTapsFor(double trans);
+    int halfTaps() const { return P_; }
+    /** Input samples by which an output lags the last input consumed (for capture stamps). */
+    int delaySamples() const { return 2 * P_ - 1; }
+    /** Writes up to (n + 1) / 2 outputs; returns the count. */
+    int process(const cf32* in, int n, cf32* out);
+    float tap(int j) const { return h_[(size_t)j]; }   ///< j = 0: the centre; 1…P: the pairs (tests)
+private:
+    int P_;
+    std::vector<float> h_;                  // [0] centre, [j] the pair at ±(2j−1)
+    std::vector<float> eR_, eI_, oR_, oI_;   // planar even / odd history (+ the new block) — grow-only storage
+    size_t len_ = 0;                         // pairs held (the vectors' sizes are capacity, never zero-filled per call)
+    bool carry_ = false; cf32 carried_{0, 0};
+};
+
 // ── Zoom spectrum ────────────────────────────────────────────────────────--
 //
 // ★★★ WHY THIS EXISTS. Cropping a wide FFT cannot add resolution. At 8 MSPS a 32768-point FFT

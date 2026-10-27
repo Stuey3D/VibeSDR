@@ -3,6 +3,7 @@
 #include "digi_bands.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <exception>
 #include <algorithm>
@@ -180,6 +181,7 @@ void Spotter::plan() {
 void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double captureUtc,
                      const float* binPow, int nb, double binHz) {
     if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
+    if (!x) { feedGap(n, rate, centreHz, captureUtc); return; }   // ★ a null block: a gap of n samples (see feedGap)
     const long long key = std::llround(centreHz);
     bool replan = false;
     auto it = slices_.find(key);
@@ -215,6 +217,31 @@ void Spotter::feedIq(const cf32* x, int n, double rate, double centreHz, double 
         loadedNow_ = loaded_ ? loaded_() : false;
         budget_.tick(captureUtc, skippedLocked(), unitsInUse());
     }
+    S.endUtc = captureUtc; S.lastGated = gated;
+    feedChans(key, S, x, n, rate, centreHz, captureUtc, gated);
+}
+
+void Spotter::feedGap(int n, double rate, double centreHz, double captureUtc) {
+    if (scope_ != Scope::Band || n <= 0 || !(rate > 0)) return;
+    static const bool kNoBridge = [] { const char* e = std::getenv("VIBE_BAND_BRIDGE"); return e && *e == '0'; }();   // ★ A/B
+    if (kNoBridge) return;
+    const long long key = std::llround(centreHz);
+    auto it = slices_.find(key);
+    if (it == slices_.end() || std::fabs(it->second.rate - rate) > 0.5) return;   // ★ a gap in a slice not yet planned: nothing to keep whole
+    Slice& S = it->second;
+    if ((int)zeros_.size() < 4096) zeros_.assign(4096, cf32(0, 0));
+    for (int done = 0; done < n;) {
+        const int k = std::min(4096, n - done);
+        done += k;
+        const double t = captureUtc - (double)(n - done) / rate;   // ★ the stamp of this piece's last sample
+        S.lastUtc = t; S.endUtc = t;
+        feedChans(key, S, zeros_.data(), k, rate, centreHz, t, S.lastGated);
+    }
+    S.bridged += (uint64_t)n;
+    bridgedTotal_.fetch_add((uint64_t)std::llround(1e6 * n / rate), std::memory_order_relaxed);
+}
+
+void Spotter::feedChans(long long key, Slice& S, const cf32* x, int n, double rate, double centreHz, double captureUtc, int gated) {
     for (auto& kv : chans_) {
         Chan& c = kv.second;
         if (c.slice != key) continue;
