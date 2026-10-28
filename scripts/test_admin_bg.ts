@@ -41,6 +41,11 @@ ok(bgVfoLine({ hz: 7074000, dec: 'spots-band', label: 'Digital spots: Band (summ
    === '7074.0 Digital spots: Band 40 m \u00b7 running \u00b7 212 spots, 31 countries so far \u00b7 2.1 %', 'Band VFO live count');
 ok(bgVfoLine({ hz: 7074000, dec: 'spots-band', label: 'Digital spots: Band (summary)', band: '40 m', state: 'paused', why: 'the server owner has switched Band spots off on this receiver' })
    .includes('paused (the server owner has switched Band spots off'), 'Band VFO switched off here: paused, with why');
+// ★ V12 2026-10-27: an NDB skimmer VFO — no frequency of its own, the part of the band it covers and its beacons
+ok(bgVfoLine({ hz: 0, dec: 'ndb-skim', label: 'NDB skimmer (summary)', ndbLo: 190000, ndbHi: 535000, ndb: '12 beacons identified of 41 carriers', state: 'running', cpuPct: 3.2 })
+   === 'NDB skimmer 190–535 kHz · running · 12 beacons identified of 41 carriers · 3.2 %', 'NDB skimmer VFO line');
+ok(bgVfoLine({ hz: 0, dec: 'ndb-skim', label: 'NDB skimmer (summary)', state: 'paused', why: 'a listener is running NDB mode' })
+   === 'NDB skimmer · paused (a listener is running NDB mode)', 'NDB skimmer VFO paused, with why');
 ok(bgDuration(45) === '45 s' && bgDuration(120) === '2 min', 'durations');
 // ★ V12 2026-10-25: an ISM profile — no VFOs, the band and the day instead
 const ism = bgLines({ state: 'running', profiles: 1, profile: 1, ism: { band: '433', name: '433.92 MHz ISM', devices: 6, today: '14 devices \u00b7 212 readings today' } })!;
