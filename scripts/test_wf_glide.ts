@@ -9,7 +9,7 @@
  *   - outside both frames is the floor (0), and a jump is not a glide.
  * Run: node --no-warnings scripts/test_wf_glide.ts
  */
-import { glideRowAt, newGlideScratch, canGlide, placementMoved } from '../web/client/src/wfGlide.ts';
+import { glideRowAt, newGlideScratch, canGlide, placementMoved, zoomEaseMs, zoomEaseView, easedRowAt } from '../web/client/src/wfGlide.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -55,5 +55,21 @@ ok(!placementMoved(1e6, 2e5, 1e6, 2e5, N) && placementMoved(1e6, 2e5, 1e6 + 1000
    'placementMoved: steady no, tune yes, zoom yes');
 ok(canGlide(1e6, 2e5, 1e6 + 20000, 2e5) && !canGlide(1e6, 2e5, 1e6 + 30000, 2e5), 'a move past 1/8 of the span is a jump, not a glide');
 
+// ── THE ZOOM EASE (Stuart 2026-10-28): the history stays as drawn; the new rows ease the zoom on an S-curve ──
+{ // a ×2 zoom in about the dial (1.0 MHz): the carrier's column across the ease leaves and lands with small steps, monotone
+  const lo0 = 900000, s0 = 200000, lo1 = 950000, s1 = 100000, cols: number[] = [];
+  for (let k = 0; k <= 16; k++) { const [L, S] = zoomEaseView(lo0, s0, lo1, s1, k / 16); cols.push((F - L) / S * N); }
+  const steps = cols.slice(1).map((c, i) => c - cols[i]);
+  ok(Math.abs(cols[0] - (F - lo0) / s0 * N) < 1e-6 && Math.abs(cols[16] - (F - lo1) / s1 * N) < 1e-6, 'the ease starts at the old view and lands on the new');
+  ok(steps.every((d) => d > 0) && steps[0] < steps[8] / 4 && steps[15] < steps[8] / 4, `an S-curve: small steps at both ends (${steps.map((d) => d.toFixed(1)).join(' ')})`);
+  const [Lm, Sm] = zoomEaseView(lo0, s0, lo1, s1, 0.5);
+  ok(Math.abs(Lm + Sm / 2 - 1000000) < 1e-3, 'the zoom\'s fixed point (the dial) stays put mid-ease');
+  ok(Math.abs(zoomEaseMs(2) - 1000) < 1e-9 && zoomEaseMs(1 / 64) === 1500 && zoomEaseMs(0.95) < 80 && zoomEaseMs(0.99) === 40, 'the duration scales with the step (×2 1 s, capped 1.5 s, a pinch step under 80 ms, floor 40)');
+}
+{ // a zoom-in row drawn wider than its data continues the row below at the edges — never black
+  const cur = frame(950000, 100000), below = new Uint8Array(N).fill(77);
+  easedRowAt(cur, 900000 + 50000, 100000, 900000, 200000, d, below, st);
+  ok(d[0] === 77 && d[N - 1] === 77 && d[N / 2] !== 77, 'an eased zoom-in row: edges continue the row below, the middle is the frame');
+}
 console.log(`   ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

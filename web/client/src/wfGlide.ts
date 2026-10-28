@@ -85,3 +85,37 @@ export function glideRowAt(prev: Uint8Array, lo0: number, span0: number, cur: Ui
   }
   return [L, S];
 }
+
+/* ── THE ZOOM EASE (Stuart, 2026-10-28 — the app's twin is src/utils/wfRowPlace.ts fanAfterRow): a zoom no longer re-maps
+ *    the history ("a thin line signal should expand out to the width and the history remains the thin line"); the rows
+ *    drawn just after a zoom step are drawn at IN-BETWEEN zooms on an S-curve, so a station's trail leaves its old column
+ *    vertically, curves out (zoom in) or in (zoom out), and lands vertically on its new one — "no breaks … a continuous
+ *    history". The duration scales with the step: a ×2 drum step 1 s, ×4 or more 1.5 s, a pinch's 5 % step 74 ms.
+ *    ★ Longer than the app's 16 rows (~0.64 s): the web draws one DEVICE PIXEL a row and has no per-row zoom join in its
+ *      shader, so a shorter ease put a carrier 14 px to the side per row at the steepest — dashes. */
+export const ZOOM_EASE_MS_PER_OCTAVE = 1000;
+export function zoomEaseMs(k: number): number {
+  return Math.max(40, Math.min(1500, Math.abs(Math.log2(k)) * ZOOM_EASE_MS_PER_OCTAVE));
+}
+/** The view the ease draws at fraction u (0..1) from (lo0, span0) to (lo1, span1): smoothstep, the span geometric, the
+ *  zoom's fixed point (the anchor) held. */
+export function zoomEaseView(lo0: number, span0: number, lo1: number, span1: number, u: number): [number, number] {
+  const x = u < 0 ? 0 : u > 1 ? 1 : u, e = x * x * (3 - 2 * x);
+  const S = span0 * Math.pow(span1 / span0, e);
+  const ds = span0 - span1;
+  if (Math.abs(ds) <= span1 * 1e-9) return [lo0 + (lo1 - lo0) * e, S];
+  const xs = (lo1 - lo0) / ds;
+  return [lo0 + span0 * xs - S * xs, S];
+}
+/** `cur` (placed lo, span) resampled onto the view (L, S) into dst; a column the frame does not cover CONTINUES the row
+ *  drawn before it (`below`, same columns) — the history runs on up the edges of a zoom-in instead of a black wedge. */
+export function easedRowAt(cur: Uint8Array, lo: number, span: number, L: number, S: number, dst: Uint8Array,
+                           below: Uint8Array | null, st: GlideScratch): void {
+  const n = dst.length;
+  if (st.a.length < n) { st.a = new Float32Array(n); st.b = new Float32Array(n); }
+  sampleInto(cur, lo, span, n, L, S, st.a);
+  for (let c = 0; c < n; c++) {
+    const v = st.a[c];
+    dst[c] = v === v ? (v < 0 ? 0 : v > 255 ? 255 : Math.round(v)) : (below && below.length === n ? below[c] : 0);
+  }
+}
