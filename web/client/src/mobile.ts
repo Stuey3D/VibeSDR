@@ -17,6 +17,7 @@
 import { SIGID_HOME } from '../../../src/services/dialChat';
 import { pushBack } from './gamepad';
 import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
+import { setModeLabel } from './modeIconDom';   // ★ V12 mode icons
 
 /** ★★ V12 beta25 — the DC spike, explained for listeners (the app's ModeSelector carries the same words). */
 export const DC_SPIKE_EXPLAINED =
@@ -73,7 +74,7 @@ export type MobileDeps = {
   dcSpikeOnScreen?: () => boolean;
   /** ★ The one decoder left when the owner has blocked all the others (and the spots) — drawn
    *  here in place of DECODERS… so a single button does not hide behind a door. See main.ts. */
-  soleDecoder: () => { label: string; on: boolean; press: () => void } | null;
+  soleDecoder: () => { id: string; label: string; on: boolean; press: () => void } | null;
   /** ★ False when the owner has switched off every decoder and the spot list — the DECODERS…
    *  entry is then left out rather than opening an empty panel. */
   anyDecoderLeft: () => boolean;
@@ -336,7 +337,7 @@ export function initMobileControls(deps: MobileDeps) {
     if (deps.dabCapable()) {
       const dabRow = document.createElement('button');
       dabRow.className = 'mModeOpt' + (deps.dabOn() ? ' on' : '');
-      dabRow.textContent = 'DAB';
+      setModeLabel(dabRow, 'dab', 'DAB');
       dabRow.title = 'DAB (Experimental) — digital radio, Band III';
       dabRow.onclick = () => { deps.toggleDab(); close(); refresh(); };
       grid.appendChild(dabRow);
@@ -356,7 +357,7 @@ export function initMobileControls(deps: MobileDeps) {
     if (ac && (ac.ok || deps.adsbOn())) {
       const adsbRow = document.createElement('button');
       adsbRow.className = 'mModeOpt' + (deps.adsbOn() ? ' on' : '') + (ac.ok ? '' : ' dis');
-      adsbRow.textContent = 'ADS-B';
+      setModeLabel(adsbRow, 'adsb', 'ADS-B');
       adsbRow.title = ac.ok ? 'ADS-B — aircraft on 1090 MHz, with a map' : `ADS-B is not available: ${ac.why}`;
       if (!ac.ok) adsbRow.setAttribute('aria-disabled', 'true');
       adsbRow.onclick = () => { deps.toggleAdsb(); close(); refresh(); };
@@ -368,7 +369,7 @@ export function initMobileControls(deps: MobileDeps) {
     if (ic && (ic.ok || deps.ismOn())) {   // ★ refused = not drawn (see ADS-B above)
       const ismRow = document.createElement('button');
       ismRow.className = 'mModeOpt' + (deps.ismOn() ? ' on' : '') + (ic.ok ? '' : ' dis');
-      ismRow.textContent = 'ISM';
+      setModeLabel(ismRow, 'ism', 'ISM');
       ismRow.title = ic.ok ? 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)' : `ISM is not available: ${ic.why}`;
       if (!ic.ok) ismRow.setAttribute('aria-disabled', 'true');
       ismRow.onclick = () => { deps.toggleIsm(); close(); refresh(); };
@@ -380,7 +381,7 @@ export function initMobileControls(deps: MobileDeps) {
     if (nc && (nc.ok || deps.ndbOn())) {   // ★ refused = not drawn (see ADS-B above)
       const ndbRow = document.createElement('button');
       ndbRow.className = 'mModeOpt' + (deps.ndbOn() ? ' on' : '') + (nc.ok ? '' : ' dis');
-      ndbRow.textContent = 'NDB';
+      setModeLabel(ndbRow, 'ndb', 'NDB');
       ndbRow.title = nc.ok ? 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map' : `NDB is not available: ${nc.why}`;
       if (!nc.ok) ndbRow.setAttribute('aria-disabled', 'true');
       ndbRow.onclick = () => { deps.toggleNdb(); close(); refresh(); };
@@ -391,7 +392,7 @@ export function initMobileControls(deps: MobileDeps) {
     if (aic && (aic.ok || deps.aisOn())) {   // ★ refused = not drawn (see ADS-B above)
       const aisRow = document.createElement('button');
       aisRow.className = 'mModeOpt' + (deps.aisOn() ? ' on' : '') + (aic.ok ? '' : ' dis');
-      aisRow.textContent = 'AIS';
+      setModeLabel(aisRow, 'ais', 'AIS');
       aisRow.title = aic.ok ? 'AIS — ships on 161.975 and 162.025 MHz, with a map' : `AIS is not available: ${aic.why}`;
       if (!aic.ok) aisRow.setAttribute('aria-disabled', 'true');
       aisRow.onclick = () => { deps.toggleAis(); close(); refresh(); };
@@ -404,7 +405,7 @@ export function initMobileControls(deps: MobileDeps) {
       if (sole) {
         // ★ One survivor: it stands where the door stood, and toggles exactly as it would inside.
         decRow.className = 'mModeOpt' + (sole.on ? ' on' : '');
-        decRow.textContent = sole.label;
+        setModeLabel(decRow, sole.id, sole.label);
         decRow.onclick = () => { sole.press(); close(); refresh(); };
       } else {
         decRow.className = 'mModeOpt';

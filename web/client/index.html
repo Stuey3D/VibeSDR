@@ -3041,6 +3041,17 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
 /* Menu button rows + settings sub-panels (mirrors the app's menu). */
 .btnRow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+/* ★ V12 mode icons (src/utils/modeIcons.ts): a decoder's category glyph before its name — the text's size and colour,
+   so a lit (.on) button lights its glyph too. Never shrinks: a narrow button truncates nothing it did not before. */
+.modeIco { width: 1.1em; height: 1.1em; vertical-align: -0.2em; margin-right: 0.35em; flex: none; }
+/* ★ V12 the decoder panel's band tabs and groups (decoderBandsDom.ts). A far-off decoder is dimmed, never disabled. */
+#decBandTabs { justify-content: flex-start; margin: 2px 0 4px; }
+#decBandTabs .btn { min-width: 4.5em; }
+.decGroupHead { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; font-size: 10px; letter-spacing: 2px;
+                color: var(--text-dim); }
+.decGroupHead .modeIco { margin-right: 0; width: 13px; height: 13px; }
+.decGroup .btnRow { margin-top: 6px; }
+.btn.dimFar:not(.on) { opacity: 0.4; }
 .subPanel {
   margin: 6px 0 10px; padding: 8px 10px;
   border: 1px solid var(--bar-border); border-radius: 8px;
@@ -5083,8 +5094,15 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="galleryBtn" title="What this server's decoders have heard — background decoding while nobody listened, and listeners' own">GALLERY</button>
   </div>
 
-  <h2>CLIENT DECODERS</h2>
-  <div class="btnRow">
+  <h2>DECODERS</h2>
+  <!-- ★★ V12 BAND TABS (Stuart, 2026-10-28) — HF (with LF / MF) · VHF · UHF, opening on the band of the dial, and within a
+       band the decoders grouped by use (Aviation · Maritime · Amateur · Utility / Broadcast / Sensors), each heading with
+       its glyph. decoderBandsDom.ts MOVES the buttons below (and DIGITAL SPOTS) into #decGroups for the open tab — the
+       same nodes, so every handler and the hidden-where-the-server-lacks-it rule stay as they were. A decoder far from
+       its usual frequencies is DIMMED, never disabled. src/utils/decoderBands.ts is the table, shared with the app. -->
+  <div class="seg" id="decBandTabs" role="tablist" aria-label="Band"></div>
+  <div id="decGroups"></div>
+  <div class="btnRow" id="decPark" hidden>
     <button class="btn" data-dec="rtty">RTTY</button>
     <button class="btn" data-dec="cw" hidden title="Morse — the signal in your passband decoded, every other one in it listed; or SKIMMER: every CW signal across a segment around your dial">CW</button>
     <!-- ★★ V12 2026-10-26: PSK31/63 — this server's own (decoders/psk_skimmer.h); drawn only where vibeserver.json says "psk": true. -->

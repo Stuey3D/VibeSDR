@@ -1,0 +1,170 @@
+/**
+ * ★★ WHERE EACH DECODER LIVES — the decoder panel's BAND TABS, its groups by USE, and which keys are DIMMED because the
+ * dial is nowhere near where that decoder is normally used (Stuart, 2026-10-28: "dimming out the decoders that dont
+ * apply will make it easier"). ONE pure module, shared by the app (ModeSelector) and the web client (web/client/src/
+ * decoderBands.ts), tested by scripts/test_decoder_bands.ts.
+ *
+ *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map)
+ *                     ⚓ Maritime  NAVTEX · DSC · WEFAX
+ *                     Amateur     DIGITAL SPOTS · CW · PSK · RTTY · JTTY · SSTV · APRS (300 Bd HF packet)
+ *                     Utility     NDB · TIME
+ *   VHF               ⚓ Maritime  AIS · DSC (channel 70)
+ *                     Amateur     APRS · DIGITAL SPOTS (6 m / 2 m) · CW · SSTV
+ *                     Broadcast   DAB · ADV RDS
+ *   UHF               ✈ Aviation  ADS-B
+ *                     Sensors     ISM
+ *   Every band        SCANNER · GALLERY · TRANSCRIBE (tools, not decoders of one band)
+ *
+ * ★★★ DIMMED, NEVER DISABLED OR HIDDEN (Stuart: "someone who hasnt setup an upconverter correctly will be tuned to 130MHz
+ *     or so for HF"). A dimmed key is a HINT and stays fully tappable; the band tab only picks which tab OPENS — the
+ *     others are one tap away. Availability (what the radio / owner allows) is the callers' existing rules, untouched.
+ * ★★ THE FREQUENCY IS THE ONE THE USER SEES — after any converter offset (the app's status.frequency is already the
+ *    display frequency; the server reports its own converter's display frequency).
+ * ★ A tab that is NOT the dial's band is dimmed whole (decoderDim): on 7.074 MHz the VHF tab's CW is the same decoder as
+ *   HF's, but nothing on that tab applies where you are.
+ * ★ The DIAL, not the whole view: a 2.4 MHz view around 7.074 MHz takes in the 6.6 MHz HFDL band, and Stuart's example
+ *   is exactly that HFDL should be dim there.
+ * ★ The knowledge is the code's own wherever it has it: the band plan's AMATEUR bands (constants/bandPlan), NAVTEX's
+ *   bands (navtexStations.generated), DSC's channels (services/dsc). Only what the code had nowhere is tabled here:
+ *   the HF aeronautical (R) bands HFDL uses, the major WEFAX stations, the time-signal carriers (DecoderClient's
+ *   timeStationFor reads the same ones — the test checks they agree), and the ISM / AIS / DAB / ADS-B / NDB ranges.
+ */
+import { BAND_PLAN } from '../constants/bandPlan.ts';
+import { NAVTEX_BANDS_KHZ } from './navtexStations.generated.ts';
+import { DSC_CHANNELS } from '../services/dsc.ts';
+
+export type RadioBand = 'hf' | 'vhf' | 'uhf';
+export type DecoderGroup = 'aviation' | 'maritime' | 'amateur' | 'other';
+
+export const RADIO_BANDS: ReadonlyArray<{ id: RadioBand; label: string }> = [
+  { id: 'hf', label: 'HF' }, { id: 'vhf', label: 'VHF' }, { id: 'uhf', label: 'UHF' },
+];
+export const DECODER_GROUPS: readonly DecoderGroup[] = ['aviation', 'maritime', 'amateur', 'other'];
+
+/** The band a (displayed) frequency is in: HF below 30 MHz (LF and MF with it), VHF to 300 MHz, UHF above. */
+export function radioBandOf(hz: number): RadioBand {
+  if (!Number.isFinite(hz) || hz < 30e6) return 'hf';
+  return hz < 300e6 ? 'vhf' : 'uhf';
+}
+
+/** A group's heading in a band — the fourth group is named for what it holds there. */
+export function decoderGroupLabel(g: DecoderGroup, band: RadioBand): string {
+  if (g === 'aviation') return 'AVIATION';
+  if (g === 'maritime') return 'MARITIME';
+  if (g === 'amateur') return 'AMATEUR';
+  return band === 'hf' ? 'UTILITY' : band === 'vhf' ? 'BROADCAST' : 'SENSORS';
+}
+/** The id whose ModeIcon a group's heading carries (utils/modeIcons modeIconFor), or 'yagi' for Amateur. */
+export function decoderGroupIcon(g: DecoderGroup, band: RadioBand): string {
+  if (g === 'aviation') return 'adsb';
+  if (g === 'maritime') return 'ais';
+  if (g === 'amateur') return 'amateur';
+  return band === 'hf' ? 'ndb' : band === 'vhf' ? 'dab' : 'ism';
+}
+
+/**
+ * Where each key sits: band → group, in display order. A decoder that genuinely works in two bands is in both (the
+ * same key, the same decoder). Ids are both clients' (the app's DecId / whole-radio keys, the web's data-dec).
+ * 'spots' = DIGITAL SPOTS (FT8, FT4, WSPR… — the server's spotting); 'rds' = ADVANCED RDS; 'hfdl' = the HFDL server map.
+ */
+export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: DecoderGroup; ids: readonly string[] }>>> = {
+  hf: [
+    { group: 'aviation', ids: ['hfdl'] },
+    { group: 'maritime', ids: ['navtex', 'dsc', 'wefax'] },
+    { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'sstv', 'aprs'] },
+    { group: 'other',    ids: ['ndb', 'time'] },
+  ],
+  vhf: [
+    { group: 'maritime', ids: ['ais', 'dsc'] },
+    { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv'] },
+    { group: 'other',    ids: ['dab', 'rds'] },
+  ],
+  uhf: [
+    { group: 'aviation', ids: ['adsb'] },
+    { group: 'other',    ids: ['ism'] },
+  ],
+};
+
+/** Every band an id is placed in. */
+export function bandsOfDecoder(id: string): RadioBand[] {
+  return RADIO_BANDS.map(b => b.id).filter(b => DECODER_PLACES[b].some(g => g.ids.includes(id)));
+}
+
+/**
+ * The tab to OPEN: the dial's band, unless nothing is on it here (an HF-only server's panel opened at 145 MHz through an
+ * unset upconverter) — then the first band that has something. `present(band)` says whether a band has any key drawn.
+ */
+export function openingBand(hz: number, present: (b: RadioBand) => boolean): RadioBand {
+  const b = radioBandOf(hz);
+  if (present(b)) return b;
+  return RADIO_BANDS.map(x => x.id).find(present) ?? b;
+}
+
+// ── "near": the dial against each decoder's usual frequencies ─────────────────────────────────────────────────────────
+type Range = readonly [number, number];
+const kHz = (lo: number, hi = lo) => [lo * 1e3, hi * 1e3] as const;
+const MHz = (lo: number, hi = lo) => [lo * 1e6, hi * 1e6] as const;
+
+/** Amateur bands, from the band plan (every region — a hint, not a licence check). */
+const HAM: readonly Range[] = BAND_PLAN.filter(b => b.type === 'ham').map(b => [b.lo, b.hi] as const);
+/** HF aeronautical mobile (R) bands (ITU RR Appendix 27) — where HFDL ground stations transmit. */
+const HFDL: readonly Range[] = [
+  kHz(2850, 3155), kHz(3400, 3500), kHz(4650, 4750), kHz(5450, 5730), kHz(6525, 6765), kHz(8815, 9040),
+  kHz(10005, 10100), kHz(11175, 11400), kHz(13200, 13360), kHz(15010, 15100), kHz(17900, 18030), kHz(21924, 22000),
+];
+/** Major HF WEFAX stations' carriers (kHz): Northwood, DWD Pinneberg, NOAA Boston / Pt Reyes / New Orleans / Kodiak /
+ *  Honolulu, JMH Tokyo, Charleville, Wellington, Kyodo. ±4 kHz covers the USB dial 1.9 kHz below. */
+const WEFAX_KHZ = [
+  2618.5, 4610, 8040, 11086.5, 3855, 7880, 13882.5, 4235, 6340.5, 9110, 12750, 4346, 8682, 12786, 17151.2, 22527,
+  4317.9, 8503.9, 12789.9, 17146.4, 2054, 4298, 8459, 12412.5, 9982.5, 11090, 16135, 3622.5, 7795, 13988.5,
+  5100, 11030, 13920, 20469, 5807, 9459, 13550.5, 16340.1, 16971, 17069.6, 22542,
+];
+/** Standard time signals (Hz) — the stations DecoderClient's timeStationFor names (MSF/WWVB, DCF77, RWM, WWV). */
+export const TIME_SIGNAL_HZ: readonly number[] = [
+  60_000, 77_500, 66_666, 4_996_000, 9_996_000, 14_996_000,
+  2_500_000, 5_000_000, 10_000_000, 15_000_000, 20_000_000, 25_000_000,
+];
+
+const pad = (hz: number, r: Range, tol: number) => hz >= r[0] - tol && hz <= r[1] + tol;
+const anyNear = (hz: number, rs: readonly Range[], tol = 0) => rs.some(r => pad(hz, r, tol));
+const pointsNear = (hz: number, pts: readonly number[], tol: number) => pts.some(p => Math.abs(hz - p) <= tol);
+
+const NEAR: Record<string, (hz: number) => boolean> = {
+  hfdl:   hz => anyNear(hz, HFDL, 5e3),
+  navtex: hz => pointsNear(hz, NAVTEX_BANDS_KHZ.map(k => k * 1e3), 5e3),
+  dsc:    hz => DSC_CHANNELS.some(c => Math.abs(hz - c.hz) <= (c.vhf ? 50e3 : 5e3)),
+  wefax:  hz => pointsNear(hz, WEFAX_KHZ.map(k => k * 1e3), 4e3),
+  spots:  hz => anyNear(hz, HAM),
+  cw:     hz => anyNear(hz, HAM),
+  psk:    hz => anyNear(hz, HAM),
+  rtty:   hz => anyNear(hz, HAM),
+  jtty:   hz => anyNear(hz, HAM),
+  sstv:   hz => anyNear(hz, HAM),
+  aprs:   hz => anyNear(hz, HAM),
+  ndb:    hz => anyNear(hz, [kHz(190, 535)]),
+  time:   hz => pointsNear(hz, TIME_SIGNAL_HZ, 5e3),
+  ais:    hz => anyNear(hz, [MHz(161.975, 162.025)], 100e3),
+  dab:    hz => anyNear(hz, [MHz(174, 240)]),
+  rds:    hz => anyNear(hz, [MHz(87.5, 108)], 500e3),   // Japan's 76–95 MHz FM is below; a hint only
+  adsb:   hz => anyNear(hz, [MHz(1090)], 5e6),
+  ism:    hz => anyNear(hz, [MHz(314, 316), MHz(344, 346), MHz(433.05, 434.79), MHz(863, 870), MHz(902, 928)], 1e6),
+};
+
+/**
+ * True when the dial (the DISPLAYED frequency) is near where `id` is normally used — the key is drawn bright; false =
+ * drawn DIM (still tappable). An id with no rule (a tool: SCANNER, GALLERY…) is never dimmed, nor is an unknown dial.
+ */
+export function decoderNear(id: string, hz: number): boolean {
+  const f = NEAR[id];
+  if (!f || !Number.isFinite(hz) || hz <= 0) return true;
+  return f(hz);
+}
+
+/**
+ * DIMMED in tab `tab`: not near its usual frequencies — or the tab is not the dial's band (an HF dial looking at the VHF
+ * tab: none of it applies where you are). A HINT: the caller keeps the key fully tappable. Never for an unknown dial.
+ */
+export function decoderDim(id: string, hz: number, tab: RadioBand): boolean {
+  if (!Number.isFinite(hz) || hz <= 0) return false;
+  return !decoderNear(id, hz) || radioBandOf(hz) !== tab;
+}
