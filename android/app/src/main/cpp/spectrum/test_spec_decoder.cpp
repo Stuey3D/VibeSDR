@@ -38,6 +38,10 @@ int main() {
     uint8_t gz[] = {0x1f, 0x8b, 8, 0};      CHECK(d.feed(gz, 4, fq) == SpecDecoder::kNotSpec, "gzip is not spectrum");
     b = hdr(0x04, 1); put16(b, 3); put16(b, 0); b.push_back(1); CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kSpectrum, "truncated delta applies what fits");
     b = hdr(0x04, 1); b.push_back(1);       CHECK(d.feed(b.data(), b.size(), fq) == SpecDecoder::kIgnored, "delta body < 2: silent, like the JS");
+    // ★ V12 the full-capture row (SPWB) is NOT a fault: recognised before the magic check, bins untouched
+    { std::vector<uint8_t> w = {'S','P','W','B', 2, 0}; w.resize(32 + 256, 0); const size_t before = d.bins().size(); const float b0 = d.bins()[0];
+      CHECK(d.feed(w.data(), w.size(), fq) == SpecDecoder::kWide && d.bins().size() == before && d.bins()[0] == b0, "SPWB is kWide, the bins untouched");
+      w[3] = 'X'; CHECK(d.feed(w.data(), w.size(), fq) == SpecDecoder::kFault, "…and a stranger magic is still a fault"); }
     SpecDecoder f; CHECK(f.bins().size() == 1024 && f.binCount() == 1024, "starts as the JS does: 1024 zeros");
     f.setBinCount(2048); CHECK(f.bins().size() == 2048, "config binCount change reallocates");
     std::printf("%s (%d failures)\n", fails ? "FAIL" : "PASS", fails);
