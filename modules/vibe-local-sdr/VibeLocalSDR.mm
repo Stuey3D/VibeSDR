@@ -345,6 +345,16 @@ RCT_EXPORT_METHOD(setFrameRateCap:(double)hz) {
 // Hz while waterfall rows are flowing (every range link pinned there, see gFpsSteady); 0 = release. Live.
 RCT_EXPORT_METHOD(setSteadyRefresh:(double)hz) {
   NSInteger want = (std::isfinite(hz) && hz > 0) ? (NSInteger)lround(hz) : 0;
+  // ★★ ON A MAC: the full rate, not the feed-matched one. macOS runs the panel at whatever the whole screen asks (Stuart's
+  //   ProMotion Mac showed 90–100 Hz with the app asking for 40), so a low pin only spaces OUR frames unevenly across its
+  //   refreshes; at the full rate the row pacer places rows by time (build 507 — "judder seems to be gone"). The
+  //   feed-matched low rate (the power saving) is for iPhone/iPad, where the request is honoured.
+  if (want > 0) {
+    NSProcessInfo *pi = [NSProcessInfo processInfo];
+    BOOL onMac = pi.isMacCatalystApp;
+    if (@available(iOS 14.0, *)) onMac = onMac || pi.isiOSAppOnMac;
+    if (onMac) want = 120;
+  }
   dispatch_async(dispatch_get_main_queue(), ^{
     if (!gFpsSync) return;
     @synchronized (gFpsSync) {

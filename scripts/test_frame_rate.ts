@@ -131,6 +131,7 @@ ok('the waterfall turns it on with rows and off when they stop, on backgrounding
     ok('steadyHzFor: ONE rate whether interacting or not — 30/40/60, a whole multiple of the (snapped) feed', bad.length === 0, bad.join('; '));
   } else ok('steadyHzFor importable', false); }
 ok('Android Platform: no-op (the native method is iOS-only)', /native\(\)\?\.setSteadyRefresh/.test(svc));
+ok('on a Mac the steady pin is the full rate (macOS ignores a low one)', /isiOSAppOnMac[\s\S]{0,60}if \(onMac\) want = 120/.test(ios));
 ok('Android re-applies on resume', /onHostResume\(\)\s*\{\s*applyFrameRateCap\(\)/.test(android));
 
 console.log(`frame rate: ${passes} passed, ${fails} failed`);
