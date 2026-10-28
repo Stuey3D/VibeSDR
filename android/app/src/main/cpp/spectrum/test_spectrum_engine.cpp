@@ -196,6 +196,45 @@ int main() {
         CHECK(r[500] > 150 && r[501] > 150, "max-pool: r[500]=%d r[501]=%d", r[500], r[501]);
         rlImage(img); delete e;
     }
+    // ── 4b. THE ZOOM FAN (wf_zoom_fan.h): a ×2 zoom in re-maps the history — every old row's carrier moves to the column
+    //        the new span puts it at (688, from 600 at 2.048 MHz), none left at its old one (the slices). Zoom back out:
+    //        the old rows are their stored selves again, byte for byte. ──
+    {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        void* img = nullptr; double head = 0;
+        auto feed = [&](int frames, int n, int bin, double bw) {
+            for (int f = 0; f < frames; f++) {
+                auto b = frame(n, bin);
+                e->pushFrame(b.data(), n, 100e6, bw, 100e6);
+                run(e, 50);
+                UiUpdate u;
+                if (e->pollUi(u)) { if (u.image) { if (img) rlImage(img); img = u.image; head = u.head; } if (u.peakPath) rlPath(u.peakPath); }
+            }
+        };
+        feed(10, 1024, 600, 2.048e6);
+        const double oldHead = head;
+        std::vector<uint8_t> stored(((FakeImage*)img)->px);
+        e->setView(100e6, 1.024e6);
+        feed(4, 1024, 688, 1.024e6);
+        int moved = 0, stale = 0;
+        for (double h = 2; h <= oldHead; h++) {
+            const uint8_t* r = rowOf((FakeImage*)img, h);
+            if (r[688] > 150 && r[600] < 100) moved++;
+            if (r[600] > 150) stale++;
+        }
+        CHECK(moved == (int)oldHead - 1 && stale == 0, "zoom in: %d of %d old rows fanned to 688, %d left at 600 (slices)", moved, (int)oldHead - 1, stale);
+        const uint8_t* nr = rowOf((FakeImage*)img, head);
+        CHECK(nr[688] > 150, "zoom in: the new row's carrier at 688 (%d)", nr[688]);
+        e->setView(100e6, 2.048e6);
+        feed(6, 1024, 600, 2.048e6);   // (the jitter buffer holds a couple of frames: enough to land the new span)
+        int same = 0;
+        for (double h = 1; h <= oldHead; h++)
+            if (std::memcmp(rowOf((FakeImage*)img, h), stored.data() + ((size_t)(h - 1) % 1024) * 1024, 1024) == 0) same++;
+        CHECK(same == (int)oldHead, "zoom in then out: %d of %d old rows restored byte for byte", same, (int)oldHead);
+        rlImage(img); delete e;
+    }
     // ── 5. Covered: rows go into the ring, no images; uncover publishes ONE ──
     {
         auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);

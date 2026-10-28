@@ -17,11 +17,17 @@
  *
  *   • THE GLIDE (2026-10-28): a fast tune's trail is ONE CONNECTED line — each row's lit run touches the row before's —
  *     where without it the rows were dots tens of bins apart; steady rows are byte-for-byte unstreaked; the floor is
- *     never raised; a jump past GLIDE_MAX_FRAC and a zoom-drum step are left as they were; a pinch fans connected.
+ *     never raised; a jump past GLIDE_MAX_FRAC is left as it was; a zoom (drum step OR pinch) is never streaked.
+ *
+ *   • THE ZOOM FAN (2026-10-28): through placeRow (WaterfallView's whole placement) and the DISPLAYED ring (fanImage):
+ *     a zoom in / out / anchored zoom / pinch chain puts EVERY history row's carrier at the column the live view puts it;
+ *     a zoom out leaves blank (0) edges and keeps a one-bin carrier (max under a pixel); zoom in then out gives back the
+ *     stored ring byte for byte; a tune does not fan (the bend); unzoomed, the display IS the stored ring (steady rows
+ *     byte-identical, no second buffer); a fast tune and a ×2 drum step both stay one connected trail on screen.
  *
  * Run: node --no-warnings scripts/test_wf_row_place.ts
  */
-import { glideMap, glideRow, GLIDE_MAX_FRAC, newGlideState, rowViewOffset, writeRow } from '../src/utils/wfRowPlace.ts';
+import { applyViewChange, fanImage, fanRefresh, glideMap, glideRow, GLIDE_MAX_FRAC, newFanState, newGlideState, placeRow, rowViewOffset, writeRow } from '../src/utils/wfRowPlace.ts';
 
 let fails = 0, passes = 0;
 function ok(what: string, cond: boolean, detail = '') {
@@ -217,15 +223,23 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     const l = lit(gf - 1);
     ok('the glide: a jump (bookmark, typed frequency) is not streaked', sp === 0 && !!l && l[1] - l[0] === 4, `span ${sp} lit ${l}`);
   }
-  // a zoom-drum step (×2) is not streaked; a pinch (5 % a row) fans connected
+  // a zoom is never streaked — neither a ×2 drum step nor a 5 % pinch: the ZOOM FAN re-maps the history instead (below),
+  // and a streak on top of it would draw the fan twice
   ok('the glide: a ×2 zoom step is not streaked', glideMap(0, 195.3125, 0, 97.65625, N) === null);
+  ok('the glide: a 5 % pinch is not streaked (the fan places the history — no double scaling)', glideMap(0, 195.3125, 0, 195.3125 * 0.95, N) === null);
   {
     let w = { c: 1_000_000, bw: 200_000 };
     for (let i = 0; i < 3; i++) gpush(noisyRow(w.c, w.bw), w.c, w.bw, w);
-    const pinchFrom = gf - 1;
-    for (let i = 0; i < 12; i++) { w = { c: w.c, bw: w.bw * 0.95 }; gpush(noisyRow(w.c, w.bw), w.c, w.bw, w); }
-    const pg = connected(pinchFrom, gf);
-    ok('the glide: a pinch fans the carrier out in one connected line', pg.length === 0, pg.join('; '));
+    let raised = 0;
+    for (let i = 0; i < 12; i++) {
+      w = { c: w.c, bw: w.bw * 0.95 };
+      seed = 500 + i; const ref = noisyRow(w.c, w.bw);
+      const slot = (gf % ROWS) * N;
+      seed = 500 + i; const sp = gpush(noisyRow(w.c, w.bw), w.c, w.bw, w);
+      if (sp !== 0) raised++;
+      for (let x = 0; x < N; x++) if (G[slot + x] !== ref[x]) raised++;
+    }
+    ok('the glide: pinch rows are stored exactly as written (the stored ring is never scaled)', raised === 0, `${raised}`);
   }
   ok('the glide: the history before the tune is untouched', steadyBefore.every((x, i) => x === G[i]));
   // cost: one streaked row, timed
@@ -235,6 +249,133 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     const per = (performance.now() - t0) / 2000;
     console.log(`  glide cost (incl. building the test row): ${(per * 1000).toFixed(1)} µs per streaked row`);
   }
+}
+
+// ── THE ZOOM FAN: a zoom re-maps the history (Stuart 2026-10-27/28 — the app was left in slices of the old scale) ──
+{
+  const R = 256;
+  const S = new Uint8Array(N * R);
+  const gl = newGlideState(N), fan = newFanState(R);
+  let fr = 0;
+  let v = { c: 1_030_000, bw: 200_000 };
+  /** One row as the server builds it — a ONE-bin carrier (the hardest to keep on a zoom out) on a flat floor — placed
+   *  as pushRow does, against the view `v`. */
+  const fpush = (rc: number, span: number) => {
+    const r = new Uint8Array(N).fill(40);
+    const bin = Math.round((CARRIER - rc) / (span / N)) + N / 2;
+    if (bin >= 0 && bin < N) r[bin] = 230;
+    placeRow(S, R, N, fr, r, rc, span / N, v.c, v.bw, gl, fan); fr++;
+  };
+  const D = () => fanImage(fan, S);
+  /** The displayed row f's lit run [first, last] (≥ 200) or null. */
+  const dlit = (f: number): [number, number] | null => {
+    const d = D(), s = (f % R) * N; let a = -1, b = -1;
+    for (let i = 0; i < N; i++) if (d[s + i] >= 200) { if (a < 0) a = i; b = i; }
+    return a < 0 ? null : [a, b];
+  };
+  /** The column the LIVE view puts the carrier at. */
+  const liveCol = () => (CARRIER - (v.c - v.bw / 2)) / (v.bw / N);
+  /** Rows f0..f1-1 whose displayed carrier is not at the live column (± tol px), as text. */
+  const offCol = (f0: number, f1: number, tol = 1.5) => {
+    const bad: string[] = []; const want = liveCol();
+    for (let f = f0; f < f1; f++) { const l = dlit(f); if (!l || l[0] > want + tol || l[1] < want - tol - 1) bad.push(`row ${f}: ${l} want ${want.toFixed(1)}`); }
+    return bad;
+  };
+  const conn = (f0: number, f1: number) => {
+    const g: string[] = [];
+    for (let f = f0 + 1; f < f1; f++) { const p = dlit(f - 1), q = dlit(f); if (!p || !q || q[0] > p[1] + 1 || q[1] < p[0] - 1) g.push(`row ${f}: ${q} vs ${p}`); }
+    return g;
+  };
+
+  for (let i = 0; i < 60; i++) fpush(v.c, v.bw);
+  ok('the fan: unzoomed, the display IS the stored ring (no second buffer, steady rows byte-identical)', D() === S && fan.disp === null);
+  const stored0 = S.slice(0, 60 * N);
+
+  // (rows 60–63 are the tune below — they BEND, as they must, so the column checks skip them)
+  // a TUNE (same span) does not fan: the history stays where it was drawn (the bend, #57)
+  v = { c: v.c + 2_000, bw: v.bw }; for (let i = 0; i < 4; i++) fpush(v.c, v.bw);
+  ok('the fan: a tune does not touch the history (no maps, display = stored)', D() === S && fan.xfA.every((a) => a === 1) && fan.xfB.every((b) => b === 0));
+  v = { c: 1_030_000, bw: 200_000 }; for (let i = 0; i < 4; i++) fpush(v.c, v.bw);
+  const preZoom = fr;
+
+  // ×2 ZOOM IN about the dial (the drum): one frame from the old span still in flight, then the new span
+  v = { c: 1_030_000, bw: 100_000 };
+  fpush(1_030_000, 200_000);
+  for (let i = 0; i < 6; i++) fpush(v.c, v.bw);
+  { const bad = offCol(0, 60).concat(offCol(64, fr));
+    ok('the fan: after a ×2 zoom in, EVERY history row shows the carrier at the live view\'s column (no slices)', bad.length === 0, bad.slice(0, 4).join('; ')); }
+  ok('the fan: the stored rows are never rewritten by a zoom', stored0.every((x, i) => x === S[i]));
+  { // control: what the app drew before the fan — the stored row as it came — is a slice at the OLD scale
+    let c0 = -1; for (let x = 0; x < N; x++) if (S[x] >= 200) c0 = x;
+    ok('control: without the fan the history row sits at its old column (the slice the test must see)', Math.abs(c0 - liveCol()) > 50, `${c0} vs ${liveCol()}`); }
+  { const g = conn(preZoom, fr); ok('the fan: a ×2 drum step is ONE connected trail on screen (was a gap)', g.length === 0, g.join('; ')); }
+
+  // a ZOOM OUT past the start (×4 from here): old rows draw in, the new edges are blank, the one-bin carrier survives
+  v = { c: 1_030_000, bw: 400_000 };
+  for (let i = 0; i < 6; i++) fpush(v.c, v.bw);
+  { const bad = offCol(0, 60).concat(offCol(64, fr));
+    ok('the fan: after a zoom OUT, every row\'s carrier is at the live column — a one-bin carrier is kept (max under a pixel)', bad.length === 0, bad.slice(0, 4).join('; ')); }
+  { const d = D(); let edge = 0;
+    for (let f = 0; f < 60; f++) { const s = f * N; for (let x = 0; x < N / 4 - 1; x++) if (d[s + x] !== 0 || d[s + N - 1 - x] !== 0) edge++; }
+    ok('the fan: a zoom out leaves the never-seen edges blank (0), not smeared', edge === 0, `${edge} non-blank edge px`); }
+
+  // back to 200 kHz: every row from before the zoom is the stored row again, byte for byte (lossless)
+  v = { c: 1_030_000, bw: 200_000 };
+  fpush(v.c, v.bw);
+  { const d = D(); let diff = 0; for (let i = 0; i < 60 * N; i++) if (d[i] !== stored0[i]) diff++;
+    ok('the fan: zoom in then back out restores the history exactly (edges and all)', diff === 0, `${diff} bytes differ`); }
+  { const bad = offCol(0, 60).concat(offCol(64, fr)); ok('the fan: …and every row since, at every zoom it was drawn at, lines up', bad.length === 0, bad.slice(0, 4).join('; ')); }
+
+  // an ANCHORED zoom (about the carrier — a pinch about the finger): the carrier stays put on screen
+  { const xs = liveCol(); const span = 120_000; const lo = CARRIER - xs * (span / N);
+    v = { c: lo + span / 2, bw: span }; fpush(v.c, v.bw);
+    const bad = offCol(0, 60).concat(offCol(64, fr)); ok('the fan: an anchored zoom keeps the carrier pinned, history and all', bad.length === 0 && Math.abs(liveCol() - xs) < 1e-6, bad.slice(0, 4).join('; ')); }
+
+  // a PINCH chain (5 % a row, about the centre): connected on screen, every row at the live column
+  v = { c: 1_030_000, bw: 200_000 }; fpush(v.c, v.bw);
+  { const from = fr - 1;
+    for (let i = 0; i < 12; i++) { v = { c: v.c, bw: v.bw * 0.95 }; fpush(v.c, v.bw); }
+    const g = conn(from, fr), bad = offCol(0, 60).concat(offCol(64, fr));
+    ok('the fan: a pinch fans the carrier out in one connected line, the history with it', g.length === 0 && bad.length === 0, g.concat(bad).slice(0, 4).join('; ')); }
+
+  // the GLIDE still connects a fast tune, with zoomed history on screen
+  { const from = fr; const cs: number[] = [];
+    for (let i = 1; i <= 15; i++) { v = { c: v.c + 1_500, bw: v.bw }; cs.push(v.c); const rc = cs[Math.max(0, cs.length - 3)]; fpush(rc, v.bw); }
+    const g = conn(from - 1, fr); ok('the fan + glide: a fast tune is still one connected trail on screen', g.length === 0, g.join('; ')); }
+
+  // RING rows after the last zoom, every row is the identity: the second buffer is dropped
+  for (let i = 0; i < R; i++) fpush(v.c, v.bw);
+  ok('the fan: once the zoomed history has scrolled away, the display buffer is freed', fan.disp === null && D() === S);
+
+  // only the rows that can be ON SCREEN are made at a zoom; a resize that shows more makes the rest (fanRefresh)
+  { const S2 = new Uint8Array(N * R), g2 = newGlideState(N), f2 = newFanState(R); let k = 0, w = { c: 1_030_000, bw: 200_000 };
+    const p2 = (vis: number) => { const r = new Uint8Array(N).fill(40); const bin = Math.round((CARRIER - w.c) / (w.bw / N)) + N / 2; r[bin] = 230;
+                                   placeRow(S2, R, N, k++, r, w.c, w.bw / N, w.c, w.bw, g2, f2, vis); };
+    for (let i = 0; i < 200; i++) p2(64);
+    w = { c: 1_030_000, bw: 100_000 }; p2(64);
+    const want = Math.round((CARRIER - (w.c - w.bw / 2)) / (w.bw / N));
+    const col = (f: number) => { const d = fanImage(f2, S2), s0 = (f % R) * N; for (let x = 0; x < N; x++) if (d[s0 + x] >= 200) return x; return -1; };
+    let shown = 0, below = 0; for (let f = k - 64; f < k; f++) if (Math.abs(col(f) - want) <= 1) shown++; for (let f = 0; f < k - 70; f++) if (Math.abs(col(f) - want) <= 1) below++;
+    ok('the fan: a zoom makes the rows on screen (64 visible) and leaves the off-screen rest for later', shown === 64 && below === 0, `${shown} shown, ${below} below`);
+    const did = fanRefresh(f2, S2, N, R, k, R); let all = 0; for (let f = 0; f < k; f++) if (Math.abs(col(f) - want) <= 1) all++;
+    ok('the fan: a resize that shows the whole ring makes every row at the live zoom (fanRefresh)', did && all === k && !fanRefresh(f2, S2, N, R, k, R), `${all}/${k}`); }
+
+  // the pure maps: a pinch in and back out returns to the EXACT identity
+  { const A = new Float64Array([1]), B = new Float64Array([0]); let lo = 900_000, sp = 200_000;
+    for (const s2 of [160_000, 130_000, 100_000, 80_000, 100_000, 130_000, 160_000, 200_000]) { const l2 = 1_000_000 - s2 / 2; applyViewChange(A, B, lo, sp, l2, s2); lo = l2; sp = s2; }
+    ok('the fan: a pinch in and out snaps back to the exact identity', A[0] === 1 && B[0] === 0, `${A[0]} ${B[0]}`); }
+
+  // cost: a full 1024-row ring, a ×2 zoom step (in then out), timed
+  { const RR = 1024, SS = new Uint8Array(N * RR); const g2 = newGlideState(N), f2 = newFanState(RR); let k = 0;
+    const row = new Uint8Array(N); for (let i = 0; i < N; i++) row[i] = 40 + (i * 7919 % 50);
+    for (let i = 0; i < RR; i++) placeRow(SS, RR, N, k++, row, 1e6, 200_000 / N, 1e6, 200_000, g2, f2);
+    const steps = 20; let bw = 200_000, t0 = performance.now();
+    for (let i = 0; i < steps; i++) { bw *= 0.97; placeRow(SS, RR, N, k++, row, 1e6, bw / N, 1e6, bw, g2, f2); }
+    const tin = (performance.now() - t0) / steps;
+    t0 = performance.now();
+    for (let i = 0; i < steps * 2; i++) { bw /= 0.97; placeRow(SS, RR, N, k++, row, 1e6, bw / N, 1e6, bw, g2, f2); }
+    const tout = (performance.now() - t0) / (steps * 2);
+    console.log(`  zoom fan cost (1024-row ring, every row re-made, this JS engine): ${tin.toFixed(2)} ms a zoom-in step, ${tout.toFixed(2)} ms a zoom-out step`); }
 }
 
 console.log(`  waterfall row placement: ${passes} passed, ${fails} failed`);
