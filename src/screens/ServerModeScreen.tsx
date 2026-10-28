@@ -63,7 +63,7 @@ import {
   type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
-import { loadActiveEibi } from '../services/eibi';
+import { loadActiveEibi, eibiStatusNote } from '../services/eibi';
 import { IcomFacts, IcomSettingsFields, type IcomSwitchInk } from '../components/IcomSetupCard';
 import {
   type IcomSettings, type IcomPhoneFields, icomPhoneFields, icomPresence, icomSettingsFrom, parseIcomRadio,
@@ -1514,9 +1514,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       const list = await loadActiveEibi();
       const Local = (NativeModules as any).VibeLocalSDR;
       if (list.length) Local?.setStationsJson?.(JSON.stringify(list));
+      // ★★ eibiStatusNote(): "EiBi hasn't published the B26 (winter) schedule yet — using A26 until
+      //    it appears." — said plainly, because an unpublished season is not a broken download.
+      const note = eibiStatusNote();
       setEibiMsg(list.length
-        ? `${list.length} stations loaded — clients will see these names.`
-        : 'Nothing came back. Check the device has a connection and try again.');
+        ? `${list.length} stations loaded — clients will see these names.` + (note ? ` ${note}` : '')
+        : note || 'Nothing came back. Check the device has a connection and try again.');
     } catch (e: any) {
       setEibiMsg(e?.message ?? 'Could not download the schedule');
     } finally {

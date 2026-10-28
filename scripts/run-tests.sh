@@ -273,6 +273,8 @@ deps_for() {
     test-geoip)         echo "$SRC/geoip.cpp $SRC/proc.cpp" ;;
     test-asndb)         echo "$SRC/asndb.cpp $SRC/proc.cpp" ;;
     test-moveloc)       echo "$SRC/moveloc.cpp $SRC/proc.cpp" ;;
+    # ★★★ The EiBi season + its fallback (NickB, 2026-10-27: B26 a 404 two days after we switched to it).
+    test-eibi)          echo "$SRC/eibi.cpp $SRC/proc.cpp" ;;
     test-admin-banlist) echo "" ;;
     # ★★ The POWER card's verdict (vibe_power.h, 2026-10-16): brief supply dips amber; red only for a dip
     #    held ≥ 10 s, near-continuous dips, USB over-current, or a USB device lost in a dip. Header-only,
@@ -517,6 +519,9 @@ if node --no-warnings scripts/test_listener_id.ts; then pass=$((pass+1)); else f
 # ★★★ V12 THE SCANNER ENGINE (scanner.ts, docs/v12/SCANNER.md): fake backends of every family — hang cancel on an over-change,
 #     noiseRef thresholds, ignores, priority, OWRX hijack PAUSED/resume, no tune ever outside the span (fuzzed), spikes never stop it.
 if node --no-warnings scripts/test_scanner.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ EiBi SEASON FALLBACK (eibiSeason.ts, NickB 2026-10-27): an unpublished season (B26 a 404) uses the previous one,
+#     says so in words, re-asks every 6 h — same scenarios as test-eibi.cpp; the Swift port in test_eibi_season_swift.sh.
+if node --no-warnings scripts/test_eibi_season.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ proxy.kiwisdr.com IS 8073 ONLY (2026-10-07): 47 % of public Kiwis are listed portless (= port 80, refused).
 if node --no-warnings scripts/test_kiwi_proxy_port.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ SERVER ADDRESSES (serverUrl.ts): scheme and port are a PAIR — https://host:8073 stays TLS (GitHub #52, OWRX+ native TLS).

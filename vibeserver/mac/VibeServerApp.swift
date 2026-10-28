@@ -575,8 +575,11 @@ final class Server: ObservableObject {
         eibiStatus = "downloading…"
         Task { @MainActor in
             switch await EibiStations.refresh() {
-            case .loaded(let n): self.eibiStatus = "\(n) stations on air now — in search"
-            case .failed(let e): self.eibiStatus = "couldn't load: \(e)"
+            // ★ `note`: "EiBi hasn't published the B26 (winter) schedule yet — using A26 until it
+            //   appears." — an unpublished season said in words, not reported as a failure.
+            case .loaded(let n, let note):
+                self.eibiStatus = "\(n) stations on air now — in search" + (note.isEmpty ? "" : ". \(note)")
+            case .failed(let e): self.eibiStatus = e   // already a sentence ("couldn't reach eibispace.de — …")
             }
         }
     }

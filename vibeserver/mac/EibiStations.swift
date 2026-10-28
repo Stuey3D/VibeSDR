@@ -10,33 +10,45 @@
 // large and the web search works from the itu code and name); everything else matches.
 import Foundation
 
+// ★★★ A SEASON EiBi HAS NOT PUBLISHED YET IS NOT AN ERROR (NickB, 2026-10-27: "curl: (22) The
+//     requested URL returned error: 404"). Our season switch is a date guess (25 March / 25
+//     October); EiBi publishes the new file when it is ready, which can be weeks later. So: ask for
+//     this season; if it is not there, use the PREVIOUS season's file, say so in words, and ask for
+//     the new one again every few hours until it appears. Same rule as vibeserver/eibi.cpp and
+//     src/services/eibiSeason.ts — keep all three in step.
 enum EibiStations {
     /// Result of a refresh, so the UI can tell the truth instead of always claiming success.
-    enum Result { case loaded(Int), failed(String) }
+    /// `note` is a plain sentence when the schedule is not this season's ("" when it is).
+    enum Result { case loaded(Int, note: String), failed(String) }
+
+    /// One season's file from the network. `unpublished` = EiBi has no such file yet (404/410).
+    enum Fetch { case ok(Data), unpublished, failed(String) }
+
+    /// How long after EiBi said "not yet" before asking again.
+    static let retryUnpublished: TimeInterval = 6 * 3600
 
     /// Fetch (or reuse today's cache), filter to what is on air now, and publish to the core.
     /// Safe to call repeatedly — it no-ops the network when the cache is fresh for today's season.
     static func refresh() async -> Result {
-        do {
-            let (file, season) = seasonFile()
-            let csv = try await csvForSeason(file: file, season: season)
+        switch await schedule(now: Date(), fetch: fetchRemote) {
+        case .failed(let e):
+            // Leave whatever the core already has; the search degrades to bookmarks + band plan.
+            return .failed(e)
+        case .loaded(let csv, let note):
             let active = activeNow(parse(csv))
             let json = buildJSON(active)
             json.withCString { vs_set_stations($0) }
-            return .loaded(active.count)
-        } catch {
-            // Leave whatever the core already has; the search degrades to bookmarks + band plan.
-            return .failed(error.localizedDescription)
+            return .loaded(active.count, note: note)
         }
     }
 
     /// Clear the served list (toggle turned off).
     static func clear() { vs_set_stations("") }
 
-    // ── Season file ─────────────────────────────────────────────────────────
+    // ── Season ──────────────────────────────────────────────────────────────
     // A = summer (~last Sun Mar → last Sun Oct), B = winter. EiBi labels a season by the year it
-    // started; Jan/Feb belong to the previous year's winter.
-    private static func seasonFile(_ now: Date = Date()) -> (file: String, season: String) {
+    // started, so January to 24 March belong to the previous year's winter.
+    static func seasonCode(for now: Date) -> String {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "UTC")!
         let c = cal.dateComponents([.year, .month, .day], from: now)
@@ -46,44 +58,119 @@ enum EibiStations {
         else if m < 3 || m > 10 { summer = false }
         else if m == 3 { summer = day >= 25 }
         else { summer = day < 25 }               // m == 10
-        var yy = y
-        if !summer && m <= 2 { yy = y - 1 }
-        let season = (summer ? "a" : "b") + String(String(yy).suffix(2))
-        return ("sked-\(season).csv", season)
+        // ★★ m <= 3, NOT m <= 2: 1–24 March is still the winter that started the previous October
+        //    ("<= 2" asked for sked-b27.csv on 1 March 2027 — a file that will never exist).
+        let yy = (!summer && m <= 3) ? y - 1 : y
+        return (summer ? "a" : "b") + String(format: "%02d", ((yy % 100) + 100) % 100)
     }
 
-    // ── CSV: today's cache, else download ───────────────────────────────────
+    /// b26 → a26, a27 → b26.
+    static func previousSeason(_ code: String) -> String {
+        let yy = Int(code.dropFirst()) ?? 0
+        return code.hasPrefix("b") ? String(format: "a%02d", yy) : String(format: "b%02d", (yy + 99) % 100)
+    }
+
+    /// "B26 (winter)" / "A26 (summer)".
+    static func seasonLabel(_ code: String) -> String {
+        code.uppercased() + (code.hasPrefix("a") ? " (summer)" : " (winter)")
+    }
+
+    static func notPublishedNote(current: String, using: String) -> String {
+        "EiBi hasn't published the \(seasonLabel(current)) schedule yet — using \(using.uppercased()) until it appears."
+    }
+
+    // ── Cache ───────────────────────────────────────────────────────────────
+    /// ★ Settable for the test; the app uses ~/Library/Application Support/VibeServer.
+    static var cacheDirOverride: URL?
     private static func cacheDir() -> URL {
+        if let d = cacheDirOverride { return d }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("VibeServer", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }
+    private static func cacheFile(_ season: String) -> URL { cacheDir().appendingPathComponent("eibi-\(season).csv") }
+    /// "b26 <unix time>": the season EiBi last said it has not published, and when.
+    private static func triedFile() -> URL { cacheDir().appendingPathComponent("eibi-tried.txt") }
 
-    private static func csvForSeason(file: String, season: String) async throws -> String {
-        let cache = cacheDir().appendingPathComponent("eibi-\(season).csv")
+    private static func cached(_ season: String, freshOn now: Date? = nil) -> String? {
+        let url = cacheFile(season)
+        if let now {
+            guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let mod = attrs[.modificationDate] as? Date,
+                  Calendar.current.isDate(mod, inSameDayAs: now) else { return nil }
+        }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let csv = decodeWin1252(data)
+        return parse(csv).isEmpty ? nil : csv
+    }
+
+    private static func triedRecently(_ season: String, _ now: Date) -> Bool {
+        guard let s = try? String(contentsOf: triedFile(), encoding: .utf8) else { return false }
+        let p = s.split(separator: " ")
+        guard p.count == 2, String(p[0]) == season, let at = Double(p[1]) else { return false }
+        let age = now.timeIntervalSince1970 - at
+        return age >= 0 && age < retryUnpublished
+    }
+
+    enum Schedule { case loaded(String, note: String), failed(String) }
+
+    /// The season choice and its fallback. ★ Internal (not private) so the test can drive it with a
+    /// fake fetcher and clock.
+    static func schedule(now: Date, fetch: (String) async -> Fetch) async -> Schedule {
+        let cur = seasonCode(for: now), prev = previousSeason(cur)
+        let note = notPublishedNote(current: cur, using: prev)
         // Reuse the cache if it is from today — EiBi changes at most once a day, and this keeps a
         // frequently-restarted server (or an offline one) from hammering eibispace.de.
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: cache.path),
-           let mod = attrs[.modificationDate] as? Date,
-           Calendar.current.isDateInToday(mod),
-           let data = try? Data(contentsOf: cache) {
-            return decodeWin1252(data)
+        if let csv = cached(cur, freshOn: now) { return .loaded(csv, note: "") }
+        // ★★ EiBi said "not yet" for this season a short while ago: the previous one is the schedule.
+        if triedRecently(cur, now), let csv = cached(prev) { return .loaded(csv, note: note) }
+
+        switch await fetch(cur) {
+        case .ok(let data) where !parse(decodeWin1252(data)).isEmpty:
+            try? data.write(to: cacheFile(cur))
+            try? FileManager.default.removeItem(at: triedFile())
+            return .loaded(decodeWin1252(data), note: "")
+        case .failed(let msg):
+            // ★ A REAL failure says so — but a stale cache still beats an empty search.
+            if let csv = cached(cur) { return .loaded(csv, note: "") }
+            if let csv = cached(prev) { return .loaded(csv, note: triedRecently(cur, now) ? note : "") }
+            return .failed("couldn't reach eibispace.de — \(msg)")
+        case .ok, .unpublished:
+            // ★ Not published (a page with no entries counts too — it must never become the list).
+            try? "\(cur) \(Int(now.timeIntervalSince1970))".write(to: triedFile(), atomically: true, encoding: .utf8)
         }
+
+        if let csv = cached(prev, freshOn: now) { return .loaded(csv, note: note) }
+        switch await fetch(prev) {
+        case .ok(let data) where !parse(decodeWin1252(data)).isEmpty:
+            try? data.write(to: cacheFile(prev))
+            return .loaded(decodeWin1252(data), note: note)
+        case .failed(let msg):
+            if let csv = cached(prev) { return .loaded(csv, note: note) }
+            return .failed("EiBi hasn't published the \(seasonLabel(cur)) schedule yet, and the \(seasonLabel(prev)) one could not be fetched — couldn't reach eibispace.de — \(msg)")
+        case .ok, .unpublished:
+            if let csv = cached(prev) { return .loaded(csv, note: note) }
+            return .failed("EiBi hasn't published the \(seasonLabel(cur)) schedule yet, and the \(seasonLabel(prev)) file has no entries either")
+        }
+    }
+
+    private static func fetchRemote(_ season: String) async -> Fetch {
         // ★★ Plain http on purpose for now: https://www.eibispace.de serves an EXPIRED certificate
         //    (checked 2026-10-03), so https would fail every fetch. The parser treats every line as
         //    untrusted. Same note as eibi.cpp — move both to https together once the cert is fixed.
-        guard let url = URL(string: "http://www.eibispace.de/dx/\(file)") else {
-            throw URLError(.badURL)
+        guard let url = URL(string: "http://www.eibispace.de/dx/sked-\(season).csv") else {
+            return .failed("bad URL")
         }
-        let (data, resp) = try await URLSession.shared.data(from: url)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else {
-            // Fall back to any stale cache rather than failing outright.
-            if let data = try? Data(contentsOf: cache) { return decodeWin1252(data) }
-            throw URLError(.badServerResponse)
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 404 || status == 410 { return .unpublished }
+            guard status == 200, !data.isEmpty else { return .failed("HTTP \(status)") }
+            return .ok(data)
+        } catch {
+            return .failed(error.localizedDescription)
         }
-        try? data.write(to: cache)
-        return decodeWin1252(data)
     }
 
     // EiBi files are Windows-1252. Decoding as UTF-8 turns accented station names into U+FFFD.

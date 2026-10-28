@@ -592,7 +592,10 @@ public:
 
     /** Accept connections handed to us by the process holding the public port. */
     static bool listenForHandoff(const std::string& socketPath, std::string& err);
-    using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated)>;
+    /** ★ `note`: a plain sentence for the owner when the cache is not this season's file yet
+     *  ("EiBi hasn't published the B26 (winter) schedule yet — using A26 until it appears"). */
+    using EibiFn = std::function<int(bool refresh, std::string& err, std::string& updated,
+                                     std::string& note)>;
     static void setEibiHandler(EibiFn fn);
     /** ★★★ THE BROADCASTER'S OWN STATION LOGO, from RadioDNS (radiodns.org) — looked up by PI
      *  code, ECC and frequency rather than by NAME. The name is what RDS is worst at: eight
