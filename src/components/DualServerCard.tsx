@@ -136,6 +136,8 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   };
   useEffect(() => () => { if (balTimer.current) clearTimeout(balTimer.current); }, []);
   const trackW = useRef(1);
+  const trackX = useRef(0);
+  const trackRef = useRef<View>(null);
   const balRef = useRef(st.balance); balRef.current = st.balance;
   /* ★★ THE BALANCE OWNS THE FINGER ONCE IT HAS IT (Stuart, 2026-10-28, screen recording: "it works but its erratic as its
    *  fighting against the collapse button for touch control"). A drag LEFT on the track is also the card's flick-left-to-
@@ -150,11 +152,19 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
     onMoveShouldSetPanResponderCapture: () => true,
     onPanResponderTerminationRequest: () => false,
     onShouldBlockNativeResponder: () => true,
+    // ★★ SCREEN X MINUS THE TRACK'S OWN SCREEN X — never nativeEvent.locationX (Stuart, 2026-10-28: still "erratic"
+    //    after the gesture fix). locationX is relative to whatever view is under the finger, and the rail, the centre
+    //    mark and the knob are children of the track: crossing the knob switched the origin mid-drag and the value
+    //    jumped. The track's place is measured at the grant (the card slides, so a layout-time figure can be stale).
     onPanResponderGrant: (e) => {
+      const px = e.nativeEvent.pageX;
+      trackRef.current?.measureInWindow((tx, _ty, tw) => {
+        trackX.current = tx; trackW.current = Math.max(1, tw);
+        setDualBalance(((px - tx) / trackW.current) * 2 - 1, false);
+      });
       if (balTimer.current) clearTimeout(balTimer.current);
-      setDualBalance((e.nativeEvent.locationX / trackW.current) * 2 - 1, false);
     },
-    onPanResponderMove: (e) => setDualBalance((e.nativeEvent.locationX / trackW.current) * 2 - 1, false),
+    onPanResponderMove: (e) => setDualBalance(((e.nativeEvent.pageX - trackX.current) / trackW.current) * 2 - 1, false),
     onPanResponderRelease: () => { setDualBalance(balRef.current, true); armBalClose(); },
     onPanResponderTerminate: () => { setDualBalance(balRef.current, true); armBalClose(); },
   }), []);   // eslint-disable-line react-hooks/exhaustive-deps
@@ -285,12 +295,12 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
             {balOpen && !ended && (
               <View style={s.balRow}>
                 <Text style={[s.balEnd, { color: colour }]} numberOfLines={1}>{short(st.sides[0]?.name)}</Text>
-                <View style={s.track} {...balPan.panHandlers}
+                <View ref={trackRef} style={s.track} {...balPan.panHandlers}
                       onLayout={(e) => { trackW.current = Math.max(1, e.nativeEvent.layout.width); }}
                       accessibilityRole="adjustable" accessibilityLabel="Balance between the two servers">
-                  <View style={[s.rail, { backgroundColor: colour }]} />
-                  <View style={[s.mid, { backgroundColor: colour }]} />
-                  <View style={[s.knob, { borderColor: colour, left: `${((st.balance + 1) / 2) * 100}%` }]} />
+                  <View pointerEvents="none" style={[s.rail, { backgroundColor: colour }]} />
+                  <View pointerEvents="none" style={[s.mid, { backgroundColor: colour }]} />
+                  <View pointerEvents="none" style={[s.knob, { borderColor: colour, left: `${((st.balance + 1) / 2) * 100}%` }]} />
                 </View>
                 <Text style={[s.balEnd, { color: colour }]} numberOfLines={1}>{short(st.sides[1]?.name)}</Text>
               </View>
