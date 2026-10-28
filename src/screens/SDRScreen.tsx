@@ -9165,8 +9165,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     const anchor = tuned > 0 ? tuned : v.centerHz;
     c.zoom(anchor, Math.max(1, v.binBandwidth * factor));
   }, []);
-  const onZoomIn  = useCallback(() => zoomBy(0.5), [zoomBy]);
-  const onZoomOut = useCallback(() => zoomBy(2),   [zoomBy]);
+  /* ★★ ONE PRESS = ×√2 ON OUR OWN RADIO (Stuart, 2026-10-28: "the zoom steps seem a lot coarser than before like big
+   *  chunky steps … i am sure there were more levels"). An octave a press was always the step; the whole-history stretch
+   *  hid it, and now that a zoom leaves the history as drawn every press shows. VibeServer (and the phone's own radio)
+   *  serves ANY span, so half an octave is a real level — the same one view send a press, no extra data. A server that
+   *  snaps to an octave ladder (UberSDR — see onZoomStep) keeps ×2, or a tap would snap straight back. */
+  const zoomStepK = isLocal ? Math.SQRT2 : 2;
+  const onZoomIn  = useCallback(() => zoomBy(1 / zoomStepK), [zoomBy, zoomStepK]);
+  const onZoomOut = useCallback(() => zoomBy(zoomStepK),     [zoomBy, zoomStepK]);
 
   // ── HiFi tuner keys (BRIEF-inputs §2) ───────────────────────────────────────
   // One press = one step. The VFO key reuses the MEDIA-SKIP path deliberately:
@@ -9286,8 +9292,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   // always used.
   const onZoomStep = useCallback((dir: -1 | 1) => {
     markInteract();
-    zoomBy(dir === 1 ? 0.5 : 2);
-  }, [zoomBy, markInteract]);
+    zoomBy(dir === 1 ? 1 / zoomStepK : zoomStepK);
+  }, [zoomBy, markInteract, zoomStepK]);
   // ★ A HELD sweep wants the opposite: small compounding factors, which DO cross rungs
   // cumulatively and give a smooth ramp instead of leaping an octave per tick.
   const onZoomSweep = useCallback((dir: -1 | 1) => {

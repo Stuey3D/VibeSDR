@@ -183,8 +183,10 @@ export function initMobileControls(deps: MobileDeps) {
   deps.holdSweep($('mVfoDown'), () => deps.nudgeSteps(-1));
   deps.holdSweep($('mVfoUp'),   () => deps.nudgeSteps(1));
   // ★ IN magnifies, OUT widens. These were once the wrong way round: − zoomed in and + zoomed out.
-  attachRepeat($('mZoomIn'),  () => deps.zoomBy(2));
-  attachRepeat($('mZoomOut'), () => deps.zoomBy(0.5));
+  // ★★ ×√2 a press (Stuart, 2026-10-28: "big chunky steps … i am sure there were more levels") — an octave a press showed
+  //    once a zoom stopped stretching the history; VibeServer serves any span, so half an octave is a real level.
+  attachRepeat($('mZoomIn'),  () => deps.zoomBy(Math.SQRT2));
+  attachRepeat($('mZoomOut'), () => deps.zoomBy(Math.SQRT1_2));
 
   // ── Buttons — the app's order: step, audio, menu, [decoders] ────────────────
   // ★ A POPUP, NOT A CYCLER (Stuart). Cycling makes you tap through every step to reach the
