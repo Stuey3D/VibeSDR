@@ -82,19 +82,23 @@ int main() {
         for (int r = 0; r < MR; r++) if (std::fabs(decodeMotion(img[MR * N + r], img[(MR + 1) * N + r]) - ms.h[r]) > 1.0 / 64) same = false;
         CHECK(same, "image motion rows do not decode to the slots' h");
     }
-    {   // a JUMP (bookmark): re-mapped like a zoom — history at the live column, the exposed edge blank, no motion
+    {   // ★★ a drum-spin tune past MOTION_MAX_FRAC but within the view EASES (wfRowPlace.ts — Stuart 2026-10-28): history as
+        //    drawn, the new rows slide to the live column; a JUMP of a whole view or more moves the history out (black)
         for (int i = 0; i < 5; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
-        const int jf = mfr;
+        const int jf = mfr; const int before = mcol(jf - 3);
         vc += 200'000 * MOTION_MAX_FRAC * 1.5;
-        mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
+        for (int i = 0; i < 8; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
         const double live = N / 2 + (CARRIER - vc) / (vbw / N);
-        int off = 0; for (int f = jf - 5; f < jf; f++) if (std::fabs(mcol(f) - live) > 1.01) off++;
-        CHECK(off == 0, "jump: %d history rows not shifted into place (a slice)", off);
-        CHECK(ms.h[(jf - 1) % MR] == 0, "jump pair interpolated (%g)", ms.h[(jf - 1) % MR]);
-        const uint8_t* d = wfImageBytes(mf, ms, M.data(), N, MR) + (size_t)((jf - 1) % MR) * N; int edge = 0;
-        const int shift = (int)std::floor(200'000 * MOTION_MAX_FRAC * 1.5 / (vbw / N));
-        for (int x = N - shift + 1; x < N; x++) if (d[x] != 0) edge++;
-        CHECK(edge == 0, "jump: the newly exposed edge is not blank (%d px)", edge);
+        CHECK(mcol(jf - 3) == before, "drum-spin tune: the history moved (%d vs %d) — a slice", mcol(jf - 3), before);
+        CHECK(std::fabs(mcol(mfr - 1) - live) <= 1.01, "drum-spin tune: the newest row not at the live column (%d vs %g)", mcol(mfr - 1), live);
+        { double k0, c0; takeFanStep(mf, k0, c0); CHECK(k0 == 1 && c0 == 0, "drum-spin tune: a screen ease (%g %g)", k0, c0); }
+        for (int i = 0; i < 10; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
+        const int jj = mfr; vc += vbw * 1.2; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
+        const uint8_t* d = wfImageBytes(mf, ms, M.data(), N, MR); int lit = 0;
+        for (int f = jj - 5; f < jj; f++) for (int x = 0; x < N; x++) if (d[(size_t)(f % MR) * N + x] != 0) lit++;
+        CHECK(lit == 0, "jump of 1.2 views: %d texels still lit in the moved history (want out of view, black)", lit);
+        CHECK(ms.h[(jj - 1) % MR] == 0, "jump pair interpolated (%g)", ms.h[(jj - 1) % MR]);
+        for (int i = 0; i < 10; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);   // (past any ease before the pinch)
     }
     {   // a PINCH: never motion (the fan placed the history)
         { double k0, c0; takeFanStep(mf, k0, c0); }   // (the jump above's step, not this pinch's)
@@ -170,16 +174,18 @@ int main() {
             if (std::fabs(N / 2.0 + gl.g[r] * (p - N / 2.0) + gl.h[r] - q) > 1.5) pred++; if (q != p) moved++; }
           CHECK(pred == 0 && atHist(0, 60) == 0 && moved >= 10, "pinch: %d steps (g, h) does not predict, %d moved", pred, moved); }
         for (int i = 0; i < 30; i++) fpush(vc, vbw);
-        vc += vbw * 0.4; const int preJump = fr; fpush(vc, vbw);
-        CHECK(offCol(preJump - 6, fr) == 0 && !fan.disp.empty(), "jump: %d rows not moved to the live column", offCol(preJump - 6, fr));
+        { int ha2, hb2; const int pre = fr; dlit(pre - 3, ha2, hb2);
+          vc += vbw * 0.4; for (int i = 0; i < 8; i++) fpush(vc, vbw);
+          int a3, b3; dlit(pre - 3, a3, b3);
+          CHECK(offCol(fr - 3, fr) == 0 && a3 == ha2, "0.4-view tune: %d new rows off the live column, history %d vs %d", offCol(fr - 3, fr), a3, ha2); }
         { const int from = fr; std::vector<double> cs;
           for (int i = 1; i <= 15; i++) { vc += 1'500; cs.push_back(vc); fpush(cs[std::max(0, (int)cs.size() - 3)], vbw); }
           int bad = 0;   // with moved history on screen, every moved pair's h predicts the displayed move
           for (int f = from; f < fr - 1; f++) { int a0, b0, a1, b1; if (!dlit(f, a0, b0) || !dlit(f + 1, a1, b1)) { bad++; continue; }
             if (std::fabs((a0 + gl.h[f % R]) - a1) > 1.01) bad++; }
-          CHECK(bad == 0, "jump + motion: %d pairs whose h does not predict the displayed move", bad); }
+          CHECK(bad == 0, "tune + motion: %d pairs whose h does not predict the displayed move", bad); }
         for (int i = 0; i < R; i++) fpush(vc, vbw);
-        CHECK(fan.disp.empty() && D() == S.data(), "the display buffer was not freed once the moved history scrolled away");
+        CHECK(fan.disp.empty() && D() == S.data(), "the display buffer was not freed once the eased rows scrolled away");
         {   // cost: a full 1024-row ring, every row re-made per step
             const int RR = 1024; std::vector<uint8_t> SS((size_t)N * (RR + MOTION_ROWS)); MotionState g2(RR, N); FanState f2(RR); int k = 0;
             std::vector<uint8_t> row(N); for (int i = 0; i < N; i++) row[i] = (uint8_t)(40 + (i * 7919 % 50));

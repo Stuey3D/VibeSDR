@@ -64,6 +64,8 @@ struct FanState {
 
 constexpr int ZOOM_EASE_ROWS = 4;    // a ×2 step (~0.2 s); ×4+ = 6; a pinch's 5 % step = 1 — short and EASE-OUT: the
                                      // 16-row S-curve felt "oddly delayed" (Stuart 2026-10-28; v2 changed within a frame)
+/** Rows a tune past MOTION_MAX_FRAC (but within the view) eases over: 8 per view width, 2…6 (wfRowPlace.ts tuneEaseRows). */
+inline int tuneEaseRows(double frac) { return std::max(2, std::min(6, (int)std::floor(frac * 8 + 0.5))); }
 inline int zoomEaseRows(double k) {
     return std::max(1, std::min(6, (int)std::floor(std::fabs(std::log2(k)) * ZOOM_EASE_ROWS + 0.5)));
 }
@@ -150,9 +152,15 @@ inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n,
         st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
         st.eT = st.easeLeft = std::max(zoomEaseRows(span / st.dSpan), st.easeLeft > 0 ? st.easeLeft : 0);
     }
-    // ★★★ A zoom leaves the history as drawn (the JS twin, wfRowPlace.ts fanNoteRow — Stuart 2026-10-28): only a JUMP
-    //     at the same span moves it into place.
-    if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && std::fabs(lo - st.lastLo) > st.lastSpan * MOTION_MAX_FRAC) {
+    // ★★ A tune past MOTION_MAX_FRAC but within the view EASES like a zoom (the JS twin, wfRowPlace.ts — Stuart 2026-10-28:
+    //    "the tuning still looks a little sliced up … blended like the zoom"); only a move of a whole view or more is a JUMP.
+    const double moved = std::fabs(lo - st.lastLo);
+    if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * MOTION_MAX_FRAC && moved < st.lastSpan) {
+        if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
+        st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
+        st.eT = st.easeLeft = std::max(tuneEaseRows(moved / st.lastSpan), st.easeLeft > 0 ? st.easeLeft : 0);
+    }
+    if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
         const double k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
         st.stepC += st.stepK * c; st.stepK *= k;   // x0 = c1 + k1·(c2 + k2·x2)
         st.easeLeft = 0;
