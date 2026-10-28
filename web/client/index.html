@@ -3052,6 +3052,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 .decGroupHead .modeIco { margin-right: 0; width: 13px; height: 13px; }
 .decGroup .btnRow { margin-top: 6px; }
 .btn.dimFar:not(.on) { opacity: 0.4; }
+#wholeRadio .btn.dis { opacity: 0.45; border-style: dashed; }   /* refused by the server, still drawn while ON (mode menu's rule) */
 .subPanel {
   margin: 6px 0 10px; padding: 8px 10px;
   border: 1px solid var(--bar-border); border-radius: 8px;
@@ -5094,6 +5095,15 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="galleryBtn" title="What this server's decoders have heard — background decoding while nobody listened, and listeners' own">GALLERY</button>
   </div>
 
+  <!-- ★★★ V12 TUNES THE RADIO ITSELF (Stuart, 2026-10-28) — ADS-B, AIS, DAB, ISM, NDB and DIGITAL SPOTS: BAND: each moves
+       the radio and opens its own view, so they sit above the band tabs and are never dimmed. Built by decoderBandsDom.ts
+       from main.ts's own toggles and availability (the same keys stay in the mode menu); SPOTS: BAND is the spots section's
+       node, moved here while the section is shown. -->
+  <div id="wholeRadioSec" hidden>
+    <h2>TUNES THE RADIO ITSELF</h2>
+    <div class="btnRow" id="wholeRadio"></div>
+    <div class="lbl wrap" id="wholeRadioHint"></div>
+  </div>
   <h2>DECODERS</h2>
   <!-- ★★ V12 BAND TABS (Stuart, 2026-10-28) — HF (with LF / MF) · VHF · UHF, opening on the band of the dial, and within a
        band the decoders grouped by use (Aviation · Maritime · Amateur · Utility / Broadcast / Sensors), each heading with

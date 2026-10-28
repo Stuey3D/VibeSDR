@@ -4,16 +4,22 @@
  * apply will make it easier"). ONE pure module, shared by the app (ModeSelector) and the web client (web/client/src/
  * decoderBands.ts), tested by scripts/test_decoder_bands.ts.
  *
+ *   TUNES THE RADIO ITSELF (above the tabs, never dimmed — WHOLE_RADIO_IDS):
+ *                     ADS-B · AIS · DAB · ISM · NDB · DIGITAL SPOTS: BAND
  *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map)
  *                     ⚓ Maritime  NAVTEX · DSC · WEFAX
  *                     Amateur     DIGITAL SPOTS · CW · PSK · RTTY · JTTY · SSTV · APRS (300 Bd HF packet)
- *                     Utility     NDB · TIME
- *   VHF               ⚓ Maritime  AIS · DSC (channel 70)
+ *                     Utility     TIME
+ *   VHF               ⚓ Maritime  DSC (channel 70)
  *                     Amateur     APRS · DIGITAL SPOTS (6 m / 2 m) · CW · SSTV
- *                     Broadcast   DAB · ADV RDS
- *   UHF               ✈ Aviation  ADS-B
- *                     Sensors     ISM
+ *                     Broadcast   ADV RDS
+ *   UHF               (nothing yet: ADS-B and ISM tune the radio themselves — no tab is drawn for an empty band)
  *   Every band        SCANNER · GALLERY · TRANSCRIBE (tools, not decoders of one band)
+ *
+ * ★★★ TUNES THE RADIO ITSELF (Stuart, 2026-10-28: "any decoders that trigger their own view Digital Spots (Full Band) DAB
+ *     ISM ADS-B etc need their own separate section that is always lit up as they tune the SDR themselves"). They take
+ *     the radio to their own frequencies and open their own view, so where the dial is now says nothing about them:
+ *     never dimmed, never inside a band tab.
  *
  * ★★★ DIMMED, NEVER DISABLED OR HIDDEN (Stuart: "someone who hasnt setup an upconverter correctly will be tuned to 130MHz
  *     or so for HF"). A dimmed key is a HINT and stays fully tappable; the band tab only picks which tab OPENS — the
@@ -27,7 +33,7 @@
  * ★ The knowledge is the code's own wherever it has it: the band plan's AMATEUR bands (constants/bandPlan), NAVTEX's
  *   bands (navtexStations.generated), DSC's channels (services/dsc). Only what the code had nowhere is tabled here:
  *   the HF aeronautical (R) bands HFDL uses, the major WEFAX stations, the time-signal carriers (DecoderClient's
- *   timeStationFor reads the same ones — the test checks they agree), and the ISM / AIS / DAB / ADS-B / NDB ranges.
+ *   timeStationFor reads the same ones — the test checks they agree), and the FM broadcast range for ADV RDS.
  */
 import { BAND_PLAN } from '../constants/bandPlan.ts';
 import { NAVTEX_BANDS_KHZ } from './navtexStations.generated.ts';
@@ -54,12 +60,12 @@ export function decoderGroupLabel(g: DecoderGroup, band: RadioBand): string {
   if (g === 'amateur') return 'AMATEUR';
   return band === 'hf' ? 'UTILITY' : band === 'vhf' ? 'BROADCAST' : 'SENSORS';
 }
-/** The id whose ModeIcon a group's heading carries (utils/modeIcons modeIconFor), or 'yagi' for Amateur. */
+/** The id whose ModeIcon a group's heading carries (utils/modeIcons modeIconFor; 'amateur' is the transceiver). */
 export function decoderGroupIcon(g: DecoderGroup, band: RadioBand): string {
   if (g === 'aviation') return 'adsb';
   if (g === 'maritime') return 'ais';
   if (g === 'amateur') return 'amateur';
-  return band === 'hf' ? 'ndb' : band === 'vhf' ? 'dab' : 'ism';
+  return band === 'hf' ? 'time' : band === 'vhf' ? 'rds' : 'ism';
 }
 
 /**
@@ -72,18 +78,25 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
     { group: 'aviation', ids: ['hfdl'] },
     { group: 'maritime', ids: ['navtex', 'dsc', 'wefax'] },
     { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'sstv', 'aprs'] },
-    { group: 'other',    ids: ['ndb', 'time'] },
+    { group: 'other',    ids: ['time'] },
   ],
   vhf: [
-    { group: 'maritime', ids: ['ais', 'dsc'] },
+    { group: 'maritime', ids: ['dsc'] },
     { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv'] },
-    { group: 'other',    ids: ['dab', 'rds'] },
+    { group: 'other',    ids: ['rds'] },
   ],
-  uhf: [
-    { group: 'aviation', ids: ['adsb'] },
-    { group: 'other',    ids: ['ism'] },
-  ],
+  uhf: [],
 };
+
+/**
+ * ★★★ THE MODES THAT TUNE THE RADIO THEMSELVES and open their own view — their own section ABOVE the band tabs, in this
+ * order, never dimmed (decoderDim is false for them). 'spotsband' = DIGITAL SPOTS: BAND (a whole band's digital
+ * frequencies; the tune keys then step bands). Their availability is the callers' existing rules (locked range,
+ * blocked modes, what the radio reaches), untouched.
+ */
+export const WHOLE_RADIO_IDS: readonly string[] = ['adsb', 'ais', 'dab', 'ism', 'ndb', 'spotsband'];
+export const WHOLE_RADIO_LABEL = 'TUNES THE RADIO ITSELF';
+export const WHOLE_RADIO_HINT = 'Each moves the radio to its own frequencies and opens its own view.';
 
 /** Every band an id is placed in. */
 export function bandsOfDecoder(id: string): RadioBand[] {
@@ -141,13 +154,8 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   jtty:   hz => anyNear(hz, HAM),
   sstv:   hz => anyNear(hz, HAM),
   aprs:   hz => anyNear(hz, HAM),
-  ndb:    hz => anyNear(hz, [kHz(190, 535)]),
   time:   hz => pointsNear(hz, TIME_SIGNAL_HZ, 5e3),
-  ais:    hz => anyNear(hz, [MHz(161.975, 162.025)], 100e3),
-  dab:    hz => anyNear(hz, [MHz(174, 240)]),
   rds:    hz => anyNear(hz, [MHz(87.5, 108)], 500e3),   // Japan's 76–95 MHz FM is below; a hint only
-  adsb:   hz => anyNear(hz, [MHz(1090)], 5e6),
-  ism:    hz => anyNear(hz, [MHz(314, 316), MHz(344, 346), MHz(433.05, 434.79), MHz(863, 870), MHz(902, 928)], 1e6),
 };
 
 /**
@@ -165,6 +173,7 @@ export function decoderNear(id: string, hz: number): boolean {
  * tab: none of it applies where you are). A HINT: the caller keeps the key fully tappable. Never for an unknown dial.
  */
 export function decoderDim(id: string, hz: number, tab: RadioBand): boolean {
+  if (WHOLE_RADIO_IDS.includes(id)) return false;   // they tune the radio themselves
   if (!Number.isFinite(hz) || hz <= 0) return false;
   return !decoderNear(id, hz) || radioBandOf(hz) !== tab;
 }

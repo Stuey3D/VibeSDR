@@ -10,9 +10,45 @@
  * ★ Whole-radio modes (DAB, ADS-B, ISM, NDB, AIS) stay in the web's MODE menu, beside the demodulators, as before — so a
  *   band with nothing here (UHF on the web) simply has no tab.
  */
-import { DECODER_PLACES, RADIO_BANDS, decoderGroupIcon, decoderGroupLabel, decoderDim, openingBand,
+import { DECODER_PLACES, RADIO_BANDS, WHOLE_RADIO_HINT, decoderGroupIcon, decoderGroupLabel, decoderDim, openingBand,
          radioBandOf, type RadioBand } from '../../../src/utils/decoderBands';
 import { modeIconFor, modeIconSvg } from '../../../src/utils/modeIcons';
+import { setModeLabel } from './modeIconDom';
+
+/** ★★★ A TUNES THE RADIO ITSELF key, as main.ts knows it — its own availability rule already applied (absent = not listed). */
+export interface WholeRadioKey { id: string; label: string; title: string; on: boolean; dis: boolean; press: () => void }
+let wholeKeys: () => WholeRadioKey[] = () => [];
+/** main.ts hands over its keys once (the same toggles and caps as the mode menu's). */
+export function setWholeRadioKeys(fn: () => WholeRadioKey[]): void { wholeKeys = fn; }
+
+/** The section above the tabs: ADS-B · AIS · DAB · ISM · NDB, then DIGITAL SPOTS: BAND (the spots section's own node,
+ *  moved in while that section is shown, with its reason line). Never dimmed — they tune the radio themselves. */
+function layoutWholeRadio(): void {
+  const sec = document.getElementById('wholeRadioSec');
+  const row = document.getElementById('wholeRadio');
+  if (!sec || !row) return;
+  const band = document.getElementById('spotsBandBtn');
+  const why = document.getElementById('spotsBandWhy');
+  for (const b of Array.from(row.querySelectorAll('[data-whole]'))) b.remove();
+  for (const k of wholeKeys()) {
+    const b = document.createElement('button');
+    b.className = 'btn' + (k.on ? ' on' : '') + (k.dis ? ' dis' : '');
+    b.dataset.whole = k.id;
+    b.title = k.title;
+    if (k.dis) b.setAttribute('aria-disabled', 'true');
+    setModeLabel(b, k.id, k.label);
+    b.onclick = () => k.press();
+    row.appendChild(b);
+  }
+  const spotsShown = !document.getElementById('spotsSection')?.hidden;
+  if (band && why) {
+    if (spotsShown) { row.appendChild(band); sec.appendChild(why); }
+    else { document.getElementById('mapBtn')?.before(band); band.parentElement?.after(why); }
+  }
+  const hint = document.getElementById('wholeRadioHint');
+  if (hint) hint.textContent = WHOLE_RADIO_HINT;
+  sec.hidden = !Array.from(row.children).some(c => !(c as HTMLElement).hidden);
+}
 
 let tab: RadioBand | null = null;   // the user's pick since the panel opened (null = follow the dial)
 let lastHz = NaN;
@@ -65,7 +101,8 @@ export function layoutDecoderBands(hz: number, reset = false): void {
   for (const id of allIds) { const el = keyEl(id); if (el && id !== 'spots') park.appendChild(el); }
   // DIGITAL SPOTS lives in its own section's row between layouts (where it always was) — never left in a group being cleared
   const spots = keyEl('spots');
-  if (spots) { document.getElementById('spotsBandBtn')?.before(spots); spotsLabel(spots, false); }
+  if (spots) { document.getElementById('mapBtn')?.before(spots); spotsLabel(spots, false); }
+  layoutWholeRadio();
   const present = (b: RadioBand) => DECODER_PLACES[b].some(g => g.ids.some(id => !!usable(id)));
   const bands = RADIO_BANDS.map(b => b.id).filter(present);
   const cur: RadioBand = tab && bands.includes(tab) ? tab : openingBand(hz, present);

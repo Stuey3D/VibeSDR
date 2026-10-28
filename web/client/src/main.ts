@@ -25,7 +25,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
 import { addModeIcon } from './modeIconDom';   // ★ V12 mode icons
-import { layoutDecoderBands, decoderBandsDial } from './decoderBandsDom';   // ★ V12 decoder panel by band
+import { layoutDecoderBands, decoderBandsDial, setWholeRadioKeys } from './decoderBandsDom';   // ★ V12 decoder panel by band
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the contract module the app reads too, and the browser's panel.
 import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeLabel, icomClientMode, icomBanner,
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
@@ -9028,19 +9028,19 @@ function buildControls() {
     // ★ Null between multiplexes (a retune sets dabState = null): the card then says it is searching.
     dabQuality:    () => (dabOn && dabState ? dabQuality : null),
     /* ★ DAB from ADS-B: the server leaves ADS-B itself (it sends adsb_off first), so only our UI unwinds here. */
-    toggleDab:     () => { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); },
+    toggleDab:     toggleDabMode,
     adsbCap:       () => adsbCap,
     adsbOn:        () => adsbOn,
-    toggleAdsb:    () => { if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); },
+    toggleAdsb:    toggleAdsbMode,
     ismCap:        () => ismCap,
     ismOn:         () => ismOn,
-    toggleIsm:     () => { if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); },
+    toggleIsm:     toggleIsmMode,
     aisCap:        () => aisCap,
     aisOn:         () => aisOn,
-    toggleAis:     () => { if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); },
+    toggleAis:     toggleAisMode,
     ndbCap:        () => ndbCap,
     ndbOn:         () => ndbOn,
-    toggleNdb:     () => { if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); },
+    toggleNdb:     toggleNdbMode,
     openChat:      () => { togglePanel('chatPanel'); chatOpened(isPanelOpen('chatPanel')); },
   });
   initBw();
@@ -12588,6 +12588,31 @@ function anyDecoderLeft(): boolean {
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc'))
     || (jttyCap && !blockedModes.has('jtty'));
 }
+
+/* ★★ THE WHOLE-RADIO TOGGLES — one each, for the mode menu (mobile.ts deps) AND the decoder panel's TUNES THE RADIO ITSELF
+ *  (decoderBandsDom.ts). Each leaves whichever other whole-radio mode is on first, as the menu always did. */
+function toggleDabMode() { if (adsbOn && !dabOn) adsbUiOff(); if (ismOn && !dabOn) ismUiOff(); if (aisOn && !dabOn) aisUiOff(); if (ndbOn && !dabOn) ndbUiOff(); dabSetMode(!dabOn); }
+function toggleAdsbMode() { if (ismOn && !adsbOn) ismUiOff(); if (aisOn && !adsbOn) aisUiOff(); if (ndbOn && !adsbOn) ndbUiOff(); adsbSetMode(!adsbOn); }
+function toggleIsmMode() { if (adsbOn && !ismOn) adsbUiOff(); if (aisOn && !ismOn) aisUiOff(); if (ndbOn && !ismOn) ndbUiOff(); ismSetMode(!ismOn); }
+function toggleAisMode() { if (adsbOn && !aisOn) adsbUiOff(); if (ismOn && !aisOn) ismUiOff(); if (ndbOn && !aisOn) ndbUiOff(); aisSetMode(!aisOn); }
+function toggleNdbMode() { if (adsbOn && !ndbOn) adsbUiOff(); if (ismOn && !ndbOn) ismUiOff(); if (aisOn && !ndbOn) aisUiOff(); ndbSetMode(!ndbOn); }
+/* ★★★ TUNES THE RADIO ITSELF in the decoder panel — the mode menu's keys, with the mode menu's rule: a REFUSED mode is not
+ *  drawn unless it is ON (so it can be left), DAB where the radio is DAB-capable. A press closes the panel, as the menu does. */
+setWholeRadioKeys(() => {
+  const keys: Array<{ id: string; label: string; title: string; on: boolean; dis: boolean; press: () => void }> = [];
+  const add = (id: string, label: string, cap: { ok: boolean; why: string } | null, on: boolean, toggle: () => void, what: string) => {
+    if (!cap || !(cap.ok || on)) return;
+    keys.push({ id, label, on, dis: !cap.ok, title: cap.ok ? what : `${label} is not available: ${cap.why}`,
+                press: () => { toggle(); closePanels(); } });
+  };
+  add('adsb', 'ADS-B', adsbCap, adsbOn, toggleAdsbMode, 'ADS-B — aircraft on 1090 MHz, with a map');
+  add('ais', 'AIS', aisCap, aisOn, toggleAisMode, 'AIS — ships on 161.975 and 162.025 MHz, with a map');
+  if (dabCapable) keys.push({ id: 'dab', label: 'DAB', on: dabOn, dis: false, title: 'DAB (Experimental) — digital radio, Band III',
+                              press: () => { toggleDabMode(); closePanels(); } });
+  add('ism', 'ISM', ismCap, ismOn, toggleIsmMode, 'ISM — weather stations, sensors, doorbells, tyres (the arrows step bands)');
+  add('ndb', 'NDB', ndbCap, ndbOn, toggleNdbMode, 'NDB — every aeronautical beacon on 190–535 kHz decoded at once, with a map');
+  return keys;
+});
 
 function soleDecoder(): { id: string; label: string; on: boolean; press: () => void } | null {
   if (!blockedModes.has('spots')) return null;
