@@ -30,8 +30,8 @@
  *
  * Run: node --no-warnings scripts/test_wf_row_place.ts
  */
-import { applyViewChange, decodeMotion, encodeMotion, fanImage, fanRefresh, MOTION_MAX_FRAC, MOTION_ROWS, MOTION_ZERO, motionSample, newFanState,
-         newMotionState, placeRow, rowViewOffset, takeFanStep, wfImageBytes, writeRow } from '../src/utils/wfRowPlace.ts';
+import { applyViewChange, decodeMotion, decodeZoom, encodeMotion, fanImage, fanRefresh, MOTION_MAX_FRAC, MOTION_ROWS, MOTION_ZERO, motionSample, newFanState,
+         newMotionState, placeRow, rowViewOffset, takeFanStep, wfImageBytes, writeRow, fanRow, ZOOM_EASE_ROWS, zoomEaseRows } from '../src/utils/wfRowPlace.ts';
 import { floorIdx, layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, WIDE_HDR } from '../src/utils/wfWide.ts';
 
 let fails = 0, passes = 0;
@@ -198,13 +198,16 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   { const from = mfr; vc += 2_000; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
     const st = takeFanStep(mf);
     ok('a small tune bends (motion), the history is not re-mapped', ms.h[(from - 1) % MR] !== 0 && st[0] === 1 && st[1] === 0, `${ms.h[(from - 1) % MR]} ${st}`); }
-  // a PINCH never carries motion — the fan placed the history at the new scale
+  // a PINCH (about the centre) is a ZOOM join on every pair: g = 1/0.95 (the newer row spreads), no shift, no re-map
   { const from = mfr; let bw = vbw;
     for (let i = 0; i < 12; i++) { bw *= 0.95; mpush(noisyRow(vc, bw), vc, bw, vc, bw); }
-    let mv = 0; for (let f = from - 1; f < mfr; f++) if (ms.h[f % MR] !== 0) mv++;
-    ok('motion: a pinch carries no motion (the fan, not the blend, moves the history)', mv === 0, `${mv}`);
+    let bad = 0; for (let f = from - 1; f < mfr - 1; f++) if (!(ms.g[f % MR] > 1.0005) || Math.abs(ms.h[f % MR]) > 1 / 64) bad++;
+    ok('motion: every pinch pair carries a zoom (g > 1, spreading, about the centre: h = 0)', bad === 0, `${bad}`);
+    const d = wfImageBytes(mf, ms, M, N, MR); let same = true;
+    for (let r = 0; r < MR; r++) if (Math.abs(decodeZoom(d[(MR + 2) * N + r], d[(MR + 3) * N + r]) - ms.g[r]) > 2e-4 * ms.g[r]) same = false;
+    ok('…the image carries g to the shader (encode/decode round trip)', same);
     const st = takeFanStep(mf);
-    ok('…and the 12 pinch steps hand the UI one composed fan (0.95^12, about the centre)', Math.abs(st[0] - 0.95 ** 12) < 1e-9 && Math.abs(st[1] - (1 - 0.95 ** 12) / 2) < 1e-9, `${st}`); }
+    ok('…and the UI is handed no ease (the history is not moved by a zoom)', st[0] === 1 && st[1] === 0, `${st}`); }
 
   // THE SHADER'S SAMPLE (motionSample, the CPU reference): a station moving 30 columns between two rows is drawn at
   // every intermediate place as t goes 0 → 1 — continuous, one copy, never two half-bright ghosts.
@@ -280,85 +283,96 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   v = { c: 1_030_000, bw: 200_000 }; for (let i = 0; i < 4; i++) fpush(v.c, v.bw);
   const preZoom = fr;
 
+  // ★★★ A ZOOM LEAVES THE HISTORY AS DRAWN (Stuart 2026-10-28: "a thin line signal should expand out to the width and the
+  //     history remains the thin line" — beta27's re-map stretched the whole history). New rows arrive at the new zoom.
+  const histCol = dlit(10)![0];
+  /** Rows f0..f1-1 whose displayed carrier is not where the history drew it. */
+  const atHist = (f0: number, f1: number) => { const bad: string[] = []; for (let f = f0; f < f1; f++) { const l = dlit(f); if (!l || l[0] !== histCol || l[1] !== histCol) bad.push(`row ${f}: ${l} want ${histCol}`); } return bad; };
   // ×2 ZOOM IN about the dial (the drum): one frame from the old span still in flight, then the new span
   v = { c: 1_030_000, bw: 100_000 };
   fpush(1_030_000, 200_000);
-  for (let i = 0; i < 6; i++) fpush(v.c, v.bw);
-  { const bad = offCol(0, 60).concat(offCol(64, fr));
-    ok('the fan: after a ×2 zoom in, EVERY history row shows the carrier at the live view\'s column (no slices)', bad.length === 0, bad.slice(0, 4).join('; ')); }
-  ok('the fan: the stored rows are never rewritten by a zoom', stored0.every((x, i) => x === S[i]));
-  { // control: what the app drew before the fan — the stored row as it came — is a slice at the OLD scale
-    let c0 = -1; for (let x = 0; x < N; x++) if (S[x] >= 200) c0 = x;
-    ok('control: without the fan the history row sits at its old column (the slice the test must see)', Math.abs(c0 - liveCol()) > 50, `${c0} vs ${liveCol()}`); }
-  { const g = conn(preZoom, fr); ok('the fan: a ×2 drum step is ONE connected trail on screen (was a gap)', g.length === 0, g.join('; ')); }
+  const zf = fr;
+  for (let i = 0; i < 24; i++) fpush(v.c, v.bw);
+  const asDrawn = (f0: number, f1: number) => { const d = D(); let k = 0; for (let i = f0 * N; i < f1 * N; i++) if (d[i] !== S[i]) k++; return k; };
+  { const bad = atHist(0, 60);
+    ok('the zoom: after a ×2 zoom in, the history is untouched — the carrier stays a one-texel line where it was drawn', bad.length === 0 && asDrawn(0, 60) === 0, bad.slice(0, 4).join('; ')); }
+  ok('the zoom: the stored rows are never rewritten by a zoom', stored0.every((x, i) => x === S[i]));
+  { const bad = offCol(zf + ZOOM_EASE_ROWS - 1, fr);
+    ok('the zoom: once eased, the new rows are at the new zoom (the live column)', bad.length === 0, bad.slice(0, 4).join('; ')); }
+  { const cs: number[] = []; for (let f = zf - 1; f < zf + ZOOM_EASE_ROWS; f++) cs.push(dlit(f)![0]);
+    let mono = true; for (let i = 1; i < cs.length; i++) if (!(cs[i] > cs[i - 1])) mono = false;
+    const steps = cs.slice(1).map((c, i) => c - cs[i]);
+    ok(`the zoom: the ease FANS the carrier out over ${ZOOM_EASE_ROWS} rows on an S-curve — small steps at both ends (${cs.join(' ')})`, mono && Math.max(...steps) < 20 && steps[0] <= 3 && steps[steps.length - 1] <= 3, steps.join(' ')); }
+  ok('control: the live column is far from the history\'s (the fan the eye sees)', Math.abs(liveCol() - histCol) > 50, `${liveCol()} vs ${histCol}`);
+  { const [k, c] = takeFanStep(fan); ok('the zoom: no screen ease (the history is not moved)', k === 1 && c === 0, `${k} ${c}`); }
 
-  // a ZOOM OUT past the start (×4 from here): old rows draw in, the new edges are blank, the one-bin carrier survives
+  // a ZOOM OUT (×4 from here): the history still as drawn, the new rows at the new zoom
   v = { c: 1_030_000, bw: 400_000 };
-  for (let i = 0; i < 6; i++) fpush(v.c, v.bw);
-  { const bad = offCol(0, 60).concat(offCol(64, fr));
-    ok('the fan: after a zoom OUT, every row\'s carrier is at the live column — a one-bin carrier is kept (max under a pixel)', bad.length === 0, bad.slice(0, 4).join('; ')); }
-  { const d = D(); let edge = 0;
-    for (let f = 0; f < 60; f++) { const s = f * N; for (let x = 0; x < N / 4 - 1; x++) if (d[s + x] !== 0 || d[s + N - 1 - x] !== 0) edge++; }
-    ok('the fan: a zoom out leaves the never-seen edges blank (0), not smeared', edge === 0, `${edge} non-blank edge px`); }
+  for (let i = 0; i < 30; i++) fpush(v.c, v.bw);
+  { const bad = atHist(0, 60).concat(offCol(fr - 4, fr));
+    ok('the zoom: after a zoom OUT, the history is as drawn and the new rows at the live column', bad.length === 0 && asDrawn(0, 60) === 0, bad.slice(0, 4).join('; ')); }
 
-  // back to 200 kHz: every row from before the zoom is the stored row again, byte for byte (lossless)
-  v = { c: 1_030_000, bw: 200_000 };
-  fpush(v.c, v.bw);
-  { const d = D(); let diff = 0; for (let i = 0; i < 60 * N; i++) if (d[i] !== stored0[i]) diff++;
-    ok('the fan: zoom in then back out restores the history exactly (edges and all)', diff === 0, `${diff} bytes differ`); }
-  { const bad = offCol(0, 60).concat(offCol(64, fr)); ok('the fan: …and every row since, at every zoom it was drawn at, lines up', bad.length === 0, bad.slice(0, 4).join('; ')); }
-
-  // an ANCHORED zoom (about the carrier — a pinch about the finger): the carrier stays put on screen
-  { const xs = liveCol(); const span = 120_000; const lo = CARRIER - xs * (span / N);
-    v = { c: lo + span / 2, bw: span }; fpush(v.c, v.bw);
-    const bad = offCol(0, 60).concat(offCol(64, fr)); ok('the fan: an anchored zoom keeps the carrier pinned, history and all', bad.length === 0 && Math.abs(liveCol() - xs) < 1e-6, bad.slice(0, 4).join('; ')); }
-
-  // a PINCH chain (5 % a row, about the centre): connected on screen, every row at the live column
-  v = { c: 1_030_000, bw: 200_000 }; fpush(v.c, v.bw);
+  // a PINCH chain (5 % a row, about the centre): each row at its own zoom — the carrier FANS out, and each pair's (g, h)
+  // predicts where it went, so the shader joins the steps into one line
+  v = { c: 1_030_000, bw: 200_000 }; for (let i = 0; i < 30; i++) fpush(v.c, v.bw);   // (past the ×2 step's ease)
   { const from = fr - 1;
     for (let i = 0; i < 12; i++) { v = { c: v.c, bw: v.bw * 0.95 }; fpush(v.c, v.bw); }
-    const g = conn(from, fr), bad = offCol(0, 60).concat(offCol(64, fr));
-    ok('the fan: a pinch fans the carrier out in one connected line, the history with it', g.length === 0 && bad.length === 0, g.concat(bad).slice(0, 4).join('; ')); }
+    const bad = atHist(0, 60); let pred = 0, moved = 0;
+    for (let f = from; f < fr - 1; f++) { const lp = dlit(f)!, lq = dlit(f + 1)!, p = (lp[0] + lp[1] + 1) / 2, q = (lq[0] + lq[1] + 1) / 2, r = f % R;
+      if (Math.abs(N / 2 + gl.g[r] * (p - N / 2) + gl.h[r] - q) > 1.5) pred++; if (q !== p) moved++; }
+    ok('the zoom: a pinch fans the carrier out, each pair\'s (g, h) predicts the step, the history left as drawn', pred === 0 && bad.length === 0 && moved >= 10, bad.slice(0, 4).join('; ') + ` pred ${pred} moved ${moved}`); }
+  // THE SHADER'S FAN (motionSample with g): a ×2 drum step — the carrier at 100 columns right of the centre in the old row,
+  // 200 in the new — is drawn as ONE line sweeping between them, no gap between successive display lines
+  { const W2 = 1024, m = W2 / 2, rd = (r: number, x: number) => { const c = r === 0 ? m + 100 : m + 200; return Math.abs(x - c) < 1 ? 1 : 0; };
+    let prev = -1, gaps = 0;
+    for (let k = 0; k <= 20; k++) { const t = k / 20; let best = -1, bv = 0;
+      for (let x = 0; x < W2; x++) { const v2 = motionSample(rd, 0, 1, x + 0.5, t, 0, true, 2, m); if (v2 > bv) { bv = v2; best = x; } }
+      if (prev >= 0 && Math.abs(best - prev) > 6) gaps++; prev = best; }
+    ok('the zoom: the shader joins a ×2 step into one line (the carrier sweeps 100 → 200 columns, steps ≤ 6 per line)', gaps === 0 && Math.abs(prev - (m + 200)) <= 1, `${gaps} gaps, ends ${prev}`); }
 
-  // MOTION with zoomed history on screen: every moved pair's h predicts the displayed move
+  // a JUMP at the same span (a bookmark, a typed frequency): the history IS moved into place — still visible, no slice
+  for (let i = 0; i < 30; i++) fpush(v.c, v.bw);
+  v = { c: v.c + v.bw * 0.4, bw: v.bw };
+  const preJump = fr;
+  fpush(v.c, v.bw);
+  { const bad = offCol(preJump - 6, fr);
+    ok('the jump: a same-span jump moves the history to the live column', bad.length === 0 && fan.disp !== null, bad.slice(0, 4).join('; ')); }
+
+  // MOTION with jumped history on screen: every moved pair's h predicts the displayed move
   { const from = fr; const cs: number[] = [];
     for (let i = 1; i <= 15; i++) { v = { c: v.c + 1_500, bw: v.bw }; cs.push(v.c); const rc = cs[Math.max(0, cs.length - 3)]; fpush(rc, v.bw); }
     let bad = 0; for (let f = from; f < fr - 1; f++) { const p = dlit(f), q = dlit(f + 1); if (!p || !q || Math.abs(p[0] + gl.h[f % R] - q[0]) > 1.01) bad++; }
-    ok('the fan + motion: a fast tune over zoomed history — each pair\'s h is the move on screen', bad === 0, `${bad}`); }
+    ok('the jump + motion: a fast tune over moved history — each pair\'s h is the move on screen', bad === 0, `${bad}`); }
 
-  // RING rows after the last zoom, every row is the identity: the second buffer is dropped
+  // RING rows after the last jump, every row is the identity: the second buffer is dropped
   for (let i = 0; i < R; i++) fpush(v.c, v.bw);
-  ok('the fan: once the zoomed history has scrolled away, the display buffer is freed', fan.disp === null && D() === S);
+  ok('the jump: once the moved history has scrolled away, the display buffer is freed', fan.disp === null && D() === S);
 
-  // only the rows that can be ON SCREEN are made at a zoom; a resize that shows more makes the rest (fanRefresh)
+  // only the rows that can be ON SCREEN are made at a jump; a resize that shows more makes the rest (fanRefresh)
   { const S2 = new Uint8Array(N * (R + MOTION_ROWS)), g2 = newMotionState(R, N), f2 = newFanState(R); let k = 0, w = { c: 1_030_000, bw: 200_000 };
-    const p2 = (vis: number) => { const r = new Uint8Array(N).fill(40); const bin = Math.round((CARRIER - w.c) / (w.bw / N)) + N / 2; r[bin] = 230;
+    const p2 = (vis: number) => { const r = new Uint8Array(N).fill(40); const bin = Math.round((CARRIER - w.c) / (w.bw / N)) + N / 2; if (bin >= 0 && bin < N) r[bin] = 230;
                                    placeRow(S2, R, N, k++, r, w.c, w.bw / N, w.c, w.bw, g2, f2, vis); };
     for (let i = 0; i < 200; i++) p2(64);
-    w = { c: 1_030_000, bw: 100_000 }; p2(64);
+    w = { c: 1_080_000, bw: 200_000 }; p2(64);
     const want = Math.round((CARRIER - (w.c - w.bw / 2)) / (w.bw / N));
     const col = (f: number) => { const d = fanImage(f2, S2), s0 = (f % R) * N; for (let x = 0; x < N; x++) if (d[s0 + x] >= 200) return x; return -1; };
     let shown = 0, below = 0; for (let f = k - 64; f < k; f++) if (Math.abs(col(f) - want) <= 1) shown++; for (let f = 0; f < k - 70; f++) if (Math.abs(col(f) - want) <= 1) below++;
-    ok('the fan: a zoom makes the rows on screen (64 visible) and leaves the off-screen rest for later', shown === 64 && below === 0, `${shown} shown, ${below} below`);
+    ok('the jump: the rows on screen (64 visible) are moved and the off-screen rest left for later', shown === 64 && below === 0, `${shown} shown, ${below} below`);
     const did = fanRefresh(f2, S2, N, R, k, R); let all = 0; for (let f = 0; f < k; f++) if (Math.abs(col(f) - want) <= 1) all++;
-    ok('the fan: a resize that shows the whole ring makes every row at the live zoom (fanRefresh)', did && all === k && !fanRefresh(f2, S2, N, R, k, R), `${all}/${k}`); }
+    ok('the jump: a resize that shows the whole ring moves every row (fanRefresh)', did && all === k && !fanRefresh(f2, S2, N, R, k, R), `${all}/${k}`); }
 
   // the pure maps: a pinch in and back out returns to the EXACT identity
   { const A = new Float64Array([1]), B = new Float64Array([0]); let lo = 900_000, sp = 200_000;
     for (const s2 of [160_000, 130_000, 100_000, 80_000, 100_000, 130_000, 160_000, 200_000]) { const l2 = 1_000_000 - s2 / 2; applyViewChange(A, B, lo, sp, l2, s2); lo = l2; sp = s2; }
     ok('the fan: a pinch in and out snaps back to the exact identity', A[0] === 1 && B[0] === 0, `${A[0]} ${B[0]}`); }
 
-  // cost: a full 1024-row ring, a ×2 zoom step (in then out), timed
+  // cost: a full 1024-row ring, a same-span JUMP (the only thing that re-makes rows now), timed
   { const RR = 1024, SS = new Uint8Array(N * (RR + MOTION_ROWS)); const g2 = newMotionState(RR, N), f2 = newFanState(RR); let k = 0;
     const row = new Uint8Array(N); for (let i = 0; i < N; i++) row[i] = 40 + (i * 7919 % 50);
-    for (let i = 0; i < RR; i++) placeRow(SS, RR, N, k++, row, 1e6, 200_000 / N, 1e6, 200_000, g2, f2);
-    const steps = 20; let bw = 200_000, t0 = performance.now();
-    for (let i = 0; i < steps; i++) { bw *= 0.97; placeRow(SS, RR, N, k++, row, 1e6, bw / N, 1e6, bw, g2, f2); }
-    const tin = (performance.now() - t0) / steps;
-    t0 = performance.now();
-    for (let i = 0; i < steps * 2; i++) { bw /= 0.97; placeRow(SS, RR, N, k++, row, 1e6, bw / N, 1e6, bw, g2, f2); }
-    const tout = (performance.now() - t0) / (steps * 2);
-    console.log(`  zoom fan cost (1024-row ring, every row re-made, this JS engine): ${tin.toFixed(2)} ms a zoom-in step, ${tout.toFixed(2)} ms a zoom-out step`); }
+    let c = 1e6; for (let i = 0; i < RR; i++) placeRow(SS, RR, N, k++, row, c, 200_000 / N, c, 200_000, g2, f2);
+    const steps = 20, t0 = performance.now();
+    for (let i = 0; i < steps; i++) { c += (i % 2 ? -1 : 1) * 60_000; placeRow(SS, RR, N, k++, row, c, 200_000 / N, c, 200_000, g2, f2); }
+    console.log(`  jump cost (1024-row ring, every row re-made, this JS engine): ${((performance.now() - t0) / steps).toFixed(2)} ms a jump`); }
 }
 
 // ── THE FULL-CAPTURE LAYER (V12, src/utils/wfWide.ts; docs/v12/WATERFALL-FULL-CAPTURE.md): rows recorded while zoomed in
@@ -398,7 +412,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
       if (!X.fan.layer) X.fan.layer = newLayerRing(R, F, C);
     }
     const slot = placeRow(X.S, R, N, X.fr, row, X.v.c, X.v.bw / N, X.v.c, X.v.bw, X.gl, X.fan, visible, X.last);
-    if (X.fan.layer) layerWriteRow(X.fan.layer, slot, X.st, X.last.startHz, X.last.spanHz, X.t, makeToIdx(-125, -50, 0, X.st.off));
+    if (X.fan.layer) { layerWriteRow(X.fan.layer, slot, X.st, X.last.startHz, X.last.spanHz, X.t, makeToIdx(-125, -50, 0, X.st.off)); fanRow(X.fan, X.S, N, slot, R); }
     X.fr++; X.t += 50;
   };
   const D = (X: Run) => fanImage(X.fan, X.S);
@@ -425,41 +439,27 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     return [f0, f0 + rows];
   };
 
-  // ZOOM IN AWAY from the carrier (1.40 MHz, it is at 1.05), then out: the web's acceptance test (web 55/55, beta26 0/59)
-  const W = mk(true), O = mk(false);
-  const [z0, z1] = zoomInOut(W, 1_400_000, 60); zoomInOut(O, 1_400_000, 60);
-  { const [atCol, black, widest] = scan(W, z0, z1);
-    ok(`the layer: zoom in AWAY from a carrier and out — every row written meanwhile shows it at its true column (${atCol}/${z1 - z0})`, atCol === z1 - z0);
-    ok(`the layer: …no black inside the capture (${black} rows with a black texel)`, black === 0);
-    ok(`the layer: …and it is a THIN line (widest ${widest} texel(s))`, widest <= 2);
-    const [oc, ob] = scan(O, z0, z1);
-    ok(`control: an older server (no SPWB) — no layer is allocated and the rows are the narrow strip in black, as before (${oc} rows show it, ${ob} black)`,
-       O.fan.layer === null && oc === 0 && ob === z1 - z0); }
-  { // the filled floor is as bright as the detailed floor beside it (the newest rows are detailed across the capture)
-    const d = D(W); let lsum = 0, ln = 0, dsum = 0, dn = 0; const want = liveCol(W);
-    for (let f = z0 + 2; f < z1; f++) { const s0 = (f % R) * N; for (let x = 0; x < 300; x++) if (Math.abs(x - want) > 4) { lsum += d[s0 + x]; ln++; } }
-    for (let f = W.fr - 1; f < W.fr; f++) { const s0 = (f % R) * N; for (let x = 0; x < N; x++) if (Math.abs(x - want) > 4) { dsum += d[s0 + x]; dn++; } }
-    const la = lsum / ln, da = dsum / dn;
-    ok(`the layer: the filled floor is as bright as the detailed floor beside it (layer ${la.toFixed(1)}, detailed ${da.toFixed(1)}, E[idx] ${floorIdx(-110, 3, toIdx)})`, Math.abs(la - da) <= 3);
-    ok(`the layer: the floor offset matched the detailed median within 1 dB (${W.st.off.toFixed(2)} dB)`, Math.abs(W.st.off) < 1); }
-  // ZOOM IN ON the carrier, then out: its rows stay DETAILED inside their strip (the layer only outside and in the edge fade)
-  { const A = mk(true), B = mk(false); seed = 9; const [a0, a1] = zoomInOut(A, CAR, 40); seed = 9; zoomInOut(B, CAR, 40);
-    const da = D(A), db = D(B), fade = Math.ceil(A.fan.layer!.fadeTx) + 1; let diff = 0;
-    const XL = (CAR - 50_000 - CLO) / CAPS * N, XR = (CAR + 50_000 - CLO) / CAPS * N;
-    for (let f = a0; f < a1; f++) { const s0 = (f % R) * N; for (let x = Math.ceil(XL + fade); x < XR - fade; x++) if (da[s0 + x] !== db[s0 + x]) diff++; }
-    const [atCol] = scan(A, a0, a1);
-    ok(`the layer: zoom in ON a carrier — its rows stay detailed inside their strip (${diff} texels differ) and it is at its column (${atCol}/${a1 - a0})`, diff === 0 && atCol === a1 - a0); }
+  // A ZOOM IN AND OUT no longer re-maps (Stuart 2026-10-28): the rows written while zoomed stay as drawn, the layer unused
+  { const W = mk(true); const [z0, z1] = zoomInOut(W, 1_400_000, 60);
+    let diff = 0; for (let f = z0 + zoomEaseRows(100_000 / CAPS); f < z1; f++) { const s0 = (f % R) * N; for (let x = 0; x < N; x++) if (D(W)[s0 + x] !== W.S[s0 + x]) diff++; }
+    const [, black] = scan(W, z0, z1);
+    ok(`the layer: after a zoom in and out the zoomed rows are shown as drawn (${diff} texels differ past the ease), no black in the ease (${black})`, diff === 0 && black === 0); }
   // PAN across the capture at the narrow zoom (a jump of 300 kHz — re-mapped, not bent): every row has data across the screen
   { const P = mk(true); for (let i = 0; i < 4; i++) push(P);
     P.v = { c: 1_200_000, bw: 100_000 }; const p0 = P.fr; for (let i = 0; i < 40; i++) push(P);
     P.v = { c: 1_500_000, bw: 100_000 }; push(P);
-    const [, black] = scan(P, p0 + 1, P.fr - 1);
+    // (the zoom's first eased rows are drawn nearly as wide as the capture: a 300 kHz pan takes them past its edge — black
+    //  there is honest, the radio never captured it — so the check starts after the ease)
+    const [, black] = scan(P, p0 + zoomEaseRows(100_000 / CAPS), P.fr - 1);
     ok(`the layer: a pan across the capture at a narrow zoom — no black in the history (${black} rows with a black texel)`, black === 0);
     P.v = { c: CAR + 20_000, bw: 100_000 }; push(P);
-    const [atCol, black2] = scan(P, p0 + 1, P.fr - 1);
-    ok(`the layer: …and panned onto the carrier, every row shows it at its column (${atCol}/${P.fr - 2 - p0}, ${black2} black)`, atCol === P.fr - 2 - p0 && black2 === 0); }
-  // ROTATION / RESIZE: the zoom out made only the 32 rows on screen; a taller view makes the rest — layer and all
-  { const Q = mk(true); const [q0, q1] = zoomInOut(Q, 1_400_000, 60, 32);
+    // (the zoom's eased rows are drawn at their in-between zoom — the fan — so the column check starts after them)
+    const e0 = p0 + zoomEaseRows(100_000 / CAPS), [atCol, black2] = scan(P, e0, P.fr - 1);
+    ok(`the layer: …and panned onto the carrier, every row past the ease shows it at its column (${atCol}/${P.fr - 1 - e0}, ${black2} black)`, atCol === P.fr - 1 - e0 && black2 === 0); }
+  // ROTATION / RESIZE: a JUMP at the narrow zoom made only the 32 rows on screen; a taller view makes the rest — layer and all
+  { const Q = mk(true); for (let i = 0; i < 4; i++) push(Q);
+    Q.v = { c: 1_200_000, bw: 100_000 }; const q0 = Q.fr + zoomEaseRows(100_000 / CAPS); for (let i = 0; i < 60; i++) push(Q, 32);
+    Q.v = { c: CAR + 20_000, bw: 100_000 }; push(Q, 32); const q1 = Q.fr - 1;
     const [before] = scan(Q, q0, q1);
     const did = fanRefresh(Q.fan, Q.S, N, R, Q.fr, R);
     const [after, black] = scan(Q, q0, q1);

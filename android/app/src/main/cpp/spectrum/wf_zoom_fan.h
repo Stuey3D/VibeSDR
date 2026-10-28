@@ -54,8 +54,18 @@ struct FanState {
     std::vector<int32_t> lo, hi;
     double stepK = 1, stepC = 0;   // the screen move of every fan since the last takeFanStep: x_old = stepC + stepK·x_new
     std::unique_ptr<LayerRing> layer;   // ★ V12 the full-capture layer (wf_wide.h) — null until the first SPWB
-    explicit FanState(int rows = 0) : xfA(rows, 1.0), xfB(rows, 0.0) {}
+    // ★★ THE ZOOM EASE (wfRowPlace.ts fanAfterRow): the geometry the newest rows are drawn at while a zoom eases in, its
+    //    start, the rows done / the rows it takes, and each slot's own span (a jump moves rows by Hz in their scale).
+    double dLo = NAN, dSpan = NAN, eLo0 = NAN, eSpan0 = NAN;
+    int easeLeft = 0, eJ = 0, eT = 0;
+    std::vector<double> span;
+    explicit FanState(int rows = 0) : xfA(rows, 1.0), xfB(rows, 0.0), span(rows, 0.0) {}
 };
+
+constexpr int ZOOM_EASE_ROWS = 16;   // a ×2 step; ×4+ = 24; a pinch's 5 % step = 1 (the shader's zoom join draws it)
+inline int zoomEaseRows(double k) {
+    return std::max(1, std::min(24, (int)std::floor(std::fabs(std::log2(k)) * ZOOM_EASE_ROWS + 0.5)));
+}
 
 /** Per output pixel, the stored bins [lo, hi] it shows under (a, b); lo = -1 = blank. */
 inline void fanTable(double a, double b, int n, int32_t* lo, int32_t* hi) {
@@ -103,7 +113,29 @@ inline void fanRegen(FanState& st, const uint8_t* ring, int n, int rows, double 
     }
 }
 
-/** BEFORE a row placed at (lo, span) Hz goes in: a change of span fans the history. */
+/** ONE displayed row from the stored ring through its map; where an eased row has no data it continues the row below
+ *  as drawn, then the layer (if any) draws the capture there. No-op for an identity row. */
+inline void fanRow(FanState& st, const uint8_t* ring, int n, int r, int rows = 0) {
+    const double a = st.xfA[r], b = st.xfB[r];
+    if (st.disp.empty() || (a == 1 && b == 0)) return;
+    if ((int)st.lo.size() < n) { st.lo.resize(n); st.hi.resize(n); }
+    int32_t* lo = st.lo.data(); int32_t* hi = st.hi.data();
+    fanTable(a, b, n, lo, hi);
+    uint8_t* disp = st.disp.data();
+    const size_t at = (size_t)r * n;
+    const uint8_t* s = ring + at; uint8_t* d = disp + at;
+    const uint8_t* pv = rows > 0 ? disp + (size_t)((r + rows - 1) % rows) * n : nullptr;
+    for (int x = 0; x < n; x++) {
+        const int32_t l = lo[x];
+        if (l < 0) { d[x] = pv ? pv[x] : 0; continue; }
+        uint8_t m = s[l];
+        for (int32_t q = l + 1; q <= hi[x]; q++) if (s[q] > m) m = s[q];
+        d[x] = m;
+    }
+    if (st.layer) layerFillRow(*st.layer, r, a, b, n, d, lo);
+}
+
+/** BEFORE a row placed at (lo, span) Hz goes in: a zoom starts the ease; a same-span JUMP moves the history. */
 inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n, int rows, double frames, int visible,
                        double lo, double span) {
     if (!(span > 0)) return false;
@@ -112,10 +144,26 @@ inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n,
         lo = st.lastLo + (st.lastSpan - span) / 2;
     }
     bool fanned = false;
-    if (frames > 0 && st.lastSpan > 0 && (spanChanged(st.lastSpan, span) || std::fabs(lo - st.lastLo) > st.lastSpan * MOTION_MAX_FRAC)) {
+    if (frames > 0 && st.lastSpan > 0 && spanChanged(st.lastSpan, span)) {
+        if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
+        st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
+        st.eT = st.easeLeft = std::max(zoomEaseRows(span / st.dSpan), st.easeLeft > 0 ? st.easeLeft : 0);
+    }
+    // ★★★ A zoom leaves the history as drawn (the JS twin, wfRowPlace.ts fanNoteRow — Stuart 2026-10-28): only a JUMP
+    //     at the same span moves it into place.
+    if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && std::fabs(lo - st.lastLo) > st.lastSpan * MOTION_MAX_FRAC) {
         const double k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
         st.stepC += st.stepK * c; st.stepK *= k;   // x0 = c1 + k1·(c2 + k2·x2)
-        const bool zoomed = applyViewChange(st.xfA.data(), st.xfB.data(), (int)st.xfA.size(), st.lastLo, st.lastSpan, lo, span);
+        st.easeLeft = 0;
+        // every row moves by the jump's Hz in ITS own scale (rows keep the zoom they were drawn at)
+        const double dHz = lo - st.lastLo;
+        bool zoomed = false;
+        for (size_t r = 0; r < st.xfA.size(); r++) {
+            const double sp = st.span[r] > 0 ? st.span[r] : span;
+            double nb = st.xfB[r] + dHz / sp;
+            if (st.xfA[r] == 1 && std::fabs(nb) < 1e-9) nb = 0; else zoomed = true;
+            st.xfB[r] = nb;
+        }
         if (zoomed) {
             if (st.disp.empty()) st.disp.assign(ringLen, 0);
             fanRegen(st, ring, n, rows, frames, visible);
@@ -129,6 +177,25 @@ inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n,
 
 /** AFTER the row at `slot` is written: the identity, copied to the display. */
 inline void fanAfterRow(FanState& st, const uint8_t* ring, int slot, int n, int rows) {
+    st.span[slot] = st.lastSpan;
+    if (st.easeLeft > 0 && st.lastSpan > 0 && st.eSpan0 > 0 && std::isfinite(st.eLo0)) {
+        const double tl = st.lastLo, ts = st.lastSpan;
+        st.eJ++; st.easeLeft = st.eT - st.eJ;
+        const double u = std::min(1.0, (double)st.eJ / st.eT), e = u * u * (3 - 2 * u);   // smoothstep
+        const double ns = st.eSpan0 * std::pow(ts / st.eSpan0, e);
+        const double ds = st.eSpan0 - ts;
+        double nl;
+        if (std::fabs(ds) > ts * 1e-9) { const double xs = (tl - st.eLo0) / ds; nl = st.eLo0 + st.eSpan0 * xs - ns * xs; }
+        else nl = st.eLo0 + (tl - st.eLo0) * e;
+        st.dLo = nl; st.dSpan = ns;
+        if (st.easeLeft > 0) {
+            st.xfA[slot] = ns / ts; st.xfB[slot] = (nl - tl) / ts;
+            if (st.disp.empty()) st.disp.assign(ring, ring + (size_t)(rows + MOTION_ROWS) * n);
+            fanRow(st, ring, n, slot, rows);
+            st.sinceZoom = 0;
+            return;
+        }
+    } else st.easeLeft = 0;
     st.xfA[slot] = 1; st.xfB[slot] = 0;
     if (st.disp.empty()) return;
     const size_t at = (size_t)slot * n;

@@ -25,6 +25,7 @@ import { NativeModules, Platform } from 'react-native';
 type Native = {
   maxRefreshRate?: () => Promise<unknown>;
   setFrameRateCap?: (hz: number) => void;
+  setSteadyRefresh?: (on: boolean) => void;
   startFrameWatch?: () => void;
   stopFrameWatch?: () => void;
   takeFrameWatch?: () => unknown;
@@ -46,6 +47,18 @@ export function readMaxRefreshRate(): Promise<number | null> {
     ? Promise.resolve().then(() => fn()).then((v: unknown) => (typeof v === 'number' ? v : null), () => null)
     : Promise.resolve(null);
   return maxHz;
+}
+
+/** iOS/Mac: hold every display link at its ceiling while the waterfall scrolls (VibeLocalSDR.mm gFpsSteady) — a
+ *  ProMotion panel left free to wander 60…120 put whole-row steps on an uneven beat (Stuart's Mac, 2026-10-28). No-op
+ *  elsewhere and on an old binary. Called on transitions only. */
+let steadyOn = false;
+export function setSteadyRefresh(on: boolean): void {
+  if (on === steadyOn) return;
+  steadyOn = on;
+  const fn = native()?.setSteadyRefresh;
+  if (typeof fn !== 'function') return;
+  try { fn(on); } catch { /* old binary */ }
 }
 
 /** Tell the native side the cap: 60 or 30, or 0 for the display's own maximum. */

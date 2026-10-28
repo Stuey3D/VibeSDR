@@ -116,6 +116,13 @@ for (const m of ['setFrameRateCap', 'maxRefreshRate']) {
 ok('iOS wraps all three display-link entry points',
    ['displayLinkWithTarget:selector:', 'setPreferredFrameRateRange:', 'setPreferredFramesPerSecond:']
      .every(s => ios.includes(`@selector(${s})`)));
+// ★ STEADY REFRESH while the waterfall scrolls (2026-10-28, Stuart's ProMotion Mac: the panel wandered 81–99 Hz → judder)
+ok('iOS exports setSteadyRefresh', /RCT_EXPORT_METHOD\(setSteadyRefresh:/.test(ios));
+ok('steady raises the floor to the ceiling (min = max = preferred)', /gFpsSteady[\s\S]{0,400}CAFrameRateRangeMake\(top, top, top\)/.test(ios));
+ok('the waterfall turns it on with rows and off when they stop, on backgrounding and on unmount',
+   (() => { const w = read('src/components/WaterfallView.tsx'); return /noteRowsFlowing\(\)/.test(w) && /setSteadyRefresh\(false\)[\s\S]{0,40}\}, 1000\)/.test(w)
+     && /if \(bg\) \{[\s\S]{0,120}setSteadyRefresh\(false\)/.test(w) && /useEffect\(\(\) => \(\) => \{[\s\S]{0,120}setSteadyRefresh\(false\)/.test(w); })());
+ok('Android Platform: no-op (the native method is iOS-only)', /native\(\)\?\.setSteadyRefresh/.test(svc));
 ok('Android re-applies on resume', /onHostResume\(\)\s*\{\s*applyFrameRateCap\(\)/.test(android));
 
 console.log(`frame rate: ${passes} passed, ${fails} failed`);

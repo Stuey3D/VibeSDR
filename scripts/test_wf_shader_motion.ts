@@ -24,8 +24,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../src/utils/wfRowPlace.ts';
-import { easeAt, easeCompose } from '../src/utils/wfPace.ts';
+import { fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes, ZOOM_EASE_ROWS } from '../src/utils/wfRowPlace.ts';
 import { layerWriteRow, newLayerRing, newWideState, wideArrive, type WideRow } from '../src/utils/wfWide.ts';
 import { COLORMAPS_256 } from '../src/assets/colormaps.ts';
 
@@ -106,7 +105,7 @@ function draw(R: Ring, o: { lut?: Uint8Array; motion?: boolean; cont?: number; z
   const paint = new CK.Paint(); paint.setShader(sh);
   surf.getCanvas().drawRect(CK.LTRBRect(0, 0, W, h), paint);
   const px = surf.getCanvas().readPixels(0, 0, { width: W, height: h, colorType: CK.ColorType.RGBA_8888, alphaType: CK.AlphaType.Unpremul, colorSpace: CK.ColorSpace.SRGB });
-  if (o.lut && (process.env.WF_PNG || process.env.WF_LAYER_PNG)) lastSurf.push({ surf, h });
+  if (o.lut && (process.env.WF_PNG || process.env.WF_LAYER_PNG || process.env.WF_ZOOM_PNG)) lastSurf.push({ surf, h });
   else surf.delete();
   paint.delete(); sh.delete(); wf.delete(); lu.delete(); img.delete(); lut.delete();
   return px as Uint8Array;
@@ -183,26 +182,39 @@ for (const [name, px] of [['settled', settled], ['mid-glide (continuous, t = 0.5
   const g = gaps(px, ySweepTop - 30, ySweepBot + 30, xEnd, THR, 60);   // (lagging rows leave the honest black edge strip, ~33 px, where the tuner has not been yet)
   ok('tuner retune (rows lagging the view, #57): one continuous trail', g.gaps === 0 && g.lines >= 120, `${g.gaps} gaps over ${g.lines}`); }
 
-// ── 3. A ZOOM (×2 drum step) after the sweep: the fan + the screen ease mid-flight ──
+// ── 3. A ZOOM (×2 drum step) after the sweep (Stuart 2026-10-28: "a thin line signal should expand out to the width and
+//       the history remains the thin line"): the history keeps its zoom, the new rows ease to the new one, ONE line ──
 { const Z = newRing(); sweep(Z, 0);
-  for (let i = 0; i < 1; i++) push(Z, endC, span / 2, endC, span / 2);
+  const NEW = 24;
+  for (let i = 0; i < NEW; i++) push(Z, endC, span / 2, endC, span / 2);
   const [k, c] = takeFanStep(Z.fan);
-  const px = draw(Z);
-  // the station nearest the dial (a ×2 zoom about the centre keeps it on screen)
-  const zs = stations.filter((s) => s.lvl > 0.75).sort((a, b) => Math.abs(a.f - endC) - Math.abs(b.f - endC))[0];
+  ok('a ×2 zoom: no screen ease (the history is not moved)', k === 1 && c === 0, `${k} ${c}`);
+  const px = draw(Z), pOff = draw(Z, { motion: false });
+  // a strong station well off the dial, so the zoom moves it a long way
+  const zs = stations.filter((s) => s.lvl > 0.75 && Math.abs(s.f - endC) > span / 12 && Math.abs(s.f - endC) < span / 5)[0];
   const ZTHR = thrOf(zs.lvl);
-  const lz = endC - span / 4, xz = (zs.f - lz) / (span / 2) * W;
-  let off = 0; for (let y = 4 * ROW_PX; y < ySweepTop - 6; y += ROW_PX) { const r = run(px, y, xz, ZTHR, 30); if (!r || Math.abs((r[0] + r[1]) / 2 - xz) > 5) off++; }
-  ok('a ×2 zoom: every history line\'s carrier at the live column (no slices)', off === 0, `${off} lines off`);
-  // mid-ease: the new image drawn in the old geometry, half eased — the newest row and the history agree (no seam)
-  const e0 = easeCompose(1, 0, k, c), e = easeAt(e0[0], e0[1], 0, 100, 50);
-  const pm = draw(Z, { za: e[0], zb: e[1] });
-  const xm = ((xz / W) - e[1]) / e[0] * W;   // where screen shows image column xz/W
-  let seam = 0; for (let y = 0; y < ySweepTop - 6; y += ROW_PX) { const r = run(pm, y, xm, ZTHR, 30); if (!r || Math.abs((r[0] + r[1]) / 2 - xm) > 5) seam++; }
-  ok('the screen ease mid-flight: one geometry top to bottom (the newest row and the history fan together)', seam === 0, `${seam} lines off`);
-  const e1 = easeAt(e0[0], e0[1], 0, 100, 0);
-  const x0 = ((xz / W) - e1[1]) / e1[0] * W, xOld = (zs.f - lo) / span * W;
-  ok('…and it starts exactly where the old picture was (no snap at the swap)', Math.abs(x0 - xOld) < 0.5, `${x0.toFixed(2)} vs ${xOld.toFixed(2)}`); }
+  const xOld = (zs.f - (endC - span / 2)) / span * W, xNew = (zs.f - (endC - span / 4)) / (span / 2) * W;
+  const yNew1 = (NEW - ZOOM_EASE_ROWS - 1) * ROW_PX, yH0 = (NEW + 1) * ROW_PX, yH1 = ySweepTop + NEW * ROW_PX - 6;
+  let offN = 0; for (let y = ROW_PX; y < yNew1; y += ROW_PX) { const r = run(px, y, xNew, ZTHR, 30); if (!r || Math.abs((r[0] + r[1]) / 2 - xNew) > 5) offN++; }
+  ok('a ×2 zoom: the new lines show the station at the new zoom', offN === 0, `${offN} lines off`);
+  let offH = 0; for (let y = yH0; y < yH1; y += ROW_PX) { const r = run(px, y, xOld, ZTHR, 30); if (!r || Math.abs((r[0] + r[1]) / 2 - xOld) > 5) offH++; }
+  ok('a ×2 zoom: the history keeps the station where it was drawn (the thin line stays)', offH === 0, `${offH} lines off`);
+  const g = gaps(px, ROW_PX, yH1, xNew, ZTHR);
+  ok(`a ×2 zoom: the FAN — one continuous line from the new column (${xNew.toFixed(0)}) down to the old (${xOld.toFixed(0)})`, g.gaps === 0, `${g.gaps} gaps over ${g.lines}`);
+  const g0 = gaps(pOff, ROW_PX, yH1, xNew, ZTHR);
+  ok('CONTROL: the same rows without the motion join step (the fan needs it)', g0.gaps >= 3, `${g0.gaps} gaps over ${g0.lines}`); }
+
+// WF_ZOOM_PNG=path: a picture of the zoom — steady at 150 kHz, a pinch in to ×4 (5 % a row), then two ×2 drum steps back out
+if (process.env.WF_ZOOM_PNG) {
+  const Z = newRing(); let bw = span; const c0 = 700_000;
+  for (let i = 0; i < 120; i++) push(Z, c0, bw, c0, bw);
+  while (bw > span / 4) { bw *= 0.95; push(Z, c0, bw, c0, bw); }
+  for (let i = 0; i < 50; i++) push(Z, c0, bw, c0, bw);
+  for (const k of [2, 2]) { bw *= k; for (let i = 0; i < 45; i++) push(Z, c0, bw, c0, bw); }
+  lastSurf.length = 0; draw(Z, { lut: lutGqrx });
+  const sf = lastSurf[0]; writeFileSync(process.env.WF_ZOOM_PNG, sf.surf.makeImageSnapshot().encodeToBytes());
+  console.log(`  wrote ${process.env.WF_ZOOM_PNG}`);
+}
 
 // ── 4. A resize: the same ring at another visible depth — the rows on screen are the same rows ──
 { const short = draw(A, { vis: 200 }); let diff = 0;
@@ -234,35 +246,28 @@ for (const [name, px] of [['settled', settled], ['mid-glide (continuous, t = 0.5
   const pushL = (X: LR, c: number, bw: number) => {
     if (X.wide && X.R.frames % 4 === 0) { wideArrive(X.st, wideRow(), X.t, X.placed.startHz, X.placed.spanHz, NaN); if (!X.R.fan.layer) X.R.fan.layer = newLayerRing(ROWS, FB, CC); }
     const slot = placeRow(X.R.buf, ROWS, N, X.R.frames, bandRow(c, bw), c, bw / N, c, bw, X.R.ms, X.R.fan, 600, X.placed);
-    if (X.R.fan.layer) { X.R.fan.layer.fadeTx = 6 * N / 393; layerWriteRow(X.R.fan.layer, slot, X.st, X.placed.startHz, X.placed.spanHz, X.t, ident); }
+    if (X.R.fan.layer) { X.R.fan.layer.fadeTx = 6 * N / 393; layerWriteRow(X.R.fan.layer, slot, X.st, X.placed.startHz, X.placed.spanHz, X.t, ident); fanRow(X.R.fan, X.R.buf, N, slot, ROWS); }
     X.R.frames++; X.t += 50;
   };
-  const VC = 1_000_000, VS = 600_000, ZC = 1_160_000, ZS = 50_000;
+  const VC = 1_000_000, VS = 600_000, ZC = 1_160_000, ZS = 50_000, ZN = 30;
   const scene = (X: LR) => {
     for (let i = 0; i < 100; i++) pushL(X, VC, VS);
-    for (let i = 0; i < 60; i++) pushL(X, ZC, ZS);    // zoomed in, away from most stations
-    for (let i = 0; i < 120; i++) pushL(X, VC, VS);   // back out
+    for (let i = 0; i < ZN; i++) pushL(X, ZC, ZS);    // zoomed in, away from most stations — the newest ZN rows
   };
   const L = mkL(true), O = mkL(false); seed = 21; scene(L); seed = 21; scene(O);
   const pl = draw(L.R), po = draw(O.R);
-  // the zoomed rows are 120..180 rows down: device lines 360..540 (3 px a row); test the middle of them
-  const y0 = 125 * ROW_PX, y1 = 175 * ROW_PX, zl = (ZC - ZS / 2 - (VC - VS / 2)) / VS * W, zr = (ZC + ZS / 2 - (VC - VS / 2)) / VS * W;
-  const strong = stations.filter((st) => st.lvl > 0.8).map((st) => ({ st, x: (st.f - (VC - VS / 2)) / VS * W }))
-    .filter((o) => o.x > 20 && o.x < W - 20 && (o.x < zl - 20 || o.x > zr + 20));
-  const thr = (lvl: number) => Math.round(lvl * 255 * 0.8);
-  let seen = 0, total = 0, widest = 0, oseen = 0;
-  for (let y = y0; y < y1; y += ROW_PX) for (const o of strong) {
-    total++;
-    const r = run(pl, y, o.x, thr(o.st.lvl), 6); if (r) { seen++; widest = Math.max(widest, r[1] - r[0] + 1); }
-    if (run(po, y, o.x, thr(o.st.lvl), 6)) oseen++;
-  }
-  ok(`the layer, on the real shader: every history line recorded while zoomed in shows every strong station at its live column (${seen}/${total}, ${strong.length} stations)`, seen === total && strong.length >= 4);
-  ok(`the layer: …thin — the widest carrier run is ${widest} device px (one texel = ${(W / N).toFixed(2)} px)`, widest <= 9);
-  ok(`CONTROL: an older server (no SPWB) — those lines are black outside the strip (${oseen}/${total} seen)`, oseen === 0);
-  { let black = 0; for (let y = y0; y < y1; y += ROW_PX) for (let x = 0; x < W; x += 3) if (pl[(y * W + x) * 4] === 0 && pl[(y * W + x) * 4 + 1] === 0 && pl[(y * W + x) * 4 + 2] === 0) black++;
-    // (gray LUT: index 0 is black — the floor's speckle here never clips, so any black is a hole)
-    ok(`the layer: no black inside the capture in those lines (${black} px)`, black === 0); }
-  if (process.env.WF_VERBOSE) console.log(`  layer: ${seen}/${total} seen, widest ${widest} px, control ${oseen}`);
+  // ★ The ZOOM EASE rows (ZN-1 … ZN-ZOOM_EASE_ROWS+1 rows down) are drawn at in-between zooms, wider than their own data:
+  //   the layer fills around the detailed strip — black only on an older server
+  const yE0 = (ZN - ZOOM_EASE_ROWS + 1) * ROW_PX, yE1 = (ZN - 1) * ROW_PX;
+  const blackIn = (px: Uint8Array) => { let k = 0; for (let y = yE0; y < yE1; y++) for (let x = 0; x < W; x += 3) if (px[(y * W + x) * 4] === 0 && px[(y * W + x) * 4 + 1] === 0 && px[(y * W + x) * 4 + 2] === 0) k++; return k; };
+  const bl = blackIn(pl), bo = blackIn(po);
+  ok(`the layer, on the real shader: a zoom's eased lines have no black around the detailed strip (${bl} px)`, bl === 0);
+  ok(`an older server (no SPWB) — those lines continue the history below instead of black (${bo} px)`, bo === 0);
+  // the history (below the zoom) keeps every strong station where it was drawn
+  const strong = stations.filter((st) => st.lvl > 0.8).map((st) => ({ st, x: (st.f - (VC - VS / 2)) / VS * W })).filter((o) => o.x > 20 && o.x < W - 20);
+  let seen = 0, total = 0;
+  for (let y = (ZN + 3) * ROW_PX; y < (ZN + 60) * ROW_PX; y += ROW_PX) for (const o of strong) { total++; if (run(pl, y, o.x, Math.round(o.st.lvl * 255 * 0.8), 6)) seen++; }
+  ok(`the layer: the history below the zoom shows every strong station where it was drawn (${seen}/${total})`, seen === total && strong.length >= 4);
   if (process.env.WF_LAYER_PNG) {
     lastSurf.length = 0;
     draw(O.R, { lut: lutGqrx }); draw(L.R, { lut: lutGqrx });

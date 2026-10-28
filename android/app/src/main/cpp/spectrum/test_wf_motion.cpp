@@ -97,10 +97,16 @@ int main() {
         CHECK(edge == 0, "jump: the newly exposed edge is not blank (%d px)", edge);
     }
     {   // a PINCH: never motion (the fan placed the history)
+        { double k0, c0; takeFanStep(mf, k0, c0); }   // (the jump above's step, not this pinch's)
         const int from = mfr; double bw = vbw;
         for (int i = 0; i < 12; i++) { bw *= 0.95; mpush(noisyRow(vc, bw), vc, bw, vc, bw); }
-        int mv = 0; for (int f = from - 1; f < mfr; f++) if (ms.h[f % MR] != 0) mv++;
-        CHECK(mv == 0, "pinch: %d pairs carry motion", mv);
+        int bad = 0; for (int f = from - 1; f < mfr - 1; f++) if (!(ms.g[f % MR] > 1.0005) || std::fabs(ms.h[f % MR]) > 1.0 / 64) bad++;
+        CHECK(bad == 0, "pinch: %d pairs without a spreading zoom (g > 1, h = 0)", bad);
+        const uint8_t* d = wfImageBytes(mf, ms, M.data(), N, MR); bool same = true;
+        for (int r = 0; r < MR; r++) if (std::fabs(decodeZoom(d[(MR + 2) * N + r], d[(MR + 3) * N + r]) - ms.g[r]) > 2e-4 * ms.g[r]) same = false;
+        CHECK(same, "pinch: the image does not carry g");
+        double k, c; takeFanStep(mf, k, c);
+        CHECK(k == 1 && c == 0, "pinch: a screen ease (%g %g) — the history must not move", k, c);
     }
     // ── THE ZOOM FAN (wf_zoom_fan.h) — the same cases as the zoom-fan section of scripts/test_wf_row_place.ts ──
     {
@@ -127,7 +133,6 @@ int main() {
             for (int f = f0; f < f1; f++) { int a, b; if (!dlit(f, a, b) || a > want + 1.5 || b < want - 2.5) bad++; }
             return bad;
         };
-        auto offAll = [&]() { return offCol(0, 60) + offCol(64, fr); };   // rows 60–63 are the tune: they BEND
         auto conn = [&](int f0, int f1) {
             int g = 0;
             for (int f = f0 + 1; f < f1; f++) { int pa, pb, qa, qb; if (!dlit(f - 1, pa, pb) || !dlit(f, qa, qb) || qa > pb + 1 || qb < pa - 1) g++; }
@@ -140,50 +145,50 @@ int main() {
         bool ident = true; for (int i = 0; i < R; i++) if (fan.xfA[i] != 1 || fan.xfB[i] != 0) ident = false;
         CHECK(D() == S.data() && ident, "a tune touched the history");
         vc = 1'030'000; for (int i = 0; i < 4; i++) fpush(vc, vbw);
-        const int preZoom = fr;
+        // ★★★ A ZOOM LEAVES THE HISTORY AS DRAWN (Stuart 2026-10-28) — the zoom section of scripts/test_wf_row_place.ts
+        int ha, hb; dlit(10, ha, hb); const int histCol = ha;
+        auto atHist = [&](int f0, int f1) { int bad = 0; for (int f = f0; f < f1; f++) { int a, b; if (!dlit(f, a, b) || a != histCol || b != histCol) bad++; } return bad; };
+        auto asDrawn = [&](int f0, int f1) { const uint8_t* d = D(); int k = 0; for (size_t i = (size_t)f0 * N; i < (size_t)f1 * N; i++) if (d[i] != S[i]) k++; return k; };
         vbw = 100'000; fpush(1'030'000, 200'000);                         // one old-span frame in flight
-        for (int i = 0; i < 6; i++) fpush(vc, vbw);
-        CHECK(offAll() == 0, "x2 zoom in: %d rows off the live column (slices)", offAll());
+        const int zf = fr;
+        for (int i = 0; i < 24; i++) fpush(vc, vbw);
+        CHECK(atHist(0, 60) == 0 && asDrawn(0, 60) == 0, "x2 zoom in: the history moved (%d rows)", atHist(0, 60));
         CHECK(std::memcmp(stored0.data(), S.data(), stored0.size()) == 0, "a zoom rewrote the stored rows");
-        { int c0 = -1; for (int x = 0; x < N; x++) if (S[x] >= 200) c0 = x;
-          CHECK(std::fabs(c0 - liveCol()) > 50, "control: the stored row is not a slice (%d vs %g)", c0, liveCol()); }
-        CHECK(conn(preZoom, fr) == 0, "x2 drum step: %d gaps on screen", conn(preZoom, fr));
-        vbw = 400'000; for (int i = 0; i < 6; i++) fpush(vc, vbw);
-        CHECK(offAll() == 0, "zoom out: %d rows off the live column (one-bin carrier lost?)", offAll());
-        { const uint8_t* d = D(); int edge = 0;
-          for (int f = 0; f < 60; f++) for (int x = 0; x < N / 4 - 1; x++) if (d[f * N + x] != 0 || d[f * N + N - 1 - x] != 0) edge++;
-          CHECK(edge == 0, "zoom out: %d non-blank edge px", edge); }
-        vbw = 200'000; fpush(vc, vbw);
-        { const uint8_t* d = D(); int diff = 0; for (int i = 0; i < 60 * N; i++) if (d[i] != stored0[i]) diff++;
-          CHECK(diff == 0, "zoom in then out: %d bytes differ from the stored history", diff); }
-        CHECK(offAll() == 0, "after the round trip: %d rows off", offAll());
-        { const double xs = liveCol(), span = 120'000, lo = CARRIER - xs * (span / N);
-          vc = lo + span / 2; vbw = span; fpush(vc, vbw);
-          CHECK(offAll() == 0 && std::fabs(liveCol() - xs) < 1e-6, "anchored zoom: %d rows off", offAll()); }
-        vc = 1'030'000; vbw = 200'000; fpush(vc, vbw);
+        CHECK(offCol(zf + ZOOM_EASE_ROWS - 1, fr) == 0, "x2 zoom in: %d eased-in rows off the live column", offCol(zf + ZOOM_EASE_ROWS - 1, fr));
+        { std::vector<int> cs; for (int f = zf - 1; f < zf + ZOOM_EASE_ROWS; f++) { int a, b; dlit(f, a, b); cs.push_back(a); }
+          bool mono = true; int mx = 0; for (size_t i = 1; i < cs.size(); i++) { if (!(cs[i] > cs[i - 1])) mono = false; mx = std::max(mx, cs[i] - cs[i - 1]); }
+          CHECK(mono && mx < 20 && cs[1] - cs[0] <= 3 && cs.back() - cs[cs.size() - 2] <= 3, "x2 zoom in: the ease is not an S-curve fan (%d .. %d)", cs.front(), cs.back()); }
+        { double k, c; takeFanStep(fan, k, c); CHECK(k == 1 && c == 0, "x2 zoom: a screen ease (%g %g)", k, c); }
+        vbw = 400'000; for (int i = 0; i < 30; i++) fpush(vc, vbw);
+        CHECK(atHist(0, 60) == 0 && offCol(fr - 4, fr) == 0 && asDrawn(0, 60) == 0, "zoom out: history moved or new rows off (%d, %d)", atHist(0, 60), offCol(fr - 4, fr));
+        vbw = 200'000; for (int i = 0; i < 30; i++) fpush(vc, vbw);
         { const int from = fr - 1;
           for (int i = 0; i < 12; i++) { vbw *= 0.95; fpush(vc, vbw); }
-          CHECK(conn(from, fr) == 0 && offAll() == 0, "pinch: %d gaps, %d rows off", conn(from, fr), offAll()); }
+          int pred = 0, moved = 0;
+          for (int f = from; f < fr - 1; f++) { int pa, pb, qa, qb; dlit(f, pa, pb); dlit(f + 1, qa, qb);
+            const double p = (pa + pb + 1) / 2.0, q = (qa + qb + 1) / 2.0; const int r = f % R;
+            if (std::fabs(N / 2.0 + gl.g[r] * (p - N / 2.0) + gl.h[r] - q) > 1.5) pred++; if (q != p) moved++; }
+          CHECK(pred == 0 && atHist(0, 60) == 0 && moved >= 10, "pinch: %d steps (g, h) does not predict, %d moved", pred, moved); }
+        for (int i = 0; i < 30; i++) fpush(vc, vbw);
+        vc += vbw * 0.4; const int preJump = fr; fpush(vc, vbw);
+        CHECK(offCol(preJump - 6, fr) == 0 && !fan.disp.empty(), "jump: %d rows not moved to the live column", offCol(preJump - 6, fr));
         { const int from = fr; std::vector<double> cs;
           for (int i = 1; i <= 15; i++) { vc += 1'500; cs.push_back(vc); fpush(cs[std::max(0, (int)cs.size() - 3)], vbw); }
-          int bad = 0;   // with zoomed history on screen, every moved pair's h predicts the displayed move
+          int bad = 0;   // with moved history on screen, every moved pair's h predicts the displayed move
           for (int f = from; f < fr - 1; f++) { int a0, b0, a1, b1; if (!dlit(f, a0, b0) || !dlit(f + 1, a1, b1)) { bad++; continue; }
             if (std::fabs((a0 + gl.h[f % R]) - a1) > 1.01) bad++; }
-          CHECK(bad == 0, "fan + motion: %d pairs whose h does not predict the displayed move", bad); }
+          CHECK(bad == 0, "jump + motion: %d pairs whose h does not predict the displayed move", bad); }
         for (int i = 0; i < R; i++) fpush(vc, vbw);
-        CHECK(fan.disp.empty() && D() == S.data(), "the display buffer was not freed once the zoomed history scrolled away");
+        CHECK(fan.disp.empty() && D() == S.data(), "the display buffer was not freed once the moved history scrolled away");
         {   // cost: a full 1024-row ring, every row re-made per step
             const int RR = 1024; std::vector<uint8_t> SS((size_t)N * (RR + MOTION_ROWS)); MotionState g2(RR, N); FanState f2(RR); int k = 0;
             std::vector<uint8_t> row(N); for (int i = 0; i < N; i++) row[i] = (uint8_t)(40 + (i * 7919 % 50));
             for (int i = 0; i < RR; i++) placeRow(SS.data(), RR, N, k++, row.data(), 1e6, 200'000.0 / N, 1e6, 200'000, g2, f2);
-            double bw = 200'000;
+            double cc = 1e6;
             auto t0 = std::chrono::steady_clock::now();
-            for (int i = 0; i < 20; i++) { bw *= 0.97; placeRow(SS.data(), RR, N, k++, row.data(), 1e6, bw / N, 1e6, bw, g2, f2); }
+            for (int i = 0; i < 20; i++) { cc += (i % 2 ? -1 : 1) * 60'000; placeRow(SS.data(), RR, N, k++, row.data(), cc, 200'000.0 / N, cc, 200'000, g2, f2); }
             auto t1 = std::chrono::steady_clock::now();
-            for (int i = 0; i < 40; i++) { bw /= 0.97; placeRow(SS.data(), RR, N, k++, row.data(), 1e6, bw / N, 1e6, bw, g2, f2); }
-            auto t2 = std::chrono::steady_clock::now();
-            std::printf("  zoom fan cost (1024-row ring, native, this host): %.2f ms a zoom-in step, %.2f ms a zoom-out step\n",
-                        std::chrono::duration<double, std::milli>(t1 - t0).count() / 20, std::chrono::duration<double, std::milli>(t2 - t1).count() / 40);
+            std::printf("  jump cost (1024-row ring, native, this host): %.2f ms a jump\n", std::chrono::duration<double, std::milli>(t1 - t0).count() / 20);
         }
     }
     // ── V12 THE FULL-CAPTURE LAYER (wf_wide.h) — the same cases as scripts/test_wf_wide_app.ts and the layer section of
@@ -243,7 +248,7 @@ int main() {
             double start = NAN;
             const int slot = placeRow(X.S.data(), R, N, X.fr, row.data(), X.vc, X.vbw / N, X.vc, X.vbw, X.gl, X.fan, visible, &start);
             X.lastLo = start; X.lastSpan = X.vbw;
-            if (X.fan.layer) layerWriteRow(*X.fan.layer, slot, &X.st, start, X.vbw, X.t, ToIdx(-125, -50, 0, X.st.off));
+            if (X.fan.layer) { layerWriteRow(*X.fan.layer, slot, &X.st, start, X.vbw, X.t, ToIdx(-125, -50, 0, X.st.off)); fanRow(X.fan, X.S.data(), N, slot, R); }
             X.fr++; X.t += 50;
         };
         auto D = [&](Run& X) { return wfImageBytes(X.fan, X.gl, X.S.data(), N, R); };
@@ -267,49 +272,34 @@ int main() {
             X.vc = CAPC; X.vbw = CAPS; push(X, visible);
             return f0;
         };
-        // zoom in AWAY from the carrier, then out
+        const int EZ = zoomEaseRows(100'000 / CAPS);   // the zoom-in's eased rows: drawn at in-between zooms (the fan)
+        // a zoom in and out no longer re-maps (Stuart 2026-10-28): the zoomed rows past the ease stay as drawn, no black
         {
-            Run W(R, true), O(R, false);
-            const int z0 = zoomInOut(W, 1'400'000, 60); zoomInOut(O, 1'400'000, 60);
-            const Scan s = scan(W, z0, z0 + 60), o = scan(O, z0, z0 + 60);
-            CHECK(s.atCol == 60, "the layer: zoom in AWAY from a carrier and out — every row shows it at its true column (%d/60)", s.atCol);
-            CHECK(s.black == 0, "the layer: no black inside the capture (%d rows)", s.black);
-            CHECK(s.widest <= 2, "the layer: a THIN line (%d texels)", s.widest);
-            CHECK(!O.fan.layer && o.atCol == 0 && o.black == 60, "control: an older server — no layer allocated, the strip in black as before (%d, %d)", o.atCol, o.black);
-            // the filled floor is as bright as the detailed floor beside it
-            const uint8_t* d = D(W); const double want = liveCol(W); double ls = 0, ds = 0; int ln = 0, dn = 0;
-            for (int f = z0 + 2; f < z0 + 60; f++) for (int x = 0; x < 300; x++) if (std::fabs(x - want) > 4) { ls += d[(size_t)(f % R) * N + x]; ln++; }
-            for (int x = 0; x < N; x++) if (std::fabs(x - want) > 4) { ds += d[(size_t)((W.fr - 1) % R) * N + x]; dn++; }
-            CHECK(std::fabs(ls / ln - ds / dn) <= 3, "the layer: the filled floor as bright as the detailed (%.1f vs %.1f)", ls / ln, ds / dn);
-            CHECK(std::fabs(W.st.off) < 1, "the floor offset within 1 dB of the detailed median (%.2f)", W.st.off);
-        }
-        // zoom in ON the carrier: its rows stay detailed inside their strip
-        {
-            Run A(R, true), B(R, false); seed = 9; const int a0 = zoomInOut(A, CAR, 40); seed = 9; zoomInOut(B, CAR, 40);
-            const uint8_t* da = D(A); const uint8_t* db = D(B); const int fade = (int)std::ceil(A.fan.layer->fadeTx) + 1; int diff = 0;
-            const double XL = (CAR - 50'000 - CLO) / CAPS * N, XR = (CAR + 50'000 - CLO) / CAPS * N;
-            for (int f = a0; f < a0 + 40; f++) for (int x = (int)std::ceil(XL + fade); x < XR - fade; x++) if (da[(size_t)(f % R) * N + x] != db[(size_t)(f % R) * N + x]) diff++;
-            const Scan s = scan(A, a0, a0 + 40);
-            CHECK(diff == 0 && s.atCol == 40, "the layer: zoom in ON a carrier — detailed inside the strip (%d differ), at its column (%d/40)", diff, s.atCol);
+            Run W(R, true); const int z0 = zoomInOut(W, 1'400'000, 60);
+            const uint8_t* d = D(W); int diff = 0;
+            for (int f = z0 + EZ; f < z0 + 60; f++) for (int x = 0; x < N; x++) if (d[(size_t)(f % R) * N + x] != W.S[(size_t)(f % R) * N + x]) diff++;
+            CHECK(diff == 0 && scan(W, z0, z0 + 60).black == 0, "the layer: zoomed rows not as drawn past the ease (%d texels) or black in the ease", diff);
         }
         // a pan across the capture at the narrow zoom
         {
             Run P(R, true); for (int i = 0; i < 4; i++) push(P);
             P.vc = 1'200'000; P.vbw = 100'000; const int p0 = P.fr; for (int i = 0; i < 40; i++) push(P);
             P.vc = 1'500'000; push(P);
-            CHECK(scan(P, p0 + 1, P.fr - 1).black == 0, "the layer: a pan across the capture — no black in the history");
+            CHECK(scan(P, p0 + EZ, P.fr - 1).black == 0, "the layer: a pan across the capture — no black in the history");
             P.vc = CAR + 20'000; push(P);
-            const Scan s = scan(P, p0 + 1, P.fr - 1);
-            CHECK(s.atCol == P.fr - 2 - p0 && s.black == 0, "the layer: panned onto the carrier, every row shows it (%d/%d)", s.atCol, P.fr - 2 - p0);
+            const Scan s = scan(P, p0 + EZ, P.fr - 1);
+            CHECK(s.atCol == P.fr - 1 - (p0 + EZ) && s.black == 0, "the layer: panned onto the carrier, every row past the ease shows it (%d/%d)", s.atCol, P.fr - 1 - (p0 + EZ));
         }
         // rotation / resize: portrait (32 rows made) → landscape (all) → portrait
         {
-            Run Q(R, true); const int q0 = zoomInOut(Q, 1'400'000, 60, 32);
-            const int before = scan(Q, q0, q0 + 60).atCol;
+            Run Q(R, true); for (int i = 0; i < 4; i++) push(Q);
+            Q.vc = 1'200'000; Q.vbw = 100'000; const int q0 = Q.fr + EZ; for (int i = 0; i < 60; i++) push(Q, 32);
+            Q.vc = CAR + 20'000; push(Q, 32); const int q1 = Q.fr - 1;
+            const int before = scan(Q, q0, q1).atCol;
             // (the engine always makes the whole ring; the JS path's fanRefresh does this for a taller view)
             if (!Q.fan.disp.empty() && Q.fr - std::min(R, Q.fr) < Q.fan.validFrom) fanRegen(Q.fan, Q.S.data(), N, R, Q.fr, R);
-            const Scan s = scan(Q, q0, q0 + 60);
-            CHECK(before < 60 && s.atCol == 60 && s.black == 0, "the layer: portrait → landscape keeps both layers (%d then %d/60, %d black)", before, s.atCol, s.black);
+            const Scan s = scan(Q, q0, q1);
+            CHECK(before < q1 - q0 && s.atCol == q1 - q0 && s.black == 0, "the layer: portrait → landscape keeps both layers (%d then %d/%d, %d black)", before, s.atCol, q1 - q0, s.black);
         }
         // the fill's cost on this host: a full 1024-row ring, every row re-made at a 12× zoom out
         {
