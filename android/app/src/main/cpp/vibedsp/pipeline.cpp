@@ -947,6 +947,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
             if (span <= 0.0) {
                 if (zoom_) zoom_->disable();
                 zoomSpanOut_.store(0.0, std::memory_order_relaxed);
+                zoomPrimedOut_.store(false, std::memory_order_relaxed);
             } else {
                 // Rebuild on a width change too — and do it HERE, on the DSP thread. Destroying
                 // it from the caller's thread would free buffers a feed() in flight is reading.
@@ -962,11 +963,13 @@ void RxPipeline::feed(const cf32* iq, int n) {
                 zoom_->configure(zoomOffReq_.load(std::memory_order_relaxed), span,
                                  zoomRateReq_.load(std::memory_order_relaxed));
                 zoomSpanOut_.store(zoom_->spanHz(), std::memory_order_relaxed);
+                zoomPrimedOut_.store(zoom_->primed(), std::memory_order_relaxed);   // false after a rebuild
                 zoomOffOut_.store(zoomOffReq_.load(std::memory_order_relaxed), std::memory_order_relaxed);
             }
         }
         if (zoom_ && zoom_->enabled())
             zoom_->feed(iq, n, [&](const float* db, int nb) {
+                zoomPrimedOut_.store(true, std::memory_order_relaxed);
                 cb_.zoomSpectrum(cb_.ctx, db, nb);
             });
     }

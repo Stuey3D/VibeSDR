@@ -10877,7 +10877,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (emit && useSpy() && shownHz > sampleRate * 0.95) emit = false;
         // ★ While the zoom path is delivering, it owns the waterfall — emitting both would double
         //   the frame rate and make the two fight over the same texture rows.
-        if (emit && rx.zoomSpanHz() > 0.0) emit = false;
+        //   ★★ …but only once it IS delivering (rx.zoomPrimed): after a change of decimation its window refills from
+        //   empty, and until its first frame the wide spectrum carries on — a magnified, softer row instead of NO row
+        //   (Stuart, 2026-10-28: zooming stuttered on the Lenovo, the feed dipping to 9 fps).
+        if (emit && rx.zoomSpanHz() > 0.0 && rx.zoomPrimed()) emit = false;
 
         // ★★★ PER-LISTENER RATE, applied HERE and not in the engine. The engine runs at the
         //     fastest rate anyone asked for (recomputeEngineRate); this drops the frames a slower

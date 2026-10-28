@@ -305,6 +305,10 @@ public:
     void setLog(LogFn f) { logCb_ = std::move(f); }
     void disable();
     bool enabled() const { return enabled_; }
+    /** ★★ PRIMED: a frame has come out since the last rebuild_() (a change of decimation empties the window and the
+     *  filters, and the new view must collect a whole window of decimated samples first — a few ms shallow, hundreds
+     *  deep). Until then the caller keeps the wide spectrum going (RxPipeline::zoomPrimed) so frames never stop. */
+    bool primed() const { return primed_; }
 
     /** ★★★ The span the FRAME covers — exactly what configure() was asked for. Decimation is a
      *  power of two, so the DSP works at a slightly wider span internally and the frame is
@@ -333,6 +337,7 @@ private:
     Method method_;
     int    bins_;
     bool   enabled_ = false;
+    bool   primed_  = false;   // see primed()
     double offsetHz_ = 0.0, spanHz_ = 0.0, reqSpanHz_ = 0.0, rateHz_ = 15.0;
     int    decim_ = 1;
 
@@ -2835,6 +2840,10 @@ public:
     /** The span actually delivered — decimation is a power of two, so it is the next achievable
      *  span AT OR ABOVE what was asked for. A caller that assumes otherwise draws the scale wrong. */
     double zoomSpanHz() const { return zoomSpanOut_.load(std::memory_order_relaxed); }
+    /** ★★ The zoom view is DELIVERING (it has emitted since its last rebuild). The shim lets the wide spectrum through
+     *  until then — Stuart, 2026-10-28: rapid zooming stuttered even on the Lenovo, the feed dipping to 9 fps, because
+     *  each change of decimation left the waterfall with NO frames while the new window filled. */
+    bool zoomPrimed() const { return zoomPrimedOut_.load(std::memory_order_relaxed); }
     /** ★★ The view offset the zoom channel was actually BUILT for (set on the DSP thread when it is
      *  configured) — not the last one asked for. A frame's centre must come from this: the request
      *  lands a block or more later, and stamping frames with the request labelled old data with the
@@ -3232,6 +3241,7 @@ private:
     bool sharedChannels_ = false;
     std::atomic<double> zoomOffReq_{0.0}, zoomSpanReq_{0.0};
     std::atomic<double> zoomSpanOut_{0.0}, zoomOffOut_{0.0};
+    std::atomic<bool>   zoomPrimedOut_{false};
     std::atomic<double> zoomRateReq_{15.0};
     std::atomic<bool>   zoomDirty_{false};
     std::atomic<int>    zoomBins_{1024};
