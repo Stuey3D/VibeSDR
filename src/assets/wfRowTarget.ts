@@ -85,3 +85,15 @@ export function stepRowTarget(st: RowTargetState, scroll: WfScroll, feedFps: num
   st.target = rowTargetFor(scroll, st.latched);
   return st.target;
 }
+
+/** ★★ UNDER A DISPLAY CAP BELOW 60 (Stuart, 2026-10-28: "in 30fps lock mode no point running a 60fps waterfall"): the
+ *  target drops to the largest ROW_RATE that is ≤ the target, ≤ the cap and DIVIDES the cap — 60 → 30, 20 → 15 (20 on a
+ *  30 Hz display alternates one refresh and two), 30/15/10 kept, 12 → 10 — so every row gets the same number of
+ *  refreshes. 0 (actual rows) when that is no more than the feed. `capHz` 0 or ≥ 60 = unchanged (every ROW_RATE
+ *  divides 60 and 120). */
+export function rowTargetUnderCap(target: number, feedFps: number, capHz: number): number {
+  if (!(target > 0) || !(capHz > 0) || capHz >= 60) return target;
+  let best = 0;
+  for (const r of ROW_RATES) if (r <= target && r <= capHz && capHz % r === 0) best = r;
+  return best > feedFps * 1.05 ? best : 0;
+}

@@ -49,4 +49,14 @@ inline double stepRowTarget(RowTargetState& st, int cap, double feedFps) {
     return st.target;
 }
 
+/** Under a display cap below 60: the largest ROW_RATE ≤ the target and the cap that DIVIDES the cap (60 → 30, 20 → 15);
+ *  0 = actual rows when that is no more than the feed (wfRowTarget.ts rowTargetUnderCap — Stuart 2026-10-28). */
+inline double rowTargetUnderCap(double target, double feedFps, int capHz) {
+    if (!(target > 0) || capHz <= 0 || capHz >= 60) return target;
+    static const int rates[] = {10, 12, 15, 20, 30, 60};
+    int best = 0;
+    for (int r : rates) if (r <= target && r <= capHz && capHz % r == 0) best = r;
+    return best > feedFps * 1.05 ? best : 0;
+}
+
 }  // namespace vibewf

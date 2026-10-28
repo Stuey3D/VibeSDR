@@ -5,7 +5,7 @@
  * in test_spectrum_engine.cpp runs the same table).
  * Run: node --no-warnings scripts/test_wf_row_target.ts
  */
-import { stepRowTarget, newRowTargetState, rowTargetFor, snappedTarget, type WfScroll } from '../src/assets/wfRowTarget.ts';
+import { stepRowTarget, newRowTargetState, rowTargetFor, snappedTarget, rowTargetUnderCap, type WfScroll } from '../src/assets/wfRowTarget.ts';
 let fails = 0, passes = 0;
 const ok = (what: string, c: boolean, d = '') => { if (c) passes++; else { fails++; console.log(`  FAIL ${what}${d ? `  (${d})` : ''}`); } };
 const shown = (t: number, fps: number) => (t === 0 ? fps : t);   // 0 = actual rows
@@ -61,5 +61,10 @@ for (const [s, from, to, a, b] of [['smooth', 10, 5, 60, 30], ['default', 10, 5,
   ok('a feed wobbling 17-19 fps holds one Default target', new Set(r.out.slice(100)).size === 1, `${[...new Set(r.out.slice(100))]}`);
 }
 ok('snappedTarget: 3 x 5 = 15, 6 x 9 = 54 → 30, 6 x 3.33 = 20', snappedTarget('default', 5) === 15 && snappedTarget('smooth', 9) === 30 && snappedTarget('smooth', 10 / 3) === 20);
+// ★ Under a FRAME RATE cap below 60 the target divides the cap (Stuart 2026-10-28: "in 30fps lock mode no point running a 60fps waterfall")
+{ const c: [number, number, number, number][] = [[60, 10, 30, 30], [20, 10, 30, 15], [20, 20, 30, 0], [30, 5, 30, 30], [15, 5, 30, 15],
+    [12, 3, 30, 10], [60, 10, 60, 60], [20, 10, 0, 20], [20, 10, 120, 20], [0, 20, 30, 0]];
+  const bad = c.filter(([t, f, cap, want]) => rowTargetUnderCap(t, f, cap) !== want).map(([t, f, cap, want]) => `${t}@${f}fps cap ${cap} → ${rowTargetUnderCap(t, f, cap)} want ${want}`);
+  ok('rowTargetUnderCap: 60 → 30, 20 → 15 (or actual rows), unchanged at 60/120/no cap', bad.length === 0, bad.join('; ')); }
 console.log(`wf row target: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

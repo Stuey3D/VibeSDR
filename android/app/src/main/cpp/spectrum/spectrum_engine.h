@@ -36,6 +36,7 @@ struct EngineConfig {
     bool   specShow = true;
     bool   peakHold = true;
     bool   smoothTune = true;
+    int    displayCapHz = 0;   // the FRAME RATE cap (0 = none): under 60 the row target divides it (wf_row_target.h rowTargetUnderCap)
     int    targetRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
 };
 
