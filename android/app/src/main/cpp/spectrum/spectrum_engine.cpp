@@ -343,24 +343,13 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
     }
     if (ring_.empty()) ring_.assign((size_t)RING_W * RING_ROWS, 0);
     if (srcN != RING_W && rowHzPerBin > 0) rowHzPerBin = rowHzPerBin * srcN / RING_W;
-    const size_t slot = (size_t)std::fmod(frameCount_, (double)RING_ROWS) * n;
-    double off = 0;
-    if (rowHzPerBin > 0 && rowCenterHz > 0 && viewC_ > 0 && viewBw_ > 0) {
-        const double viewHzPerBin = viewBw_ / n;
-        if (std::fabs(rowHzPerBin - viewHzPerBin) <= viewHzPerBin * 1e-6) {
-            off = jround((rowCenterHz - viewC_) / rowHzPerBin);
-            if (std::fabs(off) >= n) off = 0;
-        }
-    }
-    uint8_t* dst = ring_.data() + slot;
-    if (off == 0) {
-        std::memcpy(dst, row, n);
-    } else {
-        std::memset(dst, 0, n);   // vacated edge = floor
-        const int o = (int)off;
-        if (o > 0) std::memcpy(dst + o, row, n - o);
-        else       std::memcpy(dst, row - o, n + o);
-    }
+    // Placed against the view (rowViewOffset/writeRow), then:
+    // ★★ GLIDE (2026-10-28): a row placed somewhere else than the one before streaks its signals back to there, so a
+    //    tune's trail is one continuous line — this row only, once (wf_glide.h; the JS path's utils/wfRowPlace.ts).
+    // ★★★ THE ZOOM FAN (2026-10-28): a row at a different SPAN re-maps every stored row to the new view, so a zoom fans
+    //    the history in and out instead of leaving slices of the old scale. The stored ring is never rewritten; the
+    //    image is made from the displayed ring (wf_zoom_fan.h fanImage), regenerated through per-row maps on a zoom.
+    vibewf::placeRow(ring_.data(), RING_ROWS, n, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_, trail_, fan_);
     frameCount_ += 1;
     if (covNow_ || !publish) { ringDirty_ = true; return; }
     publishRing();
@@ -377,7 +366,7 @@ void SpectrumEngine::publishRing() {
 void* SpectrumEngine::makeRingImage() {
     if (ring_.empty()) return nullptr;
     ringDirty_ = false;
-    return makeImage_(ring_.data(), RING_W, RING_ROWS, RING_W);
+    return makeImage_(vibewf::fanImage(fan_, ring_.data()), RING_W, RING_ROWS, RING_W);
 }
 void SpectrumEngine::storeRingImageLocked(void* img) {
     if (outImage_) releaseImage_(outImage_);   // superseded before the UI took it: never wrapped

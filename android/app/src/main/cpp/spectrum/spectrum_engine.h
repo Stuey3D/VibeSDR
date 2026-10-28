@@ -14,6 +14,7 @@
 //   vibe_rnskia exports in the patched react-native-skia), so this core builds and tests on the host.
 #pragma once
 #include "wf_row_target.h"
+#include "wf_zoom_fan.h"   // + wf_glide.h
 #include "spectrum_processor.h"
 #include <atomic>
 #include <cmath>
@@ -144,6 +145,8 @@ private:
     bool jbPrefill_ = true;
     std::vector<uint8_t> ring_;           // RING_W × RING_ROWS
     std::vector<uint8_t> rowBuf_;         // resample scratch
+    vibewf::GlideState trail_{RING_W};    // previous row's placement + glide scratch (wf_glide.h)
+    vibewf::FanState fan_{RING_ROWS};     // the zoom fan: per-row maps + the displayed ring, made at the first zoom (wf_zoom_fan.h)
     double frameCount_ = 0;
     bool ringDirty_ = false;
     std::vector<uint8_t> lastRow_;        // unresampled processed row (repeat rows)

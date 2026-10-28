@@ -81,7 +81,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { rowViewOffset, writeRow } from '../utils/wfRowPlace';
+import { fanImage, fanRefresh, newFanState, newGlideState, placeRow } from '../utils/wfRowPlace';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -515,6 +515,15 @@ function WaterfallView({
   // ── Signal processor (owns all dB→index maths) ──────────────────────────────
   /** Scratch for the resample — reused, never per-frame allocated. */
   const rowBuf = useRef(new Uint8Array(RING_W));
+  /** The previous ring row's placement + the glide's scratch (utils/wfRowPlace.ts) — allocated once. */
+  const glideSt = useRef<ReturnType<typeof newGlideState> | null>(null);
+  if (!glideSt.current) glideSt.current = newGlideState(RING_W);   // ★ lazily: not 6 KB of scratch per render
+  /** THE ZOOM FAN (utils/wfRowPlace.ts): per-slot maps + the displayed ring, made only once a zoom happens. */
+  const fanSt = useRef<ReturnType<typeof newFanState> | null>(null);
+  if (!fanSt.current) fanSt.current = newFanState(RING_ROWS);
+  /** Ring rows that can be on screen (the shader's visible depth, + its blend row and margin): a zoom re-makes only these. */
+  const fanVisible = useRef(RING_ROWS);
+  fanVisible.current = Math.min(RING_ROWS, Math.ceil(shaderRows) + 4);
   const proc = useRef(new SignalProcessor());
   /* ★★★ THE NATIVE SPECTRUM ENGINE (Android; docs/NATIVE-SPECTRUM-ENGINE.md, cpp/spectrum). On the Galaxy XCover 4s the
    *  waterfall "renders smoothly then crawls for a bit" (Stuart, 2026-10-12): every row came through the JS thread —
@@ -1018,9 +1027,16 @@ function WaterfallView({
     //     rewritten. GitHub #57's torn trails were rows the SERVER cropped against the wrong tuner position
     //     (local_sdr_shim.cpp onSpectrum); scripts/test_wf_row_place.ts guards this half, scripts/test-web-waterfall-history.mjs the server's.
     // ★ Only a frame at the SAME bin scale may be shifted (rowViewOffset) — one from a different span is drawn as it came.
-    const slot = (frameCount.current % RING_ROWS) * n;
+    // ★★ GLIDE (2026-10-28, "the signal glide into place looks broken"): when this row sits somewhere else than the row
+    //    before it, its signals are drawn as short streaks from there to here, so a tune's diagonal is one continuous
+    //    trail rather than dots a row apart. This row only, once; steady rows untouched (utils/wfRowPlace.ts glideRow).
+    // ★★★ THE ZOOM FAN (2026-10-28): a row at a different SPAN re-maps every stored row to the new view, so the history
+    //    fans out on a zoom in and draws in on a zoom out instead of being left as slices of the old scale. The stored
+    //    rows are never rewritten — the IMAGE is made from a displayed ring regenerated through per-row maps
+    //    (fanImage), so a zoom undone gives the edges back exactly. A tune does not touch it (the bend above).
     const v = viewRef.current;
-    writeRow(idxBuf.current, slot, row, n, rowViewOffset(rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz, n));
+    placeRow(idxBuf.current, RING_ROWS, n, frameCount.current, row, rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz,
+             glideSt.current!, fanSt.current!, fanVisible.current);
     frameCount.current += 1;
     // ★★ COVERED (an opaque full-screen overlay — the map, recordings, About): the ROW is kept, the
     //   PICTURE is not made. History stays continuous — closing the map shows what passed while it was
@@ -1036,7 +1052,7 @@ function WaterfallView({
     if (!idxBuf.current) return;
     ringDirty.current = false;
     const n = RING_W;
-    const data = Skia.Data.fromBytes(idxBuf.current);
+    const data = Skia.Data.fromBytes(fanImage(fanSt.current!, idxBuf.current));
     const img = Skia.Image.MakeImage(
       { width: n, height: RING_ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
       data,
@@ -1052,6 +1068,14 @@ function WaterfallView({
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
+
+  // ★ THE ZOOM FAN makes only the rows that can be on screen; a resize that shows more (rotate to a taller view, a Mac
+  //   window dragged taller) makes the newly visible ones from the stored ring before they are seen — the history the
+  //   hard rule says a resize must keep, at the zoom it is now shown at.
+  useEffect(() => {
+    if (!idxBuf.current || !fanRefresh(fanSt.current!, idxBuf.current, RING_W, RING_ROWS, frameCount.current, fanVisible.current)) return;
+    if (coveredRef.current) ringDirty.current = true; else publishRing();
+  }, [shaderRows, publishRing]);
 
   // (pushLine and the per-line slide/snap switching are gone — phase 2 moves
   // line synthesis into the shader; pushRow runs once per data frame and the
