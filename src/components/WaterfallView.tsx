@@ -40,7 +40,7 @@
  *   - Needle: 3-layer LED glow (28/16/6 blur), needleScale = clamp(.25,1,pxPerHz×4000)
  */
 
-import { newRowTargetState, stepRowTarget } from '../assets/wfRowTarget';
+import { newRowTargetState, stepRowTarget, rowTargetUnderCap } from '../assets/wfRowTarget';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
@@ -80,7 +80,7 @@ import { FramePool, type FrameSlot } from '../services/framePool';
 const JB_MAX_QUEUE_SLOTS = 5;
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { useScreenCovered } from '../hooks/useScreenCovered';
-import { cadenceGap } from '../services/uiCadence';
+import { cadenceGap, uiFrameCapHz } from '../services/uiCadence';
 import { setSteadyRefresh } from '../services/frameRate';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
@@ -465,7 +465,7 @@ interface SpectrumEngineHost {
    *  Optional: a binary built before it has none, and then the row is simply not drawn. */
   pushWide?(frame: Uint8Array): void;
   setConfig(c: { width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
-                 smoothTune: boolean; targetRows: number }): void;
+                 smoothTune: boolean; targetRows: number; displayCapHz?: number }): void;
   setSettings(s: Record<string, number | boolean>): void;
   setBackground(bg: boolean): void;
   setCovered(c: boolean): void;
@@ -1812,9 +1812,11 @@ function WaterfallView({
     //     (20 Default, 60 Smooth); the rows aimed for are min(cap, 3x / 6x the measured feed), snapped to a divisor of
     //     60, with a latch on the feed so a wobble cannot flap it. 0 = actual rows. rowCarry runs on across a change.
     if (rowTargetCap.current !== cfg.targetRows) { rowTargetSt.current = newRowTargetState(); rowTargetCap.current = cfg.targetRows; }
-    const rowTarget = avgFrameMs.current > 0
+    // ★★ …and under a FRAME RATE cap below 60 it divides the cap (wfRowTarget rowTargetUnderCap — Stuart 2026-10-28: "in
+    //    30fps lock mode no point running a 60fps waterfall"): 60 → 30, 20 → 15.
+    const rowTarget = rowTargetUnderCap(avgFrameMs.current > 0
       ? stepRowTarget(rowTargetSt.current, cfg.targetRows >= 60 ? 'smooth' : cfg.targetRows > 0 ? 'default' : 'sharp', 1000 / avgFrameMs.current)
-      : rowTargetSt.current.target;
+      : rowTargetSt.current.target, 1000 / Math.max(1, avgFrameMs.current), uiFrameCapHz.value);
     const repeatsCarry = rowTarget > 0;
     const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
@@ -2156,15 +2158,22 @@ function WaterfallView({
       ? (bins: Float32Array, st: SDRStatus) => {
           const at = lastInteractAt?.current ?? 0;
           engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, at);
+          // ★ The FRAME RATE cap reaches the engine's row target (rowTargetUnderCap) when it changes — no React state
+          //   carries it here, so it is checked per frame (one number compare) and the config re-sent on a change.
+          const cap = uiFrameCapHz.value, ec = engineCfg.current;
+          if (ec && ec.displayCapHz !== cap) { ec.displayCapHz = cap; engine.setConfig(ec); }
           // (no interaction flag for the display driver any more — always whole rows at the steady pace)
         }
       : enqueueFrame;    // frames flow through the jitter buffer, not straight to render
     return () => { frameSink.current = null; };
   }, [frameSink, enqueueFrame, engine, lastInteractAt]);
 
+  const engineCfg = useRef<{ width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
+                             smoothTune: boolean; targetRows: number; displayCapHz: number } | null>(null);
   // ── Native engine: the state JS owns, forwarded when it changes ──────────────────────────────────────────
   useEffect(() => {
-    engine?.setConfig({ width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS });
+    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value };
+    engine?.setConfig(engineCfg.current);
   }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS]);
   useEffect(() => { engine?.setCovered(covered); }, [engine, covered]);
   useEffect(() => {

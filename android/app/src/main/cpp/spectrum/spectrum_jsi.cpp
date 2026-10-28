@@ -110,6 +110,7 @@ public:
             k.width = num(r, o, "width", 0); k.wfTop = num(r, o, "wfTop", 0); k.specH = num(r, o, "specH", 0);
             k.specShow = flag(r, o, "specShow", true); k.peakHold = flag(r, o, "peakHold", true);
             k.smoothTune = flag(r, o, "smoothTune", true); k.targetRows = (int)num(r, o, "targetRows", 0);
+            k.displayCapHz = (int)num(r, o, "displayCapHz", 0);
             en.setConfig(k);
             return jsi::Value::undefined();
         });

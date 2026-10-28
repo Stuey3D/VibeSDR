@@ -306,8 +306,10 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     //     60 Smooth); the rows actually aimed for are min(cap, 3x / 6x the measured feed), snapped to a divisor of 60,
     //     with hysteresis. 0 = actual rows. The fractional carry (rowCarry_) runs on across a change: no jump.
     if (cfg.targetRows != rowTargetCap_) { rowTargetSt_ = {}; rowTargetCap_ = cfg.targetRows; }   // a new setting decides afresh
-    const double rowTarget = avgFrameMs_ > 0 ? vibewf::stepRowTarget(rowTargetSt_, cfg.targetRows, 1000.0 / avgFrameMs_)
-                                             : rowTargetSt_.target;
+    // ★★ …divided into the FRAME RATE cap below 60 (Stuart 2026-10-28: "in 30fps lock mode no point running a 60fps waterfall").
+    const double rowTarget = vibewf::rowTargetUnderCap(avgFrameMs_ > 0 ? vibewf::stepRowTarget(rowTargetSt_, cfg.targetRows, 1000.0 / avgFrameMs_)
+                                                                       : rowTargetSt_.target,
+                                                       avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, cfg.displayCapHz);
     const bool repeatsCarry = rowTarget > 0;
     const bool wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
