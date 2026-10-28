@@ -125,10 +125,10 @@ ok('the waterfall turns it on with rows and off when they stop, on backgrounding
 // ★ POWER (Stuart 2026-10-28): 120 only on interaction; at rest a whole multiple of the feed, from 30
 { const { steadyHzFor } = await import('../src/utils/steadyHz.ts').catch(() => ({ steadyHzFor: null as any }));
   if (steadyHzFor) {
-    const cases: [number, boolean, number][] = [[20, true, 60], [10, true, 60], [40, true, 120], [25, true, 60], [20, false, 40], [19.6, false, 40], [21, false, 40], [10, false, 30],
-      [15, false, 30], [30, false, 30], [29.2, false, 30], [25, false, 60], [40, false, 40], [60, false, 60], [17.5, false, 60], [0, false, 60]];
-    const bad = cases.filter(([f, i, want]) => steadyHzFor(f, i) !== want).map(([f, i, want]) => `${f}${i ? ' touch' : ''} → ${steadyHzFor(f, i)} (want ${want})`);
-    ok('steadyHzFor: a gesture 60 (120 only where 60 is not a multiple); at rest 30/40/60, a whole multiple of the (snapped) feed', bad.length === 0, bad.join('; '));
+    const cases: [number, number][] = [[20, 40], [19.6, 40], [21, 40], [10, 30], [15, 30], [30, 30], [29.2, 30], [25, 60],
+      [40, 40], [60, 60], [17.5, 60], [0, 60]];
+    const bad = cases.filter(([f, want]) => steadyHzFor(f) !== want).map(([f, want]) => `${f} → ${steadyHzFor(f)} (want ${want})`);
+    ok('steadyHzFor: ONE rate whether interacting or not — 30/40/60, a whole multiple of the (snapped) feed', bad.length === 0, bad.join('; '));
   } else ok('steadyHzFor importable', false); }
 ok('Android Platform: no-op (the native method is iOS-only)', /native\(\)\?\.setSteadyRefresh/.test(svc));
 ok('Android re-applies on resume', /onHostResume\(\)\s*\{\s*applyFrameRateCap\(\)/.test(android));

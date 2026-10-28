@@ -1175,9 +1175,8 @@ function WaterfallView({
    *  rows on an uneven beat). On with a row, off 1 s after the last one, on backgrounding and on unmount. */
   const steadyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noteRowsFlowing = useCallback(() => {
-    // 120 on a gesture (the drum, a pinch, the buttons — markInteract), else a whole multiple of the feed (steadyHzFor)
-    const interacting = Date.now() - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
-    setSteadyRefresh(steadyHzFor(1000 / Math.max(1, avgFrameMs.current), interacting));
+    // ONE rate while rows flow — a whole multiple of the feed, the same on a gesture (steadyHzFor)
+    setSteadyRefresh(steadyHzFor(1000 / Math.max(1, avgFrameMs.current)));
     if (steadyTimer.current) clearTimeout(steadyTimer.current);
     steadyTimer.current = setTimeout(() => { steadyTimer.current = null; setSteadyRefresh(0); }, 1000);
   // eslint-disable-next-line react-hooks/exhaustive-deps
