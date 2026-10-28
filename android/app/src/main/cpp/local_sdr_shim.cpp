@@ -113,6 +113,7 @@
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
+#include "vibe_wide_row.h"      // ★ V12 the full-capture row (SPWB v2)
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
 #include "vibe_dab_txdb_e1.h"    // the UK DAB transmitter directory (generated)
@@ -6084,18 +6085,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  zoomed into part of the capture only ever received rows of that part, so after zooming out the history recorded
      *  meanwhile was a narrow strip in a black frame. Black is allowed ONLY where the radio was not capturing.
      *  ★ So while a listener who ASKED for it (`&wide=1` on /ws/user-spectrum — an older client never asks and sees no
-     *    change at all) views less than the capture, every kWideEvery-th spectrum frame it is sent is followed by a COARSE
-     *    row of the WHOLE capture: kWideBins bins, MAX-held from the wide FFT's averaged row (a one-bin carrier survives),
-     *    at the capture's own centre and span. The client keeps it as the layer UNDER its detailed history.
+     *    change at all) views less than the capture, every kWideEvery-th spectrum frame it is sent is followed by a row of
+     *    the WHOLE capture at the capture's own centre and span: its FLOOR (medians) and its PEAKS (thin, where they are)
+     *    — vibe_wide_row.h, which says why (v1's max-held bins drew hot blobs). The client keeps it as the layer UNDER its
+     *    detailed history.
      *  ★ ZERO EXTRA FFT: the wide FFT runs anyway (the crop path IS it, and it keeps running while the zoom path owns the
-     *    waterfall) — this is one max-hold pass over its averaged row, on the thread that already made that row (never the
-     *    audio's), and only while somebody subscribed is zoomed. No extra frame rate: it rides the listener's own frames.
-     *  ★ Wire: 'S','P','W','B', 1 (version), 0 (flags), u64 timestamp ns, u64 centre Hz (the capture's physical centre),
-     *    u32 span Hz (the capture width), then the bins LOW → HIGH (natural order — not the SPEC frame's DC-at-0); a 0
-     *    byte is "no data", as on SPEC. docs/PROTOCOL.md, 2026-10-28. */
-    static constexpr int kWideBins = 1024;
-    static constexpr int kWideEvery = 8;
-    static constexpr size_t kWideHdr = 26;
+     *    waterfall) — this is one pass over its averaged row, on the thread that already made that row (never the
+     *    audio's), only when a subscriber is about to be sent one. No extra frame rate: it rides the listener's own frames.
+     *  ★ Wire: vibe_wide_row.h / docs/PROTOCOL.md, 2026-10-28. */
+    static constexpr int kWideVersion = 2;
+    static constexpr int kWideEvery = 4;
+    std::atomic<bool> wideWant_{false};                   // ★ a subscriber is one frame from its next row — build one
+    vibe::wide::Scratch wideScratch_;                     // DSP thread only
     struct WideSub { int n = 0; bool zoomed = false; };
     std::mutex wideMtx_;
     std::map<net::Socket*, WideSub> wideSubs_;          // ★ under wideMtx_
@@ -6104,25 +6105,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     double wideFrameAt_ = 0.0;                            // when it was built (nowSecs) — a stale row is never sent
     /** Build the full-capture row from wideRowAvg_ (fftshifted, DC = bins/2, physical DC at accumCentre_). DSP thread. */
     void buildWideFrame(int bins, float specComp) {
-        if (bins < kWideBins || (int)wideRowAvg_.size() != bins || !(sampleRate > 0) || !(accumCentre_ > 0)) return;
-        std::vector<uint8_t> fr(kWideHdr + kWideBins);
-        fr[0]='S'; fr[1]='P'; fr[2]='W'; fr[3]='B'; fr[4]=1; fr[5]=0;
+        if ((int)wideRowAvg_.size() != bins || !(sampleRate > 0) || !(accumCentre_ > 0)) return;
+        std::vector<uint8_t> fr;
+        vibe::wide::encode(wideRowAvg_.data(), bins, accumCentre_, sampleRate, specComp, fr, wideScratch_);
+        if (fr.empty()) return;
         const uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         std::memcpy(&fr[6], &ts, 8);
-        const uint64_t c = (uint64_t)llround(accumCentre_);
-        std::memcpy(&fr[14], &c, 8);
-        const uint32_t sp = (uint32_t)llround(sampleRate);
-        std::memcpy(&fr[22], &sp, 4);
-        const float* r = wideRowAvg_.data();
-        for (int o = 0; o < kWideBins; o++) {
-            const int lo = (int)((long long)o * bins / kWideBins);
-            int hi = (int)((long long)(o + 1) * bins / kWideBins); if (hi <= lo) hi = lo + 1;
-            float best = r[lo];
-            for (int i = lo + 1; i < hi; i++) if (r[i] > best) best = r[i];   // max-hold: a one-bin carrier survives
-            const int v = (int)lround(best + 256.0 + specComp);
-            fr[kWideHdr + o] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));   // 0 stays "no data"
-        }
         std::lock_guard<std::mutex> lk(wideMtx_);
         wideFrame_.swap(fr);
         wideFrameAt_ = nowSecs();
@@ -6139,11 +6128,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             WideSub& w = it->second;
             const bool z = !useSpy() && sampleRate > 0 && viewSpanHz > 0 && viewSpanHz < sampleRate * 0.98;
             if (z != w.zoomed) {
-                w.zoomed = z; w.n = kWideEvery - 1;
+                w.zoomed = z; w.n = kWideEvery - 2;   // ★ the first row goes with the next frame (one is built for it)
                 if (wideZoomed_.fetch_add(z ? 1 : -1) + (z ? 1 : -1) <= 0) { wideFrame_.clear(); }
             }
-            if (!z || ++w.n < kWideEvery) return;
-            if (wideFrame_.empty() || nowSecs() - wideFrameAt_ > 1.0) { w.n = kWideEvery - 1; return; }   // next frame
+            if (!z) return;
+            ++w.n;
+            if (w.n == kWideEvery - 1) { wideWant_.store(true, std::memory_order_relaxed); return; }   // build for next
+            if (w.n < kWideEvery) return;
+            if (wideFrame_.empty() || nowSecs() - wideFrameAt_ > 1.0) {   // none fresh yet: ask again, try next frame
+                w.n = kWideEvery - 1; wideWant_.store(true, std::memory_order_relaxed); return; }
             w.n = 0;
             out = wideFrame_;
         }
@@ -10708,7 +10701,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (int i = 0; i < bins; i++) wideRowAvg_[i] = fftAccum[i] * inv;
             slowPush(wideSlow_, wideRowAvg_.data(), bins);
             // ★ V12 the full-capture row (SPWB) — only while a subscriber is zoomed; see buildWideFrame.
-            if (wideZoomed_.load(std::memory_order_relaxed) > 0 && !useSpy()) buildWideFrame(bins, specComp);
+            if (wideZoomed_.load(std::memory_order_relaxed) > 0 && !useSpy() && wideWant_.exchange(false, std::memory_order_relaxed))
+                buildWideFrame(bins, specComp);
         }
 
         /* ── Lightning, from the same averaged frame (see SfericDetect) ─────────────────────
@@ -17095,7 +17089,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *  the server is not applying. */
                       + ",\"sqlOn\":true"
                       /* ★ V12: this server sends the full-capture row (SPWB) to a spectrum socket that asks `wide=1`. */
-                      + ",\"wide\":" + std::to_string(kWideBins)
+                      + ",\"wide\":" + std::to_string(kWideVersion)
                       + std::string(",\"gainCap\":")
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))
