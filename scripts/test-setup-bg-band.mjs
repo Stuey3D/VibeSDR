@@ -97,7 +97,13 @@ api = mk(null);
 api.bgLoad({ driver: 'sdrplay', bgDecode: saved });
 ok(!!freqIn(vfoRows()[1]) && !freqIn(vfoRows()[1]).disabled && modeSel(vfoRows()[1]).disabled, 'no band list (radio not running): a typed frequency names the band; the demodulator stays greyed');
 freqIn(vfoRows()[1]).value = ''; freqIn(vfoRows()[1]).oninput();
-ok(note().textContent.startsWith('Type any frequency in the band'), 'no frequency yet: how to name the band');
+ok(note().textContent.startsWith('The server\u2019s band list has not arrived') && !/Type any frequency/.test(note().textContent),
+   'no frequency yet: the band list is missing, said so (never "type any frequency")');
+// ★★ 2026-10-28 (Stuart, beta27): a radio that is NOT RUNNING still picks its band — from the server's own list, which
+//    renderHw takes from the front door (offline: true, spotBands from the door)
+api = mk({ offline: true, spotBands: [B160, B40] });
+api.bgLoad({ driver: 'sdrplay', bgDecode: saved });
+ok(!freqIn(vfoRows()[1]) && !!bandSel(vfoRows()[1]) && modeSel(vfoRows()[1]).disabled, 'radio not running, the server\'s list: a band picker, no frequency box');
 api = mk(HW);
 
 // where Band cannot run
@@ -117,6 +123,21 @@ ok(!decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band'), 'a runn
 api = mk(null);
 api.bgLoad({ driver: 'rtlsdr', bgDecode: JSON.stringify(LENOVO) });
 ok(decSel(vfoRows()[1]).children.some((o) => o.value === 'spots-band'), 'a radio not running (no hwinfo): offered — the save checks the band');
+
+// ★★★ THE PAGE'S HW IS GET /vibeserver/hardware, NOT hwinfo (the beta27 bug: the list rode only on hwinfo, so the picker
+//     never showed on the real page). The endpoint must carry it — the radio's own reach, the door's whole list — and
+//     the page must take the door's for a radio that did not answer, and redraw the editor once HW has arrived.
+{
+  const shim = fs.readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8');
+  const h0 = shim.indexOf('reqLine.rfind("GET /vibeserver/hardware", 0) == 0) {');
+  const h1 = shim.indexOf('reqLine.rfind("GET /vibeserver/rate-guard", 0) == 0', h0);
+  const hw = h0 > 0 && h1 > h0 ? shim.slice(h0, h1) : '';
+  ok(/vsSpotBandsJson\(vsSpotSpans\(\)\)/.test(hw), 'GET /vibeserver/hardware carries the radio\'s spotBands');
+  ok(/vsSpotBandsJson\(vibe::digi::reachableSpans\(/.test(hw), '…and the front door the server\'s whole list');
+  const rh = src.slice(src.indexOf('async function renderHw()'), src.indexOf('function fetchSoon('));
+  ok(/spotBands: own\.spotBands/.test(rh), 'renderHw takes the door\'s list for a radio that did not answer');
+  ok(/HW = hw;[\s\S]{0,800}bgRender\(\)/.test(rh), 'renderHw redraws the background editor once HW has arrived');
+}
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

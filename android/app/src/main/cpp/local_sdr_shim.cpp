@@ -1656,6 +1656,7 @@ static bool vsIsmAnyBand();          // ★ false = ISM is not offered AT ALL (t
 static bool vsNdbReach(double& lo, double& hi);   // the part of the NDB band this radio reaches ("" = none worth offering)
 static std::string vsNdbWhyNot();    // "" = NDB can run here now
 static std::vector<vibe::digi::Span> vsSpotSpans();   // ★ V12: the bands Band spots can sit on (empty = no Band button)
+static std::string vsSpotBandsJson(const std::vector<vibe::digi::Span>& spans);   // ,"spotBands":[…] (hwinfo + /hardware)
 static std::string vsSpotsBandWhyNot();
 static int vsBandOverride(const std::string& mode);   // ★ V12 Band governor: the owner's +1 Always / −1 Off / 0 Auto
 static double vsBandBudgetUnits();                    // ★ …and the benchmark's budget in FT8 units (∞ = none)
@@ -21490,6 +21491,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   j += "]"; }
                 // ★★ V12 2026-10-27: whether THIS radio reaches the NDB band — the setup page offers an NDB background profile only then
                 { double nlo = 0, nhi = 0; j += std::string(",\"ndbHw\":") + (vsNdbReach(nlo, nhi) ? "true" : "false"); }
+                /* ★★ V12 2026-10-28: the bands THIS radio's Band digital spots can sit on — the setup page's Band VFO picks
+                 *  from these (an empty list = no Band decoder offered). Only hwinfo carried them, so the page never saw
+                 *  them and a Band row asked for a typed frequency (Stuart, beta27). */
+                j += vsSpotBandsJson(vsSpotSpans());
                 std::map<int, std::string> heard;
                 { std::lock_guard<std::mutex> lk(g_dabEnsMemMtx); dabEnsLoadLocked(); heard = g_dabEnsMem; }
                 j += ",\"dabBlocks\":[";
@@ -21502,6 +21507,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     j += "}";
                 }
                 j += "]";
+            } else {
+                /* ★ THE DOOR OWNS NO RADIO, but the Band plan is the server's: every band some mode is on, for the setup
+                 *  page's Band picker on a radio that is not running (as `bands` above) — the radio's save checks reach. */
+                j += vsSpotBandsJson(vibe::digi::reachableSpans(vibe::digi::modes(), [](double, double) { return true; }));
             }
             // ★★ AN ICOM's setup facts — model, CI-V address, baud, the preflight in plain words, the transport —
             //    are the same object hwinfo carries (one writer, radioCapsJsonCore), as `radio` here too.
@@ -34237,6 +34246,37 @@ static bool vsDabCapableHw() {
     return vibedab::radioCanDab(r.data(), r.size(), cap);
 }
 
+/** ★★ V12 2026-10-28 — the radio's Band list as JSON (`,"spotBands":[…]`): each band Band mode can sit on, its drawn
+ *  span, dial (`hz`), band edges and modes. ONE WRITER for hwinfo (the listener's Band button) AND GET /vibeserver/hardware
+ *  (the setup page's Band VFO picker) — the picker read HW.spotBands, which only hwinfo carried, so on the real page it
+ *  never appeared and the row fell back to a typed frequency (Stuart, beta27: "should give an option to choose the band"). */
+static std::string vsSpotBandsJson(const std::vector<vibe::digi::Span>& spans) {
+    std::string j = ",\"spotBands\":[";
+    bool first = true;
+    for (const auto& sp : spans) {
+        char e[200];
+        std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"hz\":%.0f,\"lo\":%.0f,\"hi\":%.0f,\"bandLo\":%.0f,\"bandHi\":%.0f,\"modes\":[",
+                      first ? "" : ",", sp.band->id, sp.band->name, sp.centreHz, sp.loHz, sp.hiHz, sp.band->loHz, sp.band->hiHz);
+        j += e; first = false;
+        // ★ V12 (2026-10-27): every mode Band decodes on the band — the main slice's AND its extra slices' (40 m JTTY)
+        const std::vector<std::string> all = sp.allModes();
+        for (size_t k = 0; k < all.size(); ++k) j += std::string(k ? "," : "") + "\"" + all[k] + "\"";
+        j += "]";
+        // ★ …and where the extra slices are (RF lo/hi), for a client that draws them; older clients ignore it
+        if (!sp.extras.empty()) {
+            j += ",\"extra\":[";
+            for (size_t k = 0; k < sp.extras.size(); ++k) {
+                char x[64]; std::snprintf(x, sizeof x, "%s[%.0f,%.0f]", k ? "," : "", sp.extras[k].loHz, sp.extras[k].hiHz);
+                j += x;
+            }
+            j += "]";
+        }
+        j += "}";
+    }
+    j += "]";
+    return j;
+}
+
 static std::string vsTunableJson() {
     const vibebands::Ranges t = vsTunableRanges();
     if (t.empty()) return {};
@@ -34321,29 +34361,7 @@ static std::string vsTunableJson() {
             const std::string why = vsSpotsBandWhyNot();
             j += std::string(",\"spotsBand\":") + (why.empty() ? "true" : "false");
             if (!why.empty()) j += ",\"spotsBandWhy\":\"" + dabEscape(why) + "\"";
-            j += ",\"spotBands\":[";
-            first = true;
-            for (const auto& sp : spans) {
-                char e[200];
-                std::snprintf(e, sizeof e, "%s{\"id\":\"%s\",\"name\":\"%s\",\"hz\":%.0f,\"lo\":%.0f,\"hi\":%.0f,\"bandLo\":%.0f,\"bandHi\":%.0f,\"modes\":[",
-                              first ? "" : ",", sp.band->id, sp.band->name, sp.centreHz, sp.loHz, sp.hiHz, sp.band->loHz, sp.band->hiHz);
-                j += e; first = false;
-                // ★ V12 (2026-10-27): every mode Band decodes on the band — the main slice's AND its extra slices' (40 m JTTY)
-                const std::vector<std::string> all = sp.allModes();
-                for (size_t k = 0; k < all.size(); ++k) j += std::string(k ? "," : "") + "\"" + all[k] + "\"";
-                j += "]";
-                // ★ …and where the extra slices are (RF lo/hi), for a client that draws them; older clients ignore it
-                if (!sp.extras.empty()) {
-                    j += ",\"extra\":[";
-                    for (size_t k = 0; k < sp.extras.size(); ++k) {
-                        char x[64]; std::snprintf(x, sizeof x, "%s[%.0f,%.0f]", k ? "," : "", sp.extras[k].loHz, sp.extras[k].hiHz);
-                        j += x;
-                    }
-                    j += "]";
-                }
-                j += "}";
-            }
-            j += "]";
+            j += vsSpotBandsJson(spans);
         }
     }
     /* ★ SEPARATE FROM `dab`, because the two answer different questions and the setup page needs

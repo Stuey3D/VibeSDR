@@ -83,8 +83,11 @@ static void config() {
        "the band's modes outside the window: refused, in words — " + err);
     bg::Config off = c; off.profiles[0].vfos[0].hz = 6500000; off.profiles[0].centreHz = 6500000;
     off.profiles[0].vfos.resize(1);
-    ok(!bg::validate(off, 250000, err) && err.find("not in a band the digital modes use") != std::string::npos && err.find("7074") != std::string::npos,
+    ok(!bg::validate(off, 250000, err) && err.find("not in a band the digital modes use") != std::string::npos && err.find("choose a band") != std::string::npos,
        "a frequency on no band: refused, with an example — " + err);
+    // ★ 2026-10-28: the setup page PICKS the band — a row with none says to choose it, not "set a frequency"
+    bg::Config none = off; none.profiles[0].vfos[0].hz = 0;
+    ok(!bg::validate(none, 250000, err) && err.find("choose its band") != std::string::npos, "a Band row with no band: refused, in words — " + err);
     bg::Config lk = c; lk.profiles[0].vfos.resize(1);
     ok(!bg::validate(lk, 250000, err, 0, 7200000) && err.find("locked") != std::string::npos, "a locked radio whose window misses the band: refused — " + err);
     err.clear();

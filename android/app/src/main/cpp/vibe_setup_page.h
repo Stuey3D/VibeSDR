@@ -22,7 +22,7 @@
 
 static const char* const kVibeSetupPage = R"HTML(<!doctype html>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>VibeServer setup</title>
 <style>
   :root{--bg:#0b0906;--panel:#151009;--line:#3a2c17;--ink:#f2e4cf;--dim:#a08e73;
@@ -30,7 +30,10 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);
        font:15px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  .wrap{max-width:760px;margin:0 auto;padding:32px 20px 80px}
+  /* ★★ ROOM FOR THE SAVE BAR (Stuart, V12 beta27, 2026-10-28: "couldn't reach the save buttons"). The bar is fixed to
+     the bottom and WRAPS to two rows on a narrow window (its message above, the buttons below), ~120 px — the old 80 px
+     let it cover the end of the page there. Both clear the bottom safe area (an iPhone's home indicator in Safari). */
+  .wrap{max-width:760px;margin:0 auto;padding:32px 20px calc(140px + env(safe-area-inset-bottom, 0px))}
   h1{font-size:26px;margin:0 0 4px;color:var(--amber);letter-spacing:.3px}
   .sub{color:var(--dim);margin:0 0 28px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
@@ -150,7 +153,7 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .ok{color:var(--good)}
   .addr{font-family:ui-monospace,monospace;color:var(--amber)}
   .bar{position:fixed;left:0;right:0;bottom:0;background:#12100c;border-top:1px solid var(--line);
-       padding:14px 20px;display:flex;gap:14px;align-items:center;justify-content:flex-end}
+       padding:14px 20px calc(14px + env(safe-area-inset-bottom, 0px));display:flex;gap:14px;align-items:center;justify-content:flex-end}
   .bar .spacer{flex:1;color:var(--dim);font-size:13px}
   /* ★★★ THE hidden ATTRIBUTE MUST WIN. [hidden] is only display:none in the USER-AGENT sheet, so
      ANY author rule that sets display beats it — .modalWrap{display:flex} did, and the serial
@@ -4101,10 +4104,16 @@ async function renderHw() {
    *  case while setting one up), or one behind its own PIN, left the per-band ceiling picker with nothing
    *  but "All bands" (Stuart, 2026-10-04: "I've seen this happen a lot especially when setting up a new
    *  radio"). This process answers /vibeserver/hardware too, front door included, with the same list. */
-  if (!(hw && Array.isArray(hw.bands) && hw.bands.length)) {
+  /* ★★ V12 2026-10-28: AND THE BAND DIGITAL-SPOTS LIST the same way — a Band VFO picks its band from it. The radio's own
+   *  list (only the bands it reaches) when it answered; the server's whole list when it did not (the radio's save
+   *  checks reach). */
+  if (!(hw && Array.isArray(hw.bands) && hw.bands.length) || !(hw && Array.isArray(hw.spotBands))) {
     try {
       const own = await (await fetch("/vibeserver/hardware", {cache:"no-store"})).json();
-      if (own && Array.isArray(own.bands) && own.bands.length) hw = Object.assign({}, hw || {}, { bands: own.bands });
+      if (own && Array.isArray(own.bands) && own.bands.length && !(hw && Array.isArray(hw.bands) && hw.bands.length))
+        hw = Object.assign({}, hw || {}, { bands: own.bands });
+      if (own && Array.isArray(own.spotBands) && own.spotBands.length && !(hw && Array.isArray(hw.spotBands)))
+        hw = Object.assign({}, hw || {}, { spotBands: own.spotBands });
     } catch (e) { /* the page still offers "All bands" */ }
   }
   if (hw && Array.isArray(hw.bands) && hw.bands.length)
@@ -4120,6 +4129,10 @@ async function renderHw() {
   HW = hw;
   modeRateShow(r);   // ★ the rate switch's red line reads HW.rateGuard, which has only now arrived
   dabDecoderShow(r); // ★ and the DAB+ decoder switch reads HW.dabFaad2Avail
+  /* ★★ V12 2026-10-28: and the background-decoding editor reads HW.spotBands (a Band VFO's band picker) — drawn by
+   *  bgLoad BEFORE this answer arrived, so a Band row showed a typed frequency until something redrew it (Stuart,
+   *  beta27). Drawn again now, for the radio it shows. */
+  if (bgRadio === r && typeof bgRender === "function") bgRender();
   /* ★★★ THE RSP's SOCKETS, FROM THE RADIO (2026-10-22). The antenna card and the per-band socket pickers read
    *     r.antennas, which nothing ever filled — so neither appeared on any RSP. The radio's own list when it is
    *     running, the model's when it is not (rspCaps). Not saved: it describes the hardware, not a setting. */
@@ -5789,22 +5802,25 @@ function bgBandOk() {
   if (String(r0.driver || "") === "icom") return false;
   try { if (typeof modeBlockSet === "function") { const b = modeBlockSet(); if (b.has("spots") || b.has("spotsband")) return false; } } catch (e) { /* no mode list */ }
   const hw = typeof HW !== "undefined" ? HW : null;
-  if (hw && !hw.offline && Array.isArray(hw.spotBands)) return hw.spotBands.length > 0;
+  if (hw && Array.isArray(hw.spotBands)) return hw.spotBands.length > 0;
   return true;
 }
 /** The band a Band VFO's frequency names, from the radio's own list (HW.spotBands) — or null. */
 function bgSpotBand(hz) {
   const hw = typeof HW !== "undefined" ? HW : null;
-  if (!hw || hw.offline || !Array.isArray(hw.spotBands) || !(hz > 0)) return null;
+  if (!hw || !Array.isArray(hw.spotBands) || !(hz > 0)) return null;
   return hw.spotBands.filter(function (b) { return hz >= b.bandLo && hz <= b.bandHi; })[0] || null;
 }
 /* \u2605\u2605 V12 2026-10-27 (Stuart): a Band VFO picks its BAND, not a typed frequency \u2014 from the radio's own list (HW.spotBands),
  *  only the bands whose digital modes this profile's capture holds (the server's own save rule: every mode of the band's
  *  main span inside the window around the RF centre). The row stores the band's dial (its span's centre), so an older
  *  row with any frequency inside the band loads into that band and saves back unchanged until another band is picked. */
+/* ★★ 2026-10-28: and on a radio that is not running, the SERVER's whole list (renderHw takes it from the door, as it
+ *  does the band names) — the radio's save says if a band is out of its reach. Only with no answer at all is there no
+ *  list, and only then does a Band row keep a frequency box. */
 function bgBandList() {
   const hw = typeof HW !== "undefined" ? HW : null;
-  return hw && !hw.offline && Array.isArray(hw.spotBands) ? hw.spotBands : null;
+  return hw && Array.isArray(hw.spotBands) && hw.spotBands.length ? hw.spotBands : null;
 }
 function bgBandReach(b, centre, rate) {
   if (!(centre > 0) || !(rate > 0)) return true;   // \u2605 no centre or rate yet: every band (the save checks)
@@ -5825,14 +5841,9 @@ function bgBandHint(v, centre, rate) {
     return { bad: false, text: b.name + ": " + (b.modes || []).join(", ") + " on " + (b.lo / 1e6).toFixed(4) + "\u2013" + (b.hi / 1e6).toFixed(4)
       + " MHz \u2014 one summary card an hour; quiet modes cost nothing (the Band governor). The decoder sets the frequency and demodulator." };
   }
-  if (!(v.hz > 0)) return { bad: false, text: "Type any frequency in the band \u2014 7074 for 40 m, 14074 for 20 m. Every digital mode on that band is decoded into one summary card an hour." };
-  const b = bgSpotBand(v.hz);
-  const hw = typeof HW !== "undefined" ? HW : null;
-  if (!b) return hw && !hw.offline && Array.isArray(hw.spotBands)
-    ? { bad: true, text: (v.hz / 1e3).toFixed(1) + " kHz is not in a band the digital modes use on this radio \u2014 e.g. 7074 for 40 m." }
-    : { bad: false, text: "Every digital mode on this frequency\u2019s band, in one summary card an hour." };
-  return { bad: false, text: b.name + ": " + (b.modes || []).join(", ") + " on " + (b.lo / 1e6).toFixed(4) + "\u2013" + (b.hi / 1e6).toFixed(4)
-    + " MHz \u2014 the RF centre must hold all of it. One summary card an hour; quiet modes cost nothing (the Band governor)." };
+  // \u2605 No band list at all (the server did not answer): the box takes the band's FT8 dial until it does
+  return { bad: false, text: "The server\u2019s band list has not arrived \u2014 enter the band\u2019s FT8 dial (7074 for 40 m, 14074 for 20 m), or reload "
+    + "to choose the band. Every digital mode on it is decoded into one summary card an hour." };
 }
 /* ★★ DSC WATCH (V12, 2026-10-26): the GMDSS DSC distress and safety frequencies (ITU RR Appendix 15) — as many as this
  *  radio's window can hear around the profile's RF centre become VFOs at once (the dial 1.7 kHz below on USB). A radio
@@ -6152,8 +6163,8 @@ function bgRender() {
       /* ★★ V12 2026-10-27 (Stuart): WHEN THE DECODER SETS THE FREQUENCY — the NDB skimmer (the part of the band the
        *  centre holds) and Band digital spots (the band's own dials) — the row's frequency box and demodulator are greyed
        *  out, never left editable and meaningless. A Band row picks its BAND instead (bgBandList, only the bands this
-       *  capture holds); an NDB row stores hz 0. Only where the radio's band list is unknown (its radio offline) does a
-       *  Band row keep a typed frequency, which names its band (the server's own rule). */
+       *  capture holds); an NDB row stores hz 0. Only where no band list arrived at all (bgBandList: the radio's
+       *  own, else the server's) does a Band row keep a frequency box, which names its band (the server's own rule). */
       const fixed = bgDecoderSetsFreq(v.dec);
       if (fixed) v.mode = "usb";
       const bands = v.dec === "spots-band" ? bgBandList() : null;

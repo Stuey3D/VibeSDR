@@ -42,6 +42,11 @@ import { WebView } from 'react-native-webview';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { appAlert } from './AppAlert';
+import { isMacHost } from '../services/macAudio';
+
+/** ★ The bottom strip the Mac draws over an iPad app's window, measured from Stuart's beta27 screenshot (~33 pt) —
+ *  kept clear even where the Mac reports no bottom inset. */
+const MAC_BOTTOM_FLOOR = 34;
 
 export interface BrowserOverlayProps {
   url:     string | null;
@@ -55,6 +60,8 @@ export interface BrowserOverlayProps {
   backLabel?: string;
   /** Top safe-area inset, MEASURED BY THE PARENT — see the note above the component. */
   topInset?: number;
+  /** Bottom safe-area inset, measured by the parent for the same reason — see `bottomPad` below. */
+  bottomInset?: number;
 }
 
 /** ★★★ MEASURED BY THE PARENT, because the insets HOOK RETURNS 0 INSIDE A MODAL — which is why
@@ -63,7 +70,7 @@ export interface BrowserOverlayProps {
  *  status bar and the clock (build 70). The parent is not in a modal and always knows the real
  *  inset, so passing it in removes the timing dependence entirely rather than hoping a frame is
  *  enough. Falls back to the SafeAreaView behaviour when not supplied. */
-export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS, backLabel, topInset }: BrowserOverlayProps) {
+export default function BrowserOverlay({ url, title, onClose, allowSave, injectCSS, backLabel, topInset, bottomInset }: BrowserOverlayProps) {
   // ★★ THIS IS SOMEONE ELSE'S PAGE. Every VibeSDR keyboard and controller shortcut is
   // switched off for as long as it is SHOWING — see PanelNav. Firing our own actions under a
   // page we did not write is worse than doing nothing, because the user is looking at that
@@ -101,6 +108,7 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
   const [progress, setProgress] = useState(0);   // 0..1 page-load progress (Safari-style bar)
   const [loading,  setLoading]  = useState(true); // spinner while the page loads (slow-first-byte)
   if (!url) return null;
+  const bottomPad = bottomInset != null ? Math.max(bottomInset, isMacHost() ? MAC_BOTTOM_FLOOR : 0) : undefined;
   // Hand the currently-open URL to the OS share sheet — for an image (a tapped
   // file in the OWRX gallery) iOS/Android offer "Save Image" / "Save to Files".
   const onSave = () => { Share.share({ url: curUrl ?? url }).catch(() => {}); };
@@ -118,7 +126,15 @@ export default function BrowserOverlay({ url, title, onClose, allowSave, injectC
       {/* SafeAreaView (native, measures the modal's own window) — the
           useSafeAreaInsets hook returns 0 inside an RN Modal, which clipped
           the bar under the Dynamic Island. */}
-      <SafeAreaView style={styles.root} edges={topInset != null ? [] : ['top']}
+      {/* ★★★ AND THE BOTTOM EDGE (Stuart, V12 beta27, 2026-10-28: "couldn't reach the save buttons" on the Setup
+          page). The WebView ran to the very bottom of the window, so a page's FIXED footer — the setup page's Save
+          radio settings / Save and start bar — sat under whatever the system draws in the bottom safe area: the home
+          indicator on an iPhone or iPad, and on the Mac a dark rounded strip that covered the buttons outright.
+          The page is someone else's and cannot know our window, so the WebView now ends ABOVE the bottom inset (the
+          root's black shows beneath it). Measured by the parent, as the top is (never less than the Mac's strip on a
+          Mac); the native edge otherwise. */}
+      <SafeAreaView style={[styles.root, bottomPad != null && { paddingBottom: bottomPad }]}
+                    edges={topInset != null ? (bottomPad != null ? [] : ['bottom']) : (bottomPad != null ? ['top'] : ['top', 'bottom'])}
                     onTouchStart={() => setKeyNote(false)}>
         {/* ★ Only when a key is pressed — see keyNote. Sits under the bar so it reads as
             part of this page's chrome rather than an alert over the receiver's own UI. */}
