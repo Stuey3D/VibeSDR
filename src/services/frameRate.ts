@@ -61,7 +61,7 @@ export function setSteadyRefresh(hz: number): void {
   try { fn(hz); } catch { /* old binary */ }
 }
 
-export { steadyHzFor, STEADY_RATES, FEED_RATES } from '../utils/steadyHz';
+
 
 /** Tell the native side the cap: 60 or 30, or 0 for the display's own maximum. */
 export function applyFrameRateCap(hz: number): void {

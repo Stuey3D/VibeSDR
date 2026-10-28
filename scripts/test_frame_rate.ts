@@ -116,22 +116,9 @@ for (const m of ['setFrameRateCap', 'maxRefreshRate']) {
 ok('iOS wraps all three display-link entry points',
    ['displayLinkWithTarget:selector:', 'setPreferredFrameRateRange:', 'setPreferredFramesPerSecond:']
      .every(s => ios.includes(`@selector(${s})`)));
-// ★ STEADY REFRESH while the waterfall scrolls (2026-10-28, Stuart's ProMotion Mac: the panel wandered 81–99 Hz → judder)
-ok('iOS exports setSteadyRefresh', /RCT_EXPORT_METHOD\(setSteadyRefresh:/.test(ios));
-ok('steady pins every link at one rate (min = max = preferred), under the cap', /gFpsSteady > 0[\s\S]{0,200}MIN\(gFpsSteady, cap\)[\s\S]{0,120}CAFrameRateRangeMake\(top, top, top\)/.test(ios));
-ok('the waterfall turns it on with rows and off when they stop, on backgrounding and on unmount',
-   (() => { const w = read('src/components/WaterfallView.tsx'); return /noteRowsFlowing\(\)/.test(w) && /setSteadyRefresh\(0\)[\s\S]{0,40}\}, 1000\)/.test(w)
-     && /if \(bg\) \{[\s\S]{0,120}setSteadyRefresh\(0\)/.test(w) && /useEffect\(\(\) => \(\) => \{[\s\S]{0,120}setSteadyRefresh\(0\)/.test(w); })());
-// ★ POWER (Stuart 2026-10-28): 120 only on interaction; at rest a whole multiple of the feed, from 30
-{ const { steadyHzFor } = await import('../src/utils/steadyHz.ts').catch(() => ({ steadyHzFor: null as any }));
-  if (steadyHzFor) {
-    const cases: [number, number][] = [[20, 40], [19.6, 40], [21, 40], [10, 30], [15, 30], [30, 30], [29.2, 30], [25, 60],
-      [40, 40], [60, 60], [17.5, 60], [0, 60]];
-    const bad = cases.filter(([f, want]) => steadyHzFor(f) !== want).map(([f, want]) => `${f} → ${steadyHzFor(f)} (want ${want})`);
-    ok('steadyHzFor: ONE rate whether interacting or not — 30/40/60, a whole multiple of the (snapped) feed', bad.length === 0, bad.join('; '));
-  } else ok('steadyHzFor importable', false); }
-ok('Android Platform: no-op (the native method is iOS-only)', /native\(\)\?\.setSteadyRefresh/.test(svc));
-ok('on a Mac the steady pin is the full rate (macOS ignores a low one)', /isiOSAppOnMac[\s\S]{0,60}if \(onMac\) want = 120/.test(ios));
+// ★ NO REFRESH PIN from the waterfall (Stuart 2026-10-28: ProMotion varies its rate to suit; a fixed screen has vsync)
+ok('the waterfall pins no refresh rate (ProMotion left to vary)', !/setSteadyRefresh\(/.test(read('src/components/WaterfallView.tsx')));
+ok('iOS still exports setSteadyRefresh (unused, kept for a screen that needs a pin)', /RCT_EXPORT_METHOD\(setSteadyRefresh:/.test(ios));
 ok('Android re-applies on resume', /onHostResume\(\)\s*\{\s*applyFrameRateCap\(\)/.test(android));
 
 console.log(`frame rate: ${passes} passed, ${fails} failed`);

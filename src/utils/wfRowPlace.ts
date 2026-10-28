@@ -312,6 +312,10 @@ export function newFanState(rows: number): FanState {
  *    did back in v2 … oddly delayed". v2 made the whole change within ONE frame interval. Every eased row keeps the
  *    geometry it was drawn at, like any history row. */
 export const ZOOM_EASE_ROWS = 4;
+/** Rows a tune past MOTION_MAX_FRAC eases over: 8 per view width moved, 2…6 (an eighth of the view 2, half of it 4). */
+export function tuneEaseRows(frac: number): number {
+  return Math.max(2, Math.min(6, Math.round(frac * 8)));
+}
 export function zoomEaseRows(k: number): number {
   return Math.max(1, Math.min(6, Math.round(Math.abs(Math.log2(k)) * ZOOM_EASE_ROWS)));
 }
@@ -411,7 +415,19 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
   //     remains the thin line"). The first build (v2) never re-mapped: new rows arrive at the new zoom, old ones keep
   //     theirs, so a station FANS out/in down the waterfall. Only a JUMP at the same span (a bookmark, a typed
   //     frequency, a spin faster than the radio) moves the history into place.
-  if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && Math.abs(lo - st.lastLo) > st.lastSpan * MOTION_MAX_FRAC) {
+  // ★★ A TUNE TOO BIG TO JOIN IN ONE ROW BUT WITHIN THE VIEW EASES TOO (Stuart, 2026-10-28, the iPhone: "the tuning still
+  //    looks a little sliced up so wonder if that can be blended like the zoom"). A drum spin moves the view more than
+  //    MOTION_MAX_FRAC between rows; that used to count as a JUMP and shift the whole history at once — a horizontal slice
+  //    across every trail. Now the new rows are drawn sliding across from where the last was drawn (the zoom's ease, the
+  //    span unchanged), the history stays as drawn and the shader joins row to row. Only a move of a whole view or more
+  //    (a bookmark, a typed frequency — nothing on screen in common) is a jump.
+  const moved = Math.abs(lo - st.lastLo);
+  if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * MOTION_MAX_FRAC && moved < st.lastSpan) {
+    if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
+    st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
+    st.eT = st.easeLeft = Math.max(tuneEaseRows(moved / st.lastSpan), st.easeLeft > 0 ? st.easeLeft : 0);
+  }
+  if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
     const k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
     st.stepC += st.stepK * c; st.stepK *= k;   // x0 = c1 + k1·(c2 + k2·x2)
     st.easeLeft = 0;                           // a jump re-maps everything to the new view: no zoom left to ease

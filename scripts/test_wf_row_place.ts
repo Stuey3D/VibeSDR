@@ -182,18 +182,26 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     for (let i = 1; i <= 12; i++) { vc -= 2_300; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw); }
     let bad = 0; for (let f = from - 1; f < mfr - 1; f++) { const h = ms.h[f % MR], a = mcol(f), b = mcol(f + 1); if (Math.abs(a + h - b) > 1.01 || h === 0) bad++; }
     ok('motion (view pan over a fixed capture): every pair carries the pan', bad === 0, `${bad}`); }
-  // a JUMP (bookmark, typed frequency, a spin faster than the radio): re-mapped, never a slice
+  // ★★ A TUNE PAST MOTION_MAX_FRAC BUT WITHIN THE VIEW EASES (Stuart 2026-10-28: "the tuning still looks a little sliced
+  //    up … blended like the zoom"): the history stays as drawn, the new rows slide across, no screen move, no slice
   { for (let i = 0; i < 5; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
-    const jf = mfr; vc += vbw * MOTION_MAX_FRAC * 1.5; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
+    const jf = mfr, before = mcol(jf - 3); vc += vbw * MOTION_MAX_FRAC * 1.5;
+    for (let i = 0; i < 8; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
     const live = N / 2 + (CARRIER - vc) / (vbw / N);
-    let off = 0; for (let f = jf - 5; f < jf; f++) if (Math.abs(mcol(f) - live) > 1.01) off++;
-    ok('NO SLICE on a jump: every history row is shifted into place (re-mapped like a zoom)', off === 0, `${off} rows`);
-    ok('…and the jump is not interpolated (a gap is honest, a smear is not)', ms.h[(jf - 1) % MR] === 0);
-    const d = img(), s0 = ((jf - 1) % MR) * N, shift = Math.floor(vbw * MOTION_MAX_FRAC * 1.5 / (vbw / N));
-    let edge = 0, kept = 0; for (let x = 0; x < N; x++) { if (x >= N - shift) { if (d[s0 + x] !== 0) edge++; } else if (d[s0 + x] !== 0) kept++; }
-    ok('GAPS ONLY ON A JUMP: black exactly where the radio has not captured yet, the rest of the row kept', edge === 0 && kept === N - shift, `${edge} edge, ${kept} kept`);
+    ok('a drum-spin tune (3/16 of the view): the history stays as drawn (no slice)', mcol(jf - 3) === before, `${mcol(jf - 3)} vs ${before}`);
+    const cs: number[] = []; for (let f = jf - 1; f < mfr; f++) cs.push(mcol(f));
+    let mono = true; for (let i = 1; i < cs.length; i++) if ((cs[i] - cs[i - 1]) * (live - cs[0]) < 0) mono = false;
+    ok(`…the new rows slide across to the live column and stay (${cs.join(' ')})`, mono && Math.abs(cs[cs.length - 1] - live) <= 1.01);
     const st = takeFanStep(mf);
-    ok('…and the UI is handed the slide to ease (k 1, c = the jump\'s share of the width)', st[0] === 1 && Math.abs(st[1] - MOTION_MAX_FRAC * 1.5) < 1e-9, `${st}`); }
+    ok('…and the screen is not moved (no ease handed to the UI)', st[0] === 1 && st[1] === 0, `${st}`); }
+  // a JUMP (a bookmark, a typed frequency — a whole view or more): the history is moved (out of the view: the honest gap)
+  { for (let i = 0; i < 10; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
+    const jf = mfr; vc += vbw * 1.2; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
+    const d = img(); let lit = 0; for (let f = jf - 5; f < jf; f++) { const s0 = (f % MR) * N; for (let x = 0; x < N; x++) if (d[s0 + x] !== 0) lit++; }
+    ok('a JUMP of 1.2 views: the old rows are moved with it — out of the view, black (the gap the rule allows), no slice', lit === 0, `${lit} lit`);
+    ok('…and the jump is not interpolated', ms.h[(jf - 1) % MR] === 0);
+    const st = takeFanStep(mf);
+    ok('…and the UI is handed the slide to ease (k 1, c = 1.2)', st[0] === 1 && Math.abs(st[1] - 1.2) < 1e-9, `${st}`); }
   // a small tune is a BEND, not a re-map (the history stays where it was drawn — #57)
   { const from = mfr; vc += 2_000; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
     const st = takeFanStep(mf);
@@ -330,36 +338,23 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
       if (prev >= 0 && Math.abs(best - prev) > 6) gaps++; prev = best; }
     ok('the zoom: the shader joins a ×2 step into one line (the carrier sweeps 100 → 200 columns, steps ≤ 6 per line)', gaps === 0 && Math.abs(prev - (m + 200)) <= 1, `${gaps} gaps, ends ${prev}`); }
 
-  // a JUMP at the same span (a bookmark, a typed frequency): the history IS moved into place — still visible, no slice
-  for (let i = 0; i < 30; i++) fpush(v.c, v.bw);
+  // a TUNE of 0.4 of the view at the same span: eased like a zoom — the history stays as drawn, the new rows land live
+  const preTune = fr, histTune = dlit(preTune - 3);
   v = { c: v.c + v.bw * 0.4, bw: v.bw };
-  const preJump = fr;
-  fpush(v.c, v.bw);
-  { const bad = offCol(preJump - 6, fr);
-    ok('the jump: a same-span jump moves the history to the live column', bad.length === 0 && fan.disp !== null, bad.slice(0, 4).join('; ')); }
-
+  for (let i = 0; i < 8; i++) fpush(v.c, v.bw);
+  { const bad = offCol(fr - 3, fr); const h2 = dlit(preTune - 3);
+    ok('the tune ease: a 0.4-view tune leaves the history as drawn and the new rows land at the live column', bad.length === 0 && !!histTune && !!h2 && h2[0] === histTune[0], bad.slice(0, 4).join('; ')); }
   // MOTION with jumped history on screen: every moved pair's h predicts the displayed move
   { const from = fr; const cs: number[] = [];
     for (let i = 1; i <= 15; i++) { v = { c: v.c + 1_500, bw: v.bw }; cs.push(v.c); const rc = cs[Math.max(0, cs.length - 3)]; fpush(rc, v.bw); }
     let bad = 0; for (let f = from; f < fr - 1; f++) { const p = dlit(f), q = dlit(f + 1); if (!p || !q || Math.abs(p[0] + gl.h[f % R] - q[0]) > 1.01) bad++; }
-    ok('the jump + motion: a fast tune over moved history — each pair\'s h is the move on screen', bad === 0, `${bad}`); }
+    ok('the tune + motion: a fast tune after the eased one — each pair\'s h is the move on screen', bad === 0, `${bad}`); }
 
   // RING rows after the last jump, every row is the identity: the second buffer is dropped
   for (let i = 0; i < R; i++) fpush(v.c, v.bw);
-  ok('the jump: once the moved history has scrolled away, the display buffer is freed', fan.disp === null && D() === S);
+  ok('once the eased rows have scrolled away, the display buffer is freed', fan.disp === null && D() === S);
 
-  // only the rows that can be ON SCREEN are made at a jump; a resize that shows more makes the rest (fanRefresh)
-  { const S2 = new Uint8Array(N * (R + MOTION_ROWS)), g2 = newMotionState(R, N), f2 = newFanState(R); let k = 0, w = { c: 1_030_000, bw: 200_000 };
-    const p2 = (vis: number) => { const r = new Uint8Array(N).fill(40); const bin = Math.round((CARRIER - w.c) / (w.bw / N)) + N / 2; if (bin >= 0 && bin < N) r[bin] = 230;
-                                   placeRow(S2, R, N, k++, r, w.c, w.bw / N, w.c, w.bw, g2, f2, vis); };
-    for (let i = 0; i < 200; i++) p2(64);
-    w = { c: 1_080_000, bw: 200_000 }; p2(64);
-    const want = Math.round((CARRIER - (w.c - w.bw / 2)) / (w.bw / N));
-    const col = (f: number) => { const d = fanImage(f2, S2), s0 = (f % R) * N; for (let x = 0; x < N; x++) if (d[s0 + x] >= 200) return x; return -1; };
-    let shown = 0, below = 0; for (let f = k - 64; f < k; f++) if (Math.abs(col(f) - want) <= 1) shown++; for (let f = 0; f < k - 70; f++) if (Math.abs(col(f) - want) <= 1) below++;
-    ok('the jump: the rows on screen (64 visible) are moved and the off-screen rest left for later', shown === 64 && below === 0, `${shown} shown, ${below} below`);
-    const did = fanRefresh(f2, S2, N, R, k, R); let all = 0; for (let f = 0; f < k; f++) if (Math.abs(col(f) - want) <= 1) all++;
-    ok('the jump: a resize that shows the whole ring moves every row (fanRefresh)', did && all === k && !fanRefresh(f2, S2, N, R, k, R), `${all}/${k}`); }
+  // (the jump's rows-on-screen / fanRefresh cases: the full-capture layer section's 3-view pan below)
 
   // the pure maps: a pinch in and back out returns to the EXACT identity
   { const A = new Float64Array([1]), B = new Float64Array([0]); let lo = 900_000, sp = 200_000;
@@ -371,7 +366,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     const row = new Uint8Array(N); for (let i = 0; i < N; i++) row[i] = 40 + (i * 7919 % 50);
     let c = 1e6; for (let i = 0; i < RR; i++) placeRow(SS, RR, N, k++, row, c, 200_000 / N, c, 200_000, g2, f2);
     const steps = 20, t0 = performance.now();
-    for (let i = 0; i < steps; i++) { c += (i % 2 ? -1 : 1) * 60_000; placeRow(SS, RR, N, k++, row, c, 200_000 / N, c, 200_000, g2, f2); }
+    for (let i = 0; i < steps; i++) { c += (i % 2 ? -1 : 1) * 240_000; placeRow(SS, RR, N, k++, row, c, 200_000 / N, c, 200_000, g2, f2); }
     console.log(`  jump cost (1024-row ring, every row re-made, this JS engine): ${((performance.now() - t0) / steps).toFixed(2)} ms a jump`); }
 }
 

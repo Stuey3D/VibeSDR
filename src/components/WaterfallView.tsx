@@ -79,8 +79,6 @@ const JB_MAX_QUEUE_SLOTS = 5;
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap } from '../services/uiCadence';
-import { setSteadyRefresh } from '../services/frameRate';
-import { steadyHzFor } from '../utils/steadyHz';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
@@ -1171,20 +1169,13 @@ function WaterfallView({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
 
-  /** ★ STEADY REFRESH while rows flow (services/frameRate.ts setSteadyRefresh — a ProMotion panel left to wander put the
-   *  rows on an uneven beat). On with a row, off 1 s after the last one, on backgrounding and on unmount. */
-  const steadyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const noteRowsFlowing = useCallback(() => {
-    // ONE rate while rows flow — a whole multiple of the feed, the same on a gesture (steadyHzFor)
-    setSteadyRefresh(steadyHzFor(1000 / Math.max(1, avgFrameMs.current)));
-    if (steadyTimer.current) clearTimeout(steadyTimer.current);
-    steadyTimer.current = setTimeout(() => { steadyTimer.current = null; setSteadyRefresh(0); }, 1000);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useEffect(() => () => {
-    if (steadyTimer.current) clearTimeout(steadyTimer.current);
-    setSteadyRefresh(0);
-  }, []);
+  /** ★★★ NO REFRESH PIN (Stuart, 2026-10-28, after a day of trying them — feed-matched 40 Hz, 120, a different rate on a
+   *  gesture): "we dont need to lock to fixed FPS on pro motion screens … on pro motion we can take advantage of the way
+   *  they change refresh rate and we can transition through weird numbers like 53 45fps"; a normal screen has a fixed
+   *  rate, so vsync is already the steady beat. The display links ask for what they always did (up to 120 on ProMotion,
+   *  the FRAME RATE setting's cap respected) and the panel varies to land each row when it is due. The native
+   *  setSteadyRefresh stays (unused) in case a screen ever needs a pin. */
+
 
   /** Build the waterfall texture from the ring as it stands and hand it to the shader. */
   const publishRing = useCallback(() => {
@@ -1210,7 +1201,6 @@ function WaterfallView({
     const ms = motionSt.current!;
     jsPendGen.current += 1;
     jsPending.value = { gen: jsPendGen.current, img, avail: frameCount.current, moLo: ms.lo, moHi: ms.hi, k, c };
-    noteRowsFlowing();
     if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
@@ -1662,7 +1652,6 @@ function WaterfallView({
       if (bg) {
         stopRevealStepper();
         stopSpecTween();
-        setSteadyRefresh(0);
       }
     });
     return () => sub.remove();
