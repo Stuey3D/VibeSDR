@@ -71,12 +71,12 @@ eq('auto follows its rung', frameRateCapHz({ frameRate: 'auto' }, 30), 30);
 eq('a pick ignores the auto rung', frameRateCapHz({ frameRate: '60' }, 30), 60);
 
 // ── AUTO's rule ──────────────────────────────────────────────────────────────
-eq('rungs on 120 Hz: none → 60 → 30', autoFrameRungs(120), [0, 60, 30]);
+eq('rungs on 120 Hz: 60 → 30 (AUTO is 60, Stuart 2026-10-28)', autoFrameRungs(120), [60, 30]);
 eq('rungs on 60 Hz: none → 30', autoFrameRungs(60), [0, 30]);
 eq('Android AUTO on a 120 Hz panel: 60, then 30', autoFrameRungs(120, 'android'), [60, 30]);
 eq('Android AUTO on a 60 Hz panel: the panel, then 30', autoFrameRungs(60, 'android'), [0, 30]);
 eq('Android AUTO with the panel unknown: no cap, then 30', autoFrameRungs(null, 'android'), [0, 30]);
-eq('iOS ProMotion keeps its maximum', autoFrameRungs(120, 'ios'), [0, 60, 30]);
+eq('iOS ProMotion AUTO is 60 too (120 is the manual pick)', autoFrameRungs(120, 'ios'), [60, 30]);
 ok('a still screen teaches nothing', !autoWindowLate(20, 20));
 ok('a fast phone (1 % late) stays', !autoWindowLate(300, 3));
 ok('the Tab at 60 (≈ 5 % late) stays', !autoWindowLate(300, 15));
@@ -119,7 +119,7 @@ ok('iOS wraps all three display-link entry points',
 // ★ NO REFRESH PIN from the waterfall (Stuart 2026-10-28: ProMotion varies its rate to suit; a fixed screen has vsync)
 // ★ HELD AT 120 while rows flow, the same on a touch (Stuart 2026-10-28: 507 held — "judder seems to be gone"; free — "stuttering")
 { const w = read('src/components/WaterfallView.tsx');
-  ok('the waterfall holds ONE fixed 60 while rows flow (a multiple of every row rate), the same on a touch', /setSteadyRefresh\(60\)/.test(w) && !/lastInteractAt/.test(w.split('const noteRowsFlowing')[1].slice(0, 900)));
+  ok('the waterfall holds the FRAME RATE setting\'s rate (asks 120, the native cap decides) — the same on a touch', /setSteadyRefresh\(120\)/.test(w) && !/lastInteractAt/.test(w.split('const noteRowsFlowing')[1].slice(0, 900)));
   ok('…released 1 s after the last row, on backgrounding and on unmount', /setSteadyRefresh\(0\); \}, 1000\)/.test(w) && /if \(bg\) \{[\s\S]{0,120}setSteadyRefresh\(0\)/.test(w) && /useEffect\(\(\) => \(\) => \{[\s\S]{0,120}setSteadyRefresh\(0\)/.test(w)); }
 ok('iOS still exports setSteadyRefresh (unused, kept for a screen that needs a pin)', /RCT_EXPORT_METHOD\(setSteadyRefresh:/.test(ios));
 ok('Android re-applies on resume', /onHostResume\(\)\s*\{\s*applyFrameRateCap\(\)/.test(android));

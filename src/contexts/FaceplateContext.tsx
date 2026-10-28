@@ -191,7 +191,7 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   // ★★ AUTO (Stuart's spec, 2026-10-11/12): count late frames in ~5 s windows; two late windows in a row step one rung
   //   down (constants/faceplate.ts autoWindowLate / autoFrameRungs), never back up within the session. Android only —
   //   frameWatchAvailable says why. The rung is NOT stored: every launch measures afresh.
-  const [autoHz, setAutoHz] = useState(Platform.OS === 'android' ? 60 : 0);   // ★ Android AUTO is 60 from the first frame (autoFrameRungs)
+  const [autoHz, setAutoHz] = useState(60);   // ★ AUTO is 60 from the first frame — Android since 10-13, iOS since 10-28 (autoFrameRungs)
   const [maxRefreshHz, setMaxRefreshHz] = useState<number | null>(null);
   const autoOn = settings.frameRate === 'auto';
   useEffect(() => {

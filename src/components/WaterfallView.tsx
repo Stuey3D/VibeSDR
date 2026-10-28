@@ -1199,12 +1199,11 @@ function WaterfallView({
    *  NOW 60, NOT 120 (below). Released 1 s after the last row, on backgrounding and on unmount. */
   const steadyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noteRowsFlowing = useCallback(() => {
-    // ★★★ ONE FIXED 60 while rows flow — the same during and after a touch (Stuart, 2026-10-28, after trying 120 held,
-    //     40, ProMotion free and a 120→60 step: "seems like a lot of tradeoffs for little gain" / "keep 60fps everywhere").
-    //     60 is a whole multiple of EVERY row rate the waterfall uses (wfRowTarget ROW_RATES 10, 12, 15, 20, 30, 60), so
-    //     rows land on an even beat whatever the feed; nothing switches, so nothing can judder; half 120's power; the
-    //     needle and LED meters (on the display's frames) stay smooth.
-    setSteadyRefresh(60);
+    // ★★★ THE FRAME RATE SETTING IS THE RATE (Stuart, 2026-10-28: "keep the 120/60/30 options and they are what we run
+    //     at … default to 60"). Asked for 120 here; the native side holds every link at min(this, the setting's cap) —
+    //     AUTO is 60 (constants/faceplate autoFrameRungs), 120 Hz = the panel's maximum, 60, 30. One fixed rate during and
+    //     after a touch — nothing switches, so nothing judders (the day's trials: a rate changing on interaction did).
+    setSteadyRefresh(120);
     if (steadyTimer.current) clearTimeout(steadyTimer.current);
     steadyTimer.current = setTimeout(() => { steadyTimer.current = null; setSteadyRefresh(0); }, 1000);
   }, []);
