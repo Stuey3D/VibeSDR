@@ -25,6 +25,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
 import { addModeIcon } from './modeIconDom';   // ★ V12 mode icons
+import { layoutDecoderBands, decoderBandsDial } from './decoderBandsDom';   // ★ V12 decoder panel by band
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the contract module the app reads too, and the browser's panel.
 import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeLabel, icomClientMode, icomBanner,
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
@@ -1932,6 +1933,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         const id = (b.dataset.dec || '').toLowerCase();
         b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'jtty' && !jttyCap);
       }
+      if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
        *  DAB never produces a spot, so both buttons were dead weight there (Stuart, 2026-09-17).
        *  Switched off mid-session: the subscription is dropped too, or the box keeps filling. */
@@ -10843,6 +10845,8 @@ function togglePanel(id: string) {
   const open = $(id).classList.contains('open');
   closePanels(false);
   if (!open) $(id).classList.add('open');
+  // ★★ V12: the decoder panel opens on the band of the dial (HF / VHF / UHF), the far-off decoders dimmed
+  if (!open && id === 'decodersPanel') layoutDecoderBands(spec?.frequency ?? NaN, true);
 }
 
 /** ★★★ THE CONTROLLER GUIDE (padGuide.ts, 2026-10-19) — from the menu's CONTROLLER GUIDE key and from SELECT on a pad,
@@ -17322,6 +17326,7 @@ function renderFreq() {
   updateVts();
   updateMediaSession();
   const hz = Math.round(spec.frequency);
+  if (isPanelOpen('decodersPanel')) decoderBandsDial(hz);   // ★ V12: re-dim the decoders as the dial moves
   // ★ The readout itself is the card's (#mFreq / #mChan via cardFreqText(), on mobile.ts's poll).
   /* ★★ THE CARD'S INPUT FOLLOWS THE RADIO TOO. It was filled once when the panel opened and never
      again, so tuning from the search list left the box showing where you USED to be — 96.600 while

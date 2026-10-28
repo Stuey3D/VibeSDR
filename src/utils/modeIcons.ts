@@ -20,12 +20,12 @@
  *   spots       FT8 / DIGITAL SPOTS (FT4, WSPR, JS8…)  (a globe with spots on it)
  *   broadcast   DAB
  *   clock       TIME (MSF, DCF77, WWV…)
- *   yagi        the AMATEUR group's heading in the decoder panel (utils/decoderBands)
+ *   radio       the AMATEUR group's heading in the decoder panel (utils/decoderBands)
  */
 
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
-  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'yagi';
+  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -106,9 +106,11 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
     { d: 'M6 7a11 11 0 0 1 11 11' },
     { d: 'M6 2a16 16 0 0 1 16 16', w: 1.5 },
   ],
-  yagi: [   // a beam antenna on its mast — the AMATEUR group's heading
-    { d: 'M3 8h18M12 8v13.5M8.5 21.5h7' },
-    { d: 'M5.5 4v8M10 3v10M14.5 4v8M19 5v6', w: 1.6 },
+  radio: [   // a transceiver with its whip — the AMATEUR group's heading
+    { r: [2.5, 9, 19, 12, 2] },
+    { d: 'M6.5 9 17 3' },
+    { c: [8.5, 15, 3], w: 1.6 },
+    { d: 'M14.5 12.5h4M14.5 15h4M14.5 17.5h4', w: 1.5 },
   ],
   clock: [
     { c: [12, 12, 9] },
@@ -139,7 +141,7 @@ export function modeIconFor(id: string): ModeIconName | null {
     case 'ft8': case 'ft4': case 'wspr': case 'js8': case 'jt65': case 'jt9': case 'q65': case 'fst4': case 'fst4w':
     case 'msk144': case 'digi': case 'spots': return 'spots';
     case 'dab': case 'rds': case 'advrds': return 'broadcast';
-    case 'amateur': return 'yagi';
+    case 'amateur': return 'radio';
     case 'time': return 'clock';
     default: return null;
   }
