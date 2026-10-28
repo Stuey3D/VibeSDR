@@ -14,7 +14,7 @@
 //   vibe_rnskia exports in the patched react-native-skia), so this core builds and tests on the host.
 #pragma once
 #include "wf_row_target.h"
-#include "wf_zoom_fan.h"   // + wf_glide.h
+#include "wf_zoom_fan.h"   // + wf_motion.h
 #include "spectrum_processor.h"
 #include <atomic>
 #include <cmath>
@@ -47,8 +47,10 @@ struct UiUpdate {
     int      quant = 1;            // uQuant
     double   avgFrameMs = 150;     // uAvgMs
     uint32_t scrollGen = 0;        // changed → apply the LATEST scroll command:
-    bool     glide = false;        //   true  = start a glide of glideDur (scrollFrac 0 → 1)   (WaterfallView startGlide)
-    double   glideDur = 100;       //   false = stop the glide, scrollFrac = 1                  (stopGlide + settle)
+    bool     glide = false;        //   (unused by the UI since 2026-10-28 — the display driver paces both ways)
+    double   glideDur = 100;
+    double   moLo = 1, moHi = 0;   // the image's motion range (absolute frames; lo > hi = none) — uMoLo/uMoHi
+    double   fanK = 1, fanC = 0;   // the fans' screen move since the last image the UI took (x_old = fanC + fanK·x)
     // Spectrum
     uint32_t specGen = 0;          // changed → specTarget is new
     std::vector<float> specTarget; // the decimated trace target (specToSv)
@@ -143,9 +145,9 @@ private:
     std::deque<Frame> jbQueue_;
     double jbArrivalMs_ = 150, jbLastArrival_ = 0, jbDueAt_ = -1;
     bool jbPrefill_ = true;
-    std::vector<uint8_t> ring_;           // RING_W × RING_ROWS
+    std::vector<uint8_t> ring_;           // RING_W × (RING_ROWS + MOTION_ROWS): the ring + the motion rows the image carries
     std::vector<uint8_t> rowBuf_;         // resample scratch
-    vibewf::GlideState trail_{RING_W};    // previous row's placement + glide scratch (wf_glide.h)
+    vibewf::MotionState motion_{RING_ROWS, RING_W};   // each slot's placement + its move to the next row (wf_motion.h)
     vibewf::FanState fan_{RING_ROWS};     // the zoom fan: per-row maps + the displayed ring, made at the first zoom (wf_zoom_fan.h)
     double frameCount_ = 0;
     bool ringDirty_ = false;
@@ -163,6 +165,9 @@ private:
 
     // Outbox for the UI (under mx_)
     void* outImage_ = nullptr; double outHead_ = 0; bool texReady_ = false;
+    double imgK_ = 1, imgC_ = 0;                     // the fans' screen move taken with the image just made (engine thread)
+    double imgMoLo_ = 1, imgMoHi_ = 0;               // …and its motion range
+    double outK_ = 1, outC_ = 0, outMoLo_ = 1, outMoHi_ = 0;   // composed for the UI until it takes an image (mx_)
     int outQuant_ = 1; double outAvgMs_ = 150;
     uint32_t scrollGen_ = 0; bool glide_ = false; double glideDur_ = 100;
     uint32_t specGen_ = 0; std::vector<float> outSpec_; bool specHidden_ = false;

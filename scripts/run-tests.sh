@@ -513,6 +513,13 @@ if node --no-warnings scripts/test_wf_pacing.ts; then pass=$((pass+1)); else fai
 # ★★★ GitHub #57 / Stuart's hard rule: the APP's waterfall history — each row placed once against its view, a locked tune
 #    and a zoom draw one continuous (bending / fanning) trail, nothing older is ever rewritten. Pure logic.
 if node --no-warnings scripts/test_wf_row_place.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE APP'S WATERFALL SHADER, RUN FOR REAL (CanvasKit, the same WF_SKSL): a swept station is ONE continuous trail
+#    (view pan AND tuner retune), control: dashes without motion compensation; steady rows pixel-identical; a zoom fans
+#    with no slices and the screen ease has no seam; a resize keeps the rows. Skips if canvaskit-wasm is absent.
+if node --no-warnings scripts/test_wf_shader_motion.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ A STEADY PACE through a tune (wfPace.ts, Stuart 2026-10-28): rows/s the same settled, interacting and after; no
+#    lurch at the hand-overs; continuous every 120 Hz frame while interacting; a paused feed comes back at the same pace.
+if node --no-warnings scripts/test_wf_pace.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ The web waterfall's ZOOM FAN (web/client/src/wfZoomFan.ts): a zoom re-maps the history to the new span, a tune
 #    does not move it, in-then-out is lossless (Stuart 2026-10-27: zooming SLICED the web waterfall).
 if node --no-warnings scripts/test_wf_zoom_fan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
