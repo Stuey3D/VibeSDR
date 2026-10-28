@@ -531,6 +531,10 @@ function WaterfallView({
    *    grows a pixel before it ever maps past RING_ROWS. */
   const devRowPx  = Math.max(1, Math.round(PixelRatio.get()), Math.ceil(wfRenderH * PixelRatio.get() / (RING_ROWS - 16)));
   const shaderRows = wfRenderH * PixelRatio.get() / devRowPx;   // uVisibleRows: rows across uDrawH, each devRowPx tall
+  // ★★ The shader's pixel footprint, computed HERE on the JS thread: wfUniforms is a UI-thread worklet and PixelRatio.get()
+  //   is not callable there — calling it inside threw on the first frame and crashed V12 beta27 on connect.
+  const uRowPxV = shaderRows / Math.max(1, wfRenderH * PixelRatio.get());   // = 1 / devRowPx
+  const uColPxV = width * PixelRatio.get() / RING_W;
 
   // Waterfall line rate. Settled rows are drawn as WHOLE-PIXEL pushes (no
   // subpixel translate — razor-sharp lines, and no fractional-pixel shimmer,
@@ -881,11 +885,11 @@ function WaterfallView({
     uContrast: uContrastSv.value,
     uMoLo:     uMoLoSv.value,
     uMoHi:     uMoHiSv.value,
-    uRowPx:    shaderRows / Math.max(1, wfRenderH * PixelRatio.get()),   // = 1 / devRowPx
-    uColPx:    width * PixelRatio.get() / RING_W,
+    uRowPx:    uRowPxV,
+    uColPx:    uColPxV,
     uZA:       uZASv.value,
     uZB:       uZBSv.value,
-  }), [width, wfRenderH, shaderRows]);
+  }), [width, wfRenderH, shaderRows, uRowPxV, uColPxV]);
 
   // ── Spectrum tween (smooth tune, settled state) ────────────────────────────
   // Data frames arrive at ~10Hz (or ~3Hz under the idle divisor); setting the
