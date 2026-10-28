@@ -67,6 +67,9 @@ import { LinkManager, LADDERS, type LinkMode } from './vibeLinkManager';
 export const LADDERS_FOR = LADDERS;
 import { USER_AGENT, APP_PROTO } from '../constants/version';
 import { NativeSpecSocket, nativeSpecSocketAvailable } from './nativeSpecSocket';
+import { loadWideCaps, noteWideCaps, wideSuffix } from './wideCaps';   // ★ the full-capture row (SPWB) — who sends it
+import { emitWide } from './wideRowBus';
+import { isWideFrame } from '../utils/wfWide';
 
 /**
  * ★★★ NAME OURSELVES IN THE QUERY, because the header is not ours to set. React Native's WebSocket
@@ -439,6 +442,9 @@ export abstract class VibeServerWsClient {
     // somewhere else it has to be told — otherwise the readout shows one frequency while the audio
     // plays another.
     if (opts?.allowServerDefault) this.callbacks.onStatus({ ...this.status });
+
+    await loadWideCaps();   // ★ which servers send the full-capture row (wideCapsCore.ts) — a storage read; never fails
+    if (this.destroyed) return;
 
     try {
       await this._checkConnection();
@@ -1435,6 +1441,8 @@ export abstract class VibeServerWsClient {
       throw new Error(`The server is in a low power state to protect its battery (${lv}%). It comes back once the battery is above ${ra}%.`);
     }
     if (!json.allowed) throw new Error(json.reason ?? 'Server rejected connection');
+    // ★ V12: a server that says here that it sends the full-capture row decides the FIRST socket too (wideCapsCore.ts).
+    if ('wide' in json) noteWideCaps(this.baseUrl, (json as { wide?: unknown }).wide);
     // ★★★ ONLY NOW MAY THE AUDIO SOCKET OPEN. Proved against a live UberSDR (2026-08-18): a WS
     //     carrying a session id this POST has not registered gets a 101 and 213 bytes — the
     //     handshake and nothing else — while the identical id, POSTed first, streams 28 KB in the
@@ -1471,7 +1479,9 @@ export abstract class VibeServerWsClient {
       pending: this.wantTune, frequency: Number(this.status.frequency), mode: this.status.mode,
     });
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
+    // ★★ `&wide=1` — the full-capture row (SPWB, utils/wfWide.ts) — ONLY for a server whose hwinfo said "wide" ≥ 2
+    //    (remembered per server, wideCapsCore.ts). An older server gets exactly the URL it always got.
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}${wideSuffix(this.baseUrl)}`);
     // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
     //     WS upgrade, and React Native's WebSocket sends none by default — so every app session
     //     appeared in the owner's log as "—", indistinguishable from a bot or a bare script, while
@@ -1643,6 +1653,10 @@ export abstract class VibeServerWsClient {
       guard('vibe-spec', msgKind(m), () => this._handleSpectrumMessage(m));
       return;
     }
+
+    // ★★ V12 THE FULL-CAPTURE ROW (SPWB) — BEFORE the SPEC checks, which count any other magic as a fault. Only a socket
+    //    that asked `wide=1` receives one; it goes to the waterfall's layer (services/wideRowBus.ts → utils/wfWide.ts).
+    if (isWideFrame(bytes)) { emitWide(bytes); return; }
 
     if (buf.byteLength < 22) {
       noteFault('vibe-spec', 'short-frame', new Error('frame too short'), `len=${buf.byteLength}`);
@@ -2573,6 +2587,8 @@ export abstract class VibeServerWsClient {
     }
     if (msg.type === 'hwinfo') {
       this.squelchSpeaksOn = msg.sqlOn === true;   // ★ see setSquelchDb / vibeSquelch.ts
+      // ★ does this server send the full-capture row (SPWB v2)? Remembered for its next spectrum socket (wideCapsCore.ts).
+      noteWideCaps(this.baseUrl, msg.wide);
       if (typeof msg.autoDs === 'boolean')
         this.callbacks.onHwDirectSampling?.(msg.autoDs, Number(msg.dsBelowHz) || 0, Number(msg.ds) || 0);
       // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.

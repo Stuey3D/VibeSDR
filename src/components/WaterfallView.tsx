@@ -82,6 +82,8 @@ import { cadenceGap } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { fanRefresh, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
+import { setWideSink } from '../services/wideRowBus';
 import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate } from '../utils/wfPace';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
@@ -431,6 +433,9 @@ const WF_EFFECT = Skia.RuntimeEffect.Make(WF_SKSL);
 interface SpectrumEngineHost {
   push(bins: Float32Array, centerHz: number, bwHz: number, trueCenterHz: number | undefined, lastInteractAt: number): void;
   setView(centerHz: number, bwHz: number): void;
+  /** ★ V12 a full-capture row (SPWB, utils/wfWide.ts) the JS socket received — the engine keeps the layer (wf_wide.h).
+   *  Optional: a binary built before it has none, and then the row is simply not drawn. */
+  pushWide?(frame: Uint8Array): void;
   setConfig(c: { width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
                  smoothTune: boolean; targetRows: number }): void;
   setSettings(s: Record<string, number | boolean>): void;
@@ -591,6 +596,13 @@ function WaterfallView({
   const fanVisible = useRef(RING_ROWS);
   fanVisible.current = Math.min(RING_ROWS, Math.ceil(shaderRows) + 4);
   const proc = useRef(new SignalProcessor());
+  /** ★★ V12 THE FULL-CAPTURE LAYER (utils/wfWide.ts; docs/v12/WATERFALL-FULL-CAPTURE.md): the newest picture of the whole
+   *  capture (null until a VibeServer that sends SPWB has sent one — an older server allocates nothing), the detailed
+   *  rows' median (its floor match) and the last row's placement (its k and m). The layer ring itself is fanSt.layer. */
+  const wideSt = useRef<WideState | null>(null);
+  const detP50 = useRef(NaN);
+  const p50Scratch = useRef({ buf: new Float32Array(0) });
+  const placedRef = useRef({ startHz: NaN, spanHz: 0 });
   /* ★★★ THE NATIVE SPECTRUM ENGINE (Android; docs/NATIVE-SPECTRUM-ENGINE.md, cpp/spectrum). On the Galaxy XCover 4s the
    *  waterfall "renders smoothly then crawls for a bit" (Stuart, 2026-10-12): every row came through the JS thread —
    *  jitter buffer, SignalProcessor, ring, a 1 MiB image per row, repeat rows on setTimeout — so whenever JS was busy
@@ -1120,8 +1132,20 @@ function WaterfallView({
     //    rows are never rewritten — the IMAGE is made from a displayed ring regenerated through per-row maps
     //    (wfImageBytes), so a zoom undone gives the edges back exactly. A tune does not touch it (the bend above).
     const v = viewRef.current;
-    placeRow(idxBuf.current, RING_ROWS, n, frameCount.current, row, rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz,
-             motionSt.current!, fanSt.current!, fanVisible.current);
+    const placed = placedRef.current;
+    const slot = placeRow(idxBuf.current, RING_ROWS, n, frameCount.current, row, rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz,
+                          motionSt.current!, fanSt.current!, fanVisible.current, placed);
+    // ★★ V12 THE FULL-CAPTURE LAYER: this row's layer row at the same slot, in capture space (utils/wfWide.ts) — the
+    //    blended newest picture of the whole capture through the detailed rows' own dB → index mapping. Only once a
+    //    server has sent one (fanSt.layer is null until then).
+    const layer = fanSt.current!.layer;
+    if (layer) {
+      const w = frameCfg.current.width;
+      layer.fadeTx = w > 0 ? Math.max(2, Math.min(24, 6 * RING_W / w)) : 6;   // ~6 pt: the soft edge where a row's edge is on screen
+      const r = proc.current.getRange(), ws = wideSt.current;
+      layerWriteRow(layer, slot, ws, placed.startHz, placed.spanHz, Date.now(),
+                    makeToIdx(r.dbMin, r.dbMax, proc.current.getSettings().wfBrightness || 0, ws ? ws.off : 0));
+    }
     frameCount.current += 1;
     // ★★ COVERED (an opaque full-screen overlay — the map, recordings, About): the ROW is kept, the
     //   PICTURE is not made. History stays continuous — closing the map shows what passed while it was
@@ -1640,6 +1664,8 @@ function WaterfallView({
     // during a tune/zoom). Same interaction window as the boost below.
     const interacting = cfg.smoothTune && Date.now() - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
     const frame = proc.current.process(fbins, fstatus.centerHz, fstatus.bwHz, interacting);
+    // ★ V12 the full-capture layer's floor match (utils/wfWide.ts wideArrive) — only once a server has sent one.
+    if (wideSt.current) detP50.current = medianOf(fbins, p50Scratch.current);
 
     // While the phone is rendering, the watch BORROWS this row rather than
     // running its own SignalProcessor over 4096 bins on this same thread — that
@@ -2010,6 +2036,24 @@ function WaterfallView({
   }, [drainFrame, handleFrame, lastInteractAt]);
 
   useEffect(() => () => { if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; } }, []);
+
+  // ★★ V12 THE FULL-CAPTURE ROW (SPWB) — from the JS spectrum socket (services/wideRowBus.ts). The native engine keeps its
+  //    own layer (cpp/spectrum/wf_wide.h); the JS path keeps it here, beside the ring (utils/wfWide.ts).
+  useEffect(() => {
+    const sink = engine
+      ? (u8: Uint8Array) => { engine.pushWide?.(u8); }
+      : (u8: Uint8Array) => {
+          const row = parseWide(u8);
+          if (!row) return;
+          const st = wideSt.current ?? (wideSt.current = newWideState());
+          wideArrive(st, row, Date.now(), placedRef.current.startHz, placedRef.current.spanHz, detP50.current);
+          const fan = fanSt.current!, L = fan.layer;
+          // ★ allocated at the FIRST row only (~0.8 MB), and again only if the server's grid ever changed
+          if (!L || L.F !== row.floor.length || L.C !== row.cells) fan.layer = newLayerRing(RING_ROWS, row.floor.length, row.cells);
+        };
+    setWideSink(sink);
+    return () => setWideSink(null, sink);
+  }, [engine]);
 
   useEffect(() => {
     if (!frameSink) return;
