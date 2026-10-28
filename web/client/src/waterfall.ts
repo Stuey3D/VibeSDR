@@ -47,6 +47,8 @@ function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
 }
 import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
+import { applyViewChange, spanChanged, mapRuns, visibleSpan } from './wfZoomFan';
+import { glideRow } from './wfGlide';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -160,6 +162,16 @@ export class Waterfall {
     else this.pacer.setRate(this.rowsPerSec, this.sharpRows, renderDpr());
   }
   private prevRow: Uint8Array | null = null;   // last received row
+  /** ★ The Hz extent each of prevRow/curRow was measured over (lo edge, span) — drawRow places the history by it. */
+  private prevLo = 0; private prevSpan = 0; private curLo = 0; private curSpan = 0;
+  /** ★★ THE ZOOM FAN (wfZoomFan.ts): per ring row, the map from screen x to the row's own u (u = xfA·x + xfB). */
+  private xfA = new Float64Array(0);
+  private xfB = new Float64Array(0);
+  /** Extent of the newest row WRITTEN to the ring — the view the history is currently drawn against. */
+  private lastLo = 0; private lastSpan = 0;
+  private runs = { buf: new Float64Array(64) };
+  /** ★ GLIDE (wfGlide.ts): the view the previous emitted row was drawn against (lo edge, span) — 0 = none. */
+  private glideLo = 0; private glideSpan = 0;
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
   /** ★ Arrival gaps, display rate, cadence and the per-pair row budget — all in wfPacing.ts's
@@ -388,6 +400,12 @@ export class Waterfall {
                                               0, 0, w, wfH * (firstRows / oh));
       if (this.head > 0)  this.wfCtx.drawImage(tmp, 0, 0, old.width, this.head,
                                               0, wfH * (firstRows / oh), w, wfH * (this.head / oh));
+      // ★ The zoom fan's maps follow their rows into the unwrapped, re-heighted buffer (row j ← reading row j·oh/wfH).
+      if (this.xfA.length === oh) {
+        const a = new Float64Array(wfH), b = new Float64Array(wfH);
+        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; }
+        this.xfA = a; this.xfB = b;
+      }
     }
     this.head = 0;
     // drawRow() bails without this, so the waterfall silently never draws.
@@ -410,6 +428,7 @@ export class Waterfall {
     if (this.gl) this.gl.clear();
     else { this.wfCtx.fillStyle = '#000'; this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height); }
     this.head = 0;      // an all-black ring has no meaningful head
+    this.xfA.fill(1); this.xfB.fill(0);   // a blank ring has nothing to fan
   }
 
   /** Feed one raw dBFS frame. Rows are NOT drawn here — see tick(). */
@@ -560,9 +579,13 @@ export class Waterfall {
       this.prevRow = new Uint8Array(row);
       this.curRow = new Uint8Array(row);
       this.blendRow = new Uint8Array(row.length);
+      this.prevLo = this.curLo = centerHz - bwHz / 2;
+      this.prevSpan = this.curSpan = bwHz;
     } else {
       this.prevRow!.set(this.curRow);
       this.curRow.set(row);
+      this.prevLo = this.curLo; this.prevSpan = this.curSpan;
+      this.curLo = centerHz - bwHz / 2; this.curSpan = bwHz;
     }
 
     // How many lines to synthesise before the next frame lands. Derived from the
@@ -678,8 +701,27 @@ export class Waterfall {
     //     power saving is still free visually) and every row on screen is a real measurement.
     //     ★ `prev` is kept: it is what a future in-shader interpolation would need, and the app's
     //     continuous mode is worth porting if a tune ever looks steppy.
-    blend.set(t >= 0.5 ? cur : prev);
-    void n;
+    const useCur = t >= 0.5;
+    const content = useCur ? cur : prev;
+    const cLo = useCur ? this.curLo : this.prevLo, cSpan = useCur ? this.curSpan : this.prevSpan;
+    // ★★ GLIDE SMOOTHING (wfGlide.ts, Stuart 2026-10-28): while the centre moves between two frames of the SAME span, the
+    //    row is drawn against the view t of the way from the previous frame's to the new one's, and its strong signals
+    //    are smeared back to where the previous row drew them — a moving station is one continuous diagonal, not dashes.
+    //    A steady row (both shifts 0) is the plain copy it always was.
+    let viewLo = cLo;
+    if (cSpan > 0 && !spanChanged(this.prevSpan, this.curSpan) && this.prevSpan > 0) {
+      const L = this.prevLo + Math.max(0, Math.min(1, t)) * (this.curLo - this.prevLo);
+      const shift = (cLo - L) / cSpan * n;
+      const near = this.glideSpan > 0 && !spanChanged(this.glideSpan, cSpan) && Math.abs(L - this.glideLo) < cSpan * 0.25;
+      const prevShift = near ? (cLo - this.glideLo) / cSpan * n : shift;
+      if (Math.round(shift) !== 0 || Math.round(prevShift) !== 0) glideRow(content, blend, n, shift, prevShift);
+      else blend.set(content);
+      viewLo = L;
+    } else blend.set(content);
+    this.glideLo = viewLo; this.glideSpan = cSpan;
+    // ★★ THE ZOOM FAN — before this row goes in, a change of SPAN since the last row re-maps the whole history to the
+    //    new view (wfZoomFan.ts). A change of centre alone leaves it alone: that is the tune's bend.
+    this._noteRowView(viewLo, cSpan);
 
     // ★ NO SELF-COPY. This used to scroll with `wfCtx.drawImage(this.wf, 0, 1)` — drawing the
     // waterfall canvas onto ITSELF one pixel down, every frame. Safari optimises that; Chromium
@@ -708,14 +750,18 @@ export class Waterfall {
         this.glCols = RING_W;
       }
       const rows = this.gl.rows;
+      this._ensureXf(rows);
       this.head = (this.head - 1 + rows) % rows;
       this.gl.pushRow(rowIn, this.head);
+      this.xfA[this.head] = 1; this.xfB[this.head] = 0;
       return;
     }
 
     // 2D fallback: peak-preserving downsample to canvas width + palette LUT + putImageData.
     const H = wfH;
+    this._ensureXf(H);
     this.head = (this.head - 1 + H) % H;
+    this.xfA[this.head] = 1; this.xfB[this.head] = 0;
     const W = this.wf.width;
     if (!this.rowImg) return;
     const img = this.rowImg.data;
@@ -735,6 +781,20 @@ export class Waterfall {
       img[p + 3] = 255;
     }
     this.wfCtx.putImageData(this.rowImg, 0, this.head);
+  }
+
+  /** The history's per-row maps, one per ring row; a new size (first row, a ring that grew and so was cleared) starts
+   *  every row at the identity. */
+  private _ensureXf(rows: number) {
+    if (this.xfA.length === rows) return;
+    this.xfA = new Float64Array(rows).fill(1);
+    this.xfB = new Float64Array(rows);
+  }
+
+  private _noteRowView(lo: number, span: number) {
+    if (!(span > 0)) return;
+    if (spanChanged(this.lastSpan, span) && this.xfA.length) applyViewChange(this.xfA, this.xfB, this.lastLo, this.lastSpan, lo, span);
+    this.lastLo = lo; this.lastSpan = span;
   }
 
   /** Composite waterfall + spectrum trace + markers to the visible canvas. */
@@ -759,8 +819,11 @@ export class Waterfall {
     //     guards both halves (tune/zoom continuity and resize keeping the history) against the real server.
     // Straight blit, in BIN space — exactly what the app does (its shader maps
     // display x directly to bins: tx = xy.x / uDrawW * uTexW). No pan offset, no
-    // frequency-indexed history, no re-alignment. Old rows keep their old bins
+    // frequency-indexed history, no re-alignment ON A TUNE. Old rows keep their old bins
     // and scroll away.
+    // ★★ EXCEPT THE SPAN (2026-10-27, Stuart: zooming left the history SLICED into bands of different
+    //    zoom): a zoom re-maps every stored row to the new span — the fan — through a per-row map
+    //    (wfZoomFan.ts), drawn per run of rows below. The stored pixels are still never rewritten.
     //
     // Both of the clever alternatives were worse: sliding the history sideways
     // fought the frames still in flight (snap-back), and cropping a
@@ -773,13 +836,37 @@ export class Waterfall {
     if (this.gl && this.glCanvas && this.glCols > 0) {
       // GPU path: the shader unwraps the ring from `head` and colours it on the GPU. One draw into
       // the GL canvas, one blit onto the visible canvas — no per-row CPU work, dpr scaling is free.
-      this.gl.render(this.head, wfH, W, wfH);
+      // ★ The zoom fan: runs of rows sharing one map (one run, the identity, until somebody zooms).
+      const nRuns = this.xfA.length === this.gl.rows ? mapRuns(this.xfA, this.xfB, this.head, wfH, this.runs) : 0;
+      this.gl.render(this.head, wfH, W, wfH, this.runs.buf, nRuns);
       ctx.drawImage(this.glCanvas, 0, 0, W, wfH, 0, specH, W, wfH);
     } else {
-      // 2D fallback: unwrap the ring with two blits (head→bottom, then top→head).
-      const first = wfH - this.head;            // rows from head to the end of the buffer
-      if (first > 0) ctx.drawImage(this.wf, 0, this.head, W, first, 0, specH, W, first);
-      if (this.head > 0) ctx.drawImage(this.wf, 0, 0, W, this.head, 0, specH + first, W, this.head);
+      const nRuns = this.xfA.length === wfH ? mapRuns(this.xfA, this.xfB, this.head, wfH, this.runs) : 0;
+      const rb = this.runs.buf;
+      if (nRuns <= 1 && (nRuns === 0 || (rb[2] === 1 && rb[3] === 0))) {
+        // 2D fallback: unwrap the ring with two blits (head→bottom, then top→head).
+        const first = wfH - this.head;            // rows from head to the end of the buffer
+        if (first > 0) ctx.drawImage(this.wf, 0, this.head, W, first, 0, specH, W, first);
+        if (this.head > 0) ctx.drawImage(this.wf, 0, 0, W, this.head, 0, specH + first, W, this.head);
+      } else {
+        // ★ The zoom fan on the 2D path: each run is blitted horizontally scaled to its map, blank where it has no data.
+        //   A few drawImage calls per run (two if it wraps the ring) — the stored pixels are never rewritten.
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, specH, W, wfH);
+        for (let i = 0; i < nRuns; i++) {
+          const j0 = rb[i * 4], j1 = rb[i * 4 + 1];
+          const vs = visibleSpan(rb[i * 4 + 2], rb[i * 4 + 3]);
+          if (!vs) continue;
+          const sx = vs[2] * W, sw = (vs[3] - vs[2]) * W, dx = vs[0] * W, dw = (vs[1] - vs[0]) * W;
+          let j = j0;
+          while (j < j1) {
+            const r = (this.head + j) % wfH;
+            const cnt = Math.min(j1 - j, wfH - r);
+            ctx.drawImage(this.wf, sx, r, sw, cnt, dx, specH + j, dw, cnt);
+            j += cnt;
+          }
+        }
+      }
     }
 
     if (specH > 4 && this.spec && this._showSpec) {
