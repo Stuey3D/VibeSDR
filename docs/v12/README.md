@@ -16,6 +16,7 @@ Stuart, 2026-10-07: "this is now a V12 feature when we build the decoders into t
 | [JTTY.md](JTTY.md) | JTTY, the WSJT-X 3.2 keyboard mode (branch `v12-jtty`, 2026-10-26): the protocol with sources and confidence, a slot-less whole-passband receiver (list Viterbi, coherent pass, coherence gates), real off-air decodes matching PSKReporter, 0 false frames in 10 h of noise |
 | [DIGITAL-SPOTS.md](DIGITAL-SPOTS.md) | Digital spots (branch `v12-spots`, 2026-10-26): Single mode and Band (a band's IQ slice, every mode on its own dial), the mode registry other mode engines plug into, band stepping, the map coloured by mode |
 | [SCANNER.md](SCANNER.md) | The scanner (branch `v12-scanner`, 2026-10-27): Stuart's July brief brought up to V12 — Band search / Bookmarks / the QSO hopper as a decoder-box item on every backend but FM-DX and a shared dial; one reach clamp for OWRX profiles and VibeServer windows; proposals A–E (server coverage, watch channels, the web client); M1 built |
+| [WATERFALL-FULL-CAPTURE.md](WATERFALL-FULL-CAPTURE.md) | The full-capture layer under the waterfall's history (branch `v12-wf-wide-buffer`, 2026-10-28): the server's SPWB row and the web layer are built; this is the spec for the APP (JS fan + Android engine) |
 
 Each ends with a **Review against the codebase** section: what already exists (corrected clock, admin HMAC auth, stable radio
 IDs, benchmark, health chip, crash reporter), what this week's fixes add (exact-rate audio, decoders keep the chain alive,
