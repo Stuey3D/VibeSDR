@@ -65,6 +65,7 @@ import { noteUnhandled, noteDecision } from './protocolLog';
 import { guard, guardJson, noteFault, msgKind } from './faultLog';
 import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './vibeLinkManager';
+import { uberDivisorFor } from '../assets/wfSpeedCap';
 
 /** ★ Re-exported so each subclass names its own ladder without reaching past this file. */
 export const LADDERS_FOR = LADDERS;
@@ -2071,6 +2072,7 @@ export abstract class VibeServerWsClient {
       // interpolation can hide 5 but not 3.3.
       lowDataRung: 2,
       mode,
+      userCapFps: this._wfLinkCap,  // ★ V12 MINIMUM / ECO waterfall speed — a 5 / 10 fps ceiling (src/assets/wfSpeedCap.ts)
       apply: (rung, fps) => {
         if (this.isVibe) {
           this.ladderFps = fps;
@@ -2088,7 +2090,9 @@ export abstract class VibeServerWsClient {
             this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: fps }));
           }
         } else {
-          this.setRate(rung);          // UberSDR: rung IS the poll divisor
+          // UberSDR: a divisor off the full rate — from the rung's FPS, since a capped ladder ([5, 3.3]) no longer
+          // numbers its rungs as divisors.
+          this.setRate(uberDivisorFor(this.ladderFor()[0], fps));
         }
       },
     });
@@ -2158,6 +2162,15 @@ export abstract class VibeServerWsClient {
   private _linkMode: LinkMode = 'adaptive';
   get linkMode(): LinkMode { return this._linkMode; }
   set linkMode(m: LinkMode) { this._linkMode = m; this.link?.setMode(m); }
+  /** ★ V12 MINIMUM / ECO waterfall speed (src/assets/wfSpeedCap.ts): a ceiling in fps (5 / 10; 0 = none) on the link
+   *  controller, so the SERVER sends fewer frames. A setter for the same reason as linkMode — it reconfigures the
+   *  running controller live. */
+  private _wfLinkCap = 0;
+  get wfLinkCap(): number { return this._wfLinkCap; }
+  set wfLinkCap(fps: number) { this._wfLinkCap = fps > 0 ? fps : 0; this.link?.setUserCap(this._wfLinkCap); }
+  /** The server's own top rate as the link controller knows it (0 = no controller yet) — the waterfall-speed buttons'
+   *  live numbers are worked out from it (wfSpeedCap.speedNumbers). */
+  get wfNativeFps(): number { return this.link?.nativeFps ?? 0; }
   private lastFrameAt    = 0;
   private lastReconnectAt = 0;
   private pingSentAt     = 0;

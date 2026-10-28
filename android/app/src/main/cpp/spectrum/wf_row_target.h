@@ -12,14 +12,16 @@
 
 namespace vibewf {
 
-/** `cap` 20 = Default, 60 = Smooth, 0 = Sharp (EngineConfig::targetRows carries the cap). */
-inline int rowMultFor(int cap) { return cap >= 60 ? 6 : 3; }
+/** `cap` 20 = Default, 60 = Smooth, 10 = Eco, 5 = Minimum (V12), 0 = Sharp/Native (EngineConfig::targetRows carries the cap). */
+inline int rowMultFor(int cap) { return cap >= 60 || cap == 10 || cap == 5 ? 6 : 3; }   // ★ Eco 10 / Minimum 5 = mult 6, as wfRowTarget.ts
+
 
 /** The largest of {10,12,15,20,30,60} ≤ min(cap, mult × fps) (3 % slack: 3.33 × 6 → 20), or 0. */
 inline double snappedRowTarget(int cap, double fps) {
     if (cap <= 0 || !(fps > 0)) return 0;
     static const double kRates[] = {10, 12, 15, 20, 30, 60};
     const double raw = std::min((double)cap, rowMultFor(cap) * fps) * 1.03;
+    if (cap == 5) return raw >= 5 ? 5 : 0;   // ★ V12 MINIMUM: its one rate, 5 (only a sub-5 feed is filled in)
     double best = 0;
     for (double r : kRates) if (r <= raw && r <= cap) best = r;
     return best;
