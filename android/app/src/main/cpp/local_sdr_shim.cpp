@@ -30309,6 +30309,51 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     over.push_back({sk, si->second, sess, vibeturn::keptUntilWanted(soft, turnSpentLocked(tk, now))});
                 }
             }
+            /* ★★★ AN AUDIO SOCKET WITH NO WATERFALL IS A LISTENER WHO IS STILL HERE (Stuart, 2026-10-28, V12 two
+             *     servers at once: "because it is taking me through the front door each time to switch servers it is
+             *     resetting the time limit each time so I've found a sneaky time limit bypass here").
+             *  This pass walked SPECTRUM sockets only. The app closes its waterfall whenever its screen is not in front —
+             *  the phone locked, the app minimised, and now the SECOND SERVER of a pairing playing in the other ear — and
+             *  the audio plays on. Nothing touched that listener's turn, so the turn book read the whole time as AWAY
+             *  (startFor moves the start on by it: time away is not time used), and after the 15-minute break the
+             *  spectrum socket's return was a NEW turn: a full guarantee back, while the audio never stopped. A hard
+             *  limit could not end an audio-only listener at all.
+             *  ★★ Now the same rule as the decoder below: the audio-only listener's turn is KEPT SEEN, judged on the
+             *     turn's own start (heldStart — no clock of its own, so the waterfall's return reads the same number),
+             *     warned and ended on its audio socket. specListenerCountLocked() has always counted them (the pocketed
+             *     phone) — the limit now agrees with the count.
+             *  ★ Keyed exactly as the spectrum socket is (turnKeyLocked: the listener id where the client sends one —
+             *    the app's `bid` since 89431dae, the browser's — else the address), so two people behind one address are
+             *    two turns, and a listener's own spectrum socket, counted above, is not counted again here. */
+            {
+                std::vector<std::shared_ptr<net::Socket>> auds;
+                if (audioClient) auds.push_back(audioClient);
+                for (auto& a : audioExtra) auds.push_back(a);
+                for (auto& au : auds) {
+                    if (!au || !au->isOpen()) continue;
+                    const std::string addr = au->peerAddress();
+                    if (addr.empty() || isLoopback(addr)) continue;            // the host's own listening
+                    { std::lock_guard<std::mutex> al(adminSockMtx);
+                      if (adminSocks.count(au.get())) continue; }             // the owner is exempt
+                    std::string sess;
+                    { auto it = sockSession.find(au.get()); if (it != sockSession.end()) sess = it->second; }
+                    if (sess.empty()) continue;                                // never stamped: an old client
+                    if (sess == adminSess) continue;                           // the owner is exempt
+                    if (sockSince.find(au.get()) == sockSince.end()) continue; // ended already, draining
+                    const std::string tk = turnKeyLocked(au.get(), addr);
+                    if (!present.insert(tk).second) continue;                  // its waterfall is here: counted
+                    ++listeners;
+                    const double started = turnBook.heldStart(tk, now);
+                    const double left = (double)limitMin * 60.0 - (now - started);
+                    if (left > 0) {
+                        const int stage = left <= 30 ? 2 : left <= 120 ? 1 : 0;
+                        int& w = sockWarned[au.get()];
+                        if (stage > 0 && !(w & stage)) { w |= stage; toWarn.push_back({au, (int)(left + 0.5)}); }
+                    } else {
+                        over.push_back({au, started, sess, vibeturn::keptUntilWanted(soft, turnSpentLocked(tk, now))});
+                    }
+                }
+            }
             /* ★★★ AN OPEN DECODER IS A LISTENER WHO IS STILL HERE (Stuart, 2026-10-04). The app closes
              *     its waterfall when minimised and its audio when muted; WEFAX ran on for 1 h 45 m on the
              *     decoder socket alone, the turn lapsed after the 15-minute break, and on return the
@@ -30397,8 +30442,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
               turnBook.markSpent(tk, now);   // ★ borrowed time later (B10)
           }
           // ★ The same session's audio goes with it, as `au` does above.
+          // ★ …but not the victim itself when it IS an audio socket (an audio-only listener): it says why and drains
+          //   through outboxClose above, and a hard close here would cut the message off before it was sent.
           auto same = [&](const std::shared_ptr<net::Socket>& a) {
-              if (!a || victim.session.empty()) return false;
+              if (!a || victim.session.empty() || a == victim.sk) return false;
               auto it = sockSession.find(a.get());
               return it != sockSession.end() && it->second == victim.session; };
           if (same(audioClient)) auds.push_back(audioClient);

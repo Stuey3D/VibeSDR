@@ -77,6 +77,24 @@ int main() {
     ok(LIMIT - ((300 + 600) - s2) == LIMIT - 300, "back inside the break: the turn resumes with the time away not charged");
   }
   {
+    // ★★★ AN AUDIO SOCKET WITH NO WATERFALL IS STILL HERE (2026-10-28, V12 two servers at once — Stuart's "sneaky time
+    //     limit bypass"). The shared dial's pass now keeps an audio-only listener's turn SEEN with heldStart, as it does
+    //     an open decoder. Without that, the background time read as AWAY: credited back on the waterfall's return, and
+    //     past the break a FULL fresh turn while the audio never stopped.
+    Book b; const std::string k = "b:app-install";
+    b.startFor(k, 0);                                   // waterfall + audio arrive
+    b.touch(k, 120);                                    // two minutes in front
+    for (double t = 121; t <= 120 + 20 * 60; t += 2) b.heldStart(k, t);   // 20 minutes in the background, audio only
+    const double back = 120 + 20 * 60 + 1;
+    const double s = b.startFor(k, back);               // the swap back: the waterfall returns
+    ok(s <= 2, "★★ back from 20 min of audio-only listening: the SAME turn, from its first start (no fresh turn; one 2 s tick)");
+    ok(back - s >= 22 * 60 - 2, "...and the background time is CHARGED (" + std::to_string((int)(back - s)) + " s used)");
+    // ★ The other side of it: a listener whose audio really did stop is away, and is not charged for it.
+    Book c; c.startFor(k, 0); c.touch(k, 120);
+    const double s2 = c.startFor(k, 120 + 5 * 60);      // dropped for five minutes, back
+    ok(s2 == 5 * 60, "a real drop of 5 min is NOT charged — a dropped connection costs nothing extra");
+  }
+  {
     // ★ Pruning keeps the book bounded, and does not drop the key being asked about.
     Book b;
     for (int i = 0; i < 1000; i++) b.startFor("v" + std::to_string(i), i);

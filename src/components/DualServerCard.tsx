@@ -33,6 +33,8 @@ import { bgSide, countdownStage, earIcon, fmtLeft, shouldPopOut } from '../servi
 /** A server's name at a slider's end: the left end is server 1 (the left ear), the right end server 2. */
 const short = (n?: string) => { const t = (n ?? '').trim(); return t.length > 9 ? `${t.slice(0, 8)}…` : t || '—'; };
 
+/** The speaker for the OTHER ear (the server in front): there, but plainly not this one. */
+const EAR_FAINT = 0.38;
 const STAGE_TAB   = ['#ffb833', '#ffe14d', '#ff6b6b'];                                        // = SDRScreen TIME_TAB
 const STAGE_FRAME = ['rgba(255,160,0,0.55)', 'rgba(255,225,77,0.7)', 'rgba(255,90,90,0.75)']; // = the time card's
 
@@ -182,7 +184,8 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   const tabColour = ended ? '#ff6b6b' : asking ? STAGE_TAB[1] : colour;
   const freq = bg.freqHz > 0 ? bookmarkFreqLabel(bg.freqHz) : '';
   const mode = (bg.mode || '').toUpperCase();
-  const earA11y = icon === 'mono' ? 'in both ears' : icon === 'L' ? 'in your left ear' : 'in your right ear';
+  const earA11y = icon === 'mono' ? 'in both ears'
+    : icon === 'L' ? 'in your left ear, the server in front in your right' : 'in your right ear, the server in front in your left';
 
   const onPress = () => {
     if (ended) return;
@@ -204,15 +207,20 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
             onPress={onPress} onLongPress={() => { if (!ended) { setBalOpen(true); armBalClose(); } }}
             delayLongPress={450} style={({ pressed }) => [s.body, { opacity: pressed ? 0.8 : 1 }]}
             accessibilityRole="button"
-            accessibilityLabel={`${bg.name}${freq ? `, ${freq} ${mode}` : ''}, ${earA11y}`}
+            accessibilityLabel={`${bg.name}${freq ? `, ${freq} ${mode}` : ''}${bg.station ? `, ${bg.station}` : ''}, ${earA11y}`}
             accessibilityHint={ended ? undefined : asking ? 'Tap to tell the server you are still listening'
                                                           : 'Tap to switch to this server. Hold for the balance between the two.'}>
             <View style={s.top}>
               {icon === 'mono'
                 ? <Animated.View style={{ opacity: lamp }}><Speaker colour={colour} opacity={1} /></Animated.View>
-                : <View style={s.ears}>
-                    <Speaker colour={colour} opacity={icon === 'L' ? 1 : 0.22} flip waves={icon === 'L'} />
-                    <Speaker colour={colour} opacity={icon === 'R' ? 1 : 0.22} waves={icon === 'R'} />
+                : /* ★★ A PAIR, SO IT READS AS STEREO (Stuart, 2026-10-28: "on the chip there needs to be a little faint
+                   *  speaker for the opposite channel to show its actually a stereo setup you are listening to"). Back to
+                   *  back, facing out — left ear, right ear — this server's lit, the one in front FAINT but whole, waves
+                   *  and all: at 0.22 with no waves it was a smudge nobody saw on a phone. Stereo only: in Mono both
+                   *  servers are in both ears and the single lamp speaker above says so. */
+                  <View style={s.ears}>
+                    <Speaker colour={colour} opacity={icon === 'L' ? 1 : EAR_FAINT} flip />
+                    <Speaker colour={colour} opacity={icon === 'R' ? 1 : EAR_FAINT} />
                   </View>}
               <Text style={[s.name, { color: colour }]} numberOfLines={1}>{bg.name}</Text>
             </View>
@@ -232,6 +240,10 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
                   </Text>
                 )}
               </View>
+            )}
+            {/* ★ In DAB, the service playing (dualMix.cardStation) — what the station strip names on its own screen. */}
+            {!ended && !asking && !!bg.station && (
+              <Text style={[s.station, { color: colour }]} numberOfLines={1}>{bg.station}</Text>
             )}
             {balOpen && !ended && (
               <View style={s.balRow}>
@@ -275,10 +287,11 @@ const s = StyleSheet.create({
              borderWidth: 1.5, borderLeftWidth: 0, borderTopRightRadius: 12, borderBottomRightRadius: 12 },
   body:    { paddingVertical: 5, paddingLeft: 8, paddingRight: 2, gap: 2, flexShrink: 1 },
   top:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  ears:    { flexDirection: 'row', alignItems: 'center', gap: 1 },
+  ears:    { flexDirection: 'row', alignItems: 'center', gap: 3 },
   name:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 12, letterSpacing: 0.3, flexShrink: 1, maxWidth: 190 },
   freq:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
   mode:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 0.8, opacity: 0.85 },
+  station: { fontFamily: 'Atkinson Hyperlegible', fontSize: 12, letterSpacing: 0.2, opacity: 0.9, maxWidth: 220 },
   clock:   { fontFamily: 'Atkinson Hyperlegible', fontSize: 11, fontVariant: ['tabular-nums'], opacity: 0.95 },
   line:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 12, maxWidth: 220 },
   balRow:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 2 },

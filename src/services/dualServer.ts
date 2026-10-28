@@ -65,7 +65,9 @@ export interface DualSide extends DualSideCore {
   params: Record<string, unknown>;
   /** What it is playing, in DISPLAY Hz, as its screen last showed it. */
   freqHz: number;
+  /** The mode its screen SHOWS (dualMix.cardMode — DAB, ADS-B… over the idle demodulator), and in DAB the service. */
   mode: string;
+  station?: string;
   /** Its session limit as an absolute time (ms), and whether that limit is a guarantee rather than an end. */
   endsAt: number | null;
   soft: boolean;
@@ -461,7 +463,7 @@ export function roleOnMount(params: Record<string, unknown> & DualRouteLike & { 
 }
 
 /** The screen in front keeps its side's card facts current (cheap: only on change). */
-export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mode' | 'endsAt' | 'soft' | 'name' | 'radioKey'>>,
+export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mode' | 'station' | 'endsAt' | 'soft' | 'name' | 'radioKey'>>,
                            radioBase?: string | null) {
   const s = state.sides.find((x) => x.id === id);
   if (!s) return;

@@ -171,7 +171,7 @@ import { canListenSecond, dualHolds, dualSupported, dualTransport, foregroundEnd
          noteStatus, returnParams, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
          isFirstRadio, backToFirstRadio,
          useDualShape } from '../services/dualServer';
-import { dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
+import { cardMode, cardStation, dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
 import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
@@ -11913,12 +11913,18 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  for it — "server · radio" when the server has more than one radio to tell apart (Gesiima's two dongles, #57). */
   const dualRadioKey = radioKeyOf(radioBase);
   const dualName = sideName(instanceName ?? baseUrl, door && door.radios.length > 1 ? chosenRadio?.label : null);
+  /* ★★ THE MODE THE SCREEN SHOWS, not the idle demodulator under a whole-radio mode (dualMix.cardMode — Stuart,
+   *  2026-10-28: the card said WFM while the Pi 2 was in DAB), and in DAB the service playing (dualMix.cardStation). */
+  const dualDab = dabOn || liveStation.badge === 'DAB';
+  const dualMode = cardMode({ mode: String(status.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn });
+  const dualStation = cardStation({ dab: dualDab, service: liveStation.badge === 'DAB' ? liveStation.name : null,
+                                    ensemble: dabState?.label, channel: dabState?.channel });
   useEffect(() => {
     if (!dualMyId || dualShape.phase === 'off') return;
-    noteStatus(dualMyId, { freqHz: status.frequency, mode: String(status.mode), endsAt: dualEndsAt,
+    noteStatus(dualMyId, { freqHz: status.frequency, mode: dualMode, station: dualStation, endsAt: dualEndsAt,
                            soft: limitSoft || borrowed, name: dualName, radioKey: dualRadioKey }, radioBase);
-  }, [dualMyId, dualShape.phase, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed, dualName, dualRadioKey,
-      radioBase]);
+  }, [dualMyId, dualShape.phase, status.frequency, dualMode, dualStation, dualEndsAt, limitSoft, borrowed, dualName,
+      dualRadioKey, radioBase]);
   // ★ The server ended THIS one (its refusal is on screen): the background server keeps playing.
   useEffect(() => { if (refusal && dualMyId) foregroundEnded(dualMyId); }, [refusal, dualMyId]);
   // ★ Gone while still in front without saying so (a crash reset, an alert's "Back to Servers"): it LEFT.
@@ -11937,11 +11943,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     const back = returnParams(route.params as never);
     if (dualRadioKey && radioBase) back.baseUrl = radioBase;
     listenSecond({ id: dualMyId, name: dualName, params: back, radioKey: dualRadioKey,
-                   freqHz: abDoor.frequency, mode: String(abDoor.mode), endsAt: dualEndsAt, soft: limitSoft || borrowed },
+                   freqHz: abDoor.frequency, endsAt: dualEndsAt, soft: limitSoft || borrowed, station: dualStation,
+                   mode: cardMode({ mode: String(abDoor.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn }) },
                  start.note);
     navigation.goBack();
   }, [dualMyId, dualName, dualRadioKey, radioBase, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt,
-      limitSoft, borrowed, navigation]);
+      limitSoft, borrowed, navigation, dualDab, adsbOn, ismOn, aisOn, ndbOn, dualStation]);
   /** TAP the card: the background server's screen comes up; both keep playing, ears unmoved. A reset with the server
    *  list beneath — the one way this app lands on a VibeServer (connectVibeServer's note on why not navigate). */
   const onDualSwap = useCallback(() => {
