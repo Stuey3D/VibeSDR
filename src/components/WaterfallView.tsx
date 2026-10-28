@@ -81,7 +81,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { rowViewOffset, writeRow } from '../utils/wfRowPlace';
+import { glideRow, newGlideState, rowViewOffset, writeRow } from '../utils/wfRowPlace';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -515,6 +515,9 @@ function WaterfallView({
   // ── Signal processor (owns all dB→index maths) ──────────────────────────────
   /** Scratch for the resample — reused, never per-frame allocated. */
   const rowBuf = useRef(new Uint8Array(RING_W));
+  /** The previous ring row's placement + the glide's scratch (utils/wfRowPlace.ts) — allocated once. */
+  const glideSt = useRef<ReturnType<typeof newGlideState> | null>(null);
+  if (!glideSt.current) glideSt.current = newGlideState(RING_W);   // ★ lazily: not 6 KB of scratch per render
   const proc = useRef(new SignalProcessor());
   /* ★★★ THE NATIVE SPECTRUM ENGINE (Android; docs/NATIVE-SPECTRUM-ENGINE.md, cpp/spectrum). On the Galaxy XCover 4s the
    *  waterfall "renders smoothly then crawls for a bit" (Stuart, 2026-10-12): every row came through the JS thread —
@@ -1020,7 +1023,12 @@ function WaterfallView({
     // ★ Only a frame at the SAME bin scale may be shifted (rowViewOffset) — one from a different span is drawn as it came.
     const slot = (frameCount.current % RING_ROWS) * n;
     const v = viewRef.current;
-    writeRow(idxBuf.current, slot, row, n, rowViewOffset(rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz, n));
+    const off = rowViewOffset(rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz, n);
+    writeRow(idxBuf.current, slot, row, n, off);
+    // ★★ GLIDE (2026-10-28, "the signal glide into place looks broken"): when this row sits somewhere else than the row
+    //    before it, its signals are drawn as short streaks from there to here, so a tune's diagonal is one continuous
+    //    trail rather than dots a row apart. This row only, once; steady rows untouched (utils/wfRowPlace.ts glideRow).
+    glideRow(idxBuf.current, slot, n, rowCenterHz, rowHzPerBin, off, glideSt.current!);
     frameCount.current += 1;
     // ★★ COVERED (an opaque full-screen overlay — the map, recordings, About): the ROW is kept, the
     //   PICTURE is not made. History stays continuous — closing the map shows what passed while it was

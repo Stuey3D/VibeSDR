@@ -361,6 +361,9 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
         if (o > 0) std::memcpy(dst + o, row, n - o);
         else       std::memcpy(dst, row - o, n + o);
     }
+    // ★★ GLIDE (2026-10-28): a row placed somewhere else than the one before streaks its signals back to there, so a
+    //    tune's trail is one continuous line — this row only, once (wf_glide.h; the JS path's utils/wfRowPlace.ts).
+    vibewf::glideRow(dst, n, rowCenterHz, rowHzPerBin, off, trail_);
     frameCount_ += 1;
     if (covNow_ || !publish) { ringDirty_ = true; return; }
     publishRing();
