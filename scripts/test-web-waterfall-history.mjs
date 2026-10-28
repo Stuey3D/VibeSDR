@@ -57,22 +57,30 @@ const SNIFF = `(() => { window.__rows = []; const O = WebSocket;
 const COLUMNS = `(() => { const h = window.__vibeWf(); if (!h) return null; const wf = h.wf; const cv = document.getElementById('wf');
   const W = cv.width, H = cv.height, wfH = wf.wf.height, top = H - wfH; const d = cv.getContext('2d').getImageData(0, top, W, wfH).data;
   const at = (o, x) => { const p = o + x * 4; return d[p] * 2 + d[p + 1] + d[p + 2]; };
-  const cols = []; for (let y = 0; y < wfH; y++) { let best = -1, bx = 0; const o = y * W * 4;
-    let sum = 0; for (let x = 2; x < W - 2; x++) { const v = at(o, x); sum += v; if (v > best) { best = v; bx = x; } }
+  const cols = [], ls = [], rs = [], blank = []; for (let y = 0; y < wfH; y++) { let best = -1, bx = 0, lo = 1e9; const o = y * W * 4;
+    let sum = 0; for (let x = 2; x < W - 2; x++) { const v = at(o, x); sum += v; if (v < lo) lo = v; if (v > best) { best = v; bx = x; } }
+    blank.push(best - lo < 30);
     let l = bx, r = bx; while (l > 2 && at(o, l - 1) >= best - 24) l--; while (r < W - 3 && at(o, r + 1) >= best - 24) r++;
-    cols.push(best - sum / (W - 4) > 120 ? Math.round((l + r) / 2) : -1); } return { W, wfH, cols }; })()`;
+    const lit = best - sum / (W - 4) > 120; cols.push(lit ? Math.round((l + r) / 2) : -1); ls.push(lit ? l : -1); rs.push(lit ? r : -1); }
+  return { W, wfH, cols, ls, rs, blank }; })()`;
 
-/** Rows (y, newest first) whose column jumps away from BOTH neighbours by more than `px` the same way, while the
- *  neighbours agree with each other — a torn row (it leaves the trail and comes straight back to it). A trail that
- *  TURNS (the fast spin reversing: 1139, 1190, 1164) is not torn — its neighbours sit on different sides of the turn.
+/** Rows (y, newest first) whose column jumps away from BOTH neighbours by more than `px` the same way — a torn row (it
+ *  leaves the trail and comes back). Except a trail that TURNS (the fast spin reversing: 1118 1174 1196 1178 1136): it
+ *  keeps moving away on both sides, at the same pace as the step to the turn.
  *  (-1 = a row with no clear carrier, e.g. not drawn yet — skipped, and so are its neighbours.) */
 function zigzags(cols, px) {
   const out = [];
   for (let y = 1; y < cols.length - 1; y++) {
     if (cols[y] < 0 || cols[y - 1] < 0 || cols[y + 1] < 0) continue;
     const a = cols[y] - cols[y - 1], b = cols[y] - cols[y + 1];
-    if (Math.sign(a) === Math.sign(b) && Math.abs(a) > px && Math.abs(b) > px
-        && Math.abs(cols[y - 1] - cols[y + 1]) < Math.min(Math.abs(a), Math.abs(b)) / 2) out.push(y);
+    if (!(Math.sign(a) === Math.sign(b) && Math.abs(a) > px && Math.abs(b) > px)) continue;
+    // ★ A TURN: the trail keeps going away from this row on BOTH sides (monotonic), at a pace like the step to it.
+    //   An alternating zig-zag fails the first half, a lone torn row in a slow trail the second.
+    const c2 = cols[y - 2] ?? -1, c3 = cols[y + 2] ?? -1;
+    const away = (n1, n2) => n2 >= 0 && Math.abs(cols[y] - n2) >= Math.abs(cols[y] - n1);
+    const turn = away(cols[y - 1], c2) && away(cols[y + 1], c3)
+              && Math.min(Math.abs(a), Math.abs(b)) <= px + 2 * Math.max(Math.abs(cols[y - 1] - c2), Math.abs(c3 - cols[y + 1]));
+    if (!turn) out.push(y);
   }
   return out;
 }
@@ -172,10 +180,12 @@ try {
   ok(!!pic && pic.cols.length > 100, `read the waterfall (${pic?.W}×${pic?.wfH})`);
   // the newest ~ (tune + zooms) rows sit at the top; the column of the carrier there must move smoothly
   const recent = pic.cols.slice(0, Math.min(pic.cols.length, 600));
-  const lit = recent.filter((x) => x >= 0);
+  // ★ Out of the rows DRAWN — the bottom of the picture may still be the blank ring from before the page started.
+  const drawn = recent.filter((x, y) => !pic.blank[y]);
+  const lit = drawn.filter((x) => x >= 0);
   const zz = zigzags(recent, 4);
   const travel = lit.length ? Math.max(...lit) - Math.min(...lit) : 0;
-  ok(lit.length > recent.length * 0.5, `the carrier stands out in ${lit.length} of ${recent.length} rows`);
+  ok(drawn.length > 200 && lit.length > drawn.length * 0.7, `the carrier stands out in ${lit.length} of the ${drawn.length} rows drawn`);
   if (process.env.WFHIST_SHOT) { const s = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(process.env.WFHIST_SHOT, Buffer.from(s.result.data, 'base64')); }
   if (process.env.WFHIST_DEBUG) { console.log('   cols', recent.slice(0, 260).join(' '));
     console.log('   runs', JSON.stringify(await ev(`(() => { const w = window.__vibeWf().wf; const out = []; const R = w.runs.buf; for (let i = 0; i < 40 && i * 4 < R.length; i++) out.push([R[i*4], R[i*4+1], +R[i*4+2].toFixed(4), +R[i*4+3].toFixed(4)]); return out; })()`))); }
@@ -218,6 +228,29 @@ try {
   };
   await fanCase(SPAN, 80000);
   await fanCase(80000, SPAN);
+
+  // ── 5. GLIDE (Stuart 2026-10-28): a FAST tune — 3 kHz every 60 ms, ~16 px a row at 200 kHz across 1280 px — must draw
+  //    ONE continuous diagonal: every row's carrier touches the row above's, no dashes with gaps between them ──
+  {
+    await sleep(1500);
+    for (let i = 1; i <= 16; i++) { await ev(`window.__vibeWf().spec.tune(${fEnd + i * 3000})`); await sleep(60); }
+    await sleep(1500);
+    const g = await columns();
+    const cStart = Math.round((0.5 + (CARRIER - fEnd) / SPAN) * g.W), cEnd = Math.round((0.5 + (CARRIER - fEnd - 48000) / SPAN) * g.W);
+    // the moving part of the trail, newest first: rows strictly between where it started and where it settled
+    const ys = []; for (let y = 0; y < Math.min(400, g.cols.length); y++) { const c = g.cols[y]; if (c >= 0 && c < cStart - 3 && c > cEnd + 3) ys.push(y); }
+    let gaps = 0, worst = 0, pairs = 0;
+    const y0 = ys.length ? ys[0] - 1 : 0, y1 = ys.length ? ys[ys.length - 1] + 1 : 0;
+    for (let y = Math.max(0, y0); y < y1; y++) {
+      if (g.ls[y] < 0 || g.ls[y + 1] < 0) continue;
+      pairs++;
+      const gap = Math.max(g.ls[y] - g.rs[y + 1], g.ls[y + 1] - g.rs[y]) - 1;   // empty pixels between the two rows' carriers
+      if (gap > 1) { gaps++; worst = Math.max(worst, gap); }
+    }
+    ok(ys.length >= 6 && pairs >= 6 && gaps <= 1,
+       `a fast tune (${cStart} → ${cEnd} px) draws one continuous trail: ${gaps} gap(s) between ${pairs} row pairs along ${ys.length} moving rows` +
+       (gaps ? ` (widest ${worst} px)` : ''));
+  }
  }
 } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
 finally {

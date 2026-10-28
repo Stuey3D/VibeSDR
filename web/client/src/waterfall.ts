@@ -48,6 +48,7 @@ function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
 import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
 import { applyViewChange, spanChanged, mapRuns, visibleSpan } from './wfZoomFan';
+import { glideRow } from './wfGlide';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -169,6 +170,8 @@ export class Waterfall {
   /** Extent of the newest row WRITTEN to the ring — the view the history is currently drawn against. */
   private lastLo = 0; private lastSpan = 0;
   private runs = { buf: new Float64Array(64) };
+  /** ★ GLIDE (wfGlide.ts): the view the previous emitted row was drawn against (lo edge, span) — 0 = none. */
+  private glideLo = 0; private glideSpan = 0;
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
   /** ★ Arrival gaps, display rate, cadence and the per-pair row budget — all in wfPacing.ts's
@@ -688,11 +691,26 @@ export class Waterfall {
     //     ★ `prev` is kept: it is what a future in-shader interpolation would need, and the app's
     //     continuous mode is worth porting if a tune ever looks steppy.
     const useCur = t >= 0.5;
-    blend.set(useCur ? cur : prev);
-    void n;
+    const content = useCur ? cur : prev;
+    const cLo = useCur ? this.curLo : this.prevLo, cSpan = useCur ? this.curSpan : this.prevSpan;
+    // ★★ GLIDE SMOOTHING (wfGlide.ts, Stuart 2026-10-28): while the centre moves between two frames of the SAME span, the
+    //    row is drawn against the view t of the way from the previous frame's to the new one's, and its strong signals
+    //    are smeared back to where the previous row drew them — a moving station is one continuous diagonal, not dashes.
+    //    A steady row (both shifts 0) is the plain copy it always was.
+    let viewLo = cLo;
+    if (cSpan > 0 && !spanChanged(this.prevSpan, this.curSpan) && this.prevSpan > 0) {
+      const L = this.prevLo + Math.max(0, Math.min(1, t)) * (this.curLo - this.prevLo);
+      const shift = (cLo - L) / cSpan * n;
+      const near = this.glideSpan > 0 && !spanChanged(this.glideSpan, cSpan) && Math.abs(L - this.glideLo) < cSpan * 0.25;
+      const prevShift = near ? (cLo - this.glideLo) / cSpan * n : shift;
+      if (Math.round(shift) !== 0 || Math.round(prevShift) !== 0) glideRow(content, blend, n, shift, prevShift);
+      else blend.set(content);
+      viewLo = L;
+    } else blend.set(content);
+    this.glideLo = viewLo; this.glideSpan = cSpan;
     // ★★ THE ZOOM FAN — before this row goes in, a change of SPAN since the last row re-maps the whole history to the
     //    new view (wfZoomFan.ts). A change of centre alone leaves it alone: that is the tune's bend.
-    this._noteRowView(useCur ? this.curLo : this.prevLo, useCur ? this.curSpan : this.prevSpan);
+    this._noteRowView(viewLo, cSpan);
 
     // ★ NO SELF-COPY. This used to scroll with `wfCtx.drawImage(this.wf, 0, 1)` — drawing the
     // waterfall canvas onto ITSELF one pixel down, every frame. Safari optimises that; Chromium
