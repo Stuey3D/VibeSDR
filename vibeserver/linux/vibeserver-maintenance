@@ -260,6 +260,178 @@ say_offer() {
   esac
 }
 
+# ★★★ A NEW CARD'S ONE UPDATE CHECK (Stuart, 2026-10-28: "Make the SBC cards check for a VibeServer update on first
+#     install if connected to the internet, that way any fixes other than underlying OS stuff get put on the box the
+#     minute it gets set up, then the owner can choose auto updates thereafter"). His flow, exactly:
+#       1. the owner flashes the card and connects to it;  2. they set up the network in the setup page;
+#       3. THEN the setup page asks for this, ONCE, and shows it ("Checking for a VibeServer update…" → "Updated to
+#          11.0.x" / "Up to date");  4. no internet → "cannot check — proceeding with setup", and setup goes on;
+#       5. a check or update that FAILS is NEVER tried again by itself — not at boot, not later. From then on only the
+#          owner's own Update button or the auto-update schedule they choose;
+#       6. a Cancel while it runs: the installed VibeServer stays intact — the download is stopped, and once dpkg has
+#          started it is let finish (the page says so). Never a half-installed package.
+#  ★★ ONCE MEANS ONCE. The record is written BEFORE anything touches the network, on the settings partition (the bound
+#     /var/lib/vibeserver-pocket), and this action refuses to run while it exists — a reload of the page, a second
+#     request, a power cut mid-way: none of them runs it again. Only a CARD that was built to do it (the image's
+#     /etc/vibeserver-pocket/first-update, image/pocket customise.sh) ever does: a box that updated to this package
+#     from an older one was set up long ago, and its owner's choices already stand.
+#  ★★ IT IS THE `update` ACTION, NOT A SECOND UPDATER: the same apt_do (the real root through overlayroot-chroot on a
+#     sealed card), --only-upgrade of vibeserver ALONE (never the OS — Pi OS / Armbian stay as built), the same
+#     pocket_converge, the same reboot on a read-only root. What it adds: a quick look first (our repository only, into
+#     a throwaway list directory, so nothing is written anywhere when there is nothing to do), time limits, a cancel,
+#     and the result recorded for the page.
+#  ★ Never a downgrade: only an offer of kind stable/beta (a NEWER version, offer_for) is installed, by exact version,
+#    with --only-upgrade. A beta card (built from a ~beta package, so it carries the beta source) gets the newest beta.
+FIRST_ARM=/etc/vibeserver-pocket/first-update
+FIRST_REC=/var/lib/vibeserver-pocket/first-update
+FIRST_CANCEL=/var/lib/vibeserver/first-update.cancel
+FIRST_TMP=/run/vibeserver-first-update
+# ★ The time limits. VIBE_FIRST_*_SECS exist for test_first_update_inner.sh only: the helper runs from a root unit with
+#   no environment of the daemon's, so nothing the daemon writes can reach them.
+FIRST_CHECK_SECS=${VIBE_FIRST_CHECK_SECS:-90}       # the quick look at our repository
+FIRST_INDEX_SECS=${VIBE_FIRST_INDEX_SECS:-600}      # every source's index, through the chroot (a Pi Zero parsing Debian's is slow)
+FIRST_FETCH_SECS=${VIBE_FIRST_FETCH_SECS:-900}      # the package itself
+first_rec() {   # <state> <from> <to> [why] — checking | downloading | installing | updated | uptodate | offline | failed | cancelled
+  local d; d=$(dirname "$FIRST_REC")
+  [ -L "$d" ] && return 0
+  install -d -m 0755 "$d" 2>/dev/null || true
+  rm -f "$FIRST_REC.tmp" 2>/dev/null || true
+  ( umask 022 && printf 'state=%s\nfrom=%s\nto=%s\nwhy=%s\ntime=%s\n' "$1" "$2" "$3" "${4:-}" "$(date +%s)" \
+      > "$FIRST_REC.tmp" ) 2>/dev/null || return 0
+  sync "$FIRST_REC.tmp" 2>/dev/null || sync
+  mv -f "$FIRST_REC.tmp" "$FIRST_REC" 2>/dev/null || true
+  sync "$d" 2>/dev/null || sync
+}
+# ★ The daemon's Cancel is one file in ITS directory (it cannot write ours). Only its EXISTENCE is read — never its
+#   contents, never followed — and it is removed with rm, which removes a link and not what it points at.
+first_cancelled() { [ -e "$FIRST_CANCEL" ] || [ -L "$FIRST_CANCEL" ]; }
+children_of() {
+  if command -v pgrep >/dev/null 2>&1; then pgrep -P "$1" 2>/dev/null || true
+  else awk -v p="$1" '$4 == p { print $1 }' /proc/[0-9]*/stat 2>/dev/null || true; fi
+}
+# ★★ STOP THE DOWNLOAD, NOT THE WRAPPER. Only apt-get and its download methods are signalled. overlayroot-chroot and
+#    apt_do must run on to their own clean-up (the real root remounted read-only, /dev and the boot partition unbound) —
+#    killing them would leave the real root mounted read-write under a running box. apt-get on SIGTERM drops its
+#    partial files and its lock; nothing has been unpacked while it is still fetching.
+stop_apt_under() {
+  local c comm
+  for c in $(children_of "$1"); do stop_apt_under "$c"; done
+  comm=$(cat "/proc/$1/comm" 2>/dev/null || true)
+  case "$comm" in apt-get|http|https) kill -TERM "$1" 2>/dev/null || true ;; esac
+}
+# Run "$@" (a command or apt_do …) with a time limit and the cancel. 0 done · 1 failed · 2 cancelled · 3 timed out.
+run_watched() {
+  local limit=$1 n=0 why="" rc=0 pid; shift
+  "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ -z "$why" ]; then
+      if first_cancelled; then why=cancel; log "Cancel pressed — stopping the download"; stop_apt_under "$pid"
+      elif [ "$n" -ge "$limit" ]; then why=timeout; log "!! no answer after ${limit} s — stopping"; stop_apt_under "$pid"; fi
+    else
+      stop_apt_under "$pid"    # ★ again, for a method started in between
+    fi
+    sleep 1; n=$((n + 1))
+  done
+  wait "$pid" || rc=$?
+  case "$why" in cancel) return 2 ;; timeout) return 3 ;; esac
+  [ "$rc" = 0 ] || return 1
+  return 0
+}
+# ★ The quick look: OUR repository only (the stable source, and the beta one if this card has it), into a list
+#   directory in RAM that is thrown away — no Debian or Armbian index, nothing written to the root, no stale answer from
+#   an index left on the card. Prints apt-cache madison's lines for vibeserver.
+first_look() {
+  local f
+  rm -rf "$FIRST_TMP"
+  install -d -m 0755 "$FIRST_TMP" "$FIRST_TMP/lists" "$FIRST_TMP/lists/partial" || return 1
+  : > "$FIRST_TMP/sources.list"
+  for f in "$STABLE_LIST" "$BETA_LIST"; do
+    if [ -f "$f" ] && [ ! -L "$f" ]; then cat "$f" >> "$FIRST_TMP/sources.list"; fi
+  done
+  FIRST_APT=(-o "Dir::Etc::SourceList=$FIRST_TMP/sources.list" -o Dir::Etc::SourceParts=- \
+             -o "Dir::State::Lists=$FIRST_TMP/lists" -o Dir::Cache::pkgcache= -o Dir::Cache::srcpkgcache= \
+             -o APT::Get::List-Cleanup=false -o Acquire::Retries=0 \
+             -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+  run_watched "$FIRST_CHECK_SECS" apt-get -q "${FIRST_APT[@]}" update
+}
+first_update() {
+  local inst m s b o kind ver on=0 rc now
+  if [ ! -f "$FIRST_ARM" ]; then log "this box was not set up from a new card — nothing to do (use Update VibeServer)"; return 0; fi
+  if [ -e "$FIRST_REC" ] || [ -L "$FIRST_REC" ]; then
+    log "the new-card update check has already run once — from now on Update VibeServer, or the schedule, does this"
+    return 0
+  fi
+  # ★ A Cancel pressed while the request was still waiting for this helper counts: the file is NOT cleared here.
+  inst=$(dpkg-query -W -f='${Version}' vibeserver 2>/dev/null | tr -cd 'A-Za-z0-9.+~:-' || true)
+  first_rec checking "$inst" ""
+  log "Checking for a VibeServer update (this is $inst)…"
+  rc=0; first_look || rc=$?
+  if [ "$rc" = 2 ]; then rm -f "$FIRST_CANCEL"; first_rec cancelled "$inst" "" cancel; log "Cancelled — VibeServer $inst is unchanged."; return 0; fi
+  beta_is_on && on=1
+  m=$(apt-cache "${FIRST_APT[@]}" madison vibeserver 2>/dev/null || true)
+  rm -rf "$FIRST_TMP"
+  s=$(printf '%s\n' "$m" | newest_in stable)
+  b=$(printf '%s\n' "$m" | newest_in beta)
+  o=$(offer_for "$on" "$inst" "$s" "$b")
+  kind=${o%% *}; ver=""; [ "$o" = "$kind" ] || ver=${o#* }
+  case "$kind" in
+    unknown)
+      # ★ No answer from the repository: no internet (a box set up on its own hotspot, a dead uplink, no DNS).
+      first_rec offline "$inst" "" "$([ "$rc" = 3 ] && echo timeout || echo offline)"
+      log "VibeServer cannot check for updates (no answer from apt.vibesdr.net) — proceeding with setup."
+      return 0 ;;
+    stable|beta) ;;
+    *)
+      # ★ none, or back-to-stable (a beta newer than every stable): nothing is EVER installed downwards here.
+      first_rec uptodate "$inst" ""
+      log "VibeServer is up to date ($inst)."
+      return 0 ;;
+  esac
+  log "VibeServer $ver is available — downloading it"
+  first_rec downloading "$inst" "$ver"
+  # ★ Every source's index, as `update` does: the new package may need a system package the card does not have yet,
+  #   and pocket_converge installs what this release's list adds. Cancellable — nothing is installed yet.
+  rc=0; run_watched "$FIRST_INDEX_SECS" apt_do apt-get -q -o Acquire::Retries=1 \
+          -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update || rc=$?
+  if [ "$rc" = 0 ]; then
+    rc=0; run_watched "$FIRST_FETCH_SECS" apt_do apt-get -q -y --only-upgrade --download-only \
+            -o Acquire::Retries=1 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+            install "vibeserver=$ver" || rc=$?
+  fi
+  # ★ The last moment a Cancel can still be honoured: after this line dpkg runs, and dpkg is never interrupted.
+  if [ "$rc" = 0 ] && first_cancelled; then rc=2; fi
+  case "$rc" in
+    0) ;;
+    2) rm -f "$FIRST_CANCEL"; first_rec cancelled "$inst" "$ver" cancel
+       log "Cancelled — nothing was installed; VibeServer $inst is unchanged."; return 0 ;;
+    3) first_rec failed "$inst" "$ver" timeout
+       log "!! The download took too long and was stopped — VibeServer $inst is unchanged. Update it later from the admin page."
+       return 0 ;;
+    *) first_rec failed "$inst" "$ver" download
+       log "!! The download failed — VibeServer $inst is unchanged. Update it later from the admin page."
+       return 0 ;;
+  esac
+  first_rec installing "$inst" "$ver"
+  log "Installing VibeServer $ver — this part cannot be cancelled; it takes a minute"
+  rc=0; apt_do apt-get -q -y --only-upgrade \
+          -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+          install "vibeserver=$ver" || rc=$?
+  rm -f "$FIRST_CANCEL"
+  # ★ Asked of the REAL root (through the chroot): on a sealed card the live overlay may still show the old status file.
+  now=$(apt_do dpkg-query -W -f='${Version}' vibeserver 2>/dev/null | tr -cd 'A-Za-z0-9.+~:-' || true)
+  if [ "$rc" != 0 ] || [ "$now" != "$ver" ]; then
+    first_rec failed "$inst" "$ver" install
+    log "!! The install did not finish (apt said $rc; installed now: ${now:-?}). Update it later from the admin page."
+    return 0
+  fi
+  pocket_converge
+  write_offer
+  first_rec updated "$inst" "$ver"
+  log "Updated to VibeServer $ver."
+  after_install
+}
+
 case "$action" in
   restart)      log "restarting vibeserver";     systemctl restart vibeserver ;;
   # ★ Asked for by the server's own stall watchdog, not by a button: sdrplay_apiService stopped
@@ -361,6 +533,8 @@ case "$action" in
                 # ★ The page's offer line follows (after a restart this process may already be gone — harmless).
                 write_offer
                 after_install ;;
+  # ★★★ A NEW CARD'S ONE UPDATE CHECK — asked for by the setup page once the network is set up. See first_update.
+  first-update) first_update || true ;;
   maps-install) log "installing the detail map pack"
                 # ★★★ THE FULL MAP PACK, ON REQUEST. The server ships the basic pack; the detail
                 #   pack is ~82 MB compressed and is its own package precisely so it is a choice

@@ -65,6 +65,31 @@ CONVERGE=/usr/lib/vibeserver/vibeserver-pocket-converge
 install -d -o root -g root -m 0755 /etc/vibeserver-pocket
 echo "1" > /etc/vibeserver-pocket/enabled
 chmod 0644 /etc/vibeserver-pocket/enabled
+# ★★★ A NEW CARD'S ONE UPDATE CHECK (Stuart, 2026-10-28: "Make the SBC cards check for a VibeServer update on first
+#     install if connected to the internet … then the owner can choose auto updates thereafter"). This file ARMS it: once
+#     the owner has set up the network, the setup page asks the root helper (vibeserver-maintenance first-update) to look
+#     ONCE for a newer VibeServer and install it — the package only, never the OS. Only a card carries the file, so a box
+#     that updated to this package from an older one never runs it. The helper records the run on the settings partition
+#     and never runs it again (offline, failed or cancelled included). A package from before the feature: not armed.
+if grep -q '^first_update()' /usr/lib/vibeserver/vibeserver-maintenance 2>/dev/null; then
+  : > /etc/vibeserver-pocket/first-update
+  chmod 0644 /etc/vibeserver-pocket/first-update
+  say "armed the one update check at first setup"
+else
+  say "this vibeserver package has no first-update — the card will not check for an update at setup"
+fi
+# ★★ A CARD BUILT FROM A BETA looks in the BETA suite (Stuart: "stable suite unless the card was built from beta"). The same
+#    file the admin page's "Receive beta updates" tick writes (vibeserver-maintenance beta_write), so the page shows it
+#    ticked and the owner can untick it — the way back to stable is the one that already exists.
+case "$(dpkg-query -W -f='${Version}' vibeserver 2>/dev/null)" in
+  *~beta*)
+    printf '%s\n' "# VibeServer BETA updates. Written by the admin page (Receive beta updates);" \
+      "# untick it there, or delete this file and run apt update, to go back to stable releases only." \
+      "deb [arch=arm64,amd64,armhf signed-by=/usr/share/keyrings/vibesdr.gpg] https://apt.vibesdr.net beta main" \
+      > /etc/apt/sources.list.d/vibesdr-beta.list
+    chmod 0644 /etc/apt/sources.list.d/vibesdr-beta.list
+    say "a beta package: the card follows the beta suite (the admin page shows Receive beta updates ticked)" ;;
+esac
 if [ ! -f /etc/vibeserver-pocket/pocket.conf ]; then
   install -m 0644 "$POCKET_FILES/pocket.conf" /etc/vibeserver-pocket/pocket.conf
   sed -i "s/^COUNTRY=.*/COUNTRY=$COUNTRY/" /etc/vibeserver-pocket/pocket.conf
