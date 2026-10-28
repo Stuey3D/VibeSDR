@@ -19825,13 +19825,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 sock->close(); return;
             }
             std::string err, updated;
-            const int n = fn(wantRefresh, err, updated);
+            std::string note;
+            const int n = fn(wantRefresh, err, updated, note);
             std::string b = "{\"entries\":" + std::to_string(n)
                           + ",\"updated\":\"" + updated + "\"";
-            if (!err.empty()) {
-                std::string e; for (char c : err) { if (c=='"'||c=='\\') e += '\\'; if ((unsigned char)c >= 0x20) e += c; }
-                b += ",\"error\":\"" + e + "\"";
-            }
+            auto jstr = [](const std::string& in) {
+                std::string e; for (char c : in) { if (c=='"'||c=='\\') e += '\\'; if ((unsigned char)c >= 0x20) e += c; }
+                return e;
+            };
+            if (!err.empty())  b += ",\"error\":\"" + jstr(err) + "\"";
+            // ★ NOT an error: EiBi has not published this season yet and the previous one is in use.
+            if (!note.empty()) b += ",\"note\":\"" + jstr(note) + "\"";
             b += "}";
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Connection: close\r\nContent-Length: " + std::to_string(b.size())
