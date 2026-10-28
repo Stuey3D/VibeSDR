@@ -47,7 +47,8 @@ function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
 }
 import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
-import { applyViewChange, spanChanged, mapRuns, visibleSpan } from './wfZoomFan';
+import { applyViewChange, spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
+import { WIDE_TEX, wideExtent, wideRowInto, percentile, type WideRow } from './wfWide';
 import { placementMoved, canGlide, glideRowAt, newGlideScratch } from './wfGlide';
 
 export interface WaterfallOpts {
@@ -169,7 +170,27 @@ export class Waterfall {
   private xfB = new Float64Array(0);
   /** Extent of the newest row WRITTEN to the ring — the view the history is currently drawn against. */
   private lastLo = 0; private lastSpan = 0;
-  private runs = { buf: new Float64Array(64) };
+  private runs = { buf: new Float64Array(80) };
+  /** ★★ V12 THE FULL-CAPTURE LAYER (wfWide.ts): per ring row, the extent X its coarse row covers (0 = none), the newest
+   *  full-capture row and when it came, the floor offset that matches it to the detailed rows, and the 2D path's own
+   *  coarse ring (the GL path keeps it as a second texture in WaterfallGL). */
+  private xfX = new Float64Array(0);
+  private wide: WideRow | null = null;
+  /** ★ The full-capture row as DRAWN: interpolated in time from the one before to the newest across the interval they
+   *  come at (every 8th frame — drawn as it came, the layer stepped in blocks of rows). A capture that moved is not
+   *  interpolated across (the two rows describe different bands). */
+  private widePrev: Float32Array | null = null;
+  private wideGap = 800;
+  private wideSm: WideRow | null = null;
+  private wideAt = 0;
+  private wideEver = false;
+  private wideOff = 0; private wideOffSet = false;
+  private detP20 = NaN;
+  private pScratch = { buf: new Float32Array(1024) };
+  private coarseRow = new Uint8Array(WIDE_TEX);
+  private wfC: HTMLCanvasElement | null = null;
+  private wfCCtx: CanvasRenderingContext2D | null = null;
+  private rowImgC: ImageData | null = null;
   /** ★ GLIDE (wfGlide.ts): scratch for the in-between rows. */
   private glideScratch = newGlideScratch(1024);
   private curRow: Uint8Array | null = null;    // newest received row
@@ -402,9 +423,20 @@ export class Waterfall {
                                               0, wfH * (firstRows / oh), w, wfH * (this.head / oh));
       // ★ The zoom fan's maps follow their rows into the unwrapped, re-heighted buffer (row j ← reading row j·oh/wfH).
       if (this.xfA.length === oh) {
-        const a = new Float64Array(wfH), b = new Float64Array(wfH);
-        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; }
-        this.xfA = a; this.xfB = b;
+        const a = new Float64Array(wfH), b = new Float64Array(wfH), x = new Float64Array(wfH);
+        const hasX = this.xfX.length === oh;
+        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; x[j] = hasX ? this.xfX[r] : 0; }
+        this.xfA = a; this.xfB = b; this.xfX = x;
+      }
+      // ★ V12 and the full-capture layer's rows follow theirs, the same way (unwrapped, re-heighted).
+      if (this.wfC && this.wfCCtx && this.wfC.height === oh) {
+        const tc2 = document.createElement('canvas'); tc2.width = WIDE_TEX; tc2.height = oh;
+        tc2.getContext('2d')!.drawImage(this.wfC, 0, 0);
+        this.wfC.height = wfH;
+        this.wfCCtx.fillStyle = '#000'; this.wfCCtx.fillRect(0, 0, WIDE_TEX, wfH);
+        if (firstRows > 0) this.wfCCtx.drawImage(tc2, 0, this.head, WIDE_TEX, firstRows, 0, 0, WIDE_TEX, wfH * (firstRows / oh));
+        if (this.head > 0) this.wfCCtx.drawImage(tc2, 0, 0, WIDE_TEX, this.head, 0, wfH * (firstRows / oh), WIDE_TEX, wfH * (this.head / oh));
+        this.rowImgC = this.wfCCtx.createImageData(WIDE_TEX, 1);
       }
     }
     this.head = 0;
@@ -429,6 +461,49 @@ export class Waterfall {
     else { this.wfCtx.fillStyle = '#000'; this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height); }
     this.head = 0;      // an all-black ring has no meaningful head
     this.xfA.fill(1); this.xfB.fill(0);   // a blank ring has nothing to fan
+    this.xfX.fill(0);
+    this.wide = null; this.wideSm = null; this.widePrev = null;   // ★ a jump: the old full-capture row is another band
+    if (this.wfCCtx && this.wfC) { this.wfCCtx.fillStyle = '#000'; this.wfCCtx.fillRect(0, 0, this.wfC.width, this.wfC.height); }
+  }
+
+  /** ★★ V12 a full-capture row (SPWB) arrived — the layer under the history (wfWide.ts). Not held with the detailed rows:
+   *  it is only ever the newest picture of the rest of the band. */
+  pushWide(row: WideRow) {
+    const now = performance.now(), old = this.wide;
+    if (old && old.centreHz === row.centreHz && old.spanHz === row.spanHz && old.db.length === row.db.length && this.wideSm) {
+      // ★ from what is on screen now (the interpolation part-way), so a row that comes early does not jump
+      if (!this.widePrev || this.widePrev.length !== row.db.length) this.widePrev = new Float32Array(row.db.length);
+      this.widePrev.set(this.wideSm.db);
+      const gap = now - this.wideAt;
+      if (gap > 0 && gap < 5000) this.wideGap += (gap - this.wideGap) * 0.3;
+    } else this.widePrev = null;
+    // ★ COPY: the caller (spectrum.ts) parses every full-capture row into one reused buffer
+    this.wide = { centreHz: row.centreHz, spanHz: row.spanHz, db: new Float32Array(row.db) };
+    this.wideAt = now;
+    this.wideEver = true;
+    // ★ Match its noise floor to the detailed rows' (the wide FFT's bins are wider, its floor higher): the 20th
+    //   percentile of the part of the band both cover, followed slowly so the outside does not flicker.
+    const n = row.db.length, wLo = row.centreHz - row.spanHz / 2;
+    if (this.curSpan > 0 && this.detP20 === this.detP20) {
+      // ★ At least 24 coarse bins round the view: zoomed far in, the view covers fewer coarse bins than a percentile can
+      //   use, and an unmatched layer is drawn many dB too hot (the wide FFT's max-held bins against the zoom FFT's).
+      const mid = (this.curLo + this.curSpan / 2 - wLo) / row.spanHz * n;
+      const half = Math.max(12, this.curSpan / row.spanHz * n / 2);
+      const i0 = mid - half, i1 = mid + half;
+      const c = percentile(row.db, i0, i1, 0.2, this.pScratch);
+      if (c === c) {
+        const off = Math.max(-30, Math.min(30, this.detP20 - c));
+        this.wideOff = this.wideOffSet ? this.wideOff + (off - this.wideOff) * 0.3 : off;
+        this.wideOffSet = true;
+      }
+    }
+  }
+
+  /** ★ V12 the band the history holds rows for beyond the view — the newest full-capture row's extent (null = none fresh). */
+  captureWindow(): { lo: number; hi: number } | null {
+    const w = this.wide;
+    if (!w || performance.now() - this.wideAt > 4000) return null;
+    return { lo: w.centreHz - w.spanHz / 2, hi: w.centreHz + w.spanHz / 2 };
   }
 
   /** Feed one raw dBFS frame. Rows are NOT drawn here — see tick(). */
@@ -545,6 +620,8 @@ export class Waterfall {
     this.spanHz = bwHz;
 
     const frame = this.proc.process(bins, centerHz, bwHz);
+    // ★ V12 the full-capture layer's floor match (pushWide) — only once a server has sent one.
+    if (this.wideEver) this.detP20 = percentile(bins, 0, bins.length, 0.2, this.pScratch);
 
     // Roll the trace: keep the OLD frame so draw() can blend towards the new one.
     if (!this.spec || this.spec.length !== frame.spec.length) {
@@ -750,6 +827,13 @@ export class Waterfall {
       this.head = (this.head - 1 + rows) % rows;
       this.gl.pushRow(rowIn, this.head);
       this.xfA[this.head] = 1; this.xfB[this.head] = 0;
+      // ★★ V12 the full-capture layer: this row's coarse twin, at the same ring row (wfWide.ts).
+      this.xfX[this.head] = 0;
+      if (this.wideEver) {
+        this.gl.ensureCoarse(WIDE_TEX);
+        this.xfX[this.head] = this._coarseFor(cLo, cSpan);
+        this.gl.pushCoarse(this.coarseRow, this.head);
+      }
       return;
     }
 
@@ -758,6 +842,17 @@ export class Waterfall {
     this._ensureXf(H);
     this.head = (this.head - 1 + H) % H;
     this.xfA[this.head] = 1; this.xfB[this.head] = 0;
+    this.xfX[this.head] = 0;
+    // ★★ V12 the full-capture layer on the 2D path: a coloured WIDE_TEX-wide row in its own ring canvas, same row index.
+    if (this.wideEver) {
+      this.xfX[this.head] = this._coarseFor(cLo, cSpan);
+      this._ensureWfC(H);
+      if (this.rowImgC && this.wfCCtx) {
+        const d = this.rowImgC.data, lut = this.lut, cr = this.coarseRow;
+        for (let x = 0; x < WIDE_TEX; x++) { const o = cr[x] << 2, q = x << 2; d[q] = lut[o]; d[q + 1] = lut[o + 1]; d[q + 2] = lut[o + 2]; d[q + 3] = 255; }
+        this.wfCCtx.putImageData(this.rowImgC, 0, this.head);
+      }
+    }
     const W = this.wf.width;
     if (!this.rowImg) return;
     const img = this.rowImg.data;
@@ -785,6 +880,41 @@ export class Waterfall {
     if (this.xfA.length === rows) return;
     this.xfA = new Float64Array(rows).fill(1);
     this.xfB = new Float64Array(rows);
+    this.xfX = new Float64Array(rows);
+  }
+
+  /** ★ V12 the coarse row for a detailed row placed at (lo, span) into this.coarseRow; returns its extent X (0 = none:
+   *  no fresh full-capture row, or the row already covers the capture). Through the detailed rows' own dB → index
+   *  mapping, so the two layers share the palette and the auto range. */
+  private _coarseFor(lo: number, span: number): number {
+    const src = this.wide;
+    const X = src && performance.now() - this.wideAt < 4000 ? wideExtent(src.spanHz, span) : 0;
+    if (!X || !src) { this.coarseRow.fill(0); return 0; }
+    let w = this.wideSm;
+    if (!w || w.db.length !== src.db.length) w = this.wideSm = { centreHz: src.centreHz, spanHz: src.spanHz, db: new Float32Array(src.db.length) };
+    w.centreHz = src.centreHz; w.spanHz = src.spanHz;
+    {
+      const a = w.db, b = src.db, p = this.widePrev;
+      const t = p ? Math.max(0, Math.min(1, (performance.now() - this.wideAt) / Math.max(50, this.wideGap))) : 1;
+      if (!p || t >= 1) a.set(b);
+      else for (let i = 0; i < a.length; i++) { const v0 = p[i], v1 = b[i]; a[i] = v0 === v0 && v1 === v1 ? v0 + (v1 - v0) * t : v1; }
+    }
+    const r = this.proc.getRange(), bright = this.proc.getSettings().wfBrightness || 0;
+    const range = r.dbMax - r.dbMin > 0 ? r.dbMax - r.dbMin : 1, CLIP = 14.97;
+    wideRowInto(this.coarseRow, w, lo, span, X, this.wideOff, (db) => {
+      const nrm = Math.max(0, Math.min(1, (db + bright - r.dbMin) / range));
+      const mag = nrm * 255;
+      return Math.round(mag < CLIP ? 0 : (mag - CLIP) / (255 - CLIP) * 255);
+    });
+    return X;
+  }
+
+  /** The 2D path's coarse ring canvas, WIDE_TEX × the waterfall's height. */
+  private _ensureWfC(H: number) {
+    if (this.wfC && this.wfC.height === H) return;
+    if (!this.wfC) { this.wfC = document.createElement('canvas'); this.wfCCtx = this.wfC.getContext('2d'); }
+    this.wfC.width = WIDE_TEX; this.wfC.height = H;
+    if (this.wfCCtx) { this.wfCCtx.fillStyle = '#000'; this.wfCCtx.fillRect(0, 0, WIDE_TEX, H); this.rowImgC = this.wfCCtx.createImageData(WIDE_TEX, 1); }
   }
 
   private _noteRowView(lo: number, span: number) {
@@ -833,13 +963,13 @@ export class Waterfall {
       // GPU path: the shader unwraps the ring from `head` and colours it on the GPU. One draw into
       // the GL canvas, one blit onto the visible canvas — no per-row CPU work, dpr scaling is free.
       // ★ The zoom fan: runs of rows sharing one map (one run, the identity, until somebody zooms).
-      const nRuns = this.xfA.length === this.gl.rows ? mapRuns(this.xfA, this.xfB, this.head, wfH, this.runs) : 0;
+      const nRuns = this.xfA.length === this.gl.rows ? mapRunsX(this.xfA, this.xfB, this.xfX, this.head, wfH, this.runs) : 0;
       this.gl.render(this.head, wfH, W, wfH, this.runs.buf, nRuns);
       ctx.drawImage(this.glCanvas, 0, 0, W, wfH, 0, specH, W, wfH);
     } else {
-      const nRuns = this.xfA.length === wfH ? mapRuns(this.xfA, this.xfB, this.head, wfH, this.runs) : 0;
+      const nRuns = this.xfA.length === wfH ? mapRunsX(this.xfA, this.xfB, this.xfX, this.head, wfH, this.runs) : 0;
       const rb = this.runs.buf;
-      if (nRuns <= 1 && (nRuns === 0 || (rb[2] === 1 && rb[3] === 0))) {
+      if (nRuns <= 1 && (nRuns === 0 || (rb[2] === 1 && rb[3] === 0 && rb[4] === 0))) {
         // 2D fallback: unwrap the ring with two blits (head→bottom, then top→head).
         const first = wfH - this.head;            // rows from head to the end of the buffer
         if (first > 0) ctx.drawImage(this.wf, 0, this.head, W, first, 0, specH, W, first);
@@ -850,8 +980,19 @@ export class Waterfall {
         ctx.fillStyle = '#000';
         ctx.fillRect(0, specH, W, wfH);
         for (let i = 0; i < nRuns; i++) {
-          const j0 = rb[i * 4], j1 = rb[i * 4 + 1];
-          const vs = visibleSpan(rb[i * 4 + 2], rb[i * 4 + 3]);
+          const j0 = rb[i * 5], j1 = rb[i * 5 + 1], ra = rb[i * 5 + 2], rbb = rb[i * 5 + 3], X = rb[i * 5 + 4];
+          // ★★ V12 the full-capture layer first (wfWide.ts): the run's coarse rows through the same map, extended by X.
+          if (X > 0 && this.wfC && this.wfC.height === wfH) {
+            const e = 1 + 2 * X;
+            const cs = visibleSpan(ra / e, (rbb + X) / e);
+            if (cs) {
+              const sx = cs[2] * WIDE_TEX, sw = (cs[3] - cs[2]) * WIDE_TEX, dx = cs[0] * W, dw = (cs[1] - cs[0]) * W;
+              let j = j0;
+              while (j < j1) { const r = (this.head + j) % wfH; const cnt = Math.min(j1 - j, wfH - r);
+                ctx.drawImage(this.wfC, sx, r, sw, cnt, dx, specH + j, dw, cnt); j += cnt; }
+            }
+          }
+          const vs = visibleSpan(ra, rbb);
           if (!vs) continue;
           const sx = vs[2] * W, sw = (vs[3] - vs[2]) * W, dx = vs[0] * W, dw = (vs[1] - vs[0]) * W;
           let j = j0;

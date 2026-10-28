@@ -6447,6 +6447,87 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else       { d = -d; std::memmove(v.data() + d, v.data(), sizeof(float) * (size_t)(n - d)); std::fill(v.begin(), v.begin() + d, v[d]); }
     }
     std::vector<float> wideRowAvg_;
+    /* ★★★ V12 THE FULL-CAPTURE ROW — "SPWB" (Stuart, 2026-10-28 02:00, beta26 web, Lenovo RSP1A, MW, zoomed in then out:
+     *  "the waterfall should be buffering outside the zoomed area so that the black doesn't show at all"). A listener
+     *  zoomed into part of the capture only ever received rows of that part, so after zooming out the history recorded
+     *  meanwhile was a narrow strip in a black frame. Black is allowed ONLY where the radio was not capturing.
+     *  ★ So while a listener who ASKED for it (`&wide=1` on /ws/user-spectrum — an older client never asks and sees no
+     *    change at all) views less than the capture, every kWideEvery-th spectrum frame it is sent is followed by a COARSE
+     *    row of the WHOLE capture: kWideBins bins, MAX-held from the wide FFT's averaged row (a one-bin carrier survives),
+     *    at the capture's own centre and span. The client keeps it as the layer UNDER its detailed history.
+     *  ★ ZERO EXTRA FFT: the wide FFT runs anyway (the crop path IS it, and it keeps running while the zoom path owns the
+     *    waterfall) — this is one max-hold pass over its averaged row, on the thread that already made that row (never the
+     *    audio's), and only while somebody subscribed is zoomed. No extra frame rate: it rides the listener's own frames.
+     *  ★ Wire: 'S','P','W','B', 1 (version), 0 (flags), u64 timestamp ns, u64 centre Hz (the capture's physical centre),
+     *    u32 span Hz (the capture width), then the bins LOW → HIGH (natural order — not the SPEC frame's DC-at-0); a 0
+     *    byte is "no data", as on SPEC. docs/PROTOCOL.md, 2026-10-28. */
+    static constexpr int kWideBins = 1024;
+    static constexpr int kWideEvery = 8;
+    static constexpr size_t kWideHdr = 26;
+    struct WideSub { int n = 0; bool zoomed = false; };
+    std::mutex wideMtx_;
+    std::map<net::Socket*, WideSub> wideSubs_;          // ★ under wideMtx_
+    std::atomic<int> wideZoomed_{0};                     // subscribers zoomed right now (changed under wideMtx_)
+    std::vector<uint8_t> wideFrame_;                      // ★ the newest full-capture row, under wideMtx_ (empty = none)
+    double wideFrameAt_ = 0.0;                            // when it was built (nowSecs) — a stale row is never sent
+    /** Build the full-capture row from wideRowAvg_ (fftshifted, DC = bins/2, physical DC at accumCentre_). DSP thread. */
+    void buildWideFrame(int bins, float specComp) {
+        if (bins < kWideBins || (int)wideRowAvg_.size() != bins || !(sampleRate > 0) || !(accumCentre_ > 0)) return;
+        std::vector<uint8_t> fr(kWideHdr + kWideBins);
+        fr[0]='S'; fr[1]='P'; fr[2]='W'; fr[3]='B'; fr[4]=1; fr[5]=0;
+        const uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::memcpy(&fr[6], &ts, 8);
+        const uint64_t c = (uint64_t)llround(accumCentre_);
+        std::memcpy(&fr[14], &c, 8);
+        const uint32_t sp = (uint32_t)llround(sampleRate);
+        std::memcpy(&fr[22], &sp, 4);
+        const float* r = wideRowAvg_.data();
+        for (int o = 0; o < kWideBins; o++) {
+            const int lo = (int)((long long)o * bins / kWideBins);
+            int hi = (int)((long long)(o + 1) * bins / kWideBins); if (hi <= lo) hi = lo + 1;
+            float best = r[lo];
+            for (int i = lo + 1; i < hi; i++) if (r[i] > best) best = r[i];   // max-hold: a one-bin carrier survives
+            const int v = (int)lround(best + 256.0 + specComp);
+            fr[kWideHdr + o] = (uint8_t)(v < 1 ? 1 : (v > 255 ? 255 : v));   // 0 stays "no data"
+        }
+        std::lock_guard<std::mutex> lk(wideMtx_);
+        wideFrame_.swap(fr);
+        wideFrameAt_ = nowSecs();
+    }
+    /** After a spectrum frame went to `s` for a view `viewSpanHz` wide: every kWideEvery-th such frame, while that view is
+     *  narrower than the capture, follow it with the full-capture row. The first one goes with the first zoomed frame. */
+    void wideAfterFrame(const std::shared_ptr<net::Socket>& s, double viewSpanHz) {
+        if (!s) return;
+        std::vector<uint8_t> out;
+        {
+            std::lock_guard<std::mutex> lk(wideMtx_);
+            auto it = wideSubs_.find(s.get());
+            if (it == wideSubs_.end()) return;
+            WideSub& w = it->second;
+            const bool z = !useSpy() && sampleRate > 0 && viewSpanHz > 0 && viewSpanHz < sampleRate * 0.98;
+            if (z != w.zoomed) {
+                w.zoomed = z; w.n = kWideEvery - 1;
+                if (wideZoomed_.fetch_add(z ? 1 : -1) + (z ? 1 : -1) <= 0) { wideFrame_.clear(); }
+            }
+            if (!z || ++w.n < kWideEvery) return;
+            if (wideFrame_.empty() || nowSecs() - wideFrameAt_ > 1.0) { w.n = kWideEvery - 1; return; }   // next frame
+            w.n = 0;
+            out = wideFrame_;
+        }
+        sendWs(s, 0x2, out.data(), out.size(), Out::Wide);
+        vsSpecBytes.fetch_add(out.size(), std::memory_order_relaxed);
+    }
+    /** A spectrum socket opened (subscribe = it asked `wide=1`) or closed (false). */
+    void wideSubscribe(net::Socket* s, bool subscribe) {
+        std::lock_guard<std::mutex> lk(wideMtx_);
+        auto it = wideSubs_.find(s);
+        if (it != wideSubs_.end()) {
+            if (it->second.zoomed && wideZoomed_.fetch_sub(1) - 1 <= 0) wideFrame_.clear();
+            wideSubs_.erase(it);
+        }
+        if (subscribe) wideSubs_[s] = WideSub{};
+    }
     void slowPush(SlowAvg& a, const float* row, int n) {
         a.ring.emplace_back(row, row + n);
         while ((int)a.ring.size() > kSlowAvgMax) a.ring.pop_front();
@@ -9290,6 +9371,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         sendWs(sock, 0x2, frame.data(), frame.size(), Out::Spectrum);
         vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+        wideAfterFrame(sock, c->viewSpanHz);   // ★ V12 SPWB — this listener's own view, the capture around it
     }
 
     /** Encode and send one block of this listener's audio to ITS OWN socket. */
@@ -10850,7 +10932,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     that says the front end is clipping almost never arrived.
      *  ★ The enum note above adc already warned "NOT Out::Sig" — the separation was understood and
      *    then undone by a third message quietly reusing the class. One class, one quantity. */
-    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx };
+    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx, Wide };   // ★ Wide: the full-capture row (SPWB)
 
     /** ★ Backlog ceiling per client. Reached = THIS listener cannot keep up, so THIS listener is
      *  dropped — which is the honest outcome and, crucially, a local one. The old code punished
@@ -11044,6 +11126,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     rather than freezing. Back to full rate once the audio has been clear for ~1 s.
         std::lock_guard<std::mutex> lk(ob->m);
         if (ob->closing) return;
+        // ★ The full-capture row (SPWB) is the first thing to go: while the audio is backed up it is not sent at all.
+        if (cls == Out::Wide && ob->gate && !ob->isAudio && ob->gate->yielding()) return;
         if (cls == Out::Spectrum && ob->gate && !ob->isAudio && !ob->gate->waterfallMaySend(qosNowMs())) {
             noteWaterfallYield(ob);
             return;
@@ -11055,7 +11139,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Each newest-wins class supersedes only ITS OWN kind — a fresh signal reading must not
         //   discard the pending gain telemetry, which is a different quantity that has not changed.
         if (cls == Out::Spectrum || cls == Out::Sig || cls == Out::Adc
-            || cls == Out::RspStat || cls == Out::Lx) {
+            || cls == Out::RspStat || cls == Out::Lx || cls == Out::Wide) {
             for (auto it = ob->q.begin(); it != ob->q.end(); ) {
                 if (it->first == cls) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
                 else ++it;
@@ -11239,7 +11323,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         size_t sent = 0;
         for (size_t pi = 0; pi < peers.size(); pi++)
             if (due[pi] && peers[pi].bins == outBins)
-                { sendWs(peers[pi].sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++; }
+                { sendWs(peers[pi].sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++;
+                  wideAfterFrame(peers[pi].sock, displaySpan() / zoomFactor.load()); }   // ★ V12 SPWB
         vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
         }   // end per-width loop
         // ★ The FIRST frame stays at LOGI — it is the proof the zoom path started. The every-100
@@ -11324,6 +11409,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if ((int)wideRowAvg_.size() != bins) wideRowAvg_.assign(bins, 0.0f);
             for (int i = 0; i < bins; i++) wideRowAvg_[i] = fftAccum[i] * inv;
             slowPush(wideSlow_, wideRowAvg_.data(), bins);
+            // ★ V12 the full-capture row (SPWB) — only while a subscriber is zoomed; see buildWideFrame.
+            if (wideZoomed_.load(std::memory_order_relaxed) > 0 && !useSpy()) buildWideFrame(bins, specComp);
         }
 
         /* ── Lightning, from the same averaged frame (see SfericDetect) ─────────────────────
@@ -11657,6 +11744,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
                 if (std::fabs(sp - view.span) >= 1 || std::fabs(ce - view.centre) >= 1) continue;
                 sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++;
+                wideAfterFrame(p.sock, view.span);   // ★ V12 SPWB — the rest of the capture, under this view
             }
             vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
             }   // end per-width loop
@@ -19658,6 +19746,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *  on an older server and must treat <= -100 as off, or it would draw a gate
                        *  the server is not applying. */
                       + ",\"sqlOn\":true"
+                      /* ★ V12: this server sends the full-capture row (SPWB) to a spectrum socket that asks `wide=1`. */
+                      + ",\"wide\":" + std::to_string(kWideBins)
                       /* ★★ V12 VFO A/B: how many watch channels a listener may add here (0 = none — no toggle). */
                       + ",\"watch\":" + std::to_string(watchMaxFor(sock))   // ★ 0 for a listener in DRM
                       + std::string(",\"gainCap\":")
@@ -21035,6 +21125,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ The DAB report in pieces (sendDab) — the client's own word, like proto; it grants nothing.
                 const bool dabV2 = queryParam(reqLine, "dab") == "2";
                 { std::lock_guard<std::mutex> pl(dabPeerMtx); dabPeers[sock.get()] = DabPeer{ dabV2 }; }
+                // ★ V12 the full-capture row (SPWB) — the client's own word; a socket that does not ask never gets one.
+                wideSubscribe(sock.get(), queryParam(reqLine, "wide") == "1");
                 const std::string bq = queryParam(reqLine, "bins");
                 wantBins = bq.empty() ? WIRE_BINS_DEFAULT : atoi(bq.c_str());
                 if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
@@ -24639,6 +24731,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           clientFps.erase(sock.get());
           clientFpsAcc.erase(sock.get());
           clientSpecAudit.erase(sock.get());
+          wideSubscribe(sock.get(), false);   // ★ V12 SPWB (wideMtx_ is a leaf lock — taking it under clientMtx is safe)
           // ★ Close the log entry for whoever this socket was. The reason is "closed" — the
           //   paths that end a session for a REASON (kicked, banned, timeout) each record their
           //   own before getting here, and ConnLog::close only ever fills the most recent

@@ -88,6 +88,10 @@ try {
   for (let s = SPAN; s > 40000; s = Math.round(s * 0.85)) { await zoom(f, s); await sleep(80); }
   await zoom(f, 40000);
   await sleep(4000); await shot('3-zoom-in');
+  if (process.env.WFSHOT_DEBUG) console.log('   layer', await ev(`JSON.stringify((() => { const w = window.__vibeWf().wf;
+    const d = w.wide && [...w.wide.db].filter((v) => v === v).sort((a, b) => a - b);
+    return { off: w.wideOff, det: w.detP20, set: w.wideOffSet, wideP20: d && d[Math.floor(d.length * 0.2)], range: w.proc.getRange(),
+             cur: [w.curLo, w.curSpan], wide: w.wide && [w.wide.centreHz, w.wide.spanHz] }; })())`));
   for (let s = 40000; s < SPAN; s = Math.round(s / 0.85)) { await zoom(f, s); await sleep(80); }
   await zoom(f, SPAN);
   await sleep(2500); await shot('4-zoom-out');
