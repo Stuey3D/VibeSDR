@@ -40,7 +40,7 @@
  *   - Needle: 3-layer LED glow (28/16/6 blur), needleScale = clamp(.25,1,pxPerHz×4000)
  */
 
-import { newRowTargetState, stepRowTarget, rowTargetUnderCap } from '../assets/wfRowTarget';
+import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, carryRows, type WfScroll } from '../assets/wfRowTarget';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
@@ -223,7 +223,7 @@ export interface WaterfallViewProps {
    *    SMOOTH   4 — continuous motion on a slow feed, at the cost of largely synthesised rows.
    *  ★ Scroll SPEED therefore follows the data rate (rows/s = multiplier x fps), which is what
    *    SHARP has always done and what nobody has ever objected to. */
-  wfScroll?:       'sharp' | 'default' | 'smooth';
+  wfScroll?:       WfScroll;   // ★ V12 'eco' = 10 rows/s, 'minimum' = actual rows (5 rows/s under a sub-5 feed) — wfRowTarget ROW_RULE
   /** ★★ THE SLOWEST FRAME RATE THIS BACKEND EVER DELIVERS — what the fixed multiplier is sized
    *  against. It is a property of the SERVER, not a measurement, so it is known at connect and
    *  never moves: UberSDR bottoms out at 3.3 fps (→ 6x for a 20 rows/s scroll), VibeServer at
@@ -584,7 +584,7 @@ function WaterfallView({
   //   (1, 2, 1, 2 rows per frame). The web client now uses these same three (web/client/src/main.ts WF_PRESET).
   // ★★★ AND THESE ARE NOW CAPS (Stuart 10-20): the rows aimed for follow the measured feed — min(cap, 3x / 6x the feed),
   //     snapped to a divisor of 60 (src/assets/wfRowTarget.ts; handleFrame / spectrum_engine.cpp apply it).
-  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 20 : 0;
+  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 20 : wfScroll === 'eco' ? 10 : wfScroll === 'minimum' ? 5 : 0;
   // ★★ WF_ROWS (a lines-per-frame figure LATCHED from the measured feed rate) is GONE
   //     (2026-10-03). Since uN was pinned to 1 nothing read it — it only fed `cfg.rowsPerFrame`,
   //     which no code read either. Its latch never latched (handleFrame is a []-deps callback and
@@ -657,7 +657,7 @@ function WaterfallView({
     const sharpBase =
       // Interpolation blur scales with how many rows are synthesised, so the unsharp base follows
       // the multiplier rather than a frame rate that no longer drives anything.
-      wfScroll === 'smooth' ? 3 : wfScroll === 'default' ? 2 : 1.5;
+      wfScroll === 'smooth' ? 3 : wfScroll === 'default' ? 2 : wfScroll === 'eco' ? 1.75 : 1.5;   // minimum = sharp's
     // ★★ LINEAR ACROSS THE WHOLE SLIDER, with a ceiling about double the old
     // maximum. The curve used to be quadratic, which made the BOTTOM half do
     // nothing — slider 2 was (2/5)^2 = 0.16x base, imperceptible — so a 10-point
@@ -1442,6 +1442,15 @@ function WaterfallView({
   const pCool  = useSharedValue(0);
   const pMode  = useSharedValue(0);
   const pRate  = useSharedValue(0.03);   // rows per ms, measured (starts at Default's 30/s)
+  /** ★★★ V12 (Stuart 2026-10-28: "the interpolation always over interpolates and discards"): when the rows are being
+   *  FILLED IN to a target (Eco 10, Default 20, Smooth 60, Minimum 5 under a slow feed), the pace is that TARGET, rows
+   *  per ms — not the measured arrival rate. The fill-in pushes rows in lumps (9 fps → 10 is 1,1,…,1,2 per arrival), and
+   *  a ½ s measurement of lumps swung 8 ↔ 12 rows/s, so ECO's one-row-every-6-frames rhythm held on ~45 % of steps.
+   *  Paced at the known target, the playout buffer absorbs the lumps (as the web's RowPacer does) and the rhythm holds
+   *  (scripts/test_wf_speed_cap.ts). 0 = actual rows: the measured rate, as before. */
+  const pTgt   = useSharedValue(0);
+  const engTgtSt = useRef(newRowTargetState());   // the engine path's twin of the engine's own row target (see frameSink)
+  const engTgtMs = useRef({ last: 0, avg: 0, cap: -1 });
   const pRateT = useSharedValue(0);
   const pRateN = useSharedValue(0);
   const pPos   = useSharedValue(0);      // the continuous position, rows (contPace)
@@ -1500,7 +1509,7 @@ function WaterfallView({
         scrollFrac.value = pos - w;
       }
     } else {
-      const shown = rowPace(avail, pShown, pAcc, pLead, pCool, pMode, pRate.value, gap, true);
+      const shown = rowPace(avail, pShown, pAcc, pLead, pCool, pMode, pTgt.value > 0 ? pTgt.value : pRate.value, gap, true);
       shownRate(shown, ts, pSRate, pSN, pST);
       if (uHead.value !== shown) uHead.value = shown;
       if (scrollFrac.value !== 1) scrollFrac.value = 1;
@@ -1797,7 +1806,7 @@ function WaterfallView({
     // ★★ …and under a FRAME RATE cap below 60 it divides the cap (wfRowTarget rowTargetUnderCap — Stuart 2026-10-28: "in
     //    30fps lock mode no point running a 60fps waterfall"): 60 → 30, 20 → 15.
     const rowTarget = rowTargetUnderCap(avgFrameMs.current > 0
-      ? stepRowTarget(rowTargetSt.current, cfg.targetRows >= 60 ? 'smooth' : cfg.targetRows > 0 ? 'default' : 'sharp', 1000 / avgFrameMs.current)
+      ? stepRowTarget(rowTargetSt.current, scrollForCap(cfg.targetRows), 1000 / avgFrameMs.current)
       : rowTargetSt.current.target, 1000 / Math.max(1, avgFrameMs.current), uiFrameCapHz.value);
     const repeatsCarry = rowTarget > 0;
     const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
@@ -1874,15 +1883,11 @@ function WaterfallView({
     //     ★ It made sense in the OLD model, where the glide came from uFrac sweeping across uN
     //       synthesised lines. With uN = 1 there are no synthesised lines to sweep: the scroll IS
     //       the rows, so the rows must be pushed on every path.
-    const rowMs = rowTarget > 0 ? 1000 / rowTarget : 0;
-    let extras = 0;
-    if (rowMs > 0) {
-      rowCarry.current += dur / rowMs;      // rows this interval has earned (fractional)
-      extras = Math.max(0, Math.floor(rowCarry.current) - 1);   // the arrival itself was row #1
-      rowCarry.current -= Math.floor(rowCarry.current);
-      // ★ The rule never asks for more than 6 rows a frame (Stuart 10-20), so 8 is headroom — the stall guard.
-      if (extras > 8) extras = 8;           // a stall must not repay as a burst
-    }
+    // Rows this interval has earned at the target (fractional carry; the arrival itself was row #1) — wfRowTarget
+    // carryRows, proved with the display pacer in scripts/test_wf_speed_cap.ts. ★ The rule never asks for more than 6
+    // rows a frame (Stuart 10-20), so its cap of 8 is headroom — the stall guard.
+    const extras = carryRows(rowCarry, dur, rowTarget);
+    { const tg = rowTarget > 0 ? rowTarget / 1000 : 0; if (pTgt.value !== tg) pTgt.value = tg; }   // the pace (see pTgt)
     lastDynRows.current = extras + 1;
     scheduleExtraRows(extras, dur / (extras + 1));
     // ★★★ SPREAD THE REVEAL OVER THE ROW-SET INTERVAL, NOT THE DATA-FRAME INTERVAL. On a gated
@@ -2144,6 +2149,17 @@ function WaterfallView({
           //   carries it here, so it is checked per frame (one number compare) and the config re-sent on a change.
           const cap = uiFrameCapHz.value, ec = engineCfg.current;
           if (ec && ec.displayCapHz !== cap) { ec.displayCapHz = cap; engine.setConfig(ec); }
+          // ★ The pace target (pTgt) — the SAME rule the engine applies (wf_row_target.h, the same feed EMA), worked out
+          //   here because the engine's poll does not carry it. 0 = actual rows.
+          if (ec) {
+            const m = engTgtMs.current, now = Date.now();
+            if (m.cap !== ec.targetRows) { engTgtSt.current = newRowTargetState(); m.cap = ec.targetRows; }
+            if (m.last > 0) { const d = now - m.last; if (d > 0 && d < 2000) m.avg = m.avg > 0 ? m.avg * 0.8 + d * 0.2 : d; }
+            m.last = now;
+            const t = m.avg > 0 ? rowTargetUnderCap(stepRowTarget(engTgtSt.current, scrollForCap(ec.targetRows), 1000 / m.avg), 1000 / m.avg, cap) : 0;
+            const tg = t > 0 ? t / 1000 : 0;
+            if (pTgt.value !== tg) pTgt.value = tg;
+          }
           // The display driver's interaction flag (120 Hz, the pace rate frozen) — the engine's own boost rule.
           const on = frameCfg.current.smoothTune && Date.now() - at < SMOOTH_TUNE_TAIL_MS;
           if (interactSv.value !== on) interactSv.value = on;

@@ -154,6 +154,14 @@ int main() {
             CHECK(settle(20, r.fps) == r.def && settle(60, r.fps) == r.smo, "row target at %.2f fps: %g / %g (want %g / %g)",
                   r.fps, settle(20, r.fps), settle(60, r.fps), r.def, r.smo);
         CHECK(vibewf::rowTargetFor(20, 20) == 0, "20 fps Default is actual rows");
+        // ★ V12 ECO (cap 10): exactly 10 rows/s from any slower feed (over-generate and discard); 10 fps = actual rows.
+        struct Eco { double fps, want; } eco[] = { {5, 10}, {10.0 / 3, 10}, {6, 10}, {7, 10}, {9, 10}, {10, 10}, {2, 10} };
+        for (const Eco& r : eco)
+            CHECK(std::abs(settle(10, r.fps) - r.want) < 0.05, "eco at %.2f fps: %g rows (want %g)", r.fps, settle(10, r.fps), r.want);
+        // ★ V12 MINIMUM (cap 5): actual rows at 5 and above; a slower feed (2, 3.3) is filled in to 5.
+        struct Mn { double fps, want; } mn[] = { {5, 5}, {10.0 / 3, 5}, {2, 5}, {10, 10} };
+        for (const Mn& r : mn)
+            CHECK(std::abs(settle(5, r.fps) - r.want) < 0.05, "minimum at %.2f fps: %g rows (want %g)", r.fps, settle(5, r.fps), r.want);
         // A governor step 10 → 5: Smooth changes once, 60 → 30.
         vibewf::RowTargetState st; double ema = 150; double t = drive(60, 10, st, ema, 200); int changes = 0;
         for (int i = 0; i < 400; i++) { ema = ema * 0.8 + 200 * 0.2; const double n = vibewf::stepRowTarget(st, 60, 1000.0 / ema); if (n != t) changes++; t = n; }

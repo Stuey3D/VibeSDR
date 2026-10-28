@@ -21,6 +21,8 @@
 //   VibeServer `fftRate`   20/10/5       →  20 / 10 / 5  fps
 //   OpenWebRX  — no lever at all; fps/fft_fps/fft_size are ignored. No LinkManager.
 
+import { capLadder } from '../assets/wfSpeedCap.ts';
+
 /** What the user asked for. Not a boolean, because "slow on purpose" and "slow because the link is
  *  bad" are different states that must look different in the UI. */
 export type LinkMode = 'full' | 'adaptive' | 'lowData';
@@ -81,6 +83,14 @@ export class LinkManager {
   private lowDataRung: number;
   private apply: (rung: number, fps: number) => void;
   private mode: LinkMode;
+  /** ★ V12 MINIMUM / ECO (src/assets/wfSpeedCap.ts): the backend's own ladder and Low Data rung, before any ceiling —
+   *  so a ceiling can be LIFTED again (the cap chosen off, or the owner raising maxFftRate), not only ever clamp down. */
+  private readonly baseLadder: number[];
+  private readonly baseLowDataRung: number;
+  /** The owner's ceiling from hwinfo (0 = none yet). */
+  private serverMax = 0;
+  /** The listener's waterfall-speed ceiling, fps: MINIMUM 5, ECO 10, 0 = none (wfSpeedCap.capLadder). */
+  private userCap = 0;
 
   /** The rate actually requested (1 = full). Includes a user-pinned Low Data floor. */
   rung = 1;
@@ -124,10 +134,14 @@ export class LinkManager {
     lowDataRung: number;
     mode: LinkMode;
     startRung?: number;
+    /** V12: the waterfall-speed ceiling in fps (MINIMUM 5 / ECO 10; 0 or absent = none). */
+    userCapFps?: number;
     apply: (rung: number, fps: number) => void;
   }) {
-    this.ladder = opts.ladder;
-    this.lowDataRung = Math.min(Math.max(1, opts.lowDataRung), opts.ladder.length);
+    this.baseLadder = opts.ladder.slice();
+    this.baseLowDataRung = Math.min(Math.max(1, opts.lowDataRung), opts.ladder.length);
+    this.userCap = opts.userCapFps && opts.userCapFps > 0 ? opts.userCapFps : 0;
+    ({ ladder: this.ladder, lowDataRung: this.lowDataRung } = this.computeLadder());
     this.apply = opts.apply;
     this.mode = opts.mode;
 
@@ -137,7 +151,7 @@ export class LinkManager {
       // ★ NEVER OPEN ON THE BOTTOM RUNG: "we don't want everything looking garbage as that gives a
       //   bad first impression" — so the cautious start is at most one rung above the floor.
       const start = opts.startRung ?? 2;
-      this.rung = Math.min(Math.max(1, start), Math.max(1, opts.ladder.length - 1));
+      this.rung = Math.min(Math.max(1, start), Math.max(1, this.ladder.length - 1));
     }
     this.adaptiveRung = opts.mode === 'adaptive' ? this.rung : 1;
     this.settling = opts.mode === 'adaptive';
@@ -169,7 +183,9 @@ export class LinkManager {
   }
 
   tick(fps: number, live: boolean, settled: boolean): void {
-    if (this.ladder.length <= 1) return;          // backend has no lever (OWRX)
+    // ★ The BACKEND's ladder, not the capped one: under MINIMUM a VibeServer's ladder is the single rung [5], and a
+    //   pinned mode must still re-assert it every tick (the early return used to mean only "no lever at all").
+    if (this.baseLadder.length <= 1) return;      // backend has no lever (OWRX)
 
     // Pinned modes RE-ASSERT every tick (force), not just on a rung change. The app has other code
     // paths that write the rate directly — idle-wake / markInteract call client.setRate(1) — and
@@ -289,7 +305,11 @@ export class LinkManager {
   }
 
   /** Re-assert the current rung — call after a reconnect, where the server starts at its default. */
-  reassert(): void { if (this.rung !== 1) this.apply(this.rung, this.ladder[this.rung - 1]); }
+  reassert(): void {
+    // ★ Rung 1 is the server's default only when no ceiling of OURS lowered it — under MINIMUM rung 1 is 5 fps, and a
+    //   reconnected server would otherwise sit at its own full rate with nothing to tell it otherwise.
+    if (this.rung !== 1 || this.ladder[0] < this.baseLadder[0]) this.apply(this.rung, this.ladder[this.rung - 1]);
+  }
 
   /** Apply the current rung UNCONDITIONALLY, including rung 1.
    *
@@ -311,15 +331,66 @@ export class LinkManager {
    */
   applyServerCeiling(maxFps: number): void {
     if (!(maxFps > 0)) return;
-    const clamped = this.ladder.map(f => Math.min(f, maxFps));
-    // Rungs that collapse onto the same rate are no longer distinct steps; keep one of each.
-    const deduped = clamped.filter((f, i) => i === 0 || f < clamped[i - 1]);
-    if (deduped.length === this.ladder.length && deduped.every((f, i) => f === this.ladder[i])) return;
-    this.ladder = deduped;
+    this.serverMax = maxFps;
+    if (!this.rebuild()) return;
     this.rung = Math.min(this.rung, this.ladder.length);
-    this.lowDataRung = Math.min(this.lowDataRung, this.ladder.length);
     this.recent = [];
     this.apply(this.rung, this.ladder[this.rung - 1]);
+  }
+
+  /** The ladder from the backend's own rungs: the owner's ceiling (rung INDEX kept for Low Data, as it always was),
+   *  then the listener's MINIMUM / ECO cap (wfSpeedCap.capLadder — Low Data keeps its RATE, so 5 stays 5). */
+  private computeLadder(cap = this.userCap): { ladder: number[]; lowDataRung: number } {
+    let ladder = this.baseLadder.slice();
+    if (this.serverMax > 0) {
+      const clamped = ladder.map(f => Math.min(f, this.serverMax));
+      // Rungs that collapse onto the same rate are no longer distinct steps; keep one of each.
+      ladder = clamped.filter((f, i) => i === 0 || f < clamped[i - 1]);
+    }
+    return capLadder(ladder, Math.min(this.baseLowDataRung, ladder.length), cap);
+  }
+
+  /** Recompute the ladder; true when it (or the Low Data rung) actually changed. */
+  private rebuild(): boolean {
+    const next = this.computeLadder();
+    if (next.lowDataRung === this.lowDataRung && next.ladder.length === this.ladder.length
+        && next.ladder.every((f, i) => f === this.ladder[i])) return false;
+    this.ladder = next.ladder;
+    this.lowDataRung = next.lowDataRung;
+    return true;
+  }
+
+  /** The current ladder, full rate first — for tests and the debug line. */
+  get rungs(): readonly number[] { return this.ladder; }
+  /** The server's OWN top rate as this controller knows it — the backend's top rung under the owner's ceiling, before
+   *  the listener's cap. What NATIVE asks for; the base of the waterfall-speed buttons' live numbers. */
+  get nativeFps(): number { return this.computeLadder(0).ladder[0] ?? 0; }
+
+  /**
+   * ★★★ V12 MINIMUM / ECO WATERFALL SPEED, LIVE (src/assets/wfSpeedCap.ts; Stuart 2026-10-28). A CEILING on this
+   * controller, not a mode: Auto keeps managing the link underneath it, Full is capped to it, Low Data keeps its rate.
+   * Applied at once in every mode — the point is that the SERVER sends fewer frames, so the request goes out now.
+   * ★ LIFTING it in Auto re-opens like a fresh connect — on the middle rung, earning the top — rather than sitting
+   *   at 5 for 8-20 s, or leaping straight to full rate on a link nobody has measured at that rate.
+   */
+  setUserCap(capFps: number): void {
+    const cap = capFps > 0 ? capFps : 0;
+    if (this.userCap === cap) return;
+    const lifted = cap === 0 || (this.userCap > 0 && cap > this.userCap);
+    const wasFps = this.ladder[this.rung - 1] ?? 0;
+    this.userCap = cap;
+    this.rebuild();
+    if (this.mode === 'full')         this.set(1, false, true);
+    else if (this.mode === 'lowData') this.set(this.lowDataRung, false, true);
+    else if (!lifted) {
+      // Keep any back-off the link has earned: the rung at or below the rate we were on (UberSDR's 3.3 stays 3.3).
+      const i = this.ladder.findIndex(f => f <= wasFps);
+      const r = i >= 0 ? i + 1 : 1;
+      this.set(r, r > 1, true);
+    } else {
+      this.settling = true;
+      this.set(Math.max(1, this.ladder.length - 1), true, true);
+    }
   }
 
   private set(r: number, adaptive: boolean, force = false): void {
