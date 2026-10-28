@@ -1515,6 +1515,19 @@ else
 fi
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ AN AUDIO SOCKET WITH NO WATERFALL KEEPS ITS LISTENER'S TURN (2026-10-28, V12 two servers at once: the background
+#     server's audio-only socket was invisible to the shared dial's limit — Stuart's "sneaky time limit bypass"). Shared
+#     dial, hard 1-minute limit: audio-only listener warned + ended at the end of the ORIGINAL turn; a waterfall back
+#     after time in the background gets what is LEFT; another listener id behind the same address gets its own turn.
+#     ~80 s, so only with VIBESERVER_SLOW=1.
+printf '\n\033[1m── session turn: an audio-only listener is present (end to end) ──\033[0m\n'
+if [ "${VIBESERVER_SLOW:-0}" = "1" ]; then
+  node scripts/test-session-audio-presence.mjs; rc=$?
+else
+  echo '   not run — ~80 s; set VIBESERVER_SLOW=1'; rc=3
+fi
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ MODERN ROOTS FOR OLD PHONES (B10: a Lite on Android 5.1 could not fetch RIPE/APNIC, so Europe had
 #     no flags). VibeTls.kt itself, on the desktop JVM, against the real chains, with an old store
 #     simulated — and still refusing expired / self-signed / untrusted / wrong-host. Needs the network.

@@ -21,6 +21,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Easing, PanResponder, Pressable, StyleSheet, Text, TouchableOpacity, View,
          useWindowDimensions } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { G, Path } from 'react-native-svg';
 import { EDGE_TAB_W, edgeChipGeometry } from './edgeChipGeometry';
@@ -33,6 +34,12 @@ import { bgSide, countdownStage, earIcon, fmtLeft, shouldPopOut } from '../servi
 /** A server's name at a slider's end: the left end is server 1 (the left ear), the right end server 2. */
 const short = (n?: string) => { const t = (n ?? '').trim(); return t.length > 9 ? `${t.slice(0, 8)}…` : t || '—'; };
 
+/** ★ The one-time hint's key (the lsv_*_seen pattern of FkaSplash / LegacyPackageNotice). */
+const HINT_SEEN_KEY = 'lsv_dual_card_hint_seen';
+export const DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance';
+
+/** The speaker for the OTHER ear (the server in front): there, but plainly not this one. */
+const EAR_FAINT = 0.38;
 const STAGE_TAB   = ['#ffb833', '#ffe14d', '#ff6b6b'];                                        // = SDRScreen TIME_TAB
 const STAGE_FRAME = ['rgba(255,160,0,0.55)', 'rgba(255,225,77,0.7)', 'rgba(255,90,90,0.75)']; // = the time card's
 
@@ -109,6 +116,17 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
     return () => { live = false; clearInterval(t); };
   }, [wantLamp, bg?.transport]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* ── ONCE: what the card does (Stuart, 2026-10-28: "tap to return to the other server, hold for balance") ──
+   *  Shown the first time a card appears, until it is dismissed (✕) or the card is used — a tap or a hold shows it was
+   *  understood. Remembered for good. Unknown storage (a read that fails) shows nothing rather than nag. */
+  const [hint, setHint] = useState(false);
+  useEffect(() => {
+    let live = true;
+    AsyncStorage.getItem(HINT_SEEN_KEY).then((v) => { if (live && v !== '1') setHint(true); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  const hintDone = () => { if (!hint) return; setHint(false); AsyncStorage.setItem(HINT_SEEN_KEY, '1').catch(() => {}); };
+
   /* ── HOLD: the balance ── */
   const [balOpen, setBalOpen] = useState(false);
   const balTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -119,9 +137,19 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   useEffect(() => () => { if (balTimer.current) clearTimeout(balTimer.current); }, []);
   const trackW = useRef(1);
   const balRef = useRef(st.balance); balRef.current = st.balance;
+  /* ★★ THE BALANCE OWNS THE FINGER ONCE IT HAS IT (Stuart, 2026-10-28, screen recording: "it works but its erratic as its
+   *  fighting against the collapse button for touch control"). A drag LEFT on the track is also the card's flick-left-to-
+   *  tuck gesture, and the card's responder (an ancestor) asked for the touch mid-drag; the track let it go by default,
+   *  so the card slid under the finger and the knob jumped. Now the track refuses to hand the touch over, and the card's
+   *  tuck gesture stands down entirely while the balance is open (the ‹ button still tucks it on a plain tap). */
+  const balOpenRef = useRef(false); balOpenRef.current = balOpen;
   const balPan = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
+    onStartShouldSetPanResponderCapture: () => true,
     onMoveShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponderCapture: () => true,
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
     onPanResponderGrant: (e) => {
       if (balTimer.current) clearTimeout(balTimer.current);
       setDualBalance((e.nativeEvent.locationX / trackW.current) * 2 - 1, false);
@@ -158,8 +186,9 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   const offRef = useRef(off); offRef.current = off;
   // Flick LEFT to tuck (the edge is on the left); drag the tab RIGHT to bring it back.
   const pan = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_e, g) => g.dx < -6 && Math.abs(g.dx) > Math.abs(g.dy),
-    onPanResponderMove: (_e, g) => x.setValue(Math.min(0, g.dx) * -1),
+    onMoveShouldSetPanResponder: (_e, g) => !balOpenRef.current && g.dx < -6 && Math.abs(g.dx) > Math.abs(g.dy),
+    // ★ Never past the tucked position: a long flick used to leave x beyond `off`, out of step with the tab.
+    onPanResponderMove: (_e, g) => x.setValue(Math.min(offRef.current, Math.min(0, g.dx) * -1)),
     onPanResponderRelease: (_e, g) => {
       if (g.dx < -50 || g.vx < -0.5) {
         Animated.timing(x, { toValue: offRef.current, duration: 180, useNativeDriver: true }).start(() => setTucked(true));
@@ -182,10 +211,12 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   const tabColour = ended ? '#ff6b6b' : asking ? STAGE_TAB[1] : colour;
   const freq = bg.freqHz > 0 ? bookmarkFreqLabel(bg.freqHz) : '';
   const mode = (bg.mode || '').toUpperCase();
-  const earA11y = icon === 'mono' ? 'in both ears' : icon === 'L' ? 'in your left ear' : 'in your right ear';
+  const earA11y = icon === 'mono' ? 'in both ears'
+    : icon === 'L' ? 'in your left ear, the server in front in your right' : 'in your right ear, the server in front in your left';
 
   const onPress = () => {
     if (ended) return;
+    hintDone();
     if (asking) { answerStillHere(bg.id); return; }
     onSwap();
   };
@@ -201,18 +232,23 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
         <View style={[s.row, { borderColor: frame, paddingLeft: geo.padRight }]}>
           {/* ★ The pad / keyboard reach it like every other screen control (ScreenNav): Enter = the tap. */}
           <Pressable ref={screenNavRef('dualCard', tucked ? undefined : onPress)}
-            onPress={onPress} onLongPress={() => { if (!ended) { setBalOpen(true); armBalClose(); } }}
+            onPress={onPress} onLongPress={() => { if (!ended) { hintDone(); setBalOpen(true); armBalClose(); } }}
             delayLongPress={450} style={({ pressed }) => [s.body, { opacity: pressed ? 0.8 : 1 }]}
             accessibilityRole="button"
-            accessibilityLabel={`${bg.name}${freq ? `, ${freq} ${mode}` : ''}, ${earA11y}`}
+            accessibilityLabel={`${bg.name}${freq ? `, ${freq} ${mode}` : ''}${bg.station ? `, ${bg.station}` : ''}, ${earA11y}`}
             accessibilityHint={ended ? undefined : asking ? 'Tap to tell the server you are still listening'
                                                           : 'Tap to switch to this server. Hold for the balance between the two.'}>
             <View style={s.top}>
               {icon === 'mono'
                 ? <Animated.View style={{ opacity: lamp }}><Speaker colour={colour} opacity={1} /></Animated.View>
-                : <View style={s.ears}>
-                    <Speaker colour={colour} opacity={icon === 'L' ? 1 : 0.22} flip waves={icon === 'L'} />
-                    <Speaker colour={colour} opacity={icon === 'R' ? 1 : 0.22} waves={icon === 'R'} />
+                : /* ★★ A PAIR, SO IT READS AS STEREO (Stuart, 2026-10-28: "on the chip there needs to be a little faint
+                   *  speaker for the opposite channel to show its actually a stereo setup you are listening to"). Back to
+                   *  back, facing out — left ear, right ear — this server's lit, the one in front FAINT but whole, waves
+                   *  and all: at 0.22 with no waves it was a smudge nobody saw on a phone. Stereo only: in Mono both
+                   *  servers are in both ears and the single lamp speaker above says so. */
+                  <View style={s.ears}>
+                    <Speaker colour={colour} opacity={icon === 'L' ? 1 : EAR_FAINT} flip />
+                    <Speaker colour={colour} opacity={icon === 'R' ? 1 : EAR_FAINT} />
                   </View>}
               <Text style={[s.name, { color: colour }]} numberOfLines={1}>{bg.name}</Text>
             </View>
@@ -233,6 +269,19 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
                 )}
               </View>
             )}
+            {/* ★ In DAB, the service playing (dualMix.cardStation) — what the station strip names on its own screen. */}
+            {!ended && !asking && !!bg.station && (
+              <Text style={[s.station, { color: colour }]} numberOfLines={1}>{bg.station}</Text>
+            )}
+            {hint && !ended && !asking && !balOpen && (
+              <View style={s.hintRow}>
+                <Text style={[s.hint, { color: colour }]}>{DUAL_CARD_HINT}</Text>
+                <TouchableOpacity onPress={hintDone} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button" accessibilityLabel="Dismiss the hint">
+                  <Text style={[s.hintX, { color: colour }]}>✕</Text>
+                </TouchableOpacity>
+              </View>
+            )}
             {balOpen && !ended && (
               <View style={s.balRow}>
                 <Text style={[s.balEnd, { color: colour }]} numberOfLines={1}>{short(st.sides[0]?.name)}</Text>
@@ -247,8 +296,13 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
               </View>
             )}
           </Pressable>
-          <TouchableOpacity onPress={() => Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true })
-                                          .start(() => setTucked(true))}
+          {/* ★ Tucking closes the balance first: the card is measured again without its slider row, and the slide
+               *  ends exactly at the compact card's tucked position (the lastOff effect re-places it if the width moves). */}
+          <TouchableOpacity onPress={() => {
+              setBalOpen(false);
+              if (balTimer.current) clearTimeout(balTimer.current);
+              Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true }).start(() => setTucked(true));
+            }}
             hitSlop={{ top: 8, bottom: 8, left: 2, right: 8 }} accessibilityRole="button"
             accessibilityLabel={`Hide ${bg.name}`} style={s.arrowHit}>
             <Text style={[s.arrow, { color: tabColour }]}>‹</Text>
@@ -275,10 +329,14 @@ const s = StyleSheet.create({
              borderWidth: 1.5, borderLeftWidth: 0, borderTopRightRadius: 12, borderBottomRightRadius: 12 },
   body:    { paddingVertical: 5, paddingLeft: 8, paddingRight: 2, gap: 2, flexShrink: 1 },
   top:     { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  ears:    { flexDirection: 'row', alignItems: 'center', gap: 1 },
+  ears:    { flexDirection: 'row', alignItems: 'center', gap: 3 },
   name:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 12, letterSpacing: 0.3, flexShrink: 1, maxWidth: 190 },
   freq:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
   mode:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 0.8, opacity: 0.85 },
+  station: { fontFamily: 'Atkinson Hyperlegible', fontSize: 12, letterSpacing: 0.2, opacity: 0.9, maxWidth: 220 },
+  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2, maxWidth: 240 },
+  hint:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 11, opacity: 0.8, flexShrink: 1 },
+  hintX:   { fontSize: 12, opacity: 0.8 },
   clock:   { fontFamily: 'Atkinson Hyperlegible', fontSize: 11, fontVariant: ['tabular-nums'], opacity: 0.95 },
   line:    { fontFamily: 'Atkinson Hyperlegible', fontSize: 12, maxWidth: 220 },
   balRow:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, marginBottom: 2 },

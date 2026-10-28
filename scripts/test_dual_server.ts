@@ -24,7 +24,7 @@ import {
   Ramp, earGains, balanceGains, dualTargets, earIcon, countdownStage, shouldPopOut, fmtLeft, dualEligible, sameServer,
   DUAL_OFF, beginPicking, attachSecond, swap, endSide, markEnded, holds, transportFor, bgSide, terminalWhy,
   TERMINAL_WHY, DUAL_RAMP_SEC, clampBalance, pairingStart, secondServerHint, VFO_B_CLOSED_NOTE,
-  radioKeyOf, sameRadio, pickSameServer, detachSecond, sideName,
+  radioKeyOf, sameRadio, pickSameServer, detachSecond, sideName, cardMode, cardStation,
   type DualCore, type DualSideCore,
 } from '../src/services/dualMix.ts';
 
@@ -233,7 +233,7 @@ console.log('two servers OR VFO A/B, never both (Stuart, #57: "There will only b
   ok(/closesVfoB=\{abOn\}/.test(sdr), 'the Servers menu is told when B is on');
   ok(/onListenSecond=\{dualMyId && !refusal && canListenSecond\(route\.params\) && dualShape\.phase === 'off'\s*\? onListenSecond : undefined\}/.test(sdr),
      '"Listen to a 2nd server" is NOT hidden by VFO B (the row stays available)');
-  ok(/freqHz: abDoor\.frequency, mode: String\(abDoor\.mode\)/.test(sdr), 'the card is given VFO A\'s tuning — the channel that plays on');
+  ok(/freqHz: abDoor\.frequency,/.test(sdr) && /mode: cardMode\(\{ mode: String\(abDoor\.mode\)/.test(sdr), 'the card is given VFO A\'s tuning — the channel that plays on');
   const chip = readFileSync('src/components/ServersChip.tsx', 'utf8');
   ok(/secondServerHint\(closesVfoB\)/.test(chip) && !/SECOND_HINT/.test(chip), 'the chip draws the one hint rule');
   const ds = readFileSync('src/services/dualServer.ts', 'utf8');
@@ -280,12 +280,72 @@ console.log('pairing is per RADIO (Gesiima\'s two dongles on one VibeServer, #57
   const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
   const adopts = sdr.match(/setRadioBase\((?!null)/g) ?? [];
   const guarded = (sdr.match(/bounceIfFirstRadio\((baseUrl|radioBaseUrl\(baseUrl, (id|d\.radios\[0\]\.id)\))\)\) return/g) ?? []).length;
-  ok(adopts.length === 3 && guarded === 3, `every radio adoption (chosen, door of one, an address naming its radio) passes the first-radio check first (${guarded}/${adopts.length})`);
-  ok(/noteStatus\(dualMyId, \{[^}]*name: dualName, radioKey: dualRadioKey \}, radioBase\)/.test(sdr), 'the card is told the radio and its name');
+  // ★ The fourth adoption is a side coming BACK to its own radio (returningSide) — that one IS the radio playing.
+  ok(adopts.length === 4 && guarded === 3, `every radio adoption (chosen, door of one, an address naming its radio) passes the first-radio check first (${guarded}/${adopts.length - 1}; + the side coming back)`);
+  ok(/noteStatus\(dualMyId, \{[^}]*name: dualName, radioKey: dualRadioKey,\s*pinned: !!radioAuthSuffix \}, radioBase\)/.test(sdr), 'the card is told the radio and its name');
   ok(/if \(dualRadioKey && radioBase\) back\.baseUrl = radioBase;/.test(sdr) && /baseUrl: wantBase/.test(ds),
      'a side returns to its RADIO\'s address (adopted straight through), never the radio list');
   const dr = readFileSync('src/utils/doorReturn.ts', 'utf8');
   ok(/'autoTakeover', 'dualSide'\]/.test(dr), 'back to the radio list is a new listener: the old side\'s session does not ride along');
+}
+
+
+console.log('the card says the mode the screen shows (Stuart 2026-10-28: "i am in DAB not WFM mode on the Pi2")');
+{
+  ok(cardMode({ mode: 'wfm', dab: true }) === 'DAB', 'DAB over the idle WFM demodulator reads DAB, not WFM');
+  ok(cardMode({ mode: 'am', adsb: true }) === 'ADS-B' && cardMode({ mode: 'nfm', ism: true }) === 'ISM'
+     && cardMode({ mode: 'nfm', ais: true }) === 'AIS' && cardMode({ mode: 'am', ndb: true }) === 'NDB',
+     'every whole-radio mode by name: ADS-B, ISM, AIS, NDB');
+  ok(cardMode({ mode: 'wfm', dab: true, adsb: true }) === 'DAB', 'the receiver label\'s own order: DAB first');
+  ok(cardMode({ mode: 'usb' }) === 'USB' && cardMode({ mode: '' }) === '', 'otherwise the demodulator; nothing invented');
+  ok(cardStation({ dab: true, service: 'Grt Hits Nrthnts', ensemble: 'Now Northants', channel: '12D' }) === 'Grt Hits Nrthnts',
+     'in DAB, the service playing');
+  ok(cardStation({ dab: true, service: '', ensemble: 'Now Northants', channel: '12D' }) === 'Now Northants · 12D'
+     && cardStation({ dab: true, channel: '11B' }) === '11B', '…else the ensemble and block while the services arrive');
+  ok(cardStation({ dab: false, service: 'Radio X' }) === '', 'nothing outside DAB');
+  const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  ok(/noteStatus\(dualMyId, \{ freqHz: status\.frequency, mode: dualMode, station: dualStation/.test(sdr)
+     && /const dualMode = cardMode\(\{ mode: String\(status\.mode\), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn \}\)/.test(sdr),
+     'the screen hands the card cardMode, never the bare status.mode');
+  ok(!/mode: String\(abDoor\.mode\), endsAt/.test(sdr), '…and so does "Listen to a 2nd server"');
+  const card = readFileSync('src/components/DualServerCard.tsx', 'utf8');
+  ok(/opacity=\{icon === 'L' \? 1 : EAR_FAINT\} flip \/>/.test(card) && /opacity=\{icon === 'R' \? 1 : EAR_FAINT\} \/>/.test(card)
+     && Number((card.match(/const EAR_FAINT = ([\d.]+)/) ?? [])[1]) >= 0.3,
+     'stereo: a speaker per ear, the other server\'s FAINT but visible (Stuart: "a little faint speaker for the opposite channel")');
+}
+
+
+console.log('a swap is not an arrival (Stuart\'s recording 2026-10-28: the tap landed on the Pi 2\'s "Choose a receiver")');
+{
+  const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  const ds = readFileSync('src/services/dualServer.ts', 'utf8');
+  const door = sdr.indexOf('if (dualBack && !dualBack.pinned) {');
+  ok(door > 0 && door < sdr.indexOf('const d = await fetchFrontDoor(baseUrl);'),
+     'a side coming back adopts its return address as the radio BEFORE any front door is fetched');
+  ok(/if \(dualBack && !dualBack\.pinned\) \{\s*setRadioBase\(baseUrl\);\s*setDoorPending\(false\);\s*return;/.test(sdr),
+     '…no door, no landing card, no wait for a tap');
+  ok(/useState\(\(\) => returningSide\(dualSideId, route\.params as never\)\)/.test(sdr), '…decided once, on mount, from the pairing');
+  ok(/params\.dualSide !== myId/.test(ds) && /x\.id === myId && !x\.ended/.test(ds),
+     'only a screen whose route names its OWN live side counts as coming back');
+  ok(/pinned: !!radioAuthSuffix/.test(sdr), 'a radio unlocked with its own PIN still goes through the door (the proof cannot ride along)');
+  ok(/return \{ \.\.\.bg\.params, dualSide: bg\.id \}/.test(ds), 'the swap carries the side (and so the session) to the screen');
+}
+
+
+console.log('the card\'s balance owns the finger; the one-time hint (Stuart 2026-10-28)');
+{
+  const card = readFileSync('src/components/DualServerCard.tsx', 'utf8');
+  ok(/onPanResponderTerminationRequest: \(\) => false/.test(card), 'the balance track never hands a drag over to the card');
+  ok(/onMoveShouldSetPanResponder: \(_e, g\) => !balOpenRef\.current && g\.dx < -6/.test(card),
+     'the flick-to-tuck stands down while the balance is open (a drag LEFT on the track was also a tuck)');
+  ok(/x\.setValue\(Math\.min\(offRef\.current,/.test(card), 'a flick never drags the card past its tucked position');
+  ok(/setBalOpen\(false\);[\s\S]{0,120}Animated\.timing\(x, \{ toValue: offRef\.current/.test(card),
+     'the ‹ closes the balance before it tucks');
+  ok(/HINT_SEEN_KEY = 'lsv_dual_card_hint_seen'/.test(card) && /AsyncStorage\.setItem\(HINT_SEEN_KEY, '1'\)/.test(card),
+     'the hint is shown once and remembered');
+  ok(/DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance'/.test(card), '…in Stuart\'s words');
+  ok((card.match(/hintDone\(\)/g) ?? []).length >= 2 && /onPress=\{hintDone\}/.test(card),
+     '…and goes on ✕, on a tap and on a hold');
 }
 
 console.log(fails ? `\n✗ ${fails} failed` : '\n✓ all passed');

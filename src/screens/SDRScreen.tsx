@@ -168,10 +168,10 @@ import MenuSheet, { type DspFilterDesc } from '../components/MenuSheet';
 import ServersChip from '../components/ServersChip';
 import DualServerCard from '../components/DualServerCard';
 import { canListenSecond, dualHolds, dualSupported, dualTransport, foregroundEnded, leaveForeground, listenSecond,
-         noteStatus, returnParams, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
+         noteStatus, returnParams, returningSide, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
          isFirstRadio, backToFirstRadio,
          useDualShape } from '../services/dualServer';
-import { dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
+import { cardMode, cardStation, dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
 import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
@@ -612,6 +612,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  player must open the second voice from its very first run: opened on the main pump even once, it would replace
    *  server 1's socket. null = an ordinary screen (and, on a VibeServer, a possible server 1: see dualMyId). */
   const [dualSideId] = useState<string | null>(() => roleOnMount(route.params as never, uuidv4));
+  /** ★★★ Coming BACK to a side still playing (a swap, ‹ Back from the server list): its radio was chosen when it began,
+   *  so the door is not opened again (dualServer.returningSide — Stuart's recording, 2026-10-28). Read once, on mount. */
+  const [dualBack] = useState(() => returningSide(dualSideId, route.params as never));
   /** The pairing's shape (who is where) — NOT its card facts, so this screen does not re-render on them. */
   const dualShape = useDualShape();
   const dualCan = dualSupported && dualEligible(route.params);
@@ -689,6 +692,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       //   (App.tsx widens it for the watch), and a narrow compare would be a silent always-false.
       const t = String(route.params.serverType ?? '');
       if (t === 'kiwi' || t === 'web888' || t === 'owrx' || t === 'fmdx') {
+        setDoorPending(false);
+        return;
+      }
+      /* ★★★ A SWAP IS NOT AN ARRIVAL (Stuart, 2026-10-28, screen recording: the card's tap landed on the Pi 2's "Choose
+       *  a receiver" — a door of one with its aerial written up — over the radio he was already hearing in that ear).
+       *  The side's return address IS its radio (`<base>/r/<id>`, or the server itself when it is the radio), chosen
+       *  when the side began, and its audio has played the whole time: adopt it, open no door, show no landing.
+       *  ★ Not the radio list's first-radio check either — this IS that radio, coming back to the front. */
+      if (dualBack && !dualBack.pinned) {
+        setRadioBase(baseUrl);
         setDoorPending(false);
         return;
       }
@@ -11912,13 +11925,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ PER RADIO: which radio on its server this side is (`/r/<id>`, '' = the address is the radio), and the card's name
    *  for it — "server · radio" when the server has more than one radio to tell apart (Gesiima's two dongles, #57). */
   const dualRadioKey = radioKeyOf(radioBase);
-  const dualName = sideName(instanceName ?? baseUrl, door && door.radios.length > 1 ? chosenRadio?.label : null);
+  // ★ Back without its door (above), the side keeps the name it was given at the door ("server · radio").
+  const dualName = dualBack && !door ? dualBack.name
+    : sideName(instanceName ?? baseUrl, door && door.radios.length > 1 ? chosenRadio?.label : null);
+  /* ★★ THE MODE THE SCREEN SHOWS, not the idle demodulator under a whole-radio mode (dualMix.cardMode — Stuart,
+   *  2026-10-28: the card said WFM while the Pi 2 was in DAB), and in DAB the service playing (dualMix.cardStation). */
+  const dualDab = dabOn || liveStation.badge === 'DAB';
+  const dualMode = cardMode({ mode: String(status.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn });
+  const dualStation = cardStation({ dab: dualDab, service: liveStation.badge === 'DAB' ? liveStation.name : null,
+                                    ensemble: dabState?.label, channel: dabState?.channel });
   useEffect(() => {
     if (!dualMyId || dualShape.phase === 'off') return;
-    noteStatus(dualMyId, { freqHz: status.frequency, mode: String(status.mode), endsAt: dualEndsAt,
-                           soft: limitSoft || borrowed, name: dualName, radioKey: dualRadioKey }, radioBase);
-  }, [dualMyId, dualShape.phase, status.frequency, status.mode, dualEndsAt, limitSoft, borrowed, dualName, dualRadioKey,
-      radioBase]);
+    noteStatus(dualMyId, { freqHz: status.frequency, mode: dualMode, station: dualStation, endsAt: dualEndsAt,
+                           soft: limitSoft || borrowed, name: dualName, radioKey: dualRadioKey,
+                           pinned: !!radioAuthSuffix }, radioBase);
+  }, [dualMyId, dualShape.phase, status.frequency, dualMode, dualStation, dualEndsAt, limitSoft, borrowed, dualName,
+      dualRadioKey, radioBase, radioAuthSuffix]);
   // ★ The server ended THIS one (its refusal is on screen): the background server keeps playing.
   useEffect(() => { if (refusal && dualMyId) foregroundEnded(dualMyId); }, [refusal, dualMyId]);
   // ★ Gone while still in front without saying so (a crash reset, an alert's "Back to Servers"): it LEFT.
@@ -11936,12 +11958,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★★ Its return address names its RADIO when it is one behind a front door, so coming back never stops at the list.
     const back = returnParams(route.params as never);
     if (dualRadioKey && radioBase) back.baseUrl = radioBase;
-    listenSecond({ id: dualMyId, name: dualName, params: back, radioKey: dualRadioKey,
-                   freqHz: abDoor.frequency, mode: String(abDoor.mode), endsAt: dualEndsAt, soft: limitSoft || borrowed },
+    listenSecond({ id: dualMyId, name: dualName, params: back, radioKey: dualRadioKey, pinned: !!radioAuthSuffix,
+                   freqHz: abDoor.frequency, endsAt: dualEndsAt, soft: limitSoft || borrowed, station: dualStation,
+                   mode: cardMode({ mode: String(abDoor.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn }) },
                  start.note);
     navigation.goBack();
-  }, [dualMyId, dualName, dualRadioKey, radioBase, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt,
-      limitSoft, borrowed, navigation]);
+  }, [dualMyId, dualName, dualRadioKey, radioBase, radioAuthSuffix, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt,
+      limitSoft, borrowed, navigation, dualDab, adsbOn, ismOn, aisOn, ndbOn, dualStation]);
   /** TAP the card: the background server's screen comes up; both keep playing, ears unmoved. A reset with the server
    *  list beneath — the one way this app lands on a VibeServer (connectVibeServer's note on why not navigate). */
   const onDualSwap = useCallback(() => {

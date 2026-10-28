@@ -107,6 +107,38 @@ export function earIcon(output: DualOutput, index: 0 | 1): 'L' | 'R' | 'mono' {
   return index === 0 ? 'L' : 'R';
 }
 
+/**
+ * ★★ THE CARD'S MODE IS THE MODE THE SCREEN SHOWS, NOT THE DEMODULATOR UNDER IT (Stuart, 2026-10-28: the card read
+ *   "194.064 MHz WFM" — "i am in DAB not WFM mode on the Pi2"). A whole-radio mode (DAB, ADS-B, ISM, AIS, NDB) leaves the
+ *   ordinary demodulator sitting idle underneath, so `status.mode` is not what is playing. The same order as the
+ *   receiver's own label (SDRScreen `mode:` and the web client's): DAB, ADS-B, ISM, AIS, NDB, else the demodulator.
+ *   Every flag is one the SERVER's reports set — nothing here is invented.
+ */
+export function cardMode(o: { mode: string; dab?: boolean; adsb?: boolean; ism?: boolean; ais?: boolean;
+                              ndb?: boolean }): string {
+  if (o.dab) return 'DAB';
+  if (o.adsb) return 'ADS-B';
+  if (o.ism) return 'ISM';
+  if (o.ais) return 'AIS';
+  if (o.ndb) return 'NDB';
+  return String(o.mode ?? '').toUpperCase();
+}
+
+/**
+ * ★ …and in DAB, WHAT is playing: the service the screen's station strip names ("Grt Hits Nrthnts"), else the
+ *   multiplex — its ensemble and block ("BBC National DAB · 12B") — while the service list is still arriving. Nothing outside DAB: an RDS name is the
+ *   frequency's, and the frequency is already on the card.
+ */
+export function cardStation(o: { dab: boolean; service?: string | null; ensemble?: string | null;
+                                 channel?: string | null }): string {
+  if (!o.dab) return '';
+  const svc = (o.service ?? '').trim();
+  if (svc) return svc;
+  const ens = (o.ensemble ?? '').trim();
+  const ch = (o.channel ?? '').trim();
+  return ens && ch ? `${ens} · ${ch}` : ens || ch;
+}
+
 /* ─────────────────────────────── the background server's clock ─────────────────────────────── */
 
 /**
