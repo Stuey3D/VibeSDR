@@ -15,11 +15,21 @@
 //   once-a-day fetch of a plain-HTTP CSV; adding libcurl (or worse, hand-rolling a client) to the
 //   build for that would be a poor trade. If the fetch fails we keep whatever cache we have, which
 //   is the behaviour the app already has and the only one that keeps a receiver useful offline.
+//
+// ★★★ A SEASON EiBi HAS NOT PUBLISHED YET IS NOT AN ERROR (NickB, 2026-10-27: "curl: (22) The
+//     requested URL returned error: 404"). The season switch below is a DATE GUESS — 25 March and
+//     25 October — and EiBi publishes the new file when it is ready, which can be days or weeks
+//     later. B26 was still a 404 two days after we switched to it. Before this, the server kept its
+//     old cache but told the owner a raw curl error, asked again on every hourly wake, and a
+//     server with NO cache had no schedule at all. Now: ask for this season; if it is not there,
+//     use the PREVIOUS season's file (which is what EiBi itself still has up), say so in plain
+//     words, and ask for the new one again every few hours until it appears.
+//     ★ The same rule is in src/services/eibi.ts (app) and vibeserver/mac/EibiStations.swift —
+//       keep all three in step.
 #include "eibi.h"
 #include "proc.h"
 
-#include "../android/app/src/main/cpp/local_sdr_shim.h"
-
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -33,26 +43,42 @@
 namespace vseibi {
 namespace {
 
+std::function<void(const std::string&)> g_publish;
+Fetcher g_fetcher;
+std::function<std::time_t()> g_clock;
 
+std::time_t nowT() { return g_clock ? g_clock() : std::time(nullptr); }
+void publish(const std::string& json) { if (g_publish) g_publish(json); }
 
-/** EiBi labels a season by the year it STARTED, so Jan/Feb belong to the previous year's winter.
- *  ★ Derived exactly as `src/services/eibi.ts` does — the app and the server must ask for the same
- *    file, or a listener's app and the receiver it is listening to disagree about what is on air. */
-std::string seasonFile() {
-    const std::time_t t = std::time(nullptr);
-    std::tm g{};
-    gmtime_r(&t, &g);
-    const int m = g.tm_mon + 1, day = g.tm_mday, y = g.tm_year + 1900;
-    bool summer;
-    if (m > 3 && m < 10)      summer = true;
-    else if (m < 3 || m > 10) summer = false;
-    else if (m == 3)          summer = day >= 25;   // ~last Sunday of March
-    else                      summer = day < 25;    // ~last Sunday of October
-    int yy = y;
-    if (!summer && m <= 2) yy = y - 1;
-    char s[32];
-    snprintf(s, sizeof s, "sked-%c%02d.csv", summer ? 'a' : 'b', yy % 100);
-    return s;
+std::string fileFor(const std::string& code) { return "sked-" + code + ".csv"; }
+/** "sked-a26.csv" → "a26". ★ The season marker has always held the FILE name, so a cache written
+ *  by an older server still reads correctly. */
+std::string codeOfFile(const std::string& file) {
+    if (file.size() == 12 && file.compare(0, 5, "sked-") == 0) return file.substr(5, 3);
+    return "";
+}
+
+/** The real fetch: curl, no shell, to `dest`. ★ -f makes an HTTP error an exit status (22) rather
+ *  than an HTML error page saved as the schedule; the status code in curl's own message tells a
+ *  file that is not there yet (404/410) from a server or network that is broken. */
+Fetch curlFetch(const std::string& url, const std::string& dest, std::string& msg) {
+    std::string out;
+    vibeproc::Child c = vibeproc::spawn(
+        {"curl", "-fsSL", "--max-time", "45", "-o", dest, url}, true);
+    if (c.ok()) {
+        char buf[4096]; size_t n;
+        while ((n = fread(buf, 1, sizeof buf, c.out)) > 0) out.append(buf, n);
+    }
+    const int rc = vibeproc::reap(c);
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) out.pop_back();
+    if (rc == 0) return Fetch::Ok;
+    if (rc == 22) {                              // HTTP error; curl says "... returned error: 404"
+        const size_t at = out.rfind("error: ");
+        const int code = at == std::string::npos ? 0 : atoi(out.c_str() + at + 7);
+        if (code == 404 || code == 410) return Fetch::NotPublished;
+    }
+    msg = out.empty() ? (rc < 0 ? "curl could not be run" : "curl exited " + std::to_string(rc)) : out;
+    return Fetch::Failed;
 }
 
 std::string esc(const std::string& in) {
@@ -146,6 +172,7 @@ std::string toStationsJson(const std::string& csv, int& count) {
     return j;
 }
 
+
 /** ★ Settable, for the same reason geoip's and asndb's are: /var/lib does not exist on a Mac, so
  *  a hardcoded path there means the schedule can never download. See vsDataDir() in main.cpp. */
 std::string g_dir = "/var/lib/vibeserver";
@@ -154,6 +181,9 @@ std::string cachePath() { return g_dir + "/eibi.csv"; }
  *  sked-b26.csv are the same shape, and a cache fetched yesterday is still stale the moment the
  *  season turns over. Without this a rollover would wait for the age check to expire. */
 std::string seasonPath() { return g_dir + "/eibi.season"; }
+/** "sked-b26.csv <unix time>" — the season EiBi last told us it has not published, and when.
+ *  ★ What keeps a fallback from re-asking on every wake, and what lets note() explain it. */
+std::string triedPath() { return g_dir + "/eibi.tried"; }
 
 std::string readSmall(const std::string& path) {
     FILE* f = fopen(path.c_str(), "rb");
@@ -165,10 +195,97 @@ std::string readSmall(const std::string& path) {
     while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
     return s;
 }
+void writeSmall(const std::string& path, const std::string& s) {
+    if (FILE* f = fopen(path.c_str(), "wb")) { fwrite(s.data(), 1, s.size(), f); fclose(f); }
+}
+
+std::string cachedSeason() { return codeOfFile(readSmall(seasonPath())); }
+
+/** The unpublished season last asked for, and when (0 = never). */
+std::string triedSeason(std::time_t& at) {
+    const std::string s = readSmall(triedPath());
+    const size_t sp = s.find(' ');
+    at = sp == std::string::npos ? 0 : (std::time_t)atoll(s.c_str() + sp + 1);
+    return codeOfFile(s.substr(0, sp));
+}
+
+bool cacheAge(double& ageSec) {
+    struct stat st{};
+    if (stat(cachePath().c_str(), &st) != 0) return false;
+    ageSec = difftime(nowT(), st.st_mtime);
+    return true;
+}
+constexpr double kDailySec = 20 * 3600;            // a day old, near enough
+
+/** Fetch one season's file to the temp file and parse it. Ok = `json`/`count` hold a usable
+ *  schedule and the temp file is waiting to be committed; anything else leaves no temp file.
+ *  ★ A file that downloads but parses to nothing counts as NOT PUBLISHED: some servers answer a
+ *    missing file with a 200 and an HTML page, and that must never replace a working schedule. */
+Fetch fetchSeason(const std::string& code, const std::string& tmp, std::string& json, int& count,
+                  std::string& msg) {
+    // ★★ PLAIN http, ON PURPOSE AND FOR NOW (checked 2026-10-03): https://www.eibispace.de presents
+    //    an EXPIRED certificate, so an https URL here fails every fetch. The content is treated as
+    //    untrusted either way (the parser above bounds every number it casts). Move to https the
+    //    day the site's certificate is valid again — and keep the Mac app's copy in step
+    //    (vibeserver/mac/EibiStations.swift).
+    const std::string url = "http://www.eibispace.de/dx/" + fileFor(code);
+    unlink(tmp.c_str());
+    const Fetch r = (g_fetcher ? g_fetcher : Fetcher(curlFetch))(url, tmp, msg);
+    if (r != Fetch::Ok) { unlink(tmp.c_str()); return r; }
+    FILE* f = fopen(tmp.c_str(), "rb");
+    if (!f) { msg = "the download left no file"; return Fetch::Failed; }
+    std::string csv;
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) csv.append(buf, n);
+    fclose(f);
+    count = 0;
+    json = toStationsJson(csv, count);
+    if (count <= 0) { unlink(tmp.c_str()); return Fetch::NotPublished; }
+    return Fetch::Ok;
+}
 
 }  // namespace
 
 void setDir(const std::string& dir) { if (!dir.empty()) g_dir = dir; }
+void setPublisher(std::function<void(const std::string&)> fn) { g_publish = std::move(fn); }
+void setFetcher(Fetcher fn) { g_fetcher = std::move(fn); }
+void setClock(std::function<std::time_t()> fn) { g_clock = std::move(fn); }
+
+std::string seasonCodeAt(std::time_t t) {
+    std::tm g{};
+    gmtime_r(&t, &g);
+    const int m = g.tm_mon + 1, day = g.tm_mday, y = g.tm_year + 1900;
+    bool summer;
+    if (m > 3 && m < 10)      summer = true;
+    else if (m < 3 || m > 10) summer = false;
+    else if (m == 3)          summer = day >= 25;   // ~last Sunday of March
+    else                      summer = day < 25;    // ~last Sunday of October
+    int yy = y;
+    // ★★ m <= 3, NOT m <= 2: 1–24 March is still the winter that started the previous October.
+    //    "<= 2" asked for sked-b27.csv on 1 March 2027 — a file that will never exist.
+    if (!summer && m <= 3) yy = y - 1;
+    char s[8];
+    snprintf(s, sizeof s, "%c%02d", summer ? 'a' : 'b', ((yy % 100) + 100) % 100);
+    return s;
+}
+
+std::string previousSeason(const std::string& code) {
+    if (code.size() != 3) return "";
+    const int yy = atoi(code.c_str() + 1);
+    char s[8];
+    // ★ b26 → a26 (the same year's summer); a27 → b26 (the winter that STARTED the year before).
+    if (code[0] == 'b') snprintf(s, sizeof s, "a%02d", yy);
+    else                snprintf(s, sizeof s, "b%02d", (yy + 99) % 100);
+    return s;
+}
+
+std::string seasonLabel(const std::string& code) {
+    if (code.size() != 3) return code;
+    std::string s = code;
+    s[0] = (char)toupper((unsigned char)s[0]);
+    return s + (code[0] == 'a' ? " (summer)" : " (winter)");
+}
 
 int loadFromCache() {
     FILE* f = fopen(cachePath().c_str(), "rb");
@@ -181,20 +298,27 @@ int loadFromCache() {
     if (csv.empty()) return 0;
     int count = 0;
     const std::string json = toStationsJson(csv, count);
-    if (count > 0) vibe::LocalSdrShim::instance().setStationsJson(json);
+    if (count > 0) publish(json);
     return count;
 }
 
 bool needsRefresh() {
-    struct stat st{};
-    if (stat(cachePath().c_str(), &st) != 0) return true;          // nothing cached
-    if (readSmall(seasonPath()) != seasonFile()) return true;      // the season turned over
-    const double ageSec = difftime(std::time(nullptr), st.st_mtime);
-    return ageSec > 20 * 3600;                                     // a day old, near enough
+    double age = 0;
+    if (!cacheAge(age)) return true;                                // nothing cached
+    const std::time_t now = nowT();
+    const std::string cur = seasonCodeAt(now);
+    if (cachedSeason() == cur) return age > kDailySec;             // this season: daily
+    // ★★ The season turned over. Ask — unless EiBi told us "not yet" for this very season within
+    //    the last few hours, in which case the fallback we hold is the best there is.
+    std::time_t at = 0;
+    if (triedSeason(at) == cur && now >= at && now - at < kRetryUnpublishedSec) return false;
+    return true;
 }
 
 int refresh(std::string& err) {
-    const std::string file = seasonFile();
+    err.clear();
+    const std::time_t now = nowT();
+    const std::string cur = seasonCodeAt(now), prev = previousSeason(cur);
     // ★ To a temp file first, then parse, then move. A half-downloaded CSV overwriting a good
     //   cache would leave the receiver with a truncated schedule until the next successful fetch —
     //   the same reasoning as the atomic config write.
@@ -205,46 +329,49 @@ int refresh(std::string& err) {
     //     NEXT TO the target, not somewhere convenient.
     mkdir(g_dir.c_str(), 0755);
     const std::string tmp = g_dir + "/eibi.csv.tmp";
-    /* ★★★ NO SHELL — see vibeserver/proc.h. `file` is composed from the season and year here, so
-     *  this one was not exploitable, but it is the same shape as the RadioDNS path that WAS, and
-     *  leaving one shell command line in the daemon is how the next one gets written. stderr is
-     *  merged into the output because curl's own message is what this reports to the owner when
-     *  the fetch fails. */
-    // ★★ PLAIN http, ON PURPOSE AND FOR NOW (checked 2026-10-03): https://www.eibispace.de presents
-    //    an EXPIRED certificate, so an https URL here fails every fetch. The content is treated as
-    //    untrusted either way (the parser above bounds every number it casts). Move to https the
-    //    day the site's certificate is valid again — and keep the Mac app's copy in step
-    //    (vibeserver/mac/EibiStations.swift).
-    std::string out;
-    vibeproc::Child c = vibeproc::spawn(
-        {"curl", "-fsSL", "--max-time", "45", "-o", tmp, "http://www.eibispace.de/dx/" + file}, true);
-    if (c.ok()) {
-        char buf[4096]; size_t n;
-        while ((n = fread(buf, 1, sizeof buf, c.out)) > 0) out.append(buf, n);
-    }
-    vibeproc::reap(c);
-    FILE* f = fopen(tmp.c_str(), "rb");
-    if (!f) { err = out.empty() ? "could not reach eibispace.de" : out; return 0; }
-    std::string csv;
-    char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0) csv.append(buf, n);
-    fclose(f);
+    /* ★★★ NO SHELL — see vibeserver/proc.h. The file name is composed from the season and year
+     *  here, so this one was not exploitable, but it is the same shape as the RadioDNS path that
+     *  WAS, and leaving one shell command line in the daemon is how the next one gets written. */
+    auto commit = [&](const std::string& code, const std::string& json) {
+        rename(tmp.c_str(), cachePath().c_str());
+        writeSmall(seasonPath(), fileFor(code));
+        publish(json);
+    };
 
+    std::string json, msg;
     int count = 0;
-    const std::string json = toStationsJson(csv, count);
-    if (count <= 0) {
-        // ★★ KEEP THE OLD CACHE. A season file that has not been published yet returns a short
-        //    404 page, which parses to zero entries — and replacing a working schedule with
-        //    nothing because the new season is a week away is the worst outcome available.
-        unlink(tmp.c_str());
-        err = "downloaded file had no usable entries (" + std::to_string(csv.size()) + " bytes)";
+    Fetch r = fetchSeason(cur, tmp, json, count, msg);
+    if (r == Fetch::Ok) {
+        commit(cur, json);
+        unlink(triedPath().c_str());
+        return count;
+    }
+    if (r == Fetch::Failed) {
+        // ★ A REAL failure (no network, DNS, a 5xx) says so — that is the owner's to fix or wait
+        //   out. The caller keeps serving the cache it has.
+        err = "couldn't reach eibispace.de — " + msg;
         return 0;
     }
-    rename(tmp.c_str(), cachePath().c_str());
-    if (FILE* f = fopen(seasonPath().c_str(), "wb")) { fwrite(file.data(), 1, file.size(), f); fclose(f); }
-    vibe::LocalSdrShim::instance().setStationsJson(json);
-    return count;
+
+    // ── EiBi has not published this season yet: fall back to the one before ──────────────────
+    writeSmall(triedPath(), fileFor(cur) + " " + std::to_string((long long)now));
+    double age = 0;
+    if (cachedSeason() == prev && cacheAge(age) && age <= kDailySec) {
+        const int n = loadFromCache();                  // already holding it, and it is fresh
+        if (n > 0) return n;
+    }
+    json.clear(); msg.clear(); count = 0;
+    r = fetchSeason(prev, tmp, json, count, msg);
+    if (r == Fetch::Ok) { commit(prev, json); return count; }
+    // ★ Neither file: keep whatever cache there is (an older season beats an empty search).
+    const int n = loadFromCache();
+    if (n > 0) return n;
+    err = r == Fetch::Failed
+        ? "EiBi hasn't published the " + seasonLabel(cur) + " schedule yet, and the "
+          + seasonLabel(prev) + " one could not be fetched — couldn't reach eibispace.de — " + msg
+        : "EiBi hasn't published the " + seasonLabel(cur) + " schedule yet, and the "
+          + seasonLabel(prev) + " file has no entries either";
+    return 0;
 }
 
 std::string status() {
@@ -255,6 +382,19 @@ std::string status() {
     gmtime_r(&st.st_mtime, &g);
     strftime(when, sizeof when, "%Y-%m-%d", &g);
     return when;
+}
+
+std::string note() {
+    struct stat st{};
+    if (stat(cachePath().c_str(), &st) != 0) return "";
+    const std::string cur = seasonCodeAt(nowT()), cached = cachedSeason();
+    if (cached.empty() || cached == cur) return "";
+    std::time_t at = 0;
+    if (triedSeason(at) != cur) return "";
+    std::string using_ = cached;
+    using_[0] = (char)toupper((unsigned char)using_[0]);
+    return "EiBi hasn't published the " + seasonLabel(cur) + " schedule yet — using "
+         + using_ + " until it appears.";
 }
 
 }  // namespace vseibi
