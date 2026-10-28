@@ -80,6 +80,7 @@ import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalP
 import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap } from '../services/uiCadence';
 import { setSteadyRefresh } from '../services/frameRate';
+import { steadyHzFor } from '../utils/steadyHz';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
@@ -1174,13 +1175,16 @@ function WaterfallView({
    *  rows on an uneven beat). On with a row, off 1 s after the last one, on backgrounding and on unmount. */
   const steadyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noteRowsFlowing = useCallback(() => {
-    setSteadyRefresh(true);
+    // 120 on a gesture (the drum, a pinch, the buttons — markInteract), else a whole multiple of the feed (steadyHzFor)
+    const interacting = Date.now() - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    setSteadyRefresh(steadyHzFor(1000 / Math.max(1, avgFrameMs.current), interacting));
     if (steadyTimer.current) clearTimeout(steadyTimer.current);
-    steadyTimer.current = setTimeout(() => { steadyTimer.current = null; setSteadyRefresh(false); }, 1000);
+    steadyTimer.current = setTimeout(() => { steadyTimer.current = null; setSteadyRefresh(0); }, 1000);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => () => {
     if (steadyTimer.current) clearTimeout(steadyTimer.current);
-    setSteadyRefresh(false);
+    setSteadyRefresh(0);
   }, []);
 
   /** Build the waterfall texture from the ring as it stands and hand it to the shader. */
@@ -1570,7 +1574,12 @@ function WaterfallView({
       }
       // ★ quant: 0 = draw continuously (a gesture, a slow Sharp feed), 1 = whole rows. The engine's per-arrival
       //   glide command (p.glide / scrollGen) is no longer used — the display driver paces both ways.
-      uQuantSv.value = p.quant;
+      // ★★★ ALWAYS WHOLE ROWS (Stuart, 2026-10-28: "we dont need to ramp it up to 120 it doesnt add anything useful").
+      //     The continuous 120 Hz mode during a gesture drew the rows BLENDED (soft) at a frozen pace, fell ~1 s behind
+      //     the spectrum on a zoom, then caught up and went sharp when the hand let go — "the diagonal lines go blurry
+      //     then snap sharp" (measured in his recording: spectrum 6.37 s, waterfall 7.38 s). The steady pace and the
+      //     shader's row join (tunes and zooms) are the smoothness now. (p.quant is ignored.)
+      uQuantSv.value = 1;
       uAvgMs.value = p.avgMs;
       uNSv.value = 1;
       if (p.specGen !== engSpec.value) {
@@ -1654,7 +1663,7 @@ function WaterfallView({
       if (bg) {
         stopRevealStepper();
         stopSpecTween();
-        setSteadyRefresh(false);
+        setSteadyRefresh(0);
       }
     });
     return () => sub.remove();
@@ -1738,7 +1747,7 @@ function WaterfallView({
       uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
     }
     lastFrameTs.current = now;
-    if (interactSv.value !== boost) interactSv.value = boost;   // the display driver: 120 Hz + the pace rate frozen
+    // (interactSv stays false: no 120 Hz gesture mode, no frozen pace — see "ALWAYS WHOLE ROWS")
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
     // fps so the low-rate scroll is silky (no added latency; pure scroll interpolation). ★ NOT applied
     // to the spectrum trace: at ~10 fps the trace must keep its ~30 fps EASING TWEEN — making it follow
@@ -1816,7 +1825,7 @@ function WaterfallView({
     //   uncover.) The waterfall's display clocks are stopped by the uncover/cover effect.
     if (coveredRef.current) return;
     // copies synchronously — no snapshot needed
-    uQuantSv.value = wfBoost ? 0 : 1;
+    uQuantSv.value = 1;   // ★★★ ALWAYS WHOLE ROWS — see the engine path's note (Stuart 2026-10-28)
 
     // The interval the rows are spread over: the gap between ROW-SETS, falling back to the frame
     // interval until it has been measured.
@@ -2093,9 +2102,7 @@ function WaterfallView({
       ? (bins: Float32Array, st: SDRStatus) => {
           const at = lastInteractAt?.current ?? 0;
           engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, at);
-          // The display driver's interaction flag (120 Hz, the pace rate frozen) — the engine's own boost rule.
-          const on = frameCfg.current.smoothTune && Date.now() - at < SMOOTH_TUNE_TAIL_MS;
-          if (interactSv.value !== on) interactSv.value = on;
+          // (no interaction flag for the display driver any more — always whole rows at the steady pace)
         }
       : enqueueFrame;    // frames flow through the jitter buffer, not straight to render
     return () => { frameSink.current = null; };
