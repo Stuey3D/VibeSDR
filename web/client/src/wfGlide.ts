@@ -90,17 +90,19 @@ export function glideRowAt(prev: Uint8Array, lo0: number, span0: number, cur: Ui
  *    the history ("a thin line signal should expand out to the width and the history remains the thin line"); the rows
  *    drawn just after a zoom step are drawn at IN-BETWEEN zooms on an S-curve, so a station's trail leaves its old column
  *    vertically, curves out (zoom in) or in (zoom out), and lands vertically on its new one — "no breaks … a continuous
- *    history". The duration scales with the step: a ×2 drum step 1 s, ×4 or more 1.5 s, a pinch's 5 % step 74 ms.
- *    ★ Longer than the app's 16 rows (~0.64 s): the web draws one DEVICE PIXEL a row and has no per-row zoom join in its
- *      shader, so a shorter ease put a carrier 14 px to the side per row at the steepest — dashes. */
-export const ZOOM_EASE_MS_PER_OCTAVE = 1000;
+ *    history". The duration scales with the step: a ×2 drum step 400 ms, ×4 or more 600 ms, a pinch's 5 % step 40 ms.
+ *    ★ A little longer than the app's ~4 rows: the web draws one device pixel a row and its shader has no per-row zoom
+ *      join yet (the app's has), so a faster fan draws as a dashed diagonal. OWED: the join in the web shader.
+ *    ★★ SHORT AND EASE-OUT (Stuart, 2026-10-28, on the first try's 1 s S-curve in the app: "it doesnt feel as instant as
+ *      it did back in v2 … oddly delayed"): the first rows are most of the way there; v2 changed within a frame. */
+export const ZOOM_EASE_MS_PER_OCTAVE = 400;
 export function zoomEaseMs(k: number): number {
-  return Math.max(40, Math.min(1500, Math.abs(Math.log2(k)) * ZOOM_EASE_MS_PER_OCTAVE));
+  return Math.max(40, Math.min(600, Math.abs(Math.log2(k)) * ZOOM_EASE_MS_PER_OCTAVE));
 }
-/** The view the ease draws at fraction u (0..1) from (lo0, span0) to (lo1, span1): smoothstep, the span geometric, the
+/** The view the ease draws at fraction u (0..1) from (lo0, span0) to (lo1, span1): ease-out, the span geometric, the
  *  zoom's fixed point (the anchor) held. */
 export function zoomEaseView(lo0: number, span0: number, lo1: number, span1: number, u: number): [number, number] {
-  const x = u < 0 ? 0 : u > 1 ? 1 : u, e = x * x * (3 - 2 * x);
+  const x = u < 0 ? 0 : u > 1 ? 1 : u, e = 1 - (1 - x) * (1 - x);
   const S = span0 * Math.pow(span1 / span0, e);
   const ds = span0 - span1;
   if (Math.abs(ds) <= span1 * 1e-9) return [lo0 + (lo1 - lo0) * e, S];
