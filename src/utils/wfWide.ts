@@ -30,7 +30,10 @@
  *   (128 + 640 + 16 = 784 B × 1024 rows ≈ 0.8 MB), allocated at the FIRST SPWB only — sparse peaks, not the web's dense
  *   2·C a row (2.2 MB), for the 1 GB phones (android_potato_phone_users). CPU: per row written while a layer is live, one
  *   blend (F + C) and F × 5 + ≤ P index mappings; per row the fan regenerates, one pass over the texels outside the
- *   detailed extent + its peaks. GPU: NOTHING — the shader is unchanged (the XCover 4s is GPU-bound).
+ *   detailed extent + its peaks. Measured with V8's interpreter only (node --no-opt --no-sparkplug --no-maglev, M-series —
+ *   the stand-in for Hermes): ~90 µs a row written, ~36 µs a row filled at a 12× zoom out; a zoom-out step that re-makes
+ *   400 rows 13 → 22 ms. Native (wf_wide.h): ~2 µs either. GPU: NOTHING — the shader is unchanged (the XCover 4s is
+ *   GPU-bound).
  * PURE — scripts/test_wf_wide_app.ts (+ the layer cases in test_wf_row_place.ts and the real shader in
  * test_wf_shader_motion.ts). The Android engine's twin is android/app/src/main/cpp/spectrum/wf_wide.h — change one, change
  * both. The web's reference is web/client/src/wfWide.ts. */
@@ -288,61 +291,109 @@ export function layerWriteRow(L: LayerRing, slot: number, st: WideState | null, 
   return L.k[slot];
 }
 
-/** The layer's palette index at capture fraction uc of slot's row (floor only), or −1 (outside the capture / no data). */
-function layerFloorAt(L: LayerRing, fo: number, uc: number): number {
+/** ★★ FILL a displayed row the fan just made: slot `slot`'s row drawn under map (a, b) into disp[at .. at+n). `lo[x] < 0`
+ *  marks the texels the detailed row has no data for (fanTable's table for this map — a row's own data is ONE run, so
+ *  the blank texels are a run at either end) — those take the layer; where the detailed row's edge is ON SCREEN the two
+ *  cross-fade over L.fadeTx texels (off-screen edges never fade). The layer is read at uc = k·u + m,
+ *  u = a·(x + ½)/n + b: the floor linear between its bins (0 = black where it has no data, or beyond the capture),
+ *  raised by every peak within max(½ texel, its half-width) of its centre — a thin carrier one texel wide at any zoom.
+ *  ★ COST: this is most of a zoom-out step's layer work on Hermes (an interpreter), so the blank runs are written in one
+ *    tight pass each, and a peak touches only its own texels. */
+export function layerFillRow(L: LayerRing, slot: number, a: number, b: number, n: number, disp: Uint8Array, at: number,
+                             lo: Int32Array): void {
+  const k = L.k[slot];
+  if (!(k > 0) || !(a > 0)) return;
+  const A = k * a / n, B = k * (a * 0.5 / n + b) + L.m[slot];   // uc(x) = A·x + B
+  const XL = -b / a * n, XR = (1 - b) / a * n, fade = L.fadeTx;
+  if (XL <= 0 && XR >= n) return;   // ★ the detailed row covers the screen (a zoom IN): nothing to fill, no edge to fade
+  const fo = slot * L.F;
+  let xa = 0; while (xa < n && lo[xa] < 0) xa++;
+  let xb = n; while (xb > xa && lo[xb - 1] < 0) xb--;
+  layerFloorRun(L, fo, A, B, 0, xa, disp, at);
+  layerFloorRun(L, fo, A, B, xb, n, disp, at);
+  // the soft edge's texels: inside the detailed run, within `fade` of an ON-SCREEN edge — [xa, eL) and [sR, xb)
+  const soft = fade > 0 && xa < xb;
+  const eL = soft && XL > 0 ? Math.min(xb, Math.ceil(XL + fade)) : xa;
+  const sR = soft && XR < n ? Math.max(eL, Math.floor(XR - fade)) : xb;
+  if (L.lay.length < n) L.lay = new Int16Array(n);
+  const lay = L.lay;
+  for (let x = xa; x < eL; x++) lay[x] = layerFloorOne(L, fo, A * x + B);
+  for (let x = sR; x < xb; x++) lay[x] = layerFloorOne(L, fo, A * x + B);
+  // the peaks: into the blank runs (where the floor has data — beyond it stays black) and the soft edge's layer values
+  const C = L.C, po = slot * L.P, np = L.pkN[slot], half = 0.5 * A;
+  // ★ only the peaks that can reach the screen (they are sorted by cell): most of a zoomed-out capture is off screen
+  const cLo = Math.floor((B - half) * C) - 1, cHi = Math.ceil((A * n + B + half) * C) + 1;
+  let i0 = 0, i1 = np;
+  while (i0 < i1) { const mid = (i0 + i1) >> 1; if (L.pkCell[po + mid] < cLo) i0 = mid + 1; else i1 = mid; }
+  for (let i = i0; i < np; i++) {
+    const cell = L.pkCell[po + i], sh = L.pkShape[po + i], ix = L.pkIdx[po + i];
+    if (cell > cHi) break;
+    const c0 = (cell + ((sh & 15) + 0.5) / 16) / C, hw = Math.max(half, ((sh >> 4) + 1) / 32 / C);
+    const x0 = Math.max(0, Math.ceil((c0 - hw - B) / A - 1e-9)), x1 = Math.min(n - 1, Math.floor((c0 + hw - B) / A + 1e-9));
+    for (let x = x0; x <= x1; x++) {
+      if (x < xa || x >= xb) { const d = disp[at + x]; if (d > 0 && ix > d) disp[at + x] = ix; }
+      else if (x < eL || x >= sR) { const v = lay[x]; if (v >= 0 && ix > v) lay[x] = ix; }
+      else x = sR - 1;   // the detailed run between the soft edges: untouched
+    }
+  }
+  for (let x = xa; x < xb; x++) {
+    if (x === eL && x < sR) x = sR;
+    if (x >= xb) break;
+    const v = lay[x];
+    if (v < 0) continue;
+    const c = x + 0.5;
+    let e = 1;
+    if (XL > 0) e = Math.min(e, (c - XL) / fade);
+    if (XR < n) e = Math.min(e, (XR - c) / fade);
+    if (e >= 1) continue;
+    if (e < 0) e = 0;
+    const d = disp[at + x];
+    disp[at + x] = Math.round(v + (d - v) * e);
+  }
+}
+
+/** The floor into disp[at + x0 .. at + x1): linear between its bins, 0 where it has no data or beyond the capture. */
+function layerFloorRun(L: LayerRing, fo: number, A: number, B: number, x0: number, x1: number, disp: Uint8Array, at: number): void {
+  if (x1 <= x0) return;
+  const F = L.F, fl = L.floor;
+  // beyond the capture (uc < 0 or > 1): black
+  let xc0 = Math.ceil(-B / A - 1e-9); if (xc0 < x0) xc0 = x0; if (xc0 > x1) xc0 = x1;
+  let xc1 = Math.floor((1 - B) / A + 1e-9) + 1; if (xc1 < xc0) xc1 = xc0; if (xc1 > x1) xc1 = x1;
+  if (xc0 > x0) disp.fill(0, at + x0, at + xc0);
+  if (x1 > xc1) disp.fill(0, at + xc1, at + x1);
+  if (F < 2) { disp.fill(fl[fo], at + xc0, at + xc1); return; }
+  // ★ SEGMENT BY SEGMENT (one floor-bin pair at a time, the value stepping linearly): the same floor as layerFloorOne
+  //   per texel, without its per-texel arithmetic — this loop is the bulk of a zoom-out step on Hermes (an interpreter).
+  const P0 = B * F - 0.5, dP = A * F;   // p(x) = P0 + dP·x
+  let x = xc0;
+  while (x < xc1) {
+    const p = P0 + dP * x;
+    let i: number, xe: number;
+    if (p < 0) { i = -1; xe = Math.ceil(-P0 / dP - 1e-9); }                       // before bin 0's centre: flat
+    else { i = p | 0; xe = i >= F - 1 ? xc1 : Math.ceil((i + 1 - P0) / dP - 1e-9); }
+    if (xe <= x) xe = x + 1; if (xe > xc1) xe = xc1;
+    if (i < 0 || i >= F - 1) {                                                    // an end: flat at the edge bin
+      const fa = fl[fo + (i < 0 ? 0 : F - 2)], fb = fl[fo + (i < 0 ? 1 : F - 1)];
+      disp.fill(i < 0 ? (fa ? fa : fb) : (fb ? fb : fa), at + x, at + xe);
+      x = xe; continue;
+    }
+    const fa = fl[fo + i], fb = fl[fo + i + 1];
+    if (!fa || !fb) { disp.fill(fa ? fa : fb, at + x, at + xe); x = xe; continue; }
+    let v = fa + (fb - fa) * (p - i) + 0.5;
+    const dv = (fb - fa) * dP;
+    for (; x < xe; x++, v += dv) disp[at + x] = v | 0;   // Math.round (non-negative)
+  }
+}
+
+/** The floor at one capture fraction, or −1 (no data / beyond the capture). */
+function layerFloorOne(L: LayerRing, fo: number, uc: number): number {
   if (uc < 0 || uc > 1) return -1;
   const F = L.F, fl = L.floor;
   if (F < 2) return fl[fo] ? fl[fo] : -1;
   const p = uc * F - 0.5;
   let i = Math.floor(p), t = p - i;
-  if (i < 0) { i = 0; t = 0; } if (i >= F - 1) { i = F - 2; t = 1; }
-  const a = fl[fo + i], b = fl[fo + i + 1];
-  if (!a && !b) return -1;
-  if (!a) return b; if (!b) return a;
-  return Math.round(a + (b - a) * t);
-}
-
-/** ★★ FILL a displayed row the fan just made: slot `slot`'s row drawn under map (a, b) into disp[at .. at+n). `lo[x] < 0`
- *  marks the texels the detailed row has no data for (fanTable's table for this map) — those take the layer; where the
- *  detailed row's edge is ON SCREEN the two cross-fade over L.fadeTx texels (off-screen edges never fade). The layer is
- *  read at uc = k·u + m, u = a·(x + ½)/n + b: the floor linear between its bins, raised by every peak within
- *  max(½ texel, its half-width) of its centre — a thin carrier one texel wide at any zoom. */
-export function layerFillRow(L: LayerRing, slot: number, a: number, b: number, n: number, disp: Uint8Array, at: number,
-                             lo: Int32Array): void {
-  const k = L.k[slot];
-  if (!(k > 0) || !(a > 0)) return;
-  if (L.lay.length < n) L.lay = new Int16Array(n);
-  const lay = L.lay, m = L.m[slot], fo = slot * L.F;
-  const A = k * a / n, B = k * (a * 0.5 / n + b) + m;   // uc(x) = A·x + B
-  const XL = -b / a * n, XR = (1 - b) / a * n, fade = L.fadeTx;
-  const fadeL = XL > 0 && fade > 0, fadeR = XR < n && fade > 0;
-  let any = false;
-  for (let x = 0; x < n; x++) {
-    let need = lo[x] < 0;
-    if (!need && (fadeL || fadeR)) { const c = x + 0.5; need = (fadeL && c - XL < fade) || (fadeR && XR - c < fade); }
-    if (!need) { lay[x] = -2; continue; }
-    lay[x] = layerFloorAt(L, fo, A * x + B);
-    any = true;
-  }
-  if (!any) return;
-  const C = L.C, po = slot * L.P, np = L.pkN[slot], half = 0.5 * A;
-  for (let i = 0; i < np; i++) {
-    const cell = L.pkCell[po + i], sh = L.pkShape[po + i], ix = L.pkIdx[po + i];
-    const c0 = (cell + ((sh & 15) + 0.5) / 16) / C, hw = Math.max(half, ((sh >> 4) + 1) / 32 / C);
-    const x0 = Math.max(0, Math.ceil((c0 - hw - B) / A - 1e-9)), x1 = Math.min(n - 1, Math.floor((c0 + hw - B) / A + 1e-9));
-    for (let x = x0; x <= x1; x++) if (lay[x] >= 0 && ix > lay[x]) lay[x] = ix;
-  }
-  for (let x = 0; x < n; x++) {
-    const v = lay[x];
-    if (v < 0) continue;
-    if (lo[x] < 0) { disp[at + x] = v; continue; }
-    const c = x + 0.5;
-    let e = 1;
-    if (fadeL) e = Math.min(e, (c - XL) / fade);
-    if (fadeR) e = Math.min(e, (XR - c) / fade);
-    if (e < 0) e = 0;
-    if (e >= 1) continue;
-    const d = disp[at + x];
-    disp[at + x] = Math.round(v + (d - v) * e);
-  }
+  if (i < 0) { i = 0; t = 0; } else if (i >= F - 1) { i = F - 2; t = 1; }
+  const fa = fl[fo + i], fb = fl[fo + i + 1];
+  if (!fa && !fb) return -1;
+  return !fa ? fb : !fb ? fa : Math.round(fa + (fb - fa) * t);
 }
