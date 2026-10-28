@@ -192,6 +192,14 @@ body.joining > *:not(#wifiJoining):not(script):not(style) { display: none !impor
   border-top-color: rgba(245,185,66,1); animation: wjspin 1s linear infinite; margin-bottom: 14px; }
 @keyframes wjspin { to { transform: rotate(360deg); } }
 body.wifiFirst .wifiFirstOnly { display: block; }
+/* ★★★ A NEW CARD'S ONE UPDATE CHECK (2026-10-28): while it runs it IS the step — the rest of setup waits under it, so
+ *  nothing typed meanwhile can be lost to the restart an update ends with. Gone the moment it finishes or is cancelled. */
+body.firstUpdBusy #setup > *:not(#firstUpdCard):not(.sub), body.firstUpdBusy #bar { display: none !important; }
+#firstUpdCard .fuRow { display: flex; gap: 12px; align-items: center; }
+#firstUpdCard .spin { flex: none; width: 22px; height: 22px; border-radius: 50%; border: 3px solid rgba(245,185,66,.25);
+  border-top-color: rgba(245,185,66,1); animation: wjspin 1s linear infinite; }
+#firstUpdCard .fuText { margin: 0; }
+#firstUpdCard .fuMore { margin: 10px 0 0; color: var(--dim); font-size: 13px; }
 </style>
 <div class="wrap">
   <h1>VibeServer</h1>
@@ -234,6 +242,18 @@ body.wifiFirst .wifiFirstOnly { display: block; }
   <!-- ── 2. SETUP ────────────────────────────────────────────────────────── -->
   <div id="setup" class="hide">
     <p class="sub">Set this receiver up. You can change any of it later from Admin.</p>
+
+    <!-- ★★★ A NEW CARD'S ONE UPDATE CHECK (Stuart, 2026-10-28). A card carries the VibeServer it was built with, so it can
+         be weeks old; once the network is set up, the box looks ONCE for a newer VibeServer and installs it, here, in
+         front of the owner. No internet: it says so and setup carries on. A failure is never retried by itself — from
+         then on Update VibeServer (Admin › Maintenance) and the schedule the owner chooses do this. Drawn only on a
+         card built to do it (the server offers the first-update action); every other server never sees it. -->
+    <div class="card hide" id="firstUpdCard">
+      <h2>VibeServer update</h2>
+      <div class="fuRow"><div class="spin" id="firstUpdSpin"></div><p class="fuText" id="firstUpdText"></p></div>
+      <p class="fuMore hide" id="firstUpdMore"></p>
+      <p style="margin:12px 0 0"><button type="button" class="ghost" id="firstUpdCancel">Cancel</button></p>
+    </div>
 
     <!-- ★★★ FRONT AND CENTRE: A RADIO THAT HAS GONE, OR ONE THAT HAS ARRIVED (Stuart, 2026-10-04).
          Above the tabs, because a radio stuck restarting every five seconds is the first thing an
@@ -5843,6 +5863,8 @@ async function wifiLoad() {
   try { WIFI_BASELINE = JSON.stringify(wifiCollect()); } catch (e) { WIFI_BASELINE = ""; }
   wifiDirtyRender();
   sshRender();
+  // ★ The network is now known: if it is set up (not the open setup hotspot), a new card checks for an update once.
+  firstUpdMaybe();
 }
 
 /** ★★★ ENABLE SSH (11.0.11). From the root service's state (WIFI.ssh): drawn only on a box that has sshd, and never while
@@ -6480,6 +6502,173 @@ $("wifiGo").onclick = () => {
       $("wifiGoNow").textContent = "Switching — join your network now";
     } catch (e) { $("wifiGoErr").textContent = String(e); $("wifiGoNow").disabled = false; }
   };
+};
+
+// ── ★★★ A NEW CARD'S ONE UPDATE CHECK (Stuart, 2026-10-28) ────────────────────────────────────────────────────────
+// His flow: the owner connects to the card, sets up the network, THEN the box checks for a VibeServer update once —
+// shown here ("Checking for a VibeServer update…" → "Updated to 11.0.x" / "Up to date"). No internet: "VibeServer cannot
+// check for updates — proceeding with setup". A failure is NEVER retried by itself. Cancel at any time: the download
+// stops and the installed VibeServer is untouched; once dpkg has started it is let finish, and this says so.
+// ★★ The work is the root helper's (vibeserver-maintenance first-update), which records each step on the settings
+//    partition BEFORE it acts; this page only asks once, then reads that record (admin status → updates.first). It runs
+//    at most once per card whatever this page does — a reload mid-way picks the run up where it is.
+// ★★ AN UPDATE RESTARTS VIBESERVER (a sealed card reboots). The page does not reload: it waits for a NEW server instance,
+//    the same proof the Save uses, and carries on with setup from where the owner was.
+const FIRST_UPD_RUNNING = ["checking", "downloading", "installing"];
+let FIRST_UPD_ASKED = false;     // ★ once per page: wifiLoad runs again after Wi-Fi saves
+let FIRST_UPD_CANCEL = false;
+
+/** The version without the Debian revision or epoch, as the owner knows it: 1:11.0.16-1 → 11.0.16. */
+function firstUpdVer(v) { return String(v || "").replace(/^\d+:/, "").replace(/-[^-]*$/, ""); }
+
+/** The page's words for a state — ONE place, so a reload mid-run and a live run say the same thing. Returns
+ *  {text, more, busy, cancel}. `from` / `to` are the helper's versions. */
+function firstUpdWords(f) {
+  const st = (f && f.state) || "", from = firstUpdVer(f && f.from), to = firstUpdVer(f && f.to);
+  const later = "From now on updates are your choice: Admin › Maintenance has Update VibeServer, "
+              + "and a schedule if you want it done automatically.";
+  switch (st) {
+    case "":
+    case "checking":    return {text: "Checking for a VibeServer update…", more: "", busy: true, cancel: true};
+    case "downloading": return {text: "Downloading VibeServer " + to + "…", more: "Cancel stops the download and keeps VibeServer " + from + ".", busy: true, cancel: true};
+    case "installing":  return {text: "Installing VibeServer " + to + "…", more: "This part cannot be cancelled — it takes a minute or two, then VibeServer restarts and this page carries on by itself.", busy: true, cancel: false};
+    case "updated":     return {text: "Updated to VibeServer " + to + ".", more: later, busy: false};
+    case "uptodate":    return {text: "VibeServer is up to date (" + from + ").", more: later, busy: false};
+    case "offline":     return {text: "VibeServer cannot check for updates — proceeding with setup.", more: later, busy: false};
+    case "cancelled":   return {text: "Update cancelled — VibeServer " + from + " is unchanged.", more: later, busy: false};
+    default:            return {text: (f && f.why === "install"
+                                        ? "The update to VibeServer " + to + " did not finish installing."
+                                        : "The update check did not finish — VibeServer " + from + " is unchanged.")
+                                      + " Use Update VibeServer in Admin › Maintenance when you are ready.", more: later, busy: false};
+  }
+}
+
+function firstUpdShow(w) {
+  $("firstUpdCard").classList.remove("hide");
+  $("firstUpdText").textContent = w.text;
+  $("firstUpdMore").textContent = w.more || "";
+  $("firstUpdMore").classList.toggle("hide", !w.more);
+  $("firstUpdSpin").classList.toggle("hide", !w.busy);
+  $("firstUpdCancel").classList.toggle("hide", !(w.busy && w.cancel));
+  if (FIRST_UPD_CANCEL && w.busy && !w.cancel)
+    $("firstUpdMore").textContent = "Too late to cancel — the install has started and is finishing safely. Setup carries on in a moment.";
+  document.body.classList.toggle("firstUpdBusy", !!w.busy);
+}
+
+/** {first, offered, running} from the server, or null when it cannot be reached (restarting) / refused. */
+async function firstUpdStatus() {
+  try {
+    const r = await fetch("/vibeserver/admin/status?" + await authQuery(), {cache: "no-store"});
+    if (r.status === 401) return {refused: true};
+    if (!r.ok) return null;
+    const s = await r.json();
+    let running = true;
+    try {
+      const l = await fetch("/vibeserver/admin/maintenance-log?" + await authQuery(), {cache: "no-store"});
+      if (l.ok) running = !!(await l.json()).running;
+    } catch (e) { /* keep "running": never call a run dead on a missed read */ }
+    return {first: (s.updates && s.updates.first) || null,
+            offered: String(s.maintenance || "").split(","), running};
+  } catch (e) { return null; }
+}
+
+async function firstUpdMaybe() {
+  if (!POCKET || FIRST_UPD_ASKED) return;
+  // ★ Step 3 comes AFTER step 2: still on the open setup hotspot, the network is not set up yet.
+  if (!WIFI || pocketWifiFirst(WIFI.mode, WIFI.wired)) return;
+  const st = await firstUpdStatus();
+  if (!st || st.refused || !st.first || !st.offered.includes("first-update")) return;   // not a new card / older server
+  if (FIRST_UPD_ASKED) return;
+  FIRST_UPD_ASKED = true;
+  const s = st.first.state || "";
+  if (s === "") return firstUpdRun(false);
+  if (FIRST_UPD_RUNNING.includes(s)) return firstUpdRun(true);   // ★ a reload mid-run: follow it, never start another
+  // ★ Finished on an earlier visit: nothing more to say here.
+}
+
+async function firstUpdRun(resume) {
+  FIRST_UPD_CANCEL = false;
+  const startId = BOOT_ID;
+  firstUpdShow(firstUpdWords({state: "checking"}));
+  if (!resume) {
+    try {
+      const r = await fetch("/vibeserver/admin/action?" + await authQuery(),
+                            {method: "POST", cache: "no-store", body: JSON.stringify({action: "first-update"})});
+      if (!r.ok) throw new Error("refused (" + r.status + ")");
+    } catch (e) {
+      firstUpdShow({text: "VibeServer could not start its update check — proceeding with setup.",
+                    more: "Use Update VibeServer in Admin › Maintenance when you are ready.", busy: false});
+      return;
+    }
+  }
+  let last = null, idle = 0, away = 0, sawGone = false;
+  const t0 = Date.now();
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1500));
+    const st = await firstUpdStatus();
+    if (st && st.refused) {
+      // ★ The server came back and no longer accepts this page's sign-in (a ticket from before the restart).
+      firstUpdShow({text: "VibeServer restarted — sign in again to carry on with setup.", more: "", busy: false});
+      setTimeout(() => location.reload(), 2500);
+      return;
+    }
+    if (!st || !st.first) {
+      // ★ Restarting (the update's own restart, or the sealed card's reboot). Wait for it, up to ten minutes.
+      sawGone = true;
+      if (++away * 1.5 > 600) {
+        firstUpdShow({text: "VibeServer has not come back yet. Wait a minute, then reload this page.", more: "", busy: false});
+        return;
+      }
+      firstUpdShow({text: "VibeServer is restarting with the update — this page reconnects by itself…", more: "", busy: true, cancel: false});
+      continue;
+    }
+    away = 0;
+    const f = st.first, s = f.state || "";
+    last = f;
+    if (FIRST_UPD_RUNNING.includes(s) || s === "") {
+      // ★★ A run that DIED (power cut, a crash) leaves its last step in the record and nothing running. Not retried:
+      //    reported as not finished. "" while the request waits counts as running (the helper has not started yet).
+      idle = st.running ? 0 : idle + 1;
+      if (idle >= 4 && s !== "") { firstUpdShow(firstUpdWords({state: "failed", from: f.from, to: f.to, why: s === "installing" ? "install" : ""})); break; }
+      // ★ The helper never picked the request up (the log handler gives up on it after a minute): say so, carry on.
+      if (idle >= 4 && s === "") {
+        firstUpdShow({text: "VibeServer could not start its update check — proceeding with setup.",
+                      more: "Use Update VibeServer in Admin › Maintenance when you are ready.", busy: false});
+        break;
+      }
+      if (Date.now() - t0 > 30 * 60 * 1000) { firstUpdShow(firstUpdWords({state: "failed", from: f.from, to: f.to})); break; }
+      firstUpdShow(firstUpdWords(f));
+      continue;
+    }
+    if (s === "updated") {
+      // ★★ Updated is not finished until the NEW VibeServer answers — otherwise the owner would start typing into a
+      //    page whose server is about to restart under them. A new instance is the proof (the Save's rule).
+      let id = "";
+      try { id = (await (await fetch("/vibeserver.json", {cache: "no-store"})).json()).instance || ""; } catch (e) { id = ""; }
+      if (!id || (startId && id === startId && !sawGone)) {
+        if (Date.now() - t0 < 15 * 60 * 1000) {
+          firstUpdShow({text: "Updated to VibeServer " + firstUpdVer(f.to) + " — restarting it…", more: "", busy: true, cancel: false});
+          continue;
+        }
+      }
+      if (id) BOOT_ID = id;   // ★ the Save waits for a DIFFERENT instance — this one is now the baseline
+    }
+    firstUpdShow(firstUpdWords(f));
+    break;
+  }
+  // ★ Setup carries on: the rest of the page is back (firstUpdBusy is off). Reload what a restart may have changed.
+  if (sawGone) { try { wifiLoad(); } catch (e) { /* the page still works without it */ } }
+}
+
+$("firstUpdCancel").onclick = async () => {
+  FIRST_UPD_CANCEL = true;
+  $("firstUpdCancel").disabled = true;
+  $("firstUpdText").textContent = "Cancelling…";
+  try {
+    await fetch("/vibeserver/admin/action?" + await authQuery(),
+                {method: "POST", cache: "no-store", body: JSON.stringify({action: "first-update-cancel"})});
+  } catch (e) { /* the next status read says what happened */ }
+  setTimeout(() => { $("firstUpdCancel").disabled = false; }, 4000);
 };
 
 $("sdrCheckAgain").addEventListener("click", () => sdrChangesLoad());

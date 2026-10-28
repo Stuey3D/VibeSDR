@@ -453,3 +453,52 @@ NetworkManager's `managed no` on it; IPv6 NAT on Armbian's sunxi kernel (the red
 > These cards are still **tested under emulation only** apart from the Orange Pi One. If anything goes wrong, install
 > the board's own OS and add VibeServer with APT instead.
 
+
+## One VibeServer update check during setup (2026-10-28)
+
+Stuart: *"Make the SBC cards check for a VibeServer update on first install if connected to the internet, that way any
+fixes other than underlying OS stuff get put on the box the minute it gets set up, then the owner can choose auto
+updates thereafter."* The flow he set:
+
+1. connect to the card;
+2. set up the network;
+3. the box checks **once**, shown on the setup page;
+4. no internet → "VibeServer cannot check for updates — proceeding with setup";
+5. a failure is **never** retried by itself;
+6. Cancel leaves the installed VibeServer intact.
+
+Built on branch `sbc-firstboot-update`. The full description is in
+[`image/pocket/README.md`](../image/pocket/README.md#a-new-card-checks-for-a-vibeserver-update-once-during-setup). In
+short:
+
+- **Where it hooks in.** Not at boot. There is no first-boot job and no retry flag. The **setup page** asks for it in
+  `wifiLoad()`, once the box reports a network that is not the open setup hotspot: a wired box at sign-in, a Wi-Fi box
+  once it has joined the owner's network. The page then shows the step, and the rest of the page waits behind it.
+- **It is not a second updater.** It is a new action in the existing root helper, `vibeserver-maintenance`
+  (`first-update`, plus the daemon's own `first-update-cancel`). Both are offered only on a card that carries the
+  image's arm file, `/etc/vibeserver-pocket/first-update`, which `customise.sh` writes. It does the `update` action's
+  work: `apt_do`, then `--only-upgrade vibeserver` at the exact newer version, then `pocket_converge`, then the reboot
+  on a sealed root. Before that it takes a quick look at apt.vibesdr.net only. The look goes into a throwaway list
+  directory in `/run` with time limits, so an up-to-date or offline box writes nothing.
+- **Read-only root.** The check runs only after the network is set up, which is always after the first-boot seal. On
+  a sealed card the install goes through `overlayroot-chroot` into the real root, the same path as Install updates.
+  The box then **reboots**, and the page waits for the new server instance and carries on. Cancel signals only
+  apt-get and its download methods, never the chroot wrapper, so the real root is always remounted read-only
+  afterwards. The run's record lives on the settings partition (`/var/lib/vibeserver-pocket/first-update`) and is
+  written before any network access. A power cut mid-run therefore reads as "did not finish" and is not retried.
+- **Never a downgrade.** Only a newer version is installed (`offer_for` kind stable/beta). A card built from a `~beta`
+  package also gets `vibesdr-beta.list`, the admin page's own "Receive beta updates" file, so its check uses the beta
+  suite.
+- **Tests:**
+  - `vibeserver/linux/test_first_update_docker.sh`, 47/47. Real apt and dpkg, with no network. Covers: newer →
+    updated, and only vibeserver; same → up to date; older only → no downgrade; offline; a hanging repository stopped
+    at the limit; a failed download, not retried; Cancel during the download, with dpkg clean and no lock left;
+    Cancel before the start; Cancel during dpkg ignored, so dpkg finishes; no arm file → nothing; beta cards.
+  - `scripts/test-setup-first-update.mjs`, 27/27. The page's flow, wired into `run-tests.sh`.
+  - `test_vibeserver_maintenance.py` and `test_pocket_converge.py` still pass.
+  - `main.cpp` passes a Linux syntax check (g++ in the bookworm build image).
+  - **Not run:** a card build or boot, because the published 11.0.15 package does not carry the feature. The overlay
+    path is the existing `apt_do`, unchanged.
+- **Ships with a release.** The helper, the daemon and the page are all in the vibeserver package. Cards must be
+  rebuilt from the first package that carries them (11.0.16 or later). A card built from 11.0.15 builds unarmed, and
+  `build.sh` says so.
