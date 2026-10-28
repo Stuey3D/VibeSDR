@@ -1116,7 +1116,7 @@ async function connect(host: string, pin: string) {
   //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
   //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
   // ★ `dab=2`: the DAB report in pieces (src/services/dabAssemble.ts) — a server that predates it ignores the flag.
-  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2', auth)}`;
+  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2&wide=1', auth)}`;   // ★ V12 wide=1: the full-capture row (wfWide.ts)
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
@@ -1212,6 +1212,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       mobileUi?.paintSignal();
       updateRangeGap(centerHz, bwHz);
     },
+    onWide: (row) => wf?.pushWide(row),   // ★ V12 the full-capture layer under the history (wfWide.ts)
     onConfig: (cfg) => {
       /* ★★★ THE RECEIVER HAS ANSWERED A TUNE — which is what a sweep must pace against. See
        *  sweepAwaitingEcho: the ping cannot see how long a retune actually takes. */
@@ -1229,7 +1230,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       const span = cfg.binCount * cfg.binBandwidth;
       const lo = cfg.centerFreq - span / 2, hi = cfg.centerFreq + span / 2;
       if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
-      lastWindow = { lo, hi };
+      // ★★ V12 THE HISTORY COVERS THE CAPTURE, not just the view (the full-capture layer, wfWide.ts): a PAN or a tune to
+      //    anywhere inside what the radio was capturing still has history to show there, so only a move clear of the
+      //    whole capture is a jump (Stuart: black "ONLY when absolutely necessary").
+      { const cap = wf?.captureWindow();
+        lastWindow = cap ? { lo: Math.min(lo, cap.lo), hi: Math.max(hi, cap.hi) } : { lo, hi }; }
 
       /* ★★★ THE NON-DAB DIAL, REMEMBERED AND — IF SOMEBODY JUST LEFT DAB — HANDED BACK. Both halves
        *  belong here because this message is the truth about where the radio is; see dabNoteNonDab

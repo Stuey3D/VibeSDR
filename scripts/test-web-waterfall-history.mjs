@@ -16,6 +16,11 @@
 //   4. THE ZOOM FAN (Stuart 2026-10-27 23:51: zooming SLICED the web waterfall into bands of different zoom): after a
 //      straight trail, a zoom IN and then OUT — every row of that trail, old and new, shows the carrier at the column the
 //      NEW span puts it (the history fanned with the zoom), never at the old one.
+//   6. THE FULL-CAPTURE LAYER (V12, Stuart 2026-10-28 02:00: "the waterfall should be buffering outside the zoomed area so
+//      that the black doesn't show at all"): zoomed in AWAY from the carrier for a few seconds, then back out — every row
+//      recorded while zoomed shows the carrier at its true column (the coarse full-capture row under the detailed one),
+//      never black; zoomed in ON the carrier, those rows keep it DETAILED (narrow) after the zoom out; panned across the
+//      capture while zoomed, the same; and a phone turned portrait → landscape → portrait keeps that history.
 //   All of it twice: the WebGL renderer, then the 2D fallback (old phones without WebGL draw the same picture).
 //   VIBESERVER_BIN=…/vibeserver node --max-old-space-size=512 scripts/test-web-waterfall-history.mjs
 //   (the page is the one compiled into that binary — rebuild it after `node scripts/build-web.mjs`)
@@ -264,13 +269,97 @@ try {
       if (gap > 1) { gaps++; worst = Math.max(worst, gap); }
       const d = Math.abs(g.cols[y] - g.cols[y + 1]); ds.push(d); if (d === 0) still++;
     }
-    const sorted = [...ds].sort((x, y) => x - y), med = sorted.length ? sorted[sorted.length >> 1] : 0, big = sorted.length ? sorted[sorted.length - 1] : 0;
+    // ★ "Largest" is the 90th percentile: a spin faster than the tuner's retune cooldown leaves the radio catching up in
+    //   one jump now and then (the hard rule's allowed gap) — a staircase is MANY rows standing still and then jumps.
+    const sorted = [...ds].sort((x, y) => x - y), med = sorted.length ? sorted[sorted.length >> 1] : 0,
+          big = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))] : 0;
     ok(ys.length >= 6 && pairs >= 6 && still <= pairs * 0.25 && big <= 3 * med + 4,
-       `${label} (${cStart} → ${cEnd} px): the trail moves EVENLY, a curve not a staircase — ${still}/${pairs} rows standing still, steps median ${med} px, largest ${big} px`);
+       `${label} (${cStart} → ${cEnd} px): the trail moves EVENLY, a curve not a staircase — ${still}/${pairs} rows standing still, steps median ${med} px, 90th percentile ${big} px`);
     if (wantTouch) ok(gaps <= 1, `${label}: one continuous trail — ${gaps} gap(s) between ${pairs} row pairs` + (gaps ? ` (widest ${worst} px)` : ''));
   };
   await glideCase('drum-spin', 500, 50, 40, true);
   await glideCase('fast-spin', 3000, 60, 16, false);
+  // ── 6. THE FULL-CAPTURE LAYER — no black inside the capture after a zoom out ──
+  {
+    // ★ The view moves, the dial does not, all through this section (followVfo off — every zoom goes out as `free`).
+    await ev('(() => { window.__vibeWf().spec.followVfo = false; return true; })()');
+    const ringRows = () => ev(`(() => { const w = window.__vibeWf().wf; return w.gl ? w.gl.rows : w.wf.height; })()`);
+    const headNow = () => ev('window.__vibeWf().wf.head');
+    const zoomTo = (c, span) => ev(`(() => { const s = window.__vibeWf().spec; s.zoom(${c}, ${span} / (s.cfg.binCount || 1024)); return true; })()`);
+    const colAt = (f, W) => Math.round((0.5 + (f - fEnd) / SPAN) * W);
+    // Zoom to `span` round `centres` (one per second — a pan), then back out to SPAN round the dial; the rows written
+    // meanwhile, newest first, as display rows [y0, y1) of the picture taken after.
+    const phase = async (span, centres) => {
+      await zoomTo(fEnd, SPAN); await sleep(1500);
+      const h0 = await headNow();
+      for (const c of centres) { await zoomTo(c, span); await sleep(1000); }
+      const h1 = await headNow();
+      await zoomTo(fEnd, SPAN); await sleep(1200);
+      const h2 = await headNow(), R = await ringRows();
+      const pic = await columns();
+      // a ring row r is display row (r − head) mod R; the phase wrote rows h1 … h0−1 (the head walks backwards)
+      const y0 = ((h1 - h2) % R + R) % R + 3, y1 = ((h0 - h2) % R + R) % R - 3;   // a few in-flight rows excused at each end
+      return { pic, y0, y1 };
+    };
+    const lit = (pic, y0, y1, col, tol) => { let n = 0, at = 0, w = 0;
+      for (let y = y0; y < y1; y++) { n++; const c = pic.cols[y]; if (c >= 0 && Math.abs(c - col) <= tol) { at++; w = Math.max(w, pic.rs[y] - pic.ls[y] + 1); } }
+      return { n, at, w }; };
+    // (a) zoomed 20 kHz AWAY from the carrier (it is 10 kHz above the dial; the view sits 40 kHz below it) — outside the view
+    {
+      const { pic, y0, y1 } = await phase(20000, [fEnd - 30000, fEnd - 30000, fEnd - 30000, fEnd - 30000]);
+      const r = lit(pic, y0, y1, colAt(CARRIER, pic.W), 12);
+      if (process.env.WFHIST_SHOTS) { fs.mkdirSync(process.env.WFHIST_SHOTS, { recursive: true }); const sh = await send('Page.captureScreenshot', { format: 'png' });
+        fs.writeFileSync(path.join(process.env.WFHIST_SHOTS, `wide-layer-zoom-out-${MODE}.png`), Buffer.from(sh.result.data, 'base64')); }
+      ok(r.n >= 30 && r.at >= r.n * 0.9,
+         `zoomed in away from the carrier, then out: ${r.at}/${r.n} of the rows written meanwhile show it at its true column (the full-capture layer) — not black`);
+    }
+    // (b) zoomed ON the carrier: those rows keep their detail after the zoom out (narrow, not the coarse layer's width)
+    {
+      const { pic, y0, y1 } = await phase(20000, [CARRIER, CARRIER, CARRIER, CARRIER]);
+      const r = lit(pic, y0, y1, colAt(CARRIER, pic.W), 4);
+      ok(r.n >= 30 && r.at >= r.n * 0.9 && r.w <= 8,
+         `zoomed in ON the carrier, then out: ${r.at}/${r.n} rows show it at its column, at most ${r.w} px wide — the detailed rows on top`);
+    }
+    // (d) a PHONE turned portrait → landscape → portrait keeps the history (the same ring, re-drawn at the new size)
+    {
+      const before = await columns();
+      const oldRows = before.cols.map((x, y) => [y, x]).filter(([, x]) => x >= 0).slice(0, 200);
+      for (const [w, h] of [[390, 844], [844, 390], [390, 844]]) {
+        await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
+        await sleep(400);
+      }
+      const after = await columns();
+      const k = after.W / before.W;
+      // ★ The GPU ring shows one row per device pixel, so a taller screen shows MORE rows (a row stays at its y, plus what
+      //   scrolled in meanwhile — at dpr 2 that is twice the rows a second); the 2D ring is re-heighted (stretched).
+      const near = (yy, x) => Math.abs((after.cols[yy] ?? -99) - x * k) <= 6;
+      const kept = oldRows.filter(([y, x]) => {
+        for (let dy = 0; dy <= 90; dy++) if (near(y + dy, x)) return true;
+        for (let dy = 0; dy <= 16; dy += 2) if (near(Math.round((y + dy) * after.wfH / before.wfH), x)) return true;
+        return false; }).length;
+      ok(oldRows.length >= 100 && kept >= oldRows.length * 0.7,
+         `a phone turned portrait → landscape → portrait (${before.W}×${before.wfH} → ${after.W}×${after.wfH}) keeps the history: ${kept}/${oldRows.length} rows`);
+      await send('Emulation.setDeviceMetricsOverride', { width: 900, height: 900, deviceScaleFactor: 1, mobile: false });
+      await sleep(400);
+    }
+    // (c) PANNED across the capture while zoomed. A pan is a centre move, so — like a tune — the rows keep their own
+    //     placement (the #57 bend); what must hold is that NONE of them can show black inside the capture once zoomed
+    //     out: every row written during the pan carries a full-capture layer (X > 0) reaching across the whole screen.
+    {
+      const { y0, y1 } = await phase(20000, [fEnd - 40000, fEnd - 10000, CARRIER, CARRIER + 30000, CARRIER + 60000]);
+      const cov = await ev(`(() => { const w = window.__vibeWf().wf; const R = w.xfA.length; let n = 0, c = 0;
+        for (let j = ${y0}; j < ${y1}; j++) { const r = (w.head + j) % R; n++;
+          const a = w.xfA[r], b = w.xfB[r], X = w.xfX[r], e = 1 + 2 * X;
+          const detail = b <= 0 && a + b >= 1, layer = X > 0 && (b + X) / e <= 0 && (a + b + X) / e >= 1;
+          if (detail || layer) c++; }
+        return [c, n]; })()`);
+      ok(cov && cov[1] >= 40 && cov[0] >= cov[1] * 0.95,
+         `panned across the capture while zoomed, then out: ${cov && cov[0]}/${cov && cov[1]} rows have data across the whole screen (no black inside the capture)`);
+    }
+    await ev(`(() => { const s = window.__vibeWf().spec; s.followVfo = true; s.tune(${fEnd}); return true; })()`);
+    await zoomTo(fEnd, SPAN); await sleep(1000);
+  }
+
  }
 } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
 finally {

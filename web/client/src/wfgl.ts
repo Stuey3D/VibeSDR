@@ -47,6 +47,11 @@ precision mediump float;
 #endif
 uniform sampler2D uRing;   // LUMINANCE, ringW × ringH — the dB index (WebGL1 samples L as .rgb)
 uniform sampler2D uLut;    // 256×1 RGBA palette
+uniform sampler2D uCoarse; // ★ V12 the full-capture layer (wfWide.ts): WIDE_TEX × ringH, same rows as uRing; 0 = no data
+uniform float uHasCoarse;  // 0 until the first full-capture row (an older server never sends one)
+uniform HP float uX;       // this run's extent: the coarse row covers the detailed row's u in [−X, 1 + X]
+uniform HP float uXNext;   // the next run's
+uniform float uFade;       // the cross-fade at a detailed row's edge, in x units (a few pixels)
 uniform HP float uHead;    // newest row index in the ring
 uniform HP float uRows;       // ring height (fixed, generous)
 uniform float uCols;       // ring width (bins)
@@ -54,6 +59,8 @@ uniform float uSharp;      // 0 = off; unsharp-mask amount (see below)
 uniform float uContrast;   // -1..1 S-curve mix (see below)
 uniform float uTaps;       // ★ zoom fan: samples per pixel for a run drawn SHRUNK (zoomed out past it) — 1 otherwise
 uniform float uTapsNext;   // the same for uMapNext
+uniform HP vec2 uMapF;     // this run's map again, for layerAt (its own name: a uniform shared with the vertex shader must match its precision)
+uniform HP vec2 uMapNextF;
 uniform float uTapDu;      // u between those samples (one output pixel's worth at the identity)
 uniform HP float uRunEnd;  // display row where this run ends (exclusive) — its last row blends with the next run's first
 varying vec2 vUv;
@@ -107,6 +114,27 @@ float ringAt(HP float ux, HP float ty, float taps) {
   return v;
 }
 
+// ★ V12 THE FULL-CAPTURE LAYER (wfWide.ts): the detailed row where it has data, the coarse full-capture row everywhere
+//   else — black only where the radio was not capturing. Read through the SAME map (so the fan, the bend and a resize move
+//   both together). Where the detailed row's edge is ON SCREEN the two cross-fade over uFade, so a zoom out shows no
+//   hard-edged block of different resolution.
+float layerAt(HP float ux, HP vec2 map, HP float X, HP float ty, float taps) {
+  bool inside = ux >= 0.0 && ux <= 1.0;
+  float d = inside ? ringAt(ux, ty, taps) : 0.0;
+  if (uHasCoarse < 0.5 || X <= 0.0) return d;
+  HP float uc = (ux + X) / (1.0 + 2.0 * X);
+  float c = (uc < 0.0 || uc > 1.0) ? 0.0 : texture2D(uCoarse, vec2(uc, ty)).r;
+  bool hasC = c > 0.5 / 255.0;
+  if (!inside) return hasC ? c : 0.0;
+  if (!hasC) return d;
+  HP float x = vUv.x;
+  HP float xl = -map.y / map.x, xr = (1.0 - map.y) / map.x;
+  float e = 1.0;
+  if (xl > 0.0) e = min(e, float((x - xl) / uFade));
+  if (xr < 1.0) e = min(e, float((xr - x) / uFade));
+  return mix(c, d, clamp(e, 0.0, 1.0));
+}
+
 void main() {
   // Top of the output (vUv.y = 0) is the newest row = head; walk down uVisible rows into the ring.
   // The ring is taller than the display so a resize never reallocates it — history is just preserved.
@@ -122,10 +150,10 @@ void main() {
   HP float r0 = mod(uHead + j, uRows);
   float v;
   if (j < uRunEnd - 1.0 && r0 < uRows - 1.0) {
-    v = ringAt(vU, (r0 + 1.0) / uRows, uTaps);
+    v = layerAt(vU, uMapF, uX, (r0 + 1.0) / uRows, uTaps);
   } else {
     HP float r1 = mod(r0 + 1.0, uRows);
-    v = 0.5 * (ringAt(vU, (r0 + 0.5) / uRows, uTaps) + ringAt(vU2, (r1 + 0.5) / uRows, uTapsNext));
+    v = 0.5 * (layerAt(vU, uMapF, uX, (r0 + 0.5) / uRows, uTaps) + layerAt(vU2, uMapNextF, uXNext, (r1 + 0.5) / uRows, uTapsNext));
   }
 
   // ★★★ CONTRAST — THE SAME BUG AS THE SHARPNESS SLIDER ABOVE, in the same file, one control
@@ -176,6 +204,19 @@ export class WaterfallGL {
   private uMapNext: WebGLUniformLocation;
   private uTapsNext: WebGLUniformLocation;
   private uRunEnd: WebGLUniformLocation;
+  private uCoarse: WebGLUniformLocation;
+  private uHasCoarse: WebGLUniformLocation;
+  private uX: WebGLUniformLocation;
+  private uXNext: WebGLUniformLocation;
+  private uFade: WebGLUniformLocation;
+  private uMapF: WebGLUniformLocation;
+  private uMapNextF: WebGLUniformLocation;
+  /** ★ V12 the full-capture layer (wfWide.ts): a second LUMINANCE ring, coarseW × ringH, allocated at the first full-capture
+   *  row (an older server never sends one, and the layer then costs nothing). `blank` is a 1×1 zero for the sampler. */
+  private coarse: WebGLTexture | null = null;
+  private coarseW = 0;
+  private coarseH = 0;
+  private blank: WebGLTexture;
   // ★ Looked up ONCE. render() used to call getAttribLocation + getUniformLocation ×2 every frame;
   //   they are string lookups on the program and cost a driver round-trip on some stacks.
   private aPos: number;
@@ -223,6 +264,16 @@ export class WaterfallGL {
     this.uMapNext = gl.getUniformLocation(prog, 'uMapNext')!;
     this.uTapsNext = gl.getUniformLocation(prog, 'uTapsNext')!;
     this.uRunEnd = gl.getUniformLocation(prog, 'uRunEnd')!;
+    this.uCoarse = gl.getUniformLocation(prog, 'uCoarse')!;
+    this.uHasCoarse = gl.getUniformLocation(prog, 'uHasCoarse')!;
+    this.uX = gl.getUniformLocation(prog, 'uX')!;
+    this.uXNext = gl.getUniformLocation(prog, 'uXNext')!;
+    this.uFade = gl.getUniformLocation(prog, 'uFade')!;
+    this.uMapF = gl.getUniformLocation(prog, 'uMapF')!;
+    this.uMapNextF = gl.getUniformLocation(prog, 'uMapNextF')!;
+    this.blank = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.blank);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array(1));
     this.aPos = gl.getAttribLocation(prog, 'aPos');
     this.uRing = gl.getUniformLocation(prog, 'uRing')!;
     this.uLut = gl.getUniformLocation(prog, 'uLut')!;
@@ -282,6 +333,34 @@ export class WaterfallGL {
     gl.bindTexture(gl.TEXTURE_2D, this.ring);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, this.ringW, this.ringH, 0,
       gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
+    if (this.coarse) {
+      gl.bindTexture(gl.TEXTURE_2D, this.coarse);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, this.coarseW, this.coarseH, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
+    }
+  }
+
+  /** ★ V12 the full-capture ring: allocated (zeroed) at `cols` × the ring's height; re-made if the ring grew. */
+  ensureCoarse(cols: number) {
+    if (this.coarse && this.coarseW === cols && this.coarseH === this.ringH) return;
+    const gl = this.gl;
+    if (!this.ringH) return;
+    if (this.coarse) gl.deleteTexture(this.coarse);
+    this.coarse = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.coarse);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, cols, this.ringH, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.coarseW = cols; this.coarseH = this.ringH;
+  }
+  get hasCoarse(): boolean { return !!this.coarse && this.coarseH === this.ringH; }
+  /** One full-capture row at `headRow` (the same row as the detailed ring's). */
+  pushCoarse(row: Uint8Array, headRow: number) {
+    const gl = this.gl;
+    if (!this.coarse || row.length !== this.coarseW || headRow >= this.coarseH) return;
+    gl.bindTexture(gl.TEXTURE_2D, this.coarse);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, headRow, this.coarseW, 1, gl.LUMINANCE, gl.UNSIGNED_BYTE, row);
   }
 
   /** Upload one row of dB indices (length must equal the ring width) at `headRow`. Uploaded as-is
@@ -296,7 +375,7 @@ export class WaterfallGL {
 
   /** Render the waterfall into this renderer's canvas at outW×outH. `head` is the newest row and
    *  `visibleRows` is how many rows of the ring to show (the waterfall pixel height).
-   *  ★ `runs` (wfZoomFan.mapRuns: [j0, j1, a, b] per run, display rows from the top) draws each run of rows through its
+   *  ★ `runs` (wfZoomFan.mapRunsX: [j0, j1, a, b, X] per run, display rows from the top) draws each run of rows through its
    *    own map — the zoom fan. Omitted / one identity run = the single full-screen draw this always was. */
   render(head: number, visibleRows: number, outW: number, outH: number, runs?: Float64Array, nRuns = 0) {
     const gl = this.gl;
@@ -316,6 +395,11 @@ export class WaterfallGL {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.lut);
     gl.uniform1i(this.uLut, 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.hasCoarse ? this.coarse : this.blank);
+    gl.uniform1i(this.uCoarse, 2);
+    gl.uniform1f(this.uHasCoarse, this.hasCoarse ? 1 : 0);
+    gl.uniform1f(this.uFade, 12 / Math.max(1, outW));   // ★ ~12 px cross-fade at a detailed row's on-screen edge
     gl.uniform1f(this.uHead, head);
     gl.uniform1f(this.uRows, this.ringH);
     gl.uniform1f(this.uVisible, Math.min(visibleRows, this.ringH));
@@ -337,7 +421,11 @@ export class WaterfallGL {
     gl.uniform1f(this.uTapDu, 1 / Math.max(1, outW));
     const taps = (a: number) => a > 1.01 ? Math.min(8, Math.ceil(a)) : 1;
     // ★ Each run carries its own map AND the next run's (its last row blends with that run's first — see the shader).
-    const setMap = (a: number, b: number, an: number, bn: number, end: number) => {
+    const setMap = (a: number, b: number, an: number, bn: number, end: number, x = 0, xn = 0) => {
+      gl.uniform1f(this.uX, x);
+      gl.uniform1f(this.uXNext, xn);
+      gl.uniform2f(this.uMapF, a, b);
+      gl.uniform2f(this.uMapNextF, an, bn);
       gl.uniform2f(this.uMap, a, b);
       gl.uniform1f(this.uTaps, taps(a));
       gl.uniform2f(this.uMapNext, an, bn);
@@ -345,9 +433,11 @@ export class WaterfallGL {
       gl.uniform1f(this.uRunEnd, end);
     };
     const vis = Math.max(1, Math.min(visibleRows, this.ringH));
+    // ★ runs are [j0, j1, a, b, X] quintuples (wfZoomFan.mapRunsX).
+    const R = 5;
     if (!runs || nRuns <= 1) {
-      const a = runs && nRuns === 1 ? runs[2] : 1, b = runs && nRuns === 1 ? runs[3] : 0;
-      setMap(a, b, a, b, 1e9);
+      const a = runs && nRuns === 1 ? runs[2] : 1, b = runs && nRuns === 1 ? runs[3] : 0, x = runs && nRuns === 1 ? runs[4] : 0;
+      setMap(a, b, a, b, 1e9, x, x);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       return;
     }
@@ -356,12 +446,13 @@ export class WaterfallGL {
     const scale = outH / vis;
     gl.enable(gl.SCISSOR_TEST);
     for (let i = 0; i < nRuns; i++) {
-      const y0 = Math.round(runs[i * 4] * scale), y1 = Math.round(runs[i * 4 + 1] * scale);
+      const o = i * R;
+      const y0 = Math.round(runs[o] * scale), y1 = Math.round(runs[o + 1] * scale);
       if (y1 <= y0) continue;
       gl.scissor(0, outH - y1, outW, y1 - y0);
       const last = i === nRuns - 1;
-      const a = runs[i * 4 + 2], b = runs[i * 4 + 3];
-      setMap(a, b, last ? a : runs[i * 4 + 6], last ? b : runs[i * 4 + 7], last ? 1e9 : runs[i * 4 + 1]);
+      const a = runs[o + 2], b = runs[o + 3], x = runs[o + 4];
+      setMap(a, b, last ? a : runs[o + R + 2], last ? b : runs[o + R + 3], last ? 1e9 : runs[o + 1], x, last ? x : runs[o + R + 4]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     gl.disable(gl.SCISSOR_TEST);

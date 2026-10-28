@@ -17,6 +17,7 @@
  *      link. Keep _sendView.
  */
 
+import { parseWide, WIDE_MAGIC, type WideRow } from './wfWide';
 import { guard, guardCallbacks, noteFault, msgKind } from '../../../src/services/faultLog';
 import { DabAssembler } from '../../../src/services/dabAssemble';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
@@ -390,6 +391,8 @@ export interface DabState {
 
 export interface SpectrumCallbacks {
   onBins?:   (bins: Float32Array, centerHz: number, bwHz: number) => void;
+  /** ★ V12 the full-capture row (SPWB, wfWide.ts): the WHOLE capture, coarse, while the view is narrower than it. */
+  onWide?:   (row: WideRow) => void;
   onConfig?: (cfg: Config) => void;
   /** Lightning for THIS listener: flashes/min (0 = nothing to say), and how long ago. */
   onLightning?: (ratePerMin: number, agoSecs: number) => void;
@@ -1462,10 +1465,17 @@ export class SpectrumClient {
     }
   }
 
+  private wideDb: Float32Array | null = null;
   private _handleBinary(buf: ArrayBuffer) {
     // ★ Every drop counted — a frame thrown away in silence reads as a frozen waterfall.
     if (buf.byteLength < 22) { noteFault('web-spec', 'short-frame', new Error('frame too short'), `len=${buf.byteLength}`); return; }
     const dv = new DataView(buf);
+    // ★ V12 the full-capture row (SPWB) — asked for with `wide=1`; the layer under the waterfall's history (wfWide.ts).
+    if (dv.getUint32(0, true) === WIDE_MAGIC) {
+      const w = parseWide(buf, U8_DBFS_OFFSET, this.wideDb);
+      if (w) { this.wideDb = w.db; this.cb.onWide?.(w); }
+      return;
+    }
     if (dv.getUint32(0, true) !== SPEC_MAGIC) { noteFault('web-spec', 'bad-magic', new Error('bad magic'), `len=${buf.byteLength}`); return; }
     const flags = dv.getUint8(5);
     // shim only ever emits FULL_UINT8

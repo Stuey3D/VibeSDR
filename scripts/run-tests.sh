@@ -247,6 +247,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    Edge, --mute-audio, the real server. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-web-waterfall-history.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 the full-capture row (SPWB): only to a socket that asked `wide=1`, only while zoomed, one per 8 SPEC frames, no
+#    extra frames, the capture's centre/span, a one-bin carrier outside the view kept. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-wide-rows.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
 #   browser — and the cases that matter are the ones it must NOT fold (session-less refusals).
@@ -523,6 +527,8 @@ if node --no-warnings scripts/test_wf_pace.ts; then pass=$((pass+1)); else fail=
 # ★★★ The web waterfall's ZOOM FAN (web/client/src/wfZoomFan.ts): a zoom re-maps the history to the new span, a tune
 #    does not move it, in-then-out is lossless (Stuart 2026-10-27: zooming SLICED the web waterfall).
 if node --no-warnings scripts/test_wf_zoom_fan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 the full-capture layer under the web waterfall's history (wfWide.ts): SPWB parse, extent, placement, no-data.
+if node --no-warnings scripts/test_wf_wide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ The web waterfall's GLIDE (web/client/src/wfGlide.ts): a fast tune draws one continuous trail, the noise floor unsmeared.
 if node --no-warnings scripts/test_wf_glide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE ROW TARGET FOLLOWS THE FEED (src/assets/wfRowTarget.ts, Stuart 10-20): Default min(20, 3x), Smooth min(60, 6x),

@@ -67,3 +67,26 @@ export function visibleSpan(a: number, b: number): [number, number, number, numb
   if (!(u1 > u0)) return null;
   return [(u0 - b) / a, (u1 - b) / a, u0, u1];
 }
+
+/** mapRuns with a third per-row value — the full-capture layer's extent X (wfWide.ts) — in the key: writes
+ *  [j0, j1, a, b, X] quintuples. Rows at one zoom share X, so a tune does not split runs any more than before. */
+export function mapRunsX(xfA: Float64Array, xfB: Float64Array, xfX: Float64Array, head: number, visible: number,
+                         out: { buf: Float64Array }): number {
+  const rows = xfA.length;
+  if (!rows || visible <= 0 || xfX.length !== rows) return 0;
+  let n = 0, j0 = 0;
+  let a = xfA[head % rows], b = xfB[head % rows], x = xfX[head % rows];
+  const push = (j1: number) => {
+    if ((n + 1) * 5 > out.buf.length) { const g = new Float64Array(out.buf.length * 2 + 80); g.set(out.buf); out.buf = g; }
+    const o = n * 5;
+    out.buf[o] = j0; out.buf[o + 1] = j1; out.buf[o + 2] = a; out.buf[o + 3] = b; out.buf[o + 4] = x; n++;
+  };
+  const vis = Math.min(visible, rows);
+  for (let j = 1; j < vis; j++) {
+    const r = (head + j) % rows;
+    const ra = xfA[r], rb = xfB[r], rx = xfX[r];
+    if (ra !== a || rb !== b || rx !== x) { push(j); j0 = j; a = ra; b = rb; x = rx; }
+  }
+  push(vis);
+  return n;
+}
