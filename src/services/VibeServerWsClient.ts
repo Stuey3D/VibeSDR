@@ -54,6 +54,7 @@
 //   8-bit variants: same layout but values are uint8 (0..255 mapped to dBFS range)
 
 import type { DabState } from './dabTypes';
+import { gapLogOn, jsMark, jsTimed } from '../utils/frameGapLog';
 import type { ShareOut } from './chatShare';
 import { isIcom, parseIcomRadio, parseIcomStatus, icomControlMsg, nearestSpanIndex, mergeIcomStatus, icomFollowNote,
          type IcomRadio, type IcomControlFields } from './icomRadio';
@@ -1818,12 +1819,13 @@ export abstract class VibeServerWsClient {
       if (ws.readyState === WebSocket.OPEN) {
         if (this.pingSentAt === 0) this.pingSentAt = Date.now();
         ws.send(JSON.stringify({ type: 'ping' }));
+        jsMark('ws ping');   // dev frame-gap log (utils/frameGapLog.ts), a no-op unless it is on
       } else clearInterval(ping);
     }, 5_000);
 
     const qual = setInterval(() => {
       if (ws.readyState !== WebSocket.OPEN) { clearInterval(qual); return; }
-      this._evalLink();
+      jsTimed('link quality', () => this._evalLink());
     }, 1_000);
 
     ws.onclose = (e) => {
@@ -2101,7 +2103,10 @@ export abstract class VibeServerWsClient {
       // running controller would re-assert its own rung every second and win the fight — powersave pill
       // showing while the wire held 10fps (Stuart 2026-07-24). Skip the tick's rate control while
       // paused; still emit the meter so the readout tracks the real idle rate.
+      const rungWas = this.link?.adaptiveRung;
       if (!this.linkPaused) this.link?.tick(fps, !!live, Date.now() - this.lastResubAt > 1500);
+      // dev frame-gap log: a rung change re-asks the server's frame rate — name it if a late row follows.
+      if (gapLogOn() && this.link && this.link.adaptiveRung !== rungWas) jsMark(`link rung ${rungWas}→${this.link.adaptiveRung} (${fps} fps counted)`);
       if (this.link) this.callbacks.onLinkRate?.(this.link.adaptiveRung, this.link.settling, fps, kbps);
     }, 1000);
   }
@@ -2234,7 +2239,7 @@ export abstract class VibeServerWsClient {
 
   private _armWatchdog() {
     this._stopWatchdog();
-    this.watchdogTimer = setInterval(() => this._watchdogTick(), WATCHDOG_TICK_MS);
+    this.watchdogTimer = setInterval(() => jsTimed('ws watchdog', () => this._watchdogTick()), WATCHDOG_TICK_MS);
   }
 
   private _stopWatchdog() {
@@ -2493,6 +2498,7 @@ export abstract class VibeServerWsClient {
         this.rttJit = this.rttHist.length >= 3
           ? med(this.rttHist.map(r => Math.abs(r - this.rttAvg))) : 0;
         this._retuneTunePace();   // ★ a slow path clumps tunes too — the "ping" half of tunePace.ts
+        jsMark('ws pong');
       }
       return;
     }
