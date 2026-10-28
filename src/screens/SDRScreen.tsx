@@ -13328,6 +13328,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <BrowserOverlay
           url={compatUrl}
           topInset={insets.top}
+          bottomInset={insets.bottom}
           title={(instanceName ?? rxLabel) + ' — web'}
           backLabel="← VibeSDR"
           onClose={() => { setCompatUrl(null); navigation.goBack(); }}
@@ -14855,6 +14856,7 @@ export default function SDRScreen({ route, navigation }: Props) {
          *      header to give a full-screen map, so our bar is the ONLY way out. Two reasonable
          *      decisions — hide their chrome, trust the fallback — combined into no exit at all. */
         topInset={insets.top}
+        bottomInset={insets.bottom}   /* ★ the page's fixed save bar sat under the bottom inset (Setup, 2026-10-28) */
         title={adminPage?.title}
         allowSave={!!adminPage?.url?.includes('/files')}
         injectCSS={adminPage?.url?.endsWith('/map')

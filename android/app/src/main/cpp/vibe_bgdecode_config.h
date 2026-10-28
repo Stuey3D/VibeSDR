@@ -362,7 +362,8 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
                 }
                 continue;
             }
-            if (!(v.hz > 0)) { err = vn + ": set a frequency"; return false; }
+            // ★ V12 2026-10-28: a Band row PICKS its band on the setup page (its dial is what is stored) — say so
+            if (!(v.hz > 0)) { err = vn + (isBandSpots(v) ? ": choose its band" : ": set a frequency"); return false; }
             if (!demodOk(v.mode)) { err = vn + ": background decoding runs on USB, LSB or NFM"; return false; }
             if (!decoderDef(v.dec)) { err = vn + ": choose a decoder"; return false; }
             if (!decoderFitsDemod(v.dec, v.mode)) {
@@ -379,8 +380,8 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
             if (isBandSpots(v) && bandSpanHook()) {
                 BandSpan sp;
                 if (!bandSpan(v.hz, sp)) {
-                    err = vn + ": " + khz(v.hz) + " is not in a band the digital modes use \xe2\x80\x94 type a frequency inside the "
-                          "band, e.g. 7074 for 40 m or 14074 for 20 m";
+                    err = vn + ": " + khz(v.hz) + " is not in a band the digital modes use \xe2\x80\x94 choose a band, "
+                          "e.g. 40 m or 20 m";
                     return false;
                 }
                 if (rate > 0) {
