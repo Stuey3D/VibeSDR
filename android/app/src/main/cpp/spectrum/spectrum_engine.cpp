@@ -111,6 +111,10 @@ bool SpectrumEngine::pollUi(UiUpdate& out) {
     std::lock_guard<std::mutex> lk(mx_);
     if (outVer_ == uiSeenVer_) return false;
     uiSeenVer_ = outVer_;
+    if (outImage_) {                                        // the motion range + screen move ride with the image
+        out.moLo = outMoLo_; out.moHi = outMoHi_; out.fanK = outK_; out.fanC = outC_;
+        outK_ = 1; outC_ = 0;
+    }
     out.image = outImage_; outImage_ = nullptr;            // ownership moves to the UI
     out.head = outHead_; out.texReady = texReady_;
     out.quant = outQuant_; out.avgFrameMs = outAvgMs_;
@@ -275,7 +279,9 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
 
     if (lastWfPushAt_ > 0) {
         const double wfDt = now - lastWfPushAt_;
-        if (wfDt > 0 && wfDt < 2000) avgWfGapMs_ = avgWfGapMs_ > 0 ? avgWfGapMs_ * 0.8 + wfDt * 0.2 : wfDt;
+        // ★ Not while interacting (2026-10-28, WaterfallView's twin): a re-subscribe's pause folded in here lengthened
+        //   `dur`, so every arrival after it earned extra repeat rows and the scroll sped up for a beat after a tune.
+        if (wfDt > 0 && wfDt < 2000 && !boost) avgWfGapMs_ = avgWfGapMs_ > 0 ? avgWfGapMs_ * 0.8 + wfDt * 0.2 : wfDt;
     }
     lastWfPushAt_ = now;
     const double rowCentre = std::isnan(f.trueCenterHz) ? f.centerHz : f.trueCenterHz;
@@ -341,15 +347,16 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
         }
         row = dst; n = RING_W;
     }
-    if (ring_.empty()) ring_.assign((size_t)RING_W * RING_ROWS, 0);
+    if (ring_.empty()) ring_.assign((size_t)RING_W * (RING_ROWS + vibewf::MOTION_ROWS), 0);
     if (srcN != RING_W && rowHzPerBin > 0) rowHzPerBin = rowHzPerBin * srcN / RING_W;
     // Placed against the view (rowViewOffset/writeRow), then:
-    // ★★ GLIDE (2026-10-28): a row placed somewhere else than the one before streaks its signals back to there, so a
-    //    tune's trail is one continuous line — this row only, once (wf_glide.h; the JS path's utils/wfRowPlace.ts).
+    // ★★ MOTION (2026-10-28): the row's placement and its move from the row before are noted beside the ring (two image
+    //    rows), and the SHADER draws the move between rows (motion-compensated) — nothing stored is altered (wf_motion.h;
+    //    the JS path's utils/wfRowPlace.ts). It replaced the glide streak. A jump is re-mapped like a zoom (wf_zoom_fan.h).
     // ★★★ THE ZOOM FAN (2026-10-28): a row at a different SPAN re-maps every stored row to the new view, so a zoom fans
     //    the history in and out instead of leaving slices of the old scale. The stored ring is never rewritten; the
     //    image is made from the displayed ring (wf_zoom_fan.h fanImage), regenerated through per-row maps on a zoom.
-    vibewf::placeRow(ring_.data(), RING_ROWS, n, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_, trail_, fan_);
+    vibewf::placeRow(ring_.data(), RING_ROWS, n, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_, motion_, fan_);
     frameCount_ += 1;
     if (covNow_ || !publish) { ringDirty_ = true; return; }
     publishRing();
@@ -366,12 +373,17 @@ void SpectrumEngine::publishRing() {
 void* SpectrumEngine::makeRingImage() {
     if (ring_.empty()) return nullptr;
     ringDirty_ = false;
-    return makeImage_(vibewf::fanImage(fan_, ring_.data()), RING_W, RING_ROWS, RING_W);
+    vibewf::takeFanStep(fan_, imgK_, imgC_);
+    imgMoLo_ = motion_.lo; imgMoHi_ = motion_.hi;
+    return makeImage_(vibewf::wfImageBytes(fan_, motion_, ring_.data(), RING_W, RING_ROWS), RING_W, RING_ROWS + vibewf::MOTION_ROWS, RING_W);
 }
 void SpectrumEngine::storeRingImageLocked(void* img) {
     if (outImage_) releaseImage_(outImage_);   // superseded before the UI took it: never wrapped
     outImage_ = img;
     outHead_ = frameCount_;
+    outC_ += outK_ * imgC_; outK_ *= imgK_;           // composed until the UI takes an image (a superseded one's move kept)
+    imgK_ = 1; imgC_ = 0;
+    outMoLo_ = imgMoLo_; outMoHi_ = imgMoHi_;
     texReady_ = true;
 }
 

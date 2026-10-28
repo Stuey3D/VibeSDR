@@ -203,14 +203,17 @@ int main() {
         auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
         EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78;
         e->setConfig(c); e->setView(100e6, 2.048e6);
-        void* img = nullptr; double head = 0;
+        void* img = nullptr; double head = 0, fanK = 1, fanC = 0;
         auto feed = [&](int frames, int n, int bin, double bw) {
             for (int f = 0; f < frames; f++) {
                 auto b = frame(n, bin);
                 e->pushFrame(b.data(), n, 100e6, bw, 100e6);
                 run(e, 50);
                 UiUpdate u;
-                if (e->pollUi(u)) { if (u.image) { if (img) rlImage(img); img = u.image; head = u.head; } if (u.peakPath) rlPath(u.peakPath); }
+                if (e->pollUi(u)) {
+                    if (u.image) { if (img) rlImage(img); img = u.image; head = u.head; fanC += fanK * u.fanC; fanK *= u.fanK; }
+                    if (u.peakPath) rlPath(u.peakPath);
+                }
             }
         };
         feed(10, 1024, 600, 2.048e6);
@@ -227,6 +230,9 @@ int main() {
         CHECK(moved == (int)oldHead - 1 && stale == 0, "zoom in: %d of %d old rows fanned to 688, %d left at 600 (slices)", moved, (int)oldHead - 1, stale);
         const uint8_t* nr = rowOf((FakeImage*)img, head);
         CHECK(nr[688] > 150, "zoom in: the new row's carrier at 688 (%d)", nr[688]);
+        // ★ The screen move the fan made rides with the images the UI took (WaterfallView eases from it): ×2 about the centre.
+        CHECK(std::fabs(fanK - 0.5) < 1e-9 && std::fabs(fanC - 0.25) < 1e-9, "zoom in: the UI was handed k %g c %g, want 0.5 0.25", fanK, fanC);
+        CHECK(((FakeImage*)img)->px.size() == (size_t)1024 * (1024 + vibewf::MOTION_ROWS), "the image carries the motion rows");
         e->setView(100e6, 2.048e6);
         feed(6, 1024, 600, 2.048e6);   // (the jitter buffer holds a couple of frames: enough to land the new span)
         int same = 0;

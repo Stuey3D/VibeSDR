@@ -84,7 +84,8 @@ import { cadenceGap } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { needleGeometry } from '../utils/needleGeometry';
-import { fanImage, fanRefresh, newFanState, newGlideState, placeRow } from '../utils/wfRowPlace';
+import { fanRefresh, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate } from '../utils/wfPace';
 import { gapArrival, gapDraw, gapLogOn, gapPacerSlip } from '../utils/frameGapLog';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
@@ -315,6 +316,18 @@ uniform float uDrawW;    // draw width (screen px)
 uniform float uDrawH;    // draw height incl. overscan row (screen px)
 uniform float uSharp;    // unsharp amount (0..~1.2)
 uniform float uContrast; // -1..1 S-curve mix
+uniform float uMoLo;     // ★ MOTION (utils/wfRowPlace.ts): absolute frames f whose pair f -> f+1 moves are uMoLo..uMoHi
+uniform float uMoHi;     //   (lo > hi = none). Only rows inside it read the motion rows below the ring.
+uniform float uRowPx;    // ring rows per DEVICE pixel line (a pixel's footprint, in rows)
+uniform float uColPx;    // device pixels per ring column
+uniform float uZA;       // ★ THE SCREEN EASE (utils/wfPace.ts): image column (0..1) shown at screen x (0..1) = uZA*x + uZB;
+uniform float uZB;       //   (1, 0) at rest. Outside the image = the floor (the edge the radio has not captured yet).
+
+// The ring at column x (0..uTexW) of ring row r — the floor outside it (a vacated edge, never a smear of the edge bin).
+float px(float x, float r) {
+  if (x < 0.0 || x > uTexW) { return 0.0; }
+  return wf.eval(float2(clamp(x, 0.5, uTexW - 0.5), r)).r;
+}
 
 // Temporal interpolation (phase 2): the ring holds RAW frames; intermediate
 // lines are synthesized here by blending adjacent frames at fractional depth
@@ -348,28 +361,79 @@ half4 main(float2 xy) {
   if (uQuant > 0.5) { t = step(0.5, t); }
   float r1 = mod(fI, uRows) + 0.5;
   float r2 = mod(fI + 1.0, uRows) + 0.5;
-  float tx = clamp(xy.x / uDrawW * uTexW, 0.5, uTexW - 0.5);
+  float tx = (uZA * (xy.x / uDrawW) + uZB) * uTexW;   // the ease is (1, 0) at rest: exactly the old column
+  // ★★ MOTION-COMPENSATED INTERPOLATION (2026-10-28 — Stuart: "the chunky broken diagonal lines joined up so they looked
+  //    solid", the first build's MW sweep). Each ring slot carries h: how many columns its trail moves to the next newer
+  //    row (wfRowPlace.ts MOTION; 16 bits in the two image rows below the ring — RING_ROWS <= RING_W, one column a slot).
+  //    A line between frames f and f+1 at progress t samples f at x - t*h and f+1 at x + (1-t)*h: the WHOLE row (the
+  //    noise with the stations) slides between data rows instead of cross-fading two places. Settled, the ONE frame a
+  //    row shows is warped the same way toward the row above it (a real measurement, displaced, never a blend), so each
+  //    row's top meets the next row's place. Taps across the pixel's own footprint (one per device px it crosses, up to 6) fill a fast move; where one
+  //    tap finds a station the pixel takes it (a solid trail), noise is averaged (no brightened floor).
+  //  ★ Steady rows (h = 0, or outside uMoLo..uMoHi — no fetch at all) take the unchanged paths below.
+  float h = 0.0;
+  if (fI >= uMoLo && fI <= uMoHi && (uQuant < 0.5 || t == 0.0)) {
+    float mc = mod(fI, uRows) + 0.5;
+    float hb = wf.eval(float2(mc, uRows + 0.5)).r;
+    float lb = wf.eval(float2(mc, uRows + 1.5)).r;
+    h = (floor(hb * 255.0 + 0.5) * 256.0 + floor(lb * 255.0 + 0.5) - 32768.0) / 64.0;
+  }
   float c, l, r;
-  float xl = max(tx - 1.0, 0.5);
-  float xr = min(tx + 1.0, uTexW - 0.5);
-  if (t == 0.0 || t == 1.0) {
-    // ★★ ONE ROW, NOT TWO (2026-10-12, XCover 4s: GPU 78-96 % busy at 343 MHz and the waterfall updating far less
-    //    often than the UI). Settled, the blend is snapped, so a pixel shows ONE frame — but both frames were still
-    //    fetched (3 each for the unsharp) and mixed with a weight of 0 or 1. Fetch only the one shown: 7 texture reads
-    //    a pixel become 4, the picture identical. The tuning glide (t between 0 and 1) still blends, as before.
-    float rr = t == 0.0 ? r1 : r2;
-    c = wf.eval(float2(tx, rr)).r;
-    if (uSharp > 0.0) {
-      l = wf.eval(float2(xl, rr)).r;
-      r = wf.eval(float2(xr, rr)).r;
+  if (tx < 0.0 || tx > uTexW) {
+    c = 0.0;                                   // the screen ease: beyond the history's span
+  } else if (h != 0.0) {
+    float tc = uQuant > 0.5 ? 1.0 - (Lc - L) : t;   // progress f -> f+1 at this pixel's centre
+    float K  = clamp(ceil(abs(h) * uRowPx * uColPx), 1.0, 6.0);   // one tap per device px the trail crosses in this line
+    float acc = 0.0;
+    float mx  = 0.0;
+    for (int k = 0; k < 6; k++) {
+      if (float(k) < K) {
+        float tk = clamp(tc + ((float(k) + 0.5) / K - 0.5) * uRowPx, 0.0, 1.0);
+        float xa = tx - tk * h;
+        float xb = tx + (1.0 - tk) * h;
+        // ★ At the picture's edge one frame may have no data where the other does (a pan brings new spectrum in from
+        //   the side): take the frame that HAS it, never the floor — else the edge shows a black comb mid-glide.
+        bool ina = xa >= 0.0 && xa <= uTexW;
+        bool inb = xb >= 0.0 && xb <= uTexW;
+        float v = ina ? px(xa, r1) : px(xb, r2);
+        if (uQuant < 0.5 && ina && inb) { v = mix(v, px(xb, r2), tk); }
+        acc += v;
+        mx = max(mx, v);
+      }
+    }
+    float mean = acc / K;
+    c = mix(mean, mx, smoothstep(0.03, 0.10, mx - mean));
+    if (uSharp > 0.0 && K < 1.5) {
+      float xa = tx - tc * h;
+      float xb = tx + (1.0 - tc) * h;
+      l = px(xa - 1.0, r1);
+      r = px(xa + 1.0, r1);
+      if (uQuant < 0.5) { l = mix(l, px(xb - 1.0, r2), tc); r = mix(r, px(xb + 1.0, r2), tc); }
       c = c + uSharp * (c - (l + r) * 0.5);
     }
   } else {
-    c = mix(wf.eval(float2(tx, r1)).r, wf.eval(float2(tx, r2)).r, t);
-    if (uSharp > 0.0) {
-      l = mix(wf.eval(float2(xl, r1)).r, wf.eval(float2(xl, r2)).r, t);
-      r = mix(wf.eval(float2(xr, r1)).r, wf.eval(float2(xr, r2)).r, t);
-      c = c + uSharp * (c - (l + r) * 0.5);
+    tx = clamp(tx, 0.5, uTexW - 0.5);
+    float xl = max(tx - 1.0, 0.5);
+    float xr = min(tx + 1.0, uTexW - 0.5);
+    if (t == 0.0 || t == 1.0) {
+      // ★★ ONE ROW, NOT TWO (2026-10-12, XCover 4s: GPU 78-96 % busy at 343 MHz and the waterfall updating far less
+      //    often than the UI). Settled, the blend is snapped, so a pixel shows ONE frame — but both frames were still
+      //    fetched (3 each for the unsharp) and mixed with a weight of 0 or 1. Fetch only the one shown: 7 texture reads
+      //    a pixel become 4, the picture identical. The tuning glide (t between 0 and 1) still blends, as before.
+      float rr = t == 0.0 ? r1 : r2;
+      c = wf.eval(float2(tx, rr)).r;
+      if (uSharp > 0.0) {
+        l = wf.eval(float2(xl, rr)).r;
+        r = wf.eval(float2(xr, rr)).r;
+        c = c + uSharp * (c - (l + r) * 0.5);
+      }
+    } else {
+      c = mix(wf.eval(float2(tx, r1)).r, wf.eval(float2(tx, r2)).r, t);
+      if (uSharp > 0.0) {
+        l = mix(wf.eval(float2(xl, r1)).r, wf.eval(float2(xl, r2)).r, t);
+        r = mix(wf.eval(float2(xr, r1)).r, wf.eval(float2(xr, r2)).r, t);
+        c = c + uSharp * (c - (l + r) * 0.5);
+      }
     }
   }
   float raw = clamp(c, 0.0, 1.0);
@@ -395,6 +459,8 @@ interface SpectrumEngineHost {
   poll(): {
     image?: SkImage; head: number; texReady: boolean; quant: number; avgMs: number;
     scrollGen: number; glide: boolean; glideDur: number;
+    /** The motion range of this image (absolute frames) and the fans' screen move since the last image (x_old = c + k·x). */
+    moLo?: number; moHi?: number; fanK?: number; fanC?: number;
     specGen: number; specHidden: boolean; spec?: number[];
     peakGen: number; peak?: SkPath;
   } | null;
@@ -535,9 +601,9 @@ function WaterfallView({
   // ── Signal processor (owns all dB→index maths) ──────────────────────────────
   /** Scratch for the resample — reused, never per-frame allocated. */
   const rowBuf = useRef(new Uint8Array(RING_W));
-  /** The previous ring row's placement + the glide's scratch (utils/wfRowPlace.ts) — allocated once. */
-  const glideSt = useRef<ReturnType<typeof newGlideState> | null>(null);
-  if (!glideSt.current) glideSt.current = newGlideState(RING_W);   // ★ lazily: not 6 KB of scratch per render
+  /** Each ring slot's placement + the move to the next row (utils/wfRowPlace.ts MOTION) — allocated once, ~22 KB. */
+  const motionSt = useRef<ReturnType<typeof newMotionState> | null>(null);
+  if (!motionSt.current) motionSt.current = newMotionState(RING_ROWS, RING_W);   // ★ lazily: not per render
   /** THE ZOOM FAN (utils/wfRowPlace.ts): per-slot maps + the displayed ring, made only once a zoom happens. */
   const fanSt = useRef<ReturnType<typeof newFanState> | null>(null);
   if (!fanSt.current) fanSt.current = newFanState(RING_ROWS);
@@ -669,7 +735,8 @@ function WaterfallView({
   /** ★★★ THE INTERVAL THE REVEAL MUST BE PACED OVER: the time between accepted WATERFALL ROW-SETS,
    *  which on a gated feed is NOT the data-frame interval. See the note where it is measured. */
   const avgWfGapMs = useRef(0);
-  const uQuantSv    = useSharedValue(1); // 1 = crisp steps, 0 = boost glide
+  const uQuantSv    = useSharedValue(1); // ASKED: 1 = whole rows (settled), 0 = continuous (a gesture, a slow Sharp feed)
+  const uQuantDrawSv = useSharedValue(1); // DRAWN — the display driver's (paceTick): it switches on a whole row
   const frameCount  = useRef(0);
   /** ★ Covered by an opaque full-screen overlay (useScreenCovered): rows go into the ring, but no
    *  texture is made and none of the display-rate drivers run. `ringDirty` = rows arrived meanwhile. */
@@ -695,6 +762,16 @@ function WaterfallView({
   // regression. React renders stay at the ~10Hz data rate (driven by parent
   // props); empty path = draw nothing (Path doesn't take null).
   const wfImage  = useSharedValue<SkImage | null>(null);
+  /** publishRing → the UI thread, in ONE value: the image, its newest row, its motion range, the fans' screen move. */
+  const jsPending = useSharedValue<{ gen: number; img: SkImage | null; avail: number; moLo: number; moHi: number; k: number; c: number }>(
+    { gen: 0, img: null, avail: 0, moLo: 1, moHi: 0, k: 1, c: 0 });
+  const jsPendGen = useRef(0);
+  const uMoLoSv = useSharedValue(1);     // the motion range (utils/wfRowPlace.ts MOTION) — lo > hi = none
+  const uMoHiSv = useSharedValue(0);
+  const uZASv   = useSharedValue(1);     // the screen ease (utils/wfPace.ts) — (1, 0) at rest
+  const uZBSv   = useSharedValue(0);
+  /** Interacting (the smooth-tune window): the display driver draws every frame and holds the pace rate. */
+  const interactSv = useSharedValue(false);
   const specPath = useSharedValue<SkPath>(Skia.Path.Make());
   /** ★ ONE persistent empty path for "peak hold off / paused". It was a fresh Skia.Path.Make() on
    *  EVERY data frame while peak hold was off (the common case) — an allocation, a shared-value write
@@ -714,7 +791,7 @@ function WaterfallView({
   const wfLive    = useRef<{ img: SkImage; data: SkData | null } | null>(null);
   const wfPending = useRef<Set<{ img: SkImage; data: SkData | null }>>(new Set());
   const swapWfImage = useCallback((img: SkImage, data: SkData | null) => {
-    wfImage.value = img;
+    // ★ The UI thread shows it (jsPending, taken by the pacer's frame callback) — this keeps the dispose bookkeeping.
     const old = wfLive.current;
     wfLive.current = { img, data };
     // TIME-based disposal (was count-based "keep 2"). The UI-thread Skia render
@@ -782,7 +859,7 @@ function WaterfallView({
     uHeadF:    uHead.value,
     uFrac:     scrollFrac.value,
     uN:        uNSv.value,
-    uQuant:    uQuantSv.value,
+    uQuant:    uQuantDrawSv.value,   // what the display driver is DRAWING (it finishes a row before it settles)
     uRows:        RING_ROWS,   // fixed ring depth (never changes on resize → no waterfall redraw)
     uVisibleRows: shaderRows,  // whole device px per row (see devRowPx) — same scroll both orientations
     uTexW:     uTexW.value,
@@ -790,6 +867,12 @@ function WaterfallView({
     uDrawH:    wfRenderH,
     uSharp:    uSharpSv.value,
     uContrast: uContrastSv.value,
+    uMoLo:     uMoLoSv.value,
+    uMoHi:     uMoHiSv.value,
+    uRowPx:    shaderRows / Math.max(1, wfRenderH * PixelRatio.get()),   // = 1 / devRowPx
+    uColPx:    width * PixelRatio.get() / RING_W,
+    uZA:       uZASv.value,
+    uZB:       uZBSv.value,
   }), [width, wfRenderH, shaderRows]);
 
   // ── Spectrum tween (smooth tune, settled state) ────────────────────────────
@@ -862,7 +945,6 @@ function WaterfallView({
     specDead.value = true;
     try { specTweenRef.current?.setActive(false); } catch {}
     try { revealRef.current?.setActive(false); } catch {}
-    try { glideRef.current?.setActive(false); } catch {}
     const a = specPathA, b = specPathB;
     setTimeout(() => { try { a.dispose(); b.dispose(); } catch {} }, 300);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1017,7 +1099,8 @@ function WaterfallView({
     }
     // Allocated ONCE. No bin count can reallocate it, so history always survives.
     if (!idxBuf.current) {
-      idxBuf.current = new Uint8Array(RING_W * RING_ROWS);
+      // ★ + MOTION_ROWS: the two motion rows the image carries below the ring (utils/wfRowPlace.ts wfImageBytes).
+      idxBuf.current = new Uint8Array(RING_W * (RING_ROWS + MOTION_ROWS));
       uTexW.value = RING_W;
     }
     // The resample changes how much spectrum each stored bin covers, so the
@@ -1049,16 +1132,18 @@ function WaterfallView({
     //     rewritten. GitHub #57's torn trails were rows the SERVER cropped against the wrong tuner position
     //     (local_sdr_shim.cpp onSpectrum); scripts/test_wf_row_place.ts guards this half, scripts/test-web-waterfall-history.mjs the server's.
     // ★ Only a frame at the SAME bin scale may be shifted (rowViewOffset) — one from a different span is drawn as it came.
-    // ★★ GLIDE (2026-10-28, "the signal glide into place looks broken"): when this row sits somewhere else than the row
-    //    before it, its signals are drawn as short streaks from there to here, so a tune's diagonal is one continuous
-    //    trail rather than dots a row apart. This row only, once; steady rows untouched (utils/wfRowPlace.ts glideRow).
+    // ★★ MOTION (2026-10-28, "the chunky broken diagonal lines joined up so they looked solid"): the row's placement is
+    //    noted beside the ring with how far its trail moved from the row before, and the SHADER draws the move between the
+    //    two rows (motion-compensated interpolation) — nothing stored is altered; steady rows draw exactly as before.
+    //    (It replaced the glide streak, which max-smeared a moved row's signals: the "smeared" look Stuart rejected.)
+    //    A move too big to bend (a jump) re-maps the history like a zoom — utils/wfRowPlace.ts MOTION + THE ZOOM FAN.
     // ★★★ THE ZOOM FAN (2026-10-28): a row at a different SPAN re-maps every stored row to the new view, so the history
     //    fans out on a zoom in and draws in on a zoom out instead of being left as slices of the old scale. The stored
     //    rows are never rewritten — the IMAGE is made from a displayed ring regenerated through per-row maps
-    //    (fanImage), so a zoom undone gives the edges back exactly. A tune does not touch it (the bend above).
+    //    (wfImageBytes), so a zoom undone gives the edges back exactly. A tune does not touch it (the bend above).
     const v = viewRef.current;
     placeRow(idxBuf.current, RING_ROWS, n, frameCount.current, row, rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz,
-             glideSt.current!, fanSt.current!, fanVisible.current);
+             motionSt.current!, fanSt.current!, fanVisible.current);
     frameCount.current += 1;
     // ★★ COVERED (an opaque full-screen overlay — the map, recordings, About): the ROW is kept, the
     //   PICTURE is not made. History stays continuous — closing the map shows what passed while it was
@@ -1083,30 +1168,33 @@ function WaterfallView({
     //   pressure — what the Android engine's wrapImage already does. Same pixels, same dispose; only the GC
     //   stops being told about memory we free ourselves. The stock pair stays as the fallback (web, or a
     //   binary built before the patch).
+    // ★★ The image is RING_ROWS + MOTION_ROWS tall: the motion rows ride with the rows they describe, so the shader can
+    //   never see one image's rows with another's motion (utils/wfRowPlace.ts wfImageBytes).
+    const bytes = wfImageBytes(fanSt.current!, motionSt.current!, idxBuf.current, n, RING_ROWS);
     const mk = (globalThis as { __vibeMakeGray8Image?: VibeMakeGray8Image }).__vibeMakeGray8Image;
+    let img: SkImage | null = null;
+    let data: SkData | null = null;
     if (mk) {
-      const img = mk(fanImage(fanSt.current!, idxBuf.current), n, RING_ROWS, n);
-      if (img) {
-        swapWfImage(img, null);
-        jsAvail.value = frameCount.current;
-        if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
-      }
-      return;
-    }
-    const data = Skia.Data.fromBytes(fanImage(fanSt.current!, idxBuf.current));
-    const img = Skia.Image.MakeImage(
-      { width: n, height: RING_ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
-      data,
-      n,
-    );
-    if (img) {
-      swapWfImage(img, data); // UI-thread swap + retire old pair (1 MiB: 1024x1024 Gray_8)
-      // ★ The newest row in the IMAGE — which rows are SHOWN is the display-clock pacer's call (rowPace, below).
-      jsAvail.value = frameCount.current;
-      if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
+      img = mk(bytes, n, RING_ROWS + MOTION_ROWS, n);
     } else {
-      data.dispose();
+      data = Skia.Data.fromBytes(bytes);
+      img = Skia.Image.MakeImage(
+        { width: n, height: RING_ROWS + MOTION_ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
+        data,
+        n,
+      );
+      if (!img) { data.dispose(); return; }
     }
+    if (!img) return;
+    swapWfImage(img, data); // retire the old one (1 MiB: 1024x1026 Gray_8)
+    // ★★ ONE HAND-OVER TO THE UI THREAD: the image, the newest row in it, its motion range and the screen move a fan
+    //   made are taken TOGETHER by the pacer's frame callback (jsPending), so the shader never draws an image with the
+    //   previous one's head, motion range or geometry for a frame. Which rows are SHOWN is the pacer's call (rowPace).
+    const [k, c] = takeFanStep(fanSt.current!);
+    const ms = motionSt.current!;
+    jsPendGen.current += 1;
+    jsPending.value = { gen: jsPendGen.current, img, avail: frameCount.current, moLo: ms.lo, moHi: ms.hi, k, c };
+    if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
 
@@ -1267,8 +1355,7 @@ function WaterfallView({
     //     1 for the NEWEST row to be the one at the top — at 0 it would draw the head one row
     //     stale. The scroll now comes from rows being PUSHED, exactly as in the web client, not
     //     from a fraction being animated over a block of synthesised lines.
-    scrollFrac.value = 1;
-    stopGlide();            // ★ a glide still running would overwrite the 1 on its next frame
+    // (The display driver owns scrollFrac now — paceTick.)
     // n === 0 is legitimate: nothing extra is due THIS interval, but the stepper must stay alive
     // (see the caller). Only a negative count means "switch it off".
     if (n < 0) { setRevealActive(false); return; }
@@ -1288,88 +1375,102 @@ function WaterfallView({
 
   useEffect(() => stopRevealStepper, [stopRevealStepper]); // stop on unmount
 
-  // ── The boost / low-fps glide, drawn at ≤ 60 Hz ───────────────────────────
-  /* ★★★ THIS WAS `scrollFrac.value = withTiming(1, { duration: dur, easing: linear })` — the SAME
-   *  linear ramp, and on a 120 Hz ProMotion panel a withTiming writes on EVERY display frame. Each
-   *  write is a new uniform, so the FULL-SCREEN waterfall shader re-ran 120 times a second — six-odd
-   *  texture reads and a LUT lookup for every physical pixel of the waterfall (~1320 × 2000 on a Pro
-   *  Max), and the island's BlurView above it re-blurred each time. The glide is ALWAYS on below
-   *  ~15 fps (lowFps: every UberSDR session, and a VibeServer feed that has stepped down to ~8 fps),
-   *  so on those feeds it was the dominant GPU load, permanently. Power audit 2026-10-01.
-   *  ★★ WHY 60 Hz LOOKS THE SAME: the glide moves the picture by ONE ROW (one point, 3 px) over the
-   *    whole row interval (~50–300 ms) — at 60 Hz that is ≤ 1 physical pixel per drawn frame, a
-   *    sub-pixel cross-fade (the shader's continuous blend, uQuant = 0). Halving how often a sub-pixel
-   *    fade is redrawn is not something an eye can see; motion that crosses whole pixels per frame
-   *    would be, and this does not. Every non-ProMotion phone has always shown it at 60.
-   *  ★ The ramp is the same function of TIME (linear, timestamp − start over dur), so a skipped frame
-   *    loses nothing: the next drawn frame is exactly where the withTiming would have been then.
-   *  ★ It lands EXACTLY on 1 (the last frame is always written), and it stays alive across the gap to
-   *    the next arrival so a 10 fps feed does not stop/start it per row — the stop/start round trip
-   *    is what halted the reveal stepper (build 73). It releases the display ~250 ms after a glide
-   *    ends with no new one: the feed stopped, a gesture ended on a fast feed. */
-  const glideStart = useSharedValue(-1);   // UI timestamp the current glide began; -1 = "on the next frame"
-  const glideDur   = useSharedValue(100);
-  const glideLast  = useSharedValue(0);    // timestamp of the last write
-  const glideGen   = useSharedValue(0);
-  const glideAsked = useSharedValue(0);
-  const glideGenRef = useRef(0);
-  const glideRef = useRef<{ setActive: (b: boolean) => void; isActive: boolean } | null>(null);
-  const setGlideActive = useCallback((on: boolean) => {
-    const t = glideRef.current;
-    if (t && t.isActive !== on) t.setActive(on);
-  }, []);
-  /** From the worklet: stop — unless a new glide was started after it looked (then it is needed). */
-  const glideSleep = useCallback((seen: number) => {
-    if (seen === glideGenRef.current) setGlideActive(false);
-  }, [setGlideActive]);
-  /** Stop any glide and leave scrollFrac where the caller puts it (replaces cancelAnimation). */
-  const stopGlide = useCallback(() => {
-    if (!glideRef.current?.isActive) return;   // the settled path calls this every frame: no hop if idle
-    glideGenRef.current += 1;
-    glideGen.value = glideGenRef.current;
-    setGlideActive(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setGlideActive]);
-  const startGlide = useCallback((dur: number) => {
-    glideGenRef.current += 1;
-    glideGen.value = glideGenRef.current;
-    glideDur.value = Math.max(1, dur);
-    glideStart.value = -1;
-    glideAsked.value = 0;
-    scrollFrac.value = 0;   // as the withTiming did: the new row starts unrevealed, this same frame
-    setGlideActive(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setGlideActive]);
-  /** One glide tick. Returns TRUE once the glide has ended and ~250 ms passed with no new one (time to sleep).
-   *  Shared by the JS path's glideCb and the native engine's enginePoll. */
-  const glideTick = (ts: number): boolean => {
+  // ── THE DISPLAY DRIVER: which rows are shown, how, and the screen ease (utils/wfPace.ts) ───────────────────────────
+  /* ★★★ ONE PACE, TWO WAYS OF DRAWING IT (2026-10-28 — Stuart: "keep a STEADY PACE but have everything feel smooth rather
+   *  than awkwardly ramp up and slow down like some of the v2 builds did"; and "the whole zooming in and out and tuning
+   *  actually used to use ProMotion and ramp up to 120fps too").
+   *  Settled: whole rows on the display's beat (rowPace — unchanged since 2026-10-13). Interacting, or a slow Sharp feed:
+   *  the SAME rows at the SAME measured rate, the position continuous (contPace) and the shader's motion-compensated
+   *  blend drawing the trail between data rows — every display frame while interacting (120 Hz on ProMotion), ≤ 60 Hz
+   *  for a slow feed at rest (the 2026-10-01 power audit's rule for the old glide). The hand-over keeps the position and
+   *  the buffer, so the scroll neither lurches when a gesture starts nor stalls when it ends.
+   *  ★ This replaced the per-arrival GLIDE (scrollFrac 0 → 1 over each frame interval, restarted on every data row, with
+   *    the pacer told to show the newest row while it ran): the waterfall jumped a buffer's worth forward at the start of
+   *    every gesture, the repeat rows of a slow feed landed on top of the glide mid-way (two motions), and the release
+   *    waited for the buffer to refill — the ramp. 7013cebe1's rule stands: no continuous glide at REST while repeat rows
+   *    carry the scroll (uQuant decides that, unchanged) — and during a gesture the repeat rows are simply rows of the
+   *    same steady pace now, not a second motion.
+   *  ★ Nothing here asks any server for anything: all of it is drawn from rows that already arrived. */
+  const pShown = useSharedValue(0);      // the newest row on screen while settled (uHead)
+  const pAcc   = useSharedValue(0);
+  const pLead  = useSharedValue(0);      // rows in hand, smoothed (the playout buffer — see rowPace)
+  const pCool  = useSharedValue(0);
+  const pMode  = useSharedValue(0);
+  const pRate  = useSharedValue(0.03);   // rows per ms, measured (starts at Default's 30/s)
+  const pRateT = useSharedValue(0);
+  const pRateN = useSharedValue(0);
+  const pPos   = useSharedValue(0);      // the continuous position, rows (contPace)
+  const pCLead = useSharedValue(0);
+  const pCont  = useSharedValue(false);  // drawing continuously
+  const pCTgt  = useSharedValue(1);      // the buffer the continuous pace keeps (the settled lead it was handed)
+  const pSRate = useSharedValue(0);      // the pace the settled picture actually runs at, rows/ms (shownRate)
+  const pSN    = useSharedValue(0);
+  const pST    = useSharedValue(0);
+  const pWrote = useSharedValue(0);      // timestamp of the last continuous write (the ≤ 60 Hz rule at rest)
+  // THE SCREEN EASE (wfPace.ts easeAt/easeCompose): a fan's step, eased over one row interval.
+  const zA0 = useSharedValue(1), zB0 = useSharedValue(0), zT0 = useSharedValue(0), zDur = useSharedValue(0);
+  const zOn = useSharedValue(false);
+  const gapOnSv  = useSharedValue(gapLogOn());   // read once at mount (dev log)
+  /** A new image's screen move (x_old = c + k·x_new): start (or extend) the ease. UI thread. */
+  const easeStep = (k: number, c: number, ts: number) => {
     'worklet';
-    if (glideStart.value < 0) { glideStart.value = ts; glideLast.value = ts; return false; }
-    const elapsed = ts - glideStart.value;
-    const p = Math.min(1, elapsed / glideDur.value);
-    if (scrollFrac.value < 1) {
-      // ≤ 60 Hz: skip a frame that comes < 12 ms after the last write — except the one that lands on 1.
-      if (p < 1 && ts - glideLast.value < 12) return false;
-      glideLast.value = ts;
-      scrollFrac.value = p;
-    } else if (elapsed > glideDur.value + 250 && !glideAsked.value) {
-      glideAsked.value = 1;
-      return true;
-    }
-    return false;
+    if (k === 1 && c === 0) return;
+    let a = 1, b = 0;
+    if (zOn.value) { const e = easeAt(zA0.value, zB0.value, zT0.value, zDur.value, ts); a = e[0]; b = e[1]; }
+    const nx = easeCompose(a, b, k, c);
+    zA0.value = nx[0]; zB0.value = nx[1]; zT0.value = ts;
+    // One row interval at the measured rate: a pinch's chain of steps is one continuous motion.
+    zDur.value = Math.max(40, Math.min(250, 1 / Math.max(1e-4, pRate.value)));
+    zOn.value = true;
   };
-  const glideCbLast = useSharedValue(0);
-  const glideCb = useFrameCallback((fi) => {
+  /** One display frame of the driver. `avail` = the newest row in the image. Returns the rows advanced (diag). */
+  const paceTick = (avail: number, ts: number, gap: number): number => {
     'worklet';
-    if (specDead.value) return;   // component is gone — see specDead
-    if (cadenceGap(glideCbLast, fi.timestamp) < 0) return;   // ★ FRAME RATE cap (services/uiCadence)
-    if (glideTick(fi.timestamp)) runOnJS(glideSleep)(glideGen.value);
-  }, false);
-  glideRef.current = glideCb;
+    const interacting = interactSv.value;
+    rowRate(avail, ts, pRate, pRateN, pRateT, interacting);   // ★ frozen while interacting (a re-subscribe's pause)
+    const before = uHead.value;
+    const wantCont = uQuantSv.value < 0.5;
+    const cRate = pSRate.value > 0 ? pSRate.value : pRate.value;   // the SETTLED pace, frozen while continuous
+    if (wantCont && !pCont.value) {
+      paceToCont(pShown, pPos, pLead, pCLead, pCTgt);   // from where the whole-row picture is: no lurch
+      pCont.value = true;
+      uQuantDrawSv.value = 0;
+    }
+    if (pCont.value) {
+      // Asked to settle: keep gliding until this frame lands on a whole row (≤ one row interval), then hand over there.
+      const land = !wantCont && contAtWholeRow(pPos.value, cRate, gap);
+      const pos = contPace(avail, pPos, pCLead, cRate, gap, pCTgt.value);
+      if (land) {
+        paceToSettled(avail, pPos, pShown, pAcc, pLead, pCLead, pMode);
+        pCont.value = false;
+        uQuantDrawSv.value = 1;
+        if (uHead.value !== pShown.value) uHead.value = pShown.value;
+        scrollFrac.value = 1;
+      } else if (interacting || ts - pWrote.value >= 12) {
+        // ≤ 60 Hz at rest (a slow feed's glide: sub-pixel motion — the 2026-10-01 power audit); every frame while
+        // interacting (ProMotion's 120). Time-based, so a skipped write loses nothing.
+        pWrote.value = ts;
+        const w = Math.floor(pos);
+        if (uHead.value !== w + 1) uHead.value = w + 1;
+        scrollFrac.value = pos - w;
+      }
+    } else {
+      const shown = rowPace(avail, pShown, pAcc, pLead, pCool, pMode, pRate.value, gap, true);
+      shownRate(shown, ts, pSRate, pSN, pST);
+      if (uHead.value !== shown) uHead.value = shown;
+      if (scrollFrac.value !== 1) scrollFrac.value = 1;
+    }
+    if (zOn.value) {
+      const e = easeAt(zA0.value, zB0.value, zT0.value, zDur.value, ts);
+      uZASv.value = e[0]; uZBSv.value = e[1];
+      if (e[0] === 1 && e[1] === 0) zOn.value = false;
+    }
+    return uHead.value - before;
+  };
 
   // ── Native spectrum engine: the UI-thread side (see `engine`) ───────────────────────────────────────────
-  // ONE frame callback: take whatever the engine finished since the last display frame, then run the glide and
-  // the trace tween it would otherwise have needed JS to switch on. No runOnJS per frame — nothing here waits on JS.
+  // ONE frame callback: take whatever the engine finished since the last display frame, then run the display driver
+  // and the trace tween it would otherwise have needed JS to switch on. No runOnJS per frame — nothing here waits on JS.
   // ★ Replaced images and paths are disposed RETIRE_FRAMES later: the canvas records them on this thread and draws
   //   them on SkiaRender, but the recorded picture holds its own reference, so a few frames is ample. They were made
   //   without Hermes memory pressure, so dispose is cheap — and it must happen, or native memory waits for a GC.
@@ -1377,145 +1478,44 @@ function WaterfallView({
   const engFrame   = useSharedValue(0);
   const engImg     = useSharedValue<SkImage | null>(null);
   const engPeak    = useSharedValue<SkPath | null>(null);
-  const engScroll  = useSharedValue(-1);
   const engSpec    = useSharedValue(-1);
   const engPeakGen = useSharedValue(-1);
-  const engGlideOn = useSharedValue(false);
   const engSpecOn  = useSharedValue(false);
   const engTexSent = useSharedValue(false);
   const engLast = useSharedValue(0);
   /* ★★ ROWS SHOWN ON THE DISPLAY'S CLOCK (2026-10-12, Galaxy Tab A9, 60 Hz: "very slight waterfall judder … almost
    *  like vsync isnt working"). The engine makes rows on its own timer (~33 ms on Default) and the screen draws every
    *  16.7 ms; when the two run nearly in phase, jitter flips which frame a row lands on — measured as a row every other
-   *  frame with, about one move in eight, a frame late and then two at once (1.1 0 0 0 2.9 0 1.1). So while settled
-   *  (not gliding), every row is still in the IMAGE the moment it is made, but uHead — which rows are SHOWN — advances
-   *  at the measured row rate, whole rows, on this frame callback: an even beat, about one row (≈33 ms) behind. The
-   *  lag is held near one row by nudging the rate (a backlog speeds it, none slows it); more than 3 behind (a stall,
-   *  a resume) snaps to the newest. Glides (Sharp's slow feeds, every gesture) are untouched: they show the newest.
-   *  ★ Superseded in part 2026-10-13: the lag is now a PLAYOUT BUFFER of ≈40 ms, held by slips — see rowPace. */
-  /** One frame of the row pacer (see the note above): returns the row to SHOW. Shared by both paths — the native engine
-   *  (Android) and the JS path (iOS, and Android's fallback). `settled` false (a glide, a gesture) shows the newest. */
-  /* ★★★ A PLAYOUT BUFFER (2026-10-13, Tab A9 at 60 with Smooth: ~1–2 % of drawn frames showed NO row — measured in-app,
-   *  "a semi regular stutter"). The pacer before this held almost nothing in hand: after each release 0–1 rows were
-   *  left, so a row landing a few ms after the vsync left that frame empty and the next took two. Rows arrive at
-   *  59–68/s (network bursts, FFT batching) around a true 60 — the jitter is the problem, not the rate.
-   *  Now the pacer keeps PLAYOUT_MS of rows in hand (≈2.4 rows at 60/s, 1 row minimum) and releases them on the
-   *  frame beat, like the audio jitter buffer: a late row is still inside the buffer, so the beat never misses.
-   *  The buffer depth is a SMOOTHED lead (≈½ s), and it is corrected by SLIPS — one extra row, or one frame's wait —
-   *  no more than one per ½ s once settled. The feed and the display share no clock, so a slip now and then is the
-   *  honest cost of a whole-row display; at a real 60 against 60 Hz it is ppm-rare. (Instant-backlog reserve rules,
-   *  tried the night before, oscillated 0/4 at 30 — the smoothing and the cool-down are what stop that.)
-   *  Stuart: "30-50ms is imperceptible to most" / "you'd notice stutter over 30-50ms delay". */
-  /** The row rate (rows per ms) for the pacer, over ½ s windows. ★ The old per-arrival average swung ±15 % on jittery
-   *  arrivals — enough to flip the pacer's mode (one row every 2nd frame ↔ a free count) and lose the rhythm. A change
-   *  of more than 25 % (Default ↔ Smooth, a slower feed) is taken at once; anything less is smoothed. */
-  const rowRate = (avail: number, t: number, rateSv: { value: number }, nSv: { value: number }, tSv: { value: number }) => {
-    'worklet';
-    const dt = t - tSv.value;
-    if (tSv.value <= 0 || dt > 2000 || avail < nSv.value) { nSv.value = avail; tSv.value = t; return; }
-    if (dt < 500) return;
-    const inst = (avail - nSv.value) / dt;
-    if (inst > 0) rateSv.value = Math.abs(inst / rateSv.value - 1) > 0.25 ? inst : rateSv.value * 0.6 + inst * 0.4;
-    nSv.value = avail; tSv.value = t;
-  };
-  const PLAYOUT_MS = 40;
-  const rowPace = (avail: number, shownSv: { value: number }, accSv: { value: number },
-                   leadSv: { value: number }, coolSv: { value: number }, modeSv: { value: number }, rate: number,
-                   gap: number, settled: boolean): number => {
-    'worklet';
-    let shown = shownSv.value;
-    const target = Math.max(1, rate * PLAYOUT_MS);     // rows to hold in hand
-    if (!settled || shown <= 0 || shown > avail || avail - shown > target + 6) {
-      // A glide, a gesture, the first rows, a stall or a resume: show the newest; the buffer refills by waiting.
-      shown = avail; accSv.value = 0; leadSv.value = 0; coolSv.value = 0; modeSv.value = 0;
-    } else {
-      const lead0 = avail - shown;            // rows in hand before this frame
-      let lead = leadSv.value;                // …smoothed
-      const expect = rate * gap;              // rows this frame at the measured rate
-      const whole = Math.round(expect);
-      const m = expect > 0 ? Math.round(1 / expect) : 0;
-      const cool = coolSv.value + 1;
-      /* ★ THE MODE, WITH HYSTERESIS: w (> 0) = w rows every frame, −m = one row every m frames, 0 = neither. The measured
-       *  rate is noisy enough (±10 %) to flip a bare test frame to frame — and a flip mid-count misread the counter as
-       *  rows (two at once, in simulation). Enter within 0.15 of the ratio, leave only past 0.3; a change zeroes it. */
-      const prevMode = modeSv.value;
-      let mode = 0;
-      // ★ 0.75, not `whole >= 1`: Math.round(0.5) is 1, so Default on 60 Hz (0.5 rows a frame) fell between the two tests
-      //   whenever the rate read a hair over 30/s — measured in simulation as the rhythm lost and a 5-row catch-up.
-      if (expect >= 0.75) { const e = Math.abs(expect - whole); if (e < 0.15 || (prevMode === whole && e < 0.3)) mode = whole; }
-      else if (m >= 2) { const e = Math.abs(expect * m - 1); if (e < 0.15 || (prevMode === -m && e < 0.3)) mode = -m; }
-      if (mode !== prevMode) { modeSv.value = mode; accSv.value = 0; }
-      // A slip may come every 6 frames while the buffer is well off target (filling after a gesture), else every 30.
-      const far = Math.abs(lead - target) > 1.5;
-      const slipOk = cool >= (far ? 6 : 30);
-      if (mode > 0) {
-        /* ★★ LOCKED: A WHOLE NUMBER OF ROWS PER FRAME (Stuart, 2026-10-13: 30 fps + Default "juddery still", 60 fine).
-         *  At 30 drawn, Default is ONE row a frame; at 60, Smooth is one; at 30, Smooth is two. Each frame releases
-         *  exactly that step — never a partial one: a frame that finds less waits (an underrun, now rare). */
-        // ★ A slip's effect on the depth is known at once, so it is booked into the smoothed lead now — waiting for the
-        //   ½ s average to see it would let a filling buffer slip again and again and overshoot.
-        let step = mode;
-        if (slipOk && lead > target + 0.6 && lead0 >= mode + 1) { step = mode + 1; coolSv.value = 0; lead -= 1; } // ahead
-        else if (slipOk && lead < target - 0.6) { step = 0; coolSv.value = 0; lead += mode; }                     // short
-        else coolSv.value = cool;
-        if (lead0 >= step) shown += step;
-        accSv.value = 0;
-      } else if (mode < 0) {
-        /* ★★ LOCKED THE OTHER WAY: ONE ROW EVERY m FRAMES (Default at 60 = every 2nd, at 120 = every 4th; Smooth at 120 =
-         *  every 2nd). The fractional counter below broke the 1-0-1-0 rhythm on ~4 % of frames in simulation (23 % before
-         *  the buffer); a frame count keeps it exact, and a slip is one frame early or late. accSv counts frames here. */
-        const m = -mode;
-        const n = accSv.value + 1;              // frames since the last row
-        let due = m, slip = 0;
-        if (slipOk && lead > target + 0.6 && lead0 >= 2) { due = m - 1; slip = -1; }   // ahead: one frame early
-        else if (slipOk && lead < target - 0.6) { due = m + 1; slip = 1; }            // short: one frame late
-        if (n >= due && lead0 >= 1) {
-          shown++; accSv.value = 0;
-          if (slip !== 0) { coolSv.value = 0; lead += slip / m; } else coolSv.value = cool;
-        } else { accSv.value = Math.min(n, 2 * m); coolSv.value = cool; }
-      } else {
-        // Rows and frames at no whole ratio (40 rows on 60 Hz, a wandering rate): a fractional counter, nudged toward the target.
-        const k = Math.max(0.85, Math.min(1.25, 1 + 0.15 * (lead - target)));
-        let acc = accSv.value + expect * k;
-        while (acc >= 1 && shown < avail) { shown++; acc -= 1; }
-        accSv.value = Math.min(acc, shown === avail ? 1 : 2);
-        coolSv.value = cool;
-      }
-      const a = Math.min(1, gap / 500);       // ≈½ s smoothing
-      leadSv.value = lead + (avail - shown - lead) * a;
-    }
-    shownSv.value = shown;
-    return shown;
-  };
+   *  frame with, about one move in eight, a frame late and then two at once (1.1 0 0 0 2.9 0 1.1). So every row is in
+   *  the IMAGE the moment it is made, but uHead — which rows are SHOWN — advances at the measured row rate on the frame
+   *  callback, from a playout buffer of ≈40 ms (utils/wfPace.ts rowPace). The JS path does the same (jsAvail). */
   // ── The JS path's pacer (iOS; Android without the engine). ★★ 2026-10-13: a bunched pair of frames (network jitter —
   //   the status reading 21 fps for a second) stepped the iPhone's waterfall twice in quick succession; Android's engine
-  //   path already paced rows to the display. Same rule here: publishRing sets jsAvail, this shows rows on the clock.
+  //   path already paced rows to the display. Same rule here: publishRing hands over jsPending, this shows rows on the clock.
   const jsAvail  = useSharedValue(0);
-  const jsShown  = useSharedValue(0);
-  const jsAcc    = useSharedValue(0);
-  const jsLead   = useSharedValue(0);
-  const jsCool   = useSharedValue(0);
-  const jsMode   = useSharedValue(0);
-  const jsRate   = useSharedValue(0.03);
-  const jsRateT  = useSharedValue(0);
-  const jsSeen   = useSharedValue(0);
+  const jsSeen   = useSharedValue(0);    // the last jsPending generation taken
   const jsLast   = useSharedValue(0);
-  const gapOnSv  = useSharedValue(gapLogOn());   // read once at mount (dev log)
   useFrameCallback((fi) => {
     'worklet';
     if (specDead.value) return;
     const gap = cadenceGap(jsLast, fi.timestamp);
     if (gap < 0) return;
+    const pend = jsPending.value;
+    if (pend.gen !== jsSeen.value && pend.img) {
+      // ★ The image, its newest row, its motion range and its screen move — all in the same frame.
+      jsSeen.value = pend.gen;
+      wfImage.value = pend.img;
+      jsAvail.value = pend.avail;
+      uMoLoSv.value = pend.moLo; uMoHiSv.value = pend.moHi;
+      easeStep(pend.k, pend.c, fi.timestamp);
+    }
     const avail = jsAvail.value;
     if (avail <= 0) return;
-    rowRate(avail, fi.timestamp, jsRate, jsSeen, jsRateT);
-    const settled = uQuantSv.value >= 0.5 && scrollFrac.value >= 1;
-    const coolWas = jsCool.value;
-    const shown = rowPace(avail, jsShown, jsAcc, jsLead, jsCool, jsMode, jsRate.value, gap, settled);
-    if (uHead.value !== shown) uHead.value = shown;
+    const coolWas = pCool.value;
+    paceTick(avail, fi.timestamp, gap);
     // DEV frame-gap log (utils/frameGapLog.ts, OFF by default): a deliberate slip — one hop to JS per slip only.
-    if (gapOnSv.value && settled && coolWas > 0 && jsCool.value === 0) {
-      runOnJS(gapPacerSlip)(jsLead.value, Math.max(1, jsRate.value * PLAYOUT_MS), jsRate.value);
+    if (gapOnSv.value && !pCont.value && coolWas > 0 && pCool.value === 0) {
+      runOnJS(gapPacerSlip)(pLead.value, Math.max(1, pRate.value * PLAYOUT_MS), pRate.value);
     }
   }, engine == null);
 
@@ -1527,14 +1527,6 @@ function WaterfallView({
     console.log(`[VibeDiag] wf pace rows/frame 0..5: ${h} | gap ${gap} ms | rate ${rate} rows/s | lead ${lead} rows`);
   }, []);
   const engAvail = useSharedValue(0);    // the newest row in the image
-  const engShown = useSharedValue(0);    // the newest row on screen (uHead while settled)
-  const engAcc   = useSharedValue(0);
-  const engLead  = useSharedValue(0);    // rows in hand, smoothed (the playout buffer — see rowPace)
-  const engCool  = useSharedValue(0);
-  const engMode  = useSharedValue(0);
-  const engRate  = useSharedValue(0.03); // rows per ms, measured (starts at Default's 30/s)
-  const engRateT = useSharedValue(0);
-  const engRateN = useSharedValue(0);
   const enginePoll = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value || !engine) return;
@@ -1562,25 +1554,17 @@ function WaterfallView({
         wfImage.value = p.image;
         engImg.value = p.image;
         engAvail.value = p.head;
+        // ★ The engine composes the motion range and the fans' screen move for exactly the image it hands over.
+        if (p.moLo != null && p.moHi != null) { uMoLoSv.value = p.moLo; uMoHiSv.value = p.moHi; }
+        easeStep(p.fanK ?? 1, p.fanC ?? 0, fi.timestamp);
         if (old) retire.push({ o: old, f });
         if (!engTexSent.value) { engTexSent.value = true; runOnJS(setTexReady)(true); }   // once, ever
       }
+      // ★ quant: 0 = draw continuously (a gesture, a slow Sharp feed), 1 = whole rows. The engine's per-arrival
+      //   glide command (p.glide / scrollGen) is no longer used — the display driver paces both ways.
       uQuantSv.value = p.quant;
       uAvgMs.value = p.avgMs;
       uNSv.value = 1;
-      if (p.scrollGen !== engScroll.value) {
-        engScroll.value = p.scrollGen;
-        if (p.glide) {   // startGlide(dur)
-          glideDur.value = Math.max(1, p.glideDur);
-          glideStart.value = -1;
-          glideAsked.value = 0;
-          scrollFrac.value = 0;
-          engGlideOn.value = true;
-        } else {         // stopGlide + settle
-          engGlideOn.value = false;
-          scrollFrac.value = 1;
-        }
-      }
       if (p.specGen !== engSpec.value) {
         engSpec.value = p.specGen;
         if (p.specHidden) {
@@ -1604,21 +1588,17 @@ function WaterfallView({
       engRetire.value = retire;
     }
     // ── Which rows are shown (see engAvail) ──
-    {
-      rowRate(engAvail.value, fi.timestamp, engRate, engRateN, engRateT);   // the row rate, over ½ s windows
-      const before = uHead.value;
-      const shown = rowPace(engAvail.value, engShown, engAcc, engLead, engCool, engMode, engRate.value, gap, !engGlideOn.value && uQuantSv.value >= 0.5);
-      if (uHead.value !== shown) uHead.value = shown;
+    if (engAvail.value > 0) {
+      const d = paceTick(engAvail.value, fi.timestamp, gap);
       if (paceDiag) {   // DIAG (diagnostics builds): rows shown per drawn frame, logged every 5 s
-        const h = paceHist.value; const d = Math.max(0, Math.min(5, shown - before)); h[d]++; paceHist.value = h;
+        const h = paceHist.value; h[Math.max(0, Math.min(5, d))]++; paceHist.value = h;
         if (fi.timestamp - paceT0.value > 5000) {
           paceT0.value = fi.timestamp;
-          runOnJS(paceLog)(h.join(','), Math.round(gap), Math.round(engRate.value * 1000 * 10) / 10, Math.round(engLead.value * 10) / 10);
+          runOnJS(paceLog)(h.join(','), Math.round(gap), Math.round(pRate.value * 1000 * 10) / 10, Math.round(pLead.value * 10) / 10);
           paceHist.value = [0, 0, 0, 0, 0, 0];
         }
       }
     }
-    if (engGlideOn.value && glideTick(fi.timestamp)) engGlideOn.value = false;
     if (engSpecOn.value && specTweenTick(gap)) engSpecOn.value = false;
   }, engine != null);
 
@@ -1627,9 +1607,9 @@ function WaterfallView({
   //   Uncover: ONE texture from the ring as it now stands, so the rows that arrived while covered
   //   appear at once instead of waiting for the next frame.
   useEffect(() => {
-    if (covered) { stopGlide(); stopRevealStepper(); stopSpecTween(); }
+    if (covered) { stopRevealStepper(); stopSpecTween(); }
     else if (ringDirty.current) publishRing();
-  }, [covered, stopGlide, stopRevealStepper, stopSpecTween, publishRing]);
+  }, [covered, stopRevealStepper, stopSpecTween, publishRing]);
 
   // ── Background gate ────────────────────────────────────────────────────────
   // On background/inactive: cancel any in-flight scroll glide and kill the
@@ -1664,7 +1644,6 @@ function WaterfallView({
       setActive(!bg);
       engine?.setBackground(bg);
       if (bg) {
-        stopGlide();
         stopRevealStepper();
         stopSpecTween();
       }
@@ -1748,6 +1727,7 @@ function WaterfallView({
       uAvgMs.value = avgFrameMs.current;   // the tween worklet reads this, not the ref
     }
     lastFrameTs.current = now;
+    if (interactSv.value !== boost) interactSv.value = boost;   // the display driver: 120 Hz + the pace rate frozen
     // WATERFALL boost — the continuous vsync glide instead of discrete whole-line steps. Also on at low
     // fps so the low-rate scroll is silky (no added latency; pure scroll interpolation). ★ NOT applied
     // to the spectrum trace: at ~10 fps the trace must keep its ~30 fps EASING TWEEN — making it follow
@@ -1804,7 +1784,9 @@ function WaterfallView({
       const wfDt = now - lastWfPushAt.current;
       // Same smoothing as avgFrameMs. Ignore absurd gaps (a resume, a tune) so one pause cannot
       // slow the scroll for the next several pairs.
-      if (wfDt > 0 && wfDt < 2000)
+      // ★ 2026-10-28: and NOT while interacting — a re-subscribe's pause folded in here lengthened `dur`, so every
+      //   arrival after it earned extra repeat rows and the scroll SPED UP for a beat after a tune (the ramp).
+      if (wfDt > 0 && wfDt < 2000 && !boost)
         avgWfGapMs.current = avgWfGapMs.current > 0 ? avgWfGapMs.current * 0.8 + wfDt * 0.2 : wfDt;
     }
     lastWfPushAt.current = now;
@@ -1881,8 +1863,8 @@ function WaterfallView({
       // ★★★ uN IS NOW ALWAYS 1 — see the note at WF_TARGET_ROWS. The shader no longer maps history.
       uNSv.value = 1;
       stopRevealStepper();
-      // ★ ≤ 60 Hz — see startGlide / glideCb. Same linear ramp over the same `dur`.
-      startGlide(dur);
+      // ★★ No per-arrival glide any more (2026-10-28): uQuant = 0 tells the display driver (paceTick) to draw the SAME
+      //   steady pace continuously — at display rate while interacting, ≤ 60 Hz for a slow feed at rest.
     } else {
       // Settled: interpolate UP to hold at least the target scroll rate from the (now stable) data
       // rate — 5fps Low Data still scrolls at the chosen 10/20/30 fps; fast data (Kiwi) needs none.
@@ -1903,8 +1885,7 @@ function WaterfallView({
       //     AVERAGE is exactly the rate the setting promises, on any feed.
       //     ★ Only possible because uN is 1: the row count per frame is now a local decision about
       //       new data, not a global mapping, so it may vary frame to frame at no cost.
-      stopGlide();                     // a boost glide still running would overwrite the 1
-      scrollFrac.value = 1;            // uN is 1, so R must be 1 (see the shader note)
+      // (uN is 1, so R must be 1 — the display driver sets scrollFrac = 1 whenever it draws whole rows.)
       // ★★★ NEVER STOP THE STEPPER BETWEEN ARRIVALS. At 30 rows/s on a 20 fps feed the extras
       //     alternate 0,1,0,1 — so stopping on the zero frames meant a stop/start round trip
       //     through runOnJS every 50 ms, and the single extra row had 25 ms to survive it. It
@@ -2087,7 +2068,11 @@ function WaterfallView({
     //   enqueueFrame read it.
     frameSink.current = engine
       ? (bins: Float32Array, st: SDRStatus) => {
-          engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, lastInteractAt?.current ?? 0);
+          const at = lastInteractAt?.current ?? 0;
+          engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, at);
+          // The display driver's interaction flag (120 Hz, the pace rate frozen) — the engine's own boost rule.
+          const on = frameCfg.current.smoothTune && Date.now() - at < SMOOTH_TUNE_TAIL_MS;
+          if (interactSv.value !== on) interactSv.value = on;
         }
       : enqueueFrame;    // frames flow through the jitter buffer, not straight to render
     return () => { frameSink.current = null; };

@@ -148,6 +148,10 @@ public:
             o.setProperty(r, "scrollGen", (double)u.scrollGen);
             o.setProperty(r, "glide", u.glide);
             o.setProperty(r, "glideDur", u.glideDur);
+            if (u.image) {                                   // ride with the image (WaterfallView enginePoll)
+                o.setProperty(r, "moLo", u.moLo); o.setProperty(r, "moHi", u.moHi);
+                o.setProperty(r, "fanK", u.fanK); o.setProperty(r, "fanC", u.fanC);
+            }
             o.setProperty(r, "specGen", (double)u.specGen);
             o.setProperty(r, "specHidden", u.specHidden);
             if (!u.specTarget.empty()) {
