@@ -528,12 +528,11 @@ export function autoFrameRungs(maxHz: number | null | undefined, os: string = 'i
   //   Skia draws + a performance hint (8fda78df) — after which the Moto was smooth at 30, 60 and 120. Above 60 Hz it
   //   still starts at 60: 120 doubles the drawing for no visible gain; it stays a manual pick. (For one night it was
   //   30 — b832b7c6 — while the judder was unexplained.) iOS keeps the panel's maximum.
-  // ★★★ iOS AUTO IS 60 TOO (Stuart, 2026-10-28: "keep the 120/60/30 options and they are what we run at … default to
-  //   60"). The waterfall holds the display at the chosen rate while it runs (WaterfallView noteRowsFlowing); 60 is a
-  //   whole multiple of every row rate, so the default never judders. The panel's own maximum (120) is the manual
-  //   pick for the smoothest UI at a battery cost.
+  // (2026-10-28: iOS AUTO was made 60 for a day and reverted with the refresh holds — "the frame rate locks make the app
+  //  feel laggy". iOS keeps the panel's maximum, as before.)
   const hz = normaliseHz(maxHz);
-  if (hz != null && hz > 60) return [60, 30];
+  if (os === 'android') return hz != null && hz > 60 ? [60, 30] : [0, 30];
+  if (hz != null && hz > 60) return [0, 60, 30];
   return [0, 30];
 }
 

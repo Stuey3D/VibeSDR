@@ -63,9 +63,9 @@ ok(decoderNear('scanner', 7e6) && decoderNear('gallery', 7e6), 'tools are never 
 ok(decoderNear('hfdl', NaN) && decoderNear('hfdl', 0), 'an unknown dial dims nothing');
 
 console.log('▶ a tab that is not the dial\'s band is dimmed whole (a hint — the keys still work)');
-ok(!decoderDim('cw', 7.074e6, 'hf') && decoderDim('cw', 7.074e6, 'vhf'), 'CW: bright on HF at 7.074, dim on the VHF tab');
-ok(!decoderDim('cw', 144.05e6, 'vhf') && decoderDim('cw', 144.05e6, 'hf'), 'CW: bright on VHF at 144.05, dim on the HF tab');
-ok(decoderDim('navtex', 7.074e6, 'hf'), 'NAVTEX dim at 7.074 on its own tab');
+ok(!decoderDim('cw', 7.074e6, 'hf') && !decoderDim('cw', 7.074e6, 'vhf'), 'nothing dims (Stuart 2026-10-28): CW at 7.074 on either tab');
+ok(!decoderDim('navtex', 0.7e6, 'hf'), 'NAVTEX on MW (its band in view) is not dimmed');
+ok(!decoderDim('navtex', 7.074e6, 'hf'), 'NAVTEX not dimmed at 7.074 either');
 ok(!decoderDim('hfdl', NaN, 'vhf'), 'an unknown dial dims nothing');
 console.log('▶ the time-signal table agrees with DecoderClient.timeStationFor');
 for (const hz of TIME_SIGNAL_HZ) ok(timeStationFor(hz) !== null, `${hz} Hz is a station to the decoder`);

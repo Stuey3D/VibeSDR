@@ -172,8 +172,10 @@ export function decoderNear(id: string, hz: number): boolean {
  * DIMMED in tab `tab`: not near its usual frequencies — or the tab is not the dial's band (an HF dial looking at the VHF
  * tab: none of it applies where you are). A HINT: the caller keeps the key fully tappable. Never for an unknown dial.
  */
-export function decoderDim(id: string, hz: number, tab: RadioBand): boolean {
-  if (WHOLE_RADIO_IDS.includes(id)) return false;   // they tune the radio themselves
-  if (!Number.isFinite(hz) || hz <= 0) return false;
-  return !decoderNear(id, hz) || radioBandOf(hz) !== tab;
+// ★★★ NOTHING IS DIMMED (Stuart, 2026-10-28, the same day it was built: "dont dim out the decoders as i was tuned to MW
+//     and the navtex icon was greyed out even though the navtex band was in view"). The dial alone cannot say what the
+//     user can see or reach; the band tab still opens on the dial's band. Kept as a function so both clients' call sites
+//     stay one line; decoderNear stays for anyone who wants the hint back.
+export function decoderDim(_id: string, _hz: number, _tab: RadioBand): boolean {
+  return false;
 }
