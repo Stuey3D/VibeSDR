@@ -287,19 +287,24 @@ int main(int argc, char** argv) {
         std::string cmd = "rm -rf '" + dir + "'"; if (std::system(cmd.c_str()) != 0) std::printf("  (could not remove %s)\n", dir.c_str());
     }
 
-    std::printf("\n── the background-decoding NDB profile ──\n");
+    std::printf("\n── an older whole-radio NDB profile, converted to the NDB skimmer VFO ──\n");
     {
+        // ★ V12 2026-10-27: NDB is a VFO decoder now (vibe_bgdecode_config.h "ndb-skim"); a profile saved as the old
+        //   whole-radio kind loads as a VFO profile on the band's middle with ONE NDB skimmer, and saves in that shape.
         vibe::bg::Config c; std::string err;
         ok(vibe::bg::parse(R"({"on":true,"waitMin":5,"profiles":[{"centre":0,"from":"00:00","to":"00:00","vfos":[],"ndb":true}]})", c, err)
-           && c.profiles.size() == 1 && c.profiles[0].isNdb() && c.profiles[0].isWhole(), "an NDB profile parses (" + err + ")");
-        ok(vibe::bg::toJson(c).find("\"ndb\":true") != std::string::npos, "…and is written back");
+           && c.profiles.size() == 1 && !c.profiles[0].isWhole() && c.profiles[0].vfos.size() == 1
+           && vibe::bg::isNdbSkim(c.profiles[0].vfos[0]) && c.profiles[0].centreHz == vibe::bg::kNdbLegacyCentreHz,
+           "an old NDB profile parses into a VFO profile with the NDB skimmer (" + err + ")");
+        const std::string back = vibe::bg::toJson(c);
+        ok(back.find("\"ndb\":true") == std::string::npos && back.find("\"dec\":\"ndb-skim\"") != std::string::npos, "…and is written back in the new shape: " + back);
         std::string e1, e2, e3;
         ok(vibe::bg::validate(c, 768000, e1, 0, 0, true, true), "valid on a radio that reaches LF (" + e1 + ")");
         ok(!vibe::bg::validate(c, 768000, e2, 0, 0, true, false) && e2.find("NDB") != std::string::npos, "refused, in words, where it reaches none: " + e2);
-        ok(!vibe::bg::validate(c, 768000, e3, 0, 7100000, true, true) && e3.find("locked") != std::string::npos, "refused on a locked radio: " + e3);
+        ok(!vibe::bg::validate(c, 768000, e3, 0, 7100000, true, true) && e3.find("NDB band") != std::string::npos, "refused on a radio locked away from the band: " + e3);
         vibe::bg::Config o; std::string e4;
         ok(vibe::bg::parse(R"({"on":true,"profiles":[{"centre":500000,"vfos":[{"hz":518000,"mode":"usb","dec":"navtex"}]}]})", o, e4)
-           && !o.profiles[0].isNdb() && vibe::bg::toJson(o).find("ndb") == std::string::npos, "an ordinary profile carries no ndb");
+           && o.profiles[0].vfos.size() == 1 && vibe::bg::toJson(o).find("ndb") == std::string::npos, "an ordinary profile carries no ndb");
     }
 
     /* ★★ THE REAL RECORDING (Stuart's UberSDR, 256–448 kHz I/Q at 192 kHz, the first 330 s of 2026-10-26 07:29 UTC) —

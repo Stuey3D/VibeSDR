@@ -139,6 +139,7 @@
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
+#include "vibe_bgdecode_ndb.h"      // ★★ V12: …its NDB skimmer VFO (the listener's NDB service, fed the runner's slice)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
 #include "vibe_squelch_msg.h"       // ★ squelch on/off: explicit `on`, else the legacy db > -100
 #include "vibe_tune_pace.h"         // ★ a burst of tunes: the newest wins, paced by load (2026-10-05)
@@ -28644,8 +28645,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  own door (ismLeave), which puts the radio back where it was — "listeners always win", the same as every profile.
      *  ★ Never with a listener on (keepInRange cannot apply: there is no "in range" for a whole-capture mode), never on
      *    a locked radio (refused at the save too), never over another whole-radio mode. */
-    bool        bgIsm_ = false;          // ★ the running profile is WHOLE-RADIO (ISM — or NDB, bgNdb_): bgActive_ means "that mode is ours"
-    bool        bgNdb_ = false;          // ★ …and it is NDB (V12 2026-10-27), not ISM
+    bool        bgIsm_ = false;          // ★ the running profile is WHOLE-RADIO (ISM): bgActive_ means "that mode is ours"
+                                         //   (★ V12 2026-10-27: NDB is no longer whole-radio — it is a VFO decoder, ndb-skim)
     bool        bgAis_ = false;          // ★ …or AIS: bgActive_ means "AIS mode is ours" (bgAisStart)
     std::string bgIsmWhy_;               // ★ why the due ISM profile cannot run here now ("" = it can) — the admin line
 
@@ -28704,6 +28705,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         p.bandBudgetUnits = [] { return vsBandBudgetUnits(); };
         p.loaded = [this] { return vibetune::paceMs(serverLoad()) > 0; };
         p.bandWhyNot = [] { return vsSpotsBandWhyNot(); };
+        /* ★★ V12 2026-10-27 — AN NDB SKIMMER VFO (Stuart: beside NAVTEX and FT8 on the same capture): the listener's NDB
+         *  service fed the runner's slice, into the gallery as background's; only the part of the band this radio reaches;
+         *  not while the owner has NDB switched off here, nor while a listener's own NDB mode has the band (their skimmer
+         *  keeps the cards meanwhile — never two skimmers on the same beacons). */
+        p.ndbMake = vibe::bg::makeNdbFeedFactory(p.store);
+        p.ndbReach = [](double& lo, double& hi) { return vsNdbReach(lo, hi); };
+        p.ndbWhyNot = [] {
+            if (vsModeBlocked("ndb")) return std::string("the server owner has switched NDB off on this receiver");
+            if (g_ndbMode.load(std::memory_order_relaxed)) return std::string("a listener is running NDB mode \xe2\x80\x94 their skimmer keeps the NDB cards meanwhile");
+            return std::string();
+        };
         return p;
     }
     /** ★★ V12 2026-10-27: where a profile with a Band digital-spots VFO puts the capture. A zero-IF radio's DC sits at
@@ -28715,6 +28727,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double half = vibe::bg::halfWindowHz(sampleRate);
         double lo = -INFINITY, hi = INFINITY; bool any = false;
         for (const auto& v : prof.vfos) {
+            // ★ V12: an NDB skimmer has no frequency — the move may not shrink the part of the band it covers at `centre`
+            if (vibe::bg::isNdbSkim(v)) {
+                double nlo = 0, nhi = 0;
+                if (vibe::bg::ndbSegment(centre, sampleRate, nlo, nhi)) { lo = std::max(lo, nhi - half); hi = std::min(hi, nlo + half); }
+                continue;
+            }
             double at = v.hz, w = 0;
             vibe::bg::BandSpan sp;
             if (vibe::bg::isBandSpots(v) && vibe::bg::bandSpan(v.hz, sp)) { at = sp.centreHz; w = std::max(sp.centreHz - sp.loHz, sp.hiHz - sp.centreHz); any = true; }
@@ -28744,10 +28762,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ An ISM profile runs only with nobody here, on a radio it may move (see bgIsm_) — otherwise it waits, and the
         //    radio is not even woken for it.
         if (prof.isWhole()) {
-            if (bgLocked()) { bgIsmRefuse(idx, prof.isNdb() ? "this radio's range is locked \xe2\x80\x94 background decoding never moves a locked radio onto the NDB band"
-                                                            : "this radio's range is locked \xe2\x80\x94 background decoding never moves a locked radio onto an ISM band"); return; }
+            if (bgLocked()) { bgIsmRefuse(idx, "this radio's range is locked \xe2\x80\x94 background decoding never moves a locked radio onto an ISM band"); return; }
             if (!move || listenerOn) return;
-            if (prof.isNdb()) bgNdbStartLocked(cfg, idx); else bgIsmStartLocked(cfg, idx);
+            bgIsmStartLocked(cfg, idx);
             return;
         }
         resumeCaptureIdle(/*fromBg=*/true);       // ★ a parked or released radio is taken back first
@@ -28820,43 +28837,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bgProfile_ = idx;
         bgGen_ = g_bgCfgGen.load();
     }
-    /** ★★ Start an NDB profile (V12 2026-10-27): the radio onto the LF beacon band in NDB mode, every beacon skimmed, the
-     *  day's heard log and map to the gallery as background's. Caller holds bgOpMtx_, and nobody is here. */
-    void bgNdbStartLocked(const vibe::bg::Config& cfg, int idx) {
-        const auto& prof = cfg.profiles[(size_t)idx];
-        if (g_adsbMode.load() || g_dabMode.load() || g_ismMode.load() || g_aisMode.load() || (g_ndbMode.load() && !bgIsm_) || modeLeaveDueAt.load() > 0.0) return;
-        const std::string why = vsNdbWhyNot();
-        if (!why.empty()) { bgIsmRefuse(idx, why); return; }
-        resumeCaptureIdle(/*fromBg=*/true);
-        if (radioReleased.load()) {
-            LOGI("background decoding: profile %d (NDB) is due but another program has the radio \xe2\x80\x94 trying again in 60 s", idx + 1);
-            bgNotBefore_ = nowSecs() + 60; return;
-        }
-        if (bgSaved_.valid) { bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio); bgSaved_.valid = false; }
-        bgIsmWhy_.clear();
-        LOGI("background decoding: nobody here for %.0f s \xe2\x80\x94 profile %d puts the radio on the NDB band (every beacon, to the "
-             "gallery); it goes back to %.3f kHz when somebody arrives", vsBgWaitSec(cfg), idx + 1, audioFreq.load() / 1e3);
-        ndbOrigin_ = "background"; ndbProfile_ = "Profile " + std::to_string(idx + 1);
-        ndbEnter();
-        if (!g_ndbMode.load()) { bgIsmRefuse(idx, "the NDB band could not be planned at this radio's rate"); return; }
-        bgIsm_ = true; bgNdb_ = true;
-        { vibe::bg::Config one; one.profiles = { prof }; bgProfileJson_ = vibe::bg::toJson(one); }
-        bgActive_.store(true);
-        bgMoved_ = true;
-        bgWanted_.store(true);
-        bgProfile_ = idx;
-        bgGen_ = g_bgCfgGen.load();
-    }
     /** Stop it, and (if `restore`) put the radio back where it was before background decoding moved it. Caller holds
      *  bgOpMtx_. The runner's taps write what they held as they stop — a message cut off is kept, marked partial. */
     void bgStopLocked(const char* why, bool restore) {
         if (bgActive_.exchange(false)) {
-            if (bgIsm_ && bgNdb_) {
-                // ★ NDB's own door, the same way: the skimmer stops (the day's card and map written), the radio goes back.
-                bgIsm_ = false; bgNdb_ = false;
-                ndbLeave(false);
-                LOGI("background decoding stopped — %s (NDB: the radio is back where it was)", why);
-            } else if (bgIsm_) {
+            if (bgIsm_) {
                 // ★ ISM's own door: the decoder service stops (the day's log and card written), the radio goes back to
                 //   exactly where ismEnter found it. Nobody is told anything — nobody was here.
                 bgIsm_ = false;
@@ -28878,7 +28863,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★★ Would any of profile `idx`'s VFOs be inside the window the radio has now? */
     bool bgAnyInWindow(const vibe::bg::Config& cfg, int idx) const {
         const double c = rtlCenter.load(), half = vibe::bg::halfWindowHz(sampleRate);
-        for (const auto& v : cfg.profiles[(size_t)idx].vfos) if (std::fabs(v.hz - c) <= half) return true;
+        for (const auto& v : cfg.profiles[(size_t)idx].vfos) {
+            // ★ V12: an NDB skimmer is "in" when the window holds enough of the NDB band (the runner's own rule)
+            if (vibe::bg::isNdbSkim(v)) { double lo = 0, hi = 0; if (vibe::bg::ndbSegment(c, sampleRate, lo, hi)) return true; continue; }
+            if (std::fabs(v.hz - c) <= half) return true;
+        }
         return false;
     }
     /** ★★★ SOMEBODY ARRIVED. As ever: the radio goes back to the dial it was left on BEFORE background decoding moved it,
@@ -28969,12 +28958,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (retryIn >= 0)  { std::snprintf(b, sizeof b, ",\"retryIn\":%.0f", retryIn); j += b; }
         // ★★ An ISM profile: the band, and the day so far ("14 devices · 212 readings today") — no VFO runner.
         const int shownP = active ? bgProfile_ : want;
-        // ★★ An NDB profile: "NDB beacons" and the run so far ("12 beacons identified of 41 carriers").
-        if (shownP >= 0 && (size_t)shownP < cfg.profiles.size() && cfg.profiles[(size_t)shownP].isNdb()) {
-            j += ",\"ndb\":{\"name\":\"NDB beacons\"";
-            if (active && bgNdb_) j += ",\"brief\":\"" + vibe::gallery::jsonEsc(g_ndb.brief()) + "\",\"identified\":" + std::to_string(g_ndb.identifiedNow());
-            j += "}";
-        }
         if (shownP >= 0 && (size_t)shownP < cfg.profiles.size() && cfg.profiles[(size_t)shownP].isIsm()) {
             const vibeism::Band* ib = vibeism::bandById(cfg.profiles[(size_t)shownP].ism);
             j += std::string(",\"ism\":{\"band\":\"") + vibe::gallery::jsonEsc(cfg.profiles[(size_t)shownP].ism) + "\",\"name\":\""
@@ -29475,14 +29458,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 dabRestore();
         }
         if (g_ndbMode.load(std::memory_order_relaxed)) {
-            // ★★ V12: unless background decoding put it there (an NDB profile) — that one ends when a listener ARRIVES
-            bool bgOwns;
-            { std::lock_guard<std::mutex> op(bgOpMtx_); bgOwns = bgIsm_ && bgNdb_; }
-            if (!bgOwns) {
-                LOGI("[NDB] last listener left — the receiver goes back to where it was");
-                ndbLeave(false);
-                noteModeAutoLeft("ndb");
-            }
+            // ★ V12 2026-10-27: background decoding never puts the radio in NDB mode any more (its NDB skimmer is a VFO)
+            LOGI("[NDB] last listener left — the receiver goes back to where it was");
+            ndbLeave(false);
+            noteModeAutoLeft("ndb");
         }
         if (g_ismMode.load(std::memory_order_relaxed)) {
             // ★★ V12: unless background decoding put it there (an ISM profile) — that one ends when a listener ARRIVES

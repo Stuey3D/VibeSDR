@@ -25,7 +25,10 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
+#include <condition_variable>
+#include <ctime>
 
 namespace vibendb {
 
@@ -129,9 +132,63 @@ public:
         run_.store(true);
         tap_.start([this](const cf32* x, int n, double r, double c) { onSlice(x, n, r, c); });
     }
+    /** ★★ V12 2026-10-27 — FED SLICES: background decoding's NDB skimmer VFO (vibe_bgdecode.h). The runner already cuts
+     *  every VFO's slice off ONE forward FFT of the capture, so this service makes no tap of its own: feedSlice() is a
+     *  copy into a two-second queue (the oldest dropped and counted, never a wait — the runner's worker must not stall on
+     *  a beacon), and a thread of its own at decoder priority runs the same skimmer, the same report and the same gallery
+     *  sink a listener's NDB mode does. `rate` is the capture's, for the report; [loHz, hiHz] is what the slice covers. */
+    void startFed(double rate, double hwCentreHz, double loHz, double hiHz, bool havePos, double lat, double lon,
+                  std::shared_ptr<Sink> sink = nullptr) {
+        stop();
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            rate_ = rate; hw_ = hwCentreHz; lo_ = loHz; hi_ = hiHz; havePos_ = havePos; lat_ = lat; lon_ = lon;
+            sink_ = std::move(sink);
+            sk_.reset(); sliceRate_ = 0; sliceCentre_ = 0;
+            report_.clear(); copy_.clear(); copySeq_ = 0;
+            started_ = nowUtc();
+        }
+        { std::lock_guard<std::mutex> lk(fqM_); fq_.clear(); fqSec_ = 0; fedStop_ = false; }
+        fed_ = true;
+        run_.store(true);
+        fedTh_ = std::thread([this] { fedLoop(); });
+    }
+    /** From the runner's worker: copy and return. */
+    void feedSlice(const cf32* x, int n, double rate, double centre) {
+        if (!run_.load(std::memory_order_relaxed) || !fed_ || n <= 0 || !(rate > 0)) return;
+        FedBlock b; b.v.assign(x, x + n); b.rate = rate; b.centre = centre;
+        {
+            std::lock_guard<std::mutex> lk(fqM_);
+            fqSec_ += (double)n / rate;
+            fq_.push_back(std::move(b));
+            while (fq_.size() > 1 && fqSec_ > 2.0) {
+                fqSec_ -= (double)fq_.front().v.size() / fq_.front().rate;
+                fq_.pop_front();
+                fedDropped_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        fqCv_.notify_one();
+    }
+    /** ★ The radio moved under a fed skimmer (a listener's dial, background keeping on in range): what the slice covers
+     *  and where the hardware's DC is now. The skimmer is rebuilt on the next slice; the day's log and cards carry on. */
+    void aimFed(double hwCentreHz, double loHz, double hiHz) {
+        std::lock_guard<std::mutex> wk(work_);
+        std::lock_guard<std::mutex> lk(m_);
+        hw_ = hwCentreHz; lo_ = loHz; hi_ = hiHz;
+        sk_.reset(); sliceRate_ = 0; sliceCentre_ = 0;
+    }
+    /** ★ CPU the fed thread has spent decoding (ns, its own thread clock) — the admin page's per-VFO figure. */
+    uint64_t fedCpuNs() const { return fedCpu_.load(std::memory_order_relaxed); }
+    /** ★ Seconds of slices waiting for the fed thread (a test paces its feed by it). */
+    double fedQueuedSec() { std::lock_guard<std::mutex> lk(fqM_); return fqSec_; }
     void stop() {
         if (!run_.exchange(false)) return;
-        tap_.stop();
+        if (fed_) {
+            { std::lock_guard<std::mutex> lk(fqM_); fedStop_ = true; fq_.clear(); fqSec_ = 0; }
+            fqCv_.notify_all();
+            if (fedTh_.joinable()) fedTh_.join();
+            fed_ = false;
+        } else tap_.stop();
         std::shared_ptr<Sink> s;
         { std::lock_guard<std::mutex> lk(m_); s.swap(sink_); sk_.reset(); }
         if (s) s->finish();
@@ -139,7 +196,7 @@ public:
     bool running() const { return run_.load(std::memory_order_relaxed); }
     /** From the DSP thread: copy and return (WideTap's bounded queue). */
     void feed(const cf32* iq, int n) { if (run_.load(std::memory_order_relaxed)) tap_.feed(iq, n); }
-    uint64_t droppedBlocks() const { return tap_.droppedBlocks(); }
+    uint64_t droppedBlocks() const { return tap_.droppedBlocks() + fedDropped_.load(std::memory_order_relaxed); }
     /** The last report — {"type":"ndb",…} — or "" before the first. A copy: never waits on the decoder. */
     std::string report() const { std::lock_guard<std::mutex> lk(m_); return report_; }
     /** For the admin line: "12 beacons identified of 41 carriers". */
@@ -314,7 +371,7 @@ private:
         std::snprintf(b, sizeof b, "{\"type\":\"ndb\",\"centre\":%.0f,\"lo\":%.0f,\"hi\":%.0f,\"rate\":%.0f,\"now\":%lld,\"carriers\":%d,\"identified\":%d,"
                       "\"published\":%d,\"heardIn\":%d,\"pos\":%s,\"dropped\":%llu,\"bin\":%.2f,\"source\":\"%s\"",
                       hw_, lo_, hi_, rate_, (long long)nowS, carriers, ident, published, heardIn, havePos_ ? "true" : "false",
-                      (unsigned long long)tap_.droppedBlocks(), sk_->binHzActual(), jsonEsc(kNavaidSource).c_str());
+                      (unsigned long long)droppedBlocks(), sk_->binHzActual(), jsonEsc(kNavaidSource).c_str());
         o += b;
         if (far > 0) { std::snprintf(b, sizeof b, ",\"far\":{\"ident\":\"%s\",\"km\":%.0f}", cleanText(farIdent, 6).c_str(), far); o += b; }
         o += ",\"beacons\":[";
@@ -387,6 +444,39 @@ private:
         // ★ the gallery's copy OUTSIDE the report lock: a report() asked for meanwhile never waits on a file
         if (sink_) { for (const auto& h : toSink) sink_->heard(h, nowS); sink_->tick(); }
     }
+
+    /** ★ The fed thread (startFed): slices off the runner's queue, decoded here at decoder priority. */
+    void fedLoop() {
+        vibeDecoderThread("vibe-bgndb");
+        for (;;) {
+            FedBlock b;
+            {
+                std::unique_lock<std::mutex> lk(fqM_);
+                fqCv_.wait_for(lk, std::chrono::milliseconds(500), [this] { return !fq_.empty() || fedStop_; });
+                if (fedStop_) return;
+                if (fq_.empty()) continue;
+                b = std::move(fq_.front()); fq_.pop_front();
+                fqSec_ -= (double)b.v.size() / b.rate;
+            }
+            const uint64_t a = threadCpuNs();
+            onSlice(b.v.data(), (int)b.v.size(), b.rate, b.centre);
+            fedCpu_.fetch_add(threadCpuNs() - a, std::memory_order_relaxed);
+        }
+    }
+    static uint64_t threadCpuNs() {
+        timespec ts{};
+        if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) return 0;
+        return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+    }
+    struct FedBlock { std::vector<cf32> v; double rate = 0, centre = 0; };
+    bool fed_ = false;
+    std::thread fedTh_;
+    std::mutex fqM_;
+    std::condition_variable fqCv_;
+    std::deque<FedBlock> fq_;
+    double fqSec_ = 0;
+    bool fedStop_ = false;
+    std::atomic<uint64_t> fedDropped_{0}, fedCpu_{0};
 
     vibe::WideTap tap_;
     std::atomic<bool> run_{false};
