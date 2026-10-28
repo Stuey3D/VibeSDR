@@ -241,6 +241,60 @@ int main() {
         CHECK(same == (int)oldHead, "zoom in then out: %d of %d old rows restored byte for byte", same, (int)oldHead);
         rlImage(img); delete e;
     }
+    // ── 4c. V12 THE FULL-CAPTURE LAYER (wf_wide.h): zoom in AWAY from a carrier with SPWB rows arriving on the native
+    //        socket, then back out — every row written meanwhile shows the carrier at its true column, from the layer.
+    //        CONTROL: the same feed with no SPWB (an older server) allocates nothing and leaves the strip in black. ──
+    for (int withWide = 1; withWide >= 0; withWide--) {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78;
+        const double CAPC = 100e6, CAPS = 2.4e6, CAR = 99.4e6;   // the capture; the carrier 600 kHz below its centre
+        e->setConfig(c); e->setView(CAPC, CAPS);
+        // the SPWB the server sends: a -108 dB floor (sigma 1 dB), the carrier's cell at -40 dB, one bin wide
+        std::vector<uint8_t> w(32 + 256, 0);
+        w[0] = 'S'; w[1] = 'P'; w[2] = 'W'; w[3] = 'B'; w[4] = 2;
+        { const uint64_t cc = (uint64_t)CAPC; for (int i = 0; i < 8; i++) w[14 + i] = (uint8_t)(cc >> (8 * i));
+          const uint32_t sp = (uint32_t)CAPS; for (int i = 0; i < 4; i++) w[22 + i] = (uint8_t)(sp >> (8 * i));
+          w[26] = 128; w[28] = 0; w[29] = 4;   // F 128, C 1024
+          for (int i = 0; i < 128; i++) { w[32 + i] = 148; w[32 + 128 + i] = 10; }
+          const double cf = (CAR - (CAPC - CAPS / 2)) / CAPS * 1024; int cell = (int)std::floor(cf), d = cell + 1, P = 0;
+          while (d > 255) { w.push_back(255); w.push_back(0); w.push_back(0); d -= 255; P++; }
+          w.push_back((uint8_t)d); w.push_back(216); w.push_back((uint8_t)std::min(15, (int)std::floor((cf - cell) * 16))); P++;
+          w[30] = (uint8_t)P; }
+        void* img = nullptr; double head = 0; int fed = 0;
+        auto feed = [&](int frames, double vc, double bw) {
+            e->setView(vc, bw);
+            for (int f = 0; f < frames; f++, fed++) {
+                const int bin = (int)std::floor((CAR - (vc - bw / 2)) / (bw / 1024));
+                auto b = frame(1024, bin >= 0 && bin < 1024 ? bin : -1);
+                if (withWide && bw < CAPS * 0.98 && fed % 4 == 0) e->pushWideNative(w.data(), w.size());
+                e->pushFrameNative(b.data(), 1024, vc, bw, vc);
+                run(e, 50);
+                UiUpdate u;
+                if (e->pollUi(u)) { if (u.image) { if (img) rlImage(img); img = u.image; head = u.head; } if (u.peakPath) rlPath(u.peakPath); }
+            }
+        };
+        feed(10, CAPC, CAPS);
+        const double h0 = head;
+        feed(30, 100.3e6, 200e3);                  // zoomed in, 700 kHz from the carrier
+        const double h1 = head;
+        feed(4, CAPC, CAPS);                       // back out
+        const int want = (int)std::floor((CAR - (CAPC - CAPS / 2)) / CAPS * 1024);   // 256
+        int at = 0, rows = 0, zeros = 0;
+        for (double h = h0 + 4; h <= h1 - 2; h++) {   // (the jitter buffer: skip the rows either side of the switch)
+            const uint8_t* r = rowOf((FakeImage*)img, h); rows++;
+            int a = -1, b = -1; for (int x = 0; x < 1024; x++) { if (r[x] > 150) { if (a < 0) a = x; b = x; } if (x < 500 && r[x] == 0) zeros++; }
+            if (a >= 0 && a >= want - 2 && b <= want + 2) at++;
+        }
+        std::printf("  the layer (engine, %s): %d of %d zoomed rows show the carrier at %d, %d black texels left of it; off %.2f dB\n",
+                    withWide ? "SPWB" : "older server", at, rows, want, zeros, e->wideOffForTest());
+        if (withWide) {
+            CHECK(e->layerForTest() != nullptr && rows >= 20 && at == rows, "the layer: zoom in away and out — %d of %d zoomed rows show the carrier at %d", at, rows, want);
+            CHECK(std::fabs(e->wideOffForTest()) < 2, "the layer's floor offset (%.2f dB) matches the detailed median", e->wideOffForTest());
+        } else {
+            CHECK(e->layerForTest() == nullptr && at == 0 && zeros > 0, "control (older server): no layer allocated, the strip in black (%d shown, %d black)", at, zeros);
+        }
+        rlImage(img); delete e;
+    }
     // ── 5. Covered: rows go into the ring, no images; uncover publishes ONE ──
     {
         auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);

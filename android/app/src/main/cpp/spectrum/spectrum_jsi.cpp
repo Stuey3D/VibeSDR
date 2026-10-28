@@ -88,6 +88,17 @@ public:
             en.pushFrame(bins, (int)len, a[1].asNumber(), a[2].asNumber(), tc);
             return jsi::Value::undefined();
         });
+        if (name == "pushWide") return fn(1, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            // pushWide(frame: Uint8Array) — ★ V12 an SPWB full-capture row the JS socket received (wf_wide.h)
+            if (c < 1 || !a[0].isObject()) return jsi::Value::undefined();
+            const jsi::Object arr = a[0].asObject(r);
+            const jsi::ArrayBuffer buf = arr.getProperty(r, "buffer").asObject(r).getArrayBuffer(r);
+            const size_t off = (size_t)arr.getProperty(r, "byteOffset").asNumber();
+            const size_t len = (size_t)arr.getProperty(r, "length").asNumber();
+            if (off + len > buf.size(r)) return jsi::Value::undefined();
+            en.pushWide(buf.data(r) + off, len);
+            return jsi::Value::undefined();
+        });
         if (name == "setView") return fn(2, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
             if (c >= 2) en.setView(a[0].asNumber(), a[1].asNumber());
             return jsi::Value::undefined();

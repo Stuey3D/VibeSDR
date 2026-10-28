@@ -18,7 +18,9 @@
 //    zoom step, on the engine thread; a 1 KiB copy per row while a zoomed history is on screen. GPU: nothing.
 #pragma once
 #include "wf_motion.h"
+#include "wf_wide.h"   // ★ V12 the full-capture layer the fan fills from
 #include <algorithm>
+#include <memory>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -51,6 +53,7 @@ struct FanState {
     double validFrom = 0;          // oldest frame whose displayed row is current
     std::vector<int32_t> lo, hi;
     double stepK = 1, stepC = 0;   // the screen move of every fan since the last takeFanStep: x_old = stepC + stepK·x_new
+    std::unique_ptr<LayerRing> layer;   // ★ V12 the full-capture layer (wf_wide.h) — null until the first SPWB
     explicit FanState(int rows = 0) : xfA(rows, 1.0), xfB(rows, 0.0) {}
 };
 
@@ -85,14 +88,18 @@ inline void fanRegen(FanState& st, const uint8_t* ring, int n, int rows, double 
         if (a == 1 && b == 0) { std::memcpy(disp + at, ring + at, n); continue; }
         if (!(a == ta && b == tb)) { fanTable(a, b, n, lo, hi); ta = a; tb = b; }
         const uint8_t* s = ring + at; uint8_t* d = disp + at;
-        if (a <= 1) { for (int x = 0; x < n; x++) { const int32_t l = lo[x]; d[x] = l < 0 ? 0 : s[l]; } continue; }
-        for (int x = 0; x < n; x++) {
-            const int32_t l = lo[x];
-            if (l < 0) { d[x] = 0; continue; }
-            uint8_t m = s[l];
-            for (int32_t q = l + 1; q <= hi[x]; q++) if (s[q] > m) m = s[q];
-            d[x] = m;
+        if (a <= 1) { for (int x = 0; x < n; x++) { const int32_t l = lo[x]; d[x] = l < 0 ? 0 : s[l]; } }
+        else {
+            for (int x = 0; x < n; x++) {
+                const int32_t l = lo[x];
+                if (l < 0) { d[x] = 0; continue; }
+                uint8_t m = s[l];
+                for (int32_t q = l + 1; q <= hi[x]; q++) if (s[q] > m) m = s[q];
+                d[x] = m;
+            }
         }
+        // ★★ V12: outside the detailed extent, the row's own full-capture layer through the same map (wf_wide.h)
+        if (st.layer) layerFillRow(*st.layer, r, a, b, n, d, lo);
     }
 }
 
@@ -142,9 +149,10 @@ inline const uint8_t* wfImageBytes(FanState& st, const MotionState& ms, uint8_t*
 
 /** pushRow's whole placement (WaterfallView's placeRow): slide onto the view, fan on a span change or a jump, keep the
  *  display in step, note the placement and the move from the row before (MOTION). `ring` is n × (rows + MOTION_ROWS).
- *  `frames` = rows written before this one. Returns the slot written. */
+ *  `frames` = rows written before this one; `startOut` receives column 0's Hz (the layer's placement). Returns the slot. */
 inline int placeRow(uint8_t* ring, int rows, int n, double frames, const uint8_t* row, double rowCenterHz, double rowHzPerBin,
-                    double viewCenterHz, double viewBwHz, MotionState& motion, FanState& fan, int visible = -1) {
+                    double viewCenterHz, double viewBwHz, MotionState& motion, FanState& fan, int visible = -1,
+                    double* startOut = nullptr) {
     if (visible < 0) visible = rows;
     const int slot = (int)std::fmod(frames, (double)rows);
     double off = 0;
@@ -156,6 +164,7 @@ inline int placeRow(uint8_t* ring, int rows, int n, double frames, const uint8_t
         }
     }
     const double start = placedStartHz(rowCenterHz, rowHzPerBin, off, n);
+    if (startOut) *startOut = start;   // ★ V12: where the layer row goes (its k and m — wf_wide.h)
     const bool fanned = rowHzPerBin > 0
         && fanNoteRow(fan, ring, (size_t)(rows + MOTION_ROWS) * n, n, rows, frames, visible, start, rowHzPerBin * n);
     uint8_t* dst = ring + (size_t)slot * n;

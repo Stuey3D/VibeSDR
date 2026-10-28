@@ -89,6 +89,26 @@ void SpectrumEngine::pushFrameImpl(const float* bins, int n, double centerHz, do
     cv_.notify_one();
 }
 
+void SpectrumEngine::pushWideNative(const uint8_t* p, size_t len) {
+    if (!p || len < vibewf::WIDE_HDR) return;
+    pushWideImpl(p, len);
+}
+void SpectrumEngine::pushWide(const uint8_t* p, size_t len) {
+    if (!p || len < vibewf::WIDE_HDR) return;
+    {
+        std::lock_guard<std::mutex> lk(mx_);
+        if (now() < nativeFedUntil_) return;   // the native socket gave us this row already
+    }
+    pushWideImpl(p, len);
+}
+void SpectrumEngine::pushWideImpl(const uint8_t* p, size_t len) {
+    std::lock_guard<std::mutex> lk(mx_);
+    WideIn w; w.bytes.assign(p, p + len); w.at = now();
+    wideInbox_.push_back(std::move(w));
+    while (wideInbox_.size() > 4) wideInbox_.pop_front();   // only ever the newest picture matters
+    // ★ no wake: it is applied with the next frame, timed by its arrival (no extra engine work of its own)
+}
+
 void SpectrumEngine::setView(double c, double bw) { std::lock_guard<std::mutex> lk(mx_); viewCenterHz_ = c; viewBwHz_ = bw; }
 void SpectrumEngine::setConfig(const EngineConfig& c) { std::lock_guard<std::mutex> lk(mx_); cfg_ = c; }
 void SpectrumEngine::setSettings(const vibedsp::SpectrumProcessorSettings& s) {
@@ -155,6 +175,7 @@ void SpectrumEngine::testStep(double nowMs) { runDue(nowMs); }
 
 void SpectrumEngine::runDue(double now) {
     std::deque<Frame> arrived;
+    std::deque<WideIn> wides;
     bool applySettings = false;
     vibedsp::SpectrumProcessorSettings ps;
     bool wasCov = covNow_, wasBg = bgNow_;
@@ -163,6 +184,7 @@ void SpectrumEngine::runDue(double now) {
         cfgNow_ = cfg_; viewC_ = viewCenterHz_; viewBw_ = viewBwHz_; interactAt_ = lastInteractAt_;
         bgNow_ = bg_; covNow_ = covered_;
         arrived.swap(inbox_);
+        wides.swap(wideInbox_);
         if (settingsDirty_) { ps = pendingSettings_; settingsDirty_ = false; applySettings = true; }
     }
     if (applySettings) proc_.applySettings(ps);
@@ -185,6 +207,7 @@ void SpectrumEngine::runDue(double now) {
         std::lock_guard<std::mutex> lk(mx_);
         if (nativeFedUntil_ > now + NATIVE_FED_MS) nativeFedUntil_ = 0;
     }
+    for (auto& w : wides) applyWide(w.bytes, w.at);   // ★ V12 before the frames: a row drawn now uses the newest picture
     for (auto& f : arrived) enqueue(std::move(f), f.arrivedMs);
     if (jbDueAt_ >= 0 && now >= jbDueAt_) { jbDueAt_ = -1; drain(now); }
     if (extraDueAt_ >= 0 && now >= extraDueAt_) {
@@ -194,6 +217,16 @@ void SpectrumEngine::runDue(double now) {
     }
     std::lock_guard<std::mutex> lk(mx_);
     while (framePool_.size() > 6) framePool_.pop_back();
+}
+
+// ★★ V12 a full-capture row arrived (at `at`): the newest picture of the capture, and the layer ring at the first one.
+void SpectrumEngine::applyWide(const std::vector<uint8_t>& bytes, double at) {
+    if (!vibewf::parseWide(bytes.data(), bytes.size(), wideRow_)) return;
+    if (!wide_) wide_ = std::make_unique<vibewf::WideState>();
+    vibewf::wideArrive(*wide_, wideRow_, at, placedLo_, placedSpan_, detP50_);
+    const int F = (int)wideRow_.floor.size(), C = wideRow_.cells;
+    // ★ allocated at the FIRST row only (~0.8 MB), and again only if the server's grid ever changed
+    if (!fan_.layer || fan_.layer->F != F || fan_.layer->C != C) fan_.layer = std::make_unique<vibewf::LayerRing>(RING_ROWS, F, C);
 }
 
 // enqueueFrame (WaterfallView 1612-1637)
@@ -249,6 +282,7 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     if (n == 0 || cfg.width < 4) return;
     const bool interacting = cfg.smoothTune && now - interactAt_ < 1000;
     const vibedsp::SpectrumFrameOut fr = proc_.process(f.bins.data(), n, f.centerHz, f.bwHz, interacting, now);
+    if (wide_) detP50_ = vibewf::medianOf(f.bins.data(), n, p50Scratch_);   // ★ V12 the layer's floor match
 
     {   // setLiveRange, 2 dB hysteresis
         const int rMin = (int)jround(fr.dbMin), rMax = (int)jround(fr.dbMax);
@@ -356,7 +390,18 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
     // ★★★ THE ZOOM FAN (2026-10-28): a row at a different SPAN re-maps every stored row to the new view, so a zoom fans
     //    the history in and out instead of leaving slices of the old scale. The stored ring is never rewritten; the
     //    image is made from the displayed ring (wf_zoom_fan.h fanImage), regenerated through per-row maps on a zoom.
-    vibewf::placeRow(ring_.data(), RING_ROWS, n, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_, motion_, fan_);
+    double start = NAN;
+    const int slot = vibewf::placeRow(ring_.data(), RING_ROWS, n, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_,
+                                      motion_, fan_, -1, &start);
+    placedLo_ = start; placedSpan_ = rowHzPerBin * n;
+    // ★★ V12 THE FULL-CAPTURE LAYER: this row's layer row at the same slot, in capture space (wf_wide.h) — only once a
+    //    server has sent one. Through the detailed rows' own dB → index mapping (proc_'s range and brightness).
+    if (fan_.layer) {
+        const double w = cfgNow_.width;
+        fan_.layer->fadeTx = w > 0 ? std::max(2.0, std::min(24.0, 6.0 * RING_W / w)) : 6.0;   // ~6 pt soft edge
+        const vibewf::ToIdx toIdx(proc_.dbMin(), proc_.dbMax(), proc_.settings().wfBrightness, wide_ ? wide_->off : 0);
+        vibewf::layerWriteRow(*fan_.layer, slot, wide_.get(), placedLo_, placedSpan_, now(), toIdx);
+    }
     frameCount_ += 1;
     if (covNow_ || !publish) { ringDirty_ = true; return; }
     publishRing();
