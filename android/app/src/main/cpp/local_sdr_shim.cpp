@@ -18583,7 +18583,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   + ",\"minProto\":" + std::to_string(VS_MIN_PROTO) + ",\"webUrl\":\"/\"}"
                 : busy
                 ? "{\"allowed\":false,\"reason\":\"in-use\"}"
-                : "{\"allowed\":true}";
+                : "{\"allowed\":true,\"wide\":2}";   // ★ V12: the full-capture row (SPWB v2) is offered — the app asks with &wide=1 on its FIRST socket
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
