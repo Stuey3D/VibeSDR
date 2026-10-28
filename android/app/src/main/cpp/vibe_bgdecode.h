@@ -886,6 +886,26 @@ private:
     int fd_ = -1;
 };
 
+// ── An NDB skimmer VFO's decoder (V12 2026-10-27) ───────────────────────────────────────────────────────────────
+/** ★★ What the runner hands an NDB skimmer VFO's slice to. The decoder itself (vibendb::Service in its fed-slice mode, the
+ *  listener's own skimmer, beacon list and gallery cards — vibe_bgdecode_ndb.h) is MADE by the host through
+ *  Params::ndbMake, so this header (and every test of the runner) does not carry the beacon list; a host without it simply
+ *  shows the VFO "not available on this server". Made when the VFO starts (its slot claimed), stopped when it pauses or
+ *  the run ends — the stop writes the gallery's cards (the last-10-minute card "to HH:MM", the hour so far, partial). */
+class NdbFeed {
+public:
+    virtual ~NdbFeed() = default;
+    /** From the runner's worker: copy and return — never decode on its thread. */
+    virtual void feedSlice(const vibedsp::cf32* x, int n, double rate, double centreRfHz) = 0;
+    /** The radio moved: what the slice covers now, and where the hardware's DC is. */
+    virtual void aim(double hwCentreHz, double loHz, double hiHz) = 0;
+    virtual void stop() = 0;
+    virtual uint64_t cpuNs() const = 0;          ///< its decode thread's own CPU clock
+    virtual uint64_t droppedBlocks() const = 0;  ///< slices its queue dropped (it fell behind)
+    virtual std::string brief() const = 0;       ///< "12 beacons identified of 41 carriers"
+};
+struct NdbStart { int profileIdx = 0; double rate = 0, hwCentreHz = 0, loHz = 0, hiHz = 0, lat = NAN, lon = NAN; };
+
 // ── The engine ──────────────────────────────────────────────────────────────────────────────────────────────────
 class BgRunner {
 public:
@@ -920,6 +940,13 @@ public:
         std::function<double()> bandBudgetUnits;
         std::function<bool()> loaded;
         std::function<std::string()> bandWhyNot;
+        /** ★★ V12 2026-10-27 — AN NDB SKIMMER VFO: `ndbMake` makes its decoder (empty = this host has none: the VFO is
+         *  shown not available, never run); `ndbReach` the part of the LF band this radio reaches (empty = all of it);
+         *  `ndbWhyNot` non-empty = it may not run now, said on the VFO (the owner switched NDB off here; a listener's own
+         *  NDB mode has the band — their skimmer keeps the gallery's NDB cards meanwhile, never two at once). */
+        std::function<std::shared_ptr<NdbFeed>(const NdbStart&)> ndbMake;
+        std::function<bool(double& lo, double& hi)> ndbReach;
+        std::function<std::string()> ndbWhyNot;
     };
     BgRunner() = default;
     ~BgRunner() { stop(false); }
@@ -953,6 +980,11 @@ public:
                 else { c->bandCentre = c->vfo.hz; c->blockWhy = "not in a band the digital modes use"; }
                 if (p_.bandWhyNot) { const std::string w = p_.bandWhyNot(); if (!w.empty()) c->blockWhy = w; }
             }
+            /* ★★ AN NDB SKIMMER VFO (V12 2026-10-27) is fed IQ too: ONE slice over as much of the NDB band as the capture
+             *  holds (place() works it out, and again whenever the radio moves), cut and tapered exactly as the listener's
+             *  NDB tap cuts it (vibe_wide_tap.h), to the host's skimmer (Params::ndbMake). */
+            c->ndb = isNdbSkim(c->vfo);
+            if (c->ndb && !p_.ndbMake) c->blockWhy = "the NDB skimmer is not available on this server";
             const double need = c->skim ? passbandHz(c->vfo) / 0.92 : std::max(passbandHz(c->vfo) * 2.5, 24000.0);
             int b = 64;
             while (b < p_.fftSize && p_.sampleRate * (double)b / (double)p_.fftSize < need) b <<= 1;
@@ -960,7 +992,7 @@ public:
             if (c->band) c->bins = bandSliceBins(p_.sampleRate, p_.fftSize, std::min(DecoderHostBandWidth(c->bandCentre), p_.sampleRate * 0.8));
             c->rate = p_.sampleRate * (double)c->bins / (double)p_.fftSize;
             c->slice.assign((size_t)c->bins, cf32{0.0f, 0.0f});
-            if (!c->skim && !c->band) {
+            if (!c->skim && !c->band && !c->ndb) {
                 c->rx.reset(new vibedsp::RxPipeline());
                 vibedsp::RxPipeline::Callbacks cb{};
                 cb.ctx = c.get();
@@ -1094,7 +1126,7 @@ public:
         { std::lock_guard<std::mutex> lk(qm_); run_.store(false); q_.clear(); qSamples_ = 0; }
         qcv_.notify_all();
         if (th_.joinable()) th_.join();
-        for (auto& c : chans_) if (c->host) c->host->shutdown();
+        for (auto& c : chans_) { if (c->host) c->host->shutdown(); stopNdb(*c); }
         chans_.clear();
         if (p_.registry) p_.registry->publish({});
         if (was && sayIt) say("background decoding stopped");
@@ -1104,6 +1136,8 @@ public:
     int  decodersPaused() const { int n = 0; for (auto& c : chans_) if (!c->decoding) ++n; return n; }
     /** ★ Test seam: run the worker's slot housekeeping now (pause requests, resumes) rather than within its 0.5 s. */
     void slotTickForTest() { slotTick(true); }
+    /** ★ Test seam: capture samples waiting for the worker (a test paces its feed by it rather than by sleeps). */
+    size_t queuedForTest() { std::lock_guard<std::mutex> lk(qm_); return qSamples_; }
     int  decodersRunning() const { int n = 0; for (auto& c : chans_) if (c->decoding) ++n; return n; }
     uint64_t droppedSamples() const { return dropped_.load(); }
     uint64_t fedSamples() const { uint64_t n = 0; for (auto& c : chans_) if (c->host) n += c->host->fedSamples(); return n; }
@@ -1144,7 +1178,11 @@ public:
         std::lock_guard<std::mutex> ck(cpuMtx_);
         const auto now = std::chrono::steady_clock::now();
         CpuSample cur{ now, sharedNs_.load(std::memory_order_relaxed), {} };
-        for (auto& c : chans_) cur.vfo.push_back(c->demodNs.load(std::memory_order_relaxed) + (c->host ? c->host->cpuNs() : 0));
+        for (auto& c : chans_) {
+            uint64_t ndbNs = 0;
+            if (c->ndb) { std::lock_guard<std::mutex> nl(c->ndbM); ndbNs = c->ndbCpuDone + (c->ndbFeed ? c->ndbFeed->cpuNs() : 0); }
+            cur.vfo.push_back(c->demodNs.load(std::memory_order_relaxed) + (c->host ? c->host->cpuNs() : 0) + ndbNs);
+        }
         if (!cpu_.empty() && cpu_.back().vfo.size() != cur.vfo.size()) cpu_.clear();   // ★ a restart: new VFOs
         if (cpu_.empty() || now - cpu_.back().t >= std::chrono::milliseconds(1500)) cpu_.push_back(cur);
         while (cpu_.size() > 2 && now - cpu_[1].t >= std::chrono::seconds(10)) cpu_.pop_front();
@@ -1163,8 +1201,9 @@ public:
         uint64_t sumNow = cur.shared, sumBase = base ? base->shared : 0;
         j += ",\"channelsCpuPct\":" + pct(cur.shared, sumBase) + ",\"vfos\":[";
         for (size_t i = 0; i < chans_.size(); i++) {
-            const auto& c = *chans_[i];
+            auto& c = *chans_[i];
             const DecoderDef* d = decoderDef(c.vfo.dec);
+            const auto nf = c.ndb ? c.feed() : nullptr;
             const std::string state = !c.inWindow ? "out" : c.decoding ? "running" : "paused";
             const int fs = c.decoding && c.host ? c.host->fskState() : -1;
             const char* lock = fs < 0 ? "" : fs == 3 ? "locked" : fs == 0 ? "no signal" : "hunting";
@@ -1177,8 +1216,11 @@ public:
                + ",\"cpuPct\":" + pct(cur.vfo[i], base ? base->vfo[i] : 0)
                // ★ V12: a Band VFO names its band and what its governor runs now ("FT8 7.074, FT4 7.0475 …")
                + (c.band ? ",\"band\":\"" + gallery::jsonEsc(c.bandName) + "\",\"modes\":\"" + gallery::jsonEsc(c.decoding && c.host ? c.host->spotsDescribe() : std::string()) + "\"" : std::string())
+               // ★ V12: an NDB skimmer names the part of the band it covers and how it is doing ("12 beacons identified of 41 carriers")
+               + (c.ndb ? ",\"ndbLo\":" + std::to_string((long long)std::llround(c.ndbLo)) + ",\"ndbHi\":" + std::to_string((long long)std::llround(c.ndbHi))
+                          + ",\"ndb\":\"" + gallery::jsonEsc(nf ? nf->brief() : std::string()) + "\"" : std::string())
                // ★ FT8/FT4: the summary's running count, so a quiet card is not read as "no decodes"
-               + (d && (!*d->ext || d->widthHz > 0) ? ",\"spots\":" + std::to_string((unsigned long long)c.liveSpots->load(std::memory_order_relaxed))
+               + (d && !c.ndb && (!*d->ext || d->widthHz > 0) ?",\"spots\":" + std::to_string((unsigned long long)c.liveSpots->load(std::memory_order_relaxed))
                                 + ",\"countries\":" + std::to_string((unsigned long long)c.liveCountries->load(std::memory_order_relaxed)) : std::string())
                + "}";
         }
@@ -1206,6 +1248,15 @@ private:
         struct Extra { std::vector<cf32> slice; std::vector<float> pw; vibedsp::Channelizer::ExtractCtx ctx; double gapCarry = 0; };
         Extra bx[kMaxExtraSlices];
         double gapCarry = 0;
+        // ★ V12 2026-10-27: an NDB skimmer VFO — the part of the band its slice covers now, its decoder (made on start,
+        //   stopped on pause — under ndbM, as the admin page reads it from another thread), and the decoder slot it holds.
+        bool ndb = false;
+        double ndbLo = 0, ndbHi = 0;
+        std::mutex ndbM;
+        std::shared_ptr<NdbFeed> ndbFeed;
+        int ndbSlot = -1;
+        uint64_t ndbCpuDone = 0, ndbDropDone = 0, ndbLastDrop = 0;   // ★ stopped feeds' CPU and drops, so the counters only rise
+        std::shared_ptr<NdbFeed> feed() { std::lock_guard<std::mutex> lk(ndbM); return ndbFeed; }
         double sliceRf = 0;                          // ★ the RF frequency at the centre of this VFO's slice
         bool decoding = false;
         bool inWindow = true;    // ★ inside what the radio captures now (a listener's dial may have moved it away)
@@ -1221,6 +1272,7 @@ private:
     /** Cut this VFO's channel against the current centre, and say whether it is inside the window at all. */
     void place(Chan& c) {
         const double binHz = p_.sampleRate / (double)p_.fftSize;
+        if (c.ndb) { placeNdb(c, binHz); return; }
         const double at = c.band ? c.bandCentre : c.vfo.hz;
         const double off = at - p_.centreHz - p_.hwOffsetHz;
         c.inWindow = std::fabs(at - p_.centreHz) <= halfWindowHz(p_.sampleRate);
@@ -1234,6 +1286,58 @@ private:
         c.rx->setTune(resid, c.vfo.mode == "lsb" ? vibedsp::RxPipeline::Mode::SSB_LSB
                            : c.vfo.mode == "nfm" ? vibedsp::RxPipeline::Mode::NFM : vibedsp::RxPipeline::Mode::SSB_USB,
                       passbandHz(c.vfo));
+    }
+    /** ★★ An NDB skimmer VFO against the current centre: the part of 190–535 kHz the capture holds (ndbSegment — the same
+     *  rule the save checks, clipped to what the radio reaches), and a slice over it sized and centred as the listener's
+     *  NDB tap cuts one (the segment + 2.6 kHz, over 0.92 of the slice's rate, a power-of-two of bins). Under 100 kHz of
+     *  the band in the window = out of the window, paused like any VFO a listener's dial left behind. */
+    void placeNdb(Chan& c, double binHz) {
+        double rl = 0, rh = 0;
+        if (p_.ndbReach && !p_.ndbReach(rl, rh)) { rl = 1e12; rh = 0; }   // ★ reaches none of it
+        double lo = 0, hi = 0;
+        const bool ok = ndbSegment(p_.centreHz, p_.sampleRate, lo, hi, rl, rh);
+        c.inWindow = ok;
+        if (!ok) return;
+        const double width = hi - lo + 2600.0;
+        int b = 64;
+        while (b < p_.fftSize && p_.sampleRate * (double)b / (double)p_.fftSize < width / 0.92) b <<= 1;
+        b = std::min(b, p_.fftSize);
+        if (b != c.bins) { c.bins = b; c.slice.assign((size_t)b, cf32{0.0f, 0.0f}); c.ectx = vibedsp::Channelizer::ExtractCtx(); }
+        c.rate = p_.sampleRate * (double)c.bins / (double)p_.fftSize;
+        c.centreBin = (int)std::lround((0.5 * (lo + hi) - p_.centreHz - p_.hwOffsetHz) / binHz);
+        c.sliceRf = p_.centreHz + p_.hwOffsetHz + c.centreBin * binHz;
+        const bool moved = std::fabs(lo - c.ndbLo) > 1 || std::fabs(hi - c.ndbHi) > 1;
+        c.ndbLo = lo; c.ndbHi = hi;
+        if (moved) if (auto f = c.feed()) f->aim(p_.centreHz + p_.hwOffsetHz, lo, hi);
+    }
+    /** ★ Start an NDB skimmer VFO: a decoder slot, then its decoder (Params::ndbMake). */
+    void startNdb(Chan& c) {
+        c.decoding = false;
+        const std::string w = p_.ndbWhyNot ? p_.ndbWhyNot() : std::string();
+        if (!w.empty()) { c.pauseWhy = w; return; }
+        const int tok = p_.slots ? p_.slots->claim() : 0;
+        if (tok < 0) { c.pauseWhy = "waiting for a decoder slot (listeners come first)"; return; }
+        NdbStart s;
+        s.profileIdx = p_.profileIdx; s.rate = p_.sampleRate; s.hwCentreHz = p_.centreHz + p_.hwOffsetHz;
+        s.loHz = c.ndbLo; s.hiHz = c.ndbHi; s.lat = p_.lat; s.lon = p_.lon;
+        std::shared_ptr<NdbFeed> f;
+        try { f = p_.ndbMake(s); } catch (const std::exception& ex) { say(std::string("background decoding: the NDB skimmer could not start: ") + ex.what()); }
+        if (!f) { if (p_.slots) p_.slots->release(tok); c.pauseWhy = "the NDB skimmer could not start"; return; }
+        { std::lock_guard<std::mutex> lk(c.ndbM); c.ndbFeed = std::move(f); }
+        c.ndbSlot = tok;
+        c.decoding = true;
+        c.pauseWhy.clear();
+    }
+    /** ★ Stop it: its decoder writes the gallery's cards (the last 10 minutes "to HH:MM", the hour so far), the slot back. */
+    void stopNdb(Chan& c) {
+        std::shared_ptr<NdbFeed> f;
+        { std::lock_guard<std::mutex> lk(c.ndbM); f = std::move(c.ndbFeed); c.ndbFeed.reset(); }
+        if (f) {
+            f->stop();
+            std::lock_guard<std::mutex> lk(c.ndbM);
+            c.ndbCpuDone += f->cpuNs(); c.ndbDropDone += f->droppedBlocks();
+        }
+        if (c.ndbSlot >= 0) { if (p_.slots) p_.slots->release(c.ndbSlot); c.ndbSlot = -1; }
     }
     /** ★ The channels the budget allows now (a locked radio's free user slots); a large number when there is none. */
     int budget() const { return p_.channelBudget ? std::max(0, p_.channelBudget()) : 1 << 20; }
@@ -1252,11 +1356,14 @@ private:
             if (runningCount() >= budget()) { c->pauseWhy = "waiting \xe2\x80\x94 every user slot of this radio is taken (listeners come first)"; say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 every user slot of this radio is taken (listeners come first)"); continue; }
             startOne(*c);
             if (c->decoding) ++started_;
+            else if (c->ndb && !c->pauseWhy.empty() && c->pauseWhy.find("decoder slot") == std::string::npos)
+                say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 " + c->pauseWhy);
             else say("background decoding: VFO " + name(*c) + " waiting \xe2\x80\x94 no decoder slot free (listeners come first)");
         }
     }
     void startOne(Chan& c) {
         const DecoderDef* d = decoderDef(c.vfo.dec);
+        if (c.ndb) { if (c.blockWhy.empty()) startNdb(c); return; }
         if (!d || !c.host || !c.blockWhy.empty()) return;
         // ★ FT8/FT4 is the host's spotter (its own slot), every other decoder its audio-extension decoder — and a Band
         //   VFO the same spotter in Band scope (every mode on the band, behind the governor).
@@ -1268,15 +1375,22 @@ private:
     /** ★ Pause one VFO for a listener: its decoder stops — the tap WRITES what it held (an RTTY buffer; a chart or
      *  picture in progress as PARTIAL) — and its slot is free. The channel keeps running, decoder-less (the host takes
      *  no audio while nothing runs), which is cheaper than tearing down and rebuilding the pipeline when it comes back. */
-    void pauseOne(Chan& c, const char* why = "a listener needed a decoder slot") {
-        if (!c.host || !c.decoding) return;
-        c.host->stop(); c.host->stopSpots();
+    void pauseOne(Chan& c, const std::string& why = "a listener needed a decoder slot") {
+        if (!c.decoding) return;
+        if (c.ndb) stopNdb(c);
+        else if (!c.host) return;
+        else { c.host->stop(); c.host->stopSpots(); }
         c.decoding = false;
         c.pauseWhy = why;
         say("background decoding: VFO " + name(c) + " paused \xe2\x80\x94 " + why);
     }
     std::string name(const Chan& c) const {
         const DecoderDef* d = decoderDef(c.vfo.dec);
+        // ★ An NDB skimmer has no frequency of its own: it is named by the part of the band it covers
+        if (c.ndb) {
+            char b[96]; std::snprintf(b, sizeof b, "%.0f\xe2\x80\x93%.0f kHz", c.ndbLo / 1e3, c.ndbHi / 1e3);
+            return std::to_string(c.index + 1) + " (" + (c.ndbHi > c.ndbLo ? std::string(b) : std::string("the NDB band")) + " " + (d ? d->label : "?") + ")";
+        }
         return std::to_string(c.index + 1) + " (" + khz(c.vfo.hz) + " " + (d ? d->label : "?") + ")";
     }
     void publish() {
@@ -1298,6 +1412,15 @@ private:
             if (!low) break;
             pauseOne(*low, "a listener took this radio's last user slot"); changed = true;
         }
+        // ★★ An NDB skimmer that may not run now (a listener's own NDB mode has the band; the owner switched NDB off): paused,
+        //    said why — it resumes by the ordinary path once the reason is gone.
+        std::string ndbWhy;
+        bool ndbWhyRead = false;
+        for (auto& c : chans_) {
+            if (!c->ndb || !c->decoding || !p_.ndbWhyNot) continue;
+            if (!ndbWhyRead) { ndbWhy = p_.ndbWhyNot(); ndbWhyRead = true; }
+            if (!ndbWhy.empty()) { pauseOne(*c, ndbWhy); changed = true; }
+        }
         for (int n = p_.registry ? p_.registry->takeDrops() : 0; n > 0; --n) {
             Chan* low = nullptr;
             for (auto& c : chans_) if (c->decoding) low = c.get();       // ★ rows are in rank order: the last running is the lowest
@@ -1312,6 +1435,10 @@ private:
             lastResume_ = now;
             for (auto& c : chans_) {
                 if (c->decoding || !c->inWindow || !c->blockWhy.empty()) continue;
+                if (c->ndb && p_.ndbWhyNot) {
+                    if (!ndbWhyRead) { ndbWhy = p_.ndbWhyNot(); ndbWhyRead = true; }
+                    if (!ndbWhy.empty()) { c->pauseWhy = ndbWhy; continue; }   // ★ not its turn — never blocks the VFOs below
+                }
                 if (!p_.slots || p_.slots->inUse() >= p_.slots->max() || runningCount() >= budget()) break;
                 const int best = p_.registry ? BgRegistry::bestPaused(p_.registry->dir()) : 0;
                 if (best && c->index + 1 > best) break;             // ★ a higher-ranked VFO on another radio is waiting
@@ -1361,6 +1488,13 @@ private:
                         say(b);
                     }
                     c->lastDrop = d;
+                    if (c->ndb) {
+                        uint64_t nd;
+                        { std::lock_guard<std::mutex> nl(c->ndbM); nd = c->ndbDropDone + (c->ndbFeed ? c->ndbFeed->droppedBlocks() : 0); }
+                        if (nd > c->ndbLastDrop) say("background decoding: VFO " + name(*c) + " \xe2\x80\x94 " + std::to_string((unsigned long long)(nd - c->ndbLastDrop))
+                                                     + " NDB slice(s) dropped in the last minute (its skimmer fell behind)");
+                        c->ndbLastDrop = nd;
+                    }
                 }
             }
             if (now - lastYieldCheck > std::chrono::milliseconds(500)) { lastYieldCheck = now; slotTick(); }
@@ -1387,7 +1521,11 @@ private:
                     if (!c->decoding) continue;          // ★ a paused or out-of-window channel costs nothing
                     const uint64_t a = vibeThreadCpuNs();
                     if (c->band) feedBand(*c, bins, bi, utc);
-                    else {
+                    else if (c->ndb) {
+                        // ★ V12: the NDB skimmer's slice — the same cut and taper as the listener's NDB tap, to its own queue
+                        const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
+                        if (got > 0) if (auto f = c->feed()) f->feedSlice(c->slice.data(), got, c->rate, c->sliceRf);
+                    } else {
                     const int got = chan_->extract(bins, c->centreBin, c->bins, c->slice.data(), c->ectx, bi);
                     if (got > 0) {
                         if (c->rx) c->rx->feed(c->slice.data(), got);

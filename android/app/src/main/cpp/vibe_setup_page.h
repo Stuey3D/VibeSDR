@@ -103,6 +103,11 @@ static const char* const kVibeSetupPage = R"HTML(<!doctype html>
   .bgVfo{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:6px 0}
   .bgVfo input{max-width:110px} .bgVfo select{width:auto}
   .bgVfo .hint{margin:0;flex-basis:100%}
+  /* ★ V12 2026-10-27 (Stuart): a row whose DECODER sets the frequency (the NDB skimmer, Band digital spots) greys its
+     frequency box and demodulator out — visibly, not just inert */
+  .bgVfo input:disabled,.bgVfo select:disabled{opacity:.4;cursor:not-allowed;filter:grayscale(1)}
+  .bgVfo .bgFixedUnit{opacity:.4}
+  .bgVfo select.bgBandPick{max-width:200px}
   .bgTimes{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}
   .bgTimes input{width:auto}
   button.linkish{background:none;border:none;color:var(--amber);padding:4px 0;text-decoration:underline;cursor:pointer}
@@ -1948,6 +1953,8 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             <option value="60">1 hour</option></select>
           the SDR will move to your selected RF Centre. Set an RF centre here and choose 1 or multiple VFO's and
           decoders for background decoding.
+          <span id="bgNdbLine">A VFO can also be the NDB skimmer &mdash; every beacon in as much of the 190&ndash;535 kHz
+          band as the profile&rsquo;s RF centre holds, beside the other VFOs.</span>
           <span id="bgIsmLine">Or let a profile decode ISM sensors (weather stations, tyre sensors, doorbells, and on 868 MHz
           water, heat and gas meters) on a whole band instead.</span>
           <br>The moment anybody connects, background decoding stops and the radio goes back to exactly where it was
@@ -5737,7 +5744,37 @@ const BG_DECODERS = [
   //    the VFO's frequency is in (7074 = 40 m), the listener's own Band mode behind its CPU governor, ONE summary card
   //    for the band. Offered only where this radio has a band at all and Band is not switched off here (bgBandOk).
   { id: "spots-band",   label: "Digital spots: Band (summary)", tone: 0,   modes: ["usb"], band: true },
+  // ★★ V12 2026-10-27 — THE NDB SKIMMER (Stuart: it runs BESIDE the other VFOs on the same capture — his Lenovo RSP at
+  //    1200 kHz / 3 MS/s holds 190–535 kHz whole). Every beacon in as much of the band as the RF centre holds; its row's
+  //    frequency and demodulator are greyed out (the decoder sets them), and it stores hz 0. Offered only where this radio
+  //    reaches LF (bgNdbOk) — never as a dead control on an RTL without direct sampling, a HackRF, an Airspy R2 or an Icom.
+  { id: "ndb-skim",     label: "NDB skimmer (summary)",        tone: 0,    modes: ["usb"], ndb: true },
 ];
+/** ★ V12 2026-10-27 (Stuart): a row whose DECODER sets the frequency — its frequency box and demodulator are greyed out. */
+function bgDecoderSetsFreq(dec) { return dec === "spots-band" || dec === "ndb-skim"; }
+/* ★★ The NDB band, as the server has it (vibe_bgdecode_config.h ndbSegment): what a skimmer VFO covers at a centre and a
+ *  rate — inside the guard every background VFO keeps from the capture's edge — and the least worth a decoder slot. */
+const BG_NDB_LO = 190000, BG_NDB_HI = 535000, BG_NDB_MIN = 100000, BG_NDB_LEGACY_CENTRE = 362750;
+function bgHalfWindow(rate) { return rate > 0 ? rate / 2 - Math.min(50000, rate * 0.15) - 3000 : 0; }
+function bgNdbSegment(centre, rate) {
+  const half = bgHalfWindow(rate);
+  if (!(centre > 0) || !(rate > 0)) return null;
+  const lo = Math.max(BG_NDB_LO, centre - half), hi = Math.min(BG_NDB_HI, centre + half);
+  return { lo: lo, hi: hi, ok: hi - lo >= BG_NDB_MIN };
+}
+/** The line under an NDB skimmer VFO: what it covers at this profile's centre, or why it cannot run. */
+function bgNdbHint(p, r0, locked) {
+  if (!bgNdbOk()) return { bad: true, text: "This radio cannot skim NDBs" + (bgNdbBlocked() ? " — NDB is switched off on it (Modes and decoders)." : " (an RTL needs direct sampling).") + " Choose another decoder or remove this VFO." };
+  const rate = locked && r0.lockRate > 0 ? r0.lockRate : (r0.rate || 0);
+  const centre = locked ? r0.lockFreq : p.centre;
+  const seg = bgNdbSegment(centre, rate);
+  const what = " The frequency and demodulator are set by the decoder. Every beacon heard goes to the gallery: the day’s heard log and map, the last 10 minutes and a card for every UTC hour.";
+  if (!seg) return { bad: false, text: "Every NDB beacon in as much of the 190–535 kHz band as the RF centre holds." + what };
+  if (!seg.ok) return { bad: true, text: "At " + (centre / 1e3).toFixed(1) + " kHz and " + Math.round(rate / 1e3) + " kS/s this radio sees "
+    + (seg.hi > seg.lo ? "only " + ((seg.hi - seg.lo) / 1e3).toFixed(0) + " kHz" : "none") + " of the NDB band (190–535 kHz) — the skimmer needs at least 100 kHz. "
+    + (locked ? "On a locked radio the lock must cover the band." : "Move the RF centre nearer the band (e.g. 362.75 kHz).") };
+  return { bad: false, text: "Covers " + (seg.lo / 1e3).toFixed(0) + "–" + (seg.hi / 1e3).toFixed(0) + " kHz of the NDB band at this RF centre." + what };
+}
 /* ★★ V12 2026-10-27 — may a VFO here run Band digital spots? Not on an Icom (a transceiver's audio, no IQ), not where the
  *  owner has switched digital spots or Band off for this radio (Setup → Modes and decoders — the benchmark's default on a
  *  box that measured it red, which the owner can tick back), and only where the radio reaches a band at all (HW.spotBands,
@@ -5756,9 +5793,33 @@ function bgSpotBand(hz) {
   if (!hw || hw.offline || !Array.isArray(hw.spotBands) || !(hz > 0)) return null;
   return hw.spotBands.filter(function (b) { return hz >= b.bandLo && hz <= b.bandHi; })[0] || null;
 }
+/* \u2605\u2605 V12 2026-10-27 (Stuart): a Band VFO picks its BAND, not a typed frequency \u2014 from the radio's own list (HW.spotBands),
+ *  only the bands whose digital modes this profile's capture holds (the server's own save rule: every mode of the band's
+ *  main span inside the window around the RF centre). The row stores the band's dial (its span's centre), so an older
+ *  row with any frequency inside the band loads into that band and saves back unchanged until another band is picked. */
+function bgBandList() {
+  const hw = typeof HW !== "undefined" ? HW : null;
+  return hw && !hw.offline && Array.isArray(hw.spotBands) ? hw.spotBands : null;
+}
+function bgBandReach(b, centre, rate) {
+  if (!(centre > 0) || !(rate > 0)) return true;   // \u2605 no centre or rate yet: every band (the save checks)
+  const half = bgHalfWindow(rate) + 3000;
+  return Math.max(Math.abs(b.lo - centre), Math.abs(b.hi - centre)) <= half;
+}
 /** The line under a Band VFO: what it decodes there, or why it cannot. */
-function bgBandHint(v) {
+function bgBandHint(v, centre, rate) {
   if (!bgBandOk()) return { bad: true, text: "Band digital spots are switched off on this radio (Modes and decoders) \u2014 choose another decoder or switch Band back on." };
+  const bl = bgBandList();
+  if (bl) {
+    const b = bgSpotBand(v.hz);
+    if (!b) return { bad: false, text: bl.some(function (x) { return bgBandReach(x, centre, rate); })
+      ? "Choose the band. Every digital mode on it is decoded into one summary card an hour; the decoder sets the frequency and demodulator."
+      : "No band\u2019s digital modes fit inside this radio\u2019s window at this RF centre \u2014 move the RF centre onto a band (e.g. 1840 for 160 m)." };
+    if (!bgBandReach(b, centre, rate)) return { bad: true, text: b.name + "\u2019s digital modes (" + (b.lo / 1e6).toFixed(4) + "\u2013" + (b.hi / 1e6).toFixed(4)
+      + " MHz) are outside this radio\u2019s window at this RF centre \u2014 choose a band it holds, or move the RF centre." };
+    return { bad: false, text: b.name + ": " + (b.modes || []).join(", ") + " on " + (b.lo / 1e6).toFixed(4) + "\u2013" + (b.hi / 1e6).toFixed(4)
+      + " MHz \u2014 one summary card an hour; quiet modes cost nothing (the Band governor). The decoder sets the frequency and demodulator." };
+  }
   if (!(v.hz > 0)) return { bad: false, text: "Type any frequency in the band \u2014 7074 for 40 m, 14074 for 20 m. Every digital mode on that band is decoded into one summary card an hour." };
   const b = bgSpotBand(v.hz);
   const hw = typeof HW !== "undefined" ? HW : null;
@@ -5836,15 +5897,18 @@ function bgIsmBands() {
   if (hw && Array.isArray(hw.ismHwBands) && !hw.offline) return BG_ISM_BANDS.filter(function (b) { return hw.ismHwBands.indexOf(b.id) >= 0; });
   return BG_ISM_BANDS.slice();
 }
-/* ★★ V12 2026-10-27 — AN NDB PROFILE: the LF beacon band whole, every beacon skimmed, each day's heard log and map to the
- *  gallery (vibe_bgdecode_config.h Profile::ndb). Only where THIS radio reaches LF (HW.ndbHw; else its driver — an HF+ or
- *  an RSP, an RTL only with direct sampling on or automatic) and never on a locked radio. */
+/* ★★ V12 2026-10-27 — MAY A VFO HERE BE THE NDB SKIMMER? Only where THIS radio reaches LF (HW.ndbHw; else its driver —
+ *  an HF+ or an RSP, an RTL only with direct sampling on or automatic) and NDB is not switched off on it. A locked radio
+ *  may (nothing moves: the lock must simply cover the band — bgNdbHint says so, and the save refuses it otherwise).
+ *  ★ No longer a whole-radio profile kind (Stuart chose the VFO list); an older "ndb":true profile is converted on load. */
+function bgNdbBlocked() {
+  try { return typeof modeBlockSet === "function" && modeBlockSet().has("ndb"); } catch (e) { return false; }
+}
 function bgNdbOk() {
   const r0 = bgRadio || {};
   const drv = String(r0.driver || "");
   if (drv === "icom" || drv === "hackrf" || drv === "airspy") return false;
-  if (r0.mode === "locked" && r0.lockFreq > 0) return false;
-  try { if (typeof modeBlockSet === "function" && modeBlockSet().has("ndb")) return false; } catch (e) { /* no mode list on this page */ }
+  if (bgNdbBlocked()) return false;
   const hw = typeof HW !== "undefined" ? HW : null;
   if (hw && typeof hw.ndbHw === "boolean" && !hw.offline) return hw.ndbHw;
   if (drv === "airspyhf" || drv === "sdrplay") return true;
@@ -5868,7 +5932,9 @@ function bgLoad(r) {
                    return { hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : "usb", dec: v.dec || "navtex" }; }) };
         // ★ only an ISM profile carries "ism" — an ordinary one saves back exactly as it came
         if (typeof p.ism === "string" && p.ism) { q.ism = p.ism; q.centre = 0; q.vfos = []; }
-        else if (p.ndb === true) { q.ndb = true; q.centre = 0; q.vfos = []; }
+        // ★ V12 2026-10-27: an older whole-radio NDB profile is the VFO profile it now is — the band's middle as its RF
+        //   centre and ONE NDB skimmer VFO (the server converts it the same way when it reads it)
+        else if (p.ndb === true) { q.centre = BG_NDB_LEGACY_CENTRE; q.vfos = [{ hz: 0, mode: "usb", dec: "ndb-skim" }]; }
         return q;
       }) : [];
     }
@@ -5900,7 +5966,7 @@ function bgCollect() {
   bgModel.on = !!($("bgOn") && $("bgOn").checked);
   bgModel.waitMin = parseFloat(($("bgWait") || {}).value) || 5;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
-  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ndb || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0; }); })) return "";
+  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim"; }); })) return "";
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
   const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
   if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
@@ -5946,6 +6012,7 @@ function bgRender() {
   bgReleaseNote();
   // ★ The headline's ISM sentence only where an ISM profile can be chosen (AGENTS.md — never on an HF+ or an Icom)
   if ($("bgIsmLine")) $("bgIsmLine").classList.toggle("hide", !bgIsmBands().length);
+  if ($("bgNdbLine")) $("bgNdbLine").classList.toggle("hide", !bgNdbOk());   // ★ …and the NDB one only where it can run
   if (!bgModel.on) return;
   if (!bgModel.profiles.length) bgModel.profiles.push(bgNewProfile());
   const el = function (tag, attrs, text) {
@@ -5988,33 +6055,24 @@ function bgRender() {
     /* ★★ WHAT THIS PROFILE DECODES — stations on VFOs, or ISM sensors on a whole band. Drawn only where ISM can run here
      *  (bgIsmBands); a saved ISM profile on a radio that can no longer do it stays visible, said plainly, so the owner
      *  sees why it does not run (the server refuses the save in words too). */
+    // \u2605 V12 2026-10-27: NDB is not a profile kind any more \u2014 it is a VFO decoder ("NDB skimmer (summary)", below)
     const ismBands = bgIsmBands();
-    const ndbOk = bgNdbOk();
-    if (ismBands.length || p.ism || ndbOk || p.ndb) {
+    if (ismBands.length || p.ism) {
       const kl = el("label"); kl.appendChild(el("span", { class: "lbl" }, "Decodes"));
       const ks = el("select", { class: "bgKind", style: "max-width:320px" });
       ks.appendChild(el("option", { value: "vfo" }, "Stations on VFOs (RF centre + VFOs)"));
       if (ismBands.length) ks.appendChild(el("option", { value: "ism" }, "ISM sensors on a whole band"));
-      if (ndbOk) ks.appendChild(el("option", { value: "ndb" }, "NDB beacons \u2014 the whole LF beacon band"));
-      ks.value = p.ism && ismBands.length ? "ism" : p.ndb && ndbOk ? "ndb" : "vfo";
+      ks.value = p.ism && ismBands.length ? "ism" : "vfo";
       ks.onchange = function () {
         if (ks.value === "ism") {
           const land = ismBands.filter(function (b) { return b.id === "433"; })[0] || ismBands[0];
-          delete p.ndb; p.ism = land.id; p.centre = 0; p.vfos = [];
-        } else if (ks.value === "ndb") { delete p.ism; p.ndb = true; p.centre = 0; p.vfos = []; }
-        else { delete p.ism; delete p.ndb; if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); }
+          p.ism = land.id; p.centre = 0; p.vfos = [];
+        } else { delete p.ism; if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); }
         bgRender();
       };
       kl.appendChild(ks); card.appendChild(kl);
     }
-    if (p.ndb) {
-      card.appendChild(el("div", { class: "hint bgNdbNote", style: ndbOk ? "" : "color:#ff8a7d" }, ndbOk
-        ? "NDB takes the whole radio onto the LF beacon band (190\u2013535 kHz, as much as its rate holds) and skims every beacon "
-          + "in it \u2014 so it runs only while nobody is listening, and stops the moment anybody connects. Each day\u2019s heard "
-          + "log and map, a card for every UTC hour and a last-10-minutes card go to the gallery."
-        : "This profile skims NDBs, which this radio cannot do" + (locked ? " \u2014 its range is locked, and background decoding never moves a locked radio."
-          : " (an RTL needs direct sampling).") + " Choose \u201cStations on VFOs\u201d or delete the profile."));
-    } else if (p.ism) {
+    if (p.ism) {
       if (!ismBands.length) {
         card.appendChild(el("div", { class: "hint", style: "color:#ff8a7d" }, "This profile decodes ISM, which this radio cannot do"
           + (locked ? " \u2014 its range is locked, and background decoding never moves a locked radio." : ".")
@@ -6033,12 +6091,16 @@ function bgRender() {
       }
     } else {
     // RF centre — not on a locked radio: its window is the owner's lock, and background never moves it
+    const repaints = [];   // ★ V12: what follows the RF centre as it is typed (a Band row's picker, the rows' lines)
+    const bgRate = locked && r0.lockRate > 0 ? r0.lockRate : (r0.rate || 0);
+    const centreNow = function () { return locked ? r0.lockFreq : p.centre; };
     if (!locked) {
       const cl = el("label"); cl.appendChild(el("span", { class: "lbl" }, "RF Centre"));
       const cw = el("span", { style: "display:flex;gap:8px;align-items:center" });
       const ci = el("input", { type: "number", step: "0.1", min: "0", placeholder: "500", style: "max-width:140px" });
       ci.value = p.centre > 0 ? String(p.centre / 1e3) : "";
-      ci.oninput = function () { p.centre = Math.round((parseFloat(ci.value) || 0) * 1e3); };
+      // ★ V12: the band pickers and NDB lines follow the centre as it is typed (what the window holds changes with it)
+      ci.oninput = function () { p.centre = Math.round((parseFloat(ci.value) || 0) * 1e3); repaints.forEach(function (f) { f(); }); };
       cw.appendChild(ci); cw.appendChild(el("span", null, "kHz")); cl.appendChild(cw); card.appendChild(cl);
     } else if (!(p.centre > 0)) p.centre = r0.lockFreq;   // ★ stored as the lock, which is what it runs at
     // VFO rows — on a multi-radio box, a tier list: rank, a drag handle, ▲ / ▼
@@ -6082,19 +6144,50 @@ function bgRender() {
         row.appendChild(up); row.appendChild(dn);
       }
       row.appendChild(el("span", null, "VFO " + (vi + 1)));
-      const fi = el("input", { type: "number", step: "0.1", min: "0", placeholder: "517.5" });
-      fi.value = v.hz > 0 ? String(v.hz / 1e3) : "";
-      row.appendChild(fi); row.appendChild(el("span", null, "kHz"));
-      const md = el("select");
+      /* ★★ V12 2026-10-27 (Stuart): WHEN THE DECODER SETS THE FREQUENCY — the NDB skimmer (the part of the band the
+       *  centre holds) and Band digital spots (the band's own dials) — the row's frequency box and demodulator are greyed
+       *  out, never left editable and meaningless. A Band row picks its BAND instead (bgBandList, only the bands this
+       *  capture holds); an NDB row stores hz 0. Only where the radio's band list is unknown (its radio offline) does a
+       *  Band row keep a typed frequency, which names its band (the server's own rule). */
+      const fixed = bgDecoderSetsFreq(v.dec);
+      if (fixed) v.mode = "usb";
+      const bands = v.dec === "spots-band" ? bgBandList() : null;
+      let fi = null, bp = null, fillBands = null;
+      if (bands) {
+        bp = el("select", { class: "bgBandPick", "aria-label": "Band", title: "The band — the decoder sets the frequency" });
+        fillBands = function () {
+          bp.innerHTML = "";
+          const cur = bgSpotBand(v.hz);
+          const fit = bands.filter(function (b) { return bgBandReach(b, centreNow(), bgRate) || (cur && b.id === cur.id); });
+          if (!cur) bp.appendChild(el("option", { value: "" }, fit.length ? "Choose a band…" : "No band in this window"));
+          fit.forEach(function (b) {
+            bp.appendChild(el("option", { value: b.id }, b.name + (bgBandReach(b, centreNow(), bgRate) ? "" : " (outside this window)")));
+          });
+          bp.value = cur ? cur.id : "";
+        };
+        fillBands();
+        repaints.push(fillBands);
+        row.appendChild(bp);
+      } else {
+        fi = el("input", { type: "number", step: "0.1", min: "0", placeholder: fixed && v.dec === "ndb-skim" ? "auto" : "517.5", class: "bgFreq" });
+        fi.value = v.hz > 0 && v.dec !== "ndb-skim" ? String(v.hz / 1e3) : "";
+        if (v.dec === "ndb-skim") { fi.disabled = true; fi.title = "Set by the decoder — the part of the NDB band this RF centre holds"; }
+        row.appendChild(fi);
+        row.appendChild(el("span", { class: v.dec === "ndb-skim" ? "bgFixedUnit" : "" }, "kHz"));
+      }
+      const md = el("select", { class: "bgDemod" });
       for (const k in BG_DEMODS) { const o = el("option", { value: k }, BG_DEMODS[k]); md.appendChild(o); }
       md.value = v.mode; row.appendChild(md);
-      const dc = el("select");
+      if (fixed) { md.disabled = true; md.title = "Set by the decoder — it is fed the radio’s IQ, no demodulator runs"; }
+      const dc = el("select", { class: "bgDec" });
       // ★ Only the decoders that make sense for this demodulator (Stuart) — refilled when the demodulator changes.
       const fillDec = function () {
         dc.innerHTML = "";
         // ★ Band digital spots only where this radio can run it — or on a row that already has it (said why, below)
         const bandOk = bgBandOk();
-        const fit = BG_DECODERS.filter(function (d) { return d.modes.indexOf(md.value) >= 0 && (!d.band || bandOk || v.dec === d.id); });
+        // ★ The NDB skimmer only where this radio reaches LF, and once a profile (one covers every beacon it holds)
+        const ndbOk = bgNdbOk() && !p.vfos.some(function (o) { return o !== v && o.dec === "ndb-skim"; });
+        const fit = BG_DECODERS.filter(function (d) { return d.modes.indexOf(md.value) >= 0 && (!d.band || bandOk || v.dec === d.id) && (!d.ndb || ndbOk || v.dec === d.id); });
         fit.forEach(function (d) { dc.appendChild(el("option", { value: d.id }, d.label)); });
         if (!fit.some(function (d) { return d.id === v.dec; })) v.dec = fit.length ? fit[0].id : "";
         dc.value = v.dec;
@@ -6105,27 +6198,43 @@ function bgRender() {
       row.appendChild(rm);
       // ★ No per-VFO "Listening for … kHz" line (Stuart, 2026-10-22: "they arent needed, and would look odd to
       //   someone setting up wefax or rtty"). The frequency typed is the dial, as a listener would type it.
-      // ★★ V12: a Band VFO says which band its frequency names and what is decoded there (or why it cannot run)
+      // ★★ V12: a Band VFO says which band it decodes and what is decoded there (or why it cannot run); an NDB skimmer
+      //    what part of the band it covers at this centre (or why it cannot)
       let bh = null;
-      const paintBand = function () {
+      const paintHint = function () {
         if (!bh) return;
-        const h = bgBandHint(v);
+        const h = v.dec === "ndb-skim" ? bgNdbHint(p, r0, locked) : bgBandHint(v, centreNow(), bgRate);
         bh.textContent = h.text;
         bh.style.color = h.bad ? "#ff8a7d" : "";
       };
-      const upd = function () {
-        const wasBand = v.dec === "spots-band";
-        v.hz = Math.round((parseFloat(fi.value) || 0) * 1e3); v.mode = md.value; v.dec = dc.value;
-        if (wasBand !== (v.dec === "spots-band")) bgRender(); else paintBand();
+      repaints.push(paintHint);
+      if (bp) bp.onchange = function () {
+        const b = bands.filter(function (x) { return x.id === bp.value; })[0];
+        v.hz = b ? b.hz : 0;
+        fillBands(); paintHint();
       };
-      fi.oninput = upd; dc.onchange = upd;
+      dc.onchange = function () {
+        const was = v.dec;
+        v.dec = dc.value;
+        if (bgDecoderSetsFreq(v.dec)) {
+          v.mode = "usb";
+          if (v.dec === "ndb-skim") v.hz = 0;
+          // ★ a row becoming Band lands on the first band this capture holds (never on a stray NAVTEX frequency)
+          if (v.dec === "spots-band") {
+            const bl = bgBandList();
+            if (bl && !bgSpotBand(v.hz)) { const first = bl.filter(function (b) { return bgBandReach(b, centreNow(), bgRate); })[0]; v.hz = first ? first.hz : 0; }
+          }
+        }
+        if (was !== v.dec && (bgDecoderSetsFreq(was) || bgDecoderSetsFreq(v.dec))) bgRender(); else paintHint();
+      };
+      if (fi && !fi.disabled) fi.oninput = function () { v.hz = Math.round((parseFloat(fi.value) || 0) * 1e3); paintHint(); };
       md.onchange = function () {
-        const wasBand = v.dec === "spots-band";
-        v.mode = md.value; fillDec(); upd();
-        if (wasBand !== (v.dec === "spots-band")) bgRender();
+        const was = v.dec;
+        v.mode = md.value; fillDec();
+        if (was !== v.dec && (bgDecoderSetsFreq(was) || bgDecoderSetsFreq(v.dec))) bgRender();
       };
       card.appendChild(row);
-      if (v.dec === "spots-band") { bh = el("div", { class: "hint bgBandNote" }); card.appendChild(bh); paintBand(); }
+      if (fixed) { bh = el("div", { class: "hint " + (v.dec === "ndb-skim" ? "bgNdbNote" : "bgBandNote") }); card.appendChild(bh); paintHint(); }
     });
     // ★ One radio: rows past the box's decoders are KEPT (a box that went from several radios back to one) but said
     //   plainly not to run; the server refuses a save with more, in words.

@@ -2445,8 +2445,8 @@ int main(int argc, char** argv) {
                 // ★★ V12 2026-10-25: an ISM profile only where the radio reaches an ISM band at all — by its driver, as the
                 //    setup page offers it (the HF+ tops out near 260 MHz; an Icom is a transceiver's audio).
                 const bool ismOk = r.driver != "airspyhf" && r.driver != "icom";
-                // ★★ V12 2026-10-27: an NDB profile only where the radio reaches LF — an HF+ or an RSP, an RTL only with direct
-                //    sampling on or automatic (the same rule as the mode's own capability, vsNdbReach).
+                // ★★ V12 2026-10-27: an NDB skimmer VFO only where the radio reaches LF — an HF+ or an RSP, an RTL only with
+                //    direct sampling on or automatic (the same rule as the mode's own capability, vsNdbReach).
                 const bool rtlLike = r.driver != "airspyhf" && r.driver != "sdrplay" && r.driver != "icom" && r.driver != "hackrf" && r.driver != "airspy";
                 const bool ndbOk = r.driver == "airspyhf" || r.driver == "sdrplay" || (rtlLike && (r.autoDirectSampling || r.directSampling > 0));
                 if (!parsed || !vibe::bg::validate(bc, rate, be, cap, locked ? r.lockFreq : 0, ismOk, ndbOk)) {

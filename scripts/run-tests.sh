@@ -102,6 +102,8 @@ flags_for() {
     test-vfo-dc)           echo "-O2" ;;
     # ★★ BACKGROUND DECODING + THE GALLERY (V12, 2026-10-22): the real DSP chain AND the real decoders, end to end.
     test-bgdecode|test-bg-priority|test-bg-band|test-cw|test-dsc|test-psk|test-jtty) echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★ V12 2026-10-27: …and the NDB skimmer as a background VFO, beside NAVTEX on one capture (ndb_synth.h's beacons)
+    test-bg-ndb)           echo "-O2 -I $VDSP -I $KISS -I android/app/src/main/cpp/ft8_lib -I tools/ndb-bench -lpthread" ;;
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
     test-bm-names) echo "-O2 -I android/app/src/main/cpp" ;;
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
@@ -227,7 +229,8 @@ deps_for() {
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
     # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link — nor pffft,
     #   which they carry too since monitor.c's STFT runs through it (2026-10-25).
-    test-bgdecode|test-bg-priority|test-bg-band|test-cw|test-dsc|test-psk|test-jtty) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    # ★ V12 2026-10-27: test-bg-ndb — the same, plus the NDB skimmer (the background NDB skimmer VFO, vibe_bgdecode_ndb.h)
+    test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-psk|test-jtty) echo "$([ "$1" = test-bg-ndb ] && echo android/app/src/main/cpp/decoders/ndb_skimmer.cpp) $VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
@@ -310,7 +313,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-bg-band|test-cw|test-dsc|test-psk|test-jtty)
+    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-psk|test-jtty)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
@@ -406,10 +409,12 @@ if node scripts/test-setup-bgdecode.mjs; then pass=$((pass+1)); else fail=$((fai
 # ★★ …and an ISM PROFILE (2026-10-25): offered only where ISM can run (not an HF+, an Icom, a locked radio, ISM blocked),
 #    only the bands the radio reaches; a band instead of a centre and VFOs; saved as {"ism":"433"} and read back.
 if node scripts/test-setup-bg-ism.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-# ★★ V12 2026-10-27: a Band digital-spots VFO in the editor — offered only where it can run, the band named, saved and read back.
+# ★★ V12 2026-10-27: a Band digital-spots VFO in the editor — offered only where it can run, a BAND PICKER (only the bands the
+#    capture holds) in place of the frequency, the demodulator greyed out, saved and read back.
 if node scripts/test-setup-bg-band.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-# ★★ …and an NDB PROFILE (2026-10-27): offered only where the radio reaches LF (HF+, RSP, an RTL in direct sampling; the
-#    running radio's ndbHw first), never locked or blocked; no centre or VFOs; saved as {"ndb":true} and read back.
+# ★★ …and the NDB SKIMMER VFO (2026-10-27): offered only where the radio reaches LF (HF+, RSP, an RTL in direct sampling; the
+#    running radio's ndbHw first), never with NDB blocked, once a profile; frequency and demodulator greyed out; Stuart's
+#    Lenovo profile round-trips; an older {"ndb":true} profile loads as a VFO profile with the skimmer.
 if node scripts/test-setup-bg-ndb.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?

@@ -33,14 +33,12 @@ struct Profile {
      *  vibe_ism_bands.h) instead of an RF centre and VFOs, and runs the listener's own ISM mode with nobody here.
      *  Empty = an ordinary profile. Stored as "ism":"433"; its "centre" and "vfos" are ignored. */
     std::string ism;
-    /** ★★ V12 2026-10-27 — AN NDB PROFILE (Stuart: "a radio can skim NDBs unattended into the gallery"). Like ISM, a
-     *  WHOLE-CAPTURE decoder: the listener's own NDB mode run with nobody here — every beacon on the LF band at once, each
-     *  day's heard log and map to the gallery. Stored as "ndb":true; its "centre" and "vfos" are ignored. */
-    bool ndb = false;
+    /* ★ V12 2026-10-27 — there is no whole-radio NDB profile any more (Stuart chose the VFO list: the NDB skimmer is a VFO
+     *  decoder, "ndb-skim", running beside NAVTEX and FT8 on the same capture). An older saved "ndb":true profile is
+     *  CONVERTED on parse into a VFO profile with that one entry, centred on the band (kNdbLegacyCentreHz) — see parse(). */
     bool allDay() const { return fromMin == toMin; }
     bool isIsm() const { return !ism.empty(); }
-    bool isNdb() const { return ndb && ism.empty(); }
-    bool isWhole() const { return isIsm() || isNdb(); }   ///< a whole-radio mode, not VFOs
+    bool isWhole() const { return isIsm(); }   ///< a whole-radio mode (ISM), not VFOs
 };
 struct Config {
     bool on = false;
@@ -101,6 +99,13 @@ inline const std::vector<DecoderDef>& decoders() {
         //    The frequency only NAMES the band (7074 = 40 m): the slice is cut where the band's modes are (bandSpan).
         //    "usb" only because a VFO row has a demodulator — none runs (it is fed IQ, as a skimmer is).
         { "spots-band",   "Digital spots: Band (summary)", "",      "ft8",   "usb",     0,    0,   0,     false, false, 0 },
+        // ★★ V12 2026-10-27 — THE NDB SKIMMER (Stuart: NDB "must just run beside them" — the Lenovo's RSP at 1200 kHz,
+        //    3 MS/s, with NAVTEX 489.5 + 517.5 and 160 m FT8). Every beacon in as much of the LF beacon band (190–535 kHz)
+        //    as the profile's capture holds: the listener's own NDB skimmer on ONE IQ slice of the runner's channeliser,
+        //    into the same gallery cards a listener's NDB mode writes (the day's heard log and map, last 10 min, hourly).
+        //    ★ ITS FREQUENCY MEANS NOTHING — the decoder sets it (ndbSegment): the setup page greys the box out and the row
+        //      stores hz 0. "usb" only because a VFO row has a demodulator — none runs (it is fed IQ).
+        { "ndb-skim",     "NDB skimmer (summary)",        "",       "ndb",   "usb",     0,    0,   0,     false, false, 0 },
     };
     return d;
 }
@@ -128,6 +133,14 @@ inline double passbandHz(const Vfo& v) {
 inline bool isSkimmer(const Vfo& v) { const DecoderDef* d = decoderDef(v.dec); return d && d->widthHz > 0; }
 /** ★ A Band digital-spots VFO (V12 2026-10-27): fed the band's IQ slices, no demodulator. */
 inline bool isBandSpots(const Vfo& v) { return v.dec == "spots-band"; }
+/** ★ An NDB skimmer VFO (V12 2026-10-27): fed one IQ slice over the NDB band, no demodulator, its frequency ignored. */
+inline bool isNdbSkim(const Vfo& v) { return v.dec == "ndb-skim"; }
+/** ★★ THE NDB BAND, as the listener's NDB mode has it (vibe_ndb_service.h kBandLoHz / kBandHiHz / kMinSpanHz — the runner
+ *  static_asserts they agree; this header is read by the daemon's save path without the decoder). */
+constexpr double kNdbBandLoHz = 190e3, kNdbBandHiHz = 535e3, kNdbMinSpanHz = 100e3;
+/** ★ Where an older whole-radio NDB profile's capture is put when it is converted to a VFO profile: the band's middle,
+ *  a quarter-kHz off the 0.5 kHz raster so the DC remnant lands between beacons (vibendb::plan's rule). */
+constexpr double kNdbLegacyCentreHz = 362750;
 
 /** ★★ WHERE A BAND VFO'S SLICE GOES — the registered modes' span of the band `hz` is in (digi::spanOf: its RF edges and
  *  centre — the main slice's; the extra slices are the host's to cut where the capture holds them). The registry of
@@ -202,7 +215,8 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
             if (f < 0 || t < 0) { err = "background decoding: a profile time is not HH:MM"; return false; }
             p.fromMin = f; p.toMin = t;
             p.ism = pj.str("ism", "");
-            if (const auto* nd = pj.get("ndb")) p.ndb = nd->kind == antswitch::Json::Bool ? nd->b : false;
+            bool legacyNdb = false;
+            if (const auto* nd = pj.get("ndb")) legacyNdb = nd->kind == antswitch::Json::Bool && nd->b;
             if (const auto* vs = pj.get("vfos"); vs && vs->kind == antswitch::Json::Arr)
                 for (const auto& vj : vs->a) {
                     if (vj.kind != antswitch::Json::Obj) continue;
@@ -212,6 +226,14 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
                     v.dec  = vj.str("dec", "navtex");
                     p.vfos.push_back(v);
                 }
+            /* ★★ BACKWARD COMPATIBILITY (V12 2026-10-27): a profile saved while NDB was a whole-radio profile kind
+             *  ("ndb":true, its centre and VFOs ignored) becomes the VFO profile it now is — the band's middle as its RF
+             *  centre and ONE NDB skimmer VFO. It decodes what it did (every beacon), and saves back in the new shape. */
+            if (legacyNdb && p.ism.empty()) {
+                p.centreHz = kNdbLegacyCentreHz;
+                Vfo v; v.hz = 0; v.mode = "usb"; v.dec = "ndb-skim";
+                p.vfos.assign(1, v);
+            }
             out.profiles.push_back(p);
         }
     }
@@ -237,7 +259,6 @@ inline std::string toJson(const Config& c) {
         o += "]";
         // ★ V12 2026-10-25: absent on an ordinary profile, so older settings read back unchanged (the page's own order)
         if (p.isIsm()) o += ",\"ism\":\"" + gallery::jsonEsc(p.ism) + "\"";
-        if (p.isNdb()) o += ",\"ndb\":true";
         o += "}";
     }
     return o + "]}";
@@ -258,6 +279,18 @@ inline int activeProfile(const Config& c, int m) {
  *  capture (rate/2 − min(50 kHz, 15 %)), less a passband's worth (3 kHz) so the whole signal is inside. */
 inline double halfWindowHz(double rate) { return rate / 2.0 - std::min(50000.0, rate * 0.15) - 3000.0; }
 
+/** ★★ WHAT AN NDB SKIMMER VFO COVERS: as much of 190–535 kHz as the capture at `centre` and `rate` holds — inside the same
+ *  guard every background VFO keeps from the capture's edge (halfWindowHz), clipped to what the radio reaches
+ *  ([reachLo, reachHi]; 0 = no limit). False when under kNdbMinSpanHz of the band is there (or the rate is unknown): the
+ *  skimmer would hear too few beacons to be worth a decoder slot. */
+inline bool ndbSegment(double centre, double rate, double& lo, double& hi, double reachLo = 0, double reachHi = 0) {
+    const double half = rate > 0 ? halfWindowHz(rate) : 0;
+    lo = std::max(kNdbBandLoHz, centre - half); hi = std::min(kNdbBandHiHz, centre + half);
+    if (reachLo > 0) lo = std::max(lo, reachLo);
+    if (reachHi > 0) hi = std::min(hi, reachHi);
+    return rate > 0 && hi - lo >= kNdbMinSpanHz;
+}
+
 static inline std::string khz(double hz) { char b[32]; std::snprintf(b, sizeof b, "%.1f kHz", hz / 1e3); return b; }
 
 /** ★★ WHAT THE SAVE REFUSES, IN WORDS. `rate` is the radio's sample rate (0 = unknown: the window is not checked).
@@ -268,7 +301,9 @@ static inline std::string khz(double hz) { char b[32]; std::snprintf(b, sizeof b
  *  its own, and every VFO must sit inside the locked window. */
 /** `ismOk` false: this radio reaches no ISM band at all (an Airspy HF+ tops out near 260 MHz; an Icom is a transceiver's
  *  audio) — an ISM profile is refused there, in words (AGENTS.md: no control that cannot work on this radio). Whether it
- *  reaches the CHOSEN band through the owner's own allow/block ranges is the radio's to say when the profile runs. */
+ *  reaches the CHOSEN band through the owner's own allow/block ranges is the radio's to say when the profile runs.
+ *  `ndbOk` false: this radio reaches no LF (an RTL without direct sampling, a HackRF, an Airspy R2/Mini, an Icom) — an
+ *  NDB skimmer VFO is refused there, in words. */
 inline bool validate(const Config& c, double rate, std::string& err, int slotCap = 0, double lockCentre = 0, bool ismOk = true, bool ndbOk = true) {
     if (c.profiles.size() > kMaxProfiles) { err = "background decoding: at most " + std::to_string(kMaxProfiles) + " profiles"; return false; }
     if (c.on && c.profiles.empty()) { err = "background decoding is on but has no profile — add one, or switch it off"; return false; }
@@ -293,16 +328,6 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
             }
             continue;
         }
-        // ★★ AN NDB PROFILE: the radio onto the LF beacon band — never on a locked radio, never where it reaches no LF.
-        if (p.isNdb()) {
-            if (!ndbOk) { err = name + ": this radio cannot tune to the NDB band (an RTL needs direct sampling)"; return false; }
-            if (lockCentre > 0) {
-                err = name + ": NDB puts the radio on the beacon band, and this radio's range is locked \xe2\x80\x94 "
-                      "background decoding never moves a locked radio. Unlock it, or choose VFOs inside its range.";
-                return false;
-            }
-            continue;
-        }
         if (!(p.centreHz > 0) && !(lockCentre > 0)) { err = name + ": set an RF centre"; return false; }
         const double centre = lockCentre > 0 ? lockCentre : p.centreHz;
         if (p.vfos.empty()) { err = name + ": add at least one VFO"; return false; }
@@ -316,6 +341,27 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
         for (size_t k = 0; k < p.vfos.size(); k++) {
             const auto& v = p.vfos[k];
             const std::string vn = name + ", VFO " + std::to_string(k + 1);
+            /* ★★ AN NDB SKIMMER VFO (V12 2026-10-27): no frequency of its own — it covers what the capture holds of the NDB
+             *  band. Refused, in words, on a radio that reaches no LF at all (an RTL without direct sampling, a HackRF, an
+             *  Airspy R2/Mini, an Icom — the page does not even offer it there), where the capture misses the band, and a
+             *  second time in one profile (it would hear the same beacons twice). */
+            if (isNdbSkim(v)) {
+                if (!ndbOk) { err = vn + ": this radio cannot reach the NDB band (190\xe2\x80\x93" "535 kHz) \xe2\x80\x94 an RTL needs direct sampling, and a HackRF, an Airspy R2/Mini or an Icom cannot do it at all"; return false; }
+                for (size_t q = 0; q < k; q++)
+                    if (isNdbSkim(p.vfos[q])) { err = vn + ": this profile already has an NDB skimmer (VFO " + std::to_string(q + 1) + ") \xe2\x80\x94 one covers every beacon its capture holds"; return false; }
+                double lo = 0, hi = 0;
+                if (rate > 0 && !ndbSegment(centre, rate, lo, hi)) {
+                    const double half = halfWindowHz(rate);
+                    char b[420];
+                    std::snprintf(b, sizeof b, "%s: the NDB skimmer needs at least %.0f kHz of the NDB band (190\xe2\x80\x93" "535 kHz) inside the capture "
+                                  "\xe2\x80\x94 at %.0f kS/s around %s this radio sees %.1f\xe2\x80\x93%.1f kHz%s. %s",
+                                  vn.c_str(), kNdbMinSpanHz / 1e3, rate / 1e3, khz(centre).c_str(), std::max(0.0, centre - half) / 1e3, (centre + half) / 1e3,
+                                  hi > lo ? (std::string(", only ") + khz(hi - lo) + " of the band").c_str() : ", none of the band",
+                                  lockCentre > 0 ? "On a locked radio the lock must cover the band." : "Move the RF centre nearer the band (e.g. 362.75 kHz), or remove the NDB skimmer.");
+                    err = b; return false;
+                }
+                continue;
+            }
             if (!(v.hz > 0)) { err = vn + ": set a frequency"; return false; }
             if (!demodOk(v.mode)) { err = vn + ": background decoding runs on USB, LSB or NFM"; return false; }
             if (!decoderDef(v.dec)) { err = vn + ": choose a decoder"; return false; }

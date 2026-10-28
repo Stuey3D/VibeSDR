@@ -15,6 +15,9 @@ export interface BgVfo {
   spots?: number; countries?: number;
   /** ★ V12 2026-10-27: a Band digital-spots VFO — its band ("40 m") and what the governor runs now. */
   band?: string; modes?: string;
+  /** ★ V12 2026-10-27: an NDB skimmer VFO — the part of the band it covers (no frequency of its own) and how it is doing
+   *  ("12 beacons identified of 41 carriers"). */
+  ndbLo?: number; ndbHi?: number; ndb?: string;
 }
 export interface BgStatus {
   state: 'off' | 'idle' | 'waiting' | 'running' | 'listener' | 'paused' | 'busy' | 'blocked';
@@ -51,6 +54,20 @@ export function bgVfoLine(v: BgVfo): string {
   //   And a PSK skimmer (2026-10-26) is "PSK skimmer".
   // ★ V12 2026-10-27: a Band digital-spots VFO is "Digital spots: Band 40 m" (every mode on the band, one summary).
   const name = v.dec === 'spots-band' ? `Digital spots: Band${v.band ? ' ' + v.band : ''}` : v.dec === 'cwskim' ? 'CW skimmer' : v.dec === 'pskskim' ? 'PSK skimmer' : typeof v.spots === 'number' ? 'FT8' : v.label || v.dec.toUpperCase();
+  // ★ V12 2026-10-27: an NDB skimmer has no frequency — "NDB skimmer 190–535 kHz · running · 12 beacons identified of 41 carriers"
+  if (v.dec === 'ndb-skim') {
+    const span = (v.ndbHi ?? 0) > (v.ndbLo ?? 0) ? ` ${((v.ndbLo ?? 0) / 1000).toFixed(0)}–${((v.ndbHi ?? 0) / 1000).toFixed(0)} kHz` : '';
+    const p = [`NDB skimmer${span}`];
+    if (v.state === 'out') p.push('out of range (the window holds too little of the NDB band)');
+    else if (v.state === 'paused') p.push(`paused (${v.why || 'a listener needed the decoder slot'})`);
+    else {
+      p.push('running');
+      p.push(v.ndb || 'nothing yet');
+      const c = pctShort(v.cpuPct);
+      if (c) p.push(c);
+    }
+    return p.join(' · ');
+  }
   const parts = [`${khz(v.hz)} ${name}`];
   if (v.state === 'out') parts.push("out of range (outside the listener's window)");
   else if (v.state === 'paused') parts.push(`paused (${v.why || 'a listener needed the decoder slot'})`);

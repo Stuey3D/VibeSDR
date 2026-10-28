@@ -38,7 +38,8 @@ Nick's case: centre 500 kHz; VFO 1 489.5 kHz USB NAVTEX; VFO 2 517.5 kHz USB NAV
 | SSTV | USB, NFM | dial | one PNG per picture |
 | FT8 / FT4 | USB | dial | a **summary**, not the spots: a standing "last 10 minutes" card + one card per UTC hour |
 | DSC (MF/HF) · DSC (VHF ch 70) | USB, LSB · NFM | 1700 Hz · dial | the day's log per DSC frequency + one item per distress/urgency call, pinned at its position (docs/v12/DSC.md); **+ DSC watch** fills the VFOs |
-| Digital spots: Band (summary) | USB | — (the frequency names the band) | the FT8 summary's two cards for the whole band, every mode counted (2026-10-27, below) |
+| Digital spots: Band (summary) | USB (greyed — set by the decoder) | — (a band picker; the row stores the band's dial) | the FT8 summary's two cards for the whole band, every mode counted (2026-10-27, below) |
+| NDB skimmer (summary) | USB (greyed — set by the decoder) | — (no frequency: the part of 190–535 kHz the capture holds; stored hz 0) | the NDB cards: the day's heard log and map, last 10 minutes, one per UTC hour (2026-10-27, below) |
 
 ★★ **LSB inverts mark and space.** NickB asked for LSB so he could dodge local interference. An FSK decoder on an LSB VFO
 is started with `inverted` flipped, so the same signal decodes identically on either sideband. `test-bgdecode` proves this
@@ -187,11 +188,54 @@ range" of a listener), through the listener's own ISM mode, and a listener arriv
 Stuart (2026-10-27): *"I'd like to add NDB to the background decoding as my SDRPlay on the Lenovo already decodes Navtex
 and 160M FT8 in the background NDB would be within its range too. Also full band digital modes too."*
 
-### NDB profiles keep the FT8 summary's cards
+### The NDB skimmer is a VFO decoder (2026-10-27, second pass)
 
-The NDB profile (`"ndb":true`, "Decodes: NDB beacons — the whole LF beacon band"; docs/v12/NDB-SKIMMER.md) was already
-there: the listener's NDB mode run with nobody here, the whole 190–535 kHz band skimmed, each UTC day's heard log and map
-in the gallery. It now also keeps what an FT8 VFO keeps (`vibe_ndb_gallery.h`, `DayLog`):
+★★ Stuart (2026-10-27): the NDB skimmer must be a **per-VFO decoder**, running BESIDE the profile's other VFOs on the same
+capture — like the CW/PSK skimmers and Digital spots: Band in the same list. His case: the Lenovo RSP1A at 3 MS/s, RF
+centre 1200 kHz, NAVTEX 489.5 + 517.5 and 160 m — that capture already spans the whole 190–535 kHz band. He looked in the
+VFO decoder list and NDB wasn't there (it was a whole-radio profile kind, which dropped every VFO). **The whole-radio
+"Decodes: NDB beacons" option is gone**; NDB is **NDB skimmer (summary)** (`"dec":"ndb-skim"`) in a VFO row's list.
+
+- **The VFO's frequency means nothing — the decoder sets it.** The skimmer covers as much of 190–535 kHz as the capture at
+  the profile's RF centre holds, inside the same guard every background VFO keeps from the capture's edge
+  (`vibe_bgdecode_config.h ndbSegment`: centre ± `halfWindowHz(rate)`, clipped to the band and to what the radio reaches —
+  `vsNdbReach`). The row's frequency box and demodulator are **greyed out** (disabled) on the setup page with a line saying
+  what it covers ("Covers 190–535 kHz of the NDB band at this RF centre …"), and the row stores `{"hz":0,"mode":"usb"}`.
+  At 1200 kHz / 3 MS/s that is the whole band; at 700 kHz / 1.024 MS/s it is 241–535 kHz.
+- **Fed like the CW skimmers** (`vibe_bgdecode.h`, `BgRunner::placeNdb`): ONE IQ slice off the runner's SAME forward FFT,
+  centred on the covered segment, sized and tapered as the listener's NDB tap cuts one (segment + 2.6 kHz over 0.92 of the
+  slice rate, a power of two of bins — `vibe_wide_tap.h`'s rule). The slice goes to the **listener's own NDB service** in a
+  new fed-slice mode (`vibendb::Service::startFed` / `feedSlice` — a copy into a two-second queue, the oldest dropped and
+  counted, a decode thread of its own at decoder priority): the same skimmer, beacon list, harmonic flags and **the same
+  gallery sink** (`vibe_ndb_gallery.h DayLog`, labelled background and the profile) — the day's heard log and map, the
+  standing last-10-minutes card, one card per UTC hour. The decoder is made through `Params::ndbMake`
+  (`vibe_bgdecode_ndb.h makeNdbFeedFactory`), so the runner and its other tests do not carry the beacon list.
+- **One decoder slot, like any VFO**: claimed when it starts, given back when it pauses; listeners still win it (the tier
+  list's "lowest VFO pauses"), and a locked radio's channel budget counts it. Paused **with the reason** while a
+  listener's own NDB mode has the band (their skimmer keeps the cards meanwhile — never two skimmers on the same beacons)
+  or the owner has NDB switched off on the receiver. With "keep decoding in range", a listener's dial that still holds
+  ≥ 100 kHz of the band keeps it running (re-aimed — `aimFed` — not rebuilt; the day's cards carry on); one that does not
+  takes it out of the window, its slot back. When a profile with a Band VFO moves the centre to keep the DC off its modes
+  (`bgBandCentre`), the move may not shrink what the NDB skimmer covers.
+- **Refused at the save, in words** (`validate`): on a radio that reaches no LF ("this radio cannot reach the NDB band
+  (190–535 kHz) — an RTL needs direct sampling, and a HackRF, an Airspy R2/Mini or an Icom cannot do it at all"); where the
+  capture holds under 100 kHz of the band (`kNdbMinSpanHz`: "the NDB skimmer needs at least 100 kHz of the NDB band … at
+  2400 kS/s around 7000.0 kHz this radio sees 5853.0–8147.0 kHz, none of the band. Move the RF centre nearer the band");
+  and a second NDB skimmer in one profile. A locked radio may run it when its lock covers the band (nothing moves).
+- **Not offered where it cannot run** (AGENTS.md): the setup page lists it only where the radio reaches LF (hwinfo
+  `ndbHw`, else the driver: an HF+, an RSP, an RTL with direct sampling on or automatic) and NDB is not switched off — once
+  a profile. The headline's NDB sentence shows only there too.
+- **Older profiles** saved as the whole-radio kind (`"ndb":true`) are **converted on load**, by the server's `parse()` and
+  the page's `bgLoad()` alike, into a VFO profile with RF centre 362.75 kHz (the band's middle, off the 0.5 kHz raster) and
+  one NDB skimmer VFO, their hours kept — they decode what they did, and save back in the new shape. The whole-radio
+  background path in the shim (`bgNdbStartLocked`) is removed.
+- **The admin line**: "NDB skimmer 190–535 kHz · running · 12 beacons identified of 41 carriers · 3.2 %" (status JSON
+  `ndbLo` / `ndbHi` / `ndb`).
+
+### NDB keeps the FT8 summary's cards
+
+Whoever runs the skimmer — a listener's NDB mode, or the background NDB skimmer VFO above — the gallery keeps what an FT8
+VFO keeps (`vibe_ndb_gallery.h`, `DayLog`):
 
 - **Last 10 minutes** — ONE standing card, "NDB last 10 min · 23 beacons · furthest KER 412 km · best WOD 26 dB", the
   rolling last ten minutes; rewritten at most once a minute and only when the window changed, moved to the top, adopted
@@ -203,7 +247,7 @@ in the gallery. It now also keeps what an FT8 VFO keeps (`vibe_ndb_gallery.h`, `
 - **One store.** The cards are fed by the same `heard()` the day's log is (the service's confirmed beacons, at most once a
   minute each); there is no second record of NDB readings. A listener's NDB session gets the same cards, labelled live.
 - The RSP reaches LF (the API tunes from 1 kHz; the band constant is `vibendb::kBandLoHz`/`kBandHiHz`, 190–535 kHz). The Lenovo's
-  RSP is offered NDB by its driver at the save and by hwinfo `ndbHw` on the page.
+  RSP is offered the NDB skimmer by its driver at the save and by hwinfo `ndbHw` on the page.
 
 ### A Band digital-spots VFO
 
@@ -211,7 +255,14 @@ A VFO row can now choose **Digital spots: Band (summary)** (`"dec":"spots-band"`
 band the VFO's frequency is in — FT8, FT4, WSPR, JS8, FT2, JTTY and PSK on their own dials — through the listener's own Band
 mode (`digi::Spotter`, Band scope) and its CPU governor (`digi_governor.h`), kept as ONE summary for the band.
 
-- **The frequency names the band** (7074 = 40 m). The slice is cut on the band's span (`digi::spanOf` — the cluster round
+- **The setup page picks the BAND** (Stuart, 2026-10-27: when the decoder sets the frequency, the row's frequency box and
+  demodulator grey out). A Band row has a **band picker** in place of the frequency — from the radio's own list (hwinfo
+  `spotBands`), only the bands whose digital modes the profile's capture holds (160 m alone at 1200 kHz / 3 MS/s); the
+  demodulator is greyed out. The row stores the band's dial (its span's centre), so an older row's typed frequency inside
+  the band loads into that band and saves back unchanged until another band is picked; a band the centre no longer holds
+  stays listed, marked "(outside this window)", in red. Only where the radio's band list is unknown (its radio offline)
+  does the row keep a typed frequency.
+- On the server nothing changed: **the frequency names the band** (7074 = 40 m). The slice is cut on the band's span (`digi::spanOf` — the cluster round
   FT8, ≤ 48 kHz), not on the typed frequency, sized and tapered exactly as a listener's Band slice (`vibe_band_slice.h`),
   off the runner's SAME forward FFT; the band's extra slices (40 m's JTTY at 7.090 …) are cut where the capture holds them.
   Each block carries its CAPTURE time, stamped on the DSP thread (`BgRunner::feedIq`), so FT8/WSPR slots are cut by when
@@ -248,13 +299,13 @@ quiet band the gate decodes nothing. A busy band's engines cost what a listener'
 "The Band governor"), capped by the box's budget. Not measured on the Pi 2 or the Lenovo yet.
 
 **Stuart's Lenovo RSP, step by step** (Setup → Radio → the RSP's tab → Background Decoding, on):
-1. *NDB*: Profile 1 → **Decodes: NDB beacons — the whole LF beacon band** → set its hours (e.g. 18:00–06:00 UTC).
-2. *40 m Band*: "Want to add another background decoding profile?" → Profile 2 → Decodes: Stations on VFOs → **RF Centre
-   7000** kHz (the RSP at 2 MS/s or more holds 6.0–8.0 MHz) → VFO 1 **7074** kHz, USB, **Digital spots: Band (summary)**
-   (the line beneath says "40 m: WSPR, PSK, FT4, FT2, FT8, JS8, JTTY on 7.0396–7.0816 MHz …") → its hours (06:00–18:00).
-   Or keep the existing NAVTEX + 160 m profile and change its 1840 FT8 row to Band: with a centre of ~1.2 MHz and a rate
-   of 2 MS/s the 160 m span and 490/518 kHz NAVTEX fit one window.
-3. Save. The save refuses overlapping hours, a band outside the window, or NDB/Band where the radio cannot run them.
+1. The existing profile: **RF Centre 1200** kHz (the RSP at 3 MS/s) → VFO 1 **489.5** USB NAVTEX → VFO 2 **517.5** USB
+   NAVTEX → VFO 3 decoder **Digital spots: Band (summary)**, band **160 m** (the only band this window holds; frequency
+   and demodulator greyed out) → **+ Add another VFO** → VFO 4 decoder **NDB skimmer (summary)** (frequency and
+   demodulator greyed out; the line says "Covers 190–535 kHz of the NDB band at this RF centre"). Four VFOs, four
+   decoder slots — all on the one capture.
+2. Save. The save refuses overlapping hours, a band outside the window, an NDB skimmer whose capture misses the band, or
+   NDB/Band where the radio cannot run them.
 
 ## Listeners first: priority, in range, locked radios (2026-10-22, beta3)
 
@@ -464,7 +515,9 @@ PSKReporter (parked: "not really designed as a PSKReporting service").
 | `scripts/test-setup-bg-ism.mjs` | 18 | The setup editor's ISM profile (2026-10-25). |
 | `vibeserver/test-bg-band.cpp` | 28 | A Band digital-spots VFO: the config and the save's refusals, 40 m end to end on synthetic IQ through BgRunner (two FT8 stations → "Digital spots summary · Band 40 m", Japan furthest), the admin line, a quiet band all idle, switched off here (paused with why, no slot, NAVTEX beside it runs), the CPU at 2.4 MS/s. (2026-10-27) |
 | `vibeserver/test-ndb.cpp` (summary cards) | +10 | NDB's last-10 card (once a minute, only on change, one standing card, adopted by the next run) and hourly cards (partial and whole). (2026-10-27) |
-| `scripts/test-setup-bg-band.mjs` | 16 | The editor's Band VFO: offered only where it can run, the band and its modes named, red where it cannot, saved and read back. (2026-10-27) |
+| `scripts/test-setup-bg-band.mjs` | 23 | The editor's Band VFO: offered only where it can run, a band picker (only the bands the capture holds — 160 m at 1200 kHz / 3 MS/s) in place of the frequency, the demodulator greyed out, an older row's frequency loading into its band, red where it cannot, saved and read back. (2026-10-27) |
+| `scripts/test-setup-bg-ndb.mjs` | 31 | The editor's NDB skimmer VFO: offered only where the radio reaches LF and once a profile, frequency and demodulator greyed out, its line following the RF centre, Stuart's Lenovo profile (NAVTEX ×2 + 160 m Band + NDB) round-tripped, an older `"ndb":true` profile converted on load, no NDB in "Decodes". (2026-10-27) |
+| `vibeserver/test-bg-ndb.cpp` | 37 | The NDB skimmer VFO: the config (what it covers, the save's refusals in words, the Lenovo profile, the old profile converted), end to end — synthetic WOD + CAM at 1.024 MS/s centred 700 kHz through BgRunner's slice → the NDB service → the gallery's cards, NAVTEX beside it, nothing dropped; one slot (NAVTEX first, NDB waits), a listener's NDB mode pausing it with the reason, the radio moved off the band and back. (2026-10-27) |
 | `scripts/test_gallery_translate.ts` | 27 | TRANSLATE's rule: the lines sent and kept, the Mondolfo text as Italian, Niton's French, the station hint, no key in the target language, the layout put back. (2026-10-23) |
 
 The live test uses two test-only environment variables:
