@@ -1174,10 +1174,15 @@ function WaterfallView({
    *  iPhone: held 120 (build 507) — "judder seems to be gone"; held 40 (508/509) — judder; not held, ProMotion free to vary
    *  (510/511) — "still stuttering on interaction": iOS lifts the rate on a touch and drops it after, so un-held rows land
    *  on a changing beat). The FRAME RATE setting's cap still caps it natively; on a Mac the native side asks the full rate.
-   *  Released 1 s after the last row, on backgrounding and on unmount. */
+   *  NOW 60, NOT 120 (below). Released 1 s after the last row, on backgrounding and on unmount. */
   const steadyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noteRowsFlowing = useCallback(() => {
-    setSteadyRefresh(120);
+    // ★★★ ONE FIXED 60 while rows flow — the same during and after a touch (Stuart, 2026-10-28, after trying 120 held,
+    //     40, ProMotion free and a 120→60 step: "seems like a lot of tradeoffs for little gain" / "keep 60fps everywhere").
+    //     60 is a whole multiple of EVERY row rate the waterfall uses (wfRowTarget ROW_RATES 10, 12, 15, 20, 30, 60), so
+    //     rows land on an even beat whatever the feed; nothing switches, so nothing can judder; half 120's power; the
+    //     needle and LED meters (on the display's frames) stay smooth.
+    setSteadyRefresh(60);
     if (steadyTimer.current) clearTimeout(steadyTimer.current);
     steadyTimer.current = setTimeout(() => { steadyTimer.current = null; setSteadyRefresh(0); }, 1000);
   }, []);
