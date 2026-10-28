@@ -3229,10 +3229,22 @@ int main(int argc, char** argv) {
     });
     // ★ The admin page's "clear station logo cache" — see setLogoCacheClearHandler.
     LocalSdrShim::setLogoCacheClearHandler([] { vsradiodns::clearCache(); });
-    LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated) -> int {
+    // ★ The schedule goes to the shim's /stations list. A hook (not a call inside eibi.cpp) so the
+    //   EiBi test does not need the whole shim; set before the first load below.
+    vseibi::setPublisher([](const std::string& json) {
+        LocalSdrShim::instance().setStationsJson(json);
+    });
+    // ★ And the data dir BEFORE that first load — it was only set further down, so the start-up
+    //   load read /var/lib/vibeserver even where the cache lives elsewhere (the Mac).
+    vseibi::setDir(vsDataDir());
+    LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated,
+                                    std::string& note) -> int {
         int n = refresh ? vseibi::refresh(err) : 0;
         if (!refresh || n == 0) { const int c = vseibi::loadFromCache(); if (c > n) n = c; }
         updated = vseibi::status();
+        // ★★ "EiBi hasn't published the B26 (winter) schedule yet — using A26 until it appears."
+        //    In words, never as a curl error: it is the normal first days of a season.
+        note = vseibi::note();
         return n;
     });
     {
@@ -3258,7 +3270,11 @@ int main(int argc, char** argv) {
                 if (vseibi::needsRefresh()) {
                     std::string e;
                     const int n2 = vseibi::refresh(e);
-                    if (n2 > 0) std::printf("VibeServer: EiBi refreshed — %d entries\n", n2);
+                    if (n2 > 0) {
+                        const std::string nt = vseibi::note();
+                        if (nt.empty()) std::printf("VibeServer: EiBi refreshed — %d entries\n", n2);
+                        else std::printf("VibeServer: EiBi — %d entries. %s\n", n2, nt.c_str());
+                    }
                     else if (!e.empty())
                         std::fprintf(stderr, "VibeServer: EiBi refresh failed — %s\n", e.c_str());
                 }

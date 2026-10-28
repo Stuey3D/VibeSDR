@@ -14,6 +14,10 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ServerBookmark } from './stations';
+import {
+  type EibiState, type FetchOutcome, seasonFor, previousSeason, seasonUrl, shouldFetch,
+  refreshWithFallback, noteFor, utcDate,
+} from './eibiSeason';
 
 interface EibiEntry {
   freqHz: number;
@@ -46,28 +50,11 @@ function decodeWin1252(bytes: Uint8Array): string {
 }
 
 let _entries: EibiEntry[] | null = null;
-let _season  = '';
-let _date    = '';
-
-// ── Season file: A = summer (≈ last Sun Mar → last Sun Oct), B = winter ──────
-function seasonFile(d = new Date()): { file: string; season: string } {
-  const m = d.getUTCMonth() + 1, day = d.getUTCDate(), y = d.getUTCFullYear();
-  let summer: boolean;
-  if (m > 3 && m < 10) summer = true;
-  else if (m < 3 || m > 10) summer = false;
-  else if (m === 3) summer = day >= 25;   // ~last Sunday of March
-  else /* m === 10 */ summer = day < 25;  // ~last Sunday of October
-  // EiBi labels a season by the year it started; Jan/Feb belong to the
-  // previous year's winter (B) season.
-  let yy = y;
-  if (!summer && m <= 2) yy = y - 1;
-  const season = (summer ? 'a' : 'b') + String(yy).slice(-2);
-  return { file: `sked-${season}.csv`, season };
-}
-
-function utcDateStr(d = new Date()): string {
-  return d.toISOString().slice(0, 10);
-}
+// ★ What is held and what EiBi last said "not yet" to — see eibiSeason.ts. The season choice and
+//   its fallback live there (pure, tested); this file does the fetching and the storage.
+const _state: EibiState = { season: '', date: '', triedSeason: '', triedAt: 0 };
+let _loadedFromStore = false;
+let _error = '';
 
 function parse(csv: string): EibiEntry[] {
   const out: EibiEntry[] = [];
@@ -161,39 +148,80 @@ function activeNow(entries: EibiEntry[]): ServerBookmark[] {
   return out;
 }
 
-async function ensureLoaded(): Promise<void> {
-  const { file, season } = seasonFile();
-  const today = utcDateStr();
-  if (_entries && _season === season && _date === today) return;
+/** One season's file. ★ Plain http on purpose for now: https://www.eibispace.de serves an EXPIRED
+ *  certificate (checked 2026-10-03) — same note as vibeserver/eibi.cpp. */
+async function fetchSeason(code: string): Promise<FetchOutcome> {
+  let res: Response;
+  try {
+    res = await fetch(seasonUrl(code));
+  } catch (e: any) {
+    return { kind: 'failed', message: e?.message ?? 'no connection' };
+  }
+  if (res.status === 404 || res.status === 410) return { kind: 'unpublished' };
+  if (!res.ok) return { kind: 'failed', message: `HTTP ${res.status}` };
+  const csv = decodeWin1252(new Uint8Array(await res.arrayBuffer()));
+  const count = parse(csv).length;
+  // ★ A page with no entries is not a schedule — treat it as not published, never as the list.
+  return count > 0 ? { kind: 'ok', csv, count } : { kind: 'unpublished' };
+}
+
+// ★ One load at a time: the radio screen, the server screen and the server feed all ask, and a
+//   season fallback is two requests — three callers at once would be six.
+let _inFlight: Promise<void> | null = null;
+function ensureLoaded(): Promise<void> {
+  if (!_inFlight) _inFlight = ensureLoadedOnce().finally(() => { _inFlight = null; });
+  return _inFlight;
+}
+
+async function ensureLoadedOnce(): Promise<void> {
+  const now = new Date();
+  const cur = seasonFor(now);
 
   // Warm from cache first (instant, even if stale) so stations show offline.
-  if (!_entries || _season !== season) {
+  // ★★ This season's file OR the previous one: the previous IS the schedule while EiBi has not
+  //    published the new season yet (B26 was a 404 on 2026-10-27). Accepting only the current
+  //    season left the app with no schedule at all on every season change.
+  if (!_loadedFromStore) {
+    _loadedFromStore = true;
     try {
-      const [cs, csv, cd] = await Promise.all([
+      const [cs, csv, cd, tried] = await Promise.all([
         AsyncStorage.getItem('lsv_eibi_season2'),
         AsyncStorage.getItem('lsv_eibi_csv2'),
         AsyncStorage.getItem('lsv_eibi_date2'),
+        AsyncStorage.getItem('lsv_eibi_tried2'),
       ]);
-      if (csv && cs === season) { _entries = parse(csv); _season = season; _date = cd || ''; }
+      if (csv && cs && (cs === cur || cs === previousSeason(cur))) {
+        _entries = parse(csv); _state.season = cs; _state.date = cd || '';
+      }
+      if (tried) {
+        const t = JSON.parse(tried);
+        if (typeof t?.season === 'string' && typeof t?.at === 'number') {
+          _state.triedSeason = t.season; _state.triedAt = t.at;
+        }
+      }
     } catch {}
   }
 
-  // Refresh once a day (or if the season rolled over).
-  if (_date !== today || _season !== season) {
-    try {
-      const res = await fetch(`http://www.eibispace.de/dx/${file}`);
-      if (res.ok) {
-        const csv = decodeWin1252(new Uint8Array(await res.arrayBuffer()));
-        const parsed = parse(csv);
-        if (parsed.length > 0) {
-          _entries = parsed; _season = season; _date = today;
-          AsyncStorage.setItem('lsv_eibi_csv2', csv).catch(() => {});
-          AsyncStorage.setItem('lsv_eibi_season2', season).catch(() => {});
-          AsyncStorage.setItem('lsv_eibi_date2', today).catch(() => {});
-        }
-      }
-    } catch { /* keep whatever cache we have */ }
+  // Once a day; on a season change; and a season EiBi has not published every few hours.
+  if (_entries && !shouldFetch(_state, now)) return;
+  const r = await refreshWithFallback(_state, now, fetchSeason);
+  if (r.kind === 'failed') { _error = r.error; return; }   // keep whatever cache we have
+  _error = '';
+  if (r.kind === 'ok') {
+    _entries = parse(r.csv); _state.season = r.season; _state.date = utcDate(now);
+    AsyncStorage.setItem('lsv_eibi_csv2', r.csv).catch(() => {});
+    AsyncStorage.setItem('lsv_eibi_season2', r.season).catch(() => {});
+    AsyncStorage.setItem('lsv_eibi_date2', _state.date).catch(() => {});
   }
+  AsyncStorage.setItem('lsv_eibi_tried2',
+    JSON.stringify({ season: _state.triedSeason, at: _state.triedAt })).catch(() => {});
+}
+
+/** A plain sentence about the schedule in use, for the server screen: the note when EiBi has not
+ *  published this season yet ("EiBi hasn't published the B26 (winter) schedule yet — using A26
+ *  until it appears."), or the last real failure. '' when all is well. */
+export function eibiStatusNote(): string {
+  return noteFor(_state, new Date()) || _error;
 }
 
 /** Currently-active EiBi entries as bookmarks (time + weekday filtered). */

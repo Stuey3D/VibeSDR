@@ -3773,6 +3773,11 @@ function paintSaveButton() {
   }
 }
 
+/** ★★ EiBi publishes a season's file when it is ready, which can be weeks after our date switch
+ *  (B26 was a 404 on 2026-10-27). The server then serves the previous season and says so in
+ *  `note` — shown as-is, in words, after the count. Older servers send no note. */
+function eibiNote(j) { return j && j.note ? " " + j.note : ""; }
+
 async function eibiStatus() {
   const el = $("eibiState");
   if (!el) return;
@@ -3780,7 +3785,7 @@ async function eibiStatus() {
     const r = await fetch("/vibeserver/eibi", { cache: "no-store" });
     const j = await r.json();
     el.textContent = j.entries
-      ? `${j.entries.toLocaleString()} entries, updated ${j.updated || "unknown"}.`
+      ? `${j.entries.toLocaleString()} entries, updated ${j.updated || "unknown"}.` + eibiNote(j)
       : "Not downloaded yet — this receiver's search will find frequencies but not station names.";
     el.style.color = j.entries ? "var(--good)" : "var(--dim)";
   } catch { el.textContent = "This server is too old to fetch the schedule."; }
@@ -3795,7 +3800,7 @@ async function eibiFetch() {
     //   machine, triggerable by anyone who can reach the port if it were not.
     const r = await fetch("/vibeserver/eibi?refresh=1&" + (await authQuery()), { cache: "no-store" });
     const j = await r.json();
-    if (j.entries) { el.textContent = `${j.entries.toLocaleString()} entries, updated ${j.updated}.`;
+    if (j.entries) { el.textContent = `${j.entries.toLocaleString()} entries, updated ${j.updated}.` + eibiNote(j);
                      el.style.color = "var(--good)"; }
     else { el.textContent = j.error || "could not download the schedule"; el.style.color = "var(--bad)"; }
   } catch (e) { el.textContent = "could not reach the server"; el.style.color = "var(--bad)"; }
