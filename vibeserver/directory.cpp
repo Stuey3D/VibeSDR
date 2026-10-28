@@ -117,6 +117,20 @@ std::string run(const std::string& cmd) {
  *  created by mkstemp (O_EXCL, owner-only) in our own state directory, handed over as
  *  `--data-binary @file` (exact bytes; `-d @` would strip newlines), and unlinked straight after.
  *  ★ Only the temp file's PATH is on the command line, and it is still shellQuote()d. */
+
+/** The offset of `key` (e.g. "\"modes\":") at the TOP level of the JSON object `j` — depth 1, outside strings — or
+ *  npos. A plain find() matches the same key inside a nested object or array first. */
+static size_t topLevelKey(const std::string& j, const std::string& key) {
+    int depth = 0; bool str = false, esc = false;
+    for (size_t i = 0; i < j.size(); ++i) {
+        const char c = j[i];
+        if (str) { if (esc) esc = false; else if (c == '\\') esc = true; else if (c == '"') str = false; continue; }
+        if (c == '"') { if (depth == 1 && j.compare(i, key.size(), key) == 0) return i; str = true; continue; }
+        if (c == '{' || c == '[') ++depth; else if (c == '}' || c == ']') --depth;
+    }
+    return std::string::npos;
+}
+
 static std::string writeBodyFile(const std::string& json) {
     // ★ In RAM where there is one: /run/vibeserver (tmpfs, the service's own RuntimeDirectory) — a POST
     //   body that lives for one curl call has no business on an SD card (2026-10-10 write audit).
@@ -539,8 +553,11 @@ std::string buildStatus(int port) {
                                 j += std::string(",\"autoDs\":") + (jsonBool(ri, "autoDs") ? "true" : "false");
                             { const long long co = jsonNum(ri, "convOffsetHz", 0);
                               if (co != 0) j += ",\"convOffsetHz\":" + std::to_string(co); }
+                            /* ★★ THE RADIO'S OWN `modes`, at the TOP of its object — never a nested one (2026-10-28: beta32's
+                             *  spotBands list put each band's own "modes" first, and a plain find() took the first
+                             *  band's FT8/FT2/JS8/WSPR: the directory showed "1 MODES" for every V12 radio). */
                             { const std::string k2 = "\"modes\":";
-                              size_t a = ri.find(k2);
+                              size_t a = topLevelKey(ri, k2);
                               if (a != std::string::npos) {
                                   a = ri.find('[', a);
                                   const size_t b = a == std::string::npos ? a : ri.find(']', a);
