@@ -247,7 +247,7 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    Edge, --mute-audio, the real server. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-web-waterfall-history.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-# ★★ V12 the full-capture row (SPWB): only to a socket that asked `wide=1`, only while zoomed, one per 8 SPEC frames, no
+# ★★ The full-capture row (SPWB v2): only to a socket that asked `wide=1`, only while zoomed, one per 4 SPEC frames, no
 #    extra frames, the capture's centre/span, a one-bin carrier outside the view kept. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-wide-rows.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -529,6 +529,15 @@ if node --no-warnings scripts/test_wf_pace.ts; then pass=$((pass+1)); else fail=
 if node --no-warnings scripts/test_wf_zoom_fan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 the full-capture layer under the web waterfall's history (wfWide.ts): SPWB parse, extent, placement, no-data.
 if node --no-warnings scripts/test_wf_wide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the APP's full-capture layer (src/utils/wfWide.ts): SPWB v2 parse, the layer ring, the fill through each row's fan map.
+if node --no-warnings scripts/test_wf_wide_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ `&wide=1` only for a server that said "wide" ≥ 2 in its preflight or hwinfo (src/services/wideCapsCore.ts).
+if node --no-warnings scripts/test_wide_caps.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ The Android native spectrum engine's twins of the above (host builds): motion + zoom fan + layer, the engine, SPEC/SPWB decode.
+SPX=android/app/src/main/cpp/spectrum
+if g++ -std=c++17 -O2 "$SPX/test_wf_motion.cpp" -o "$OUT/test_wf_motion" && "$OUT/test_wf_motion"; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if g++ -std=c++17 -O2 -I "$VDSP" "$SPX/test_spectrum_engine.cpp" "$SPX/spectrum_engine.cpp" "$VDSP/spectrum_processor.cpp" -o "$OUT/test_spectrum_engine" && "$OUT/test_spectrum_engine"; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if g++ -std=c++17 -O2 "$SPX/test_spec_decoder.cpp" "$SPX/spec_decoder.cpp" -o "$OUT/test_spec_decoder" && "$OUT/test_spec_decoder"; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ The web waterfall's GLIDE (web/client/src/wfGlide.ts): a fast tune draws one continuous trail, the noise floor unsmeared.
 if node --no-warnings scripts/test_wf_glide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE ROW TARGET FOLLOWS THE FEED (src/assets/wfRowTarget.ts, Stuart 10-20): Default min(20, 3x), Smooth min(60, 6x),
