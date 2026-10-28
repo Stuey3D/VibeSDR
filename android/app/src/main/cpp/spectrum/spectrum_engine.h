@@ -21,6 +21,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -84,6 +85,11 @@ public:
      *  a frame in the last NATIVE_FED_MS, pushFrame (JS's copy of the same frame, delivered later) is ignored — so a
      *  server on the native socket and one on the JS path (OWRX, Kiwi) need no switch. */
     void pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    /** ★★ V12 a full-capture row (SPWB v2, wf_wide.h) — the bytes as received; copied, applied on the engine thread with
+     *  its ARRIVAL time (the layer interpolates between rows by it). From the native socket (…Native, its thread) or
+     *  from JS (a server on the JS socket; ignored while the native socket feeds frames, as pushFrame is). */
+    void pushWide(const uint8_t* p, size_t len);
+    void pushWideNative(const uint8_t* p, size_t len);
     void setView(double centerHz, double bwHz);              // the props view (viewRef) — in-flight alignment
     void setConfig(const EngineConfig& c);
     void setSettings(const vibedsp::SpectrumProcessorSettings& s);
@@ -100,9 +106,14 @@ public:
     /** Host tests: run `ms` of engine time synchronously instead of on the thread. */
     void testStep(double nowMs);
     static SpectrumEngine* makeForTest(MakeImage, MakePath, Release, Release, Clock);
+    /** Host tests: the layer ring (null until the first SPWB) and the full-capture state's floor offset. */
+    const vibewf::LayerRing* layerForTest() const { return fan_.layer.get(); }
+    double wideOffForTest() const { return wide_ ? wide_->off : NAN; }
 
 private:
     void pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    void pushWideImpl(const uint8_t* p, size_t len);
+    void applyWide(const std::vector<uint8_t>& bytes, double at);   // engine thread
     struct Frame { std::vector<float> bins; double centerHz = 0, bwHz = 0, trueCenterHz = NAN; double arrivedMs = 0; };
 
     void loop();
@@ -139,6 +150,8 @@ private:
     static constexpr double NATIVE_FED_MS = 2000;
     vibedsp::SpectrumProcessorSettings pendingSettings_;
     std::vector<Frame> framePool_;        // recycled frame buffers
+    struct WideIn { std::vector<uint8_t> bytes; double at = 0; };
+    std::deque<WideIn> wideInbox_;        // ★ V12 full-capture rows waiting for the engine thread (newest few)
 
     // Engine-thread state
     vibedsp::SpectrumProcessor proc_;
@@ -162,6 +175,12 @@ private:
     EngineConfig cfgNow_;
     double viewC_ = 0, viewBw_ = 0, interactAt_ = 0;
     std::vector<float> specScratch_, peakXY_;
+    // ★★ V12 THE FULL-CAPTURE LAYER (wf_wide.h): the newest picture of the whole capture (null until a server sends one —
+    //    an older server allocates nothing), the detailed rows' median (its floor match) and the last row's placement.
+    std::unique_ptr<vibewf::WideState> wide_;
+    vibewf::WideRow wideRow_;
+    double detP50_ = NAN, placedLo_ = NAN, placedSpan_ = 0;
+    std::vector<float> p50Scratch_;
 
     // Outbox for the UI (under mx_)
     void* outImage_ = nullptr; double outHead_ = 0; bool texReady_ = false;

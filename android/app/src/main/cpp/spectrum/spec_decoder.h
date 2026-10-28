@@ -9,6 +9,7 @@
 // Layout (little-endian): u32 magic "SPEC", u8 version, u8 flags, u64 timestamp (unused), u64 frequency Hz, body.
 //   0x01 full f32 · 0x02 delta f32 (u16 count, {u16 idx, f32}) · 0x03 full u8 · 0x04 delta u8 (u16 count, {u16 idx, u8})
 //   u8 → dBFS = u8 − 256.  Gzipped JSON control frames (1f 8b) are NOT spectrum — the caller hands those to JS.
+//   "SPWB" (V12) is the full-capture row — kWide, see below.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -18,7 +19,10 @@ namespace vibespec {
 
 class SpecDecoder {
 public:
-    enum Result { kSpectrum, kNotSpec, kFault, kIgnored };   // kIgnored: the JS returns silently (delta body < 2)
+    enum Result { kSpectrum, kNotSpec, kFault, kIgnored, kWide };   // kIgnored: the JS returns silently (delta body < 2)
+    // ★★ kWide (V12): an SPWB full-capture row (wf_wide.h) — recognised BEFORE the SPEC checks, which count any other magic
+    //    as a fault. Not decoded here: the caller hands the bytes to the engine's layer. Only a socket that asked `wide=1`
+    //    (a server whose hwinfo said "wide" >= 2) ever receives one.
 
     /** Decode one binary frame. kSpectrum: bins() now holds the frame (raw server order) and `frequency` its Hz. */
     Result feed(const uint8_t* p, size_t len, double& frequency);
@@ -27,6 +31,7 @@ public:
     void setBinCount(int n) { binCount_ = n; if (n > 0 && (int)bins_.size() != n) bins_.assign(n, 0.f); }
     int binCount() const { return binCount_; }   // updated by full frames, as status.binCount is
     static bool isGzip(const uint8_t* p, size_t len) { return len >= 2 && p[0] == 0x1f && p[1] == 0x8b; }
+    static bool isWide(const uint8_t* p, size_t len) { return len >= 4 && p[0] == 'S' && p[1] == 'P' && p[2] == 'W' && p[3] == 'B'; }
 
 private:
     std::vector<float> bins_ = std::vector<float>(1024, 0.f);   // the JS starts at Float32Array(1024), binCount 1024

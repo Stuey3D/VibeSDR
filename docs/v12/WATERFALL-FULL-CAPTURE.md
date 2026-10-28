@@ -1,7 +1,7 @@
 # The full-capture layer — spec for the APP (iOS/Mac JS path + Android native engine)
 
-**Status:** server + web built on `v12-wf-wide-buffer` (2026-10-28) — SPWB **v2** (floor + peaks). The app is NOT done;
-this is its spec.
+**Status:** server + web built on `v12-wf-wide-buffer` (2026-10-28) — SPWB **v2** (floor + peaks). **App built on
+`v12-app-wf-wide` (2026-10-28)** — see "The app build" at the end; this is still its spec.
 **Why:** Stuart, beta26 web, 02:00: *"the waterfall should be buffering outside the zoomed area so that the black
 doesn't show at all."* His acceptance spec: *"NO SLICING when zooming or tuning, MINIMAL black gaps ONLY when absolutely
 necessary due to the SDR catching up from a large move or rapid tuning, and the waterfall PRESERVED on orientation change
@@ -101,3 +101,26 @@ Only clear when the new view lies outside the previous view ∪ the last fresh S
   row — 51 µs a row on an M-series core (32768 bins), ~1 ms on a Pi 2 (estimate ×15–25); 5 rows/s at 20 fps.
 - App: one layer row per ring row (C + F + 4 bytes), one blend pass per row written (C cells); the per-pixel peak rule
   only where the layer shows.
+
+## The app build (2026-10-28, `v12-app-wf-wide`)
+
+- **Pure core, both paths:** `src/utils/wfWide.ts` (JS) and `android/app/src/main/cpp/spectrum/wf_wide.h` (native), line for
+  line: parse, the time blend + floor match (§2), the LAYER RING (§3) and the fill (§4). The fill runs inside the zoom fan's
+  `fanRegen` (wfRowPlace.ts / wf_zoom_fan.h) for every row it regenerates — the texels the detailed row has no data for
+  (`lo[x] < 0`) take the layer at `uc = k·u + m`; the on-screen edge cross-fades over ~6 pt. The SkSL shader is
+  UNCHANGED (the GPU pays nothing; the shader's own two-row blend gives the soft vertical look, each row with its own m).
+- **Sparse peaks, not dense:** per slot F floor indices + ≤ 160 (cell, index, shape) + k, m — 784 B a slot, ~0.8 MB for
+  1024 rows (the web's dense 2·C is 2.2 MB), allocated at the FIRST SPWB. A thin carrier lights the texels within
+  max(½ texel, its half-width): one texel.
+- **The wire:** `&wide=1` only for a server remembered as `"wide" ≥ 2` (`src/services/wideCapsCore.ts`, per base URL,
+  AsyncStorage). hwinfo arrives AFTER the spectrum URL is chosen, so the FIRST visit to a server gets no SPWB; every later
+  socket (resume, reconnect, next session) does. Server change that would fix the first visit: put `"wide":2` in the
+  `/connection` preflight reply (the app already reads it there).
+- **Routing:** JS socket → `VibeServerWsClient._parseBinaryFrame` recognises SPWB before the SPEC magic check →
+  `services/wideRowBus.ts` → WaterfallView (JS path: wideArrive + the layer ring; Android engine: `engine.pushWide`).
+  Android native socket → `SpecDecoder::kWide` → `SpectrumEngine::pushWideNative` on the socket thread (not queued for JS).
+- **History clear (§5):** the app never clears its history (a jump re-maps it, a far one scrolls it off), so there is
+  nothing to gate; a stale (> 4 s) or other-band picture draws nothing outside the capture it describes.
+- **Tests:** `scripts/test_wf_wide_app.ts`, `scripts/test_wide_caps.ts`, the layer sections of `scripts/test_wf_row_place.ts`
+  and `scripts/test_wf_shader_motion.ts` (the real shader), `cpp/spectrum/test_wf_motion.cpp`, `test_spectrum_engine.cpp`
+  §4c, `test_spec_decoder.cpp`.

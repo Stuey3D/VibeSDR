@@ -12,7 +12,10 @@
  *   • steady rows are pixel-identical with the motion machinery on or off (nothing changes outside a move);
  *   • a zoom fans the history (no slices: every history line's carrier at the live column) and the screen ease in mid
  *     flight draws one continuous geometry (no seam between history and the new rows);
- *   • a resize (fewer/more visible rows) keeps the same rows — the ring is not rebuilt.
+ *   • a resize (fewer/more visible rows) keeps the same rows — the ring is not rebuilt;
+ *   • V12 THE FULL-CAPTURE LAYER (src/utils/wfWide.ts): zoom in AWAY from the stations and back out — every history line
+ *     recorded while zoomed in shows every strong station at its live column, thin, and no black (CONTROL: an older server,
+ *     no SPWB, draws those lines black outside the strip). WF_LAYER_PNG=<path> writes the before | after picture.
  * Writes the comparison PNG (reference frame | settled | mid-glide | before) when WF_PNG=<path> is set.
  * Skips (exit 0) if canvaskit-wasm is not installed (it comes with @shopify/react-native-skia's web build).
  * Run: node --no-warnings scripts/test_wf_shader_motion.ts
@@ -23,6 +26,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../src/utils/wfRowPlace.ts';
 import { easeAt, easeCompose } from '../src/utils/wfPace.ts';
+import { layerWriteRow, newLayerRing, newWideState, wideArrive, type WideRow } from '../src/utils/wfWide.ts';
 import { COLORMAPS_256 } from '../src/assets/colormaps.ts';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -102,7 +106,7 @@ function draw(R: Ring, o: { lut?: Uint8Array; motion?: boolean; cont?: number; z
   const paint = new CK.Paint(); paint.setShader(sh);
   surf.getCanvas().drawRect(CK.LTRBRect(0, 0, W, h), paint);
   const px = surf.getCanvas().readPixels(0, 0, { width: W, height: h, colorType: CK.ColorType.RGBA_8888, alphaType: CK.AlphaType.Unpremul, colorSpace: CK.ColorSpace.SRGB });
-  if (o.lut && process.env.WF_PNG) lastSurf.push({ surf, h });
+  if (o.lut && (process.env.WF_PNG || process.env.WF_LAYER_PNG)) lastSurf.push({ surf, h });
   else surf.delete();
   paint.delete(); sh.delete(); wf.delete(); lu.delete(); img.delete(); lut.delete();
   return px as Uint8Array;
@@ -205,6 +209,75 @@ for (const [name, px] of [['settled', settled], ['mid-glide (continuous, t = 0.5
   for (let y = 0; y < 200 * ROW_PX; y++) for (let x = 0; x < W; x += 7) if (short[(y * W + x) * 4] !== settled[(y * W + x) * 4]) diff++;
   // (a handful of px may differ by float rounding of the sub-row position inside a warped row — not a re-draw)
   ok('a resize keeps the history: the newest 200 rows draw identically at a shorter height', diff <= 10, `${diff} px differ`); }
+
+// ── 5. V12 THE FULL-CAPTURE LAYER: zoom in away from the stations, then back out (docs/v12/WATERFALL-FULL-CAPTURE.md) ──
+{
+  const CAPC = 1_000_000, CAPS = 2_400_000, CLO = CAPC - CAPS / 2, FB = 128, CC = 1024;
+  /** The SPWB row the server would send of this synthetic band, in the rows' own units (index = "dB" here, toIdx the
+   *  identity): the floor is the speckle's middle, every station a narrow carrier cell and its sidebands' cells. */
+  const wideRow = (): WideRow => {
+    const floor = new Float32Array(FB).fill(0.32 * 255), spread = new Float32Array(FB);
+    const cells: [number, number, number][] = [];
+    for (const st of stations) {
+      const cf = (st.f - CLO) / CAPS * CC, c = Math.floor(cf), off = Math.min(15, Math.floor((cf - c) * 16));
+      for (const d of [-2, -1, 1, 2]) cells.push([c + d, st.lvl * 255 * (0.62 + 0.1 * rnd()), (15 << 4) | 7]);   // a sideband fills its cell
+      cells.push([c, st.lvl * 255, off]);                                                                          // the carrier: one bin
+    }
+    cells.sort((a, b) => a[0] - b[0]);
+    const pkCell = new Int32Array(cells.length), pkDb = new Float32Array(cells.length), pkShape = new Uint8Array(cells.length);
+    cells.forEach(([c, v, sh], i) => { pkCell[i] = c; pkDb[i] = v; pkShape[i] = sh; });
+    return { centreHz: CAPC, spanHz: CAPS, floor, spread, cells: CC, pkCell, pkDb, pkShape, nPk: cells.length };
+  };
+  const ident = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  const mkL = (wide: boolean) => { const R = newRing(); return { R, st: newWideState(), wide, placed: { startHz: NaN, spanHz: 0 }, t: 0 }; };
+  type LR = ReturnType<typeof mkL>;
+  const pushL = (X: LR, c: number, bw: number) => {
+    if (X.wide && X.R.frames % 4 === 0) { wideArrive(X.st, wideRow(), X.t, X.placed.startHz, X.placed.spanHz, NaN); if (!X.R.fan.layer) X.R.fan.layer = newLayerRing(ROWS, FB, CC); }
+    const slot = placeRow(X.R.buf, ROWS, N, X.R.frames, bandRow(c, bw), c, bw / N, c, bw, X.R.ms, X.R.fan, 600, X.placed);
+    if (X.R.fan.layer) { X.R.fan.layer.fadeTx = 6 * N / 393; layerWriteRow(X.R.fan.layer, slot, X.st, X.placed.startHz, X.placed.spanHz, X.t, ident); }
+    X.R.frames++; X.t += 50;
+  };
+  const VC = 1_000_000, VS = 600_000, ZC = 1_160_000, ZS = 50_000;
+  const scene = (X: LR) => {
+    for (let i = 0; i < 100; i++) pushL(X, VC, VS);
+    for (let i = 0; i < 60; i++) pushL(X, ZC, ZS);    // zoomed in, away from most stations
+    for (let i = 0; i < 120; i++) pushL(X, VC, VS);   // back out
+  };
+  const L = mkL(true), O = mkL(false); seed = 21; scene(L); seed = 21; scene(O);
+  const pl = draw(L.R), po = draw(O.R);
+  // the zoomed rows are 120..180 rows down: device lines 360..540 (3 px a row); test the middle of them
+  const y0 = 125 * ROW_PX, y1 = 175 * ROW_PX, zl = (ZC - ZS / 2 - (VC - VS / 2)) / VS * W, zr = (ZC + ZS / 2 - (VC - VS / 2)) / VS * W;
+  const strong = stations.filter((st) => st.lvl > 0.8).map((st) => ({ st, x: (st.f - (VC - VS / 2)) / VS * W }))
+    .filter((o) => o.x > 20 && o.x < W - 20 && (o.x < zl - 20 || o.x > zr + 20));
+  const thr = (lvl: number) => Math.round(lvl * 255 * 0.8);
+  let seen = 0, total = 0, widest = 0, oseen = 0;
+  for (let y = y0; y < y1; y += ROW_PX) for (const o of strong) {
+    total++;
+    const r = run(pl, y, o.x, thr(o.st.lvl), 6); if (r) { seen++; widest = Math.max(widest, r[1] - r[0] + 1); }
+    if (run(po, y, o.x, thr(o.st.lvl), 6)) oseen++;
+  }
+  ok(`the layer, on the real shader: every history line recorded while zoomed in shows every strong station at its live column (${seen}/${total}, ${strong.length} stations)`, seen === total && strong.length >= 4);
+  ok(`the layer: …thin — the widest carrier run is ${widest} device px (one texel = ${(W / N).toFixed(2)} px)`, widest <= 9);
+  ok(`CONTROL: an older server (no SPWB) — those lines are black outside the strip (${oseen}/${total} seen)`, oseen === 0);
+  { let black = 0; for (let y = y0; y < y1; y += ROW_PX) for (let x = 0; x < W; x += 3) if (pl[(y * W + x) * 4] === 0 && pl[(y * W + x) * 4 + 1] === 0 && pl[(y * W + x) * 4 + 2] === 0) black++;
+    // (gray LUT: index 0 is black — the floor's speckle here never clips, so any black is a hole)
+    ok(`the layer: no black inside the capture in those lines (${black} px)`, black === 0); }
+  if (process.env.WF_VERBOSE) console.log(`  layer: ${seen}/${total} seen, widest ${widest} px, control ${oseen}`);
+  if (process.env.WF_LAYER_PNG) {
+    lastSurf.length = 0;
+    draw(O.R, { lut: lutGqrx }); draw(L.R, { lut: lutGqrx });
+    const PW = 600, PH = Math.round(H * PW / W);
+    const out = CK.MakeSurface(PW * 2 + 10, PH + 40); const cv = out.getCanvas();
+    cv.clear(CK.Color(20, 20, 20, 1));
+    lastSurf.forEach((sf, i) => { const im = sf.surf.makeImageSnapshot();
+      cv.drawImageRectOptions(im, CK.LTRBRect(0, 0, W, sf.h), CK.LTRBRect(i * (PW + 10), 40, i * (PW + 10) + PW, 40 + PH), CK.FilterMode.Linear, CK.MipmapMode.None, null); });
+    const font = new CK.Font(null, 16); const tp = new CK.Paint(); tp.setColor(CK.Color(240, 240, 240, 1));
+    ['before (no SPWB): zoom in, then out', 'APP + full-capture layer (SPWB v2)'].forEach((t, i) => cv.drawText(t, i * (PW + 10) + 8, 26, tp, font));
+    writeFileSync(process.env.WF_LAYER_PNG, out.makeImageSnapshot().encodeToBytes());
+    lastSurf.forEach((sf, i) => writeFileSync(process.env.WF_LAYER_PNG!.replace(/\.png$/, `.full${i}.png`), sf.surf.makeImageSnapshot().encodeToBytes()));
+    console.log(`  wrote ${process.env.WF_LAYER_PNG}`);
+  }
+}
 
 // ── The comparison PNG: reference | settled | mid-glide | before ──
 if (process.env.WF_PNG) {
