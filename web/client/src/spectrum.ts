@@ -1873,15 +1873,14 @@ export class SpectrumClient {
     }
   }
 
-  private wideDb: Float32Array | null = null;
   private _handleBinary(buf: ArrayBuffer) {
     // ★ Every drop counted — a frame thrown away in silence reads as a frozen waterfall.
     if (buf.byteLength < 22) { noteFault('web-spec', 'short-frame', new Error('frame too short'), `len=${buf.byteLength}`); return; }
     const dv = new DataView(buf);
     // ★ V12 the full-capture row (SPWB) — asked for with `wide=1`; the layer under the waterfall's history (wfWide.ts).
     if (dv.getUint32(0, true) === WIDE_MAGIC) {
-      const w = parseWide(buf, U8_DBFS_OFFSET, this.wideDb);
-      if (w) { this.wideDb = w.db; this.cb.onWide?.(w); }
+      const w = parseWide(buf, U8_DBFS_OFFSET);
+      if (w) this.cb.onWide?.(w);
       return;
     }
     if (dv.getUint32(0, true) !== SPEC_MAGIC) { noteFault('web-spec', 'bad-magic', new Error('bad magic'), `len=${buf.byteLength}`); return; }

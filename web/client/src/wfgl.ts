@@ -47,10 +47,15 @@ precision mediump float;
 #endif
 uniform sampler2D uRing;   // LUMINANCE, ringW × ringH — the dB index (WebGL1 samples L as .rgb)
 uniform sampler2D uLut;    // 256×1 RGBA palette
-uniform sampler2D uCoarse; // ★ V12 the full-capture layer (wfWide.ts): WIDE_TEX × ringH, same rows as uRing; 0 = no data
+// ★ V12 the full-capture layer (wfWide.ts), in CAPTURE space, one row per ring row (the same row index as uRing):
+uniform sampler2D uFloorT; // F × ringH LUMINANCE, linear: the floor (palette index; 0 = no data)
+uniform sampler2D uPeakT;  // C × ringH LUMINANCE_ALPHA, nearest: per cell the peak's index (0 = none) and its shape byte
+uniform sampler2D uMT;     // 1 × ringH RGBA, nearest: the row's m (24 bits — wfWide.encodeM)
 uniform float uHasCoarse;  // 0 until the first full-capture row (an older server never sends one)
-uniform HP float uX;       // this run's extent: the coarse row covers the detailed row's u in [−X, 1 + X]
+uniform HP float uX;       // this run's k (row span ÷ capture span): u_capture = k·u + m. 0 = no layer
 uniform HP float uXNext;   // the next run's
+uniform HP float uCells;   // C
+uniform HP float uPxX;     // one output pixel in x units (1 / width)
 uniform float uFade;       // the cross-fade at a detailed row's edge, in x units (a few pixels)
 uniform HP float uHead;    // newest row index in the ring
 uniform HP float uRows;       // ring height (fixed, generous)
@@ -114,25 +119,56 @@ float ringAt(HP float ux, HP float ty, float taps) {
   return v;
 }
 
-// ★ V12 THE FULL-CAPTURE LAYER (wfWide.ts): the detailed row where it has data, the coarse full-capture row everywhere
-//   else — black only where the radio was not capturing. Read through the SAME map (so the fan, the bend and a resize move
-//   both together). Where the detailed row's edge is ON SCREEN the two cross-fade over uFade, so a zoom out shows no
-//   hard-edged block of different resolution.
-float layerAt(HP float ux, HP vec2 map, HP float X, HP float ty, float taps) {
-  bool inside = ux >= 0.0 && ux <= 1.0;
-  float d = inside ? ringAt(ux, ty, taps) : 0.0;
-  if (uHasCoarse < 0.5 || X <= 0.0) return d;
-  HP float uc = (ux + X) / (1.0 + 2.0 * X);
-  float c = (uc < 0.0 || uc > 1.0) ? 0.0 : texture2D(uCoarse, vec2(uc, ty)).r;
-  bool hasC = c > 0.5 / 255.0;
-  if (!inside) return hasC ? c : 0.0;
-  if (!hasC) return d;
+// ★ V12 THE FULL-CAPTURE LAYER (wfWide.ts): the detailed row where it has data, the full-capture layer everywhere else —
+//   black only where the radio was not capturing. Read through the SAME map (the fan, the bend and a resize move both
+//   together). Where the detailed row's edge is ON SCREEN the two cross-fade over uFade (no hard-edged block).
+// ★★ v2, "the same waterfall, just less sharp": the layer is the FLOOR (linear between its bins) with every PEAK drawn
+//    as a line at its own frequency, its own width — at least 0.6 px, so a thin carrier stays a thin line at any zoom.
+HP float rowM(HP float tyRow) {
+  vec4 t = texture2D(uMT, vec2(0.5, tyRow));
+  HP vec3 b = floor(t.rgb * 255.0 + 0.5);
+  return (b.r * 65536.0 + b.g * 256.0 + b.b) / 16777215.0 * 4.0 - 2.0;
+}
+float coarseAt(HP float u, HP float k, HP float a, HP float tyRow) {
+  HP float uc = k * u + rowM(tyRow);
+  if (uc < 0.0 || uc > 1.0) return -1.0;
+  float f = texture2D(uFloorT, vec2(uc, tyRow)).r;
+  if (f < 0.5 / 255.0) return -1.0;
+  float v = f;
+  HP float pxU = max(k * abs(a) * uPxX, 1e-7);   // one screen pixel, in capture fraction
+  HP float cell = floor(uc * uCells);
+  for (int d = -2; d <= 2; d++) {
+    HP float ci = cell + float(d);
+    if (ci < 0.0 || ci >= uCells) continue;
+    vec4 p = texture2D(uPeakT, vec2((ci + 0.5) / uCells, tyRow));
+    if (p.r < 0.5 / 255.0) continue;
+    float sh = floor(p.a * 255.0 + 0.5);
+    float off = mod(sh, 16.0), w16 = floor(sh / 16.0) + 1.0;
+    HP float c0 = (ci + (off + 0.5) / 16.0) / uCells;
+    HP float hw = max(0.6 * pxU, w16 / 32.0 / uCells);
+    if (abs(uc - c0) <= hw) v = max(v, p.r);
+  }
+  return v;
+}
+// How far inside the detailed row's ON-SCREEN edges this pixel is, 0..1 over uFade (1 = fully detailed).
+float edgeE(HP vec2 map) {
   HP float x = vUv.x;
   HP float xl = -map.y / map.x, xr = (1.0 - map.y) / map.x;
   float e = 1.0;
   if (xl > 0.0) e = min(e, float((x - xl) / uFade));
   if (xr < 1.0) e = min(e, float((xr - x) / uFade));
-  return mix(c, d, clamp(e, 0.0, 1.0));
+  return clamp(e, 0.0, 1.0);
+}
+// One ring row (at its exact centre tyRow): detailed, the layer, or the cross-fade between them.
+float layerRow(HP float u, HP vec2 map, HP float k, HP float tyRow, float taps) {
+  bool inside = u >= 0.0 && u <= 1.0;
+  float d = inside ? ringAt(u, tyRow, taps) : 0.0;
+  if (uHasCoarse < 0.5 || k <= 0.0) return d;
+  float e = inside ? edgeE(map) : 0.0;
+  if (e >= 1.0) return d;
+  float c = coarseAt(u, k, map.x, tyRow);
+  if (c < 0.0) return d;
+  return inside ? mix(c, d, e) : c;
 }
 
 void main() {
@@ -150,10 +186,15 @@ void main() {
   HP float r0 = mod(uHead + j, uRows);
   float v;
   if (j < uRunEnd - 1.0 && r0 < uRows - 1.0) {
-    v = layerAt(vU, uMapF, uX, (r0 + 1.0) / uRows, uTaps);
+    // ★ inside the detailed rows (the common case): the one-fetch blend, exactly as before; the layer is per row (each row
+    //   has its own m), so where it shows the two rows are read separately and averaged
+    if (uHasCoarse < 0.5 || uX <= 0.0 || (vU >= 0.0 && vU <= 1.0 && edgeE(uMapF) >= 1.0))
+      v = ringAt(vU, (r0 + 1.0) / uRows, uTaps);
+    else
+      v = 0.5 * (layerRow(vU, uMapF, uX, (r0 + 0.5) / uRows, uTaps) + layerRow(vU, uMapF, uX, (r0 + 1.5) / uRows, uTaps));
   } else {
     HP float r1 = mod(r0 + 1.0, uRows);
-    v = 0.5 * (layerAt(vU, uMapF, uX, (r0 + 0.5) / uRows, uTaps) + layerAt(vU2, uMapNextF, uXNext, (r1 + 0.5) / uRows, uTapsNext));
+    v = 0.5 * (layerRow(vU, uMapF, uX, (r0 + 0.5) / uRows, uTaps) + layerRow(vU2, uMapNextF, uXNext, (r1 + 0.5) / uRows, uTapsNext));
   }
 
   // ★★★ CONTRAST — THE SAME BUG AS THE SHARPNESS SLIDER ABOVE, in the same file, one control
@@ -204,18 +245,26 @@ export class WaterfallGL {
   private uMapNext: WebGLUniformLocation;
   private uTapsNext: WebGLUniformLocation;
   private uRunEnd: WebGLUniformLocation;
-  private uCoarse: WebGLUniformLocation;
+  private uFloorT: WebGLUniformLocation;
+  private uPeakT: WebGLUniformLocation;
+  private uMT: WebGLUniformLocation;
+  private uCells: WebGLUniformLocation;
+  private uPxX: WebGLUniformLocation;
   private uHasCoarse: WebGLUniformLocation;
   private uX: WebGLUniformLocation;
   private uXNext: WebGLUniformLocation;
   private uFade: WebGLUniformLocation;
   private uMapF: WebGLUniformLocation;
   private uMapNextF: WebGLUniformLocation;
-  /** ★ V12 the full-capture layer (wfWide.ts): a second LUMINANCE ring, coarseW × ringH, allocated at the first full-capture
-   *  row (an older server never sends one, and the layer then costs nothing). `blank` is a 1×1 zero for the sampler. */
-  private coarse: WebGLTexture | null = null;
-  private coarseW = 0;
-  private coarseH = 0;
+  /** ★ V12 the full-capture layer (wfWide.ts): three rings beside the detailed one — the floor (F wide), the peaks (C wide,
+   *  two bytes a cell) and each row's m (1 wide, RGBA) — allocated at the first full-capture row (an older server never
+   *  sends one, and the layer then costs nothing). `blank` is a 1×1 zero for the samplers until then. */
+  private floorT: WebGLTexture | null = null;
+  private peakT: WebGLTexture | null = null;
+  private mT: WebGLTexture | null = null;
+  private layerF = 0;
+  private layerC = 0;
+  private layerH = 0;
   private blank: WebGLTexture;
   // ★ Looked up ONCE. render() used to call getAttribLocation + getUniformLocation ×2 every frame;
   //   they are string lookups on the program and cost a driver round-trip on some stacks.
@@ -264,7 +313,11 @@ export class WaterfallGL {
     this.uMapNext = gl.getUniformLocation(prog, 'uMapNext')!;
     this.uTapsNext = gl.getUniformLocation(prog, 'uTapsNext')!;
     this.uRunEnd = gl.getUniformLocation(prog, 'uRunEnd')!;
-    this.uCoarse = gl.getUniformLocation(prog, 'uCoarse')!;
+    this.uFloorT = gl.getUniformLocation(prog, 'uFloorT')!;
+    this.uPeakT = gl.getUniformLocation(prog, 'uPeakT')!;
+    this.uMT = gl.getUniformLocation(prog, 'uMT')!;
+    this.uCells = gl.getUniformLocation(prog, 'uCells')!;
+    this.uPxX = gl.getUniformLocation(prog, 'uPxX')!;
     this.uHasCoarse = gl.getUniformLocation(prog, 'uHasCoarse')!;
     this.uX = gl.getUniformLocation(prog, 'uX')!;
     this.uXNext = gl.getUniformLocation(prog, 'uXNext')!;
@@ -333,34 +386,44 @@ export class WaterfallGL {
     gl.bindTexture(gl.TEXTURE_2D, this.ring);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, this.ringW, this.ringH, 0,
       gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
-    if (this.coarse) {
-      gl.bindTexture(gl.TEXTURE_2D, this.coarse);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, this.coarseW, this.coarseH, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
-    }
+    if (this.floorT) this.layerH = 0;   // ★ re-made (zeroed) by the next ensureLayer
   }
 
-  /** ★ V12 the full-capture ring: allocated (zeroed) at `cols` × the ring's height; re-made if the ring grew. */
-  ensureCoarse(cols: number) {
-    if (this.coarse && this.coarseW === cols && this.coarseH === this.ringH) return;
+  /** ★ V12 the full-capture layer's rings: allocated (zeroed) at F floor bins and C cells × the ring's height; re-made if
+   *  the ring grew or was cleared. */
+  ensureLayer(F: number, C: number) {
+    if (this.floorT && this.layerF === F && this.layerC === C && this.layerH === this.ringH) return;
     const gl = this.gl;
     if (!this.ringH) return;
-    if (this.coarse) gl.deleteTexture(this.coarse);
-    this.coarse = gl.createTexture()!;
-    gl.bindTexture(gl.TEXTURE_2D, this.coarse);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, cols, this.ringH, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    this.coarseW = cols; this.coarseH = this.ringH;
+    const make = (old: WebGLTexture | null, w: number, fmt: number, linear: boolean) => {
+      if (old) gl.deleteTexture(old);
+      const t = gl.createTexture()!;
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texImage2D(gl.TEXTURE_2D, 0, fmt, w, this.ringH, 0, fmt, gl.UNSIGNED_BYTE, null);
+      const f = linear ? gl.LINEAR : gl.NEAREST;
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      return t;
+    };
+    this.floorT = make(this.floorT, F, gl.LUMINANCE, true);
+    this.peakT = make(this.peakT, C, gl.LUMINANCE_ALPHA, false);
+    this.mT = make(this.mT, 1, gl.RGBA, false);
+    this.layerF = F; this.layerC = C; this.layerH = this.ringH;
   }
-  get hasCoarse(): boolean { return !!this.coarse && this.coarseH === this.ringH; }
-  /** One full-capture row at `headRow` (the same row as the detailed ring's). */
-  pushCoarse(row: Uint8Array, headRow: number) {
+  get hasCoarse(): boolean { return !!this.floorT && this.layerH === this.ringH; }
+  /** One row of the layer at `headRow` (the same row as the detailed ring's): floor indices (F), (index, shape) per cell
+   *  (2C), and the row's m (4 bytes). */
+  pushLayer(floor: Uint8Array, peaks: Uint8Array, m: Uint8Array, headRow: number) {
     const gl = this.gl;
-    if (!this.coarse || row.length !== this.coarseW || headRow >= this.coarseH) return;
-    gl.bindTexture(gl.TEXTURE_2D, this.coarse);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, headRow, this.coarseW, 1, gl.LUMINANCE, gl.UNSIGNED_BYTE, row);
+    if (!this.hasCoarse || floor.length !== this.layerF || peaks.length !== 2 * this.layerC || headRow >= this.layerH) return;
+    gl.bindTexture(gl.TEXTURE_2D, this.floorT);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, headRow, this.layerF, 1, gl.LUMINANCE, gl.UNSIGNED_BYTE, floor);
+    gl.bindTexture(gl.TEXTURE_2D, this.peakT);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, headRow, this.layerC, 1, gl.LUMINANCE_ALPHA, gl.UNSIGNED_BYTE, peaks);
+    gl.bindTexture(gl.TEXTURE_2D, this.mT);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, headRow, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, m);
   }
 
   /** Upload one row of dB indices (length must equal the ring width) at `headRow`. Uploaded as-is
@@ -395,10 +458,13 @@ export class WaterfallGL {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.lut);
     gl.uniform1i(this.uLut, 1);
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.hasCoarse ? this.coarse : this.blank);
-    gl.uniform1i(this.uCoarse, 2);
-    gl.uniform1f(this.uHasCoarse, this.hasCoarse ? 1 : 0);
+    const has = this.hasCoarse;
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, has ? this.floorT : this.blank); gl.uniform1i(this.uFloorT, 2);
+    gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, has ? this.peakT : this.blank); gl.uniform1i(this.uPeakT, 3);
+    gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, has ? this.mT : this.blank); gl.uniform1i(this.uMT, 4);
+    gl.uniform1f(this.uHasCoarse, has ? 1 : 0);
+    gl.uniform1f(this.uCells, Math.max(1, this.layerC));
+    gl.uniform1f(this.uPxX, 1 / Math.max(1, outW));
     gl.uniform1f(this.uFade, 12 / Math.max(1, outW));   // ★ ~12 px cross-fade at a detailed row's on-screen edge
     gl.uniform1f(this.uHead, head);
     gl.uniform1f(this.uRows, this.ringH);

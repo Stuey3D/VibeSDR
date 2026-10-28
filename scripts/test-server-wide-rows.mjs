@@ -57,7 +57,11 @@ function listener(sid, wide) {
 }
 const parseWide = (b) => {
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
-  return { ver: b[4], centre: Number(dv.getBigUint64(14, true)), span: dv.getUint32(22, true), bins: b.subarray(26) };
+  const F = dv.getUint16(26, true), C = dv.getUint16(28, true), P = dv.getUint16(30, true);
+  const floor = b.subarray(32, 32 + F), spread = b.subarray(32 + F, 32 + 2 * F), peaks = [];
+  let cell = -1;
+  for (let i = 0, o = 32 + 2 * F; i < P; i++, o += 3) { cell += b[o]; if (b[o + 1]) peaks.push({ cell, lvl: b[o + 1], shape: b[o + 2] }); }
+  return { ver: b[4], centre: Number(dv.getBigUint64(14, true)), span: dv.getUint32(22, true), F, C, floor, spread, peaks, bytes: b.length };
 };
 
 const deadline = setTimeout(() => { console.log('   FAIL deadline'); srv.kill('SIGTERM'); rtl.kill('SIGTERM'); process.exit(1); }, 90000);
@@ -68,7 +72,7 @@ try {
   await sleep(1500);
   A.send({ type: 'tune', frequency: CENTRE, mode: 'am' });
   await sleep(2500);
-  ok(A.hw && A.hw.wide === 1024, `hwinfo advertises the full-capture row (wide: ${A.hw && A.hw.wide})`);
+  ok(A.hw && A.hw.wide === 2, `hwinfo advertises the full-capture row (wide: ${A.hw && A.hw.wide})`);
 
   // ── 1. the whole capture in view: no SPWB ──
   A.reset(); B.reset(); await sleep(4000);
@@ -80,23 +84,30 @@ try {
   await sleep(1500);
   A.reset(); B.reset(); await sleep(6000);
   const z = { aSpec: A.spec / 6, bSpec: B.spec / 6, aWide: A.wide / 6, bWide: B.wide, aKBs: A.bytes / 6 / 1024, bKBs: B.bytes / 6 / 1024 };
-  ok(z.aWide > 0 && Math.abs(z.aWide - z.aSpec / 8) <= Math.max(0.4, z.aSpec * 0.04),
-     `zoomed: ${z.aWide.toFixed(2)} SPWB/s for ${z.aSpec.toFixed(1)} SPEC/s — one per 8`);
+  ok(z.aWide > 0 && Math.abs(z.aWide - z.aSpec / 4) <= Math.max(0.5, z.aSpec * 0.05),
+     `zoomed: ${z.aWide.toFixed(2)} SPWB/s for ${z.aSpec.toFixed(1)} SPEC/s — one per 4`);
   ok(z.bWide === 0, `a listener that did not ask (an older client) gets none: ${z.bWide}`);
   ok(Math.abs(z.aSpec - full.aSpec) <= full.aSpec * 0.15 && Math.abs(z.bSpec - full.bSpec) <= full.bSpec * 0.15,
      `no extra frames: SPEC ${full.aSpec.toFixed(1)} → ${z.aSpec.toFixed(1)}/s (A), ${full.bSpec.toFixed(1)} → ${z.bSpec.toFixed(1)}/s (B)`);
   const w = A.lastWide && parseWide(A.lastWide);
-  ok(!!w && w.ver === 1 && w.span === RATE && Math.abs(w.centre - CENTRE) <= RATE / 4 && w.bins.length === 1024,
-     `SPWB: version ${w?.ver}, the capture's span ${w?.span} Hz at centre ${w?.centre} Hz, ${w?.bins.length} bins`);
+  ok(!!w && w.ver === 2 && w.span === RATE && Math.abs(w.centre - CENTRE) <= RATE / 4 && w.F === 128 && w.C === 1024,
+     `SPWB v2: the capture's span ${w?.span} Hz at centre ${w?.centre} Hz, ${w?.F} floor bins, ${w?.C} cells, ${w?.peaks.length} peaks, ${w?.bytes} bytes`);
   if (w) {
-    let best = -1, bi = 0; const sorted = [...w.bins].sort((x, y) => x - y), med = sorted[512];
-    for (let i = 0; i < w.bins.length; i++) if (w.bins[i] > best) { best = w.bins[i]; bi = i; }
-    const fAt = w.centre - w.span / 2 + (bi + 0.5) * w.span / w.bins.length, binHz = w.span / w.bins.length;
-    ok(Math.abs(fAt - CARRIER) <= binHz && best - med >= 20,
-       `the one-bin carrier OUTSIDE the view is in the row at its true frequency: ${(fAt / 1e3).toFixed(1)} kHz (carrier ${CARRIER / 1e3}), ${best - med} above the floor`);
-    ok(w.bins.every((v) => v > 0), 'every bin of the capture has data (no 0 = "no data" inside the capture)');
+    const sorted = [...w.floor].sort((x, y) => x - y), med = sorted[64];
+    const sig = [...w.spread].sort((x, y) => x - y)[64] / 10;
+    ok(sig > 0.5 && sig < 8, `the floor carries its spread (σ ${sig.toFixed(1)} dB — the speckle the client averages)`);
+    ok(w.floor.every((v) => v > 0) && sorted[120] - sorted[8] <= 6, `the floor is the floor: every bin has data, flat across the capture (${sorted[8]}…${sorted[120]}, median ${med})`);
+    const binHz = w.span / w.C, lo = w.centre - w.span / 2;
+    const at = w.peaks.map((p) => ({ f: lo + (p.cell + ((p.shape & 15) + 0.5) / 16) * binHz, p }));
+    const hit = at.filter((x) => Math.abs(x.f - CARRIER) <= binHz / 8);
+    ok(hit.length === 1 && (hit[0].p.shape >> 4) <= 1 && hit[0].p.lvl - med >= 20,
+       `the one-bin carrier OUTSIDE the view is a THIN peak at its true frequency: ${hit.length ? (hit[0].f / 1e3).toFixed(2) : '—'} kHz (carrier ${CARRIER / 1e3}), width ${hit.length ? (hit[0].p.shape >> 4) + 1 : '—'}/16 of a cell, ${hit.length ? hit[0].p.lvl - med : '—'} over the floor`);
   }
   console.log(`   bandwidth: whole view A ${full.aKBs.toFixed(2)} KB/s, B ${full.bKBs.toFixed(2)} KB/s · zoomed A ${z.aKBs.toFixed(2)} KB/s (with SPWB), B ${z.bKBs.toFixed(2)} KB/s (without) → +${(z.aKBs - z.bKBs).toFixed(2)} KB/s (+${(100 * (z.aKBs - z.bKBs) / z.bKBs).toFixed(1)} %)`);
+  // ★ The budget at its worst: a full row (140 peaks) every 4th frame against this listener's SPEC bytes.
+  { const specB = z.bKBs * 1024 / Math.max(1, z.bSpec), worst = (32 + 2 * 128 + 110 * 3) / 4;
+    ok(worst / specB <= 0.15 && (z.aKBs - z.bKBs) / z.bKBs <= 0.15,
+       `within the budget: measured +${(100 * (z.aKBs - z.bKBs) / z.bKBs).toFixed(1)} %; a busy band's worst row (110 peaks) would be +${(100 * worst / specB).toFixed(1)} % of ${specB.toFixed(0)} B/frame`); }
 
   // ── 4. zoomed back out: SPWB stops ──
   A.send({ type: 'zoom', frequency: CENTRE, binBandwidth: RATE / 1024 });

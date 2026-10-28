@@ -48,7 +48,7 @@ function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
 import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
 import { applyViewChange, spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
-import { WIDE_TEX, wideExtent, wideRowInto, percentile, type WideRow } from './wfWide';
+import { WIDE_TEX, wideExtent, wideRowInto, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
 import { placementMoved, canGlide, glideRowAt, newGlideScratch } from './wfGlide';
 
 export interface WaterfallOpts {
@@ -171,23 +171,31 @@ export class Waterfall {
   /** Extent of the newest row WRITTEN to the ring — the view the history is currently drawn against. */
   private lastLo = 0; private lastSpan = 0;
   private runs = { buf: new Float64Array(80) };
-  /** ★★ V12 THE FULL-CAPTURE LAYER (wfWide.ts): per ring row, the extent X its coarse row covers (0 = none), the newest
-   *  full-capture row and when it came, the floor offset that matches it to the detailed rows, and the 2D path's own
-   *  coarse ring (the GL path keeps it as a second texture in WaterfallGL). */
+  /** ★★ V12 THE FULL-CAPTURE LAYER (wfWide.ts). Per ring row `xfX` is the layer's key: on the GPU path k (the row's span
+   *  ÷ the capture's — the shader's u_capture = k·u + m, m per row in its own texture), on the 2D path the twin's extent X;
+   *  0 = no layer. The newest full-capture row (floor + per-cell peaks) and the one before it, for the interpolation in
+   *  time between them (every 4th frame — drawn as it came, the layer stepped in blocks of rows); the floor offset that
+   *  matches the layer to the detailed rows. */
   private xfX = new Float64Array(0);
   private wide: WideRow | null = null;
-  /** ★ The full-capture row as DRAWN: interpolated in time from the one before to the newest across the interval they
-   *  come at (every 8th frame — drawn as it came, the layer stepped in blocks of rows). A capture that moved is not
-   *  interpolated across (the two rows describe different bands). */
-  private widePrev: Float32Array | null = null;
-  private wideGap = 800;
-  private wideSm: WideRow | null = null;
   private wideAt = 0;
+  private wideGap = 400;
   private wideEver = false;
   private wideOff = 0; private wideOffSet = false;
-  private detP20 = NaN;
+  private detP50 = NaN;
   private pScratch = { buf: new Float32Array(1024) };
+  // the newest and previous rows, per floor bin and per cell (dB, NaN = none), and the blend drawn for one row
+  private wFloor = new Float32Array(0); private wFloorP: Float32Array | null = null;
+  private wSpread = new Float32Array(0); private wSpreadP: Float32Array | null = null; private bSpread = new Float32Array(0);
+  private wCell = new Float32Array(0); private wShape = new Uint8Array(0);
+  private wCellP: Float32Array | null = null; private wShapeP: Uint8Array | null = null;
+  private bFloor = new Float32Array(0); private bCell = new Float32Array(0); private bShape = new Uint8Array(0);
+  // the GPU row: floor indices, peak (level, shape) pairs, the row's m
+  private gFloor = new Uint8Array(0); private gPeak = new Uint8Array(0); private gM = new Uint8Array(4);
+  // the 2D twin
   private coarseRow = new Uint8Array(WIDE_TEX);
+  private dense: DenseRow = { centreHz: 0, spanHz: 0, db: new Float32Array(4096) };
+  private fIdx = new Float32Array(0); private cIdx = new Float32Array(0);
   private wfC: HTMLCanvasElement | null = null;
   private wfCCtx: CanvasRenderingContext2D | null = null;
   private rowImgC: ImageData | null = null;
@@ -462,7 +470,7 @@ export class Waterfall {
     this.head = 0;      // an all-black ring has no meaningful head
     this.xfA.fill(1); this.xfB.fill(0);   // a blank ring has nothing to fan
     this.xfX.fill(0);
-    this.wide = null; this.wideSm = null; this.widePrev = null;   // ★ a jump: the old full-capture row is another band
+    this.wide = null; this.wFloorP = null; this.wCellP = null;   // ★ a jump: the old full-capture row is another band
     if (this.wfCCtx && this.wfC) { this.wfCCtx.fillStyle = '#000'; this.wfCCtx.fillRect(0, 0, this.wfC.width, this.wfC.height); }
   }
 
@@ -470,33 +478,54 @@ export class Waterfall {
    *  it is only ever the newest picture of the rest of the band. */
   pushWide(row: WideRow) {
     const now = performance.now(), old = this.wide;
-    if (old && old.centreHz === row.centreHz && old.spanHz === row.spanHz && old.db.length === row.db.length && this.wideSm) {
-      // ★ from what is on screen now (the interpolation part-way), so a row that comes early does not jump
-      if (!this.widePrev || this.widePrev.length !== row.db.length) this.widePrev = new Float32Array(row.db.length);
-      this.widePrev.set(this.wideSm.db);
+    const F = row.floor.length, C = row.cells;
+    const same = !!old && old.centreHz === row.centreHz && old.spanHz === row.spanHz && this.wFloor.length === F && this.wCell.length === C;
+    if (same) {
+      // ★ from what is on screen NOW (the blend part-way), so a row that comes early does not jump
+      if (!this.wFloorP || this.wFloorP.length !== F) { this.wFloorP = new Float32Array(F); this.wSpreadP = new Float32Array(F); this.wCellP = new Float32Array(C); this.wShapeP = new Uint8Array(C); }
+      if (this.bFloor.length === F && this.bCell.length === C) { this.wFloorP.set(this.bFloor); this.wSpreadP!.set(this.bSpread); this.wCellP!.set(this.bCell); this.wShapeP!.set(this.bShape); }
+      else { this.wFloorP.set(this.wFloor); this.wSpreadP!.set(this.wSpread); this.wCellP!.set(this.wCell); this.wShapeP!.set(this.wShape); }
       const gap = now - this.wideAt;
       if (gap > 0 && gap < 5000) this.wideGap += (gap - this.wideGap) * 0.3;
-    } else this.widePrev = null;
-    // ★ COPY: the caller (spectrum.ts) parses every full-capture row into one reused buffer
-    this.wide = { centreHz: row.centreHz, spanHz: row.spanHz, db: new Float32Array(row.db) };
-    this.wideAt = now;
+    } else { this.wFloorP = null; this.wSpreadP = null; this.wCellP = null; this.wShapeP = null; }
+    if (this.wFloor.length !== F) { this.wFloor = new Float32Array(F); this.bFloor = new Float32Array(F); this.gFloor = new Uint8Array(F);
+      this.wSpread = new Float32Array(F); this.bSpread = new Float32Array(F); }
+    if (this.wCell.length !== C) { this.wCell = new Float32Array(C); this.wShape = new Uint8Array(C); this.bCell = new Float32Array(C); this.bShape = new Uint8Array(C); this.gPeak = new Uint8Array(2 * C); }
+    this.wFloor.set(row.floor); this.wSpread.set(row.spread);
+    cellsOf(row, this.wCell, this.wShape);
+    this.wide = row; this.wideAt = now;
     this.wideEver = true;
-    // ★ Match its noise floor to the detailed rows' (the wide FFT's bins are wider, its floor higher): the 20th
-    //   percentile of the part of the band both cover, followed slowly so the outside does not flicker.
-    const n = row.db.length, wLo = row.centreHz - row.spanHz / 2;
-    if (this.curSpan > 0 && this.detP20 === this.detP20) {
-      // ★ At least 24 coarse bins round the view: zoomed far in, the view covers fewer coarse bins than a percentile can
-      //   use, and an unmatched layer is drawn many dB too hot (the wide FFT's max-held bins against the zoom FFT's).
-      const mid = (this.curLo + this.curSpan / 2 - wLo) / row.spanHz * n;
-      const half = Math.max(12, this.curSpan / row.spanHz * n / 2);
-      const i0 = mid - half, i1 = mid + half;
-      const c = percentile(row.db, i0, i1, 0.2, this.pScratch);
-      if (c === c) {
-        const off = Math.max(-30, Math.min(30, this.detP20 - c));
+    // ★★ THE FLOOR MATCH: the layer's floor (medians of the wide FFT) against the detailed rows' own (the MEDIAN of the
+    //    latest row) over the frequencies the view covers — so a row reads as ONE row across the detailed strip's edge,
+    //    through the detailed rows' own palette mapping. Followed slowly so the outside does not flicker.
+    if (this.curSpan > 0 && this.detP50 === this.detP50) {
+      const wLo = row.centreHz - row.spanHz / 2;
+      let sum = 0, n = 0;
+      for (let i = 0; i < 16; i++) {
+        const f = floorAt(row.floor, (this.curLo + (i + 0.5) / 16 * this.curSpan - wLo) / row.spanHz);
+        if (f === f) { sum += f; n++; }
+      }
+      if (n >= 8) {
+        const off = Math.max(-30, Math.min(30, this.detP50 - sum / n));
         this.wideOff = this.wideOffSet ? this.wideOff + (off - this.wideOff) * 0.3 : off;
         this.wideOffSet = true;
       }
     }
+  }
+
+  /** ★ For the tests: the layer's floor (dB, with its offset) against the detailed rows' median over the same view, and
+   *  over the part of the capture OUTSIDE the view (a flat band must read the same there). */
+  layerFloorCheck(): { det: number; inView: number; outside: number } | null {
+    const w = this.wide;
+    if (!w || !(this.curSpan > 0)) return null;
+    const wLo = w.centreHz - w.spanHz / 2, at = (f: number) => floorAt(w.floor, (f - wLo) / w.spanHz) + this.wideOff;
+    let a = 0, na = 0, b = 0, nb = 0;
+    for (let i = 0; i < 16; i++) { const v = at(this.curLo + (i + 0.5) / 16 * this.curSpan); if (v === v) { a += v; na++; } }
+    for (let i = 0; i < 64; i++) { const f = wLo + (i + 0.5) / 64 * w.spanHz;
+      if (f > this.curLo - this.curSpan && f < this.curLo + 2 * this.curSpan) continue;
+      if (f < wLo + w.spanHz * 0.1 || f > wLo + w.spanHz * 0.9) continue;   // the capture's roll-off skirts
+      const v = at(f); if (v === v) { b += v; nb++; } }
+    return { det: this.detP50, inView: na ? a / na : NaN, outside: nb ? b / nb : NaN };
   }
 
   /** ★ V12 the band the history holds rows for beyond the view — the newest full-capture row's extent (null = none fresh). */
@@ -621,7 +650,7 @@ export class Waterfall {
 
     const frame = this.proc.process(bins, centerHz, bwHz);
     // ★ V12 the full-capture layer's floor match (pushWide) — only once a server has sent one.
-    if (this.wideEver) this.detP20 = percentile(bins, 0, bins.length, 0.2, this.pScratch);
+    if (this.wideEver) this.detP50 = percentile(bins, 0, bins.length, 0.5, this.pScratch);
 
     // Roll the trace: keep the OLD frame so draw() can blend towards the new one.
     if (!this.spec || this.spec.length !== frame.spec.length) {
@@ -829,10 +858,10 @@ export class Waterfall {
       this.xfA[this.head] = 1; this.xfB[this.head] = 0;
       // ★★ V12 the full-capture layer: this row's coarse twin, at the same ring row (wfWide.ts).
       this.xfX[this.head] = 0;
-      if (this.wideEver) {
-        this.gl.ensureCoarse(WIDE_TEX);
-        this.xfX[this.head] = this._coarseFor(cLo, cSpan);
-        this.gl.pushCoarse(this.coarseRow, this.head);
+      if (this.wideEver && this.gFloor.length && this.gPeak.length) {
+        this.gl.ensureLayer(this.gFloor.length, this.gPeak.length >> 1);
+        this.xfX[this.head] = this._layerGL(cLo, cSpan);
+        this.gl.pushLayer(this.gFloor, this.gPeak, this.gM, this.head);
       }
       return;
     }
@@ -883,29 +912,71 @@ export class Waterfall {
     this.xfX = new Float64Array(rows);
   }
 
-  /** ★ V12 the coarse row for a detailed row placed at (lo, span) into this.coarseRow; returns its extent X (0 = none:
-   *  no fresh full-capture row, or the row already covers the capture). Through the detailed rows' own dB → index
-   *  mapping, so the two layers share the palette and the auto range. */
-  private _coarseFor(lo: number, span: number): number {
-    const src = this.wide;
-    const X = src && performance.now() - this.wideAt < 4000 ? wideExtent(src.spanHz, span) : 0;
-    if (!X || !src) { this.coarseRow.fill(0); return 0; }
-    let w = this.wideSm;
-    if (!w || w.db.length !== src.db.length) w = this.wideSm = { centreHz: src.centreHz, spanHz: src.spanHz, db: new Float32Array(src.db.length) };
-    w.centreHz = src.centreHz; w.spanHz = src.spanHz;
-    {
-      const a = w.db, b = src.db, p = this.widePrev;
-      const t = p ? Math.max(0, Math.min(1, (performance.now() - this.wideAt) / Math.max(50, this.wideGap))) : 1;
-      if (!p || t >= 1) a.set(b);
-      else for (let i = 0; i < a.length; i++) { const v0 = p[i], v1 = b[i]; a[i] = v0 === v0 && v1 === v1 ? v0 + (v1 - v0) * t : v1; }
+  /** ★ V12 the layer as drawn for a row emitted NOW: the floor and the cells interpolated from the previous full-capture
+   *  row to the newest across the interval they come at. A cell with a peak in only one of the two fades between that
+   *  peak and the floor under it. Returns false when there is no fresh row. */
+  private _blendLayer(): boolean {
+    const w = this.wide;
+    if (!w || performance.now() - this.wideAt > 4000) return false;
+    const F = this.wFloor.length, C = this.wCell.length;
+    const pF = this.wFloorP, pC = this.wCellP, pS = this.wShapeP, pG = this.wSpreadP;
+    const t = pF ? Math.max(0, Math.min(1, (performance.now() - this.wideAt) / Math.max(50, this.wideGap))) : 1;
+    if (!pF || !pC || !pS || !pG || t >= 1) { this.bFloor.set(this.wFloor); this.bSpread.set(this.wSpread); this.bCell.set(this.wCell); this.bShape.set(this.wShape); return true; }
+    for (let i = 0; i < F; i++) { const a = pF[i], b = this.wFloor[i]; this.bFloor[i] = a === a && b === b ? a + (b - a) * t : b;
+      this.bSpread[i] = pG[i] + (this.wSpread[i] - pG[i]) * t; }
+    for (let c = 0; c < C; c++) {
+      const p = pC[c], q = this.wCell[c];
+      if (p !== p && q !== q) { this.bCell[c] = NaN; continue; }
+      const fl = floorAt(this.bFloor, (c + 0.5) / C);
+      if (p === p && q === q) { this.bCell[c] = p + (q - p) * t; this.bShape[c] = this.wShape[c]; }
+      else if (q === q) { this.bCell[c] = fl + Math.max(0, q - fl) * t; this.bShape[c] = this.wShape[c]; }
+      else { this.bCell[c] = fl + Math.max(0, p - fl) * (1 - t); this.bShape[c] = pS[c]; }
     }
+    return true;
+  }
+
+  /** dB → the detailed rows' own palette index (SignalProcessor's mapping: brightness, the auto range, the 14.97 clip). */
+  private _idxFn(): (db: number) => number {
     const r = this.proc.getRange(), bright = this.proc.getSettings().wfBrightness || 0;
-    const range = r.dbMax - r.dbMin > 0 ? r.dbMax - r.dbMin : 1, CLIP = 14.97;
-    wideRowInto(this.coarseRow, w, lo, span, X, this.wideOff, (db) => {
-      const nrm = Math.max(0, Math.min(1, (db + bright - r.dbMin) / range));
+    const range = r.dbMax - r.dbMin > 0 ? r.dbMax - r.dbMin : 1, CLIP = 14.97, off = this.wideOff;
+    return (db: number) => {
+      const nrm = Math.max(0, Math.min(1, (db + off + bright - r.dbMin) / range));
       const mag = nrm * 255;
       return Math.round(mag < CLIP ? 0 : (mag - CLIP) / (255 - CLIP) * 255);
-    });
+    };
+  }
+
+  /** ★ GPU path: the layer's row for a detailed row placed at (lo, span) — floor indices, (level, shape) per cell, and
+   *  the row's m — into gFloor / gPeak / gM. Returns k (0 = no layer: no fresh row, or the row covers the capture). */
+  private _layerGL(lo: number, span: number): number {
+    const w = this.wide;
+    if (!w || !(span > 0) || span >= w.spanHz * 0.98 || !this._blendLayer()) { this.gFloor.fill(0); this.gPeak.fill(0); return 0; }
+    const idx = this._idxFn();
+    for (let i = 0; i < this.bFloor.length; i++) { const v = this.bFloor[i]; this.gFloor[i] = v === v ? Math.max(1, floorIdx(v, this.bSpread[i], idx)) : 0; }
+    const C = this.bCell.length, g = this.gPeak;
+    for (let c = 0; c < C; c++) {
+      const v = this.bCell[c];
+      if (v === v) { g[2 * c] = Math.max(1, idx(v)); g[2 * c + 1] = this.bShape[c]; } else { g[2 * c] = 0; g[2 * c + 1] = 0; }
+    }
+    encodeM((lo - (w.centreHz - w.spanHz / 2)) / w.spanHz, this.gM, 0);
+    return span / w.spanHz;
+  }
+
+  /** ★ 2D path: the coarse twin for a detailed row placed at (lo, span) into this.coarseRow; returns its extent X (0 =
+   *  none). Built from the dense row (the floor with every peak drawn in) through the detailed rows' own mapping. */
+  private _coarseFor(lo: number, span: number): number {
+    const w = this.wide;
+    const X = w ? wideExtent(w.spanHz, span) : 0;
+    if (!X || !w || !this._blendLayer()) { this.coarseRow.fill(0); return 0; }
+    // ★ built in palette INDICES (the floor as its speckle's average — floorIdx — which has no single dB to stand for it)
+    this.dense.centreHz = w.centreHz; this.dense.spanHz = w.spanHz;
+    const idx = this._idxFn(), F = this.bFloor.length;
+    if (this.fIdx.length !== F) this.fIdx = new Float32Array(F);
+    for (let i = 0; i < F; i++) { const v = this.bFloor[i]; this.fIdx[i] = v === v ? floorIdx(v, this.bSpread[i], idx) : NaN; }
+    if (this.cIdx.length !== this.bCell.length) this.cIdx = new Float32Array(this.bCell.length);
+    for (let c = 0; c < this.bCell.length; c++) { const v = this.bCell[c]; this.cIdx[c] = v === v ? idx(v) : NaN; }
+    denseRow(this.fIdx, this.cIdx, this.bShape, this.dense.db);
+    wideRowInto(this.coarseRow, this.dense, lo, span, X, 0, (v) => Math.round(v));
     return X;
   }
 
