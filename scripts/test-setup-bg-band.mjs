@@ -1,8 +1,10 @@
 // test-setup-bg-band.mjs — the setup page's background-decoding editor with a BAND DIGITAL-SPOTS VFO (V12, 2026-10-27),
 // its REAL code against a DOM stand-in (the harness of test-setup-bg-ism.mjs). Stuart: "Also full band digital modes
 // too." A VFO row offers "Digital spots: Band (summary)" on USB only where this radio can run it (not on an Icom, not with
-// digital spots or Band switched off here, not where the radio reaches no band); choosing it says which band the
-// frequency names and what is decoded there, or why it cannot run; it saves as {"dec":"spots-band"} and reads back.
+// digital spots or Band switched off here, not where the radio reaches no band); choosing it says which band and what is
+// decoded there, or why it cannot run; it saves as {"dec":"spots-band"} and reads back.
+// ★★ 2026-10-27 (Stuart): the decoder sets the frequency — a BAND PICKER (only the bands the profile's capture holds) in
+// place of the frequency box, the demodulator greyed out; an older row's typed frequency loads into its band.
 import fs from 'node:fs';
 
 const src = fs.readFileSync(new URL('../android/app/src/main/cpp/vibe_setup_page.h', import.meta.url), 'utf8');
@@ -35,9 +37,10 @@ const mk = (HW) => new Function('$', 'document', 'cfg', 'HW', 'modeBlockSet',
   `${src.slice(a, b)}\nreturn { bgLoad, bgCollect, bgRender, model: () => bgModel };`)($, document, cfg, HW, modeBlockSetStub);
 const box = els.bgProfiles;
 const vfoRows = () => box.all().filter((e) => e.attrs.class === 'bgVfo');
-const decSel = (row) => row.children.filter((e) => e.tag === 'select').slice(-1)[0];
-const modeSel = (row) => row.children.filter((e) => e.tag === 'select')[0];
+const decSel = (row) => row.children.find((e) => e.attrs.class === 'bgDec');
+const modeSel = (row) => row.children.find((e) => e.attrs.class === 'bgDemod');
 const freqIn = (row) => row.children.find((e) => e.tag === 'input');
+const bandSel = (row) => row.children.find((e) => e.attrs.class === 'bgBandPick');
 const note = () => box.all().find((e) => e.attrs.class === 'hint bgBandNote');
 
 // the running radio's own list of bands (hwinfo spotBands), as an RSP on HF reports it
@@ -60,21 +63,42 @@ modeSel(vfoRows()[1]).value = 'usb'; modeSel(vfoRows()[1]).onchange();
 decSel(vfoRows()[1]).value = 'spots-band'; decSel(vfoRows()[1]).onchange();
 ok(!!note() && note().textContent.startsWith('160 m: FT8, WSPR, JS8, FT2 on 1.8360') && note().style.color === '',
    'choosing Band: the line names the band and its modes — ' + (note() && note().textContent));
+// ★★ V12 2026-10-27 (Stuart): the decoder sets the frequency — a BAND PICKER in place of the box, the demodulator greyed out
+ok(!freqIn(vfoRows()[1]) && !!bandSel(vfoRows()[1]) && bandSel(vfoRows()[1]).value === '160m', 'a Band row has a band picker, no frequency box (160 m)');
+ok(modeSel(vfoRows()[1]).disabled === true && modeSel(vfoRows()[1]).value === 'usb', '…and its demodulator is greyed out');
+ok(note().textContent.includes('decoder sets the frequency'), '…said on its line');
 const saved = api.bgCollect();
-ok(saved.includes('{"hz":1840000,"mode":"usb","dec":"spots-band"}'), 'saves as {"dec":"spots-band"}: ' + saved);
+ok(saved.includes('{"hz":1840000,"mode":"usb","dec":"spots-band"}'), 'an older row\'s frequency inside the band is kept as it was: ' + saved);
 api.bgLoad({ driver: 'sdrplay', bgDecode: saved });
-ok(decSel(vfoRows()[1]).value === 'spots-band' && api.bgCollect() === saved, 'reads back as Band and saves back unchanged');
-// a frequency on 40 m, then on no band
-freqIn(vfoRows()[1]).value = '7074'; freqIn(vfoRows()[1]).oninput();
-ok(note().textContent.startsWith('40 m: WSPR, PSK, FT4, FT2, FT8, JS8, JTTY on 7.0396') && note().textContent.includes('RF centre must hold'),
-   'typing 7074: 40 m and every mode on it — ' + note().textContent);
-freqIn(vfoRows()[1]).value = '6500'; freqIn(vfoRows()[1]).oninput();
-ok(note().textContent.includes('not in a band') && note().style.color === '#ff8a7d', 'typing 6500: said in red, not in a band — ' + note().textContent);
+ok(decSel(vfoRows()[1]).value === 'spots-band' && bandSel(vfoRows()[1]).value === '160m' && api.bgCollect() === saved, 'reads back into 160 m and saves back unchanged');
+bandSel(vfoRows()[1]).value = '40m'; bandSel(vfoRows()[1]).onchange();
+ok(note().textContent.startsWith('40 m: WSPR, PSK, FT4, FT2, FT8, JS8, JTTY on 7.0396') && api.bgCollect().includes('{"hz":7060600,"mode":"usb","dec":"spots-band"}'),
+   'picking 40 m: every mode on it, stored as the band\'s dial — ' + note().textContent);
+// back to another decoder: the line goes, the box comes back
+decSel(vfoRows()[1]).value = 'ft8'; decSel(vfoRows()[1]).onchange();
+ok(!note() && !!freqIn(vfoRows()[1]) && !modeSel(vfoRows()[1]).disabled, 'back to FT8: no Band line, the frequency box and demodulator are back');
+
+// ★★ ONLY THE BANDS THIS CAPTURE HOLDS: Stuart's RSP at 1200 kHz, 3 MS/s — 160 m yes, 40 m no
+const AT1200 = { on: true, waitMin: 5, profiles: [{ centre: 1200000, from: '00:00', to: '00:00',
+  vfos: [{ hz: 489500, mode: 'usb', dec: 'navtex' }, { hz: 1840500, mode: 'usb', dec: 'spots-band' }] }] };
+api.bgLoad({ driver: 'sdrplay', rate: 3000000, bgDecode: JSON.stringify(AT1200) });
+ok(bandSel(vfoRows()[1]).children.map((o) => o.value).join() === '160m', 'at 1200 kHz / 3 MS/s the picker offers 160 m only: ' + bandSel(vfoRows()[1]).children.map((o) => o.value).join());
+ok(api.bgCollect() === JSON.stringify(AT1200), '…and the profile saves back byte for byte');
+const ci = box.all().find((e) => e.tag === 'input' && e.attrs.placeholder === '500');
+ci.value = '7000'; ci.oninput();
+ok(bandSel(vfoRows()[1]).children.map((o) => o.value).join() === '160m,40m' && bandSel(vfoRows()[1]).children[0].textContent.includes('outside this window')
+   && note().style.color === '#ff8a7d', 'the centre moved to 7 MHz: 40 m appears, the chosen 160 m is kept but marked outside, said in red');
+ci.value = '1200'; ci.oninput();
+// a NAVTEX row turned into Band lands on a band this capture holds — never a stray frequency
+decSel(vfoRows()[0]).value = 'spots-band'; decSel(vfoRows()[0]).onchange();
+ok(bandSel(vfoRows()[0]).value === '160m' && api.model().profiles[0].vfos[0].hz === 1840500, 'a NAVTEX row turned into Band lands on 160 m (the band\'s dial)');
+// the radio offline (no band list): the old typed frequency, which names its band
+api = mk(null);
+api.bgLoad({ driver: 'sdrplay', bgDecode: saved });
+ok(!!freqIn(vfoRows()[1]) && !freqIn(vfoRows()[1]).disabled && modeSel(vfoRows()[1]).disabled, 'no band list (radio not running): a typed frequency names the band; the demodulator stays greyed');
 freqIn(vfoRows()[1]).value = ''; freqIn(vfoRows()[1]).oninput();
 ok(note().textContent.startsWith('Type any frequency in the band'), 'no frequency yet: how to name the band');
-// back to another decoder: the line goes
-decSel(vfoRows()[1]).value = 'ft8'; decSel(vfoRows()[1]).onchange();
-ok(!note(), 'back to FT8: no Band line');
+api = mk(HW);
 
 // where Band cannot run
 blocked = new Set(['spotsband']);
