@@ -47,10 +47,11 @@ export function writeRow(ring: Uint8Array, slot: number, row: Uint8Array, n: num
  *    nothing runs per display frame. Steady rows (same placement as the one before) are byte-for-byte what they were.
  *  ★ Only SIGNAL streaks, never the floor: a column streaks only when it stands GLIDE_MARGIN above the row's median, so
  *    the noise floor is not max-filtered into a bright band.
- *  ★ Zoom falls out of the same maths: the map from this row's columns to the previous row's is affine (scale a, shift b),
- *    so a small scale change (a pinch) fans each signal along its own short path. A big step (the zoom drum's ×2) or a
- *    move of more than GLIDE_MAX_FRAC of the width (a bookmark, a typed frequency, a spin faster than the radio) is NOT
- *    streaked — a gap there is what Stuart accepts, a bar across the whole picture is not.
+ *  ★ A ZOOM IS NOT STREAKED (2026-10-28): a change of SPAN re-maps the whole history to the new view (THE ZOOM FAN,
+ *    below), so the previous row already shows each signal where this one does — a streak on top of that would be the
+ *    fan drawn twice. (Before the fan, a small pinch was streaked here as a stand-in for it; a ×2 step left a gap.)
+ *    A move of more than GLIDE_MAX_FRAC of the width (a bookmark, a typed frequency, a spin faster than the radio) is
+ *    NOT streaked either — a gap there is what Stuart accepts, a bar across the whole picture is not.
  *  ★ Synthesised pixels: a streak draws the signal at columns between two measurements. That is the point (frame
  *    generation for the trail), and it only ever happens while the placement is moving. */
 
@@ -58,8 +59,6 @@ export function writeRow(ring: Uint8Array, slot: number, row: Uint8Array, n: num
 export const GLIDE_MARGIN = 24;
 /** The longest streak, as a fraction of the row width: past it the move is a jump, left as a gap. */
 export const GLIDE_MAX_FRAC = 1 / 8;
-/** The largest scale change between two rows that still streaks (a pinch); a zoom-drum step is far beyond it. */
-export const GLIDE_MAX_SCALE = 0.25;
 
 /** The previous row's column map plus reusable scratch — allocated once, never per row. */
 export interface GlideState {
@@ -77,18 +76,17 @@ export function placedStartHz(rowCenterHz: number, rowHzPerBin: number, off: num
   return rowCenterHz - (off + n / 2) * rowHzPerBin;
 }
 
-/** The map from a column of the NEW row to where the same frequency sat in the PREVIOUS row: p(c) = a·c + b. Null when
- *  the two rows sit in the same place (steady — draw as today), or the move is not one to streak (see the guards). */
+/** The map from a column of the NEW row to where the same frequency sat in the PREVIOUS row: p(c) = c + b (a is always
+ *  1 — a change of scale is a zoom, which the fan handles). Null when the two rows sit in the same place (steady — draw
+ *  as today), the span changed (a zoom: the fan re-mapped the history), or the move is a jump (see the guards). */
 export function glideMap(prevStartHz: number, prevHzPerCol: number, startHz: number, hzPerCol: number, n: number): [number, number] | null {
   if (!(prevHzPerCol > 0 && hzPerCol > 0 && n > 0) || !isFinite(prevStartHz) || !isFinite(startHz)) return null;
-  const a = hzPerCol / prevHzPerCol;
-  if (Math.abs(a - 1) > GLIDE_MAX_SCALE) return null;
+  if (spanChanged(prevHzPerCol, hzPerCol)) return null;   // ★ a zoom: the fan placed the history — never streak it too
   const b = (startHz - prevStartHz) / prevHzPerCol;
-  const s0 = Math.abs(b), s1 = Math.abs((a - 1) * (n - 1) + b);
-  const span = Math.max(s0, s1);
+  const span = Math.abs(b);
   if (span < 0.5) return null;                    // steady: untouched
   if (span > n * GLIDE_MAX_FRAC) return null;     // a jump: a gap is honest, a bar across the picture is not
-  return [Math.abs(a - 1) < 1e-9 ? 1 : a, b];
+  return [1, b];
 }
 
 /** The row's median (its noise floor, in index units) — histogram, O(n), no allocation. */
@@ -137,15 +135,7 @@ export function glideStreak(ring: Uint8Array, at: number, n: number, a: number, 
     }
     return raised;
   }
-  // A scale change (a pinch): each signal column draws its own short path. Spans are capped by glideMap, and only
-  // columns above the floor (at most half the row, by the median) do any work.
-  for (let c = 0; c < n; c++) {
-    const v = mask[c];
-    if (!v) continue;
-    const p = a * c + b;
-    const lo = Math.max(0, Math.floor(Math.min(c, p))), hi = Math.min(n - 1, Math.ceil(Math.max(c, p)));
-    for (let x = lo; x <= hi; x++) if (v > ring[at + x]) { ring[at + x] = v; raised++; }
-  }
+  // A scale change is a zoom — the fan's job (glideMap never asks for one). Nothing to streak.
   return raised;
 }
 
@@ -160,9 +150,182 @@ export function glideRow(ring: Uint8Array, at: number, n: number,
     const m = glideMap(st.startHz, st.hzPerCol, start, rowHzPerBin, n);
     if (m) {
       glideStreak(ring, at, n, m[0], m[1], st);
-      span = Math.max(Math.abs(m[1]), Math.abs((m[0] - 1) * (n - 1) + m[1]));
+      span = Math.abs(m[1]);
     }
   }
   st.has = true; st.startHz = start; st.hzPerCol = rowHzPerBin;
   return span;
+}
+
+/* ── THE ZOOM FAN: a zoom re-maps the whole history to the new view (Stuart, 2026-10-27/28: zooming left the history in
+ *    horizontal SLICES — every old row kept the scale it was drawn at, so the waterfall read as bands of different zoom;
+ *    the web client was fixed first on V12 — web/client/src/wfZoomFan.ts there — and this is the same design for the ring)
+ *  The STORED ring (what writeRow + glideRow make) is never rewritten. Each slot carries ONE affine map from the screen's
+ *  x (0..1 across the view) to its own u (0..1 across the row as stored): u = a·x + b, the identity when it is written.
+ *  When a row arrives at a different SPAN than the row before (a zoom — drum, pinch, buttons, all read off the rows), every
+ *  slot's map composes the screen move that zoom made (applyViewChange, the web's maths) and the DISPLAYED ring is
+ *  regenerated from the stored one through the maps: the history stretches out on a zoom in and draws in toward the
+ *  anchor on a zoom out, blank only where it never had data.
+ *  ★ A change of CENTRE alone (a tune) does NOT touch the maps — that is the trail that bends and then runs straight
+ *    (#57). A zoom that also moves the centre takes its translation with it, so the anchor stays put.
+ *  ★ LOSSLESS: the display is always made from the stored rows, so zoom in then back out gives the edges back exactly
+ *    (the maps return to the identity and the displayed ring is the stored one, byte for byte).
+ *  ★ THIN CARRIERS SURVIVE a zoom out: a pixel that covers several stored bins takes their MAX (as the resample into the
+ *    ring does), never a sample that could step over a one-bin carrier.
+ *  ★ COST (the trade, stated — feedback_state_efficiency_tradeoffs):
+ *    RAM — the displayed ring is a second RING_W × RING_ROWS bytes (1 MiB) + 16 KiB of maps, allocated at the FIRST zoom
+ *          and dropped again once every row on it is back at the identity (zoomed back, or RING_ROWS rows since the last
+ *          zoom). An unzoomed session costs nothing; the image made per row is the same 1 MiB either way.
+ *    CPU — only on a zoom step: every row that can be on screen re-sampled once (~1 M byte ops for a full 1024-row ring;
+ *          the per-pixel bin ranges are worked out once per distinct map, not per row). JS path (iOS/Mac, Hermes is an
+ *          interpreter): ~20 ms a zoom-in step / ~30 ms a zoom-out step for a FULL ring, measured with V8's interpreter
+ *          only on an M-series Mac (node --no-opt --no-sparkplug --no-maglev) — a phone shows half the ring or less. Steady rows and tunes pay one 1 KiB copy a row
+ *          while a zoomed history is on screen, nothing otherwise. Native (the Android engine, wf_zoom_fan.h, the
+ *          whole ring): 0.4–0.75 ms a step on an M-series host, so a few ms on a slow phone — on the engine's own thread. The GPU pays NOTHING — the shader is unchanged (the XCover 4s is GPU-bound; a per-row map in the shader
+ *          would cost every pixel of every display frame, and could not take the max under a pixel).
+ *  PURE — scripts/test_wf_row_place.ts (zoom-fan section), the native twin is cpp/spectrum/wf_zoom_fan.h. */
+
+/** True when two rows' bin scales differ enough to count as a zoom (not float noise). */
+export function spanChanged(span0: number, span1: number): boolean {
+  return span0 > 0 && span1 > 0 && Math.abs(span1 - span0) > span0 * 1e-6;
+}
+
+/** Every map after the view moved from (lo0, span0) to (lo1, span1), in Hz: screen x in the new view sits at
+ *  x_old = (lo1 − lo0)/span0 + x·span1/span0 in the old one, so a' = a·k and b' = a·c + b. A map that comes back to the
+ *  identity (a zoom undone) snaps to it exactly, so the restore is byte-for-byte. Returns true if any map is not the
+ *  identity afterwards. */
+export function applyViewChange(xfA: Float64Array, xfB: Float64Array, lo0: number, span0: number, lo1: number, span1: number): boolean {
+  if (!(span0 > 0 && span1 > 0)) return false;
+  const k = span1 / span0, c = (lo1 - lo0) / span0;
+  let any = false;
+  for (let i = 0; i < xfA.length; i++) {
+    const a = xfA[i];
+    let na = a * k, nb = a * c + xfB[i];
+    if (Math.abs(na - 1) < 1e-9 && Math.abs(nb) < 1e-9) { na = 1; nb = 0; } else any = true;
+    xfA[i] = na; xfB[i] = nb;
+  }
+  return any;
+}
+
+/** The fan's state: the last row's placement, the per-slot maps, and the displayed ring (null = the stored ring IS the
+ *  display — no zoomed history on it). */
+export interface FanState {
+  lastLo: number; lastSpan: number;
+  xfA: Float64Array; xfB: Float64Array;
+  disp: Uint8Array | null;
+  sinceZoom: number;
+  /** The oldest frame whose displayed row is current — older ones were off screen at the last fan (fanRefresh). */
+  validFrom: number;
+  lo: Int32Array | null; hi: Int32Array | null;
+}
+export function newFanState(rows: number): FanState {
+  return { lastLo: 0, lastSpan: 0, xfA: new Float64Array(rows).fill(1), xfB: new Float64Array(rows), disp: null, sinceZoom: 0,
+           validFrom: 0, lo: null, hi: null };
+}
+
+/** Per output pixel x of an n-wide row, the stored bins [lo[x], hi[x]] it shows under map (a, b) — lo = -1 where the
+ *  row has no data (blank). Magnified (a ≤ 1): the one bin under the pixel's centre. Shrunk: every bin it covers. */
+export function fanTable(a: number, b: number, n: number, lo: Int32Array, hi: Int32Array): void {
+  const bn = b * n;
+  if (a <= 1) {
+    for (let x = 0; x < n; x++) {
+      const c = Math.floor(a * (x + 0.5) + bn);
+      if (c >= 0 && c < n) { lo[x] = c; hi[x] = c; } else { lo[x] = -1; hi[x] = -1; }
+    }
+    return;
+  }
+  for (let x = 0; x < n; x++) {
+    const l = Math.max(0, Math.floor(a * x + bn)), h = Math.min(n - 1, Math.ceil(a * (x + 1) + bn) - 1);
+    if (l <= h) { lo[x] = l; hi[x] = h; } else { lo[x] = -1; hi[x] = -1; }
+  }
+}
+
+/** Regenerate the displayed rows of the newest `count` frames (of `frames` written into a `rows`-slot ring) from the
+ *  stored ring through their maps. Only what can be ON SCREEN is made (the caller's visible depth): on the JS path a
+ *  zoom step is ~20–30 ms of Hermes interpreter for a whole 1024-row ring, and the visible depth is half that or less on
+ *  a phone. Rows below it are made by fanRefresh if a resize ever shows them. */
+export function fanRegen(st: FanState, ring: Uint8Array, n: number, rows: number, frames: number, count: number): void {
+  const disp = st.disp!;
+  if (!st.lo) { st.lo = new Int32Array(n); st.hi = new Int32Array(n); }
+  const lo = st.lo, hi = st.hi!;
+  const k = Math.min(count, frames, rows);
+  st.validFrom = frames - k;
+  let ta = NaN, tb = NaN;
+  for (let f = frames - 1; f >= frames - k; f--) {
+    const r = f % rows;
+    const a = st.xfA[r], b = st.xfB[r], at = r * n;
+    if (a === 1 && b === 0) { disp.set(ring.subarray(at, at + n), at); continue; }
+    if (a !== ta || b !== tb) { fanTable(a, b, n, lo, hi); ta = a; tb = b; }   // rows zoomed together share a map
+    if (a <= 1) {                                                              // magnified: one gather per pixel
+      for (let x = 0; x < n; x++) { const l = lo[x]; disp[at + x] = l < 0 ? 0 : ring[at + l]; }
+      continue;
+    }
+    for (let x = 0; x < n; x++) {                                              // shrunk: the max under the pixel
+      const l = lo[x];
+      if (l < 0) { disp[at + x] = 0; continue; }
+      const h = hi[x];
+      let m = ring[at + l];
+      for (let k = l + 1; k <= h; k++) { const v = ring[at + k]; if (v > m) m = v; }
+      disp[at + x] = m;
+    }
+  }
+}
+
+/** BEFORE a row placed at (lo, span) Hz goes in: a change of span fans the history. `frames` = rows written so far;
+ *  `visible` = how many of the newest can be on screen. Returns true when it fanned. */
+export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: number, frames: number, visible: number,
+                           lo: number, span: number): boolean {
+  if (!(span > 0)) return false;
+  if (!isFinite(lo)) {                         // centre unknown: assume it held (a zoom about the centre)
+    if (!(st.lastSpan > 0)) return false;
+    lo = st.lastLo + (st.lastSpan - span) / 2;
+  }
+  let fanned = false;
+  if (spanChanged(st.lastSpan, span) && frames > 0) {
+    const zoomed = applyViewChange(st.xfA, st.xfB, st.lastLo, st.lastSpan, lo, span);
+    if (zoomed) {
+      if (!st.disp) st.disp = new Uint8Array(ring.length);
+      fanRegen(st, ring, n, rows, frames, visible);
+      st.sinceZoom = 0;
+    } else st.disp = null;                    // every row back at the identity: the stored ring is the display again
+    fanned = true;
+  }
+  st.lastLo = lo; st.lastSpan = span;
+  return fanned;
+}
+
+/** AFTER the row at `slot` (0..rows-1) is written (and glided): it is the identity, and the display gets it as is. */
+export function fanAfterRow(st: FanState, ring: Uint8Array, slot: number, n: number, rows: number): void {
+  st.xfA[slot] = 1; st.xfB[slot] = 0;
+  if (!st.disp) return;
+  const at = slot * n;
+  st.disp.set(ring.subarray(at, at + n), at);
+  if (++st.sinceZoom >= rows) st.disp = null;  // every slot has been rewritten since the zoom: all identity again
+}
+
+/** A resize that shows MORE rows than the last fan made: make the ones now on screen. No-op when nothing is zoomed or
+ *  they are already current. Returns true when it re-made anything (publish a new image). */
+export function fanRefresh(st: FanState, ring: Uint8Array, n: number, rows: number, frames: number, visible: number): boolean {
+  if (!st.disp || frames - Math.min(visible, frames, rows) >= st.validFrom) return false;
+  fanRegen(st, ring, n, rows, frames, visible);
+  return true;
+}
+
+/** The bytes to make the waterfall image from. */
+export function fanImage(st: FanState, ring: Uint8Array): Uint8Array { return st.disp ?? ring; }
+
+/** pushRow's whole placement, in one place (WaterfallView's JS path; the Android engine's twin is wf_zoom_fan.h
+ *  placeRow): slide the row onto the view (rowViewOffset/writeRow), fan the history if the span changed, streak a moved
+ *  row (glideRow), keep the display in step. `frames` = rows written before this one; `visible` = how many of the newest
+ *  rows can be on screen (the fan makes only those). Returns the slot written. */
+export function placeRow(ring: Uint8Array, rows: number, n: number, frames: number, row: Uint8Array,
+                         rowCenterHz: number, rowHzPerBin: number, viewCenterHz: number, viewBwHz: number,
+                         glide: GlideState, fan: FanState, visible = rows): number {
+  const slot = frames % rows;
+  const off = rowViewOffset(rowCenterHz, rowHzPerBin, viewCenterHz, viewBwHz, n);
+  if (rowHzPerBin > 0) fanNoteRow(fan, ring, n, rows, frames, visible, placedStartHz(rowCenterHz, rowHzPerBin, off, n), rowHzPerBin * n);
+  writeRow(ring, slot * n, row, n, off);
+  glideRow(ring, slot * n, n, rowCenterHz, rowHzPerBin, off, glide);
+  fanAfterRow(fan, ring, slot, n, rows);
+  return slot;
 }

@@ -6,7 +6,8 @@
 //    and a fast tune moves a station tens of bins between rows, so the diagonal was dots. When a row's placement differs
 //    from the previous row's, its SIGNAL columns (> median + GLIDE_MARGIN) are streaked back to where they sat in that
 //    row, so consecutive rows join. Only the new row, once; steady rows untouched; the floor never raised; a jump past
-//    GLIDE_MAX_FRAC of the width or a scale step past GLIDE_MAX_SCALE is left as it was (a gap).
+//    GLIDE_MAX_FRAC of the width is left as it was (a gap). A ZOOM (any change of span) is never streaked: the zoom fan
+//    (wf_zoom_fan.h) re-maps the history to the new view, and a streak on top would draw the fan twice.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -17,7 +18,11 @@ namespace vibewf {
 
 constexpr int GLIDE_MARGIN = 24;
 constexpr double GLIDE_MAX_FRAC = 1.0 / 8;
-constexpr double GLIDE_MAX_SCALE = 0.25;
+
+/** True when two rows' bin scales differ enough to count as a zoom (not float noise). */
+inline bool spanChanged(double span0, double span1) {
+    return span0 > 0 && span1 > 0 && std::fabs(span1 - span0) > span0 * 1e-6;
+}
 
 struct GlideState {
     bool has = false; double startHz = 0, hzPerCol = 0;
@@ -31,15 +36,14 @@ inline double placedStartHz(double rowCenterHz, double rowHzPerBin, double off, 
     return rowCenterHz - (off + n / 2.0) * rowHzPerBin;
 }
 
-/** p(c) = a·c + b (new column → previous row's column); false = steady, or not a move to streak. */
+/** p(c) = c + b (new column → previous row's column; a is always 1); false = steady, a zoom (the fan's job), or a jump. */
 inline bool glideMap(double prevStartHz, double prevHzPerCol, double startHz, double hzPerCol, int n, double& a, double& b) {
     if (!(prevHzPerCol > 0 && hzPerCol > 0 && n > 0) || !std::isfinite(prevStartHz) || !std::isfinite(startHz)) return false;
-    a = hzPerCol / prevHzPerCol;
-    if (std::fabs(a - 1) > GLIDE_MAX_SCALE) return false;
+    if (spanChanged(prevHzPerCol, hzPerCol)) return false;   // ★ a zoom: the fan placed the history — never streak it too
+    a = 1;
     b = (startHz - prevStartHz) / prevHzPerCol;
-    const double span = std::max(std::fabs(b), std::fabs((a - 1) * (n - 1) + b));
+    const double span = std::fabs(b);
     if (span < 0.5 || span > n * GLIDE_MAX_FRAC) return false;
-    if (std::fabs(a - 1) < 1e-9) a = 1;
     return true;
 }
 
@@ -87,15 +91,7 @@ inline int glideStreak(uint8_t* row, int n, double a, double b, GlideState& st) 
         }
         return raised;
     }
-    // A scale change (a pinch): each signal column draws its own short path (spans capped by glideMap).
-    for (int c = 0; c < n; c++) {
-        const uint8_t v = mask[c];
-        if (!v) continue;
-        const double p = a * c + b;
-        const int lo = std::max(0, (int)std::floor(std::min((double)c, p)));
-        const int hi = std::min(n - 1, (int)std::ceil(std::max((double)c, p)));
-        for (int x = lo; x <= hi; x++) if (v > row[x]) { row[x] = v; raised++; }
-    }
+    // A scale change is a zoom — the fan's job (glideMap never asks for one). Nothing to streak.
     return raised;
 }
 
@@ -106,7 +102,7 @@ inline double glideRow(uint8_t* row, int n, double rowCenterHz, double rowHzPerB
     double span = 0, a = 1, b = 0;
     if (st.has && glideMap(st.startHz, st.hzPerCol, start, rowHzPerBin, n, a, b)) {
         glideStreak(row, n, a, b, st);
-        span = std::max(std::fabs(b), std::fabs((a - 1) * (n - 1) + b));
+        span = std::fabs(b);
     }
     st.has = true; st.startHz = start; st.hzPerCol = rowHzPerBin;
     return span;
