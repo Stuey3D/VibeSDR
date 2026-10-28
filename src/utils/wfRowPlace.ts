@@ -312,9 +312,11 @@ export function newFanState(rows: number): FanState {
  *    did back in v2 … oddly delayed". v2 made the whole change within ONE frame interval. Every eased row keeps the
  *    geometry it was drawn at, like any history row. */
 export const ZOOM_EASE_ROWS = 4;
-/** Rows a tune past MOTION_MAX_FRAC eases over: 8 per view width moved, 2…6 (an eighth of the view 2, half of it 4). */
+/** A tune eases once it moves more than two columns of a 1024-wide row (a tuning step, not float noise). */
+export const TUNE_EASE_MIN_FRAC = 2 / 1024;
+/** Rows a tune eases over: 3 for a step, up to 6 for a move of the whole view. */
 export function tuneEaseRows(frac: number): number {
-  return Math.max(2, Math.min(6, Math.round(frac * 8)));
+  return Math.max(3, Math.min(6, 3 + Math.round(frac * 6)));
 }
 export function zoomEaseRows(k: number): number {
   return Math.max(1, Math.min(6, Math.round(Math.abs(Math.log2(k)) * ZOOM_EASE_ROWS)));
@@ -422,7 +424,9 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
   //    span unchanged), the history stays as drawn and the shader joins row to row. Only a move of a whole view or more
   //    (a bookmark, a typed frequency — nothing on screen in common) is a jump.
   const moved = Math.abs(lo - st.lastLo);
-  if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * MOTION_MAX_FRAC && moved < st.lastSpan) {
+  // ★★★ EVERY STEP, not only big ones (Stuart, build 511: "still slicing up the tune" — a 9 kHz press/detent is under
+  //     MOTION_MAX_FRAC, so it was joined in ONE row: a dash, then a block, a staircase). Any move past two columns eases.
+  if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * TUNE_EASE_MIN_FRAC && moved < st.lastSpan) {
     if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
     st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
     st.eT = st.easeLeft = Math.max(tuneEaseRows(moved / st.lastSpan), st.easeLeft > 0 ? st.easeLeft : 0);

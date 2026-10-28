@@ -65,7 +65,8 @@ struct FanState {
 constexpr int ZOOM_EASE_ROWS = 4;    // a ×2 step (~0.2 s); ×4+ = 6; a pinch's 5 % step = 1 — short and EASE-OUT: the
                                      // 16-row S-curve felt "oddly delayed" (Stuart 2026-10-28; v2 changed within a frame)
 /** Rows a tune past MOTION_MAX_FRAC (but within the view) eases over: 8 per view width, 2…6 (wfRowPlace.ts tuneEaseRows). */
-inline int tuneEaseRows(double frac) { return std::max(2, std::min(6, (int)std::floor(frac * 8 + 0.5))); }
+inline int tuneEaseRows(double frac) { return std::max(3, std::min(6, 3 + (int)std::floor(frac * 6 + 0.5))); }
+constexpr double TUNE_EASE_MIN_FRAC = 2.0 / 1024;   // every step past two columns eases (Stuart, build 511: "still slicing")
 inline int zoomEaseRows(double k) {
     return std::max(1, std::min(6, (int)std::floor(std::fabs(std::log2(k)) * ZOOM_EASE_ROWS + 0.5)));
 }
@@ -155,7 +156,7 @@ inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n,
     // ★★ A tune past MOTION_MAX_FRAC but within the view EASES like a zoom (the JS twin, wfRowPlace.ts — Stuart 2026-10-28:
     //    "the tuning still looks a little sliced up … blended like the zoom"); only a move of a whole view or more is a JUMP.
     const double moved = std::fabs(lo - st.lastLo);
-    if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * MOTION_MAX_FRAC && moved < st.lastSpan) {
+    if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * TUNE_EASE_MIN_FRAC && moved < st.lastSpan) {
         if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
         st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
         st.eT = st.easeLeft = std::max(tuneEaseRows(moved / st.lastSpan), st.easeLeft > 0 ? st.easeLeft : 0);

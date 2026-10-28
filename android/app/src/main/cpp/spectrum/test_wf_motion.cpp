@@ -73,7 +73,7 @@ int main() {
         for (int f = from - 1; f < mfr - 1; f++) {
             const double h = ms.h[f % MR]; const int a = mcol(f), b = mcol(f + 1);
             if (h != 0) moving++;
-            if (a < 0 || b < 0 || std::fabs(a + h - b) > 1.01) bad++;
+            if (a < 0 || b < 0 || std::fabs(a + h - b) > 1.51) bad++;   // (eased rows are resampled: ±½ column)
         }
         CHECK(bad == 0 && moving >= 14, "fast tune: %d pairs mis-predicted, %d moving", bad, moving);
         CHECK(ms.lo <= from && ms.hi >= from + 13 && ms.hi < mfr - 1, "moving range [%g, %g] does not cover the tune", ms.lo, ms.hi);
@@ -146,8 +146,8 @@ int main() {
         CHECK(D() == S.data() && fan.disp.empty(), "unzoomed: the display is not the stored ring");
         std::vector<uint8_t> stored0(S.begin(), S.begin() + 60 * N);
         vc += 2'000; for (int i = 0; i < 4; i++) fpush(vc, vbw);
-        bool ident = true; for (int i = 0; i < R; i++) if (fan.xfA[i] != 1 || fan.xfB[i] != 0) ident = false;
-        CHECK(D() == S.data() && ident, "a tune touched the history");
+        bool ident = true; for (int i = 0; i < 60; i++) if (fan.xfA[i] != 1 || fan.xfB[i] != 0) ident = false;
+        CHECK(std::memcmp(D(), S.data(), (size_t)60 * N) == 0 && ident, "a tune touched the history");
         vc = 1'030'000; for (int i = 0; i < 4; i++) fpush(vc, vbw);
         // ★★★ A ZOOM LEAVES THE HISTORY AS DRAWN (Stuart 2026-10-28) — the zoom section of scripts/test_wf_row_place.ts
         int ha, hb; dlit(10, ha, hb); const int histCol = ha;
@@ -184,7 +184,7 @@ int main() {
           for (int f = from; f < fr - 1; f++) { int a0, b0, a1, b1; if (!dlit(f, a0, b0) || !dlit(f + 1, a1, b1)) { bad++; continue; }
             if (std::fabs((a0 + gl.h[f % R]) - a1) > 1.01) bad++; }
           CHECK(bad == 0, "tune + motion: %d pairs whose h does not predict the displayed move", bad); }
-        for (int i = 0; i < R; i++) fpush(vc, vbw);
+        for (int i = 0; i < R + 8; i++) fpush(vc, vbw);   // (+ the last ease's rows)
         CHECK(fan.disp.empty() && D() == S.data(), "the display buffer was not freed once the eased rows scrolled away");
         {   // cost: a full 1024-row ring, every row re-made per step
             const int RR = 1024; std::vector<uint8_t> SS((size_t)N * (RR + MOTION_ROWS)); MotionState g2(RR, N); FanState f2(RR); int k = 0;
