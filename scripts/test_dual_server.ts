@@ -331,5 +331,22 @@ console.log('a swap is not an arrival (Stuart\'s recording 2026-10-28: the tap l
   ok(/return \{ \.\.\.bg\.params, dualSide: bg\.id \}/.test(ds), 'the swap carries the side (and so the session) to the screen');
 }
 
+
+console.log('the card\'s balance owns the finger; the one-time hint (Stuart 2026-10-28)');
+{
+  const card = readFileSync('src/components/DualServerCard.tsx', 'utf8');
+  ok(/onPanResponderTerminationRequest: \(\) => false/.test(card), 'the balance track never hands a drag over to the card');
+  ok(/onMoveShouldSetPanResponder: \(_e, g\) => !balOpenRef\.current && g\.dx < -6/.test(card),
+     'the flick-to-tuck stands down while the balance is open (a drag LEFT on the track was also a tuck)');
+  ok(/x\.setValue\(Math\.min\(offRef\.current,/.test(card), 'a flick never drags the card past its tucked position');
+  ok(/setBalOpen\(false\);[\s\S]{0,120}Animated\.timing\(x, \{ toValue: offRef\.current/.test(card),
+     'the ‹ closes the balance before it tucks');
+  ok(/HINT_SEEN_KEY = 'lsv_dual_card_hint_seen'/.test(card) && /AsyncStorage\.setItem\(HINT_SEEN_KEY, '1'\)/.test(card),
+     'the hint is shown once and remembered');
+  ok(/DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance'/.test(card), '…in Stuart\'s words');
+  ok((card.match(/hintDone\(\)/g) ?? []).length >= 2 && /onPress=\{hintDone\}/.test(card),
+     '…and goes on ✕, on a tap and on a hold');
+}
+
 console.log(fails ? `\n✗ ${fails} failed` : '\n✓ all passed');
 process.exit(fails ? 1 : 0);
