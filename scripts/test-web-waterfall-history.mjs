@@ -212,7 +212,10 @@ try {
   // ── 3. A resize keeps the history (Stuart: resize and rotate must never lose it) ──
   // ★ The OLDEST rows with the carrier in them — the straight trail from before the tune — and where they sit.
   const before = await columns();
-  const old = before.cols.map((x, y) => [y, x]).filter(([, x]) => x >= 0).slice(-40);
+  // ★ Rows on a VERTICAL stretch only (since 2026-10-28 a zoom leaves curved trails in the history, where a few lines of
+  //   scroll between the two reads would move the column — that is the scroll, not a lost row).
+  const vert = (y) => [-3, -2, -1, 1, 2, 3].every((d) => before.cols[y + d] >= 0 && Math.abs(before.cols[y + d] - before.cols[y]) <= 1);
+  const old = before.cols.map((x, y) => [y, x]).filter(([y, x]) => x >= 0 && vert(y)).slice(-40);
   await send('Emulation.setDeviceMetricsOverride', { width: 900, height: 900, deviceScaleFactor: 1, mobile: false });
   await sleep(150);
   const after = await columns();
@@ -222,25 +225,29 @@ try {
   ok(old.length >= 30 && after.W !== before.W && kept >= old.length * 0.8,
      `a resize (${before.W} → ${after.W} px) keeps the history: ${kept}/${old.length} of the oldest rows still show the carrier, at its rescaled column`);
 
-  // ── 4. THE ZOOM FAN — a straight trail, then a zoom in, then back out: the whole trail follows the new span ──
-  // ★ The carrier sits 10 kHz above the dial: at 200 kHz it is 5 % right of centre, at 80 kHz 12.5 %. A history that does
-  //   not fan keeps the trail's older rows at the OLD column under the new rows at the new one — the slicing.
+  // ── 4. A ZOOM LEAVES THE HISTORY AS DRAWN (Stuart 2026-10-28: "a thin line signal should expand out to the width and
+  //    the history remains the thin line"; zooming out "no breaks … a continuous history"): a straight trail, then a zoom —
+  //    the new rows at the new column, the old trail still at the old one, and between them the ease's curve: one line,
+  //    no break. ★ The carrier sits 10 kHz above the dial: 5 % right of centre at 200 kHz, 12.5 % at 80 kHz.
   const fanCase = async (fromSpan, toSpan) => {
     await sleep(4000);   // a straight trail at fromSpan (~80 rows)
     const pre = await columns();
     const colAt = (span, W) => Math.round((0.5 + (CARRIER - fEnd) / span) * W);
     const c0 = colAt(fromSpan, pre.W);
-    let L = 0; while (L < pre.cols.length && (pre.cols[L] < 0 || Math.abs(pre.cols[L] - c0) <= 3)) L++;
     await ev(`(() => { const s = window.__vibeWf().spec; s.zoom(${fEnd}, ${toSpan} / (s.cfg.binCount || 1024)); return true; })()`);
-    await sleep(1200);
+    await sleep(2500);
     const post = await columns();
     const c1 = colAt(toSpan, post.W);
-    // the straight trail has moved down by the rows drawn since; check the top L rows (new + old), a few in-flight rows excused
-    const top = post.cols.slice(0, Math.min(L, 200)).filter((x) => x >= 0);
-    const at = top.filter((x) => Math.abs(x - c1) <= 4).length, atOld = top.filter((x) => Math.abs(x - c0) <= 3).length;
-    ok(L >= 40 && top.length >= 40 && at >= top.length * 0.92,
-       `zoom ${fromSpan / 1000} → ${toSpan / 1000} kHz fans the history: ${at}/${top.length} rows of the ${L}-row trail at the new column ${c1}` +
-       ` (${atOld} still at the old column ${c0})`);
+    const newTop = post.cols.slice(2, 12).filter((x) => x >= 0), newAt = newTop.filter((x) => Math.abs(x - c1) <= 4).length;
+    const yOld = post.cols.findIndex((x, y) => y > 12 && x >= 0 && Math.abs(x - c0) <= 3);
+    const oldRun = yOld >= 0 ? post.cols.slice(yOld, yOld + 40).filter((x) => x >= 0) : [];
+    const oldAt = oldRun.filter((x) => Math.abs(x - c0) <= 3).length;
+    let worst = 0, gaps = 0;
+    for (let y = 3; y <= yOld + 2 && y < post.cols.length; y++) { const p = post.cols[y - 1], q = post.cols[y];
+      if (p >= 0 && q >= 0) worst = Math.max(worst, Math.abs(q - p)); else gaps++; }
+    ok(newTop.length >= 8 && newAt >= newTop.length * 0.9 && yOld > 12 && oldRun.length >= 30 && oldAt >= oldRun.length * 0.9 && worst <= 12 && gaps <= 2,   // (≤ 12 px: headless draws ~16 rows/s — a real browser twice that, so half the step)
+       `zoom ${fromSpan / 1000} → ${toSpan / 1000} kHz: new rows at ${c1} (${newAt}/${newTop.length}), the history still at ${c0} (${oldAt}/${oldRun.length}),` +
+       ` joined by one curve (largest step ${worst} px, ${gaps} unlit rows over ${yOld} rows)`);
   };
   await fanCase(SPAN, 80000);
   await fanCase(80000, SPAN);
@@ -320,8 +327,11 @@ try {
       return { n, at, w }; };
     // (a) zoomed 20 kHz AWAY from the carrier (it is 10 kHz above the dial; the view sits 40 kHz below it) — outside the view
     {
-      const { pic, y0, y1, mid } = await phase(20000, [fEnd - 30000, fEnd - 30000, fEnd - 30000, fEnd - 30000],
+      const { pic, y0, y1: y1all, mid } = await phase(20000, [fEnd - 30000, fEnd - 30000, fEnd - 30000, fEnd - 30000],
         () => ev('window.__vibeWf().wf.layerFloorCheck()'));
+      // ★ the OLDEST rows of the phase are the zoom-in's ease (drawn at in-between, wider views — they may show the
+      //   carrier, rightly): the newest 60 % are the settled zoom
+      const y1 = y0 + Math.round((y1all - y0) * 0.6);
       const r = lit(pic, y0, y1, colAt(CARRIER, pic.W), 12);
       // ★★ "the same waterfall, just less sharp" (Stuart's review of v1): the layer's floor matches the detailed rows' in dB
       //    (in the view, and outside it on this flat band), the filled rows' floor LOOKS like the detailed rows' floor beside
@@ -329,31 +339,21 @@ try {
       // ★ within 1 dB + the wire's own step (both rows arrive as whole dB, and the detailed median is one of them)
       ok(mid && Math.abs(mid.inView - mid.det) <= 1.5 && Math.abs(mid.outside - mid.det) <= 1.5,
          `the layer's floor in dB: detailed median ${mid && mid.det.toFixed(1)}, layer in the view ${mid && mid.inView.toFixed(1)}, outside it ${mid && mid.outside.toFixed(1)} (within 1 dB + the 1 dB wire step)`);
-      const cc = colAt(CARRIER, pic.W), wOf = (y) => (pic.lh[y] >= 0 && Math.abs(pic.cols[y] - cc) <= 12 ? pic.rh[y] - pic.lh[y] + 1 : -1);
-      const med = (a) => { const b = a.filter((x) => x > 0).sort((x, y) => x - y); return b.length ? b[b.length >> 1] : -1; };
-      const wFill = med([...Array(Math.max(0, y1 - y0)).keys()].map((k) => wOf(y0 + k)));
-      const wDet = med([...Array(Math.max(0, y0 - 12)).keys()].map((k) => wOf(k + 4)));
-      // ★ The 2D fallback (no WebGL) keeps the layer as a twin row of WIDE_TEX texels across the capture-wide extended
-      //   range, so its carrier is as wide as one twin texel magnified: 2.35 kHz here — it cannot draw a 1 px line. The GPU
-      //   path draws each peak at its own place and width.
-      const twinPx = 2 * ((2 * Math.ceil(2400000 / 20000) + 1) * 20000 / 2048) / SPAN * pic.W + 2;   // two twin texels
-      ok(wFill > 0 && wDet > 0 && wFill <= (MODE === 'webgl' ? Math.max(3, 2 * wDet + 1) : twinPx),
-         `the carrier in the filled rows is a thin line: ${wFill} px wide at half brightness (detailed rows: ${wDet} px${MODE === '2d' ? `; 2D twin limit ${twinPx.toFixed(0)} px` : ''})`);
-      const xa = Math.round(pic.W * 0.03), xb = Math.round(pic.W * 0.2);   // far from the carrier and from the zoomed strip
-      const lf = await lum(y0, y1, xa, xb), ld = await lum(4, Math.max(8, y0 - 8), xa, xb);
-      ok(Math.abs(lf - ld) <= ld * 0.3 + 16,   // of 0…1020 — 16 is 1.5 % of full scale
-         `the filled rows' floor looks like the detailed rows' beside it: brightness ${lf.toFixed(1)} vs ${ld.toFixed(1)}`);
-      if (process.env.WFHIST_SHOTS) { fs.mkdirSync(process.env.WFHIST_SHOTS, { recursive: true }); const sh = await send('Page.captureScreenshot', { format: 'png' });
-        fs.writeFileSync(path.join(process.env.WFHIST_SHOTS, `wide-layer-zoom-out-${MODE}.png`), Buffer.from(sh.result.data, 'base64')); }
-      ok(r.n >= 30 && r.at >= r.n * 0.9,
-         `zoomed in away from the carrier, then out: ${r.at}/${r.n} of the rows written meanwhile show it at its true column (the full-capture layer) — not black`);
+      // ★★ Since 2026-10-28 a zoom out no longer re-maps those rows: they stay as drawn (the narrow view, the carrier
+      //    outside it) — every one still the identity, nothing black inside it.
+      const asDrawn = await ev(`(() => { const w = window.__vibeWf().wf; const R = w.xfA.length; let n = 0, c = 0;
+        for (let j = ${y0}; j < ${y1}; j++) { const r = (w.head + j) % R; n++; if (w.xfA[r] === 1 && w.xfB[r] === 0) c++; } return [c, n]; })()`);
+      ok(asDrawn && asDrawn[1] >= 30 && asDrawn[0] === asDrawn[1] && r.at === 0,
+         `zoomed in away from the carrier, then out: ${asDrawn && asDrawn[0]}/${asDrawn && asDrawn[1]} of the rows written meanwhile stay as drawn (the carrier outside them: ${r.at} show it)`);
     }
     // (b) zoomed ON the carrier: those rows keep their detail after the zoom out (narrow, not the coarse layer's width)
     {
-      const { pic, y0, y1 } = await phase(20000, [CARRIER, CARRIER, CARRIER, CARRIER]);
-      const r = lit(pic, y0, y1, colAt(CARRIER, pic.W), 4);
+      const { pic, y0, y1: y1all } = await phase(20000, [CARRIER, CARRIER, CARRIER, CARRIER]);
+      const y1 = y0 + Math.round((y1all - y0) * 0.6);   // (past the zoom-in's ease, as above)
+      // as drawn: the view was centred on the carrier, so those rows keep it at the CENTRE, thin
+      const r = lit(pic, y0, y1, Math.round(pic.W / 2), 4);
       ok(r.n >= 30 && r.at >= r.n * 0.9 && r.w <= 8,
-         `zoomed in ON the carrier, then out: ${r.at}/${r.n} rows show it at its column, at most ${r.w} px wide — the detailed rows on top`);
+         `zoomed in ON the carrier, then out: ${r.at}/${r.n} rows keep it where it was drawn (the centre), at most ${r.w} px wide`);
     }
     // (d) a PHONE turned portrait → landscape → portrait keeps the history (the same ring, re-drawn at the new size)
     {

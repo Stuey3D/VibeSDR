@@ -47,9 +47,9 @@ function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
 }
 import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
-import { applyViewChange, spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
+import { spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
 import { WIDE_TEX, wideExtent, wideRowInto, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
-import { placementMoved, canGlide, glideRowAt, newGlideScratch } from './wfGlide';
+import { placementMoved, canGlide, glideRowAt, newGlideScratch, zoomEaseMs, zoomEaseView, easedRowAt } from './wfGlide';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -165,6 +165,9 @@ export class Waterfall {
   private prevRow: Uint8Array | null = null;   // last received row
   /** ★ The Hz extent each of prevRow/curRow was measured over (lo edge, span) — drawRow places the history by it. */
   private prevLo = 0; private prevSpan = 0; private curLo = 0; private curSpan = 0;
+  /** THE ZOOM EASE: the row last drawn and its view; the ease's start view, start time, duration and target span. */
+  private outRow: Uint8Array | null = null; private outLo = 0; private outSpan = 0;
+  private eLo0 = 0; private eSpan0 = 0; private eT0 = 0; private eDur = 0; private eTgtSpan = 0;
   /** ★★ THE ZOOM FAN (wfZoomFan.ts): per ring row, the map from screen x to the row's own u (u = xfA·x + xfB). */
   private xfA = new Float64Array(0);
   private xfB = new Float64Array(0);
@@ -813,7 +816,25 @@ export class Waterfall {
     //    the shader joins row to row. A STEADY pair (same placement) is the whole frame it always was — the "whole rows,
     //    not blends" rule above stands for every row that is not moving. A jump is not interpolated (an honest gap).
     let cLo: number, cSpan: number;
-    if (placementMoved(this.prevLo, this.prevSpan, this.curLo, this.curSpan, n)
+    // ★★ THE ZOOM EASE (wfGlide.ts zoomEaseView): a new span starts (or retargets) the ease from where the last row was
+    //    DRAWN; while it runs, every row is the newest frame drawn at the eased view. A step mid-ease keeps at least the
+    //    time the ease had left — never a snap.
+    // ★ The start test compares the frame's span with the span the LAST ease aimed for (or, before any, the last row's)
+    //   and needs a real zoom (> 0.1 %): an ease ends a hair short of its target, and comparing with the drawn row
+    //   restarted it on every row at its own start — the view froze and a tune after a zoom drew as a jump.
+    const nowMs = performance.now();
+    const easing = nowMs < this.eT0 + this.eDur;
+    const tgt = this.eTgtSpan > 0 ? this.eTgtSpan : this.outSpan;
+    if (this.outSpan > 0 && this.curSpan > 0 && tgt > 0 && Math.abs(Math.log(this.curSpan / tgt)) > 1e-3) {
+      const left = easing ? this.eT0 + this.eDur - nowMs : 0;
+      this.eLo0 = this.outLo; this.eSpan0 = this.outSpan; this.eT0 = nowMs;
+      this.eDur = Math.max(zoomEaseMs(this.curSpan / this.outSpan), left);
+      this.eTgtSpan = this.curSpan;
+    }
+    if (nowMs < this.eT0 + this.eDur && this.eSpan0 > 0) {
+      [cLo, cSpan] = zoomEaseView(this.eLo0, this.eSpan0, this.curLo, this.curSpan, (nowMs - this.eT0) / this.eDur);
+      easedRowAt(cur, this.curLo, this.curSpan, cLo, cSpan, blend, this.outRow, this.glideScratch);
+    } else if (placementMoved(this.prevLo, this.prevSpan, this.curLo, this.curSpan, n)
         && canGlide(this.prevLo, this.prevSpan, this.curLo, this.curSpan)) {
       [cLo, cSpan] = glideRowAt(prev, this.prevLo, this.prevSpan, cur, this.curLo, this.curSpan, t, blend, this.glideScratch);
     } else {
@@ -821,9 +842,11 @@ export class Waterfall {
       blend.set(useCur ? cur : prev);
       cLo = useCur ? this.curLo : this.prevLo; cSpan = useCur ? this.curSpan : this.prevSpan;
     }
-    // ★★ THE ZOOM FAN — before this row goes in, a change of SPAN since the last row re-maps the whole history to the
-    //    new view (wfZoomFan.ts). A change of centre alone leaves it alone: that is the tune's bend.
+    // ★★★ A ZOOM NO LONGER RE-MAPS THE HISTORY (Stuart 2026-10-28): every row stays as it was drawn — the ease above
+    //     draws the fan. (_noteRowView keeps the last view for the maps' sake; the maps stay the identity.)
     this._noteRowView(cLo, cSpan);
+    if (!this.outRow || this.outRow.length !== n) this.outRow = new Uint8Array(n);
+    this.outRow.set(blend); this.outLo = cLo; this.outSpan = cSpan;
 
     // ★ NO SELF-COPY. This used to scroll with `wfCtx.drawImage(this.wf, 0, 1)` — drawing the
     // waterfall canvas onto ITSELF one pixel down, every frame. Safari optimises that; Chromium
@@ -990,7 +1013,6 @@ export class Waterfall {
 
   private _noteRowView(lo: number, span: number) {
     if (!(span > 0)) return;
-    if (spanChanged(this.lastSpan, span) && this.xfA.length) applyViewChange(this.xfA, this.xfB, this.lastLo, this.lastSpan, lo, span);
     this.lastLo = lo; this.lastSpan = span;
   }
 
