@@ -16,6 +16,8 @@
  *     §9 — it restarted the ring on every zoom).
  * PURE. */
 
+import { layerFillRow, type LayerRing } from './wfWide.ts';   // ★ .ts: node runs this file directly (the tests)
+
 /** Bins to slide a row by so it lands under the CURRENT view: the gap between the row's own centre and the view's, in the
  *  row's bins. 0 when it cannot be placed honestly — unknown centres, a different bin scale (a frame from another span
  *  would draw the right signal at the wrong width), or no overlap at all. */
@@ -64,7 +66,7 @@ export function writeRow(ring: Uint8Array, slot: number, row: Uint8Array, n: num
  *    scale on screen (g = 1) and h across a zoom step is 0.
  *  ★ FOR A SECOND (COARSE) RING: the maps are in Hz (column x of slot r shows P_r + Q_r·x), not in another ring's
  *    columns, so a coarse full-capture ring with its own slots and maps can be related to the same view and drawn
- *    under this one where it is blank (docs/v12 — not built here).
+ *    under this one where it is blank — BUILT (V12): wfWide.ts, the full-capture layer, filled in by fanRegen.
  *  PURE — scripts/test_wf_row_place.ts (motion section); the native twin is cpp/spectrum/wf_glide.h. */
 
 /** Extra image rows below the ring: row RING_ROWS = the high byte of each slot's h, RING_ROWS+1 = the low byte. */
@@ -248,10 +250,13 @@ export interface FanState {
   lo: Int32Array | null; hi: Int32Array | null;
   /** The screen move every fan since the last takeFanStep made, composed: x_old = stepC + stepK·x_new (0..1 units). */
   stepK: number; stepC: number;
+  /** ★ V12 THE FULL-CAPTURE LAYER (wfWide.ts): one layer row per slot, in capture space — null until the first SPWB (an
+   *  older server never allocates it). fanRegen fills each regenerated row's texels outside its detailed extent from it. */
+  layer: LayerRing | null;
 }
 export function newFanState(rows: number): FanState {
   return { lastLo: 0, lastSpan: 0, xfA: new Float64Array(rows).fill(1), xfB: new Float64Array(rows), disp: null, sinceZoom: 0,
-           validFrom: 0, lo: null, hi: null, stepK: 1, stepC: 0 };
+           validFrom: 0, lo: null, hi: null, stepK: 1, stepC: 0, layer: null };
 }
 
 /** Per output pixel x of an n-wide row, the stored bins [lo[x], hi[x]] it shows under map (a, b) — lo = -1 where the
@@ -289,16 +294,19 @@ export function fanRegen(st: FanState, ring: Uint8Array, n: number, rows: number
     if (a !== ta || b !== tb) { fanTable(a, b, n, lo, hi); ta = a; tb = b; }   // rows zoomed together share a map
     if (a <= 1) {                                                              // magnified: one gather per pixel
       for (let x = 0; x < n; x++) { const l = lo[x]; disp[at + x] = l < 0 ? 0 : ring[at + l]; }
-      continue;
+    } else {
+      for (let x = 0; x < n; x++) {                                            // shrunk: the max under the pixel
+        const l = lo[x];
+        if (l < 0) { disp[at + x] = 0; continue; }
+        const h = hi[x];
+        let m = ring[at + l];
+        for (let k = l + 1; k <= h; k++) { const v = ring[at + k]; if (v > m) m = v; }
+        disp[at + x] = m;
+      }
     }
-    for (let x = 0; x < n; x++) {                                              // shrunk: the max under the pixel
-      const l = lo[x];
-      if (l < 0) { disp[at + x] = 0; continue; }
-      const h = hi[x];
-      let m = ring[at + l];
-      for (let k = l + 1; k <= h; k++) { const v = ring[at + k]; if (v > m) m = v; }
-      disp[at + x] = m;
-    }
+    // ★★ V12: outside the detailed extent, the row's own full-capture layer through the same map (black only where
+    //    the radio was not capturing) — wfWide.ts layerFillRow.
+    if (st.layer) layerFillRow(st.layer, r, a, b, n, disp, at, lo);
   }
 }
 
@@ -365,14 +373,17 @@ export function fanImage(st: FanState, ring: Uint8Array): Uint8Array { return st
 /** pushRow's whole placement, in one place (WaterfallView's JS path; the Android engine's twin is wf_zoom_fan.h
  *  placeRow): slide the row onto the view (rowViewOffset/writeRow), fan the history if the span changed or the row
  *  jumped, keep the display in step, note the row's placement and the move from the row before (MOTION). `frames` = rows
- *  written before this one; `visible` = how many of the newest rows can be on screen (the fan makes only those). Returns
+ *  written before this one; `visible` = how many of the newest rows can be on screen (the fan makes only those);
+ *  `placed` (optional) receives the row's placement (column 0's Hz, its span) — the full-capture layer's k and m. Returns
  *  the slot written. */
 export function placeRow(ring: Uint8Array, rows: number, n: number, frames: number, row: Uint8Array,
                          rowCenterHz: number, rowHzPerBin: number, viewCenterHz: number, viewBwHz: number,
-                         motion: MotionState, fan: FanState, visible = rows): number {
+                         motion: MotionState, fan: FanState, visible = rows,
+                         placed?: { startHz: number; spanHz: number }): number {
   const slot = frames % rows;
   const off = rowViewOffset(rowCenterHz, rowHzPerBin, viewCenterHz, viewBwHz, n);
   const start = placedStartHz(rowCenterHz, rowHzPerBin, off, n);
+  if (placed) { placed.startHz = start; placed.spanHz = rowHzPerBin * n; }   // ★ V12: where the layer row goes (wfWide.ts)
   const fanned = rowHzPerBin > 0 ? fanNoteRow(fan, ring, n, rows, frames, visible, start, rowHzPerBin * n) : false;
   writeRow(ring, slot * n, row, n, off);
   fanAfterRow(fan, ring, slot, n, rows);

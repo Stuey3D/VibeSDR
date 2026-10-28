@@ -32,10 +32,11 @@
  */
 import { applyViewChange, decodeMotion, encodeMotion, fanImage, fanRefresh, MOTION_MAX_FRAC, MOTION_ROWS, MOTION_ZERO, motionSample, newFanState,
          newMotionState, placeRow, rowViewOffset, takeFanStep, wfImageBytes, writeRow } from '../src/utils/wfRowPlace.ts';
+import { floorIdx, layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, WIDE_HDR } from '../src/utils/wfWide.ts';
 
 let fails = 0, passes = 0;
 function ok(what: string, cond: boolean, detail = '') {
-  if (cond) { passes++; return; }
+  if (cond) { passes++; if (process.env.WF_VERBOSE) console.log(`  ok   ${what}`); return; }
   fails++; console.log(`  FAIL ${what}${detail ? `\n       ${detail}` : ''}`);
 }
 
@@ -358,6 +359,115 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     for (let i = 0; i < steps * 2; i++) { bw /= 0.97; placeRow(SS, RR, N, k++, row, 1e6, bw / N, 1e6, bw, g2, f2); }
     const tout = (performance.now() - t0) / (steps * 2);
     console.log(`  zoom fan cost (1024-row ring, every row re-made, this JS engine): ${tin.toFixed(2)} ms a zoom-in step, ${tout.toFixed(2)} ms a zoom-out step`); }
+}
+
+// ── THE FULL-CAPTURE LAYER (V12, src/utils/wfWide.ts; docs/v12/WATERFALL-FULL-CAPTURE.md): rows recorded while zoomed in
+//    carry a layer row of the whole capture, drawn through the SAME per-row map wherever the detailed row has no data ──
+{
+  const R = 256, CAPC = 1_500_000, CAPS = 2_400_000, CLO = CAPC - CAPS / 2, C = 1024, F = 128, CAR = 1_050_000;
+  const toIdx = makeToIdx(-125, -50, 0, 0);
+  let seed = 5; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+  const gauss = () => { let s = 0; for (let i = 0; i < 6; i++) s += rnd(); return (s - 3) * Math.SQRT2; };   // σ ≈ 1
+  /** A detailed row as the server measures it, in dB: a −110 floor (σ 3 dB) and the carrier at −60 in its bin. */
+  const rowDb = (centre: number, span: number) => {
+    const d = new Float32Array(N); for (let i = 0; i < N; i++) d[i] = -110 + 3 * gauss();
+    const b = Math.floor((CAR - (centre - span / 2)) / (span / N)); if (b >= 0 && b < N) d[b] = -60;
+    return d;
+  };
+  /** The SPWB v2 row of the capture: the floor (−110, σ 3.0) and the carrier's cell, its place to 1/16. */
+  const spwb = () => {
+    const cf = (CAR - CLO) / CAPS * C, cell = Math.floor(cf), off = Math.min(15, Math.floor((cf - cell) * 16));
+    const trip: number[] = []; let d = cell + 1; while (d > 255) { trip.push(255, 0, 0); d -= 255; } trip.push(d, 196, off);   // the escape
+    const u = new Uint8Array(WIDE_HDR + 2 * F + trip.length), dv = new DataView(u.buffer);
+    u.set([0x53, 0x50, 0x57, 0x42, 2, 0]); dv.setUint32(14, CAPC, true); dv.setUint32(22, CAPS, true);
+    dv.setUint16(26, F, true); dv.setUint16(28, C, true); dv.setUint16(30, trip.length / 3, true);
+    u.fill(146, WIDE_HDR, WIDE_HDR + F); u.fill(30, WIDE_HDR + F, WIDE_HDR + 2 * F);
+    u.set(trip, WIDE_HDR + 2 * F);
+    return parseWide(u)!;
+  };
+  interface Run { S: Uint8Array; gl: ReturnType<typeof newMotionState>; fan: ReturnType<typeof newFanState>; fr: number; t: number;
+                  st: ReturnType<typeof newWideState>; v: { c: number; bw: number }; wide: boolean; last: { startHz: number; spanHz: number } }
+  const mk = (wide: boolean): Run => ({ S: new Uint8Array(N * (R + MOTION_ROWS)), gl: newMotionState(R, N), fan: newFanState(R), fr: 0, t: 0,
+                                         st: newWideState(), v: { c: CAPC, bw: CAPS }, wide, last: { startHz: NaN, spanHz: 0 } });
+  /** pushRow's JS path: an SPWB every 4th row (when this server sends them and the view is narrower than the capture), the
+   *  row placed by placeRow, its layer row written at the same slot. */
+  const push = (X: Run, visible = R) => {
+    const db = rowDb(X.v.c, X.v.bw), row = new Uint8Array(N); for (let i = 0; i < N; i++) row[i] = toIdx(db[i]);
+    if (X.wide && X.fr % 4 === 0 && X.v.bw < CAPS * 0.98) {
+      wideArrive(X.st, spwb(), X.t, X.last.startHz, X.last.spanHz, medianOf(db, { buf: new Float32Array(N) }));
+      if (!X.fan.layer) X.fan.layer = newLayerRing(R, F, C);
+    }
+    const slot = placeRow(X.S, R, N, X.fr, row, X.v.c, X.v.bw / N, X.v.c, X.v.bw, X.gl, X.fan, visible, X.last);
+    if (X.fan.layer) layerWriteRow(X.fan.layer, slot, X.st, X.last.startHz, X.last.spanHz, X.t, makeToIdx(-125, -50, 0, X.st.off));
+    X.fr++; X.t += 50;
+  };
+  const D = (X: Run) => fanImage(X.fan, X.S);
+  const liveCol = (X: Run) => (CAR - (X.v.c - X.v.bw / 2)) / (X.v.bw / N);
+  /** Rows f0..f1−1: [rows whose carrier is lit (≥ 150) at the live column ± 1.5 and nowhere else, rows with a black texel,
+   *  the widest lit run]. */
+  const scan = (X: Run, f0: number, f1: number) => {
+    const d = D(X), want = liveCol(X); let atCol = 0, black = 0, widest = 0;
+    for (let f = f0; f < f1; f++) {
+      const s0 = (f % R) * N; let a = -1, b = -1, z = 0;
+      for (let x = 0; x < N; x++) { if (d[s0 + x] >= 150) { if (a < 0) a = x; b = x; } if (d[s0 + x] === 0) z++; }
+      if (a >= 0 && a + 0.5 >= want - 1.5 && b + 0.5 <= want + 1.5) atCol++;
+      if (z) black++;
+      if (a >= 0) widest = Math.max(widest, b - a + 1);
+    }
+    return [atCol, black, widest];
+  };
+  /** Zoom in to 100 kHz at `zc` for `rows` rows, then back out to the whole capture (one row). Returns the zoomed frames. */
+  const zoomInOut = (X: Run, zc: number, rows: number, visible = R) => {
+    for (let i = 0; i < 20; i++) push(X);
+    X.v = { c: zc, bw: 100_000 }; const f0 = X.fr;
+    for (let i = 0; i < rows; i++) push(X, visible);
+    X.v = { c: CAPC, bw: CAPS }; push(X, visible);
+    return [f0, f0 + rows];
+  };
+
+  // ZOOM IN AWAY from the carrier (1.40 MHz, it is at 1.05), then out: the web's acceptance test (web 55/55, beta26 0/59)
+  const W = mk(true), O = mk(false);
+  const [z0, z1] = zoomInOut(W, 1_400_000, 60); zoomInOut(O, 1_400_000, 60);
+  { const [atCol, black, widest] = scan(W, z0, z1);
+    ok(`the layer: zoom in AWAY from a carrier and out — every row written meanwhile shows it at its true column (${atCol}/${z1 - z0})`, atCol === z1 - z0);
+    ok(`the layer: …no black inside the capture (${black} rows with a black texel)`, black === 0);
+    ok(`the layer: …and it is a THIN line (widest ${widest} texel(s))`, widest <= 2);
+    const [oc, ob] = scan(O, z0, z1);
+    ok(`control: an older server (no SPWB) — no layer is allocated and the rows are the narrow strip in black, as before (${oc} rows show it, ${ob} black)`,
+       O.fan.layer === null && oc === 0 && ob === z1 - z0); }
+  { // the filled floor is as bright as the detailed floor beside it (the newest rows are detailed across the capture)
+    const d = D(W); let lsum = 0, ln = 0, dsum = 0, dn = 0; const want = liveCol(W);
+    for (let f = z0 + 2; f < z1; f++) { const s0 = (f % R) * N; for (let x = 0; x < 300; x++) if (Math.abs(x - want) > 4) { lsum += d[s0 + x]; ln++; } }
+    for (let f = W.fr - 1; f < W.fr; f++) { const s0 = (f % R) * N; for (let x = 0; x < N; x++) if (Math.abs(x - want) > 4) { dsum += d[s0 + x]; dn++; } }
+    const la = lsum / ln, da = dsum / dn;
+    ok(`the layer: the filled floor is as bright as the detailed floor beside it (layer ${la.toFixed(1)}, detailed ${da.toFixed(1)}, E[idx] ${floorIdx(-110, 3, toIdx)})`, Math.abs(la - da) <= 3);
+    ok(`the layer: the floor offset matched the detailed median within 1 dB (${W.st.off.toFixed(2)} dB)`, Math.abs(W.st.off) < 1); }
+  // ZOOM IN ON the carrier, then out: its rows stay DETAILED inside their strip (the layer only outside and in the edge fade)
+  { const A = mk(true), B = mk(false); seed = 9; const [a0, a1] = zoomInOut(A, CAR, 40); seed = 9; zoomInOut(B, CAR, 40);
+    const da = D(A), db = D(B), fade = Math.ceil(A.fan.layer!.fadeTx) + 1; let diff = 0;
+    const XL = (CAR - 50_000 - CLO) / CAPS * N, XR = (CAR + 50_000 - CLO) / CAPS * N;
+    for (let f = a0; f < a1; f++) { const s0 = (f % R) * N; for (let x = Math.ceil(XL + fade); x < XR - fade; x++) if (da[s0 + x] !== db[s0 + x]) diff++; }
+    const [atCol] = scan(A, a0, a1);
+    ok(`the layer: zoom in ON a carrier — its rows stay detailed inside their strip (${diff} texels differ) and it is at its column (${atCol}/${a1 - a0})`, diff === 0 && atCol === a1 - a0); }
+  // PAN across the capture at the narrow zoom (a jump of 300 kHz — re-mapped, not bent): every row has data across the screen
+  { const P = mk(true); for (let i = 0; i < 4; i++) push(P);
+    P.v = { c: 1_200_000, bw: 100_000 }; const p0 = P.fr; for (let i = 0; i < 40; i++) push(P);
+    P.v = { c: 1_500_000, bw: 100_000 }; push(P);
+    const [, black] = scan(P, p0 + 1, P.fr - 1);
+    ok(`the layer: a pan across the capture at a narrow zoom — no black in the history (${black} rows with a black texel)`, black === 0);
+    P.v = { c: CAR + 20_000, bw: 100_000 }; push(P);
+    const [atCol, black2] = scan(P, p0 + 1, P.fr - 1);
+    ok(`the layer: …and panned onto the carrier, every row shows it at its column (${atCol}/${P.fr - 2 - p0}, ${black2} black)`, atCol === P.fr - 2 - p0 && black2 === 0); }
+  // ROTATION / RESIZE: the zoom out made only the 32 rows on screen; a taller view makes the rest — layer and all
+  { const Q = mk(true); const [q0, q1] = zoomInOut(Q, 1_400_000, 60, 32);
+    const [before] = scan(Q, q0, q1);
+    const did = fanRefresh(Q.fan, Q.S, N, R, Q.fr, R);
+    const [after, black] = scan(Q, q0, q1);
+    ok(`the layer: portrait (32 rows made) → landscape (all): both layers kept — ${before} then ${after}/${q1 - q0} rows show the carrier, ${black} black`,
+       did && before < q1 - q0 && after === q1 - q0 && black === 0);
+    const did2 = fanRefresh(Q.fan, Q.S, N, R, Q.fr, 32);
+    const [back] = scan(Q, q0, q1);
+    ok('the layer: …and back to portrait loses nothing', !did2 && back === q1 - q0); }
 }
 
 console.log(`  waterfall row placement: ${passes} passed, ${fails} failed`);
