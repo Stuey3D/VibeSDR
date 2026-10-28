@@ -118,10 +118,18 @@ ok('iOS wraps all three display-link entry points',
      .every(s => ios.includes(`@selector(${s})`)));
 // ★ STEADY REFRESH while the waterfall scrolls (2026-10-28, Stuart's ProMotion Mac: the panel wandered 81–99 Hz → judder)
 ok('iOS exports setSteadyRefresh', /RCT_EXPORT_METHOD\(setSteadyRefresh:/.test(ios));
-ok('steady raises the floor to the ceiling (min = max = preferred)', /gFpsSteady[\s\S]{0,400}CAFrameRateRangeMake\(top, top, top\)/.test(ios));
+ok('steady pins every link at one rate (min = max = preferred), under the cap', /gFpsSteady > 0[\s\S]{0,200}MIN\(gFpsSteady, cap\)[\s\S]{0,120}CAFrameRateRangeMake\(top, top, top\)/.test(ios));
 ok('the waterfall turns it on with rows and off when they stop, on backgrounding and on unmount',
-   (() => { const w = read('src/components/WaterfallView.tsx'); return /noteRowsFlowing\(\)/.test(w) && /setSteadyRefresh\(false\)[\s\S]{0,40}\}, 1000\)/.test(w)
-     && /if \(bg\) \{[\s\S]{0,120}setSteadyRefresh\(false\)/.test(w) && /useEffect\(\(\) => \(\) => \{[\s\S]{0,120}setSteadyRefresh\(false\)/.test(w); })());
+   (() => { const w = read('src/components/WaterfallView.tsx'); return /noteRowsFlowing\(\)/.test(w) && /setSteadyRefresh\(0\)[\s\S]{0,40}\}, 1000\)/.test(w)
+     && /if \(bg\) \{[\s\S]{0,120}setSteadyRefresh\(0\)/.test(w) && /useEffect\(\(\) => \(\) => \{[\s\S]{0,120}setSteadyRefresh\(0\)/.test(w); })());
+// ★ POWER (Stuart 2026-10-28): 120 only on interaction; at rest a whole multiple of the feed, from 30
+{ const { steadyHzFor } = await import('../src/utils/steadyHz.ts').catch(() => ({ steadyHzFor: null as any }));
+  if (steadyHzFor) {
+    const cases: [number, boolean, number][] = [[20, true, 60], [10, true, 60], [40, true, 120], [25, true, 60], [20, false, 40], [19.6, false, 40], [21, false, 40], [10, false, 30],
+      [15, false, 30], [30, false, 30], [29.2, false, 30], [25, false, 60], [40, false, 40], [60, false, 60], [17.5, false, 60], [0, false, 60]];
+    const bad = cases.filter(([f, i, want]) => steadyHzFor(f, i) !== want).map(([f, i, want]) => `${f}${i ? ' touch' : ''} → ${steadyHzFor(f, i)} (want ${want})`);
+    ok('steadyHzFor: a gesture 60 (120 only where 60 is not a multiple); at rest 30/40/60, a whole multiple of the (snapped) feed', bad.length === 0, bad.join('; '));
+  } else ok('steadyHzFor importable', false); }
 ok('Android Platform: no-op (the native method is iOS-only)', /native\(\)\?\.setSteadyRefresh/.test(svc));
 ok('Android re-applies on resume', /onHostResume\(\)\s*\{\s*applyFrameRateCap\(\)/.test(android));
 
