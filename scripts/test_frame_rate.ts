@@ -117,7 +117,10 @@ ok('iOS wraps all three display-link entry points',
    ['displayLinkWithTarget:selector:', 'setPreferredFrameRateRange:', 'setPreferredFramesPerSecond:']
      .every(s => ios.includes(`@selector(${s})`)));
 // ★ NO REFRESH PIN from the waterfall (Stuart 2026-10-28: ProMotion varies its rate to suit; a fixed screen has vsync)
-ok('the waterfall pins no refresh rate (ProMotion left to vary)', !/setSteadyRefresh\(/.test(read('src/components/WaterfallView.tsx')));
+// ★ HELD AT 120 while rows flow, the same on a touch (Stuart 2026-10-28: 507 held — "judder seems to be gone"; free — "stuttering")
+{ const w = read('src/components/WaterfallView.tsx');
+  ok('the waterfall holds 120 while rows flow and never a different rate on a touch', /setSteadyRefresh\(120\)/.test(w) && !/lastInteractAt/.test(w.split('const noteRowsFlowing')[1].slice(0, 400)));
+  ok('…released 1 s after the last row, on backgrounding and on unmount', /setSteadyRefresh\(0\); \}, 1000\)/.test(w) && /if \(bg\) \{[\s\S]{0,120}setSteadyRefresh\(0\)/.test(w) && /useEffect\(\(\) => \(\) => \{[\s\S]{0,120}setSteadyRefresh\(0\)/.test(w)); }
 ok('iOS still exports setSteadyRefresh (unused, kept for a screen that needs a pin)', /RCT_EXPORT_METHOD\(setSteadyRefresh:/.test(ios));
 ok('Android re-applies on resume', /onHostResume\(\)\s*\{\s*applyFrameRateCap\(\)/.test(android));
 

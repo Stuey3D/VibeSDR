@@ -170,7 +170,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     for (let i = 1; i <= 15; i++) { vc += 7_500; cs.push(vc); const rc = cs[Math.max(0, cs.length - 3)]; mpush(noisyRow(rc, 200_000), rc, 200_000, vc, vbw); }
     for (let i = 0; i < 10; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
     let bad = 0, moving = 0;
-    for (let f = from - 1; f < mfr - 1; f++) { const h = ms.h[f % MR], a = mcol(f), b = mcol(f + 1); if (h !== 0) moving++; if (a < 0 || b < 0 || Math.abs(a + h - b) > 1.01) bad++; }
+    for (let f = from - 1; f < mfr - 1; f++) { const h = ms.h[f % MR], a = mcol(f), b = mcol(f + 1); if (h !== 0) moving++; if (a < 0 || b < 0 || Math.abs(a + h - b) > 1.51) bad++; }   // (±½ column: eased rows are resampled)
     ok('motion (tuner retune): every pair\'s h is exactly the carrier\'s move on screen', bad === 0 && moving >= 14, `${bad} bad, ${moving} moving`);
     ok('motion: the moving range covers the tune and nothing after it', ms.lo <= from && ms.hi >= from + 13 && ms.hi < mfr - 1, `[${ms.lo}, ${ms.hi}]`);
     ok('motion: the newest row has no motion (no newer row yet)', ms.h[(mfr - 1) % MR] === 0);
@@ -207,7 +207,8 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     const st = takeFanStep(mf);
     ok('a small tune bends (motion), the history is not re-mapped', ms.h[(from - 1) % MR] !== 0 && st[0] === 1 && st[1] === 0, `${ms.h[(from - 1) % MR]} ${st}`); }
   // a PINCH (about the centre) is a ZOOM join on every pair: g = 1/0.95 (the newer row spreads), no shift, no re-map
-  { const from = mfr; let bw = vbw;
+  { for (let i = 0; i < 8; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);   // (past the tune's ease)
+    const from = mfr; let bw = vbw;
     for (let i = 0; i < 12; i++) { bw *= 0.95; mpush(noisyRow(vc, bw), vc, bw, vc, bw); }
     let bad = 0; for (let f = from - 1; f < mfr - 1; f++) if (!(ms.g[f % MR] > 1.0005) || Math.abs(ms.h[f % MR]) > 1 / 64) bad++;
     ok('motion: every pinch pair carries a zoom (g > 1, spreading, about the centre: h = 0)', bad === 0, `${bad}`);
@@ -287,7 +288,9 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   // (rows 60–63 are the tune below — they BEND, as they must, so the column checks skip them)
   // a TUNE (same span) does not fan: the history stays where it was drawn (the bend, #57)
   v = { c: v.c + 2_000, bw: v.bw }; for (let i = 0; i < 4; i++) fpush(v.c, v.bw);
-  ok('the fan: a tune does not touch the history (no maps, display = stored)', D() === S && fan.xfA.every((a) => a === 1) && fan.xfB.every((b) => b === 0));
+  { let same = true; for (let i = 0; i < 60 * N; i++) if (D()[i] !== S[i]) { same = false; break; }
+    let mapped = 0; for (let f = 0; f < 60; f++) if (fan.xfA[f % R] !== 1 || fan.xfB[f % R] !== 0) mapped++;
+    ok('the fan: a tune does not touch the history (the rows before it keep no map, shown as stored)', same && mapped === 0, `${mapped} mapped`); }
   v = { c: 1_030_000, bw: 200_000 }; for (let i = 0; i < 4; i++) fpush(v.c, v.bw);
   const preZoom = fr;
 
@@ -351,7 +354,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     ok('the tune + motion: a fast tune after the eased one — each pair\'s h is the move on screen', bad === 0, `${bad}`); }
 
   // RING rows after the last jump, every row is the identity: the second buffer is dropped
-  for (let i = 0; i < R; i++) fpush(v.c, v.bw);
+  for (let i = 0; i < R + 8; i++) fpush(v.c, v.bw);   // (+ the last ease's rows)
   ok('once the eased rows have scrolled away, the display buffer is freed', fan.disp === null && D() === S);
 
   // (the jump's rows-on-screen / fanRefresh cases: the full-capture layer section's 3-view pan below)
