@@ -90,12 +90,17 @@ SNR, the furthest. Fed by the same `heard()` as the day's log (docs/v12/BACKGROU
 spots").
 Gallery chip NDB.
 
-**Background decoding** (2026-10-27): an **NDB profile** ("Decodes: NDB beacons — the whole LF beacon band" in the setup
-page's profile editor, stored `"ndb":true`) runs the listener's NDB mode with nobody here — every beacon skimmed, each
-day's log and map to the gallery as background's; it ends the moment anybody connects, the radio back exactly as left.
-Offered only where the radio reaches LF (hwinfo `ndbHw`; at the save, by driver — an RTL only with direct sampling), never
-on a locked radio (refused in words at the save), and on the admin page as "NDB beacons · 12 beacons identified of 41
-carriers".
+**Background decoding** (2026-10-27, Stuart's second pass): the **NDB skimmer is a VFO decoder** — "NDB skimmer
+(summary)" (`"dec":"ndb-skim"`) in a background VFO row's decoder list, running BESIDE the profile's other VFOs on the same
+capture (his Lenovo RSP at 1200 kHz / 3 MS/s: NAVTEX 489.5 + 517.5, 160 m Band and every NDB at once). Its frequency and
+demodulator are greyed out — it covers as much of 190–535 kHz as the RF centre holds (`ndbSegment`; under 100 kHz is
+refused in words at the save). The background runner cuts ONE slice off its own FFT and feeds this service in its
+fed-slice mode (`Service::startFed` / `feedSlice` / `aimFed` — no tap of its own, a two-second queue that drops the oldest,
+a decode thread at decoder priority), with the same gallery cards labelled background. One decoder slot; paused while a
+listener's own NDB mode has the band. Offered only where the radio reaches LF (hwinfo `ndbHw`; at the save, by driver — an
+RTL only with direct sampling). The first pass's whole-radio profile kind ("Decodes: NDB beacons", `"ndb":true`) is gone;
+a saved one is converted on load into a VFO profile centred 362.75 kHz with one NDB skimmer VFO. Admin line: "NDB skimmer
+190–535 kHz · running · 12 beacons identified of 41 carriers". Details: docs/v12/BACKGROUND-DECODING.md.
 
 ## The web view (map-first, ADS-B's pattern)
 
@@ -166,11 +171,14 @@ x86-64 SSE2 syntax-checks clean.
   every reading, Find, stats, the receiver given back exactly.
 - `scripts/test-web-ndb.mjs`: 27 checks in headless Edge (`--mute-audio`): the map view, the list (order, NM, bars,
   coloured readings, tiles), the map (markers, NM rings), the card, RINGS, HEARD LOG, Find, stats, the fold, 390 px.
-- `scripts/test-setup-bg-ndb.mjs`: the setup page's real profile editor — NDB offered on an HF+, an RSP, an RTL in direct
-  sampling (HW.ndbHw first), never a HackRF / R2 / Icom / locked / blocked radio; saved as `{"ndb":true}` and read back.
+- `scripts/test-setup-bg-ndb.mjs`: the setup page's real profile editor — the NDB skimmer VFO offered on an HF+, an RSP,
+  an RTL in direct sampling (HW.ndbHw first), never a HackRF / R2 / Icom / blocked radio, once a profile; its frequency and
+  demodulator greyed out; saved as `{"hz":0,"dec":"ndb-skim"}` and read back; an older `{"ndb":true}` profile converted.
+- `vibeserver/test-bg-ndb.cpp`: the NDB skimmer VFO end to end — synthetic beacons through the background runner's slice
+  into the fed service and the gallery's cards, beside a NAVTEX VFO; slots, a listener's NDB mode, the radio moving.
 - `scripts/test_ndb_layer.mjs`: the layer's generated copy, the bars rule, and the rings shared with ADS-B (ladder, NM,
   four labels). `scripts/test_adsb_layer.mjs` (ADS-B's own, 151 checks) still passes on the shared ring code.
-- test-ndb also: the background-decoding NDB profile (parse, write back, valid / refused on a locked radio or one with no
+- test-ndb also: an older whole-radio background NDB profile converted on parse (written back in the new shape, valid / refused on a radio locked away from the band or one with no
   LF), and the real recording's eleven idents.
 
 ## Not done / owed
