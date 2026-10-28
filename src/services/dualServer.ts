@@ -76,6 +76,9 @@ export interface DualSide extends DualSideCore {
   /** ★★ WHICH RADIO on its server — `/r/<id>`, or '' when its address is the radio (dualMix.radioKeyOf). Pairing is per
    *  RADIO: two radios on one VibeServer are two sides (Gesiima, #57). Set by its screen once the radio is chosen. */
   radioKey?: string;
+  /** ★ Its radio was unlocked with a PIN of its own at the door: coming back, the door asks again (a radio PIN is proved
+   *  with a fresh nonce, which a return address cannot carry). Every other side comes straight back to its radio. */
+  pinned?: boolean;
 }
 
 export interface DualState extends DualCore<DualSide> {
@@ -463,7 +466,7 @@ export function roleOnMount(params: Record<string, unknown> & DualRouteLike & { 
 }
 
 /** The screen in front keeps its side's card facts current (cheap: only on change). */
-export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mode' | 'station' | 'endsAt' | 'soft' | 'name' | 'radioKey'>>,
+export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mode' | 'station' | 'endsAt' | 'soft' | 'name' | 'radioKey' | 'pinned'>>,
                            radioBase?: string | null) {
   const s = state.sides.find((x) => x.id === id);
   if (!s) return;
@@ -474,6 +477,19 @@ export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mod
   const baseOk = !wantBase || s.params.baseUrl === wantBase;
   if (baseOk && (Object.keys(p) as (keyof typeof p)[]).every((k) => s[k] === p[k])) return;
   patchSide(id, baseOk ? p : { ...p, params: { ...s.params, baseUrl: wantBase } });
+}
+
+/**
+ * ★★★ A SCREEN COMING BACK TO A SIDE THAT IS STILL PLAYING (a swap, the server list's ‹ Back) — the side, else null.
+ *  Stuart, 2026-10-28 (screen recording, iPhone, both servers connected): tapping the card took him to the Pi 2's
+ *  "Choose a receiver" — its landing card, because the radio has an aerial written up — and he had to choose the radio
+ *  he was already listening to. The radio was chosen when the side began; its audio never stopped. So the screen does
+ *  not open the door again: it adopts its return address as the radio, exactly as an address naming a radio (`/r/<id>`)
+ *  already does. ★ Except a radio unlocked with its own PIN (`pinned`): that proof cannot ride along, and the door asks.
+ */
+export function returningSide(myId: string | null, params: { dualSide?: unknown }): DualSide | null {
+  if (!myId || params.dualSide !== myId || state.phase === 'off') return null;
+  return state.sides.find((x) => x.id === myId && !x.ended) ?? null;
 }
 
 /** ★★ The joining screen's radio is the one the FIRST side is already playing (same server, same radio)? */

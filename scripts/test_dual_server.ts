@@ -280,8 +280,9 @@ console.log('pairing is per RADIO (Gesiima\'s two dongles on one VibeServer, #57
   const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
   const adopts = sdr.match(/setRadioBase\((?!null)/g) ?? [];
   const guarded = (sdr.match(/bounceIfFirstRadio\((baseUrl|radioBaseUrl\(baseUrl, (id|d\.radios\[0\]\.id)\))\)\) return/g) ?? []).length;
-  ok(adopts.length === 3 && guarded === 3, `every radio adoption (chosen, door of one, an address naming its radio) passes the first-radio check first (${guarded}/${adopts.length})`);
-  ok(/noteStatus\(dualMyId, \{[^}]*name: dualName, radioKey: dualRadioKey \}, radioBase\)/.test(sdr), 'the card is told the radio and its name');
+  // ★ The fourth adoption is a side coming BACK to its own radio (returningSide) — that one IS the radio playing.
+  ok(adopts.length === 4 && guarded === 3, `every radio adoption (chosen, door of one, an address naming its radio) passes the first-radio check first (${guarded}/${adopts.length - 1}; + the side coming back)`);
+  ok(/noteStatus\(dualMyId, \{[^}]*name: dualName, radioKey: dualRadioKey,\s*pinned: !!radioAuthSuffix \}, radioBase\)/.test(sdr), 'the card is told the radio and its name');
   ok(/if \(dualRadioKey && radioBase\) back\.baseUrl = radioBase;/.test(sdr) && /baseUrl: wantBase/.test(ds),
      'a side returns to its RADIO\'s address (adopted straight through), never the radio list');
   const dr = readFileSync('src/utils/doorReturn.ts', 'utf8');
@@ -311,6 +312,23 @@ console.log('the card says the mode the screen shows (Stuart 2026-10-28: "i am i
   ok(/opacity=\{icon === 'L' \? 1 : EAR_FAINT\} flip \/>/.test(card) && /opacity=\{icon === 'R' \? 1 : EAR_FAINT\} \/>/.test(card)
      && Number((card.match(/const EAR_FAINT = ([\d.]+)/) ?? [])[1]) >= 0.3,
      'stereo: a speaker per ear, the other server\'s FAINT but visible (Stuart: "a little faint speaker for the opposite channel")');
+}
+
+
+console.log('a swap is not an arrival (Stuart\'s recording 2026-10-28: the tap landed on the Pi 2\'s "Choose a receiver")');
+{
+  const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  const ds = readFileSync('src/services/dualServer.ts', 'utf8');
+  const door = sdr.indexOf('if (dualBack && !dualBack.pinned) {');
+  ok(door > 0 && door < sdr.indexOf('const d = await fetchFrontDoor(baseUrl);'),
+     'a side coming back adopts its return address as the radio BEFORE any front door is fetched');
+  ok(/if \(dualBack && !dualBack\.pinned\) \{\s*setRadioBase\(baseUrl\);\s*setDoorPending\(false\);\s*return;/.test(sdr),
+     '…no door, no landing card, no wait for a tap');
+  ok(/useState\(\(\) => returningSide\(dualSideId, route\.params as never\)\)/.test(sdr), '…decided once, on mount, from the pairing');
+  ok(/params\.dualSide !== myId/.test(ds) && /x\.id === myId && !x\.ended/.test(ds),
+     'only a screen whose route names its OWN live side counts as coming back');
+  ok(/pinned: !!radioAuthSuffix/.test(sdr), 'a radio unlocked with its own PIN still goes through the door (the proof cannot ride along)');
+  ok(/return \{ \.\.\.bg\.params, dualSide: bg\.id \}/.test(ds), 'the swap carries the side (and so the session) to the screen');
 }
 
 console.log(fails ? `\n✗ ${fails} failed` : '\n✓ all passed');
