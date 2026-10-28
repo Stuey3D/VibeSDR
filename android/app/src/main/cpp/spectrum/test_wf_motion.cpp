@@ -157,7 +157,7 @@ int main() {
         CHECK(offCol(zf + ZOOM_EASE_ROWS - 1, fr) == 0, "x2 zoom in: %d eased-in rows off the live column", offCol(zf + ZOOM_EASE_ROWS - 1, fr));
         { std::vector<int> cs; for (int f = zf - 1; f < zf + ZOOM_EASE_ROWS; f++) { int a, b; dlit(f, a, b); cs.push_back(a); }
           bool mono = true; int mx = 0; for (size_t i = 1; i < cs.size(); i++) { if (!(cs[i] > cs[i - 1])) mono = false; mx = std::max(mx, cs[i] - cs[i - 1]); }
-          CHECK(mono && mx < 20 && cs[1] - cs[0] <= 3 && cs.back() - cs[cs.size() - 2] <= 3, "x2 zoom in: the ease is not an S-curve fan (%d .. %d)", cs.front(), cs.back()); }
+          CHECK(mono && cs[1] - cs[0] == mx && 2 * (cs.back() - cs[cs.size() - 2]) < mx, "x2 zoom in: the ease is not an ease-out fan (%d .. %d)", cs.front(), cs.back()); }
         { double k, c; takeFanStep(fan, k, c); CHECK(k == 1 && c == 0, "x2 zoom: a screen ease (%g %g)", k, c); }
         vbw = 400'000; for (int i = 0; i < 30; i++) fpush(vc, vbw);
         CHECK(atHist(0, 60) == 0 && offCol(fr - 4, fr) == 0 && asDrawn(0, 60) == 0, "zoom out: history moved or new rows off (%d, %d)", atHist(0, 60), offCol(fr - 4, fr));

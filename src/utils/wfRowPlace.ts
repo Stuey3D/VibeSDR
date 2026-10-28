@@ -303,14 +303,17 @@ export function newFanState(rows: number): FanState {
            span: new Float64Array(rows) };
 }
 
-/** Rows a zoom step eases over — by its SIZE: a ×2 drum step 16 rows (~0.6 s at 25 rows/s), ×4 or more 24, a pinch's
- *  5 % step 1 (nothing to ease: the shader's zoom join draws it). The new rows are drawn at in-between zooms on an
- *  S-curve, so a station's trail leaves its old column and lands on its new one VERTICALLY and curves between — Stuart's
- *  sketch, 2026-10-28: "thin lines when zoomed out expanding with nice curves as you zoom in", and zooming out "no
- *  breaks … a continuous history". Every eased row keeps the geometry it was drawn at, like any history row. */
-export const ZOOM_EASE_ROWS = 16;
+/** Rows a zoom step eases over — by its SIZE: a ×2 drum step 4 rows (~0.2 s at 20 rows/s), ×4 or more 6, a pinch's 5 %
+ *  step 1 (nothing to ease: the shader's zoom join draws it). The new rows are drawn at in-between zooms on an EASE-OUT
+ *  — the first new row is already most of the way — and the shader's per-row zoom join draws the curve between them:
+ *  Stuart's sketch, 2026-10-28 ("thin lines when zoomed out expanding with nice curves"), zooming out "no breaks".
+ *  ★★ NOT LONGER, NOT AN S-CURVE: 16 rows on an S-curve (the first try) made the waterfall reach the new zoom ¾ s after
+ *    the spectrum, and its slow start drew almost nothing for the first rows — Stuart: "it doesnt feel as instant as it
+ *    did back in v2 … oddly delayed". v2 made the whole change within ONE frame interval. Every eased row keeps the
+ *    geometry it was drawn at, like any history row. */
+export const ZOOM_EASE_ROWS = 4;
 export function zoomEaseRows(k: number): number {
-  return Math.max(1, Math.min(24, Math.round(Math.abs(Math.log2(k)) * ZOOM_EASE_ROWS)));
+  return Math.max(1, Math.min(6, Math.round(Math.abs(Math.log2(k)) * ZOOM_EASE_ROWS)));
 }
 
 /** Per output pixel x of an n-wide row, the stored bins [lo[x], hi[x]] it shows under map (a, b) — lo = -1 where the
@@ -442,7 +445,7 @@ export function fanAfterRow(st: FanState, ring: Uint8Array, slot: number, n: num
   if (st.easeLeft > 0 && st.lastSpan > 0 && st.eSpan0 > 0 && isFinite(st.eLo0)) {
     const tl = st.lastLo, ts = st.lastSpan;
     st.eJ++; st.easeLeft = st.eT - st.eJ;
-    const u = Math.min(1, st.eJ / st.eT), e = u * u * (3 - 2 * u);   // smoothstep: leaves and lands vertical
+    const u = Math.min(1, st.eJ / st.eT), e = 1 - (1 - u) * (1 - u);   // ease-out: most of the way at once, lands soft
     const ns = st.eSpan0 * Math.pow(ts / st.eSpan0, e);              // the span geometrically (each step the same ratio)
     const ds = st.eSpan0 - ts;
     let nl: number;                                                  // …about the zoom's fixed point (the anchor)

@@ -302,7 +302,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   { const cs: number[] = []; for (let f = zf - 1; f < zf + ZOOM_EASE_ROWS; f++) cs.push(dlit(f)![0]);
     let mono = true; for (let i = 1; i < cs.length; i++) if (!(cs[i] > cs[i - 1])) mono = false;
     const steps = cs.slice(1).map((c, i) => c - cs[i]);
-    ok(`the zoom: the ease FANS the carrier out over ${ZOOM_EASE_ROWS} rows on an S-curve — small steps at both ends (${cs.join(' ')})`, mono && Math.max(...steps) < 20 && steps[0] <= 3 && steps[steps.length - 1] <= 3, steps.join(' ')); }
+    ok(`the zoom: the ease FANS the carrier out over ${ZOOM_EASE_ROWS} rows — EASE-OUT: the biggest step first, landing soft (${cs.join(' ')})`, mono && steps[0] === Math.max(...steps) && steps[steps.length - 1] < steps[0] / 2, steps.join(' ')); }
   ok('control: the live column is far from the history\'s (the fan the eye sees)', Math.abs(liveCol() - histCol) > 50, `${liveCol()} vs ${histCol}`);
   { const [k, c] = takeFanStep(fan); ok('the zoom: no screen ease (the history is not moved)', k === 1 && c === 0, `${k} ${c}`); }
 

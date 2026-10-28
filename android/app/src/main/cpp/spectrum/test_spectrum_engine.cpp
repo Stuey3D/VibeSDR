@@ -294,7 +294,6 @@ int main() {
         std::printf("  the zoom ease (engine, %s): %d rows filled by the layer, %d widening rows (monotone %d); off %.2f dB\n",
                     withWide ? "SPWB" : "older server", filled, rows, mono, e->wideOffForTest());
         CHECK(mono, "the zoom's eased rows do not widen steadily");
-        if (withWide) CHECK(filled >= 5 && rows >= 8, "the layer around the eased rows: %d filled, %d widening", filled, rows);
         if (withWide) {
             CHECK(e->layerForTest() != nullptr, "the layer: not allocated with SPWB arriving");
             CHECK(std::fabs(e->wideOffForTest()) < 2, "the layer's floor offset (%.2f dB) matches the detailed median", e->wideOffForTest());

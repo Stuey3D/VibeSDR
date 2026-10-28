@@ -62,9 +62,10 @@ struct FanState {
     explicit FanState(int rows = 0) : xfA(rows, 1.0), xfB(rows, 0.0), span(rows, 0.0) {}
 };
 
-constexpr int ZOOM_EASE_ROWS = 16;   // a ×2 step; ×4+ = 24; a pinch's 5 % step = 1 (the shader's zoom join draws it)
+constexpr int ZOOM_EASE_ROWS = 4;    // a ×2 step (~0.2 s); ×4+ = 6; a pinch's 5 % step = 1 — short and EASE-OUT: the
+                                     // 16-row S-curve felt "oddly delayed" (Stuart 2026-10-28; v2 changed within a frame)
 inline int zoomEaseRows(double k) {
-    return std::max(1, std::min(24, (int)std::floor(std::fabs(std::log2(k)) * ZOOM_EASE_ROWS + 0.5)));
+    return std::max(1, std::min(6, (int)std::floor(std::fabs(std::log2(k)) * ZOOM_EASE_ROWS + 0.5)));
 }
 
 /** Per output pixel, the stored bins [lo, hi] it shows under (a, b); lo = -1 = blank. */
@@ -181,7 +182,7 @@ inline void fanAfterRow(FanState& st, const uint8_t* ring, int slot, int n, int 
     if (st.easeLeft > 0 && st.lastSpan > 0 && st.eSpan0 > 0 && std::isfinite(st.eLo0)) {
         const double tl = st.lastLo, ts = st.lastSpan;
         st.eJ++; st.easeLeft = st.eT - st.eJ;
-        const double u = std::min(1.0, (double)st.eJ / st.eT), e = u * u * (3 - 2 * u);   // smoothstep
+        const double u = std::min(1.0, (double)st.eJ / st.eT), e = 1 - (1 - u) * (1 - u);   // ease-out
         const double ns = st.eSpan0 * std::pow(ts / st.eSpan0, e);
         const double ds = st.eSpan0 - ts;
         double nl;

@@ -61,10 +61,10 @@ ok(canGlide(1e6, 2e5, 1e6 + 20000, 2e5) && !canGlide(1e6, 2e5, 1e6 + 30000, 2e5)
   for (let k = 0; k <= 16; k++) { const [L, S] = zoomEaseView(lo0, s0, lo1, s1, k / 16); cols.push((F - L) / S * N); }
   const steps = cols.slice(1).map((c, i) => c - cols[i]);
   ok(Math.abs(cols[0] - (F - lo0) / s0 * N) < 1e-6 && Math.abs(cols[16] - (F - lo1) / s1 * N) < 1e-6, 'the ease starts at the old view and lands on the new');
-  ok(steps.every((d) => d > 0) && steps[0] < steps[8] / 4 && steps[15] < steps[8] / 4, `an S-curve: small steps at both ends (${steps.map((d) => d.toFixed(1)).join(' ')})`);
+  ok(steps.every((d) => d > 0) && steps[0] >= Math.max(...steps) * 0.95 && steps[15] < steps[0] / 4, `an ease-out: the biggest step first, landing soft (${steps.map((d) => d.toFixed(1)).join(' ')})`);
   const [Lm, Sm] = zoomEaseView(lo0, s0, lo1, s1, 0.5);
   ok(Math.abs(Lm + Sm / 2 - 1000000) < 1e-3, 'the zoom\'s fixed point (the dial) stays put mid-ease');
-  ok(Math.abs(zoomEaseMs(2) - 1000) < 1e-9 && zoomEaseMs(1 / 64) === 1500 && zoomEaseMs(0.95) < 80 && zoomEaseMs(0.99) === 40, 'the duration scales with the step (×2 1 s, capped 1.5 s, a pinch step under 80 ms, floor 40)');
+  ok(Math.abs(zoomEaseMs(2) - 400) < 1e-9 && zoomEaseMs(1 / 64) === 600 && zoomEaseMs(0.95) === 40, 'the duration scales with the step (×2 400 ms, capped 600, a pinch step the 40 ms floor)');
 }
 { // a zoom-in row drawn wider than its data continues the row below at the edges — never black
   const cur = frame(950000, 100000), below = new Uint8Array(N).fill(77);
