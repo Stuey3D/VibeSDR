@@ -245,7 +245,9 @@ inline int layerFloorAt(const LayerRing& L, size_t fo, double uc) {
     return (int)std::floor(a + (b - a) * t + 0.5);
 }
 
-/** ★★ FILL a displayed row the fan just made (see wfWide.ts layerFillRow): lo[x] < 0 = no detailed data there. */
+/** ★★ FILL a displayed row the fan just made (see wfWide.ts layerFillRow): lo[x] < 0 = no detailed data there.
+ *  ★ The same picture as the TS; the TS walks the blank runs floor-segment by segment and binary-searches the peaks
+ *    because Hermes is an interpreter — here the plain per-texel form costs ~2 µs a row. */
 inline void layerFillRow(LayerRing& L, int slot, double a, double b, int n, uint8_t* disp, const int32_t* lo) {
     const double k = L.k[slot];
     if (!(k > 0) || !(a > 0)) return;
@@ -255,6 +257,7 @@ inline void layerFillRow(LayerRing& L, int slot, double a, double b, int n, uint
     const size_t fo = (size_t)slot * L.F;
     const double A = k * a / n, B = k * (a * 0.5 / n + b) + m;
     const double XL = -b / a * n, XR = (1 - b) / a * n, fade = L.fadeTx;
+    if (XL <= 0 && XR >= n) return;   // ★ the detailed row covers the screen (a zoom IN): nothing to fill, no edge to fade
     const bool fadeL = XL > 0 && fade > 0, fadeR = XR < n && fade > 0;
     bool any = false;
     for (int x = 0; x < n; x++) {
