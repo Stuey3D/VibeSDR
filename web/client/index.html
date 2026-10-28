@@ -3041,6 +3041,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 
 /* Menu button rows + settings sub-panels (mirrors the app's menu). */
 .btnRow { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+/* ★ V12 mode icons (src/utils/modeIcons.ts): a decoder's category glyph before its name — the text's size and colour,
+   so a lit (.on) button lights its glyph too. Never shrinks: a narrow button truncates nothing it did not before. */
+.modeIco { width: 1.1em; height: 1.1em; vertical-align: -0.2em; margin-right: 0.35em; flex: none; }
 .subPanel {
   margin: 6px 0 10px; padding: 8px 10px;
   border: 1px solid var(--bar-border); border-radius: 8px;

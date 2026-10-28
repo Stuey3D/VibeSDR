@@ -24,6 +24,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
 (window as unknown as { __vibeFaults: () => unknown }).__vibeFaults =
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
+import { addModeIcon } from './modeIconDom';   // ★ V12 mode icons
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the contract module the app reads too, and the browser's panel.
 import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeLabel, icomClientMode, icomBanner,
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
@@ -12011,6 +12012,12 @@ function initDecoders(host: string, auth: AuthState) {
 
   // ── Decoder selection: toggles start/stop, and the MENU STAYS OPEN (skin
   //    semantics, same as the app). Selecting one opens the output box.
+  /* ★ V12 MODE ICONS (Stuart, 2026-10-28: "I thought AIS was aircraft because of the A") — each decoder's category glyph
+   *  before its name, here, in the gallery's filter and on DIGITAL SPOTS. The text stays the button's only text, so
+   *  soleDecoder()'s label is unchanged. */
+  for (const b of Array.from(document.querySelectorAll('#decodersPanel [data-dec]')) as HTMLElement[]) addModeIcon(b, b.dataset.dec || '');
+  for (const b of Array.from(document.querySelectorAll('#galFilter [data-kind]')) as HTMLElement[]) addModeIcon(b, b.dataset.kind || '');
+  for (const id of ['spotsBtn', 'spotsBandBtn']) { const b = document.getElementById(id); if (b) addModeIcon(b, 'spots'); }
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
       const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'jtty';
@@ -12578,13 +12585,13 @@ function anyDecoderLeft(): boolean {
     || (jttyCap && !blockedModes.has('jtty'));
 }
 
-function soleDecoder(): { label: string; on: boolean; press: () => void } | null {
+function soleDecoder(): { id: string; label: string; on: boolean; press: () => void } | null {
   if (!blockedModes.has('spots')) return null;
   const left = (Array.from(document.querySelectorAll('#decodersPanel [data-dec]')) as HTMLButtonElement[])
     .filter(b => !b.hidden);
   if (left.length !== 1) return null;
   const b = left[0];
-  return { label: (b.textContent || '').trim(), on: b.classList.contains('on'), press: () => b.click() };
+  return { id: b.dataset.dec || '', label: (b.textContent || '').trim(), on: b.classList.contains('on'), press: () => b.click() };
 }
 
 function syncDecButtons() {

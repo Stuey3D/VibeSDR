@@ -269,6 +269,10 @@ export interface PopupKeyProps {
   dot?: string;
   /** An icon drawn before the label, in the legend's colour. */
   icon?: (legendColor: string) => React.ReactNode;
+  /** The icon ABOVE the label instead of before it (a narrow key: the decoder keys on the narrowest phones), and the
+   *  gap between them (default 7 beside, 1 above). */
+  iconStack?: boolean;
+  iconGap?: number;
   onPress?: () => void;
   onPressIn?: (e: GestureResponderEvent) => void;
   onPressOut?: (e: GestureResponderEvent) => void;
@@ -297,7 +301,7 @@ export interface PopupKeyProps {
  * ★ Default chassis: never drawn — callers keep today's key (see the file header).
  */
 export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey({
-  label, children, active = false, pip = false, primary = false, danger = false, dot, icon, onPress, onPressIn, onPressOut,
+  label, children, active = false, pip = false, primary = false, danger = false, dot, icon, iconStack, iconGap, onPress, onPressIn, onPressOut,
   disabled, style, height = 34, fontSize = 11, legendStyle, numberOfLines = 1, focused, hitSlop = 4,
   accessibilityLabel, accessibilityHint,
 }, ref) {
@@ -360,13 +364,14 @@ export const PopupKey = React.forwardRef<View, PopupKeyProps>(function PopupKey(
       {dot ? (
         <View style={[ps.dot, { backgroundColor: dot, shadowColor: dot }]} />
       ) : children ? children(legendColor) : (
-        <View style={icon ? ps.iconRow : undefined}>
+        <View style={icon ? [ps.iconRow, iconStack && { flexDirection: 'column' as const, gap: 1 },
+                             iconGap != null && { gap: iconGap }, { maxWidth: '100%' }] : undefined}>
           {icon?.(legendColor)}
           {lit && pt.legendLitShade && !danger && !icon && (
             <Text numberOfLines={numberOfLines} style={[legendBase, legendStyle, ps.shade,
                   { color: pt.legendLitShade, textShadowRadius: 0 }]}>{label}</Text>
           )}
-          <Text numberOfLines={numberOfLines} style={[legendBase, legendStyle]}>{label}</Text>
+          <Text numberOfLines={numberOfLines} style={[legendBase, legendStyle, icon && !iconStack && { flexShrink: 1 }]}>{label}</Text>
         </View>
       )}
     </AnimatedPressable>

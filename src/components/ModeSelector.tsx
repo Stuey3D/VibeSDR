@@ -28,6 +28,7 @@ import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText } from '../services/cwList';
 import { JTTY_HINT } from '../services/jtty';
+import { ModeLabel, modeKeyIcon, MODE_ICON_STACK_BELOW } from './ModeIcon';   // ★ V12 mode icons (Stuart 2026-10-28)
 import { DSC_HINT } from '../services/dsc';
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
@@ -99,12 +100,15 @@ function MoreItem({ onPress, onReveal, children }: {
  * or on/off group (lit = selected; the legend lights in the controls colour too) — never on a plain
  * action (MAP, FILES, the server maps, CLOSE). Default chassis: never drawn — every site keeps today's key.
  */
-function MetalKey({ navRef, focused, label, active = false, pip = false, onPress, fontSize = 12, style }: {
+function MetalKey({ navRef, focused, label, active = false, pip = false, onPress, fontSize = 12, style, iconId, stack }: {
   navRef: React.MutableRefObject<View | null>; focused: boolean; label: string; active?: boolean; pip?: boolean;
   onPress?: () => void; fontSize?: number; style?: object;
+  /** ★ V12: the mode's category glyph before the legend (utils/modeIcons) — above it when `stack` (narrowest phones). */
+  iconId?: string; stack?: boolean;
 }) {
   return (
     <PopupKey ref={navRef as any} label={label} active={active} pip={pip} onPress={onPress} focused={focused}
+      icon={iconId ? modeKeyIcon(iconId, stack ? 12 : 13) : undefined} iconStack={stack} iconGap={stack ? undefined : 5}
       height={36} fontSize={fontSize} style={[{ flex: 1, minWidth: '22%' }, style]} />
   );
 }
@@ -462,6 +466,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   // ★ "ADV RDS" was an abbreviation forced by nothing — the button spans the whole row and has
   //   room to spare. Only the very narrowest phones need the short form (Stuart, 2026-07-28).
   const advRdsLabel = winW >= 340 ? 'ADVANCED RDS' : 'ADV RDS';
+  /** ★ V12 mode icons: on the narrowest phones the glyph goes ABOVE the label (beside it, NAVTEX would truncate). */
+  const stackIco = winW < MODE_ICON_STACK_BELOW;
+  const icoPad = stackIco ? 4 : 10;
   const txShown = !!transcribeControls && !isBlocked('transcribe');
   const tc = transcribeControls;
   const txLit = !!tc && (tc.active || tc.selected);
@@ -491,14 +498,15 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const lit = dc.decMode === id;
     return (
       <NavItem key={id} onPress={() => dc.onDecToggle(id)}>{(navFocused, navRef) => pt.metal ? (
-        <MetalKey navRef={navRef} focused={navFocused} label={label} active={lit} pip onPress={() => dc.onDecToggle(id)} />
+        <MetalKey navRef={navRef} focused={navFocused} label={label} active={lit} pip onPress={() => dc.onDecToggle(id)} iconId={id} stack={stackIco} />
       ) : (
       <TouchableOpacity ref={navRef as any} accessibilityLabel={a11y} accessibilityState={{ selected: lit }}
-        style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: 10 },
+        style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: icoPad },
                 active && { backgroundColor: decBg },
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
         onPress={() => dc.onDecToggle(id)} activeOpacity={0.8}>
-        <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>{label}</Text>
+        <ModeLabel id={id} stack={stackIco} color={lit ? dec : t.btnText}
+                   style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>{label}</ModeLabel>
       </TouchableOpacity>
       )}</NavItem>
     );
@@ -509,20 +517,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const dc = decoderControls!;
     return (
       <NavItem key="adsb" onPress={() => dc.onAdsb?.()}>{(navFocused, navRef) => pt.metal ? (
-        <MetalKey navRef={navRef} focused={navFocused} label="ADS-B" active={adsbLit} pip
+        <MetalKey navRef={navRef} focused={navFocused} label="ADS-B" active={adsbLit} pip iconId="adsb" stack={stackIco}
           onPress={() => dc.onAdsb?.()} fontSize={inGrid ? 13 : 12} style={adsbOff ? { opacity: 0.45 } : undefined} />
       ) : (
       <TouchableOpacity ref={navRef as any}
         accessibilityLabel={adsbOff ? `ADS-B, unavailable: ${dc.adsbWhy}` : 'ADS-B'}
-        style={[st.btn, { borderColor: adsbLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+        style={[st.btn, { borderColor: adsbLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : inGrid && isWhite ? 12 : 10 },
                 adsbLit && { backgroundColor: decBg },
                 adsbOff && { opacity: 0.45, borderStyle: 'dashed' as const },
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
         onPress={() => dc.onAdsb?.()} activeOpacity={0.8}>
-        <Text numberOfLines={1}
+        <ModeLabel id="adsb" stack={stackIco} numberOfLines={1} color={adsbLit ? dec : t.btnText}
               style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: adsbLit ? dec : t.btnText }]}>
           ADS-B
-        </Text>
+        </ModeLabel>
       </TouchableOpacity>
       )}</NavItem>
     );
@@ -534,20 +542,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const dc = decoderControls!;
     return (
       <NavItem key="ism" onPress={() => dc.onIsm?.()}>{(navFocused, navRef) => pt.metal ? (
-        <MetalKey navRef={navRef} focused={navFocused} label="ISM" active={ismLit} pip
+        <MetalKey navRef={navRef} focused={navFocused} label="ISM" active={ismLit} pip iconId="ism" stack={stackIco}
           onPress={() => dc.onIsm?.()} fontSize={inGrid ? 13 : 12} style={ismOff ? { opacity: 0.45 } : undefined} />
       ) : (
       <TouchableOpacity ref={navRef as any}
         accessibilityLabel={ismOff ? `ISM, unavailable: ${dc.ismWhy}` : 'ISM sensors'}
-        style={[st.btn, { borderColor: ismLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+        style={[st.btn, { borderColor: ismLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : inGrid && isWhite ? 12 : 10 },
                 ismLit && { backgroundColor: decBg },
                 ismOff && { opacity: 0.45, borderStyle: 'dashed' as const },
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
         onPress={() => dc.onIsm?.()} activeOpacity={0.8}>
-        <Text numberOfLines={1}
+        <ModeLabel id="ism" stack={stackIco} numberOfLines={1} color={ismLit ? dec : t.btnText}
               style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: ismLit ? dec : t.btnText }]}>
           ISM
-        </Text>
+        </ModeLabel>
       </TouchableOpacity>
       )}</NavItem>
     );
@@ -559,20 +567,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const dc = decoderControls!;
     return (
       <NavItem key="ndb" onPress={() => dc.onNdb?.()}>{(navFocused, navRef) => pt.metal ? (
-        <MetalKey navRef={navRef} focused={navFocused} label="NDB" active={ndbLit} pip
+        <MetalKey navRef={navRef} focused={navFocused} label="NDB" active={ndbLit} pip iconId="ndb" stack={stackIco}
           onPress={() => dc.onNdb?.()} fontSize={inGrid ? 13 : 12} style={ndbOff ? { opacity: 0.45 } : undefined} />
       ) : (
       <TouchableOpacity ref={navRef as any}
         accessibilityLabel={ndbOff ? `NDB, unavailable: ${dc.ndbWhy}` : 'NDB beacons — every aeronautical beacon on the LF band, with a map'}
-        style={[st.btn, { borderColor: ndbLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+        style={[st.btn, { borderColor: ndbLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : inGrid && isWhite ? 12 : 10 },
                 ndbLit && { backgroundColor: decBg },
                 ndbOff && { opacity: 0.45, borderStyle: 'dashed' as const },
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
         onPress={() => dc.onNdb?.()} activeOpacity={0.8}>
-        <Text numberOfLines={1}
+        <ModeLabel id="ndb" stack={stackIco} numberOfLines={1} color={ndbLit ? dec : t.btnText}
               style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: ndbLit ? dec : t.btnText }]}>
           NDB
-        </Text>
+        </ModeLabel>
       </TouchableOpacity>
       )}</NavItem>
     );
@@ -584,20 +592,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const dc = decoderControls!;
     return (
       <NavItem key="ais" onPress={() => dc.onAis?.()}>{(navFocused, navRef) => pt.metal ? (
-        <MetalKey navRef={navRef} focused={navFocused} label="AIS" active={aisLit} pip
+        <MetalKey navRef={navRef} focused={navFocused} label="AIS" active={aisLit} pip iconId="ais" stack={stackIco}
           onPress={() => dc.onAis?.()} fontSize={inGrid ? 13 : 12} style={aisOff ? { opacity: 0.45 } : undefined} />
       ) : (
       <TouchableOpacity ref={navRef as any}
         accessibilityLabel={aisOff ? `AIS, unavailable: ${dc.aisWhy}` : 'AIS ships'}
-        style={[st.btn, { borderColor: aisLit ? dec : t.btnBorder, paddingVertical: inGrid && isWhite ? 12 : 10 },
+        style={[st.btn, { borderColor: aisLit ? dec : t.btnBorder, paddingVertical: stackIco ? 4 : inGrid && isWhite ? 12 : 10 },
                 aisLit && { backgroundColor: decBg },
                 aisOff && { opacity: 0.45, borderStyle: 'dashed' as const },
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
         onPress={() => dc.onAis?.()} activeOpacity={0.8}>
-        <Text numberOfLines={1}
+        <ModeLabel id="ais" stack={stackIco} numberOfLines={1} color={aisLit ? dec : t.btnText}
               style={[st.btnText, { fontFamily: t.font, fontSize: inGrid && isWhite ? 15 : 13, color: aisLit ? dec : t.btnText }]}>
           AIS
-        </Text>
+        </ModeLabel>
       </TouchableOpacity>
       )}</NavItem>
     );
@@ -949,19 +957,20 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           {dabInGrid && decoderControls?.dabAvail && (
             <NavItem key="dab" onPress={() => decoderControls.onDab?.()}>{(navFocused, navRef) => pt.metal ? (
               <MetalKey navRef={navRef} focused={navFocused} label="DAB" active={!!decoderControls.dabOn} pip
-                onPress={() => decoderControls.onDab?.()} fontSize={13} />
+                onPress={() => decoderControls.onDab?.()} fontSize={13} iconId="dab" stack={stackIco} />
             ) : (
             <TouchableOpacity ref={navRef as any}
               style={[st.btn,
-                { borderColor: t.btnBorder, paddingVertical: isWhite ? 12 : 10 },
+                { borderColor: t.btnBorder, paddingVertical: stackIco ? 4 : isWhite ? 12 : 10 },
                 decoderControls.dabOn && { backgroundColor: t.btnActiveBg, borderColor: t.btnActiveBdr },
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
               onPress={() => decoderControls.onDab?.()} activeOpacity={0.8}>
-              <Text style={[st.btnText,
+              <ModeLabel id="dab" stack={stackIco} color={decoderControls.dabOn ? t.btnActiveText : t.btnText}
+                style={[st.btnText,
                 { fontFamily: t.font, fontSize: isWhite ? 15 : 14, color: t.btnText },
                 decoderControls.dabOn && { color: t.btnActiveText }]}>
                 DAB
-              </Text>
+              </ModeLabel>
             </TouchableOpacity>
             )}</NavItem>
           )}
@@ -1077,7 +1086,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                     onPress={() => pick(m.id)}
                     onLayout={e => { itemY.current[m.id] = e.nativeEvent.layout.y; }}
                     activeOpacity={0.7}>
-                    <Text style={[st.moreItemText, { fontFamily: t.font },
+                    {/* ★ V12 mode icons: the decoder's category glyph before its name (ADS-B / HFDL / VDL2 an aircraft, AIS /
+                        DSC / NAVTEX a ship…); a row without one keeps the same indent so the names stay in a column. */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    {(() => {
+                      const sel = m.id === activeDecoder || m.id === current;
+                      const ico = modeKeyIcon(m.id, 14);
+                      const c = pt.metal ? (sel ? pt.readout : pt.winText)
+                                         : m.id === activeDecoder ? dec : m.id === current ? t.btnActiveText : t.btnText;
+                      return ico ? ico(c) : <View style={{ width: 14 }} />;
+                    })()}
+                    <Text style={[st.moreItemText, { fontFamily: t.font, flexShrink: 1 },
                                   // ★ Silver / black: the list is a recessed window — the text colour, the
                                   //   chosen row lit with the ✓ (neon under Nixie).
                                   pt.metal
@@ -1088,6 +1107,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                                     : { color: m.id === activeDecoder ? dec : m.id === current ? t.btnActiveText : t.btnText }]}>
                       {m.id === activeDecoder || m.id === current ? '✓ ' : ''}{m.label.toUpperCase()}
                     </Text>
+                    </View>
                   </TouchableOpacity>
                   )}</MoreItem></NavRow>
                 ))}
@@ -1132,16 +1152,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 return (
                   <NavItem key={k} onPress={() => decoderControls.onDecToggle(k)}>{(navFocused, navRef) => pt.metal ? (
                     <MetalKey navRef={navRef} focused={navFocused} label={k.toUpperCase()} active={active || selected} pip
-                      onPress={() => decoderControls.onDecToggle(k)} />
+                      onPress={() => decoderControls.onDecToggle(k)} iconId={k} stack={stackIco} />
                   ) : (
                   <TouchableOpacity ref={navRef as any}
-                    style={[st.btn, { borderColor: (active || selected) ? dec : t.btnBorder, paddingVertical: 10 },
+                    style={[st.btn, { borderColor: (active || selected) ? dec : t.btnBorder, paddingVertical: icoPad },
                             active && { backgroundColor: decBg },
                             navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
                     onPress={() => decoderControls.onDecToggle(k)} activeOpacity={0.8}>
-                    <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (active || selected) ? dec : t.btnText }]}>
+                    <ModeLabel id={k} stack={stackIco} color={(active || selected) ? dec : t.btnText}
+                               style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (active || selected) ? dec : t.btnText }]}>
                       {k.toUpperCase()}
-                    </Text>
+                    </ModeLabel>
                   </TouchableOpacity>
                   )}</NavItem>
                 );
@@ -1175,17 +1196,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {decoderControls.dabAvail && (
                 <NavItem key="dab" onPress={() => decoderControls.onDab?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label="DAB" active={!!decoderControls.dabOn} pip
-                    onPress={() => decoderControls.onDab?.()} />
+                    onPress={() => decoderControls.onDab?.()} iconId="dab" stack={stackIco} />
                 ) : (
                 <TouchableOpacity ref={navRef as any}
-                  style={[st.btn, { borderColor: decoderControls.dabOn ? dec : t.btnBorder, paddingVertical: 10 },
+                  style={[st.btn, { borderColor: decoderControls.dabOn ? dec : t.btnBorder, paddingVertical: icoPad },
                           decoderControls.dabOn && { backgroundColor: decBg },
                           navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
                   onPress={() => decoderControls.onDab?.()} activeOpacity={0.8}>
-                  <Text numberOfLines={1}
+                  <ModeLabel id="dab" stack={stackIco} numberOfLines={1} color={decoderControls.dabOn ? dec : t.btnText}
                         style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: decoderControls.dabOn ? dec : t.btnText }]}>
                     DAB
-                  </Text>
+                  </ModeLabel>
                 </TouchableOpacity>
                 )}</NavItem>
               )}
@@ -1211,17 +1232,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {advRdsShown && (
                 <NavItem key="advrds" onPress={() => decoderControls.onAdvRds?.()}>{(navFocused, navRef) => pt.metal ? (
                   <MetalKey navRef={navRef} focused={navFocused} label={advRdsLabel} active={!!decoderControls.advRdsOn} pip
-                    onPress={() => decoderControls.onAdvRds?.()} />
+                    onPress={() => decoderControls.onAdvRds?.()} iconId="rds" stack={stackIco} />
                 ) : (
                 <TouchableOpacity ref={navRef as any}
-                  style={[st.btn, { borderColor: decoderControls.advRdsOn ? dec : t.btnBorder, paddingVertical: 10 },
+                  style={[st.btn, { borderColor: decoderControls.advRdsOn ? dec : t.btnBorder, paddingVertical: icoPad },
                           decoderControls.advRdsOn && { backgroundColor: decBg },
                           navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
                   onPress={() => decoderControls.onAdvRds?.()} activeOpacity={0.8}>
-                  <Text numberOfLines={1}
+                  <ModeLabel id="rds" stack={stackIco} numberOfLines={1} color={decoderControls.advRdsOn ? dec : t.btnText}
                         style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: decoderControls.advRdsOn ? dec : t.btnText }]}>
                     {advRdsLabel}
-                  </Text>
+                  </ModeLabel>
                 </TouchableOpacity>
                 )}</NavItem>
               )}
@@ -1386,14 +1407,15 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 return (
               <NavItem onPress={() => spotsControls.onSpotsToggle('digi')}>{(nf, nr) => pt.metal ? (
                 <MetalKey navRef={nr} focused={nf} label={label} active={lit} pip
-                  onPress={() => spotsControls.onSpotsToggle('digi')} />
+                  onPress={() => spotsControls.onSpotsToggle('digi')} iconId="spots" stack={stackIco} />
               ) : (
               <TouchableOpacity ref={nr as any} accessibilityLabel={spotsControls.band ? 'Digital spots, single mode: the modes at your dial' : 'Digital spots'}
-                                style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: 10 },
+                                style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: icoPad },
                                         lit && { backgroundColor: decBg },
                                         nf && { borderColor: focusC.ring, borderWidth: 2 }]}
                 onPress={() => spotsControls.onSpotsToggle('digi')} activeOpacity={0.8}>
-                <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>{label}</Text>
+                <ModeLabel id="spots" stack={stackIco} numberOfLines={1} color={lit ? dec : t.btnText}
+                           style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>{label}</ModeLabel>
               </TouchableOpacity>)}</NavItem>
                 );
               })()}
@@ -1419,13 +1441,14 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               {spotsControls.showCwStt && (
                 <NavItem onPress={() => spotsControls.onSpotsToggle('cw')}>{(nf, nr) => pt.metal ? (
                   <MetalKey navRef={nr} focused={nf} label="CW SPOTS" active={spotsControls.spotsKind === 'cw'} pip
-                    onPress={() => spotsControls.onSpotsToggle('cw')} />
+                    onPress={() => spotsControls.onSpotsToggle('cw')} iconId="cw" stack={stackIco} />
                 ) : (
-                <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: spotsControls.spotsKind === 'cw' ? dec : t.btnBorder, paddingVertical: 10 },
+                <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: spotsControls.spotsKind === 'cw' ? dec : t.btnBorder, paddingVertical: icoPad },
                                           spotsControls.spotsKind === 'cw' && { backgroundColor: decBg },
                                           nf && { borderColor: focusC.ring, borderWidth: 2 }]}
                   onPress={() => spotsControls.onSpotsToggle('cw')} activeOpacity={0.8}>
-                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'cw' ? dec : t.btnText }]}>CW SPOTS</Text>
+                  <ModeLabel id="cw" stack={stackIco} color={spotsControls.spotsKind === 'cw' ? dec : t.btnText}
+                             style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'cw' ? dec : t.btnText }]}>CW SPOTS</ModeLabel>
                 </TouchableOpacity>)}</NavItem>
               )}
               {spotsControls.showCwStt && (
@@ -1496,15 +1519,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               SERVER MAPS
             </Text>
             <NavRow><View style={st.grid}>
-              {([['hfdl', '✈ HFDL'], ['digi', '📡 DIGITAL'], ['cw', '⊟ CW']] as const).map(([k, label]) => (
+              {/* ★ V12: the emoji (✈ 📡 ⊟) became the shared mode glyphs — the aircraft, the spots globe, the Morse key. */}
+              {([['hfdl', 'HFDL'], ['digi', 'DIGITAL'], ['cw', 'CW']] as const).map(([k, label]) => (
                 <NavItem key={k} onPress={() => onServerMap(k)}>{(nf, nr) => pt.metal ? (
-                  <MetalKey navRef={nr} focused={nf} label={label} onPress={() => onServerMap(k)} />
+                  <MetalKey navRef={nr} focused={nf} label={label} onPress={() => onServerMap(k)} iconId={k} stack={stackIco} />
                 ) : (
                 <TouchableOpacity ref={nr as any}
-                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: icoPad },
                           nf && { borderColor: focusC.ring, borderWidth: 2 }]}
                   onPress={() => onServerMap(k)} activeOpacity={0.8}>
-                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>{label}</Text>
+                  <ModeLabel id={k} stack={stackIco} color={t.btnText}
+                             style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>{label}</ModeLabel>
                 </TouchableOpacity>)}</NavItem>
               ))}
             </View></NavRow>

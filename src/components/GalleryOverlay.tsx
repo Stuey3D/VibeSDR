@@ -21,6 +21,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
+import { ModeLabel } from './ModeIcon';
 import { withReadAuth } from '../services/vibeAuth';
 import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
@@ -207,7 +208,9 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                 {KINDS.map((k) => (
                   <TouchableOpacity key={k.id || 'all'} onPress={() => { setKind(k.id); setPage(1); }}
                                     style={[s.key, kind === k.id && { borderColor: pt.ink.selected, backgroundColor: pt.ink.selectedBg }]}>
-                    <Text style={[s.keyText, kind === k.id && { color: pt.ink.selected }]}>{k.label}</Text>
+                    {/* ★ V12: the decoder's category glyph before its name (a ship for AIS / DSC / NAVTEX…); ALL has none */}
+                    <ModeLabel id={k.id} iconSize={12} color={kind === k.id ? pt.ink.selected : pt.ink.key}
+                               style={[s.keyText, kind === k.id && { color: pt.ink.selected }]}>{k.label}</ModeLabel>
                   </TouchableOpacity>
                 ))}
               </View>
