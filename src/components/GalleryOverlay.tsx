@@ -38,7 +38,9 @@ export interface GalleryItem {
 }
 const KINDS: { id: string; label: string }[] = [
   { id: '', label: 'ALL' }, { id: 'navtex', label: 'NAVTEX' }, { id: 'rtty', label: 'RTTY' },
-  { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' }, { id: 'ft8', label: 'FT8' },
+  { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
+  // ★ 'DIGITAL SPOTS' (Stuart 2026-10-28): the ft8 kind holds FT8 cards AND the Band digital-spots summaries (every mode)
+  { id: 'ft8', label: 'DIGITAL SPOTS' },
   // ★★ V12 2026-10-25: CW — a listener's decoded text (a run) and the skimmer's spots summary cards (vibe_bgdecode.h)
   { id: 'cw', label: 'CW' },
   // ★★ V12 2026-10-26: PSK31/63 — the same, from the server's PSK decoder and skimmer
