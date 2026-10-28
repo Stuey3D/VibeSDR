@@ -104,6 +104,9 @@ const TICK_H   = 22;   // frequency ticker height
 // so orientation changes the mapping — never the ring. Depth ≥ any view's point-height so 1 row = 1
 // point holds without the mapping exceeding the ring.
 const RING_ROWS = 1024;
+/** Installed on the JS runtime by the react-native-skia patch (VibeExport.cpp): a Gray_8 raster image made
+ *  WITHOUT Hermes external memory pressure. Absent on web / an unpatched binary. See publishRing. */
+type VibeMakeGray8Image = (bytes: Uint8Array, width: number, height: number, rowBytes: number) => SkImage | null;
 /** Fixed waterfall texture WIDTH. Incoming rows are resampled into it, so a
  *  server changing its bin count (UberSDR does this on every zoom) can never
  *  reallocate the ring, reset the frame counter or destroy history. 1024 matches
@@ -700,9 +703,11 @@ function WaterfallView({
   // accumulate for ages (measured ~770MB resident, plus constant GC churn).
   // Retire queues delay dispose() by a couple of swaps so the UI thread can
   // never be mid-draw on a freed object.
-  const wfLive    = useRef<{ img: SkImage; data: SkData } | null>(null);
-  const wfPending = useRef<Set<{ img: SkImage; data: SkData }>>(new Set());
-  const swapWfImage = useCallback((img: SkImage, data: SkData) => {
+  // ★ `data` is null for an image from __vibeMakeGray8Image (publishRing): it owns its pixels, there is no
+  //   separate SkData host object to free.
+  const wfLive    = useRef<{ img: SkImage; data: SkData | null } | null>(null);
+  const wfPending = useRef<Set<{ img: SkImage; data: SkData | null }>>(new Set());
+  const swapWfImage = useCallback((img: SkImage, data: SkData | null) => {
     wfImage.value = img;
     const old = wfLive.current;
     wfLive.current = { img, data };
@@ -715,7 +720,7 @@ function WaterfallView({
     if (old) {
       wfPending.current.add(old);
       setTimeout(() => {
-        if (wfPending.current.delete(old)) { try { old.img.dispose(); old.data.dispose(); } catch {} }
+        if (wfPending.current.delete(old)) { try { old.img.dispose(); old.data?.dispose(); } catch {} }
       }, 300);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -753,8 +758,8 @@ function WaterfallView({
     const live = wfLive.current, imgs = [...wfPending.current], paths = [...pathPending.current];
     wfLive.current = null; wfPending.current.clear(); pathPending.current.clear();
     setTimeout(() => {
-      if (live) { try { live.img.dispose(); live.data.dispose(); } catch {} }
-      imgs.forEach(r => { try { r.img.dispose(); r.data.dispose(); } catch {} });
+      if (live) { try { live.img.dispose(); live.data?.dispose(); } catch {} }
+      imgs.forEach(r => { try { r.img.dispose(); r.data?.dispose(); } catch {} });
       paths.forEach(p => { try { p.dispose(); } catch {} });
     }, 300);
   }, []);
@@ -1061,6 +1066,25 @@ function WaterfallView({
     if (!idxBuf.current) return;
     ringDirty.current = false;
     const n = RING_W;
+    // ★★★ NO HERMES MEMORY PRESSURE (2026-10-28, the late frame every ~15 s on iOS/Mac at 20 fps). Stock
+    //   Skia.Data.fromBytes + Skia.Image.MakeImage report BOTH host objects to Hermes as external memory —
+    //   1 MiB each, ~2 MiB a row, ~40 MiB/s at 20 fps — so Hermes ran a GC every few seconds, and the big ones
+    //   stalled the JS thread long enough to make a waterfall frame late. The pressure buys nothing here: every
+    //   image is disposed 300 ms after it is replaced (swapWfImage). __vibeMakeGray8Image (the skia patch,
+    //   VibeExport.cpp) builds the same image with ONE copy of the bytes, no SkData host object, and no
+    //   pressure — what the Android engine's wrapImage already does. Same pixels, same dispose; only the GC
+    //   stops being told about memory we free ourselves. The stock pair stays as the fallback (web, or a
+    //   binary built before the patch).
+    const mk = (globalThis as { __vibeMakeGray8Image?: VibeMakeGray8Image }).__vibeMakeGray8Image;
+    if (mk) {
+      const img = mk(idxBuf.current, n, RING_ROWS, n);
+      if (img) {
+        swapWfImage(img, null);
+        jsAvail.value = frameCount.current;
+        if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
+      }
+      return;
+    }
     const data = Skia.Data.fromBytes(idxBuf.current);
     const img = Skia.Image.MakeImage(
       { width: n, height: RING_ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },

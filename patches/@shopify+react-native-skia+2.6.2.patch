@@ -665,10 +665,10 @@ index 756476f..7cf2b2d 100644
  
  template <typename T>
 diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkManager.cpp b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkManager.cpp
-index 60ac527..71d869f 100644
+index 60ac527..a6729be 100644
 --- a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkManager.cpp
 +++ b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkManager.cpp
-@@ -23,6 +23,12 @@
+@@ -23,6 +23,14 @@
  #include "rnwgpu/api/descriptors/GPUTextureUsage.h"
  #endif
  
@@ -676,12 +676,14 @@ index 60ac527..71d869f 100644
 +// exported vibe_rnskia::wrapImage/wrapPath.
 +namespace vibe_rnskia {
 +void vibeSetPlatformContext(std::shared_ptr<RNSkia::RNSkPlatformContext>);
++void vibeInstallJsBindings(facebook::jsi::Runtime &,
++                           std::shared_ptr<RNSkia::RNSkPlatformContext>);
 +} // namespace vibe_rnskia
 +
  namespace RNSkia {
  namespace jsi = facebook::jsi;
  
-@@ -34,6 +40,8 @@ RNSkManager::RNSkManager(
+@@ -34,6 +42,8 @@ RNSkManager::RNSkManager(
        _jsCallInvoker(jsCallInvoker),
        _viewApi(std::make_shared<RNSkJsiViewApi>(platformContext)) {
  
@@ -690,6 +692,17 @@ index 60ac527..71d869f 100644
    // Register main runtime (used by both Skia and WebGPU bindings)
    RNJsi::BaseRuntimeAwareCache::setMainJsRuntime(_jsRuntime);
  
+@@ -74,6 +84,10 @@ void RNSkManager::installBindings() {
+       *_jsRuntime, "SkiaViewApi",
+       jsi::Object::createFromHostObject(*_jsRuntime, _viewApi));
+ 
++  // VibeSDR: global.__vibeMakeGray8Image (VibeExport.cpp) - the JS waterfall's
++  // per-row image WITHOUT Hermes external memory pressure.
++  vibe_rnskia::vibeInstallJsBindings(*_jsRuntime, _platformContext);
++
+ #ifdef SK_GRAPHITE
+   // Install WebGPU constructors
+   rnwgpu::GPU::installConstructor(*_jsRuntime);
 diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h b/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h
 index 0059ea1..08216db 100644
 --- a/node_modules/@shopify/react-native-skia/cpp/rnskia/RNSkPictureView.h
@@ -773,10 +786,10 @@ index 5181c71..5f9ad5c 100644
  
 diff --git a/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.cpp b/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.cpp
 new file mode 100644
-index 0000000..943c9e4
+index 0000000..b70a64e
 --- /dev/null
 +++ b/node_modules/@shopify/react-native-skia/cpp/rnskia/VibeExport.cpp
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,208 @@
 +// VibeSDR: see VibeExport.h for why this exists (hidden Skia symbols; the
 +// per-dispose memory-pressure cost).
 +
@@ -821,6 +834,80 @@ index 0000000..943c9e4
 +void vibeSetPlatformContext(std::shared_ptr<RNSkPlatformContext> context) {
 +  std::lock_guard<std::mutex> lock(gContextMutex);
 +  gContext = std::move(context);
++}
++
++// Called from RNSkManager::installBindings (not part of the exported header).
++//
++// global.__vibeMakeGray8Image(bytes: Uint8Array, width, height, rowBytes)
++//   -> SkImage | null
++//
++// The JS waterfall (iOS/Mac, and Android whenever the native engine is not
++// running) rebuilds its whole 1024x1024 Gray_8 ring image on every row. Stock
++// Skia.Data.fromBytes + Skia.Image.MakeImage create BOTH host objects WITH
++// external memory pressure - 1 MiB each, so ~2 MiB reported to Hermes per row,
++// ~40 MiB/s at 20 fps - and Hermes answers with a GC every few seconds, some
++// of them long enough to make a waterfall frame late. The native memory is
++// already freed deterministically (WaterfallView disposes each image 300 ms
++// after it is replaced), so the pressure only buys GCs. This builds the same
++// raster image (one copy of the bytes into an SkData the image owns; no
++// separate SkData host object at all) and wraps it as a plain host object,
++// exactly as the Android engine's wrapImage does. dispose() on it is cheap.
++void vibeInstallJsBindings(jsi::Runtime &rt,
++                           std::shared_ptr<RNSkPlatformContext> context) {
++  auto fn = jsi::Function::createFromHostFunction(
++      rt, jsi::PropNameID::forAscii(rt, "__vibeMakeGray8Image"), 4,
++      [context](jsi::Runtime &runtime, const jsi::Value &,
++                const jsi::Value *args, size_t count) -> jsi::Value {
++        if (count < 4 || !args[0].isObject() || !args[1].isNumber() ||
++            !args[2].isNumber() || !args[3].isNumber()) {
++          throw jsi::JSError(runtime, "__vibeMakeGray8Image(bytes: "
++                                      "Uint8Array, width, height, rowBytes)");
++        }
++        const int width = static_cast<int>(args[1].asNumber());
++        const int height = static_cast<int>(args[2].asNumber());
++        const double rowBytesD = args[3].asNumber();
++        if (width <= 0 || height <= 0 || rowBytesD < width) {
++          return jsi::Value::null();
++        }
++        const size_t rowBytes = static_cast<size_t>(rowBytesD);
++        const size_t need = rowBytes * static_cast<size_t>(height);
++
++        // A typed array: honour its view (byteOffset/byteLength), not just the
++        // whole backing buffer as Skia.Data.fromBytes does.
++        auto view = args[0].asObject(runtime);
++        auto bufVal = view.getProperty(runtime, "buffer");
++        if (!bufVal.isObject() || !bufVal.asObject(runtime).isArrayBuffer(runtime)) {
++          throw jsi::JSError(runtime,
++                             "__vibeMakeGray8Image: bytes must be a Uint8Array");
++        }
++        auto buffer = bufVal.asObject(runtime).getArrayBuffer(runtime);
++        const auto offVal = view.getProperty(runtime, "byteOffset");
++        const auto lenVal = view.getProperty(runtime, "byteLength");
++        const size_t off =
++            offVal.isNumber() ? static_cast<size_t>(offVal.asNumber()) : 0;
++        const size_t len = lenVal.isNumber()
++                               ? static_cast<size_t>(lenVal.asNumber())
++                               : buffer.size(runtime);
++        if (off + len > buffer.size(runtime) || len < need) {
++          return jsi::Value::null();
++        }
++
++        auto info = SkImageInfo::Make(width, height, kGray_8_SkColorType,
++                                      kOpaque_SkAlphaType);
++        auto data = SkData::MakeWithCopy(buffer.data(runtime) + off, need);
++        sk_sp<SkImage> image =
++            SkImages::RasterFromData(info, std::move(data), rowBytes);
++        if (image == nullptr) {
++          return jsi::Value::null();
++        }
++        auto hostObject =
++            std::make_shared<RNSkia::JsiSkImage>(context, std::move(image));
++        hostObject->setVibeNoMemoryPressure();
++        // Plain createFromHostObject: NOT ..._WITH_MEMORY_PRESSURE.
++        return jsi::Object::createFromHostObject(runtime,
++                                                 std::move(hostObject));
++      });
++  rt.global().setProperty(rt, "__vibeMakeGray8Image", std::move(fn));
 +}
 +
 +void *makeGray8Image(const uint8_t *pixels, int width, int height,
