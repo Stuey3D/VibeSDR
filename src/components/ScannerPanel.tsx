@@ -26,7 +26,7 @@ import { usePadField } from './ControllerKeyboard';
 import {
   type ScannerController, type BandChoice, type ScanPreset, type FoundSignal, type MeterMode, type ScanTag,
   freqText, modeText, nameTolerance, sMeterDetents, snapSMeter, setTrigger, HANG_MIN_MS, HANG_MAX_MS, LIMIT_MIN_MS,
-  LIMIT_MAX_MS, defaultTagLabel, scanRowText,
+  LIMIT_MAX_MS, defaultTagLabel, scanRowText, type RangeUnit,
 } from '../services/scanner';
 import type { SDRMode } from '../services/sdrProtocol';
 
@@ -80,9 +80,11 @@ export default function ScannerPanel(p: ScannerPanelProps) {
   useEffect(() => { if (!undo) return; const t = setTimeout(() => setUndo(null), 6000); return () => clearTimeout(t); }, [undo]);
   // ★ The Lo / Hi fields are text while typed; the engine only ever sees a parsed number.
   const [loTxt, setLoTxt] = useState(''); const [hiTxt, setHiTxt] = useState('');
+  // ★ 5 decimals: an 8.33 kHz channel (118.00833) must read back as itself, not as 118.0083.
+  const mhzTxt = (hz: number) => (hz > 0 ? (hz / 1e6).toFixed(5).replace(/0+$/, '').replace(/\.$/, '') : '');
+  const syncText = () => { setLoTxt(c.band ? mhzTxt(c.band.loHz) : ''); setHiTxt(c.band ? mhzTxt(c.band.hiHz) : ''); };
   useEffect(() => {
-    setLoTxt(c.band ? (c.band.loHz / 1e6).toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : '');
-    setHiTxt(c.band ? (c.band.hiHz / 1e6).toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : '');
+    syncText();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [c.band?.loHz, c.band?.hiHz]);
 
@@ -91,9 +93,9 @@ export default function ScannerPanel(p: ScannerPanelProps) {
   const loRef = useRef<TextInput | null>(null), hiRef = useRef<TextInput | null>(null), nameRef = useRef<TextInput | null>(null);
   const live = useRef({ loTxt, hiTxt, saving }); live.current = { loTxt, hiTxt, saving };
   const loField = usePadField({ ref: loRef, mode: 'frequency', title: 'Scan from (MHz)', unit: () => 'mhz', unitLocked: true,
-    getValue: () => live.current.loTxt, setValue: setLoTxt, onSubmit: (v) => { applyRange(v, live.current.hiTxt); } });
+    getValue: () => live.current.loTxt, setValue: setLoTxt, onSubmit: (v, u) => { applyRange(v, live.current.hiTxt, { lo: u }); } });
   const hiField = usePadField({ ref: hiRef, mode: 'frequency', title: 'Scan to (MHz)', unit: () => 'mhz', unitLocked: true,
-    getValue: () => live.current.hiTxt, setValue: setHiTxt, onSubmit: (v) => { applyRange(live.current.loTxt, v); } });
+    getValue: () => live.current.hiTxt, setValue: setHiTxt, onSubmit: (v, u) => { applyRange(live.current.loTxt, v, { hi: u }); } });
   const nameField = usePadField({ ref: nameRef, mode: 'text', title: 'Name this scan',
     getValue: () => live.current.saving ?? '', setValue: (v) => setSaving(v),
     onSubmit: (v) => { if (!v.trim()) return 'Enter a name.'; p.onSavePreset(v.trim()); setSaving(null); } });
@@ -113,11 +115,19 @@ export default function ScannerPanel(p: ScannerPanelProps) {
   const add = (key: string, press: () => void) => { items.push({ key, press }); return key; };
   const hl = (key: string) => (items[p.focusIdx]?.key === key ? { borderColor: tk.focus, borderWidth: 2 } : null);
 
-  const parseMhz = (t: string) => { const v = parseFloat(t.replace(',', '.')); return Number.isFinite(v) && v > 0 ? Math.round(v * 1e6) : NaN; };
-  const applyRange = (loT: string, hiT: string) => {
-    const lo = parseMhz(loT), hi = parseMhz(hiT);
-    const b = c.band ?? { loHz: 0, hiHz: 0, stepHz: 25000, mode: 'am' as SDRMode };
-    if (Number.isFinite(lo) && Number.isFinite(hi)) c.setBand({ ...b, loHz: Math.min(lo, hi), hiHz: Math.max(lo, hi) });
+  /* ★★ ONE COMMIT (scanner.ts commitRange / parseScanRange). A field losing the cursor commits quietly; START commits
+   *  out loud, from the fields' LIVE text — on the Mac a click on START never ends the field's editing, so START used to
+   *  scan the last band committed rather than the one on screen (Stuart, 2026-10-28: fields 110 / 130, scan refused as
+   *  "130.000 MHz–110000.000 MHz"). The fields are rewritten from the band afterwards, so a swapped Lo / Hi reads back
+   *  in order. */
+  const applyRange = (loT: string, hiT: string, o: { lo?: RangeUnit; hi?: RangeUnit; quiet?: boolean } = { quiet: true }) => {
+    const done = c.commitRange(loT, hiT, o);
+    if (done) syncText();
+    return done;
+  };
+  const startScan = (reachableOnly = false) => {
+    if (c.source === 'band' && !applyRange(live.current.loTxt, live.current.hiTxt, {})) return;
+    c.start(reachableOnly ? { reachableOnly: true } : {});
   };
 
   const doIgnore = () => {
@@ -188,7 +198,7 @@ export default function ScannerPanel(p: ScannerPanelProps) {
       {!running && !!c.refusal && (
         <View style={s.bannerBox}>
           <Text style={s.banner}>{`${c.refusal.why}${c.refusal.out.length ? `: ${c.refusal.out.join(', ')}` : ''}`}</Text>
-          {c.refusal.okCount > 0 && key('reach', `START WITH ${c.refusal.okCount} REACHABLE`, () => c.start({ reachableOnly: true }),
+          {c.refusal.okCount > 0 && key('reach', `START WITH ${c.refusal.okCount} REACHABLE`, () => startScan(true),
             { a11y: `Start with the ${c.refusal.okCount} reachable channels`, hint: 'Scans only what this receiver can reach now' })}
         </View>
       )}
@@ -201,7 +211,7 @@ export default function ScannerPanel(p: ScannerPanelProps) {
 
       {/* ── the live controls: exactly three, large, plus Start/Stop (and Tag in Manual) ── */}
       <View style={s.liveRow}>
-        {key('start', running ? 'STOP' : 'START', () => (running ? c.stop() : c.start()),
+        {key('start', running ? 'STOP' : 'START', () => (running ? c.stop() : startScan()),
           { big: true, on: running, a11y: running ? 'Stop scanning' : 'Start scanning' })}
         {key('hold', c.state === 'HOLD' ? 'RESUME' : 'HOLD', () => c.hold(),
           { big: true, on: c.state === 'HOLD', dim: !running, a11y: c.state === 'HOLD' ? 'Resume scanning' : 'Hold on this frequency',
@@ -221,11 +231,14 @@ export default function ScannerPanel(p: ScannerPanelProps) {
             <Text style={s.lbl}>LO</Text>
             {void add('lo', () => loField.open())}
             <TextInput ref={loRef} {...loField.fieldProps} style={[s.input, hl('lo')]} value={loTxt} keyboardType="decimal-pad" placeholder="MHz" placeholderTextColor={tk.muted}
-              onChangeText={setLoTxt} onEndEditing={() => applyRange(loTxt, hiTxt)} accessibilityLabel="Lowest frequency, megahertz" />
+              onChangeText={setLoTxt} onEndEditing={() => applyRange(live.current.loTxt, live.current.hiTxt)} accessibilityLabel="Lowest frequency, megahertz" />
+            {/* ★ The unit stays on screen once a number is in — the placeholder alone vanished, and "110000" (kHz) became 110 GHz. */}
+            <Text style={s.unit}>MHz</Text>
             <Text style={s.lbl}>HI</Text>
             {void add('hi', () => hiField.open())}
             <TextInput ref={hiRef} {...hiField.fieldProps} style={[s.input, hl('hi')]} value={hiTxt} keyboardType="decimal-pad" placeholder="MHz" placeholderTextColor={tk.muted}
-              onChangeText={setHiTxt} onEndEditing={() => applyRange(loTxt, hiTxt)} accessibilityLabel="Highest frequency, megahertz" />
+              onChangeText={setHiTxt} onEndEditing={() => applyRange(live.current.loTxt, live.current.hiTxt)} accessibilityLabel="Highest frequency, megahertz" />
+            <Text style={s.unit}>MHz</Text>
             {key('bands', showBands ? 'BANDS ▴' : 'BANDS ▾', () => setShowBands((v) => !v),
               { on: showBands, a11y: 'Band list', hint: 'Fills the range, step and mode for a band in one tap' })}
           </View>
@@ -443,6 +456,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   note:      { fontFamily: F, fontSize: 12, lineHeight: 17, color: T.muted },
   fieldRow:  { flexDirection: 'row', alignItems: 'center', gap: 6 },
   lbl:       { fontFamily: F, fontSize: 11, letterSpacing: 1, color: T.rowLabel },
+  unit:      { fontFamily: F, fontSize: 11, color: T.rowLabel, marginLeft: -2 },
   val:       { fontFamily: F, fontSize: 13, color: T.value, minWidth: 64, textAlign: 'center' },
   input:     { minWidth: 72, flexShrink: 1, height: 34, paddingHorizontal: 8, borderRadius: 6, borderWidth: 1, borderColor: T.chipBorder,
                fontFamily: F, fontSize: 13, color: T.value },

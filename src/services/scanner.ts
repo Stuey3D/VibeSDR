@@ -29,6 +29,7 @@ import type { SDRMode } from './sdrProtocol.ts';
 import { MODE_BANDWIDTHS } from './sdrProtocol.ts';
 import { BAND_PLAN, type Band, type BandType } from '../constants/bandPlan.ts';
 import { S9_DB, DB_PER_S_UNIT } from '../constants/meters.ts';
+import { STEP_833, stepExactHz, stepIndex, stepHz as rasterHz } from '../utils/airband.ts';
 
 // ═══ Data model (brief §2) ═════════════════════════════════════════════════════════════════════════════════════════
 
@@ -295,14 +296,55 @@ export function bandPassband(mode: SDRMode, stepHz: number): [number, number] {
   return [Math.max(lo, -half), Math.min(hi, half)];
 }
 
+/* ★★ THE 8.33 kHz RASTER IS 25 kHz / 3, NOT 8333 Hz. The step is carried as the integer sentinel STEP_833 (8333 —
+ *  utils/airband.ts), and stepping a band by the sentinel itself drifts a third of a hertz a channel: 2400 channels
+ *  across 110–130 MHz ended 800 Hz off the channel. Every band sum goes through the EXACT step, each channel computed
+ *  from its index (never accumulated), and an 8.33 band starts ON the raster — the channels are absolute (118.00833 is
+ *  a channel wherever the scan starts), so a Lo typed between two of them begins at the next one up. */
+const exStep = (b: BandSpec) => stepExactHz(b.stepHz);
+
+/** The band as it is scanned: an 8.33 kHz band moved onto the airband raster (first channel at or above Lo); any other
+ *  step scans from Lo exactly as typed. */
+export function rasterBand(b: BandSpec): BandSpec {
+  if (b.stepHz !== STEP_833 || !(b.hiHz >= b.loHz)) return b;
+  return { ...b, loHz: rasterHz(stepIndex(b.loHz, STEP_833, 'ceil'), STEP_833) };
+}
+
 export function bandCount(b: BandSpec): number {
   if (!(b.stepHz > 0) || !(b.hiHz >= b.loHz)) return 0;
-  return Math.floor((b.hiHz - b.loHz) / b.stepHz + 1e-6) + 1;
+  return Math.floor((b.hiHz - b.loHz) / exStep(b) + 1e-6) + 1;
 }
 
 export function bandTarget(b: BandSpec, n: number): ScanTarget {
   const [bwLow, bwHigh] = bandPassband(b.mode, b.stepHz);
-  return { frequency: Math.round(b.loHz + n * b.stepHz), mode: b.mode, bwLow, bwHigh };
+  return { frequency: Math.round(b.loHz + n * exStep(b)), mode: b.mode, bwLow, bwHigh };
+}
+
+/**
+ * ★★★ THE LO / HI FIELDS → A RANGE, in one pure place (Stuart, 2026-10-28, 110–130 MHz AM 8.33 airband: the panel
+ * answered "This receiver reaches 0.100 MHz–1766.000 MHz from here: 130.000 MHz–110000.000 MHz" while its fields read
+ * 110 and 130). Two faults met there:
+ *  · The fields only reached the engine on END EDITING. On the Mac a click on START does not end a text field's editing,
+ *    so START scanned whatever band was last committed — not what the fields said. The panel now commits the fields
+ *    through this function on START, so what is scanned is what is on screen.
+ *  · The fields are MEGAHERTZ, but nothing beside them said so once a number was in (the unit was only the empty
+ *    placeholder): "110000", meant as kHz, became 110 GHz. The fields now carry the unit, and the controller keyboard's
+ *    own kHz / Hz unit is honoured here instead of being read as MHz.
+ * Either order is fine (Lo > Hi is swapped). Returns the range in Hz, or `why` in plain words.
+ */
+export type RangeUnit = 'mhz' | 'khz' | 'hz';
+export function parseScanFreq(t: string, unit: RangeUnit = 'mhz'): number {
+  const v = parseFloat(String(t ?? '').trim().replace(',', '.'));
+  if (!Number.isFinite(v) || !(v > 0)) return NaN;
+  return Math.round(v * (unit === 'khz' ? 1e3 : unit === 'hz' ? 1 : 1e6));
+}
+export function parseScanRange(loT: string, hiT: string, units: { lo?: RangeUnit; hi?: RangeUnit } = {}):
+  { loHz: number; hiHz: number } | { why: string } {
+  const lo = parseScanFreq(loT, units.lo), hi = parseScanFreq(hiT, units.hi);
+  if (!Number.isFinite(lo) && !Number.isFinite(hi)) return { why: 'Enter the range to scan — Lo and Hi in MHz' };
+  if (!Number.isFinite(lo)) return { why: 'Enter where to scan from — Lo, in MHz' };
+  if (!Number.isFinite(hi)) return { why: 'Enter where to scan to — Hi, in MHz' };
+  return { loHz: Math.min(lo, hi), hiHz: Math.max(lo, hi) };
 }
 
 export function tagTarget(t: ScanTag): ScanTarget {
@@ -325,10 +367,11 @@ export function validateCandidates<T extends { frequency: number }>(c: T[], r: S
 /** A band against the reach: the part inside, or null when none of it is. */
 export function clipBand(b: BandSpec, r: ScanReach): BandSpec | null {
   if (!r.allowed || bandCount(b) === 0) return null;
-  const firstN = Math.max(0, Math.ceil((r.loHz - b.loHz) / b.stepHz - 1e-6));
-  const lastN = Math.min(bandCount(b) - 1, Math.floor((r.hiHz - b.loHz) / b.stepHz + 1e-6));
+  const ex = exStep(b);
+  const firstN = Math.max(0, Math.ceil((r.loHz - b.loHz) / ex - 1e-6));
+  const lastN = Math.min(bandCount(b) - 1, Math.floor((r.hiHz - b.loHz) / ex + 1e-6));
   if (lastN < firstN) return null;
-  return { ...b, loHz: b.loHz + firstN * b.stepHz, hiHz: b.loHz + lastN * b.stepHz };
+  return { ...b, loHz: Math.round(b.loHz + firstN * ex), hiHz: Math.round(b.loHz + lastN * ex) };
 }
 
 // ═══ The band picker (§6.1) — a shortcut that fills Lo / Hi / step / mode ════════════════════════════════════════
@@ -344,6 +387,16 @@ export function scanStepFor(mode: SDRMode | undefined, bandStep: number | undefi
   if (mode === 'cwu' || mode === 'cwl') return Math.max(s, 500);
   if ((mode === 'am' || mode === 'sam') && s < 5000) return 5000;
   return s;
+}
+
+/** ★★ The name a band goes by IN THE SCANNER'S LIST. bandPlan names 108–118 and 118–137 MHz both "Airband (VHF Air)"
+ *  (one label on the dial), and the list kept the first of a name — so "Airband" filled 108–118 MHz, the VOR / ILS
+ *  navaids (Morse idents, no voice), and the voice band was never offered at all. The two are told apart here, and the
+ *  voice band says its raster: "Airband (118–137 MHz, AM 8.33)" in Region 1, "AM 25" where 25 kHz is the plan. */
+function choiceName(b: Band): string {
+  if (b.name !== 'Airband (VHF Air)') return b.name;
+  if (b.hi <= 118e6) return 'Air navaids (108–118 MHz, VOR / ILS)';
+  return `Airband (118–137 MHz, AM ${b.step === STEP_833 ? '8.33' : '25'})`;
 }
 
 /** Mode for a band that names none: SSB by the amateur convention (LSB below 10 MHz), AM on VHF/UHF voice. */
@@ -364,15 +417,17 @@ export function bandChoices(region: number, reach: { loHz: number; hiHz: number 
   const out: BandChoice[] = [];
   for (const b of BAND_PLAN) {
     if (b.regions && b.regions.length && region && !b.regions.includes(region)) continue;
-    if (seen.has(b.name)) continue;
+    const name = choiceName(b);
+    if (seen.has(name)) continue;
     const lo = Math.max(b.lo, reach.loHz), hi = Math.min(b.hi, reach.hiHz);
     if (!(hi > lo)) continue;
-    seen.add(b.name);
+    seen.add(name);
     const mode = modeFor(b);
     const stepHz = scanStepFor(mode, b.step);
-    // ★ Start on the raster the band uses, so a CB scan lands ON 26.965, not 26.9653.
-    const loHz = Math.ceil((lo - b.lo) / stepHz - 1e-6) * stepHz + b.lo;
-    out.push({ name: b.name, type: b.type, spec: { loHz, hiHz: hi, stepHz, mode } });
+    // ★ Start on the raster the band uses, so a CB scan lands ON 26.965, not 26.9653 (and an 8.33 one on 25 kHz / 3).
+    const ex = stepExactHz(stepHz);
+    const loHz = Math.round(Math.ceil((lo - b.lo) / ex - 1e-6) * ex + b.lo);
+    out.push({ name, type: b.type, spec: { loHz, hiHz: hi, stepHz, mode } });
   }
   const order: Record<BandType, number> = { ham: 0, broadcast: 1, utility: 2 };
   return out.sort((a, b) => (order[a.type] - order[b.type]) || (a.spec.loHz - b.spec.loHz));
@@ -602,6 +657,19 @@ export class ScannerController {
     this.source = s; this.refusal = null; this.host.changed?.();
   }
   setBand(b: BandSpec | null): void { this.band = b; this.refusal = null; this.host.changed?.(); }
+  /** ★★ The Lo / Hi fields, committed (parseScanRange) — what the panel's START scans is what its fields say. The band
+   *  keeps its step and mode. A range that does not parse: `quiet` (a field losing the cursor mid-entry) changes
+   *  nothing; otherwise (START) it says why on the panel and returns false. */
+  commitRange(loT: string, hiT: string, opts: { lo?: RangeUnit; hi?: RangeUnit; quiet?: boolean } = {}): boolean {
+    const r = parseScanRange(loT, hiT, opts);
+    if ('why' in r) {
+      if (!opts.quiet) { this.refusal = { out: [], okCount: 0, why: r.why }; this.host.changed?.(); }
+      return false;
+    }
+    const b = this.band ?? { loHz: 0, hiHz: 0, stepHz: 25000, mode: 'am' as SDRMode };
+    if (b.loHz !== r.loHz || b.hiHz !== r.hiHz || !this.band) this.setBand({ ...b, loHz: r.loHz, hiHz: r.hiHz });
+    return true;
+  }
   setTags(t: ScanTag[]): void {
     this.tags = t;
     // ★ A tag removed while scanning must never be tuned again; the run's index is re-found by id on the next hop.
@@ -712,7 +780,7 @@ export class ScannerController {
     this.refusal = null;
     if (!r.allowed) { this.refusal = { out: [], okCount: 0, why: r.why || 'Scanning is not available here' }; this.host.changed?.(); return false; }
     if (this.source === 'band') {
-      const b = this.band;
+      const b = this.band ? rasterBand(this.band) : null;
       if (!b || bandCount(b) === 0 || b.hiHz < b.loHz) {
         this.refusal = { out: [], okCount: 0, why: 'Enter the range to scan — Lo, Hi and a step' };
         this.host.changed?.(); return false;
@@ -723,7 +791,8 @@ export class ScannerController {
         if (!clip || !opts.reachableOnly) {
           this.refusal = {
             out: [`${freqText(b.loHz)}–${freqText(b.hiHz)}`], okCount: clip ? bandCount(clip) : 0,
-            why: `This receiver reaches ${freqText(r.loHz)}–${freqText(r.hiHz)} from here`,
+            // ★ A range no radio has (110000 MHz) is a unit slip, not a receiver limit — say which unit the fields use.
+            why: `This receiver reaches ${freqText(r.loHz)}–${freqText(r.hiHz)} from here${b.hiHz > 10e9 ? ' — Lo and Hi are in MHz' : ''}`,
           };
           this.host.changed?.(); return false;
         }

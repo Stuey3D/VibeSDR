@@ -13,7 +13,7 @@ import {
   type ScanHost, type ScanReach, type ScanTarget, type MeterMode, type ScanTag, type ScanTiming, type ScanSample,
 } from '../src/services/scanner.ts';
 import type { SDRMode } from '../src/services/sdrProtocol.ts';
-import { scanRowText } from '../src/services/scanner.ts';
+import { scanRowText, parseScanRange, rasterBand, bandCount, bandTarget } from '../src/services/scanner.ts';
 import { readFileSync } from 'node:fs';
 
 let fails = 0, passes = 0;
@@ -146,9 +146,10 @@ const tag = (hz: number, mode: SDRMode, extra: Partial<ScanTag> = {}): ScanTag =
   eq('CB R2 = AM 10 kHz', cb2 && [cb2.spec.mode, cb2.spec.stepHz], ['am', 10_000]);
   ok('no 2 m on a 0–30 MHz receiver', !r1.some((b) => b.name === '2m Ham Band' || b.spec.loHz > 30e6));
   const vhf = bandChoices(1, { loHz: 24e6, hiHz: 1.7e9 });
-  const air = vhf.find((b) => b.name === 'Airband (VHF Air)');
+  // ★ The VOICE airband (118–137), not the 108–118 navaids this used to find under the shared bandPlan name.
+  const air = vhf.find((b) => b.name === 'Airband (118–137 MHz, AM 8.33)');
   ok('airband offered on a VHF receiver', !!air);
-  eq('airband R1 = AM', air?.spec.mode, 'am');
+  eq('airband R1 = AM 8.33 from 118 MHz', air && [air.spec.mode, air.spec.stepHz, air.spec.loHz], ['am', 8333, 118e6]);
   const ssb = r1.find((b) => b.name === '40m Ham Band');
   eq('40 m scans a passband apart, LSB', ssb && [ssb.spec.mode, ssb.spec.stepHz], ['lsb', 2500]);
   const sw = r1.find((b) => b.name === '31m Broadcast Band');
@@ -627,6 +628,73 @@ const tag = (hz: number, mode: SDRMode, extra: Partial<ScanTag> = {}): ScanTag =
   const f = OWRX();
   f.ctl.setTags([tag(118_100_000, 'am'), tag(145_000_000, 'nfm')]);
   eq('loading a preset that does not fit → refusal shown, nothing started', [f.ctl.checkReachable(), !!f.ctl.refusal, f.ctl.state, f.tunes.length], [false, true, 'IDLE', 0]);
+}
+
+// ═══ ★★ Stuart, 2026-10-28 — 110–130 MHz AM 8.33 on his single-user VibeServer (RTL-SDR Blog V4, parked on 675 kHz) ═══
+// The panel said "This receiver reaches 0.100 MHz–1766.000 MHz from here: 130.000 MHz–110000.000 MHz" with its fields
+// reading 110 / 130. The reach was right; the band was a stale commit (START never ended the field's editing on the Mac)
+// of a Lo typed as kHz into an MHz field.
+{
+  // The reach exactly as SDRScreen computes it there: a VibeServer is the local shim → panSpan movable → tuneBoundsOf =
+  // caps.freqRange (LOCAL_CAPS 100 kHz–1766 MHz), no locked window; the policy may move the hardware.
+  const pol = scanPolicy({ kind: 'vibeserver', isLocal: false, sharedDial: false });
+  eq('single-user VibeServer: offered, may retune the hardware', pol, { offered: true, movesHardware: true });
+  const V4: ScanReach = { allowed: true, loHz: 100_000, hiHz: 1_766_000_000, key: 'm|100000|1766000000' };
+
+  eq('fields 110 / 130 → 110–130 MHz', parseScanRange('110', '130'), { loHz: 110e6, hiHz: 130e6 });
+  eq('reverse order → the same band', parseScanRange('130', '110'), { loHz: 110e6, hiHz: 130e6 });
+  eq('a comma decimal', parseScanRange('118,005', '137'), { loHz: 118_005_000, hiHz: 137e6 });
+  eq('the pad keyboard in kHz is honoured, not read as MHz', parseScanRange('110000', '130', { lo: 'khz' }), { loHz: 110e6, hiHz: 130e6 });
+  ok('an empty Hi says which field', 'why' in parseScanRange('110', '') && /Hi/.test((parseScanRange('110', '') as { why: string }).why));
+
+  const f = new Fake({ meter: 'dbfs', reach: V4, timing: scanTiming('vibeserver', false) });
+  f.ctl.setSource('band');
+  // The stale commit he had: Lo "110000" (meant kHz) and Hi "130", swapped into order.
+  f.ctl.setBand({ loHz: 130e6, hiHz: 110000e6, stepHz: 8333, mode: 'am' });
+  eq('the stale band refuses (his screen)', f.ctl.start(), false);
+  ok('…and the refusal names the unit', /Lo and Hi are in MHz/.test(f.ctl.refusal?.why ?? ''), f.ctl.refusal?.why);
+  // START now commits the fields as they read — 110 then 130 — first.
+  eq('START commits the fields', f.ctl.commitRange('110', '130'), true);
+  eq('…band 110–130 MHz, step and mode kept', f.ctl.band, { loHz: 110e6, hiHz: 130e6, stepHz: 8333, mode: 'am' });
+  eq('…and it runs', f.ctl.start(), true);
+  eq('no refusal', f.ctl.refusal, null);
+  f.run(4000);
+  const hz = f.tunedHzList();
+  ok('hops the hardware from 110 MHz on the 8.33 raster', hz[0] === 110e6 && hz[1] === 110_008_333 && hz[2] === 110_016_667 && hz[3] === 110_025_000, JSON.stringify(hz.slice(0, 4)));
+  ok('every tune in AM, passband inside the 8.33 channel', f.tunes.every((x) => x.t.mode === 'am' && x.t.bwHigh - x.t.bwLow <= 7500));
+  eq('2401 channels, no cap', bandCount({ loHz: 110e6, hiHz: 130e6, stepHz: 8333, mode: 'am' }), 2401);
+  eq('the last channel IS 130.000 MHz (no 800 Hz drift)', bandTarget({ loHz: 110e6, hiHz: 130e6, stepHz: 8333, mode: 'am' }, 2400).frequency, 130e6);
+  eq('channel 1000 from 118 = 126.33333 MHz', bandTarget({ loHz: 118e6, hiHz: 137e6, stepHz: 8333, mode: 'am' }, 1000).frequency, 126_333_333);
+  eq('a Lo between channels starts on the next one', rasterBand({ loHz: 118_004_000, hiHz: 119e6, stepHz: 8333, mode: 'am' }).loHz, 118_008_333);
+  eq('a Lo already on a channel stays', rasterBand({ loHz: 118_008_333, hiHz: 119e6, stepHz: 8333, mode: 'am' }).loHz, 118_008_333);
+  eq('other steps scan from Lo as typed', rasterBand({ loHz: 26_965_123, hiHz: 27e6, stepHz: 10000, mode: 'am' }).loHz, 26_965_123);
+  // Editing one field after the other: a Lo alone (Hi empty) commits nothing and says nothing until START.
+  const g = new Fake({ meter: 'dbfs', reach: V4, timing: scanTiming('vibeserver', false) });
+  g.ctl.setSource('band');
+  eq('Lo alone, quietly: no band, no banner', [g.ctl.commitRange('110', '', { quiet: true }), g.ctl.band, g.ctl.refusal], [false, null, null]);
+  eq('START with Hi empty: says why', [g.ctl.commitRange('110', ''), g.ctl.refusal?.why], [false, 'Enter where to scan to — Hi, in MHz']);
+  eq('then Hi: the band, with the default AM', [g.ctl.commitRange('110', '130', { quiet: true }), g.ctl.band?.loHz, g.ctl.band?.hiHz, g.ctl.refusal], [true, 110e6, 130e6, null]);
+
+  // The band list: the VOICE airband is offered (bandPlan names 108–118 and 118–137 alike; the list kept only the first).
+  const r1 = bandChoices(1, V4), r2 = bandChoices(2, V4);
+  eq('Region 1: Airband 118–137 MHz, AM 8.33', r1.find((b) => b.name === 'Airband (118–137 MHz, AM 8.33)')?.spec, { loHz: 118e6, hiHz: 137e6, stepHz: 8333, mode: 'am' });
+  eq('Region 2: Airband 118–137 MHz, AM 25', r2.find((b) => b.name === 'Airband (118–137 MHz, AM 25)')?.spec, { loHz: 118e6, hiHz: 137e6, stepHz: 25000, mode: 'am' });
+  ok('108–118 MHz is named for what it is', r1.some((b) => b.name.startsWith('Air navaids (108–118 MHz')) && !r1.some((b) => b.name === 'Airband (VHF Air)'));
+  eq('Airband on a 0–30 MHz receiver: absent', bandChoices(1, HF).some((b) => b.name.startsWith('Airband')), false);
+  const h = new Fake({ meter: 'dbfs', reach: V4, timing: scanTiming('vibeserver', false) });
+  h.ctl.setSource('band'); h.ctl.setBand(r1.find((b) => b.name.startsWith('Airband (118'))!.spec);
+  eq('the Airband choice runs', h.ctl.start(), true);
+  h.run(3000);
+  eq('…from 118.000, 118.00833', h.tunedHzList().slice(0, 2), [118e6, 118_008_333]);
+
+  // The panel: START scans what the fields say, the fields carry their unit, the pad's unit is honoured.
+  const src = readFileSync(new URL('../src/components/ScannerPanel.tsx', import.meta.url), 'utf8');
+  ok('panel: START commits the fields first', /const startScan[\s\S]{0,200}applyRange\(live\.current\.loTxt, live\.current\.hiTxt, \{\}\)/.test(src) && /running \? c\.stop\(\) : startScan\(\)/.test(src));
+  ok('panel: START WITH N REACHABLE commits too', /\(\) => startScan\(true\)/.test(src));
+  ok('panel: the fields show MHz', (src.match(/<Text style=\{s\.unit\}>MHz<\/Text>/g) ?? []).length === 2);
+  ok('panel: the pad keyboard unit reaches the parse', /onSubmit: \(v, u\) => \{ applyRange\(v, live\.current\.hiTxt, \{ lo: u \}\)/.test(src));
+  const kb = readFileSync(new URL('../src/components/ControllerKeyboard.tsx', import.meta.url), 'utf8');
+  ok('pad L1/R1 cannot change a locked unit', /a === 'unit' && !reqRef\.current\.unitLocked/.test(kb));
 }
 
 console.log(`test_scanner: ${passes} passed, ${fails} failed`);

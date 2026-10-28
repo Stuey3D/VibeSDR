@@ -172,7 +172,9 @@ function ControllerKeyboardView({ req }: { req: KbRequest }) {
       else if (a === 'space') apply({ t: 'space' });
       else if (a === 'shift') apply({ t: 'shift' });
       else if (a === 'symbols') apply({ t: stRef.current.layer === 'symbols' ? 'abc' : 'symbols' });
-      else if (a === 'unit') apply({ t: 'unit' });
+      // ★ A LOCKED unit stays locked on the pad's L1 / R1 too (the on-screen key is already absent): the scanner's Lo / Hi
+      //   are MHz, and a stray shoulder press turned 110 into "110000" kHz, read back as 110 GHz.
+      else if (a === 'unit' && !reqRef.current.unitLocked) apply({ t: 'unit' });
     });
     return () => sub.remove();
   }, [layout]);   // eslint-disable-line react-hooks/exhaustive-deps
