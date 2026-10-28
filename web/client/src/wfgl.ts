@@ -22,9 +22,11 @@
 const VERT = `
 attribute vec2 aPos;
 uniform vec2 uMap;         // ★ the zoom fan (wfZoomFan.ts): this run of rows reads u = uMap.x * x + uMap.y
+uniform vec2 uMapNext;     // ★ the map of the run BELOW this one — its first row is this run's last row's blend partner
 uniform float uVisible;    // how many rows the display actually shows (the waterfall pixel height)
 varying vec2 vUv;
 varying highp float vU;
+varying highp float vU2;   // the same x through uMapNext
 varying highp float vRow;  // display row (0 = newest at the top), fractional — floor() is the row
 void main() {
   // aPos in [-1,1]; vUv in [0,1] with y=0 at the TOP (newest row).
@@ -32,6 +34,7 @@ void main() {
   vRow = vUv.y * uVisible;
   // ★ Worked out here, at the quad's corners, in highp — linear in x, so the interpolation is exact.
   vU = uMap.x * vUv.x + uMap.y;
+  vU2 = uMapNext.x * vUv.x + uMapNext.y;
   gl_Position = vec4(aPos, 0.0, 1.0);
 }`;
 
@@ -50,20 +53,20 @@ uniform float uCols;       // ring width (bins)
 uniform float uSharp;      // 0 = off; unsharp-mask amount (see below)
 uniform float uContrast;   // -1..1 S-curve mix (see below)
 uniform float uTaps;       // ★ zoom fan: samples per pixel for a run drawn SHRUNK (zoomed out past it) — 1 otherwise
+uniform float uTapsNext;   // the same for uMapNext
 uniform float uTapDu;      // u between those samples (one output pixel's worth at the identity)
+uniform HP float uRunEnd;  // display row where this run ends (exclusive) — its last row blends with the next run's first
 varying vec2 vUv;
 varying HP float vU;       // the row's own u for this x — wfZoomFan.ts (identity until a zoom)
+varying HP float vU2;      // this x through the NEXT run's map
 varying HP float vRow;
-void main() {
-  // Top of the output (vUv.y = 0) is the newest row = head; walk down uVisible rows into the ring.
-  // The ring is taller than the display so a resize never reallocates it — history is just preserved.
-  // ★★ WHOLE RING ROWS, in highp where there is any. This was "mod(uHead + vUv.y * uVisible)": at a pixel's centre
-  //    that is head + j + 0.5, and "(ry + 0.5) / uRows" then sampled EXACTLY between ring rows j and j+1 — the LINEAR
-  //    filter showed every screen row as a 50/50 mix of two (a vertical blur), and in mediump (2560 rows > 2048) the
-  //    row could be off by one outright. The zoom fan draws runs of rows by index, so display row j must be ring row
-  //    head + j, exactly.
-  HP float ry = mod(uHead + floor(vRow), uRows);
-  HP float ty = (ry + 0.5) / uRows;
+
+// One sample of the ring at (u, ty): blank outside the row's own extent, the brightest of the bins a pixel covers when the
+// run is drawn shrunk, then the along-frequency unsharp mask. ty may sit between two ring rows — the LINEAR filter blends.
+float ringAt(HP float ux, HP float ty, float taps) {
+  // ★★ THE ZOOM FAN: outside the row's own extent there is no data — blank (the palette floor, as a cleared ring), never
+  //    a smear of the edge bin. That is the "slight gap at a newly exposed edge" the hard rule allows, and nothing else.
+  if (ux < 0.0 || ux > 1.0) return 0.0;
   // ★★★ ONE BIN, NOT THE BRIGHTER OF TWO. This used to sample the NEXT bin along as well and keep
   //     the larger — "peak-preserve" — which paints every carrier a bin wider than it is. That is a
   //     horizontal DILATION: on a busy band each signal grows into its neighbour, the gaps between
@@ -72,22 +75,17 @@ void main() {
   //     ★ The app's shader (WaterfallView.tsx, WF_SKSL) samples a single point, and the app is the
   //     sharper of the two on the same signal — Stuart, comparing side by side on the same server:
   //     "server appears brighter and softer", "that waterfall is the best I've ever seen".
-  // ★★ THE ZOOM FAN: outside the row's own extent there is no data — blank (the palette floor, as a cleared ring), never
-  //    a smear of the edge bin. That is the "slight gap at a newly exposed edge" the hard rule allows, and nothing else.
-  float ux = vU;
-  bool outside = ux < 0.0 || ux > 1.0;
-  float v = outside ? 0.0 : texture2D(uRing, vec2(ux, ty)).r;
+  float v = texture2D(uRing, vec2(ux, ty)).r;
   // ★ A run shrunk by a zoom out spans several of its own bins per pixel; one sample would step over a one-bin carrier
   //   and the old trail would flicker in and out. The brightest of the bins the pixel covers, as resampleRow keeps it.
-  //   One sample (the loop never runs) for every run at or above its own scale — the single-bin rule below stands.
-  if (!outside && uTaps > 1.0) {
+  //   One sample (the loop never runs) for every run at or above its own scale — the single-bin rule above stands.
+  if (taps > 1.0) {
     for (int i = 1; i < 8; i++) {
-      if (float(i) >= uTaps) break;
+      if (float(i) >= taps) break;
       float uu = ux + float(i) * uTapDu;
       if (uu <= 1.0) v = max(v, texture2D(uRing, vec2(uu, ty)).r);
     }
   }
-
   // ★★ UNSHARP MASK — the web waterfall was visibly SOFTER than the app's for the
   // same signal, and the sharpness slider did nothing because nothing here read it
   // (Stuart, 2026-07-28). The app sharpens in its SkSL shader; this is the WebGL
@@ -98,7 +96,7 @@ void main() {
   // the very thing being sharpened, and would also make the scroll shimmer. The
   // neighbours are one bin either side; at the edges the sample clamps to itself,
   // which yields zero correction rather than a bright rim.
-  if (uSharp > 0.0 && !outside) {
+  if (uSharp > 0.0) {
     float dx = 1.0 / uCols;
     float l = texture2D(uRing, vec2(max(ux - dx, 0.0), ty)).r;
     float r = texture2D(uRing, vec2(min(ux + dx, 1.0), ty)).r;
@@ -106,6 +104,30 @@ void main() {
     float hi = v - (l + r) * 0.5;
     v = clamp(v + hi * uSharp, 0.0, 1.0);
   }
+  return v;
+}
+
+void main() {
+  // Top of the output (vUv.y = 0) is the newest row = head; walk down uVisible rows into the ring.
+  // The ring is taller than the display so a resize never reallocates it — history is just preserved.
+  // ★★ THE SOFT VERTICAL LOOK IS RESTORED (Stuart, 2026-10-28 02:02, beta26: "the sharpness on tuning looks broken").
+  //    Display row j has always shown a 50/50 blend of ring rows head+j and head+j+1 (the old addressing sampled exactly
+  //    between them through the LINEAR filter). 1130bbe14 took that away to make the zoom fan's rows exact; it is back:
+  //    • inside a run (both rows share one map) the hardware does the blend in ONE fetch at ty between the two rows —
+  //      exactly the old picture at the old cost;
+  //    • the LAST row of a run blends with the FIRST row of the next run, each read through its OWN map (two fetches),
+  //      and so does the row where the ring wraps — so the fan stays correct at every boundary.
+  //    ★ Addressed in highp where there is any: in mediump (2560 rows > 2048) the row could be off by one outright.
+  HP float j = floor(vRow);
+  HP float r0 = mod(uHead + j, uRows);
+  float v;
+  if (j < uRunEnd - 1.0 && r0 < uRows - 1.0) {
+    v = ringAt(vU, (r0 + 1.0) / uRows, uTaps);
+  } else {
+    HP float r1 = mod(r0 + 1.0, uRows);
+    v = 0.5 * (ringAt(vU, (r0 + 0.5) / uRows, uTaps) + ringAt(vU2, (r1 + 0.5) / uRows, uTapsNext));
+  }
+
   // ★★★ CONTRAST — THE SAME BUG AS THE SHARPNESS SLIDER ABOVE, in the same file, one control
   // along. wfContrast was handed to applySettings and stored, and NOTHING HERE EVER READ IT: the
   // manual contrast slider under Brightness moved from end to end with no visible change at all,
@@ -151,6 +173,9 @@ export class WaterfallGL {
   private uMap: WebGLUniformLocation;
   private uTaps: WebGLUniformLocation;
   private uTapDu: WebGLUniformLocation;
+  private uMapNext: WebGLUniformLocation;
+  private uTapsNext: WebGLUniformLocation;
+  private uRunEnd: WebGLUniformLocation;
   // ★ Looked up ONCE. render() used to call getAttribLocation + getUniformLocation ×2 every frame;
   //   they are string lookups on the program and cost a driver round-trip on some stacks.
   private aPos: number;
@@ -195,6 +220,9 @@ export class WaterfallGL {
     this.uMap = gl.getUniformLocation(prog, 'uMap')!;
     this.uTaps = gl.getUniformLocation(prog, 'uTaps')!;
     this.uTapDu = gl.getUniformLocation(prog, 'uTapDu')!;
+    this.uMapNext = gl.getUniformLocation(prog, 'uMapNext')!;
+    this.uTapsNext = gl.getUniformLocation(prog, 'uTapsNext')!;
+    this.uRunEnd = gl.getUniformLocation(prog, 'uRunEnd')!;
     this.aPos = gl.getAttribLocation(prog, 'aPos');
     this.uRing = gl.getUniformLocation(prog, 'uRing')!;
     this.uLut = gl.getUniformLocation(prog, 'uLut')!;
@@ -307,24 +335,33 @@ export class WaterfallGL {
     // ★ /10 to reach the shader's −1..1, matching WaterfallView.tsx:370 exactly.
     gl.uniform1f(this.uContrast, Math.max(-1, Math.min(1, this.contrast / 10)));
     gl.uniform1f(this.uTapDu, 1 / Math.max(1, outW));
-    const setMap = (a: number, b: number) => {
+    const taps = (a: number) => a > 1.01 ? Math.min(8, Math.ceil(a)) : 1;
+    // ★ Each run carries its own map AND the next run's (its last row blends with that run's first — see the shader).
+    const setMap = (a: number, b: number, an: number, bn: number, end: number) => {
       gl.uniform2f(this.uMap, a, b);
-      gl.uniform1f(this.uTaps, a > 1.01 ? Math.min(8, Math.ceil(a)) : 1);
+      gl.uniform1f(this.uTaps, taps(a));
+      gl.uniform2f(this.uMapNext, an, bn);
+      gl.uniform1f(this.uTapsNext, taps(an));
+      gl.uniform1f(this.uRunEnd, end);
     };
+    const vis = Math.max(1, Math.min(visibleRows, this.ringH));
     if (!runs || nRuns <= 1) {
-      setMap(runs && nRuns === 1 ? runs[2] : 1, runs && nRuns === 1 ? runs[3] : 0);
+      const a = runs && nRuns === 1 ? runs[2] : 1, b = runs && nRuns === 1 ? runs[3] : 0;
+      setMap(a, b, a, b, 1e9);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       return;
     }
     // ★ One scissored draw per run: the fill is still exactly one screen, only the uniforms change between runs.
     //   Display row j is GL row (outH − 1 − j) — GL counts from the bottom. Rows map 1:1 to pixels (visible = outH).
-    const scale = outH / Math.max(1, Math.min(visibleRows, this.ringH));
+    const scale = outH / vis;
     gl.enable(gl.SCISSOR_TEST);
     for (let i = 0; i < nRuns; i++) {
       const y0 = Math.round(runs[i * 4] * scale), y1 = Math.round(runs[i * 4 + 1] * scale);
       if (y1 <= y0) continue;
       gl.scissor(0, outH - y1, outW, y1 - y0);
-      setMap(runs[i * 4 + 2], runs[i * 4 + 3]);
+      const last = i === nRuns - 1;
+      const a = runs[i * 4 + 2], b = runs[i * 4 + 3];
+      setMap(a, b, last ? a : runs[i * 4 + 6], last ? b : runs[i * 4 + 7], last ? 1e9 : runs[i * 4 + 1]);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     gl.disable(gl.SCISSOR_TEST);

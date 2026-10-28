@@ -1,29 +1,59 @@
 /**
- * WEB WATERFALL GLIDE (web/client/src/wfGlide.ts) — Stuart 2026-10-28: a fast tune drew a station's trail as dashes.
- * Proves on the pure row: a slide moves the row (vacated edge = floor 0); a carrier is painted across every slide
- * between the previous row's and this row's, so consecutive rows touch; the noise floor is NOT smeared; a move wider
- * than SMEAR_MAX is left as a jump.
+ * WEB WATERFALL GLIDE (web/client/src/wfGlide.ts) — Stuart 2026-10-28: "refer back to the video for the glide". A row
+ * emitted t of the way between two frames whose view moved is drawn against the in-between view, both frames resampled
+ * there and cross-faded. Proves on the pure rows:
+ *   - a fixed carrier lands where the in-between view puts it (sub-pixel: the curve, not a staircase), on a tune AND a zoom;
+ *   - the WHOLE row moves (the noise texture travels with the carrier — no streak over a static floor);
+ *   - t = 0 / t = 1 give back frame A / frame B exactly (a moving pair joins the steady rows either side seamlessly);
+ *   - a one-bin carrier survives a zoom OUT (the max of the bins a column covers);
+ *   - outside both frames is the floor (0), and a jump is not a glide.
  * Run: node --no-warnings scripts/test_wf_glide.ts
  */
-import { glideRow, SMEAR_MAX } from '../web/client/src/wfGlide.ts';
+import { glideRowAt, newGlideScratch, canGlide, placementMoved } from '../web/client/src/wfGlide.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
-const N = 1024;
-const row = () => { const r = new Uint8Array(N); for (let i = 0; i < N; i++) r[i] = 40 + (i * 7919 % 13); r[500] = 250; return r; };
-const lit = (d: Uint8Array) => [...d].map((v, i) => [v, i]).filter(([v]) => v >= 250).map(([, i]) => i);
+const N = 1024, F = 1050000;
+// A frame of the band (lo, span): noise that is a fixed function of FREQUENCY (so it should move with the view) + a carrier at F.
+const frame = (lo: number, span: number) => {
+  const r = new Uint8Array(N);
+  for (let i = 0; i < N; i++) { const f = lo + (i + 0.5) * span / N; r[i] = 40 + (Math.floor(f / 1000) * 7919 % 13); }
+  const c = Math.floor((F - lo) / span * N); if (c >= 0 && c < N) r[c] = 250;
+  return r;
+};
+const peak = (d: Uint8Array) => { let b = 0, bi = -1; for (let i = 0; i < N; i++) if (d[i] > b) { b = d[i]; bi = i; } return bi; };
+const st = newGlideScratch(N), d = new Uint8Array(N);
 
-{ const s = row(), d = new Uint8Array(N); glideRow(s, d, N, 0, 0);
-  ok(d.every((v, i) => v === s[i]), 'no shift, no smear: the row exactly as it came'); }
-{ const s = row(), d = new Uint8Array(N); glideRow(s, d, N, 10, 10);
-  ok(lit(d).join() === '510' && d[0] === 0 && d[9] === 0 && d[10] === s[0], 'slide 10: the carrier at 510, the vacated edge the floor'); }
-{ const s = row(), d = new Uint8Array(N); glideRow(s, d, N, -12, 0);
-  const l = lit(d);
-  ok(l.length === 13 && l[0] === 488 && l[l.length - 1] === 500, `smear back to the previous row's place: the carrier spans 488–500 (${l[0]}–${l[l.length - 1]})`);
-  let same = 0; for (let i = 0; i < N; i++) { const j = i + 12; if (j < N && i !== 500 && (i < 488 || i > 500) && d[i] === s[j]) same++; }
-  ok(same > N - 40, `the noise floor is slid, never smeared (${same} bins untouched by the smear)`); }
-{ const s = row(), d = new Uint8Array(N); glideRow(s, d, N, SMEAR_MAX + 5, 0);
-  ok(lit(d).length === 1, 'a move wider than SMEAR_MAX is a jump: no smear'); }
+{ const A = frame(900000, 200000), B = frame(910000, 200000);
+  glideRowAt(A, 900000, 200000, B, 900000, 200000, 0, d, st); const e0 = d.every((v, i) => v === A[i]);
+  glideRowAt(A, 900000, 200000, B, 910000, 200000, 0, d, st); const a0 = d.every((v, i) => v === A[i]);
+  glideRowAt(A, 900000, 200000, B, 910000, 200000, 1, d, st); const b1 = d.every((v, i) => v === B[i]);
+  ok(e0 && a0 && b1, 't = 0 is frame A, t = 1 is frame B, exactly — the moving rows join the steady rows either side');
+  const cols: number[] = [];
+  for (const t of [0, 0.25, 0.5, 0.75, 1]) { glideRowAt(A, 900000, 200000, B, 910000, 200000, t, d, st); cols.push(peak(d)); }
+  ok(cols.join() === '768,755,742,730,716' || cols.every((c, i) => i === 0 || (c < cols[i - 1] && cols[i - 1] - c <= 14)),
+     `a tune: the carrier walks across in even steps, one row each — a curve, not a staircase (${cols.join(' ')})`);
+  // The noise is a function of frequency: at t = 0.5 the view is 905000..1105000, so column c shows frequency 905000 + c·span/N.
+  const [L, S] = glideRowAt(A, 900000, 200000, B, 910000, 200000, 0.5, d, st);
+  const want = frame(L, S); let same = 0; for (let i = 0; i < N; i++) if (Math.abs(d[i] - want[i]) <= 6) same++;
+  ok(L === 905000 && S === 200000 && same > N * 0.95, `the WHOLE row moves: the noise texture sits where the in-between view puts it (${same}/${N})`);
+}
+{ const A = frame(900000, 200000), B = frame(940000, 120000);   // a zoom in about 1.0 MHz
+  const cols: number[] = [];
+  for (const t of [0, 0.5, 1]) { const [L, S] = glideRowAt(A, 900000, 200000, B, 940000, 120000, t, d, st);
+    cols.push(peak(d)); ok(Math.abs(peak(d) - Math.floor((F - L) / S * N)) <= 1, `a zoom, t = ${t}: the carrier at the in-between view's column (${peak(d)})`); }
+}
+{ const A = frame(1030000, 40000), B = frame(1010000, 80000);   // a zoom OUT about the carrier: a column covers ~1.6 bins of A
+  glideRowAt(A, 1030000, 40000, B, 1010000, 80000, 0.6, d, st);
+  ok(d[peak(d)] >= 200, `a one-bin carrier survives a zoom out (${d[peak(d)]})`);
+  // the in-between view (1018000..1082000) reaches past A — B covers it; and nothing is NaN-garbage
+  ok(d.every((v) => v >= 40 || v === 0) && d[0] >= 40, 'edges one frame does not cover are filled from the other');
+}
+{ const A = frame(1000000, 50000), B = frame(1000000, 50000);
+  glideRowAt(A, 1000000, 50000, B, 1000000, 50000, 0.5, d, st); ok(d.every((v, i) => v === A[i]), 'a steady pair is the frame exactly'); }
+ok(!placementMoved(1e6, 2e5, 1e6, 2e5, N) && placementMoved(1e6, 2e5, 1e6 + 1000, 2e5, N) && placementMoved(1e6, 2e5, 1e6, 1.9e5, N),
+   'placementMoved: steady no, tune yes, zoom yes');
+ok(canGlide(1e6, 2e5, 1e6 + 20000, 2e5) && !canGlide(1e6, 2e5, 1e6 + 30000, 2e5), 'a move past 1/8 of the span is a jump, not a glide');
 
 console.log(`   ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

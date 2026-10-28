@@ -57,12 +57,17 @@ const SNIFF = `(() => { window.__rows = []; const O = WebSocket;
 const COLUMNS = `(() => { const h = window.__vibeWf(); if (!h) return null; const wf = h.wf; const cv = document.getElementById('wf');
   const W = cv.width, H = cv.height, wfH = wf.wf.height, top = H - wfH; const d = cv.getContext('2d').getImageData(0, top, W, wfH).data;
   const at = (o, x) => { const p = o + x * 4; return d[p] * 2 + d[p + 1] + d[p + 2]; };
-  const cols = [], ls = [], rs = [], blank = []; for (let y = 0; y < wfH; y++) { let best = -1, bx = 0, lo = 1e9; const o = y * W * 4;
+  const cols = [], ls = [], rs = [], lh = [], rh = [], blank = []; for (let y = 0; y < wfH; y++) { let best = -1, bx = 0, lo = 1e9; const o = y * W * 4;
     let sum = 0; for (let x = 2; x < W - 2; x++) { const v = at(o, x); sum += v; if (v < lo) lo = v; if (v > best) { best = v; bx = x; } }
     blank.push(best - lo < 30);
     let l = bx, r = bx; while (l > 2 && at(o, l - 1) >= best - 24) l--; while (r < W - 3 && at(o, r + 1) >= best - 24) r++;
-    const lit = best - sum / (W - 4) > 120; cols.push(lit ? Math.round((l + r) / 2) : -1); ls.push(lit ? l : -1); rs.push(lit ? r : -1); }
-  return { W, wfH, cols, ls, rs, blank }; })()`;
+    const lit = best - sum / (W - 4) > 120; cols.push(lit ? Math.round((l + r) / 2) : -1); ls.push(lit ? l : -1); rs.push(lit ? r : -1);
+    // ★ The carrier's HALF-brightness extent: rows blend 50/50 into the next (the soft vertical look), so a moving trail's
+    //   row is part one row's carrier and part the next's — its visible width is where it stands half way above the floor.
+    const half = lo + (best - lo) / 2; let hl = bx, hr = bx;
+    while (hl > 2 && at(o, hl - 1) >= half) hl--; while (hr < W - 3 && at(o, hr + 1) >= half) hr++;
+    lh.push(lit ? hl : -1); rh.push(lit ? hr : -1); }
+  return { W, wfH, cols, ls, rs, lh, rh, blank }; })()`;
 
 /** Rows (y, newest first) whose column jumps away from BOTH neighbours by more than `px` the same way — a torn row (it
  *  leaves the trail and comes back). Except a trail that TURNS (the fast spin reversing: 1118 1174 1196 1178 1136): it
@@ -229,28 +234,43 @@ try {
   await fanCase(SPAN, 80000);
   await fanCase(80000, SPAN);
 
-  // ── 5. GLIDE (Stuart 2026-10-28): a FAST tune — 3 kHz every 60 ms, ~16 px a row at 200 kHz across 1280 px — must draw
-  //    ONE continuous diagonal: every row's carrier touches the row above's, no dashes with gaps between them ──
-  {
+  // ── 5. GLIDE (Stuart 2026-10-28: "I just wanted the chunky broken diagonal lines joined up so they looked solid";
+  //    the reference is the first native build's sweep — whole rows at their own placement, a smooth curve, no steps).
+  //    A tune draws a trail that moves EVENLY row by row — never the staircase of a run of rows at one place and then a
+  //    jump (several rows emitted per frame all snapped to that frame's placement). At a drum's pace the rows also TOUCH
+  //    (no gap between one row's carrier and the next). At a fast spin — more pixels a row than the carrier is wide — a
+  //    one-bin carrier is an even dotted diagonal: the rows are a frame interval apart and nothing real lies between. ──
+  let tuneAt = fEnd;
+  const glideCase = async (label, stepHz, everyMs, steps, wantTouch) => {
     await sleep(1500);
-    for (let i = 1; i <= 16; i++) { await ev(`window.__vibeWf().spec.tune(${fEnd + i * 3000})`); await sleep(60); }
+    const from = tuneAt;
+    for (let i = 1; i <= steps; i++) { tuneAt = from + i * stepHz; await ev(`window.__vibeWf().spec.tune(${tuneAt})`); await sleep(everyMs); }
     await sleep(1500);
     const g = await columns();
-    const cStart = Math.round((0.5 + (CARRIER - fEnd) / SPAN) * g.W), cEnd = Math.round((0.5 + (CARRIER - fEnd - 48000) / SPAN) * g.W);
+    // ★ WFHIST_SHOTS=<dir>: a picture of each tune per renderer (before/after comparisons of the glide).
+    if (process.env.WFHIST_SHOTS) { const s = await send('Page.captureScreenshot', { format: 'png' });
+      fs.mkdirSync(process.env.WFHIST_SHOTS, { recursive: true });
+      fs.writeFileSync(path.join(process.env.WFHIST_SHOTS, `${label}-${MODE}.png`), Buffer.from(s.result.data, 'base64')); }
+    const cStart = Math.round((0.5 + (CARRIER - from) / SPAN) * g.W), cEnd = Math.round((0.5 + (CARRIER - tuneAt) / SPAN) * g.W);
     // the moving part of the trail, newest first: rows strictly between where it started and where it settled
     const ys = []; for (let y = 0; y < Math.min(400, g.cols.length); y++) { const c = g.cols[y]; if (c >= 0 && c < cStart - 3 && c > cEnd + 3) ys.push(y); }
-    let gaps = 0, worst = 0, pairs = 0;
+    let gaps = 0, worst = 0, pairs = 0, still = 0;
+    const ds = [];
     const y0 = ys.length ? ys[0] - 1 : 0, y1 = ys.length ? ys[ys.length - 1] + 1 : 0;
     for (let y = Math.max(0, y0); y < y1; y++) {
-      if (g.ls[y] < 0 || g.ls[y + 1] < 0) continue;
+      if (g.lh[y] < 0 || g.lh[y + 1] < 0) continue;
       pairs++;
-      const gap = Math.max(g.ls[y] - g.rs[y + 1], g.ls[y + 1] - g.rs[y]) - 1;   // empty pixels between the two rows' carriers
+      const gap = Math.max(g.lh[y] - g.rh[y + 1], g.lh[y + 1] - g.rh[y]) - 1;   // empty pixels between the two rows' carriers
       if (gap > 1) { gaps++; worst = Math.max(worst, gap); }
+      const d = Math.abs(g.cols[y] - g.cols[y + 1]); ds.push(d); if (d === 0) still++;
     }
-    ok(ys.length >= 6 && pairs >= 6 && gaps <= 1,
-       `a fast tune (${cStart} → ${cEnd} px) draws one continuous trail: ${gaps} gap(s) between ${pairs} row pairs along ${ys.length} moving rows` +
-       (gaps ? ` (widest ${worst} px)` : ''));
-  }
+    const sorted = [...ds].sort((x, y) => x - y), med = sorted.length ? sorted[sorted.length >> 1] : 0, big = sorted.length ? sorted[sorted.length - 1] : 0;
+    ok(ys.length >= 6 && pairs >= 6 && still <= pairs * 0.25 && big <= 3 * med + 4,
+       `${label} (${cStart} → ${cEnd} px): the trail moves EVENLY, a curve not a staircase — ${still}/${pairs} rows standing still, steps median ${med} px, largest ${big} px`);
+    if (wantTouch) ok(gaps <= 1, `${label}: one continuous trail — ${gaps} gap(s) between ${pairs} row pairs` + (gaps ? ` (widest ${worst} px)` : ''));
+  };
+  await glideCase('drum-spin', 500, 50, 40, true);
+  await glideCase('fast-spin', 3000, 60, 16, false);
  }
 } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
 finally {
