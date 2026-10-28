@@ -79,9 +79,10 @@ const JB_MAX_QUEUE_SLOTS = 5;
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap } from '../services/uiCadence';
+import { setSteadyRefresh } from '../services/frameRate';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { fanRefresh, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
 import { setWideSink } from '../services/wideRowBus';
 import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate } from '../utils/wfPace';
@@ -355,25 +356,33 @@ half4 main(float2 xy) {
   //    tap finds a station the pixel takes it (a solid trail), noise is averaged (no brightened floor).
   //  ★ Steady rows (h = 0, or outside uMoLo..uMoHi — no fetch at all) take the unchanged paths below.
   float h = 0.0;
+  float g = 1.0;   // ★ the ZOOM to the next row (utils/wfRowPlace.ts pairMotion): x_b = m + g·(x_a − m) + h, m = the centre
   if (fI >= uMoLo && fI <= uMoHi && (uQuant < 0.5 || t == 0.0)) {
     float mc = mod(fI, uRows) + 0.5;
     float hb = wf.eval(float2(mc, uRows + 0.5)).r;
     float lb = wf.eval(float2(mc, uRows + 1.5)).r;
     h = (floor(hb * 255.0 + 0.5) * 256.0 + floor(lb * 255.0 + 0.5) - 32768.0) / 64.0;
+    float gh = wf.eval(float2(mc, uRows + 2.5)).r;
+    float gl = wf.eval(float2(mc, uRows + 3.5)).r;
+    g = exp2((floor(gh * 255.0 + 0.5) * 256.0 + floor(gl * 255.0 + 0.5) - 32768.0) / 4096.0);
   }
+  float mid = uTexW * 0.5;
   float c, l, r;
   if (tx < 0.0 || tx > uTexW) {
     c = 0.0;                                   // the screen ease: beyond the history's span
-  } else if (h != 0.0) {
+  } else if (h != 0.0 || g != 1.0) {
     float tc = uQuant > 0.5 ? 1.0 - (Lc - L) : t;   // progress f -> f+1 at this pixel's centre
-    float K  = clamp(ceil(abs(h) * uRowPx * uColPx), 1.0, 6.0);   // one tap per device px the trail crosses in this line
+    // The move AT THIS PIXEL: h at the centre, plus the zoom's spread away from it (the fan).
+    float xa0 = mid + ((tx - mid) - tc * h) / (1.0 + tc * (g - 1.0));
+    float mv = (g - 1.0) * (xa0 - mid) + h;
+    float K  = clamp(ceil(abs(mv) * uRowPx * uColPx), 1.0, 6.0);   // one tap per device px the trail crosses in this line
     float acc = 0.0;
     float mx  = 0.0;
     for (int k = 0; k < 6; k++) {
       if (float(k) < K) {
         float tk = clamp(tc + ((float(k) + 0.5) / K - 0.5) * uRowPx, 0.0, 1.0);
-        float xa = tx - tk * h;
-        float xb = tx + (1.0 - tk) * h;
+        float xa = mid + ((tx - mid) - tk * h) / (1.0 + tk * (g - 1.0));
+        float xb = mid + g * (xa - mid) + h;
         // ★ At the picture's edge one frame may have no data where the other does (a pan brings new spectrum in from
         //   the side): take the frame that HAS it, never the floor — else the edge shows a black comb mid-glide.
         bool ina = xa >= 0.0 && xa <= uTexW;
@@ -387,8 +396,8 @@ half4 main(float2 xy) {
     float mean = acc / K;
     c = mix(mean, mx, smoothstep(0.03, 0.10, mx - mean));
     if (uSharp > 0.0 && K < 1.5) {
-      float xa = tx - tc * h;
-      float xb = tx + (1.0 - tc) * h;
+      float xa = xa0;
+      float xb = mid + g * (xa - mid) + h;
       l = px(xa - 1.0, r1);
       r = px(xa + 1.0, r1);
       if (uQuant < 0.5) { l = mix(l, px(xb - 1.0, r2), tc); r = mix(r, px(xb + 1.0, r2), tc); }
@@ -1093,7 +1102,7 @@ function WaterfallView({
     }
     // Allocated ONCE. No bin count can reallocate it, so history always survives.
     if (!idxBuf.current) {
-      // ★ + MOTION_ROWS: the two motion rows the image carries below the ring (utils/wfRowPlace.ts wfImageBytes).
+      // ★ + MOTION_ROWS: the motion rows (move + zoom) the image carries below the ring (utils/wfRowPlace.ts wfImageBytes).
       idxBuf.current = new Uint8Array(RING_W * (RING_ROWS + MOTION_ROWS));
       uTexW.value = RING_W;
     }
@@ -1149,6 +1158,7 @@ function WaterfallView({
       const r = proc.current.getRange(), ws = wideSt.current;
       layerWriteRow(layer, slot, ws, placed.startHz, placed.spanHz, Date.now(),
                     makeToIdx(r.dbMin, r.dbMax, proc.current.getSettings().wfBrightness || 0, ws ? ws.off : 0));
+      fanRow(fanSt.current!, idxBuf.current, n, slot, RING_ROWS);   // ★ a zoom's eased row: drawn again now its layer row exists
     }
     frameCount.current += 1;
     // ★★ COVERED (an opaque full-screen overlay — the map, recordings, About): the ROW is kept, the
@@ -1159,6 +1169,19 @@ function WaterfallView({
     publishRing();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
+
+  /** ★ STEADY REFRESH while rows flow (services/frameRate.ts setSteadyRefresh — a ProMotion panel left to wander put the
+   *  rows on an uneven beat). On with a row, off 1 s after the last one, on backgrounding and on unmount. */
+  const steadyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noteRowsFlowing = useCallback(() => {
+    setSteadyRefresh(true);
+    if (steadyTimer.current) clearTimeout(steadyTimer.current);
+    steadyTimer.current = setTimeout(() => { steadyTimer.current = null; setSteadyRefresh(false); }, 1000);
+  }, []);
+  useEffect(() => () => {
+    if (steadyTimer.current) clearTimeout(steadyTimer.current);
+    setSteadyRefresh(false);
+  }, []);
 
   /** Build the waterfall texture from the ring as it stands and hand it to the shader. */
   const publishRing = useCallback(() => {
@@ -1184,6 +1207,7 @@ function WaterfallView({
     const ms = motionSt.current!;
     jsPendGen.current += 1;
     jsPending.value = { gen: jsPendGen.current, img, avail: frameCount.current, moLo: ms.lo, moHi: ms.hi, k, c };
+    noteRowsFlowing();
     if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
@@ -1630,6 +1654,7 @@ function WaterfallView({
       if (bg) {
         stopRevealStepper();
         stopSpecTween();
+        setSteadyRefresh(false);
       }
     });
     return () => sub.remove();

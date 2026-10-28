@@ -401,6 +401,7 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
         fan_.layer->fadeTx = w > 0 ? std::max(2.0, std::min(24.0, 6.0 * RING_W / w)) : 6.0;   // ~6 pt soft edge
         const vibewf::ToIdx toIdx(proc_.dbMin(), proc_.dbMax(), proc_.settings().wfBrightness, wide_ ? wide_->off : 0);
         vibewf::layerWriteRow(*fan_.layer, slot, wide_.get(), placedLo_, placedSpan_, now(), toIdx);
+        vibewf::fanRow(fan_, ring_.data(), n, slot, RING_ROWS);   // ★ a zoom's eased row: again, now its layer row exists
     }
     frameCount_ += 1;
     if (covNow_ || !publish) { ringDirty_ = true; return; }

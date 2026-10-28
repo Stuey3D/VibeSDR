@@ -11,7 +11,9 @@
 //    Nothing stored is altered; steady rows (h = 0) draw exactly as before. This REPLACES the glide streak (a moved row's
 //    signals max-smeared back to the previous row's place — "smeared", rejected).
 //  ★ A move past MOTION_MAX_FRAC of the width is a JUMP: not interpolated — the fan re-maps the history (wf_zoom_fan.h).
-//  ★ A zoom is never motion: the fan re-maps every row to the current scale, so h across a zoom step is 0.
+//  ★★ A ZOOM IS MOTION TOO (2026-10-28 — Stuart: "a thin line signal should expand out to the width and the history
+//    remains the thin line"): the history keeps the zoom it was drawn at, so each slot also carries g, the change of scale
+//    to the next row (two more image rows), and the shader draws the fan between them. h is the move at the CENTRE.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -20,7 +22,8 @@
 
 namespace vibewf {
 
-constexpr int MOTION_ROWS = 2;          // image rows below the ring: high byte, low byte of each slot's h
+constexpr int MOTION_ROWS = 4;          // image rows below the ring: h high/low byte, then g (log2) high/low byte
+constexpr int ZOOM_SCALE = 4096;        // log2(g) in 1/4096 of an octave
 constexpr int MOTION_SCALE = 64;        // 1/64 column
 constexpr int MOTION_ZERO = 32768;
 constexpr double MOTION_MAX_FRAC = 1.0 / 8;
@@ -38,11 +41,15 @@ inline double placedStartHz(double rowCenterHz, double rowHzPerBin, double off, 
 
 struct MotionState {
     std::vector<double> startHz, hzPerCol;   // per slot (NaN start = unknown)
-    std::vector<float> h;                    // per slot: display columns to the next newer row
+    std::vector<float> h;                    // per slot: display columns to the next newer row, at the centre
+    std::vector<float> g;                    // per slot: the zoom to the next newer row (1 = none)
     std::vector<uint8_t> bytes;              // MOTION_ROWS × n — the image's tail rows
     double lo = 1, hi = 0;                   // absolute frames whose pair moves; lo > hi = none
-    MotionState(int rows = 0, int n = 0) : startHz(rows, NAN), hzPerCol(rows, 0.0), h(rows, 0.f), bytes((size_t)MOTION_ROWS * n) {
-        for (int r = 0; r < n; r++) { bytes[r] = MOTION_ZERO >> 8; bytes[n + r] = MOTION_ZERO & 255; }
+    MotionState(int rows = 0, int n = 0) : startHz(rows, NAN), hzPerCol(rows, 0.0), h(rows, 0.f), g(rows, 1.f), bytes((size_t)MOTION_ROWS * n) {
+        for (int r = 0; r < n; r++) {
+            bytes[r] = MOTION_ZERO >> 8; bytes[n + r] = MOTION_ZERO & 255;
+            bytes[2 * n + r] = MOTION_ZERO >> 8; bytes[3 * n + r] = MOTION_ZERO & 255;
+        }
     }
 };
 
@@ -51,6 +58,11 @@ inline int encodeMotion(double h) {
     return (int)std::max(0.0, std::min(65535.0, v));
 }
 inline double decodeMotion(int hi, int lo) { return ((hi * 256 + lo) - MOTION_ZERO) / (double)MOTION_SCALE; }
+inline int encodeZoom(double g) {
+    const double v = std::floor(std::log2(g) * ZOOM_SCALE + 0.5) + MOTION_ZERO;
+    return (int)std::max(0.0, std::min(65535.0, v));
+}
+inline double decodeZoom(int hi, int lo) { return std::exp2(((hi * 256 + lo) - MOTION_ZERO) / (double)ZOOM_SCALE); }
 
 /** Slot r's display map: screen column x shows P + Q·x Hz. False when its placement is unknown. */
 inline bool displayMap(const MotionState& ms, const double* xfA, const double* xfB, int r, int n, double& P, double& Q) {
@@ -60,30 +72,43 @@ inline bool displayMap(const MotionState& ms, const double* xfA, const double* x
     return true;
 }
 
-/** Display columns a trail moves from slot a (older) to slot b (the next newer); 0 = steady/unknown/scale/jump. */
-inline double pairMotion(const MotionState& ms, const double* xfA, const double* xfB, int a, int b, int n) {
+/** How a trail moves from slot a (older) to slot b (the next newer): a station at display column x in a is at
+ *  m + g·(x − m) + h in b (m = n/2). g = 1, h = 0: steady / unknown / a jump. A tune is h alone (≤ MOTION_MAX_FRAC); a
+ *  zoom is g (h = the centre's move, ≤ ±511 columns or it is drawn as a step). */
+inline void pairMotion(const MotionState& ms, const double* xfA, const double* xfB, int a, int b, int n, double& g, double& h) {
+    g = 1; h = 0;
     double Pa, Qa, Pb, Qb;
-    if (!displayMap(ms, xfA, xfB, a, n, Pa, Qa) || !displayMap(ms, xfA, xfB, b, n, Pb, Qb)) return 0;
-    if (std::fabs(Qa / Qb - 1) > 1e-3) return 0;
-    const double h = (Pa - Pb) / Qb;
-    if (!std::isfinite(h) || std::fabs(h) < 1.0 / MOTION_SCALE || std::fabs(h) > n * MOTION_MAX_FRAC) return 0;
-    return h;
+    if (!displayMap(ms, xfA, xfB, a, n, Pa, Qa) || !displayMap(ms, xfA, xfB, b, n, Pb, Qb)) return;
+    const double m = n / 2.0, gg = Qa / Qb, c = (Pa - Pb) / Qb;
+    if (!std::isfinite(gg) || !std::isfinite(c)) return;
+    if (std::fabs(gg - 1) <= 1e-3) {
+        if (std::fabs(c) < 1.0 / MOTION_SCALE || std::fabs(c) > n * MOTION_MAX_FRAC) return;
+        h = c; return;
+    }
+    if (gg < 1.0 / 256 || gg > 256) return;
+    const double hc = c + (gg - 1) * m;
+    if (std::fabs(hc) > 511) return;
+    g = gg; h = std::fabs(hc) < 1.0 / MOTION_SCALE ? 0 : hc;
 }
 
-inline void setMotion(MotionState& ms, int slot, double h, int n) {
-    ms.h[slot] = (float)h;
+inline void setMotion(MotionState& ms, int slot, double g, double h, int n) {
+    ms.h[slot] = (float)h; ms.g[slot] = (float)g;
     const int v = encodeMotion(h);
     ms.bytes[slot] = (uint8_t)(v >> 8); ms.bytes[n + slot] = (uint8_t)(v & 255);
+    const int z = encodeZoom(g);
+    ms.bytes[2 * n + slot] = (uint8_t)(z >> 8); ms.bytes[3 * n + slot] = (uint8_t)(z & 255);
 }
+inline bool moves(double g, double h) { return g != 1 || h != 0; }
 
 /** Every pair among the newest `rows` frames, and the moving range (after a fan re-mapped them all). */
 inline void motionRecompute(MotionState& ms, const double* xfA, const double* xfB, int n, int rows, double frames) {
     ms.lo = 1; ms.hi = 0;
     for (double f = std::max(0.0, frames - rows); f < frames; f++) {
         const int r = (int)std::fmod(f, (double)rows);
-        const double h = f + 1 < frames ? pairMotion(ms, xfA, xfB, r, (int)std::fmod(f + 1, (double)rows), n) : 0;
-        setMotion(ms, r, h, n);
-        if (h != 0) { if (ms.lo > ms.hi) ms.lo = f; ms.hi = f; }
+        double g = 1, h = 0;
+        if (f + 1 < frames) pairMotion(ms, xfA, xfB, r, (int)std::fmod(f + 1, (double)rows), n, g, h);
+        setMotion(ms, r, g, h, n);
+        if (moves(g, h)) { if (ms.lo > ms.hi) ms.lo = f; ms.hi = f; }
     }
 }
 
@@ -94,12 +119,13 @@ inline void motionAfterRow(MotionState& ms, const double* xfA, const double* xfB
     ms.startHz[slot] = std::isfinite(startHz) && hzPerCol > 0 ? startHz : NAN;
     ms.hzPerCol[slot] = hzPerCol > 0 ? hzPerCol : 0;
     if (refanned) { motionRecompute(ms, xfA, xfB, n, rows, f + 1); return; }
-    setMotion(ms, slot, 0, n);
+    setMotion(ms, slot, 1, 0, n);
     if (f > 0) {
         const int p = (int)std::fmod(f - 1, (double)rows);
-        const double h = pairMotion(ms, xfA, xfB, p, slot, n);
-        setMotion(ms, p, h, n);
-        if (h != 0) { if (ms.lo > ms.hi) ms.lo = f - 1; ms.hi = f - 1; }
+        double g, h;
+        pairMotion(ms, xfA, xfB, p, slot, n, g, h);
+        setMotion(ms, p, g, h, n);
+        if (moves(g, h)) { if (ms.lo > ms.hi) ms.lo = f - 1; ms.hi = f - 1; }
     }
     const double oldest = f + 1 - rows;
     if (ms.hi < oldest) { ms.lo = 1; ms.hi = 0; } else if (ms.lo < oldest) ms.lo = oldest;
