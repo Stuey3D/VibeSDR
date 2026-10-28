@@ -85,6 +85,7 @@ import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { needleGeometry } from '../utils/needleGeometry';
 import { glideRow, newGlideState, rowViewOffset, writeRow } from '../utils/wfRowPlace';
+import { gapArrival, gapDraw, gapLogOn, gapPacerSlip } from '../utils/frameGapLog';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -1459,6 +1460,7 @@ function WaterfallView({
   const jsRateT  = useSharedValue(0);
   const jsSeen   = useSharedValue(0);
   const jsLast   = useSharedValue(0);
+  const gapOnSv  = useSharedValue(gapLogOn());   // read once at mount (dev log)
   useFrameCallback((fi) => {
     'worklet';
     if (specDead.value) return;
@@ -1468,8 +1470,13 @@ function WaterfallView({
     if (avail <= 0) return;
     rowRate(avail, fi.timestamp, jsRate, jsSeen, jsRateT);
     const settled = uQuantSv.value >= 0.5 && scrollFrac.value >= 1;
+    const coolWas = jsCool.value;
     const shown = rowPace(avail, jsShown, jsAcc, jsLead, jsCool, jsMode, jsRate.value, gap, settled);
     if (uHead.value !== shown) uHead.value = shown;
+    // DEV frame-gap log (utils/frameGapLog.ts, OFF by default): a deliberate slip — one hop to JS per slip only.
+    if (gapOnSv.value && settled && coolWas > 0 && jsCool.value === 0) {
+      runOnJS(gapPacerSlip)(jsLead.value, Math.max(1, jsRate.value * PLAYOUT_MS), jsRate.value);
+    }
   }, engine == null);
 
   // DIAG (diagnostics builds only): a histogram of rows shown per drawn frame, so pacing is measured, not eyeballed.
@@ -1976,6 +1983,8 @@ function WaterfallView({
   const jbArrivalMs   = useRef(150);   // measured arrival cadence (drives the drain rate)
   const jbLastArrival = useRef(0);
   const jbTimer       = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** When the drain timer is due (dev frame-gap log only: how late it fired = how busy the JS thread was). */
+  const jbDueAt       = useRef(0);
   const jbPrefill     = useRef(true);
   const JB_TARGET_DEPTH = 1;
   const JB_MAX_QUEUE    = 3;
@@ -1990,16 +1999,20 @@ function WaterfallView({
     }
     if (q.length === 0) { jbPrefill.current = true; return; }   // ran dry → hold, re-prefill
     const f = q.shift()!;
+    // ★ DEV frame-gap log (utils/frameGapLog.ts, OFF by default): a late row, and whether the JS timer or the feed made it late.
+    if (gapLogOn()) gapDraw(jbArrivalMs.current, jbDueAt.current > 0 ? Date.now() - jbDueAt.current : 0);
     handleFrame(f.bins, f.status);       // reads synchronously and keeps nothing (see framePool.ts)…
     jbPool.current.release(f);           // …so the slot is free again
     // Reschedule at the arrival cadence (steady); a little faster if backed up, to catch up.
     const dur = Math.max(40, Math.min(1000,
       q.length > JB_TARGET_DEPTH ? jbArrivalMs.current * 0.6 : jbArrivalMs.current));
     jbTimer.current = setTimeout(drainFrame, dur);
+    jbDueAt.current = Date.now() + dur;
   }, [handleFrame]);
 
   const enqueueFrame = useCallback((bins: Float32Array, status: SDRStatus) => {
     if (bgRef.current) return;
+    gapArrival();
     const now = Date.now();
     const interacting = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
     // DURING interaction, BYPASS the buffer — tune/zoom must feel instant. The jitter buffer only
@@ -2022,7 +2035,7 @@ function WaterfallView({
     const q = jbQueue.current;
     q.push(jbPool.current.take(bins, status));   // copy (into a pooled slot): the parent reuses its buffers
     if (q.length > JB_MAX_QUEUE) jbPool.current.release(q.shift()!);   // bound the latency
-    if (!jbTimer.current) jbTimer.current = setTimeout(drainFrame, 0);  // kick the drain
+    if (!jbTimer.current) { jbTimer.current = setTimeout(drainFrame, 0); jbDueAt.current = now; }  // kick the drain
   }, [drainFrame, handleFrame, lastInteractAt]);
 
   useEffect(() => () => { if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; } }, []);
