@@ -128,6 +128,7 @@ try {
   ok(await until(() => vfo(a) === 7100000), `the listener is on 7100.000 kHz (${vfo(a)})`);
   await sleep(2500);
   ok(logCount(/background decoding stopped|RF centre 500\.0 kHz/) === 0, 'nothing moved while somebody was listening');
+  a.send({ type: 'leave' });   // ★ a real goodbye — a dropped socket is HELD (session hold, beta24) and still counts
   a.close();
   const leftAt = Date.now();
 
@@ -157,6 +158,7 @@ try {
   ok(await until(() => vfo(b) === 7100000, 3000), `★ the newcomer is on 7100.000 kHz — not the NAVTEX or RTTY centre (${vfo(b)})`);
   await sleep(WAIT_S * 1000 + 2500);
   ok(logCount(/profile 2, RF centre 4600\.0 kHz/) === 1, 'while they are here, it does not come back');
+  b.send({ type: 'leave' });   // ★ a real goodbye — a dropped socket is HELD (session hold, beta24) and still counts
   b.close();
 
   console.log('── they leave; it comes back after the wait; a DECODER socket on its own stops it too ──');

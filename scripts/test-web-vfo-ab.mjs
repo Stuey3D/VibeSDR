@@ -105,6 +105,7 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   await click('#mFreqBox');
   ok(await until(`!document.getElementById('freqAbRow').hidden && document.getElementById('abToggle')?.textContent === 'OFF'`, 3000), 'the frequency card carries VFO A/B: OFF');
   await shot('freq-card');
+  await until(`(() => { const t = document.getElementById('abToggle'), r = t.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === t; })()`, 3000);   // ★ the card slides in: wait until the toggle is what a tap would hit
   await click('#abToggle');
   ok(await until(`${sentWatch}.some(m => m.on === true && m.id === 1)`, 3000), `ON sends {watch, id:1, on:true} (${JSON.stringify(await ev(`${sentWatch}[0]`))})`);
   ok(await until(`document.getElementById('abToggle').textContent === 'ON' && document.getElementById('freqPanel').classList.contains('open')`, 3000), 'the card stays open and reads ON');
@@ -257,6 +258,7 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   // ── off, from the frequency card
   await click('#mFreqBox');
   ok(await until(`!document.getElementById('freqAbRow').hidden && document.getElementById('abToggle')?.textContent === 'ON'`, 3000), 'the toggle reads ON');
+  await until(`(() => { const t = document.getElementById('abToggle'), r = t.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === t; })()`, 3000);   // ★ the card slides in: wait until the toggle is what a tap would hit
   await click('#abToggle');
   ok(await until(`${sentWatch}.some(m => m.off === true)`, 2000), 'OFF sends {watch, id:1, off:true}');
   ok(await until(`!${AB}.on && ${AB}.sel === 'A' && document.getElementById('mAbKey').hidden && !document.getElementById('mTuneGlyph').hidden`, 3000), 'back to one VFO: A selected, key gone, glyph back');
