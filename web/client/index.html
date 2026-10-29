@@ -1424,7 +1424,7 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 #ndbLive.min { width: auto; border-radius: 999px; }
 #ndbLive.min #ndbLiveHead { padding: 7px 14px; }
 #ndbLive.min #ndbLiveHead .chev { border-top: none; border-bottom: 6px solid rgba(255, 184, 51, 0.7); }
-#ndbLive.min #ndbList, #ndbLive.min #ndbChips { display: none; }
+#ndbLive.min #ndbList, #ndbLive.min #ndbChips, #ndbLive.min #ndbListFoot { display: none; }
 /* ★ The list header's chips: small keys in a row under the head, the key word dimmed so the figure reads first */
 /* ★ a wide screen WRAPS them (height to spare there); a phone scrolls them, as the bar (media query below) */
 #ndbChips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 8px 7px; }
@@ -4518,6 +4518,8 @@ select.btn { padding: 6px 8px; }
         <button type="button" id="ndbStatsBtn" class="adsbChip" title="Reception stats, with CSV">STATS</button>
       </div>
       <div id="ndbList" data-navscroll></div>
+      <!-- ★ Once, at the foot of the list (Stuart, 2026-10-29) — not on every unnamed beacon. Same words as NdbLiveList.tsx. -->
+      <div id="ndbListFoot" class="ndbNote">A beacon shown by its ident alone isn&rsquo;t in our list (OurAirports, FAA, OpenStreetMap) — it may be on another list.</div>
     </div>
   </div>
 </div>

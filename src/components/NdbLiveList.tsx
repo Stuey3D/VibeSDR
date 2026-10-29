@@ -133,6 +133,8 @@ export default function NdbLiveList(p: {
                          onPress={() => p.onSelect(b.id)} />
                   </NavRow>
                 )) : <Text style={s.note} numberOfLines={4}>{ndbEmptyText(r)}</Text>}
+                {/* ★ Once, at the foot of the list (Stuart, 2026-10-29) — not on every unnamed beacon. */}
+                {rows.length > 0 && <Text style={s.dim}>A beacon shown by its ident alone isn't in our list (OurAirports, FAA, OpenStreetMap) — it may be on another list.</Text>}
               </ScrollView>
             )}
           </View>
