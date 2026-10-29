@@ -173,11 +173,30 @@ cp "$WORK/rtl/include/rtl-sdr.h" "$WORK/rtl/include/rtl-sdr_export.h" "$PREFIX/i
 #     COPYING travels with the package (CMakeLists.txt installs share/licences/COPYING.faad2 into /usr/share/doc).
 # ★ Float, not FAAD2's fixed-point variant: every profile has an FPU (ARMv6 VFPv2 included), and the float decoder is the
 #   one measured (docs/v12/DRM-AUDIO-ROUTES.md). DRC off (DRM's AAC carries none); no CLI.
+# ★★ V12 (2026-10-29, Stuart: "fully optimised like DAB+"): VibeSDR's FAAD2 PATCH SERIES (faad2-patches/series) is
+#    applied HERE, before both builds — the DRM build and the DAB+ build below are made from the same patched tree. For
+#    DRM it is patch 1 (no -ffloat-store), the SBR/QMF/transform kernels of 2-8, and patch 9: HCR, the error-resilient
+#    codeword reordering only DRM's AAC uses, which was most of a DRM frame's decode time on a Pi 2. NOT
+#    -funsafe-math-optimizations here: measured on the Pi 2 it bought DRM nothing (0.365 vs 0.360 % of a core) and cost
+#    output margin. Pi 2, RRI 9570 AAC mono: 1.66 → 0.36 % of a core; KTWR HE-AAC mono: 4.80 → 1.29 %; output ≥ 132 dB
+#    SNR against stock (docs/v12/DRM-AUDIO-ROUTES.md "DRM's FAAD2, optimised").
 fetch "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VER.tar.gz" "faad2.tar.gz" "$FAAD_SHA"
 mkdir -p "$WORK/faad" && tar -xzf "$WORK/faad2.tar.gz" -C "$WORK/faad" --strip-components 1
+FAAD_PATCHES="$(cd "$(dirname "$0")" && pwd)/faad2-patches"
+FAAD_SERIES=""
+if [ -f "$FAAD_PATCHES/series" ]; then
+  while IFS= read -r p; do
+    case "$p" in ""|\#*) continue ;; esac
+    patch -d "$WORK/faad" -p1 -s --no-backup-if-mismatch < "$FAAD_PATCHES/$p" || { echo "!! FAAD2 patch $p did not apply"; exit 1; }
+    FAAD_SERIES="$FAAD_SERIES $p"
+  done < "$FAAD_PATCHES/series"
+fi
+echo "==> FAAD2 patches:${FAAD_SERIES:- none}"
+# ★ The flags go in through the ENVIRONMENT's CFLAGS (which CMake ADDS to a toolchain's own), as the DAB+ build's do.
+CFLAGS="$CFLAGS" \
 cmake -S "$WORK/faad" -B "$WORK/faad/b" -DCMAKE_BUILD_TYPE=Release "${CMAKE_TC[@]}" \
       $([ "$PROFILE" = native ] && echo "-DCMAKE_C_COMPILER=$CC_ONLY") \
-      ${ARCHFLAGS:+-DCMAKE_C_FLAGS="$ARCHFLAGS"} -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF \
+      -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF -DFAAD_APPLY_DRC=OFF \
       >"$WORK/faad.log" 2>&1 \
   && cmake --build "$WORK/faad/b" --target faad_drm -j"$JOBS" >>"$WORK/faad.log" 2>&1 \
   || { tail -40 "$WORK/faad.log"; echo "!! FAAD2 build failed"; exit 1; }
@@ -187,6 +206,9 @@ mkdir -p "$PREFIX/share/licences" && cp "$WORK/faad/COPYING" "$PREFIX/share/lice
 # ★ The FEATURE, not the file: the DRM entry point must be in it (a plain libfaad would build and play nothing).
 [ "$("$NM" "$PREFIX/lib/libfaad_drm.a" 2>/dev/null | count 'T .*NeAACDecInitDRM')" -gt 0 ] \
   || { echo "!! libfaad_drm.a has no NeAACDecInitDRM — refusing"; exit 1; }
+# ★ …and the series is in the tree it was built from (patch 9 is the one only DRM reaches): a stock build would play, slower.
+[ -z "$FAAD_SERIES" ] || [ "$(count VIBE_FAAD_STOCK "$WORK/faad/libfaad/hcr.c")" -gt 0 ] \
+  || { echo "!! FAAD2's hcr.c is not the patched one — refusing"; exit 1; }
 
 # ── FAAD2 2.11.3 AGAIN, its PLAIN build, every global renamed vibedab_ — V12 DAB+ audio in process ──────────────
 # ★★★ THE DRM BUILD REFUSES DAB+ ("No standard extension payload allowed in DRM", measured 2026-10-26), and the plain
@@ -202,18 +224,9 @@ mkdir -p "$PREFIX/share/licences" && cp "$WORK/faad/COPYING" "$PREFIX/share/lice
 #      guest instructions −23.5 %; output against the stock build max |diff| 1.6e-6, SNR 132.5 dB, level and every
 #      third octave identical to 0.0001 dB (docs/v12/DRM-AUDIO-ROUTES.md "DAB+ on its own thread").
 #   2. VibeSDR's FAAD2 PATCH SERIES (faad2-patches/series): NEON (ARMv7 + AArch64) / SSE2 / scalar versions of the hot
-#      stages, each documented in its own header, applied here in order — published with the source, never a silent
-#      fork. Applied to the plain (DAB+) build only, AFTER the DRM build above has been made from the untouched tree.
+#      stages, each documented in its own header, applied in order — published with the source, never a silent
+#      fork. Applied ONCE, above, before the DRM build (V12 2026-10-29: both builds come from the same patched tree).
 FAAD_DAB_OPT="-funsafe-math-optimizations"
-FAAD_PATCHES="$(cd "$(dirname "$0")" && pwd)/faad2-patches"
-FAAD_SERIES=""
-if [ -f "$FAAD_PATCHES/series" ]; then
-  while IFS= read -r p; do
-    case "$p" in ""|\#*) continue ;; esac
-    patch -d "$WORK/faad" -p1 -s --no-backup-if-mismatch < "$FAAD_PATCHES/$p" || { echo "!! FAAD2 patch $p did not apply"; exit 1; }
-    FAAD_SERIES="$FAAD_SERIES $p"
-  done < "$FAAD_PATCHES/series"
-fi
 echo "==> FAAD2 (DAB+): $FAAD_DAB_OPT; patches:${FAAD_SERIES:- none}"
 # ★ TWO PASSES: the plain build defines globals the DRM one does not (LTP, MAIN prediction — measured on the Mac), so
 #   the list is read off a first, unprefixed plain build; the second, prefixed build is the one kept.
@@ -281,7 +294,7 @@ done
 { echo "libusb $USB_VER sha256 $USB_SHA (no udev)"
   echo "libopus $OPUS_VER sha256 $OPUS_SHA ${OPUS_EXTRA[*]}"
   echo "librtlsdr osmocom/rtl-sdr $RTL_SHA (DETACH_KERNEL_DRIVER)"
-  echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_drm, float, GPL-2.0-or-later)"
+  echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_drm, float, GPL-2.0-or-later; VibeSDR patches:${FAAD_SERIES:- none})"
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_dab: the plain build, globals prefixed vibedab_, float, GPL-2.0-or-later; $FAAD_DAB_OPT; VibeSDR patches:${FAAD_SERIES:- none})"
   echo "libxaac $XAAC_VER sha256 $XAAC_SHA (decoder only, $XAAC_VARIANT code path, Apache-2.0)"
   echo "profile $PROFILE, CFLAGS '$CFLAGS', $CCVER"; } > "$PREFIX/BUILT-FROM"

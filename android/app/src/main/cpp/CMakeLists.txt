@@ -260,6 +260,22 @@ target_link_libraries(vibelocalsdr PRIVATE
     mediandk
     log)
 
+# ★★ V12 DRM — FAAD2's DRM build for the ON-DEVICE SERVER (the app's own server screen and VibeServer Lite). GPL-2.0+,
+#    and this .so ships in the Android app (Play and the GitHub APK) — GPL like the app; it is NEVER in the App Store
+#    (iOS) binary, which build_ios.sh checks. sdr-kit/build-faad2.sh makes the prebuilts (with VibeSDR's FAAD2 patch
+#    series, as the Linux and Mac servers): sdr-kit/<ABI>/lib/libfaad_drm.a for the app and lite/native/kit/armeabi-v7a
+#    for Lite (its own SDR_KIT_ROOT); with the file present it is linked.
+# ★★ OUTSIDE the `if (NOT VIBE_LITE_APP)` below (2026-10-29): it used to sit inside it, so VibeServer Lite — a server —
+#    never linked FAAD2 and played DRM AAC as silence even with a prebuilt in place.
+option(VIBE_DRM_FAAD2 "DRM AAC via FAAD2 on the on-device server (GPL-2.0+)" ON)
+if(VIBE_DRM_FAAD2 AND EXISTS "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libfaad_drm.a")
+  target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_FAAD2)
+  target_link_libraries(vibelocalsdr PRIVATE "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libfaad_drm.a")
+  message(STATUS "FAAD2 (DRM) for ${ANDROID_ABI}: linked (${SDR_KIT_ROOT})")
+elseif(VIBE_DRM_FAAD2)
+  message(WARNING "FAAD2 (DRM) for ${ANDROID_ABI}: no ${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libfaad_drm.a — DRM AAC will be silent on this build (run sdr-kit/build-faad2.sh)")
+endif()
+
 # --- vibespectrum: the native spectrum engine (docs/NATIVE-SPECTRUM-ENGINE.md) -------------------------------
 # ★ Its own small library, loaded by VibeSpectrum.kt when the SDR screen installs it — NOT part of vibelocalsdr,
 #   which loads only when a USB radio is used. Links JSI (it is a host object) and react-native-skia's prefab
@@ -269,17 +285,6 @@ target_link_libraries(vibelocalsdr PRIVATE
 if (NOT VIBE_LITE_APP)
 find_package(ReactAndroid REQUIRED CONFIG)
 find_package(shopify_react-native-skia REQUIRED CONFIG)
-# ★★ V12 DRM — FAAD2's DRM build for the ON-DEVICE SERVER (the app's own server screen and VibeServer Lite). GPL-2.0+,
-#    and this .so ships in the Android app (Play and the GitHub APK) — GPL like the app; it is NEVER in the App Store
-#    (iOS) binary, which build_ios.sh checks. OFF until the prebuilt is made: sdr-kit/build-faad2.sh puts
-#    sdr-kit/<ABI>/lib/libfaad_drm.a + include/neaacdec.h here; with them present it is linked automatically.
-option(VIBE_DRM_FAAD2 "DRM AAC via FAAD2 on the on-device server (GPL-2.0+)" ON)
-if(VIBE_DRM_FAAD2 AND EXISTS "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libfaad_drm.a")
-  target_compile_definitions(vibelocalsdr PRIVATE VIBE_HAVE_FAAD2)
-  target_link_libraries(vibelocalsdr PRIVATE "${SDR_KIT_ROOT}/${ANDROID_ABI}/lib/libfaad_drm.a")
-  message(STATUS "FAAD2 (DRM) for ${ANDROID_ABI}: linked")
-endif()
-
 add_library(vibespectrum SHARED spectrum/spectrum_jsi.cpp spectrum/spectrum_engine.cpp spectrum/spec_decoder.cpp spectrum/spec_socket.cpp)
 target_include_directories(vibespectrum PRIVATE vibedsp spectrum)
 set_target_properties(vibespectrum PROPERTIES CXX_STANDARD 20)

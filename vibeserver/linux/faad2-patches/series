@@ -1,7 +1,9 @@
-# VibeSDR's patch series for FAAD2 2.11.3 — the PLAIN (DAB+) build only (libfaad_dab.a; the DRM build stays stock).
-# Applied in this order by vibeserver/linux/build-deps.sh and vibeserver/mac/build-deps.sh (patch -p1, in the FAAD2
-# source tree). FAAD2 is GPL-2.0-or-later; these patches are too, and are published with it. Each patch's header says
-# what it changes, why, and what it was measured against (output vs stock FAAD2 on real DAB+ unit logs).
+# VibeSDR's patch series for FAAD2 2.11.3 — BOTH builds VibeServer links: the plain one for DAB+ (libfaad_dab.a) and,
+# since 2026-10-29, the DRM one (libfaad_drm.a; 1-8 were first written and measured for DAB+, 9 is DRM's HCR).
+# Applied in this order by vibeserver/linux/build-deps.sh, vibeserver/mac/build-deps.sh and
+# android/app/src/main/cpp/sdr-kit/build-faad2.sh (patch -p1, in the FAAD2 source tree). FAAD2 is GPL-2.0-or-later;
+# these patches are too, and are published with it. Each patch's header says what it changes, why, and what it was
+# measured against (output vs stock FAAD2 on real DAB+ unit logs; for DRM, docs/v12/DRM-AUDIO-ROUTES.md).
 0001-cmake-ffloat-store-only-for-x87.patch
 0002-vibe-simd4f-header.patch
 0003-dct4-kernel-simd.patch
@@ -10,3 +12,4 @@
 0006-sbr-hfgen-simd.patch
 0007-sbr-hfadj-simd.patch
 0008-aac-imdct-filterbank-simd.patch
+0009-hcr-reorder-without-scan-or-modulo.patch
