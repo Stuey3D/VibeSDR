@@ -8970,11 +8970,41 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         auto* c = (ClientDsp*)ctx;
         if (c && c->drm) c->drm->feedIq(x, n, rateHz);
     }
+    /** ★★ V12 DRM: CAN THIS LISTENER'S ZOOM MOVE THE RADIO? — the report's `zoomMovesRadio`, so the DRM card can say so
+     *  (Stuart, 2026-10-29: "when auto IF is detected on an RTL a little message on the DRM decoder warning that zooming
+     *  changes IF filter which resyncs the DRM"). A zoom updates only the view (clientRetuneView, and the shared zoom
+     *  handler keeps the DrmListener), but on an RTL with the IF filter on Auto the zoom handler's dongleForView may
+     *  really retune the tuner, and applyAutoIf re-programs the tuner's IF filter from the view — a hardware move, and
+     *  DRM re-locks after it. The SERVER says when it is true, from the same conditions those two paths test, so no
+     *  client guesses from the radio type:
+     *   · a shared zoom path — not perClientDsp(): a listener with their own channel inside a pinned window only ever
+     *     moves their view (and applyAutoIf returns on a locked centre);
+     *   · the centre not LOCKED (dongleForView returns g_vsLockedCentre itself) and not an Icom (no IQ tuner: tuneHw
+     *     returns);
+     *   · the IF filter on Auto (g_tunerBwAuto — the owner's switch, re-read on every report, so the field follows it);
+     *   · an RTL, the one radio whose IF filter this server drives and offers (a USB dongle's rtlsdr_set_tuner_bandwidth;
+     *     the clients' IF row is rtlOnly, rtl_tcp included — its Auto runs the same placement rule).
+     *  ✗ Not the Airspy HF+, R2/Mini, HackRF or RSP: none has an IF filter here, so "IF filter on Auto" would describe a
+     *    control they do not show. */
+    bool drmZoomMovesRadio() const {
+        if (perClientDsp() || useIcom()) return false;
+        if (g_vsLockedCentre.load() > 0.0) return false;
+        if (!g_tunerBwAuto.load(std::memory_order_relaxed)) return false;
+        return dev != nullptr || useTcp();
+    }
+    /** The report with `zoomMovesRadio` spliced in after its "type" — the receiver's JSON (vibe_drm_report.h) knows
+     *  nothing of the radio, so the field is the shim's. Always present (true/false): every report is the whole state. */
+    static std::string drmWithZoomNote(const std::string& j, bool moves) {
+        static const std::string kHead = "{\"type\":\"drm\"";
+        if (j.compare(0, kHead.size(), kHead) != 0) return j;
+        return kHead + (moves ? ",\"zoomMovesRadio\":true" : ",\"zoomMovesRadio\":false") + j.substr(kHead.size());
+    }
     /** ★ V12 DRM: the status report on this listener's spectrum socket, when it has changed (≤ once a super frame). */
     void drmSendStatus(ClientDsp* c) {
         uint64_t ver = 0;
-        const std::string j = c->drm->statusJson(&ver);
+        const std::string raw = c->drm->statusJson(&ver);
         if (ver == c->drmSentVer) return;
+        const std::string j = drmWithZoomNote(raw, drmZoomMovesRadio());   // ★ false here in practice: perClientDsp
         std::shared_ptr<net::Socket> sk;
         { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
         if (sk && sk->isOpen()) { sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size()); c->drmSentVer = ver; }
@@ -15861,6 +15891,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::mutex drmSharedMtx;
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
+    bool drmSharedZoomMoves = false;   // ★ the `zoomMovesRadio` last sent — see drmZoomMovesRadio
     /** The raw-IQ-out consumer's rate on the direct path, or 0 — the channel floor DRM must not lower. */
     double iqDirectRate() {
         std::lock_guard<std::mutex> lk(iqDirectMtx);
@@ -15880,9 +15911,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 d->takePcm(&drmBuf[0].l, count);
                 data = drmBuf.data(); ch = 2;
                 uint64_t ver = 0;
-                const std::string j = d->statusJson(&ver);
-                if (ver != drmSharedVer) {
+                const std::string raw = d->statusJson(&ver);
+                /* ★ …and when `zoomMovesRadio` changes (the owner switched the IF filter), though the receiver's own
+                 *  report has not — a searching receiver may not publish again for a long time. */
+                const bool zm = drmZoomMovesRadio();
+                if (ver != drmSharedVer || zm != drmSharedZoomMoves) {
                     drmSharedVer = ver;
+                    drmSharedZoomMoves = zm;
+                    const std::string j = drmWithZoomNote(raw, zm);
                     std::vector<std::shared_ptr<net::Socket>> socks;
                     { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
                     for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());

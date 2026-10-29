@@ -2288,6 +2288,9 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #drmBody .drmCodec .drmDec { color: var(--text-dim); font-size: 11px; }
 #drmBody .drmWhy { border-left: 3px solid var(--amber); padding: 4px 8px; background: rgba(255,184,51,0.08); line-height: 1.35; }
 #drmBody .drmWait { color: var(--text-dim); font-style: italic; }
+/* ★ V12 the zoom note (drm.ts DRM_ZOOM_NOTE): one dim line, the box's own small text — under the box and the Signal pane */
+#drmBody .drmNote, #drmSignal .drmNote { color: var(--text-dim); font-size: 11px; line-height: 1.35; }
+#drmSignal .drmNote { margin-top: 8px; }
 #decBox {
   /* Absolute inside #wfWrap, NOT fixed to the viewport — fixed + bottom:0 put it
      underneath the control bar. This way it always floats above the bar, whatever

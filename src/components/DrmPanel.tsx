@@ -139,6 +139,7 @@ export default function DrmPanel({ state, bottomOffset, topLimit }: DrmPanelProp
             {!!v.why && <Text style={[s.why, { color: tk.value }]} accessibilityRole="alert">{v.why}</Text>}
             {!!v.small && <Text style={[s.small, { color: tk.muted }]}>{v.small}</Text>}
             {!!v.wait && <Text style={[s.wait, { color: tk.muted }]}>{v.wait}</Text>}
+            {!!v.note && <Text style={[s.note, { color: tk.muted }]}>{v.note}</Text>}
           </View>
         </DecoderBody>
       )}
@@ -156,6 +157,8 @@ export default function DrmPanel({ state, bottomOffset, topLimit }: DrmPanelProp
                   <Text style={[s.val, { color: tone(r.tone) }, r.tone === 'bad' && tk.badBold && s.valBad]}>{r.v}</Text>
                 </View>
               )))}
+            {/* ★ the zoom note under the rows, as on the web's #drmSignal — the same dim line as the station box's */}
+            {!!v.note && <Text style={[s.note, s.paneNote, { color: tk.muted }]}>{v.note}</Text>}
           </ScrollView>
         </DecoderBody>
       )}
@@ -185,6 +188,9 @@ const makeStyles = (_T: DecoderTokens) => StyleSheet.create({
             backgroundColor: 'rgba(255,184,51,0.08)', paddingHorizontal: 8, paddingVertical: 4 },
   small:  { fontFamily: DECODER_FONT, fontSize: 10, fontVariant: ['tabular-nums'] },
   wait:   { fontFamily: DECODER_FONT, fontSize: 11, paddingVertical: 4 },
+  // ★ V12 the zoom note (DRM_ZOOM_NOTE): one dim line in the box's small size — the web's .drmNote
+  note:   { fontFamily: DECODER_FONT, fontSize: 10, lineHeight: 14 },
+  paneNote: { marginTop: 10 },
   // ── the Signal pane: DabPanel's rows (124 pt label, value beside it), its section headings ──
   pane:    { paddingHorizontal: 12, paddingVertical: 6, gap: 3 },
   section: { fontFamily: DECODER_FONT, fontSize: 10, letterSpacing: 2, marginTop: 10, marginBottom: 2 },

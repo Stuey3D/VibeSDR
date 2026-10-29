@@ -21,7 +21,18 @@ export interface DrmState {
   so?: number; codeRateA?: number; sdcRate?: number; sdcMer?: number; delayMs?: number; dopplerHz?: number;
   sbr?: boolean; ps?: boolean; concealed?: number; underruns?: number; sdcOk?: number; sdcBad?: number; superFrames?: number;
   lockS?: number[]; reacq?: number; lostWhy?: string; lostAtS?: number; blankedPct?: number; iqGaps?: number;
+  /** ★★ V12 (2026-10-29): this listener's zoom can retune the radio — an RTL with the IF filter on Auto, not range-locked
+   *  (local_sdr_shim.cpp drmZoomMovesRadio). The SERVER says so; absent from an older server = no note. */
+  zoomMovesRadio?: boolean;
 }
+
+/** ★★ The one case where a zoom can still knock DRM off its lock (Stuart, 2026-10-29: "when auto IF is detected on an RTL
+ *  a little message on the DRM decoder warning that zooming changes IF filter which resyncs the DRM"). A zoom is only the
+ *  view everywhere else; here the tuner may really move (and its IF filter follows the view), and the receiver re-locks.
+ *  Shown only on the server's word (`zoomMovesRadio`). ONE RULE, TWO READERS: the app's src/services/drm.ts carries the
+ *  same sentence, held equal by scripts/test_drm_app.ts. */
+export const DRM_ZOOM_NOTE = 'Zooming here can retune the radio (IF filter on Auto) — DRM resyncs for a few seconds after a big zoom.';
+const zoomNote = (s: DrmState | null) => (s && s.zoomMovesRadio === true ? `<div class="drmNote">${esc(DRM_ZOOM_NOTE)}</div>` : '');
 
 const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
 
@@ -49,7 +60,7 @@ export function drmRender(host: HTMLElement, s: DrmState | null): boolean {
     `<span class="drmLight${s[k] ? ' on' : ''}" title="${esc(tip)}">${name}</span>`).join('');
   const parts: string[] = [];
   if (!s.sync) {
-    host.innerHTML = `<div class="drmLights">${lights}</div><div class="drmWait">Searching for a DRM signal on this frequency…</div>`;
+    host.innerHTML = `<div class="drmLights">${lights}</div><div class="drmWait">Searching for a DRM signal on this frequency…</div>${zoomNote(s)}`;
     return true;
   }
   const label = s.label || (s.locked ? 'DRM station' : 'Locking…');
@@ -82,6 +93,7 @@ export function drmRender(host: HTMLElement, s: DrmState | null): boolean {
   } else {
     parts.push('<div class="drmWait">A DRM signal is here — reading its parameters…</div>');
   }
+  parts.push(zoomNote(s));
   host.innerHTML = parts.join('');
   return true;
 }
@@ -223,12 +235,13 @@ export function drmSignalRows(s: DrmState | null): DrmSigRow[] {
  *  rewritten, so a row being read under the pointer keeps its tooltip and the pane does not jump (DAB's dabPatchRows). */
 export function drmSignalRender(host: HTMLElement, s: DrmState | null): void {
   const rows = drmSignalRows(s);
-  const sig = rows.map((r) => ('h' in r ? `#${r.h}` : r.k)).join('\u0001');
+  const note = zoomNote(s);   // ★ under the rows, outside them (no .row), so the patching below is unchanged
+  const sig = rows.map((r) => ('h' in r ? `#${r.h}` : r.k)).join('\u0001') + (note ? '\u0001#note' : '');
   const val = (r: { v: string; tone?: DrmTone }) => (r.tone ? `<span class="tl ${r.tone}">${esc(r.v)}</span>` : esc(r.v));
   if (host.dataset.sig !== sig) {
     host.dataset.sig = sig;
     host.innerHTML = rows.map((r) => ('h' in r ? `<h4>${esc(r.h)}</h4>`
-      : `<div class="row" title="${esc(r.tip)}"><span>${esc(r.k)}</span><span>${val(r)}</span></div>`)).join('');
+      : `<div class="row" title="${esc(r.tip)}"><span>${esc(r.k)}</span><span>${val(r)}</span></div>`)).join('') + note;
     return;
   }
   const els = host.querySelectorAll('.row') as NodeListOf<HTMLElement>;
