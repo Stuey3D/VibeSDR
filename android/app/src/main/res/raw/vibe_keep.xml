@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★★ Resource shrinking (R8, docs/ANDROID-R8.md): drawables found BY NAME, which the shrinker cannot see.
+     VibeStreamService builds the lock-screen artwork with getIdentifier("artwork_<colour>"),
+     getIdentifier("logo_vibeserver_<colour>") and getIdentifier("logo_<server type>").
+     The React Native bundle's own images are kept by the keep.xml its bundle task generates. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/artwork_*,@drawable/logo_*" />

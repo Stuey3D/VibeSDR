@@ -12600,7 +12600,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       onLayout={(e: { nativeEvent: { layout: { height: number } } }) =>
         setRootH(e.nativeEvent.layout.height)}
     >
-      <StatusBar barStyle="light-content" backgroundColor="#000" translucent={false} />
+      {/* ★ barStyle only: backgroundColor/translucent are Android-only and React Native ignores both on an edge-to-edge
+          activity (it logs "Ignored status bar change") — and they ask for the bar colour API Android 15 deprecated. */}
+      <StatusBar barStyle="light-content" />
       {/* ★ The keyboard's highlight on this screen (ScreenNav) — only while the keyboard is driving and nothing is open. */}
       {screenHl.ring}
 

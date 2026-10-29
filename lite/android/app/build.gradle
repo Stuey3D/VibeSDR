@@ -18,6 +18,11 @@ def litePropsFile = file(findProperty('liteSigningProps') ?:
 if (litePropsFile.exists()) litePropsFile.withInputStream { liteProps.load(it) }
 def liteKeysOk = ['storeFile', 'oldStoreFile', 'lineageFile'].every { liteProps[it] && file(liteProps[it]).exists() }
 
+// ★★★ R8 + JNI: the keep rules come from the C++ (scripts/r8-jni.py), as in the main app's build.gradle.
+def liteJniKeepRules = file("${buildDir}/generated/r8/vibe-jni-keep.pro")
+def liteR8Script = file('../../../scripts/r8-jni.py')
+def liteCppDir = file("${MAIN}/cpp")
+
 android {
     // ★ The NAMESPACE stays com.vibesdr.app: the engine's JNI symbols are Java_com_vibesdr_app_*,
     //   and the shared Kotlin lives in that package. The APPLICATION ID is Lite's own, so both
@@ -51,7 +56,7 @@ android {
         buildConfigField 'boolean', 'IS_LEGACY_PACKAGE', 'false'
         minSdkVersion 21            // Android 5.0 — a 2017 Fire 7 is 5.1.1 (API 22)
         targetSdkVersion 28         // ★ sideload-only: old enough that an old tablet's rules apply
-        versionCode 85
+        versionCode 90             // ★ V12 beta: next after V11 11.0.16's Lite 89 (one shared sequence, GitHub only)
         versionName serverVersion + "-lite"
         ndk { abiFilters 'armeabi-v7a' }
         externalNativeBuild {
@@ -108,8 +113,34 @@ android {
     buildTypes {
         release {
             if (liteKeysOk) signingConfig signingConfigs.liteOld
-            minifyEnabled false
+            // ★★★ R8 (V12, docs/ANDROID-R8.md) — the same rules as the main app: Lite's own proguard-rules.pro, and the
+            //     JNI keep rules GENERATED from the main app's C++ (which Lite compiles as-is), checked after R8 runs.
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro', liteJniKeepRules
         }
+    }
+}
+
+// ── R8 and the JNI (docs/ANDROID-R8.md): rules from the C++ before R8; R8's dex checked against the C++ after it ──
+tasks.register('generateJniKeepRules', Exec) {
+    inputs.files(fileTree(liteCppDir) { include '**/*.cpp', '**/*.cc', '**/*.c', '**/*.h', '**/*.hpp'; exclude 'sdr-kit/**', 'cloudflared/**' })
+    inputs.file(liteR8Script)
+    outputs.file(liteJniKeepRules)
+    commandLine 'python3', '-I', liteR8Script.path, 'keep', '--cpp', liteCppDir.path, '--out', liteJniKeepRules.path
+}
+tasks.named('preBuild') { dependsOn 'generateJniKeepRules' }
+tasks.matching { it.name == 'minifyReleaseWithR8' }.configureEach { t ->
+    t.doLast {
+        // ★ --src: only what Lite COMPILES (its own Kotlin + the synced shared files). A class the C++ names that Lite
+        //   does not compile (VibeSpectrum, VibeBinaural …) is listed and skipped.
+        def pr = new ProcessBuilder(['python3', '-I', liteR8Script.path, 'check', '--cpp', liteCppDir.path,
+                                     '--src', file('src/main/java').path, '--src', file("${buildDir}/shared-src").path,
+                                     file("${buildDir}/intermediates/dex/release/minifyReleaseWithR8").path])
+                     .redirectErrorStream(true).start()
+        def out = pr.inputStream.text
+        logger.lifecycle(out.trim())
+        if (pr.waitFor() != 0) throw new GradleException("R8 removed or renamed something the C++ calls by name — see above (scripts/r8-jni.py)")
     }
 }
 
