@@ -18,9 +18,10 @@
 //     step, timing from the channel's averaged delay profile (integer window steps; their rate IS the sample-clock
 //     offset). ★ Each step moves the averaged profiles with the window, and of blocks as strong as the strongest the one
 //     the window already holds wins (2026-10-26 — see applyStepToRing and equalise).
-//  5. CHANNEL — the scattered gain references (table 58) interpolated in TIME (linear, y−1 symbols of look-ahead) then in
-//     FREQUENCY (linear, after removing the slope that the window offset puts across the band); equalised cells carry
-//     |H|² as their CSI weight. SIMD equaliser.
+//  5. CHANNEL — the scattered gain references (table 58) interpolated in TIME (cubic through four pilots, 2y−1 symbols of
+//     look-ahead) then in FREQUENCY (an MMSE/Wiener interpolator, after removing the delay centre's phase slope; its
+//     model is the channel's MEASURED delay profile and noise floor, rebuilt every frame — 2026-10-29); equalised cells
+//     carry |H|² as their CSI weight. SIMD equaliser.
 //  ★ V12 THE SIGNAL PANE (2026-10-26): delay spread and Doppler come from the same channel estimate (delayAccumulate,
 //    dopplerAccumulate), the lock group from the state machine (markLock, loseSync) — RxStatus's last block.
 //  6. FAC every frame (CRC-8 AND field validity — the second gate; the third is two agreeing FACs before anything is
@@ -116,7 +117,7 @@ private:
     std::vector<cf> buf_; int64_t bufBase_ = 0; int64_t samplesIn24_ = 0;
     void trimBuffer(int64_t keepFrom);
     void blankNew();
-    int64_t blankFrom_ = 0; float pAvg_ = 0; float blankWin_[8] = {0}; uint32_t blankWi_ = 0; int blankHold_ = 0, blankRun_ = 0; int64_t blanked_ = 0;
+    int64_t blankFrom_ = 0; float pAvg_ = 0, pSlow_ = 0; float blankWin_[8] = {0}; uint32_t blankWi_ = 0; int blankHold_ = 0, blankRun_ = 0; int64_t blanked_ = 0;
     int blankWarm_ = 0; int64_t blankRecent_[2] = {0, 0}, blankRecentN_[2] = {0, 0}; int blankBucket_ = 0;
     cf at(int64_t absIdx) const { return buf_[size_t(absIdx - bufBase_)]; }
     int64_t bufEnd() const { return bufBase_ + int64_t(buf_.size()); }
@@ -156,10 +157,16 @@ private:
     void equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W);
     void applyStepToRing(int delta);
     static constexpr int kWienerK = 12;
-    struct WienerTap { int col = 0; float w = 0; };
+    struct WienerTap { int col = 0; cf w{0, 0}; };
     std::vector<int> wienerCols_;
+    std::vector<int> wienerGeom_;                 // per carrier: which offset pattern its nearest columns make (−1 = none)
+    std::vector<std::vector<int>> wienerPat_;     // the distinct patterns: column offsets from the carrier, nearest first
     std::vector<WienerTap> wienerTaps_;           // nk × kWienerK
-    void buildWiener();
+    int wienerDmax_ = 0;                          // the largest carrier lag any tap uses
+    unsigned wienerTick_ = 0;
+    void buildWiener();                           // per plan: the columns, and the design model (flat over Tg)
+    void solveWiener(const std::vector<cf>& rho, double noiseRatio);
+    void updateWiener();                          // per frame: the model from the measured delay profile
     std::vector<float> pdp_; int pdpN_ = 0; std::vector<cf> twid_;
     // ── frames / super frames ──
     std::vector<cf> frY_; std::vector<float> frW_; int frS_ = 0;   // current frame's equalised cells, s × nk

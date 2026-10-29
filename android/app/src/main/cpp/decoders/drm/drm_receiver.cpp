@@ -77,7 +77,7 @@ Receiver::~Receiver() = default;
 void Receiver::reset() {
     rsRate_ = 0; rsH_.clear(); rsHist_.clear(); rsF_.clear(); rsPos_ = 0;
     buf_.clear(); bufBase_ = 0; samplesIn24_ = 0;
-    blankFrom_ = 0; pAvg_ = 0; blankHold_ = 0; blankRun_ = 0; blanked_ = 0; blankWarm_ = 0;
+    blankFrom_ = 0; pAvg_ = 0; pSlow_ = 0; blankHold_ = 0; blankRun_ = 0; blanked_ = 0; blankWarm_ = 0;
     blankRecent_[0] = blankRecent_[1] = 0; blankRecentN_[0] = blankRecentN_[1] = 0; blankBucket_ = 0;
     loseSync("reset");
     st_ = RxStatus();
@@ -192,7 +192,15 @@ void Receiver::trimBuffer(int64_t keepFrom) {
  *     in one symbol in five on a CLEAN synthetic signal and capped its MER at ~20 dB. 13 dB is e^-20 — never by chance —
  *     and the radar sat 18 dB up.
  *  ★ A level that RISES and stays (a transmitter switching on, a gain change) is not a pulse: after 100 ms of blanking
- *    the mean is taken from the new level. */
+ *    the mean is taken from the new level.
+ *  ★★★ …AND A SIGNAL COMING BACK OUT OF A FADE IS NOT A PULSE EITHER (2026-10-29). The 100 ms mean follows the signal
+ *    DOWN into a fade, and on the way back up the signal stood "13 dB over the mean" — and was zeroed, at the moment it
+ *    was returning. Annex B's fading channels lost most of their frames to it (a single Rayleigh path at 1 Hz Doppler,
+ *    30 dB SNR: 2.3 % blanked, 57 of 140 frames; unblanked, 140 of 140). The reference is now the LARGER of the 100 ms
+ *    mean and a 1 s mean: a fade drags the first down, not the second, so the recovery is judged against the signal's
+ *    usual level; a fading peak is judged against the 100 ms mean, which has followed it up. A pulse (18 dB on the RRI
+ *    recording) stands over both. The 8-sample test sits at 6× (7.8 dB): a Rayleigh channel spends e^-6 = 0.25 % of the
+ *    time that far over its own mean. */
 void Receiver::blankNew() {
     for (int64_t i = std::max(blankFrom_, bufBase_); i < bufEnd(); ++i) {
         cf& v = buf_[size_t(i - bufBase_)];
@@ -204,6 +212,7 @@ void Receiver::blankNew() {
          *  were blanked until the level-rise rule gave up (seen as 10 % blanked in the first second of every lock). */
         if (blankWarm_ < kFs / 100) {
             pAvg_ = blankWarm_ == 0 ? p + 1e-12f : pAvg_ + (p - pAvg_) / float(blankWarm_ + 1);
+            pSlow_ = pAvg_;
             ++blankWarm_;
             blankWin_[blankWi_ & 7] = p; ++blankWi_;
             continue;
@@ -213,15 +222,17 @@ void Receiver::blankNew() {
         //   enough to catch a pulse's skirts, which a single-sample test at 13 dB let through)
         blankWin_[blankWi_ & 7] = p; ++blankWi_;
         float s8 = 0; for (float q : blankWin_) s8 += q;
-        if (s8 > 4.0f * 8.0f * pAvg_ || p > 20.0f * pAvg_) {
+        const float ref = std::max(pAvg_, pSlow_);
+        if (s8 > 6.0f * 8.0f * ref || p > 20.0f * ref) {
             ++blankRun_;
-            if (blankRun_ > kFs / 10) { pAvg_ = s8 / 8.0f; blankRun_ = 0; continue; }
+            if (blankRun_ > kFs / 10) { pAvg_ = pSlow_ = s8 / 8.0f; blankRun_ = 0; continue; }
             for (int64_t j = std::max(bufBase_, i - 8); j < i; ++j) buf_[size_t(j - bufBase_)] = cf(0, 0);
             blankHold_ = 8;
         }
         if (blankHold_ > 0) { --blankHold_; v = cf(0, 0); ++blanked_; ++blankRecent_[blankBucket_]; continue; }
         blankRun_ = 0;
         pAvg_ += (p - pAvg_) * (1.0f / 2400.0f);
+        pSlow_ += (p - pSlow_) * (1.0f / 24000.0f);
     }
     blankFrom_ = bufEnd();
 }
@@ -491,7 +502,9 @@ void Receiver::runTrack() {
  *  The standard's design limit is the guard interval, so the channel's power-delay profile is modelled as flat over
  *  Tg about its mean (which the slope removal has put at zero): correlation sinc(Δk·Tg/Tu) between carriers Δk apart.
  *  Each carrier's estimate is the MMSE combination of its kWienerK nearest pilot columns (noise assumed 20 dB down),
- *  solved once per plan — at the band edges the taps are simply one-sided. */
+ *  solved once per plan — at the band edges the taps are simply one-sided.
+ *  ★ That flat model is only the START (2026-10-29): once the averaged delay profile has ~20 symbols in it, updateWiener
+ *    replaces it every frame with the channel's own measured profile and noise floor. */
 void Receiver::buildWiener() {
     const ModeInfo& mi = modeInfo(mode_);
     wienerCols_.clear();
@@ -501,45 +514,111 @@ void Receiver::buildWiener() {
         if (((k - mi.k0) % mi.x + mi.x) % mi.x != 0) continue;
         wienerCols_.push_back(j);
     }
-    const int K = kWienerK;
-    wienerTaps_.assign(size_t(emap_.nk) * K, WienerTap{});
-    const double span = double(tg_) / double(tu_);
-    auto corr = [&](double dk) { const double x = M_PI * dk * span; return std::abs(x) < 1e-9 ? 1.0 : std::sin(x) / x; };
-    const int nc = int(wienerCols_.size());
+    // each carrier's kWienerK nearest columns, once per plan
+    const int K = kWienerK, nc = int(wienerCols_.size());
+    wienerGeom_.assign(size_t(emap_.nk), -1); wienerPat_.clear(); wienerDmax_ = 0;
     for (int j = 0; j < emap_.nk; ++j) {
-        // the K nearest columns
         std::vector<int> idx(static_cast<size_t>(nc));
         for (int i = 0; i < nc; ++i) idx[size_t(i)] = i;
-        std::partial_sort(idx.begin(), idx.begin() + std::min(K, nc), idx.end(),
-                          [&](int a, int b) { return std::abs(wienerCols_[size_t(a)] - j) < std::abs(wienerCols_[size_t(b)] - j); });
         const int kk = std::min(K, nc);
-        std::vector<double> A(size_t(kk * kk)), rhs(static_cast<size_t>(kk));
-        for (int a = 0; a < kk; ++a) {
-            const int ca = wienerCols_[size_t(idx[size_t(a)])];
-            rhs[size_t(a)] = corr(double(j - ca));
-            for (int b = 0; b < kk; ++b) A[size_t(a * kk + b)] = corr(double(ca - wienerCols_[size_t(idx[size_t(b)])])) + (a == b ? 0.01 : 0.0);
+        std::partial_sort(idx.begin(), idx.begin() + kk, idx.end(),
+                          [&](int a, int b) { return std::abs(wienerCols_[size_t(a)] - j) < std::abs(wienerCols_[size_t(b)] - j); });
+        std::vector<int> o(static_cast<size_t>(kk));
+        for (int a = 0; a < kk; ++a) o[size_t(a)] = wienerCols_[size_t(idx[size_t(a)])] - j;
+        for (int a = 0; a < kk; ++a) for (int b = 0; b < kk; ++b) wienerDmax_ = std::max({ wienerDmax_, std::abs(o[size_t(a)]), std::abs(o[size_t(a)] - o[size_t(b)]) });
+        auto it = std::find(wienerPat_.begin(), wienerPat_.end(), o);
+        if (it == wienerPat_.end()) { wienerPat_.push_back(o); it = wienerPat_.end() - 1; }
+        wienerGeom_[size_t(j)] = kk ? int(it - wienerPat_.begin()) : -1;
+    }
+    // the design model until the channel's own profile has been measured: flat over Tg about the centre, 20 dB SNR
+    std::vector<cf> rho(size_t(2 * emap_.nk + 1));
+    const double span = double(tg_) / double(tu_);
+    for (int d = -emap_.nk; d <= emap_.nk; ++d) {
+        const double x = M_PI * d * span;
+        rho[size_t(d + emap_.nk)] = cf(float(std::abs(x) < 1e-9 ? 1.0 : std::sin(x) / x), 0.0f);
+    }
+    solveWiener(rho, 0.01);
+}
+
+/** The MMSE interpolator for correlation `rho` (indexed Δk + nk, unit at 0) and pilot noise-to-signal ratio `nr`: each
+ *  carrier from its nearest columns. Orthogonality, E[(H − Σ c_a y_a) y_b*] = 0, gives Σ_a c_a R_ab = r_b with
+ *  R_ab = ρ(c_a − c_b) + nr·δ_ab and r_b = ρ(k − c_b); solved by Gaussian elimination per carrier. */
+void Receiver::solveWiener(const std::vector<cf>& rho, double nr) {
+    const int K = kWienerK, nk = emap_.nk;
+    wienerTaps_.assign(size_t(nk) * K, WienerTap{});
+    auto R = [&](int d) { return std::complex<double>(rho[size_t(d + nk)]); };
+    std::vector<std::complex<double>> A(static_cast<size_t>(K * K)), rhs(static_cast<size_t>(K)), w(static_cast<size_t>(K));
+    // ★ the taps depend only on the columns' OFFSETS from the carrier (ρ is a function of Δk), and inside the band those
+    //   repeat every x carriers: one solve per distinct pattern (~40 in mode B SO 3), not one per carrier (207)
+    std::vector<std::vector<cf>> pw(wienerPat_.size());
+    for (size_t pi = 0; pi < wienerPat_.size(); ++pi) {
+        const std::vector<int>& o = wienerPat_[pi];
+        const int kk = int(o.size());
+        // row b is the equation for column b: Σ_a R_ab c_a = r_b, R_ab = ρ(o_a − o_b) + nr·δ_ab, r_b = ρ(−o_b)
+        for (int r = 0; r < kk; ++r) {
+            rhs[size_t(r)] = R(-o[size_t(r)]);
+            for (int c = 0; c < kk; ++c) A[size_t(r * kk + c)] = R(o[size_t(c)] - o[size_t(r)]) + (c == r ? nr : 0.0);
         }
-        // Gaussian elimination with partial pivoting
         for (int c = 0; c < kk; ++c) {
             int piv = c; for (int r = c + 1; r < kk; ++r) if (std::abs(A[size_t(r * kk + c)]) > std::abs(A[size_t(piv * kk + c)])) piv = r;
             if (piv != c) { for (int q = 0; q < kk; ++q) std::swap(A[size_t(c * kk + q)], A[size_t(piv * kk + q)]); std::swap(rhs[size_t(c)], rhs[size_t(piv)]); }
             for (int r = c + 1; r < kk; ++r) {
-                const double f = A[size_t(r * kk + c)] / A[size_t(c * kk + c)];
+                const std::complex<double> f = A[size_t(r * kk + c)] / A[size_t(c * kk + c)];
                 for (int q = c; q < kk; ++q) A[size_t(r * kk + q)] -= f * A[size_t(c * kk + q)];
                 rhs[size_t(r)] -= f * rhs[size_t(c)];
             }
         }
-        std::vector<double> w(static_cast<size_t>(kk));
         for (int c = kk - 1; c >= 0; --c) {
-            double v = rhs[size_t(c)];
+            std::complex<double> v = rhs[size_t(c)];
             for (int q = c + 1; q < kk; ++q) v -= A[size_t(c * kk + q)] * w[size_t(q)];
             w[size_t(c)] = v / A[size_t(c * kk + c)];
         }
+        pw[pi].resize(size_t(kk));
+        for (int c = 0; c < kk; ++c) pw[pi][size_t(c)] = cf(float(w[size_t(c)].real()), float(w[size_t(c)].imag()));
+    }
+    for (int j = 0; j < nk; ++j) {
+        const int pi = wienerGeom_[size_t(j)];
+        if (pi < 0) continue;
+        const std::vector<int>& o = wienerPat_[size_t(pi)];
         for (int a = 0; a < K; ++a) {
             WienerTap& t = wienerTaps_[size_t(j * K + a)];
-            if (a < kk) { t.col = wienerCols_[size_t(idx[size_t(a)])]; t.w = float(w[size_t(a)]); } else { t.col = wienerCols_.empty() ? 0 : wienerCols_[0]; t.w = 0; }
+            if (a < int(o.size())) { t.col = j + o[size_t(a)]; t.w = pw[size_t(pi)][size_t(a)]; }
+            else { t.col = j + o[0]; t.w = cf(0, 0); }
         }
     }
+}
+
+/** ★★ THE INTERPOLATOR FOLLOWS THE CHANNEL'S MEASURED DELAY PROFILE (2026-10-29, the French broadcast on 5970 kHz).
+ *  The design model — flat over Tg — throws away whatever the channel holds outside it, and night-time HF can hold a
+ *  lot: diffuse scatter spread over most of the profile's span. The averaged profile pdp_ the timing loop already keeps
+ *  IS the channel's power-delay profile plus a flat noise floor, so the textbook MMSE interpolator can be built from it:
+ *  correlation ρ(Δk) = Σ_t P(t)·e^{−j2πΔk(t−τc)/Tu} (τc: the derotation centre), noise from the floor.
+ *  Every other frame (800 ms: the profile itself is a ~1 s average); the whole of it costs ~5 % of the receiver's CPU. */
+void Receiver::updateWiener() {
+    static const bool flatOnly = getenv("VIBE_DRM_WFLAT") != nullptr;   // ★ bench knob: the design model only, A/B
+    if (flatOnly || (++wienerTick_ & 1)) return;
+    const int P = int(pdp_.size());
+    if (P == 0 || pdpN_ < 20 || wienerCols_.empty() || wienerPat_.empty() || twid_.size() != size_t(tu_)) return;
+    // the noise floor: a low percentile (paths occupy part of the span, noise all of it)
+    std::vector<float> tmp = pdp_;
+    std::nth_element(tmp.begin(), tmp.begin() + P / 5, tmp.end());
+    const double floor = std::max(1e-30, double(tmp[size_t(P / 5)]));
+    std::vector<double> Pm(static_cast<size_t>(P));
+    double sig = 0;
+    for (int t = 0; t < P; ++t) { const double v = double(pdp_[size_t(t)]) - floor; Pm[size_t(t)] = v > floor ? v : 0.0; sig += Pm[size_t(t)]; }
+    if (!(sig > 0)) return;
+    const int nk = emap_.nk, tc = int(std::lround(tauAvg_));
+    std::vector<cf> rho(size_t(2 * nk + 1), cf(0, 0));
+    for (int t = 0; t < P; ++t) {
+        if (Pm[size_t(t)] <= 0) continue;
+        int dl = t - tc; while (dl > P / 2) dl -= P; while (dl <= -P / 2) dl += P;
+        const float wgt = float(Pm[size_t(t)] / sig);
+        for (int d = -wienerDmax_; d <= wienerDmax_; ++d)   // e^{−j2π d·dl/Tu} = conj(twid_[(d·dl) mod Tu]); only the lags the taps use
+            rho[size_t(d + nk)] += wgt * std::conj(twid_[size_t(((int64_t(d) * dl) % tu_ + tu_) % tu_)]);
+    }
+    // pilot noise-to-signal: per tap the floor is Ncols·σ², and the profile's signal sums to P·Ncols·S
+    const double nr = std::min(1.0, std::max(1e-3, floor * P / sig));
+    solveWiener(rho, nr);
 }
 
 void Receiver::applyStepToRing(int delta) {
@@ -744,6 +823,7 @@ void Receiver::equalise(const Sym& sy, std::vector<cf>& Y, std::vector<float>& W
 // ── FAC per frame ───────────────────────────────────────────────────────────────────────────────────────────────
 
 void Receiver::frameDone() {
+    updateWiener();
     channelStats();   // ★ the Signal pane's delay spread and Doppler, once per frame (400 ms) — a frame whose FAC fails too
     // the FAC cells in map order
     std::vector<cf> fy; std::vector<float> fw;
