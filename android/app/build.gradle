@@ -81,6 +81,15 @@ def enableMinifyInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBu
  */
 def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
+/**
+ * ★★★ R8 KEEP RULES FOR JNI, GENERATED FROM THE C++ (docs/ANDROID-R8.md). Everything the native server reaches by name
+ * — the exported Java_com_vibesdr_app_* natives and the methods it calls back by FindClass/GetStaticMethodID — is read
+ * out of src/main/cpp by scripts/r8-jni.py, so a new JNI call is kept without anybody writing a rule.
+ */
+def vibeJniKeepRules = file("${buildDir}/generated/r8/vibe-jni-keep.pro")
+def vibeR8Script = new File(projectRoot, 'scripts/r8-jni.py')
+def vibeCppDir = file('src/main/cpp')
+
 android {
     ndkVersion rootProject.ext.ndkVersion
 
@@ -158,7 +167,9 @@ android {
             def enableShrinkResources = findProperty('android.enableShrinkResourcesInReleaseBuilds') ?: 'false'
             shrinkResources enableShrinkResources.toBoolean()
             minifyEnabled enableMinifyInReleaseBuilds
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            // ★★★ R8 (V12, Play's "DEX code optimization" notice). The third file is GENERATED from the C++ on every
+            //     release build — what the native server reaches by name — see scripts/r8-jni.py and docs/ANDROID-R8.md.
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro", vibeJniKeepRules
             def enablePngCrunchInRelease = findProperty('android.enablePngCrunchInReleaseBuilds') ?: 'true'
             crunchPngs enablePngCrunchInRelease.toBoolean()
         }
@@ -211,6 +222,31 @@ tasks.register('requireUploadKey') {
 }
 // ★ Every release variant's first task: preReleaseBuild, and per flavour preCurrentReleaseBuild / preLegacyReleaseBuild.
 tasks.matching { it.name ==~ /pre\w*ReleaseBuild/ }.configureEach { dependsOn 'requireUploadKey' }
+
+// ── R8 and the JNI (docs/ANDROID-R8.md) ───────────────────────────────────────────────────────────────────────
+// ★ Before R8: write the keep rules from the C++. ★★ After R8: read its OUTPUT (the dex) and FAIL the build if a class
+//   or method the C++ reaches by name is missing, renamed or re-signed — before anything is packaged, so no APK or AAB
+//   that would die at the first native call can come out of a release build.
+tasks.register('generateJniKeepRules', Exec) {
+    inputs.files(fileTree(vibeCppDir) { include '**/*.cpp', '**/*.cc', '**/*.c', '**/*.h', '**/*.hpp'; exclude 'sdr-kit/**', 'cloudflared/**' })
+    inputs.file(vibeR8Script)
+    outputs.file(vibeJniKeepRules)
+    commandLine 'python3', '-I', vibeR8Script.path, 'keep', '--cpp', vibeCppDir.path, '--out', vibeJniKeepRules.path
+}
+// ★ From preBuild, so every task that reads the rules (R8, lint's model of the build) runs after it — cheap, and
+//   up to date unless the C++ moved.
+tasks.named('preBuild') { dependsOn 'generateJniKeepRules' }
+tasks.matching { it.name ==~ /minify\w*ReleaseWithR8/ }.configureEach { t ->
+    t.doLast {
+        def variant = (t.name =~ /minify(\w*Release)WithR8/)[0][1]
+        def dexDir = file("${buildDir}/intermediates/dex/${variant[0].toLowerCase() + variant.substring(1)}/${t.name}")
+        def pr = new ProcessBuilder(['python3', '-I', vibeR8Script.path, 'check', '--cpp', vibeCppDir.path,
+                                     '--src', file('src/main/java').path, dexDir.path]).redirectErrorStream(true).start()
+        def out = pr.inputStream.text
+        logger.lifecycle(out.trim())
+        if (pr.waitFor() != 0) throw new GradleException("R8 removed or renamed something the C++ calls by name — see above (scripts/r8-jni.py)")
+    }
+}
 
 // Flatten the needed src/main/cpp/sdr-kit/<ABI>/lib/*.so -> build/sdrkit-jniLibs.
 // V5: only librtlsdr + libusb (symlinks dereferenced to real files by Copy).
