@@ -11,9 +11,13 @@
  * ★ A call that sent a POSITION gets MAP: the position pinned on this server's own map (the same GPU map / Leaflet
  *   fallback the spots map uses), with this receiver's house beside it.
  * ★ The channel keys tune the DSC frequencies as a DSC receiver does: USB with the dial 1.7 kHz below (2185.8 for
- *   2187.5), or channel 70 in NFM — only those this radio can reach.
+ *   2187.5), or channel 70 in NFM — only those this radio can reach. The box itself carries the keys for the band the dial
+ *   is on (distress + routine, ITU-R M.541) and, when the dial sits ON an assigned frequency, a one-tap TUNE … USB.
  */
 import { mapglVendor, type MapGLKit } from './mapgl';
+import { DSC_DISTRESS, dscTuneFor as sharedTuneFor, dscCentreFor } from '../../../src/utils/dscChannels';
+export { DSC_DISTRESS, DSC_ROUTINE, DSC_ALL, dscBandOf, dscBandLabel, dscBandChannels, dscChannelOn, dscChannelsForDial,
+         dscReachable, dscTuneOffer, dscKeyTitle, dscDialText, type DscBand, type DscChannel } from '../../../src/utils/dscChannels';
 
 export interface DscCall {
   id: number; utc: number; rf: number; repeat: number;
@@ -24,36 +28,22 @@ export interface DscCall {
   quality: number; band: 'hf' | 'vhf'; line: string;
 }
 
-/** The DSC distress and safety frequencies (ITU RR Appendix 15) and channel 70. */
-export const DSC_CHANNELS: { hz: number; label: string; vhf: boolean }[] = [
-  { hz: 2187500, label: '2187.5', vhf: false },
-  { hz: 4207500, label: '4207.5', vhf: false },
-  { hz: 6312000, label: '6312', vhf: false },
-  { hz: 8414500, label: '8414.5', vhf: false },
-  { hz: 12577000, label: '12577', vhf: false },
-  { hz: 16804500, label: '16804.5', vhf: false },
-  { hz: 156525000, label: 'Ch 70', vhf: true },
-];
-const TONE = 1700;
+/** The DSC distress and safety frequencies (ITU RR Appendix 15) and channel 70. ★ The routine channels (ITU-R M.541)
+ *  and every rule about where to tune are src/utils/dscChannels.ts — one table, read by the app too. */
+export const DSC_CHANNELS: { hz: number; label: string; vhf: boolean }[] = DSC_DISTRESS.map(({ hz, label, vhf }) => ({ hz, label, vhf }));
 
 /** Where to tune for a DSC channel: USB 1.7 kHz below, or channel 70 in NFM. */
 export function dscTuneFor(ch: { hz: number; vhf: boolean }): { hz: number; mode: string } {
-  return ch.vhf ? { hz: ch.hz, mode: 'nfm' } : { hz: ch.hz - TONE, mode: 'usb' };
+  return sharedTuneFor(ch);
 }
 
 /** The attach parameters for the listener's dial and mode. ★ The audio centre is worked out from the NEAREST DSC
- *  frequency, so a dial a little off the usual 1.7 kHz (2186.0 USB) still decodes; anywhere else, 1700 Hz. */
+ *  channel, distress or routine (dscCentreFor), so a dial a little off the usual 1.7 kHz (2186.0 USB) still decodes;
+ *  anywhere else, 1700 Hz. */
 export function dscParams(dialHz: number, mode: string): Record<string, unknown> {
   const m = (mode || '').toLowerCase();
   if (m === 'nfm' || m === 'fm' || Math.abs(dialHz - 156525000) < 25000) return { band: 'vhf' };
-  let centre = TONE;
-  let best = Infinity;
-  for (const c of DSC_CHANNELS) {
-    if (c.vhf) continue;
-    const a = m === 'lsb' ? dialHz - c.hz : c.hz - dialHz;
-    if (a >= 300 && a <= 3000 && Math.abs(a - TONE) < best) { best = Math.abs(a - TONE); centre = a; }
-  }
-  return { band: 'hf', center_frequency: Math.round(centre) };
+  return { band: 'hf', center_frequency: dscCentreFor(dialHz, m) };
 }
 
 /** A dsc_call's data, re-checked field by field (it is from the server, but every client checks what it shows). */

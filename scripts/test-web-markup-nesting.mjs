@@ -44,7 +44,11 @@ for (const id of ['menu', 'audioPanel', 'decodersPanel', 'recordingsPanel']) {
 for (const [id, p] of parent) {
   if (/Settings$/.test(id) && parent.get(id) && html.includes(`class="subPanel" id="${id}"`)) ok(p === 'decodersPanel', `#${id} is in the decoders panel (parent: ${p || 'top'})`);
 }
-ok(parent.get('spotsSection') === 'decodersPanel', `DIGITAL SPOTS / MAP sit in the decoders panel (parent: ${parent.get('spotsSection') || 'top'})`);
+// ★ V12 (2026-10-29): VIEWS (MAP, GALLERY) sits in the decoders panel, and the spots section (its note and parked keys) in VIEWS.
+ok(parent.get('viewsSec') === 'decodersPanel', `VIEWS sits in the decoders panel (parent: ${parent.get('viewsSec') || 'top'})`);
+ok(parent.get('viewsRow') === 'viewsSec' && parent.get('mapBtn') === 'viewsRow' && parent.get('galleryBtn') === 'viewsRow', `MAP and GALLERY are VIEWS keys (parents: ${parent.get('mapBtn')}, ${parent.get('galleryBtn')})`);
+ok(parent.get('spotsSection') === 'viewsSec', `the DIGITAL SPOTS note sits under VIEWS (parent: ${parent.get('spotsSection') || 'top'})`);
+ok(parent.get('dscKeys') === 'dscList', `the DSC box has its channel keys (parent: ${parent.get('dscKeys') || 'top'})`);
 
 console.log(fails ? `\n${fails} failed` : '\nall passed');
 process.exit(fails ? 1 : 0);

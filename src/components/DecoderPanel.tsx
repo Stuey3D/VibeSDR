@@ -42,7 +42,7 @@ import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
 import CwView, { cwItems } from './CwView';
 import JttyView, { jttyItems } from './JttyView';
-import DscView, { dscHasPos } from './DscView';
+import DscView, { dscHasPos, type DscBoxKey } from './DscView';
 import AprsView from './AprsView';   // ★ V12 APRS
 import type { AprsBoxRow } from '../services/tracks';
 import type { CwList, CwSpot } from '../services/cwList';
@@ -120,7 +120,7 @@ export interface DecoderPanelProps {
   /** ★ V12 JTTY (VibeServer): the stations and spots (JttyView) and its tune (USB, 1500 Hz below) — set while JTTY runs. */
   jtty?:           { list: JttySignal[]; spots: JttySpot[]; onTune: (rfHz: number) => void } | null;
   /** ★ V12 DSC (VibeServer): the calls newest first (DscView) and MAP for a position — set while DSC runs. */
-  dsc?:            { calls: DscCall[]; onMap?: (c: DscCall) => void } | null;
+  dsc?:            { calls: DscCall[]; onMap?: (c: DscCall) => void; keys?: DscBoxKey[] } | null;
   /** ★ V12 digital spots: the modes THIS server decodes (vibeserver.json spotModes — the MODE filter's choices, matched by
    *  family: PSK31/PSK63 → PSK). Undefined = not a VibeServer that says (UberSDR's four). */
   spotModes?:      string[];
@@ -763,7 +763,8 @@ export default function DecoderPanel({
   // "same kinda thing with ADSB except nothing to select just scroll" — so they navigate but
   // Enter does nothing rather than pretending to.
   // ★ CW's rows (signals, then spots) are selectable too: Enter tunes to the one highlighted.
-  const listLen = isDabMode ? dabProgrammes.length : (isCw || isJtty) ? cwRows.length : isDsc ? dsc!.calls.length
+  // ★ DSC: the box's channel keys (and a TUNE offer) come first, then the calls
+  const listLen = isDabMode ? dabProgrammes.length : (isCw || isJtty) ? cwRows.length : isDsc ? (dsc!.keys?.length ?? 0) + dsc!.calls.length
                 : isAprs ? aprs!.rows.length
                 : isScanner ? Math.max(1, scanNav.current.len) : 0;
 
@@ -903,7 +904,11 @@ export default function DecoderPanel({
   cwSelectRef.current = isCw ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) cw!.onTune(r.hz); }
     : isJtty ? (i: number) => { const r = cwRows[i]; if (r && r.hz > 0) jtty!.onTune(r.hz); }
     // ★ DSC: Enter on a call with a position is its MAP (rows are otherwise read, not pressed)
-    : isDsc ? (i: number) => { const c = dsc!.calls[i]; if (c && dscHasPos(c)) dsc!.onMap?.(c); }
+    : isDsc ? (i: number) => {
+        const nk = dsc!.keys?.length ?? 0;
+        if (i < nk) { dsc!.keys![i].press(); return; }   // a channel key / the TUNE offer
+        const c = dsc!.calls[i - nk]; if (c && dscHasPos(c)) dsc!.onMap?.(c);
+      }
     // ★ V12 APRS: Enter on a station = the map, on it (the row's press)
     : isAprs ? (i: number) => { const r = aprs!.rows[i]; if (r && aprs!.onMap) aprs!.onMap(r.key); }
     : null;
@@ -1491,7 +1496,7 @@ export default function DecoderPanel({
                     scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}
         {!minimised && isDsc && (
-          <DscView calls={dsc!.calls} bodySize={bodySize} focusIdx={kbZone === 'list' ? listIdx : -1} onMap={dsc!.onMap}
+          <DscView calls={dsc!.calls} keys={dsc!.keys} bodySize={bodySize} focusIdx={kbZone === 'list' ? listIdx : -1} onMap={dsc!.onMap}
                    scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}
         {!minimised && isAprs && (

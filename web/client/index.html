@@ -3062,6 +3062,41 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   background: rgba(0,0,0,0.3);
 }
 .subPanel .seg { justify-content: flex-end; }
+/* ★★★ V12 ONE KEY SIZE (Stuart, 2026-10-29: "make the buttons for the decoders one uniform size … left justify them under
+   their category title"). decoderBandsDom.ts measures the widest legend and the panel, then sets --dk-cols: every key one
+   column wide, rows left-justified, a short row ending early. .dkStack (the narrowest panels) puts the glyph above. */
+#decodersPanel .decKeys { display: grid; grid-template-columns: repeat(var(--dk-cols, 3), minmax(0, 1fr)); gap: 6px;
+                          position: relative; }
+#decodersPanel .decKeys > .btn { width: 100%; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis;
+                                 white-space: nowrap; justify-content: center; }
+#decodersPanel .decKeys > .btn, #decodersPanel .dkMeasure { padding-left: 0.6em; padding-right: 0.6em; }
+#decodersPanel.dkSmall .decKeys > .btn, #decodersPanel.dkSmall .dkMeasure { font-size: 0.82em; letter-spacing: 0.04em;
+                                                                            padding-left: 0.45em; padding-right: 0.45em; }
+#decodersPanel.dkStack .decKeys > .btn .modeIco { display: block; margin: 0 auto 2px; }
+#decodersPanel .decKeys > .subPanel .mrow { justify-content: flex-start; }
+/* ★★★ A KEY'S OPTIONS POP OUT OF IT ("the options look like they have popped out of the decoder button itself onto the
+   row below"): the open key stands on a tab of its own colour that runs down into the options panel on the next row —
+   one shape. The tab is the panel's ::before, placed under the key (--tab-l / --tab-w / --tab-h from decoderBandsDom). */
+#decodersPanel .decKeys > .subPanel { grid-column: 1 / -1; margin: 0 -4px; position: relative; border: none;
+  background: var(--dk-shade, rgba(255,200,0,0.12)); border-radius: 8px; }
+@supports (background: color-mix(in srgb, red 10%, transparent)) {
+  #decodersPanel .decKeys > .subPanel { --dk-shade: color-mix(in srgb, var(--btn-active-bdr) 16%, transparent); }
+}
+#decodersPanel .decKeys > .subPanel::before { content: ''; position: absolute; z-index: -1; pointer-events: none;
+  left: var(--tab-l, 0); width: var(--tab-w, 0); top: calc(-1 * var(--tab-h, 0px)); height: var(--tab-h, 0px);
+  background: var(--dk-shade, rgba(255,200,0,0.12)); border-radius: 8px 8px 0 0; }
+#decodersPanel .decKeys > .subPanel.tabL { border-top-left-radius: 0; }
+#decodersPanel .decKeys > .subPanel.tabR { border-top-right-radius: 0; }
+#decodersPanel .decKeys > .subPanel .seg { justify-content: flex-start; }
+#viewsSec[hidden] { display: none; }
+#spotsPark { display: none; }
+/* ★★ V12 the DSC box's own keys: the band's channels, and the TUNE offer above them */
+#dscKeys { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 6px; }
+#dscKeys:empty { display: none; }
+#dscKeys .btn { min-width: 4.6em; font-variant-numeric: tabular-nums; }
+#dscKeys .btn.distress:not(.on) { border-color: #FF4B4B; }
+#dscKeys .dscOffer { flex: 1 1 100%; text-align: left; white-space: normal; }
+#dscKeys .dscOffer small { display: block; opacity: 0.75; font-size: 10px; margin-top: 2px; }
 
 
 /* Mirrored bandwidth sliders. */
@@ -4087,7 +4122,9 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 APRS: the stations heard, the messages, and the packets as they arrive. -->
     <div id="aprsList"><div id="aprsRows"></div><div class="aprsHead" id="aprsMsgHead" hidden>MESSAGES</div><div id="aprsMsgs"></div><div class="aprsHead">PACKETS</div><div id="aprsLog"></div></div>
     <!-- ★★ DSC: the calls, newest first — the server's line, coloured by distress / urgency / safety / routine (dsc.ts). -->
-    <div id="dscList"><div id="dscRows"></div></div>
+    <!-- ★★ V12 (2026-10-29): the box's own channel keys — the band the dial is on (distress + routine), else the distress
+         set — and a one-tap TUNE when the dial sits ON an assigned frequency (main.ts renderDscKeys). -->
+    <div id="dscList"><div id="dscKeys"></div><div id="dscRows"></div></div>
     <!-- ★★ JTTY: every JTTY station in the passband (lowest frequency first, coloured by confidence), then the spots (jtty.ts). -->
     <div id="jttyList"><div id="jttyRows"></div><div id="jttySpotsHead">SPOTS</div><div id="jttySpots"></div></div>
     <!-- ★ ADVANCED RDS. Everything the station is transmitting, plus the receiver's own
@@ -5103,18 +5140,13 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="decClose">CLOSE</button>
   </div>
 
-  <!-- ★★ V12: what this SERVER's decoders have heard — background decoding and listeners' — kept on the server. -->
-  <div class="btnRow">
-    <button class="btn" id="galleryBtn" title="What this server's decoders have heard — background decoding while nobody listened, and listeners' own">GALLERY</button>
-  </div>
-
   <!-- ★★★ V12 TUNES THE RADIO ITSELF (Stuart, 2026-10-28) — ADS-B, AIS, DAB, ISM, NDB and DIGITAL SPOTS: BAND: each moves
        the radio and opens its own view, so they sit above the band tabs and are never dimmed. Built by decoderBandsDom.ts
        from main.ts's own toggles and availability (the same keys stay in the mode menu); SPOTS: BAND is the spots section's
        node, moved here while the section is shown. -->
   <div id="wholeRadioSec" hidden>
     <h2>TUNES THE RADIO ITSELF</h2>
-    <div class="btnRow" id="wholeRadio"></div>
+    <div class="btnRow decKeys" id="wholeRadio"></div>
     <div class="lbl wrap" id="wholeRadioHint"></div>
   </div>
   <h2>DECODERS</h2>
@@ -5125,6 +5157,33 @@ select.btn { padding: 6px 8px; }
        its usual frequencies is DIMMED, never disabled. src/utils/decoderBands.ts is the table, shared with the app. -->
   <div class="seg" id="decBandTabs" role="tablist" aria-label="Band"></div>
   <div id="decGroups"></div>
+  <!-- ★★★ V12 (Stuart, 2026-10-29): VIEWS — the MAP of what has been spotted and the server's GALLERY (GALLERY was above the
+       decoders; MAP was in DECODED SPOTS). Same uniform keys as the decoders (decoderBandsDom.ts). -->
+  <div id="viewsSec">
+    <h2>VIEWS</h2>
+    <div class="btnRow decKeys" id="viewsRow">
+      <button class="btn" id="mapBtn" title="The spots on a map — opens in a new tab">&#128506; MAP</button>
+      <!-- ★★ V12: what this SERVER's decoders have heard — background decoding and listeners' — kept on the server. -->
+      <button class="btn" id="galleryBtn" title="What this server's decoders have heard — background decoding while nobody listened, and listeners' own">GALLERY</button>
+    </div>
+    <!-- ★ One section, one switch: the owner's "Digital spots / map" entry hides the whole of it (and VIEWS' MAP).
+         ★ V12: its keys live in the decoder groups (DIGITAL SPOTS in Amateur, BAND in TUNES THE RADIO ITSELF) and the MAP in
+         VIEWS — they wait in #spotsPark between layouts; what is left is the note on how spotting works. -->
+    <div id="spotsSection">
+    <!-- ★★ V12 (2026-10-26): TWO WAYS TO SPOT. SINGLE MODE is the button there always was — the mode(s) at your dial,
+         cheap, any server. BAND reads a whole band's digital frequencies at once, every mode on its own dial; the arrows then
+         step BANDS (2200 m … 10 m, 6 m, 4 m, 2 m, 70 cm), the readout names the band and the drawn VFO is the band's span.
+         Band is shown only where this radio reaches a band; greyed with the server's reason where the owner has it off. -->
+    <div class="btnRow" id="spotsPark">
+      <button class="btn" id="spotsBtn" title="The digital modes at your dial (FT8 and FT4 on your passband)">DIGITAL SPOTS: SINGLE MODE</button>
+      <button class="btn" id="spotsBandBtn" title="A whole band's digital frequencies at once — every mode on its own dial" hidden>DIGITAL SPOTS: BAND</button>
+    </div>
+    <div class="lbl wrap" id="spotsBandWhy" style="margin-top:6px" hidden></div>
+    <div class="lbl wrap" style="margin-top:6px">
+      Decoding runs on the server. Tap a spot to tune. In BAND the tuning arrows step bands; type a frequency for an exact one.
+    </div>
+    </div>
+  </div>
   <div class="btnRow" id="decPark" hidden>
     <button class="btn" data-dec="rtty">RTTY</button>
     <button class="btn" data-dec="cw" hidden title="Morse — the signal in your passband decoded, every other one in it listed; or SKIMMER: every CW signal across a segment around your dial">CW</button>
@@ -5146,7 +5205,9 @@ select.btn { padding: 6px 8px; }
     <button class="btn" data-dec="rds" title="Advanced RDS — the full data set plus signal diagnostics. Basic RDS (station name, RadioText, PI) is always on.">ADV RDS</button>
   </div>
 
-  <!-- Settings for the selected mode appear underneath, as in the app. -->
+  <!-- ★★★ Settings for the selected decoder POP OUT OF ITS KEY (Stuart, 2026-10-29): decoderBandsDom.ts placeOptions moves
+       the open .subPanel into the key's grid, on the row directly under the key's own row, on a tab of the key's colour.
+       Between times they wait here, hidden. -->
   <!-- ★ The station is a PRESET, exactly like RTTY's, because each one implies its own frequency
        AND its own mode — and getting the mode wrong is the difference between decoding and a flat
        line. The label carries both so nobody has to look them up. -->
@@ -5227,15 +5288,21 @@ select.btn { padding: 6px 8px; }
       that carried it. <b>MAP</b> in the box shows them on the map.</div>
   </div>
   <!-- ★★ DSC (V12, 2026-10-26): the DSC distress and safety frequencies, tuned as a DSC receiver does (USB 1.7 kHz below,
-       or channel 70 in NFM) — only those this radio reaches are drawn (main.ts initDscChannels). -->
+       or channel 70 in NFM) — only those this radio reaches are drawn (main.ts initDscChannels). ★ 2026-10-29: and the
+       ROUTINE channels (ITU-R M.541) of the band the dial is on (src/utils/dscChannels.ts). -->
   <div class="subPanel" id="dscSettings" hidden>
     <div class="mrow">
-      <label>CHANNEL</label>
+      <label>DISTRESS</label>
       <div class="seg" id="dscChans"></div>
     </div>
-    <div class="hint" id="dscHint">Tune a DSC frequency in <b>USB</b> with the dial 1.7 kHz below it (2185.8 for
-      2187.5 kHz) — or press a channel. Channel 70 (156.525 MHz) is <b>NFM</b>. 8414.5 kHz is the busiest by day,
-      2187.5 kHz at night. Each call is shown as it is decoded; a position sent gets <b>MAP</b>.</div>
+    <div class="mrow" id="dscRoutineRow" hidden>
+      <label id="dscRoutineLbl">ROUTINE</label>
+      <div class="seg" id="dscRoutine"></div>
+    </div>
+    <div class="hint" id="dscHint">A listed DSC frequency is the ASSIGNED frequency, not the dial: tune <b>USB</b> with the
+      dial 1.7 kHz below it (4206.8 for 4208.5 kHz) — or press a channel. Channel 70 (156.525 MHz) is <b>NFM</b>. DISTRESS
+      holds the distress and safety channels; the band you are on lists its routine ones too. 8414.5 kHz is the busiest by
+      day, 2187.5 kHz at night. Each call is shown as it is decoded; a position sent gets <b>MAP</b>.</div>
   </div>
 
   <!-- ★★ JTTY (V12, 2026-10-26): the announced calling frequencies (USB dial) — only those this radio reaches are drawn
@@ -5351,23 +5418,6 @@ select.btn { padding: 6px 8px; }
     published its own location.
   </div>
 
-  <!-- ★ One section, one switch: the owner's "Digital spots / map" entry hides the whole of it. -->
-  <div id="spotsSection">
-  <h2>DECODED SPOTS</h2>
-  <!-- ★★ V12 (2026-10-26): TWO WAYS TO SPOT. SINGLE MODE is the button there always was — the mode(s) at your dial,
-       cheap, any server. BAND reads a whole band's digital frequencies at once, every mode on its own dial; the arrows then
-       step BANDS (2200 m … 10 m, 6 m, 4 m, 2 m, 70 cm), the readout names the band and the drawn VFO is the band's span.
-       Band is shown only where this radio reaches a band; greyed with the server's reason where the owner has it off. -->
-  <div class="btnRow">
-    <button class="btn" id="spotsBtn" title="The digital modes at your dial (FT8 and FT4 on your passband)">DIGITAL SPOTS: SINGLE MODE</button>
-    <button class="btn" id="spotsBandBtn" title="A whole band's digital frequencies at once — every mode on its own dial" hidden>DIGITAL SPOTS: BAND</button>
-    <button class="btn" id="mapBtn" title="Opens in a new tab">&#128506; MAP</button>
-  </div>
-  <div class="lbl wrap" id="spotsBandWhy" style="margin-top:6px" hidden></div>
-  <div class="lbl wrap" style="margin-top:6px">
-    Decoding runs on the server. Tap a spot to tune. In BAND the tuning arrows step bands; type a frequency for an exact one.
-  </div>
-  </div>
 </div>
 
 <!-- ★★ V12 THE GALLERY (2026-10-22): what this server's decoders heard — background decoding while nobody listened,

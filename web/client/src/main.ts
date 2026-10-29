@@ -26,7 +26,7 @@ import { guard, noteFault, faultSummary, faultTotal } from '../../../src/service
   () => ({ total: faultTotal(), faults: faultSummary() });
 import { initMobileControls } from './mobile';
 import { addModeIcon } from './modeIconDom';   // ★ V12 mode icons
-import { layoutDecoderBands, decoderBandsDial, setWholeRadioKeys } from './decoderBandsDom';   // ★ V12 decoder panel by band
+import { layoutDecoderBands, decoderBandsDial, setWholeRadioKeys, placeOptions, sizeKeys } from './decoderBandsDom';   // ★ V12 decoder panel by band
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the contract module the app reads too, and the browser's panel.
 import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeLabel, icomClientMode, icomBanner,
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
@@ -137,7 +137,8 @@ import { mapglVendor, probeMapGL, type MapGLKit } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { LEAFLET_ASSET } from './leafletAsset';
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
-import { DSC_CHANNELS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, type DscCall, type DscPin } from './dsc';
+import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
+         dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle, type DscCall, type DscPin, type DscChannel } from './dsc';
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
@@ -1941,6 +1942,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       const spotsOff = blockedModes.has('spots');
       const ss = document.getElementById('spotsSection');
       if (ss) ss.hidden = spotsOff;
+      $('mapBtn').hidden = spotsOff;   // ★ V12: the MAP is in VIEWS now, beside GALLERY — the same switch hides it
+      if (isPanelOpen('decodersPanel')) queueMicrotask(sizeKeys);
       if (spotsOff && decoders?.spotsEnabled) {
         decoders.setSpots(false);
         $<HTMLButtonElement>('spotsBtn').classList.remove('on');
@@ -11436,20 +11439,63 @@ function dscTune(ch: { hz: number; vhf: boolean }) {
   renderFreq();
   reattachIf('dsc');
 }
-/** ★ The DSC channels this radio can actually reach — the rest are not drawn (AGENTS.md: no dead controls). */
+/** ★ A DSC channel this radio can reach where it would be TUNED (AGENTS.md: no dead controls — on every radio alike). */
+const dscReach = (hz: number) => clampTune(hz) === hz;
+function dscKey(ch: DscChannel, on: boolean): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.className = 'btn' + (on ? ' on' : '') + (ch.kind === 'distress' ? ' distress' : '');
+  b.textContent = ch.label;
+  b.title = dscKeyTitle(ch);
+  b.onclick = () => dscTune(ch);
+  return b;
+}
+/** ★ The settings' channels: DISTRESS (every band this radio reaches) and the ROUTINE channels (ITU-R M.541) of the band
+ *  the dial is on — only those this radio can actually reach (AGENTS.md: no dead controls). */
+let dscPanelSig = '';
 function initDscChannels() {
   const host = document.getElementById('dscChans');
   if (!host) return;
+  const dial = spec ? Math.round(spec.frequency) : 0, md = String(spec?.mode ?? '');
+  const band = dscBandOf(dial);
+  const routine = band ? dscBandChannels(band).filter((c) => c.kind === 'routine' && dscReach(dscTuneFor(c).hz)) : [];
+  const distress = DSC_DISTRESS.filter((c) => dscReach(dscTuneFor(c).hz));
+  const sig = [band, md, ...[...distress, ...routine].map((c) => `${c.hz}:${dscChannelOn(c, dial, md) ? 1 : 0}`)].join(',');
+  if (sig === dscPanelSig && host.childElementCount) return;   // ★ redrawn only when something on it changes
+  dscPanelSig = sig;
   host.textContent = '';
-  for (const ch of DSC_CHANNELS) {
-    const t = dscTuneFor(ch);
-    if (clampTune(t.hz) !== t.hz) continue;
+  for (const ch of distress) host.appendChild(dscKey(ch, dscChannelOn(ch, dial, md)));
+  const rr = document.getElementById('dscRoutineRow'), rh = document.getElementById('dscRoutine'), rl = document.getElementById('dscRoutineLbl');
+  if (rr && rh) {
+    rh.textContent = '';
+    for (const ch of routine) rh.appendChild(dscKey(ch, dscChannelOn(ch, dial, md)));
+    rr.hidden = !routine.length;
+    if (rl) rl.textContent = band ? `ROUTINE · ${dscBandLabel(band)}` : 'ROUTINE';
+  }
+}
+/** ★★ V12 (Stuart, 2026-10-29: "most people tune DSC wrong") — the DSC BOX's own keys: the band the dial is on (distress +
+ *  routine), else the distress set; and, when the dial sits ON an assigned frequency (4208.5 typed straight in, where the
+ *  tones fall at 0 Hz), a one-tap TUNE … USB above them. Same rules as the app's DscView (src/utils/dscChannels.ts). */
+let dscBoxSig = '';
+function renderDscKeys() {
+  const host = document.getElementById('dscKeys');
+  if (!host) return;
+  if (activeDec !== 'dsc' || !spec) { host.textContent = ''; dscBoxSig = ''; return; }
+  const dial = Math.round(spec.frequency), md = String(spec.mode ?? '');
+  const offer = dscTuneOffer(dial, md);
+  const okOffer = offer && dscReach(offer.hz) ? offer : null;
+  const { channels } = dscChannelsForDial(dial, dscReach);
+  const sig = [okOffer?.text ?? '', ...channels.map((c) => `${c.hz}:${dscChannelOn(c, dial, md) ? 1 : 0}`)].join(',');
+  if (sig === dscBoxSig) return;
+  dscBoxSig = sig;
+  host.textContent = '';
+  if (okOffer) {
     const b = document.createElement('button');
-    b.className = 'btn'; b.textContent = ch.label;
-    b.title = ch.vhf ? 'VHF channel 70, 156.525 MHz — tuned in NFM' : `${ch.label} kHz — tuned ${((ch.hz - 1700) / 1e3).toFixed(1)} kHz USB`;
-    b.onclick = () => dscTune(ch);
+    b.className = 'btn dscOffer';
+    b.innerHTML = `${okOffer.text.replace(/[&<>]/g, '')}<small>A listed DSC frequency is the assigned one — the dial goes 1.7 kHz below it in USB.</small>`;
+    b.onclick = () => dscTune(okOffer.ch);
     host.appendChild(b);
   }
+  for (const ch of channels) host.appendChild(dscKey(ch, dscChannelOn(ch, dial, md)));
 }
 function openDscMap(calls: DscCall[]) {
   const pins: DscPin[] = calls.filter((c) => c.lat !== null && c.lon !== null)
@@ -12656,6 +12702,8 @@ function syncDecButtons() {
   if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
   $('jttySettings').hidden = activeDec !== 'jtty';
   if (activeDec === 'jtty') initJttyDials();
+  renderDscKeys();
+  placeOptions(activeDec);   // ★★★ V12: the settings pop out of the decoder's own key (decoderBandsDom.ts)
 }
 
 function showDecBox(what: string) {
@@ -17370,6 +17418,10 @@ function renderFreq() {
   updateMediaSession();
   const hz = Math.round(spec.frequency);
   if (isPanelOpen('decodersPanel')) decoderBandsDial(hz);   // ★ V12: re-dim the decoders as the dial moves
+  if (activeDec === 'dsc') {   // ★ V12: the DSC keys follow the dial (the band's channels, the lit one, the TUNE offer)
+    renderDscKeys();
+    if (isPanelOpen('decodersPanel')) { const was = dscPanelSig; initDscChannels(); if (was !== dscPanelSig) placeOptions('dsc'); }
+  }
   // ★ The readout itself is the card's (#mFreq / #mChan via cardFreqText(), on mobile.ts's poll).
   /* ★★ THE CARD'S INPUT FOLLOWS THE RADIO TOO. It was filled once when the panel opened and never
      again, so tuning from the search list left the box showing where you USED to be — 96.600 while
