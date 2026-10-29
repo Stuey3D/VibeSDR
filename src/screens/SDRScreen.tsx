@@ -171,7 +171,7 @@ import DualServerCard from '../components/DualServerCard';
 import { canListenSecond, dualHolds, dualSupported, dualTransport, foregroundEnded, leaveForeground, listenSecond,
          noteStatus, returnParams, returningSide, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
          isFirstRadio, backToFirstRadio,
-         useDualShape } from '../services/dualServer';
+         useDualShape, getDual, setSideMuted } from '../services/dualServer';
 import { cardMode, cardStation, dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
@@ -2668,11 +2668,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ V12 NDB and AIS too: the server sends no audio there. ★★ NEVER a squelch (sessionHoldNotice.audioQuietFor): a closed
   //   squelch plays the server's gated silence and must keep the session — "the one time where silence is justified".
   const audioQuiet = audioQuietFor({ adsb: adsbOn, ism: ismOn, ndb: ndbOn, ais: aisOn });
+  /* ★★★ V12 TWO SERVERS: NOT WHILE ANOTHER SERVER IS PLAYING. QUIET pauses the main engine and lets the audio session go
+   *  — the other server's voice with it (server 1 on the main pump, and the session both engines share). In a pairing
+   *  this server's silence is its own voice going to zero, and the other plays on CENTRED (dualMix.dualTargets). */
+  const engineQuiet = audioQuiet && dualShape.phase === 'off';
   useEffect(() => {
-    if (audioQuiet === quietSaid.current) return;
-    quietSaid.current = audioQuiet;
-    setNativeQuiet(audioQuiet, audioQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : 'AIS') : 'left ADS-B / ISM / NDB / AIS');
-  }, [audioQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
+    if (engineQuiet === quietSaid.current) return;
+    quietSaid.current = engineQuiet;
+    setNativeQuiet(engineQuiet, engineQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : 'AIS')
+      : audioQuiet ? 'two servers playing' : 'left ADS-B / ISM / NDB / AIS');
+  }, [engineQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (quietSaid.current) setNativeQuiet(false, 'receiver closed'); }, []);
 
   /* ★★★ V12 HELD SESSION — "VibeSDR paused" (sessionHoldNotice.ts, docs/v12/BACKGROUND-DECODING.md, "The held session"). Stuart: "when the OS
@@ -3281,7 +3286,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bandMutedARef = useRef<VfoId | null>(null);
   useEffect(() => {
     const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
-    const wantSpk = spotsBandOn && !abOn, wantA = spotsBandOn && abOn;
+    /* ★★★ V12 TWO SERVERS: NOT THE SPEAKER WHILE PAIRED. The speaker mute is the native ⏸, and both servers follow it
+     *  (Stuart, 2026-10-28: "if i mute a server it does both together"); in a pairing Band silences ITS OWN server
+     *  (noteStatus `band` → dualMix.sideHasAudio) and the other comes to both ears. */
+    const wantSpk = spotsBandOn && !abOn && dualShape.phase === 'off', wantA = spotsBandOn && abOn;
     if (wantSpk && preBandMuteRef.current === null) {
       preBandMuteRef.current = isMutedRef.current; VM?.setMuted?.(true); setIsMuted(true);
     } else if (!wantSpk && preBandMuteRef.current !== null) {
@@ -3292,7 +3300,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (mv) abClient()?.abSetMute?.(mv, false);
       bandMutedARef.current = spotsVfo; abClient()?.abSetMute?.(spotsVfo, true);
     } else if (!wantA && mv) { bandMutedARef.current = null; if (abOn) abClient()?.abSetMute?.(mv, false); }
-  }, [spotsBandOn, abOn, abClient, spotsVfo]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [spotsBandOn, abOn, abClient, spotsVfo, dualShape.phase]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★★★ The VFO a decoder (or the spots) started NOW runs on — the selected one (vfoAB.ts decStartVfo). A server too old
    *  to decode B (no `decB` in its watch state) keeps round 3's rule: the controls go to A first. The web's abStartVfo. */
   const abStartVfo = useCallback((): VfoId => {
@@ -10288,6 +10296,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       // at, so unmuting could not restore it. Route to the phone's existing mute, which
       // gates playback and leaves the volume where it was.
       onMute: (muted: boolean) => {
+        // ★★ V12 two servers: the wrist mutes the server ON SCREEN, not both (dualServer.setSideMuted).
+        if (getDual().phase === 'paired' && dualIdRef.current) {
+          setSideMuted(dualIdRef.current, muted);
+          watchProvider.setMuted(muted);
+          return;
+        }
         (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
           ?.setMuted?.(muted);
         setIsMuted(muted);
@@ -11963,9 +11977,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!dualMyId || dualShape.phase === 'off') return;
     noteStatus(dualMyId, { freqHz: status.frequency, mode: dualMode, station: dualStation, endsAt: dualEndsAt,
                            soft: limitSoft || borrowed, name: dualName, radioKey: dualRadioKey,
-                           pinned: !!radioAuthSuffix }, radioBase);
+                           pinned: !!radioAuthSuffix, quiet: audioQuiet, band: spotsBandOn && !abOn }, radioBase);
   }, [dualMyId, dualShape.phase, status.frequency, dualMode, dualStation, dualEndsAt, limitSoft, borrowed, dualName,
-      dualRadioKey, radioBase, radioAuthSuffix]);
+      dualRadioKey, radioBase, radioAuthSuffix, audioQuiet, spotsBandOn, abOn]);
   // ★ The server ended THIS one (its refusal is on screen): the background server keeps playing.
   useEffect(() => { if (refusal && dualMyId) foregroundEnded(dualMyId); }, [refusal, dualMyId]);
   // ★ Gone while still in front without saying so (a crash reset, an alert's "Back to Servers"): it LEFT.
@@ -11985,11 +11999,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (dualRadioKey && radioBase) back.baseUrl = radioBase;
     listenSecond({ id: dualMyId, name: dualName, params: back, radioKey: dualRadioKey, pinned: !!radioAuthSuffix,
                    freqHz: abDoor.frequency, endsAt: dualEndsAt, soft: limitSoft || borrowed, station: dualStation,
-                   mode: cardMode({ mode: String(abDoor.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn }) },
+                   mode: cardMode({ mode: String(abDoor.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn }),
+                   quiet: audioQuiet, band: spotsBandOn },
                  start.note);
     navigation.goBack();
   }, [dualMyId, dualName, dualRadioKey, radioBase, radioAuthSuffix, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt,
-      limitSoft, borrowed, navigation, dualDab, adsbOn, ismOn, aisOn, ndbOn, dualStation]);
+      limitSoft, borrowed, navigation, dualDab, adsbOn, ismOn, aisOn, ndbOn, dualStation, audioQuiet, spotsBandOn]);
   /** TAP the card: the background server's screen comes up; both keep playing, ears unmoved. A reset with the server
    *  list beneath — the one way this app lands on a VibeServer (connectVibeServer's note on why not navigate). */
   const onDualSwap = useCallback(() => {
@@ -12495,7 +12510,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears); VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and SPOTS: BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs, opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGITAL SPOTS, CW, PSK, RTTY, JTTY, SSTV, APRS) and Utility or Broadcast (TIME, ADVANCED RDS). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device). Where the server offers it, SPOTS: BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it.',      target: tourRef('modeBtn') },
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs, opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, SSTV, APRS) and Utility or Broadcast (TIME, ADV RDS). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it.',      target: tourRef('modeBtn') },
     { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
@@ -14636,6 +14651,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★★ V12 two servers: the TWO SERVERS row, only while two are playing.
         dualStereo={dualShape.output === 'stereo'}
         onDualStereo={dualShape.phase === 'paired' ? (on: boolean) => setDualOutput(on ? 'stereo' : 'mono') : undefined}
+        dualMuted={!!dualShape.sides.find((x) => x.id === dualMyId)?.muted}
+        onDualMute={dualShape.phase === 'paired' && dualMyId ? (on: boolean) => setSideMuted(dualMyId, on) : undefined}
         vfoABOn={abOn}
         /* ★★ V12 VFO A/B round 3 — a squelch row for each VFO, with its MUTE, while VFO B is on (VibeServer only). */
         vfoRows={abOn && isLocal && !icom ? {

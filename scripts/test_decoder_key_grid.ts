@@ -46,6 +46,54 @@ ok(!decoderKeyGrid([L(100, false)], 250, M).stack, 'no glyphs at all: never "abo
 ok(decoderKeyGrid(PANEL, 0, M).cols === 1 && decoderKeyGrid(PANEL, 0, M).keyW === 0, 'an unmeasured (0) panel: one column, nothing drawn wide');
 ok(colsFor(100, 200, 7) === 1, 'a key wider than the panel still gets one column');
 
+console.log('▶ DIGI SPOTS: phones fit THREE a row (Stuart, 2026-10-29: "dont want super big buttons if we can help it")');
+// ★ Measured from assets/fonts/AtkinsonHyperlegible-Regular.ttf at the metal key's 12 pt, letter-spacing 1 (bold ≈ +4 %):
+//   DIGITAL SPOTS 104 · ADVANCED RDS 103 · SPOTS: BAND 88 · TRANSCRIBE 84 · DIGI SPOTS 80 · DIGI BAND 73 · ADV RDS 58.
+const NOW: KeyLegend[] = [L(42) /* ADS-B */, L(26) /* AIS */, L(30) /* DAB */, L(26) /* ISM */, L(30) /* NDB */,
+  L(73) /* DIGI BAND */, L(52) /* NAVTEX */, L(30) /* DSC */, L(45) /* WEFAX */, L(56) /* SITOR-A */, L(80) /* DIGI SPOTS */,
+  L(20), L(28), L(36), L(36), L(40), L(42), L(33) /* TIME */, L(58) /* ADV RDS */, L(68) /* HFDL MAP */, L(65) /* DIGI MAP */,
+  L(54) /* CW MAP */, L(29) /* MAP */, L(38) /* FILES */, L(62, false) /* SCANNER */, L(59, false) /* GALLERY */,
+  L(84, false) /* TRANSCRIBE */];
+const OLD: KeyLegend[] = NOW.map((k) => (k.w === 80 ? L(104) : k.w === 73 ? L(88) : k.w === 58 ? L(103) : k));
+for (const [w, name] of [[SE, 'SE / mini'], [PRO, '6.1" phone'], [MAX, 'Pro Max']] as const) {
+  const g = decoderKeyGrid(NOW, w, M), o = decoderKeyGrid(OLD, w, M);
+  ok(g.cols === 3, `${name} (${w}): three keys a row (was ${o.cols})`);
+  ok(g.keyW >= keyNeed(NOW, M, g.stack) - 0.01 && g.keyW * 3 + 2 * M.gap <= w + 0.01, `${name}: and every legend still fits`);
+}
+ok(decoderKeyGrid(NOW, SE_ZOOM, M).cols === 2, 'SE in Display Zoom: still two (its keys would be narrower than a legend)');
+ok(decoderKeyGrid(NOW, LAND, M).cols === 4, 'the 640 pt sheet: four, as before');
+ok(!decoderKeyGrid(NOW, MAX, M).stack, 'Pro Max: three a row with every glyph beside its legend');
+{
+  const widest = NOW.filter((k) => k.icon).reduce((a, k) => Math.max(a, k.w), 0);
+  ok(widest === 80, 'DIGI SPOTS is the widest legend with a glyph (DIGI BAND, ADV RDS and the maps are narrower)');
+}
+const appSrc = readFileSync(new URL('../src/components/ModeSelector.tsx', import.meta.url), 'utf8');
+const webSrc = readFileSync(new URL('../web/client/src/decoderBandsDom.ts', import.meta.url), 'utf8');
+ok(/const SPOTS_LEGEND = 'DIGI SPOTS'/.test(appSrc) && /const BAND_LEGEND = 'DIGI BAND'/.test(appSrc), 'the app says DIGI SPOTS / DIGI BAND');
+ok(/SPOTS_KEY_LABEL = 'DIGI SPOTS'/.test(webSrc) && /BAND_KEY_LABEL = 'DIGI BAND'/.test(webSrc), '…and so does the web');
+ok(!/label="SPOTS: BAND"|>SPOTS: BAND</.test(appSrc) && !/'DIGITAL SPOTS'/.test(appSrc), 'no key still says SPOTS: BAND or DIGITAL SPOTS');
+ok(/const advRdsLabel = 'ADV RDS'/.test(appSrc), 'ADV RDS (as on the web) — ADVANCED RDS was as wide as DIGITAL SPOTS');
+
+console.log('▶ VIEWS: every map and picture page is a uniform key, with a line glyph (no colour emoji)');
+ok(!/🗺|🖼/.test(appSrc), 'no 🗺 / 🖼 emoji left on a key in the app');
+ok(/viewKey\('map', 'MAP', 'map'/.test(appSrc), 'the spots MAP has the line map glyph');
+ok(/viewKey\('owrxmap', 'MAP', 'map', owrxPages\.onMap/.test(appSrc) && /viewKey\('owrxfiles', 'FILES', 'files', owrxPages\.onFiles/.test(appSrc),
+   "an OpenWebRX's MAP and FILES are VIEWS keys");
+ok(/\.\.\.serverMapKeys\.map\(/.test(appSrc) && /label: 'HFDL MAP'/.test(appSrc) && /label: 'DIGI MAP'/.test(appSrc) && /label: 'CW MAP'/.test(appSrc),
+   "an UberSDR's HFDL / DIGI / CW maps are VIEWS keys");
+ok(/!\(m\.kind === 'hfdl' && hfdlInBands\)/.test(appSrc), '…HFDL only where HF Aviation does not already hold it');
+ok(!/>\s*SERVER MAPS\s*</.test(appSrc) && !/>\s*OPENWEBRX\s*</.test(appSrc), 'the SERVER MAPS and OPENWEBRX sections are gone');
+ok(/<KeyGrid items=\{viewItems\} grid=\{keyGrid\}/.test(appSrc), 'VIEWS is drawn on the one key grid');
+{
+  const icons = readFileSync(new URL('../src/utils/modeIcons.ts', import.meta.url), 'utf8');
+  ok(/case 'map':[^\n]*return 'map'/.test(icons) && /case 'files':[^\n]*return 'picture'/.test(icons) && /\n  map: \[/.test(icons),
+     'modeIcons has the map and picture glyphs (one table, both clients)');
+  const html = readFileSync(new URL('../web/client/index.html', import.meta.url), 'utf8');
+  const main = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
+  ok(/id="mapBtn"[^>]*>MAP<\/button>/.test(html) && !/&#128506;/.test(html), "the web's MAP lost its emoji");
+  ok(/getElementById\('mapBtn'\); if \(b\) addModeIcon\(b, 'map'\)/.test(main), '…and got the line glyph');
+}
+
 console.log('▶ one MORE key (SITOR-A joining Maritime) changes nothing but the row count');
 const plus = [...PANEL, L(60) /* SITOR-A */];
 for (const w of [SE_ZOOM, PRO, LAND]) {

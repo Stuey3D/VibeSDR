@@ -65,6 +65,12 @@ class DualVoice {
     /** Smoothed level (0…1) for the card's MONO speaker. */
     @Volatile var level = 0f
         private set
+    /** ★ When this voice last had a buffer (uptime ms; 0 = never) — dualServer.ts's "has its stream stopped?" (a server
+     *  in ADS-B / AIS / ISM / NDB sends nothing at all). */
+    @Volatile var lastAt = 0L
+        private set
+    /** ms since the last buffer, −1 = never. */
+    fun ageMs(): Double = if (lastAt > 0) (android.os.SystemClock.uptimeMillis() - lastAt).toDouble() else -1.0
 
     fun setTarget(p: Float, g: Float, o: Boolean) {
         wantPos = p.coerceIn(0f, 1f); wantGain = g.coerceIn(0f, 1f); wantOn = o
@@ -79,6 +85,7 @@ class DualVoice {
      */
     fun process(src: ShortArray, samples: Int, ch: Int, rate: Int, out: ShortArray, extraGain: Float = 1f): Int {
         val p = wantPos; val g = wantGain; val o = wantOn
+        lastAt = android.os.SystemClock.uptimeMillis()
         if (!on) { on = true; pos.set(0.5f); gain.set(1f) }   // from the plain path: centre at unity — no step
         val frames = samples / max(1, ch)
         val steps = (0.4 * rate).roundToInt()                   // dualMix.ts DUAL_RAMP_SEC
@@ -202,6 +209,8 @@ class VibeDualAudioModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMo
         val m = Arguments.createMap()
         m.putDouble("native", VibeDualMix.primary.level.toDouble())
         m.putDouble("aux", VibeDualMix.aux.level.toDouble())
+        m.putDouble("nativeAge", VibeDualMix.primary.ageMs())
+        m.putDouble("auxAge", VibeDualMix.aux.ageMs())
         promise.resolve(m)
     }
 

@@ -17,6 +17,9 @@
  * ★ Tucked or out: out by default; the user's flick is respected until the server has something to SAY (a time stage
  *   rising, STILL LISTENING?, an ending) — dualMix.shouldPopOut.
  * ★ TAP = swap to that server. HOLD = the balance between the two (a slider appears in the card; it closes itself).
+ * ★★ ITS OWN MUTE (Stuart, 2026-10-28: "right now if i mute a server it does both together"): the speaker key at the
+ *   card's right mutes THIS server only — the one in front plays on, in both ears (dualMix.dualTargets). The server in
+ *   front has its own, in its Audio menu.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Easing, PanResponder, Pressable, StyleSheet, Text, TouchableOpacity, View,
@@ -28,7 +31,7 @@ import { EDGE_TAB_W, edgeChipGeometry } from './edgeChipGeometry';
 import { useIslandSide } from '../hooks/useIslandSide';
 import { screenNavRef } from './ScreenNav';
 import { bookmarkFreqLabel } from '../utils/bookmarkName';
-import { answerStillHere, dualLevels, setDualBalance, useDual } from '../services/dualServer';
+import { answerStillHere, dualLevels, setDualBalance, setSideMuted, useDual } from '../services/dualServer';
 import { bgSide, countdownStage, earIcon, fmtLeft, shouldPopOut } from '../services/dualMix';
 
 /** A server's name at a slider's end: the left end is server 1 (the left ear), the right end server 2. */
@@ -43,14 +46,17 @@ const EAR_FAINT = 0.38;
 const STAGE_TAB   = ['#ffb833', '#ffe14d', '#ff6b6b'];                                        // = SDRScreen TIME_TAB
 const STAGE_FRAME = ['rgba(255,160,0,0.55)', 'rgba(255,225,77,0.7)', 'rgba(255,90,90,0.75)']; // = the time card's
 
-/** A speaker; `flip` faces it left. */
-function Speaker({ colour, opacity, flip, waves = true }: { colour: string; opacity: number; flip?: boolean; waves?: boolean }) {
+/** A speaker; `flip` faces it left; `muted` draws the cross where the waves were. */
+function Speaker({ colour, opacity, flip, waves = true, muted = false }: { colour: string; opacity: number; flip?: boolean;
+                                                                          waves?: boolean; muted?: boolean }) {
   return (
     <Svg width={17} height={17} viewBox="0 0 24 24" style={{ opacity }}>
       <G transform={flip ? 'translate(24,0) scale(-1,1)' : undefined}>
         <Path d="M3 9v6h4l5 4V5L7 9H3z" fill={colour} />
-        {waves && <Path d="M15.5 8.5a5 5 0 0 1 0 7M18.3 5.7a9 9 0 0 1 0 12.6" fill="none" stroke={colour}
-                         strokeWidth={2} strokeLinecap="round" />}
+        {muted
+          ? <Path d="M15.5 9.5l5 5M20.5 9.5l-5 5" fill="none" stroke={colour} strokeWidth={2} strokeLinecap="round" />
+          : waves && <Path d="M15.5 8.5a5 5 0 0 1 0 7M18.3 5.7a9 9 0 0 1 0 12.6" fill="none" stroke={colour}
+                           strokeWidth={2} strokeLinecap="round" />}
       </G>
     </Svg>
   );
@@ -306,6 +312,17 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
               </View>
             )}
           </Pressable>
+          {/* ★★ THIS server's mute — the one in the background. Only it goes quiet; the server in front plays on, centred. */}
+          {!ended && (
+            <TouchableOpacity ref={screenNavRef('dualMute', tucked ? undefined : () => setSideMuted(bg.id, !bg.muted))}
+              onPress={() => setSideMuted(bg.id, !bg.muted)}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 2 }} accessibilityRole="button"
+              accessibilityState={{ selected: !!bg.muted }}
+              accessibilityLabel={bg.muted ? `Unmute ${bg.name}` : `Mute ${bg.name}. The server on screen keeps playing, in both ears.`}
+              style={[s.muteHit, bg.muted && { backgroundColor: 'rgba(255,184,51,0.18)' }]}>
+              <Speaker colour={bg.muted ? '#ff8c8c' : colour} opacity={bg.muted ? 1 : 0.85} muted={!!bg.muted} />
+            </TouchableOpacity>
+          )}
           {/* ★ Tucking closes the balance first: the card is measured again without its slider row, and the slide
                *  ends exactly at the compact card's tucked position (the lastOff effect re-places it if the width moves). */}
           <TouchableOpacity onPress={() => {
@@ -357,6 +374,7 @@ const s = StyleSheet.create({
   knob:    { position: 'absolute', width: 16, height: 16, marginLeft: -8, borderRadius: 8, borderWidth: 2,
              backgroundColor: 'rgba(8,10,8,0.95)' },
   arrowHit: { justifyContent: 'center', paddingLeft: 1, paddingRight: 7 },
+  muteHit: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 6, marginVertical: 4, borderRadius: 8 },
   arrow:   { fontSize: 20, fontWeight: '700', lineHeight: 22 },
   tabWrap: { position: 'absolute', zIndex: 251 },
   tab:     { height: 52, borderTopRightRadius: 12, borderBottomRightRadius: 12, borderWidth: 1.5, borderLeftWidth: 0,

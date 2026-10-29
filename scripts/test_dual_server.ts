@@ -7,7 +7,9 @@
  *     with zero slope at both ends, re-aimed mid-move from where it is — and the Swift and Kotlin voices carry the same;
  *   • ear assignment: server 1 LEFT, server 2 RIGHT in stereo; both centred in mono; the survivor centred at unity;
  *     a swap never moves an ear;
- *   • the balance only ever LOWERS the server leaned away from, with a dead zone round even;
+ *   • the balance only ever LOWERS the server leaned away from, with a dead zone round even (and a snap at the ends);
+ *   • ONE SERVER WITH SOMETHING TO GIVE PLAYS CENTRED (Stuart, 2026-10-28) — the other muted, spectrum-only, in Band or
+ *     its stream stopped; a full lean does the same by hand; per-server MUTE never touches the other server;
  *   • the background clock's stages match the app's own countdown, and the card pops out on a RISE only;
  *   • which servers may take part (VibeServer only — never a dead row);
  *   • the pairing's state machine: begin → attach → swap → end, in every configuration, including the lone survivor on
@@ -24,6 +26,7 @@ import {
   Ramp, earGains, balanceGains, dualTargets, earIcon, countdownStage, shouldPopOut, fmtLeft, dualEligible, sameServer,
   DUAL_OFF, beginPicking, attachSecond, swap, endSide, markEnded, holds, transportFor, bgSide, terminalWhy,
   TERMINAL_WHY, DUAL_RAMP_SEC, clampBalance, pairingStart, secondServerHint, VFO_B_CLOSED_NOTE,
+  dualEarGains, sideHasAudio, withSideMuted, DUAL_STALL_MS, BALANCE_END_SNAP,
   radioKeyOf, sameRadio, pickSameServer, detachSecond, sideName, cardMode, cardStation,
   type DualCore, type DualSideCore,
 } from '../src/services/dualMix.ts';
@@ -91,6 +94,96 @@ console.log('ears');
   ok(one.s2.pos === 0.5 && one.s2.gain === 1, 'survivor: centred at unity, the balance forgotten');
   ok(one.s1.gain === 0 && one.s1.pos === 0, 'the one leaving fades OUT where it is — it does not swing across the head');
   ok(earIcon('stereo', 0) === 'L' && earIcon('stereo', 1) === 'R' && earIcon('mono', 0) === 'mono', 'card icon');
+}
+
+console.log('the spread rule — one server with something to give plays CENTRED (Stuart, 2026-10-28)');
+{
+  const base = { output: 'stereo' as const, balance: 0, s1Alive: true, s2Alive: true };
+  const C = Math.SQRT1_2 * Math.SQRT2;   // unity per ear at the centre: √2·cos(π/4) = 1
+  const both = dualEarGains(base);
+  ok(near(both.s1.l, Math.SQRT2) && near(both.s1.r, 0) && near(both.s2.l, 0) && near(both.s2.r, Math.SQRT2),
+     'both playing: server 1 LEFT only, server 2 RIGHT only (equal power)');
+  // Stuart's case: Pi 2 on DAB (server 1), Lenovo RSP1A in DIGITAL SPOTS: BAND (server 2).
+  const band = sideHasAudio({ band: true, live: true, front: true });
+  const dab = sideHasAudio({ live: true, front: false });
+  ok(!band && dab, 'Band has nothing to give; DAB has');
+  const stu = dualEarGains({ ...base, s1Audio: dab, s2Audio: band });
+  ok(near(stu.s1.l, C) && near(stu.s1.r, C), 'Stuart\'s case: the DAB in BOTH ears, equal power (1, 1)');
+  ok(near(stu.s2.l, 0) && near(stu.s2.r, 0), '…and the Band server silent');
+  const stuT = dualTargets({ ...base, s1Audio: dab, s2Audio: band });
+  ok(stuT.s2.pos === 1, '…the silent one waits at ITS OWN ear, so it fades back in there');
+  for (const [what, o] of [
+    ['ADS-B / AIS / ISM / NDB in front', { quiet: true, live: true, front: true }],
+    ['a spectrum-only mode in the background (its stream stopped)', { quiet: true, live: false, front: false }],
+    ['its stream stopped', { live: false }],
+  ] as const) {
+    const a = sideHasAudio(o);
+    const g = dualEarGains({ ...base, s1Audio: a, s2Audio: true });
+    ok(!a && near(g.s2.l, C) && near(g.s2.r, C) && near(g.s1.l, 0) && near(g.s1.r, 0), `${what}: the other centred`);
+  }
+  ok(sideHasAudio({ quiet: true, live: true, front: false }),
+     'a stale spectrum-only flag in the background yields to a stream that is coming (the stream decides there)');
+  ok(sideHasAudio({}) && sideHasAudio({ live: true }), 'unknown = has audio (an older binary is never judged stopped)');
+  ok(DUAL_STALL_MS >= 2000, 'a stop is judged over seconds, not a network blip');
+  const mono = dualEarGains({ ...base, output: 'mono', s2Audio: false });
+  ok(near(mono.s1.l, C) && near(mono.s1.r, C), 'mono output: the one playing is centred at unity too');
+  const lean = dualTargets({ ...base, balance: 0.9, s1Audio: true, s2Audio: false });
+  ok(lean.s1.pos === 0.5 && lean.s1.gain === 1, 'a server with nothing to give has no claim on the balance (lean ignored)');
+  const none = dualTargets({ ...base, balance: 0.5, s1Audio: false, s2Audio: false });
+  ok(none.s1.pos === 0 && none.s2.pos === 1 && none.s2.gain === 1 && none.s1.gain < 1,
+     'neither has anything: both stay home at the balance\'s level — nothing moves for nothing');
+}
+
+console.log('a full lean of the balance = that server centred');
+{
+  const base = { output: 'stereo' as const, s1Alive: true, s2Alive: true };
+  const C = 1;
+  const full1 = dualEarGains({ ...base, balance: -1 });
+  ok(near(full1.s1.l, C) && near(full1.s1.r, C) && near(full1.s2.r, 0), 'all server 1: server 1 in both ears');
+  const full2 = dualEarGains({ ...base, balance: 1 });
+  ok(near(full2.s2.l, C) && near(full2.s2.r, C) && near(full2.s1.l, 0), 'all server 2: server 2 in both ears');
+  const nearly = dualTargets({ ...base, balance: -(BALANCE_END_SNAP + 0.01) });
+  ok(nearly.s1.pos === 0.5 && nearly.s2.gain === 0, 'the end snaps (a finger lands at 0.97, not 1.00)');
+  const mid = dualTargets({ ...base, balance: -0.5 });
+  ok(mid.s1.pos === 0 && mid.s2.pos === 1 && mid.s1.gain === 1 && mid.s2.gain > 0 && mid.s2.gain < 1,
+     'in between: the slider blends them left and right, as before');
+  ok(balanceGains(0.97).s1 === 0 && balanceGains(-0.97).s2 === 0, 'balanceGains snaps the ends to silence');
+}
+
+console.log('per-server MUTE (Stuart, 2026-10-28: "right now if i mute a server it does both together")');
+{
+  type S = DualSideCore & { name: string };
+  let st: DualCore<S> = DUAL_OFF as DualCore<S>;
+  st = beginPicking(st, { id: 'pi2', transport: 'native', ended: null, name: 'Pi 2' });
+  st = attachSecond(st, { id: 'lenovo', transport: 'aux', ended: null, name: 'Lenovo' });
+  const before = st;
+  const m = withSideMuted(st, 'lenovo', true);
+  ok(m.sides[1].muted === true && !m.sides[0].muted, 'muting the server in front mutes ONLY it');
+  ok(m.sides[0] === before.sides[0], '…the other side\'s object is untouched');
+  const g = dualEarGains({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: true,
+                           s1Muted: !!m.sides[0].muted, s2Muted: !!m.sides[1].muted });
+  ok(near(g.s2.l, 0) && near(g.s2.r, 0), '…its voice goes to zero');
+  ok(near(g.s1.l, 1) && near(g.s1.r, 1), '…and the other keeps playing, now in both ears');
+  const m2 = withSideMuted(m, 'pi2', true);
+  const g2 = dualEarGains({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: true, s1Muted: true, s2Muted: true });
+  ok(m2.sides.every((x) => x.muted) && near(g2.s1.l + g2.s1.r + g2.s2.l + g2.s2.r, 0), 'both muted: silence');
+  const m3 = withSideMuted(m2, 'lenovo', false);
+  const g3 = dualEarGains({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: true, s1Muted: true, s2Muted: false });
+  ok(!m3.sides[1].muted && !!m3.sides[0].muted && near(g3.s2.l, 1) && near(g3.s2.r, 1), 'unmute one: only it comes back');
+  ok(withSideMuted(m, 'lenovo', true) === m, 'muting a muted server changes nothing');
+  ok(withSideMuted(DUAL_OFF as DualCore<S>, 'x', true) === DUAL_OFF, 'no pairing: nothing to mute');
+  const leanMuted = dualTargets({ output: 'stereo', balance: -1, s1Alive: true, s2Alive: true, s1Muted: true });
+  ok(leanMuted.s1.gain === 0 && leanMuted.s2.pos === 0.5 && leanMuted.s2.gain === 1,
+     'a muted server stays muted even with the balance leaned all the way to it');
+  const sw = swap(m);
+  ok(sw.sides[1].muted === true && !sw.sides[0].muted, 'a swap keeps each server\'s mute where it was');
+  const surv = endSide(m, 'pi2');
+  ok(surv.st.phase === 'off', 'leaving the unmuted one: pairing off');
+  const surv2 = endSide({ ...m, fg: 'pi2' }, 'pi2');
+  ok(surv2.st.sides[0]?.id === 'lenovo' && surv2.st.sides[0]?.muted === true,
+     'the survivor in the background keeps its mute (picking)');
+  const solo = dualTargets({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: false, s1Muted: true });
+  ok(solo.s1.gain === 0, 'a lone survivor the listener muted stays muted');
 }
 
 console.log('the background clock');
@@ -282,7 +375,7 @@ console.log('pairing is per RADIO (Gesiima\'s two dongles on one VibeServer, #57
   const guarded = (sdr.match(/bounceIfFirstRadio\((baseUrl|radioBaseUrl\(baseUrl, (id|d\.radios\[0\]\.id)\))\)\) return/g) ?? []).length;
   // ★ The fourth adoption is a side coming BACK to its own radio (returningSide) — that one IS the radio playing.
   ok(adopts.length === 4 && guarded === 3, `every radio adoption (chosen, door of one, an address naming its radio) passes the first-radio check first (${guarded}/${adopts.length - 1}; + the side coming back)`);
-  ok(/noteStatus\(dualMyId, \{[^}]*name: dualName, radioKey: dualRadioKey,\s*pinned: !!radioAuthSuffix \}, radioBase\)/.test(sdr), 'the card is told the radio and its name');
+  ok(/noteStatus\(dualMyId, \{[^}]*name: dualName, radioKey: dualRadioKey,\s*pinned: !!radioAuthSuffix,[^}]*\}, radioBase\)/.test(sdr), 'the card is told the radio and its name');
   ok(/if \(dualRadioKey && radioBase\) back\.baseUrl = radioBase;/.test(sdr) && /baseUrl: wantBase/.test(ds),
      'a side returns to its RADIO\'s address (adopted straight through), never the radio list');
   const dr = readFileSync('src/utils/doorReturn.ts', 'utf8');
@@ -346,6 +439,35 @@ console.log('the card\'s balance owns the finger; the one-time hint (Stuart 2026
   ok(/DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance'/.test(card), '…in Stuart\'s words');
   ok((card.match(/hintDone\(\)/g) ?? []).length >= 2 && /onPress=\{hintDone\}/.test(card),
      '…and goes on ✕, on a tap and on a hold');
+}
+
+console.log('source: mute and quiet never silence the OTHER server');
+{
+  const scr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  const srv = readFileSync('src/services/dualServer.ts', 'utf8');
+  const sheet = readFileSync('src/components/AudioSheet.tsx', 'utf8');
+  const card = readFileSync('src/components/DualServerCard.tsx', 'utf8');
+  const swift = readFileSync('ios/VibeSDR/VibeDualAudio.swift', 'utf8');
+  const kt = readFileSync('android/app/src/main/java/com/vibesdr/app/VibeDualAudio.kt', 'utf8');
+  ok(/const wantSpk = spotsBandOn && !abOn && dualShape\.phase === 'off'/.test(scr),
+     'Band mutes the SPEAKER (the native pause, both servers) only outside a pairing');
+  ok(/const engineQuiet = audioQuiet && dualShape\.phase === 'off'/.test(scr) && /setNativeQuiet\(engineQuiet/.test(scr),
+     'QUIET (pause the engine, release the session) only outside a pairing');
+  ok(/quiet: audioQuiet, band: spotsBandOn && !abOn/.test(scr), 'the screen tells the pairing it has nothing to give');
+  ok(/getDual\(\)\.phase === 'paired' && dualIdRef\.current\) \{\s*setSideMuted\(dualIdRef\.current, muted\)/.test(scr),
+     'the watch mutes the server on screen, not both');
+  ok(/onDualMute=\{dualShape\.phase === 'paired' && dualMyId \? \(on: boolean\) => setSideMuted\(dualMyId, on\)/.test(scr),
+     'the Audio menu\'s mute is this server\'s');
+  ok(/if \(mac\.state\.muted\) toggleMacAudioMute\(\); else onDualMute\(!dualMuted\)/.test(sheet),
+     'the Mac MUTE key mutes this server while paired');
+  ok(/screenNavRef\('dualMute'/.test(card) && /setSideMuted\(bg\.id, !bg\.muted\)/.test(card),
+     'the card has its own mute for the background server (pad-reachable)');
+  ok(/s1Muted: !!s1\?\.muted, s2Muted: !!s2\?\.muted, s1Audio: audio\(s1\), s2Audio: audio\(s2\)/.test(srv),
+     'pushMix feeds each side\'s mute and has-audio into the rule');
+  ok(/"nativeAge": VibeDualAudio\.primary\.ageMs/.test(swift) && /putDouble\("nativeAge", VibeDualMix\.primary\.ageMs\(\)\)/.test(kt),
+     'both natives report how long since each voice last had audio');
+  ok(/lastAt = ProcessInfo\.processInfo\.systemUptime/.test(swift) && /lastAt = android\.os\.SystemClock\.uptimeMillis\(\)/.test(kt),
+     '…stamped on every buffer the voice places');
 }
 
 console.log(fails ? `\n✗ ${fails} failed` : '\n✓ all passed');

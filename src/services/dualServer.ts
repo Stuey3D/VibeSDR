@@ -32,6 +32,7 @@ import { noteFault } from './faultLog';
 import {
   DUAL_OFF, attachSecond, beginPicking, bgSide, clampBalance, dualEligible, dualTargets, endSide, holds,
   markEnded, sameServer, sameRadio, swap, terminalWhy, transportFor, detachSecond, pickSameServer,
+  sideHasAudio, withSideMuted, DUAL_STALL_MS,
   type DualCore, type DualOutput, type DualRouteLike, type DualSideCore, type Transport,
 } from './dualMix';
 
@@ -44,7 +45,8 @@ type DualNative = {
   stopAux?: () => void;
   pushAuxOpus?: (b64: string, rate: number, channels: number) => void;
   pushAuxPcm?: (b64: string, rate: number, channels: number) => void;
-  getLevels?: () => Promise<{ native?: number; aux?: number }>;
+  /** ★ `nativeAge` / `auxAge`: ms since that voice last had a buffer (−1 = never) — the "has its stream stopped?" test. */
+  getLevels?: () => Promise<{ native?: number; aux?: number; nativeAge?: number; auxAge?: number }>;
 };
 const Dual = (NativeModules as { VibeDualAudio?: DualNative }).VibeDualAudio;
 const Vibe = NativeModules.VibePowerModule as {
@@ -79,6 +81,10 @@ export interface DualSide extends DualSideCore {
   /** ★ Its radio was unlocked with a PIN of its own at the door: coming back, the door asks again (a radio PIN is proved
    *  with a fresh nonce, which a return address cannot carry). Every other side comes straight back to its radio. */
   pinned?: boolean;
+  /** ★★ Nothing to give (dualMix.sideHasAudio), as its screen last said: `quiet` = a spectrum-only whole-radio mode
+   *  (ADS-B, AIS, ISM, NDB); `band` = DIGITAL SPOTS: BAND, which mutes the dial's audio. */
+  quiet?: boolean;
+  band?: boolean;
 }
 
 export interface DualState extends DualCore<DualSide> {
@@ -113,17 +119,18 @@ export function useDual(): DualState { return useSyncExternalStore(subscribeDual
  *  same object until the shape changes. */
 export interface DualShape {
   phase: DualState['phase']; fg: string | null; output: DualOutput;
-  sides: { id: string; transport: Transport; ended: boolean; name: string }[];
+  sides: { id: string; transport: Transport; ended: boolean; name: string; muted: boolean }[];
 }
 let shapeKey = '';
 let shape: DualShape = { phase: 'off', fg: null, output: 'stereo', sides: [] };
 function getShape(): DualShape {
   const k = `${state.phase}|${state.fg}|${state.output}|`
-          + state.sides.map((s) => `${s.id}:${s.transport}:${s.ended ? 1 : 0}:${s.name}`).join(',');
+          + state.sides.map((s) => `${s.id}:${s.transport}:${s.ended ? 1 : 0}:${s.muted ? 1 : 0}:${s.name}`).join(',');
   if (k !== shapeKey) {
     shapeKey = k;
     shape = { phase: state.phase, fg: state.fg, output: state.output,
-              sides: state.sides.map((s) => ({ id: s.id, transport: s.transport, ended: !!s.ended, name: s.name })) };
+              sides: state.sides.map((s) => ({ id: s.id, transport: s.transport, ended: !!s.ended, name: s.name,
+                                                       muted: !!s.muted })) };
   }
   return shape;
 }
@@ -367,17 +374,66 @@ function watchNativeText(on: boolean) {
 
 /* ─────────────────────────────── the mix ─────────────────────────────── */
 
-/** Tell the two native voices where each server is now. Only on a pairing change — the native side glides. */
+/**
+ * ★★ IS EACH SERVER'S STREAM STILL COMING? Judged twice a second while two are paired: the second voice by its own
+ *    socket's last frame (here), the main pump by the native voice's last buffer (getLevels' nativeAge). A server in
+ *    ADS-B / AIS / ISM / NDB sends nothing at all, so this is also how a BACKGROUND server's spectrum-only mode is known
+ *    (its screen, and with it the flag, is gone). A closed squelch is not a stop — the server sends gated silence.
+ *    Kept out of the state: it changes nothing anyone draws, only where the voices sit.
+ */
+const live = new Map<string, boolean>();
+let liveTimer: ReturnType<typeof setInterval> | null = null;
+function liveOf(id: string): boolean { return live.get(id) !== false; }
+function watchLive(on: boolean) {
+  if (on && !liveTimer) {
+    liveTimer = setInterval(() => {
+      if (state.phase !== 'paired') return;
+      const now = Date.now();
+      (Dual?.getLevels?.() ?? Promise.resolve(undefined)).then((lv) => {
+        let changed = false;
+        for (const sd of state.sides) {
+          let ok: boolean;
+          if (sd.transport === 'aux') {
+            const a = aux;
+            ok = !!a && a.id === sd.id && a.lastFrameAt > 0 && now - a.lastFrameAt < DUAL_STALL_MS;
+          } else {
+            // ★ An older binary without the age: never judged stopped (as before).
+            const age = Number(lv?.nativeAge);
+            ok = !Number.isFinite(age) || (age >= 0 && age < DUAL_STALL_MS);
+          }
+          if (live.get(sd.id) !== ok) { live.set(sd.id, ok); changed = true; }
+        }
+        if (changed) pushMix();
+      }).catch(() => {});
+    }, 500);
+  } else if (!on && liveTimer) {
+    clearInterval(liveTimer);
+    liveTimer = null;
+    live.clear();
+  }
+}
+
+/** Tell the two native voices where each server is now. On a pairing change, a mute, or a stream stopping or coming
+ *  back — the native side glides. */
 function pushMix() {
   if (!Dual?.setNativeMix) return;
+  if (state.phase === 'picking') {
+    // ★ The one playing while the server list is up: centred — at zero when the listener muted it or it is in Band
+    //   (Band's mute is this side's now, not the speaker's: the pairing took it over from the screen).
+    const solo = state.sides[0];
+    if (solo && (solo.muted || solo.band)) { Dual.setNativeMix(0.5, 0, true); return; }
+  }
   if (state.phase !== 'paired') {
     // ★ Centre, unity, and STAND DOWN once there: the main pump goes back to exactly its single-server path.
     Dual.setNativeMix(0.5, 1, false);
     return;
   }
   const [s1, s2] = state.sides;
+  const audio = (sd: DualSide | undefined) => !!sd && sideHasAudio({ quiet: sd.quiet, band: sd.band, live: liveOf(sd.id),
+                                                                       front: state.fg === sd.id });
   const t = dualTargets({ output: state.output, balance: state.balance,
-                          s1Alive: !!s1 && !s1.ended, s2Alive: !!s2 && !s2.ended });
+                          s1Alive: !!s1 && !s1.ended, s2Alive: !!s2 && !s2.ended,
+                          s1Muted: !!s1?.muted, s2Muted: !!s2?.muted, s1Audio: audio(s1), s2Audio: audio(s2) });
   const tgt = [t.s1, t.s2];
   state.sides.forEach((s, i) => {
     if (s.transport === 'native') Dual.setNativeMix?.(tgt[i].pos, tgt[i].gain, true);
@@ -389,12 +445,34 @@ function onChanged(prev: DualState) {
   if (prev.phase !== state.phase || prev.sides !== state.sides || prev.output !== state.output
       || prev.balance !== state.balance) pushMix();
   watchNativeText(state.phase !== 'off');
+  watchLive(state.phase === 'paired');
   // ★ The lock-screen card names the server in FRONT (Stuart: "AirPods/remote controls, lock screen Now Playing:
   //   the foreground server"). Remote ▶/⏸ act on the whole app — both servers pause and resume together.
   if (prev.fg !== state.fg && state.fg) {
     const s = state.sides.find((x) => x.id === state.fg);
     if (s) Vibe?.setInstanceName?.(s.name);
   }
+}
+
+/**
+ * ★★★ MUTE ONE SERVER (its card's mute; its own Audio menu's while it is in front; the Mac's MUTE key while paired).
+ *     Only that server's voice goes to zero — the other keeps playing, and centres (dualMix.dualTargets). NOT the
+ *     native pause (VibePowerModule.setMuted): that is the whole app's ⏸ — the lock screen, AirPods, interruptions —
+ *     and both servers follow it by design.
+ */
+export function setSideMuted(id: string | null, on: boolean) {
+  if (!id) return;
+  const next = withSideMuted(state, id, on);
+  if (next !== state) set({ ...state, ...next });
+}
+export function sideMuted(id: string | null): boolean {
+  return !!id && state.phase !== 'off' && !!state.sides.find((s) => s.id === id)?.muted;
+}
+
+/** ★ A mute the pairing held on the server that is LEFT ALONE IN FRONT outlives the pairing as the ordinary mute — the
+ *  screen's own muted banner — rather than the server springing back to full volume the moment the other one goes. */
+function carryMute(sur: DualSide | undefined) {
+  if (sur?.muted) (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(true);
 }
 
 /** Levels for the card's MONO speaker (0..1, smoothed natively). */
@@ -466,7 +544,7 @@ export function roleOnMount(params: Record<string, unknown> & DualRouteLike & { 
 }
 
 /** The screen in front keeps its side's card facts current (cheap: only on change). */
-export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mode' | 'station' | 'endsAt' | 'soft' | 'name' | 'radioKey' | 'pinned'>>,
+export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mode' | 'station' | 'endsAt' | 'soft' | 'name' | 'radioKey' | 'pinned' | 'quiet' | 'band'>>,
                            radioBase?: string | null) {
   const s = state.sides.find((x) => x.id === id);
   if (!s) return;
@@ -540,7 +618,10 @@ function endSideNow(id: string) {
     else if (releaseNative(fx.stop.id)) Vibe?.stopLocalAudio?.();
   }
   if (fx.moveToNative) moveToNative(fx.moveToNative);
+  const wasOn = state.phase !== 'off';
+  const sur = state.sides.find((x) => x.id !== id && !x.ended);
   set({ ...state, ...st });
+  if (wasOn && state.phase === 'off') carryMute(sur);
 }
 
 /**
@@ -588,6 +669,7 @@ export function returnToSolo(): Record<string, unknown> | null {
   const s = soloSide();
   if (!s) return null;
   set({ ...(DUAL_OFF as DualCore<DualSide>), output: state.output, balance: state.balance });
+  carryMute(s);
   // ★ dualSide carries the SESSION: the screen comes back as the same listener and its player ADOPTS the pump that is
   //   still playing (LocalAudioPlayer: nativeOwnedBy) instead of reopening it.
   return { ...s.params, dualSide: s.id };

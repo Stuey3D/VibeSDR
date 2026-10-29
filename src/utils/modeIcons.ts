@@ -21,11 +21,13 @@
  *   broadcast   DAB
  *   clock       TIME (MSF, DCF77, WWV…)
  *   radio       the AMATEUR group's heading in the decoder panel (utils/decoderBands)
+ *   map         MAP — the spots map, an OpenWebRX's map (VIEWS; was the colour 🗺 emoji, 2026-10-29)
+ *   picture     FILES — an OpenWebRX's decoded pictures (VIEWS; was the colour 🖼 emoji)
  */
 
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
-  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio';
+  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -116,6 +118,15 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
     { c: [12, 12, 9] },
     { d: 'M12 6.8V12l3.6 2.2' },
   ],
+  map: [   // a folded paper map, three panels — the house line style, not the colour emoji it replaced
+    { d: 'M2.5 6.2 8.8 3.5l6.4 2.7 6.3-2.7v14.3l-6.3 2.7-6.4-2.7-6.3 2.7Z' },
+    { d: 'M8.8 3.5v14.3M15.2 6.2v14.3', w: 1.5 },
+  ],
+  picture: [   // a framed picture: the sun over hills
+    { r: [2.5, 4, 19, 16, 2] },
+    { c: [8.3, 9.3, 1.7], fill: true },
+    { d: 'M3 17.5l5.2-5 4 3.8 2.8-2.7 5.5 5.2' },
+  ],
 };
 
 /**
@@ -143,6 +154,8 @@ export function modeIconFor(id: string): ModeIconName | null {
     case 'dab': case 'rds': case 'advrds': return 'broadcast';
     case 'amateur': return 'radio';
     case 'time': return 'clock';
+    case 'map': case 'spotsmap': case 'owrxmap': return 'map';
+    case 'files': case 'owrxfiles': return 'picture';
     default: return null;
   }
 }
