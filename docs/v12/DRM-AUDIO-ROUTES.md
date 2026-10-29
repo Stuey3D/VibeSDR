@@ -115,10 +115,10 @@ re-orders the side information:
 
 | Build | FAAD2? | How |
 |---|---|---|
-| VibeServer: Linux deb (x86_64, i386, arm64, armhf, ARMv6) | Yes | `linux/build-deps.sh`: FAAD2 2.11.3 from the pinned GitHub tag (sha256 `860ab620…`), static `libfaad_drm.a`, float. The NeAACDecInitDRM check is in it. `COPYING.faad2` goes to `/usr/share/doc/vibeserver` and `build-deb.sh` checks it is there. |
-| VibeServer Mac app | Yes | `mac/build-deps.sh` (the same pin and checks). `COPYING.faad2` goes into `Resources/`. |
+| VibeServer: Linux deb (x86_64, i386, arm64, armhf, ARMv6) | Yes | `linux/build-deps.sh`: FAAD2 2.11.3 from the pinned GitHub tag (sha256 `860ab620…`) with VibeSDR's patch series (since 2026-10-29, see "DRM's FAAD2, optimised" below), static `libfaad_drm.a`, float. The NeAACDecInitDRM check is in it. `COPYING.faad2` goes to `/usr/share/doc/vibeserver` and `build-deb.sh` checks it is there. |
+| VibeServer Mac app | Yes | `mac/build-deps.sh` (the same pin, patches and checks). `COPYING.faad2` goes into `Resources/`. |
 | VibeServer Windows | — | For the windows-m1 agent: add the same pinned build to `vibeserver/windows/build-deps.sh`. That branch was not edited. |
-| Android app (Play + GitHub APK) and VibeServer Lite: the on-device server | Yes, once its prebuilt is made | `sdr-kit/build-faad2.sh` (the same pin, both ABIs); the CMake links it when it is there. **This puts GPL-2.0+ code in the Android app's APK on Play and GitHub, which is GPL itself — Stuart to confirm.** Lite has its own `sdr-kit` root (`lite/native`), so it needs the prebuilt copied there too. |
+| Android app (Play + GitHub APK) and VibeServer Lite: the on-device server | **Yes, since 2026-10-29** (it was missing: DRM AAC was silent on Android servers) | `sdr-kit/build-faad2.sh` (the same pin and patches): `sdr-kit/{arm64-v8a,armeabi-v7a}/lib/libfaad_drm.a` at android-24 for the app, `lite/native/kit/armeabi-v7a/lib/libfaad_drm.a` at android-21 for Lite (checked free of the API-23 `stderr` symbol). The CMake links whichever its `SDR_KIT_ROOT` holds — the block used to sit inside `if (NOT VIBE_LITE_APP)`, so Lite could never have linked it. **This puts GPL-2.0+ code in the Android app's APK on Play and GitHub, which is GPL itself — Stuart to confirm.** |
 | iOS / iPadOS / Mac Catalyst app (App Store) | **Never** | `build_ios.sh` never defines `VIBE_HAVE_FAAD2`, and **fails if any FAAD2 symbol is in the archive.** |
 
 **Building it was not possible here:** the auto-mode permission check blocks building external code. Everything was
@@ -271,7 +271,8 @@ decoder thread's 2.15 G. Now 32 taps a branch, no division, the 2:3 case twelve 
 estimate): HE-AAC v2 ≈ 3–4 % of a core, 48 kHz AAC-LC ≈ 5 % (faad4 measured 11.9 % there; FFmpeg 8.7 %).
 
 **The patches** live in `vibeserver/linux/faad2-patches/` (series order, each documented in its header), applied by
-both deps builders to the plain (DAB+) build only; the DRM build stays stock. GPL-2.0-or-later, published with FAAD2.
+both deps builders to the plain (DAB+) build only; the DRM build stays stock (until 2026-10-29: see below). GPL-2.0-or-later,
+published with FAAD2.
 Not measured on: real AAC-LC or HE-AAC v1 DAB+ recordings (none received here — the AAC-LC row is a 1024-sample
 ffmpeg stream), the 34-band PS configuration.
 
@@ -279,3 +280,71 @@ ffmpeg stream), the 34-band PS configuration.
 the old `dabFaad2` in g_runtimeConfig, and its next self-persist (the DAB block, as the last listener left) folded every
 per-radio field from that copy back into config.json. The live-persist handler now folds its patch into the radio's
 entry as it is on disk (vibeserver/main.cpp). scripts/test-setup-dab-faad2.mjs (headless muted Edge) reproduces it.
+
+# DRM's FAAD2, optimised (2026-10-29)
+
+**Stuart:** DRM AAC "fully optimised like DAB+". The DRM build (`libfaad_drm.a`) was still stock FAAD2: `-ffloat-store`
+on every GCC build and none of the DAB+ series.
+
+**What changed.** The patch series (`vibeserver/linux/faad2-patches/series`) is now applied ONCE, before both builds, by
+`linux/build-deps.sh`, `mac/build-deps.sh` and `sdr-kit/build-faad2.sh`. Patches 1–8 apply unchanged with DRM_SUPPORT
+(the 960 frame length, ER, the DRM SBR all build and run through them). Patch 9 is new and is DRM's:
+
+- **0009 HCR** (`hcr.c`, `reordered_spectral_data`). DRM's AAC is error-resilient AAC with Huffman codeword reordering;
+  on the Pi 2 that one function was 60 % of the stock decoder on an AAC mono service (84 % with its division helper once
+  1–8 had made the rest cheaper). Step 1 scanned every section for every 4 lines of every sfb in all 22 pre-sort passes;
+  step 2 visited every codeword in every trial and took a `%` per visit — `__aeabi_idivmod`, a library call on ARMv7.
+  Now a table names each sfb's section, passes and sfbs that cannot match are skipped, each trial visits only the
+  undecoded codewords with a running index, and the set ends once nothing is left to decode. Integer only, the same
+  order: **bit-identical** to stock, clean and with frames corrupted on purpose (1 in 2/3/5/7), under ASan + UBSan.
+- **No `-funsafe-math-optimizations` for DRM** (DAB+ keeps it). Measured on the Pi 2 it bought DRM nothing
+  (0.365 vs 0.360 % of a core) and cost output margin (KTWR 132.0 → 131.7 dB on armhf, 130.99 dB on the Mac).
+
+**Test material.** Real DRM AAC only, dumped from the receiver to `.drmau` files (`vibeserver/faad2-drm-bench/
+drm-au-dump.cpp`) and decoded by a standalone bench (`faad2-drm-bench.c`, one static binary):
+- RRI 9570 kHz, AAC mono 12 kHz (`uber_rri_9570000_iq48.wav`, 1825 frames, 142 s);
+- KTWR Japanese, **HE-AAC (SBR) mono** — the KiwiSDR project's published sample recording `DRM.KTWR.slideshow.au`
+  (12 kHz IQ, resampled to 48 kHz; 4840 frames, 387 s). It is test data, not in the repo.
+- Recorded today off Stuart's UberSDR: TDF 13695 kHz ("TDF DRM", AAC mono) — too weak, every frame refused by stock
+  FAAD2 too; 13650 kHz never decoded. **No parametric-stereo or stereo DRM station was found**, so DRM PS
+  (`drm_dec.c`) is not exercised by any test here (forcing DRMCH_SBR_PS_STEREO on KTWR's mono stream gives
+  byte-identical output: with no PS data in the stream the PS path does nothing) and was not optimised.
+
+**Output against stock FAAD2 built for the same target** (SNR of stock against the difference; level identical to
+0.00001 dB everywhere):
+
+| Target (compiler) | RRI AAC mono | KTWR HE-AAC mono |
+|---|---|---|
+| amd64 (GCC 12) | identical | 137.9 dB |
+| i386, SSE2 floor (GCC 12 `-m32`) | identical | 137.9 dB |
+| arm64 (GCC 12) | 143.0 dB | 132.4 dB |
+| armhf, NEON, ARM mode (GCC 12; qemu Cortex-A7) | 141.0 dB | 132.0 dB |
+| ARMv6 (clang, Raspbian sysroot; qemu ARM1176) | identical | 137.9 dB |
+| macOS arm64 (Apple clang) | 141.0 dB | 132.9 dB |
+| Android arm64-v8a (NDK 27, emulator API 28) | 141.0 dB | 132.7 dB |
+
+Patch 1 alone is bit-identical on armhf. Android armeabi-v7a was built and linked (Lite) but not run (no 32-bit ARM
+emulator on this Mac); it is the same source and NEON path as the Linux armhf row.
+
+**CPU, Raspberry Pi 2** (Cortex-A7, armhf as `build-deps.sh` builds it; the decoder alone, `nice -n 19`, median of 7
+passes, % of one core):
+
+| Build | RRI AAC mono | KTWR HE-AAC mono |
+|---|---|---|
+| stock FAAD2 2.11.3 (its own flags) | 1.663 % | 4.871 % |
+| + patch 1 (no `-ffloat-store`) | 1.403 % | 2.920 % |
+| + patches 2–8 (the DAB+ kernels) | 1.363 % | 2.543 % |
+| **+ patch 9 (HCR) = shipped** | **0.365 %** | **1.318 %** |
+
+4.6× and 3.7×. What is left on HE-AAC: HCR 16 %, the SBR DCT-IV 17 %, QMF synthesis 12 % / analysis 8 %, HF assembly
+7 % (gprof on the Pi). On plain AAC: HCR ~40 %, the radix-4 FFT pass 15 %, Huffman 9 %. The 960-point transform's
+radix-3/5/2 passes are scalar and small. Mac and Android arm64: 0.031 → 0.012 % and 0.054 → 0.025 %.
+
+**Builds checked:** `linux/build-deps.sh armhf` in the release image (its `libfaad_drm.a` decodes byte-identically to the
+library measured above); `mac/build-deps.sh` (DRM + DAB+ rebuilt with the series; test-drm 134/134, test-drm-signal
+109/109, test-drm-faad 6/6 against it); `sdr-kit/build-faad2.sh` (three libraries); VibeServer Lite's
+`libvibelocalsdr.so` (armeabi-v7a, android-21) linked with FAAD2; test-drm-faad built with the NDK for arm64 and run on
+an API 28 emulator against the Android prebuilt — 1773 frames decoded, programme envelope, concealment, 6/6. amd64,
+i386, arm64 and ARMv6: the FAAD2 build with each profile's flags, not the whole `build-deps.sh` (that runs on the
+Lenovo at release).
+

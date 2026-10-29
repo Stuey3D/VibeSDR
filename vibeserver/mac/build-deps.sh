@@ -193,15 +193,31 @@ fi
 # ── FAAD2 2.11.3 (libfaad_drm), static — V12 DRM's AAC, decoded on the server ─────────────────────────────────
 # ★★★ GPL-2.0-or-later: the VibeServer MAC APP may contain it (it is GPL, notarised, not App Store). The App Store app's
 #     archive never does — modules/vibe-local-sdr/build_ios.sh fails on any FAAD2 symbol. COPYING → Resources/COPYING.faad2.
+# ★★ V12 (2026-10-29): built from the PATCHED tree — VibeSDR's series (linux/faad2-patches/series), as linux/build-deps.sh
+#    does: the SBR/QMF/transform kernels and patch 9 (HCR, which only DRM's error-resilient AAC uses). No
+#    -funsafe-math-optimizations for DRM (it bought nothing measurable and costs output margin).
 FAAD_VER=2.11.3
 FAAD_SHA=860ab62087e336c1844a70e33196c1790b525fb9a9e7b6ac4fab1a1a4e4d5ce8  # GitHub tag tarball = linux/build-deps.sh
-FAAD_STAMP="faad2 $FAAD_VER $FAAD_SHA min=$MIN arch=$ARCH $CCVER"
+FAAD_PATCHES="$MAC/../linux/faad2-patches"
+FAAD_SERIES_SUM="$( { [ -f "$FAAD_PATCHES/series" ] && cat "$FAAD_PATCHES/series" && grep -v '^#' "$FAAD_PATCHES/series" | while IFS= read -r p; do [ -n "$p" ] && cat "$FAAD_PATCHES/$p"; done; } 2>/dev/null | shasum -a 256 | cut -c1-16)"
+FAAD_STAMP="faad2 $FAAD_VER $FAAD_SHA min=$MIN arch=$ARCH $CCVER patches=$FAAD_SERIES_SUM"
+# ★ the series into a fresh tree (dir) — both FAAD2 builds below use it
+faad_patched_tree() {
+  rm -rf "$1"; mkdir -p "$1"
+  tar -xzf "$SRC/faad2-$FAAD_VER.tar.gz" -C "$1" --strip-components 1
+  if [ -f "$FAAD_PATCHES/series" ]; then
+    while IFS= read -r p; do
+      case "$p" in ""|\#*) continue ;; esac
+      patch -d "$1" -p1 -s < "$FAAD_PATCHES/$p" || { echo "!! FAAD2 patch $p did not apply"; exit 1; }
+      echo "    FAAD2 patch: $p"
+    done < "$FAAD_PATCHES/series"
+  fi
+}
 if stamp_ok faad2 "$FAAD_STAMP" "$PREFIX/lib/libfaad_drm.a"; then echo "==> FAAD2 $FAAD_VER: up to date"; else
   echo "==> FAAD2 $FAAD_VER (DRM build): building for macOS $MIN"
   fetch "https://github.com/knik0/faad2/archive/refs/tags/$FAAD_VER.tar.gz" "faad2-$FAAD_VER.tar.gz" "$FAAD_SHA"
-  rm -rf "$WORK/faad"; mkdir -p "$WORK/faad"
-  tar -xzf "$SRC/faad2-$FAAD_VER.tar.gz" -C "$WORK/faad" --strip-components 1
-  cmake -S "$WORK/faad" -B "$WORK/faad/b" "${CMAKE_COMMON[@]}" -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF \
+  faad_patched_tree "$WORK/faad"
+  cmake -S "$WORK/faad" -B "$WORK/faad/b" "${CMAKE_COMMON[@]}" -DCMAKE_C_FLAGS="$CFLAGS" -DBUILD_SHARED_LIBS=OFF -DFAAD_BUILD_CLI=OFF \
         -DFAAD_APPLY_DRC=OFF >"$WORK/faad.log" 2>&1 \
     && cmake --build "$WORK/faad/b" --target faad_drm -j"$JOBS" >>"$WORK/faad.log" 2>&1 \
     || { tail -30 "$WORK/faad.log"; echo "!! FAAD2 build failed"; exit 1; }
@@ -210,6 +226,8 @@ if stamp_ok faad2 "$FAAD_STAMP" "$PREFIX/lib/libfaad_drm.a"; then echo "==> FAAD
   mkdir -p "$PREFIX/share/licences"; cp "$WORK/faad/COPYING" "$PREFIX/share/licences/COPYING.faad2"
   [ "$(nm "$PREFIX/lib/libfaad_drm.a" 2>/dev/null | grep -c 'T .*NeAACDecInitDRM' || true)" -gt 0 ] \
     || { echo "!! libfaad_drm.a has no NeAACDecInitDRM — refusing"; exit 1; }
+  [ ! -f "$FAAD_PATCHES/series" ] || [ "$(grep -c VIBE_FAAD_STOCK "$WORK/faad/libfaad/hcr.c" || true)" -gt 0 ] \
+    || { echo "!! FAAD2's hcr.c is not the patched one — refusing"; exit 1; }
   check_log "$WORK/faad.log"
   verify_archive "$PREFIX/lib/libfaad_drm.a"
   rm -rf "$WORK/faad" "$WORK/faad.log"
@@ -222,20 +240,10 @@ fi
 #     and the archive is CHECKED to define nothing unprefixed. vibe_dab_faad.h calls it under the prefixed names.
 # ★★ V12: optimised, with VibeSDR's patch series — see linux/build-deps.sh (the same flag, the same series, in order).
 FAAD_DAB_OPT="-funsafe-math-optimizations"
-FAAD_PATCHES="$MAC/../linux/faad2-patches"
-FAAD_SERIES_SUM="$( { [ -f "$FAAD_PATCHES/series" ] && cat "$FAAD_PATCHES/series" && grep -v '^#' "$FAAD_PATCHES/series" | while IFS= read -r p; do [ -n "$p" ] && cat "$FAAD_PATCHES/$p"; done; } 2>/dev/null | shasum -a 256 | cut -c1-16)"
 FAADD_STAMP="faad2-dab $FAAD_VER $FAAD_SHA min=$MIN arch=$ARCH $CCVER opt=$FAAD_DAB_OPT patches=$FAAD_SERIES_SUM"
 if stamp_ok faad2-dab "$FAADD_STAMP" "$PREFIX/lib/libfaad_dab.a"; then echo "==> FAAD2 $FAAD_VER (DAB+ build): up to date"; else
   echo "==> FAAD2 $FAAD_VER (plain build, prefixed, for DAB+): building for macOS $MIN"
-  rm -rf "$WORK/faadd"; mkdir -p "$WORK/faadd"
-  tar -xzf "$SRC/faad2-$FAAD_VER.tar.gz" -C "$WORK/faadd" --strip-components 1
-  if [ -f "$FAAD_PATCHES/series" ]; then
-    while IFS= read -r p; do
-      case "$p" in ""|\#*) continue ;; esac
-      patch -d "$WORK/faadd" -p1 -s < "$FAAD_PATCHES/$p" || { echo "!! FAAD2 patch $p did not apply"; exit 1; }
-      echo "    FAAD2 patch: $p"
-    done < "$FAAD_PATCHES/series"
-  fi
+  faad_patched_tree "$WORK/faadd"
   # ★ TWO PASSES: the plain build defines globals the DRM one does not (LTP, MAIN prediction — measured), so the list is
   #   read off a first, unprefixed plain build, and the second build is the one kept.
   cmake -S "$WORK/faadd" -B "$WORK/faadd/b0" "${CMAKE_COMMON[@]}" -DCMAKE_C_FLAGS="$CFLAGS" \

@@ -359,6 +359,8 @@ interleaver):
 
 ## CPU per DRM listener
 
+- **The AAC decoder, 2026-10-29** (FAAD2's DRM build with VibeSDR's patch series, DRM-AUDIO-ROUTES.md "DRM's FAAD2,
+  optimised"): measured on the Pi 2, decoder alone — AAC mono 1.66 → 0.37 % of one core, HE-AAC mono 4.87 → 1.32 %.
 - **Since 2026-10-29** (the measured-profile interpolator): +3–6 % on the receiver — interleaved A/B on the Mac, mode B
   64-QAM 0.42 → 0.43–0.44 % of one core; the real RRI file 0.71 → 0.75 s of CPU for 150 s. Pi 2: ~8–16 %.
 - **Since 2026-10-26** (the Signal pane's statistics included, the timing loop's block scan made O(P)): mode A 0.37 %,

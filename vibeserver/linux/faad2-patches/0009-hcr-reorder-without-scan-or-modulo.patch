@@ -1,0 +1,216 @@
+Subject: [PATCH 9/9] hcr: Huffman codeword reordering without the section scan and the per-codeword modulo
+
+VibeSDR patch for FAAD2 2.11.3 (VibeServer's DRM build, libfaad_drm.a — DRM's AAC is error-resilient AAC with HCR;
+the plain DAB+ build carries it too and never reaches it). GPL-2.0-or-later, as FAAD2. Written for VibeSDR,
+2026-10-29; applied by vibeserver/linux/build-deps.sh, vibeserver/mac/build-deps.sh and
+android/app/src/main/cpp/sdr-kit/build-faad2.sh in the order of faad2-patches/series.
+
+reordered_spectral_data() (ISO/IEC 14496-3 8.5.3.3) was most of a DRM AAC frame's decode time on a Raspberry Pi 2
+(Cortex-A7): 60 % of the stock decoder on an AAC mono service, and with the division helper it calls, 84 % once
+patches 1-8 had made the rest cheaper. Three things, none of which changes what is decoded:
+ 1. Step 1 (the priority codewords) asked, for every 4 spectral lines of every sfb in every one of the 22 pre-sort
+    passes, every section of the window group whether it held that sfb. section_data() lays the sections end to end,
+    so each sfb has one section per group: a table says which, a pass whose codebook no section uses is skipped, and
+    an sfb whose section does not match the pass is skipped. The codewords are read in exactly the stock order.
+    (A section map that is not a partition — section_data() rejects one before this runs — takes the stock scan.)
+ 2. Step 2 (the remaining codewords) visited every codeword of a set in every trial, decoded or not, and computed
+    (trial + codewordBase) % numberOfSegments for each: an __aeabi_idivmod library call on ARMv7. Now each trial visits
+    the codewords still undecoded, in the same order, with a running segment index; within one trial every codeword
+    meets a different segment, so leaving out the decoded ones (which the stock loop tests and passes over) changes
+    nothing, nor do the trials after the last codeword is decoded or the last segment has run dry (a segment only
+    gains bits while it still has some).
+ 3. Step 1's codewords per window group, (4 * window_group_length) / inc with inc 4 or 2, without the division.
+Integer only. Output identical to the stock function, bit for bit: real DRM AAC (RRI 9570 kHz AAC mono, 1825 frames;
+KTWR HE-AAC mono, 4840 frames) clean and with every 2nd/3rd/5th/7th frame's second half deliberately corrupted, on
+macOS arm64 (also under AddressSanitizer + UBSan) and armhf. VIBE_FAAD_STOCK compiles the stock function.
+Raspberry Pi 2, the whole decoder (armhf, on top of patches 1-8), % of one core: AAC mono 1.363 -> 0.365; HE-AAC mono
+2.543 -> 1.318 (stock FAAD2: 1.663 and 4.871).
+
+--- a/libfaad/hcr.c
++++ b/libfaad/hcr.c
+@@ -32,6 +32,7 @@
+ #include "structs.h"
+ 
+ #include <stdlib.h>
++#include <string.h>
+ 
+ #include "specrec.h"
+ #include "huffman.h"
+@@ -259,21 +260,77 @@
+         last_CB = NUM_CB;
+     }
+ 
++#if !defined(VIBE_FAAD_STOCK)
++    /* VibeSDR: which section of each window group holds each sfb (section_data() lays them end to end, so there is
++     * at most one), and which of the pre-sort passes can match any section at all. Step 1 below then visits, in the
++     * stock order, only the passes that do something and only the one section that can hold the sfb, instead of every
++     * section for every 4 lines of every sfb in all 22 passes. A section map that is not a partition (it cannot be,
++     * after section_data()'s checks) falls back to the stock scan. Integer only: the output is identical. */
++    uint8_t sec_of[MAX_WINDOW_GROUPS][MAX_SFB];
++    uint8_t vibe_scan_all = (ics->max_sfb > MAX_SFB || ics->num_window_groups > MAX_WINDOW_GROUPS);
++    uint32_t vibe_cb_used = 0;
++    if (!vibe_scan_all)
++    {
++        for (g = 0; g < ics->num_window_groups; g++)
++        {
++            memset(sec_of[g], 0xFF, ics->max_sfb);
++            for (i = 0; i < ics->num_sec[g] && !vibe_scan_all; i++)
++            {
++                uint16_t k;
++                for (k = ics->sect_start[g][i]; k < ics->sect_end[g][i] && k < ics->max_sfb; k++)
++                {
++                    if (sec_of[g][k] != 0xFF) { vibe_scan_all = 1; break; }
++                    sec_of[g][k] = (uint8_t)i;
++                    vibe_cb_used |= 1u << (ics->sect_cb[g][i] & 31);
++                }
++            }
++        }
++    }
++#endif
++
+     /* step 1: decode PCW's (set 0), and stuff data in easier-to-use format */
+     for (sortloop = 0; sortloop < last_CB; sortloop++)
+     {
+         /* select codebook to process this pass */
+         this_CB = PreSortCb[sortloop];
+ 
++#if !defined(VIBE_FAAD_STOCK)
++        /* VibeSDR: a pass whose codebook no section uses decodes nothing (is_good_cb: the same codebook, or for the
++         * pair/quad books below ESC_HCB the next one up) */
++        if (!vibe_scan_all &&
++            !(vibe_cb_used & ((1u << this_CB) | (this_CB < ESC_HCB ? (1u << (this_CB + 1)) : 0u))))
++            continue;
++#endif
++
+         /* loop over sfbs */
+         for (sfb = 0; sfb < ics->max_sfb; sfb++)
+         {
++#if !defined(VIBE_FAAD_STOCK)
++            /* VibeSDR: an sfb no window group codes with this pass's codebook has nothing to read in this pass */
++            if (!vibe_scan_all)
++            {
++                uint8_t vibe_any = 0;
++                for (g = 0; g < ics->num_window_groups && !vibe_any; g++)
++                    vibe_any = sec_of[g][sfb] != 0xFF && is_good_cb(this_CB, ics->sect_cb[g][sec_of[g][sfb]]);
++                if (!vibe_any) continue;
++            }
++#endif
+             /* loop over all in this sfb, 4 lines per loop */
+             for (w_idx = 0; 4*w_idx < (min(ics->swb_offset[sfb+1], ics->swb_offset_max) - ics->swb_offset[sfb]); w_idx++)
+             {
+                 for(g = 0; g < ics->num_window_groups; g++)
+                 {
++#if !defined(VIBE_FAAD_STOCK)
++                    uint8_t i_first = 0, i_last = ics->num_sec[g];
++                    if (!vibe_scan_all)
++                    {
++                        if (sec_of[g][sfb] == 0xFF) continue;
++                        i_first = sec_of[g][sfb]; i_last = (uint8_t)(i_first + 1);
++                    }
++                    for (i = i_first; i < i_last; i++)
++#else
+                     for (i = 0; i < ics->num_sec[g]; i++)
++#endif
+                     {
+                         /* check whether sfb used here is the one we want to process */
+                         if ((ics->sect_start[g][i] <= sfb) && (ics->sect_end[g][i] > sfb))
+@@ -286,7 +343,12 @@
+                                 /* precalculate some stuff */
+                                 uint16_t sect_sfb_size = ics->sect_sfb_offset[g][sfb+1] - ics->sect_sfb_offset[g][sfb];
+                                 uint8_t inc = (this_sec_CB < FIRST_PAIR_HCB) ? QUAD_LEN : PAIR_LEN;
++#if !defined(VIBE_FAAD_STOCK)
++                                /* VibeSDR: inc is 4 or 2 — no division (a library call on ARMv7) */
++                                uint16_t group_cws_count = (inc == QUAD_LEN) ? ics->window_group_length[g] : (uint16_t)(2*ics->window_group_length[g]);
++#else
+                                 uint16_t group_cws_count = (4*ics->window_group_length[g])/inc;
++#endif
+                                 uint8_t segwidth = segmentWidth(this_sec_CB);
+                                 uint16_t cws;
+ 
+@@ -359,7 +421,77 @@
+         return 10;
+ 
+     numberOfSets = numberOfCodewords / numberOfSegments;
++
++#if !defined(VIBE_FAAD_STOCK)
++    /* step 2: decode nonPCWs
++     * VibeSDR: the same trials in the same order, but each trial visits only the codewords of the set that are still
++     * undecoded (a list, in codewordBase order), and the set ends once none is left. Within one trial every codeword
++     * meets a different segment, so the codewords skipped — decoded ones, which the stock loop tests and passes over —
++     * change nothing; nor do the trials after the last codeword is decoded. The segment index is kept running instead
++     * of (trial + codewordBase) % numberOfSegments, which was a library call per codeword on ARMv7. Most of a DRM AAC
++     * frame's decode time on a Raspberry Pi 2 was here and in step 1's section scan. Integer only: identical output. */
++    {
++        uint16_t todo[512];
++        const int ncw = (int)numberOfCodewords - (int)numberOfSegments;
++        /* segments that still hold bits: one that runs dry never gains any again (bits are only added to a segment
++         * that has some), so once none is left the remaining sets can decode nothing */
++        uint16_t live = 0;
++        for (i = 0; i < numberOfSegments; i++)
++            live += segment[i].len > 0;
+ 
++        for (set = 1; set <= numberOfSets && live > 0; set++)
++        {
++            const int base = (int)set*numberOfSegments - numberOfSegments;
++            uint16_t trial, n = 0, k, m, codewordBase;
++
++            for (codewordBase = 0; codewordBase < numberOfSegments && base + codewordBase < ncw; codewordBase++)
++                if (!codeword[base + codewordBase].decoded)
++                    todo[n++] = codewordBase;
++
++            for (trial = 0; trial < numberOfSegments && n > 0 && live > 0; trial++)
++            {
++                for (k = 0, m = 0; k < n; k++)
++                {
++                    const uint16_t cwb = todo[k];
++                    const uint16_t segment_idx = (uint16_t)(trial + cwb < numberOfSegments ? trial + cwb : trial + cwb - numberOfSegments);
++                    const uint16_t codeword_idx = (uint16_t)(base + cwb);
++
++                    if (segment[segment_idx].len > 0)
++                    {
++                        uint8_t tmplen = segment[segment_idx].len + codeword[codeword_idx].bits.len;
++
++                        if (tmplen > 64)
++                        {
++                          // Drop bits that do not fit concatenation result.
++                          flushbits_hcr(&codeword[codeword_idx].bits, tmplen - 64);
++                        }
++
++                        if (codeword[codeword_idx].bits.len != 0)
++                            concat_bits(&segment[segment_idx], &codeword[codeword_idx].bits);
++
++                        tmplen = segment[segment_idx].len;
++
++                        if (huffman_spectral_data_2(codeword[codeword_idx].cb, &segment[segment_idx],
++                                                   &spectral_data[codeword[codeword_idx].sp_offset]) >= 0)
++                        {
++                            codeword[codeword_idx].decoded = 1;
++                        } else
++                        {
++                            codeword[codeword_idx].bits = segment[segment_idx];
++                            codeword[codeword_idx].bits.len = tmplen;
++                        }
++                        live -= segment[segment_idx].len == 0;
++                    }
++                    if (!codeword[codeword_idx].decoded)
++                        todo[m++] = cwb;
++                }
++                n = m;
++            }
++            for (i = 0; i < numberOfSegments; i++)
++                rewrev_bits(&segment[i]);
++        }
++    }
++#else
+     /* step 2: decode nonPCWs */
+     for (set = 1; set <= numberOfSets; set++)
+     {
+@@ -409,6 +541,8 @@
+             rewrev_bits(&segment[i]);
+     }
+ 
++#endif
++
+ #if 0 // Seems to give false errors
+     bitsleft = 0;
+ 
