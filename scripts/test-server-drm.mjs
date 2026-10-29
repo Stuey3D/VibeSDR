@@ -6,7 +6,9 @@
 //     mode B, 10 kHz, 16-QAM, the station's label, its codec — and, for this AAC station, playable:false with the
 //     sentence that says why (no system decoder plays DRM's error-resilient AAC);
 //   • the audio socket keeps flowing (the programme or silence — never a stall);
-//   • on a ONE-PIPELINE radio (the shared receiver) and on a RANGE-LOCKED one (the listener's own channel);
+//   • on a ONE-PIPELINE radio (the shared receiver, one listener), on a SHARED DIAL (the same one receiver, several listeners
+//     allowed — its audio is always Opus, decoded here to judge the programme) and on a RANGE-LOCKED one (the listener's own
+//     channel);
 //   • zooming in and out (and a restated tune) leaves the receiver alone — one receiver, the lock held;
 //   • every report says whether this listener's zoom can move the radio (`zoomMovesRadio`, the DRM card's note): true on
 //     the rtl_tcp radio with the IF filter on Auto, false once the IF filter is set by hand (and true again on Auto), false
@@ -72,6 +74,24 @@ function ws(port, pathq) {
 }
 const jsons = (st, type) => st.txt.filter((t) => t.includes(`"type":"${type}"`)).map((t) => JSON.parse(t));
 
+/** Audio frames → int16-scaled mono samples at 48 kHz (the left channel). [0] channels, [1] codec (0 PCM, 3 Opus — a SHARED
+ *  DIAL always sends Opus), [2..5] rate. Opus is decoded with the web client's own decoder package (opus-decoder), so a shared
+ *  dial's programme is judged by the same checks as a one-pipeline radio's raw PCM. */
+async function pcmOf(frames) {
+  const out = [];
+  let opusDec = null;   // ★ one per stream: an Opus decoder carries state from packet to packet
+  for (const f of frames) {
+    if (f.length < 7) continue;
+    if (f[1] === 0) { const ch = f[0] || 1; for (let i = 6; i + 1 < f.length; i += 2 * ch) out.push(f.readInt16LE(i)); continue; }
+    if (f[1] !== 3) continue;
+    if (!opusDec) { const { OpusDecoder } = await import('opus-decoder'); opusDec = new OpusDecoder({ channels: 2 }); await opusDec.ready; }
+    let r; try { r = opusDec.decodeFrame(new Uint8Array(f.subarray(6))); } catch { continue; }
+    if (r && r.samplesDecoded) for (let i = 0; i < r.samplesDecoded; i++) out.push(Math.round(r.channelData[0][i] * 32767));
+  }
+  if (opusDec) try { opusDec.free(); } catch {}
+  return out;
+}
+
 /** ★ "Port already in use": freePort() hands out a port that something else on this machine can take before the server
  *  binds it (other benches run beside this one). A server that says so is started again on fresh ports — a harness race,
  *  not a result. */
@@ -121,7 +141,7 @@ async function listener(port, sid, f, mode) {
   return L;
 }
 
-async function scenario(label, args, tag, zoomMoves, { ifSwitch = false, noteOnly = false } = {}) {
+async function scenario(label, args, tag, zoomMoves, { ifSwitch = false } = {}) {
   console.log(`── ${label} ──`);
   const S = await server(args, tag);
   try {
@@ -169,8 +189,6 @@ async function scenario(label, args, tag, zoomMoves, { ifSwitch = false, noteOnl
       L.spec.send({ type: 'tunerbw', value: -1 });
       ok(await until(() => last() && last().zoomMovesRadio === true, 5000), `IF filter back on Auto: zoomMovesRadio true (${last() && last().zoomMovesRadio})`);
     }
-    // ★ the shared dial is here for its `zoomMovesRadio` only — the rest of the contract is the two radios' below
-    if (noteOnly) { for (const k of ['spec', 'aud']) L[k].close(); return; }
     const r = last() || {};
     ok(r.robustness === 'B' && r.bwKhz === 10 && r.mscQam === 16, `mode B, 10 kHz, 16-QAM (${r.robustness} ${r.bwKhz} ${r.mscQam})`);
     ok(r.label === 'SNR Tiganesti E1', `the station's label: "${r.label}"`);
@@ -181,20 +199,21 @@ async function scenario(label, args, tag, zoomMoves, { ifSwitch = false, noteOnl
     if (!faad) ok(r.playable === false && /cannot be played/.test(r.why || ''), `an AAC station says why it is silent: "${r.why}"`);
     else {
       ok(/FAAD2/.test(r.decoder || ''), `the box names the decoder: ${r.decoder}`);
-      // the programme itself, as PCM on this listener's audio socket (int16 frames: [ch][0][rate u32 LE][samples])
+      // the programme itself, on this listener's audio socket — raw int16 PCM on a one-at-a-time radio, Opus on a shared dial
+      // (where Opus is the stream, whatever the client asks: one encode fanned out to everybody — see acceptWs's caller)
       L.aud.countOnly = false; L.aud.bin.length = 0;
       await sleep(8000);
-      const pcm = [];
-      for (const f of L.aud.bin) if (f[1] === 0) { const ch = f[0]; for (let i = 6; i + 1 < f.length; i += 2 * ch) pcm.push(f.readInt16LE(i)); }
+      const pcm = await pcmOf(L.aud.bin);
       const N = 480, env = [];
       for (let i = 0; i + N <= pcm.length; i += N) { let e = 0; for (let k = 0; k < N; k++) e += pcm[i + k] * pcm[i + k]; env.push(10 * Math.log10(e / N + 1)); }
-      const sorted = [...env].sort((a, b) => a - b), q = (p) => sorted[Math.floor(p * (sorted.length - 1))];
+      // ★ no PCM at all must FAIL the checks below, not throw on an empty envelope (q() of nothing is -Infinity)
+      const sorted = [...env].sort((a, b) => a - b), q = (p) => (sorted.length ? sorted[Math.floor(p * (sorted.length - 1))] : -Infinity);
       let zc = 0; for (let i = 1; i < pcm.length; i++) if ((pcm[i] >= 0) !== (pcm[i - 1] >= 0)) zc++;
       const zcr = zc / Math.max(1, pcm.length) * 48000 / 2;
       ok(pcm.length > 48000 * 6, `programme PCM arrives (${(pcm.length / 48000).toFixed(1)} s in 8 s)`);
       ok(q(0.5) > 40, `it is not silence (median level ${q(0.5).toFixed(1)} dB re 1 LSB)${q(0.5) > 40 ? '' : ' — report: ' + JSON.stringify(last())}`);
       ok(q(0.9) - q(0.1) > 10, `it moves like programme, not noise (envelope p10→p90 ${(q(0.9) - q(0.1)).toFixed(1)} dB)`);
-      ok(zcr < 3000, `its energy is low in the band, as AAC at 12 kHz is (zero-crossing rate ≈ ${zcr.toFixed(0)} Hz)`);
+      ok(pcm.length > 0 && zcr < 3000, `its energy is low in the band, as AAC at 12 kHz is (zero-crossing rate ≈ ${zcr.toFixed(0)} Hz)`);
       // and as Opus to a client that asks for it
       const O = ws(S.port, `/ws/audio?user_session_id=drm${tag}001&codec=opus`);
       await sleep(4000);
@@ -237,7 +256,7 @@ async function scenario(label, args, tag, zoomMoves, { ifSwitch = false, noteOnl
 }
 
 await scenario('one-pipeline radio (the shared receiver)', ['--freq', String(STATION), '--mode', 'drm', '--users', '1'], 'one', true, { ifSwitch: true });
-await scenario('shared dial (unlocked, several listeners, one VFO)', ['--freq', String(STATION), '--mode', 'drm', '--users', '4'], 'dial', true, { noteOnly: true });
+await scenario('shared dial (unlocked, several listeners, one VFO)', ['--freq', String(STATION), '--mode', 'drm', '--users', '4'], 'dial', true);
 await scenario('range-locked radio (the listener\'s own channel)', ['--freq', String(CENTRE), '--lock-freq', String(CENTRE), '--users', '4', '--mode', 'am', '--idle-grace', '0'], 'lock', false);
 
 console.log(`\n${fail ? '✗' : '✓'} test-server-drm: ${pass} passed, ${fail} failed`);
