@@ -155,7 +155,7 @@ void SpecSocketSink::feedEngine(const std::vector<float>& bins, double freq) {
     const int half = n >> 1;
     std::memcpy(display_.data(), bins.data() + half, sizeof(float) * half);
     std::memcpy(display_.data() + half, bins.data(), sizeof(float) * half);
-    e->pushFrameNative(display_.data(), n, centerHz, bwHz, freq);
+    e->pushFrameNative(display_.data(), n, centerHz, bwHz, freq, statusBinBw_ > 0 ? statusBinBw_ * bc : NAN);   // ★ the bins' real span
 }
 
 }  // namespace vibespec

@@ -84,7 +84,7 @@ import { cadenceGap, uiFrameCapHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { needleGeometry } from '../utils/needleGeometry';
-import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
 import { setWideSink } from '../services/wideRowBus';
 import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate } from '../utils/wfPace';
@@ -458,7 +458,8 @@ const WF_EFFECT = Skia.RuntimeEffect.Make(WF_SKSL);
 /** The native spectrum engine's host object (cpp/spectrum/spectrum_jsi.cpp). JS calls the setters and push; the UI
  *  thread calls poll. */
 interface SpectrumEngineHost {
-  push(bins: Float32Array, centerHz: number, bwHz: number, trueCenterHz: number | undefined, lastInteractAt: number): void;
+  push(bins: Float32Array, centerHz: number, bwHz: number, trueCenterHz: number | undefined, lastInteractAt: number,
+       trueBwHz?: number): void;   // ★ the bins' real span (an older binary ignores it)
   setView(centerHz: number, bwHz: number): void;
   /** ★ V12 a full-capture row (SPWB, utils/wfWide.ts) the JS socket received — the engine keeps the layer (wf_wide.h).
    *  Optional: a binary built before it has none, and then the row is simply not drawn. */
@@ -1852,8 +1853,15 @@ function WaterfallView({
     }
     lastWfPushAt.current = now;
 
-    const rowCentre = fstatus.trueCenterHz ?? fstatus.centerHz;
-    const rowHzBin  = fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0;
+    // ★★★ THE ROW'S OWN GEOMETRY — centre AND span (2026-10-29, beta37 iPhone on UberSDR: "the fan out on zoom doesn't
+    //     work properly", the history below a zoom out drawn as sideways smears). bwHz is the PREDICTED view while a zoom
+    //     is in flight (300 ms after the last send), but the bins are at the server's rung — UberSDR snaps every request
+    //     to its ladder (200/300/500/1000/2000 Hz a bin, measured). Labelled with the prediction, every pinch step and the
+    //     settle's snap to the real rung were taken for zoom steps the data never made: each started a fan ease that
+    //     magnified rows by the wrong ratio and joined rows of one scale as if they were another — rows stretched
+    //     sideways and torn. Placed by trueBwHz, a row changes span only when its bins really do, and the fan runs once
+    //     per real step. (The trace and the axis keep the predicted geometry — they move under the finger.)
+    const [rowCentre, rowHzBin] = rowGeometry(fstatus, frame.row.length);   // utils/wfRowPlace.ts
     pushRow(frame.row, rowCentre, rowHzBin);
     // Keep it for the repeat pushes on a slow feed (frame.row is reused by the caller).
     if (!lastRow.current || lastRow.current.length !== frame.row.length)
@@ -2144,7 +2152,7 @@ function WaterfallView({
     frameSink.current = engine
       ? (bins: Float32Array, st: SDRStatus) => {
           const at = lastInteractAt?.current ?? 0;
-          engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, at);
+          engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, at, st.trueBwHz);
           // ★ The FRAME RATE cap reaches the engine's row target (rowTargetUnderCap) when it changes — no React state
           //   carries it here, so it is checked per frame (one number compare) and the config re-sent on a change.
           const cap = uiFrameCapHz.value, ec = engineCfg.current;

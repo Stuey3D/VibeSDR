@@ -58,30 +58,30 @@ double SpectrumEngine::now() const { return clock_ ? clock_() : wallMs(); }
 
 // ── From JS ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-void SpectrumEngine::pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
+void SpectrumEngine::pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz) {
     if (!bins || n <= 0) return;
     {
         std::lock_guard<std::mutex> lk(mx_);
         nativeFedUntil_ = now() + NATIVE_FED_MS;
     }
-    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz);
+    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz, trueBwHz);
 }
 
-void SpectrumEngine::pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
+void SpectrumEngine::pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz) {
     if (!bins || n <= 0) return;
     {
         std::lock_guard<std::mutex> lk(mx_);
         if (now() < nativeFedUntil_) return;   // the native socket already gave us this frame, on time
     }
-    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz);
+    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz, trueBwHz);
 }
 
-void SpectrumEngine::pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
+void SpectrumEngine::pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz) {
     std::lock_guard<std::mutex> lk(mx_);
     Frame f;
     if (!framePool_.empty()) { f = std::move(framePool_.back()); framePool_.pop_back(); }
     f.bins.assign(bins, bins + n);
-    f.centerHz = centerHz; f.bwHz = bwHz; f.trueCenterHz = trueCenterHz;
+    f.centerHz = centerHz; f.bwHz = bwHz; f.trueCenterHz = trueCenterHz; f.trueBwHz = trueBwHz;
     f.arrivedMs = now();
     inbox_.push_back(std::move(f));
     // A runaway producer (the engine thread starved) must not grow memory: keep the newest few.
@@ -321,7 +321,10 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     }
     lastWfPushAt_ = now;
     const double rowCentre = std::isnan(f.trueCenterHz) ? f.centerHz : f.trueCenterHz;
-    const double rowHzBin = (f.bwHz > 0 && n > 0) ? f.bwHz / n : 0;
+    // ★★ The row's OWN span (WaterfallView's twin, 2026-10-29): bwHz is the predicted view while a zoom is in flight, the
+    //   bins are at the server's rung — placed by the prediction, the fan eased rows by ratios the data never had.
+    const double rowBw = (!std::isnan(f.trueBwHz) && f.trueBwHz > 0) ? f.trueBwHz : f.bwHz;
+    const double rowHzBin = (rowBw > 0 && n > 0) ? rowBw / n : 0;
     // ★★ The row is published TOGETHER with the scroll state below (one lock, one version): the UI must never see
     //   the new head without the glide restart that goes with it. Apart, a poll between the two showed the head
     //   one row on with the old glide still at 1 — the whole waterfall a row forward for one frame, then back —

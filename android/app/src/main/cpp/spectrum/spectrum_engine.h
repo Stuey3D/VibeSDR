@@ -81,11 +81,12 @@ public:
 
     // ── From JS ──
     /** One decoded frame (raw dB, display order). Copied; returns at once. trueCenterHz NaN = absent. */
-    void pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    /** ★★ trueBwHz = the bins' REAL span (SDRStatus.trueBwHz; NaN = bwHz is already theirs) — rows are placed by it. */
+    void pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz = NAN);
     /** The same, from the native spectrum socket (spec_socket.cpp) on ITS thread, at arrival. While the socket has fed
      *  a frame in the last NATIVE_FED_MS, pushFrame (JS's copy of the same frame, delivered later) is ignored — so a
      *  server on the native socket and one on the JS path (OWRX, Kiwi) need no switch. */
-    void pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    void pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz = NAN);
     /** ★★ V12 a full-capture row (SPWB v2, wf_wide.h) — the bytes as received; copied, applied on the engine thread with
      *  its ARRIVAL time (the layer interpolates between rows by it). From the native socket (…Native, its thread) or
      *  from JS (a server on the JS socket; ignored while the native socket feeds frames, as pushFrame is). */
@@ -112,10 +113,10 @@ public:
     double wideOffForTest() const { return wide_ ? wide_->off : NAN; }
 
 private:
-    void pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    void pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz);
     void pushWideImpl(const uint8_t* p, size_t len);
     void applyWide(const std::vector<uint8_t>& bytes, double at);   // engine thread
-    struct Frame { std::vector<float> bins; double centerHz = 0, bwHz = 0, trueCenterHz = NAN; double arrivedMs = 0; };
+    struct Frame { std::vector<float> bins; double centerHz = 0, bwHz = 0, trueCenterHz = NAN, trueBwHz = NAN; double arrivedMs = 0; };
 
     void loop();
     void runDue(double now);                 // timers + inbox, engine thread

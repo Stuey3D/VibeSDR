@@ -7656,7 +7656,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ V12 binaural tuning: the AM/CW/FM offset from this frame (and the dial/source); off = one ref read.
         if (binauralRef.current) {
           binauralTracker.current?.onFrame(newBins, {
-            centerHz: s.trueCenterHz ?? s.centerHz, bwHz: s.bwHz, tuneHz: s.frequency,
+            centerHz: s.trueCenterHz ?? s.centerHz, bwHz: s.trueBwHz ?? s.bwHz, tuneHz: s.frequency,
             lo: s.bandwidthLow, hi: s.bandwidthHigh,
           }, dabOnRef.current ? 'dab' : s.mode);
         }
@@ -7671,7 +7671,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // bug — confirmed on the watch). Fall back to centerHz for any adapter that doesn't
           // set it. The main app's full-spectrum draw keeps using the predicted centre.
           centerHz:   s.trueCenterHz ?? s.centerHz,
-          bwHz:       s.bwHz,
+          bwHz:       s.trueBwHz ?? s.bwHz,   // ★ the bins' real span with their real centre (SDRStatus.trueBwHz)
           tuneHz:     s.frequency,
           filterLow:  s.bandwidthLow,
           filterHigh: s.bandwidthHigh,
@@ -7869,7 +7869,7 @@ export default function SDRScreen({ route, navigation }: Props) {
              *  whole over (Stuart, 2 m NFM, 2026-09-27 — found in the web client; same algorithm here).
              *  ★ Same geometry as `peak` above: the VFO at the middle of `newBins`, spanning s.bwHz. */
             const excess = aSl
-              ? channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.bwHz, aSl.frequency, aSl.bandwidthLow, aSl.bandwidthHigh)
+              ? channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.trueBwHz ?? s.bwHz, aSl.frequency, aSl.bandwidthLow, aSl.bandwidthHigh)
               : channelExcessDb(newBins, s.frequency, s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
             const nearInst = Number.isFinite(excess) ? autoChan - excess : NaN;
             if (Number.isFinite(nearInst)) {
@@ -7961,7 +7961,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  never taken for a signal. Nothing at all runs while the scanner is idle. */
           if (scannerFeedRef.current && scannerCtlRef.current?.running()) {
             const cHz = s.trueCenterHz ?? s.centerHz;
-            const ex = channelExcessDb(newBins, cHz, s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
+            const ex = channelExcessDb(newBins, cHz, s.trueBwHz ?? s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
             const floorLvl = Number.isFinite(ex) ? levelDbm - ex
               : (owrxDbm == null && !isKiwi && !isLocal && floorEmaRef.current > -900) ? floorEmaRef.current + vg : NaN;
             scanFloorRef.current = floorLvl;
@@ -7972,7 +7972,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             });
           } else if (activeDecRef.current === 'scanner') {
             // ★ Tagging while idle still wants a floor: the same reference, cheap (one pass over the channel's neighbours).
-            const ex = channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
+            const ex = channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.trueBwHz ?? s.bwHz, s.frequency, s.bandwidthLow, s.bandwidthHigh);
             scanFloorRef.current = Number.isFinite(ex) ? levelDbm - ex
               : (owrxDbm == null && !isKiwi && !isLocal && floorEmaRef.current > -900) ? floorEmaRef.current + vg : NaN;
           }
@@ -8002,7 +8002,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             const bSl = abActiveRef.current === 'B' ? s : abNow.other;
             if (sqlBAutoRef.current && Number.isFinite(chB) && bSl) {
               const bKey = `${Math.round(bSl.frequency)}|${bSl.mode}|${bSl.bandwidthLow}|${bSl.bandwidthHigh}`;
-              const bEx = channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.bwHz, bSl.frequency, bSl.bandwidthLow, bSl.bandwidthHigh);
+              const bEx = channelExcessDb(newBins, s.trueCenterHz ?? s.centerHz, s.trueBwHz ?? s.bwHz, bSl.frequency, bSl.bandwidthLow, bSl.bandwidthHigh);
               const want = sqlBTrack.current.tick(chB, bKey, bEx, sqlAutoMarginRef.current, Date.now(), 90 - 130 - vg);
               if (want !== null && want !== abNow.squelchB) {
                 (client.current as { setSquelchVfo?: (v: 'A' | 'B', db: number) => void } | null)?.setSquelchVfo?.('B', want);

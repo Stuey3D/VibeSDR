@@ -74,8 +74,8 @@ public:
                 });
         };
         // ── JS thread ──
-        if (name == "push") return fn(5, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
-            // push(bins: Float32Array, centerHz, bwHz, trueCenterHz | undefined, lastInteractAt)
+        if (name == "push") return fn(6, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            // push(bins: Float32Array, centerHz, bwHz, trueCenterHz | undefined, lastInteractAt, trueBwHz | undefined)
             if (c < 3 || !a[0].isObject()) return jsi::Value::undefined();
             const jsi::Object arr = a[0].asObject(r);
             const jsi::ArrayBuffer buf = arr.getProperty(r, "buffer").asObject(r).getArrayBuffer(r);
@@ -85,7 +85,8 @@ public:
             const float* bins = reinterpret_cast<const float*>(buf.data(r) + off);
             const double tc = (c > 3 && a[3].isNumber()) ? a[3].asNumber() : NAN;
             if (c > 4 && a[4].isNumber()) en.setLastInteractAt(a[4].asNumber());   // read at arrival, as enqueueFrame did
-            en.pushFrame(bins, (int)len, a[1].asNumber(), a[2].asNumber(), tc);
+            const double tb = (c > 5 && a[5].isNumber()) ? a[5].asNumber() : NAN;
+            en.pushFrame(bins, (int)len, a[1].asNumber(), a[2].asNumber(), tc, tb);
             return jsi::Value::undefined();
         });
         if (name == "pushWide") return fn(1, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {

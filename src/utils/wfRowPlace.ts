@@ -29,6 +29,19 @@ export function rowViewOffset(rowCenterHz: number, rowHzPerBin: number, viewCent
   return Math.abs(off) >= n ? 0 : off;
 }
 
+/** ★★★ A ROW'S OWN GEOMETRY: [centre Hz, Hz a bin] of the bins in this frame — the TRUE centre and span when the client
+ *  states them (SDRStatus.trueCenterHz / trueBwHz), else the status's. While a zoom is in flight centerHz/bwHz are the
+ *  PREDICTED view, but the bins are at the server's own rung (UberSDR's ladder, measured 2026-10-29: 200/300/500/1000/2000
+ *  Hz a bin — 244 asked → 200, 1953 → 2000). Placing a row by the prediction made every pinch step and the settle's snap to
+ *  the real rung look like zoom steps the data never made: each started a fan ease that magnified real rows by a ratio
+ *  they never had, and the joins warped rows of one scale as if another — the sideways smears under a zoom out (beta37,
+ *  iPhone on UberSDR). scripts/test_wf_zoomout_fan.ts. */
+export function rowGeometry(s: { centerHz: number; bwHz: number; trueCenterHz?: number; trueBwHz?: number }, len: number): [number, number] {
+  const c = s.trueCenterHz ?? s.centerHz;
+  const bw = s.trueBwHz != null && s.trueBwHz > 0 ? s.trueBwHz : s.bwHz;
+  return [c, bw > 0 && len > 0 ? bw / len : 0];
+}
+
 /** Write `row` (n bins) into `ring` at `slot`, slid by `off` bins; the vacated edge is the floor (0) — the "slight gap"
  *  at a newly exposed edge, never a smear of the edge bin. */
 export function writeRow(ring: Uint8Array, slot: number, row: Uint8Array, n: number, off: number): void {
