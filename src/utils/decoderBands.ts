@@ -37,7 +37,7 @@
  */
 import { BAND_PLAN } from '../constants/bandPlan.ts';
 import { NAVTEX_BANDS_KHZ } from './navtexStations.generated.ts';
-import { DSC_CHANNELS } from '../services/dsc.ts';
+import { DSC_ALL } from './dscChannels.ts';
 
 export type RadioBand = 'hf' | 'vhf' | 'uhf';
 export type DecoderGroup = 'aviation' | 'maritime' | 'amateur' | 'other';
@@ -145,7 +145,7 @@ const pointsNear = (hz: number, pts: readonly number[], tol: number) => pts.some
 const NEAR: Record<string, (hz: number) => boolean> = {
   hfdl:   hz => anyNear(hz, HFDL, 5e3),
   navtex: hz => pointsNear(hz, NAVTEX_BANDS_KHZ.map(k => k * 1e3), 5e3),
-  dsc:    hz => DSC_CHANNELS.some(c => Math.abs(hz - c.hz) <= (c.vhf ? 50e3 : 5e3)),
+  dsc:    hz => DSC_ALL.some(c => Math.abs(hz - c.hz) <= (c.vhf ? 50e3 : 5e3)),
   wefax:  hz => pointsNear(hz, WEFAX_KHZ.map(k => k * 1e3), 4e3),
   spots:  hz => anyNear(hz, HAM),
   cw:     hz => anyNear(hz, HAM),

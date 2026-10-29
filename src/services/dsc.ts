@@ -13,6 +13,10 @@
  *    orange, safety amber, routine plain — newest first.
  */
 import { esc, rangeBearing, compass8, ago, type LatLon, type TrackItem, type TrackRow } from './tracks';
+import { DSC_DISTRESS, dscTuneFor as sharedTuneFor, dscCentreFor, dscReachable, dscBandOf, dscBandChannels,
+         type DscBand, type DscChannel } from '../utils/dscChannels';
+export { DSC_DISTRESS, DSC_ROUTINE, DSC_ALL, dscBandOf, dscBandLabel, dscBandChannels, dscChannelOn, dscChannelsForDial,
+         dscTuneOffer, dscKeyTitle, dscDialText, type DscBand, type DscChannel } from '../utils/dscChannels';
 
 export interface DscCall {
   id: number; utc: number; rf: number; repeat: number;
@@ -23,36 +27,23 @@ export interface DscCall {
   quality: number; band: 'hf' | 'vhf'; line: string;
 }
 
-/** The DSC distress and safety frequencies (ITU RR Appendix 15) and channel 70 — the web's DSC_CHANNELS. */
-export const DSC_CHANNELS: ReadonlyArray<{ hz: number; label: string; vhf: boolean }> = [
-  { hz: 2187500, label: '2187.5', vhf: false },
-  { hz: 4207500, label: '4207.5', vhf: false },
-  { hz: 6312000, label: '6312', vhf: false },
-  { hz: 8414500, label: '8414.5', vhf: false },
-  { hz: 12577000, label: '12577', vhf: false },
-  { hz: 16804500, label: '16804.5', vhf: false },
-  { hz: 156525000, label: 'Ch 70', vhf: true },
-];
-const TONE = 1700;
+/** The DSC distress and safety frequencies (ITU RR Appendix 15) and channel 70 — the web's DSC_CHANNELS. The routine
+ *  channels (ITU-R M.541) and every rule about where to tune live in utils/dscChannels (shared with the web). */
+export const DSC_CHANNELS: ReadonlyArray<{ hz: number; label: string; vhf: boolean }> =
+  DSC_DISTRESS.map(({ hz, label, vhf }) => ({ hz, label, vhf }));
 
 /** Where to tune for a DSC channel: USB 1.7 kHz below, or channel 70 in NFM. */
 export function dscTuneFor(ch: { hz: number; vhf: boolean }): { hz: number; mode: 'usb' | 'nfm' } {
-  return ch.vhf ? { hz: ch.hz, mode: 'nfm' } : { hz: ch.hz - TONE, mode: 'usb' };
+  return sharedTuneFor(ch);
 }
 
 /** The attach parameters for the listener's dial and mode. ★ The audio centre is worked out from the NEAREST DSC
- *  frequency, so a dial a little off the usual 1.7 kHz (2186.0 USB) still decodes; anywhere else, 1700 Hz. */
+ *  channel — distress or routine (dscCentreFor) — so a dial a little off the usual 1.7 kHz (2186.0 USB) still decodes;
+ *  anywhere else, 1700 Hz. */
 export function dscParams(dialHz: number, mode: string): { band: 'vhf' } | { band: 'hf'; center_frequency: number } {
   const m = (mode || '').toLowerCase();
   if (m === 'nfm' || m === 'fm' || Math.abs(dialHz - 156525000) < 25000) return { band: 'vhf' };
-  let centre = TONE;
-  let best = Infinity;
-  for (const c of DSC_CHANNELS) {
-    if (c.vhf) continue;
-    const a = m === 'lsb' ? dialHz - c.hz : c.hz - dialHz;
-    if (a >= 300 && a <= 3000 && Math.abs(a - TONE) < best) { best = Math.abs(a - TONE); centre = a; }
-  }
-  return { band: 'hf', center_frequency: Math.round(centre) };
+  return { band: 'hf', center_frequency: dscCentreFor(dialHz, m) };
 }
 
 /** A dsc_call's data, re-checked field by field. null = not a call. */
@@ -106,16 +97,29 @@ export function dscTimeText(ms: number): string {
 /** The idle line and the hint — the web's, word for word (the hint's bold dropped). */
 export const DSC_IDLE = 'listening — each DSC call appears here as it is decoded. A few an hour on each frequency; most are '
   + 'test calls to coast stations and their acknowledgements.';
-export const DSC_HINT = 'Tune a DSC frequency in USB with the dial 1.7 kHz below it (2185.8 for 2187.5 kHz) — or press a '
-  + 'channel. Channel 70 (156.525 MHz) is NFM. 8414.5 kHz is the busiest by day, 2187.5 kHz at night. Each call is shown '
-  + 'as it is decoded; a position sent gets MAP.';
+export const DSC_HINT = 'A listed DSC frequency is the ASSIGNED frequency, not the dial: tune USB with the dial 1.7 kHz '
+  + 'below it (4206.8 for 4208.5 kHz) — or press a channel. Channel 70 (156.525 MHz) is NFM. DISTRESS holds the distress '
+  + 'and safety channels; the band you are on lists its routine ones too. 8414.5 kHz is the busiest by day, 2187.5 kHz at '
+  + 'night. Each call is shown as it is decoded; a position sent gets MAP.';
 
 /** The status line for the decoder's 0x03 state (the web's onState). */
 export function dscStateText(st: number): string { return st ? 'receiving a call…' : 'listening…'; }
 
-/** ★ The channels this radio can reach (where each would be TUNED) — the rest are not drawn (the web's initDscChannels). */
+/** ★ The distress channels this radio can reach (where each would be TUNED) — the rest are not drawn (the web's
+ *  initDscChannels). */
 export function dscChannelsReachable(reach: (hz: number) => boolean): Array<{ hz: number; label: string; vhf: boolean }> {
   return DSC_CHANNELS.filter((ch) => reach(dscTuneFor(ch).hz));
+}
+
+/** ★ The Mode panel's DSC options: DISTRESS (every band this radio reaches) and the ROUTINE channels of the band the dial
+ *  is on (none off every DSC band) — the web's initDscChannels. */
+export function dscPanelChannels(dialHz: number, reach: (hz: number) => boolean): { distress: DscChannel[]; band: DscBand | null; routine: DscChannel[] } {
+  const band = dscBandOf(dialHz);
+  return {
+    distress: dscReachable(DSC_DISTRESS, reach),
+    band,
+    routine: band ? dscReachable(dscBandChannels(band).filter((c) => c.kind === 'routine'), reach) : [],
+  };
 }
 
 /** A call with a position, as a map pin: the call's line, its level's colour (the web's PIN_COLOUR). */

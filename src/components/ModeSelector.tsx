@@ -12,8 +12,9 @@ import { useTheme } from '../contexts/ThemeContext';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus, NAV_ADJUST } from './PanelNav';
 import {
   usePopupSurface, usePopupTheme, usePopupFrame, engraveText, windowStyle,
-  PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader, sheetCap,
+  PopupScrim, PopupPlate, PopupHandle, PopupKey, PopupFader, sheetCap, POPUP_FONT, SHEET_MAX_W,
 } from './PopupShell';
+import { decoderKeyGrid, gridRows, tabCorners, type KeyGrid as KeyGridSize, type KeyLegend } from '../utils/decoderKeyGrid';
 
 /** Today's dim and sheet glass — Transparency OFF drops the first and makes the second opaque.
  *  ★★ Silver / black (§10.3, build 356 — "still the old gold / glass style"): the sheet takes the chassis
@@ -28,11 +29,11 @@ import { RTTY_BAUD_ROWS, RTTY_PARITIES, RTTY_SHIFTS, rttyStops } from '../utils/
 import { sameLanguage, translateTargetLabel } from '../services/transcriber';
 import { CW_WIDTHS, CW_DEFAULT_WIDTH, cwHintText, PSK_WIDTHS, PSK_DEFAULT_WIDTH, pskHintText } from '../services/cwList';
 import { JTTY_HINT } from '../services/jtty';
-import ModeIcon, { ModeLabel, modeKeyIcon, MODE_ICON_STACK_BELOW } from './ModeIcon';   // ★ V12 mode icons (Stuart 2026-10-28)
+import ModeIcon, { ModeLabel, modeKeyIcon } from './ModeIcon';   // ★ V12 mode icons (Stuart 2026-10-28)
 import { DECODER_PLACES, RADIO_BANDS, WHOLE_RADIO_IDS, WHOLE_RADIO_LABEL, WHOLE_RADIO_HINT, decoderGroupIcon, decoderGroupLabel, decoderDim, openingBand,
          type RadioBand } from '../utils/decoderBands';   // ★ V12 band tabs + groups + dimming (Stuart 2026-10-28)
 import { modeIconFor } from '../utils/modeIcons';
-import { DSC_HINT } from '../services/dsc';
+import { DSC_HINT, dscChannelOn } from '../services/dsc';
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'aprs';
@@ -158,6 +159,71 @@ function SubLabel({ label, small }: { label: string; small?: boolean }) {
 function OptRow({ children }: { children: React.ReactNode }) {
   return <NavRow><View style={dst.optRow}>{children}</View></NavRow>;
 }
+/**
+ * ★★★ ONE GRID OF UNIFORM KEYS (Stuart, 2026-10-29: "make the buttons for the decoders one uniform size … left justify
+ * them under their category title") — utils/decoderKeyGrid sizes them; this draws them: rows of `grid.cols` keys, each
+ * `grid.keyW` wide, left-justified (a short row ends early), every row its own NavRow so up / down step row by row.
+ * ★★ A KEY'S OPTIONS POP OUT OF IT ("the options look like they have popped out of the decoder button itself onto the row
+ *   below"): the open key sits on a shaded TAB that runs down into a shaded panel on the row directly beneath its own row —
+ *   one shape, in the key's colour — and the keys after it keep their places below. The panel's own rows are NavRows, so
+ *   the D-pad reaches them between the key's row and the next.
+ */
+const KEY_GAP = 7;
+const TAB_PAD = 4;
+const TAB_R = 8;
+function KeyGrid({ items, grid, openId, options, shade, style }: {
+  items: { id: string; node: React.ReactNode }[]; grid: KeyGridSize;
+  openId?: string | null; options?: React.ReactNode; shade: string; style?: object;
+}) {
+  if (!items.length) return null;
+  const rows = gridRows(items, grid.cols);
+  const openAt = openId && options ? items.findIndex((it) => it.id === openId) : -1;
+  const corners = tabCorners(openAt, grid.cols);
+  return (
+    <View style={[{ gap: KEY_GAP }, style]}>
+      {rows.map((row, r) => {
+        const openHere = openAt >= 0 && Math.floor(openAt / grid.cols) === r;
+        return (
+          <React.Fragment key={row[0].id}>
+            <NavRow><View style={{ flexDirection: 'row', gap: KEY_GAP }}>
+              {row.map((it, c) => (
+                <View key={it.id} style={openHere && c === corners.col ? [kg.tab, { width: grid.keyW + 2 * TAB_PAD, backgroundColor: shade }]
+                                                                      : [kg.cell, { width: grid.keyW }]}>
+                  {it.node}
+                </View>
+              ))}
+            </View></NavRow>
+            {openHere && (
+              <View style={[kg.panel, { backgroundColor: shade },
+                            corners.left && { borderTopLeftRadius: 0 }, corners.right && { borderTopRightRadius: 0 }]}>
+                {options}
+              </View>
+            )}
+          </React.Fragment>
+        );
+      })}
+    </View>
+  );
+}
+const kg = StyleSheet.create({
+  cell:  { flexDirection: 'row' },
+  // ★ The tab: the key's own cell grown by TAB_PAD round its top and sides and by the row gap below, so it meets the
+  //   panel; the negative margins keep every key where it was (nothing in the row moves when a key opens).
+  tab:   { flexDirection: 'row', marginHorizontal: -TAB_PAD, marginTop: -TAB_PAD, marginBottom: -KEY_GAP,
+           paddingTop: TAB_PAD, paddingHorizontal: TAB_PAD, paddingBottom: KEY_GAP,
+           borderTopLeftRadius: TAB_R, borderTopRightRadius: TAB_R },
+  panel: { marginHorizontal: -TAB_PAD, borderRadius: TAB_R, paddingHorizontal: 10, paddingTop: 6, paddingBottom: 10 },
+});
+
+/** rgba() of a colour at another alpha — the shade of a key's colour (rgb(), rgba() or #rrggbb). */
+function shadeOf(c: string, a: number): string {
+  const m = c.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/);
+  if (m) return `rgba(${m[1]},${m[2]},${m[3]},${a})`;
+  const h = c.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})/i);
+  if (h) return `rgba(${parseInt(h[1], 16)},${parseInt(h[2], 16)},${parseInt(h[3], 16)},${a})`;
+  return `rgba(255,255,255,${a})`;
+}
+
 function SegBtn({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const { focused, viewRef } = useNavButton(onPress);
@@ -336,8 +402,10 @@ interface ModeSelectorProps {
     onPskView?: (skim: boolean) => void; onPskWidth?: (w: number) => void;
     /** ★★ V12 JTTY — only where `"jtty": true`; its settings are the announced calling frequencies THIS radio reaches. */
     jttyAvail?: boolean; jttyDials?: Array<{ hz: number; label: string }>; onJttyDial?: (hz: number) => void;
-    /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches. */
+    /** ★★ V12 DSC — only where `"dsc": true`; its settings are the DSC channels THIS radio reaches: `dscChans` the distress
+     *  set, `dscRoutine` the routine channels (ITU-R M.541) of the band the dial is on, named `dscBandLabel`. */
     dscAvail?: boolean; dscChans?: Array<{ hz: number; label: string; vhf: boolean }>;
+    dscRoutine?: Array<{ hz: number; label: string; vhf: boolean }>; dscBandLabel?: string;
     onDscChan?: (ch: { hz: number; label: string; vhf: boolean }) => void;
     /** The dial now — lights the JTTY band / DSC channel key the radio is on. */
     tunedHz?: number;
@@ -477,9 +545,79 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   // ★ "ADV RDS" was an abbreviation forced by nothing — the button spans the whole row and has
   //   room to spare. Only the very narrowest phones need the short form (Stuart, 2026-07-28).
   const advRdsLabel = winW >= 340 ? 'ADVANCED RDS' : 'ADV RDS';
-  /** ★ V12 mode icons: on the narrowest phones the glyph goes ABOVE the label (beside it, NAVTEX would truncate). */
-  const stackIco = winW < MODE_ICON_STACK_BELOW;
+  const txShown = !!transcribeControls && !isBlocked('transcribe');
+  /* ★★★ ONE KEY SIZE FOR THE WHOLE PANEL (Stuart, 2026-10-29 — utils/decoderKeyGrid). Every key the DECODERS, VIEWS and
+   *  spots sections can draw (every band tab's too, so switching tabs never resizes them) is listed with its legend; the
+   *  legends are MEASURED in the keys' own font (the hidden row below) and the panel's own width is measured where it is
+   *  drawn — never the device. Until both are in, an estimate from the window keeps the first frame close. */
+  const legendSpecs: Array<{ label: string; icon: string | null }> = [];
+  const addLegend = (label: string, icon: string | null = null) => {
+    if (!legendSpecs.some((l) => l.label === label)) legendSpecs.push({ label, icon: icon && modeIconFor(icon) ? icon : null });
+  };
+  if (decSectionShown && decoderControls) {
+    if (adsbShown) addLegend('ADS-B', 'adsb');
+    if (aisShown) addLegend('AIS', 'ais');
+    if (decoderControls.dabAvail) addLegend('DAB', 'dab');
+    if (ismShown) addLegend('ISM', 'ism');
+    if (ndbShown) addLegend('NDB', 'ndb');
+    if (bandInWhole) addLegend('SPOTS: BAND', 'spotsband');
+    for (const k of clientDecs) addLegend(k.toUpperCase(), k);
+    if (cwShown) addLegend('CW', 'cw');
+    if (pskShown) addLegend('PSK', 'psk');
+    if (jttyShown) addLegend('JTTY', 'jtty');
+    if (dscShown) addLegend('DSC', 'dsc');
+    if (aprsShown) addLegend('APRS', 'aprs');
+    if (advRdsShown) addLegend(advRdsLabel, 'rds');
+    if (spotsInBands) addLegend('DIGITAL SPOTS', 'spots');
+    if (hfdlInBands) addLegend('HFDL MAP', 'hfdl');
+    if (scanShown) addLegend('SCANNER');
+  }
+  if (spotsShown && spotsControls?.showMap) addLegend('🗺 MAP');
+  if (decoderControls?.galleryAvail) addLegend('GALLERY');
+  if (txShown) addLegend('TRANSCRIBE');
+  if (spotsShown && spotsControls) {
+    if (!spotsInBands) addLegend(spotsControls.band ? 'SPOTS: SINGLE' : 'DIGITAL SPOTS', 'spots');
+    if (spotsControls.band && !bandInWhole) addLegend('SPOTS: BAND', 'spotsband');
+    if (spotsControls.showCwStt) { addLegend('CW SPOTS', 'cw'); addLegend('STT'); }
+  }
+  const keyFont = pt.metal
+    ? { fontFamily: POPUP_FONT, fontSize: 12, fontWeight: '700' as const, letterSpacing: 1 }
+    : { fontFamily: t.font, fontSize: 13 };
+  const fontSig = `${keyFont.fontFamily}/${keyFont.fontSize}/${pt.metal ? 1 : 0}`;
+  const [legendW, setLegendW] = useState<Record<string, number>>({});
+  const [panelW, setPanelW] = useState(0);
+  const onPanelLayout = (e: { nativeEvent: { layout: { width: number } } }) => {
+    const w = Math.round(e.nativeEvent.layout.width);
+    if (w > 0) setPanelW((p) => (p === w ? p : w));
+  };
+  const legends: KeyLegend[] = legendSpecs.map((l) => ({
+    w: legendW[`${fontSig}|${l.label}`] ?? l.label.length * keyFont.fontSize * 0.72 + l.label.length * (pt.metal ? 1 : 0),
+    icon: !!l.icon,
+  }));
+  const keyGrid = decoderKeyGrid(legends, panelW || Math.min(winW, SHEET_MAX_W) - 32, {
+    gap: KEY_GAP, padX: pt.metal ? 9 : 5, iconW: 13, iconGap: pt.metal ? 5 : 4, slack: 6, maxCols: 5,
+  });
+  /** The hidden row the legends are measured in — the keys' own font, never drawn. */
+  const legendMeasurer = (
+    <View pointerEvents="none" style={st.measure} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      {legendSpecs.map((l) => {
+        const k = `${fontSig}|${l.label}`;
+        return (
+          <Text key={k} numberOfLines={1} style={keyFont}
+                onLayout={(e) => { const w = Math.ceil(e.nativeEvent.layout.width); setLegendW((p) => (p[k] === w ? p : { ...p, [k]: w })); }}>
+            {l.label}
+          </Text>
+        );
+      })}
+    </View>
+  );
+  /** ★ V12 mode icons: on the narrowest panels the glyph goes ABOVE the label (the key grid decides — beside it, the
+   *  widest legend would leave fewer than two keys a row). */
+  const stackIco = keyGrid.stack;
   const icoPad = stackIco ? 4 : 10;
+  /** ★ The shade an open key's tab and options share — the key's own colour: the selected-item meaning on the default
+   *  chassis (a running decoder's colour), the controls colour (its pip and legend) on silver / black. */
+  const optShade = pt.metal ? shadeOf(pt.pipOn, pt.silver ? 0.22 : 0.16) : `rgba(${pt.ink.m.selectedRgb},0.13)`;
   /* ★★ V12 DIMMED, NEVER DISABLED (Stuart): a key whose usual frequencies are nowhere near the dial is drawn at 40 % — and
    *  stays fully tappable (an unset upconverter puts HF at 130 MHz). A lit / running key is never dimmed. */
   const DIM = { opacity: 0.4 };
@@ -488,7 +626,6 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const dimOf = (id: string, lit: boolean) => !lit && decoderDim(id, dialHz ?? NaN, decTab);
   const [bandTab, setBandTab] = useState<RadioBand | null>(null);
   useEffect(() => { if (visible) setBandTab(null); }, [visible]);   // every opening starts on the dial's band
-  const txShown = !!transcribeControls && !isBlocked('transcribe');
   const tc = transcribeControls;
   const txLit = !!tc && (tc.active || tc.selected);
   const transcribeKey = tc ? (
@@ -723,22 +860,21 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 </TouchableOpacity>
                 )}</NavItem>
   );
-  /** ★ DIGITAL SPOTS (SINGLE) — `inBands`: in the Amateur group, where it says DIGITAL SPOTS (BAND stays in its section),
-   *  spans two columns (it is the longest legend in the group) and dims away from the amateur bands. */
+  /** ★ DIGITAL SPOTS (SINGLE) — `inBands`: in the Amateur group, where it says DIGITAL SPOTS (BAND stays in its section)
+   *  and dims away from the amateur bands. One key wide like every other (it is the legend the key size is set by). */
   const spotsKey = (inBands: boolean) => {
     const sc = spotsControls!;
     // ★ V12: where Band exists the key says which it is — SINGLE (the modes at your dial) beside BAND
     const lit = sc.band ? !!sc.singleOn : sc.spotsKind === 'digi';
     const label = sc.band && !inBands ? 'SPOTS: SINGLE' : 'DIGITAL SPOTS';
-    const wide = inBands ? { minWidth: '47%' as const } : null;
     const dim = inBands && dimOf('spots', lit) ? DIM : null;
     return (
       <NavItem key="spots" onPress={() => sc.onSpotsToggle('digi')}>{(nf, nr) => pt.metal ? (
         <MetalKey navRef={nr} focused={nf} label={label} active={lit} pip
-          onPress={() => sc.onSpotsToggle('digi')} iconId="spots" stack={stackIco} style={{ ...wide, ...dim }} />
+          onPress={() => sc.onSpotsToggle('digi')} iconId="spots" stack={stackIco} style={dim ?? undefined} />
       ) : (
       <TouchableOpacity ref={nr as any} accessibilityLabel={sc.band ? 'Digital spots, single mode: the modes at your dial' : 'Digital spots'}
-                        style={[st.btn, wide, { borderColor: lit ? dec : t.btnBorder, paddingVertical: icoPad },
+                        style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: icoPad },
                                 lit && { backgroundColor: decBg }, dim,
                                 nf && { borderColor: focusC.ring, borderWidth: 2 }]}
         onPress={() => sc.onSpotsToggle('digi')} activeOpacity={0.8}>
@@ -791,17 +927,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /* ★★★ TUNES THE RADIO ITSELF (Stuart, 2026-10-28: "any decoders that trigger their own view Digital Spots (Full Band) DAB
    *  ISM ADS-B etc need their own separate section that is always lit up as they tune the SDR themselves") — above the band
    *  tabs, never dimmed, in utils/decoderBands' order. Availability is each key's own rule, as before. */
-  const wholeKeys: React.ReactNode[] = !decoderControls ? [] : WHOLE_RADIO_IDS.map(id => {
+  const wholeKeys: { id: string; node: React.ReactNode }[] = !decoderControls ? [] : WHOLE_RADIO_IDS.map(id => {
     switch (id) {
-      case 'adsb': return adsbShown ? adsbKey(false) : null;
-      case 'ais':  return aisShown ? aisKey(false) : null;
-      case 'dab':  return decoderControls.dabAvail ? dabKey() : null;
-      case 'ism':  return ismShown ? ismKey(false) : null;
-      case 'ndb':  return ndbShown ? ndbKey(false) : null;
-      case 'spotsband': return bandInWhole ? spotsBandKey() : null;
-      default: return null;
+      case 'adsb': return { id, node: adsbShown ? adsbKey(false) : null };
+      case 'ais':  return { id, node: aisShown ? aisKey(false) : null };
+      case 'dab':  return { id, node: decoderControls.dabAvail ? dabKey() : null };
+      case 'ism':  return { id, node: ismShown ? ismKey(false) : null };
+      case 'ndb':  return { id, node: ndbShown ? ndbKey(false) : null };
+      case 'spotsband': return { id, node: bandInWhole ? spotsBandKey() : null };
+      default: return { id, node: null };
     }
-  }).filter(Boolean);
+  }).filter(k => !!k.node);
   /* ★★ V12 THE BAND GROUPS — one renderer per id (utils/decoderBands names them), so a decoder placed in two bands (DSC,
    *  CW, APRS, SSTV, DIGITAL SPOTS) is the same key in each. null = not on this radio / not allowed here (the rules above,
    *  unchanged — a locked range still hides ADS-B and the rest). */
@@ -912,9 +1048,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const trRow = !tc?.translateTo ? undefined : txTargets.find(l => l.id === tc.translateTo || !!l.ids?.includes(tc.translateTo));
   const trHead = !tc ? '' : tc.translateTo ? (trRow?.name ?? translateTargetLabel(tc.translateTo)).toUpperCase() : 'OFF';
   const trPick = (id: string) => { setTrListOpen(false); tc?.onTranslateTo(id); };
+  /* ★ TRANSCRIBE's options — popped out of its key in VIEWS (KeyGrid), as every decoder's are. */
   const transcribeCallout = tc && txLit ? (
-    <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                             : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
+    <>
       <SubLabel label="LANGUAGE" />
       <NavRow><NavItem onPress={() => setTxListOpen(o => !o)}>{(navFocused, navRef) => pt.metal ? (
         <PopupKey ref={navRef as any} active pip onPress={() => setTxListOpen(o => !o)} focused={navFocused} height={38}
@@ -1068,7 +1204,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       <Text style={[st.btnText, { fontFamily: t.font, fontSize: 11, opacity: 0.7, marginTop: 6, textAlign: 'left' }, { color: t.btnText }]}>
         On this device, free and private — nothing is sent anywhere.{tc.autoNote ? ` ${tc.autoNote}` : ''} Clear speech works best; noisy SSB and airband will be patchy.
       </Text>
-    </View>
+    </>
   ) : null;
   const isWhite = t.name === 'white';
   const [moreOpen, setMoreOpen] = useState(false);
@@ -1119,6 +1255,167 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     }, 60);
     return () => clearTimeout(id);
   }, [moreOpen, currentInOthers, activeDecInOthers]);
+
+  /* ★★★ EACH DECODER'S OPTIONS, POPPED OUT OF ITS OWN KEY (Stuart, 2026-10-29: "these need to open in line … the
+   *  background shaded to show they are the DSC controls" — "any decoder with options RTTY WEFAX etc"). Drawn by KeyGrid on
+   *  the shaded panel under the row the key is in, while that decoder is the one selected; deselecting folds it away.
+   *  NAVTEX and SSTV have no options (none on the web either), so their keys open nothing. */
+  const capText = [st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)];
+  const optionsFor = (id: string | null | undefined): React.ReactNode => {
+    const dc = decoderControls;
+    if (!id) return null;
+    if (id === 'transcribe') return txShown ? transcribeCallout : null;
+    if (!dc || dc.decMode !== id) return null;
+    switch (id) {
+      case 'rtty':
+        return dc.rttySettings && dc.onRttySettings ? <RttySettingsRows s={dc.rttySettings} onChange={dc.onRttySettings} /> : null;
+      /* ★★ THE STATION IS AUTO-PICKED FROM THE DIAL, and this is the override. Auto is right nearly always — nobody lands
+          on 77.5 kHz by accident — but 60 kHz is genuinely TWO stations (MSF in the UK, WWVB in the US) and the tell is the
+          RECEIVER's location, which not every server publishes (Stuart, 2026-08-13). AUTO is a real choice and the default. */
+      case 'time':
+        return (<>
+          <SubLabel label="STATION" />
+          <OptRow>{(['auto', 'msf', 'dcf77', 'wwv', 'wwvb', 'rwm'] as const).map(v => (
+            <SegBtn key={v} label={v.toUpperCase()} active={(dc.timeStation ?? 'auto') === v} onPress={() => dc.onTimeStation?.(v)} />
+          ))}</OptRow>
+        </>);
+      /* ★ V12 CW: the web's VIEW and WIDTH rows and its hint (cwList cwHintText). WIDTH only for the skimmer. */
+      case 'cw':
+        return (<>
+          <SubLabel label="VIEW" />
+          <OptRow>
+            <SegBtn label="ONE SIGNAL" active={!dc.cwSkim} onPress={() => dc.onCwView?.(false)} />
+            <SegBtn label="SKIMMER" active={!!dc.cwSkim} onPress={() => dc.onCwView?.(true)} />
+          </OptRow>
+          {!!dc.cwSkim && (<>
+            <SubLabel label="WIDTH" />
+            <OptRow>{CW_WIDTHS.map((w) => (
+              <SegBtn key={w} label={`${w / 1000} kHz`} active={(dc.cwWidth ?? CW_DEFAULT_WIDTH) === w} onPress={() => dc.onCwWidth?.(w)} />
+            ))}</OptRow>
+          </>)}
+          <Text style={capText}>{cwHintText(!!dc.cwSkim, dc.cwWidth ?? CW_DEFAULT_WIDTH)}</Text>
+        </>);
+      /* ★ V12 PSK: the web's VIEW and SEGMENT rows and its hint (cwList pskHintText). SEGMENT only for the skimmer. */
+      case 'psk':
+        return (<>
+          <SubLabel label="VIEW" />
+          <OptRow>
+            <SegBtn label="ONE SIGNAL" active={!dc.pskSkim} onPress={() => dc.onPskView?.(false)} />
+            <SegBtn label="SKIMMER" active={!!dc.pskSkim} onPress={() => dc.onPskView?.(true)} />
+          </OptRow>
+          {!!dc.pskSkim && (<>
+            <SubLabel label="SEGMENT" />
+            <OptRow>{PSK_WIDTHS.map((w) => (
+              <SegBtn key={w} label={`${w / 1000} kHz`} active={(dc.pskWidth ?? PSK_DEFAULT_WIDTH) === w} onPress={() => dc.onPskWidth?.(w)} />
+            ))}</OptRow>
+          </>)}
+          <Text style={capText}>{pskHintText(!!dc.pskSkim, dc.pskWidth ?? PSK_DEFAULT_WIDTH)}</Text>
+        </>);
+      /* ★ V12 JTTY: the announced calling frequencies this radio reaches (preliminary — WSJT-X 3.2 RCs) and the hint. */
+      case 'jtty':
+        return (<>
+          {!!dc.jttyDials?.length && (<>
+            <SubLabel label="BAND" />
+            <OptRow>{dc.jttyDials.map((d) => (
+              <SegBtn key={d.hz} label={d.label} active={Math.abs((dc.tunedHz ?? 0) - d.hz) < 3000} onPress={() => dc.onJttyDial?.(d.hz)} />
+            ))}</OptRow>
+          </>)}
+          <Text style={capText}>{JTTY_HINT}</Text>
+        </>);
+      /* ★★ V12 DSC: DISTRESS (every band this radio reaches) and the ROUTINE channels (ITU-R M.541) of the band the dial is
+          on — each tuned as a DSC receiver does (USB 1.7 kHz below the ASSIGNED frequency, or Ch 70 NFM) — and the hint. */
+      case 'dsc':
+        return (<>
+          {!!dc.dscChans?.length && (<>
+            <SubLabel label="DISTRESS" />
+            <OptRow>{dc.dscChans.map((c) => (
+              <SegBtn key={c.hz} label={c.label} active={dscChannelOn(c, dc.tunedHz ?? 0, String(current))} onPress={() => dc.onDscChan?.(c)} />
+            ))}</OptRow>
+          </>)}
+          {!!dc.dscRoutine?.length && (<>
+            <SubLabel label={`ROUTINE · ${dc.dscBandLabel ?? ''}`.replace(/ · $/, '')} />
+            <OptRow>{dc.dscRoutine.map((c) => (
+              <SegBtn key={c.hz} label={c.label} active={dscChannelOn(c, dc.tunedHz ?? 0, String(current))} onPress={() => dc.onDscChan?.(c)} />
+            ))}</OptRow>
+          </>)}
+          <Text style={capText}>{DSC_HINT}</Text>
+        </>);
+      /* ★ V12 APRS: the web's PACKET row, its TUNE key and hint (tracks.ts aprsTuneFor / aprsHintText). */
+      case 'aprs':
+        return (<>
+          <SubLabel label="PACKET" />
+          <OptRow>
+            <SegBtn label="VHF 1200" active={(dc.aprsBaud ?? 1200) === 1200} onPress={() => dc.onAprsBaud?.(1200)} />
+            <SegBtn label="HF 300" active={dc.aprsBaud === 300} onPress={() => dc.onAprsBaud?.(300)} />
+          </OptRow>
+          <OptRow>
+            <SegBtn label={aprsTuneFor(dc.aprsBaud ?? 1200, dc.aprsHz ?? 144.8e6).label} active={false} onPress={() => dc.onAprsTune?.()} />
+          </OptRow>
+          <Text style={capText}>{aprsHintText(dc.aprsBaud ?? 1200, dc.aprsHz ?? 144.8e6)}</Text>
+        </>);
+      case 'wefax':
+        return (<>
+          <SubLabel label="LPM" />
+          <OptRow>{[60, 120, 240].map(v => (
+            <SegBtn key={v} label={String(v)} active={dc.wefaxLpm === v} onPress={() => dc.onWefaxLpm?.(v)} />
+          ))}</OptRow>
+        </>);
+      default: return null;
+    }
+  };
+  /** The key whose options are open: the selected decoder, or TRANSCRIBE while it is on / chosen. */
+  const openDec = decoderControls?.decMode ?? null;
+  const openOpts = optionsFor(openDec);
+  const txOpts = optionsFor('transcribe');
+  /* ★★★ VIEWS (Stuart, 2026-10-29: "Gallery and Transcribe need to move and live with the Map View as these are on device
+   *  items anyway" — "Views is fine"): the MAP of what has been spotted, the server's GALLERY, and TRANSCRIBE (on this
+   *  device). The same uniform keys; TRANSCRIBE's options pop out of it like a decoder's. */
+  const mapKey = spotsShown && spotsControls?.showMap ? (
+    <NavItem key="map" onPress={() => spotsControls.onSpotsMap?.()}>{(nf, nr) => pt.metal ? (
+      <MetalKey navRef={nr} focused={nf} label="🗺 MAP" onPress={() => spotsControls.onSpotsMap?.()} />
+    ) : (
+    <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                      nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+      onPress={() => spotsControls.onSpotsMap?.()} activeOpacity={0.8}>
+      <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
+    </TouchableOpacity>)}</NavItem>
+  ) : null;
+  const viewItems = [
+    { id: 'map', node: mapKey },
+    { id: 'gallery', node: decoderControls?.galleryAvail ? galleryKey() : null },
+    { id: 'transcribe', node: txShown ? transcribeKey : null },
+  ].filter(v => !!v.node);
+  /* The spots section's own toggles that are not views (an UberSDR's CW SPOTS and STT; DIGITAL SPOTS / BAND where the
+   *  decoder section is not drawn). */
+  const spotItems = !(spotsShown && spotsControls) ? [] : [
+    { id: 'spots', node: !spotsInBands ? spotsKey(false) : null },
+    { id: 'spotsband', node: !!spotsControls.band && !bandInWhole ? spotsBandKey() : null },
+    { id: 'cwspots', node: spotsControls.showCwStt ? (
+      <NavItem key="cwspots" onPress={() => spotsControls.onSpotsToggle('cw')}>{(nf, nr) => pt.metal ? (
+        <MetalKey navRef={nr} focused={nf} label="CW SPOTS" active={spotsControls.spotsKind === 'cw'} pip
+          onPress={() => spotsControls.onSpotsToggle('cw')} iconId="cw" stack={stackIco} />
+      ) : (
+      <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: spotsControls.spotsKind === 'cw' ? dec : t.btnBorder, paddingVertical: icoPad },
+                                spotsControls.spotsKind === 'cw' && { backgroundColor: decBg },
+                                nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={() => spotsControls.onSpotsToggle('cw')} activeOpacity={0.8}>
+        <ModeLabel id="cw" stack={stackIco} color={spotsControls.spotsKind === 'cw' ? dec : t.btnText}
+                   style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'cw' ? dec : t.btnText }]}>CW SPOTS</ModeLabel>
+      </TouchableOpacity>)}</NavItem>
+    ) : null },
+    { id: 'stt', node: spotsControls.showCwStt ? (
+      <NavItem key="stt" onPress={spotsControls.onSttToggle}>{(nf, nr) => pt.metal ? (
+        <MetalKey navRef={nr} focused={nf} label="STT" active={spotsControls.sttActive || spotsControls.sttSelected} pip
+          onPress={spotsControls.onSttToggle} />
+      ) : (
+      <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: (spotsControls.sttActive || spotsControls.sttSelected) ? dec : t.btnBorder, paddingVertical: 10 },
+                                spotsControls.sttActive && { backgroundColor: decBg },
+                                nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+        onPress={spotsControls.onSttToggle} activeOpacity={0.8}>
+        <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (spotsControls.sttActive || spotsControls.sttSelected) ? dec : t.btnText }]}>STT</Text>
+      </TouchableOpacity>)}</NavItem>
+    ) : null },
+  ].filter(v => !!v.node);
 
   const pick = (id: string) => { onSelect(id as Mode); onClose(); };
 
@@ -1351,11 +1648,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </View>
         )}
 
-        {/* CLIENT DECODERS — relocated from MenuSheet (§4.3). Below the mode grid + passband:
-            a decoder rides on the demod you set above. Selecting one starts DecoderClient;
-            its settings drop into a callout beneath the row; tapping again tears it down. */}
+        {/* CLIENT DECODERS — relocated from MenuSheet (§4.3). Below the mode grid + passband: a decoder rides on the demod you
+            set above. Selecting one starts DecoderClient; ★ V12 its settings POP OUT OF ITS KEY onto the row below it
+            (KeyGrid); tapping again tears it down. */}
         {decSectionShown && decoderControls && (
-          <View style={[dst.decWrap, rule]}>
+          <View style={[dst.decWrap, rule]} onLayout={onPanelLayout}>
             <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
               DECODERS
             </Text>
@@ -1368,10 +1665,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 <View style={dst.groupHead} accessible accessibilityRole="header">
                   <Text style={[dst.groupText, secLbl]}>{WHOLE_RADIO_LABEL}</Text>
                 </View>
-                <NavRow><View style={st.grid}>{wholeKeys}</View></NavRow>
-                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
-                  {WHOLE_RADIO_HINT}
-                </Text>
+                <KeyGrid items={wholeKeys} grid={keyGrid} shade={optShade} />
+                <Text style={capText}>{WHOLE_RADIO_HINT}</Text>
                 {bandInWhole && spotsBandCaption()}
                 {/* the band decoders below get their own heading once this section is above them */}
                 {decBands.length > 0 && <View style={[dst.wholeRule, rule]} />}
@@ -1383,7 +1678,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               ))}</OptRow>
             )}
             {DECODER_PLACES[decTab].map(({ group, ids }) => {
-              const keys = ids.map(id => decKeyFor(id)).filter(Boolean);
+              const keys = ids.map(id => ({ id, node: decKeyFor(id) })).filter(k => !!k.node);
               if (!keys.length) return null;
               const gi = modeIconFor(decoderGroupIcon(group, decTab));
               return (
@@ -1392,216 +1687,46 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                     {gi && <ModeIcon name={gi} size={11} color={secColor} />}
                     <Text style={[dst.groupText, secLbl]}>{decoderGroupLabel(group, decTab)}</Text>
                   </View>
-                  <NavRow><View style={st.grid}>{keys}</View></NavRow>
+                  <KeyGrid items={keys} grid={keyGrid} openId={openDec} options={openOpts} shade={optShade} />
                 </View>
               );
             })}
-            {/* ★ Tools, not decoders of one band: SCANNER, GALLERY, TRANSCRIBE — under every tab. */}
-            {(scanShown || decoderControls.galleryAvail || txShown) && (
-              <NavRow><View style={[st.grid, { marginTop: 10 }]}>
-                {scanShown && scannerKey()}
-                {decoderControls.galleryAvail && galleryKey()}
-                {txShown && transcribeKey}
-              </View></NavRow>
+            {/* ★ SCANNER — a tool, not a decoder of one band: under every tab. (GALLERY and TRANSCRIBE moved to VIEWS.) */}
+            {scanShown && (
+              <KeyGrid items={[{ id: 'scanner', node: scannerKey() }]} grid={keyGrid} shade={optShade} style={{ marginTop: 10 }} />
             )}
             {adsbShown && adsbWhyLine}
             {ismShown && ismWhyLine}
             {ndbShown && ndbWhyLine}
             {aisShown && aisWhyLine}
-            {decoderControls.decMode === 'rtty' && decoderControls.rttySettings && decoderControls.onRttySettings && (
-              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
-                <RttySettingsRows s={decoderControls.rttySettings} onChange={decoderControls.onRttySettings} />
-              </View>
-            )}
-            {/* ★★ THE STATION IS AUTO-PICKED FROM THE DIAL, and this is the override. Auto is right
-                nearly always — nobody lands on 77.5 kHz by accident — but 60 kHz is genuinely TWO
-                stations (MSF in the UK, WWVB in the US) and the tell is the RECEIVER's location,
-                which not every server publishes. Where it cannot know, the owner must be able to
-                say (Stuart, 2026-08-13: "it isnt giving me any options like the web client does").
-                ★ AUTO is a real choice and the default, not an absent one: picking a station by
-                  hand should be a decision, and returning to automatic should be possible without
-                  reconnecting. */}
-            {decoderControls.decMode === 'time' && (
-              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
-                <SubLabel label="STATION" />
-                <OptRow>{(['auto', 'msf', 'dcf77', 'wwv', 'wwvb', 'rwm'] as const).map(v => (
-                  <SegBtn key={v} label={v.toUpperCase()}
-                          active={(decoderControls.timeStation ?? 'auto') === v}
-                          onPress={() => decoderControls.onTimeStation?.(v)} />
-                ))}</OptRow>
-              </View>
-            )}
-            {txShown && transcribeCallout}
-            {/* ★ V12 CW: the web's VIEW and WIDTH rows and its hint (cwList cwHintText). WIDTH only for the skimmer. */}
-            {cwShown && decoderControls.decMode === 'cw' && (
-              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
-                <SubLabel label="VIEW" />
-                <OptRow>
-                  <SegBtn label="ONE SIGNAL" active={!decoderControls.cwSkim} onPress={() => decoderControls.onCwView?.(false)} />
-                  <SegBtn label="SKIMMER" active={!!decoderControls.cwSkim} onPress={() => decoderControls.onCwView?.(true)} />
-                </OptRow>
-                {!!decoderControls.cwSkim && (<>
-                  <SubLabel label="WIDTH" />
-                  <OptRow>{CW_WIDTHS.map((w) => (
-                    <SegBtn key={w} label={`${w / 1000} kHz`} active={(decoderControls.cwWidth ?? CW_DEFAULT_WIDTH) === w}
-                            onPress={() => decoderControls.onCwWidth?.(w)} />
-                  ))}</OptRow>
-                </>)}
-                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
-                  {cwHintText(!!decoderControls.cwSkim, decoderControls.cwWidth ?? CW_DEFAULT_WIDTH)}
-                </Text>
-              </View>
-            )}
-            {/* ★ V12 PSK: the web's VIEW and SEGMENT rows and its hint (cwList pskHintText). SEGMENT only for the skimmer. */}
-            {pskShown && decoderControls.decMode === 'psk' && (
-              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
-                <SubLabel label="VIEW" />
-                <OptRow>
-                  <SegBtn label="ONE SIGNAL" active={!decoderControls.pskSkim} onPress={() => decoderControls.onPskView?.(false)} />
-                  <SegBtn label="SKIMMER" active={!!decoderControls.pskSkim} onPress={() => decoderControls.onPskView?.(true)} />
-                </OptRow>
-                {!!decoderControls.pskSkim && (<>
-                  <SubLabel label="SEGMENT" />
-                  <OptRow>{PSK_WIDTHS.map((w) => (
-                    <SegBtn key={w} label={`${w / 1000} kHz`} active={(decoderControls.pskWidth ?? PSK_DEFAULT_WIDTH) === w}
-                            onPress={() => decoderControls.onPskWidth?.(w)} />
-                  ))}</OptRow>
-                </>)}
-                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
-                  {pskHintText(!!decoderControls.pskSkim, decoderControls.pskWidth ?? PSK_DEFAULT_WIDTH)}
-                </Text>
-              </View>
-            )}
-            {/* ★ V12 JTTY: the announced calling frequencies this radio reaches (preliminary — WSJT-X 3.2 RCs) and the hint. */}
-            {jttyShown && decoderControls.decMode === 'jtty' && (
-              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
-                {!!decoderControls.jttyDials?.length && (<>
-                  <SubLabel label="BAND" />
-                  <OptRow>{decoderControls.jttyDials.map((d) => (
-                    <SegBtn key={d.hz} label={d.label} active={Math.abs((decoderControls.tunedHz ?? 0) - d.hz) < 3000} onPress={() => decoderControls.onJttyDial?.(d.hz)} />
-                  ))}</OptRow>
-                </>)}
-                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
-                  {JTTY_HINT}
-                </Text>
-              </View>
-            )}
-            {/* ★ V12 DSC: the distress and safety channels this radio reaches (USB 1.7 kHz below, or Ch 70 NFM) and the hint. */}
-            {dscShown && decoderControls.decMode === 'dsc' && (
-              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
-                {!!decoderControls.dscChans?.length && (<>
-                  <SubLabel label="CHANNEL" />
-                  <OptRow>{decoderControls.dscChans.map((c) => (
-                    <SegBtn key={c.hz} label={c.label} active={Math.abs((decoderControls.tunedHz ?? 0) - (c.vhf ? c.hz : c.hz - 1700)) < 1000} onPress={() => decoderControls.onDscChan?.(c)} />
-                  ))}</OptRow>
-                </>)}
-                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
-                  {DSC_HINT}
-                </Text>
-              </View>
-            )}
-            {/* ★ V12 APRS: the web's PACKET row, its TUNE key and hint (tracks.ts aprsTuneFor / aprsHintText). */}
-            {aprsShown && decoderControls.decMode === 'aprs' && (
-              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
-                <SubLabel label="PACKET" />
-                <OptRow>
-                  <SegBtn label="VHF 1200" active={(decoderControls.aprsBaud ?? 1200) === 1200} onPress={() => decoderControls.onAprsBaud?.(1200)} />
-                  <SegBtn label="HF 300" active={decoderControls.aprsBaud === 300} onPress={() => decoderControls.onAprsBaud?.(300)} />
-                </OptRow>
-                <OptRow>
-                  <SegBtn label={aprsTuneFor(decoderControls.aprsBaud ?? 1200, decoderControls.aprsHz ?? 144.8e6).label} active={false}
-                          onPress={() => decoderControls.onAprsTune?.()} />
-                </OptRow>
-                <Text style={[st.decCaption, { fontFamily: t.font, color: pt.metal ? undefined : t.btnText }, pt.metal && engraveText(pt, pt.note)]}>
-                  {aprsHintText(decoderControls.aprsBaud ?? 1200, decoderControls.aprsHz ?? 144.8e6)}
-                </Text>
-              </View>
-            )}
-            {decoderControls.decMode === 'wefax' && (
-              <View style={[dst.callout, pt.metal ? { borderColor: pt.rule, backgroundColor: 'transparent' }
-                                       : { borderColor: dec, backgroundColor: `rgba(${pt.ink.m.selectedRgb},0.06)` }]}>
-                <SubLabel label="LPM" />
-                <OptRow>{[60, 120, 240].map(v => (
-                  <SegBtn key={v} label={String(v)} active={decoderControls.wefaxLpm === v}
-                          onPress={() => decoderControls.onWefaxLpm?.(v)} />
-                ))}</OptRow>
-              </View>
-            )}
           </View>
         )}
 
-        {/* ★ TRANSCRIBE where the CLIENT DECODERS grid is not drawn (OpenWebRX, a receiver with nothing else to
-            decode): its own section under the same heading, so it is found in the same place everywhere. */}
-        {txShown && !(decSectionShown && decoderControls) && (
-          <View style={[dst.decWrap, rule]}>
+        {/* ★★★ VIEWS — MAP, GALLERY, TRANSCRIBE (Stuart, 2026-10-29). Drawn on every backend that has one of them (TRANSCRIBE
+            is on-device, so OpenWebRX too). */}
+        {viewItems.length > 0 && (
+          <View style={[dst.decWrap, rule]} onLayout={onPanelLayout}>
             <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
-              DECODERS
+              VIEWS
             </Text>
-            <NavRow><View style={st.grid}>{transcribeKey}</View></NavRow>
-            {transcribeCallout}
+            <KeyGrid items={viewItems} grid={keyGrid} openId={txLit ? 'transcribe' : null} options={txOpts} shade={optShade} />
           </View>
         )}
 
         {/* SERVER EXTENSIONS / DECODED SPOTS — relocated from MenuSheet (§4.3). ★ V12: DIGITAL SPOTS itself moved into the
-            band groups (Amateur), so the section is drawn only while it still has BAND, CW SPOTS / STT or the MAP. */}
-        {spotsShown && spotsControls && (!spotsInBands || spotsControls.showCwStt || spotsControls.showMap) && (
-          <View style={[dst.decWrap, rule]}>
+            band groups (Amateur) and the MAP into VIEWS, so the section is drawn only while it still has a toggle of its own:
+            BAND or DIGITAL SPOTS where the decoder section is not drawn, an UberSDR's CW SPOTS / STT. */}
+        {spotItems.length > 0 && spotsControls && (
+          <View style={[dst.decWrap, rule]} onLayout={onPanelLayout}>
             <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
               {spotsControls.label}
             </Text>
-            <NavRow><View style={st.grid}>
-              {/* ★★ V12: in the band groups (Amateur) wherever the decoder section is drawn — here only where it is not. */}
-              {!spotsInBands && spotsKey(false)}
-              {/* ★★ V12 BAND — a whole band's digital frequencies at once. Dimmed with its reason (never hidden). It tunes the radio
-                  itself, so wherever the decoder section is drawn it sits in TUNES THE RADIO ITSELF; here only where it is not. */}
-              {!!spotsControls.band && !bandInWhole && spotsBandKey()}
-              {spotsControls.showCwStt && (
-                <NavItem onPress={() => spotsControls.onSpotsToggle('cw')}>{(nf, nr) => pt.metal ? (
-                  <MetalKey navRef={nr} focused={nf} label="CW SPOTS" active={spotsControls.spotsKind === 'cw'} pip
-                    onPress={() => spotsControls.onSpotsToggle('cw')} iconId="cw" stack={stackIco} />
-                ) : (
-                <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: spotsControls.spotsKind === 'cw' ? dec : t.btnBorder, paddingVertical: icoPad },
-                                          spotsControls.spotsKind === 'cw' && { backgroundColor: decBg },
-                                          nf && { borderColor: focusC.ring, borderWidth: 2 }]}
-                  onPress={() => spotsControls.onSpotsToggle('cw')} activeOpacity={0.8}>
-                  <ModeLabel id="cw" stack={stackIco} color={spotsControls.spotsKind === 'cw' ? dec : t.btnText}
-                             style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: spotsControls.spotsKind === 'cw' ? dec : t.btnText }]}>CW SPOTS</ModeLabel>
-                </TouchableOpacity>)}</NavItem>
-              )}
-              {spotsControls.showCwStt && (
-                <NavItem onPress={spotsControls.onSttToggle}>{(nf, nr) => pt.metal ? (
-                  <MetalKey navRef={nr} focused={nf} label="STT" active={spotsControls.sttActive || spotsControls.sttSelected} pip
-                    onPress={spotsControls.onSttToggle} />
-                ) : (
-                <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: (spotsControls.sttActive || spotsControls.sttSelected) ? dec : t.btnBorder, paddingVertical: 10 },
-                                          spotsControls.sttActive && { backgroundColor: decBg },
-                                          nf && { borderColor: focusC.ring, borderWidth: 2 }]}
-                  onPress={spotsControls.onSttToggle} activeOpacity={0.8}>
-                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (spotsControls.sttActive || spotsControls.sttSelected) ? dec : t.btnText }]}>STT</Text>
-                </TouchableOpacity>)}</NavItem>
-              )}
-              {spotsControls.showMap && (
-                <NavItem onPress={() => spotsControls.onSpotsMap?.()}>{(nf, nr) => pt.metal ? (
-                  <MetalKey navRef={nr} focused={nf} label="🗺 MAP" onPress={() => spotsControls.onSpotsMap?.()} />
-                ) : (
-                <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
-                                  nf && { borderColor: focusC.ring, borderWidth: 2 }]}
-                  onPress={() => spotsControls.onSpotsMap?.()} activeOpacity={0.8}>
-                  <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
-                </TouchableOpacity>)}</NavItem>
-              )}
-            </View></NavRow>
+            <KeyGrid items={spotItems} grid={keyGrid} shade={optShade} />
             {/* ★ Band's reason when it cannot run (the web's #spotsBandWhy), or what it covers. */}
             {!!spotsControls.band && !bandInWhole && spotsBandCaption()}
           </View>
         )}
+        {legendMeasurer}
 
         {/* OWRX MAP + FILES — relocated from the MenuSheet OPENWEBRX section. The OWRX
             equivalent of the server maps (its combined map + the decoded-image gallery). */}
@@ -1728,6 +1853,8 @@ const st = StyleSheet.create({
     padding: 16, paddingBottom: 40,
   },
   sheetLabel:   { textAlign: 'center', fontSize: 10, letterSpacing: 3, marginBottom: 14 },
+  // ★ The legends' measuring row (KeyGrid's key size): off to the side, never seen, never in the way of a touch.
+  measure:      { position: 'absolute', left: 0, top: 0, width: 1200, opacity: 0, alignItems: 'flex-start' },
   grid:         { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   bwMirrorRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12 },
   bwHalfSlider: { flex: 1, height: 32 },

@@ -8,6 +8,10 @@
  *
  * ★ READABLE, NEVER A SYMBOL DUMP. A keyboard / pad reaches every row (DecoderPanel's list zone; `focusIdx`); Enter on a
  *   row with a position is its MAP. ★ The decoder font throughout (DECODER_FONT).
+ * ★★ V12 (Stuart, 2026-10-29: "most people tune DSC wrong") THE BOX CARRIES ITS OWN CHANNEL KEYS — the band the dial is on
+ *   (its distress channel and its ITU-R M.541 routine ones), else the distress set — and, when the dial sits ON an assigned
+ *   frequency (4208.5 typed straight in, where the tones fall at 0 Hz), a one-tap "TUNE 4206.8 USB for 4208.5 kHz" above
+ *   them. They come first in the list zone: `focusIdx` counts the keys, then the calls.
  */
 import React, { useEffect, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, type ViewStyle } from 'react-native';
@@ -15,8 +19,13 @@ import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } 
 import { scrollLane } from '../constants/popupTokens';
 import { DSC_IDLE, DSC_LEVEL_BG, DSC_LEVEL_BORDER, DSC_LEVEL_NAMES, DSC_LEVEL_TEXT, dscFreqText, dscTimeText, type DscCall } from '../services/dsc';
 
+/** A key at the top of the box: the tune offer (`offer`), or a channel (lit while the dial is on it). */
+export interface DscBoxKey { id: string; label: string; a11y: string; on: boolean; offer?: boolean; distress?: boolean; press: () => void }
+
 export interface DscViewProps {
   calls: readonly DscCall[];
+  /** The box's keys, drawn above the calls (the list zone reaches them first). Absent / empty = none. */
+  keys?: readonly DscBoxKey[];
   bodySize: StyleProp<ViewStyle>;
   focusIdx: number;
   /** MAP for a call that sent a position; absent = no MAP key (never a dead control). */
@@ -27,24 +36,51 @@ export interface DscViewProps {
 
 export const dscHasPos = (c: DscCall) => c.lat !== null && c.lon !== null;
 
-export default function DscView({ calls, bodySize, focusIdx, onMap, scrollRef, onScrollY }: DscViewProps) {
+export default function DscView({ calls, keys = [], bodySize, focusIdx, onMap, scrollRef, onScrollY }: DscViewProps) {
   const tk = useDecoderTokens();
   const cs = useDecoderStyles(makeCs);
   const own = useRef<ScrollView | null>(null);
   const sv = scrollRef ?? own;
   const rowY = useRef<number[]>([]);
+  const nk = keys.length;
   useEffect(() => {
     if (focusIdx < 0) return;
-    const y = rowY.current[focusIdx];
+    if (focusIdx < nk) { try { sv.current?.scrollTo({ y: 0, animated: false }); } catch { /* detached */ } return; }
+    const y = rowY.current[focusIdx - nk];
     if (y == null) return;
     try { sv.current?.scrollTo({ y: Math.max(0, y - 40), animated: false }); } catch { /* detached */ }
-  }, [focusIdx, sv]);
-  const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
+  }, [focusIdx, sv, nk]);
+  const ring = (i: number) => (i + nk === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
+  const offer = keys.find((k) => k.offer);
+  const chans = keys.filter((k) => !k.offer);
 
   return (
     <ScrollView ref={sv as any} style={[cs.body, bodySize]} contentContainerStyle={[cs.content, scrollLane]}
                 showsVerticalScrollIndicator scrollEventThrottle={32}
                 onScroll={(e) => onScrollY?.(e?.nativeEvent?.contentOffset?.y ?? 0)}>
+      {!!offer && (
+        <TouchableOpacity accessibilityRole="button" accessibilityLabel={offer.a11y} onPress={offer.press}
+                          style={[cs.offer, { borderColor: tk.chipBorderAct, backgroundColor: tk.chipBgAct }, keys.indexOf(offer) === focusIdx && { borderColor: tk.focus, borderWidth: 2 }]}>
+          <Text style={[cs.offerTxt, { color: tk.accent }]}>{offer.label}</Text>
+          <Text style={[cs.offerWhy, { color: tk.muted }]}>A listed DSC frequency is the assigned one — the dial goes 1.7 kHz below it in USB.</Text>
+        </TouchableOpacity>
+      )}
+      {chans.length > 0 && (
+        <View style={cs.keys}>
+          {chans.map((k) => {
+            const i = keys.indexOf(k);
+            return (
+              <TouchableOpacity key={k.id} accessibilityRole="button" accessibilityLabel={k.a11y} accessibilityState={{ selected: k.on }}
+                                hitSlop={4} onPress={k.press}
+                                style={[cs.key, { borderColor: k.on ? tk.chipBorderAct : tk.chipBorder }, k.on && { backgroundColor: tk.chipBgAct },
+                                        !!k.distress && !k.on && { borderColor: DSC_LEVEL_BORDER[3] ?? tk.divider },
+                                        i === focusIdx && { borderColor: tk.focus, borderWidth: 2 }]}>
+                <Text style={[cs.keyTxt, { color: k.on ? tk.selected : tk.value }]}>{k.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
       {!calls.length && <Text style={[cs.idle, { color: tk.muted }]}>{DSC_IDLE}</Text>}
       {calls.map((c, i) => {
         const rule = DSC_LEVEL_BORDER[c.level];
@@ -85,6 +121,13 @@ const makeCs = (_T: DecoderTokens) => StyleSheet.create({
   body:    {},
   content: { paddingHorizontal: 8, paddingVertical: 6 },
   idle:    { fontFamily: DECODER_FONT, fontSize: 11, padding: 10, textAlign: 'center' },
+  // ★ The channel keys: 44 pt targets with their hitSlop, wrapped; a distress channel's rule in the distress red.
+  keys:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
+  key:     { borderWidth: 1, borderRadius: 5, paddingHorizontal: 10, paddingVertical: 7, minWidth: 64, alignItems: 'center' },
+  keyTxt:  { fontFamily: DECODER_FONT, fontSize: 12, fontWeight: '700', letterSpacing: 0.4, fontVariant: ['tabular-nums'] },
+  offer:   { borderWidth: 1, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8, marginVertical: 4 },
+  offerTxt: { fontFamily: DECODER_FONT, fontSize: 13, fontWeight: '700', letterSpacing: 0.6 },
+  offerWhy: { fontFamily: DECODER_FONT, fontSize: 10, marginTop: 2 },
   row:     { minHeight: 44, justifyContent: 'center', paddingHorizontal: 6, paddingVertical: 5,
              borderBottomWidth: StyleSheet.hairlineWidth, borderWidth: 0, borderColor: 'transparent' },
   unconf:  { opacity: 0.7 },
