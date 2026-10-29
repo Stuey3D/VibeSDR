@@ -7,7 +7,7 @@
  *   TUNES THE RADIO ITSELF (above the tabs, never dimmed — WHOLE_RADIO_IDS):
  *                     ADS-B · AIS · DAB · ISM · NDB · DIGITAL SPOTS: BAND
  *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map)
- *                     ⚓ Maritime  NAVTEX · DSC · WEFAX
+ *                     ⚓ Maritime  NAVTEX · DSC · SITOR-A · WEFAX
  *                     Amateur     DIGITAL SPOTS · CW · PSK · RTTY · JTTY · SSTV · APRS (300 Bd HF packet)
  *                     Utility     TIME
  *   VHF               ⚓ Maritime  DSC (channel 70)
@@ -76,7 +76,7 @@ export function decoderGroupIcon(g: DecoderGroup, band: RadioBand): string {
 export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: DecoderGroup; ids: readonly string[] }>>> = {
   hf: [
     { group: 'aviation', ids: ['hfdl'] },
-    { group: 'maritime', ids: ['navtex', 'dsc', 'wefax'] },
+    { group: 'maritime', ids: ['navtex', 'dsc', 'sitora', 'wefax'] },
     { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'sstv', 'aprs'] },
     { group: 'other',    ids: ['time'] },
   ],
@@ -142,10 +142,16 @@ const pad = (hz: number, r: Range, tol: number) => hz >= r[0] - tol && hz <= r[1
 const anyNear = (hz: number, rs: readonly Range[], tol = 0) => rs.some(r => pad(hz, r, tol));
 const pointsNear = (hz: number, pts: readonly number[], tol: number) => pts.some(p => Math.abs(hz - p) <= tol);
 
+/** ★ The HF maritime mobile bands (ITU Radio Regulations Article 5) — where SITOR-A's ships and coast stations work. */
+const HF_MARITIME: readonly Range[] = [
+  [4063e3, 4438e3], [6200e3, 6525e3], [8195e3, 8815e3], [12230e3, 13200e3], [16360e3, 17410e3],
+  [18780e3, 18900e3], [19680e3, 19800e3], [22000e3, 22855e3], [25070e3, 25210e3], [26100e3, 26175e3],
+];
 const NEAR: Record<string, (hz: number) => boolean> = {
   hfdl:   hz => anyNear(hz, HFDL, 5e3),
   navtex: hz => pointsNear(hz, NAVTEX_BANDS_KHZ.map(k => k * 1e3), 5e3),
   dsc:    hz => DSC_ALL.some(c => Math.abs(hz - c.hz) <= (c.vhf ? 50e3 : 5e3)),
+  sitora: hz => anyNear(hz, HF_MARITIME, 2e3),
   wefax:  hz => pointsNear(hz, WEFAX_KHZ.map(k => k * 1e3), 4e3),
   spots:  hz => anyNear(hz, HAM),
   cw:     hz => anyNear(hz, HAM),

@@ -93,6 +93,9 @@ inline const std::vector<DecoderDef>& decoders() {
         //    found by the decoder; VHF channel 70 on NFM. Kept as the day's log + an item per distress/urgency call.
         { "dsc",          "DSC (MF/HF)",                  "dsc",    "dsc",   "usb,lsb", 1700, 170, 100,   false, false, 0 },
         { "dsc-vhf",      "DSC (VHF channel 70)",         "dsc",    "dsc",   "nfm",     0,    0,   1200,  false, false, 0 },
+        // ★★ V12 2026-10-29: SITOR-A (AMTOR mode A, ARQ) — both stations of a link, the tones 1 kHz from the dial as for
+        //    RTTY; either sense is found by the decoder. Kept as an RTTY-style run of text.
+        { "sitora",       "SITOR-A (ARQ)",                "sitora", "sitora", "usb,lsb", 1000, 170, 100,  false, false, 0 },
         // ★★ V12 2026-10-27 — DIGITAL SPOTS: BAND (Stuart: "Also full band digital modes too"). Every digital mode on the
         //    band the VFO's frequency is in — FT8, FT4, WSPR, JS8, FT2, JTTY, PSK on their own dials, the listener's own
         //    Band mode (decoders/digi_spotter.h) with its CPU governor — kept as ONE summary for the band, as FT8's is.
@@ -178,6 +181,7 @@ inline std::string attachMsg(const Vfo& v) {
     else if (id == "aprs" || id == "aprs-hf") std::snprintf(b, sizeof b, "{\"baud_rate\":%.0f}", d->baud);
     else if (id == "dsc") std::snprintf(b, sizeof b, "{\"band\":\"hf\",\"center_frequency\":%.0f}", d->toneHz);
     else if (id == "dsc-vhf") std::snprintf(b, sizeof b, "{\"band\":\"vhf\"}");
+    else if (id == "sitora") std::snprintf(b, sizeof b, "{\"center_frequency\":%.0f}", d->toneHz);
     else if (d->widthHz > 0) std::snprintf(b, sizeof b, "{\"width\":%.0f}", d->widthHz);
     else
         std::snprintf(b, sizeof b, "{\"center_frequency\":%.0f,\"shift\":%.0f,\"baud_rate\":%.2f,\"encoding\":\"ITA2\","

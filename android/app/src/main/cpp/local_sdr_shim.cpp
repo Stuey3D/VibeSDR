@@ -34391,6 +34391,8 @@ static std::string vsTunableJson() {
     /* ★★ DSC (V12, 2026-10-26): maritime Digital Selective Calling (decoders/dsc_decoder.h). Absent on an older server, so
      *  its clients draw no DSC button there; false where the owner has blocked it on this receiver. */
     j += std::string(",\"dsc\":") + (vsModeBlocked("dsc") ? "false" : "true");
+    // ★ V12 SITOR-A (2026-10-29): the maritime ARQ teleprinter, decoded by the server (vibe_sitora_run.h)
+    j += std::string(",\"sitora\":") + (vsModeBlocked("sitora") ? "false" : "true");
     /* ★★ JTTY (V12, 2026-10-26): the WSJT-X 3.2 keyboard mode, every JTTY signal in the passband (decoders/jtty_decoder.h).
      *  Absent on an older server, so its clients draw no JTTY button there; false where the owner has blocked it. */
     j += std::string(",\"jtty\":") + (vsModeBlocked("jtty") ? "false" : "true");
@@ -34572,7 +34574,7 @@ static std::string vsTunableJson() {
      *    off to save CPU still serves basic RDS, so the card must not read "no RDS". */
     {
         static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "jtty", "drm" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "jtty", "drm" };
         std::string m = "[";
         bool first = true;
         for (const char* id : kOffer) {
@@ -34724,7 +34726,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

@@ -54,6 +54,7 @@ const KINDS: { id: string; label: string }[] = [
   { id: 'ais', label: 'AIS' }, { id: 'aprs', label: 'APRS' },
   // ★★ V12 2026-10-26: DSC — each frequency's day of calls as a .txt, every distress/urgency call on its own (vibe_dsc_gallery.h)
   { id: 'dsc', label: 'DSC' },
+  { id: 'sitora', label: 'SITOR-A' },
 ];
 const p2 = (n: number) => String(n).padStart(2, '0');
 export function galleryWhen(t: number): string {

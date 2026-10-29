@@ -66,7 +66,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'scanner' | 'aprs' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'scanner' | 'aprs' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -258,6 +258,7 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   psk:     'PSK',
   jtty:    'JTTY',
   dsc:     'DSC',
+  sitora:  'SITOR-A',
   // ★ V12: a VibeServer's own APRS packet decoder (VHF 1200 / HF 300; the title says which).
   aprs:    'APRS',
   // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).

@@ -139,6 +139,7 @@ import { LEAFLET_ASSET } from './leafletAsset';
 import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneFor, renderJttyRows, renderJttySpots, type JttySignal } from './jtty';
 import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
          dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle, type DscCall, type DscPin, type DscChannel } from './dsc';
+import { parseSitorStatus, sitorStatusText, SITORA_HINT, type SitorStatus } from '../../../src/services/sitora';
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
@@ -785,6 +786,7 @@ async function loadAudioPolicy(httpBase: string) {
   cwCap = false;               // ★ …nor a CW decoder
   pskCap = false;              // ★ …nor a PSK one
   dscCap = false;              // ★ …nor DSC
+  sitoraCap = false;           // ★ …nor SITOR-A
   jttyCap = false;             // ★ …nor JTTY
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
@@ -837,6 +839,9 @@ async function loadAudioPolicy(httpBase: string) {
     dscCap = j.dsc === true;     // ★ DSC (V12): maritime Digital Selective Calling, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="dsc"]') as HTMLElement | null;
       if (b) b.hidden = !dscCap || blockedModes.has('dsc'); }
+    sitoraCap = j.sitora === true;   // ★ SITOR-A (V12): the maritime ARQ teleprinter, decoded by this server
+    { const b = document.querySelector('#decodersPanel [data-dec="sitora"]') as HTMLElement | null;
+      if (b) b.hidden = !sitoraCap || blockedModes.has('sitora'); }
     jttyCap = j.jtty === true;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="jtty"]') as HTMLElement | null;
       if (b) b.hidden = !jttyCap || blockedModes.has('jtty'); }
@@ -1933,7 +1938,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'jtty' && !jttyCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'jtty' && !jttyCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -11368,7 +11373,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'jtty' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'jtty' | null = null;
 /* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
  *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
  *  first, coloured by confidence) over the SPOTS; the settings hold the announced calling frequencies. Offered only where
@@ -11425,6 +11430,15 @@ function initJttyDials() {
  *  lists the calls, newest first, coloured by what they are, a position's MAP beside it; the settings hold the DSC
  *  channels to tune. Offered only where vibeserver.json says "dsc": true. See dsc.ts. */
 let dscCap = false;
+/* ★★ SITOR-A (V12, 2026-10-29) — the maritime ARQ teleprinter, decoded on the server (decoders/sitor_a.h). The box is the
+ *  text box (both stations' passages, each labelled by the server), its status line the link state, who is printing
+ *  and the RQ count (src/services/sitora.ts). Offered only where vibeserver.json says "sitora": true. */
+let sitoraCap = false;
+let sitorLast: SitorStatus | null = null;
+function renderSitorStatus(state?: number) {
+  decStateText = sitorStatusText(sitorLast, state);
+  if (!decTuneHint) $('decStatus').textContent = decStateText;
+}
 const dscCalls = new DscCalls();
 function renderDsc() {
   renderDscRows($('dscRows'), dscCalls.list,
@@ -11802,6 +11816,7 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'psk') return pskSkim ? { width: pskWidth } : { centre: passbandCentreHz() };
   if (mode === 'aprs') return { baud_rate: aprsBaud };
   if (mode === 'dsc') { const v = vfoNow(decVfo); return dscParams(v.frequency, String(v.mode ?? '')); }   // ★ the decoding VFO's dial
+  if (mode === 'sitora') return { center_frequency: 1000 };   // ★ the tones around 1 kHz, as RTTY; the polarity is found
   return {};
 }
 
@@ -11885,6 +11900,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (activeDec === 'navtex') { navtexAsm.lockState(st, Date.now()); renderNavtex(); return; }
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
+      if (activeDec === 'sitora') { if (sitorLast) sitorLast.link = st; renderSitorStatus(st); setDecLive(st >= 2 && st <= 6); return; }
       decStateText = activeDec === 'dsc' ? (st ? 'receiving a call…' : 'listening…')
                    : activeDec === 'jtty' ? (st ? 'decoding…' : 'listening…')
                    : kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
@@ -11979,6 +11995,12 @@ function initDecoders(host: string, auth: AuthState) {
       const sp = jttySpotFromJson(d);
       if (!sp) return;
       jttySpots.push(sp); renderJtty();
+    },
+    onSitorStatus: (d) => {
+      if (activeDec !== 'sitora') return;
+      const st = parseSitorStatus(d);
+      if (!st) return;
+      sitorLast = st; renderSitorStatus();
     },
     onDscCall: (d) => {
       if (activeDec !== 'dsc') return;
@@ -12088,7 +12110,7 @@ function initDecoders(host: string, auth: AuthState) {
   for (const id of ['spotsBtn', 'spotsBandBtn']) { const b = document.getElementById(id); if (b) addModeIcon(b, 'spots'); }
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'jtty';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12: the decoder runs on the VFO selected NOW (decode on either VFO) — Advanced RDS is always A's (no VFO B on FM)
       decVfo = mode === 'rds' ? 'A' : abStartVfo();
@@ -12649,7 +12671,7 @@ function batteryIcon(level: number, charging: boolean, paused: boolean, w = 54, 
 function anyDecoderLeft(): boolean {
   // ★ V12: CW and APRS count only where this server has them (vibeserver.json "cw", "aprs") — hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
-    || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc'))
+    || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
     || (jttyCap && !blockedModes.has('jtty'));
 }
 
@@ -12720,6 +12742,7 @@ function showDecBox(what: string) {
                             : what === 'cw'    ? (cwSkim ? 'CW SKIMMER' : 'CW')
                             : what === 'psk'   ? (pskSkim ? 'PSK SKIMMER' : 'PSK')
                             : what === 'aprs'  ? (aprsBaud === 300 ? 'APRS · HF 300' : 'APRS')
+                            : what === 'sitora' ? 'SITOR-A'
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -12751,6 +12774,8 @@ function showDecBox(what: string) {
   if (isDsc) { dscCalls.clear(); renderDsc(); }
   const isJtty = what === 'jtty';
   $('jttyList').classList.toggle('on', isJtty);
+  if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
+  else $('decStatus').title = '';
   if (isJtty) { jttyLast = []; jttySpots.clear(); jttyPinAt = null; renderJtty(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
   // bar is a compressed version of the same data; showing both would be saying everything

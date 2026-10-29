@@ -47,6 +47,10 @@
  *     0x01 text (one readable line per call) · 0x03 | u8 state (0 listening, 1 a call coming in)
  *     {"type":"dsc_call","data":{id,utc,rf,repeat,format,category,level,self,…,lat?,lon?,line}} — see dsc.ts
  *
+ *   SITOR-A ('sitora' — V12, the maritime ARQ teleprinter, vibe_sitora_run.h; see src/services/sitora.ts)
+ *     0x01 text (both stations; each passage starts "[n · IDENT] ") · 0x03 | u8 link state (0 no signal … 7 ended)
+ *     {"type":"sitora_status","data":{link,iss,master,heard,ids,numbers,idChecked,blocks,repeats,lost,combined,snr,offset}}
+ *
  *   JTTY ('jtty' — V12, the WSJT-X 3.2 keyboard mode, vibe_jtty_run.h)
  *     0x01 text (one line per finished message) · 0x03 | u8 state (0 listening, 3 signals being decoded)
  *     {"type":"jtty_signals","data":{signals:[{id,hz,audio,snr,q,active,last,first,frames,call,country,text}]}}
@@ -60,7 +64,7 @@ import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'jtty' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'jtty' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -132,6 +136,8 @@ export interface DecoderCallbacks {
   onJttySpot?: (data: unknown) => void;
   /** ★ DSC: one call (its data as the server sent it — dsc.ts dscFromJson checks it). */
   onDscCall?: (data: unknown) => void;
+  /** ★ SITOR-A: the link status (src/services/sitora.ts parseSitorStatus checks it). */
+  onSitorStatus?: (data: unknown) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
    *  `message` is the server's own words, shown as they are (one definition, every client). */
   onRefused?: (message: string, what: 'decoder' | 'spots') => void;
@@ -184,6 +190,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   aprs: 'aprs',
   // ★ V12 DSC: MF/HF on SSB or VHF channel 70 on NFM — which is a parameter ("band"), as the time station is.
   dsc: 'dsc',
+  sitora: 'sitora',
   // ★ V12 JTTY: every JTTY signal in the listener's passband — nothing to set.
   jtty: 'jtty',
 };
@@ -410,6 +417,11 @@ export class DecoderClient {
       if (msg.type === 'jtty_signals') this.cb.onJttySignals?.(msg.data); else this.cb.onJttySpot?.(msg.data);
       return;
     }
+    if (msg.type === 'sitora_status' && msg.data) {
+      if (this.mode !== 'sitora') return;
+      this.cb.onSitorStatus?.(msg.data);
+      return;
+    }
     if (msg.type === 'dsc_call' && msg.data) {
       if (this.mode !== 'dsc') return;
       this.cb.onDscCall?.(msg.data);
@@ -475,6 +487,8 @@ export class DecoderClient {
       case 'pskskim':
       // ★ DSC: a call's line (the box draws from the JSON instead) and the state.
       case 'dsc':
+      // ★ SITOR-A: the link's text (both stations, labelled) and its state; the status line comes as JSON.
+      case 'sitora':
       // ★ JTTY: a finished message's line (the box draws its rows from the JSON) and the state.
       case 'jtty':
         if (op === 0x01 && buf.byteLength >= 13) {

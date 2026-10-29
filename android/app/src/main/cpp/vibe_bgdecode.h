@@ -179,7 +179,7 @@ private:
             gallery::Meta mm = meta_;
             mm.utc = now;
             // ★ A CW run is written exactly as an RTTY run is (V12 2026-10-25) — only its name differs.
-            const std::string what = meta_.kind == "cw" ? "CW" : meta_.kind == "psk" ? "PSK" : "RTTY";
+            const std::string what = meta_.kind == "cw" ? "CW" : meta_.kind == "psk" ? "PSK" : meta_.kind == "sitora" ? "SITOR-A" : "RTTY";
             mm.title = what + " \xc2\xb7 " + gallery::freqText(meta_.freqHz) + " " + upper(meta_.mode);
             const std::string head = what + " \xc2\xb7 " + where() + "\nStarted " + gallery::utcStamp(now, "%Y-%m-%d %H:%M UTC") + "\n\n";
             run_ = store_.create(mm, "txt", head + buf_);
@@ -214,6 +214,7 @@ inline std::string galleryKindFor(const std::string& ext, const std::string& msg
     if (ext == "psk") return "psk";        // ★ …and a listener's PSK decoder (V12 2026-10-26)
     if (ext == "aprs") return "aprs";      // ★ V12: the day's packets + a summary card of stations (vibe_station_log.h)
     if (ext == "dsc") return "dsc";        // ★ DSC: the day's log per frequency + an item per distress/urgency call
+    if (ext == "sitora") return "sitora";  // ★ V12 SITOR-A: the link's text, as an RTTY run (both stations, labelled)
     return "";
 }
 
@@ -748,7 +749,7 @@ inline DecoderTapPtr makeGalleryTap(gallery::Store& st, const gallery::Meta& met
     if (meta.kind == "wefax" || meta.kind == "sstv") return std::make_shared<GalleryImageTap>(st, meta);
     if (meta.kind == "aprs") return std::make_shared<StationTap>(st, meta);
     if (meta.kind == "dsc") return std::make_shared<DscGalleryTap>(st, meta, std::move(dial));
-    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk") {
+    if (meta.kind == "navtex" || meta.kind == "rtty" || meta.kind == "cw" || meta.kind == "psk" || meta.kind == "sitora") {
         auto t = std::make_shared<GalleryTap>(st, meta, std::move(dial));
         if (log) t->setLog(std::move(log), tag);
         return t;
