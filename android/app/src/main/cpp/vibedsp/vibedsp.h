@@ -2983,7 +2983,13 @@ public:
     bool nfmVoice() const { return nfmVoice_.load(std::memory_order_relaxed); }
     /** ★ RAW IQ OUT: the channel rate must be at least this (Hz) so the consumer's rate can be
      *  resampled out of it. 0 = no constraint. Rebuilds the chain (same discipline as dirty_). */
-    void setIqMinRate(double hz) { iqMinRate_ = hz; dirty_ = true; }
+    /*  ★★ AND ONLY WHEN IT CHANGES. Every per-listener retune re-states the floor (24 kHz for DRM), and each restatement
+     *  rebuilt the whole chain — buffers cleared, a hole in the IQ the DRM receiver is reading (2026-10-29, the zoom that
+     *  dropped the DRM lock). Same rule as the fftRate handler: the same value is not a change. */
+    void setIqMinRate(double hz) {
+        if (iqMinRate_.load(std::memory_order_relaxed) == hz) return;
+        iqMinRate_ = hz; dirty_ = true;
+    }
     /** ★ Turn on the RDS guard-band noise measurement — the second filter pair that makes the
      *  DEVIATION READOUT honest on a weak signal. Costs CPU, and buys nothing but accuracy of a
      *  number, so it is driven by whether anyone has the analyser OPEN rather than by a setting.

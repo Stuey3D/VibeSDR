@@ -8312,6 +8312,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  clientRetune; read by the pipeline callbacks, which run under mtx too). */
         std::unique_ptr<vibe::DrmListener> drm;
         uint64_t drmSentVer = 0;
+        double drmAtHz = 0;                         // ★ the dial `drm` was built for — a new receiver only when it moves
         std::atomic<bool> drmOn{false};             // ★ for the health watch, which must not take mtx (see there)
         std::atomic<uint64_t> drmDropped{0};
         double bwHz = 0;
@@ -9251,9 +9252,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double binHz = sampleRate / (double)fftSize;
         const double off   = c->vfoHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
-        // ★ V12 DRM: the receiver needs ≥ 24 kHz of channel; a new one for a new tune (it re-acquires anyway)
-        if (c->mode == "drm") { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->rx->setIqMinRate(24000.0); }
-        else if (c->drm) { c->drm.reset(); c->rx->setIqMinRate(0.0); }
+        // ★ V12 DRM: the receiver needs ≥ 24 kHz of channel; a new one for a new tune (it re-acquires anyway).
+        // ★★★ ONLY FOR A NEW TUNE. This function runs for far more than a tune — every ZOOM came through here (the zoom
+        //     handler called clientRetune), and so does a restated tune, a passband drag, a hardware centre move — and it
+        //     built a fresh DrmListener every time: the lock, the FAC count and 0.8 s of buffered programme thrown away
+        //     on each zoom in or out (Stuart, 2026-10-29, RRI 9570 on the Pi 500 RSP1B: "each zoom in and out dropped
+        //     the lock" — the card went to "Searching…" and came back at FAC 3/3). A DRM receiver re-acquires in
+        //     seconds; it must only be asked to when the dial has actually moved or the mode has just become DRM.
+        //     ★ setIqMinRate() is a no-op when the floor is unchanged (vibedsp.h) — it used to rebuild the audio chain on
+        //       every call, which was a second, smaller hole in the IQ on the same zoom.
+        if (c->mode == "drm") {
+            if (!c->drm || c->drmAtHz != c->vfoHz) { c->drm.reset(new vibe::DrmListener()); c->drmSentVer = 0; c->drmAtHz = c->vfoHz; }
+            c->rx->setIqMinRate(24000.0);
+        }
+        else if (c->drm) { c->drm.reset(); c->drmAtHz = 0; c->rx->setIqMinRate(0.0); }
         c->drmOn.store(c->mode == "drm");
         // ★ VFO B allowance may have changed: DRM, WFM, or a dial into / out of the FM broadcast band (watchMaxFor)
         watchAllowDirty_.store(true, std::memory_order_relaxed);
@@ -17161,7 +17173,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     const double perOutBin   = me->viewSpanHz / (double)binsFor(sock);
                     me->ownView = me->viewSpanHz > 0 && perOutBin < sharedBinHz;
                 }
-                clientRetune(me.get());
+                /* ★★★ A ZOOM IS THE VIEW, NEVER THE LISTENING CHANNEL. This called clientRetune(), the whole tune path:
+                 *  the DRM receiver rebuilt (its lock lost on every zoom — Stuart, 2026-10-29), the IQ floor re-applied
+                 *  (a full audio-chain rebuild), RDS re-synced and re-swept. The listening channel is sized by the
+                 *  demodulator alone (see clientRetune), so nothing in it depends on the zoom; only the view channel
+                 *  does. The full path still runs when this listener has no channel yet. */
+                bool viewOnly = false;
+                {   // under the listener's lock, as clientRetune() holds it around the same call
+                    std::lock_guard<std::mutex> lk(me->mtx);
+                    if (me->rx) { clientRetuneView(me.get()); viewOnly = true; }
+                }
+                if (!viewOnly) clientRetune(me.get());
                 sendConfig(sock);
                 return;
             }

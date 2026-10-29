@@ -7,6 +7,7 @@
 //     sentence that says why (no system decoder plays DRM's error-resilient AAC);
 //   • the audio socket keeps flowing (the programme or silence — never a stall);
 //   • on a ONE-PIPELINE radio (the shared receiver) and on a RANGE-LOCKED one (the listener's own channel);
+//   • zooming in and out (and a restated tune) leaves the receiver alone — one receiver, the lock held;
 //   • leaving DRM for AM stops the reports.
 // Silent: audio frames are counted, never played.
 //   VIBESERVER_BIN=…/vibeserver VIBE_DRM_CLIP=…/rri9570_288k.cu8 node scripts/test-server-drm.mjs
@@ -127,6 +128,33 @@ async function scenario(label, args, tag) {
     const last = () => { const r = jsons(L.spec, 'drm'); return r[r.length - 1]; };
     ok(await until(() => last() && last().locked && last().label, 45000), `locked with a label within 45 s (${JSON.stringify(last())})`);
     ok(await until(() => last() && last().msc && last().snr > 10, 30000), `the MSC decodes (the long interleaver: 2 s more) and the SNR settles (${last() && last().snr} dB)`);
+    // ★★★ A ZOOM MUST NOT TOUCH THE RECEIVER (Stuart, 2026-10-29, the Pi 500 RSP1B on RRI 9570: "each zoom in and out
+    //     dropped the lock" — every zoom rebuilt the listener's DrmListener and the card went back to "Searching…" and FAC
+    //     3/3). The web client's own messages (spectrum.ts sendZoom; the apps send the same), in and out across the spans
+    //     where the view changes hands between the shared row and the listener's own view, then a RESTATED tune (same dial,
+    //     same mode — the client re-sends one on reconnect and on hwinfo). One receiver throughout: the FAC count only
+    //     climbs, the lock never drops, no re-acquisition.
+    {
+      const before = last() || {};
+      const n0 = jsons(L.spec, 'drm').length;
+      const facs = [];
+      const spans = [250000, 125000, 50000, 20000, 12000, 50000, 176777, 250000, 30000, 250000];
+      for (const span of spans) {
+        L.spec.send({ type: 'zoom', frequency: STATION, binBandwidth: span / 256 });
+        await sleep(700);
+        const z = last(); if (z) facs.push(z.facOk);
+      }
+      L.spec.send({ type: 'tune', frequency: STATION, mode: 'drm' });
+      for (let i = 0; i < 4; i++) { await sleep(700); const z = last(); if (z) facs.push(z.facOk); }
+      L.spec.send({ type: 'reset' });
+      for (let i = 0; i < 3; i++) { await sleep(700); const z = last(); if (z) facs.push(z.facOk); }
+      const after = last() || {};
+      const climbs = facs.every((f, i) => f >= (i ? facs[i - 1] : before.facOk));
+      ok(climbs && after.facOk > before.facOk, `zoom ×${spans.length}, a restated tune and a reset: one receiver — FAC ${before.facOk} → ${after.facOk}, never restarted (${facs.join(' ')})`);
+      const during = jsons(L.spec, 'drm').slice(n0), unlocked = during.filter((d) => !d.locked).length;
+      ok(during.length > 5 && !unlocked && after.reacq === (before.reacq || 0),
+         `…and the lock held (${unlocked} of ${during.length} reports unlocked, re-acquisitions ${before.reacq} → ${after.reacq}${after.lostWhy ? `, last: ${after.lostWhy}` : ''})`);
+    }
     const r = last() || {};
     ok(r.robustness === 'B' && r.bwKhz === 10 && r.mscQam === 16, `mode B, 10 kHz, 16-QAM (${r.robustness} ${r.bwKhz} ${r.mscQam})`);
     ok(r.label === 'SNR Tiganesti E1', `the station's label: "${r.label}"`);
