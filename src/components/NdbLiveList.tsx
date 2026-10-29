@@ -339,7 +339,7 @@ function NdbDialog({ s, kind, ndb, insets, onClose, onPick }: {
                 </NavRow>
               ));
             })()}
-            {kind === 'find' && <Text style={s.dim}>Every published NDB (OurAirports, public domain), nearest you first. ✓ = heard here — choose it to see it on the map.</Text>}
+            {kind === 'find' && <Text style={s.dim}>Every published NDB (OurAirports and FAA, public domain; © OpenStreetMap contributors, ODbL), nearest you first. ✓ = heard here — choose it to see it on the map.</Text>}
             {kind === 'stats' && <Stats s={s} st={ndb.stats} snrOf={snrOf} onSnr={setSnrOf} />}
           </ScrollView>
         </View>

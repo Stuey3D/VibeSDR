@@ -3,8 +3,8 @@
  * server's skimmer is decoding at once.
  *
  * ★★ THE PAGE'S HALF ONLY. The server decodes (vibe_ndb_service.h): it finds every carrier, reads each ident, confirms it
- *    only when several repeats agree, matches it against the published list (OurAirports, public domain) and sends a
- *    report a second. This file draws it: the map (NdbMap + web/mapkit/ndblayer.js), the live list with its tiles
+ *    only when several repeats agree, matches it against the published list (OurAirports + FAA, public domain;
+ *    OpenStreetMap, ODbL — scripts/gen-ndb-navaids.mjs) and sends a report a second. This file draws it: the map (NdbMap + web/mapkit/ndblayer.js), the live list with its tiles
  *    (CARRIERS · IDENTIFIED · FURTHEST · COVERAGE), the beacon card, the heard log, Find NDB and the stats (NdbView).
  * ★★ THE IDENT COLUMN TELLS THE TRUTH ABOUT ITSELF: ✓ = the ident read by consensus matches the published beacon;
  *    ≈ = read by consensus, one letter off the published one; plain = read by consensus, not in the list; italic + "?"
@@ -63,7 +63,7 @@ export function ndbSanitise(m: any): NdbReport | null {
   return {
     type: 'ndb', centre: num(m.centre), lo: num(m.lo), hi: num(m.hi), rate: num(m.rate), now: num(m.now), carriers: num(m.carriers), identified: num(m.identified),
     published: num(m.published), heardIn: num(m.heardIn), pos: m.pos === true ? true : m.pos === false ? false : undefined, far: m.far && typeof m.far === 'object' ? { ident: ident(m.far.ident), km: num(m.far.km) } : undefined,
-    bin: num(m.bin), source: str(m.source, 80), starting: m.starting === 1 || m.starting === true, beacons, log, copy,
+    bin: num(m.bin), source: str(m.source, 160), starting: m.starting === 1 || m.starting === true, beacons, log, copy,
   };
 }
 
@@ -437,7 +437,7 @@ export class NdbView {
   private openFind() {
     this.dlg = 'find';
     this.openDlg(`<h3>FIND AN NDB</h3><input id="ndbQ" placeholder="ident, name or kHz — empty: the nearest" autocomplete="off"><div id="ndbFoundList" class="ndbEmpty">Searching…</div>`
-      + `<div class="ndbNote">Every published NDB (OurAirports, public domain), nearest you first. Tap one heard here to see it on the map.</div>`);
+      + `<div class="ndbNote">Every published NDB (OurAirports and FAA, public domain; &copy; OpenStreetMap contributors, ODbL), nearest you first. Tap one heard here to see it on the map.</div>`);
     const inp = document.getElementById('ndbQ') as HTMLInputElement;
     let tmr = 0;
     inp.oninput = () => { clearTimeout(tmr); tmr = window.setTimeout(() => this.h.find(inp.value.trim()), 250); };

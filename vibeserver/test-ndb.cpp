@@ -147,10 +147,41 @@ int main(int argc, char** argv) {
         const auto cand = vibendb::match(352000, "", true, lat, lon);
         ok(cand.kind == vibendb::Match::Candidate && !cand.others.empty(), "no ident: the nearest on the frequency is a candidate, the rest ranked");
         const auto un = vibendb::match(353499, "EME", true, lat, lon);
-        ok(un.kind != vibendb::Match::Exact, "EME (heard, not in the list) is never matched to another beacon");
+        ok(un.kind != vibendb::Match::Exact, "EME (heard, in no source we may bundle) is never matched to another beacon");
         const auto f = vibendb::nearest(lat, lon, 5);
         ok(f.size() == 5 && f[0].km <= f[4].km, "Find NDB: nearest first");
         ok(!vibendb::nearest(lat, lon, 10, "woodley").empty(), "Find NDB: by name");
+
+        // ★★ The merged sources (scripts/gen-ndb-navaids.mjs): every record names its source, every source is used.
+        size_t per[3] = { 0, 0, 0 }; bool srcOk = true;
+        for (size_t i = 0; i < vibendb::kNavaidCount; ++i) { if (vibendb::kNavaids[i].src < 3) ++per[vibendb::kNavaids[i].src]; else srcOk = false; }
+        ok(srcOk && per[0] > 4000 && per[1] > 200 && per[2] > 50, "every beacon names its source: OurAirports " + std::to_string(per[0]) +
+           ", FAA " + std::to_string(per[1]) + ", OpenStreetMap " + std::to_string(per[2]));
+        ok(std::strstr(vibendb::kNavaidCredit, "OurAirports") && std::strstr(vibendb::kNavaidCredit, "FAA") && std::strstr(vibendb::kNavaidCredit, "OpenStreetMap"),
+           std::string("the credit names every source: ") + vibendb::kNavaidCredit);
+        ok(m.n.source().find("OurAirports") == 0, "WOD's position is OurAirports' (" + m.n.source() + ")");
+        ok(vibendb::match(342500, "NWI", true, lat, lon).n.source().find("OpenStreetMap") != std::string::npos, "NWI (Norwich) comes from OpenStreetMap");
+
+        // ★★ COVERAGE — a real heard log (Nick G4IRX, UK, 2026-10-28): 31 confirmed idents that OurAirports alone did not
+        //    name (0 of 31 before the merge). Most are UK/Irish aerodrome locators that no source we may bundle publishes
+        //    (docs/v12/NDB-SKIMMER.md § Beacon list sources); MTM 393 shares EMW's carrier and MRV 402.5 LBA's — likely
+        //    misreads. The four the merge added must stay matched; the count is printed so a source change shows.
+        struct Heard { const char* id; double khz; };
+        static const Heard nick[] = { {"LRN",398},{"HB",420},{"CDF",388.5},{"NRD",444},{"SN",430},{"MTM",393},{"EMT",419},{"PHG",424},
+            {"MRV",404},{"MVC",327},{"AX",417},{"HAW",340},{"BV",391},{"NWI",342.5},{"MRV",402.5},{"NQY",347},{"BPL",318},{"EME",353.5},
+            {"EMW",393},{"MTZ",354},{"SG",409},{"NPR",488},{"WSN",378},{"SND",362.5},{"NJ",385},{"VAT",367},{"OA",338},{"BLB",397},
+            {"MF",421},{"EGT",328.5},{"MIQ",426} };
+        int named = 0; std::string which;
+        for (const auto& h : nick) {
+            const auto mm = vibendb::match(h.khz * 1000, h.id, true, lat, lon);
+            if (mm.kind == vibendb::Match::Exact) { ++named; which += std::string(which.empty() ? "" : " ") + h.id; }
+        }
+        ok(named >= 4, "G4IRX's 31 unlisted idents: " + std::to_string(named) + " now named (" + which + ")");
+        for (const char* id : { "NWI", "SG", "MF", "MIQ" })
+            ok(which.find(id) != std::string::npos, std::string(id) + " is named");
+        // ★ MIQ is 427 kHz in OurAirports (whole kHz only) and 426.5 in OpenStreetMap: the finer frequency is kept.
+        const auto miq = vibendb::match(426000, "MIQ", true, lat, lon);
+        ok(miq.kind == vibendb::Match::Exact && std::fabs(miq.n.hz() - 426500) < 1, "MIQ is on 426.5 kHz (the finer frequency won the merge)");
     }
 
     std::printf("\n── the service: report, match, harmonic ──\n");

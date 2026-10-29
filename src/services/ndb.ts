@@ -60,7 +60,7 @@ export function ndbSanitise(m: any): NdbReport | null {
   return {
     type: 'ndb', centre: num(m.centre), lo: num(m.lo), hi: num(m.hi), rate: num(m.rate), now: num(m.now), carriers: num(m.carriers), identified: num(m.identified),
     published: num(m.published), heardIn: num(m.heardIn), pos: m.pos === true ? true : m.pos === false ? false : undefined, far: m.far && typeof m.far === 'object' ? { ident: ident(m.far.ident), km: num(m.far.km) } : undefined,
-    bin: num(m.bin), source: str(m.source, 80), starting: m.starting === 1 || m.starting === true, beacons, log, copy,
+    bin: num(m.bin), source: str(m.source, 160), starting: m.starting === 1 || m.starting === true, beacons, log, copy,
   };
 }
 

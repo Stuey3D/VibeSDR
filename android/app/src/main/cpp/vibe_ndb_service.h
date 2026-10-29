@@ -367,11 +367,11 @@ private:
         lk.unlock();
         std::string o;
         o.reserve(16384);
-        char b[512];
+        char b[768];   // ★ room for the credit line (kNavaidCredit, every source named)
         std::snprintf(b, sizeof b, "{\"type\":\"ndb\",\"centre\":%.0f,\"lo\":%.0f,\"hi\":%.0f,\"rate\":%.0f,\"now\":%lld,\"carriers\":%d,\"identified\":%d,"
                       "\"published\":%d,\"heardIn\":%d,\"pos\":%s,\"dropped\":%llu,\"bin\":%.2f,\"source\":\"%s\"",
                       hw_, lo_, hi_, rate_, (long long)nowS, carriers, ident, published, heardIn, havePos_ ? "true" : "false",
-                      (unsigned long long)droppedBlocks(), sk_->binHzActual(), jsonEsc(kNavaidSource).c_str());
+                      (unsigned long long)droppedBlocks(), sk_->binHzActual(), jsonEsc(kNavaidCredit).c_str());
         o += b;
         if (far > 0) { std::snprintf(b, sizeof b, ",\"far\":{\"ident\":\"%s\",\"km\":%.0f}", cleanText(farIdent, 6).c_str(), far); o += b; }
         o += ",\"beacons\":[";

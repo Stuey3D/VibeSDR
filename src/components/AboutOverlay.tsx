@@ -427,11 +427,13 @@ const CREDITS: { name: string; detail: string; url?: string }[] = [
   { name: 'GeoNames',
     detail: 'CC BY 4.0. The towns and cities at close zoom, including the ones no continental dataset lists.' },
   { name: 'OurAirports',
-    detail: 'Public domain, dedicated by David Megginson. Every airfield, heliport and seaplane base, and the runway thresholds and designators.' },
+    detail: 'Public domain, dedicated by David Megginson. Every airfield, heliport and seaplane base, the runway thresholds and designators, and most of the NDB beacon list that names the beacons the NDB decoder hears.' },
+  { name: 'FAA — National Airspace System Resource (NASR)',
+    detail: 'Public domain (US Government). The current US NDBs and their surveyed positions, in the NDB beacon list.' },
   { name: 'NGA World Port Index',
     detail: 'Public domain (US Government). The world’s sea ports.' },
   { name: 'OpenStreetMap contributors',
-    detail: 'ODbL. The detailed coastline at close zoom — the layer that puts an island’s shore where it really is. Built in when the map data is made, never fetched at runtime: the app makes no request to OpenStreetMap for maps. As ODbL requires, the same data is published unrestricted alongside every release.' },
+    detail: 'ODbL. The detailed coastline at close zoom — the layer that puts an island’s shore where it really is. Built in when the map data is made, never fetched at runtime: the app makes no request to OpenStreetMap for maps. Also the NDB beacons OpenStreetMap mappers have recorded that the other lists lack, merged into the NDB beacon list — which, as it holds OpenStreetMap data, is itself offered under the ODbL. As ODbL requires, the same data is published unrestricted alongside every release.' },
 
   // ── LOOK AND FRAMEWORK ───────────────────────────────────────────────────────────────────────
   { name: 'GQRX, KiwiSDR, CuteSDR, SdrDx, OpenWebRX, matplotlib',
