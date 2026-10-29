@@ -34,7 +34,7 @@
  *      WF_ONLY='<feed> · <panel>' runs one case; WF_SECS sets the run length; WF_JSBLOCK the longest JS-thread block (40 ms).
  */
 import { newRowTargetState, stepRowTarget, rowTargetUnderCap, rowsForArrival, type WfScroll } from '../src/assets/wfRowTarget.ts';
-import { CLOCK_CFG, clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockRowRate, clockRun, clockSetRate, newRowClock } from '../src/assets/wfClock.ts';
+import { CLOCK_CFG, holdLimitMs, clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockRowRate, clockRun, clockSetRate, newRowClock } from '../src/assets/wfClock.ts';
 import { rowPace, rowRate, traceLagMs } from '../src/utils/wfPace.ts';
 import { RowPacer } from '../web/client/src/wfPacing.ts';
 
@@ -519,6 +519,26 @@ if (process.env.WF_SWEEP) {
                 `web ${(acc.wh / acc.n * 100).toFixed(1)} % / ${(acc.wl / acc.n).toFixed(0)} ms · stalls ${acc.st}`);
   }
   Object.assign(CLOCK_CFG, keep);
+}
+
+// ── A BIG JUMP: an outlier frame, then the feed pauses (the 2026-10-29 white bar was suspected here first) ──
+// The white bar was NOT the clock: it lasted ~6 s with row-to-row variation (real, distinct rows — a stale server zoom
+// offset, fixed in the server and the layer). This pins what the clock CAN do on a jump: a saturated frame followed by a
+// 1.5 s retune pause is held for at most the dead-link limit, then the clock stops (black), and resumes on the next real
+// frame with no burst.
+{
+  const c = newRowClock(); clockSetRate(c, 30, 0);
+  const out: number[] = []; let t = 0, id = 0;
+  for (; t < 2000; t += 50) { clockArrive(c, id++, t); clockRun(c, t, out); }
+  const sat = id++; clockArrive(c, sat, t);                       // the outlier (a saturated frame across the jump)
+  const before = out.length;
+  for (const end = t + 1500; t < end; t += 5) clockRun(c, t, out); // the feed pauses while the radio settles
+  const held = out.slice(before).filter((x) => x === sat).length;
+  const limitRows = Math.ceil((holdLimitMs(c.ivl) + CLOCK_CFG.delayMaxMs) * 30 / 1000) + 1;
+  ok(`a jump's outlier frame is held at most the dead-link limit (${held} rows ≤ ${limitRows}), then the clock stops`,
+     held <= limitRows && out.length - before <= limitRows + 2, `held ${held}, rows in the pause ${out.length - before}`);
+  const resume = out.length; clockArrive(c, id++, t); for (const end = t + 40; t < end; t += 5) clockRun(c, t, out);
+  ok('after the pause: the next real frame resumes the scroll with no burst', out.length - resume <= 2, `${out.length - resume} rows in 40 ms`);
 }
 
 console.log(`wf fixed clock: ${passes} passed, ${fails} failed`);

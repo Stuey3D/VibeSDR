@@ -48,7 +48,7 @@ function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
 import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
 import { spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
-import { WIDE_TEX, wideExtent, wideRowInto, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
+import { WIDE_TEX, wideExtent, wideRowInto, rowInCapture, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
 import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type RowView } from './wfGlide';
 
 export interface WaterfallOpts {
@@ -992,7 +992,7 @@ export class Waterfall {
   private lastM = 0;
   private _layerGL(lo: number, span: number): number {
     const w = this.wide;
-    if (!w || !(span > 0) || span >= w.spanHz * 0.98 || !this._blendLayer()) { this.gFloor.fill(0); this.gPeak.fill(0); return 0; }
+    if (!w || !(span > 0) || span >= w.spanHz * 0.98 || !rowInCapture(lo, span, w.centreHz, w.spanHz) || !this._blendLayer()) { this.gFloor.fill(0); this.gPeak.fill(0); return 0; }
     const idx = this._idxFn();
     for (let i = 0; i < this.bFloor.length; i++) { const v = this.bFloor[i]; this.gFloor[i] = v === v ? Math.max(1, floorIdx(v, this.bSpread[i], idx)) : 0; }
     const C = this.bCell.length, g = this.gPeak;
@@ -1009,7 +1009,7 @@ export class Waterfall {
    *  none). Built from the dense row (the floor with every peak drawn in) through the detailed rows' own mapping. */
   private _coarseFor(lo: number, span: number): number {
     const w = this.wide;
-    const X = w ? wideExtent(w.spanHz, span) : 0;
+    const X = w && rowInCapture(lo, span, w.centreHz, w.spanHz) ? wideExtent(w.spanHz, span) : 0;
     if (!X || !w || !this._blendLayer()) { this.coarseRow.fill(0); return 0; }
     // ★ built in palette INDICES (the floor as its speckle's average — floorIdx — which has no single dB to stand for it)
     this.dense.centreHz = w.centreHz; this.dense.spanHz = w.spanHz;
