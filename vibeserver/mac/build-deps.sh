@@ -49,7 +49,7 @@ MIN="$(tr -d '[:space:]' < "$MAC/MACOS_MINIMUM")"
 # ★ arm64 only, matching build-app.sh (swiftc -target arm64-apple-macos…, and the core's CMake
 #   builds for the host). If the app ever goes universal, this list and build-app.sh move together.
 ARCH=arm64
-JOBS="$(sysctl -n hw.ncpu)"
+JOBS="${JOBS:-$(sysctl -n hw.ncpu)}"   # ★ JOBS=2 keeps a working Mac cool
 [ -n "$MIN" ] || { echo "!! build-deps: MACOS_MINIMUM is empty"; exit 1; }
 
 mkdir -p "$PREFIX/lib" "$PREFIX/include" "$SRC" "$CFDIR"
