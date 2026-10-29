@@ -446,6 +446,8 @@ export interface ServerOccupancy {
   psk?: boolean;
   jtty?: boolean;
   dsc?: boolean;
+  /** ★ V12 SITOR-A: this server's maritime ARQ listener ('sitora'). False or absent = no key. */
+  sitora?: boolean;
   /** ★ V12: where this radio can be tuned (Hz windows after the owner's lists) — decides which channel / band keys draw. */
   tunable?: Array<[number, number]>;
   /** ★ V12 digital spots (docs/v12/DIGITAL-SPOTS.md): the modes this server decodes, Band mode's capability and bands. */
@@ -514,6 +516,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       psk:       j.psk === true,
       jtty:      j.jtty === true,
       dsc:       j.dsc === true,
+      sitora:    j.sitora === true,
       tunable:   parseTunable(j.tunable),
       spotModes: parseSpotModes(j.spotModes),
       spotsBand: parseSpotsBandCap(j),

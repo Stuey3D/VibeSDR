@@ -37,6 +37,7 @@ Nick's case: centre 500 kHz; VFO 1 489.5 kHz USB NAVTEX; VFO 2 517.5 kHz USB NAV
 | WEFAX 120 LPM | USB | 1900 Hz (the carrier) | one PNG per chart, start tone to stop tone |
 | SSTV | USB, NFM | dial | one PNG per picture |
 | FT8 / FT4 | USB | dial | a **summary**, not the spots: a standing "last 10 minutes" card + one card per UTC hour |
+| SITOR-A (ARQ) | USB, LSB | 1000 Hz | text appended as an RTTY run (both stations, each passage labelled) |
 | DSC (MF/HF) · DSC (VHF ch 70) | USB, LSB · NFM | 1700 Hz · dial | the day's log per DSC frequency + one item per distress/urgency call, pinned at its position (docs/v12/DSC.md); **+ DSC watch** fills the VFOs |
 | Digital spots: Band (summary) | USB (greyed — set by the decoder) | — (a band picker; the row stores the band's dial) | the FT8 summary's two cards for the whole band, every mode counted (2026-10-27, below) |
 | NDB skimmer (summary) | USB (greyed — set by the decoder) | — (no frequency: the part of 190–535 kHz the capture holds; stored hz 0) | the NDB cards: the day's heard log and map, last 10 minutes, one per UTC hour (2026-10-27, below) |

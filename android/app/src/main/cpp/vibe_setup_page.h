@@ -2660,6 +2660,8 @@ const BLOCKABLE = [
   { id: "psk",    label: "PSK31/63" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
+  /* ★ V12 SITOR-A (2026-10-29) — the maritime ARQ teleprinter (AMTOR mode A), both stations of a link. */
+  { id: "sitora", label: "SITOR-A" },
   /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio
    *  reaches LF; this switch takes it off a radio that could. */
   { id: "ndb",    label: "NDB beacons" },
@@ -5744,6 +5746,8 @@ const BG_DECODERS = [
   //    is found), VHF channel 70 (156.525 MHz) on NFM. The "+ DSC watch" key below fills these in.
   { id: "dsc",          label: "DSC (MF/HF)",                  tone: 1700, modes: ["usb", "lsb"] },
   { id: "dsc-vhf",      label: "DSC (VHF channel 70)",         tone: 0,    modes: ["nfm"] },
+  // ★★ V12 2026-10-29: SITOR-A — the maritime ARQ teleprinter, both stations of a link, tones 1 kHz from the dial
+  { id: "sitora",       label: "SITOR-A (ARQ)",                tone: 1000, modes: ["usb", "lsb"] },
   // ★★ V12 2026-10-27 — DIGITAL SPOTS: BAND (Stuart: "Also full band digital modes too"): every digital mode on the band
   //    the VFO's frequency is in (7074 = 40 m), the listener's own Band mode behind its CPU governor, ONE summary card
   //    for the band. Offered only where this radio has a band at all and Band is not switched off here (bgBandOk).
