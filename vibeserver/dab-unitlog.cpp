@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
         if (std::getenv("VIBE_UNITLOG_JSON") && std::fabs(fed - 10.0) < 0.026) { std::string j; svc.jsonTry(j); }   // ★ primes the CPU window
         if (const char* sw = std::getenv("VIBE_UNITLOG_SWITCH_AT")) {
             static bool flipped = false;
-            if (!flipped && fed >= std::atof(sw)) { flipped = true; vibedab::dabAacChoice().store(1 - vibedab::dabAacChoice().load()); std::printf("   [%.1f s] switch flipped\n", fed); }
+            if (!flipped && fed >= std::atof(sw)) { flipped = true; vibedab::dabAacChoice().store(vibedab::dabWantFaad2() ? 2 : 1); std::printf("   [%.1f s] switch flipped\n", fed); }
         }
         // ★ VIBE_UNITLOG_FAST=1: no real-time pacing — as fast as the machine goes (per-thread instruction counts under qemu)
         static const bool fast = std::getenv("VIBE_UNITLOG_FAST") != nullptr;

@@ -120,13 +120,18 @@ fi
 #   vendor/openrsp/include, and the images no longer COPY a sdrplay-inc/ directory.
 # ★ And the bundled tunnel: CMake refuses a package without it, so check here rather than after a build.
 bash "$SRC_DIR/tools/cloudflared-desktop/fetch.sh" >/dev/null
+# ★★ And the bundled FFmpeg (V12): all five binaries are built HERE, on the Mac, once per FFmpeg version (a no-op when
+#    tools/ffmpeg-linux/bin is current), and travel to the Lenovo with the tree like cloudflared's. CMake refuses a package
+#    without its one. ★ The source tarball it leaves in tools/ffmpeg-linux/bin/source must be published beside the packages
+#    (docs/v12/BUNDLED-FFMPEG.md) — publish-apt-remote.sh says so.
+bash "$SRC_DIR/android/app/src/main/cpp/sdr-kit/build-ffmpeg-linux.sh"
 
 # ★ ONE exclude list for both copies, so the Mac and the Lenovo build from the same tree.
 EXCLUDES=(--exclude node_modules --exclude .git --exclude 'android/app/build'
   --exclude 'android/app/.cxx' --exclude 'ios/Pods' --exclude 'vibeserver/build'
   --exclude 'vibeserver/build-*' --exclude 'web/dist' --exclude .claude --exclude spike
   --exclude tvos --exclude lite --exclude '*.zip' --exclude '*.raw' --exclude '*.iq16' --exclude '*.cf32'
-  --exclude fuzz-corpus --exclude .armhf-out --exclude '.prebuilt-*')
+  --exclude fuzz-corpus --exclude .armhf-out --exclude '.prebuilt-*' --exclude 'tools/ffmpeg-linux/bin/.debug')
 if [ -n "$REMOTE_ARCHES" ]; then
   echo "==> syncing the tree to $HOST:~/$RSRC"
   rsync_to_host --delete "${EXCLUDES[@]}" "$SRC_DIR/" "$HOST:$RSRC/"

@@ -134,7 +134,13 @@ additions are syntax-checked but have not run.
 - **`test-server-drm`** (40/40): RRI plays through the real server as PCM and as Opus (200 packets in 4 s, up to 369 bytes), on both radio kinds.
 - **`test-web-drm`** (16/16): the box shows "Audio … via FAAD2 2.11.3".
 
-# DAB+ through FAAD2 — the owner's choice since 2026-10-26 (FFmpeg stays the default)
+# DAB+ through FAAD2 — the owner's choice since 2026-10-26; THE LINUX DEFAULT since 2026-10-29
+
+**2026-10-29 (Stuart: "use FAAD2 for DRM and DAB+ by default and FFmpeg where needed"):** on Linux servers FAAD2 is
+now the DAB+ default and FFmpeg the owner's alternative; the packages bundle FFmpeg 8.1 and no longer Recommend the
+distribution's ([BUNDLED-FFMPEG.md](BUNDLED-FFMPEG.md)). The Mac keeps the platform's decoder as its default; Android
+keeps AMediaCodec (FAAD2 there only for DRM's AAC). The setup page's switch is now a choice, "DAB+ audio decoder"
+(config `dabAacDecoder`: 0 default, 1 FAAD2, 2 FFmpeg). The history below is kept as it was written.
 
 **First version below (bench multiplex, synthetic damage). Superseded by the off-air measurements in the next section.**
 
@@ -218,7 +224,7 @@ global symbols, once with a forced include renaming every one to `vibedab_` — 
 nothing unprefixed. Measured in the build images: armhf, ARMv6 (Tag_CPU_arch v6) and arm64; an armhf binary links
 `libfaad_drm.a` and `libfaad_dab.a` together. CMake `VIBE_DAB_FAAD2` (on) requires it in a release deps prefix.
 
-**The switch.** Setup page, per radio: "Decode DAB+ audio with FAAD2, inside VibeServer" (`dabFaad2`), drawn only where
+**The switch** (as first built — now "DAB+ audio decoder", `dabAacDecoder`, see the top of this section). Setup page, per radio: "Decode DAB+ audio with FAAD2, inside VibeServer" (`dabFaad2`), drawn only where
 `hwinfo.dabFaad2Avail` (FAAD2 built and FFmpeg working). Live: the next super frame restarts the decoder as a service
 change would. `VIBE_DAB_AAC=faad2|ffmpeg` overrides it. The DAB panel's "AAC decoder" line shows the decoder, its CPU
 (`aacCpu`, % of a core: FFmpeg's child or FAAD2's time) and units concealed.

@@ -239,6 +239,21 @@ for d in "$DIST/main"/binary-*; do
     "$(grep -oE '^Version: [0-9][^ ]*' "$d/Packages" | awk '{print $2}' | sort -V | tail -1)"
 done
 
+# ── 6b. THE BUNDLED FFmpeg'S CORRESPONDING SOURCE, beside the packages (V12, 2026-10-29) ──────────
+# ★★★ LGPL-2.1: shipping FFmpeg's binary (lib/vibeserver/ffmpeg) is allowed because its exact source and the way we built
+#     it are offered with it. They go into the repository itself, so whoever can fetch the package can fetch them:
+#     https://apt.vibesdr.net/source/ffmpeg/<version>/ — the release tarball and its signature, our build script and
+#     build image, the licence, the notice, BUILDINFO (every configure line) and the binaries' checksums. Same files on
+#     every publish, so git stores them once. A package with no source beside it is not published.
+FFSRC="$SRC_DIR/tools/ffmpeg-linux/bin"
+FFVER="$(sed -n 's/^ffmpeg \([0-9.]*\) .*/\1/p' "$FFSRC/BUILDINFO" 2>/dev/null)"
+[ -n "$FFVER" ] && [ -f "$FFSRC/source/ffmpeg-$FFVER.tar.xz" ] && [ -f "$FFSRC/source/build-ffmpeg-linux.sh" ] \
+  || { echo "!! the bundled FFmpeg's source is not in $FFSRC/source — refusing to publish packages without it"; exit 1; }
+mkdir -p "$APT_DIR/source/ffmpeg/$FFVER"
+cp "$FFSRC/source/"* "$FFSRC/COPYING.LGPLv2.1" "$FFSRC/NOTICE.ffmpeg" "$FFSRC/BUILDINFO" "$FFSRC/manifest.sha256" \
+   "$APT_DIR/source/ffmpeg/$FFVER/"
+echo "==> FFmpeg $FFVER source + build script beside the packages: source/ffmpeg/$FFVER/"
+
 # ── 7. commit (always), push (never on --dry-run) ──────────────────────────────────────────────
 VERS=""; for A in $ARCHES; do VERS="$VERS $(getver "$A")"; done
 VERS="$(echo "$VERS" | tr ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ $//')"

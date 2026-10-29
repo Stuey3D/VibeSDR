@@ -6231,6 +6231,15 @@ select.btn { padding: 6px 8px; }
     Natural Earth, NOAA ETOPO, &copy; GeoNames, &copy; HydroLAKES, &copy; RESOLVE Ecoregions 2017
     (CC BY 4.0), OurAirports, NGA World Port Index and &copy; OpenStreetMap contributors (ODbL).
   </div>
+  <!-- ★★ V12 (2026-10-29): the server's audio decoders — FFmpeg is LGPL and BUNDLED in the Linux packages, so its
+       credit and where its licence and source are is said where a listener can see it. Same as the app's About. -->
+  <div class="lbl wrap">
+    DAB+ and DRM audio is decoded by this server, with <b>FAAD2</b> (GPL-2.0-or-later) where it is built in. The Linux
+    packages also include <b>FFmpeg</b> (the FFmpeg developers, LGPL-2.1-or-later;
+    <a href="https://ffmpeg.org/" target="_blank" rel="noopener">ffmpeg.org</a>) for xHE-AAC stations and as the optional
+    DAB+ decoder &mdash; its licence and notice are in <code>/usr/share/doc/vibeserver</code> on the server, and its
+    exact source with our build script is published beside the packages.
+  </div>
   <!-- ★★ Credited in full (Stuart, 2026-10-09): linked, never copied — see the app's AboutOverlay. -->
   <div class="lbl wrap">
     &ldquo;What is this signal?&rdquo; answers and the SIGNAL ID WIKI key link to the

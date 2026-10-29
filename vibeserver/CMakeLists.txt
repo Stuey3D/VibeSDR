@@ -94,7 +94,7 @@ endforeach()
 # ── Linux: NOTHING FROM THE SYSTEM BUT glibc (Stuart, 2026-10-18) ────────────────────────────
 # ★★★ THE RULE. The .deb needs nothing from the distribution for SDR support or libraries: no
 #     libusb, librtlsdr, libhackrf, libopus, ncurses, libstdc++ or libgcc. glibc (libc6) necessarily
-#     stays; FFmpeg stays a Recommends (DAB+, exec'd); the SDRplay API stays the owner's own install,
+#     stays; FFmpeg is BUNDLED (V12: lib/vibeserver/ffmpeg, exec'd — no longer a Recommends); the SDRplay API stays the owner's own install,
 #     dlopen'd. Everything else is OURS, built from pinned source (linux/build-deps.sh, the same
 #     versions as mac/build-deps.sh) or compiled from the vendored tree, and linked IN.
 # ★★ WHY. dpkg-shlibdeps writes the BUILD image's library versions into Depends, not the versions
@@ -750,8 +750,8 @@ if(VIBE_DRM_FAAD2)
 endif()
 
 # ── FAAD2 (PLAIN build, globals prefixed vibedab_): DAB+ audio IN PROCESS (V12 — vibe_dab_faad.h) ─────────────────────
-# ★★ The owner's alternative to the FFmpeg child for DAB+ (setup: "DAB+ audio decoder", config dabFaad2; FFmpeg stays the
-#    default). The DRM build above refuses DAB+, and the plain build exports the same names, so build-deps compiles the
+# ★★ DAB+'s DEFAULT decoder on Linux since 2026-10-29 (setup: "DAB+ audio decoder", config dabDecoder; the FFmpeg child is
+#    the owner's alternative — vibe_dab_aacdec.h dabFaad2Default). The DRM build above refuses DAB+, and the plain build exports the same names, so build-deps compiles the
 #    plain one with every global renamed (libfaad_dab.a) and checks it defines nothing unprefixed. Same licence as above:
 #    server builds only, never the App Store archive (build_ios.sh fails on any FAAD2 symbol, prefixed ones included).
 # ★ Release builds: from the deps prefix, and its absence is a configure error (re-run build-deps.sh) unless
@@ -1176,6 +1176,53 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
             "Fix: run tools/cloudflared-desktop/fetch.sh (or copy tools/cloudflared-desktop/bin/ into this\n"
             "tree). To build without it on purpose: -DVIBESERVER_ALLOW_NO_TUNNEL=ON.")
   endif()
+  # ★★★ SHIP FFmpeg TOO (V12, Stuart 2026-10-29: "bundle FFmpeg on the Linux servers … use FAAD2 for DRM and DAB+ by
+  #     default and FFmpeg where needed"). Where it is needed is xHE-AAC (DRM's USAC stations), which a distribution's
+  #     ffmpeg mostly cannot decode (Pi OS bookworm 5.1, Ubuntu 24.04 6.1), and DAB+ when the owner picks FFmpeg over
+  #     FAAD2. A minimal LGPL-only FFmpeg 8.1 CLI, built by android/app/src/main/cpp/sdr-kit/build-ffmpeg-linux.sh into
+  #     tools/ffmpeg-linux/bin (gitignored, like cloudflared's), goes to lib/vibeserver/ffmpeg — the server prefers it and
+  #     falls back to a system ffmpeg only if it is missing (vibe_ffmpeg_path.h). So ffmpeg is no longer a Recommends.
+  #  ★★ LGPL-2.1+: the licence text and a NOTICE go in the package's doc directory, and the exact source tarball + the
+  #     build script are published beside the packages (docs/v12/BUNDLED-FFMPEG.md) — that is what makes shipping it OK.
+  #  ★★ armhf carries TWO, like vibeserver itself: the ARMv7+NEON one (the Pi 2) and lib/vibeserver/armv6/ffmpeg for a
+  #     CPU without NEON — the ARMv6 vibeserver binary looks for its own (vibe_ffmpeg_path.h), so postinst moves nothing.
+  #  ★ FATAL when missing, for the cloudflared reason below the line: a package without it would quietly drop xHE-AAC
+  #    on every machine that installed it. -DVIBESERVER_ALLOW_NO_FFMPEG=ON builds without it on purpose.
+  set(_vibe_ff_src "${CMAKE_CURRENT_SOURCE_DIR}/../tools/ffmpeg-linux/bin")
+  if(VIBE_X86_32)
+    set(_vibe_ff_arch i386)
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(_vibe_ff_arch arm64)
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv6")
+    set(_vibe_ff_arch armv6)
+  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
+    set(_vibe_ff_arch armhf)
+  else()
+    set(_vibe_ff_arch amd64)
+  endif()
+  set(_vibe_ff "${_vibe_ff_src}/ffmpeg-linux-${_vibe_ff_arch}")
+  if(EXISTS "${_vibe_ff}" AND EXISTS "${_vibe_ff_src}/COPYING.LGPLv2.1" AND EXISTS "${_vibe_ff_src}/NOTICE.ffmpeg")
+    install(PROGRAMS "${_vibe_ff}" DESTINATION lib/vibeserver RENAME ffmpeg)
+    if(VIBE_ARMV6_STAGE)
+      if(NOT EXISTS "${_vibe_ff_src}/ffmpeg-linux-armv6")
+        message(FATAL_ERROR "the armhf package carries an ARMv6 build but ${_vibe_ff_src}/ffmpeg-linux-armv6 is missing — "
+                            "run android/app/src/main/cpp/sdr-kit/build-ffmpeg-linux.sh")
+      endif()
+      install(PROGRAMS "${_vibe_ff_src}/ffmpeg-linux-armv6" DESTINATION lib/vibeserver/armv6 RENAME ffmpeg)
+    endif()
+    install(FILES "${_vibe_ff_src}/COPYING.LGPLv2.1" DESTINATION share/doc/vibeserver RENAME COPYING.ffmpeg)
+    install(FILES "${_vibe_ff_src}/NOTICE.ffmpeg" "${_vibe_ff_src}/BUILDINFO" DESTINATION share/doc/vibeserver)
+    message(STATUS "bundling FFmpeg: ${_vibe_ff}")
+  elseif(VIBESERVER_ALLOW_NO_FFMPEG)
+    message(WARNING "FFmpeg not bundled (VIBESERVER_ALLOW_NO_FFMPEG) — xHE-AAC needs a system ffmpeg 8.1+, and installing "
+                    "this package REMOVES any /usr/lib/vibeserver/ffmpeg a previous one installed")
+  else()
+    message(FATAL_ERROR
+            "FFmpeg not found at ${_vibe_ff} (or its COPYING.LGPLv2.1 / NOTICE.ffmpeg).\n"
+            "A package built now would take xHE-AAC (DRM) away from every machine that installs it.\n"
+            "Fix: run android/app/src/main/cpp/sdr-kit/build-ffmpeg-linux.sh on the Mac (it builds all five), or copy\n"
+            "tools/ffmpeg-linux/bin/ into this tree. To build without it on purpose: -DVIBESERVER_ALLOW_NO_FFMPEG=ON.")
+  endif()
   # ★★ NOT a plain install() — the config is the one file the user edits, and apt must never
   #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
   install(FILES linux/vibeserver.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/vibeserver)
@@ -1331,30 +1378,22 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #     which this package already requires by shipping a .service unit. Declaring `systemd` would
   #     also wrongly refuse to install on a container image where the binary is still useful.
   set(CPACK_DEBIAN_PACKAGE_DEPENDS "adduser, curl, gzip")
-  # ★★★ ffmpeg IS HOW DAB+ IS DECODED ON LINUX, and it was never declared — so a machine simply
-  #     without it served DAB+ that the SERVER could not decode, fell back to shipping raw AAC to
-  #     the client, and told nobody. Measured on the x86 box (2026-09-11): no ffmpeg anywhere,
-  #     aacDecoded 0, perfect superframes, and audio quality decided by whatever the browser made
-  #     of it — which is precisely the client-side decoding this project moved AWAY from. The Pi
-  #     had it only because something else pulled it in.
-  # ★★ RECOMMENDS, NOT DEPENDS. apt installs Recommends by default and keeps them upgraded, which
-  #    is what "auto-updating" means here (Stuart, 2026-09-11) — while a hard dependency would drag
-  #    a large package onto a receiver run purely for FM/AM/SSB, and would refuse to install on a
-  #    minimal image where the binary is still perfectly useful. Same reasoning as systemd above.
-  # ★ The decoder also now SAYS so at start-up when it is absent — see vibe_dab_aacdec.h. A
-  #   missing Recommends must never again be a silent downgrade.
+  # ★★★ ffmpeg IS NO LONGER A RECOMMENDS (V12, 2026-10-29) — the package carries its own (lib/vibeserver/ffmpeg, see the
+  #     bundling block above), so a machine without a system ffmpeg still decodes xHE-AAC, and DAB+ is FAAD2's by default.
+  #     History: until V12 ffmpeg was how DAB+ was decoded on Linux and was a Recommends, because a machine without it
+  #     (the x86 box, 2026-09-11) served DAB+ it could not decode and told nobody. The decoder still SAYS so at start-up
+  #     when its ffmpeg is missing (vibe_dab_aacdec.h).
   # ★★★ AND THE OPTIONAL MAP DETAIL PACK — RECOMMENDS, EMPHATICALLY NOT DEPENDS. 82 MB compressed,
   #     ~221 MB on disk, and it is the zoomed-in half of the map: coastline shards, second-level
   #     boundaries, minor roads, small places. A receiver is perfectly usable without it (the basic
   #     pack inside this package covers the whole world down to zoom 7) and a Pi on a 4 GB card may
   #     not have room for it at all — so it must never be able to refuse an install.
   #  ★★ Recommends rather than Suggests because apt installs Recommends by default AND keeps them
-  #     upgraded, which is what makes the data track the server on a machine with the disk for it —
-  #     the same reasoning as ffmpeg above. `--no-install-recommends`, or a machine tight on space,
+  #     upgraded, which is what makes the data track the server on a machine with the disk for it. `--no-install-recommends`, or a machine tight on space,
   #     simply gets the basic map.
   #  ★ The server says which layers it has not got, per request, rather than failing silently — see
   #    the 404 wording in vibe_mapdata.h.
-  set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "ffmpeg, vibeserver-mapdata-detail")
+  set(CPACK_DEBIAN_PACKAGE_RECOMMENDS "vibeserver-mapdata-detail")
   # ★★★ THE GUARD: a release package whose Depends names ANY library but libc6 is refused and
   #     deleted, so "nothing from the system but glibc" cannot regress quietly — a -dev package
   #     creeping back into a build image, a new find_library, a dynamic libatomic. Release builds

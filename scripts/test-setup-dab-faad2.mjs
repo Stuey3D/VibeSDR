@@ -1,4 +1,6 @@
-// test-setup-dab-faad2.mjs — UNTICKING "Decode DAB+ audio with FAAD2" MUST STICK (Stuart's Pi 2, 2026-10-26).
+// test-setup-dab-faad2.mjs — CHOOSING FFmpeg OVER FAAD2 FOR DAB+ MUST STICK (Stuart's Pi 2, 2026-10-26).
+// ★ 2026-10-29: the switch is now a choice, "DAB+ audio decoder" (#dabAacDecoder: 0 default, 1 FAAD2, 2 FFmpeg — config
+//   dabAacDecoder, replacing the dabFaad2 bool), because FAAD2 became the Linux default and "off" no longer meant FFmpeg.
 //
 // ★★★ THE BUG: Stuart unticked the switch and saved (the log: three "config saved by …", then "Configuration saved —
 //     restarting"), and the radio came back on FAAD2 with "dabFaad2": true in config.json. The setup page saves through
@@ -45,7 +47,7 @@ const cfgPath = path.join(dir, 'config.json');
 fs.writeFileSync(cfgPath, JSON.stringify({
   configured: true, fullMode: true, name: 'FAAD2 switch test', adminPass: ADMIN, port: P,
   radios: [{ serial: SERIAL, driver: 'rtlsdr', label: 'RTL', enabled: true, configured: true, users: 4, rate: 2048000,
-             freq: 100000000, demodMode: 'wfm', dabFaad2: false }],
+             freq: 100000000, demodMode: 'wfm', dabAacDecoder: 0 }],
 }));
 // ★★ EVERY PORT DISTINCT. freePort() can hand back P+1 (the radio's own port) — and a radio told to read rtl_tcp from its
 //    own HTTP port feeds on itself (the first run of this test grew to 17 GB before it was killed).
@@ -77,7 +79,9 @@ const R = () => {
   } catch { return ''; }
 };
 const up = async (port) => { for (let i = 0; i < 100; i++) { if (await new Promise((r) => { const c = net.connect(port, '127.0.0.1'); c.on('connect', () => { c.end(); r(true); }); c.on('error', () => r(false)); })) return true; await sleep(100); } return false; };
-const fileFaad2 = () => JSON.parse(fs.readFileSync(cfgPath, 'utf8')).radios.find((r) => r.serial === SERIAL)?.dabFaad2;
+/** ★ true = FAAD2 chosen (dabAacDecoder 1), false = FFmpeg chosen (2); anything else is returned as it is. */
+const fileFaad2 = () => { const d = JSON.parse(fs.readFileSync(cfgPath, 'utf8')).radios.find((r) => r.serial === SERIAL)?.dabAacDecoder;
+                          return d === 1 ? true : d === 2 ? false : d; };
 
 /** A WebSocket listener on the radio — enough to enter and leave DAB. */
 function ws(port, pathq) {
@@ -132,16 +136,16 @@ async function openSetup() {
   await until(async () => await js(`document.querySelectorAll("#radioTabs button").length > 0`), 10000);
   await js(`(() => { const b = [...document.querySelectorAll("#radioTabs button")].find(x => /RTL/.test(x.textContent)); b && b.click(); return 1; })()`);
   const drawn = await until(async () => await js(`(() => { const b = document.getElementById("dabFaad2Box"); return !!b && !b.classList.contains("hide"); })()`), 15000);
-  ok(drawn, 'signed in: the "Decode DAB+ audio with FAAD2" switch is drawn (this server has both decoders)');
+  ok(drawn, 'signed in: the "DAB+ audio decoder" choice is drawn (this server has both decoders)');
   if (!drawn) console.log('      HW:', await js(`JSON.stringify(HW && { dabFaad2Avail: HW.dabFaad2Avail, dabHw: HW.dabHw, offline: HW.offline, keys: Object.keys(HW).length })`),
                    await js(`fetch("/vibeserver/radios").then(r => r.text())`), await js(`fetch("/r/${SERIAL}/vibeserver/hardware").then(r => r.status + " " + r.text().then(t=>t.slice(0,200)))`));
 }
 async function setAndSave(on) {
-  await js(`(() => { const c = document.getElementById("dabFaad2"); if (c.checked !== ${on}) c.click(); return c.checked; })()`);
-  ok(await js(`document.getElementById("dabFaad2").checked`) === on, `${on ? 'ticked' : 'unticked'}`);
+  await js(`(() => { const c = document.getElementById("dabAacDecoder"); c.value = "${on ? 1 : 2}"; c.dispatchEvent(new Event("change")); return c.value; })()`);
+  ok(await js(`document.getElementById("dabAacDecoder").value`) === (on ? '1' : '2'), `${on ? 'FAAD2' : 'FFmpeg'} chosen`);
   const visible = await js(`(() => { const b = document.getElementById("saveRadioBtn"); return !!b && !b.classList.contains("hide") && !b.disabled; })()`);
   await js(`document.getElementById(${JSON.stringify(visible ? 'saveRadioBtn' : 'saveBtn')}).click(); 1`);
-  ok(await until(() => fileFaad2() === on, 10000), `★ saved through the page (${visible ? 'Save radio settings' : 'Save and start'}): config.json says dabFaad2 ${on}`);
+  ok(await until(() => fileFaad2() === on, 10000), `★ saved through the page (${visible ? 'Save radio settings' : 'Save and start'}): config.json says dabAacDecoder ${on ? 1 : 2}`);
   await sleep(1500);
 }
 
@@ -182,7 +186,7 @@ try {
   await sleep(4000);
   ok(fs.statSync(cfgPath).mtimeMs > savedAt && /remembering block|dabChannel/.test(R() + fs.readFileSync(cfgPath, 'utf8')),
      'the radio DID persist its own state after the save (config.json rewritten by the radio — the write that used to undo it)');
-  ok(fileFaad2() === false, `★★ after the radio has persisted its own state, config.json still says dabFaad2 false (it says ${fileFaad2()})`);
+  ok(fileFaad2() === false, `★★ after the radio has persisted its own state, config.json still says FFmpeg (dabAacDecoder 2; it says ${fileFaad2()})`);
   await stopRadio(); startRadio(); await up(P + 1);
   ok(await until(() => /DAB\+ decoder: (FFmpeg|FAAD2)/.test(R()), 10000) && /DAB\+ decoder: FFmpeg/.test(R()) && !/DAB\+ decoder: FAAD2/.test(R()),
      `★★ the radio restarts on FFmpeg (${(R().match(/DAB\+ decoder: [^\n]*/) || ['no line'])[0]})`);
