@@ -41,6 +41,8 @@
  */
 
 import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, rowsForArrival, type WfScroll } from '../assets/wfRowTarget';
+import { clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockReset, clockRowRate, clockRun, clockSetRate, newRowClock }
+  from '../assets/wfClock';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
@@ -472,6 +474,8 @@ interface SpectrumEngineHost {
   liveRange(): [number, number] | null;
   poll(): {
     image?: SkImage; head: number; texReady: boolean; quant: number; avgMs: number;
+    /** ★ V12 the fixed output clock's rate, rows/s (0 = NATIVE / actual rows); absent from a binary built before it. */
+    rowRate?: number;
     scrollGen: number; glide: boolean; glideDur: number;
     /** The motion range of this image (absolute frames) and the fans' screen move since the last image (x_old = c + k·x). */
     moLo?: number; moHi?: number; fanK?: number; fanC?: number;
@@ -1091,7 +1095,7 @@ function WaterfallView({
   // incremental display shift, colourise, new SkImage. The line ticker emits
   // duplicate pushes of the latest data row between frames so the fps modes
   // reach 30/60 lines per second.
-  const pushRow = useCallback((srcRow: Uint8Array, rowCenterHz = 0, rowHzPerBin = 0) => {
+  const pushRow = useCallback((srcRow: Uint8Array, rowCenterHz = 0, rowHzPerBin = 0, publish = true) => {
     // ★★ THE RING IS A FIXED SIZE IN BOTH DIMENSIONS. It used to be reallocated
     // whenever the incoming bin count changed, which also reset frameCount to 0 —
     // and the shader indexes from that ABSOLUTE counter, so the reset made it
@@ -1192,7 +1196,7 @@ function WaterfallView({
     //   open — but no texture is built or uploaded and the shader does not run for a screen nobody
     //   can see. publishRing() makes the one texture on uncover. See useScreenCovered.
     if (coveredRef.current) { ringDirty.current = true; return; }
-    publishRing();
+    if (publish) publishRing(); else ringDirty.current = true;   // (the fixed clock's catch-up: several rows, ONE image)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
 
@@ -1318,6 +1322,45 @@ function WaterfallView({
     };
     extraTimer.current = setTimeout(tick, spacingMs);
   }, [emitRepeatRows]);
+
+  /* ★★★ THE FIXED OUTPUT CLOCK (V12 2026-10-29, src/assets/wfClock.ts — every mode but NATIVE). Stuart: "if we are only
+   *  doing a straight 2x 3x interpolation an incoming rate that drifts about will make it feel juddery which is why I said
+   *  to over interpolate and discard to avoid this issue". The rows used to be made PER ARRIVAL (rowsForArrival + the
+   *  repeat timer above), so the supply followed the feed: a late frame left the playout buffer empty and the scroll
+   *  stalled. Now the rows come off a steady clock at the mode's rate, each one the newest REAL frame presented by its
+   *  tick (a repeat, never a blend); a late frame costs one more repeat, two frames in one tick drop the older. This timer
+   *  only PRODUCES them into the ring, at exactly the rate; the UI thread releases them on the display's frames
+   *  (utils/wfPace.ts clockPace). Frames are kept here by id until the clock has shown or dropped them. */
+  const rowClock   = useRef(newRowClock());
+  const clockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clockOut   = useRef<number[]>([]);
+  const clockSeq   = useRef(0);
+  /** The real frames the clock may still show, by id (a few: the clock's queue is 4 deep, plus the one it holds). */
+  const clockFrames = useRef(new Map<number, { row: Uint8Array; c: number; h: number }>());
+  const clockPool   = useRef<{ row: Uint8Array; c: number; h: number }[]>([]);   // their buffers, reused (no per-frame allocation)
+  const clockStop = useCallback(() => {
+    if (clockTimer.current) { clearTimeout(clockTimer.current); clockTimer.current = null; }
+  }, []);
+  const pumpClock = useCallback(() => {
+    clockTimer.current = null;
+    const rc = rowClock.current, now = performance.now(), out = clockOut.current;
+    out.length = 0;
+    clockRun(rc, now, out);
+    for (let i = 0; i < out.length; i++) {
+      const f = clockFrames.current.get(out[i]);
+      if (f) pushRow(f.row, f.c, f.h, i === out.length - 1);   // several due (a busy JS thread): ONE image for them all
+    }
+    // Forget frames the clock can no longer show (older than the one it holds and not queued).
+    if (clockFrames.current.size > 6) {
+      const keep = new Set<number>(rc.q.map(f => f.id)); keep.add(rc.cur);
+      for (const [id, f] of clockFrames.current) if (!keep.has(id)) { clockFrames.current.delete(id); if (clockPool.current.length < 8) clockPool.current.push(f); }
+    }
+    if (bgRef.current || coveredRef.current || clockIdle(rc, now)) return;   // a dead link stops; the next frame restarts it
+    const nx = clockNextAt(rc);
+    if (nx >= 0) clockTimer.current = setTimeout(pumpClock, Math.max(0, nx - performance.now()));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pushRow]);
+  useEffect(() => clockStop, [clockStop]);   // unmount
 
   const revealCb = useFrameCallback((fi) => {
     'worklet';
@@ -1454,6 +1497,10 @@ function WaterfallView({
    *  Paced at the known target, the playout buffer absorbs the lumps (as the web's RowPacer does) and the rhythm holds
    *  (scripts/test_wf_speed_cap.ts). 0 = actual rows: the measured rate, as before. */
   const pTgt   = useSharedValue(0);
+  /** ★ V12 2026-10-29: the rows come off the FIXED OUTPUT CLOCK (every mode but NATIVE — wfClock.ts): released by
+   *  clockPace (an exact-rate phase accumulator, the buffer held by whole-frame slips), not rowPace's mode lock. */
+  const pClocked = useSharedValue(false);
+  const engRateSeen = useSharedValue(false);   // the engine reports its rate (poll().rowRate) — the JS mirror stands down
   const engTgtSt = useRef(newRowTargetState());   // the engine path's twin of the engine's own row target (see frameSink)
   const engTgtMs = useRef({ last: 0, avg: 0, cap: -1 });
   const pRateT = useSharedValue(0);
@@ -1501,6 +1548,8 @@ function WaterfallView({
       const pos = contPace(avail, pPos, pCLead, cRate, gap, pCTgt.value);
       if (land) {
         paceToSettled(avail, pPos, pShown, pAcc, pLead, pCLead, pMode);
+        // ★ Clocked rows (wfPace clockPace): the phase starts half a frame's share from the edge, never on it.
+        if (pClocked.value && pTgt.value > 0) pAcc.value = Math.min(0.5, pTgt.value * gap / 2);
         pCont.value = false;
         uQuantDrawSv.value = 1;
         if (uHead.value !== pShown.value) uHead.value = pShown.value;
@@ -1514,7 +1563,8 @@ function WaterfallView({
         scrollFrac.value = pos - w;
       }
     } else {
-      const shown = rowPace(avail, pShown, pAcc, pLead, pCool, pMode, pTgt.value > 0 ? pTgt.value : pRate.value, gap, true);
+      const shown = rowPace(avail, pShown, pAcc, pLead, pCool, pMode, pTgt.value > 0 ? pTgt.value : pRate.value, gap, true,
+                            pClocked.value && pTgt.value > 0);
       shownRate(shown, ts, pSRate, pSN, pST);
       if (uHead.value !== shown) uHead.value = shown;
       if (scrollFrac.value !== 1) scrollFrac.value = 1;
@@ -1626,6 +1676,14 @@ function WaterfallView({
       //   judder is worse … we had these issues in the past and we fixed them".)
       uQuantSv.value = p.quant;
       uAvgMs.value = p.avgMs;
+      // ★ V12 THE FIXED OUTPUT CLOCK: the engine says the rate its rows come at — the pace (pTgt) and the release
+      //   (clockPace) follow the engine's own number, not a JS mirror of its rule.
+      if (p.rowRate != null) {
+        engRateSeen.value = true;
+        const tg = p.rowRate > 0 ? p.rowRate / 1000 : 0;
+        if (pTgt.value !== tg) pTgt.value = tg;
+        if (pClocked.value !== p.rowRate > 0) pClocked.value = p.rowRate > 0;
+      }
       uNSv.value = 1;
       if (p.specGen !== engSpec.value) {
         engSpec.value = p.specGen;
@@ -1810,9 +1868,17 @@ function WaterfallView({
     if (rowTargetCap.current !== cfg.targetRows) { rowTargetSt.current = newRowTargetState(); rowTargetCap.current = cfg.targetRows; }
     // ★★ …and under a FRAME RATE cap below 60 it divides the cap (wfRowTarget rowTargetUnderCap — Stuart 2026-10-28: "in
     //    30fps lock mode no point running a 60fps waterfall"): 60 → 30, 20 → 15.
-    const rowTarget = rowTargetUnderCap(avgFrameMs.current > 0
-      ? stepRowTarget(rowTargetSt.current, scrollForCap(cfg.targetRows), 1000 / avgFrameMs.current)
-      : rowTargetSt.current.target, 1000 / Math.max(1, avgFrameMs.current), uiFrameCapHz.value);
+    // ★★★ V12 2026-10-29: every mode but NATIVE runs on the FIXED OUTPUT CLOCK (pumpClock) at wfClock's rate — the same
+    //     rule, latched so it does not step DOWN while the feed still supports it (Stuart's 9–11 fps UberSDR kept Smooth
+    //     at 60, not 60 ↔ 30). NATIVE keeps its rule exactly as it was (0 = actual rows: "pure unmodified lines").
+    const wfScroll = scrollForCap(cfg.targetRows);
+    const feedFps = 1000 / Math.max(1, avgFrameMs.current);
+    const clocked = wfScroll !== 'sharp';
+    const rowTarget = clocked
+      ? (avgFrameMs.current > 0 ? clockRateUnderCap(clockRowRate(rowTargetSt.current, wfScroll, feedFps), uiFrameCapHz.value) : 0)
+      : rowTargetUnderCap(avgFrameMs.current > 0
+          ? stepRowTarget(rowTargetSt.current, wfScroll, 1000 / avgFrameMs.current)
+          : rowTargetSt.current.target, feedFps, uiFrameCapHz.value);
     const repeatsCarry = rowTarget > 0;
     const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
@@ -1874,8 +1940,25 @@ function WaterfallView({
     // ★ Floor 15 ms, not 50 (2026-10-29): a feed faster than 20 fps (a 23 fps Kiwi) was counted as 50 ms a frame, so its
     //   rows over-ran the target by up to 2.5× once Default/Smooth filled such a feed in (23 fps at 30 → 34 rows/s).
     const dur = Math.max(15, Math.min(1000, revealMs));
-    const rowsNow = rowsForArrival(rowCarry, dur, rowTarget);
+    const onClock = clocked && rowTarget > 0 && !coveredRef.current;
+    const rowsNow = onClock ? 0 : rowsForArrival(rowCarry, dur, rowTarget);
     if (rowsNow > 0) pushRow(frame.row, rowCentre, rowHzBin);
+    if (onClock) {
+      // ★★★ THE FIXED CLOCK: the frame is handed to the clock (presented on the feed's de-jittered schedule — at once
+      //     during a gesture, as the jitter buffer is bypassed then too), and the clock makes the rows (pumpClock).
+      const id = ++clockSeq.current, t = performance.now();
+      let slot = clockPool.current.pop();
+      if (!slot || slot.row.length !== frame.row.length) slot = { row: new Uint8Array(frame.row.length), c: 0, h: 0 };
+      clockFrames.current.set(id, slot);
+      slot.row.set(frame.row); slot.c = rowCentre; slot.h = rowHzBin;
+      clockSetRate(rowClock.current, rowTarget, t);
+      clockArrive(rowClock.current, id, t, boost);
+      clockStop();
+      pumpClock();
+    } else if (rowClock.current.rate > 0) {
+      // Off the clock (NATIVE, a feed too slow to fill, or covered): stop it; the next clocked frame starts afresh.
+      clockStop(); clockReset(rowClock.current); clockSetRate(rowClock.current, 0, 0); clockFrames.current.clear();
+    }
     // Keep it for the repeat pushes on a slow feed (frame.row is reused by the caller).
     if (!lastRow.current || lastRow.current.length !== frame.row.length)
       lastRow.current = new Uint8Array(frame.row.length);
@@ -1905,8 +1988,9 @@ function WaterfallView({
     // Rows this interval has earned at the target (fractional carry; the arrival itself was row #1) — wfRowTarget
     // carryRows, proved with the display pacer in scripts/test_wf_speed_cap.ts. ★ The rule never asks for more than 6
     // rows a frame (Stuart 10-20), so its cap of 8 is headroom — the stall guard.
-    const extras = Math.max(0, rowsNow - 1);   // (rowsForArrival above — the arrival itself, when kept, was row #1)
+    const extras = onClock ? 0 : Math.max(0, rowsNow - 1);   // (rowsForArrival above — the arrival itself, when kept, was row #1; the clock makes its own)
     { const tg = rowTarget > 0 ? rowTarget / 1000 : 0; if (pTgt.value !== tg) pTgt.value = tg; }   // the pace (see pTgt)
+    if (pClocked.value !== onClock) pClocked.value = onClock;   // the release for clocked rows (wfPace clockPace)
     lastDynRows.current = extras + 1;
     scheduleExtraRows(extras, dur / (extras + 1));
     // ★★★ SPREAD THE REVEAL OVER THE ROW-SET INTERVAL, NOT THE DATA-FRAME INTERVAL. On a gated
@@ -2170,7 +2254,7 @@ function WaterfallView({
           if (ec && ec.displayCapHz !== cap) { ec.displayCapHz = cap; engine.setConfig(ec); }
           // ★ The pace target (pTgt) — the SAME rule the engine applies (wf_row_target.h, the same feed EMA), worked out
           //   here because the engine's poll does not carry it. 0 = actual rows.
-          if (ec) {
+          if (ec && !engRateSeen.value) {   // (an engine binary from before the fixed clock: mirror its old rule)
             const m = engTgtMs.current, now = Date.now();
             if (m.cap !== ec.targetRows) { engTgtSt.current = newRowTargetState(); m.cap = ec.targetRows; }
             if (m.last > 0) { const d = now - m.last; if (d > 0 && d < 2000) m.avg = m.avg > 0 ? m.avg * 0.8 + d * 0.2 : d; }
