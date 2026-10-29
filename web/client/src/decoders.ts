@@ -63,6 +63,7 @@
 import { withAuth, type AuthState } from './auth';
 import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
+import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
 export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'jtty' | null;
 
@@ -71,11 +72,15 @@ export interface CwSignal {
   id: number; hz: number; audio: number; wpm: number; snr: number;
   q: 'high' | 'medium' | 'low' | 'poor'; active: boolean; last: number; first: number;
   call: string; country: string; text: string;
+  /** ★ V12 (2026-10-29): the speed as a range (absent from an older server) — src/utils/cwFormat cwWpmText. */
+  wpmLo?: number; wpmHi?: number;
   /** ★ PSK only: 31 or 63, and the IMD (dB, 0 = not measured). One list draws both decoders. */
   baud?: number; imd?: number;
 }
 export interface CwList { skimmer: boolean; centre: number; width: number; primary: number; signals: CwSignal[] }
-export interface CwSpot { callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number; mode?: string }
+export interface CwSpot { callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number; mode?: string;
+  /** ★ V12 (2026-10-29): the speed as a range, as the rows. */
+  wpmLo?: number; wpmHi?: number }
 
 /** ★ V12 APRS: one new packet, as the server describes it. */
 export interface AprsPacket { key: string; from: string; kind: string; line: string; raw: string; lat?: number; lon?: number; to?: string; text?: string }
@@ -392,6 +397,7 @@ export class DecoderClient {
           id: num(x?.id), hz: num(x?.hz), audio: num(x?.audio), wpm: num(x?.wpm), snr: num(x?.snr), q: q(x?.q),
           active: x?.active === true, last: num(x?.last), first: num(x?.first),
           call: str(x?.call, 16), country: str(x?.country, 40), text: str(x?.text, 160),
+          ...(psk ? {} : cwWpmRangeOf(x)),
           ...(psk ? { baud: num(x?.baud) > 40 ? 63 : 31, imd: num(x?.imd) } : {}),
         })),
       });
@@ -436,6 +442,7 @@ export class DecoderClient {
         callsign: d.callsign.slice(0, 16), frequency: Number(d.frequency) || 0, audio: Number(d.audio) || 0,
         wpm: Number(d.wpm) || 0, snr: Number(d.snr) || 0, how: String(d.how || '').slice(0, 8),
         country: String(d.country || '').slice(0, 40), timestamp: Number(d.timestamp) || Date.now(),
+        ...(psk ? {} : cwWpmRangeOf(d)),
         ...(psk ? { mode: d.mode === 'BPSK63' ? 'BPSK63' : 'BPSK31' } : {}),
       });
       return;

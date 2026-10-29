@@ -10,6 +10,8 @@
  *   and, ONE SIGNAL only, the primary signal's text as RTTY's 0x01 frame, the state as 0x03.
  */
 
+import { cwWpmRangeOf, cwWpmText } from '../utils/cwFormat.ts';
+
 export type CwQ = 'high' | 'medium' | 'low' | 'poor';
 
 /** One signal the server's CW engine is decoding (or heard recently). `hz` is RF (0 for ONE SIGNAL's audio-only rows);
@@ -17,12 +19,17 @@ export type CwQ = 'high' | 'medium' | 'low' | 'poor';
 export interface CwSignal {
   id: number; hz: number; audio: number; wpm: number; snr: number; q: CwQ; active: boolean;
   last: number; first: number; call: string; country: string; text: string;
+  /** ★ V12 (2026-10-29): the speed as a range — the slowest and fastest the signal was read at (absent from an older
+   *  server; utils/cwFormat cwWpmText draws "17–21 wpm"). */
+  wpmLo?: number; wpmHi?: number;
   /** ★ V12 PSK only: 31 or 63, and the IMD (dB, 0 = not measured). One list draws both decoders (the web's rule). */
   baud?: 31 | 63; imd?: number;
 }
 export interface CwList { skimmer: boolean; centre: number; width: number; primary: number; signals: CwSignal[] }
 export interface CwSpot {
   callsign: string; frequency: number; audio: number; wpm: number; snr: number; how: string; country: string; timestamp: number;
+  /** ★ V12 (2026-10-29): the speed as a range, as the signal rows (absent from an older server). */
+  wpmLo?: number; wpmHi?: number;
   /** ★ V12 PSK only: 'BPSK31' | 'BPSK63' (shown as PSK31 / PSK63 where CW shows its speed). */
   mode?: string;
 }
@@ -55,6 +62,7 @@ export function parseCwSignals(d: any, psk = false): CwList | null {
       id: num(x?.id), hz: num(x?.hz), audio: num(x?.audio), wpm: num(x?.wpm), snr: num(x?.snr), q: q(x?.q),
       active: x?.active === true, last: num(x?.last), first: num(x?.first),
       call: str(x?.call, 16), country: str(x?.country, 40), text: str(x?.text, 160),
+      ...(psk ? {} : cwWpmRangeOf(x)),
       ...(psk ? { baud: (num(x?.baud) > 40 ? 63 : 31) as 31 | 63, imd: num(x?.imd) } : {}),
     })),
   };
@@ -67,6 +75,7 @@ export function parseCwSpot(d: any, now: number, psk = false): CwSpot | null {
     callsign: d.callsign.slice(0, 16), frequency: Number(d.frequency) || 0, audio: Number(d.audio) || 0,
     wpm: Number(d.wpm) || 0, snr: Number(d.snr) || 0, how: String(d.how || '').slice(0, 8),
     country: String(d.country || '').slice(0, 40), timestamp: Number(d.timestamp) || now,
+    ...(psk ? {} : cwWpmRangeOf(d)),
     ...(psk ? { mode: d.mode === 'BPSK63' ? 'BPSK63' : 'BPSK31' } : {}),
   };
 }
@@ -111,11 +120,11 @@ export function kbIdleText(psk: boolean, skimmer: boolean): string {
              : 'listening — tune a CW signal into the passband';
 }
 /** A row's speed column: "PSK31" for PSK, "18 wpm" for CW. A spot's: its mode (BPSK→PSK) or its speed. */
-export function kbRateText(sg: { baud?: number; wpm: number }): string {
-  return sg.baud !== undefined ? `PSK${sg.baud}` : `${Math.round(sg.wpm)} wpm`;
+export function kbRateText(sg: { baud?: number; wpm: number; wpmLo?: number; wpmHi?: number }): string {
+  return sg.baud !== undefined ? `PSK${sg.baud}` : cwWpmText(sg);
 }
-export function kbSpotRateText(s: { mode?: string; wpm: number }): string {
-  return s.mode ? s.mode.replace('BPSK', 'PSK') : `${Math.round(s.wpm)} wpm`;
+export function kbSpotRateText(s: { mode?: string; wpm: number; wpmLo?: number; wpmHi?: number }): string {
+  return s.mode ? s.mode.replace('BPSK', 'PSK') : cwWpmText(s);
 }
 
 /** ★★ LOWEST FREQUENCY FIRST, ALWAYS (Stuart, 2026-10-25: "the CW Skimmer list likes to reorder itself a lot so I think we

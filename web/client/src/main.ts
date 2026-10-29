@@ -145,6 +145,9 @@ import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
 } from '../../../src/services/vtsLine';
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../../../src/services/wholeModeResume';
+import { plainEnglish } from '../../../src/utils/cwVocab';
+import { cwHasWpmRange, cwWpmText } from '../../../src/utils/cwFormat';
+import { callHtml, wireQrz } from './qrzLink';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
  *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
@@ -11540,6 +11543,45 @@ let cwSkim = false;
 let cwWidth = 48000;
 let cwLast: CwList | null = null;
 const cwSpotsSeen: CwSpot[] = [];
+/* ★★ V12 (2026-10-29) PLAIN ENGLISH — #cwPlain in the box's header, beside CLR (CW only): one press reads every row's text
+ *  and ONE SIGNAL's through src/utils/cwVocab plainEnglish (codes in plain words; callsigns, names and numbers as sent),
+ *  the next shows the CW as sent. Lit while on, remembered in this browser. The app's DecoderPanel PLAIN key is the same.
+ *  ONE SIGNAL's raw text stays in #decText (it is appended to in place); the plain reading is drawn in #cwPlainText
+ *  beside it, and CSS shows one or the other (#decBox.cwplain). */
+const CW_PLAIN_KEY = 'vibe.cwPlain';
+let cwPlainOn = (() => { try { return localStorage.getItem(CW_PLAIN_KEY) === '1'; } catch { return false; } })();
+let cwPlainQueued = false;
+/** A row's text as the PLAIN key says to show it. */
+function cwRead(t: string): string { return cwPlainOn && activeDec === 'cw' ? plainEnglish(t) : t; }
+/** The PLAIN key, the box's class and ONE SIGNAL's plain text, to the current state. */
+function syncCwPlain() {
+  const key = document.getElementById('cwPlain');
+  const cw = activeDec === 'cw';
+  if (key) { key.style.display = cw ? '' : 'none'; key.classList.toggle('on', cwPlainOn); key.setAttribute('aria-pressed', String(cwPlainOn)); }
+  document.getElementById('decBox')?.classList.toggle('cwplain', cw && cwPlainOn);
+  queueCwPlainText();
+}
+/** ONE SIGNAL's text in plain English — redrawn at most once a frame as the CW arrives. */
+function queueCwPlainText() {
+  if (cwPlainQueued) return;
+  cwPlainQueued = true;
+  requestAnimationFrame(() => {
+    cwPlainQueued = false;
+    const out = document.getElementById('cwPlainText');
+    if (!out) return;
+    if (!(cwPlainOn && activeDec === 'cw')) { if (out.textContent) out.textContent = ''; return; }
+    const raw = document.getElementById('decText')?.textContent || '';
+    const atBottom = out.scrollHeight - out.scrollTop - out.clientHeight < 24;
+    out.textContent = plainEnglish(raw);
+    if (atBottom) out.scrollTop = out.scrollHeight;
+  });
+}
+function toggleCwPlain() {
+  cwPlainOn = !cwPlainOn;
+  try { localStorage.setItem(CW_PLAIN_KEY, cwPlainOn ? '1' : '0'); } catch { /* private mode */ }
+  syncCwPlain();
+  renderCw();
+}
 /* ★★ PSK31/63 (V12, 2026-10-26) — the server's own (decoders/psk_skimmer.h), CW's two views exactly: ONE SIGNAL decodes
  *  the passband ('psk' — the signal nearest the middle of it is the box's, a PSK program's cursor) and lists every PSK
  *  signal in it; SKIMMER every one across a segment centred on the dial ('pskskim'). ONE list box serves both decoders
@@ -11606,6 +11648,9 @@ function renderCw() {
    *  we list it from frequency lowest to highest regardless of confidence"). A row keeps its place while its signal lives;
    *  the order is the band's, as on the spectrum above. A signal with no RF frequency (ONE SIGNAL's audio) by its tone. */
   const sigs = [...(l?.signals ?? [])].sort((a, b) => (a.hz > 0 && b.hz > 0 ? a.hz - b.hz : a.audio - b.audio) || a.id - b.id);
+  // ★ A speed RANGE ("17–21 wpm") widens the speed column — only while a row shows one (#cwRows.wr / #cwSpots.wr)
+  rows.classList.toggle('wr', sigs.some((x) => x.baud === undefined && cwHasWpmRange(x)));
+  $('cwSpots').classList.toggle('wr', cwSpotsSeen.slice(0, 60).some((x) => !x.mode && cwHasWpmRange(x)));
   for (const sg of sigs) {
     const r = document.createElement('div');
     // ★ q-<confidence> colours the message (#cwList .cwr.q-low .tx …): red poor, orange low, amber medium, green high (Stuart).
@@ -11614,16 +11659,17 @@ function renderCw() {
     const psk = sg.baud !== undefined;
     r.innerHTML =
       `<span class="f">${escapeHtml(cwFreq(sg))}</span>` +
-      `<span class="c${sg.call ? '' : ' none'}">${escapeHtml(sg.call || '—')}</span>` +
-      `<span class="w">${psk ? `PSK${sg.baud}` : `${Math.round(sg.wpm)} wpm`}</span>` +
+      `<span class="c${sg.call ? '' : ' none'}">${sg.call ? callHtml(sg.call, escapeHtml) : '—'}</span>` +
+      `<span class="w">${psk ? `PSK${sg.baud}` : cwWpmText(sg)}</span>` +
       `<span class="s">${sg.snr >= 0 ? '+' : ''}${Math.round(sg.snr)} dB</span>` +
       `<span class="q ${sg.q}">${sg.q}</span>` +
       `<span class="a">${sg.active ? cwAge(sg.last) : cwAge(sg.last)}</span>` +
-      `<span class="tx"><bdi>${escapeHtml(sg.text.trim())}</bdi></span>`;
+      `<span class="tx"><bdi>${escapeHtml(cwRead(sg.text.trim()))}</bdi></span>`;
+    wireQrz(r);
     r.title = `${sg.call ? sg.call + (sg.country ? ' · ' + sg.country : '') + ' · ' : ''}${cwFreq(sg)}${sg.hz > 0 ? ' kHz' : ''} · `
             + (psk ? `BPSK${sg.baud} · Es/N0 ${Math.round(sg.snr)} dB (in the baud rate's bandwidth) · `
                      + (sg.imd ? `IMD ${Math.round(sg.imd)} dB · ` : '')
-                   : `${Math.round(sg.wpm)} WPM · SNR ${Math.round(sg.snr)} dB in the decoder's 47 Hz bin · `) + `${sg.q} · `
+                   : `${cwWpmText(sg).toUpperCase()} · SNR ${Math.round(sg.snr)} dB in the decoder's 47 Hz bin · `) + `${sg.q} · `
             + `${sg.active ? 'heard' : 'last heard'} ${cwAge(sg.last)} ago — tap to tune`;
     r.onclick = () => cwTune(sg.hz);
     rows.appendChild(r);
@@ -11640,9 +11686,10 @@ function renderCw() {
     r.className = 'cws';
     r.innerHTML = `<span class="t">${fmtSpotTime(s.timestamp)}</span>` +
       `<span class="f">${escapeHtml(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
-      `<span class="c">${escapeHtml(s.callsign)}</span>` +
+      `<span class="c">${callHtml(s.callsign, escapeHtml)}</span>` +
       `<span class="ct">${escapeHtml(s.country)}</span>` +
-      `<span class="w">${s.mode ? escapeHtml(s.mode.replace('BPSK', 'PSK')) : `${Math.round(s.wpm)} wpm`}</span>`;
+      `<span class="w">${s.mode ? escapeHtml(s.mode.replace('BPSK', 'PSK')) : cwWpmText(s)}</span>`;
+    wireQrz(r);
     r.title = `${s.callsign} · ${s.how}${s.mode ? ' · ' + s.mode : ''} · ${Math.round(s.snr)} dB — tap to tune`;
     r.onclick = () => cwTune(s.frequency);
     sp.appendChild(r);
@@ -11893,6 +11940,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (node.length > 8000 + DEC_TRIM_SLACK) node.deleteData(0, node.length - 8000);
       if (atBottom) el.scrollTop = el.scrollHeight;
       setDecLive(true);
+      if (activeDec === 'cw' && cwPlainOn) queueCwPlainText();   // ★ V12 the PLAIN key's reading of ONE SIGNAL
     },
     onState: (st) => {
       // ★ Its status is the broadcast's — see renderNavtex. A lock lost mid-message ends it [end lost] (NickB 2026-10-12:
@@ -12247,8 +12295,10 @@ function initDecoders(host: string, auth: AuthState) {
 
   // Output box chrome.
   initSpotFilters();
+  $('cwPlain').onclick = () => toggleCwPlain();
   $('decClr').onclick = () => {
     $('decText').textContent = '';
+    if (activeDec === 'cw') queueCwPlainText();
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
     if (kbOn()) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
@@ -12711,6 +12761,7 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
 }
 
 function syncDecButtons() {
+  syncCwPlain();   // ★ V12 the CW box's PLAIN key follows the decoder (CW only)
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.classList.toggle('on', b.dataset.dec === activeDec);
   }
@@ -12770,6 +12821,7 @@ function showDecBox(what: string) {
   if (isAprs) { $('decText').classList.add('off'); aprsLast = null; aprsLog.length = 0; aprsTrails.clear(); renderAprs(); }
   else aprsView?.hide();
   if (isCw) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
+  syncCwPlain();   // ★ V12 the PLAIN key: CW only
   const isDsc = what === 'dsc';
   $('dscList').classList.toggle('on', isDsc);
   if (isDsc) { dscCalls.clear(); renderDsc(); }
@@ -14675,7 +14727,7 @@ function renderSpots() {
       `<span class="mode" style="color:${ms.colour}"><i style="background:${ms.colour};color:${ms.ink}">${escapeHtml(ms.letter)}</i>${escapeHtml(sp.mode)}</span>` +
       `<span class="band">${escapeHtml(sp.band)}</span>` +
       `<span class="snr ${Number(sp.snr) >= 0 ? 'pos' : 'neg'}">${Number(sp.snr) || 0}</span>` +
-      `<span class="call">${escapeHtml(sp.callsign)}</span>` +
+      `<span class="call">${callHtml(sp.callsign, escapeHtml)}</span>` +
       `<span class="cty">${escapeHtml(abbrCountry(country) || '')}</span>` +
       `<span class="km">${km != null ? Math.round(km) + 'km' : ''}</span>` +
       // ★★ Dimmer than line 1 on purpose: this is context to READ, not a scan target. Parts are
@@ -14692,6 +14744,7 @@ function renderSpots() {
             fmtSpotTimeSec(sp.timestamp),
           ].filter(Boolean).join(' · '))}</span>`
         : '');
+    wireQrz(row);   // ★ V12: the callsign opens its QRZ.COM page — its own click, not the row's tune
     row.title = `${sp.mode} · ${sp.grid || 'no grid'} · ${(sp.frequency / 1e6).toFixed(3)} MHz`;
     row.onclick = () => {
       spec?.tune(clampTune(sp.frequency), 'usb', { recenter: true, retarget: true });

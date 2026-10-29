@@ -14,6 +14,8 @@
  * ★ The box keeps the listener's place while it updates (main.ts pins the SPOTS heading, as CW's does).
  */
 
+import { callHtml, wireQrz } from './qrzLink';
+
 export interface JttySignal {
   id: number; hz: number; audio: number; snr: number; q: 'high' | 'medium' | 'low' | 'poor';
   active: boolean; last: number; first: number; frames: number; call: string; country: string; text: string;
@@ -101,7 +103,7 @@ export function renderJttyRows(host: HTMLElement, sigs: JttySignal[], onTune: (h
     r.className = 'jtr q-' + sg.q + (sg.active ? '' : ' gone');
     r.innerHTML =
       `<span class="f">${esc(jttyFreq(sg))}</span>` +
-      `<span class="c${sg.call ? '' : ' none'}">${esc(sg.call || '—')}</span>` +
+      `<span class="c${sg.call ? '' : ' none'}">${sg.call ? callHtml(sg.call, esc) : '—'}</span>` +
       `<span class="s">${sg.snr >= 0 ? '+' : ''}${Math.round(sg.snr)} dB</span>` +
       `<span class="q ${sg.q}">${sg.q}</span>` +
       `<span class="a">${jttyAge(sg.last)}</span>` +
@@ -109,6 +111,7 @@ export function renderJttyRows(host: HTMLElement, sigs: JttySignal[], onTune: (h
     r.title = `${sg.call ? sg.call + (sg.country ? ' · ' + sg.country : '') + ' · ' : ''}${jttyFreq(sg)}${sg.hz > 0 ? ' kHz' : ''} · `
             + `SNR ${Math.round(sg.snr)} dB (2500 Hz) · ${sg.frames} frame${sg.frames === 1 ? '' : 's'} · ${sg.q} confidence · `
             + `${sg.active ? 'heard' : 'last heard'} ${jttyAge(sg.last)} ago — tap to tune`;
+    wireQrz(r);   // ★ V12: the callsign opens its QRZ.COM page — its own click, not the row's tune
     r.onclick = () => onTune(sg.hz);
     host.appendChild(r);
   }
@@ -127,10 +130,11 @@ export function renderJttySpots(host: HTMLElement, spots: JttySpot[], fmtTime: (
     r.className = 'jts' + (s.how === 'CQ' ? ' cq' : '');
     r.innerHTML = `<span class="t">${esc(fmtTime(s.timestamp))}</span>` +
       `<span class="f">${esc(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
-      `<span class="c">${esc(s.callsign)}</span>` +
+      `<span class="c">${callHtml(s.callsign, esc)}</span>` +
       `<span class="h">${esc(s.how)}</span>` +
       `<span class="ct">${esc(s.country)}</span>`;
     r.title = `${s.callsign} · ${s.how === 'CQ' ? 'calling CQ' : 'in an exchange'} · ${Math.round(s.snr)} dB — tap to tune`;
+    wireQrz(r);
     r.onclick = () => onTune(s.frequency);
     host.appendChild(r);
   }

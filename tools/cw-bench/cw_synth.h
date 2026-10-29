@@ -206,4 +206,30 @@ inline void cer(const std::string& refIn, const std::string& gotIn, int& errs, i
     errs = prev[bj]; refLen = std::max(1, bj - startPrev[bj]);
 }
 
+/** ★★ WORDS SPLIT AND MERGED (V12, 2026-10-29): over the best alignment of `got` with `ref` (as cer), the word spaces
+ *  the decoder ADDED (a word broken: "E E BT") and the ones it LOST (words run together: "OPISRICHARD"). */
+inline void spaceErrors(const std::string& refIn, const std::string& gotIn, int& split, int& merged, int& refSpaces) {
+    const std::string ref = squash(refIn), got = squash(gotIn);
+    const size_t R = ref.size(), G = got.size();
+    split = merged = 0; refSpaces = 0;
+    if (!G || !R) return;
+    // full DP with backtrace; free start/end in ref (semi-global)
+    std::vector<std::vector<int>> D(G + 1, std::vector<int>(R + 1, 0));
+    for (size_t i = 1; i <= G; ++i) D[i][0] = (int)i;
+    for (size_t i = 1; i <= G; ++i)
+        for (size_t j = 1; j <= R; ++j)
+            D[i][j] = std::min({ D[i - 1][j - 1] + (got[i - 1] == ref[j - 1] ? 0 : 1), D[i - 1][j] + 1, D[i][j - 1] + 1 });
+    size_t j = 0; for (size_t k = 1; k <= R; ++k) if (D[G][k] < D[G][j]) j = k;
+    size_t i = G; const size_t jEnd = j;
+    while (i > 0 && j > 0) {
+        if (D[i][j] == D[i - 1][j - 1] + (got[i - 1] == ref[j - 1] ? 0 : 1)) {
+            if (got[i - 1] != ref[j - 1]) { if (got[i - 1] == ' ') ++split; else if (ref[j - 1] == ' ') ++merged; }
+            if (ref[j - 1] == ' ') ++refSpaces;
+            --i; --j;
+        } else if (D[i][j] == D[i - 1][j] + 1) { if (got[i - 1] == ' ') ++split; --i; }
+        else { if (ref[j - 1] == ' ') { ++merged; ++refSpaces; } --j; }
+    }
+    (void)jEnd;
+}
+
 } // namespace cwsynth

@@ -138,6 +138,16 @@ int main() {
         std::string c, h;
         ok(!cw::identify({ "UR", "RST", "599" }, c, h) && !cw::identify({ "5NN", "TU" }, c, h), "text with no call identifies nobody");
     }
+    // ── ★ V12 2026-10-29: callsigns must make sense (the ITU series) ──
+    {
+        bool good = true;
+        for (const char* c : { "A65BR", "S51ABC", "T77C", "E73A", "C31XX", "V51AS", "Z35A", "2E0ABC", "9A1A", "DB70DLR", "M0PKZ", "G4TPJ", "TK1RR" })
+            good &= cw::isCallsign(c);
+        ok(good, "ITU series: letter+figure blocks (A6, S5, T7, E7, C3, V5, Z3), figure+letter (2E, 9A), special calls (DB70DLR)");
+        bool bad = false;
+        for (const char* c : { "QE5ABC", "0A1BC", "1S1AB", "E9ABC", "O1ABC", "X2ABC", "U5ABC" }) bad |= cw::isCallsign(c);
+        ok(!bad, "no Q series, no 0/1 first figure, no single letter that is not a whole-letter nation (O, U, X), no unallocated E8/E9");
+    }
     // ── the floor ──
     for (int pass = 0; pass < 2; ++pass) {
         const bool cplx = pass == 0; const double rate = cplx ? 48000 : 12000;
@@ -196,6 +206,60 @@ int main() {
             char b[200]; std::snprintf(b, sizeof b, "fist: %s — CER %.1f %% (≤ %.0f)", fc.name, pc, L);
             ok(pc <= L, b);
         }
+    }
+    // ── ★★ V12 2026-10-29: HUMAN-SENT MORSE (Stuart's 80 m screenshots) ──
+    {
+        struct H { const char* name; std::string text; Keying k; int overs; double cerMax; int mergedMax; int splitMax; };
+        std::vector<H> hs;
+        const std::string tonbridge = "M0PKZ DE G4TPJ R R TNX FER CALL = UR RST 599 599 = OP IS RICHARD RICHARD ES QTH IS NR TONBRIDGE TONBRIDGE = HW? + M0PKZ DE G4TPJ KN  ";
+        { Keying k; k.wpm = 24; k.charGap = 3.0; k.wordGap = 3.6; k.jitter = 0.05; hs.push_back({ "the TONBRIDGE line (G4TPJ, 24 WPM, word gaps 1.2 × letter gaps)", tonbridge, k, 3, 4.0, 4, 10 }); }
+        { Keying k; k.wpm = 22; k.charGap = 3.0; k.wordGap = 3.9; k.jitter = 0.06;
+          hs.push_back({ "an ITALIAN QSO with word gaps 1.3 × letter gaps reads as Italian", "IZ0ABC DE IK2XYZ BUONA SERA = TUTTA LESTATE SI E STATO UN PO STRANO = QUI ANTENNA FILARE IN GIARDINO = GRAZIE DEL QSO 73 K  ", k, 3, 5.0, 8, 6 }); }
+        { Keying k; k.wpm = 8; k.jitter = 0.2; k.elemGap = 1.6; k.charGap = 4.5; k.wordGap = 9;
+          hs.push_back({ "a slow straight key (8 WPM, long gaps) is shown at all", kOvers[1], k, 2, 30.0, 99, 12 }); }
+        for (const H& hc : hs) {
+            Rng rng(500 + 10 + hc.text.size());   // ★ the +0 dB draw of cw_bench human
+            std::string sent; std::vector<float> env;
+            for (int o = 0; o < hc.overs; ++o) { auto e = keyEnvelope(hc.text, hc.k, 48000, rng, 1.5); env.insert(env.end(), e.begin(), e.end()); sent += hc.text; }
+            Tone t; t.hz = 2000; t.snrDb = 0; t.env = env;
+            std::vector<Tone> ts{ t }; std::vector<cf> iq; std::vector<float> re;
+            synth(ts, 48000, true, env.size() / 48000.0, rng, iq, re);
+            cw::Skimmer::Config c; c.rate = 48000; c.complexIn = true; c.loHz = -20000; c.hiHz = 20000;
+            cw::Skimmer sk(c);
+            auto r = run(sk, iq, re);
+            std::string got; for (auto& kv : r.text) if (std::fabs(r.hz[kv.first] - t.hz) < 40) got += kv.second + " ";
+            int e, n, sp, mg, rs; cer(sent, got, e, n); spaceErrors(sent, got, sp, mg, rs);
+            const double pc = 100.0 * e / std::max(1, (int)squash(sent).size());
+            char b[260]; std::snprintf(b, sizeof b, "%s — CER %.1f %% (≤ %.0f), words run together %d (≤ %d), broken %d (≤ %d)", hc.name, pc, hc.cerMax, mg, hc.mergedMax, sp, hc.splitMax);
+            ok(!got.empty() && pc <= hc.cerMax && mg <= hc.mergedMax && sp <= hc.splitMax, b);
+            if (std::string(hc.name).find("TONBRIDGE") != std::string::npos)
+                ok(got.find("OP IS RICHARD RICHARD ES QTH IS NR TONBRIDGE TONBRIDGE") != std::string::npos,
+                   "the Tonbridge line reads with its spaces: \"OP IS RICHARD RICHARD ES QTH IS NR TONBRIDGE TONBRIDGE\"");
+        }
+    }
+    // ── ★ V12 2026-10-29: the speed as a range — one figure for a keyer, a range for a fist that varies ──
+    {
+        // ★ The range is of the LAST 24 characters — so each over here is short (≈ 45 characters) and the ramp steep, and
+        //   the last over's second half is what the range must show.
+        auto rangeOf = [](const Keying& k, int& lo, int& hi, float& w) {
+            Rng rng(77); std::string sent; std::vector<float> env;
+            for (int o = 0; o < 6; ++o) { auto e = keyEnvelope(kOvers[3], k, 48000, rng, 1.5); env.insert(env.end(), e.begin(), e.end()); }
+            Tone t; t.hz = 2000; t.snrDb = 10; t.env = env;
+            std::vector<Tone> ts{ t }; std::vector<cf> iq; std::vector<float> re;
+            synth(ts, 48000, true, env.size() / 48000.0, rng, iq, re);
+            cw::Skimmer::Config c; c.rate = 48000; c.complexIn = true; c.loHz = -20000; c.hiHz = 20000;
+            cw::Skimmer sk(c);
+            run(sk, iq, re);
+            lo = hi = 0; w = 0;
+            for (auto& v : sk.signals()) if (std::fabs(v.offsetHz - 2000) < 40) { lo = v.wpmLo; hi = v.wpmHi; w = v.wpm; return; }
+        };
+        int lo, hi; float w;
+        { Keying k; k.wpm = 24; rangeOf(k, lo, hi, w);
+          char b[160]; std::snprintf(b, sizeof b, "a keyer at 24 WPM shows ONE figure (%d–%d, %.0f)", lo, hi, w);
+          ok(lo == hi && lo >= 22 && lo <= 26, b); }
+        { Keying k; k.wpm = 14; k.wpmEnd = 28; rangeOf(k, lo, hi, w);
+          char b[160]; std::snprintf(b, sizeof b, "a fist ramping 14→28 WPM in each over shows a RANGE (%d–%d) around the figure (%.0f)", lo, hi, w);
+          ok(lo < hi && lo <= (int)std::lround(w) && hi >= (int)std::lround(w) && hi - lo >= 3, b); }
     }
     // ── pure noise ──
     {

@@ -86,7 +86,10 @@ const STEPS: Step[] = [
         + 'their own view (ADS-B, AIS, DAB, ISM, NDB, DIGI BAND) come first, under TUNES THE RADIO ITSELF — they '
         + 'are in this menu too. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
         + '— Aviation, Maritime, Amateur, Utility or Broadcast — each with an icon. With the VFO FREE, a small red DC Spike label marks the radio\u2019s DC '
-        + 'spike, and WHAT IS THE DC SPIKE? under the Signal ID Wiki link in this menu explains it.',
+        + 'spike, and WHAT IS THE DC SPIKE? under the Signal ID Wiki link in this menu explains it. Under that link, QRZ.COM '
+        + 'opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in '
+        + 'the CW, PSK, JTTY and digital spots lists a callsign opens its QRZ.com page, and in the CW box PLAIN shows the '
+        + 'Morse in plain English.',
   },
   {
     ids: ['mMenu'],
