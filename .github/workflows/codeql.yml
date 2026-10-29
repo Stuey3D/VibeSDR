@@ -104,7 +104,7 @@ jobs:
             librtlsdr-dev libusb-1.0-0-dev libopus-dev cmake ninja-build
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
@@ -180,7 +180,7 @@ jobs:
       #    committed here, compiled into the server and the apps we ship, and patched in-tree when
       #    needed (ft8_lib's monitor.c, 2026-09-28) — so a finding in them is one we can and must act on.
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: '/language:${{ matrix.language }}'
           upload: never
@@ -216,7 +216,7 @@ jobs:
           done
 
       - name: Upload CodeQL results
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: sarif-results
           category: '/language:${{ matrix.language }}'
