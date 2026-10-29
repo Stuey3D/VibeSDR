@@ -23,7 +23,14 @@ export interface DrmState {
   so?: number; codeRateA?: number; sdcRate?: number; sdcMer?: number; delayMs?: number; dopplerHz?: number;
   sbr?: boolean; ps?: boolean; concealed?: number; underruns?: number; sdcOk?: number; sdcBad?: number; superFrames?: number;
   lockS?: number[]; reacq?: number; lostWhy?: string; lostAtS?: number; blankedPct?: number; iqGaps?: number;
+  /** ★★ V12 (2026-10-29): this listener's zoom can retune the radio — an RTL with the IF filter on Auto, not range-locked
+   *  (local_sdr_shim.cpp drmZoomMovesRadio). The SERVER says so; absent from an older server = no note. */
+  zoomMovesRadio?: boolean;
 }
+
+/** ★★ The one case where a zoom can still knock DRM off its lock — the web's DRM_ZOOM_NOTE, word for word (the test holds
+ *  them equal). Shown only on the server's word (`zoomMovesRadio`), never guessed from the radio type. */
+export const DRM_ZOOM_NOTE = 'Zooming here can retune the radio (IF filter on Auto) — DRM resyncs for a few seconds after a big zoom.';
 
 /** The report off the wire, checked field by field (the server's, but every client checks what it shows). null = not one. */
 export function drmSanitise(m: any): DrmState | null {
@@ -47,6 +54,7 @@ export function drmSanitise(m: any): DrmState | null {
     lockS: Array.isArray(m.lockS) && m.lockS.length === 6 && m.lockS.every((x: unknown) => typeof x === 'number' && Number.isFinite(x))
       ? (m.lockS as number[]).slice() : undefined,
     reacq: n(m.reacq), lostWhy: s(m.lostWhy, 12), lostAtS: n(m.lostAtS), blankedPct: n(m.blankedPct), iqGaps: n(m.iqGaps),
+    zoomMovesRadio: b(m.zoomMovesRadio),
   };
   for (const k of Object.keys(out) as Array<keyof DrmState>) if (out[k] === undefined) delete out[k];
   return out;
@@ -79,14 +87,17 @@ export interface DrmView {
   codec?: { playable: boolean; line: string; via: string };
   why?: string;
   small?: string;
+  /** ★ DRM_ZOOM_NOTE, when the server says a zoom can retune the radio — last, under everything (the web's .drmNote). */
+  note?: string;
 }
 
 /** ★ The box for `s` — the web's drmRender, as data, word for word. */
 export function drmView(s: DrmState | null): DrmView {
   if (!s) return { wait: 'Searching for a DRM signal…', lights: null };
   const lights = DRM_LIGHTS.map(([k, name, tip]) => ({ name, on: !!s[k], tip }));
-  if (!s.sync) return { lights, wait: 'Searching for a DRM signal on this frequency…' };
-  const v: DrmView = { lights };
+  const note = s.zoomMovesRadio === true ? { note: DRM_ZOOM_NOTE } : {};
+  if (!s.sync) return { lights, wait: 'Searching for a DRM signal on this frequency…', ...note };
+  const v: DrmView = { lights, ...note };
   v.label = s.label || (s.locked ? 'DRM station' : 'Locking…');
   if (s.serviceId) v.sid = s.serviceId;
   const meta = [s.programme, s.language || (s.lang3 ? s.lang3.toUpperCase() : ''), s.country ? `${drmFlag(s.country)} ${s.country.toUpperCase()}` : '']
@@ -129,6 +140,7 @@ export function drmViewText(v: DrmView): string[] {
   if (v.why) out.push(v.why);
   if (v.small) out.push(v.small);
   if (v.wait) out.push(v.wait);
+  if (v.note) out.push(v.note);
   return out;
 }
 

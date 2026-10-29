@@ -7,8 +7,8 @@
  * Run: npx tsx scripts/test_drm_app.ts   (run-tests.sh does)
  */
 import { readFileSync } from 'node:fs';
-import { drmSanitise, drmView, drmViewText, drmOffered, drmSignalRows, DRM_LIGHTS, type DrmState } from '../src/services/drm';
-import { drmRender, drmSignalRows as webSignalRows, drmSignalRender } from '../web/client/src/drm';
+import { drmSanitise, drmView, drmViewText, drmOffered, drmSignalRows, DRM_LIGHTS, DRM_ZOOM_NOTE, type DrmState } from '../src/services/drm';
+import { drmRender, drmSignalRows as webSignalRows, drmSignalRender, DRM_ZOOM_NOTE as WEB_ZOOM_NOTE } from '../web/client/src/drm';
 
 let fails = 0, passes = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -46,6 +46,28 @@ const cases: Array<[string, DrmState | null]> = [
   ['lang3 only', { ...RRI, language: undefined, lang3: 'deu', country: undefined, programme: undefined }],
 ];
 for (const [what, s] of cases) eq(`box text: ${what}`, appText(s), webText(s));
+
+// ── ★★ V12 THE ZOOM NOTE (2026-10-29): shown only on the server's word (`zoomMovesRadio`), the same sentence on both ──
+eq('the zoom note: one sentence, two readers', DRM_ZOOM_NOTE, WEB_ZOOM_NOTE);
+for (const [what, s] of cases) {
+  if (!s) continue;
+  const z = { ...s, zoomMovesRadio: true };
+  eq(`box text with the zoom note: ${what}`, appText(z), webText(z));
+  ok(`the note shows with the field: ${what}`, drmView(z).note === DRM_ZOOM_NOTE && webText(z).endsWith(DRM_ZOOM_NOTE.replace(/\s+/g, '')));
+  ok(`no note without it: ${what}`, !drmView(s).note && !drmView({ ...s, zoomMovesRadio: false }).note
+     && !webText(s).includes('Zoominghere') && !webText({ ...s, zoomMovesRadio: false }).includes('Zoominghere'));
+}
+ok('no report yet: no note', !drmView(null).note && !webText(null).includes('Zoominghere'));
+eq('sanitised: zoomMovesRadio kept when true, dropped otherwise', [drmSanitise({ type: 'drm', zoomMovesRadio: true })?.zoomMovesRadio,
+   drmSanitise({ type: 'drm', zoomMovesRadio: false })?.zoomMovesRadio, drmSanitise({ type: 'drm', zoomMovesRadio: 'yes' })?.zoomMovesRadio], [true, undefined, undefined]);
+{
+  const pane = (st: DrmState) => { const h = { innerHTML: '', dataset: {} as Record<string, string>, querySelectorAll: () => [] } as unknown as HTMLElement;
+                                    drmSignalRender(h, st); return h.innerHTML; };
+  ok('web Signal pane: the note under the rows with the field', /<\/div><div class="drmNote">Zooming here/.test(pane({ ...RRI, zoomMovesRadio: true })));
+  ok('web Signal pane: no note without it', !/drmNote/.test(pane(RRI)));
+  const panelSrc = readFileSync(new URL('../src/components/DrmPanel.tsx', import.meta.url), 'utf8');
+  ok('app: the note drawn in the box and under the Signal pane', (panelSrc.match(/\{!!v\.note && <Text style=\{\[s\.note/g) || []).length === 2);
+}
 
 // The quality bands (the web's: ≥ 15 good, ≥ 9 fair, else poor) and the lights' order.
 eq('SNR good', drmView(RRI).sig?.q, 'good');

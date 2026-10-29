@@ -20,6 +20,31 @@ section: `DECODER-RESEARCH.md` §4.4.
   - when the server cannot play the codec, the server's own sentence saying why.
 - **The Signal pane** (2026-10-26) — the box's second view, behind **SIGNAL ▸** in its header (◂ STATION goes back),
   on the web page and in the app. See [The Signal pane](#the-signal-pane-2026-10-26) below.
+- **A zoom does not touch the receiver** (2026-10-29). A zoom or pan updates only the listener's view
+  (`clientRetuneView` on a range-locked radio; the shared zoom handler keeps the `DrmListener`); the receiver is rebuilt
+  only when the mode or the dial changes. `scripts/test-server-drm.mjs` zooms ten times, restates the tune and resets,
+  and asserts one receiver and a held lock.
+- **The zoom note** (2026-10-29) — the one case where a zoom can still cost the lock. On an RTL with the IF filter on
+  Auto, a zoom may really retune the tuner (`dongleForView`, the Auto IF placement) and re-program its IF filter
+  (`applyAutoIf`). The receiver then resyncs, which is accepted: that is what Auto IF does. The box says so in one dim
+  line, under the box and under the Signal pane:
+  > Zooming here can retune the radio (IF filter on Auto) — DRM resyncs for a few seconds after a big zoom.
+  - **The server decides** (`drmZoomMovesRadio` in `local_sdr_shim.cpp`). Every report carries `"zoomMovesRadio"`
+    (true/false), and the clients show the line only when it is true. No client guesses from the radio type.
+  - **It is true when all of these hold:**
+    - the listener is on the shared zoom path (not `perClientDsp()`);
+    - the centre is not locked (`g_vsLockedCentre`), and the radio is not an Icom;
+    - the IF filter is on Auto (`g_tunerBwAuto`);
+    - the radio is an RTL (a USB dongle, or rtl_tcp — the IF row is `rtlOnly`).
+  - So it is **true** on an RTL with one listener or on a shared dial. It is **false** on a range-locked radio, where a
+    zoom is only ever the view, and once the owner sets the IF filter by hand. It is false on the Airspy HF+,
+    Airspy R2/Mini, HackRF and RSP, which have no IF filter control here.
+  - **It follows the owner's IF switch at once.** The shared dial re-sends the report when the field changes, even if
+    the receiver's own report has not (a searching receiver may not publish again for a long time).
+  - Tests: `scripts/test-server-drm.mjs` (true on the one-pipeline rtl_tcp radio, false → true across a manual IF
+    and back to Auto; true on a shared dial; false range-locked); `scripts/test_drm_app.ts` (shown only with the
+    field, the same words in the web box, the web Signal pane and the app); `scripts/test-web-drm.mjs` (the line under
+    the box and the pane in the real page, dim, in the box's font, inside the box at 390 px).
 - **The station bar (VTS)** carries the label and the text, with the service ID as the id, as for DAB.
 - **The bandwidth row is hidden in DRM.** The receiver cuts its own channel, so the slider would do nothing.
 - **Audio** replaces the AM detector's output, at the detector's own pace. It is buffered 0.8 s deep, because DRM

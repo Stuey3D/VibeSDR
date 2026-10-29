@@ -8,6 +8,9 @@
 //   • the audio socket keeps flowing (the programme or silence — never a stall);
 //   • on a ONE-PIPELINE radio (the shared receiver) and on a RANGE-LOCKED one (the listener's own channel);
 //   • zooming in and out (and a restated tune) leaves the receiver alone — one receiver, the lock held;
+//   • every report says whether this listener's zoom can move the radio (`zoomMovesRadio`, the DRM card's note): true on
+//     the rtl_tcp radio with the IF filter on Auto, false once the IF filter is set by hand (and true again on Auto), false
+//     on the range-locked one;
 //   • leaving DRM for AM stops the reports.
 // Silent: audio frames are counted, never played.
 //   VIBESERVER_BIN=…/vibeserver VIBE_DRM_CLIP=…/rri9570_288k.cu8 node scripts/test-server-drm.mjs
@@ -118,7 +121,7 @@ async function listener(port, sid, f, mode) {
   return L;
 }
 
-async function scenario(label, args, tag) {
+async function scenario(label, args, tag, zoomMoves, { ifSwitch = false, noteOnly = false } = {}) {
   console.log(`── ${label} ──`);
   const S = await server(args, tag);
   try {
@@ -155,6 +158,19 @@ async function scenario(label, args, tag) {
       ok(during.length > 5 && !unlocked && after.reacq === (before.reacq || 0),
          `…and the lock held (${unlocked} of ${during.length} reports unlocked, re-acquisitions ${before.reacq} → ${after.reacq}${after.lostWhy ? `, last: ${after.lostWhy}` : ''})`);
     }
+    // ★★ V12 `zoomMovesRadio` (local_sdr_shim.cpp drmZoomMovesRadio): the condition the DRM card's note shows on. An RTL
+    //    (this fake rtl_tcp) with the IF filter on Auto, not range-locked: a zoom may retune the tuner — true. A pinned
+    //    window: a zoom is only ever the view — false. And it FOLLOWS the owner's IF switch without waiting for the
+    //    receiver's own report to change.
+    ok(last() && last().zoomMovesRadio === zoomMoves, `zoomMovesRadio is ${zoomMoves} (${last() && last().zoomMovesRadio})`);
+    if (ifSwitch) {   // ★ a listener may set the IF filter only on a one-listener radio (a shared dial is locked to Auto)
+      L.spec.send({ type: 'tunerbw', value: 1000000 });
+      ok(await until(() => last() && last().zoomMovesRadio === false, 5000), `IF filter set by hand: zoomMovesRadio false (${last() && last().zoomMovesRadio})`);
+      L.spec.send({ type: 'tunerbw', value: -1 });
+      ok(await until(() => last() && last().zoomMovesRadio === true, 5000), `IF filter back on Auto: zoomMovesRadio true (${last() && last().zoomMovesRadio})`);
+    }
+    // ★ the shared dial is here for its `zoomMovesRadio` only — the rest of the contract is the two radios' below
+    if (noteOnly) { for (const k of ['spec', 'aud']) L[k].close(); return; }
     const r = last() || {};
     ok(r.robustness === 'B' && r.bwKhz === 10 && r.mscQam === 16, `mode B, 10 kHz, 16-QAM (${r.robustness} ${r.bwKhz} ${r.mscQam})`);
     ok(r.label === 'SNR Tiganesti E1', `the station's label: "${r.label}"`);
@@ -220,8 +236,9 @@ async function scenario(label, args, tag) {
   } finally { await S.stop(); }
 }
 
-await scenario('one-pipeline radio (the shared receiver)', ['--freq', String(STATION), '--mode', 'drm', '--users', '1'], 'one');
-await scenario('range-locked radio (the listener\'s own channel)', ['--freq', String(CENTRE), '--lock-freq', String(CENTRE), '--users', '4', '--mode', 'am', '--idle-grace', '0'], 'lock');
+await scenario('one-pipeline radio (the shared receiver)', ['--freq', String(STATION), '--mode', 'drm', '--users', '1'], 'one', true, { ifSwitch: true });
+await scenario('shared dial (unlocked, several listeners, one VFO)', ['--freq', String(STATION), '--mode', 'drm', '--users', '4'], 'dial', true, { noteOnly: true });
+await scenario('range-locked radio (the listener\'s own channel)', ['--freq', String(CENTRE), '--lock-freq', String(CENTRE), '--users', '4', '--mode', 'am', '--idle-grace', '0'], 'lock', false);
 
 console.log(`\n${fail ? '✗' : '✓'} test-server-drm: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

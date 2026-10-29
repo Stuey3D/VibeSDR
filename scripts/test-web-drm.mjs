@@ -8,6 +8,8 @@
 //   • back to AM: the box goes;
 //   • the SIGNAL key swaps the box for the Signal pane (V12 2026-10-26): its six groups, delay spread against the guard,
 //     Doppler, lock times, MERs, errors; a tooltip on every row; DAB's colours; one pad stop; STATION brings the box back;
+//   • the zoom note (V12 2026-10-29, DRM_ZOOM_NOTE): this rtl_tcp radio has the IF filter on Auto, so the server says a
+//     zoom can retune it (`zoomMovesRadio`) — one dim line under the box and under the Signal pane, in the box's own font;
 //   • at PHONE WIDTH (390 px) nothing scrolls sideways, box or pane; no exception on the page. Screenshots to VIBE_SHOT_DIR.
 // ★ SILENT: headless Edge with --mute-audio and --disable-audio-output.
 //   VIBESERVER_BIN=…/vibeserver VIBE_DRM_CLIP=…/rri9570_288k.cu8 node scripts/test-web-drm.mjs
@@ -113,6 +115,13 @@ try {
   }
   ok(await until(`/SNR Tiganesti E1/.test(document.getElementById('vtsName')?.textContent || '')`, 5000), 'the station bar carries the label');
   ok(await ev(`(() => { const r = document.querySelector('.bwRow'); return !r || r.style.display === 'none'; })()`), 'the bandwidth row is hidden in DRM');
+  // ★★ V12 the zoom note: the server's word (`zoomMovesRadio` — an RTL, IF filter on Auto), drawn as one dim line
+  const NOTE = 'Zooming here can retune the radio (IF filter on Auto) — DRM resyncs for a few seconds after a big zoom.';
+  ok(await until(`document.querySelector('#drmBody .drmNote')?.textContent === ${JSON.stringify(NOTE)}`, 5000),
+     `the zoom note under the box: "${await ev(`document.querySelector('#drmBody .drmNote')?.textContent || ''`)}"`);
+  const nst = JSON.parse(await ev(`JSON.stringify((() => { const n = getComputedStyle(document.querySelector('#drmBody .drmNote')), m = getComputedStyle(document.querySelector('#drmBody .drmSmall') || document.querySelector('#drmBody .drmNote'));
+      return { c: n.color, mc: m.color, f: n.fontFamily, bf: getComputedStyle(document.getElementById('drmBox')).fontFamily, fs: n.fontSize }; })())`));
+  ok(nst.c === nst.mc && nst.f === nst.bf && nst.fs === '11px', `…dim like the box's small line, in the box's font (${nst.c}, ${nst.fs})`);
   const s1 = await shot('drm-desktop.png');
 
   // ── ★★ V12 THE SIGNAL PANE (2026-10-26): DAB's kind of advanced pane, behind the SIGNAL key in the box's header ──
@@ -141,6 +150,9 @@ try {
       const r = document.querySelector('#drmSignal .row'); const ok1 = document.querySelector('#drmSignal .tl.ok');
       return { dabLbl: a, dabOk: b, drmLbl: getComputedStyle(r.firstElementChild).color, drmOk: ok1 ? getComputedStyle(ok1).color : '' }; })())`));
   ok(colours.dabLbl === colours.drmLbl && colours.dabOk === colours.drmOk, `labels and lights in DAB's colours (${colours.drmLbl}, ${colours.drmOk})`);
+  ok(await ev(`(() => { const n = document.querySelector('#drmSignal .drmNote'), rows = document.querySelectorAll('#drmSignal .row');
+      return !!n && n.textContent === ${JSON.stringify(NOTE)} && !!rows.length && n.getBoundingClientRect().top >= rows[rows.length - 1].getBoundingClientRect().bottom; })()`),
+     'the zoom note under the Signal pane\'s rows too');
   const clear = async () => JSON.parse(await ev(`JSON.stringify((() => { const h = document.getElementById('srvHealth'), b = document.getElementById('drmPane').getBoundingClientRect();
       const r = h && getComputedStyle(h).display !== 'none' && h.getBoundingClientRect().height > 0 ? h.getBoundingClientRect() : null;
       return { key: Math.round(b.top), pill: r ? Math.round(r.bottom) : null, hit: !!r && b.top < r.bottom && b.right > r.left }; })())`));
@@ -154,6 +166,8 @@ try {
   const fit = JSON.parse(await ev(`JSON.stringify({ doc: document.documentElement.scrollWidth, box: document.getElementById('drmBox').getBoundingClientRect().right,
                                                     left: document.getElementById('drmBox').getBoundingClientRect().left,
                                                     rows: Math.max(...[...document.querySelectorAll('#drmSignal .row')].map(r => r.getBoundingClientRect().right)) })`));
+  const noteR = await ev(`Math.round(document.querySelector('#drmSignal .drmNote')?.getBoundingClientRect().right || 0)`);
+  ok(noteR > 0 && noteR <= fit.box + 0.5, `390 px: the pane's zoom note wraps inside the box (to ${noteR} px)`);
   ok(fit.doc <= 391 && fit.box <= 391 && fit.left >= 0 && fit.rows <= fit.box + 0.5,
      `the Signal pane: nothing scrolls sideways (page ${fit.doc}, box ${Math.round(fit.left)}–${Math.round(fit.box)}, rows to ${Math.round(fit.rows)} px)`);
   const c2 = await clear();
@@ -163,6 +177,8 @@ try {
   ok(await until(`document.getElementById('drmSignal').hidden && !document.getElementById('drmBody').hidden`, 3000), 'STATION brings the compact box back');
   const fit2 = JSON.parse(await ev(`JSON.stringify({ doc: document.documentElement.scrollWidth, box: document.getElementById('drmBox').getBoundingClientRect().right,
                                                     left: document.getElementById('drmBox').getBoundingClientRect().left })`));
+  const noteR2 = await ev(`Math.round(document.querySelector('#drmBody .drmNote')?.getBoundingClientRect().right || 0)`);
+  ok(noteR2 > 0 && noteR2 <= fit2.box + 0.5, `390 px: the box's zoom note wraps inside it (to ${noteR2} px)`);
   ok(fit2.doc <= 391 && fit2.box <= 391 && fit2.left >= 0, `the box: nothing scrolls sideways (page ${fit2.doc}, box ${Math.round(fit2.left)}–${Math.round(fit2.box)} px)`);
   const s2 = await shot('drm-phone.png');
   await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
