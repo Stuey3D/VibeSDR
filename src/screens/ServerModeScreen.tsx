@@ -467,6 +467,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm);
       notes.push(`Digital spots: Band is off — a busy band measured ${Math.round(band.pct)}% of a core here. Switch it on to offer it anyway.`);
     }
+    /* ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29) — the same rule as vibe_setup_page.h benchApplyDefaults: ON unless the
+     *  box measured RED carrying it beside WFM stereo. The owner can switch it back on. */
+    const zoom = row('zoom_2048');
+    if (zoom && zoom.grade === 'red' && zoomSpec) {
+      setZoomSpec(false); AsyncStorage.setItem(K.zoomSpectrum, '0');
+      notes.push(`Keep the spectrum sharp is off — zooming in measured ${Math.round(zoom.pct)}% of a core here. Switch it on to use it anyway.`);
+    }
     if (scan && scan.grade === 'red' && dabScanLabels === 1) {
       setDabScanLabels(0); AsyncStorage.setItem(K.dabScanLabels, '0');
       notes.push(`The station-label scan is off — it measured ${Math.round(scan.pct)}% of a core here.`);
@@ -491,7 +498,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       notes.push(`Decoders at once set to ${rec} — what this device measured with ${j.decoders.forUsers || 0} listeners on it.`);
     }
     setBenchNote(notes.join(' '));
-  }, [blockedModes, dabScanLabels, usersText, decoderMax]);
+  }, [blockedModes, dabScanLabels, usersText, decoderMax, zoomSpec]);
 
   const runBench = React.useCallback(async (manual: boolean) => {
     const mod = (NativeModules as any).VibeLocalSDR;

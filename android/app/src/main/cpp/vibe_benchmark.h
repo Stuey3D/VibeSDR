@@ -176,7 +176,7 @@ static void noExt(void*, const vibedsp::RxPipeline::Callbacks::RdsExt&) {}
 /** Run one scenario: `seconds` of signal through a fresh RxPipeline, fed as fast as it will take it; the hottest
  *  thread's CPU over the signal's duration is the score. */
 inline Result runOne(const std::string& id, const std::string& label, double fs, RxPipeline::Mode mode, double bw,
-                     const std::vector<cf32>& iq, double seconds, bool rdsExt) {
+                     const std::vector<cf32>& iq, double seconds, bool rdsExt, double zoomSpanHz = 0.0) {
     Result r; r.id = id; r.label = label; r.rate = fs;
     static std::atomic<bool> rdsOff{false}, rdsOn{true};
     RxPipeline pipe;
@@ -191,10 +191,17 @@ inline Result runOne(const std::string& id, const std::string& label, double fs,
      *  fast as the pipeline will take it — this whole function — a dropping instrument would score a
      *  fraction of its real cost and grade a Pi 2 green for a feature it cannot carry. */
     pipe.setMeasureBlocking(true);
+    if (zoomSpanHz > 0) cb.zoomSpectrum = noSpec;   // ★ see KEEP-SHARP ZOOM below
     const auto before = threadCpu();
     const double self0 = threadSelfCpu();
     pipe.start(fs, 4096, 10.0, 48000, cb);
     pipe.setTune(200000.0, mode, bw);
+    /* ★★ KEEP-SHARP ZOOM (config zoomSpectrum): a listener zoomed in deep on the station, at 10 frames a second.
+     *  It runs on the feeding thread (vibe-dsp), so it lands in that thread's figure below. */
+    if (zoomSpanHz > 0) {
+        pipe.setZoomBins(1024);
+        pipe.setZoomView(200000.0, zoomSpanHz, 10.0);
+    }
     // Warm up: the first blocks build the chain and fault the buffers in; the CEQ and AGC settle.
     const int blk = 65536, total = (int)iq.size();
     for (int o = 0; o < std::min(total, (int)fs / 2); o += blk) pipe.feed(iq.data() + o, std::min(blk, total - o));
@@ -370,7 +377,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         auto& p = benchProgress();
         p.running.store(true);
         p.step.store(0);
-        p.steps.store(1 + 1 + 7 + 4 + 6 + (moreRows ? moreRowSteps : 0));   // ★ DAB's 2, + ADS-B's 2 where the host adds them
+        p.steps.store(1 + 1 + 7 + 1 + 4 + 6 + (moreRows ? moreRowSteps : 0));   // ★ 7 scenarios + keep-sharp zoom; DAB's 2, + ADS-B's 2 where the host adds them
         { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
     }
     /* ★★★ FIRST, WHILE THE MACHINE IS COOLEST: the all-core clock calibration the throttle snail is
@@ -417,6 +424,19 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
             cache[sc[i].fs] = sc[i].fm ? fmStation(sc[i].fs, 1.0, 200000.0) : nbSignal(sc[i].fs, 1.0, 200000.0);
         res.push_back(runOne(sc[i].id, sc[i].label, sc[i].fs, sc[i].mode, sc[i].bw, cache[sc[i].fs],
                              secondsPerScenario, sc[i].rds));
+    }
+    /* ★★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29: "add it into the initial setup benchmark and then enable it or disable
+     *  it depending on CPU, default to on in most cases"). WFM stereo at 2.048 MS/s with a listener zoomed in to a
+     *  25 kHz view — the zoom FFT runs on vibe-dsp, so this row is that thread carrying both. Setup turns keep-sharp
+     *  OFF only when this grades RED (vibe_setup_page.h benchApplyDefaults, ServerModeScreen.tsx applyBench).
+     *  Pi 2 live, 2026-10-29: 151 % → 186 % of one core for the whole process while zooming, audio and feed clean. */
+    {
+        const char* zl = "WFM + keep-sharp zoom @ 2.048 MS/s";
+        benchStep(zl);
+        if (progress) progress(N - 1, N, zl);
+        if (!fmCache.count(2048000)) fmCache[2048000] = fmStation(2048000, 1.0, 200000.0);
+        res.push_back(runOne("zoom_2048", zl, 2048000, M::WFM, 200000, fmCache[2048000], secondsPerScenario,
+                             false, 25000.0));
     }
     /* ★★★ LOCKED RANGE — THE LISTENER'S WHOLE CHAIN, NOT JUST ITS DEMODULATOR (2026-09-19).
      *  This timed a bare RxPipeline at channel rate, and on a Pi 2 read 3.4 % for an NFM listener the live

@@ -245,7 +245,7 @@ struct Config {
     double idleGrace = 300;
 
     // Front end
-    bool rfNotch = false, dabNotch = false, zoomSpectrum = false;
+    bool rfNotch = false, dabNotch = false, zoomSpectrum = true;   // ★ keep-sharp ON unless the setup benchmark grades it red (2026-10-29)
     /* ★ AUTO NOTCH: the RSP's front-end filters follow the dial. Off by default — a hardware
      *  filter must never switch itself on over an owner's head. autoNotch owns rfNotch/dabNotch
      *  while it is on; userNotch says whether LISTENERS may touch them at all. */
@@ -571,7 +571,7 @@ struct RadioConfig {
      *  owner would not have wanted; the only choice it removes is the choice to keep clipping.
      *  ★ The AGC includes this; with rtlAgc on, this is redundant rather than contradictory. */
     int         agcLock  = -1;  ///< 1 = AGC forced on, listener may not turn it off (RSP, HF+).
-    bool   rfNotch = false, dabNotch = false, zoomSpectrum = false;
+    bool   rfNotch = false, dabNotch = false, zoomSpectrum = true;   // ★ see the per-radio copy
     bool   autoNotch = false, userNotch = true;   // ★ see the note on the per-radio copy
     std::string antennaPort;                      // ★ port NAME — see the note in Config
     bool   antennaPortLocked = false;

@@ -2116,6 +2116,15 @@ function benchApplyDefaults() {
     bandBox.dispatchEvent(new Event("change"));
     benchNote(bandBox, "Digital spots: Band is off: a busy band measured " + Math.round(band.pct) + "% of a core here. Tick it to offer it anyway.");
   }
+  // ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29): ON unless the box measured RED carrying it beside WFM stereo — amber
+  //    keeps it, it is what makes a shared receiver worth zooming into. Every radio, because the box is one box.
+  //    Same rule as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS).
+  const zoom = row("zoom_2048");
+  if (zoom && zoom.grade === "red" && $("zoomSpectrum") && $("zoomSpectrum").checked) {
+    radioList().forEach(r => { r.zoomSpectrum = false; });
+    $("zoomSpectrum").checked = false;
+    benchNote($("zoomSpectrum"), "Keep the spectrum sharp is off: zooming in measured " + Math.round(zoom.pct) + "% of a core here. Tick it to use it anyway.");
+  }
   if (scan && scan.grade === "red" && $("dabScanLabels")) {
     $("dabScanLabels").value = "0";
     benchNote($("dabScanLabels"), "The station-label scan is off: it measured " + Math.round(scan.pct) + "% of a core here.");

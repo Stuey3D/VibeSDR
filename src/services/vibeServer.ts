@@ -304,7 +304,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     askBeforeTuning: cfg.askBeforeTuning ?? false,
     idleKickMin: cfg.idleKickMin ?? 0,
     lockedCentre: cfg.lockedCentre ?? 0,
-    zoomSpectrum: cfg.zoomSpectrum ?? false,
+    zoomSpectrum: cfg.zoomSpectrum ?? true,   // ★ keep-sharp ON unless the benchmark grades it red (2026-10-29)
     spectrogram: cfg.spectrogram ?? false,
     rawIq: cfg.rawIq ?? 0,
     rawIqMax: cfg.rawIqMax ?? 0,

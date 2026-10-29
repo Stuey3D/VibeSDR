@@ -264,7 +264,7 @@ object VibeServerBoot {
         // ★★★ THE CAPTURED WINDOW. Shared listening only works because everybody gets a slice of
         //     ONE window, so the centre must be pinned.
         VibeLocalSDR.setVibeServerLockedCentre(cfg.n("lockedCentre", 0.0))
-        VibeLocalSDR.setVibeServerZoomSpectrum(cfg.b("zoomSpectrum", false))
+        VibeLocalSDR.setVibeServerZoomSpectrum(cfg.b("zoomSpectrum", true))
         VibeLocalSDR.setVibeServerSpectrogram(cfg.b("spectrogram", false))
         // ★ 0 = never park. 300 s matches the desktop's own default.
         VibeLocalSDR.setVibeServerIdleGrace(cfg.n("idleGraceSec", 300.0))

@@ -259,12 +259,10 @@ struct Opts {
     double      lockFreq = 0;            // 0 = the centre follows the VFO, as it always has
     int         users    = 1;            // expected listeners; 1 = personal receiver
     std::string channels;                // "" = derive from `users`; else "direct" | "shared"
-    // ★★★ OFF BY DEFAULT. It gives real bins at deep zoom, but the WIDE path is a tuned, known-good
-    // waterfall and the zoom path SUPPRESSES it — so switching it on replaces something already
-    // good with something still being tuned (Stuart, 2026-08-02: "the web client's view was
-    // already perfect before this"). Sharper bins are not worth a worse picture. Opt in with
-    // --zoom-spectrum until it can beat the wide path on LOOK as well as resolution.
-    bool        zoomSpectrum = false;
+    // ★★★ ON BY DEFAULT since 2026-10-29 (Stuart: "default to on in most cases"). It was off while the zoom path
+    // suppressed the wide waterfall and stuttered on a rebuild; the wide path now carries on until the zoom view is
+    // primed (RxPipeline::zoomPrimed). The setup benchmark switches it off where its zoom_2048 row grades red.
+    bool        zoomSpectrum = true;
     // ★★ Ask before tuning on a shared dial (docs/TUNING-ETIQUETTE.md). Normally per radio in config.json
     //    (RadioConfig::askBeforeTuning); this flag is for a server run from the command line, and the tests.
     bool        askBeforeTuning = false;
