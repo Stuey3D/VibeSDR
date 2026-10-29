@@ -21,7 +21,7 @@ ca-certificates   # https to apt.vibesdr.net
 curl              # the apt key fetch at image time; the server's own downloads
 gnupg             # dearmoring the apt key
 avahi-daemon      # VibeServerSetup.local while setting up, then ONLY the owner's chosen name, on every network
-ffmpeg            # ★★★ DAB+ audio on Linux — the package only RECOMMENDS it and the image installs without recommends
+ffmpeg            # ★ REDUNDANT FROM V12: the vibeserver package bundles its own (/usr/lib/vibeserver/ffmpeg) and DAB+ is FAAD2's by default — drop at the next image (kept so converge tests and existing cards stay as they are)
 overlayroot       # the read-only root (power-cut hardening)
 initramfs-tools   # overlayroot lives in the initramfs
 dosfstools        # fsck.vfat for the card's FAT partition (VIBESETUP on a board card) before it is mounted — 11.0.11

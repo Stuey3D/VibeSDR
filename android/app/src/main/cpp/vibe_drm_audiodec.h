@@ -2,10 +2,13 @@
 // vibe_dab_aacdec.h, applied to DRM). Access units and their AudioSpecificConfig come from decoders/drm/drm_audio.h.
 //
 // ★★★ PER PLATFORM:
-//   • Linux / macOS with FFmpeg: FFmpeg run as a process, fed LOAS (the transport that carries ANY AudioSpecificConfig),
-//     asked for 48 kHz stereo float. xHE-AAC needs FFmpeg's native USAC decoder, which arrived in FFmpeg 7.1 (2024):
-//     Debian 13 has it, Ubuntu 24.04 (6.1) and Raspberry Pi OS bookworm (5.1) do not — and the listener is TOLD so, by
-//     name, rather than given silence (canDecode()).
+//   • Linux / macOS with FFmpeg: FFmpeg run as a process, fed a live Matroska stream (drm_audio.h MkvStream: the
+//     AudioSpecificConfig as CodecPrivate — FFmpeg's LOAS reader cannot take a USAC config, found 2026-10-29), asked for
+//     48 kHz stereo float. xHE-AAC needs FFmpeg's native USAC decoder (7.1+). ★★ THE LINUX PACKAGES BUNDLE FFmpeg 8.1
+//     (V12: /usr/lib/vibeserver/ffmpeg, vibe_ffmpeg_path.h) because most distributions' is older (Ubuntu 24.04 6.1,
+//     Raspberry Pi OS bookworm 5.1); a missing or old one is still TOLD to the listener, by name (canDecode()).
+//   • DRM's AAC (all server builds with FAAD2 — VIBE_HAVE_FAAD2): FAAD2's DRM build, in process. That is the DEFAULT and
+//     only route for DRM AAC; FFmpeg is used only for xHE-AAC.
 //   • macOS: AudioToolbox has decoded USAC since macOS 10.15 (kAudioFormatMPEGD_USAC) and is preferred for xHE-AAC when
 //     it accepts the configuration; FFmpeg is the fallback.
 //   • Android: MediaCodec with the AudioSpecificConfig as csd-0 (audio/mp4a-latm, profile 42) — xHE-AAC from Android 10
@@ -36,6 +39,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "vibe_ffmpeg_path.h"   // ★ which ffmpeg: the package's own on Linux (V12), shared with DAB+
 #if defined(__APPLE__)
 #include <AudioToolbox/AudioToolbox.h>
 #endif
@@ -44,13 +48,12 @@
 namespace vibe {
 
 #if !defined(__ANDROID__)
-/** ★ FFmpeg, found by its known homes first (a Finder-launched Mac has no Homebrew on $PATH — vibe_dab_aacdec.h). */
+/** ★ FFmpeg — vibe_ffmpeg_path.h: the package's own on Linux (/usr/lib/vibeserver/ffmpeg, FFmpeg 8.1 with the xHE-AAC
+ *  decoder), a system one only if that is missing; Homebrew's on a Mac. VIBE_DRM_FFMPEG still overrides it (tests). */
 inline const char* drmFfmpegPath() {
     static const std::string path = [] {
         if (const char* e = getenv("VIBE_DRM_FFMPEG")) return std::string(e);
-        for (const char* c : { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg" })
-            if (::access(c, X_OK) == 0) return std::string(c);
-        return std::string("ffmpeg");
+        return std::string(vibe::ffmpegPath());
     }();
     return path.c_str();
 }
@@ -89,16 +92,27 @@ inline const FfmpegCaps& drmFfmpegCaps() {
     return caps;
 }
 
-/** LOAS in, 48 kHz stereo float out, through an FFmpeg child (the vibe_dab_aacdec.h pattern: non-blocking pipes, SIGPIPE
- *  ignored, never a permanent failure). */
+/** Matroska in (drm_audio.h MkvStream), 48 kHz stereo float out, through an FFmpeg child (the vibe_dab_aacdec.h pattern:
+ *  non-blocking pipes, SIGPIPE ignored, never a permanent failure). */
 class DrmFfmpegChild {
 public:
     ~DrmFfmpegChild() { close(); }
     bool running() const { return pid_ > 0; }
-    bool write(const std::vector<uint8_t>& loas) {
-        if (pid_ < 0 && !start()) return false;
-        const ssize_t w = ::write(inFd_, loas.data(), loas.size());
-        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { close(); return false; }
+    /** The stream head every new child is given first (a restarted child starts a fresh stream). */
+    void setHeader(std::vector<uint8_t> h) { head_ = std::move(h); }
+    /** ★★ A CONTAINER MUST NOT LOSE BYTES. LOAS resynchronised on its next sync word; Matroska would read a half-written
+     *  block as garbage. So what the pipe does not take now is kept and sent first next time — and if FFmpeg has fallen
+     *  so far behind that a second of it is queued, the child is restarted rather than the queue grown. */
+    bool write(const std::vector<uint8_t>& bytes) {
+        if (pid_ < 0) { if (!start()) return false; pend_ = head_; }
+        pend_.insert(pend_.end(), bytes.begin(), bytes.end());
+        while (!pend_.empty()) {
+            const ssize_t w = ::write(inFd_, pend_.data(), pend_.size());
+            if (w > 0) { pend_.erase(pend_.begin(), pend_.begin() + w); continue; }
+            if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+            close(); return false;
+        }
+        if (pend_.size() > 256 * 1024) { close(); return false; }
         return true;
     }
     void drain(std::vector<float>& out) {
@@ -120,7 +134,7 @@ public:
         if (inFd_ >= 0) { ::close(inFd_); inFd_ = -1; }
         if (outFd_ >= 0) { ::close(outFd_); outFd_ = -1; }
         if (pid_ > 0) { ::kill(pid_, SIGKILL); int st = 0; ::waitpid(pid_, &st, 0); }
-        pid_ = -1; carry_.clear();
+        pid_ = -1; carry_.clear(); pend_.clear();
     }
 private:
     bool start() {
@@ -136,7 +150,7 @@ private:
             const int dn = ::open("/dev/null", O_WRONLY); if (dn >= 0) ::dup2(dn, STDERR_FILENO);
             ::execlp(drmFfmpegPath(), "ffmpeg", "-hide_banner", "-loglevel", "quiet", "-nostdin",
                      "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32", "-analyzeduration", "0",
-                     "-f", "loas", "-i", "pipe:0", "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1", (char*)nullptr);
+                     "-f", "matroska", "-i", "pipe:0", "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1", (char*)nullptr);
             ::_exit(127);
         }
         ::close(in[0]); ::close(out[1]);
@@ -146,7 +160,7 @@ private:
         return true;
     }
     pid_t pid_ = -1; int inFd_ = -1, outFd_ = -1;
-    std::vector<uint8_t> carry_;
+    std::vector<uint8_t> carry_, head_, pend_;
 };
 #endif
 
@@ -407,8 +421,14 @@ public:
 #endif
         const FfmpegCaps& c = drmFfmpegCaps();
         if (c.usac) { backend = "ffmpeg " + c.version; return true; }
+#if defined(__linux__)
+        // ★ The package carries its own FFmpeg 8.1 (V12); missing means a damaged install, and reinstalling is the fix.
+        if (!c.present) why = "This station uses xHE-AAC. This server's FFmpeg (/usr/lib/vibeserver/ffmpeg) is missing, so the audio "
+                              "cannot be played; the signal is being received and decoded. (Reinstalling VibeServer restores it.)";
+#else
         if (!c.present) why = "This station uses xHE-AAC. This server has no FFmpeg, so the audio cannot be played; the signal is "
-                              "being received and decoded. (Installing FFmpeg 7.1 or newer adds it.)";
+                              "being received and decoded. (Installing FFmpeg 8.1 or newer adds it.)";
+#endif
         else why = "This station uses xHE-AAC. This server's FFmpeg (" + c.version + ") has no xHE-AAC decoder — that arrived in "
                    "FFmpeg 7.1 — so the audio cannot be played; the signal is being received and decoded.";
         return false;
@@ -429,6 +449,9 @@ public:
         const vibedrm::UsacInfo& u = fr.usac();
         if (!u.ok) { why_ = "This station's xHE-AAC configuration could not be read (" + u.why + ")."; return false; }
         usac_ = u; rate_ = a.sampleRateHz(); ch_ = a.audioMode == 2 ? 2 : 1;
+#if !defined(__ANDROID__)
+        ff_.setHeader(mkv_.header(u.asc, rate_, ch_, u.outputFrameLength));   // ★ the config travels as CodecPrivate
+#endif
 #if defined(__ANDROID__)
         if (!mc_.open(u, rate_, ch_)) { why_ = "This station uses xHE-AAC, which this Android device's decoders do not offer."; return false; }
 #else
@@ -439,6 +462,14 @@ public:
             else { why_ = "This Mac refused the station's xHE-AAC configuration."; return false; }
         }
 #endif
+        /* ★★ FFmpeg (8.1, the bundled one) refuses USAC's eSBR tools outright — every unit would come back as an error and
+         *  the listener would get silence with no reason. Say it instead. (Its LPD/ACELP speech core is not decoded
+         *  either, but that is chosen frame by frame and cannot be known from the config.) */
+        if (backend_.rfind("ffmpeg", 0) == 0 && u.esbr) {
+            why_ = "This station uses xHE-AAC with enhanced SBR, which this server's FFmpeg (" + drmFfmpegCaps().version +
+                   ") cannot decode yet, so the audio cannot be played; the signal is being received and decoded.";
+            return false;
+        }
 #endif
         open_ = true;
         return true;
@@ -465,7 +496,8 @@ public:
 #if defined(__APPLE__)
         if (at_.ok()) { at_.decode(au.data.data(), au.data.size(), pcm); return; }
 #endif
-        ff_.write(vibedrm::loasFrame(usac_.asc, usac_.ascBits, au.data.data(), au.data.size()));
+        if (!ff_.running()) mkv_.newCluster();   // ★ a new (or restarted) child gets the head, then a fresh Cluster
+        ff_.write(mkv_.block(au.data.data(), au.data.size()));
         ff_.drain(pcm);
 #endif
     }
@@ -515,6 +547,7 @@ private:
     DrmMediaCodecUsac mc_;
 #else
     DrmFfmpegChild ff_;
+    vibedrm::MkvStream mkv_;
 #if defined(__APPLE__)
     DrmAppleUsac at_;
 #endif

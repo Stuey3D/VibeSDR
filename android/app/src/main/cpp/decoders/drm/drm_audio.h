@@ -4,14 +4,16 @@
 // ★★★ THE POSITION (Stuart; docs/v12/DECODER-RESEARCH.md §4.4): as for DAB+ (vibe_dab_aacdec.h) the SERVER'S OPERATING
 //     SYSTEM decodes — FFmpeg run as a process on Linux/macOS, AudioToolbox on Apple, MediaCodec on Android. This file
 //     turns DRM's own framing into what those decoders take: an AudioSpecificConfig and raw access units, carried to FFmpeg
-//     as LOAS/LATM (ISO/IEC 14496-3 §1.7), which is the one MPEG-4 transport that carries ANY AudioSpecificConfig —
-//     ADTS cannot describe USAC.
+//     in a live Matroska stream (MkvStream — the config as CodecPrivate; ADTS cannot describe USAC, and FFmpeg's LOAS
+//     reader cannot take a USAC config in-band: see MkvStream). loasFrame() is kept for decoders that do take LOAS.
 //
 // ★★★ WHAT CAN BE DECODED, HONESTLY:
 //   • xHE-AAC (USAC, the newer stations): the DRM "static config" (§5.3.2, table 4) is the standard UsacConfig with the
 //     constant parts left out. usacFromDrm() puts them back bit for bit, so any USAC decoder can be configured. FFmpeg has
-//     decoded USAC natively since 7.1 (2024); Apple since iOS 13 / macOS 10.15 (kAudioFormatMPEGD_USAC); Android from
-//     API 29 on devices whose codec lists it.
+//     decoded USAC natively since 7.1 (2024; the Linux packages bundle 8.1 — vibe_ffmpeg_path.h); Apple since iOS 13 /
+//     macOS 10.15 (kAudioFormatMPEGD_USAC); Android from API 29 on devices whose codec lists it. ★ FFmpeg (8.1) does not
+//     yet decode USAC's eSBR tools (harmonic SBR, PVC, inter-TES) or its LPD core (ACELP/TCX), so a station using those
+//     still fails there (docs/v12/BUNDLED-FFMPEG.md).
 //   • DRM's AAC (the older stations) is NOT ordinary AAC: it is ER AAC Scalable (object type 20) with the HCR and VCB11
 //     error-resilience tools mandatory, a 960-sample transform, and SBR data stored BACKWARDS at the end of each frame
 //     (§5.4.1–5.4.2). FFmpeg's native decoder refuses ER resilience and object type 20; AudioToolbox and MediaCodec do not
@@ -22,6 +24,7 @@
 #include "drm_coding.h"
 #include "drm_info.h"
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <string>
 #include <vector>
@@ -74,19 +77,23 @@ inline int usacSfIndex(int hz) {
     return 0x1F;
 }
 
-/** Copy SbrConfig() (23003-3 §5.2, unchanged in DRM). */
-inline void copySbrConfig(ByteBitReader& r, BitWriter& w) {
-    w.put(r.get(1), 1); w.put(r.get(1), 1); w.put(r.get(1), 1);           // harmonicSBR, bs_interTes, bs_pvc
+/** Copy SbrConfig() (23003-3 §5.2, unchanged in DRM). Returns true when it switches on an eSBR tool (harmonicSBR,
+ *  bs_interTes or bs_pvc) — which FFmpeg 8.1 refuses outright ("AAC USAC eSBR"). */
+inline bool copySbrConfig(ByteBitReader& r, BitWriter& w) {
+    const uint32_t hs = r.get(1), it = r.get(1), pvc = r.get(1);
+    w.put(hs, 1); w.put(it, 1); w.put(pvc, 1);                              // harmonicSBR, bs_interTes, bs_pvc
     w.put(r.get(4), 4); w.put(r.get(4), 4);                                 // dflt_start_freq, dflt_stop_freq
     const uint32_t e1 = r.get(1), e2 = r.get(1); w.put(e1, 1); w.put(e2, 1);
     if (e1) { w.put(r.get(2), 2); w.put(r.get(1), 1); w.put(r.get(2), 2); } // freq_scale, alter_scale, noise_bands
     if (e2) { w.put(r.get(2), 2); w.put(r.get(2), 2); w.put(r.get(1), 1); w.put(r.get(1), 1); }
+    return hs || it || pvc;
 }
 
 struct UsacInfo {
     bool ok = false;
     int coreSbrFrameLengthIndex = 0, sbrRatioIndex = 0, outputFrameLength = 0;
     int stereoConfigIndex = 0;
+    bool esbr = false;              // ★ an eSBR tool is on (harmonic SBR / inter-TES / PVC) — FFmpeg 8.1 cannot decode it
     std::vector<uint8_t> asc;       // the AudioSpecificConfig (object type 42) for the decoder, byte-aligned
     size_t ascBits = 0;             // ★ its EXACT length: LATM (audioMuxVersion 0) carries the config with no length field
     std::string why;
@@ -121,12 +128,12 @@ inline UsacInfo usacFromDrm(const AudioInfo& a, int rateHz) {
         el.put(0, 2);                            // ID_USAC_SCE
         el.put(0, 1);                            // tw_mdct (not used in DRM)
         el.put(r.get(1), 1);                     // noiseFilling
-        if (u.sbrRatioIndex > 0) copySbrConfig(r, el);
+        if (u.sbrRatioIndex > 0) u.esbr = copySbrConfig(r, el);
     } else {
         el.put(1, 2);                            // ID_USAC_CPE
         el.put(0, 1); el.put(r.get(1), 1);
         int sci = 0;
-        if (u.sbrRatioIndex > 0) { copySbrConfig(r, el); sci = int(r.get(2)); }
+        if (u.sbrRatioIndex > 0) { u.esbr = copySbrConfig(r, el); sci = int(r.get(2)); }
         el.put(uint32_t(sci), 2);
         u.stereoConfigIndex = sci;
         if (sci > 0) {
@@ -186,6 +193,85 @@ inline std::vector<uint8_t> loasFrame(const std::vector<uint8_t>& asc, size_t as
     o.insert(o.end(), m.b.begin(), m.b.end());
     return o;
 }
+
+// ── Matroska, live (unknown sizes) — how an xHE-AAC access unit and its config reach FFmpeg ───────────────────────────
+// ★★★ NOT LOAS, FOR FFmpeg (found 2026-10-29, bundling FFmpeg 8.1). FFmpeg's LATM/LOAS decoder parses the in-band config
+//     with no decoder context, and its USAC config reader refuses that ("if (!ac) return AVERROR_PATCHWELCOME") — in 7.1,
+//     8.1 and 9.0 alike — so every LOAS-framed xHE-AAC unit came back "Invalid data". The same units with the config as
+//     the stream's extradata decode bit-exactly. Matroska is the simplest standard container that carries that config
+//     (CodecPrivate) AND streams down a pipe with no length known in advance: an EBML header, a Segment and Clusters of
+//     unknown size, one SimpleBlock per access unit. scripts/test-bundled-ffmpeg.sh feeds ISO's USAC conformance streams
+//     through exactly this writer and compares with their reference decodes.
+//  ★ loasFrame() above stays — the standard's own transport, for any decoder that takes it; the FFmpeg path no longer uses it.
+class MkvStream {
+public:
+    /** The stream's head: EBML header, Segment (unknown size), Info, Tracks (A_AAC, the AudioSpecificConfig as
+     *  CodecPrivate). `frameLen` is samples per access unit at `rateHz` (USAC: outputFrameLength) — for timestamps only. */
+    std::vector<uint8_t> header(const std::vector<uint8_t>& asc, int rateHz, int channels, int frameLen) {
+        rate_ = rateHz > 0 ? rateHz : 48000; frameLen_ = frameLen > 0 ? frameLen : 1024; samples_ = 0; clusterMs_ = -1;
+        std::vector<uint8_t> o, e, info, trk, aud, tracks;
+        el(e, 0x4286, uint_(1)); el(e, 0x42F7, uint_(1)); el(e, 0x42F2, uint_(4)); el(e, 0x42F3, uint_(8));
+        el(e, 0x4282, str("matroska")); el(e, 0x4287, uint_(4)); el(e, 0x4285, uint_(2));
+        el(o, 0x1A45DFA3, e);
+        id(o, 0x18538067); unknownSize(o);                                       // Segment
+        el(info, 0x2AD7B1, uint_(1000000)); el(info, 0x4D80, str("VibeServer")); el(info, 0x5741, str("VibeServer"));
+        el(o, 0x1549A966, info);
+        el(aud, 0xB5, dbl(double(rate_))); el(aud, 0x9F, uint_(uint64_t(channels > 0 ? channels : 2)));
+        el(trk, 0xD7, uint_(1)); el(trk, 0x73C5, uint_(1)); el(trk, 0x83, uint_(2)); el(trk, 0x86, str("A_AAC"));
+        el(trk, 0x63A2, asc); el(trk, 0xE1, aud);
+        el(tracks, 0xAE, trk);
+        el(o, 0x1654AE6B, tracks);
+        return o;
+    }
+    /** The next block opens a new Cluster — for a reader that has just started (a restarted FFmpeg child). */
+    void newCluster() { clusterMs_ = -1; }
+    /** One access unit as a SimpleBlock (a new Cluster every ~30 s, inside the 16-bit relative timecode). */
+    std::vector<uint8_t> block(const uint8_t* au, size_t n) {
+        std::vector<uint8_t> o;
+        const int64_t ms = int64_t(samples_ * 1000 / uint64_t(rate_));
+        if (clusterMs_ < 0 || ms - clusterMs_ > 30000) {
+            clusterMs_ = ms;
+            id(o, 0x1F43B675); unknownSize(o);                                   // Cluster
+            el(o, 0xE7, uint_(uint64_t(ms)));
+        }
+        std::vector<uint8_t> b;
+        const int16_t rel = int16_t(ms - clusterMs_);
+        b.push_back(0x81); b.push_back(uint8_t(uint16_t(rel) >> 8)); b.push_back(uint8_t(rel & 0xFF)); b.push_back(0x80);
+        b.insert(b.end(), au, au + n);
+        el(o, 0xA3, b);
+        samples_ += uint64_t(frameLen_);
+        return o;
+    }
+private:
+    static void id(std::vector<uint8_t>& o, uint32_t v) {
+        if (v > 0xFFFFFF) o.push_back(uint8_t(v >> 24));
+        if (v > 0xFFFF) o.push_back(uint8_t(v >> 16));
+        if (v > 0xFF) o.push_back(uint8_t(v >> 8));
+        o.push_back(uint8_t(v));
+    }
+    static void size(std::vector<uint8_t>& o, uint64_t n) {     // EBML variable-length size, shortest form
+        int len = 1; while (len < 8 && n >= (uint64_t(1) << (7 * len)) - 1) ++len;
+        for (int i = len - 1; i >= 0; --i) {
+            uint8_t byte = uint8_t(n >> (8 * i));
+            if (i == len - 1) byte |= uint8_t(0x80 >> (len - 1));
+            o.push_back(byte);
+        }
+    }
+    static void unknownSize(std::vector<uint8_t>& o) { o.push_back(0x01); for (int i = 0; i < 7; ++i) o.push_back(0xFF); }
+    static void el(std::vector<uint8_t>& o, uint32_t i, const std::vector<uint8_t>& body) {
+        id(o, i); size(o, body.size()); o.insert(o.end(), body.begin(), body.end());
+    }
+    static std::vector<uint8_t> uint_(uint64_t v) {
+        std::vector<uint8_t> b; do { b.insert(b.begin(), uint8_t(v & 0xFF)); v >>= 8; } while (v); return b;
+    }
+    static std::vector<uint8_t> str(const char* s) { return std::vector<uint8_t>(s, s + std::strlen(s)); }
+    static std::vector<uint8_t> dbl(double d) {
+        uint64_t u; std::memcpy(&u, &d, 8); std::vector<uint8_t> b(8);
+        for (int i = 0; i < 8; ++i) b[size_t(i)] = uint8_t(u >> (56 - 8 * i));
+        return b;
+    }
+    int rate_ = 48000, frameLen_ = 1024; uint64_t samples_ = 0; int64_t clusterMs_ = -1;
+};
 
 // ── The audio super frame → access units ────────────────────────────────────────────────────────────────────────────
 

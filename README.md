@@ -274,6 +274,8 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | **Opus** — Xiph.Org Foundation | BSD-3-Clause | The streaming codec: VibeServer encodes, the app, watch and web client decode |
 | **ncurses** — Thomas E. Dickey & the Free Software Foundation | X11 (MIT-style) | VibeServer on Linux: the settings wizard, linked into the binary |
 | **[opus-decoder / wasm-audio-decoders](https://github.com/eshaz/wasm-audio-decoders)** — Ethan Halsall | MIT | libopus in WebAssembly — how VibeServer's web client decodes Opus on a plain `http://` LAN address |
+| **FAAD2** — Nero AG, M. Bakker & contributors | GPL-2.0-or-later | DRM's AAC on every VibeServer build that has it, and DAB+ (the Linux default); never in the iPhone/iPad app |
+| **FFmpeg** — the FFmpeg developers | LGPL-2.1-or-later | Bundled in the Linux VibeServer packages (a minimal 8.1 build, `/usr/lib/vibeserver/ffmpeg`) for xHE-AAC and as the optional DAB+ decoder; source and build script published beside the packages ([docs/v12/BUNDLED-FFMPEG.md](docs/v12/BUNDLED-FFMPEG.md)) |
 | **cloudflared** — Cloudflare | Apache-2.0 | The tunnel that lets a VibeServer be reached without port forwarding |
 | **MapLibre GL JS** — MapLibre contributors | BSD-3-Clause | The GPU map engine (app, web client, directory) |
 | **PMTiles** — Protomaps | BSD-3-Clause | The single-file map format the maps are served from |
@@ -283,9 +285,11 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | **Expo, React Native, Hermes, Skia, Reanimated, Gesture Handler, WebView, OkHttp, AndroidX Media3, Fresco** | various (MIT / Apache-2.0) | App framework and native stack |
 
 DAB MP2 audio, the DAB Reed-Solomon and Viterbi decoders, the WebSocket server, the mDNS
-responder and all of VibeDSP are our own code. DAB+ (HE-AAC) audio is decoded by the host's own
-decoder — Android's MediaCodec, Apple's AudioToolbox, or an installed ffmpeg — never by a codec
-we ship.
+responder and all of VibeDSP are our own code. DAB+ and DRM audio is decoded on the server, never in
+the app you listen with: on a Linux VibeServer by FAAD2 built in (GPL-2.0-or-later; the DAB+ default)
+and the package's own copy of FFmpeg (LGPL-2.1-or-later) for xHE-AAC; on a Mac by Apple's AudioToolbox
+or an installed ffmpeg; on Android by MediaCodec, with FAAD2 for DRM's own AAC. The iPhone and iPad
+app carries none of these decoders.
 
 ### Data
 
@@ -319,8 +323,9 @@ that, WebSDR support will not be added.
 
 **How does DAB+ work without a licensed codec?** VibeServer runs its own DAB receiver, written from
 the ETSI standards: the OFDM front end, the error correction and the MP2 audio of plain DAB are our
-own code. DAB+ audio is HE-AAC, and that part is decoded by the decoder the host already has,
-Android's MediaCodec, Apple's AudioToolbox or an installed ffmpeg, never by a codec we ship.
+own code. DAB+ audio is HE-AAC, and that part is decoded on the server: by FAAD2 (free software,
+built into the Linux packages), or by the decoder the host already has — Android's MediaCodec, Apple's
+AudioToolbox or an installed ffmpeg. The app you listen with only plays the result.
 Receivers that can do it carry the DAB+ mark in the directory.
 
 **Why no DRM, HD Radio or DMR?** Patents, not difficulty. HD Radio is Xperi's; DRM needs xHE-AAC

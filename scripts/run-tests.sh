@@ -21,10 +21,10 @@ KISS="$VDSP/third_party/kissfft"
 DIGIMODES="$(ls android/app/src/main/cpp/decoders/digimodes/*.cpp 2>/dev/null | tr '\n' ' ')"
 # ★ V12 DRM: FAAD2's DRM build, where this machine has one (a release's deps prefix via VIBE_DEPS, else an installed copy) —
 #   without it test-drm-faad reports NOT RUN rather than passing.
-FAAD_FLAGS=""
+FAAD_FLAGS=""; FAAD_LIB=""   # ★ the library goes AFTER the source (deps_for) — a static libfaad_drm.a before it links nothing on Linux
 for d in "${VIBE_DEPS:-/nonexistent}" /opt/homebrew/opt/faad2 /usr/local /usr; do
   if [ -f "$d/include/neaacdec.h" ] && ls "$d"/lib/libfaad_drm.* >/dev/null 2>&1; then
-    FAAD_FLAGS="-DVIBE_HAVE_FAAD2 -I $d/include -L $d/lib -lfaad_drm -Wl,-rpath,$d/lib"; break
+    FAAD_FLAGS="-DVIBE_HAVE_FAAD2 -I $d/include -L $d/lib -Wl,-rpath,$d/lib"; FAAD_LIB="-lfaad_drm"; break
   fi
 done
 # ★ V12 DAB+: FAAD2's PLAIN build, prefixed (libfaad_dab.a from build-deps) — from a release's deps prefix or the Mac's;
@@ -302,7 +302,8 @@ deps_for() {
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
     test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
-    test-drm|test-drm-faad|test-drm-signal) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
+    test-drm|test-drm-signal) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
+    test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB" ;;   # ★ pffft + kiss from cobjs_for
     test-dab-faad|test-dab-faad-queue) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
     test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
@@ -344,6 +345,9 @@ for t in "$SRC"/test-*.cpp; do
   #   here rather than renaming it keeps it discoverable beside its siblings.
   #     test-radio-api — links vibeserver_core; built by `cmake --build … --target test-radio-api`.
   #     test-icom-source — links vibe_icom (libusb, ALSA/CoreAudio, the source's threads); ctest `icom-source`.
+  # ★ VIBE_TESTS="test-a test-b": only those C++ suites, and stop after them (the Linux build container runs the DAB/DRM
+  #   ones this way — it has no node for the page checks below).
+  if [ -n "${VIBE_TESTS:-}" ]; then case " $VIBE_TESTS " in *" $name "*) ;; *) continue ;; esac; fi
   case "$name" in
     test-radio-api|test-icom-source) printf '\n\033[1m── %s ──\033[0m\n   \033[2mskipped — a CMake target (needs the whole core); build it with cmake\033[0m\n' "$name"; continue ;;
   esac
@@ -360,6 +364,10 @@ for t in "$SRC"/test-*.cpp; do
   "$OUT/$name"; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 done
+if [ -n "${VIBE_TESTS:-}" ]; then
+  printf '\n\033[1m%d suite(s) passed, %d failed, %d did not build, %d not run\033[0m\n' "$pass" "$fail" "$broke" "$notrun"
+  [ "$fail" -eq 0 ] && [ "$broke" -eq 0 ]; exit
+fi
 
 # ★ The setup page is a C++ raw string, so no compiler ever looks at its JavaScript. A syntax
 #   error there ships silently and the page simply does nothing — the worst failure this tree has,

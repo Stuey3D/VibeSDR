@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 400 && d.inFlightFrames(); ++i) std::this_thread::sleep_for(milliseconds(5));
         const size_t f1 = col.frames();
         check(f1 > 0 && p.interleaved.empty(), "FAAD2's audio came through the sink, not the call");
-        vibedab::dabAacChoice().store(0);
+        vibedab::dabAacChoice().store(2);   // ★ 2 = FFmpeg (0 is the server's default — FAAD2 on Linux since 2026-10-29)
         check(d.switchPending(), "switching to FFmpeg is pending");
         d.reset();
         check(!d.async() && !d.switchPending(), "FFmpeg now: decodes in the call");

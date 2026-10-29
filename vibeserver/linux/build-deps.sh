@@ -10,8 +10,8 @@
 # — the same layout vibeserver/mac/build-deps.sh produces, so CMake treats the two prefixes alike.
 #
 # ★★★ WHY (Stuart, 2026-10-18): the package must need NOTHING from the system for SDR support or
-#     libraries — only glibc, FFmpeg (Recommends, DAB+) and the SDRplay API (closed, dlopen'd, the
-#     owner installs it). Linux used to link Debian's libusb, libopus, libhackrf, ncurses and the
+#     libraries — only glibc and the SDRplay API (closed, dlopen'd, the owner installs it; FFmpeg is BUNDLED
+#     from V12 by sdr-kit/build-ffmpeg-linux.sh, no longer a Recommends). Linux used to link Debian's libusb, libopus, libhackrf, ncurses and the
 #     C++ runtime, and dpkg-shlibdeps copied the BUILD image's versions into Depends — so the one
 #     package refused Ubuntu 22.04 over a libhackrf0 (>= 2022.09.1) whose every call we use is
 #     years older. A radio driver should arrive on OUR release cycle, not a distribution's.

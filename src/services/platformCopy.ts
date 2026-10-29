@@ -20,7 +20,8 @@ export const IOS_REWRITES: ReadonlyArray<readonly [string, string]> = [
   ['the Pi, Linux, the Mac, Android and Lite', 'the Pi, Linux and the Mac'],
   [' Built in, with a small patch to open the radio from an Android USB handle, so it works the moment it is plugged in with nothing to install.', ' Built in.'],
   ['Built from source for Android, VibeServer Lite and the Mac; Cloudflare’s own release on Linux.', 'Built from source for the Mac; Cloudflare’s own release on Linux.'],
-  ['the HOST already has — Android’s, Apple’s, or an ffmpeg the owner installed —', 'the HOST already has — Apple’s, or an ffmpeg the owner installed —'],
+  ['; on an Android phone, the phone’s decoder, with FAAD2 for DRM’s own AAC.', '.'],
+  [' (Linux, the Mac and the Android app’s on-device server)', ' (Linux and the Mac)'],
   // V4: on an iPhone the radio is a networked rtl_tcp server, never a USB dongle in the phone.
   ['Local SDR hardware \u2014 VibeSDR now runs a radio on-device. Plug an RTL-SDR into an Android phone over USB (\u201cLocal Hardware\u201d), or connect to a networked rtl_tcp server from either platform, and the app',
    'rtl_tcp \u2014 connect to a networked rtl_tcp server and the app'],

@@ -50,6 +50,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "vibe_ffmpeg_path.h"   // ★ which ffmpeg: the package's own on Linux (V12), shared with DRM
 #endif
 
 namespace vibedab {
@@ -63,15 +64,33 @@ struct AacPcm {
     int channels = 0;
 };
 
-/** ★★ WHICH DAB+ DECODER — the owner's choice (setup page, config dabFaad2), read when a service's decoder starts and
- *  watched while it runs, so a change applies within a super frame without restarting anything. 0 = the platform's
- *  (FFmpeg; AudioToolbox on a Mac without it), 1 = FAAD2 in process. VIBE_DAB_AAC=faad2|ffmpeg overrides it (tests).
- *  ★ FFmpeg stays the default until Stuart has listened to both (docs/v12/DRM-AUDIO-ROUTES.md, "DAB+"). */
+/** ★★ WHICH DAB+ DECODER — the owner's choice (setup page, config dabAacDecoder), read when a service's decoder starts and
+ *  watched while it runs, so a change applies within a super frame without restarting anything. 0 = this server's
+ *  DEFAULT (dabFaad2Default() below), 1 = FAAD2 in process, 2 = the platform's (FFmpeg; AudioToolbox on a Mac without
+ *  it). VIBE_DAB_AAC=faad2|ffmpeg overrides it (tests).
+ *  ★★★ THE DEFAULT IS FAAD2 ON LINUX (Stuart, 2026-10-29: "use FAAD2 for DRM and DAB+ by default and FFmpeg where
+ *      needed") — exact pitch, about half the processor time of the FFmpeg child on a Pi 2, concealment on a weak signal.
+ *      FFmpeg (bundled in the package since V12, /usr/lib/vibeserver/ffmpeg) is the owner's alternative. The Mac keeps
+ *      the platform's decoder as its default (unchanged); Android never reaches this (AMediaCodec, above). */
 inline std::atomic<int>& dabAacChoice() { static std::atomic<int> v{0}; return v; }
 inline int dabAacEnvChoice() {
     static const int v = [] { const char* e = std::getenv("VIBE_DAB_AAC"); if (!e) return -1;
                               if (!std::strcmp(e, "faad2")) return 1; if (!std::strcmp(e, "ffmpeg")) return 0; return -1; }();
     return v;
+}
+inline constexpr bool dabFaad2Default() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    return true;
+#else
+    return false;
+#endif
+}
+/** The choice in force, resolved: true = FAAD2. (The test override first, then the owner's choice, then the default.) */
+inline bool dabWantFaad2() {
+    const int e = dabAacEnvChoice();
+    if (e >= 0) return e == 1;
+    const int c = dabAacChoice().load(std::memory_order_relaxed);
+    return c == 1 || (c == 0 && dabFaad2Default());
 }
 /** Is FAAD2's DAB+ build in this binary? (The setup page offers the choice only where it is AND FFmpeg is.) */
 /** Is the PLATFORM decoder a working FFmpeg? (POSIX servers; false on Android and where it is missing.) Defined below. */
@@ -564,18 +583,10 @@ public:
     int channels() const { return pid_ > 0 ? 2 : 0; }
 
 private:
-    /** ★★★ THE BINARY IS FOUND BY PATH, NOT BY $PATH. A macOS app launched from the Finder has
-     *  /usr/bin:/bin:/usr/sbin:/sbin and nothing else — Homebrew's /opt/homebrew/bin (Apple
-     *  silicon) and /usr/local/bin (Intel) are not on it, so `execlp("ffmpeg")` would report "no
-     *  ffmpeg" on a Mac that has it. The known homes first, then whatever $PATH offers. */
-    static const char* ffmpegPath() {
-        static const std::string path = [] {
-            for (const char* c : { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg" })
-                if (::access(c, X_OK) == 0) return std::string(c);
-            return std::string("ffmpeg");
-        }();
-        return path.c_str();
-    }
+    /** ★★★ THE BINARY IS FOUND BY PATH, NOT BY $PATH — vibe_ffmpeg_path.h: on Linux the package's own
+     *  (/usr/lib/vibeserver/ffmpeg) first, a system one only if that is missing; on a Mac Homebrew's known homes
+     *  (a Finder-launched app has no Homebrew on $PATH). The same answer DRM gets. */
+    static const char* ffmpegPath() { return vibe::ffmpegPath(); }
     static bool probe() {
         /* ★ `ffmpeg -decoders` and look for the aac line — the same check by hand as
          *  `ffmpeg -decoders | grep ' aac '`, which is how the Pi was confirmed: "A....D aac". */
@@ -595,10 +606,17 @@ private:
          *  was perfect — hours to place, and one apt line to fix. */
         if (!found)
             std::fprintf(stderr,
+#if defined(__linux__)
+                "[DAB] no usable ffmpeg found (%s) — the package's own copy, /usr/lib/vibeserver/ffmpeg, is "
+                "missing: reinstalling vibeserver restores it. DAB+ still plays through FAAD2 (the default); only "
+                "the FFmpeg choice is unavailable.\n", ffmpegPath());
+#else
                 "[DAB] no usable ffmpeg found (looked in /opt/homebrew/bin, /usr/local/bin, "
-                "/usr/bin and $PATH) — DAB+ CANNOT BE DECODED ON THIS SERVER. Install it with "
-                "`sudo apt install ffmpeg`. Everything else (the ensemble, MP2 services, the "
-                "signal figures) is unaffected.\n");
+                "/usr/bin and $PATH) — DAB+ goes through the operating system's decoder instead. Everything else "
+                "(the ensemble, MP2 services, the signal figures) is unaffected.\n");
+#endif
+        else
+            std::fprintf(stderr, "[DAB] ffmpeg: %s%s\n", ffmpegPath(), vibe::ffmpegIsBundled() ? " (bundled)" : "");
         std::fflush(stderr);
         return found;
     }
@@ -751,7 +769,7 @@ public:
     int channels() const { return !useFaad_ ? plat_.channels() : inlineFaad() ? sync_.channels() : faad_.channels(); }
     int64_t concealed() const { return inlineFaad() ? sync_.concealed() : faad_.concealed(); }
 private:
-    static bool want() { const int e = dabAacEnvChoice(); return (e >= 0 ? e : dabAacChoice().load(std::memory_order_relaxed)) == 1; }
+    static bool want() { return dabWantFaad2(); }
     AacDecoderPlatform plat_;
     AacDecoderFaadAsync faad_;
     AacDecoderFaad sync_;      ///< only with VIBE_DAB_FAAD_INLINE=1
