@@ -102,7 +102,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // ★ RC4 (530) is above every com.vibesdr.app APK ever released on GitHub (the last was RC3, 529), so the
         //   legacy build installs over a sideload; net.vibesdr.app starts its own sequence at the same number.
-        versionCode 573
+        // ★ V12's first Android beta (2026-10-29): 596 = the next code after V11 11.0.16 (595), so a Play test track
+        //   can offer it over production. V11 and V12 share ONE sequence on Play — the next of either takes 597.
+        versionCode 596
         versionName "12.0.0"
 
         // ★ The memory diagnostics build (VibeDiag.kt): `./gradlew -PvibeDiag=true :app:assembleCurrentRelease`.
