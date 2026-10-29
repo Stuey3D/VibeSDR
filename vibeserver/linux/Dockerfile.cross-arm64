@@ -20,7 +20,7 @@ RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-i
 #     byte for byte (SHA-256 checked against openrsp_3.15.2-20_arm64.deb).
 # ★★ The SDRplay headers are NO LONGER STAGED here: the API headers are OpenRSP's, in vendor/openrsp/include.
 COPY arm64-toolchain.cmake /opt/arm64-toolchain.cmake
-COPY build-deps.sh librtlsdr-cancel-wait.patch /opt/
+COPY build-deps.sh build-libxaac.sh librtlsdr-cancel-wait.patch /opt/
 COPY faad2-patches /opt/faad2-patches
 # ★ Two compile jobs, niced: the Lenovo is a live receiver (build-debs-remote.sh passes DEPS_NICE=19).
 ARG DEPS_JOBS=2
