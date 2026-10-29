@@ -277,7 +277,9 @@ fi
 XAAC_VER=0.1.14
 XAAC_SHA=f467a6e5bcf3941ce5d1a4d811442835fba7eb3744ae986f3ea37e110584b611  # GitHub tag tarball = linux/build-deps.sh
 XAAC_SCRIPT="$MAC/../linux/build-libxaac.sh"
-XAAC_STAMP="libxaac $XAAC_VER $XAAC_SHA min=$MIN arch=$ARCH $CCVER script=$(shasum -a 256 "$XAAC_SCRIPT" | cut -c1-12)"
+XAAC_PATCHES="$MAC/../linux/xaac-patches"   # ★ VibeSDR's libxaac patch series, applied by build-libxaac.sh (the stamp covers it)
+XAAC_SERIES_SUM="$( { [ -f "$XAAC_PATCHES/series" ] && cat "$XAAC_PATCHES/series" && grep -v '^#' "$XAAC_PATCHES/series" | while IFS= read -r p; do [ -n "$p" ] && cat "$XAAC_PATCHES/$p"; done; } 2>/dev/null | shasum -a 256 | cut -c1-16)"
+XAAC_STAMP="libxaac $XAAC_VER $XAAC_SHA min=$MIN arch=$ARCH $CCVER script=$(shasum -a 256 "$XAAC_SCRIPT" | cut -c1-12) patches=$XAAC_SERIES_SUM"
 if stamp_ok libxaac "$XAAC_STAMP" "$PREFIX/lib/libxaacdec.a"; then echo "==> libxaac $XAAC_VER: up to date"; else
   echo "==> libxaac $XAAC_VER: building for macOS $MIN"
   fetch "https://github.com/ittiam-systems/libxaac/archive/refs/tags/v$XAAC_VER.tar.gz" "libxaac-$XAAC_VER.tar.gz" "$XAAC_SHA"

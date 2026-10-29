@@ -261,9 +261,11 @@ unpref="$("$NM" -g --defined-only "$PREFIX/lib/libfaad_dab.a" 2>/dev/null | awk 
 
 # ── libxaac 0.1.14 (decoder only), static — V12 xHE-AAC, decoded in process (docs/v12/LIBXAAC.md) ─────────────────
 # ★★ Apache-2.0 (compatible with VibeServer's GPL-3.0); LICENSE + NOTICE travel with the package as LICENSE.libxaac and
-#    NOTICE.libxaac (CMakeLists.txt installs them). Unmodified. Built by build-libxaac.sh, shared with the Mac.
+#    NOTICE.libxaac (CMakeLists.txt installs them). Built by build-libxaac.sh, shared with the Mac, which applies VibeSDR's
+#    patch series (xaac-patches/series: speed, plus two defect fixes) — every patched file says so (Apache-2.0 §4(b)).
 # ★ Which of libxaac's code paths: armhf its ARMv7 NEON assembly (through clang's assembler — see build-libxaac.sh),
 #   arm64 its AArch64 NEON assembly, amd64 / i386 / ARMv6 its C (it has no x86 SIMD; ARMv6 has no NEON).
+XAAC_PATCH_LIST="$(grep -v '^#' "$(cd "$(dirname "$0")" && pwd)/xaac-patches/series" 2>/dev/null | tr '\n' ' ')"
 fetch "https://github.com/ittiam-systems/libxaac/archive/refs/tags/v$XAAC_VER.tar.gz" "libxaac.tar.gz" "$XAAC_SHA"
 mkdir -p "$WORK/xaac" && tar -xzf "$WORK/libxaac.tar.gz" -C "$WORK/xaac" --strip-components 1
 case "$PROFILE" in
@@ -296,7 +298,7 @@ done
   echo "librtlsdr osmocom/rtl-sdr $RTL_SHA (DETACH_KERNEL_DRIVER)"
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_drm, float, GPL-2.0-or-later; VibeSDR patches:${FAAD_SERIES:- none})"
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_dab: the plain build, globals prefixed vibedab_, float, GPL-2.0-or-later; $FAAD_DAB_OPT; VibeSDR patches:${FAAD_SERIES:- none})"
-  echo "libxaac $XAAC_VER sha256 $XAAC_SHA (decoder only, $XAAC_VARIANT code path, Apache-2.0)"
+  echo "libxaac $XAAC_VER sha256 $XAAC_SHA (decoder only, $XAAC_VARIANT code path, Apache-2.0; VibeSDR patches: $XAAC_PATCH_LIST)"
   echo "profile $PROFILE, CFLAGS '$CFLAGS', $CCVER"; } > "$PREFIX/BUILT-FROM"
 ls -l "$PREFIX/lib"
 echo "==> deps ($PROFILE): done"

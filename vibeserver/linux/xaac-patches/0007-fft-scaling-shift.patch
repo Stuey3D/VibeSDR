@@ -1,0 +1,76 @@
+Subject: [PATCH 7/8] fft: input scaling by shift, not division
+
+VibeSDR patch for libxaac v0.1.14 (commit 2fbadd57; the decoder VibeServer links for xHE-AAC). Apache-2.0, as libxaac.
+Written for VibeSDR, 2026-10-29; applied in the order of xaac-patches/series by vibeserver/linux/build-libxaac.sh (Linux
+and Mac). Every file it changes carries a "Modified by VibeSDR" notice (Apache-2.0 section 4(b)). Measured with
+xaacbench on the 7 ISO conformance streams, 12 xHE test streams (usac/xhe) and 4 off-air DAB+ unit logs, at PCM16 as
+the server decodes, on arm64, armhf, ARMv6, i386 and amd64 (qemu) and the Mac. Instruction counts: qemu, guest
+instructions per second of audio.
+
+ixheaacd_complex_fft_p2_dec (and the armv7 C copy) scaled the input by xr[i] / (1 << shift) with a run-time shift: a
+real division per sample. Replaced by the exact round-toward-zero shift. Bit-identical.
+
+diff --git a/decoder/armv7/ixheaacd_fft_armv7.c b/decoder/armv7/ixheaacd_fft_armv7.c
+index 37ea498..979925f 100644
+--- a/decoder/armv7/ixheaacd_fft_armv7.c
++++ b/decoder/armv7/ixheaacd_fft_armv7.c
+@@ -1,3 +1,9 @@
++/* Modified by VibeSDR, 2026-10-29: the input scaling of
++ * ixheaacd_complex_fft_p2_armv7() divides by a power of two with a shift
++ * (rounding toward zero, as the division does) instead of a division per
++ * sample, a library call on 32-bit ARM. Identical results.
++ * Original: Copyright (C) 2018 The Android Open Source Project, Apache-2.0
++ * (see LICENSE and NOTICE). */
+ #include <stdlib.h>
+ #include <stdio.h>
+ 
+@@ -38,9 +44,13 @@ VOID ixheaacd_complex_fft_p2_armv7(WORD32 *xr, WORD32 *xi, WORD32 nlength,
+   else
+     shift = ((n + 3) / 2);
+ 
+-  for (i = 0; i < nlength; i++) {
+-    ptr_x[2 * i] = (xr[i] / (1 << (shift)));
+-    ptr_x[2 * i + 1] = (xi[i] / (1 << (shift)));
++  {
++    /* VibeSDR: x / 2^shift, rounding toward zero, without dividing */
++    const WORD32 vibe_bias = (WORD32)((1u << shift) - 1u);
++    for (i = 0; i < nlength; i++) {
++      ptr_x[2 * i] = (xr[i] + ((xr[i] >> 31) & vibe_bias)) >> shift;
++      ptr_x[2 * i + 1] = (xi[i] + ((xi[i] >> 31) & vibe_bias)) >> shift;
++    }
+   }
+ 
+   if (fft_mode == -1) {
+diff --git a/decoder/ixheaacd_fft.c b/decoder/ixheaacd_fft.c
+index 8827001..a18bd10 100644
+--- a/decoder/ixheaacd_fft.c
++++ b/decoder/ixheaacd_fft.c
+@@ -16,6 +16,11 @@
+  *
+  *****************************************************************************
+  * Originally developed and contributed by Ittiam Systems Pvt. Ltd, Bangalore
++ *
++ * Modified by VibeSDR, 2026-10-29: the input scaling of ixheaacd_complex_fft_p2*()
++ * divides by a power of two with a shift (rounding toward zero, as the division
++ * does) instead of a division per sample, a library call on 32-bit ARM.
++ * Identical results.
+ */
+ #include <stdlib.h>
+ #include <stdio.h>
+@@ -1440,9 +1445,13 @@ VOID ixheaacd_complex_fft_p2_dec(WORD32 *xr, WORD32 *xi, WORD32 nlength,
+   else
+     shift = ((n + 3) / 2);
+ 
+-  for (i = 0; i < nlength; i++) {
+-    ptr_x[2 * i] = (xr[i] / (1 << (shift)));
+-    ptr_x[2 * i + 1] = (xi[i] / (1 << (shift)));
++  {
++    /* VibeSDR: x / 2^shift, rounding toward zero, without dividing */
++    const WORD32 vibe_bias = (WORD32)((1u << shift) - 1u);
++    for (i = 0; i < nlength; i++) {
++      ptr_x[2 * i] = (xr[i] + ((xr[i] >> 31) & vibe_bias)) >> shift;
++      ptr_x[2 * i + 1] = (xi[i] + ((xi[i] >> 31) & vibe_bias)) >> shift;
++    }
+   }
+ 
+   if (fft_mode == -1) {

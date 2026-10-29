@@ -1,0 +1,83 @@
+Subject: [PATCH 2/8] sbr_dec: run the harmonic transposer only once the stream uses it
+
+VibeSDR patch for libxaac v0.1.14 (commit 2fbadd57; the decoder VibeServer links for xHE-AAC). Apache-2.0, as libxaac.
+Written for VibeSDR, 2026-10-29; applied in the order of xaac-patches/series by vibeserver/linux/build-libxaac.sh (Linux
+and Mac). Every file it changes carries a "Modified by VibeSDR" notice (Apache-2.0 section 4(b)). Measured with
+xaacbench on the 7 ISO conformance streams, 12 xHE test streams (usac/xhe) and 4 off-air DAB+ unit logs, at PCM16 as
+the server decodes, on arm64, armhf, ARMv6, i386 and amd64 (qemu) and the Mac. Instruction counts: qemu, guest
+instructions per second of audio.
+
+For AAC with eSBR (and USAC with harmonicSBR) the QMF / DFT transposer ran on every frame, though its output is read
+only when the frame's sbrPatchingMode is 0. On plain HE-AAC (DAB+) it never is, and the transposer (with its cbrt()
+per QMF sample, its own analysis/synthesis filterbanks) was ~30 % of the eSBR path. It now starts on the channel's
+first frame with sbrPatchingMode 0 and runs on every frame after that. Output bit-identical on every test stream
+(including the harmonic one). armhf DAB+ eSBR path 49.1 -> 34.4 M instr/s.
+(The earlier profile's "libm pow" was this cbrt: glibc's cbrt calls frexp/ldexp, which the symbol map showed as
+cbrtl/scalbnl/frexpl. SBR envelope pow() is 0.2 %, so it was left alone.)
+
+diff --git a/decoder/ixheaacd_sbr_dec.c b/decoder/ixheaacd_sbr_dec.c
+index bccc772..ab69a5d 100644
+--- a/decoder/ixheaacd_sbr_dec.c
++++ b/decoder/ixheaacd_sbr_dec.c
+@@ -16,6 +16,12 @@
+  *
+  *****************************************************************************
+  * Originally developed and contributed by Ittiam Systems Pvt. Ltd, Bangalore
++ *
++ * Modified by VibeSDR, 2026-10-29: the harmonic transposer (QMF and DFT based)
++ * runs only once the stream has signalled harmonic patching (sbrPatchingMode 0)
++ * on that channel; until then its output is never read. Same output for every
++ * stream that never uses it (plain HE-AAC, DAB+), and from the first harmonic
++ * frame on it runs as before.
+ */
+ #include <string.h>
+ #include "ixheaacd_sbr_common.h"
+@@ -878,7 +884,10 @@ WORD32 ixheaacd_sbr_dec(
+         ptr_sbr_dec, sbr_tables_ptr,
+         op_delay + codec_x_delay + SBR_HF_ADJ_OFFSET);
+ 
+-    if (hbe_flag && apply_processing) {
++    /* VibeSDR: the transposer only from the first frame that uses harmonic patching */
++    if (hbe_flag && apply_processing && !ptr_frame_data->sbr_patching_mode)
++      ptr_sbr_dec->p_hbe_txposer->vibe_hbe_used = 1;
++    if (hbe_flag && apply_processing && ptr_sbr_dec->p_hbe_txposer->vibe_hbe_used) {
+       if (dft_hbe_flag == 1) {
+         WORD32 err_code = 0;
+         ptr_sbr_dec->p_hbe_txposer->oversampling_flag =
+@@ -1379,7 +1388,9 @@ WORD32 ixheaacd_esbr_dec(ia_sbr_dec_struct *ptr_sbr_dec,
+       ptr_sbr_dec, ptr_sbr_tables,
+       op_delay + codec_x_delay + SBR_HF_ADJ_OFFSET);
+ 
+-  if (hbe_flag) {
++  /* VibeSDR: the transposer only from the first frame that uses harmonic patching */
++  if (hbe_flag && !ptr_frame_data->sbr_patching_mode) ptr_sbr_dec->p_hbe_txposer->vibe_hbe_used = 1;
++  if (hbe_flag && ptr_sbr_dec->p_hbe_txposer->vibe_hbe_used) {
+     WORD32 err = ixheaacd_qmf_hbe_apply(
+         ptr_sbr_dec->p_hbe_txposer,
+         ptr_sbr_dec->qmf_buf_real + (op_delay + SBR_HF_ADJ_OFFSET) +
+diff --git a/decoder/ixheaacd_sbr_dec.h b/decoder/ixheaacd_sbr_dec.h
+index 86963a7..7ca5499 100644
+--- a/decoder/ixheaacd_sbr_dec.h
++++ b/decoder/ixheaacd_sbr_dec.h
+@@ -16,6 +16,12 @@
+  *
+  *****************************************************************************
+  * Originally developed and contributed by Ittiam Systems Pvt. Ltd, Bangalore
++ *
++ * Modified by VibeSDR, 2026-10-29: the harmonic transposer (QMF and DFT based)
++ * runs only once the stream has signalled harmonic patching (sbrPatchingMode 0)
++ * on that channel; until then its output is never read. Same output for every
++ * stream that never uses it (plain HE-AAC, DAB+), and from the first harmonic
++ * frame on it runs as before.
+ */
+ #ifndef IXHEAACD_SBR_DEC_H
+ #define IXHEAACD_SBR_DEC_H
+@@ -95,6 +101,8 @@ typedef struct {
+   FLOAT32 *syn_cos_sin_tab;
+   FLOAT32 *ana_cos_sin_tab;
+ 
++  /* VibeSDR: set (and kept) from the first frame that uses harmonic patching */
++  WORD32 vibe_hbe_used;
+ } ia_esbr_hbe_txposer_struct;
+ 
+ typedef struct {

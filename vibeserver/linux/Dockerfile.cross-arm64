@@ -22,6 +22,7 @@ RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-i
 COPY arm64-toolchain.cmake /opt/arm64-toolchain.cmake
 COPY build-deps.sh build-libxaac.sh librtlsdr-cancel-wait.patch /opt/
 COPY faad2-patches /opt/faad2-patches
+COPY xaac-patches /opt/xaac-patches
 # ★ Two compile jobs, niced: the Lenovo is a live receiver (build-debs-remote.sh passes DEPS_NICE=19).
 ARG DEPS_JOBS=2
 ARG DEPS_NICE=10
