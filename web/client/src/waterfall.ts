@@ -49,7 +49,7 @@ import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
 import { spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
 import { WIDE_TEX, wideExtent, wideRowInto, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
-import { placementMoved, canGlide, glideRowAt, newGlideScratch, zoomEaseMs, zoomEaseView, easedRowAt } from './wfGlide';
+import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type RowView } from './wfGlide';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -165,9 +165,16 @@ export class Waterfall {
   private prevRow: Uint8Array | null = null;   // last received row
   /** ★ The Hz extent each of prevRow/curRow was measured over (lo edge, span) — drawRow places the history by it. */
   private prevLo = 0; private prevSpan = 0; private curLo = 0; private curSpan = 0;
-  /** THE ZOOM EASE: the row last drawn and its view; the ease's start view, start time, duration and target span. */
+  /** The row last drawn and the view it was drawn at — the row below the next one (its join, its continued edges). */
   private outRow: Uint8Array | null = null; private outLo = 0; private outSpan = 0;
-  private eLo0 = 0; private eSpan0 = 0; private eT0 = 0; private eDur = 0; private eTgtSpan = 0;
+  /** ★★ THE EASE (wfGlide.ts rowView — the app's zoom/tune ease, in device rows): which view each new row is drawn at. */
+  private ease = newRowEase();
+  private rv: RowView = { lo: 0, span: 0, jumpHz: 0 };
+  /** Per ring row, the span (Hz) it was drawn at — a jump moves every row by the same Hz in ITS OWN scale. 0 = blank. */
+  private xfS = new Float64Array(0);
+  /** GPU path: per ring row, the full-capture layer's m (where the row's u = 0 sits in the capture, 0..1) — the shader
+   *  reads it from its own texture; kept here too so the coverage can be checked (scripts/test-web-waterfall-history.mjs). */
+  private xfM = new Float64Array(0);
   /** ★★ THE ZOOM FAN (wfZoomFan.ts): per ring row, the map from screen x to the row's own u (u = xfA·x + xfB). */
   private xfA = new Float64Array(0);
   private xfB = new Float64Array(0);
@@ -434,10 +441,10 @@ export class Waterfall {
                                               0, wfH * (firstRows / oh), w, wfH * (this.head / oh));
       // ★ The zoom fan's maps follow their rows into the unwrapped, re-heighted buffer (row j ← reading row j·oh/wfH).
       if (this.xfA.length === oh) {
-        const a = new Float64Array(wfH), b = new Float64Array(wfH), x = new Float64Array(wfH);
-        const hasX = this.xfX.length === oh;
-        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; x[j] = hasX ? this.xfX[r] : 0; }
-        this.xfA = a; this.xfB = b; this.xfX = x;
+        const a = new Float64Array(wfH), b = new Float64Array(wfH), x = new Float64Array(wfH), sp = new Float64Array(wfH);
+        const hasX = this.xfX.length === oh, hasS = this.xfS.length === oh;
+        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; x[j] = hasX ? this.xfX[r] : 0; sp[j] = hasS ? this.xfS[r] : 0; }
+        this.xfA = a; this.xfB = b; this.xfX = x; this.xfS = sp;
       }
       // ★ V12 and the full-capture layer's rows follow theirs, the same way (unwrapped, re-heighted).
       if (this.wfC && this.wfCCtx && this.wfC.height === oh) {
@@ -472,7 +479,8 @@ export class Waterfall {
     else { this.wfCtx.fillStyle = '#000'; this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height); }
     this.head = 0;      // an all-black ring has no meaningful head
     this.xfA.fill(1); this.xfB.fill(0);   // a blank ring has nothing to fan
-    this.xfX.fill(0);
+    this.xfX.fill(0); this.xfS.fill(0);
+    this.ease = newRowEase(); this.outRow = null;   // ★ the next row starts afresh: nothing below it to join to or ease from
     this.wide = null; this.wFloorP = null; this.wCellP = null;   // ★ a jump: the old full-capture row is another band
     if (this.wfCCtx && this.wfC) { this.wfCCtx.fillStyle = '#000'; this.wfCCtx.fillRect(0, 0, this.wfC.width, this.wfC.height); }
   }
@@ -810,42 +818,32 @@ export class Waterfall {
     //     power saving is still free visually) and every row on screen is a real measurement.
     //     ★ `prev` is kept: it is what a future in-shader interpolation would need, and the app's
     //     continuous mode is worth porting if a tune ever looks steppy.
-    // ★★ THE GLIDE (wfGlide.ts, Stuart 2026-10-28, "refer back to the video"): while the view MOVES between the two frames
-    //    (a tune or a zoom), the row is drawn against the view t of the way between them, both frames resampled there and
-    //    cross-faded — a curve on a tune, a fan on a zoom, the noise moving with the stations; the soft vertical blend in
-    //    the shader joins row to row. A STEADY pair (same placement) is the whole frame it always was — the "whole rows,
-    //    not blends" rule above stands for every row that is not moving. A jump is not interpolated (an honest gap).
-    let cLo: number, cSpan: number;
-    // ★★ THE ZOOM EASE (wfGlide.ts zoomEaseView): a new span starts (or retargets) the ease from where the last row was
-    //    DRAWN; while it runs, every row is the newest frame drawn at the eased view. A step mid-ease keeps at least the
-    //    time the ease had left — never a snap.
-    // ★ The start test compares the frame's span with the span the LAST ease aimed for (or, before any, the last row's)
-    //   and needs a real zoom (> 0.1 %): an ease ends a hair short of its target, and comparing with the drawn row
-    //   restarted it on every row at its own start — the view froze and a tune after a zoom drew as a jump.
-    const nowMs = performance.now();
-    const easing = nowMs < this.eT0 + this.eDur;
-    const tgt = this.eTgtSpan > 0 ? this.eTgtSpan : this.outSpan;
-    if (this.outSpan > 0 && this.curSpan > 0 && tgt > 0 && Math.abs(Math.log(this.curSpan / tgt)) > 1e-3) {
-      const left = easing ? this.eT0 + this.eDur - nowMs : 0;
-      this.eLo0 = this.outLo; this.eSpan0 = this.outSpan; this.eT0 = nowMs;
-      this.eDur = Math.max(zoomEaseMs(this.curSpan / this.outSpan), left);
-      this.eTgtSpan = this.curSpan;
-    }
-    if (nowMs < this.eT0 + this.eDur && this.eSpan0 > 0) {
-      [cLo, cSpan] = zoomEaseView(this.eLo0, this.eSpan0, this.curLo, this.curSpan, (nowMs - this.eT0) / this.eDur);
-      easedRowAt(cur, this.curLo, this.curSpan, cLo, cSpan, blend, this.outRow, this.glideScratch);
-    } else if (placementMoved(this.prevLo, this.prevSpan, this.curLo, this.curSpan, n)
-        && canGlide(this.prevLo, this.prevSpan, this.curLo, this.curSpan)) {
-      [cLo, cSpan] = glideRowAt(prev, this.prevLo, this.prevSpan, cur, this.curLo, this.curSpan, t, blend, this.glideScratch);
+    // ★★★ WHERE THIS ROW IS DRAWN — the app's rule (wfGlide.ts rowView; src/utils/wfRowPlace.ts fanNoteRow/fanAfterRow):
+    //     the row is the newest REAL frame the pacer presents (whole rows — Stuart's rule, never a blend of two frames),
+    //     drawn at its own placement — except just after a zoom step or a tune step, when it is drawn at an in-between
+    //     view on a short ease-out (the app's zoomEaseRows / tuneEaseRows screen rows; each device row its own step), so
+    //     a station's trail fans out on a zoom in, draws in on a zoom out and slides across on a tune, and the history
+    //     stays AS DRAWN above it. A move of a whole view or more is a JUMP: the history moves into place (below).
+    //     ✗ The cross-fade glide (two frames mixed by t, 0fa2c5d2f/d6b99aa1f) and the 400 ms time-based zoom ease
+    //       (f6139764b/7db21a2d5) are gone: the first blended rows; the second drew a fast fan as a dashed near-horizontal
+    //       line with no join — the hard break under a zoom out on Stuart's Pi 500 recording (2026-10-29).
+    const useCur = this.pacer.useCur;
+    const src = useCur ? cur : prev;
+    const sLo = useCur ? this.curLo : this.prevLo, sSpan = useCur ? this.curSpan : this.prevSpan;
+    const v = rowView(this.ease, sLo, sSpan, this.pacer.rowPx, this.rv);
+    const cLo = v.lo, cSpan = v.span;
+    if (v.jumpHz) this._jumpHistory(v.jumpHz, cSpan);
+    // ★★ THE JOIN (wfGlide.ts joinedRowAt — the app's shader motion taps): a row drawn somewhere other than the row below
+    //    is drawn across its footprint toward it, so the trail is ONE solid line through the ease, not dashes. A steady row
+    //    (the same view as the row below) is the frame exactly; a jump is not joined (the history moved instead).
+    const below = this.outRow && this.outRow.length === n ? this.outRow : null;
+    if (v.jumpHz || !below || !(this.outSpan > 0)) {
+      if (cLo === sLo && cSpan === sSpan) blend.set(src); else easedRowAt(src, sLo, sSpan, cLo, cSpan, blend, null, this.glideScratch);
+    } else if (cLo === this.outLo && cSpan === this.outSpan && cLo === sLo && cSpan === sSpan) {
+      blend.set(src);
     } else {
-      // ★ V12 2026-10-29: which real row is the PACER's call (the fixed clock presents each frame on the feed's schedule —
-      //   wfPacing.ts useCur); before, it was t ≥ 0.5 (half a pair after the arrival).
-      const useCur = this.pacer.useCur;
-      blend.set(useCur ? cur : prev);
-      cLo = useCur ? this.curLo : this.prevLo; cSpan = useCur ? this.curSpan : this.prevSpan;
+      joinedRowAt(src, sLo, sSpan, cLo, cSpan, this.outLo, this.outSpan, blend, below, this.glideScratch);
     }
-    // ★★★ A ZOOM NO LONGER RE-MAPS THE HISTORY (Stuart 2026-10-28): every row stays as it was drawn — the ease above
-    //     draws the fan. (_noteRowView keeps the last view for the maps' sake; the maps stay the identity.)
     this._noteRowView(cLo, cSpan);
     if (!this.outRow || this.outRow.length !== n) this.outRow = new Uint8Array(n);
     this.outRow.set(blend); this.outLo = cLo; this.outSpan = cSpan;
@@ -880,12 +878,13 @@ export class Waterfall {
       this._ensureXf(rows);
       this.head = (this.head - 1 + rows) % rows;
       this.gl.pushRow(rowIn, this.head);
-      this.xfA[this.head] = 1; this.xfB[this.head] = 0;
+      this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan;
       // ★★ V12 the full-capture layer: this row's coarse twin, at the same ring row (wfWide.ts).
       this.xfX[this.head] = 0;
       if (this.wideEver && this.gFloor.length && this.gPeak.length) {
         this.gl.ensureLayer(this.gFloor.length, this.gPeak.length >> 1);
         this.xfX[this.head] = this._layerGL(cLo, cSpan);
+        this.xfM[this.head] = this.lastM;
         this.gl.pushLayer(this.gFloor, this.gPeak, this.gM, this.head);
       }
       return;
@@ -895,7 +894,7 @@ export class Waterfall {
     const H = wfH;
     this._ensureXf(H);
     this.head = (this.head - 1 + H) % H;
-    this.xfA[this.head] = 1; this.xfB[this.head] = 0;
+    this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan;
     this.xfX[this.head] = 0;
     // ★★ V12 the full-capture layer on the 2D path: a coloured WIDE_TEX-wide row in its own ring canvas, same row index.
     if (this.wideEver) {
@@ -935,6 +934,23 @@ export class Waterfall {
     this.xfA = new Float64Array(rows).fill(1);
     this.xfB = new Float64Array(rows);
     this.xfX = new Float64Array(rows);
+    this.xfS = new Float64Array(rows);
+    this.xfM = new Float64Array(rows);
+  }
+
+  /** ★★ A JUMP (wfGlide.ts rowView: a move of a whole view or more — a bookmark, a typed frequency, a spin faster than the
+   *  radio): every row on the ring moves into place by `hz`, each in ITS OWN scale (rows keep the zoom they were drawn
+   *  at), so the history stays visible where it still belongs and is blank only at the newly exposed edge — the full-
+   *  capture layer fills that where the radio was capturing (black ONLY where nothing was). Two multiply-adds a row; the
+   *  stored pixels are never rewritten (the app's fanNoteRow jump, src/utils/wfRowPlace.ts). */
+  private _jumpHistory(hz: number, span: number) {
+    const A = this.xfA, B = this.xfB, S = this.xfS;
+    for (let r = 0; r < B.length; r++) {
+      const sp = S[r] > 0 ? S[r] : span;
+      let nb = B[r] + hz / sp;
+      if (A[r] === 1 && Math.abs(nb) < 1e-9) nb = 0;
+      B[r] = nb;
+    }
   }
 
   /** ★ V12 the layer as drawn for a row emitted NOW: the floor and the cells interpolated from the previous full-capture
@@ -973,6 +989,7 @@ export class Waterfall {
 
   /** ★ GPU path: the layer's row for a detailed row placed at (lo, span) — floor indices, (level, shape) per cell, and
    *  the row's m — into gFloor / gPeak / gM. Returns k (0 = no layer: no fresh row, or the row covers the capture). */
+  private lastM = 0;
   private _layerGL(lo: number, span: number): number {
     const w = this.wide;
     if (!w || !(span > 0) || span >= w.spanHz * 0.98 || !this._blendLayer()) { this.gFloor.fill(0); this.gPeak.fill(0); return 0; }
@@ -983,7 +1000,8 @@ export class Waterfall {
       const v = this.bCell[c];
       if (v === v) { g[2 * c] = Math.max(1, idx(v)); g[2 * c + 1] = this.bShape[c]; } else { g[2 * c] = 0; g[2 * c + 1] = 0; }
     }
-    encodeM((lo - (w.centreHz - w.spanHz / 2)) / w.spanHz, this.gM, 0);
+    this.lastM = (lo - (w.centreHz - w.spanHz / 2)) / w.spanHz;
+    encodeM(this.lastM, this.gM, 0);
     return span / w.spanHz;
   }
 
@@ -1042,9 +1060,9 @@ export class Waterfall {
     // display x directly to bins: tx = xy.x / uDrawW * uTexW). No pan offset, no
     // frequency-indexed history, no re-alignment ON A TUNE. Old rows keep their old bins
     // and scroll away.
-    // ★★ EXCEPT THE SPAN (2026-10-27, Stuart: zooming left the history SLICED into bands of different
-    //    zoom): a zoom re-maps every stored row to the new span — the fan — through a per-row map
-    //    (wfZoomFan.ts), drawn per run of rows below. The stored pixels are still never rewritten.
+    // ★★ A ZOOM DOES NOT RE-MAP THE HISTORY (Stuart 2026-10-28): the rows stay as drawn and the new ones ease
+    //    in (drawRow, wfGlide.ts). The per-row maps (wfZoomFan.ts), drawn per run of rows below, move the
+    //    history only on a JUMP (_jumpHistory). The stored pixels are never rewritten.
     //
     // Both of the clever alternatives were worse: sliding the history sideways
     // fought the frames still in flight (snap-back), and cropping a
