@@ -17,6 +17,11 @@
  *   step is two multiply-adds per ring row in JS (2560 rows); each frame the renderer walks the visible rows once to
  *   find runs that share a map and draws each run with its own uniforms — one draw when nobody has zoomed, a handful
  *   after a pinch, and the old runs scroll away.
+ * ★★★ SUPERSEDED FOR A ZOOM (2026-10-28, Stuart: "a thin line signal should expand out to the width and the history
+ *     remains the thin line"): a zoom no longer re-maps the history — the rows stay as drawn and the new ones ease in
+ *     (wfGlide.ts). The maps now move the history only on a JUMP (waterfall.ts _jumpHistory: a move of a whole view or
+ *     more, every row by the jump's Hz in its own scale); mapRuns/visibleSpan still draw them. applyViewChange is kept
+ *     for its test.
  * PURE — scripts/test_wf_zoom_fan.ts. */
 
 /** Rows' maps after the view's span/position changed from (lo0, span0) to (lo1, span1), in Hz. Only call it when the

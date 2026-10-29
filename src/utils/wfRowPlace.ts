@@ -469,6 +469,19 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
   return fanned;
 }
 
+/** THE EASE's geometry at fraction u (0..1) from (lo0, span0) to (lo1, span1), in Hz: EASE-OUT (most of the way at once,
+ *  landing soft), the span geometric (each step the same ratio) about the zoom's FIXED POINT (the anchor — the dial for the
+ *  drum, the finger for a pinch); a tune (same span) slides lo. Shared by the app (fanAfterRow) and the web
+ *  (web/client/src/wfGlide.ts) — one formula, so the two fan alike. */
+export function easeView(lo0: number, span0: number, lo1: number, span1: number, u: number): [number, number] {
+  const x = u < 0 ? 0 : u > 1 ? 1 : u, e = 1 - (1 - x) * (1 - x);
+  const S = span0 * Math.pow(span1 / span0, e);
+  const ds = span0 - span1;
+  if (Math.abs(ds) <= span1 * 1e-9) return [lo0 + (lo1 - lo0) * e, S];
+  const xs = (lo1 - lo0) / ds;
+  return [lo0 + span0 * xs - S * xs, S];
+}
+
 /** AFTER the row at `slot` (0..rows-1) is written: it is the identity, and the display gets it as is — unless a zoom is
  *  easing in, when it is drawn one step further from the old zoom to the new (its own row's geometry, lastLo/lastSpan).
  *  ★ The step keeps the zoom's FIXED POINT (the anchor — the dial for the drum, the finger for a pinch) where it is, and
@@ -478,12 +491,7 @@ export function fanAfterRow(st: FanState, ring: Uint8Array, slot: number, n: num
   if (st.easeLeft > 0 && st.lastSpan > 0 && st.eSpan0 > 0 && isFinite(st.eLo0)) {
     const tl = st.lastLo, ts = st.lastSpan;
     st.eJ++; st.easeLeft = st.eT - st.eJ;
-    const u = Math.min(1, st.eJ / st.eT), e = 1 - (1 - u) * (1 - u);   // ease-out: most of the way at once, lands soft
-    const ns = st.eSpan0 * Math.pow(ts / st.eSpan0, e);              // the span geometrically (each step the same ratio)
-    const ds = st.eSpan0 - ts;
-    let nl: number;                                                  // …about the zoom's fixed point (the anchor)
-    if (Math.abs(ds) > ts * 1e-9) { const xs = (tl - st.eLo0) / ds; nl = st.eLo0 + st.eSpan0 * xs - ns * xs; }
-    else nl = st.eLo0 + (tl - st.eLo0) * e;
+    const [nl, ns] = easeView(st.eLo0, st.eSpan0, tl, ts, st.eJ / st.eT);
     st.dLo = nl; st.dSpan = ns;
     if (st.easeLeft > 0) {
       st.xfA[slot] = ns / ts; st.xfB[slot] = (nl - tl) / ts;
