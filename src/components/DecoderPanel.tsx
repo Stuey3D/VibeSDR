@@ -40,7 +40,7 @@ import { SLANT_STEP, parseAlign, wefaxAlignKey, wefaxFormat, wefaxPreset, type W
 import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/DecoderClient';
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
-import CwView, { cwItems } from './CwView';
+import CwView, { CallLink, cwItems } from './CwView';
 import JttyView, { jttyItems } from './JttyView';
 import DscView, { dscHasPos, type DscBoxKey } from './DscView';
 import AprsView from './AprsView';   // ★ V12 APRS
@@ -151,6 +151,9 @@ const DAB_SPEEDS = [
   { v: 0.3333, l: '×0.33' }, { v: 0.25, l: '×0.25' },
 ];
 
+/** ★ V12: the CW box's PLAIN key, remembered on this device. */
+const CW_PLAIN_KEY = 'vibe_cw_plain';
+
 const MORSE_QUALITIES: MorseQuality[] = ['all', 'low', 'medium', 'high'];
 const MORSE_QUALITY_LABELS: Record<MorseQuality, string> = {
   all: 'ALL', low: 'LOW+', medium: 'MED+', high: 'HIGH',
@@ -198,10 +201,8 @@ const SpotRowView = React.memo(function SpotRowView({ s, isCW, font, callColor, 
         <Text style={[dp.spotCell, dp.spotTime, { fontFamily: font }]}>
           {fmtSpotTime(s.time)}
         </Text>
-        <Text style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]}
-              numberOfLines={1}>
-          {s.call}
-        </Text>
+        {/* ★ V12: the callsign opens its QRZ.COM page (CwView CallLink) — its own tap, not the row's tune. */}
+        <CallLink call={s.call} style={[dp.spotCell, dp.spotCall, { color: callColor, fontFamily: font }]} />
         <Text style={[dp.spotCell, dp.spotBand, { fontFamily: font }]}>{s.band}</Text>
         {/* ★ V12: the mode in ITS colour — the same as its map marker (src/utils/digiModes.ts). */}
         <Text style={[dp.spotCell, dp.spotMode, { fontFamily: font }, !isCW && { color: digiModeStyle(s.mode).colour }]}>
@@ -420,6 +421,19 @@ export default function DecoderPanel({
   const scanNav = useRef<ScannerNav>({ len: 0, press: () => {} });
   const cwRows = React.useMemo(() => (isCw ? cwItems(cw!.list, cw!.spots) : isJtty ? jttyItems(jtty!.list, jtty!.spots) : []),
                                 [isCw, cw, isJtty, jtty]);
+  /* ★★ V12 (2026-10-29) PLAIN ENGLISH — the CW box's header key: one press reads every row (and ONE SIGNAL's text) through
+   *  utils/cwVocab plainEnglish, the next shows the CW as sent. Lit while on; remembered on this device (the web keeps
+   *  the same choice in its own localStorage). CW only — PSK's text is typed, not abbreviated Morse. */
+  const isCwOnly = isCw && activeDecoder === 'cw';
+  const [cwPlain, setCwPlain] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem(CW_PLAIN_KEY).then((v: string | null) => { if (v === '1') setCwPlain(true); }).catch(() => {});
+  }, []);
+  const toggleCwPlain = () => {
+    const next = !cwPlain;
+    setCwPlain(next);
+    AsyncStorage.setItem(CW_PLAIN_KEY, next ? '1' : '0').catch(() => {});
+  };
   const [nvViewPrev, setNvViewPrev] = useState(false);
   const [, setNvTick] = useState(0);
   // ★ A lost NNNN ends the message after 75 s of silence (NAVTEX_END_LOST_MS) — nothing else would redraw the box
@@ -1212,6 +1226,16 @@ export default function DecoderPanel({
             </HBtn>
           )}
 
+          {/* ★★ V12 PLAIN — CW in plain English (see cwPlain). Beside CLR, lit while on. */}
+          {isCwOnly && (
+            <HBtn active={cwPlain} run hitSlop={6}
+              accessibilityLabel={cwPlain ? 'Plain English is on — show the CW as sent' : 'Show the CW in plain English'}
+              accessibilityState={{ selected: cwPlain }}
+              onPress={(e: any) => { e?.stopPropagation(); toggleCwPlain(); }}>
+              <DecoderKeyLabel active={cwPlain}>PLAIN</DecoderKeyLabel>
+            </HBtn>
+          )}
+
           {/* DAB speed correction (§4.5) — opens the SPEED FIX popup (separate preset
               buttons), a popup like the spots filters. Highlighted when not Off. */}
           {isDabMode && onDabSpeed && (
@@ -1486,7 +1510,7 @@ export default function DecoderPanel({
           </ScrollView>
         )}
         {!minimised && isCw && (
-          <CwView skim={cw!.skim} psk={activeDecoder === 'psk'} list={cw!.list} spots={cw!.spots} text={decoderText} bodySize={bodySize}
+          <CwView skim={cw!.skim} psk={activeDecoder === 'psk'} plain={cwPlain} list={cw!.list} spots={cw!.spots} text={decoderText} bodySize={bodySize}
                   focusIdx={kbZone === 'list' ? listIdx : -1} onTune={cw!.onTune}
                   scrollRef={outputRef} onScrollY={(y) => { bodyScrollY.current = y; }} />
         )}

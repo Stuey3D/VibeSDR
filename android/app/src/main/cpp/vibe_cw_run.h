@@ -146,9 +146,9 @@ private:
         char b[512];
         const std::string call = clean(s.call, 16), how = clean(s.how, 8), ctry = clean(callsign::country(s.call), 40);
         const int n = std::snprintf(b, sizeof b,
-            "{\"type\":\"cw_spot\",\"data\":{\"callsign\":\"%s\",\"frequency\":%.0f,\"audio\":%.0f,\"wpm\":%.0f,\"snr\":%.0f,"
+            "{\"type\":\"cw_spot\",\"data\":{\"callsign\":\"%s\",\"frequency\":%.0f,\"audio\":%.0f,\"wpm\":%.0f,\"wpmLo\":%d,\"wpmHi\":%d,\"snr\":%.0f,"
             "\"how\":\"%s\",\"country\":\"%s\",\"timestamp\":%lld}}",
-            call.c_str(), hz, skim_ ? 0.0 : s.offsetHz, s.wpm, s.snrDb, how.c_str(), ctry.c_str(), (long long)s.utcMs);
+            call.c_str(), hz, skim_ ? 0.0 : s.offsetHz, s.wpm, s.wpmLo, s.wpmHi, s.snrDb, how.c_str(), ctry.c_str(), (long long)s.utcMs);
         if (n > 0 && out_.json) out_.json(std::string(b, (size_t)std::min(n, (int)sizeof b - 1)));
     }
     static int64_t nowMs() {
@@ -183,8 +183,9 @@ private:
             if (n >= 60) break;
             if (n) j += ',';
             ++n;
-            std::snprintf(b, sizeof b, "{\"id\":%d,\"hz\":%.0f,\"audio\":%.0f,\"wpm\":%.0f,\"snr\":%.0f,\"q\":\"%s\",\"active\":%s,\"last\":%lld,\"first\":%lld,",
-                          s.id, rf(s.offsetHz), skim_ ? 0.0 : s.offsetHz, s.wpm, s.snrDb, cw::qualityWord(s.quality),
+            // ★ wpmLo / wpmHi (V12, 2026-10-29): the speed as a range ("17–21 wpm"), equal when the fist is steady
+            std::snprintf(b, sizeof b, "{\"id\":%d,\"hz\":%.0f,\"audio\":%.0f,\"wpm\":%.0f,\"wpmLo\":%d,\"wpmHi\":%d,\"snr\":%.0f,\"q\":\"%s\",\"active\":%s,\"last\":%lld,\"first\":%lld,",
+                          s.id, rf(s.offsetHz), skim_ ? 0.0 : s.offsetHz, s.wpm, s.wpmLo, s.wpmHi, s.snrDb, cw::qualityWord(s.quality),
                           s.active ? "true" : "false", (long long)s.lastMs, (long long)s.firstMs);
             j += b;
             j += "\"call\":\"" + clean(s.call, 16) + "\",\"country\":\"" + clean(s.call.empty() ? std::string() : callsign::country(s.call), 40)

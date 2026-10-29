@@ -2,6 +2,8 @@
 //
 //   cw_bench accuracy                 CER over WPM × SNR (one signal, real 12 kHz audio and 48 kHz IQ)
 //   cw_bench conditions               QSB, drift, key clicks, Farnsworth, a ragged fist
+//   cw_bench human                    human-sent Morse (V12 2026-10-29): the Tonbridge line, slow straight keys, Italian
+//                                     — CER, word spaces added / lost, the speed range (CW_SHOW=1 prints the text)
 //   cw_bench multi                    many signals 50–300 Hz apart in one segment (clicks on), per-signal CER
 //   cw_bench noise [minutes]          pure noise: false signals and false spots
 //   cw_bench bias                     the floor's bias on noise (kFloorBias in cw_skimmer.cpp)
@@ -214,6 +216,53 @@ static int fists() {
     return 0;
 }
 
+/** ★★ HUMAN-SENT MORSE, SCORED (V12, 2026-10-29 — Stuart's 80 m evening): the cases the screenshots showed. Each is a
+ *  few overs of one station, 48 kHz IQ; CER, word spaces ADDED (split) and LOST (merged), and the speed shown. */
+struct HumanCase { const char* name; std::string text; Keying k; int overs; };
+static std::vector<HumanCase> humanCases() {
+    std::vector<HumanCase> v;
+    const std::string tonbridge = "M0PKZ DE G4TPJ R R TNX FER CALL = UR RST 599 599 = OP IS RICHARD RICHARD ES QTH IS NR TONBRIDGE TONBRIDGE = HW? + M0PKZ DE G4TPJ KN  ";
+    { Keying k; k.wpm = 24; k.charGap = 3.0; k.wordGap = 3.6; k.jitter = 0.05; v.push_back({ "TONBRIDGE: G4TPJ 24 WPM, word gaps 1.2 x letter", tonbridge, k, 3 }); }
+    { Keying k; k.wpm = 24; k.charGap = 3.0; k.wordGap = 4.2; k.jitter = 0.06; v.push_back({ "word gaps 1.4 x letter, 24 WPM", tonbridge, k, 3 }); }
+    { Keying k; k.wpm = 20; k.charGap = 3.4; k.wordGap = 4.4; k.jitter = 0.12; k.gapJitter = 0.18; v.push_back({ "word gaps 1.3 x letter, hand key 20 WPM", kOvers[1] + kOvers[2], k, 2 }); }
+    { Keying k; k.wpm = 8; k.jitter = 0.2; k.elemGap = 1.6; k.charGap = 4.5; k.wordGap = 9; v.push_back({ "slow straight key 8 WPM, long gaps", kOvers[1], k, 2 }); }
+    { Keying k; k.wpm = 10; k.dotJitter = 0.15; k.dashJitter = 0.15; k.gapJitter = 0.35; k.elemGap = 1.5; k.charGap = 3.5; k.wordGap = 8;
+      v.push_back({ "slow uneven 10 WPM (inner gaps to 2 dots)", kOvers[1], k, 2 }); }
+    { Keying k; k.wpm = 12; k.jitter = 0.15; k.gapJitter = 0.3; k.elemGap = 1.3; k.charGap = 4.0; k.wordGap = 7;
+      v.push_back({ "hand key 12 WPM, gaps +-30 %", kOvers[2], k, 2 }); }
+    { Keying k; k.wpm = 18; k.jitter = 0.10;
+      v.push_back({ "ITALIAN QSO 18 WPM", "IZ0ABC DE IK2XYZ BUONA SERA = TUTTA LESTATE SI E STATO UN PO STRANO = QUI ANTENNA FILARE IN GIARDINO = GRAZIE DEL QSO 73 K  ", k, 3 }); }
+    { Keying k; k.wpm = 22; k.charGap = 3.0; k.wordGap = 3.9; k.jitter = 0.06;
+      v.push_back({ "ITALIAN, word gaps 1.3 x letter (no English forced)", "IZ0ABC DE IK2XYZ BUONA SERA = TUTTA LESTATE SI E STATO UN PO STRANO = QUI ANTENNA FILARE IN GIARDINO = GRAZIE DEL QSO 73 K  ", k, 3 }); }
+    { Keying k; k.wpm = 20; k.jitter = 0.04; v.push_back({ "keyer 20 WPM (must stay clean)", kOvers[0] + kOvers[1] + kOvers[2], k, 2 }); }
+    return v;
+}
+static int human() {
+    std::printf("\n== human-sent: CER / word spaces added (split) / lost (merged) of the spaces sent, speed shown; 48 kHz IQ ==\n");
+    for (auto& hc : humanCases()) {
+        for (double snr : { 5.0, 0.0 }) {
+            Rng rng(500 + (uint64_t)(snr + 10) + hc.text.size());
+            std::string sent; std::vector<float> env;
+            for (int o = 0; o < hc.overs; ++o) { auto e = keyEnvelope(hc.text, hc.k, 48000, rng, 1.5); env.insert(env.end(), e.begin(), e.end()); sent += hc.text; }
+            Tone t; t.hz = 2000; t.snrDb = snr; t.env = env;
+            std::vector<Tone> ts{ t }; std::vector<cf> iq; std::vector<float> re;
+            synth(ts, 48000, true, env.size() / 48000.0, rng, iq, re);
+            Skimmer::Config cfg; cfg.rate = 48000; cfg.complexIn = true; cfg.loHz = -20000; cfg.hiHz = 20000;
+            Skimmer sk(cfg);
+            auto r = run(sk, iq, re);
+            const std::string got = textNear(r, t.hz);
+            int e, n, sp, mg, rs; cer(sent, got, e, n); spaceErrors(sent, got, sp, mg, rs);
+            std::string spd = "-";
+            for (auto& v : sk.signals()) if (std::fabs(v.offsetHz - t.hz) < 40) {
+                char b[32]; if (v.wpmLo != v.wpmHi) std::snprintf(b, sizeof b, "%d-%d", v.wpmLo, v.wpmHi); else std::snprintf(b, sizeof b, "%.0f", v.wpm); spd = b; break; }
+            std::printf("  %-46s %+3.0f dB  CER %5.1f%%  split %3d  merged %3d/%-3d  wpm %-7s\n", hc.name, snr,
+                        100.0 * e / std::max(1, (int)squash(sent).size()), sp, mg, rs, spd.c_str());
+            if (std::getenv("CW_SHOW")) std::printf("      GOT: %s\n", squash(got).c_str());
+        }
+    }
+    return 0;
+}
+
 static int multi() {
     std::printf("\n== multi: 12 signals in 48 kHz IQ, 60–300 Hz apart, mixed speeds/SNR, half hard-keyed ==\n");
     Rng rng(4242);
@@ -388,8 +437,10 @@ static int wav(const char* path, double centreHz, double width) {
     std::printf("\nSignals heard (strongest active first, then gone):\n");
     for (auto& v : sk.signals()) {
         std::string t = v.text; for (auto& c : t) if (c == '\n') c = ' ';
-        if (t.size() > 70) t = "…" + t.substr(t.size() - 70);
-        std::printf("  %10.2f kHz %-9s %2.0f WPM %+4.0f dB %-6s %s\n", (centreHz + v.offsetHz) / 1e3, v.call.c_str(), v.wpm, v.snrDb,
+        const size_t keep = std::getenv("CW_FULL") ? 400 : 70;
+        if (t.size() > keep) t = "…" + t.substr(t.size() - keep);
+        char spd[24]; if (v.wpmLo != v.wpmHi) std::snprintf(spd, sizeof spd, "%d-%d", v.wpmLo, v.wpmHi); else std::snprintf(spd, sizeof spd, "%.0f", v.wpm);
+        std::printf("  %10.2f kHz %-9s %5s WPM %+4.0f dB %-6s %s\n", (centreHz + v.offsetHz) / 1e3, v.call.c_str(), spd, v.snrDb,
                     qualityWord(v.quality), t.c_str());
     }
     return 0;
@@ -460,6 +511,7 @@ int main(int argc, char** argv) {
     if (m == "multi") return multi();
     if (m == "fists") return fists();
     if (m == "fist" && argc > 3) return fistShow(std::atoi(argv[2]), std::atof(argv[3]));
+    if (m == "human") return human();
     if (m == "noise") return noise(argc > 2 ? std::atof(argv[2]) : 10);
     if (m == "bias") return bias();
     if (m == "clip" && argc > 4) return clip(argv[2], std::atof(argv[3]), std::atof(argv[4]));

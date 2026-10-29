@@ -563,6 +563,8 @@ if node --no-warnings scripts/test_transcribeOrder.ts; then pass=$((pass+1)); el
 if node --no-warnings scripts/test_recordBuffer.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 CW (cwList.ts): the app's CW box against the web's — order, confidence colours, spots, the scroll pin, the segment drawn.
 if node --no-warnings scripts/test_cw_list.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 CW words (cwVocab / cwFormat): the PLAIN key's reading, the terms guide's search, the speed range, the QRZ links.
+if node --no-warnings scripts/test_cw_vocab.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 ISM (src/services/ism.ts): the app's ISM against the web's — sanitiser, lines in every unit, status, filter, capability.
 if npx tsx scripts/test_ism_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 APP PARITY 2 (2026-10-26): the app's PSK / JTTY / DSC boxes against the web's own modules — dials, channels, parsers,

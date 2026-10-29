@@ -19,10 +19,29 @@ import { ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, t
 import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
 import { fmtSpotTime } from '../utils/spotTime';   // ★ HH:MM:SS UTC (one helper for every spot list)
+import { plainEnglish } from '../utils/cwVocab';
+import { cwHasWpmRange, qrzCallUrl } from '../utils/cwFormat';
+import { openWebPage } from '../utils/openWebPage';
 import {
   CW_Q_COLOURS, cwAge, cwFreqText, cwPinFromScroll, cwPinRestore, cwSnrText, kbIdleText, kbRateText, kbSpotRateText,
   sortCwSignals, type CwList, type CwSignal, type CwSpot,
 } from '../services/cwList';
+
+/** ★★ V12 (2026-10-29) A CALLSIGN OPENS ITS QRZ.COM PAGE — in the same in-app browser as the Signal ID wiki
+ *  (utils/openWebPage). A nested Text with its own onPress takes the touch, so the row's own tap (tune) does not fire.
+ *  Not a callsign (qrzCallUrl null: "—", a garbled call) = plain text. Used by every list with callsigns (CW, PSK,
+ *  JTTY, the digital spots). Nothing is fetched from QRZ: it is a link. */
+export function CallLink({ call, style, children }: { call: string; style: any; children?: React.ReactNode }) {
+  const url = qrzCallUrl(call);
+  if (!url) return <Text style={style} numberOfLines={1}>{children ?? call}</Text>;
+  return (
+    <Text style={[style, { textDecorationLine: 'underline' }]} numberOfLines={1} suppressHighlighting={false}
+      accessibilityRole="link" accessibilityLabel={`${call} on QRZ.com`}
+      onPress={(e: any) => { e?.stopPropagation?.(); openWebPage(url); }}>
+      {children ?? call}
+    </Text>
+  );
+}
 
 /** The spots drawn (the web keeps 200 and draws 60). */
 export const CW_SPOTS_SHOWN = 60;
@@ -107,9 +126,13 @@ export interface CwViewProps {
   /** The panel's scroll hooks (bodyScrollY for the arrows) — merged with the pin's own. */
   scrollRef?: React.RefObject<ScrollView | null>;
   onScrollY?: (y: number) => void;
+  /** ★★ V12 (2026-10-29) THE PLAIN ENGLISH KEY (DecoderPanel's header): every row's text, and ONE SIGNAL's, read
+   *  through utils/cwVocab plainEnglish — codes in plain words, callsigns / names / numbers as sent. CW only. */
+  plain?: boolean;
 }
 
-export default function CwView({ skim, psk = false, list, spots, text, bodySize, focusIdx, onTune, scrollRef, onScrollY }: CwViewProps) {
+export default function CwView({ skim, psk = false, list, spots, text, bodySize, focusIdx, onTune, scrollRef, onScrollY,
+                                 plain = false }: CwViewProps) {
   const tk = useDecoderTokens();
   const cs = useDecoderStyles(makeCs);
   const sigs = useMemo(() => sortCwSignals(list?.signals ?? []), [list]);
@@ -118,6 +141,11 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
   const { scrollProps, onHeadLayout, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
 
   const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
+  const read = (t: string) => (plain && !psk ? plainEnglish(t) : t);
+  // ★ A speed RANGE ("17–21 wpm") needs a wider column — only while a row shows one, so an older server's list keeps
+  //   its call column as wide as before.
+  const wideRows = !psk && sigs.some(cwHasWpmRange);
+  const wideSpots = !psk && shownSpots.some(cwHasWpmRange);
 
   return (
     <ScrollView
@@ -127,7 +155,7 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
       showsVerticalScrollIndicator
     >
       {!skim && !!text && (
-        <Text style={[cs.primary, { color: tk.value }]} selectable>{text}</Text>
+        <Text style={[cs.primary, { color: tk.value }]} selectable>{read(text)}</Text>
       )}
       {!sigs.length && (
         <Text style={[cs.idle, { color: tk.muted }]}>{kbIdleText(psk, skim)}</Text>
@@ -146,14 +174,14 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
             onPress={() => onTune(sg.hz)}>
             <View style={cs.line}>
               <Text style={[cs.cell, cs.freq, { color: tk.value }]} numberOfLines={1}>{cwFreqText(sg.hz, sg.audio)}</Text>
-              <Text style={[cs.cell, cs.call, { color: sg.call ? tk.accent : tk.muted }]} numberOfLines={1}>{sg.call || '—'}</Text>
-              <Text style={[cs.cell, cs.wpm, { color: tk.value }]} numberOfLines={1}>{kbRateText(sg)}</Text>
+              <CallLink call={sg.call} style={[cs.cell, cs.call, { color: sg.call ? tk.accent : tk.muted }]}>{sg.call || '—'}</CallLink>
+              <Text style={[cs.cell, cs.wpm, wideRows && cs.wpmWide, { color: tk.value }]} numberOfLines={1}>{kbRateText(sg)}</Text>
               <Text style={[cs.cell, cs.snr, { color: tk.value }]} numberOfLines={1}>{cwSnrText(sg.snr)}</Text>
               <Text style={[cs.cell, cs.q, { color: qc, borderColor: qc }]} numberOfLines={1}>{Q_SHORT[sg.q]}</Text>
               <Text style={[cs.cell, cs.age, { color: tk.muted }]} numberOfLines={1}>{cwAge(sg.last, now)}</Text>
             </View>
             {!!sg.text.trim() && (
-              <Text style={[cs.tx, { color: qc }]} numberOfLines={2}>{sg.text.trim()}</Text>
+              <Text style={[cs.tx, { color: qc }]} numberOfLines={2}>{read(sg.text.trim())}</Text>
             )}
           </TouchableOpacity>
         );
@@ -175,9 +203,9 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
             <View style={cs.line}>
               <Text style={[cs.cell, cs.time, { color: tk.muted }]} numberOfLines={1}>{fmtSpotTime(s.timestamp)}</Text>
               <Text style={[cs.cell, cs.freq, { color: tk.value }]} numberOfLines={1}>{cwFreqText(s.frequency, s.audio)}</Text>
-              <Text style={[cs.cell, cs.call, { color: tk.accent }]} numberOfLines={1}>{s.callsign}</Text>
+              <CallLink call={s.callsign} style={[cs.cell, cs.call, { color: tk.accent }]} />
               <Text style={[cs.cell, cs.country, { color: tk.value }]} numberOfLines={1}>{s.country}</Text>
-              <Text style={[cs.cell, cs.wpm, { color: tk.value }]} numberOfLines={1}>{kbSpotRateText(s)}</Text>
+              <Text style={[cs.cell, cs.wpm, wideSpots && cs.wpmWide, { color: tk.value }]} numberOfLines={1}>{kbSpotRateText(s)}</Text>
             </View>
           </TouchableOpacity>
         );
@@ -202,6 +230,7 @@ const makeCs = (T: DecoderTokens) => StyleSheet.create({
   freq:    { width: 58 },
   call:    { flex: 1, fontSize: 13, fontWeight: '700' },
   wpm:     { width: 44, textAlign: 'right' },
+  wpmWide: { width: 64 },   // ★ "17–21 wpm"
   snr:     { width: 40, textAlign: 'right' },
   q:       { width: 38, fontSize: 9, letterSpacing: 0.8, textAlign: 'center', borderWidth: 1, borderRadius: 3,
              paddingVertical: 1, overflow: 'hidden' },

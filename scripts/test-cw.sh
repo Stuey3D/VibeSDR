@@ -31,7 +31,7 @@ case "${1:-all}" in
   wav)   build; "$OUT/cw_bench" wav "${2:?iq.wav}" "${3:?centre Hz}" "${4:-192000}" ;;
   all)
     build
-    for m in accuracy conditions fists multi; do "$OUT/cw_bench" $m; done
+    for m in accuracy conditions fists human multi; do "$OUT/cw_bench" $m; done
     "$OUT/cw_bench" noise 30
     "$OUT/cw_bench" cpu 60
     "$OUT/cw_bench_scalar" cpu 60 ;;

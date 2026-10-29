@@ -5,6 +5,8 @@ import {
 } from 'react-native';
 import { RotateSheet, SheetRise } from './RotateFade';
 import { openWebPage } from '../utils/openWebPage';
+import { QRZ_HOME, QRZ_SIGN_IN_NOTE } from '../utils/cwFormat';
+import CwTermsGuide from './CwTermsGuide';
 import { SIGID_HOME } from '../services/dialChat';
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
@@ -481,6 +483,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   decoderControls, spotsControls, transcribeControls, blocked, dcSpikeOnScreen = false, dialHz }: ModeSelectorProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const [dcInfoOpen, setDcInfoOpen] = useState(false);   // ★ V12 beta25 — the DC spike's explanation, opened by its key
+  const [cwGuideOpen, setCwGuideOpen] = useState(false);   // ★ V12 — the CW terms guide (CwTermsGuide), over this sheet
+  useEffect(() => { if (!visible) setCwGuideOpen(false); }, [visible]);   // ★ a sheet opened again opens without it
   const isBlocked = (id: string) => !!blocked && blocked.has(id);
   /* The client decoders this receiver both runs and allows — the same filter the row applies. */
   const clientDecs = (['rtty', 'navtex', 'wefax', 'sstv', 'time'] as DecId[]).filter(k => {
@@ -1802,6 +1806,35 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>SIGNAL ID WIKI ↗</Text>
               </TouchableOpacity>)}</NavItem>
             </View></NavRow>
+            {/* ★★ V12 (2026-10-29) QRZ.COM ↗ and THE CW TERMS GUIDE. QRZ opens in the same in-app browser as the wiki (the
+                site as it publishes it — nothing fetched or stored); every spotted or decoded callsign in the CW, PSK, JTTY
+                and digital spots lists opens its own QRZ page the same way. The guide (CwTermsGuide) is the ham-CW
+                vocabulary the PLAIN key reads from (utils/cwVocab), searchable, with the look-alikes. */}
+            <NavRow><View style={[st.grid, { marginTop: 8 }]}>
+              <NavItem key="qrz" onPress={() => openWebPage(QRZ_HOME)}>{(nf, nr) => pt.metal ? (
+                <MetalKey navRef={nr} focused={nf} label="QRZ.COM ↗" onPress={() => openWebPage(QRZ_HOME)} />
+              ) : (
+              <TouchableOpacity ref={nr as any}
+                style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                        nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+                onPress={() => openWebPage(QRZ_HOME)} activeOpacity={0.8}
+                accessibilityLabel="Open QRZ.com, the callsign lookup">
+                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>QRZ.COM ↗</Text>
+              </TouchableOpacity>)}</NavItem>
+              <NavItem key="cwterms" onPress={() => setCwGuideOpen(true)}>{(nf, nr) => pt.metal ? (
+                <MetalKey navRef={nr} focused={nf} label="CW TERMS GUIDE" onPress={() => setCwGuideOpen(true)} />
+              ) : (
+              <TouchableOpacity ref={nr as any}
+                style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                        nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+                onPress={() => setCwGuideOpen(true)} activeOpacity={0.8}
+                accessibilityLabel="Open the CW terms guide: Q-codes, abbreviations and prosigns">
+                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>CW TERMS GUIDE</Text>
+              </TouchableOpacity>)}</NavItem>
+            </View></NavRow>
+            <Text style={[secLbl, { marginTop: 6, fontSize: 11, lineHeight: 15, letterSpacing: 0, textTransform: 'none', fontWeight: 'normal' }]}>
+              {QRZ_SIGN_IN_NOTE}
+            </Text>
             {/* ★★ V12 beta25 — WHAT IS THE DC SPIKE? Only while the red "DC Spike" label is on screen (FREE tuning on a radio
                 with a real spike): a short explanation for listeners, opened in place under its key. */}
             {dcSpikeOnScreen && (
@@ -1841,6 +1874,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         </ScrollView>
       </View>
       </SheetRise></RotateSheet>
+      {/* ★ Inside this Modal, so it presents over the sheet (a second top-level Modal cannot on iOS). */}
+      <CwTermsGuide visible={visible && cwGuideOpen} onClose={() => setCwGuideOpen(false)} />
     </Modal>
   );
 }

@@ -17,7 +17,7 @@ import { scrollLane } from '../constants/popupTokens';
 import { fmtSpotTime } from '../utils/spotTime';
 import { CW_Q_COLOURS, cwAge, cwFreqText, cwSnrText } from '../services/cwList';
 import { JTTY_IDLE_ROWS, JTTY_IDLE_SPOTS, JTTY_SPOTS_SHOWN, sortJtty, type JttySignal, type JttySpot } from '../services/jtty';
-import { Q_SHORT, useSpotsPin } from './CwView';
+import { CallLink, Q_SHORT, useSpotsPin } from './CwView';
 
 /** Every row a keyboard / pad can land on, in the order drawn: the stations, then the spots. `hz` is RF (0 = none). */
 export function jttyItems(list: readonly JttySignal[], spots: readonly JttySpot[]): Array<{ hz: number }> {
@@ -59,7 +59,7 @@ export default function JttyView({ list, spots, bodySize, focusIdx, onTune, scro
             onPress={() => onTune(sg.hz)}>
             <View style={cs.line}>
               <Text style={[cs.cell, cs.freq, { color: tk.value }]} numberOfLines={1}>{cwFreqText(sg.hz, sg.audio)}</Text>
-              <Text style={[cs.cell, cs.call, { color: sg.call ? tk.accent : tk.muted }]} numberOfLines={1}>{sg.call || '—'}</Text>
+              <CallLink call={sg.call} style={[cs.cell, cs.call, { color: sg.call ? tk.accent : tk.muted }]}>{sg.call || '—'}</CallLink>
               <Text style={[cs.cell, cs.snr, { color: tk.value }]} numberOfLines={1}>{cwSnrText(sg.snr)}</Text>
               <Text style={[cs.cell, cs.q, { color: qc, borderColor: qc }]} numberOfLines={1}>{Q_SHORT[sg.q]}</Text>
               <Text style={[cs.cell, cs.age, { color: tk.muted }]} numberOfLines={1}>{cwAge(sg.last, now)}</Text>
@@ -84,7 +84,7 @@ export default function JttyView({ list, spots, bodySize, focusIdx, onTune, scro
             <View style={cs.line}>
               <Text style={[cs.cell, cs.time, { color: tk.muted }]} numberOfLines={1}>{fmtSpotTime(s.timestamp)}</Text>
               <Text style={[cs.cell, cs.freq, { color: tk.value }]} numberOfLines={1}>{cwFreqText(s.frequency, s.audio)}</Text>
-              <Text style={[cs.cell, cs.call, { color: tk.accent }]} numberOfLines={1}>{s.callsign}</Text>
+              <CallLink call={s.callsign} style={[cs.cell, cs.call, { color: tk.accent }]} />
               {/* ★ CQ stands out (the web's .jts.cq): a station calling is the one to answer */}
               <Text style={[cs.cell, cs.how, { color: s.how === 'CQ' ? CW_Q_COLOURS.high : tk.muted }]} numberOfLines={1}>{s.how}</Text>
               <Text style={[cs.cell, cs.country, { color: tk.value }]} numberOfLines={1}>{s.country}</Text>

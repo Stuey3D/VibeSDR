@@ -880,6 +880,40 @@ body.icomFollow #mZoomDial { opacity: 0.35; }
 /* ★ The Signal Identification Wiki link — the close button's shape, as a real link (it opens a new tab). */
 .mModeDcInfo { margin: 6px 4px 2px; font-size: 12px; line-height: 1.45; opacity: 0.9; text-align: left; }   /* ★ V12 beta25 — the DC spike, explained */
 .mModeWiki { display: flex; align-items: center; justify-content: center; text-decoration: none; box-sizing: border-box; }
+/* ★ V12: QRZ.COM ↗ and CW TERMS GUIDE side by side under the wiki link, and the sign-in note under them. */
+.mModePair { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 2px; }
+.mModePair .mModeClose { margin-top: 0; min-width: 0; }
+.mModeNote { margin: 4px 4px 2px; font-size: 11px; line-height: 1.4; opacity: 0.8; text-align: left; }
+/* ★★ V12 THE CW TERMS GUIDE (cwGuide.ts): a card over everything, a reading width, scrolling inside itself. */
+#cwGuide { position: fixed; inset: 0; z-index: 9990; background: rgba(0,0,0,0.6); display: flex; align-items: center;
+           justify-content: center; padding: max(16px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom)); }
+#cwGuide .cwgCard { display: flex; flex-direction: column; width: 100%; max-width: 640px; max-height: 100%; min-height: 0;
+                    background: var(--ov-admin, rgba(6,5,2,0.985)); border: 1px solid var(--btn-border); border-radius: 12px;
+                    box-shadow: 0 8px 28px rgba(0,0,0,0.7); overflow: hidden; color: var(--btn-text); }
+#cwGuide .cwgHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px;
+                    border-bottom: 1px solid var(--bar-border); }
+#cwGuide .cwgTitle { font-size: 13px; letter-spacing: 3px; font-weight: 700; color: var(--amber); }
+#cwGuide .cwgHint { font-size: 10px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#cwGuideSearch { margin: 10px 12px 6px; padding: 9px 12px; font: inherit; font-size: 14px; color: var(--btn-text);
+                 background: rgba(255,255,255,0.04); border: 1px solid var(--btn-border); border-radius: 8px; min-width: 0; }
+#cwGuideSearch::placeholder { color: var(--text-dim); }
+#cwGuideList { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 14px 16px; overscroll-behavior: contain; }
+#cwGuide .cwgTerm { padding: 9px 4px; border-bottom: 1px solid var(--bar-border); }
+#cwGuide .cwgTerm:focus-visible { outline: 2px solid var(--freq); outline-offset: -2px; }
+#cwGuide .cwgTermHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+#cwGuide .cwgCode { font-size: 15px; font-weight: 700; letter-spacing: 1px; color: var(--freq); overflow-wrap: anywhere; }
+#cwGuide .cwgKind { font-size: 9px; letter-spacing: 1.5px; color: var(--text-dim); }
+#cwGuide .cwgPlain { font-size: 13px; margin-top: 3px; color: var(--btn-text); }
+#cwGuide .cwgPara { font-size: 13px; line-height: 1.45; margin: 3px 0 0; color: var(--btn-text); opacity: 0.9; overflow-wrap: anywhere; }
+#cwGuide p.cwgPara { margin-top: 12px; }
+#cwGuide .cwgStrong { font-weight: 700; opacity: 1; }
+#cwGuide .cwgEx { font-size: 12px; line-height: 1.4; margin-top: 3px; font-style: italic; color: var(--text-dim); overflow-wrap: anywhere; }
+#cwGuide .cwgSec { font-size: 11px; letter-spacing: 2px; color: var(--unit); margin: 18px 0 2px; }
+#cwGuide .cwgLookTitle { font-size: 13px; font-weight: 700; color: var(--freq); margin-bottom: 2px; }
+#cwGuide .cwgNone { text-align: center; }
+#cwGuide .cwgNote { font-size: 12px; }
+#cwGuide .cwgClose { background: none; border: 0; border-top: 1px solid var(--bar-border); color: var(--amber); font: inherit;
+                     font-size: 12px; letter-spacing: 2px; font-weight: 700; padding: 14px; cursor: pointer; min-height: 44px; }
 #mModeMenu .bwRow { display: flex; align-items: center; gap: 0.4em; }
 #mModeMenu .bwRow input[type=range] { flex: 1 1 auto; min-width: 3em; height: 40px; }
 .mModeOpt {
@@ -1902,7 +1936,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      ★ Every overflow-y: auto container belongs in this list — scripts/test-web-scrollbar-lane.mjs
        measures them with classic scrollbars forced on. */
 #menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel, #galleryPanel,
-#galText, #searchResults, #chatLog, #decText, #decBody, #rdsPanel, #adminPanelBody, #actLog {
+#galText, #searchResults, #chatLog, #decText, #cwPlainText, #decBody, #rdsPanel, #adminPanelBody, #actLog, #cwGuideList {
   scrollbar-gutter: stable;
 }
 #splash { scrollbar-gutter: stable both-edges; }
@@ -2058,7 +2092,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 
 /* Decoder output. */
-#decText {
+#decText, #cwPlainText {
   margin: 10px 0 0; padding: 10px; min-height: 120px; max-height: 300px; overflow-y: auto;
   background: #000; border: 1px solid var(--btn-border); border-radius: 6px;
   color: var(--btn-text); font-size: 12px; white-space: pre-wrap; word-break: break-word;
@@ -2078,7 +2112,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   border: 1px solid var(--btn-border); border-radius: 6px; image-rendering: pixelated;
 }
 #decImage.on { display: block; }
-#decText.off { display: none; }
+#decText.off, #cwPlainText.off { display: none; }
 #spotList { margin-top: 10px; }
 /* Active buttons in the panels. NB: an earlier edit spliced a
    `button.btn[hidden] { display: none }` rule INTO this selector list, which made
@@ -2169,7 +2203,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 }
 
 /* Decoder output. */
-#decText {
+#decText, #cwPlainText {
   margin: 10px 0 0; padding: 10px; min-height: 120px; max-height: 300px; overflow-y: auto;
   background: #000; border: 1px solid var(--btn-border); border-radius: 6px;
   color: var(--btn-text); font-size: 12px; white-space: pre-wrap; word-break: break-word;
@@ -2189,7 +2223,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   border: 1px solid var(--btn-border); border-radius: 6px; image-rendering: pixelated;
 }
 #decImage.on { display: block; }
-#decText.off { display: none; }
+#decText.off, #cwPlainText.off { display: none; }
 #spotList { margin-top: 10px; }
 /* Active buttons in the panels. NB: an earlier edit spliced a
    `button.btn[hidden] { display: none }` rule INTO this selector list, which made
@@ -2540,7 +2574,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    ★★ `min-height` is what makes the box taller the moment the button is pressed, which is the
       only honest response to a size control — the room is reserved, and the text fills it as it
       decodes rather than the panel growing line by line under the reader's eyes. */
-#decBox.big #decText {
+#decBox.big #decText, #decBox.big #cwPlainText {
   min-height: clamp(240px, 50vh, 560px);
   max-height: clamp(300px, 62vh, 700px);
 }
@@ -2887,11 +2921,11 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 #decBox.rds #decBody { display: flex; flex-direction: column; }
 #decBox.rds #rdsPanel { flex: 0 1 auto; min-height: 0; }
 #decBox.min #decBody { display: none; }
-#decText {
+#decText, #cwPlainText {
   margin: 0; color: var(--btn-text); font-size: 12px;
   white-space: pre-wrap; word-break: break-word; min-height: 60px;
 }
-#decText.off { display: none; }
+#decText.off, #cwPlainText.off { display: none; }
 /* ★★ NAVTEX (2026-10-05): one message — its title line, then the text — shown only while NAVTEX has the box.
    It scrolls itself at #decText's sizes, BIG included, so the two text decoders feel the same. */
 #navtexView { display: none; max-height: 300px; overflow-y: auto; min-height: 60px; }
@@ -2991,6 +3025,17 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
 #cwList .tx bdi { direction: ltr; unicode-bidi: isolate; }
 #cwRows .idle, #cwSpots .idle { color: var(--text-dim); font-size: 11px; padding: 6px; }
+/* ★★ V12 PLAIN (main.ts syncCwPlain): ONE SIGNAL's plain-English reading in place of the raw text — and never while the
+   raw text itself is hidden (the skimmer, another decoder). */
+#cwPlainText { display: none; }
+#decBox.cwplain #decText { display: none; }
+#decBox.cwplain #decText:not(.off) + #cwPlainText { display: block; }
+/* ★ V12: a speed RANGE ("17–21 wpm") widens the speed column while a row shows one. */
+#cwRows.wr .cwr { grid-template-columns: 6.2em minmax(4.5em, 1fr) 6.6em 4.2em 4.4em 3.4em; }
+#cwSpots.wr .cws { grid-template-columns: 4.8em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 6.6em; }
+/* ★★ V12: every callsign is a QRZ.COM link (qrzLink.ts) — its own colour, a quiet underline. */
+a.qrz { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
+a.qrz:hover { text-decoration-thickness: 2px; }
 #cwSpotsHead { color: var(--text-dim); font-size: 10px; letter-spacing: 1px; margin: 8px 6px 2px; }
 #cwSpots .cws { display: grid; grid-template-columns: 4.8em 6.2em minmax(4.5em, 1fr) minmax(0, 1.2fr) 4.8em; gap: 8px;
                 font-size: 11px; padding: 3px 6px; cursor: pointer; align-items: baseline; }
@@ -4034,6 +4079,8 @@ select.btn { padding: 6px 8px; }
     <button class="btn" id="decAdj" title="Align the chart and set its slant" style="display:none">ADJ</button>
     <button class="btn" id="aprsMapBtn" title="The stations heard, on the map" style="display:none">MAP</button>
     <button class="btn" id="decClr" title="Clear output">CLR</button>
+    <!-- ★★ V12 PLAIN — the CW box's codes in plain English (main.ts syncCwPlain); CW only, lit while on. -->
+    <button class="btn" id="cwPlain" title="Show the CW in plain English (press again for the CW as sent)" aria-pressed="false" style="display:none">PLAIN</button>
     <!-- ★ DAB: CLR clears a text pane DAB does not have, so in DAB this stands in its place
          (Stuart, 2026-09-07): the stations this receiver has learnt, bookmarks filtered to DAB. -->
     <button class="btn" id="dabBm" title="DAB stations heard by this receiver" style="display:none"><svg viewBox="0 0 12 14" aria-hidden="true" width="11" height="13"><path d="M2 1.5 H10 V12.5 L6 9.5 L2 12.5 Z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
@@ -4106,6 +4153,7 @@ select.btn { padding: 6px 8px; }
       <div id="dabScanList"></div>
     </div>
     <pre id="decText"></pre>
+    <pre id="cwPlainText" aria-live="off"></pre>
     <!-- ★★ NAVTEX, a message at a time (Stuart, 2026-10-05) — the stream cut into ZCZC…NNNN blocks by
          src/utils/navtex.ts, the same file the app uses. LIVE / PREV and SAVE are the image decoders' keys. -->
     <div id="navtexView">
@@ -6302,6 +6350,12 @@ select.btn { padding: 6px 8px; }
     <a href="https://www.sigidwiki.com/" target="_blank" rel="noopener">Signal Identification Wiki</a> (sigidwiki.com),
     a public-benefit reference funded by its own advertising. Its pages open whole and unmodified; the content
     belongs to its contributors and VibeSDR copies none of it.
+  </div>
+  <!-- ★ V12 (2026-10-29): QRZ.com — linked only, as the wiki is (the app's AboutOverlay credits it the same way). -->
+  <div class="lbl wrap">
+    The QRZ.COM key in the mode menu and every callsign in the CW, PSK, JTTY and digital spots lists link to
+    <a href="https://www.qrz.com/" target="_blank" rel="noopener">QRZ.com</a>, the callsign lookup, in a new tab.
+    VibeSDR fetches and stores nothing from it; QRZ.com shows full details only when you are signed in.
   </div>
   <!-- ★ The DAB pane's "Licensed sites" come from four regulators (2026-10-06); OGL v3 makes the
        Ofcom sentence a condition, and the others are credited because they asked or as a courtesy.

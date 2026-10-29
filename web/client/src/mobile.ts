@@ -16,6 +16,8 @@
 
 import { SIGID_HOME } from '../../../src/services/dialChat';
 import { pushBack } from './gamepad';
+import { openCwGuide } from './cwGuide';
+import { QRZ_HOME, QRZ_SIGN_IN_NOTE } from '../../../src/utils/cwFormat';
 import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
 import { setModeLabel } from './modeIconDom';   // ★ V12 mode icons
 
@@ -432,6 +434,31 @@ export function initMobileControls(deps: MobileDeps) {
     wiki.textContent = 'SIGNAL ID WIKI ↗';
     wiki.title = 'Not sure what a signal is? Search the Signal Identification Wiki';
     menu.appendChild(wiki);
+    /* ★★ V12 (2026-10-29) QRZ.COM ↗ — the callsign lookup, a plain link in a new tab as the wiki is (nothing fetched or
+     *  stored); every spotted or decoded callsign in the lists opens its own page the same way (qrzLink.ts). Beside it
+     *  CW TERMS GUIDE — the ham-CW vocabulary the PLAIN key reads from, searchable (cwGuide.ts). The app has the same pair. */
+    const pair = document.createElement('div');
+    pair.className = 'mModePair';
+    const qrz = document.createElement('a');
+    qrz.className = 'mModeClose mModeWiki';
+    qrz.id = 'mModeQrz';
+    qrz.href = QRZ_HOME;
+    qrz.target = '_blank';
+    qrz.rel = 'noopener noreferrer';
+    qrz.textContent = 'QRZ.COM ↗';
+    qrz.title = 'QRZ.com — look up a callsign';
+    const guide = document.createElement('button');
+    guide.className = 'mModeClose';
+    guide.id = 'mModeCwTerms';
+    guide.textContent = 'CW TERMS GUIDE';
+    guide.title = 'Q-codes, abbreviations and prosigns used in Morse contacts, searchable';
+    guide.onclick = () => { close(); openCwGuide(); };
+    pair.append(qrz, guide);
+    menu.appendChild(pair);
+    const qrzNote = document.createElement('div');
+    qrzNote.className = 'mModeNote';
+    qrzNote.textContent = QRZ_SIGN_IN_NOTE;
+    menu.appendChild(qrzNote);
     // ★★ V12 beta25 — WHAT IS THE DC SPIKE? Only while the red label is on screen; the explanation opens in place under it.
     if (deps.dcSpikeOnScreen?.()) {
       const dcKey = document.createElement('button');

@@ -48,6 +48,9 @@ struct Spot {
     std::string call;
     double offsetHz = 0;   ///< from the segment's centre (IQ) or the audio frequency (real input)
     float  wpm = 0;
+    /** ★ The speed as a RANGE (V12, 2026-10-29): the spread of the station's recent characters — equal to each other
+     *  (and to round(wpm)) when the fist is steady. Shown "17–21 wpm" when they differ. */
+    int    wpmLo = 0, wpmHi = 0;
     float  snrDb = 0;      ///< mark over noise in the decoder's own ≈ 47 Hz bin (see Skimmer::binHz)
     std::string how;       ///< "CQ", "TEST" or "DE" — what the station was doing when it was heard
     int64_t utcMs = 0;
@@ -59,6 +62,7 @@ struct SignalView {
     int     id = 0;
     double  offsetHz = 0;
     float   wpm = 0;
+    int     wpmLo = 0, wpmHi = 0;   ///< ★ the speed as a range (see Spot::wpmLo)
     float   snrDb = 0;
     float   quality = 0;   ///< 0..1: how cleanly its characters decode (timing margins, valid codes)
     int64_t firstMs = 0, lastMs = 0;   ///< first and last heard (stream clock, UTC ms)

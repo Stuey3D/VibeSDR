@@ -317,6 +317,8 @@ each satellite decoder needs from them.
   high/medium/low/poor grading our UberSDR path already shows (`MorseQuality`), so one client UI serves both. Later,
   put N of these on the `Channelizer` for a skimmer, sending spots, not text, to the CW spots map we already draw.
   ITU-R M.1677 defines the code.
+  ★ **Built** (V12, 2026-10-25, `docs/v12/CW-SKIMMER.md`); **human fists** (2026-10-29): per-station soft timing, a short
+  beam over the readings and a small n-gram model of ham CW that breaks ties — see CW-SKIMMER.md "Human-sent Morse".
 - **DSC.** The FSK decoder already does 100 Bd/170 Hz. DSC adds the 10-bit symbols (7 information bits plus a 3-bit
   count of B-bits), the DX/RX time diversity (each symbol sent twice, 4 symbols apart), the format/category/MMSI/
   nature-of-distress fields from M.493, and the ECC check. Show distress alerts plainly, with position (if sent),
