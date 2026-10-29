@@ -52,8 +52,9 @@ transform as one.
 ## The mode (server contract)
 
 `{"type":"ndb","on":1|0}` (gated by ask-before-tuning). The server saves the listener's place, puts the hardware centre
-on the band (`vibendb::plan`: as much of 190–535 kHz as the radio reaches and its rate holds, **in one slice**, centred on
-Europe's 255–526.5 when it cannot hold it all; x.25/x.75 kHz, between raster beacons; its DC and IQ image are never
+on the band (`vibendb::plan`: as much of 190–535 kHz as the radio reaches and its rate holds, **in one slice**; when it
+cannot hold it all, where the listed beacons near the server are (`nearbyCentre`: the slice holding the most within
+2000 km, 4000 km if under 10 — Stuart, 2026-10-29), centred on Europe's 255–526.5 without a position; x.25/x.75 kHz, between raster beacons; its DC and IQ image are never
 carriers) and gives the radio back exactly as found.
 
 **A whole-radio, map-first mode in ADS-B's pattern** (Stuart, 2026-10-27: "NDB should be a map and list view like ADS-B
@@ -66,7 +67,7 @@ mode / passband / zoom / rate / IF filter ignored with a log line. One whole-rad
 | radio | capture | NDB band in the slice |
 |---|---|---|
 | Airspy HF+ | 384 / 456 / 768 / 912 kS/s | all of 190–535 kHz (384 kS/s holds 345.6 kHz — just) |
-| Airspy HF+ | 192 / 256 kS/s | 172.8 / 230 kHz centred on 255–526.5 (≈ 304–477 / 275–505 kHz) |
+| Airspy HF+ | 192 / 256 kS/s | 172.8 / 230 kHz where the beacons near the server are (192 kS/s: UK ≈ 282–454, Kansas ≈ 242–414 kHz); without a position centred on 255–526.5 (≈ 304–477 / 275–505 kHz) |
 | SDRplay RSP | ≥ 2 MS/s | all of it |
 | RTL-SDR, direct sampling on or automatic | 2.4 MS/s (any ≥ 384 kS/s) | all of it |
 | RTL-SDR without direct sampling, HackRF, Airspy R2/Mini, Icom | — | none: no NDB control at all |

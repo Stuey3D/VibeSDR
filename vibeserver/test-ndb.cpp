@@ -162,6 +162,35 @@ int main(int argc, char** argv) {
         ok(m.n.source().find("OurAirports") == 0, "WOD's position is OurAirports' (" + m.n.source() + ")");
         ok(vibendb::match(342500, "NWI", true, lat, lon).n.source().find("OpenStreetMap") != std::string::npos, "NWI (Norwich) comes from OpenStreetMap");
 
+        // ★★ A capture too narrow for the band goes where the listed beacons near the SERVER are (Stuart, 2026-10-29).
+        {
+            vibendb::Plan none, uk, us, au, full;
+            ok(vibendb::plan(9e3, 31e6, 192e3, none) && std::fabs(0.5 * (none.lo + none.hi) - 390.75e3) < 1e3,
+               "HF+ 192 kS/s, no position: centred on Europe's 255–526.5 kHz (" + std::to_string((int)(none.lo / 1e3)) + "–" + std::to_string((int)(none.hi / 1e3)) + " kHz)");
+            auto count = [](const vibendb::Plan& p, double la, double lo) {
+                int n = 0;
+                for (size_t i = 0; i < vibendb::kNavaidCount; ++i) {
+                    double km, deg; vibendb::distBearing(la, lo, vibendb::kNavaids[i].lat, vibendb::kNavaids[i].lon, km, deg);
+                    if (km <= 2000 && vibendb::kNavaids[i].hz >= p.lo && vibendb::kNavaids[i].hz <= p.hi) ++n;
+                }
+                return n;
+            };
+            vibendb::plan(9e3, 31e6, 192e3, uk, lat, lon);
+            ok(count(uk, lat, lon) >= count(none, lat, lon), "UK server: its slice (" + std::to_string((int)(uk.lo / 1e3)) + "–" + std::to_string((int)(uk.hi / 1e3)) +
+               " kHz) holds " + std::to_string(count(uk, lat, lon)) + " beacons within 2000 km, the fixed core " + std::to_string(count(none, lat, lon)));
+            const double kla = 38.5, klo = -97.0;   // ★ Kansas: US beacons crowd 200–420 kHz
+            vibendb::plan(9e3, 31e6, 192e3, us, kla, klo);
+            ok(us.lo < none.lo && count(us, kla, klo) > count(none, kla, klo), "US server: the slice moves down (" + std::to_string((int)(us.lo / 1e3)) + "–" +
+               std::to_string((int)(us.hi / 1e3)) + " kHz) — " + std::to_string(count(us, kla, klo)) + " beacons within 2000 km vs " + std::to_string(count(none, kla, klo)));
+            vibendb::plan(9e3, 31e6, 192e3, au, -25.0, 134.0);
+            ok(au.lo >= vibendb::kBandLoHz && au.hi <= vibendb::kBandHiHz && std::fmod(au.hwCentre, 500.0) == 250.0,
+               "outback server: a slice inside the band, centre still between raster beacons (" + std::to_string((int)(au.lo / 1e3)) + "–" + std::to_string((int)(au.hi / 1e3)) + " kHz)");
+            ok(vibendb::plan(9e3, 31e6, 384e3, full, kla, klo) && full.lo == vibendb::kBandLoHz && full.hi == vibendb::kBandHiHz,
+               "384 kS/s holds the whole band, wherever the server is");
+            vibendb::Plan again; vibendb::plan(9e3, 31e6, 192e3, again, kla, klo);
+            ok(again.hwCentre == us.hwCentre, "the same position gives the same slice (cached)");
+        }
+
         // ★★ COVERAGE — a real heard log (Nick G4IRX, UK, 2026-10-28): 31 confirmed idents that OurAirports alone did not
         //    name (0 of 31 before the merge). Most are UK/Irish aerodrome locators that no source we may bundle publishes
         //    (docs/v12/NDB-SKIMMER.md § Beacon list sources); MTM 393 shares EMW's carrier and MRV 402.5 LBA's — likely

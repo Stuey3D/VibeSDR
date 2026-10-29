@@ -37,18 +37,53 @@ constexpr double kBandLoHz = 190e3, kBandHiHz = 535e3;
 /** ★ Below this much of the band in the capture, the mode is not worth offering. */
 constexpr double kMinSpanHz = 100e3;
 
+/** ★ Where the beacons near THIS receiver are, for a capture too narrow for the whole band (Stuart, 2026-10-29: "region
+ *  detect a server location and choose the region accordingly when less than 2 MS/s"). From the beacon list itself,
+ *  not a table of regions: the centre in [cLo, cHi] (0.5 kHz steps) whose slice holds the most listed beacons within
+ *  2000 km — 4000 km when that finds under 10 (a remote island, the outback) — ties to the one nearest Europe's core.
+ *  NaN without a position or with under 10 beacons in reach, and the caller keeps the core. Cached: the hwinfo
+ *  answer calls it too, and on a Pi 2 the 6882 distances are worth doing once per position, not per request. */
+inline double nearbyCentre(double cLo, double cHi, double usable, double core, double lat, double lon) {
+    if (!std::isfinite(lat) || !std::isfinite(lon) || cHi < cLo) return NAN;
+    static std::mutex mu;
+    static double kLat = NAN, kLon = NAN, kLo = NAN, kHi = NAN, kUse = NAN, kAns = NAN;
+    std::lock_guard<std::mutex> lk(mu);
+    if (lat == kLat && lon == kLon && cLo == kLo && cHi == kHi && usable == kUse) return kAns;
+    double ans = NAN;
+    for (double radius : { 2000.0, 4000.0 }) {
+        std::vector<double> f;
+        for (size_t i = 0; i < kNavaidCount; ++i) {
+            double km, deg; distBearing(lat, lon, kNavaids[i].lat, kNavaids[i].lon, km, deg);
+            if (km <= radius) f.push_back(kNavaids[i].hz);
+        }
+        if (f.size() < 10) continue;
+        std::sort(f.begin(), f.end());
+        long best = -1;
+        for (double c = cLo; c <= cHi + 1.0; c += 500.0) {
+            const long n = (long)(std::upper_bound(f.begin(), f.end(), c + usable / 2) - std::lower_bound(f.begin(), f.end(), c - usable / 2));
+            if (n > best || (n == best && std::fabs(c - core) < std::fabs(ans - core))) { best = n; ans = c; }
+        }
+        break;
+    }
+    kLat = lat; kLon = lon; kLo = cLo; kHi = cHi; kUse = usable; kAns = ans;
+    return ans;
+}
+
 /** Where to put the capture, given what the radio reaches ([reachLo, reachHi]) and its rate: the band (or as much of it
- *  as fits, centred on Europe's busy 255–526.5 kHz), the hardware centre a little off the 0.5 kHz raster so the DC
- *  remnant lands between beacons. Returns false when under kMinSpanHz of the band can be had. */
+ *  as fits — where the listed beacons near the receiver are when its position is known, else centred on Europe's busy
+ *  255–526.5 kHz), the hardware centre a little off the 0.5 kHz raster so the DC remnant lands between beacons.
+ *  Returns false when under kMinSpanHz of the band can be had. */
 struct Plan { double hwCentre = 0, lo = 0, hi = 0; };
-inline bool plan(double reachLo, double reachHi, double rate, Plan& p) {
+inline bool plan(double reachLo, double reachHi, double rate, Plan& p, double lat = NAN, double lon = NAN) {
     double lo = std::max(kBandLoHz, reachLo), hi = std::min(kBandHiHz, reachHi);
     if (hi - lo < kMinSpanHz) return false;
     const double usable = rate * 0.90;   // ★ the slice's (and the radio's) outer 5 % are filter roll-off
     if (hi - lo > usable) {
-        // ★ centre on the core (255–526.5), clamped into what the radio reaches
+        // ★ centre on the beacons near this receiver, else on the core (255–526.5); clamped into what the radio reaches
         const double core = 0.5 * (255e3 + 526.5e3);
-        double c = std::max(lo + usable / 2, std::min(hi - usable / 2, core));
+        const double cLo = lo + usable / 2, cHi = hi - usable / 2;
+        const double near = nearbyCentre(cLo, cHi, usable, core, lat, lon);
+        double c = std::max(cLo, std::min(cHi, std::isfinite(near) ? near : core));
         lo = c - usable / 2; hi = c + usable / 2;
     }
     if (hi - lo < kMinSpanHz) return false;

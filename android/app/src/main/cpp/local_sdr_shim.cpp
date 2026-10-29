@@ -14389,7 +14389,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!vsNdbReach(reachLo, reachHi)) return;
         const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : sampleRate;
         vibendb::Plan pl;
-        if (!vibendb::plan(reachLo, reachHi, rate, pl)) return;
+        if (!vibendb::plan(reachLo, reachHi, rate, pl, g_bgLat.load(), g_bgLon.load())) return;
         AdsbSaved& s = ndbSaved_;
         s.lockedCentre = g_vsLockedCentre.load(); s.lockedRate = g_vsLockedRate.load();
         s.rtl = rtlCenter.load(); s.audio = audioFreq.load(); s.view = viewCenter.load(); s.rate = sampleRate;
@@ -34360,10 +34360,11 @@ static std::string vsTunableJson() {
             j += std::string(",\"ndb\":") + (why.empty() ? "true" : "false");
             if (!why.empty()) j += ",\"ndbWhy\":\"" + dabEscape(why) + "\"";
             /* ★ What ONE slice covers at the rate this radio runs at now — the whole band where the rate holds it (an HF+ at
-             *  384 kS/s or more, an RSP, an RTL in direct sampling at 2.4 MS/s), else the part centred on 255–526.5 kHz. */
+             *  384 kS/s or more, an RSP, an RTL in direct sampling at 2.4 MS/s), else the part where the listed beacons near this server are (its position
+             *  known), or centred on 255–526.5 kHz. */
             const double running = LocalSdrShim::instance().captureSpanHz();
             vibendb::Plan pl;
-            if (running > 0 && vibendb::plan(lo, hi, running, pl)) { lo = pl.lo; hi = pl.hi; }
+            if (running > 0 && vibendb::plan(lo, hi, running, pl, g_bgLat.load(), g_bgLon.load())) { lo = pl.lo; hi = pl.hi; }
             char e[80]; std::snprintf(e, sizeof e, ",\"ndbLo\":%.0f,\"ndbHi\":%.0f", lo, hi); j += e;
         }
     }
