@@ -130,7 +130,11 @@ private:
     void* makeRingImage();   // a new image of the ring as it stands (no lock), or nullptr
     void storeRingImageLocked(void* img);   // with mx_ held
     void emitRepeatRow();
-    void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost);
+    /** `at` > `now`: the trace waits for its row (WaterfallView traceShow) — queued, published by runTrace. */
+    void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at = 0, double now = 0);
+    void publishTrace(const std::vector<float>& spec, void* peak);
+    void runTrace(double now);
+    void traceDrop();
     double now() const;
 
     // Injected
@@ -182,6 +186,10 @@ private:
     std::vector<ClockRow> clockRows_;
     std::vector<long> clockOut_;
     long clockSeq_ = 0;
+    // ★★★ V12 2026-10-29 (v12-wf-no-jb) THE TRACE GOES WITH ITS ROW (WaterfallView traceShow): clocked frames skip the
+    //     jitter buffer, and the spectrum target waits here until its frame's row is on screen (presentation + traceLagMs).
+    struct TraceItem { double at = 0; std::vector<float> spec; void* peak = nullptr; };
+    std::deque<TraceItem> traceQ_;
     void runClock(double now);
     void clockOff();
     bool covNow_ = false, bgNow_ = false;  // engine-thread copies

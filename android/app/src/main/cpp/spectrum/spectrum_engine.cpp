@@ -52,6 +52,7 @@ SpectrumEngine::~SpectrumEngine() {
     if (thread_.joinable()) thread_.join();
     if (outImage_) releaseImage_(outImage_);
     if (outPeak_) releasePath_(outPeak_);
+    traceDrop();   // ★ V12 peak paths still waiting for their rows
 }
 
 double SpectrumEngine::now() const { return clock_ ? clock_() : wallMs(); }
@@ -159,6 +160,7 @@ void SpectrumEngine::loop() {
         double next = -1;
         if (jbDueAt_ >= 0) next = jbDueAt_;
         if (extraDueAt_ >= 0 && (next < 0 || extraDueAt_ < next)) next = extraDueAt_;
+        if (!traceQ_.empty() && (next < 0 || traceQ_.front().at < next)) next = traceQ_.front().at;   // ★ V12 the trace's wait
         // ★ V12 the fixed output clock's next tick (engine-thread state, read here under mx_ as the deadlines above are)
         if (rowClock_.rate > 0 && !vibewf::clockIdle(rowClock_, t)) { const double c = vibewf::clockNextAt(rowClock_); if (c >= 0 && (next < 0 || c < next)) next = c; }
         const bool work = !inbox_.empty() || settingsDirty_ || bg_ != bgNow_ || covered_ != covNow_ || (next >= 0 && next <= t);
@@ -191,7 +193,7 @@ void SpectrumEngine::runDue(double now) {
     }
     if (applySettings) proc_.applySettings(ps);
     // ★ Background / cover STOP the repeat rows (the JS timer kept pushing up to 8 after either — and after unmount).
-    if ((bgNow_ && !wasBg) || (covNow_ && !wasCov)) { extrasLeft_ = 0; extraDueAt_ = -1; clockOff(); }
+    if ((bgNow_ && !wasBg) || (covNow_ && !wasCov)) { extrasLeft_ = 0; extraDueAt_ = -1; clockOff(); traceDrop(); }
     if (bgNow_ && !wasBg) {                                     // drainFrame's background branch, at once
         for (auto& f : jbQueue_) framePool_.push_back(std::move(f));
         jbQueue_.clear(); jbPrefill_ = true; jbDueAt_ = -1;
@@ -205,6 +207,7 @@ void SpectrumEngine::runDue(double now) {
     //    monotonic clock is the proper follow-up.
     if (jbDueAt_ > now + 1000) jbDueAt_ = now;
     if (extraDueAt_ > now + 1000) extraDueAt_ = now;
+    for (auto& it : traceQ_) if (it.at > now + 1000) it.at = now;
     if (rowClock_.rate > 0 && vibewf::clockNextAt(rowClock_) > now + 1000) { rowClock_.t0 = now; rowClock_.k = 0; }
     {
         std::lock_guard<std::mutex> lk(mx_);
@@ -219,6 +222,7 @@ void SpectrumEngine::runDue(double now) {
         extraDueAt_ = extrasLeft_ > 0 ? now + extraSpacing_ : -1;
     }
     if (rowClock_.rate > 0 && !bgNow_ && !covNow_) { const double c = vibewf::clockNextAt(rowClock_); if (c >= 0 && now >= c) runClock(now); }
+    if (!traceQ_.empty() && now >= traceQ_.front().at) runTrace(now);
     std::lock_guard<std::mutex> lk(mx_);
     while (framePool_.size() > 6) framePool_.pop_back();
 }
@@ -242,6 +246,22 @@ void SpectrumEngine::enqueue(Frame&& f, double now) {
         { std::lock_guard<std::mutex> lk(mx_); for (auto& q : jbQueue_) framePool_.push_back(std::move(q)); }
         jbQueue_.clear();
         jbPrefill_ = true;
+        jbLastArrival_ = now;
+        handleFrame(f, now);
+        std::lock_guard<std::mutex> lk(mx_); framePool_.push_back(std::move(f));
+        return;
+    }
+    // ★★★ V12 2026-10-29 (v12-wf-no-jb, WaterfallView enqueueFrame's twin): ON THE FIXED CLOCK, straight through on arrival —
+    //     `now` is the frame's real arrival (arrivedMs), and the clock's own presentation delay is the only de-jitter.
+    //     Stuart: "if the buffer isnt needed for the waterfall improve the latency there too please". The clock running
+    //     means the last frame was clocked; the first frame, a covered view or a feed too slow to fill comes through the
+    //     buffer once and starts it. NATIVE (targetRows 0) keeps the buffer. Anything banked from before goes.
+    if (rowClock_.rate > 0 && cfgNow_.targetRows > 0) {
+        jbDueAt_ = -1;
+        { std::lock_guard<std::mutex> lk(mx_); for (auto& q : jbQueue_) framePool_.push_back(std::move(q)); }
+        jbQueue_.clear();
+        jbPrefill_ = true;
+        if (jbLastArrival_ > 0) jbArrivalMs_ = jbArrivalMs_ * 0.8 + (now - jbLastArrival_) * 0.2;
         jbLastArrival_ = now;
         handleFrame(f, now);
         std::lock_guard<std::mutex> lk(mx_); framePool_.push_back(std::move(f));
@@ -360,7 +380,7 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
         if (!slot) { clockRows_.emplace_back(); slot = &clockRows_.back(); }
         slot->id = id; slot->row.assign(fr.row, fr.row + n); slot->c = rowCentre; slot->h = rowHzBin;
         vibewf::clockSetRate(rowClock_, rowTarget, now);
-        vibewf::clockArrive(rowClock_, id, now, boost);
+        const double pAt = vibewf::clockArrive(rowClock_, id, now, boost);
         runClock(now);
         {
             std::lock_guard<std::mutex> lk(mx_);
@@ -368,7 +388,9 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
             outAvgMs_ = avgFrameMs_;
             outVer_++;
         }
-        buildSpectrum(fr, boost);
+        // ★★ The trace goes with its row: at its presentation + the rows the UI holds in hand (traceLagMs); at once in a
+        //   gesture.
+        buildSpectrum(fr, boost, boost ? 0 : pAt + vibewf::traceLagMs(rowTarget), now);
         return;
     }
     if (rowClock_.rate > 0) clockOff();   // off the clock (NATIVE, a feed too slow to fill): the next clocked frame starts afresh
@@ -502,9 +524,10 @@ void SpectrumEngine::clockOff() {
 }
 
 // Spectrum target (1493-1526) + peak path (1528-1552) + hidden (1553-1571)
-void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost) {
+void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at, double now) {
     const EngineConfig& cfg = cfgNow_;
     if (!(cfg.specShow && cfg.specH > 4)) {
+        traceDrop();
         std::lock_guard<std::mutex> lk(mx_);
         specHidden_ = true; specGen_++;
         if (outPeak_) { releasePath_(outPeak_); outPeak_ = nullptr; }
@@ -542,13 +565,37 @@ void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boo
     } else if (boost) {
         proc_.resetPeakHold();
     }
+    if (at > now) {   // ★ V12 waits for its row (never out of order; at most 4 waiting, as the clock's queue)
+        if (!traceQ_.empty() && at < traceQ_.back().at) at = traceQ_.back().at;
+        traceQ_.push_back(TraceItem{at, next, peak});
+        while (traceQ_.size() > 4) { if (traceQ_.front().peak) releasePath_(traceQ_.front().peak); traceQ_.pop_front(); }
+        return;
+    }
+    traceDrop();   // now: anything still waiting is older
+    publishTrace(next, peak);
+}
+void SpectrumEngine::publishTrace(const std::vector<float>& spec, void* peak) {
     std::lock_guard<std::mutex> lk(mx_);
-    outSpec_ = next;
+    outSpec_ = spec;
     specGen_++; specHidden_ = false;
     if (outPeak_) releasePath_(outPeak_);
     outPeak_ = peak;
     peakGen_++;
     outVer_++;
+}
+// ★★★ V12 the trace whose row is now on screen: every one due, the newest published (older ones' peak paths never shown).
+void SpectrumEngine::runTrace(double now) {
+    if (bgNow_ || covNow_) { traceDrop(); return; }
+    bool any = false; TraceItem due;
+    while (!traceQ_.empty() && traceQ_.front().at <= now) {
+        if (any && due.peak) releasePath_(due.peak);
+        due = std::move(traceQ_.front()); traceQ_.pop_front(); any = true;
+    }
+    if (any) publishTrace(due.spec, due.peak);
+}
+void SpectrumEngine::traceDrop() {
+    for (auto& it : traceQ_) if (it.peak) releasePath_(it.peak);
+    traceQ_.clear();
 }
 
 }  // namespace vibespec
