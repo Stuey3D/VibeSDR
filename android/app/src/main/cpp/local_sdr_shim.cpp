@@ -14551,7 +14551,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         aisGains_ = LocalSdrShim::instance().getTunerGains();
         aisGainIdx_ = aisGainSet_ = -1; aisGainStart_ = -1; aisManual_ = false;
         if (!aisGains_.empty()) {
-            aisGainStart_ = aisGainIdx_ = int(aisGains_.size() * 6 / 10);   // ★ 60 % up the radio's own list (ISM's rule)
+            /* ★★ 85 % UP THE RADIO'S OWN LIST (was ISM's 60 %, 2026-10-29). A listener with an RTL heard ONE ship where
+             *  another decoder heard many. On an R820T the list is 0…49.6 dB in 29 rungs: 60 % is 32.8 dB, where the
+             *  dongle's own noise (and its 8-bit converter) still sit near the aerial's — a far ship's burst is lost under
+             *  them. 85 % is 43.4 dB, the region AIS is normally received in. Ships are short bursts on quiet channels, so
+             *  the clip rule below still steps it down if a strong neighbour (a pager, a broadcaster) overloads it. */
+            aisGainStart_ = aisGainIdx_ = std::min(int(aisGains_.size()) - 1, int(aisGains_.size() * 85 / 100));
             aisGainSet_ = aisGains_[size_t(aisGainIdx_)];
         }
         agcForget("AIS: the channels are not the carrier we came off");
