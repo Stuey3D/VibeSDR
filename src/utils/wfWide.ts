@@ -239,6 +239,18 @@ export function wideCapture(st: WideState | null, now: number): { lo: number; hi
   return { lo: w.centreHz - w.spanHz / 2, hi: w.centreHz + w.spanHz / 2 };
 }
 
+/** ★★★ A ROW THE SERVER PLACED OUTSIDE ITS OWN CAPTURE GETS NO LAYER (V12, 2026-10-29). The layer's floor is drawn
+ *  through the DETAILED row's own dB → index mapping (its auto range) — which only means anything when the detailed row
+ *  is a picture of part of this capture. A zoom channel left at a stale offset after a recentre (the server's retune,
+ *  fixed there too) built rows for ~8.79 MHz from the IF filter's stopband while the capture was 5.6–8.6 MHz; the auto
+ *  range followed that stopband, and when the view came back to 40 m those rows were filled from the layer — the real
+ *  40 m floor, ~30 dB above that range: a solid white bar for the nine seconds the offset was stale (Stuart, RSP1A on
+ *  the Lenovo). Its centre outside the capture = an inconsistent row: black outside its data, never a guess. */
+export function rowInCapture(rowLo: number, rowSpan: number, capCentreHz: number, capSpanHz: number): boolean {
+  const c = rowLo + rowSpan / 2;
+  return Math.abs(c - capCentreHz) <= capSpanHz / 2;
+}
+
 /* ── THE LAYER RING: one layer row per ring slot, in capture space ─────────────────────────────────────────────────── */
 
 export interface LayerRing {
@@ -266,7 +278,7 @@ export function layerWriteRow(L: LayerRing, slot: number, st: WideState | null, 
   L.k[slot] = 0; L.pkN[slot] = 0;
   const w = st?.row;
   if (!st || !w || !(rowSpan > 0) || !isFinite(rowLo) || rowSpan >= w.spanHz * LAYER_FULL || st.F !== L.F || st.C !== L.C
-      || !wideBlend(st, now)) return 0;
+      || !rowInCapture(rowLo, rowSpan, w.centreHz, w.spanHz) || !wideBlend(st, now)) return 0;
   const F = L.F, C = L.C, P = L.P, fo = slot * F;
   for (let i = 0; i < F; i++) { const v = st.bFloor[i]; L.floor[fo + i] = v === v ? Math.max(1, Math.min(255, floorIdx(v, st.bSpread[i], toIdx))) : 0; }
   let n = 0;

@@ -309,30 +309,66 @@ export interface FanState {
   eLo0: number; eSpan0: number; eJ: number; eT: number;
   /** Each slot's own span in Hz (0 = unknown) — a jump moves every row by the same Hz, in ITS scale. */
   span: Float64Array;
+  /** ★ The rows/s the waterfall is running at (the fixed clock's rate, or the feed's in Native) — the ease is by TIME
+   *  (zoomEaseRows / tuneEaseRows). The caller keeps it current; EASE_ROW_RATE until it does. */
+  rowRate: number;
 }
 export function newFanState(rows: number): FanState {
   return { lastLo: 0, lastSpan: 0, xfA: new Float64Array(rows).fill(1), xfB: new Float64Array(rows), disp: null, sinceZoom: 0,
            validFrom: 0, lo: null, hi: null, stepK: 1, stepC: 0, layer: null, dLo: NaN, dSpan: NaN, easeLeft: 0, eLo0: NaN, eSpan0: NaN, eJ: 0, eT: 0,
-           span: new Float64Array(rows) };
+           span: new Float64Array(rows), rowRate: EASE_ROW_RATE };
 }
 
-/** Rows a zoom step eases over — by its SIZE: a ×2 drum step 4 rows (~0.2 s at 20 rows/s), ×4 or more 6, a pinch's 5 %
- *  step 1 (nothing to ease: the shader's zoom join draws it). The new rows are drawn at in-between zooms on an EASE-OUT
- *  — the first new row is already most of the way — and the shader's per-row zoom join draws the curve between them:
- *  Stuart's sketch, 2026-10-28 ("thin lines when zoomed out expanding with nice curves"), zooming out "no breaks".
- *  ★★ NOT LONGER, NOT AN S-CURVE: 16 rows on an S-curve (the first try) made the waterfall reach the new zoom ¾ s after
- *    the spectrum, and its slow start drew almost nothing for the first rows — Stuart: "it doesnt feel as instant as it
- *    did back in v2 … oddly delayed". v2 made the whole change within ONE frame interval. Every eased row keeps the
- *    geometry it was drawn at, like any history row. */
-export const ZOOM_EASE_ROWS = 4;
+/** ★★★ HOW LONG A STEP EASES — BY TIME, AT THE RUNNING ROW RATE (Stuart, 2026-10-29: "do what you feel is the best for
+ *  having the zoom curves show the signal back to its historic view, the same applies to the tune curves too, the lines
+ *  are simply too sharp" / "a longer more rounded curve everywhere … similar to how it was back in the early builds").
+ *  ★ WHY THE OLD COUNT SLICED: 4 rows per ×2 made a ×√2 key (VibeServer's zoom step) TWO rows on an ease-out — 75 % of
+ *    the move in the first row — so every press was a stair-step joined by the shader's one-row hairline (his
+ *    screenshot 21:12, the Lenovo RSP at 12058 kHz: six bands, each carrier straight inside one and jumping sideways at
+ *    each boundary).
+ *  ★ THE EARLY BUILD (9c297f390, "waterfall is perfect"): no fan — the drum sent a STREAM of small zoom changes, so each
+ *    row was drawn at a slightly different scale and the stacked rows made a smooth curve with the signal's own width for
+ *    as long as the hand turned. A step now EMULATES THE HAND: it is spread at a steady zoom rate (constant in
+ *    log-span) over a fixed TIME — 0.33 s per ×2, never under 0.25 s for a key or detent (×√2), capped at 0.5 s for a big
+ *    step — so 10 rows at Default 30 and 20 at Smooth 60 for a ×2, every one a whole real row at its in-between zoom.
+ *    A pinch's own small steps (< 0.2 octave) take their proportional time (one or two rows): a continuous gesture still
+ *    draws its own curve, as the drum did.
+ *  ★★ IT MOVES FROM THE FIRST ROW (easeView: steady, a soft landing) — the 10-28 S-curve's slow start ("oddly delayed")
+ *     is not repeated, and a ×2 has landed within 0.33 s, the spectrum's own step.
+ *  Every eased row keeps the geometry it was drawn at, like any history row. Shared: the app (here), the Android engine
+ *  (wf_zoom_fan.h — the twin) and the web (web/client/src/wfGlide.ts, in device rows). */
+export const ZOOM_EASE_S_PER_OCTAVE = 0.33;
+export const ZOOM_EASE_MIN_S = 0.25;
+export const ZOOM_EASE_MAX_S = 0.5;
+/** A tune step glides the same way: 0.25 s for a step, up to 0.35 s for a move of most of the view. */
+export const TUNE_EASE_S = 0.25;
+export const TUNE_EASE_MAX_S = 0.35;
+/** The row rate the counts assume when the caller has not said (Default 30). */
+export const EASE_ROW_RATE = 30;
+/** Seconds a zoom by k eases over (see above). */
+export function zoomEaseSec(k: number): number {
+  const oct = Math.abs(Math.log2(k));
+  if (!(oct > 0)) return 0;
+  const t = oct * ZOOM_EASE_S_PER_OCTAVE;
+  return oct < 0.2 ? t : Math.max(ZOOM_EASE_MIN_S, Math.min(ZOOM_EASE_MAX_S, t));
+}
+/** Seconds a tune of `frac` of the view eases over. */
+export function tuneEaseSec(frac: number): number {
+  return TUNE_EASE_S + (TUNE_EASE_MAX_S - TUNE_EASE_S) * Math.min(1, Math.max(0, frac));
+}
+/** Rows a zoom step by k eases over at `rowRate` rows/s. */
+export function zoomEaseRows(k: number, rowRate = EASE_ROW_RATE): number {
+  const r = rowRate > 0 ? rowRate : EASE_ROW_RATE;
+  return Math.max(1, Math.round(zoomEaseSec(k) * r));
+}
+/** A ×2 step's rows at the default rate (the tests' reference). */
+export const ZOOM_EASE_ROWS = zoomEaseRows(2);
 /** A tune eases once it moves more than two columns of a 1024-wide row (a tuning step, not float noise). */
 export const TUNE_EASE_MIN_FRAC = 2 / 1024;
-/** Rows a tune eases over: 3 for a step, up to 6 for a move of the whole view. */
-export function tuneEaseRows(frac: number): number {
-  return Math.max(3, Math.min(6, 3 + Math.round(frac * 6)));
-}
-export function zoomEaseRows(k: number): number {
-  return Math.max(1, Math.min(6, Math.round(Math.abs(Math.log2(k)) * ZOOM_EASE_ROWS)));
+/** Rows a tune of `frac` of the view eases over at `rowRate` rows/s (at least 2). */
+export function tuneEaseRows(frac: number, rowRate = EASE_ROW_RATE): number {
+  const r = rowRate > 0 ? rowRate : EASE_ROW_RATE;
+  return Math.max(2, Math.round(tuneEaseSec(frac) * r));
 }
 
 /** Per output pixel x of an n-wide row, the stored bins [lo[x], hi[x]] it shows under map (a, b) — lo = -1 where the
@@ -423,7 +459,7 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
     if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }   // else: on from where the ease has got to
     st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
     // ★ A step mid-ease (a pinch after a drum step) carries on for at least what the ease had left — never a snap.
-    st.eT = st.easeLeft = Math.max(zoomEaseRows(span / st.dSpan), st.easeLeft > 0 ? st.easeLeft : 0);
+    st.eT = st.easeLeft = Math.max(zoomEaseRows(span / st.dSpan, st.rowRate), st.easeLeft > 0 ? st.easeLeft : 0);
   }
   // ★★★ A ZOOM LEAVES THE HISTORY AS IT WAS DRAWN (Stuart, 2026-10-28, on beta27's re-map: "you are simply expanding the
   //     whole signal history … what should happen is a thin line signal should expand out to the width and the history
@@ -442,7 +478,7 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
   if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * TUNE_EASE_MIN_FRAC && moved < st.lastSpan) {
     if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
     st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
-    st.eT = st.easeLeft = Math.max(tuneEaseRows(moved / st.lastSpan), st.easeLeft > 0 ? st.easeLeft : 0);
+    st.eT = st.easeLeft = Math.max(tuneEaseRows(moved / st.lastSpan, st.rowRate), st.easeLeft > 0 ? st.easeLeft : 0);
   }
   if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
     const k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
@@ -469,12 +505,14 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
   return fanned;
 }
 
-/** THE EASE's geometry at fraction u (0..1) from (lo0, span0) to (lo1, span1), in Hz: EASE-OUT (most of the way at once,
- *  landing soft), the span geometric (each step the same ratio) about the zoom's FIXED POINT (the anchor — the dial for the
+/** THE EASE's geometry at fraction u (0..1) from (lo0, span0) to (lo1, span1), in Hz: STEADY with a soft landing
+ *  (e = 1.5u − 0.5u²: the hand's constant rate, moving from the first row at 1.5× the mean pace and arriving at half it —
+ *  the 2026-10-29 time-based ease; it was a quadratic ease-out, 1 − (1 − u)², which put 75 % of a two-row step in its
+ *  first row), the span geometric (each step the same ratio) about the zoom's FIXED POINT (the anchor — the dial for the
  *  drum, the finger for a pinch); a tune (same span) slides lo. Shared by the app (fanAfterRow) and the web
  *  (web/client/src/wfGlide.ts) — one formula, so the two fan alike. */
 export function easeView(lo0: number, span0: number, lo1: number, span1: number, u: number): [number, number] {
-  const x = u < 0 ? 0 : u > 1 ? 1 : u, e = 1 - (1 - x) * (1 - x);
+  const x = u < 0 ? 0 : u > 1 ? 1 : u, e = x * (1.5 - 0.5 * x);
   const S = span0 * Math.pow(span1 / span0, e);
   const ds = span0 - span1;
   if (Math.abs(ds) <= span1 * 1e-9) return [lo0 + (lo1 - lo0) * e, S];

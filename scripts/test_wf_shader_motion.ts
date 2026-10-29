@@ -216,11 +216,27 @@ if (process.env.WF_ZOOM_PNG) {
   console.log(`  wrote ${process.env.WF_ZOOM_PNG}`);
 }
 
+// WF_KEYS_PNG=path: Stuart's 2026-10-29 slices — ×√2 zoom keys (VibeServer), six presses out then three ×2 rungs back in
+//   (UberSDR), then a 1 kHz tune step and a short spin; rows at Default 30 (each a whole real row, the clock's)
+if (process.env.WF_KEYS_PNG) {
+  const Z = newRing(); let bw = span / 2; const c0 = 700_000;
+  for (let i = 0; i < 60; i++) push(Z, c0, bw, c0, bw);
+  for (let k = 0; k < 6; k++) { bw *= Math.SQRT2; for (let i = 0; i < 24; i++) push(Z, c0, bw, c0, bw); }
+  for (let k = 0; k < 3; k++) { bw /= 2; for (let i = 0; i < 30; i++) push(Z, c0, bw, c0, bw); }
+  let c = c0; c += 1_000; for (let i = 0; i < 30; i++) push(Z, c, bw, c, bw);
+  for (let k = 0; k < 12; k++) { c += 500; push(Z, c, bw, c, bw); push(Z, c, bw, c, bw); }
+  for (let i = 0; i < 40; i++) push(Z, c, bw, c, bw);
+  lastSurf.length = 0; draw(Z, { lut: lutGqrx });
+  const sf = lastSurf[0]; writeFileSync(process.env.WF_KEYS_PNG, sf.surf.makeImageSnapshot().encodeToBytes());
+  console.log(`  wrote ${process.env.WF_KEYS_PNG}`);
+}
+
 // ── 4. A resize: the same ring at another visible depth — the rows on screen are the same rows ──
 { const short = draw(A, { vis: 200 }); let diff = 0;
   for (let y = 0; y < 200 * ROW_PX; y++) for (let x = 0; x < W; x += 7) if (short[(y * W + x) * 4] !== settled[(y * W + x) * 4]) diff++;
-  // (a handful of px may differ by float rounding of the sub-row position inside a warped row — not a re-draw)
-  ok('a resize keeps the history: the newest 200 rows draw identically at a shorter height', diff <= 10, `${diff} px differ`); }
+  // (a handful of px may differ by float rounding of the sub-row position inside a warped row — not a re-draw; the
+  //  2026-10-29 time-based glide makes ~3× as many warped rows, so 10 → 30 of the ~26 000 sampled)
+  ok('a resize keeps the history: the newest 200 rows draw identically at a shorter height', diff <= 30, `${diff} px differ`); }
 
 // ── 5. V12 THE FULL-CAPTURE LAYER: zoom in away from the stations, then back out (docs/v12/WATERFALL-FULL-CAPTURE.md) ──
 {

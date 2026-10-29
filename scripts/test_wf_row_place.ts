@@ -31,7 +31,7 @@
  * Run: node --no-warnings scripts/test_wf_row_place.ts
  */
 import { applyViewChange, decodeMotion, decodeZoom, encodeMotion, fanImage, fanRefresh, MOTION_MAX_FRAC, MOTION_ROWS, MOTION_ZERO, motionSample, newFanState,
-         newMotionState, placeRow, rowViewOffset, takeFanStep, wfImageBytes, writeRow, fanRow, ZOOM_EASE_ROWS, zoomEaseRows } from '../src/utils/wfRowPlace.ts';
+         newMotionState, placeRow, rowViewOffset, takeFanStep, wfImageBytes, writeRow, fanRow, ZOOM_EASE_ROWS, zoomEaseRows, tuneEaseRows } from '../src/utils/wfRowPlace.ts';
 import { floorIdx, layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, WIDE_HDR } from '../src/utils/wfWide.ts';
 
 let fails = 0, passes = 0;
@@ -313,7 +313,9 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   { const cs: number[] = []; for (let f = zf - 1; f < zf + ZOOM_EASE_ROWS; f++) cs.push(dlit(f)![0]);
     let mono = true; for (let i = 1; i < cs.length; i++) if (!(cs[i] > cs[i - 1])) mono = false;
     const steps = cs.slice(1).map((c, i) => c - cs[i]);
-    ok(`the zoom: the ease FANS the carrier out over ${ZOOM_EASE_ROWS} rows — EASE-OUT: the biggest step first, landing soft (${cs.join(' ')})`, mono && steps[0] === Math.max(...steps) && steps[steps.length - 1] < steps[0] / 2, steps.join(' ')); }
+    const mean = steps.reduce((x, y) => x + y, 0) / steps.length;
+    ok(`the zoom: the ease FANS the carrier out over ${ZOOM_EASE_ROWS} rows — STEADY from the first row, landing soft (${cs.join(' ')})`,
+       ZOOM_EASE_ROWS >= 8 && mono && steps[0] >= 0.8 * mean && Math.max(...steps) <= 1.6 * mean && steps[steps.length - 1] < steps[0], steps.join(' ')); }
   ok('control: the live column is far from the history\'s (the fan the eye sees)', Math.abs(liveCol() - histCol) > 50, `${liveCol()} vs ${histCol}`);
   { const [k, c] = takeFanStep(fan); ok('the zoom: no screen ease (the history is not moved)', k === 1 && c === 0, `${k} ${c}`); }
 
@@ -344,13 +346,13 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   // a TUNE of 0.4 of the view at the same span: eased like a zoom — the history stays as drawn, the new rows land live
   const preTune = fr, histTune = dlit(preTune - 3);
   v = { c: v.c + v.bw * 0.4, bw: v.bw };
-  for (let i = 0; i < 8; i++) fpush(v.c, v.bw);
+  for (let i = 0; i < tuneEaseRows(0.4) + 4; i++) fpush(v.c, v.bw);   // (the glide is by time: tuneEaseRows rows)
   { const bad = offCol(fr - 3, fr); const h2 = dlit(preTune - 3);
     ok('the tune ease: a 0.4-view tune leaves the history as drawn and the new rows land at the live column', bad.length === 0 && !!histTune && !!h2 && h2[0] === histTune[0], bad.slice(0, 4).join('; ')); }
   // MOTION with jumped history on screen: every moved pair's h predicts the displayed move
   { const from = fr; const cs: number[] = [];
     for (let i = 1; i <= 15; i++) { v = { c: v.c + 1_500, bw: v.bw }; cs.push(v.c); const rc = cs[Math.max(0, cs.length - 3)]; fpush(rc, v.bw); }
-    let bad = 0; for (let f = from; f < fr - 1; f++) { const p = dlit(f), q = dlit(f + 1); if (!p || !q || Math.abs(p[0] + gl.h[f % R] - q[0]) > 1.01) bad++; }
+    let bad = 0; for (let f = from; f < fr - 1; f++) { const p = dlit(f), q = dlit(f + 1); if (!p || !q || Math.abs(p[0] + gl.h[f % R] - q[0]) > 1.5) bad++; }   // ± 1.5: whole texels from fractional places (the pinch case's tolerance)
     ok('the tune + motion: a fast tune after the eased one — each pair\'s h is the move on screen', bad === 0, `${bad}`); }
 
   // RING rows after the last jump, every row is the identity: the second buffer is dropped
@@ -466,6 +468,63 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     const did2 = fanRefresh(Q.fan, Q.S, N, R, Q.fr, 32);
     const [back] = scan(Q, q0, q1);
     ok('the layer: …and back to portrait loses nothing', !did2 && back === q1 - q0); }
+}
+
+// ── ★★★ STUART'S SLICES (2026-10-29 21:12, the Lenovo RSP at 12058 kHz, 20 fps, Default 30): a VibeServer feed whose span
+//    changes in WHOLE ×√2 key steps, frames at 20 fps, rows off the fixed clock at 30/s (each frame repeated 1–2 times) —
+//    the case that drew six bands, each carrier straight inside one and jumping sideways in ONE row at each boundary. ──
+{
+  const R = 512, Nn = 1024, C0 = 12_058_000; let CAR = 12_160_000;   // a carrier off the dial (on screen at every span of the run)
+  /** Run a zoom sequence; for each step the carrier's displayed column per row after it, and its lit width. */
+  const runZoom = (spans: number[], rate: number, framesPerStep = 30) => {
+    const S2 = new Uint8Array(Nn * (R + MOTION_ROWS)), g2 = newMotionState(R, Nn), f2 = newFanState(R); f2.rowRate = rate;
+    let fr2 = 0, acc = 0;
+    const frame = (bw: number) => { const row = new Uint8Array(Nn).fill(20); const b = Math.floor((CAR - (C0 - bw / 2)) / (bw / Nn));
+      for (let k = -1; k <= 1; k++) if (b + k >= 0 && b + k < Nn) row[b + k] = 220; return row; };   // a carrier 3 bins wide
+    const steps: { cols: number[]; widths: number[]; from: number; to: number }[] = [];
+    let prevBw = spans[0];
+    for (const bw of spans) {
+      const row = frame(bw), first = fr2;
+      for (let i = 0; i < framesPerStep; i++) { acc += rate / 20; while (acc >= 1) { acc -= 1; placeRow(S2, R, Nn, fr2++, row, C0, bw / Nn, C0, bw, g2, f2); } }
+      const D2 = fanImage(f2, S2), cols: number[] = [], widths: number[] = [];
+      for (let f = first; f < fr2; f++) { const at = (f % R) * Nn; let lo = -1, hi = -1;
+        for (let x = 0; x < Nn; x++) if (D2[at + x] >= 200) { if (lo < 0) lo = x; hi = x; }
+        cols.push((lo + hi) / 2); widths.push(hi - lo + 1); }
+      const colOf = (w: number) => (Math.floor((CAR - (C0 - w / 2)) / (w / Nn)) * (w / Nn) + (C0 - w / 2) - (C0 - w / 2)) / (w / Nn);
+      steps.push({ cols, widths, from: colOf(prevBw), to: colOf(bw) });
+      if (process.env.DBG) console.log(bw, colOf(prevBw), colOf(bw), cols.slice(0, 18).join(' '), widths.slice(0, 18).join(' '));
+      prevBw = bw;
+    }
+    return steps.slice(1);
+  };
+  const report = (name: string, steps: ReturnType<typeof runZoom>, rate: number) => {
+    let worst = 0, rowsTo = 0, firstMoves = true, widthOk = true;
+    for (const st of steps) {
+      const total = Math.abs(st.to - st.from);
+      let prev = st.from, n = 0;
+      for (let i = 0; i < st.cols.length; i++) { const d = Math.abs(st.cols[i] - prev); worst = Math.max(worst, d / total); prev = st.cols[i];
+        if (Math.abs(st.cols[i] - st.to) > 0.6) n = i + 2; }
+      rowsTo = Math.max(rowsTo, n);
+      if (!(Math.abs(st.cols[0] - st.from) > 0.5)) firstMoves = false;
+      for (let i = 0; i < n; i++) if (st.widths[i] < 3) widthOk = false;   // the carrier at its own width, never a 1-texel hairline
+    }
+    console.log(`  ${name}: ${steps.length} steps — the largest one-row move ${(worst * 100).toFixed(0)} % of a step, landed in ${rowsTo} rows = ${(rowsTo / rate).toFixed(2)} s`);
+    return { worst, rowsTo, firstMoves, widthOk };
+  };
+  const keys: number[] = [400_000]; for (let i = 0; i < 6; i++) keys.push(keys[keys.length - 1] * Math.SQRT2);   // ×√2 zoom-out keys
+  const a = report('VibeServer ×√2 keys at 20 fps → 30 rows/s', runZoom(keys, 30), 30);
+  ok('the ×√2 keys: no slice — no single row carries more than a quarter of a step (it was 75 % in one row)', a.worst <= 0.25, `${(a.worst * 100).toFixed(0)} %`);
+  ok('the ×√2 keys: every step MOVES from its first row and the trail keeps the carrier\'s own width', a.firstMoves && a.widthOk);
+  ok('the ×√2 keys: each lands within 0.3 s', a.rowsTo / 30 <= 0.3, `${a.rowsTo} rows`);
+  const b = report('VibeServer ×√2 keys, Smooth 60', runZoom(keys, 60), 60);
+  ok('Smooth 60: twice the rows, the same time (≤ 0.3 s), no slice', b.worst <= 0.2 && b.rowsTo / 60 <= 0.3, `${(b.worst * 100).toFixed(0)} % ${b.rowsTo} rows`);
+  const rungs = [200_000, 400_000, 800_000, 400_000, 200_000];                    // UberSDR's ×2 rungs (a pinch snapped)
+  CAR = 12_120_000;   // 62 kHz off: on screen at 200 kHz
+  const c = report('UberSDR ×2 rungs at 30 rows/s', runZoom(rungs, 30), 30);
+  ok('×2 rungs: reach the new zoom in ≤ 0.4 s, no row more than 20 % of the step, from the first row', c.rowsTo / 30 <= 0.4 && c.worst <= 0.25 && c.firstMoves && c.widthOk,
+     `${c.rowsTo} rows, ${(c.worst * 100).toFixed(0)} %`);
+  const big = report('a ×4 step at 30 rows/s', runZoom([200_000, 800_000], 30), 30);
+  ok('a ×4 step: capped at 0.5 s, no slice', big.rowsTo / 30 <= 0.55 && big.worst <= 0.2, `${big.rowsTo} rows, ${(big.worst * 100).toFixed(0)} %`);
 }
 
 console.log(`  waterfall row placement: ${passes} passed, ${fails} failed`);

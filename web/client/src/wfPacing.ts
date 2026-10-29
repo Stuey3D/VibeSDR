@@ -187,6 +187,12 @@ export class RowPacer {
     this.onClock = false;
   }
 
+  /** ★ DEVICE rows/s actually drawn — what the zoom/tune ease's TIME is counted in (wfGlide.ts rowView): the setting's
+   *  rate on the clock, one screen row per frame in Sharp. */
+  easeRowRate(): number {
+    return this.sharp ? this.rowPx * 1000 / Math.max(15, this.avgGap || 50) : this.rowsPerSec;
+  }
+
   /** A FIXED rate (no feed-following) — the cadence tests drive this directly. Not sharp → on the clock. */
   setRate(rowsPerSec: number, sharp: boolean, rowPx = 1) {
     const px = Math.max(1, Math.round(rowPx));

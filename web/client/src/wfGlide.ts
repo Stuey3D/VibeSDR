@@ -9,9 +9,10 @@
  * THE APP'S MODEL (src/utils/wfRowPlace.ts fanNoteRow / fanAfterRow), shared here, not re-derived:
  *   • every row is drawn ONCE against a view and the history is never rescaled — a zoom leaves the old rows AS DRAWN
  *     ("a thin line signal should expand out to the width and the history remains the thin line");
- *   • the new rows after a zoom step, or ANY tune step past two columns, are drawn at in-between views on a short
- *     EASE-OUT (easeView: the span geometric about the zoom's fixed point) — zoomEaseRows / tuneEaseRows SCREEN rows,
- *     the app's own counts — so a station's trail curves out on a zoom in, in on a zoom out, and slides across on a tune;
+ *   • the new rows after a zoom step, or ANY tune step past two columns, are drawn at in-between views — STEADY with a
+ *     soft landing over a fixed TIME (easeView; the app's zoomEaseSec / tuneEaseSec, 2026-10-29: 0.33 s a ×2, 0.25 s a
+ *     key or a tune step), counted in the device rows the pacer draws (easeRowRate) — so a station's trail curves out on
+ *     a zoom in, in on a zoom out, and slides across on a tune;
  *   • a move of a whole view or more is a JUMP: the history is moved into place by Hz, each row in its OWN scale, and is
  *     black only at the newly exposed edge (waterfall.ts does the move — the per-row maps of wfZoomFan.ts).
  * ★★ THE JOIN (the app's shader motion taps, WaterfallView.tsx — "the chunky broken diagonal lines joined up so they
@@ -161,7 +162,7 @@ export const SPIN_ROWS = 12;
 export interface RowView { lo: number; span: number; /** ≠ 0: a jump — move the history by this many Hz first. */ jumpHz: number }
 
 /** The view to draw the next row of a frame placed at (lo, span) at. `rowPx` = device rows a screen row. */
-export function rowView(st: RowEase, lo: number, span: number, rowPx: number, out: RowView): RowView {
+export function rowView(st: RowEase, lo: number, span: number, rowPx: number, out: RowView, devRowsPerSec = 0): RowView {
   out.jumpHz = 0;
   if (!(span > 0) || !isFinite(lo)) { out.lo = lo; out.span = span; return out; }
   if (!(st.tSpan > 0) || !(st.dSpan > 0)) {            // the first row
@@ -183,9 +184,12 @@ export function rowView(st: RowEase, lo: number, span: number, rowPx: number, ou
       out.lo = lo; out.span = span; return out;
     }
     let rows = 0;
-    if (zoom) { rows = zoomEaseRows(span / st.dSpan) * px; st.lin = false; }
+    // ★★ BY TIME (the app's zoomEaseSec / tuneEaseSec, 2026-10-29): counted in the DEVICE rows actually drawn when the
+    //    caller says how many a second; the default rate's screen rows otherwise.
+    const rr = devRowsPerSec > 0 ? devRowsPerSec : 0;
+    if (zoom) { rows = rr ? zoomEaseRows(span / st.dSpan, rr) : zoomEaseRows(span / st.dSpan) * px; st.lin = false; }
     else if (moved > st.tSpan * TUNE_EASE_MIN_FRAC) {
-      rows = tuneEaseRows(moved / st.tSpan) * px;
+      rows = rr ? tuneEaseRows(moved / st.tSpan, rr) : tuneEaseRows(moved / st.tSpan) * px;
       // ★ A SPIN (a step that follows the last within SPIN_ROWS screen rows): the ease spans the rows between steps, so
       //   the trail moves EVENLY all through it — a step that eased in 3 rows and then stood still until the next frame
       //   drew a fine staircase. An isolated step keeps the app's short ease.

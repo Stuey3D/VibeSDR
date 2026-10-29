@@ -59,17 +59,33 @@ struct FanState {
     double dLo = NAN, dSpan = NAN, eLo0 = NAN, eSpan0 = NAN;
     int easeLeft = 0, eJ = 0, eT = 0;
     std::vector<double> span;
+    double rowRate = 30;   // ★ rows/s the waterfall runs at — the ease is by TIME (zoomEaseRows / tuneEaseRows); the engine keeps it current
     explicit FanState(int rows = 0) : xfA(rows, 1.0), xfB(rows, 0.0), span(rows, 0.0) {}
 };
 
-constexpr int ZOOM_EASE_ROWS = 4;    // a ×2 step (~0.2 s); ×4+ = 6; a pinch's 5 % step = 1 — short and EASE-OUT: the
-                                     // 16-row S-curve felt "oddly delayed" (Stuart 2026-10-28; v2 changed within a frame)
-/** Rows a tune past MOTION_MAX_FRAC (but within the view) eases over: 8 per view width, 2…6 (wfRowPlace.ts tuneEaseRows). */
-inline int tuneEaseRows(double frac) { return std::max(3, std::min(6, 3 + (int)std::floor(frac * 6 + 0.5))); }
-constexpr double TUNE_EASE_MIN_FRAC = 2.0 / 1024;   // every step past two columns eases (Stuart, build 511: "still slicing")
-inline int zoomEaseRows(double k) {
-    return std::max(1, std::min(6, (int)std::floor(std::fabs(std::log2(k)) * ZOOM_EASE_ROWS + 0.5)));
+// ★★★ THE EASE IS BY TIME at the running row rate — the twin of src/utils/wfRowPlace.ts zoomEaseSec / tuneEaseSec (the
+//     note there: a ×√2 key was TWO rows on an ease-out — a stair-step with a hairline join; Stuart 2026-10-29 "the
+//     lines are simply too sharp"). 0.33 s per ×2, 0.25 s minimum for a key or detent, 0.5 s cap; a pinch's < 0.2 octave
+//     steps proportional. A tune 0.25 s, up to 0.35 s for most of the view. Change one, change both.
+constexpr double ZOOM_EASE_S_PER_OCTAVE = 0.33, ZOOM_EASE_MIN_S = 0.25, ZOOM_EASE_MAX_S = 0.5;
+constexpr double TUNE_EASE_S = 0.25, TUNE_EASE_MAX_S = 0.35, EASE_ROW_RATE = 30;
+inline double zoomEaseSec(double k) {
+    const double oct = std::fabs(std::log2(k));
+    if (!(oct > 0)) return 0;
+    const double t = oct * ZOOM_EASE_S_PER_OCTAVE;
+    return oct < 0.2 ? t : std::max(ZOOM_EASE_MIN_S, std::min(ZOOM_EASE_MAX_S, t));
 }
+inline double tuneEaseSec(double frac) { return TUNE_EASE_S + (TUNE_EASE_MAX_S - TUNE_EASE_S) * std::min(1.0, std::max(0.0, frac)); }
+inline int zoomEaseRows(double k, double rowRate = EASE_ROW_RATE) {
+    const double r = rowRate > 0 ? rowRate : EASE_ROW_RATE;
+    return std::max(1, (int)std::floor(zoomEaseSec(k) * r + 0.5));
+}
+inline int tuneEaseRows(double frac, double rowRate = EASE_ROW_RATE) {
+    const double r = rowRate > 0 ? rowRate : EASE_ROW_RATE;
+    return std::max(2, (int)std::floor(tuneEaseSec(frac) * r + 0.5));
+}
+inline const int ZOOM_EASE_ROWS = zoomEaseRows(2);   // a ×2 step at the default rate (the tests' reference)
+constexpr double TUNE_EASE_MIN_FRAC = 2.0 / 1024;   // every step past two columns eases (Stuart, build 511: "still slicing")
 
 /** Per output pixel, the stored bins [lo, hi] it shows under (a, b); lo = -1 = blank. */
 inline void fanTable(double a, double b, int n, int32_t* lo, int32_t* hi) {
@@ -151,7 +167,7 @@ inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n,
     if (frames > 0 && st.lastSpan > 0 && spanChanged(st.lastSpan, span)) {
         if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
         st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
-        st.eT = st.easeLeft = std::max(zoomEaseRows(span / st.dSpan), st.easeLeft > 0 ? st.easeLeft : 0);
+        st.eT = st.easeLeft = std::max(zoomEaseRows(span / st.dSpan, st.rowRate), st.easeLeft > 0 ? st.easeLeft : 0);
     }
     // ★★ A tune past MOTION_MAX_FRAC but within the view EASES like a zoom (the JS twin, wfRowPlace.ts — Stuart 2026-10-28:
     //    "the tuning still looks a little sliced up … blended like the zoom"); only a move of a whole view or more is a JUMP.
@@ -159,7 +175,7 @@ inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n,
     if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * TUNE_EASE_MIN_FRAC && moved < st.lastSpan) {
         if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
         st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
-        st.eT = st.easeLeft = std::max(tuneEaseRows(moved / st.lastSpan), st.easeLeft > 0 ? st.easeLeft : 0);
+        st.eT = st.easeLeft = std::max(tuneEaseRows(moved / st.lastSpan, st.rowRate), st.easeLeft > 0 ? st.easeLeft : 0);
     }
     if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
         const double k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
@@ -191,7 +207,7 @@ inline void fanAfterRow(FanState& st, const uint8_t* ring, int slot, int n, int 
     if (st.easeLeft > 0 && st.lastSpan > 0 && st.eSpan0 > 0 && std::isfinite(st.eLo0)) {
         const double tl = st.lastLo, ts = st.lastSpan;
         st.eJ++; st.easeLeft = st.eT - st.eJ;
-        const double u = std::min(1.0, (double)st.eJ / st.eT), e = 1 - (1 - u) * (1 - u);   // ease-out
+        const double u = std::min(1.0, (double)st.eJ / st.eT), e = u * (1.5 - 0.5 * u);   // steady, a soft landing (wfRowPlace.ts easeView)
         const double ns = st.eSpan0 * std::pow(ts / st.eSpan0, e);
         const double ds = st.eSpan0 - ts;
         double nl;

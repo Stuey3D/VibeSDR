@@ -16582,6 +16582,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // VFO leaves the FFT span entirely (handled in the zoom/pan path).
             if (!useSpy()) viewCenter.store(freq);
             tuneHw(centre);
+            /* ★★★ AND THE ZOOM CHANNEL WITH IT (V12, 2026-10-29). The zoom channel is an OFFSET from rtlCenter +
+             *  hwOffsetHz() (updateZoomView), and the other two branches below re-derive it after their move — this one
+             *  did not. Stuart typed 7100 kHz on the Lenovo's RSP from 4208: the app's view message came first and fitted
+             *  the tuner to 5406.675 MHz (offset +1678 kHz, the view at 7100), then this recentre put the tuner on 7100
+             *  and left the offset at +1678 — so for nine seconds the zoom rows were built for ~8.79 MHz, OUTSIDE the
+             *  capture (the IF filter's stopband), and the app showed "around 8000" until a tune step re-sent the view.
+             *  Those rows, re-placed into the 40 m view afterwards, drew the full-capture layer through their stopband
+             *  range: the white bar. */
+            if (!useSpy()) updateZoomView();
             // USB/rtl_tcp path: the capture just recentred, but tuneHw only pushes
             // a fresh config to the spectrum client on the SpyServer path. A LOCAL
             // client self-tracks the centre natively; a REMOTE VibeServer client
@@ -26289,6 +26298,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rtlCenter.store(dongle);
         tuneHw(dongle);
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        updateZoomView();   // ★ the zoom channel is measured from rtlCenter + hwOffsetHz() — see retune()'s recentre
         LOGI("deferred retune applied: dongle -> %.0f Hz", dongle);
     }
 
@@ -26995,6 +27005,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             viewCenter.store(viewHz);   // ★ the view goes to the VFO being tuned, as retune() sends it to A's dial
             tuneHw(c);
             rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+            updateZoomView();   // ★ the zoom channel is measured from rtlCenter + hwOffsetHz() — see retune()'s recentre
         }
         applyAutoIf();   // ★ the IF filter follows the capture, as after any retune
         LOGI("VFO B moved the radio to %.3f MHz (session %.8s) — both VFOs in one window", c / 1e6, sess.c_str());
