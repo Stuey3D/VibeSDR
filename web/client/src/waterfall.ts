@@ -830,7 +830,7 @@ export class Waterfall {
     const useCur = this.pacer.useCur;
     const src = useCur ? cur : prev;
     const sLo = useCur ? this.curLo : this.prevLo, sSpan = useCur ? this.curSpan : this.prevSpan;
-    const v = rowView(this.ease, sLo, sSpan, this.pacer.rowPx, this.rv);
+    const v = rowView(this.ease, sLo, sSpan, this.pacer.rowPx, this.rv, this.pacer.easeRowRate());
     const cLo = v.lo, cSpan = v.span;
     if (v.jumpHz) this._jumpHistory(v.jumpHz, cSpan);
     // ★★ THE JOIN (wfGlide.ts joinedRowAt — the app's shader motion taps): a row drawn somewhere other than the row below
