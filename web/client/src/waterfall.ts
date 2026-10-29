@@ -838,7 +838,9 @@ export class Waterfall {
         && canGlide(this.prevLo, this.prevSpan, this.curLo, this.curSpan)) {
       [cLo, cSpan] = glideRowAt(prev, this.prevLo, this.prevSpan, cur, this.curLo, this.curSpan, t, blend, this.glideScratch);
     } else {
-      const useCur = t >= 0.5;
+      // ★ V12 2026-10-29: which real row is the PACER's call (the fixed clock presents each frame on the feed's schedule —
+      //   wfPacing.ts useCur); before, it was t ≥ 0.5 (half a pair after the arrival).
+      const useCur = this.pacer.useCur;
       blend.set(useCur ? cur : prev);
       cLo = useCur ? this.curLo : this.prevLo; cSpan = useCur ? this.curSpan : this.prevSpan;
     }

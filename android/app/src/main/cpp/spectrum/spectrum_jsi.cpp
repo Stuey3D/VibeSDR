@@ -158,6 +158,7 @@ public:
             o.setProperty(r, "texReady", u.texReady);
             o.setProperty(r, "quant", u.quant);
             o.setProperty(r, "avgMs", u.avgFrameMs);
+            o.setProperty(r, "rowRate", u.rowRate);   // ★ V12 the fixed output clock's rate (0 = NATIVE / actual rows)
             o.setProperty(r, "scrollGen", (double)u.scrollGen);
             o.setProperty(r, "glide", u.glide);
             o.setProperty(r, "glideDur", u.glideDur);

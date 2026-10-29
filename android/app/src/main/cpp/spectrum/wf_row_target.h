@@ -70,7 +70,8 @@ inline int rowsForArrival(double& carry, double durMs, double target) {
 
 /** One waterfall's latch: the target is the rule on a LATCHED feed rate, which moves at once past ±15 % or after 20
  *  frames in a row more than 4 % away — hysteresis on the feed, not the output (see wfRowTarget.ts for why). */
-struct RowTargetState { double latched = 0; int away = 0; double target = 0; int frames = 0; };
+struct RowTargetState { double latched = 0; int away = 0; double target = 0; int frames = 0;
+                        double clockRate = 0; };   // ★ V12 the fixed clock's rate (wf_row_clock.h clockRowRate)
 
 /** Advance by one data frame. `feedFps` = the smoothed feed estimate. Returns rows/s, or 0 = actual rows. */
 inline double stepRowTarget(RowTargetState& st, int cap, double feedFps) {

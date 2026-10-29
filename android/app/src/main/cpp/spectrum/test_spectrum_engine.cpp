@@ -363,6 +363,137 @@ int main() {
         CHECK(head == h0, "no rows after background (head %g → %g)", h0, head);
         delete e;
     }
+    // ── V12 THE FIXED OUTPUT CLOCK (wf_row_clock.h — Stuart 2026-10-29: "over interpolate and discard"). Every mode but
+    //    NATIVE: rows at exactly the mode's rate whatever the feed does — jitter, late frames, a 9 fps dip, a 9–11 fps
+    //    wander, 23 fps — each row the newest REAL frame (repeated, never blended); the supply never pauses. ──
+    {
+        struct Case { const char* name; int cap; double want; double (*rate)(double); double jit; double late; };
+        static auto r10 = [](double) { return 10.0; };
+        static auto r97 = [](double) { return 9.7; };
+        static auto r23 = [](double) { return 23.0; };
+        static auto rdip = [](double t) { return t >= 10000 && t < 14000 ? 9.0 : 10.0; };
+        static auto rwan = [](double t) { static const double v[] = {9, 11, 9.4, 10.7, 9, 11, 10.2, 9.1}; return v[(int)(t / 2500) % 8]; };
+        const Case cases[] = {
+            {"Default · 10 fps ±15 ms + late", 20, 30, r10, 15, 0.03}, {"Smooth · 10 fps ±15 ms + late", 60, 60, r10, 15, 0.03},
+            {"Default · 9.7 fps", 20, 30, r97, 5, 0}, {"Smooth · 9.7 fps", 60, 60, r97, 5, 0},
+            {"Default · 23 fps", 20, 30, r23, 5, 0}, {"Smooth · 23 fps", 60, 60, r23, 5, 0},
+            {"Default · 10 → 9 dip", 20, 30, rdip, 5, 0}, {"Smooth · 10 → 9 dip", 60, 60, rdip, 5, 0},
+            {"Default · 9–11 wander ±15", 20, 30, rwan, 15, 0}, {"Smooth · 9–11 wander ±15", 60, 60, rwan, 15, 0},
+            {"Eco · 23 fps (thinned)", 10, 10, r23, 5, 0},
+        };
+        for (const Case& cs : cases) {
+            auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+            EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = cs.cap;
+            e->setConfig(c); e->setView(100e6, 2.048e6);
+            uint32_t seed = 12345; auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+            const double T0 = gClock;
+            double nominal = 0, nextAt = 0, head = 0, lastStep = 0, maxGap = 0; int rateOff = 0, polls = 0;
+            std::vector<double> stepT;
+            for (double t = 0; t < 30000; t += 1) {
+                gClock = T0 + t;
+                if (t >= nextAt) {
+                    auto b = frame(1024, 300);
+                    e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+                    nominal += 1000.0 / cs.rate(nominal);
+                    nextAt = nominal + (rnd() * 2 - 1) * cs.jit + (rnd() < cs.late ? 40 + 40 * rnd() : 0);
+                }
+                e->testStep(gClock);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    polls++;
+                    if (u.image) {
+                        if (u.head > head && t >= 5000) {
+                            for (double k = head; k < u.head; k++) stepT.push_back(t);
+                            if (lastStep > 0) maxGap = std::max(maxGap, t - lastStep);
+                            lastStep = t;
+                        }
+                        head = u.head; rlImage(u.image);
+                    }
+                    if (u.peakPath) rlPath(u.peakPath);
+                    if (t >= 5000 && u.rowRate != cs.want) rateOff++;
+                }
+            }
+            // 1 s windows after 5 s
+            int wMin = 1 << 30, wMax = 0;
+            for (double w = 5000; w + 1000 <= 30000; w += 1000) {
+                int n = 0; for (double x : stepT) if (x >= w && x < w + 1000) n++;
+                wMin = std::min(wMin, n); wMax = std::max(wMax, n);
+            }
+            std::printf("  clock %-28s rows/s %d–%d, longest gap %.1f ms, %d polls\n", cs.name, wMin, wMax, maxGap, polls);
+            CHECK(wMin >= cs.want - 1 && wMax <= cs.want + 1, "%s: rows per 1 s window %d–%d (want %g)", cs.name, wMin, wMax, cs.want);
+            CHECK(maxGap <= 1000.0 / cs.want + 1.5, "%s: the supply never pauses — longest gap between rows %g ms (a tick is %g)",
+                  cs.name, maxGap, 1000.0 / cs.want);
+            CHECK(rateOff == 0, "%s: poll reports the clock's rate %g every time once settled (%d off)", cs.name, cs.want, rateOff);
+            delete e;
+        }
+    }
+    // ── SAMPLE-AND-HOLD, read back from the ring: an exact 10 fps feed at Default gives EVERY real frame exactly 3 rows; a
+    //    9.7 fps feed 3 or 4 (3,3,…,4 — the feed's own pattern); each row is one real frame, whole (never a blend). ──
+    for (double fps : {10.0, 9.7}) {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 20;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        const double T0 = gClock; double next = 0; int fi = 0; void* img = nullptr; double head = 0;
+        for (double t = 0; t < 12000; t += 1) {
+            gClock = T0 + t;
+            if (t >= next) { auto b = frame(1024, 100 + 40 * (fi % 20)); e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6); fi++; next += 1000.0 / fps; }
+            e->testStep(gClock);
+            UiUpdate u;
+            if (e->pollUi(u)) { if (u.image) { if (img) rlImage(img); img = u.image; head = u.head; } if (u.peakPath) rlPath(u.peakPath); }
+        }
+        // Walk the newest ~150 rows: runs of the same carrier position = one real frame's rows.
+        std::vector<int> runs; int last = -1, run = 0, blended = 0;
+        for (double h = head - 150; h <= head; h++) {
+            const uint8_t* r = rowOf((FakeImage*)img, h);
+            int pos = -1, hot = 0;
+            for (int b = 0; b < 1024; b++) if (r[b] > 200) { if (pos < 0) pos = b; hot++; }
+            if (hot > 12) blended++;                       // two carriers in one row = a blend
+            if (pos == last) run++; else { if (run) runs.push_back(run); run = 1; last = pos; }
+        }
+        runs.erase(runs.begin()); if (!runs.empty()) runs.pop_back();   // the edges are partial
+        int bad = 0, threes = 0;
+        for (int n : runs) { if (n == 3) threes++; if (fps == 10.0 ? n != 3 : (n < 3 || n > 4)) bad++; }
+        std::printf("  hold %.1f fps at Default: %zu frames, %d of them 3 rows, %d off-pattern, %d blended\n", fps, runs.size(), threes, bad, blended);
+        CHECK(bad == 0 && blended == 0, "%.1f fps at Default: rows per real frame %s (%zu frames, %d off-pattern, %d blended)",
+              fps, fps == 10.0 ? "all 3" : "3 or 4", runs.size(), bad, blended);
+        if (fps == 9.7) CHECK(threes > (int)runs.size() * 0.8, "9.7 fps: mostly 3s with an occasional 4 (%d of %zu are 3)", threes, runs.size());
+        if (img) rlImage(img);
+        delete e;
+    }
+    // ── NATIVE stays as it is: one row per frame received, in order, none repeated or dropped; no clock rate ──
+    {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 0;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        const double T0 = gClock; double next = 0; int fi = 0; void* img = nullptr; double head = 0, headAt = 0; int rateOn = 0, sent = 0;
+        uint32_t seed = 777; auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+        for (double t = 0; t < 15000; t += 1) {
+            gClock = T0 + t;
+            if (t >= next) {
+                auto b = frame(1024, 100 + 40 * (fi % 20)); e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6); fi++;
+                if (t >= 5000) sent++;
+                next = fi * 100.0 + (rnd() * 2 - 1) * 15;
+            }
+            if (t == 5000) headAt = head;
+            e->testStep(gClock);
+            UiUpdate u;
+            if (e->pollUi(u)) { if (u.image) { if (img) rlImage(img); img = u.image; head = u.head; } if (u.peakPath) rlPath(u.peakPath); if (u.rowRate != 0) rateOn++; }
+        }
+        // Each settled frame is one row: consecutive rows differ (no repeat), carriers step 40 bins at a time (none dropped).
+        int repeats = 0, skips = 0, lastPos = -1;
+        for (double h = head - 80; h <= head; h++) {
+            const uint8_t* r = rowOf((FakeImage*)img, h); int pos = -1;
+            for (int b = 0; b < 1024; b++) if (r[b] > 200) { pos = b; break; }
+            if (lastPos >= 0) { int d = ((pos - lastPos) % 800 + 800) % 800; if (d == 0) repeats++; else if (d != 40 && d != 800 - 760) skips++; }
+            lastPos = pos;
+        }
+        std::printf("  native: %g rows for %d frames, %d repeated, %d dropped\n", head - headAt, sent, repeats, skips);
+        CHECK(repeats == 0 && skips == 0, "NATIVE: one row per frame, in order (%d repeated, %d dropped in the last 80 rows)", repeats, skips);
+        CHECK(std::abs((head - headAt) - sent) <= 2, "NATIVE: %g rows for %d frames since 5 s", head - headAt, sent);
+        CHECK(rateOn == 0, "NATIVE: no clock rate reported (%d)", rateOn);
+        if (img) rlImage(img);
+        delete e;
+    }
     std::printf("images made %d freed %d · paths made %d freed %d\n", gImagesMade, gImagesFreed, gPathsMade, gPathsFreed);
     CHECK(gImagesMade == gImagesFreed, "image leak: %d made, %d freed", gImagesMade, gImagesFreed);
     CHECK(gPathsMade == gPathsFreed, "path leak: %d made, %d freed", gPathsMade, gPathsFreed);

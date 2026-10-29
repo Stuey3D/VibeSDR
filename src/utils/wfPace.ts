@@ -36,6 +36,59 @@ export function rowRate(avail: number, t: number, rateSv: Sv, nSv: Sv, tSv: Sv, 
   nSv.value = avail; tSv.value = t;
 }
 
+/* ★★★ THE RELEASE FOR CLOCKED ROWS (V12 2026-10-29 — the fixed output clock, src/assets/wfClock.ts; every mode but NATIVE,
+ *  which keeps rowPace's own rules below, unchanged). Stuart: "over interpolate and discard … leaving headroom to account
+ *  for link rate judder". The supply is now EXACTLY `rate` rows/s (repeats absorb the feed's drift upstream), so this only
+ *  has to release them at that rate on the display's frames — evenly, and without running the buffer dry:
+ *   • A PHASE ACCUMULATOR, no mode. acc += rate × gap each frame; a row goes when it passes a whole row. The gaps sum to
+ *     real time, so the release runs at exactly the rate on ANY panel — every 2nd frame at 60 Hz, every 4th at 120, 3s and
+ *     4s on the Mac's 90–100 Hz (rowPace locked Default 30 to every 3rd frame there: 31.7–33.3 rows/s out of a 30/s
+ *     supply, and the buffer ran dry between slips — scripts/test_wf_fixed_clock.ts).
+ *   • THE PHASE IS CENTRED half a frame's share away from the edge (acc starts at rate × gap / 2), so on a panel that is
+ *     a whole multiple of the rate the frame jitter can never flip a row between two frames.
+ *   • THE BUFFER IS HELD BY WHOLE-FRAME SLIPS, which keep the phase centred (a slip moves it by exactly one frame's share;
+ *     a rate nudge would walk it to the edge): after a start or a stall it FILLS — one frame's wait every 6 frames until
+ *     the depth is within 0.1 row of the target (≈1.2 rows at 30/s) — and is then HELD, corrected only past 0.7 row either
+ *     way (one slip per 30 frames at most). With supply and release at one rate nothing else moves the depth; rowPace's
+ *     ±0.6 deadband let it settle at ~0.7 row, where a row a millisecond late was a stall.
+ *   • Never more rows in a frame than the rate's share rounded (Smooth 60 at 60 Hz: 1), never more than one row owed. */
+export function clockPace(avail: number, shownSv: Sv, accSv: Sv, leadSv: Sv, coolSv: Sv, modeSv: Sv, rate: number,
+                          gap: number, settled: boolean): number {
+  'worklet';
+  let shown = shownSv.value;
+  const target = Math.max(1, rate * PLAYOUT_MS);
+  const expect = rate * gap;
+  if (!settled || shown <= 0 || shown > avail || avail - shown > target + 6) {
+    shown = avail; accSv.value = Math.min(0.5, expect / 2); leadSv.value = 0; coolSv.value = 0; modeSv.value = 0;
+  } else {
+    const lead0 = avail - shown;
+    let lead = leadSv.value;
+    const cool = coolSv.value + 1;
+    const far = Math.abs(lead - target) > 1.5;
+    const slipOk = cool >= (far ? 6 : 30);
+    // modeSv: 0 = FILLING (after a start or a stall: wait frames until the depth is within 0.1 row of the target), 1 =
+    // HELD (correct only past 0.7 row either way — the depth then sits still, since supply and release share one rate).
+    const filling = modeSv.value === 0;
+    if (filling && lead >= target - 0.1) modeSv.value = 1;
+    const shortBy = filling ? 0.1 : 0.7;
+    if (!filling && lead < target - shortBy) modeSv.value = 0;
+    let inc = expect;
+    if ((filling ? cool >= 6 : slipOk) && lead < target - shortBy) { inc = 0; coolSv.value = 0; lead += expect; }   // short: wait a frame
+    else if (slipOk && lead > target + 0.7 && lead0 >= 2) { inc = 2 * expect; coolSv.value = 0; lead -= expect; }   // ahead: a frame early
+    else coolSv.value = cool;
+    let acc = accSv.value + inc;
+    const maxPer = Math.max(1, Math.round(expect));
+    let n = 0;
+    while (acc >= 1 && shown < avail && n < maxPer) { shown++; acc -= 1; n++; }
+    if (acc >= 1) acc = Math.min(acc, 1 + expect / 2);     // a row owed (none in hand): at most one, released next
+    accSv.value = acc;
+    const a = Math.min(1, gap / 500);
+    leadSv.value = lead + (avail - shown - lead) * a;
+  }
+  shownSv.value = shown;
+  return shown;
+}
+
 /* ★★★ A PLAYOUT BUFFER (2026-10-13, Tab A9 at 60 with Smooth: ~1–2 % of drawn frames showed NO row — measured in-app,
  *  "a semi regular stutter"). The pacer before this held almost nothing in hand: after each release 0–1 rows were
  *  left, so a row landing a few ms after the vsync left that frame empty and the next took two. Rows arrive at
@@ -49,8 +102,9 @@ export function rowRate(avail: number, t: number, rateSv: Sv, nSv: Sv, tSv: Sv, 
 /** One frame of the settled row pacer: returns the row to SHOW. `settled` false resets it to the newest (a stall, a
  *  resume — and, before 2026-10-28, every gesture; gestures now hand over through contPace instead). */
 export function rowPace(avail: number, shownSv: Sv, accSv: Sv, leadSv: Sv, coolSv: Sv, modeSv: Sv, rate: number,
-                        gap: number, settled: boolean): number {
+                        gap: number, settled: boolean, clocked = false): number {
   'worklet';
+  if (clocked) return clockPace(avail, shownSv, accSv, leadSv, coolSv, modeSv, rate, gap, settled);
   let shown = shownSv.value;
   const target = Math.max(1, rate * PLAYOUT_MS);     // rows to hold in hand
   if (!settled || shown <= 0 || shown > avail || avail - shown > target + 6) {
