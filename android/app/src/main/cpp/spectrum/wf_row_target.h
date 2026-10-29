@@ -21,10 +21,19 @@ inline int rowMultFor(int cap) { return cap >= 60 || cap == 10 || cap == 5 ? 6 :
 inline double snappedRowTarget(int cap, double fps) {
     if (cap <= 0 || !(fps > 0)) return 0;
     static const double kRates[] = {10, 12, 15, 20, 30, 60};
-    const double raw = std::min((double)cap, rowMultFor(cap) * fps) * 1.03;
+    // ★ Default (carried as 20) runs up to 30 — Stuart, 2026-10-29, a 10 fps UberSDR: "we should be smoothing to 30".
+    const double top = cap == 20 ? 30.0 : (double)cap;
+    const double raw = std::min(top, rowMultFor(cap) * fps) * 1.03;
     if (cap == 5) return raw >= 5 ? 5 : 0;   // ★ V12 MINIMUM: its one rate, 5 (only a sub-5 feed is filled in)
+    if (cap == 20) {   // ★★ DEFAULT never runs at 20 (Stuart 2026-10-29): 10 / 15 / 30, 3 × the feed rounded UP, ≤ 6 × the feed
+        if (3 * fps * 1.03 < 10) return 0;   // the idle floor: a 2 fps feed stays actual rows
+        const double want = std::min(30.0, 3 * fps) / 1.03;
+        double best = 0;
+        for (double r : {30.0, 15.0, 10.0}) if (r >= want && r <= 6 * fps * 1.03) best = r;
+        return best > 0 ? best : (raw >= 10 ? 10 : 0);
+    }
     double best = 0;
-    for (double r : kRates) if (r <= raw && r <= cap) best = r;
+    for (double r : kRates) if (r <= raw && r <= top) best = r;
     return best;
 }
 

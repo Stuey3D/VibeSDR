@@ -21,17 +21,18 @@ function drive(scroll: WfScroll, frames: number, gapAt: (i: number) => number, s
 // ── The table, every row — from a cold start (the 150 ms estimate), as a real session begins ──
 const TABLE: [string, number, number, number, number][] = [
   ['5 fps', 5, 5, 15, 30],
-  ['10 fps', 10, 10, 20, 60],
-  ['20 fps', 20, 20, 20, 60],
+  ['10 fps', 10, 10, 30, 60],
+  ['20 fps', 20, 20, 30, 60],
   ['UberSDR 3.33 fps', 10 / 3, 10 / 3, 10, 20],
-  ['OWRX ~9 fps', 9, 9, 20, 30],
+  ['OWRX ~9 fps', 9, 9, 30, 30],
 ];
 for (const [label, fps, sh, de, sm] of TABLE) {
   const g = () => 1000 / fps;
   const r = { sharp: shown(drive('sharp', 200, g).last, fps), def: shown(drive('default', 200, g).last, fps), smo: shown(drive('smooth', 200, g).last, fps) };
   ok(`${label}: ${sh.toFixed(2)} / ${de} / ${sm}`, Math.abs(r.sharp - sh) < 1e-9 && r.def === de && r.smo === sm, JSON.stringify(r));
 }
-ok('20 fps Default is ACTUAL rows (x1), not a repeat to 20', rowTargetFor('default', 20) === 0 && rowTargetFor('default', 19.8) === 0);
+// ★★ Default never runs at 20 (Stuart 2026-10-29: "its the 20 that is causing the frame pacing issues")
+ok('Default is never 20: a 20 fps feed is filled in to 30, 10 fps to 30', rowTargetFor('default', 20) === 30 && rowTargetFor('default', 10) === 30 && [1.7, 3.3, 5, 9, 13, 20, 23].every(f => rowTargetFor('default', f) !== 20));
 ok('Sharp is always actual rows', [2, 5, 10, 20, 30].every(f => rowTargetFor('sharp', f) === 0));
 ok('the 2 fps idle floor: Default is actual rows (3 x 2 < 10) …', rowTargetFor('default', 2) === 0);
 ok('… and Smooth gives 12 (6 x 2), a divisor of 60', rowTargetFor('smooth', 2) === 12);
@@ -46,7 +47,7 @@ ok('every Default/Smooth target from 1 to 60 fps divides 60, is at most x6, and 
 { const want: [number, WfScroll, number][] = [
     // feed, choice, rows/s on screen (0 = actual rows)
     [23, 'default', 30], [23, 'smooth', 60], [23, 'eco', 10], [23, 'minimum', 5], [23, 'sharp', 0],
-    [13, 'eco', 10], [13, 'default', 20], [13, 'smooth', 60], [21, 'default', 30], [20.3, 'default', 0], [25, 'default', 30],
+    [13, 'eco', 10], [13, 'default', 30], [13, 'smooth', 60], [21, 'default', 30], [20.3, 'default', 30], [25, 'default', 30],
     [30, 'default', 0], [40, 'default', 60], [40, 'smooth', 60], [75, 'smooth', 60], [75, 'default', 60],
     [5.6, 'minimum', 5], [12, 'eco', 10], [10.2, 'eco', 0], [10.6, 'eco', 10], [4.4, 'minimum', 5], [2, 'default', 0]];
   const b = want.filter(([f, s, w]) => rowTargetFor(s, f) !== w).map(([f, s, w]) => `${f} fps ${s} → ${rowTargetFor(s, f)} want ${w}`);
@@ -82,7 +83,7 @@ ok('every Default/Smooth target from 1 to 60 fps divides 60, is at most x6, and 
   const r2 = drive('smooth', 600, i => (i < 100 ? 100 : 100 + 11 * (Math.floor(i / 7) % 2)));
   ok('… nor in slow runs of 9 and 10 (7 frames each)', new Set(r2.out.slice(150)).size === 1, `targets ${[...new Set(r2.out.slice(150))]}`);
 }
-for (const [s, from, to, a, b] of [['smooth', 10, 5, 60, 30], ['default', 10, 5, 20, 15], ['default', 20, 10, 0, 20], ['smooth', 5, 10, 30, 60], ['default', 5, 10, 15, 20]] as const) {
+for (const [s, from, to, a, b] of [['smooth', 10, 5, 60, 30], ['default', 10, 5, 30, 15], ['default', 40, 10, 60, 30], ['smooth', 5, 10, 30, 60], ['default', 5, 10, 15, 30]] as const) {
   const first = drive(s, 200, () => 1000 / from);
   const r = drive(s, 400, () => 1000 / to, first.st, first.ema);
   ok(`a governor step ${from} -> ${to} fps changes ${s} ONCE, ${a || 'actual'} -> ${b || 'actual'}`,
