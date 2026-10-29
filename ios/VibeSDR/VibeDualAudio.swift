@@ -55,6 +55,12 @@ final class VibeDualVoice {
   /// Smoothed level of this server's audio (0…1) — the card's MONO speaker lights with it. A Float store is atomic on
   /// every Apple CPU; a lamp can read a value a buffer old.
   private(set) var level: Float = 0
+  /// ★ When this voice last had a buffer (system uptime, s; 0 = never) — dualServer.ts's "has its stream stopped?"
+  ///   (a server in ADS-B / AIS / ISM / NDB sends nothing at all). A Double store, read a buffer old at worst.
+  private(set) var lastAt: TimeInterval = 0
+
+  /// ms since the last buffer, −1 = never.
+  var ageMs: Double { lastAt > 0 ? (ProcessInfo.processInfo.systemUptime - lastAt) * 1000 : -1 }
 
   func setTarget(pos p: Float, gain g: Float, on o: Bool) {
     lock.lock(); wantPos = max(0, min(1, p)); wantGain = max(0, min(1, g)); wantOn = o; lock.unlock()
@@ -64,6 +70,7 @@ final class VibeDualVoice {
   func process(_ buf: AVAudioPCMBuffer, extraGain: Float = 1) {
     lock.lock(); let p = wantPos, g = wantGain, o = wantOn; lock.unlock()
     if !o && !on { return }
+    lastAt = ProcessInfo.processInfo.systemUptime
     guard let ch = buf.floatChannelData, buf.format.channelCount == 2 else { return }
     // ★ Coming in from the plain path = the centre at unity, which is exactly what the plain path sounds like (mono
     //   in both ears), so the first glide starts with no step.
@@ -244,7 +251,8 @@ final class VibeDualAudio: NSObject {
   }
 
   @objc func getLevels(_ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock) {
-    resolve(["native": VibeDualAudio.primary.level, "aux": VibeDualAudio.auxVoice.level])
+    resolve(["native": VibeDualAudio.primary.level, "aux": VibeDualAudio.auxVoice.level,
+             "nativeAge": VibeDualAudio.primary.ageMs, "auxAge": VibeDualAudio.auxVoice.ageMs])
   }
 
   // MARK: - Playing (q)

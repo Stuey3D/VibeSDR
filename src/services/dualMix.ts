@@ -73,14 +73,42 @@ export function clampBalance(b: number): number {
  *   the travel is gentle and the ends are decisive). Even = both at their own level, exactly as with no balance at all;
  *   a full lean silences the other server without disconnecting it.
  * ★ Small dead zone round the middle: a finger lifting off a slider always moves it a hair, and "nearly even" should be
- *   EVEN, not 0.999.
+ *   EVEN, not 0.999. ★ And at the ENDS: a finger at the end of a 120-pt track lands at 0.97, and "nearly all server 1"
+ *   should be ALL server 1 — which now also CENTRES it (dualTargets), so the end has to be reachable.
  */
+export const BALANCE_MID_DEAD = 0.04;
+export const BALANCE_END_SNAP = 0.96;
 export function balanceGains(balance: number): { s1: number; s2: number } {
   let b = clampBalance(balance);
-  if (Math.abs(b) < 0.04) b = 0;
-  const taper = (x: number) => Math.cos(x * (Math.PI / 2));
+  if (Math.abs(b) < BALANCE_MID_DEAD) b = 0;
+  else if (Math.abs(b) > BALANCE_END_SNAP) b = Math.sign(b);
+  const taper = (x: number) => (x >= 1 ? 0 : Math.cos(x * (Math.PI / 2)));
   return { s1: b > 0 ? taper(b) : 1, s2: b < 0 ? taper(-b) : 1 };
 }
+
+/**
+ * ★★★ HAS THIS SERVER ANY AUDIO TO GIVE? (Stuart, 2026-10-28: the Pi 2 on DAB in his left ear only while the Lenovo sat
+ *     in DIGITAL SPOTS: BAND — "the DAB must be in both ears"). Not when:
+ *   · it is in a whole-radio mode that runs spectrum-only — ADS-B, AIS, ISM, NDB (`quiet`: the server sends no audio
+ *     there at all; sessionHoldNotice.audioQuietFor is the same list). Judged from the flag only while its screen is in
+ *     FRONT, where the flag is live; in the background the stream itself says so (`live`);
+ *   · it is in DIGITAL SPOTS: BAND (`band`) — the server still sends the dial's audio, but Band mutes it (the app and the
+ *     web both: "you cannot hear anything anyway"). Kept from its screen's last word while it is in the background;
+ *   · its audio stream has STOPPED (`live` false — no frame for DUAL_STALL_MS; a closed squelch is NOT a stop: the server
+ *     keeps a squelched listener's stream going with gated silence, in lockstep).
+ *   The listener's own MUTE is separate (dualTargets' `muted`): a muted server has nothing to give either, but it also
+ *   stays at zero when NEITHER server has anything to give.
+ */
+export const DUAL_STALL_MS = 2500;
+export function sideHasAudio(o: { quiet?: boolean; band?: boolean; live?: boolean; front?: boolean }): boolean {
+  if (o.band) return false;
+  if (o.quiet && o.front) return false;
+  return o.live !== false;
+}
+
+/** One server's part in the mix, as dualTargets reads it. `audio` = sideHasAudio (default true); `muted` = the listener
+ *  muted THIS server (its card's mute, or its own Audio menu's while it is in front) — never the other. */
+export interface DualSideMix { alive: boolean; muted?: boolean; audio?: boolean }
 
 /**
  * Where each of the two servers should be. `alive` false = that server has gone (fades out where it is — it keeps
@@ -88,17 +116,45 @@ export function balanceGains(balance: number): { s1: number; s2: number } {
  * ears, as Stuart asked ("leaving one server should leave the other playing centred").
  * ★★ EARS BELONG TO SERVERS, NOT TO THE SCREEN: server 1 is left and server 2 right whichever is in front — a swap
  *    changes the picture, never the sound.
+ * ★★★ ONE SERVER WITH SOMETHING TO GIVE PLAYS CENTRED (Stuart, 2026-10-28). Its own ear is only worth having when the
+ *     other ear is in use: with the other muted, in a spectrum-only mode, in Band or its stream stopped, the one playing
+ *     glides to the middle at its full level — both ears, equal power — whatever the balance says (a server with nothing
+ *     to give has no claim on the balance). The silent one goes to zero AT ITS OWN EAR, so when it comes back it fades in
+ *     there while the other glides home: a 400 ms raised cosine both ways, no click.
+ *   · And a FULL LEAN of the balance is the same thing chosen by hand: "all server 1" centres server 1. In between the
+ *     slider blends them left and right exactly as before.
+ *   · Neither has anything to give (a network gap on both, or both in Band): each stays at its own ear at the balance's
+ *     level — nothing is heard, and nothing moves for nothing. A muted one stays at zero.
  */
-export function dualTargets(o: { output: DualOutput; balance: number; s1Alive: boolean; s2Alive: boolean }):
+export function dualTargets(o: { output: DualOutput; balance: number; s1Alive: boolean; s2Alive: boolean;
+                                 s1Muted?: boolean; s2Muted?: boolean; s1Audio?: boolean; s2Audio?: boolean }):
     { s1: VoiceTarget; s2: VoiceTarget } {
-  const bg = balanceGains(o.balance);
-  const both = o.s1Alive && o.s2Alive;
   const stereo = o.output === 'stereo';
-  const s1: VoiceTarget = !o.s1Alive ? { pos: stereo && o.s2Alive ? 0 : 0.5, gain: 0 }
-                        : both ? { pos: stereo ? 0 : 0.5, gain: bg.s1 } : { pos: 0.5, gain: 1 };
-  const s2: VoiceTarget = !o.s2Alive ? { pos: stereo && o.s1Alive ? 1 : 0.5, gain: 0 }
-                        : both ? { pos: stereo ? 1 : 0.5, gain: bg.s2 } : { pos: 0.5, gain: 1 };
-  return { s1, s2 };
+  const home1 = stereo ? 0 : 0.5, home2 = stereo ? 1 : 0.5;
+  const m1 = !!o.s1Muted, m2 = !!o.s2Muted;
+  if (!o.s1Alive || !o.s2Alive) {
+    // ★ One (or none) left: the survivor centred at unity — unless the listener muted it.
+    const s1: VoiceTarget = !o.s1Alive ? { pos: stereo && o.s2Alive ? home1 : 0.5, gain: 0 } : { pos: 0.5, gain: m1 ? 0 : 1 };
+    const s2: VoiceTarget = !o.s2Alive ? { pos: stereo && o.s1Alive ? home2 : 0.5, gain: 0 } : { pos: 0.5, gain: m2 ? 0 : 1 };
+    return { s1, s2 };
+  }
+  const a1 = !m1 && o.s1Audio !== false, a2 = !m2 && o.s2Audio !== false;
+  const bg = balanceGains(o.balance);
+  if (a1 && a2) {
+    if (bg.s2 === 0) return { s1: { pos: 0.5, gain: 1 }, s2: { pos: home2, gain: 0 } };
+    if (bg.s1 === 0) return { s1: { pos: home1, gain: 0 }, s2: { pos: 0.5, gain: 1 } };
+    return { s1: { pos: home1, gain: bg.s1 }, s2: { pos: home2, gain: bg.s2 } };
+  }
+  if (a1) return { s1: { pos: 0.5, gain: 1 }, s2: { pos: home2, gain: 0 } };
+  if (a2) return { s1: { pos: home1, gain: 0 }, s2: { pos: 0.5, gain: 1 } };
+  return { s1: { pos: home1, gain: m1 ? 0 : bg.s1 }, s2: { pos: home2, gain: m2 ? 0 : bg.s2 } };
+}
+
+/** What each server ends up as in each ear once the glide has settled — the tests' view of dualTargets + earGains. */
+export function dualEarGains(o: Parameters<typeof dualTargets>[0]):
+    { s1: { l: number; r: number }; s2: { l: number; r: number } } {
+  const t = dualTargets(o);
+  return { s1: earGains(t.s1.pos, t.s1.gain), s2: earGains(t.s2.pos, t.s2.gain) };
 }
 
 /** The card's ear icon: which speaker is lit — 'L' / 'R', or 'mono' (one speaker that follows the audio level). */
@@ -278,6 +334,9 @@ export interface DualSideCore {
   transport: Transport;
   /** null = playing; a sentence = the server ended it (shown on the card a moment, then the side goes). */
   ended: string | null;
+  /** ★★ The listener muted THIS server (Stuart, 2026-10-28: "right now if i mute a server it does both together"). Per
+   *  side, for the life of the pairing: its voice goes to zero, the other plays on — centred (dualTargets). */
+  muted?: boolean;
 }
 
 export interface DualCore<S extends DualSideCore = DualSideCore> {
@@ -362,6 +421,17 @@ export function endSide<S extends DualSideCore>(st: DualCore<S>, id: string): { 
   const moved = sur.transport === 'aux';
   return { st: { phase: 'picking', sides: [{ ...sur, transport: 'native' }], fg: null },
            fx: { stop, moveToNative: moved ? sur.id : null } };
+}
+
+/**
+ * ★★★ MUTE ONE SERVER, NEVER BOTH. Only side `id` changes; the other side's object is the SAME object (nothing about it
+ *     moved). Unknown id or no pairing: unchanged.
+ */
+export function withSideMuted<S extends DualSideCore>(st: DualCore<S>, id: string, on: boolean): DualCore<S> {
+  if (st.phase === 'off') return st;
+  const s = st.sides.find((x) => x.id === id);
+  if (!s || !!s.muted === on) return st;
+  return { ...st, sides: st.sides.map((x) => (x.id === id ? { ...x, muted: on } : x)) };
 }
 
 /** Mark a side ENDED by the server (the card says why for a moment before endSide removes it). */

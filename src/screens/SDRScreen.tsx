@@ -171,7 +171,7 @@ import DualServerCard from '../components/DualServerCard';
 import { canListenSecond, dualHolds, dualSupported, dualTransport, foregroundEnded, leaveForeground, listenSecond,
          noteStatus, returnParams, returningSide, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
          isFirstRadio, backToFirstRadio,
-         useDualShape } from '../services/dualServer';
+         useDualShape, getDual, setSideMuted } from '../services/dualServer';
 import { cardMode, cardStation, dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
@@ -2668,11 +2668,16 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ★ V12 NDB and AIS too: the server sends no audio there. ★★ NEVER a squelch (sessionHoldNotice.audioQuietFor): a closed
   //   squelch plays the server's gated silence and must keep the session — "the one time where silence is justified".
   const audioQuiet = audioQuietFor({ adsb: adsbOn, ism: ismOn, ndb: ndbOn, ais: aisOn });
+  /* ★★★ V12 TWO SERVERS: NOT WHILE ANOTHER SERVER IS PLAYING. QUIET pauses the main engine and lets the audio session go
+   *  — the other server's voice with it (server 1 on the main pump, and the session both engines share). In a pairing
+   *  this server's silence is its own voice going to zero, and the other plays on CENTRED (dualMix.dualTargets). */
+  const engineQuiet = audioQuiet && dualShape.phase === 'off';
   useEffect(() => {
-    if (audioQuiet === quietSaid.current) return;
-    quietSaid.current = audioQuiet;
-    setNativeQuiet(audioQuiet, audioQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : 'AIS') : 'left ADS-B / ISM / NDB / AIS');
-  }, [audioQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
+    if (engineQuiet === quietSaid.current) return;
+    quietSaid.current = engineQuiet;
+    setNativeQuiet(engineQuiet, engineQuiet ? (adsbOn ? 'ADS-B' : ismOn ? 'ISM' : ndbOn ? 'NDB' : 'AIS')
+      : audioQuiet ? 'two servers playing' : 'left ADS-B / ISM / NDB / AIS');
+  }, [engineQuiet]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { if (quietSaid.current) setNativeQuiet(false, 'receiver closed'); }, []);
 
   /* ★★★ V12 HELD SESSION — "VibeSDR paused" (sessionHoldNotice.ts, docs/v12/BACKGROUND-DECODING.md, "The held session"). Stuart: "when the OS
@@ -3281,7 +3286,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bandMutedARef = useRef<VfoId | null>(null);
   useEffect(() => {
     const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
-    const wantSpk = spotsBandOn && !abOn, wantA = spotsBandOn && abOn;
+    /* ★★★ V12 TWO SERVERS: NOT THE SPEAKER WHILE PAIRED. The speaker mute is the native ⏸, and both servers follow it
+     *  (Stuart, 2026-10-28: "if i mute a server it does both together"); in a pairing Band silences ITS OWN server
+     *  (noteStatus `band` → dualMix.sideHasAudio) and the other comes to both ears. */
+    const wantSpk = spotsBandOn && !abOn && dualShape.phase === 'off', wantA = spotsBandOn && abOn;
     if (wantSpk && preBandMuteRef.current === null) {
       preBandMuteRef.current = isMutedRef.current; VM?.setMuted?.(true); setIsMuted(true);
     } else if (!wantSpk && preBandMuteRef.current !== null) {
@@ -3292,7 +3300,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (mv) abClient()?.abSetMute?.(mv, false);
       bandMutedARef.current = spotsVfo; abClient()?.abSetMute?.(spotsVfo, true);
     } else if (!wantA && mv) { bandMutedARef.current = null; if (abOn) abClient()?.abSetMute?.(mv, false); }
-  }, [spotsBandOn, abOn, abClient, spotsVfo]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [spotsBandOn, abOn, abClient, spotsVfo, dualShape.phase]);   // eslint-disable-line react-hooks/exhaustive-deps
   /** ★★★ The VFO a decoder (or the spots) started NOW runs on — the selected one (vfoAB.ts decStartVfo). A server too old
    *  to decode B (no `decB` in its watch state) keeps round 3's rule: the controls go to A first. The web's abStartVfo. */
   const abStartVfo = useCallback((): VfoId => {
@@ -10288,6 +10296,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       // at, so unmuting could not restore it. Route to the phone's existing mute, which
       // gates playback and leaves the volume where it was.
       onMute: (muted: boolean) => {
+        // ★★ V12 two servers: the wrist mutes the server ON SCREEN, not both (dualServer.setSideMuted).
+        if (getDual().phase === 'paired' && dualIdRef.current) {
+          setSideMuted(dualIdRef.current, muted);
+          watchProvider.setMuted(muted);
+          return;
+        }
         (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })
           ?.setMuted?.(muted);
         setIsMuted(muted);
@@ -11963,9 +11977,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!dualMyId || dualShape.phase === 'off') return;
     noteStatus(dualMyId, { freqHz: status.frequency, mode: dualMode, station: dualStation, endsAt: dualEndsAt,
                            soft: limitSoft || borrowed, name: dualName, radioKey: dualRadioKey,
-                           pinned: !!radioAuthSuffix }, radioBase);
+                           pinned: !!radioAuthSuffix, quiet: audioQuiet, band: spotsBandOn && !abOn }, radioBase);
   }, [dualMyId, dualShape.phase, status.frequency, dualMode, dualStation, dualEndsAt, limitSoft, borrowed, dualName,
-      dualRadioKey, radioBase, radioAuthSuffix]);
+      dualRadioKey, radioBase, radioAuthSuffix, audioQuiet, spotsBandOn, abOn]);
   // ★ The server ended THIS one (its refusal is on screen): the background server keeps playing.
   useEffect(() => { if (refusal && dualMyId) foregroundEnded(dualMyId); }, [refusal, dualMyId]);
   // ★ Gone while still in front without saying so (a crash reset, an alert's "Back to Servers"): it LEFT.
@@ -11985,11 +11999,12 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (dualRadioKey && radioBase) back.baseUrl = radioBase;
     listenSecond({ id: dualMyId, name: dualName, params: back, radioKey: dualRadioKey, pinned: !!radioAuthSuffix,
                    freqHz: abDoor.frequency, endsAt: dualEndsAt, soft: limitSoft || borrowed, station: dualStation,
-                   mode: cardMode({ mode: String(abDoor.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn }) },
+                   mode: cardMode({ mode: String(abDoor.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn }),
+                   quiet: audioQuiet, band: spotsBandOn },
                  start.note);
     navigation.goBack();
   }, [dualMyId, dualName, dualRadioKey, radioBase, radioAuthSuffix, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt,
-      limitSoft, borrowed, navigation, dualDab, adsbOn, ismOn, aisOn, ndbOn, dualStation]);
+      limitSoft, borrowed, navigation, dualDab, adsbOn, ismOn, aisOn, ndbOn, dualStation, audioQuiet, spotsBandOn]);
   /** TAP the card: the background server's screen comes up; both keep playing, ears unmoved. A reset with the server
    *  list beneath — the one way this app lands on a VibeServer (connectVibeServer's note on why not navigate). */
   const onDualSwap = useCallback(() => {
@@ -14636,6 +14651,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★★ V12 two servers: the TWO SERVERS row, only while two are playing.
         dualStereo={dualShape.output === 'stereo'}
         onDualStereo={dualShape.phase === 'paired' ? (on: boolean) => setDualOutput(on ? 'stereo' : 'mono') : undefined}
+        dualMuted={!!dualShape.sides.find((x) => x.id === dualMyId)?.muted}
+        onDualMute={dualShape.phase === 'paired' && dualMyId ? (on: boolean) => setSideMuted(dualMyId, on) : undefined}
         vfoABOn={abOn}
         /* ★★ V12 VFO A/B round 3 — a squelch row for each VFO, with its MUTE, while VFO B is on (VibeServer only). */
         vfoRows={abOn && isLocal && !icom ? {

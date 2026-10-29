@@ -595,6 +595,11 @@ export interface AudioSheetProps {
    *  Passed only while two servers are playing — nowhere else would it do anything. Remembered per device. */
   dualStereo?: boolean;
   onDualStereo?: (on: boolean) => void;
+  /** ★★ V12 TWO SERVERS: THIS server's own mute (Stuart, 2026-10-28: "right now if i mute a server it does both
+   *  together"). Only this server goes quiet; the other plays on, centred. Passed only while two servers are playing —
+   *  and then the Mac's MUTE key is this server's mute too (the VOLUME fader stays the whole app's). */
+  dualMuted?: boolean;
+  onDualMute?: (on: boolean) => void;
   /** ★★ V12 VFO A/B round 3 — A SQUELCH ROW FOR EACH VFO while VFO B is on (Stuart, 2026-10-27: "the 2 VFO's can they
    *  have their own squelch and auto squelch options which show in the audio menu when the 2nd VFO is active"), each
    *  labelled with its letter in its needle colour, each with its own AUTO SQUELCH and a MUTE ("the ability to mute a
@@ -684,7 +689,7 @@ export default function AudioSheet({
   sqlAuto = false, onSqlAuto, sqlAutoMargin = 12, onSqlAutoMargin, sqlAutoOk = false,
   fmSquelch = -999, onFmSquelch, isFmMode = false,
   notchOn = false, onNotch, binaural = false, onBinaural, vfoStereo = true, onVfoStereo, vfoABOn = false, vfoRows,
-  dualStereo = true, onDualStereo,
+  dualStereo = true, onDualStereo, dualMuted = false, onDualMute,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
   fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
@@ -823,8 +828,14 @@ export default function AudioSheet({
                 minimumTrackTintColor={mac.state.muted ? C.track : pt.gold.fill}
                 maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
               <Text style={[st.bwVal, { minWidth: 52 }]}>{macVolumeLabel(mac.state)}</Text>
-              <Toggle label="MUTE" on={mac.state.muted} onPress={toggleMacAudioMute} padH={10}
-                a11y={mac.state.muted ? 'Unmute' : 'Mute'} />
+              {/* ★★ Two servers playing: MUTE is THIS server's (the other keeps playing, centred). A whole-Mac mute
+                  already on is lifted first — one press, one thing changed. */}
+              {onDualMute
+                ? <Toggle label="MUTE" on={mac.state.muted || dualMuted} padH={10}
+                    onPress={() => { if (mac.state.muted) toggleMacAudioMute(); else onDualMute(!dualMuted); }}
+                    a11y={mac.state.muted || dualMuted ? 'Unmute this server' : 'Mute this server. The other server keeps playing.'} />
+                : <Toggle label="MUTE" on={mac.state.muted} onPress={toggleMacAudioMute} padH={10}
+                    a11y={mac.state.muted ? 'Unmute' : 'Mute'} />}
             </View>
           )}
 
@@ -1022,11 +1033,18 @@ export default function AudioSheet({
               <View style={st.bwRow}>
                 <Text style={[st.bwLabel, { width: 78 }]}>TWO SERVERS</Text>
                 <View style={{ flex: 1 }} />
-                <Toggle label={dualStereo ? 'STEREO' : 'MONO'} on={dualStereo} onPress={() => onDualStereo(!dualStereo)}
-                  a11y={dualStereo ? 'Two servers in stereo. Tap to hear both in both ears.' : 'Two servers in mono. Tap to put each server in its own ear.'} />
+                <NavRow>
+                  {/* ★ This server's mute — on a Mac it is the MUTE key beside VOLUME above, so not twice. */}
+                  {onDualMute && !mac.onMac && (
+                    <Toggle label={dualMuted ? 'MUTED' : 'MUTE'} on={dualMuted} padH={10} onPress={() => onDualMute(!dualMuted)}
+                      a11y={dualMuted ? 'Unmute this server' : 'Mute this server. The other server keeps playing, in both ears.'} />
+                  )}
+                  <Toggle label={dualStereo ? 'STEREO' : 'MONO'} on={dualStereo} onPress={() => onDualStereo(!dualStereo)} marginLeft={onDualMute && !mac.onMac ? 8 : undefined}
+                    a11y={dualStereo ? 'Two servers in stereo. Tap to hear both in both ears.' : 'Two servers in mono. Tap to put each server in its own ear.'} />
+                </NavRow>
               </View>
               <Text style={st.iqNote}>
-                Stereo: the first server in your left ear, the second in your right, whichever is on screen. Mono: both in both ears. Each server is heard in mono either way. Hold the card under Servers for the balance between them.
+                Stereo: the first server in your left ear, the second in your right, whichever is on screen. Mono: both in both ears. Each server is heard in mono either way. When one has nothing to play (muted, a map mode such as ADS-B, Band spots, or its stream has stopped), the other plays in both ears. MUTE here mutes only this server; the card under Servers has its own mute for the other. Hold the card for the balance between them; all the way to one side plays that server in both ears.
               </Text>
             </View>
           )}
