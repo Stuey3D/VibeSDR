@@ -1,9 +1,8 @@
 # check-deb-depends.cmake — CPACK_POST_BUILD_SCRIPTS: refuse a package that depends on a library.
 #
 # ★★★ THE RULE (Stuart, 2026-10-18): the VibeServer .deb needs NOTHING from the system for SDR
-#     support or libraries except glibc. xHE-AAC is libxaac, linked in (V12); FFmpeg is not a dependency (the owner's
-#     optional DAB+ FFmpeg decoder uses an installed one); the SDRplay API is the owner's own install (dlopen'd), so none
-#     of them can appear here. Depends may name libc6 and
+#     support or libraries except glibc. AAC is FAAD2 + libxaac, linked in (V12); VibeServer uses no FFmpeg; the SDRplay
+#     API is the owner's own install (dlopen'd), so none of them can appear here. Depends may name libc6 and
 #     the tools we exec (CPACK_VIBE_ALLOWED_DEPENDS, set in CMakeLists.txt) — nothing else.
 # ★★ WHY A GUARD AND NOT A HABIT. dpkg-shlibdeps adds a Depends line for every shared library the
 #    ELF names, silently. One -dev package left in a build image, one find_library that settles for a

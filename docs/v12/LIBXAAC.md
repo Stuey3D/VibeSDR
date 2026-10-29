@@ -4,6 +4,11 @@ Stuart: *"if we can reduce the amount of libraries we include the better, FAAD2 
 the Android Open Source Project, Apache-2.0, `github.com/ittiam-systems/libxaac`, also AOSP `external/libxaac`) to replace
 both the bundled FFmpeg and FAAD2. These are the measurements.
 
+> ★★ **UPDATE, 2026-10-29 (branch `v12-no-ffmpeg`):** Stuart chose the dual approach — FAAD2 for DRM AAC and DAB+,
+> libxaac for xHE-AAC — and VibeServer on Linux and the Mac no longer uses FFmpeg at all. The owner's DAB+ decoder choice
+> (`dabAacDecoder`) is gone; the Mac decodes DAB+ with FAAD2 like Linux. Android keeps MediaCodec. The sections below
+> that describe an FFmpeg option or the Mac's old DAB+ path are history.
+
 ## The answer
 
 | Decoder | Replaced by libxaac? | Why |
@@ -13,8 +18,7 @@ both the bundled FFmpeg and FAAD2. These are the measurements.
 | **FAAD2, DAB+ build** | **Not yet. Stuart decides.** | libxaac decodes DAB+ correctly: 960-sample frames (`frameLengthFlag`), SBR with 15 time slots, and PS. It costs more CPU than our patched FAAD2, though, and each of its two SBR paths has a catch (see "DAB+"). |
 
 **What we bundle on Linux after this branch:** FAAD2 (`libfaad_drm.a` + `libfaad_dab.a`, one source, two builds) and
-libxaac (`libxaacdec.a`). FFmpeg is gone from the packages. The owner's optional DAB+ "FFmpeg" decoder now uses an
-installed `ffmpeg` if the machine has one. If it doesn't, the server falls back to FAAD2 rather than going silent.
+libxaac (`libxaacdec.a`). FFmpeg is gone from the packages, and (since `v12-no-ffmpeg`) from the server altogether.
 
 ## Correctness
 
@@ -177,9 +181,9 @@ to keep the existing notices, and §4(d) to ship NOTICE.
   builds without it. ★ Found while testing: `DrmAppleUsac` hands AudioToolbox the bare AudioSpecificConfig as its
   magic cookie, and in a standalone test making the same calls **AudioToolbox refuses it** (`'!dat'`). Wrapped in an `esds` ES_Descriptor it decodes fine. So
   the Mac's AudioToolbox xHE path never worked; it silently fell back to Homebrew FFmpeg, if present. With libxaac the
-  path is no longer used, and fixing it is not needed now. **Mac DAB+ is unchanged:** FFmpeg if Homebrew has one,
-  else AudioToolbox, with FAAD2 the owner's option (vibe_dab_aacdec.h). Given a 960-sample ASC, AudioToolbox refuses it
-  in the same test, which is why that path decodes DAB+ as 1024.
+  path is no longer used, and fixing it is not needed now. **Mac DAB+ is FAAD2 since `v12-no-ffmpeg`**, as on
+  Linux (vibe_dab_aacdec.h); AudioToolbox remains only for an Apple build without FAAD2 (the iOS app, a Mac dev build).
+  Given a 960-sample ASC, AudioToolbox refuses it in the same test, which is why that path decodes DAB+ as 1024.
 - **Android:** unchanged. libxaac does not fix the silent DRM AAC on Android: that needs `libfaad_drm.a` for the NDK,
   which is a separate job. xHE-AAC there is MediaCodec, which on Android 10+ *is* libxaac (`c2.android.xaac.decoder`).
   Linking libxaac into the Android server would only add xHE-AAC on Android 5–9.
@@ -203,10 +207,9 @@ before a tag, pin the commit (GitHub archive tarball by SHA, the same `fetch` + 
 
 ## Config: how existing settings map
 
-- `dabAacDecoder` keeps its meaning: 0 = default (FAAD2 on Linux), 1 = FAAD2, 2 = FFmpeg. An owner who stored 2
-  keeps 2. If the machine has no ffmpeg, `dabWantFaad2()` now returns FAAD2 (Linux), so the station plays instead of
-  going silent, and the choice applies again once an ffmpeg is installed. The setup page already draws the choice
-  only where both decoders exist (`hwinfo.dabFaad2Avail`). The old `dabFaad2` bool mapping is unchanged.
+- `dabAacDecoder` (and the older `dabFaad2` bool) — **removed in `v12-no-ffmpeg`.** FAAD2 is the only DAB+ decoder on
+  the Linux and Mac servers, so there is nothing to choose. A config that still carries either key loads cleanly; the
+  key is ignored and dropped at the next save (`scripts/test-setup-dab-faad2.mjs`).
 - No new key: xHE-AAC has one decoder on server builds.
 
 ## Tests
@@ -229,5 +232,6 @@ before a tag, pin the commit (GitHub archive tarball by SHA, the same `fetch` + 
    its peak limiter. Or keep FAAD2 (recommended for now).
 2. Whether to carry a **libxaac patch series** for the Pi 2: arithmetic-decoder division, `pow` tables, HBE skip,
    NEON for PS.
-3. Whether the owner's **FFmpeg DAB+ option** should stay at all on Linux, now that the package carries none.
+3. ~~Whether the owner's **FFmpeg DAB+ option** should stay at all on Linux~~ — decided 2026-10-29: removed, with every
+   other FFmpeg use (`v12-no-ffmpeg`).
 4. Patents (above).

@@ -83,9 +83,9 @@ In the browser setup page, for the RTL-SDR:
 - **Tunnel / listing: off** for the first run. It is off on a new server. The tunnel uses about
   60 MB, which on this board decides what else fits. Listeners on your own network, or through a port
   forward, need no tunnel.
-- **DAB+: leave it off.** Untick it under *Modes and decoders*. This image does not install `ffmpeg`,
-  which DAB+ audio needs, because DietPi does not install "recommended" packages. Add it later with
-  `sudo apt install ffmpeg` if you want to try DAB+ and can spare the ~40 MB.
+- **DAB+: nothing to install.** VibeServer decodes DAB+ audio itself (FAAD2, built in). Run the
+  benchmark first to see whether this board keeps up with a DAB multiplex, and untick DAB under
+  *Modes and decoders* if it does not.
 - **Advanced RDS: off.** It is a CPU cost that a Pi 2 also runs without. It only runs while a
   listener has its panel (ADV RDS) open.
 - **CPU governor:** VibeServer holds the clock at its top, which is 1.008 GHz here. If the box runs

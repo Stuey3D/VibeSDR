@@ -1,16 +1,17 @@
-// test-dab-faad.cpp — DAB+ audio: FAAD2 in process (vibe_dab_faad.h) against TODAY's FFmpeg child process, on REAL
-// off-air access units — unit logs written by dab-unitlog from captured multiplexes, CRC failures and lost super frames
-// included, so the comparison is made on exactly what the receiver produced on air. V12, 2026-10-26.
+// test-dab-faad.cpp — DAB+ audio through FAAD2 in process (vibe_dab_faad.h — the Linux and Mac servers' only DAB+ decoder
+// since 2026-10-29), on REAL off-air access units — unit logs written by dab-unitlog from captured multiplexes, CRC
+// failures and lost super frames included, so it is tested on exactly what the receiver produced on air. V12, 2026-10-26.
 //
-// Each decoder's output is put through the SERVICE's timeline exactly as DabService builds it:
-//   ffmpeg  — today: only the good units go to `ffmpeg -f aac … -ar 48000` (the server's own arguments); its 1024-sample
-//             output is paced at the measured rate; a hole is SPLICED (the neighbours join) and the clock is held by
-//             silence once the deficit passes 240 ms (holdTimeline).
+// Each output is put through the SERVICE's timeline exactly as DabService builds it:
 //   faad2   — vibe_dab_faad.h: every missing unit CONCEALED (the last good unit decoded again, fading out; silence;
 //             the next good unit fading in), so the clock never needs filling.
-//   faad2-splice — the same decoder fed the way FFmpeg is (spliced + silence fill): what the decoder alone changes.
-//   ref960  — an independent check of the 960 transform: FFmpeg reading the units as LOAS/LATM, whose StreamMuxConfig
-//             carries the AudioSpecificConfig with frameLengthFlag = 1. Measurement only — never a server path.
+//   faad2-splice — the same decoder with the holes SPLICED (the neighbours join) and the clock held by silence once the
+//             deficit passes 240 ms (holdTimeline): what concealment changes.
+// ★ OPTIONAL OFFLINE REFERENCES, only where a developer's `ffmpeg` command is installed (the server never runs it):
+//   ref960  — an independent check of the 960 transform: the ffmpeg command reading the units as LOAS/LATM, whose
+//             StreamMuxConfig carries the AudioSpecificConfig with frameLengthFlag = 1.
+//   ffmpeg  — the good units as ADTS (1024-sample frames), spliced and paced at the measured rate: a second opinion.
+//   Without it the FAAD2 checks still run; the reference comparisons are skipped and say so.
 // Reported per service: level, agreement (SNR) with the 960 reference, stereo image, and on damaged logs the largest
 // step, clicks, dips and gaps; start-up; CPU and memory. Exit 0 when the checks pass, 1 when one fails, 3 when no logs.
 //   run: test-dab-faad [<log.dabu>…]  (none: every log in ~/VibeSDR-test-audio/dab/logs) (VIBE_DAB_FAAD_WAV=<prefix>: also writes <prefix>-<log>-<variant>.wav, 48 kHz 16-bit)
@@ -18,6 +19,7 @@
 //     none given (or none found) the test says NOT RUN and exits 3.
 #include "vibe_dab_aacdec.h"
 #include "vibe_dab_faad.h"
+#include <unistd.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -58,11 +60,13 @@ static bool loadLog(const std::string& path, Log& L) {
 static double cpuChildren() { rusage r; getrusage(RUSAGE_CHILDREN, &r); return r.ru_utime.tv_sec + r.ru_stime.tv_sec + (r.ru_utime.tv_usec + r.ru_stime.tv_usec) * 1e-6; }
 static double cpuThread() { timespec t; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 static std::string tmpDir() { const char* t = getenv("TMPDIR"); return t ? t : "/tmp"; }
+/** ★ A developer's ffmpeg command, for the optional offline references only — nullptr when there is none. */
 static const char* ffPath() {
     for (const char* c : { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg" }) if (::access(c, X_OK) == 0) return c;
-    return "ffmpeg";
+    return nullptr;
 }
 static bool runFf(const std::string& fmt, const std::vector<uint8_t>& in, std::vector<float>& out, double& cpu, long& rssKb) {
+    if (!ffPath()) return false;
     const std::string a = tmpDir() + "/tdf-in.bin", b = tmpDir() + "/tdf-out.f32";
     FILE* f = std::fopen(a.c_str(), "wb"); std::fwrite(in.data(), 1, in.size(), f); std::fclose(f);
     const double c0 = cpuChildren();
@@ -128,19 +132,14 @@ static Out spliceTimeline(const Log& L, const std::vector<float>& dec, double pe
     return o;
 }
 
-static Out runFfmpegToday(const Log& L) {
+static Out runFfmpegRef(const Log& L) {
     std::vector<uint8_t> in; size_t good = 0;
     for (const auto& s : L.s) if (!s.adts.empty()) { in.insert(in.end(), s.adts.begin(), s.adts.end()); ++good; }
     std::vector<float> dec; double cpu = 0; long rss = 0;
     if (!good || !runFf("aac", in, dec, cpu, rss)) return {};
-    std::printf("   ffmpeg today: %.1f frames at 48 kHz per unit — paced to %.1f\n", double(dec.size() / 2) / double(good), 5760.0 / L.slots);
+    std::printf("   ffmpeg (reference): %.1f frames at 48 kHz per unit — paced to %.1f\n", double(dec.size() / 2) / double(good), 5760.0 / L.slots);
     Out o = spliceTimeline(L, dec, double(dec.size() / 2) / double(good));
     o.cpu = cpu; o.rssKb = rss;
-    // start-up through the live pipe exactly as the server runs it
-    vibedab::AacDecoderFfmpeg ff; vibedab::AacPcm p; const auto t0 = steady_clock::now();
-    for (const auto& s : L.s) { if (s.adts.empty()) continue; ff.decode(s.adts.data(), s.adts.size(), p); std::this_thread::sleep_for(milliseconds(20)); ff.drain(p); if (!p.interleaved.empty()) break; }
-    if (!p.interleaved.empty()) o.startMs = duration<double, std::milli>(steady_clock::now() - t0).count();
-    ff.close();
     return o;
 }
 
@@ -339,7 +338,7 @@ int main(int argc, char** argv) {
         std::sort(paths.begin(), paths.end());
     }
     if (paths.empty()) { std::printf("   NOT RUN — no unit logs (dab-unitlog makes them from a capture; they stay in ~/VibeSDR-test-audio/dab/logs)\n"); return 3; }
-    if (!vibedab::AacDecoderFfmpeg().available()) { std::printf("   NOT RUN — no FFmpeg to compare against\n"); return 3; }
+    if (!ffPath()) std::printf("   (no ffmpeg command on this machine — the FAAD2 checks run; the offline reference comparisons are skipped)\n");
     int ran = 0;
     for (const std::string& path : paths) {
         Log L; if (!loadLog(path, L)) { std::printf("   %s: not a unit log, skipped\n", path.c_str()); continue; }
@@ -353,58 +352,54 @@ int main(int argc, char** argv) {
         const double secs = sfs * 0.12;
         std::printf("\n══ %s: %d units per super frame%s, %.1f s — %zu units due, %zu missing (%zu CRC, %zu in lost super frames)\n",
                     L.name.c_str(), L.slots, L.ps ? ", parametric stereo" : "", secs, due, missing, bad, missing - bad);
-        Out ff = runFfmpegToday(L), ref = runRef960(L), fa = runFaad(L, true), fs = runFaad(L, false);
-        if (ff.pcm.empty() || fa.pcm.empty()) { std::printf("   (a decoder produced nothing)\n"); continue; }
-        const double U = 5760.0 / L.slots;
-        std::printf("   timeline: due %.0f frames; ffmpeg %+.0f ms (silence %.2f s) | faad2 %+.0f ms (%lld concealed) | faad2-splice %+.0f ms\n",
-                    secs * 48000, (double(ff.pcm.size() / 2) - secs * 48000) / 48.0, ff.silenceFrames / 48000.0,
-                    (double(fa.pcm.size() / 2) - secs * 48000) / 48.0, (long long)fa.concealed, (double(fs.pcm.size() / 2) - secs * 48000) / 48.0);
-        (void)U;
-        std::printf("   level (RMS): ffmpeg %.2f dB | faad2 %.2f dB | ref960 %.2f dB\n", rmsDb(ff.pcm), rmsDb(fa.pcm), ref.pcm.empty() ? 0.0 : rmsDb(ref.pcm));
+        Out ff = runFfmpegRef(L), ref = runRef960(L), fa = runFaad(L, true), fs = runFaad(L, false);
+        if (fa.pcm.empty()) { std::printf("   (FAAD2 produced nothing)\n"); check(false, "FAAD2 decodes the log"); continue; }
+        const bool hasFf = !ff.pcm.empty();
+        std::printf("   timeline: due %.0f frames; faad2 %+.0f ms (%lld concealed) | faad2-splice %+.0f ms (silence %.2f s)\n",
+                    secs * 48000, (double(fa.pcm.size() / 2) - secs * 48000) / 48.0, (long long)fa.concealed,
+                    (double(fs.pcm.size() / 2) - secs * 48000) / 48.0, fs.silenceFrames / 48000.0);
+        std::printf("   level (RMS): faad2 %.2f dB", rmsDb(fa.pcm));
+        if (!ref.pcm.empty()) std::printf(" | ref960 %.2f dB", rmsDb(ref.pcm));
+        if (hasFf) std::printf(" | ffmpeg %.2f dB", rmsDb(ff.pcm));
+        std::printf("\n");
         if (!ref.pcm.empty() && missing * 50 <= due) {
-            int l1, l2, l3; double g1, g2, g3;
+            int l1; double g1;
             // ★ faad2-splice: the SAME timeline as the reference (holes spliced), so this compares the decoders and nothing else
-            const double s1 = snrAgainst(fs.pcm, ref.pcm, l1, g1), s2 = snrAgainst(ff.pcm, ref.pcm, l2, g2), s3 = snrAgainst(ff.pcm, fs.pcm, l3, g3);
-            std::printf("   waveform (gain-matched SNR): faad2 vs ref960 %.1f dB (gain %+.2f dB) | ffmpeg-today vs ref960 %.1f dB (gain %+.2f dB) | ffmpeg-today vs faad2 %.1f dB\n",
-                        s1, g1, s2, g2, s3);
-            double w1, m1, p1, w2, m2, p2; spectralAgreement(fs.pcm, ref.pcm, w1, m1, p1); spectralAgreement(ff.pcm, ref.pcm, w2, m2, p2);
-            std::printf("   spectrum vs ref960: faad2 worst third-octave %.2f dB, short-time distance median %.2f / p95 %.2f dB | ffmpeg-today %.2f dB, %.2f / %.2f dB\n",
-                        w1, m1, p1, w2, m2, p2);
-            (void)l1; (void)l2; (void)l3; (void)g3;
-        }
-        double c1, sd1, c2, sd2, c3 = 0, sd3 = 0; stereo(fs.pcm, c1, sd1); stereo(ff.pcm, c2, sd2); if (!ref.pcm.empty()) stereo(ref.pcm, c3, sd3);
-        std::printf("   stereo: L/R correlation faad2 %.3f / ffmpeg %.3f / ref960 %.3f; side/mid faad2 %.2f dB / ffmpeg %.2f dB / ref960 %.2f dB\n", c1, c2, c3, sd1, sd2, sd3);
-        // ★★ THE GATE, as far as numbers can hold it (Stuart listens to the rest): FAAD2 must be the true 960 decode in
-        //    level, spectrum and stereo image where the log is clean, never stop or start dead where it is not, and cost less.
-        if (!ref.pcm.empty() && missing * 50 <= due) {
+            const double s1 = snrAgainst(fs.pcm, ref.pcm, l1, g1);
             double w1, m1, p1; spectralAgreement(fs.pcm, ref.pcm, w1, m1, p1);
+            std::printf("   vs ref960: waveform (gain-matched SNR) %.1f dB (gain %+.2f dB); worst third-octave %.2f dB, short-time distance median %.2f / p95 %.2f dB\n",
+                        s1, g1, w1, m1, p1);
+            (void)l1;
             double c3 = 0, sd3 = 0, c1b = 0, sd1b = 0; stereo(ref.pcm, c3, sd3); stereo(fs.pcm, c1b, sd1b);
+            std::printf("   stereo: L/R correlation faad2 %.3f / ref960 %.3f; side/mid faad2 %.2f dB / ref960 %.2f dB\n", c1b, c3, sd1b, sd3);
+            // ★★ THE GATE, as far as numbers can hold it (Stuart listens to the rest): FAAD2 must be the true 960 decode in
+            //    level, spectrum and stereo image where the log is clean.
             check(std::fabs(rmsDb(fs.pcm) - rmsDb(ref.pcm)) <= 0.15, "level within 0.15 dB of the 960 reference");
             check(w1 <= 1.5, "long-term spectrum within 1.5 dB of the 960 reference in every third octave to 16 kHz");
             check(std::fabs(sd1b - sd3) <= 1.0, "stereo image (side/mid) within 1 dB of the 960 reference");
-        }
-        { const int ea = abruptEdges(fa.pcm), ef = abruptEdges(ff.pcm);
-          std::printf("   hard edges into/out of silence: ffmpeg %d | faad2 %d\n", ef, ea);
+        } else if (ref.pcm.empty()) std::printf("   (no 960 reference — needs a developer's ffmpeg command)\n");
+        { const int ea = abruptEdges(fa.pcm);
+          std::printf("   hard edges into/out of silence: faad2 %d\n", ea);
           check(ea == 0, "FAAD2 never stops or starts dead (no hard edge into or out of silence)"); }
-        check(fa.cpu < ff.cpu, "FAAD2 costs less CPU than the FFmpeg child");
-        const Damage dff = damage(ff.pcm), dfa = damage(fa.pcm), dfs = damage(fs.pcm);
-        { const EventStats a = atHoles(ff.pcm, ff.events), b = atHoles(fa.pcm, fa.events), c = atHoles(fs.pcm, fs.events);
+        const Damage dfa = damage(fa.pcm), dfs = damage(fs.pcm);
+        { const EventStats b = atHoles(fa.pcm, fa.events), c = atHoles(fs.pcm, fs.events);
           auto pr = [](const char* nm, const EventStats& e) { std::printf("   at holes %-13s %3d holes: click median %+5.1f dB worst %+5.1f dB, %d over 15 dB; dip median %5.1f dB worst %5.1f dB\n", nm, e.n, e.clickMed, e.clickWorst, e.audible, e.dipMed, e.dipWorst); };
-          if (missing) { pr("ffmpeg", a); pr("faad2", b); pr("faad2-splice", c); } }
-        std::printf("   damage: step   ffmpeg %.4f | faad2 %.4f | faad2-splice %.4f\n", dff.step, dfa.step, dfs.step);
-        std::printf("           clicks ffmpeg %d | faad2 %d | faad2-splice %d\n", dff.clicks, dfa.clicks, dfs.clicks);
-        std::printf("           dips   ffmpeg %d | faad2 %d | faad2-splice %d\n", dff.dips, dfa.dips, dfs.dips);
-        std::printf("           gaps   ffmpeg %d (%.2f s) | faad2 %d (%.2f s) | faad2-splice %d (%.2f s)\n", dff.gaps, dff.gapSec, dfa.gaps, dfa.gapSec, dfs.gaps, dfs.gapSec);
+          if (missing) { pr("faad2", b); pr("faad2-splice", c); if (hasFf) pr("ffmpeg", atHoles(ff.pcm, ff.events)); } }
+        std::printf("   damage: step   faad2 %.4f | faad2-splice %.4f\n", dfa.step, dfs.step);
+        std::printf("           clicks faad2 %d | faad2-splice %d\n", dfa.clicks, dfs.clicks);
+        std::printf("           dips   faad2 %d | faad2-splice %d\n", dfa.dips, dfs.dips);
+        std::printf("           gaps   faad2 %d (%.2f s) | faad2-splice %d (%.2f s)\n", dfa.gaps, dfa.gapSec, dfs.gaps, dfs.gapSec);
         if (getenv("VIBE_DAB_FAAD_SYNTH")) {   // ★ 1 unit in 10 corrupted AFTER the CRC — harsher than air (the CRC removes these)
             const Out fx = runFaad(L, true, 10); const Damage dx = damage(fx.pcm);
             std::printf("   synthetic 1-in-10 corrupted past the CRC: faad2 step %.4f, clicks %d, dips %d\n", dx.step, dx.clicks, dx.dips);
         }
-        std::printf("   start-up: first PCM after %.1f ms (faad2) vs %.1f ms (ffmpeg live pipe)\n", fa.startMs, ff.startMs);
-        std::printf("   CPU for %.1f s: faad2 %.3f s (%.2f %% of a core), ffmpeg %.3f s (%.2f %%); memory: faad2 +%ld KB in process, ffmpeg child peak RSS %ld KB\n",
-                    secs, fa.cpu, 100 * fa.cpu / secs, ff.cpu, 100 * ff.cpu / secs, fa.rssKb, ff.rssKb);
+        std::printf("   start-up: first PCM after %.1f ms (faad2)\n", fa.startMs);
+        std::printf("   CPU for %.1f s: faad2 %.3f s (%.2f %% of a core); memory: faad2 +%ld KB in process\n",
+                    secs, fa.cpu, 100 * fa.cpu / secs, fa.rssKb);
         if (const char* wp = getenv("VIBE_DAB_FAAD_WAV")) {
             const std::string b = std::string(wp) + "-" + L.name + "-";
-            writeWav(b + "ffmpeg-today.wav", ff.pcm); writeWav(b + "faad2.wav", fa.pcm); writeWav(b + "faad2-splice.wav", fs.pcm);
+            writeWav(b + "faad2.wav", fa.pcm); writeWav(b + "faad2-splice.wav", fs.pcm);
+            if (hasFf) writeWav(b + "ffmpeg-ref.wav", ff.pcm);
             if (!ref.pcm.empty()) writeWav(b + "ref960.wav", ref.pcm);
         }
     }

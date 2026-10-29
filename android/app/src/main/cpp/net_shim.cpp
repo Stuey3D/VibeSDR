@@ -220,7 +220,7 @@ std::shared_ptr<Socket> Listener::accept(Address*, int timeout) {
         if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) return nullptr;
     }
     int cfd = ::accept(fd_, nullptr, nullptr);
-    // ★ Close-on-exec (audit 2026-10-03): otherwise every child we spawn (curl, cloudflared, ffmpeg) inherits
+    // ★ Close-on-exec (audit 2026-10-03): otherwise every child we spawn (curl, cloudflared) inherits
     //   listeners' sockets. fcntl rather than accept4 — the same code builds for macOS, which has no accept4.
     if (cfd >= 0) ::fcntl(cfd, F_SETFD, FD_CLOEXEC);
     if (cfd < 0) return nullptr;

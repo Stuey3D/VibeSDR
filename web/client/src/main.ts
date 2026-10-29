@@ -7386,9 +7386,9 @@ function dabRender() {
     + (d.sfTried ? row('DAB+ super frames', tl(`${d.sfOk ?? 0} of ${d.sfTried}`, (d.sfOk ?? 0) / d.sfTried > 0.98 ? 'ok' : (d.sfOk ?? 0) / d.sfTried > 0.9 ? 'warn' : 'bad')) : '')
     // ★★★ The audio itself (2026-10-06): super frames read ~100 % "OK" on bubbling mud — one surviving AU is enough.
     + (d.auIn ? row('Audio units', tl(`${d.auBad ?? 0} of ${d.auIn} lost`, (d.auBad ?? 0) / d.auIn < 0.01 ? 'ok' : (d.auBad ?? 0) / d.auIn < 0.08 ? 'warn' : 'bad')) : '')
-    /* ★ Which decoder turns the units into sound, and what it costs (V12: FFmpeg's child process, or FAAD2 in the server —
-     *  the owner's choice in setup). Concealed = units FAAD2 filled in for ones that never arrived. */
-    + (d.auIn && d.aacDec ? row('AAC decoder', escapeHtml(d.aacDec === 'ffmpeg' ? 'FFmpeg' : d.aacDec)
+    /* ★ Which decoder turns the units into sound, and what it costs (V12: FAAD2 in the server on Linux and the Mac; the
+     *  phone's own on Android). Concealed = units FAAD2 filled in for ones that never arrived. */
+    + (d.auIn && d.aacDec ? row('AAC decoder', escapeHtml(d.aacDec)
         + (d.aacCpu !== undefined ? ` · ${d.aacCpu.toFixed(2)} % of a core` : '')
         + (d.aacConcealed ? ` · ${d.aacConcealed} units concealed` : '')
         // ★ V12: FAAD2 decodes on its own thread; a unit it could not take in time is concealed, never waited for

@@ -11,8 +11,8 @@
 #
 # ★★★ WHY (Stuart, 2026-10-18): the package must need NOTHING from the system for SDR support or
 #     libraries — only glibc and the SDRplay API (closed, dlopen'd, the owner installs it). xHE-AAC is libxaac,
-#     linked in (V12, docs/v12/LIBXAAC.md); FFmpeg is neither bundled nor recommended — the owner's optional DAB+
-#     FFmpeg decoder uses one only if it is installed. Linux used to link Debian's libusb, libopus, libhackrf, ncurses and the
+#     linked in (V12, docs/v12/LIBXAAC.md), as is FAAD2 for DRM AAC and DAB+; VibeServer uses no FFmpeg (2026-10-29).
+#     Linux used to link Debian's libusb, libopus, libhackrf, ncurses and the
 #     C++ runtime, and dpkg-shlibdeps copied the BUILD image's versions into Depends — so the one
 #     package refused Ubuntu 22.04 over a libhackrf0 (>= 2022.09.1) whose every call we use is
 #     years older. A radio driver should arrive on OUR release cycle, not a distribution's.

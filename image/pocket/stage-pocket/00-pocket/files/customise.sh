@@ -72,8 +72,8 @@ fi
 
 # ── 4b. The system packages — THE PACKAGE'S LIST, the same one every Update reads ───────────────
 # ★★ dnsmasq-base (hotspot DHCP + captive DNS), nftables (the :80 redirect), iw, rfkill, avahi-daemon, overlayroot +
-#    initramfs-tools (the read-only root), ffmpeg (★★★ DAB+ audio — Stuart, 2026-10-10: "does it contain FFMPEG ready
-#    for DAB+?"; the package only RECOMMENDS it)… all in /usr/lib/vibeserver/pocket-packages.txt, which says why.
+#    initramfs-tools (the read-only root)… all in /usr/lib/vibeserver/pocket-packages.txt, which says why.
+#    ★ No ffmpeg (V12, 2026-10-29): VibeServer decodes DAB+ and DRM audio itself (FAAD2, libxaac — built in).
 #    Without THEIR recommends (no X, no extras). After the marker: the converge does nothing without it.
 MISSING=$("$CONVERGE" --missing-packages)
 if [ -n "$MISSING" ]; then
@@ -83,7 +83,6 @@ if [ -n "$MISSING" ]; then
 fi
 MISSING=$("$CONVERGE" --missing-packages)
 [ -z "$MISSING" ] || { say "!! still missing after install: $MISSING"; exit 1; }
-command -v ffmpeg >/dev/null || { say "!! ffmpeg did not install — DAB+ would have no audio"; exit 1; }
 
 # ── 5. First-boot server config: a Full-mode front door with no radio and no password yet ────────
 # ★★ Without it the daemon would start as a single-radio server and look for a dongle that is not

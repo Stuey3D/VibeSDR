@@ -1974,9 +1974,9 @@ def main():
         open(fake, "w").close()
         seen = []
         with redirect_stdout(io.StringIO()):
-            got = vp.converge_report(run=lambda a, **k: (seen.append(a), R(1, b"vibeserver-pocket-converge: !! system packages missing (Update installs them): ffmpeg\n"))[1], path=fake)
+            got = vp.converge_report(run=lambda a, **k: (seen.append(a), R(1, b"vibeserver-pocket-converge: !! system packages missing (Update installs them): dosfstools\n"))[1], path=fake)
         ok(seen == [[fake, "--check"]], "converge check at start: --check only (never apply on the live overlay)")
-        ok(len(got) == 1 and "ffmpeg" in got[0], "…and what is not converged is logged")
+        ok(len(got) == 1 and "dosfstools" in got[0], "…and what is not converged is logged")
         with redirect_stdout(io.StringIO()):
             got = vp.converge_report(run=lambda a, **k: R(0, b"vibeserver-pocket-converge: converged\n"), path=fake)
         ok(got == [], "a converged box logs nothing")

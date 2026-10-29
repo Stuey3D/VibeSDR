@@ -94,7 +94,7 @@ endforeach()
 # ── Linux: NOTHING FROM THE SYSTEM BUT glibc (Stuart, 2026-10-18) ────────────────────────────
 # ★★★ THE RULE. The .deb needs nothing from the distribution for SDR support or libraries: no
 #     libusb, librtlsdr, libhackrf, libopus, ncurses, libstdc++ or libgcc. glibc (libc6) necessarily
-#     stays; xHE-AAC is libxaac, linked in (V12 — FFmpeg is neither bundled nor a Recommends); the SDRplay API stays the owner's own install,
+#     stays; AAC is FAAD2 + libxaac, linked in (V12 — no FFmpeg, bundled or installed); the SDRplay API stays the owner's own install,
 #     dlopen'd. Everything else is OURS, built from pinned source (linux/build-deps.sh, the same
 #     versions as mac/build-deps.sh) or compiled from the vendored tree, and linked IN.
 # ★★ WHY. dpkg-shlibdeps writes the BUILD image's library versions into Depends, not the versions
@@ -750,12 +750,12 @@ if(VIBE_DRM_FAAD2)
 endif()
 
 # ── FAAD2 (PLAIN build, globals prefixed vibedab_): DAB+ audio IN PROCESS (V12 — vibe_dab_faad.h) ─────────────────────
-# ★★ DAB+'s DEFAULT decoder on Linux since 2026-10-29 (setup: "DAB+ audio decoder", config dabDecoder; the FFmpeg child is
-#    the owner's alternative — vibe_dab_aacdec.h dabFaad2Default). The DRM build above refuses DAB+, and the plain build exports the same names, so build-deps compiles the
+# ★★ The Linux and Mac servers' ONLY DAB+ decoder since 2026-10-29 (vibe_dab_aacdec.h). The DRM build above refuses DAB+, and the plain build exports the same names, so build-deps compiles the
 #    plain one with every global renamed (libfaad_dab.a) and checks it defines nothing unprefixed. Same licence as above:
 #    server builds only, never the App Store archive (build_ios.sh fails on any FAAD2 symbol, prefixed ones included).
 # ★ Release builds: from the deps prefix, and its absence is a configure error (re-run build-deps.sh) unless
-#   -DVIBE_DAB_FAAD2=OFF. Dev builds: FAAD2_DAB_LIB, or a deps prefix's copy if there is one; without it, FFmpeg only.
+#   -DVIBE_DAB_FAAD2=OFF. Dev builds: FAAD2_DAB_LIB, or a deps prefix's copy if there is one; without it, DAB+ is
+#   unplayable on Linux (the ensemble and MP2 still work) and AudioToolbox on a Mac.
 option(VIBE_DAB_FAAD2 "DAB+ AAC via FAAD2's plain build, prefixed (GPL-2.0+; server builds only)" ON)
 if(VIBE_DAB_FAAD2 AND FAAD2_INC)
   if(VIBE_DEPS_PREFIX)
@@ -771,17 +771,17 @@ if(VIBE_DAB_FAAD2 AND FAAD2_INC)
     target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_FAAD2_DAB)
     target_link_libraries(vibeserver_core PUBLIC "${FAAD2_DAB_LIB}")
   else()
-    message(STATUS "FAAD2's prefixed DAB+ library not found — DAB+ through FFmpeg only (dev build)")
+    message(STATUS "FAAD2's prefixed DAB+ library not found — no DAB+ audio on Linux, AudioToolbox on a Mac (dev build)")
   endif()
 endif()
 
 # ── libxaac (decoder): DRM's xHE-AAC, decoded IN PROCESS (V12, 2026-10-29 — docs/v12/LIBXAAC.md, vibe_xaac.h) ─────────
 # ★★ Apache-2.0 — compatible with VibeServer's GPL-3.0; its LICENSE and NOTICE ship beside the binary (deb: doc dir; Mac:
-#    Resources). Replaces the FFmpeg child the packages bundled in early V12: FFmpeg 8.1 garbles USAC with SBR and does not
-#    decode the speech core; libxaac decodes every USAC tool. Server builds only — the App Store app links no decoder.
+#    Resources). libxaac decodes every USAC tool (SBR, eSBR, the ACELP/TCX speech core, MPS 2-1-2). Server builds only —
+#    the App Store app links no decoder.
 # ★ Release builds take it from the deps prefix (linux/ and mac/build-deps.sh, pinned source, build-libxaac.sh) and its
 #   absence is a configure error unless -DVIBE_XAAC=OFF. Dev builds: a deps prefix's copy if there is one, else without it
-#   (xHE-AAC then falls back to an installed FFmpeg / AudioToolbox, and says so when it cannot).
+#   (xHE-AAC is then AudioToolbox on a Mac; on Linux the listener is told it cannot be played).
 option(VIBE_XAAC "xHE-AAC via libxaac in process (Apache-2.0; server builds only)" ON)
 if(VIBE_XAAC)
   if(VIBE_DEPS_PREFIX)
@@ -815,7 +815,7 @@ if(VIBE_XAAC)
       endif()
     endforeach()
   else()
-    message(STATUS "libxaac not found — building without it: xHE-AAC through an installed FFmpeg / AudioToolbox (dev build)")
+    message(STATUS "libxaac not found — building without it: no xHE-AAC on Linux, AudioToolbox on a Mac (dev build)")
   endif()
 endif()
 
@@ -1014,7 +1014,7 @@ target_include_directories(dab-switch PRIVATE "${CPP_DIR}")
 target_compile_options(dab-switch PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(dab-switch PRIVATE vibeserver_core)
 
-# ★ test-dab-faad: DAB+ through FAAD2 vs today's FFmpeg child on REAL unit logs (dab-unitlog) — the evidence for the switch.
+# ★ test-dab-faad: DAB+ through FAAD2 on REAL unit logs (dab-unitlog) — timeline, concealment, damage at the holes.
 add_executable(test-dab-faad "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-faad.cpp")
 target_include_directories(test-dab-faad PRIVATE "${CPP_DIR}")
 target_compile_options(test-dab-faad PRIVATE -O3 -ffp-contract=fast)
@@ -1024,14 +1024,14 @@ add_executable(dab-faad-bench "${CMAKE_CURRENT_SOURCE_DIR}/dab-faad-bench.cpp")
 target_include_directories(dab-faad-bench PRIVATE "${CPP_DIR}")
 target_compile_options(dab-faad-bench PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(dab-faad-bench PRIVATE vibeserver_core)
-# ★ test-dab-faad-queue: FAAD2 on its own thread (vibe-faad2) — the ring, drops, resets, the live switch.
+# ★ test-dab-faad-queue: FAAD2 on its own thread (vibe-faad2) — the ring, drops, resets, the service's decoder.
 add_executable(test-dab-faad-queue "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-faad-queue.cpp")
 target_include_directories(test-dab-faad-queue PRIVATE "${CPP_DIR}")
 target_compile_options(test-dab-faad-queue PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(test-dab-faad-queue PRIVATE vibeserver_core)
 
 # ★ dab-unitlog: one DAB+ service's access units, CRC failures and lost super frames off a captured multiplex — the
-#   input test-dab-faad replays through each decoder (dev tool; real recordings stay in ~/VibeSDR-test-audio/dab).
+#   input test-dab-faad replays through FAAD2 (dev tool; real recordings stay in ~/VibeSDR-test-audio/dab).
 add_executable(dab-unitlog "${CMAKE_CURRENT_SOURCE_DIR}/dab-unitlog.cpp")
 target_include_directories(dab-unitlog PRIVATE "${CPP_DIR}")
 target_compile_options(dab-unitlog PRIVATE -O3 -ffp-contract=fast)
@@ -1051,7 +1051,7 @@ if(APPLE)
   # libusb on macOS talks to IOKit; these are system frameworks, nothing to ship.
   target_link_libraries(vibeserver_core PUBLIC
       "-framework IOKit" "-framework CoreFoundation" "-framework Security"
-      "-framework AudioToolbox" "-framework CoreAudio" objc)   # ★ AudioToolbox decodes DAB+ (vibe_dab_aacdec.h)
+      "-framework AudioToolbox" "-framework CoreAudio" objc)   # ★ AudioToolbox: Icom audio, and DAB+ / xHE-AAC in a dev build without the deps (vibe_dab_aacdec.h)
 endif()
 find_package(Threads REQUIRED)
 target_link_libraries(vibeserver_core PUBLIC Threads::Threads)
@@ -1220,9 +1220,8 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
             "Fix: run tools/cloudflared-desktop/fetch.sh (or copy tools/cloudflared-desktop/bin/ into this\n"
             "tree). To build without it on purpose: -DVIBESERVER_ALLOW_NO_TUNNEL=ON.")
   endif()
-  # ★ NO FFmpeg IN THE PACKAGE (V12, 2026-10-29). Early V12 bundled a minimal FFmpeg 8.1 for xHE-AAC; libxaac, linked in
-  #   above, replaced it (docs/v12/LIBXAAC.md). The owner's optional DAB+ FFmpeg decoder uses an installed ffmpeg if there
-  #   is one (vibe_ffmpeg_path.h); FAAD2 is the default, so nothing is lost without it.
+  # ★ NO FFmpeg IN THE PACKAGE, AND NONE USED (V12, 2026-10-29). AAC is FAAD2 (DRM AAC, DAB+) and libxaac (xHE-AAC),
+  #   both linked in above (docs/v12/LIBXAAC.md). build-deb.sh refuses a package that carries or depends on ffmpeg.
   # ★★ NOT a plain install() — the config is the one file the user edits, and apt must never
   #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
   install(FILES linux/vibeserver.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/vibeserver)
@@ -1378,11 +1377,9 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
   #     which this package already requires by shipping a .service unit. Declaring `systemd` would
   #     also wrongly refuse to install on a container image where the binary is still useful.
   set(CPACK_DEBIAN_PACKAGE_DEPENDS "adduser, curl, gzip")
-  # ★★★ ffmpeg IS NO LONGER A RECOMMENDS (V12, 2026-10-29) — the package carries its own (lib/vibeserver/ffmpeg, see the
-  #     bundling block above), so a machine without a system ffmpeg still decodes xHE-AAC, and DAB+ is FAAD2's by default.
-  #     History: until V12 ffmpeg was how DAB+ was decoded on Linux and was a Recommends, because a machine without it
-  #     (the x86 box, 2026-09-11) served DAB+ it could not decode and told nobody. The decoder still SAYS so at start-up
-  #     when its ffmpeg is missing (vibe_dab_aacdec.h).
+  # ★★★ ffmpeg IS NOT A RECOMMENDS, AND MUST NEVER BE ONE AGAIN (V12, 2026-10-29) — VibeServer does not use it: DAB+ and
+  #     DRM AAC are FAAD2, xHE-AAC is libxaac, all in process. History: until V12 ffmpeg decoded DAB+ on Linux and was a
+  #     Recommends. build-deb.sh fails a package whose control file names it.
   # ★★★ AND THE OPTIONAL MAP DETAIL PACK — RECOMMENDS, EMPHATICALLY NOT DEPENDS. 82 MB compressed,
   #     ~221 MB on disk, and it is the zoomed-in half of the map: coastline shards, second-level
   #     boundaries, minor roads, small places. A receiver is perfectly usable without it (the basic

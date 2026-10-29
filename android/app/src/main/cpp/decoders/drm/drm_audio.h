@@ -1,23 +1,21 @@
 // decoders/drm/drm_audio.h — DRM audio super frames (ETSI ES 201 980 V4.3.1 §5.2–5.4) into ACCESS UNITS, and the
 // configuration a platform decoder needs to decode them. No codec is here and none is shipped.
 //
-// ★★★ THE POSITION (Stuart; docs/v12/DECODER-RESEARCH.md §4.4): as for DAB+ (vibe_dab_aacdec.h) the SERVER'S OPERATING
-//     SYSTEM decodes — FFmpeg run as a process on Linux/macOS, AudioToolbox on Apple, MediaCodec on Android. This file
-//     turns DRM's own framing into what those decoders take: an AudioSpecificConfig and raw access units, carried to FFmpeg
-//     in a live Matroska stream (MkvStream — the config as CodecPrivate; ADTS cannot describe USAC, and FFmpeg's LOAS
-//     reader cannot take a USAC config in-band: see MkvStream). loasFrame() is kept for decoders that do take LOAS.
+// ★★★ THE POSITION (Stuart; docs/v12/DECODER-RESEARCH.md §4.4; V12 2026-10-29): as for DAB+ (vibe_dab_aacdec.h) the
+//     SERVER decodes — FAAD2's DRM build for DRM's AAC and libxaac for xHE-AAC, in process, on Linux and the Mac
+//     (vibe_drm_audiodec.h); MediaCodec on Android; AudioToolbox in the iOS app. This file turns DRM's own framing into
+//     what those decoders take: an AudioSpecificConfig and raw access units. loasFrame() and MkvStream are the standard
+//     transports for a decoder that wants a stream (MkvStream feeds the dev tool drm-usac-stream).
 //
 // ★★★ WHAT CAN BE DECODED, HONESTLY:
 //   • xHE-AAC (USAC, the newer stations): the DRM "static config" (§5.3.2, table 4) is the standard UsacConfig with the
-//     constant parts left out. usacFromDrm() puts them back bit for bit, so any USAC decoder can be configured. FFmpeg has
-//     decoded USAC natively since 7.1 (2024); Apple since iOS 13 /
-//     macOS 10.15 (kAudioFormatMPEGD_USAC); Android from API 29 on devices whose codec lists it. ★ FFmpeg (8.1) does not
-//     yet decode USAC's eSBR tools (harmonic SBR, PVC, inter-TES) or its LPD core (ACELP/TCX), and garbles USAC SBR — so the
-//     server builds decode xHE-AAC with libxaac in process instead (vibe_xaac.h, docs/v12/LIBXAAC.md).
+//     constant parts left out. usacFromDrm() puts them back bit for bit, so any USAC decoder can be configured: libxaac on
+//     the servers (vibe_xaac.h, docs/v12/LIBXAAC.md — every USAC tool, eSBR and the ACELP/TCX core included); Apple since
+//     iOS 13 / macOS 10.15 (kAudioFormatMPEGD_USAC); Android from API 29 on devices whose codec lists it.
 //   • DRM's AAC (the older stations) is NOT ordinary AAC: it is ER AAC Scalable (object type 20) with the HCR and VCB11
 //     error-resilience tools mandatory, a 960-sample transform, and SBR data stored BACKWARDS at the end of each frame
-//     (§5.4.1–5.4.2). FFmpeg's native decoder refuses ER resilience and object type 20; AudioToolbox and MediaCodec do not
-//     offer it. So an AAC station's frames are found, counted and reported — and the listener is told, in words, that this
+//     (§5.4.1–5.4.2). FAAD2's DRM build decodes it (the servers); AudioToolbox and MediaCodec do not offer it. So
+//     without FAAD2 an AAC station's frames are found, counted and reported — and the listener is told, in words, that this
 //     server's decoder cannot play that codec. (The repack to plain AAC — HCR decode, VCB11 → book 11, SBR moved into a
 //     fill element — is lossless and possible; it is listed as remaining work in docs/v12/DRM.md, not pretended.)
 #pragma once
@@ -78,7 +76,7 @@ inline int usacSfIndex(int hz) {
 }
 
 /** Copy SbrConfig() (23003-3 §5.2, unchanged in DRM). Returns true when it switches on an eSBR tool (harmonicSBR,
- *  bs_interTes or bs_pvc) — which FFmpeg 8.1 refuses outright ("AAC USAC eSBR"). */
+ *  bs_interTes or bs_pvc) — reported with the config (libxaac decodes every eSBR tool). */
 inline bool copySbrConfig(ByteBitReader& r, BitWriter& w) {
     const uint32_t hs = r.get(1), it = r.get(1), pvc = r.get(1);
     w.put(hs, 1); w.put(it, 1); w.put(pvc, 1);                              // harmonicSBR, bs_interTes, bs_pvc
@@ -93,7 +91,7 @@ struct UsacInfo {
     bool ok = false;
     int coreSbrFrameLengthIndex = 0, sbrRatioIndex = 0, outputFrameLength = 0;
     int stereoConfigIndex = 0;
-    bool esbr = false;              // ★ an eSBR tool is on (harmonic SBR / inter-TES / PVC) — FFmpeg 8.1 cannot decode it
+    bool esbr = false;              // ★ an eSBR tool is on (harmonic SBR / inter-TES / PVC) (reported; libxaac decodes it)
     std::vector<uint8_t> asc;       // the AudioSpecificConfig (object type 42) for the decoder, byte-aligned
     size_t ascBits = 0;             // ★ its EXACT length: LATM (audioMuxVersion 0) carries the config with no length field
     std::string why;
@@ -170,7 +168,7 @@ inline UsacInfo usacFromDrm(const AudioInfo& a, int rateHz) {
     return u;
 }
 
-// ── LOAS / LATM (ISO/IEC 14496-3 §1.7.3) — how an access unit and its config reach FFmpeg ────────────────────────────
+// ── LOAS / LATM (ISO/IEC 14496-3 §1.7.3) — an access unit with its config in-band ────────────────────────────────────
 
 inline std::vector<uint8_t> loasFrame(const std::vector<uint8_t>& asc, size_t ascBits, const uint8_t* au, size_t n) {
     BitWriter m;
@@ -194,15 +192,11 @@ inline std::vector<uint8_t> loasFrame(const std::vector<uint8_t>& asc, size_t as
     return o;
 }
 
-// ── Matroska, live (unknown sizes) — how an xHE-AAC access unit and its config reach FFmpeg ───────────────────────────
-// ★★★ NOT LOAS, FOR FFmpeg (found 2026-10-29, bundling FFmpeg 8.1). FFmpeg's LATM/LOAS decoder parses the in-band config
-//     with no decoder context, and its USAC config reader refuses that ("if (!ac) return AVERROR_PATCHWELCOME") — in 7.1,
-//     8.1 and 9.0 alike — so every LOAS-framed xHE-AAC unit came back "Invalid data". The same units with the config as
-//     the stream's extradata decode bit-exactly. Matroska is the simplest standard container that carries that config
-//     (CodecPrivate) AND streams down a pipe with no length known in advance: an EBML header, a Segment and Clusters of
-//     unknown size, one SimpleBlock per access unit. Kept for builds without libxaac (an installed FFmpeg); the server
-//     builds decode xHE-AAC in process (vibe_xaac.h) and never write it.
-//  ★ loasFrame() above stays — the standard's own transport, for any decoder that takes it; the FFmpeg path no longer uses it.
+// ── Matroska, live (unknown sizes) — an xHE-AAC access unit with its config as CodecPrivate ──────────────────────────
+// ★★ Matroska is the simplest standard container that carries the AudioSpecificConfig out of band (CodecPrivate) AND
+//    streams with no length known in advance: an EBML header, a Segment and Clusters of unknown size, one SimpleBlock per
+//    access unit. Used by the dev tool drm-usac-stream (a file any player opens); the servers decode xHE-AAC in process
+//    (vibe_xaac.h) and never write it.
 class MkvStream {
 public:
     /** The stream's head: EBML header, Segment (unknown size), Info, Tracks (A_AAC, the AudioSpecificConfig as
@@ -223,7 +217,7 @@ public:
         el(o, 0x1654AE6B, tracks);
         return o;
     }
-    /** The next block opens a new Cluster — for a reader that has just started (a restarted FFmpeg child). */
+    /** The next block opens a new Cluster — for a reader that has just started (e.g. a restarted consumer). */
     void newCluster() { clusterMs_ = -1; }
     /** One access unit as a SimpleBlock (a new Cluster every ~30 s, inside the 16-bit relative timecode). */
     std::vector<uint8_t> block(const uint8_t* au, size_t n) {

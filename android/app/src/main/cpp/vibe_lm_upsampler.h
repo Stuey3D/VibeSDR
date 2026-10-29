@@ -55,7 +55,7 @@ static inline void dabDot4Stride2(const float* t, const float* x, int K, float* 
  *     THIRD of FAAD2's whole cost). Kaiser β 7.0, cut-off 0.975 of the input's Nyquist (15.6 kHz at 32 kHz in), designed
  *     and checked numerically (docs/v12/DRM-AUDIO-ROUTES.md "DAB+ on its own thread"):
  *       passband flat within ±0.1 dB to 13.8 kHz, −2.4 dB at 15 kHz, ≥ 70 dB down from 17.85 kHz (the image of 14.15 kHz).
- *     FFmpeg's own resampler — what today's default path puts this audio through (swr: 32 taps, Kaiser β 9, cut-off
+ *     FFmpeg's swr resampler — the reference this was checked against (32 taps, Kaiser β 9, cut-off
  *     0.97) — is flat only to 13.5 kHz and reaches −60 dB only at 18.1 kHz, so this is never worse than that path; the
  *     64-tap one it replaces kept more rejection between 16 and 17.8 kHz (images of 14.2–16 kHz SBR, ≤ −25 dB here).
  *  ★★ BOTH CHANNELS PER TAP LOAD. The two histories sit in one buffer, R a fixed distance after L, so vibedsp::dotReal2

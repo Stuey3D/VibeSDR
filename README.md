@@ -286,10 +286,9 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 
 DAB MP2 audio, the DAB Reed-Solomon and Viterbi decoders, the WebSocket server, the mDNS
 responder and all of VibeDSP are our own code. DAB+ and DRM audio is decoded on the server, never in
-the app you listen with: on a Linux VibeServer by FAAD2 built in (GPL-2.0-or-later; the DAB+ default)
-and libxaac (Apache-2.0, built in too) for xHE-AAC; on a Mac by FAAD2 and libxaac for DRM and, for DAB+, Apple's AudioToolbox
-or an installed ffmpeg; on Android by MediaCodec, with FAAD2 for DRM's own AAC. The iPhone and iPad
-app carries none of these decoders.
+the app you listen with: on a Linux or Mac VibeServer by FAAD2 (GPL-2.0-or-later) for DAB+ and DRM's
+own AAC and libxaac (Apache-2.0) for xHE-AAC, both built in; on Android by MediaCodec, with FAAD2 for
+DRM's own AAC. The iPhone and iPad app carries none of these decoders.
 
 ### Data
 
@@ -324,8 +323,8 @@ that, WebSDR support will not be added.
 **How does DAB+ work without a licensed codec?** VibeServer runs its own DAB receiver, written from
 the ETSI standards: the OFDM front end, the error correction and the MP2 audio of plain DAB are our
 own code. DAB+ audio is HE-AAC, and that part is decoded on the server: by FAAD2 (free software,
-built into the Linux packages), or by the decoder the host already has — Android's MediaCodec, Apple's
-AudioToolbox or an installed ffmpeg. The app you listen with only plays the result.
+built into the Linux and Mac servers), or on an Android server by the phone's own MediaCodec. The app
+you listen with only plays the result.
 Receivers that can do it carry the DAB+ mark in the directory.
 
 **Why no DRM, HD Radio or DMR?** Patents, not difficulty. HD Radio is Xperi's; DRM needs xHE-AAC

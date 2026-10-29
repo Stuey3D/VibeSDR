@@ -223,7 +223,6 @@ struct Opts {
     bool        rateLock = false;        // the sample rate is PINNED, not merely capped
     bool        dabRateBoost = false;    // DAB may borrow 2.048 MS/s — see Config::dabRateBoost
     bool        adsb256 = false;     // ADS-B at 2.56 MS/s on an RTL — see Config::adsb256
-    int         dabAacDecoder = 0;      // DAB+ decoder: 0 default, 1 FAAD2, 2 platform — see Config::dabAacDecoder
     int         rawIq = 0, rawIqMax = 0; // raw IQ out — see RadioConfig::rawIq
     int         rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling — see RadioConfig::rawIqLanMaxHz
     int         nbWide = 1;              // wide impulse blanker — see RadioConfig::nbWide
@@ -621,7 +620,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.ifBwLimits = c.ifBwLimits;
     o.gainLock = c.gainLock; o.gainLocks = c.gainLocks;
     o.ifGrLimits = c.ifGrLimits; o.gainSplits = c.gainSplits; o.gainCurves = c.gainCurves;
-    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.adsb256 = c.adsb256; o.dabAacDecoder = c.dabAacDecoder; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide; o.vfoB = c.vfoB;
+    o.rateLock = c.rateLock; o.dabRateBoost = c.dabRateBoost; o.adsb256 = c.adsb256; o.rawIq = c.rawIq; o.rawIqMax = c.rawIqMax; o.rawIqLanMaxHz = c.rawIqLanMaxHz; o.nbWide = c.nbWide; o.vfoB = c.vfoB;
     o.blockedModes = c.blockedModes;
     o.rtlAgc = c.rtlAgc; o.tunerBwAuto = c.tunerBwAuto;
     o.adminIdleMin    = c.adminIdleMin;
@@ -669,7 +668,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.ifBwLimits = o.ifBwLimits;
     c.gainLock = o.gainLock; c.gainLocks = o.gainLocks;
     c.ifGrLimits = o.ifGrLimits; c.gainSplits = o.gainSplits; c.gainCurves = o.gainCurves;
-    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.adsb256 = o.adsb256; c.dabAacDecoder = o.dabAacDecoder; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide; c.vfoB = o.vfoB;
+    c.rateLock = o.rateLock; c.dabRateBoost = o.dabRateBoost; c.adsb256 = o.adsb256; c.rawIq = o.rawIq; c.rawIqMax = o.rawIqMax; c.rawIqLanMaxHz = o.rawIqLanMaxHz; c.nbWide = o.nbWide; c.vfoB = o.vfoB;
     c.blockedModes = o.blockedModes;
     c.rtlAgc = o.rtlAgc; c.tunerBwAuto = o.tunerBwAuto;
     c.adminIdleMin    = o.adminIdleMin;
@@ -1920,7 +1919,6 @@ int main(int argc, char** argv) {
     }
     LocalSdrShim::setVibeServerDabRateBoost(o.dabRateBoost);
     LocalSdrShim::setVibeServerAdsb256(o.adsb256);
-    LocalSdrShim::setVibeServerDabDecoder(o.dabAacDecoder);
     LocalSdrShim::setVibeServerRawIq(o.rawIq, o.rawIqMax, o.rawIqLanMaxHz);
     LocalSdrShim::setVibeServerNbWide(o.nbWide);
     LocalSdrShim::setVibeServerVfoB(o.vfoB != 0);
@@ -2500,7 +2498,6 @@ int main(int argc, char** argv) {
                     LocalSdrShim::setGainSplits(g_runtimeConfig.gainSplits);
                     LocalSdrShim::setGainCurves(g_runtimeConfig.gainCurves);
                     LocalSdrShim::setVibeServerRateLock(g_runtimeConfig.rateLock);
-                    LocalSdrShim::setVibeServerDabDecoder(g_runtimeConfig.dabAacDecoder);   // ★ V12: the DAB+ decoder, live — the next super frame
                     LocalSdrShim::setRestGain(g_runtimeConfig.restGain);
                     // ★ Both, together: the AGC raises the ceiling to the tuner's maximum, so it
                     //   must be applied where the gain settings are, not somewhere that could run
@@ -3334,7 +3331,7 @@ int main(int argc, char** argv) {
             r.idleGrace = disk.idleGrace;
             r.rfNotch = disk.rfNotch; r.dabNotch = disk.dabNotch; r.zoomSpectrum = disk.zoomSpectrum;
             r.biasT = disk.biasT; r.ppm = disk.ppm; r.ppb = disk.ppb;
-            r.directSampling = disk.directSampling; r.dabRateBoost = disk.dabRateBoost; r.adsb256 = disk.adsb256; r.dabAacDecoder = disk.dabAacDecoder;
+            r.directSampling = disk.directSampling; r.dabRateBoost = disk.dabRateBoost; r.adsb256 = disk.adsb256;
             r.rawIq = disk.rawIq; r.rawIqMax = disk.rawIqMax; r.rawIqLanMaxHz = disk.rawIqLanMaxHz; r.nbWide = disk.nbWide; r.vfoB = disk.vfoB;
             r.blockedModes = disk.blockedModes;
             r.antennaPort = disk.antennaPort;   // ★ a listener's/admin's socket choice — was never folded (found 2026-10-09)

@@ -1,11 +1,8 @@
 // vibe_xaac.h — xHE-AAC (MPEG-D USAC) decoded IN PROCESS by libxaac (Ittiam / the Android Open Source Project,
 // Apache-2.0), for DRM's xHE-AAC stations. V12, 2026-10-29 (docs/v12/LIBXAAC.md).
 //
-// ★★★ WHY libxaac AND NOT THE FFmpeg IT REPLACES. FFmpeg 8.1's USAC decoder (the bundled one, V12 until now) produced
-//     garbage — peaks of 10^4–10^6 full scale, or NaN — on EVERY USAC stream with SBR we gave it, plain FD+SBR included,
-//     could not parse MPEG Surround 2-1-2 and refused PVC and inter-TES outright; it does not decode the ACELP/TCX speech
-//     core at all. DRM's xHE-AAC runs at 12–24 kbit/s, which is SBR (and often the speech core) by construction. libxaac
-//     decodes all of it: ISO's conformance streams to ±1 LSB, and SBR / eSBR / ACELP / MPS streams to within float
+// ★★★ WHY libxaac. DRM's xHE-AAC runs at 12–24 kbit/s, which is SBR (and often the ACELP/TCX speech core) by
+//     construction, with MPEG Surround 2-1-2, PVC and inter-TES in use on air. libxaac decodes all of it: ISO's conformance streams to ±1 LSB, and SBR / eSBR / ACELP / MPS streams to within float
 //     rounding of macOS's own decoder (docs/v12/LIBXAAC.md "Correctness").
 // ★★ IN PROCESS, ONE ACCESS UNIT AT A TIME. No child process, no pipe, no container: the AudioSpecificConfig (drm_audio.h
 //    usacFromDrm) is given once, then each access unit. Its output is 16-bit PCM at the stream's own rate (mono or stereo);

@@ -119,7 +119,7 @@ def dpkg_status(pkgs):
 
 
 ALL_PKGS = ["network-manager", "dnsmasq-base", "nftables", "iw", "rfkill", "python3", "ca-certificates", "curl",
-            "gnupg", "avahi-daemon", "ffmpeg", "overlayroot", "initramfs-tools", "dosfstools", "vibeserver"]
+            "gnupg", "avahi-daemon", "overlayroot", "initramfs-tools", "dosfstools", "vibeserver"]
 
 
 def make_root(tmp, marker=True, pkgs=ALL_PKGS):
@@ -306,14 +306,14 @@ def main():
 
     # ── a box flashed from the 11.0.0 image: everything there; a NEW release adds one boot line + one package ──
     with tempfile.TemporaryDirectory() as tmp:
-        pkgs = [p for p in ALL_PKGS if p not in ("ffmpeg", "iw")]
+        pkgs = [p for p in ALL_PKGS if p not in ("dosfstools", "iw")]
         r, sc, m = make_root(tmp, pkgs=pkgs)
         old_block = LITE_CONFIG_TXT + "\n# VibeServer pocket — headless radio box\ngpu_mem=16\ndtoverlay=disable-bt\ndtparam=audio=off\n"
         open(os.path.join(r, "boot/firmware/config.txt"), "w").write(old_block)
         rc, out = converge(r, sc, m, "--missing-packages")
-        ok(out.strip() == "iw ffmpeg", "manifest-driven: the missing packages, in manifest order (%r)" % out.strip())
+        ok(out.strip() == "iw dosfstools", "manifest-driven: the missing packages, in manifest order (%r)" % out.strip())
         rc, out = converge(r, sc, m, "--check")
-        ok(rc == 1 and "system packages missing (Update installs them): iw ffmpeg" in out, "--check names the missing packages")
+        ok(rc == 1 and "system packages missing (Update installs them): iw dosfstools" in out, "--check names the missing packages")
         rc, out = converge(r, sc, m)
         ct = F(r, "boot/firmware/config.txt")
         ok(ct.count("# VibeServer pocket") == 2 and "added by an update\n[all]\ndisable_splash=1\n" in ct,
@@ -327,9 +327,9 @@ def main():
         with open(os.path.join(r, "usr/lib/vibeserver/pocket-packages.txt"), "a") as f:
             f.write("rtl-sdr   # a future need\n")
         rc, out = converge(r, sc, m, "--missing-packages")
-        ok(out.strip() == "iw ffmpeg rtl-sdr", "a line added to pocket-packages.txt is missing until installed")
+        ok(out.strip() == "iw dosfstools rtl-sdr", "a line added to pocket-packages.txt is missing until installed")
         open(os.path.join(r, "var/lib/dpkg/status"), "a").write(
-            dpkg_status(["iw", "ffmpeg"]) + "Package: rtl-sdr\nStatus: deinstall ok config-files\n\n")
+            dpkg_status(["iw", "dosfstools"]) + "Package: rtl-sdr\nStatus: deinstall ok config-files\n\n")
         rc, out = converge(r, sc, m, "--missing-packages")
         ok(out.strip() == "rtl-sdr", "installed packages drop out; a removed one (config-files only) is still missing")
 
@@ -372,7 +372,7 @@ def maintenance_tests():
     bash = shutil.which("bash")
     for portable, sealed in ((True, True), (True, False), (False, False)):
         with tempfile.TemporaryDirectory() as tmp:
-            r, sc, m = make_root(tmp, marker=portable, pkgs=[p for p in ALL_PKGS if p != "ffmpeg"])
+            r, sc, m = make_root(tmp, marker=portable, pkgs=[p for p in ALL_PKGS if p != "dosfstools"])
             bin_ = os.path.join(tmp, "bin")
             os.makedirs(bin_)
             log = os.path.join(tmp, "calls.log")
@@ -428,9 +428,9 @@ def maintenance_tests():
             ok("apt-get install -y --only-upgrade vibeserver" in c, "%s: vibeserver upgraded" % tag)
             if portable:
                 i_up = c.index("--only-upgrade vibeserver")
-                i_pk = c.find("apt-get install -y --no-install-recommends ffmpeg")
+                i_pk = c.find("apt-get install -y --no-install-recommends dosfstools")
                 i_cv = c.rfind("converge \n") if "converge \n" in c else c.rfind("converge")
-                ok(i_pk > i_up, "%s: the missing manifest package (ffmpeg) installed AFTER the vibeserver upgrade" % tag)
+                ok(i_pk > i_up, "%s: the missing manifest package (dosfstools) installed AFTER the vibeserver upgrade" % tag)
                 ok("converge --missing-packages" in c and i_cv > i_pk, "%s: then the converge runs" % tag)
                 ok(os.path.lexists(os.path.join(r, "etc/systemd/system/multi-user.target.wants/vibeserver-pocket.service")),
                    "%s: the converge really applied (vibeserver-pocket enabled on the root)" % tag)
