@@ -40,7 +40,7 @@
  *   - Needle: 3-layer LED glow (28/16/6 blur), needleScale = clamp(.25,1,pxPerHz×4000)
  */
 
-import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, carryRows, type WfScroll } from '../assets/wfRowTarget';
+import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, rowsForArrival, type WfScroll } from '../assets/wfRowTarget';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
@@ -1862,7 +1862,16 @@ function WaterfallView({
     //     sideways and torn. Placed by trueBwHz, a row changes span only when its bins really do, and the fan runs once
     //     per real step. (The trace and the axis keep the predicted geometry — they move under the finger.)
     const [rowCentre, rowHzBin] = rowGeometry(fstatus, frame.row.length);   // utils/wfRowPlace.ts
-    pushRow(frame.row, rowCentre, rowHzBin);
+    // ★★★ FILLED IN OR THINNED (2026-10-29, Stuart on a 23 fps Kiwi: "interpolate and discard"): the rows this frame
+    //     becomes at the target (wfRowTarget rowsForArrival) — 0 = DISCARDED from the waterfall (a feed faster than the
+    //     rate: Eco's 13 fps Kiwi thinned evenly to 10), 1 = the frame, more = the frame and repeats. The spectrum trace
+    //     and everything else above still had this frame. Native (target 0) is always 1: every frame, as it comes.
+    const revealMs = avgWfGapMs.current > 0 ? avgWfGapMs.current : avgFrameMs.current;
+    // ★ Floor 15 ms, not 50 (2026-10-29): a feed faster than 20 fps (a 23 fps Kiwi) was counted as 50 ms a frame, so its
+    //   rows over-ran the target by up to 2.5× once Default/Smooth filled such a feed in (23 fps at 30 → 34 rows/s).
+    const dur = Math.max(15, Math.min(1000, revealMs));
+    const rowsNow = rowsForArrival(rowCarry, dur, rowTarget);
+    if (rowsNow > 0) pushRow(frame.row, rowCentre, rowHzBin);
     // Keep it for the repeat pushes on a slow feed (frame.row is reused by the caller).
     if (!lastRow.current || lastRow.current.length !== frame.row.length)
       lastRow.current = new Uint8Array(frame.row.length);
@@ -1876,10 +1885,8 @@ function WaterfallView({
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
 
-    // The interval the rows are spread over: the gap between ROW-SETS, falling back to the frame
-    // interval until it has been measured.
-    const revealMs = avgWfGapMs.current > 0 ? avgWfGapMs.current : avgFrameMs.current;
-    const dur = Math.max(50, Math.min(1000, revealMs));
+    // (The interval the rows are spread over, `dur` — the gap between ROW-SETS, falling back to the frame interval until
+    // it has been measured — was worked out with the row count above.)
 
     // ★★★ ROW EMISSION HAPPENS ON BOTH PATHS — THIS IS WHAT MADE SLOW FEEDS SLOW.
     //     `wfBoost` is true whenever the feed is below ~15 fps (lowFps: avgFrameMs > 66 ms), which
@@ -1894,7 +1901,7 @@ function WaterfallView({
     // Rows this interval has earned at the target (fractional carry; the arrival itself was row #1) — wfRowTarget
     // carryRows, proved with the display pacer in scripts/test_wf_speed_cap.ts. ★ The rule never asks for more than 6
     // rows a frame (Stuart 10-20), so its cap of 8 is headroom — the stall guard.
-    const extras = carryRows(rowCarry, dur, rowTarget);
+    const extras = Math.max(0, rowsNow - 1);   // (rowsForArrival above — the arrival itself, when kept, was row #1)
     { const tg = rowTarget > 0 ? rowTarget / 1000 : 0; if (pTgt.value !== tg) pTgt.value = tg; }   // the pace (see pTgt)
     lastDynRows.current = extras + 1;
     scheduleExtraRows(extras, dur / (extras + 1));

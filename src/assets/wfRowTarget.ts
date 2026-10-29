@@ -9,8 +9,9 @@
  *       Sharp   = actual rows (x1).
  *       Default = min(20, 3 x feed fps).
  *       Smooth  = min(60, 6 x feed fps).
- *     Each target snaps DOWN to the nearest rate that divides 60 evenly — {10, 12, 15, 20, 30, 60} — and is never
- *     below the feed itself (then it is simply actual rows). Every row on screen is a REAL frame, repeated, never a
+ *     Each target snaps DOWN to the nearest rate that divides 60 evenly — {10, 12, 15, 20, 30, 60}. (★ 2026-10-29: a
+ *     feed faster than the rate is no longer shown as it comes — see nominalRowRate: Default/Smooth go UP to the next
+ *     rate, Eco/Minimum THIN it.) Every row on screen is a REAL frame, repeated, never a
  *     blend (7bce170d), and the repeat factor never exceeds 6.
  *
  *       feed fps    Sharp   Default   Smooth
@@ -83,6 +84,21 @@ export function carryRows(carry: { current: number }, durMs: number, target: num
   return extras;
 }
 
+/**
+ * ★★★ ROWS FOR ONE ARRIVAL, FILLED IN OR THINNED (2026-10-29): the rows this data frame becomes at `target` rows/s over
+ * `durMs` (the smoothed gap between arrivals), with a fractional carry — 0 = this frame is DISCARDED (a feed faster than
+ * the rate: 23 fps at 20 rows/s keeps 6 frames in 7, evenly), 1 = the frame itself, more = the frame and repeats of it.
+ * The average is exactly the target on any feed. `target` 0 (actual rows) = always 1. At most 9 (a stall must not repay
+ * as a burst). carryRows (above) is the same count less the arrival, for a caller that always keeps the frame.
+ */
+export function rowsForArrival(carry: { current: number }, durMs: number, target: number): number {
+  if (!(target > 0) || !(durMs > 0)) return 1;
+  carry.current += durMs / (1000 / target);
+  const n = Math.floor(carry.current);
+  carry.current -= n;
+  return Math.min(n, 9);
+}
+
 /** Latch state for one waterfall. `latched` = the feed rate the target was decided from (0 = none yet). */
 export interface RowTargetState { latched: number; away: number; target: number; frames: number }
 export const newRowTargetState = (): RowTargetState => ({ latched: 0, away: 0, target: 0, frames: 0 });
@@ -93,11 +109,43 @@ export const ROW_LATCH_FAST = ROW_HYST;   // relatch at once past ±15 %
 export const ROW_LATCH_SLOW = 0.04;       // …or after ROW_LATCH_FRAMES frames in a row more than 4 % away
 export const ROW_LATCH_FRAMES = 20;
 
-/** The rule on a settled feed rate: rows/s, or 0 = actual rows — a target within 5 % of the feed is the feed (a
- *  20 fps server measured at 19.8 is not worth a repeated row every 2.5 s). */
+/* ★★★ EVERY RATE DIVIDES 60 — FILLED IN OR THINNED (Stuart, 2026-10-29, a 23 fps KiwiSDR showing "ECO 13 · NATIVE 23 ·
+ *  DEFAULT 23": "on Kiwi those FPS numbers look weird and won't line up with any refresh rate, so we need to interpolate
+ *  and discard"). Every choice but NATIVE now runs at a rate that divides 60 (and 120), so each row gets a whole number
+ *  of refreshes:
+ *    MINIMUM  5   — a faster feed is THINNED to 5 (rows discarded evenly), a slower one filled in.
+ *    ECO      10  — the same: a 13 fps Kiwi (its wf_speed 3) is thinned to 10, a 5 fps server filled in to 10.
+ *    DEFAULT  min(20, 3 × feed), snapped — but the interpolated pair NEVER drops real frames: a feed faster than that
+ *             goes UP to the next rate that divides 60 (23 fps → 30, filled in), and only a feed above 60 is thinned.
+ *    SMOOTH   min(60, 6 × feed), snapped; above 60, thinned to 60.
+ *    NATIVE   unchanged — the server's own rate, every row a real frame, no snapping (Stuart: "native will stay at a
+ *             weird fps").
+ *  A feed within 2.5 % of the rate is simply shown as it comes (actual rows, ROW_ACTUAL_TOL).
+ *    feed      MIN  ECO  DEFAULT  SMOOTH        feed      MIN  ECO  DEFAULT  SMOOTH
+ *    3.3       5    10   10       20            20        5    10   20 (x1) 60
+ *    5         5(x1)10   15       30            23 Kiwi   5    10   30       60
+ *    9 OWRX    5    10   20       30            30        5    10   30 (x1) 60
+ *    10        5    10(x1)20      60            ~13 Kiwi ECO     10 (thinned)          */
+/** ★ A feed this close to the rate is shown as it comes (actual rows): 2.5 % — a 20 fps server measured at 19.8 is not
+ *  worth a repeat every 5 s, but a 21 fps one (the Lenovo) is a slip every second and is thinned/filled to a divisor. */
+export const ROW_ACTUAL_TOL = 0.025;
+/** The rate a choice runs at on a feed of `fps` (rows/s, always a divisor of 60 — 0 for NATIVE or no feed), before the
+ *  actual-rows test. This is the number the button shows. */
+export function nominalRowRate(scroll: WfScroll, fps: number): number {
+  if (scroll === 'sharp' || !(fps > 0)) return 0;
+  let t = snappedTarget(scroll, fps);
+  if ((scroll === 'default' || scroll === 'smooth') && t > 0 && t < fps / (1 + ROW_ACTUAL_TOL)) {   // (0 = a feed too slow to fill: actual rows)
+    t = 60;                                                   // the interpolated pair never thins below the feed…
+    for (let i = ROW_RATES.length - 1; i >= 0; i--) if (ROW_RATES[i] >= fps / (1 + ROW_ACTUAL_TOL)) t = ROW_RATES[i];   // …the next rate up
+  }
+  return t;
+}
+
+/** The rule on a settled feed rate: rows/s, or 0 = actual rows (a rate within 2.5 % of the feed is the feed). Above the
+ *  feed the rows are filled in (repeats); below it they are THINNED (rowsForArrival discards evenly). */
 export function rowTargetFor(scroll: WfScroll, fps: number): number {
-  const s = snappedTarget(scroll, fps);
-  return s > fps * 1.05 ? s : 0;
+  const s = nominalRowRate(scroll, fps);
+  return s > 0 && Math.abs(s - fps) > fps * ROW_ACTUAL_TOL ? s : 0;
 }
 
 /**
@@ -126,5 +174,6 @@ export function rowTargetUnderCap(target: number, feedFps: number, capHz: number
   if (!(target > 0) || !(capHz > 0) || capHz >= 60) return target;
   let best = 0;
   for (const r of ROW_RATES) if (r <= target && r <= capHz && capHz % r === 0) best = r;
-  return best > feedFps * 1.05 ? best : 0;
+  // ★ 2026-10-29: below the feed too — the rows are thinned to it (Smooth 60 on a 45 fps feed under a 30 cap → 30).
+  return best > 0 && Math.abs(best - feedFps) > feedFps * ROW_ACTUAL_TOL ? best : 0;
 }

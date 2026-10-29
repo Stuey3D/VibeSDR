@@ -14,7 +14,7 @@
  */
 import { capLadder, capFps, capHasEffect, linkCapFor, speedNumbers, uberDivisorFor, isWfSpeedSetting, KIWI_SPEED_CAPS,
          MIN_WF_FPS } from '../src/assets/wfSpeedCap.ts';
-import { rowTargetFor, stepRowTarget, newRowTargetState, carryRows, type WfScroll } from '../src/assets/wfRowTarget.ts';
+import { rowTargetFor, stepRowTarget, newRowTargetState, rowsForArrival, type WfScroll } from '../src/assets/wfRowTarget.ts';
 import { LinkManager as UberLM, LADDERS } from '../src/services/linkManager.ts';
 import { LinkManager as VibeLM } from '../src/services/vibeLinkManager.ts';
 import { rowRate, rowPace } from '../src/utils/wfPace.ts';
@@ -81,10 +81,10 @@ for (const [name, LM, ladder] of [['UberSDR', UberLM, LADDERS.ubersdr], ['VibeSe
 
 // ── 2. Row targets ────────────────────────────────────────────────────────────────────────────────────────────────
 const rt = (s: WfScroll, f: number) => { const t = rowTargetFor(s, f); return t > 0 ? t : f; };
-for (const [f, want] of [[20, 20], [10, 10], [9, 10], [7, 10], [6, 10], [5, 10], [10 / 3, 10], [2, 10]] as const)
+for (const [f, want] of [[20, 10], [13, 10], [10, 10], [9, 10], [7, 10], [6, 10], [5, 10], [10 / 3, 10], [2, 10]] as const)
   ok(`ECO at ${f.toFixed(1)} fps → ${want} rows/s`, Math.abs(rt('eco', f) - want) < 0.01, `got ${rt('eco', f)}`);
-// (20 fps → the link is asked for 10, so the feed IS 10 — actual rows; the 20 row above is the uncapped rule.)
-for (const [f, want] of [[20, 20], [5, 5], [10 / 3, 5], [2, 5]] as const)
+// (★ 2026-10-29: a feed the link cap could not bring down — Kiwi's ~13 fps ECO step — is THINNED to 10.)
+for (const [f, want] of [[20, 5], [5, 5], [10 / 3, 5], [2, 5]] as const)
   ok(`MINIMUM at ${f.toFixed(1)} fps → ${want} rows/s`, Math.abs(rt('minimum', f) - want) < 0.01, `got ${rt('minimum', f)}`);
 ok('MINIMUM on a 5 fps feed is actual rows (same as NATIVE)', rowTargetFor('minimum', 5) === 0);
 ok('Default / Smooth unchanged: 9 fps → 20 / 30', rt('default', 9) === 20 && rt('smooth', 9) === 30);
@@ -97,8 +97,8 @@ function feed(fps: number, ms: number, jit: number, seed = 7): number[] {
   for (let k = 0, t = 10; t < ms; k++, t = 10 + k * 1000 / fps + (rnd() - 0.5) * 2 * jit) out.push(t);
   return out.sort((a, b) => a - b);
 }
-/** THE APP: WaterfallView handleFrame (the EMA'd feed → stepRowTarget → carryRows → extra rows spread over the
- *  interval) into the display driver (rowRate + rowPace, settled) at `hz`. Returns the display-frame index of each step. */
+/** THE APP: WaterfallView handleFrame (the EMA'd feed → stepRowTarget → rowsForArrival → extra rows spread over the
+ *  interval; a discarded frame pushes nothing) into the display driver (rowRate + rowPace, settled) at `hz`. Returns the display-frame index of each step. */
 function appRun(scroll: WfScroll, fps: number, jit: number, hz = 60, ms = 16000) {
   const arr = feed(fps, ms, jit);
   const st = newRowTargetState(), carry = { current: 0 };
@@ -110,9 +110,10 @@ function appRun(scroll: WfScroll, fps: number, jit: number, hz = 60, ms = 16000)
     last = t;
     const target = stepRowTarget(st, scroll, 1000 / avgFrameMs);
     tgts.push([t, target]);
-    const dur = Math.max(50, Math.min(1000, avgGap > 0 ? avgGap : avgFrameMs));
-    pushes.push(t);
-    const extras = carryRows(carry, dur, target);
+    const dur = Math.max(15, Math.min(1000, avgGap > 0 ? avgGap : avgFrameMs));
+    const rows = rowsForArrival(carry, dur, target);   // ★ 2026-10-29: 0 = the frame is discarded (thinned)
+    if (rows > 0) pushes.push(t);
+    const extras = Math.max(0, rows - 1);
     for (let k = 1; k <= extras; k++) pushes.push(t + k * dur / (extras + 1));   // scheduleExtraRows
   }
   pushes.sort((a, b) => a - b);
@@ -155,6 +156,9 @@ const cases: [WfScroll, number, number][] = [
   ['smooth', 9, 30], ['default', 9, 20], ['eco', 9, 10],
   ['eco', 5, 10], ['eco', 10 / 3, 10], ['default', 10 / 3, 10], ['smooth', 5, 30],
   ['minimum', 2, 5], ['minimum', 10 / 3, 5], ['default', 20, 20],
+  // ★ 2026-10-29 — THINNED and FILLED to a divisor of 60 (Stuart, a 23 fps Kiwi): ECO's ~13 fps Kiwi step → 10, MINIMUM
+  //   on a 6 fps feed → 5, Default on 23 → 30, Smooth on 23 → 60, Default on 22 → 30.
+  ['eco', 13, 10], ['minimum', 6.5, 5], ['default', 23, 30], ['smooth', 23, 60], ['default', 22, 30],
 ];
 for (const [scroll, fps, want] of cases) {
   for (const [who, run] of [['app', appRun], ['web', webRun]] as const) {
@@ -181,7 +185,16 @@ ok('5 fps server: MINIMUM 5 · ECO 10 · NATIVE 5 · DEFAULT 15 · SMOOTH 30',
    n5.minimum === 5 && n5.eco === 10 && n5.sharp === 5 && n5.default === 15 && n5.smooth === 30, JSON.stringify(n5));
 ok('2 fps server: MINIMUM 5 (filled in) · NATIVE 2', n2.minimum === 5 && n2.sharp === 2, JSON.stringify(n2));
 ok('unknown feed → no numbers', speedNumbers(0) === null);
-ok('Kiwi (23 fps, ECO step ≈13): ECO shows 13', speedNumbers(23, KIWI_SPEED_CAPS)!.eco === 13);
+{ const k = speedNumbers(23, KIWI_SPEED_CAPS)!;
+  ok('Kiwi (23 fps, ECO step ≈13): MINIMUM 5 · ECO 10 (thinned) · NATIVE 23 · DEFAULT 30 · SMOOTH 60 — 2026-10-29',
+     k.minimum === 5 && k.eco === 10 && k.sharp === 23 && k.default === 30 && k.smooth === 60, JSON.stringify(k)); }
+// every button but NATIVE shows a divisor of 60, on every client type's own rate (Kiwi ~23, UberSDR 10, OWRX ~9, VibeServer 20/21/30)
+for (const [name, f, caps] of [['Kiwi', 23, KIWI_SPEED_CAPS], ['UberSDR', 10, undefined], ['OpenWebRX', 9, undefined],
+                               ['VibeServer', 20, undefined], ['VibeServer (Lenovo)', 21, undefined], ['VibeServer', 30, undefined]] as const) {
+  const k = speedNumbers(f, caps)!;
+  ok(`${name} at ${f} fps: every number but NATIVE divides 60 — ${JSON.stringify(k)}`,
+     [k.minimum, k.eco, k.default, k.smooth].every(v => 60 % v === 0) && k.sharp === f);
+}
 
 console.log(`${fails ? 'FAIL' : 'PASS'}: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

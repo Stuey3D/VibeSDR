@@ -154,12 +154,29 @@ int main() {
             CHECK(settle(20, r.fps) == r.def && settle(60, r.fps) == r.smo, "row target at %.2f fps: %g / %g (want %g / %g)",
                   r.fps, settle(20, r.fps), settle(60, r.fps), r.def, r.smo);
         CHECK(vibewf::rowTargetFor(20, 20) == 0, "20 fps Default is actual rows");
+        // ★ 2026-10-29 (Stuart, a 23 fps Kiwi: "interpolate and discard") — every choice but Native divides 60, the same
+        //   table as scripts/test_wf_row_target.ts: Eco/Minimum thin a faster feed, Default/Smooth go up to the next rate.
+        struct Sn { int cap; double fps, want; } sn[] = { {20, 23, 30}, {60, 23, 60}, {10, 23, 10}, {5, 23, 5}, {10, 13, 10},
+            {20, 13, 20}, {20, 30, 0}, {20, 40, 60}, {60, 75, 60}, {10, 10.2, 0}, {10, 10.6, 10}, {20, 2, 0}, {20, 20.3, 0} };
+        for (const Sn& r : sn)
+            CHECK(vibewf::rowTargetFor(r.cap, r.fps) == r.want, "snap: cap %d at %.1f fps -> %g (want %g)", r.cap, r.fps, vibewf::rowTargetFor(r.cap, r.fps), r.want);
+        {   // discard counts: 23 fps thinned to 20 keeps 2000 of 2300 frames, never two dropped in a row
+            double c = 0; int rows = 0, dropped = 0, prevZero = 0, twoInRow = 0;
+            for (int i = 0; i < 2300; i++) { const int k = vibewf::rowsForArrival(c, 1000.0 / 23, 20); rows += k; if (k == 0) { dropped++; if (prevZero) twoInRow++; } prevZero = k == 0; }
+            CHECK(std::abs(rows - 2000) <= 1 && std::abs(dropped - 300) <= 1 && twoInRow == 0, "thin 23 -> 20: %d rows, %d dropped, %d doubled", rows, dropped, twoInRow);
+            c = 0; rows = 0; int mx = 0;
+            for (int i = 0; i < 2300; i++) { const int k = vibewf::rowsForArrival(c, 1000.0 / 23, 30); rows += k; mx = std::max(mx, k); }
+            CHECK(std::abs(rows - 3000) <= 1 && mx == 2, "fill 23 -> 30: %d rows, max %d a frame", rows, mx);
+            c = 0; CHECK(vibewf::rowsForArrival(c, 43, 0) == 1, "native: every frame one row");
+        }
+        CHECK(vibewf::rowTargetUnderCap(20, 20, 30) == 15, "under a 30 cap a 20 fps feed is thinned to 15");
         // ★ V12 ECO (cap 10): exactly 10 rows/s from any slower feed (over-generate and discard); 10 fps = actual rows.
         struct Eco { double fps, want; } eco[] = { {5, 10}, {10.0 / 3, 10}, {6, 10}, {7, 10}, {9, 10}, {10, 10}, {2, 10} };
         for (const Eco& r : eco)
             CHECK(std::abs(settle(10, r.fps) - r.want) < 0.05, "eco at %.2f fps: %g rows (want %g)", r.fps, settle(10, r.fps), r.want);
-        // ★ V12 MINIMUM (cap 5): actual rows at 5 and above; a slower feed (2, 3.3) is filled in to 5.
-        struct Mn { double fps, want; } mn[] = { {5, 5}, {10.0 / 3, 5}, {2, 5}, {10, 10} };
+        // ★ V12 MINIMUM (cap 5): actual rows at 5; a slower feed (2, 3.3) is filled in to 5 — and (2026-10-29) a faster
+        //   one is THINNED to 5 (it used to be shown at its own 10).
+        struct Mn { double fps, want; } mn[] = { {5, 5}, {10.0 / 3, 5}, {2, 5}, {10, 5} };
         for (const Mn& r : mn)
             CHECK(std::abs(settle(5, r.fps) - r.want) < 0.05, "minimum at %.2f fps: %g rows (want %g)", r.fps, settle(5, r.fps), r.want);
         // A governor step 10 → 5: Smooth changes once, 60 → 30.
