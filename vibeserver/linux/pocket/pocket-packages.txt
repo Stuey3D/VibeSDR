@@ -11,6 +11,8 @@
 # ★ Installed with --no-install-recommends, like everything on the image (Stuart: "keep the footprint minimal").
 # ★ One package name per line; '#' starts a comment. Adding a line here is the whole job — the next Update installs it.
 #   Removing one does NOT uninstall it from boxes that have it (an update never removes what an owner may rely on).
+# ★ '-name' RETIRES a package: never installed, and an Update removes it from a box that has it — only when apt would
+#   remove nothing else with it, plus the libraries only it used (vibeserver-pocket-converge --remove-retired).
 
 dnsmasq-base      # NM's shared (hotspot) mode runs it for DHCP + the captive DNS rule; no service of its own
 nftables          # the :80 -> front-door redirect while a hotspot is up (its own service stays disabled)
@@ -24,3 +26,4 @@ avahi-daemon      # VibeServerSetup.local while setting up, then ONLY the owner'
 overlayroot       # the read-only root (power-cut hardening)
 initramfs-tools   # overlayroot lives in the initramfs
 dosfstools        # fsck.vfat for the card's FAT partition (VIBESETUP on a board card) before it is mounted — 11.0.11
+-ffmpeg           # retired in 12.0: VibeServer decodes AAC with its own FAAD2 + libxaac and no longer runs it

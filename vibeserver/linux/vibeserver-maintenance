@@ -140,6 +140,8 @@ after_install() {
 #          just installed and is read INSIDE the chroot, so it is this release's list, not the one the run started with;
 #       2. vibeserver-pocket-converge brings the OS to this release's state (services, drop-ins, config.txt, fstab).
 #          postinst ran it already; this run also sees the packages from step 1 and the boot partition.
+#       1b. any package the list marks RETIRED ('-name') is removed, with the libraries only it used — but only when
+#          apt would remove nothing else (an owner who installed something that needs it keeps it);
 #  ★★ Still ONE THING BY NAME, never something the daemon chose: the list is a root-owned file from our signed
 #     package, and nothing the unprivileged daemon writes reaches this line. An ordinary install never gets here.
 #  ★ A failure in either step is logged and the update carries on to its reboot: the server itself is already new,
@@ -154,6 +156,8 @@ pocket_converge() {
     echo "Portable: installing $M"
     apt-get install -y --no-install-recommends $M' \
     || log "!! Portable: some system packages did not install — the next Update tries again"
+  apt_do /usr/lib/vibeserver/vibeserver-pocket-converge --remove-retired \
+    || log "!! Portable: a package this release no longer uses was not removed — the next Update tries again"
   apt_do /usr/lib/vibeserver/vibeserver-pocket-converge \
     || log "!! Portable: the settings check did not finish — the next Update runs it again"
 }

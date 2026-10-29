@@ -333,6 +333,53 @@ def main():
         rc, out = converge(r, sc, m, "--missing-packages")
         ok(out.strip() == "rtl-sdr", "installed packages drop out; a removed one (config-files only) is still missing")
 
+    # ── a RETIRED package ('-ffmpeg'): never installed, removed with only what it alone used, never with more ──
+    def fake_apt(tmp, sim_remove, auto_before, auto_after):
+        d = os.path.join(tmp, "apt")
+        os.makedirs(d)
+        for n, v in (("remove", sim_remove), ("before", auto_before), ("after", auto_after)):
+            open(os.path.join(d, n), "w").write("".join("Remv %s [1.0]\n" % x for x in v))
+        a = os.path.join(tmp, "apt-get")
+        open(a, "w").write("""#!/bin/sh
+D=%s
+if [ "$1" = -s ]; then
+  case "$2" in
+    remove) cat "$D/remove" ;;
+    autoremove) if [ -f "$D/done" ]; then cat "$D/after"; else cat "$D/before"; fi ;;
+  esac
+  exit 0
+fi
+echo "$*" >> "$D/log"; touch "$D/done"
+""" % d)
+        os.chmod(a, 0o755)
+        return a, d
+
+    with tempfile.TemporaryDirectory() as tmp:
+        r, sc, m = make_root(tmp, pkgs=ALL_PKGS + ["ffmpeg", "libavcodec59", "libold1"])
+        rc, out = converge(r, sc, m, "--missing-packages")
+        ok(out.strip() == "", "a retired line is never reported missing, so never installed (%r)" % out.strip())
+        a, d = fake_apt(tmp, ["ffmpeg"], ["libold1"], ["libold1", "libavcodec59"])
+        rc, out = converge(r, sc, m, "--remove-retired", extra_env={"APT_GET": a})
+        log = F(d, "log") or ""
+        ok(rc == 0 and log == "remove -y ffmpeg\nremove -y libavcodec59\n",
+           "retired: ffmpeg removed, then ONLY the library it left unused — not the orphan the box already had (%r)" % log)
+    with tempfile.TemporaryDirectory() as tmp:
+        r, sc, m = make_root(tmp, pkgs=ALL_PKGS + ["ffmpeg", "owners-tool"])
+        a, d = fake_apt(tmp, ["ffmpeg", "owners-tool"], [], [])
+        rc, out = converge(r, sc, m, "--remove-retired", extra_env={"APT_GET": a})
+        ok(rc == 0 and F(d, "log") is None and "leaving ffmpeg installed" in out and "owners-tool" in out,
+           "retired: kept, and said, when apt would also remove something an owner installed")
+    with tempfile.TemporaryDirectory() as tmp:
+        r, sc, m = make_root(tmp)
+        a, d = fake_apt(tmp, ["ffmpeg"], [], [])
+        rc, out = converge(r, sc, m, "--remove-retired", extra_env={"APT_GET": a})
+        ok(rc == 0 and F(d, "log") is None, "retired: a box without it runs no apt at all")
+    with tempfile.TemporaryDirectory() as tmp:
+        r, sc, m = make_root(tmp, marker=False, pkgs=ALL_PKGS + ["ffmpeg"])
+        a, d = fake_apt(tmp, ["ffmpeg"], [], [])
+        rc, out = converge(r, sc, m, "--remove-retired", extra_env={"APT_GET": a})
+        ok(rc == 0 and F(d, "log") is None and out.strip() == "", "retired: an ordinary VibeServer (no marker) keeps its ffmpeg")
+
     # ── no config.txt visible (overlayroot-chroot without the boot partition) ──
     with tempfile.TemporaryDirectory() as tmp:
         r, sc, m = make_root(tmp)

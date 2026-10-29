@@ -46,8 +46,12 @@
 #        vibeserver-pocket-converge --check    report what is not converged; exit 1 if anything is pending
 #        vibeserver-pocket-converge --missing-packages
 #                                              print the pocket-packages.txt names dpkg does not have (one line)
+#        vibeserver-pocket-converge --remove-retired
+#                                              remove the '-name' packages of pocket-packages.txt this box still has
+#                                              (as root, through overlayroot-chroot — the admin Update runs it)
 # Environment (tests): VIBE_POCKET_ROOT (default /) — every path is under it, and systemctl gets --root;
-#                      SYSTEMCTL (default systemctl); VIBE_POCKET_PROC_MOUNTS (default /proc/self/mounts).
+#                      SYSTEMCTL (default systemctl); VIBE_POCKET_PROC_MOUNTS (default /proc/self/mounts);
+#                      APT_GET (default apt-get).
 
 import os
 import re
@@ -56,6 +60,7 @@ import sys
 
 ROOT = os.environ.get("VIBE_POCKET_ROOT", "/") or "/"
 SYSTEMCTL = os.environ.get("SYSTEMCTL", "systemctl")
+APT_GET = os.environ.get("APT_GET", "apt-get")
 PROC_MOUNTS = os.environ.get("VIBE_POCKET_PROC_MOUNTS", "/proc/self/mounts")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -259,8 +264,9 @@ def write_atomic(path, text, mode=0o644):
 
 
 # ── packages ─────────────────────────────────────────────────────────────────────────────────────────────────────
-def manifest():
-    """The pocket-packages.txt names, in order. Beside this script when the root has none (a source checkout)."""
+def manifest_lines():
+    """The pocket-packages.txt names, in order, a retired one ('-name') kept with its dash. Beside this script when the
+    root has none (a source checkout)."""
     text = read(MANIFEST)
     if text is None:
         try:
@@ -271,9 +277,19 @@ def manifest():
     out = []
     for line in text.splitlines():
         name = line.split("#", 1)[0].strip()
-        if name and re.match(r"^[a-z0-9][a-z0-9+.-]+$", name) and name not in out:
+        if name and re.match(r"^-?[a-z0-9][a-z0-9+.-]+$", name) and name not in out:
             out.append(name)
     return out
+
+
+def manifest():
+    """The packages a Portable needs (every name without a dash)."""
+    return [n for n in manifest_lines() if not n.startswith("-")]
+
+
+def retired():
+    """The packages a release no longer uses ('-name' lines) — removed from a box that has them, never installed."""
+    return [n[1:] for n in manifest_lines() if n.startswith("-")]
 
 
 def installed_packages():
@@ -295,6 +311,46 @@ def installed_packages():
 def missing_packages():
     have = installed_packages()
     return [p for p in manifest() if p not in have]
+
+
+def apt_removals(args):
+    """The packages `apt-get -s <args>` WOULD remove — a simulation, it changes nothing. None if apt-get failed."""
+    try:
+        p = subprocess.run([APT_GET, "-s"] + args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           universal_newlines=True)
+    except OSError:
+        return None
+    if p.returncode != 0:
+        return None
+    return set(re.findall(r"^Remv (\S+)", p.stdout, re.M))
+
+
+def remove_retired():
+    """★★ Removes a retired package ONLY when apt would remove exactly that and nothing else — an owner who installed
+    something that needs it keeps both, and is told. Then removes just the libraries that removal left unused (the
+    autoremove list after, minus the one before), never an orphan the box already had."""
+    have = installed_packages()
+    old = [p for p in retired() if p in have]
+    if not old:
+        return 0
+    would = apt_removals(["remove"] + old)
+    if would is None:
+        say("could not ask apt about removing %s — the next Update tries again" % " ".join(old))
+        return 1
+    if would != set(old):
+        say("leaving %s installed — removing it would also remove %s" % (" ".join(old), " ".join(sorted(would - set(old)))))
+        return 0
+    before = apt_removals(["autoremove"]) or set()
+    say("removing %s (this release no longer uses it)" % " ".join(old))
+    if subprocess.run([APT_GET, "remove", "-y"] + old).returncode != 0:
+        return 1
+    after = apt_removals(["autoremove"]) or set()
+    unused = sorted(after - before)
+    if unused:
+        say("removing what only it used: %s" % " ".join(unused))
+        if subprocess.run([APT_GET, "remove", "-y"] + unused).returncode != 0:
+            return 1
+    return 0
 
 
 # ── units, read OFFLINE from the filesystem (cheap, and the same on a fake root, a chroot or a live box) ────────────
@@ -524,21 +580,23 @@ def live_overlay_root():
 
 def main(argv):
     mode = argv[1] if len(argv) > 1 else "apply"
-    if mode not in ("apply", "--check", "--missing-packages"):
-        print("usage: vibeserver-pocket-converge [--check|--missing-packages]", file=sys.stderr)
+    if mode not in ("apply", "--check", "--missing-packages", "--remove-retired"):
+        print("usage: vibeserver-pocket-converge [--check|--missing-packages|--remove-retired]", file=sys.stderr)
         return 2
     if not os.path.exists(P(MARKER)):
-        if mode != "--missing-packages":
+        if mode not in ("--missing-packages", "--remove-retired"):
             say("not a VibeServer Portable (%s missing) — nothing to do" % MARKER)
         return 0
     if mode == "--missing-packages":
         print(" ".join(missing_packages()))
         return 0
-    apply = mode == "apply"
+    apply = mode in ("apply", "--remove-retired")
     if apply and live_overlay_root():
         say("the root is the read-only overlay — a change here would vanish at the next boot. "
             "Run it through overlayroot-chroot (the admin Update does).")
         return 0
+    if mode == "--remove-retired":
+        return remove_retired()
     r = Run(apply)
     r.packages()
     r.files()
