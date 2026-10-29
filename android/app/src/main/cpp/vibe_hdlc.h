@@ -14,6 +14,10 @@
 //    alone would let one noise frame in 65 536 / repairMax through.
 // ★ Feed one LEVEL per bit with a signed soft value (sign = the level, |v| = confidence). Nothing here knows about tones,
 //   phases or rates; every demodulator above feeds the same class.
+// ★★ `pairDist` = 2 is for a COHERENT MSK/GMSK detector (vibe_ais.h CohPath): it decides the carrier's phase at each bit
+//    boundary on alternate axes, and the NRZI data bit is then whether symbol k equals symbol k−2 (two bits apart the
+//    phase has turned by 0 or ±π). One wrong symbol is again two wrong data bits — i and i+2 — and repair flips both.
+//    1 (the default, AX.25 / a discriminator) is unchanged.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -70,6 +74,7 @@ struct DeframerOptions {
      *  `validateClean`. Empty = accept. */
     std::function<bool(const std::vector<uint8_t>&)> validate;
     bool validateClean = false;
+    int pairDist = 1;                      ///< data bit = (level k == level k−pairDist): 1 = NRZI levels, 2 = coherent MSK
 };
 
 class Deframer {
@@ -80,7 +85,9 @@ public:
     /** One level: `soft` > 0 = high, < 0 = low; |soft| = confidence. Calls `out` for each frame that passes. */
     template <class Out> void push(float soft, Out&& out) {
         const int lvl = soft >= 0 ? 1 : 0;
-        const int bit = lvl == lastLvl_ ? 1 : 0;   // NRZI: no change = 1
+        const int ref = o_.pairDist == 2 ? lastLvl2_ : lastLvl_;
+        const int bit = lvl == ref ? 1 : 0;        // NRZI: no change = 1
+        lastLvl2_ = lastLvl_;
         lastLvl_ = lvl;
         const float conf = std::fabs(soft);
         lv_.push_back(conf);
@@ -141,14 +148,15 @@ private:
         // ★ THE WEAKEST LEVELS, one at a time. A level i maps to data bits i and i+1 (both inside the content; the first
         //   level's partner is the opening flag's last bit, which we cannot change, so i starts at 1).
         idx_.clear();
-        for (size_t i = 1; i + 1 < n; ++i) idx_.push_back(uint32_t(i));
+        const size_t D = size_t(o_.pairDist == 2 ? 2 : 1);
+        for (size_t i = 1; i + D < n; ++i) idx_.push_back(uint32_t(i));
         const size_t k = std::min<size_t>(size_t(o_.repairMax), idx_.size());
         std::partial_sort(idx_.begin(), idx_.begin() + long(k), idx_.end(), [this](uint32_t a, uint32_t b) { return lv_[a] < lv_[b]; });
         for (size_t t = 0; t < k; ++t) {
             const size_t i = idx_[t];
-            bits_[i] ^= 1; bits_[i + 1] ^= 1;
+            bits_[i] ^= 1; bits_[i + D] ^= 1;
             const bool good = unstuff_(bits_.data(), n, tmp_) && tmp_.size() >= o_.minBytes && tmp_.size() <= o_.maxBytes && fcsOk(tmp_.data(), tmp_.size());
-            bits_[i] ^= 1; bits_[i + 1] ^= 1;
+            bits_[i] ^= 1; bits_[i + D] ^= 1;
             if (!good) continue;
             f.bytes.assign(tmp_.begin(), tmp_.end() - 2);
             if (o_.validate && !o_.validate(f.bytes)) continue;
@@ -163,7 +171,7 @@ private:
     std::vector<float> lv_;
     std::vector<uint32_t> idx_;
     uint8_t sr_ = 0;
-    int lastLvl_ = 0, ones_ = 0;
+    int lastLvl_ = 0, lastLvl2_ = 0, ones_ = 0;
     bool inFrame_ = false;
     uint64_t ok_ = 0, rep_ = 0, bad_ = 0;
 };

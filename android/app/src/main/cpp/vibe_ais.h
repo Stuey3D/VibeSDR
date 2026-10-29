@@ -10,11 +10,18 @@
 //    (161.975 = −25 kHz, 162.025 = +25 kHz). One shared chain cuts the capture down to ~100 kHz holding both, then each
 //    channel is mixed to 0 Hz and cut to ~40–80 kHz on its own (vibedsp's NCO + FirDecimator: NEON on ARM, SSE2 on x86).
 //    Any capture ≥ ~100 kS/s works; an integer factor is found for every rate, never a resampler.
-// ★★ THE DEMODULATOR (GmskDemod): a polar discriminator, a short post-detection low-pass, a DC tracker that follows a
-//    crystal's offset quickly in the training sequence and slowly inside a frame, then FIVE bit clocks at fixed phases a
-//    fifth of a bit apart, each with its own deframer. A frame any of them gets through the FCS counts once.
-//    ★ Improvements over a single slicer: the five phases (no loop to be shaken by ISI or noise), and a
-//      soft-decision repair of ONE channel bit (vibe_hdlc.h) accepted only if the message's length fits its type.
+//    ★★ AFC (Front::afcStep_): the dongle's crystal error, measured from the bursts and taken out of both channels' NCOs.
+// ★★ THE DEMODULATOR (GmskDemod), 2026-10-29: COHERENT (CohPath) at FOUR fixed sampling phases a quarter of a bit apart,
+//    each with its own deframer; a frame any of them gets through the FCS counts once. The receive filter is matched to
+//    GMSK's main Laurent pulse, the carrier's frequency and phase are estimated data-free from the squared signal over a
+//    few dozen bits, and each symbol is read as a real ±1. 50 % of frames at ~8.5 dB Eb/N0 where the discriminator below
+//    needed 13 dB (test-ais), and on a real recording it decodes everything the discriminator does with ~3 dB of noise
+//    added on top (docs/v12/AIS-APRS.md).
+//    • The DISCRIMINATOR (polar discriminator, post-detection low-pass, a peak/valley DC tracker) is kept behind
+//      Tuning::disc, OFF: with the AFC it found nothing the coherent detector missed (one frame in the compound case at
+//      16 dB) and it costs as much CPU again; it is there to compare against.
+//    ★ A soft-decision repair of ONE symbol (vibe_hdlc.h), accepted only if the message's length fits its type AND a
+//      second deframer produced the same bytes (emit_).
 #pragma once
 #include "vibe_hdlc.h"
 #include "vibe_maritime_mid.h"   // ★ the MID → country table DSC uses too
@@ -44,6 +51,11 @@ static constexpr double kMinRateHz = 96e3;              ///< below this the two 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  ONE CHANNEL'S DEMODULATOR — complex baseband at fs (≈ 40–80 kS/s), centred on the channel
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** ★ Experiment switches (test-ais only; the defaults are the shipped receiver — measured choices, docs/v12/AIS-APRS.md:
+ *  W/Wf the phase/frequency windows in bits, 4 coherent phases (5 gained ~5 % at 9 dB for +20 % CPU; 3 lost ~15 %). */
+struct Tuning { bool disc = false, coh = true, afc = true; int W = 6, Wf = 24, cohPhases = 4, discPhases = 3; };
+inline Tuning& tuning() { static Tuning t; return t; }
+
 struct RawFrame { std::vector<uint8_t> bytes; int repaired = 0; float quality = 0, flipConf = 0; float levelDb = -120, snrDb = 0; };
 
 /** The message's length fits its type (M.1371 Annex 8). The check a REPAIRED frame must pass, and a clean one too. */
@@ -70,9 +82,148 @@ inline bool plausible(const std::vector<uint8_t>& b) {
     }
 }
 
+/** ★ GMSK's main Laurent pulse C0 (P. A. Laurent, IEEE Trans. Commun. 1986) for BT 0.4, h = ½, sampled at `sps` samples
+ *  a bit — the receive filter matched to the part of the signal that carries ~99 % of its energy. The frequency pulse
+ *  g(t) (the bit's rectangle through the Gaussian, area ½) is truncated to L = 4 bits; q(t) = ∫g; S(t) = sin(π·q(t)) on
+ *  [0, L), mirrored on [L, 2L); C0(t) = Π S(t + i), i = 0…L−1, which lasts L+1 bits. Tails under 1 % are trimmed. */
+inline std::vector<float> laurentC0(double sps) {
+    const int L = 4, fine = 64;
+    const double BT = 0.4, k = std::sqrt(2.0) * std::sqrt(std::log(2.0)) / (2 * M_PI * BT);
+    const int nq = L * fine;
+    std::vector<double> q(size_t(nq) + 1, 0.0);
+    for (int i = 1; i <= nq; ++i) {
+        const double t = (i - 0.5) / fine - L / 2.0;
+        q[size_t(i)] = q[size_t(i - 1)] + 0.25 * (std::erf((t + 0.5) / k) - std::erf((t - 0.5) / k)) / fine;
+    }
+    const double qEnd = q[size_t(nq)];
+    auto S = [&](double t) -> double {
+        if (t < 0 || t >= 2 * L) return 0.0;
+        if (t >= L) t = 2 * L - t;
+        const double x = t * fine; const int i = std::min(nq - 1, int(x)); const double fr = x - i;
+        const double qq = (q[size_t(i)] + (q[size_t(i + 1)] - q[size_t(i)]) * fr) * 0.5 / qEnd;   // q(∞) = ½ exactly
+        return std::sin(M_PI * qq);
+    };
+    const int n = int(std::ceil((L + 1) * sps));
+    std::vector<float> c(static_cast<size_t>(n));
+    float peak = 0;
+    for (int j = 0; j < n; ++j) {
+        double v = 1; const double t = j / sps;
+        for (int i = 0; i < L; ++i) v *= S(t + i);
+        c[size_t(j)] = float(v); peak = std::max(peak, float(v));
+    }
+    size_t a = 0, b = c.size();
+    while (a < b && c[a] < 0.01f * peak) ++a;
+    while (b > a && c[b - 1] < 0.01f * peak) --b;
+    if ((b - a) % 2 == 0) { if (b < c.size()) ++b; else if (a > 0) --a; }   // ★ odd: a whole-sample group delay
+    std::vector<float> o(c.begin() + long(a), c.begin() + long(b));
+    float sum = 0; for (float v : o) sum += v;
+    for (float& v : o) v /= sum;
+    return o;
+}
+
+/** ★★★ A COHERENT DETECTOR FOR ONE SAMPLING PHASE — no training needed, no carrier loop to lose lock.
+ *  MSK (and GMSK, near enough) at a bit BOUNDARY sits on an axis: the phase is θ + k·π/2 + (a multiple of π), so after
+ *  turning sample k back by k quarter-turns, y_k = ±A·e^{jθ}. Squaring takes the data out: y² = A²e^{j2θ}. So:
+ *   • the carrier's FREQUENCY is the turn from one y² to the next, averaged over ±Wf bits (data-free);
+ *   • after removing it, the carrier's PHASE is half the angle of Σy² over ±W bits (data-free), followed continuously
+ *     so the half-angle never jumps by π for nothing;
+ *   • the symbol is Re(y·e^{−jθ}) — a real ±1 with all the signal's energy, where a discriminator sees the noise twice.
+ *  A π ambiguity is left, and does not matter: AIS is NRZI, and on this detector the data bit is symbol k vs symbol k−2
+ *  (vibehdlc pairDist = 2), which a sign flip of every symbol leaves alone.
+ *  Delay: Wf + W bits. All running sums, so the cost is the same whatever the windows (a few dozen flops a bit). */
+class CohPath {
+public:
+    CohPath(int W, int Wf) : W_(W), Wf_(Wf), N_(2 * (W + Wf) + 4) {
+        invWin_ = 1.f / float(2 * W + 1); invWinF_ = 1.f / float(2 * Wf + 1);
+        y_.assign(size_t(N_), cf(0, 0)); r_ = u_ = yr_ = q2_ = y_;
+        g_.assign(size_t(N_), 0.f);
+    }
+    /** One sample at this phase's bit instant: `x` matched-filtered (the symbol), `r` the same instant unfiltered (the
+     *  estimates — see below). Calls `out(soft)` for the symbol Wf + W bits back.
+     *  ★★ WHY TWO: the matched filter's output at a boundary carries its NEIGHBOURS in quadrature (C0 at ±T is ~45 % of its
+     *     peak, and the neighbours sit on the other axis). The symbol decision takes the real part, so that is harmless
+     *     there — but squared, it is not data-free any more (the training sequence's 1+0.9j squares to 84°). The channel-
+     *     filtered sample at the same instant is on its axis to within GMSK's own few degrees, so the carrier is
+     *     estimated from that, and the symbol read from the matched filter. */
+    template <class Out> void push(cf x, cf r, Out&& out) {
+        // turn back by k quarter-turns: (−j)^k
+        auto turn = [this](cf v) {
+            switch (k_ & 3) { case 1: return cf(v.imag(), -v.real()); case 2: return -v; case 3: return cf(-v.imag(), v.real()); default: return v; }
+        };
+        // ★ the coarse frequency: the mean turn a bit of the UNturned sample (±90° of data each bit, averaging out)
+        const cf dr = r * std::conj(rawPrev_);
+        const float dph = vibedsp::fastAtan2(dr.imag(), dr.real());
+        rawPrev_ = r;
+        x = turn(x); r = turn(r);
+        ++k_;
+        if (++i_ == N_) i_ = 0;
+        const int i = i_;
+        auto at = [&](int back) { int j = i - back; if (j < 0) j += N_; return size_t(j); };
+        G_ += dph - g_[at(2 * Wf_ + 1)];
+        g_[size_t(i)] = dph;
+        const cf q = r * r;
+        const cf u = q * std::conj(qPrev2_);   // ★ two bits apart — see the note on the frequency below
+        qPrev2_ = qPrev_; qPrev_ = q;
+        y_[size_t(i)] = x; r_[size_t(i)] = r; u_[size_t(i)] = u;
+        // ── frequency: Σu over the last 2Wf+1 bits, centred Wf back ──
+        F_ += u - u_[at(2 * Wf_ + 1)];
+        // ★ running sums in float drift: rebuilt from the window every 1024 bits
+        if (++fresh_ > 1024) { fresh_ = 0; F_ = 0; G_ = 0; for (int b = 0; b <= 2 * Wf_; ++b) { F_ += u_[at(b)]; G_ += g_[at(b)]; } }
+        /* ★★ TWO BITS APART, NOT ONE. GMSK's Gaussian shrinks the swing of alternating levels (data 0s — the padding of
+         *  every name) from ±45° to about ±21°, so at a boundary those samples sit 24° off their axis, alternately either
+         *  side: squared, consecutive ones differ by ~96°, and a one-bit average of y²·conj(y²) turns NEGATIVE — the
+         *  estimate jumped by 2400 Hz in the middle of every type 5 (measured). Two bits apart they are on the same
+         *  side. The price is the range: ±π/4 a bit, ±1200 Hz — so the alias (every 2400 Hz) is chosen nearest the
+         *  coarse estimate above, which is good to a few hundred Hz over the window. */
+        // ★ the estimate moves slowly (a ±Wf-bit window): worked out every 4th bit, the step kept in between (the CPU)
+        if ((k_ & 3) == 0) {
+            float w = 0.25f * vibedsp::fastAtan2(F_.imag(), F_.real());   // rad a bit, ±π/4
+            const float coarse = G_ * invWinF_;
+            w += float(M_PI / 2) * std::floor((coarse - w) * float(2 / M_PI) + 0.5f);
+            w = std::max(-2.4f, std::min(2.4f, w));
+            const float c = 1 - w * w * (0.5f - w * w * (1.f / 24 - w * w / 720.f)), s = w * (1 - w * w * (1.f / 6 - w * w * (1.f / 120 - w * w / 5040.f)));
+            step_ = cf(c, -s);
+        }
+        // the rotor turns back by ψ; advanced by the frequency estimate
+        rot_ *= step_;
+        rot_ *= 1.5f - 0.5f * std::norm(rot_);   // ★ back to unit length (first order: it never strays far in one step)
+        const cf yr = y_[at(Wf_)] * rot_, rr = r_[at(Wf_)] * rot_;
+        yr_[size_t(i)] = yr;
+        // ── phase: Σ(rr²) over the last 2W+1 rotated samples, centred W back ──
+        const cf q2 = rr * rr;
+        q2_[size_t(i)] = q2;
+        P_ += q2 - q2_[at(2 * W_ + 1)];
+        if (fresh_ == 0) { P_ = 0; for (int b = 0; b <= 2 * W_; ++b) P_ += q2_[at(b)]; }
+        const float pm = std::sqrt(std::norm(P_));
+        if (pm > 0) {
+            const float c2 = P_.real() / pm, s2 = P_.imag() / pm;
+            float ec = std::sqrt(std::max(0.f, 0.5f * (1 + c2))), es = std::sqrt(std::max(0.f, 0.5f * (1 - c2)));
+            if (s2 < 0) es = -es;
+            if (ec * e_.real() + es * e_.imag() < 0) { ec = -ec; es = -es; }   // ★ the branch nearest the last: no false π jumps
+            e_ = cf(ec, es);
+        }
+        const cf v = yr_[at(W_)];
+        const float amp = std::sqrt(pm * invWin_);   // the burst's amplitude: soft values near ±1
+        const float sym = v.real() * e_.real() + v.imag() * e_.imag();
+        out(amp > 0 ? sym / amp : 0.f);
+    }
+private:
+    int W_, Wf_, N_;
+    float invWin_ = 1, invWinF_ = 1;
+    uint64_t k_ = 0;
+    int fresh_ = 0;
+    std::vector<cf> y_, r_, u_, yr_, q2_;
+    std::vector<float> g_;
+    float G_ = 0;
+    cf rawPrev_{0, 0};
+    cf qPrev_{0, 0}, qPrev2_{0, 0}, rot_{1, 0}, e_{1, 0}, step_{1, 0};
+    cf F_{0, 0}, P_{0, 0};
+    int i_ = 0;
+};
+
 class GmskDemod {
 public:
-    explicit GmskDemod(double fs) : fs_(fs) {
+    explicit GmskDemod(double fs) : fs_(fs), useCoh_(tuning().coh), useDisc_(tuning().disc) {
         // post-detection low-pass: a little over half the bit rate (the GMSK pulse is already smooth)
         lp_ = vibedsp::designLowpass(0.62 * kBaud / fs, 0.5 * kBaud / fs);
         std::reverse(lp_.begin(), lp_.end());
@@ -83,13 +234,29 @@ public:
          *  PHASE. A loop that chases zero crossings is shaken by GMSK's own ISI (BT 0.4 moves a crossing ±0.1 bit with
          *  its neighbours) and by noise; five clocks a fifth of a bit apart need no loop at all — one of them is always
          *  within a tenth of a bit of the eye's centre, and the deduplication keeps the frame once. */
-        for (int i = 0; i < kSlicers; ++i) {
-            clk_[i].reset(new vibehdlc::BitClock(fs, kBaud, i / double(kSlicers)));
+        nDisc_ = std::max(1, std::min(kSlicers, tuning().discPhases));
+        for (int i = 0; i < nDisc_; ++i) {
+            clk_[i].reset(new vibehdlc::BitClock(fs, kBaud, i / double(nDisc_)));
             vibehdlc::Deframer::Options o;
             o.minBytes = 12 + 2; o.maxBytes = 126 + 2;
             o.repairMax = 8;
             o.validate = plausible; o.validateClean = true;
             df_[i].reset(new vibehdlc::Deframer(o));
+        }
+        // ★ the coherent paths: the matched filter, then five phases, each its own CohPath + deframer (pairDist 2)
+        mf_ = laurentC0(fs / kBaud);
+        std::reverse(mf_.begin(), mf_.end());
+        mfRe_.assign(mf_.size() * 2, 0.f); mfIm_.assign(mf_.size() * 2, 0.f);
+        nCoh_ = std::max(1, std::min(kSlicers, tuning().cohPhases));
+        for (int i = 0; i < nCoh_; ++i) {
+            coh_[i].reset(new CohPath(tuning().W, tuning().Wf));
+            cph_[i] = i / double(nCoh_);
+            vibehdlc::Deframer::Options o;
+            o.minBytes = 12 + 2; o.maxBytes = 126 + 2;
+            o.repairMax = 8;
+            o.validate = plausible; o.validateClean = true;
+            o.pairDist = 2;
+            cdf_[i].reset(new vibehdlc::Deframer(o));
         }
         dcFast_ = float(1.0 - std::exp(-1.0 / (fs / kBaud * 16)));    // hunting: ~16 bits
         dcSlow_ = float(1.0 - std::exp(-1.0 / (fs / kBaud * 200)));   // in a frame: ~200 bits
@@ -108,6 +275,9 @@ public:
             pw_ += (p - pw_) * pwA_;
             // ★ the noise floor: a slow follower that falls fast and climbs very slowly (frames are short and rare)
             if (pw_ < floor_ || floor_ <= 0) floor_ += (pw_ - floor_) * 0.02f; else floor_ += (pw_ - floor_) * 2e-6f;
+            afcSample_(d);
+            if (useCoh_) cohSample_(s, out);
+            if (!useDisc_) { ++t_; if (hasPend_ && t_ >= pendDue_) flush_(out); continue; }
             float f = vibedsp::fastAtan2(d.imag(), d.real()) * scale_;   // ±1 at the nominal deviation
             if (!(f == f)) f = 0;
             // the post-detection FIR on a doubled history (contiguous for the dot product)
@@ -120,7 +290,7 @@ public:
              *  flag, or five 1s and a stuffed 0) does not drag it as a plain average would. Faster while hunting (the
              *  training sequence settles it), slower inside a frame. */
             bool inFrame = false;
-            for (int k = 0; k < kSlicers; ++k) inFrame = inFrame || df_[k]->inFrame();
+            for (int k = 0; k < nDisc_; ++k) inFrame = inFrame || df_[k]->inFrame();
             float rel = inFrame ? dcSlow_ : dcFast_;
             /* ★ RESTARTED BY A RISE IN POWER: between frames the discriminator of noise swings to ±fs/2, and followers
              *  that took those extremes would start every frame far off. A burst arriving (the short-term power 4 dB over
@@ -139,7 +309,7 @@ public:
             }
             dc_ = 0.5f * (hi_ + lo_);
             const float v = y - dc_;
-            for (int k = 0; k < kSlicers; ++k) {
+            for (int k = 0; k < nDisc_; ++k) {
                 clk_[k]->push(v, 1.0f, [&](float lvl) {
                     df_[k]->push(lvl, [&](const vibehdlc::Frame& fr) { emit_(fr, out); });
                 });
@@ -149,7 +319,15 @@ public:
         }
     }
     double noiseDb() const { return floor_ > 0 ? 10 * std::log10(floor_) : -120; }
-    uint64_t repaired() const { uint64_t n = 0; for (int k = 0; k < kSlicers; ++k) n += df_[k]->framesRepaired(); return n; }
+    /** ★ AFC: a burst's mean frequency (Hz from this channel's centre) since the last call, and how many bits it rests
+     *  on; false = none. GMSK's spectrum is symmetric, so a burst's mean frequency IS its carrier's offset. */
+    bool takeBurstFreq(double& hz, double& bits) {
+        if (afcN_ <= 0) return false;
+        hz = afcHz_; bits = afcN_; afcN_ = 0; return true;
+    }
+    bool inBurst() const { return afcRun_ > 0; }
+    uint64_t unconfirmed() const { return unconfirmed_; }   ///< repaired frames dropped for want of a second witness
+    uint64_t repaired() const { uint64_t n = 0; for (int k = 0; k < kSlicers; ++k) n += (df_[k] ? df_[k]->framesRepaired() : 0) + (cdf_[k] ? cdf_[k]->framesRepaired() : 0); return n; }
 
 private:
     static constexpr int kSlicers = 5;
@@ -167,10 +345,21 @@ private:
         if (hasPend_ && pendH_ == h) {
             const bool better = (pend_.repaired && !fr.repaired) || (pend_.repaired == fr.repaired && fr.quality > pend_.quality);
             if (better) fill_(fr);
+            ++copies_;
+            if (!pend_.repaired) pendDue_ = std::min(pendDue_, t_ + uint64_t(2 * fs_ / kBaud) + 1);
             return;
         }
         if (hasPend_) flush_(out);
-        pendH_ = h; fill_(fr); hasPend_ = true; pendDue_ = t_ + uint64_t(2 * fs_ / kBaud) + 1;
+        pendH_ = h; fill_(fr); hasPend_ = true; copies_ = 1;
+        /* ★★★ A REPAIRED FRAME NEEDS A SECOND WITNESS. Sixteen bits of FCS against eight candidate flips lets about one
+         *  failed frame in 8000 through as a false "repair" — and with ten deframers a channel, a weak busy coast fails
+         *  hundreds a minute. The service's rule (the MMSI must be known) does not catch it when the error is past the
+         *  MMSI: test-ais's back-to-back case produced a type 5 of a known ship with a wrong field. A real single error is
+         *  seen alike by neighbouring sampling phases and by the other detector, which repair to the SAME bytes; a chance
+         *  FCS match is not reproduced. So a repaired frame waits (the coherent detector is W + Wf bits behind the
+         *  discriminator) and is sent only if another deframer produced the same bytes, repaired or clean. */
+        const int holdBits = fr.repaired ? tuning().W + tuning().Wf + 6 : 2;
+        pendDue_ = t_ + uint64_t(holdBits * fs_ / kBaud) + 1;
     }
     void fill_(const vibehdlc::Frame& fr) {
         pend_.bytes = fr.bytes; pend_.repaired = fr.repaired; pend_.quality = fr.quality; pend_.flipConf = fr.flipConf;
@@ -179,14 +368,67 @@ private:
     }
     template <class Out> void flush_(Out& out) {
         hasPend_ = false;
+        if (pend_.repaired && copies_ < 2) { ++unconfirmed_; return; }
         recent_[rp_] = { pendH_, t_ }; rp_ = (rp_ + 1) % kRecent;
         out(pend_);
     }
+    int copies_ = 0;
+    uint64_t unconfirmed_ = 0;
+    /* ★★ BURST FREQUENCY for the AFC: the discriminator's complex product summed over a run of samples well over the
+     *  floor (3×); a run 120–1400 bits long is burst-shaped (an AIS burst is 256 bits a slot, at most 5 slots) and is
+     *  reported; longer is a carrier, not a ship, and is ignored. */
+    void afcSample_(const cf& d) {
+        if (floor_ > 0 && pw_ > 3.f * floor_) { afcSum_ += std::complex<double>(d); ++afcRun_; return; }
+        if (afcRun_ > 0) {
+            const double bits = afcRun_ * kBaud / fs_;
+            if (bits >= 120 && bits <= 1400 && std::abs(afcSum_) > 0) {
+                afcHz_ = std::arg(afcSum_) * fs_ / (2 * M_PI); afcN_ = bits;
+            }
+            afcSum_ = 0; afcRun_ = 0;
+        }
+    }
+    /** The matched filter, then each phase's bit instant (linear interpolation) into its CohPath and deframer. */
+    template <class Out> void cohSample_(const cf& s, Out& out) {
+        const int K = int(mf_.size());
+        mfRe_[size_t(mp_)] = s.real(); mfRe_[size_t(mp_ + K)] = s.real();
+        mfIm_[size_t(mp_)] = s.imag(); mfIm_[size_t(mp_ + K)] = s.imag();
+        mp_ = (mp_ + 1) % K;
+        const cf m(vibedsp::dotReal(&mfRe_[size_t(mp_)], mf_.data(), K), vibedsp::dotReal(&mfIm_[size_t(mp_)], mf_.data(), K));
+        const size_t c0 = size_t(mp_ + K / 2);   // ★ the raw sample at the filter's centre: the same instant
+        const cf r(mfRe_[c0], mfIm_[c0]);
+        const double step = kBaud / fs_;
+        for (int k = 0; k < nCoh_; ++k) {
+            cph_[k] += step;
+            if (cph_[k] >= 1.0) {
+                cph_[k] -= 1.0;
+                const float back = float(cph_[k] / step);   // samples since the instant (0…1)
+                const cf x = m - (m - mfPrev_) * back, xr = r - (r - rawPrev_) * back;
+                cohPush_(k, x, xr, out);
+            }
+        }
+        mfPrev_ = m; rawPrev_ = r;
+    }
+    template <class Out> void cohPush_(int k, const cf& x, const cf& xr, Out& out) {
+        coh_[k]->push(x, xr, [&](float soft) {
+            cdf_[k]->push(soft, [&](const vibehdlc::Frame& fr) { emit_(fr, out); });
+        });
+    }
+    std::vector<float> mf_, mfRe_, mfIm_;
+    int mp_ = 0;
+    cf mfPrev_{0, 0}, rawPrev_{0, 0};
+    double cph_[5] = {0, 0, 0, 0, 0};
+    int nCoh_ = 5, nDisc_ = 5;
+    std::unique_ptr<CohPath> coh_[5];
+    std::unique_ptr<vibehdlc::Deframer> cdf_[5];
+    std::complex<double> afcSum_{0, 0};
+    long afcRun_ = 0;
+    double afcHz_ = 0, afcN_ = 0;
     RawFrame pend_;
     uint32_t pendH_ = 0;
     bool hasPend_ = false;
     uint64_t pendDue_ = 0;
     double fs_;
+    bool useCoh_, useDisc_;
     std::vector<float> lp_, hist_;
     int hp_ = 0;
     float scale_;
@@ -269,12 +511,44 @@ public:
                 const int k = chDec_[c]->process(mixed_.data(), cnt, ch_.data());
                 demod_[c]->feed(reinterpret_cast<const cf*>(ch_.data()), k, [&](const RawFrame& f) { out(c, f); });
             }
+            afcStep_();
         }
     }
+    double afcHz() const { return afc_; }
+    /** Start the AFC where a previous run left it (Service: the same dongle's crystal). */
+    void seedAfc(double hz) {
+        afc_ = std::max(-12e3, std::min(12e3, hz));
+        for (int c = 0; c < 2; ++c) { applied_[c] = afc_; nco_[c].setFreq((kChanHz[c] - kCentreHz + afc_) / shared_); }
+    }
+    uint64_t unconfirmed() const { return demod_[0]->unconfirmed() + demod_[1]->unconfirmed(); }
     double noiseDb(int c) const { return demod_[c]->noiseDb(); }
     uint64_t repaired() const { return demod_[0]->repaired() + demod_[1]->repaired(); }
 
 private:
+    /* ★★★ AFC — THE DONGLE'S CRYSTAL. An RTL dongle without a TCXO is commonly 20–60 ppm off, which at 162 MHz is
+     *  3–10 kHz: a burst pushed against (or past) the ±7 kHz channel filter. Measured before this (test-ais conditions):
+     *  +6 kHz lost half the frames at 14 dB, −9 kHz decoded NOTHING even at 20 dB. Both channels share the crystal, so
+     *  every burst on either channel (its mean frequency, GmskDemod::takeBurstFreq) moves ONE correction half of the
+     *  way; it is applied to both channels' NCOs between bursts (never mid-burst), up to ±12 kHz. A burst far off is only
+     *  partly inside the filter, so its estimate falls short — repeated, it converges in a handful of bursts. Each ship's
+     *  own ±500 Hz averages out; what remains the coherent detector follows burst by burst (±1200 Hz).
+     *  ★ Measured (test-ais, 20 dB): −9 kHz settles within 100 Hz in ~10 bursts. The service keeps the last value and
+     *    starts the next Front there (seedAfc): a crystal does not change between sessions, so only the first ever start
+     *    pays the settling. */
+    void afcStep_() {
+        if (!tuning().afc) return;
+        for (int c = 0; c < 2; ++c) {
+            double hz = 0, bits = 0;
+            // ★ the estimate is relative to where THIS channel's NCO sits now
+            if (demod_[c]->takeBurstFreq(hz, bits)) afc_ = std::max(-12e3, std::min(12e3, afc_ + (applied_[c] + hz - afc_) / 2));
+        }
+        for (int c = 0; c < 2; ++c)
+            if (applied_[c] != afc_ && !demod_[c]->inBurst()) {   // ★ each channel between its own bursts
+                applied_[c] = afc_;
+                nco_[c].setFreq((kChanHz[c] - kCentreHz + afc_) / shared_);
+            }
+    }
+    double afc_ = 0, applied_[2] = {0, 0};
     double rate_, shared_ = 0, chRate_ = 0, mixHz_ = 0;
     vibedsp::NCO mix_;
     std::vector<std::unique_ptr<vibedsp::FirDecimator>> stages_;

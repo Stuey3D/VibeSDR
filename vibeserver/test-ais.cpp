@@ -5,10 +5,15 @@
 //     every type we read encoded from M.1371 Annex 8 and decoded back, field by field.
 //  3. The whole receiver on synthetic captures: GMSK BT 0.4 at 9600 bit/s, NRZI, HDLC, on BOTH channels at once, with a
 //     crystal offset, at 2.4 and 2.048 MS/s, over a range of Eb/N0 — the decode rate per SNR, with and without repair.
+//  3b. The real world, harsher: crystal −9…+6 kHz, ±500 Hz transmitters with an 8-bit ramp and a settling synthesiser,
+//     a second path, FM on both adjacent channels, a stronger ship in the slot before (`--conditions`: the full table).
 //  4. Noise only, ten minutes of channel bits: ZERO frames.
 //  5. The service: one row per MMSI merged from several messages, the readable line, the JSON, the trail, the trend.
 //  6. CPU: real time per capture second at 2.4 MS/s (this Mac; the Pi 2 is estimated in the doc).
 //  `test-ais --write-clip <file.cu8> <rate>` writes a capture (RTL's u8 IQ, centred on 162.000 MHz) for the server test.
+//  `test-ais --cu8 <file.cu8> <rate>` decodes a REAL rtl_sdr capture centred on 162.000 MHz (AIS_DEBUG=1: every frame);
+//  `test-ais --wav <file.wav> <channelHz>` one channel from a 16-bit stereo IQ WAV (AIS_WAV_NOISE=σ adds noise).
+//  Experiment switches after the mode word: disc nocoh noafc W= Wf= ph= dph= (vibeais::Tuning).
 #include "vibe_ais_service.h"
 
 #include <chrono>
@@ -17,6 +22,7 @@
 #include <cstring>
 #include <random>
 #include <set>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -105,10 +111,32 @@ static std::vector<int> airBits(const std::vector<uint8_t>& msg) {
     std::vector<int> lv; int level = 0; vibehdlc::nrzi(b, lv, level);
     return lv;
 }
-struct Burst { double t0; double offHz; std::vector<int> levels; double amp; };
+/** ★ The real world a synthetic burst should survive (M.1371 Annex 2 §3.1: a transmitter may take up to 8 bits to ramp
+ *  its power up, and its carrier is good to ±500 Hz; an RTL dongle's crystal adds the same offset to every burst). */
+struct Cond {
+    const char* name = "clean";
+    double xtalHz = 1200;          ///< the receiver's crystal error, common to every burst
+    double txSpreadHz = 0;         ///< each transmitter's own error, uniform ±this
+    int rampBits = 0;              ///< power ramp-up, levels modulated through it (0 = a 3-sample ramp, the old test)
+    double chirpHz = 0;            ///< a synthesiser still settling at key-up: +chirpHz decaying with τ = 3 bits
+    double ray2Db = -99, ray2Bits = 0;   ///< a second path: its level and its delay in bits (random phase per burst)
+    double adjDb = -99;            ///< FM carriers on the adjacent 25 kHz channels (161.950, 162.050) this far over a burst
+    double prevDb = -99;           ///< a stronger burst in the PREVIOUS slot on the same channel (back to back)
+    double rate = 2.4e6;
+    int warm = 16;                 ///< bursts 10 dB stronger first (other ships, not counted): the AFC settles, as it has
+                                   ///< long since on a receiver that has been running (a cold start costs ~10 bursts)
+};
+struct Burst { double t0; double offHz; std::vector<int> levels; double amp; int rampBits = 0; double chirpHz = 0;
+               double ray2 = 0, ray2Bits = 0, ray2Ph = 0; };
 /** Add one burst into `iq` (rate fs) at its offset from 162.000 MHz. The frequency pulse is the NRZ rectangle through
  *  the Gaussian (BT 0.4): p(t) = ½[erf((t+T/2)/(√2σT)) − erf((t−T/2)/(√2σT))], σ = √ln2 / (2π·BT), tabulated over ±3 T. */
-static void addBurst(std::vector<cf>& iq, double fs, const Burst& b) {
+static void addBurst(std::vector<cf>& iq, double fs, const Burst& b0, uint64_t seed = 1) {
+    Burst b = b0;
+    if (b.rampBits > 0) {   // ★ levels sent through the ramp (the transmitter is already modulating): random ones
+        std::vector<int> pre; uint64_t s = seed * 0x9E3779B97F4A7C15ull + 7;
+        for (int i = 0; i < b.rampBits; ++i) { s ^= s << 13; s ^= s >> 7; s ^= s << 17; pre.push_back(int(s & 1)); }
+        b.levels.insert(b.levels.begin(), pre.begin(), pre.end());
+    }
     const double sps = fs / 9600.0, BT = 0.4, sigma = std::sqrt(std::log(2.0)) / (2 * M_PI * BT);
     const int half = int(std::ceil(3 * sps));
     std::vector<float> p(size_t(2 * half + 1));
@@ -126,11 +154,20 @@ static void addBurst(std::vector<cf>& iq, double fs, const Burst& b) {
     }
     double ph = 0;
     const size_t s0 = size_t(b.t0 * fs);
-    const double rampLen = sps * 3;
-    for (size_t i = 0; i < n && s0 + i < iq.size(); ++i) {
-        ph += 2 * M_PI * (b.offHz + 2400.0 * f[i]) / fs;
-        const double ramp = std::min(1.0, std::min(double(i) / rampLen, double(n - i) / rampLen));
-        iq[s0 + i] += cf(float(b.amp * ramp * std::cos(ph)), float(b.amp * ramp * std::sin(ph)));
+    const double rampLen = b.rampBits > 0 ? sps * b.rampBits : sps * 3;
+    std::vector<cf> z(n);
+    for (size_t i = 0; i < n; ++i) {
+        const double chirp = b.chirpHz * std::exp(-double(i) / (3 * sps));
+        ph += 2 * M_PI * (b.offHz + chirp + 2400.0 * f[i]) / fs;
+        const double ramp = std::min(1.0, std::min(double(i) / rampLen, double(n - i) / (sps * 3)));
+        z[i] = cf(float(b.amp * ramp * std::cos(ph)), float(b.amp * ramp * std::sin(ph)));
+    }
+    const long dly = std::lround(b.ray2Bits * sps);
+    const cf r2 = std::polar(float(b.ray2), float(b.ray2Ph));
+    for (size_t i = 0; i < n + size_t(dly) && s0 + i < iq.size(); ++i) {
+        cf v = i < n ? z[i] : cf(0, 0);
+        if (b.ray2 > 0 && long(i) >= dly && size_t(long(i) - dly) < n) v += r2 * z[size_t(long(i) - dly)];
+        iq[s0 + i] += v;
     }
 }
 struct Rng {
@@ -224,21 +261,54 @@ static void testEncoded() {
  *  rate fs, with a crystal offset. Frames are counted through the SERVICE's rule: a repaired frame counts only when its
  *  MMSI was heard cleanly before (Service::accept_). */
 struct E2E { int sent = 0, heard = 0, repaired = 0, wrong = 0, dropped = 0; double cpuS = 0, capS = 0; };
-static E2E endToEnd(double fs, double ebn0, int n, bool repair, uint64_t seed, double xtalHz = 1200, std::vector<cf>* keep = nullptr) {
+static E2E endToEnd(double fs, double ebn0, int n, bool repair, uint64_t seed, double xtalHz = 1200, std::vector<cf>* keep = nullptr,
+                    const Cond* cond = nullptr) {
     E2E r;
-    const double gapS = 0.04, dur = 0.1 + n * gapS + 0.1;
+    Cond cd; if (cond) cd = *cond; else cd.xtalHz = xtalHz;
+    const int warm = cond ? cond->warm : 0;
+    const double gapS = 0.04, t0s = 0.1 + warm * gapS, dur = t0s + n * gapS + 0.1;
     std::vector<cf> iq(size_t(dur * fs), cf(0, 0));
-    std::vector<std::vector<uint8_t>> sent;
+    std::vector<std::vector<uint8_t>> sent, extra;
     const double amp = 0.25;
     const int ships = std::max(1, n / 6);
+    Rng crng(seed * 31 + 5);
+    Rng wrng(seed * 7 + 3);
+    for (int i = 0; i < warm; ++i) {
+        std::vector<uint8_t> wm = msgType1(266000000u + uint32_t(i), 53.0, 3.0, 2, 2, 2, 0);
+        Burst wb{ 0.1 + i * gapS, (i & 1 ? 25e3 : -25e3) + cd.xtalHz + cd.txSpreadHz * (2 * wrng.u() - 1), airBits(wm), amp * std::sqrt(10.0) };
+        addBurst(iq, fs, wb, uint64_t(i) + 77);
+        extra.push_back(wm);
+    }
     for (int i = 0; i < n; ++i) {
         const int sh = i % ships, k = i / ships;
         const uint32_t mmsi = 235000000u + uint32_t(sh) * 7 + uint32_t(seed % 5);
         std::vector<uint8_t> m = (k % 3 == 1) ? msgType5(mmsi, "TEST SHIP " + std::to_string(sh), "M" + std::to_string(sh), "SOUTHAMPTON", 70)
                                               : msgType1(mmsi, 50.0 + sh * 0.01 + k * 0.0003, -1.0 - sh * 0.01, 5 + k, (sh * 37 + k) % 360, (sh * 41) % 360, 0);
-        Burst b{ 0.1 + i * gapS, (i & 1 ? 25e3 : -25e3) + xtalHz, airBits(m), amp };
-        addBurst(iq, fs, b);
+        const double chOff = (i & 1 ? 25e3 : -25e3) + cd.xtalHz;
+        Burst b{ t0s + i * gapS, chOff + cd.txSpreadHz * (2 * crng.u() - 1), airBits(m), amp, cd.rampBits, cd.chirpHz,
+                 cd.ray2Db > -90 ? std::pow(10.0, cd.ray2Db / 20) : 0.0, cd.ray2Bits, 2 * M_PI * crng.u() };
+        if (cd.prevDb > -90) {
+            // ★ back to back: a stronger ship in the slot before (26.67 ms), ending ~2 ms before this one starts
+            std::vector<uint8_t> pm = msgType1(244000000u + uint32_t(i), 52.0, 3.0, 1, 1, 1, 0);
+            std::vector<int> pl = airBits(pm);
+            Burst pb{ b.t0 - (pl.size() + 6 + 20) / 9600.0, chOff + cd.txSpreadHz * (2 * crng.u() - 1), pl, amp * std::pow(10.0, cd.prevDb / 20),
+                      cd.rampBits, cd.chirpHz };
+            addBurst(iq, fs, pb, uint64_t(i) + 991);
+            extra.push_back(pm);
+        }
+        addBurst(iq, fs, b, uint64_t(i) + seed * 1000);
         sent.push_back(m);
+    }
+    if (cd.adjDb > -90) {
+        // ★ FM voice carriers on the neighbouring 25 kHz channels: a 1 kHz tone at ±3 kHz deviation, continuous
+        const double a = amp * std::pow(10.0, cd.adjDb / 20);
+        for (int s = -1; s <= 1; s += 2) {
+            double ph = 0;
+            for (size_t i = 0; i < iq.size(); ++i) {
+                ph += 2 * M_PI * (s * 50e3 + cd.xtalHz + 3000.0 * std::sin(2 * M_PI * 1000.0 * i / fs + s)) / fs;
+                iq[i] += cf(float(a * std::cos(ph)), float(a * std::sin(ph)));
+            }
+        }
     }
     Rng rng(seed);
     // Eb/N0 → noise: total complex noise power σ² = A² fs / (9600 · Eb/N0)
@@ -247,7 +317,7 @@ static E2E endToEnd(double fs, double ebn0, int n, bool repair, uint64_t seed, d
     addNoise(iq, std::sqrt(sigma2 / 2), rng);
     if (keep) *keep = iq;
     vibeais::Front fe(fs, vibeais::kCentreHz);
-    std::vector<std::vector<uint8_t>> got;
+    std::vector<std::vector<uint8_t>> got; std::vector<int> gotRep;
     std::set<uint32_t> known;
     const auto t0 = std::chrono::steady_clock::now();
     fe.feed(iq.data(), iq.size(), [&](int, const vibeais::RawFrame& f) {
@@ -255,17 +325,31 @@ static E2E endToEnd(double fs, double ebn0, int n, bool repair, uint64_t seed, d
         if (!vibeais::decode(f.bytes, m)) return;
         if (f.repaired && (!repair || !known.count(m.mmsi))) { ++r.dropped; return; }
         if (!f.repaired) known.insert(m.mmsi);
-        got.push_back(f.bytes); if (f.repaired) ++r.repaired;
+        got.push_back(f.bytes); gotRep.push_back(f.repaired); if (f.repaired) ++r.repaired;
     });
     r.cpuS = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    if (std::getenv("AIS_DEBUG")) std::printf("   [afc %.0f Hz, crystal %.0f]\n", fe.afcHz(), cd.xtalHz);
     r.capS = dur;
     r.sent = n;
     std::vector<int> seen(sent.size(), 0);
-    for (auto& g : got) {
+    for (size_t gi = 0; gi < got.size(); ++gi) {
+        const auto& g = got[gi];
         int idx = -1;
         for (size_t q = 0; q < sent.size(); ++q) if (sent[q] == g && !seen[q]) { idx = int(q); break; }
         if (idx < 0) for (size_t q = 0; q < sent.size(); ++q) if (sent[q] == g) { idx = int(q); break; }
-        if (idx >= 0) { if (!seen[size_t(idx)]++) ++r.heard; } else ++r.wrong;
+        if (idx >= 0) { if (!seen[size_t(idx)]++) ++r.heard; }
+        else if (std::find(extra.begin(), extra.end(), g) == extra.end()) {   // ★ the strong ship before is not wrong
+            ++r.wrong;
+            if (std::getenv("AIS_DEBUG")) {
+                vibeais::Msg wm; vibeais::decode(g, wm);
+                std::printf("   WRONG: type %d MMSI %u, %zu bytes, repaired %d\n", wm.type, wm.mmsi, g.size(), gotRep[gi]);
+            }
+        }
+    }
+    if (std::getenv("AIS_DEBUG")) {
+        std::printf("   missed:");
+        for (size_t q = 0; q < sent.size(); ++q) if (!seen[q]) std::printf(" %zu(t%d)", q, sent[q][0] >> 2);
+        std::printf("\n");
     }
     return r;
 }
@@ -282,12 +366,14 @@ static void testReceiver() {
     E2E clean = endToEnd(2.4e6, 30, 30, true, 1);
     CHECK(clean.heard == clean.sent && clean.wrong == 0, "2.4 MS/s, clean: %d of %d, %d wrong", clean.heard, clean.sent, clean.wrong);
     E2E clean2 = endToEnd(2.048e6, 30, 30, true, 2, -3000);
-    CHECK(clean2.heard == clean2.sent && clean2.wrong == 0, "2.048 MS/s, −3 kHz crystal: %d of %d, %d wrong", clean2.heard, clean2.sent, clean2.wrong);
+    // ★ a COLD start 3 kHz off: the coherent detector follows ±1200 Hz of where the AFC has the channel, so the first
+    //   burst or two go by while the AFC settles (Front::afcStep_; the service then keeps it across restarts)
+    CHECK(clean2.heard >= clean2.sent - 2 && clean2.wrong == 0, "2.048 MS/s, −3 kHz crystal, cold: %d of %d, %d wrong", clean2.heard, clean2.sent, clean2.wrong);
     E2E slow = endToEnd(250e3, 30, 20, true, 3, 500);
     CHECK(slow.heard == slow.sent, "250 kS/s capture: %d of %d", slow.heard, slow.sent);
     std::printf("   Eb/N0 (dB)   decoded of 120: no repair   with repair (repaired)   wrong\n");
     const double snrs[] = { 8, 10, 11, 12, 13, 14, 16, 18 };
-    int at14 = 0, at18 = 0, at12r = 0, at12n = 0;
+    int at14 = 0, at18 = 0, at12r = 0, at12n = 0, at10 = 0, at8 = 0;
     for (double e : snrs) {
         E2E a = endToEnd(2.4e6, e, 120, false, 100 + uint64_t(e));
         E2E r = endToEnd(2.4e6, e, 120, true, 100 + uint64_t(e));
@@ -295,12 +381,67 @@ static void testReceiver() {
                     r.heard, 100.0 * r.heard / r.sent, r.repaired, r.wrong + a.wrong);
         CHECK(r.wrong == 0 && a.wrong == 0, "no wrong frames at %.0f dB", e);
         if (e == 14) at14 = r.heard;
+        if (e == 10) at10 = r.heard;
+        if (e == 8) at8 = r.heard;
         if (e == 18) at18 = r.heard;
         if (e == 12) { at12r = r.heard; at12n = a.heard; }
     }
-    CHECK(at18 >= 119, "≥ 119/120 at 18 dB (%d)", at18);
-    CHECK(at14 >= 100, "≥ 100/120 at 14 dB (%d)", at14);
-    CHECK(at12r > at12n, "the repair gains at 12 dB (%d vs %d)", at12r, at12n);
+    // ★ 2026-10-29, the coherent detector: 50 % now falls at ~8.5 dB (was 13 dB). Measured 45 / 118 / 120 / 120 / 120.
+    CHECK(at18 >= 120, "120/120 at 18 dB (%d)", at18);
+    CHECK(at14 >= 119, "≥ 119/120 at 14 dB (%d)", at14);
+    CHECK(at12r >= 118, "≥ 118/120 at 12 dB (%d)", at12r);
+    CHECK(at10 >= 100, "≥ 100/120 at 10 dB (%d)", at10);
+    CHECK(at8 >= 30, "≥ 30/120 at 8 dB (%d)", at8);
+    CHECK(at12r >= at12n, "the repair never loses a frame at 12 dB (%d vs %d)", at12r, at12n);
+}
+
+/** ★★ THE REAL WORLD, HARSHER: a dongle's crystal ±3 kHz and +6 kHz (≈ 37 ppm), the transmitters' own ±500 Hz, an 8-bit
+ *  power ramp with a settling synthesiser, a second path, FM carriers on both adjacent channels, and a stronger ship in
+ *  the slot before. Each row: frames decoded of 60 (repair on, through the service's rule) per Eb/N0. */
+static const Cond kConds[] = {
+    { "plain (1.2 kHz)" },
+    { "crystal -3 kHz", -3000 },
+    { "crystal +3 kHz", 3000 },
+    { "crystal +6 kHz", 6000 },
+    { "crystal -9 kHz (55 ppm)", -9000 },
+    { "tx +-500 Hz, 8-bit ramp, 1 kHz settle", 1500, 500, 8, 1000 },
+    { "2nd path -6 dB, 0.25 bit", 1200, 0, 0, 0, -6, 0.25 },
+    { "adjacent FM +40 dB", 1200, 0, 0, 0, -99, 0, 40 },
+    { "previous slot +15 dB", 1200, 0, 0, 0, -99, 0, -99, 15 },
+    { "all of it (+2.5 kHz)", 2500, 500, 8, 1000, -6, 0.25, 40, 15 },
+};
+static void conditionTable(const double* snrs, int ns, int n, std::vector<std::vector<int>>* out = nullptr) {
+    std::printf("   condition (%d frames, repair on)        ", n);
+    for (int j = 0; j < ns; ++j) std::printf("%5.0f", snrs[j]);
+    std::printf("  dB   wrong\n");
+    int ci = 0;
+    for (const Cond& c : kConds) {
+        if (std::getenv("AIS_COND") && std::atoi(std::getenv("AIS_COND")) != ci) { ++ci; continue; }   // ★ one row (debugging)
+        std::printf("   %-40s", c.name);
+        int wrong = 0;
+        std::vector<int> row;
+        for (int j = 0; j < ns; ++j) {
+            if (std::getenv("AIS_SNR") && std::atof(std::getenv("AIS_SNR")) != snrs[j]) continue;
+            E2E r = endToEnd(c.rate, snrs[j], n, true, 500 + uint64_t(j) * 17 + uint64_t(ci) * 101, 0, nullptr, &c);
+            std::printf("%5.0f", 100.0 * r.heard / r.sent); std::fflush(stdout);
+            wrong += r.wrong; row.push_back(r.heard);
+        }
+        std::printf("  %%    %d\n", wrong);
+        CHECK(wrong == 0, "%s: no wrong frames", c.name);
+        // ★ every condition: half the frames by 10 dB, 90 % by 14 (the first column is 8 dB when the table is short)
+        for (int j = 0; j < ns && int(row.size()) == ns; ++j) {
+            if (snrs[j] == 10) CHECK(row[size_t(j)] * 2 >= n, "%s: ≥ 50 %% at 10 dB (%d of %d)", c.name, row[size_t(j)], n);
+            if (snrs[j] == 14) CHECK(row[size_t(j)] * 10 >= n * 9, "%s: ≥ 90 %% at 14 dB (%d of %d)", c.name, row[size_t(j)], n);
+        }
+        if (out) out->push_back(row);
+        ++ci;
+    }
+}
+static void testConditions(bool full) {
+    std::printf("── the receiver under real-world conditions ──\n");
+    const double all[] = { 8, 9, 10, 11, 12, 14, 16, 20 }, quick[] = { 8, 10, 14 };
+    std::vector<std::vector<int>> t;
+    if (full) conditionTable(all, 8, 60, &t); else conditionTable(quick, 3, 60, &t);
 }
 
 static void testNoise() {
@@ -364,12 +505,104 @@ static int writeClip(const char* path, double fs) {
     return 0;
 }
 
+/** ★ A REAL recording of ONE channel: a 16-bit stereo IQ WAV (I left, Q right) at ≥ 38.4 kS/s, the channel `offHz` from
+ *  its centre. Shifted, cut to ±7/14 kHz as the front end does, then one GmskDemod. Prints each frame. */
+static int replayWav(const char* path, double offHz) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+    std::vector<uint8_t> all; uint8_t buf[65536]; size_t got;
+    while ((got = std::fread(buf, 1, sizeof buf, f)) > 0) all.insert(all.end(), buf, buf + got);
+    std::fclose(f);
+    if (all.size() < 44 || std::memcmp(all.data(), "RIFF", 4) != 0) { std::printf("not a WAV\n"); return 1; }
+    size_t p = 12; uint32_t rate = 0; int ch = 0, bitsPer = 0; size_t dataAt = 0, dataLen = 0;
+    while (p + 8 <= all.size()) {
+        const uint32_t len = uint32_t(all[p + 4]) | uint32_t(all[p + 5]) << 8 | uint32_t(all[p + 6]) << 16 | uint32_t(all[p + 7]) << 24;
+        if (!std::memcmp(&all[p], "fmt ", 4)) { ch = all[p + 10]; rate = uint32_t(all[p + 12]) | uint32_t(all[p + 13]) << 8 | uint32_t(all[p + 14]) << 16; bitsPer = all[p + 22]; }
+        if (!std::memcmp(&all[p], "data", 4)) { dataAt = p + 8; dataLen = std::min<size_t>(len, all.size() - p - 8); break; }
+        p += 8 + len + (len & 1);
+    }
+    if (ch != 2 || bitsPer != 16 || !dataAt) { std::printf("need 16-bit stereo IQ (got %d ch, %d bits)\n", ch, bitsPer); return 1; }
+    const size_t n = dataLen / 4;
+    std::vector<vibedsp::cf32> iq(n);
+    for (size_t i = 0; i < n; ++i) {
+        const int16_t a = int16_t(all[dataAt + 4 * i] | all[dataAt + 4 * i + 1] << 8), b = int16_t(all[dataAt + 4 * i + 2] | all[dataAt + 4 * i + 3] << 8);
+        iq[i] = vibedsp::cf32(a / 32768.f, b / 32768.f);
+    }
+    const double fs = rate;
+    if (const char* nz = std::getenv("AIS_WAV_NOISE")) {   // ★ white noise added (σ per dimension, full scale = 1): real bursts made weaker
+        Rng rng(11); const float sg = float(std::atof(nz));
+        for (auto& z : iq) { float a, b; rng.gauss2(a, b); z += vibedsp::cf32(a * sg, b * sg); }
+    }
+    vibedsp::NCO nco(offHz / fs);
+    std::vector<vibedsp::cf32> m(n + 16), c(n + 16);
+    nco.mix(iq.data(), m.data(), int(n));
+    vibedsp::FirDecimator fir(vibedsp::designLowpass(0.5 * (7e3 + 14e3) / fs, 7e3 / fs, true), 1);
+    const int k = fir.process(m.data(), int(n), c.data());
+    vibeais::GmskDemod d(fs);
+    int frames = 0, rep = 0; std::set<uint32_t> ships;
+    d.feed(reinterpret_cast<const cf*>(c.data()), k, [&](const vibeais::RawFrame& fr) {
+        vibeais::Msg msg; if (!vibeais::decode(fr.bytes, msg)) return;
+        ++frames; if (fr.repaired) ++rep; ships.insert(msg.mmsi);
+        if (std::getenv("AIS_DEBUG")) std::printf("   type %2d MMSI %09u%s %s\n", msg.type, msg.mmsi, fr.repaired ? " (repaired)" : "", msg.name.c_str());
+    });
+    std::printf("%s: %.1f s at %.0f S/s, channel at %+.0f Hz: %d frames (%d repaired), %zu stations\n", path, n / fs, fs, offHz, frames, rep, ships.size());
+    return 0;
+}
+
+/** ★ A REAL capture of BOTH channels: rtl_sdr's unsigned 8-bit IQ, centred on 162.000 MHz, at `rate` (≥ 96 kS/s) —
+ *  the whole front end (AFC included), as the server runs it. Prints the frames, the stations and where the AFC settled. */
+static int replayCu8(const char* path, double rate) {
+    FILE* f = std::fopen(path, "rb");
+    if (!f) { std::printf("cannot open %s\n", path); return 1; }
+    vibeais::Front fe(rate, vibeais::kCentreHz);
+    std::vector<uint8_t> u(size_t(rate) * 2);
+    std::vector<cf> iq;
+    int frames = 0, perCh[2] = {0, 0}; std::set<uint32_t> ships; double secs = 0;
+    size_t got;
+    while ((got = std::fread(u.data(), 1, u.size(), f)) >= 2) {
+        iq.resize(got / 2);
+        for (size_t i = 0; i < iq.size(); ++i) iq[i] = cf((u[2 * i] - 127.5f) / 127.5f, (u[2 * i + 1] - 127.5f) / 127.5f);
+        fe.feed(iq.data(), iq.size(), [&](int c, const vibeais::RawFrame& fr) {
+            vibeais::Msg msg; if (!vibeais::decode(fr.bytes, msg)) return;
+            ++frames; ++perCh[c & 1]; ships.insert(msg.mmsi);
+            if (std::getenv("AIS_DEBUG")) std::printf("   %6.2f s  %c  type %2d MMSI %09u %s\n", secs, c ? 'B' : 'A', msg.type, msg.mmsi, msg.name.c_str());
+        });
+        secs += iq.size() / rate;
+    }
+    std::fclose(f);
+    std::printf("%s: %.1f s at %.0f S/s: %d frames (A %d, B %d), %zu stations, AFC %+.0f Hz (%.1f ppm)\n", path, secs, rate, frames,
+                perCh[0], perCh[1], ships.size(), fe.afcHz(), fe.afcHz() / 162.0);
+    return 0;
+}
+
 int main(int argc, char** argv) {
+    if (argc >= 4 && std::strcmp(argv[1], "--cu8") == 0) return replayCu8(argv[2], std::atof(argv[3]));
+    if (argc >= 3 && std::strcmp(argv[1], "--wav") == 0) {
+        for (int i = 4; i < argc; ++i) { auto& t = vibeais::tuning(); if (!std::strcmp(argv[i], "nodisc")) t.disc = false; if (!std::strcmp(argv[i], "disc")) t.disc = true; if (!std::strcmp(argv[i], "nocoh")) t.coh = false; }
+        return replayWav(argv[2], argc >= 4 ? std::atof(argv[3]) : 0);
+    }
     if (argc >= 4 && std::strcmp(argv[1], "--write-clip") == 0) return writeClip(argv[2], std::atof(argv[3]));
+    // ★ experiment switches: nodisc nocoh noafc W=<bits> Wf=<bits> (after the mode word)
+    for (int i = 2; i < argc; ++i) {
+        auto& t = vibeais::tuning();
+        if (!std::strcmp(argv[i], "nodisc")) t.disc = false;
+        else if (!std::strcmp(argv[i], "disc")) t.disc = true;
+        else if (!std::strcmp(argv[i], "nocoh")) t.coh = false;
+        else if (!std::strcmp(argv[i], "noafc")) t.afc = false;
+        else if (!std::strncmp(argv[i], "W=", 2)) t.W = std::atoi(argv[i] + 2);
+        else if (!std::strncmp(argv[i], "Wf=", 3)) t.Wf = std::atoi(argv[i] + 3);
+        else if (!std::strncmp(argv[i], "ph=", 3)) t.cohPhases = std::atoi(argv[i] + 3);
+        else if (!std::strncmp(argv[i], "dph=", 4)) t.discPhases = std::atoi(argv[i] + 4);
+    }
+    if (argc >= 2 && std::strcmp(argv[1], "--conditions") == 0) { testConditions(true); return 0; }
+    if (argc >= 2 && std::strcmp(argv[1], "--cpu") == 0) { testCpu(); return 0; }
+    if (argc >= 2 && std::strcmp(argv[1], "--noise") == 0) { testNoise(); return 0; }
+    if (argc >= 2 && std::strcmp(argv[1], "--sweep") == 0) { testReceiver(); return 0; }
     testHdlc();
     testPublished();
     testEncoded();
     testReceiver();
+    testConditions(false);   // ★ the full table: test-ais --conditions
     testNoise();
     testService();
     testCpu();

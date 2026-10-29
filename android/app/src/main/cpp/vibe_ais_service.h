@@ -115,6 +115,7 @@ public:
         sink_ = std::move(sink);
         hwCentre_ = hwCentreHz; rate_ = rateHz;
         fe_.reset(new Front(rateHz, hwCentreHz));
+        fe_->seedAfc(afcHz_);   // ★ the crystal's error from the last run (Front::afcStep_): no settling again
         queue_.clear(); queued_ = 0; dropped_ = 0;
         if (!keepList) { t0_ = std::chrono::steady_clock::now(); ships_.clear(); msgs_ = 0; perCh_[0] = perCh_[1] = 0; repaired_ = 0; other_ = 0; safety_.clear(); rateWin_.clear(); }
         cap_.reset(rateHz, now());
@@ -151,7 +152,7 @@ public:
     /** ★ For tests and the offline tool: one frame as the worker takes it (channel 0/1), with no thread. */
     void acceptForTest(int ch, const RawFrame& f) { std::lock_guard<std::mutex> lk(mtx_); accept_(ch, f, now()); }
 
-    /** {"type":"ais", "centre", "rate", "now", "msgs", "msgRate", "chA", "chB", "repaired", "dropped", "capture", "noise",
+    /** {"type":"ais", "centre", "rate", "now", "msgs", "msgRate", "chA", "chB", "repaired", "dropped", "capture", "noise", "afc",
      *  "vessels":[…], "safety":[…]} */
     std::string report() {
         std::lock_guard<std::mutex> lk(mtx_);
@@ -161,10 +162,10 @@ public:
         const double span = std::min(60.0, std::max(1.0, t));
         char b[400];
         std::snprintf(b, sizeof b, "{\"type\":\"ais\",\"centre\":%.0f,\"rate\":%.0f,\"now\":%.1f,\"msgs\":%llu,\"msgRate\":%.2f,"
-                      "\"chA\":%llu,\"chB\":%llu,\"repaired\":%llu,\"other\":%llu,\"dropped\":%llu,\"capture\":%d,\"noise\":%.1f,\"vessels\":[",
+                      "\"chA\":%llu,\"chB\":%llu,\"repaired\":%llu,\"other\":%llu,\"dropped\":%llu,\"capture\":%d,\"noise\":%.1f,\"afc\":%.0f,\"vessels\":[",
                       kCentreHz, rate_, t, (unsigned long long)msgs_, rateWin_.size() / span * 60.0,
                       (unsigned long long)perCh_[0], (unsigned long long)perCh_[1], (unsigned long long)repaired_,
-                      (unsigned long long)other_, (unsigned long long)dropped_, cap_.percent(t), health_.noiseDb);
+                      (unsigned long long)other_, (unsigned long long)dropped_, cap_.percent(t), health_.noiseDb, afcHz_);
         std::string o = b;
         std::vector<const Vessel*> v;
         for (const auto& kv : ships_) v.push_back(&kv.second);
@@ -215,7 +216,9 @@ private:
                 size_t clip = 0, seen = 0;
                 for (size_t i = 0; i < blk.size(); i += 4, ++seen) if (std::fabs(blk[i].real()) > 0.93f || std::fabs(blk[i].imag()) > 0.93f) ++clip;
                 fe->feed(blk.data(), blk.size(), [&](int c, const RawFrame& f) { got.emplace_back(c, f); });
+                const double afc = fe->afcHz();
                 lk.lock();
+                afcHz_ = afc;
                 clipN_ += clip; clipSeen_ += seen;
                 const double t = now();
                 std::vector<vibestation::Heard> heard;
@@ -356,6 +359,7 @@ private:
     std::thread worker_;
     std::atomic<bool> run_{false};
     double hwCentre_ = 0, rate_ = 0;
+    double afcHz_ = 0;   ///< ★ the radio's crystal error at 162 MHz as the AFC found it (Hz; kept across restarts)
     std::unique_ptr<Front> fe_;
     std::deque<std::vector<cf>> queue_;
     size_t queued_ = 0;
