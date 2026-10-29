@@ -36,7 +36,7 @@ section: `DECODER-RESEARCH.md` §4.4.
 | `decoders/drm/drm_receiver.{h,cpp}` | The receiver — see below. |
 | `decoders/drm/drm_audio.h` | Audio super frames → access units. xHE-AAC: header CRC, directory, frames spanning super frames (incl. 0xFFE/0xFFF), CRC-16 per AU. AAC: borders and frames. Also the DRM xHE-AAC static config → standard `UsacConfig` → AudioSpecificConfig (AOT 42), and LOAS/LATM framing. |
 | `decoders/drm/drm_tx.h` | **Test transmitter** (FAC/SDC/MSC from the standard's own arithmetic, OFDM at 24 kHz) and annex B's channels 1–5 (WSSUS, Gaussian Doppler), plus frequency offset, clock ppm and AWGN. Tests and bench only. |
-| `vibe_drm_audiodec.h` | The decoders: DRM's AAC through FAAD2's DRM build in process (every server build with FAAD2 — the default and only route); xHE-AAC through FFmpeg as a process (a live Matroska stream in — the config as CodecPrivate, since FFmpeg's LOAS reader cannot take a USAC config — 48 kHz stereo out; the Linux packages bundle FFmpeg 8.1, [BUNDLED-FFMPEG.md](BUNDLED-FFMPEG.md)), AudioToolbox `kAudioFormatMPEGD_USAC` on Apple, MediaCodec on Android. Plus `canDecode()`, which gives the sentence a listener sees. |
+| `vibe_drm_audiodec.h` | The decoders: DRM's AAC through FAAD2's DRM build in process (every server build with FAAD2 — the default and only route); xHE-AAC through **libxaac in process** on every server build that links it — the Linux packages and the Mac ([LIBXAAC.md](LIBXAAC.md), `vibe_xaac.h`); builds without it fall back to FFmpeg as a process (a live Matroska stream — [BUNDLED-FFMPEG.md](BUNDLED-FFMPEG.md)) or AudioToolbox; MediaCodec on Android. Plus `canDecode()`, which gives the sentence a listener sees. |
 | `vibe_drm_listener.h` | One listener's DRM: IQ queue (2 s, oldest dropped and counted), a `vibe-drm` thread at decoder priority, the PCM buffer, the JSON report. |
 | `local_sdr_shim.cpp` | Mode `drm` (`paramsFor`, `vsModeKnown`, the offer list). Wiring: the RxPipeline `Callbacks::iq` tap per listener (`clientIqCb`) and on the shared dial (`iqCb`), with `setIqMinRate(24000)`; the audio replaced in `onClientAudio` / `onAudio`; the health card's "too heavy" line. |
 
@@ -278,7 +278,7 @@ starts again on fresh ports.
 
 | Station codec | Who can decode it | Status |
 |---|---|---|
-| **xHE-AAC (USAC)** | Linux: the package's own FFmpeg 8.1 (bundled since 2026-10-29 — a distribution's is usually too old: Ubuntu 24.04 6.1, Pi OS bookworm 5.1). macOS AudioToolbox, Android 10+ where listed | **Built, NOT verified on air.** No xHE-AAC station was receivable. The transport is verified: ISO's USAC conformance streams, written by the server's own Matroska writer and decoded by the bundled FFmpeg on all five Linux architectures, match their reference decodes to ±1 LSB (`scripts/test-bundled-ffmpeg.sh`). ★ FFmpeg 8.1 does not decode USAC's eSBR tools (refused, and the listener is told) or its LPD/ACELP speech core — many real xHE-AAC stations may use them ([BUNDLED-FFMPEG.md](BUNDLED-FFMPEG.md) "Limits"). |
+| **xHE-AAC (USAC)** | Linux and Mac servers: **libxaac 0.1.14, in process** (since 2026-10-29 — [LIBXAAC.md](LIBXAAC.md)). Android 10+ MediaCodec where listed | **Built, NOT verified on air.** No xHE-AAC station was receivable. Verified: ISO's USAC conformance streams to ±1.2 LSB (SNR 66–89 dB), and USAC SBR / switched FD-LPD / ACELP / MPS 2-1-2 streams against macOS AudioToolbox (median block SNR 70–97 dB; ACELP-only 51 dB, float rounding) — `test-drm-xaac`. The FFmpeg 8.1 bundled before produced garbage on every USAC stream with SBR. |
 | **DRM AAC / HE-AAC** (ER AAC Scalable, object type 20, with HCR + VCB11 and 960-sample frames; SBR stored backwards) | **None of the platform decoders.** FFmpeg 9.0.1 says "AAC data resilience (flags 5) is not implemented". AudioToolbox refuses the format. | Frames are found and counted. The box says why there is no sound. |
 
 **Radio Romania International (all its DRM tested) uses DRM AAC, 12 kHz, mono, ~11.6 kbit/s.** Most of the older
@@ -377,7 +377,7 @@ interleaver):
 ## What remains
 
 1. **The AAC repack.** Without it, the older stations — RRI among them — have no sound.
-2. **xHE-AAC verified on a real station**, on the bundled FFmpeg 8.1 and AudioToolbox, including whether the SDC's rate is
+2. **xHE-AAC verified on a real station**, on libxaac (Linux and Mac servers) and MediaCodec (Android), including whether the SDC's rate is
    `usacSamplingFrequency` (assumed). The xHE frames-per-super-frame count will settle it.
 3. **Multipath under fast fading** — channels 4/5 mostly fixed 2026-10-29 (the blanker); 64-QAM on channel 5 still
    loses ~20 % of frames in bursts. Diffuse night-time scatter (5970 kHz) is beyond any guard-interval receiver.
