@@ -651,15 +651,16 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const txLit = !!tc && (tc.active || tc.selected);
   const transcribeKey = tc ? (
     <NavItem key="transcribe" onPress={tc.onToggle}>{(navFocused, navRef) => pt.metal ? (
-      <MetalKey navRef={navRef} focused={navFocused} label="TRANSCRIBE" active={txLit} pip onPress={tc.onToggle} />
+      <MetalKey navRef={navRef} focused={navFocused} label="T'SCRIBE" active={txLit} pip onPress={tc.onToggle} />
     ) : (
     <TouchableOpacity ref={navRef as any}
       style={[st.btn, { borderColor: txLit ? dec : t.btnBorder, paddingVertical: 10 },
               tc.active && { backgroundColor: decBg },
               navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
-      onPress={tc.onToggle} activeOpacity={0.8}>
+      onPress={tc.onToggle} activeOpacity={0.8} accessibilityRole="button" accessibilityLabel="Transcribe">
+      {/* ★ T'SCRIBE (Stuart, 2026-10-29): TRANSCRIBE was the widest key in VIEWS and held an SE to two a row. */}
       <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: txLit ? dec : t.btnText }]}>
-        TRANSCRIBE
+        T'SCRIBE
       </Text>
     </TouchableOpacity>
     )}</NavItem>

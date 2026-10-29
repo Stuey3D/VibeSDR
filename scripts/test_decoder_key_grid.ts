@@ -18,7 +18,7 @@ const M: KeyMetrics = { gap: 7, padX: 9, iconW: 13, iconGap: 5, slack: 6, maxCol
 const L = (w: number, icon = true): KeyLegend => ({ w, icon });
 const PANEL: KeyLegend[] = [L(42) /* ADS-B */, L(26) /* AIS */, L(30), L(26), L(30), L(84) /* SPOTS: BAND */,
   L(56) /* NAVTEX */, L(30) /* DSC */, L(50) /* WEFAX */, L(100) /* DIGITAL SPOTS */, L(20), L(28), L(36), L(36), L(40),
-  L(42), L(36) /* TIME */, L(62, false) /* SCANNER */, L(56, false) /* GALLERY */, L(80, false) /* TRANSCRIBE */];
+  L(42), L(36) /* TIME */, L(62, false) /* SCANNER */, L(56, false) /* GALLERY */, L(56, false) /* T'SCRIBE */];
 
 console.log('▶ the key size is the widest legend plus its glyph');
 ok(keyNeed(PANEL, M, false) === 100 + 13 + 5 + 18 + 6, 'beside: 100 + 13 + 5 + 2×9 + 6 = 142');
@@ -53,7 +53,7 @@ const NOW: KeyLegend[] = [L(42) /* ADS-B */, L(26) /* AIS */, L(30) /* DAB */, L
   L(73) /* DIGI BAND */, L(52) /* NAVTEX */, L(30) /* DSC */, L(45) /* WEFAX */, L(56) /* SITOR-A */, L(80) /* DIGI SPOTS */,
   L(20), L(28), L(36), L(36), L(40), L(42), L(33) /* TIME */, L(58) /* ADV RDS */, L(68) /* HFDL MAP */, L(65) /* DIGI MAP */,
   L(54) /* CW MAP */, L(29) /* MAP */, L(38) /* FILES */, L(62, false) /* SCANNER */, L(59, false) /* GALLERY */,
-  L(84, false) /* TRANSCRIBE */];
+  L(60, false) /* T'SCRIBE */];
 const OLD: KeyLegend[] = NOW.map((k) => (k.w === 80 ? L(104) : k.w === 73 ? L(88) : k.w === 58 ? L(103) : k));
 for (const [w, name] of [[SE, 'SE / mini'], [PRO, '6.1" phone'], [MAX, 'Pro Max']] as const) {
   const g = decoderKeyGrid(NOW, w, M), o = decoderKeyGrid(OLD, w, M);

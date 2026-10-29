@@ -402,9 +402,10 @@ console.log('the card says the mode the screen shows (Stuart 2026-10-28: "i am i
      'the screen hands the card cardMode, never the bare status.mode');
   ok(!/mode: String\(abDoor\.mode\), endsAt/.test(sdr), '…and so does "Listen to a 2nd server"');
   const card = readFileSync('src/components/DualServerCard.tsx', 'utf8');
-  ok(/opacity=\{icon === 'L' \? 1 : EAR_FAINT\} flip \/>/.test(card) && /opacity=\{icon === 'R' \? 1 : EAR_FAINT\} \/>/.test(card)
+  ok(/opacity=\{ear === 'both' \|\| \(ear !== 'off' && icon === 'L'\) \? 1 : EAR_FAINT\} flip \/>/.test(card)
+     && /opacity=\{ear === 'both' \|\| \(ear !== 'off' && icon === 'R'\) \? 1 : EAR_FAINT\} \/>/.test(card)
      && Number((card.match(/const EAR_FAINT = ([\d.]+)/) ?? [])[1]) >= 0.3,
-     'stereo: a speaker per ear, the other server\'s FAINT but visible (Stuart: "a little faint speaker for the opposite channel")');
+     'stereo: a speaker per ear, the other server\'s FAINT but visible (Stuart: "a little faint speaker for the opposite channel"); both lit when centred, both faint when silent (Stuart 2026-10-29: "show both when it is in both ears")');
 }
 
 

@@ -415,6 +415,15 @@ function watchLive(on: boolean) {
 
 /** Tell the two native voices where each server is now. On a pairing change, a mute, or a stream stopping or coming
  *  back — the native side glides. */
+/** Where a voice is heard: one ear, both ears (centred), or not at all (zero gain). */
+export type DualEar = 'L' | 'R' | 'both' | 'off';
+function earOf(v: { pos: number; gain: number }): DualEar {
+  if (!(v.gain > 0)) return 'off';
+  return Math.abs(v.pos - 0.5) < 0.05 ? 'both' : v.pos < 0.5 ? 'L' : 'R';
+}
+let lastEars: [DualEar, DualEar] = ['L', 'R'];
+/** The ear the voice of side `index` (0 = server 1) is in now — the card draws this. */
+export function dualEar(index: 0 | 1): DualEar { return lastEars[index]; }
 function pushMix() {
   if (!Dual?.setNativeMix) return;
   if (state.phase === 'picking') {
@@ -435,6 +444,13 @@ function pushMix() {
                           s1Alive: !!s1 && !s1.ended, s2Alive: !!s2 && !s2.ended,
                           s1Muted: !!s1?.muted, s2Muted: !!s2?.muted, s1Audio: audio(s1), s2Audio: audio(s2) });
   const tgt = [t.s1, t.s2];
+  // ★ What each card's ear icon shows (Stuart, 2026-10-29: "show both when it is in both ears") — from the SAME targets
+  //   the voices get, so the icon can never disagree with what is heard.
+  const ears = tgt.map((v) => earOf(v)) as [DualEar, DualEar];
+  if (ears[0] !== lastEars[0] || ears[1] !== lastEars[1]) {
+    lastEars = ears;
+    setTimeout(() => subs.forEach((f) => { try { f(); } catch { /* a listener must not stop the rest */ } }), 0);
+  }
   state.sides.forEach((s, i) => {
     if (s.transport === 'native') Dual.setNativeMix?.(tgt[i].pos, tgt[i].gain, true);
     else Dual.setAuxMix?.(tgt[i].pos, tgt[i].gain);

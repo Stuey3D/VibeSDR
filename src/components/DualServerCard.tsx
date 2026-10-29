@@ -31,7 +31,7 @@ import { EDGE_TAB_W, edgeChipGeometry } from './edgeChipGeometry';
 import { useIslandSide } from '../hooks/useIslandSide';
 import { screenNavRef } from './ScreenNav';
 import { bookmarkFreqLabel } from '../utils/bookmarkName';
-import { answerStillHere, dualLevels, setDualBalance, setSideMuted, useDual } from '../services/dualServer';
+import { answerStillHere, dualEar, dualLevels, setDualBalance, setSideMuted, useDual } from '../services/dualServer';
 import { bgSide, countdownStage, earIcon, fmtLeft, shouldPopOut } from '../services/dualMix';
 
 /** A server's name at a slider's end: the left end is server 1 (the left ear), the right end server 2. */
@@ -76,6 +76,9 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   const bg = st.fg === myId ? bgSide(st) : null;
   const index = bg ? (st.sides.indexOf(bg) as 0 | 1) : 0;
   const icon = earIcon(st.output, index);
+  // ★ Centred in both ears (the other server has nothing to give, or the balance is fully this way) or silent: the
+  //   pair shows it — both lit, or both faint (Stuart, 2026-10-29: "show both when it is in both ears").
+  const ear = dualEar(index);
 
   /* ── the clock ── */
   const [now, setNow] = useState(() => Date.now());
@@ -227,7 +230,7 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   const tabColour = ended ? '#ff6b6b' : asking ? STAGE_TAB[1] : colour;
   const freq = bg.freqHz > 0 ? bookmarkFreqLabel(bg.freqHz) : '';
   const mode = (bg.mode || '').toUpperCase();
-  const earA11y = icon === 'mono' ? 'in both ears'
+  const earA11y = icon === 'mono' || ear === 'both' ? 'in both ears' : ear === 'off' ? 'silent — the server in front has both ears'
     : icon === 'L' ? 'in your left ear, the server in front in your right' : 'in your right ear, the server in front in your left';
 
   const onPress = () => {
@@ -263,8 +266,8 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
                    *  and all: at 0.22 with no waves it was a smudge nobody saw on a phone. Stereo only: in Mono both
                    *  servers are in both ears and the single lamp speaker above says so. */
                   <View style={s.ears}>
-                    <Speaker colour={colour} opacity={icon === 'L' ? 1 : EAR_FAINT} flip />
-                    <Speaker colour={colour} opacity={icon === 'R' ? 1 : EAR_FAINT} />
+                    <Speaker colour={colour} opacity={ear === 'both' || (ear !== 'off' && icon === 'L') ? 1 : EAR_FAINT} flip />
+                    <Speaker colour={colour} opacity={ear === 'both' || (ear !== 'off' && icon === 'R') ? 1 : EAR_FAINT} />
                   </View>}
               <Text style={[s.name, { color: colour }]} numberOfLines={1}>{bg.name}</Text>
             </View>
