@@ -20,6 +20,18 @@ import React from 'react';
 import { Alert, Share, Text, TouchableOpacity } from 'react-native';
 import type { StyleProp, TextStyle, ViewStyle } from 'react-native';
 import { buildDiagnostics } from '../services/diagnostics';
+import { readNativeDeviceClass } from '../services/deviceClass';
+import { parseDeviceClass } from '../constants/transparency';
+
+/** ★★ ON A MAC THE ALERT DOES NOT SCROLL (Stuart, 2026-10-29, build 520 on his MacBook: "locked up the app as I cannot
+ *  scroll the log and there is not closed button" — he had to force quit). The iPad app on a Mac draws the alert as a
+ *  fixed panel: a 15 000-character report pushes Cancel / Copy / Share… off the screen. There the dialog shows the
+ *  report's head and says the whole of it goes out through Copy and Share…; iPhone, iPad and Android keep the whole
+ *  report (their alerts scroll — and people photograph them). */
+const MAC_PREVIEW_CHARS = 1200;
+function onMac(): boolean {
+  try { return parseDeviceClass(readNativeDeviceClass()).isMac; } catch { return false; }
+}
 
 export const EXPORT_LOGS_LABEL = 'Export logs…';
 const DISCORD_LIMIT = 2000;
@@ -49,8 +61,11 @@ export async function exportLogs(): Promise<void> {
     `${size} No PINs, passwords or location are included.\n\n`
       // ★ The WHOLE report, never a preview (Stuart, 2026-10-10: "I'd rather have too much than too little").
       //   It was cut at 900 characters, and people PHOTOGRAPH this dialog — Chicopee's photo stopped mid-report.
-      //   Both platforms' alerts scroll a long message.
-      + report,
+      //   iPhone/iPad and Android alerts scroll a long message; a Mac's does not (MAC_PREVIEW_CHARS above).
+      + (onMac() && n > MAC_PREVIEW_CHARS
+        ? report.slice(0, MAC_PREVIEW_CHARS) + '\n\n… the first ' + MAC_PREVIEW_CHARS.toLocaleString()
+          + ' characters. Copy or Share… sends the whole report.'
+        : report),
     [
       { text: 'Cancel', style: 'cancel' },
       {

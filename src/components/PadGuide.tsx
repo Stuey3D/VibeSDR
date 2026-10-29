@@ -19,7 +19,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, G, Path, Rect, Text as SvgText } from 'react-native-svg';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../contexts/ThemeContext';
 import { useRepeatingKeys, noteTouchInteraction } from './PanelNav';
 import {
@@ -71,7 +71,10 @@ export default function PadGuide() {
   }, []);
 
   if (!open) return null;
-  return <GuideModal layout={layout} setLayout={setLayout} onClose={close} />;
+  // ★★ ITS OWN SafeAreaProvider (2026-10-29, build 520: "Controller guide hit an error and is restarting" on the iPad,
+  //    iPhone and Mac — "No safe area value available"). The guide is mounted at the ROOT beside PadNotice, outside the
+  //    app's provider, so useSafeAreaInsets threw on every open. Same fix as RecordingsOverlay.
+  return <SafeAreaProvider><GuideModal layout={layout} setLayout={setLayout} onClose={close} /></SafeAreaProvider>;
 }
 
 function GuideModal({ layout, setLayout, onClose }: {
