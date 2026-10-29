@@ -12108,6 +12108,7 @@ function initDecoders(host: string, auth: AuthState) {
   for (const b of Array.from(document.querySelectorAll('#decodersPanel [data-dec]')) as HTMLElement[]) addModeIcon(b, b.dataset.dec || '');
   for (const b of Array.from(document.querySelectorAll('#galFilter [data-kind]')) as HTMLElement[]) addModeIcon(b, b.dataset.kind || '');
   for (const id of ['spotsBtn', 'spotsBandBtn']) { const b = document.getElementById(id); if (b) addModeIcon(b, 'spots'); }
+  { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
       const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'jtty';

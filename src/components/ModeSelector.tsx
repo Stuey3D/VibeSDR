@@ -169,6 +169,17 @@ function OptRow({ children }: { children: React.ReactNode }) {
  *   the D-pad reaches them between the key's row and the next.
  */
 const KEY_GAP = 7;
+/* ★★ THE SPOTS LEGENDS (Stuart, 2026-10-29: "dont want super big buttons if we can help it" — "a huge button for DSC
+ *  would look weird"). Every key is the widest legend's size, and DIGITAL SPOTS (104 pt) held phones to two a row:
+ *  DIGI SPOTS (80) — and Band, which was then the widest at SPOTS: BAND (88), says DIGI BAND (73) beside it. */
+const SPOTS_LEGEND = 'DIGI SPOTS';
+const BAND_LEGEND = 'DIGI BAND';
+/** An UberSDR's own maps, as VIEWS keys: the map's kind (onServerMap), its legend and its glyph (utils/modeIcons). */
+const SERVER_MAPS: ReadonlyArray<{ kind: 'hfdl' | 'digi' | 'cw'; label: string; icon: string; a11y: string }> = [
+  { kind: 'hfdl', label: 'HFDL MAP', icon: 'hfdl', a11y: 'HFDL map — aircraft heard over HF data link' },
+  { kind: 'digi', label: 'DIGI MAP', icon: 'digi', a11y: 'The server\'s map of digital spots' },
+  { kind: 'cw',   label: 'CW MAP',   icon: 'cw',   a11y: 'The server\'s map of CW spots' },
+];
 const TAB_PAD = 4;
 const TAB_R = 8;
 function KeyGrid({ items, grid, openId, options, shade, style }: {
@@ -545,10 +556,15 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const secLbl = pt.metal ? { ...engraveText(pt), fontWeight: '700' as const } : { color: t.sectionColor, fontFamily: t.font };
   const rule = { borderTopColor: pt.metal ? pt.rule : pt.ink.divider };
   const { height: winH, width: winW } = useWindowDimensions();
-  // ★ "ADV RDS" was an abbreviation forced by nothing — the button spans the whole row and has
-  //   room to spare. Only the very narrowest phones need the short form (Stuart, 2026-07-28).
-  const advRdsLabel = winW >= 340 ? 'ADVANCED RDS' : 'ADV RDS';
+  /* ★★ "ADV RDS" (as the web's key has always said). It was ADVANCED RDS where the button spanned a whole row (Stuart,
+   *  2026-07-28); since every key is ONE size (utils/decoderKeyGrid), the full legend was the widest on the panel and held
+   *  every phone to two keys a row (2026-10-29: "DIGI SPOTS" so phones fit three — ADVANCED RDS was as wide as DIGITAL SPOTS). */
+  const advRdsLabel = 'ADV RDS';
   const txShown = !!transcribeControls && !isBlocked('transcribe');
+  /* ★★ THE SERVER'S OWN MAPS (an UberSDR's HFDL / digital spots / CW spots) are VIEWS like any other (Stuart,
+   *  2026-10-29) — HFDL only where it is not already in HF Aviation. */
+  const serverMapKeys = showServerMaps && onServerMap
+    ? SERVER_MAPS.filter((m) => !(m.kind === 'hfdl' && hfdlInBands)) : [];
   /* ★★★ ONE KEY SIZE FOR THE WHOLE PANEL (Stuart, 2026-10-29 — utils/decoderKeyGrid). Every key the DECODERS, VIEWS and
    *  spots sections can draw (every band tab's too, so switching tabs never resizes them) is listed with its legend; the
    *  legends are MEASURED in the keys' own font (the hidden row below) and the panel's own width is measured where it is
@@ -563,7 +579,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (decoderControls.dabAvail) addLegend('DAB', 'dab');
     if (ismShown) addLegend('ISM', 'ism');
     if (ndbShown) addLegend('NDB', 'ndb');
-    if (bandInWhole) addLegend('SPOTS: BAND', 'spotsband');
+    if (bandInWhole) addLegend(BAND_LEGEND, 'spotsband');
     for (const k of clientDecs) addLegend(k.toUpperCase(), k);
     if (cwShown) addLegend('CW', 'cw');
     if (pskShown) addLegend('PSK', 'psk');
@@ -571,16 +587,18 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     if (dscShown) addLegend('DSC', 'dsc');
     if (aprsShown) addLegend('APRS', 'aprs');
     if (advRdsShown) addLegend(advRdsLabel, 'rds');
-    if (spotsInBands) addLegend('DIGITAL SPOTS', 'spots');
+    if (spotsInBands) addLegend(SPOTS_LEGEND, 'spots');
     if (hfdlInBands) addLegend('HFDL MAP', 'hfdl');
     if (scanShown) addLegend('SCANNER');
   }
-  if (spotsShown && spotsControls?.showMap) addLegend('🗺 MAP');
+  if (spotsShown && spotsControls?.showMap) addLegend('MAP', 'map');
+  if (owrxPages) { addLegend('MAP', 'map'); addLegend('FILES', 'files'); }
+  for (const m of serverMapKeys) addLegend(m.label, m.icon);
   if (decoderControls?.galleryAvail) addLegend('GALLERY');
   if (txShown) addLegend('TRANSCRIBE');
   if (spotsShown && spotsControls) {
-    if (!spotsInBands) addLegend(spotsControls.band ? 'SPOTS: SINGLE' : 'DIGITAL SPOTS', 'spots');
-    if (spotsControls.band && !bandInWhole) addLegend('SPOTS: BAND', 'spotsband');
+    if (!spotsInBands) addLegend(spotsControls.band ? 'SPOTS: SINGLE' : SPOTS_LEGEND, 'spots');
+    if (spotsControls.band && !bandInWhole) addLegend(BAND_LEGEND, 'spotsband');
     if (spotsControls.showCwStt) { addLegend('CW SPOTS', 'cw'); addLegend('STT'); }
   }
   const keyFont = pt.metal
@@ -869,7 +887,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const sc = spotsControls!;
     // ★ V12: where Band exists the key says which it is — SINGLE (the modes at your dial) beside BAND
     const lit = sc.band ? !!sc.singleOn : sc.spotsKind === 'digi';
-    const label = sc.band && !inBands ? 'SPOTS: SINGLE' : 'DIGITAL SPOTS';
+    const label = sc.band && !inBands ? 'SPOTS: SINGLE' : SPOTS_LEGEND;
     const dim = inBands && dimOf('spots', lit) ? DIM : null;
     return (
       <NavItem key="spots" onPress={() => sc.onSpotsToggle('digi')}>{(nf, nr) => pt.metal ? (
@@ -886,7 +904,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       </TouchableOpacity>)}</NavItem>
     );
   };
-  /** ★ The HFDL map (UberSDR's aircraft over HF) — in HF Aviation; the SERVER MAPS keep DIGITAL and CW. */
+  /** ★ The HFDL map (UberSDR's aircraft over HF) — in HF Aviation; VIEWS keeps the DIGI and CW maps (and HFDL where Aviation is not drawn). */
   const hfdlKey = () => (
     <NavItem key="hfdl" onPress={() => onServerMap!('hfdl')}>{(nf, nr) => pt.metal ? (
       <MetalKey navRef={nr} focused={nf} label="HFDL MAP" onPress={() => onServerMap!('hfdl')} iconId="hfdl" stack={stackIco}
@@ -906,7 +924,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     const b = spotsControls!.band!;
     return (
       <NavItem key="spotsband" onPress={b.onPress}>{(nf, nr) => pt.metal ? (
-        <MetalKey navRef={nr} focused={nf} label="SPOTS: BAND" active={b.on} pip onPress={b.onPress} iconId="spotsband" stack={stackIco}
+        <MetalKey navRef={nr} focused={nf} label={BAND_LEGEND} active={b.on} pip onPress={b.onPress} iconId="spotsband" stack={stackIco}
           style={!b.ok ? { opacity: 0.45 } : undefined} />
       ) : (
       <TouchableOpacity ref={nr as any} accessibilityLabel={b.ok ? `Digital spots, band mode. ${b.hint}` : `Band spots, unavailable: ${b.hint}`}
@@ -917,7 +935,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 nf && { borderColor: focusC.ring, borderWidth: 2 }]}
         onPress={b.onPress} activeOpacity={0.8}>
         <ModeLabel id="spotsband" stack={stackIco} numberOfLines={1} color={b.on ? dec : t.btnText}
-                   style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: b.on ? dec : t.btnText }]}>SPOTS: BAND</ModeLabel>
+                   style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: b.on ? dec : t.btnText }]}>{BAND_LEGEND}</ModeLabel>
       </TouchableOpacity>)}</NavItem>
     );
   };
@@ -1374,18 +1392,32 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /* ★★★ VIEWS (Stuart, 2026-10-29: "Gallery and Transcribe need to move and live with the Map View as these are on device
    *  items anyway" — "Views is fine"): the MAP of what has been spotted, the server's GALLERY, and TRANSCRIBE (on this
    *  device). The same uniform keys; TRANSCRIBE's options pop out of it like a decoder's. */
-  const mapKey = spotsShown && spotsControls?.showMap ? (
-    <NavItem key="map" onPress={() => spotsControls.onSpotsMap?.()}>{(nf, nr) => pt.metal ? (
-      <MetalKey navRef={nr} focused={nf} label="🗺 MAP" onPress={() => spotsControls.onSpotsMap?.()} />
+  /** One VIEWS key: a plain action (no pip — it opens a view), its line glyph beside the legend like every other key. */
+  const viewKey = (id: string, label: string, iconId: string | null, onPress: () => void, a11y?: string) => (
+    <NavItem key={id} onPress={onPress}>{(nf, nr) => pt.metal ? (
+      <MetalKey navRef={nr} focused={nf} label={label} onPress={onPress} iconId={iconId ?? undefined} stack={stackIco} />
     ) : (
-    <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
-                      nf && { borderColor: focusC.ring, borderWidth: 2 }]}
-      onPress={() => spotsControls.onSpotsMap?.()} activeOpacity={0.8}>
-      <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
+    <TouchableOpacity ref={nr as any} accessibilityLabel={a11y}
+      style={[st.btn, { borderColor: t.btnBorder, paddingVertical: iconId ? icoPad : 10 },
+              nf && { borderColor: focusC.ring, borderWidth: 2 }]}
+      onPress={onPress} activeOpacity={0.8}>
+      {iconId
+        ? <ModeLabel id={iconId} stack={stackIco} numberOfLines={1} color={t.btnText}
+                     style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>{label}</ModeLabel>
+        : <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>{label}</Text>}
     </TouchableOpacity>)}</NavItem>
-  ) : null;
+  );
+  /* ★★ Every map and picture page joins VIEWS as a uniform key (Stuart, 2026-10-29): the MAP of what has been spotted, an
+   *  OpenWebRX's MAP and FILES (its combined map and its decoded-image gallery), an UberSDR's own HFDL / DIGI / CW maps,
+   *  the server's GALLERY and TRANSCRIBE. The colour map and picture emoji became line glyphs like every other key's. */
   const viewItems = [
-    { id: 'map', node: mapKey },
+    { id: 'map', node: spotsShown && spotsControls?.showMap
+        ? viewKey('map', 'MAP', 'map', () => spotsControls.onSpotsMap?.(), 'Map of the spots') : null },
+    { id: 'owrxmap', node: owrxPages ? viewKey('owrxmap', 'MAP', 'map', owrxPages.onMap, 'OpenWebRX map') : null },
+    { id: 'owrxfiles', node: owrxPages
+        ? viewKey('owrxfiles', 'FILES', 'files', owrxPages.onFiles, 'OpenWebRX files — the decoded pictures') : null },
+    ...serverMapKeys.map((m) => ({ id: `srvmap-${m.kind}`, node: viewKey(`srvmap-${m.kind}`, m.label, m.icon,
+                                                                         () => onServerMap!(m.kind), m.a11y) })),
     { id: 'gallery', node: decoderControls?.galleryAvail ? galleryKey() : null },
     { id: 'transcribe', node: txShown ? transcribeKey : null },
   ].filter(v => !!v.node);
@@ -1706,8 +1738,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           </View>
         )}
 
-        {/* ★★★ VIEWS — MAP, GALLERY, TRANSCRIBE (Stuart, 2026-10-29). Drawn on every backend that has one of them (TRANSCRIBE
-            is on-device, so OpenWebRX too). */}
+        {/* ★★★ VIEWS — MAP, an OpenWebRX's MAP / FILES, an UberSDR's server maps, GALLERY, TRANSCRIBE (Stuart, 2026-10-29).
+            Drawn on every backend that has one of them (TRANSCRIBE is on-device, so OpenWebRX too). */}
         {viewItems.length > 0 && (
           <View style={[dst.decWrap, rule]} onLayout={onPanelLayout}>
             <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
@@ -1732,58 +1764,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         )}
         {legendMeasurer}
 
-        {/* OWRX MAP + FILES — relocated from the MenuSheet OPENWEBRX section. The OWRX
-            equivalent of the server maps (its combined map + the decoded-image gallery). */}
-        {owrxPages && (
-          <View style={[dst.decWrap, rule]}>
-            <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
-              OPENWEBRX
-            </Text>
-            <NavRow><View style={st.grid}>
-              <NavItem onPress={owrxPages.onMap}>{(nf, nr) => pt.metal ? (
-                <MetalKey navRef={nr} focused={nf} label="🗺 MAP" onPress={owrxPages.onMap} />
-              ) : (
-              <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
-                                nf && { borderColor: focusC.ring, borderWidth: 2 }]}
-                onPress={owrxPages.onMap} activeOpacity={0.8}>
-                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🗺 MAP</Text>
-              </TouchableOpacity>)}</NavItem>
-              <NavItem onPress={owrxPages.onFiles}>{(nf, nr) => pt.metal ? (
-                <MetalKey navRef={nr} focused={nf} label="🖼 FILES" onPress={owrxPages.onFiles} />
-              ) : (
-              <TouchableOpacity ref={nr as any} style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
-                                nf && { borderColor: focusC.ring, borderWidth: 2 }]}
-                onPress={owrxPages.onFiles} activeOpacity={0.8}>
-                <Text style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>🖼 FILES</Text>
-              </TouchableOpacity>)}</NavItem>
-            </View></NavRow>
-          </View>
-        )}
-
-        {/* SERVER MAPS — relocated from MenuSheet (§4.4). Same "what's on this signal"
-            family as the decoders, so it belongs here. Each fires MapOverlay unchanged. */}
-        {showServerMaps && onServerMap && (
-          <View style={[st.mapsWrap, rule]}>
-            <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
-              SERVER MAPS
-            </Text>
-            <NavRow><View style={st.grid}>
-              {/* ★ V12: the emoji (✈ 📡 ⊟) became the shared mode glyphs — the aircraft, the spots globe, the Morse key. */}
-              {([['hfdl', 'HFDL'], ['digi', 'DIGITAL'], ['cw', 'CW']] as const).filter(([k]) => !(k === 'hfdl' && hfdlInBands)).map(([k, label]) => (
-                <NavItem key={k} onPress={() => onServerMap(k)}>{(nf, nr) => pt.metal ? (
-                  <MetalKey navRef={nr} focused={nf} label={label} onPress={() => onServerMap(k)} iconId={k} stack={stackIco} />
-                ) : (
-                <TouchableOpacity ref={nr as any}
-                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: icoPad },
-                          nf && { borderColor: focusC.ring, borderWidth: 2 }]}
-                  onPress={() => onServerMap(k)} activeOpacity={0.8}>
-                  <ModeLabel id={k} stack={stackIco} color={t.btnText}
-                             style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>{label}</ModeLabel>
-                </TouchableOpacity>)}</NavItem>
-              ))}
-            </View></NavRow>
-          </View>
-        )}
+        {/* ★★ OWRX MAP + FILES and the SERVER MAPS were their own sections here (relocated from the MenuSheet); since
+            2026-10-29 they are VIEWS keys (viewItems), one size with the rest. */}
 
         {/* ★★ THE SIGNAL IDENTIFICATION WIKI (Stuart, 2026-10-09: "at the bottom of the demodulators a link to the main
             signal identification wiki page where a user can then search for the signal they want to identify"). Opened

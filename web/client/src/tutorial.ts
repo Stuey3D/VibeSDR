@@ -83,7 +83,7 @@ const STEPS: Step[] = [
     title: 'The demodulator button',
     body: 'The demodulator button [[@mMode]] opens the audio modes and the decoders — how you listen, '
         + 'plus things like RTTY and weather fax. In DECODERS… there, the modes that tune the radio themselves and open '
-        + 'their own view (ADS-B, AIS, DAB, ISM, NDB, DIGITAL SPOTS: BAND) come first, under TUNES THE RADIO ITSELF — they '
+        + 'their own view (ADS-B, AIS, DAB, ISM, NDB, DIGI BAND) come first, under TUNES THE RADIO ITSELF — they '
         + 'are in this menu too. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
         + '— Aviation, Maritime, Amateur, Utility or Broadcast — each with an icon. With the VFO FREE, a small red DC Spike label marks the radio\u2019s DC '
         + 'spike, and WHAT IS THE DC SPIKE? under the Signal ID Wiki link in this menu explains it.',
