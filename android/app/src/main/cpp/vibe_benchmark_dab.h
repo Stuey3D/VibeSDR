@@ -11,8 +11,8 @@
 //    (feed(): inDropped_) — flooded, a slow box would throw most of the signal away and read CHEAPER than it is.
 // ★★ DabService, not DabReceiver: the service is what the server runs — the MSC split, vibe-mp2, the PAD label
 //    scanner — and the scanner is exactly the cost the two rows separate.
-// ★ Linux decodes DAB+ AAC in an ffmpeg CHILD process, which /proc/self/task does not see. It is a small cost next
-//   to the receiver; the rows say "receiver" for that reason.
+// ★ DAB+ AAC is decoded by FAAD2 on its own thread (vibe-faad2); the rows say "receiver" because they measure the
+//   receiver's own threads.
 //
 // File: magic "VIBEBU81", double rate, double centreHz, uint32 sid (a DAB+ service in the clip), then u8 I/Q pairs.
 #pragma once

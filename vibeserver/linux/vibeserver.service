@@ -110,7 +110,7 @@ DeviceAllow=/dev/vcio_gencmd r
 # ── Further hardening (2026-10-03 security pass) ─────────────────────────────────────────────
 # ★★★ EVERY LINE BELOW WAS CHECKED AGAINST WHAT THE DAEMON ACTUALLY DOES: raw USB through libusb
 #     (/dev/bus/usb + netlink hotplug), /dev/vcio_gencmd read, CAP_SYS_NICE, children it spawns
-#     (curl, cloudflared, ffmpeg, its own radios), writes to its state dir and /etc/vibeserver,
+#     (curl, cloudflared, its own radios), writes to its state dir and /etc/vibeserver,
 #     reads of /proc/self, /proc/stat, /proc/cpuinfo and /sys cpufreq/thermal/hwmon. If a radio or
 #     a readout breaks after an upgrade, these are the lines to suspect — one at a time.
 #  ★ Unknown keys are WARNED about and skipped by an older systemd (ProtectProc= is v247+), so
@@ -134,7 +134,7 @@ ProtectKernelModules=yes
 ProtectKernelLogs=yes
 # The cgroup tree is read-only. We never move ourselves between cgroups.
 ProtectControlGroups=yes
-# No new namespaces of any kind — nothing here (or curl/cloudflared/ffmpeg) creates one.
+# No new namespaces of any kind — nothing here (or curl/cloudflared) creates one.
 RestrictNamespaces=yes
 # personality(2) is locked to the default execution domain.
 LockPersonality=yes
@@ -146,7 +146,7 @@ RestrictSUIDSGID=yes
 #    No AF_PACKET, no AF_BLUETOOTH, no raw anything.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 # ★ SystemCallFilter= is DELIBERATELY DEFERRED. @system-service would very likely be fine, but the
-#   SDRplay API is a closed binary, ffmpeg and cloudflared are spawned children, and a filter that
+#   SDRplay API is a closed binary, curl and cloudflared are spawned children, and a filter that
 #   kills one of them with SIGSYS on a box in a cupboard is exactly the "dead after upgrade with
 #   nothing saying why" failure. It needs a soak on each radio type first, not a guess.
 

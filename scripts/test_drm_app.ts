@@ -40,7 +40,7 @@ const cases: Array<[string, DrmState | null]> = [
   ['timing + label, no lock', { type: 'drm', sync: true, freq: true, frame: true, fac: true, sdc: true, label: 'Funklust' }],
   ['RRI playing via FAAD2', RRI],
   ['xHE-AAC not playable', { ...RRI, codec: 'xHE-AAC', audioRate: 24000, bitrate: 22100, playable: false, decoder: undefined,
-                             why: 'This server cannot play xHE-AAC: FFmpeg 7.1 or newer is needed.' }],
+                             why: 'This station uses xHE-AAC. This server was built without an xHE-AAC decoder, so the audio cannot be played.' }],
   ['locked, fair SNR, no codec yet', { type: 'drm', sync: true, freq: true, frame: true, fac: true, locked: true, robustness: 'A', snr: 11 }],
   ['locked, poor SNR, no meta', { type: 'drm', sync: true, freq: true, frame: true, fac: true, locked: true, snr: 4.2, offsetHz: 2 }],
   ['lang3 only', { ...RRI, language: undefined, lang3: 'deu', country: undefined, programme: undefined }],
@@ -82,7 +82,7 @@ const sigCases: Array<[string, DrmState | null]> = [
   ['re-acquiring after a loss', { type: 'drm', sync: true, freq: true, lockS: [0.8, 1.2, -1, -1, -1, -1], reacq: 2, lostWhy: 'fac', dropped: 3 }],
   ['RRI on an OLDER server (none of the new fields)', RRI],
   ['RRI, every field', NEW],
-  ['xHE-AAC not playable', { ...NEW, codec: 'xHE-AAC', sbr: undefined, ps: undefined, playable: false, decoder: undefined, why: 'FFmpeg 7.1 or newer is needed.' }],
+  ['xHE-AAC not playable', { ...NEW, codec: 'xHE-AAC', sbr: undefined, ps: undefined, playable: false, decoder: undefined, why: 'This server was built without an xHE-AAC decoder.' }],
   ['bad channel', { ...NEW, snr: 7, mscMer: 6, sdcMer: 3, delayMs: 5.1, dopplerHz: 2.4, facBad: 30, blankedPct: 12, mscQam: 64, robustness: 'B' }],
   ['mode D, not measured yet', { ...NEW, robustness: 'D', delayMs: undefined, dopplerHz: undefined }],
 ];

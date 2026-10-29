@@ -42,7 +42,7 @@ COUNTRY="${COUNTRY:-GB}"
 IMAGE_VERSION="${IMAGE_VERSION:-1}"
 # Armbian's image signing key (Igor Pecovnik) — every dl.armbian.com .asc is made with it (as image/soft66ip-dietpi).
 ARMBIAN_IMAGE_KEY="DF00FAF1C577104B50BF1D0093D6889F9F0E78D5"
-GROW_MIB=3584             # working room for NetworkManager, VibeServer, ffmpeg and the maps; shrunk again afterwards
+GROW_MIB=3584             # working room for NetworkManager, VibeServer and the maps; shrunk again afterwards
 HEADROOM_MIB=1024         # left free in root after the shrink — room for an Update in the read-only root (as the Pi)
 DATA_MIB=256              # the settings partition, never grown (as the Pi)
 SETUP_MIB=16              # ★ the small FAT partition (LABEL=VIBESETUP) an owner can reach from Windows / macOS (11.0.11)
@@ -272,7 +272,7 @@ nice -n 19 chroot "$R" /usr/bin/env POCKET_COUNTRY="$COUNTRY" POCKET_HOSTNAME=vi
     /bin/bash /tmp/pocket-files/customise.sh
 nice -n 19 chroot "$R" /bin/bash /tmp/sbc-files/customise-armbian.sh post
 chroot "$R" /usr/bin/dpkg-query -W -f '${Package} ${Version} ${Architecture}\n' \
-    vibeserver network-manager avahi-daemon overlayroot ffmpeg 'linux-image-*' 'linux-u-boot-*' 'linux-dtb-*' \
+    vibeserver network-manager avahi-daemon overlayroot 'linux-image-*' 'linux-u-boot-*' 'linux-dtb-*' \
     > "$OUT/$OUT_NAME.packages.txt" 2>/dev/null || true
 rm -f "$R/usr/sbin/policy-rc.d"
 rm -rf "$R/tmp/pocket-files" "$R/tmp/pocket-debs" "$R/tmp/sbc-files"

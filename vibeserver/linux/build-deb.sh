@@ -177,8 +177,22 @@ for f in LICENSE.libxaac NOTICE.libxaac; do
 done
 XAAC_LINE="$(strings "$X/usr/bin/vibeserver" | grep -oE 'libxaac [0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 [ -n "$XAAC_LINE" ] || fail "usr/bin/vibeserver has no libxaac in it (xHE-AAC would be silent)"
-# ★ and no FFmpeg left over from early V12: the package must not carry, or remove on upgrade, anything we no longer build
-[ ! -e "$X/usr/lib/vibeserver/ffmpeg" ] || fail "usr/lib/vibeserver/ffmpeg is in the package — the FFmpeg bundle is gone (libxaac)"
+# ★★★ NO FFmpeg, IN ANY FORM (V12, 2026-10-29): AAC is FAAD2 (DRM AAC, DAB+) and libxaac (xHE-AAC), in process. The
+#     package must not carry an ffmpeg/ffprobe binary or an FFmpeg library, must not name one in any relationship field
+#     (Depends, Recommends, Suggests, Pre-Depends, Enhances), and no ELF in it may refer to ffmpeg — a leftover path or
+#     probe would be a decoder route nobody can see.
+FF_FILES="$(cd "$X" && find . \( -iname '*ffmpeg*' -o -iname '*ffprobe*' -o -name 'libav*.so*' -o -name 'libsw*.so*' \) -print || true)"
+[ -z "$FF_FILES" ] || fail "FFmpeg is in the package: $FF_FILES"
+for field in Depends Pre-Depends Recommends Suggests Enhances; do
+  v="$(dpkg-deb -f "$DEB" "$field" 2>/dev/null || true)"
+  [ "$(echo "$v" | count -iE 'ffmpeg|libav(codec|format|util)|libsw(resample|scale)')" -eq 0 ] || fail "$field names FFmpeg: $v"
+done
+FF_ELF=""
+while IFS= read -r f; do
+  case "$(file -b "$f")" in ELF*) ;; *) continue ;; esac
+  [ "$(strings "$f" | count -i -e ffmpeg -e ffprobe)" -eq 0 ] || FF_ELF="$FF_ELF ${f#"$X"}"
+done < <(find "$X" -type f)
+[ -z "$FF_ELF" ] || fail "these binaries still refer to ffmpeg:$FF_ELF"
 {
   echo "package   $(basename "$DEB")"
   echo "Depends   $DEPENDS"

@@ -1,17 +1,12 @@
 // vibe_dab_faad.h — DAB+ audio (HE-AAC v2: AAC-LC + SBR + PS, 960-sample frames) through FAAD2, IN PROCESS — the
-// alternative to the FFmpeg child process in vibe_dab_aacdec.h. V12, 2026-10-26.
-//
-// ★★★ NOT THE DEFAULT. Stuart: "our DAB+ audio gets high praise" — FFmpeg stays the default until he has listened to
-//     both (docs/v12/DRM-AUDIO-ROUTES.md "DAB+"); the owner's switch (dabFaad2) or VIBE_DAB_AAC=faad2 picks this one.
-// ★★★ WHY IT IS WORTH HAVING. FAAD2 is told the truth about the frames — 960 samples (frameLengthFlag in the
-//     AudioSpecificConfig) — so it runs DAB+'s real transform: exact pitch, an exact output rate, nothing to measure or
-//     re-pace. FFmpeg is fed ADTS, which cannot say 960, decodes each unit as 1024 and the service paces it at the
-//     MEASURED rate (+0.2 % on tones). In process it is also ~5x cheaper, ~80x smaller and starts at once (no child).
+// Linux and Mac servers' DAB+ decoder (vibe_dab_aacdec.h). V12, 2026-10-26; the only one there from 2026-10-29.
+// ★★★ WHY FAAD2. It is told the truth about the frames — 960 samples (frameLengthFlag in the AudioSpecificConfig) — so
+//     it runs DAB+'s real transform: exact pitch, an exact output rate, nothing to measure or re-pace. In process it is
+//     also cheap, small and starts at once (no child process).
 // ★★★ A LOST UNIT IS CONCEALED, NOT SPLICED. The service tells us exactly which access units never arrived (a CRC
 //     failure leaves a hole in its super frame; a lost super frame a hole in the clock) and conceal() fills each with
 //     one unit of audio: the last good unit DECODED AGAIN, fading out — the decoder's own overlap-add carries it on
-//     without a step — then silence, and the next good unit fades back in. The FFmpeg path cannot do that: a child
-//     process given only the good units joins their neighbours end to end.
+//     without a step — then silence, and the next good unit fades back in.
 // ★★ THE PLAIN FAAD2 BUILD, WITH ITS SYMBOLS PREFIXED vibedab_. The server also links FAAD2's DRM build for DRM, and
 //    that build refuses DAB+ ("No standard extension payload allowed in DRM"); both export the same names, so the deps
 //    builders compile the plain one a second time with every global renamed (libfaad_dab.a, faad_dab_prefix.h). This
@@ -49,7 +44,7 @@ void vibedab_NeAACDecClose(NeAACDecHandle);
 namespace vibedab {
 
 
-/** ★ The same face as AacDecoderFfmpeg (vibe_dab_aacdec.h) — DabService drives either — plus conceal(). PCM comes back
+/** ★ The face DabService drives (vibe_dab_aacdec.h), plus conceal(). PCM comes back
  *  as 48 kHz interleaved stereo, ready for the service's fast path (no interpolation there). */
 class AacDecoderFaad {
 public:
@@ -64,7 +59,7 @@ public:
     AacDecoderFaad(const AacDecoderFaad&) = delete;
     AacDecoderFaad& operator=(const AacDecoderFaad&) = delete;
 
-    /** One ADTS-framed access unit in (the very bytes the FFmpeg path gets); 48 kHz stereo appended to out. */
+    /** One ADTS-framed access unit in (the very bytes the platform decoders get); 48 kHz stereo appended to out. */
     bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
         if (n < 7) return true;
         const double c0 = cpuNow();
@@ -238,8 +233,7 @@ public:
     int fadeUnits() const { return unitFrames_ ? std::max(1, int(std::lround(double(fadeMs_) * 48.0 / double(unitFrames_)))) : 1; }
 private:
 
-    /* ★ LEVEL: FAAD2's float output is already ±1.0 full scale (it divides by 2^15 itself), FFmpeg's f32le the same.
-     *  Any difference between the two is measured in test-dab-faad, not assumed here. */
+    /* ★ LEVEL: FAAD2's float output is already ±1.0 full scale (it divides by 2^15 itself). */
     static constexpr float kScale = 1.0f;
     NeAACDecHandle h_ = nullptr;
     int prof_ = -1, sfi_ = -1, ch_ = -1, rate_ = 0, unitFrames_ = 0, run_ = 0, mode_ = 0, reopened_ = 0, fadeMs_ = 120;
@@ -258,7 +252,7 @@ private:
  *  end, FIC and Viterbi — already the busiest thread in the product on a Cortex-A7. One super frame's units arrive at
  *  once and are decoded at once, so every 120 ms the worker took a burst of codec work on top of its own; it missed its
  *  deadline and the audio broke up ("DAB breaking up like mad", with the machine only ~62 % busy over its four cores).
- *  FFmpeg never showed it because its decoder is another process, on another core. This puts FAAD2 on one too.
+ *  This puts FAAD2 on a thread of its own, on another core.
  *  ★★ THE SAME FACE AS AacDecoderFaad, AND THE SAME ORDER OF EVENTS. DabService calls decode() / conceal() / reset()
  *     exactly as before; each becomes a JOB on a bounded single-producer single-consumer ring, executed in order on
  *     vibe-faad2, and the PCM goes to the service through the sink — the same pushPcm48Stereo it went through inline.

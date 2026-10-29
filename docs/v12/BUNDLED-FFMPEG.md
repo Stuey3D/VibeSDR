@@ -1,9 +1,12 @@
 # The bundled FFmpeg, and FAAD2 as the Linux default (V12, 2026-10-29)
 
-> ★★★ **SUPERSEDED the same day by [LIBXAAC.md](LIBXAAC.md)** (branch `v12-libxaac`). The packages no longer carry FFmpeg:
-> xHE-AAC is decoded by libxaac in process. FFmpeg 8.1's USAC decoder turned out to produce garbage on every USAC stream
-> with SBR, which is what DRM's xHE-AAC uses. FAAD2 stays the DAB+ default and DRM's AAC decoder. This page is kept for
-> its findings: the LOAS refusal, the Matroska transport (still used by builds without libxaac) and the FFmpeg profile.
+> ★★★ **REMOVED (V12, 2026-10-29 — branch `v12-no-ffmpeg`). VibeServer on Linux and the Mac no longer uses FFmpeg in
+> any form.** AAC is decoded by exactly two libraries, both in process: **FAAD2** for DRM's AAC and DAB+, **libxaac** for
+> xHE-AAC ([LIBXAAC.md](LIBXAAC.md)). The bundle, the `dabAacDecoder` choice, `vibe_ffmpeg_path.h`, the FFmpeg child
+> processes in `vibe_dab_aacdec.h` / `vibe_drm_audiodec.h` and the Portable images' `ffmpeg` package are all gone, and
+> `build-deb.sh` fails a package that carries, depends on or refers to ffmpeg. Android servers keep MediaCodec.
+> **This page is history**, kept for its findings (the LOAS refusal, the Matroska transport that the dev tool
+> `drm-usac-stream` still writes, the measurements). Nothing below describes the current server.
 
 Stuart: *"bundle FFmpeg on the Linux servers as you described, use FAAD2 for DRM and DAB+ by default and FFmpeg where
 needed."* And: *"Android server can use system hardware decoders."*

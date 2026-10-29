@@ -329,7 +329,7 @@ decoders and vibedsp, about 114,500 lines). Counted 2026-10-05.
 | `getuid`/`getpwnam` | main.cpp 1 | Drop it (there is no service user to drop to). | S |
 | `clock_gettime`/`usleep` | 1–2 in 7 files | `std::chrono` (mostly already used); MinGW provides `clock_gettime`. | S |
 | ncurses TUI (`tui.cpp`) | the whole setup wizard | **Do not port.** On Windows the setup is the existing web setup page (`vibe_setup_page.h`) opened by the tray app. | S |
-| `vibe_dab_aacdec.h`: ffmpeg as a child process | about 30 lines | Either use **Media Foundation's AAC decoder** (the platform decoder, like AudioToolbox on the Mac; HE-AAC support **[unverified]** for DAB+'s 960-sample frames), or find `ffmpeg.exe` if installed. Start with ffmpeg-if-present and add MF later. | M |
+| `vibe_dab_aacdec.h` | — | ★ **Superseded (V12, 2026-10-29):** VibeServer no longer uses FFmpeg. DAB+ and DRM AAC are FAAD2 and xHE-AAC is libxaac, both portable C linked in — build them for Windows as on Linux (no platform decoder, no child process). | S |
 | mDNS responder (`mdns_responder.cpp`) | binds UDP 5353 | Windows' own `Dnscache` already owns 5353. Use **`DnsServiceRegister`** (Win10 1809+) instead. **[unverified coexistence]** | S–M |
 | `haveServiceManager()` = systemd check | main.cpp | On Windows the front door supervises its radio processes itself (already supported for "no systemd"), inside a Job Object. | S |
 
@@ -520,7 +520,7 @@ llvm-mingw and cloudflared allow.
 3. **Is VibeServer open source** for SignPath's purposes? Under which licence?
 4. **Tray app first, service later**, or is a headless service needed from day one?
 5. **Firewall rule:** Private networks only by default, or Public too?
-6. **DAB+ on Windows:** is "works if you install ffmpeg" acceptable for the first release?
+6. ~~**DAB+ on Windows:** is "works if you install ffmpeg" acceptable?~~ Moot since V12: FAAD2 is built in (no FFmpeg).
 7. **Test PC details:** Windows 11 version, Memory Integrity state, and whether any Realtek TV driver
    is installed today. Is it a PC Stuart minds having a test USB filter driver (UsbDk) installed on?
    It is worth a restore point first.

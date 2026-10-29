@@ -173,9 +173,9 @@ flags_for() {
     # ★★ DRM's AAC through FAAD2 on the real RRI recording: decodes, programme, concealment without clicks or gaps, CPU.
     test-drm-xaac)         echo "-O2 -I android/app/src/main/cpp -I $VDSP $XAAC_FLAGS" ;;
     test-drm-faad)         echo "-O2 -I $VDSP -I $KISS $FAAD_FLAGS $XAAC_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
-    # ★ DAB+ through FAAD2 (vibe_dab_faad.h) against today's FFmpeg child and a 960 reference, on REAL unit logs.
+    # ★ DAB+ through FAAD2 (vibe_dab_faad.h) on REAL unit logs; a 960 reference only where a developer's ffmpeg is installed.
     # ★ V12: FAAD2 on its own thread (vibe-faad2) — same audio as inline, a full ring drops (concealed) never waits,
-    #   resets mid-queue, the live switch both ways. Same deps as test-dab-faad.
+    #   resets mid-queue, the service's decoder is FAAD2. Same deps as test-dab-faad.
     test-dab-faad|test-dab-faad-queue) echo "-O3 -ffp-contract=fast $FAAD_DAB_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★★ V12 WSPR (decoders/digimodes/wspr_decoder.h): protocol, synthetic slots −20…−28 dB with drift and DT, hashed calls, pure
     #    noise, subtraction, the live decoder — optimised, it decodes ~50 two-minute slots. VIBE_TEST_AUDIO adds 40 m + 20 m
@@ -1465,11 +1465,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── boosted-rate stall and crash (end to end) ──\033[0m\n'
 node scripts/test-rate-guard.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
-# ★★★ UNTICKING "Decode DAB+ audio with FAAD2" STICKS (Stuart's Pi 2, 2026-10-26): the real setup page in headless MUTED Edge,
-#     a front door + the radio's own process (as systemd runs them): tick, save, restart on FAAD2; untick, save; the radio
-#     persists its own state (the DAB block, as the last listener leaves) — the file must stay false and the radio restart
-#     on FFmpeg. ★ Bounded: 512 MB heap, its own 1 GB / 2 GB-per-child memory watch and a 180 s deadline. ~60 s.
-printf '\n\033[1m── the DAB+ decoder switch survives the radio persisting its own state (setup page, end to end) ──\033[0m\n'
+# ★★★ THE DAB+ DECODER CHOICE IS GONE (V12, 2026-10-29 — FAAD2 is the only one): the real setup page in headless MUTED Edge,
+#     a front door + the radio's own process (as systemd runs them), started from an OLD config carrying dabAacDecoder /
+#     dabFaad2: both start, no choice is drawn, hwinfo has no old fields, and through a save and the radio persisting its
+#     own state the keys are kept as written (unknown keys are preserved) and never acted on. ★ Bounded: 512 MB heap, its own 1 GB / 2 GB-per-child memory watch and a 180 s
+#     deadline. ~40 s.
+printf '\n\033[1m── an old config with the DAB+ decoder choice loads; the choice is gone (setup page, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-setup-dab-faad2.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 

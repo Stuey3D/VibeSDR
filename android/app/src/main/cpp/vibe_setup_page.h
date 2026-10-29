@@ -1741,25 +1741,6 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <div class="note" id="adsb256Note" style="margin-left:24px">ADS-B takes the radio to 2.56 MS/s instead of 2.4,
          and back when it ends. Watch the capture figure in ADS-B: below 97 % the dongle is dropping samples.</div>
       </div>
-      <!-- ★★ V12: THE DAB+ DECODER (Stuart, 2026-10-26: "switch the pi 2 between FFMPG and FAAD2"; 2026-10-29: "use FAAD2
-           for DRM and DAB+ by default and FFmpeg where needed"). Drawn only where the server has BOTH (hwinfo
-           dabFaad2Avail) and the radio can do DAB — a choice of one is a dead control. Live: the next DAB+ super frame
-           uses it. config dabAacDecoder: 0 this server's default (FAAD2 on Linux — hwinfo dabFaad2Default; the operating
-           system's on a Mac), 1 FAAD2, 2 FFmpeg. -->
-      <div id="dabFaad2Box" class="hide">
-      <label class="row" id="dabFaad2Row" style="gap:8px;margin-top:10px">
-        <span>DAB+ audio decoder</span>
-        <select id="dabAacDecoder">
-          <option value="0" id="dabDecoderDefault">Default</option>
-          <option value="1">FAAD2, inside VibeServer</option>
-          <option value="2" id="dabDecoderPlatform">FFmpeg</option>
-        </select></label>
-      <div class="note" id="dabFaad2Note">FAAD2 decodes DAB+ inside VibeServer: exact pitch, about half the processor time
-         of FFmpeg, no separate process, sound at once on a station change, and a lost piece of audio on a weak signal
-         fades out and back in instead of cutting. FFmpeg runs as a separate process; choose it if a station sounds
-         wrong through FAAD2. Takes effect straight away, no restart. The DAB panel's AAC decoder line shows which one is
-         playing and what it costs.</div>
-      </div>
       <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
            the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
            (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
@@ -2721,8 +2702,8 @@ function modeBlockRender() {
   const off = modeBlockSet();
   host.innerHTML = BLOCKABLE.map(m => {
     /* ★★★ DO NOT OFFER A MODE THE MACHINE CANNOT COMPLETE. DAB+ audio is decoded server-side — by
-     *  FAAD2 built in (the Linux packages since V12, which also bundle FFmpeg), or by the operating
-     *  system's decoder / an installed ffmpeg elsewhere; without one the receiver tunes the multiplex, locks it
+     *  FAAD2 built in (the Linux and Mac servers since V12), or by the phone's own decoder on Android;
+     *  a build without one (a Linux dev build) tunes the multiplex, locks it
      *  perfectly, and cannot play a word — which reads as broken hardware rather than a missing
      *  package (Stuart, 2026-09-11). A tick box that cannot deliver is the fault AGENTS.md names:
      *  branch on what the machine has, or leave it out. */
@@ -2735,9 +2716,8 @@ function modeBlockRender() {
   if (!DAB_DECODER) host.insertAdjacentHTML("beforeend",
     `<div class="hint" style="flex:1 1 100%;margin-top:8px">`
     + `<b>DAB is not available on this machine.</b> This server has no decoder for the AAC audio a`
-    + ` DAB+ multiplex carries. The VibeServer packages for Linux include one (FAAD2, and a copy of`
-    + ` FFmpeg); reinstalling or updating VibeServer puts it back. On a Mac, installing <code>ffmpeg</code>`
-    + ` (Homebrew) also works.`
+    + ` DAB+ multiplex carries. The VibeServer packages for Linux and the Mac include one (FAAD2,`
+    + ` built in); installing a VibeServer release puts it back.`
     + ` <br>The radio itself is fine \u2014 it will receive and lock a multiplex perfectly without it,`
     + ` which is why the fault looks like bad reception rather than a missing package.`
     + `</div>`);
@@ -3615,7 +3595,6 @@ function renderGain() {
   //    "let DAB borrow 2.048 MS/s" is a promise it cannot keep. Same test as the DAB landing choice:
   //    the running radio's own answer, else its driver.
   modeRateShow(r);
-  dabDecoderShow(r);
   fpsShow(r);
   $("dabScanLabels").value = String(r.dabScanLabels === 0 || r.dabScanLabels === 1 ? r.dabScanLabels : -1);
   $("gainRest").value = gainFromRaw(r.restGain);
@@ -3946,20 +3925,6 @@ function modeRateShow(r) {
   $("adsb256Row").style.opacity = live ? "" : "0.45";
   if (typeof rateGuardShow === "function") rateGuardShow();
 }
-/** ★★ V12: the DAB+ decoder switch — only where this server has both decoders and the radio can do DAB. */
-function dabDecoderShow(r) {
-  const box = $("dabFaad2Box"); if (!box) return;
-  const dabOk = (HW && typeof HW.dabHw === "boolean" && !HW.offline) ? HW.dabHw : r.driver !== "airspyhf";
-  const both = !!(HW && !HW.offline && HW.dabFaad2Avail);
-  box.classList.toggle("hide", !(both && dabOk));
-  // ★ "Default" names what it means on THIS server: FAAD2 on Linux (V12), the operating system's decoder on a Mac.
-  const faadDefault = !(HW && HW.dabFaad2Default === false);
-  $("dabDecoderDefault").textContent = faadDefault ? "Default — FAAD2, inside VibeServer"
-                                                   : "Default — FFmpeg if installed, otherwise macOS's own";
-  $("dabDecoderPlatform").textContent = faadDefault ? "FFmpeg (the copy included with VibeServer)" : "FFmpeg / macOS";
-  const v = Number(r.dabAacDecoder);
-  $("dabAacDecoder").value = String(v === 1 || v === 2 ? v : 0);
-}
 /** ★★★ A STALL OR CRASH AT A RATE A MODE BOOSTED TO (HW.rateGuard, vibe_rate_guard.h): the red line, and the switch
  *  disabled until the owner clears it. ONE RULE, TWO READERS: the app's src/services/rateGuard.ts rateGuardLine draws
  *  the same sentence; the SERVER keeps the switch off itself while the fault stands. */
@@ -4151,7 +4116,6 @@ async function renderHw() {
   //   the stored config, which would wipe a figure the owner was part-way through typing.
   HW = hw;
   modeRateShow(r);   // ★ the rate switch's red line reads HW.rateGuard, which has only now arrived
-  dabDecoderShow(r); // ★ and the DAB+ decoder switch reads HW.dabFaad2Avail
   /* ★★ V12 2026-10-28: and the background-decoding editor reads HW.spotBands (a Band VFO's band picker) — drawn by
    *  bgLoad BEFORE this answer arrived, so a Band row showed a typed frequency until something redrew it (Stuart,
    *  beta27). Drawn again now, for the radio it shows. */
@@ -5614,7 +5578,6 @@ function fill() {
   // ★ The switch re-draws the option beneath it.
   $("dabRateBoost").addEventListener("change", () => { radio().dabRateBoost = $("dabRateBoost").checked; modeRateShow(radio()); });
   $("adsb256").addEventListener("change", () => { radio().adsb256 = $("adsb256").checked; });
-  $("dabAacDecoder").addEventListener("change", () => { radio().dabAacDecoder = Number($("dabAacDecoder").value); });
   $("rateGuardClear").addEventListener("click", rateGuardClear);
   // ★ ONE CONTROL, BOTH NUMBERS — the ceiling and the rate the engine runs at, now for this radio alone.
   $("maxFps").addEventListener("change", () => {

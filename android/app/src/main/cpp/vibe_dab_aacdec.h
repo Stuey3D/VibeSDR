@@ -1,12 +1,16 @@
-// vibe_dab_aacdec.h — DAB+ AAC decoded BY THE SERVER'S OPERATING SYSTEM, never by us.
+// vibe_dab_aacdec.h — DAB+ AAC decoded ON THE SERVER: FAAD2 in process on the Linux and Mac servers, the operating
+// system's decoder everywhere else.
 //
-// ★★★ WE STILL SHIP NO AAC DECODER, AND THAT IS DELIBERATE, NOT INCIDENTAL. vibe_dab_aac.h says
-//     it "parses, error-corrects and REFRAMES ... it never produces PCM, and VibeServer links no
-//     AAC decoder — the browser's own does the decoding, which it is already licensed for." That
-//     position is unchanged here: this file calls the PLATFORM's decoder, the same posture as
-//     relying on the browser's. Android's AMediaCodec is part of the OS. Nothing is bundled.
+// ★★★ PER PLATFORM (V12, 2026-10-29 — Stuart: two libraries for AAC on the servers, FAAD2 and libxaac):
+//   • Linux and Mac VibeServer: FAAD2's plain build, prefixed vibedab_ (vibe_dab_faad.h, VIBE_HAVE_FAAD2_DAB), on its
+//     own thread. The ONLY DAB+ decoder there — no choice, no child process, no installed program needed. The release
+//     builds refuse to configure without libfaad_dab.a (CMakeLists.txt), so a packaged server always has it.
+//   • Android: AMediaCodec, the phone's own decoder ("Android server can use system hardware decoders").
+//   • The iOS / Mac Catalyst app (local hardware) and a Mac dev build without the deps: AudioToolbox. ★ The App Store
+//     archive never links FAAD2 (build_ios.sh checks).
+//   • A Linux dev build without FAAD2: no decoder — available() says so and the DAB+ services are marked unplayable.
 //
-// ★★★ WHY MOVE IT OFF THE CLIENT AT ALL. Everything in the browser audio path — WebCodecs
+// ★★★ WHY DECODE ON THE SERVER AT ALL. Everything in the browser audio path — WebCodecs
 //     probing, MediaSource fallbacks, 960-vs-1024 framing, parametric-stereo signalling, mp4
 //     timescale arithmetic — exists ONLY for browsers, and Safari still is not right: DAB+ plays
 //     "split seconds of audio" there. And the APPS have not been touched, so doing this
@@ -23,34 +27,17 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>      // ★ ::time (the FFmpeg retry cooldown) — the Mac got it indirectly, Linux did not
 #include <vector>
 #include <string>
 
 #if defined(__ANDROID__)
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
-#elif defined(__unix__) || defined(__APPLE__)
-#if defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(VIBE_HAVE_FAAD2_DAB)
 #include <AudioToolbox/AudioToolbox.h>   // ★ outside the namespace below — system headers must not be wrapped in it
-#include <TargetConditionals.h>
-#if TARGET_OS_OSX
-#include <libproc.h>                     // ★ proc_pid_rusage: the FFmpeg child's CPU for the DAB panel — macOS only:
-#endif                                   //   the iOS SDK has no libproc, and iOS never runs an FFmpeg child (build_ios.sh)
-#include <mach/mach_time.h>
-#endif
-#include <cerrno>
-#include <cstdlib>
-#include <cstring>          // ★ glibc does not pull this in transitively; macOS does
-#include <csignal>
-#include <cstdio>
-#include <fcntl.h>
-#include <signal.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#include "vibe_ffmpeg_path.h"   // ★ which ffmpeg (an installed one), shared with DRM
 #endif
 
 namespace vibedab {
@@ -64,44 +51,7 @@ struct AacPcm {
     int channels = 0;
 };
 
-/** ★★ WHICH DAB+ DECODER — the owner's choice (setup page, config dabAacDecoder), read when a service's decoder starts and
- *  watched while it runs, so a change applies within a super frame without restarting anything. 0 = this server's
- *  DEFAULT (dabFaad2Default() below), 1 = FAAD2 in process, 2 = the platform's (FFmpeg; AudioToolbox on a Mac without
- *  it). VIBE_DAB_AAC=faad2|ffmpeg overrides it (tests).
- *  ★★★ THE DEFAULT IS FAAD2 ON LINUX (Stuart, 2026-10-29: "use FAAD2 for DRM and DAB+ by default and FFmpeg where
- *      needed") — exact pitch, about half the processor time of the FFmpeg child on a Pi 2, concealment on a weak signal.
- *      FFmpeg (an installed one — the package no longer carries its own, docs/v12/LIBXAAC.md) is the owner's alternative,
- *      offered only where one is present. The Mac keeps
- *      the platform's decoder as its default (unchanged); Android never reaches this (AMediaCodec, above). */
-inline std::atomic<int>& dabAacChoice() { static std::atomic<int> v{0}; return v; }
-inline int dabAacEnvChoice() {
-    static const int v = [] { const char* e = std::getenv("VIBE_DAB_AAC"); if (!e) return -1;
-                              if (!std::strcmp(e, "faad2")) return 1; if (!std::strcmp(e, "ffmpeg")) return 0; return -1; }();
-    return v;
-}
-inline constexpr bool dabFaad2Default() {
-#if defined(__linux__) && !defined(__ANDROID__)
-    return true;
-#else
-    return false;
-#endif
-}
-inline bool AacDecoderFfmpegAvailable();
-/** The choice in force, resolved: true = FAAD2. (The test override first, then the owner's choice, then the default.)
- *  ★★ LINUX, V12 (libxaac): the package no longer carries an FFmpeg, so an owner who picked FFmpeg (2) on a machine
- *     without one gets FAAD2, never silence — the choice is kept and applies again as soon as an ffmpeg is installed. */
-inline bool dabWantFaad2() {
-    const int e = dabAacEnvChoice();
-    if (e >= 0) return e == 1;
-    const int c = dabAacChoice().load(std::memory_order_relaxed);
-#if defined(__linux__) && !defined(__ANDROID__) && defined(VIBE_HAVE_FAAD2_DAB)
-    if (c == 2 && !AacDecoderFfmpegAvailable()) return true;
-#endif
-    return c == 1 || (c == 0 && dabFaad2Default());
-}
-/** Is FAAD2's DAB+ build in this binary? (The setup page offers the choice only where it is AND FFmpeg is.) */
-/** Is the PLATFORM decoder a working FFmpeg? (POSIX servers; false on Android and where it is missing.) Defined below. */
-inline bool AacDecoderFfmpegAvailable();
+/** Is FAAD2's DAB+ build in this binary? (Every Linux and Mac server build; never Android or the App Store app.) */
 inline constexpr bool dabFaad2Built() {
 #if defined(VIBE_HAVE_FAAD2_DAB)
     return true;
@@ -129,7 +79,6 @@ public:
     void conceal(int, AacPcm&) {}
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return -1.0; }  ///< inside the OS's media service — not ours to measure
-    bool switchPending() const { return false; }
     bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
     uint64_t inFlightFrames() const { return 0; }
     uint64_t dropped() const { return 0; }
@@ -345,16 +294,16 @@ private:
     bool     failed_ = false;
 };
 
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(VIBE_HAVE_FAAD2_DAB)
 
-/** ★★★ THE PLATFORM'S DECODER ON macOS IS AudioToolbox — the same posture as AMediaCodec on
- *  Android and ffmpeg on Linux: the operating system decodes, nothing is shipped. Stuart,
- *  2026-09-08: "route the AAC for DAB+ through the MacOS decoder".
+/** ★★★ AudioToolbox — for an Apple build WITHOUT FAAD2: the iOS / Mac Catalyst app's local hardware (the App Store
+ *  archive links no FAAD2) and a Mac dev build without the deps prefix. The Mac VibeServer release links FAAD2 and never
+ *  compiles this. Stuart, 2026-09-08: "route the AAC for DAB+ through the MacOS decoder".
  *  ★ An AudioConverter fed one access unit at a time. The ADTS header gives the core rate and
  *    channel count; a core at 24 kHz or below is HE-AAC (SBR, and parametric stereo when the core
  *    is mono) and decodes to twice its rate in stereo; a 32 or 48 kHz core is plain AAC-LC.
- *  ★ Apple decodes 1024-sample frames, not DAB+'s 960 — the same substitution ffmpeg makes, so
- *    kExactFrames is false and DabService measures the real rate exactly as it does for ffmpeg. */
+ *  ★ Apple decodes 1024-sample frames, not DAB+'s 960, so kExactFrames is false and DabService
+ *    measures the real rate. */
 class AacDecoderApple {
 public:
     static constexpr bool kExactFrames = false;
@@ -363,6 +312,13 @@ public:
     void conceal(int, AacPcm&) {}
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return -1.0; }
+    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
+    uint64_t inFlightFrames() const { return 0; }
+    uint64_t dropped() const { return 0; }
+    uint32_t generation() const { return 0; }
+    template <class F> void setSink(F&&) {}
+    void stop() {}
+    int64_t concealed() const { return 0; }
     AacDecoderApple() = default;
     ~AacDecoderApple() { close(); }
     AacDecoderApple(const AacDecoderApple&) = delete;
@@ -426,8 +382,7 @@ private:
         /* ★ MEASURED on the 12B capture (Radio 1 Dance, HE-AAC v2, 16 kHz core), 2026-09-08:
          *  HE_V2 at 2048 frames per packet decodes; HE_V2 at 1024, HE at 2048 and LC at 1024 decode
          *  NOTHING. Even so a quarter of the units come back 'bada' — Apple's parser wants
-         *  1024-sample frames and DAB+ carries 960, and where ffmpeg is lenient this one refuses.
-         *  That is why the wrapper below prefers ffmpeg when the machine has it. */
+         *  1024-sample frames and DAB+ carries 960. That is why the Mac server decodes with FAAD2. */
         in.mFormatID        = he ? kAudioFormatMPEG4AAC_HE_V2 : kAudioFormatMPEG4AAC;
         in.mSampleRate      = core;
         in.mChannelsPerFrame = UInt32(he ? 2 : (ch ? ch : 2));
@@ -455,342 +410,60 @@ private:
     bool failed_ = false; int errors_ = 0; OSStatus lastErr_ = 0;
 };
 
-#endif
-/* ★ NOT ANDROID — Bionic defines __unix__ too, and the AMediaCodec class above is Android's. */
-#if !defined(__ANDROID__) && (defined(__unix__) || defined(__APPLE__))
+using AacDecoder = AacDecoderApple;
 
-/** ★★★ THE PLATFORM'S DECODER ON A POSIX SERVER IS ffmpeg, RUN AS A PROCESS.
- *  ★ On macOS too, when it is installed (Homebrew): see AacDecoder below for why it is preferred.
- *
- *  ★★★ STILL NOT A DECODER WE SHIP. Same posture as AMediaCodec above and as the browser's before
- *      that: we hand ADTS to something the operating system already provides and take PCM back.
- *      Nothing is linked, nothing is bundled, and a machine without ffmpeg simply reports
- *      available() == false. It is also what OpenWebRX does with dablin, so it is a shape this
- *      hardware is already known to sustain.
- *
- *  ★★★ ffmpeg RESAMPLES TO 48 kHz STEREO FOR US, AND THAT IS DELIBERATE. DAB+ is HE-AAC: the core
- *      rate in the ADTS header is not the output rate (SBR doubles it) and a mono core can decode
- *      to two channels (parametric stereo). Asking the decoder for exactly what the audio path
- *      wants removes that whole class of question — the same class that made the Android path
- *      play at the wrong speed until the output format was read back rather than assumed.
- *
- *  ★★ ONE PROCESS PER SERVICE, STARTED LAZILY AND KILLED ON A SERVICE CHANGE. A DAB+ service can
- *     change rate and channel mode, and a decoder configured for the previous one produces
- *     confident nonsense.
- *  ★ SIGPIPE is ignored once, process-wide: ffmpeg exiting mid-write must return an error here,
- *    not kill the server.
- */
-class AacDecoderFfmpeg {
-public:
-    /** ★★★ THIS DECODER CANNOT DO THE 960-SAMPLE DAB+ TRANSFORM — it returns 1024 samples per
-     *  access unit, so the caller must MEASURE its real output rate (see DabService). */
-    static constexpr bool kExactFrames = false;
-    bool exactFrames() const { return false; }
-    bool canConceal() const { return false; }   ///< a hole between the units it is given is spliced — see AacDecoderFaad
-    void conceal(int, AacPcm&) {}
-    int unitFrames() const { return 0; }
-    bool switchPending() const { return false; }
-    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
-    uint64_t inFlightFrames() const { return 0; }
-    uint64_t dropped() const { return 0; }
-    uint32_t generation() const { return 0; }
-    template <class F> void setSink(F&&) {}
-    void stop() {}
-    int64_t concealed() const { return 0; }
-    /** ★ The CHILD's CPU (user + system), so the DAB panel can show what the decoder costs: /proc/<pid>/stat on Linux,
-     *  proc_pid_rusage on macOS. Cumulative for the current child; -1 when there is none. */
-    double cpuSeconds() const {
-        if (pid_ <= 0) return -1.0;
-#if defined(__APPLE__) && !TARGET_OS_OSX
-        return -1.0;                     // ★ iOS: no child process to measure
-#elif defined(__APPLE__)
-        rusage_info_v2 ri{};
-        if (proc_pid_rusage(pid_, RUSAGE_INFO_V2, reinterpret_cast<rusage_info_t*>(&ri)) != 0) return -1.0;
-        static const double tick = [] { mach_timebase_info_data_t tb{}; mach_timebase_info(&tb); return double(tb.numer) / double(tb.denom) * 1e-9; }();
-        return double(ri.ri_user_time + ri.ri_system_time) * tick;
-#else
-        char path[64]; std::snprintf(path, sizeof path, "/proc/%d/stat", int(pid_));
-        FILE* f = std::fopen(path, "r"); if (!f) return -1.0;
-        char buf[1024]; const size_t n = std::fread(buf, 1, sizeof buf - 1, f); std::fclose(f); buf[n] = 0;
-        const char* p = std::strrchr(buf, ')'); if (!p) return -1.0;
-        unsigned long ut = 0, st = 0;   // fields 14 and 15, counted from after the ")" that closes the command name
-        if (std::sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &ut, &st) != 2) return -1.0;
-        return double(ut + st) / double(sysconf(_SC_CLK_TCK));
-#endif
-    }
-    AacDecoderFfmpeg() = default;
-    ~AacDecoderFfmpeg() { close(); }
-    AacDecoderFfmpeg(const AacDecoderFfmpeg&) = delete;
-    AacDecoderFfmpeg& operator=(const AacDecoderFfmpeg&) = delete;
-    const char* backend() const { return "ffmpeg"; }
-    int restarts() const { return 0; }   ///< error-code restarts: the AMediaCodec decoder's only
-
-    /** ★ Probed ONCE: the binary must exist AND report an AAC decoder. A server with ffmpeg built
-     *  without AAC would otherwise look capable and deliver silence. The BINARY does not come and
-     *  go, so probing once is right; the CHILD PROCESS does, which is what the retry below is for.
-     *
-     *  ★★★ `failed_` USED TO BE A ONE-WAY LATCH, AND IT KILLED DAB+ FOR THE LIFE OF THE SERVER.
-     *      One broken pipe — an ffmpeg child killed by anything at all — set it, nothing ever
-     *      cleared it, and from that moment every DAB+ access unit was dropped while the audio
-     *      path gap-filled 48 kHz of nothing. Measured on the OWRX box (2026-09-11): superframes
-     *      arriving perfectly (sfOk 67 of 67, Reed-Solomon 0 fixed 0 lost, MER 23.4 dB, IQ dropped
-     *      0) with `aacDecoded` stuck at 0 and `pcmFilled` climbing ~48,000/s — the whole of the
-     *      audio being filler. What the listener gets depends only on the filler: a 32 kHz service
-     *      crackles constantly, a 48 kHz one goes silent (Stuart: "audio gone completely but look
-     *      at the reception its the cleanest out of them all", then "on a 32K station constant
-     *      crackle"). Both are this one fault, and from the outside both read as broken hardware —
-     *      which is precisely why the receiver looked worst on the machine whose reception was best.
-     *
-     *  ★★ SO IT RETRIES, AND IT NEVER GIVES UP PERMANENTLY. The cooldown backs off to a cap so a
-     *     genuinely broken ffmpeg cannot spin the box respawning it, but there is no attempt count
-     *     that ends in a receiver that has quietly stopped decoding for good. A radio that fixes
-     *     itself when the cause goes away is worth more than one that has to be restarted by hand,
-     *     and "never limit permanently" is the rule this broke. */
-    bool available() const {
-        static const bool ok = probe();
-        if (!ok) return false;
-        if (!failed_) return true;
-        const long cool = coolSec();
-        if (::time(nullptr) - failedAt_ < cool) return false;
-        failed_ = false;            // ★ due for another go — decode() will start a fresh child
-        return true;
-    }
-
-    bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
-        if (!available() || n < 7) return available();
-        if (pid_ < 0 && !start()) return false;
-        ssize_t w = ::write(inFd_, adts, n);
-        if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { fail("write to ffmpeg failed"); return false; }
-        drain(out);
-        return true;
-    }
-
-    void drain(AacPcm& out) {
-        if (pid_ < 0) return;
-        for (;;) {
-            uint8_t buf[16384];
-            const ssize_t r = ::read(outFd_, buf, sizeof buf);
-            if (r <= 0) break;
-            const float* f = reinterpret_cast<const float*>(buf);
-            const size_t nf = size_t(r) / sizeof(float);
-            out.interleaved.insert(out.interleaved.end(), f, f + nf);
-            out.rateHz = 48000; out.channels = 2;      // what we asked ffmpeg for
-            if (size_t(r) < sizeof buf) break;
-        }
-    }
-
-    void close() {
-        if (inFd_  >= 0) { ::close(inFd_);  inFd_  = -1; }
-        if (outFd_ >= 0) { ::close(outFd_); outFd_ = -1; }
-        if (pid_ > 0) { ::kill(pid_, SIGKILL); int st = 0; ::waitpid(pid_, &st, 0); }
-        pid_ = -1;
-    }
-    void reset() { close(); failed_ = false; failures_ = 0; }
-    int rateHz()   const { return pid_ > 0 ? 48000 : 0; }
-    int channels() const { return pid_ > 0 ? 2 : 0; }
-
-private:
-    /** ★★★ THE BINARY IS FOUND BY PATH, NOT BY $PATH — vibe_ffmpeg_path.h: on Linux /usr/lib/vibeserver/ffmpeg if an
-     *  owner put one there, then the system's; on a Mac Homebrew's known homes
-     *  (a Finder-launched app has no Homebrew on $PATH). The same answer DRM gets. */
-    static const char* ffmpegPath() { return vibe::ffmpegPath(); }
-    static bool probe() {
-        /* ★ `ffmpeg -decoders` and look for the aac line — the same check by hand as
-         *  `ffmpeg -decoders | grep ' aac '`, which is how the Pi was confirmed: "A....D aac". */
-        const std::string cmd = std::string("'") + ffmpegPath() + "' -hide_banner -decoders 2>/dev/null";
-        FILE* p = ::popen(cmd.c_str(), "r");
-        if (!p) return false;
-        char line[512]; bool found = false;
-        while (std::fgets(line, sizeof line, p)) {
-            const char* a = std::strstr(line, " aac ");
-            if (a) { found = true; break; }
-        }
-        ::pclose(p);
-        /* ★★★ SAY IT ONCE, LOUDLY. Without ffmpeg the server cannot decode DAB+ at all: it ships
-         *  raw AAC to the client instead, which is the client-side decoding this project
-         *  deliberately moved away from, and the owner is told nothing. On the x86 box that showed
-         *  up as one service crackling and another silent on a receiver whose figures said the air
-         *  was perfect — hours to place, and one apt line to fix. */
-        if (!found)
-            std::fprintf(stderr,
-#if defined(__linux__)
-                "[DAB] no usable ffmpeg found (%s) — DAB+ plays through FAAD2 (the default, built in); only the "
-                "owner's optional FFmpeg decoder is unavailable (installing ffmpeg adds it).\n", ffmpegPath());
-#else
-                "[DAB] no usable ffmpeg found (looked in /opt/homebrew/bin, /usr/local/bin, "
-                "/usr/bin and $PATH) — DAB+ goes through the operating system's decoder instead. Everything else "
-                "(the ensemble, MP2 services, the signal figures) is unaffected.\n");
-#endif
-        else
-            std::fprintf(stderr, "[DAB] ffmpeg: %s%s\n", ffmpegPath(), vibe::ffmpegIsBundled() ? " (bundled)" : "");
-        std::fflush(stderr);
-        return found;
-    }
-
-    bool start() {
-        static const bool ignoredPipe = [] { ::signal(SIGPIPE, SIG_IGN); return true; }();
-        (void)ignoredPipe;
-        int inPipe[2], outPipe[2];
-        if (::pipe(inPipe) != 0) return false;
-        if (::pipe(outPipe) != 0) { ::close(inPipe[0]); ::close(inPipe[1]); return false; }
-        const pid_t pid = ::fork();
-        if (pid < 0) {
-            ::close(inPipe[0]); ::close(inPipe[1]); ::close(outPipe[0]); ::close(outPipe[1]);
-            fail("could not fork for ffmpeg"); return false;
-        }
-        if (pid == 0) {
-            ::dup2(inPipe[0], STDIN_FILENO);
-            ::dup2(outPipe[1], STDOUT_FILENO);
-            ::close(inPipe[1]); ::close(outPipe[0]);
-            const int devnull = ::open("/dev/null", O_WRONLY);
-            if (devnull >= 0) ::dup2(devnull, STDERR_FILENO);
-            /* ★ nobuffer + low_delay because this is a live stream, not a file: ffmpeg's default
-             *  input buffering would add latency the audio path then has to carry for ever. */
-            ::execlp(ffmpegPath(), "ffmpeg", "-hide_banner", "-loglevel", "quiet", "-nostdin",
-                     "-fflags", "nobuffer", "-flags", "low_delay",
-                     "-f", "aac", "-i", "pipe:0",
-                     "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1", (char*)nullptr);
-            ::_exit(127);
-        }
-        ::close(inPipe[0]); ::close(outPipe[1]);
-        inFd_ = inPipe[1]; outFd_ = outPipe[0];
-        ::fcntl(inFd_,  F_SETFL, O_NONBLOCK);
-        ::fcntl(outFd_, F_SETFL, O_NONBLOCK);
-        pid_ = pid;
-        return true;
-    }
-
-    /** ★ ONE PLACE THAT RECORDS A FAILURE, so the cooldown, the counter and the message cannot
-     *  drift apart — and so the journal SAYS the decoder has gone. Silence in the log is what let
-     *  this sit undiagnosed behind a perfect-looking receiver. */
-    void fail(const char* why) {
-        close();
-        failed_ = true;
-        failedAt_ = ::time(nullptr);
-        if (failures_ < 1000000) ++failures_;
-        std::fprintf(stderr, "[DAB] AAC decoder lost (%s) — DAB+ audio is filler until it restarts; "
-                             "retrying in %lds (failure %d)\n", why, coolSec(), failures_);
-        std::fflush(stderr);
-    }
-    /** ★ 2 s, doubling to a 30 s cap. Quick enough that a one-off death is inaudible; slow enough
-     *  that a machine with no working ffmpeg is not forking one twice a second. */
-    long coolSec() const {
-        long c = 2; for (int i = 1; i < failures_ && c < 30; ++i) c *= 2;
-        return c > 30 ? 30 : c;
-    }
-
-    pid_t pid_ = -1;
-    int   inFd_ = -1, outFd_ = -1;
-    mutable bool failed_ = false;
-    mutable long failedAt_ = 0;
-    int   failures_ = 0;
-};
-
-inline bool AacDecoderFfmpegAvailable() { static const bool ok = AacDecoderFfmpeg().available(); return ok; }
-
-#if defined(__APPLE__)
-/** ★★★ macOS: ffmpeg IF THE MACHINE HAS IT, AudioToolbox OTHERWISE. Stuart, 2026-09-08: "route
- *  the AAC for DAB+ through the MacOS decoder". Measured on the 12B capture, Apple's decoder
- *  refuses a quarter of DAB+'s 960-sample access units as bad data (it parses 1024-sample frames)
- *  where ffmpeg decodes every one of them — so a Mac with Homebrew ffmpeg gets the clean path and
- *  a Mac without it still plays DAB+ with the operating system's own decoder rather than not at
- *  all. Which one is in use is reported (backend()) so nobody has to guess from the sound. */
-class AacDecoderPlatform {
-public:
-    static constexpr bool kExactFrames = false;
-    bool exactFrames() const { return false; }
-    bool canConceal() const { return false; }
-    void conceal(int, AacPcm&) {}
-    int unitFrames() const { return 0; }
-    double cpuSeconds() const { return useFf_ ? ff_.cpuSeconds() : -1.0; }
-    bool switchPending() const { return false; }
-    bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
-    uint64_t inFlightFrames() const { return 0; }
-    uint64_t dropped() const { return 0; }
-    uint32_t generation() const { return 0; }
-    template <class F> void setSink(F&&) {}
-    void stop() {}
-    int64_t concealed() const { return 0; }
-    /** ★ VIBE_AAC_APPLE=1 forces AudioToolbox — read once, here, so dab-offline can measure both. */
-    AacDecoderPlatform() : useFf_(ff_.available() && !getenv("VIBE_AAC_APPLE")) {}
-    bool available() const { return useFf_ ? ff_.available() : at_.available(); }
-    const char* backend() const { return useFf_ ? ff_.backend() : at_.backend(); }
-    int restarts() const { return 0; }
-    bool decode(const uint8_t* adts, size_t n, AacPcm& out) { return useFf_ ? ff_.decode(adts, n, out) : at_.decode(adts, n, out); }
-    void drain(AacPcm& out) { if (useFf_) ff_.drain(out); else at_.drain(out); }
-    void close() { ff_.close(); at_.close(); }
-    void reset() { ff_.reset(); at_.reset(); }
-    int rateHz()   const { return useFf_ ? ff_.rateHz()   : at_.rateHz(); }
-    int channels() const { return useFf_ ? ff_.channels() : at_.channels(); }
-private:
-    AacDecoderFfmpeg ff_;
-    AacDecoderApple  at_;
-    bool useFf_ = false;
-};
-#else
-using AacDecoderPlatform = AacDecoderFfmpeg;
 #endif
 
-#if defined(VIBE_HAVE_FAAD2_DAB)
+#if !defined(__ANDROID__) && defined(VIBE_HAVE_FAAD2_DAB)
 }  // namespace vibedab
 #include "vibe_dab_faad.h"
 namespace vibedab {
-/** ★★ The decoder DabService drives: the platform's or FAAD2, chosen at reset() (a service start) and re-chosen when the
- *  owner flips the switch (switchPending → the service resets it as it would for a new service). Every call goes to the
- *  one in use; the other is closed, so FFmpeg's child does not linger while FAAD2 plays. */
+/** ★★★ THE LINUX AND MAC SERVERS' DAB+ DECODER: FAAD2, the only one (V12, 2026-10-29). It is told DAB+'s real 960-sample
+ *  frames, so the pitch and the output rate are exact and nothing is measured or re-paced (kExactFrames), and a lost
+ *  unit is concealed rather than spliced (canConceal).
+ *  ★★★ FAAD2 RUNS ON ITS OWN THREAD (vibe-faad2 — AacDecoderFaadAsync): its decode and conceal calls return at once
+ *      and the PCM arrives through the sink.
+ *  ★ VIBE_DAB_FAAD_INLINE=1: FAAD2 decodes in the call instead, on the DAB thread, exactly as before the codec had a
+ *    thread of its own — the A/B for measuring what the thread moves off the demodulator (and a way back). */
 class AacDecoder {
 public:
-    static constexpr bool kExactFrames = false;    ///< not ALWAYS exact — ask exactFrames()
-    AacDecoder() { useFaad_ = want(); }
-    /* ★★★ FAAD2 RUNS ON ITS OWN THREAD (vibe-faad2 — AacDecoderFaadAsync): its decode and conceal calls return at once
-     *  and the PCM arrives through the sink. FFmpeg (a child process) and the others decode in the call, as before.
-     *  ★ VIBE_DAB_FAAD_INLINE=1: FAAD2 decodes in the call instead, on the DAB thread, exactly as before the codec had a
-     *    thread of its own — the A/B for measuring what the thread moves off the demodulator (and a way back). */
+    static constexpr bool kExactFrames = true;
+    AacDecoder() = default;
     static bool inlineFaad() { static const bool v = [] { const char* e = std::getenv("VIBE_DAB_FAAD_INLINE"); return e && e[0] == '1'; }(); return v; }
-    bool async() const { return useFaad_ && !inlineFaad(); }
+    bool async() const { return !inlineFaad(); }
     uint64_t inFlightFrames() const { return async() ? faad_.inFlightFrames() : 0; }
     uint64_t dropped() const { return faad_.dropped(); }
     uint32_t generation() const { return faad_.generation(); }
     void setSink(AacDecoderFaadAsync::Sink s) { faad_.setSink(std::move(s)); }
     void stop() { faad_.stop(); }
-    double cpuDecodeSeconds() const { return !useFaad_ ? -1.0 : inlineFaad() ? sync_.cpuDecodeSeconds() : faad_.cpuDecodeSeconds(); }
-    double cpuResampleSeconds() const { return !useFaad_ ? -1.0 : inlineFaad() ? sync_.cpuResampleSeconds() : faad_.cpuResampleSeconds(); }
-    bool exactFrames() const { return useFaad_; }
-    bool canConceal() const { return useFaad_; }
-    void conceal(int n, AacPcm& out) { if (!useFaad_) return; if (inlineFaad()) sync_.conceal(n, out); else faad_.conceal(n, out); }
-    int unitFrames() const { return !useFaad_ ? 0 : inlineFaad() ? sync_.unitFrames() : faad_.unitFrames(); }
-    double cpuSeconds() const { return !useFaad_ ? plat_.cpuSeconds() : inlineFaad() ? sync_.cpuSeconds() : faad_.cpuSeconds(); }
-    bool switchPending() const { return want() != useFaad_; }
-    bool available() const { return useFaad_ ? true : plat_.available(); }
-    const char* backend() const { return useFaad_ ? "FAAD2" : plat_.backend(); }
-    int restarts() const { return !useFaad_ ? plat_.restarts() : inlineFaad() ? sync_.restarts() : faad_.restarts(); }
-    bool decode(const uint8_t* adts, size_t n, AacPcm& out) {
-        if (!useFaad_) return plat_.decode(adts, n, out);
-        return inlineFaad() ? sync_.decode(adts, n, out) : faad_.decode(adts, n, out);
-    }
-    void drain(AacPcm& out) { if (!useFaad_) plat_.drain(out); }
-    void close() { faad_.close(); sync_.close(); plat_.close(); }
-    void reset() { useFaad_ = want(); faad_.reset(); sync_.reset(); plat_.reset(); }
-    int rateHz()   const { return !useFaad_ ? plat_.rateHz()   : inlineFaad() ? sync_.rateHz()   : faad_.rateHz(); }
-    int channels() const { return !useFaad_ ? plat_.channels() : inlineFaad() ? sync_.channels() : faad_.channels(); }
+    double cpuDecodeSeconds() const { return inlineFaad() ? sync_.cpuDecodeSeconds() : faad_.cpuDecodeSeconds(); }
+    double cpuResampleSeconds() const { return inlineFaad() ? sync_.cpuResampleSeconds() : faad_.cpuResampleSeconds(); }
+    bool exactFrames() const { return true; }
+    bool canConceal() const { return true; }
+    void conceal(int n, AacPcm& out) { if (inlineFaad()) sync_.conceal(n, out); else faad_.conceal(n, out); }
+    int unitFrames() const { return inlineFaad() ? sync_.unitFrames() : faad_.unitFrames(); }
+    double cpuSeconds() const { return inlineFaad() ? sync_.cpuSeconds() : faad_.cpuSeconds(); }
+    bool available() const { return true; }
+    const char* backend() const { return "FAAD2"; }
+    int restarts() const { return inlineFaad() ? sync_.restarts() : faad_.restarts(); }
+    bool decode(const uint8_t* adts, size_t n, AacPcm& out) { return inlineFaad() ? sync_.decode(adts, n, out) : faad_.decode(adts, n, out); }
+    void drain(AacPcm&) {}
+    void close() { faad_.close(); sync_.close(); }
+    void reset() { faad_.reset(); sync_.reset(); }
+    int rateHz()   const { return inlineFaad() ? sync_.rateHz()   : faad_.rateHz(); }
+    int channels() const { return inlineFaad() ? sync_.channels() : faad_.channels(); }
     int64_t concealed() const { return inlineFaad() ? sync_.concealed() : faad_.concealed(); }
 private:
-    static bool want() { return dabWantFaad2(); }
-    AacDecoderPlatform plat_;
     AacDecoderFaadAsync faad_;
     AacDecoderFaad sync_;      ///< only with VIBE_DAB_FAAD_INLINE=1
-    bool useFaad_ = false;
 };
-#else
-using AacDecoder = AacDecoderPlatform;
 #endif
 
-#endif
-#if !defined(__ANDROID__) && !defined(__unix__) && !defined(__APPLE__)
+#if !defined(__ANDROID__) && !defined(VIBE_HAVE_FAAD2_DAB) && !defined(__APPLE__)
 
-/** ★★ NO PLATFORM DECODER HERE YET — Linux gets ffmpeg and macOS AudioToolbox, and until then
- *  available() answers honestly and the DAB+ services are marked unplayable rather than silently
- *  producing nothing. The ensemble, the MP2 services and the signal figures are unaffected. */
+/** ★★ NO DAB+ DECODER IN THIS BUILD (a Linux dev build without libfaad_dab.a) — available() answers honestly and the
+ *  DAB+ services are marked unplayable rather than silently producing nothing. The ensemble, the MP2 services and the
+ *  signal figures are unaffected. Release builds cannot get here (CMakeLists.txt requires FAAD2). */
 class AacDecoder {
 public:
     static constexpr bool kExactFrames = true;
@@ -799,7 +472,6 @@ public:
     void conceal(int, AacPcm&) {}
     int unitFrames() const { return 0; }
     double cpuSeconds() const { return -1.0; }
-    bool switchPending() const { return false; }
     bool async() const { return false; }               ///< decodes in the call (see AacDecoderFaadAsync for the other kind)
     uint64_t inFlightFrames() const { return 0; }
     uint64_t dropped() const { return 0; }
@@ -820,7 +492,4 @@ public:
 
 #endif
 
-#if defined(__ANDROID__) || !(defined(__unix__) || defined(__APPLE__))
-inline bool AacDecoderFfmpegAvailable() { return false; }
-#endif
 }  // namespace vibedab

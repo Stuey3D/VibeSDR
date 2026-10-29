@@ -1,13 +1,12 @@
 // dab-unitlog.cpp — run a captured multiplex (bench-clip .vbu8 layout: "VIBEBU81", double rate, double centre, uint32 sid,
 // then u8 I/Q) through the REAL DabService in real time and write a UNIT LOG of one DAB+ service: every access-unit slot
 // of every super frame on the programme clock, CRC-failed slots marked, lost super frames left as gaps. test-dab-faad
-// replays the log through each decoder, so FFmpeg and FAAD2 are compared on exactly the units — and exactly the errors —
-// the receiver produced off air. V12, 2026-10-26.
+// replays the log through FAAD2, so the decoder is tested on exactly the units — and exactly the errors — the receiver
+// produced off air. V12, 2026-10-26.
 //   dab-unitlog <clip.vbu8> list                      — the services on the multiplex (after the FIC has been read)
 //   dab-unitlog <clip.vbu8> <sid hex> <out.dabu>      — the log for one service, the whole clip
 //   dab-unitlog <clip.vbu8> <sid hex> --pcm <out.wav> — what the SERVICE delivers (takePcm, 48 kHz stereo) — the stream a
-//                                                       listener gets, whichever decoder VIBE_DAB_AAC / the switch picks;
-//                                                       VIBE_UNITLOG_SWITCH_AT=<s> flips the owner's switch at that second
+//                                                       listener gets
 // Log: magic "VIBEDABU", then per slot: uint32 sf, uint8 slot, uint8 slots, uint8 ps, uint8 pad, uint16 len, ADTS bytes.
 // ★ The clip is STREAMED (u8 → float per 50 ms block): a 60 s 2.4 MS/s capture is 1.15 GB as float.
 // ★★ Real broadcasts are other people's programmes: logs made from them live in ~/VibeSDR-test-audio/dab/ only.
@@ -61,10 +60,6 @@ int main(int argc, char** argv) {
         svc.feed(f.data(), blk); fed += 0.05;
         { const size_t got = svc.takePcm(pcm.data(), pcm.size() / 2); if (pcmMode) heard.insert(heard.end(), pcm.begin(), pcm.begin() + long(2 * got)); }
         if (std::getenv("VIBE_UNITLOG_JSON") && std::fabs(fed - 10.0) < 0.026) { std::string j; svc.jsonTry(j); }   // ★ primes the CPU window
-        if (const char* sw = std::getenv("VIBE_UNITLOG_SWITCH_AT")) {
-            static bool flipped = false;
-            if (!flipped && fed >= std::atof(sw)) { flipped = true; vibedab::dabAacChoice().store(vibedab::dabWantFaad2() ? 2 : 1); std::printf("   [%.1f s] switch flipped\n", fed); }
-        }
         // ★ VIBE_UNITLOG_FAST=1: no real-time pacing — as fast as the machine goes (per-thread instruction counts under qemu)
         static const bool fast = std::getenv("VIBE_UNITLOG_FAST") != nullptr;
         if (!fast) std::this_thread::sleep_until(t0 + microseconds((long long)(fed * 1e6)));

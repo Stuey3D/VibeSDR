@@ -98,7 +98,7 @@ docker run --rm --privileged --cpus 2 --platform "$PLAT" -v /dev:/dev \
   echo "==> base: $(basename "$BASE") (sha256 ok)"
   IMG=/out/work/$NAME.img
   nice -n 15 xz -dc "$BASE" > "$IMG"
-  # ── 2. WORKING room for VibeServer, ffmpeg and the maps: +4 GB on the root partition ──
+  # ── 2. WORKING room for VibeServer, its packages and the maps: +4 GB on the root partition ──
   # ★★★ WORKING ROOM ONLY — step 5 shrinks root to what it holds + 1 GB, so the image is no bigger.
   #     It was +1.5 GB until 2026-10-10: once ffmpeg (~400 MB of libraries) was added, used + 1 GB no
   #     longer fitted, sfdisk could not place partitions 2 and 3 yet RETURNED SUCCESS, and the v6 image

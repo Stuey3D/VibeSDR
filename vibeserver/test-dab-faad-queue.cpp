@@ -7,8 +7,8 @@
 //      timed), the ones that do not fit are counted as dropped, and once the worker runs again the output is EXACTLY as
 //      long as the programme (each dropped unit concealed in its place — the clock stays whole, nothing is spliced).
 //   3. A SERVICE CHANGE — jobs queued before reset() are never run; the sink sees only the new generation; a fresh decoder.
-//   4. THE LIVE SWITCH, BOTH WAYS — the AacDecoder the service drives (dabAacChoice): FAAD2 → FFmpeg → FAAD2, async()
-//      following the switch, audio from each (FFmpeg only where it is installed), the FAAD2 thread reused, not leaked.
+//   4. THE DECODER THE SERVICE DRIVES (vibedab::AacDecoder) is FAAD2 — the Linux and Mac servers' only DAB+ decoder —
+//      async, exact, concealing, and still sending audio through the sink after a service change (reset).
 //   5. THE THREAD IS NAMED vibe-faad2 and is not the caller's.
 // Exit 0 pass, 1 fail, 3 not run (no FAAD2 in the build, or no logs).
 //   run: test-dab-faad-queue [<log.dabu>]
@@ -159,35 +159,22 @@ int main(int argc, char** argv) {
         check(as.inFlightFrames() == 0, "nothing left in flight");
     }
 
-    // ── 4. the live switch, both ways, through the decoder DabService drives ──
-    std::printf("── 4. the owner's live switch: FAAD2 → FFmpeg → FAAD2\n");
+    // ── 4. the decoder DabService drives: FAAD2, the server's only DAB+ decoder (V12, 2026-10-29) ──
+    std::printf("── 4. the service's decoder is FAAD2, on its own thread, across a service change\n");
     {
-        const bool ff = vibedab::AacDecoderFfmpegAvailable();
-        vibedab::dabAacChoice().store(1);
         vibedab::AacDecoder d; Collect col; d.setSink(std::ref(col)); vibedab::AacPcm p;
         d.reset();
-        check(d.async() && std::string(d.backend()) == "FAAD2", "FAAD2 chosen: async, on its own thread");
+        check(d.available() && d.async() && std::string(d.backend()) == "FAAD2" && d.exactFrames() && d.canConceal()
+              && vibedab::AacDecoder::kExactFrames, "FAAD2: available, async, exact frames, conceals");
         for (size_t i = 0; i < 40; ++i) if (!L[i].adts.empty()) d.decode(L[i].adts.data(), L[i].adts.size(), p);
         for (int i = 0; i < 400 && d.inFlightFrames(); ++i) std::this_thread::sleep_for(milliseconds(5));
         const size_t f1 = col.frames();
         check(f1 > 0 && p.interleaved.empty(), "FAAD2's audio came through the sink, not the call");
-        vibedab::dabAacChoice().store(2);   // ★ 2 = FFmpeg (0 is the server's default — FAAD2 on Linux since 2026-10-29)
-        check(d.switchPending(), "switching to FFmpeg is pending");
-        d.reset();
-        check(!d.async() && !d.switchPending(), "FFmpeg now: decodes in the call");
-        if (ff) {
-            for (size_t i = 0; i < 120 && p.interleaved.empty(); ++i) { if (!L[i].adts.empty()) d.decode(L[i].adts.data(), L[i].adts.size(), p); std::this_thread::sleep_for(milliseconds(10)); d.drain(p); }
-            check(!p.interleaved.empty(), "FFmpeg returned audio");
-        } else std::printf("   (no ffmpeg on this machine — its half not run)\n");
-        check(col.frames() == f1, "FAAD2's thread sent nothing while FFmpeg played");
-        vibedab::dabAacChoice().store(1);
-        check(d.switchPending(), "and back: switching to FAAD2 is pending");
-        d.reset();
+        d.reset();   // ★ what a service change does
         for (size_t i = 0; i < 40; ++i) if (!L[i].adts.empty()) d.decode(L[i].adts.data(), L[i].adts.size(), p);
         for (int i = 0; i < 400 && d.inFlightFrames(); ++i) std::this_thread::sleep_for(milliseconds(5));
-        check(d.async() && col.frames() > f1, "FAAD2 again, audio through the sink");
+        check(d.async() && col.frames() > f1 && p.interleaved.empty(), "after a reset: FAAD2 again, the same thread, audio through the sink");
         d.stop(); d.close();
-        vibedab::dabAacChoice().store(0);
     }
     std::printf("\ntest-dab-faad-queue: %d checks, %d failed\n", passes + fails, fails);
     return fails ? 1 : 0;

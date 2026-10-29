@@ -682,7 +682,7 @@ public:
     void setRatioFile(const std::string& path) {
         std::lock_guard<std::mutex> lk(m_);
         ratioFile_ = path;
-        if (AacDecoder::kExactFrames || path.empty()) return;   // ★ ALWAYS exact (Android): nothing to learn; a switchable build keeps it for FFmpeg
+        if (AacDecoder::kExactFrames || path.empty()) return;   // ★ exact (FAAD2, AMediaCodec): nothing to learn; AudioToolbox measures
         if (FILE* f = fopen(path.c_str(), "rb")) {
             /* ★★ TWO FORMATS, because the file on an upgraded box is the old one. A line with two
              *  fields is "<access units> <ratio>"; a bare number is a pre-5.4 ratio.
@@ -1203,9 +1203,9 @@ public:
             snprintf(ab, sizeof ab, ",\"mer\":%.1f,\"mscBer\":%.5f,\"irPeak\":%d,\"aacDec\":\"%s\"",
                      s.merDb, s.mscBer, s.irPeakSamples, aac_.backend());   // ★ which decoder DAB+ goes through — never guessed from the sound
             j += ab;
-            /* ★★ AND WHAT IT COSTS (V12 — the FFmpeg/FAAD2 A/B on a Pi 2): the decoder's CPU over the time since the last
-             *  report, as % of one core — FFmpeg's child process, or FAAD2's time on this thread — and the units concealed
-             *  (FAAD2 only). aacCpu is absent when the platform cannot say (AMediaCodec, AudioToolbox). */
+            /* ★★ AND WHAT IT COSTS (V12): the decoder's CPU over the time since the last report, as % of one core —
+             *  FAAD2's time on its own thread — and the units concealed (FAAD2 only). aacCpu is absent when the platform
+             *  cannot say (AMediaCodec, AudioToolbox). */
             {
                 const double cpu = aac_.cpuSeconds();
                 const auto now = std::chrono::steady_clock::now();
@@ -1215,8 +1215,7 @@ public:
                 if (wall > 0.5 || cpu < aacCpuPrev_) { aacCpuPrev_ = cpu; aacCpuAt_ = now; }
                 char cb[96];
                 if (aacCpuPct_ >= 0) { snprintf(cb, sizeof cb, ",\"aacCpu\":%.2f", aacCpuPct_); j += cb; }
-                snprintf(cb, sizeof cb, ",\"aacConcealed\":%lld,\"aacChoice\":%s", (long long)aac_.concealed(),
-                         dabFaad2Built() ? (aac_.exactFrames() && aac_.canConceal() ? "\"faad2\"" : "\"platform\"") : "null");
+                snprintf(cb, sizeof cb, ",\"aacConcealed\":%lld", (long long)aac_.concealed());
                 j += cb;
                 // ★ units the codec's own thread could not take in time (concealed, never waited for) — vibe-faad2
                 if (aac_.async()) { snprintf(cb, sizeof cb, ",\"aacDropped\":%llu", (unsigned long long)aac_.dropped()); j += cb; }
@@ -2204,15 +2203,6 @@ private:
                 } else onAuSlotForTest(sfAt, slot, s.auTotal, s.ps, nullptr, 0);
             }
         }
-        /* ★★ THE OWNER SWITCHED DECODER (setup: dabFaad2) — restart it exactly as a new service would: the other decoder,
-         *  fresh, its rate learning from scratch, the timeline re-anchored. Within a super frame of the click; nothing else
-         *  in the receiver notices. */
-        if (aac_.switchPending()) {
-            aac_.reset(); aacDry_ = 0; aacPcmAcc_ = 0.0; aacAuAcc_ = 0; aacPrimed_ = false;
-            aacStartedKnown_ = aac_.exactFrames(); unitsOut_ = -1; unitsCfg_ = 0;
-            { std::lock_guard<std::mutex> plk(pm_); resampleReset(); }
-            std::fprintf(stderr, "[DAB] DAB+ decoder switched to %s\n", aac_.backend());
-        }
         /* ★★ A super frame whose header is real (firecode) but whose every unit failed its CRC is a KNOWN hole of a known
          *  size — conceal it now, in place, rather than waiting for the clock to notice it 240 ms later. Only for the
          *  geometry already playing: a header that passed its firecode by chance must not invent units. */
@@ -2436,7 +2426,7 @@ private:
     std::deque<std::vector<uint8_t>> sf_;      ///< the five-frame window
     std::deque<std::vector<uint8_t>> adts_;    ///< reframed AUs, for a server with no decoder — under adtsM_
     std::mutex adtsM_;                         ///< adts_ only; a leaf, never held with anything else taken after it
-    AacDecoder aac_;                           ///< the PLATFORM's decoder — we ship none
+    AacDecoder aac_;                           ///< FAAD2 on the Linux/Mac servers, the platform's elsewhere (vibe_dab_aacdec.h)
     uint32_t   aacDecoded_ = 0;
     /* ★★ THE UNIT CLOCK for a concealing decoder (FAAD2). unitsOut_ = the index of the next unit the decoder owes, on a
      *  clock of auTotal units per 120 ms super frame read off pcmOwed_; -1 until a unit has been decoded (nothing to

@@ -146,8 +146,9 @@ package list) first acts on the update *after* it. This does not matter for boxe
   `/etc/vibeserver/config.json`: a Full-mode front door with no radio and no password.
 - **Installs the package's list**, `pocket-packages.txt`: `dnsmasq-base` (hotspot DHCP and the
   captive DNS rule), `nftables` (the `:80` redirect; its service stays off), `iw`, `rfkill`,
-  `avahi-daemon`, `ffmpeg` (DAB+ audio), `overlayroot` and `initramfs-tools`. These are the same
-  packages that every Update checks for.
+  `avahi-daemon`, `overlayroot`, `initramfs-tools` and `dosfstools`. These are the same
+  packages that every Update checks for. There is no `ffmpeg`: VibeServer decodes DAB+ and DRM
+  audio itself.
 - **Runs `vibeserver-pocket-converge`**, which is the same step every Update runs, then
   `--check`. The build stops if anything did not converge. The converge does the following:
   - **Enables** `vibeserver`, `vibeserver-radios`, `vibeserver-maintenance.path`,

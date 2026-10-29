@@ -134,7 +134,14 @@ additions are syntax-checked but have not run.
 - **`test-server-drm`** (40/40): RRI plays through the real server as PCM and as Opus (200 packets in 4 s, up to 369 bytes), on both radio kinds.
 - **`test-web-drm`** (16/16): the box shows "Audio … via FAAD2 2.11.3".
 
-# DAB+ through FAAD2 — the owner's choice since 2026-10-26; THE LINUX DEFAULT since 2026-10-29
+# DAB+ through FAAD2 — the owner's choice since 2026-10-26; THE LINUX DEFAULT since 2026-10-29; THE ONLY ONE since later that day
+
+**2026-10-29, later (branch `v12-no-ffmpeg` — Stuart: "go for the dual approach then and lose FFmpeg"):** VibeServer on
+Linux and the Mac decodes AAC with exactly two libraries, in process: **FAAD2** for DAB+ and DRM's AAC, **libxaac** for
+xHE-AAC. There is no FFmpeg route of any kind and no decoder choice (`dabAacDecoder` is gone; an old config's key is
+ignored). The Mac decodes DAB+ with FAAD2 like Linux; Android keeps AMediaCodec. Everything below that mentions an
+FFmpeg path, the switch or the Mac's AudioToolbox DAB+ path is history.
+
 
 **2026-10-29 (Stuart: "use FAAD2 for DRM and DAB+ by default and FFmpeg where needed"):** on Linux servers FAAD2 is
 now the DAB+ default and FFmpeg the owner's alternative; the packages no longer Recommend the distribution's FFmpeg — it is

@@ -1,24 +1,18 @@
-// vibe_drm_audiodec.h — DRM audio decoded BY THE SERVER'S OPERATING SYSTEM, never by us (the DAB+ posture of
-// vibe_dab_aacdec.h, applied to DRM). Access units and their AudioSpecificConfig come from decoders/drm/drm_audio.h.
+// vibe_drm_audiodec.h — DRM audio decoded ON THE SERVER (the DAB+ posture of vibe_dab_aacdec.h, applied to DRM).
+// Access units and their AudioSpecificConfig come from decoders/drm/drm_audio.h.
 //
-// ★★★ PER PLATFORM:
-//   • xHE-AAC on every server build with libxaac (VIBE_HAVE_LIBXAAC — the Linux packages and the Mac VibeServer, V12
-//     2026-10-29): libxaac IN PROCESS (vibe_xaac.h), one access unit at a time — no child, no container. It decodes what
-//     FFmpeg 8.1 could not (SBR, eSBR, the ACELP/TCX speech core, MPEG Surround 2-1-2); docs/v12/LIBXAAC.md. The routes
-//     below are what a build WITHOUT libxaac falls back to (dev builds; Android keeps MediaCodec).
-//   • Linux / macOS with FFmpeg (no libxaac): FFmpeg run as a process, fed a live Matroska stream (drm_audio.h MkvStream: the
-//     AudioSpecificConfig as CodecPrivate — FFmpeg's LOAS reader cannot take a USAC config, found 2026-10-29), asked for
-//     48 kHz stereo float. xHE-AAC needs FFmpeg's native USAC decoder (7.1+) — and even 8.1 garbles USAC with SBR, which
-//     is why the packages now carry libxaac instead (the FFmpeg bundle of early V12 is gone). A missing or old FFmpeg is
-//     still TOLD to the listener, by name (canDecode()).
-//   • DRM's AAC (all server builds with FAAD2 — VIBE_HAVE_FAAD2): FAAD2's DRM build, in process. That is the DEFAULT and
-//     only route for DRM AAC; FFmpeg is used only for xHE-AAC.
-//   • macOS: AudioToolbox has decoded USAC since macOS 10.15 (kAudioFormatMPEGD_USAC) and is preferred for xHE-AAC when
-//     it accepts the configuration; FFmpeg is the fallback.
+// ★★★ PER PLATFORM (V12, 2026-10-29 — the Linux and Mac servers decode AAC with exactly two libraries):
+//   • DRM's AAC (all server builds with FAAD2 — VIBE_HAVE_FAAD2): FAAD2's DRM build, in process.
+//   • xHE-AAC on every server build with libxaac (VIBE_HAVE_LIBXAAC — the Linux packages and the Mac VibeServer):
+//     libxaac IN PROCESS (vibe_xaac.h), one access unit at a time — every USAC tool (SBR, eSBR, the ACELP/TCX speech
+//     core, MPEG Surround 2-1-2); docs/v12/LIBXAAC.md.
 //   • Android: MediaCodec with the AudioSpecificConfig as csd-0 (audio/mp4a-latm, profile 42) — xHE-AAC from Android 10
 //     on devices whose codec list has it. ★ Written to the NDK's documented API; not yet run on a device (docs/v12/DRM.md).
-//   • DRM's AAC (ER AAC Scalable + HCR/VCB11, 960, reversed SBR — see drm_audio.h) is decodable by NONE of these; the
-//     answer for an AAC station is the honest one.
+//   • The iOS / Mac Catalyst app (no FAAD2, no libxaac — the App Store archive links no decoder library): AudioToolbox,
+//     which has decoded USAC since macOS 10.15 (kAudioFormatMPEGD_USAC). DRM's own AAC is not decodable there.
+//   • A Linux dev build without libxaac: xHE-AAC is not decodable, and the listener is TOLD so, by name (canDecode()).
+//   • DRM's AAC (ER AAC Scalable + HCR/VCB11, 960, reversed SBR — see drm_audio.h) needs FAAD2's DRM build; where that
+//     is missing, the answer for an AAC station is the honest one.
 #pragma once
 #include "decoders/drm/drm_audio.h"
 #include <algorithm>
@@ -37,139 +31,13 @@
 #if defined(__ANDROID__)
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
-#else
-#include <csignal>
-#include <ctime>
-#include <fcntl.h>
-#include <signal.h>
-#include <sys/wait.h>
-#include <unistd.h>
-#include "vibe_ffmpeg_path.h"   // ★ which ffmpeg: the package's own on Linux (V12), shared with DAB+
-#if defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(VIBE_HAVE_LIBXAAC)
 #include <AudioToolbox/AudioToolbox.h>
-#endif
 #endif
 
 namespace vibe {
 
-#if !defined(__ANDROID__)
-/** ★ FFmpeg — vibe_ffmpeg_path.h: an installed one (Homebrew's on a Mac). Only a build WITHOUT libxaac comes here for
- *  xHE-AAC. VIBE_DRM_FFMPEG still overrides it (tests). */
-inline const char* drmFfmpegPath() {
-    static const std::string path = [] {
-        if (const char* e = getenv("VIBE_DRM_FFMPEG")) return std::string(e);
-        return std::string(vibe::ffmpegPath());
-    }();
-    return path.c_str();
-}
-/** ★ What this machine's FFmpeg can do, probed ONCE: present, has the AAC decoder, and its version (USAC from 7.1). */
-struct FfmpegCaps { bool present = false; bool aac = false; int major = 0, minor = 0; bool usac = false; std::string version; };
-inline const FfmpegCaps& drmFfmpegCaps() {
-    static const FfmpegCaps caps = [] {
-        FfmpegCaps c;
-        const std::string cmd = std::string("'") + drmFfmpegPath() + "' -hide_banner -version 2>/dev/null";
-        if (FILE* p = ::popen(cmd.c_str(), "r")) {
-            char line[512];
-            if (std::fgets(line, sizeof line, p)) {
-                // "ffmpeg version 7.1.1-1+b1 …", "ffmpeg version n7.1 …", or a git build "N-11xxxx-g…"
-                const char* v = std::strstr(line, "version ");
-                if (v) {
-                    v += 8; c.version.assign(v, std::strcspn(v, " \n"));
-                    const char* d = v; while (*d && (*d < '0' || *d > '9')) ++d;
-                    if (*v == 'N' && v[1] == '-') { c.major = 99; c.minor = 0; }   // ★ a git snapshot: newer than any release
-                    else if (*d) { c.major = std::atoi(d); const char* dot = std::strchr(d, '.'); c.minor = dot ? std::atoi(dot + 1) : 0; }
-                    c.present = true;
-                }
-            }
-            ::pclose(p);
-        }
-        if (c.present) {
-            const std::string cmd2 = std::string("'") + drmFfmpegPath() + "' -hide_banner -decoders 2>/dev/null";
-            if (FILE* p = ::popen(cmd2.c_str(), "r")) {
-                char line[512];
-                while (std::fgets(line, sizeof line, p)) if (std::strstr(line, " aac ")) { c.aac = true; break; }
-                ::pclose(p);
-            }
-        }
-        c.usac = c.aac && (c.major > 7 || (c.major == 7 && c.minor >= 1));
-        return c;
-    }();
-    return caps;
-}
-
-/** Matroska in (drm_audio.h MkvStream), 48 kHz stereo float out, through an FFmpeg child (the vibe_dab_aacdec.h pattern:
- *  non-blocking pipes, SIGPIPE ignored, never a permanent failure). */
-class DrmFfmpegChild {
-public:
-    ~DrmFfmpegChild() { close(); }
-    bool running() const { return pid_ > 0; }
-    /** The stream head every new child is given first (a restarted child starts a fresh stream). */
-    void setHeader(std::vector<uint8_t> h) { head_ = std::move(h); }
-    /** ★★ A CONTAINER MUST NOT LOSE BYTES. LOAS resynchronised on its next sync word; Matroska would read a half-written
-     *  block as garbage. So what the pipe does not take now is kept and sent first next time — and if FFmpeg has fallen
-     *  so far behind that a second of it is queued, the child is restarted rather than the queue grown. */
-    bool write(const std::vector<uint8_t>& bytes) {
-        if (pid_ < 0) { if (!start()) return false; pend_ = head_; }
-        pend_.insert(pend_.end(), bytes.begin(), bytes.end());
-        while (!pend_.empty()) {
-            const ssize_t w = ::write(inFd_, pend_.data(), pend_.size());
-            if (w > 0) { pend_.erase(pend_.begin(), pend_.begin() + w); continue; }
-            if (w < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
-            close(); return false;
-        }
-        if (pend_.size() > 256 * 1024) { close(); return false; }
-        return true;
-    }
-    void drain(std::vector<float>& out) {
-        if (pid_ < 0) return;
-        for (;;) {
-            uint8_t buf[16384];
-            const ssize_t r = ::read(outFd_, buf, sizeof buf);
-            if (r <= 0) break;
-            // ★ the pipe may split a float: keep the odd bytes for next time
-            carry_.insert(carry_.end(), buf, buf + r);
-            const size_t nf = carry_.size() / 4;
-            const float* f = reinterpret_cast<const float*>(carry_.data());
-            out.insert(out.end(), f, f + nf);
-            carry_.erase(carry_.begin(), carry_.begin() + long(nf * 4));
-            if (size_t(r) < sizeof buf) break;
-        }
-    }
-    void close() {
-        if (inFd_ >= 0) { ::close(inFd_); inFd_ = -1; }
-        if (outFd_ >= 0) { ::close(outFd_); outFd_ = -1; }
-        if (pid_ > 0) { ::kill(pid_, SIGKILL); int st = 0; ::waitpid(pid_, &st, 0); }
-        pid_ = -1; carry_.clear(); pend_.clear();
-    }
-private:
-    bool start() {
-        static const bool ign = [] { ::signal(SIGPIPE, SIG_IGN); return true; }(); (void)ign;
-        int in[2], out[2];
-        if (::pipe(in) != 0) return false;
-        if (::pipe(out) != 0) { ::close(in[0]); ::close(in[1]); return false; }
-        const pid_t pid = ::fork();
-        if (pid < 0) { ::close(in[0]); ::close(in[1]); ::close(out[0]); ::close(out[1]); return false; }
-        if (pid == 0) {
-            ::dup2(in[0], STDIN_FILENO); ::dup2(out[1], STDOUT_FILENO);
-            ::close(in[1]); ::close(out[0]);
-            const int dn = ::open("/dev/null", O_WRONLY); if (dn >= 0) ::dup2(dn, STDERR_FILENO);
-            ::execlp(drmFfmpegPath(), "ffmpeg", "-hide_banner", "-loglevel", "quiet", "-nostdin",
-                     "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32", "-analyzeduration", "0",
-                     "-f", "matroska", "-i", "pipe:0", "-f", "f32le", "-ar", "48000", "-ac", "2", "pipe:1", (char*)nullptr);
-            ::_exit(127);
-        }
-        ::close(in[0]); ::close(out[1]);
-        inFd_ = in[1]; outFd_ = out[0];
-        ::fcntl(inFd_, F_SETFL, O_NONBLOCK); ::fcntl(outFd_, F_SETFL, O_NONBLOCK);
-        pid_ = pid;
-        return true;
-    }
-    pid_t pid_ = -1; int inFd_ = -1, outFd_ = -1;
-    std::vector<uint8_t> carry_, head_, pend_;
-};
-#endif
-
-#if defined(__APPLE__)
+#if defined(__APPLE__) && !defined(VIBE_HAVE_LIBXAAC)
 /** ★ AudioToolbox's USAC decoder, one access unit at a time; 48 kHz stereo float is asked for directly. */
 class DrmAppleUsac {
 public:
@@ -400,7 +268,8 @@ private:
 #endif
 
 /** ★★ The one door the DRM listener uses: configure for a service, ask whether it can be played (and why not), feed
- *  access units, collect PCM (48 kHz stereo on FFmpeg/Apple; the codec's own rate on Android — rateHz()). */
+ *  access units, collect PCM (48 kHz stereo from FAAD2, libxaac and AudioToolbox; the codec's own rate on Android —
+ *  rateHz()). */
 class DrmAudioDecoder {
 public:
     /** Is this service's audio decodable on this server? `why` is a sentence for the listener when it is not. */
@@ -420,21 +289,16 @@ public:
 #if defined(VIBE_HAVE_LIBXAAC)
         backend = XaacDecoder::version();   // ★ in process, every USAC tool (vibe_xaac.h)
         return true;
-#endif
-#if defined(__ANDROID__)
+#elif defined(__ANDROID__)
         backend = "MediaCodec";
         return true;   // ★ tried on open(); a refusal there turns into the sentence below
+#elif defined(__APPLE__)
+        backend = "AudioToolbox";
+        return true;   // ★ tried on open(); a refusal there turns into the sentence below
 #else
-#if defined(__APPLE__)
-        if (!getenv("VIBE_DRM_NO_APPLE")) { backend = "AudioToolbox"; return true; }
-#endif
-        const FfmpegCaps& c = drmFfmpegCaps();
-        if (c.usac) { backend = "ffmpeg " + c.version; return true; }
-        // ★ Only a build without libxaac reaches this (the packages and the Mac app link libxaac — VIBE_HAVE_LIBXAAC).
-        if (!c.present) why = "This station uses xHE-AAC. This server was built without an xHE-AAC decoder and has no FFmpeg, so the "
-                              "audio cannot be played; the signal is being received and decoded.";
-        else why = "This station uses xHE-AAC. This server's FFmpeg (" + c.version + ") has no xHE-AAC decoder — that arrived in "
-                   "FFmpeg 7.1 — so the audio cannot be played; the signal is being received and decoded.";
+        // ★ Only a Linux dev build without libxaac reaches this (the packages and the Mac app link libxaac).
+        why = "This station uses xHE-AAC. This server was built without an xHE-AAC decoder, so the audio cannot be played; "
+              "the signal is being received and decoded.";
         return false;
 #endif
     }
@@ -455,30 +319,12 @@ public:
         usac_ = u; rate_ = a.sampleRateHz(); ch_ = a.audioMode == 2 ? 2 : 1;
 #if defined(VIBE_HAVE_LIBXAAC)
         if (!xaac_.open(u.asc)) { why_ = "This station's xHE-AAC configuration was refused by the decoder (" + XaacDecoder::version() + ")."; return false; }
-        open_ = true;
-        return true;
-#endif
-#if !defined(__ANDROID__)
-        ff_.setHeader(mkv_.header(u.asc, rate_, ch_, u.outputFrameLength));   // ★ the config travels as CodecPrivate
-#endif
-#if defined(__ANDROID__)
+#elif defined(__ANDROID__)
         if (!mc_.open(u, rate_, ch_)) { why_ = "This station uses xHE-AAC, which this Android device's decoders do not offer."; return false; }
+#elif defined(__APPLE__)
+        if (!at_.open(u, rate_, ch_)) { why_ = "This device refused the station's xHE-AAC configuration."; return false; }
 #else
-#if defined(__APPLE__)
-        if (backend_ == "AudioToolbox" && !at_.open(u, rate_, ch_)) {
-            const FfmpegCaps& c = drmFfmpegCaps();
-            if (c.usac) backend_ = "ffmpeg " + c.version;
-            else { why_ = "This Mac refused the station's xHE-AAC configuration."; return false; }
-        }
-#endif
-        /* ★★ FFmpeg (8.1) refuses USAC's eSBR tools outright — every unit would come back as an error and
-         *  the listener would get silence with no reason. Say it instead. (Its LPD/ACELP speech core is not decoded
-         *  either, but that is chosen frame by frame and cannot be known from the config.) */
-        if (backend_.rfind("ffmpeg", 0) == 0 && u.esbr) {
-            why_ = "This station uses xHE-AAC with enhanced SBR, which this server's FFmpeg (" + drmFfmpegCaps().version +
-                   ") cannot decode yet, so the audio cannot be played; the signal is being received and decoded.";
-            return false;
-        }
+        return false;   // ★ unreachable: canDecode() said no
 #endif
         open_ = true;
         return true;
@@ -487,10 +333,7 @@ public:
     const std::string& why() const { return why_; }
     const std::string& backend() const { return backend_; }
     int rateHz() const {
-#if defined(VIBE_HAVE_LIBXAAC)
-        if (xaac_.ok()) return 48000;
-#endif
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) && !defined(VIBE_HAVE_LIBXAAC)
         return mc_.rateHz();
 #else
         return 48000;
@@ -504,25 +347,13 @@ public:
 #endif
 #if defined(VIBE_HAVE_LIBXAAC)
         if (xaac_.ok()) { xaac_.decode(au.data.data(), au.data.size(), au.crcOk, pcm); return; }
-#endif
-#if defined(__ANDROID__)
+#elif defined(__ANDROID__)
         mc_.decode(au.data.data(), au.data.size(), pcm);
-#else
-#if defined(__APPLE__)
+#elif defined(__APPLE__)
         if (at_.ok()) { at_.decode(au.data.data(), au.data.size(), pcm); return; }
 #endif
-        if (!ff_.running()) mkv_.newCluster();   // ★ a new (or restarted) child gets the head, then a fresh Cluster
-        ff_.write(mkv_.block(au.data.data(), au.data.size()));
-        ff_.drain(pcm);
-#endif
     }
-    void drain(std::vector<float>& pcm) {
-#if !defined(__ANDROID__)
-        if (open_) ff_.drain(pcm);
-#else
-        (void)pcm;
-#endif
-    }
+    void drain(std::vector<float>&) {}   // ★ every decoder here hands its PCM back in decode()
     /** Frames decoded / concealed (FAAD2 for DRM AAC, libxaac for xHE-AAC), for the report. */
     int64_t unitsGood() const {
         int64_t n = 0;
@@ -551,14 +382,10 @@ public:
 #endif
 #if defined(VIBE_HAVE_LIBXAAC)
         xaac_.close();
-#endif
-#if defined(__ANDROID__)
+#elif defined(__ANDROID__)
         mc_.close();
-#else
-        ff_.close();
-#if defined(__APPLE__)
+#elif defined(__APPLE__)
         at_.close();
-#endif
 #endif
     }
 private:
@@ -569,15 +396,10 @@ private:
 #endif
 #if defined(VIBE_HAVE_LIBXAAC)
     XaacDecoder xaac_;
-#endif
-#if defined(__ANDROID__)
+#elif defined(__ANDROID__)
     DrmMediaCodecUsac mc_;
-#else
-    DrmFfmpegChild ff_;
-    vibedrm::MkvStream mkv_;
-#if defined(__APPLE__)
+#elif defined(__APPLE__)
     DrmAppleUsac at_;
-#endif
 #endif
 };
 

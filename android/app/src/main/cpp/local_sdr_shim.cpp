@@ -14815,7 +14815,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_dabMode.load(std::memory_order_relaxed)) return fail("the radio is already on a multiplex");
         if (vsModeBlocked("dab")) return fail("DAB is blocked on this radio");
         if (!vsDabCapable()) return fail(!vsDabDecoderAvailable()
-            ? "this server has no AAC decoder (ffmpeg), so it cannot do DAB"
+            ? "this server was built without a DAB+ audio decoder, so it cannot do DAB"
             : "this radio cannot reach a DAB multiplex at 2.048 MS/s with its current settings");
         resumeCaptureIdle();
         if (radioReleased.load()) return fail("another program on this server has the radio just now");
@@ -14971,7 +14971,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::string dabBandScanWhyNot(const std::shared_ptr<net::Socket>& sock) {
         if (vsModeBlocked("dab")) return "DAB is switched off on this receiver";
         if (!vsDabCapable()) return !vsDabDecoderAvailable()
-            ? "this server has no AAC decoder (ffmpeg), so it cannot do DAB"
+            ? "this server was built without a DAB+ audio decoder, so it cannot do DAB"
             : "this radio cannot reach a DAB multiplex at 2.048 MS/s with its current settings";
         if (sock && g_vsMaxUsers.load() > 1 && !adminNow(sock))
             return "Scanning is only offered on a single-listener radio. This one is shared, and a scan would move the "
@@ -18143,9 +18143,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!vsDabCapable()) {
                 /* ★ NAME THE ACTUAL REASON. "cannot reach a multiplex at 2.048 MS/s" sent the
                  *  owner of a decoder-less server hunting through sample rates and aerials for a
-                 *  fault that was one apt line away. */
+                 *  fault that was not in the radio at all. */
                 sendText(sock, !vsDabDecoderAvailable()
-                    ? "{\"type\":\"dab_error\",\"why\":\"this server has no AAC decoder \xe2\x80\x94 ffmpeg is required for DAB, and its owner has not installed it\"}"
+                    ? "{\"type\":\"dab_error\",\"why\":\"this server was built without a DAB+ audio decoder, so it cannot do DAB\"}"
                     : "{\"type\":\"dab_error\",\"why\":\"this receiver cannot reach a DAB multiplex at 2.048 MS/s\"}");
                 return;
             }
@@ -18487,22 +18487,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 g_adsb256.store(v != 0, std::memory_order_relaxed);
                 vsPersist(std::string("{\"adsb256\":") + (v != 0 ? "1" : "0") + "}");
                 LOGI("ADS-B at 2.56 MS/s (RTL): %s", v != 0 ? "ON" : "off");
-                sendHwInfo(sock);
-            }
-            return;
-        }
-        if (type == "dabAacDecoder" || type == "dabFaad2") {
-            /* ★★ V12: the DAB+ decoder — 0 the server's default (FAAD2 on Linux), 1 FAAD2, 2 the platform's (FFmpeg). An
-             *  owner's decision like the rate switch beside it, through the same admin gate, persisted, and LIVE: DabService
-             *  sees the change at its next super frame and restarts the decoder as a new service would (switchPending).
-             *  ★ The older {"type":"dabFaad2","on":0|1} still works: on = FAAD2, off = FFmpeg, both explicit. */
-            double v = 0;
-            const bool legacy = type == "dabFaad2";
-            if (jsonNum(msg, legacy ? "on" : "v", v) && adminGate("the DAB+ decoder")) {
-                const int c = legacy ? (v != 0 ? 1 : 2) : std::max(0, std::min(2, int(v)));
-                vibedab::dabAacChoice().store(c, std::memory_order_relaxed);
-                vsPersist(std::string("{\"dabAacDecoder\":") + std::to_string(c) + "}");
-                LOGI("DAB+ decoder: %s", vibedab::dabWantFaad2() ? "FAAD2 (in process)" : "FFmpeg");
                 sendHwInfo(sock);
             }
             return;
@@ -21483,16 +21467,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!noRadio) {
                 j += std::string(",\"dabHw\":") + (vsDabCapableHw() ? "true" : "false")
                    + ",\"dab\":" + (vsDabCapable() ? "true" : "false");
-                /* ★★ V12: WHICH DAB+ DECODER. `dabFaad2Avail` — this server has BOTH (FAAD2 built in AND a working FFmpeg),
-                 *  so there is a choice to offer; the setup page draws the choice only then (a choice with one option is a
-                 *  dead control). `dabFaad2` — FAAD2 is the one in force (VIBE_DAB_AAC may override it for tests).
-                 *  `dabAacDecoder` — the owner's stored choice (0 default, 1 FAAD2, 2 FFmpeg); `dabFaad2Default` — which one
-                 *  "default" means on this server (FAAD2 on Linux, the platform's on a Mac), so the page can say so. */
-                { const bool both = vibedab::dabFaad2Built() && vibedab::AacDecoderFfmpegAvailable();
-                  j += std::string(",\"dabFaad2Avail\":") + (both ? "true" : "false")
-                     + ",\"dabFaad2\":" + (vibedab::dabFaad2Built() && vibedab::dabWantFaad2() ? "true" : "false")
-                     + ",\"dabAacDecoder\":" + std::to_string(vibedab::dabAacChoice().load(std::memory_order_relaxed))
-                     + ",\"dabFaad2Default\":" + (vibedab::dabFaad2Default() ? "true" : "false"); }
                 // ★★ V12: the ADS-B landing's two facts, the same shape — `adsbHw` hides the toggle, `adsbHwWhy` says why
                 { const std::string aw = vsAdsbHwWhyNot();
                   j += std::string(",\"adsbHw\":") + (aw.empty() ? "true" : "false");
@@ -33902,12 +33876,6 @@ void LocalSdrShim::setRateGuardBase(const std::string& base) {
 std::string LocalSdrShim::rateGuardJson() { return g_rateGuard.json(); }
 void LocalSdrShim::rateGuardClear() { g_rateGuard.clear(); }
 void LocalSdrShim::setVibeServerAdsb256(bool on) { g_adsb256.store(on, std::memory_order_relaxed); }
-void LocalSdrShim::setVibeServerDabDecoder(int choice) {
-    vibedab::dabAacChoice().store(std::max(0, std::min(2, choice)), std::memory_order_relaxed);
-    const bool faad = vibedab::dabWantFaad2();
-    LOGI("DAB+ decoder: %s%s%s", faad ? "FAAD2 (in process)" : "FFmpeg", choice == 0 ? " (this server's default)" : "",
-         faad && !vibedab::dabFaad2Built() ? " — FAAD2 is not in this build, so FFmpeg" : "");
-}
 void LocalSdrShim::setVibeServerVfoB(bool on) { g_vsVfoB.store(on, std::memory_order_relaxed); }
 void LocalSdrShim::setVibeServerNbWide(int mode) {
     g_vsNbWide.store(std::max(0, std::min(2, mode)), std::memory_order_relaxed);
@@ -34019,18 +33987,17 @@ static vibebands::Ranges vsTunableRanges() {
  *  locked rate or a restricted range means the button "shouldnt even present itself". So this asks
  *  the same `tunable` set the directory publishes — after allow/block lists — and the rate the
  *  receiver would actually run at. Never the driver name: AGENTS.md's "ELSE MEANS DONGLE". */
-/** ★★★ IS THERE ANYTHING ON THIS MACHINE THAT CAN DECODE DAB+ AUDIO? On Linux that is ffmpeg and
- *  nothing else (`using AacDecoder = AacDecoderFfmpeg`; the AudioToolbox alternative is macOS
- *  only), and it is not shipped — so a server can be perfectly capable of RECEIVING an ensemble
- *  and quite unable to play a word of it.
+/** ★★★ IS THERE ANYTHING IN THIS BUILD THAT CAN DECODE DAB+ AUDIO? FAAD2 on the Linux and Mac servers (always, in a
+ *  release build), AMediaCodec on Android, AudioToolbox in the iOS app — but a Linux dev build without libfaad_dab.a has
+ *  none, and a server can be perfectly capable of RECEIVING an ensemble and quite unable to play a word of it.
  *
- *  ★★★ WHICH IS EXACTLY WHAT HAPPENED. The x86 box had no ffmpeg at all, advertised DAB, tuned
+ *  ★★★ WHICH IS WHAT HAPPENED (2026-09-11, before FAAD2): an x86 box with no decoder advertised DAB, tuned
  *      the multiplex, locked it, and delivered superframes with Reed-Solomon 0 fixed 0 lost —
  *      then shipped the raw AAC to the client because it could not decode it itself. One service
  *      crackled, another was silent, and the receiver's own figures said the air was perfect
  *      (Stuart, 2026-09-11: "audio gone completely but look at the reception its the cleanest out
  *      of them all"). Offering a mode we cannot complete is the fault AGENTS.md names outright.
- *  ★ Probed once, inside AacDecoder::available(); constructing one starts no process. */
+ *  ★ Asked once, of AacDecoder::available(); constructing one starts nothing. */
 static bool vsDabDecoderAvailable() {
     static vibedab::AacDecoder probe;
     return probe.available();

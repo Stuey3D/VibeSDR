@@ -322,14 +322,8 @@ struct Config {
     bool dabRateBoost = false;
     /** ★ ADS-B at 2.56 MS/s on an RTL: the owner's own switch (Stuart's OWRX ADS-B rate); never the default. */
     bool adsb256 = false;
-    /** ★ V12: WHICH DAB+ DECODER — 0 = this server's default, 1 = FAAD2 in process (vibe_dab_faad.h), 2 = the platform's
-     *  (FFmpeg on Linux; FFmpeg or AudioToolbox on a Mac). The default is FAAD2 on LINUX (Stuart, 2026-10-29: "use FAAD2 for
-     *  DRM and DAB+ by default and FFmpeg where needed") and the platform's on a Mac (unchanged). Offered only where the
-     *  server has both (hwinfo dabFaad2Avail). Live.
-     *  ★★ Replaces the old `dabFaad2` bool: a config saying "dabFaad2": true reads as 1 (an explicit FAAD2 choice).
-     *     "dabFaad2": false cannot be told apart from never chosen — both writers always wrote it — so it reads as 0, the
-     *     default; an owner who wants FFmpeg picks it again (setup page) and that is stored as 2. */
-    int dabAacDecoder = 0;
+    /* ★ V12: there is no DAB+ decoder choice — FAAD2 is the Linux and Mac servers' only one (2026-10-29). An old config's
+     *  `dabAacDecoder` / `dabFaad2` keys are ignored on load and dropped at the next save. */
     int  rawIq = 0;               // ★ raw IQ out: 0 off, 1 local only, 2 local + public
     int  rawIqMax = 0;            // ★ total raw IQ listeners at once; 0 = host default
     /** ★ The highest raw IQ rate offered on the local network, in Hz (a one-listener radio only;
@@ -645,7 +639,6 @@ struct RadioConfig {
     int    ppb = 0;             // Airspy HF+ calibration, parts per billion
     bool   dabRateBoost = false;   // per radio — see Config::dabRateBoost
     bool   adsb256 = false;    // per radio — see Config::adsb256
-    int    dabAacDecoder = 0;     // per radio — see Config::dabAacDecoder
     int    rawIq = 0;              // ★ raw IQ out: 0 off, 1 local network only, 2 local + public
     int    rawIqMax = 0;           // ★ total raw IQ listeners at once; 0 = the host's default
     int  rawIqLanMaxHz = 0;       // ★ LAN raw IQ ceiling in Hz, 0 = none (one-listener radio only)
