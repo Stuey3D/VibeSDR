@@ -84,9 +84,9 @@ That is the whole installation. Every library VibeServer uses — libusb, librtl
 HackRF drivers, libopus, ncurses, the C++ runtime — is **built into it**, so it does not depend on
 your distribution's versions of any of them. The package needs only the C library and three
 everyday tools (`curl`, `gzip`, `adduser`), which apt fetches if they are missing. DAB+ and DRM audio
-are decoded by FAAD2, built in; for xHE-AAC (some DRM stations) and as the owner's alternative DAB+
-decoder the package carries its own copy of **FFmpeg** (`/usr/lib/vibeserver/ffmpeg`, LGPL — see
-`/usr/share/doc/vibeserver/NOTICE.ffmpeg`), so there is nothing extra to install.
+are decoded by FAAD2, built in, and xHE-AAC (some DRM stations) by **libxaac**, built in too (Apache-2.0 —
+see `/usr/share/doc/vibeserver/NOTICE.libxaac`), so there is nothing extra to install. If the machine
+has `ffmpeg` installed, the setup page also offers it as an alternative DAB+ decoder.
 
 ★ **The SDRplay RSP driver is included too** on amd64, arm64 and armhf, as its own small service
 (`vibeserver-rsp`). If SDRplay's own API is already installed, VibeServer uses that instead. See the

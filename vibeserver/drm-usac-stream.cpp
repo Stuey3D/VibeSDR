@@ -10,7 +10,7 @@
 //    test suite (fate-suite.ffmpeg.org/aac/usac/ and aac/Fd_2_c1_Ms_*, each with its reference decode): this tool takes
 //    the stream's AudioSpecificConfig and access units out of the MP4 and writes them with vibedrm::MkvStream — the very
 //    writer vibe_drm_audiodec.h feeds the FFmpeg child with — so what reaches FFmpeg is the shape a DRM xHE-AAC station
-//    produces. scripts/test-bundled-ffmpeg.sh runs it and compares the decode with the conformance reference.
+//    produces. (The packages now decode xHE-AAC with libxaac in process — test-drm-xaac; this tool stays for FFmpeg checks.)
 // ★ A deliberately small MP4 reader: moov/trak/mdia/minf/stbl → stsd (mp4a/esds → DecoderSpecificInfo), stsz, stsc,
 //   stco/co64. Enough for the conformance files; not a general demuxer.
 #include "../android/app/src/main/cpp/decoders/drm/drm_audio.h"

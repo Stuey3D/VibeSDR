@@ -10,10 +10,10 @@
 // ★★★ WHAT CAN BE DECODED, HONESTLY:
 //   • xHE-AAC (USAC, the newer stations): the DRM "static config" (§5.3.2, table 4) is the standard UsacConfig with the
 //     constant parts left out. usacFromDrm() puts them back bit for bit, so any USAC decoder can be configured. FFmpeg has
-//     decoded USAC natively since 7.1 (2024; the Linux packages bundle 8.1 — vibe_ffmpeg_path.h); Apple since iOS 13 /
+//     decoded USAC natively since 7.1 (2024); Apple since iOS 13 /
 //     macOS 10.15 (kAudioFormatMPEGD_USAC); Android from API 29 on devices whose codec lists it. ★ FFmpeg (8.1) does not
-//     yet decode USAC's eSBR tools (harmonic SBR, PVC, inter-TES) or its LPD core (ACELP/TCX), so a station using those
-//     still fails there (docs/v12/BUNDLED-FFMPEG.md).
+//     yet decode USAC's eSBR tools (harmonic SBR, PVC, inter-TES) or its LPD core (ACELP/TCX), and garbles USAC SBR — so the
+//     server builds decode xHE-AAC with libxaac in process instead (vibe_xaac.h, docs/v12/LIBXAAC.md).
 //   • DRM's AAC (the older stations) is NOT ordinary AAC: it is ER AAC Scalable (object type 20) with the HCR and VCB11
 //     error-resilience tools mandatory, a 960-sample transform, and SBR data stored BACKWARDS at the end of each frame
 //     (§5.4.1–5.4.2). FFmpeg's native decoder refuses ER resilience and object type 20; AudioToolbox and MediaCodec do not
@@ -200,8 +200,8 @@ inline std::vector<uint8_t> loasFrame(const std::vector<uint8_t>& asc, size_t as
 //     8.1 and 9.0 alike — so every LOAS-framed xHE-AAC unit came back "Invalid data". The same units with the config as
 //     the stream's extradata decode bit-exactly. Matroska is the simplest standard container that carries that config
 //     (CodecPrivate) AND streams down a pipe with no length known in advance: an EBML header, a Segment and Clusters of
-//     unknown size, one SimpleBlock per access unit. scripts/test-bundled-ffmpeg.sh feeds ISO's USAC conformance streams
-//     through exactly this writer and compares with their reference decodes.
+//     unknown size, one SimpleBlock per access unit. Kept for builds without libxaac (an installed FFmpeg); the server
+//     builds decode xHE-AAC in process (vibe_xaac.h) and never write it.
 //  ★ loasFrame() above stays — the standard's own transport, for any decoder that takes it; the FFmpeg path no longer uses it.
 class MkvStream {
 public:

@@ -2,11 +2,15 @@
 // vibe_dab_aacdec.h, applied to DRM). Access units and their AudioSpecificConfig come from decoders/drm/drm_audio.h.
 //
 // ★★★ PER PLATFORM:
-//   • Linux / macOS with FFmpeg: FFmpeg run as a process, fed a live Matroska stream (drm_audio.h MkvStream: the
+//   • xHE-AAC on every server build with libxaac (VIBE_HAVE_LIBXAAC — the Linux packages and the Mac VibeServer, V12
+//     2026-10-29): libxaac IN PROCESS (vibe_xaac.h), one access unit at a time — no child, no container. It decodes what
+//     FFmpeg 8.1 could not (SBR, eSBR, the ACELP/TCX speech core, MPEG Surround 2-1-2); docs/v12/LIBXAAC.md. The routes
+//     below are what a build WITHOUT libxaac falls back to (dev builds; Android keeps MediaCodec).
+//   • Linux / macOS with FFmpeg (no libxaac): FFmpeg run as a process, fed a live Matroska stream (drm_audio.h MkvStream: the
 //     AudioSpecificConfig as CodecPrivate — FFmpeg's LOAS reader cannot take a USAC config, found 2026-10-29), asked for
-//     48 kHz stereo float. xHE-AAC needs FFmpeg's native USAC decoder (7.1+). ★★ THE LINUX PACKAGES BUNDLE FFmpeg 8.1
-//     (V12: /usr/lib/vibeserver/ffmpeg, vibe_ffmpeg_path.h) because most distributions' is older (Ubuntu 24.04 6.1,
-//     Raspberry Pi OS bookworm 5.1); a missing or old one is still TOLD to the listener, by name (canDecode()).
+//     48 kHz stereo float. xHE-AAC needs FFmpeg's native USAC decoder (7.1+) — and even 8.1 garbles USAC with SBR, which
+//     is why the packages now carry libxaac instead (the FFmpeg bundle of early V12 is gone). A missing or old FFmpeg is
+//     still TOLD to the listener, by name (canDecode()).
 //   • DRM's AAC (all server builds with FAAD2 — VIBE_HAVE_FAAD2): FAAD2's DRM build, in process. That is the DEFAULT and
 //     only route for DRM AAC; FFmpeg is used only for xHE-AAC.
 //   • macOS: AudioToolbox has decoded USAC since macOS 10.15 (kAudioFormatMPEGD_USAC) and is preferred for xHE-AAC when
@@ -26,6 +30,7 @@
 #include <string>
 #include <vector>
 
+#include "vibe_xaac.h"   // ★★ libxaac (Apache-2.0) — xHE-AAC in process on server builds (VIBE_HAVE_LIBXAAC)
 #if defined(VIBE_HAVE_FAAD2)
 #include <neaacdec.h>   // ★★ FAAD2 (GPL-2.0-or-later), its DRM build — SERVER BUILDS ONLY (VIBE_DRM_FAAD2); never the App Store app
 #endif
@@ -48,8 +53,8 @@
 namespace vibe {
 
 #if !defined(__ANDROID__)
-/** ★ FFmpeg — vibe_ffmpeg_path.h: the package's own on Linux (/usr/lib/vibeserver/ffmpeg, FFmpeg 8.1 with the xHE-AAC
- *  decoder), a system one only if that is missing; Homebrew's on a Mac. VIBE_DRM_FFMPEG still overrides it (tests). */
+/** ★ FFmpeg — vibe_ffmpeg_path.h: an installed one (Homebrew's on a Mac). Only a build WITHOUT libxaac comes here for
+ *  xHE-AAC. VIBE_DRM_FFMPEG still overrides it (tests). */
 inline const char* drmFfmpegPath() {
     static const std::string path = [] {
         if (const char* e = getenv("VIBE_DRM_FFMPEG")) return std::string(e);
@@ -412,6 +417,10 @@ public:
             return false;
         }
         if (a.coding != 3) { why = "This station uses an audio codec DRM reserves for the future."; return false; }
+#if defined(VIBE_HAVE_LIBXAAC)
+        backend = XaacDecoder::version();   // ★ in process, every USAC tool (vibe_xaac.h)
+        return true;
+#endif
 #if defined(__ANDROID__)
         backend = "MediaCodec";
         return true;   // ★ tried on open(); a refusal there turns into the sentence below
@@ -421,14 +430,9 @@ public:
 #endif
         const FfmpegCaps& c = drmFfmpegCaps();
         if (c.usac) { backend = "ffmpeg " + c.version; return true; }
-#if defined(__linux__)
-        // ★ The package carries its own FFmpeg 8.1 (V12); missing means a damaged install, and reinstalling is the fix.
-        if (!c.present) why = "This station uses xHE-AAC. This server's FFmpeg (/usr/lib/vibeserver/ffmpeg) is missing, so the audio "
-                              "cannot be played; the signal is being received and decoded. (Reinstalling VibeServer restores it.)";
-#else
-        if (!c.present) why = "This station uses xHE-AAC. This server has no FFmpeg, so the audio cannot be played; the signal is "
-                              "being received and decoded. (Installing FFmpeg 8.1 or newer adds it.)";
-#endif
+        // ★ Only a build without libxaac reaches this (the packages and the Mac app link libxaac — VIBE_HAVE_LIBXAAC).
+        if (!c.present) why = "This station uses xHE-AAC. This server was built without an xHE-AAC decoder and has no FFmpeg, so the "
+                              "audio cannot be played; the signal is being received and decoded.";
         else why = "This station uses xHE-AAC. This server's FFmpeg (" + c.version + ") has no xHE-AAC decoder — that arrived in "
                    "FFmpeg 7.1 — so the audio cannot be played; the signal is being received and decoded.";
         return false;
@@ -449,6 +453,11 @@ public:
         const vibedrm::UsacInfo& u = fr.usac();
         if (!u.ok) { why_ = "This station's xHE-AAC configuration could not be read (" + u.why + ")."; return false; }
         usac_ = u; rate_ = a.sampleRateHz(); ch_ = a.audioMode == 2 ? 2 : 1;
+#if defined(VIBE_HAVE_LIBXAAC)
+        if (!xaac_.open(u.asc)) { why_ = "This station's xHE-AAC configuration was refused by the decoder (" + XaacDecoder::version() + ")."; return false; }
+        open_ = true;
+        return true;
+#endif
 #if !defined(__ANDROID__)
         ff_.setHeader(mkv_.header(u.asc, rate_, ch_, u.outputFrameLength));   // ★ the config travels as CodecPrivate
 #endif
@@ -462,7 +471,7 @@ public:
             else { why_ = "This Mac refused the station's xHE-AAC configuration."; return false; }
         }
 #endif
-        /* ★★ FFmpeg (8.1, the bundled one) refuses USAC's eSBR tools outright — every unit would come back as an error and
+        /* ★★ FFmpeg (8.1) refuses USAC's eSBR tools outright — every unit would come back as an error and
          *  the listener would get silence with no reason. Say it instead. (Its LPD/ACELP speech core is not decoded
          *  either, but that is chosen frame by frame and cannot be known from the config.) */
         if (backend_.rfind("ffmpeg", 0) == 0 && u.esbr) {
@@ -478,6 +487,9 @@ public:
     const std::string& why() const { return why_; }
     const std::string& backend() const { return backend_; }
     int rateHz() const {
+#if defined(VIBE_HAVE_LIBXAAC)
+        if (xaac_.ok()) return 48000;
+#endif
 #if defined(__ANDROID__)
         return mc_.rateHz();
 #else
@@ -489,6 +501,9 @@ public:
         if (!open_) return;
 #if defined(VIBE_HAVE_FAAD2)
         if (faad_.ok()) { faad_.decode(au, pcm); return; }
+#endif
+#if defined(VIBE_HAVE_LIBXAAC)
+        if (xaac_.ok()) { xaac_.decode(au.data.data(), au.data.size(), au.crcOk, pcm); return; }
 #endif
 #if defined(__ANDROID__)
         mc_.decode(au.data.data(), au.data.size(), pcm);
@@ -508,25 +523,34 @@ public:
         (void)pcm;
 #endif
     }
-    /** DRM AAC frames decoded / concealed (FAAD2), for the report. */
+    /** Frames decoded / concealed (FAAD2 for DRM AAC, libxaac for xHE-AAC), for the report. */
     int64_t unitsGood() const {
+        int64_t n = 0;
 #if defined(VIBE_HAVE_FAAD2)
-        return faad_.good();
-#else
-        return 0;
+        n += faad_.good();
 #endif
+#if defined(VIBE_HAVE_LIBXAAC)
+        n += xaac_.good();
+#endif
+        return n;
     }
     int64_t unitsConcealed() const {
+        int64_t n = 0;
 #if defined(VIBE_HAVE_FAAD2)
-        return faad_.bad();
-#else
-        return 0;
+        n += faad_.bad();
 #endif
+#if defined(VIBE_HAVE_LIBXAAC)
+        n += xaac_.bad();
+#endif
+        return n;
     }
     void close() {
         open_ = false;
 #if defined(VIBE_HAVE_FAAD2)
         faad_.close();
+#endif
+#if defined(VIBE_HAVE_LIBXAAC)
+        xaac_.close();
 #endif
 #if defined(__ANDROID__)
         mc_.close();
@@ -542,6 +566,9 @@ private:
     vibedrm::UsacInfo usac_; int rate_ = 48000, ch_ = 1;
 #if defined(VIBE_HAVE_FAAD2)
     DrmFaad faad_;
+#endif
+#if defined(VIBE_HAVE_LIBXAAC)
+    XaacDecoder xaac_;
 #endif
 #if defined(__ANDROID__)
     DrmMediaCodecUsac mc_;

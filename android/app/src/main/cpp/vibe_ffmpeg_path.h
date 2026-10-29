@@ -2,13 +2,12 @@
 // vibe_drm_audiodec.h). One answer for both, so the two can never disagree about which binary — or which version — is
 // in use. Not for Android (AMediaCodec / MediaCodec) and never in the App Store app.
 //
-// ★★★ LINUX: THE PACKAGE'S OWN FIRST (V12, 2026-10-29). The .deb carries a minimal LGPL FFmpeg 8.1 at
-//     /usr/lib/vibeserver/ffmpeg (sdr-kit/build-ffmpeg-linux.sh; docs/v12/BUNDLED-FFMPEG.md) — the version we tested, with
-//     the xHE-AAC decoder a distribution's ffmpeg often lacks (Pi OS bookworm 5.1, Ubuntu 24.04 6.1). A system ffmpeg is
-//     used ONLY if the bundled one is missing (a hand build, a stripped install).
-//  ★★ THE ARMv6 BUILD (Pi Zero / Pi 1) RUNS ITS OWN: /usr/lib/vibeserver/armv6/ffmpeg. The armhf package's main copy is
-//     ARMv7 + NEON and would die "Illegal instruction" there; the ARMv6 vibeserver binary is compiled separately, so it
-//     knows at compile time which one is its own (and never falls back to the NEON one).
+// ★★★ LINUX: /usr/lib/vibeserver/ffmpeg FIRST, IF THERE IS ONE, THEN THE SYSTEM'S. Early V12 packages carried an FFmpeg
+//     there; from 2026-10-29 they do not (xHE-AAC is libxaac, in process — docs/v12/LIBXAAC.md), so in practice this is
+//     the system's ffmpeg, used only for the owner's optional DAB+ FFmpeg decoder. The slot stays so an owner can drop in
+//     a build of their own.
+//  ★★ THE ARMv6 BUILD (Pi Zero / Pi 1) looks in /usr/lib/vibeserver/armv6/ffmpeg instead, never at the armhf slot (an
+//     ARMv7 + NEON binary would die "Illegal instruction" there).
 //  ★ Found relative to the binary first (/usr/bin/vibeserver → ../lib/vibeserver), as vibe_mapdata.h finds its data, so a
 //    package unpacked under another prefix still uses its own copy.
 // ★ macOS: unchanged — Homebrew's (/opt/homebrew/bin, /usr/local/bin), /usr/bin, then $PATH. A Finder-launched app has no

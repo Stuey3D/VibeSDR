@@ -1,5 +1,10 @@
 # The bundled FFmpeg, and FAAD2 as the Linux default (V12, 2026-10-29)
 
+> ★★★ **SUPERSEDED the same day by [LIBXAAC.md](LIBXAAC.md)** (branch `v12-libxaac`). The packages no longer carry FFmpeg:
+> xHE-AAC is decoded by libxaac in process. FFmpeg 8.1's USAC decoder turned out to produce garbage on every USAC stream
+> with SBR, which is what DRM's xHE-AAC uses. FAAD2 stays the DAB+ default and DRM's AAC decoder. This page is kept for
+> its findings: the LOAS refusal, the Matroska transport (still used by builds without libxaac) and the FFmpeg profile.
+
 Stuart: *"bundle FFmpeg on the Linux servers as you described, use FAAD2 for DRM and DAB+ by default and FFmpeg where
 needed."* And: *"Android server can use system hardware decoders."*
 

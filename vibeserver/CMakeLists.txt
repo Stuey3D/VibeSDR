@@ -94,7 +94,7 @@ endforeach()
 # ── Linux: NOTHING FROM THE SYSTEM BUT glibc (Stuart, 2026-10-18) ────────────────────────────
 # ★★★ THE RULE. The .deb needs nothing from the distribution for SDR support or libraries: no
 #     libusb, librtlsdr, libhackrf, libopus, ncurses, libstdc++ or libgcc. glibc (libc6) necessarily
-#     stays; FFmpeg is BUNDLED (V12: lib/vibeserver/ffmpeg, exec'd — no longer a Recommends); the SDRplay API stays the owner's own install,
+#     stays; xHE-AAC is libxaac, linked in (V12 — FFmpeg is neither bundled nor a Recommends); the SDRplay API stays the owner's own install,
 #     dlopen'd. Everything else is OURS, built from pinned source (linux/build-deps.sh, the same
 #     versions as mac/build-deps.sh) or compiled from the vendored tree, and linked IN.
 # ★★ WHY. dpkg-shlibdeps writes the BUILD image's library versions into Depends, not the versions
@@ -775,6 +775,50 @@ if(VIBE_DAB_FAAD2 AND FAAD2_INC)
   endif()
 endif()
 
+# ── libxaac (decoder): DRM's xHE-AAC, decoded IN PROCESS (V12, 2026-10-29 — docs/v12/LIBXAAC.md, vibe_xaac.h) ─────────
+# ★★ Apache-2.0 — compatible with VibeServer's GPL-3.0; its LICENSE and NOTICE ship beside the binary (deb: doc dir; Mac:
+#    Resources). Replaces the FFmpeg child the packages bundled in early V12: FFmpeg 8.1 garbles USAC with SBR and does not
+#    decode the speech core; libxaac decodes every USAC tool. Server builds only — the App Store app links no decoder.
+# ★ Release builds take it from the deps prefix (linux/ and mac/build-deps.sh, pinned source, build-libxaac.sh) and its
+#   absence is a configure error unless -DVIBE_XAAC=OFF. Dev builds: a deps prefix's copy if there is one, else without it
+#   (xHE-AAC then falls back to an installed FFmpeg / AudioToolbox, and says so when it cannot).
+option(VIBE_XAAC "xHE-AAC via libxaac in process (Apache-2.0; server builds only)" ON)
+if(VIBE_XAAC)
+  if(VIBE_DEPS_PREFIX)
+    set(XAAC_LIB "${VIBE_DEPS_PREFIX}/lib/libxaacdec.a" CACHE FILEPATH "" FORCE)
+    if(NOT EXISTS "${XAAC_LIB}")
+      message(FATAL_ERROR "${VIBE_DEPS_PREFIX} has no lib/libxaacdec.a (libxaac, xHE-AAC) — ${_deps_hint}, or configure with -DVIBE_XAAC=OFF")
+    endif()
+    set(_xaac_prefix "${VIBE_DEPS_PREFIX}")
+  else()
+    find_library(XAAC_LIB NAMES libxaacdec.a HINTS "${CMAKE_CURRENT_SOURCE_DIR}/mac/deps/prefix/lib")
+    get_filename_component(_xaac_prefix "${XAAC_LIB}/../.." ABSOLUTE)
+  endif()
+  if(XAAC_LIB)
+    # ★ the pinned release, for the listener's "decoded by" line: BUILT-FROM (Linux) or the stamp (Mac)
+    set(_xaac_ver "?")
+    foreach(_f "${_xaac_prefix}/BUILT-FROM" "${_xaac_prefix}/.stamp-libxaac")
+      if(EXISTS "${_f}")
+        file(STRINGS "${_f}" _l REGEX "^libxaac [0-9.]+")
+        if(_l)
+          string(REGEX REPLACE "^libxaac ([0-9.]+).*" "\\1" _xaac_ver "${_l}")
+          break()
+        endif()
+      endif()
+    endforeach()
+    message(STATUS "libxaac ${_xaac_ver}: ${XAAC_LIB}")
+    target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_LIBXAAC VIBE_LIBXAAC_VERSION="${_xaac_ver}")
+    target_link_libraries(vibeserver_core PUBLIC "${XAAC_LIB}")
+    foreach(_f LICENSE.libxaac NOTICE.libxaac)
+      if(EXISTS "${_xaac_prefix}/share/licences/${_f}")
+        install(FILES "${_xaac_prefix}/share/licences/${_f}" DESTINATION share/doc/vibeserver)   # ★ Apache-2.0 §4(a)/(d)
+      endif()
+    endforeach()
+  else()
+    message(STATUS "libxaac not found — building without it: xHE-AAC through an installed FFmpeg / AudioToolbox (dev build)")
+  endif()
+endif()
+
 # ── libopus: compressed VibeServer audio (replaces IMA-ADPCM) ──────────────────
 # STATIC like the others, so the .app ships self-contained. VIBE_HAVE_OPUS gates every Opus code
 # path in the shim; where it is undefined (the Android build has no libopus yet — UberSDR decode
@@ -1176,53 +1220,9 @@ install(FILES linux/vibeserver@.service linux/vibeserver-radios.service
             "Fix: run tools/cloudflared-desktop/fetch.sh (or copy tools/cloudflared-desktop/bin/ into this\n"
             "tree). To build without it on purpose: -DVIBESERVER_ALLOW_NO_TUNNEL=ON.")
   endif()
-  # ★★★ SHIP FFmpeg TOO (V12, Stuart 2026-10-29: "bundle FFmpeg on the Linux servers … use FAAD2 for DRM and DAB+ by
-  #     default and FFmpeg where needed"). Where it is needed is xHE-AAC (DRM's USAC stations), which a distribution's
-  #     ffmpeg mostly cannot decode (Pi OS bookworm 5.1, Ubuntu 24.04 6.1), and DAB+ when the owner picks FFmpeg over
-  #     FAAD2. A minimal LGPL-only FFmpeg 8.1 CLI, built by android/app/src/main/cpp/sdr-kit/build-ffmpeg-linux.sh into
-  #     tools/ffmpeg-linux/bin (gitignored, like cloudflared's), goes to lib/vibeserver/ffmpeg — the server prefers it and
-  #     falls back to a system ffmpeg only if it is missing (vibe_ffmpeg_path.h). So ffmpeg is no longer a Recommends.
-  #  ★★ LGPL-2.1+: the licence text and a NOTICE go in the package's doc directory, and the exact source tarball + the
-  #     build script are published beside the packages (docs/v12/BUNDLED-FFMPEG.md) — that is what makes shipping it OK.
-  #  ★★ armhf carries TWO, like vibeserver itself: the ARMv7+NEON one (the Pi 2) and lib/vibeserver/armv6/ffmpeg for a
-  #     CPU without NEON — the ARMv6 vibeserver binary looks for its own (vibe_ffmpeg_path.h), so postinst moves nothing.
-  #  ★ FATAL when missing, for the cloudflared reason below the line: a package without it would quietly drop xHE-AAC
-  #    on every machine that installed it. -DVIBESERVER_ALLOW_NO_FFMPEG=ON builds without it on purpose.
-  set(_vibe_ff_src "${CMAKE_CURRENT_SOURCE_DIR}/../tools/ffmpeg-linux/bin")
-  if(VIBE_X86_32)
-    set(_vibe_ff_arch i386)
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-    set(_vibe_ff_arch arm64)
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv6")
-    set(_vibe_ff_arch armv6)
-  elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^arm")
-    set(_vibe_ff_arch armhf)
-  else()
-    set(_vibe_ff_arch amd64)
-  endif()
-  set(_vibe_ff "${_vibe_ff_src}/ffmpeg-linux-${_vibe_ff_arch}")
-  if(EXISTS "${_vibe_ff}" AND EXISTS "${_vibe_ff_src}/COPYING.LGPLv2.1" AND EXISTS "${_vibe_ff_src}/NOTICE.ffmpeg")
-    install(PROGRAMS "${_vibe_ff}" DESTINATION lib/vibeserver RENAME ffmpeg)
-    if(VIBE_ARMV6_STAGE)
-      if(NOT EXISTS "${_vibe_ff_src}/ffmpeg-linux-armv6")
-        message(FATAL_ERROR "the armhf package carries an ARMv6 build but ${_vibe_ff_src}/ffmpeg-linux-armv6 is missing — "
-                            "run android/app/src/main/cpp/sdr-kit/build-ffmpeg-linux.sh")
-      endif()
-      install(PROGRAMS "${_vibe_ff_src}/ffmpeg-linux-armv6" DESTINATION lib/vibeserver/armv6 RENAME ffmpeg)
-    endif()
-    install(FILES "${_vibe_ff_src}/COPYING.LGPLv2.1" DESTINATION share/doc/vibeserver RENAME COPYING.ffmpeg)
-    install(FILES "${_vibe_ff_src}/NOTICE.ffmpeg" "${_vibe_ff_src}/BUILDINFO" DESTINATION share/doc/vibeserver)
-    message(STATUS "bundling FFmpeg: ${_vibe_ff}")
-  elseif(VIBESERVER_ALLOW_NO_FFMPEG)
-    message(WARNING "FFmpeg not bundled (VIBESERVER_ALLOW_NO_FFMPEG) — xHE-AAC needs a system ffmpeg 8.1+, and installing "
-                    "this package REMOVES any /usr/lib/vibeserver/ffmpeg a previous one installed")
-  else()
-    message(FATAL_ERROR
-            "FFmpeg not found at ${_vibe_ff} (or its COPYING.LGPLv2.1 / NOTICE.ffmpeg).\n"
-            "A package built now would take xHE-AAC (DRM) away from every machine that installs it.\n"
-            "Fix: run android/app/src/main/cpp/sdr-kit/build-ffmpeg-linux.sh on the Mac (it builds all five), or copy\n"
-            "tools/ffmpeg-linux/bin/ into this tree. To build without it on purpose: -DVIBESERVER_ALLOW_NO_FFMPEG=ON.")
-  endif()
+  # ★ NO FFmpeg IN THE PACKAGE (V12, 2026-10-29). Early V12 bundled a minimal FFmpeg 8.1 for xHE-AAC; libxaac, linked in
+  #   above, replaced it (docs/v12/LIBXAAC.md). The owner's optional DAB+ FFmpeg decoder uses an installed ffmpeg if there
+  #   is one (vibe_ffmpeg_path.h); FAAD2 is the default, so nothing is lost without it.
   # ★★ NOT a plain install() — the config is the one file the user edits, and apt must never
   #   clobber it on upgrade. Staged elsewhere and copied by postinst ONLY if absent.
   install(FILES linux/vibeserver.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/vibeserver)

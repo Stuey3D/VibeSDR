@@ -169,28 +169,23 @@ if [ "$ARCH" != i386 ]; then
   [ -f "$X/usr/share/doc/vibeserver/COPYING.faad2" ] || fail "FAAD2's licence is not in the package (V12 DRM links it)"
   ORSP_LINE="library ($NAPI sdrplay_api_ exports), service, firmware $(cut -c1-12 "$ORSP/firmware/own/manifest.sha256" | tr '\n' ' ')"
 fi
-# ★★★ THE BUNDLED FFmpeg IS IN IT, WITH ITS LICENCE (V12, 2026-10-29 — sdr-kit/build-ffmpeg-linux.sh). Without the binary
-#     xHE-AAC goes silent; without COPYING.ffmpeg + NOTICE.ffmpeg we would be shipping LGPL code without its terms.
-#     (The ELF loop above has already held it to this package's machine and the glibc floor.)
-FF="$X/usr/lib/vibeserver/ffmpeg"
-[ -x "$FF" ] || fail "no usr/lib/vibeserver/ffmpeg in the package (run sdr-kit/build-ffmpeg-linux.sh on the Mac)"
-for f in COPYING.ffmpeg NOTICE.ffmpeg BUILDINFO; do
-  [ -f "$X/usr/share/doc/vibeserver/$f" ] || fail "no usr/share/doc/vibeserver/$f — the bundled FFmpeg's licence/notice"
+# ★★★ libxaac IS LINKED IN, WITH ITS LICENCE (V12, 2026-10-29 — docs/v12/LIBXAAC.md). Without it xHE-AAC goes silent;
+#     without LICENSE.libxaac + NOTICE.libxaac we would be shipping Apache-2.0 code without its terms (§4(a), §4(d)).
+#     The binary is stripped, so the proof is the version string vibe_xaac.h builds into the listener's "decoded by" line.
+for f in LICENSE.libxaac NOTICE.libxaac; do
+  [ -f "$X/usr/share/doc/vibeserver/$f" ] || fail "no usr/share/doc/vibeserver/$f — libxaac's licence/notice"
 done
-[ "$(strings "$FF" | count -- '-vibeserver1')" -gt 0 ] || fail "usr/lib/vibeserver/ffmpeg is not our build"
-if [ "$ARCH" = armhf ]; then
-  [ -x "$X/usr/lib/vibeserver/armv6/ffmpeg" ] || fail "no usr/lib/vibeserver/armv6/ffmpeg (the Pi Zero / Pi 1 copy)"
-  [ "$(readelf -A "$X/usr/lib/vibeserver/armv6/ffmpeg" | count 'Tag_Advanced_SIMD_arch')" -eq 0 ] || fail "the ARMv6 ffmpeg has NEON in it"
-  [ "$(readelf -A "$FF" | count 'Tag_Advanced_SIMD_arch: NEON')" -gt 0 ] || fail "the armhf ffmpeg is not the NEON build"
-fi
-FF_LINE="$(head -1 "$X/usr/share/doc/vibeserver/BUILDINFO" | cut -d' ' -f1-2), $(stat -c %s "$FF") bytes"
+XAAC_LINE="$(strings "$X/usr/bin/vibeserver" | grep -oE 'libxaac [0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+[ -n "$XAAC_LINE" ] || fail "usr/bin/vibeserver has no libxaac in it (xHE-AAC would be silent)"
+# ★ and no FFmpeg left over from early V12: the package must not carry, or remove on upgrade, anything we no longer build
+[ ! -e "$X/usr/lib/vibeserver/ffmpeg" ] || fail "usr/lib/vibeserver/ffmpeg is in the package — the FFmpeg bundle is gone (libxaac)"
 {
   echo "package   $(basename "$DEB")"
   echo "Depends   $DEPENDS"
   echo "ELF files $ELVES, all $WANT_ELF; highest GLIBC_ version needed: $MAXG"
   echo "vibeserver: $(file -b "$X/usr/bin/vibeserver" 2>/dev/null || echo '?')"
   echo "OpenRSP   $ORSP_LINE"
-  echo "FFmpeg    $FF_LINE"
+  echo "libxaac   $XAAC_LINE (in process)"
   case "$ARCH" in
     armhf) echo "  $(readelf -A "$X/usr/bin/vibeserver" | grep -E 'Tag_CPU_arch:|Tag_Advanced_SIMD_arch:|Tag_FP_arch:' | tr -s ' ' | tr '\n' ' ')"
            [ -f "$X/usr/lib/vibeserver/armv6/vibeserver" ] || fail "no ARMv6 binary in lib/vibeserver/armv6"

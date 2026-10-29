@@ -137,8 +137,9 @@ additions are syntax-checked but have not run.
 # DAB+ through FAAD2 — the owner's choice since 2026-10-26; THE LINUX DEFAULT since 2026-10-29
 
 **2026-10-29 (Stuart: "use FAAD2 for DRM and DAB+ by default and FFmpeg where needed"):** on Linux servers FAAD2 is
-now the DAB+ default and FFmpeg the owner's alternative; the packages bundle FFmpeg 8.1 and no longer Recommend the
-distribution's ([BUNDLED-FFMPEG.md](BUNDLED-FFMPEG.md)). The Mac keeps the platform's decoder as its default; Android
+now the DAB+ default and FFmpeg the owner's alternative; the packages no longer Recommend the distribution's FFmpeg — it is
+used only if installed — and xHE-AAC is libxaac, built in ([LIBXAAC.md](LIBXAAC.md); the FFmpeg bundle of
+[BUNDLED-FFMPEG.md](BUNDLED-FFMPEG.md) was replaced the same day). The Mac keeps the platform's decoder as its default; Android
 keeps AMediaCodec (FAAD2 there only for DRM's AAC). The setup page's switch is now a choice, "DAB+ audio decoder"
 (config `dabAacDecoder`: 0 default, 1 FAAD2, 2 FFmpeg). The history below is kept as it was written.
 

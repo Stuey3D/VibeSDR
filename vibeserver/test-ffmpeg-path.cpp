@@ -1,5 +1,5 @@
 // test-ffmpeg-path.cpp — which ffmpeg a server runs (vibe_ffmpeg_path.h, V12 2026-10-29).
-// ★★ The Linux package bundles its own FFmpeg 8.1 at /usr/lib/vibeserver/ffmpeg; a system ffmpeg must only ever be the
+// ★★ /usr/lib/vibeserver/ffmpeg (an owner-placed build; the package no longer ships one) comes first; a system ffmpeg must only ever be the
 //    fallback, or a Pi with Debian's 5.1 installed would silently lose xHE-AAC. And the ARMv6 binary must never be handed
 //    the NEON copy. This checks the ORDER of the candidates, and that VIBE_FFMPEG overrides them.
 #include "vibe_ffmpeg_path.h"

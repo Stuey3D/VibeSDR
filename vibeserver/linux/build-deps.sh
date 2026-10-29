@@ -4,14 +4,15 @@
 #   build-deps.sh <prefix> [native|armhf|armv6|arm64]
 #
 # Run inside the build images (Dockerfile.build, Dockerfile.cross-armhf, Dockerfile.cross-arm64). Output:
-#   <prefix>/lib/{libusb-1.0.a,libopus.a,librtlsdr.a,libfaad_drm.a,libfaad_dab.a}
+#   <prefix>/lib/{libusb-1.0.a,libopus.a,librtlsdr.a,libfaad_drm.a,libfaad_dab.a,libxaacdec.a}
 #   <prefix>/include/{libusb-1.0/libusb.h,opus/*.h,rtl-sdr.h,rtl-sdr_export.h}
 #   <prefix>/BUILT-FROM                  what went in, one line per library
 # — the same layout vibeserver/mac/build-deps.sh produces, so CMake treats the two prefixes alike.
 #
 # ★★★ WHY (Stuart, 2026-10-18): the package must need NOTHING from the system for SDR support or
-#     libraries — only glibc and the SDRplay API (closed, dlopen'd, the owner installs it; FFmpeg is BUNDLED
-#     from V12 by sdr-kit/build-ffmpeg-linux.sh, no longer a Recommends). Linux used to link Debian's libusb, libopus, libhackrf, ncurses and the
+#     libraries — only glibc and the SDRplay API (closed, dlopen'd, the owner installs it). xHE-AAC is libxaac,
+#     linked in (V12, docs/v12/LIBXAAC.md); FFmpeg is neither bundled nor recommended — the owner's optional DAB+
+#     FFmpeg decoder uses one only if it is installed. Linux used to link Debian's libusb, libopus, libhackrf, ncurses and the
 #     C++ runtime, and dpkg-shlibdeps copied the BUILD image's versions into Depends — so the one
 #     package refused Ubuntu 22.04 over a libhackrf0 (>= 2022.09.1) whose every call we use is
 #     years older. A radio driver should arrive on OUR release cycle, not a distribution's.
@@ -48,6 +49,8 @@ OPUS_SHA=6ffcb593207be92584df15b32466ed64bbec99109f007c82205f0194572411a1   # = 
 RTL_SHA=797f8143266d983c56d8f35d2d442527529dd8a5                             # = mac/build-deps.sh
 FAAD_VER=2.11.3
 FAAD_SHA=860ab62087e336c1844a70e33196c1790b525fb9a9e7b6ac4fab1a1a4e4d5ce8   # = mac/build-deps.sh (GitHub tag tarball)
+XAAC_VER=0.1.14
+XAAC_SHA=f467a6e5bcf3941ce5d1a4d811442835fba7eb3744ae986f3ea37e110584b611   # = mac/build-deps.sh (GitHub tag tarball, = commit 2fbadd57)
 
 # ── the toolchain, per profile ───────────────────────────────────────────────────────────────
 HOSTOPT=(); CMAKE_TC=(); OPUS_EXTRA=()
@@ -243,9 +246,26 @@ cp "$WORK/faad/bd/libfaad.a" "$PREFIX/lib/libfaad_dab.a"
 unpref="$("$NM" -g --defined-only "$PREFIX/lib/libfaad_dab.a" 2>/dev/null | awk 'NF >= 3 && $2 ~ /^[TDBSRC]$/ && $3 !~ /^vibedab_/ && $3 !~ /^__x86\.get_pc_thunk\./ {print $3}')"
 [ -z "$unpref" ] || { echo "!! libfaad_dab.a defines unprefixed globals (they would collide with libfaad_drm.a):"; echo "$unpref" | head; exit 1; }
 
+# ── libxaac 0.1.14 (decoder only), static — V12 xHE-AAC, decoded in process (docs/v12/LIBXAAC.md) ─────────────────
+# ★★ Apache-2.0 (compatible with VibeServer's GPL-3.0); LICENSE + NOTICE travel with the package as LICENSE.libxaac and
+#    NOTICE.libxaac (CMakeLists.txt installs them). Unmodified. Built by build-libxaac.sh, shared with the Mac.
+# ★ Which of libxaac's code paths: armhf its ARMv7 NEON assembly (through clang's assembler — see build-libxaac.sh),
+#   arm64 its AArch64 NEON assembly, amd64 / i386 / ARMv6 its C (it has no x86 SIMD; ARMv6 has no NEON).
+fetch "https://github.com/ittiam-systems/libxaac/archive/refs/tags/v$XAAC_VER.tar.gz" "libxaac.tar.gz" "$XAAC_SHA"
+mkdir -p "$WORK/xaac" && tar -xzf "$WORK/libxaac.tar.gz" -C "$WORK/xaac" --strip-components 1
+case "$PROFILE" in
+  armhf) XAAC_VARIANT=armv7; XAAC_ASCC="clang --target=arm-linux-gnueabihf -march=armv7-a -mfpu=neon-vfpv4" ;;
+  arm64) XAAC_VARIANT=armv8; XAAC_ASCC="$CC" ;;
+  native) if [ "$(dpkg --print-architecture)" = arm64 ]; then XAAC_VARIANT=armv8; else XAAC_VARIANT=c; fi; XAAC_ASCC="$CC" ;;
+  *)     XAAC_VARIANT=c; XAAC_ASCC="$CC" ;;   # armv6 (and amd64 / i386 through "native")
+esac
+ASCC="$XAAC_ASCC" bash "$(cd "$(dirname "$0")" && pwd)/build-libxaac.sh" "$WORK/xaac" "$PREFIX" "$XAAC_VARIANT" >"$WORK/xaac.log" 2>&1 \
+  || { tail -30 "$WORK/xaac.log"; echo "!! libxaac build failed"; exit 1; }
+tail -1 "$WORK/xaac.log"
+
 # ── every object for the architecture the profile promises ───────────────────────────────────
 X="$WORK/x"; mkdir -p "$X"
-for a in libusb-1.0 libopus librtlsdr libfaad_drm libfaad_dab; do
+for a in libusb-1.0 libopus librtlsdr libfaad_drm libfaad_dab libxaacdec; do
   rm -rf "$X"/*; ( cd "$X" && "$AR" x "$PREFIX/lib/$a.a" )
   if [ -n "$WANT_FILE" ]; then
     bad="$(file "$X"/*.o | count -v "$WANT_FILE")"
@@ -263,6 +283,7 @@ done
   echo "librtlsdr osmocom/rtl-sdr $RTL_SHA (DETACH_KERNEL_DRIVER)"
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_drm, float, GPL-2.0-or-later)"
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_dab: the plain build, globals prefixed vibedab_, float, GPL-2.0-or-later; $FAAD_DAB_OPT; VibeSDR patches:${FAAD_SERIES:- none})"
+  echo "libxaac $XAAC_VER sha256 $XAAC_SHA (decoder only, $XAAC_VARIANT code path, Apache-2.0)"
   echo "profile $PROFILE, CFLAGS '$CFLAGS', $CCVER"; } > "$PREFIX/BUILT-FROM"
 ls -l "$PREFIX/lib"
 echo "==> deps ($PROFILE): done"

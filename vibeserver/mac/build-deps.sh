@@ -261,6 +261,29 @@ if stamp_ok faad2-dab "$FAADD_STAMP" "$PREFIX/lib/libfaad_dab.a"; then echo "==>
   echo "$FAADD_STAMP" > "$PREFIX/.stamp-faad2-dab"
 fi
 
+# ── libxaac 0.1.14 (decoder only), static — V12 xHE-AAC in process (docs/v12/LIBXAAC.md) ─────────────────────────────
+# ★★ The same pinned release and the same builder as Linux (../linux/build-libxaac.sh). Apache-2.0; LICENSE + NOTICE go
+#    into the app's Resources (CMakeLists.txt / build-app.sh) as LICENSE.libxaac / NOTICE.libxaac. Server only — the
+#    iPhone/iPad app never links it.
+# ★ The C code path ("c" — see build-libxaac.sh): libxaac's AArch64 assembly is written for ELF/GNU as, not Mach-O. The Mac has the CPU.
+XAAC_VER=0.1.14
+XAAC_SHA=f467a6e5bcf3941ce5d1a4d811442835fba7eb3744ae986f3ea37e110584b611  # GitHub tag tarball = linux/build-deps.sh
+XAAC_SCRIPT="$MAC/../linux/build-libxaac.sh"
+XAAC_STAMP="libxaac $XAAC_VER $XAAC_SHA min=$MIN arch=$ARCH $CCVER script=$(shasum -a 256 "$XAAC_SCRIPT" | cut -c1-12)"
+if stamp_ok libxaac "$XAAC_STAMP" "$PREFIX/lib/libxaacdec.a"; then echo "==> libxaac $XAAC_VER: up to date"; else
+  echo "==> libxaac $XAAC_VER: building for macOS $MIN"
+  fetch "https://github.com/ittiam-systems/libxaac/archive/refs/tags/v$XAAC_VER.tar.gz" "libxaac-$XAAC_VER.tar.gz" "$XAAC_SHA"
+  rm -rf "$WORK/xaac"; mkdir -p "$WORK/xaac"
+  tar -xzf "$SRC/libxaac-$XAAC_VER.tar.gz" -C "$WORK/xaac" --strip-components 1
+  AR=/usr/bin/ar NM=/usr/bin/nm bash "$XAAC_SCRIPT" "$WORK/xaac" "$PREFIX" c >"$WORK/xaac.log" 2>&1 \
+    || { tail -30 "$WORK/xaac.log"; echo "!! libxaac build failed"; exit 1; }
+  tail -1 "$WORK/xaac.log"
+  check_log "$WORK/xaac.log"
+  verify_archive "$PREFIX/lib/libxaacdec.a"
+  rm -rf "$WORK/xaac" "$WORK/xaac.log"
+  echo "$XAAC_STAMP" > "$PREFIX/.stamp-libxaac"
+fi
+
 # ── cloudflared 2026.10.4, compiled ───────────────────────────────────────────────────────────
 # ★★★ Cloudflare's darwin release binary is minos 15.0 (their CI links it with a macOS 15 SDK
 #     through cgo), so on a macOS 14 Mac the tunnel switch starts nothing. Compiled here with

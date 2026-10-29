@@ -274,6 +274,10 @@ cp "$ROOT/vendor/openrsp/COPYING" "$APP/Contents/Resources/COPYING.openrsp"
 if [ -f "$DEPS/prefix/share/licences/COPYING.faad2" ]; then
   cp "$DEPS/prefix/share/licences/COPYING.faad2" "$APP/Contents/Resources/COPYING.faad2"
 fi
+# ★ V12: libxaac (Apache-2.0) decodes xHE-AAC in the server — its LICENSE and NOTICE travel with it (§4(a), §4(d))
+for f in LICENSE.libxaac NOTICE.libxaac; do
+  if [ -f "$DEPS/prefix/share/licences/$f" ]; then cp "$DEPS/prefix/share/licences/$f" "$APP/Contents/Resources/$f"; fi
+done
 cp "$ROOT/vendor/openrsp/VIBESDR-CHANGES" "$APP/Contents/Resources/openrsp/VIBESDR-CHANGES"
 cp "$MAC/README.openrsp" "$APP/Contents/Resources/openrsp/README.openrsp"
 ( cd "$APP/Contents/Resources/openrsp/firmware/own" && shasum -a 256 -c manifest.sha256 >/dev/null ) \

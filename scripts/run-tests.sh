@@ -37,6 +37,14 @@ for d in "${VIBE_DEPS:-/nonexistent}" vibeserver/mac/deps/prefix; do
     FAAD_DAB_FLAGS="-DVIBE_HAVE_FAAD2_DAB -I $inc -I android/app/src/main/cpp/vibedsp"; FAAD_DAB_LIB="$d/lib/libfaad_dab.a"; break
   fi
 done
+# ★ V12 xHE-AAC: libxaac (libxaacdec.a from build-deps — a release's deps prefix or the Mac's); without it
+#   test-drm-xaac reports NOT RUN. Its inputs: ~/VibeSDR-test-audio/usac (conformance + usac/xhe, README.txt there).
+XAAC_FLAGS=""; XAAC_LIB=""
+for d in "${VIBE_DEPS:-/nonexistent}" vibeserver/mac/deps/prefix; do
+  if [ -f "$d/lib/libxaacdec.a" ]; then
+    XAAC_FLAGS="-DVIBE_HAVE_LIBXAAC -DVIBE_LIBXAAC_VERSION=\"dev\""; XAAC_LIB="$d/lib/libxaacdec.a"; break
+  fi
+done
 
 # test name -> extra compiler flags it needs
 flags_for() {
@@ -163,7 +171,8 @@ flags_for() {
     #    nothing, the audio framing, a CPU row. VIBE_TEST_AUDIO adds RRI off air (drm/). Optimised: ~2 min.
     test-drm|test-drm-signal) echo "-O2 -I $VDSP -I $KISS" ;;
     # ★★ DRM's AAC through FAAD2 on the real RRI recording: decodes, programme, concealment without clicks or gaps, CPU.
-    test-drm-faad)         echo "-O2 -I $VDSP -I $KISS $FAAD_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
+    test-drm-xaac)         echo "-O2 -I android/app/src/main/cpp -I $VDSP $XAAC_FLAGS" ;;
+    test-drm-faad)         echo "-O2 -I $VDSP -I $KISS $FAAD_FLAGS $XAAC_FLAGS $( [ "$(uname)" = Darwin ] && echo "-framework AudioToolbox -framework CoreFoundation")" ;;
     # ★ DAB+ through FAAD2 (vibe_dab_faad.h) against today's FFmpeg child and a 960 reference, on REAL unit logs.
     # ★ V12: FAAD2 on its own thread (vibe-faad2) — same audio as inline, a full ring drops (concealed) never waits,
     #   resets mid-queue, the live switch both ways. Same deps as test-dab-faad.
@@ -303,7 +312,8 @@ deps_for() {
     test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
     test-drm|test-drm-signal) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
-    test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB" ;;   # ★ pffft + kiss from cobjs_for
+    test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;
+    test-drm-xaac) echo "$XAAC_LIB" ;;   # ★ after the source, like FAAD2   # ★ pffft + kiss from cobjs_for
     test-dab-faad|test-dab-faad-queue) echo "$FAAD_DAB_LIB" ;;   # ★ after the source, so a Linux link resolves it
     test-ndb)           echo "android/app/src/main/cpp/decoders/ndb_skimmer.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp \
                               $VDSP/channelizer.cpp $VDSP/fft.cpp $VDSP/ddc.cpp" ;;   # ★ pffft + kiss_fft from cobjs_for (C); ddc: the Band tap's decimator (vibe_wide_tap.h, reached through the service)
