@@ -296,9 +296,10 @@ we ship.
 | **RESOLVE Ecoregions 2017** (Dinerstein et al.) | **CC BY 4.0** | Biome colouring |
 | **HydroLAKES / HydroSHEDS** | **CC BY 4.0** | Lakes and reservoirs |
 | **GeoNames** | **CC BY 4.0** | Towns and cities |
-| **OurAirports** (David Megginson) | public domain | Airfields and runways |
+| **OurAirports** (David Megginson) | public domain | Airfields and runways; the NDB beacon list |
+| **FAA NASR** (US Government) | public domain | US NDBs in the NDB beacon list |
 | **NGA World Port Index** | public domain | Sea ports |
-| **© OpenStreetMap contributors** | **ODbL** | Detailed coastline (built in, never fetched; the derived data is published with every release) and Nominatim geocoding of a server's location |
+| **© OpenStreetMap contributors** | **ODbL** | Detailed coastline (built in, never fetched; the derived data is published with every release), NDB beacons the other lists lack (the merged beacon list, `vibe_ndb_navaids.h`, is offered under ODbL) and Nominatim geocoding of a server's location |
 | **Ofcom** | **OGL v3** — contains public sector information licensed under the Open Government Licence v3.0 | UK DAB transmitter identification |
 | **BAKOM** (Federal Office of Communications, Switzerland) | opendata.swiss **"Open use"** | Swiss DAB+ licensed sites ([survey](docs/DAB-SITES-SOURCES.md)) |
 | **ČTÚ** (Czech Telecommunication Office) | data.gov.cz terms — no copyright or database right (CC0) | Czech DAB licensed sites |

@@ -1,4 +1,5 @@
-// vibe_ndb_db.h — what a heard NDB IS: the published beacons (OurAirports, public domain — vibe_ndb_navaids.h), matched
+// vibe_ndb_db.h — what a heard NDB IS: the published beacons (vibe_ndb_navaids.h — OurAirports and the FAA, public
+// domain, and OpenStreetMap, ODbL; scripts/gen-ndb-navaids.mjs merges them), matched
 // by frequency AND ident, with the distance and bearing from the receiver. docs/v12/NDB-SKIMMER.md.
 //
 // ★★ THE MATCH, in order (several beacons share every frequency — "four on freq" — so frequency alone names nothing):
@@ -9,7 +10,7 @@
 //    3. italic "candidate" — no ident yet (or none matches): the published beacons on the frequency ranked by distance,
 //                    the nearest first — a GUESS, labelled as one, never shown as the ident.
 //    A confirmed ident with no published beacon on the frequency stays "unlisted" (the list is incomplete — e.g. the
-//    UK's EME / EMW are heard but not in it): the ident is shown, the station is blank.
+//    UK's EME / EMW are heard but in no source we may bundle): the ident is shown, the station is blank.
 // ★ The receiver's own position comes from the server's location (g_bgLat/g_bgLon, the owner's setting).
 // ★ Never on the DSP thread: the service calls this from its own thread, once a second at most per beacon.
 #pragma once
@@ -35,6 +36,8 @@ struct Navaid {
     double hz() const { return r ? r->hz : 0; }
     double lat() const { return r ? r->lat : 0; }
     double lon() const { return r ? r->lon : 0; }
+    /** Where this beacon's position came from — the credit for it (kNavaidSourceNames). */
+    std::string source() const { return r && r->src < sizeof kNavaidSourceNames / sizeof kNavaidSourceNames[0] ? std::string(kNavaidSourceNames[r->src]) : std::string(); }
 };
 
 /** Great-circle distance (km, haversine on a 6371 km sphere) and initial bearing (° true) from (la1, lo1) to (la2, lo2). */

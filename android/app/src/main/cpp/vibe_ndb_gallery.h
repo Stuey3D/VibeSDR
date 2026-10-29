@@ -254,7 +254,7 @@ private:
         std::string o = "NDB heard log" + std::string(kDot) + date(day_) + " (UTC)\n";
         o += std::string("Heard by ") + (o_.origin == "background" ? "background decoding" + (o_.profile.empty() ? std::string() : " (" + o_.profile + ")") : "a listener in NDB mode") + ".\n";
         o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + ". An ident is listed only once several of its repeats agreed. Stations, countries and "
-             "positions: OurAirports (public domain); a beacon not in that list shows its ident alone.\n\n";
+             "positions: " + std::string(vibendb::kNavaidCredit) + "; a beacon not in that list shows its ident alone.\n\n";
         o += std::to_string(rows_.size()) + (rows_.size() == 1 ? " beacon" : " beacons") + " identified";
         if (const Row* f = furthest()) { char b[160]; std::snprintf(b, sizeof b, "%sfurthest: %s %s %.0f km", kDot, f->ident.c_str(), f->name.c_str(), f->km); o += b; }
         o += "\n\nEach beacon, most recently heard first (last heard \xc2\xb7 first heard \xc2\xb7 ident \xc2\xb7 kHz \xc2\xb7 best SNR \xc2\xb7 distance \xc2\xb7 bearing \xc2\xb7 country \xc2\xb7 station):\n";

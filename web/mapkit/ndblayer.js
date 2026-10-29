@@ -1,6 +1,6 @@
 /* ══════════════════════════════════════════════════════════════════════════════════════════════
  * ndblayer.js — the NDB beacons on our map (V12, docs/v12/NDB-SKIMMER.md): every beacon at its PUBLISHED position (the
- * OurAirports navaid — the airport or beacon site), each marker carrying a small 3-BAR SIGNAL METER from its live SNR,
+ * published navaid — OurAirports, FAA or OpenStreetMap: the airport or beacon site), each marker carrying a small 3-BAR SIGNAL METER from its live SNR,
  * dimmed when not heard recently; the published beacons not heard, optionally, faint; the ADS-B map's own range rings
  * (in nautical miles, labels on all four sides) and receiver house; a tapped beacon's line to the receiver.
  *
