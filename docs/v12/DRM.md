@@ -44,8 +44,9 @@ section: `DECODER-RESEARCH.md` §4.4.
 
 0. **Resample to 24 kHz.** One windowed-sinc FIR, then cubic interpolation. A pipeline channel already at 24 kHz
    passes straight through.
-   - **Pulse blanker:** a run-based detector (an 8-sample mean 6 dB over the running mean, or one sample 13 dB over
-     it). It was added because the first real recording carried a 40 Hz pulsed interferer.
+   - **Pulse blanker:** a run-based detector (an 8-sample mean 7.8 dB over the reference, or one sample 13 dB over
+     it). It was added because the first real recording carried a 40 Hz pulsed interferer. The reference is the larger
+     of a 100 ms and a 1 s mean, so a signal climbing out of a fade is not mistaken for a pulse (2026-10-29, below).
 1. **Mode and timing** come from guard-interval correlation, folded modulo Ts over 0.8 s.
    - The peak has to stand over the fold's 10th percentile. That is the first false-lock gate: an AM carrier gives a
      flat fold.
@@ -61,8 +62,9 @@ section: `DECODER-RESEARCH.md` §4.4.
      window steps; their rate is reported as the sample-clock offset.
 5. **Channel estimation:**
    - gain references interpolated in time — cubic through four pilots (2y−1 symbols of look-ahead);
-   - then in frequency by a Wiener filter (sinc correlation over Tg, 12 taps, solved once per plan), centred on the
-     delay profile;
+   - then in frequency by a Wiener filter (12 taps), centred on the delay profile. It starts from the design model
+     (flat over Tg, 20 dB SNR) and from then on is rebuilt every other frame from the channel's own measured delay
+     profile and noise floor (2026-10-29, below);
    - SIMD equaliser; |H|² is each cell's CSI weight.
 6. **Decoding:**
    - FAC every frame. It needs CRC-8 plus valid fields, and two agreeing FACs before "locked" — the second and third
@@ -180,6 +182,64 @@ Also fixed:
 - The pulse blanker's mean now warms up over 10 ms. It began from one sample's power and blanked the first 100 ms of
   every lock (10 % of the first second); the first lights now come 0.4 s sooner.
 
+### The French broadcast on 5970 kHz, and two receiver faults it led to (2026-10-29)
+
+**Symptom.** At ~02:50 UTC both of Stuart's receivers (the RSP1A on the Lenovo and the RX888 UberSDR) showed a DRM
+block ~20 dB over the noise: mode B, SO 3, MSC 64-QAM, SDC 16-QAM, long interleave. The FAC decoded (85–90 %), but
+the SDC never did and the MSC MER read 0. The same code decodes RRI 9570 kHz without a bad frame.
+
+**Is it the signal or us?** No independent DRM decoder could be run here (the reference decoders need Qt, which this
+Mac does not have, and the UberSDR's DRM extension is not installed). So the signal was measured with methods that do
+not use our channel estimator at all:
+
+- **The guard interval's own redundancy.** The guard is a copy of the symbol's tail, so x[n]·x*[n+Tu], folded over the
+  symbol period, measures how much of the received energy is consistent with ONE OFDM symbol at ANY timing — a ceiling
+  for every receiver, whatever its window placement. RRI 9570: 0.96–0.97. 5970: **0.69–0.75** (Tg-averaged; 0.80 at
+  the best single point). At least a fifth of the energy is not cyclic-prefix consistent anywhere.
+- **The frequency-reference tones' spectrum** (0.1 Hz resolution) is the channel's Doppler spectrum. RRI: one line,
+  a skirt 30–35 dB down. 5970: the line, plus a **skirt only ~22 dB down spread ±2.5 Hz** — a diffuse, Doppler-spread
+  component carrying several per cent of the power. The fold's floor at every lag is 3× RRI's (energy spread over
+  delays far beyond the 5.3 ms guard).
+- **The raw pilots** (a gain reference against the mean of its neighbours y symbols either side): data-cell SINR
+  ≈ 9–10 dB, flat across the band (±2 dB carrier to carrier) and steady in time (8–13.5 dB frame to frame).
+- **The band edges:** the noise outside the channel is 21 dB below the signal inside it. The impairment travels WITH
+  the signal: propagation (night-time diffuse scatter), not noise, interference or our front end.
+- **Moving the FFT window** through the whole guard changes the SINR by at most 2 dB, best where it already sits.
+- **A second OFDM signal under it?** Guard correlation at every mode's Tu, over 6 s chunks: no second peak.
+
+**Verdict: the signal.** A synthetic channel built to match — the main paths (0 and 0.8 ms, 0.25 Hz) plus diffuse
+scatter 2.5–9.5 ms at 3 Hz Doppler, ~17 % of the power — reproduces the recording: FAC MER ~3 dB, FAC ~86 %, MSC 0 of
+137 frames, **at 21 dB SNR and at 40 dB alike**. 64-QAM needs ≳ 16 dB at the decision; ~9–10 dB is not enough for any
+receiver. The audio of that recording cannot be decoded.
+
+**But two faults of ours turned up on the way**, both proved on synthetic channels and fixed:
+
+1. **The pulse blanker zeroed signals coming back out of fades.** Its reference was a 100 ms mean, which followed the
+   signal DOWN into a fade; on the way back up the signal stood "13 dB over the mean" and was blanked. One Rayleigh
+   path at 1 Hz Doppler, 30 dB SNR: 2.3 % blanked and 57 of 140 frames; unblanked, 140 of 140. It even clipped OFDM
+   peaks on a clean signal (MSC MER at 30 dB AWGN: 27 → 31 dB once fixed). The reference is now the larger of the
+   100 ms mean and a 1 s mean, and the 8-sample test sits at 6× (7.8 dB). RRI 9720's radar pulses are still caught
+   (17 % blanked, FAC 352/372 — was 332/372). **This was most of the "fast-fading error floor" on channels 4 and 5.**
+2. **The frequency interpolator assumed the channel**: flat over Tg, 20 dB SNR, always. It now builds the textbook
+   MMSE interpolator from what the receiver already measures — the averaged delay profile (its floor is the noise,
+   what stands above it is the channel's power-delay profile): ρ(Δk) = Σ P(t)·e^{−j2πΔk(t−τc)/Tu}, noise = floor·P/ΣP.
+   Every other frame; one solve per distinct tap pattern (~40 in mode B SO 3), not per carrier. Mode B 64-QAM at
+   14 dB AWGN: 8 % → 89 % of frames. `VIBE_DRM_WFLAT=1` keeps the design model, for A/B.
+
+On the 5970 recording the two together decode the SDC once in 48 — the label **"TDF DRM"** — where nothing decoded
+before; FAC 131 → 138 of 148. The MSC stays at 0, as the measurements above say it must.
+
+Mode B, SO 3, MSC 64-QAM prot 1, SDC 16-QAM (the station's settings), 50 super frames, MSC frames correct of 140
+delivered (the ~10 of 150 not delivered are acquisition):
+
+| Channel | SNR | Before | After |
+|---|---|---|---|
+| two equal paths 4 ms apart, 0.25 Hz | 18 / 22 / 26 dB | 110 / 117 / 118 | 136 / 140 / 140 |
+| 3 ms, second path −3 dB, 0.5 Hz | 18 / 22 / 26 dB | 78 / 87 / 92 | 135 / 140 / 140 |
+| 4.5 ms, second path −2 dB, 1 Hz | 18 / 22 / 26 dB | 22 / 25 / 27 | 131 / 139 / 139 |
+| annex B channel 5 (4 ms equal, 2 Hz) | 18 / 22 / 26 dB | 0 / 0 / 0 | 118 / 123 / 125 |
+| like 5970: main paths + diffuse 2.5–9.5 ms, 3 Hz | 21 / 40 dB | 0 / 0 (SDC 19/48) | 0 / 0 (SDC 23/48) |
+
 ### The flaky `test-server-drm` — found and fixed
 
 **Symptom:** ~3 runs in 10 heard silence in the 8 s audio window. FAC failures climbed; no queue drops were logged.
@@ -234,7 +294,7 @@ which FFmpeg decodes:
 
 It needs ISO/IEC 14496-3's HCR clause, which is a paid standard. Stuart's call.
 
-## Test results (`vibeserver/test-drm.cpp`, 134 checks, 0 failed; `scripts/run-tests.sh`)
+## Test results (`vibeserver/test-drm.cpp`, 134 checks, 0 failed; `scripts/run-tests.sh`; re-run 2026-10-29)
 
 **The standard's tables** — cell counts, SDC lengths and the PRBS — all match.
 
@@ -247,19 +307,24 @@ interleaver):
 
 | Mode, QAM, channel | 10 dB | 14 dB | 18 dB | 22 dB | 26 dB | 30 dB |
 |---|---|---|---|---|---|---|
-| B 64-QAM, AWGN | 0 | 8 | 96 | 96 | 96 | 96 |
-| B 16-QAM, AWGN | 89 | 96 | 96 | 96 | 96 | 96 |
-| A 64-QAM, ch 2 (Rice) | 1 | 89 | 96 | 96 | 96 | 96 |
-| B 64-QAM, ch 3 (US Consortium) | 11 | 34 | 53 | 64 | 65 | 66 |
-| B 16-QAM, ch 3 | 50 | 86 | 91 | 92 | 93 | 92 |
-| B 16-QAM, ch 4 (CCIR Poor: 2 ms, 1 Hz) | 31 | 52 | 57 | 58 | 60 | 60 |
-| B 16-QAM, ch 5 (4 ms, 2 Hz) | 3 | 11 | 14 | 15 | 12 | 14 |
-| D 16-QAM, ch 5 | 48 | 54 | 54 | 50 | 47 | 47 |
+| B 64-QAM, AWGN | 0 | 89 | 96 | 96 | 96 | 96 |
+| B 16-QAM, AWGN | 96 | 96 | 96 | 96 | 96 | 96 |
+| A 64-QAM, ch 2 (Rice) | 9 | 96 | 96 | 96 | 96 | 96 |
+| B 64-QAM, ch 3 (US Consortium) | 16 | 50 | 93 | 96 | 96 | 96 |
+| B 64-QAM, ch 4 | 2 | 62 | 92 | 95 | 95 | 93 |
+| B 64-QAM, ch 5 | 0 | 48 | 72 | 74 | 76 | 76 |
+| B 16-QAM, ch 3 | 58 | 92 | 96 | 96 | 96 | 96 |
+| B 16-QAM, ch 4 (CCIR Poor: 2 ms, 1 Hz) | 79 | 96 | 96 | 96 | 96 | 96 |
+| B 16-QAM, ch 5 (4 ms, 2 Hz) | 69 | 88 | 88 | 91 | 92 | 92 |
+| D 16-QAM, ch 5 | 89 | 91 | 92 | 92 | 92 | 93 |
 
-- **The fast-fading channels (4, 5) have an error floor.** The diagnostics point at estimation under Doppler:
-  - channel 4 frozen (0.05 Hz) decodes 100 %; at 0.3 Hz 97 %; at 1 Hz 68 %;
-  - the tracking loops are not the cause (`VIBE_DRM_NOFT` / `VIBE_DRM_NOTT` change nothing).
-  - This is the first thing to improve, with a Doppler-aware Wiener in time and a decision-directed refinement.
+- **Since 2026-10-29** (the blanker and the measured-profile interpolator, above). Before, the same rows read: B 64-QAM
+  AWGN 0/8/96…; ch 3 64-QAM topped out at 66; ch 4 64-QAM at ~21; ch 5 64-QAM 0; 16-QAM ch 4 at ~60, ch 5 at ~15,
+  D ch 5 at ~50.
+- **The "fast-fading error floor" was mostly the pulse blanker**, zeroing the signal each time it climbed out of a fade
+  (single Rayleigh path, 1 Hz, 30 dB: 57 → 140 of 140 frames once fixed). What is left on channel 5 in 64-QAM (~76 %)
+  comes in bursts of a few frames while the two equal paths sit in a deep notch pattern longer than the 2 s
+  interleaver; a Doppler-aware Wiener in time is still the next thing to try there.
 - **Tuning error and clock:** ±1.2 kHz × ±30 ppm, all clean. The offset reads within 2 Hz; the clock within 6 ppm.
 - **False locks:**
   - 10 minutes of noise: 0 FAC passes, 0 locks, 0 frames.
@@ -275,6 +340,12 @@ interleaver):
       which caps MER at ~4 dB.
     - The pulses are 0.93-coherent shot to shot, so per-pulse template subtraction is the next step.
   - **RRI 5910 and 13750 kHz:** nothing receivable at the time (noise).
+- **Real recordings, 2026-10-29** (`uber_5970000_iq48_french_2026-10-29.wav`, 60 s, Stuart's UberSDR, ~02:50 UTC):
+  - **5970 kHz, a French service (TDF), mode B / SO 3 / 64-QAM MSC / 16-QAM SDC, long interleave.**
+    - Before: FAC 131/148, SDC 0/48, MSC 0. After: FAC 138/148, SDC 1/48 (label "TDF DRM"), MSC 0.
+    - Signal-limited, not ours: diffuse Doppler-spread scatter caps the SINR at ~9–10 dB for any receiver (the guard
+      redundancy reads 0.69–0.75 against RRI's 0.96). See "The French broadcast on 5970 kHz" above.
+    - RRI 9570 after the same changes: FAC 372/373, SDC 123/123, 365 MSC frames — unchanged; MSC MER ~0.5–2 dB higher.
 - **Through the real server** (`scripts/test-server-drm.mjs`, 46 checks since the Signal pane): a fake rtl_tcp replays RRI 9570 kHz, made
   by `scripts/drm-clip.py`.
   - Tested on a one-pipeline radio and on a range-locked one.
@@ -288,6 +359,8 @@ interleaver):
 
 ## CPU per DRM listener
 
+- **Since 2026-10-29** (the measured-profile interpolator): +3–6 % on the receiver — interleaved A/B on the Mac, mode B
+  64-QAM 0.42 → 0.43–0.44 % of one core; the real RRI file 0.71 → 0.75 s of CPU for 150 s. Pi 2: ~8–16 %.
 - **Since 2026-10-26** (the Signal pane's statistics included, the timing loop's block scan made O(P)): mode A 0.37 %,
   B 0.38 %, D 0.30 % of one Mac core, synthetic 64-QAM. The statistics add < 0.01 %. Pi 2 estimate by the same
   25–40× ratio as below: ~8–15 % of one core.
@@ -306,7 +379,8 @@ interleaver):
 1. **The AAC repack.** Without it, the older stations — RRI among them — have no sound.
 2. **xHE-AAC verified on a real station**, on the bundled FFmpeg 8.1 and AudioToolbox, including whether the SDC's rate is
    `usacSamplingFrequency` (assumed). The xHE frames-per-super-frame count will settle it.
-3. **Multipath under fast fading** (channels 4/5) — see above.
+3. **Multipath under fast fading** — channels 4/5 mostly fixed 2026-10-29 (the blanker); 64-QAM on channel 5 still
+   loses ~20 % of frames in bursts. Diffuse night-time scatter (5970 kHz) is beyond any guard-interval receiver.
 4. **Pulse interference** — subtraction instead of blanking (9720 kHz).
 5. **The app** (React Native) — the mode, the box and (2026-10-26) the Signal pane BUILT (APP-PARITY-2026-10-26.md: DrmPanel, drm.ts held
    to drmRender by scripts/test_drm_app.ts); the audio is the server's, so it plays as any mode's. Still owed: the station
