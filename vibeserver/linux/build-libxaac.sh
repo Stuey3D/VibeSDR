@@ -27,6 +27,23 @@ S="${1:?source}"; PREFIX="${2:?prefix}"; VARIANT="${3:?variant}"
 : "${CC:?CC}" "${AR:?AR}"
 ASCC="${ASCC:-$CC}"
 B="$(mktemp -d)"; trap 'rm -rf "$B"' EXIT
+# ── VibeSDR's patch series (xaac-patches/series), applied IN PLACE to the freshly unpacked tree, in order ──────────────
+# ★★ Every caller unpacks a clean, SHA-256-checked tarball first, so the series always lands on pristine v0.1.14. Each
+#    patch changes behaviour only where its header says, and adds a "Modified by VibeSDR" notice to every file it touches
+#    (Apache-2.0 §4(b)). XAAC_PATCHES=none builds the tree as it is (development only).
+P="${XAAC_PATCHES:-$(cd "$(dirname "$0")" && pwd)/xaac-patches}"
+XAAC_SERIES=""
+# ★ A missing series is an ERROR, not "no patches": an image that copied build-libxaac.sh without xaac-patches/ would
+#   otherwise build stock libxaac in silence (and lose the defect fixes in 0005 and 0008).
+[ "$P" = none ] || [ -f "$P/series" ] || { echo "!! libxaac patch series not found at $P/series — refusing (XAAC_PATCHES=none builds stock)"; exit 1; }
+if [ "$P" != none ]; then
+  while IFS= read -r p; do
+    case "$p" in ""|\#*) continue ;; esac
+    patch -d "$S" -p1 -s --no-backup-if-mismatch < "$P/$p" || { echo "!! libxaac patch $p did not apply"; exit 1; }
+    XAAC_SERIES="$XAAC_SERIES $p"
+  done < "$P/series"
+fi
+echo "==> libxaac patches:${XAAC_SERIES:- none}"
 srcs() { grep -ho '"${XAAC_ROOT}/[^"]*"' "$@" | tr -d '"' | sed "s#\${XAAC_ROOT}#$S#" | grep -E '\.(c|s)$' | sort -u; }
 LIST="$(srcs "$S/common/common.cmake" "$S/decoder/libxaacdec.cmake" "$S/decoder/drc_src/libxaacdec_drc.cmake" \
         | grep -v '/decoder/\(x86\|x86_64\|armv7\|armv8\|generic\)/')"
@@ -64,4 +81,4 @@ if [ "$(uname -s)" != Darwin ]; then   # ★ no object may ask for an executable
     [ "$("$RE" -S "$o" 2>/dev/null | grep -c 'note.GNU-stack' || true)" -gt 0 ] || { echo "!! $(basename "$o") has no .note.GNU-stack"; exit 1; }
   done
 fi
-echo "==> libxaac ($VARIANT): ${#OBJS[@]} objects, $(wc -c < "$PREFIX/lib/libxaacdec.a") bytes"
+echo "==> libxaac ($VARIANT): ${#OBJS[@]} objects, $(wc -c < "$PREFIX/lib/libxaacdec.a") bytes; patches:${XAAC_SERIES:- none}"

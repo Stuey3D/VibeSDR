@@ -1,0 +1,12 @@
+# VibeSDR's patch series for libxaac v0.1.14 (commit 2fbadd57) — the decoder VibeServer links for xHE-AAC.
+# Applied in this order by vibeserver/linux/build-libxaac.sh (Linux and Mac; patch -p1 in the unpacked tree).
+# libxaac is Apache-2.0; these patches are too. Each patched file says "Modified by VibeSDR" (section 4(b)); each patch's
+# header says what it changes, why, and what it was measured against. docs/v12/LIBXAAC.md has the figures.
+0001-mult64-sat-no-division.patch
+0002-hbe-only-when-used.patch
+0003-arith-decode-no-division.patch
+0004-samples-sat-no-division.patch
+0005-esbr-synthesis-saturate.patch
+0006-sat-ops-qadd.patch
+0007-fft-scaling-shift.patch
+0008-cpe-second-channel-sbr-mode.patch

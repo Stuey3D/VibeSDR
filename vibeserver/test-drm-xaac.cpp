@@ -166,7 +166,7 @@ int main() {
     // ── 2 + 3. the USAC tools FFmpeg could not do, against AudioToolbox; the server's 48 kHz path; concealment ──────────
     const struct { const char* n; double min; } xhe[] = {
         {"fd_st64_noesbr", 60}, {"fd_mono16_sbr", 60}, {"fd_st24_mps", 60}, {"sw_mono16_esbr", 60}, {"sw_speech12", 60},
-        {"sw_st24_mps", 60}, {"td_speech12", 35}, {"fd_st32_sbr", -1}, {"sw_mono16_pvc", -1}, {"sw_st20_ites", -1} };
+        {"sw_st24_mps", 60}, {"td_speech12", 35}, {"fd_st32_sbr", 60}, {"sw_mono16_pvc", -1}, {"sw_st20_ites", -1} };
     for (const auto& x : xhe) {
         Stream s;
         if (!readAus(base + "/xhe/" + x.n + ".aus", s)) { std::printf("   %s: not found, skipped\n", x.n); continue; }

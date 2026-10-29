@@ -8,6 +8,12 @@ both the bundled FFmpeg and FAAD2. These are the measurements.
 > libxaac for xHE-AAC — and VibeServer on Linux and the Mac no longer uses FFmpeg at all. The owner's DAB+ decoder choice
 > (`dabAacDecoder`) is gone; the Mac decodes DAB+ with FAAD2 like Linux. Android keeps MediaCodec. The sections below
 > that describe an FFmpeg option or the Mac's old DAB+ path are history.
+>
+> ★★ **UPDATE, 2026-10-29 (branch `v12-xaac-opt`): libxaac is now PATCHED** — `vibeserver/linux/xaac-patches/`, eight
+> patches, applied by `build-libxaac.sh` on Linux and the Mac. Six make it faster (bit-identical output), two fix
+> defects found in the evaluation: the **eSBR overload wrap** (0005 — it was the synthesis filterbank truncating, not
+> PS) and the **stereo-SBR right channel** (0008 — ours was wrong, AudioToolbox right). See "The VibeSDR patch series"
+> below; the Pi 2 table there supersedes the CPU table further down for xHE-AAC.
 
 ## The answer
 
@@ -50,9 +56,11 @@ Everything here is reproducible from `~/VibeSDR-test-audio/xaac/` (bench, data, 
 
   ¹ ACELP's recursive synthesis filters carry float rounding forward. Two libxaac builds (NEON vs C) differ from each
   other by the same 46 dB. Band energies match AudioToolbox within 0.06 dB on average.
-  ² The right channel differs from AudioToolbox by about 25 dB in every band, and the left channel matches to 96 dB.
-  Both decoders are **equally close to the source** (5.40 vs 5.44 dB SNR). The cause is unresolved, so the test
-  reports it without gating on it.
+  ² **Was 27 dB: FIXED by patch 0008, now 76.5 dB (gated at 60).** The right channel's SBR band (5–12 kHz) differed
+  from AudioToolbox by ~10 dB; its core and the left channel matched. Cause, in libxaac: on a USAC SBR header in a
+  channel pair only the first channel's frame data got the SBR mode, so the right channel's first frame skipped HF
+  adjustment and its noise/sine index ran one frame (832 steps) behind for the rest of the stream. Energy was right,
+  the noise phase was not — which is why both decoders were equally close to the source. AudioToolbox was right.
 
   **Measured against the original source**, libxaac and AudioToolbox are indistinguishable on every stream (band-energy
   distance to the source within 0.02 dB of each other). FFmpeg 8.1's USAC decoder is only fit for FD streams without
@@ -77,11 +85,13 @@ libxaac decoded every unit with 0 errors and the correct length (1920 samples a 
 - In a three-way comparison of third-octave band energies, **libxaac's eSBR path is the consensus**: it is 0.4–0.6 dB
   rms from FFmpeg, while FAAD2 is 1.0–1.2 dB rms from both and runs +0.18 dB hot below 4 kHz. The core (non-PS)
   output matches FAAD2 to 73 dB where the programme is near-mono.
-- ★★ **Its catch: overload wraps.** When the programme is above 0 dBFS (FAAD2 shows peaks up to +1.14 FS on 11D-C1C0),
-  the libxaac eSBR/PS path **wraps to the opposite full scale on every build except arm64**. That is 29 samples a minute
-  on that station, each one a loud click. arm64 saturates correctly. UBSan finds no signed overflow or implicit
-  truncation in the PS/QMF files, so the cause is not pinned down yet. This needs a patch before libxaac could decode
-  DAB+.
+- ★★ **Its catch was: overload wraps — FIXED by patch 0005.** When the programme is above 0 dBFS (FAAD2 shows peaks
+  up to +1.14 FS on 11D-C1C0), the libxaac eSBR path wrapped to the opposite full scale on every build except arm64
+  (31 samples in 58 s on 11D-C1C0, 249 in 45 s on 10D-C2EF), each one a loud click. Cause: the eSBR QMF synthesis
+  (`ixheaacd_esbr_qmfsyn64_winadd`) stored its 64-bit sum as `(WORD32)(acc >> 31)` — a Q16 sample above 32767.99
+  overflows 32 bits. Only libxaac's AArch64 C copy saturated; the portable C and the ARMv7 assembly (`VSHRN`) did
+  not. It is not in PS at all (UBSan could not see it: the truncating cast is defined behaviour). Every build now
+  saturates and matches arm64 sample for sample. xHE-AAC uses the same synthesis, so it had the same click.
 - **The other path** (`ESBR=0`, libxaac's legacy low-power SBR) is bit-identical on armhf and arm64 and never wraps.
   But it runs a peak limiter (peaks 0.75 FS where FAAD2 gives 1.14), sits about 0.3 dB low, and is further from the
   consensus (0.6–1.4 dB).
@@ -139,7 +149,8 @@ x86 was not timed (qemu only). On instruction counts the C path costs about 1.8�
   x86_64 selector (plain C) with `__ARM_NEON__` undefined for every C build, and `-Werror=incompatible-pointer-types`.
   This is worth reporting upstream.
 
-**Headroom, armhf, if we patched it (estimates from the profile; not built):**
+**Headroom, armhf, if we patched it (estimates from the profile; not built — see "The VibeSDR patch series" for what
+was built and measured; item 2's `pow` turned out to be the harmonic transposer's `cbrt`, so 3 covers it):**
 1. Replace the 64-bit division in the arithmetic decoder (`__udivmoddi4`): about −10 to −14 % on every xHE stream.
 2. A table or `exp2f` for SBR envelope `pow()`: about −10 % (DAB+ eSBR), less on xHE.
 3. Skip the harmonic transposer's analysis when the stream has no harmonic SBR: −4 to −8 % (DAB+ eSBR path).
@@ -153,16 +164,62 @@ question settled.
 **Would a local patch series hold up?** Well. The hot DSP files (`ixheaacd_ps_dec.c`, `esbr_polyphase.c`,
 `sbr_dec.c`, `hbe_trans.c`, `arith_dec.c`, `env_calc.c`, `qmf_dec*.c`) have had **no upstream commits since
 2024**. Upstream work is fuzz and parsing fixes (`api.c`, MPS, DRC). Releases come once or twice a year (0.1.12
-2024-12, 0.1.13 2026-01, 0.1.14 2026-10). Patches would live in `vibeserver/linux/libxaac-patches/` with a `series`
+2024-12, 0.1.13 2026-01, 0.1.14 2026-10). Patches live in `vibeserver/linux/xaac-patches/` with a `series`
 file, like faad2-patches. **Apache-2.0 §4(b) requires every modified file to carry a prominent notice that we
 changed it**, so each patch adds a "Modified by VibeSDR, <date>: <what>" line to the file's header. §4(c) requires us
 to keep the existing notices, and §4(d) to ship NOTICE.
+
+## The VibeSDR patch series (`v12-xaac-opt`, 2026-10-29)
+
+`vibeserver/linux/xaac-patches/` — each patch's header has the detail. "Bit-identical" means every one of the 27 test
+outputs (7 conformance, 12 xHE, 4 DAB+ logs × eSBR and legacy SBR, PCM16 as the server asks) is the same sample for
+sample as stock v0.1.14 on that arch, checked on arm64, armhf, ARMv6, i386, amd64 (qemu) and the Mac.
+
+| # | Patch | Output | What it buys |
+|---|---|---|---|
+| 0001 | `ixheaac_mult64_sat()`: checked multiply, no 64-bit division | bit-identical | libgcc `__udivmoddi4`, 14 % of an FD stream on armhf |
+| 0002 | harmonic transposer only once the stream uses harmonic patching | bit-identical (incl. the harmonic stream) | ~30 % of the DAB+/AAC eSBR path (its `cbrt` per QMF sample was the profile's "pow") |
+| 0003 | arithmetic decoder: compare `cf·range > num` instead of dividing | bit-identical | a library division per symbol on ARM |
+| 0004 | PCM output loop without `i % ch`, `i / ch` | bit-identical | a library divmod per output sample on ARM |
+| 0005 | **eSBR synthesis saturates** (C ×3 copies + ARMv7 `VQSHRN`) | changes only samples that wrapped | **defect (a)** |
+| 0006 | `add32_sat` / `sub32_sat` / `negate32_sat` / `shl32_sat(x,1)` = QADD/QSUB on 32-bit ARM, checked add elsewhere | bit-identical | every C fixed-point FFT: −45 % instructions on ARMv6 xHE SBR (with 0007) |
+| 0007 | FFT input scaling by shift, not `/ (1 << shift)` | bit-identical | a library division per FFT sample on ARM |
+| 0008 | **USAC CPE: second channel gets the SBR mode from the header** | changes the right channel of stereo-SBR streams | **defect (b)**: fd_st32_sbr vs AudioToolbox R 24 → 76.5 dB |
+
+**Pi 2 (Cortex-A7, 900 MHz), % of one core, decode only, best of 2 runs of 3× the stream, `nice -n 19`, standalone
+static `xaacbench` in a scratch directory (removed afterwards; vibeserver untouched).** Same flags as the packages. The
+ARMv6 binary ran on the Pi 2's A7, not an ARM1176.
+
+| Stream | armhf stock | armhf patched | | ARMv6 stock | ARMv6 patched | |
+|---|---|---|---|---|---|---|
+| xHE Fd_1 mono 48 k, no SBR | 3.49 | **2.83** | −19 % | 4.52 | **3.30** | −27 % |
+| xHE Fd_2 0x05 stereo 32 k | 4.61 | **3.54** | −23 % | 5.92 | **4.21** | −29 % |
+| xHE mono 16 k SBR + LPD (sw_mono16_esbr) | 5.66 | **5.40** | −5 % | 8.34 | **6.18** | −26 % |
+| xHE ACELP 12 k + SBR (td_speech12) | 5.80 | **5.60** | −3 % | 8.52 | **6.38** | −25 % |
+| xHE stereo 32 k SBR (fd_st32_sbr) | 8.94 | **8.20** | −8 % | 13.94 | **9.80** | −30 % |
+| xHE stereo 24 k SBR + MPS (sw_st24_mps) | 14.33 | **13.71** | −4 % | 17.00 | **14.70** | −14 % |
+| DAB+ 12B / 11D, eSBR path | 9.01 / 8.83 | **5.35 / 5.43** | −40 % | 11.30 / 11.15 | **6.05 / 6.20** | −45 % |
+| DAB+ 12B / 11D, legacy SBR path | 3.96 / 4.06 | **3.49 / 3.59** | −12 % | 9.28 / 9.41 | **5.20 / 5.27** | −44 % |
+
+Instruction counts (qemu) agree in direction; i386 (the C path at the SSE2 floor) went from 126 to 94 M instr/s on
+fd_st32_sbr and 99 → 57 on the DAB+ legacy path; amd64 runs the same C. armhf's xHE SBR streams gain least because
+its FFTs were already libxaac's NEON assembly — what is left there is `sbr_env_calc`, the QMF window/add and MPS
+(float C), the next targets if xHE-AAC on the Pi 2 ever needs it. DAB+ through libxaac's eSBR path is now ~1.8× our
+patched FAAD2 (2.9–3.0 %) on armhf, from 3×.
+
+**Per-arch SIMD state (unchanged by the series):** armhf runs libxaac's ARMv7 NEON + ARM-DSP assembly (61 files),
+arm64 its AArch64 NEON (20), and ARMv6 / i386 / amd64 / the Mac the C path — which the series made much cheaper on
+32-bit ARM (QADD/QSUB, no library divisions) and somewhat on x86. libxaac has no x86 SIMD; none was added. The Mac
+could use the AArch64 assembly (it assembles with Apple clang given `_` aliases, bit-identical on every xHE stream) but
+measured no faster there, so it stays on C.
 
 ## Packaging (this branch)
 
 - **Pinned:** libxaac **v0.1.14** = commit `2fbadd57bca46693b7a077bcf1513131106d960c` (2026-10-01). Tarball
   `https://github.com/ittiam-systems/libxaac/archive/refs/tags/v0.1.14.tar.gz`, **SHA-256
-  `f467a6e5bcf3941ce5d1a4d811442835fba7eb3744ae986f3ea37e110584b611`**. Unmodified.
+  `f467a6e5bcf3941ce5d1a4d811442835fba7eb3744ae986f3ea37e110584b611`**, with VibeSDR's patch series
+  (`vibeserver/linux/xaac-patches/series`, applied by `build-libxaac.sh`; a missing series is a build error, and
+  `XAAC_PATCHES=none` builds stock for comparison). The Docker images copy `xaac-patches/` beside the script.
 - **Built by** `vibeserver/linux/build-libxaac.sh`, called by `linux/build-deps.sh` (every profile) and
   `mac/build-deps.sh`. It builds the decoder only, statically and in process. The source list is read from libxaac's
   own cmake lists. Variants:
@@ -216,7 +273,8 @@ before a tag, pin the commit (GitHub archive tarball by SHA, the same `fetch` + 
 
 - **`vibeserver/test-drm-xaac.cpp`** (in run-tests.sh, which needs a deps prefix with `libxaacdec.a`) runs the
   conformance and `usac/xhe` comparisons above, the server's 48 kHz path (duration, finite output, ≤ +6 dBFS) and
-  concealment (1 unit in 7 failing CRC). **85/85 on the Mac (C path) and on Linux arm64 (NEON path).**
+  concealment (1 unit in 7 failing CRC). **86/86 on the Mac with the patch series** (fd_st32_sbr now gated at
+  60 dB against AudioToolbox; 85/85 before, when it was reported only).
 - `test-drm-faad` now builds the DRM decoder door with FAAD2 **and** libxaac, as the server does. It passes, with
   RRI 9570 off air.
 - Also passing: `test-drm` 134/134 (incl. real recordings), `test-drm-signal` 109/109, `test-dab-faad` 53/53,
@@ -227,11 +285,12 @@ before a tag, pin the commit (GitHub archive tarball by SHA, the same `fetch` + 
 ## For Stuart to decide
 
 1. **DAB+ on libxaac** (it would drop `libfaad_dab.a` and the FAAD2 patch series, but FAAD2 stays for DRM either
-   way). You can have the eSBR path, which is the consensus quality but costs 3× our patched FAAD2 on the Pi 2 and
-   must have its overload wrap fixed first. Or the legacy path, at 1.35× FAAD2 on armhf (3× on ARMv6 and x86), with
-   its peak limiter. Or keep FAAD2 (recommended for now).
-2. Whether to carry a **libxaac patch series** for the Pi 2: arithmetic-decoder division, `pow` tables, HBE skip,
-   NEON for PS.
+   way). The eSBR path's overload wrap is fixed (0005) and its CPU is down by a third (see the patch series table),
+   but it is still above our patched FAAD2 on the Pi 2. Or keep FAAD2 (still recommended).
+2. ~~Whether to carry a **libxaac patch series**~~ — done on `v12-xaac-opt` (eight patches). Not done, and why: NEON for
+   PS de-correlation/rotation (it only helps DAB+, which FAAD2 decodes); MPS; the Mac on libxaac's AArch64 assembly
+   (all 19 files assemble with Apple clang given `_`-prefixed aliases, and the output is bit-identical to the C path
+   on every xHE stream — but it measured no faster on an Apple core, so the build stays simple).
 3. ~~Whether the owner's **FFmpeg DAB+ option** should stay at all on Linux~~ — decided 2026-10-29: removed, with every
    other FFmpeg use (`v12-no-ffmpeg`).
 4. Patents (above).

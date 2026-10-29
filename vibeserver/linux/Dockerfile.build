@@ -68,6 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   tarballs, the full commit for rtl-sdr, the V4L strings, no udev symbols).
 COPY build-deps.sh build-libxaac.sh librtlsdr-cancel-wait.patch /opt/
 COPY faad2-patches /opt/faad2-patches
+COPY xaac-patches /opt/xaac-patches
 # ★ Two compile jobs, niced: the Mac overheats and the Lenovo is a live receiver.
 ARG DEPS_JOBS=2
 # ★ build-debs-remote.sh passes DEPS_NICE=19 on the Lenovo (a live receiver); 10 and DEPS_JOBS=8 on the Mac.

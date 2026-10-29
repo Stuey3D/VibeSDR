@@ -1,0 +1,91 @@
+Subject: [PATCH 6/8] basic ops: QADD/QSUB for the saturating 32-bit add/subtract
+
+VibeSDR patch for libxaac v0.1.14 (commit 2fbadd57; the decoder VibeServer links for xHE-AAC). Apache-2.0, as libxaac.
+Written for VibeSDR, 2026-10-29; applied in the order of xaac-patches/series by vibeserver/linux/build-libxaac.sh (Linux
+and Mac). Every file it changes carries a "Modified by VibeSDR" notice (Apache-2.0 section 4(b)). Measured with
+xaacbench on the 7 ISO conformance streams, 12 xHE test streams (usac/xhe) and 4 off-air DAB+ unit logs, at PCM16 as
+the server decodes, on arm64, armhf, ARMv6, i386 and amd64 (qemu) and the Mac. Instruction counts: qemu, guest
+instructions per second of audio.
+
+ixheaac_add32_sat / sub32_sat / negate32_sat widened to 64 bits and compared twice; they are in every fixed-point
+butterfly (the C FFTs are the hottest code on every build without libxaac's assembly). On 32-bit ARM (ARMv5TE+,
+so ARMv6 and ARMv7) they are now the QADD / QSUB instructions, and a saturating doubling (shl32_sat by 1) is
+QADD(a, a); elsewhere the compiler's checked add/subtract. Same saturation, bit-identical output. ARMv6
+x_fd_st32_sbr 109.6 -> 62.5 M instr/s (with 0007), DAB+ legacy path 81.4 -> 34.7; i386 xHE SBR 126 -> 94.
+
+diff --git a/common/ixheaac_basic_ops32.h b/common/ixheaac_basic_ops32.h
+index f8dbc73..e992cce 100644
+--- a/common/ixheaac_basic_ops32.h
++++ b/common/ixheaac_basic_ops32.h
+@@ -16,6 +16,13 @@
+  *
+  *****************************************************************************
+  * Originally developed and contributed by Ittiam Systems Pvt. Ltd, Bangalore
++ *
++ * Modified by VibeSDR, 2026-10-29: ixheaac_add32_sat(), ixheaac_sub32_sat() and
++ * ixheaac_negate32_sat() (and ixheaac_shl32_sat() by one) use the ARM QADD /
++ * QSUB instructions on 32-bit ARM
++ * (ARMv5TE and later, which includes ARMv6) and the compiler's checked add /
++ * subtract elsewhere, instead of widening to 64 bits and comparing. They
++ * saturate exactly as before; the results are identical.
+ */
+ #ifndef IXHEAAC_BASIC_OPS32_H
+ #define IXHEAAC_BASIC_OPS32_H
+@@ -66,6 +73,10 @@ static PLATFORM_INLINE WORD32 ixheaac_shr32(WORD32 a, WORD b) {
+ 
+ static PLATFORM_INLINE WORD32 ixheaac_shl32_sat(WORD32 a, WORD b) {
+   WORD32 out_val;
++#if defined(__arm__) && defined(__ARM_FEATURE_DSP) && (defined(__GNUC__) || defined(__clang__))
++  /* VibeSDR: a saturating doubling is QADD(a, a) — the same clamp */
++  if (__builtin_constant_p(b) && b == 1) return __builtin_arm_qadd(a, a);
++#endif
+   if (a > (MAX_32 >> b))
+     out_val = MAX_32;
+   else if (a < (MIN_32 >> b))
+@@ -194,8 +205,22 @@ static PLATFORM_INLINE WORD32 ixheaac_sub32(WORD32 a, WORD32 b) {
+   return diff;
+ }
+ 
++/* VibeSDR: one instruction on 32-bit ARM, a checked add elsewhere (same saturation) */
++#if defined(__arm__) && defined(__ARM_FEATURE_DSP) && (defined(__GNUC__) || defined(__clang__))
++#define VIBE_SAT32_ARM 1
++#elif defined(__GNUC__) || defined(__clang__)
++#define VIBE_SAT32_OVF 1
++#endif
++
+ static PLATFORM_INLINE WORD32 ixheaac_add32_sat(WORD32 a, WORD32 b) {
+   WORD64 sum;
++#if defined(VIBE_SAT32_ARM)
++  return __builtin_arm_qadd(a, b);
++#elif defined(VIBE_SAT32_OVF)
++  WORD32 r;
++  if (__builtin_add_overflow(a, b, &r)) return (a < 0) ? MIN_32 : MAX_32;
++  return r;
++#endif
+ 
+   sum = (WORD64)a + (WORD64)b;
+ 
+@@ -224,6 +249,13 @@ static PLATFORM_INLINE WORD32 ixheaac_add32_sat3(WORD32 a, WORD32 b, WORD32 c) {
+ 
+ static PLATFORM_INLINE WORD32 ixheaac_sub32_sat(WORD32 a, WORD32 b) {
+   WORD64 diff;
++#if defined(VIBE_SAT32_ARM)
++  return __builtin_arm_qsub(a, b);
++#elif defined(VIBE_SAT32_OVF)
++  WORD32 r;
++  if (__builtin_sub_overflow(a, b, &r)) return (a < 0) ? MIN_32 : MAX_32;
++  return r;
++#endif
+ 
+   diff = (WORD64)a - (WORD64)b;
+ 
+@@ -316,6 +348,9 @@ static PLATFORM_INLINE WORD32 ixheaac_negate32(WORD32 a) {
+ 
+ static PLATFORM_INLINE WORD32 ixheaac_negate32_sat(WORD32 a) {
+   WORD32 neg_val;
++#if defined(VIBE_SAT32_ARM)
++  return __builtin_arm_qsub(0, a);
++#endif
+ 
+   if (a == MIN_32) {
+     neg_val = MAX_32;

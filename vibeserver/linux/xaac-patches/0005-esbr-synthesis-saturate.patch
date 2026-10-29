@@ -1,0 +1,174 @@
+Subject: [PATCH 5/8] eSBR synthesis: saturate instead of wrapping above 0 dBFS
+
+VibeSDR patch for libxaac v0.1.14 (commit 2fbadd57; the decoder VibeServer links for xHE-AAC). Apache-2.0, as libxaac.
+Written for VibeSDR, 2026-10-29; applied in the order of xaac-patches/series by vibeserver/linux/build-libxaac.sh (Linux
+and Mac). Every file it changes carries a "Modified by VibeSDR" notice (Apache-2.0 section 4(b)). Measured with
+xaacbench on the 7 ISO conformance streams, 12 xHE test streams (usac/xhe) and 4 off-air DAB+ unit logs, at PCM16 as
+the server decodes, on arm64, armhf, ARMv6, i386 and amd64 (qemu) and the Mac. Instruction counts: qemu, guest
+instructions per second of audio.
+
+DEFECT FIX. ixheaacd_esbr_qmfsyn64_winadd() stored (WORD32)(acc >> 31): a Q16 sample above 32767.99 wrapped to the
+opposite full scale, a loud click. Only the AArch64 C version saturated (ixheaac_sat64_32), so every other build -
+the C path (amd64, i386, ARMv6, the Mac) and the ARMv7 NEON assembly (VSHRN) - clicked. Off air: DAB+ 10D-C2EF 249
+wrapped samples in 45 s, 11D-C1C0 31 in 58 s. xHE-AAC goes through the same synthesis, so an overloaded xHE programme
+did the same. Now saturating in the C (64 and 32 band, all three copies) and in the ARMv7 assembly (VQSHRN). Output
+unchanged below full scale; the clipped samples now equal the AArch64 build's on every arch.
+
+diff --git a/decoder/armv7/ixheaacd_esbr_qmfsyn64_winadd.s b/decoder/armv7/ixheaacd_esbr_qmfsyn64_winadd.s
+index ebfca72..9a4ea86 100644
+--- a/decoder/armv7/ixheaacd_esbr_qmfsyn64_winadd.s
++++ b/decoder/armv7/ixheaacd_esbr_qmfsyn64_winadd.s
+@@ -1,3 +1,7 @@
++@ Modified by VibeSDR, 2026-10-29: VQSHRN (saturating) in place of VSHRN, so a
++@ programme above 0 dBFS saturates instead of wrapping (as the C and AArch64
++@ versions now do). Original: Copyright (C) 2018 The Android Open Source Project,
++@ Apache-2.0 (see LICENSE and NOTICE).
+ @VOID ixheaacd_esbr_qmfsyn64_winadd(
+ @WORD32 *tmp1,
+ @WORD32 *tmp2,
+@@ -114,12 +118,12 @@ ixheaacd_esbr_qmfsyn64_winadd:          @ PROC
+     VMLAL.S32       Q13, D16, D18
+     VMLAL.S32       Q14, D17, D19
+ 
+-    VSHRN.S64       D26 , Q13, #31
++    VQSHRN.S64      D26 , Q13, #31
+ 
+     VST1.32         D26[0], [R3], R5
+     VST1.32         D26[1], [R3], R5
+ 
+-    VSHRN.S64       D27 , Q14, #31
++    VQSHRN.S64      D27 , Q14, #31
+ 
+     VST1.32         D27[0], [R3], R5
+     VST1.32         D27[1], [R3], R5
+@@ -207,12 +211,12 @@ LOOP_1:
+     VMLAL.S32       Q13, D16, D18
+     VMLAL.S32       Q14, D17, D19
+ 
+-    VSHRN.S64       D26 , Q13, #31
++    VQSHRN.S64      D26 , Q13, #31
+ 
+     VST1.32         D26[0], [R3], R5
+     VST1.32         D26[1], [R3], R5
+ 
+-    VSHRN.S64       D27 , Q14, #31
++    VQSHRN.S64      D27 , Q14, #31
+ 
+     VST1.32         D27[0], [R3], R5
+     VST1.32         D27[1], [R3], R5
+@@ -299,12 +303,12 @@ LOOP_1:
+     VMLAL.S32       Q13, D16, D18
+     VMLAL.S32       Q14, D17, D19
+ 
+-    VSHRN.S64       D26 , Q13, #31
++    VQSHRN.S64      D26 , Q13, #31
+ 
+     VST1.32         D26[0], [R3], R5
+     VST1.32         D26[1], [R3], R5
+ 
+-    VSHRN.S64       D27 , Q14, #31
++    VQSHRN.S64      D27 , Q14, #31
+ 
+     VST1.32         D27[0], [R3], R5
+     VST1.32         D27[1], [R3], R5
+@@ -395,12 +399,12 @@ LOOP_1:
+     VMLAL.S32       Q13, D16, D18
+     VMLAL.S32       Q14, D17, D19
+ 
+-    VSHRN.S64       D26 , Q13, #31
++    VQSHRN.S64      D26 , Q13, #31
+ 
+     VST1.32         D26[0], [R3], R5
+     VST1.32         D26[1], [R3], R5
+ 
+-    VSHRN.S64       D27, Q14, #31
++    VQSHRN.S64      D27, Q14, #31
+ 
+     VST1.32         D27[0], [R3], R5
+     VST1.32         D27[1], [R3], R5
+diff --git a/decoder/armv7/ixheaacd_qmf_dec_armv7.c b/decoder/armv7/ixheaacd_qmf_dec_armv7.c
+index 3a18da4..cf913b4 100644
+--- a/decoder/armv7/ixheaacd_qmf_dec_armv7.c
++++ b/decoder/armv7/ixheaacd_qmf_dec_armv7.c
+@@ -16,6 +16,12 @@
+  *
+  *****************************************************************************
+  * Originally developed and contributed by Ittiam Systems Pvt. Ltd, Bangalore
++ *
++ * Modified by VibeSDR, 2026-10-29: ixheaacd_esbr_qmfsyn64_winadd() and
++ * ixheaacd_esbr_qmfsyn32_winadd() saturate the output sample to 32 bits instead of
++ * truncating it. A programme above 0 dBFS wrapped to the opposite full scale (a
++ * click) in the eSBR synthesis; the AArch64 build already saturated the 64-band
++ * case. Unchanged below full scale.
+ */
+ #include <string.h>
+ 
+@@ -485,6 +491,6 @@ VOID ixheaacd_esbr_qmfsyn32_winadd(WORD32 *tmp1, WORD32 *tmp2, WORD32 *inp1,
+     syn_out =
+         ixheaac_add64(syn_out, ixheaac_mult64(tmp2[576 + k], inp1[2 * (k + 288)]));
+ 
+-    sample_buffer[ch_fac * k] = (WORD32)(syn_out >> 31);
++    sample_buffer[ch_fac * k] = ixheaac_sat64_32(syn_out >> 31); /* VibeSDR: saturate */
+   }
+ }
+diff --git a/decoder/armv8/ixheaacd_qmf_dec_armv8.c b/decoder/armv8/ixheaacd_qmf_dec_armv8.c
+index ebd34d5..c2038b4 100644
+--- a/decoder/armv8/ixheaacd_qmf_dec_armv8.c
++++ b/decoder/armv8/ixheaacd_qmf_dec_armv8.c
+@@ -16,6 +16,12 @@
+  *
+  *****************************************************************************
+  * Originally developed and contributed by Ittiam Systems Pvt. Ltd, Bangalore
++ *
++ * Modified by VibeSDR, 2026-10-29: ixheaacd_esbr_qmfsyn64_winadd() and
++ * ixheaacd_esbr_qmfsyn32_winadd() saturate the output sample to 32 bits instead of
++ * truncating it. A programme above 0 dBFS wrapped to the opposite full scale (a
++ * click) in the eSBR synthesis; the AArch64 build already saturated the 64-band
++ * case. Unchanged below full scale.
+ */
+ #include <string.h>
+ #include "ixheaacd_sbr_common.h"
+@@ -1323,7 +1329,7 @@ VOID ixheaacd_esbr_qmfsyn32_winadd(WORD32 *tmp1, WORD32 *tmp2, WORD32 *inp1,
+     syn_out =
+         ixheaac_add64(syn_out, ixheaac_mult64(tmp2[576 + k], inp1[2 * (k + 288)]));
+ 
+-    sample_buffer[ch_fac * k] = (WORD32)(syn_out >> 31);
++    sample_buffer[ch_fac * k] = ixheaac_sat64_32(syn_out >> 31); /* VibeSDR: saturate */
+   }
+ }
+ 
+diff --git a/decoder/generic/ixheaacd_qmf_dec_generic.c b/decoder/generic/ixheaacd_qmf_dec_generic.c
+index e3e8e4a..9ed6f09 100644
+--- a/decoder/generic/ixheaacd_qmf_dec_generic.c
++++ b/decoder/generic/ixheaacd_qmf_dec_generic.c
+@@ -16,6 +16,12 @@
+  *
+  *****************************************************************************
+  * Originally developed and contributed by Ittiam Systems Pvt. Ltd, Bangalore
++ *
++ * Modified by VibeSDR, 2026-10-29: ixheaacd_esbr_qmfsyn64_winadd() and
++ * ixheaacd_esbr_qmfsyn32_winadd() saturate the output sample to 32 bits instead of
++ * truncating it. A programme above 0 dBFS wrapped to the opposite full scale (a
++ * click) in the eSBR synthesis; the AArch64 build already saturated the 64-band
++ * case. Unchanged below full scale.
+ */
+ #include <string.h>
+ 
+@@ -1570,7 +1576,7 @@ VOID ixheaacd_esbr_qmfsyn64_winadd(WORD32 *tmp1, WORD32 *tmp2, WORD32 *inp1,
+     syn_out =
+         ixheaac_add64(syn_out, ixheaac_mult64(tmp2[1152 + k], inp1[k + 576]));
+ 
+-    sample_buffer[ch_fac * k] = (WORD32)(syn_out >> 31);
++    sample_buffer[ch_fac * k] = ixheaac_sat64_32(syn_out >> 31); /* VibeSDR: saturate */
+   }
+ }
+ 
+@@ -1603,7 +1609,7 @@ VOID ixheaacd_esbr_qmfsyn32_winadd(WORD32 *tmp1, WORD32 *tmp2, WORD32 *inp1,
+     syn_out =
+         ixheaac_add64(syn_out, ixheaac_mult64(tmp2[576 + k], inp1[2 * (k + 288)]));
+ 
+-    sample_buffer[ch_fac * k] = (WORD32)(syn_out >> 31);
++    sample_buffer[ch_fac * k] = ixheaac_sat64_32(syn_out >> 31); /* VibeSDR: saturate */
+   }
+ }
+ 
