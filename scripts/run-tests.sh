@@ -543,6 +543,13 @@ if node --no-warnings scripts/test_wf_glide.ts; then pass=$((pass+1)); else fail
 # ★★ THE ROW TARGET FOLLOWS THE FEED (src/assets/wfRowTarget.ts, Stuart 10-20): Default min(20, 3x), Smooth min(60, 6x),
 #    snapped to a divisor of 60 — the app, the web client and the native engine (wf_row_target.h) share the rule.
 if node --no-warnings scripts/test_wf_row_target.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ The V12 waterfall (backported to 11.0.16): the five speeds' link caps and live numbers, the FIXED OUTPUT CLOCK
+#    (over-interpolate and discard; NATIVE untouched), the zoom-out fan by the bins' own span, and the interaction boost
+#    + slope cap on a fast run of tune/zoom steps.
+if node --no-warnings scripts/test_wf_speed_cap.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_fixed_clock.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_zoomout_fan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_spin.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE 10-FPS DEFAULT (2026-10-20): the serving phone's tiers read Smoother · 20 / Default · 10 / Half · 5, the stored
 #    keys still mean 20 / 10 / 5, and a new server starts on Default · 10.
 if node --no-warnings scripts/test_fps_tiers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
