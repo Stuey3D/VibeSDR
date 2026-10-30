@@ -9590,7 +9590,9 @@ function ensureWebLink() {
     const ladder = webLadder();
     webLink = new WebLinkManager({
       ladder, lowDataRung: lowDataRungFor(ladder), mode: linkModeFor(wfData),
-      apply: (_r, f) => { if (f !== linkFps) { linkFps = f; activeFps = computeActiveFps(); if (spec) spec.setFftRate(wantedFps()); updateStatus(); } },
+      // ★ A rate WE chose changes the spacing of the frames: the link meter re-learns it from scratch (gapHist), or the
+      //   new, wider gaps read as a stalling link — 1 bar, then back to 3 (Stuart, 2026-10-30, beta47 on the Lenovo).
+      apply: (_r, f) => { if (f !== linkFps) { linkFps = f; gapHist.length = 0; activeFps = computeActiveFps(); if (spec) spec.setFftRate(wantedFps()); updateStatus(); } },
     });
     webLink.forceApply();
   } else webLink.setMode(linkModeFor(wfData));
