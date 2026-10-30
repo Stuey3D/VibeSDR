@@ -62,7 +62,7 @@ function Speaker({ colour, opacity, flip, waves = true, muted = false }: { colou
   );
 }
 
-export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
+export default function DualServerCard({ myId, top, onSwap, boxOpen = false, safeInsets }: {
   /** This screen's side of the pairing — the card shows the OTHER one, and only while this screen is in front. */
   myId: string;
   /** Under ‹ Servers. */
@@ -71,6 +71,8 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   onSwap: () => void;
   /** A decoder / DAB / Advanced RDS box is open: tuck, as the health and time cards do (they fouled the boxes). */
   boxOpen?: boolean;
+  /** ★ The screen's insets, measured by the parent — inside a Modal (a full-screen map) the hook reads 0. */
+  safeInsets?: { top: number; bottom: number; left: number; right: number };
 }) {
   const st = useDual();
   const bg = st.fg === myId ? bgSide(st) : null;
@@ -179,7 +181,8 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false }: {
   }), []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── the left edge (EdgeChip, mirrored) ── */
-  const insets = useSafeAreaInsets();
+  const hookInsets = useSafeAreaInsets();
+  const insets = safeInsets ?? hookInsets;
   const { width: windowW, height: windowH } = useWindowDimensions();
   const island = useIslandSide();
   const mirrored = island === 'left' ? 'right' : island === 'right' ? 'left' : island;

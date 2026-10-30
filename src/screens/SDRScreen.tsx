@@ -13871,6 +13871,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           out card the same as the health and timer chips"). Draws nothing unless this screen is in front of a pair. ★ It
           stays when the furniture is hidden, as the clock card does: a server you cannot see is still in your ear. */}
       {/* ★ Not while the Servers menu is open: the menu drops down over exactly this spot. */}
+      {/* ★ The same card over a full-screen map (dualMapCard) — a Modal covers this one. */}
       {!!dualMyId && dualShape.phase === 'paired' && !serversOpen && (
         <PanelBoundary name="Second server">
           <DualServerCard myId={dualMyId} top={insets.top + 46 + 44} onSwap={onDualSwap} boxOpen={anyBoxOpen} />
@@ -14917,7 +14918,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         adsbList={shownMap === 'adsb' ? aircraft : undefined}
         adsbStarted={!!adsbReport}
         safeInsets={insets}
-      /></PanelBoundary>}
+        overlay={!!dualMyId && dualShape.phase === 'paired' ? (
+          // ★★ V12 the second server's card over the map too (Stuart, 2026-10-30: "the 2nd server chip control should also
+          //   be accessible here too … with the ability to minimise it the same as in waterfall mode") — the same card,
+          //   tucking to its tab as over the waterfall; under the map's own header bar.
+          <PanelBoundary name="Second server (map)">
+            <DualServerCard myId={dualMyId} top={insets.top + 64} onSwap={onDualSwap} safeInsets={insets} />
+          </PanelBoundary>
+        ) : undefined}
+        /></PanelBoundary>}
 
       {/* On-device FT8 spots map (Local/Kiwi): RN-fed spots (each with a grid),
           receiver position from device GPS / Kiwi gps / a picked city. */}
@@ -14936,6 +14945,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         disconnected={serverLost || serverBusy || connTimedOut}
         onBackToList={() => { setLocalMapOpen(false); navigation.goBack(); }}
         onRetry={() => fullReconnect()}
+        safeInsets={insets}
+        overlay={!!dualMyId && dualShape.phase === 'paired' ? (
+          // ★★ V12 the second server's card over the on-device spots map too (Stuart, 2026-10-30) — see the map above.
+          <PanelBoundary name="Second server (map)">
+            <DualServerCard myId={dualMyId} top={insets.top + 64} onSwap={onDualSwap} safeInsets={insets} />
+          </PanelBoundary>
+        ) : undefined}
       /></PanelBoundary>}
 
       <PanelBoundary name="City picker" onClose={() => setCityPickerOpen(false)} resetKey={cityPickerOpen}>

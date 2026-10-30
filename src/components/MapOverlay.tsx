@@ -155,6 +155,9 @@ interface MapOverlayProps {
           focus?: string } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
+  /** ★ V12 drawn over the map, last (on top): the second server's card (Stuart, 2026-10-30: "the 2nd server chip control
+   *  should also be accessible here too … with the ability to minimise it the same as in waterfall mode"). */
+  overlay?: React.ReactNode;
 }
 
 // ── HTML document builder ─────────────────────────────────────────────────────
@@ -1811,7 +1814,7 @@ function spotToData(s: SpotRow) {
 
 export default function MapOverlay(
   { visible, kind, baseUrl, radioUrl, sessionUuid, onClose, local, wsBaseOverride, rxLat, rxLon, onPickCity, spots,
-    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes }:
+    disconnected, onBackToList, onRetry, adsbAircraft, adsbList, adsbStarted, adsbCapture, adsbFeedWarn, adsbGain, ndb, trk, safeInsets, spotModes, overlay }:
     MapOverlayProps & { spots?: SpotRow[]; spotModes?: string[] },
 ) {
   const webRef = useRef<WebView>(null);
@@ -2315,6 +2318,7 @@ export default function MapOverlay(
             </NavCard>
           </View>
         )}
+        {overlay}
       </View>
     </Modal>
   );
