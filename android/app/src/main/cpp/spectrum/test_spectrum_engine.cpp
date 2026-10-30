@@ -57,9 +57,10 @@ int main() {
             }
             if (f == 19) headAt20 = lastHead;
         }
-        // ★ The TS jitter buffer starts at a 150 ms arrival estimate: at 20 fps it drains slowly at first, the
-        //   queue tops out at 3 and the OLDEST frame is dropped until the estimate converges — faithfully copied.
-        CHECK(lastHead >= 36 && lastHead <= 40, "head %g (a couple of early drops allowed)", lastHead);
+        // ★ The TS jitter buffer started at a 150 ms arrival estimate: at 20 fps it drained slowly at first, the
+        //   queue topped out at 3 and the OLDEST frame was dropped until the estimate converged. ★ V12 (v12-wf-no-jb):
+        //   NATIVE no longer goes through it — every frame is a row from the first.
+        CHECK(lastHead == 40, "head %g: every one of 40 frames a row (no jitter buffer to drop any)", lastHead);
         CHECK(lastHead - headAt20 == 20, "settled: every frame becomes a row (%g of 20)", lastHead - headAt20);
         CHECK(polls >= 30 && imgs >= 30, "polls %d images %d", polls, imgs);
         CHECK(specLen == 200, "spectrum target = ceil(width/2) points, got %zu", specLen);
