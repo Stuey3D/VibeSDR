@@ -14,7 +14,7 @@
  * Run: node --no-warnings scripts/test_wf_speed_cap.ts
  */
 import { capLadder, capFps, capHasEffect, linkCapFor, speedNumbers, uberDivisorFor, isWfSpeedSetting, KIWI_SPEED_CAPS,
-         MIN_WF_FPS, LOW_WF_FPS, loadWfSpeed, migrateWfDataRate, offeredWithoutLever, WF_SPEED_LABEL } from '../src/assets/wfSpeedCap.ts';
+         MIN_WF_FPS, LOW_WF_FPS, loadWfSpeed, migrateWfDataRate, migrateLinkMode, offeredWithoutLever, WF_SPEED_LABEL } from '../src/assets/wfSpeedCap.ts';
 import { rowTargetFor, stepRowTarget, newRowTargetState, rowsForArrival, type WfScroll } from '../src/assets/wfRowTarget.ts';
 import { LinkManager as UberLM, LADDERS } from '../src/services/linkManager.ts';
 import { LinkManager as VibeLM } from '../src/services/vibeLinkManager.ts';
@@ -45,6 +45,10 @@ ok('saved data rate: NATIVE + AUTO/20 stays NATIVE; DEFAULT / SMOOTH / MINIMUM /
    migrateWfDataRate('sharp', 0) === 'sharp' && migrateWfDataRate('sharp', 20) === 'sharp'
    && migrateWfDataRate('default', 5) === 'default' && migrateWfDataRate('smooth', 10) === 'smooth'
    && migrateWfDataRate('min2', 5) === 'min2' && migrateWfDataRate('eco', 5) === 'eco' && migrateWfDataRate('sharp', 'x') === 'sharp');
+// ★★ The app's removed LINK MANAGEMENT row: LOW DATA (a 5 fps pin) migrates as a data rate of 5; FULL / AUTO keep the speed.
+ok('saved link mode: LOW DATA on NATIVE → LOW; on DEFAULT stays DEFAULT; FULL / AUTO / junk keep the speed',
+   migrateLinkMode('sharp', 'lowData') === 'low' && migrateLinkMode('default', 'lowData') === 'default'
+   && migrateLinkMode('sharp', 'full') === 'sharp' && migrateLinkMode('smooth', 'adaptive') === 'smooth' && migrateLinkMode('eco', null) === 'eco');
 ok("'minimum' is no longer a CURRENT value (so it is always migrated, never kept)", !isWfSpeedSetting('minimum'));
 ok('OpenWebRX (no lever): MINIMUM offered (thinned on the client), LOW / ECO hidden, the rest offered',
    offeredWithoutLever('min2') && !offeredWithoutLever('low') && !offeredWithoutLever('eco')
