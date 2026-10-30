@@ -175,9 +175,10 @@ function buildTable(): KnownSignal[] {
   for (const d of DIGI_DIALS.JS8) t.push(digi('JS8', d));
   for (const k of SHANNON_VOLMET) t.push(volmet(k, 'Shannon'));
   // ★ the stations each one is decoded as — DecoderClient timeStationFor's own map (RBU's 66.666 kHz reads as 'rwm')
-  t.push(time(60_000, 'MSF/WWVB', 'cw', 'time', ['msf', 'wwvb']), time(77_500, 'DCF77', 'cw', 'time', ['dcf77']),
-         time(66_666, 'RBU', 'cw', 'time', ['rwm']));
-  for (const f of [4_996_000, 9_996_000, 14_996_000]) t.push(time(f, 'RWM', 'cw', 'time', ['rwm']));
+  // ★ CW = 'cwu' on the wire (sdrTypes.ts SDRMode has no plain 'cw'): the carrier keyed in amplitude becomes a beat note
+  t.push(time(60_000, 'MSF/WWVB', 'cwu', 'time', ['msf', 'wwvb']), time(77_500, 'DCF77', 'cwu', 'time', ['dcf77']),
+         time(66_666, 'RBU', 'cwu', 'time', ['rwm']));
+  for (const f of [4_996_000, 9_996_000, 14_996_000]) t.push(time(f, 'RWM', 'cwu', 'time', ['rwm']));
   for (const f of [2_500_000, 5_000_000, 10_000_000, 15_000_000]) t.push(time(f, 'WWV/WWVH', 'am', 'time', ['wwv']));
   for (const f of [20_000_000, 25_000_000]) t.push(time(f, 'WWV', 'am', 'time', ['wwv']));
   for (const k of [3330, 7850, 14670]) t.push(time(kHz(k), 'CHU', 'am', ''));
@@ -247,7 +248,7 @@ export function eibiKnownSignals(rows: readonly EibiRow[], nowMin: number, curat
     if (curated.some(k => Math.abs(k.hz - hz) <= 1000) || out.some(k => k.label.startsWith(c.kind) && Math.abs(k.hz - hz) <= 1000)) continue;
     const place = eibiPlace(r.name);
     const sig: KnownSignal = { hz, label: place ? `${c.kind} · ${place}` : c.kind, dec: c.dec, dialHz,
-                               mode: c.dec === 'cw' ? 'cw' : 'usb', prio: PRIO_EIBI, src: 'eibi' };
+                               mode: c.dec === 'cw' ? 'cwu' : 'usb', prio: PRIO_EIBI, src: 'eibi' };
     if (c.voice) { sig.lo = f + 300; sig.hi = f + 2700; }
     out.push(sig);
   }
@@ -403,7 +404,9 @@ export interface KnownTapPlan {
 }
 export function knownTapPlan(sig: KnownSignal, avail: KnownAvail): KnownTapPlan {
   const dec: KnownDecoder = sig.dec && avail[sig.dec] ? sig.dec : '';
-  const plan: KnownTapPlan = { hz: sig.dialHz, mode: sig.mode, dec };
+  // ★ a bookmark saved as plain "cw" (OpenWebRX's name) is CW upper here — sdrTypes.ts SDRMode has no 'cw'
+  const mode = String(sig.mode || '').toLowerCase();
+  const plan: KnownTapPlan = { hz: sig.dialHz, mode: mode === 'cw' ? 'cwu' : mode, dec };
   if (dec && sig.preset) plan.preset = sig.preset;
   return plan;
 }
