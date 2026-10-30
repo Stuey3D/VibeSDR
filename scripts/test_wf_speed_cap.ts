@@ -87,7 +87,7 @@ for (const [f, want] of [[20, 10], [13, 10], [10, 10], [9, 10], [7, 10], [6, 10]
 for (const [f, want] of [[20, 5], [5, 5], [10 / 3, 5], [2, 5]] as const)
   ok(`MINIMUM at ${f.toFixed(1)} fps → ${want} rows/s`, Math.abs(rt('minimum', f) - want) < 0.01, `got ${rt('minimum', f)}`);
 ok('MINIMUM on a 5 fps feed is actual rows (same as NATIVE)', rowTargetFor('minimum', 5) === 0);
-ok('Default / Smooth unchanged: 9 fps → 20 / 30', rt('default', 9) === 20 && rt('smooth', 9) === 30);
+ok('Default / Smooth: 9 fps → 30 / 30 (Default never 20 — Stuart 2026-10-29)', rt('default', 9) === 30 && rt('smooth', 9) === 30);
 
 // ── 3. The pace on screen: the TARGET, evenly, both clients ───────────────────────────────────────────────────────
 function lcg(seed: number) { let s = seed; return () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; }; }
@@ -153,9 +153,9 @@ function judge(steps: { f: number; n: number }[], hz = 60) {
   return { rate: (rows - s[0].n) / secs, even: modal };
 }
 const cases: [WfScroll, number, number][] = [
-  ['smooth', 9, 30], ['default', 9, 20], ['eco', 9, 10],
+  ['smooth', 9, 30], ['default', 9, 30], ['eco', 9, 10],
   ['eco', 5, 10], ['eco', 10 / 3, 10], ['default', 10 / 3, 10], ['smooth', 5, 30],
-  ['minimum', 2, 5], ['minimum', 10 / 3, 5], ['default', 20, 20],
+  ['minimum', 2, 5], ['minimum', 10 / 3, 5], ['default', 20, 30], ['default', 10, 30],
   // ★ 2026-10-29 — THINNED and FILLED to a divisor of 60 (Stuart, a 23 fps Kiwi): ECO's ~13 fps Kiwi step → 10, MINIMUM
   //   on a 6 fps feed → 5, Default on 23 → 30, Smooth on 23 → 60, Default on 22 → 30.
   ['eco', 13, 10], ['minimum', 6.5, 5], ['default', 23, 30], ['smooth', 23, 60], ['default', 22, 30],
@@ -179,8 +179,8 @@ for (const [who, run] of [['app', appRun], ['web', webRun]] as const) {
 
 // ── 4. The live numbers ──────────────────────────────────────────────────────────────────────────────────────────
 const n20 = speedNumbers(20)!, n5 = speedNumbers(5)!, n2 = speedNumbers(2)!;
-ok('20 fps server: MINIMUM 5 · ECO 10 · NATIVE 20 · DEFAULT 20 · SMOOTH 60',
-   n20.minimum === 5 && n20.eco === 10 && n20.sharp === 20 && n20.default === 20 && n20.smooth === 60, JSON.stringify(n20));
+ok('20 fps server: MINIMUM 5 · ECO 10 · NATIVE 20 · DEFAULT 30 · SMOOTH 60',
+   n20.minimum === 5 && n20.eco === 10 && n20.sharp === 20 && n20.default === 30 && n20.smooth === 60, JSON.stringify(n20));
 ok('5 fps server: MINIMUM 5 · ECO 10 · NATIVE 5 · DEFAULT 15 · SMOOTH 30',
    n5.minimum === 5 && n5.eco === 10 && n5.sharp === 5 && n5.default === 15 && n5.smooth === 30, JSON.stringify(n5));
 ok('2 fps server: MINIMUM 5 (filled in) · NATIVE 2', n2.minimum === 5 && n2.sharp === 2, JSON.stringify(n2));

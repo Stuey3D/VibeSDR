@@ -140,7 +140,7 @@ int main() {
             }
         }
         const double rows = head - headAt10;
-        CHECK(rows >= 18 && rows <= 22, "default at 10 fps: %g rows in 1 s (expect 20, ±2 for where the window cuts a frame's extras)", rows);
+        CHECK(rows >= 27 && rows <= 33, "default at 10 fps: %g rows in 1 s (expect 30 — Default never 20, Stuart 2026-10-29 — ±3 for where the window cuts a frame's extras)", rows);
         delete e;
     }
     // ── 2d. wf_row_target.h: the same table as scripts/test_wf_row_target.ts, from a cold 150 ms estimate ──
@@ -149,15 +149,15 @@ int main() {
             double t = 0; for (int i = 0; i < frames; i++) { ema = ema * 0.8 + (1000.0 / fps) * 0.2; t = vibewf::stepRowTarget(st, cap, 1000.0 / ema); }
             return t; };
         auto settle = [&](int cap, double fps) { vibewf::RowTargetState st; double ema = 150; const double t = drive(cap, fps, st, ema, 200); return t == 0 ? fps : t; };
-        struct Row { double fps, def, smo; } tbl[] = { {5, 15, 30}, {10, 20, 60}, {20, 20, 60}, {10.0 / 3, 10, 20}, {9, 20, 30} };
+        struct Row { double fps, def, smo; } tbl[] = { {5, 15, 30}, {10, 30, 60}, {20, 30, 60}, {10.0 / 3, 10, 20}, {9, 30, 30} };
         for (const Row& r : tbl)
             CHECK(settle(20, r.fps) == r.def && settle(60, r.fps) == r.smo, "row target at %.2f fps: %g / %g (want %g / %g)",
                   r.fps, settle(20, r.fps), settle(60, r.fps), r.def, r.smo);
-        CHECK(vibewf::rowTargetFor(20, 20) == 0, "20 fps Default is actual rows");
+        CHECK(vibewf::rowTargetFor(20, 20) == 30 && vibewf::rowTargetFor(20, 10) == 30, "Default is never 20: 20 and 10 fps feeds run at 30");
         // ★ 2026-10-29 (Stuart, a 23 fps Kiwi: "interpolate and discard") — every choice but Native divides 60, the same
         //   table as scripts/test_wf_row_target.ts: Eco/Minimum thin a faster feed, Default/Smooth go up to the next rate.
         struct Sn { int cap; double fps, want; } sn[] = { {20, 23, 30}, {60, 23, 60}, {10, 23, 10}, {5, 23, 5}, {10, 13, 10},
-            {20, 13, 20}, {20, 30, 0}, {20, 40, 60}, {60, 75, 60}, {10, 10.2, 0}, {10, 10.6, 10}, {20, 2, 0}, {20, 20.3, 0} };
+            {20, 13, 30}, {20, 30, 0}, {20, 40, 60}, {60, 75, 60}, {10, 10.2, 0}, {10, 10.6, 10}, {20, 2, 0}, {20, 20.3, 30} };
         for (const Sn& r : sn)
             CHECK(vibewf::rowTargetFor(r.cap, r.fps) == r.want, "snap: cap %d at %.1f fps -> %g (want %g)", r.cap, r.fps, vibewf::rowTargetFor(r.cap, r.fps), r.want);
         {   // discard counts: 23 fps thinned to 20 keeps 2000 of 2300 frames, never two dropped in a row

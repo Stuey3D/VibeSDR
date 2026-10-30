@@ -42,7 +42,7 @@ export const ROW_RATES = [10, 12, 15, 20, 30, 60] as const;
 export const ROW_RULE: Record<Exclude<WfScroll, 'sharp'>, { cap: number; mult: number }> = {
   minimum: { cap: 5,  mult: 6 },
   eco:     { cap: 10, mult: 6 },   // ★ mult 6 (the repeat limit) so even a 1.7 fps feed is lifted to 10
-  default: { cap: 20, mult: 3 },
+  default: { cap: 30, mult: 3 },   // ★ 30, was 20 (Stuart, 2026-10-29, a 10 fps UberSDR: "incoming is 10 we should be smoothing to 30")
   smooth:  { cap: 60, mult: 6 },
 };
 /** ±15 %: how far the measured feed may move before the target follows it. */
@@ -62,6 +62,15 @@ export function snappedTarget(scroll: WfScroll, fps: number): number {
   const { cap, mult } = ROW_RULE[scroll];
   const raw = Math.min(cap, mult * fps) * SNAP_SLACK;
   let best = 0;
+  // ★★ DEFAULT NEVER RUNS AT 20 (Stuart, 2026-10-29: "its the 20 that is causing the frame pacing issues"; "incoming is
+  //    10 we should be smoothing to 30"): its rates are 10, 15 and 30, and 3 × the feed goes UP to the next of them —
+  //    3.3 fps → 10, 5 → 15, 6–30 → 30 — never past 6 × the feed (the repeat limit).
+  if (scroll === 'default') {
+    if (mult * fps * SNAP_SLACK < 10) return 0;   // ★ the idle floor: a 2 fps feed stays actual rows (3 × 2 < 10)
+    const want = Math.min(cap, mult * fps) / SNAP_SLACK;
+    for (const r of [30, 15, 10]) if (r >= want && r <= 6 * fps * SNAP_SLACK) best = r;
+    return best || (raw >= 10 ? 10 : 0);
+  }
   // ★ MINIMUM's one rate, 5, is not a ROW_RATE (Default must not start lifting a 1.7 fps feed to 5); 5 divides 60 too.
   for (const r of scroll === 'minimum' ? [5] : ROW_RATES) if (r <= raw && r <= cap) best = r;
   return best;

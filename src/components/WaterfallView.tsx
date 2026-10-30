@@ -560,6 +560,10 @@ function WaterfallView({
   // ★★ SMOOTH IS 60, NOT 40 (Stuart, 2026-10-13: "smooth is at 60 and is working so keep it"). 40 rows/s divides evenly
   //   into no drawing rate — ⅔ of a row per frame at 60, 1⅓ at 30: a regular judder (Galaxy Tab A9, measured 2·1·2·1).
   //   60 is one row a frame at 60, two at 30, one every other at 120; Default's 30 is one at 30, one every other at 60.
+  // ★★★ DEFAULT RUNS AT 30, NEVER 20 (Stuart, 2026-10-29, the Mac on a 10 fps UberSDR: "its the 20 that is causing the
+  //     frame pacing issues"; "30fps here would work well"; Native 10 and Smooth 60 were perfect). wfRowTarget.ts: Default's
+  //     rates are 10 / 15 / 30 (3 × the feed, rounded UP). The cap below stays 20 — it is the code the engine knows as
+  //     Default (EngineConfig::targetRows), not the rate. The 10-20 note that follows is superseded:
   // ★★ DEFAULT IS 20, NOT 30 (Stuart, 2026-10-20): with 10 fps the server default, 20 and 60 divide evenly
   //   into 5/10/20 fps feeds and 60/120 Hz displays; 30 gave x1.5 alternating repeats on a 20 fps feed
   //   (1, 2, 1, 2 rows per frame). The web client now uses these same three (web/client/src/main.ts WF_PRESET).
