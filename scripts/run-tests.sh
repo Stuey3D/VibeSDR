@@ -970,6 +970,13 @@ printf '\n\033[1m── download diagnostics (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-admin-diagnostics.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★★ THE RADIO MENU'S AGC CHOICE for an SDRplay (2026-10-30): rsp_control vagcmode refused for a listener, applied live
+#     and saved for the owner (both ways, clamped), kept across a restart; rfAgc folded into the radio's entry too.
+#     Same VIBESERVER_BIN rule.
+printf '\n\033[1m── SDRplay AGC choice from the menu (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-rsp-vagc-control.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ AUDIO FIRST (2026-10-20, docs/BRIEF-portable-wifi-realtime.md Phase 2): a listener whose audio backs up gets a
 #     ~2 fps waterfall until it has been clear for ~1 s; another listener never notices; an encoder burst is not a
 #     backlog. The backed-up half needs a kernel that honours a small receive buffer (Linux) — elsewhere it says NOT RUN.
