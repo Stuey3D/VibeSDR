@@ -657,6 +657,9 @@ console.log('every kind wired: one session per server, the player that plays it,
      '…adopts its adapter coming back, parks it going');
   ok(/onMenu=\{onTunerBack\}/.test(tun) && /onMenuLongPress=\{onTunerBackHold\}/.test(tun)
      && /if \(dualBg\) tunerBackMenu\(\); else leaveTuner\(\);/.test(tun), '…tap Back is Back (asks only while two play); HOLD for the options');
+  const cb = readFileSync('src/components/ControlsBar.tsx', 'utf8');
+  ok(/onMenuNav=\{onTunerBackHold\}/.test(tun) && (cb.match(/screenNavRef\('menuBtn', onMenuNav \?\? onMenu\)/g) ?? []).length === 2,
+     '…and a game controller / remote / keyboard reaches the same options with Enter on ‹ Back — never hold-only');
   ok(/<DualServerCard myId=\{dualMyId\}/.test(tun) && /onDualMute=\{dualShape\.phase === 'paired' && dualMyId/.test(tun), '…the card and this server\'s MUTE');
   ok(/rebindCallbacks\(cb: BackendCallbacks\): void \{/.test(fmdx) && /!this\.audioDetached/.test(fmdx), 'FmdxAdapter adoptable and detachable');
   // The picker: one session per server per person, by address, BEFORE anything touches it.

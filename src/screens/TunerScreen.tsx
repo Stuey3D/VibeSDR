@@ -1140,7 +1140,11 @@ export default function TunerScreen({ route, navigation }: Props) {
              offerSecond ? secondServerHint(false) : dualBg ? `${dualBg.name} is playing too.` : undefined, rows);
   }, [offerSecond, dualBg, leaveTuner, onListenSecond, instanceName]);
   const onTunerBack = useCallback(() => { if (dualBg) tunerBackMenu(); else leaveTuner(); }, [dualBg, tunerBackMenu, leaveTuner]);
-  /** HOLD: only when there is a two-server choice to make — otherwise a hold is just a slow tap. */
+  /** HOLD: only when there is a two-server choice to make — otherwise a hold is just a slow tap.
+   *  ★★ And the HIGHLIGHT's Enter on ‹ Back (game controller, TV remote, keyboard) does the same: a pad cannot hold
+   *     (gamepad_mapping — every control reachable, never hold-only), and its own BACK button only closes what is open
+   *     on this screen, so Enter on ‹ Back is how a pad leaves. Where there is a two-server choice it opens the options
+   *     with "‹ Back to server list" FIRST (one more Enter to leave); with none, it is Back, as before. */
   const onTunerBackHold = useCallback(() => { if (offerSecond || dualBg) tunerBackMenu(); else leaveTuner(); },
                                       [offerSecond, dualBg, tunerBackMenu, leaveTuner]);
   const resumeFromPause = useCallback(() => { (VibePowerModule as any)?.setMuted?.(false); }, []);
@@ -1371,6 +1375,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         onStep={setStep}
         onMenu={onTunerBack}
         onMenuLongPress={onTunerBackHold}
+        onMenuNav={onTunerBackHold}
         onChat={openChat}
         onAudio={() => setAudioSheetOpen(true)}
         audioAsRecord

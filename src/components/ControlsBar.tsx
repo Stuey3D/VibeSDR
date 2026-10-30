@@ -596,6 +596,10 @@ export interface ControlsBarProps {
   /** ★★ V12 two servers (FM-DX, which has no Servers chip): HOLD the Back key for its two-server options. A tap stays
    *  Back. Absent = no hold. */
   onMenuLongPress?: () => void;
+  /** ★★ …and what the HIGHLIGHT's Enter does on that key (game controller, TV remote, keyboard — ScreenNav). A pad has
+   *  no hold (gamepad_mapping: every control reachable, never hold-only), so the hold's options get their own route
+   *  here. Absent = Enter presses the key like a tap. */
+  onMenuNav?: () => void;
   /** Override the frequency string formatting (FM-DX shows 3-dp MHz instead of
    *  the unit-based full-resolution format HF needs). */
   freqFormat?: (hz: number) => string;
@@ -2134,7 +2138,7 @@ function UnreadChatMark({ pulse, radius, colour, size }: {
 function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   dspNr, dspNb, dspAn,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, onMenuLongPress, vfoNoInertia,
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, onMenuLongPress, onMenuNav, vfoNoInertia,
   readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
   vfoMuxLabel, vfoAB, onVfoSwap, onControlRects, plateInset }: any) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
@@ -2358,7 +2362,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
         </DomeKey>
 
         {/* MENU */}
-        <DomeKey ref={mergeRefs(tourRef('menuBtn'), screenNavRef('menuBtn', onMenu))} style={por.key} {...keyProps} onPress={onMenu} onLongPress={onMenuLongPress}
+        <DomeKey ref={mergeRefs(tourRef('menuBtn'), screenNavRef('menuBtn', onMenuNav ?? onMenu))} style={por.key} {...keyProps} onPress={onMenu} onLongPress={onMenuLongPress}
           accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
           {p => menuAsBack
             ? <DomeText progress={p} style={{ fontSize: s.f(t.btnSize) * dl.legendScale }}>‹ Back</DomeText>
@@ -2521,7 +2525,7 @@ const por = StyleSheet.create({
 function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, connected, signalActive, bus, meterMode, fmStereo = false,
   signal, peak, stepLabel, onFreqTap, onModeTap, onStep, onChat, onMenu, onAudio, audioAsRecord,
   dspNr, dspNb, dspAn,
-  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, onMenuLongPress, vfoNoInertia,
+  onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, chatOff, singleDrum, menuAsBack, onMenuLongPress, onMenuNav, vfoNoInertia,
   /* ★★★ sharedDial WAS MISSING FROM THIS LIST AND USED IN THE BODY. The props arrive as {...shared}, so the
    *  name simply was not in scope and the landscape bar threw "Property 'sharedDial' doesn't exist" the moment
    *  it rendered — the whole app bounced back to the server list (Stuart, 2026-09-20). PortraitBar destructures
@@ -2672,7 +2676,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
           {p => <DomeText progress={p} style={[lnd.lsTxt, { fontSize: KEY_FONT, lineHeight: KEY_LH }]}
                   numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{stepLabel}</DomeText>}
         </DomeKey>
-        <DomeKey ref={mergeRefs(tourRef('menuBtn'), screenNavRef('menuBtn', onMenu))} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach}
+        <DomeKey ref={mergeRefs(tourRef('menuBtn'), screenNavRef('menuBtn', onMenuNav ?? onMenu))} style={lnd.lsKey} height={KEY_H} radius={6} lightReach={lightReach}
           onPress={onMenu} onLongPress={onMenuLongPress} accessibilityLabel={menuAsBack ? 'Back' : 'Settings'}>
           {/* ★ SET, not the cog, where the key is small (Stuart, 2026-10-03, the SE in Display Zoom: "the cog is the
               weak icon here, maybe change it to say SET instead") — at 14 pt its teeth blur, letters do not. The
@@ -3208,6 +3212,7 @@ function ControlsBar({
   meterLabel,
   menuAsBack = false,
   onMenuLongPress,
+  onMenuNav,
   freqFormat,
   vfoKeys = false,
   zoomKeys = false,
@@ -3372,7 +3377,7 @@ function ControlsBar({
     clock, isRecording, recTime, chatUnread,
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
-    singleDrum, menuAsBack, onMenuLongPress, vfoNoInertia,
+    singleDrum, menuAsBack, onMenuLongPress, onMenuNav, vfoNoInertia,
     vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, vfoAB, onVfoSwap, onControlRects, onDrumAnchors,
     /* ★★★ FIVE PROPS THE BARS DESTRUCTURE AND NEVER RECEIVED (Stuart, 2026-09-20: "no shared dial notification
      *  above the frequency"). ControlsBar took them, the bars declared them, and NOTHING carried them across
