@@ -178,6 +178,9 @@ export class RowPacer {
   private arrId = 0;
   private curP = 0;            // when the newest frame (cur) is presented
   private onClock = false;     // rows come off the fixed clock (every mode but NATIVE / actual rows)
+  /** Rows come off the fixed clock — the only place a feed is thinned, so the only place frames are combined
+   *  (wfCombine.ts WfRowMerge). */
+  get clocked(): boolean { return this.onClock; }
   /** Screen rows/s aimed for now (0 = actual rows) — for the test and diagnostics. */
   screenTarget = 0;
   /** ★★★ THE INTERACTION BOOST (wfClock.ts boostRowRate — Stuart 2026-10-29: "increase during interaction … even if it

@@ -18,6 +18,7 @@
 
 import { RowPacer } from './wfPacing';
 import type { WfScroll } from '../../../src/assets/wfRowTarget.ts';
+import { WfRowMerge, dbPerUnit } from '../../../src/assets/wfCombine.ts';
 import { SignalProcessor, type SignalProcessorSettings } from '../../../src/assets/signalProcessor';
 
 /** Fixed ring width — see the note at the GPU push. Must never depend on bin count. */
@@ -225,6 +226,11 @@ export class Waterfall {
   private rowSeq = 0;
   private stampTickCache = new Map<number, { W: number; lo: number; span: number; dpr: number; ticks: { x: number; label: string | null; w: number }[] }>();
   private curRow: Uint8Array | null = null;    // newest received row
+  /** ★★ V12 2026-10-30 (src/assets/wfCombine.ts): rows never drawn before a newer one landed (the thinning's surplus) are
+   *  COMBINED into the next row drawn — linear power, peaks kept — not dropped. Stuart: "rather than simply dropping the
+   *  excess frames can we average them". Only on the clock; NATIVE never merges. curK: the newest row's dB per unit. */
+  private merge = new WfRowMerge();
+  private curK = 0;
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
   /** ★ Arrival gaps, display rate, cadence and the per-pair row budget — all in wfPacing.ts's
    *  RowPacer, pure, so scripts/test_wf_pacing.ts proves the cadence the screen gets. */
@@ -703,6 +709,9 @@ export class Waterfall {
     //       the waterfall stalls — is handled instead by SIZING for the worst gap below, which
     //       guarantees there are always enough rows to reach the next arrival.
 
+    // ★★ An undrawn cur joins the pending group before it rolls to prev (wfCombine.ts WfRowMerge).
+    this.merge.arrive(this.pacer.clocked, this.curRow, this.curLo, this.curSpan, this.curK);
+    this.curK = dbPerUnit(frame.dbMin, frame.dbMax);
     // Roll cur -> prev, and copy in the new row (frame.row is a reused buffer).
     if (!this.curRow || this.curRow.length !== row.length) {
       this.prevRow = new Uint8Array(row);
@@ -846,6 +855,8 @@ export class Waterfall {
     //       (f6139764b/7db21a2d5) are gone: the first blended rows; the second drew a fast fan as a dashed near-horizontal
     //       line with no join — the hard break under a zoom out on Stuart's Pi 500 recording (2026-10-29).
     const useCur = this.pacer.useCur;
+    // ★★ The first draw of a row takes in the rows the thinning passed over (WfRowMerge) — combined, peaks kept.
+    if (useCur) this.merge.drawCur(cur, this.curLo, this.curSpan, this.curK); else this.merge.drawPrev(prev);
     const src = useCur ? cur : prev;
     const sLo = useCur ? this.curLo : this.prevLo, sSpan = useCur ? this.curSpan : this.prevSpan;
     const v = rowView(this.ease, sLo, sSpan, this.pacer.rowPx, this.rv, this.pacer.easeRowRate());
