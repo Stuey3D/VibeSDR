@@ -20,6 +20,7 @@ import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
+import { RspAgcWatch, rspAgcSampleOf } from '../../../src/services/rspAgcReadout';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
  *  sections that failed — counted per source and type. Type __vibeFaults() in the console. */
 (window as unknown as { __vibeFaults: () => unknown }).__vibeFaults =
@@ -2172,6 +2173,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       }, 4000);
     },
     onRspStat: (sys, lna, ifgr, overload, settling, m: any = {}) => {
+      /* ★★★ THE AGC READOUT FIRST (2026-10-30) — before the early return below, which would skip it during a re-kick.
+       *  Fed every report, drawn at most twice a second and written only on a CHANGE (the same reason as the gain-stuck
+       *  chip: replacing textContent under the pointer eats clicks). See rspAgcReadout.ts. */
+      rspAgcFeed(m, $<HTMLButtonElement>('rspIfAgc').classList.contains('on'));
       /* ★★★ THE WHOLE START-UP CYCLE, NOT THE SIX-STEP KICK. This read `settling`, which is the
        *  kick alone — a few seconds — and then went out while the visible settling was still to
        *  come: the grace, the liveness check, the one coarse placement (which momentarily removes
@@ -2561,6 +2566,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onStatus: (s, detail) => {
       setStatus(s, detail);
+      if (s === 'closed' || s === 'error') rspAgcClear();   // ★ the AGC readout described the radio we just lost
       // Server-side settings live on the SERVER, so restoring the sliders isn't
       // enough — they have to be re-sent, or the UI shows values the radio isn't
       // actually using. Also covers reconnects, where the shim starts fresh.
@@ -3182,6 +3188,40 @@ let srvTzOffsetMin: number | null = null, srvTzAbbr = '';
  *    path) kept showing the right numbers. Stuart: "the chip is showing the LNA number but not the
  *    menu". A thrown render does not look like a crash, it looks like missing data. */
 let rspLnaN: number | null = null;
+
+/* ★★★ THE SDRplay AGC READOUT (2026-10-30) — the status line's "RF n · IF nn" (#rspAgcTag) and the radio panel's line
+ *  (#rspAgcLine). Stuart: "do we get to see a readout of what the AGC is doing for both the RF and IF so I can see if it
+ *  is working or got stuck". The rules — states, words, and the latched amber — are the app's, in one shared file
+ *  (src/services/rspAgcReadout.ts), so the two clients cannot disagree about whether a radio is stuck. */
+const rspAgcWatch = new RspAgcWatch();
+let rspAgcDrawnAt = 0;
+function rspAgcDraw(): void {
+  const rd = rspAgcWatch.read();
+  const tag = document.getElementById('rspAgcTag');
+  if (tag) {
+    const t = rd.status ? `· ${rd.status}` : '';
+    if (tag.textContent !== t) tag.textContent = t;
+    tag.classList.toggle('warn', rd.warn);
+    const title = rd.status ? `SDRplay AGC — RF = LNA state (0 = most gain), IF = IF gain reduction, dB. ${rd.line}${rd.why ? ` — ${rd.why}` : ''}` : '';
+    if (tag.title !== title) tag.title = title;
+  }
+  const line = document.getElementById('rspAgcLine');
+  if (line) {
+    const key = `${rd.line}|${rd.why}`;
+    if (line.dataset.k !== key) {
+      line.dataset.k = key;
+      line.textContent = rd.line;
+      if (rd.why) { const w = document.createElement('span'); w.className = 'why'; w.textContent = rd.why; line.appendChild(w); }
+    }
+    line.classList.toggle('warn', rd.warn);
+  }
+}
+function rspAgcFeed(m: any, ifAgc: boolean): void {
+  const now = Date.now();
+  rspAgcWatch.push(rspAgcSampleOf(m, ifAgc), now);
+  if (now - rspAgcDrawnAt >= 500) { rspAgcDrawnAt = now; rspAgcDraw(); }
+}
+function rspAgcClear(): void { rspAgcWatch.reset(); rspAgcDraw(); }
 let rspLastLna: number | null = null;
 let rspLastIf: number | null = null;
 /** ★ When the RSP's gain last moved, so the status chip can breathe for a moment after. */
@@ -18309,6 +18349,7 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
    *    the panel exists, and the web client would have handed the same person dead controls. */
   const isAsp = caps?.driver === 'airspy';
   $<HTMLElement>('rspCtls').hidden = !isRsp;
+  if (!isRsp) rspAgcClear();   // ★ the AGC readout belongs to an SDRplay only — never left standing over another radio
   $<HTMLElement>('ahfCtls').hidden = !isAhf;
   $<HTMLElement>('hrfCtls').hidden = !isHrf;
   $<HTMLElement>('aspCtls').hidden = !isAsp;

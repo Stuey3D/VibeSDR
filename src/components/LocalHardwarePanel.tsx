@@ -242,6 +242,10 @@ export interface LocalHardwarePanelProps {
   rspLnaN?: number;
   /** ★ The SDRplay gain API has frozen: every figure here is stale, and a reset is offered. */
   rspGainStuck?: boolean; onRspAgcRestart?: () => void;
+  /** ★★★ THE AGC READOUT (2026-10-30, src/services/rspAgcReadout.ts): one line saying what the gain loop is doing —
+   *  VibeAGC's state and why, the ADC peak against its target, gain writes in the last minute; or which AGC runs
+   *  instead. `rspAgcWarn` = it has stuck (latched), `rspAgcWhy` the reason in words. */
+  rspAgcLine?: string; rspAgcWarn?: boolean; rspAgcWhy?: string;
   rspRfNotch?: boolean;  onRspRfNotch?: (on: boolean) => void;
   /* ★ The RSP sweep (GitHub #29, 2026-09-24). The VALUES are read from `radio` — the caps the
    *  radio itself publishes — rather than mirrored into props here, so the panel always shows the
@@ -887,6 +891,17 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     : (p.rspSysGain ?? -999) > -998 ? `${(p.rspSysGain ?? 0).toFixed(1)} dB` : '—'}
                 </Text>
               </View>
+              {/* ★★★ WHAT THE AGC IS DOING, AND WHETHER IT HAS STUCK (2026-10-30). Stuart: "do we get to see a
+                  readout of what the AGC is doing for both the RF and IF so I can see if it is working or got
+                  stuck". VibeAGC's state and why, the ADC peak against its target and gain writes in the last
+                  minute — or which AGC is running instead. Amber with the reason when it has stuck; latched, so it
+                  never flickers on a healthy radio (src/services/rspAgcReadout.ts). The same RF/IF figures ride
+                  the main screen's status line. */}
+              {!!p.rspAgcLine && (
+                <Text style={[styles.agcLine, p.rspAgcWarn ? styles.agcLineWarn : null]}>
+                  {p.rspAgcLine}{p.rspAgcWarn && p.rspAgcWhy ? `\n${p.rspAgcWhy}` : ''}
+                </Text>
+              )}
               {/* ★ The radio raises OVERLOAD itself when its ADC clips — no inference from the
                   spectrum, unlike a dongle. It is also the thing that destroys RDS, so it is
                   worth shouting about rather than burying. */}
@@ -928,9 +943,13 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     <Switch value={p.rspRfAgc !== false} onValueChange={(v) => p.onRspRfAgc?.(v)}
                       trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.rspRfAgc !== false ? K.gold : '#ccc'} />
                   </View>
+                  {/* ★ Both arrangements, because which one runs depends on the driver: VibeAGC (on by
+                      default with OpenRSP) owns the LNA AND the IF; otherwise this steps the LNA from where
+                      the radio's own IF AGC settles. The line under SYSTEM GAIN says which is running. */}
                   <Text style={styles.note}>
-                    Steps the LNA from where the radio's own IF AGC settles, so the front end sits
-                    as high as the IF can support.
+                    Lets the AGC move the LNA too. With VibeAGC it is one loop for both stages; otherwise
+                    it steps the LNA from where the radio's own IF AGC settles. The line under System gain
+                    says which is running.
                   </Text>
                 </>
               )}
@@ -1954,4 +1973,7 @@ const makeLhpStyles = (pt: PopupTokens) => StyleSheet.create({
   // ★ A refusal / an overload: `bad` — white BOLD on red text (meaningsFor).
   noteBad: meaningText(pt.ink.m, pt.ink.m.bad),
   valBad: meaningText(pt.ink.m, pt.ink.m.bad),
+  // ★ The AGC readout line: plain, not italic (it is a reading, not advice); `warn` when the loop has stuck.
+  agcLine: { fontFamily: FONT, fontSize: 12, color: pt.ink.textSoft, marginTop: 8 },
+  agcLineWarn: meaningText(pt.ink.m, pt.ink.m.warn),
 });

@@ -77,6 +77,7 @@ import { DECK, portraitDeck, phoneBarStack, landscapeDeck, compactKeyHitSlop, sq
 import { statusGainParts, statusGainText, statusFit, statusFits, statusState, vfdFreqLayout, type StatusItem, type StatusRowSpec,
          cellWindow, screenString, segFieldCells, steppedOffset, VFD_STEP_MS } from '../constants/displayText';
 import Svg, { Path as SvgPath } from 'react-native-svg';
+import { DECODER_MEANING, meaningsFor } from '../constants/decoderTokens';
 
 /**
  * ★★ THE STATUS DISPLAY (§8.1): the status row in the DISPLAY's font and colour — faceplate.ts statusDisplayFor()
@@ -277,6 +278,14 @@ export interface MeterValues {
    *     thing on the receiver and nothing on screen would otherwise say so. Stuart, of the web
    *     client's version: "so a user knows its working". Empty on a radio that has no such filter. */
   ifText?: string;
+  /** ★★★ AN SDRplay's AGC, AT A GLANCE (2026-10-30): "RF 3 · IF 42" — the LNA state and the IF gain reduction the AGC
+   *  has chosen — plus a short reason while it is stuck ("· IF RAIL"). Stuart: "do we get to see a readout of what the
+   *  AGC is doing for both the RF and IF so I can see if it is working or got stuck". Rides AFTER the gain item, in it
+   *  (so the row's fitting drops it with the gain); written at most twice a second and only on a change
+   *  (SDRScreen's onRspStat — rspstat itself arrives ~10 Hz). Empty on every other radio. */
+  rspText?: string;
+  /** Amber: the AGC has stuck — see src/services/rspAgcReadout.ts for the rules and the latch. */
+  rspWarn?: boolean;
   /** ★ hwinfo's `ds`: the direct-sampling mode the radio is in NOW (0 tuner, 1 I, 2 Q). Above 0 the
    *  gain item reads "Direct Sample" instead of agcText — see statusGainText. */
   dsLive?: number;
@@ -852,7 +861,11 @@ export function DspBadges({ nr, nb, an, onPress, font, color }:
 }
 
 /** What the connection meter shows, as the few values that are actually DRAWN. */
-interface LinkReadout { q: 0 | 1 | 2 | 3; showRate: boolean; kbps: number; fps: number; agcText: string; ifText: string }
+interface LinkReadout { q: 0 | 1 | 2 | 3; showRate: boolean; kbps: number; fps: number; agcText: string; ifText: string;
+  /** ★ The gain item in amber — an SDRplay AGC that has stuck (MeterValues.rspWarn). */
+  gainWarn?: boolean }
+/** ★ The gain item's text: our VibeAGC's (or "AGC"), then an SDRplay's "RF n · IF nn" (MeterValues.rspText). */
+function joinGain(a: string, rsp?: string): string { return a && rsp ? `${a} · ${rsp}` : (a || rsp || ''); }
 
 /**
  * The connection meter's readout from the bus. ★ It re-renders only when something DRAWN changes —
@@ -880,7 +893,8 @@ function useLinkReadout(bus?: MeterBus): LinkReadout {
              // ★ "Direct Sample" in place of the gain while the tuner is bypassed — HERE, the one
              //   place the drawn readout is derived, so the row, its measuring twin and statusFit's
              //   widths all see the same text (statusGainText).
-             agcText: statusGainText(m?.agcText ?? '', m?.dsLive), ifText: m?.ifText ?? '' };
+             agcText: joinGain(statusGainText(m?.agcText ?? '', m?.dsLive), m?.rspText), ifText: m?.ifText ?? '',
+             gainWarn: !!m?.rspWarn && !!m?.rspText };
   };
   const [r, setR] = useState<LinkReadout>(() => derive(bus ? bus.value : null));
   useEffect(() => {
@@ -888,7 +902,7 @@ function useLinkReadout(bus?: MeterBus): LinkReadout {
     const f = (v: MeterValues) => {
       const n = derive(v);
       setR((p) => (p.q === n.q && p.showRate === n.showRate && p.kbps === n.kbps && p.fps === n.fps
-                   && p.agcText === n.agcText && p.ifText === n.ifText) ? p : n);
+                   && p.agcText === n.agcText && p.ifText === n.ifText && p.gainWarn === n.gainWarn) ? p : n);
     };
     bus.subs.add(f);
     f(bus.value);
@@ -941,6 +955,8 @@ export function LinkIndicator({ bus, hide, noNode = false, readout, onUnit, oneL
         </Unit>}
         {showRate && !hide?.rate ? <Unit id="rate" onUnit={onUnit}><StatusText>{`${r.kbps}k/s ${r.fps}fps`}</StatusText></Unit> : null}
         {r.agcText && !hide?.gain ? <Unit id="gain" onUnit={onUnit}>{(() => {
+          // ★ An SDRplay AGC that has stuck: the whole item in the warn colour (the clash rule — amber text → white).
+          if (r.gainWarn) return <StatusText keepColor style={{ color: meaningsFor(sd.rgb).warn }}>{`· ${r.agcText}`}</StatusText>;
           const g = statusGainParts(r.agcText);
           if (!g) return <StatusText>{`· ${r.agcText}`}</StatusText>;
           // ★ VCR / DOT: one run, the arrow its own cell — always there (dark when steady), so the value never
@@ -974,7 +990,7 @@ export function LinkIndicator({ bus, hide, noNode = false, readout, onUnit, oneL
       {showRate && !hide?.rate ? <Unit id="rate" onUnit={onUnit}><Text style={[pm.linkRate, { color: ct.linkRate }]}>{rateTxt}</Text></Unit> : null}
       {/* ★ After the rate, because it changes rarely — a value that moves once a minute beside one
              that moves every second reads as part of the same reading if it comes first. */}
-      {r.agcText && !hide?.gain ? <Unit id="gain" onUnit={onUnit}><Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${r.agcText}`}</Text></Unit> : null}
+      {r.agcText && !hide?.gain ? <Unit id="gain" onUnit={onUnit}><Text style={[pm.linkRate, { color: r.gainWarn ? DECODER_MEANING.warn : ct.linkRate }]}>{`· ${r.agcText}`}</Text></Unit> : null}
       {/* ★ Last: it moves least of all — it changes only when somebody zooms. */}
       {r.ifText && !hide?.if ? <Unit id="if" onUnit={onUnit}><Text style={[pm.linkRate, { color: ct.linkRate }]}>{`· ${r.ifText}`}</Text></Unit> : null}
       </>)}

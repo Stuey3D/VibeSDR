@@ -27,6 +27,7 @@ import React, {
 } from 'react';
 import { setSessionTeardown } from '../services/crashGuard';
 import { guardJson } from '../services/faultLog';
+import { RspAgcWatch, rspAgcSampleOf } from '../services/rspAgcReadout';
 import {
   Alert,
   AppState,
@@ -5151,6 +5152,23 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  moment the panel opens, so it opens on the radio's current reading, never a stale one. */
   type RspStat = Parameters<NonNullable<SDRCallbacks['onRspStat']>>[0];
   const rspLatestRef = useRef<RspStat | null>(null);
+  /* ★★★ THE AGC READOUT (2026-10-30, src/services/rspAgcReadout.ts). Stuart: "do we get to see a readout of what the
+   *  AGC is doing for both the RF and IF so I can see if it is working or got stuck". Every rspstat goes into the watch
+   *  (a ref — no render); at most twice a second the result goes to the status row (via the meter bus, only when the
+   *  text or the amber CHANGES) and, while the panel is open, to its line. The power-audit rule below holds: the
+   *  screen never re-renders at the rspstat rate. */
+  const rspAgcWatch = useRef(new RspAgcWatch());
+  const rspAgcDrawnAt = useRef(0);
+  const [rspAgcLine, setRspAgcLine] = useState('');
+  const [rspAgcWarn, setRspAgcWarn] = useState(false);
+  const [rspAgcWhy,  setRspAgcWhy]  = useState('');
+  const drawRspAgc = (panel: boolean) => {
+    const rd = rspAgcWatch.current.read();
+    const b = meterBus.current;
+    if (b && ((b.value.rspText ?? '') !== rd.status || !!b.value.rspWarn !== rd.warn))
+      b.emit({ ...b.value, rspText: rd.status, rspWarn: rd.warn });
+    if (panel) { setRspAgcLine(rd.line); setRspAgcWarn(rd.warn); setRspAgcWhy(rd.why); }   // equal values: no render
+  };
   const hwOpenRef = useRef(false); hwOpenRef.current = hwOpen;
   // ★ Setters and refs only, so the copy captured by the connect effect's callbacks is never stale.
   const applyRspStat = (r: RspStat) => {
@@ -5167,7 +5185,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setRspLnaN(r.lnaN); setRspGainStuck(r.gainStuck);
   };
   useEffect(() => {
-    if (hwOpen && rspLatestRef.current) applyRspStat(rspLatestRef.current);
+    if (hwOpen && rspLatestRef.current) { applyRspStat(rspLatestRef.current); drawRspAgc(true); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hwOpen]);
   /* ★★★ HackRF One live state. Mirrors what we last SENT, like the HF+ above — the shim has no
@@ -7049,6 +7067,9 @@ export default function SDRScreen({ route, navigation }: Props) {
       onServerLost: function onLost(reason?: string, neverConnected?: boolean) {
         // ★ GitHub #52: a socket that never opened over https asks about the certificate first (tlsGateFailure).
         if (neverConnected && !tlsAsked && tlsGateFailure(connectBase, () => { tlsAsked = true; onLost(reason, neverConnected); })) return;
+        // ★ The AGC readout described the radio we just lost — never leave it standing over another backend.
+        { rspAgcWatch.current.reset(); const b = meterBus.current;
+          if (b && (b.value.rspText || b.value.rspWarn)) b.emit({ ...b.value, rspText: '', rspWarn: false }); }
         // OWRX server crashed/restarted. Keep the app alive, free the dead audio
         // engine, and surface the wait-and-reconnect prompt (no auto-reconnect —
         // the server is usually still restarting).
@@ -7435,6 +7456,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       onRadioCaps:  (caps) => {
         if (destroyed.current) return;
         setRadioCaps(caps);
+        // ★ Not an SDRplay: no AGC readout — drop a stale "RF n · IF nn" (a server whose radio changed).
+        if (caps.driver !== 'sdrplay') {
+          rspAgcWatch.current.reset();
+          const b = meterBus.current;
+          if (b && (b.value.rspText || b.value.rspWarn)) b.emit({ ...b.value, rspText: '', rspWarn: false });
+        }
         // ★ A radio that is not an Icom has no Icom status: drop a stale one (a server whose radio changed).
         if (!isIcom(caps)) { icomDbmRef.current = null; icomLiveKey.current = ''; setIcomLive(null); }
         else {
@@ -7512,6 +7539,10 @@ export default function SDRScreen({ route, navigation }: Props) {
          *  moment it opens — so the panel never shows an older reading than before. */
         rspLatestRef.current = r;
         if (hwOpenRef.current) applyRspStat(r);
+        // ★ The AGC readout: fed every time, drawn at most every 500 ms (see rspAgcWatch).
+        const nowMs = Date.now();
+        rspAgcWatch.current.push(rspAgcSampleOf(r, rspIfAgcRef.current), nowMs);
+        if (nowMs - rspAgcDrawnAt.current >= 500) { rspAgcDrawnAt.current = nowMs; drawRspAgc(hwOpenRef.current); }
         // ★ The one field read outside the panel — the (re)initialising notice. A boolean that
         //   changes rarely, so it costs nothing to keep live.
         setRspAgcInit(r.agcInit);
@@ -12716,7 +12747,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   assume the app is broken, when it is usually the receiver or the path to it.
     //   Saying what it measures turns a worry into information.
     { id: 'link', title: 'How healthy is the connection?',
-      body: 'Phone ⇄ bars ⇄ receiver. The bars are the health of the link between you and the server, and the figures beside them are what is actually arriving — kilobytes per second and frames per second. If the bars drop it is nearly always the receiver or the route to it, not the app; the numbers tell you whether data is still flowing. Sideways on a small phone, the figures step aside when the row runs out of room (the bars never do): turn the phone upright to see everything.',
+      body: 'Phone ⇄ bars ⇄ receiver. The bars are the health of the link between you and the server, and the figures beside them are what is actually arriving — kilobytes per second and frames per second. If the bars drop it is nearly always the receiver or the route to it, not the app; the numbers tell you whether data is still flowing. On an SDRplay radio the row also shows RF and IF — the gain the AGC has chosen — in amber if the AGC gets stuck; the radio panel says what it is doing. Sideways on a small phone, the figures step aside when the row runs out of room (the bars never do): turn the phone upright to see everything.',
       target: tourRef('linkMeter') },
     // ★ The SERVER side of the same question — read together with the card above (Stuart, 2026-09-28:
     //   the pill is for owners at a glance, and for listeners to tell the server from their own link).
@@ -14958,6 +14989,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onRspAgcSet={(v) => { setRspAgcSet(v); (client.current as any)?.rspControl?.({ agcset: v }); }}
           rspLnaN={rspLnaN}
           rspGainStuck={rspGainStuck}
+          rspAgcLine={rspAgcLine} rspAgcWarn={rspAgcWarn} rspAgcWhy={rspAgcWhy}
           onRspAgcRestart={() => { setRspGainStuck(false); (client.current as any)?.rspAgcRestart?.(); }}
           rspRfNotch={rspRfNotch}
           onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}

@@ -149,6 +149,23 @@ struct VagcOut {
     double expectDb = 0.0;     // the level change the write should cause at the ADC (+ = louder); NaN if unknown
     double ifDb = 0.0;         // the IF part of it, exactly known
     char   why[200] = {0};
+    /* ★ WHY, as a number — for the live readout (rspstat `vrs`), which has no room for the sentence above. */
+    int    act = 0;            // VagcAct
+};
+
+/* ★★ THE READOUT'S REASON CODES (rspstat `vrs`, 2026-10-30). Stuart: "do we get to see a readout of what the AGC is
+ *    doing for both the RF and IF so I can see if it is working or got stuck". Numbers on the wire, words in the
+ *    clients (src/services/rspAgcReadout.ts) — the message is sent ten times a second to every listener. ★ Append
+ *    only: an older client shows a number it does not know as no reason at all. */
+enum VagcAct : int {
+    kActNone = 0,
+    kActCutSwamped = 1,   // RF out: IF at its 59 rail and the converter still hot
+    kActCutClip    = 2,   // RF out: converter clipping with the IF nearly spent
+    kActCutLoad    = 3,   // RF out: IF reduction held over the front-end load line
+    kActAddRoom    = 4,   // RF in: the IF has had room for a whole rung
+    kActIfDown     = 5,   // IF: too hot, less gain
+    kActIfUp       = 6,   // IF: quiet, more gain
+    kActIfDab      = 7,   // IF: DAB, the level left the freeze band
 };
 
 /* ── THE LOOP ──────────────────────────────────────────────────────────────────────────────────────────── */
@@ -196,6 +213,23 @@ public:
     unsigned ifWrites() const { return ifWrites_; }
     unsigned lnaWrites() const { return lnaWrites_; }
     int maxWritesInAnySecond() const { return maxPerSec_; }
+    /* ★ For the live readout (rspstat vst/vrs): the last RF move, when and why. */
+    double lastLnaAt() const { return lastLnaAt_; }
+    int lastLnaDir() const { return lastLnaDir_; }
+    int lastLnaAct() const { return lastLnaAct_; }
+    /** ★★ The IF held at its rail ON PURPOSE: DAB's profile freezes the IF while the ADC peak is inside its freeze band
+     *  (no steps inside OFDM symbols), so an IF parked at 59 with the level there is the design, not a stuck loop —
+     *  the readout's rail must not count it (coordinator, 2026-10-30: the DAB false warning). */
+    bool ifHeldOnPurpose(double peak) const {
+        return p_.ifFreeze && std::isfinite(peak) && peak >= p_.freezeLo && peak <= p_.freezeHi;
+    }
+    /** ★★ An RF add is being held ON PURPOSE — the overload ceiling, the reversal guard, a recent clip. The readout's
+     *  "IF at its floor with RF to spare" must not call that stuck: it is the loop doing what it was built to do. */
+    bool addHeld(double now) const {
+        return (ceilingState_ >= 0 && lna_ - 1 <= ceilingState_ && now - ceilingAt_ <= kCeilingSec)
+            || (lastLnaDir_ < 0 && now - lastLnaAt_ < kReverseSec)
+            || now - lastClipAt_ <= std::max(p_.rfAddDwellSec, kAcqAddDwellSec);
+    }
 
     VagcOut tick(const VagcIn& in) {
         VagcOut o; o.lna = lna_; o.gr = gr_;
@@ -269,6 +303,7 @@ public:
                               clipCut ? "converter clipping with the IF nearly spent" :
                                         "IF reduction held over the front-end load line",
                               lna_, to, rung, gr_, grTo, atk);
+                o.act = swamped ? kActCutSwamped : clipCut ? kActCutClip : kActCutLoad;
                 emit(o, in, to, grTo, -rung, -1);
                 return o;
             }
@@ -285,6 +320,7 @@ public:
             std::snprintf(o.why, sizeof o.why, "the IF has had room for a whole rung for %.0f s — RF gain state "
                           "%d -> %d (rung %.1f dB), IF %d -> %d dB in the same write (ADC peak %.1f dBFS)",
                           in.now - roomSince_, lna_, to, rung, gr_, grTo, dec);
+            o.act = kActAddRoom;
             emit(o, in, to, grTo, +rung, +1);
             return o;
         }
@@ -298,6 +334,7 @@ public:
             if (grTo == gr_) return o;
             std::snprintf(o.why, sizeof o.why, "DAB: ADC peak %.1f dBFS left the %.0f..%.0f band — IF %d -> %d dB",
                           want > 0 ? atk : dec, p_.freezeLo, p_.freezeHi, gr_, grTo);
+            o.act = kActIfDab;
             emit(o, in, lna_, grTo, -(grTo - gr_), 0);
             return o;
         }
@@ -313,6 +350,7 @@ public:
             if (grTo == gr_) return o;
             std::snprintf(o.why, sizeof o.why, "ADC peak %.1f dBFS over the %.0f target%s — IF %d -> %d dB",
                           atk, p_.targetPk, clipping ? " (clipping)" : "", gr_, grTo);
+            o.act = kActIfDown;
             emit(o, in, lna_, grTo, -(double)(grTo - gr_), 0);
             return o;
         }
@@ -325,6 +363,7 @@ public:
             if (grTo == gr_) return o;
             std::snprintf(o.why, sizeof o.why, "loudest window of the last second %.1f dBFS, under the %.0f target "
                           "— IF %d -> %d dB", dec, p_.targetPk, gr_, grTo);
+            o.act = kActIfUp;
             emit(o, in, lna_, grTo, (double)(gr_ - grTo), 0);
             return o;
         }
@@ -352,6 +391,7 @@ private:
     unsigned lastWindows_ = 0, waitWindowsTo_ = 0; bool needFresh_ = true;
     double lastIfAt_ = -1e9, lastLnaAt_ = -1e9, lastClipAt_ = -1e9, retuneAt_ = -1e9;
     int lastLnaDir_ = 0;                                   // +1 = gain added, -1 = cut
+    int lastLnaAct_ = 0;                                   // VagcAct of the last RF move (readout)
     double loadedSince_ = -1, roomSince_ = -1;
     int ceilingState_ = -1; double ceilingAt_ = -1e9;
     bool acquiring_ = true; double acqStart_ = -1, inBandSince_ = -1;
@@ -374,7 +414,7 @@ private:
         o.write = true; o.lna = lna; o.gr = gr; o.lnaChanged = lna != lna_;
         o.ifDb = -(double)(gr - gr_);
         o.expectDb = o.lnaChanged ? (expectDb + o.ifDb) : o.ifDb;
-        if (o.lnaChanged) { lastLnaAt_ = in.now; lastLnaDir_ = lnaDir; ++lnaWrites_; roomSince_ = -1; loadedSince_ = -1; }
+        if (o.lnaChanged) { lastLnaAt_ = in.now; lastLnaDir_ = lnaDir; lastLnaAct_ = o.act; ++lnaWrites_; roomSince_ = -1; loadedSince_ = -1; }
         if (gr != gr_) { lastIfAt_ = in.now; ++ifWrites_; }
         if (o.lnaChanged && gr == gr_) lastIfAt_ = std::max(lastIfAt_, in.now - kIfMinSec + 0.25);
         lna_ = lna; gr_ = gr; ++writes_;
@@ -384,5 +424,16 @@ private:
         hist_.clear();
     }
 };
+
+/** ★★★ THE READOUT'S RAIL (rspstat `vrail`'s sign, 2026-10-30): +1 = the IF at its 59 rail with RF still to cut, −1 = at
+ *  its floor with RF still to add, 0 = neither — or a hold that is DELIBERATE: VibeAGC (`vagc` non-null) holding an RF
+ *  add back (addHeld) or its DAB profile freezing the IF with the level inside the freeze band (ifHeldOnPurpose). Pure,
+ *  so the false-warning cases are tested (test-rsp-vibeagc). */
+inline int vagcRailDir(int gr, int lna, int nStates, int lnaFloor, int grFloor, const VibeAgcRsp* vagc, double now,
+                       double adcPeak) {
+    if (gr >= VibeAgcRsp::kGrMax && lna + 1 < nStates && !(vagc && vagc->ifHeldOnPurpose(adcPeak))) return +1;
+    if (gr <= grFloor && lna - 1 >= lnaFloor && !(vagc && vagc->addHeld(now))) return -1;
+    return 0;
+}
 
 }  // namespace vibersp

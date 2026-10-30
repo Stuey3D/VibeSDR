@@ -133,7 +133,10 @@ const STEPS: Step[] = [
     title: 'The connection line',
     body: 'The line at the bottom is how your connection is doing. Ping is how quickly the '
         + 'receiver answers, and buf is how much audio is held in hand to ride out the bumps. '
-        + 'Lower is better, but VibeSDR buffers so a weaker connection still plays smoothly.',
+        + 'Lower is better, but VibeSDR buffers so a weaker connection still plays smoothly. '
+        // ★ 2026-10-30: the SDRplay AGC readout rides this row (#rspAgcTag) — say what RF and IF mean here.
+        + 'On an SDRplay radio it also shows RF and IF — the gain the AGC has chosen — and turns amber if the AGC '
+        + 'gets stuck; the radio panel says what it is doing.',
   },
   {
     // ★ Stuart, 2026-09-28: the pill is "for Server Owners to diagnose their server at a glance, and
