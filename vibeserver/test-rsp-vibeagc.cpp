@@ -302,11 +302,18 @@ static void caseG() {
 
 static void caseT() {
     std::printf("\n── T  the take-over: IF parked at 59, the level under target (the Lenovo, 10-30, MW) ──\n");
-    // at LNA 5 the IF wants ~40: the walk down from 59 is not a loaded front end
-    SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 5; r.gr = 59; r.sigs = {-50.0}; r.wanted = -60.0;
-    const LoopStats s = runLoop(r, VagcBand::AmMw, 60, [](double, SimRsp&) {}, true, true);
-    ok(s.lnaMoveT.empty() || s.lnaMoveT.front() > 10.0, "no RF rung thrown away while the IF walks down from its parking value");
-    ok(s.finalGr >= 30 && s.finalGr <= 52, "the IF settles inside the window");
+    // the journal's numbers: LNA 5/6, IF 59, ADC peak -26 dBFS — the IF wants ~53, a walk of a few dB, not a loaded front end
+    SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 5; r.gr = 59; r.sigs = {-17.0}; r.wanted = -30.0;
+    VibeAgcRsp agc; agc.setProfile(VagcBand::AmMw); agc.adopt(r.lna, r.gr);
+    int cuts = 0;
+    for (double t = 0; t < 10; t += 0.1) {
+        ++r.k; ++r.windows;
+        VagcIn in; in.now = t; in.windows = r.windows; in.peak = r.peak(); in.nStates = 7; in.band = 0;
+        const VagcOut o = agc.tick(in);
+        if (o.write) { if (o.lna > r.lna) ++cuts; std::printf("      t=%5.1f  %s\n", t, o.why); r.lna = o.lna; r.gr = o.gr; }
+    }
+    ok(cuts == 0, "no RF rung thrown away while the IF walks down from its parking value");
+    ok(std::fabs(r.peak() + 20.0) <= 6.5, fmt("the level inside the dead band (+ wander) of target (%.1f dBFS), by the IF alone", r.peak()));
 }
 
 static void caseH() {
