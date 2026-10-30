@@ -998,6 +998,9 @@ public:
                 vibedsp::RxPipeline::Callbacks cb{};
                 cb.ctx = c.get();
                 cb.audio = &BgRunner::audioCb;
+                // ★ its name in its own log lines ("[pilot] …"), fixed for the VFO's life
+                { const std::string lb = "background VFO " + std::to_string(i + 1) + " (" + khz(c->vfo.hz) + " " + c->vfo.mode + ")";
+                  c->rx->setLogLabel([lb] { return lb; }); }
                 c->rx->start(c->rate, 1024, 10.0, 48000, cb);
                 c->rx->setRdsEnabled(false);
             }

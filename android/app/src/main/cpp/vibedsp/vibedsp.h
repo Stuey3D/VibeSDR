@@ -2861,6 +2861,12 @@ public:
                const Callbacks& cb);
     // Tune the demod channel: offsetHz from band centre, mode, channel bandwidth.
     void setTune(double offsetHz, Mode mode, double bwHz);
+    /** ★★ WHO THIS PIPELINE IS, for its own log lines (the "[pilot]" probe). A server runs several — the shared
+     *  dial, a listener's own channel, a background decoder's VFO — and a line that does not say which one, or on
+     *  what frequency, sends the reader to the wrong station (Lenovo, 2026-10-30). Called only when a line is
+     *  written (at most once a second), on the DSP/demod thread, so it may read the host's atomics; it must not
+     *  take a lock the feeding thread holds. Set before start(); unset = "a pipeline" plus its own offset. */
+    void setLogLabel(std::function<std::string()> f) { std::lock_guard<std::mutex> lk(logLabelMtx_); logLabel_ = std::move(f); }
     void feed(const cf32* iq, int n);   // raw IQ from the source
 
     /** ★★★ Channel extraction method. MUST be called before start() and never changed after:
@@ -3459,7 +3465,11 @@ private:
     float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
     float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB
     float imsBlendHz_ = 0.0f;                // ★ IMS's own contribution — see imsBlendHz()
-    int   pilotOddTicks_ = 0;                // ★ live probe — see the note in pipeline.cpp
+    long  pilotOddSamples_ = 0;              // ★ live probe — channel samples present-but-unlocked, see pipeline.cpp
+    long  pilotOddLogged_ = 0;               // ★ …and where the last line was written, so it is once a second
+    std::mutex logLabelMtx_;
+    std::function<std::string()> logLabel_;
+    std::string logLabelNow_();
     int   imsWhy_ = 1;                       // ★ and why not, when it is not
     // ★ The audio (L+R and mono) high-cut — the cure for hiss that survives a switch to mono,
     //   which high-blend cannot touch because it only ever acts on L-R.
