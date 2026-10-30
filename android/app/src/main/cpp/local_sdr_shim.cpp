@@ -22185,42 +22185,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *      and the DAB pipeline does not survive it, so there we still hand the receiver
              *      back as we found it rather than leave a half-built ensemble behind. */
             // ★ Not during teardown — see stopLocked: a restore here raced the shutdown into an abort.
+            /* ★★★ DAB OUTLIVES A SOCKET SWAP (V12 2026-10-25, backported to 11.0.16 on 2026-10-30). It was left the INSTANT
+             *  the listener count touched zero — and a client touches zero for a moment whenever it swaps a socket. The
+             *  Sony (Lite 11.0.15, 2026-10-30): the app's audio socket reopened while its spectrum socket was away, the
+             *  count was zero for 130 ms, and the server switched DAB off, went back to its FM carrier and resumed the
+             *  block five seconds later — "the server tuned to a different multiplex and changed station", with nobody in
+             *  the admin log. So the leave WAITS kModeLeaveGraceS; anyone arriving cancels it (resumeCaptureIdle, the same
+             *  early connect step that cancels the idle park), and the park is armed only once the leave has happened —
+             *  a short RELEASE under a running DAB pipeline is the one thing it cannot survive. */
             if (stillEmpty && !stopping.load() && g_dabMode.load(std::memory_order_relaxed)) {
-                /* ★★★ REMEMBER THE DIAL, THEN HAND THE HARDWARE BACK CLEANLY.
-                 *  Stuart, 2026-09-21: "It should be a case of the radio remembers its last left
-                 *  state and then idles or hands over to another app if that option is set and
-                 *  then on a new user reconnecting that previously saved state gets resumed as if
-                 *  the radio never powered down or handed over. Yes I know DAB will need to
-                 *  reacquire but that is seconds."
-                 *  ★★ So the INTENT survives and the HARDWARE does not have to. That is strictly
-                 *     safer than leaving a half-built ensemble up while the radio is parked — or
-                 *     released, which is a full device teardown the DAB pipeline cannot survive —
-                 *     and it is how every other mode already behaves: the VFO is server state,
-                 *     re-applied when somebody arrives. */
-                g_dabWantChannel.store(g_dabChannel.load(std::memory_order_relaxed),
-                                       std::memory_order_relaxed);
-                // ★★ AND THE STATION — the block alone came back with nothing selected.
-                // ★ What is PLAYING, else what was ASKED FOR — a listener who left before the
-                //   ensemble listed their station still meant that station.
-                g_dabWantSid.store(g_dab.service() ? g_dab.service() : g_dab.wantedService(),
-                                   std::memory_order_relaxed);
-                /* ★★★ AND TO DISK, OR IT SURVIVES ONLY THE LISTENER, NOT THE PROCESS. The atomic
-                 *  above dies with the server, so an app the TV backgrounded, an apt upgrade or an
-                 *  APK install came back on the DAB frequency — `freq` IS persisted — in the
-                 *  default mode, WFM. Stuart, 2026-09-24: "I left the Sony TV in DAB mode came back
-                 *  and it was on the DAB frequency but had reverted to WFM". Half the state was
-                 *  written down and half was not, so the receiver came back contradicting itself. */
-                vsPersist("{\"dabChannel\":"
-                          + std::to_string(g_dabWantChannel.load(std::memory_order_relaxed))
-                          + ",\"dabSid\":" + std::to_string(g_dabWantSid.load(std::memory_order_relaxed)) + "}");
-                LOGI("[DAB] last listener left — remembering block %d (service 0x%X) and restoring the "
-                     "receiver; the next listener is put back on it",
-                     g_dabWantChannel.load(std::memory_order_relaxed),
-                     unsigned(g_dabWantSid.load(std::memory_order_relaxed)));
-                dabRestore();
+                modeLeaveDueAt.store(nowSecs() + kModeLeaveGraceS);
+                LOGI("last listener left — DAB stays up for %.0f s in case they are only reconnecting", kModeLeaveGraceS);
             }
-            if (stillEmpty && !stopping.load()) armIdlePark();
-            else LOGI("not parking — a new listener arrived while this socket was closing");
+            if (stillEmpty && !stopping.load() && modeLeaveDueAt.load() == 0.0) armIdlePark();
+            else if (!stillEmpty) LOGI("not parking — a new listener arrived while this socket was closing");
         }
         /* ★★★ SAY WHAT THEY ACTUALLY GOT. "spectrum WS disconnected" after nine seconds is
          *   indistinguishable from a fault and from somebody having a quick look — and those want
@@ -24432,6 +24410,45 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return true;
     }
 
+    /** A whole-radio mode (DAB) waits this long before the last listener's leave ends it — see the close path. */
+    static constexpr double kModeLeaveGraceS = 5.0;
+    std::atomic<double> modeLeaveDueAt{0.0};
+    void leaveDabNow() {
+        if (!g_dabMode.load(std::memory_order_relaxed)) return;
+                /* ★★★ REMEMBER THE DIAL, THEN HAND THE HARDWARE BACK CLEANLY.
+                 *  Stuart, 2026-09-21: "It should be a case of the radio remembers its last left
+                 *  state and then idles or hands over to another app if that option is set and
+                 *  then on a new user reconnecting that previously saved state gets resumed as if
+                 *  the radio never powered down or handed over. Yes I know DAB will need to
+                 *  reacquire but that is seconds."
+                 *  ★★ So the INTENT survives and the HARDWARE does not have to. That is strictly
+                 *     safer than leaving a half-built ensemble up while the radio is parked — or
+                 *     released, which is a full device teardown the DAB pipeline cannot survive —
+                 *     and it is how every other mode already behaves: the VFO is server state,
+                 *     re-applied when somebody arrives. */
+                g_dabWantChannel.store(g_dabChannel.load(std::memory_order_relaxed),
+                                       std::memory_order_relaxed);
+                // ★★ AND THE STATION — the block alone came back with nothing selected.
+                // ★ What is PLAYING, else what was ASKED FOR — a listener who left before the
+                //   ensemble listed their station still meant that station.
+                g_dabWantSid.store(g_dab.service() ? g_dab.service() : g_dab.wantedService(),
+                                   std::memory_order_relaxed);
+                /* ★★★ AND TO DISK, OR IT SURVIVES ONLY THE LISTENER, NOT THE PROCESS. The atomic
+                 *  above dies with the server, so an app the TV backgrounded, an apt upgrade or an
+                 *  APK install came back on the DAB frequency — `freq` IS persisted — in the
+                 *  default mode, WFM. Stuart, 2026-09-24: "I left the Sony TV in DAB mode came back
+                 *  and it was on the DAB frequency but had reverted to WFM". Half the state was
+                 *  written down and half was not, so the receiver came back contradicting itself. */
+                vsPersist("{\"dabChannel\":"
+                          + std::to_string(g_dabWantChannel.load(std::memory_order_relaxed))
+                          + ",\"dabSid\":" + std::to_string(g_dabWantSid.load(std::memory_order_relaxed)) + "}");
+                LOGI("[DAB] last listener left — remembering block %d (service 0x%X) and restoring the "
+                     "receiver; the next listener is put back on it",
+                     g_dabWantChannel.load(std::memory_order_relaxed),
+                     unsigned(g_dabWantSid.load(std::memory_order_relaxed)));
+                dabRestore();
+    }
+
     void armIdlePark() {
         // ★ Applied here rather than when the park FIRES: the radio may be released or paused by
         //   then, and a gain written to a stopped device is a gain nobody applied. The grace
@@ -24466,6 +24483,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //   only ever scheduled, so it is cancelled before it can happen.
         if (idleParkDueAt.exchange(0.0) > 0.0)
             LOGI("listener returned within the grace period — idle park cancelled");
+        if (modeLeaveDueAt.exchange(0.0) > 0.0)
+            LOGI("listener returned within %.0f s — DAB kept", kModeLeaveGraceS);
         // ★★ TAKE THE RADIO BACK FIRST, because everything below assumes a device. If another
         //    program has it we carry on WITHOUT one rather than failing the connection: the
         //    listener gets the server, the band plan and a clear reason, which is far better than
@@ -25723,7 +25742,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //    working picture is worth risking (Stuart, 2026-08-08: "I'd rather not break
                 //    something that works"). The COST is real and is now stated on the toggle that
                 //    chooses it, which is where an owner can weigh it.
-                if (idleParkDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load()
+                // ★ The deferred DAB leave (see the close path): re-justified against the state NOW.
+                if (const double due = modeLeaveDueAt.load(); due > 0.0 && nowSecs() >= due && !stopping.load()) {
+                    bool empty;
+                    { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
+                    modeLeaveDueAt.store(0.0);
+                    if (empty) { leaveDabNow(); armIdlePark(); }
+                }
+                if (idleParkDueAt.load() == 0.0 && modeLeaveDueAt.load() == 0.0 && !captureIdle.load() && !radioReleased.load()
                     && !(g_vsProvidesSpectrogram.load() && !g_vsReleaseWhenIdle.load())) {
                     bool empty;
                     { std::lock_guard<std::mutex> lk(clientMtx); empty = nobodyWatchingLocked(); }
