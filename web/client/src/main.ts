@@ -11,6 +11,8 @@ import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFr
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
+import { fmLogoKey, retryDelay } from '../../../src/services/logoCachePolicy.ts';
+import { webLogos, webLogoOffer, webLogoOutranked, webLogoForget, webLogoDead, dabIdxKey, dabWebKey } from './logoStoreWeb';   // ★ V12 persistent logo cache
 import { drmRender, drmSignalRender, type DrmState } from './drm';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
          type Swatch, type ControlLook } from './controlColours';
@@ -2553,6 +2555,16 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         logoDnsKey = '';
         rdsLogoProvisional = false;
         logoFromIdentity = false;
+        /* ★★ V12: DRAWN AT ONCE FROM THE PERSISTENT CACHE (logoStoreWeb — country + PI + bearer), with the rank it was
+         *  found at: an identity answer is final, a name match stays provisional so identity can still overrule it. */
+        const held = webLogos.get(fmIdxKey());
+        if (held && !webLogoDead(held.show)) {
+          rdsLogoUrl = held.show;
+          logoFromIdentity = held.src === 'radiodns';
+          // ★ Still provisional if it rests on a DERIVED ECC — the transmitted one, when it comes, re-asks (see below).
+          rdsLogoProvisional = held.src !== 'radiodns' || rdsEcc <= 0;
+          webLogos.touch(fmIdxKey(), Date.now());
+        }
       }
       // ★★★ AND UPGRADE A DERIVED ANSWER THE MOMENT THE REAL ECC ARRIVES. A logo found from an
       //     ECC we DERIVED rests on the assumption that the station is in the receiver's own
@@ -2568,7 +2580,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       //    (which may correct a derived one), or we have a PI and identity has not been tried yet
       //    for it. `logoDnsKey` records the attempt, so this cannot loop on a station that simply
       //    is not in RadioDNS — it asks once per PI+frequency and then leaves it alone.
-      if (!rdsLogoUrl || (rdsLogoProvisional && (rdsEcc > 0 || rdsPi > 0)))
+      // ★ V12: and a held logo is re-checked once its day is up — replaced only if the broadcaster published a new one.
+      if (!rdsLogoUrl || (rdsLogoProvisional && (rdsEcc > 0 || rdsPi > 0))
+          || (rdsPi > 0 && webLogos.get(fmIdxKey()) && webLogos.shouldAsk(fmIdxKey(), Date.now())))
         void resolveRdsLogoBest(rdsIso);
       rdsFreq = spec ? spec.frequency : -1;   // this RDS belongs to THIS carrier
       if (rdsPanelOpen()) renderRds();
@@ -3892,6 +3906,13 @@ let logoQuery = '';     // guards against a stale async logo landing late
 /** ★ The PI/ECC/frequency already asked of the server's RadioDNS route — one request per station,
  *  not one per RDS update. Cleared wherever the logo is, so a new station is asked afresh. */
 let logoDnsKey = '';
+/** ★ V12: stalls per PI/ECC/frequency this visit — the rung of the retry ladder (logoCachePolicy.retryDelay). */
+const fmLogoFails = new Map<string, number>();
+/** ★ V12: the tuned FM station's key in the persistent logo cache — receiver's country + PI + bearer ('' without a PI). */
+function fmIdxKey(): string {
+  if (!(rdsPi > 0)) return '';
+  return fmLogoKey(rdsPi.toString(16).toUpperCase().padStart(4, '0'), serverIso || '', spec ? spec.frequency : 0);
+}
 /** ★ True when the logo we are showing was found from a DERIVED ECC (the receiver's country), so
  *  it is our inference and not the transmitter's word. A real ECC arriving later replaces it. */
 let rdsLogoProvisional = false;
@@ -4669,15 +4690,25 @@ async function resolveRdsLogoBest(iso: string) {
     //   miss path costs the server a DNS round trip — unguarded it would be several a second.
     if (logoDnsKey !== key) {
       logoDnsKey = key;
+      const fk = fmIdxKey();
+      // ★ The daily re-check has begun: do not start another until it is due again (or this one fails).
+      if (webLogos.get(fk)) webLogos.confirm(fk, Date.now());
+      let stalled = false;
       try {
+        // ★ V12: a deadline — a request that hangs on a stalled tunnel is a stall, retried below, not a wait for ever.
+        const ac = new AbortController();
+        const t = setTimeout(() => ac.abort(), 12000);
         const r = await fetch(P(`/vibeserver/stationlogo?pi=${piHex}&ecc=${eccHex}&freq=${Math.round(hz)}`),
-                              { cache: 'no-store' });
+                              { cache: 'no-store', signal: ac.signal }).finally(() => clearTimeout(t));
         if (r.ok) {
           const url = webImageUrl((await r.json())?.logo);
           // The dial may have moved while DNS was resolving — this answer belongs to the station
           // we ASKED about, not to whatever is tuned now.
           if (url && logoDnsKey === key) {
-            rdsLogoUrl = url;
+            /* ★★ Filed as the identity answer: replaces a name match, and replaces an older identity answer only when
+             *  the URL changed (the bytes are the browser's to cache — a page may not read a broadcaster's picture). */
+            rdsLogoUrl = (fk && !webLogoDead(url) ? webLogoOffer(fk, 'radiodns', url) : '') || url;
+            fmLogoFails.delete(key);
             logoFromIdentity = true;
             // ★ Remember it against the FREQUENCY — this is what lets the bookmark list show the
             //   broadcaster's own artwork for a station with no PI stored against it.
@@ -4689,8 +4720,21 @@ async function resolveRdsLogoBest(iso: string) {
             updateMediaSession();
             return;
           }
-        }
-      } catch { /* no server route, or offline — the name ladder below still applies */ }
+        } else if (r.status >= 500) stalled = true;
+      } catch { stalled = true; /* no server route, or offline — the name ladder below still applies */ }
+      /* ★★★ A STALL IS ASKED AGAIN — 1 min, 5 min, 30 min, then daily (logoCachePolicy). It used to be asked once per
+       *  station per visit, so one tunnel hiccup at the moment of tuning meant the name ladder's guess for the rest of
+       *  the visit, however long it lasted. */
+      if (stalled && logoDnsKey === key) {
+        const n = (fmLogoFails.get(key) ?? 0) + 1;
+        fmLogoFails.set(key, n);
+        if (fk && webLogos.get(fk)) webLogos.failedAbove(fk, 'radiodns', Date.now());
+        setTimeout(() => {
+          if (logoDnsKey !== key) return;
+          logoDnsKey = '';
+          if (rdsPi > 0 && (!rdsLogoUrl || rdsLogoProvisional || !logoFromIdentity)) void resolveRdsLogoBest(rdsIso);
+        }, retryDelay(n));
+      }
     }
   }
   // ★★★ THE NAME LADDER DOES NOT RUN ONCE IDENTITY HAS ANSWERED. The PI is error-protected and
@@ -4732,8 +4776,10 @@ async function resolveRdsLogo(name: string, iso: string) {
      *  only a PI change is, and that clears it where rdsLogoPi is handled.
      *  ★ So: a hit replaces, a miss leaves things exactly as they were. */
     const safeUrl = webImageUrl(url);
-    if (!safeUrl) return;
-    rdsLogoUrl = safeUrl;
+    if (!safeUrl || webLogoDead(safeUrl)) return;
+    // ★ V12: a name match is filed too (as 'name' — any identity answer replaces it), so it draws at once next visit.
+    const fk = fmIdxKey();
+    rdsLogoUrl = (fk ? webLogoOffer(fk, 'name', safeUrl) : '') || safeUrl;
     // ★★★ A NAME-SEARCH RESULT IS PROVISIONAL, AND SAYING SO IS THE WHOLE FIX. A NAME IS NOT AN
     //     IDENTITY: radio-browser matched "BBC 3CR" to a generic Radioplayer icon, and because a
     //     logo we already have was never re-examined, that wrong picture LOCKED — even though the
@@ -7515,26 +7561,17 @@ function dabRender() {
  *  service and remembered; the list is re-rendered twice a second and must not refetch. */
 const dabLogos = new Map<string, string | null>();
 /* ★ REMEMBERED, so a return to an ensemble does not fetch every logo again (Stuart, 2026-09-07).
- *  Identity-resolved URLs are the broadcaster's own and change rarely: kept for 30 days in
- *  localStorage; a miss is not kept (the next visit may succeed). */
-const DAB_LOGO_STORE = 'vibe.dabLogos.v1';
-const DAB_LOGO_TTL_MS = 30 * 24 * 3600 * 1000;
+ * ★★★ V12 (Stuart, 2026-10-30: "cache the logos and only change them when a new one is published"): the persistent
+ *     index is logoStoreWeb.ts, on the policy the app shares (logoCachePolicy.ts) — held logos are checked at most
+ *     daily and replaced only when the published one changed; a miss is retried 1 min / 5 min / 30 min / daily instead
+ *     of being "no logo" for the session (the old claim-null-then-never-ask fault — one tunnel stall blanked a logo);
+ *     the multiplex's own logo is kept and outranks everything; bounded (LRU). `dabLogos` stays as the draw-time map
+ *     every reader (rows, header, VTS, bookmarks) already consults. */
 function dabLogosLoad() {
-  try {
-    const raw = localStorage.getItem(DAB_LOGO_STORE); if (!raw) return;
-    const j = JSON.parse(raw) as Record<string, { u: string; t: number }>;
-    const now = Date.now();
-    for (const [k, v] of Object.entries(j)) if (v && v.u && now - v.t < DAB_LOGO_TTL_MS) dabLogos.set(k, v.u);
-  } catch { /* storage unavailable: logos are simply fetched again */ }
-}
-function dabLogosSave() {
-  try {
-    const j: Record<string, { u: string; t: number }> = {};
-    const raw = localStorage.getItem(DAB_LOGO_STORE);
-    if (raw) { try { Object.assign(j, JSON.parse(raw)); } catch { /* start clean */ } }
-    for (const [k, v] of dabLogos) if (v) j[k] = { u: v, t: j[k]?.t ?? Date.now() };
-    localStorage.setItem(DAB_LOGO_STORE, JSON.stringify(j));
-  } catch { /* ignore */ }
+  for (const [k, e] of Object.entries(webLogos.entries)) {
+    const wk = dabWebKey(k);
+    if (wk) dabLogos.set(wk, e.show);
+  }
 }
 dabLogosLoad();
 
@@ -7567,7 +7604,8 @@ dabLogosLoad();
 const dabAirKept = new Set<string>();
 async function dabKeepAirLogo(key: string, url: string, provisional: boolean) {
   if (dabAirKept.has(key)) return;
-  if (provisional && dabLogos.get(key)) return;    // never displace a better source with cover art
+  // ★ Never displace a better source with cover art — the policy's ranking, asked before the fetch (logoCachePolicy).
+  if (webLogoOutranked(dabIdxKey(key), provisional ? 'slide' : 'air')) return;
   dabAirKept.add(key);
   try {
     /* ★ 'no-cache', not 'no-store' (2026-10-19): the <img> beside it has just fetched these bytes, and the server now
@@ -7583,8 +7621,11 @@ async function dabKeepAirLogo(key: string, url: string, provisional: boolean) {
       fr.readAsDataURL(blob);
     });
     if (!data.startsWith('data:image/')) return;
-    dabLogos.set(key, data);
-    dabLogosSave();
+    /* ★★ "that needs to be cached too" — the multiplex's picture is filed as the AIR source (outranks RadioDNS and the
+     *  name search), its bytes are its signature: the same picture next session only stamps it seen; a different one
+     *  from the ensemble replaces it. A slide is filed below everything and only while nothing better exists. */
+    const shown = webLogoOffer(dabIdxKey(key), provisional ? 'slide' : 'air', provisional ? '' : url, { sig: data, show: data });
+    if (shown) dabLogos.set(key, shown);
     /* ★ The bookmark panel is not redrawn on a timer — it is built when opened — so a logo that
      *  arrives while it is open would otherwise not appear until the next open. */
     if (isPanelOpen('bookmarksPanel')) renderBookmarks();
@@ -7602,7 +7643,11 @@ function dabLogoTag(sv: DabState['services'][number], d: DabState): string {
     return `<img class="dabLogo" src="${air}" alt="" loading="lazy">`;
   }
   const known = dabLogos.get(key);
-  if (known === undefined) { dabLogos.set(key, null); void dabLogoLookup(key, sv, d, ecc); return dabSlideTag(sv, key); }
+  /* ★★★ NO MORE CLAIM-WITH-NULL-AND-NEVER-ASK-AGAIN. The index refuses a key being asked, backing off, or checked within
+   *  the day (logoCachePolicy) — so this is safe twice a second — and a failed lookup comes back on the retry ladder.
+   *  Not before the ensemble's EId has decoded: an answer filed then would sit under the wrong identity. */
+  if (d.eid && webLogos.shouldAsk(dabIdxKey(key), Date.now())) void dabLogoLookup(key, sv, d, ecc);
+  if (!known) return dabSlideTag(sv, key);
   /* ★ A URL THAT RESOLVES IS NOT A PICTURE THAT LOADS (the RDS panel learned this first): the
    *  name search hands back dead favicons, the browser drew its "?" tile, and the list is rebuilt
    *  twice a second — so the tile FLASHED (Stuart's screenshot, Magic Radio, 2026-09-07). A logo
@@ -7642,6 +7687,8 @@ function forgetDeadLogo(src: string) {
   for (const [k, v] of dabLogos) if (same(v)) (window as any).dabLogoFailed?.(k);
   for (const [k, v] of bmLogos) if (same(v)) bmLogos.set(k, '');
   if (same(rdsLogoUrl)) rdsLogoUrl = '';
+  webLogoForget(dead);            // ★ V12: out of the persistent cache too, and backed off — re-resolved later, not never
+  if (dead !== src) webLogoForget(src);
 }
 
 /** ★★★ THE PICTURE THE STATION ITSELF TRANSMITS, AS THE LAST RESORT.
@@ -7664,25 +7711,59 @@ function dabSlideTag(sv: DabState['services'][number], key?: string): string {
   if (key) void dabKeepAirLogo(key, url, true);
   return `<img class="dabLogo" src="${escapeHtml(url)}" alt="" loading="lazy">`;   // ★ escaped: it now carries a query
 }
-(window as any).dabLogoFailed = (k: string) => { dabLogos.set(k, null); try { const raw = localStorage.getItem(DAB_LOGO_STORE); if (raw) { const j = JSON.parse(raw); delete j[k]; localStorage.setItem(DAB_LOGO_STORE, JSON.stringify(j)); } } catch { /* ignore */ } };
+/* ★ A picture that would not draw is forgotten AND backed off (logoStoreWeb) — re-resolved on the ladder, never blank for
+ *  the session; the dead URL itself is not filed again this visit. */
+(window as any).dabLogoFailed = (k: string) => {
+  const shown = dabLogos.get(k);
+  dabLogos.delete(k);
+  if (shown) webLogoForget(shown); else webLogos.drop(dabIdxKey(k), Date.now());
+};
 const dabLogoQueue = limiter(3);
 async function dabLogoLookup(key: string, sv: DabState['services'][number], d: DabState, ecc: number) {
-  let url: string | null = null;
+  const ik = dabIdxKey(key);
+  if (!webLogos.begin(ik)) return;
+  let stalled = false;
   try {
-    if (ecc >= 0 && d.eid) {
+    let url: string | null = null;
+    let src: 'radiodns' | 'name' = 'radiodns';
+    if (ecc >= 0 && d.eid && !webLogoOutranked(ik, 'radiodns')) {
       const q = `ecc=${ecc.toString(16).toUpperCase().padStart(2, '0')}&eid=${d.eid.toString(16).toUpperCase().padStart(4, '0')}`
               + `&sid=${sv.sid.toString(16).toUpperCase().padStart(4, '0')}&scids=${Math.max(0, sv.scids ?? 0)}`;
-      // ★ Three at a time — under the server's cap of four, so every service gets its real answer (src/utils/limit.ts).
-      const r = await dabLogoQueue(() => fetch(P(`/vibeserver/dablogo?${q}`), { cache: 'no-store' }));
-      if (r.ok) url = String((await r.json())?.logo ?? '') || null;
+      /* ★★ A DEADLINE, and a stall is not a verdict: a request that hangs (a quick tunnel) or a 5xx is retried on the
+       *  ladder — the name search below may still fill the tile meanwhile, without being filed for a day. */
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), 12000);
+      try {
+        // ★ Three at a time — under the server's cap of four, so every service gets its real answer (src/utils/limit.ts).
+        const r = await dabLogoQueue(() => fetch(P(`/vibeserver/dablogo?${q}`), { cache: 'no-store', signal: ac.signal }));
+        if (r.ok) {
+          // ★ An absolute broadcaster URL (the Sony Lite server answers with Global's own), or the server's own copy.
+          const u = String((await r.json())?.logo ?? '');
+          url = webImageUrl(u) || (u.startsWith('/') && !u.startsWith('//') ? u : '') || null;
+        }
+        else if (r.status >= 500) stalled = true;
+      } catch { stalled = true; } finally { clearTimeout(t); }
+      if (url && webLogoDead(url)) url = null;
     }
-  } catch { url = null; }
-  if (!url) {
-    // ★ Name search, as the bookmark list does — provisional, but far better than a blank tile.
-    try { url = await lookupStationLogo(tidyStationName(sv.label), undefined, serverIso || undefined); } catch { url = null; }
-  }
-  dabLogos.set(key, url || null);
-  if (url) dabLogosSave();
+    if (!url && !webLogoOutranked(ik, 'name')) {
+      // ★ Name search, as the bookmark list does — provisional, but far better than a blank tile.
+      src = 'name';
+      try { url = await lookupStationLogo(tidyStationName(sv.label), undefined, serverIso || undefined); } catch { url = null; }
+      if (url && webLogoDead(url)) url = null;
+    }
+    const now = Date.now();
+    if (url) {
+      const shown = webLogoOffer(ik, src, url);
+      if (shown) dabLogos.set(key, shown);
+      if (stalled) webLogos.failedAbove(ik, 'radiodns', now);
+    } else if (webLogos.get(ik) && !stalled) {
+      webLogos.confirm(ik, now);                     // nothing new, nothing lost: the held logo stands for another day
+    } else if (webLogos.get(ik)) {
+      webLogos.failedAbove(ik, 'radiodns', now);
+    } else {
+      webLogos.miss(ik, now);                        // ★★★ retried in 1 min, 5 min, 30 min, then daily — never "no logo" for good
+    }
+  } finally { webLogos.end(ik); }
 }
 
 /** ★ "Daventry (Northants) · 12 mi · 13 dB": the site from the country's transmitter directory
