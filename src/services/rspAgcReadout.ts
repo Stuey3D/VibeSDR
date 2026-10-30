@@ -201,7 +201,9 @@ export function vagcChoiceText(mode: number, auto: boolean): string {
 export function vagcIfOwner(running: boolean): string {
   return running ? 'VibeAGC' : 'SDRplay';
 }
-/** The AGC TARGET while VibeAGC runs: its real target, read-only. */
-export function vagcTargetText(vtgt: number | undefined): string {
-  return typeof vtgt === 'number' ? `${dbfs(vtgt)} dBFS · set by VibeAGC` : 'set by VibeAGC';
+/** The AGC TARGET while VibeAGC runs: its real target, read-only. `short` for the web menu's fixed 130 px readout (its
+ *  row label then says "· VIBEAGC", like IF AGC and RF AGC, and the slider's title says it is set by VibeAGC). */
+export function vagcTargetText(vtgt: number | undefined, short = false): string {
+  const who = short ? 'VibeAGC' : 'set by VibeAGC';
+  return typeof vtgt === 'number' ? `${dbfs(vtgt)} dBFS · ${who}` : who;
 }

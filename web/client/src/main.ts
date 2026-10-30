@@ -3251,6 +3251,9 @@ function renderRspVagc(): void {
    *  under manual gain: no AGC is running then, whatever was chosen. */
   const ifTag = ifOn && (running || mode !== null) ? ` · ${vagcIfOwner(running).toUpperCase()}` : '';
   const rfTag = ifOn && rfOn && running ? ' · VIBEAGC' : '';
+  const spBy = document.getElementById('rspAgcSetBy');
+  const spTag = ifOn && running ? ' · VIBEAGC' : '';
+  if (spBy && spBy.textContent !== spTag) spBy.textContent = spTag;
   if (ifBy && ifBy.textContent !== ifTag) ifBy.textContent = ifTag;
   if (rfBy && rfBy.textContent !== rfTag) rfBy.textContent = rfTag;
   if (!row) return;
@@ -18772,7 +18775,9 @@ function renderRspVals() {
   const vagcRuns = ifAgcOwns && rspVagcRunning === true;
   $('rspLnaVal').textContent =
     `${pos}/${lnaMax} · LNA ${lna}${lna === 0 ? ' · max' : lna === lnaMax ? ' · min' : ''}`
-    + (ifAgcOwns && rfAgcOwns ? (vagcRuns ? ' · VibeAGC' : ' · RF AGC') : '');
+    /* ★ " · AGC", not the loop's name: this readout has a fixed 130 px and "· RF AGC" already ran off its end (Stuart's
+     *  "RF AG…", 2026-10-30) — the RF AGC row's own label now says which loop it is (· VIBEAGC). */
+    + (ifAgcOwns && rfAgcOwns ? ' · AGC' : '');
   $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`
     + (ifAgcOwns ? (vagcRuns ? ' · VibeAGC' : ' · IF AGC') : '');
   const sp = Number($<HTMLInputElement>('rspAgcSet').value);
@@ -18793,7 +18798,7 @@ function renderRspVals() {
    *     true of the SDRplay set point, and no help to anybody: VibeAGC was holding −20 and nothing said so. Not
    *     settable: VibeAGC's targets are per band and tuned on air, and it has no setter (rspAgcReadout.ts). */
   $('rspAgcSetVal').textContent = vagcRuns
-    ? vagcTargetText(rspVagcTgt)
+    ? vagcTargetText(rspVagcTgt, true)
     : `${sp} dBfs${dabOwns ? ' · DAB' :
        sp === AGC_DEFAULT ? ' · default' : sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
 }

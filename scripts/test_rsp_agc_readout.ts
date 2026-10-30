@@ -117,7 +117,8 @@ ok(vagcAutoNote(0, true) === '→ VibeAGC (OpenRSP driver)' && vagcAutoNote(0, f
 ok(vagcChoiceText(0, true) === 'VibeAGC (auto)' && vagcChoiceText(2, true) === "SDRplay's own" && vagcChoiceText(1, false) === 'VibeAGC',
    'a listener\'s read-only row names the choice');
 ok(vagcIfOwner(true) === 'VibeAGC' && vagcIfOwner(false) === 'SDRplay', 'IF AGC row: VibeAGC while it runs, SDRplay otherwise');
-ok(vagcTargetText(-20) === '−20 dBFS · set by VibeAGC' && vagcTargetText(undefined) === 'set by VibeAGC',
+ok(vagcTargetText(-20) === '−20 dBFS · set by VibeAGC' && vagcTargetText(undefined) === 'set by VibeAGC'
+   && vagcTargetText(-20, true) === '−20 dBFS · VibeAGC',
    'AGC TARGET under VibeAGC: its real target, read-only');
 
 process.exit(fails ? 1 : 0);

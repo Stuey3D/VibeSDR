@@ -1141,9 +1141,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #rspAgcLine:empty { display: none; }
 /* ★ The radio menu's AGC choice (2026-10-30): which loop owns a row, said beside its name — "IF AGC · VIBEAGC". */
 .agcBy { color: var(--amber, #ffb833); font-size: 0.8em; }
-#rspVagcVal { flex-basis: 100%; text-align: left; font-size: 11px; }
-#rspVagcVal:empty { display: none; }
-#rspVagcVal.inline { flex-basis: auto; text-align: right; font-size: 12px; color: var(--hi); }
+/* ★ Beats #rspCtls .val's fixed 130 px (that rule keeps SLIDERS still while their readouts change length; this row has
+   no slider): the AUTO note takes its own line under the keys, a listener's choice sits where the keys would be. */
+#rspCtls #rspVagcVal { flex: 0 0 100%; min-width: 0; text-align: right; white-space: normal; font-size: 11px; }
+#rspCtls #rspVagcVal:empty { display: none; }
+#rspCtls #rspVagcVal.inline { flex: 0 1 auto; font-size: 12px; color: var(--hi); }
 #rspAgcLine .why { display: block; font-weight: 600; margin-top: 3px; padding: 1px 5px; width: fit-content;
   border: 1px solid rgba(255,180,60,0.8); border-radius: 3px; }
 
@@ -5731,7 +5733,7 @@ select.btn { padding: 6px 8px; }
          (less negative) figure asks for a louder output and so applies MORE gain. The right
          value depends on band and antenna, so it belongs to the user. -->
     <div class="mrow" id="rowAgcSet">
-      <label for="rspAgcSet">AGC TARGET</label>
+      <label for="rspAgcSet">AGC TARGET<span class="agcBy" id="rspAgcSetBy"></span></label>
       <input type="range" id="rspAgcSet" min="-72" max="-10" value="-30">
       <span class="val" id="rspAgcSetVal">—</span>
     </div>

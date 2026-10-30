@@ -977,6 +977,12 @@ printf '\n\033[1m── SDRplay AGC choice from the menu (end to end) ──\033
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-rsp-vagc-control.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
+# ★★ …and the web page's RADIO section on an SDRplay (a page shim dresses the fake radio as an RSP1A): the AGC row for
+#    the owner and for a listener, and what IF AGC / RF AGC / AGC TARGET say per mode. Needs Edge; silent.
+printf '\n\033[1m── SDRplay AGC rows on the web page (headless) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-rsp-agc-rows.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
 # ★★★ AUDIO FIRST (2026-10-20, docs/BRIEF-portable-wifi-realtime.md Phase 2): a listener whose audio backs up gets a
 #     ~2 fps waterfall until it has been clear for ~1 s; another listener never notices; an encoder burst is not a
 #     backlog. The backed-up half needs a kernel that honours a small receive buffer (Linux) — elsewhere it says NOT RUN.
