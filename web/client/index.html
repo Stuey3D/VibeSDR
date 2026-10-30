@@ -6182,6 +6182,16 @@ select.btn { padding: 6px 8px; }
     at a rate that divides the screen's refresh (2, 5, 10, 15, 20, 30 or 60 rows a second), filling in rows or combining
     them evenly, keeping short bursts. Native is the server's own rate, every row a real frame. Default
     and Smooth add interpolated rows for a smoother scroll.</div>
+  <!-- ★★ V12 2026-10-30 (GitHub #57): its own control (Stuart's wording). OFF = the interaction boost never raises the row
+       rate (wfClock.ts boostRowRate) — the rows stay at the chosen speed through a tune or zoom. Default ON. -->
+  <div class="mrow">
+    <label>SPEED UP WHILE TUNING</label>
+    <div class="seg" id="wfBoostSeg">
+      <button class="btn on" data-wfboost="1">ON</button>
+      <button class="btn" data-wfboost="0">OFF</button>
+    </div>
+  </div>
+  <div class="rowNote">Speeds up the waterfall when tuning or zooming to make it feel more responsive. Turn off for signal accuracy, at the cost of it feeling slower.</div>
   <div class="mrow" id="rowWfSpeed">
     <label>WATERFALL SPEED</label>
     <div class="seg" id="wfSpeedSeg">

@@ -147,8 +147,9 @@ inline double clockRateUnderCap(double rate, int capHz) {
 //     maximum as set, ≤ 120, ≤ 12 × the feed; every extra row is a frame already received. Nothing is asked of the
 //     server. NATIVE (base 0) → 0, untouched. Change one, change both.
 constexpr double BOOST_MAX_RATE = 120, BOOST_FEED_X = 12, BOOST_TAIL_MS = 750;
-inline double boostRowRate(double base, double feedFps, double displayHz) {
+inline double boostRowRate(double base, double feedFps, double displayHz, bool enabled = true) {
     if (!(base > 0)) return 0;
+    if (!enabled) return base;   // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" off (wfClock.ts): never raised
     const double hz = displayHz > 0 ? displayHz : 60;
     const double lim = std::min(std::min(BOOST_MAX_RATE, hz * 1.02), (feedFps > 0 ? feedFps : 0) * BOOST_FEED_X * 1.0001);
     static const double R[] = {120, 60, 30, 20, 15, 12, 10, 5};

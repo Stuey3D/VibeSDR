@@ -243,6 +243,30 @@ const DISPS: [string, (t: number) => number][] = [['60 Hz', () => 60], ['120 Hz'
   }
 }
 
+// ── C2. ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" OFF (GitHub #57): the rate never rises — the shared rule the app JS path
+//    uses (boostRowRate's `enabled`; the Android engine's twin is checked in test_spectrum_engine.cpp) and the web pacer
+//    through a real 1.5 s spin. ──
+{
+  for (const [base, fps, hz] of [[30, 10, 120], [2, 23, 60], [5, 5, 120], [60, 10, 120]] as const)
+    ok(`boost OFF: boostRowRate(${base} rows/s, ${fps} fps, ${hz} Hz) stays ${base} (on: ${boostRowRate(base, fps, hz)})`,
+       boostRowRate(base, fps, hz, false) === base && boostRowRate(base, fps, hz) >= base);
+  const T_ON = 8000, T_OFF = 9500, SECS = 14;
+  for (const [scroll, fps] of [['default', 10], ['min2', 23], ['eco', 10]] as const) {
+    const ts = mkDisp(() => 120, SECS), p = new RowPacer(); p.setScroll(scroll, 1); p.boostEnabled = false;
+    const arr: number[] = []; for (let t = 31.7; t < SECS * 1000; t += 1000 / fps) arr.push(t);
+    let ai = 0, hasRow = false, everBoosted = false; const rel: number[] = [];
+    for (const t of ts) {
+      while (ai < arr.length && arr[ai] <= t) { if (arr[ai] >= T_ON && arr[ai] < T_OFF) p.noteMove(arr[ai]); p.onArrival(arr[ai]); ai++; hasRow = ai > 1; }
+      if (p.onFrame(t, hasRow) > 0) for (let k = 0; k < p.rowsNow; k++) rel.push(t);
+      everBoosted ||= p.boosted;
+    }
+    const rate = (a: number, b: number) => rel.filter((x) => x >= a && x < b).length / ((b - a) / 1000);
+    const rest = rate(5000, 8000), during = rate(8300, 9400);
+    ok(`web boost OFF: ${scroll} on ${fps} fps keeps its rate through a spin (rest ${rest.toFixed(1)}, during ${during.toFixed(1)} rows/s)`,
+       !everBoosted && Math.abs(during - rest) <= rest * 0.15 + 1);
+  }
+}
+
 // ── D. THE APP UI: clock rows released by contPace (gesture) / clockPace (rest), across the boost ───────────────────────
 {
   console.log('  D. the app UI — the shown position through a gesture: boost up, tail, back down, hand-over to whole rows');
