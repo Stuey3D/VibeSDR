@@ -274,6 +274,9 @@ export interface WaterfallViewProps {
   // ~10Hz — the slide is pure interpolation) and the spectrum trace eases at
   // ~30fps, so ProMotion can drop the panel rate and save battery.
   smoothTune?:     boolean;
+  /** ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (default on): false = the interaction boost never raises the row rate
+   *  (wfClock.ts boostRowRate `enabled`; the Android engine's EngineConfig.boost). */
+  wfBoost?:        boolean;
   lastInteractAt?: React.MutableRefObject<number>;
 
   // VFO-lock panning (BRIEF-vfo-lock-and-panning §5.6). All default off so
@@ -623,7 +626,7 @@ function WaterfallView({
   wfBrightness = 0, wfContrast = 0, wfSharpness = 0, minRangeDb = 30,
   frameRate = '20fps', wfScroll = 'sharp', feedFloorFps = 3.3, needleColor = '#ff2020', needleIntensity = 5, needleFrost = 0,
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
-  smoothTune = true, lastInteractAt,
+  smoothTune = true, wfBoost: wfBoostOn = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
   centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0',
   deckOcclusion = null,
@@ -1965,10 +1968,10 @@ function WaterfallView({
   // per frame (~a full core of CPU). Per-render config is mirrored into a ref
   // so the stable callback never closes over stale props.
   const frameCfg = useRef({ width, wfTop, specH, specShow, peakHold,
-                            smoothTune, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
+                            smoothTune, boostOn: wfBoostOn, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
                             minGapMs: WF_MIN_GAP_MS });
   frameCfg.current = { width, wfTop, specH, specShow, peakHold,
-                       smoothTune, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
+                       smoothTune, boostOn: wfBoostOn, targetRows: WF_TARGET_ROWS, targetFps: TARGET_FPS,
                        minGapMs: WF_MIN_GAP_MS };
 
   // Geometry the watch needs to crop a VFO-centred slice out of the row.
@@ -2137,7 +2140,7 @@ function WaterfallView({
     if (inAt > boostSt.current.lastMove && ptNow - inAt < BOOST_TAIL_MS) boostNote(boostSt.current, inAt);
     if (easeStarted) boostNote(boostSt.current, ptNow);
     const boostOn = clocked && baseRowTarget > 0 && boostActive(boostSt.current, ptNow, easing);
-    const rowTarget = boostOn ? boostRowRate(baseRowTarget, feedFps, uiDisplayMaxHz()) : baseRowTarget;
+    const rowTarget = boostOn ? boostRowRate(baseRowTarget, feedFps, uiDisplayMaxHz(), cfg.boostOn) : baseRowTarget;
     const repeatsCarry = rowTarget > 0;
     const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
@@ -2577,15 +2580,15 @@ function WaterfallView({
   }, [frameSink, enqueueFrame, engine, lastInteractAt]);
 
   const engineCfg = useRef<{ width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
-                             smoothTune: boolean; targetRows: number; displayCapHz: number; panelHz?: number;
+                             smoothTune: boolean; boost: boolean; targetRows: number; displayCapHz: number; panelHz?: number;
                              stampViewRows?: number; stampMinGapRows?: number; ringRows?: number } | null>(null);
   // ── Native engine: the state JS owns, forwarded when it changes ──────────────────────────────────────────
   useEffect(() => {
-    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value, panelHz: uiPanelMaxHz.value,
+    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, boost: wfBoostOn, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value, panelHz: uiPanelMaxHz.value,
                           stampViewRows: Math.ceil(shaderRows), stampMinGapRows: stampCfg.current.minGapRows,
                           ringRows: ringTarget };   // ★ the ring depth (grow-only; the engine copies its history across)
     engine?.setConfig(engineCfg.current);
-  }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS, shaderRows, ringTarget]);
+  }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, wfBoostOn, WF_TARGET_ROWS, shaderRows, ringTarget]);
   useEffect(() => { engine?.setCovered(covered); }, [engine, covered]);
   useEffect(() => {
     if (!engine) return;

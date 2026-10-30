@@ -153,6 +153,8 @@ export class Waterfall {
     this.pacer.setScroll(scroll, renderDpr());
   }
   private scroll: WfScroll | null = null;
+  /** ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (main.ts): false = the interaction boost never raises the row rate. */
+  setBoost(on: boolean) { this.pacer.boostEnabled = on; }
   private sharpRows = false;
 
 

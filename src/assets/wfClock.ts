@@ -273,8 +273,12 @@ const BOOST_RATES = [120, 60, 30, 20, 15, 12, 10, 5];
 /** The clock's rate while a tune/zoom is in flight: `base` (the setting's rate on the clock; 0 = Native/actual rows →
  *  0), `feedFps` the measured feed, `displayHz` the display's maximum as the app is set (0 = unknown → 60). Never lower
  *  than `base`. */
-export function boostRowRate(base: number, feedFps: number, displayHz: number): number {
+export function boostRowRate(base: number, feedFps: number, displayHz: number, enabled = true): number {
   if (!(base > 0)) return 0;                           // NATIVE / actual rows: untouched
+  // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" OFF (GitHub #57 — Stuart: "Turn off for signal accuracy, at the cost of it
+  //    feeling slower"): the rate is never raised; the rows stay at the chosen speed through a tune or zoom, and the
+  //    ease/fan draws at that rate. A phone user zooming toward a signal spotted on MINIMUM keeps the history on screen.
+  if (!enabled) return base;
   const hz = displayHz > 0 ? displayHz : 60;
   const lim = Math.min(BOOST_MAX_RATE, hz * 1.02, (feedFps > 0 ? feedFps : 0) * BOOST_FEED_X * 1.0001);
   for (const r of BOOST_RATES) {

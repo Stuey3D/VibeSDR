@@ -594,17 +594,20 @@ int main() {
     //    up to the display's maximum as set (≤ 120, ≤ 12 × the feed), from frames already here, and back after the tail;
     //    NATIVE is untouched (no rate, one row a frame, through the same tune). ──
     {
-        struct BC { const char* name; int cap; int panel; int dcap; double fps; double base; double boosted; };
+        struct BC { const char* name; int cap; int panel; int dcap; double fps; double base; double boosted; bool off = false; };
         const BC bcs[] = {
             {"Default · 10 fps · 120 Hz panel", 20, 120, 0, 10, 30, 120}, {"Default · 10 fps · 60 Hz panel", 20, 60, 0, 10, 30, 60},
             {"Default · 5 fps · 120 Hz panel", 20, 120, 0, 5, 30, 60},     {"Smooth · 10 fps · FRAME RATE 60", 60, 120, 60, 10, 60, 60},
             {"Eco · 10 fps · 120 Hz panel", 10, 120, 0, 10, 10, 120},      {"Default · 10 fps · FRAME RATE 30", 20, 120, 30, 10, 30, 30},
             {"Native · 10 fps · 120 Hz panel", 0, 120, 0, 10, 0, 0},
+            // ★★ V12 2026-10-30 SPEED UP WHILE TUNING off: the rate stays the speed's through the tune
+            {"Default · 10 fps · 120 Hz · boost OFF", 20, 120, 0, 10, 30, 30, true},
+            {"Minimum · 10 fps · 120 Hz · boost OFF", 2, 120, 0, 10, 2, 2, true},
         };
         for (const BC& bc : bcs) {
             auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
             EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = bc.cap; c.panelHz = bc.panel; c.displayCapHz = bc.dcap;
-            c.smoothTune = true;
+            c.smoothTune = true; c.boost = !bc.off;
             e->setConfig(c); double vc = 1'000'000; e->setView(vc, 200'000);
             const double T0 = gClock; double next = 0; int fi = 0, rateBad = 0, maxRate = 0, after = -1; double head = 0, h0 = 0, h1 = 0;
             int restBad = 0;

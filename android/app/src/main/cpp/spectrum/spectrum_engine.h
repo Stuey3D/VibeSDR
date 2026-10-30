@@ -40,6 +40,7 @@ struct EngineConfig {
     bool   specShow = true;
     bool   peakHold = true;
     bool   smoothTune = true;
+    bool   boost = true;       // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (wf_row_clock.h boostRowRate `enabled`)
     int    displayCapHz = 0;   // the FRAME RATE cap (0 = none): under 60 the row target divides it (wf_row_target.h rowTargetUnderCap)
     int    panelHz = 0;        // ★ the panel's maximum refresh (0 = unknown): the interaction boost's ceiling when there is no cap
     int    targetRows = 0;

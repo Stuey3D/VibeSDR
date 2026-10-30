@@ -7404,6 +7404,17 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (lm != null) AsyncStorage.removeItem('lsv_link_mode').catch(() => {});
     }).catch(() => {});
   }, []);
+  /* ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (GitHub #57 — the interaction boost raced the waterfall just as a phone user
+   *  zoomed toward a signal spotted on MINIMUM). Default ON (the behaviour as it was); OFF = the rows stay at the chosen
+   *  speed through a tune or zoom (wfClock.ts boostRowRate). Per device, every radio. */
+  const [wfBoost, setWfBoost] = useState(true);
+  const onWfBoost = useCallback((v: boolean) => {
+    setWfBoost(v);
+    AsyncStorage.setItem('lsv_wf_boost', v ? '1' : '0').catch(() => {});
+  }, []);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_wf_boost').then((v: string | null) => { if (v === '0') setWfBoost(false); }).catch(() => {});
+  }, []);
   const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps') => {
     setFrameRate(v);
     AsyncStorage.setItem('lsv_frame_rate', v).catch(() => {});
@@ -10713,6 +10724,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         minRangeDb={dabOn ? 15 : 30}
         frameRate={frameRate}
         wfScroll={wfShown}   /* ★ every speed is a row mode (wfRowTarget) — MINIMUM / LOW / ECO included */
+        wfBoost={wfBoost}
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
@@ -11757,6 +11769,7 @@ export default function SDRScreen({ route, navigation }: Props) {
            everywhere: its point is the slow scroll (#57), which thinning gives on any feed. */
         wfScroll={wfShown}  onWfScroll={onWfScroll}
         wfCapsOk={wfCapsOk}
+        wfBoost={wfBoost}  onWfBoost={onWfBoost}
         wfSpeedNums={speedNumbers(wfNativeFps, isKiwi ? KIWI_SPEED_CAPS : undefined)}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         drumMode={drumMode}             onDrumMode={onDrumMode}

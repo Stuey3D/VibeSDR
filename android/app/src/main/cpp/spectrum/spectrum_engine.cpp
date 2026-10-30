@@ -371,7 +371,7 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     const bool boostOn = clocked && baseRowTarget > 0 && vibewf::boostActive(boost_, now, easing);
     const double dispHz = cfg.displayCapHz > 0 ? (cfg.panelHz > 0 ? std::min(cfg.displayCapHz, cfg.panelHz) : cfg.displayCapHz)
                                                : (cfg.panelHz > 0 ? cfg.panelHz : 60);
-    const double rowTarget = boostOn ? vibewf::boostRowRate(baseRowTarget, avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, dispHz)
+    const double rowTarget = boostOn ? vibewf::boostRowRate(baseRowTarget, avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, dispHz, cfg.boost)
                                      : baseRowTarget;
     const bool repeatsCarry = rowTarget > 0;
     // ★★ The zoom/tune ease is by TIME (wf_zoom_fan.h zoomEaseRows): the rows/s the waterfall runs at — the clock's rate, or

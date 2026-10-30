@@ -342,6 +342,9 @@ export interface MenuSheetProps {
   onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
   wfScroll?:          WfSpeedSetting;
   onWfScroll?:        (v: WfSpeedSetting) => void;
+  /** ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (the interaction boost), default on. */
+  wfBoost?:           boolean;
+  onWfBoost?:         (v: boolean) => void;
   /** ★ V12: offer LOW / ECO (5 / 10 fps link ceilings) — false where the server has no rate lever (OpenWebRX). MINIMUM (2)
    *  is offered regardless. */
   wfCapsOk?:          boolean;
@@ -1290,7 +1293,7 @@ function MenuSheetBody({
   specFloor = 0, onSpecFloor, visualGain = 0, onVisualGain,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
-  frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll, wfCapsOk = true, wfSpeedNums = null,
+  frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll, wfBoost = true, onWfBoost, wfCapsOk = true, wfSpeedNums = null,
   smoothTune = true, onSmoothTune,
   onSpecRatio,
 }: MenuSheetProps) {
@@ -1940,6 +1943,16 @@ function MenuSheetBody({
                   //   runs at a rate that divides the screen's refresh — the numbers on the keys are what runs.
                   + 'Every speed but Native runs at a rate that divides the screen\'s refresh (2, 5, 10, 15, 20, 30 or 60 rows a second), filling in rows or combining them evenly. Native is the server\'s own rate, every row a real frame. Default and Smooth add interpolated rows for a smoother scroll.'}
                 </Text>
+                {/* ★★ V12 2026-10-30 (GitHub #57) — its own control, not one of the speed keys (Stuart's wording). OFF = the
+                    interaction boost never raises the row rate: the history stays on screen through a tune or zoom. */}
+                {!!onWfBoost && (<>
+                <SubLabel label="Speed Up While Tuning" />
+                <BtnRow>
+                  <Btn label="ON"  active={wfBoost}  onPress={() => onWfBoost(true)} />
+                  <Btn label="OFF" active={!wfBoost} onPress={() => onWfBoost(false)} />
+                </BtnRow>
+                <Text style={styles.wfNote}>Speeds up the waterfall when tuning or zooming to make it feel more responsive. Turn off for signal accuracy, at the cost of it feeling slower.</Text>
+                </>)}
                   </>);
                 })()}
 

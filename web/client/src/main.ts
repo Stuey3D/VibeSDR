@@ -8059,6 +8059,8 @@ let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
 // ★★ DEFAULTS TO SMOOTH *HERE* AND SHARP IN THE APP — each keeps the waterfall it already had, so
 //    nobody's picture changes on upgrade and the other one is a tap away. The two are not better
 //    and worse, they trade detail against motion (Stuart: "they both have their merits").
+/** ★★ V12 "SPEED UP WHILE TUNING" — kept so a waterfall built later (a reconnect) takes it too (applyWaterfallRates). */
+let wfBoostWanted = true;
 let wfScroll: WfSpeedSetting = 'default';   // ★ V12 + 'min2' (MINIMUM, 2) / 'low' (LOW, 5) / 'eco' (wfSpeedCap.ts); 'sharp' is labelled NATIVE
 // Rows synthesised per received frame for each preset. DETAILED is 1 = no interpolation at all.
 // ★ Each preset is a TARGET ROW RATE (rows/sec on screen), not a multiplier: this renderer works
@@ -8115,6 +8117,7 @@ function applyWaterfallRates() {
   wf?.setSpeed(wfSpeed);
   // ★★★ The rows follow the FEED now (Stuart 10-20): the preset is a scroll MODE, its rate a cap (wfRowTarget.ts).
   wf?.setScroll(wfScroll);
+  wf?.setBoost(wfBoostWanted);
   // The speed control belongs to SMOOTH: under SHARP the data rate decides, so showing it would be
   // a control whose every use is a no-op.
   // ★ The old 10/20/30 SPEED row is gone from the UI: the preset decides it. Kept hidden rather
@@ -13526,6 +13529,19 @@ function buildMenu() {
       applyWaterfallRates();
     };
   }
+  // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (#57): the interaction boost on/off, default on, per device.
+  { let on = true;
+    try { on = prefs().wfBoost !== false; } catch { /* storage blocked: default on */ }
+    const paint = () => { for (const b of Array.from($('wfBoostSeg').querySelectorAll<HTMLButtonElement>('[data-wfboost]')))
+      b.classList.toggle('on', (b.dataset.wfboost === '1') === on); };
+    wf?.setBoost(on); wfBoostWanted = on; paint();
+    for (const b of Array.from($('wfBoostSeg').querySelectorAll<HTMLButtonElement>('[data-wfboost]'))) {
+      b.onclick = () => {
+        on = b.dataset.wfboost === '1'; wfBoostWanted = on;
+        try { savePref('wfBoost', on); } catch { /* storage blocked: this visit only */ }
+        wf?.setBoost(on); paint();
+      };
+    } }
   // Restore saved choices, then apply once.
   { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
   // ★ an old 'sharp' loads as NATIVE; an old 'minimum' was the 5 fps choice — it loads as LOW and is re-saved as 'low',
