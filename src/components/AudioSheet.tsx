@@ -1078,7 +1078,7 @@ export default function AudioSheet({
                   a11y={vfoStereo ? 'VFO stereo on. Tap to put both VFOs in both ears.' : 'VFO stereo off. Tap to put each VFO in its own ear.'} />
               </View>
               <Text style={st.iqNote}>
-                With VFO A/B on (the frequency card): the lower frequency in your left ear, the higher in your right, crossing over smoothly if you tune one past the other. Off: both VFOs in both ears. A phone speaker or a mono headset plays both together either way.{vfoABOn && onBinaural ? ' Binaural tuning rests while VFO B is on.' : ''}
+                With VFO A/B on (the frequency card): the lower frequency in your left ear, the higher in your right, crossing over smoothly if you tune one past the other. Off: both VFOs in both ears. A phone speaker or a mono headset plays both together either way. The BALANCE between them is under the two squelch rows.{vfoABOn && onBinaural ? ' Binaural tuning rests while VFO B is on.' : ''}
               </Text>
             </View>
           )}

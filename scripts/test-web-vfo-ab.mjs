@@ -10,6 +10,9 @@
 //   • ROUND 3: with B on the AUDIO panel has a squelch row for EACH VFO (labelled, coloured) — B's row hidden with B off;
 //     each row's MUTE sends its own watch message and the server says so; B's bar sets B's squelch (a watch sql) and
 //     never A's; B's AUTO SQUELCH sends B's threshold; the A row's bar stays A's whichever VFO is selected;
+//   • ★★★ THE A ⟷ B BALANCE (2026-10-30): the row sits right under B's squelch row (hwinfo watchBal); a slide sends
+//     {watch, balance}, the server holds it (its state's bal), a pad step is a tenth, it survives VFO STEREO off, EVEN
+//     centres it; none with VFO A/B off;
 //   • DECODE ON EITHER VFO (2026-10-27): a decoder started with B selected attaches on B ("vfo":"B"), the controls stay on
 //     B, B's needle and squelch row say DEC, and selecting A afterwards moves nothing; Band started on B subscribes on B,
 //     puts B on the band, mutes B (not A), and with A selected the arrows tune A.
@@ -172,6 +175,26 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   ok(await until(`${sentWatch}.some(m => m.muteA === true) && ${AB}.state.muteA === true`, 3000), 'A\'s MUTE sends {watch, muteA:true}; the server mutes A');
   await click('#sqlMuteA');
   ok(await until(`${AB}.state.muteA === false`, 3000), 'pressed again: A unmuted');
+  // ── ★★★ THE A ⟷ B BALANCE (Stuart, 2026-10-30): right under VFO B's squelch row, only where the server takes it
+  ok((await ev(`${AB}.watchBal`)) === true, 'hwinfo says watchBal: this server takes the balance');
+  ok(await ev(`(() => { const b = document.getElementById('abBalBlock'), q = document.getElementById('sqlBlockB');
+                 return !!b && !b.hidden && q.nextElementSibling === b; })()`), 'the BALANCE row is shown, directly under VFO B\'s squelch row');
+  await shot('audio-balance');
+  await ev(`(() => { const s = document.getElementById('abBal'); s.value = '-0.5'; s.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()`);
+  ok(await until(`${sentWatch}.some(m => m.balance === -0.5 && m.id === undefined)`, 2000), 'sliding it sends {watch, balance:-0.5}');
+  ok(await until(`${AB}.state.bal === -0.5 && document.getElementById('abBalVal').textContent === 'B -3 dB'`, 3000),
+     `the server holds it, and the row says B is turned down ("${await ev(`document.getElementById('abBalVal').textContent`)}")`);
+  ok(await ev(`(() => { try { return Object.keys(localStorage).some(k => { try { return JSON.parse(localStorage.getItem(k)).abBalance === -0.5; } catch { return false; } }); } catch { return 'n/a'; } })()`) !== false,
+     'remembered on this device');
+  // the controller's / keyboard's step: gamepad.ts adjust() is stepUp + an input event — a tenth
+  await ev(`(() => { const s = document.getElementById('abBal'); s.stepUp(); s.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()`);
+  ok(await until(`${AB}.state.bal === -0.4`, 3000), 'a step right (the pad / keyboard adjust) moves it a tenth: −0.4');
+  // ★ in MONO too (Stuart: "the balance also applies if the user is in Mono mode too") — the server keeps it with stereo off
+  await click('#abStereoBtn');
+  ok(await until(`${AB}.state.stereo === false && ${AB}.state.bal === -0.4`, 3000), 'VFO STEREO off: the balance stays (a level, before placement)');
+  await click('#abStereoBtn');
+  await click('#abBalEven');
+  ok(await until(`${sentWatch}.some(m => m.balance === 0) && ${AB}.state.bal === 0 && document.getElementById('abBalVal').textContent === 'EVEN'`, 3000), 'EVEN centres it');
   const sqlA0 = await ev(`window.__sent.filter(s => s.includes('"type":"squelch"')).length`);
   await click('#sqlBarB');
   ok(await until(`${sentWatch}.some(m => m.id === 1 && typeof m.sql === 'number' && m.sqlOn === true)`, 2000), 'B\'s bar sets B\'s squelch (a watch sql)');
@@ -277,6 +300,7 @@ await session('off', { vfoB: 0 }, async ({ ev, until, click }) => {
   await sleep(500);
   ok(await ev(`document.getElementById('freqAbRow').hidden`), 'no VFO A/B row on the frequency card');
   ok(await ev(`document.getElementById('abStereoRow').hidden`), 'no STEREO row in the audio panel');
+  ok(await ev(`document.getElementById('abBalBlock').hidden`), 'no BALANCE row either');
 });
 console.log(`${fail ? 'FAILED' : 'ok'}: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
