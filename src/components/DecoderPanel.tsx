@@ -1227,13 +1227,15 @@ export default function DecoderPanel({
             </HBtn>
           )}
 
-          {/* ★★ V12 PLAIN — CW in plain English (see cwPlain). Beside CLR, lit while on. */}
+          {/* ★★ V12 EXPLAIN ↔ RAW — CW in plain English (see cwPlain). Beside CLR. The legend names what a press DOES
+           *  (Stuart, 2026-10-30: it "changes to RAW to switch back to RAW cw"); not TRANSLATE (reads as another
+           *  language) nor DECODE (reads as a decoder like RTTY). Never lit — the legend carries the state. */}
           {isCwOnly && (
-            <HBtn active={cwPlain} run hitSlop={6}
-              accessibilityLabel={cwPlain ? 'Plain English is on — show the CW as sent' : 'Show the CW in plain English'}
+            <HBtn run hitSlop={6}
+              accessibilityLabel={cwPlain ? 'Show the CW as sent' : 'Explain the CW in plain English'}
               accessibilityState={{ selected: cwPlain }}
               onPress={(e: any) => { e?.stopPropagation(); toggleCwPlain(); }}>
-              <DecoderKeyLabel active={cwPlain}>PLAIN</DecoderKeyLabel>
+              <DecoderKeyLabel>{cwPlain ? 'RAW' : 'EXPLAIN'}</DecoderKeyLabel>
             </HBtn>
           )}
 

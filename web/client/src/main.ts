@@ -11557,7 +11557,12 @@ function cwRead(t: string): string { return cwPlainOn && activeDec === 'cw' ? pl
 function syncCwPlain() {
   const key = document.getElementById('cwPlain');
   const cw = activeDec === 'cw';
-  if (key) { key.style.display = cw ? '' : 'none'; key.classList.toggle('on', cwPlainOn); key.setAttribute('aria-pressed', String(cwPlainOn)); }
+  // ★ EXPLAIN ↔ RAW: the legend names what a press does (Stuart, 2026-10-30) — never lit, the legend carries the state.
+  if (key) {
+    key.style.display = cw ? '' : 'none'; key.setAttribute('aria-pressed', String(cwPlainOn));
+    key.textContent = cwPlainOn ? 'RAW' : 'EXPLAIN';
+    key.title = cwPlainOn ? 'Show the CW as sent' : 'Explain the CW in plain English (press again for the CW as sent)';
+  }
   document.getElementById('decBox')?.classList.toggle('cwplain', cw && cwPlainOn);
   queueCwPlainText();
 }
