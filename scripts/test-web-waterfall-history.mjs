@@ -242,12 +242,15 @@ try {
     const yOld = post.cols.findIndex((x, y) => y > 12 && x >= 0 && Math.abs(x - c0) <= 3);
     const oldRun = yOld >= 0 ? post.cols.slice(yOld, yOld + 40).filter((x) => x >= 0) : [];
     const oldAt = oldRun.filter((x) => Math.abs(x - c0) <= 3).length;
+    // ★ JOINED (wfGlide.ts joinedRowAt — the app's shader taps, 2026-10-29): each moving row is lit across its move to the
+    //   row below, so the curve is one solid line however quick the ease: the gap between one row's carrier and the
+    //   next row's (half-brightness extents) is what must stay closed, not the step.
     let worst = 0, gaps = 0;
     for (let y = 3; y <= yOld + 2 && y < post.cols.length; y++) { const p = post.cols[y - 1], q = post.cols[y];
-      if (p >= 0 && q >= 0) worst = Math.max(worst, Math.abs(q - p)); else gaps++; }
-    ok(newTop.length >= 8 && newAt >= newTop.length * 0.9 && yOld > 12 && oldRun.length >= 30 && oldAt >= oldRun.length * 0.9 && worst <= 24 && gaps <= 2,   // (≤ 24 px: a short ease-out on 1-px rows with no per-row join yet; headless draws ~16 rows/s)
+      if (p >= 0 && q >= 0) worst = Math.max(worst, Math.max(post.lh[y] - post.rh[y - 1], post.lh[y - 1] - post.rh[y]) - 1, 0); else gaps++; }
+    ok(newTop.length >= 8 && newAt >= newTop.length * 0.9 && yOld > 12 && oldRun.length >= 30 && oldAt >= oldRun.length * 0.9 && worst <= 2 && gaps <= 2,
        `zoom ${fromSpan / 1000} → ${toSpan / 1000} kHz: new rows at ${c1} (${newAt}/${newTop.length}), the history still at ${c0} (${oldAt}/${oldRun.length}),` +
-       ` joined by one curve (largest step ${worst} px, ${gaps} unlit rows over ${yOld} rows)`);
+       ` joined by one solid curve (widest gap between rows ${worst} px, ${gaps} unlit rows over ${yOld} rows)`);
   };
   await fanCase(SPAN, 80000);
   await fanCase(80000, SPAN);
@@ -288,6 +291,7 @@ try {
           big = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))] : 0;
     // ★ the fast spin outruns the tuner (it catches up in jumps — the allowed gap), so it gets the looser bound
     const [sMax, bK, bA] = wantTouch ? [0.25, 3, 4] : [0.35, 4, 6];
+    if (process.env.WFHIST_DEBUG) console.log(`   ${label} steps:`, ds.join(' '));
     ok(ys.length >= 6 && pairs >= 6 && still <= pairs * sMax && big <= bK * med + bA,
        `${label} (${cStart} → ${cEnd} px): the trail moves EVENLY, a curve not a staircase — ${still}/${pairs} rows standing still, steps median ${med} px, 90th percentile ${big} px`);
     // ★ up to 1 in 10 pairs: a frame the server sends late leaves a small gap (the timing of a loaded test box)
@@ -382,12 +386,19 @@ try {
     //     out: every row written during the pan carries a full-capture layer (X > 0) reaching across the whole screen.
     {
       const { y0, y1 } = await phase(20000, [fEnd - 40000, fEnd - 10000, CARRIER, CARRIER + 30000, CARRIER + 60000]);
-      const cov = await ev(`(() => { const w = window.__vibeWf().wf; const R = w.xfA.length; let n = 0, c = 0;
+      const cov = await ev(`(() => { const w = window.__vibeWf().wf; const R = w.xfA.length; let n = 0, c = 0; const bad = [];
         for (let j = ${y0}; j < ${y1}; j++) { const r = (w.head + j) % R; n++;
-          const a = w.xfA[r], b = w.xfB[r], X = w.xfX[r], e = 1 + 2 * X;
-          const detail = b <= 0 && a + b >= 1, layer = X > 0 && (b + X) / e <= 0 && (a + b + X) / e >= 1;
-          if (detail || layer) c++; }
-        return [c, n]; })()`);
+          // screen x 0..1 shows the row's u = a·x + b; the detail covers it where u spans 0..1; the layer where the capture
+          // coordinate does — 2D: the twin's s = (u + X)/(1 + 2X); GPU: u_capture = k·u + m (X holds k there, m in xfM).
+          // ★ Since the pan's moves are JUMPS (a whole view or more, wfGlide.ts rowView) the rows are moved into place by
+          //   their maps (b ≠ 0), so it is the LAYER that must cover — what the check was always for.
+          const a = w.xfA[r], b = w.xfB[r], X = w.xfX[r];
+          const detail = b <= 0 && a + b >= 1;
+          const layer = X > 0 && (w.gl ? (X * b + w.xfM[r] >= 0 && X * (a + b) + w.xfM[r] <= 1)
+                                         : ((b + X) / (1 + 2 * X) >= 0 && (a + b + X) / (1 + 2 * X) <= 1));
+          if (detail || layer) c++; else if (n % 10 === 0) bad.push([j, +a.toFixed(3), +b.toFixed(3), +X.toFixed(4), +(w.xfM[r] || 0).toFixed(4)]); }
+        return [c, n, bad.slice(0, 12)]; })()`);
+      if (process.env.WFHIST_DEBUG) console.log('   pan rows not covered [y, a, b, X|k, m]:', JSON.stringify(cov && cov[2]));
       ok(cov && cov[1] >= 40 && cov[0] >= cov[1] * 0.95,
          `panned across the capture while zoomed, then out: ${cov && cov[0]}/${cov && cov[1]} rows have data across the whole screen (no black inside the capture)`);
     }
