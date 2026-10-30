@@ -184,9 +184,31 @@ const SERVER_MAPS: ReadonlyArray<{ kind: 'hfdl' | 'digi' | 'cw'; label: string; 
 ];
 const TAB_PAD = 4;
 const TAB_R = 8;
-function KeyGrid({ items, grid, openId, options, shade, style }: {
+/** ★★★ ON SILVER / BLACK THE TAB AND PANEL ARE A WELL PRESSED INTO THE PLATE (Stuart, 2026-10-30: "make it look like the
+ *  metal of the backing plate is pushed in and these sub controls live inside it, the blue to show that they are linked
+ *  doesnt work on the metallic skins"). The plate shows through a darker fill; the walls are dark, shading in from the
+ *  top as a recessed window's do (PopupWindow), and the floor's far edge catches the light (the window's lip). The
+ *  panel's top wall stops either side of the tab, so key and options read as one hollow. */
+export interface Recess { fill: string; wall: string; shade: string; lip: string }
+function recessOf(pt: { silver?: boolean; window: { lip: string } }): Recess {
+  return pt.silver
+    ? { fill: 'rgba(0,0,0,0.10)', wall: 'rgba(0,0,0,0.42)', shade: 'rgba(0,0,0,0.16)', lip: pt.window.lip }
+    : { fill: 'rgba(0,0,0,0.38)', wall: 'rgba(0,0,0,0.85)', shade: 'rgba(0,0,0,0.40)', lip: pt.window.lip };
+}
+/** The shading under a top wall: three hairlines fading down (no gradient view on this path). */
+function WallShade({ r, left = 0, right = 0, width }: { r: Recess; left?: number; right?: number; width?: number }) {
+  return (
+    <>
+      {[0, 1, 2].map((i) => (
+        <View key={i} pointerEvents="none" style={{ position: 'absolute', top: i, height: 1, left, ...(width != null ? { width } : { right }),
+                                                     backgroundColor: r.shade, opacity: 1 - i * 0.33 }} />
+      ))}
+    </>
+  );
+}
+function KeyGrid({ items, grid, openId, options, shade, recess, style }: {
   items: { id: string; node: React.ReactNode }[]; grid: KeyGridSize;
-  openId?: string | null; options?: React.ReactNode; shade: string; style?: object;
+  openId?: string | null; options?: React.ReactNode; shade: string; recess?: Recess; style?: object;
 }) {
   if (!items.length) return null;
   const rows = gridRows(items, grid.cols);
@@ -200,15 +222,32 @@ function KeyGrid({ items, grid, openId, options, shade, style }: {
           <React.Fragment key={row[0].id}>
             <NavRow><View style={{ flexDirection: 'row', gap: KEY_GAP }}>
               {row.map((it, c) => (
-                <View key={it.id} style={openHere && c === corners.col ? [kg.tab, { width: grid.keyW + 2 * TAB_PAD, backgroundColor: shade }]
-                                                                      : [kg.cell, { width: grid.keyW }]}>
+                <View key={it.id} style={openHere && c === corners.col
+                  ? [kg.tab, { width: grid.keyW + 2 * TAB_PAD, backgroundColor: recess ? recess.fill : shade },
+                     recess && [kg.tabWell, { borderColor: recess.wall }]]
+                  : [kg.cell, { width: grid.keyW }]}>
+                  {openHere && c === corners.col && recess && <WallShade r={recess} />}
                   {it.node}
                 </View>
               ))}
             </View></NavRow>
             {openHere && (
-              <View style={[kg.panel, { backgroundColor: shade },
+              <View style={[kg.panel, { backgroundColor: recess ? recess.fill : shade },
+                            recess && [kg.panelWell, { borderColor: recess.wall, borderBottomColor: recess.lip }],
                             corners.left && { borderTopLeftRadius: 0 }, corners.right && { borderTopRightRadius: 0 }]}>
+                {recess && (() => {
+                  // The tab's opening, from the panel's inner left edge: its column's x (the panel and the tab both
+                  // reach TAB_PAD out), less the wall the panel's border already takes.
+                  const x = corners.col * (grid.keyW + KEY_GAP), w = grid.keyW + 2 * TAB_PAD;
+                  return (
+                    <>
+                      {x > 1 && <View pointerEvents="none" style={[kg.wallTop, { left: 0, width: x - 1, backgroundColor: recess.wall }]} />}
+                      <View pointerEvents="none" style={[kg.wallTop, { left: x + w - 1, right: 0, backgroundColor: recess.wall }]} />
+                      {x > 1 && <WallShade r={recess} left={0} width={x - 1} />}
+                      <WallShade r={recess} left={x + w - 1} />
+                    </>
+                  );
+                })()}
                 {options}
               </View>
             )}
@@ -226,6 +265,13 @@ const kg = StyleSheet.create({
            paddingTop: TAB_PAD, paddingHorizontal: TAB_PAD, paddingBottom: KEY_GAP,
            borderTopLeftRadius: TAB_R, borderTopRightRadius: TAB_R },
   panel: { marginHorizontal: -TAB_PAD, borderRadius: TAB_R, paddingHorizontal: 10, paddingTop: 6, paddingBottom: 10 },
+  // The well: walls on the tab's top and sides (its foot is open into the panel); the panel's sides and floor, its top
+  // wall drawn either side of the tab (wallTop). A border's width is taken out of the padding, so nothing moves.
+  tabWell:   { borderTopWidth: 1, borderLeftWidth: 1, borderRightWidth: 1, paddingTop: TAB_PAD - 1, paddingHorizontal: TAB_PAD - 1,
+               overflow: 'hidden' },
+  panelWell: { borderLeftWidth: 1, borderRightWidth: 1, borderBottomWidth: 1, paddingHorizontal: 9, paddingBottom: 9,
+               overflow: 'hidden' },
+  wallTop:   { position: 'absolute', top: 0, height: 1 },
 });
 
 /** rgba() of a colour at another alpha — the shade of a key's colour (rgb(), rgba() or #rrggbb). */
@@ -643,6 +689,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /** ★ The shade an open key's tab and options share — the key's own colour: the selected-item meaning on the default
    *  chassis (a running decoder's colour), the controls colour (its pip and legend) on silver / black. */
   const optShade = pt.metal ? shadeOf(pt.pipOn, pt.silver ? 0.22 : 0.16) : `rgba(${pt.ink.m.selectedRgb},0.13)`;
+  const optRecess = pt.metal ? recessOf(pt) : undefined;   // ★ silver / black: a well in the plate, not a colour
   /* ★★ V12 DIMMED, NEVER DISABLED (Stuart): a key whose usual frequencies are nowhere near the dial is drawn at 40 % — and
    *  stays fully tappable (an unset upconverter puts HF at 130 MHz). A lit / running key is never dimmed. */
   const DIM = { opacity: 0.4 };
@@ -1706,7 +1753,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 <View style={dst.groupHead} accessible accessibilityRole="header">
                   <Text style={[dst.groupText, secLbl]}>{WHOLE_RADIO_LABEL}</Text>
                 </View>
-                <KeyGrid items={wholeKeys} grid={keyGrid} shade={optShade} />
+                <KeyGrid items={wholeKeys} grid={keyGrid} shade={optShade} recess={optRecess} />
                 <Text style={capText}>{WHOLE_RADIO_HINT}</Text>
                 {bandInWhole && spotsBandCaption()}
                 {/* the band decoders below get their own heading once this section is above them */}
@@ -1728,13 +1775,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                     {gi && <ModeIcon name={gi} size={11} color={secColor} />}
                     <Text style={[dst.groupText, secLbl]}>{decoderGroupLabel(group, decTab)}</Text>
                   </View>
-                  <KeyGrid items={keys} grid={keyGrid} openId={openDec} options={openOpts} shade={optShade} />
+                  <KeyGrid items={keys} grid={keyGrid} openId={openDec} options={openOpts} shade={optShade} recess={optRecess} />
                 </View>
               );
             })}
             {/* ★ SCANNER — a tool, not a decoder of one band: under every tab. (GALLERY and TRANSCRIBE moved to VIEWS.) */}
             {scanShown && (
-              <KeyGrid items={[{ id: 'scanner', node: scannerKey() }]} grid={keyGrid} shade={optShade} style={{ marginTop: 10 }} />
+              <KeyGrid items={[{ id: 'scanner', node: scannerKey() }]} grid={keyGrid} shade={optShade} recess={optRecess} style={{ marginTop: 10 }} />
             )}
             {adsbShown && adsbWhyLine}
             {ismShown && ismWhyLine}
@@ -1750,7 +1797,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
               VIEWS
             </Text>
-            <KeyGrid items={viewItems} grid={keyGrid} openId={txLit ? 'transcribe' : null} options={txOpts} shade={optShade} />
+            <KeyGrid items={viewItems} grid={keyGrid} openId={txLit ? 'transcribe' : null} options={txOpts} shade={optShade} recess={optRecess} />
           </View>
         )}
 
@@ -1762,7 +1809,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <Text style={[st.sheetLabel, secLbl, { marginBottom: 8 }]}>
               {spotsControls.label}
             </Text>
-            <KeyGrid items={spotItems} grid={keyGrid} shade={optShade} />
+            <KeyGrid items={spotItems} grid={keyGrid} shade={optShade} recess={optRecess} />
             {/* ★ Band's reason when it cannot run (the web's #spotsBandWhy), or what it covers. */}
             {!!spotsControls.band && !bandInWhole && spotsBandCaption()}
           </View>
