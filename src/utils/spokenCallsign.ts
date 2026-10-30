@@ -267,3 +267,42 @@ export function captionPieces(line: string): CaptionPiece[] {
   if (at < line.length) out.push({ text: line.slice(at) });
   return out;
 }
+
+const CACHE = new Map<string, CaptionPiece[]>();
+const CACHE_MAX = 800;
+function piecesOf(line: string): CaptionPiece[] {
+  let p = CACHE.get(line);
+  if (!p) {
+    p = captionPieces(line);
+    if (CACHE.size >= CACHE_MAX) CACHE.delete(CACHE.keys().next().value as string);
+    CACHE.set(line, p);
+  }
+  return p;
+}
+const TRANSLATED = '   → ';
+
+/** ★ The whole TRANSCRIBE transcript cut into plain runs and links, for TranscriptText. Each LINE is parsed once (a
+ *  bounded cache keyed by the line text); lines with no call stay joined in one plain run. A translated line ("   → …",
+ *  under its source) keeps the links found on the SOURCE — any call the translation lost is added at its end. */
+export function transcriptPieces(text: string): CaptionPiece[] {
+  const out: CaptionPiece[] = [];
+  let plain = '';
+  const flush = () => { if (plain) { out.push({ text: plain }); plain = ''; } };
+  const lines = text.split('\n');
+  let srcCalls: string[] = [];
+  lines.forEach((line, i) => {
+    const nl = i < lines.length - 1 ? '\n' : '';
+    const ps = line ? piecesOf(line) : [{ text: '' } as CaptionPiece];
+    const calls = ps.filter((p) => p.call).map((p) => p.call as string);
+    const lost = line.startsWith(TRANSLATED) ? srcCalls.filter((c) => !calls.includes(c)) : [];
+    if (!line.startsWith(TRANSLATED)) srcCalls = calls;
+    if (calls.length === 0 && lost.length === 0) { plain += line + nl; return; }
+    for (const p of ps) {
+      if (p.call) { flush(); out.push(p); } else plain += p.text;
+    }
+    for (const c of lost) { plain += ' · '; flush(); out.push({ text: c, call: c, spoken: c }); }
+    plain += nl;
+  });
+  flush();
+  return out;
+}

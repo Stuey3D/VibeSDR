@@ -1,6 +1,6 @@
 // test_spoken_callsign.ts — callsigns heard in the TRANSCRIBE captions (src/utils/spokenCallsign.ts, V12 2026-10-30).
 // Run: node scripts/test_spoken_callsign.ts
-import { findCallsigns, captionPieces, isValidCallsign } from '../src/utils/spokenCallsign.ts';
+import { findCallsigns, captionPieces, isValidCallsign, transcriptPieces } from '../src/utils/spokenCallsign.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 const calls = (s: string) => findCallsigns(s).map((m) => m.call);
@@ -92,6 +92,13 @@ const p = captionPieces('CQ this is golf four tango papa juliet over');
 ok(p.length === 3 && p[0].text === 'CQ this is ' && p[1].call === 'G4TPJ' && (p[1] as any).spoken === 'golf four tango papa juliet'
   && p[2].text === ' over', 'pieces: ' + JSON.stringify(p));
 ok(captionPieces('nothing here').length === 1, 'no calls → one piece');
+
+// ── the transcript: links per line; a translation keeps the source's calls ──
+const tp = transcriptPieces('— English —\nCQ golf four tango papa juliet\n   \u2192 CQ le golf quatre\nnothing\n');
+const links = tp.filter((x) => x.call).map((x) => x.call);
+ok(JSON.stringify(links) === '["G4TPJ","G4TPJ"]', 'transcript links (source + translation): ' + JSON.stringify(links));
+ok(tp.map((x) => x.text).join('') === '— English —\nCQ G4TPJ\n   \u2192 CQ le golf quatre · G4TPJ\nnothing\n', 'transcript text: ' + JSON.stringify(tp.map((x) => x.text).join('')));
+ok(transcriptPieces('plain\nlines\n').length === 1, 'no calls → one plain run');
 
 console.log(`${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

@@ -31,12 +31,19 @@ import {
  *  (utils/openWebPage). A nested Text with its own onPress takes the touch, so the row's own tap (tune) does not fire.
  *  Not a callsign (qrzCallUrl null: "—", a garbled call) = plain text. Used by every list with callsigns (CW, PSK,
  *  JTTY, the digital spots). Nothing is fetched from QRZ: it is a link. */
-export function CallLink({ call, style, children }: { call: string; style: any; children?: React.ReactNode }) {
+export function CallLink({ call, style, children, inline, label }: {
+  call: string; style: any; children?: React.ReactNode;
+  /** ★ Inside a running caption (TRANSCRIBE): no one-line clamp, the text flows with the sentence. */
+  inline?: boolean;
+  /** The accessibility label, when the link stands for more than its call (a spoken run). */
+  label?: string;
+}) {
   const url = qrzCallUrl(call);
-  if (!url) return <Text style={style} numberOfLines={1}>{children ?? call}</Text>;
+  const lines = inline ? undefined : 1;
+  if (!url) return <Text style={style} numberOfLines={lines}>{children ?? call}</Text>;
   return (
-    <Text style={[style, { textDecorationLine: 'underline' }]} numberOfLines={1} suppressHighlighting={false}
-      accessibilityRole="link" accessibilityLabel={`${call} on QRZ.com`}
+    <Text style={[style, { textDecorationLine: 'underline' }]} numberOfLines={lines} suppressHighlighting={false}
+      accessibilityRole="link" accessibilityLabel={label ?? `${call} on QRZ.com`}
       onPress={(e: any) => { e?.stopPropagation?.(); openWebPage(url); }}>
       {children ?? call}
     </Text>
