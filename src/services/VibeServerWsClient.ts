@@ -1230,8 +1230,12 @@ export abstract class VibeServerWsClient {
                   antenna?: string; hdr?: boolean; amNotch?: boolean; extRef?: boolean;
                   /** ★ The RSP's own bias-T (2026-10-22): wire key `biast`, admin only on the server. There was
                    *  no key here at all, so the app had no way to power an aerial on an RSP. */
-                  biasT?: boolean }) {
+                  biasT?: boolean;
+                  /** ★ WHICH AGC (the radio menu's AGC row, 2026-10-30): 0 auto · 1 VibeAGC · 2 the SDRplay's own. Wire key
+                   *  `vagcmode`; owner-only on the server (adminGate), applied live and saved as rspVibeAgc. */
+                  vagcmode?: number }) {
     const m: Record<string, unknown> = { type: 'rsp_control' };
+    if (o.vagcmode !== undefined) m.vagcmode = o.vagcmode;
     if (o.lna      !== undefined) m.lna      = o.lna;
     if (o.ifgr     !== undefined) m.ifgr     = o.ifgr;
     if (o.ifagc    !== undefined) m.ifagc    = o.ifagc ? 1 : 0;
