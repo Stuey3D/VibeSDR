@@ -51,6 +51,9 @@ import { spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
 import { TUNE_EASE_MIN_FRAC } from '../../../src/utils/wfRowPlace.ts';
 import { WIDE_TEX, wideExtent, wideRowInto, rowInCapture, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
 import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type RowView } from './wfGlide';
+import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRow, stampPrune, stampReset, stampSettleRows, stampSweepRows, stampsShown, stampTicks, stampColour }
+  from '../../../src/utils/wfStamps.ts';
+import { tickStep, fmtTick } from './freqScale';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -173,6 +176,9 @@ export class Waterfall {
   private rv: RowView = { lo: 0, span: 0, jumpHz: 0 };
   /** Per ring row, the span (Hz) it was drawn at — a jump moves every row by the same Hz in ITS OWN scale. 0 = blank. */
   private xfS = new Float64Array(0);
+  /** ★★ Per ring row, the Hz at the left edge it was drawn at (with xfS its whole scale) — a tap on an OLD row tunes by
+   *  THAT row's scale (xyToHz; Stuart, 2026-10-30, #57). */
+  private xfL = new Float64Array(0);
   /** GPU path: per ring row, the full-capture layer's m (where the row's u = 0 sits in the capture, 0..1) — the shader
    *  reads it from its own texture; kept here too so the coverage can be checked (scripts/test-web-waterfall-history.mjs). */
   private xfM = new Float64Array(0);
@@ -212,6 +218,11 @@ export class Waterfall {
   private rowImgC: ImageData | null = null;
   /** ★ GLIDE (wfGlide.ts): scratch for the in-between rows. */
   private glideScratch = newGlideScratch(1024);
+  // ★★ SCALE STAMPS (src/utils/wfStamps.ts — Stuart, 2026-10-30, #57): the old scale laid on the history when a zoom or a
+  //    tune lands. rowSeq counts every row drawn (the newest is rowSeq); a stamp sits rowSeq − its row device rows down.
+  private stamps = newStampState();
+  private rowSeq = 0;
+  private stampTickCache = new Map<number, { W: number; lo: number; span: number; dpr: number; ticks: { x: number; label: string | null; w: number }[] }>();
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
   /** ★ Arrival gaps, display rate, cadence and the per-pair row budget — all in wfPacing.ts's
@@ -442,10 +453,10 @@ export class Waterfall {
                                               0, wfH * (firstRows / oh), w, wfH * (this.head / oh));
       // ★ The zoom fan's maps follow their rows into the unwrapped, re-heighted buffer (row j ← reading row j·oh/wfH).
       if (this.xfA.length === oh) {
-        const a = new Float64Array(wfH), b = new Float64Array(wfH), x = new Float64Array(wfH), sp = new Float64Array(wfH);
-        const hasX = this.xfX.length === oh, hasS = this.xfS.length === oh;
-        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; x[j] = hasX ? this.xfX[r] : 0; sp[j] = hasS ? this.xfS[r] : 0; }
-        this.xfA = a; this.xfB = b; this.xfX = x; this.xfS = sp;
+        const a = new Float64Array(wfH), b = new Float64Array(wfH), x = new Float64Array(wfH), sp = new Float64Array(wfH), lo = new Float64Array(wfH);
+        const hasX = this.xfX.length === oh, hasS = this.xfS.length === oh, hasL = this.xfL.length === oh;
+        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; x[j] = hasX ? this.xfX[r] : 0; sp[j] = hasS ? this.xfS[r] : 0; lo[j] = hasL ? this.xfL[r] : 0; }
+        this.xfA = a; this.xfB = b; this.xfX = x; this.xfS = sp; this.xfL = lo;
       }
       // ★ V12 and the full-capture layer's rows follow theirs, the same way (unwrapped, re-heighted).
       if (this.wfC && this.wfCCtx && this.wfC.height === oh) {
@@ -458,6 +469,15 @@ export class Waterfall {
         this.rowImgC = this.wfCCtx.createImageData(WIDE_TEX, 1);
       }
     }
+    // ★ The scale stamps follow their rows into the re-heighted buffer (row j ← reading row j·oh/wfH), as the maps do.
+    if (old && old.height > 0) {
+      const oh = old.height;
+      for (const st of this.stamps.stamps) {
+        st.frame = this.rowSeq - Math.round((this.rowSeq - st.frame) * wfH / oh);
+        st.born = this.rowSeq - Math.round((this.rowSeq - st.born) * wfH / oh);
+      }
+      this.stamps.refFrame = Math.min(this.stamps.refFrame, this.rowSeq);
+    } else stampReset(this.stamps);
     this.head = 0;
     // drawRow() bails without this, so the waterfall silently never draws.
     this.rowImg = this.ctx.createImageData(w, 1);
@@ -480,8 +500,9 @@ export class Waterfall {
     else { this.wfCtx.fillStyle = '#000'; this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height); }
     this.head = 0;      // an all-black ring has no meaningful head
     this.xfA.fill(1); this.xfB.fill(0);   // a blank ring has nothing to fan
-    this.xfX.fill(0); this.xfS.fill(0);
+    this.xfX.fill(0); this.xfS.fill(0); this.xfL.fill(0);
     this.ease = newRowEase(); this.outRow = null;   // ★ the next row starts afresh: nothing below it to join to or ease from
+    stampReset(this.stamps); this.stampTickCache.clear();   // ★ no history, nothing to label
     this.wide = null; this.wFloorP = null; this.wCellP = null;   // ★ a jump: the old full-capture row is another band
     if (this.wfCCtx && this.wfC) { this.wfCCtx.fillStyle = '#000'; this.wfCCtx.fillRect(0, 0, this.wfC.width, this.wfC.height); }
   }
@@ -840,7 +861,11 @@ export class Waterfall {
     const v = rowView(this.ease, sLo, sSpan, this.pacer.rowPx, this.rv, this.pacer.easeRowRate());
     const cLo = v.lo, cSpan = v.span;
     this.pacer.easing = this.ease.eN > 0;   // ★ the boost holds until the ease has landed
-    if (v.jumpHz) this._jumpHistory(v.jumpHz, cSpan);
+    // ★★★ A JUMP KEEPS THE HISTORY AS DRAWN TOO (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and
+    //     zooms so it is not lost" — Gesiima tunes from the history onto a signal that is quiet now). It used to move every
+    //     row into place (_jumpHistory — rows slid off, the edge went dark); now nothing is moved or blanked: the old rows
+    //     stay where they were drawn, a scale stamp marks the boundary, and a tap on them tunes by THEIR scale (xyToHz).
+    //     (_jumpHistory and stampJump are kept for a re-mapping caller; v.jumpHz still stops the join across the jump.)
     // ★★ THE JOIN (wfGlide.ts joinedRowAt — the app's shader motion taps): a row drawn somewhere other than the row below
     //    is drawn across its footprint toward it, so the trail is ONE solid line through the ease, not dashes. A steady row
     //    (the same view as the row below) is the frame exactly; a jump is not joined (the history moved instead).
@@ -855,6 +880,12 @@ export class Waterfall {
     this._noteRowView(cLo, cSpan);
     if (!this.outRow || this.outRow.length !== n) this.outRow = new Uint8Array(n);
     this.outRow.set(blend); this.outLo = cLo; this.outSpan = cSpan;
+    // ★★ The scale stamps watch every row as DRAWN (the eased ones too): one stamp of the old scale once a move lands.
+    this.rowSeq++;
+    this.stamps.minGapRows = STAMP_MIN_GAP_LABELS * Math.round(15 * renderDpr());   // ★ three label heights, in device rows
+    this.stamps.sweepRows = stampSweepRows(this.pacer.easeRowRate(), wfH);   // ★ a long tune/pan sweep: now and then
+    stampNoteRow(this.stamps, this.rowSeq, cLo, cSpan, stampSettleRows(this.pacer.easeRowRate()));
+    if (this.stamps.stamps.length) stampPrune(this.stamps, this.rowSeq, wfH + 64);
 
     // ★ NO SELF-COPY. This used to scroll with `wfCtx.drawImage(this.wf, 0, 1)` — drawing the
     // waterfall canvas onto ITSELF one pixel down, every frame. Safari optimises that; Chromium
@@ -886,7 +917,7 @@ export class Waterfall {
       this._ensureXf(rows);
       this.head = (this.head - 1 + rows) % rows;
       this.gl.pushRow(rowIn, this.head);
-      this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan;
+      this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan; this.xfL[this.head] = cLo;
       // ★★ V12 the full-capture layer: this row's coarse twin, at the same ring row (wfWide.ts).
       this.xfX[this.head] = 0;
       if (this.wideEver && this.gFloor.length && this.gPeak.length) {
@@ -902,7 +933,7 @@ export class Waterfall {
     const H = wfH;
     this._ensureXf(H);
     this.head = (this.head - 1 + H) % H;
-    this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan;
+    this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan; this.xfL[this.head] = cLo;
     this.xfX[this.head] = 0;
     // ★★ V12 the full-capture layer on the 2D path: a coloured WIDE_TEX-wide row in its own ring canvas, same row index.
     if (this.wideEver) {
@@ -943,6 +974,7 @@ export class Waterfall {
     this.xfB = new Float64Array(rows);
     this.xfX = new Float64Array(rows);
     this.xfS = new Float64Array(rows);
+    this.xfL = new Float64Array(rows);
     this.xfM = new Float64Array(rows);
   }
 
@@ -1127,11 +1159,68 @@ export class Waterfall {
       }
     }
 
+    if (this.stamps.stamps.length) this._drawStamps(ctx, W, specH, wfH);
+
     if (specH > 4 && this.spec && this._showSpec) {
       this._drawSpec(ctx, W, specH);
       this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
     }
     this._drawVfo(ctx, W, H);
+  }
+
+  /** ★★ THE SCALE STAMPS (src/utils/wfStamps.ts; Stuart, 2026-10-30, #57: "zoom in and a stamp of the previous frequency
+   *  scale as it was is added onto the old waterfall position and it gently drops off the bottom of the screen, same with
+   *  tuning too if needed"). Each is a thin ruler of the scale its rows were drawn at — the live scale's own step and
+   *  units (freqScale.ts), in the user's VFO colour with a dark shadow (stampColour — white if that clashes with the
+   *  palette; Stuart: "an opposite colour to the waterfall … i'd simply use orange like my VFO") — on a faint dark band, laid on the top of those rows: rowSeq − its row device rows down,
+   *  so it scrolls with them exactly. It fades in over a few rows and out over the bottom of the waterfall. An overlay
+   *  only: nothing in the ring is touched. A few fillRect/fillText calls a stamp; nothing at all when there are none. */
+  private _drawStamps(ctx: CanvasRenderingContext2D, W: number, top: number, wfH: number) {
+    const dpr = renderDpr();
+    const band = Math.round(15 * dpr);
+    const shown = stampsShown(this.stamps.stamps, 1, band);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, top, W, wfH); ctx.clip();
+    ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const hair = Math.max(1, Math.round(dpr * 0.75)), tickW = Math.max(1, Math.round(dpr)), tickH = Math.round(4 * dpr);
+    const live = new Set<number>();
+    const col = stampColour(this.vfoLiveColor || this.vfoColor, this.lut);
+    ctx.shadowColor = 'rgba(0,0,0,0.95)';
+    ctx.shadowOffsetX = 0; ctx.shadowOffsetY = Math.max(1, Math.round(dpr));
+    ctx.shadowBlur = NO_GLOW ? 0 : Math.round(2 * dpr);
+    for (const s of shown) {
+      const yr = this.rowSeq - s.frame;                 // device rows from the top of the waterfall to the stamp's rows
+      const a = stampAlpha(yr, band, wfH, this.rowSeq - s.born);
+      if (!(a > 0.01)) continue;
+      live.add(s.id);
+      let c = this.stampTickCache.get(s.id);
+      if (!c || c.W !== W || c.lo !== s.lo || c.span !== s.span || c.dpr !== dpr) {
+        const t = stampTicks(s.lo, s.span, W, (sp) => tickStep(sp, 8), fmtTick, 56 * dpr);
+        c = { W, lo: s.lo, span: s.span, dpr, ticks: t.map(k => ({ ...k, w: k.label ? ctx.measureText(k.label).width : 0 })) };
+        this.stampTickCache.set(s.id, c);
+      }
+      const y = top + yr;
+      ctx.globalAlpha = a;
+      ctx.shadowColor = 'transparent';
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, y, W, band);
+      ctx.shadowColor = 'rgba(0,0,0,0.95)';
+      ctx.fillStyle = rgba(col, 0.55);                 // the line where the scale changed
+      ctx.fillRect(0, y, W, hair);
+      for (const k of c.ticks) {
+        ctx.fillStyle = rgba(col, 0.85);
+        ctx.fillRect(Math.round(k.x - tickW / 2), y, tickW, tickH);
+        if (!k.label) continue;
+        // ★ kept whole at the edges (the live scale's end labels are cut; a stamp's would read as a glitch)
+        const x = Math.max(k.w / 2 + 2, Math.min(W - k.w / 2 - 2, k.x));
+        ctx.fillStyle = rgba(col, 0.95);
+        ctx.fillText(k.label, x, y + tickH + Math.round(dpr));
+      }
+    }
+    ctx.restore();
+    for (const id of this.stampTickCache.keys()) if (!live.has(id) && !this.stamps.stamps.some(s => s.id === id)) this.stampTickCache.delete(id);
   }
 
   /** Trace blended prev->cur by elapsed time. Runs at the display's refresh rate,
@@ -1559,6 +1648,25 @@ export class Waterfall {
 
   /** CSS pixel x -> Hz. `cssW` lets a per-frame caller (the pointer-frequency label) pass a cached
    *  width instead of reading clientWidth — a layout read — every frame; same arithmetic either way. */
+  /** ★★ THE FREQUENCY UNDER A POINT, BY THE ROW UNDER IT (Stuart, 2026-10-30, #57 — Gesiima: "I look back in the waterfall
+   *  to see where exactly the signal was, and then I tune onto that position"). On the waterfall, the row's OWN scale (the
+   *  view it was drawn at, through its map) — a trace drawn before a zoom or a tune tunes to that signal's frequency, not
+   *  to whatever the live scale has there now. Above the waterfall, or on a row with no geometry, the live scale (xToHz):
+   *  a row at the live scale gives exactly what xToHz does. */
+  xyToHz(cssX: number, cssY: number, cssW = this.canvas.clientWidth, cssH = this.canvas.clientHeight): number {
+    const H = this.canvas.height, wfH = this.wf.height, rows = this.xfA.length;
+    const y = cssY * H / Math.max(1, cssH), specH = H - wfH;
+    if (rows > 0 && wfH > 0 && y >= specH && y < H) {
+      const j = Math.floor(y - specH);
+      if (j < this.rowSeq) {
+        const r = (this.head + j) % rows;
+        const S = this.xfS[r], L = this.xfL[r];
+        if (S > 0 && L > 0) return L + S * (this.xfA[r] * (cssX / Math.max(1, cssW)) + this.xfB[r]);
+      }
+    }
+    return this.xToHz(cssX, cssW);
+  }
+
   xToHz(cssX: number, cssW = this.canvas.clientWidth): number {
     const lo = this.displayCenterHz() - this.spanHz / 2;
     const frac = cssX / Math.max(1, cssW);

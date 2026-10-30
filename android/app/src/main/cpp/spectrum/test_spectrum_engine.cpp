@@ -688,6 +688,51 @@ int main() {
         CHECK(kOut == 0, "a row outside its own capture got a layer (k %.4f) — it fills white", kOut);
         CHECK(kIn > 0, "a row inside the capture lost its layer");
     }
+    // ── ★★ SCALE STAMPS (wf_stamps.h; src/utils/wfStamps.ts is the reference, scripts/test_wf_stamps.ts its proof) — the
+    //    engine detects, the UI draws: a ×2 zoom in publishes ONE stamp of the OLD scale on the newest row drawn at it;
+    //    a rapid run of zoom steps publishes one more (the pre-run scale), never more than 3, never crowded.
+    {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 0; c.stampViewRows = 600; c.stampMinGapRows = 45;
+        e->setConfig(c); e->setView(7.1e6, 200e3);
+        std::vector<vibewf::WfStamp> got; uint32_t gens = 0; void* lastImg = nullptr;
+        auto feed = [&](double centre, double span, int frames) {
+            for (int f = 0; f < frames; f++) {
+                auto b = frame(1024, 512);
+                e->setView(centre, span);
+                e->pushFrame(b.data(), 1024, centre, span, centre);
+                run(e, 50);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    if (u.image) { if (lastImg) rlImage(lastImg); lastImg = u.image; }
+                    if (u.peakPath) rlPath(u.peakPath);
+                    if (u.stampsNew) { got = u.stamps; gens++; }
+                }
+            }
+        };
+        feed(7.1e6, 200e3, 60);
+        CHECK(got.empty(), "steady: no stamps (%zu)", got.size());
+        feed(7.1e6, 100e3, 60);
+        CHECK(got.size() == 1 && std::fabs(got[0].span - 200e3) < 1 && std::fabs(got[0].lo - 7.0e6) < 1,
+              "a zoom in: ONE stamp of the old scale (%zu, %.0f + %.0f)", got.size(), got.empty() ? 0 : got[0].lo, got.empty() ? 0 : got[0].span);
+        double span = 100e3;
+        for (int k = 0; k < 8; k++) { span /= 1.2; feed(7.1e6, span, 2); }   // a rapid run: a step every 100 ms
+        feed(7.1e6, span, 60);
+        CHECK(got.size() == 2 && std::fabs(got[0].span - 100e3) < 1, "a rapid zoom run: ONE more, the pre-run scale (%zu, newest %.0f)",
+              got.size(), got.empty() ? 0 : got[0].span);
+        CHECK(got.size() < 2 || got[0].frame - got[1].frame >= 45, "never crowded (%g rows apart)", got.size() < 2 ? 0 : got[0].frame - got[1].frame);
+        {   // ★★ a tap on a row drawn before the zoom reads THAT row's scale (rowGeom), the newest row the live one
+            double lo = 0, span = 0;
+            const bool okOld = e->rowGeom(got.back().frame, lo, span);
+            CHECK(okOld && std::fabs(span - 200e3) < 1 && std::fabs(lo - 7.0e6) < 1, "rowGeom on an old row: %d %.0f + %.0f", okOld, lo, span);
+            UiUpdate u; double head = 0; if (e->pollUi(u)) { head = u.head; if (u.image) rlImage(u.image); if (u.peakPath) rlPath(u.peakPath); }
+            (void)head;
+            CHECK(!e->rowGeom(-5, lo, span), "rowGeom of a row never written");
+        }
+        std::printf("  scale stamps: %zu published over %u updates\n", got.size(), gens);
+        if (lastImg) rlImage(lastImg);
+        delete e;
+    }
     std::printf("images made %d freed %d · paths made %d freed %d\n", gImagesMade, gImagesFreed, gPathsMade, gPathsFreed);
     CHECK(gImagesMade == gImagesFreed, "image leak: %d made, %d freed", gImagesMade, gImagesFreed);
     CHECK(gPathsMade == gPathsFreed, "path leak: %d made, %d freed", gPathsMade, gPathsFreed);

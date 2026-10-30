@@ -17,6 +17,7 @@
 #include "wf_row_clock.h"
 #include "wf_av_sync.h"
 #include "wf_zoom_fan.h"   // + wf_motion.h
+#include "wf_stamps.h"
 #include "spectrum_processor.h"
 #include <atomic>
 #include <cmath>
@@ -40,7 +41,11 @@ struct EngineConfig {
     bool   smoothTune = true;
     int    displayCapHz = 0;   // the FRAME RATE cap (0 = none): under 60 the row target divides it (wf_row_target.h rowTargetUnderCap)
     int    panelHz = 0;        // ★ the panel's maximum refresh (0 = unknown): the interaction boost's ceiling when there is no cap
-    int    targetRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
+    int    targetRows = 0;
+    // ★★ SCALE STAMPS (wf_stamps.h): the waterfall's rows on screen (WaterfallView shaderRows) and the fewest rows
+    //    between two stamps (three label heights) — 0 = unknown (an older JS): defaults.
+    int    stampViewRows = 0;
+    int    stampMinGapRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
 };
 
 /** What the UI thread picks up. Handles are OWNED by the receiver once taken (wrap them or release them). */
@@ -61,6 +66,10 @@ struct UiUpdate {
     uint32_t specGen = 0;          // changed → specTarget is new
     std::vector<float> specTarget; // the decimated trace target (specToSv)
     bool     specHidden = false;   // spectrum hidden → reset the trace paths, peak empty
+    // ★★ Scale stamps (wf_stamps.h): changed → `stamps` is the new list (newest first)
+    uint32_t stampGen = 0;
+    bool stampsNew = false;
+    std::vector<vibewf::WfStamp> stamps;
     // Peak
     uint32_t peakGen = 0;          // changed → peakPath is new (nullptr = the empty path)
     void*    peakPath = nullptr;
@@ -107,6 +116,9 @@ public:
     void setCovered(bool covered);
     /** dB window for the axis labels (2 dB hysteresis, as liveRange). Returns true when it changed since last read. */
     bool liveRange(int& dbMin, int& dbMax);
+    /** ★★ The scale row `frame` (absolute) is DISPLAYED at — Hz at the left edge and across — while it is in the ring; false
+     *  if not. A tap on an old row tunes by its own scale (Stuart, 2026-10-30, #57). Any thread (under mx_). */
+    bool rowGeom(double frame, double& lo, double& span);
 
     // ── From the UI thread ──
     /** Fill `out` with everything new since the last poll. Cheap when nothing is (returns false). */
@@ -117,6 +129,7 @@ public:
     static SpectrumEngine* makeForTest(MakeImage, MakePath, Release, Release, Clock);
     /** Host tests: the layer ring (null until the first SPWB) and the full-capture state's floor offset. */
     const vibewf::LayerRing* layerForTest() const { return fan_.layer.get(); }
+    const vibewf::StampState& stampsForTest() const { return stamps_; }
     double wideOffForTest() const { return wide_ ? wide_->off : NAN; }
 
 private:
@@ -211,6 +224,8 @@ private:
     vibewf::WideRow wideRow_;
     double detP50_ = NAN, placedLo_ = NAN, placedSpan_ = 0;
     std::vector<float> p50Scratch_;
+    vibewf::StampState stamps_;            // ★★ the scale stamps' detector (engine thread)
+    unsigned stampSeen_ = 0;
 
     // Outbox for the UI (under mx_)
     void* outImage_ = nullptr; double outHead_ = 0; bool texReady_ = false;
@@ -221,6 +236,9 @@ private:
     uint32_t scrollGen_ = 0; bool glide_ = false; double glideDur_ = 100;
     uint32_t specGen_ = 0; std::vector<float> outSpec_; bool specHidden_ = false;
     uint32_t peakGen_ = 0; void* outPeak_ = nullptr;
+    uint32_t stampGen_ = 0, uiStamp_ = 0; std::vector<vibewf::WfStamp> outStamps_;
+    struct RowGeo { double frame = -1, lo = 0, span = 0; };
+    std::vector<RowGeo> rowGeo_;                     // ★★ per slot, as displayed when written (mx_) — rowGeom
     uint64_t outVer_ = 0, uiSeenVer_ = 0;
     uint32_t uiSpec_ = 0;
     // liveRange (under mx_)

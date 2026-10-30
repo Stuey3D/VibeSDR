@@ -312,11 +312,14 @@ export interface FanState {
   /** ★ The rows/s the waterfall is running at (the fixed clock's rate, or the feed's in Native) — the ease is by TIME
    *  (zoomEaseRows / tuneEaseRows). The caller keeps it current; EASE_ROW_RATE until it does. */
   rowRate: number;
+  /** ★ The Hz the LAST row's jump moved the history by (0 = it was not a jump) — the scale stamps move with it
+   *  (wfStamps.ts stampJump). */
+  jumpHz: number;
 }
 export function newFanState(rows: number): FanState {
   return { lastLo: 0, lastSpan: 0, xfA: new Float64Array(rows).fill(1), xfB: new Float64Array(rows), disp: null, sinceZoom: 0,
            validFrom: 0, lo: null, hi: null, stepK: 1, stepC: 0, layer: null, dLo: NaN, dSpan: NaN, easeLeft: 0, eLo0: NaN, eSpan0: NaN, eJ: 0, eT: 0,
-           span: new Float64Array(rows), rowRate: EASE_ROW_RATE };
+           span: new Float64Array(rows), rowRate: EASE_ROW_RATE, jumpHz: 0 };
 }
 
 /** ★★★ HOW LONG A STEP EASES — BY TIME, AT THE RUNNING ROW RATE (Stuart, 2026-10-29: "do what you feel is the best for
@@ -484,10 +487,19 @@ export function fanRow(st: FanState, ring: Uint8Array, n: number, r: number, row
   if (st.layer) layerFillRow(st.layer, r, a, b, n, disp, at, lo);
 }
 
+/** ★★★ A JUMP KEEPS THE HISTORY AS DRAWN (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms so
+ *  it is not lost" — Gesiima: "I look back in the waterfall to see where exactly the signal was, and then I tune onto that
+ *  position and wait for the next transmission"). A move of a whole view or more used to translate every row into place
+ *  (rows slid off, the exposed edge went dark); now, like every zoom and tune, nothing is moved or blanked — the old rows
+ *  stay where they were drawn, a SCALE STAMP (wfStamps.ts) marks the boundary, and a tap on them tunes by THEIR scale
+ *  (WaterfallView tapHz). The re-map below is kept behind this switch, not deleted. The C++ twin: wf_zoom_fan.h. */
+export const JUMP_KEEPS_HISTORY = true;
+
 /** BEFORE a row placed at (lo, span) Hz goes in: a change of span fans the history. `frames` = rows written so far;
  *  `visible` = how many of the newest can be on screen. Returns true when it fanned. */
 export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: number, frames: number, visible: number,
                            lo: number, span: number): boolean {
+  st.jumpHz = 0;
   if (!(span > 0)) return false;
   if (!isFinite(lo)) {                         // centre unknown: assume it held (a zoom about the centre)
     if (!(st.lastSpan > 0)) return false;
@@ -526,13 +538,14 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
     st.eT = st.easeLeft = Math.max(cappedEaseRows(st.dLo, st.dSpan, lo, span, tuneEaseRows(moved / st.lastSpan, st.rowRate), st.rowRate),
                                    st.easeLeft > 0 ? st.easeLeft : 0);
   }
-  if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
+  if (!JUMP_KEEPS_HISTORY && frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
     const k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
     st.stepC += st.stepK * c; st.stepK *= k;   // x0 = c1 + k1·(c2 + k2·x2)
     st.easeLeft = 0;                           // a jump re-maps everything to the new view: no zoom left to ease
     // ★ Every row moves by the jump's Hz in its OWN scale (rows keep the zoom they were drawn at — a fraction of the
     //   live screen would move a row drawn at another zoom by the wrong amount).
     const dHz = lo - st.lastLo;
+    st.jumpHz = dHz;
     let zoomed = false;
     for (let r = 0; r < st.xfA.length; r++) {
       const sp = st.span[r] > 0 ? st.span[r] : span;

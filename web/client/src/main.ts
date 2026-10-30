@@ -39,6 +39,7 @@ import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { earTags, needleAlpha, decStartVfo, decTagFor } from './vfoAB';
 import { FrameClock, renderEvery } from './wfPacing';
+import { tickStep, fmtTick } from './freqScale';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
@@ -1365,7 +1366,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // with what's on screen, and letting it scroll out takes ~30s at 18 rows/s.
       const span = cfg.binCount * cfg.binBandwidth;
       const lo = cfg.centerFreq - span / 2, hi = cfg.centerFreq + span / 2;
-      if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
+      // ★★★ NO LONGER CLEARED (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms so it is not
+      //     lost"): the old rows stay as drawn, a scale stamp says what they were, and a tap on them tunes by their scale.
+      // if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
       // ★★ V12 THE HISTORY COVERS THE CAPTURE, not just the view (the full-capture layer, wfWide.ts): a PAN or a tune to
       //    anywhere inside what the radio was capturing still has history to show there, so only a move clear of the
       //    whole capture is a jump (Stuart: black "ONLY when absolutely necessary").
@@ -3471,25 +3474,7 @@ function renderFrame(frameTs: number) {
 
 // ── Frequency scale ──────────────────────────────────────────────────────────
 
-/** Pick a tick step that yields ~6-10 labels across the span, from a 1/2/5 ladder. */
-function tickStep(spanHz: number, targetTicks: number): number {
-  const raw = spanHz / targetTicks;
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-  for (const m of [1, 2, 5, 10]) if (raw <= mag * m) return mag * m;
-  return mag * 10;
-}
-
-/** Label a frequency at a resolution matched to the tick step — the units must
- *  SWITCH with the span, not just the decimal places, or a wide span overflows
- *  the label and a narrow one shows nothing changing. */
-function fmtTick(hz: number, step: number): string {
-  if (step >= 1e6) return (hz / 1e6).toFixed(0) + 'M';
-  if (step >= 1e5) return (hz / 1e6).toFixed(1) + 'M';
-  if (step >= 1e4) return (hz / 1e6).toFixed(2) + 'M';
-  if (step >= 1e3) return (hz / 1e6).toFixed(3) + 'M';
-  if (step >= 100) return (hz / 1e3).toFixed(1) + 'k';
-  return (hz / 1e3).toFixed(2) + 'k';
-}
+// tickStep / fmtTick live in freqScale.ts — shared with the waterfall's scale stamps.
 
 function drawScale() {
   const c = $<HTMLCanvasElement>('scale');
@@ -18861,7 +18846,8 @@ function initWaterfallInput() {
         const x = e.clientX - rect.left, ox = wf.hzToX(spec.abOther.frequency, c.clientWidth);
         if (Math.abs(x - ox) <= 10) { spec.swapVfo(); return; }
       }
-      const hz = snapToStep(wf.xToHz(e.clientX - rect.left), step);
+      // ★★ by the ROW under the tap (wf.xyToHz — Stuart, 2026-10-30, #57): an old trace tunes to ITS frequency
+      const hz = snapToStep(wf.xyToHz(e.clientX - rect.left, e.clientY - rect.top), step);
       airDesig = null;
       spec.tune(clampTune(hz));
       syncStep();
@@ -18961,7 +18947,7 @@ function initPointerFreq(c: HTMLCanvasElement) {
     const x = px - rect.left, y = py - rect.top;
     if (x < 0 || y < 0 || x > W || y > H) { setShown(false); return; }
     if (measure && shown) { measure = false; lw = el.offsetWidth; lh = el.offsetHeight; }
-    const t = clickTarget(wf.xToHz(x, cw));
+    const t = clickTarget(wf.xyToHz(x, y, cw, H));   // ★★ the row under the pointer's own scale (#57)
     // ── then writes ──
     if (t.hz !== shownHz || freqUnit !== shownUnit) {
       shownHz = t.hz; shownUnit = freqUnit;
