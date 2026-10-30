@@ -609,9 +609,16 @@ export function noteStatus(id: string, p: Partial<Pick<DualSide, 'freqHz' | 'mod
  *  already does. ★ Except a radio unlocked with its own PIN (`pinned`): that proof cannot ride along, and the door asks.
  */
 export function returningSide(myId: string | null, params: { dualSide?: unknown }): DualSide | null {
-  if (!myId || params.dualSide !== myId || state.phase === 'off') return null;
+  if (!myId || params.dualSide !== myId) return null;
+  // ★★ The server list's "return to …" banner (returnToSolo) ends the pairing BEFORE the screen comes up, so the side is
+  //   no longer in the state — it is handed over in `returning` (Stuart, 2026-10-30: back to the Pi 2 from the
+  //   directory's banner went through its front door again, "like it did before we fixed it" for the card's swap).
+  if (returning?.id === myId) { const r = returning; returning = null; return r; }
+  if (state.phase === 'off') return null;
   return state.sides.find((x) => x.id === myId && !x.ended) ?? null;
 }
+/** The side returnToSolo just brought back — read once by its screen (returningSide). */
+let returning: DualSide | null = null;
 
 /** ★★ The joining screen's radio is the one the FIRST side is already playing (same server, same radio)? */
 export function isFirstRadio(myId: string | null, params: DualRouteLike & { baseUrl?: string }, radioKey: string): boolean {
@@ -711,6 +718,7 @@ export function soloSide(): DualSide | null {
 export function returnToSolo(): Record<string, unknown> | null {
   const s = soloSide();
   if (!s) return null;
+  returning = s;
   set({ ...(DUAL_OFF as DualCore<DualSide>), output: state.output, balance: state.balance });
   carryMute(s);
   // ★ dualSide carries the SESSION: the screen comes back as the same listener and its player ADOPTS the pump that is
