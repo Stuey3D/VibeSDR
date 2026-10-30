@@ -11844,9 +11844,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         return u.startsWith('https://') ? u : null;
       } catch { return null; }
     };
-    askServer().then((srv) => srv ?? resolveStationLogo({
-      pi: liveStation.pi, name, iso: iso || undefined, freqHz: status.frequency || undefined,
-    })).then((url) => {
+    /* ★★ V12: the server's answer goes THROUGH the logo store (logoStore.ts) as the identity tier, so its bytes are kept
+     *  on disk and drawn at once next time — it used to be drawn from the network on every tune, and a held logo is
+     *  asked about at most daily (Stuart, 2026-10-30: "cache the logos and only change them when a new one is published"). */
+    resolveStationLogo({
+      pi: liveStation.pi, name, iso: iso || undefined, freqHz: status.frequency || undefined, server: askServer,
+    }).then((url) => {
       /* ★★★ A MISS MUST NOT ERASE A LOGO WE ALREADY HAVE (2026-09-22) — the same fault as the web
        *  client's. The key contains the NAME, and a station that marquees its PS changes that every
        *  second, so every rotation that resolved nothing blanked the picture the last one found
