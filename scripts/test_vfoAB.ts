@@ -39,12 +39,16 @@ import { fileURLToPath } from 'node:url';
  *     left on A, nothing without a B or with B selected; and the screen's wiring: a decoder / spots / Band start on the
  *     selected VFO, the box tunes the decoding VFO (abTuneVfo), Band's arrows are its VFO's, both needles and both
  *     squelch rows carry DEC.
+ *   • ★★★ THE A ⟷ B BALANCE (Stuart, 2026-10-30): hwinfo `watchBal` (or `bal` in the state) is the capability — an older
+ *     server gets nothing sent and no row; msgBalance clamped and rounded; it rides along with B's `on`; sent only while
+ *     B is on; adopted from the server with an adopted B; the rule is dualMix.ts's, imported (never re-written); the
+ *     Audio sheet draws the row under the two squelch rows only when the server takes it.
  *
  * Run: node --no-warnings scripts/test_vfoAB.ts   (silent: no audio anywhere)
  */
 import {
   parseWatch, watchOffered, watchMaxOf, vfoB, msgOn, msgOff, msgAim, msgSquelch, msgStereo, msgMonoOut, EarOrder, VfoABCore,
-  decStartVfo, decTagFor, abOfferNow,
+  decStartVfo, decTagFor, abOfferNow, watchBalOffered, msgBalance,
   SWAP_HZ, SAME_HZ, otherVfo, vfoATune, DoorSeq, RESYNC_MS, edgesForWidth, autoVfoBColour, vfoBNeedle, VFO_B_AUTO,
   type TuneStatus,
 } from '../src/services/vfoAB.ts';
@@ -466,6 +470,55 @@ console.log('── two servers OR VFO A/B, never both (Stuart, #57) ──');
   ok(JSON.stringify(msgOff()) === JSON.stringify({ type: 'watch', id: 1, off: true }), 'B-off is the ordinary watch off');
   ok(/const start = pairingStart\(abOn\);\s*if \(start\.closeB\) onVfoAB\(false\);[\s\S]{0,400}?listenSecond\(/.test(scr),
      '"Listen to a 2nd server" closes VFO B BEFORE the pairing begins');
+}
+console.log('── the A ⟷ B balance (Stuart, 2026-10-30) ──');
+{
+  ok(watchBalOffered({ type: 'hwinfo', watch: 1, watchBal: true }) && !watchBalOffered({ type: 'hwinfo', watch: 1 })
+     && !watchBalOffered(null) && !watchBalOffered({ watchBal: 'yes' }), 'hwinfo watchBal: true only when the server says exactly so');
+  ok(JSON.stringify(msgBalance(0.5)) === JSON.stringify({ type: 'watch', balance: 0.5 }), 'msgBalance: {type:watch, balance}');
+  ok(msgBalance(7).balance === 1 && msgBalance(-3).balance === -1 && msgBalance(NaN).balance === 0 && msgBalance(0.123456).balance === 0.12,
+     '…clamped to −1…+1, NaN even, two places');
+  ok(parseWatch({ type: 'watch', max: 1, chans: [] })!.bal === null && parseWatch({ type: 'watch', max: 1, bal: -0.4, chans: [] })!.bal === -0.4
+     && parseWatch({ type: 'watch', max: 1, bal: 9, chans: [] })!.bal === 1, 'the state\'s bal: null from an older server, clamped');
+  let t = 1000;
+  const status: TuneStatus = { frequency: 7074000, mode: 'usb', bandwidthLow: 100, bandwidthHigh: 2800 };
+  const sent: Record<string, unknown>[] = [];
+  const ab = new VfoABCore(() => status, (m) => sent.push(m), () => {}, () => t);
+  ab.setOffered(1);
+  // AN OLDER SERVER: no watchBal — nothing is sent, ever, and the screen draws no row (balOffered false)
+  ab.setBalance(0.6);
+  ok(sent.length === 0 && !ab.info().balOffered && ab.info().balance === 0.6, 'older server, B off: held, nothing sent, not offered');
+  ab.setOn(true);
+  ok(sent.at(-1)!.on === true && !('balance' in sent.at(-1)!), 'older server: B\'s `on` carries no balance');
+  sent.length = 0; ab.setBalance(-0.3);
+  ok(sent.length === 0, 'older server, B on: still nothing sent (no control that does nothing)');
+  ab.setOn(false); sent.length = 0;
+  // A SERVER THAT TAKES IT
+  ok(ab.setBalOffered(true) && !ab.setBalOffered(true) && ab.info().balOffered, 'watchBal: offered (a repeat is not a change)');
+  ab.setBalance(0.25);
+  ok(sent.length === 0, 'B off: held, not sent');
+  t += 5000; ab.setOn(true);
+  ok(sent.at(-1)!.on === true && sent.at(-1)!.balance === 0.25, 'B on: the balance rides along with `on` (first block mixed right)');
+  sent.length = 0; ab.setBalance(-1);
+  ok(sent.length === 1 && sent[0].type === 'watch' && sent[0].balance === -1 && !('id' in sent[0]), 'B on: a change goes out as {type:watch, balance}');
+  // a state carrying `bal` is the capability too; adoption takes the server's word
+  const ab2 = new VfoABCore(() => status, () => {}, () => {}, () => t);
+  ab2.setOffered(1);
+  ab2.onWatch({ type: 'watch', max: 1, bal: 0.4, chans: [{ id: 1, freq: 7080000, mode: 'usb', bw: 2700 }] });
+  ok(ab2.on && ab2.info().balOffered && ab2.info().balance === 0.4, 'a state with `bal` = offered; an adopted B keeps the server\'s balance');
+  // ONE RULE: the app imports dualMix.ts's, the server mirrors it (vibe_watch.h) — never a second copy in TS
+  const src = (f: string) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
+  const vab = src('../src/services/vfoAB.ts'), sheet = src('../src/components/AudioSheet.tsx'), scr = src('../src/screens/SDRScreen.tsx');
+  const vw = src('../android/app/src/main/cpp/vibe_watch.h'), shim = src('../android/app/src/main/cpp/local_sdr_shim.cpp');
+  ok(/import \{ clampBalance \} from '\.\/dualMix\.ts'/.test(vab) && !/Math\.cos/.test(vab), 'vfoAB.ts imports the two-server rule, writes no taper of its own');
+  ok(/kBalanceMidDead = 0\.04f/.test(vw) && /kBalanceEndSnap = 0\.96f/.test(vw) && /BALANCE_MID_DEAD = 0\.04/.test(src('../src/services/dualMix.ts'))
+     && /BALANCE_END_SNAP = 0\.96/.test(src('../src/services/dualMix.ts')), 'the server\'s dead zone and end snap are dualMix.ts\'s numbers');
+  ok(/"watchBal\\":true/.test(shim) || /\\"watchBal\\":true/.test(shim), 'the server advertises watchBal in hwinfo');
+  ok(/w->mixer\.setBalance\(w->balance\)/.test(shim), 'the server applies it in the A/B mix');
+  ok(/balance: vfoBalance, onBalance: abInfo\?\.balOffered \? onVfoBalance : undefined/.test(scr), 'the screen gives the row only where the server takes it');
+  const sq = sheet.indexOf('<VfoSqlLabel vfo="B"'), row = sheet.indexOf('<VfoBalanceRow'), stereoRow = sheet.indexOf('VFO STEREO</Text>');
+  ok(sq > 0 && row > sq && row < stereoRow && /\{vfoRows\.onBalance && \(/.test(sheet), 'the BALANCE row sits right under VFO B\'s squelch row, drawn only with onBalance');
+  ok(/VFO_BALANCE_KEY/.test(scr) && /c\?\.abSetBalance\?\.\(vfoBalanceRef\.current\)/.test(scr), 'remembered per device; re-sent with B on and on every hwinfo');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -374,6 +374,8 @@ const NFM_VOICE_KEY = 'lsv_nfm_voice';
 const BINAURAL_KEY = 'lsv_binaural';
 /** ★★ V12 VFO A/B's STEREO switch (lower VFO left / higher right) — remembered per device like binaural; absent = ON. */
 const VFO_STEREO_KEY = 'lsv_vfo_stereo';
+/** ★★★ The VFO A ⟷ B BALANCE, remembered per device like VFO STEREO (−1 all A … 0 even … +1 all B). */
+const VFO_BALANCE_KEY = 'lsv_vfo_balance';
 const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
 
 /** The server's health levels arrive as plain numbers off the wire (ServerHealth) and the pill's own
@@ -3212,7 +3214,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   const abClient = useCallback(() => client.current as unknown as {
     abSetOn?: (on: boolean) => boolean; abSelect?: (v: VfoId) => void; abSetStereo?: (on: boolean) => void;
-    abSetMonoOut?: (on: boolean) => void; abInfo?: () => VfoABInfo;
+    abSetMonoOut?: (on: boolean) => void; abInfo?: () => VfoABInfo; abSetBalance?: (b: number) => void;
     // ★★ Round 3: a named VFO's squelch, its mute, and its own level (VibeServerWsClient)
     setSquelchVfo?: (v: VfoId, db: number) => void; abSetMute?: (v: VfoId, on: boolean) => void;
     channelLevelVfoDb?: (v: VfoId, maxAgeMs?: number) => number } | null, []);
@@ -3221,10 +3223,34 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem(VFO_STEREO_KEY, on ? '1' : '0').catch(() => {});
     abClient()?.abSetStereo?.(on);
   }, [abClient]);
+  /* ★★★ THE A ⟷ B BALANCE (Stuart, 2026-10-30: "we need a way to balance the A/B on the same server in the same way as
+   *  we do the dual server audio to compensate for a louder broadcast station and an SSB contact"). The two-server rule
+   *  (dualMix.ts balanceGains), applied by the SERVER to its A/B mix (vibe_watch.h PanMixer::setBalance) — a level before
+   *  any stereo or mono placement, so it works with VFO STEREO off and on a mono output too. Remembered per device; held
+   *  by the client and sent with B's `on`, re-sent on every hwinfo (a reconnect). The row is in the Audio sheet, right
+   *  under the two VFO squelch rows, only on a server that takes it (hwinfo watchBal). */
+  const [vfoBalance, setVfoBalanceState] = useState(0);
+  const vfoBalanceRef = useRef(0);
+  useEffect(() => {
+    AsyncStorage.getItem(VFO_BALANCE_KEY).then((v) => {
+      const b = Number(v);
+      if (v != null && Number.isFinite(b) && b !== 0) {
+        vfoBalanceRef.current = Math.max(-1, Math.min(1, b)); setVfoBalanceState(vfoBalanceRef.current);
+        abClient()?.abSetBalance?.(vfoBalanceRef.current);
+      }
+    }).catch(() => {});
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const onVfoBalance = useCallback((b: number) => {
+    const v = Math.round(Math.max(-1, Math.min(1, Number.isFinite(b) ? b : 0)) * 100) / 100;
+    vfoBalanceRef.current = v; setVfoBalanceState(v);
+    AsyncStorage.setItem(VFO_BALANCE_KEY, String(v)).catch(() => {});
+    abClient()?.abSetBalance?.(v);
+  }, [abClient]);
   /** The tuning menu's toggle. */
   const onVfoAB = useCallback((on: boolean) => {
     const c = abClient();
     c?.abSetStereo?.(vfoStereoRef.current);
+    c?.abSetBalance?.(vfoBalanceRef.current);   // ★★★ rides along with B's `on` (VfoABCore msgOn)
     // ★ TODO(native): no route channel count reaches JS today (VibePowerModule logs the route, never emits it), so the
     //   app cannot yet tell a mono speaker from headphones — the hint in the audio menu says what a mono output does,
     //   and abSetMonoOut(true) is the hook a future `VibeOutputMono` event calls.
@@ -6658,7 +6684,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       onWatchOffered: (n: number) => {
         if (destroyed.current) return;
         setAbOffered(n);
-        if (n > 0) (client.current as unknown as { abSetStereo?: (on: boolean) => void } | null)?.abSetStereo?.(vfoStereoRef.current);
+        if (n > 0) {
+          const c = client.current as unknown as { abSetStereo?: (on: boolean) => void; abSetBalance?: (b: number) => void } | null;
+          c?.abSetStereo?.(vfoStereoRef.current);
+          c?.abSetBalance?.(vfoBalanceRef.current);   // ★★★ the balance too (sent only while B is on, to a server that takes it)
+        }
       },
       onWatch: (info: VfoABInfo) => { if (!destroyed.current) onWatchInfo(info); },
       /** ★ The server's answer to a raw IQ request: the address or the pairing code, or why not. */
@@ -14711,6 +14741,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           muteA: !!abInfo?.muteA, muteB: !!abInfo?.muteB, onMute: onAbMute,
           decA: !!abDecTag('A'), decB: !!abDecTag('B'),
           onDragB: onSquelchDragB, autoB: sqlBAuto, onAutoB: setSquelchAutoB, autoOkB: sqlAutoOk,
+          // ★★★ the A ⟷ B balance — only on a server that takes it (hwinfo watchBal): never a dead row
+          balance: vfoBalance, onBalance: abInfo?.balOffered ? onVfoBalance : undefined,
         } : undefined}
         deemph={hwDeemph}   onDeemph={icom ? undefined : askWrap(onHwDeemph)}   /* ★ an Icom has no WFM chain to de-emphasise */
         stereo={hwStereo}   onStereo={icom ? undefined : askWrap(onHwStereo)}
