@@ -33,6 +33,7 @@ const Vibe = NativeModules.VibePowerModule as {
 } | undefined;
 
 import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
+import { ExtAudioOut } from './extAudioOut';   // ★ V12 two servers: main player or second voice
 import { cleanText } from '../utils/safeText';
 import { receiverPlaceLine } from './grid';
 import { owrxWsUrl, owrxHttpBase, owrxCloseReason } from '../utils/serverUrl';
@@ -256,7 +257,9 @@ export class OwrxAdapter implements SDRBackend {
   private lonSent = false;
   private receiverPos: { lat: number; lon: number } | null = null;      // receiver longitude emitted once
   private dspStarted = false;     // dspcontrol start re-asserted after demod (web-client order)
-  private audioStarted = false;
+  /** ★★ V12 two servers: where the decoded PCM goes — the main player (the old path, call for call) or the second voice
+   *  (src/services/extAudioOut.ts). Set by dualServer, never by this adapter. */
+  readonly audioOut = new ExtAudioOut();
   private audioDec = new OwrxAudioDecoder();    // type-2 (output_rate, 12k)
   private hdAudioDec = new OwrxAudioDecoder();   // type-4 (hd_output_rate, 48k — WFM)
 
@@ -424,10 +427,14 @@ export class OwrxAdapter implements SDRBackend {
   destroy(): void {
     this.started = false;
     this.stopStatusPoll();
-    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; }
+    this.audioOut.stop();
     const ws = this.ws; this.ws = null;
     if (ws) { try { ws.onclose = null; ws.close(); } catch {} }
   }
+
+  /** ★★ V12 two servers: a screen coming back ADOPTS this adapter (dualServer.parkBackend / takeParked) — its session,
+   *  socket and audio carry on, and from here on it reports to the new screen. */
+  rebindCallbacks(cb: BackendCallbacks): void { this.cb = cb; }
 
   /** Pause-disconnect: close the WS to free the server slot, but DON'T tear down
    *  the native audio session — the native engine keeps showing the paused /
@@ -1004,7 +1011,7 @@ export class OwrxAdapter implements SDRBackend {
     // the PCM rate by that factor and let the native resampler stretch it back to
     // correct speed + pitch. Only DAB (type-4) is scaled; WFM (also type-4) isn't.
     const playRate = String(this.mode) === 'dab' ? Math.round(rate * this.dabRateScale) : rate;
-    if (!this.audioStarted) { Vibe?.startExternalAudio?.(playRate, 'release'); this.audioStarted = true; }
+    if (!this.audioOut.isStarted()) this.audioOut.start(playRate, 'release');
     let pcm: Int16Array;
     if (this.cfg?.audioCompression === 'adpcm') {
       pcm = dec.decode(payload);
@@ -1015,7 +1022,7 @@ export class OwrxAdapter implements SDRBackend {
       for (let i = 0; i < pcm.length; i++) pcm[i] = dv.getInt16(i * 2, true);
     }
     if (!pcm.length) return;
-    Vibe?.pushExternalPcm?.(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), playRate, 1);
+    this.audioOut.push(bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)), playRate, 1);
   }
 
   /** DAB speed correction factor (1 = off). e.g. 0.6667 plays a 32 kHz-as-48 kHz
@@ -1201,7 +1208,7 @@ export class OwrxAdapter implements SDRBackend {
     for (const [re, v] of OwrxAdapter.BURST_MS) if (re.test(mod)) { ms = v; break; }
     if (ms === this.lastBurstMs) return;
     this.lastBurstMs = ms;
-    Vibe?.setAudioBurstDepth?.(ms);
+    this.audioOut.burst(ms);
   }
 
   /** DAB: pick a programme within the tuned ensemble (re-sends the demod). */

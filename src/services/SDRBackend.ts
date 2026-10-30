@@ -186,6 +186,12 @@ export interface SDRBackend {
   /** Pause-disconnect: close the connection but keep the native audio session
    *  (lock-screen card) intact. OWRX/Kiwi only; UberSDR uses pauseSpectrum. */
   disconnectSocket?(): void;
+  /** ★★ V12 two servers (Kiwi / Web-888 / OpenWebRX — the adapters that decode their own audio): a screen coming back to
+   *  a server that never stopped playing ADOPTS its adapter — the same sockets, the same session — and this points the
+   *  adapter's reports at the new screen. Absent = the backend is rebuilt as ever. */
+  rebindCallbacks?(cb: BackendCallbacks): void;
+  /** ★★ V12 two servers: where an adapter that decodes its own audio sends it (src/services/extAudioOut.ts). */
+  readonly audioOut?: import('./extAudioOut').ExtAudioOut;
 
   /** recenter:true forces a one-shot view recentre even when unlocked (discrete
    *  jumps: freq modal, skip, Siri). Omitted/false = respect the follow flag. */

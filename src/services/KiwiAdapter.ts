@@ -63,6 +63,7 @@ const WF_BINS = 1024;              // Kiwi waterfall is a fixed 1024-bin row
 
 import { receiverPlaceLine } from './grid';
 import { bytesToBase64 } from './base64';   // ★ the shared pair-table encoder
+import { ExtAudioOut } from './extAudioOut';   // ★ V12 two servers: main player or second voice
 import { toWsUrl } from '../utils/serverUrl';
 
 // SND flags (audio.js)
@@ -192,7 +193,9 @@ export class KiwiAdapter implements SDRBackend {
   private adoptedDefaults = false;
   private followVfo = true;               // VFO lock (true = view follows VFO)
 
-  private audioStarted = false;
+  /** ★★ V12 two servers: where the decoded PCM goes — the main player (the old path, call for call) or the second voice
+   *  (src/services/extAudioOut.ts). Set by dualServer, never by this adapter. */
+  readonly audioOut = new ExtAudioOut();
   private lastDecoderFreq = -1;          // last dial Hz pushed to the FT8 sidecar
   private audioDec = new ImaAdpcmDecoder('kiwi', -32768, 32767);
   private started = false;
@@ -840,9 +843,9 @@ export class KiwiAdapter implements SDRBackend {
     if (!pcm.length) return;
 
     const rate = Math.round(this.trueAudioRate);
-    if (!this.audioStarted) { Vibe?.startExternalAudio?.(rate, 'reconnect'); this.audioStarted = true; }
+    if (!this.audioOut.isStarted()) this.audioOut.start(rate, 'reconnect');
     const b64 = bytesToBase64(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength));
-    Vibe?.pushExternalPcm?.(b64, rate, 1);
+    this.audioOut.push(b64, rate, 1);
     // Tell the sidecar the dial frequency (when it changes) so FT8 spots get the
     // right RF freq + band — otherwise they sit at the 100 MHz default (no band
     // colour, wrong tune-on-tap). Pushed here so the sidecar is already running.
@@ -1105,10 +1108,14 @@ export class KiwiAdapter implements SDRBackend {
     // The handshake timeout is a field now (the dialect retry re-arms it), so it has to be
     // cleared here or a torn-down adapter still rejects its dead promise 12 s later.
     if (this.handshakeTimer) { clearTimeout(this.handshakeTimer); this.handshakeTimer = null; }
-    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; this.lastDecoderFreq = -1; }
+    if (this.audioOut.isStarted()) { this.audioOut.stop(); this.lastDecoderFreq = -1; }
     this.closeSocket('sndWs');
     this.closeSocket('wfWs');
   }
+
+  /** ★★ V12 two servers: a screen coming back ADOPTS this adapter (dualServer.parkBackend / takeParked) — its session,
+   *  sockets and audio carry on, and from here on it reports to the new screen. */
+  rebindCallbacks(cb: BackendCallbacks): void { this.cb = cb; }
 
   /** Pause-disconnect: drop the sockets but keep the native audio session. */
   disconnectSocket(): void {
@@ -1157,7 +1164,7 @@ export class KiwiAdapter implements SDRBackend {
     this.stopKeepalive();
     this.closeSocket('sndWs');
     this.closeSocket('wfWs');
-    if (this.audioStarted) { Vibe?.stopExternalAudio?.(); this.audioStarted = false; this.lastDecoderFreq = -1; }
+    if (this.audioOut.isStarted()) { this.audioOut.stop(); this.lastDecoderFreq = -1; }
     this.cb.onLink?.(0);
     this.cb.onDisconnect();
     if (!this.everConnected) {
