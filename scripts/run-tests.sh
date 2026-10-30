@@ -698,6 +698,10 @@ if node --no-warnings scripts/test_dab_stereo.ts; then pass=$((pass+1)); else fa
 # ★★★ THE DAB RECEPTION METER (2026-10-06): three bars + a sentence in place of the signal bar, judged on ~5 s
 #     of the server's counters with hysteresis; thresholds held to the on-air cases (app + web share it).
 if node --no-warnings scripts/test_dab_quality.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE STATION-LOGO CACHE (V12, 2026-10-30): air > RadioDNS > name, a failed fetch retried 1 min / 5 min / 30 min /
+#     daily (never a permanent blank), replaced only when the published logo changed, LRU-bounded (app + web share it).
+if node --no-warnings scripts/test_logo_cache.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_logo_cache_web.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ An unchanged DAB service list keeps its array and objects across the once-a-second reports.
 if node --no-warnings scripts/test_dab_share_services.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ DAB tuning keys: a burst of presses is ONE block change on the server (the one stopped on), and

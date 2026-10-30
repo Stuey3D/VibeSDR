@@ -34,6 +34,8 @@ import { receiverIso } from '../services/rdsCountry';
 import { withReadAuth } from '../services/vibeAuth';
 import { dabSlideQuery } from '../services/dabSlide';
 import { limiter } from '../utils/limit';
+import { dabLogoKey } from '../services/logoCachePolicy';
+import { forgetShownLogo, logoDue, offerAirLogo, peekLogo, peekLogoEntry, resolveLogo, useLogoStoreVersion } from '../services/logoStore';
 import { cuPct, dabCuSegments } from '../utils/dabCapacity';
 import { dabScanRows, dabScanLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle, type DabScanState } from '../services/dabBandScan';
 
@@ -169,29 +171,36 @@ const ImpulseResponse = React.memo(function ImpulseResponse({ ir, width, height 
  *      the broadcaster's own logo — but for a small station that publishes neither it is the only
  *      picture of that station in existence.
  *
- * ★★ ASKED ONCE PER SERVICE, EVER. The `dab` message arrives about once a second and this list is
- *    re-rendered with it; a lookup per render would be a request per second per service. The cache
- *    is claimed BEFORE the fetch (the same rule primeStationLogo follows in the web client) or the
- *    first second fires one lookup per frame.
- * ★ A miss is remembered as null, so a station with no artwork is not asked about for ever.
+ * ★★★ REMEMBERED ON THE DEVICE, AND A MISS IS NO LONGER FOR EVER (V12, Stuart, 2026-10-30: "cache the logos and only
+ *     change them when a new one is published"). This used to claim a service with `null` BEFORE its fetch and never ask
+ *     again, so ONE fetch lost in a Cloudflare quick-tunnel stall blanked that logo for the whole session (the Sony TV
+ *     server, while RadioDNS was answering perfectly). Now every answer goes through the logo store (logoStore.ts, the
+ *     policy in logoCachePolicy.ts, one copy with the web client): the BYTES are kept on disk keyed on ECC/EId/SId and
+ *     drawn at once next time, offline and from any server; a held logo is re-checked at most daily and REPLACED ONLY
+ *     WHEN THE PICTURE CHANGED (md5); a miss is retried 1 min, 5 min, 30 min, then daily.
+ * ★★ THE AIR LOGO IS KEPT TOO ("that needs to be cached too"), and still wins: while the multiplex carries it the store
+ *    downloads it (once a session, compared by md5), and from then on it outranks RadioDNS and the name search — a new
+ *    one from the ensemble replaces it; nothing lower ever does.
+ * ★ Safe per render (the list redraws every second): the store refuses a key that is being asked, is backing off, or was
+ *   checked within the day — the job the `null` claim used to do.
  */
-const logoCache = new Map<string, string | null>();
-
 function useServiceLogo(base: string, d: DabState | null,
                         sv: DabState['services'][number] | undefined, readAuth = ''): string | null {
+  useLogoStoreVersion();                             // re-render when a logo arrives or changes
   const ecc = sv?.ecc ?? d?.ecc ?? -1;
-  const key = `${ecc}|${d?.eid ?? 0}|${sv?.sid ?? 0}`;
-  const [, bump] = React.useState(0);
   if (!sv || !d) return null;
-  if (sv.logoAir) return `${base}/vibeserver/dablogoair?sid=${sv.sid}`;
-  const known = logoCache.get(key);
-  /* ★★★ DO NOT CLAIM A SERVICE WE CANNOT YET ASK ABOUT. The claim exists to stop a request per
-   *  render, and it must not outlive its purpose: this used to be set BEFORE testing `ecc`/`eid`,
-   *  so a service rendered in the seconds before the ensemble identity had decoded was cached as
-   *  "no logo" permanently and never asked about again. The label is enough for the name search
-   *  below, so wait until there is one. */
-  if (known === undefined && (sv.label || (ecc >= 0 && d.eid))) {
-    logoCache.set(key, null);                       // claim it BEFORE the fetch — see above
+  /* ★★★ DO NOT FILE A SERVICE UNDER AN IDENTITY WE DO NOT YET HAVE. A service rendered in the seconds before the
+   *  ensemble identity has decoded has no EId; keyed then, its answer would sit under the wrong key on disk. The
+   *  slideshow (below) covers those seconds. */
+  const key = d.eid ? dabLogoKey(ecc, d.eid, sv.sid) : '';
+  const held = peekLogoEntry(key);
+  if (sv.logoAir) {
+    const air = `${base}/vibeserver/dablogoair?sid=${sv.sid}`;
+    if (key) offerAirLogo(key, air);
+    // ★ OFF THE AIR FIRST, as before — from the disk when the store already holds this multiplex's picture.
+    return held?.src === 'air' ? held.show : air;
+  }
+  if (key && logoDue(key)) {
     /* ★★★ THREE SOURCES, NOT TWO — the web client's fourth fallback was missing here, and it is the
      *  one that fills most of the gaps. `dabLogoLookup` in main.ts ends with a NAME SEARCH when
      *  RadioDNS has nothing: "provisional, but far better than a blank tile". Without it a station
@@ -202,30 +211,37 @@ function useServiceLogo(base: string, d: DabState | null,
      * ★ Identity first, name second, exactly as the browser ranks them: RadioDNS is the
      *   broadcaster's own file for THIS service, a name match is a guess that is usually right. */
     const hex = (n: number, w: number) => n.toString(16).toUpperCase().padStart(w, '0');
-    const viaName = async (): Promise<string | null> => {
-      const nm = tidyStationName(sv.label || '');
-      if (!nm) return null;
-      try { return await lookupStationLogo(nm, undefined, receiverIso() || undefined); }
-      catch { return null; }
-    };
-    const viaIdentity = async (): Promise<string | null> => {
-      if (!(ecc >= 0 && d.eid)) return null;
-      const q = `ecc=${hex(ecc, 2)}&eid=${hex(d.eid, 4)}&sid=${hex(sv.sid, 4)}&scids=${Math.max(0, sv.scids ?? 0)}`;
-      try {
-        const r = await dabLogoQueue(() => fetch(`${base}/vibeserver/dablogo?${q}`));
-        if (!r.ok) return null;
-        const j: { logo?: string } | null = await r.json();
-        const u = j && typeof j.logo === 'string' && j.logo ? j.logo : '';
-        return u ? (u.startsWith('http') ? u : `${base}${u}`) : null;
-      } catch { return null; }
-    };
-    void (async () => {
-      const u = (await viaIdentity()) ?? (await viaName());
-      if (!u) return;
-      logoCache.set(key, u);
-      bump(x => x + 1);                              // it arrived after the render that asked
-    })();
+    const label = sv.label || '';
+    const sid = sv.sid, scids = sv.scids ?? 0, eid = d.eid;
+    void resolveLogo(key, [
+      { src: 'radiodns', run: async () => {
+        if (!(ecc >= 0 && eid)) return null;
+        const q = `ecc=${hex(ecc, 2)}&eid=${hex(eid, 4)}&sid=${hex(sid, 4)}&scids=${Math.max(0, scids)}`;
+        /* ★★ A DEADLINE. A stalled tunnel accepted the request and said nothing; the promise never settled, and a key
+         *  that is still being asked is a key that is never asked again. */
+        const ac = new AbortController();
+        const t = setTimeout(() => ac.abort(), 12000);
+        try {
+          // ★★ A stall or a 5xx THROWS (the store retries it in a minute); a clean "none" is null.
+          const r = await dabLogoQueue(() => fetch(`${base}/vibeserver/dablogo?${q}`, { signal: ac.signal }));
+          if (r.status >= 500) throw new Error(`dablogo ${r.status}`);
+          if (!r.ok) return null;
+          const j: { logo?: string } | null = await r.json();
+          const u = j && typeof j.logo === 'string' && j.logo ? j.logo : '';
+          // ★ An absolute third-party URL (the Sony Lite server answers with Global's own) is fetched and kept by the
+          //   store itself; a relative one is the server's copy.
+          return u ? (u.startsWith('http') ? u : `${base}${u}`) : null;
+        } finally { clearTimeout(t); }
+      } },
+      { src: 'name', run: async () => {
+        const nm = tidyStationName(label);
+        if (!nm) return null;
+        try { return await lookupStationLogo(nm, undefined, receiverIso() || undefined); }
+        catch { return null; }
+      } },
+    ]);
   }
+  const known = held?.show ?? peekLogo(key);
   if (known) return known;
   return sv.logoSlide ? withReadAuth(`${base}/vibeserver/dabslide?sid=${sv.sid}`, readAuth) : null;
 }
@@ -331,7 +347,7 @@ const SvcLogo = React.memo(function SvcLogo({ uri }: { uri: string | null }) {
     <Image source={{ uri }} style={s.logoBox} resizeMode="contain" {...LOGO_DECODE}
            /* ★ A URL that resolves is not a picture that loads — the RDS panel learned this first.
             *  A logo that fails is dropped rather than left as a broken tile. */
-           onError={() => setDead(true)} />
+           onError={() => { setDead(true); forgetShownLogo(uri); }} />
   );
 });
 

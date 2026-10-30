@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Image, StyleSheet } from 'react-native';
 import { LOGO_DECODE } from '../constants/logoDecode';
 import { resolveStationLogo } from '../services/stationLogoCache';
+import { forgetShownLogo } from '../services/logoStore';
 import { ituToIso, validIso } from '../services/rdsCountry';
 
 /**
@@ -68,7 +69,9 @@ export default function StationLogo({ name, itu, size = 18, uri }: {
       {...LOGO_DECODE}
       onLoad={() => setLoaded(true)}
       // ★ An image that fails stays transparent rather than becoming a white square.
-      onError={() => setLoaded(false)}
+      // ★ V12: and a picture held by the logo store that will not draw (a dead link, a damaged file) is forgotten and
+      //   re-resolved on the retry ladder — never left blank for the session.
+      onError={() => { setLoaded(false); forgetShownLogo(shown); }}
     />
   );
 }
