@@ -4958,7 +4958,7 @@ select.btn { padding: 6px 8px; }
        "we need a separate data control but dont mention frame rates, just call it low auto full" — so no rates here.
        LOW = the 5 fps floor; AUTO adapts to the connection, never below it; FULL = the server's full rate. Where the old
        WATERFALL DATA RATE row was (a saved 5 → LOW, 20 → FULL, 0/10 → AUTO). The speed keys above are display only. -->
-  <div class="mrow icomHide">
+  <div class="mrow">
     <label>DATA</label>
     <div class="seg" id="wfDataSeg">
       <button class="btn" data-wfdata="low">LOW</button>
@@ -4966,7 +4966,7 @@ select.btn { padding: 6px 8px; }
       <button class="btn" data-wfdata="full">FULL</button>
     </div>
   </div>
-  <div class="rowNote icomHide">How much spectrum data the server sends. Low saves data; Auto adapts to your connection; Full is the server's full rate.</div>
+  <div class="rowNote">How much spectrum data the server sends. Low saves data; Auto adapts to your connection; Full is the server's full rate.</div>
   <!-- ★ The IDLE SAVER switch went with the feature. It slowed the spectrum after 30 s without a
        touch, which read "nobody is looking" from "nobody is touching" — backwards on a waterfall,
        the one thing you watch without touching it. A hidden TAB still throttles (nothing is being
