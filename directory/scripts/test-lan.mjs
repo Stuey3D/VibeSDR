@@ -178,5 +178,23 @@ console.log('\nA Worker deployed BEFORE migration 0008 — nothing breaks');
   ok((await page(env, HOME4)).includes('receiver'), 'the shareable address still serves the page');
 }
 
+console.log('\nThe directory page draws it only from `lan`, and only as a LAN address');
+{
+  const html = readFileSync(new URL('public/index.html', dir), 'utf8');
+  const lift = (name) => {
+    const at = html.indexOf(`function ${name}(`);
+    if (at < 0) throw new Error(`${name} not found in index.html`);
+    let i = html.indexOf('{', at), depth = 0;
+    for (; i < html.length; i++) { if (html[i] === '{') depth++; else if (html[i] === '}' && --depth === 0) break; }
+    return html.slice(at, i + 1);
+  };
+  // eslint-disable-next-line no-new-func
+  const { lanHost, lanNote } = new Function(`const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);\n${lift('lanHost')}\n${lift('lanNote')}\nreturn { lanHost, lanNote };`)();
+  ok(lanNote({ name: 'x' }) === '' && lanHost({}) === '', 'no `lan` (every stranger) → no tag, no line');
+  const n = lanNote({ lan: { hosts: ['192.168.86.13:48001'], nonce: 'lanx', proof: 'p' } });
+  ok(n.includes('href="http://192.168.86.13:48001/"') && n.includes('on your network'), 'same network → the line and the direct link');
+  ok(lanNote({ lan: { hosts: ['javascript:alert(1)', '"><b>x'] } }) === '', 'anything that is not host:port is never drawn');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
