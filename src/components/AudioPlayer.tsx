@@ -2,6 +2,9 @@ import { useEffect, useRef } from 'react';
 import { NativeModules, NativeEventEmitter } from 'react-native';
 import { noteAudioEvent } from '../services/audioPathLog';
 import { v4 as uuidv4 } from 'uuid';
+import { USER_AGENT } from '../constants/version';
+import { auxClose, auxIsOpenFor, auxOpen, claimNative, dualHolds, nativeOwnedBy, noteUberLink, releaseNative,
+         setUberClientName, uberAudioUrl, type UberLink } from '../services/dualServer';
 
 // Both platforms expose the SAME native surface as "VibePowerModule"
 // (iOS: VibePowerModule.swift; Android: VibeStreamModule.kt getName()).
@@ -143,9 +146,18 @@ export interface AudioPlayerProps {
    *  Without this the watchdog retried every four seconds indefinitely and the user simply had no
    *  sound (issue #20). */
   onStuck?:      () => void;
+  /** ★★ V12 TWO SERVERS AT ONCE (src/services/dualServer.ts). Absent (null) = the ordinary single-server path, exactly
+   *  as before. `id` is this screen's side (= `uuid`, its session); `transport` which voice its audio rides: 'native' —
+   *  this engine (server 1, or any UberSDR playing alone); 'aux' — the second voice, whose socket dualServer reads in JS
+   *  and which outlives this component. */
+  dual?:         { id: string; transport: 'native' | 'aux' } | null;
+  /** The filter edges, for a reopen of the second voice's socket (the engine keeps its own copy natively). */
+  bandwidthLow?:  number;
+  bandwidthHigh?: number;
 }
 
-export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password, adminAuth, restartKey, onStuck }: AudioPlayerProps) {
+export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceName, uuid: propUuid, password, adminAuth, restartKey, onStuck,
+                                      dual = null, bandwidthLow, bandwidthHigh }: AudioPlayerProps) {
   const activeUrl  = useRef<string | null>(null);
   const activeFreq = useRef<number>(0);
   const activeMode = useRef<string>('');
@@ -177,7 +189,70 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
     return () => { path.remove(); stuck.remove(); };
   }, [onStuck]);
 
+  /* ★★ V12 TWO SERVERS: which voice the engine effect last opened, and whether it has run on this mount — the FIRST run
+   *  may ADOPT audio already playing for this listener (a swap back, a return from the server list). */
+  const transport = dual?.transport ?? 'native';
+  const dualId = dual?.id ?? null;
+  const ranOnce = useRef(false);
+  /** Where this listener's audio is, for the pairing (reopen on either voice). Kept current with the dial. */
+  const link = (): UberLink | null => (baseUrl && propUuid ? {
+    baseUrl, uuid: propUuid, password: password ?? '', adminAuth: adminAuth ?? '',
+    freq: frequency, mode, bwLow: bandwidthLow, bwHigh: bandwidthHigh,
+  } : null);
   useEffect(() => {
+    const l = link();
+    if (dualId && l) noteUberLink(dualId, l);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dualId, baseUrl, propUuid, password, adminAuth, frequency, mode, bandwidthLow, bandwidthHigh]);
+
+  /* ★★★ THE SECOND VOICE (dualServer.ts): an UberSDR that is server 2 — or that moved there when an FM-DX joined — plays
+   *  through its OWN socket read in JS, never this engine: the engine is the main player, and two servers never share
+   *  one player. The socket belongs to dualServer and outlives this screen when it goes to the background. */
+  const auxRestart = useRef(restartKey);
+  const auxAdmin = useRef(adminAuth);
+  useEffect(() => {
+    if (transport !== 'aux' || !dualId) return;
+    if (!baseUrl) { noteAudioEvent('second voice: no baseUrl — gate closed'); return; }
+    const l = link();
+    if (!l) return;
+    setUberClientName(USER_AGENT);
+    // ★ A reconnect (restartKey) or a new credential asks for a NEW socket; anything else adopts the one playing.
+    const forced = restartKey !== auxRestart.current || adminAuth !== auxAdmin.current;
+    auxRestart.current = restartKey; auxAdmin.current = adminAuth;
+    if (!forced && auxIsOpenFor(dualId)) noteAudioEvent('second voice adopted (UberSDR)');
+    else {
+      noteAudioEvent(`second voice opening (UberSDR) → ${baseUrl}`);
+      auxOpen({ id: dualId, url: uberAudioUrl(l, USER_AGENT), hello: null, proto: 'uber' }, forced);
+    }
+    ranOnce.current = true;
+    return () => {
+      // ★ Going to the background (a swap): dualServer still holds it — keep playing. Otherwise it is ours to close.
+      setTimeout(() => { if (!dualHolds(dualId)) auxClose(dualId); }, 0);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transport, dualId, baseUrl, propUuid, restartKey, adminAuth]);
+
+  const prevTransport = useRef<'native' | 'aux' | null>(null);
+  useEffect(() => {
+    const fromAux = prevTransport.current === 'aux';
+    prevTransport.current = transport;
+    if (transport === 'aux' && dualId) { activeUrl.current = null; return; }
+    // ★★ V12 TWO SERVERS: the engine is ALREADY playing this listener (it never stopped while its screen was away, or the
+    //   pairing just moved it here — dualServer.moveToNative) — adopt it. Restarting it would cut the audio and meet the
+    //   server with a reconnect.
+    if ((!ranOnce.current || fromAux) && dualId && baseUrl && nativeOwnedBy(propUuid ?? null)) {
+      ranOnce.current = true;
+      activeUrl.current = baseUrl; uuid.current = propUuid ?? uuid.current;
+      lastRestart.current = restartKey; lastAdmin.current = adminAuth;
+      activeFreq.current = frequency; activeMode.current = mode;
+      noteAudioEvent('native engine adopted — already playing this listener');
+      return () => {
+        setTimeout(() => {
+          if (!dualHolds(dualId) && releaseNative(propUuid ?? '')) { noteAudioEvent('unmount — stopping engine'); VibePowerModule?.stopAudioEngine(); }
+        }, 0);
+      };
+    }
+    ranOnce.current = true;
     // ★★★ A CREDENTIAL THAT ARRIVES LATER IS STILL A REASON TO REBUILD. adminAuth was in the
     //     dependency list — so this effect re-ran when the owner typed the password — and then
     //     returned early, because baseUrl and uuid had not changed. setAdminAuth() was never
@@ -210,6 +285,8 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
       noteAudioEvent(`startAudioEngine → ${baseUrl} ${frequency} ${mode}`
                    + ` session=${uuid.current.slice(0, 8)}${adminAuth ? ' [admin]' : ''}`);
       VibePowerModule?.startAudioEngine(baseUrl, frequency, mode, uuid.current, password ?? '');
+      // ★ V12: the engine is the main player — say whose it is, so a screen that goes away later cannot stop another's.
+      claimNative(uuid.current);
       VibePowerModule?.setInstanceName(instanceName ?? '');
       activeFreq.current = frequency;
       activeMode.current = mode;
@@ -221,9 +298,17 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
       VibePowerModule?.stopAudioEngine();
     }
 
-    return () => { noteAudioEvent('unmount/deps changed — stopping engine'); VibePowerModule?.stopAudioEngine(); };
+    /* ★★ V12 TWO SERVERS: stop only what is still OURS and not wanted by the pairing — dualHolds (this server is going to
+     *  the background and keeps playing) and releaseNative (another server has the main player now). Outside a pairing
+     *  both answers are "stop", exactly as before. Decided a tick late: a re-run must not stop what the next run adopts. */
+    const sid = uuid.current;
+    return () => {
+      if (!dualId) { noteAudioEvent('unmount/deps changed — stopping engine'); VibePowerModule?.stopAudioEngine(); return; }
+      if (dualHolds(dualId) || !releaseNative(sid)) { noteAudioEvent('leaving — the pairing keeps the engine'); return; }
+      noteAudioEvent('unmount/deps changed — stopping engine'); VibePowerModule?.stopAudioEngine();
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, propUuid, restartKey, adminAuth]);
+  }, [baseUrl, propUuid, restartKey, adminAuth, transport, dualId]);
 
   /* ★★★ THIS EFFECT NO LONGER TUNES, AND THAT IS THE FIX.
    *
