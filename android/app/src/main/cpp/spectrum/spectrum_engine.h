@@ -15,6 +15,7 @@
 #pragma once
 #include "wf_row_target.h"
 #include "wf_row_clock.h"
+#include "wf_av_sync.h"
 #include "wf_zoom_fan.h"   // + wf_motion.h
 #include "spectrum_processor.h"
 #include <atomic>
@@ -99,6 +100,9 @@ public:
     void setConfig(const EngineConfig& c);
     void setSettings(const vibedsp::SpectrumProcessorSettings& s);
     void setLastInteractAt(double ms);                       // lastInteractAt.current
+    /** ★★ V12 2026-10-30 the audio's playout delay, ms (−1 = unknown) — the clock waits for the sound (wf_av_sync.h).
+     *  JS polls it at 4 Hz (VibeStreamService.audioPlayoutMs) and forwards it. */
+    void setAudioDelay(double ms);
     void setBackground(bool bg);
     void setCovered(bool covered);
     /** dB window for the axis labels (2 dB hysteresis, as liveRange). Returns true when it changed since last read. */
@@ -132,7 +136,7 @@ private:
     void storeRingImageLocked(void* img);   // with mx_ held
     void emitRepeatRow();
     /** `at` > `now`: the trace waits for its row (WaterfallView traceShow) — queued, published by runTrace. */
-    void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at = 0, double now = 0);
+    void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at = 0, double now = 0, bool shrunk = false);
     void publishTrace(const std::vector<float>& spec, void* peak);
     void runTrace(double now);
     void traceDrop();
@@ -153,6 +157,7 @@ private:
     EngineConfig cfg_;
     double viewCenterHz_ = 0, viewBwHz_ = 0;
     double lastInteractAt_ = 0;
+    double audioMs_ = -1; bool audioNew_ = false;   // ★ V12 the audio's playout delay, as JS last sent it
     bool bg_ = false, covered_ = false;
     bool settingsDirty_ = false;
     double nativeFedUntil_ = 0;
@@ -185,6 +190,7 @@ private:
     struct ClockRow { long id = -1; std::vector<uint8_t> row; double c = 0, h = 0; };
     vibewf::RowClock rowClock_;
     vibewf::BoostState boost_;   // ★ the interaction boost (wf_row_clock.h boostRowRate)
+    vibewf::AvSyncState av_;     // ★★ V12 2026-10-30 the waterfall waits for the sound (wf_av_sync.h)
     int lastEaseLeft_ = 0;
     std::vector<ClockRow> clockRows_;
     std::vector<long> clockOut_;

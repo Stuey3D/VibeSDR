@@ -116,6 +116,7 @@ void SpectrumEngine::setSettings(const vibedsp::SpectrumProcessorSettings& s) {
     std::lock_guard<std::mutex> lk(mx_); pendingSettings_ = s; settingsDirty_ = true; cv_.notify_one();
 }
 void SpectrumEngine::setLastInteractAt(double ms) { std::lock_guard<std::mutex> lk(mx_); lastInteractAt_ = ms; }
+void SpectrumEngine::setAudioDelay(double ms) { std::lock_guard<std::mutex> lk(mx_); audioMs_ = ms; audioNew_ = true; }
 void SpectrumEngine::setBackground(bool bg) { std::lock_guard<std::mutex> lk(mx_); bg_ = bg; cv_.notify_one(); }
 void SpectrumEngine::setCovered(bool c) { std::lock_guard<std::mutex> lk(mx_); covered_ = c; cv_.notify_one(); }
 
@@ -185,6 +186,7 @@ void SpectrumEngine::runDue(double now) {
     bool wasCov = covNow_, wasBg = bgNow_;
     {
         std::lock_guard<std::mutex> lk(mx_);
+        if (audioNew_) { vibewf::avNoteAudio(av_, audioMs_, now); audioNew_ = false; }   // ★ V12 (wf_av_sync.h)
         cfgNow_ = cfg_; viewC_ = viewCenterHz_; viewBw_ = viewBwHz_; interactAt_ = lastInteractAt_;
         bgNow_ = bg_; covNow_ = covered_;
         arrived.swap(inbox_);
@@ -399,7 +401,15 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
         if (!slot) { clockRows_.emplace_back(); slot = &clockRows_.back(); }
         slot->id = id; slot->row.assign(fr.row, fr.row + n); slot->c = rowCentre; slot->h = rowHzBin;
         vibewf::clockSetRate(rowClock_, rowTarget, now);
-        const double pAt = vibewf::clockArrive(rowClock_, id, now, boost);
+        // ★★★ THE WATERFALL WAITS FOR THE SOUND (wf_av_sync.h — WaterfallView's twin, Stuart 2026-10-30): the frame enters
+        //     the clock `hold` ms after it arrived (the audio's playout delay less this route's own), so row and trace come
+        //     on screen as the sound is heard. "…simply duplicate the previous lines if needed and then the waterfall still
+        //     reacts to the audio in time but still stays smooth": a growing hold is the clock's repeats, a shrinking one
+        //     its discards. ZERO for 1 s after any tune or zoom input (smoothTune or not) — a moving dial is never held.
+        const bool avPass = now - interactAt_ < 1000;
+        const double holdWas = av_.hold;
+        const double hold = vibewf::avHold(av_, vibewf::clockOwnMs(rowClock_.ivl, rowTarget), avPass);
+        const double pAt = vibewf::clockArrive(rowClock_, id, now, boost, hold);
         runClock(now);
         {
             std::lock_guard<std::mutex> lk(mx_);
@@ -409,7 +419,7 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
         }
         // ★★ The trace goes with its row: at its presentation + the rows the UI holds in hand (traceLagMs); at once in a
         //   gesture.
-        buildSpectrum(fr, boost, boost ? 0 : pAt + vibewf::traceLagMs(rowTarget), now);
+        buildSpectrum(fr, boost, boost ? 0 : pAt + vibewf::traceLagMs(rowTarget), now, hold < holdWas);
         return;
     }
     if (rowClock_.rate > 0) clockOff();   // off the clock (NATIVE, a feed too slow to fill): the next clocked frame starts afresh
@@ -543,7 +553,7 @@ void SpectrumEngine::clockOff() {
 }
 
 // Spectrum target (1493-1526) + peak path (1528-1552) + hidden (1553-1571)
-void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at, double now) {
+void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at, double now, bool shrunk) {
     const EngineConfig& cfg = cfgNow_;
     if (!(cfg.specShow && cfg.specH > 4)) {
         traceDrop();
@@ -584,10 +594,13 @@ void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boo
     } else if (boost) {
         proc_.resetPeakHold();
     }
-    if (at > now) {   // ★ V12 waits for its row (never out of order; at most 4 waiting, as the clock's queue)
+    if (at > now) {   // ★ V12 waits for its row (never out of order; as many waiting as the clock's queue)
+        // ★★ V12 2026-10-30 the A/V hold shrank: traces still waiting later than this one went with their rows.
+        if (shrunk) while (!traceQ_.empty() && traceQ_.back().at > at) { if (traceQ_.back().peak) releasePath_(traceQ_.back().peak); traceQ_.pop_back(); }
         if (!traceQ_.empty() && at < traceQ_.back().at) at = traceQ_.back().at;
         traceQ_.push_back(TraceItem{at, next, peak});
-        while (traceQ_.size() > 4) { if (traceQ_.front().peak) releasePath_(traceQ_.front().peak); traceQ_.pop_front(); }
+        const size_t cap = std::max<size_t>(4, rowClock_.q.size() + 1);   // ★ + the frames an A/V hold keeps waiting
+        while (traceQ_.size() > cap) { if (traceQ_.front().peak) releasePath_(traceQ_.front().peak); traceQ_.pop_front(); }
         return;
     }
     traceDrop();   // now: anything still waiting is older

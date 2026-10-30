@@ -138,6 +138,11 @@ public:
             if (c >= 1) en.setBackground(a[0].isBool() && a[0].getBool());
             return jsi::Value::undefined();
         });
+        // ★★ V12 2026-10-30 the audio's playout delay, ms (−1 = unknown) — the clock waits for the sound (wf_av_sync.h).
+        if (name == "setAudioDelay") return fn(1, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            en.setAudioDelay(c >= 1 && a[0].isNumber() ? a[0].asNumber() : -1);
+            return jsi::Value::undefined();
+        });
         if (name == "setCovered") return fn(1, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
             if (c >= 1) en.setCovered(a[0].isBool() && a[0].getBool());
             return jsi::Value::undefined();
