@@ -20,6 +20,18 @@
 /** Rows held in hand, in ms of rows — the playout buffer (2026-10-13; Stuart: "30-50ms is imperceptible to most"). */
 export const PLAYOUT_MS = 40;
 
+/** ★★ V12 2026-10-29 (v12-wf-no-jb): how long after a frame's PRESENTATION time on the fixed clock its row is on screen —
+ *  the depth clockPace holds in hand (PLAYOUT_MS, at least one row) — so the SPECTRUM TRACE, retargeted on the same
+ *  schedule, can wait for it. Stuart: "if the buffer isnt needed for the waterfall improve the latency there too
+ *  please". The waterfall's rows now skip the jitter buffer and go to the clock on arrival; the trace, through a jitter
+ *  buffer of its own, would then trail the newest row by ~85 ms (scripts/test_wf_fixed_clock.ts — the trace "via its own
+ *  jitter buffer" line). Retargeted at presentation + this, the trace and the row it goes with land together.
+ *  `rate` rows/s (0 = off the clock: no wait). Pure — the Android engine has the same line (spectrum_engine.cpp). */
+export function traceLagMs(rate: number): number {
+  'worklet';
+  return rate > 0 ? Math.max(1, rate * PLAYOUT_MS / 1000) * 1000 / rate : 0;
+}
+
 type Sv = { value: number };
 
 /** The row rate (rows per ms) for the pacer, over ½ s windows. ★ The old per-arrival average swung ±15 % on jittery

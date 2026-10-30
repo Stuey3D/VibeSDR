@@ -460,6 +460,58 @@ int main() {
         if (img) rlImage(img);
         delete e;
     }
+    // ── V12 NO JITTER BUFFER IN FRONT OF THE CLOCK (v12-wf-no-jb — Stuart 2026-10-29: "if the buffer isnt needed for the
+    //    waterfall improve the latency there too please"): a clocked frame's row is in the ring within the clock's own
+    //    delay + one tick of its ARRIVAL (through the buffer it was ~1–2 feed intervals later), and the spectrum target
+    //    for it is published traceLagMs after its presentation — with its row as the UI shows it, not ahead or behind. ──
+    for (int cap : {20, 60}) {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = cap;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        uint32_t seed = 4242; auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+        const double T0 = gClock; double next = 0; int fi = 0;
+        std::vector<double> arrAt, ringAt, specAt;
+        for (double t = 0; t < 20000; t += 1) {
+            gClock = T0 + t;
+            if (t >= next) {
+                auto b = frame(1024, 100 + 40 * (fi % 20)); e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+                arrAt.push_back(t); ringAt.push_back(-1); specAt.push_back(-1); fi++;
+                next = fi * 100.0 + (rnd() * 2 - 1) * 15;
+            }
+            e->testStep(gClock);
+            UiUpdate u;
+            if (e->pollUi(u)) {
+                if (u.image) {   // the newest row's carrier → which frame it is (the latest one sent with that position)
+                    const uint8_t* r = rowOf((FakeImage*)u.image, u.head); int pos = -1;
+                    for (int b = 0; b < 1024; b++) if (r[b] > 200) { pos = b; break; }
+                    for (int k = fi - 1; k >= 0 && k >= fi - 6; k--) if (std::abs(100 + 40 * (k % 20) - pos) <= 4) { if (ringAt[k] < 0) ringAt[k] = t; break; }
+                    rlImage(u.image);
+                }
+                if (!u.specTarget.empty()) {   // the trace's peak → its frame
+                    int best = 0; for (int k = 1; k < (int)u.specTarget.size(); k++) if (u.specTarget[k] > u.specTarget[best]) best = k;
+                    const int bin = (int)std::lround(best * 1024.0 / u.specTarget.size());
+                    for (int k = fi - 1; k >= 0 && k >= fi - 6; k--) if (std::abs(100 + 40 * (k % 20) - bin) <= 8) { if (specAt[k] < 0) specAt[k] = t; break; }
+                }
+                if (u.peakPath) rlPath(u.peakPath);
+            }
+        }
+        double lat = 0, off = 0; int n = 0, no = 0, missing = 0;
+        for (size_t k = 0; k + 5 < arrAt.size(); k++) {
+            if (arrAt[k] < 5000) continue;
+            if (ringAt[k] < 0) { missing++; continue; }
+            lat += ringAt[k] - arrAt[k]; n++;
+            if (specAt[k] >= 0) { off += specAt[k] - ringAt[k]; no++; }
+        }
+        lat /= std::max(1, n); off /= std::max(1, no);
+        const double rate = cap == 20 ? 30 : 60, lag = vibewf::traceLagMs(rate);
+        std::printf("  no jitter buffer, %s: arrival → ring %.1f ms mean, ring → trace %.1f ms (traceLag %.1f), %d/%d traced, %d missing\n",
+                    cap == 20 ? "Default" : "Smooth", lat, off, lag, no, n, missing);
+        CHECK(missing == 0, "cap %d: every frame reaches the ring (%d missing)", cap, missing);
+        CHECK(lat <= 20 + 1000.0 / rate + 5, "cap %d: arrival → ring %.1f ms — the clock's delay + one tick, no jitter buffer", cap, lat);
+        CHECK(no >= n * 0.9, "cap %d: the trace takes (nearly) every frame (%d of %d)", cap, no, n);
+        CHECK(std::abs(off - lag) <= 1000.0 / rate / 2 + 3, "cap %d: the trace follows its row by traceLag %.1f ms (got %.1f)", cap, lag, off);
+        delete e;
+    }
     // ── NATIVE stays as it is: one row per frame received, in order, none repeated or dropped; no clock rate ──
     {
         auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);

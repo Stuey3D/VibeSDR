@@ -86,7 +86,7 @@ import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan
 import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
 import { setWideSink } from '../services/wideRowBus';
-import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate } from '../utils/wfPace';
+import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate, traceLagMs } from '../utils/wfPace';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -1744,6 +1744,55 @@ function WaterfallView({
   const watchCfg = useRef({ tuneHz, filterLow, filterHigh });
   watchCfg.current = { tuneHz, filterLow, filterHigh };
 
+  /* ★★★ THE TRACE GOES WITH ITS ROW (V12 2026-10-29, v12-wf-no-jb). The waterfall's frames now skip the jitter buffer and
+   *  go to the fixed clock on arrival (enqueueFrame) — Stuart: "if the buffer isnt needed for the waterfall improve the
+   *  latency there too please". The SPECTRUM TRACE was de-jittered by that same buffer; left behind a buffer of its own
+   *  it would trail the newest row by ~85 ms (simulated, scripts/test_wf_fixed_clock.ts), and on arrival it takes the
+   *  raw network jitter. So the trace is retargeted on the CLOCK's de-jittered schedule instead: at the frame's
+   *  presentation time plus the rows the release holds in hand (traceLagMs) — when that frame's row comes on screen.
+   *  Simulated: trace → newest row 50–70 ms apart through the buffer, now 0–20 (±1 tick of the 33 ms tween), and both
+   *  ~140 ms sooner. Its ~30 fps easing tween is unchanged. At once (at = 0) in a gesture, off the clock (NATIVE, a feed
+   *  too slow to fill) and whenever nothing is waiting — exactly as before. Never out of order; a newer frame that is
+   *  due supersedes an older one still waiting (its peak path is disposed unseen). */
+  const traceQ     = useRef<{ at: number; spec: number[]; peak: SkPath | null }[]>([]);
+  const traceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const traceApply = useCallback((spec: number[], peak: SkPath | null) => {
+    specToSv.value = spec;
+    if (specDispSv.value.length !== spec.length) specDispSv.value = Array.from(spec);
+    setSpecTweenActive(true);   // idle → running; a no-op while it already is
+    swapPath(peakPath, peak ?? peakEmpty);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setSpecTweenActive, swapPath]);
+  const traceDrop = useCallback(() => {
+    if (traceTimer.current) { clearTimeout(traceTimer.current); traceTimer.current = null; }
+    const q = traceQ.current;
+    for (const it of q) if (it.peak) { try { it.peak.dispose(); } catch {} }   // never shown: no grace needed
+    q.length = 0;
+  }, []);
+  const traceRun = useCallback(() => {
+    traceTimer.current = null;
+    if (bgRef.current || coveredRef.current || specDead.value) { traceDrop(); return; }
+    const q = traceQ.current, now = performance.now();
+    let due: { at: number; spec: number[]; peak: SkPath | null } | null = null;
+    while (q.length && q[0].at <= now + 1) {   // several due (a busy JS thread): the newest is the target
+      const it = q.shift()!;
+      if (due?.peak) { try { due.peak.dispose(); } catch {} }
+      due = it;
+    }
+    if (due) traceApply(due.spec, due.peak);
+    if (q.length) traceTimer.current = setTimeout(traceRun, Math.max(0, q[0].at - performance.now()));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [traceApply, traceDrop]);
+  const traceShow = useCallback((spec: number[], peak: SkPath | null, at: number) => {
+    if (!(at > performance.now())) { traceDrop(); traceApply(spec, peak); return; }   // now: anything waiting is older
+    const q = traceQ.current;
+    if (q.length && at < q[q.length - 1].at) at = q[q.length - 1].at;                 // never out of order
+    q.push({ at, spec, peak });
+    while (q.length > 4) { const o = q.shift()!; if (o.peak) { try { o.peak.dispose(); } catch {} } }   // the clock's own depth
+    if (!traceTimer.current) traceTimer.current = setTimeout(traceRun, Math.max(0, q[0].at - performance.now()));
+  }, [traceApply, traceDrop, traceRun]);
+  useEffect(() => traceDrop, [traceDrop]);   // unmount
+
   const handleFrame = useCallback((fbins: Float32Array, fstatus: SDRStatus) => {
     // Backgrounded: audio keeps playing on its own native path, but the whole
     // visual frame path (Reanimated withTiming glide + reveal/tween setIntervals
@@ -1857,6 +1906,8 @@ function WaterfallView({
     //     (Stuart, build 70). My comment claimed the trace had "already run for this frame" — it
     //     had not, and I never checked the order before asserting it.
     const wfGated = cfg.minGapMs > 0 && now - lastWfPushAt.current < cfg.minGapMs;
+    /** When the SPECTRUM TRACE takes this frame (performance.now() ms; 0 = at once) — see traceShow. */
+    let traceAt = 0;
     if (!wfGated) {
     // ★★★ MEASURE THE GAP BETWEEN ROW-SETS, NOT BETWEEN DATA FRAMES. This is the quantity the
     //     reveal has to be spread over, and using the wrong one is what made the waterfall "leap a
@@ -1902,15 +1953,22 @@ function WaterfallView({
     if (onClock) {
       // ★★★ THE FIXED CLOCK: the frame is handed to the clock (presented on the feed's de-jittered schedule — at once
       //     during a gesture, as the jitter buffer is bypassed then too), and the clock makes the rows (pumpClock).
+      // ★★★ V12 2026-10-29 (v12-wf-no-jb): the frame comes here ON ARRIVAL now, not out of the jitter buffer (see
+      //     enqueueFrame) — `t` is its real arrival, and the clock's own presentation delay (0.2 × the interval, ≤ 40 ms) is
+      //     the only de-jitter. Stuart: "if the buffer isnt needed for the waterfall improve the latency there too please".
+      //     Simulated (scripts/test_wf_fixed_clock.ts): arrival → on screen ~220 → ~80 ms, stalls and bursts still 0.
       const id = ++clockSeq.current, t = performance.now();
       let slot = clockPool.current.pop();
       if (!slot || slot.row.length !== frame.row.length) slot = { row: new Uint8Array(frame.row.length), c: 0, h: 0 };
       clockFrames.current.set(id, slot);
       slot.row.set(frame.row); slot.c = rowCentre; slot.h = rowHzBin;
       clockSetRate(rowClock.current, rowTarget, t);
-      clockArrive(rowClock.current, id, t, boost);
+      const pAt = clockArrive(rowClock.current, id, t, boost);
       clockStop();
       pumpClock();
+      // ★★ The trace goes with its row: at the frame's presentation time plus the rows clockPace holds in hand, so the
+      //   trace eases to this frame as its row comes on screen (traceLagMs). At once in a gesture (as before).
+      if (!boost) traceAt = pAt + traceLagMs(rowTarget);
     } else if (rowClock.current.rate > 0) {
       // Off the clock (NATIVE, a feed too slow to fill, or covered): stop it; the next clocked frame starts afresh.
       clockStop(); clockReset(rowClock.current); clockSetRate(rowClock.current, 0, 0); clockFrames.current.clear();
@@ -2031,6 +2089,7 @@ function WaterfallView({
       // clock regardless of the data rate, so the trace stays fluid at ANY rate — the way
       // VibeServer/Jr do it. The view is pinned during a gesture, so the spectrum content barely
       // shifts and the small easing lag is invisible; on release the tween eases to the new view.
+      let traceNext: number[] | null = null;
       {
         // Retarget the tween at the latest frame.
         // ★ Array.from, because a worklet cannot be handed a Float32Array — the shared value has to
@@ -2053,11 +2112,10 @@ function WaterfallView({
         } else {
           next = Array.from(fs);
         }
-        specToSv.value = next;
-        if (specDispSv.value.length !== next.length) specDispSv.value = Array.from(next);
-        setSpecTweenActive(true);   // idle → running; a no-op while it already is
+        traceNext = next;
       }
 
+      let peakNext: SkPath | null = null;   // null = draw no peak trace
       if (cfg.peakHold && !boost) {
         const pk = frame.peak;
         const sLen = pk.length;
@@ -2074,18 +2132,21 @@ function WaterfallView({
         }
         const pp = Skia.Path.Make();
         pp.addPoly(pool, false);
-        swapPath(peakPath, pp);
+        peakNext = pp;
       } else {
         // Peak hold PAUSES while interacting: bin-indexed peaks detach from
         // their signals as the view moves (geometry is pinned during gestures
         // so the processor can't see the shift) and smear the display. Clear
         // and hide; it re-seeds within a frame or two of settling.
         if (boost) proc.current.resetPeakHold();
-        swapPath(peakPath, peakEmpty); // empty = draw nothing (a no-op once already empty)
+        // (peakNext null → swapPath(peakPath, peakEmpty): empty = draw nothing, a no-op once already empty)
       }
+      // The trace and the peak path go up together — now, or with this frame's row (traceShow).
+      traceShow(traceNext!, peakNext, traceAt);
     } else {
       // Spectrum hidden — nothing needs inter-frame smoothness; the panel can
       // fall all the way to the data rate.
+      traceDrop();
       stopSpecTween();
       // ★★★ CLEAR IT, DO NOT swapPath IT. swapPath DISPOSES the outgoing path, and since the tween
       // moved to the UI thread the outgoing path is one of the two PERSISTENT buffers the worklet
@@ -2111,6 +2172,12 @@ function WaterfallView({
   // arrival jitter never reaches the display — the reason Jr and the web client feel smooth at a
   // variable/low frame rate where the phone (rendering per-arrival) juddered. targetDepth = 1 frame of
   // banked latency (insurance against a late row); prefill/hold when dry, catch up when backed up.
+  // ★★★ V12 2026-10-29 (v12-wf-no-jb): NOT for the fixed clock's modes any more. The clock de-jitters the waterfall itself
+  //     (wfClock.ts: each frame presented on the feed's smoothed schedule, a late one costs a repeat), so the buffer in
+  //     front of it only added latency — 80–190 ms of the app's ~160–260 ms. Stuart: "if the buffer isnt needed for the
+  //     waterfall improve the latency there too please". Those frames go straight to handleFrame on arrival (enqueueFrame)
+  //     and the trace rides the clock's schedule (traceShow). Still through here: NATIVE (no clock), and a feed too slow
+  //     for the clock to fill (it runs per arrival, as before).
   const jbQueue       = useRef<FrameSlot[]>([]);
   /* ★★ The queued copies come from a small pool, not a fresh `bins.slice()` + status spread per frame
    *  (framePool.ts — the biggest steady-state allocation in the 2026-10-03 iPhone profile). A slot goes back
@@ -2146,6 +2213,18 @@ function WaterfallView({
     if (bgRef.current) return;
     const now = Date.now();
     const interacting = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    // ★★★ ON THE FIXED CLOCK: straight through, on arrival (see the note above). The clock running (rate > 0) means the
+    //     last frame was clocked; the first frame of a session, a covered view or a feed too slow to fill comes through
+    //     the buffer once and starts it. Anything still banked from before goes — it is older than this frame.
+    if (!interacting && rowClock.current.rate > 0 && scrollForCap(frameCfg.current.targetRows) !== 'sharp') {
+      if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; }
+      if (jbQueue.current.length) jbClear();
+      jbPrefill.current = true;
+      if (jbLastArrival.current > 0) jbArrivalMs.current = jbArrivalMs.current * 0.8 + (now - jbLastArrival.current) * 0.2;
+      jbLastArrival.current = now;
+      handleFrame(bins, status);         // consumed synchronously — parent's reused buffers are safe
+      return;
+    }
     // DURING interaction, BYPASS the buffer — tune/zoom must feel instant. The jitter buffer only
     // exists to smooth steady-state scroll; holding a frame here costs up to a full arrival period
     // (~200ms at 5fps) of lag on every crown move — the slowdown VibeServer/Jr don't have because

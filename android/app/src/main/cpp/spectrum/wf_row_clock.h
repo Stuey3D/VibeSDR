@@ -25,6 +25,10 @@ struct ClockCfg { double delayFrac = 0.2, delayMaxMs = 40; };
 inline ClockCfg& clockCfg() { static ClockCfg c; return c; }   // mutable only for the test's sweep, as the TS
 inline double clockDelayMs(double ivl) { return std::min(clockCfg().delayMaxMs, clockCfg().delayFrac * ivl); }
 inline double holdLimitMs(double ivl) { return std::max(300.0, 2.5 * ivl + 100); }
+/** ★★ V12 2026-10-29 (v12-wf-no-jb) — src/utils/wfPace.ts traceLagMs: how long after a frame's presentation time its row
+ *  is on screen (the depth the UI's clockPace holds: PLAYOUT_MS 40, at least one row), so the spectrum trace, retargeted
+ *  on the same schedule, lands with the row it goes with. `rate` rows/s; 0 = off the clock (no wait). */
+inline double traceLagMs(double rate) { return rate > 0 ? std::max(1.0, rate * 40.0 / 1000.0) * 1000.0 / rate : 0; }
 
 struct ClockFrame { long id; double p; };
 struct RowClock {
