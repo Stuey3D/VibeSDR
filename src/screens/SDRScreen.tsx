@@ -6152,7 +6152,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // bug — confirmed on the watch). Fall back to centerHz for any adapter that doesn't
           // set it. The main app's full-spectrum draw keeps using the predicted centre.
           centerHz:   s.trueCenterHz ?? s.centerHz,
-          bwHz:       s.bwHz,
+          bwHz:       s.trueBwHz ?? s.bwHz,   // ★ the bins' real span with their real centre (SDRStatus.trueBwHz)
           tuneHz:     s.frequency,
           filterLow:  s.bandwidthLow,
           filterHigh: s.bandwidthHigh,

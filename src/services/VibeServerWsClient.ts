@@ -2212,6 +2212,9 @@ export abstract class VibeServerWsClient {
     // The REAL centre of these bins — never overridden below. The watch crop indexes bins by
     // this; using the predicted emit.centerHz draws the signal offset from the VFO.
     emit.trueCenterHz = frequency;
+    // ★★ …and their REAL span: the bins are at the server's rung (s.binBandwidth, from its config) even while bwHz below
+    //   is the predicted view's. The waterfall places rows by this pair (SDRStatus.trueBwHz — the zoom-out smears).
+    emit.trueBwHz = s.binBandwidth > 0 ? s.binBandwidth * n : undefined;
     const v = this.view;
     if (this._inFlight() && v.binBandwidth > 0) {
       emit.centerHz     = v.centerHz;
