@@ -3,6 +3,7 @@
 // Images and paths are faked (a heap copy of the ring / the points); the engine runs on a simulated clock.
 #include "spectrum_engine.h"
 #include "wf_row_target.h"
+#include "wf_wide.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -140,7 +141,7 @@ int main() {
             }
         }
         const double rows = head - headAt10;
-        CHECK(rows >= 18 && rows <= 22, "default at 10 fps: %g rows in 1 s (expect 20, ±2 for where the window cuts a frame's extras)", rows);
+        CHECK(rows >= 27 && rows <= 33, "default at 10 fps: %g rows in 1 s (expect 30 — Default never 20, Stuart 2026-10-29 — ±3 for where the window cuts a frame's extras)", rows);
         delete e;
     }
     // ── 2d. wf_row_target.h: the same table as scripts/test_wf_row_target.ts, from a cold 150 ms estimate ──
@@ -149,11 +150,36 @@ int main() {
             double t = 0; for (int i = 0; i < frames; i++) { ema = ema * 0.8 + (1000.0 / fps) * 0.2; t = vibewf::stepRowTarget(st, cap, 1000.0 / ema); }
             return t; };
         auto settle = [&](int cap, double fps) { vibewf::RowTargetState st; double ema = 150; const double t = drive(cap, fps, st, ema, 200); return t == 0 ? fps : t; };
-        struct Row { double fps, def, smo; } tbl[] = { {5, 15, 30}, {10, 20, 60}, {20, 20, 60}, {10.0 / 3, 10, 20}, {9, 20, 30} };
+        struct Row { double fps, def, smo; } tbl[] = { {5, 15, 30}, {10, 30, 60}, {20, 30, 60}, {10.0 / 3, 10, 20}, {9, 30, 30} };
         for (const Row& r : tbl)
             CHECK(settle(20, r.fps) == r.def && settle(60, r.fps) == r.smo, "row target at %.2f fps: %g / %g (want %g / %g)",
                   r.fps, settle(20, r.fps), settle(60, r.fps), r.def, r.smo);
-        CHECK(vibewf::rowTargetFor(20, 20) == 0, "20 fps Default is actual rows");
+        CHECK(vibewf::rowTargetFor(20, 20) == 30 && vibewf::rowTargetFor(20, 10) == 30, "Default is never 20: 20 and 10 fps feeds run at 30");
+        // ★ 2026-10-29 (Stuart, a 23 fps Kiwi: "interpolate and discard") — every choice but Native divides 60, the same
+        //   table as scripts/test_wf_row_target.ts: Eco/Minimum thin a faster feed, Default/Smooth go up to the next rate.
+        struct Sn { int cap; double fps, want; } sn[] = { {20, 23, 30}, {60, 23, 60}, {10, 23, 10}, {5, 23, 5}, {10, 13, 10},
+            {20, 13, 30}, {20, 30, 0}, {20, 40, 60}, {60, 75, 60}, {10, 10.2, 0}, {10, 10.6, 10}, {20, 2, 0}, {20, 20.3, 30} };
+        for (const Sn& r : sn)
+            CHECK(vibewf::rowTargetFor(r.cap, r.fps) == r.want, "snap: cap %d at %.1f fps -> %g (want %g)", r.cap, r.fps, vibewf::rowTargetFor(r.cap, r.fps), r.want);
+        {   // discard counts: 23 fps thinned to 20 keeps 2000 of 2300 frames, never two dropped in a row
+            double c = 0; int rows = 0, dropped = 0, prevZero = 0, twoInRow = 0;
+            for (int i = 0; i < 2300; i++) { const int k = vibewf::rowsForArrival(c, 1000.0 / 23, 20); rows += k; if (k == 0) { dropped++; if (prevZero) twoInRow++; } prevZero = k == 0; }
+            CHECK(std::abs(rows - 2000) <= 1 && std::abs(dropped - 300) <= 1 && twoInRow == 0, "thin 23 -> 20: %d rows, %d dropped, %d doubled", rows, dropped, twoInRow);
+            c = 0; rows = 0; int mx = 0;
+            for (int i = 0; i < 2300; i++) { const int k = vibewf::rowsForArrival(c, 1000.0 / 23, 30); rows += k; mx = std::max(mx, k); }
+            CHECK(std::abs(rows - 3000) <= 1 && mx == 2, "fill 23 -> 30: %d rows, max %d a frame", rows, mx);
+            c = 0; CHECK(vibewf::rowsForArrival(c, 43, 0) == 1, "native: every frame one row");
+        }
+        CHECK(vibewf::rowTargetUnderCap(20, 20, 30) == 15, "under a 30 cap a 20 fps feed is thinned to 15");
+        // ★ V12 ECO (cap 10): exactly 10 rows/s from any slower feed (over-generate and discard); 10 fps = actual rows.
+        struct Eco { double fps, want; } eco[] = { {5, 10}, {10.0 / 3, 10}, {6, 10}, {7, 10}, {9, 10}, {10, 10}, {2, 10} };
+        for (const Eco& r : eco)
+            CHECK(std::abs(settle(10, r.fps) - r.want) < 0.05, "eco at %.2f fps: %g rows (want %g)", r.fps, settle(10, r.fps), r.want);
+        // ★ V12 MINIMUM (cap 5): actual rows at 5; a slower feed (2, 3.3) is filled in to 5 — and (2026-10-29) a faster
+        //   one is THINNED to 5 (it used to be shown at its own 10).
+        struct Mn { double fps, want; } mn[] = { {5, 5}, {10.0 / 3, 5}, {2, 5}, {10, 5} };
+        for (const Mn& r : mn)
+            CHECK(std::abs(settle(5, r.fps) - r.want) < 0.05, "minimum at %.2f fps: %g rows (want %g)", r.fps, settle(5, r.fps), r.want);
         // A governor step 10 → 5: Smooth changes once, 60 → 30.
         vibewf::RowTargetState st; double ema = 150; double t = drive(60, 10, st, ema, 200); int changes = 0;
         for (int i = 0; i < 400; i++) { ema = ema * 0.8 + 200 * 0.2; const double n = vibewf::stepRowTarget(st, 60, 1000.0 / ema); if (n != t) changes++; t = n; }
@@ -337,6 +363,254 @@ int main() {
         e->setBackground(true); run(e, 300); drain();
         CHECK(head == h0, "no rows after background (head %g → %g)", h0, head);
         delete e;
+    }
+    // ── V12 THE FIXED OUTPUT CLOCK (wf_row_clock.h — Stuart 2026-10-29: "over interpolate and discard"). Every mode but
+    //    NATIVE: rows at exactly the mode's rate whatever the feed does — jitter, late frames, a 9 fps dip, a 9–11 fps
+    //    wander, 23 fps — each row the newest REAL frame (repeated, never blended); the supply never pauses. ──
+    {
+        struct Case { const char* name; int cap; double want; double (*rate)(double); double jit; double late; };
+        static auto r10 = [](double) { return 10.0; };
+        static auto r97 = [](double) { return 9.7; };
+        static auto r23 = [](double) { return 23.0; };
+        static auto rdip = [](double t) { return t >= 10000 && t < 14000 ? 9.0 : 10.0; };
+        static auto rwan = [](double t) { static const double v[] = {9, 11, 9.4, 10.7, 9, 11, 10.2, 9.1}; return v[(int)(t / 2500) % 8]; };
+        const Case cases[] = {
+            {"Default · 10 fps ±15 ms + late", 20, 30, r10, 15, 0.03}, {"Smooth · 10 fps ±15 ms + late", 60, 60, r10, 15, 0.03},
+            {"Default · 9.7 fps", 20, 30, r97, 5, 0}, {"Smooth · 9.7 fps", 60, 60, r97, 5, 0},
+            {"Default · 23 fps", 20, 30, r23, 5, 0}, {"Smooth · 23 fps", 60, 60, r23, 5, 0},
+            {"Default · 10 → 9 dip", 20, 30, rdip, 5, 0}, {"Smooth · 10 → 9 dip", 60, 60, rdip, 5, 0},
+            {"Default · 9–11 wander ±15", 20, 30, rwan, 15, 0}, {"Smooth · 9–11 wander ±15", 60, 60, rwan, 15, 0},
+            {"Eco · 23 fps (thinned)", 10, 10, r23, 5, 0},
+        };
+        for (const Case& cs : cases) {
+            auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+            EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = cs.cap;
+            e->setConfig(c); e->setView(100e6, 2.048e6);
+            uint32_t seed = 12345; auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+            const double T0 = gClock;
+            double nominal = 0, nextAt = 0, head = 0, lastStep = 0, maxGap = 0; int rateOff = 0, polls = 0;
+            std::vector<double> stepT;
+            for (double t = 0; t < 30000; t += 1) {
+                gClock = T0 + t;
+                if (t >= nextAt) {
+                    auto b = frame(1024, 300);
+                    e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+                    nominal += 1000.0 / cs.rate(nominal);
+                    nextAt = nominal + (rnd() * 2 - 1) * cs.jit + (rnd() < cs.late ? 40 + 40 * rnd() : 0);
+                }
+                e->testStep(gClock);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    polls++;
+                    if (u.image) {
+                        if (u.head > head && t >= 5000) {
+                            for (double k = head; k < u.head; k++) stepT.push_back(t);
+                            if (lastStep > 0) maxGap = std::max(maxGap, t - lastStep);
+                            lastStep = t;
+                        }
+                        head = u.head; rlImage(u.image);
+                    }
+                    if (u.peakPath) rlPath(u.peakPath);
+                    if (t >= 5000 && u.rowRate != cs.want) rateOff++;
+                }
+            }
+            // 1 s windows after 5 s
+            int wMin = 1 << 30, wMax = 0;
+            for (double w = 5000; w + 1000 <= 30000; w += 1000) {
+                int n = 0; for (double x : stepT) if (x >= w && x < w + 1000) n++;
+                wMin = std::min(wMin, n); wMax = std::max(wMax, n);
+            }
+            std::printf("  clock %-28s rows/s %d–%d, longest gap %.1f ms, %d polls\n", cs.name, wMin, wMax, maxGap, polls);
+            CHECK(wMin >= cs.want - 1 && wMax <= cs.want + 1, "%s: rows per 1 s window %d–%d (want %g)", cs.name, wMin, wMax, cs.want);
+            CHECK(maxGap <= 1000.0 / cs.want + 1.5, "%s: the supply never pauses — longest gap between rows %g ms (a tick is %g)",
+                  cs.name, maxGap, 1000.0 / cs.want);
+            CHECK(rateOff == 0, "%s: poll reports the clock's rate %g every time once settled (%d off)", cs.name, cs.want, rateOff);
+            delete e;
+        }
+    }
+    // ── SAMPLE-AND-HOLD, read back from the ring: an exact 10 fps feed at Default gives EVERY real frame exactly 3 rows; a
+    //    9.7 fps feed 3 or 4 (3,3,…,4 — the feed's own pattern); each row is one real frame, whole (never a blend). ──
+    for (double fps : {10.0, 9.7}) {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 20;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        const double T0 = gClock; double next = 0; int fi = 0; void* img = nullptr; double head = 0;
+        for (double t = 0; t < 12000; t += 1) {
+            gClock = T0 + t;
+            if (t >= next) { auto b = frame(1024, 100 + 40 * (fi % 20)); e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6); fi++; next += 1000.0 / fps; }
+            e->testStep(gClock);
+            UiUpdate u;
+            if (e->pollUi(u)) { if (u.image) { if (img) rlImage(img); img = u.image; head = u.head; } if (u.peakPath) rlPath(u.peakPath); }
+        }
+        // Walk the newest ~150 rows: runs of the same carrier position = one real frame's rows.
+        std::vector<int> runs; int last = -1, run = 0, blended = 0;
+        for (double h = head - 150; h <= head; h++) {
+            const uint8_t* r = rowOf((FakeImage*)img, h);
+            int pos = -1, hot = 0;
+            for (int b = 0; b < 1024; b++) if (r[b] > 200) { if (pos < 0) pos = b; hot++; }
+            if (hot > 12) blended++;                       // two carriers in one row = a blend
+            if (pos == last) run++; else { if (run) runs.push_back(run); run = 1; last = pos; }
+        }
+        runs.erase(runs.begin()); if (!runs.empty()) runs.pop_back();   // the edges are partial
+        int bad = 0, threes = 0;
+        for (int n : runs) { if (n == 3) threes++; if (fps == 10.0 ? n != 3 : (n < 3 || n > 4)) bad++; }
+        std::printf("  hold %.1f fps at Default: %zu frames, %d of them 3 rows, %d off-pattern, %d blended\n", fps, runs.size(), threes, bad, blended);
+        CHECK(bad == 0 && blended == 0, "%.1f fps at Default: rows per real frame %s (%zu frames, %d off-pattern, %d blended)",
+              fps, fps == 10.0 ? "all 3" : "3 or 4", runs.size(), bad, blended);
+        if (fps == 9.7) CHECK(threes > (int)runs.size() * 0.8, "9.7 fps: mostly 3s with an occasional 4 (%d of %zu are 3)", threes, runs.size());
+        if (img) rlImage(img);
+        delete e;
+    }
+    // ── V12 NO JITTER BUFFER IN FRONT OF THE CLOCK (v12-wf-no-jb — Stuart 2026-10-29: "if the buffer isnt needed for the
+    //    waterfall improve the latency there too please"): a clocked frame's row is in the ring within the clock's own
+    //    delay + one tick of its ARRIVAL (through the buffer it was ~1–2 feed intervals later), and the spectrum target
+    //    for it is published traceLagMs after its presentation — with its row as the UI shows it, not ahead or behind. ──
+    for (int cap : {20, 60}) {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = cap;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        uint32_t seed = 4242; auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+        const double T0 = gClock; double next = 0; int fi = 0;
+        std::vector<double> arrAt, ringAt, specAt;
+        for (double t = 0; t < 20000; t += 1) {
+            gClock = T0 + t;
+            if (t >= next) {
+                auto b = frame(1024, 100 + 40 * (fi % 20)); e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+                arrAt.push_back(t); ringAt.push_back(-1); specAt.push_back(-1); fi++;
+                next = fi * 100.0 + (rnd() * 2 - 1) * 15;
+            }
+            e->testStep(gClock);
+            UiUpdate u;
+            if (e->pollUi(u)) {
+                if (u.image) {   // the newest row's carrier → which frame it is (the latest one sent with that position)
+                    const uint8_t* r = rowOf((FakeImage*)u.image, u.head); int pos = -1;
+                    for (int b = 0; b < 1024; b++) if (r[b] > 200) { pos = b; break; }
+                    for (int k = fi - 1; k >= 0 && k >= fi - 6; k--) if (std::abs(100 + 40 * (k % 20) - pos) <= 4) { if (ringAt[k] < 0) ringAt[k] = t; break; }
+                    rlImage(u.image);
+                }
+                if (!u.specTarget.empty()) {   // the trace's peak → its frame
+                    int best = 0; for (int k = 1; k < (int)u.specTarget.size(); k++) if (u.specTarget[k] > u.specTarget[best]) best = k;
+                    const int bin = (int)std::lround(best * 1024.0 / u.specTarget.size());
+                    for (int k = fi - 1; k >= 0 && k >= fi - 6; k--) if (std::abs(100 + 40 * (k % 20) - bin) <= 8) { if (specAt[k] < 0) specAt[k] = t; break; }
+                }
+                if (u.peakPath) rlPath(u.peakPath);
+            }
+        }
+        double lat = 0, off = 0; int n = 0, no = 0, missing = 0;
+        for (size_t k = 0; k + 5 < arrAt.size(); k++) {
+            if (arrAt[k] < 5000) continue;
+            if (ringAt[k] < 0) { missing++; continue; }
+            lat += ringAt[k] - arrAt[k]; n++;
+            if (specAt[k] >= 0) { off += specAt[k] - ringAt[k]; no++; }
+        }
+        lat /= std::max(1, n); off /= std::max(1, no);
+        const double rate = cap == 20 ? 30 : 60, lag = vibewf::traceLagMs(rate);
+        std::printf("  no jitter buffer, %s: arrival → ring %.1f ms mean, ring → trace %.1f ms (traceLag %.1f), %d/%d traced, %d missing\n",
+                    cap == 20 ? "Default" : "Smooth", lat, off, lag, no, n, missing);
+        CHECK(missing == 0, "cap %d: every frame reaches the ring (%d missing)", cap, missing);
+        CHECK(lat <= 20 + 1000.0 / rate + 5, "cap %d: arrival → ring %.1f ms — the clock's delay + one tick, no jitter buffer", cap, lat);
+        CHECK(no >= n * 0.9, "cap %d: the trace takes (nearly) every frame (%d of %d)", cap, no, n);
+        CHECK(std::abs(off - lag) <= 1000.0 / rate / 2 + 3, "cap %d: the trace follows its row by traceLag %.1f ms (got %.1f)", cap, lag, off);
+        delete e;
+    }
+    // ── ★★★ THE INTERACTION BOOST (wf_row_clock.h boostRowRate — Stuart 2026-10-29): during a tune the clock's rate steps
+    //    up to the display's maximum as set (≤ 120, ≤ 12 × the feed), from frames already here, and back after the tail;
+    //    NATIVE is untouched (no rate, one row a frame, through the same tune). ──
+    {
+        struct BC { const char* name; int cap; int panel; int dcap; double fps; double base; double boosted; };
+        const BC bcs[] = {
+            {"Default · 10 fps · 120 Hz panel", 20, 120, 0, 10, 30, 120}, {"Default · 10 fps · 60 Hz panel", 20, 60, 0, 10, 30, 60},
+            {"Default · 5 fps · 120 Hz panel", 20, 120, 0, 5, 30, 60},     {"Smooth · 10 fps · FRAME RATE 60", 60, 120, 60, 10, 60, 60},
+            {"Eco · 10 fps · 120 Hz panel", 10, 120, 0, 10, 10, 120},      {"Default · 10 fps · FRAME RATE 30", 20, 120, 30, 10, 30, 30},
+            {"Native · 10 fps · 120 Hz panel", 0, 120, 0, 10, 0, 0},
+        };
+        for (const BC& bc : bcs) {
+            auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+            EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = bc.cap; c.panelHz = bc.panel; c.displayCapHz = bc.dcap;
+            c.smoothTune = true;
+            e->setConfig(c); double vc = 1'000'000; e->setView(vc, 200'000);
+            const double T0 = gClock; double next = 0; int fi = 0, rateBad = 0, maxRate = 0, after = -1; double head = 0, h0 = 0, h1 = 0;
+            int restBad = 0;
+            for (double t = 0; t < 16000; t += 1) {
+                gClock = T0 + t;
+                const bool tuning = t >= 8000 && t < 9500;
+                if (t >= next) {
+                    if (tuning) { vc -= 9'000; e->setView(vc, 200'000); e->setLastInteractAt(gClock); }
+                    auto b = frame(1024, 300); e->pushFrame(b.data(), 1024, vc, 200'000, vc); fi++;
+                    next = fi * 1000.0 / bc.fps;
+                }
+                e->testStep(gClock);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    if (u.image) { head = u.head; rlImage(u.image); }
+                    if (u.peakPath) rlPath(u.peakPath);
+                    maxRate = std::max(maxRate, (int)u.rowRate);
+                    if (t >= 8300 && t < 9500 && u.rowRate != bc.boosted) rateBad++;
+                    if ((t >= 5000 && t < 8000) || t >= 12500) { if (u.rowRate != bc.base) restBad++; }
+                    if (t >= 9500 && after < 0 && u.rowRate == bc.base) after = (int)(t - 9500);
+                }
+                if (t == 13000) h0 = head;
+                if (t == 15999) h1 = head;
+            }
+            std::printf("  boost %-34s rest %g → tune %d rows/s (max %d), back %d ms after the last step; rest rows/s %g\n",
+                        bc.name, bc.base, bc.boosted > 0 ? (int)bc.boosted : 0, maxRate, after, (h1 - h0) / 3);
+            CHECK(rateBad == 0 && maxRate == (int)bc.boosted, "%s: rate during the tune not %g (%d off, max %d)", bc.name, bc.boosted, rateBad, maxRate);
+            CHECK(restBad == 0, "%s: the rate at rest not %g (%d off)", bc.name, bc.base, restBad);
+            CHECK(maxRate <= 12 * bc.fps + 0.5, "%s: boost above 12 × the feed (%d)", bc.name, maxRate);
+            if (bc.cap == 0) CHECK(std::fabs((h1 - h0) - 3 * bc.fps) <= 2, "NATIVE through a tune: %g rows in 3 s at %g fps", h1 - h0, bc.fps);
+            delete e;
+        }
+    }
+    // ── NATIVE stays as it is: one row per frame received, in order, none repeated or dropped; no clock rate ──
+    {
+        auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = 0;
+        e->setConfig(c); e->setView(100e6, 2.048e6);
+        const double T0 = gClock; double next = 0; int fi = 0; void* img = nullptr; double head = 0, headAt = 0; int rateOn = 0, sent = 0;
+        uint32_t seed = 777; auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+        for (double t = 0; t < 15000; t += 1) {
+            gClock = T0 + t;
+            if (t >= next) {
+                auto b = frame(1024, 100 + 40 * (fi % 20)); e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6); fi++;
+                if (t >= 5000) sent++;
+                next = fi * 100.0 + (rnd() * 2 - 1) * 15;
+            }
+            if (t == 5000) headAt = head;
+            e->testStep(gClock);
+            UiUpdate u;
+            if (e->pollUi(u)) { if (u.image) { if (img) rlImage(img); img = u.image; head = u.head; } if (u.peakPath) rlPath(u.peakPath); if (u.rowRate != 0) rateOn++; }
+        }
+        // Each settled frame is one row: consecutive rows differ (no repeat), carriers step 40 bins at a time (none dropped).
+        int repeats = 0, skips = 0, lastPos = -1;
+        for (double h = head - 80; h <= head; h++) {
+            const uint8_t* r = rowOf((FakeImage*)img, h); int pos = -1;
+            for (int b = 0; b < 1024; b++) if (r[b] > 200) { pos = b; break; }
+            if (lastPos >= 0) { int d = ((pos - lastPos) % 800 + 800) % 800; if (d == 0) repeats++; else if (d != 40 && d != 800 - 760) skips++; }
+            lastPos = pos;
+        }
+        std::printf("  native: %g rows for %d frames, %d repeated, %d dropped\n", head - headAt, sent, repeats, skips);
+        CHECK(repeats == 0 && skips == 0, "NATIVE: one row per frame, in order (%d repeated, %d dropped in the last 80 rows)", repeats, skips);
+        CHECK(std::abs((head - headAt) - sent) <= 2, "NATIVE: %g rows for %d frames since 5 s", head - headAt, sent);
+        CHECK(rateOn == 0, "NATIVE: no clock rate reported (%d)", rateOn);
+        if (img) rlImage(img);
+        delete e;
+    }
+    // ── THE WHITE BAR (2026-10-29): a row the server built OUTSIDE its own capture gets no layer (wf_wide.h rowInCapture) ──
+    {
+        using namespace vibewf;
+        WideRow w; w.centreHz = 7115000; w.spanHz = 3000000; w.cells = 64;
+        w.floor.assign(32, -110.f); w.spread.assign(32, 1.f);
+        w.pkCell.assign(1, 0); w.pkDb.assign(1, 0.f); w.pkShape.assign(1, 0); w.nPk = 0;
+        WideState st; const double rs = 74409;
+        wideArrive(st, w, 0, 8793325 - rs / 2, rs, -140);
+        LayerRing L(4, 32, 64);
+        const ToIdx stop(-145, -115, 0, 0), real(-114, -84, 0, 0);
+        const double kOut = layerWriteRow(L, 0, &st, 8793325 - rs / 2, rs, 10, stop);
+        const double kIn  = layerWriteRow(L, 1, &st, 7100000 - rs / 2, rs, 10, real);
+        std::printf("  white bar: a row at 8.79 MHz on a 5.6-8.6 MHz capture -> layer k %.4f (the 40 m floor through its range = index %d); at 7.1 MHz k %.4f\n",
+                    kOut, stop(-110), kIn);
+        CHECK(kOut == 0, "a row outside its own capture got a layer (k %.4f) — it fills white", kOut);
+        CHECK(kIn > 0, "a row inside the capture lost its layer");
     }
     std::printf("images made %d freed %d · paths made %d freed %d\n", gImagesMade, gImagesFreed, gPathsMade, gPathsFreed);
     CHECK(gImagesMade == gImagesFreed, "image leak: %d made, %d freed", gImagesMade, gImagesFreed);

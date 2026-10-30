@@ -14,6 +14,7 @@
 //   vibe_rnskia exports in the patched react-native-skia), so this core builds and tests on the host.
 #pragma once
 #include "wf_row_target.h"
+#include "wf_row_clock.h"
 #include "wf_zoom_fan.h"   // + wf_motion.h
 #include "spectrum_processor.h"
 #include <atomic>
@@ -37,6 +38,7 @@ struct EngineConfig {
     bool   peakHold = true;
     bool   smoothTune = true;
     int    displayCapHz = 0;   // the FRAME RATE cap (0 = none): under 60 the row target divides it (wf_row_target.h rowTargetUnderCap)
+    int    panelHz = 0;        // ★ the panel's maximum refresh (0 = unknown): the interaction boost's ceiling when there is no cap
     int    targetRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
 };
 
@@ -48,6 +50,7 @@ struct UiUpdate {
     bool     texReady = false;
     int      quant = 1;            // uQuant
     double   avgFrameMs = 150;     // uAvgMs
+    double   rowRate = 0;          // ★ V12 the fixed output clock's rate, rows/s (0 = NATIVE / actual rows) — the UI's pTgt + clockPace
     uint32_t scrollGen = 0;        // changed → apply the LATEST scroll command:
     bool     glide = false;        //   (unused by the UI since 2026-10-28 — the display driver paces both ways)
     double   glideDur = 100;
@@ -81,11 +84,12 @@ public:
 
     // ── From JS ──
     /** One decoded frame (raw dB, display order). Copied; returns at once. trueCenterHz NaN = absent. */
-    void pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    /** ★★ trueBwHz = the bins' REAL span (SDRStatus.trueBwHz; NaN = bwHz is already theirs) — rows are placed by it. */
+    void pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz = NAN);
     /** The same, from the native spectrum socket (spec_socket.cpp) on ITS thread, at arrival. While the socket has fed
      *  a frame in the last NATIVE_FED_MS, pushFrame (JS's copy of the same frame, delivered later) is ignored — so a
      *  server on the native socket and one on the JS path (OWRX, Kiwi) need no switch. */
-    void pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    void pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz = NAN);
     /** ★★ V12 a full-capture row (SPWB v2, wf_wide.h) — the bytes as received; copied, applied on the engine thread with
      *  its ARRIVAL time (the layer interpolates between rows by it). From the native socket (…Native, its thread) or
      *  from JS (a server on the JS socket; ignored while the native socket feeds frames, as pushFrame is). */
@@ -112,10 +116,10 @@ public:
     double wideOffForTest() const { return wide_ ? wide_->off : NAN; }
 
 private:
-    void pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz);
+    void pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz);
     void pushWideImpl(const uint8_t* p, size_t len);
     void applyWide(const std::vector<uint8_t>& bytes, double at);   // engine thread
-    struct Frame { std::vector<float> bins; double centerHz = 0, bwHz = 0, trueCenterHz = NAN; double arrivedMs = 0; };
+    struct Frame { std::vector<float> bins; double centerHz = 0, bwHz = 0, trueCenterHz = NAN, trueBwHz = NAN; double arrivedMs = 0; };
 
     void loop();
     void runDue(double now);                 // timers + inbox, engine thread
@@ -127,7 +131,11 @@ private:
     void* makeRingImage();   // a new image of the ring as it stands (no lock), or nullptr
     void storeRingImageLocked(void* img);   // with mx_ held
     void emitRepeatRow();
-    void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost);
+    /** `at` > `now`: the trace waits for its row (WaterfallView traceShow) — queued, published by runTrace. */
+    void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at = 0, double now = 0);
+    void publishTrace(const std::vector<float>& spec, void* peak);
+    void runTrace(double now);
+    void traceDrop();
     double now() const;
 
     // Injected
@@ -172,6 +180,21 @@ private:
     vibewf::RowTargetState rowTargetSt_;   // rows/s aimed for now + its feed latch (wf_row_target.h); target 0 = actual rows
     int    rowTargetCap_ = -1; // the cfg.targetRows rowTarget_ was decided under
     int extrasLeft_ = 0; double extraSpacing_ = 0, extraDueAt_ = -1;
+    // ★★★ V12 THE FIXED OUTPUT CLOCK (wf_row_clock.h — every mode but NATIVE): rows made on its ticks, each the newest real
+    //     frame presented by then; the frames it may still show are kept here by id (a few — its queue is 4 deep).
+    struct ClockRow { long id = -1; std::vector<uint8_t> row; double c = 0, h = 0; };
+    vibewf::RowClock rowClock_;
+    vibewf::BoostState boost_;   // ★ the interaction boost (wf_row_clock.h boostRowRate)
+    int lastEaseLeft_ = 0;
+    std::vector<ClockRow> clockRows_;
+    std::vector<long> clockOut_;
+    long clockSeq_ = 0;
+    // ★★★ V12 2026-10-29 (v12-wf-no-jb) THE TRACE GOES WITH ITS ROW (WaterfallView traceShow): clocked frames skip the
+    //     jitter buffer, and the spectrum target waits here until its frame's row is on screen (presentation + traceLagMs).
+    struct TraceItem { double at = 0; std::vector<float> spec; void* peak = nullptr; };
+    std::deque<TraceItem> traceQ_;
+    void runClock(double now);
+    void clockOff();
     bool covNow_ = false, bgNow_ = false;  // engine-thread copies
     EngineConfig cfgNow_;
     double viewC_ = 0, viewBw_ = 0, interactAt_ = 0;
@@ -188,7 +211,7 @@ private:
     double imgK_ = 1, imgC_ = 0;                     // the fans' screen move taken with the image just made (engine thread)
     double imgMoLo_ = 1, imgMoHi_ = 0;               // …and its motion range
     double outK_ = 1, outC_ = 0, outMoLo_ = 1, outMoHi_ = 0;   // composed for the UI until it takes an image (mx_)
-    int outQuant_ = 1; double outAvgMs_ = 150;
+    int outQuant_ = 1; double outAvgMs_ = 150, outRowRate_ = 0;
     uint32_t scrollGen_ = 0; bool glide_ = false; double glideDur_ = 100;
     uint32_t specGen_ = 0; std::vector<float> outSpec_; bool specHidden_ = false;
     uint32_t peakGen_ = 0; void* outPeak_ = nullptr;

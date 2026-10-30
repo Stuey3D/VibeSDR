@@ -7,6 +7,7 @@
  */
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
+import { capFps, linkCapFor, isWfSpeedSetting, speedNumbers, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
@@ -8073,7 +8074,7 @@ let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
 // ★★ DEFAULTS TO SMOOTH *HERE* AND SHARP IN THE APP — each keeps the waterfall it already had, so
 //    nobody's picture changes on upgrade and the other one is a tap away. The two are not better
 //    and worse, they trade detail against motion (Stuart: "they both have their merits").
-let wfScroll: 'sharp' | 'default' | 'smooth' = 'default';
+let wfScroll: WfSpeedSetting = 'default';   // ★ V12 + 'minimum' / 'eco' (wfSpeedCap.ts); 'sharp' is labelled NATIVE
 // Rows synthesised per received frame for each preset. DETAILED is 1 = no interpolation at all.
 // ★ Each preset is a TARGET ROW RATE (rows/sec on screen), not a multiplier: this renderer works
 //   out how many rows to synthesise per frame pair to hit it, which is why a slow feed and a fast
@@ -8084,10 +8085,13 @@ let wfScroll: 'sharp' | 'default' | 'smooth' = 'default';
 //     feed: 5 fps → 5/15/30, 10 → 10/20/60, 20 → 20/20/60, UberSDR 3.3 → 3.3/10/20, OWRX ~9 → 9/20/30. Rates are
 //     SCREEN rows (points) — the app's row is one point. Every row is a REAL frame, repeated, never a blend (7bce170d).
 //     `rate` is the cap (it also sizes the render clock, renderHz).
-const WF_PRESET: Record<string, { rate: number; note: string }> = {
-  sharp:   { rate: 0,  note: 'One row per received frame — nothing repeated, and it scrolls at the data rate.' },
-  default: { rate: 20, note: 'Up to 20 rows/sec — three times the data rate, real rows repeated on a slow feed.' },
-  smooth:  { rate: 60, note: 'Up to 60 rows/sec — six times the data rate: the smoothest scroll, more repeats.' },
+// ★ V12: one fixed note explains all five (index.html #wfScrollNote) — `rate` is the row cap, for renderHz.
+const WF_PRESET: Record<string, { rate: number }> = {
+  minimum: { rate: 5 },
+  eco:     { rate: 10 },
+  sharp:   { rate: 0 },
+  default: { rate: 20 },
+  smooth:  { rate: 60 },
 };
 let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
 
@@ -8097,7 +8101,21 @@ function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
 /** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps). AUTO never asks
  *  for more than the chosen Speed — no point receiving frames the display would only throw away. */
 function computeActiveFps(): number {
-  return wfDataRate === 0 ? Math.min(wfSpeed, serverFpsCap()) : wfDataRate;
+  // ★ V12 MINIMUM / ECO: a CEILING on whatever else decides the rate (Auto or a pinned Data Rate) — 5 / 10, never a
+  //   divider, so a 5 pinned stays 5 (wfSpeedCap.capFps).
+  return capFps(wfDataRate === 0 ? Math.min(wfSpeed, serverFpsCap()) : wfDataRate, linkCapFor(wfScroll));
+}
+
+/** ★ V12: the live rows/s on each Waterfall speed key, from the server's own rate (its advertised max — the rate NATIVE
+ *  asks for). Unknown (no hwinfo yet) → names only. */
+function refreshWfScrollSeg() {
+  const nums = speedNumbers(serverMaxFps > 0 ? serverMaxFps : 0);
+  for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('#wfScrollSeg [data-wfscroll]'))) {
+    const k = b.dataset.wfscroll as WfSpeedSetting;
+    b.classList.toggle('on', k === wfScroll);
+    const n = b.querySelector('.wfNum');
+    if (n) n.textContent = nums ? String(nums[k]) : '';
+  }
 }
 
 /** Apply both controls: recompute the data rate, set the scroll speed, request the rate, refresh UI. */
@@ -8112,10 +8130,7 @@ function applyWaterfallRates() {
   //   than deleted so a saved wfSpeed still loads without a migration.
   { const r = document.getElementById('rowWfSpeed');    if (r) r.hidden = true;
     const n = document.getElementById('wfSpeedNote');   if (n) n.hidden = true;
-    const t = document.getElementById('wfScrollNote');
-    if (t) t.textContent = WF_PRESET[wfScroll]?.note ?? '';
-    for (const b of Array.from(document.getElementById('wfScrollSeg')?.children ?? []) as HTMLButtonElement[])
-      b.classList.toggle('on', b.dataset.wfscroll === wfScroll); }
+    refreshWfScrollSeg(); }
   spec?.setFftRate(wantedFps());
   refreshSpeedSeg();
   refreshDataRateSeg();
@@ -8136,11 +8151,14 @@ function refreshSpeedSeg() {
 /** Data-rate buttons above the server's ceiling are hidden; AUTO (0) is always available. */
 function refreshDataRateSeg() {
   const seg = document.getElementById('wfRateSeg'); if (!seg) return;
-  const cap = serverFpsCap();
+  // ★ V12: under MINIMUM / ECO a rate above that cap would ask for nothing more — hidden like one above the server's,
+  //   and the chosen one shown at what it now gets (20 under ECO lights 10). Choosing NATIVE etc. brings them back.
+  const cap = capFps(serverFpsCap(), linkCapFor(wfScroll));
+  const lit = wfDataRate > cap ? (Math.max(0, ...[20, 10, 5].filter(v => v <= cap))) : wfDataRate;
   for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
     const v = Number((b as HTMLButtonElement).dataset.wfrate);
     (b as HTMLButtonElement).hidden = v > cap;   // 0 (AUTO) is never > cap
-    b.classList.toggle('on', v === wfDataRate);
+    b.classList.toggle('on', v === lit);
   }
 }
 /** The owner's cap, from hwinfo. 0 = uncapped. */
@@ -13530,9 +13548,9 @@ function buildMenu() {
   // wondering whether the switch did anything.
   // Waterfall SPEED — on-screen scroll rate (10/20/30). Screen-relative (× dpr inside the waterfall),
   // so render resolution no longer changes the speed.
-  for (const b of Array.from($('wfScrollSeg').children) as HTMLButtonElement[]) {
+  for (const b of Array.from($('wfScrollSeg').querySelectorAll<HTMLButtonElement>('[data-wfscroll]'))) {
     b.onclick = () => {
-      wfScroll = (b.dataset.wfscroll as typeof wfScroll) || 'default';
+      wfScroll = isWfSpeedSetting(b.dataset.wfscroll) ? b.dataset.wfscroll : 'default';
       savePref('wfScroll', wfScroll);
       applyWaterfallRates();
     };
@@ -13556,7 +13574,7 @@ function buildMenu() {
   }
   // Restore saved choices, then apply once.
   { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
-  { const v = prefs().wfScroll;   if (v === 'sharp' || v === 'default' || v === 'smooth') wfScroll = v; }
+  { const v = prefs().wfScroll;   if (isWfSpeedSetting(v)) wfScroll = v; }   // an old 'sharp' loads as NATIVE
   { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
   if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
   applyWaterfallRates();

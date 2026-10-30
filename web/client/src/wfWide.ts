@@ -105,6 +105,13 @@ export function floorIdx(m: number, sigma: number, toIdx: (db: number) => number
   return Math.round(s);
 }
 
+/** ★★★ A row the server placed OUTSIDE its own capture gets no layer — the app's src/utils/wfWide.ts rowInCapture (the
+ *  white bar, 2026-10-29: rows built at a stale zoom offset, auto-ranged on the IF filter's stopband, then filled from the
+ *  real floor ~30 dB above that range when the view came back). */
+export function rowInCapture(rowLo: number, rowSpan: number, capCentreHz: number, capSpanHz: number): boolean {
+  return Math.abs(rowLo + rowSpan / 2 - capCentreHz) <= capSpanHz / 2;
+}
+
 /** The extended range X for a row `spanHz` wide of a capture `capHz` wide (the 2D twin): 0 = the row covers the capture. */
 export function wideExtent(capHz: number, spanHz: number): number {
   if (!(capHz > 0 && spanHz > 0) || spanHz >= capHz * 0.98) return 0;

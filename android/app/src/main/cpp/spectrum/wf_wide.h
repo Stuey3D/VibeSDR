@@ -197,12 +197,18 @@ struct LayerRing {
           pkIdx((size_t)r * p, 0), pkShape((size_t)r * p, 0), tmpC(c), tmpI(c) {}
 };
 
+/** ★★★ A row the server placed OUTSIDE its own capture gets no layer — src/utils/wfWide.ts rowInCapture (the white bar,
+ *  2026-10-29: rows built at a stale zoom offset, ranged on the IF filter's stopband, filled from the real floor). */
+inline bool rowInCapture(double rowLo, double rowSpan, double capCentreHz, double capSpanHz) {
+    const double c = rowLo + rowSpan / 2;
+    return std::fabs(c - capCentreHz) <= capSpanHz / 2;
+}
 /** The layer row for the ring row just written at `slot`, placed at (rowLo, rowSpan) Hz. Returns k (0 = none). */
 template <class F>
 inline double layerWriteRow(LayerRing& L, int slot, WideState* st, double rowLo, double rowSpan, double now, const F& toIdx) {
     L.k[slot] = 0; L.pkN[slot] = 0;
     if (!st || !st->has || !(rowSpan > 0) || !std::isfinite(rowLo) || rowSpan >= st->spanHz * LAYER_FULL || st->F != L.F
-        || st->C != L.C || !wideBlend(*st, now)) return 0;
+        || st->C != L.C || !rowInCapture(rowLo, rowSpan, st->centreHz, st->spanHz) || !wideBlend(*st, now)) return 0;
     const int Fn = L.F, C = L.C, P = L.P;
     const size_t fo = (size_t)slot * Fn;
     for (int i = 0; i < Fn; i++) {

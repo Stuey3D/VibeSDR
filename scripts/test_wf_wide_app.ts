@@ -12,7 +12,7 @@
  *     shape; black beyond the capture; a soft edge only where the detailed row's edge is on screen.
  * Run: node --no-warnings scripts/test_wf_wide_app.ts
  */
-import { floorIdx, isWideFrame, layerFillRow, layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide,
+import { floorIdx, isWideFrame, layerFillRow, layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, rowInCapture,
          wideArrive, wideBlend, wideCapture, WIDE_HDR, WIDE_STALE_MS } from '../src/utils/wfWide.ts';
 
 let pass = 0, fail = 0;
@@ -126,6 +126,23 @@ ok(toIdx0(-120) === 0 && toIdx0(-70) === 255 && toIdx0(-118) === 0, 'the dB → 
     t0 = performance.now(); for (let r = 0; r < RR; r++) layerFillRow(L2, r, 12, -5.5, N, d2, r * N, lo2);
     const tf = (performance.now() - t0) / RR;
     console.log(`   layer cost (this JS engine): ${(tw * 1000).toFixed(1)} µs a row written, ${(tf * 1000).toFixed(1)} µs a row filled (12× zoom out); RAM ${((F + 4 * L2.P + 16) * RR / 1024).toFixed(0)} KiB for ${RR} rows`); }
+}
+
+// ── ★★★ THE WHITE BAR (2026-10-29, RSP1A on the Lenovo): a row the server built OUTSIDE its capture gets no layer ──
+{
+  // The capture is 7.115 MHz ± 1.5 MHz (the tuner after the recentre). The zoom channel was left at +1678 kHz, so the rows
+  // claimed ~8.79 MHz: the IF filter's stopband, auto-ranged ~30 dB down (−145..−115). The 40 m floor in the layer is −110.
+  const cen = 7_115_000, span = 3_000_000, rowSpan = 74_409;
+  const st = newWideState();
+  wideArrive(st, parseWide(spwb(floorB, [], cen, span))!, 0, 8_793_325 - rowSpan / 2, rowSpan, -140);
+  const L = newLayerRing(4, F, C), stop = makeToIdx(-145, -115, 0, 0), real = makeToIdx(-114, -84, 0, 0);
+  const kOut = layerWriteRow(L, 0, st, 8_793_325 - rowSpan / 2, rowSpan, 10, stop);
+  ok(kOut === 0 && L.pkN[0] === 0, 'a row placed outside its own capture (8.79 MHz on 5.6–8.6) gets NO layer — it would be filled white');
+  ok(stop(-110) === 255, `(the guard is load-bearing: the 40 m floor through that row's range is index ${stop(-110)} — white)`);
+  const kIn = layerWriteRow(L, 1, st, 7_100_000 - rowSpan / 2, rowSpan, 10, real);
+  ok(kIn > 0, 'a row inside the capture (7.1 MHz) still gets its layer');
+  ok(rowInCapture(cen + span / 2 - rowSpan, rowSpan, cen, span) && !rowInCapture(cen + span / 2 + 1, rowSpan, cen, span),
+     'rowInCapture: a view at the capture\'s edge is in; one whose centre is past it is out');
 }
 
 console.log(`   app full-capture layer: ${pass} passed, ${fail} failed`);

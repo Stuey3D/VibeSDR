@@ -52,36 +52,37 @@ SpectrumEngine::~SpectrumEngine() {
     if (thread_.joinable()) thread_.join();
     if (outImage_) releaseImage_(outImage_);
     if (outPeak_) releasePath_(outPeak_);
+    traceDrop();   // ★ V12 peak paths still waiting for their rows
 }
 
 double SpectrumEngine::now() const { return clock_ ? clock_() : wallMs(); }
 
 // ── From JS ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
-void SpectrumEngine::pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
+void SpectrumEngine::pushFrameNative(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz) {
     if (!bins || n <= 0) return;
     {
         std::lock_guard<std::mutex> lk(mx_);
         nativeFedUntil_ = now() + NATIVE_FED_MS;
     }
-    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz);
+    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz, trueBwHz);
 }
 
-void SpectrumEngine::pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
+void SpectrumEngine::pushFrame(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz) {
     if (!bins || n <= 0) return;
     {
         std::lock_guard<std::mutex> lk(mx_);
         if (now() < nativeFedUntil_) return;   // the native socket already gave us this frame, on time
     }
-    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz);
+    pushFrameImpl(bins, n, centerHz, bwHz, trueCenterHz, trueBwHz);
 }
 
-void SpectrumEngine::pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz) {
+void SpectrumEngine::pushFrameImpl(const float* bins, int n, double centerHz, double bwHz, double trueCenterHz, double trueBwHz) {
     std::lock_guard<std::mutex> lk(mx_);
     Frame f;
     if (!framePool_.empty()) { f = std::move(framePool_.back()); framePool_.pop_back(); }
     f.bins.assign(bins, bins + n);
-    f.centerHz = centerHz; f.bwHz = bwHz; f.trueCenterHz = trueCenterHz;
+    f.centerHz = centerHz; f.bwHz = bwHz; f.trueCenterHz = trueCenterHz; f.trueBwHz = trueBwHz;
     f.arrivedMs = now();
     inbox_.push_back(std::move(f));
     // A runaway producer (the engine thread starved) must not grow memory: keep the newest few.
@@ -137,7 +138,7 @@ bool SpectrumEngine::pollUi(UiUpdate& out) {
     }
     out.image = outImage_; outImage_ = nullptr;            // ownership moves to the UI
     out.head = outHead_; out.texReady = texReady_;
-    out.quant = outQuant_; out.avgFrameMs = outAvgMs_;
+    out.quant = outQuant_; out.avgFrameMs = outAvgMs_; out.rowRate = outRowRate_;
     out.scrollGen = scrollGen_; out.glide = glide_; out.glideDur = glideDur_;
     out.specGen = specGen_; out.specHidden = specHidden_;
     if (specGen_ != uiSpec_) { out.specTarget = outSpec_; uiSpec_ = specGen_; }
@@ -159,6 +160,9 @@ void SpectrumEngine::loop() {
         double next = -1;
         if (jbDueAt_ >= 0) next = jbDueAt_;
         if (extraDueAt_ >= 0 && (next < 0 || extraDueAt_ < next)) next = extraDueAt_;
+        if (!traceQ_.empty() && (next < 0 || traceQ_.front().at < next)) next = traceQ_.front().at;   // ★ V12 the trace's wait
+        // ★ V12 the fixed output clock's next tick (engine-thread state, read here under mx_ as the deadlines above are)
+        if (rowClock_.rate > 0 && !vibewf::clockIdle(rowClock_, t)) { const double c = vibewf::clockNextAt(rowClock_); if (c >= 0 && (next < 0 || c < next)) next = c; }
         const bool work = !inbox_.empty() || settingsDirty_ || bg_ != bgNow_ || covered_ != covNow_ || (next >= 0 && next <= t);
         if (!work) {
             const double waitMs = next < 0 ? 1000 : std::max(1.0, next - t);
@@ -189,7 +193,7 @@ void SpectrumEngine::runDue(double now) {
     }
     if (applySettings) proc_.applySettings(ps);
     // ★ Background / cover STOP the repeat rows (the JS timer kept pushing up to 8 after either — and after unmount).
-    if ((bgNow_ && !wasBg) || (covNow_ && !wasCov)) { extrasLeft_ = 0; extraDueAt_ = -1; }
+    if ((bgNow_ && !wasBg) || (covNow_ && !wasCov)) { extrasLeft_ = 0; extraDueAt_ = -1; clockOff(); traceDrop(); }
     if (bgNow_ && !wasBg) {                                     // drainFrame's background branch, at once
         for (auto& f : jbQueue_) framePool_.push_back(std::move(f));
         jbQueue_.clear(); jbPrefill_ = true; jbDueAt_ = -1;
@@ -203,6 +207,8 @@ void SpectrumEngine::runDue(double now) {
     //    monotonic clock is the proper follow-up.
     if (jbDueAt_ > now + 1000) jbDueAt_ = now;
     if (extraDueAt_ > now + 1000) extraDueAt_ = now;
+    for (auto& it : traceQ_) if (it.at > now + 1000) it.at = now;
+    if (rowClock_.rate > 0 && vibewf::clockNextAt(rowClock_) > now + 1000) { rowClock_.t0 = now; rowClock_.k = 0; }
     {
         std::lock_guard<std::mutex> lk(mx_);
         if (nativeFedUntil_ > now + NATIVE_FED_MS) nativeFedUntil_ = 0;
@@ -215,6 +221,8 @@ void SpectrumEngine::runDue(double now) {
         extrasLeft_--;
         extraDueAt_ = extrasLeft_ > 0 ? now + extraSpacing_ : -1;
     }
+    if (rowClock_.rate > 0 && !bgNow_ && !covNow_) { const double c = vibewf::clockNextAt(rowClock_); if (c >= 0 && now >= c) runClock(now); }
+    if (!traceQ_.empty() && now >= traceQ_.front().at) runTrace(now);
     std::lock_guard<std::mutex> lk(mx_);
     while (framePool_.size() > 6) framePool_.pop_back();
 }
@@ -238,6 +246,22 @@ void SpectrumEngine::enqueue(Frame&& f, double now) {
         { std::lock_guard<std::mutex> lk(mx_); for (auto& q : jbQueue_) framePool_.push_back(std::move(q)); }
         jbQueue_.clear();
         jbPrefill_ = true;
+        jbLastArrival_ = now;
+        handleFrame(f, now);
+        std::lock_guard<std::mutex> lk(mx_); framePool_.push_back(std::move(f));
+        return;
+    }
+    // ★★★ V12 2026-10-29 (v12-wf-no-jb, WaterfallView enqueueFrame's twin): ON THE FIXED CLOCK, straight through on arrival —
+    //     `now` is the frame's real arrival (arrivedMs), and the clock's own presentation delay is the only de-jitter.
+    //     Stuart: "if the buffer isnt needed for the waterfall improve the latency there too please". The clock running
+    //     means the last frame was clocked; the first frame, a covered view or a feed too slow to fill comes through the
+    //     buffer once and starts it. NATIVE (targetRows 0) keeps the buffer. Anything banked from before goes.
+    if (rowClock_.rate > 0 && cfgNow_.targetRows > 0) {
+        jbDueAt_ = -1;
+        { std::lock_guard<std::mutex> lk(mx_); for (auto& q : jbQueue_) framePool_.push_back(std::move(q)); }
+        jbQueue_.clear();
+        jbPrefill_ = true;
+        if (jbLastArrival_ > 0) jbArrivalMs_ = jbArrivalMs_ * 0.8 + (now - jbLastArrival_) * 0.2;
         jbLastArrival_ = now;
         handleFrame(f, now);
         std::lock_guard<std::mutex> lk(mx_); framePool_.push_back(std::move(f));
@@ -307,10 +331,34 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     //     with hysteresis. 0 = actual rows. The fractional carry (rowCarry_) runs on across a change: no jump.
     if (cfg.targetRows != rowTargetCap_) { rowTargetSt_ = {}; rowTargetCap_ = cfg.targetRows; }   // a new setting decides afresh
     // ★★ …divided into the FRAME RATE cap below 60 (Stuart 2026-10-28: "in 30fps lock mode no point running a 60fps waterfall").
-    const double rowTarget = vibewf::rowTargetUnderCap(avgFrameMs_ > 0 ? vibewf::stepRowTarget(rowTargetSt_, cfg.targetRows, 1000.0 / avgFrameMs_)
-                                                                       : rowTargetSt_.target,
-                                                       avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, cfg.displayCapHz);
+    // ★★★ V12 2026-10-29: every mode but NATIVE runs on the FIXED OUTPUT CLOCK (wf_row_clock.h, runClock) at its latched
+    //     rate; NATIVE (targetRows 0) keeps its rule exactly as it was ("pure unmodified lines direct from the server").
+    const bool clocked = cfg.targetRows > 0;
+    const double baseRowTarget = clocked
+        ? (avgFrameMs_ > 0 ? vibewf::clockRateUnderCap(vibewf::clockRowRate(rowTargetSt_, cfg.targetRows, 1000.0 / avgFrameMs_), cfg.displayCapHz) : 0)
+        : vibewf::rowTargetUnderCap(avgFrameMs_ > 0 ? vibewf::stepRowTarget(rowTargetSt_, cfg.targetRows, 1000.0 / avgFrameMs_)
+                                                    : rowTargetSt_.target,
+                                    avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, cfg.displayCapHz);
+    // ★★★ THE INTERACTION BOOST (wf_row_clock.h boostRowRate — WaterfallView's twin; Stuart 2026-10-29: "increase during
+    //     interaction … even if it means a 12x frame generation" / "if the app is set to 120 we do 120"): while a hand is on
+    //     the dial or an ease is still drawing, the clock's rate steps up to the display's maximum as set, ≤ 120, ≤ 12 × the
+    //     feed. Frames already here, nothing asked of the server; NATIVE (not clocked) untouched.
+    //     (Also while the fan eases a move this hand did not make — a shared dial, a recentre: the boost is local.)
+    //     The tail runs from the last input or the START of the last ease; the boost then holds until the ease lands.
+    const bool easing = fan_.easeLeft > 0, easeStarted = fan_.easeLeft > lastEaseLeft_;
+    lastEaseLeft_ = fan_.easeLeft;
+    // (the input's OWN time — noting `now` while the input is recent would add a second tail)
+    if (interactAt_ > boost_.lastMove && now - interactAt_ < vibewf::BOOST_TAIL_MS) vibewf::boostNote(boost_, interactAt_);
+    if (easeStarted) vibewf::boostNote(boost_, now);
+    const bool boostOn = clocked && baseRowTarget > 0 && vibewf::boostActive(boost_, now, easing);
+    const double dispHz = cfg.displayCapHz > 0 ? (cfg.panelHz > 0 ? std::min(cfg.displayCapHz, cfg.panelHz) : cfg.displayCapHz)
+                                               : (cfg.panelHz > 0 ? cfg.panelHz : 60);
+    const double rowTarget = boostOn ? vibewf::boostRowRate(baseRowTarget, avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, dispHz)
+                                     : baseRowTarget;
     const bool repeatsCarry = rowTarget > 0;
+    // ★★ The zoom/tune ease is by TIME (wf_zoom_fan.h zoomEaseRows): the rows/s the waterfall runs at — the clock's rate, or
+    //    one row a frame in Native.
+    fan_.rowRate = rowTarget > 0 ? rowTarget : (avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 20.0);
     const bool wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
     if (lastWfPushAt_ > 0) {
@@ -321,29 +369,54 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     }
     lastWfPushAt_ = now;
     const double rowCentre = std::isnan(f.trueCenterHz) ? f.centerHz : f.trueCenterHz;
-    const double rowHzBin = (f.bwHz > 0 && n > 0) ? f.bwHz / n : 0;
+    // ★★ The row's OWN span (WaterfallView's twin, 2026-10-29): bwHz is the predicted view while a zoom is in flight, the
+    //   bins are at the server's rung — placed by the prediction, the fan eased rows by ratios the data never had.
+    const double rowBw = (!std::isnan(f.trueBwHz) && f.trueBwHz > 0) ? f.trueBwHz : f.bwHz;
+    const double rowHzBin = (rowBw > 0 && n > 0) ? rowBw / n : 0;
     // ★★ The row is published TOGETHER with the scroll state below (one lock, one version): the UI must never see
     //   the new head without the glide restart that goes with it. Apart, a poll between the two showed the head
     //   one row on with the old glide still at 1 — the whole waterfall a row forward for one frame, then back —
     //   at every real frame: the judder on an 8 fps feed (XCover 4s, 2026-10-12). The JS path does both in one
     //   synchronous call, so it never could.
-    pushRow(fr.row, n, rowCentre, rowHzBin, false);
+    const double revealMs = avgWfGapMs_ > 0 ? avgWfGapMs_ : avgFrameMs_;
+    const double dur = std::max(15.0, std::min(1000.0, revealMs));   // ★ 15, not 50 (2026-10-29): a > 20 fps feed over-ran the target
+    // ★★★ FILLED IN OR THINNED (2026-10-29, WaterfallView's twin): 0 = this frame is DISCARDED from the waterfall (a feed
+    //     faster than the rate, thinned evenly); the trace below still gets it. At most 9 (the stall guard).
+    const bool onClock = clocked && rowTarget > 0 && !covNow_;
+    const int rowsNow = onClock ? 0 : vibewf::rowsForArrival(rowCarry_, dur, rowTarget);
+    if (rowsNow > 0) pushRow(fr.row, n, rowCentre, rowHzBin, false);
     lastRow_.assign(fr.row, fr.row + n);
     lastRowCenterHz_ = rowCentre; lastRowHzPerBin_ = rowHzBin;
+    { std::lock_guard<std::mutex> lk(mx_); outRowRate_ = onClock ? rowTarget : 0; }
+
+    if (onClock) {
+        // ★★★ THE FIXED CLOCK (WaterfallView's twin): the frame goes to the clock — presented on the feed's de-jittered
+        //     schedule, at once during a gesture — and the clock makes the rows (runClock, on its ticks).
+        extrasLeft_ = 0; extraDueAt_ = -1;
+        const long id = ++clockSeq_;
+        ClockRow* slot = nullptr;
+        for (auto& r : clockRows_) if (r.id < 0) { slot = &r; break; }
+        if (!slot) { clockRows_.emplace_back(); slot = &clockRows_.back(); }
+        slot->id = id; slot->row.assign(fr.row, fr.row + n); slot->c = rowCentre; slot->h = rowHzBin;
+        vibewf::clockSetRate(rowClock_, rowTarget, now);
+        const double pAt = vibewf::clockArrive(rowClock_, id, now, boost);
+        runClock(now);
+        {
+            std::lock_guard<std::mutex> lk(mx_);
+            outQuant_ = wfBoost ? 0 : 1;
+            outAvgMs_ = avgFrameMs_;
+            outVer_++;
+        }
+        // ★★ The trace goes with its row: at its presentation + the rows the UI holds in hand (traceLagMs); at once in a
+        //   gesture.
+        buildSpectrum(fr, boost, boost ? 0 : pAt + vibewf::traceLagMs(rowTarget), now);
+        return;
+    }
+    if (rowClock_.rate > 0) clockOff();   // off the clock (NATIVE, a feed too slow to fill): the next clocked frame starts afresh
 
     if (covNow_) return;
-    const double revealMs = avgWfGapMs_ > 0 ? avgWfGapMs_ : avgFrameMs_;
-    const double dur = std::max(50.0, std::min(1000.0, revealMs));
-    const double rowMs = rowTarget > 0 ? 1000.0 / rowTarget : 0;
-    int extras = 0;
-    if (rowMs > 0) {
-        rowCarry_ += dur / rowMs;
-        extras = std::max(0, (int)std::floor(rowCarry_) - 1);
-        rowCarry_ -= std::floor(rowCarry_);
-        // ★ The rule never asks for more than 6 rows a frame (Stuart 10-20, wf_row_target.h), so 8 is headroom
-        //   again — kept as the stall guard it always was.
-        if (extras > 8) extras = 8;
-    }
+    if (rowsNow == 0) { buildSpectrum(fr, boost); return; }   // nothing new in the ring: no image, no scroll step
+    const int extras = rowsNow - 1;
     // scheduleExtraRows: always clear the pending chain first
     extrasLeft_ = extras;
     extraSpacing_ = dur / (extras + 1);
@@ -441,10 +514,39 @@ void SpectrumEngine::emitRepeatRow() {
     pushRow(lastRow_.data(), (int)lastRow_.size(), lastRowCenterHz_, lastRowHzPerBin_);
 }
 
+// ★★★ V12 THE FIXED OUTPUT CLOCK's ticks (wf_row_clock.h): every row due by `now`, each the newest real frame presented by
+//     its tick, into the ring — then ONE image for them all (a late wake-up makes up its ticks, at most 6).
+void SpectrumEngine::runClock(double now) {
+    clockOut_.clear();
+    vibewf::clockRun(rowClock_, now, clockOut_);
+    bool any = false;
+    for (long id : clockOut_) {
+        for (auto& r : clockRows_) if (r.id == id) { pushRow(r.row.data(), (int)r.row.size(), r.c, r.h, false); any = true; break; }
+    }
+    // Free the frames the clock can no longer show (not held, not queued).
+    for (auto& r : clockRows_) {
+        if (r.id < 0 || r.id == rowClock_.cur) continue;
+        bool queued = false;
+        for (auto& f : rowClock_.q) if (f.id == r.id) { queued = true; break; }
+        if (!queued) r.id = -1;
+    }
+    if (!any || covNow_ || bgNow_) return;
+    void* img = makeRingImage();
+    std::lock_guard<std::mutex> lk(mx_);
+    if (img) storeRingImageLocked(img);
+    outVer_++;
+}
+void SpectrumEngine::clockOff() {
+    vibewf::clockReset(rowClock_);
+    vibewf::clockSetRate(rowClock_, 0, 0);
+    for (auto& r : clockRows_) r.id = -1;
+}
+
 // Spectrum target (1493-1526) + peak path (1528-1552) + hidden (1553-1571)
-void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost) {
+void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at, double now) {
     const EngineConfig& cfg = cfgNow_;
     if (!(cfg.specShow && cfg.specH > 4)) {
+        traceDrop();
         std::lock_guard<std::mutex> lk(mx_);
         specHidden_ = true; specGen_++;
         if (outPeak_) { releasePath_(outPeak_); outPeak_ = nullptr; }
@@ -482,13 +584,37 @@ void SpectrumEngine::buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boo
     } else if (boost) {
         proc_.resetPeakHold();
     }
+    if (at > now) {   // ★ V12 waits for its row (never out of order; at most 4 waiting, as the clock's queue)
+        if (!traceQ_.empty() && at < traceQ_.back().at) at = traceQ_.back().at;
+        traceQ_.push_back(TraceItem{at, next, peak});
+        while (traceQ_.size() > 4) { if (traceQ_.front().peak) releasePath_(traceQ_.front().peak); traceQ_.pop_front(); }
+        return;
+    }
+    traceDrop();   // now: anything still waiting is older
+    publishTrace(next, peak);
+}
+void SpectrumEngine::publishTrace(const std::vector<float>& spec, void* peak) {
     std::lock_guard<std::mutex> lk(mx_);
-    outSpec_ = next;
+    outSpec_ = spec;
     specGen_++; specHidden_ = false;
     if (outPeak_) releasePath_(outPeak_);
     outPeak_ = peak;
     peakGen_++;
     outVer_++;
+}
+// ★★★ V12 the trace whose row is now on screen: every one due, the newest published (older ones' peak paths never shown).
+void SpectrumEngine::runTrace(double now) {
+    if (bgNow_ || covNow_) { traceDrop(); return; }
+    bool any = false; TraceItem due;
+    while (!traceQ_.empty() && traceQ_.front().at <= now) {
+        if (any && due.peak) releasePath_(due.peak);
+        due = std::move(traceQ_.front()); traceQ_.pop_front(); any = true;
+    }
+    if (any) publishTrace(due.spec, due.peak);
+}
+void SpectrumEngine::traceDrop() {
+    for (auto& it : traceQ_) if (it.peak) releasePath_(it.peak);
+    traceQ_.clear();
 }
 
 }  // namespace vibespec

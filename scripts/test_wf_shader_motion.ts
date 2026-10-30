@@ -24,7 +24,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes, ZOOM_EASE_ROWS } from '../src/utils/wfRowPlace.ts';
+import { fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes, ZOOM_EASE_ROWS, cappedEaseRows } from '../src/utils/wfRowPlace.ts';
 import { layerWriteRow, newLayerRing, newWideState, wideArrive, type WideRow } from '../src/utils/wfWide.ts';
 import { COLORMAPS_256 } from '../src/assets/colormaps.ts';
 
@@ -166,11 +166,14 @@ const THR = thrOf(vis.lvl);
 for (const [name, px] of [['settled', settled], ['mid-glide (continuous, t = 0.5)', mid]] as const) {
   // follow it from where it settled (above the sweep) down the bend until it leaves the screen
   const g = gaps(px, ySweepTop - 30, ySweepBot + 30, xEnd, THR);
-  ok(`view pan, ${name}: the swept carrier is ONE continuous trail down the bend (every device line touches the next)`, g.gaps === 0 && g.lines >= 120, `${g.gaps} gaps over ${g.lines} lines`);
+  // ★★★ 2026-10-29 THE SLOPE CAP: this sweep (1.4 % of the view a row at its fastest, no interaction boost here) is faster
+  //     than the cap, so the trail is spread over more rows — a longer, flatter-at-the-top bend that leaves the screen a
+  //     little sooner, and a 1-px threshold miss or three where the diagonal is shallow (the picture is continuous: WF_PNG)
+  ok(`view pan, ${name}: the swept carrier is ONE continuous trail down the bend (every device line touches the next)`, g.gaps <= 3 && g.lines >= 90, `${g.gaps} gaps over ${g.lines} lines`);
 }
 { const g = gaps(before, ySweepTop - 30, ySweepBot + 30, xEnd, THR);
   ok('CONTROL: the same rows without motion compensation are broken (the chunky dashes the test must see)', g.gaps >= 20, `${g.gaps} gaps over ${g.lines} lines`); }
-{ let diff = 0; for (let y = 0; y < ySweepTop - 2 * ROW_PX; y++) for (let x = 0; x < W; x++) if (settled[(y * W + x) * 4] !== before[(y * W + x) * 4]) diff++;
+{ let diff = 0; for (let y = 0; y < ySweepTop - 32 * ROW_PX; y++)   // (★ the slope cap's ease runs on ≤ 30 rows past the sweep) for (let x = 0; x < W; x++) if (settled[(y * W + x) * 4] !== before[(y * W + x) * 4]) diff++;
   for (let y = ySweepBot + 2 * ROW_PX; y < H; y++) for (let x = 0; x < W; x++) if (settled[(y * W + x) * 4] !== before[(y * W + x) * 4]) diff++;
   ok('steady rows (before and after the sweep) are pixel-identical with motion on or off', diff === 0, `${diff} px differ`); }
 // a trail ends straight where the view puts it
@@ -180,12 +183,12 @@ for (const [name, px] of [['settled', settled], ['mid-glide (continuous, t = 0.5
 { const B = newRing(); sweep(B, 2);
   const px = draw(B);
   const g = gaps(px, ySweepTop - 30, ySweepBot + 30, xEnd, THR, 60);   // (lagging rows leave the honest black edge strip, ~33 px, where the tuner has not been yet)
-  ok('tuner retune (rows lagging the view, #57): one continuous trail', g.gaps === 0 && g.lines >= 120, `${g.gaps} gaps over ${g.lines}`); }
+  ok('tuner retune (rows lagging the view, #57): one continuous trail', g.gaps <= 3 && g.lines >= 90, `${g.gaps} gaps over ${g.lines}`); }   // (as above: the slope cap)
 
 // ── 3. A ZOOM (×2 drum step) after the sweep (Stuart 2026-10-28: "a thin line signal should expand out to the width and
 //       the history remains the thin line"): the history keeps its zoom, the new rows ease to the new one, ONE line ──
 { const Z = newRing(); sweep(Z, 0);
-  const NEW = 24;
+  const NEW = 40;   // (★ the slope cap: a ×2 eases up to 30 rows)
   for (let i = 0; i < NEW; i++) push(Z, endC, span / 2, endC, span / 2);
   const [k, c] = takeFanStep(Z.fan);
   ok('a ×2 zoom: no screen ease (the history is not moved)', k === 1 && c === 0, `${k} ${c}`);
@@ -194,7 +197,8 @@ for (const [name, px] of [['settled', settled], ['mid-glide (continuous, t = 0.5
   const zs = stations.filter((s) => s.lvl > 0.75 && Math.abs(s.f - endC) > span / 12 && Math.abs(s.f - endC) < span / 5)[0];
   const ZTHR = thrOf(zs.lvl);
   const xOld = (zs.f - (endC - span / 2)) / span * W, xNew = (zs.f - (endC - span / 4)) / (span / 2) * W;
-  const yNew1 = (NEW - ZOOM_EASE_ROWS - 1) * ROW_PX, yH0 = (NEW + 1) * ROW_PX, yH1 = ySweepTop + NEW * ROW_PX - 6;
+  const ZR = cappedEaseRows(endC - span / 2, span, endC - span / 4, span / 2, ZOOM_EASE_ROWS);
+  const yNew1 = (NEW - ZR - 1) * ROW_PX, yH0 = (NEW + 1) * ROW_PX, yH1 = ySweepTop + NEW * ROW_PX - 32 * ROW_PX;   // (★ the sweep's capped ease runs ≤ 30 rows past it)
   let offN = 0; for (let y = ROW_PX; y < yNew1; y += ROW_PX) { const r = run(px, y, xNew, ZTHR, 30); if (!r || Math.abs((r[0] + r[1]) / 2 - xNew) > 5) offN++; }
   ok('a ×2 zoom: the new lines show the station at the new zoom', offN === 0, `${offN} lines off`);
   let offH = 0; for (let y = yH0; y < yH1; y += ROW_PX) { const r = run(px, y, xOld, ZTHR, 30); if (!r || Math.abs((r[0] + r[1]) / 2 - xOld) > 5) offH++; }
@@ -202,7 +206,10 @@ for (const [name, px] of [['settled', settled], ['mid-glide (continuous, t = 0.5
   const g = gaps(px, ROW_PX, yH1, xNew, ZTHR);
   ok(`a ×2 zoom: the FAN — one continuous line from the new column (${xNew.toFixed(0)}) down to the old (${xOld.toFixed(0)})`, g.gaps === 0, `${g.gaps} gaps over ${g.lines}`);
   const g0 = gaps(pOff, ROW_PX, yH1, xNew, ZTHR);
-  ok('CONTROL: the same rows without the motion join step (the fan needs it)', g0.gaps >= 3, `${g0.gaps} gaps over ${g0.lines}`); }
+  // ★★★ 2026-10-29 THE SLOPE CAP: this used to be a CONTROL (without the join the fan broke into ≥ 3 dashes). The ease is
+  //     now long enough that no row moves the station more than the cap — the rows touch even WITHOUT the join. (The sweep's
+  //     CONTROL above still proves the gap counter sees dashes.)
+  ok('the slope cap: the ×2 fan is continuous even without the motion join (each row moves the station under the cap)', g0.gaps === 0, `${g0.gaps} gaps over ${g0.lines}`); }
 
 // WF_ZOOM_PNG=path: a picture of the zoom — steady at 150 kHz, a pinch in to ×4 (5 % a row), then two ×2 drum steps back out
 if (process.env.WF_ZOOM_PNG) {
@@ -216,11 +223,27 @@ if (process.env.WF_ZOOM_PNG) {
   console.log(`  wrote ${process.env.WF_ZOOM_PNG}`);
 }
 
+// WF_KEYS_PNG=path: Stuart's 2026-10-29 slices — ×√2 zoom keys (VibeServer), six presses out then three ×2 rungs back in
+//   (UberSDR), then a 1 kHz tune step and a short spin; rows at Default 30 (each a whole real row, the clock's)
+if (process.env.WF_KEYS_PNG) {
+  const Z = newRing(); let bw = span / 2; const c0 = 700_000;
+  for (let i = 0; i < 60; i++) push(Z, c0, bw, c0, bw);
+  for (let k = 0; k < 6; k++) { bw *= Math.SQRT2; for (let i = 0; i < 24; i++) push(Z, c0, bw, c0, bw); }
+  for (let k = 0; k < 3; k++) { bw /= 2; for (let i = 0; i < 30; i++) push(Z, c0, bw, c0, bw); }
+  let c = c0; c += 1_000; for (let i = 0; i < 30; i++) push(Z, c, bw, c, bw);
+  for (let k = 0; k < 12; k++) { c += 500; push(Z, c, bw, c, bw); push(Z, c, bw, c, bw); }
+  for (let i = 0; i < 40; i++) push(Z, c, bw, c, bw);
+  lastSurf.length = 0; draw(Z, { lut: lutGqrx });
+  const sf = lastSurf[0]; writeFileSync(process.env.WF_KEYS_PNG, sf.surf.makeImageSnapshot().encodeToBytes());
+  console.log(`  wrote ${process.env.WF_KEYS_PNG}`);
+}
+
 // ── 4. A resize: the same ring at another visible depth — the rows on screen are the same rows ──
 { const short = draw(A, { vis: 200 }); let diff = 0;
   for (let y = 0; y < 200 * ROW_PX; y++) for (let x = 0; x < W; x += 7) if (short[(y * W + x) * 4] !== settled[(y * W + x) * 4]) diff++;
-  // (a handful of px may differ by float rounding of the sub-row position inside a warped row — not a re-draw)
-  ok('a resize keeps the history: the newest 200 rows draw identically at a shorter height', diff <= 10, `${diff} px differ`); }
+  // (a handful of px may differ by float rounding of the sub-row position inside a warped row — not a re-draw; the
+  //  2026-10-29 time-based glide makes ~3× as many warped rows, so 10 → 30 of the ~26 000 sampled)
+  ok('a resize keeps the history: the newest 200 rows draw identically at a shorter height', diff <= 30, `${diff} px differ`); }
 
 // ── 5. V12 THE FULL-CAPTURE LAYER: zoom in away from the stations, then back out (docs/v12/WATERFALL-FULL-CAPTURE.md) ──
 {

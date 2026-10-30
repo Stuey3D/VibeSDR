@@ -40,7 +40,9 @@
  *   - Needle: 3-layer LED glow (28/16/6 blur), needleScale = clamp(.25,1,pxPerHz×4000)
  */
 
-import { newRowTargetState, stepRowTarget, rowTargetUnderCap } from '../assets/wfRowTarget';
+import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, rowsForArrival, type WfScroll } from '../assets/wfRowTarget';
+import { boostActive, boostNote, boostRowRate, BOOST_TAIL_MS, clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockReset, clockRowRate, clockRun, clockSetRate, newBoost, newRowClock }
+  from '../assets/wfClock';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
@@ -78,13 +80,13 @@ import { FramePool, type FrameSlot } from '../services/framePool';
 const JB_MAX_QUEUE_SLOTS = 5;
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { useScreenCovered } from '../hooks/useScreenCovered';
-import { cadenceGap, uiFrameCapHz } from '../services/uiCadence';
+import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
 import { setWideSink } from '../services/wideRowBus';
-import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate } from '../utils/wfPace';
+import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate, traceLagMs } from '../utils/wfPace';
 
 // ── Layout constants (vibeWaterfall.ts v1.5) ──────────────────────────────────
 
@@ -216,7 +218,7 @@ export interface WaterfallViewProps {
    *    SMOOTH   4 — continuous motion on a slow feed, at the cost of largely synthesised rows.
    *  ★ Scroll SPEED therefore follows the data rate (rows/s = multiplier x fps), which is what
    *    SHARP has always done and what nobody has ever objected to. */
-  wfScroll?:       'sharp' | 'default' | 'smooth';
+  wfScroll?:       WfScroll;   // ★ V12 'eco' = 10 rows/s, 'minimum' = actual rows (5 rows/s under a sub-5 feed) — wfRowTarget ROW_RULE
   /** ★★ THE SLOWEST FRAME RATE THIS BACKEND EVER DELIVERS — what the fixed multiplier is sized
    *  against. It is a property of the SERVER, not a measurement, so it is known at connect and
    *  never moves: UberSDR bottoms out at 3.3 fps (→ 6x for a 20 rows/s scroll), VibeServer at
@@ -439,19 +441,22 @@ const WF_EFFECT = Skia.RuntimeEffect.Make(WF_SKSL);
 /** The native spectrum engine's host object (cpp/spectrum/spectrum_jsi.cpp). JS calls the setters and push; the UI
  *  thread calls poll. */
 interface SpectrumEngineHost {
-  push(bins: Float32Array, centerHz: number, bwHz: number, trueCenterHz: number | undefined, lastInteractAt: number): void;
+  push(bins: Float32Array, centerHz: number, bwHz: number, trueCenterHz: number | undefined, lastInteractAt: number,
+       trueBwHz?: number): void;   // ★ the bins' real span (an older binary ignores it)
   setView(centerHz: number, bwHz: number): void;
   /** ★ V12 a full-capture row (SPWB, utils/wfWide.ts) the JS socket received — the engine keeps the layer (wf_wide.h).
    *  Optional: a binary built before it has none, and then the row is simply not drawn. */
   pushWide?(frame: Uint8Array): void;
   setConfig(c: { width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
-                 smoothTune: boolean; targetRows: number; displayCapHz?: number }): void;
+                 smoothTune: boolean; targetRows: number; displayCapHz?: number; panelHz?: number }): void;
   setSettings(s: Record<string, number | boolean>): void;
   setBackground(bg: boolean): void;
   setCovered(c: boolean): void;
   liveRange(): [number, number] | null;
   poll(): {
     image?: SkImage; head: number; texReady: boolean; quant: number; avgMs: number;
+    /** ★ V12 the fixed output clock's rate, rows/s (0 = NATIVE / actual rows); absent from a binary built before it. */
+    rowRate?: number;
     scrollGen: number; glide: boolean; glideDur: number;
     /** The motion range of this image (absolute frames) and the fans' screen move since the last image (x_old = c + k·x). */
     moLo?: number; moHi?: number; fanK?: number; fanC?: number;
@@ -559,12 +564,16 @@ function WaterfallView({
   // ★★ SMOOTH IS 60, NOT 40 (Stuart, 2026-10-13: "smooth is at 60 and is working so keep it"). 40 rows/s divides evenly
   //   into no drawing rate — ⅔ of a row per frame at 60, 1⅓ at 30: a regular judder (Galaxy Tab A9, measured 2·1·2·1).
   //   60 is one row a frame at 60, two at 30, one every other at 120; Default's 30 is one at 30, one every other at 60.
+  // ★★★ DEFAULT RUNS AT 30, NEVER 20 (Stuart, 2026-10-29, the Mac on a 10 fps UberSDR: "its the 20 that is causing the
+  //     frame pacing issues"; "30fps here would work well"; Native 10 and Smooth 60 were perfect). wfRowTarget.ts: Default's
+  //     rates are 10 / 15 / 30 (3 × the feed, rounded UP). The cap below stays 20 — it is the code the engine knows as
+  //     Default (EngineConfig::targetRows), not the rate. The 10-20 note that follows is superseded:
   // ★★ DEFAULT IS 20, NOT 30 (Stuart, 2026-10-20): with 10 fps the server default, 20 and 60 divide evenly
   //   into 5/10/20 fps feeds and 60/120 Hz displays; 30 gave x1.5 alternating repeats on a 20 fps feed
   //   (1, 2, 1, 2 rows per frame). The web client now uses these same three (web/client/src/main.ts WF_PRESET).
   // ★★★ AND THESE ARE NOW CAPS (Stuart 10-20): the rows aimed for follow the measured feed — min(cap, 3x / 6x the feed),
   //     snapped to a divisor of 60 (src/assets/wfRowTarget.ts; handleFrame / spectrum_engine.cpp apply it).
-  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 20 : 0;
+  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 20 : wfScroll === 'eco' ? 10 : wfScroll === 'minimum' ? 5 : 0;
   // ★★ WF_ROWS (a lines-per-frame figure LATCHED from the measured feed rate) is GONE
   //     (2026-10-03). Since uN was pinned to 1 nothing read it — it only fed `cfg.rowsPerFrame`,
   //     which no code read either. Its latch never latched (handleFrame is a []-deps callback and
@@ -637,7 +646,7 @@ function WaterfallView({
     const sharpBase =
       // Interpolation blur scales with how many rows are synthesised, so the unsharp base follows
       // the multiplier rather than a frame rate that no longer drives anything.
-      wfScroll === 'smooth' ? 3 : wfScroll === 'default' ? 2 : 1.5;
+      wfScroll === 'smooth' ? 3 : wfScroll === 'default' ? 2 : wfScroll === 'eco' ? 1.75 : 1.5;   // minimum = sharp's
     // ★★ LINEAR ACROSS THE WHOLE SLIDER, with a ceiling about double the old
     // maximum. The curve used to be quadratic, which made the BOTTOM half do
     // nothing — slider 2 was (2/5)^2 = 0.16x base, imperceptible — so a 10-point
@@ -1064,7 +1073,7 @@ function WaterfallView({
   // incremental display shift, colourise, new SkImage. The line ticker emits
   // duplicate pushes of the latest data row between frames so the fps modes
   // reach 30/60 lines per second.
-  const pushRow = useCallback((srcRow: Uint8Array, rowCenterHz = 0, rowHzPerBin = 0) => {
+  const pushRow = useCallback((srcRow: Uint8Array, rowCenterHz = 0, rowHzPerBin = 0, publish = true) => {
     // ★★ THE RING IS A FIXED SIZE IN BOTH DIMENSIONS. It used to be reallocated
     // whenever the incoming bin count changed, which also reset frameCount to 0 —
     // and the shader indexes from that ABSOLUTE counter, so the reset made it
@@ -1165,7 +1174,7 @@ function WaterfallView({
     //   open — but no texture is built or uploaded and the shader does not run for a screen nobody
     //   can see. publishRing() makes the one texture on uncover. See useScreenCovered.
     if (coveredRef.current) { ringDirty.current = true; return; }
-    publishRing();
+    if (publish) publishRing(); else ringDirty.current = true;   // (the fixed clock's catch-up: several rows, ONE image)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
 
@@ -1275,6 +1284,47 @@ function WaterfallView({
     };
     extraTimer.current = setTimeout(tick, spacingMs);
   }, [emitRepeatRows]);
+
+  /* ★★★ THE FIXED OUTPUT CLOCK (V12 2026-10-29, src/assets/wfClock.ts — every mode but NATIVE). Stuart: "if we are only
+   *  doing a straight 2x 3x interpolation an incoming rate that drifts about will make it feel juddery which is why I said
+   *  to over interpolate and discard to avoid this issue". The rows used to be made PER ARRIVAL (rowsForArrival + the
+   *  repeat timer above), so the supply followed the feed: a late frame left the playout buffer empty and the scroll
+   *  stalled. Now the rows come off a steady clock at the mode's rate, each one the newest REAL frame presented by its
+   *  tick (a repeat, never a blend); a late frame costs one more repeat, two frames in one tick drop the older. This timer
+   *  only PRODUCES them into the ring, at exactly the rate; the UI thread releases them on the display's frames
+   *  (utils/wfPace.ts clockPace). Frames are kept here by id until the clock has shown or dropped them. */
+  const rowClock   = useRef(newRowClock());
+  const boostSt    = useRef(newBoost());   // ★ the interaction boost (wfClock.ts boostRowRate)
+  const lastEaseLeft = useRef(0);
+  const clockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clockOut   = useRef<number[]>([]);
+  const clockSeq   = useRef(0);
+  /** The real frames the clock may still show, by id (a few: the clock's queue is 4 deep, plus the one it holds). */
+  const clockFrames = useRef(new Map<number, { row: Uint8Array; c: number; h: number }>());
+  const clockPool   = useRef<{ row: Uint8Array; c: number; h: number }[]>([]);   // their buffers, reused (no per-frame allocation)
+  const clockStop = useCallback(() => {
+    if (clockTimer.current) { clearTimeout(clockTimer.current); clockTimer.current = null; }
+  }, []);
+  const pumpClock = useCallback(() => {
+    clockTimer.current = null;
+    const rc = rowClock.current, now = performance.now(), out = clockOut.current;
+    out.length = 0;
+    clockRun(rc, now, out);
+    for (let i = 0; i < out.length; i++) {
+      const f = clockFrames.current.get(out[i]);
+      if (f) pushRow(f.row, f.c, f.h, i === out.length - 1);   // several due (a busy JS thread): ONE image for them all
+    }
+    // Forget frames the clock can no longer show (older than the one it holds and not queued).
+    if (clockFrames.current.size > 6) {
+      const keep = new Set<number>(rc.q.map(f => f.id)); keep.add(rc.cur);
+      for (const [id, f] of clockFrames.current) if (!keep.has(id)) { clockFrames.current.delete(id); if (clockPool.current.length < 8) clockPool.current.push(f); }
+    }
+    if (bgRef.current || coveredRef.current || clockIdle(rc, now)) return;   // a dead link stops; the next frame restarts it
+    const nx = clockNextAt(rc);
+    if (nx >= 0) clockTimer.current = setTimeout(pumpClock, Math.max(0, nx - performance.now()));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pushRow]);
+  useEffect(() => clockStop, [clockStop]);   // unmount
 
   const revealCb = useFrameCallback((fi) => {
     'worklet';
@@ -1404,6 +1454,19 @@ function WaterfallView({
   const pCool  = useSharedValue(0);
   const pMode  = useSharedValue(0);
   const pRate  = useSharedValue(0.03);   // rows per ms, measured (starts at Default's 30/s)
+  /** ★★★ V12 (Stuart 2026-10-28: "the interpolation always over interpolates and discards"): when the rows are being
+   *  FILLED IN to a target (Eco 10, Default 20, Smooth 60, Minimum 5 under a slow feed), the pace is that TARGET, rows
+   *  per ms — not the measured arrival rate. The fill-in pushes rows in lumps (9 fps → 10 is 1,1,…,1,2 per arrival), and
+   *  a ½ s measurement of lumps swung 8 ↔ 12 rows/s, so ECO's one-row-every-6-frames rhythm held on ~45 % of steps.
+   *  Paced at the known target, the playout buffer absorbs the lumps (as the web's RowPacer does) and the rhythm holds
+   *  (scripts/test_wf_speed_cap.ts). 0 = actual rows: the measured rate, as before. */
+  const pTgt   = useSharedValue(0);
+  /** ★ V12 2026-10-29: the rows come off the FIXED OUTPUT CLOCK (every mode but NATIVE — wfClock.ts): released by
+   *  clockPace (an exact-rate phase accumulator, the buffer held by whole-frame slips), not rowPace's mode lock. */
+  const pClocked = useSharedValue(false);
+  const engRateSeen = useSharedValue(false);   // the engine reports its rate (poll().rowRate) — the JS mirror stands down
+  const engTgtSt = useRef(newRowTargetState());   // the engine path's twin of the engine's own row target (see frameSink)
+  const engTgtMs = useRef({ last: 0, avg: 0, cap: -1 });
   const pRateT = useSharedValue(0);
   const pRateN = useSharedValue(0);
   const pPos   = useSharedValue(0);      // the continuous position, rows (contPace)
@@ -1436,7 +1499,9 @@ function WaterfallView({
     rowRate(avail, ts, pRate, pRateN, pRateT, interacting);   // ★ frozen while interacting (a re-subscribe's pause)
     const before = uHead.value;
     const wantCont = uQuantSv.value < 0.5;
-    const cRate = pSRate.value > 0 ? pSRate.value : pRate.value;   // the SETTLED pace, frozen while continuous
+    // the SETTLED pace, frozen while continuous — ★ but clocked rows run at the clock's rate (pTgt), which the interaction
+    // boost raises while the hand is on the dial: the release follows the supply exactly, up and back down.
+    const cRate = pClocked.value && pTgt.value > 0 ? pTgt.value : (pSRate.value > 0 ? pSRate.value : pRate.value);
     if (wantCont && !pCont.value) {
       paceToCont(pShown, pPos, pLead, pCLead, pCTgt);   // from where the whole-row picture is: no lurch
       pCont.value = true;
@@ -1448,6 +1513,8 @@ function WaterfallView({
       const pos = contPace(avail, pPos, pCLead, cRate, gap, pCTgt.value);
       if (land) {
         paceToSettled(avail, pPos, pShown, pAcc, pLead, pCLead, pMode);
+        // ★ Clocked rows (wfPace clockPace): the phase starts half a frame's share from the edge, never on it.
+        if (pClocked.value && pTgt.value > 0) pAcc.value = Math.min(0.5, pTgt.value * gap / 2);
         pCont.value = false;
         uQuantDrawSv.value = 1;
         if (uHead.value !== pShown.value) uHead.value = pShown.value;
@@ -1461,7 +1528,8 @@ function WaterfallView({
         scrollFrac.value = pos - w;
       }
     } else {
-      const shown = rowPace(avail, pShown, pAcc, pLead, pCool, pMode, pRate.value, gap, true);
+      const shown = rowPace(avail, pShown, pAcc, pLead, pCool, pMode, pTgt.value > 0 ? pTgt.value : pRate.value, gap, true,
+                            pClocked.value && pTgt.value > 0);
       shownRate(shown, ts, pSRate, pSN, pST);
       if (uHead.value !== shown) uHead.value = shown;
       if (scrollFrac.value !== 1) scrollFrac.value = 1;
@@ -1568,6 +1636,14 @@ function WaterfallView({
       //   judder is worse … we had these issues in the past and we fixed them".)
       uQuantSv.value = p.quant;
       uAvgMs.value = p.avgMs;
+      // ★ V12 THE FIXED OUTPUT CLOCK: the engine says the rate its rows come at — the pace (pTgt) and the release
+      //   (clockPace) follow the engine's own number, not a JS mirror of its rule.
+      if (p.rowRate != null) {
+        engRateSeen.value = true;
+        const tg = p.rowRate > 0 ? p.rowRate / 1000 : 0;
+        if (pTgt.value !== tg) pTgt.value = tg;
+        if (pClocked.value !== p.rowRate > 0) pClocked.value = p.rowRate > 0;
+      }
       uNSv.value = 1;
       if (p.specGen !== engSpec.value) {
         engSpec.value = p.specGen;
@@ -1672,6 +1748,55 @@ function WaterfallView({
   const watchCfg = useRef({ tuneHz, filterLow, filterHigh });
   watchCfg.current = { tuneHz, filterLow, filterHigh };
 
+  /* ★★★ THE TRACE GOES WITH ITS ROW (V12 2026-10-29, v12-wf-no-jb). The waterfall's frames now skip the jitter buffer and
+   *  go to the fixed clock on arrival (enqueueFrame) — Stuart: "if the buffer isnt needed for the waterfall improve the
+   *  latency there too please". The SPECTRUM TRACE was de-jittered by that same buffer; left behind a buffer of its own
+   *  it would trail the newest row by ~85 ms (simulated, scripts/test_wf_fixed_clock.ts), and on arrival it takes the
+   *  raw network jitter. So the trace is retargeted on the CLOCK's de-jittered schedule instead: at the frame's
+   *  presentation time plus the rows the release holds in hand (traceLagMs) — when that frame's row comes on screen.
+   *  Simulated: trace → newest row 50–70 ms apart through the buffer, now 0–20 (±1 tick of the 33 ms tween), and both
+   *  ~140 ms sooner. Its ~30 fps easing tween is unchanged. At once (at = 0) in a gesture, off the clock (NATIVE, a feed
+   *  too slow to fill) and whenever nothing is waiting — exactly as before. Never out of order; a newer frame that is
+   *  due supersedes an older one still waiting (its peak path is disposed unseen). */
+  const traceQ     = useRef<{ at: number; spec: number[]; peak: SkPath | null }[]>([]);
+  const traceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const traceApply = useCallback((spec: number[], peak: SkPath | null) => {
+    specToSv.value = spec;
+    if (specDispSv.value.length !== spec.length) specDispSv.value = Array.from(spec);
+    setSpecTweenActive(true);   // idle → running; a no-op while it already is
+    swapPath(peakPath, peak ?? peakEmpty);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setSpecTweenActive, swapPath]);
+  const traceDrop = useCallback(() => {
+    if (traceTimer.current) { clearTimeout(traceTimer.current); traceTimer.current = null; }
+    const q = traceQ.current;
+    for (const it of q) if (it.peak) { try { it.peak.dispose(); } catch {} }   // never shown: no grace needed
+    q.length = 0;
+  }, []);
+  const traceRun = useCallback(() => {
+    traceTimer.current = null;
+    if (bgRef.current || coveredRef.current || specDead.value) { traceDrop(); return; }
+    const q = traceQ.current, now = performance.now();
+    let due: { at: number; spec: number[]; peak: SkPath | null } | null = null;
+    while (q.length && q[0].at <= now + 1) {   // several due (a busy JS thread): the newest is the target
+      const it = q.shift()!;
+      if (due?.peak) { try { due.peak.dispose(); } catch {} }
+      due = it;
+    }
+    if (due) traceApply(due.spec, due.peak);
+    if (q.length) traceTimer.current = setTimeout(traceRun, Math.max(0, q[0].at - performance.now()));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [traceApply, traceDrop]);
+  const traceShow = useCallback((spec: number[], peak: SkPath | null, at: number) => {
+    if (!(at > performance.now())) { traceDrop(); traceApply(spec, peak); return; }   // now: anything waiting is older
+    const q = traceQ.current;
+    if (q.length && at < q[q.length - 1].at) at = q[q.length - 1].at;                 // never out of order
+    q.push({ at, spec, peak });
+    while (q.length > 4) { const o = q.shift()!; if (o.peak) { try { o.peak.dispose(); } catch {} } }   // the clock's own depth
+    if (!traceTimer.current) traceTimer.current = setTimeout(traceRun, Math.max(0, q[0].at - performance.now()));
+  }, [traceApply, traceDrop, traceRun]);
+  useEffect(() => traceDrop, [traceDrop]);   // unmount
+
   const handleFrame = useCallback((fbins: Float32Array, fstatus: SDRStatus) => {
     // Backgrounded: audio keeps playing on its own native path, but the whole
     // visual frame path (Reanimated withTiming glide + reveal/tween setIntervals
@@ -1752,9 +1877,35 @@ function WaterfallView({
     if (rowTargetCap.current !== cfg.targetRows) { rowTargetSt.current = newRowTargetState(); rowTargetCap.current = cfg.targetRows; }
     // ★★ …and under a FRAME RATE cap below 60 it divides the cap (wfRowTarget rowTargetUnderCap — Stuart 2026-10-28: "in
     //    30fps lock mode no point running a 60fps waterfall"): 60 → 30, 20 → 15.
-    const rowTarget = rowTargetUnderCap(avgFrameMs.current > 0
-      ? stepRowTarget(rowTargetSt.current, cfg.targetRows >= 60 ? 'smooth' : cfg.targetRows > 0 ? 'default' : 'sharp', 1000 / avgFrameMs.current)
-      : rowTargetSt.current.target, 1000 / Math.max(1, avgFrameMs.current), uiFrameCapHz.value);
+    // ★★★ V12 2026-10-29: every mode but NATIVE runs on the FIXED OUTPUT CLOCK (pumpClock) at wfClock's rate — the same
+    //     rule, latched so it does not step DOWN while the feed still supports it (Stuart's 9–11 fps UberSDR kept Smooth
+    //     at 60, not 60 ↔ 30). NATIVE keeps its rule exactly as it was (0 = actual rows: "pure unmodified lines").
+    const wfScroll = scrollForCap(cfg.targetRows);
+    const feedFps = 1000 / Math.max(1, avgFrameMs.current);
+    const clocked = wfScroll !== 'sharp';
+    const baseRowTarget = clocked
+      ? (avgFrameMs.current > 0 ? clockRateUnderCap(clockRowRate(rowTargetSt.current, wfScroll, feedFps), uiFrameCapHz.value) : 0)
+      : rowTargetUnderCap(avgFrameMs.current > 0
+          ? stepRowTarget(rowTargetSt.current, wfScroll, 1000 / avgFrameMs.current)
+          : rowTargetSt.current.target, feedFps, uiFrameCapHz.value);
+    // ★★★ THE INTERACTION BOOST (src/assets/wfClock.ts boostRowRate — Stuart 2026-10-29: "increase during interaction …
+    //     even if it means a 12x frame generation" / "if the app is set to 120 we do 120"). While a hand is on the dial
+    //     (BOOST_TAIL_MS after the last input) or an ease is still drawing, the CLOCK's rate steps up to the display's
+    //     maximum as set (the FRAME RATE cap, or the panel's), ≤ 120, ≤ 12 × the feed. The extra rows are frames already
+    //     here, each at its own in-between view (fanAfterRow) — the ease gets the rows its curve needs. Nothing is asked
+    //     of the server. NATIVE (baseRowTarget from its own rule, never clocked) is untouched.
+    const ptNow = Date.now();   // (the boost's clock: lastInteractAt's)
+    //     ★ Also while the fan is easing a move this hand did not make (a shared dial, a recentre): the rows it needs are
+    //       the same, and the boost is local — nothing goes to the server.
+    //       The tail runs from the last input or the START of the last ease; the boost then holds until the ease lands.
+    const easeLeft = fanSt.current?.easeLeft ?? 0, easing = easeLeft > 0;
+    const easeStarted = easeLeft > lastEaseLeft.current; lastEaseLeft.current = easeLeft;
+    // (the input's OWN time — noting `now` while the input is recent would add a second tail)
+    const inAt = lastInteractAt?.current ?? 0;
+    if (inAt > boostSt.current.lastMove && ptNow - inAt < BOOST_TAIL_MS) boostNote(boostSt.current, inAt);
+    if (easeStarted) boostNote(boostSt.current, ptNow);
+    const boostOn = clocked && baseRowTarget > 0 && boostActive(boostSt.current, ptNow, easing);
+    const rowTarget = boostOn ? boostRowRate(baseRowTarget, feedFps, uiDisplayMaxHz()) : baseRowTarget;
     const repeatsCarry = rowTarget > 0;
     const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
@@ -1777,6 +1928,8 @@ function WaterfallView({
     //     (Stuart, build 70). My comment claimed the trace had "already run for this frame" — it
     //     had not, and I never checked the order before asserting it.
     const wfGated = cfg.minGapMs > 0 && now - lastWfPushAt.current < cfg.minGapMs;
+    /** When the SPECTRUM TRACE takes this frame (performance.now() ms; 0 = at once) — see traceShow. */
+    let traceAt = 0;
     if (!wfGated) {
     // ★★★ MEASURE THE GAP BETWEEN ROW-SETS, NOT BETWEEN DATA FRAMES. This is the quantity the
     //     reveal has to be spread over, and using the wrong one is what made the waterfall "leap a
@@ -1799,9 +1952,52 @@ function WaterfallView({
     }
     lastWfPushAt.current = now;
 
-    const rowCentre = fstatus.trueCenterHz ?? fstatus.centerHz;
-    const rowHzBin  = fstatus.bwHz > 0 && frame.row.length > 0 ? fstatus.bwHz / frame.row.length : 0;
-    pushRow(frame.row, rowCentre, rowHzBin);
+    // ★★★ THE ROW'S OWN GEOMETRY — centre AND span (2026-10-29, beta37 iPhone on UberSDR: "the fan out on zoom doesn't
+    //     work properly", the history below a zoom out drawn as sideways smears). bwHz is the PREDICTED view while a zoom
+    //     is in flight (300 ms after the last send), but the bins are at the server's rung — UberSDR snaps every request
+    //     to its ladder (200/300/500/1000/2000 Hz a bin, measured). Labelled with the prediction, every pinch step and the
+    //     settle's snap to the real rung were taken for zoom steps the data never made: each started a fan ease that
+    //     magnified rows by the wrong ratio and joined rows of one scale as if they were another — rows stretched
+    //     sideways and torn. Placed by trueBwHz, a row changes span only when its bins really do, and the fan runs once
+    //     per real step. (The trace and the axis keep the predicted geometry — they move under the finger.)
+    const [rowCentre, rowHzBin] = rowGeometry(fstatus, frame.row.length);   // utils/wfRowPlace.ts
+    // ★★★ FILLED IN OR THINNED (2026-10-29, Stuart on a 23 fps Kiwi: "interpolate and discard"): the rows this frame
+    //     becomes at the target (wfRowTarget rowsForArrival) — 0 = DISCARDED from the waterfall (a feed faster than the
+    //     rate: Eco's 13 fps Kiwi thinned evenly to 10), 1 = the frame, more = the frame and repeats. The spectrum trace
+    //     and everything else above still had this frame. Native (target 0) is always 1: every frame, as it comes.
+    const revealMs = avgWfGapMs.current > 0 ? avgWfGapMs.current : avgFrameMs.current;
+    // ★ Floor 15 ms, not 50 (2026-10-29): a feed faster than 20 fps (a 23 fps Kiwi) was counted as 50 ms a frame, so its
+    //   rows over-ran the target by up to 2.5× once Default/Smooth filled such a feed in (23 fps at 30 → 34 rows/s).
+    const dur = Math.max(15, Math.min(1000, revealMs));
+    const onClock = clocked && rowTarget > 0 && !coveredRef.current;
+    const rowsNow = onClock ? 0 : rowsForArrival(rowCarry, dur, rowTarget);
+    // ★★ The zoom/tune ease is by TIME (wfRowPlace.ts zoomEaseRows): the rows/s the waterfall runs at — the clock's rate, or
+    //    one row a frame in Native.
+    if (fanSt.current) fanSt.current.rowRate = rowTarget > 0 ? rowTarget : (avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 20);
+    if (rowsNow > 0) pushRow(frame.row, rowCentre, rowHzBin);
+    if (onClock) {
+      // ★★★ THE FIXED CLOCK: the frame is handed to the clock (presented on the feed's de-jittered schedule — at once
+      //     during a gesture, as the jitter buffer is bypassed then too), and the clock makes the rows (pumpClock).
+      // ★★★ V12 2026-10-29 (v12-wf-no-jb): the frame comes here ON ARRIVAL now, not out of the jitter buffer (see
+      //     enqueueFrame) — `t` is its real arrival, and the clock's own presentation delay (0.2 × the interval, ≤ 40 ms) is
+      //     the only de-jitter. Stuart: "if the buffer isnt needed for the waterfall improve the latency there too please".
+      //     Simulated (scripts/test_wf_fixed_clock.ts): arrival → on screen ~220 → ~80 ms, stalls and bursts still 0.
+      const id = ++clockSeq.current, t = performance.now();
+      let slot = clockPool.current.pop();
+      if (!slot || slot.row.length !== frame.row.length) slot = { row: new Uint8Array(frame.row.length), c: 0, h: 0 };
+      clockFrames.current.set(id, slot);
+      slot.row.set(frame.row); slot.c = rowCentre; slot.h = rowHzBin;
+      clockSetRate(rowClock.current, rowTarget, t);
+      const pAt = clockArrive(rowClock.current, id, t, boost);
+      clockStop();
+      pumpClock();
+      // ★★ The trace goes with its row: at the frame's presentation time plus the rows clockPace holds in hand, so the
+      //   trace eases to this frame as its row comes on screen (traceLagMs). At once in a gesture (as before).
+      if (!boost) traceAt = pAt + traceLagMs(rowTarget);
+    } else if (rowClock.current.rate > 0) {
+      // Off the clock (NATIVE, a feed too slow to fill, or covered): stop it; the next clocked frame starts afresh.
+      clockStop(); clockReset(rowClock.current); clockSetRate(rowClock.current, 0, 0); clockFrames.current.clear();
+    }
     // Keep it for the repeat pushes on a slow feed (frame.row is reused by the caller).
     if (!lastRow.current || lastRow.current.length !== frame.row.length)
       lastRow.current = new Uint8Array(frame.row.length);
@@ -1815,10 +2011,8 @@ function WaterfallView({
     // copies synchronously — no snapshot needed
     uQuantSv.value = wfBoost ? 0 : 1;
 
-    // The interval the rows are spread over: the gap between ROW-SETS, falling back to the frame
-    // interval until it has been measured.
-    const revealMs = avgWfGapMs.current > 0 ? avgWfGapMs.current : avgFrameMs.current;
-    const dur = Math.max(50, Math.min(1000, revealMs));
+    // (The interval the rows are spread over, `dur` — the gap between ROW-SETS, falling back to the frame interval until
+    // it has been measured — was worked out with the row count above.)
 
     // ★★★ ROW EMISSION HAPPENS ON BOTH PATHS — THIS IS WHAT MADE SLOW FEEDS SLOW.
     //     `wfBoost` is true whenever the feed is below ~15 fps (lowFps: avgFrameMs > 66 ms), which
@@ -1830,15 +2024,12 @@ function WaterfallView({
     //     ★ It made sense in the OLD model, where the glide came from uFrac sweeping across uN
     //       synthesised lines. With uN = 1 there are no synthesised lines to sweep: the scroll IS
     //       the rows, so the rows must be pushed on every path.
-    const rowMs = rowTarget > 0 ? 1000 / rowTarget : 0;
-    let extras = 0;
-    if (rowMs > 0) {
-      rowCarry.current += dur / rowMs;      // rows this interval has earned (fractional)
-      extras = Math.max(0, Math.floor(rowCarry.current) - 1);   // the arrival itself was row #1
-      rowCarry.current -= Math.floor(rowCarry.current);
-      // ★ The rule never asks for more than 6 rows a frame (Stuart 10-20), so 8 is headroom — the stall guard.
-      if (extras > 8) extras = 8;           // a stall must not repay as a burst
-    }
+    // Rows this interval has earned at the target (fractional carry; the arrival itself was row #1) — wfRowTarget
+    // carryRows, proved with the display pacer in scripts/test_wf_speed_cap.ts. ★ The rule never asks for more than 6
+    // rows a frame (Stuart 10-20), so its cap of 8 is headroom — the stall guard.
+    const extras = onClock ? 0 : Math.max(0, rowsNow - 1);   // (rowsForArrival above — the arrival itself, when kept, was row #1; the clock makes its own)
+    { const tg = rowTarget > 0 ? rowTarget / 1000 : 0; if (pTgt.value !== tg) pTgt.value = tg; }   // the pace (see pTgt)
+    if (pClocked.value !== onClock) pClocked.value = onClock;   // the release for clocked rows (wfPace clockPace)
     lastDynRows.current = extras + 1;
     scheduleExtraRows(extras, dur / (extras + 1));
     // ★★★ SPREAD THE REVEAL OVER THE ROW-SET INTERVAL, NOT THE DATA-FRAME INTERVAL. On a gated
@@ -1923,6 +2114,7 @@ function WaterfallView({
       // clock regardless of the data rate, so the trace stays fluid at ANY rate — the way
       // VibeServer/Jr do it. The view is pinned during a gesture, so the spectrum content barely
       // shifts and the small easing lag is invisible; on release the tween eases to the new view.
+      let traceNext: number[] | null = null;
       {
         // Retarget the tween at the latest frame.
         // ★ Array.from, because a worklet cannot be handed a Float32Array — the shared value has to
@@ -1945,11 +2137,10 @@ function WaterfallView({
         } else {
           next = Array.from(fs);
         }
-        specToSv.value = next;
-        if (specDispSv.value.length !== next.length) specDispSv.value = Array.from(next);
-        setSpecTweenActive(true);   // idle → running; a no-op while it already is
+        traceNext = next;
       }
 
+      let peakNext: SkPath | null = null;   // null = draw no peak trace
       if (cfg.peakHold && !boost) {
         const pk = frame.peak;
         const sLen = pk.length;
@@ -1966,18 +2157,21 @@ function WaterfallView({
         }
         const pp = Skia.Path.Make();
         pp.addPoly(pool, false);
-        swapPath(peakPath, pp);
+        peakNext = pp;
       } else {
         // Peak hold PAUSES while interacting: bin-indexed peaks detach from
         // their signals as the view moves (geometry is pinned during gestures
         // so the processor can't see the shift) and smear the display. Clear
         // and hide; it re-seeds within a frame or two of settling.
         if (boost) proc.current.resetPeakHold();
-        swapPath(peakPath, peakEmpty); // empty = draw nothing (a no-op once already empty)
+        // (peakNext null → swapPath(peakPath, peakEmpty): empty = draw nothing, a no-op once already empty)
       }
+      // The trace and the peak path go up together — now, or with this frame's row (traceShow).
+      traceShow(traceNext!, peakNext, traceAt);
     } else {
       // Spectrum hidden — nothing needs inter-frame smoothness; the panel can
       // fall all the way to the data rate.
+      traceDrop();
       stopSpecTween();
       // ★★★ CLEAR IT, DO NOT swapPath IT. swapPath DISPOSES the outgoing path, and since the tween
       // moved to the UI thread the outgoing path is one of the two PERSISTENT buffers the worklet
@@ -2003,6 +2197,12 @@ function WaterfallView({
   // arrival jitter never reaches the display — the reason Jr and the web client feel smooth at a
   // variable/low frame rate where the phone (rendering per-arrival) juddered. targetDepth = 1 frame of
   // banked latency (insurance against a late row); prefill/hold when dry, catch up when backed up.
+  // ★★★ V12 2026-10-29 (v12-wf-no-jb): NOT for the fixed clock's modes any more. The clock de-jitters the waterfall itself
+  //     (wfClock.ts: each frame presented on the feed's smoothed schedule, a late one costs a repeat), so the buffer in
+  //     front of it only added latency — 80–190 ms of the app's ~160–260 ms. Stuart: "if the buffer isnt needed for the
+  //     waterfall improve the latency there too please". Those frames go straight to handleFrame on arrival (enqueueFrame)
+  //     and the trace rides the clock's schedule (traceShow). Still through here: NATIVE (no clock), and a feed too slow
+  //     for the clock to fill (it runs per arrival, as before).
   const jbQueue       = useRef<FrameSlot[]>([]);
   /* ★★ The queued copies come from a small pool, not a fresh `bins.slice()` + status spread per frame
    *  (framePool.ts — the biggest steady-state allocation in the 2026-10-03 iPhone profile). A slot goes back
@@ -2038,6 +2238,18 @@ function WaterfallView({
     if (bgRef.current) return;
     const now = Date.now();
     const interacting = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+    // ★★★ ON THE FIXED CLOCK: straight through, on arrival (see the note above). The clock running (rate > 0) means the
+    //     last frame was clocked; the first frame of a session, a covered view or a feed too slow to fill comes through
+    //     the buffer once and starts it. Anything still banked from before goes — it is older than this frame.
+    if (!interacting && rowClock.current.rate > 0 && scrollForCap(frameCfg.current.targetRows) !== 'sharp') {
+      if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; }
+      if (jbQueue.current.length) jbClear();
+      jbPrefill.current = true;
+      if (jbLastArrival.current > 0) jbArrivalMs.current = jbArrivalMs.current * 0.8 + (now - jbLastArrival.current) * 0.2;
+      jbLastArrival.current = now;
+      handleFrame(bins, status);         // consumed synchronously — parent's reused buffers are safe
+      return;
+    }
     // DURING interaction, BYPASS the buffer — tune/zoom must feel instant. The jitter buffer only
     // exists to smooth steady-state scroll; holding a frame here costs up to a full arrival period
     // (~200ms at 5fps) of lag on every crown move — the slowdown VibeServer/Jr don't have because
@@ -2089,11 +2301,22 @@ function WaterfallView({
     frameSink.current = engine
       ? (bins: Float32Array, st: SDRStatus) => {
           const at = lastInteractAt?.current ?? 0;
-          engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, at);
+          engine.push(bins, st.centerHz ?? 0, st.bwHz ?? 0, st.trueCenterHz, at, st.trueBwHz);
           // ★ The FRAME RATE cap reaches the engine's row target (rowTargetUnderCap) when it changes — no React state
           //   carries it here, so it is checked per frame (one number compare) and the config re-sent on a change.
           const cap = uiFrameCapHz.value, ec = engineCfg.current;
-          if (ec && ec.displayCapHz !== cap) { ec.displayCapHz = cap; engine.setConfig(ec); }
+          if (ec && (ec.displayCapHz !== cap || (ec.panelHz ?? 0) !== uiPanelMaxHz.value)) { ec.displayCapHz = cap; ec.panelHz = uiPanelMaxHz.value; engine.setConfig(ec); }
+          // ★ The pace target (pTgt) — the SAME rule the engine applies (wf_row_target.h, the same feed EMA), worked out
+          //   here because the engine's poll does not carry it. 0 = actual rows.
+          if (ec && !engRateSeen.value) {   // (an engine binary from before the fixed clock: mirror its old rule)
+            const m = engTgtMs.current, now = Date.now();
+            if (m.cap !== ec.targetRows) { engTgtSt.current = newRowTargetState(); m.cap = ec.targetRows; }
+            if (m.last > 0) { const d = now - m.last; if (d > 0 && d < 2000) m.avg = m.avg > 0 ? m.avg * 0.8 + d * 0.2 : d; }
+            m.last = now;
+            const t = m.avg > 0 ? rowTargetUnderCap(stepRowTarget(engTgtSt.current, scrollForCap(ec.targetRows), 1000 / m.avg), 1000 / m.avg, cap) : 0;
+            const tg = t > 0 ? t / 1000 : 0;
+            if (pTgt.value !== tg) pTgt.value = tg;
+          }
           // The display driver's interaction flag (120 Hz, the pace rate frozen) — the engine's own boost rule.
           const on = frameCfg.current.smoothTune && Date.now() - at < SMOOTH_TUNE_TAIL_MS;
           if (interactSv.value !== on) interactSv.value = on;
@@ -2103,10 +2326,10 @@ function WaterfallView({
   }, [frameSink, enqueueFrame, engine, lastInteractAt]);
 
   const engineCfg = useRef<{ width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
-                             smoothTune: boolean; targetRows: number; displayCapHz: number } | null>(null);
+                             smoothTune: boolean; targetRows: number; displayCapHz: number; panelHz?: number } | null>(null);
   // ── Native engine: the state JS owns, forwarded when it changes ──────────────────────────────────────────
   useEffect(() => {
-    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value };
+    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value, panelHz: uiPanelMaxHz.value };
     engine?.setConfig(engineCfg.current);
   }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS]);
   useEffect(() => { engine?.setCovered(covered); }, [engine, covered]);
