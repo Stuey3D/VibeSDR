@@ -115,6 +115,7 @@ public:
             k.panelHz = (int)num(r, o, "panelHz", 0);
             k.stampViewRows = (int)num(r, o, "stampViewRows", 0);       // ★★ the scale stamps (wf_stamps.h)
             k.stampMinGapRows = (int)num(r, o, "stampMinGapRows", 0);
+            k.ringRows = (int)num(r, o, "ringRows", 0);                 // ★★ the ring depth to grow to (wf_ring_grow.h)
             en.setConfig(k);
             return jsi::Value::undefined();
         });
@@ -179,6 +180,7 @@ public:
             if (u.image) {                                   // ride with the image (WaterfallView enginePoll)
                 o.setProperty(r, "moLo", u.moLo); o.setProperty(r, "moHi", u.moHi);
                 o.setProperty(r, "fanK", u.fanK); o.setProperty(r, "fanC", u.fanC);
+                o.setProperty(r, "ringRows", u.ringRows);    // ★★ the depth of THIS image (the shader's uRows)
             }
             o.setProperty(r, "specGen", (double)u.specGen);
             o.setProperty(r, "specHidden", u.specHidden);
