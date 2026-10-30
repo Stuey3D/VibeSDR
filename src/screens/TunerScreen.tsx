@@ -1122,14 +1122,16 @@ export default function TunerScreen({ route, navigation }: Props) {
       { name: dualScreenOf(p), params: p },
     ] } as never);
   }, [navigation]);
-  /* ★★ THE BACK KEY CARRIES IT (Stuart: "all we need to do is add the option in the back button to connect a 2nd
-   *  server" — FM-DX has no ‹ Servers chip; its control island's menu slot IS Back). TAP stays Back, one tap, exactly as
-   *  before, for everybody not using two servers. HOLD Back for the two-server options, in the Servers chip's own rows
-   *  and words: ‹ Back to server list, Listen to a 2nd server (with its hint), Stop listening to <the other>.
-   *  ★ While two are playing a TAP asks too: leaving now leaves the other playing alone, and "Stop listening to …" has
-   *    nowhere else to live on this screen. */
+  /* ★★ THE BACK KEY CARRIES IT (Stuart, 2026-10-30: "cant we simply pop the menu up when tapping back?"). FM-DX has no
+   *  ‹ Servers chip — its control island's menu slot IS Back — so a press of Back opens a small menu, the Servers chip's
+   *  own rows and words: ‹ Back to server list, Listen to a 2nd server (with its hint), and while two are playing
+   *  Stop listening to <the other>. One press for a touch, a game controller, a TV remote or a keyboard alike — the rows
+   *  are appAlert's, which a pad moves through and its Back closes (= Cancel); never a hold.
+   *  ★ Nowhere to add a second server and nothing behind (a build without the second voice): Back is Back, one press.
+   *  ★ The system back (Android's back, the swipe) stays plain Back: it leaves, and the other server plays on alone. */
   const offerSecond = !!dualMyId && canListenSecond(dualParams) && dualShape.phase === 'off';
-  const tunerBackMenu = useCallback(() => {
+  const onTunerBack = useCallback(() => {
+    if (!offerSecond && !dualBg) { leaveTuner(); return; }
     const rows: { text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }[] = [
       { text: '‹ Back to server list', onPress: leaveTuner },
     ];
@@ -1137,16 +1139,8 @@ export default function TunerScreen({ route, navigation }: Props) {
     if (dualBg) rows.push({ text: `Stop listening to ${dualBg.name}`, style: 'destructive', onPress: stopBackground });
     rows.push({ text: 'Cancel', style: 'cancel' });
     appAlert(instanceName ?? 'FM-DX',
-             offerSecond ? secondServerHint(false) : dualBg ? `${dualBg.name} is playing too.` : undefined, rows);
+             offerSecond ? secondServerHint(false) : `${dualBg?.name ?? ''} is playing too.`, rows, { cancelable: true });
   }, [offerSecond, dualBg, leaveTuner, onListenSecond, instanceName]);
-  const onTunerBack = useCallback(() => { if (dualBg) tunerBackMenu(); else leaveTuner(); }, [dualBg, tunerBackMenu, leaveTuner]);
-  /** HOLD: only when there is a two-server choice to make — otherwise a hold is just a slow tap.
-   *  ★★ And the HIGHLIGHT's Enter on ‹ Back (game controller, TV remote, keyboard) does the same: a pad cannot hold
-   *     (gamepad_mapping — every control reachable, never hold-only), and its own BACK button only closes what is open
-   *     on this screen, so Enter on ‹ Back is how a pad leaves. Where there is a two-server choice it opens the options
-   *     with "‹ Back to server list" FIRST (one more Enter to leave); with none, it is Back, as before. */
-  const onTunerBackHold = useCallback(() => { if (offerSecond || dualBg) tunerBackMenu(); else leaveTuner(); },
-                                      [offerSecond, dualBg, tunerBackMenu, leaveTuner]);
   const resumeFromPause = useCallback(() => { (VibePowerModule as any)?.setMuted?.(false); }, []);
   /* ★★★ THE STATION STRIP IS THE APP'S OWN VTS (Stuart, 2026-10-02: "make the bottom card part of the VTS
    *  instead so it matches the main theme"). It replaces the FM-DX card (logo · flag · name · ST/TP/TA ·
@@ -1374,8 +1368,6 @@ export default function TunerScreen({ route, navigation }: Props) {
         onMode={() => {}}
         onStep={setStep}
         onMenu={onTunerBack}
-        onMenuLongPress={onTunerBackHold}
-        onMenuNav={onTunerBackHold}
         onChat={openChat}
         onAudio={() => setAudioSheetOpen(true)}
         audioAsRecord

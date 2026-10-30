@@ -655,11 +655,10 @@ console.log('every kind wired: one session per server, the player that plays it,
   ok(/roleOnMount\(dualParams as never, uuidv4\)/.test(tun) && !/abandonDual\(true\)/.test(tun), 'the Tuner screen joins the pairing on its first render');
   ok(/const parked = takeParked\(dualIdRef\.current\);/.test(tun) && /if \(!parkBackend\(dualIdRef\.current, backendRef\.current\)\)/.test(tun),
      '…adopts its adapter coming back, parks it going');
-  ok(/onMenu=\{onTunerBack\}/.test(tun) && /onMenuLongPress=\{onTunerBackHold\}/.test(tun)
-     && /if \(dualBg\) tunerBackMenu\(\); else leaveTuner\(\);/.test(tun), '…tap Back is Back (asks only while two play); HOLD for the options');
-  const cb = readFileSync('src/components/ControlsBar.tsx', 'utf8');
-  ok(/onMenuNav=\{onTunerBackHold\}/.test(tun) && (cb.match(/screenNavRef\('menuBtn', onMenuNav \?\? onMenu\)/g) ?? []).length === 2,
-     '…and a game controller / remote / keyboard reaches the same options with Enter on ‹ Back — never hold-only');
+  ok(/onMenu=\{onTunerBack\}/.test(tun) && !/onMenuLongPress/.test(tun)
+     && /if \(!offerSecond && !dualBg\) \{ leaveTuner\(\); return; \}/.test(tun)
+     && /appAlert\(instanceName \?\? 'FM-DX',/.test(tun),
+     '…a press of Back opens the menu (pad-reachable appAlert rows, Back = Cancel) — never a hold; plain Back where there is no choice');
   ok(/<DualServerCard myId=\{dualMyId\}/.test(tun) && /onDualMute=\{dualShape\.phase === 'paired' && dualMyId/.test(tun), '…the card and this server\'s MUTE');
   ok(/rebindCallbacks\(cb: BackendCallbacks\): void \{/.test(fmdx) && /!this\.audioDetached/.test(fmdx), 'FmdxAdapter adoptable and detachable');
   // The picker: one session per server per person, by address, BEFORE anything touches it.
