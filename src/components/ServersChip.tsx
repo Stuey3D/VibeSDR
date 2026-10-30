@@ -157,14 +157,14 @@ export default function ServersChip({
           waterfall, and carries a faint backdrop tint. Behind the dropdown. */}
       {expanded && (
         <Pressable
-          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.18)' }]}
+          style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.18)' }, OPEN_LAYER]}
           onPress={collapse}
           accessibilityRole="button"
           accessibilityLabel="Close server menu"
         />
       )}
 
-      <View ref={anchorRef} collapsable={false} style={{ position: 'absolute', top, left }}>
+      <View ref={anchorRef} collapsable={false} style={[{ position: 'absolute', top, left }, expanded && OPEN_LAYER]}>
         {!expanded ? (
           // ── Collapsed chip ──────────────────────────────────────────────────
           <Pressable
@@ -270,6 +270,11 @@ function MeasuredScrim({ render }: { render: (w: number, h: number) => React.Rea
     </View>
   );
 }
+
+/* ★★ OPEN, IT IS TOPMOST (Stuart, 2026-10-30: "when the servers chip is open it needs to be topmost" — it opened behind
+ *  the DAB station strip and the DAB box). Above every layer on the SDR screen; the backdrop sits with it, so a tap
+ *  outside closes it rather than reaching a box. Closed, the chip keeps its ordinary place. */
+const OPEN_LAYER = { zIndex: 300, elevation: 300 } as const;
 
 const styles = StyleSheet.create({
   chip: {
