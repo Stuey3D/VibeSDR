@@ -46,17 +46,19 @@ ok('every Default/Smooth target from 1 to 60 fps divides 60, is at most x6, and 
 // ★★★ 2026-10-29 (Stuart, a 23 fps Kiwi: "interpolate and discard") — every rate but NATIVE divides 60, FILLED or THINNED.
 { const want: [number, WfScroll, number][] = [
     // feed, choice, rows/s on screen (0 = actual rows)
-    [23, 'default', 30], [23, 'smooth', 60], [23, 'eco', 10], [23, 'minimum', 5], [23, 'sharp', 0],
+    [23, 'default', 30], [23, 'smooth', 60], [23, 'eco', 10], [23, 'low', 5], [23, 'sharp', 0],
     [13, 'eco', 10], [13, 'default', 30], [13, 'smooth', 60], [21, 'default', 30], [20.3, 'default', 30], [25, 'default', 30],
     [30, 'default', 0], [40, 'default', 60], [40, 'smooth', 60], [75, 'smooth', 60], [75, 'default', 60],
-    [5.6, 'minimum', 5], [12, 'eco', 10], [10.2, 'eco', 0], [10.6, 'eco', 10], [4.4, 'minimum', 5], [2, 'default', 0]];
+    [5.6, 'low', 5], [12, 'eco', 10], [10.2, 'eco', 0], [10.6, 'eco', 10], [4.4, 'low', 5], [2, 'default', 0],
+    // ★ 2026-10-30 MINIMUM (2): thinned from any faster feed, actual rows at 2, a sub-2 feed filled in
+    [23, 'min2', 2], [9, 'min2', 2], [5, 'min2', 2], [10 / 3, 'min2', 2], [2, 'min2', 0], [1, 'min2', 2]];
   const b = want.filter(([f, s, w]) => rowTargetFor(s, f) !== w).map(([f, s, w]) => `${f} fps ${s} → ${rowTargetFor(s, f)} want ${w}`);
-  ok('the snap table: Eco/Minimum thin a faster feed to 10/5; Default/Smooth go UP to the next divisor of 60; Native as it comes', !b.length, b.join('; '));
+  ok('the snap table: Eco/Low/Minimum thin a faster feed to 10/5/2; Default/Smooth go UP to the next divisor of 60; Native as it comes', !b.length, b.join('; '));
   let nd = '';
-  for (let f = 1; f <= 80; f += 0.5) for (const s of ['minimum', 'eco', 'default', 'smooth'] as const) {
+  for (let f = 1; f <= 80; f += 0.5) for (const s of ['min2', 'low', 'eco', 'default', 'smooth'] as const) {
     const t = nominalRowRate(s, f); if (t > 0 && 60 % t !== 0) nd ||= `${f} ${s} → ${t}`;
   }
-  ok('every choice but NATIVE runs at a divisor of 60 (5…60) on any feed from 1 to 80 fps', !nd, nd); }
+  ok('every choice but NATIVE runs at a divisor of 60 (2…60) on any feed from 1 to 80 fps', !nd, nd); }
 // ── Discard and fill counts (rowsForArrival): the average is the rate, the drops are EVEN ──
 { const count = (feed: number, target: number, frames = 2300) => {
     const c = { current: 0 }, k: number[] = [];

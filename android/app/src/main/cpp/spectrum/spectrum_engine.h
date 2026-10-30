@@ -15,6 +15,7 @@
 #pragma once
 #include "wf_row_target.h"
 #include "wf_row_clock.h"
+#include "wf_row_combine.h"   // ★★ V12 2026-10-30 thinned frames combined, not dropped
 #include "wf_av_sync.h"
 #include "wf_zoom_fan.h"   // + wf_motion.h
 #include "wf_stamps.h"
@@ -39,6 +40,7 @@ struct EngineConfig {
     bool   specShow = true;
     bool   peakHold = true;
     bool   smoothTune = true;
+    bool   boost = true;       // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (wf_row_clock.h boostRowRate `enabled`)
     int    displayCapHz = 0;   // the FRAME RATE cap (0 = none): under 60 the row target divides it (wf_row_target.h rowTargetUnderCap)
     int    panelHz = 0;        // ★ the panel's maximum refresh (0 = unknown): the interaction boost's ceiling when there is no cap
     int    targetRows = 0;
@@ -214,7 +216,11 @@ private:
     int extrasLeft_ = 0; double extraSpacing_ = 0, extraDueAt_ = -1;
     // ★★★ V12 THE FIXED OUTPUT CLOCK (wf_row_clock.h — every mode but NATIVE): rows made on its ticks, each the newest real
     //     frame presented by then; the frames it may still show are kept here by id (a few — its queue is 4 deep).
-    struct ClockRow { long id = -1; std::vector<uint8_t> row; double c = 0, h = 0; };
+    struct ClockRow { long id = -1; std::vector<uint8_t> row; double c = 0, h = 0, k = 0; };   // k: dB per unit (wf_row_combine.h)
+    // ★★ V12 2026-10-30 (wf_row_combine.h — WaterfallView's twin): the last frame the clock has SHOWN; the frames after it
+    //    are kept (≤ COMBINE_MAX_FRAMES) and combined into the next one shown instead of dropped.
+    long clockShown_ = 0;
+    vibewf::RowCombiner clockComb_;
     vibewf::RowClock rowClock_;
     vibewf::BoostState boost_;   // ★ the interaction boost (wf_row_clock.h boostRowRate)
     vibewf::AvSyncState av_;     // ★★ V12 2026-10-30 the waterfall waits for the sound (wf_av_sync.h)

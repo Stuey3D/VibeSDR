@@ -813,7 +813,7 @@ body.askLocked #ceqBtn, body.askLocked #autoBwBtn, body.askLocked #nbBtn, body.a
 body.askLocked #nfmVoiceBtn { opacity: 0.35; }
 /* ★★★ AN ICOM (driver "icom", RECEIVE ONLY): everything the IQ path powers does not exist on this radio — the sample
    rate, the gain table and VibeAGC, the IF filter, direct sampling, bias-T, ppm, the other radios' panels, OUR squelch
-   and noise blanker, the broadcast-FM processing, raw IQ, the locked-centre switch and the spectrum data rate. HIDDEN,
+   and noise blanker, the broadcast-FM processing, raw IQ and the locked-centre switch. HIDDEN,
    not greyed: an inert control teaches the listener the feature is broken. A class on <body>, so no later per-driver
    code can un-hide one of them, and the next radio gets them all back the moment it is not an Icom (main.ts). */
 body.icom .icomHide, body.icom #rowRate, body.icom #rateLocked, body.icom #rowGain, body.icom #rowAgc,
@@ -6159,13 +6159,15 @@ select.btn { padding: 6px 8px; }
                    that are largely made up.
        ★ Neither the renderer nor the SPECTRUM TRACE changes; this only decides how many rows are
          synthesised between real frames. -->
-  <!-- ★★ V12 (Stuart 2026-10-28): MINIMUM · ECO · NATIVE · [DEFAULT · SMOOTH], slowest to smoothest. NATIVE was SHARP
-       (the stored value is still 'sharp'). MINIMUM / ECO ask the server for 5 / 10 fps (src/assets/wfSpeedCap.ts); the
+  <!-- ★★ V12 (Stuart 2026-10-28; the 2 fps MINIMUM 2026-10-30, GitHub #57): MINIMUM · LOW · ECO · NATIVE · [DEFAULT ·
+       SMOOTH], slowest to smoothest. NATIVE was SHARP (the stored value is still 'sharp'); LOW was MINIMUM (a saved
+       'minimum' loads as LOW). MINIMUM / LOW / ECO draw 2 / 5 / 10 rows a second — display only since 2026-10-30 (DATA sets what the server sends); the
        outlined pair add interpolated rows. Each key carries its live rows/s on this server (main.ts refreshWfScrollSeg). -->
   <div class="mrow">
     <label>WATERFALL</label>
     <div class="seg" id="wfScrollSeg">
-      <button class="btn" data-wfscroll="minimum">MINIMUM<span class="wfNum"></span></button>
+      <button class="btn" data-wfscroll="min2">MINIMUM<span class="wfNum"></span></button>
+      <button class="btn" data-wfscroll="low">LOW<span class="wfNum"></span></button>
       <button class="btn" data-wfscroll="eco">ECO<span class="wfNum"></span></button>
       <button class="btn" data-wfscroll="sharp">NATIVE<span class="wfNum"></span></button>
       <span class="wfInterp"><span class="wfInterpRow">
@@ -6174,11 +6176,22 @@ select.btn { padding: 6px 8px; }
       </span><span class="wfInterpCap">interpolated for smoothness</span></span>
     </div>
   </div>
-  <div class="rowNote" id="wfScrollNote">5 fps is the minimum waterfall rate. Minimum and Eco save data by asking the server
-    for less — no effect when it already sends that little. Eco — 10 rows a second: asks a faster server for less, fills
-    in a slower one. Every speed but Native runs at a rate that divides the screen's refresh (5, 10, 15, 20, 30 or 60 rows
-    a second), filling in rows or dropping them evenly. Native is the server's own rate, every row a real frame. Default
+  <div class="rowNote" id="wfScrollNote">How fast the waterfall scrolls — it does not change what the server sends (that is
+    DATA, below). Minimum (2 rows a second) is the slowest, for spotting an intermittent signal in the history; Low is 5
+    and Eco 10. When the server sends faster than the speed, its frames are combined into each row, keeping short bursts. Every speed but Native runs
+    at a rate that divides the screen's refresh (2, 5, 10, 15, 20, 30 or 60 rows a second), filling in rows or combining
+    them evenly. Native is the server's own rate, every row a real frame. Default
     and Smooth add interpolated rows for a smoother scroll.</div>
+  <!-- ★★ V12 2026-10-30 (GitHub #57): its own control (Stuart's wording). OFF = the interaction boost never raises the row
+       rate (wfClock.ts boostRowRate) — the rows stay at the chosen speed through a tune or zoom. Default ON. -->
+  <div class="mrow">
+    <label>SPEED UP WHILE TUNING</label>
+    <div class="seg" id="wfBoostSeg">
+      <button class="btn on" data-wfboost="1">ON</button>
+      <button class="btn" data-wfboost="0">OFF</button>
+    </div>
+  </div>
+  <div class="rowNote">Speeds up the waterfall when tuning or zooming to make it feel more responsive. Turn off for signal accuracy, at the cost of it feeling slower.</div>
   <div class="mrow" id="rowWfSpeed">
     <label>WATERFALL SPEED</label>
     <div class="seg" id="wfSpeedSeg">
@@ -6189,20 +6202,19 @@ select.btn { padding: 6px 8px; }
   </div>
   <div class="rowNote" id="wfSpeedNote">How fast the waterfall scrolls on screen. Higher scrolls smoother, but paired with
     a low data rate it fills the gaps by interpolation — smooth motion, less real detail.</div>
-  <!-- WATERFALL DATA RATE — real frames/sec from the SERVER. Auto = adaptive link management (brings in
-       as much as the link carries, up to the chosen Speed, capped at the server's 20). Speed options
-       above are filtered to >= this so you never ask for frames you'd only throw away. -->
+  <!-- ★★★ V12 2026-10-30 DATA · LOW · AUTO · FULL — what the server sends (src/assets/wfSpeedCap.ts; main.ts wfData). Stuart:
+       "we need a separate data control but dont mention frame rates, just call it low auto full" — so no rates here.
+       LOW = the 5 fps floor; AUTO adapts to the connection, never below it; FULL = the server's full rate. Where the old
+       WATERFALL DATA RATE row was (a saved 5 → LOW, 20 → FULL, 0/10 → AUTO). The speed keys above are display only. -->
   <div class="mrow icomHide">
-    <label>WATERFALL DATA RATE</label>
-    <div class="seg" id="wfRateSeg">
-      <button class="btn on" data-wfrate="0">AUTO</button>
-      <button class="btn" data-wfrate="20">20</button>
-      <button class="btn" data-wfrate="10">10</button>
-      <button class="btn" data-wfrate="5">5</button>
+    <label>DATA</label>
+    <div class="seg" id="wfDataSeg">
+      <button class="btn" data-wfdata="low">LOW</button>
+      <button class="btn on" data-wfdata="auto">AUTO</button>
+      <button class="btn" data-wfdata="full">FULL</button>
     </div>
   </div>
-  <div class="rowNote icomHide">How many real frames per second the server sends. Lower cuts the data used but can
-    miss brief signals. Auto adapts to the link, up to your chosen speed.</div>
+  <div class="rowNote icomHide">How much spectrum data the server sends. Low saves data; Auto adapts to your connection; Full is the server's full rate.</div>
   <!-- ★ The IDLE SAVER switch went with the feature. It slowed the spectrum after 30 s without a
        touch, which read "nobody is looking" from "nobody is touching" — backwards on a waterfall,
        the one thing you watch without touching it. A hidden TAB still throttles (nothing is being

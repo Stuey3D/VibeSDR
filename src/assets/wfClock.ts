@@ -15,7 +15,7 @@
  * slipped — a hitch. Native at 10 fps has a whole 100 ms row of cover; the interpolated modes had about 40 ms.
  *
  * THE DESIGN.
- *  1. THE OUTPUT RATE IS FIXED at the chosen row rate (Minimum 5, Eco 10, Default 30, Smooth 60 — the rule in
+ *  1. THE OUTPUT RATE IS FIXED at the chosen row rate (Minimum 2, Low 5, Eco 10, Default 30, Smooth 60 — the rule in
  *     wfRowTarget.ts decides it from the feed, latched; clockRowRate below keeps it from flapping). Rows come off a
  *     steady clock (tick k at t0 + k·1000/R), never off an arrival.
  *  2. EACH ROW IS THE MOST RECENT REAL FRAME presented by its tick — sample-and-hold, a REPEAT, never a blend (Stuart's
@@ -207,7 +207,7 @@ export function clockRowRate(st: RowTargetState & { clockRate?: number }, scroll
 export function clockRateUnderCap(rate: number, capHz: number): number {
   if (!(rate > 0) || !(capHz > 0) || capHz >= 60) return rate;
   let best = 0;
-  for (const r of [5, ...ROW_RATES]) if (r <= rate && r <= capHz && capHz % r === 0) best = r;
+  for (const r of [2, 5, ...ROW_RATES]) if (r <= rate && r <= capHz && capHz % r === 0) best = r;
   return best || rate;
 }
 
@@ -273,8 +273,12 @@ const BOOST_RATES = [120, 60, 30, 20, 15, 12, 10, 5];
 /** The clock's rate while a tune/zoom is in flight: `base` (the setting's rate on the clock; 0 = Native/actual rows →
  *  0), `feedFps` the measured feed, `displayHz` the display's maximum as the app is set (0 = unknown → 60). Never lower
  *  than `base`. */
-export function boostRowRate(base: number, feedFps: number, displayHz: number): number {
+export function boostRowRate(base: number, feedFps: number, displayHz: number, enabled = true): number {
   if (!(base > 0)) return 0;                           // NATIVE / actual rows: untouched
+  // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" OFF (GitHub #57 — Stuart: "Turn off for signal accuracy, at the cost of it
+  //    feeling slower"): the rate is never raised; the rows stay at the chosen speed through a tune or zoom, and the
+  //    ease/fan draws at that rate. A phone user zooming toward a signal spotted on MINIMUM keeps the history on screen.
+  if (!enabled) return base;
   const hz = displayHz > 0 ? displayHz : 60;
   const lim = Math.min(BOOST_MAX_RATE, hz * 1.02, (feedFps > 0 ? feedFps : 0) * BOOST_FEED_X * 1.0001);
   for (const r of BOOST_RATES) {

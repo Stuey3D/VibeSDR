@@ -1,61 +1,92 @@
 /**
- * wfSpeedCap.ts — THE WATERFALL SPEED CHOICES THAT ASK THE SERVER FOR LESS: MINIMUM and ECO (V12, Stuart 2026-10-28).
+ * wfSpeedCap.ts — THE WATERFALL SPEED KEYS (display only) AND THE DATA CONTROL (what the server sends) — V12.
  *
- * From a GitHub discussion: someone wanted the waterfall slower, and on a 20 fps server even Sharp scrolled 20 rows a
- * second. The control is now, slowest to smoothest:
+ * ★★★ STUART, 2026-10-30 (the design as it now stands): "we cannot slow the incoming data rate down automatically when the
+ *     waterfall is slowed down as that will effect the spectrum too. We need a minimum of 5FPS incoming for the spectrum
+ *     to feel smooth still, interpolation only goes so far on that and even at 5FPS incoming you see the limitation of
+ *     the lack of raw data. So we need a separate data control but dont mention frame rates, just call it low auto full".
  *
- *     MINIMUM · ECO · NATIVE · [ DEFAULT · SMOOTH ]   (the bracketed pair outlined: "interpolated for smoothness")
+ * 1. WATERFALL SPEED — how many rows a second the waterfall DRAWS. Never changes what the server sends.
  *
- *   MINIMUM  caps the LINK at 5 fps  — the minimum waterfall rate anyone chooses ("low data rate minimum is 5fps").
- *            Actual rows: on a 5 fps server it is the same as NATIVE; a server slower than 5 (2 fps, UberSDR's 3.3
- *            emergency rung) is filled in to an even 5 rows/s.
- *   ECO      10 rows a second: caps the LINK at 10 fps (a 20 fps server sends half) AND fills a slower feed in to 10
- *            (9, 5, 3.3 fps → 10) by over-generating and discarding to an even 10/s, as Default and Smooth do.
- *   NATIVE   the server's own frame rate, every row a real frame. (Was SHARP — the stored value is still 'sharp', so a
- *            saved setting loads unchanged.)
+ *     MINIMUM · LOW · ECO · NATIVE · [ DEFAULT · SMOOTH ]   (the bracketed pair outlined: "interpolated for smoothness")
+ *
+ *   MINIMUM  2 rows a second — stored 'min2'. GitHub #57 (Gesiima, on a phone: "the waterfall is too fast" to find an
+ *            intermittent signal in the history). Stuart chose a slower speed over a rewind/pause feature: "VibeSDR is
+ *            meant to be an easy to use app, simple and intuitive to use but powerful at the same time". 2 is the floor
+ *            ("1fps would look like no motion at all"); no slider — every rate divides 60 to stay judder-free.
+ *   LOW      5 rows a second — stored 'low'. This WAS "MINIMUM" (stored 'minimum') until 2026-10-30: a saved 'minimum'
+ *            loads as LOW, never silently as the new 2 (loadWfSpeed).
+ *   ECO      10 rows a second.
+ *   NATIVE   the server's own frame rate, every row a real frame. (Was SHARP — the stored value is still 'sharp'.)
  *   DEFAULT / SMOOTH  real frames with rows repeated between them for a smoother scroll (wfRowTarget.ts).
+ *   A feed faster than the speed is COMBINED down to it (wfCombine.ts — linear power, peaks kept), a slower one filled in.
  *
- *   ★★★ The caps exist to SAVE DATA, so the SERVER sends fewer frames — the client never throws frames away. Rows under
- *       MINIMUM draws like NATIVE (one row per received frame) unless the feed is below 5.
- *   ★★  A cap is a CEILING on the link manager, not a mode and not a divider: AUTO keeps managing the link underneath
- *       it (still steps down on a poor link — UberSDR's 3.3 fps emergency rung included), FULL is capped to it, LOW
- *       DATA keeps its own rate up to the cap (5 stays 5, never 2.5). Choosing NATIVE/DEFAULT/SMOOTH lifts it at once.
- *   ★   On a server whose own rate is already at or below a cap, that choice has no effect — nothing less to give.
+ * 2. DATA · LOW · AUTO · FULL — how much spectrum data the server sends (no frame rates on screen — Stuart's words).
+ *   LOW   the floor, 5 frames a second (DATA_FLOOR_FPS) — the least that keeps the spectrum smooth.
+ *   AUTO  adaptive link management (linkManager.ts / vibeLinkManager.ts): as much as the connection carries, stepping
+ *         down on a poor one — but never below the floor (UberSDR's old 3.3 fps emergency rung is gone).
+ *   FULL  the server's own full rate.
+ *   App: the link mode ('lowData' / 'adaptive' / 'full', lsv_link_mode — old saves load as they were). Web: main.ts runs
+ *   the same controller (vibeLinkManager) on its own socket. Kiwi has no controller: LOW = wf_speed 2 (≈ 5 fps), AUTO and
+ *   FULL its full wf_speed 4. OpenWebRX has no lever at all — no data control there.
  *
- * ONE rule for the app (linkManager.ts / vibeLinkManager.ts, KiwiAdapter, MenuSheet) and the web client
- * (web/client/src/main.ts). Pure, so scripts/test_wf_speed_cap.ts proves it.
+ * Pure, so scripts/test_wf_speed_cap.ts proves it.
  */
 import { nominalRowRate, type WfScroll } from './wfRowTarget.ts';
 
-/** The waterfall speed the user picks — every one is also a row mode (wfRowTarget); 'sharp' is labelled NATIVE, and
- *  'minimum' / 'eco' are link caps as well. */
+/** The waterfall speed the user picks — a row mode (wfRowTarget); 'sharp' is labelled NATIVE, 'min2' MINIMUM, 'low' LOW.
+ *  Display only. */
 export type WfSpeedSetting = WfScroll;
 
-/** The minimum waterfall rate — the floor a USER may choose (Low Data's rate), and MINIMUM's ceiling. */
-export const MIN_WF_FPS = 5;
-/** ECO's ceiling. */
-export const ECO_WF_FPS = 10;
+/** The slowest waterfall a USER may choose (MINIMUM), rows a second — display only (V12 #57). */
+export const MIN_WF_FPS = 2;
+/** ★★ THE DATA FLOOR: the incoming rate never goes below this from any control (LOW, AUTO, the idle saver) — "We need a
+ *  minimum of 5FPS incoming for the spectrum to feel smooth still" (Stuart, 2026-10-30). */
+export const DATA_FLOOR_FPS = 5;
 
-/** The link ceiling each capped choice asks for (fps). */
-export const LINK_CAP: Readonly<Record<'minimum' | 'eco', number>> = { minimum: MIN_WF_FPS, eco: ECO_WF_FPS };
+/** The DATA control's three choices (words only on screen). */
+export type DataMode = 'low' | 'auto' | 'full';
+export const DATA_LABEL: Readonly<Record<DataMode, string>> = { low: 'LOW', auto: 'AUTO', full: 'FULL' };
+/** The one-line note, the same on the app and the web. */
+export const DATA_NOTE = "How much spectrum data the server sends. Low saves data; Auto adapts to your connection; Full is the server's full rate.";
+/** DataMode ↔ the link managers' LinkMode (the app keeps storing the LinkMode strings, so old saves load unchanged). */
+export const linkModeFor = (d: DataMode): 'lowData' | 'adaptive' | 'full' => (d === 'low' ? 'lowData' : d === 'full' ? 'full' : 'adaptive');
+export const dataModeFor = (m: unknown): DataMode => (m === 'lowData' ? 'low' : m === 'full' ? 'full' : 'auto');
+/** ★ The web's old WATERFALL DATA RATE pref (AUTO 0 / 20 / 10 / 5) → the DATA control: 5 → LOW, 20 → FULL, 0 and 10 → AUTO
+ *  (10 was "less than full but not the floor" — AUTO gives that on any link that needs it). */
+export const dataModeFromWebRate = (v: unknown): DataMode => (v === 5 ? 'low' : v === 20 ? 'full' : 'auto');
+/** The Low Data rung of a ladder: the first rung at or below the floor (VibeServer [20, 10, 5] → 3, UberSDR [10, 5] → 2). */
+export function lowDataRungFor(ladder: readonly number[]): number {
+  const i = ladder.findIndex(f => f <= DATA_FLOOR_FPS + 1e-9);
+  return i >= 0 ? i + 1 : ladder.length;
+}
+/** A ladder with nothing below the floor (AUTO never drops under it). */
+export const floorLadder = (ladder: readonly number[]): number[] => {
+  const out = ladder.filter(f => f >= DATA_FLOOR_FPS - 1e-9);
+  return out.length ? out : [Math.max(...ladder)];
+};
 
+/** Every key's name on screen, slowest to smoothest. */
+export const WF_SPEED_LABEL: Readonly<Record<WfSpeedSetting, string>> =
+  { min2: 'MINIMUM', low: 'LOW', eco: 'ECO', sharp: 'NATIVE', default: 'DEFAULT', smooth: 'SMOOTH' };
+
+/** A CURRENT stored value. ★ The old 'minimum' is NOT one — it is a 5 fps save; loadWfSpeed turns it into LOW. */
 export const isWfSpeedSetting = (v: unknown): v is WfSpeedSetting =>
-  v === 'sharp' || v === 'eco' || v === 'default' || v === 'smooth' || v === 'minimum';
+  v === 'sharp' || v === 'eco' || v === 'default' || v === 'smooth' || v === 'low' || v === 'min2';
 
-/** The link ceiling for a setting, fps — 0 = none (NATIVE / DEFAULT / SMOOTH). */
-export const linkCapFor = (s: WfSpeedSetting): number => (s === 'minimum' || s === 'eco' ? LINK_CAP[s] : 0);
-
-/** Does a cap change anything on a server whose own top rate is `serverTopFps`? (MINIMUM on a 5 fps server: no.) */
-export const capHasEffect = (capFps: number, serverTopFps: number): boolean => capFps > 0 && serverTopFps > capFps;
-
-/** The fps to ask for under a cap — a CEILING: never above the cap, never above what was wanted. 0 = no cap. */
-export const capFps = (wantedFps: number, cap: number): number => (cap > 0 ? Math.min(wantedFps, cap) : wantedFps);
+/** ★★ A SAVED SPEED, MIGRATED (2026-10-30): the old 'minimum' (5 fps, before the 2 fps MINIMUM existed) → 'low', the 5
+ *  fps choice it always was — never the new 2. Anything else unknown → null (keep the default). Callers re-save the
+ *  result when it differs from what was stored, so the old value is gone after one load. */
+export function loadWfSpeed(v: unknown): WfSpeedSetting | null {
+  if (v === 'minimum') return 'low';
+  return isWfSpeedSetting(v) ? v : null;
+}
 
 /**
- * A link manager's ladder (fps per rung, full rate first, the last rung the adaptive floor) under a ceiling of `cap` fps.
- * Every rung is clamped to the cap and rungs that collapse together become one — VibeServer [20, 10, 5] → MINIMUM [5],
- * ECO [10, 5]; UberSDR [10, 5, 3.3] → MINIMUM [5, 3.3] (Auto may still use the 3.3 emergency rung below the cap), ECO
- * unchanged. The Low Data rung keeps its RATE, clamped the same way: 5 stays 5. `cap` 0 = untouched.
+ * A link manager's ladder (fps per rung, full rate first, the last rung the adaptive floor) under a ceiling of `cap` fps
+ * (the link managers' generic ceiling — userCapFps; since 2026-10-30 no speed key sets one, the speed keys are display
+ * only). Every rung is clamped to the cap and rungs that collapse together become one — VibeServer [20, 10, 5] under 10 →
+ * [10, 5]. The Low Data rung keeps its RATE, clamped the same way. `cap` 0 = untouched.
  */
 export function capLadder(ladder: number[], lowDataRung: number, cap: number): { ladder: number[]; lowDataRung: number } {
   const low = Math.min(Math.max(1, lowDataRung), ladder.length);
@@ -73,27 +104,15 @@ export const uberDivisorFor = (fullFps: number, fps: number): number =>
   fps > 0 && fullFps > 0 ? Math.max(1, Math.round(fullFps / fps)) : 1;
 
 /**
- * The LIVE NUMBER on each button: rows per second that choice gives on a server whose own rate is `nativeFps`.
- * Every one but NATIVE is a rate that divides 60 (wfRowTarget.ts nominalRowRate): MINIMUM 5 and ECO 10 (the capped feed
- * filled in or thinned — `caps` says what a coarser lever really sends, Kiwi's ECO step ~13 fps, thinned to 10); NATIVE =
- * native, as it comes; DEFAULT / SMOOTH = the row rule, up to the next rate above a faster feed. Unknown native → null.
- *   20 fps server → 5 · 10 · 20 · 20 · 60     5 fps → 5 · 10 · 5 · 15 · 30     23 fps Kiwi → 5 · 10 · 23 · 30 · 60
+ * The LIVE NUMBER on each speed key: rows per second it draws from a feed of `feedFps` (the rate the server is sending —
+ * its own, or the floor under DATA LOW). Every one but NATIVE is a rate that divides 60 (wfRowTarget.ts nominalRowRate):
+ * MINIMUM 2, LOW 5, ECO 10 (a faster feed combined down, a slower one filled in); NATIVE = the feed, as it comes;
+ * DEFAULT / SMOOTH = the row rule, up to the next rate above a faster feed. Unknown feed → null.
+ *   20 fps → 2 · 5 · 10 · 20 · 30 · 60     5 fps → 2 · 5 · 10 · 5 · 15 · 30     23 fps Kiwi → 2 · 5 · 10 · 23 · 30 · 60
  */
-export function speedNumbers(nativeFps: number, caps: { minimum: number; eco: number } = LINK_CAP):
-    Record<WfSpeedSetting, number> | null {
-  if (!(nativeFps > 0)) return null;
+export function speedNumbers(feedFps: number): Record<WfSpeedSetting, number> | null {
+  if (!(feedFps > 0)) return null;
   const r = (x: number) => Math.round(x * 10) / 10;
-  // ★ 2026-10-29: the RATE each runs at (nominalRowRate — always a divisor of 60), not the feed it is made from: a 23 fps
-  //   Kiwi showed "ECO 13 · DEFAULT 23" — its ECO lever gives ~13 fps, thinned to 10; Default fills 23 up to 30.
-  const rows = (s: WfScroll, f: number) => { const t = nominalRowRate(s, f); return r(t > 0 ? t : f); };
-  return {
-    minimum: rows('minimum', Math.min(caps.minimum, nativeFps)),
-    eco:     rows('eco', Math.min(caps.eco, nativeFps)),
-    sharp:   r(nativeFps),
-    default: rows('default', nativeFps),
-    smooth:  rows('smooth', nativeFps),
-  };
+  const rows = (s: WfScroll) => { const t = nominalRowRate(s, feedFps); return r(t > 0 ? t : feedFps); };
+  return { min2: rows('min2'), low: rows('low'), eco: rows('eco'), sharp: r(feedFps), default: rows('default'), smooth: rows('smooth') };
 }
-
-/** What MINIMUM / ECO really get on a Kiwi, whose lever is wf_speed (2 ≈ 5 fps, 3 ≈ 13 fps — KiwiAdapter.wfSpeedLever). */
-export const KIWI_SPEED_CAPS = { minimum: 5, eco: 13 } as const;

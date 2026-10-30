@@ -1071,18 +1071,16 @@ export class KiwiAdapter implements SDRBackend {
   pauseSpectrum(): void { this.wfSend('SET wf_speed=0'); }
   resumeSpectrum(): void { this.wfSend(`SET wf_speed=${this.wfSpeedLever()}`); }
 
-  /** ★ V12 MINIMUM / ECO waterfall speed (src/assets/wfSpeedCap.ts). Kiwi has no link manager, but it does have a rate
-   *  lever: wf_speed 4 ≈ 23 fps (fast — what we always ask for), 3 ≈ 13, 2 ≈ 5 (measured — linkManager.ts LADDERS.kiwi).
-   *  So the cap goes to the Kiwi itself: less data for the listener AND less work for someone else's receiver.
-   *  ★ ECO (10) is a step Kiwi does not have: 5 would make it MINIMUM, so it takes 3 (≈13 fps) — and the button's live
-   *    number says 13, not 10 (SDRScreen passes KIWI_SPEED_CAPS). */
-  private _wfLinkCap = 0;
-  private wfSpeedLever(): number { return this._wfLinkCap <= 0 ? 4 : this._wfLinkCap <= 5 ? 2 : 3; }
-  get wfLinkCap(): number { return this._wfLinkCap; }
-  set wfLinkCap(fps: number) {
-    const cap = fps > 0 ? fps : 0;
-    if (this._wfLinkCap === cap) return;
-    this._wfLinkCap = cap;
+  /** ★★ V12 2026-10-30 THE DATA CONTROL (src/assets/wfSpeedCap.ts — LOW · AUTO · FULL; the speed keys are display only).
+   *  Kiwi has no link manager, but it has a rate lever: wf_speed 4 ≈ 23 fps (fast — what we always ask for), 2 ≈ 5 fps
+   *  (measured — linkManager.ts LADDERS.kiwi). LOW = wf_speed 2, the 5 fps floor; AUTO and FULL = wf_speed 4 (there is no
+   *  controller to adapt with — AUTO is the full rate here). A setter like the link-managed clients' linkMode. */
+  private _linkMode: 'full' | 'adaptive' | 'lowData' = 'adaptive';
+  private wfSpeedLever(): number { return this._linkMode === 'lowData' ? 2 : 4; }
+  get linkMode(): 'full' | 'adaptive' | 'lowData' { return this._linkMode; }
+  set linkMode(m: 'full' | 'adaptive' | 'lowData') {
+    if (this._linkMode === m) return;
+    this._linkMode = m;
     if (this.wfOpened) this.wfSend(`SET wf_speed=${this.wfSpeedLever()}`);
   }
   /** wf_speed 4's measured rate — the base of the waterfall-speed buttons' live numbers. */

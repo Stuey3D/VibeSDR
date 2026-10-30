@@ -178,6 +178,9 @@ export class RowPacer {
   private arrId = 0;
   private curP = 0;            // when the newest frame (cur) is presented
   private onClock = false;     // rows come off the fixed clock (every mode but NATIVE / actual rows)
+  /** Rows come off the fixed clock — the only place a feed is thinned, so the only place frames are combined
+   *  (wfCombine.ts WfRowMerge). */
+  get clocked(): boolean { return this.onClock; }
   /** Screen rows/s aimed for now (0 = actual rows) — for the test and diagnostics. */
   screenTarget = 0;
   /** ★★★ THE INTERACTION BOOST (wfClock.ts boostRowRate — Stuart 2026-10-29: "increase during interaction … even if it
@@ -187,6 +190,8 @@ export class RowPacer {
    *  boundary (the display clock counts whole rows). Every extra row is the newest frame already here, drawn at its own
    *  in-between view; nothing is asked of the server. NATIVE is never boosted. */
   private boost = newBoost();
+  /** ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (main.ts, default on): false = the boost never raises the rate. */
+  boostEnabled = true;
   /** The waterfall's ease is still drawing (wfGlide rowView eN > 0) — the boost holds until it lands. */
   easing = false;
   /** The rate without the boost, screen rows/s (0 = not on the clock). */
@@ -205,7 +210,7 @@ export class RowPacer {
     if (!this.onClock || !(this.baseTarget > 0)) { this.boosted = false; return; }
     const on = boostActive(this.boost, now, this.easing);
     const fps = 1000 / Math.max(1, this.feedMs || this.avgGap || 100);
-    const t = on ? boostRowRate(this.baseTarget, fps, this.displayHz()) : this.baseTarget;
+    const t = on ? boostRowRate(this.baseTarget, fps, this.displayHz(), this.boostEnabled) : this.baseTarget;
     this.boosted = on && t > this.baseTarget;
     const rps = t * this.dpr;
     if (rps !== this.rowsPerSec) {
