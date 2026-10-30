@@ -1167,7 +1167,7 @@ export class Waterfall {
     ctx.textBaseline = 'top';
     const hair = Math.max(1, Math.round(dpr * 0.75)), tickW = Math.max(1, Math.round(dpr)), tickH = Math.round(4 * dpr);
     const live = new Set<number>();
-    const col = stampColour(this.vfoLiveColor || this.vfoColor, this.lut);
+    const col = stampColour(this.vfoColor, this.lut);
     ctx.shadowColor = 'rgba(0,0,0,0.95)';
     ctx.shadowOffsetX = 0; ctx.shadowOffsetY = Math.max(1, Math.round(dpr));
     ctx.shadowBlur = NO_GLOW ? 0 : Math.round(2 * dpr);
