@@ -146,6 +146,17 @@ void RxPipeline::stopDemodThread_() {
 
 RxPipeline::~RxPipeline() { meas_.stop(); stopDemodThread_(); stopSpecThread_(); }
 
+/** ★ The host's name for this pipeline (setLogLabel), then what the pipeline itself knows: its input rate and where
+ *  in it the channel sits — enough to tell two pipelines apart even when the host gave no name. */
+std::string RxPipeline::logLabelNow_() {
+    std::string who;
+    { std::lock_guard<std::mutex> lk(logLabelMtx_); if (logLabel_) who = logLabel_(); }
+    if (who.empty()) who = "a pipeline";
+    char b[96];
+    std::snprintf(b, sizeof b, " (in %.0f kS/s, channel at %+.1f kHz)", sampleRate_ / 1e3, offsetHz_ / 1e3);
+    return who + b;
+}
+
 void RxPipeline::startSpecThread_() {
     if (specThreadOn_) return;
     for (int i = 0; i < kSpecQ; ++i) {
@@ -1352,17 +1363,29 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
                  *  ★★ FIRES ONLY IN THE FAULT'S OWN SHAPE — a pilot present and usable by the
                  *     deviation meter, while the lock says otherwise. On a healthy station or a
                  *     dead one it says nothing, so this is not a log that has to be read past.
-                 *  ★ Once a second at most. Delete when the cause is found. */
-                if (pilotUsable && !pll_.locked()) {
-                    if (++pilotOddTicks_ >= 40) {
-                        pilotOddTicks_ = 0;
+                 *  ★ Once a second at most. Delete when the cause is found.
+                 *  ★★★ COUNTED IN TIME, NOT IN CALLS, AND NEVER DURING AN ACQUISITION (2026-10-30). It
+                 *      counted 40 calls of this block, and a call is one CHANNEL BLOCK — on an RSP, whose
+                 *      packets are small, 40 of them are ~20 ms. So every ordinary tune printed it: the
+                 *      metric climbs through 2-3 kHz for the ~100 ms its 110 ms average takes to cross
+                 *      the 3.1 kHz engage level, and the Lenovo's journal filled with bursts of "dev 2.2,
+                 *      2.4, 2.6, 2.8, 2.9 kHz" that looked like a second pipeline on another station.
+                 *      They were the shared dial's own pilot being acquired. Now the fault's shape has
+                 *      to HOLD for a second of signal before it is reported — far past any acquisition —
+                 *      and then once a second, with the pipeline's name and frequency (setLogLabel). */
+                if (pilotUsable && !pll_.locked() && !gainOnset) {
+                    pilotOddSamples_ += nc;
+                    if (pilotOddSamples_ >= (long)chFs_ && pilotOddSamples_ - pilotOddLogged_ >= (long)chFs_) {
+                        pilotOddLogged_ = pilotOddSamples_;
+                        const std::string who = logLabelNow_();
                         std::fprintf(stderr,
-                            "[pilot] present but NOT LOCKED — dev %.1f kHz, lockAmp %.4f, "
+                            "[pilot] %s: present but NOT LOCKED for %.1f s — dev %.1f kHz, lockAmp %.4f, "
                             "trackable %d, mpxS/N %.1f dB, lmrCut %.0f Hz\n",
+                            who.c_str(), pilotOddSamples_ / chFs_,
                             pll_.pilotDeviationKHz(), pll_.lockAmp(), (int)pll_.trackable(),
                             blendSnrDb_, lmrHiCutHz_);
                     }
-                } else pilotOddTicks_ = 0;
+                } else if (!gainOnset) { pilotOddSamples_ = 0; pilotOddLogged_ = 0; }
                 if (pilotUsable && !gainOnset) {
                     const float snr = (noise > 1e-9f) ? (pilot / noise) : 1e6f;
                     const float db  = 20.0f * std::log10(std::max(snr, 1e-6f));

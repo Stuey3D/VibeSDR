@@ -131,3 +131,14 @@ target_compile_options(vibedsp_iqclean_tests PRIVATE -O2 -Wall)
 add_executable(vibedsp_spectrum_processor_tests test_spectrum_processor.cpp ${DSP}/spectrum_processor.cpp)
 target_include_directories(vibedsp_spectrum_processor_tests PRIVATE ${DSP})
 target_compile_options(vibedsp_spectrum_processor_tests PRIVATE -O2 -Wall)
+
+# ★ IQ REPLAY — a captured rtl_tcp (u8) file through the real RxPipeline in WFM, the stereo decoder's
+#   state printed twice a second and the audio to a WAV. Prints; not a pass/fail test. (From v12-rsp-spur 5779e9cab.)
+add_executable(vibedsp_iq_replay iq_replay.cpp ${DSP_SRC})
+target_include_directories(vibedsp_iq_replay PRIVATE ${DSP})
+target_compile_options(vibedsp_iq_replay PRIVATE -O2 -Wall)
+
+# ★ ONE NaN IS A GLITCH: the pilot PLL re-locks after one, and a diverging CEQ never writes one (2026-10-30).
+add_executable(vibedsp_nan_tests test_nan_recovery.cpp ${DSP_SRC})
+target_include_directories(vibedsp_nan_tests PRIVATE ${DSP})
+target_compile_options(vibedsp_nan_tests PRIVATE -O2 -Wall)

@@ -2831,6 +2831,12 @@ static std::atomic<bool>    g_vsSessionLimitSoft{false};
  *  bites on a SHARED DIAL with more than one listener: a newcomer's tune is refused until the room says yes, or
  *  nobody answers in 15 s. Default OFF, so an upgrade changes nothing. See vibe_tune_etiquette.h. */
 static std::atomic<bool>    g_vsAskBeforeTuning{false};
+/** ★★★ THIS ZOOM IS A VIEW ONLY — set by the WebSocket reader (clientFrame) for the length of ONE handleControl call when
+ *  the frame is a `zoom` from a listener ask-before-tuning is holding back (Lenovo, 2026-10-30: a refused listener's
+ *  zoom with `"free":1` walked the RSP's centre to 94.975 MHz — the tune they had just been refused, by the back door).
+ *  The zoom handler then moves the VIEW inside the capture the radio already has and never the hardware centre.
+ *  ★ Thread-local, so the server's own landing and resume calls (other frames, other threads) never see it. */
+static thread_local bool    t_askViewOnly = false;
 /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes, 0 = OFF, and off is the default.
  *
  *  ★★★ "NO INTERACTION" IS NOT "NOT LISTENING", and that is the whole difficulty. Somebody sitting
@@ -9562,6 +9568,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ VFO B allowance may have changed: DRM, WFM, or a dial into / out of the FM broadcast band (watchMaxFor)
         watchAllowDirty_.store(true, std::memory_order_relaxed);
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
+        // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …") — this listener and this dial, fixed here where both change.
+        { char lb[96]; snprintf(lb, sizeof lb, "listener %.8s's own channel, %.4f MHz %s", c->session.c_str(), c->vfoHz / 1e6, c->mode.c_str());
+          c->rx->setLogLabel([l = std::string(lb)] { return l; }); }
         // ★ After the pipeline exists, so setRdsEnabled has something to act on. A FULL resweep,
         //   because this listener moving can free a frequency somebody else is sitting on — see
         //   rdsResweep().
@@ -10749,6 +10758,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             sendText(sock, "{\"type\":\"notice\",\"ask\":1,\"why\":\"Ask in chat before tuning or changing the receiver "
                            "\xE2\x80\x94 other people are listening to this shared tuner\"}");
         return true;
+    }
+
+    /** ★★★ A ZOOM FROM A LISTENER THE LOCK IS HOLDING BACK IS A VIEW, NEVER A TUNE.
+     *  ★★★ Zoom and pan stay free (above: "that shouldn't move the tuning or audio") — but the zoom handler moves the
+     *      HARDWARE centre whenever the view walks off the capture (dongleForView), and a FREE-mode recentre is exactly
+     *      that. Moving the centre retunes the front end for everybody: the spectrum shifts under every listener, the
+     *      PLL relocks through the audio, and with a pan far enough the VFO drags along. That is a tune, and it needs
+     *      the same permission as one (Lenovo, 2026-10-30: refused, then `"zoom","free":1` put the RSP on 94.975 MHz).
+     *  ★ So the frame is NOT refused — the listener still pans and zooms across what the radio already captures — it is
+     *    marked view-only, and the handler clamps it inside the capture (t_askViewOnly).
+     *  Call WITHOUT clientMtx held. */
+    bool askViewOnly(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (!g_vsAskBeforeTuning.load() || !sock) return false;
+        if (jsonStr(msg, "type") != "zoom") return false;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        if (!askInForceLocked()) return false;
+        static const std::string kNoSession;
+        auto it = sockSession.find(sock.get());
+        const std::string& sess = it == sockSession.end() ? kNoSession : it->second;
+        return askBook.locked(askRoomLocked(Impl::nowSecs()), sess);
+    }
+    /** ★★ EVERY FRAME A CLIENT SENT goes in here, and nothing else does: the lock's refusal, the view-only mark for the
+     *  length of this one call, then the frame. The server's own calls go straight to handleControl (askRefuses). */
+    void clientFrame(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (askRefuses(sock, msg)) return;
+        struct ViewOnly { explicit ViewOnly(bool on) { t_askViewOnly = on; } ~ViewOnly() { t_askViewOnly = false; } } vo(askViewOnly(sock, msg));
+        dabScanUserTune(msg);
+        handleControl(sock, msg);
     }
 
     /** ★ Would this gated frame change nothing — the radio is already where it asks? Call WITH clientMtx held. */
@@ -16573,6 +16610,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         cb.stereo   = &Impl::stereoCb;
         cb.iq       = &Impl::iqCb;
         fftAccum.assign(fftSize, 0.0f); accumCount = 0;
+        // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …"): the one pipeline every listener on a shared dial hears, and the
+        //    dial it is on now (atomics only — this runs on the DSP/demod thread, see setLogLabel).
+        rx.setLogLabel([this] {
+            char lb[96];
+            snprintf(lb, sizeof lb, "the radio's pipeline (%s), %.4f MHz", perClientDsp() ? "per-listener mode — fed nothing" : "the shared dial",
+                     audioFreq.load(std::memory_order_relaxed) / 1e6);
+            return std::string(lb);
+        });
         rx.start(sampleRate, fftSize, fftRate * FFT_AVG, (int)AUDIO_SR, cb);
     }
 
@@ -19065,6 +19110,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     : displaySpan() / zoomFactor.load();
                 double dongle = dongleForView(v, viewSpan, /*person*/ true);
                 bool moved = std::fabs(dongle - rtlCenter.load()) > 1.0;
+                /* ★★★ A LISTENER WHO MAY NOT TUNE MAY NOT MOVE THE CENTRE EITHER (askViewOnly). Their view is kept
+                 *     inside the capture the radio already has — the same room dongleForView allows a pan without a
+                 *     retune — and the hardware stays exactly where the room left it. */
+                if (moved && t_askViewOnly) {
+                    const double cur = rtlCenter.load(), room = viewHalfRoom(viewSpan);
+                    const double kept = std::min(cur + room, std::max(cur - room, v));
+                    LOGI("zoom from a listener ask-before-tuning is holding back: view %.4f -> %.4f MHz, the centre stays "
+                         "on %.4f MHz (it would have moved to %.4f — a tune, which needs the room's yes)",
+                         v / 1e6, kept / 1e6, cur / 1e6, dongle / 1e6);
+                    viewCenter.store(kept);
+                    moved = false;
+                }
                 // Cooldown: a hardware retune is a PLL relock, and doing it on every
                 // pan message audibly breaks the audio. The crop keeps the display
                 // honest in between, so skipping a retune costs nothing visible.
@@ -19126,7 +19183,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // and the zoom channel is tuned to that centre, so it has to follow.
             else updateZoomView();
             // ★ Auto IF follows the zoom, so every zoom and every pan is a reason to re-derive it.
-            applyAutoIf();
+            // ★★ …except a held-back listener's (askViewOnly): the tuner's IF filter is a receiver setting everybody hears
+            //    (`tunerbw` is on the lock's list) and every move of it resets the AGC — a view does not get to do that.
+            if (!t_askViewOnly) applyAutoIf();
             sendConfig(sock);
             return;
         }
@@ -25050,7 +25109,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (m.empty()) return;
             // ★★ ASK BEFORE TUNING gates what a CLIENT sent, here at the reader — never inside handleControl, which
             //    the server's own landing and resume paths also call (askRefuses).
-            if (!askRefuses(sock, m)) { dabScanUserTune(m); handleControl(sock, m); }
+            clientFrame(sock, m);
             tuneHold.applied(monoMs());
         };
         while (serverRunning.load() && sock->isOpen()) {
@@ -25096,8 +25155,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const uint64_t mergedBefore = tuneHold.merged;
                 const std::string first = tuneHold.offer(payload, monoMs(), [&] { return tunePaceMs(); }, passThrough);
                 if (tuneHold.merged != mergedBefore) g_tunesMerged.fetch_add(1, std::memory_order_relaxed);
-                if (!first.empty()) { if (!askRefuses(sock, first)) { dabScanUserTune(first); handleControl(sock, first); } tuneHold.applied(monoMs()); }
-                if (passThrough && !askRefuses(sock, payload)) { dabScanUserTune(payload); handleControl(sock, payload); }
+                if (!first.empty()) { clientFrame(sock, first); tuneHold.applied(monoMs()); }
+                if (passThrough) clientFrame(sock, payload);
             }
         }
         // ★ The last tune is never lost: one still held when the socket goes is applied, exactly as it
