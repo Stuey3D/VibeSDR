@@ -2068,7 +2068,7 @@ void SdrplaySource::setLnaState(int) {}
 bool SdrplaySource::setIfGainReduction(int) { return false; }
 bool SdrplaySource::setGainPair(int, int) { return false; }
 unsigned SdrplaySource::gainRejects() { return 0; }
-int SdrplaySource::driverKind() { return (int)sdrplaylib::RspDriver::Unknown; }
+int SdrplaySource::driverKind() { return 2; }   // sdrplaylib::RspDriver::Unknown — the header is not included in this stub build (iOS)
 const char* SdrplaySource::driverLabel() { return "none"; }
 bool SdrplaySource::ifAgcEnabled() const { return false; }
 void SdrplaySource::setIfAgc(bool) {}
