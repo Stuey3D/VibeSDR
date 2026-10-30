@@ -113,4 +113,5 @@ try {
 }
 console.log(`\n   ${pass} passed, ${fail} failed`);
 if (fail) console.log(`   log: ${LOG}`);
+else fs.rmSync(dir, { recursive: true, force: true });
 process.exit(fail ? 1 : 0);
