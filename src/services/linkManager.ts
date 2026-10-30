@@ -80,13 +80,13 @@ export class LinkManager {
   private lowDataRung: number;
   private apply: (rung: number, fps: number) => void;
   private mode: LinkMode;
-  /** ★ V12 MINIMUM / ECO (src/assets/wfSpeedCap.ts): the backend's own ladder and Low Data rung, before any ceiling —
+  /** ★ V12 MINIMUM / LOW / ECO (src/assets/wfSpeedCap.ts): the backend's own ladder and Low Data rung, before any ceiling —
    *  so a ceiling can be LIFTED again (the cap chosen off, or the owner raising maxFftRate), not only ever clamp down. */
   private readonly baseLadder: number[];
   private readonly baseLowDataRung: number;
   /** The owner's ceiling from hwinfo (0 = none yet). */
   private serverMax = 0;
-  /** The listener's waterfall-speed ceiling, fps: MINIMUM 5, ECO 10, 0 = none (wfSpeedCap.capLadder). */
+  /** The listener's waterfall-speed ceiling, fps: MINIMUM 2, LOW 5, ECO 10, 0 = none (wfSpeedCap.capLadder). */
   private userCap = 0;
 
   /** The rate actually requested (1 = full). Includes a user-pinned Low Data floor. */
@@ -131,7 +131,7 @@ export class LinkManager {
     lowDataRung: number;
     mode: LinkMode;
     startRung?: number;
-    /** V12: the waterfall-speed ceiling in fps (MINIMUM 5 / ECO 10; 0 or absent = none). */
+    /** V12: the waterfall-speed ceiling in fps (MINIMUM 2 / LOW 5 / ECO 10; 0 or absent = none). */
     userCapFps?: number;
     apply: (rung: number, fps: number) => void;
   }) {
@@ -180,7 +180,7 @@ export class LinkManager {
   }
 
   tick(fps: number, live: boolean, settled: boolean): void {
-    // ★ The BACKEND's ladder, not the capped one: under MINIMUM a VibeServer's ladder is the single rung [5], and a
+    // ★ The BACKEND's ladder, not the capped one: under LOW a VibeServer's ladder is the single rung [5] (MINIMUM [2]), and a
     //   pinned mode must still re-assert it every tick (the early return used to mean only "no lever at all").
     if (this.baseLadder.length <= 1) return;      // backend has no lever (OWRX)
 
@@ -263,7 +263,7 @@ export class LinkManager {
 
   /** Re-assert the current rung — call after a reconnect, where the server starts at its default. */
   reassert(): void {
-    // ★ Rung 1 is the server's default only when no ceiling of OURS lowered it — under MINIMUM rung 1 is 5 fps, and a
+    // ★ Rung 1 is the server's default only when no ceiling of OURS lowered it — under LOW rung 1 is 5 fps (MINIMUM 2), and a
     //   reconnected server would otherwise sit at its own full rate with nothing to tell it otherwise.
     if (this.rung !== 1 || this.ladder[0] < this.baseLadder[0]) this.apply(this.rung, this.ladder[this.rung - 1]);
   }
@@ -296,7 +296,7 @@ export class LinkManager {
   }
 
   /** The ladder from the backend's own rungs: the owner's ceiling (rung INDEX kept for Low Data, as it always was),
-   *  then the listener's MINIMUM / ECO cap (wfSpeedCap.capLadder — Low Data keeps its RATE, so 5 stays 5). */
+   *  then the listener's MINIMUM / LOW / ECO cap (wfSpeedCap.capLadder — Low Data keeps its RATE, so 5 stays 5). */
   private computeLadder(cap = this.userCap): { ladder: number[]; lowDataRung: number } {
     let ladder = this.baseLadder.slice();
     if (this.serverMax > 0) {
@@ -324,7 +324,7 @@ export class LinkManager {
   get nativeFps(): number { return this.computeLadder(0).ladder[0] ?? 0; }
 
   /**
-   * ★★★ V12 MINIMUM / ECO WATERFALL SPEED, LIVE (src/assets/wfSpeedCap.ts; Stuart 2026-10-28). A CEILING on this
+   * ★★★ V12 MINIMUM / LOW / ECO WATERFALL SPEED, LIVE (src/assets/wfSpeedCap.ts; Stuart 2026-10-28). A CEILING on this
    * controller, not a mode: Auto keeps managing the link underneath it, Full is capped to it, Low Data keeps its rate.
    * Applied at once in every mode — the point is that the SERVER sends fewer frames, so the request goes out now.
    * ★ LIFTING it in Auto re-opens like a fresh connect — on the middle rung, earning the top — rather than sitting
