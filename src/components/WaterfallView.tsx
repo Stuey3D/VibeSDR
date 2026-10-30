@@ -100,7 +100,7 @@ import { ringCapFromDeviceClass, ringNextRows, RING_MIN_ROWS } from '../utils/wf
 import { growRing } from '../utils/wfRingGrow';
 import { readNativeDeviceClass } from '../services/deviceClass';
 import { hzOnRow, rowAtLine, newStampState, stampAlpha, stampColour, stampJump, stampLine, stampNoteRow, stampPrune, stampSettleRows, stampsShown,
-         stampSweepRows, stampTicks, STAMP_MIN_GAP_LABELS, type WfStamp } from '../utils/wfStamps';
+         stampSweepRows, stampTicks, stampTimeLabel, STAMP_MIN_GAP_LABELS, type WfStamp } from '../utils/wfStamps';
 import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
 import { setWideSink } from '../services/wideRowBus';
 import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate, traceLagMs } from '../utils/wfPace';
@@ -566,12 +566,17 @@ const WfStampItem = React.memo(function WfStampItem({ s, width, rowPt, wfH, font
       while (step * width / sp < 52) step *= 2;
       return step;
     }, (hz) => fmtHz(hz), 52);
-    return ticks.map((t, i) => {
+    // ★ WHEN, at the left end (Stuart, 2026-10-30): HH:MM:SS the scale changed; frequency labels keep clear of it.
+    const time = s.at ? stampTimeLabel(s.at) : null;
+    const timeEnd = time ? 3 + font.measureText(time).width + 8 : 0;
+    const out = ticks.map((t, i) => {
       const w = t.label ? font.measureText(t.label).width : 0;
       const lx = Math.max(2, Math.min(width - w - 2, t.x - w / 2));
-      return { key: i, x: t.x, label: t.label, lx };
+      return { key: i, x: t.x, label: lx < timeEnd ? null : t.label, lx };
     });
-  }, [s.lo, s.span, width, font]);
+    if (time) out.push({ key: -1, x: -10, label: time, lx: 3 });   // x off-screen: no tick for the time
+    return out;
+  }, [s.lo, s.span, s.at, width, font]);
   // ★ Never a NaN or an infinity into the canvas: an unusable position is off-screen and invisible.
   const tr = useDerivedValue(() => {
     const y = stampLine(uHead.value, s.frame, scrollFrac.value, uN.value, uQuant.value > 0.5) * rowPt;
@@ -1839,7 +1844,15 @@ function WaterfallView({
   }, []);
   const engAvail = useSharedValue(0);    // the newest row in the image
   const engStampGen = useSharedValue(0);
-  const applyEngineStamps = useCallback((list: WfStamp[]) => { stampSink.current?.(list); }, []);
+  // ★ The engine's stamps carry no time: stamp each with the moment it first reached JS (to the second — it is placed
+  //   ~0.5 s after the move lands either way).
+  const engineStampAt = useRef(new Map<number, number>());
+  const applyEngineStamps = useCallback((list: WfStamp[]) => {
+    const seen = engineStampAt.current, now = Date.now(), keep = new Set<number>();
+    const out = list.map((s) => { keep.add(s.id); let at = seen.get(s.id); if (at == null) { at = now; seen.set(s.id, at); } return s.at ? s : { ...s, at }; });
+    for (const id of seen.keys()) if (!keep.has(id)) seen.delete(id);
+    stampSink.current?.(out);
+  }, []);
   const enginePoll = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value || !engine) return;

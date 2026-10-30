@@ -51,7 +51,7 @@ import { spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
 import { TUNE_EASE_MIN_FRAC } from '../../../src/utils/wfRowPlace.ts';
 import { WIDE_TEX, wideExtent, wideRowInto, rowInCapture, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
 import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type RowView } from './wfGlide';
-import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRow, stampPrune, stampReset, stampSettleRows, stampSweepRows, stampsShown, stampTicks, stampColour }
+import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRow, stampPrune, stampReset, stampSettleRows, stampSweepRows, stampsShown, stampTicks, stampColour, stampTimeLabel }
   from '../../../src/utils/wfStamps.ts';
 import { tickStep, fmtTick } from './freqScale';
 import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
@@ -1220,12 +1220,23 @@ export class Waterfall {
       ctx.shadowColor = 'rgba(0,0,0,0.95)';
       ctx.fillStyle = rgba(col, 0.55);                 // the line where the scale changed
       ctx.fillRect(0, y, W, hair);
+      // ★ WHEN, at the left end (Stuart, 2026-10-30): HH:MM:SS the scale changed; frequency labels keep clear of it.
+      let timeEnd = 0;
+      if (s.at) {
+        const tl = stampTimeLabel(s.at);
+        ctx.textAlign = 'left';
+        ctx.fillStyle = rgba(col, 0.95);
+        ctx.fillText(tl, Math.round(3 * dpr), y + tickH + Math.round(dpr));
+        timeEnd = Math.round(3 * dpr) + ctx.measureText(tl).width + Math.round(8 * dpr);
+        ctx.textAlign = 'center';
+      }
       for (const k of c.ticks) {
         ctx.fillStyle = rgba(col, 0.85);
         ctx.fillRect(Math.round(k.x - tickW / 2), y, tickW, tickH);
         if (!k.label) continue;
         // ★ kept whole at the edges (the live scale's end labels are cut; a stamp's would read as a glitch)
         const x = Math.max(k.w / 2 + 2, Math.min(W - k.w / 2 - 2, k.x));
+        if (x - k.w / 2 < timeEnd) continue;           // under the time: the time wins
         ctx.fillStyle = rgba(col, 0.95);
         ctx.fillText(k.label, x, y + tickH + Math.round(dpr));
       }

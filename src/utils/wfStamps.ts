@@ -52,6 +52,17 @@ export interface WfStamp {
   lo: number; span: number;
   /** The newest row index when it was placed (its fade in). */
   born: number;
+  /** ★ When it was placed (ms since the epoch) — printed at its left end, so the old scale says WHEN as well as WHERE
+   *  (Stuart, 2026-10-30: "can we add a timestamp to the frequency stamp on the waterfall"). Optional: the Android
+   *  engine's stamps get it when they first reach JS. */
+  at?: number;
+}
+
+/** A stamp's time label: local 24-hour HH:MM:SS. */
+export function stampTimeLabel(at: number): string {
+  const d = new Date(at);
+  const p = (n: number) => (n < 10 ? '0' : '') + n;
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
 export interface StampState {
@@ -102,7 +113,7 @@ export function stampSweepRows(rowRate: number, viewRows: number): number {
 function addStamp(st: StampState, frame: number, lo: number, span: number, born: number): void {
   // ★★ Never crowded: a stamp within minGapRows of the one below REPLACES it (one label for that stretch, not two).
   if (st.stamps.length && frame - st.stamps[0].frame < st.minGapRows) st.stamps.shift();
-  st.stamps.unshift({ id: st.nextId++, frame, lo, span, born });
+  st.stamps.unshift({ id: st.nextId++, frame, lo, span, born, at: Date.now() });
   if (st.stamps.length > STAMP_MAX) st.stamps.length = STAMP_MAX;
   st.gen++;
 }
