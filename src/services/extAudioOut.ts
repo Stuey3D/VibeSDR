@@ -32,6 +32,13 @@ export class ExtAudioOut {
   private burstMs = 0;
   /** When the last buffer went out (ms epoch) — the pairing's "has its stream stopped?" for the second voice. */
   lastPushAt = 0;
+  /** ★ Its screen is away (dualServer.parkBackend): audio only — no decoder feed, nothing for a screen. */
+  background = false;
+  /** ★ The pairing ended this side and stopped its audio itself: from here on nothing here starts or stops a player —
+   *  the main player may already be the OTHER server's (moved there a moment later), and this adapter's own destroy, when
+   *  its screen finally goes, must not stop it. */
+  private detached = false;
+  detach() { this.stop(); this.detached = true; }
 
   /** Where it goes now. A change while playing stops the old route; the next buffer starts the new one. */
   get current(): ExtRoute { return this.route; }
@@ -45,7 +52,7 @@ export class ExtAudioOut {
   /** The adapter's first buffer (its old `startExternalAudio`). `pauseMode` is the main player's lock-screen pause rule. */
   start(rate: number, pauseMode: string) {
     this.pauseMode = pauseMode;
-    if (this.started) return;
+    if (this.started || this.detached) return;
     this.started = true;
     if (this.route === 'aux') Dual?.startAux?.();
     else {
@@ -57,6 +64,7 @@ export class ExtAudioOut {
   isStarted(): boolean { return this.started; }
 
   push(b64: string, rate: number, channels: number) {
+    if (this.detached) return;
     if (!this.started) this.start(rate, this.pauseMode);
     this.lastPushAt = Date.now();
     if (this.route === 'aux') Dual?.pushAuxPcm?.(b64, rate, channels === 2 ? 2 : 1);

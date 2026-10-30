@@ -849,6 +849,9 @@ export class KiwiAdapter implements SDRBackend {
     // Tell the sidecar the dial frequency (when it changes) so FT8 spots get the
     // right RF freq + band — otherwise they sit at the 100 MHz default (no band
     // colour, wrong tune-on-tap). Pushed here so the sidecar is already running.
+    // ★★ V12 two servers: a Kiwi playing in the BACKGROUND (its screen away, dualServer.parkBackend) feeds no decoder —
+    //   the decoder service belongs to the screen in front, and two servers' audio in one decoder is neither's.
+    if (this.audioOut.background) return;
     if (this.lastDecoderFreq !== this.freq) {
       this.lastDecoderFreq = this.freq;
       VibeLocal?.setDecoderFreq?.(this.freq);
@@ -1116,6 +1119,8 @@ export class KiwiAdapter implements SDRBackend {
   /** ★★ V12 two servers: a screen coming back ADOPTS this adapter (dualServer.parkBackend / takeParked) — its session,
    *  sockets and audio carry on, and from here on it reports to the new screen. */
   rebindCallbacks(cb: BackendCallbacks): void { this.cb = cb; }
+  /** ★★ V12 two servers: the pairing ended this side — its audio stops now and never starts again (SDRBackend). */
+  detachAudio(): void { this.audioOut.detach(); }
 
   /** Pause-disconnect: drop the sockets but keep the native audio session. */
   disconnectSocket(): void {

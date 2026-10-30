@@ -435,6 +435,8 @@ export class OwrxAdapter implements SDRBackend {
   /** ★★ V12 two servers: a screen coming back ADOPTS this adapter (dualServer.parkBackend / takeParked) — its session,
    *  socket and audio carry on, and from here on it reports to the new screen. */
   rebindCallbacks(cb: BackendCallbacks): void { this.cb = cb; }
+  /** ★★ V12 two servers: the pairing ended this side — its audio stops now and never starts again (SDRBackend). */
+  detachAudio(): void { this.audioOut.detach(); }
 
   /** Pause-disconnect: close the WS to free the server slot, but DON'T tear down
    *  the native audio session — the native engine keeps showing the paused /

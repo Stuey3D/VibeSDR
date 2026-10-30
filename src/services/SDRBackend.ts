@@ -190,6 +190,9 @@ export interface SDRBackend {
    *  a server that never stopped playing ADOPTS its adapter — the same sockets, the same session — and this points the
    *  adapter's reports at the new screen. Absent = the backend is rebuilt as ever. */
   rebindCallbacks?(cb: BackendCallbacks): void;
+  /** ★★ V12 two servers: the pairing ended this side and stops its audio NOW; nothing the adapter does afterwards (its
+   *  destroy when the screen goes) may touch a player again — it may be the other server's by then. */
+  detachAudio?(): void;
   /** ★★ V12 two servers: where an adapter that decodes its own audio sends it (src/services/extAudioOut.ts). */
   readonly audioOut?: import('./extAudioOut').ExtAudioOut;
 
