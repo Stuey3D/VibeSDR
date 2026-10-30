@@ -43,6 +43,8 @@
 import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, rowsForArrival, type WfScroll } from '../assets/wfRowTarget';
 import { boostActive, boostNote, boostRowRate, BOOST_TAIL_MS, clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockReset, clockRowRate, clockRun, clockSetRate, newBoost, newRowClock }
   from '../assets/wfClock';
+import { avHold, avNoteAudio, clockOwnMs, newAvSync } from '../assets/wfAvSync';
+import { audioPlayoutMs } from '../utils/audioPlayout';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
@@ -466,6 +468,9 @@ interface SpectrumEngineHost {
   /** ★ V12 a full-capture row (SPWB, utils/wfWide.ts) the JS socket received — the engine keeps the layer (wf_wide.h).
    *  Optional: a binary built before it has none, and then the row is simply not drawn. */
   pushWide?(frame: Uint8Array): void;
+  /** ★★ V12 2026-10-30 the audio's playout delay, ms (−1 = unknown) — the engine's clock waits for the sound
+   *  (cpp/spectrum/wf_av_sync.h). Optional: a binary built before it holds nothing. */
+  setAudioDelay?(ms: number): void;
   setConfig(c: { width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
                  smoothTune: boolean; targetRows: number; displayCapHz?: number; panelHz?: number }): void;
   setSettings(s: Record<string, number | boolean>): void;
@@ -1333,6 +1338,9 @@ function WaterfallView({
    *  (utils/wfPace.ts clockPace). Frames are kept here by id until the clock has shown or dropped them. */
   const rowClock   = useRef(newRowClock());
   const boostSt    = useRef(newBoost());   // ★ the interaction boost (wfClock.ts boostRowRate)
+  /** ★★ V12 2026-10-30 THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts): the audio's playout delay (polled
+   *  below) and the hold each clocked frame enters with. */
+  const avSt       = useRef(newAvSync());
   const lastEaseLeft = useRef(0);
   const clockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clockOut   = useRef<number[]>([]);
@@ -1831,12 +1839,17 @@ function WaterfallView({
     if (q.length) traceTimer.current = setTimeout(traceRun, Math.max(0, q[0].at - performance.now()));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [traceApply, traceDrop]);
-  const traceShow = useCallback((spec: number[], peak: SkPath | null, at: number) => {
+  const traceShow = useCallback((spec: number[], peak: SkPath | null, at: number, shrunk = false) => {
     if (!(at > performance.now())) { traceDrop(); traceApply(spec, peak); return; }   // now: anything waiting is older
     const q = traceQ.current;
+    // ★★ V12 2026-10-30 the A/V hold shrank (wfAvSync.ts): the traces still waiting later than this one are older — their
+    //   rows were discarded by the clock, so they go too (never shown after a newer one).
+    if (shrunk) while (q.length && q[q.length - 1].at > at) { const o = q.pop()!; if (o.peak) { try { o.peak.dispose(); } catch {} } }
     if (q.length && at < q[q.length - 1].at) at = q[q.length - 1].at;                 // never out of order
     q.push({ at, spec, peak });
-    while (q.length > 4) { const o = q.shift()!; if (o.peak) { try { o.peak.dispose(); } catch {} } }   // the clock's own depth
+    // the clock's own depth — ★ and the frames an A/V hold keeps waiting (wfAvSync.ts): one trace per frame on the clock
+    const cap = Math.max(4, rowClock.current.q.length + 1);
+    while (q.length > cap) { const o = q.shift()!; if (o.peak) { try { o.peak.dispose(); } catch {} } }
     if (!traceTimer.current) traceTimer.current = setTimeout(traceRun, Math.max(0, q[0].at - performance.now()));
   }, [traceApply, traceDrop, traceRun]);
   useEffect(() => traceDrop, [traceDrop]);   // unmount
@@ -1974,6 +1987,7 @@ function WaterfallView({
     const wfGated = cfg.minGapMs > 0 && now - lastWfPushAt.current < cfg.minGapMs;
     /** When the SPECTRUM TRACE takes this frame (performance.now() ms; 0 = at once) — see traceShow. */
     let traceAt = 0;
+    let traceShrunk = false;   // ★ the A/V hold shrank on this frame (see the clock below)
     if (!wfGated) {
     // ★★★ MEASURE THE GAP BETWEEN ROW-SETS, NOT BETWEEN DATA FRAMES. This is the quantity the
     //     reveal has to be spread over, and using the wrong one is what made the waterfall "leap a
@@ -2032,12 +2046,26 @@ function WaterfallView({
       clockFrames.current.set(id, slot);
       slot.row.set(frame.row); slot.c = rowCentre; slot.h = rowHzBin;
       clockSetRate(rowClock.current, rowTarget, t);
-      const pAt = clockArrive(rowClock.current, id, t, boost);
+      // ★★★ THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts, Stuart 2026-10-30). The frame enters the clock
+      //     `hold` ms after it arrived — the audio's playout delay less what this route already takes — so the row and
+      //     its trace come on screen as the sound is heard (they ran ~140 ms ahead at rest, ~320 after a hiccup). Stuart:
+      //     "to prevent scrolling judder whilst the jitter buffer enables we can simply duplicate the previous lines if
+      //     needed and then the waterfall still reacts to the audio in time but still stays smooth": a hold that GROWS is
+      //     carried by the clock repeating the row on screen, one that SHRINKS by discards (clockArrive). ZERO while a
+      //     tune or zoom is in hand (SMOOTH_TUNE_TAIL_MS after the last input, smoothTune or not) — a held row is `hold`
+      //     ms from the screen, so a moving dial would never show a fresh one (the web's lesson, 2026-08-10). Only WHEN a
+      //     frame enters the clock moves: its ticks, rate, boost, fan and ease are untouched.
+      const avPass = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+      const holdWas = avSt.current.hold;
+      const hold = avHold(avSt.current, clockOwnMs(rowClock.current.ivl, rowTarget), avPass);
+      const pAt = clockArrive(rowClock.current, id, t, boost, hold);
       clockStop();
       pumpClock();
       // ★★ The trace goes with its row: at the frame's presentation time plus the rows clockPace holds in hand, so the
       //   trace eases to this frame as its row comes on screen (traceLagMs). At once in a gesture (as before).
       if (!boost) traceAt = pAt + traceLagMs(rowTarget);
+      // ★ The hold shrank: the trace frames still waiting later than this one went with their rows (clockArrive).
+      if (hold < holdWas) traceShrunk = true;
     } else if (rowClock.current.rate > 0) {
       // Off the clock (NATIVE, a feed too slow to fill, or covered): stop it; the next clocked frame starts afresh.
       clockStop(); clockReset(rowClock.current); clockSetRate(rowClock.current, 0, 0); clockFrames.current.clear();
@@ -2211,7 +2239,7 @@ function WaterfallView({
         // (peakNext null → swapPath(peakPath, peakEmpty): empty = draw nothing, a no-op once already empty)
       }
       // The trace and the peak path go up together — now, or with this frame's row (traceShow).
-      traceShow(traceNext!, peakNext, traceAt);
+      traceShow(traceNext!, peakNext, traceAt, traceShrunk);
     } else {
       // Spectrum hidden — nothing needs inter-frame smoothness; the panel can
       // fall all the way to the data rate.
@@ -2389,6 +2417,19 @@ function WaterfallView({
     // The dB axis labels: liveRange() answers only when the 2 dB-hysteresis window moved.
     const t = setInterval(() => { const r = engine.liveRange(); if (r) setLiveRange({ dbMin: r[0], dbMax: r[1] }); }, 200);
     return () => { clearInterval(t); engine.setBackground(true); };   // unmount: the engine stops; GC frees it
+  }, [engine]);
+  /* ★★ V12 2026-10-30 THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts): the audio's playout delay, 4 times a
+   *  second (a synchronous native read — utils/audioPlayout.ts) — to the JS path's clock, or to the engine's. Smoothed
+   *  there; −1 (nothing playing, an older native build) is no hold. Not while backgrounded (nothing is drawn). */
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (bgRef.current) return;
+      const ms = audioPlayoutMs();
+      if (engine) engine.setAudioDelay?.(ms);
+      else avNoteAudio(avSt.current, ms, performance.now());
+    }, 250);
+    return () => clearInterval(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engine]);
 
   // (Palette switches need no rebuild anymore — the lutImage memo swaps the

@@ -9,6 +9,7 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.media.MediaCodec
 import android.media.MediaFormat
@@ -1524,7 +1525,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         mine?.release()
                         mine = buildExtTrack(item.first, outCh, item.second)
                         myRate = item.first; myCh = outCh
-                        if (gen == extGen) extTrack = mine        // volume changes reach the current writer only
+                        if (gen == extGen) { extTrack = mine; extWritten = 0L }   // volume changes reach the current writer only
                     }
                     // ★ V12: a recording or the record buffer is listening — it gets what the listener would hear,
                     //   paused or not: the notch, the squelch and binaural run for it too (once, never twice).
@@ -1554,7 +1555,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                             playPcm = dualOut
                         }
                         // ★ A track released under us (it should no longer happen) ends THIS writer, not the app.
-                        try { mine?.write(playPcm, 0, playN) }  // blocking = backpressure
+                        try { mine?.write(playPcm, 0, playN); if (gen == extGen) extWritten += (playN / myCh).toLong() }  // blocking = backpressure
                         catch (e: IllegalStateException) { Log.w(TAG, "ext AudioTrack gone mid-write: ${e.message}"); break }
                     }
                     // ★ V12: the on-device transcriber — squelch applied (muted audio skips the gate above, so say so).
@@ -2091,6 +2092,45 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private var trackOutChannels = 0     // the AudioTrack's — 2 whenever V12 binaural tuning is on
     private var binDecOut = ByteArray(0) // binaural's stereo copy (decode thread only)
 
+    /* ★★ V12 2026-10-30 THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts) — iOS VibePowerModule.audioPlayoutMs'
+     *  twin. Frames written to each AudioTrack since it was built (its writer's thread writes, JS reads: @Volatile), so
+     *  the getter can say how far behind its arrival the audio is being HEARD. */
+    @Volatile private var trackWritten = 0L
+    @Volatile private var extWritten = 0L
+    private val avTs = AudioTimestamp()
+
+    /** Of what has been written to `t`, how much is still to be heard, ms. AudioTrack.getTimestamp says which frame was
+     *  at the OUTPUT at a given moment (so the HAL's and the device's own latency are in it — a Bluetooth headset's
+     *  included); before it has one, the playback head (the mixer's side: the output latency is then missed). */
+    private fun trackPendingMs(t: AudioTrack, written: Long): Double {
+        val rate = t.sampleRate
+        if (rate <= 0) return 0.0
+        val ok = try { t.getTimestamp(avTs) } catch (_: Exception) { false }
+        val heard: Double = if (ok && avTs.nanoTime > 0)
+            avTs.framePosition + (System.nanoTime() - avTs.nanoTime) * rate / 1e9
+        else (try { t.playbackHeadPosition.toLong() and 0xFFFFFFFFL } catch (_: Exception) { written }).toDouble()
+        return (written - heard).coerceIn(0.0, rate * 2.0) * 1000.0 / rate
+    }
+
+    /** ★★ V12 2026-10-30: the audio's playout delay, ms — how long after a packet ARRIVES its sound reaches the ear: the
+     *  packets waiting for the decoder (20 ms each) or the PCM waiting for the external writer, plus what the AudioTrack
+     *  still holds and the output adds. −1 when nothing is playing (the waterfall then holds nothing). JS polls it at 4 Hz
+     *  (VibeStreamModule.audioPlayoutMs, synchronous). ★ Not measured: the server's own encode delay and any difference
+     *  between the audio and spectrum sockets' transit — both taken as equal. */
+    @Synchronized fun audioPlayoutMs(): Double {
+        if (!running || muted) return -1.0
+        return try {
+            if (externalAudio) {
+                val t = extTrack ?: return -1.0
+                val rate = t.sampleRate.takeIf { it > 0 } ?: return -1.0
+                extQueuedFrames.get().coerceAtLeast(0) * 1000.0 / rate + trackPendingMs(t, extWritten)
+            } else {
+                val t = track ?: return -1.0
+                packetQueue.size * 20.0 + trackPendingMs(t, trackWritten)
+            }
+        } catch (_: Exception) { -1.0 }
+    }
+
     /** Mono PCM16 LE → both ears (only reached in the instant binaural was switched off before the track rebuilt). */
     private fun upmixBytes(src: ByteArray, frames: Int, out: ByteArray): Int {
         for (i in 0 until frames) {
@@ -2222,6 +2262,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         if (!muted) {
                             if (outN >= 0) track?.write(binDecOut, 0, outN)  // blocking = backpressure
                             else track?.write(pcm, 0, pcm.size)              // blocking = backpressure
+                            trackWritten += ((if (outN >= 0) outN else pcm.size) / (2 * trackOutChannels.coerceAtLeast(1))).toLong()
                         }
                     }
                     c.releaseOutputBuffer(outIdx, false)
@@ -2706,6 +2747,7 @@ class VibeStreamService : MediaBrowserServiceCompat() {
             .build()
         t.setVolume(volume * pageGain)
         t.play()
+        trackWritten = 0L
         track = t
         trackRate = rate
         trackChannels = ch

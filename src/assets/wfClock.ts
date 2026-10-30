@@ -44,7 +44,7 @@ export const CLOCK_CFG = { delayFrac: 0.2, delayMaxMs: 40 };
 /** The most frames waiting for their presentation time (more = a backlog: the oldest go). */
 const CLOCK_QUEUE = 4;
 
-export interface ClockFrame { id: number; p: number }
+export interface ClockFrame { id: number; p: number; h?: number }   // h: the A/V hold it entered with (wfAvSync.ts)
 export interface RowClockState {
   // ── the feed's schedule (de-jitter) ──
   base: number;          // the schedule's last arrival time (follows the mean arrival), ms; 0 = none yet
@@ -54,13 +54,15 @@ export interface RowClockState {
   q: ClockFrame[];       // frames waiting for their presentation time, oldest first
   cur: number;           // the frame being held (−1 none)
   curP: number;          // its presentation time
+  curH: number;          // ★ the A/V hold it entered with (wfAvSync.ts; 0 = none)
+  hold: number;          // ★ the A/V hold the last arrival entered with
   // ── the output clock ──
   rate: number;          // rows/s (0 = off)
   t0: number;            // tick k is due at t0 + k·1000/rate
   k: number;             // the next tick
 }
 export const newRowClock = (): RowClockState =>
-  ({ base: 0, ivl: 100, lastT: 0, ps: 0, q: [], cur: -1, curP: 0, rate: 0, t0: 0, k: 0 });
+  ({ base: 0, ivl: 100, lastT: 0, ps: 0, q: [], cur: -1, curP: 0, curH: 0, hold: 0, rate: 0, t0: 0, k: 0 });
 
 /** The presentation delay for a feed interval, ms. */
 export const clockDelayMs = (ivl: number): number => Math.min(CLOCK_CFG.delayMaxMs, CLOCK_CFG.delayFrac * ivl);
@@ -68,10 +70,28 @@ export const clockDelayMs = (ivl: number): number => Math.min(CLOCK_CFG.delayMax
 export const holdLimitMs = (ivl: number): number => Math.max(300, 2.5 * ivl + 100);
 
 /** A real frame `id` arrived at `t` (ms). `instant` (a gesture): presented at once, the schedule restarts from it —
- *  tune/zoom must feel instant (the jitter buffer is bypassed then too). Returns its presentation time. */
-export function clockArrive(c: RowClockState, id: number, t: number, instant = false): number {
-  const gap = c.lastT > 0 ? t - c.lastT : 0;
-  c.lastT = t;
+ *  tune/zoom must feel instant (the jitter buffer is bypassed then too). Returns its presentation time.
+ *
+ *  ★★★ V12 2026-10-30 `holdMs` — THE WATERFALL WAITS FOR THE SOUND (wfAvSync.ts). The frame enters the schedule `holdMs`
+ *      later than it arrived; the schedule (base, ps) moves with the hold, the feed's interval is still measured on the
+ *      REAL arrivals. Stuart (2026-10-30): "to prevent scrolling judder whilst the jitter buffer enables we can simply
+ *      duplicate the previous lines if needed and then the waterfall still reacts to the audio in time but still stays
+ *      smooth". So:
+ *   • THE HOLD GROWS (re-engaging after a tune, the audio ratcheting deeper after a hiccup): the next frame is due later,
+ *     and the ticks in between REPEAT the frame on screen — the path a late frame already takes. The scroll never stops:
+ *     the dead-link limit is lengthened by exactly the growth since the held frame went in, so the repeats are not
+ *     mistaken for a dead link.
+ *   • THE HOLD SHRINKS: frames still waiting LATER than this newer one are DISCARDED — over-interpolate and discard, as
+ *     the clock already does for a fast feed — never a burst. (A passthrough is a shrink to 0: everything still held goes.)
+ *   • 0 throughout is the clock exactly as it was. The queue grows by the frames a hold keeps waiting (~10 at 400 ms on a
+ *     23 fps feed). */
+export function clockArrive(c: RowClockState, id: number, t0: number, instant = false, holdMs = 0): number {
+  const dH = holdMs - c.hold;
+  c.hold = holdMs;
+  if (dH !== 0 && c.base > 0) { c.base += dH; c.ps += dH; }   // the schedule moves with the hold
+  const t = t0 + holdMs;
+  const gap = c.lastT > 0 ? t0 - c.lastT : 0;                 // the feed's interval: real arrivals
+  c.lastT = t0;
   let p: number;
   if (instant || c.base <= 0 || !(gap > 0) || gap > 4 * c.ivl || gap > 2000) {
     // The first frame, a gesture or a resume after a pause: a fresh schedule from this arrival.
@@ -98,11 +118,14 @@ export function clockArrive(c: RowClockState, id: number, t: number, instant = f
     if (e > dead) c.ps += e - dead; else if (e < -dead) c.ps += e + dead;
     p = Math.min(Math.max(t, c.ps), t + d + 0.25 * c.ivl);
   }
+  // ★ The hold shrank: frames still waiting later than this one are older than it — discarded, not shown after it.
+  if (dH < 0) while (c.q.length && c.q[c.q.length - 1].p > p) c.q.pop();
   // Presentation times never go backwards (a frame cannot be shown before the one that came before it).
   const lastP = c.q.length ? c.q[c.q.length - 1].p : (c.cur >= 0 ? c.curP : -Infinity);
   if (p < lastP) p = lastP;
-  c.q.push({ id, p });
-  while (c.q.length > CLOCK_QUEUE) c.q.shift();
+  c.q.push({ id, p, h: holdMs });
+  const qMax = holdMs > 0 ? CLOCK_QUEUE + Math.ceil(holdMs / Math.max(10, c.ivl)) : CLOCK_QUEUE;
+  while (c.q.length > qMax) c.q.shift();
   return p;
 }
 
@@ -135,9 +158,11 @@ export function clockRun(c: RowClockState, now: number, out: number[], maxRows =
     const tt = c.t0 + c.k * per;
     c.k++;
     // Every frame presented by this tick: the newest is shown, the older ones are discarded.
-    while (c.q.length && c.q[0].p <= tt) { const f = c.q.shift()!; c.cur = f.id; c.curP = f.p; }
+    while (c.q.length && c.q[0].p <= tt) { const f = c.q.shift()!; c.cur = f.id; c.curP = f.p; c.curH = f.h ?? 0; }
     if (c.cur < 0) continue;
-    if (tt - c.curP > holdLimitMs(c.ivl)) continue;           // a dead link: stop, do not paint one row down the screen
+    // A dead link: stop, do not paint one row down the screen. ★ Lengthened by the A/V hold's growth since this frame went
+    // in (clockArrive): those ticks are the repeats that carry the scroll while the hold grows, not a dead link.
+    if (tt - c.curP > holdLimitMs(c.ivl) + Math.max(0, c.hold - c.curH)) continue;
     out.push(c.cur); made++;
   }
   // Rebase now and then so t0 + k·per keeps its precision.
@@ -148,7 +173,7 @@ export function clockRun(c: RowClockState, now: number, out: number[], maxRows =
 /** Forget the frames (background / covered / a new radio): the next arrival starts a fresh schedule. The output phase
  *  is kept. */
 export function clockReset(c: RowClockState): void {
-  c.q.length = 0; c.cur = -1; c.curP = 0; c.base = 0; c.lastT = 0; c.ps = 0;
+  c.q.length = 0; c.cur = -1; c.curP = 0; c.curH = 0; c.hold = 0; c.base = 0; c.lastT = 0; c.ps = 0;
 }
 
 /**
@@ -225,7 +250,7 @@ export function displayClockStep(d: DisplayClockState, ts: number, rate: number,
 /** Nothing left to show: no frame waiting and the held one past its hold limit (a dead link, a paused feed) — the
  *  producer stops its timer and the next arrival restarts it (clockSetRate/clockArrive, then clockRun). */
 export const clockIdle = (c: RowClockState, now: number): boolean =>
-  c.q.length === 0 && (c.cur < 0 || now - c.curP > holdLimitMs(c.ivl));
+  c.q.length === 0 && (c.cur < 0 || now - c.curP > holdLimitMs(c.ivl) + Math.max(0, c.hold - c.curH));
 
 /* ★★★ THE INTERACTION BOOST (Stuart, 2026-10-29): "I think the waterfall rate needs to increase during interaction to
  *  allow for smoothness, but we need to do it in a way that we dont try to pull down more data than a server can supply
