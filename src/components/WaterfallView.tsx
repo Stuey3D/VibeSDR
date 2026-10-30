@@ -45,6 +45,7 @@ import { boostActive, boostNote, boostRowRate, BOOST_TAIL_MS, clockArrive, clock
   from '../assets/wfClock';
 import { avHold, avNoteAudio, clockOwnMs, newAvSync } from '../assets/wfAvSync';
 import { audioPlayoutMs } from '../utils/audioPlayout';
+import { noteFault } from '../services/faultLog';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
 import {
@@ -546,6 +547,15 @@ const WfStampItem = React.memo(function WfStampItem({ s, width, rowPt, wfH, font
   );
 });
 
+/** ★ A failure inside the stamps hides THE STAMPS — never the spectrum panel around them (PanelBoundary would close it).
+ *  Noted in Diagnostics as a contained fault. */
+class StampBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(e: unknown) { noteFault('waterfall', 'stamps', e); }
+  render() { return this.state.failed ? null : this.props.children; }
+}
+
 const WfStampLayer = React.memo(function WfStampLayer({ sink, width, rowPt, wfH, color, top, uHead, scrollFrac, uN, uQuant }: {
   sink: StampSink; width: number; rowPt: number; wfH: number; color: string; top: number;
   uHead: SharedValue<number>; scrollFrac: SharedValue<number>; uN: SharedValue<number>; uQuant: SharedValue<number>;
@@ -553,7 +563,14 @@ const WfStampLayer = React.memo(function WfStampLayer({ sink, width, rowPt, wfH,
   const [stamps, setStamps] = useState<WfStamp[]>([]);
   useEffect(() => { sink.current = setStamps; return () => { sink.current = null; }; }, [sink]);
   const typeface = useTypeface(ATKINSON_TTF);
-  const font = useMemo(() => { if (!typeface) return null; const f = Skia.Font(typeface, STAMP_FONT_PT); f.setEmbolden(true); return f; }, [typeface]);
+  // ★★ NO setEmbolden: on the iOS/Mac build of Skia it throws "Value is true, expected a number" (Stuart's 532
+  //   diagnostics, 2026-10-30) — in 531 that throw, inside the waterfall's own canvas, left the waterfall black at rest;
+  //   in 532 it closed the spectrum panel. The dark shadow under each label gives it the weight instead. Never throws:
+  //   no font = no stamps, never no waterfall.
+  const font = useMemo(() => {
+    if (!typeface) return null;
+    try { return Skia.Font(typeface, STAMP_FONT_PT); } catch { return null; }
+  }, [typeface]);
   if (!stamps.length || !font || !(rowPt > 0) || !(wfH > 0)) return null;
   return (
     <Canvas pointerEvents="none" style={{ position: 'absolute', left: 0, top, width, height: wfH }}>
@@ -3007,8 +3024,10 @@ function WaterfallView({
             after its shader; whatever a stamp did there took the whole picture with it. Now a separate transparent canvas
             over the same rectangle, mounted only while a stamp exists: the waterfall cannot be blanked by one. */}
         {active && texReady && (
-          <WfStampLayer sink={stampSink} width={width} rowPt={stampRowPt} wfH={wfH} color={stampCol} top={wfTop}
-                        uHead={uHead} scrollFrac={scrollFrac} uN={uNSv} uQuant={uQuantDrawSv} />
+          <StampBoundary>
+            <WfStampLayer sink={stampSink} width={width} rowPt={stampRowPt} wfH={wfH} color={stampCol} top={wfTop}
+                          uHead={uHead} scrollFrac={scrollFrac} uN={uNSv} uQuant={uQuantDrawSv} />
+          </StampBoundary>
         )}
 
         {active && Platform.OS !== 'android' && staticOverlayCanvas}
