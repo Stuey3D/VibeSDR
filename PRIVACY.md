@@ -192,6 +192,20 @@ When you do, this is what happens:
 The directory records the IP address each registration came from, to limit abuse,
 and nothing else about the owner.
 
+**Same network, direct (V12).** While it is listed, VibeServer also tells the
+directory its address on your own network (a private address such as
+192.168.1.20, which nobody outside your network can reach) so that a listener in
+the same house can be connected straight to it instead of through the tunnel. The
+directory gives that private address only to a visitor whose connection comes from
+the same public address as the server's own check-ins (for IPv6, the same /64
+network) — never to anybody else. To make that comparison it keeps a one-way hash
+of the server's network, not the public address itself. The private address and
+the hash are replaced on every check-in, cleared when a server stops sending them,
+and go with the listing under the same 90-day rule. One limit: some internet
+providers put many customers behind one shared public address (carrier-grade
+NAT); a stranger behind the same shared address could then be shown the private
+address, which they cannot use to reach the server.
+
 **Leaving is automatic.** A listing is only ever as current as the server behind
 it: VibeServer checks in while it runs, and a server that stops checking in simply
 drops off the list. There is nobody to contact and nothing to remember; switch
