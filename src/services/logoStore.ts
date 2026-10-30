@@ -108,9 +108,12 @@ export function useLogoStoreVersion(): number {
 
 function safeName(key: string) { return key.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80); }
 
-/** Download `url` and file it under `key` per the policy. Returns what to draw, or null if nothing usable came back. */
-async function take(key: string, src: LogoSource, url: string, headers?: Record<string, string>): Promise<string | null> {
-  if (!/^(https?:)\/\//i.test(url)) return null;
+/** Why `take` drew nothing: the bytes did not come (`net` — worth retrying soon) or they came and are not a usable
+ *  logo (`bad` — an SVG, an error page, a 5 MB file: the next source down should be tried instead). */
+type TakeFail = 'net' | 'bad';
+/** Download `url` and file it under `key` per the policy. Returns what to draw, or why there is nothing. */
+async function take(key: string, src: LogoSource, url: string, headers?: Record<string, string>): Promise<string | TakeFail> {
+  if (!/^(https?:)\/\//i.test(url)) return 'bad';
   const tmp = `${TMP}${safeName(key)}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   let res: FileSystem.FileSystemDownloadResult | undefined;
   try {
@@ -131,7 +134,8 @@ async function take(key: string, src: LogoSource, url: string, headers?: Record<
   const size = info && info.exists ? (info as { size?: number }).size ?? 0 : 0;
   if (!ok || !image || !size || size > MAX_FILE || !res?.md5) {
     await rm(tmp);
-    return null;
+    // ★ A 4xx is the publisher's answer about this file, not a stall: treat it as unusable, not as "try again soon".
+    return !res || res.status >= 500 || res.status === 0 ? 'net' : 'bad';
   }
   const now = Date.now();
   const v = index.verdict(key, { src, url, sig: res.md5 }, now);
@@ -139,7 +143,7 @@ async function take(key: string, src: LogoSource, url: string, headers?: Record<
     await rm(tmp);
     if (v === 'same') { index.same(key, now, { url, src }); saveSoon(); }
     else index.confirm(key, now);
-    return index.get(key)?.show ?? null;
+    return index.get(key)?.show ?? 'bad';
   }
   const ext = (type.match(/image\/(png|jpe?g|webp|gif)/)?.[1] || url.match(/\.(png|jpe?g|webp|gif)(\?|$)/i)?.[1] || 'img')
     .toLowerCase().replace('jpeg', 'jpg');
@@ -147,7 +151,7 @@ async function take(key: string, src: LogoSource, url: string, headers?: Record<
   try {
     await rm(path);
     await FileSystem.moveAsync({ from: tmp, to: path });
-  } catch { await rm(tmp); return null; }
+  } catch { await rm(tmp); return 'net'; }
   const { evicted, replaced } = index.store(key, { url, src, sig: res.md5, show: path, bytes: size }, now);
   remoteOnly.delete(key);
   for (const e of evicted) void rm(e.show);
@@ -182,8 +186,13 @@ export async function resolveLogo(key: string, resolvers: LogoResolver[]): Promi
         try { url = await r.run(); } catch { url = null; }
         if (!url) continue;
         const shown = await take(key, r.src, url);
-        if (shown) return shown;
-        remote = remote ?? url;              // resolved, but the bytes would not come — draw it from the network
+        if (shown !== 'net' && shown !== 'bad') return shown;
+        if (shown === 'bad') continue;       // not a drawable logo — the next source down may have one
+        /* ★★ RESOLVED, BUT THE BYTES DID NOT COME (a stall). Draw it from the network this session and retry on the
+         *  ladder — and do NOT fall through to a lower source, or a name match would be filed for a day in place of the
+         *  broadcaster's own file that one more minute would have fetched. */
+        remote = url;
+        break;
       }
       // ★ Every source is outranked by what is held (an air logo, say): nothing to ask — look again in a day.
       if (!asked && index.get(key)) { index.confirm(key, Date.now()); return peekLogo(key); }
@@ -210,7 +219,10 @@ export async function offerLogo(key: string, src: LogoSource, url: string): Prom
   await ready;
   if (outranked(index.get(key), src, Date.now())) return peekLogo(key);
   if (!index.begin(key)) return peekLogo(key);
-  try { return await take(key, src, url); } finally { index.end(key); }
+  try {
+    const r = await take(key, src, url);
+    return r === 'net' || r === 'bad' ? peekLogo(key) : r;
+  } finally { index.end(key); }
 }
 
 /**
@@ -232,7 +244,7 @@ export function offerAirLogo(key: string, url: string): void {
     try {
       const shown = await take(key, 'air', url);
       // ★ A failed fetch is retried on the ladder's first rung, not tomorrow.
-      if (!shown) airAsked.set(key, Date.now() - 24 * 3600 * 1000 + 60 * 1000);
+      if (shown === 'net') airAsked.set(key, Date.now() - 24 * 3600 * 1000 + 60 * 1000);
     } finally { index.end(key); }
   })();
 }
