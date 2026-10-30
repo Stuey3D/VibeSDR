@@ -156,6 +156,11 @@ class VibeStreamModule(private val reactContext: ReactApplicationContext) :
         else reactContext.startService(intent)
     }
 
+    /** ★★ V12 2026-10-30: the audio's playout delay, ms (−1 = none) — the waterfall waits for the sound
+     *  (src/assets/wfAvSync.ts). iOS VibePowerModule.audioPlayoutMs' twin; synchronous, polled at 4 Hz. */
+    @ReactMethod(isBlockingSynchronousMethod = true)
+    fun audioPlayoutMs(): Double = VibeStreamService.instance?.audioPlayoutMs() ?: -1.0
+
     @ReactMethod
     fun pushExternalPcm(base64: String, sampleRate: Double, channels: Double) {
         VibeStreamService.instance?.pushExternalPcm(base64, sampleRate.toInt(), channels.toInt())
