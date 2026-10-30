@@ -129,6 +129,20 @@ try {
   const zoomBefore = refusedLines('zoom', 'bbbb0002');
   b.send({ type: 'zoom', frequency: 96100000, binBandwidth: 500 }); await sleep(300);
   ok(refusedLines('zoom', 'bbbb0002') === zoomBefore, 'zoom / pan stays free ("that shouldn\'t move the tuning or audio")');
+  console.log('── …but a held-back listener\'s zoom is a VIEW, never a tune (Lenovo, 2026-10-30: zoom + free:1 moved the RSP) ──');
+  // ★ rfCentre from a full-state reply (`state` is not gated): where the HARDWARE is, not where anybody's view is.
+  const rfNow = async (s) => { const k = s.count('hwinfo'); s.send({ type: 'state' }); await until(() => s.count('hwinfo') > k, 2000);
+                               return Number(s.last('hwinfo')?.rfCentre); };
+  const viewOnlyLines = () => fs.readFileSync(logPath, 'utf8').split('\n')
+    .filter((l) => l.includes('zoom from a listener ask-before-tuning is holding back')).length;
+  const rf0 = await rfNow(a), vo0 = viewOnlyLines();
+  b.send({ type: 'zoom', frequency: 94975000, binBandwidth: 500, free: 1 }); await sleep(500);   // ★ the Lenovo's frame
+  b.send({ type: 'zoom', frequency: 98500000, binBandwidth: 2000, free: 1 }); await sleep(500);
+  b.send({ type: 'zoom', frequency: 93000000, binBandwidth: 500 }); await sleep(500);              // ★ a LOCKED pan, too
+  const rf1 = await rfNow(a);
+  ok(Number.isFinite(rf0) && rf1 === rf0, `★ a refused listener's zoom/free off the capture did not move the hardware centre (${rf0} -> ${rf1})`);
+  ok(viewOnlyLines() - vo0 >= 3, '…each one kept inside the capture as a view, and the log says so');
+  ok(vfo(a) === 96100000, '…and nobody\'s dial moved');
   const sqlBefore = refusedLines('squelch', 'bbbb0002');
   b.send({ type: 'squelch', db: -60, on: true }); await sleep(300);
   ok(refusedLines('squelch', 'bbbb0002') === sqlBefore, 'squelch stays free — it is this listener\'s own gate');
@@ -153,6 +167,13 @@ try {
   ok(await until(() => b.last('dial')?.tuneLocked === false), '★ "Go ahead, tune" from the one who said no: let in at once');
   b.send({ type: 'tune', frequency: 98000000, mode: 'wfm' });
   ok(await until(() => vfo(a) === 98000000), '★ …and now their tune moves the radio for everybody');
+  // ★ Let in, the same frame is a tune and moves the centre: the permission, not the frame, decides.
+  const rfG0 = await rfNow(a), voG0 = viewOnlyLines();
+  b.send({ type: 'zoom', frequency: 100500000, binBandwidth: 500, free: 1 }); await sleep(800);
+  const rfG1 = await rfNow(a);
+  ok(Number.isFinite(rfG1) && Math.abs(rfG1 - rfG0) > 100000 && viewOnlyLines() === voG0,
+     `★ a permitted listener's zoom/free still moves the hardware centre (${rfG0} -> ${rfG1})`);
+  b.send({ type: 'zoom', frequency: 98000000, binBandwidth: 500 }); await sleep(500);   // back over the dial for what follows
   const gainBefore = refusedLines('gain', 'bbbb0002');
   b.send({ type: 'gain', value: 300 }); await sleep(400);
   ok(refusedLines('gain', 'bbbb0002') === gainBefore, '…and their gain is accepted too');
