@@ -116,7 +116,7 @@ export class FmdxAdapter implements SDRBackend {
       this.openChatWs();
       this.fetchStaticData();
       // Audio is a separate native WS opened from the http base.
-      if (!this.audioStarted) { Vibe?.startFmdxAudio?.(this.base); this.audioStarted = true; }
+      if (!this.audioStarted && !this.audioDetached) { Vibe?.startFmdxAudio?.(this.base); this.audioStarted = true; }
       // Optional deep-link retune, first connect only (shared-tuner: retunes all).
       if (this.deepLinkFreq != null) {
         const f = this.deepLinkFreq; this.deepLinkFreq = undefined;
@@ -169,6 +169,28 @@ export class FmdxAdapter implements SDRBackend {
       if (!this.destroyed) this.openTextWs();
     }, delay);
   }
+
+  /** ★★ V12 two servers: a Tuner screen coming back to an FM-DX server that never stopped playing ADOPTS this adapter
+   *  (dualServer.parkBackend / takeParked) — the same sockets, the native MP3 audio untouched — and from here on it
+   *  reports to the new screen: connected, the chat, and the server's static facts again (they were the old screen's). */
+  rebindCallbacks(cb: BackendCallbacks): void {
+    this.cb = cb;
+    if (this.destroyed) return;
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      cb.onConnect();
+      cb.onLink?.(3);
+      cb.onChatEnabled?.(!!this.chatWs);
+      this.fetchStaticData();
+    }
+  }
+
+  /** ★★ V12 two servers: the pairing ended this side — its audio stops now and is never started again by this adapter,
+   *  and its destroy will not stop the main player (which may be the other server's by then). */
+  detachAudio(): void {
+    if (this.audioStarted) { Vibe?.stopFmdxAudio?.(); this.audioStarted = false; }
+    this.audioDetached = true;
+  }
+  private audioDetached = false;
 
   destroy(): void {
     this.destroyed = true;

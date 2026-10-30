@@ -427,6 +427,7 @@ export function parkBackend(id: string | null, b: SDRBackend | null): boolean {
   backends.set(id, b);
   parked.add(id);
   try { b.pauseSpectrum(); } catch { /* the waterfall is not ours to save */ }
+  if (b.audioOut) b.audioOut.background = true;
   // ★ From here on it reports to the pairing: an ending or a lost connection is the card's to say, and NOTHING here
   //   reconnects it — a receiver that ended the session (a time limit, a kick, inactivity) stays ended.
   b.rebindCallbacks(backgroundCallbacks(id));
@@ -439,7 +440,10 @@ export function takeParked(id: string | null): SDRBackend | null {
   if (!id || !parked.has(id)) return null;
   parked.delete(id);
   const b = backends.get(id) ?? null;
-  if (b) { try { b.resumeSpectrum(); } catch { /* it will resume on its own next frame */ } }
+  if (b) {
+    if (b.audioOut) b.audioOut.background = false;
+    try { b.resumeSpectrum(); } catch { /* it will resume on its own next frame */ }
+  }
   return b;
 }
 
@@ -453,9 +457,19 @@ function dropBackend(id: string) {
 /** What a background adapter's server says, in the card's words — never reconnecting, never answering for anybody. */
 function backgroundCallbacks(id: string): BackendCallbacks {
   const lost = () => serverEnded(id, 'the connection was lost');
+  const fmdx = kindOf(id) === 'fmdx';
   return {
     onSpectrum: () => {}, onStatus: () => {}, onConnect: () => {},
-    onDisconnect: lost,
+    // ★ FM-DX: its /text socket drops and comes back on its own (FmdxAdapter's silent reconnect) while the MP3 audio
+    //   plays on natively — a blip is not an ending. Kiwi / OpenWebRX never reconnect themselves: a drop IS the end.
+    onDisconnect: fmdx ? () => {} : lost,
+    // ★ FM-DX is ONE shared tuner: somebody else may retune it while it is in the background — the card follows.
+    onFmdxState: (st: { freqHz?: number; ps?: string }) => {
+      const s = state.sides.find((x) => x.id === id);
+      const f = Number(st?.freqHz) || 0;
+      const ps = String(st?.ps ?? '').trim();
+      if (s && f > 0 && (s.freqHz !== f || (s.station ?? '') !== ps)) patchSide(id, { freqHz: f, station: ps });
+    },
     onServerLost: lost,
     onServerBusy: () => serverEnded(id, 'the radio is busy'),
     onError: (m: string) => serverEnded(id, endedWhy(m)),
@@ -745,12 +759,11 @@ export function listenSecond(side: Omit<DualSide, 'transport' | 'ended' | 'askin
 }
 
 /** Has side `id` any audio running to keep? Per kind: a VibeServer's socket was opened (links), an UberSDR's engine
- *  was started (uberLinks), a Kiwi / OpenWebRX adapter exists, an FM-DX screen always starts its own. */
+ *  was started (uberLinks), a Kiwi / OpenWebRX / FM-DX adapter exists (noteBackend). */
 function audioStarted(id: string, kind: AudioKind): boolean {
   if (kind === 'vibe') return links.has(id);
   if (kind === 'uber') return uberLinks.has(id);
-  if (kind === 'ext') return backends.has(id);
-  return true;
+  return backends.has(id);   // Kiwi / OpenWebRX / FM-DX: the adapter that plays it
 }
 
 /**
@@ -881,10 +894,21 @@ function stopNativeFor(kind: AudioKind) {
   else Vibe?.stopLocalAudio?.();
 }
 
-/** Stop side `id`'s audio on `transport` — and a parked Kiwi / OpenWebRX adapter with it (its session ends). */
+/** Stop side `id`'s audio on `transport` — and a parked Kiwi / OpenWebRX / FM-DX adapter with it (its session ends;
+ *  its own destroy stops whichever player it was on). */
 function stopSideAudio(id: string, transport: Transport, kind: AudioKind) {
+  // ★★ An adapter whose screen is still UP (it is leaving, or showing its refusal) is stopped and DETACHED: its screen's
+  //    own destroy comes after the survivor has been moved to the main player, and must not stop it then.
+  const b = backends.get(id);
+  if (b && !parked.has(id) && b.detachAudio) {
+    if (transport === 'native') releaseNative(id);
+    else auxClose(id);
+    b.detachAudio();
+    backends.delete(id);
+    return;
+  }
   if (transport === 'aux') auxClose(id);
-  else if (releaseNative(id) && !(kind === 'ext' && parked.has(id))) stopNativeFor(kind);
+  else if (releaseNative(id) && !parked.has(id)) stopNativeFor(kind);
   dropBackend(id);
 }
 
@@ -910,6 +934,7 @@ function endSideNow(id: string) {
 function moveToNative(id: string) {
   const s = state.sides.find((x) => x.id === id);
   const kind = s?.kind ?? 'vibe';
+  if (kind === 'fmdx') return;   // never anywhere else (dualMix.needsMain)
   if (kind === 'ext') {
     // ★ A Kiwi / OpenWebRX adapter: the same socket and session — only where its PCM goes changes. No gap to speak of.
     const b = backends.get(id);
