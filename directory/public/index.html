@@ -286,6 +286,10 @@
   .tag.lock { color: var(--accent); border-color: var(--accent); }
   /* ★ The same blue as the diamond on the map and in the legend: one colour means one thing. */
   .tag.temp { color: var(--temp); border-color: var(--temp); }
+  /* ★ V12 SAME NETWORK → GO DIRECT: shown only to a visitor on that server's own network (the Worker's rule). */
+  .tag.lan { color: var(--phosphor); border-color: var(--phosphor); }
+  .lanNote { font-size: 12px; color: var(--dim); margin: 6px 0 8px; line-height: 1.5; }
+  .lanNote a { color: var(--phosphor); }
   /* ★ CAPABILITY BADGES — a statement about a receiver, never decoration: drawn only when the
      server said so. Same 21 px height as the DAB+ mark so the three sit on one line. */
   /* ★ The HF note in the spec line: the card's amber, so it reads as part of the sentence rather than a chip. */
@@ -1764,11 +1768,12 @@ function serverBlock(s) {
            with different occupancy, so "2/10 listening" beside the server NAME is only ever true
            by accident — and on the receiver's own landing page it has always sat in the radio box
            (Stuart, 2026-08-22). This line says WHERE the server is; the cards say who is on what. -->
+      ${lanHost(s) ? `<span class="tag lan" title="This receiver is on your own network — its page connects to it directly, skipping the internet tunnel, when your browser allows">On your network</span>` : ''}
       ${serverCapBadges(s)}
       <span class="meta">${esc(s.grid)}${s.unreachable ? ' · not responding' : ''}</span>
     </summary>
     <div class="body">
-      ${pinBox(s)}${ownerMessage(s)}${radios}${extra}
+      ${pinBox(s)}${ownerMessage(s)}${lanNote(s)}${radios}${extra}
       ${s.demo ? '<div class="radio cap">Simulated receiver — nothing to listen to.</div>'
                : serverLocked(s)
                // ★★★ ON A SINGLE-RADIO HOST THIS BUTTON IS THE ONLY WAY IN, so while the server is
@@ -1781,6 +1786,24 @@ function serverBlock(s) {
   </details>`;
 }
 
+
+/** ★★★ V12 SAME NETWORK → GO DIRECT. `lan` reaches this page ONLY for a visitor on the server's own network (the
+ *  Worker matches the network in SQL — directory/src/index.js lanColumnsFor). The receiver's own page, opened through
+ *  its usual address, proves the LAN address and moves there by itself where the browser allows (Chrome / Edge with
+ *  Local Network Access — web/client/src/lanHop.ts); this line says so, and gives every other browser the plain link
+ *  (a top-level navigation works everywhere; an https page cannot probe http to check first). */
+function lanHost(s) {
+  const l = s && s.lan;
+  const h = l && Array.isArray(l.hosts) ? l.hosts.find((x) => typeof x === 'string' && /^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(x)) : '';
+  return h || '';
+}
+function lanNote(s) {
+  const h = lanHost(s);
+  if (!h) return '';
+  return `<div class="lanNote">This receiver is on your network. Its page connects to it directly, skipping the internet
+    tunnel, when your browser allows — or <a href="http://${esc(h)}/" target="_blank" rel="noopener noreferrer">open it
+    directly (${esc(h)})</a>.</div>`;
+}
 
 /** ★★ THE OWNER'S MESSAGE, IN THE DIRECTORY TOO (Stuart, 2026-09-28): "since you can click a SDR direct
  *  from the directory you'd bypass that page and miss it". The same message and link the server's landing

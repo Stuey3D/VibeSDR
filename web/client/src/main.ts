@@ -7,6 +7,7 @@
  */
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
+import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
@@ -19495,15 +19496,30 @@ function escapeHtml(s: unknown): string {
   ));
 }
 
-initSplash();
+/* ★★★ V12 SAME NETWORK → GO DIRECT (lanHop.ts). A visitor on this server's own network, on its directory address,
+ *     carries the directory's vibe-lan offer; with Local Network Access already granted the page proves the LAN
+ *     address and moves there BEFORE the landing page draws or asks the tunnel anything. Everybody else — no offer —
+ *     boots exactly as before, synchronously, with nothing waited on. */
+function bootSplash(): void {
+  initSplash();
 
-// ★ Draw as soon as the page exists, then refresh while the visitor is still on the splash — a
-//   new row lands every second for the first five minutes, so a server that has just been set up
-//   visibly fills in while somebody reads the page.
-drawSplashSpectrogram();
-showSplashListeners();
-showSplashConditions();
-refreshBandConditions();
+  // ★ Draw as soon as the page exists, then refresh while the visitor is still on the splash — a
+  //   new row lands every second for the first five minutes, so a server that has just been set up
+  //   visibly fills in while somebody reads the page.
+  drawSplashSpectrogram();
+  showSplashListeners();
+  showSplashConditions();
+  refreshBandConditions();
+}
+{
+  const lanOffer = lanOfferFromPage();
+  if (!lanOffer) bootSplash();
+  else void lanHopAtBoot(lanOffer).catch(() => false).then((moving) => {
+    if (moving) return;
+    bootSplash();
+    void offerLanOnSplash(lanOffer).catch(() => {});
+  });
+}
 // ★ Slow on purpose: this is a one-minute rolling median on the server, so polling faster would
 //   re-fetch a figure that has not moved. It also keeps working after the splash is dismissed,
 //   which is when the VTS needs it.

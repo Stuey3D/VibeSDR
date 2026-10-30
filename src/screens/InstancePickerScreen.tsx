@@ -144,6 +144,9 @@ import { startMdnsDiscovery, mdnsDiscoverySupported, type DiscoveredServer, type
 import { favFromDiscovered, repairFromDiscovery, needsVibeProbe, tcpFavHttpBase } from '../services/discoveredFavs';
 import { resolveVibeAuth, checkVibePin } from '../services/vibeAuth';
 import { crumb } from '../services/crumbs';
+import { proveLan, makeLanFetch } from '../utils/lanDirect';
+/** ★ V12 SAME NETWORK → GO DIRECT: the probe the picker proves a directory server's LAN address with. */
+const rnLanFetch = makeLanFetch();
 import { exportLogs, EXPORT_LOGS_LABEL } from '../components/ExportLogs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 import RecordingsOverlay from '../components/RecordingsOverlay';
@@ -923,7 +926,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
   // shim is started — the radio lives on the serving phone.
   const connectVibeServer = useCallback(async (host: string, port: number, name: string, pin: string,
                                               base?: string, adminPw?: string,
-                                              adminTakeover?: boolean, tune?: LinkTune) => {
+                                              adminTakeover?: boolean, tune?: LinkTune,
+                                              via?: { lan?: boolean }) => {
     setConnecting(true);
     /* ★★★ LISTENING TO OUR OWN SERVER GOES OVER LOOPBACK — Stuart: "loopback like the mac".
      *  mDNS advertises the LAN address, so without this a phone serving and listening to itself
@@ -1010,6 +1014,9 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
             autoTakeover: adminTakeover || undefined,
             // ★ A vibesdr:// link's tune (see linkVibe) — first connect only, as for any link.
             ...(tune ? { deepLink: true, initialFreq: tune.freq, initialMode: tune.mode, initialZoom: tune.zoom } : null),
+            /* ★ V12 SAME NETWORK → GO DIRECT: a directory server reached at its LAN address instead of the tunnel
+             *  (openDirectoryVibeServer) — the receiver screen says "local network" under the server's name. */
+            ...(via?.lan ? { viaLan: true } : null),
           } },
       ],
     } as never);
@@ -1096,8 +1103,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
    *     into the backoff only extends it. ★ Anything the check cannot answer (an older server
    *     with no /verify, a network blip) connects as before and lets connectVibeServer report. */
   const openVibeServer = useCallback(async (host: string, port: number, name: string, needsPin: boolean,
-                                            base?: string, tune?: LinkTune) => {
-    if (!needsPin) { connectVibeServer(host, port, name, '', base, undefined, undefined, tune); return; }
+                                            base?: string, tune?: LinkTune, via?: { lan?: boolean }) => {
+    if (!needsPin) { connectVibeServer(host, port, name, '', base, undefined, undefined, tune, via); return; }
     const key = `vs_pin:${host}:${port}`;
     let saved = '';
     try { saved = (await AsyncStorage.getItem(key)) ?? ''; } catch {}
@@ -1129,7 +1136,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         return;
       }
       if (ans.save) AsyncStorage.setItem(key, pin).catch(() => {});
-      connectVibeServer(host, port, name, pin, base, undefined, undefined, tune);
+      connectVibeServer(host, port, name, pin, base, undefined, undefined, tune, via);
       return;
     }
   }, [connectVibeServer, askVibePin]);
@@ -1142,7 +1149,26 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
    * ★★ The listing's address is HTTPS on our own zone, so `base` carries it whole — host and port
    *    exist only to key the saved PIN, and 443 is right for every tunnelled listing.
    */
-  const openDirectoryVibeServer = useCallback((inst: SDRInstance) => {
+  /* ★★★ V12 SAME NETWORK → GO DIRECT (Stuart, 2026-10-30: his own Lenovo, opened from the directory, went out through
+   *     the tunnel and back — ~80 ms, a 390 ms jitter buffer, 3-4 s drops — and he wants it to "work on the app too").
+   *     The directory sends `lan` only when this phone is on that server's network; it is PROVED here first
+   *     (src/utils/lanDirect.ts: the server's own HMAC answer, ~1.5 s at most) and only then used — host and port
+   *     become the LAN ones, so the saved PIN, resolveVibeAuth and the radio list all ask the same box over the LAN,
+   *     exactly as a server found by mDNS does. Not proved (guest Wi-Fi, a carrier NAT, a different box at that
+   *     address, nothing there) → the tunnel, as it always was. */
+  const openDirectoryVibeServer = useCallback(async (inst: SDRInstance) => {
+    if (inst.lan) {
+      setConnecting(true);
+      const near = await proveLan(inst.lan, rnLanFetch).catch(() => null);
+      setConnecting(false);
+      crumb(`openDirectoryVibeServer: LAN ${near ? 'proved ' + near : 'not proved — tunnel'}`);
+      const i = near ? near.lastIndexOf(':') : -1;
+      if (near && i > 0) {
+        openVibeServer(near.slice(0, i), parseInt(near.slice(i + 1), 10), inst.name, !!inst.needsPin,
+                       `http://${near}`, undefined, { lan: true });
+        return;
+      }
+    }
     let host = '', port = 443;
     try {
       const u = new URL(inst.url);

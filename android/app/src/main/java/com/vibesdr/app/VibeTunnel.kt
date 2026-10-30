@@ -688,6 +688,35 @@ object VibeTunnel {
         return out
     }
 
+    /**
+     * ★★★ SAME NETWORK → GO DIRECT (V12; Stuart, 2026-10-30): this phone's private IPv4 address(es) with the server's
+     * port, sent on every ping as `lan` — ["192.168.86.13:48001"]. The directory hands it ONLY to a listener on this
+     * phone's own network, and the client proves it is us (the dirProof challenge) before using it; see lanColumnsFor
+     * in directory/src/index.js. The same field directory.cpp sends for a Linux/Mac server.
+     *  ★★ WI-FI, ETHERNET, THE PHONE'S OWN HOTSPOT AND USB TETHERING ONLY — by interface name. A phone on mobile
+     *     data often holds a carrier 10.x address on rmnet/ccmni, which is "private" and is NOT a LAN anybody shares.
+     *  ★ A top-level field of the PING, never inside `status` (which is public); an older directory ignores it.
+     */
+    private fun lanAddresses(port: Int): JSONArray {
+        val out = JSONArray()
+        if (port <= 0 || port > 65535) return out
+        try {
+            val lanIf = Regex("^(wlan|swlan|softap|ap|eth|rndis|br|en)\\d*", RegexOption.IGNORE_CASE)
+            val seen = HashSet<String>()
+            for (ni in java.util.Collections.list(java.net.NetworkInterface.getNetworkInterfaces() ?: return out)) {
+                if (!ni.isUp || ni.isLoopback || ni.isVirtual || !lanIf.containsMatchIn(ni.name ?: "")) continue
+                for (a in java.util.Collections.list(ni.inetAddresses)) {
+                    if (a !is java.net.Inet4Address || !a.isSiteLocalAddress) continue   // 10/8, 172.16/12, 192.168/16
+                    val hp = "${a.hostAddress}:$port"
+                    if (seen.add(hp) && out.length() < 4) out.put(hp)
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "directory: could not list LAN addresses: ${t.message}")
+        }
+        return out
+    }
+
     private fun post(path: String, body: JSONObject): JSONObject? = try {
         val req = Request.Builder()
             .url("$DIRECTORY$path")
@@ -977,6 +1006,8 @@ object VibeTunnel {
                 //     and an explicit 0.
                 if (shareForSec >= 0) put("shareForSec", shareForSec)
                 put("name", name); put("status", status)
+                // ★ SAME NETWORK → GO DIRECT — see lanAddresses. Omitted when there is none.
+                lanAddresses(port).takeIf { it.length() > 0 }?.let { put("lan", it) }
             })
             if (r != null && r.optInt("_status") == 200) {
                 listed = true
@@ -1068,6 +1099,7 @@ object VibeTunnel {
                         put("url", url); put("grid", locator)
                         if (shareForSec >= 0) put("shareForSec", shareForSec)
                         put("name", name); put("status", status)
+                        lanAddresses(port).takeIf { it.length() > 0 }?.let { put("lan", it) }
                     })
                     // ★★★ AND CHECK WHAT IT SAID. This threw the answer away, so a REGISTRATION
                     //     whose first challenge failed scheduled nothing and sat unlisted until

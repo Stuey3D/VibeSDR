@@ -810,7 +810,7 @@ if node --no-warnings scripts/test_wholeModeResume.ts >/dev/null; then pass=$((p
 #     (the hold, or a hard limit sooner), the permission asked once — and a CLOSED SQUELCH NEVER QUIET (read from source).
 if node --no-warnings scripts/test_sessionHoldNotice.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_sessionHoldNotice.ts"; fi
 # ★ The directory Worker against real SQLite: dead-address pages, and the 90-day retention (PRIVACY.md, Play form).
-for t in directory/scripts/test-gone.mjs directory/scripts/test-retention.mjs; do
+for t in directory/scripts/test-gone.mjs directory/scripts/test-retention.mjs directory/scripts/test-lan.mjs; do
   if node --no-warnings "$t" >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ $t"; fi
 done
 if node --no-warnings scripts/test_rtty_spec.ts >/dev/null; then pass=$((pass+1)); else fail=$((fail+1)); echo "  ✗ scripts/test_rtty_spec.ts"; fi
@@ -933,6 +933,10 @@ if npx tsx scripts/test_radio_chooser_nav.ts; then pass=$((pass+1)); else fail=$
 if npx tsx scripts/test_overlay_stack.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ appAlert (controller audit, 2026-10-20): button order = focus order, never starting on a destructive key, Back = cancel.
 if npx tsx scripts/test_app_alert.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 SAME NETWORK → GO DIRECT: a LAN address is used only when the box there answers with the server's own HMAC;
+#     anything else keeps the tunnel (app picker + web hop share src/utils/lanDirect.ts).
+if npx tsx scripts/test_lan_direct.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_lan_hop.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ NAV COVERAGE (controller audit, 2026-10-20): a touchable on a pad-driven surface with no nav registration fails
 #     once its file passes its baseline — the next silent skip fails here instead of on Stuart's sofa.
 if npx tsx scripts/test_nav_coverage.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

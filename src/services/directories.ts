@@ -12,6 +12,7 @@ import { countryForCoord } from './countryLookup';   // Kiwi/Receiverbook carry 
 import { countryFromText } from './countryFromText'; // last resort: parse the name/location text
 import { isoForCallsign } from './callsignIso';       // final resort: map the callsign prefix
 import type { VibeRadio } from './vibeserverRadios';
+import { parseLanOffer } from '../utils/lanDirect';
 import { cleanText } from '../utils/safeText';
 import { safeUrl, HTTP_SCHEMES } from '../utils/safeUrl';
 import { withKiwiProxyPort } from '../utils/kiwiProxy';
@@ -231,6 +232,9 @@ async function fetchVibeServers(lat?: number, lon?: number): Promise<SDRInstance
         || (Array.isArray(s.radios) && s.radios.length > 0
             && s.radios.every((r: any) => r && r.pinLocked === true)),
       radios: normaliseRadios(radios),
+      // ★★★ V12 SAME NETWORK → GO DIRECT — present only when the directory saw us on this server's network; checked
+      //     here (parseLanOffer) and PROVED before use (openDirectoryVibeServer). See src/utils/lanDirect.ts.
+      lan: parseLanOffer(s.lan) ?? undefined,
     };
   }).filter((i: SDRInstance) => !!i.url);
 }

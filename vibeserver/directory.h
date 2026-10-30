@@ -55,4 +55,7 @@ std::string platformName();
 /** The machine itself — "Raspberry Pi 500", "Mac mini (M4)". Empty when it cannot say. */
 std::string hostModel();
 
+/** ★ SAME NETWORK → GO DIRECT: `,"lan":["192.168.x.y:<port>",…]` for the directory ping, or "" (directory.cpp). */
+std::string lanAddressesJson(int port);
+
 }  // namespace vibedir

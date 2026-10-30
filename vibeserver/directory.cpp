@@ -15,6 +15,12 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#if !defined(_WIN32)
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#endif
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
@@ -680,6 +686,55 @@ std::string buildStatus(int port) {
     return j;
 }
 
+/** ★ True for an interface that is not a LAN a listener could be on: container bridges, VPNs, VM host-only nets.
+ *  Their 172.17.x / 10.x addresses are private too, and a listener would only be sent probing at them. */
+bool notALan(const char* name) {
+    static const char* const skip[] = { "docker", "br-", "veth", "virbr", "lxc", "lxd", "cni", "flannel", "podman",
+                                        "tun", "tap", "wg", "zt", "tailscale", "vmnet", "vboxnet", "utun", "awdl",
+                                        "llw", "bridge", "anpi", "gif", "stf", "ppp" };
+    for (const char* s : skip) if (std::strncmp(name, s, std::strlen(s)) == 0) return true;
+    return false;
+}
+}  // namespace
+
+/** ★★★ SAME NETWORK → GO DIRECT (V12; Stuart, 2026-10-30): `,"lan":["192.168.86.13:48001",…]` for the directory
+ *  ping — this machine's private IPv4 address(es) with the port the tunnel serves (the front door, which routes
+ *  /r/<id> to every radio, so one address reaches them all). The directory hands it ONLY to a listener on this
+ *  network and the client proves us (the dirProof challenge) before using it — see lanColumnsFor in
+ *  directory/src/index.js. RFC 1918 only, at most four, container/VPN interfaces skipped. "" when there is none.
+ *  ★ A top-level field of the PING, never inside `status`: status is public, and an older directory simply
+ *    ignores a field it does not know. */
+std::string lanAddressesJson(int port) {
+#if defined(_WIN32)
+    (void)port;
+    return {};
+#else
+    if (port <= 0 || port > 65535) return {};
+    struct ifaddrs* ifa = nullptr;
+    if (getifaddrs(&ifa) != 0) return {};
+    std::vector<std::string> out;
+    for (auto* p = ifa; p && out.size() < 4; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET || !p->ifa_name) continue;
+        if (!(p->ifa_flags & IFF_UP) || (p->ifa_flags & IFF_LOOPBACK) || notALan(p->ifa_name)) continue;
+        const uint32_t a = ntohl(reinterpret_cast<const sockaddr_in*>(p->ifa_addr)->sin_addr.s_addr);
+        const bool lan = (a >> 24) == 10 || (a >> 16) == 0xC0A8 || (a >> 20) == 0xAC1;   // 10/8, 192.168/16, 172.16/12
+        if (!lan) continue;
+        char buf[INET_ADDRSTRLEN] = {0};
+        if (!inet_ntop(AF_INET, &reinterpret_cast<const sockaddr_in*>(p->ifa_addr)->sin_addr, buf, sizeof buf)) continue;
+        const std::string hp = std::string(buf) + ":" + std::to_string(port);
+        bool dup = false;
+        for (const auto& x : out) dup = dup || x == hp;
+        if (!dup) out.push_back(hp);
+    }
+    freeifaddrs(ifa);
+    if (out.empty()) return {};
+    std::string j = ",\"lan\":[";
+    for (size_t i = 0; i < out.size(); i++) j += (i ? ",\"" : "\"") + out[i] + "\"";
+    return j + "]";
+#endif
+}
+
+namespace {
 /** ★ Escapes only what a JSON string may not contain — names come from the owner's own box. */
 std::string esc(const std::string& s) {
     std::string o;
@@ -705,7 +760,8 @@ bool publishOnce(const Settings& want, const std::string& url) {
     if (!id.empty() && !key.empty()) {
         body = "{\"id\":\"" + esc(id) + "\",\"key\":\"" + esc(key) + "\""
              + ",\"url\":\"" + esc(url) + "\",\"grid\":\"" + esc(want.locator) + "\""
-             + ",\"name\":\"" + esc(want.name) + "\",\"status\":" + status;
+             + ",\"name\":\"" + esc(want.name) + "\",\"status\":" + status
+             + lanAddressesJson(want.port);   // ★ SAME NETWORK → GO DIRECT — see lanAddressesJson
         // ★★★ THREE STATES. -1 omits (a renewal must leave the window alone), 0 is explicitly
         //     permanent, >0 sets one. Two states were not enough on Android: with 0 doing double
         //     duty, turning a temporary share off could not make it permanent.

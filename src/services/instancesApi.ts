@@ -1,3 +1,4 @@
+import type { LanOffer } from '../utils/lanDirect';
 import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
 import type { VibeRadio } from './vibeserverRadios';
 import { cleanText } from '../utils/safeText';
@@ -61,6 +62,10 @@ export interface SDRInstance {
    *  ★ Optional and possibly EMPTY on an older publisher that sends no ids — absent must fall back
    *    to the door, never delete the server. */
   radios?: VibeRadio[];
+  /** ★★★ V12 SAME NETWORK → GO DIRECT: this VibeServer's LAN address(es) + the proof to check them by. The directory
+   *  sends it ONLY when this phone is on the server's own network (directory/src/index.js lanColumnsFor); the
+   *  picker proves it (src/utils/lanDirect.ts) and connects there instead of through the tunnel. Absent = tunnel. */
+  lan?: LanOffer;
 }
 
 const BASE_URL = 'https://instances.ubersdr.org/api/instances?conditions=true';
