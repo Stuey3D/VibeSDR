@@ -21,7 +21,16 @@
 
 using namespace vibedsp;
 
-struct Cap { std::vector<float> lr; int rate = 48000; };
+struct Cap { std::vector<float> lr; int rate = 48000;
+             // ★ The Advanced RDS instrument's own figures (MpxMeasure) — what the web panel shows live.
+             //   blendSnrDb() is the LISTENER's pilot-to-guard figure, a different meter: compare like with like.
+             float snr = -1, devAvg = -1, devNoise = -1, rdsDev = -1; int snrOk = 0, ber = -1, measured = 0; };
+static void extCb(void* ctx, const RxPipeline::Callbacks::RdsExt& x) {
+    auto* c = (Cap*)ctx; c->snr = x.mpxSnrDb; c->snrOk = x.snrOk; c->devAvg = x.mpxDevAvgKHz;
+    c->devNoise = x.mpxDevNoiseKHz; c->rdsDev = x.rdsDevKHz; c->measured = x.measured;
+}
+static void berCb(void* ctx, int pct) { ((Cap*)ctx)->ber = pct; }
+static void psCb(void*, uint16_t, const char*) {}
 static void audioCb(void* ctx, const float* pcm, int frames, int ch, int rate) {
     auto* c = (Cap*)ctx; c->rate = rate;
     for (int i = 0; i < frames; ++i) { c->lr.push_back(pcm[i * ch]); c->lr.push_back(pcm[i * ch + (ch > 1 ? 1 : 0)]); }
@@ -52,10 +61,12 @@ int main(int argc, char** argv) {
     for (int i = 0; i < N; ++i) iq[i] = cf32((u[2 * i] - 127.5f) / 127.5f, (u[2 * i + 1] - 127.5f) / 127.5f);
 
     Cap cap; RxPipeline::Callbacks cb; cb.ctx = &cap; cb.audio = audioCb;
+    cb.rdsExt = extCb; cb.rdsBer = berCb; cb.rdsPs = psCb;
     RxPipeline pipe;
     const double rate = chanBins > 0 ? fs * chanBins / fftN : fs;
     const int centreBin = (int)std::lround(off / (fs / fftN));
     const double resid = chanBins > 0 ? off - centreBin * (fs / fftN) : off;
+    pipe.setMeasureThread(false);   // ★ inline: every block measured, nothing dropped
     pipe.start(rate, 1024, 20.0, 48000, cb);
     pipe.setDeemphasis(50e-6);
     pipe.setTune(resid, RxPipeline::Mode::WFM, bwHz);
@@ -74,9 +85,10 @@ int main(int argc, char** argv) {
             });
         } else
             for (int s = 0; s < n; s += 65536) pipe.feed(iq.data() + o + s, std::min(65536, n - s));
-        std::printf("%5.1f s  pilot %s  dev %.2f kHz  blend %.2f  S/N %5.1f  lmrCut %5.0f Hz  wideCost %.1f\n", (o + n) / fs,
+        std::printf("%5.1f s  pilot %s  dev %.2f kHz  blend %.2f  S/N %5.1f  lmrCut %5.0f Hz  wideCost %.1f | INSTR S/N %5.1f%s dev %.1f (noise %.1f) rds %.1f BER %d%% ceq %d ifBw %.0f\n", (o + n) / fs,
                     pipe.pilotLocked() ? "LOCK" : "----", std::fabs(pipe.pilotLockAmp()) * 75.f,
-                    pipe.stereoBlend(), pipe.blendSnrDb(), pipe.lmrHiCutHz(), pipe.ifGainDb());
+                    pipe.stereoBlend(), pipe.blendSnrDb(), pipe.lmrHiCutHz(), pipe.ifGainDb(),
+                    cap.snr, cap.snrOk ? "" : "?", cap.devAvg, cap.devNoise, cap.rdsDev, cap.ber, pipe.ceqEngaged() ? 1 : 0, pipe.ifBandwidth());
     }
     pipe.stop();
     if (wav) writeWav(wav, cap.lr, cap.rate);
