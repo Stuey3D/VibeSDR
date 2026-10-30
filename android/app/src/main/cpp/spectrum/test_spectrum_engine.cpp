@@ -3,6 +3,7 @@
 // Images and paths are faked (a heap copy of the ring / the points); the engine runs on a simulated clock.
 #include "spectrum_engine.h"
 #include "wf_row_target.h"
+#include "wf_wide.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -546,6 +547,23 @@ int main() {
         CHECK(rateOn == 0, "NATIVE: no clock rate reported (%d)", rateOn);
         if (img) rlImage(img);
         delete e;
+    }
+    // ── THE WHITE BAR (2026-10-29): a row the server built OUTSIDE its own capture gets no layer (wf_wide.h rowInCapture) ──
+    {
+        using namespace vibewf;
+        WideRow w; w.centreHz = 7115000; w.spanHz = 3000000; w.cells = 64;
+        w.floor.assign(32, -110.f); w.spread.assign(32, 1.f);
+        w.pkCell.assign(1, 0); w.pkDb.assign(1, 0.f); w.pkShape.assign(1, 0); w.nPk = 0;
+        WideState st; const double rs = 74409;
+        wideArrive(st, w, 0, 8793325 - rs / 2, rs, -140);
+        LayerRing L(4, 32, 64);
+        const ToIdx stop(-145, -115, 0, 0), real(-114, -84, 0, 0);
+        const double kOut = layerWriteRow(L, 0, &st, 8793325 - rs / 2, rs, 10, stop);
+        const double kIn  = layerWriteRow(L, 1, &st, 7100000 - rs / 2, rs, 10, real);
+        std::printf("  white bar: a row at 8.79 MHz on a 5.6-8.6 MHz capture -> layer k %.4f (the 40 m floor through its range = index %d); at 7.1 MHz k %.4f\n",
+                    kOut, stop(-110), kIn);
+        CHECK(kOut == 0, "a row outside its own capture got a layer (k %.4f) — it fills white", kOut);
+        CHECK(kIn > 0, "a row inside the capture lost its layer");
     }
     std::printf("images made %d freed %d · paths made %d freed %d\n", gImagesMade, gImagesFreed, gPathsMade, gPathsFreed);
     CHECK(gImagesMade == gImagesFreed, "image leak: %d made, %d freed", gImagesMade, gImagesFreed);
