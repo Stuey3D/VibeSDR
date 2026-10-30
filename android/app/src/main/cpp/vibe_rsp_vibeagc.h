@@ -217,6 +217,12 @@ public:
     double lastLnaAt() const { return lastLnaAt_; }
     int lastLnaDir() const { return lastLnaDir_; }
     int lastLnaAct() const { return lastLnaAct_; }
+    /** ★★ The IF held at its rail ON PURPOSE: DAB's profile freezes the IF while the ADC peak is inside its freeze band
+     *  (no steps inside OFDM symbols), so an IF parked at 59 with the level there is the design, not a stuck loop —
+     *  the readout's rail must not count it (coordinator, 2026-10-30: the DAB false warning). */
+    bool ifHeldOnPurpose(double peak) const {
+        return p_.ifFreeze && std::isfinite(peak) && peak >= p_.freezeLo && peak <= p_.freezeHi;
+    }
     /** ★★ An RF add is being held ON PURPOSE — the overload ceiling, the reversal guard, a recent clip. The readout's
      *  "IF at its floor with RF to spare" must not call that stuck: it is the loop doing what it was built to do. */
     bool addHeld(double now) const {
@@ -418,5 +424,16 @@ private:
         hist_.clear();
     }
 };
+
+/** ★★★ THE READOUT'S RAIL (rspstat `vrail`'s sign, 2026-10-30): +1 = the IF at its 59 rail with RF still to cut, −1 = at
+ *  its floor with RF still to add, 0 = neither — or a hold that is DELIBERATE: VibeAGC (`vagc` non-null) holding an RF
+ *  add back (addHeld) or its DAB profile freezing the IF with the level inside the freeze band (ifHeldOnPurpose). Pure,
+ *  so the false-warning cases are tested (test-rsp-vibeagc). */
+inline int vagcRailDir(int gr, int lna, int nStates, int lnaFloor, int grFloor, const VibeAgcRsp* vagc, double now,
+                       double adcPeak) {
+    if (gr >= VibeAgcRsp::kGrMax && lna + 1 < nStates && !(vagc && vagc->ifHeldOnPurpose(adcPeak))) return +1;
+    if (gr <= grFloor && lna - 1 >= lnaFloor && !(vagc && vagc->addHeld(now))) return -1;
+    return 0;
+}
 
 }  // namespace vibersp

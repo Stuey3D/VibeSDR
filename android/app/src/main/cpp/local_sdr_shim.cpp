@@ -13356,8 +13356,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         const int lnaFloor = capPos >= 0 ? std::max(0, nS - 1 - capPos) : 0;
                         const int f = LocalSdrShim::ifGrFloorAt(cHz);
                         const int grFloor = f >= 20 ? f : vibersp::VibeAgcRsp::kGrMin;
-                        if (gr >= vibersp::VibeAgcRsp::kGrMax && lna + 1 < nS) dir = +1;
-                        else if (gr <= grFloor && lna - 1 >= lnaFloor && !(vAct && vs.agc.addHeld(nowR))) dir = -1;
+                        dir = vibersp::vagcRailDir(gr, lna, nS, lnaFloor, grFloor, vAct ? &vs.agc : nullptr, nowR,
+                                                   sdrp->adcPeakDbfs());
                     }
                     if (dir != railDir) { railDir = dir; railSince = nowR; }
                     vrail = railDir * (int)(nowR - railSince);

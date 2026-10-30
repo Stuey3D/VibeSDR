@@ -520,10 +520,34 @@ static void caseK() {
 }
 }  // namespace snd
 
+/* ═══════════════════════════════ THE READOUT'S RAIL (vagcRailDir) ══════════════════════════════════════
+ * ★★ The DAB false warning (coordinator, 2026-10-30): DAB's profile freezes the IF while the peak is inside −34…−8 dBFS,
+ *    so an IF parked at 59 with the level 6-14 dB under target is the design. rspstat's vrail must stay 0 there for a
+ *    whole minute — the client goes amber at 10 s of rail, so 0 throughout is "never amber". */
+static void caseR() {
+    std::printf("\nR. readout rail: deliberate holds never count\n");
+    VibeAgcRsp dab; dab.setProfile(VagcBand::Dab); dab.adopt(5, 59);
+    int maxRail = 0; double since = 0; int dirNow = 0;
+    for (int i = 0; i <= 600; ++i) {                                   // 60 s at 10 Hz
+        const double t = i * 0.1;
+        const double peak = -20.0 - 6.0 - 8.0 * (0.5 + 0.5 * std::sin(t * 0.7));   // 6..14 dB under the −20 target
+        const int d = vagcRailDir(59, 5, 10, 0, 20, &dab, t, peak);
+        if (d != dirNow) { dirNow = d; since = t; }
+        maxRail = std::max(maxRail, std::abs(dirNow) * (int)(t - since));
+    }
+    ok(maxRail == 0, fmt("DAB, IF at 59, level 6-14 dB under target for 60 s: vrail stays 0 (max %.0f s) — never amber", maxRail));
+    ok(vagcRailDir(59, 5, 10, 0, 20, &dab, 0, -4.0) == +1, "DAB, IF at 59 with the level OVER the freeze band: still a rail");
+    VibeAgcRsp fm; fm.setProfile(VagcBand::FmBroadcast); fm.adopt(5, 59);
+    ok(vagcRailDir(59, 5, 10, 0, 20, &fm, 0, -30.0) == +1, "FM (no freeze), IF at 59 with RF to cut: a rail");
+    ok(vagcRailDir(59, 5, 10, 0, 20, nullptr, 0, -30.0) == +1, "official API (no VibeAGC), IF at 59 with RF to cut: a rail");
+    ok(vagcRailDir(59, 9, 10, 0, 20, &fm, 0, -30.0) == 0, "IF at 59 with the LNA already at its last state: not a rail");
+    ok(vagcRailDir(20, 0, 10, 0, 20, &fm, 100, -40.0) == 0, "IF at its floor at full RF gain: not a rail");
+}
+
 int main() {
     std::printf("VibeAGC for SDRplay — closed loop and sound\n");
     caseA(); caseB(); caseC(); caseD(); caseE(); caseF(); caseG(); caseT(); caseH();
-    snd::caseI(); snd::caseJ(); snd::caseK();
+    snd::caseI(); snd::caseJ(); snd::caseK(); caseR();
     std::printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }
