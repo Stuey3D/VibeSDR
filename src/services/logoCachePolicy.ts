@@ -130,6 +130,10 @@ export function evictions(entries: Record<string, LogoEntry>, lim: LogoLimits, k
 export class LogoIndex {
   entries: Record<string, LogoEntry>;
   private misses = new Map<string, MissState>();
+  /** ★★ A HIGHER SOURCE COULD NOT BE ASKED (a stall) while a lower one answered — the lower answer is drawn, and the
+   *  higher one is retried on the ladder rather than after a day. Without this, one tunnel stall during the RadioDNS
+   *  lookup filed a name match for 24 hours in place of the broadcaster's own file. */
+  private upgrades = new Map<string, MissState & { src: LogoSource }>();
   private busy = new Set<string>();
   limits: LogoLimits;
   // ★ No parameter properties: the tests run this file under plain `node` (type stripping only).
@@ -140,6 +144,7 @@ export class LogoIndex {
 
   get(key: string): LogoEntry | undefined { return this.entries[key]; }
   missOf(key: string): MissState | undefined { return this.misses.get(key); }
+  upgradeOf(key: string): (MissState & { src: LogoSource }) | undefined { return this.upgrades.get(key); }
   isBusy(key: string): boolean { return this.busy.has(key); }
 
   /** Mark used (LRU). Returns true when the stamp moved enough to be worth saving (an hour — not every render). */
@@ -159,6 +164,8 @@ export class LogoIndex {
     if (m && now < m.nextAt) return false;
     const e = this.entries[key];
     if (!e) return true;
+    const up = this.upgrades.get(key);
+    if (up && now >= up.nextAt) return true;
     return now - e.checkedAt >= REFRESH_MS;
   }
   /** Claim the key for one round of asking — call only after shouldAsk said yes. Returns false if already claimed. */
@@ -177,8 +184,22 @@ export class LogoIndex {
     this.misses.set(key, m);
     return m;
   }
-  /** An answer arrived: the backoff resets. */
-  hit(key: string): void { this.misses.delete(key); }
+  /** A source at `src` could not be asked (a stall) though something lower may have answered: retry it on the ladder. */
+  failedAbove(key: string, src: LogoSource, now: number): MissState {
+    const prev = this.upgrades.get(key);
+    const fails = (prev?.fails ?? 0) + 1;
+    const top = prev && SOURCE_RANK[prev.src] > SOURCE_RANK[src] ? prev.src : src;
+    const m = { fails, nextAt: now + retryDelay(fails), src: top };
+    this.upgrades.set(key, m);
+    return m;
+  }
+
+  /** An answer arrived: the backoff resets — and a pending upgrade too, once the source it waits for has answered. */
+  hit(key: string, src?: LogoSource): void {
+    this.misses.delete(key);
+    const up = this.upgrades.get(key);
+    if (up && src && SOURCE_RANK[src] >= SOURCE_RANK[up.src]) this.upgrades.delete(key);
+  }
 
   verdict(key: string, cand: { src: LogoSource; url: string; sig?: string }, now: number): Verdict {
     return verdict(this.entries[key], cand, now);
@@ -191,15 +212,15 @@ export class LogoIndex {
     e.checkedAt = now;
     if (cand?.url) e.url = cand.url;
     if (cand?.src === 'air' || e.src === 'air') e.airAt = now;
-    this.hit(key);
+    this.hit(key, cand?.src ?? e.src);
   }
 
   /** A higher source answered nothing new but a lower one did and was outranked: the entry stays; stamp it checked so
    *  the lower source is not re-asked for a day. */
-  confirm(key: string, now: number): void {
+  confirm(key: string, now: number, src?: LogoSource): void {
     const e = this.entries[key];
     if (e) e.checkedAt = now;
-    this.hit(key);
+    this.hit(key, src);
   }
 
   /** Store a new or changed logo. Returns the entries evicted to stay within the limits (and the replaced one's `show`
@@ -207,7 +228,7 @@ export class LogoIndex {
   store(key: string, e: Omit<LogoEntry, 'savedAt' | 'checkedAt' | 'usedAt'>, now: number): { evicted: LogoEntry[]; replaced?: LogoEntry } {
     const old = this.entries[key];
     this.entries[key] = { ...e, savedAt: now, checkedAt: now, usedAt: now, ...(e.src === 'air' ? { airAt: now } : {}) };
-    this.hit(key);
+    this.hit(key, e.src);
     const evicted: LogoEntry[] = [];
     for (const k of evictions(this.entries, this.limits, key)) { evicted.push(this.entries[k]); delete this.entries[k]; }
     return { evicted, replaced: old && old.show !== e.show ? old : undefined };
@@ -217,6 +238,7 @@ export class LogoIndex {
   drop(key: string, now: number): LogoEntry | undefined {
     const e = this.entries[key];
     delete this.entries[key];
+    this.upgrades.delete(key);
     this.miss(key, now);
     return e;
   }

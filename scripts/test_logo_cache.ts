@@ -98,5 +98,24 @@ eq('retry ladder 1 min, 5 min, 30 min, then daily', [1, 2, 3, 4, 9].map(retryDel
   eq('touch reports "worth saving" only after an hour', [ix.touch('a', T0 + 4), ix.touch('a', T0 + 4 + 2 * H)], [false, true]);
 }
 
+// ── a stall at a higher source does not let a lower answer settle for a day ──
+{
+  const ix = new LogoIndex();
+  const k = 'dab:E1|C1CE|C4D2';
+  ix.begin(k);
+  ix.store(k, { url: 'n', src: 'name', sig: 'n1', show: 'fn', bytes: 1 }, T0);   // the name search answered…
+  ix.failedAbove(k, 'radiodns', T0);                                            // …RadioDNS could not be asked
+  ix.end(k);
+  eq('the name logo is drawn', ix.get(k)?.show, 'fn');
+  eq('★★ RadioDNS is retried in a minute, not a day', [ix.shouldAsk(k, T0 + MIN - 1), ix.shouldAsk(k, T0 + MIN)], [false, true]);
+  ix.confirm(k, T0 + MIN);                                                      // only the name answered again
+  ix.failedAbove(k, 'radiodns', T0 + MIN);
+  eq('…then five minutes (the ladder climbs while it keeps stalling)', ix.shouldAsk(k, T0 + 6 * MIN), true);
+  ix.same(k, T0 + 6 * MIN, { src: 'name' });
+  eq('a lower source answering does not clear the pending upgrade', ix.upgradeOf(k)?.src, 'radiodns');
+  ix.store(k, { url: 'r', src: 'radiodns', sig: 'r1', show: 'fr', bytes: 1 }, T0 + 7 * MIN);
+  eq('RadioDNS answering clears it — back to daily', [ix.upgradeOf(k), ix.shouldAsk(k, T0 + 7 * MIN + REFRESH_MS - 1)], [undefined, false]);
+}
+
 console.log(`logo cache: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

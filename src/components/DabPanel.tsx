@@ -222,14 +222,16 @@ function useServiceLogo(base: string, d: DabState | null,
         const ac = new AbortController();
         const t = setTimeout(() => ac.abort(), 12000);
         try {
+          // ★★ A stall or a 5xx THROWS (the store retries it in a minute); a clean "none" is null.
           const r = await dabLogoQueue(() => fetch(`${base}/vibeserver/dablogo?${q}`, { signal: ac.signal }));
+          if (r.status >= 500) throw new Error(`dablogo ${r.status}`);
           if (!r.ok) return null;
           const j: { logo?: string } | null = await r.json();
           const u = j && typeof j.logo === 'string' && j.logo ? j.logo : '';
           // ★ An absolute third-party URL (the Sony Lite server answers with Global's own) is fetched and kept by the
           //   store itself; a relative one is the server's copy.
           return u ? (u.startsWith('http') ? u : `${base}${u}`) : null;
-        } catch { return null; } finally { clearTimeout(t); }
+        } finally { clearTimeout(t); }
       } },
       { src: 'name', run: async () => {
         const nm = tidyStationName(label);

@@ -161,6 +161,8 @@ async function take(key: string, src: LogoSource, url: string, headers?: Record<
   return path;
 }
 
+/** A source to ask. `run` resolves the logo's URL, or null for "this source has none"; it THROWS for "could not ask"
+ *  (a stall, a 5xx) — which the store retries on the ladder instead of believing for a day. */
 export interface LogoResolver { src: LogoSource; run: () => Promise<string | null | undefined> }
 
 /**
@@ -178,24 +180,29 @@ export async function resolveLogo(key: string, resolvers: LogoResolver[]): Promi
   const job = (async (): Promise<string | null> => {
     let remote: string | null = null;
     let asked = 0;
+    /** ★★ The highest source that could not be ASKED (it threw: a stall, a 5xx) or whose bytes would not come. A lower
+     *  answer is still drawn, but this one is retried on the ladder rather than in a day (LogoIndex.failedAbove). */
+    let stalled: LogoSource | null = null;
     try {
       for (const r of resolvers) {
         if (outranked(index.get(key), r.src, Date.now())) continue;
         asked++;
         let url: string | null | undefined = null;
-        try { url = await r.run(); } catch { url = null; }
+        try { url = await r.run(); } catch { stalled = stalled ?? r.src; continue; }
         if (!url) continue;
         const shown = await take(key, r.src, url);
-        if (shown !== 'net' && shown !== 'bad') return shown;
+        if (shown !== 'net' && shown !== 'bad') {
+          if (stalled) index.failedAbove(key, stalled, Date.now());
+          return shown;
+        }
         if (shown === 'bad') continue;       // not a drawable logo — the next source down may have one
-        /* ★★ RESOLVED, BUT THE BYTES DID NOT COME (a stall). Draw it from the network this session and retry on the
-         *  ladder — and do NOT fall through to a lower source, or a name match would be filed for a day in place of the
-         *  broadcaster's own file that one more minute would have fetched. */
-        remote = url;
-        break;
+        // ★ Resolved, but the bytes did not come: draw it from the network this session, retry on the ladder.
+        stalled = stalled ?? r.src;
+        remote = remote ?? url;
       }
       // ★ Every source is outranked by what is held (an air logo, say): nothing to ask — look again in a day.
       if (!asked && index.get(key)) { index.confirm(key, Date.now()); return peekLogo(key); }
+      if (stalled && index.get(key)) { index.failedAbove(key, stalled, Date.now()); return peekLogo(key); }
       if (remote && !index.get(key)) {
         remoteOnly.set(key, remote);
         changed();
