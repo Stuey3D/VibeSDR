@@ -959,6 +959,15 @@ class VibeStreamService : MediaBrowserServiceCompat() {
         openLocalAudioConn(reconnect = false)
     }
 
+    /** The same socket address with a new query — a renewed admin ticket for the NEXT open only.
+     *  The socket that is open now is left alone. */
+    fun refreshLocalAudioAuth(authSuffix: String) {
+        val cur = laUrl ?: return
+        val root = cur.substringBefore("/ws/audio")
+        val authQ = if (authSuffix.isNotEmpty()) "?" + authSuffix.removePrefix("&") else ""
+        laUrl = "$root/ws/audio$authQ"
+    }
+
     /** Open (or reopen) the local audio socket to `laUrl`. `reconnect` = recovery, not a start: the
      *  hello `tune` is then sent only where the first open was allowed to send one (see laAssert).
      *  iOS parity: VibePowerModule.openLocalAudioConn. */

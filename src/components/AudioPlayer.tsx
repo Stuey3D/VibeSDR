@@ -167,7 +167,18 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
   // full from-scratch reconnect (e.g. the data saver resuming): the old engine
   // is torn down and a fresh native session is opened.
   const lastRestart = useRef<number | undefined>(restartKey);
-  const lastAdmin   = useRef<string | undefined>(adminAuth);
+  /* ★★★ A RENEWED TICKET IS NOT A NEW CREDENTIAL — IT MUST NOT RESTART THE ENGINE. The screen renews the admin ticket
+   *     every four minutes, each time as a new string; with that string in the dependency lists below, the effect's
+   *     CLEANUP stopped the engine on every renewal (the early return for "nothing changed" runs after the cleanup has
+   *     already happened), so a signed-in owner lost the sound every 3m59s. The server decides admin once, when it
+   *     accepts the socket — so only a change of KIND (none → challenge pair → ticket, or the takeover answer) needs a
+   *     new socket. A fresh value of the same kind is handed to the native side for its NEXT handshake, nothing more. */
+  const adminKind = !adminAuth ? ''
+    : (/vs_admin_ticket=/.test(adminAuth) ? 'ticket' : 'pair') + (/vs_takeover=1/.test(adminAuth) ? '+takeover' : '');
+  const adminAuthRef = useRef(adminAuth);
+  adminAuthRef.current = adminAuth;
+  useEffect(() => { VibePowerModule?.setAdminAuth?.(adminAuth ?? ''); }, [adminAuth]);
+  const lastAdmin   = useRef<string>(adminKind);
   /** ★★★ NATIVE IS THE ONLY LAYER THAT KNOWS WHAT THE SOCKET DID. It opens its own connection, so
    *  every fact worth having — engine started, WS ready, WS aborted, first packet, a feed refused
    *  — was reachable only through a Mac, a cable and Console.app. The person who can reproduce the
@@ -209,7 +220,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
    *  through its OWN socket read in JS, never this engine: the engine is the main player, and two servers never share
    *  one player. The socket belongs to dualServer and outlives this screen when it goes to the background. */
   const auxRestart = useRef(restartKey);
-  const auxAdmin = useRef(adminAuth);
+  const auxAdmin = useRef(adminKind);
   useEffect(() => {
     if (transport !== 'aux' || !dualId) return;
     if (!baseUrl) { noteAudioEvent('second voice: no baseUrl — gate closed'); return; }
@@ -217,8 +228,8 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
     if (!l) return;
     setUberClientName(USER_AGENT);
     // ★ A reconnect (restartKey) or a new credential asks for a NEW socket; anything else adopts the one playing.
-    const forced = restartKey !== auxRestart.current || adminAuth !== auxAdmin.current;
-    auxRestart.current = restartKey; auxAdmin.current = adminAuth;
+    const forced = restartKey !== auxRestart.current || adminKind !== auxAdmin.current;
+    auxRestart.current = restartKey; auxAdmin.current = adminKind;
     if (!forced && auxIsOpenFor(dualId)) noteAudioEvent('second voice adopted (UberSDR)');
     else {
       noteAudioEvent(`second voice opening (UberSDR) → ${baseUrl}`);
@@ -230,7 +241,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
       setTimeout(() => { if (!dualHolds(dualId)) auxClose(dualId); }, 0);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transport, dualId, baseUrl, propUuid, restartKey, adminAuth]);
+  }, [transport, dualId, baseUrl, propUuid, restartKey, adminKind]);
 
   const prevTransport = useRef<'native' | 'aux' | null>(null);
   useEffect(() => {
@@ -243,7 +254,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
     if ((!ranOnce.current || fromAux) && dualId && baseUrl && nativeOwnedBy(propUuid ?? null)) {
       ranOnce.current = true;
       activeUrl.current = baseUrl; uuid.current = propUuid ?? uuid.current;
-      lastRestart.current = restartKey; lastAdmin.current = adminAuth;
+      lastRestart.current = restartKey; lastAdmin.current = adminKind;
       activeFreq.current = frequency; activeMode.current = mode;
       noteAudioEvent('native engine adopted — already playing this listener');
       return () => {
@@ -264,9 +275,9 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
     //     stays put. Giving the native side the ABILITY to carry it and never handing it over is
     //     the same fault as the ability not existing (Stuart, 2026-08-16: "I thought you wrote the
     //     native code to do that?" — I did, and then did not use it).
-    const forced = restartKey !== lastRestart.current || adminAuth !== lastAdmin.current;
+    const forced = restartKey !== lastRestart.current || adminKind !== lastAdmin.current;
     lastRestart.current = restartKey;
-    lastAdmin.current   = adminAuth;
+    lastAdmin.current   = adminKind;
     if (!forced && baseUrl === activeUrl.current && propUuid === uuid.current) return;
     // ★ A forced restart tears the engine down first: startAudioEngine on a live engine is not a
     //   reconnect, and the socket we are trying to replace is the one that was refused.
@@ -281,9 +292,9 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
       uuid.current = propUuid ?? uuidv4();
       // ★ BEFORE the engine starts, never after: the credential is read when the socket URL is
       //   built, and a busy receiver decides whether to refuse us at that handshake.
-      VibePowerModule?.setAdminAuth?.(adminAuth ?? '');
+      VibePowerModule?.setAdminAuth?.(adminAuthRef.current ?? '');
       noteAudioEvent(`startAudioEngine → ${baseUrl} ${frequency} ${mode}`
-                   + ` session=${uuid.current.slice(0, 8)}${adminAuth ? ' [admin]' : ''}`);
+                   + ` session=${uuid.current.slice(0, 8)}${adminAuthRef.current ? ' [admin]' : ''}`);
       VibePowerModule?.startAudioEngine(baseUrl, frequency, mode, uuid.current, password ?? '');
       // ★ V12: the engine is the main player — say whose it is, so a screen that goes away later cannot stop another's.
       claimNative(uuid.current);
@@ -308,7 +319,7 @@ export default function AudioPlayer({ baseUrl, frequency, mode, step, instanceNa
       noteAudioEvent('unmount/deps changed — stopping engine'); VibePowerModule?.stopAudioEngine();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [baseUrl, propUuid, restartKey, adminAuth, transport, dualId]);
+  }, [baseUrl, propUuid, restartKey, adminKind, transport, dualId]);
 
   /* ★★★ THIS EFFECT NO LONGER TUNES, AND THAT IS THE FIX.
    *

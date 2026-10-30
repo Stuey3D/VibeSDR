@@ -6,7 +6,7 @@ import { guard, noteFault } from '../services/faultLog';
 import { shouldForwardTune, type ServerDial } from '../services/audioTuneForward';
 import { listenerIdNow, loadListenerId } from '../services/listenerId';
 import { auxClose, auxIsOpenFor, auxOpen, auxSend, claimNative, dualHolds, linkFor, nativeOwnedBy, noteLink,
-         releaseNative, sameLink, setAuxOnBytes } from '../services/dualServer';
+         releaseNative, sameLink, setAuxOnBytes, auxRefreshUrl } from '../services/dualServer';
 
 // VibeSDR V4 — local-hardware / RTL-TCP audio.
 //
@@ -25,6 +25,8 @@ const Vibe = NativeModules.VibePowerModule as {
   pushExternalOpus?:  (b64: string, sampleRate: number, channels: number) => void;
   sendLocalTune?:     (json: string) => void;
   stopLocalAudio?:    () => void;
+  /** A renewed admin credential for the pump's NEXT handshake; the open socket is left alone. */
+  refreshLocalAudioAuth?: (authSuffix: string) => void;
   /** Is the pump's socket still delivering? Reopens it if not (VibePowerModule.swift / VibeStreamService.kt). */
   reviveLocalAudio?:  () => void;
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
@@ -196,8 +198,36 @@ export default function LocalAudioPlayer(
   /** ★ V12: this mount is still ADOPTING audio a previous mount opened — see the run's facts below. */
   const adopting = useRef(false);
   const lastForceKey = useRef('');
+  /* ★★★ A RENEWED TICKET IS NOT A NEW CREDENTIAL — IT MUST NOT OPEN A NEW SOCKET. The screen renews the admin ticket
+   *     every four minutes (SDRScreen: mintAdminTicket), and each renewal is a new string. Keyed on that string, this
+   *     effect tore the audio down and reopened it every 3m59s for as long as the owner was signed in: a gap in the
+   *     sound each time, and — when the spectrum socket happened to be away at that moment — the server saw its last
+   *     listener leave, switched DAB off, put the radio back on its FM carrier and resumed the block five seconds
+   *     later. A retune nobody asked for, invisible in the admin log because nobody did it (Sony, Lite 11.0.15,
+   *     2026-10-30: "the server tuned to a different multiplex and changed station").
+   *  ★★ The server decides admin ONCE, when it accepts the socket (adminSocks / adminOk), and never re-reads the
+   *     ticket. So what the socket needs re-opening for is a change of KIND — none → challenge pair → ticket, or the
+   *     takeover answer — and the URL it builds simply uses the newest string, kept in a ref. */
+  const adminAuthRef = useRef(adminAuth);
+  adminAuthRef.current = adminAuth;
+  const adminKind = !adminAuth ? ''
+    : (/vs_admin_ticket=/.test(adminAuth) ? 'ticket' : 'pair') + (/vs_takeover=1/.test(adminAuth) ? '+takeover' : '');
   const dualId = dual?.id ?? null;
   const transport = dual?.transport ?? 'native';
+  /** The pump's query WITHOUT the credential, while the native pump is this mount's socket; null otherwise. */
+  const pumpSuffix = useRef<string | null>(null);
+  /** The same for the second voice (dualServer), with the address it goes to. */
+  const auxSuffix = useRef<{ root: string; base: string } | null>(null);
+  // ★ A renewed ticket (same KIND — see adminKind) goes to the pump for its NEXT handshake: its own recovery reopen
+  //   and Android's service revival rebuild from the URL it was started with, and that ticket expires in ten minutes.
+  useEffect(() => {
+    if (!adminAuth) return;
+    const adminQ = adminAuth.startsWith('&') ? adminAuth : `&${adminAuth}`;
+    if (pumpSuffix.current != null) Vibe?.refreshLocalAudioAuth?.(pumpSuffix.current + adminQ);
+    const ax = auxSuffix.current;
+    if (ax) auxRefreshUrl(dualId, `${ax.root}/ws/audio?${(ax.base + adminQ + '&channels=1').replace(/^&/, '')}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminAuth]);
   transportRef.current = transport;
   const ws      = useRef<WebSocket | null>(null);
   const extStarted = useRef(false);
@@ -269,10 +299,14 @@ export default function LocalAudioPlayer(
     //    refused at the handshake, which reads to a user as exactly the connection error they
     //    reported." I read that warning, wrote a comment claiming the normalisation had happened,
     //    and did not check. An assumption stated confidently in a comment is not evidence.
-    const adminQ = !adminAuth || adminAuth.startsWith('&') ? (adminAuth || '') : `&${adminAuth}`;
-    const combinedSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
+    const adminNow = adminAuthRef.current;
+    const adminQ = !adminNow || adminNow.startsWith('&') ? (adminNow || '') : `&${adminNow}`;
+    const baseSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
       + `&bid=${encodeURIComponent(listenerId)}`
-      + (raw ? '' : '&codec=opus') + authSuffix + adminQ;
+      + (raw ? '' : '&codec=opus') + authSuffix;
+    pumpSuffix.current = null;
+    auxSuffix.current = null;
+    const combinedSuffix = baseSuffix + adminQ;
 
     /* ★★ V12 TWO SERVERS: the run's facts. `firstRun` — this mount's first open, the only one that may ADOPT. `fromAux` —
      *  the last run was the second voice and this one is the main pump: the same listener moving voices (it is playing
@@ -289,7 +323,7 @@ export default function LocalAudioPlayer(
      *  listener's (same session, same voice) and nothing has FORCED a new socket (a reconnect, raw/Opus, a credential),
      *  every run adopts it; once the screen's address matches the one it is playing on, adoption ends and the ordinary
      *  rules resume. Outside a pairing `dualId` is null, nothing is ever adopted, and this path is exactly as it was. */
-    const forceKey = `${restartKey}|${raw ? 1 : 0}|${adminAuth}`;
+    const forceKey = `${restartKey}|${raw ? 1 : 0}|${adminKind}`;
     const forced = !firstRun && forceKey !== lastForceKey.current;
     lastForceKey.current = forceKey;
     const desired = { host, port, suffix: combinedSuffix, wsBase: wsBase ?? '' };
@@ -312,6 +346,7 @@ export default function LocalAudioPlayer(
        *  before encoding, which is what the second voice does anyway (each server owns ONE ear), so the whole 64 kb/s
        *  lands in one channel. The tune forwarder below sends through auxSend. */
       const url = `${wsRootQ}/ws/audio?${(combinedSuffix + '&channels=1').replace(/^&/, '')}`;
+      auxSuffix.current = { root: wsRootQ, base: baseSuffix };
       noteAudioEvent(`second voice ${adoptNow ? 'adopted' : 'opening'} → ${wsRootQ}/ws/audio`);
       // ★ The hello is the main pump's rule exactly: on every OPEN when this listener may assert its tune (never adopting).
       if (!adoptNow) auxOpen({ id: dualId, url, hello: assertTune ? tuneJson(f, m, bl, bh) : null }, forced);
@@ -340,6 +375,7 @@ export default function LocalAudioPlayer(
       Vibe?.startLocalAudio?.(host, port, assertTune && !fromAux ? tuneJson(f, m, bl, bh) : '',
                               combinedSuffix, wsBase ?? '');
       }
+      pumpSuffix.current = baseSuffix;
       // ★ V12: the pump is a singleton — say whose it is, so a screen that goes away later cannot stop another's.
       claimNative(sessionId);
       started.current = true;
@@ -388,7 +424,7 @@ export default function LocalAudioPlayer(
     //   and any /r/<id> prefix. Only fall back to host:port when there is none.
     const wsRoot = (wsBase || `ws://${host}:${port}`).replace(/\/+$/, '');
     noteAudioEvent(`js socket opening → ${wsRoot}/ws/audio`
-                   + (adminAuth ? ' [admin]' : ' [no admin]'));
+                   + (adminNow ? ' [admin]' : ' [no admin]'));
     const sock = new WebSocket(`${wsRoot}/ws/audio${authQ}`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
@@ -458,9 +494,9 @@ export default function LocalAudioPlayer(
       started.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // ★ adminAuth is a dependency: it arrives AFTER the connection, because the password is typed on
-  //   a receiver you are already looking at. Without it here the socket keeps the empty credential
-  //   it opened with, which is the whole fault.
+  // ★ The credential's KIND is a dependency: it arrives AFTER the connection, because the password is
+  //   typed on a receiver you are already looking at. Without it here the socket keeps the empty
+  //   credential it opened with, which is the whole fault. Its VALUE is not — see adminAuthRef.
   // ★★★ AND SO IS wsBase — THE ADDRESS THIS SOCKET GOES TO ARRIVES LATE TOO. `connectBase` starts
   //     as the FRONT DOOR and only becomes `/r/<id>` when the door's radio list comes back, which
   //     is a round trip. With only [port, raw, adminAuth] here, a socket opened before that answer
@@ -475,7 +511,7 @@ export default function LocalAudioPlayer(
   // ★ restartKey: a reconnect asked for a NEW socket — see the prop.
   // ★ V12: `transport` too — a server left playing alone on the second voice moves to the main pump (dualServer.ts).
   // ★ listenerId: only ever '' → the id, once, and the effect does not open a socket until it has it.
-  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune, restartKey, transport, dualId, listenerId]);
+  }, [port, raw, adminKind, wsBase, host, authSuffix, sessionId, assertTune, restartKey, transport, dualId, listenerId]);
 
   /* Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
    * JS branch remains for the fallback reader.

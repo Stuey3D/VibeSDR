@@ -2671,6 +2671,14 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
     openLocalAudioConn(reconnect: false)
   }
 
+  /// The same socket address with a new query — a renewed admin ticket for the NEXT open only. The
+  /// socket that is open now is left alone (the server decided admin when it accepted it).
+  @objc func refreshLocalAudioAuth(_ authSuffix: String) {
+    guard let cur = laUrl?.absoluteString, let r = cur.range(of: "/ws/audio") else { return }
+    let q = authSuffix.isEmpty ? "" : "?" + (authSuffix.hasPrefix("&") ? String(authSuffix.dropFirst()) : authSuffix)
+    if let url = URL(string: String(cur[..<r.lowerBound]) + "/ws/audio" + q) { laUrl = url }
+  }
+
   /// Open (or reopen) the local audio socket to `laUrl`. `reconnect` = recovery, not a start: the
   /// hello `tune` is then sent only where the first open was allowed to send one (see laAssert).
   private func openLocalAudioConn(reconnect: Bool) {

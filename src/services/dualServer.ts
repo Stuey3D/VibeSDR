@@ -248,6 +248,12 @@ export function auxIsOpenFor(id: string | null, url?: string): boolean {
 /** The screen in front reads the link meter from here while its server is on the second voice. */
 export function setAuxOnBytes(f: ((n: number) => void) | null) { auxOnBytes = f; }
 
+/** A renewed admin ticket for the second voice's NEXT handshake — the open socket is left alone, and a screen coming
+ *  back still adopts it (the URL it would build matches). See LocalAudioPlayer: adminKind. */
+export function auxRefreshUrl(id: string | null, url: string) {
+  if (id && aux && aux.id === id) aux.url = url;
+}
+
 /** Open (or adopt) the second voice for side `o.id`. `force` = a reconnect asked for a NEW socket. */
 export function auxOpen(o: AuxOpen, force = false) {
   if (!force && auxIsOpenFor(o.id, o.url)) return;
