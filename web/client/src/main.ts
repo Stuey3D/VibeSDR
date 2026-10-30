@@ -7,7 +7,8 @@
  */
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
-import { capFps, linkCapFor, isWfSpeedSetting, loadWfSpeed, migrateWfDataRate, speedNumbers, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
+import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
+import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { drmRender, drmSignalRender, type DrmState } from './drm';
@@ -1328,6 +1329,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   spec = new SpectrumClient(specUrl, {
     onBins: (bins, centerHz, bwHz) => {
       noteFrame();
+      linkFrames++;   // ★ the DATA control's AUTO controller counts what arrives
       wf!.push(bins, centerHz, bwHz);
       updateSignal(bins, centerHz, bwHz);
       syncNfmVoiceRow();
@@ -9561,28 +9563,58 @@ const WF_PRESET: Record<string, { rate: number }> = {
   default: { rate: 20 },
   smooth:  { rate: 60 },
 };
-/* ★★ V12 2026-10-30 (GitHub #57): THE "WATERFALL DATA RATE" ROW (AUTO/20/10/5) IS GONE. Gesiima set it to 5 on DEFAULT and
- *   saw no change — DEFAULT still scrolls 15 or 30 rows a second from a 5 fps feed — and only MINIMUM slowed the scroll.
- *   Since V12 the Waterfall speed keys decide what the server sends (MINIMUM 2 · LOW 5 · ECO 10 ask for less; the rest
- *   take the server's rate), so the second row only overlapped them, and its use looked like a no-op (AGENTS.md).
- *   AUTO is what remains: the rate follows the speed key, the server's ceiling and the hidden tab. A saved rate is
- *   migrated once (migrateWfDataRate) and never applied again. */
+/* ★★★ V12 2026-10-30 — DATA · LOW · AUTO · FULL (src/assets/wfSpeedCap.ts), the web's twin of the app's control. Stuart:
+ *   "we cannot slow the incoming data rate down automatically when the waterfall is slowed down as that will effect the
+ *   spectrum too. We need a minimum of 5FPS incoming … So we need a separate data control but dont mention frame rates,
+ *   just call it low auto full". The speed keys are display only; this alone decides what the server sends:
+ *     LOW  the 5 fps floor · AUTO the app's own adaptive controller (vibeLinkManager) on this socket — as much as the
+ *     connection carries, stepping down on a poor one, never below the floor · FULL the server's full rate.
+ *   Replaces the old WATERFALL DATA RATE row (AUTO/20/10/5): a saved 5 → LOW, 20 → FULL, 0 and 10 → AUTO. */
+let wfData: DataMode = 'auto';
+/** The rate the controller asks for now (0 = not started). */
+let linkFps = 0;
+let webLink: WebLinkManager | null = null;
+let webLinkTop = 0;
+let linkFrames = 0;   // frames counted for the controller's 1 s tick
+/** The ladder for this server: its full rate, then 10, then the floor (5) — nothing below the floor. */
+function webLadder(): number[] {
+  const top = serverFpsCap();
+  const out = [top, 10, DATA_FLOOR_FPS].filter((f, i, a) => f <= top && (i === 0 || f < a[i - 1]));
+  return out.length ? out : [top];
+}
+/** (Re)build the controller when the server's full rate changes; set its mode otherwise. */
+function ensureWebLink() {
+  const top = serverFpsCap();
+  if (!webLink || webLinkTop !== top) {
+    webLinkTop = top;
+    const ladder = webLadder();
+    webLink = new WebLinkManager({
+      ladder, lowDataRung: lowDataRungFor(ladder), mode: linkModeFor(wfData),
+      apply: (_r, f) => { if (f !== linkFps) { linkFps = f; activeFps = computeActiveFps(); if (spec) spec.setFftRate(wantedFps()); updateStatus(); } },
+    });
+    webLink.forceApply();
+  } else webLink.setMode(linkModeFor(wfData));
+}
+setInterval(() => {
+  const n = linkFrames; linkFrames = 0;
+  // Not while the tab is hidden: that rate is ours on purpose (throttleHidden), not a symptom.
+  if (webLink && spec && !throttled) webLink.tick(n, n > 0 || document.visibilityState === 'visible', true);
+}, 1000);
 
 /** The server's fps ceiling (its advertised max, else the built-in 20). */
 function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
 
-/** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps). AUTO never asks
- *  for more than the chosen Speed — no point receiving frames the display would only throw away. */
+/** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps): the DATA control's controller.
+ *  ★ V12 2026-10-30: the speed keys never change it — they are display only. */
 function computeActiveFps(): number {
-  // ★ V12 MINIMUM / LOW / ECO: a CEILING on whatever else decides the rate (the server's rate) — 2 / 5 / 10,
-  //   never a divider, so a 5 pinned stays 5 (wfSpeedCap.capFps).
-  return capFps(Math.min(wfSpeed, serverFpsCap()), linkCapFor(wfScroll));
+  return linkFps > 0 ? linkFps : serverFpsCap();
 }
 
 /** ★ V12: the live rows/s on each Waterfall speed key, from the server's own rate (its advertised max — the rate NATIVE
  *  asks for). Unknown (no hwinfo yet) → names only. */
 function refreshWfScrollSeg() {
-  const nums = speedNumbers(serverMaxFps > 0 ? serverMaxFps : 0);
+  // ★ from the rate the server sends — its own, or the floor under DATA LOW (the keys are display only)
+  const nums = speedNumbers(serverMaxFps > 0 ? (wfData === 'low' ? Math.min(DATA_FLOOR_FPS, serverMaxFps) : serverMaxFps) : 0);
   for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('#wfScrollSeg [data-wfscroll]'))) {
     const k = b.dataset.wfscroll as WfSpeedSetting;
     b.classList.toggle('on', k === wfScroll);
@@ -9593,6 +9625,7 @@ function refreshWfScrollSeg() {
 
 /** Apply both controls: recompute the data rate, set the scroll speed, request the rate, refresh UI. */
 function applyWaterfallRates() {
+  ensureWebLink();
   activeFps = computeActiveFps();
   wf?.setSpeed(wfSpeed);
   // ★★★ The rows follow the FEED now (Stuart 10-20): the preset is a scroll MODE, its rate a cap (wfRowTarget.ts).
@@ -16257,15 +16290,22 @@ function buildMenu() {
   // ★ an old 'sharp' loads as NATIVE; an old 'minimum' was the 5 fps choice — it loads as LOW and is re-saved as 'low',
   //   never as the new 2 fps MINIMUM ('min2') (wfSpeedCap.loadWfSpeed).
   { const v = prefs().wfScroll, s = loadWfSpeed(v); if (s) { wfScroll = s; if (s !== v) savePref('wfScroll', s); } }
-  // ★★ A SAVED DATA RATE (the row is gone — V12, #57): never applied again, so it cannot silently cap the speed keys.
-  //    Only where it was clearly the same choice is it carried over (wfSpeedCap.migrateWfDataRate): NATIVE + 5 → LOW,
-  //    NATIVE + 10 → ECO (the same rows, the same data); with any other speed the speed stays as it was and the cap
-  //    just stops. The pref is removed either way.
-  { const d = prefs().wfDataRate;
-    if (d !== undefined) {
-      const s = migrateWfDataRate(wfScroll, d);
-      if (s !== wfScroll) { wfScroll = s; savePref('wfScroll', s); }
-      savePref('wfDataRate', undefined);
+  // ★★ DATA · LOW · AUTO · FULL (V12 2026-10-30): the saved choice, or the old WATERFALL DATA RATE row's mapped across
+  //    once (5 → LOW, 20 → FULL, 0 / 10 → AUTO — wfSpeedCap.dataModeFromWebRate) and the old pref removed.
+  try {
+    const p = prefs();
+    if (p.wfData === 'low' || p.wfData === 'auto' || p.wfData === 'full') wfData = p.wfData;
+    else if (p.wfDataRate !== undefined) { wfData = dataModeFromWebRate(p.wfDataRate); savePref('wfData', wfData); savePref('wfDataRate', undefined); }
+  } catch { /* storage blocked: AUTO */ }
+  { const paint = () => { for (const b of Array.from($('wfDataSeg').querySelectorAll<HTMLButtonElement>('[data-wfdata]')))
+      b.classList.toggle('on', b.dataset.wfdata === wfData); };
+    paint();
+    for (const b of Array.from($('wfDataSeg').querySelectorAll<HTMLButtonElement>('[data-wfdata]'))) {
+      b.onclick = () => {
+        const v = b.dataset.wfdata; if (v !== 'low' && v !== 'auto' && v !== 'full') return;
+        wfData = v; try { savePref('wfData', v); } catch { /* this visit only */ }
+        paint(); applyWaterfallRates();
+      };
     } }
   applyWaterfallRates();
 

@@ -6161,7 +6161,7 @@ select.btn { padding: 6px 8px; }
          synthesised between real frames. -->
   <!-- ★★ V12 (Stuart 2026-10-28; the 2 fps MINIMUM 2026-10-30, GitHub #57): MINIMUM · LOW · ECO · NATIVE · [DEFAULT ·
        SMOOTH], slowest to smoothest. NATIVE was SHARP (the stored value is still 'sharp'); LOW was MINIMUM (a saved
-       'minimum' loads as LOW). MINIMUM / LOW / ECO ask the server for 2 / 5 / 10 fps (src/assets/wfSpeedCap.ts); the
+       'minimum' loads as LOW). MINIMUM / LOW / ECO draw 2 / 5 / 10 rows a second — display only since 2026-10-30 (DATA sets what the server sends); the
        outlined pair add interpolated rows. Each key carries its live rows/s on this server (main.ts refreshWfScrollSeg). -->
   <div class="mrow">
     <label>WATERFALL</label>
@@ -6176,11 +6176,11 @@ select.btn { padding: 6px 8px; }
       </span><span class="wfInterpCap">interpolated for smoothness</span></span>
     </div>
   </div>
-  <div class="rowNote" id="wfScrollNote">Minimum (2 rows a second) is the slowest — for spotting an intermittent signal in
-    the history. Minimum, Low (5) and Eco (10) also set how much the server sends — they save data by asking it for less, with
-    no effect when it already sends that little; the other speeds take the server's own rate. Eco — 10 rows a second: asks a faster server for less, fills in a slower one. Every speed but Native runs
+  <div class="rowNote" id="wfScrollNote">How fast the waterfall scrolls — it does not change what the server sends (that is
+    DATA, below). Minimum (2 rows a second) is the slowest, for spotting an intermittent signal in the history; Low is 5
+    and Eco 10. When the server sends faster than the speed, its frames are combined into each row, keeping short bursts. Every speed but Native runs
     at a rate that divides the screen's refresh (2, 5, 10, 15, 20, 30 or 60 rows a second), filling in rows or combining
-    them evenly, keeping short bursts. Native is the server's own rate, every row a real frame. Default
+    them evenly. Native is the server's own rate, every row a real frame. Default
     and Smooth add interpolated rows for a smoother scroll.</div>
   <!-- ★★ V12 2026-10-30 (GitHub #57): its own control (Stuart's wording). OFF = the interaction boost never raises the row
        rate (wfClock.ts boostRowRate) — the rows stay at the chosen speed through a tune or zoom. Default ON. -->
@@ -6202,9 +6202,19 @@ select.btn { padding: 6px 8px; }
   </div>
   <div class="rowNote" id="wfSpeedNote">How fast the waterfall scrolls on screen. Higher scrolls smoother, but paired with
     a low data rate it fills the gaps by interpolation — smooth motion, less real detail.</div>
-  <!-- ★★ V12 2026-10-30 (GitHub #57): the WATERFALL DATA RATE row (AUTO/20/10/5) is gone — the speed keys above decide
-       what the server sends (MINIMUM 2 · LOW 5 · ECO 10 ask for less), and on DEFAULT/SMOOTH a lower data rate never
-       changed the scroll, so the row looked dead. main.ts migrates a saved rate (wfSpeedCap.migrateWfDataRate). -->
+  <!-- ★★★ V12 2026-10-30 DATA · LOW · AUTO · FULL — what the server sends (src/assets/wfSpeedCap.ts; main.ts wfData). Stuart:
+       "we need a separate data control but dont mention frame rates, just call it low auto full" — so no rates here.
+       LOW = the 5 fps floor; AUTO adapts to the connection, never below it; FULL = the server's full rate. Where the old
+       WATERFALL DATA RATE row was (a saved 5 → LOW, 20 → FULL, 0/10 → AUTO). The speed keys above are display only. -->
+  <div class="mrow icomHide">
+    <label>DATA</label>
+    <div class="seg" id="wfDataSeg">
+      <button class="btn" data-wfdata="low">LOW</button>
+      <button class="btn on" data-wfdata="auto">AUTO</button>
+      <button class="btn" data-wfdata="full">FULL</button>
+    </div>
+  </div>
+  <div class="rowNote icomHide">How much spectrum data the server sends. Low saves data; Auto adapts to your connection; Full is the server's full rate.</div>
   <!-- ★ The IDLE SAVER switch went with the feature. It slowed the spectrum after 30 s without a
        touch, which read "nobody is looking" from "nobody is touching" — backwards on a waterfall,
        the one thing you watch without touching it. A hidden TAB still throttles (nothing is being

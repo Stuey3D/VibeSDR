@@ -53,7 +53,7 @@ import { noteUnhandled, noteDecision } from './protocolLog';
 import { guard, guardJson, noteFault, msgKind } from './faultLog';
 import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './linkManager';
-import { uberDivisorFor } from '../assets/wfSpeedCap';
+import { uberDivisorFor, lowDataRungFor } from '../assets/wfSpeedCap';
 
 /** ★ Re-exported so each subclass names its own ladder without reaching past this file. */
 export const LADDERS_FOR = LADDERS;
@@ -1584,11 +1584,11 @@ export abstract class UberSDRWsClient {
     const mode = (this.linkMode ?? 'adaptive') as LinkMode;
     this.link = new LinkManager({
       ladder: this.ladderFor(),
-      // 5 fps is the deepest a USER may pin — below that is adaptive-only, because the
-      // interpolation can hide 5 but not 3.3.
-      lowDataRung: 2,
+      // ★★ DATA LOW = the 5 fps floor on every backend (wfSpeedCap.ts DATA_FLOOR_FPS — VibeServer's rung 3, UberSDR's 2;
+      //    VibeServer's Low Data was its 10 fps rung 2 until 2026-10-30). Nothing below it: AUTO's floor is the same.
+      lowDataRung: lowDataRungFor(this.ladderFor()),
       mode,
-      userCapFps: this._wfLinkCap,  // ★ V12 MINIMUM / LOW / ECO waterfall speed — a 2 / 5 / 10 fps ceiling (src/assets/wfSpeedCap.ts)
+      userCapFps: this._wfLinkCap,  // a generic ceiling (0 = none) — since 2026-10-30 no speed key sets it (display only)
       apply: (_rung, fps) => {
         // UberSDR: a set_rate DIVISOR off the full rate (fftRate is VibeServer's lever). From the rung's FPS, not its
         // index: under LOW the ladder is [5, 3.3], where rung 1 is 5 fps = divisor 2; under MINIMUM [2] = divisor 5 (src/assets/wfSpeedCap.ts).
@@ -1658,7 +1658,7 @@ export abstract class UberSDRWsClient {
   private _linkMode: LinkMode = 'adaptive';
   get linkMode(): LinkMode { return this._linkMode; }
   set linkMode(m: LinkMode) { this._linkMode = m; this.link?.setMode(m); }
-  /** ★ V12 MINIMUM / LOW / ECO waterfall speed (src/assets/wfSpeedCap.ts): a ceiling in fps (2 / 5 / 10; 0 = none) on the link
+  /** ★ V12 a listener ceiling in fps (0 = none — nothing sets it since 2026-10-30: the speed keys are display only) on the link
    *  controller, so the SERVER sends fewer frames. A setter for the same reason as linkMode — it reconfigures the
    *  running controller live. */
   private _wfLinkCap = 0;
