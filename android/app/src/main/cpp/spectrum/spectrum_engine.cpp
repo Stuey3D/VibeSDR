@@ -406,7 +406,9 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
         //     on screen as the sound is heard. "…simply duplicate the previous lines if needed and then the waterfall still
         //     reacts to the audio in time but still stays smooth": a growing hold is the clock's repeats, a shrinking one
         //     its discards. ZERO for 1 s after any tune or zoom input (smoothTune or not) — a moving dial is never held.
-        const bool avPass = now - interactAt_ < 1000;
+        // ★ …and while the picture is still moving — the ease and the boost run until a zoom or tune has landed (Stuart,
+        //   2026-10-30: "noticable delay when operating the zoom controls"). WaterfallView's avPass, the same rule.
+        const bool avPass = now - interactAt_ < 1000 || boostOn || easing;
         const double holdWas = av_.hold;
         const double hold = vibewf::avHold(av_, vibewf::clockOwnMs(rowClock_.ivl, rowTarget), avPass);
         const double pAt = vibewf::clockArrive(rowClock_, id, now, boost, hold);

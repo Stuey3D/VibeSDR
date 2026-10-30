@@ -3403,6 +3403,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (reference-skin parity).
   const onCentreVfo = useCallback(() => {
     const c = client.current; if (!c) return;
+    markMove();   // a pan of the view — the waterfall eases it
     const v = c.getView();
     if (v.binBandwidth > 0) c.zoom(c.getStatus().frequency, v.binBandwidth);
   }, []);
@@ -9182,7 +9183,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bwZoomAcc = useRef({ base: 0, px: 0, t: 0 });
   const onBwDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
-    markInteract();
+    markMove();   // ★ the ZOOM drum — a zoom (it was left on markInteract 2026-10-30 by mistake: no boost, and the A/V hold)
     const s = c.getView(); // predicted view — getStatus() is one RTT stale mid-gesture
     if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
     const a = bwZoomAcc.current;
@@ -9226,8 +9227,9 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  serves ANY span, so half an octave is a real level — the same one view send a press, no extra data. A server that
    *  snaps to an octave ladder (UberSDR — see onZoomStep) keeps ×2, or a tap would snap straight back. */
   const zoomStepK = isLocal ? Math.SQRT2 : 2;
-  const onZoomIn  = useCallback(() => zoomBy(1 / zoomStepK), [zoomBy, zoomStepK]);
-  const onZoomOut = useCallback(() => zoomBy(zoomStepK),     [zoomBy, zoomStepK]);
+  // ★ markMove: a zoom from the menu is a ZOOM — the waterfall's boost and its no-hold window follow it (Stuart, 2026-10-30).
+  const onZoomIn  = useCallback(() => { markMove(); zoomBy(1 / zoomStepK); }, [zoomBy, zoomStepK, markMove]);
+  const onZoomOut = useCallback(() => { markMove(); zoomBy(zoomStepK); },     [zoomBy, zoomStepK, markMove]);
 
   // ── HiFi tuner keys (BRIEF-inputs §2) ───────────────────────────────────────
   // One press = one step. The VFO key reuses the MEDIA-SKIP path deliberately:
@@ -9381,15 +9383,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // floor / full-span cap, OWRX/Kiwi to their own limits), so a tiny bandwidth =
   // full zoom in and a huge one = full span out.
   const onZoomMax = useCallback(() => {       // MAX = zoom all the way in
+    markMove();
     const c = client.current; if (!c) return;
     const v = c.getView(); if (!v.centerHz) return;
     c.zoom(zoomAnchorHz(v), 1);
-  }, [zoomAnchorHz]);
+  }, [zoomAnchorHz, markMove]);
   const onZoomMin = useCallback(() => {       // MIN = full span out
+    markMove();
     const c = client.current; if (!c) return;
     const v = c.getView(); if (!v.centerHz) return;
     c.zoom(zoomAnchorHz(v), Number.MAX_SAFE_INTEGER);
-  }, [zoomAnchorHz]);
+  }, [zoomAnchorHz, markMove]);
 
   // Toggle: SET DEFAULT when this instance isn't the default, CLEAR when it is
   const [isDefault, setIsDefault] = useState(false);

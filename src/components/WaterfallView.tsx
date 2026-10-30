@@ -2055,7 +2055,11 @@ function WaterfallView({
       //     tune or zoom is in hand (SMOOTH_TUNE_TAIL_MS after the last input, smoothTune or not) — a held row is `hold`
       //     ms from the screen, so a moving dial would never show a fresh one (the web's lesson, 2026-08-10). Only WHEN a
       //     frame enters the clock moves: its ticks, rate, boost, fan and ease are untouched.
-      const avPass = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS;
+      // ★ …and for as long as the picture is still MOVING (Stuart, 2026-10-30, build 527: "noticable delay when operating
+      //   the zoom controls"): the fan's ease and the interaction boost run until a zoom or tune has landed, which can be
+      //   well after the input (the server's frames at the new view arrive, then the ease draws). Held then, the new
+      //   view waited for the sound. The hold comes back once it has landed (repeats carry the growth).
+      const avPass = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS || boostOn || easing;
       const holdWas = avSt.current.hold;
       const hold = avHold(avSt.current, clockOwnMs(rowClock.current.ivl, rowTarget), avPass);
       const pAt = clockArrive(rowClock.current, id, t, boost, hold);
