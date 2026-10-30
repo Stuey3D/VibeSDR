@@ -19,6 +19,16 @@
  *    is gone; its audio socket is exactly what the server already serves a phone with the screen locked (the spectrum
  *    is paused there too). Nothing here keeps a session alive that the server would otherwise end: no pings, no
  *    keep-alives. A "STILL LISTENING?" from the server pops the card, and only a TAP answers it.
+ * ★★★ EVERY SERVER TYPE (Stuart, 2026-10-30: "I thought we were looking to be able to do it on all servers"). Each kind
+ *     keeps its own audio path and only learns which voice it rides (dualMix.audioKindOf):
+ *   · VibeServer — the native pump, or the second voice's socket read here (auxOpen, proto 'vibe').
+ *   · UberSDR — its native engine (startAudioEngine), or the second voice's socket read here (proto 'uber': the
+ *     engine's own 21-byte header + Opus). Its screen's tunes go to whichever socket is playing (uberAuxSend).
+ *   · KiwiSDR / Web-888 / OpenWebRX — the screen's own ADAPTER, which decodes in JS: kept alive while its screen is away
+ *     (parkBackend) and ADOPTED by the screen coming back (takeParked) — one session, never two. Its PCM goes to the
+ *     main player or the second voice (extAudioOut.ts); a move is a change of route, no reconnect.
+ *   · FM-DX — MP3 decoded natively into the main player, and only there: it always takes the main player, and the
+ *     other side goes to the second voice (dualMix.attachSecond / moveToAux).
  * ★★★ THE SHARED-DIAL CONTRACT HOLDS: the background server is never sent a tune. Its socket says nothing at all
  *     unless its own screen is in front and a person tunes there (LocalAudioPlayer's own rules), or the listener taps
  *     "I'm still here".
@@ -33,9 +43,10 @@ import { crumb } from './crumbs';
 import {
   DUAL_OFF, attachSecond, beginPicking, bgSide, clampBalance, dualEligible, dualTargets, endSide, holds,
   markEnded, sameServer, sameRadio, swap, terminalWhy, transportFor, detachSecond, pickSameServer,
-  sideHasAudio, withSideMuted, DUAL_STALL_MS,
-  type DualCore, type DualOutput, type DualRouteLike, type DualSideCore, type Transport,
+  sideHasAudio, withSideMuted, DUAL_STALL_MS, audioKindOf, firstMovesToAux, normBase,
+  type AudioKind, type DualCore, type DualOutput, type DualRouteLike, type DualSideCore, type Transport,
 } from './dualMix';
+import type { BackendCallbacks, SDRBackend } from './SDRBackend';
 
 /** The native second voice (ios/VibeSDR/VibeDualAudio.swift, android …/VibeDualAudio.kt). Absent = an older binary
  *  or a platform without it (tvOS, web): the feature is not offered — no dead row. */
@@ -58,6 +69,13 @@ const Vibe = NativeModules.VibePowerModule as {
   startLocalAudio?: (host: string, port: number, initialTune: string, authSuffix: string, wsBase: string) => void;
   stopLocalAudio?: () => void;
   setInstanceName?: (name: string) => void;
+  // ★ The other kinds' main-player paths (dualMix.audioKindOf): UberSDR's engine, external PCM, FM-DX's MP3.
+  startAudioEngine?: (baseUrl: string, frequency: number, mode: string, uuid: string, password: string) => void;
+  stopAudioEngine?: () => void;
+  setAdminAuth?: (q: string) => void;
+  sendAudioCommand?: (json: string) => void;
+  stopExternalAudio?: () => void;
+  stopFmdxAudio?: () => void;
 } | undefined;
 
 /** Can this build play two servers at all? */
@@ -65,6 +83,11 @@ export const dualSupported: boolean = Platform.OS !== 'web' && !!Dual?.pushAuxOp
 
 /** Where a side's audio socket is — exactly the arguments LocalAudioPlayer gave the native pump. */
 export interface DualLink { host: string; port: number; suffix: string; wsBase: string }
+
+/** ★ The route a side's screen lives on: FM-DX has its own (TunerScreen); every other kind is the receiver screen. */
+export function dualScreenOf(params: Record<string, unknown> | null | undefined): 'SDR' | 'Tuner' {
+  return params?.serverType === 'fmdx' ? 'Tuner' : 'SDR';
+}
 
 export interface DualSide extends DualSideCore {
   name: string;
@@ -202,10 +225,14 @@ export function nativeOwnedBy(id: string | null): boolean { return !!id && nativ
 
 /* ─────────────────────────────── the second voice's socket ─────────────────────────────── */
 
-type AuxOpen = { id: string; url: string; hello: string | null };
+/** ★ `proto` — whose framing the socket speaks: 'vibe' (a VibeServer's /ws/audio: formats 0–4) or 'uber' (UberSDR's
+ *  /ws?…&format=opus: a 21-byte header — rate at 8, channels at 12 — then one Opus packet, the native engine's own
+ *  handlePacket). Absent = 'vibe'. */
+type AuxProto = 'vibe' | 'uber';
+type AuxOpen = { id: string; url: string; hello: string | null; proto?: AuxProto };
 let aux: {
   id: string; url: string; ws: WebSocket | null; wanted: boolean; terminal: boolean; retries: number;
-  lastFrameAt: number; openedAt: number; started: boolean;
+  lastFrameAt: number; openedAt: number; started: boolean; proto: AuxProto;
   retryTimer: ReturnType<typeof setTimeout> | null; dog: ReturnType<typeof setInterval> | null;
 } | null = null;
 let auxOnBytes: ((n: number) => void) | null = null;
@@ -222,7 +249,7 @@ export function auxOpen(o: AuxOpen, force = false) {
   if (!force && auxIsOpenFor(o.id, o.url)) return;
   auxClose();
   aux = { id: o.id, url: o.url, ws: null, wanted: true, terminal: false, retries: 0, lastFrameAt: 0,
-          openedAt: Date.now(), started: false, retryTimer: null, dog: null };
+          openedAt: Date.now(), started: false, proto: o.proto ?? 'vibe', retryTimer: null, dog: null };
   auxConnect(o.hello);
   // ★ A half-open socket never says so: no frame for 8 s on an open socket = dead, reopen (as the native pump's
   //   revive does). Checked every 3 s, and only while the voice exists.
@@ -289,8 +316,29 @@ function auxRetry() {
   }, delay);
 }
 
+/** ★ A reopen must reach the dial the listener is on now: UberSDR tunes its own channel from the URL (its native engine
+ *  puts `frequency` and `mode` on every reopen — VibePowerModule.audioWsURL), so the URL follows each tune. Nothing is
+ *  sent: this only changes where the NEXT open goes. */
+export function auxSetUrl(id: string, url: string) {
+  if (aux && aux.id === id) aux.url = url;
+}
+
+/** UberSDR's audio frame (VibePowerModule.handlePacket, verbatim): 21-byte header, then Opus. */
+const UBER_HEADER = 21;
+function onUberFrame(buf: ArrayBuffer, a: NonNullable<typeof aux>) {
+  if (buf.byteLength <= UBER_HEADER + 2) return;
+  const dv = new DataView(buf);
+  const sr = dv.getUint32(8, true), ch = dv.getUint8(12);
+  if (sr < 8000 || sr > 96000 || (ch !== 1 && ch !== 2)) return;
+  a.lastFrameAt = Date.now();
+  a.retries = 0;
+  if (!a.started) { Dual?.startAux?.(); a.started = true; }
+  Dual?.pushAuxOpus?.(bytesToBase64(new Uint8Array(buf, UBER_HEADER)), sr, ch);
+}
+
 function onAuxFrame(buf: ArrayBuffer, a: NonNullable<typeof aux>) {
   auxOnBytes?.(buf.byteLength);
+  if (a.proto === 'uber') { onUberFrame(buf, a); return; }
   if (buf.byteLength <= 6) return;
   a.lastFrameAt = Date.now();
   a.retries = 0;
@@ -315,7 +363,15 @@ function onAuxFrame(buf: ArrayBuffer, a: NonNullable<typeof aux>) {
   Dual?.pushAuxPcm?.(bytesToBase64(pcm), rate, ch === 2 ? 2 : 1);
 }
 
+/** ★ The screen in front reads its own audio socket's text from here while it is on the second voice (UberSDR's
+ *  dsp_filters / dsp_status — what VibeWsText carries from the native engine). */
+let auxTextSink: { id: string; f: (text: string) => void } | null = null;
+export function setAuxTextSink(id: string | null, f: ((text: string) => void) | null) {
+  auxTextSink = id && f ? { id, f } : (auxTextSink && (!id || auxTextSink.id === id) ? null : auxTextSink);
+}
+
 function onAuxText(id: string, text: string, a: NonNullable<typeof aux>) {
+  if (auxTextSink && auxTextSink.id === id) { try { auxTextSink.f(text); } catch { /* the screen's problem */ } }
   let msg: { type?: string; secs?: number } | null = null;
   try { msg = JSON.parse(text); } catch { return; }
   const type = String(msg?.type ?? '');
@@ -341,6 +397,132 @@ export function auxClose(id?: string) {
   try { a.ws?.close(); } catch { /* already closed */ }
   aux = null;
   if (a.started) Dual?.stopAux?.();
+}
+
+/* ──────────────────── KIWI / WEB-888 / OPENWEBRX: the adapter outlives its screen ──────────────────── */
+
+/**
+ * ★★★ THE ADAPTER IS THE SESSION. Kiwi and OpenWebRX decode their audio in the same JavaScript adapter that draws the
+ *     waterfall, so a background Kiwi is simply its adapter KEPT: the screen leaving hands it here instead of destroying
+ *     it (parkBackend), its waterfall is paused (Kiwi `wf_speed=0`; OpenWebRX skips the FFT), its PCM keeps going to its
+ *     voice, and the screen coming back ADOPTS it (takeParked) — the same sockets, the same session, no second slot.
+ *     Kiwi counts listeners per connection; a reopen for the same person would be a second one.
+ *  ★ Every adapter a side has — in front or parked — is noted here by its side id, so the pairing can move its audio
+ *    between voices (moveToNative / moveToAux) whichever screen is up.
+ */
+const backends = new Map<string, SDRBackend>();
+const parked = new Set<string>();
+
+/** A screen created (or adopted) side `id`'s adapter: its audio rides the voice the pairing gives that side. */
+export function noteBackend(id: string | null, b: SDRBackend | null) {
+  if (!id || !b) return;
+  backends.set(id, b);
+  b.audioOut?.setRoute(transportFor(state, id));
+}
+
+/** The screen of side `id` is going and the pairing keeps it playing (dualHolds): keep its adapter. Returns true when
+ *  it was kept — the caller must then NOT destroy it. Only an adapter that can be adopted (rebindCallbacks) is kept. */
+export function parkBackend(id: string | null, b: SDRBackend | null): boolean {
+  if (!id || !b || !b.rebindCallbacks || !holds(state, id)) return false;
+  backends.set(id, b);
+  parked.add(id);
+  try { b.pauseSpectrum(); } catch { /* the waterfall is not ours to save */ }
+  // ★ From here on it reports to the pairing: an ending or a lost connection is the card's to say, and NOTHING here
+  //   reconnects it — a receiver that ended the session (a time limit, a kick, inactivity) stays ended.
+  b.rebindCallbacks(backgroundCallbacks(id));
+  crumb(`dual park ${id.slice(0, 8)} (${b.kind})`);
+  return true;
+}
+
+/** The screen coming back to side `id` takes its running adapter (and must rebind it), or null to build its own. */
+export function takeParked(id: string | null): SDRBackend | null {
+  if (!id || !parked.has(id)) return null;
+  parked.delete(id);
+  const b = backends.get(id) ?? null;
+  if (b) { try { b.resumeSpectrum(); } catch { /* it will resume on its own next frame */ } }
+  return b;
+}
+
+/** Side `id` is over: a parked adapter is destroyed (its own stop closes whichever voice it was on). */
+function dropBackend(id: string) {
+  const b = backends.get(id);
+  backends.delete(id);
+  if (b && parked.delete(id)) { try { b.destroy(); } catch { /* already gone */ } }
+}
+
+/** What a background adapter's server says, in the card's words — never reconnecting, never answering for anybody. */
+function backgroundCallbacks(id: string): BackendCallbacks {
+  const lost = () => serverEnded(id, 'the connection was lost');
+  return {
+    onSpectrum: () => {}, onStatus: () => {}, onConnect: () => {},
+    onDisconnect: lost,
+    onServerLost: lost,
+    onServerBusy: () => serverEnded(id, 'the radio is busy'),
+    onError: (m: string) => serverEnded(id, endedWhy(m)),
+  } as unknown as BackendCallbacks;
+}
+
+/** A receiver's own refusal, shortened for the card (the screen shows the whole sentence when it is in front). */
+export function endedWhy(msg: string): string {
+  const m = String(msg ?? '');
+  if (/allowance|time limit|per day|daily|expired/i.test(m)) return 'its time limit was reached';
+  if (/inactiv|idle/i.test(m)) return 'nobody answered "still listening?"';
+  if (/busy|full|no free|all .*channels/i.test(m)) return 'the radio is busy';
+  if (/kick|ban|block|refus/i.test(m)) return 'the owner ended the session';
+  return 'the server ended the session';
+}
+
+/* ─────────────────────────────── UBERSDR: its audio socket on either voice ─────────────────────────────── */
+
+/** What reopens an UberSDR side's audio on either voice — the same session (`uuid` = its side id), so the server
+ *  re-affirms the slot it registered (POST /connection) rather than meeting a stranger. Kept per side from its screen. */
+export interface UberLink { baseUrl: string; uuid: string; password: string; adminAuth: string;
+                            freq: number; mode: string; bwLow?: number; bwHigh?: number }
+const uberLinks = new Map<string, UberLink>();
+export function noteUberLink(id: string, l: UberLink) {
+  const prev = uberLinks.get(id);
+  uberLinks.set(id, { ...l, bwLow: l.bwLow ?? prev?.bwLow, bwHigh: l.bwHigh ?? prev?.bwHigh });
+  if (uberLinks.size > 8) uberLinks.delete(uberLinks.keys().next().value as string);
+}
+
+/** UberSDR's audio socket URL — the native engine's audioWsURL, one rule two readers (VibePowerModule.swift /
+ *  VibeStreamService.kt): the session, Opus, the dial it should open on, the filter when it is within ±12 kHz (out of
+ *  range the server REFUSES the socket), our name, the bypass password, the owner's credential. */
+export function uberAudioUrl(l: UberLink, client: string): string {
+  const base = l.baseUrl.trim().replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/+$/, '');
+  let q = `/ws?user_session_id=${encodeURIComponent(l.uuid)}&format=opus&version=2`;
+  if (l.freq > 0) q += `&frequency=${Math.round(l.freq)}&mode=${encodeURIComponent(l.mode)}`;
+  if (l.bwLow != null && l.bwHigh != null && Math.abs(l.bwLow) <= 12_000 && Math.abs(l.bwHigh) <= 12_000) {
+    q += `&bandwidthLow=${Math.round(l.bwLow)}&bandwidthHigh=${Math.round(l.bwHigh)}`;
+  }
+  q += `&client=${encodeURIComponent(client)}`;
+  if (l.password) q += `&password=${encodeURIComponent(l.password)}`;
+  const adm = l.adminAuth ? (l.adminAuth.startsWith('&') ? l.adminAuth : `&${l.adminAuth}`) : '';
+  return base + q + adm;
+}
+let uberClient = 'VibeSDR';
+/** The User-Agent the app names itself with (constants/version USER_AGENT), handed in by the player. */
+export function setUberClientName(c: string) { if (c) uberClient = c; }
+
+/**
+ * ★★★ AN UBERSDR SCREEN'S AUDIO COMMANDS GO TO THE SOCKET THAT IS PLAYING IT. On the main player that is the native
+ *     engine (UberSDRWsClient._routeTune, untouched); on the second voice it is the socket read here. Returns true when it
+ *     went to the second voice (the caller then sends nothing natively). A tune or a filter also moves the URL a reopen
+ *     uses — the engine's own rule (the reopen tunes the channel from the URL).
+ */
+export function uberAuxSend(id: string | null, obj: Record<string, unknown>): boolean {
+  if (!id || !aux || aux.id !== id || aux.proto !== 'uber') return false;
+  const l = uberLinks.get(id);
+  if (l && obj.type === 'tune') {
+    if (typeof obj.frequency === 'number') l.freq = obj.frequency;
+    if (typeof obj.mode === 'string') l.mode = obj.mode;
+    if (typeof obj.bandwidthLow === 'number' && typeof obj.bandwidthHigh === 'number') {
+      l.bwLow = obj.bandwidthLow; l.bwHigh = obj.bandwidthHigh;
+    }
+    auxSetUrl(id, uberAudioUrl(l, uberClient));
+  }
+  auxSend(id, JSON.stringify(obj));
+  return true;
 }
 
 /* ─────────────────────────────── the background server talking ─────────────────────────────── */
@@ -411,8 +593,9 @@ function watchLive(on: boolean) {
         for (const sd of state.sides) {
           let ok: boolean;
           if (sd.transport === 'aux') {
-            const a = aux;
-            ok = !!a && a.id === sd.id && a.lastFrameAt > 0 && now - a.lastFrameAt < DUAL_STALL_MS;
+            // ★ The second voice's feed: its socket's last frame, or a Kiwi / OpenWebRX adapter's last buffer.
+            const last = auxLastFrame(sd.id);
+            ok = last > 0 && now - last < DUAL_STALL_MS;
           } else {
             // ★ An older binary without the age: never judged stopped (as before).
             const age = Number(lv?.nativeAge);
@@ -428,6 +611,14 @@ function watchLive(on: boolean) {
     liveTimer = null;
     live.clear();
   }
+}
+
+/** When side `id`'s second-voice feed last delivered (ms epoch; 0 = never / not on it). */
+function auxLastFrame(id: string): number {
+  const a = aux;
+  if (a && a.id === id) return a.lastFrameAt;
+  const out = backends.get(id)?.audioOut;
+  return out && out.current === 'aux' ? out.lastPushAt : 0;
 }
 
 /** Tell the two native voices where each server is now. On a pairing change, a mute, or a stream stopping or coming
@@ -537,7 +728,8 @@ export function returnParams(p: Record<string, unknown>): Record<string, unknown
   return out;
 }
 
-/** May this screen offer "Listen to a 2nd server"? Only on a VibeServer, only with no pairing yet. ★ VFO B on does NOT
+/** May this screen offer "Listen to a 2nd server"? On every network receiver (dualMix.audioKindOf), only with no
+ *  pairing yet. ★ VFO B on does NOT
  *  take the row away — it says it will close B (dualMix.secondServerHint), and the screen closes it first. */
 export function canListenSecond(params: DualRouteLike): boolean {
   return dualSupported && state.phase === 'off' && dualEligible(params);
@@ -548,8 +740,17 @@ export function canListenSecond(params: DualRouteLike): boolean {
  * to the server list exactly as ‹ Back to server list does.
  */
 export function listenSecond(side: Omit<DualSide, 'transport' | 'ended' | 'asking'>, note: string | null = null) {
-  if (!links.has(side.id)) return;   // ★ its audio never started — nothing to keep playing
+  if (!audioStarted(side.id, side.kind ?? 'vibe')) return;   // ★ its audio never started — nothing to keep playing
   set({ ...state, ...beginPicking(state, { ...side, transport: 'native', ended: null, asking: null }), note });
+}
+
+/** Has side `id` any audio running to keep? Per kind: a VibeServer's socket was opened (links), an UberSDR's engine
+ *  was started (uberLinks), a Kiwi / OpenWebRX adapter exists, an FM-DX screen always starts its own. */
+function audioStarted(id: string, kind: AudioKind): boolean {
+  if (kind === 'vibe') return links.has(id);
+  if (kind === 'uber') return uberLinks.has(id);
+  if (kind === 'ext') return backends.has(id);
+  return true;
 }
 
 /**
@@ -579,10 +780,18 @@ export function roleOnMount(params: Record<string, unknown> & DualRouteLike & { 
     return null;
   }
   const id = newId();
-  set({ ...state, ...attachSecond(state, {
+  const kind = audioKindOf(params) ?? 'vibe';
+  const next = attachSecond(state, {
     id, transport: 'aux', ended: null, name: String(params.instanceName ?? ''), params: returnParams(params),
-    freqHz: 0, mode: '', endsAt: null, soft: false, asking: null,
-  }) }, true);
+    freqHz: 0, mode: '', endsAt: null, soft: false, asking: null, kind,
+  });
+  // ★ Two that both need the main player (two FM-DX servers — dualMix.canPair): the pairing cannot take this one.
+  if (next === state) { abandon(true); return null; }
+  // ★★ This server needs the main player (FM-DX): server 1 moves to the second voice FIRST — before this screen's own
+  //    audio starts on the main player and would cut it.
+  const moved = firstMovesToAux(state, next);
+  set({ ...state, ...next }, true);
+  if (moved) moveToAux(moved);
   return id;
 }
 
@@ -660,14 +869,34 @@ export function swapToBackground(): Record<string, unknown> | null {
   return { ...bg.params, dualSide: bg.id };
 }
 
+function kindOf(id: string): AudioKind {
+  return state.sides.find((x) => x.id === id)?.kind ?? 'vibe';
+}
+
+/** Stop the main player for a side of this kind — each kind's own stop (only the claimant may: releaseNative). */
+function stopNativeFor(kind: AudioKind) {
+  if (kind === 'uber') Vibe?.stopAudioEngine?.();
+  else if (kind === 'ext') Vibe?.stopExternalAudio?.();
+  else if (kind === 'fmdx') Vibe?.stopFmdxAudio?.();
+  else Vibe?.stopLocalAudio?.();
+}
+
+/** Stop side `id`'s audio on `transport` — and a parked Kiwi / OpenWebRX adapter with it (its session ends). */
+function stopSideAudio(id: string, transport: Transport, kind: AudioKind) {
+  if (transport === 'aux') auxClose(id);
+  else if (releaseNative(id) && !(kind === 'ext' && parked.has(id))) stopNativeFor(kind);
+  dropBackend(id);
+}
+
 /** End a side now: stop its voice; the other plays on centred (dualMix.endSide). */
 function endSideNow(id: string) {
+  const kind = kindOf(id);
   const { st, fx } = endSide(state, id);
-  if (fx.stop) {
-    if (fx.stop.transport === 'aux') auxClose(fx.stop.id);
-    else if (releaseNative(fx.stop.id)) Vibe?.stopLocalAudio?.();
-  }
+  if (fx.stop) stopSideAudio(fx.stop.id, fx.stop.transport, kind);
   if (fx.moveToNative) moveToNative(fx.moveToNative);
+  // ★ The survivor IN FRONT on the second voice: a VibeServer's player moves itself (it reads transportFor); every
+  //   other kind's audio is not its screen's to move, so it is moved here.
+  if (fx.frontToNative && kindOf(fx.frontToNative) !== 'vibe') moveToNative(fx.frontToNative);
   const wasOn = state.phase !== 'off';
   const sur = state.sides.find((x) => x.id !== id && !x.ended);
   set({ ...state, ...st });
@@ -680,12 +909,70 @@ function endSideNow(id: string) {
  */
 function moveToNative(id: string) {
   const s = state.sides.find((x) => x.id === id);
-  const l = links.get(id);
+  const kind = s?.kind ?? 'vibe';
+  if (kind === 'ext') {
+    // ★ A Kiwi / OpenWebRX adapter: the same socket and session — only where its PCM goes changes. No gap to speak of.
+    const b = backends.get(id);
+    if (!s || !b?.audioOut) return;
+    claimNative(id);
+    b.audioOut.setRoute('native');
+    Vibe?.setInstanceName?.(s.name);
+    return;
+  }
   auxClose(id);
-  if (!s || !l) return;
+  if (!s) return;
+  if (kind === 'uber') {
+    // ★ The same session on the native engine, on the dial it was left on (the URL carries it — no `tune` is sent).
+    const u = uberLinks.get(id);
+    if (!u) return;
+    claimNative(id);
+    Vibe?.setAdminAuth?.(u.adminAuth);
+    Vibe?.startAudioEngine?.(u.baseUrl, u.freq, u.mode, u.uuid, u.password);
+    Vibe?.setInstanceName?.(s.name);
+    return;
+  }
+  const l = links.get(id);
+  if (!l) return;
   claimNative(id);
   Vibe?.startLocalAudio?.(l.host, l.port, '', l.suffix, l.wsBase);
   Vibe?.setInstanceName?.(s.name);
+}
+
+/**
+ * ★★ The other way: server 1 leaves the main player for the second voice, because server 2 can only play there
+ *    (FM-DX — dualMix.attachSecond). Called BEFORE server 2's own audio starts. The same session every time:
+ *  · Kiwi / OpenWebRX — a change of route, nothing reconnects;
+ *  · VibeServer — the second voice's socket to the same /ws/audio with the same session (no hello: the server kept the
+ *    dial — THE SHARED-DIAL CONTRACT), then the pump stops; a short gap, once;
+ *  · UberSDR — the second voice's socket to the same session on the dial it is on, then the engine stops.
+ */
+export function moveToAux(id: string) {
+  const s = state.sides.find((x) => x.id === id);
+  if (!s) return;
+  const kind = s.kind ?? 'vibe';
+  if (kind === 'ext') {
+    const b = backends.get(id);
+    releaseNative(id);
+    b?.audioOut?.setRoute('aux');   // stops the main player's feed, the next buffer starts the second voice
+    return;
+  }
+  if (kind === 'uber') {
+    const u = uberLinks.get(id);
+    if (releaseNative(id)) Vibe?.stopAudioEngine?.();
+    if (u) auxOpen({ id, url: uberAudioUrl(u, uberClient), hello: null, proto: 'uber' }, true);
+    return;
+  }
+  if (kind === 'vibe') {
+    const l = links.get(id);
+    if (releaseNative(id)) Vibe?.stopLocalAudio?.();
+    if (l) auxOpen({ id, url: vibeAuxUrl(l), hello: null, proto: 'vibe' }, true);
+  }
+}
+
+/** A VibeServer's second-voice socket — LocalAudioPlayer's own aux URL (`channels=1`: each server owns ONE ear). */
+export function vibeAuxUrl(l: DualLink): string {
+  const root = (l.wsBase || `ws://${l.host}:${l.port}`).replace(/\/+$/, '');
+  return `${root}/ws/audio?${(l.suffix + '&channels=1').replace(/^&/, '')}`;
 }
 
 /** "Stop listening to <the background server>" in the server chip's menu. */
@@ -729,10 +1016,7 @@ export function returnToSolo(): Record<string, unknown> | null {
 /** Stop everything the pairing holds (the banner's Stop, or somewhere a second server cannot go). */
 export function abandon(quiet = false) {
   if (state.phase === 'off') return;
-  for (const s of state.sides) {
-    if (s.transport === 'aux') auxClose(s.id);
-    else if (releaseNative(s.id)) Vibe?.stopLocalAudio?.();
-  }
+  for (const s of state.sides) stopSideAudio(s.id, s.transport, s.kind ?? 'vibe');
   set({ ...(DUAL_OFF as DualCore<DualSide>), output: state.output, balance: state.balance }, quiet);
 }
 
@@ -742,7 +1026,7 @@ export function abandon(quiet = false) {
 export function isSolo(params: DualRouteLike & { baseUrl?: string }): boolean {
   const s = soloSide();
   if (!s) return false;
-  crumb(`dual pick ${params.localHost ?? params.baseUrl ?? '?'}:${params.localPort ?? ''} vs solo ${
+  crumb(`dual pick ${params.localHost ?? (params.baseUrl ? normBase(params.baseUrl) : '?')}:${params.localPort ?? ''} vs solo ${
     (s.params as { localHost?: string }).localHost ?? (s.params as { baseUrl?: string }).baseUrl ?? '?'}:${
     (s.params as { localPort?: number }).localPort ?? ''}${s.radioKey ?? ''}`);
   return pickSameServer({ params: s.params as DualRouteLike, radioKey: s.radioKey ?? '' }, params) === 'back';
@@ -755,6 +1039,8 @@ export function answerStillHere(id: string) {
   if (!s) return;
   const ping = JSON.stringify({ type: 'ping' });
   if (s.transport === 'aux') auxSend(id, ping);
+  // ★ UberSDR: the same `ping` resets its session_timeout (their idle-detector.js) — sent here only on a person's tap.
+  else if (s.kind === 'uber') Vibe?.sendAudioCommand?.(ping);
   // ★ sendLocalText, NOT sendLocalTune: the pump REMEMBERS the last tune to say again on a reopen, and a ping must not
   //   take its place (VibePowerModule.swift / VibeStreamService.kt).
   else (NativeModules.VibePowerModule as { sendLocalText?: (j: string) => void })?.sendLocalText?.(ping);
