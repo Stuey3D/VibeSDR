@@ -10,6 +10,9 @@
  * ★ Pure: no DOM, so scripts/test-web-vfo-ab.mjs can run it under plain node.
  */
 
+// ★★★ The A ⟷ B balance is the two-server rule — imported, one copy (src/services/dualMix.ts; the server mirrors it in vibe_watch.h).
+import { clampBalance } from '../../../src/services/dualMix';
+
 export interface WatchChan {
   id: number; freq: number; mode: string; bw: number;
   sqlOn: boolean; sql: number; open: boolean; since: number; lvl: number; parked: boolean;
@@ -24,6 +27,8 @@ export interface WatchState {
   follow: boolean;
   /** ★★ Decoders run on either VFO ("vfo":"B" on the decoder socket). Absent (a round-3 server) = A only. */
   decB: boolean;
+  /** ★★★ The listener's A ⟷ B balance as the server holds it (−1 all A … +1 all B); null from an older server. */
+  bal: number | null;
   chans: WatchChan[]; refused?: string; note?: string;
 }
 
@@ -39,7 +44,8 @@ export function watchSanitise(m: any): WatchState | null {
   })).filter((c: WatchChan) => c.freq > 0) : [];
   return {
     max: num(m.max, -1), lo: num(m.lo), hi: num(m.hi), stereo: m.stereo !== false, monoOut: m.monoOut === true,
-    muteA: m.muteA === true, follow: m.follow === true, decB: m.decB === true, chans,
+    muteA: m.muteA === true, follow: m.follow === true, decB: m.decB === true,
+    bal: typeof m.bal === 'number' && Number.isFinite(m.bal) ? clampBalance(m.bal) : null, chans,
     refused: typeof m.refused === 'string' ? m.refused : undefined,
     note: typeof m.note === 'string' && m.note ? m.note.slice(0, 200) : undefined,
   };

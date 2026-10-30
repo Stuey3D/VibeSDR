@@ -374,6 +374,8 @@ const NFM_VOICE_KEY = 'lsv_nfm_voice';
 const BINAURAL_KEY = 'lsv_binaural';
 /** ★★ V12 VFO A/B's STEREO switch (lower VFO left / higher right) — remembered per device like binaural; absent = ON. */
 const VFO_STEREO_KEY = 'lsv_vfo_stereo';
+/** ★★★ The VFO A ⟷ B BALANCE, remembered per device like VFO STEREO (−1 all A … 0 even … +1 all B). */
+const VFO_BALANCE_KEY = 'lsv_vfo_balance';
 const SQL_AUTO_MARGIN_KEY = 'lsv_squelch_auto_margin';
 
 /** The server's health levels arrive as plain numbers off the wire (ServerHealth) and the pill's own
@@ -3212,7 +3214,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
   const abClient = useCallback(() => client.current as unknown as {
     abSetOn?: (on: boolean) => boolean; abSelect?: (v: VfoId) => void; abSetStereo?: (on: boolean) => void;
-    abSetMonoOut?: (on: boolean) => void; abInfo?: () => VfoABInfo;
+    abSetMonoOut?: (on: boolean) => void; abInfo?: () => VfoABInfo; abSetBalance?: (b: number) => void;
     // ★★ Round 3: a named VFO's squelch, its mute, and its own level (VibeServerWsClient)
     setSquelchVfo?: (v: VfoId, db: number) => void; abSetMute?: (v: VfoId, on: boolean) => void;
     channelLevelVfoDb?: (v: VfoId, maxAgeMs?: number) => number } | null, []);
@@ -3221,10 +3223,34 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem(VFO_STEREO_KEY, on ? '1' : '0').catch(() => {});
     abClient()?.abSetStereo?.(on);
   }, [abClient]);
+  /* ★★★ THE A ⟷ B BALANCE (Stuart, 2026-10-30: "we need a way to balance the A/B on the same server in the same way as
+   *  we do the dual server audio to compensate for a louder broadcast station and an SSB contact"). The two-server rule
+   *  (dualMix.ts balanceGains), applied by the SERVER to its A/B mix (vibe_watch.h PanMixer::setBalance) — a level before
+   *  any stereo or mono placement, so it works with VFO STEREO off and on a mono output too. Remembered per device; held
+   *  by the client and sent with B's `on`, re-sent on every hwinfo (a reconnect). The row is in the Audio sheet, right
+   *  under the two VFO squelch rows, only on a server that takes it (hwinfo watchBal). */
+  const [vfoBalance, setVfoBalanceState] = useState(0);
+  const vfoBalanceRef = useRef(0);
+  useEffect(() => {
+    AsyncStorage.getItem(VFO_BALANCE_KEY).then((v) => {
+      const b = Number(v);
+      if (v != null && Number.isFinite(b) && b !== 0) {
+        vfoBalanceRef.current = Math.max(-1, Math.min(1, b)); setVfoBalanceState(vfoBalanceRef.current);
+        abClient()?.abSetBalance?.(vfoBalanceRef.current);
+      }
+    }).catch(() => {});
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  const onVfoBalance = useCallback((b: number) => {
+    const v = Math.round(Math.max(-1, Math.min(1, Number.isFinite(b) ? b : 0)) * 100) / 100;
+    vfoBalanceRef.current = v; setVfoBalanceState(v);
+    AsyncStorage.setItem(VFO_BALANCE_KEY, String(v)).catch(() => {});
+    abClient()?.abSetBalance?.(v);
+  }, [abClient]);
   /** The tuning menu's toggle. */
   const onVfoAB = useCallback((on: boolean) => {
     const c = abClient();
     c?.abSetStereo?.(vfoStereoRef.current);
+    c?.abSetBalance?.(vfoBalanceRef.current);   // ★★★ rides along with B's `on` (VfoABCore msgOn)
     // ★ TODO(native): no route channel count reaches JS today (VibePowerModule logs the route, never emits it), so the
     //   app cannot yet tell a mono speaker from headphones — the hint in the audio menu says what a mono output does,
     //   and abSetMonoOut(true) is the hook a future `VibeOutputMono` event calls.
@@ -6658,7 +6684,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       onWatchOffered: (n: number) => {
         if (destroyed.current) return;
         setAbOffered(n);
-        if (n > 0) (client.current as unknown as { abSetStereo?: (on: boolean) => void } | null)?.abSetStereo?.(vfoStereoRef.current);
+        if (n > 0) {
+          const c = client.current as unknown as { abSetStereo?: (on: boolean) => void; abSetBalance?: (b: number) => void } | null;
+          c?.abSetStereo?.(vfoStereoRef.current);
+          c?.abSetBalance?.(vfoBalanceRef.current);   // ★★★ the balance too (sent only while B is on, to a server that takes it)
+        }
       },
       onWatch: (info: VfoABInfo) => { if (!destroyed.current) onWatchInfo(info); },
       /** ★ The server's answer to a raw IQ request: the address or the pairing code, or why not. */
@@ -12558,7 +12588,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //    screen"). Verified against FreqModal (the row above CANCEL / TUNE, VibeServer only), TunerKeys, DrumWheel and
     //    AudioSheet (VFO STEREO) — the whole card, not just the new sentence (2026-10-27).
     { id: 'freq', title: 'Set the frequency, your bookmarks, and VFO A/B',
-      body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears); VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
+      body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears), and under them a BALANCE between A and B to turn the louder one down; VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
       body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs, opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, SSTV, APRS) and Utility or Broadcast (TIME, ADV RDS). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
@@ -14711,6 +14741,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           muteA: !!abInfo?.muteA, muteB: !!abInfo?.muteB, onMute: onAbMute,
           decA: !!abDecTag('A'), decB: !!abDecTag('B'),
           onDragB: onSquelchDragB, autoB: sqlBAuto, onAutoB: setSquelchAutoB, autoOkB: sqlAutoOk,
+          // ★★★ the A ⟷ B balance — only on a server that takes it (hwinfo watchBal): never a dead row
+          balance: vfoBalance, onBalance: abInfo?.balOffered ? onVfoBalance : undefined,
         } : undefined}
         deemph={hwDeemph}   onDeemph={icom ? undefined : askWrap(onHwDeemph)}   /* ★ an Icom has no WFM chain to de-emphasise */
         stereo={hwStereo}   onStereo={icom ? undefined : askWrap(onHwStereo)}

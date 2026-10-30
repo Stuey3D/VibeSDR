@@ -12,6 +12,7 @@ import { NavCtx, NavRow, NavSlot, RowCtx, usePanelNav, useNavButton, useNavRange
 import SectionIcon, { type SectionIconName } from './SectionIcon';
 import { meterText, useMeters, type MeterBus } from './ControlsBar';
 import { isKiwiProtocol } from '../services/sdrTypes';
+import { balanceGains } from '../services/dualMix';
 import {
   usePopupStyles, usePopupTheme, usePopupSurface, usePopupFrame, onMetal, engraveText,
   PopupKey, PopupFader, PopupPlate, PopupHandle, sheetCap, PopupScrim, PopupWindow, type PopupTokens,
@@ -373,6 +374,46 @@ function VfoSqlLabel({ vfo, colour, muted, onMute, dec }: { vfo: 'A' | 'B'; colo
   );
 }
 
+/** ★★★ THE A ⟷ B BALANCE ROW (Stuart, 2026-10-30: "we need a way to balance the A/B on the same server in the same way
+ *  as we do the dual server audio to compensate for a louder broadcast station and an SSB contact … simply put it in the
+ *  audio menu next to the squelch controls for both VFO's"). The two-server balance's rule (dualMix.ts balanceGains),
+ *  applied by the server: the middle is both at their own level; slide towards a VFO and the OTHER is turned down —
+ *  nothing is ever turned up; all the way = that VFO alone, in both ears. Stereo, VFO STEREO off and mono alike.
+ *  ★ Keyboard / controller: the slider is a value stop as every slider in this sheet is (PanelNav's one scheme: Enter
+ *    to adjust, left / right a tenth at a time, Enter or Back to finish); EVEN beside it centres in one press. */
+function VfoBalanceRow({ balance, onBalance, colourA, colourB }: {
+  balance: number; onBalance: (b: number) => void; colourA: string; colourB: string;
+}) {
+  const st = usePopupStyles(makeSt);
+  const pt = usePopupTheme();
+  const C = audioC(pt);
+  const bg = balanceGains(balance), g = { a: bg.s1, b: bg.s2 };   // ★ the two-server rule: s1 = A, s2 = B
+  const db = (x: number) => `${Math.round(20 * Math.log10(x))} dB`;
+  const val = g.a === 1 && g.b === 1 ? 'EVEN' : g.a === 0 ? 'B only' : g.b === 0 ? 'A only'
+            : g.a < 1 ? `A ${db(g.a)}` : `B ${db(g.b)}`;
+  return (
+    <View style={st.bwRow}>
+      <View style={[st.sqlLabel, { alignItems: 'flex-start' }]}>
+        <Text style={st.bwLabel}>BALANCE</Text>
+        <Btn label="EVEN" active={false} pip={false} onPress={() => onBalance(0)}
+             style={{ minWidth: 0, paddingHorizontal: 6, marginTop: 4 }} />
+      </View>
+      <Text style={[st.bwLabel, { color: colourA, fontWeight: '700', width: 14, textAlign: 'center' }]}
+            accessibilityLabel="VFO A">A</Text>
+      <NavSlider style={st.bwSlider}
+        minimumValue={-1} maximumValue={1}
+        value={balance}
+        onValueChange={(v: number) => onBalance(v)}
+        accessibilityLabel={`VFO A B balance, ${val}`}
+        minimumTrackTintColor={g.a < 1 || g.b < 1 ? pt.gold.fill : C.track}
+        maximumTrackTintColor={C.track} thumbTintColor={pt.gold.thumb} />
+      <Text style={[st.bwLabel, { color: colourB, fontWeight: '700', width: 14, textAlign: 'center' }]}
+            accessibilityLabel="VFO B">B</Text>
+      <Text style={st.bwVal}>{val}</Text>
+    </View>
+  );
+}
+
 // ── Helpers (local copies) ────────────────────────────────────────────────────
 function fmtRecTime(s: number) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
@@ -611,6 +652,9 @@ export interface AudioSheetProps {
     decA?: boolean; decB?: boolean;
     onMute: (v: 'A' | 'B', on: boolean) => void;
     onDragB: (v: number) => void; autoB: boolean; onAutoB: (on: boolean) => void; autoOkB: boolean;
+    /** ★★★ The A ⟷ B BALANCE (−1 all A … +1 all B) — a row right under the two squelch rows. `onBalance` absent = this
+     *  server does not take it (hwinfo watchBal): no row, never a dead one. */
+    balance?: number; onBalance?: (b: number) => void;
   };
 
   /** ★★ FM DE-EMPHASIS AND WFM STEREO LIVE HERE, NOT IN THE HARDWARE PANEL. They are not
@@ -962,6 +1006,13 @@ export default function AudioSheet({
                               margin={sqlAutoMargin} onMargin={onSqlAutoMargin}
                               autoOk={vfoRows.autoOkB} />
             </View>
+            {vfoRows.onBalance && (<>
+              <VfoBalanceRow balance={vfoRows.balance ?? 0} onBalance={vfoRows.onBalance}
+                             colourA={vfoRows.colourA} colourB={vfoRows.colourB} />
+              <Text style={st.iqNote}>
+                Turn the louder VFO down — a broadcast station against an SSB contact. Slide towards the one you want to hear more of: the other is turned down (nothing is ever turned up), and all the way over plays that VFO on its own, in both ears. Works with VFO STEREO on or off.
+              </Text>
+            </>)}
           </>) : onLocalSquelch ? (
             <View style={st.bwRow}>
               <Text style={[st.bwLabel, st.sqlLabel]}>SQUELCH</Text>
@@ -1027,7 +1078,7 @@ export default function AudioSheet({
                   a11y={vfoStereo ? 'VFO stereo on. Tap to put both VFOs in both ears.' : 'VFO stereo off. Tap to put each VFO in its own ear.'} />
               </View>
               <Text style={st.iqNote}>
-                With VFO A/B on (the frequency card): the lower frequency in your left ear, the higher in your right, crossing over smoothly if you tune one past the other. Off: both VFOs in both ears. A phone speaker or a mono headset plays both together either way.{vfoABOn && onBinaural ? ' Binaural tuning rests while VFO B is on.' : ''}
+                With VFO A/B on (the frequency card): the lower frequency in your left ear, the higher in your right, crossing over smoothly if you tune one past the other. Off: both VFOs in both ears. A phone speaker or a mono headset plays both together either way. The BALANCE between them is under the two squelch rows.{vfoABOn && onBinaural ? ' Binaural tuning rests while VFO B is on.' : ''}
               </Text>
             </View>
           )}

@@ -1783,6 +1783,12 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 .sqlMute { flex: none; padding: 3px 10px; font-size: 11px; }
 .sqlMute.on { color: #ff6b6b; border-color: #ff6b6b; }
 #sqlBlockB { border-top: 1px solid rgba(255,160,0,.25); }
+/* ★★★ The A ⟷ B BALANCE row, right under VFO B's squelch: A and B in their needle colours either side of the slider. */
+#abBalBlock { border-top: 1px solid rgba(255,160,0,.25); }
+.abBalRow { display: flex; align-items: center; gap: 8px; }
+.abBalRow input[type=range] { flex: 1; min-width: 0; }
+.abBalVal { flex: none; min-width: 4.6em; text-align: right; font-size: 11px; color: var(--btn-text); }
+.abBalNote { font-size: 11px; opacity: .75; margin-top: 4px; line-height: 1.35; }
 /* ★ The BAR is a TALL, TRANSPARENT HIT AREA — 14px of clearance above a 22px visual track. The ball
    sits in that top clearance, so it is INSIDE the clickable box: the cursor becomes a hand ON the
    ball, and a drag can start on it. (Before, the hit area was just the 22px track, so the ball
@@ -5049,6 +5055,24 @@ select.btn { padding: 6px 8px; }
     <div class="sqlAutoRow">
       <button class="btn sqlAutoBtn" id="sqlAutoB" title="VFO B's own auto squelch — it tracks B's channel noise the same way VFO A's does, with the same ABOVE NOISE margin">AUTO SQUELCH</button>
     </div>
+  </div>
+  <!-- ★★★ V12 VFO A/B — THE A ⟷ B BALANCE (Stuart, 2026-10-30: "we need a way to balance the A/B on the same server in the
+       same way as we do the dual server audio to compensate for a louder broadcast station and an SSB contact … simply put
+       it in the audio menu next to the squelch controls for both VFO's"). The two-server rule (src/services/dualMix.ts
+       balanceGains), applied by the server as a level before placement — stereo, VFO STEREO off and mono alike. Shown only
+       while VFO B is on AND the server takes it (hwinfo watchBal) — never a control that does nothing. A controller or the
+       keyboard: Enter on the slider to adjust, left / right a tenth at a time, Enter to finish; EVEN centres it. -->
+  <div class="sqlBlock icomHide" id="abBalBlock" hidden>
+    <div class="sqlHead"><label>BALANCE</label>
+      <button class="btn sqlMute" id="abBalEven" title="Even — both VFOs at their own level">EVEN</button></div>
+    <div class="abBalRow">
+      <span class="sqlVfoTag" id="abBalA" style="margin-left:0">A</span>
+      <input type="range" id="abBal" min="-1" max="1" step="0.1" value="0" aria-label="VFO A B balance"
+             title="Slide towards the VFO you want to hear more of: the other is turned down — nothing is ever turned up. All the way over plays that VFO on its own, in both ears.">
+      <span class="sqlVfoTag" id="abBalB">B</span>
+      <span class="abBalVal" id="abBalVal">EVEN</span>
+    </div>
+    <div class="abBalNote">Turn the louder VFO down — a broadcast station against an SSB contact. Works with VFO STEREO on or off, and on a mono output.</div>
   </div>
   <!-- ★ Only shown when the operator has set "listener's choice" — on any other setting the
        row is hidden entirely rather than disabled, because an inert control still reads as an

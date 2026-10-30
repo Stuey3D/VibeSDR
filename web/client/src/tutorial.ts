@@ -110,7 +110,8 @@ const STEPS: Step[] = [
       : 'The speaker button [[@mAudio]] holds the audio tools: noise reduction, notch filters and '
         + 'squelch — and raw IQ output where the receiver offers it.'
         + (abOffered() ? ' With VFO B on, each VFO has its own squelch row there, with its own AUTO SQUELCH and a MUTE (the '
-          + 'other VFO moves to both ears). Its VFO A/B STEREO switch puts the lower VFO in your left ear and the higher '
+          + 'other VFO moves to both ears), and under them a BALANCE between A and B to turn the louder one down — a broadcast '
+          + 'station against an SSB contact. Its VFO A/B STEREO switch puts the lower VFO in your left ear and the higher '
           + 'in your right; off, both VFOs play in both ears.' : ''),
   },
   {

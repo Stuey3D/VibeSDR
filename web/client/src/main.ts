@@ -38,6 +38,7 @@ import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { earTags, needleAlpha, decStartVfo, decTagFor } from './vfoAB';
+import { balanceGains, clampBalance } from '../../../src/services/dualMix';   // ★★★ the A ⟷ B balance: the two-server rule, one copy
 import { FrameClock, renderEvery } from './wfPacing';
 import { tickStep, fmtTick } from './freqScale';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
@@ -5367,6 +5368,7 @@ function sqlRowsPaint() {
   if (mB) { mB.classList.toggle('on', !!spec?.abMuteB); mB.textContent = spec?.abMuteB ? 'MUTED' : 'MUTE'; }
   if (!ab && sqlBAuto) { sqlBAuto = false; sqlBTrack.reset(); }
   drawSquelchBarB();
+  abBalPaint();
 }
 function setupSquelchRowB() {
   const bar = document.getElementById('sqlBarB');
@@ -19013,6 +19015,8 @@ function initPointerFreq(c: HTMLCanvasElement) {
 //   "BUTTONS, NOT A DRAGGABLE DRUM"), so the key takes the glyph's place while A/B is on.
 const AB_B_COLOUR = '#29c7ff';
 const AB_STEREO_PREF = 'abStereo';
+/** ★★★ The A ⟷ B balance, remembered on this device (−1 all A … +1 all B). */
+const AB_BALANCE_PREF = 'abBalance';
 let abSwitchAt = -Infinity;
 let abLastSel: 'A' | 'B' = 'A';
 let abEarOrder: boolean | null = null;
@@ -19093,7 +19097,7 @@ function abDraw() {
 //   about VFO A/B right now, and where the other needle is on screen.
 Object.defineProperty(window, '__vibeAB', { configurable: true, get: () => () => spec && wf ? {
   max: spec.watchMax, on: spec.abOn, sel: spec.abSel, a: spec.vfoA(), b: spec.vfoB(), stereo: spec.abStereo,
-  monoOut: spec.abMonoOut, state: spec.watchState, liveColor: wf.vfoLiveColor, liveAlpha: wf.vfoLiveAlpha,
+  monoOut: spec.abMonoOut, state: spec.watchState, watchBal: spec.watchBal, balance: spec.abBalance, liveColor: wf.vfoLiveColor, liveAlpha: wf.vfoLiveAlpha,
   liveLabel: wf.vfoLiveLabel, other: wf.vfo2,
   otherX: wf.vfo2 ? wf.hzToX(wf.vfo2.hz, ($("wf") as HTMLCanvasElement).clientWidth) : null,
 } : null });
@@ -19129,11 +19133,36 @@ let abPrefFor: SpectrumClient | null = null;   // ★ applied once per connectio
 function abStereoPref(): boolean {
   try { return prefs()[AB_STEREO_PREF] !== false; } catch { return true; }   // storage blocked: the default (on)
 }
+function abBalancePref(): number {
+  try { const v = prefs()[AB_BALANCE_PREF]; return typeof v === 'number' && Number.isFinite(v) ? clampBalance(v) : 0; }
+  catch { return 0; }   // storage blocked: even
+}
+/** ★★★ The BALANCE row — under VFO B's squelch, only while B is on and the server takes it (hwinfo watchBal). */
+function abBalPaint() {
+  const block = document.getElementById('abBalBlock');
+  const show = !!spec?.abOn && !!spec?.watchBal;
+  if (block) block.hidden = !show;
+  if (!show || !spec) return;
+  const sl = document.getElementById('abBal') as HTMLInputElement | null;
+  if (sl && document.activeElement !== sl && Number(sl.value) !== spec.abBalance) sl.value = String(spec.abBalance);
+  document.getElementById('abBalA')?.style.setProperty('--abcol', abColourOf('A'));
+  document.getElementById('abBalB')?.style.setProperty('--abcol', abColourOf('B'));
+  const g = balanceGains(spec.abBalance), db = (x: number) => `${Math.round(20 * Math.log10(x))} dB`;
+  const val = document.getElementById('abBalVal');
+  if (val) val.textContent = g.s1 === 1 && g.s2 === 1 ? 'EVEN' : g.s1 === 0 ? 'B only' : g.s2 === 0 ? 'A only'
+                           : g.s1 < 1 ? `A ${db(g.s1)}` : `B ${db(g.s2)}`;
+}
+function abSetBalance(b: number) {
+  if (!spec) return;
+  spec.setAbBalance(b);
+  try { savePref(AB_BALANCE_PREF, spec.abBalance); } catch { /* storage blocked: this session only */ }
+  abBalPaint();
+}
 function abOnWatch(note?: string) {
   if (!spec) return;
   // ★ The remembered STEREO choice, applied to this connection the first time it hears about VFO A/B (hwinfo) — before
   //   any toggle can send it. (initVfoAB may run before the SpectrumClient exists.)
-  if (abPrefFor !== spec) { abPrefFor = spec; spec.abStereo = abStereoPref(); }
+  if (abPrefFor !== spec) { abPrefFor = spec; spec.abStereo = abStereoPref(); spec.abBalance = abBalancePref(); }
   if (spec.abSel !== abLastSel) {
     abLastSel = spec.abSel;
     abSwitchAt = performance.now();
@@ -19170,6 +19199,10 @@ function initVfoAB() {
     t.title = 'VFO A/B: a second VFO on this radio, heard at the same time — the lower frequency in your left ear, the higher in your right. The A/B key between the tune buttons picks which one the controls tune; each VFO has its own squelch and MUTE under the speaker button, and a decoder or the spots run on the VFO selected when you start them (it says DEC). Not on FM broadcast.';
     t.addEventListener('click', () => { spec?.setAB(!spec.abOn); abRowPaint(); });
   }
+  // ★★★ The A ⟷ B balance: a drag, or the pad's / keyboard's left / right (gamepad.ts adjust dispatches `input`)
+  const bal = document.getElementById('abBal') as HTMLInputElement | null;
+  bal?.addEventListener('input', () => abSetBalance(Number(bal.value)));
+  document.getElementById('abBalEven')?.addEventListener('click', () => { if (bal) bal.value = '0'; abSetBalance(0); });
   document.getElementById('abStereoBtn')?.addEventListener('click', () => {
     if (!spec) return;
     spec.setAbStereo(!spec.abStereo);

@@ -290,6 +290,28 @@ struct Ramp {
     }
 };
 
+/** ★★★ THE A ⟷ B BALANCE (Stuart, 2026-10-30: "we need a way to balance the A/B on the same server in the same way as
+ *  we do the dual server audio to compensate for a louder broadcast station and an SSB contact").
+ *  ONE RULE, MANY READERS: this is src/services/dualMix.ts balanceGains / clampBalance / BALANCE_MID_DEAD /
+ *  BALANCE_END_SNAP, mirrored line for line — the two-server balance, here for VFO A and VFO B. Change both together.
+ *  balance −1 (all A) … 0 (even) … +1 (all B). It NEVER RAISES anything — it only lowers the VFO leaned away from, on a
+ *  cos taper (gentle in the middle, decisive at the ends); a dead zone round the middle ("nearly even" IS even) and a
+ *  snap at the ends ("nearly all A" IS all A). Out-of-range or NaN → clamped / even. */
+constexpr float kBalanceMidDead = 0.04f;
+constexpr float kBalanceEndSnap = 0.96f;
+inline float clampBalance(float b) { return std::isfinite(b) ? std::max(-1.0f, std::min(1.0f, b)) : 0.0f; }
+struct BalanceGains { float a = 1, b = 1; };
+inline BalanceGains balanceGains(float balance) {
+    float b = clampBalance(balance);
+    if (std::fabs(b) < kBalanceMidDead) b = 0;
+    else if (std::fabs(b) > kBalanceEndSnap) b = b > 0 ? 1.0f : -1.0f;
+    auto taper = [](float x) { return x >= 1.0f ? 0.0f : std::cos(x * 1.57079633f); };
+    BalanceGains g;
+    g.a = b > 0 ? taper(b) : 1.0f;
+    g.b = b < 0 ? taper(-b) : 1.0f;
+    return g;
+}
+
 /** Mixes N mono sources into one L/R stream. Source 0 is the listener's own channel (VFO A); the rest are watch
  *  channels, identified by a stable key (the channel id) so a source keeps its ramps from call to call. */
 class PanMixer {
@@ -314,19 +336,36 @@ public:
     bool stereo() const { return stereo_; }
     /** ★ A mono output folds L+R into one: every source centre, at unity, so nothing is lost or halved. */
     void setMonoOut(bool on) { mono_ = on; }
+    /** ★★★ The listener's A ⟷ B BALANCE (balanceGains above). A LEVEL, applied before any placement, so it works the same
+     *  with STEREO on (each VFO in its ear), STEREO off and a MONO output (both in both ears — Stuart, 2026-10-30: "the
+     *  balance also applies if the user is in Mono mode too"): the VFO leaned away from is turned DOWN, nothing is turned
+     *  up. Source 0 (VFO A) takes `a`, every watch channel `b`. Only while BOTH are heard: a VFO alone (the other muted,
+     *  or gone) plays at its own level whatever the balance says — one with nothing to give has no claim on it, exactly
+     *  as dualTargets does for two servers. A FULL LEAN is the other VFO MUTED by hand: it fades out AND gives up its
+     *  place, so the one kept glides to the centre, both ears (as the two-server card's full lean does). Every change is
+     *  the same kRampSec raised cosine as everything else — no click. */
+    void setBalance(float b) { balance_ = clampBalance(b); }
+    float balance() const { return balance_; }
 
     /** One block. `out` gets `frames` interleaved L/R floats. Sources not seen in this call are dropped (their fade-out
      *  has to be driven by passing them with present=false until faded()). */
     void mix(const std::vector<Src>& srcs, int frames, float* out) {
         const int dur = (int)std::lround(kRampSec * rate_);
         const int gdur = std::max(1, (int)std::lround(kGateFadeSec * rate_));
-        aimPositions(srcs, dur);
+        // ★★★ THE BALANCE (setBalance): only while VFO A AND a watch channel are both heard. A full lean silences the
+        //     other side, which then counts as MUTED below — no place in the head, so the one kept goes to the middle.
+        bool aHeard = false, bHeard = false;
+        for (auto& s : srcs) if (s.present && !s.muted) (s.key == 0 ? aHeard : bHeard) = true;
+        const BalanceGains bg = aHeard && bHeard ? balanceGains(balance_) : BalanceGains{};
+        eff_.assign(srcs.begin(), srcs.end());
+        for (auto& s : eff_) if ((s.key == 0 ? bg.a : bg.b) <= 0.0f) s.muted = true;
+        aimPositions(eff_, dur);
         // keep only the states we were given, in the order given
         std::vector<State*> st; st.reserve(srcs.size());
-        for (auto& s : srcs) {
+        for (auto& s : eff_) {
             State& x = stateFor(s.key);
             x.seen = true;
-            x.gain.aim(s.present && !s.muted ? 1.0f : 0.0f, dur);
+            x.gain.aim(s.present && !s.muted ? (s.key == 0 ? bg.a : bg.b) : 0.0f, dur);
             x.gate.aim(s.gateOpen ? 1.0f : 0.0f, gdur);
             st.push_back(&x);
         }
@@ -423,6 +462,8 @@ private:
     }
     int rate_;
     bool stereo_ = true, mono_ = false;
+    float balance_ = 0.0f;
+    std::vector<Src> eff_;   ///< srcs with the balance's full lean applied as a mute (reused, no allocation per block)
     std::vector<State> states_;
     std::vector<int> order_;
 };

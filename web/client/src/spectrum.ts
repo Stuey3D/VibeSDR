@@ -27,6 +27,7 @@ import { aisSanitise, type AisReport } from './tracks';
 import { TunePacer, tunePaceMs, healthThrottled } from '../../../src/services/tunePace';
 import { vsSquelchMsg, vsSqlOn } from '../../../src/services/vibeSquelch';
 import { type WatchState, watchSanitise } from './vfoAB';
+import { clampBalance } from '../../../src/services/dualMix';
 import { roomMode, roomPassband } from '../../../src/services/roomPassband';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs, type AskState } from '../../../src/services/dialChat';
 // ★★★ AN ICOM (driver "icom", RECEIVE ONLY) — the shared contract module the app reads too (ONE RULE, TWO READERS).
@@ -772,6 +773,11 @@ export class SpectrumClient {
   /** ★★ Round 3: each VFO muted in this listener's mix (the server's word, from its watch state). Per session. */
   abMuteA = false;
   abMuteB = false;
+  /** ★★★ This server takes the A ⟷ B BALANCE (hwinfo watchBal, or `bal` in its watch state). False = no balance row. */
+  watchBal = false;
+  /** ★★★ The listener's A ⟷ B balance, −1 all A … +1 all B (remembered per device by main.ts). Sent while B is on, with
+   *  B's `on`, and again on every hwinfo (a reconnect) — only ever to a server that takes it. */
+  abBalance = 0;
   private lastLocalWatchAt = -Infinity;
   private watchTimer: number | null = null;
   private swapLive() {
@@ -799,7 +805,8 @@ export class SpectrumClient {
       this.abOn = true;
       this.abOther = { frequency: this.frequency, mode: this.mode, bandwidthLow: this.bandwidthLow, bandwidthHigh: this.bandwidthHigh, sqlDb: -150 };
       this.lastLocalWatchAt = performance.now();
-      this._send({ type: 'watch', id: 1, on: true, stereo: this.abStereo, monoOut: this.abMonoOut });
+      this._send({ type: 'watch', id: 1, on: true, stereo: this.abStereo, monoOut: this.abMonoOut,
+                   ...(this.watchBal ? { balance: this.abBalance } : {}) });
     } else {
       if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; }
       this.abOn = false;
@@ -869,6 +876,12 @@ export class SpectrumClient {
     this.cb.onWatch?.();
   }
   setAbStereo(on: boolean) { this.abStereo = on; if (this.abOn) this._send({ type: 'watch', stereo: on }); }
+  /** ★★★ The A ⟷ B balance (Stuart, 2026-10-30: "to compensate for a louder broadcast station and an SSB contact"). The
+   *  server applies it as a level before placement (vibe_watch.h PanMixer::setBalance): stereo, stereo off and mono. */
+  setAbBalance(b: number) {
+    this.abBalance = Math.round(clampBalance(b) * 100) / 100;
+    if (this.abOn && this.watchBal) this._send({ type: 'watch', balance: this.abBalance });
+  }
   setAbMonoOut(on: boolean) { if (on === this.abMonoOut) return; this.abMonoOut = on; if (this.abOn) this._send({ type: 'watch', monoOut: on }); }
   /** B's frequency/mode/passband out — latest wins, at most every 40 ms (a held step key is dozens a second). */
   private sendWatchAim(withMode: boolean) {
@@ -888,6 +901,7 @@ export class SpectrumClient {
     if (!w) return;
     this.watchState = w;
     if (w.max >= 0) this.watchMax = w.max;
+    if (w.bal !== null) this.watchBal = true;   // ★★★ a state carrying `bal` IS a server that takes the balance
     if (typeof msg.stereo === 'boolean') this.abStereo = msg.stereo;
     const ch = w.chans.find((c) => c.id === 1);
     // ★ Round 3: the mutes are the server's (it unmutes A itself when B goes)
@@ -1583,6 +1597,10 @@ export class SpectrumClient {
         this.cb.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);   // ★ V12 beta25 — absent dcHz = no spike to show
         this.cb.onDabScanOk?.(msg.dabScan === true);   // ★ absent (an older server, a shared radio) = no SCAN key
         // ★★ V12 VFO A/B: how many watch channels a listener may add here. Absent (an older server) = 0 = no toggle.
+        // ★★★ …and whether it takes the A ⟷ B balance; re-sent here so a reconnect keeps the listener's balance.
+        { const wb = msg.watchBal === true;
+          if (wb !== this.watchBal) { this.watchBal = wb; this.cb.onWatch?.(); }
+          if (wb && this.abOn) this._send({ type: 'watch', balance: this.abBalance }); }
         { const wm = Number(msg.watch) || 0;
           if (wm !== this.watchMax) { this.watchMax = wm; if (wm < 1 && this.abOn) { if (this.abSel === 'B') { this.swapLive(); this.abSel = 'A'; } this.abOn = false; } this.cb.onWatch?.(); } }
         if (msg.tunerBw !== undefined)

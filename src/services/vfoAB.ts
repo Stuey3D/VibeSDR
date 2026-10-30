@@ -13,7 +13,9 @@
  * ★★ WHAT DOES NOT: which VFO the controls act on is the client's (VibeServerWsClient's A/B slots); the screen only
  *    draws it.
  * ★ PURE (type-only imports, no React Native), so scripts/test_vfoAB.ts runs it under plain node.
+ * ★★★ THE A ⟷ B BALANCE is the two-server balance's rule (dualMix.ts — pure too), imported, never re-written here.
  */
+import { clampBalance } from './dualMix.ts';
 
 export type VfoId = 'A' | 'B';
 export type Ear = 'L' | 'R' | 'LR';
@@ -60,6 +62,9 @@ export interface WatchState {
   muteA: boolean;
   /** ★★ Decoders run on either VFO here ("vfo":"B" on the decoder socket). Absent (a round-3 server) = A only. */
   decB: boolean;
+  /** ★★★ The listener's A ⟷ B balance as the server holds it (−1 all A … +1 all B). Absent (an older server: no
+   *  balance there) = null. */
+  bal: number | null;
   chans: WatchChan[];
   /** Set when the server refused the last request — outside | full | off | mode | band | apart | id | session. */
   refused?: string;
@@ -97,7 +102,8 @@ export function parseWatch(msg: Record<string, unknown> | null | undefined): Wat
   }
   const st: WatchState = {
     max: Math.max(0, Math.floor(num(msg.max))), lo: num(msg.lo), hi: num(msg.hi),
-    stereo: msg.stereo !== false, monoOut: msg.monoOut === true, muteA: msg.muteA === true, decB: msg.decB === true, chans,
+    stereo: msg.stereo !== false, monoOut: msg.monoOut === true, muteA: msg.muteA === true, decB: msg.decB === true,
+    bal: typeof msg.bal === 'number' && Number.isFinite(msg.bal) ? clampBalance(msg.bal) : null, chans,
   };
   const r = text(msg.refused, 16); if (r) st.refused = r;
   const n = text(msg.note, 200); if (n) st.note = n;
@@ -108,6 +114,13 @@ export function parseWatch(msg: Record<string, unknown> | null | undefined): Wat
 export function watchOffered(hwinfo: Record<string, unknown> | null | undefined): number {
   const n = hwinfo ? num(hwinfo.watch) : 0;
   return n > 0 ? Math.floor(n) : 0;
+}
+
+/** ★★★ hwinfo's `watchBal`: this server takes the A ⟷ B BALANCE (`{"type":"watch","balance":x}`). An older server
+ *  never says so — and gets no balance row (AGENTS.md: no control that does nothing). A watch state carrying `bal`
+ *  says the same (VfoABCore.onWatch). */
+export function watchBalOffered(hwinfo: Record<string, unknown> | null | undefined): boolean {
+  return !!hwinfo && hwinfo.watchBal === true;
 }
 
 /** ★★★ TWO SERVERS OR VFO A/B — NEVER BOTH (Stuart, GitHub #57: "There will only be 2 channels at a time, either A/B on
@@ -152,8 +165,10 @@ export function vfoB(st: WatchState | null | undefined): WatchChan | undefined {
 // ── Messages ───────────────────────────────────────────────────────────────────────────────────────────────────────
 /** Turn VFO B on: the server creates it at VFO A's frequency, mode and width. `stereo` / `monoOut` ride along so the
  *  very first block is mixed the way this listener wants it. */
-export function msgOn(stereo: boolean, monoOut: boolean): Record<string, unknown> {
-  return { type: 'watch', id: VFO_B_ID, on: true, stereo, monoOut };
+export function msgOn(stereo: boolean, monoOut: boolean, balance?: number): Record<string, unknown> {
+  const m: Record<string, unknown> = { type: 'watch', id: VFO_B_ID, on: true, stereo, monoOut };
+  if (balance !== undefined) m.balance = roundBalance(balance);   // ★ only to a server that takes it (watchBal)
+  return m;
 }
 export function msgOff(): Record<string, unknown> {
   return { type: 'watch', id: VFO_B_ID, off: true };
@@ -181,6 +196,13 @@ export function msgMute(v: VfoId, on: boolean): Record<string, unknown> {
   return v === 'A' ? { type: 'watch', muteA: on } : { type: 'watch', id: VFO_B_ID, mute: on };
 }
 export function msgMonoOut(on: boolean): Record<string, unknown> { return { type: 'watch', monoOut: on }; }
+/** The balance on the wire: clamped, two places (the slider moves in 0.1 steps on a pad; a finger needs no finer). */
+export function roundBalance(b: number): number { return Math.round(clampBalance(b) * 100) / 100; }
+/** ★★★ THE A ⟷ B BALANCE (Stuart, 2026-10-30: "we need a way to balance the A/B on the same server in the same way as
+ *  we do the dual server audio to compensate for a louder broadcast station and an SSB contact"). −1 = all A, 0 = even,
+ *  +1 = all B — dualMix.ts balanceGains, applied by the SERVER (vibe_watch.h PanMixer::setBalance) as a LEVEL before
+ *  any stereo or mono placement: it only turns the VFO leaned away from DOWN. */
+export function msgBalance(b: number): Record<string, unknown> { return { type: 'watch', balance: roundBalance(b) }; }
 
 // ── The ears ───────────────────────────────────────────────────────────────────────────────────────────────────────
 /**
@@ -245,6 +267,10 @@ export interface VfoABInfo {
   /** ★★ Round 3: each VFO muted in the mix — the server's word. */
   muteA: boolean;
   muteB: boolean;
+  /** ★★★ This server takes the A ⟷ B balance (hwinfo `watchBal`, or `bal` in its state). False = no balance row. */
+  balOffered: boolean;
+  /** The listener's balance (−1 all A … +1 all B) — this device's, sent to the server. */
+  balance: number;
 }
 
 /** The four fields of the client's status that ARE a VFO's tuning. */
@@ -339,6 +365,9 @@ export class VfoABCore {
   active: VfoId = 'A';
   stereo = true;
   monoOut = false;
+  /** ★★★ The A ⟷ B balance: does this server take it, and the listener's setting (remembered per device by the screen). */
+  balOffered = false;
+  balance = 0;
   state: WatchState | null = null;
   private stash: VfoSlot | null = null;
   private sqlA = -999;
@@ -373,7 +402,8 @@ export class VfoABCore {
              other: this.on && this.stash ? { ...this.stash, squelchDb: this.active === 'A' ? this.sqlB : this.sqlA } : null,
              activeSquelchDb: this.active === 'A' ? this.sqlA : this.sqlB, state: this.state,
              squelchA: this.sqlA, squelchB: this.sqlB,
-             muteA: !!b && this.state?.muteA === true, muteB: !!b && b.mute };
+             muteA: !!b && this.state?.muteA === true, muteB: !!b && b.mute,
+             balOffered: this.balOffered, balance: this.balance };
   }
   /** hwinfo's `watch`. Returns true when the offer CHANGED. A withdrawn offer resets (no dead VFO B). */
   setOffered(n: number): boolean {
@@ -390,7 +420,7 @@ export class VfoABCore {
       this.on = true; this.onAt = this.now(); this.active = 'A';
       this.stash = this.slotOfStatus(-999);   // ★ B starts where A is (the server does the same), squelch off
       this.sqlB = -999;
-      this.send(msgOn(this.stereo, this.monoOut));
+      this.send(msgOn(this.stereo, this.monoOut, this.balOffered ? this.balance : undefined));
       return true;
     }
     this.send(msgOff());
@@ -477,6 +507,14 @@ export class VfoABCore {
   setMute(v: VfoId, on: boolean) { if (this.on) this.send(msgMute(v, on)); }
   setStereo(on: boolean) { this.stereo = on; if (this.on) this.send(msgStereo(on)); }
   setMonoOut(on: boolean) { if (on === this.monoOut) return; this.monoOut = on; if (this.on) this.send(msgMonoOut(on)); }
+  /** ★★★ hwinfo's `watchBal`. Returns true when it CHANGED. */
+  setBalOffered(on: boolean): boolean { if (on === this.balOffered) return false; this.balOffered = on; return true; }
+  /** ★★★ The A ⟷ B balance. Held always (it rides along with B's `on`); SENT only while B is on, to a server that takes
+   *  it — never to an older one (it would ignore it, and nothing should pretend otherwise). */
+  setBalance(b: number) {
+    this.balance = roundBalance(b);
+    if (this.on && this.balOffered) this.send(msgBalance(this.balance));
+  }
 
   /** ★★ A spectrum socket has opened. Nothing is reset: the server's next `watch` state says whether this session still
    *  has VFO B (see PER SESSION above). */
@@ -497,6 +535,7 @@ export class VfoABCore {
     if (!st) return out;
     this.openAt = 0;   // ★ the server has spoken on this socket — its state, not a timer, decides from here
     this.state = st;
+    if (st.bal !== null) this.balOffered = true;   // ★★★ a state carrying `bal` IS a server that takes the balance
     if (st.refused && st.note) out.notes.push(st.note);   // ★ the server's own sentence
     if (!this.on) {
       // ★★★ THE SERVER HOLDS A VFO B FOR THIS SESSION AND WE DO NOT KNOW IT — a client made afresh under the same
@@ -506,6 +545,7 @@ export class VfoABCore {
       const b0 = vfoB(st);
       if (b0 && !st.refused && this.offered > 0 && this.now() - this.offAt > ADOPT_AFTER_OFF_MS) {
         this.adoptB(b0);
+        if (st.bal !== null) this.balance = st.bal;   // ★ the balance it is mixed with is the server's word too
         out.adopted = true;
       }
       return out;

@@ -101,7 +101,7 @@ import { cleanKeepSpacing } from '../utils/cleanLines';
 import { reopenRestoreTune } from './reopenTune';
 import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
-import { VfoABCore, watchOffered, watchMaxOf, vfoB, RESYNC_MS, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
+import { VfoABCore, watchOffered, watchBalOffered, watchMaxOf, vfoB, RESYNC_MS, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs } from './dialChat';
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
@@ -952,6 +952,8 @@ export abstract class VibeServerWsClient {
   abSetStereo(on: boolean) { this.ab.setStereo(on); }
   /** ★ The output is mono (a phone speaker, a mono headset): the server then puts both VFOs in both ears. */
   abSetMonoOut(on: boolean) { this.ab.setMonoOut(on); }
+  /** ★★★ The A ⟷ B balance (−1 all A … +1 all B) — sent while B is on, to a server that takes it (hwinfo watchBal). */
+  abSetBalance(b: number) { this.ab.setBalance(b); }
   /** ★★ The offer — from hwinfo `watch` AND from the watch state's `max` (see watchMaxOf), as the web reads both.
    *  A withdrawn offer resets to one VFO (A restored if B was tuned) and says so; a changed one redraws the toggle. */
   private _abOffer(n: number) {
@@ -2882,6 +2884,9 @@ export abstract class VibeServerWsClient {
       // ★ V12: does this server send the full-capture row (SPWB v2)? Remembered for its next spectrum socket (wideCapsCore.ts).
       noteWideCaps(this.baseUrl, msg.wide);
       // ★★ V12 VFO A/B: does this server offer a VFO B? 0/absent = no — the toggle is not drawn (no dead control).
+      // ★★★ Whether it takes the A ⟷ B balance (an older server: no balance row — no dead control). Before the offer:
+      //     the screen re-sends the balance from onWatchOffered, and it must already know the server takes it.
+      if (this.ab.setBalOffered(watchBalOffered(msg))) this._abNotify();
       this._abOffer(watchOffered(msg));
       if (typeof msg.autoDs === 'boolean')
         this.callbacks.onHwDirectSampling?.(msg.autoDs, Number(msg.dsBelowHz) || 0, Number(msg.ds) || 0);
