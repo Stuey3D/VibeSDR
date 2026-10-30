@@ -851,6 +851,12 @@ export default function AudioSheet({
               />
             )}
             {uberDsp && <Btn label="NB" active={nb} onPress={() => onNb?.(!nb)} />}
+            {/* ★★ V12 two servers: THIS server's MUTE, at the top beside REC (Stuart, 2026-10-30, iPhone: "when in dual server
+                mode a mute button should be here for the in view server") — where the Mac has its MUTE beside VOLUME, so
+                not on a Mac (it would be there twice). The other server's mute is on its card. */}
+            {onDualMute && !mac.onMac && (
+              <Btn label={dualMuted ? 'MUTED' : 'MUTE'} active={dualMuted} onPress={() => onDualMute(!dualMuted)} />
+            )}
             {/* No pip (the mockup): REC is an action whose state the timer below reports. */}
             <Btn label="⏺ REC" active={recording} pip={false} onPress={onRec} />
           </BtnRow>
@@ -1034,17 +1040,13 @@ export default function AudioSheet({
                 <Text style={[st.bwLabel, { width: 78 }]}>TWO SERVERS</Text>
                 <View style={{ flex: 1 }} />
                 <NavRow>
-                  {/* ★ This server's mute — on a Mac it is the MUTE key beside VOLUME above, so not twice. */}
-                  {onDualMute && !mac.onMac && (
-                    <Toggle label={dualMuted ? 'MUTED' : 'MUTE'} on={dualMuted} padH={10} onPress={() => onDualMute(!dualMuted)}
-                      a11y={dualMuted ? 'Unmute this server' : 'Mute this server. The other server keeps playing, in both ears.'} />
-                  )}
-                  <Toggle label={dualStereo ? 'STEREO' : 'MONO'} on={dualStereo} onPress={() => onDualStereo(!dualStereo)} marginLeft={onDualMute && !mac.onMac ? 8 : undefined}
+                  {/* ★ This server's mute is at the TOP (beside REC; on a Mac, beside VOLUME) — not here as well. */}
+                  <Toggle label={dualStereo ? 'STEREO' : 'MONO'} on={dualStereo} onPress={() => onDualStereo(!dualStereo)}
                     a11y={dualStereo ? 'Two servers in stereo. Tap to hear both in both ears.' : 'Two servers in mono. Tap to put each server in its own ear.'} />
                 </NavRow>
               </View>
               <Text style={st.iqNote}>
-                Stereo: the first server in your left ear, the second in your right, whichever is on screen. Mono: both in both ears. Each server is heard in mono either way. When one has nothing to play (muted, a map mode such as ADS-B, Band spots, or its stream has stopped), the other plays in both ears. MUTE here mutes only this server; the card under Servers has its own mute for the other. Hold the card for the balance between them; all the way to one side plays that server in both ears.
+                Stereo: the first server in your left ear, the second in your right, whichever is on screen. Mono: both in both ears. Each server is heard in mono either way. When one has nothing to play (muted, a map mode such as ADS-B, Band spots, or its stream has stopped), the other plays in both ears. MUTE at the top of this menu mutes only this server; the card under Servers has its own mute for the other. Hold the card for the balance between them; all the way to one side plays that server in both ears.
               </Text>
             </View>
           )}
