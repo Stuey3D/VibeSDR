@@ -24,7 +24,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, AppState, Easing, PanResponder, Pressable, StyleSheet, Text, TouchableOpacity, View,
          useWindowDimensions } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { G, Path } from 'react-native-svg';
 import { EDGE_TAB_W, edgeChipGeometry } from './edgeChipGeometry';
@@ -37,8 +36,9 @@ import { bgSide, countdownStage, earIcon, fmtLeft, shouldPopOut } from '../servi
 /** A server's name at a slider's end: the left end is server 1 (the left ear), the right end server 2. */
 const short = (n?: string) => { const t = (n ?? '').trim(); return t.length > 9 ? `${t.slice(0, 8)}…` : t || '—'; };
 
-/** ★ The one-time hint's key (the lsv_*_seen pattern of FkaSplash / LegacyPackageNotice). */
-const HINT_SEEN_KEY = 'lsv_dual_card_hint_seen';
+/** ★ The pairing whose hint has been seen (its first side's session — it lasts the pairing, through swaps). Module
+ *  level: the card is a new component on each screen. */
+let hintSeenFor: string | null = null;
 export const DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance';
 
 /** The speaker for the OTHER ear (the server in front): there, but plainly not this one. */
@@ -127,16 +127,14 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
     return () => { live = false; clearInterval(t); };
   }, [wantLamp, bg?.transport]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ── ONCE: what the card does (Stuart, 2026-10-28: "tap to return to the other server, hold for balance") ──
-   *  Shown the first time a card appears, until it is dismissed (✕) or the card is used — a tap or a hold shows it was
-   *  understood. Remembered for good. Unknown storage (a read that fails) shows nothing rather than nag. */
-  const [hint, setHint] = useState(false);
-  useEffect(() => {
-    let live = true;
-    AsyncStorage.getItem(HINT_SEEN_KEY).then((v) => { if (live && v !== '1') setHint(true); }).catch(() => {});
-    return () => { live = false; };
-  }, []);
-  const hintDone = () => { if (!hint) return; setHint(false); AsyncStorage.setItem(HINT_SEEN_KEY, '1').catch(() => {}); };
+  /* ── ONCE PER PAIRING: what the card does (Stuart, 2026-10-28: "tap to return to the other server, hold for balance")
+   *  Shown when a pairing's card first appears, until it is dismissed (✕) or the card is used — a tap or a hold shows it
+   *  was understood — and again with the NEXT pairing (Stuart, 2026-10-30: "it needs to show once per session"; it was
+   *  once per device, for good). The pairing is named by its first side's session, which lasts through swaps. */
+  const pairKey = st.sides[0]?.id ?? null;
+  const [hint, setHint] = useState(() => !!pairKey && hintSeenFor !== pairKey);
+  useEffect(() => { setHint(!!pairKey && hintSeenFor !== pairKey); }, [pairKey]);
+  const hintDone = () => { if (!hint) return; setHint(false); hintSeenFor = pairKey; };
 
   /* ── HOLD: the balance ── */
   const [balOpen, setBalOpen] = useState(false);
