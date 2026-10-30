@@ -109,6 +109,20 @@ int main() {
     ok(androidRspSupported(26), "API 26 (Android 8.0): offered");
     ok(androidRspSupported(36), "API 36: offered");
 
+    printf("\nWhose driver: OpenRSP or SDRplay's own (VibeAGC for SDRplay)\n");
+    ok(whichDriver(true, false, false, false) == RspDriver::OpenRsp, "Android: always our own OpenRSP");
+    ok(whichDriver(false, true, false, false) == RspDriver::OpenRsp, "bundled library, no system stack: OpenRSP (our service)");
+    ok(whichDriver(false, true, true, false) == RspDriver::Official, "bundled library as a FALLBACK client of the official service: official");
+    ok(whichDriver(false, false, true, true) == RspDriver::OpenRsp, "system stack owned by sdrplay-api-open: OpenRSP");
+    ok(whichDriver(false, false, true, false) == RspDriver::Official, "system stack, no OpenRSP package: official");
+    ok(whichDriver(false, false, false, false) == RspDriver::Unknown, "a library from nowhere we know: unknown");
+    ok(!linuxOpenRspPackage(root), "no dpkg record: no OpenRSP package");
+    std::system(("mkdir -p '" + root + "/var/lib/dpkg/info' && touch '" + root + kLinuxOpenRspPackage + "'").c_str());
+    ok(linuxOpenRspPackage(root), "dpkg's sdrplay-api-open.list: the OpenRSP package");
+    ok(vagcEnabled(0, RspDriver::OpenRsp) && !vagcEnabled(0, RspDriver::Official) && !vagcEnabled(0, RspDriver::Unknown),
+       "automatic: on with OpenRSP only");
+    ok(vagcEnabled(1, RspDriver::Official) && !vagcEnabled(2, RspDriver::OpenRsp), "the owner's on / off win either way");
+
     std::system(("rm -rf '" + root + "'").c_str());
     printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;

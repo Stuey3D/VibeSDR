@@ -102,7 +102,8 @@ public:
     void reset() {
         fifo_.assign((size_t)(hist_ + delay_), cf32(0.0f, 0.0f)); start_ = 0;
         gIn_ = 0; cDb_ = 0.0; compAtStep_ = 0.0; sinceStep_ = 0;
-        hintFrom_ = hintTo_ = -1; exact_ = false; nextEdge_ = 0; events_.clear(); found_ = -1;
+        hintFrom_ = hintTo_ = -1; exact_ = false; nextEdge_ = 0; events_.clear(); found_ = -1; knownPending_ = false;
+        knownLocating_ = false;
         holdOn_ = false; holdFrom_ = -1; fadeLeft_ = 0; gHoldDb_ = 0.0; lastCandAt_ = -1; recent_.clear();
     }
     /** The source says a gain change took effect in the NEXT buffer handed to process()
@@ -110,6 +111,53 @@ public:
     void noteStepAtStart() { pendingExact_ = true; }
     /** WE just wrote a gain; the radio applies it some time within `withinSec` (USB in flight, I2C). */
     void noteStepSoon(double withinSec = 0.3) { pendingSoon_ = withinSec; }
+    /** ★★★ WE WROTE A GAIN CHANGE OF EXACTLY `db` AT THE ADC (+ = louder), AND THE NEXT FLAGGED PACKET IS WHERE IT
+     *  LANDS (VibeAGC for SDRplay, 2026-10-30). Stuart: "the IF agc must not cause audio dropouts like the SDRPlay
+     *  own IF agc currently does". VibeAGC moves the IF in 1-2 dB steps, which the finder above cannot see (its bar is
+     *  2 dB flagged, 4 dB searched, because programme moves a 1.5 ms window by that much) — so a small step used to
+     *  go through raw. A 1 dB step is nothing to FM's discriminator, but on AM/SSB it is a 12 % carrier step: a
+     *  thump through the DC blocker and the audio AGC, four times a second at worst.
+     *  ★ We do not need to DETECT it: we know the size (gRdB moves in whole dB) and the radio flags the packet. So
+     *    under kKnownDirectDb the correction is exactly −db, placed where the level jumps by about that much in or next
+     *    to the flagged packet (locateKnown — the flagged packet's first sample if it jumps there, or if nothing
+     *    stands out), and glides away like any other — no hold, no estimator guard. Bigger ones go to the finder as
+     *    before (it MEASURES them, which beats any table), with this figure ignored.
+     *  ★ MEASURED (test-rsp-vibeagc case I, AM, eight 1-2 dB steps): against the same level change arriving as a
+     *    natural fade, −86 dB re programme with the step on the flagged packet's first sample and −38 dB 0.5 ms into
+     *    it; uncompensated, −6 dB. Which of those the radio does is the on-air question (grChanged's alignment).
+     *  ★ A flag that never comes (a driver that does not set grChanged) leaves it pending for kKnownWaitSec of
+     *    signal and then drops it: the step passes raw, as it always did. Counted (knownMissed). */
+    void noteKnownStep(double db) {
+        if (!std::isfinite(db) || std::fabs(db) < 0.05) return;
+        knownDb_ = db; knownDb2_ = 0.0; knownPair_ = false; knownPending_ = true; knownWait_ = (long long)(kKnownWaitSec * rate_);
+    }
+    /** ★★ ONE WRITE THAT MOVES TWO STAGES: an LNA rung of `firstDb` (from the learned ladder — approximate) and the IF
+     *  counter-step `secondDb` (exact), which VibeAGC for SDRplay sends as one Update(Tuner_Gr). The level may dip for
+     *  the moment between the two registers landing; both edges are looked for and put back (locateKnown). */
+    void noteKnownPair(double firstDb, double secondDb) {
+        if (!std::isfinite(firstDb) || !std::isfinite(secondDb)) return;
+        knownDb_ = firstDb; knownDb2_ = secondDb; knownPair_ = true; knownPending_ = true;
+        knownWait_ = (long long)(kKnownWaitSec * rate_);
+    }
+    unsigned knownPairs() const { return knownPairs_; }
+    /** ★ DIAGNOSTICS for the on-air question "does the radio flag the packet our step lands in, and where in it?":
+     *  how the last known step was placed and how far (samples) from the flagged packet's first sample.
+     *  how: 0 = at the flag (the level jumped there), 1 = elsewhere, found by the level, 2 = at the flag because the
+     *  level said nothing, 3 = a pair, both edges found (offset = first edge, offset2 = second), 4 = a pair handed to
+     *  the finder, 5 = a pair whose two registers landed together (no dip: placed as one step of their sum). Also the
+     *  jump the level showed there (dB). */
+    int lastKnownHow() const { return lkHow_; }
+    long long lastKnownOffset() const { return lkOff_; }
+    long long lastKnownOffset2() const { return lkOff2_; }
+    double lastKnownJump() const { return lkJump_; }
+    unsigned knownApplied() const { return knownApplied_; }
+    /** ★ correcting(), but only for a step that was FOUND — a placed known step is exact, so the level estimators
+     *  downstream have nothing to sit out (and with the IF moving up to 4×/s they would never measure at all). */
+    bool correctingFound(double db = 1.0) const { return correcting(db) && !lastKnown_; }
+    unsigned knownMissed() const { return knownMissed_; }
+    /** Known steps whose sample was found by the level (the rest went at their flagged packet's first sample). */
+    unsigned knownLocated() const { return knownLocated_; }
+    static constexpr double kKnownDirectDb = 2.5;
     /** ★ The flagged-transient hold (see the note above). On by default; the shim turns it off for DAB. */
     void setTransientHold(bool on) { holdEnabled_ = on; if (!on) { holdOn_ = false; holdFrom_ = -1; fadeLeft_ = 0; } }
     /** True while a flagged transient is being held, or its hold is fading out — the guard reads this too. */
@@ -147,13 +195,27 @@ public:
         const long long out0 = gIn_ - D;         // first sample leaving now
         if (pendingExact_) {
             pendingExact_ = false;
-            openHint(gIn_ - (long long)(0.001 * rate_), gIn_ + n + (long long)(0.002 * rate_), true);
+            if (knownPending_ && (knownPair_ || std::fabs(knownDb_) < kKnownDirectDb)) {
+                // ★ OUR OWN SMALL STEP: its size is known; WHERE in (or near) the flagged packet it landed is looked
+                //   for once the samples either side are in the line (locateKnown) — at the packet's first sample if
+                //   the level does not say otherwise.
+                if (knownLocating_) placeKnown(knownLocFlag_, knownLocDb_ + (knownLocPair_ ? knownLocDb2_ : 0.0));   // a second flag before the first was placed
+                knownLocating_ = true; knownLocFlag_ = gIn_; knownLocDb_ = knownDb_; knownLocPair_ = knownPair_; knownLocDb2_ = knownDb2_;
+                knownLocFrom_ = gIn_ - kSlice * 8; knownLocTo_ = gIn_ + n + kSlice * 8;
+                knownPending_ = false;
+            } else {
+                knownPending_ = false;
+                openHint(gIn_ - (long long)(0.001 * rate_), gIn_ + n + (long long)(0.002 * rate_), true);
+            }
         }
+        if (knownPending_) { knownWait_ -= n; if (knownWait_ <= 0) { knownPending_ = false; ++knownMissed_; } }
         if (pendingSoon_ > 0.0) {
             openHint(gIn_, gIn_ + n + (long long)(pendingSoon_ * rate_), false);
             pendingSoon_ = 0.0;
         }
         gIn_ += n;
+        if (knownLocating_ && gIn_ >= knownLocTo_ + (knownLocPair_ ? (long long)(kKnownPairLagSec * rate_) : 0)
+                                      + (2 * kKnownWin + 2) * kSlice) locateKnown(g0);
         if (hintTo_ >= 0 || found_ >= 0) analyse(g0, H + D + n, out0, n);
         // ── apply the correction to what leaves ──
         /* ★★ OUT OF THE LINE, THEN CORRECTED — never corrected in the line (11.0.9). The line is also the HISTORY the
@@ -190,6 +252,124 @@ public:
 
 private:
     static constexpr int kSeg = 64;
+    static constexpr double kKnownWaitSec = 0.15;   // a flag this late is not for our write
+    static constexpr int kKnownWin = 3;              // slices each side of a candidate split
+    static constexpr double kKnownPairLagSec = 0.0015;   // the second register of one write lands within this
+    bool knownLocating_ = false; long long knownLocFlag_ = 0, knownLocFrom_ = 0, knownLocTo_ = 0; double knownLocDb_ = 0.0;
+    bool knownLocPair_ = false; double knownLocDb2_ = 0.0;
+    unsigned knownLocated_ = 0, knownPairs_ = 0;
+    int lkHow_ = -1; long long lkOff_ = 0, lkOff2_ = 0; double lkJump_ = 0.0;
+    void placeKnown(long long at, double db) {
+        const Event ev{at, -db};
+        auto it = std::upper_bound(events_.begin(), events_.end(), ev,
+                                   [](const Event& a, const Event& b) { return a.at < b.at; });
+        events_.insert(it, ev);
+        knownLocating_ = false; ++knownApplied_; lastKnown_ = true;
+        lastStepDb_ = db; lastStepAt_ = at;
+    }
+    /** ★★ WHERE DID OUR KNOWN STEP LAND? A front end JUMPS between two 16-sample slices; programme slides. So for every
+     *  slice edge near the flagged packet the jump across it (mean of the kKnownWin slices after minus those before) is
+     *  taken LESS the programme's own slope there (from the slices beyond) — a 1 kHz tone at 50 % on an AM carrier
+     *  moves ~0.5 dB a slice at its steepest, a 1 dB step moves all of it at one edge. The edge whose jump best matches
+     *  the known size and sign wins, if it stands clear of the others (3× the spread of the jumps around it). */
+    struct EdgeFind { long long at = -1; double j = 0.0, rms = 1e9, jAtFlag = NAN; };
+    EdgeFind edgeSearch(const std::vector<double>& L, long long a0, long long from, long long to, double sgn) const {
+        EdgeFind r; const int ns = (int)L.size(), W = kKnownWin;
+        double sumSq = 0.0; int cnt = 0;
+        for (int k = 2 * W; k + 2 * W <= ns; ++k) {
+            double b = 0, a = 0, bb = 0, aa = 0;
+            for (int q = 0; q < W; ++q) { b += L[(size_t)(k - 1 - q)]; a += L[(size_t)(k + q)];
+                                          bb += L[(size_t)(k - 1 - W - q)]; aa += L[(size_t)(k + W + q)]; }
+            b /= W; a /= W; bb /= W; aa /= W;
+            const double slope = 0.5 * ((b - bb) + (aa - a)) / W;     // the programme's own slope per slice
+            const double j = (a - b) - slope * W;
+            const long long e = a0 + (long long)k * kSlice;
+            if (e == knownLocFlag_) r.jAtFlag = j;
+            if (e < from || e > to) continue;
+            sumSq += j * j; ++cnt;
+            if (r.at < 0 || sgn * j > sgn * r.j) { r.j = j; r.at = e; }
+            /* ★ …and the step INSIDE slice k (it rarely lands on a 16-sample boundary): from the slices before k to the
+             *   slices after it, slice k left out — its level, part-way between, says where in it the step is.
+             *   Measured without this: a step 4 samples into a slice read 0.7 of its size at each of two edges. */
+            if (k + 1 + 2 * W <= ns) {
+                double a2 = 0, aa2 = 0;
+                for (int q = 0; q < W; ++q) { a2 += L[(size_t)(k + 1 + q)]; aa2 += L[(size_t)(k + 1 + W + q)]; }
+                a2 /= W; aa2 /= W;
+                const double slope2 = 0.5 * ((b - bb) + (aa2 - a2)) / W;
+                const double j2 = (a2 - b) - slope2 * (W + 1);
+                if (sgn * j2 > sgn * r.j) {
+                    const double fr = std::fabs(a2 - b) > 1e-6 ? std::clamp((L[(size_t)k] - b) / (a2 - b), 0.0, 1.0) : 0.5;
+                    r.j = j2; r.at = e + (long long)std::lround((1.0 - fr) * kSlice);
+                }
+            }
+        }
+        r.rms = cnt > 1 ? std::sqrt(std::max(0.0, (sumSq - r.j * r.j) / (cnt - 1))) : 1e9;
+        return r;
+    }
+    static bool matches(const EdgeFind& f, double db) {
+        const double m = std::fabs(db);
+        return f.at >= 0 && (f.j > 0) == (db > 0) && std::fabs(f.j) >= 0.5 * m && std::fabs(f.j) <= 1.8 * m
+            && std::fabs(f.j) >= 3.0 * f.rms;
+    }
+    void locateKnown(long long g0) {
+        const int pad = (2 * kKnownWin + 2) * kSlice;
+        const long long tail = knownLocPair_ ? (long long)(kKnownPairLagSec * rate_) : 0;
+        const long long a0 = std::max(g0, knownLocFrom_ - pad);
+        const long long a1 = std::min(gIn_, knownLocTo_ + tail + pad);
+        const int ns = (int)((a1 - a0) / kSlice);
+        std::vector<double> L((size_t)std::max(0, ns));
+        for (int k = 0; k < ns; ++k) L[(size_t)k] = 10.0 * std::log10(std::max(meanPow(wk_ + (a0 - g0) + (long long)k * kSlice, kSlice), 1e-30));
+        const bool enough = ns >= 4 * kKnownWin + 6;
+        if (knownLocPair_) {
+            /* ★★ AN RF STEP WRITTEN AS ONE UPDATE WITH ITS IF COUNTER-STEP (VibeAGC for SDRplay). The two registers may
+             *    land a little apart: the level drops by the rung, then comes back by the counter-step (or the other way
+             *    round), a dip of a fraction of a millisecond — under the finder's 1.5 ms windows, so nothing found it and
+             *    the hold never started (measured: a 250 µs, −18.9 dB dip on AM went through whole, a +4 dB thump). Both
+             *    sizes are known, so both edges are looked for, either order, the second within kKnownPairLagSec. */
+            const double d1 = knownLocDb_, d2 = knownLocDb2_;
+            for (int order = 0; order < 2 && enough; ++order) {
+                const double first = order ? d2 : d1, second = order ? d1 : d2;
+                const EdgeFind e1 = edgeSearch(L, a0, knownLocFrom_, knownLocTo_, first > 0 ? 1.0 : -1.0);
+                if (!matches(e1, first)) continue;
+                const EdgeFind e2 = edgeSearch(L, a0, e1.at + kSlice, e1.at + tail, second > 0 ? 1.0 : -1.0);
+                if (!matches(e2, second)) continue;
+                knownLocated_ += 2; lkHow_ = 3; lkOff_ = e1.at - knownLocFlag_; lkOff2_ = e2.at - knownLocFlag_; lkJump_ = e1.j;
+                // ★ the IF's part is exact (whole dB of gRdB); the RUNG is only as good as the learned ladder, and 1 dB
+                //   off is a 1 dB step left in the audio (measured: −9.5 dB re programme on AM). So the rung's edge is
+                //   corrected by what the level actually did there.
+                placeKnown(e1.at, order ? first : e1.j); placeKnown(e2.at, order ? e2.j : second);
+                ++knownPairs_; return;
+            }
+            // ★ No dip: the two landed together, so it is ONE step of their sum — placed as a single known step if small.
+            const double net = d1 + d2;
+            if (std::fabs(net) < kKnownDirectDb) {
+                const EdgeFind e = enough ? edgeSearch(L, a0, knownLocFrom_, knownLocTo_, net > 0 ? 1.0 : -1.0) : EdgeFind{};
+                lkHow_ = 5; lkOff_ = 0; lkJump_ = e.at >= 0 ? e.j : 0.0;
+                if (std::fabs(net) >= 0.3 && matches(e, net)) { ++knownLocated_; lkOff_ = e.at - knownLocFlag_; placeKnown(e.at, net); }
+                else placeKnown(knownLocFlag_, net);
+                return;
+            }
+            // ★ Neither: hand the window to the finder and the hold, as for any flagged step — they MEASURE.
+            knownLocating_ = false; lkHow_ = 4; lkOff_ = 0; lkJump_ = 0.0; ++knownApplied_;
+            openHint(knownLocFrom_, knownLocTo_ + tail, true);
+            return;
+        }
+        if (!enough) { placeKnown(knownLocFlag_, knownLocDb_); return; }
+        const EdgeFind f = edgeSearch(L, a0, knownLocFrom_, knownLocTo_, knownLocDb_ > 0 ? 1.0 : -1.0);
+        const double m = std::fabs(knownLocDb_);
+        // ★ THE FLAG FIRST: if the level jumps by about the known step right at the flagged packet's first sample, that
+        //   is where it is — a noisier edge elsewhere that scores a little higher must not move it (measured: one of
+        //   eight 1 dB steps on a noisy AM carrier was pulled 3.5 ms early that way, a click at −17 dB).
+        if (std::isfinite(f.jAtFlag) && (f.jAtFlag > 0) == (knownLocDb_ > 0) && std::fabs(f.jAtFlag) >= 0.5 * m
+            && std::fabs(f.jAtFlag) <= 1.8 * m) { ++knownLocated_; lkHow_ = 0; lkOff_ = 0; lkJump_ = f.jAtFlag;
+                                                  placeKnown(knownLocFlag_, knownLocDb_); return; }
+        const bool good = matches(f, knownLocDb_);
+        if (good) ++knownLocated_;
+        lkHow_ = good ? 1 : 2; lkOff_ = good ? f.at - knownLocFlag_ : 0; lkJump_ = f.j;
+        placeKnown(good ? f.at : knownLocFlag_, knownLocDb_);
+    }
+    bool knownPending_ = false, knownPair_ = false; double knownDb_ = 0.0, knownDb2_ = 0.0; long long knownWait_ = 0;
+    unsigned knownApplied_ = 0, knownMissed_ = 0; bool lastKnown_ = false;
     static constexpr double kHoldDeadDb = 6.0;   // programme inside this of the level before is left alone
     static constexpr int kSlice = 16;           // the hold's resolution: 16 µs at 1 MS/s
     static constexpr double kHoldMinSec = 0.004;  // held at least this long after an edge: the IF AGC's answer
@@ -488,7 +668,7 @@ private:
                 db = m;
             }
         }
-        events_.push_back({found_, -db});
+        events_.push_back({found_, -db}); lastKnown_ = false;
         lastStepDb_ = db; lastStepAt_ = found_; lastCandAt_ = found_; ++steps_;
         // ★ In a flagged window the search goes on past a kept rung too: the IF AGC's answer to it may follow.
         if (savedExact_ && holdEnabled_ && savedTo_ > found_ + kSeg) {

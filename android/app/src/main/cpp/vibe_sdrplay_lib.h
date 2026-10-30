@@ -123,5 +123,42 @@ inline std::string resolvePort(const std::vector<std::string>& ports, const std:
 inline constexpr int kAndroidMinApi = 26;
 inline bool androidRspSupported(int apiLevel) { return apiLevel >= kAndroidMinApi; }
 
+/* ── ★★★ WHOSE DRIVER IS ANSWERING — OpenRSP OR SDRplay's OWN (VibeAGC for SDRplay, 2026-10-30) ─────────────────────
+ * The two libraries are ABI twins: the same 25 exported symbols, the same sdrplay_api_ApiVersion 3.15 (checked on the
+ * Lenovo, 2026-10-30) — so no call can tell them apart, and a size or string sniff would break on the next release of
+ * either. What CAN be known is PROVENANCE: which file we loaded, and which service it talks to.
+ *   · Android: only ever our own library, OpenRSP with its service embedded.
+ *   · Our BUNDLED library with NO system stack installed: it talks to our own bundled service — OpenRSP.
+ *   · A SYSTEM stack (/opt/sdrplay_api on Linux): OpenRSP's own package (sdrplay-api-open) puts its service at that same
+ *     path, and dpkg says which package owns it. Installed → OpenRSP; otherwise SDRplay's official installer.
+ *     ★ Whichever LIBRARY we loaded, the service behind it is the system one — the bundled library is only a fallback
+ *       client of it (candidateOrder), and the command load is the SERVICE's to survive.
+ *   · macOS with SDRplay's daemon: official. (OpenRSP's macOS installer is not out yet; when it is, add its marker.)
+ *   · Anything else: Unknown — treated as official, the cautious side.
+ * ★★ Why it matters: VibeAGC for SDRplay writes gain several times a second. The OFFICIAL service wedged under exactly
+ *    that on 09-12 (57b87900) and hung 3 times in 17 min of rapid DAB stepping on 10-20; OpenRSP took 150 min of the
+ *    same with no hang. So the loop is ON by default only where the driver is known to be OpenRSP. */
+enum class RspDriver { OpenRsp, Official, Unknown };
+
+/** The dpkg record of OpenRSP's own system package. */
+inline constexpr const char* kLinuxOpenRspPackage = "/var/lib/dpkg/info/sdrplay-api-open.list";
+inline bool linuxOpenRspPackage(const std::string& root = "") { return pathExists(root + kLinuxOpenRspPackage); }
+
+inline RspDriver whichDriver(bool android, bool loadedBundled, bool systemStack, bool openRspPackage) {
+    if (android) return RspDriver::OpenRsp;
+    if (systemStack) return openRspPackage ? RspDriver::OpenRsp : RspDriver::Official;
+    if (loadedBundled) return RspDriver::OpenRsp;
+    return RspDriver::Unknown;
+}
+inline const char* driverName(RspDriver d) {
+    return d == RspDriver::OpenRsp ? "OpenRSP" : d == RspDriver::Official ? "SDRplay API (official)" : "unknown SDRplay API";
+}
+/** The owner's choice: 0 = automatic (on with OpenRSP only), 1 = always on, 2 = off. */
+inline bool vagcEnabled(int ownerChoice, RspDriver d) {
+    if (ownerChoice == 1) return true;
+    if (ownerChoice == 2) return false;
+    return d == RspDriver::OpenRsp;
+}
+
 }  // namespace sdrplaylib
 }  // namespace vibe

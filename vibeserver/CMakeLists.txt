@@ -963,6 +963,14 @@ add_executable(test-rsp-caps "${CMAKE_CURRENT_SOURCE_DIR}/test-rsp-caps.cpp")
 target_include_directories(test-rsp-caps PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-rsp-caps)
 add_test(NAME rsp-caps COMMAND test-rsp-caps)
+# ★★★ VibeAGC FOR SDRplay (vibe_rsp_vibeagc.h, 2026-10-30): the combined IF + RF loop closed against a simulated RSP
+#     (Band II next to a +20 dB neighbour, weak HF, DAB, a signal arriving, the DAB rapid-step repro, fades, a rung
+#     bigger than its prior, a stalled stream) — and its writes through the real gainstep.h + RxPipeline: IF steps
+#     must sound like a fade, an RF rung + its IF counter-step must not click. Silent: nothing is played.
+add_executable(test-rsp-vibeagc "${CMAKE_CURRENT_SOURCE_DIR}/test-rsp-vibeagc.cpp")
+target_include_directories(test-rsp-vibeagc PRIVATE "${CPP_DIR}")
+target_link_libraries(test-rsp-vibeagc PRIVATE vibedsp Threads::Threads)
+add_test(NAME rsp-vibeagc COMMAND test-rsp-vibeagc)
 add_executable(test-agc-rules "${CMAKE_CURRENT_SOURCE_DIR}/test-agc-rules.cpp")
 target_include_directories(test-agc-rules PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-agc-rules)

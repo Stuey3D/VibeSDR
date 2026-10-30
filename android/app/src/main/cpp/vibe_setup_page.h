@@ -4343,7 +4343,28 @@ async function renderHw() {
         <br><br>On start-up the receiver gives the tuner's AGC a short <b>kick</b> &mdash; a
         deliberate disable/enable transition, because <code>agc.enable</code> only takes effect on a
         change &mdash; and opens at low RF gain so the loop climbs towards a working level rather
-        than descending from an overload.</div>
+        than descending from an overload.
+        <br><br><b>With VibeAGC (SDRplay) running</b> (below) none of the above applies: VibeAGC runs
+        both stages itself, and this box only says whether it may move the LNA &mdash; unticked, it
+        keeps to the IF and the RF gain stays where you put it.</div>
+
+      <label style="display:block;margin-top:18px"><span>VibeAGC (SDRplay)</span>
+        <select id="rspVibeAgc">
+          <option value="0">Automatic &mdash; on with the OpenRSP driver</option>
+          <option value="1">On</option>
+          <option value="2">Off &mdash; the RSP's own IF AGC</option>
+        </select></label>
+      <div class="hint"><b>Our own gain control for both stages of the RSP</b>, in place of the
+        API's IF AGC: it measures the converter level from the samples itself, moves the IF in small
+        steps that are smoothed out of the audio, and takes RF gain out first whenever the front end
+        is being driven hard &mdash; a strong neighbour can overload the RSP long before the wanted
+        station is loud. RF gain goes back only when there is room for a whole step. It writes to the
+        radio at most four times a second and never in bursts.
+        <br><br><b>Automatic</b> runs it only with the <b>OpenRSP</b> driver (bundled with VibeServer).
+        SDRplay's own API has locked up under this kind of gain control before, so with it installed
+        the RSP's IF AGC stays in charge unless you choose <b>On</b>. With the IF AGC set to manual in
+        the gain section, nothing here applies. If the driver ever rejects a gain write, VibeAGC hands
+        back to the RSP's own AGC and says why in the log.</div>
 
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="autoNotch" style="width:16px;height:16px;accent-color:var(--amber)">
@@ -4529,6 +4550,7 @@ async function renderHw() {
   // ★ OFF by default now — see g_rspRfAgc. `!!` is the right test again.
   if ($("rfAgc")) $("rfAgc").checked = !!radio().rfAgc;
   if ($("rspDabDecim")) $("rspDabDecim").checked = !!radio().rspDabDecim;
+  if ($("rspVibeAgc")) $("rspVibeAgc").value = String(radio().rspVibeAgc || 0);
   /* ★ REPAINT THE GAIN SECTION WHEN VibeAGC IS TOGGLED. renderGain() decides which gain controls
    *  VibeAGC has taken, so it has to run again the moment that answer changes — otherwise the
    *  rows stay as they were drawn on load and the greying only appears after a reload, which
@@ -6414,6 +6436,7 @@ function collectRadio() {
     ...($("rspExtRef")  ? {rspExtRef:  $("rspExtRef").checked}  : {}),
     ...($("rfAgc") ? {rfAgc: $("rfAgc").checked} : {}),
     ...($("rspDabDecim") ? {rspDabDecim: $("rspDabDecim").checked} : {}),
+    ...($("rspVibeAgc") ? {rspVibeAgc: +$("rspVibeAgc").value} : {}),
     ...($("agcSet") ? {agcSet: +$("agcSet").value} : {}),
     ...($("agcSetLock") ? {agcSetLock: $("agcSetLock").checked} : {}),
     ...($("autoNotch") ? {autoNotch: $("autoNotch").checked} : {}),

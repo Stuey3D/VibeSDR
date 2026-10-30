@@ -296,6 +296,7 @@ struct Opts {
     bool        rfAgc = false;
     bool        rspDabDecim = false;
     int         rfAgcStart = -1;
+    int         rspVibeAgc = 0;
     int         agcSet = -999;
     bool        agcSetLock = false;
     bool        dabNotch = false;
@@ -652,7 +653,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     o.rspHdr = c.rspHdr; o.rspAmNotch = c.rspAmNotch; o.rspExtRef = c.rspExtRef;
     o.icomPort = c.icomPort; o.icomBaud = c.icomBaud; o.icomCiv = c.icomCiv; o.icomAudio = c.icomAudio;
     o.icomScopeSpeed = c.icomScopeSpeed; o.icomOwnerLock = c.icomOwnerLock; o.icomRfOpen = c.icomRfOpen; o.icomTtyOk = c.icomTtyOk;
-    o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget; o.rfAgc = c.rfAgc; o.rspDabDecim = c.rspDabDecim; o.rfAgcStart = c.rfAgcStart;
+    o.dabAgcOverride = c.dabAgcOverride; o.dabAgcTarget = c.dabAgcTarget; o.rfAgc = c.rfAgc; o.rspDabDecim = c.rspDabDecim; o.rfAgcStart = c.rfAgcStart; o.rspVibeAgc = c.rspVibeAgc;
     o.agcSet = c.agcSet; o.agcSetLock = c.agcSetLock;
     o.port = c.port; o.web = c.web;
 }
@@ -690,7 +691,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.rspHdr = o.rspHdr; c.rspAmNotch = o.rspAmNotch; c.rspExtRef = o.rspExtRef;
     c.icomPort = o.icomPort; c.icomBaud = o.icomBaud; c.icomCiv = o.icomCiv; c.icomAudio = o.icomAudio;
     c.icomScopeSpeed = o.icomScopeSpeed; c.icomOwnerLock = o.icomOwnerLock; c.icomRfOpen = o.icomRfOpen; c.icomTtyOk = o.icomTtyOk;
-    c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget; c.rfAgc = o.rfAgc; c.rspDabDecim = o.rspDabDecim; c.rfAgcStart = o.rfAgcStart;
+    c.dabAgcOverride = o.dabAgcOverride; c.dabAgcTarget = o.dabAgcTarget; c.rfAgc = o.rfAgc; c.rspDabDecim = o.rspDabDecim; c.rfAgcStart = o.rfAgcStart; c.rspVibeAgc = o.rspVibeAgc;
     c.agcSet = o.agcSet; c.agcSetLock = o.agcSetLock;
     c.port = o.port; c.web = o.web;
     c.mode = o.lockFreq > 0 ? vsconfig::Mode::LockedRange : vsconfig::Mode::SingleUser;
@@ -1986,6 +1987,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerRfAgc(o.rfAgc);
     LocalSdrShim::setVibeServerRspDabDecim(o.rspDabDecim);
     LocalSdrShim::setVibeServerRfAgcStart(o.rfAgcStart);
+    LocalSdrShim::setVibeServerRspVibeAgc(o.rspVibeAgc);
     /* ★ The owner's AGC target, applied at start-up. -999 means they never chose one, so the
      *  radio keeps SDRplay's own working point rather than us inventing a value. */
     if (o.agcSet > -100) LocalSdrShim::instance().setIfAgcSetPoint(o.agcSet);
@@ -2289,7 +2291,7 @@ int main(int argc, char** argv) {
                 r.rfNotch = c.rfNotch; r.dabNotch = c.dabNotch; r.zoomSpectrum = c.zoomSpectrum;
                 r.autoNotch = c.autoNotch; r.userNotch = c.userNotch;
                 r.dabAgcOverride = c.dabAgcOverride; r.dabAgcTarget = c.dabAgcTarget; r.rfAgc = c.rfAgc; r.rspDabDecim = c.rspDabDecim;
-                r.rfAgcStart = c.rfAgcStart;
+                r.rfAgcStart = c.rfAgcStart; r.rspVibeAgc = c.rspVibeAgc;
                 r.agcSet = c.agcSet; r.agcSetLock = c.agcSetLock;
                 break;
             }
