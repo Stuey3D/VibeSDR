@@ -433,6 +433,11 @@ ${gl ? `<link rel="stylesheet" href="${glBase}vendor/maplibre-gl.css"><script sr
     background:rgba(6,9,6,0.88);border:1px solid rgba(${T.k},0.30);border-radius:8px;cursor:pointer;
     font-size:15px;line-height:1;-webkit-tap-highlight-color:transparent;touch-action:manipulation;color:rgba(${T.kt},0.80);}
   #statsbtn:active{background:rgba(${T.k},0.15);}
+  /* ★ ONE RIGHT EDGE for the stats key and the zoom stack (Stuart, 2026-10-30: the stats key sat inboard of the zoom
+     stack in landscape). The key keeps clear of the safe area (env(safe-area-inset-right) — the rounded corner and the
+     island in landscape); the map's bottom-right controls only had their own 10 px margin. Both now sit max(10 px, inset)
+     from the edge. */
+  .maplibregl-ctrl-bottom-right,.leaflet-bottom.leaflet-right{right:max(0px,calc(env(safe-area-inset-right) - 10px));}
   #stsheet{display:none;position:absolute;inset:0;z-index:1500;background:rgba(4,12,4,0.82);
     color:rgba(${T.x},0.80);font-size:12px;letter-spacing:0.8px;
     backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
