@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { scrollLane } from '../constants/popupTokens';
 import {
   Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View,
+  type TextStyle,
 } from 'react-native';
 import { RotateSheet, SheetRise } from './RotateFade';
 import { openWebPage } from '../utils/openWebPage';
@@ -106,16 +107,16 @@ function MoreItem({ onPress, onReveal, children }: {
  * or on/off group (lit = selected; the legend lights in the controls colour too) — never on a plain
  * action (MAP, FILES, the server maps, CLOSE). Default chassis: never drawn — every site keeps today's key.
  */
-function MetalKey({ navRef, focused, label, active = false, pip = false, onPress, fontSize = 12, style, iconId, stack }: {
+function MetalKey({ navRef, focused, label, active = false, pip = false, onPress, fontSize = 12, style, iconId, stack, legendStyle }: {
   navRef: React.MutableRefObject<View | null>; focused: boolean; label: string; active?: boolean; pip?: boolean;
-  onPress?: () => void; fontSize?: number; style?: object;
+  onPress?: () => void; fontSize?: number; style?: object; legendStyle?: TextStyle;
   /** ★ V12: the mode's category glyph before the legend (utils/modeIcons) — above it when `stack` (narrowest phones). */
   iconId?: string; stack?: boolean;
 }) {
   return (
     <PopupKey ref={navRef as any} label={label} active={active} pip={pip} onPress={onPress} focused={focused}
       icon={iconId ? modeKeyIcon(iconId, stack ? 12 : 13) : undefined} iconStack={stack} iconGap={stack ? undefined : 5}
-      height={36} fontSize={fontSize} style={[{ flex: 1, minWidth: '22%' }, style]} />
+      height={36} fontSize={fontSize} legendStyle={legendStyle} style={[{ flex: 1, minWidth: '22%' }, style]} />
   );
 }
 
@@ -182,6 +183,8 @@ const SERVER_MAPS: ReadonlyArray<{ kind: 'hfdl' | 'digi' | 'cw'; label: string; 
   { kind: 'digi', label: 'DIGI MAP', icon: 'digi', a11y: 'The server\'s map of digital spots' },
   { kind: 'cw',   label: 'CW MAP',   icon: 'cw',   a11y: 'The server\'s map of CW spots' },
 ];
+/** TRANSCRIBE's key: the full word where it fits the key, the short one where it does not (txFit). */
+const TX_FULL = 'TRANSCRIBE', TX_SHORT = "T'SCRIBE";
 const TAB_PAD = 4;
 const TAB_R = 8;
 /** ★★★ ON SILVER / BLACK THE TAB AND PANEL ARE A WELL PRESSED INTO THE PLATE (Stuart, 2026-10-30: "make it look like the
@@ -645,7 +648,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   if (owrxPages) { addLegend('MAP', 'map'); addLegend('FILES', 'files'); }
   for (const m of serverMapKeys) addLegend(m.label, m.icon);
   if (decoderControls?.galleryAvail) addLegend('GALLERY');
-  if (txShown) addLegend('TRANSCRIBE');
+  if (txShown) addLegend(TX_SHORT);   // ★ the grid is sized by the SHORT legend — TRANSCRIBE fits itself in (txFit)
   if (spotsShown && spotsControls) {
     if (!spotsInBands) addLegend(spotsControls.band ? 'SPOTS: SINGLE' : SPOTS_LEGEND, 'spots');
     if (spotsControls.band && !bandInWhole) addLegend(BAND_LEGEND, 'spotsband');
@@ -668,10 +671,25 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const keyGrid = decoderKeyGrid(legends, panelW || Math.min(winW, SHEET_MAX_W) - 32, {
     gap: KEY_GAP, padX: pt.metal ? 9 : 5, iconW: 13, iconGap: pt.metal ? 5 : 4, slack: 6, maxCols: 5,
   });
+  /* ★★ TRANSCRIBE IN FULL WHERE THE KEY HAS ROOM (Stuart, 2026-10-30: "looks like it has the room to say transcribe if we
+   *  lowered the font a little and allowed the word to be a little wider in the button"). The keys stay the size the
+   *  other legends set (T'SCRIBE is what sizes them); the full word is drawn a little smaller with tighter letter-spacing
+   *  when that fits the key's inside, down to 3/4 of the keys' font — below that (the narrowest phones) T'SCRIBE. */
+  const txFit = (() => {
+    const fs = keyFont.fontSize, ls = pt.metal ? 1 : 0, tight = pt.metal ? 0.5 : 0;
+    const full = legendW[`${fontSig}|${TX_FULL}`];
+    const room = keyGrid.keyW - 2 * (pt.metal ? 9 : 5) - 4;
+    if (!txShown || !full || !(room > 0)) return { label: TX_SHORT, fontSize: fs, letterSpacing: undefined as number | undefined };
+    const glyphs = full - TX_FULL.length * ls;                       // the measured width less its letter-spacing
+    const scale = Math.min(1, (room - TX_FULL.length * tight) / glyphs);
+    return scale >= 0.75
+      ? { label: TX_FULL, fontSize: Math.floor(fs * scale * 2) / 2, letterSpacing: scale < 1 ? tight : undefined }
+      : { label: TX_SHORT, fontSize: fs, letterSpacing: undefined };
+  })();
   /** The hidden row the legends are measured in — the keys' own font, never drawn. */
   const legendMeasurer = (
     <View pointerEvents="none" style={st.measure} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-      {legendSpecs.map((l) => {
+      {[...legendSpecs, ...(txShown ? [{ label: TX_FULL, icon: null }] : [])].map((l) => {
         const k = `${fontSig}|${l.label}`;
         return (
           <Text key={k} numberOfLines={1} style={keyFont}
@@ -702,16 +720,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const txLit = !!tc && (tc.active || tc.selected);
   const transcribeKey = tc ? (
     <NavItem key="transcribe" onPress={tc.onToggle}>{(navFocused, navRef) => pt.metal ? (
-      <MetalKey navRef={navRef} focused={navFocused} label="T'SCRIBE" active={txLit} pip onPress={tc.onToggle} />
+      <MetalKey navRef={navRef} focused={navFocused} label={txFit.label} active={txLit} pip onPress={tc.onToggle}
+                fontSize={txFit.fontSize} legendStyle={txFit.letterSpacing != null ? { letterSpacing: txFit.letterSpacing } : undefined} />
     ) : (
     <TouchableOpacity ref={navRef as any}
       style={[st.btn, { borderColor: txLit ? dec : t.btnBorder, paddingVertical: 10 },
               tc.active && { backgroundColor: decBg },
               navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
       onPress={tc.onToggle} activeOpacity={0.8} accessibilityRole="button" accessibilityLabel="Transcribe">
-      {/* ★ T'SCRIBE (Stuart, 2026-10-29): TRANSCRIBE was the widest key in VIEWS and held an SE to two a row. */}
-      <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: txLit ? dec : t.btnText }]}>
-        T'SCRIBE
+      {/* ★ TRANSCRIBE where it fits, else T'SCRIBE (txFit — it was T'SCRIBE always: the widest key held an SE to two a row). */}
+      <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: txFit.fontSize, color: txLit ? dec : t.btnText }]}>
+        {txFit.label}
       </Text>
     </TouchableOpacity>
     )}</NavItem>
