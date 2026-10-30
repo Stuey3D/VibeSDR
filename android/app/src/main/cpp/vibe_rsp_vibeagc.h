@@ -183,6 +183,10 @@ public:
     /** A retune / rate change / DAB block hop: the windows in flight describe the old capture. Gains are kept. */
     void noteRetune(double now, bool bandChanged) {
         hist_.clear(); waitWindowsTo_ = 0; needFresh_ = true; retuneAt_ = now;
+        /* ★ The dwells start again on ANY retune: a DAB block hop is a different multiplex at a different level, and a
+         *   load judgement begun on the last block must not complete on this one (Lenovo, DAB rapid-step repro 10-30: an
+         *   LNA cut 40 ms after a hop, on a dwell that had run through the block before). The overload ceiling is kept. */
+        loadedSince_ = roomSince_ = -1;
         if (bandChanged) { forgetJudgements(); acquiring_ = true; acqStart_ = -1; inBandSince_ = -1; }
     }
     int lna() const { return lna_; }
@@ -202,7 +206,7 @@ public:
         //   went BACK, and waiting for it to pass the old figure would sit out minutes
         if (in.windows < lastWindows_) { hist_.clear(); needFresh_ = true; }
         lastWindows_ = in.windows;
-        if (needFresh_) { waitWindowsTo_ = in.windows + 1; needFresh_ = false; }
+        if (needFresh_) { waitWindowsTo_ = in.windows + kSettleWindows; needFresh_ = false; }   // ★ one window straddles it
         if (in.windows < waitWindowsTo_) return o;                // straddles our write or a retune
         if (!std::isfinite(in.peak) || in.peak <= -98.0) return o;
         hist_.push_back({in.now, in.peak, in.clipPct > 0.0 || in.overload});
