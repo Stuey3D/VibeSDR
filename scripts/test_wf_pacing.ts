@@ -112,7 +112,8 @@ for (const seed of [11, 12, 13]) {
   ok('DEFAULT dpr2 @60 with 5 % dropped vsyncs: N stays 3', r.fpr === 3, describe(r));
 }
 // ── FOLLOW THE FEED (Stuart 10-20, src/assets/wfRowTarget.ts): the web client scrolls exactly as the app ──
-for (const [scroll, fps, screen] of [['default', 5, 15], ['default', 10, 20], ['default', 20, 20], ['smooth', 5, 30], ['smooth', 10, 60],
+// ★ Default 10 / 20 fps → 30 (faceb0e14, Stuart 2026-10-29: "it should have been 30fps"); these said 20 before.
+for (const [scroll, fps, screen] of [['default', 5, 15], ['default', 10, 30], ['default', 20, 30], ['smooth', 5, 30], ['smooth', 10, 60],
                                      ['smooth', 20, 60], ['sharp', 10, 10], ['default', 10 / 3, 10], ['smooth', 9, 30]] as const) {
   const r = simulate({ rowsPerSec: 0, scroll, rowPx: 2, fps, ...REAL });
   const want = screen * 2, n = Object.keys(r.hist).sort((a, b) => r.hist[+b] - r.hist[+a])[0];
