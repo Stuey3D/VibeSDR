@@ -4364,7 +4364,11 @@ async function renderHw() {
         SDRplay's own API has locked up under this kind of gain control before, so with it installed
         the RSP's IF AGC stays in charge unless you choose <b>On</b>. With the IF AGC set to manual in
         the gain section, nothing here applies. If the driver ever rejects a gain write, VibeAGC hands
-        back to the RSP's own AGC and says why in the log.</div>
+        back to the RSP's own AGC and says why in the log.
+        <br><br>You can also switch it <b>live from the radio menu</b>, without a restart: the
+        <b>AGC</b> row (AUTO &middot; VIBEAGC &middot; SDRPLAY) under MENU &rarr; RADIO on the web page, or
+        in the app's hardware panel, once you have unlocked the protected settings. A choice made there
+        is saved here too.</div>
 
       <label style="display:flex;align-items:center;gap:10px;margin-top:18px">
         <input type="checkbox" id="autoNotch" style="width:16px;height:16px;accent-color:var(--amber)">
