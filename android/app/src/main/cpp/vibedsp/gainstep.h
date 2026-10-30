@@ -140,6 +140,15 @@ public:
         knownWait_ = (long long)(kKnownWaitSec * rate_);
     }
     unsigned knownPairs() const { return knownPairs_; }
+    /** ★ DIAGNOSTICS for the on-air question "does the radio flag the packet our step lands in, and where in it?":
+     *  how the last known step was placed and how far (samples) from the flagged packet's first sample.
+     *  how: 0 = at the flag (the level jumped there), 1 = elsewhere, found by the level, 2 = at the flag because the
+     *  level said nothing, 3 = a pair, both edges found (offset = first edge, offset2 = second), 4 = a pair handed to
+     *  the finder. Also the jump the level showed there (dB). */
+    int lastKnownHow() const { return lkHow_; }
+    long long lastKnownOffset() const { return lkOff_; }
+    long long lastKnownOffset2() const { return lkOff2_; }
+    double lastKnownJump() const { return lkJump_; }
     unsigned knownApplied() const { return knownApplied_; }
     /** ★ correcting(), but only for a step that was FOUND — a placed known step is exact, so the level estimators
      *  downstream have nothing to sit out (and with the IF moving up to 4×/s they would never measure at all). */
@@ -248,6 +257,7 @@ private:
     bool knownLocating_ = false; long long knownLocFlag_ = 0, knownLocFrom_ = 0, knownLocTo_ = 0; double knownLocDb_ = 0.0;
     bool knownLocPair_ = false; double knownLocDb2_ = 0.0;
     unsigned knownLocated_ = 0, knownPairs_ = 0;
+    int lkHow_ = -1; long long lkOff_ = 0, lkOff2_ = 0; double lkJump_ = 0.0;
     void placeKnown(long long at, double db) {
         const Event ev{at, -db};
         auto it = std::upper_bound(events_.begin(), events_.end(), ev,
@@ -322,7 +332,7 @@ private:
                 if (!matches(e1, first)) continue;
                 const EdgeFind e2 = edgeSearch(L, a0, e1.at + kSlice, e1.at + tail, second > 0 ? 1.0 : -1.0);
                 if (!matches(e2, second)) continue;
-                knownLocated_ += 2;
+                knownLocated_ += 2; lkHow_ = 3; lkOff_ = e1.at - knownLocFlag_; lkOff2_ = e2.at - knownLocFlag_; lkJump_ = e1.j;
                 // ★ the IF's part is exact (whole dB of gRdB); the RUNG is only as good as the learned ladder, and 1 dB
                 //   off is a 1 dB step left in the audio (measured: −9.5 dB re programme on AM). So the rung's edge is
                 //   corrected by what the level actually did there.
@@ -338,7 +348,7 @@ private:
                 return;
             }
             // ★ Neither: hand the window to the finder and the hold, as for any flagged step — they MEASURE.
-            knownLocating_ = false;
+            knownLocating_ = false; lkHow_ = 4; lkOff_ = 0; lkJump_ = 0.0; ++knownApplied_;
             openHint(knownLocFrom_, knownLocTo_ + tail, true);
             return;
         }
@@ -349,9 +359,11 @@ private:
         //   is where it is — a noisier edge elsewhere that scores a little higher must not move it (measured: one of
         //   eight 1 dB steps on a noisy AM carrier was pulled 3.5 ms early that way, a click at −17 dB).
         if (std::isfinite(f.jAtFlag) && (f.jAtFlag > 0) == (knownLocDb_ > 0) && std::fabs(f.jAtFlag) >= 0.5 * m
-            && std::fabs(f.jAtFlag) <= 1.8 * m) { ++knownLocated_; placeKnown(knownLocFlag_, knownLocDb_); return; }
+            && std::fabs(f.jAtFlag) <= 1.8 * m) { ++knownLocated_; lkHow_ = 0; lkOff_ = 0; lkJump_ = f.jAtFlag;
+                                                  placeKnown(knownLocFlag_, knownLocDb_); return; }
         const bool good = matches(f, knownLocDb_);
         if (good) ++knownLocated_;
+        lkHow_ = good ? 1 : 2; lkOff_ = good ? f.at - knownLocFlag_ : 0; lkJump_ = f.j;
         placeKnown(good ? f.at : knownLocFlag_, knownLocDb_);
     }
     bool knownPending_ = false, knownPair_ = false; double knownDb_ = 0.0, knownDb2_ = 0.0; long long knownWait_ = 0;

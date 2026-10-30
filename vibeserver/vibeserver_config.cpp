@@ -316,7 +316,7 @@ std::string toJson(const Config& c) {
     B("rspHdr", c.rspHdr); B("rspAmNotch", c.rspAmNotch); B("rspExtRef", c.rspExtRef);
     S("icomPort", c.icomPort); N("icomBaud", c.icomBaud); N("icomCiv", c.icomCiv); S("icomAudio", c.icomAudio);
     N("icomScopeSpeed", c.icomScopeSpeed); B("icomOwnerLock", c.icomOwnerLock); B("icomRfOpen", c.icomRfOpen); B("icomTtyOk", c.icomTtyOk);
-    B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget); B("rfAgc", c.rfAgc); B("rspDabDecim", c.rspDabDecim); N("rfAgcStart", c.rfAgcStart); N("agcSet", c.agcSet); B("agcSetLock", c.agcSetLock);
+    B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget); B("rfAgc", c.rfAgc); B("rspDabDecim", c.rspDabDecim); N("rfAgcStart", c.rfAgcStart); N("rspVibeAgc", c.rspVibeAgc); N("agcSet", c.agcSet); B("agcSetLock", c.agcSetLock);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
     B("oneRadioPerIp", c.oneRadioPerIp);
@@ -415,6 +415,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "rfAgc", c.rfAgc);
     getBool(s, "rspDabDecim", c.rspDabDecim);
     if (getNum(s, "rfAgcStart", d)) c.rfAgcStart = (int)d;
+    if (getNum(s, "rspVibeAgc", d)) c.rspVibeAgc = std::max(0, std::min(2, (int)d));
     if (getNum(s, "agcSet", d)) c.agcSet = (int)d;
     getBool(s, "agcSetLock", c.agcSetLock);
     getBool(s, "zoomSpectrum", c.zoomSpectrum);
@@ -587,7 +588,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("rfNotch", r.rfNotch);
     B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("autoNotch", r.autoNotch); B("userNotch", r.userNotch);
-    B("dabAgcOverride", r.dabAgcOverride); I("dabAgcTarget", r.dabAgcTarget); B("rfAgc", r.rfAgc); B("rspDabDecim", r.rspDabDecim); I("rfAgcStart", r.rfAgcStart);
+    B("dabAgcOverride", r.dabAgcOverride); I("dabAgcTarget", r.dabAgcTarget); B("rfAgc", r.rfAgc); B("rspDabDecim", r.rspDabDecim); I("rfAgcStart", r.rfAgcStart); I("rspVibeAgc", r.rspVibeAgc);
     I("agcSet", r.agcSet); B("agcSetLock", r.agcSetLock);
     B("biasT", r.biasT);
     I("ppm", r.ppm); I("ppb", r.ppb); I("directSampling", r.directSampling);
@@ -660,7 +661,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("idleGrace", r.idleGrace);
     B("rfNotch", r.rfNotch); B("dabNotch", r.dabNotch); B("zoomSpectrum", r.zoomSpectrum);
     B("autoNotch", r.autoNotch); B("userNotch", r.userNotch);
-    B("dabAgcOverride", r.dabAgcOverride); N("dabAgcTarget", r.dabAgcTarget); B("rfAgc", r.rfAgc); B("rspDabDecim", r.rspDabDecim); N("rfAgcStart", r.rfAgcStart);
+    B("dabAgcOverride", r.dabAgcOverride); N("dabAgcTarget", r.dabAgcTarget); B("rfAgc", r.rfAgc); B("rspDabDecim", r.rspDabDecim); N("rfAgcStart", r.rfAgcStart); N("rspVibeAgc", r.rspVibeAgc);
     N("agcSet", r.agcSet); B("agcSetLock", r.agcSetLock);
     B("biasT", r.biasT);
     N("ppm", r.ppm); N("ppb", r.ppb); N("directSampling", r.directSampling);
@@ -751,7 +752,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.rspHdr = one.rspHdr; r.rspAmNotch = one.rspAmNotch; r.rspExtRef = one.rspExtRef;
     r.icomPort = one.icomPort; r.icomBaud = one.icomBaud; r.icomCiv = one.icomCiv; r.icomAudio = one.icomAudio;
     r.icomScopeSpeed = one.icomScopeSpeed; r.icomOwnerLock = one.icomOwnerLock; r.icomRfOpen = one.icomRfOpen; r.icomTtyOk = one.icomTtyOk;
-    r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc; r.rspDabDecim = one.rspDabDecim; r.rfAgcStart = one.rfAgcStart;
+    r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc; r.rspDabDecim = one.rspDabDecim; r.rfAgcStart = one.rfAgcStart; r.rspVibeAgc = one.rspVibeAgc;
     r.agcSet = one.agcSet; r.agcSetLock = one.agcSetLock;
     r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
     r.gainLimits = one.gainLimits; r.ifBwLimits = one.ifBwLimits; r.restGain = one.restGain; r.agcLock = one.agcLock;
@@ -1238,7 +1239,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.rspHdr = r.rspHdr; c.rspAmNotch = r.rspAmNotch; c.rspExtRef = r.rspExtRef;
     c.icomPort = r.icomPort; c.icomBaud = r.icomBaud; c.icomCiv = r.icomCiv; c.icomAudio = r.icomAudio;
     c.icomScopeSpeed = r.icomScopeSpeed; c.icomOwnerLock = r.icomOwnerLock; c.icomRfOpen = r.icomRfOpen; c.icomTtyOk = r.icomTtyOk;
-    c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc; c.rspDabDecim = r.rspDabDecim; c.rfAgcStart = r.rfAgcStart;
+    c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc; c.rspDabDecim = r.rspDabDecim; c.rfAgcStart = r.rfAgcStart; c.rspVibeAgc = r.rspVibeAgc;
     c.agcSet = r.agcSet; c.agcSetLock = r.agcSetLock;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;
     c.gainLimits = r.gainLimits; c.ifBwLimits = r.ifBwLimits; c.restGain = r.restGain; c.agcLock = r.agcLock;

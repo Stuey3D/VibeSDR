@@ -159,6 +159,19 @@ public:
      *   caller can tell "applied" from "silently dropped" — a readout that reports a value the
      *   hardware never took is the fault that made the IF slider look dead. */
     bool setIfGainReduction(int gRdB);
+    /** ★★★ BOTH STAGES IN ONE WRITE — VibeAGC for SDRplay (vibe_rsp_vibeagc.h, 2026-10-30). LNAstate and gRdB are one
+     *  struct, sent with ONE Update(Tuner_Gr): an RF rung and the IF counter-step that cancels it land together, so the
+     *  level barely moves and the command count is one, not two. Only with the API's own IF AGC disabled (returns false
+     *  otherwise, writing nothing). DC recalibration only when the LNA moved — the offset follows the RF stage, and
+     *  every extra Update is load the loop's budget is there to keep down. Returns the API's verdict (true = Success). */
+    bool setGainPair(int lnaState, int gRdB);
+    /** Gain writes the API has REJECTED since start (any caller) — VibeAGC's own error test reads the delta. */
+    static unsigned gainRejects();
+    /** ★ Whose driver this process is talking to — see vibe_sdrplay_lib.h, whichDriver(). Decided once, at load. */
+    static int driverKind();          // (int)sdrplaylib::RspDriver
+    static const char* driverLabel();
+    /** True while the API's own IF AGC is enabled on this radio. */
+    bool ifAgcEnabled() const;
     /** API-side AGC on the IF stage. While enabled the IF reduction cannot be set by hand. */
     void setIfAgc(bool on);
     /** ★★ THE AGC's TARGET LEVEL in dBfs, which SDRconnect exposes and which decides how

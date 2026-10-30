@@ -137,7 +137,7 @@ struct VagcIn {
     int    lnaFloor = 0;       // the owner's RF cap as the lowest state allowed (0 = full RF gain allowed)
     bool   rfOwned = true;     // false = the owner runs the LNA by hand; we keep to the IF
     int    band = 1;           // SdrplaySource::lnaBandId
-    double learnedRed[28];     // learned LNA reduction per state in this band (gain(0) − gain(s)); NaN unknown
+    double learnedRed[28];     // learned LNA reduction per state in this band, any common offset; NaN unknown
     VagcIn() { for (double& d : learnedRed) d = NAN; }
 };
 
@@ -196,6 +196,9 @@ public:
         VagcOut o; o.lna = lna_; o.gr = gr_;
         // ── fresh measurement only ──
         if (in.windows == lastWindows_) return o;
+        // ★ the source restarted its measurement (adcRestart on a retune, a rate change, a stream restart): the count
+        //   went BACK, and waiting for it to pass the old figure would sit out minutes
+        if (in.windows < lastWindows_) { hist_.clear(); needFresh_ = true; }
         lastWindows_ = in.windows;
         if (needFresh_) { waitWindowsTo_ = in.windows + 1; needFresh_ = false; }
         if (in.windows < waitWindowsTo_) return o;                // straddles our write or a retune
@@ -322,11 +325,12 @@ public:
      *  else the prior, which only fills gaps. */
     static double rungDbFor(const VagcIn& in, int hiGainState, int loGainState) {
         if (hiGainState < 0) hiGainState = 0;
-        auto red = [&](int s) {
-            const double l = (s >= 0 && s < 28) ? in.learnedRed[s] : NAN;
-            return std::isfinite(l) ? l : vagcPriorRed(in.band, s);
-        };
-        const double d = red(loGainState) - red(hiGainState);
+        // ★ learned figures share an unknown offset (the API's total gain + our gRdB), the prior another — so a rung
+        //   is learned only when BOTH ends are, never one end of each.
+        const double lh = (hiGainState < 28) ? in.learnedRed[hiGainState] : NAN;
+        const double ll = (loGainState >= 0 && loGainState < 28) ? in.learnedRed[loGainState] : NAN;
+        double d = (std::isfinite(lh) && std::isfinite(ll)) ? ll - lh
+                 : vagcPriorRed(in.band, loGainState) - vagcPriorRed(in.band, hiGainState);
         return std::isfinite(d) && d > 0.5 ? d : 6.0;
     }
 

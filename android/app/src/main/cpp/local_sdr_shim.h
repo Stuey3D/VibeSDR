@@ -490,6 +490,8 @@ public:
     /** ★ The RF half of the gain loop — see vsSdrplayRfAgcTick. */
     static void setVibeServerRfAgc(bool on);
     static void setVibeServerRspDabDecim(bool on);   // ★ see SdrplaySource::setDabDecimation
+    /** ★ VibeAGC for SDRplay: 0 automatic (on with OpenRSP only), 1 always, 2 never — vibe_rsp_vibeagc.h. */
+    static void setVibeServerRspVibeAgc(int choice);
     /** ★ Gain POSITION the RF AGC begins from; -1 = the middle. */
     static void setVibeServerRfAgcStart(int pos);
     /** ★ Listeners may not move the AGC target — it decides how hard everyone's front end runs. */

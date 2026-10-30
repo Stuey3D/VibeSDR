@@ -306,6 +306,10 @@ struct Config {
      *  when it disturbs the IF AGC. Starting from a sensible place means it usually has nothing
      *  to do at all (Stuart, 2026-09-12). */
     int  rfAgcStart = -1;
+    /* ★★★ VibeAGC FOR SDRplay (vibe_rsp_vibeagc.h, 2026-10-30): our own loop on BOTH gain stages, the API's IF AGC off.
+     *  0 = automatic — on with the OpenRSP driver, off with SDRplay's official API (which wedged under exactly this kind
+     *  of write load on 2026-09-12); 1 = on whatever the driver; 2 = off (the API's IF AGC + the RF walker). */
+    int  rspVibeAgc = 0;
     /* ★ The RSP's IF AGC TARGET (dBFS). -999 = the owner never chose one, so the radio keeps
      *  SDRplay's own working point of -30. agcSetLock withholds it from listeners, exactly as
      *  gainLock withholds the gain: it changes the radio for everybody on a shared receiver. */
@@ -589,6 +593,7 @@ struct RadioConfig {
     bool   rfAgc = false;
     bool   rspDabDecim = false;
     int    rfAgcStart = -1;
+    int    rspVibeAgc = 0;
     int    agcSet = -999;
     bool   agcSetLock = false;
     /** ★★★ DC ON THE FEEDLINE, REMEMBERED AND ASSERTED. A dongle's bias-T survives whatever set

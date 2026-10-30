@@ -46,6 +46,8 @@
 #include "vibe_gzip.h"
 #include "vibe_rsp_init_gate.h" // ★ the AGC-initialising indicator's ending — it cannot wedge (2026-10-06)
 #include "vibe_rsp_rail_step.h" // ★ the RF loop's open-loop test — a rail must show in OUR peak (2026-10-16)
+#include "vibe_rsp_vibeagc.h"   // ★★★ VibeAGC for SDRplay — the combined IF + RF loop (2026-10-30)
+#include "vibe_sdrplay_lib.h"   // ★ whose driver: OpenRSP or SDRplay's own — VibeAGC's default follows it
 #include "vibe_agc_rules.h"   // ★ auto-IF settle hold, gross-overload shed, per-band gain — see the header
 #include "vibe_agc_record.h"  // ★ the bounded in-memory VibeAGC record + flap counters (2026-10-20)
 #include "vibe_session_turns.h"   // ★ whose turn it is, and borrowed time after it — see the header   // ★ what this server runs on, for the directory — see the header
@@ -4334,6 +4336,25 @@ static std::atomic<double> g_adcPeakDbfs{-99.0};
  *     on air over more than one evening.
  * ★ The switch is on the setup page and in the menu; an owner who wants it can have it. */
 static std::atomic<int> g_vibeAgcRspOn{0};
+/* ★★★ VibeAGC FOR SDRplay (vibe_rsp_vibeagc.h, 2026-10-30): the owner's choice — 0 automatic (on with OpenRSP only),
+ *     1 always, 2 never — whether it is running now, and whether it has handed back for a reason (an API error, rejected
+ *     writes, a device failure): tripped stays tripped until the radio is reopened or the owner changes the setting. */
+static std::atomic<int>  g_rspVagcOwner{0};
+static std::atomic<bool> g_rspVagcActive{false};
+static std::atomic<bool> g_rspVagcTripped{false};
+/* ★★ OUR OWN GAIN WRITE, TOLD TO THE CAPTURE SMOOTHER BEFORE IT LANDS. The heartbeat writes; the DSP thread reads this
+ *    mailbox before it handles the packet the radio flags (grChanged), so the step is placed, not searched for
+ *    (GainStepSmoother::noteKnownStep / noteKnownPair). Written BEFORE the Update call, so the flagged packet — which
+ *    cannot exist until after it — always finds it. */
+static std::atomic<unsigned> g_vagcKnownSeq{0};
+static std::atomic<float>    g_vagcKnownDb1{0.0f}, g_vagcKnownDb2{0.0f};
+static std::atomic<int>      g_vagcKnownPair{0};
+static inline void vagcPostKnown(bool pair, double d1, double d2) {
+    g_vagcKnownDb1.store((float)d1, std::memory_order_relaxed);
+    g_vagcKnownDb2.store((float)d2, std::memory_order_relaxed);
+    g_vagcKnownPair.store(pair ? 1 : 0, std::memory_order_relaxed);
+    g_vagcKnownSeq.fetch_add(1, std::memory_order_release);
+}
 /* ★ Declared HERE, with its neighbour, because the control handler reads it thousands of lines
  *  before the setter is defined. Fourth time tonight a flag has had to move up for that reason:
  *  anything the message handlers read must be declared above them, not next to its setter. */
@@ -5161,6 +5182,180 @@ static void vsVibeAgcForget() {
  *  ★★★ Removed rather than left dormant: a thousand lines of unreachable controller is a
  *      standing invitation to wonder which loop is running, and tonight proved how expensive
  *      that question is to answer from outside. */
+
+/* ★★★ …AND IT IS BACK, IN A DIFFERENT SHAPE (2026-10-30) — VibeAGC FOR SDRplay, vibe_rsp_vibeagc.h. Stuart: "one that we
+ *     couldnt do before due to the SDRPlay API being garbage, but now we use OpenRSP which is more responsive". What
+ *     wedged the official API on 09-12 was the LOAD — several unbudgeted writes a second. This one writes at most every
+ *     250 ms (IF) / 1.5 s (LNA), never more than 5 in any second, only past hysteresis; a rung and its IF counter-step are
+ *     ONE Update; and it is on by default only under OpenRSP, whose service took 150 min of rapid DAB stepping without a
+ *     hang where the official one hung 3 times in 17. Under the official API the arrangement above stays unless the
+ *     owner turns this on. It steers by OUR ADC peak and OUR gRdB, so there is no readout to freeze.
+ *  ★ The writes are told to the capture smoother first (vagcPostKnown), which puts each step back exactly — an IF move
+ *    sounds like a fade, and an RF rung's dip between its two registers is found and filled (test-rsp-vibeagc).
+ *  ★★ Hands back (to the kick + their IF AGC + the RF walker) on any sign the driver is unhappy: a device failure, the
+ *     service not answering, writes rejected, or the radio refusing our gain. Logged with the reason; never silent. */
+struct RspVagcState {
+    vibersp::VibeAgcRsp agc;
+    double lastCentre = 0.0; int lastBand = -1; bool lastDab = false; int lastDabBlk = -9; double lastRate = 0.0;
+    unsigned rejectsAtStart = 0; int rejectsSeen = 0;
+    // write-rate telemetry for the minute log
+    double minuteFrom = 0.0; unsigned wAtMinute = 0, ifAtMinute = 0, lnaAtMinute = 0; int maxPsAtMinute = 0;
+    // the landed test: did gainVals.curr move after an LNA write?
+    double checkLandAt = -1.0; float structBefore = -999.0f; int unlanded = 0;
+    std::string lastProfile;
+};
+static RspVagcState g_rspVagc;
+
+/** The take-over: the API's IF AGC off (one write), the loop adopts the gain the radio is at. */
+static void vsRspVagcTakeOver(SdrplaySource* sdrp, const char* why) {
+    if (sdrp->ifAgcEnabled()) sdrp->setIfAgc(false);
+    g_rspVagc.agc.adopt(sdrp->currentLnaState(), sdrp->currentIfGr());
+    g_rspVagc.rejectsAtStart = SdrplaySource::gainRejects(); g_rspVagc.rejectsSeen = 0;
+    g_rspVagc.unlanded = 0; g_rspVagc.checkLandAt = -1.0; g_rspVagc.lastProfile.clear();
+    g_rspVagc.minuteFrom = vibersp::monoNowSec();
+    g_rspVagcActive.store(true, std::memory_order_relaxed);
+    sfericForget(6.0);
+    LOGI("VibeAGC (RSP): taking both gain stages — driver %s, %s. The API's own IF AGC is OFF; LNA state %d/%d, IF "
+         "reduction %d dB to start. Budget: IF >= %.0f ms apart, LNA >= %.1f s, <= %d writes in any second.",
+         SdrplaySource::driverLabel(), why, sdrp->currentLnaState(), std::max(0, sdrp->lnaStateCount() - 1),
+         sdrp->currentIfGr(), vibersp::VibeAgcRsp::kIfMinSec * 1000.0, vibersp::VibeAgcRsp::kLnaMinSec,
+         vibersp::VibeAgcRsp::kMaxWritesPerSec);
+}
+/** Stop: the caller re-runs the kick, which hands the IF back to the API's AGC from a safe parking value. */
+static void vsRspVagcTrip(const char* why) {
+    if (!g_rspVagcActive.load(std::memory_order_relaxed)) return;
+    g_rspVagcActive.store(false, std::memory_order_relaxed);
+    g_rspVagcTripped.store(true, std::memory_order_relaxed);
+    LOGI("VibeAGC (RSP): HANDING BACK to the API's IF AGC + the RF walker — %s. It stays off until the radio is reopened "
+         "or the owner changes the setting.", why);
+}
+
+/** One heartbeat. Returns true if it wrote to the radio. */
+static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const std::string& mode, bool dab,
+                          int dabBlock, double centreHz, double rate) {
+    auto& st = g_rspVagc;
+    const double now = vibersp::monoNowSec();
+    // ── the driver's own word first ──
+    if (sdrp->apiFailed())           { vsRspVagcTrip("the SDRplay API reported a device failure"); return false; }
+    if (sdrp->serviceUnresponsive()) { vsRspVagcTrip("the RSP service stopped answering"); return false; }
+    const int rej = (int)(SdrplaySource::gainRejects() - st.rejectsAtStart);
+    if (rej > st.rejectsSeen) {
+        st.rejectsSeen = rej;
+        LOGI("VibeAGC (RSP): the driver REJECTED a gain write (%d since take-over)", rej);
+        if (rej >= 3) { vsRspVagcTrip("the driver rejected 3 gain writes"); return false; }
+    }
+    // ── anybody else's write (a listener's slider, the owner's saved gain): adopt it, do not fight it ──
+    if (sdrp->ifAgcEnabled()) {
+        LOGI("VibeAGC (RSP): something switched the API's IF AGC back on — off again (VibeAGC owns the IF)");
+        sdrp->setIfAgc(false);
+    }
+    if (sdrp->currentLnaState() != st.agc.lna() || sdrp->currentIfGr() != st.agc.gr()) {
+        LOGI("VibeAGC (RSP): the gain was set from elsewhere (LNA %d -> %d, IF %d -> %d) — adopting it",
+             st.agc.lna(), sdrp->currentLnaState(), st.agc.gr(), sdrp->currentIfGr());
+        st.agc.adopt(sdrp->currentLnaState(), sdrp->currentIfGr());
+    }
+    // ── profile and retunes ──
+    const vibersp::VagcBand vb = vibersp::vagcBandFor(mode, dab, centreHz);
+    st.agc.setProfile(vb);
+    if (st.lastProfile != st.agc.profile().name) {
+        st.lastProfile = st.agc.profile().name;
+        LOGI("VibeAGC (RSP): profile %s — ADC peak target %.0f dBFS ±%.0f, RF out above IF %.0f dB",
+             st.agc.profile().name, st.agc.profile().targetPk, st.agc.profile().deadDb, st.agc.profile().grHigh);
+    }
+    const int band = SdrplaySource::lnaBandId(centreHz);
+    if (centreHz != st.lastCentre || dab != st.lastDab || dabBlock != st.lastDabBlk || rate != st.lastRate) {
+        st.agc.noteRetune(now, band != st.lastBand || dab != st.lastDab);
+        st.lastCentre = centreHz; st.lastDab = dab; st.lastDabBlk = dabBlock; st.lastRate = rate; st.lastBand = band;
+    }
+    // ── the landed test, 1 s after an LNA write: the API's own gainVals.curr must have moved ──
+    if (st.checkLandAt > 0 && now >= st.checkLandAt) {
+        st.checkLandAt = -1.0;
+        const float g = sdrp->structGainDb();
+        if (g > -998.0f && st.structBefore > -998.0f && std::fabs(g - st.structBefore) < 0.05f) {
+            ++st.unlanded;
+            LOGI("VibeAGC (RSP): an LNA write did not move the API's own gain figure (%.1f dB) — %d in a row",
+                 g, st.unlanded);
+            if (st.unlanded >= 3) { vsRspVagcTrip("3 LNA writes in a row were not honoured"); return false; }
+        } else if (g > -998.0f) {
+            st.unlanded = 0;
+            sdrp->noteLnaGain(sdrp->currentLnaState(), g, sdrp->currentIfGr());   // ★ the ladder learns from our own rungs
+        }
+    }
+    /* ★ BENCH ONLY — VIBE_VAGC_STRESS="<writes/s>,<seconds>[,<lna 0|1>]": how much write load does THIS driver take? From
+     *   30 s after take-over, the IF is stepped ±1 dB (and with lna=1 every 4th write also moves the LNA one rung and back)
+     *   at the given rate, budget ignored, then the loop resumes. Rejected writes, stalls and service errors are what to
+     *   read in the log. Never set on a server anyone listens to. */
+    {
+        struct Stress { double hz, secs; bool lna; };
+        static const Stress stress = [] {
+            const char* e = std::getenv("VIBE_VAGC_STRESS");
+            double hz = 0, secs = 0; int l = 0;
+            if (e) std::sscanf(e, "%lf,%lf,%d", &hz, &secs, &l);
+            return Stress{hz, secs, l != 0};
+        }();
+        static double stressFrom = -1, lastW = 0; static unsigned sw = 0; static unsigned rej0 = 0; static bool done = false;
+        if (stress.hz > 0 && !done) {
+            if (stressFrom < 0) stressFrom = now + 30.0;
+            if (now >= stressFrom) {
+                if (sw == 0) { rej0 = SdrplaySource::gainRejects();
+                               LOGI("VibeAGC (RSP) STRESS: %.1f writes/s for %.0f s%s — starting", stress.hz, stress.secs,
+                                    stress.lna ? " (every 4th moves the LNA)" : ""); }
+                if (now - stressFrom >= stress.secs) {
+                    done = true;
+                    LOGI("VibeAGC (RSP) STRESS: done — %u writes in %.0f s (%.1f/s), %u rejected, windows still advancing: %u",
+                         sw, stress.secs, sw / stress.secs, SdrplaySource::gainRejects() - rej0, sdrp->adcWindows());
+                    st.agc.adopt(sdrp->currentLnaState(), sdrp->currentIfGr());
+                } else if (now - lastW >= 1.0 / stress.hz) {
+                    lastW = now; ++sw;
+                    int g = sdrp->currentIfGr(); g += (sw % 2) ? 1 : -1;
+                    int l = sdrp->currentLnaState();
+                    if (stress.lna && sw % 4 == 0) l = (sw % 8 == 0) ? l + 1 : std::max(0, l - 1);
+                    sdrp->setGainPair(l, g);
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+    // ── the loop ──
+    vibersp::VagcIn in;
+    in.now = now; in.windows = sdrp->adcWindows(); in.peak = sdrp->adcPeakDbfs(); in.clipPct = sdrp->adcClipPct();
+    in.overload = sdrp->overloadReal(); in.nStates = std::max(1, sdrp->lnaStateCount()); in.lnaFloor = lnaFloor;
+    in.rfOwned = rfOwned; in.band = band;
+    for (int q = 0; q < std::min(28, in.nStates); ++q) {
+        const float g = sdrp->lnaGainDb(q);
+        if (std::isfinite(g)) in.learnedRed[q] = -(double)g;     // reduction = −gain, any common offset
+    }
+    const vibersp::VagcOut o = st.agc.tick(in);
+    // ── the minute log: the write rate as a fact ──
+    if (now - st.minuteFrom >= 60.0) {
+        const unsigned w = st.agc.writes() - st.wAtMinute, wi = st.agc.ifWrites() - st.ifAtMinute,
+                       wl = st.agc.lnaWrites() - st.lnaAtMinute;
+        LOGI("VibeAGC (RSP): last %.0f s — %u gain writes (%u IF, %u LNA; %.2f/s), most in any one second since start %d; "
+             "LNA %d/%d, IF %d dB, ADC peak %.1f dBFS%s", now - st.minuteFrom, w, wi, wl, w / (now - st.minuteFrom),
+             st.agc.maxWritesInAnySecond(), sdrp->currentLnaState(), std::max(0, in.nStates - 1), sdrp->currentIfGr(),
+             in.peak, st.agc.acquiring() ? " (acquiring)" : "");
+        st.minuteFrom = now; st.wAtMinute = st.agc.writes(); st.ifAtMinute = st.agc.ifWrites(); st.lnaAtMinute = st.agc.lnaWrites();
+    }
+    if (!o.write) return false;
+    // ── tell the smoother, then write ONE Update ──
+    if (o.lnaChanged) vagcPostKnown(true, o.expectDb - o.ifDb, o.ifDb);          // the rung (approximate) + the IF (exact)
+    else if (std::fabs(o.ifDb) < vibedsp::GainStepSmoother::kKnownDirectDb) vagcPostKnown(false, o.ifDb, 0.0);
+    else noteOwnGainWrite();                                                     // a big IF step: the finder measures it
+    if (o.lnaChanged) { st.structBefore = sdrp->structGainDb(); st.checkLandAt = now + 1.0; noteHwMoved(); }
+    LOGI("VibeAGC (RSP): %s", o.why);
+    if (!sdrp->setGainPair(o.lna, o.gr)) {
+        LOGI("VibeAGC (RSP): the write was not sent (the API's IF AGC owned the register) — re-adopting");
+        st.agc.adopt(sdrp->currentLnaState(), sdrp->currentIfGr());
+        return false;
+    }
+    if (o.lnaChanged) {
+        g_vibeAgcRspLastLna.store(o.lna, std::memory_order_relaxed);      // ★ the gain memory the kick hands over from
+        g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+    }
+    return true;
+}
 
 // ★ Until when somebody has asked for ADC statistics with the automation off — see enqueueIq.
 static std::atomic<double> g_adcStatsUntil{0.0};
@@ -12380,7 +12575,42 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const int savedLna0 = g_vsSavedLna.load(), savedGr0 = g_vsSavedIfGr.load();
             const int savedAgc0 = g_vsSavedIfAgc.load();
             const bool neverTouched = (savedLna0 < 0 && savedGr0 < 0 && savedAgc0 < 0);
-            if ((savedAgc0 == 0 || neverTouched) && sdrpAgcKick < 6 && n > 10) {
+            /* ★★★ VibeAGC FOR SDRplay (vsRspVagcTick, 2026-10-30) — it replaces the KICK + THEIR IF AGC + the RF walker,
+             *     and nothing else: the manual-gain start above still wins (an owner who saved AGC off, or a fresh install
+             *     that starts at the protective minimum), and so does a listener turning the IF AGC off. On by default
+             *     only under OpenRSP (vibe_sdrplay_lib.h, vagcEnabled). */
+            {
+                static bool vagcWasActive = false;
+                const bool manualPending = (savedAgc0 == 0 || neverTouched) && sdrpAgcKick < 6
+                                         && !g_rspVagcActive.load(std::memory_order_relaxed);
+                const bool vagcOn = sdrpAgcWanted && !manualPending
+                    && vibe::sdrplaylib::vagcEnabled(g_rspVagcOwner.load(std::memory_order_relaxed),
+                                                     (vibe::sdrplaylib::RspDriver)SdrplaySource::driverKind())
+                    && !g_rspVagcTripped.load(std::memory_order_relaxed);
+                if (vagcOn && !g_rspVagcActive.load(std::memory_order_relaxed) && n > 10) {
+                    vsRspVagcTakeOver(sdrp.get(), g_rspVagcOwner.load() == 1 ? "switched on by the owner"
+                                                                               : "on by default with this driver");
+                    sdrpAgcKick = 6;               // ★ no kick: there is no API AGC to start, and its walk is a fight
+                    sdrpSettling = false;
+                } else if (!vagcOn && g_rspVagcActive.load(std::memory_order_relaxed)) {
+                    g_rspVagcActive.store(false, std::memory_order_relaxed);
+                    LOGI("VibeAGC (RSP): stopping — %s", !sdrpAgcWanted ? "the IF AGC was switched off (manual gain)"
+                                                                       : "switched off by the owner");
+                }
+                if (g_rspVagcActive.load(std::memory_order_relaxed)) {
+                    const int capPosV = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
+                    const int floorV  = capPosV >= 0 ? std::max(0, sdrp->lnaStateCount() - 1 - capPosV) : 0;
+                    vsRspVagcTick(sdrp.get(), floorV, g_vibeAgcRspOn.load(std::memory_order_relaxed) != 0, mode,
+                                  g_dabMode.load(std::memory_order_relaxed), g_dabChannel.load(std::memory_order_relaxed),
+                                  rtlCenter.load() + hwOffsetHz(), sampleRate);
+                }
+                // ★ It handed back (an error, rejected writes): their AGC comes back through the kick, from its safe
+                //   parking values — never left wherever our loop last was.
+                if (vagcWasActive && !g_rspVagcActive.load(std::memory_order_relaxed) && sdrpAgcWanted) sdrpAgcKick = 0;
+                vagcWasActive = g_rspVagcActive.load(std::memory_order_relaxed);
+            }
+            const bool vagcActive = g_rspVagcActive.load(std::memory_order_relaxed);
+            if ((savedAgc0 == 0 || neverTouched) && sdrpAgcKick < 6 && n > 10 && !vagcActive) {
                 const int savedGr  = g_vsSavedIfGr.load();
                 // LNA state counts the OTHER WAY: 0 is maximum RF gain, so the last state is the
                 // least. Derived from the ladder so an RSP1 (4 states) and a dx (28) both land at
@@ -12417,7 +12647,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     and repaired only when somebody asks, via `rsp_agc_restart`.
              *  ★ sdrplay_api_DeviceFailure is different and still acts on its own: that is the
              *    library saying it has collapsed, and there is nothing to preserve by waiting. */
-            if (sdrpAgcWanted && (sdrp->apiFailed()
+            if (sdrpAgcWanted && !vagcActive && (sdrp->apiFailed()
                                   || g_rspAgcRestartReq.load(std::memory_order_relaxed))) {
                 /* ★★ ONE REPAIR, TWO CALLERS, AND THE LOG MUST SAY WHICH. The API reporting its
                  *    own collapse is a FACT; a listener tapping the chip is a DECISION taken on
@@ -12451,7 +12681,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  ★ With it in place the kick never fired and the IF AGC never started: ifgr sat
              *    frozen at 41 while the converter level moved, and the RF loop stepped the LNA on
              *    the strength of a number nobody was updating. */
-            else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0) {
+            else if (sdrpAgcWanted && sdrpAgcKick < 6 && n > 10 && (n % 20) == 0 && !vagcActive) {
                 noteHwMoved();                 // ★ every kick step moves the level; none is a sferic
                 noteOwnGainWrite();            // ★ …and is a gain write of ours (11.0.9: the kick's were not counted)
                 switch (++sdrpAgcKick) {
@@ -12678,7 +12908,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             static bool armedOnce = false;
             if (sdrpSettling) armedOnce = false;
             if (armedOnceReset) { armedOnce = false; armedOnceReset = false; }
-            if (!sdrpSettling && graceDone && ifAgcAlive && !armedOnce
+            if (!sdrpSettling && graceDone && ifAgcAlive && !armedOnce && !vagcActive
                 && g_vibeAgcRspOn.load(std::memory_order_relaxed)) {
                 armedOnce = true;
                 const int n = sdrp->lnaStateCount();
@@ -12742,7 +12972,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  original if/else chain below is left exactly as it was — a re-kick restarts the
              *  whole cycle and the listener watches the same rearrangement again. */
             if (sdrpSettling) { coarseDone = false; coarseAt = {}; }   // ★ the indicator is raised at kick step 1 now — see sdrpInitGate
-            else if (graceDone && ifAgcAlive && armedOnce && !coarseDone
+            else if (graceDone && ifAgcAlive && armedOnce && !coarseDone && !vagcActive
                      && g_vibeAgcRspOn.load(std::memory_order_relaxed)) {
                 const auto nowC = std::chrono::steady_clock::now();
                 if (coarseAt.time_since_epoch().count() == 0) coarseAt = nowC;
@@ -12953,7 +13183,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     switched back on when DAB is left, when the block changes, or when the level
              *     drifts far from the set point for 5 s (a fade, a stronger block) — it then
              *     re-settles and is held again. The RF loop stays out while the IF is held. */
-            {
+            if (!vagcActive) {   // ★ VibeAGC owns the IF in DAB too (its DAB profile freezes it inside a band)
                 static bool dabIfHeld = false;
                 static int  dabHeldBlock = -2, dabArmedBlock = -2, dabSaidBlock = -2;
                 static auto dabDriftSince = std::chrono::steady_clock::time_point{};
@@ -13062,7 +13292,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★ 250 bytes measured on air, and every added field eats the margin.
                  *   A silent truncation here reads as a DEAD FEATURE — the check below
                  *   exists because of one. Grown with the field, not after it. */
-                char gb[416];
+                char gb[448];   // ★ +32 for "vagc" (VibeAGC for SDRplay, 2026-10-30)
                 const int need = snprintf(gb, sizeof gb,
                     /* ★ The notch state rides with the gain figures because it is the same kind of
                      *   thing: what the FRONT END is doing right now. Stuart asked for the readout
@@ -13091,7 +13321,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   moment I'd be happy to leave it frozen." Leaving it frozen is a legitimate
                      *   outcome, so this informs and then stops talking. */
                     "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d,\"agcReinit\":%d,"
-                    "\"agcInit\":%d,\"gainStuck\":%d}",
+                    "\"agcInit\":%d,\"gainStuck\":%d,\"vagc\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     /* ★ CORROBORATED, not the raw latch — see overloadReal(). The badge and
                      *   VibeAGC must answer to the same fact. */
@@ -13186,7 +13416,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                             || sdrp->adcPeakDbfs() > (double)target + 20.0;
                         const bool starved   = sdrp->adcPeakDbfs() < (double)target - 20.0;
                         return (saturated || starved) ? 1 : 0;
-                    }());
+                    }(),
+                    /* ★ VibeAGC for SDRplay is running: ifgr/lna/sysGain are what WE set, never an echo (vsRspVagcTick). */
+                    g_rspVagcActive.load(std::memory_order_relaxed) ? 1 : 0);
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else
@@ -27658,6 +27890,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *      take to land — the write says WHEN only roughly, so the level itself is still left to the finder.
      *  ★ The hold is OFF on DAB: a null symbol is a sharp dip that comes back, and holding across one fills it. */
     long ownWriteGuardLeft_ = 0;   // samples of the own-write guard still to run
+    unsigned vagcKnownSeen_ = 0, vagcMissedSeen_ = 0, vagcAppliedSeen_ = 0; bool vagcSmallPending_ = false;   // ★ VibeAGC's mailbox — DSP thread only
     long flagRecentLeft_ = 0;      // samples since a flag still "recent" — what the log line says found a step
     vibeagc::SpectrumGainComp specComp_;   // ★ vibe_agc_rules.h §7 — DSP thread only
     void smoothGainSteps(cf32* iq, int n, bool flagged) {
@@ -27683,6 +27916,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         // ★ A flag is "recent" for 20 ms of signal: the step it marks is FOUND a buffer or two later (the finder
         //   looks ahead), and the log used to credit that find to "our own write" though the radio had flagged it.
+        /* ★★★ VibeAGC FOR SDRplay'S OWN WRITE (vagcPostKnown): its size is known, so it is PLACED at the packet the radio
+         *     flags rather than searched for — and a small IF step placed exactly needs no estimator guard, which at up
+         *     to 4 IF writes a second would otherwise keep the multipath meter, CEQ and RDS figures from ever measuring. */
+        bool knownSmall = false;
+        {
+            const unsigned ks = g_vagcKnownSeq.load(std::memory_order_acquire);
+            if (ks != vagcKnownSeen_) {
+                vagcKnownSeen_ = ks;
+                const double d1 = g_vagcKnownDb1.load(std::memory_order_relaxed), d2 = g_vagcKnownDb2.load(std::memory_order_relaxed);
+                if (g_vagcKnownPair.load(std::memory_order_relaxed)) { gainSmooth_.noteKnownPair(d1, d2); vagcSmallPending_ = false; }
+                else { gainSmooth_.noteKnownStep(d1); vagcSmallPending_ = true; }
+            }
+            if (flagged && vagcSmallPending_) { knownSmall = true; vagcSmallPending_ = false; }
+            if (gainSmooth_.knownMissed() != vagcMissedSeen_) {
+                vagcMissedSeen_ = gainSmooth_.knownMissed(); vagcSmallPending_ = false;
+                static double lastSaid = -1e9; const double nowM = nowSecs();
+                if (nowM - lastSaid > 60.0) {
+                    lastSaid = nowM;
+                    LOGI("VibeAGC (RSP): the driver did not flag the packet our gain write landed in (grChanged) — that step "
+                         "went through uncompensated (%u so far)", vagcMissedSeen_);
+                }
+            }
+        }
         if (flagged) { gainSmooth_.noteStepAtStart(); flagRecentLeft_ = (long)(0.02 * sampleRate); }
         const unsigned before = gainSmooth_.steps(), holdsBefore = gainSmooth_.holds();
         gainSmooth_.process(iq, n);
@@ -27699,8 +27955,26 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     LOGI("gain transient held (flagged by the radio; the step did not stay) — level kept continuous");
             }
         }
+        /* ★ ON-AIR DIAGNOSTIC (VibeAGC for SDRplay): where each of our known steps actually landed against the packet the
+         *   radio flagged — the one fact the simulation could only assume. The first 40, then every 20th. */
+        if (gainSmooth_.knownApplied() != vagcAppliedSeen_) {
+            vagcAppliedSeen_ = gainSmooth_.knownApplied();
+            static unsigned said = 0;
+            if (said < 40 || said % 20 == 0) {
+                static const char* how[] = {"at the flag (the level jumped there)", "found by the level, off the flag",
+                                            "at the flag (the level said nothing)", "a pair, both edges found",
+                                            "a pair not found — handed to the finder"};
+                const int h = gainSmooth_.lastKnownHow();
+                LOGI("VibeAGC (RSP): step #%u %+.1f dB — %s, %+lld samples from the flagged packet's start%s (level jump %+.2f dB)",
+                     vagcAppliedSeen_, gainSmooth_.lastStepDb(), (h >= 0 && h <= 4) ? how[h] : "?",
+                     gainSmooth_.lastKnownOffset(),
+                     h == 3 ? (" / second edge " + std::to_string(gainSmooth_.lastKnownOffset2())).c_str() : "",
+                     gainSmooth_.lastKnownJump());
+            }
+            ++said;
+        }
         const bool ownWrite = ownWriteGuardLeft_ > 0;
-        gainStepGuard_ = flagged || ownWrite || gainSmooth_.steps() != before || gainSmooth_.correcting(1.0)
+        gainStepGuard_ = (flagged && !knownSmall) || ownWrite || gainSmooth_.steps() != before || gainSmooth_.correctingFound(1.0)
                       || gainSmooth_.holding();
         if (gainStepGuard_) rx.noteGainStep(0.1);
         if (ownWriteGuardLeft_ > 0) ownWriteGuardLeft_ = std::max(0L, ownWriteGuardLeft_ - (long)n);
@@ -34034,6 +34308,14 @@ void LocalSdrShim::setVibeServerRfNotch(bool on)  { g_vsRfNotch.store(on); }
 void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.store(on ? 1 : 0); }
 void LocalSdrShim::setVibeServerRfAgc(bool on) { g_vibeAgcRspOn.store(on ? 1 : 0, std::memory_order_relaxed); }
 static std::atomic<bool> g_rspDabDecim{false};
+void LocalSdrShim::setVibeServerRspVibeAgc(int choice) {
+    const int c = (choice >= 0 && choice <= 2) ? choice : 0;
+    if (g_rspVagcOwner.exchange(c, std::memory_order_relaxed) != c) {
+        g_rspVagcTripped.store(false, std::memory_order_relaxed);   // ★ the owner's word clears a hand-back
+        LOGI("VibeAGC (RSP): owner setting %s (driver %s)", c == 1 ? "ON" : c == 2 ? "OFF" : "automatic",
+             SdrplaySource::driverLabel());
+    }
+}
 void LocalSdrShim::setVibeServerRspDabDecim(bool on) {
     g_rspDabDecim.store(on, std::memory_order_relaxed);
     Impl* impl = instance().p;
@@ -35978,6 +36260,13 @@ int LocalSdrShim::startSdrplay(int index,
     if (!impl->sdrp->open(index, sampleRate, sdrpPhys, gainTenthDb, err)) {
         delete impl; return -1;
     }
+    // ★ A fresh open is a fresh start for VibeAGC for SDRplay: a hand-back from the last session is forgotten, and the
+    //   heartbeat takes over again once the radio is streaming (vsRspVagcTakeOver).
+    g_rspVagcActive.store(false, std::memory_order_relaxed);
+    g_rspVagcTripped.store(false, std::memory_order_relaxed);
+    LOGI("RSP driver: %s — VibeAGC for SDRplay %s", SdrplaySource::driverLabel(),
+         vibe::sdrplaylib::vagcEnabled(g_rspVagcOwner.load(), (vibe::sdrplaylib::RspDriver)SdrplaySource::driverKind())
+             ? "will run (both gain stages ours)" : "off (the API's IF AGC + the RF walker)");
     // ★★★ THE OPERATOR'S FRONT-END FILTERS, APPLIED BY THE SERVER ITSELF.
     //     These used to arrive only because the first client pushed its saved preferences at
     //     us — which stopped happening the moment listeners on a LOCKED receiver were correctly

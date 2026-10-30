@@ -1396,6 +1396,51 @@ bool SdrplaySource::setIfGainReduction(int gRdB) {
     return true;
 }
 
+bool SdrplaySource::setGainPair(int lnaState, int gRdB) {
+    liveStale_.store(true, std::memory_order_relaxed);
+    std::lock_guard<std::recursive_mutex> lk(impl_->api_mtx);
+    if (!impl_->params || !impl_->params->rxChannelA) return false;
+    auto* ch = impl_->params->rxChannelA;
+    if (ch->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE) return false;   // ★ their AGC owns gRdB: write nothing
+    const int n = lnaStateCount();
+    if (lnaState < 0) lnaState = 0;
+    if (lnaState >= n) lnaState = n - 1;          // ★ OpenRSP refuses an out-of-band state (10-19, FM→MW)
+    if (gRdB < 20) gRdB = 20;
+    if (gRdB > 59) gRdB = 59;
+    const bool lnaMoved = (int)ch->tunerParams.gain.LNAstate != lnaState;
+    ch->tunerParams.gain.LNAstate = (unsigned char)lnaState;
+    ch->tunerParams.gain.gRdB = gRdB;
+    if (!open_) return true;
+    const sdrplay_api_ErrT e = gainUpdate("setGainPair", impl_->dev.dev, impl_->dev.tuner,
+                                          sdrplay_api_Update_Tuner_Gr, sdrplay_api_Update_Ext1_None);
+    if (e == sdrplay_api_Success && lnaMoved) dcRecalibrate();
+    return e == sdrplay_api_Success;
+}
+
+unsigned SdrplaySource::gainRejects() { return g_gainRejects.load(std::memory_order_relaxed); }
+
+bool SdrplaySource::ifAgcEnabled() const {
+    return impl_->params && impl_->params->rxChannelA
+        && impl_->params->rxChannelA->ctrlParams.agc.enable != sdrplay_api_AGC_DISABLE;
+}
+
+int SdrplaySource::driverKind() {
+    static const int k = [] {
+        const Api& a = api();
+        if (!a.h) return (int)sdrplaylib::RspDriver::Unknown;
+#if defined(__ANDROID__)
+        return (int)sdrplaylib::whichDriver(true, true, false, false);
+#elif defined(__APPLE__)
+        return (int)sdrplaylib::whichDriver(false, a.bundled, sdrplaylib::macSystemStack(), false);
+#else
+        return (int)sdrplaylib::whichDriver(false, a.bundled, sdrplaylib::linuxSystemStack(),
+                                            sdrplaylib::linuxOpenRspPackage());
+#endif
+    }();
+    return k;
+}
+const char* SdrplaySource::driverLabel() { return sdrplaylib::driverName((sdrplaylib::RspDriver)driverKind()); }
+
 void SdrplaySource::setIfAgc(bool on) {
     if (!impl_->params || !impl_->params->rxChannelA) return;
     auto* ch = impl_->params->rxChannelA;
@@ -2021,6 +2066,11 @@ void SdrplaySource::setGainTenthDb(int) {}
 void SdrplaySource::setBiasT(bool) {}
 void SdrplaySource::setLnaState(int) {}
 bool SdrplaySource::setIfGainReduction(int) { return false; }
+bool SdrplaySource::setGainPair(int, int) { return false; }
+unsigned SdrplaySource::gainRejects() { return 0; }
+int SdrplaySource::driverKind() { return (int)sdrplaylib::RspDriver::Unknown; }
+const char* SdrplaySource::driverLabel() { return "none"; }
+bool SdrplaySource::ifAgcEnabled() const { return false; }
 void SdrplaySource::setIfAgc(bool) {}
 void SdrplaySource::setIfAgcSetPoint(int) {}
 void SdrplaySource::setIfAgcDynamics(int, int, int, int) {}
