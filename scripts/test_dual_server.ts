@@ -31,6 +31,7 @@ import {
   dualEarGains, sideHasAudio, withSideMuted, DUAL_STALL_MS, BALANCE_END_SNAP,
   radioKeyOf, sameRadio, pickSameServer, detachSecond, sideName, cardMode, cardStation,
   audioKindOf, canPair, needsMain, firstMovesToAux, normBase, uberAudioUrl, vibeAuxUrl, endedWhy,
+  uberCloseVerdict, uberTextVerdict, UBER_REFUSALS_TO_GIVE_UP,
   type DualCore, type DualSideCore, type AudioKind,
 } from '../src/services/dualMix.ts';
 
@@ -583,6 +584,33 @@ console.log('source: mute and quiet never silence the OTHER server');
      'both natives report how long since each voice last had audio');
   ok(/lastAt = ProcessInfo\.processInfo\.systemUptime/.test(swift) && /lastAt = android\.os\.SystemClock\.uptimeMillis\(\)/.test(kt),
      '…stamped on every buffer the voice places');
+}
+
+console.log('UberSDR on the second voice: an ending is never retried, a network drop is');
+{
+  const net = { wasOpen: true, refusalsInARow: 0 };
+  ok(!uberCloseVerdict({ ...net, code: 1006 }).terminal && !uberCloseVerdict({ ...net, code: 1001 }).terminal
+     && !uberCloseVerdict({ ...net, code: 1000 }).terminal, 'an open socket dropping with no reason (1000/1001/1006) is the network: retried');
+  ok(!uberCloseVerdict({ wasOpen: false, refusalsInARow: 1, code: 1006 }).terminal,
+     'one socket that never opened: retried once (the spectrum client re-registers once)');
+  const r2 = uberCloseVerdict({ wasOpen: false, refusalsInARow: UBER_REFUSALS_TO_GIVE_UP, code: 1006 });
+  ok(UBER_REFUSALS_TO_GIVE_UP === 2 && r2.terminal && r2.why === 'the receiver refused the connection',
+     'two in a row refused at the handshake (400 reaped / 403 kicked-banned / 429 limit): terminal, as the spectrum client');
+  const kick = uberCloseVerdict({ ...net, code: 1000, reason: 'kicked by admin' });
+  ok(kick.terminal && kick.why === 'the owner ended the session', 'a close WITH a reason: terminal at once, in its words');
+  ok(uberCloseVerdict({ ...net, code: 1000, reason: 'session expired' }).why === 'its time limit was reached', '…a time limit says so');
+  ok(uberCloseVerdict({ ...net, code: 1008 }).terminal && uberCloseVerdict({ ...net, code: 4003 }).terminal,
+     'a policy (1008) or application (4xxx) close: terminal');
+  ok(uberTextVerdict({ type: 'kicked' }) === 'the owner ended the session' && uberTextVerdict({ type: 'session_expired' }) === 'its time limit was reached'
+     && uberTextVerdict({ type: 'banned' }) !== null && uberTextVerdict({ type: 'cooldown' }) !== null
+     && uberTextVerdict({ type: 'busy' }) !== null && uberTextVerdict({ type: 'evicted' }) !== null,
+     'the shared terminal set said on the socket: terminal');
+  ok(uberTextVerdict({ type: 'error', status: 403, error: 'banned' }) !== null && uberTextVerdict({ type: 'error', status: 429, error: 'slow down' }) === null,
+     '{type:"error"} ends it only as a refusal of the session (401/403), never a rate-limited command (429)');
+  ok(uberTextVerdict({ type: 'dsp_filters' }) === null && uberTextVerdict(null) === null, 'ordinary messages are not endings');
+  const ds = readFileSync('src/services/dualServer.ts', 'utf8');
+  ok(/if \(a\.proto === 'uber'\) \{[\s\S]{0,400}uberCloseVerdict\([\s\S]{0,300}a\.terminal = true;[\s\S]{0,200}serverEnded\(a\.id/.test(ds),
+     'the second voice\'s socket asks the verdict before any retry, and ends the side at once');
 }
 
 console.log('every kind wired: one session per server, the player that plays it, the screen that adopts it');

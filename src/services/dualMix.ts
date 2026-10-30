@@ -579,3 +579,49 @@ export function endedWhy(msg: string): string {
   if (/kick|ban|block|refus/i.test(m)) return 'the owner ended the session';
   return 'the server ended the session';
 }
+
+/* ───────────────────── UBERSDR ON THE SECOND VOICE: an ending is never retried ───────────────────── */
+
+/**
+ * ★★★ WHEN HAS AN UBERSDR ENDED THIS SESSION ON PURPOSE? Then the second voice must NEVER reopen it — a kicked or
+ *     banned listener coming straight back is exactly what an operator's kick is meant to stop.
+ *  What the app already treats as an UberSDR ending, mirrored exactly (one rule, three readers):
+ *   · The native engine (VibePowerModule.swift / VibeStreamService.kt) classifies NOTHING itself — it reopens every 2 s
+ *     — and is stopped by JS when the SPECTRUM client says the session is over (UberSDRWsClient ws.onclose):
+ *     ★ A SOCKET THAT NEVER OPENED IS A REFUSAL, NOT A DROPPED LINK — UberSDR turns the upgrade away with 400 (session
+ *       no longer registered — reaped), 403 (kicked or banned), 429 (the per-IP limit). The spectrum client re-registers
+ *       ONCE and, refused again, gives up for good ("This receiver refused the connection."). Two refusals in a row, then:
+ *       the same here (the second voice cannot re-register — that is the screen's POST /connection — so its one allowed
+ *       retry is the reopen itself).
+ *     ★ A socket that DID open and then dropped is the ordinary reconnect: retried.
+ *   · Anything the server SAYS on the socket that is an ending — the shared terminal set (TERMINAL_WHY: session_expired,
+ *     cooldown, kicked, banned, evicted, busy, idle_closed…) or {type:"error"} with an HTTP-style 401/403 (a refusal of
+ *     the session, user_spectrum_websocket.go's own shape) — is terminal at once.
+ *   · A close the server gave a REASON for (any non-empty reason), or closed with policy (1008) or an application code
+ *     (4000–4999): terminal at once, in its own words where it gave some. A bare 1000/1001/1006 is the network.
+ */
+export const UBER_REFUSALS_TO_GIVE_UP = 2;
+
+export function uberTextVerdict(msg: { type?: unknown; status?: unknown; error?: unknown } | null): string | null {
+  if (!msg) return null;
+  const type = String(msg.type ?? '');
+  const why = terminalWhy(type);
+  if (why) return why;
+  if (type === 'error') {
+    const st = Number(msg.status) || 0;
+    if (st === 401 || st === 403) return endedWhy(String(msg.error ?? 'refused'));
+  }
+  return null;
+}
+
+export function uberCloseVerdict(o: { wasOpen: boolean; refusalsInARow: number; code?: number; reason?: string }):
+    { terminal: boolean; why: string | null } {
+  const reason = String(o.reason ?? '').trim();
+  const code = Number(o.code) || 0;
+  if (reason) return { terminal: true, why: endedWhy(reason) };
+  if (code === 1008 || (code >= 4000 && code <= 4999)) return { terminal: true, why: 'the server ended the session' };
+  if (!o.wasOpen && o.refusalsInARow >= UBER_REFUSALS_TO_GIVE_UP) {
+    return { terminal: true, why: 'the receiver refused the connection' };
+  }
+  return { terminal: false, why: null };
+}

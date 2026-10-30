@@ -44,7 +44,7 @@ import {
   DUAL_OFF, attachSecond, beginPicking, bgSide, clampBalance, dualEligible, dualTargets, endSide, holds,
   markEnded, sameServer, sameRadio, swap, terminalWhy, transportFor, detachSecond, pickSameServer,
   sideHasAudio, withSideMuted, DUAL_STALL_MS, audioKindOf, firstMovesToAux, normBase, uberAudioUrl, vibeAuxUrl,
-  endedWhy, type UberLink,
+  endedWhy, uberCloseVerdict, uberTextVerdict, type UberLink,
   type AudioKind, type DualCore, type DualOutput, type DualRouteLike, type DualSideCore, type Transport,
 } from './dualMix';
 export { uberAudioUrl, vibeAuxUrl, endedWhy, type UberLink };
@@ -235,6 +235,8 @@ type AuxOpen = { id: string; url: string; hello: string | null; proto?: AuxProto
 let aux: {
   id: string; url: string; ws: WebSocket | null; wanted: boolean; terminal: boolean; retries: number;
   lastFrameAt: number; openedAt: number; started: boolean; proto: AuxProto;
+  /** UberSDR: sockets in a row that never opened (dualMix.uberCloseVerdict — two is a refusal, never retried). */
+  refusals: number;
   retryTimer: ReturnType<typeof setTimeout> | null; dog: ReturnType<typeof setInterval> | null;
 } | null = null;
 let auxOnBytes: ((n: number) => void) | null = null;
@@ -251,7 +253,7 @@ export function auxOpen(o: AuxOpen, force = false) {
   if (!force && auxIsOpenFor(o.id, o.url)) return;
   auxClose();
   aux = { id: o.id, url: o.url, ws: null, wanted: true, terminal: false, retries: 0, lastFrameAt: 0,
-          openedAt: Date.now(), started: false, proto: o.proto ?? 'vibe', retryTimer: null, dog: null };
+          openedAt: Date.now(), started: false, proto: o.proto ?? 'vibe', refusals: 0, retryTimer: null, dog: null };
   auxConnect(o.hello);
   // ★ A half-open socket never says so: no frame for 8 s on an open socket = dead, reopen (as the native pump's
   //   revive does). Checked every 3 s, and only while the voice exists.
@@ -281,8 +283,11 @@ function auxConnect(hello: string | null) {
   try { ws = new WebSocket(a.url); } catch (e) { noteFault('dual-aux', 'open', e as Error, a.url.slice(0, 40)); auxRetry(); return; }
   ws.binaryType = 'arraybuffer';
   a.ws = ws;
+  let wasOpen = false;
   ws.onopen = () => {
     if (aux !== a || a.ws !== ws) return;
+    wasOpen = true;
+    a.refusals = 0;
     // ★ The hello is the screen's own (assertTune rules, LocalAudioPlayer) — and only ever on the FIRST open. A
     //   reopen says nothing: the server kept the session's dial (THE SHARED-DIAL CONTRACT — recovery is not a user
     //   action).
@@ -297,10 +302,22 @@ function auxConnect(hello: string | null) {
     catch (err) { noteFault('dual-aux', 'frame', err as Error, `len=${(e.data as ArrayBuffer).byteLength}`); }
   };
   ws.onerror = () => { /* onclose follows */ };
-  ws.onclose = () => {
+  ws.onclose = (ev: { code?: number; reason?: string }) => {
     if (aux !== a || a.ws !== ws) return;
     a.ws = null;
     if (a.terminal || !a.wanted) return;
+    // ★★★ UBERSDR: an ending the server chose is NEVER reopened (dualMix.uberCloseVerdict — the spectrum client's own
+    //     rule, mirrored); only a genuine network drop is retried. The card says why, at once.
+    if (a.proto === 'uber') {
+      if (!wasOpen) a.refusals++;
+      const v = uberCloseVerdict({ wasOpen, refusalsInARow: a.refusals, code: ev?.code, reason: ev?.reason });
+      if (v.terminal) {
+        a.terminal = true;
+        crumb(`dual aux uber ended: code ${ev?.code ?? '-'} ${String(ev?.reason ?? '').slice(0, 60)} → ${v.why}`);
+        serverEnded(a.id, v.why ?? 'the server ended the session');
+        return;
+      }
+    }
     auxRetry();
   };
 }
@@ -374,10 +391,11 @@ export function setAuxTextSink(id: string | null, f: ((text: string) => void) | 
 
 function onAuxText(id: string, text: string, a: NonNullable<typeof aux>) {
   if (auxTextSink && auxTextSink.id === id) { try { auxTextSink.f(text); } catch { /* the screen's problem */ } }
-  let msg: { type?: string; secs?: number } | null = null;
+  let msg: { type?: string; secs?: number; status?: unknown; error?: unknown } | null = null;
   try { msg = JSON.parse(text); } catch { return; }
   const type = String(msg?.type ?? '');
-  const why = terminalWhy(type);
+  // ★ UberSDR's refusals said on the socket count too (dualMix.uberTextVerdict); a VibeServer's are the shared set.
+  const why = a.proto === 'uber' ? uberTextVerdict(msg) : terminalWhy(type);
   if (why) { a.terminal = true; serverEnded(id, why); return; }
   serverSaid(id, type, Number(msg?.secs) || 0);
 }
