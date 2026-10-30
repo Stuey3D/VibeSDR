@@ -1986,9 +1986,10 @@ function MenuSheetBody({
                   </BtnRow>
                   <Text style={styles.kbSkipNote}>
                     Names the decoder for well-known signals in view — RTTY on DWD's 4583 kHz, WEFAX on Northwood's 4610,
-                    NAVTEX, DSC, FT8, time signals — and EiBi's utility stations on air now. Drawn at the foot of the
-                    spectrum, or at the top of the waterfall when the spectrum is hidden. Your bookmarks are in the
-                    station strip, not here.
+                    NAVTEX, DSC, FT8, time signals — and EiBi's utility stations on air now; and by name your own
+                    bookmarks, the server's saved ones and, on FM, station names this receiver learnt from RDS. Drawn at
+                    the foot of the spectrum, or at the top of the waterfall when the spectrum is hidden. EiBi's broadcast
+                    schedule stays in the station strip.
                   </Text>
                 </>)}
 

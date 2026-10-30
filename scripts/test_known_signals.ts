@@ -12,7 +12,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { KNOWN_SIGNALS, DIGI_DIALS, eibiKnownSignals, eibiPlace, eibiOnAir, knownSignalList, signalsInView, labelLayout,
-         estimateLabelWidth, LABEL_MAX, PRIO_SAFETY, type KnownSignal } from '../src/utils/knownSignals.ts';
+         estimateLabelWidth, bookmarkSignals, bookmarkLabel, isLearntFm, LABEL_MAX, PRIO_SAFETY, PRIO_PERSONAL, PRIO_SERVER,
+         PRIO_LEARNT, PRIO_EIBI, PRIO_TABLE, type KnownSignal } from '../src/utils/knownSignals.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -69,6 +70,39 @@ ok(!lab(5875000), 'a broadcast is never a label');
 ok(!e.some(s => s.hz === 4271000), 'an entry not on air now is not drawn');
 ok(eibiOnAir('2200-0500', 4 * 60) && !eibiOnAir('2200-0500', 12 * 60) && eibiOnAir(undefined, 0), 'on-air windows wrap midnight; no time = on air');
 ok(eibiPlace('DWD 2 Pinneberg RTTY') === 'Pinneberg' && eibiPlace('NSS US Navy') === 'US Navy', 'short places: call sign and numbers dropped');
+
+console.log('bookmarks: personal, saved to the server, learnt FM');
+ok(PRIO_SAFETY > PRIO_TABLE && PRIO_TABLE > PRIO_PERSONAL && PRIO_PERSONAL > PRIO_SERVER && PRIO_SERVER > PRIO_LEARNT && PRIO_LEARNT > PRIO_EIBI,
+   'priority: safety > curated > personal > server-saved > learnt FM > EiBi');
+const personal = [{ name: 'My local net', frequency: 3615000, mode: 'lsb' }, { name: 'Radio 2 (mine)', frequency: 89100000, mode: 'wfm' }];
+const server = [
+  { name: 'Club net Sunday', frequency: 7130000, mode: 'lsb', source: 'server', manual: true },
+  { name: 'BBC R2', frequency: 89100000, mode: 'wfm', source: 'server', manual: false, pi: 0xC202 },     // under the personal one
+  { name: 'Classic FM', frequency: 100900000, mode: 'wfm', source: 'server', manual: false, pi: 0xC203 },
+  { name: 'Heart', frequency: 96400000, mode: 'wfm', source: 'server', manual: false, pi: 0xC3A1, nameSrc: 3 },
+  { name: 'PI4322 93.7MHz', frequency: 93700000, mode: 'wfm', source: 'server', manual: false, pi: 0x4322, nameSrc: 0 },
+  { name: 'Smooth?', frequency: 102200000, mode: 'wfm', source: 'server', manual: false, pi: 0xC4D1, nameSrc: 1 },
+  { name: 'BBC R4 DAB', frequency: 225648000, mode: 'dab', source: 'server', manual: false, sid: 0xC224 },
+  { name: 'Learnt on AM', frequency: 909000, mode: 'am', source: 'server', manual: false },
+  { name: 'Voice of Somewhere', frequency: 9410000, source: 'eibi' },
+  { name: 'An UberSDR row', frequency: 5000000, source: 'server' },
+];
+const bs = bookmarkSignals(personal, server, false);
+const bl = (hz: number) => bs.find(s => s.hz === hz);
+ok(bl(3615000)?.prio === PRIO_PERSONAL && bl(3615000)?.label === 'My local net', 'a personal bookmark is labelled by its name');
+ok(bl(7130000)?.prio === PRIO_SERVER, 'a bookmark the owner saved to the server ("manual": true) is labelled');
+ok(bl(100900000)?.prio === PRIO_LEARNT && bl(100900000)?.label === 'Classic FM', 'a learnt FM RDS name is labelled');
+ok(bl(96400000)?.label === 'Heart', 'a RadioDNS name (nameSrc 3) counts as heard');
+ok(bl(89100000)?.label === 'Radio 2 (mine)' && bs.filter(s => s.hz === 89100000).length === 1, 'one label a frequency: the personal name beats the learnt one');
+ok(!bl(93700000) && !bl(102200000), 'a provisional "PI4322" or an unverified guess is not a name');
+ok(!bl(225648000) && !bl(909000), 'a DAB service and a learnt row outside FM are not labels');
+ok(!bl(9410000), 'an EiBi broadcast row is never a label');
+ok(!bl(5000000) && bookmarkSignals([], server, true).some(s => s.hz === 5000000), 'an unmarked server row: a label only where the list is the owner\'s (not UberSDR\'s mixed list)');
+ok(bookmarkLabel('A very long bookmark name indeed') === 'A very long boo…' && bookmarkLabel('  Short  ') === 'Short', 'long names are shortened to 16 characters');
+ok(isLearntFm({ name: 'X', frequency: 98e6, source: 'server', manual: false }) && !isLearntFm({ name: 'X', frequency: 98e6, source: 'server', manual: true }), 'learnt = manual false, FM band');
+const fmList = knownSignalList([], bs);
+const F = labelLayout(fmList, 88e6, 20e6, 1200, measure0 => estimateLabelWidth(measure0, 9), 100.9e6);
+ok(F.map(p => p.sig.label).includes('Classic FM') && F.map(p => p.sig.label).includes('Heart'), 'the FM band lays out its learnt names');
 
 console.log('in view and layout');
 const list = knownSignalList(e);

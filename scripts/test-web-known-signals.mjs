@@ -7,6 +7,7 @@
 //     waterfall below it; LISTEN's box is never drawn over;
 //   • 14.06–14.10 MHz: FT8 / FT4 / JS8 / WSPR with their spans;
 //   • spectrum hidden: the labels at the top of the waterfall; toggle off: none at all.
+//   • the FM band: a personal bookmark, a server-saved one and learnt RDS names (Stuart's follow-ups, 2026-10-30).
 // Pictures to KNOWN_PNG=<dir>.   node scripts/test-web-known-signals.mjs
 import fs from 'node:fs';
 import os from 'node:os';
@@ -115,6 +116,28 @@ try {
   const top = await lilac(0, 160), below = await lilac(200, g.H);
   ok(g.specH === 0 && top > 100 && below === 0, `spectrum hidden: at the top of the waterfall (${top} px in the top rows, ${below} below)`);
   await shot('4-20m-digital-no-spectrum');
+
+  // ── 3b. bookmarks: the FM band with learnt RDS names, a personal and a server-saved bookmark ──
+  await ev(`(() => { const w = __wfDrv.wf; w.showSpec = true;
+    const bms = __known.bookmarkSignals(
+      [{ name: 'Radio 2 (mine)', frequency: 89100000, mode: 'wfm' }],
+      [{ name: 'Club FM relay', frequency: 94000000, mode: 'wfm', source: 'server', manual: true },
+       { name: 'BBC R2', frequency: 89100000, mode: 'wfm', source: 'server', manual: false, pi: 0xC202 },
+       { name: 'Classic FM', frequency: 100900000, mode: 'wfm', source: 'server', manual: false, pi: 0xC203 },
+       { name: 'Heart', frequency: 96400000, mode: 'wfm', source: 'server', manual: false, pi: 0xC3A1 },
+       { name: 'BBC R4', frequency: 93500000, mode: 'wfm', source: 'server', manual: false, pi: 0xC204 },
+       { name: 'PI4322 98.0MHz', frequency: 98000000, mode: 'wfm', source: 'server', manual: false, pi: 0x4322, nameSrc: 0 }], false);
+    w.knownSignals = __known.knownSignalList([], bms); w.knownGen++; return true; })()`);
+  await ev(`__wfDrv.setCarriers([89100000, 93500000, 94000000, 96400000, 98000000, 100900000])`);
+  await ev(`(__wfDrv.wf.vfoHz = 100900000, __wfDrv.wf.filterLow = -100000, __wfDrv.wf.filterHigh = 100000, true)`);
+  await ev(`__wfDrv.ask(95000000, 14000000)`); await ev('__wfDrv.run(3000)');
+  g = await geo();
+  const fl = g.placed.map(p => p.label);
+  console.log('      placed:', fl.join(' | '));
+  ok(['Radio 2 (mine)', 'Club FM relay', 'Classic FM', 'Heart', 'BBC R4'].every(l => fl.includes(l)),
+     'FM: the personal and server-saved bookmarks and the learnt RDS names are labelled');
+  ok(!fl.includes('BBC R2') && !fl.some(l => l.startsWith('PI4322')), 'the personal name wins its channel; a provisional PI name is not a label');
+  await shot('5-fm-bookmarks-learnt-rds');
 
   // ── 4. off ──
   await ev(`(__wfDrv.wf.showSpec = true, __wfDrv.wf.knownSignals = null, __wfDrv.wf.knownGen++, true)`); await ev('__wfDrv.run(1000)');

@@ -10,7 +10,9 @@
  *      • EiBi's (eibiKnownSignals): the schedule's utility entries ON AIR NOW, classed by EiBi's own codes — the
  *        language column's "-HF" (HFDL), "-TY" (teletype), "-CW" (Morse) — or a mode the station's name says
  *        ("Meteo Fax", "RTTY", "Volmet", "NAVTEX"). Broadcast entries are never labels.
- *  ★★ BOOKMARKS ARE NOT LABELS — the VTS station strip already shows them.
+ *  ★★ EiBi's BROADCAST rows are never labels — they would crowd the spectrum, and the VTS station strip shows them.
+ *     But the user's own bookmarks, the server owner's saved ones and FM names this receiver LEARNT from RDS are
+ *     (bookmarkSignals — Stuart's follow-ups the same day).
  *
  * ★★★ THE MARKER SITS ON THE SIGNAL, THE DIAL IS WHERE YOU TUNE. A published utility frequency is the ASSIGNED (carrier
  *     / centre) frequency — where the signal is SEEN on the spectrum — so that is where the line goes (`hz`). The DIAL
@@ -41,16 +43,21 @@ export interface KnownSignal {
   /** The decoder it wants ('' = none — VOLMET is speech, CHU has no decoder here). */
   dec: KnownDecoder;
   /** Where to tune for it, and in which mode. */
-  dialHz: number; mode: 'usb' | 'am' | 'cw' | 'nfm';
+  dialHz: number; mode: string;
   /** Higher wins a collision (PRIO_*). */
   prio: number;
-  src: 'table' | 'eibi';
+  src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt';
 }
 
-/** ★ Collision priority: safety of life first, then our curated signals, then EiBi's schedule. */
-export const PRIO_SAFETY = 4;   // DSC distress, NAVTEX
-export const PRIO_TABLE = 3;    // the curated table
-export const PRIO_ROUTINE = 2;  // DSC routine calling (a dozen in 30 kHz — they give way to everything curated)
+/** ★★ Collision priority (Stuart, 2026-10-30): safety > curated decoder labels > personal bookmarks > bookmarks saved to
+ *  the server > learnt FM RDS names > EiBi's data rows. DSC's routine calling channels are curated, but a dozen sit in
+ *  30 kHz, so they come last among the curated — still above every bookmark. */
+export const PRIO_SAFETY = 7;   // DSC distress, NAVTEX
+export const PRIO_TABLE = 6;    // the curated table
+export const PRIO_ROUTINE = 5;  // DSC routine calling
+export const PRIO_PERSONAL = 4; // the user's own bookmarks
+export const PRIO_SERVER = 3;   // saved to the server by its owner
+export const PRIO_LEARNT = 2;   // an FM station's name this receiver learnt from RDS
 export const PRIO_EIBI = 1;
 
 /** The most labels drawn at once — a hard cap, whatever is in view (Pi-2-class browsers, 1 GB phones). */
@@ -205,7 +212,7 @@ export function eibiClass(row: EibiRow): { dec: KnownDecoder; kind: string; af: 
 export function eibiKnownSignals(rows: readonly EibiRow[], nowMin: number, curated: readonly KnownSignal[] = KNOWN_SIGNALS): KnownSignal[] {
   const out: KnownSignal[] = [];
   for (const r of rows) {
-    if (!(r.frequency > 0) || r.source !== 'eibi') continue;   // ★ the schedule only — bookmarks are never labels
+    if (!(r.frequency > 0) || r.source !== 'eibi') continue;   // ★ the schedule only — bookmarks are bookmarkSignals's
     const c = eibiClass(r);
     if (!c || !eibiOnAir(r.comment, nowMin)) continue;
     const f = r.frequency;
@@ -222,10 +229,67 @@ export function eibiKnownSignals(rows: readonly EibiRow[], nowMin: number, curat
   return out.sort((a, b) => a.hz - b.hz);
 }
 
-/** The curated table and EiBi's on-air utility entries, one sorted list. */
-export function knownSignalList(eibi: readonly KnownSignal[]): KnownSignal[] {
-  if (!eibi.length) return KNOWN_SIGNALS as KnownSignal[];
-  return [...KNOWN_SIGNALS, ...eibi].sort((a, b) => a.hz - b.hz);
+// ── Bookmarks: personal, saved to the server, and learnt FM names ─────────────────────────────────────────────────
+/* ★★★ STUART (2026-10-30): "the reason I dont want normal bookmarks is because EiBi ones will crowd the spectrum, but
+ *     actual learnt ones and maybe ones saved to the server and personal ones could apply" — and "one other place the
+ *     labels could apply and that is Broadcast FM with a learnt RDS name". So three more sources, and EiBi's broadcast
+ *     rows stay OUT:
+ *      • PERSONAL — the user's own bookmarks (this device / their account, for this server);
+ *      • SAVED TO THE SERVER — the owner's list: a VibeServer row with "manual": true, or an OpenWebRX / Kiwi server's
+ *        bookmarks (they say nothing either way, and are the owner's). An UberSDR's list mixes the schedule in and
+ *        cannot be told apart, so its unmarked rows are NOT labels (the caller says which: `unmarkedIsSaved`);
+ *      • LEARNT — a VibeServer row with "manual": false, in the FM broadcast band (76–108 MHz), mode WFM, not a DAB
+ *        service, whose name was HEARD and settled (nameSrc 2, or 3 = the broadcaster's own RadioDNS name) — never a
+ *        provisional "PI4322 93.7MHz" or an unverified guess. The receiver learnt it, so it is per receiver by nature:
+ *        a name learnt at one server's location is never shown on another's.
+ *  ★ The label is the name, shortened (bookmarkLabel). The marker is the bookmark's own frequency (where you tune).
+ *  ★ One label a frequency: rows within 1 kHz of each other keep the highest priority (a personal bookmark of a station
+ *    the server also learnt shows the personal name). */
+export interface BookmarkRow {
+  name: string; frequency: number; mode?: string; source?: string; manual?: boolean;
+  pi?: number; nameSrc?: number; sid?: number; repeater?: boolean;
+}
+/** The longest label a bookmark gets (characters, an ellipsis included). */
+export const BOOKMARK_LABEL_MAX = 16;
+export function bookmarkLabel(name: string): string {
+  const s = String(name || '').replace(/\s+/g, ' ').trim();
+  return s.length > BOOKMARK_LABEL_MAX ? s.slice(0, BOOKMARK_LABEL_MAX - 1).trimEnd() + '…' : s;
+}
+const FM_LO = 76e6, FM_HI = 108e6;
+/** True when a server row is a name this receiver LEARNT for an FM broadcast channel (see above). */
+export function isLearntFm(b: BookmarkRow): boolean {
+  if (b.manual !== false || b.source !== 'server') return false;
+  if (!(b.frequency >= FM_LO && b.frequency <= FM_HI)) return false;
+  if (b.mode && b.mode.toLowerCase() !== 'wfm') return false;
+  if (typeof b.sid === 'number' && b.sid >= 0) return false;
+  const src = typeof b.nameSrc === 'number' ? b.nameSrc : 2;
+  return src >= 2 && !/^PI[0-9A-F]{4}\b/i.test(b.name);
+}
+const bmMode = (m?: string): string => (m || 'am').toLowerCase();
+export function bookmarkSignals(personal: readonly BookmarkRow[], server: readonly BookmarkRow[], unmarkedIsSaved: boolean): KnownSignal[] {
+  const cand: KnownSignal[] = [];
+  const add = (b: BookmarkRow, prio: number, src: KnownSignal['src']) => {
+    if (!(b.frequency > 0) || !Number.isFinite(b.frequency)) return;
+    const label = bookmarkLabel(b.name);
+    if (!label) return;
+    cand.push({ hz: Math.round(b.frequency), label, dec: '', dialHz: Math.round(b.frequency), mode: bmMode(b.mode), prio, src });
+  };
+  for (const b of personal) add(b, PRIO_PERSONAL, 'personal');
+  for (const b of server) {
+    if (b.source === 'eibi' || b.repeater) continue;                     // ★ the schedule never; nor a repeater database
+    if (b.manual === true || (b.manual === undefined && unmarkedIsSaved)) add(b, PRIO_SERVER, 'server');
+    else if (isLearntFm(b)) add(b, PRIO_LEARNT, 'learnt');
+  }
+  cand.sort((a, b) => (b.prio - a.prio) || (a.hz - b.hz));
+  const out: KnownSignal[] = [];
+  for (const c of cand) if (!out.some(o => Math.abs(o.hz - c.hz) <= 1000)) out.push(c);
+  return out.sort((a, b) => a.hz - b.hz);
+}
+
+/** The curated table, EiBi's on-air utility entries and the bookmark labels, one sorted list. */
+export function knownSignalList(eibi: readonly KnownSignal[], bookmarks: readonly KnownSignal[] = []): KnownSignal[] {
+  if (!eibi.length && !bookmarks.length) return KNOWN_SIGNALS as KnownSignal[];
+  return [...KNOWN_SIGNALS, ...eibi, ...bookmarks].sort((a, b) => a.hz - b.hz);
 }
 
 // ── In view, and laid out ──────────────────────────────────────────────────────────────────────────────────────────

@@ -97,7 +97,8 @@ const STEPS: Step[] = [
     // ★ 2026-10-30: SIGNAL LABELS (src/utils/knownSignals.ts) is in the display settings' SPECTRUM section.
     body: () => "[[MENU]] opens the display settings and the receiver's hardware controls. "
         + 'Under SPECTRUM, SIGNAL LABELS names the decoder to use on well-known signals in view \u2014 RTTY on DWD\u2019s '
-        + '4583 kHz, WEFAX on Northwood\u2019s 4610, NAVTEX, DSC, FT8, time signals \u2014 at the foot of the spectrum. '
+        + '4583 kHz, WEFAX on Northwood\u2019s 4610, NAVTEX, DSC, FT8, time signals \u2014 at the foot of the spectrum, with your bookmarks, the receiver\u2019s and FM names '
+        + 'learnt from RDS by name. '
         + (onIcom()
           ? 'On this Icom those are the radio\u2019s own: mode, filter, span, ATT, preamp, AGC, RF gain, and its noise '
             + 'blanker, noise reduction and notch. VibeSDR only listens through it \u2014 it never transmits. '

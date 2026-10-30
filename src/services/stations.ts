@@ -48,6 +48,11 @@ export interface ServerBookmark {
   sid?:            number;
   eid?:            number;
   ecc?:            number;
+  /** ★ VibeServer only, on a LEARNED row: the RDS PI it was heard with (-1 = none) and where its name came from
+   *  (`nameSrc`: 0 provisional "PI4322 93.7MHz", 1 an unverified guess, 2 heard and settled — absent means 2 — 3 the
+   *  broadcaster's RadioDNS name). The known-signal labels (utils/knownSignals.ts) name an FM channel only from 2 or 3. */
+  pi?:             number;
+  nameSrc?:        number;
 }
 
 export interface ServerBand {

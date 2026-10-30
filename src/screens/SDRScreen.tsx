@@ -240,7 +240,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
-import { knownSignalList, eibiKnownSignals } from '../utils/knownSignals';
+import { knownSignalList, eibiKnownSignals, bookmarkSignals } from '../utils/knownSignals';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
@@ -11130,7 +11130,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts — Stuart, 2026-10-30: "this is more for a user to know what decoder to
   //    use, the VTS shows the bookmarks"): the curated table plus EiBi's utility entries ON AIR NOW — the app's own
-  //    schedule (already filtered to now) and a server's schedule rows (their comment carries the time). Bookmarks never.
+  //    schedule (already filtered to now) and a server's schedule rows (their comment carries the time) — and the bookmark labels below.
   //    Re-read every ten minutes while on, as the schedule rolls; null while off — WaterfallView then does nothing.
   const [knownClock, setKnownClock] = useState(0);
   useEffect(() => {
@@ -11138,12 +11138,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     const iv = setInterval(() => setKnownClock((n) => n + 1), 10 * 60_000);
     return () => clearInterval(iv);
   }, [knownLabels]);
+  //  ★★ AND THE BOOKMARKS THAT ARE NOT THE SCHEDULE (Stuart, 2026-10-30: "actual learnt ones and maybe ones saved to the
+  //     server and personal ones could apply"): the user's own for this server, the owner's saved list, and FM names this
+  //     receiver learnt from RDS (knownSignals.ts bookmarkSignals). An UberSDR's list mixes the schedule in and says
+  //     nothing per row, so its rows are not labels; an OpenWebRX's / Kiwi's are the owner's.
   const knownSignals = useMemo(() => {
     if (!knownLabels) return null;
     const d = new Date();
     const rows = [...(eibiEnabled ? eibiBookmarks : []), ...serverBookmarks.filter((b: ServerBookmark) => b.source === 'eibi')];
-    return knownSignalList(eibiKnownSignals(rows, d.getUTCHours() * 60 + d.getUTCMinutes()));
-  }, [knownLabels, eibiEnabled, eibiBookmarks, serverBookmarks, knownClock]);
+    const st = route.params.serverType ?? 'ubersdr';
+    const unmarkedIsSaved = isLocal || st !== 'ubersdr';
+    const bms = bookmarkSignals(bookmarksForInstance(userBookmarks, bookmarkScope, legacyScopes), serverBookmarks, unmarkedIsSaved);
+    return knownSignalList(eibiKnownSignals(rows, d.getUTCHours() * 60 + d.getUTCMinutes()), bms);
+  }, [knownLabels, eibiEnabled, eibiBookmarks, serverBookmarks, knownClock, userBookmarks, bookmarkScope, legacyScopes,
+      isLocal, route.params.serverType]);
 
   // Push the car browse tree (Bookmarks + Band Plan folders) to the native
   // media-browser service. Bookmarks come from the merged list; the band plan is
@@ -12666,7 +12674,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //      new sentence names it; the rest re-read against AudioSheet (NR, notch, squelch, binaural, VFO stereo,
     //      de-emphasis, stereo), MenuSheet and FreqModal — unchanged.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Its DISPLAY SETTINGS hold SIGNAL LABELS: the decoder to use, named on well-known signals in view (RTTY on DWD\u2019s 4583 kHz, WEFAX on Northwood\u2019s 4610, NAVTEX, DSC, FT8, time signals) at the foot of the spectrum. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch (one row for each VFO, with its MUTE, while VFO B is on), binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Its DISPLAY SETTINGS hold SIGNAL LABELS: the decoder to use, named on well-known signals in view (RTTY on DWD\u2019s 4583 kHz, WEFAX on Northwood\u2019s 4610, NAVTEX, DSC, FT8, time signals) at the foot of the spectrum, with your bookmarks, the server\u2019s and FM names learnt from RDS by name. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch (one row for each VFO, with its MUTE, while VFO B is on), binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.

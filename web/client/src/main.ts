@@ -91,7 +91,7 @@ import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   /
 import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
-import { knownSignalList, eibiKnownSignals } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
+import { knownSignalList, eibiKnownSignals, bookmarkSignals } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
@@ -9122,7 +9122,7 @@ function buildControls() {
   // Station list comes from the SERVER (the app's cached EiBi) — the browser
   // can't fetch eibispace.de itself, no CORS headers there. Absent = degrade to
   // bookmarks + band plan, both of which are local.
-  void loadBookmarks();
+  void loadBookmarks().then(() => applyKnownSignals());
   void loadServerLocation(currentHost);
   void loadStations(currentHost).then((n) => {
     if (n) console.info(`stations: ${n} from server`);
@@ -9134,6 +9134,7 @@ function buildControls() {
   // auth suffix goes with it so the SAVE path can write back — the shim gates
   // POST/DELETE on the same PIN that guards the stream.
   void loadServerBookmarks(currentHost, authState?.query ?? '').then((n) => {
+    applyKnownSignals();
     if (n) console.info(`server bookmarks: ${n} heard by this receiver`);
   });
   /* ★★★ NO TIMER — FETCHED WHEN SOMEBODY LOOKS (Stuart, 2026-10-10: "They should only fetch on first load and then
@@ -10454,6 +10455,7 @@ function refreshServerBookmarks() {
   bmRefreshedAt = now;
   const before = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
   void loadServerBookmarks(currentHost, authState?.query ?? '').then(() => {
+    applyKnownSignals();
     const after = JSON.stringify(getServerBookmarks().map(b => [b.frequency, b.name]));
     if (after !== before && isPanelOpen('bookmarksPanel')) renderBookmarks();
   });
@@ -10579,6 +10581,7 @@ function initBookmarks() {
 let bmFilter: 'all' | 'dab' = 'all';
 
 function renderBookmarks() {
+  applyKnownSignals();   // ★★ the labels follow every bookmark change (each one re-renders this list)
   const host = $('bmList');
   host.innerHTML = '';
   if (bmFilter === 'dab') {
@@ -15911,7 +15914,10 @@ function applyKnownSignals() {
   if (!wf) return;
   if (!knownLabelsOn) { wf.knownSignals = null; wf.knownGen++; return; }
   const d = new Date();
-  wf.knownSignals = knownSignalList(eibiKnownSignals(getStations(), d.getUTCHours() * 60 + d.getUTCMinutes()));
+  // ★★ + this browser's own bookmarks, the server owner's saved ones and the FM names it learnt from RDS (GET /bookmarks
+  //    carries "manual" and "nameSrc" — knownSignals.ts bookmarkSignals); the schedule's broadcast rows never.
+  const bms = bookmarkSignals(getBookmarks(), getServerBookmarks(), false);
+  wf.knownSignals = knownSignalList(eibiKnownSignals(getStations(), d.getUTCHours() * 60 + d.getUTCMinutes()), bms);
   wf.knownGen++;
 }
 
