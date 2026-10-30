@@ -242,6 +242,11 @@ export type RootStackParamList = {
     instanceName?: string;
     viewMode:      ViewMode;
     initialFreq?:  number;   // deep-link retune (retunes the shared tuner for all)
+    /** ★★ V12 TWO SERVERS AT ONCE: as SDR's `dualSide` — coming back to an FM-DX server that never stopped playing, as
+     *  the same listener (src/services/dualServer.ts). Never set by anything else. */
+    dualSide?:     string;
+    /** ★ Always 'fmdx' when set — lets the pairing tell this route from a receiver screen's (dualServer.dualScreenOf). */
+    serverType?:   'fmdx';
   };
 };
 

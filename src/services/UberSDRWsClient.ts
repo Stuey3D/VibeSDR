@@ -80,6 +80,7 @@ export * from './sdrProtocol';
 import type { SDRMode, SDRStatus, SDRCallbacks, RadioCaps, RdsExt, IdlePolicy, IqOutState } from './sdrProtocol';
 import { MODE_BANDWIDTHS, UPDATE_APP_MESSAGE } from './sdrProtocol';
 import type { ShareOut } from './chatShare';
+import { uberAuxSend } from './dualServer';   // ★ V12 two servers: an UberSDR on the second voice is tuned down its own socket
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -552,7 +553,8 @@ export abstract class UberSDRWsClient {
     // no-op there. Send over the spectrum WS control channel — handleControl's
     // 'bandwidth' case applies it. UberSDR keeps the native audio-WS path.
     if (this.isLocal) this._sendCtl({ type: 'bandwidth', bandwidthLow: low, bandwidthHigh: high });
-    else VibePowerModule?.sendBandwidth(low, high);
+    // ★★ V12 two servers: on the second voice the filter goes down ITS socket (dualServer.uberAuxSend), never the engine.
+    else if (!uberAuxSend(this.uuid, { type: 'tune', bandwidthLow: low, bandwidthHigh: high })) VibePowerModule?.sendBandwidth(low, high);
   }
 
   // Frequency MUST be an integer — server unmarshals into uint64 and rejects
@@ -733,7 +735,7 @@ export abstract class UberSDRWsClient {
     // ★ The AUDIO socket is owned by NATIVE (VibePowerModule / VibeStreamModule), not by JS — which
     // is exactly why it was never pinged. `sendAudioCommand` already exists on both platforms and
     // is already typed in AudioPlayer.tsx, so this needs no native change.
-    try { VibePowerModule?.sendAudioCommand?.(msg); } catch {}
+    try { if (!uberAuxSend(this.uuid, { type: 'ping' })) VibePowerModule?.sendAudioCommand?.(msg); } catch {}
     try { if (this.spectrumWs?.readyState === WebSocket.OPEN) this.spectrumWs.send(msg); } catch {}
   }
   private lastActivityPing = 0;
@@ -768,6 +770,9 @@ export abstract class UberSDRWsClient {
    *    `currentFreq` in step — that, not the socket, is what the reconnect reads. */
   private _routeTune(frequency: number, mode: string) {
     if (!(frequency > 0)) return;
+    // ★★ V12 two servers: an UberSDR on the SECOND voice is tuned down that voice's own socket — the one that is playing
+    //   it — and dualServer keeps the URL a reopen uses in step (the engine's own rule, the currentFreq note above).
+    if (!this.isLocal && uberAuxSend(this.uuid, { type: 'tune', frequency, mode })) return;
     VibePowerModule?.sendTuneCommand(frequency, mode);
   }
 

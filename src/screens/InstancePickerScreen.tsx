@@ -148,7 +148,7 @@ import { exportLogs, EXPORT_LOGS_LABEL } from '../components/ExportLogs';
 import { rtlTcpServerSupported } from '../services/rtlTcpServer';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import { appAlert } from '../components/AppAlert';
-import { abandon as abandonDual, isSolo, returnToSolo, useDual } from '../services/dualServer';
+import { abandon as abandonDual, dualScreenOf, isSolo, returnToSolo, useDual } from '../services/dualServer';
 import { forgetListenerId } from '../services/listenerId';
 
 // Per-backend logo for the directory cards + per-instance type icon (receiverbook
@@ -762,6 +762,10 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
       });
       return;
     }
+    // ★★ V12 two servers: the server already playing in the background, picked again — go BACK to it, BEFORE anything
+    //   touches it (checkConnection registers a session on an UberSDR). A second session on the same receiver would be a
+    //   second slot for the same person — UberSDR and Kiwi count listeners (dualMix.sameServer, by base URL).
+    if (isSolo({ baseUrl: cleaned, serverType: serverType ?? 'ubersdr' })) { backToSolo(); return; }
     // Most-Used tally: connecting to a favourite (server or custom URL) bumps its visit count so
     // it floats to the top under the default sort. No-op if this isn't a favourite.
     registerFavouriteVisit(cleaned).then(setFavourites).catch(() => {});
@@ -898,7 +902,8 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
 
   /* ★★ V12 TWO SERVERS AT ONCE — "Listen to a 2nd server" brought us here with the first one still playing
    *  (src/services/dualServer.ts). The banner at the top says so, and offers the way back to it and the way to stop it.
-   *  Picking another VIBESERVER makes it server 2; picking anything else ends the first (its screen does, as it opens). */
+   *  Picking another server — any kind (dualMix.audioKindOf) — makes it server 2; picking something that cannot take part
+   *  (this device's own radio, RTL-TCP) ends the first (its screen does, as it opens). */
   const dual = useDual();
   const dualSolo = dual.phase === 'picking' ? dual.sides[0] ?? null : null;
   /** Back to the server still playing — its screen comes back as the same listener and adopts the running audio. */
@@ -908,7 +913,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
     // ★ No restorePlace: only connectVibeServer's reset builds a restoring picker (test_picker_return.ts).
     navigation.reset({ index: 1, routes: [
       { name: 'InstancePicker', params: { noAutoConnect: true } },
-      { name: 'SDR', params: p },
+      { name: dualScreenOf(p), params: p },   // ★ an FM-DX side comes back on its own screen
     ] } as never);
   }, [navigation]);
 
@@ -2740,7 +2745,7 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
           <Text style={{ fontFamily: F, fontSize: fs(13), color: dualSolo.ended ? C.bad : C.text, lineHeight: fs(18) }}>
             {dualSolo.ended
               ? `${dualSolo.name} has ended — ${dualSolo.ended}.`
-              : `${dual.note ? `${dual.note} ` : ''}${dualSolo.name} is still playing. Pick another VibeServer${dualSolo.radioKey ? ', or this one again for another of its radios,' : ''} to hear both — this one in your left ear, the new one in your right.`}
+              : `${dual.note ? `${dual.note} ` : ''}${dualSolo.name} is still playing. Pick another server — VibeServer, UberSDR, KiwiSDR, Web-888, OpenWebRX${dualSolo.kind === 'fmdx' ? '' : ' or FM-DX'}${dualSolo.radioKey ? ', or this one again for another of its radios,' : ''} — to hear both: this one in your left ear, the new one in your right.`}
           </Text>
           {!dualSolo.ended && (
             <View style={{ flexDirection: 'row', gap: 18, marginTop: 8 }}>

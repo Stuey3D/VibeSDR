@@ -2229,6 +2229,10 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                         var pcm = ByteArray(info.size)
                         ob.position(info.offset)
                         ob.get(pcm, 0, info.size)
+                        // ★★ V12 TWO SERVERS (VibeDualAudio.kt): an UberSDR on the main player while paired is placed in its
+                        //   ear like every other server — this path never went through the ext writer, so it was the one
+                        //   main-player feed the pan did not reach. Read ONCE per buffer, before the track's layout is chosen.
+                        decDual = VibeDualMix.primary.engaged()
                         ensureTrackFor(c.outputFormat)
                         if (trackChannels == 1 && (nbOn || nrMode != "off")) {
                             pcm = dspProcess(pcm)
@@ -2259,7 +2263,21 @@ class VibeStreamService : MediaBrowserServiceCompat() {
                             if (binDone) recTapBytes(binDecOut, outN, 2, trackRate)
                             else recTapBytes(pcm, pcm.size, trackChannels, trackRate)
                         }
-                        if (!muted) {
+                        if (!muted && decDual && trackOutChannels == 2) {
+                            // ★★ V12 two servers: placed AFTER the recorder's copy (a recording is this server as it is, not
+                            //   half of a pair) — the ext writer's rule. The track is stereo (ensureTrackFor read decDual).
+                            val srcB = if (outN >= 0) binDecOut else pcm
+                            val nB = if (outN >= 0) outN else pcm.size
+                            val sCh = if (outN >= 0) 2 else trackChannels
+                            val n = nB / 2
+                            if (decDualIn.size < n) decDualIn = ShortArray(n)
+                            ByteBuffer.wrap(srcB, 0, nB).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(decDualIn, 0, n)
+                            val frames = n / sCh.coerceAtLeast(1)
+                            if (decDualOut.size < frames * 2) decDualOut = ShortArray(frames * 2)
+                            val w = VibeDualMix.primary.process(decDualIn, n, sCh, trackRate, decDualOut)
+                            track?.write(decDualOut, 0, w)                    // blocking = backpressure
+                            trackWritten += (w / 2).toLong()
+                        } else if (!muted) {
                             if (outN >= 0) track?.write(binDecOut, 0, outN)  // blocking = backpressure
                             else track?.write(pcm, 0, pcm.size)              // blocking = backpressure
                             trackWritten += ((if (outN >= 0) outN else pcm.size) / (2 * trackOutChannels.coerceAtLeast(1))).toLong()
@@ -2719,11 +2737,18 @@ class VibeStreamService : MediaBrowserServiceCompat() {
     private fun le64(v: Long): ByteArray =
         ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(v).array()
 
+    /** ★ V12 two servers: the decode thread's per-buffer read of VibeDualMix.primary.engaged() (decode thread only), and
+     *  its own buffers for the placed copy. */
+    private var decDual = false
+    private var decDualIn = ShortArray(0)
+    private var decDualOut = ShortArray(0)
+
     private fun ensureTrackFor(format: MediaFormat) {
         val rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
         val ch = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-        // ★ V12 binaural tuning plays in two ears whatever the codec decodes — see startExtWriter.
-        val outCh = if (VibeBinaural.on) 2 else ch
+        // ★ V12 binaural tuning plays in two ears whatever the codec decodes — see startExtWriter. ★ So does a server
+        //   placed in its ear by the pairing (decDual).
+        val outCh = if (VibeBinaural.on || decDual) 2 else ch
         if (track != null && trackRate == rate && trackChannels == ch && trackOutChannels == outCh) return
         track?.release()
         val mask = if (outCh == 2) AudioFormat.CHANNEL_OUT_STEREO else AudioFormat.CHANNEL_OUT_MONO

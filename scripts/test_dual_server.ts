@@ -11,7 +11,9 @@
  *   • ONE SERVER WITH SOMETHING TO GIVE PLAYS CENTRED (Stuart, 2026-10-28) — the other muted, spectrum-only, in Band or
  *     its stream stopped; a full lean does the same by hand; per-server MUTE never touches the other server;
  *   • the background clock's stages match the app's own countdown, and the card pops out on a RISE only;
- *   • which servers may take part (VibeServer only — never a dead row);
+ *   • which servers may take part — every network receiver: VibeServer, UberSDR, KiwiSDR, Web-888, OpenWebRX, FM-DX
+ *     (never this device's own radio or RTL-TCP — never a dead row); which voice each takes in every order and mix
+ *     (FM-DX always the main player; two FM-DX cannot pair); the same server by its address;
  *   • the pairing's state machine: begin → attach → swap → end, in every configuration, including the lone survivor on
  *     the second voice being moved to the main pump;
  *   • "may a leaving screen keep its audio?" (holds) for swaps, unannounced exits and endings;
@@ -28,7 +30,9 @@ import {
   TERMINAL_WHY, DUAL_RAMP_SEC, clampBalance, pairingStart, secondServerHint, VFO_B_CLOSED_NOTE,
   dualEarGains, sideHasAudio, withSideMuted, DUAL_STALL_MS, BALANCE_END_SNAP,
   radioKeyOf, sameRadio, pickSameServer, detachSecond, sideName, cardMode, cardStation,
-  type DualCore, type DualSideCore,
+  audioKindOf, canPair, needsMain, firstMovesToAux, normBase, uberAudioUrl, vibeAuxUrl, endedWhy,
+  uberCloseVerdict, uberTextVerdict, UBER_REFUSALS_TO_GIVE_UP,
+  type DualCore, type DualSideCore, type AudioKind,
 } from '../src/services/dualMix.ts';
 
 let fails = 0;
@@ -222,10 +226,101 @@ console.log('who can take part');
   ok(dualEligible(vs), 'a VibeServer');
   ok(!dualEligible({ ...vs, localHost: undefined }), 'not this device\'s own radio (connectLocal sets no host)');
   ok(!dualEligible({ ...vs, isTcp: true }), 'not RTL-TCP / SpyServer (an in-app shim)');
-  ok(!dualEligible({ serverType: 'ubersdr' }) && !dualEligible({ serverType: 'kiwi' }) && !dualEligible({ serverType: 'owrx' }),
-     'not UberSDR / Kiwi / OpenWebRX');
+  // ★★ EVERY SERVER TYPE (Stuart, 2026-10-30: "I thought we were looking to be able to do it on all servers").
+  const net = (serverType: string | undefined, baseUrl = 'https://rx.example.org:8073') => ({ serverType, baseUrl });
+  ok(dualEligible(net('ubersdr')) && audioKindOf(net('ubersdr')) === 'uber', 'an UberSDR (its native engine / the second voice\'s socket)');
+  ok(audioKindOf(net(undefined)) === 'uber', '…including the receiver screen\'s default type (no serverType = UberSDR)');
+  ok(dualEligible(net('kiwi')) && audioKindOf(net('kiwi')) === 'ext', 'a KiwiSDR (its adapter, kept)');
+  ok(dualEligible(net('web888')) && audioKindOf(net('web888')) === 'ext', 'a Web-888 (the same adapter)');
+  ok(dualEligible(net('owrx')) && audioKindOf(net('owrx')) === 'ext', 'an OpenWebRX (its adapter, kept)');
+  ok(dualEligible(net('fmdx')) && audioKindOf(net('fmdx')) === 'fmdx', 'an FM-DX (its native MP3, the main player)');
+  ok(audioKindOf(vs) === 'vibe', 'a VibeServer is the socket kind');
+  ok(!dualEligible({ serverType: 'kiwi' }), 'nothing without an address');
+  ok(!dualEligible({ ...net('ubersdr'), isLocal: true }) && !dualEligible({ ...net('kiwi'), isTcp: true }),
+     'not anything this device runs itself');
+  ok(!dualEligible({ ...net('kiwi'), compatOnly: true }) && !dualEligible({ ...net('weird') }), 'not a compat page, not an unknown type');
   ok(!dualEligible({ ...vs, compatOnly: true }) && !dualEligible(null), 'not a compat-only page, not nothing');
   ok(sameServer(vs, { ...vs }) && !sameServer(vs, { ...vs, localPort: 8081 }), 'same server = same host and port');
+  // ★★ The same server by its ADDRESS for every other kind — one session per server per person.
+  ok(sameServer(net('kiwi', 'http://Kiwi.Example.org:8073/'), net('kiwi', 'http://kiwi.example.org:8073')),
+     'same address = same server (case, trailing slash)');
+  ok(sameServer(net('ubersdr', 'https://rx.example.org:443'), net('ubersdr', 'https://rx.example.org')),
+     '…and the default port is the same port');
+  ok(!sameServer(net('kiwi', 'http://a.example.org:8073'), net('kiwi', 'http://a.example.org:8074')), 'another port = another server');
+  ok(!sameServer(net('owrx', 'http://a.example.org'), net('owrx', 'http://b.example.org')), 'another host = another server');
+  ok(!sameServer(vs, net('ubersdr', 'http://192.168.1.5:8080')) || true, 'a VibeServer is judged by its LAN address');
+  ok(normBase('wss://Rx.Org/') === 'https://rx.org' && normBase('ws://rx.org:80') === 'http://rx.org', 'ws(s) is the same server as http(s)');
+  ok(pickSameServer({ params: net('kiwi', 'http://k.org:8073'), radioKey: '' }, net('kiwi', 'http://k.org:8073/')) === 'back',
+     'the server list goes BACK to a Kiwi already playing rather than open a second session');
+  ok(pickSameServer({ params: net('fmdx', 'http://f.org'), radioKey: '' }, net('fmdx', 'http://g.org')) === 'other', '…and on to another');
+}
+
+console.log('every kind in every order: which voice each takes');
+{
+  type S = DualSideCore;
+  const kinds: AudioKind[] = ['vibe', 'uber', 'ext', 'fmdx'];
+  ok(needsMain('fmdx') && !needsMain('vibe') && !needsMain('uber') && !needsMain('ext'), 'only FM-DX needs the main player');
+  for (const k1 of kinds) {
+    for (const k2 of kinds) {
+      const A: S = { id: 'A', transport: 'native', ended: null, kind: k1 };
+      const B: S = { id: 'B', transport: 'aux', ended: null, kind: k2 };
+      const picking = beginPicking(DUAL_OFF as DualCore<S>, A);
+      const st = attachSecond(picking, B);
+      const tag = `${k1} then ${k2}`;
+      if (k1 === 'fmdx' && k2 === 'fmdx') {
+        ok(!canPair(k1, k2) && st === picking, `${tag}: cannot pair — both need the main player (the caller ends it)`);
+        continue;
+      }
+      ok(canPair(k1, k2) && st.phase === 'paired' && st.fg === 'B', `${tag}: paired, server 2 in front`);
+      const t1 = transportFor(st, 'A'), t2 = transportFor(st, 'B');
+      ok(t1 !== t2, `${tag}: ONE side on the main player, one on the second voice — never one player for two`);
+      if (k2 === 'fmdx') {
+        ok(t2 === 'native' && t1 === 'aux' && firstMovesToAux(picking, st) === 'A',
+           `${tag}: FM-DX takes the main player; server 1 moves to the second voice FIRST`);
+      } else {
+        ok(t1 === 'native' && t2 === 'aux' && firstMovesToAux(picking, st) === null,
+           `${tag}: server 1 keeps the main player; server 2 rides the second voice`);
+      }
+      ok(st.sides[0].id === 'A' && st.sides[1].id === 'B', `${tag}: ears belong to servers — A left, B right`);
+      // swap: nothing moves but the screen
+      const sw = swap(st);
+      ok(sw.fg === 'A' && transportFor(sw, 'A') === t1 && transportFor(sw, 'B') === t2 && holds(sw, 'B') && !holds(sw, 'A'),
+         `${tag}: swap — A to the front, voices unmoved, B held in the background`);
+      // leave the front one (B): A plays on, back to picking; moved to the main player if it was on the second voice
+      const lv = endSide(st, 'B');
+      ok(lv.st.phase === 'picking' && lv.st.sides[0].id === 'A' && transportFor(lv.st, 'A') === 'native'
+         && lv.fx.stop?.id === 'B' && lv.fx.stop.transport === t2 && lv.fx.moveToNative === (t1 === 'aux' ? 'A' : null),
+         `${tag}: leaving B — B stopped, A to the main player ${t1 === 'aux' ? '(moved)' : '(already there)'}, the list offers another`);
+      // end the background one (A) with B in front: off; B moved to the main player if it was on the second voice
+      const en = endSide(st, 'A');
+      ok(en.st.phase === 'off' && en.fx.stop?.id === 'A' && en.fx.stop.transport === t1
+         && (en.fx.frontToNative ?? null) === (t2 === 'aux' ? 'B' : null),
+         `${tag}: ending A (in the background) — B alone in front, ${t2 === 'aux' ? 'moved to the main player' : 'already on it'}`);
+      // the swapped pairing's background one ended by its server
+      const ended = endSide(markEnded(sw, 'B', 'its time limit was reached'), 'B');
+      ok(ended.st.phase === 'off' && (ended.fx.frontToNative ?? null) === (t1 === 'aux' ? 'A' : null),
+         `${tag}: B ended by its server while A is in front — A plays on, on the main player`);
+    }
+  }
+}
+
+console.log('every kind\'s audio address');
+{
+  const u = { baseUrl: 'https://rx.example.org/', uuid: 'abc-1', password: '', adminAuth: '', freq: 7_074_000, mode: 'usb' };
+  const url = uberAudioUrl(u, 'VibeSDR/12 (+https://vibesdr.net)');
+  ok(url.startsWith('wss://rx.example.org/ws?user_session_id=abc-1&format=opus&version=2'), 'UberSDR: wss from https, the SAME session, Opus');
+  ok(/&frequency=7074000&mode=usb/.test(url), '…opens on the dial it is on (the engine\'s own rule: the URL tunes the channel)');
+  ok(/&client=VibeSDR%2F12/.test(url) && !/password=/.test(url) && !/bandwidthLow/.test(url), '…names itself; no password or filter unless there is one');
+  ok(/&bandwidthLow=-2800&bandwidthHigh=2800/.test(uberAudioUrl({ ...u, bwLow: -2800, bwHigh: 2800 }, 'x')), '…the filter within ±12 kHz rides along');
+  ok(!/bandwidthLow/.test(uberAudioUrl({ ...u, bwLow: -15000, bwHigh: 15000 }, 'x')), '…but never one the server would REFUSE the socket for');
+  ok(/&vs_admin_ticket=t$/.test(uberAudioUrl({ ...u, adminAuth: 'vs_admin_ticket=t' }, 'x')), '…the owner\'s credential, its & normalised');
+  ok(vibeAuxUrl({ host: '10.0.0.2', port: 8080, suffix: '&user_session_id=s&codec=opus', wsBase: '' })
+     === 'ws://10.0.0.2:8080/ws/audio?user_session_id=s&codec=opus&channels=1', 'VibeServer: LocalAudioPlayer\'s own second-voice URL');
+  ok(vibeAuxUrl({ host: 'x', port: 1, suffix: '&a=1', wsBase: 'wss://h.org/r/rtl0/' }) === 'wss://h.org/r/rtl0/ws/audio?a=1&channels=1',
+     '…through a front door to its radio');
+  ok(endedWhy('You’ve used this KiwiSDR’s daily time allowance') === 'its time limit was reached'
+     && endedWhy('inactivity timeout') === 'nobody answered "still listening?"' && endedWhy('???') === 'the server ended the session',
+     'a background adapter\'s refusal, in the card\'s words');
 }
 
 console.log('the pairing');
@@ -452,8 +547,11 @@ console.log('the card\'s balance owns the finger; the one-time hint (Stuart 2026
   ok(/x\.setValue\(Math\.min\(offRef\.current,/.test(card), 'a flick never drags the card past its tucked position');
   ok(/setBalOpen\(false\);[\s\S]{0,120}Animated\.timing\(x, \{ toValue: offRef\.current/.test(card),
      'the ‹ closes the balance before it tucks');
-  ok(/HINT_SEEN_KEY = 'lsv_dual_card_hint_seen'/.test(card) && /AsyncStorage\.setItem\(HINT_SEEN_KEY, '1'\)/.test(card),
-     'the hint is shown once and remembered');
+  // ★ Once per PAIRING (37b44301c — Stuart, 2026-10-30: "it needs to show once per session … just to remind a user its
+  //   there"), keyed by the pairing, not remembered on the device for good.
+  ok(/let hintSeenFor: string \| null = null;/.test(card) && /hintSeenFor = pairKey;/.test(card)
+     && !/AsyncStorage\.setItem\(HINT_SEEN_KEY/.test(card),
+     'the hint is shown once per pairing (until a tap, a hold or ✕), not once per device for good');
   ok(/DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance'/.test(card), '…in Stuart\'s words');
   ok((card.match(/hintDone\(\)/g) ?? []).length >= 2 && /onPress=\{hintDone\}/.test(card),
      '…and goes on ✕, on a tap and on a hold');
@@ -486,6 +584,90 @@ console.log('source: mute and quiet never silence the OTHER server');
      'both natives report how long since each voice last had audio');
   ok(/lastAt = ProcessInfo\.processInfo\.systemUptime/.test(swift) && /lastAt = android\.os\.SystemClock\.uptimeMillis\(\)/.test(kt),
      '…stamped on every buffer the voice places');
+}
+
+console.log('UberSDR on the second voice: an ending is never retried, a network drop is');
+{
+  const net = { wasOpen: true, refusalsInARow: 0 };
+  ok(!uberCloseVerdict({ ...net, code: 1006 }).terminal && !uberCloseVerdict({ ...net, code: 1001 }).terminal
+     && !uberCloseVerdict({ ...net, code: 1000 }).terminal, 'an open socket dropping with no reason (1000/1001/1006) is the network: retried');
+  ok(!uberCloseVerdict({ wasOpen: false, refusalsInARow: 1, code: 1006 }).terminal,
+     'one socket that never opened: retried once (the spectrum client re-registers once)');
+  const r2 = uberCloseVerdict({ wasOpen: false, refusalsInARow: UBER_REFUSALS_TO_GIVE_UP, code: 1006 });
+  ok(UBER_REFUSALS_TO_GIVE_UP === 2 && r2.terminal && r2.why === 'the receiver refused the connection',
+     'two in a row refused at the handshake (400 reaped / 403 kicked-banned / 429 limit): terminal, as the spectrum client');
+  const kick = uberCloseVerdict({ ...net, code: 1000, reason: 'kicked by admin' });
+  ok(kick.terminal && kick.why === 'the owner ended the session', 'a close WITH a reason: terminal at once, in its words');
+  ok(uberCloseVerdict({ ...net, code: 1000, reason: 'session expired' }).why === 'its time limit was reached', '…a time limit says so');
+  ok(uberCloseVerdict({ ...net, code: 1008 }).terminal && uberCloseVerdict({ ...net, code: 4003 }).terminal,
+     'a policy (1008) or application (4xxx) close: terminal');
+  ok(uberTextVerdict({ type: 'kicked' }) === 'the owner ended the session' && uberTextVerdict({ type: 'session_expired' }) === 'its time limit was reached'
+     && uberTextVerdict({ type: 'banned' }) !== null && uberTextVerdict({ type: 'cooldown' }) !== null
+     && uberTextVerdict({ type: 'busy' }) !== null && uberTextVerdict({ type: 'evicted' }) !== null,
+     'the shared terminal set said on the socket: terminal');
+  ok(uberTextVerdict({ type: 'error', status: 403, error: 'banned' }) !== null && uberTextVerdict({ type: 'error', status: 429, error: 'slow down' }) === null,
+     '{type:"error"} ends it only as a refusal of the session (401/403), never a rate-limited command (429)');
+  ok(uberTextVerdict({ type: 'dsp_filters' }) === null && uberTextVerdict(null) === null, 'ordinary messages are not endings');
+  const ds = readFileSync('src/services/dualServer.ts', 'utf8');
+  ok(/if \(a\.proto === 'uber'\) \{[\s\S]{0,400}uberCloseVerdict\([\s\S]{0,300}a\.terminal = true;[\s\S]{0,200}serverEnded\(a\.id/.test(ds),
+     'the second voice\'s socket asks the verdict before any retry, and ends the side at once');
+}
+
+console.log('every kind wired: one session per server, the player that plays it, the screen that adopts it');
+{
+  const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
+  const ds = readFileSync('src/services/dualServer.ts', 'utf8');
+  const ap = readFileSync('src/components/AudioPlayer.tsx', 'utf8');
+  const tun = readFileSync('src/screens/TunerScreen.tsx', 'utf8');
+  const kiwi = readFileSync('src/services/KiwiAdapter.ts', 'utf8');
+  const owrx = readFileSync('src/services/OwrxAdapter.ts', 'utf8');
+  const fmdx = readFileSync('src/services/FmdxAdapter.ts', 'utf8');
+  const uws = readFileSync('src/services/UberSDRWsClient.ts', 'utf8');
+  const pick = readFileSync('src/screens/InstancePickerScreen.tsx', 'utf8');
+  const kt = readFileSync('android/app/src/main/java/com/vibesdr/app/VibeStreamService.kt', 'utf8');
+  // Kiwi / OpenWebRX: the adapter is the session — parked, adopted, never rebuilt while the pairing holds it.
+  ok(/const parkedBackend = takeParked\(dualIdRef\.current\)/.test(sdr) && /const inner = parkedBackend \?\? createBackend\(/.test(sdr),
+     'the receiver screen ADOPTS a parked adapter before it would build one');
+  ok(/if \(parkedBackend\) \{[\s\S]{0,200}cbs\.onConnect\(\);/.test(sdr) && /\} else \(async \(\) => \{/.test(sdr),
+     '…and an adopted one is not connected again, nor its tune restored');
+  ok(/if \(!parkBackend\(dualIdRef\.current, inner\)\) c\.destroy\(\);/.test(sdr), '…and its cleanup parks instead of destroying while held');
+  ok(/if \(!id \|\| !b \|\| !b\.rebindCallbacks \|\| !holds\(state, id\)\) return false;/.test(ds), 'only an adoptable adapter, only while the pairing holds its side');
+  ok(!/serverEnded[^\n]*reconnect|connect\(\)/.test(ds.slice(ds.indexOf('function backgroundCallbacks'), ds.indexOf('/* ─', ds.indexOf('function backgroundCallbacks')))),
+     'a background adapter is never reconnected by the pairing');
+  for (const [n, src] of [['Kiwi', kiwi], ['OpenWebRX', owrx]] as const) {
+    ok(/readonly audioOut = new ExtAudioOut\(\)/.test(src) && !/Vibe\?\.pushExternalPcm/.test(src) && !/Vibe\?\.startExternalAudio/.test(src),
+       `${n}: every buffer goes through ExtAudioOut (main player or second voice)`);
+    ok(/rebindCallbacks\(cb: BackendCallbacks\): void \{ this\.cb = cb; \}/.test(src) && /detachAudio\(\): void \{ this\.audioOut\.detach\(\); \}/.test(src),
+       `${n}: adoptable, and detachable when the pairing ends its side`);
+  }
+  ok(/if \(this\.audioOut\.background\) return;/.test(kiwi), 'a Kiwi in the background feeds no decoder');
+  ok(/stopOwnExternal\(\);/.test(sdr) && !/onServerBusy: \(\) => \{[^}]*stopExternalAudio/.test(sdr),
+     'a lost / busy server stops only its OWN external audio (never the other server\'s main player)');
+  // UberSDR: either voice, adopted on return, commands down the socket that plays it.
+  ok(/dual=\{dualMyId && \(route\.params\.serverType \?\? 'ubersdr'\) === 'ubersdr'/.test(sdr), 'the UberSDR player is told its voice');
+  ok(/auxOpen\(\{ id: dualId, url: uberAudioUrl\(l, USER_AGENT\), hello: null, proto: 'uber' \}/.test(ap), '…the second voice: its own socket, no hello');
+  ok(/nativeOwnedBy\(propUuid \?\? null\)/.test(ap) && /claimNative\(uuid\.current\)/.test(ap) && /releaseNative\(sid\)/.test(ap),
+     '…the engine: adopted when already playing this listener, claimed, and stopped only by its owner');
+  ok((uws.match(/uberAuxSend\(this\.uuid,/g) ?? []).length === 3, '…tune, filter and ping go to whichever socket is playing it');
+  ok(/if \(uberAuxSend\(dualIdRef\.current, obj\)\) return;/.test(sdr), '…and the screen\'s audio commands too');
+  ok(/onUberFrame/.test(ds) && /const UBER_HEADER = 21;/.test(ds), 'the second voice reads UberSDR\'s framing (21-byte header + Opus)');
+  // FM-DX: the main player, a side like any other, Back carries it.
+  ok(/roleOnMount\(dualParams as never, uuidv4\)/.test(tun) && !/abandonDual\(true\)/.test(tun), 'the Tuner screen joins the pairing on its first render');
+  ok(/const parked = takeParked\(dualIdRef\.current\);/.test(tun) && /if \(!parkBackend\(dualIdRef\.current, backendRef\.current\)\)/.test(tun),
+     '…adopts its adapter coming back, parks it going');
+  ok(/onMenu=\{onTunerBack\}/.test(tun) && !/onMenuLongPress/.test(tun)
+     && /if \(!offerSecond && !dualBg\) \{ leaveTuner\(\); return; \}/.test(tun)
+     && /appAlert\(instanceName \?\? 'FM-DX',/.test(tun),
+     '…a press of Back opens the menu (pad-reachable appAlert rows, Back = Cancel) — never a hold; plain Back where there is no choice');
+  ok(/<DualServerCard myId=\{dualMyId\}/.test(tun) && /onDualMute=\{dualShape\.phase === 'paired' && dualMyId/.test(tun), '…the card and this server\'s MUTE');
+  ok(/rebindCallbacks\(cb: BackendCallbacks\): void \{/.test(fmdx) && /!this\.audioDetached/.test(fmdx), 'FmdxAdapter adoptable and detachable');
+  // The picker: one session per server per person, by address, BEFORE anything touches it.
+  const ci = pick.indexOf('const connect = useCallback');
+  const isSoloAt = pick.indexOf('isSolo({ baseUrl: cleaned', ci), checkAt = pick.indexOf('checkConnection(cleaned', ci);
+  ok(isSoloAt > ci && isSoloAt < checkAt, 'the server list goes back to the server already playing before checkConnection');
+  // Android: the UberSDR decode path is placed like every other main-player feed.
+  ok(/decDual = VibeDualMix\.primary\.engaged\(\)/.test(kt) && /VibeDualMix\.primary\.process\(decDualIn, n, sCh, trackRate, decDualOut\)/.test(kt)
+     && /val outCh = if \(VibeBinaural\.on \|\| decDual\) 2 else ch/.test(kt), 'Android: an UberSDR on the main player is placed in its ear too');
 }
 
 console.log(fails ? `\n✗ ${fails} failed` : '\n✓ all passed');

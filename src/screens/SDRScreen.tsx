@@ -122,7 +122,7 @@ import { watchProvider } from '../services/watchProvider';
 const WATCH_BG_DIVISOR = 1;
 // How long the status row's gain arrow stays after the gain loop's last step.
 const GAIN_ARROW_MS = 4000;
-import { filterEdgeMax, filterEdgeMin, type SDRBackend, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
+import { filterEdgeMax, filterEdgeMin, type SDRBackend, type BackendCallbacks, type ProfileInfo, type BackendMode, type DabProgramme, type Aircraft } from '../services/SDRBackend';
 import { DecoderClient, RTTY_PRESETS, timeStationFor,
          type RttySettings, type MorseQuality,
          type SpotRow, type SpotsKind,
@@ -171,8 +171,9 @@ import DualServerCard from '../components/DualServerCard';
 import { canListenSecond, dualHolds, dualSupported, dualTransport, foregroundEnded, leaveForeground, listenSecond,
          noteStatus, returnParams, returningSide, roleOnMount, screenGone, setDualOutput, stopBackground, swapToBackground,
          isFirstRadio, backToFirstRadio,
-         useDualShape, getDual, setSideMuted } from '../services/dualServer';
-import { cardMode, cardStation, dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
+         useDualShape, getDual, setSideMuted, takeParked, parkBackend, noteBackend, dualScreenOf, uberAuxSend,
+         setAuxTextSink } from '../services/dualServer';
+import { audioKindOf, cardMode, cardStation, dualEligible, pairingStart, radioKeyOf, sideName } from '../services/dualMix';
 import { useCoachmarkTour, tourRef } from '../components/Coachmark';
 import AudioPlayer, { VibePowerModule, setNativeQuiet } from '../components/AudioPlayer';
 import LocalAudioPlayer, { reviveLocalAudio } from '../components/LocalAudioPlayer';
@@ -4369,7 +4370,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  server's screen it would record the other server — so it says so and offers the way to what it CAN record,
      *  rather than make a file of the wrong station. */
     if (!isRecording && dualRecRef.current.onAux) {
-      appAlert('Recording', `While two servers are playing, recordings are taken from the first one — ${dualRecRef.current.first}. Switch to it to record.`,
+      appAlert('Recording', `While two servers are playing, recordings are taken from one of them — ${dualRecRef.current.first}. Switch to it to record.`,
         [{ text: 'Cancel', style: 'cancel' }, { text: 'Switch', onPress: () => dualRecRef.current.swap() }]);
       return;
     }
@@ -6453,6 +6454,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     const subWs = emitter.addListener('VibeWsText', (e: { text: string }) => {
       guardJson('native-audio', String(e?.text ?? ''), (raw) => onAudioText(raw));
     });
+    // ★★ V12 two servers: an UberSDR on the second voice speaks on that voice's own socket — the same messages.
+    const auxTextId = dualIdRef.current;
+    setAuxTextSink(auxTextId, (t: string) => guardJson('aux-audio', t, (raw) => onAudioText(raw)));
     const onAudioText = (raw: Record<string, unknown>) => {
       const msg = raw as { type?: string; info?: Record<string, unknown> };
       if (typeof msg.type !== 'string') return;
@@ -6485,6 +6489,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       }
     };
     return () => {
+      setAuxTextSink(auxTextId, null);
       sub.remove(); subMute.remove(); subSig.remove(); subSkip.remove(); subWs.remove();
       subCar.remove(); subCarTune.remove(); subVoice.remove(); subDsOff.remove(); subDsOn.remove(); subPath.remove(); subVol.remove();
     };
@@ -6561,7 +6566,17 @@ export default function SDRScreen({ route, navigation }: Props) {
      *   actually feed the readout, the band bar and the spectrum axis. Without this the app was
      *   told the hardware frequency and believed it — 102.2 MHz on an FM band bar while the
      *   listener was really on 2.2 MHz behind a Ham It Up. */
-    const c = wrapWithConverter(createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, wrapConverterCallbacks({
+    /* ★★ V12 TWO SERVERS AT ONCE: a Kiwi / Web-888 / OpenWebRX screen coming BACK to a server that never stopped playing
+     *  ADOPTS the adapter the pairing kept for it (dualServer.parkBackend) — the same sockets, the same session, no second
+     *  slot on somebody's receiver. Its reports point at this screen from here on (rebindCallbacks). */
+    const parkedBackend = takeParked(dualIdRef.current);
+    /** The external-PCM player is stopped only while it is THIS server's: an adapter on the second voice stops its own. */
+    const stopOwnExternal = () => {
+      const out = inner.audioOut;   // (called only once `inner` exists — a callback, never during construction)
+      if (out && out.current === 'aux') { out.stop(); return; }
+      (VibePowerModule as any)?.stopExternalAudio?.();
+    };
+    const cbs = wrapConverterCallbacks<BackendCallbacks>({
       // (callbacks below; bypass password rides every WS URL)
       // ★★★ A CONNECTION THAT SUCCEEDED TAKES THE REFUSAL CARD DOWN WITH IT. Every other notice
       //     was cleared here and this one was not, so after a successful admin takeover the
@@ -7008,12 +7023,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (destroyed.current || kiwiRefusedRef.current) return;   // refusal card already owns the screen
         setServerLostWhy(reason ? { reason, neverConnected: !!neverConnected } : null);
         setServerLost(true);
-        (VibePowerModule as any)?.stopExternalAudio?.();
+        // ★★ V12 two servers: only THIS server's audio — on the second voice the main player is the other server's.
+        stopOwnExternal();
       },
       onServerBusy: () => {
         if (destroyed.current || kiwiRefusedRef.current) return;   // refusal card already owns the screen
         setServerBusy(true);
-        (VibePowerModule as any)?.stopExternalAudio?.();
+        stopOwnExternal();
       },
       onReceiverLon: (lon) => { if (!destroyed.current) setRecvLon(lon); },
       onReceiverLoc: (lat, lon) => { recvLocRef.current = { lat, lon }; if (!destroyed.current) setRecvLoc({ lat, lon }); },
@@ -8140,7 +8156,13 @@ export default function SDRScreen({ route, navigation }: Props) {
           ]);
         }
       },
-    }, () => converterRef.current), password, !!route.params.isLocal), () => converterRef.current);
+    }, () => converterRef.current);
+    const inner = parkedBackend ?? createBackend(route.params.serverType ?? 'ubersdr', connectBase, sessionUuid, cbs,
+                                                 password, !!route.params.isLocal);
+    if (parkedBackend) parkedBackend.rebindCallbacks?.(cbs);
+    // ★★ V12: its audio rides the voice the pairing gives this side (Kiwi / OpenWebRX — extAudioOut.ts); a no-op elsewhere.
+    noteBackend(dualIdRef.current, inner);
+    const c = wrapWithConverter(inner, () => converterRef.current);
     client.current = c;
     // ★★ V12 VFO A/B: a NEW client knows no VFO B until the server says so (it adopts one the session still holds —
     //    vfoAB.ts PER SESSION), so the screen starts from the new client's word, not the old one's.
@@ -8191,7 +8213,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     let cancelled = false;
     const tuneKey = (isLocal ? `lsv_last_tune:${localDeviceKey}` : 'lsv_last_tune:' + baseUrl)
                   + radioKeySuffix;
-    (async () => {
+    // ★★ V12: an adopted adapter is already connected and tuned — nothing to restore, nobody to ask (below).
+    if (parkedBackend) {
+      lastTuneLoaded.current = true;
+      setTuneLoaded(true);
+      cbs.onConnect();
+      cbs.onStatus(inner.getStatus());
+    } else (async () => {
       /**
        * ★★★ A SERVER WITH NO FRONT DOOR STILL HAS A SHARED DIAL, AND WE WERE NOT ASKING. The guard
        *     below reads the RADIO's user count, which comes from /vibeserver/radios — and a
@@ -8374,7 +8402,11 @@ export default function SDRScreen({ route, navigation }: Props) {
       try { VibePowerModule?.stopAudioEngine?.(); } catch {}
     });
     return () => {
-      cancelled = true; destroyed.current = true; c.destroy(); client.current = null;
+      cancelled = true; destroyed.current = true;
+      // ★★ V12: going to the background in a pairing (a swap, "Listen to a 2nd server") — a Kiwi / OpenWebRX adapter IS
+      //    its session and its audio, so the pairing keeps it (dualServer.parkBackend); everything else goes as before.
+      if (!parkBackend(dualIdRef.current, inner)) c.destroy();
+      client.current = null;
       setSessionTeardown(null);
     };
   // ★★ connectBase AND THE GATES BELONG IN THE DEPS. The effect returns early while the front
@@ -9678,6 +9710,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   //    the spectrum WS doesn't know them — the old client.setNRMode/setDsp
   //    paths were sending into the void) ──────────────────────────────────────
   const sendAudioCmd = useCallback((obj: Record<string, unknown>) => {
+    // ★★ V12 two servers: an UberSDR on the second voice hears its commands down that voice's own socket.
+    if (uberAuxSend(dualIdRef.current, obj)) return;
     VibePowerModule?.sendAudioCommand(JSON.stringify(obj));
   }, []);
 
@@ -12013,7 +12047,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     listenSecond({ id: dualMyId, name: dualName, params: back, radioKey: dualRadioKey, pinned: !!radioAuthSuffix,
                    freqHz: abDoor.frequency, endsAt: dualEndsAt, soft: limitSoft || borrowed, station: dualStation,
                    mode: cardMode({ mode: String(abDoor.mode), dab: dualDab, adsb: adsbOn, ism: ismOn, ais: aisOn, ndb: ndbOn }),
-                   quiet: audioQuiet, band: spotsBandOn },
+                   quiet: audioQuiet, band: spotsBandOn,
+                   // ★★ How its audio plays (dualMix.audioKindOf) — the pairing keeps each kind on its own path.
+                   kind: audioKindOf(route.params as never) ?? 'vibe' },
                  start.note);
     navigation.goBack();
   }, [dualMyId, dualName, dualRadioKey, radioBase, radioAuthSuffix, route.params, abDoor.frequency, abDoor.mode, abOn, onVfoAB, dualEndsAt,
@@ -12023,15 +12059,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onDualSwap = useCallback(() => {
     const p = swapToBackground();
     if (!p) return;
+    // ★ An FM-DX side comes back on its own screen (dualServer.dualScreenOf).
     navigation.reset({ index: 1, routes: [
       { name: 'InstancePicker', params: { noAutoConnect: true } },
-      { name: 'SDR', params: p },
+      { name: dualScreenOf(p), params: p },
     ] } as never);
   }, [navigation]);
   const dualBg = dualShape.phase === 'paired' && dualShape.fg === dualMyId
     ? dualShape.sides.find((x) => x.id !== dualMyId) ?? null : null;
   const dualOnAux = !!dualMyId && dualShape.phase === 'paired' && dualTransport(dualMyId) === 'aux';
-  dualRecRef.current = { onAux: dualOnAux, first: dualShape.sides[0]?.name ?? '', swap: onDualSwap };
+  // ★ Recordings come from the MAIN player — server 1, unless an FM-DX joined and took it (dualMix.attachSecond).
+  dualRecRef.current = { onAux: dualOnAux, first: dualShape.sides.find((x) => x.transport === 'native')?.name ?? '', swap: onDualSwap };
 
   // Stable handlers — inline lambdas defeat the React.memo on ControlsBar.
   const onStepOpen  = useCallback(() => setStepOpen(true), []);
@@ -12535,7 +12573,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. On a VibeServer it can also keep this one playing while you add a second server, or a second radio on this one: Listen to a 2nd server. Two servers or VFO A/B, never both — with VFO B on, that closes B first, and VFO A/B comes back when you are down to one server.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. It can also keep this one playing while you add a second server — any kind: VibeServer, UberSDR, KiwiSDR, Web-888, OpenWebRX or FM-DX — or a second radio on a VibeServer: Listen to a 2nd server. Two servers or VFO A/B, never both — with VFO B on, that closes B first, and VFO A/B comes back when you are down to one server.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.
@@ -15160,6 +15198,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         //     ever; only a fresh POST /connection can make the server keep it. Re-register, then
         //     restart the engine so the new socket arrives behind a session that exists.
         onStuck={onAudioStuck}
+        // ★★ V12 two servers: which voice this UberSDR's audio rides (null = the ordinary path, untouched) — the engine,
+        //   or the second voice's own socket (dualServer.ts). The filter edges ride along for that socket's reopen URL.
+        dual={dualMyId && (route.params.serverType ?? 'ubersdr') === 'ubersdr' ? { id: dualMyId, transport: dualTransport(dualMyId) } : null}
+        bandwidthLow={status.bandwidthLow}
+        bandwidthHigh={status.bandwidthHigh}
       />
       </PanelBoundary>
       {/* ★ Record which audio component is mounted and WHY, for the diagnostics report. Both of

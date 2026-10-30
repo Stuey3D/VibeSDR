@@ -42,7 +42,11 @@ import { FMDX_TUNE_LO, FMDX_TUNE_HI, FMDX_DIAL_VIEW_LO, FMDX_DIAL_VIEW_HI } from
 import { appAlert } from '../components/AppAlert';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
-import { abandon as abandonDual } from '../services/dualServer';
+import { canListenSecond, claimNative, releaseNative, dualSupported, foregroundEnded, leaveForeground, listenSecond, noteBackend,
+         noteStatus, parkBackend, returnParams, roleOnMount, screenGone, setSideMuted, stopBackground, swapToBackground,
+         takeParked, useDualShape, dualScreenOf } from '../services/dualServer';
+import { dualEligible, secondServerHint } from '../services/dualMix';
+import DualServerCard from '../components/DualServerCard';
 
 // FM-DX Webserver tuner screen (v7). Single shared hardware tuner: server-side
 // demod + RDS, native MP3 audio. No waterfall — station/RDS panels fill the top,
@@ -115,9 +119,22 @@ let fmdxNoticeShownThisSession = false;
 export default function TunerScreen({ route, navigation }: Props) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const { baseUrl, instanceName } = route.params;
-  // ★★ V12 two servers: FM-DX plays through the same native player — a pairing still playing ends BEFORE this screen's
-  //   own audio starts (dualServer.abandon; first render, ahead of every effect).
-  useState(() => { abandonDual(true); return 0; });
+  /* ★★ V12 TWO SERVERS AT ONCE — FM-DX TAKES PART TOO (Stuart, 2026-10-30: "FM-DX is probably the easiest to do all we
+   *  need to do is add the option in the back button to connect a 2nd server"). Its MP3 is decoded natively into the MAIN
+   *  player and only there, so an FM-DX side always has the main player: as server 2 it takes it and server 1 moves to
+   *  the second voice FIRST (dualMix.attachSecond → dualServer.moveToAux) — decided on this FIRST RENDER, before any
+   *  effect starts FM-DX's audio. Two FM-DX servers cannot pair (canPair): the second ends the first, as before. */
+  const dualParams = useMemo(() => ({ ...route.params, serverType: 'fmdx' as const }), [route.params]);
+  const [dualSideId] = useState<string | null>(() => roleOnMount(dualParams as never, uuidv4));
+  /** ★ The listener this screen is — a side coming BACK (a swap, the server list's ‹ Back) is the same one, and adopts
+   *  the adapter still playing (dualServer.takeParked), never a second session on the shared tuner. */
+  const sessionUuid = useMemo(() => dualSideId
+    ?? (typeof route.params.dualSide === 'string' && route.params.dualSide ? route.params.dualSide : null)
+    ?? uuidv4(), [baseUrl]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const dualShape = useDualShape();
+  const dualMyId = dualSupported && dualEligible(dualParams) ? sessionUuid : null;
+  const dualIdRef = useRef<string | null>(null);
+  dualIdRef.current = dualMyId;
   /** ★ How a recording made here is filed in Recordings: the server's name, else its host. */
   const recServerName = instanceName || String(baseUrl ?? '').replace(/^\w+:\/\//, '').replace(/\/.*$/, '');
   const { theme: baseTheme } = useTheme();
@@ -470,7 +487,7 @@ export default function TunerScreen({ route, navigation }: Props) {
       } catch {}
     });
 
-    const uuid = uuidv4();
+    const uuid = sessionUuid;
     /* ★★ GitHub #52: a first connection over https that failed may have failed on the certificate (a server with its
      *  own self-signed pair). Asked ONCE per attempt; trusted → connect again; declined → say so; not a certificate
      *  problem → the error exactly as before. */
@@ -485,7 +502,10 @@ export default function TunerScreen({ route, navigation }: Props) {
         else setError(o === 'none' ? m : "This server's certificate is not trusted on this device");
       }).catch(() => setError(m));
     };
-    const backend = createBackend('fmdx', baseUrl, uuid, {
+    // ★★ V12: coming back to an FM-DX server the pairing kept playing — adopt its adapter (sockets and native audio as
+    //    they are); its reports come here from now on (FmdxAdapter.rebindCallbacks re-announces the connection).
+    const parked = takeParked(dualIdRef.current);
+    const cbs: Parameters<typeof createBackend>[3] = {
       onSpectrum: () => {},
       onStatus:   () => {},
       onError:    (m) => failed(m),
@@ -558,9 +578,14 @@ export default function TunerScreen({ route, navigation }: Props) {
         // ★ A hidden sender's line is kept (Show brings it back) but must not light the unread pulse.
         if (!chatOpenRef.current && !own && !chatHiddenRef.current.has(name)) setChatUnread(true);
       },
-    });
+    };
+    const backend = parked ?? createBackend('fmdx', baseUrl, uuid, cbs);
     backendRef.current = backend;
-    backend.connect().catch((e) => failed(String(e?.message ?? e)));
+    noteBackend(dualIdRef.current, backend);
+    // ★ The main player is FM-DX's from here on — say whose, so a screen that goes away later cannot stop it.
+    if (dualIdRef.current) claimNative(dualIdRef.current);
+    if (parked) parked.rebindCallbacks?.(cbs);
+    else backend.connect().catch((e) => failed(String(e?.message ?? e)));
     // FM-DX lock-screen card: neutral FM artwork + server name (the native side
     // also disables skip + owns reconnect for the shared tuner).
     VibePowerModule?.setInstanceName?.(instanceName ?? 'FM-DX');
@@ -573,7 +598,11 @@ export default function TunerScreen({ route, navigation }: Props) {
       if (convergeTimer.current) clearTimeout(convergeTimer.current);
       if (dialFlushTimer.current) clearTimeout(dialFlushTimer.current);
       if (stThrottleRef.current) clearTimeout(stThrottleRef.current);
-      backendRef.current?.destroy();
+      // ★★ V12: going to the background in a pairing — the pairing keeps the adapter (and the audio) playing.
+      if (!parkBackend(dualIdRef.current, backendRef.current)) {
+        if (dualIdRef.current) releaseNative(dualIdRef.current);
+        backendRef.current?.destroy();
+      }
       backendRef.current = null;
     };
   }, [baseUrl, tlsEpoch]);
@@ -1057,6 +1086,61 @@ export default function TunerScreen({ route, navigation }: Props) {
   }, []);
 
   const ps = st?.ps?.trim() || (paused ? 'Paused' : connected ? '' : 'Connecting…');
+
+  /* ★★ V12 TWO SERVERS AT ONCE — this screen's part (src/services/dualServer.ts), as SDRScreen's.
+   *  ★ Its card facts — the frequency, the station — are copied into the pairing while it is in front. */
+  const dualPs = st?.ps?.trim() ?? '';
+  useEffect(() => {
+    if (!dualMyId || dualShape.phase === 'off') return;
+    noteStatus(dualMyId, { freqHz: displayFreq, mode: 'WFM', station: dualPs, name: instanceName ?? 'FM-DX',
+                           endsAt: null, soft: false });
+  }, [dualMyId, dualShape.phase, displayFreq, dualPs, instanceName]);
+  // ★ The server ended THIS one (its error is on screen): the background server keeps playing.
+  useEffect(() => { if (error && dualMyId) foregroundEnded(dualMyId); }, [error, dualMyId]);
+  // ★ Gone while still in front without saying so (a crash reset, an alert's Back): it LEFT.
+  useEffect(() => () => { if (dualIdRef.current) screenGone(dualIdRef.current); }, []);
+  const dualBg = dualShape.phase === 'paired' && dualShape.fg === dualMyId
+    ? dualShape.sides.find((x) => x.id !== dualMyId) ?? null : null;
+  /** Leaving the server in FRONT ends it; the one in the background plays on, centred (dualServer.leaveForeground). */
+  const leaveTuner = useCallback(() => {
+    if (dualIdRef.current) leaveForeground(dualIdRef.current);
+    navigation.goBack();
+  }, [navigation]);
+  /** "Listen to a 2nd server": this one goes to the background and keeps playing; back to the server list. */
+  const onListenSecond = useCallback(() => {
+    if (!dualMyId) return;
+    listenSecond({ id: dualMyId, name: instanceName ?? 'FM-DX', params: returnParams(dualParams), freqHz: displayFreq,
+                   mode: 'WFM', station: dualPs, endsAt: null, soft: false, kind: 'fmdx' });
+    navigation.goBack();
+  }, [dualMyId, instanceName, dualParams, displayFreq, dualPs, navigation]);
+  /** TAP the card: the background server's screen comes up (its own route — dualServer.dualScreenOf). */
+  const onDualSwap = useCallback(() => {
+    const p = swapToBackground();
+    if (!p) return;
+    navigation.reset({ index: 1, routes: [
+      { name: 'InstancePicker', params: { noAutoConnect: true } },
+      { name: dualScreenOf(p), params: p },
+    ] } as never);
+  }, [navigation]);
+  /* ★★ THE BACK KEY CARRIES IT (Stuart, 2026-10-30: "cant we simply pop the menu up when tapping back?"). FM-DX has no
+   *  ‹ Servers chip — its control island's menu slot IS Back — so a press of Back opens a small menu, the Servers chip's
+   *  own rows and words: ‹ Back to server list, Listen to a 2nd server (with its hint), and while two are playing
+   *  Stop listening to <the other>. One press for a touch, a game controller, a TV remote or a keyboard alike — the rows
+   *  are appAlert's, which a pad moves through and its Back closes (= Cancel); never a hold.
+   *  ★ Nowhere to add a second server and nothing behind (a build without the second voice): Back is Back, one press.
+   *  ★ The system back (Android's back, the swipe) stays plain Back: it leaves, and the other server plays on alone. */
+  const offerSecond = !!dualMyId && canListenSecond(dualParams) && dualShape.phase === 'off';
+  const onTunerBack = useCallback(() => {
+    if (!offerSecond && !dualBg) { leaveTuner(); return; }
+    const rows: { text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }[] = [
+      { text: '‹ Back to server list', onPress: leaveTuner },
+    ];
+    if (offerSecond) rows.push({ text: 'Listen to a 2nd server', onPress: onListenSecond });
+    if (dualBg) rows.push({ text: `Stop listening to ${dualBg.name}`, style: 'destructive', onPress: stopBackground });
+    rows.push({ text: 'Cancel', style: 'cancel' });
+    appAlert(instanceName ?? 'FM-DX',
+             offerSecond ? secondServerHint(false) : `${dualBg?.name ?? ''} is playing too.`, rows, { cancelable: true });
+  }, [offerSecond, dualBg, leaveTuner, onListenSecond, instanceName]);
   const resumeFromPause = useCallback(() => { (VibePowerModule as any)?.setMuted?.(false); }, []);
   /* ★★★ THE STATION STRIP IS THE APP'S OWN VTS (Stuart, 2026-10-02: "make the bottom card part of the VTS
    *  instead so it matches the main theme"). It replaces the FM-DX card (logo · flag · name · ST/TP/TA ·
@@ -1123,6 +1207,11 @@ export default function TunerScreen({ route, navigation }: Props) {
         {/* REC + recordings library moved into the AUDIO sheet (control island). */}
         {!!st && !paused && <Text style={styles.users}>{st.users} 👤</Text>}
       </View>
+
+      {/* ★★ V12 THE BACKGROUND SERVER'S CARD — as on the receiver screen, under the header. */}
+      {!!dualMyId && dualShape.phase === 'paired' && (
+        <DualServerCard myId={dualMyId} top={insets.top + 46 + (paused ? 40 : 0)} onSwap={onDualSwap} />
+      )}
 
       {/* Power-saving pause: FM-DX disconnects (frees the shared tuner) — mirror the
           other backends' "PAUSED — TAP TO RECONNECT" pill (▶ or a tap resumes). */}
@@ -1278,7 +1367,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         onBwDelta={onDialZoom}
         onMode={() => {}}
         onStep={setStep}
-        onMenu={() => navigation.goBack()}
+        onMenu={onTunerBack}
         onChat={openChat}
         onAudio={() => setAudioSheetOpen(true)}
         audioAsRecord
@@ -1403,6 +1492,9 @@ export default function TunerScreen({ route, navigation }: Props) {
         recBuffer={recBufSeconds}
         onRecBuffer={setRecBufSeconds}
         onRecordings={() => { setAudioSheetOpen(false); setRecordingsOpen(true); }}
+        // ★★ V12 two servers: MUTE is THIS server's while two are playing (the other's is on its card).
+        dualMuted={!!dualShape.sides.find((x) => x.id === dualMyId)?.muted}
+        onDualMute={dualShape.phase === 'paired' && dualMyId ? (on: boolean) => setSideMuted(dualMyId, on) : undefined}
       />
 
       <FreqModal

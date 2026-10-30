@@ -237,30 +237,59 @@ export function fmtLeft(ms: number): string {
 
 /* ─────────────────────────────── which servers can take part ─────────────────────────────── */
 
-/** The route params the eligibility test reads (a subset of RootStackParamList['SDR']). */
+/** The route params the eligibility test reads (a subset of RootStackParamList['SDR'] / ['Tuner']). */
 export interface DualRouteLike {
   serverType?: string; isLocal?: boolean; isTcp?: boolean; localHost?: string; localPort?: number | null;
-  compatOnly?: boolean; instanceName?: string;
+  compatOnly?: boolean; instanceName?: string; baseUrl?: string;
 }
 
 /**
- * ★★★ VIBESERVER ONLY — AND THAT IS NOT A PREFERENCE, IT IS WHAT THE OTHERS' CLIENTS CAN DO (AGENTS.md: "a control
- *     that only works in one scenario should not be there"). The row is not drawn anywhere else.
- *   · VibeServer — its audio is ONE socket (/ws/audio) the server keeps feeding with the spectrum socket closed (that is
- *     how the app already plays with the screen locked), and tuning rides that same socket. An audio-only background
- *     session is exactly what the server already serves every locked phone.
- *   · UberSDR — its native audio engine and the VibeServer pump feed ONE player; a second stream would interleave
- *     with the first. Not without a second engine of its own.
- *   · KiwiSDR / Web-888 / OpenWebRX — their audio is decoded by the same JavaScript adapter that draws the waterfall;
- *     it does not outlive the screen.
- *   · Local hardware and RTL-TCP — the radio is in THIS device and is closed when its screen goes.
- *   · FM-DX — its own screen and its own native MP3 path into the same player.
+ * ★★★ HOW EACH KIND OF SERVER'S AUDIO PLAYS — which is all the pairing needs to know about it (Stuart, 2026-10-30: "I
+ *     thought we were looking to be able to do it on all servers"). Every receiver the app connects to already plays
+ *     with the screen locked; two at once only needs each one's audio to be able to ride EITHER voice — the main
+ *     player or the second voice (VibeDualAudio) — and to outlive its screen.
+ *   · 'vibe' — VibeServer: one socket (/ws/audio), the native pump (VibePowerModule.startLocalAudio) or the second
+ *     voice's own socket read in JS (dualServer.auxOpen). Moving voices = the same session on a new socket.
+ *   · 'uber' — UberSDR: its own audio socket (/ws?…&format=opus), the native engine (startAudioEngine) or the second
+ *     voice's socket (21-byte header + Opus — the native engine's own framing, handed to pushAuxOpus).
+ *   · 'ext'  — KiwiSDR / Web-888 / OpenWebRX: audio decoded in JS by the receiver's own ADAPTER and pushed as PCM —
+ *     to the main player (pushExternalPcm) or the second voice (pushAuxPcm). The adapter itself is kept alive while its
+ *     screen is away (dualServer.parkBackend) and the screen coming back ADOPTS it: no second session. Moving voices
+ *     is only a change of where the PCM goes — no reconnect at all.
+ *   · 'fmdx' — FM-DX: MP3 decoded natively (startFmdxAudio) into the main player — and ONLY there: there is no decoder
+ *     for it on the second voice. So an FM-DX side always takes the MAIN player, and the other side goes to the second
+ *     voice (attachSecond). Two FM-DX servers at once is the one pair that cannot be (canPair).
+ *   · null — this device's own radio and RTL-TCP / SpyServer (an in-app shim fed by the network: the radio is closed
+ *     when its screen goes), and a compat-only page. Not offered — never a dead row (AGENTS.md).
  */
+export type AudioKind = 'vibe' | 'uber' | 'ext' | 'fmdx';
+export function audioKindOf(p: DualRouteLike | null | undefined): AudioKind | null {
+  if (!p || p.compatOnly) return null;
+  const t = p.serverType ?? 'ubersdr';   // SDRScreen's own default (route.params.serverType ?? 'ubersdr')
+  if (t === 'vibeserver') {
+    if (!p.isLocal || p.isTcp) return null;
+    // ★ connectVibeServer always sets localHost; the on-device radio (connectLocal) never does.
+    return p.localHost && p.localPort != null ? 'vibe' : null;
+  }
+  if (p.isLocal || p.isTcp || !p.baseUrl) return null;
+  if (t === 'ubersdr') return 'uber';
+  if (t === 'kiwi' || t === 'web888' || t === 'owrx') return 'ext';
+  if (t === 'fmdx') return 'fmdx';
+  return null;
+}
+
+/** May this screen take part? Every network receiver the app plays (audioKindOf) — VibeServer, UberSDR, KiwiSDR,
+ *  Web-888, OpenWebRX and FM-DX. */
 export function dualEligible(p: DualRouteLike | null | undefined): boolean {
-  if (!p || p.compatOnly) return false;
-  if (p.serverType !== 'vibeserver' || !p.isLocal || p.isTcp) return false;
-  // ★ connectVibeServer always sets localHost; the on-device radio (connectLocal) never does.
-  return !!p.localHost && p.localPort != null;
+  return audioKindOf(p) != null;
+}
+
+/** ★ Only the main player can play it (FM-DX's MP3). */
+export function needsMain(kind: AudioKind | null | undefined): boolean { return kind === 'fmdx'; }
+
+/** Can these two play together? Always — unless BOTH can only play on the main player (two FM-DX servers). */
+export function canPair(a: AudioKind | null | undefined, b: AudioKind | null | undefined): boolean {
+  return !!a && !!b && !(needsMain(a) && needsMain(b));
 }
 
 /** The note the server list shows when "Listen to a 2nd server" closed VFO B. */
@@ -268,8 +297,9 @@ export const VFO_B_CLOSED_NOTE = 'VFO B closed — two servers use both ears.';
 
 /** "Listen to a 2nd server", said where it is chosen (also its spoken hint) — and, with VFO B on, that B will close. */
 export function secondServerHint(abOn: boolean): string {
-  const base = 'This server keeps playing while you pick another — or another radio on this one: this one in your left '
-             + 'ear, the next in your right (Audio menu, TWO SERVERS, for both in both ears).';
+  const base = 'This server keeps playing while you pick another — any kind: VibeServer, UberSDR, KiwiSDR, Web-888, '
+             + 'OpenWebRX or FM-DX — or another radio on this one: this one in your left ear, the next in your right '
+             + '(Audio menu, TWO SERVERS, for both in both ears).';
   return abOn ? `VFO B will close — two servers use both ears. ${base}` : base;
 }
 
@@ -279,10 +309,24 @@ export function pairingStart(abOn: boolean): { closeB: boolean; note: string | n
   return abOn ? { closeB: true, note: VFO_B_CLOSED_NOTE } : { closeB: false, note: null };
 }
 
-/** Two listings are the SAME server when host and port agree (the picker can list one server twice). */
+/** One address, written one way: scheme and host in lower case, no trailing slash, no default port. (The picker can
+ *  list one server twice — a favourite and a directory row — written slightly differently.) */
+export function normBase(u: string | null | undefined): string {
+  const t = String(u ?? '').trim().replace(/\/+$/, '');
+  const m = /^(\w+):\/\/([^/]+)(.*)$/.exec(t);
+  if (!m) return t.toLowerCase();
+  const scheme = m[1].toLowerCase().replace(/^ws(s?)$/, 'http$1');
+  let host = m[2].toLowerCase();
+  if ((scheme === 'http' && host.endsWith(':80')) || (scheme === 'https' && host.endsWith(':443'))) host = host.replace(/:\d+$/, '');
+  return `${scheme}://${host}${m[3]}`;
+}
+
+/** Two listings are the SAME server when host and port agree (a VibeServer, by the LAN address the picker resolved),
+ *  else when their addresses do (every other kind — UberSDR, Kiwi, Web-888, OpenWebRX, FM-DX — by its base URL).
+ *  ★★ A second session on the same receiver is a second slot for one person (UberSDR and Kiwi count listeners). */
 export function sameServer(a: DualRouteLike & { baseUrl?: string }, b: DualRouteLike & { baseUrl?: string }): boolean {
   if (a.localHost && b.localHost) return a.localHost === b.localHost && a.localPort === b.localPort;
-  return !!a.baseUrl && a.baseUrl === b.baseUrl;
+  return !!a.baseUrl && !!b.baseUrl && normBase(a.baseUrl) === normBase(b.baseUrl);
 }
 
 /* ───────────────────────── two RADIOS on one server (Gesiima, #57) ───────────────────────── */
@@ -348,6 +392,8 @@ export interface DualSideCore {
   /** ★★ The listener muted THIS server (Stuart, 2026-10-28: "right now if i mute a server it does both together"). Per
    *  side, for the life of the pairing: its voice goes to zero, the other plays on — centred (dualTargets). */
   muted?: boolean;
+  /** How its audio plays (audioKindOf). Absent = 'vibe' (the pairing's first kind). */
+  kind?: AudioKind;
 }
 
 export interface DualCore<S extends DualSideCore = DualSideCore> {
@@ -390,10 +436,31 @@ export function beginPicking<S extends DualSideCore>(st: DualCore<S>, side: S): 
   return { phase: 'picking', sides: [{ ...side, transport: 'native', ended: null }], fg: null };
 }
 
-/** A second server's screen arrives while picking: it becomes server 2 (RIGHT), on the second voice, in front. */
+/**
+ * A second server's screen arrives while picking: it becomes server 2 (RIGHT), in front — on the second voice, so
+ * server 1 keeps the main player it is already playing on…
+ * ★★ …UNLESS server 2 can only play on the main player (FM-DX — needsMain). Then server 2 takes the main player and
+ *    server 1 MOVES to the second voice first (firstMovesToAux: the caller moves it before server 2's audio starts).
+ *    Two that both need the main player cannot pair (canPair): unchanged — the caller ends the pairing, as for any
+ *    server that cannot take part.
+ *  Ears never follow voices: server 1 is LEFT and server 2 RIGHT whichever voice each rides.
+ */
 export function attachSecond<S extends DualSideCore>(st: DualCore<S>, side: S): DualCore<S> {
   if (st.phase !== 'picking' || st.sides.length !== 1) return st;
-  return { phase: 'paired', sides: [st.sides[0], { ...side, transport: 'aux', ended: null }], fg: side.id };
+  const first = st.sides[0];
+  const k1 = first.kind ?? 'vibe', k2 = side.kind ?? 'vibe';
+  if (!canPair(k1, k2)) return st;
+  if (needsMain(k2)) {
+    return { phase: 'paired', sides: [{ ...first, transport: 'aux' }, { ...side, transport: 'native', ended: null }], fg: side.id };
+  }
+  return { phase: 'paired', sides: [first, { ...side, transport: 'aux', ended: null }], fg: side.id };
+}
+
+/** Did attaching move server 1 off the main player? Its id — the caller moves its audio to the second voice NOW,
+ *  before server 2's screen starts the main player. */
+export function firstMovesToAux<S extends DualSideCore>(before: DualCore<S>, after: DualCore<S>): string | null {
+  const b = before.sides[0], a = after.sides[0];
+  return b && a && b.id === a.id && b.transport === 'native' && a.transport === 'aux' ? a.id : null;
 }
 
 /** TAP the card: the background server comes to the front. Ears and transports do not move. */
@@ -409,6 +476,9 @@ export interface EndEffects {
   stop: { id: string; transport: Transport } | null;
   /** The lone survivor is on the second voice with no screen in front of it: move it to the main pump now. */
   moveToNative: string | null;
+  /** ★ The lone survivor is on the second voice IN FRONT: its screen moves a VibeServer itself (LocalAudioPlayer reads
+   *  transportFor), but every other kind's audio is not the screen's to move — the caller moves it. */
+  frontToNative?: string | null;
 }
 
 /**
@@ -427,7 +497,8 @@ export function endSide<S extends DualSideCore>(st: DualCore<S>, id: string): { 
   if (!rest.length) return { st: DUAL_OFF as DualCore<S>, fx: { stop, moveToNative: null } };
   const sur = rest[0];
   if (st.phase === 'paired' && st.fg === sur.id) {
-    return { st: DUAL_OFF as DualCore<S>, fx: { stop, moveToNative: null } };
+    return { st: DUAL_OFF as DualCore<S>, fx: { stop, moveToNative: null,
+                                               frontToNative: sur.transport === 'aux' ? sur.id : null } };
   }
   const moved = sur.transport === 'aux';
   return { st: { phase: 'picking', sides: [{ ...sur, transport: 'native' }], fg: null },
@@ -470,4 +541,87 @@ export const TERMINAL_WHY: Record<string, string> = {
 /** null = not an ending. */
 export function terminalWhy(type: string): string | null {
   return Object.prototype.hasOwnProperty.call(TERMINAL_WHY, type) ? TERMINAL_WHY[type] : null;
+}
+
+/* ─────────────────────────────── every kind's audio addresses ─────────────────────────────── */
+
+/** What reopens an UberSDR side's audio on either voice — the same session (`uuid` = its side id), so the server
+ *  re-affirms the slot it registered (POST /connection) rather than meeting a stranger. Kept per side from its screen. */
+export interface UberLink { baseUrl: string; uuid: string; password: string; adminAuth: string;
+                            freq: number; mode: string; bwLow?: number; bwHigh?: number }
+/** UberSDR's audio socket URL — the native engine's audioWsURL, one rule two readers (VibePowerModule.swift /
+ *  VibeStreamService.kt): the session, Opus, the dial it should open on, the filter when it is within ±12 kHz (out of
+ *  range the server REFUSES the socket), our name, the bypass password, the owner's credential. */
+export function uberAudioUrl(l: UberLink, client: string): string {
+  const base = l.baseUrl.trim().replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/+$/, '');
+  let q = `/ws?user_session_id=${encodeURIComponent(l.uuid)}&format=opus&version=2`;
+  if (l.freq > 0) q += `&frequency=${Math.round(l.freq)}&mode=${encodeURIComponent(l.mode)}`;
+  if (l.bwLow != null && l.bwHigh != null && Math.abs(l.bwLow) <= 12_000 && Math.abs(l.bwHigh) <= 12_000) {
+    q += `&bandwidthLow=${Math.round(l.bwLow)}&bandwidthHigh=${Math.round(l.bwHigh)}`;
+  }
+  q += `&client=${encodeURIComponent(client)}`;
+  if (l.password) q += `&password=${encodeURIComponent(l.password)}`;
+  const adm = l.adminAuth ? (l.adminAuth.startsWith('&') ? l.adminAuth : `&${l.adminAuth}`) : '';
+  return base + q + adm;
+}
+/** A VibeServer's second-voice socket — LocalAudioPlayer's own aux URL (`channels=1`: each server owns ONE ear). */
+export function vibeAuxUrl(l: { host: string; port: number; suffix: string; wsBase: string }): string {
+  const root = (l.wsBase || `ws://${l.host}:${l.port}`).replace(/\/+$/, '');
+  return `${root}/ws/audio?${(l.suffix + '&channels=1').replace(/^&/, '')}`;
+}
+
+/** A receiver's own refusal, shortened for the card (the screen shows the whole sentence when it is in front). */
+export function endedWhy(msg: string): string {
+  const m = String(msg ?? '');
+  if (/allowance|time limit|per day|daily|expired/i.test(m)) return 'its time limit was reached';
+  if (/inactiv|idle/i.test(m)) return 'nobody answered "still listening?"';
+  if (/busy|full|no free|all .*channels/i.test(m)) return 'the radio is busy';
+  if (/kick|ban|block|refus/i.test(m)) return 'the owner ended the session';
+  return 'the server ended the session';
+}
+
+/* ───────────────────── UBERSDR ON THE SECOND VOICE: an ending is never retried ───────────────────── */
+
+/**
+ * ★★★ WHEN HAS AN UBERSDR ENDED THIS SESSION ON PURPOSE? Then the second voice must NEVER reopen it — a kicked or
+ *     banned listener coming straight back is exactly what an operator's kick is meant to stop.
+ *  What the app already treats as an UberSDR ending, mirrored exactly (one rule, three readers):
+ *   · The native engine (VibePowerModule.swift / VibeStreamService.kt) classifies NOTHING itself — it reopens every 2 s
+ *     — and is stopped by JS when the SPECTRUM client says the session is over (UberSDRWsClient ws.onclose):
+ *     ★ A SOCKET THAT NEVER OPENED IS A REFUSAL, NOT A DROPPED LINK — UberSDR turns the upgrade away with 400 (session
+ *       no longer registered — reaped), 403 (kicked or banned), 429 (the per-IP limit). The spectrum client re-registers
+ *       ONCE and, refused again, gives up for good ("This receiver refused the connection."). Two refusals in a row, then:
+ *       the same here (the second voice cannot re-register — that is the screen's POST /connection — so its one allowed
+ *       retry is the reopen itself).
+ *     ★ A socket that DID open and then dropped is the ordinary reconnect: retried.
+ *   · Anything the server SAYS on the socket that is an ending — the shared terminal set (TERMINAL_WHY: session_expired,
+ *     cooldown, kicked, banned, evicted, busy, idle_closed…) or {type:"error"} with an HTTP-style 401/403 (a refusal of
+ *     the session, user_spectrum_websocket.go's own shape) — is terminal at once.
+ *   · A close the server gave a REASON for (any non-empty reason), or closed with policy (1008) or an application code
+ *     (4000–4999): terminal at once, in its own words where it gave some. A bare 1000/1001/1006 is the network.
+ */
+export const UBER_REFUSALS_TO_GIVE_UP = 2;
+
+export function uberTextVerdict(msg: { type?: unknown; status?: unknown; error?: unknown } | null): string | null {
+  if (!msg) return null;
+  const type = String(msg.type ?? '');
+  const why = terminalWhy(type);
+  if (why) return why;
+  if (type === 'error') {
+    const st = Number(msg.status) || 0;
+    if (st === 401 || st === 403) return endedWhy(String(msg.error ?? 'refused'));
+  }
+  return null;
+}
+
+export function uberCloseVerdict(o: { wasOpen: boolean; refusalsInARow: number; code?: number; reason?: string }):
+    { terminal: boolean; why: string | null } {
+  const reason = String(o.reason ?? '').trim();
+  const code = Number(o.code) || 0;
+  if (reason) return { terminal: true, why: endedWhy(reason) };
+  if (code === 1008 || (code >= 4000 && code <= 4999)) return { terminal: true, why: 'the server ended the session' };
+  if (!o.wasOpen && o.refusalsInARow >= UBER_REFUSALS_TO_GIVE_UP) {
+    return { terminal: true, why: 'the receiver refused the connection' };
+  }
+  return { terminal: false, why: null };
 }
