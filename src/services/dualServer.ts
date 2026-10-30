@@ -199,7 +199,7 @@ export function setDualOutput(o: DualOutput) {
   set({ ...state, output: o });
   AsyncStorage.setItem(K_OUTPUT, o).catch(() => {});
 }
-/** ★ HOLD the card. ONE balance for every pair, not per pair: it says which ear the listener favours ("my left
+/** ★ The card's balance bar. ONE balance for every pair, not per pair: it says which ear the listener favours ("my left
  *  ear is better"), and a per-pair memory would make the same gesture mean different things on different nights. */
 export function setDualBalance(b: number, persist = true) {
   set({ ...state, balance: clampBalance(b) });

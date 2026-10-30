@@ -1097,7 +1097,7 @@ export default function AudioSheet({
                 </NavRow>
               </View>
               <Text style={st.iqNote}>
-                Stereo: the first server in your left ear, the second in your right, whichever is on screen. Mono: both in both ears. Each server is heard in mono either way. When one has nothing to play (muted, a map mode such as ADS-B, Band spots, or its stream has stopped), the other plays in both ears. MUTE at the top of this menu mutes only this server; the card under Servers has its own mute for the other. Hold the card for the balance between them; all the way to one side plays that server in both ears.
+                Stereo: the first server in your left ear, the second in your right, whichever is on screen. Mono: both in both ears. Each server is heard in mono either way. When one has nothing to play (muted, a map mode such as ADS-B, Band spots, or its stream has stopped), the other plays in both ears. MUTE at the top of this menu mutes only this server; the card under Servers has its own mute for the other. The card's balance bar sets the balance between them; all the way to one side plays that server in both ears.
               </Text>
             </View>
           )}

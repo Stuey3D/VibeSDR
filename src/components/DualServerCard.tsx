@@ -41,7 +41,7 @@ const short = (n?: string) => { const t = (n ?? '').trim(); return t.length > 9 
 /** ★ The pairing whose hint has been seen (its first side's session — it lasts the pairing, through swaps). Module
  *  level: the card is a new component on each screen. */
 let hintSeenFor: string | null = null;
-export const DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance';
+export const DUAL_CARD_HINT = 'Tap the card to switch to the other server · slide the bar for the balance';
 
 /** The speaker for the OTHER ear (the server in front): there, but plainly not this one. */
 const EAR_FAINT = 0.38;
@@ -129,7 +129,8 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
     return () => { live = false; clearInterval(t); };
   }, [wantLamp, bg?.transport]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  /* ── ONCE PER PAIRING: what the card does (Stuart, 2026-10-28: "tap to return to the other server, hold for balance")
+  /* ── ONCE PER PAIRING: what the card does (Stuart, 2026-10-28: "tap to return to the other server"; the balance bar is
+   *  always shown since 2026-10-30)
    *  Shown when a pairing's card first appears, until it is dismissed (✕) or the card is used — a tap or a hold shows it
    *  was understood — and again with the NEXT pairing (Stuart, 2026-10-30: "it needs to show once per session"; it was
    *  once per device, for good). The pairing is named by its first side's session, which lasts through swaps. */
@@ -138,14 +139,7 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
   useEffect(() => { setHint(!!pairKey && hintSeenFor !== pairKey); }, [pairKey]);
   const hintDone = () => { if (!hint) return; setHint(false); hintSeenFor = pairKey; };
 
-  /* ── HOLD: the balance ── */
-  const [balOpen, setBalOpen] = useState(false);
-  const balTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const armBalClose = () => {
-    if (balTimer.current) clearTimeout(balTimer.current);
-    balTimer.current = setTimeout(() => setBalOpen(false), 4000);
-  };
-  useEffect(() => () => { if (balTimer.current) clearTimeout(balTimer.current); }, []);
+  /* ── the balance (always on the card) ── */
   const trackW = useRef(1);
   const trackX = useRef(0);
   const trackRef = useRef<View>(null);
@@ -153,21 +147,22 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
   /* ★★ THE BALANCE OWNS THE FINGER ONCE IT HAS IT (Stuart, 2026-10-28, screen recording: "it works but its erratic as its
    *  fighting against the collapse button for touch control"). A drag LEFT on the track is also the card's flick-left-to-
    *  tuck gesture, and the card's responder (an ancestor) asked for the touch mid-drag; the track let it go by default,
-   *  so the card slid under the finger and the knob jumped. Now the track refuses to hand the touch over, and the card's
-   *  tuck gesture stands down entirely while the balance is open (the ‹ button still tucks it on a plain tap). */
-  const balOpenRef = useRef(false); balOpenRef.current = balOpen;
+   *  so the card slid under the finger and the knob jumped. Now the track refuses to hand the touch over (the ‹ button
+   *  and a flick elsewhere on the card still tuck it). */
   /* ★★★ A CONTROLLER OR KEYBOARD HAS NO HOLD (Stuart, 2026-10-30: "when controller and keyboard is detected simply put
    *  the balance controls in the chip all the time and then the navigation moves to the control and left/right adjusts
    *  it. move up again selects the collapse button"). Driving by keys, the card shows its balance whenever it is out; the
    *  slider is a highlight stop of its own — left / right move it a tenth at a time (ScreenNav screenNavAdjust), Enter
-   *  centres it, and UP goes to the collapse key ‹. Touch is unchanged (hold for the balance). */
+   *  centres it, and UP goes to the collapse key ‹. */
   const tuckNow = () => {
-    setBalOpen(false);
-    if (balTimer.current) clearTimeout(balTimer.current);
     Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true }).start(() => setTucked(true));
   };
   const keys = useKeyboardMode();
-  const balShown = (balOpen || keys) && !tucked;
+  /* ★★★ THE BALANCE IS ALWAYS ON THE CARD (Stuart, 2026-10-30: "remove the hold function on the popout card … just show
+   *  the balance all the time please, i accidentally swapped servers a few times trying to operate the balance"). No hold:
+   *  a press-and-hold that turned into a tap swapped servers. The slider owns its own touches (it refuses to hand them
+   *  over), so a drag on it never swaps and never tucks the card; a tap anywhere else on the card still swaps. */
+  const balShown = !tucked;
   const navLive = keys && !tucked && !ended;
   useEffect(() => {
     screenNavAdjust('dualBal', navLive ? (step) => {
@@ -194,11 +189,10 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
         trackX.current = tx; trackW.current = Math.max(1, tw);
         setDualBalance(((px - tx) / trackW.current) * 2 - 1, false);
       });
-      if (balTimer.current) clearTimeout(balTimer.current);
     },
     onPanResponderMove: (e) => setDualBalance(((e.nativeEvent.pageX - trackX.current) / trackW.current) * 2 - 1, false),
-    onPanResponderRelease: () => { setDualBalance(balRef.current, true); armBalClose(); },
-    onPanResponderTerminate: () => { setDualBalance(balRef.current, true); armBalClose(); },
+    onPanResponderRelease: () => { hintDone(); setDualBalance(balRef.current, true); },
+    onPanResponderTerminate: () => { setDualBalance(balRef.current, true); },
   }), []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ── the left edge (EdgeChip, mirrored) ── */
@@ -229,7 +223,9 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
   const offRef = useRef(off); offRef.current = off;
   // Flick LEFT to tuck (the edge is on the left); drag the tab RIGHT to bring it back.
   const pan = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_e, g) => !balOpenRef.current && g.dx < -6 && Math.abs(g.dx) > Math.abs(g.dy),
+    // ★ The flick-to-tuck stays: the slider claims its own touches (capture + no termination), so a drag on the bar is
+    //   never a flick of the card.
+    onMoveShouldSetPanResponder: (_e, g) => g.dx < -6 && Math.abs(g.dx) > Math.abs(g.dy),
     // ★ Never past the tucked position: a long flick used to leave x beyond `off`, out of step with the tab.
     onPanResponderMove: (_e, g) => x.setValue(Math.min(offRef.current, Math.min(0, g.dx) * -1)),
     onPanResponderRelease: (_e, g) => {
@@ -275,12 +271,12 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
         <View style={[s.row, { borderColor: frame, paddingLeft: geo.padRight }]}>
           {/* ★ The pad / keyboard reach it like every other screen control (ScreenNav): Enter = the tap. */}
           <Pressable ref={screenNavRef('dualCard', tucked ? undefined : onPress)}
-            onPress={onPress} onLongPress={() => { if (!ended) { hintDone(); setBalOpen(true); armBalClose(); } }}
+            onPress={onPress}
             delayLongPress={450} style={({ pressed }) => [s.body, { opacity: pressed ? 0.8 : 1 }]}
             accessibilityRole="button"
             accessibilityLabel={`${bg.name}${freq ? `, ${freq} ${mode}` : ''}${bg.station ? `, ${bg.station}` : ''}, ${earA11y}`}
             accessibilityHint={ended ? undefined : asking ? 'Tap to tell the server you are still listening'
-                                                          : 'Tap to switch to this server. Hold for the balance between the two.'}>
+                                                          : 'Tap to switch to this server. The balance bar below sets the balance between the two.'}>
             <View style={s.top}>
               {icon === 'mono'
                 ? <Animated.View style={{ opacity: lamp }}><Speaker colour={colour} opacity={1} /></Animated.View>
@@ -316,7 +312,7 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
             {!ended && !asking && !!bg.station && (
               <Text style={[s.station, { color: colour }]} numberOfLines={1}>{bg.station}</Text>
             )}
-            {hint && !ended && !asking && !balOpen && (
+            {hint && !ended && !asking && (
               <View style={s.hintRow}>
                 <Text style={[s.hint, { color: colour }]}>{DUAL_CARD_HINT}</Text>
                 <TouchableOpacity onPress={hintDone} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}

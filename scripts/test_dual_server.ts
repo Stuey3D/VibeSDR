@@ -542,17 +542,19 @@ console.log('the card\'s balance owns the finger; the one-time hint (Stuart 2026
 {
   const card = readFileSync('src/components/DualServerCard.tsx', 'utf8');
   ok(/onPanResponderTerminationRequest: \(\) => false/.test(card), 'the balance track never hands a drag over to the card');
-  ok(/onMoveShouldSetPanResponder: \(_e, g\) => !balOpenRef\.current && g\.dx < -6/.test(card),
-     'the flick-to-tuck stands down while the balance is open (a drag LEFT on the track was also a tuck)');
+  // ★ 2026-10-30: the balance is ALWAYS on the card — no hold (Stuart: "i accidentally swapped servers a few times trying
+  //   to operate the balance"). The track captures its own touches, so the card's flick never takes a drag on the bar.
+  ok(/onStartShouldSetPanResponderCapture: \(\) => true/.test(card) && /onMoveShouldSetPanResponderCapture: \(\) => true/.test(card),
+     'the balance track captures its own touches (a drag on the bar is never a flick or a swap)');
+  ok(!/onLongPress=/.test(card) && /const balShown = !tucked;/.test(card), 'no hold: the balance is always shown while the card is out');
   ok(/x\.setValue\(Math\.min\(offRef\.current,/.test(card), 'a flick never drags the card past its tucked position');
-  ok(/setBalOpen\(false\);[\s\S]{0,120}Animated\.timing\(x, \{ toValue: offRef\.current/.test(card),
-     'the ‹ closes the balance before it tucks');
+  ok(/const tuckNow = \(\) => \{\s*Animated\.timing\(x, \{ toValue: offRef\.current/.test(card), 'the ‹ tucks the card');
   // ★ Once per PAIRING (37b44301c — Stuart, 2026-10-30: "it needs to show once per session … just to remind a user its
   //   there"), keyed by the pairing, not remembered on the device for good.
   ok(/let hintSeenFor: string \| null = null;/.test(card) && /hintSeenFor = pairKey;/.test(card)
      && !/AsyncStorage\.setItem\(HINT_SEEN_KEY/.test(card),
      'the hint is shown once per pairing (until a tap, a hold or ✕), not once per device for good');
-  ok(/DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance'/.test(card), '…in Stuart\'s words');
+  ok(/DUAL_CARD_HINT = 'Tap the card to switch to the other server · slide the bar for the balance'/.test(card), '…and says the bar is the balance');
   ok((card.match(/hintDone\(\)/g) ?? []).length >= 2 && /onPress=\{hintDone\}/.test(card),
      '…and goes on ✕, on a tap and on a hold');
 }
