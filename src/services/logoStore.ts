@@ -30,6 +30,9 @@ const index = new LogoIndex({}, APP_LIMITS);
 /** ★ This session only: a URL that resolved but whose bytes could not be kept (download failed) — still worth drawing. */
 const remoteOnly = new Map<string, string>();
 const listeners = new Set<() => void>();
+/** ★ Pictures (by md5) that would not draw this session — never filed again until the next launch, or a damaged file
+ *  would be re-downloaded and re-filed on every rung of the retry ladder. */
+const deadSigs = new Set<string>();
 let version = 0;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 /** ★ Three downloads at a time — a DAB list of 40 services must not open 40 sockets down one tunnel. */
@@ -137,6 +140,7 @@ async function take(key: string, src: LogoSource, url: string, headers?: Record<
     // ★ A 4xx is the publisher's answer about this file, not a stall: treat it as unusable, not as "try again soon".
     return !res || res.status >= 500 || res.status === 0 ? 'net' : 'bad';
   }
+  if (deadSigs.has(res.md5)) { await rm(tmp); return 'bad'; }
   const now = Date.now();
   const v = index.verdict(key, { src, url, sig: res.md5 }, now);
   if (v !== 'store') {
@@ -261,6 +265,7 @@ export function dropLogo(key: string, shown?: string | null): void {
   const e = index.get(key);
   if (e && shown && e.show !== shown) return;           // a newer picture already replaced it
   if (!e) { if (remoteOnly.get(key) === shown) remoteOnly.delete(key); index.miss(key, Date.now()); changed(); return; }
+  if (e.sig) deadSigs.add(e.sig);
   index.drop(key, Date.now());
   void rm(e.show);
   saveSoon();
