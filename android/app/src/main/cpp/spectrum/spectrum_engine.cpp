@@ -343,6 +343,9 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
                                                     : rowTargetSt_.target,
                                     avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, cfg.displayCapHz);
     const bool repeatsCarry = rowTarget > 0;
+    // ★★ The zoom/tune ease is by TIME (wf_zoom_fan.h zoomEaseRows): the rows/s the waterfall runs at — the clock's rate, or
+    //    one row a frame in Native.
+    fan_.rowRate = rowTarget > 0 ? rowTarget : (avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 20.0);
     const bool wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
     if (lastWfPushAt_ > 0) {

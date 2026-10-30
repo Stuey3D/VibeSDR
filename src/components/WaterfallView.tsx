@@ -1949,6 +1949,9 @@ function WaterfallView({
     const dur = Math.max(15, Math.min(1000, revealMs));
     const onClock = clocked && rowTarget > 0 && !coveredRef.current;
     const rowsNow = onClock ? 0 : rowsForArrival(rowCarry, dur, rowTarget);
+    // ★★ The zoom/tune ease is by TIME (wfRowPlace.ts zoomEaseRows): the rows/s the waterfall runs at — the clock's rate, or
+    //    one row a frame in Native.
+    if (fanSt.current) fanSt.current.rowRate = rowTarget > 0 ? rowTarget : (avgFrameMs.current > 0 ? 1000 / avgFrameMs.current : 20);
     if (rowsNow > 0) pushRow(frame.row, rowCentre, rowHzBin);
     if (onClock) {
       // ★★★ THE FIXED CLOCK: the frame is handed to the clock (presented on the feed's de-jittered schedule — at once

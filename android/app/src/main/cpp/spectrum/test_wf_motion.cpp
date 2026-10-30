@@ -161,7 +161,10 @@ int main() {
         CHECK(offCol(zf + ZOOM_EASE_ROWS - 1, fr) == 0, "x2 zoom in: %d eased-in rows off the live column", offCol(zf + ZOOM_EASE_ROWS - 1, fr));
         { std::vector<int> cs; for (int f = zf - 1; f < zf + ZOOM_EASE_ROWS; f++) { int a, b; dlit(f, a, b); cs.push_back(a); }
           bool mono = true; int mx = 0; for (size_t i = 1; i < cs.size(); i++) { if (!(cs[i] > cs[i - 1])) mono = false; mx = std::max(mx, cs[i] - cs[i - 1]); }
-          CHECK(mono && cs[1] - cs[0] == mx && 2 * (cs.back() - cs[cs.size() - 2]) < mx, "x2 zoom in: the ease is not an ease-out fan (%d .. %d)", cs.front(), cs.back()); }
+          const double mean = (double)(cs.back() - cs.front()) / (cs.size() - 1);
+          // ★ 2026-10-29: by TIME (≥ 8 rows for a ×2 at 30 rows/s), steady from the first row, landing soft (wfRowPlace.ts)
+          CHECK(ZOOM_EASE_ROWS >= 8 && mono && cs[1] - cs[0] >= 0.8 * mean && mx <= 1.6 * mean && cs.back() - cs[cs.size() - 2] < cs[1] - cs[0],
+                "x2 zoom in: the ease is not a steady fan (%d .. %d)", cs.front(), cs.back()); }
         { double k, c; takeFanStep(fan, k, c); CHECK(k == 1 && c == 0, "x2 zoom: a screen ease (%g %g)", k, c); }
         vbw = 400'000; for (int i = 0; i < 30; i++) fpush(vc, vbw);
         CHECK(atHist(0, 60) == 0 && offCol(fr - 4, fr) == 0 && asDrawn(0, 60) == 0, "zoom out: history moved or new rows off (%d, %d)", atHist(0, 60), offCol(fr - 4, fr));
@@ -175,14 +178,14 @@ int main() {
           CHECK(pred == 0 && atHist(0, 60) == 0 && moved >= 10, "pinch: %d steps (g, h) does not predict, %d moved", pred, moved); }
         for (int i = 0; i < 30; i++) fpush(vc, vbw);
         { int ha2, hb2; const int pre = fr; dlit(pre - 3, ha2, hb2);
-          vc += vbw * 0.4; for (int i = 0; i < 8; i++) fpush(vc, vbw);
+          vc += vbw * 0.4; for (int i = 0; i < tuneEaseRows(0.4) + 4; i++) fpush(vc, vbw);   // the glide is by time
           int a3, b3; dlit(pre - 3, a3, b3);
           CHECK(offCol(fr - 3, fr) == 0 && a3 == ha2, "0.4-view tune: %d new rows off the live column, history %d vs %d", offCol(fr - 3, fr), a3, ha2); }
         { const int from = fr; std::vector<double> cs;
           for (int i = 1; i <= 15; i++) { vc += 1'500; cs.push_back(vc); fpush(cs[std::max(0, (int)cs.size() - 3)], vbw); }
           int bad = 0;   // with moved history on screen, every moved pair's h predicts the displayed move
           for (int f = from; f < fr - 1; f++) { int a0, b0, a1, b1; if (!dlit(f, a0, b0) || !dlit(f + 1, a1, b1)) { bad++; continue; }
-            if (std::fabs((a0 + gl.h[f % R]) - a1) > 1.01) bad++; }
+            if (std::fabs((a0 + gl.h[f % R]) - a1) > 1.5) bad++; }   // ± 1.5: whole texels from fractional places (as the TS twin)
           CHECK(bad == 0, "tune + motion: %d pairs whose h does not predict the displayed move", bad); }
         for (int i = 0; i < R + 8; i++) fpush(vc, vbw);   // (+ the last ease's rows)
         CHECK(fan.disp.empty() && D() == S.data(), "the display buffer was not freed once the eased rows scrolled away");

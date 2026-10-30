@@ -12,6 +12,7 @@
  * Run: node --no-warnings scripts/test_wf_glide.ts
  */
 import { newGlideScratch, zoomEaseView, easedRowAt, joinedRowAt, viewMoveCols, newRowEase, rowView } from '../web/client/src/wfGlide.ts';
+import { zoomEaseRows, tuneEaseRows } from '../src/utils/wfRowPlace.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -55,21 +56,28 @@ ok(Math.abs(viewMoveCols(900000, 200000, 910000, 200000, N) - 51.2) < 1e-6 && vi
 { const e = newRowEase(), v = { lo: 0, span: 0, jumpHz: 0 };
   rowView(e, 900000, 200000, 1, v);
   ok(v.lo === 900000 && v.span === 200000 && v.jumpHz === 0, 'the first row is drawn where its frame is');
-  // a ×2 zoom in about the centre: zoomEaseRows(0.5) = 4 rows, each the same ratio further, landing exactly
+  // a ×2 zoom in about the centre: zoomEaseRows(0.5) rows (BY TIME — 0.33 s at the default 30), each further, landing exactly
+  const NZ = zoomEaseRows(0.5);
   const spans: number[] = [], ctr: number[] = [];
-  for (let i = 0; i < 6; i++) { rowView(e, 950000, 100000, 1, v); spans.push(v.span); ctr.push(v.lo + v.span / 2); }
-  ok(spans[3] === 100000 && spans[4] === 100000 && spans[0] < 200000 && spans[0] > spans[1] && spans[1] > spans[2] && spans[2] > spans[3],
-     `a ×2 zoom eases over the app's 4 rows (${spans.map((s) => (s / 1000).toFixed(1)).join(' ')} kHz)`);
+  for (let i = 0; i < NZ + 2; i++) { rowView(e, 950000, 100000, 1, v); spans.push(v.span); ctr.push(v.lo + v.span / 2); }
+  ok(NZ >= 8 && spans[NZ - 1] === 100000 && spans[NZ - 2] > 100000 && spans[0] < 200000 && spans.slice(0, NZ).every((x, i) => i === 0 || x < spans[i - 1]),
+     `a ×2 zoom eases over ${NZ} rows (${spans.map((s) => (s / 1000).toFixed(1)).join(' ')} kHz)`);
   ok(ctr.every((c) => Math.abs(c - 1000000) < 1e-6), 'the zoom\'s fixed point (the centre) holds through the ease');
-  ok(200000 / spans[0] > Math.pow(2, 0.4), `ease-OUT: the first row is most of the way (×${(200000 / spans[0]).toFixed(2)} of ×2)`);
-  // on a Retina canvas (rowPx 2) each device row is its own step — 8 of them
+  const r0 = Math.log2(200000 / spans[0]);
+  ok(r0 >= 1 / NZ && r0 < 0.3, `it MOVES FROM THE FIRST ROW, at a steady pace (${r0.toFixed(3)} of an octave; a fair share is ${(1 / NZ).toFixed(3)}) — no 75 % first-row stair`);
+  // on a Retina canvas (rowPx 2) each device row is its own step — twice as many
   const e2 = newRowEase(); rowView(e2, 900000, 200000, 2, v);
-  const s2: number[] = []; for (let i = 0; i < 9; i++) { rowView(e2, 950000, 100000, 2, v); s2.push(v.span); }
-  ok(s2[7] === 100000 && s2[6] > 100000 && new Set(s2.slice(0, 7)).size === 7, 'rowPx 2: the ease takes 8 device rows, each at its own view');
+  const s2: number[] = []; for (let i = 0; i < 2 * NZ + 1; i++) { rowView(e2, 950000, 100000, 2, v); s2.push(v.span); }
+  ok(s2[2 * NZ - 1] === 100000 && s2[2 * NZ - 2] > 100000 && new Set(s2.slice(0, 2 * NZ - 1)).size === 2 * NZ - 1, `rowPx 2: the ease takes ${2 * NZ} device rows, each at its own view`);
+  // ★ the device row rate given (the pacer's easeRowRate): counted in it directly — 60 device rows/s = 20 rows for a ×2
+  const e3 = newRowEase(); rowView(e3, 900000, 200000, 1, v, 60);
+  let n3 = 0; for (let i = 0; i < 40; i++) { rowView(e3, 950000, 100000, 1, v, 60); if (v.span > 100000) n3++; }
+  ok(n3 + 1 === zoomEaseRows(0.5, 60) && (n3 + 1) / 60 <= 0.4, `at 60 device rows/s a ×2 eases over ${n3 + 1} rows = ${((n3 + 1) / 60).toFixed(2)} s (≤ 0.4 s)`);
   // a 9 kHz tune step on a 100 kHz view: tuneEaseRows(0.09) rows sliding lo, the span untouched
-  const los: number[] = []; for (let i = 0; i < 6; i++) { rowView(e, 959000, 100000, 1, v); los.push(v.lo); }
-  ok(los[0] > 950000 && los[0] < 959000 && los.some((l) => l === 959000) && v.span === 100000 && los.every((l, i) => i === 0 || l >= los[i - 1]),
-     `a tune step eases across (${los.map((l) => ((l - 950000) / 1000).toFixed(2)).join(' ')} kHz of 9)`);
+  const NT = tuneEaseRows(0.09);
+  const los: number[] = []; for (let i = 0; i < NT + 2; i++) { rowView(e, 959000, 100000, 1, v); los.push(v.lo); }
+  ok(NT >= 6 && los[0] > 950000 && los[0] < 959000 && los[NT - 1] === 959000 && los[NT - 2] < 959000 && v.span === 100000 && los.every((l, i) => i === 0 || l >= los[i - 1]),
+     `a tune step glides across over ${NT} rows (${los.map((l) => ((l - 950000) / 1000).toFixed(2)).join(' ')} kHz of 9)`);
   // a tiny move (under two columns of 1024): drawn at once, no ease
   rowView(e, 959100, 100000, 1, v); ok(v.lo === 959100, 'a move under two columns is drawn where it is (the join covers it)');
   // a jump of a whole view or more: no ease, the history moves by the centre's Hz
@@ -96,7 +104,9 @@ ok(Math.abs(viewMoveCols(900000, 200000, 910000, 200000, N) - 51.2) < 1e-6 && vi
   for (let k = 0; k <= 16; k++) { const [L, S] = zoomEaseView(lo0, s0, lo1, s1, k / 16); cols.push((F - L) / S * N); }
   const steps = cols.slice(1).map((c, i) => c - cols[i]);
   ok(Math.abs(cols[0] - (F - lo0) / s0 * N) < 1e-6 && Math.abs(cols[16] - (F - lo1) / s1 * N) < 1e-6, 'the ease starts at the old view and lands on the new');
-  ok(steps.every((d) => d > 0) && steps[0] >= Math.max(...steps) * 0.95 && steps[15] < steps[0] / 4, `an ease-out: the biggest step first, landing soft (${steps.map((d) => d.toFixed(1)).join(' ')})`);
+  const mean = steps.reduce((a, b) => a + b, 0) / steps.length;
+  ok(steps.every((d) => d > 0) && steps[0] > 0.8 * mean && Math.max(...steps) < 1.6 * mean && steps[15] < steps[0],
+     `steady with a soft landing: moves from the first step, no step over 1.6× the mean (${steps.map((d) => d.toFixed(1)).join(' ')})`);
   const [Lm, Sm] = zoomEaseView(lo0, s0, lo1, s1, 0.5);
   ok(Math.abs(Lm + Sm / 2 - 1000000) < 1e-3, 'the zoom\'s fixed point (the dial) stays put mid-ease');
 }
