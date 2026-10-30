@@ -29,6 +29,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { bytesToBase64 } from './base64';
 import { decodeVibeAdpcmFrame } from './imaAdpcm';
 import { noteFault } from './faultLog';
+import { crumb } from './crumbs';
 import {
   DUAL_OFF, attachSecond, beginPicking, bgSide, clampBalance, dualEligible, dualTargets, endSide, holds,
   markEnded, sameServer, sameRadio, swap, terminalWhy, transportFor, detachSecond, pickSameServer,
@@ -41,6 +42,10 @@ import {
 type DualNative = {
   setNativeMix?: (pos: number, gain: number, active: boolean) => void;
   setAuxMix?: (pos: number, gain: number) => void;
+  /** ★ Each voice's own stereo width, 0 (folded) … 1 (as sent) — dualMix STEREO WHEN ALONE. Absent in an older binary
+   *  (every voice folded, as before). */
+  setNativeWidth?: (w: number) => void;
+  setAuxWidth?: (w: number) => void;
   startAux?: () => void;
   stopAux?: () => void;
   pushAuxOpus?: (b64: string, rate: number, channels: number) => void;
@@ -422,6 +427,7 @@ function earOf(v: { pos: number; gain: number }): DualEar {
   return Math.abs(v.pos - 0.5) < 0.05 ? 'both' : v.pos < 0.5 ? 'L' : 'R';
 }
 let lastEars: [DualEar, DualEar] = ['L', 'R'];
+let lastMixSig = '';
 /** The ear the voice of side `index` (0 = server 1) is in now — the card draws this. */
 export function dualEar(index: 0 | 1): DualEar { return lastEars[index]; }
 function pushMix() {
@@ -430,10 +436,12 @@ function pushMix() {
     // ★ The one playing while the server list is up: centred — at zero when the listener muted it or it is in Band
     //   (Band's mute is this side's now, not the speaker's: the pairing took it over from the screen).
     const solo = state.sides[0];
+    Dual.setNativeWidth?.(1);   // alone in both ears: its own stereo
     if (solo && (solo.muted || solo.band)) { Dual.setNativeMix(0.5, 0, true); return; }
   }
   if (state.phase !== 'paired') {
     // ★ Centre, unity, and STAND DOWN once there: the main pump goes back to exactly its single-server path.
+    Dual.setNativeWidth?.(1);
     Dual.setNativeMix(0.5, 1, false);
     return;
   }
@@ -444,6 +452,12 @@ function pushMix() {
                           s1Alive: !!s1 && !s1.ended, s2Alive: !!s2 && !s2.ended,
                           s1Muted: !!s1?.muted, s2Muted: !!s2?.muted, s1Audio: audio(s1), s2Audio: audio(s2) });
   const tgt = [t.s1, t.s2];
+  // ★ A breadcrumb whenever where the voices sit changes, with every input that decided it — Export logs then shows why
+  //   a server went to both ears (Stuart, 2026-10-30: unmuting server 2 took both ears instead of server 1 going left).
+  const sig = state.sides.map((sd, i) => `s${i + 1}[${sd.transport}${state.fg === sd.id ? ' front' : ''}${sd.muted ? ' muted' : ''}`
+    + `${sd.quiet ? ' quiet' : ''}${sd.band ? ' band' : ''}${liveOf(sd.id) ? '' : ' stopped'}${sd.ended ? ' ended' : ''}`
+    + ` → ${tgt[i].pos.toFixed(2)}/${tgt[i].gain.toFixed(2)}${tgt[i].width ? ' stereo' : ''}]`).join(' ') + ` ${state.output} bal ${state.balance.toFixed(2)}`;
+  if (sig !== lastMixSig) { lastMixSig = sig; crumb(`dual mix ${sig}`); }
   // ★ What each card's ear icon shows (Stuart, 2026-10-29: "show both when it is in both ears") — from the SAME targets
   //   the voices get, so the icon can never disagree with what is heard.
   const ears = tgt.map((v) => earOf(v)) as [DualEar, DualEar];
@@ -452,8 +466,9 @@ function pushMix() {
     setTimeout(() => subs.forEach((f) => { try { f(); } catch { /* a listener must not stop the rest */ } }), 0);
   }
   state.sides.forEach((s, i) => {
-    if (s.transport === 'native') Dual.setNativeMix?.(tgt[i].pos, tgt[i].gain, true);
-    else Dual.setAuxMix?.(tgt[i].pos, tgt[i].gain);
+    // ★ The width before the place: both glide together on the voice's next buffer.
+    if (s.transport === 'native') { Dual.setNativeWidth?.(tgt[i].width); Dual.setNativeMix?.(tgt[i].pos, tgt[i].gain, true); }
+    else { Dual.setAuxWidth?.(tgt[i].width); Dual.setAuxMix?.(tgt[i].pos, tgt[i].gain); }
   });
 }
 

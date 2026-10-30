@@ -7,6 +7,8 @@
 RCT_EXTERN_METHOD(setNativeMix : (nonnull NSNumber *)pos gain : (nonnull NSNumber *)gain active : (BOOL)active)
 
 RCT_EXTERN_METHOD(setAuxMix : (nonnull NSNumber *)pos gain : (nonnull NSNumber *)gain)
+RCT_EXTERN_METHOD(setNativeWidth : (nonnull NSNumber *)w)
+RCT_EXTERN_METHOD(setAuxWidth : (nonnull NSNumber *)w)
 
 RCT_EXTERN_METHOD(startAux)
 

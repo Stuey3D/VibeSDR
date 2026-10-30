@@ -17,9 +17,9 @@
  *   Ramp is written three times — here (for the tests), VibeDualAudio.swift and VibeDualAudio.kt — ONE RULE, THREE
  *   READERS: change all three.
  *
- * ★ Each server's own audio is FOLDED TO MONO before it is placed, whatever it is (WFM stereo): a server owns ONE ear
- *   here, and its own stereo inside that ear would be half lost anyway — the other half would land in the other
- *   server's ear.
+ * ★ Each server's own audio is FOLDED TO MONO before it is placed in ONE ear, whatever it is (WFM stereo): its own
+ *   stereo inside that ear would be half lost anyway — the other half would land in the other server's ear. ALONE in
+ *   both ears it keeps its stereo (VoiceTarget.width — STEREO WHEN ALONE, below).
  * ★★★ TWO SERVERS OR VFO A/B — NEVER BOTH (Stuart, GitHub #57: "There will only be 2 channels at a time, either A/B on
  *     one server or Server 1 and Server 2, otherwise this gets far too complex for a little touchscreen to navigate let
  *     alone a game controller or TV remote."). So there is no VFO A/B pair to fold: starting a pairing with VFO B on
@@ -33,8 +33,9 @@ export const DUAL_RAMP_SEC = 0.4;
 /** How the two servers share the ears — the Audio menu's TWO SERVERS row. Remembered per device. */
 export type DualOutput = 'stereo' | 'mono';
 
-/** Where a voice is headed: position 0..1 (0 left, 0.5 centre, 1 right) and its level (0..1). */
-export interface VoiceTarget { pos: number; gain: number }
+/** Where a voice is headed: position 0..1 (0 left, 0.5 centre, 1 right), its level (0..1), and its own stereo width
+ *  (0 = folded to mono, 1 = its stereo as sent — only ever 1 when it is ALONE in both ears; see STEREO WHEN ALONE). */
+export interface VoiceTarget { pos: number; gain: number; width: number }
 
 /** A raised-cosine glide from one value to another over `dur` steps (vibe_watch.h Ramp, verbatim). */
 export class Ramp {
@@ -51,7 +52,7 @@ export class Ramp {
       this.t++;
       const u = this.t / this.dur;
       const e = 0.5 - 0.5 * Math.cos(Math.PI * u);
-      this.cur = this.from + (this.to - this.from) * e;
+      this.cur = this.t >= this.dur ? this.to : this.from + (this.to - this.from) * e;   // the last step lands exactly
     }
     return this.cur;
   }
@@ -111,6 +112,13 @@ export function sideHasAudio(o: { quiet?: boolean; band?: boolean; live?: boolea
 export interface DualSideMix { alive: boolean; muted?: boolean; audio?: boolean }
 
 /**
+ * ★★★ STEREO WHEN ALONE (Stuart, 2026-10-30: "if it is a stereo signal then it needs to play in stereo not mono if
+ *     possible … when I then enable the audio from the other server the audio fades to mono and moves to one ear whilst
+ *     the other server goes to the other, and the same works in reverse"). A server playing on its own in both ears is
+ *     its own stereo (width 1); the moment the other has something to give, it folds to mono AS it glides to its ear —
+ *     the same 400 ms raised cosine — and opens back out to stereo as it comes home to the centre. Two servers sharing
+ *     both ears (MONO output) are each folded: two stereo images on top of each other would be one smear.
+ *
  * Where each of the two servers should be. `alive` false = that server has gone (fades out where it is — it keeps
  * its place so nothing swings across the head on its way out); the one left alone goes to the CENTRE at unity, both
  * ears, as Stuart asked ("leaving one server should leave the other playing centred").
@@ -132,22 +140,25 @@ export function dualTargets(o: { output: DualOutput; balance: number; s1Alive: b
   const stereo = o.output === 'stereo';
   const home1 = stereo ? 0 : 0.5, home2 = stereo ? 1 : 0.5;
   const m1 = !!o.s1Muted, m2 = !!o.s2Muted;
+  // ★ Placed in its ear (or sharing both ears with the other): folded. ALONE in both ears: its own stereo.
+  const at = (pos: number, gain: number): VoiceTarget => ({ pos, gain, width: 0 });
+  const alone = (gain = 1): VoiceTarget => ({ pos: 0.5, gain, width: 1 });
   if (!o.s1Alive || !o.s2Alive) {
     // ★ One (or none) left: the survivor centred at unity — unless the listener muted it.
-    const s1: VoiceTarget = !o.s1Alive ? { pos: stereo && o.s2Alive ? home1 : 0.5, gain: 0 } : { pos: 0.5, gain: m1 ? 0 : 1 };
-    const s2: VoiceTarget = !o.s2Alive ? { pos: stereo && o.s1Alive ? home2 : 0.5, gain: 0 } : { pos: 0.5, gain: m2 ? 0 : 1 };
+    const s1: VoiceTarget = !o.s1Alive ? at(stereo && o.s2Alive ? home1 : 0.5, 0) : alone(m1 ? 0 : 1);
+    const s2: VoiceTarget = !o.s2Alive ? at(stereo && o.s1Alive ? home2 : 0.5, 0) : alone(m2 ? 0 : 1);
     return { s1, s2 };
   }
   const a1 = !m1 && o.s1Audio !== false, a2 = !m2 && o.s2Audio !== false;
   const bg = balanceGains(o.balance);
   if (a1 && a2) {
-    if (bg.s2 === 0) return { s1: { pos: 0.5, gain: 1 }, s2: { pos: home2, gain: 0 } };
-    if (bg.s1 === 0) return { s1: { pos: home1, gain: 0 }, s2: { pos: 0.5, gain: 1 } };
-    return { s1: { pos: home1, gain: bg.s1 }, s2: { pos: home2, gain: bg.s2 } };
+    if (bg.s2 === 0) return { s1: alone(), s2: at(home2, 0) };
+    if (bg.s1 === 0) return { s1: at(home1, 0), s2: alone() };
+    return { s1: at(home1, bg.s1), s2: at(home2, bg.s2) };
   }
-  if (a1) return { s1: { pos: 0.5, gain: 1 }, s2: { pos: home2, gain: 0 } };
-  if (a2) return { s1: { pos: home1, gain: 0 }, s2: { pos: 0.5, gain: 1 } };
-  return { s1: { pos: home1, gain: m1 ? 0 : bg.s1 }, s2: { pos: home2, gain: m2 ? 0 : bg.s2 } };
+  if (a1) return { s1: alone(), s2: at(home2, 0) };
+  if (a2) return { s1: at(home1, 0), s2: alone() };
+  return { s1: at(home1, m1 ? 0 : bg.s1), s2: at(home2, m2 ? 0 : bg.s2) };
 }
 
 /** What each server ends up as in each ear once the glide has settled — the tests' view of dualTargets + earGains. */

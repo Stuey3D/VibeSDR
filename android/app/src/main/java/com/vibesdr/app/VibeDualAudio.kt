@@ -48,7 +48,8 @@ class DualRamp(v: Float) {
         if (t < dur) {
             t++
             val u = t.toFloat() / dur.toFloat()
-            cur = from + (to - from) * (0.5f - 0.5f * cos(PI.toFloat() * u))
+            // ★ The last step lands EXACTLY on the target (a float hair short of 1 kept the voice from standing down).
+            cur = if (t >= dur) to else from + (to - from) * (0.5f - 0.5f * cos(PI.toFloat() * u))
         }
         return cur
     }
@@ -59,8 +60,12 @@ class DualVoice {
     @Volatile private var wantPos = 0.5f
     @Volatile private var wantGain = 1f
     @Volatile private var wantOn = false
+    /** ★ Its own stereo width, 0 = folded to mono … 1 = as sent (dualMix.ts STEREO WHEN ALONE). 0 until JS says
+     *  otherwise: an app whose JS never sends it folds every voice, as before. */
+    @Volatile private var wantWidth = 0f
     private val pos = DualRamp(0.5f)
     private val gain = DualRamp(1f)
+    private val width = DualRamp(1f)
     @Volatile private var on = false
     /** Smoothed level (0…1) for the card's MONO speaker. */
     @Volatile var level = 0f
@@ -75,6 +80,7 @@ class DualVoice {
     fun setTarget(p: Float, g: Float, o: Boolean) {
         wantPos = p.coerceIn(0f, 1f); wantGain = g.coerceIn(0f, 1f); wantOn = o
     }
+    fun setWidth(w: Float) { wantWidth = w.coerceIn(0f, 1f) }
 
     /** Must the writer route this buffer through process()? Read ONCE per buffer, before choosing the track's layout. */
     fun engaged(): Boolean = wantOn || on
@@ -84,34 +90,41 @@ class DualVoice {
      * stereo once engaged — the writer chose a stereo track on engaged(), so it must get stereo back.
      */
     fun process(src: ShortArray, samples: Int, ch: Int, rate: Int, out: ShortArray, extraGain: Float = 1f): Int {
-        val p = wantPos; val g = wantGain; val o = wantOn
+        val p = wantPos; val g = wantGain; val o = wantOn; val w = wantWidth
         lastAt = android.os.SystemClock.uptimeMillis()
-        if (!on) { on = true; pos.set(0.5f); gain.set(1f) }   // from the plain path: centre at unity — no step
+        // from the plain path: centre at unity with its own stereo — exactly what the plain path sounds like, no step
+        if (!on) { on = true; pos.set(0.5f); gain.set(1f); width.set(1f) }
         val frames = samples / max(1, ch)
         val steps = (0.4 * rate).roundToInt()                   // dualMix.ts DUAL_RAMP_SEC
-        pos.aim(p, steps); gain.aim(g, steps)
+        pos.aim(p, steps); gain.aim(g, steps); width.aim(w, steps)
         val k = sqrt(2f) * extraGain
         val hp = (PI / 2).toFloat()
         var sq = 0.0
-        if (!pos.moving && !gain.moving) {
+        // ★ Mid (m) is placed by the pan law; side (d, the stereo difference) is added back at `width` — at the centre at
+        //   unity with width 1 that is L and R exactly as sent; width 0 is the mono fold. Mono in: d = 0.
+        if (!pos.moving && !gain.moving && !width.moving) {
             val gl = gain.cur * k * cos(pos.cur * hp); val gr = gain.cur * k * sin(pos.cur * hp)
+            val gs = gain.cur * width.cur * extraGain
             for (i in 0 until frames) {
                 val m = if (ch == 2) 0.5f * (src[2 * i] + src[2 * i + 1]) else src[i].toFloat()
+                val d = if (ch == 2) 0.5f * (src[2 * i] - src[2 * i + 1]) else 0f
                 sq += (m * m).toDouble()
-                out[2 * i] = clip(m * gl); out[2 * i + 1] = clip(m * gr)
+                out[2 * i] = clip(m * gl + d * gs); out[2 * i + 1] = clip(m * gr - d * gs)
             }
         } else {
             for (i in 0 until frames) {
                 val m = if (ch == 2) 0.5f * (src[2 * i] + src[2 * i + 1]) else src[i].toFloat()
+                val d = if (ch == 2) 0.5f * (src[2 * i] - src[2 * i + 1]) else 0f
                 sq += (m * m).toDouble()
-                val th = pos.step() * hp; val v = m * gain.step() * k
-                out[2 * i] = clip(v * cos(th)); out[2 * i + 1] = clip(v * sin(th))
+                val th = pos.step() * hp; val gn = gain.step(); val v = m * gn * k; val ds = d * gn * width.step() * extraGain
+                out[2 * i] = clip(v * cos(th) + ds); out[2 * i + 1] = clip(v * sin(th) - ds)
             }
         }
         val rms = if (frames > 0) (sqrt(sq / frames) / 32768.0).toFloat() else 0f
         level = max(rms, level * 0.85f)
         // ★ Home and resting with the pairing over: stand down — the writer goes back to its own layout next buffer.
-        if (!o && !pos.moving && !gain.moving && abs(pos.cur - 0.5f) < 1e-6f && gain.cur >= 1f) on = false
+        if (!o && !pos.moving && !gain.moving && !width.moving && abs(pos.cur - 0.5f) < 1e-6f && gain.cur >= 1f
+            && width.cur >= 1f) on = false
         return frames * 2
     }
 
@@ -151,6 +164,12 @@ class VibeDualAudioModule(ctx: ReactApplicationContext) : ReactContextBaseJavaMo
 
     @ReactMethod
     fun setAuxMix(pos: Double, gain: Double) { VibeDualMix.aux.setTarget(pos.toFloat(), gain.toFloat(), true) }
+
+    @ReactMethod
+    fun setNativeWidth(w: Double) { VibeDualMix.primary.setWidth(w.toFloat()) }
+
+    @ReactMethod
+    fun setAuxWidth(w: Double) { VibeDualMix.aux.setWidth(w.toFloat()) }
 
     @ReactMethod
     fun startAux() {

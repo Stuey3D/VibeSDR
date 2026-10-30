@@ -96,6 +96,23 @@ console.log('ears');
   ok(earIcon('stereo', 0) === 'L' && earIcon('stereo', 1) === 'R' && earIcon('mono', 0) === 'mono', 'card icon');
 }
 
+console.log('stereo when alone — its own stereo in both ears, folded as it goes to its ear (Stuart, 2026-10-30)');
+{
+  const both = dualTargets({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: true });
+  ok(both.s1.width === 0 && both.s2.width === 0, 'both playing, one ear each: both folded to mono');
+  const s2Muted = dualTargets({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: true, s2Muted: true });
+  ok(s2Muted.s1.pos === 0.5 && s2Muted.s1.width === 1, 'server 2 muted: server 1 centred IN STEREO');
+  const s2Back = dualTargets({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: true, s2Muted: false });
+  ok(s2Back.s1.pos === 0 && s2Back.s1.width === 0 && s2Back.s2.pos === 1 && s2Back.s2.width === 0,
+     'server 2 unmuted: server 1 folds to mono in the LEFT ear, server 2 mono in the RIGHT');
+  const quiet1 = dualTargets({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: true, s1Audio: false });
+  ok(quiet1.s2.pos === 0.5 && quiet1.s2.width === 1, 'and in reverse: server 1 with nothing to give → server 2 centred in stereo');
+  const mono = dualTargets({ output: 'mono', balance: 0, s1Alive: true, s2Alive: true });
+  ok(mono.s1.width === 0 && mono.s2.width === 0, 'MONO output, both in both ears: each folded (two stereo images would smear)');
+  const left = dualTargets({ output: 'stereo', balance: 0, s1Alive: true, s2Alive: false });
+  ok(left.s1.width === 1 && left.s1.pos === 0.5, 'the survivor of a pairing: centred in stereo');
+}
+
 console.log('the spread rule — one server with something to give plays CENTRED (Stuart, 2026-10-28)');
 {
   const base = { output: 'stereo' as const, balance: 0, s1Alive: true, s2Alive: true };

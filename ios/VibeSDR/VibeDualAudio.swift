@@ -40,7 +40,9 @@ struct DualRamp {
     if t < dur {
       t += 1
       let u = Float(t) / Float(dur)
-      cur = from + (to - from) * (0.5 - 0.5 * cos(Float.pi * u))
+      // ★ The last step lands EXACTLY on the target: from + (to − from)·1 can be a hair short in float (0.99999994),
+      //   and "home at unity" (gain ≥ 1, width ≥ 1) is what lets the voice stand down to the plain stereo path.
+      cur = t >= dur ? to : from + (to - from) * (0.5 - 0.5 * cos(Float.pi * u))
     }
     return cur
   }
@@ -50,7 +52,10 @@ struct DualRamp {
 final class VibeDualVoice {
   private let lock = NSLock()
   private var wantPos: Float = 0.5, wantGain: Float = 1, wantOn = false
-  private var pos = DualRamp(0.5), gain = DualRamp(1)
+  /// ★ Its own stereo width, 0 = folded to mono … 1 = as sent (dualMix.ts STEREO WHEN ALONE). 0 until JS says otherwise:
+  ///   an app whose JS never sends it folds every voice, as before.
+  private var wantWidth: Float = 0
+  private var pos = DualRamp(0.5), gain = DualRamp(1), width = DualRamp(1)
   private var on = false
   /// Smoothed level of this server's audio (0…1) — the card's MONO speaker lights with it. A Float store is atomic on
   /// every Apple CPU; a lamp can read a value a buffer old.
@@ -65,37 +70,45 @@ final class VibeDualVoice {
   func setTarget(pos p: Float, gain g: Float, on o: Bool) {
     lock.lock(); wantPos = max(0, min(1, p)); wantGain = max(0, min(1, g)); wantOn = o; lock.unlock()
   }
+  func setWidth(_ w: Float) { lock.lock(); wantWidth = max(0, min(1, w)); lock.unlock() }
 
   /// In place. Bypassed — one lock and a Bool — unless the pairing has it on or it is still gliding back to the middle.
   func process(_ buf: AVAudioPCMBuffer, extraGain: Float = 1) {
-    lock.lock(); let p = wantPos, g = wantGain, o = wantOn; lock.unlock()
+    lock.lock(); let p = wantPos, g = wantGain, o = wantOn, w = wantWidth; lock.unlock()
     if !o && !on { return }
     lastAt = ProcessInfo.processInfo.systemUptime
     guard let ch = buf.floatChannelData, buf.format.channelCount == 2 else { return }
-    // ★ Coming in from the plain path = the centre at unity, which is exactly what the plain path sounds like (mono
-    //   in both ears), so the first glide starts with no step.
-    if !on { on = true; pos.set(0.5); gain.set(1) }
+    // ★ Coming in from the plain path = the centre at unity with its own stereo, which is exactly what the plain path
+    //   sounds like, so the first glide starts with no step.
+    if !on { on = true; pos.set(0.5); gain.set(1); width.set(1) }
     let n = Int(buf.frameLength)
     let steps = Int((0.4 * buf.format.sampleRate).rounded())   // dualMix.ts DUAL_RAMP_SEC
-    pos.aim(p, steps); gain.aim(g, steps)
+    pos.aim(p, steps); gain.aim(g, steps); width.aim(w, steps)
     let L = ch[0], R = ch[1]
     let k = Float(2).squareRoot() * extraGain, hp = Float.pi / 2
     var sq: Float = 0
-    if !pos.moving && !gain.moving {
-      // ★ At rest (nearly always): the two ear gains once per buffer, not twice per sample.
-      let gl = gain.cur * k * cos(pos.cur * hp), gr = gain.cur * k * sin(pos.cur * hp)
-      for i in 0..<n { let m = 0.5 * (L[i] + R[i]); sq += m * m; L[i] = m * gl; R[i] = m * gr }
+    // ★ Mid (m) is placed by the pan law; side (s, the stereo difference) is added back at `width` — at the centre at
+    //   unity with width 1 that is L and R exactly as sent; width 0 is the mono fold.
+    if !pos.moving && !gain.moving && !width.moving {
+      // ★ At rest (nearly always): the ear gains once per buffer, not per sample.
+      let gl = gain.cur * k * cos(pos.cur * hp), gr = gain.cur * k * sin(pos.cur * hp), gs = gain.cur * width.cur * extraGain
+      for i in 0..<n {
+        let m = 0.5 * (L[i] + R[i]), d = 0.5 * (L[i] - R[i]); sq += m * m
+        L[i] = m * gl + d * gs; R[i] = m * gr - d * gs
+      }
     } else {
       for i in 0..<n {
-        let m = 0.5 * (L[i] + R[i]); sq += m * m
-        let th = pos.step() * hp, v = m * gain.step() * k
-        L[i] = v * cos(th); R[i] = v * sin(th)
+        let m = 0.5 * (L[i] + R[i]), d = 0.5 * (L[i] - R[i]); sq += m * m
+        let th = pos.step() * hp, gn = gain.step(), v = m * gn * k, ds = d * gn * width.step() * extraGain
+        L[i] = v * cos(th) + ds; R[i] = v * sin(th) - ds
       }
     }
     let rms = n > 0 ? (sq / Float(n)).squareRoot() : 0
     level = max(rms, level * 0.85)
     // ★ Home and resting with the pairing over: stand down; the next buffer takes the plain path.
-    if !o && !pos.moving && !gain.moving && abs(pos.cur - 0.5) < 1e-6 && gain.cur >= 1 { on = false }
+    if !o && !pos.moving && !gain.moving && !width.moving && abs(pos.cur - 0.5) < 1e-6 && gain.cur >= 1 && width.cur >= 1 {
+      on = false
+    }
   }
 }
 
@@ -148,6 +161,9 @@ final class VibeDualAudio: NSObject {
   @objc func setAuxMix(_ pos: NSNumber, gain: NSNumber) {
     VibeDualAudio.auxVoice.setTarget(pos: pos.floatValue, gain: gain.floatValue, on: true)
   }
+
+  @objc func setNativeWidth(_ w: NSNumber) { VibeDualAudio.primary.setWidth(w.floatValue) }
+  @objc func setAuxWidth(_ w: NSNumber) { VibeDualAudio.auxVoice.setWidth(w.floatValue) }
 
   @objc func startAux() {
     DispatchQueue.main.async {
