@@ -41,7 +41,7 @@
  */
 
 import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, rowsForArrival, type WfScroll } from '../assets/wfRowTarget';
-import { clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockReset, clockRowRate, clockRun, clockSetRate, newRowClock }
+import { boostActive, boostNote, boostRowRate, BOOST_TAIL_MS, clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockReset, clockRowRate, clockRun, clockSetRate, newBoost, newRowClock }
   from '../assets/wfClock';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Image as RNImage, NativeModules, PixelRatio, Platform, StyleSheet, Text, View } from 'react-native';
@@ -82,7 +82,7 @@ import { FramePool, type FrameSlot } from '../services/framePool';
 const JB_MAX_QUEUE_SLOTS = 5;
 import { SignalProcessor, type SignalProcessorSettings } from '../assets/signalProcessor';
 import { useScreenCovered } from '../hooks/useScreenCovered';
-import { cadenceGap, uiFrameCapHz } from '../services/uiCadence';
+import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { needleGeometry } from '../utils/needleGeometry';
@@ -467,7 +467,7 @@ interface SpectrumEngineHost {
    *  Optional: a binary built before it has none, and then the row is simply not drawn. */
   pushWide?(frame: Uint8Array): void;
   setConfig(c: { width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
-                 smoothTune: boolean; targetRows: number; displayCapHz?: number }): void;
+                 smoothTune: boolean; targetRows: number; displayCapHz?: number; panelHz?: number }): void;
   setSettings(s: Record<string, number | boolean>): void;
   setBackground(bg: boolean): void;
   setCovered(c: boolean): void;
@@ -1332,6 +1332,8 @@ function WaterfallView({
    *  only PRODUCES them into the ring, at exactly the rate; the UI thread releases them on the display's frames
    *  (utils/wfPace.ts clockPace). Frames are kept here by id until the clock has shown or dropped them. */
   const rowClock   = useRef(newRowClock());
+  const boostSt    = useRef(newBoost());   // ★ the interaction boost (wfClock.ts boostRowRate)
+  const lastEaseLeft = useRef(0);
   const clockTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clockOut   = useRef<number[]>([]);
   const clockSeq   = useRef(0);
@@ -1536,7 +1538,9 @@ function WaterfallView({
     rowRate(avail, ts, pRate, pRateN, pRateT, interacting);   // ★ frozen while interacting (a re-subscribe's pause)
     const before = uHead.value;
     const wantCont = uQuantSv.value < 0.5;
-    const cRate = pSRate.value > 0 ? pSRate.value : pRate.value;   // the SETTLED pace, frozen while continuous
+    // the SETTLED pace, frozen while continuous — ★ but clocked rows run at the clock's rate (pTgt), which the interaction
+    // boost raises while the hand is on the dial: the release follows the supply exactly, up and back down.
+    const cRate = pClocked.value && pTgt.value > 0 ? pTgt.value : (pSRate.value > 0 ? pSRate.value : pRate.value);
     if (wantCont && !pCont.value) {
       paceToCont(pShown, pPos, pLead, pCLead, pCTgt);   // from where the whole-row picture is: no lurch
       pCont.value = true;
@@ -1923,11 +1927,29 @@ function WaterfallView({
     const wfScroll = scrollForCap(cfg.targetRows);
     const feedFps = 1000 / Math.max(1, avgFrameMs.current);
     const clocked = wfScroll !== 'sharp';
-    const rowTarget = clocked
+    const baseRowTarget = clocked
       ? (avgFrameMs.current > 0 ? clockRateUnderCap(clockRowRate(rowTargetSt.current, wfScroll, feedFps), uiFrameCapHz.value) : 0)
       : rowTargetUnderCap(avgFrameMs.current > 0
           ? stepRowTarget(rowTargetSt.current, wfScroll, 1000 / avgFrameMs.current)
           : rowTargetSt.current.target, feedFps, uiFrameCapHz.value);
+    // ★★★ THE INTERACTION BOOST (src/assets/wfClock.ts boostRowRate — Stuart 2026-10-29: "increase during interaction …
+    //     even if it means a 12x frame generation" / "if the app is set to 120 we do 120"). While a hand is on the dial
+    //     (BOOST_TAIL_MS after the last input) or an ease is still drawing, the CLOCK's rate steps up to the display's
+    //     maximum as set (the FRAME RATE cap, or the panel's), ≤ 120, ≤ 12 × the feed. The extra rows are frames already
+    //     here, each at its own in-between view (fanAfterRow) — the ease gets the rows its curve needs. Nothing is asked
+    //     of the server. NATIVE (baseRowTarget from its own rule, never clocked) is untouched.
+    const ptNow = Date.now();   // (the boost's clock: lastInteractAt's)
+    //     ★ Also while the fan is easing a move this hand did not make (a shared dial, a recentre): the rows it needs are
+    //       the same, and the boost is local — nothing goes to the server.
+    //       The tail runs from the last input or the START of the last ease; the boost then holds until the ease lands.
+    const easeLeft = fanSt.current?.easeLeft ?? 0, easing = easeLeft > 0;
+    const easeStarted = easeLeft > lastEaseLeft.current; lastEaseLeft.current = easeLeft;
+    // (the input's OWN time — noting `now` while the input is recent would add a second tail)
+    const inAt = lastInteractAt?.current ?? 0;
+    if (inAt > boostSt.current.lastMove && ptNow - inAt < BOOST_TAIL_MS) boostNote(boostSt.current, inAt);
+    if (easeStarted) boostNote(boostSt.current, ptNow);
+    const boostOn = clocked && baseRowTarget > 0 && boostActive(boostSt.current, ptNow, easing);
+    const rowTarget = boostOn ? boostRowRate(baseRowTarget, feedFps, uiDisplayMaxHz()) : baseRowTarget;
     const repeatsCarry = rowTarget > 0;
     const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
@@ -2341,7 +2363,7 @@ function WaterfallView({
           // ★ The FRAME RATE cap reaches the engine's row target (rowTargetUnderCap) when it changes — no React state
           //   carries it here, so it is checked per frame (one number compare) and the config re-sent on a change.
           const cap = uiFrameCapHz.value, ec = engineCfg.current;
-          if (ec && ec.displayCapHz !== cap) { ec.displayCapHz = cap; engine.setConfig(ec); }
+          if (ec && (ec.displayCapHz !== cap || (ec.panelHz ?? 0) !== uiPanelMaxHz.value)) { ec.displayCapHz = cap; ec.panelHz = uiPanelMaxHz.value; engine.setConfig(ec); }
           // ★ The pace target (pTgt) — the SAME rule the engine applies (wf_row_target.h, the same feed EMA), worked out
           //   here because the engine's poll does not carry it. 0 = actual rows.
           if (ec && !engRateSeen.value) {   // (an engine binary from before the fixed clock: mirror its old rule)
@@ -2362,10 +2384,10 @@ function WaterfallView({
   }, [frameSink, enqueueFrame, engine, lastInteractAt]);
 
   const engineCfg = useRef<{ width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
-                             smoothTune: boolean; targetRows: number; displayCapHz: number } | null>(null);
+                             smoothTune: boolean; targetRows: number; displayCapHz: number; panelHz?: number } | null>(null);
   // ── Native engine: the state JS owns, forwarded when it changes ──────────────────────────────────────────
   useEffect(() => {
-    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value };
+    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value, panelHz: uiPanelMaxHz.value };
     engine?.setConfig(engineCfg.current);
   }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS]);
   useEffect(() => { engine?.setCovered(covered); }, [engine, covered]);

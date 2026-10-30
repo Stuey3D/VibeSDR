@@ -14,7 +14,7 @@ let T = 10000;
 (performance as any).now = () => T;
 
 const N = 1024;
-const CARRIERS = [7105000, 7118000, 7131500, 7142000, 7150000, 7157000, 7166000, 7181000, 7196000, 7212000];
+let CARRIERS = [7105000, 7118000, 7131500, 7142000, 7150000, 7157000, 7166000, 7181000, 7196000, 7212000];
 let seed = 1;
 const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
 // The floor: a fixed function of frequency (hashed per 100 Hz) plus a little per-frame jitter.
@@ -72,12 +72,14 @@ const S: any = (window as any).__wfDrv = {
   },
   /** Ask for a view (a tune or a zoom). On rungs the span the frames carry snaps. */
   ask(centre: number, span: number) { S.view = { centre, span: S.rungs ? snap(span) : span }; },
-  /** Run `ms` of display frames at 60 Hz, the feed at feedMs. */
-  run(ms: number) {
+  /** Carriers at these frequencies instead (the render scenarios: an AM band). */
+  setCarriers(list: number[]) { CARRIERS = list; return true; },
+  /** Run `ms` of display frames at `hz` (60 unless given), the feed at feedMs. */
+  run(ms: number, hz = 60) {
     const wf = S.wf as Waterfall;
     const end = T + ms;
     while (T < end) {
-      T += 1000 / 60;
+      T += 1000 / hz;
       if (T >= S.nextFeed) {
         S.nextFeed = (S.nextFeed || T) + S.feedMs;
         frame(S.view.centre, S.view.span, S.bins);
@@ -91,8 +93,8 @@ const S: any = (window as any).__wfDrv = {
     return true;
   },
   /** A sweep of asks: `steps` of (dc, kSpan) every `every` ms. */
-  sweep(steps: number, dc: number, k: number, every: number) {
-    for (let i = 0; i < steps; i++) { S.ask(S.view.centre + dc, S.view.span * k); S.run(every); }
+  sweep(steps: number, dc: number, k: number, every: number, hz = 60) {
+    for (let i = 0; i < steps; i++) { S.ask(S.view.centre + dc, S.view.span * k); S.run(every, hz); }
     return true;
   },
   resize(w: number, h: number) {

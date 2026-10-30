@@ -146,7 +146,9 @@ ok(fix.checked > 500 && fix.misplaced === 0, `every strong carrier is drawn at i
 console.log('  CONTROL — the same frames placed by the predicted view geometry (beta37):');
 ok(bug.labelChanges >= 30, `the fan restarts on every pinch step — ${bug.labelChanges} span changes`);
 ok(bug.badJoins >= 10, `joins warp rows by moves their data never made (the sideways smears) — ${bug.badJoins} pairs, worst ${bug.worstJoin.toFixed(0)} columns`);
-ok(bug.misplaced > 0, `carriers drawn away from their frequency — ${bug.misplaced}/${bug.checked}`);
+// ★ 2026-10-29: with the slope cap's longer eases the predicted-geometry path no longer also MISPLACES a carrier under its
+//   own map — its bug still shows as the warped joins above. Reported, not required.
+console.log(`   (info) carriers drawn away from their frequency on the beta37 path — ${bug.misplaced}/${bug.checked}`);
 
 console.log(`  zoom-out fan: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

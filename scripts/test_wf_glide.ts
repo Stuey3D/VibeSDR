@@ -12,7 +12,7 @@
  * Run: node --no-warnings scripts/test_wf_glide.ts
  */
 import { newGlideScratch, zoomEaseView, easedRowAt, joinedRowAt, viewMoveCols, newRowEase, rowView } from '../web/client/src/wfGlide.ts';
-import { zoomEaseRows, tuneEaseRows } from '../src/utils/wfRowPlace.ts';
+import { cappedEaseRows, zoomEaseRows, tuneEaseRows, EASE_CEIL_S } from '../src/utils/wfRowPlace.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -57,7 +57,9 @@ ok(Math.abs(viewMoveCols(900000, 200000, 910000, 200000, N) - 51.2) < 1e-6 && vi
   rowView(e, 900000, 200000, 1, v);
   ok(v.lo === 900000 && v.span === 200000 && v.jumpHz === 0, 'the first row is drawn where its frame is');
   // a ×2 zoom in about the centre: zoomEaseRows(0.5) rows (BY TIME — 0.33 s at the default 30), each further, landing exactly
-  const NZ = zoomEaseRows(0.5);
+  // ★★★ + THE SLOPE CAP (wfRowPlace.ts cappedEaseRows): the ×2's edges move half a view, so the ease runs to its ceiling
+  const NZ = cappedEaseRows(900000, 200000, 950000, 100000, zoomEaseRows(0.5), 30);
+  ok(NZ > zoomEaseRows(0.5) && NZ <= EASE_CEIL_S * 30, `the slope cap lengthens a ×2 from ${zoomEaseRows(0.5)} to ${NZ} rows (≤ ${EASE_CEIL_S} s)`);
   const spans: number[] = [], ctr: number[] = [];
   for (let i = 0; i < NZ + 2; i++) { rowView(e, 950000, 100000, 1, v); spans.push(v.span); ctr.push(v.lo + v.span / 2); }
   ok(NZ >= 8 && spans[NZ - 1] === 100000 && spans[NZ - 2] > 100000 && spans[0] < 200000 && spans.slice(0, NZ).every((x, i) => i === 0 || x < spans[i - 1]),
@@ -71,10 +73,11 @@ ok(Math.abs(viewMoveCols(900000, 200000, 910000, 200000, N) - 51.2) < 1e-6 && vi
   ok(s2[2 * NZ - 1] === 100000 && s2[2 * NZ - 2] > 100000 && new Set(s2.slice(0, 2 * NZ - 1)).size === 2 * NZ - 1, `rowPx 2: the ease takes ${2 * NZ} device rows, each at its own view`);
   // ★ the device row rate given (the pacer's easeRowRate): counted in it directly — 60 device rows/s = 20 rows for a ×2
   const e3 = newRowEase(); rowView(e3, 900000, 200000, 1, v, 60);
-  let n3 = 0; for (let i = 0; i < 40; i++) { rowView(e3, 950000, 100000, 1, v, 60); if (v.span > 100000) n3++; }
-  ok(n3 + 1 === zoomEaseRows(0.5, 60) && (n3 + 1) / 60 <= 0.4, `at 60 device rows/s a ×2 eases over ${n3 + 1} rows = ${((n3 + 1) / 60).toFixed(2)} s (≤ 0.4 s)`);
+  let n3 = 0; for (let i = 0; i < 90; i++) { rowView(e3, 950000, 100000, 1, v, 60); if (v.span > 100000) n3++; }
+  const N3 = cappedEaseRows(900000, 200000, 950000, 100000, zoomEaseRows(0.5, 60), 60);
+  ok(n3 + 1 === N3 && (n3 + 1) / 60 <= EASE_CEIL_S + 1e-9, `at 60 device rows/s a ×2 eases over ${n3 + 1} rows = ${((n3 + 1) / 60).toFixed(2)} s (≤ ${EASE_CEIL_S} s)`);
   // a 9 kHz tune step on a 100 kHz view: tuneEaseRows(0.09) rows sliding lo, the span untouched
-  const NT = tuneEaseRows(0.09);
+  const NT = cappedEaseRows(950000, 100000, 959000, 100000, tuneEaseRows(0.09), 30);
   const los: number[] = []; for (let i = 0; i < NT + 2; i++) { rowView(e, 959000, 100000, 1, v); los.push(v.lo); }
   ok(NT >= 6 && los[0] > 950000 && los[0] < 959000 && los[NT - 1] === 959000 && los[NT - 2] < 959000 && v.span === 100000 && los.every((l, i) => i === 0 || l >= los[i - 1]),
      `a tune step glides across over ${NT} rows (${los.map((l) => ((l - 950000) / 1000).toFixed(2)).join(' ')} kHz of 9)`);

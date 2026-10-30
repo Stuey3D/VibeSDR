@@ -226,3 +226,47 @@ export function displayClockStep(d: DisplayClockState, ts: number, rate: number,
  *  producer stops its timer and the next arrival restarts it (clockSetRate/clockArrive, then clockRun). */
 export const clockIdle = (c: RowClockState, now: number): boolean =>
   c.q.length === 0 && (c.cur < 0 || now - c.curP > holdLimitMs(c.ivl));
+
+/* ★★★ THE INTERACTION BOOST (Stuart, 2026-10-29): "I think the waterfall rate needs to increase during interaction to
+ *  allow for smoothness, but we need to do it in a way that we dont try to pull down more data than a server can supply
+ *  even if it means a 12x frame generation" — and, on a sweep at Smooth 60: "if the app is set to 120 we do 120".
+ *  While a tune or zoom is in flight (and its settle), the CLOCK's row rate steps up to the display's maximum as the app
+ *  is set (the FRAME RATE setting; Auto = the panel's), never above 120 and never above 12 × the measured feed. Every
+ *  extra row is the newest frame already received, drawn at its own in-between tune/zoom position (sample-and-hold,
+ *  never a blend) — the ease gets more rows, so a curve gets its detail. NOTHING is asked of the server: no speed, no
+ *  fps, no re-subscribe. The display refresh is never held or changed (the 10-28 judder was a refresh hold; this is only
+ *  the clock's tick rate, and clockSetRate changes it on a whole-row boundary with no jump). NATIVE is untouched: 0 in,
+ *  0 out — "pure unmodified lines direct from the server" (Stuart: "I would rather have it look sharp and lacking detail
+ *  than modify its behaviour").
+ *  The rates are the ones a 60/120 Hz panel draws on whole frames: 120 (one row a refresh at 120 Hz), else 60, 30, 20,
+ *  15, 12, 10, 5. On a panel between (the Mac's 90–100 Hz VRR) 60, drawn on the exact-time path. */
+export const BOOST_MAX_RATE = 120;
+export const BOOST_FEED_X = 12;
+/** How long after the last move the boost holds (the settle), ms. */
+export const BOOST_TAIL_MS = 750;
+const BOOST_RATES = [120, 60, 30, 20, 15, 12, 10, 5];
+/** The clock's rate while a tune/zoom is in flight: `base` (the setting's rate on the clock; 0 = Native/actual rows →
+ *  0), `feedFps` the measured feed, `displayHz` the display's maximum as the app is set (0 = unknown → 60). Never lower
+ *  than `base`. */
+export function boostRowRate(base: number, feedFps: number, displayHz: number): number {
+  if (!(base > 0)) return 0;                           // NATIVE / actual rows: untouched
+  const hz = displayHz > 0 ? displayHz : 60;
+  const lim = Math.min(BOOST_MAX_RATE, hz * 1.02, (feedFps > 0 ? feedFps : 0) * BOOST_FEED_X * 1.0001);
+  for (const r of BOOST_RATES) {
+    if (r > lim) continue;
+    // whole display frames: at or above 119 Hz a 120 rate is one row a frame; otherwise the rate must divide 60
+    if (r === 120 && hz < 119) continue;
+    return Math.max(base, r);
+  }
+  return base;
+}
+/** The boost's state: when the last move was seen (ms; 0 = never). */
+export interface BoostState { lastMove: number; on: boolean }
+export const newBoost = (): BoostState => ({ lastMove: 0, on: false });
+/** A tune or zoom moved the picture at `now` (an input, or a frame placed somewhere new). */
+export function boostNote(b: BoostState, now: number): void { b.lastMove = now; b.on = true; }
+/** Whether the boost holds at `now`: within the tail of the last move, or while an ease is still drawing (`easing`). */
+export function boostActive(b: BoostState, now: number, easing: boolean): boolean {
+  b.on = b.lastMove > 0 && (now - b.lastMove < BOOST_TAIL_MS || (b.on && easing));
+  return b.on;
+}

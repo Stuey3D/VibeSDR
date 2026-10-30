@@ -26,7 +26,7 @@
  *    ★ ✗ NOT the old cross-fade glide (two frames mixed by t): Stuart's rule is whole rows, never blended.
  * PURE — scripts/test_wf_glide.ts. */
 
-import { easeView, spanChanged, tuneEaseRows, zoomEaseRows, TUNE_EASE_MIN_FRAC } from '../../../src/utils/wfRowPlace.ts';
+import { cappedEaseRows, easeView, spanChanged, tuneEaseRows, viewMoveFrac, zoomEaseRows, EASE_ROW_RATE, TUNE_EASE_MIN_FRAC } from '../../../src/utils/wfRowPlace.ts';
 
 /** One frame's row resampled onto the view (L, S): column c of dst covers [L + c·S/n, L + (c+1)·S/n). Linear between
  *  bins when the view is as fine as the frame or finer; the MAX of the covered bins when it is any coarser (a one-bin carrier
@@ -80,10 +80,8 @@ export function easedRowAt(cur: Uint8Array, lo: number, span: number, L: number,
 
 /** The largest move, in columns of an n-wide row, of any frequency on screen between views (L0, S0) and (L1, S1). */
 export function viewMoveCols(L0: number, S0: number, L1: number, S1: number, n: number): number {
-  if (!(S0 > 0 && S1 > 0)) return 0;
-  // x(F) = (F − L)/S is linear in F, so the largest move across the screen is at one of its two edges
-  const e0 = Math.abs((L0 - L1) / S1), e1 = Math.abs((L0 + S0 - L1) / S1 - 1);
-  return Math.max(e0, e1) * n;
+  // x(F) = (F − L)/S is linear in F, so the largest move across the screen is at one of its two edges (wfRowPlace.ts)
+  return viewMoveFrac(L0, S0, L1, S1) * n;
 }
 
 /** ★★ THE JOIN: the row of `cur` (placed lo, span) drawn at the view (L0, S0), across its footprint toward the view of the
@@ -201,6 +199,11 @@ export function rowView(st: RowEase, lo: number, span: number, rowPx: number, ou
         st.lin = true;   // ★ and at an even pace: an ease-out lands at rest, and a spin made of landings is a staircase
       } else { st.gap = 0; st.lin = false; }
     }
+    // ★★★ THE SLOPE CAP (wfRowPlace.ts cappedEaseRows, Stuart 2026-10-29: "higher step rates turn into sharp lines with no
+    //     detail" / "same with zooming"): long enough, from where the ease has got to, that no carrier on screen moves more
+    //     than the cap a SCREEN row (px device rows), up to EASE_CEIL_S. A fast run of steps no longer squeezes a growing
+    //     distance into the same few rows; the edges of a zoom curve instead of streaking. Unbound (small steps): as it was.
+    if (rows > 0) rows = cappedEaseRows(st.dLo, st.dSpan, lo, span, rows, rr || EASE_ROW_RATE * px, px, st.lin);
     if (rows > 0) {
       // ★ a step mid-ease starts from where the ease has got to and keeps at least the time it had left — never a snap
       st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;

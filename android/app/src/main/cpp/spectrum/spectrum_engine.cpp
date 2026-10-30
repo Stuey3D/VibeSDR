@@ -337,11 +337,27 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     // ★★★ V12 2026-10-29: every mode but NATIVE runs on the FIXED OUTPUT CLOCK (wf_row_clock.h, runClock) at its latched
     //     rate; NATIVE (targetRows 0) keeps its rule exactly as it was ("pure unmodified lines direct from the server").
     const bool clocked = cfg.targetRows > 0;
-    const double rowTarget = clocked
+    const double baseRowTarget = clocked
         ? (avgFrameMs_ > 0 ? vibewf::clockRateUnderCap(vibewf::clockRowRate(rowTargetSt_, cfg.targetRows, 1000.0 / avgFrameMs_), cfg.displayCapHz) : 0)
         : vibewf::rowTargetUnderCap(avgFrameMs_ > 0 ? vibewf::stepRowTarget(rowTargetSt_, cfg.targetRows, 1000.0 / avgFrameMs_)
                                                     : rowTargetSt_.target,
                                     avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, cfg.displayCapHz);
+    // ★★★ THE INTERACTION BOOST (wf_row_clock.h boostRowRate — WaterfallView's twin; Stuart 2026-10-29: "increase during
+    //     interaction … even if it means a 12x frame generation" / "if the app is set to 120 we do 120"): while a hand is on
+    //     the dial or an ease is still drawing, the clock's rate steps up to the display's maximum as set, ≤ 120, ≤ 12 × the
+    //     feed. Frames already here, nothing asked of the server; NATIVE (not clocked) untouched.
+    //     (Also while the fan eases a move this hand did not make — a shared dial, a recentre: the boost is local.)
+    //     The tail runs from the last input or the START of the last ease; the boost then holds until the ease lands.
+    const bool easing = fan_.easeLeft > 0, easeStarted = fan_.easeLeft > lastEaseLeft_;
+    lastEaseLeft_ = fan_.easeLeft;
+    // (the input's OWN time — noting `now` while the input is recent would add a second tail)
+    if (interactAt_ > boost_.lastMove && now - interactAt_ < vibewf::BOOST_TAIL_MS) vibewf::boostNote(boost_, interactAt_);
+    if (easeStarted) vibewf::boostNote(boost_, now);
+    const bool boostOn = clocked && baseRowTarget > 0 && vibewf::boostActive(boost_, now, easing);
+    const double dispHz = cfg.displayCapHz > 0 ? (cfg.panelHz > 0 ? std::min(cfg.displayCapHz, cfg.panelHz) : cfg.displayCapHz)
+                                               : (cfg.panelHz > 0 ? cfg.panelHz : 60);
+    const double rowTarget = boostOn ? vibewf::boostRowRate(baseRowTarget, avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, dispHz)
+                                     : baseRowTarget;
     const bool repeatsCarry = rowTarget > 0;
     // ★★ The zoom/tune ease is by TIME (wf_zoom_fan.h zoomEaseRows): the rows/s the waterfall runs at — the clock's rate, or
     //    one row a frame in Native.
