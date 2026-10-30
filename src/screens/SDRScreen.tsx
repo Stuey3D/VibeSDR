@@ -214,6 +214,7 @@ import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
+import { type WfSpeedSetting, isWfSpeedSetting, linkCapFor, speedNumbers, KIWI_SPEED_CAPS } from '../assets/wfSpeedCap';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -2882,7 +2883,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
   const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'>('20fps');
   // ★ SHARP by default: one row per received frame, exactly what the app has always drawn.
-  const [wfScroll,      setWfScroll]      = useState<'sharp'|'default'|'smooth'>('sharp');
+  const [wfScroll,      setWfScroll]      = useState<WfSpeedSetting>('sharp');
+  /* ★★ V12 MINIMUM / ECO (src/assets/wfSpeedCap.ts): caps the LINK at 5 / 10 fps so the SERVER sends less — pushed to the
+   *  live client like linkMode (VibeServer + UberSDR link managers, Kiwi's wf_speed). MINIMUM draws like NATIVE; ECO
+   *  is also a 10 rows/s row mode (wfRowTarget ROW_RULE.eco). */
+  const wfLinkCapRef = useRef(0);
+  useEffect(() => {
+    wfLinkCapRef.current = linkCapFor(wfScroll);
+    const c = client.current as unknown as { wfLinkCap?: number } | null;
+    if (c && 'wfLinkCap' in c) c.wfLinkCap = wfLinkCapRef.current;
+  }, [wfScroll]);
+  /** The server's own top waterfall rate (the link controller's uncapped top rung; 0 = not known) — the live numbers on
+   *  the Waterfall Speed buttons are worked out from it. */
+  const [wfNativeFps, setWfNativeFps] = useState(0);
   // Smooth tune: 120Hz interpolated scroll while interacting; discrete row
   // steps + ~30fps spectrum tween once settled (ProMotion idles → battery).
   const [smoothTune,    setSmoothTune]    = useState(true);
@@ -5434,6 +5447,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Low Data) is a preference, not a symptom, and must never show red.
         rungBars.current = Math.max(1, 4 - Math.max(1, rung)) as 1|2|3;
         settlingRef.current = settling;
+        // ★ V12: the server's own rate, for the Waterfall Speed buttons' live numbers (an hwinfo ceiling can move it).
+        { const nf = (client.current as unknown as { wfNativeFps?: number } | null)?.wfNativeFps;
+          if (typeof nf === 'number') setWfNativeFps(nf); }
         // Spectrum (from the client) + audio (counted here) = what the LINK is
         // actually carrying, which is the only figure worth showing.
         const audioKb = audioBytes.current / 1024;
@@ -6537,6 +6553,10 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Apply the persisted link mode too — the [linkMode] effect only fires on a CHANGE, so a mode
     // restored before this client existed would be lost (UI shows Low Data, wire runs adaptive 10fps).
     { const cc = c as unknown as { linkMode?: string }; if ('linkMode' in cc) cc.linkMode = linkModeRef.current; }
+    // …and the MINIMUM waterfall speed (a 5 fps link ceiling), for the same reason.
+    { const cc = c as unknown as { wfLinkCap?: number; wfNativeFps?: number };
+      if ('wfLinkCap' in cc) cc.wfLinkCap = wfLinkCapRef.current;
+      setWfNativeFps(cc.wfNativeFps ?? 0); }
     // Local hardware: thread the live device sample rate for panSpan()'s window.
     if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
     // VibeServer PIN: append the auth suffix to the spectrum WS.
@@ -7370,13 +7390,16 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
   }, []);
 
-  const onWfScroll = useCallback((v: 'sharp'|'default'|'smooth') => {
+  /** ★ MINIMUM / ECO need a server that can be ASKED for fewer frames (VibeServer, UberSDR, Kiwi/Web-888). */
+  const wfCapsOk = route.params.serverType !== 'owrx';
+  const wfShown: WfSpeedSetting = wfCapsOk || linkCapFor(wfScroll) === 0 ? wfScroll : 'sharp';
+  const onWfScroll = useCallback((v: WfSpeedSetting) => {
     setWfScroll(v);
     AsyncStorage.setItem('lsv_wf_scroll', v).catch(() => {});
   }, []);
   useEffect(() => {
     AsyncStorage.getItem('lsv_wf_scroll').then((v: string | null) => {
-      if (v === 'sharp' || v === 'default' || v === 'smooth') setWfScroll(v);
+      if (isWfSpeedSetting(v)) setWfScroll(v);
     }).catch(() => {});
   }, []);
   const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps') => {
@@ -10684,7 +10707,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfSharpness={wfSharpness}
         minRangeDb={dabOn ? 15 : 30}
         frameRate={frameRate}
-        wfScroll={wfScroll}
+        wfScroll={wfShown}   /* ★ every speed is a row mode (wfRowTarget) — MINIMUM / ECO included */
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
@@ -11723,7 +11746,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
         frameRate={frameRate}           onFrameRate={onFrameRate}
-        wfScroll={wfScroll}             onWfScroll={onWfScroll}
+        /* ★ MINIMUM / ECO only where the SERVER can be asked for fewer frames (VibeServer, UberSDR, Kiwi/Web-888).
+           OpenWebRX has no rate lever, so there they would save nothing (and ECO on its ~9 fps feed IS native) — hidden
+           (AGENTS.md: no one-radio controls), and a saved one shows as what it draws there: NATIVE. */
+        wfScroll={wfShown}  onWfScroll={onWfScroll}
+        wfCapsOk={wfCapsOk}
+        wfSpeedNums={speedNumbers(wfNativeFps, isKiwi ? KIWI_SPEED_CAPS : undefined)}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         linkMode={linkMode}             onLinkMode={onLinkMode}
         drumMode={drumMode}             onDrumMode={onDrumMode}

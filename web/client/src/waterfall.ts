@@ -142,11 +142,11 @@ export class Waterfall {
   setSharpRows(on: boolean) { this.sharpRows = on; if (!this.scroll) this.pacer.setRate(this.rowsPerSec, on, renderDpr()); }
   /** ★★★ THE SCROLL MODE, and the rows follow the FEED (Stuart 10-20, src/assets/wfRowTarget.ts — the app's rule):
    *  Sharp = actual rows; Default = min(20, 3 x feed); Smooth = min(60, 6 x feed); snapped to a divisor of 60. */
-  setScroll(scroll: 'sharp' | 'default' | 'smooth') {
+  setScroll(scroll: 'minimum' | 'sharp' | 'eco' | 'default' | 'smooth') {
     this.scroll = scroll; this.sharpRows = scroll === 'sharp';
     this.pacer.setScroll(scroll, renderDpr());
   }
-  private scroll: 'sharp' | 'default' | 'smooth' | null = null;
+  private scroll: 'minimum' | 'sharp' | 'eco' | 'default' | 'smooth' | null = null;
   private sharpRows = false;
 
 

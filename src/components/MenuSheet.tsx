@@ -69,6 +69,7 @@ import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import type { Textures } from '../constants/assetDensity';
+import type { WfSpeedSetting } from '../assets/wfSpeedCap';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -341,8 +342,12 @@ export interface MenuSheetProps {
   onPeakHold?:        (v: boolean) => void;
   frameRate?:         '10fps' | '20fps' | '30fps';
   onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
-  wfScroll?:          'sharp' | 'default' | 'smooth';
-  onWfScroll?:        (v: 'sharp' | 'default' | 'smooth') => void;
+  wfScroll?:          WfSpeedSetting;
+  onWfScroll?:        (v: WfSpeedSetting) => void;
+  /** ★ V12: offer MINIMUM / ECO (5 / 10 fps link ceilings) — false where the server has no rate lever (OpenWebRX). */
+  wfCapsOk?:          boolean;
+  /** ★ V12: the live rows/s each Waterfall Speed choice gives on this server (wfSpeedCap.speedNumbers); null = unknown. */
+  wfSpeedNums?:       Record<WfSpeedSetting, number> | null;
   smoothTune?:        boolean;
   onSmoothTune?:      (v: boolean) => void;
   onIdleSlow?:        (v: boolean) => void;
@@ -1287,7 +1292,7 @@ function MenuSheetBody({
   specFloor = 0, onSpecFloor, visualGain = 0, onVisualGain,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
-  frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll,
+  frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll, wfCapsOk = true, wfSpeedNums = null,
   smoothTune = true, onSmoothTune,
   onSpecRatio,
 }: MenuSheetProps) {
@@ -1902,19 +1907,38 @@ function MenuSheetBody({
                     history, so anything that changes it rescales the picture — deriving it from the
                     live data rate is what made the waterfall compress and expand. A constant cannot
                     do that. Speed therefore follows the data rate, which is what SHARP always did. */}
+                {/* ★★ V12 MINIMUM · ECO · NATIVE · [DEFAULT · SMOOTH] — slowest to smoothest (Stuart 2026-10-28). NATIVE is
+                    what was SHARP (stored value still 'sharp'). The two that add interpolated rows sit in an outlined group;
+                    MINIMUM / ECO cap the LINK so the server sends less (src/assets/wfSpeedCap.ts) and are offered only where
+                    the server has a rate lever (not OpenWebRX). Each key carries its LIVE rows/s on this server. */}
+                {!!onWfScroll && (() => {
+                  const lbl = (name: string, k: WfSpeedSetting) => wfSpeedNums ? `${name} ${wfSpeedNums[k]}` : name;
+                  const key = (name: string, k: WfSpeedSetting) => (
+                    <Btn label={lbl(name, k)} active={wfScroll === k} onPress={() => onWfScroll?.(k)}
+                      a11y={wfSpeedNums ? `${name}, ${wfSpeedNums[k]} rows a second` : name} style={styles.wfSpeedBtn} />
+                  );
+                  return (<>
                 <SubLabel label="Waterfall Speed" />
                 <BtnRow>
-                  <Btn label="SHARP"   active={wfScroll==='sharp'}   onPress={() => onWfScroll?.('sharp')} />
-                  <Btn label="DEFAULT" active={wfScroll==='default'} onPress={() => onWfScroll?.('default')} />
-                  <Btn label="SMOOTH"  active={wfScroll==='smooth'}  onPress={() => onWfScroll?.('smooth')} />
+                  {wfCapsOk && key('MINIMUM', 'minimum')}
+                  {wfCapsOk && key('ECO', 'eco')}
+                  {key('NATIVE', 'sharp')}
+                  <View style={styles.wfInterpGroup}>
+                    <View style={styles.wfInterpRow}>
+                      {key('DEFAULT', 'default')}
+                      {key('SMOOTH', 'smooth')}
+                    </View>
+                    <Text style={styles.wfInterpCap}>interpolated for smoothness</Text>
+                  </View>
                 </BtnRow>
                 <Text style={styles.wfNote}>
-                  {wfScroll === 'sharp'
-                    ? 'One row per received frame — most detail, scrolls at the data rate.'
-                    : wfScroll === 'default'
-                    ? 'Two rows per frame — a little interpolation, twice the scroll speed.'
-                    : 'Four rows per frame — continuous motion on a slow feed, less real detail.'}
+                  {(wfCapsOk
+                    ? '5 fps is the minimum waterfall rate. Minimum and Eco save data by asking the server for less — no effect when it already sends that little. Eco — 10 rows a second: asks a faster server for less, fills in a slower one. '
+                    : '')
+                  + 'Native is the server\'s own rate, every row a real frame. Default and Smooth add interpolated rows for a smoother scroll.'}
                 </Text>
+                  </>);
+                })()}
 
                 {/* ★★★ THE IDLE SAVER IS GONE, AND SO IS ITS SWITCH. It slowed the spectrum after
                     30 s without a touch, which read "nobody is looking" from "nobody is touching" —
@@ -2080,6 +2104,12 @@ function MenuSheetBody({
                 <Btn label="FULL"     active={linkMode==='full'}     onPress={() => onLinkMode('full')} />
                 <Btn label="LOW DATA" active={linkMode==='lowData'}  onPress={() => onLinkMode('lowData')} />
               </BtnRow>
+              {/* ★ V12: a Waterfall Speed cap is a ceiling on all three — say so where FULL would otherwise look broken. */}
+              {wfCapsOk && (wfScroll === 'minimum' || wfScroll === 'eco') && (
+                <Text style={styles.wfNote}>
+                  {`Waterfall Speed ${wfScroll === 'minimum' ? 'MINIMUM' : 'ECO'} caps the rate at ${wfScroll === 'minimum' ? 5 : 10} fps — Auto still steps down on a poor link.`}
+                </Text>
+              )}
             </>)}
             {/* Back-to-list, Favourite and Set-default moved OUT to the ServersChip
                 (top-left of the spectrum) — they're the "which server am I on / how
@@ -2233,6 +2263,13 @@ const makeStyles = (pt: PopupTokens) => { const C = menuC(pt); return StyleSheet
 
   btnRow:    { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingVertical: 4 },
   btnRowCol: { flexDirection: 'column', gap: 6 },
+  /* ★ V12 Waterfall Speed: DEFAULT + SMOOTH outlined together as the INTERPOLATED pair. The sheet's own control-edge
+   *  colour (C.frame), so it reads on default / silver / black alike; the caption is the note style, smaller. */
+  wfInterpGroup: { borderWidth: 1, borderColor: C.frame, borderRadius: 8, paddingHorizontal: 4, paddingTop: 4, paddingBottom: 2, alignItems: 'center' },
+  wfInterpRow:   { flexDirection: 'row', gap: 6 },
+  /* Five keys with numbers: narrower than the sheet's default key so they wrap cleanly on an SE in Display Zoom. */
+  wfSpeedBtn:    pt.metal ? { minWidth: 0, paddingHorizontal: 8 } : { paddingHorizontal: 10 },
+  wfInterpCap:   onMetal(pt, { color: C.note, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, letterSpacing: 0.5, marginTop: 2 }, engraveText(pt, pt.note)),
   optRow:    { paddingTop: 2, paddingBottom: 0 },
 
   // a11y .lsv-mp-btn: 15px text, 11×16 padding

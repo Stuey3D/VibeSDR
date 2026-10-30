@@ -208,6 +208,10 @@ export class VibeServerAdapter implements SDRBackend {
    *  default). The client's own setter reconfigures the running LinkManager live. */
   get linkMode(): VibeServerClient['linkMode'] { return this.client.linkMode; }
   set linkMode(m: VibeServerClient['linkMode']) { this.client.linkMode = m; }
+  /** ★ V12 MINIMUM / ECO waterfall speed (fps ceiling) — FORWARD, the same trap as linkMode: SDRScreen sets it here. */
+  get wfLinkCap(): number { return this.client.wfLinkCap; }
+  set wfLinkCap(fps: number) { this.client.wfLinkCap = fps; }
+  get wfNativeFps(): number { return this.client.wfNativeFps; }
 
   /** Local hardware: thread the live device sample rate for panSpan()'s Fs window. */
   setLocalSampleRate(hz: number) { this.client.localSampleRate = hz; }

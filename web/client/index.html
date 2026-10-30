@@ -2877,6 +2877,14 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
    appeared to be actually hit its neighbour. */
 .seg { display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
 .seg button { padding: 5px 9px; font-size: 11px; flex: 0 0 auto; }
+/* ★ V12 Waterfall speed: DEFAULT + SMOOTH outlined together as the interpolated pair, with a caption; the live rows/s
+   after each name. The group wraps as one piece on a narrow phone. */
+.wfInterp { display: inline-flex; flex-direction: column; align-items: center; flex: 0 0 auto;
+  border: 1px solid var(--btn-border); border-radius: 6px; padding: 2px 3px 1px; }
+.wfInterpRow { display: flex; gap: 3px; }
+.wfInterpCap { font-size: 9px; letter-spacing: 0.04em; color: var(--text-dim); line-height: 1.3; }
+.seg button .wfNum { margin-left: 4px; opacity: 0.7; font-variant-numeric: tabular-nums; }
+.seg button .wfNum:empty { display: none; }
 select.btn { padding: 6px 8px; }
 /* ★ CONTROL COLOURS (controlColours.ts): a row of swatches and a native colour input for "custom".
    Round, with the chosen one ringed — the ring is white-on-black so it shows on every swatch colour. */
@@ -4903,15 +4911,25 @@ select.btn { padding: 6px 8px; }
                    that are largely made up.
        ★ Neither the renderer nor the SPECTRUM TRACE changes; this only decides how many rows are
          synthesised between real frames. -->
+  <!-- ★★ V12 (Stuart 2026-10-28): MINIMUM · ECO · NATIVE · [DEFAULT · SMOOTH], slowest to smoothest. NATIVE was SHARP
+       (the stored value is still 'sharp'). MINIMUM / ECO ask the server for 5 / 10 fps (src/assets/wfSpeedCap.ts); the
+       outlined pair add interpolated rows. Each key carries its live rows/s on this server (main.ts refreshWfScrollSeg). -->
   <div class="mrow">
     <label>WATERFALL</label>
     <div class="seg" id="wfScrollSeg">
-      <button class="btn" data-wfscroll="sharp">SHARP</button>
-      <button class="btn on" data-wfscroll="default">DEFAULT</button>
-      <button class="btn" data-wfscroll="smooth">SMOOTH</button>
+      <button class="btn" data-wfscroll="minimum">MINIMUM<span class="wfNum"></span></button>
+      <button class="btn" data-wfscroll="eco">ECO<span class="wfNum"></span></button>
+      <button class="btn" data-wfscroll="sharp">NATIVE<span class="wfNum"></span></button>
+      <span class="wfInterp"><span class="wfInterpRow">
+        <button class="btn on" data-wfscroll="default">DEFAULT<span class="wfNum"></span></button>
+        <button class="btn" data-wfscroll="smooth">SMOOTH<span class="wfNum"></span></button>
+      </span><span class="wfInterpCap">interpolated for smoothness</span></span>
     </div>
   </div>
-  <div class="rowNote" id="wfScrollNote">A little interpolation to even out a jittery link.</div>
+  <div class="rowNote" id="wfScrollNote">5 fps is the minimum waterfall rate. Minimum and Eco save data by asking the server
+    for less — no effect when it already sends that little. Eco — 10 rows a second: asks a faster server for less, fills
+    in a slower one. Native is the server's own rate, every row a real frame. Default and Smooth add interpolated rows for
+    a smoother scroll.</div>
   <div class="mrow" id="rowWfSpeed">
     <label>WATERFALL SPEED</label>
     <div class="seg" id="wfSpeedSeg">

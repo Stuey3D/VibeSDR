@@ -27,17 +27,30 @@
  *    the 60 a fresh start at 10 gives (hysteresis on the output got stuck at 30 there — 6 x 10 is exactly 60).
  */
 
-export type WfScroll = 'sharp' | 'default' | 'smooth';
+/* ★★ V12 ECO (Stuart 2026-10-28, src/assets/wfSpeedCap.ts): "a good blend of smooth and data savings" — EXACTLY 10 rows/s.
+ *  The LINK is capped at 10 (a 20 fps server sends half); a slower feed is filled in to 10 by the same over-generate-and-
+ *  discard pacing Default and Smooth use ("the interpolation always over interpolates and discards leaving headroom to
+ *  account for link rate judder") — 9 fps → 10, 5 → 10, 3.3 → 10, never 9 × 2 = 18 or a feed multiple. */
+/* ★ V12 MINIMUM: the server is ASKED for 5 fps and the rows are actual rows — EXCEPT on a feed below 5 (a 2 fps server,
+ *  UberSDR's 3.3 emergency rung), which is filled in to an even 5 rows/s by the same rule. 5 is MINIMUM's one rate. */
+export type WfScroll = 'minimum' | 'sharp' | 'eco' | 'default' | 'smooth';
 
 /** Rates that divide 60 evenly (and so 120): each is a whole number of frames per row on 60/120 Hz panels. */
 export const ROW_RATES = [10, 12, 15, 20, 30, 60] as const;
 /** The cap and the multiplier for each setting. */
 export const ROW_RULE: Record<Exclude<WfScroll, 'sharp'>, { cap: number; mult: number }> = {
+  minimum: { cap: 5,  mult: 6 },
+  eco:     { cap: 10, mult: 6 },   // ★ mult 6 (the repeat limit) so even a 1.7 fps feed is lifted to 10
   default: { cap: 20, mult: 3 },
   smooth:  { cap: 60, mult: 6 },
 };
 /** ±15 %: how far the measured feed may move before the target follows it. */
 export const ROW_HYST = 0.15;
+
+/** The scroll mode for a row-rate cap (WaterfallView carries the cap as targetRows): 0 sharp, 5 minimum, 10 eco, 20
+ *  default, 60 smooth. */
+export const scrollForCap = (cap: number): WfScroll =>
+  (cap >= 60 ? 'smooth' : cap >= 20 ? 'default' : cap >= 10 ? 'eco' : cap > 0 ? 'minimum' : 'sharp');
 /** A target computed from a feed 3 % short still snaps up to the rate it was meant to be (3.33 fps x 6 = 19.98 → 20). */
 const SNAP_SLACK = 1.03;
 
@@ -48,8 +61,26 @@ export function snappedTarget(scroll: WfScroll, fps: number): number {
   const { cap, mult } = ROW_RULE[scroll];
   const raw = Math.min(cap, mult * fps) * SNAP_SLACK;
   let best = 0;
-  for (const r of ROW_RATES) if (r <= raw && r <= cap) best = r;
+  // ★ MINIMUM's one rate, 5, is not a ROW_RATE (Default must not start lifting a 1.7 fps feed to 5); 5 divides 60 too.
+  for (const r of scroll === 'minimum' ? [5] : ROW_RATES) if (r <= raw && r <= cap) best = r;
   return best;
+}
+
+/**
+ * ★★★ ROWS FOR ONE ARRIVAL (WaterfallView handleFrame; the Android engine's twin in spectrum_engine.cpp). The rows a
+ * data frame earns at `target` rows/s over `durMs` (the smoothed gap between arrivals), with a FRACTIONAL carry: the
+ * arrival is row 1, the rest are repeats spread over the interval. The AVERAGE is exactly the target on any feed — 9 fps
+ * at 10 rows/s is 1,1,1,1,1,1,1,1,2 — never a whole multiple of the feed (9 × 2 = 18). The display driver then releases
+ * the rows on the display's beat from a playout buffer (utils/wfPace.ts rowPace), so the pace on screen is the target,
+ * evenly. At most 8 extras (a stall must not repay as a burst). Returns the extras (rows beyond the arrival).
+ */
+export function carryRows(carry: { current: number }, durMs: number, target: number): number {
+  if (!(target > 0) || !(durMs > 0)) return 0;
+  carry.current += durMs / (1000 / target);
+  let extras = Math.max(0, Math.floor(carry.current) - 1);
+  carry.current -= Math.floor(carry.current);
+  if (extras > 8) extras = 8;
+  return extras;
 }
 
 /** Latch state for one waterfall. `latched` = the feed rate the target was decided from (0 = none yet). */
