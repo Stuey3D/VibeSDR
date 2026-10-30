@@ -851,6 +851,24 @@ public:
             if (!pSeeded_) { p_ = pin; pSeeded_ = true; }
             p_ += 1.0e-4f * (pin - p_);
             const float p = y.real() * y.real() + y.imag() * y.imag();
+            /* ★★★ THE RUNAWAY GUARD HAS TO BE PER SAMPLE, NOT PER BLOCK (2026-10-30). The block guard
+             *     below runs after the whole block has been written — and a CMA that diverges does it
+             *     exponentially, inside one block: on the Lenovo RSP1A's 6 MS/s capture of 96.1 the
+             *     output went from a sane level to Inf to NaN 1081 samples into a 2730-sample block
+             *     (p_ 7e-6, i.e. the station at -51 dBFS). The NaN went on into the discriminator and
+             *     killed the pilot PLL for good (see StereoPLL's guard). So: an output more than 40 dB
+             *     above the running input power — far past anything taps of energy ≤ 16 can make
+             *     (≤ 16 × 9 = 22 dB) — or a non-finite one, is a diverged equaliser. Back to
+             *     pass-through on the spot, THIS sample passed through unchanged (the history is kept,
+             *     so there is no hole), and the level estimate kept: it is the input's, still true.
+             *  ★ One compare per sample, on a path that only runs while the CEQ is engaged. */
+            if (!(p <= 1.0e4f * p_ + 1.0e-20f)) {
+                w_.assign((size_t)n_, cf32{0.0f, 0.0f});
+                w_[(size_t)(n_ / 2)] = cf32{1.0f, 0.0f};
+                z[i] = hp[n_ / 2];
+                ++runaways_;
+                continue;
+            }
             const float e = p - p_;
             const float g = mu * e / (p_ * p_ + 1.0e-20f);
             for (int k = 0; k < n_; ++k) {
@@ -880,8 +898,11 @@ public:
         }
         return std::sqrt(e);
     }
+    /** How many times the per-sample guard has put the taps back to pass-through (a diverged equaliser). */
+    long runaways() const { return runaways_; }
 private:
     int n_ = 9, pos_ = 0;
+    long runaways_ = 0;
     float p_ = 0.0f;                 // running input power — the dispersion constant
     bool  pSeeded_ = false;
     std::vector<cf32> w_, hist_;
