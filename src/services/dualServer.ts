@@ -111,6 +111,18 @@ function set(next: DualState, quiet = false) {
   if (next === state) return;
   const prev = state;
   state = next;
+  // ★ A breadcrumb on every change of the pairing's SHAPE — phase, who is in front, each side's session, address and
+  //   voice — so Export logs shows how a pairing got where it did (Stuart, 2026-10-30: after dropping the second server
+  //   the audio surged, and leaving the server kept it playing).
+  if (prev.phase !== next.phase || prev.fg !== next.fg || prev.sides.length !== next.sides.length
+      || prev.sides.some((s, i) => s.id !== next.sides[i]?.id || s.transport !== next.sides[i]?.transport)) {
+    const where = (sd: DualSide) => {
+      const p = sd.params as { localHost?: string; localPort?: number; baseUrl?: string };
+      return `${sd.id.slice(0, 8)}@${p.localHost ? `${p.localHost}:${p.localPort ?? ''}` : (p.baseUrl ?? '?')}${sd.radioKey ?? ''}`;
+    };
+    crumb(`dual ${prev.phase}→${next.phase} fg ${next.fg?.slice(0, 8) ?? '-'} `
+      + next.sides.map((sd, i) => `s${i + 1} ${where(sd)} ${sd.transport}${sd.ended ? ' ended' : ''}`).join(' · '));
+  }
   onChanged(prev);
   const tell = () => subs.forEach((f) => { try { f(); } catch { /* a listener must not stop the rest */ } });
   if (quiet) setTimeout(tell, 0); else tell();
@@ -722,6 +734,9 @@ export function abandon(quiet = false) {
 export function isSolo(params: DualRouteLike & { baseUrl?: string }): boolean {
   const s = soloSide();
   if (!s) return false;
+  crumb(`dual pick ${params.localHost ?? params.baseUrl ?? '?'}:${params.localPort ?? ''} vs solo ${
+    (s.params as { localHost?: string }).localHost ?? (s.params as { baseUrl?: string }).baseUrl ?? '?'}:${
+    (s.params as { localPort?: number }).localPort ?? ''}${s.radioKey ?? ''}`);
   return pickSameServer({ params: s.params as DualRouteLike, radioKey: s.radioKey ?? '' }, params) === 'back';
 }
 
