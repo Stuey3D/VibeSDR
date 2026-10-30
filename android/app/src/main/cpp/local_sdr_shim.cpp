@@ -34311,6 +34311,8 @@ void LocalSdrShim::setVibeServerAutoNotch(bool on)      { g_dsp.rspAutoNotch.sto
 void LocalSdrShim::setVibeServerRfAgc(bool on) { g_vibeAgcRspOn.store(on ? 1 : 0, std::memory_order_relaxed); }
 static std::atomic<bool> g_rspDabDecim{false};
 void LocalSdrShim::setVibeServerRspVibeAgc(int choice) {
+    // ★ BENCH: VIBE_RSP_VIBEAGC=0|1|2 overrides the owner's setting, for a same-binary A/B without touching their config.
+    if (const char* e = std::getenv("VIBE_RSP_VIBEAGC")) choice = std::atoi(e);
     const int c = (choice >= 0 && choice <= 2) ? choice : 0;
     if (g_rspVagcOwner.exchange(c, std::memory_order_relaxed) != c) {
         g_rspVagcTripped.store(false, std::memory_order_relaxed);   // ★ the owner's word clears a hand-back
