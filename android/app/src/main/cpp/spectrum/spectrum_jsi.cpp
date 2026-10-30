@@ -113,6 +113,8 @@ public:
             k.smoothTune = flag(r, o, "smoothTune", true); k.targetRows = (int)num(r, o, "targetRows", 0);
             k.displayCapHz = (int)num(r, o, "displayCapHz", 0);
             k.panelHz = (int)num(r, o, "panelHz", 0);
+            k.stampViewRows = (int)num(r, o, "stampViewRows", 0);       // ★★ the scale stamps (wf_stamps.h)
+            k.stampMinGapRows = (int)num(r, o, "stampMinGapRows", 0);
             en.setConfig(k);
             return jsi::Value::undefined();
         });
@@ -178,6 +180,18 @@ public:
                 jsi::Array arr(r, u.specTarget.size());
                 for (size_t i = 0; i < u.specTarget.size(); i++) arr.setValueAtIndex(r, i, (double)u.specTarget[i]);
                 o.setProperty(r, "spec", arr);
+            }
+            o.setProperty(r, "stampGen", (double)u.stampGen);   // ★★ the scale stamps (wf_stamps.h), when they changed
+            if (u.stampsNew) {
+                jsi::Array arr(r, u.stamps.size());
+                for (size_t i = 0; i < u.stamps.size(); i++) {
+                    const auto& st = u.stamps[i];
+                    jsi::Object so(r);
+                    so.setProperty(r, "id", (double)st.id); so.setProperty(r, "frame", st.frame);
+                    so.setProperty(r, "lo", st.lo); so.setProperty(r, "span", st.span); so.setProperty(r, "born", st.born);
+                    arr.setValueAtIndex(r, i, so);
+                }
+                o.setProperty(r, "stamps", arr);
             }
             o.setProperty(r, "peakGen", (double)u.peakGen);
             if (u.peakPath) o.setProperty(r, "peak", vibe_rnskia::wrapPath(r, u.peakPath));   // adopts the handle

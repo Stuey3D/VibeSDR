@@ -144,6 +144,8 @@ bool SpectrumEngine::pollUi(UiUpdate& out) {
     out.specGen = specGen_; out.specHidden = specHidden_;
     if (specGen_ != uiSpec_) { out.specTarget = outSpec_; uiSpec_ = specGen_; }
     out.peakGen = peakGen_; out.peakPath = outPeak_; outPeak_ = nullptr;
+    out.stampGen = stampGen_;
+    if (stampGen_ != uiStamp_) { out.stamps = outStamps_; out.stampsNew = true; uiStamp_ = stampGen_; }
     return true;
 }
 
@@ -481,6 +483,23 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
     const int slot = vibewf::placeRow(ring_.data(), RING_ROWS, n, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_,
                                       motion_, fan_, -1, &start);
     placedLo_ = start; placedSpan_ = rowHzPerBin * n;
+    // ★★ SCALE STAMPS (wf_stamps.h; Stuart, 2026-10-30, #57): the row as DISPLAYED (through its fan map — eased rows too)
+    //    to the detector; a jump moved every row, so the stamps move with it. The UI hears only when the list changes.
+    {
+        const int viewRows = cfgNow_.stampViewRows > 0 ? cfgNow_.stampViewRows : 600;
+        if (fan_.jumpHz != 0) vibewf::stampJump(stamps_, fan_.jumpHz);
+        stamps_.minGapRows = cfgNow_.stampMinGapRows > 0 ? cfgNow_.stampMinGapRows : 45;
+        stamps_.sweepRows = std::max((int)std::ceil((fan_.rowRate > 0 ? fan_.rowRate : 30) * 2.5), (int)std::ceil(viewRows * 0.25));
+        double P = 0, Q = 0;
+        if (vibewf::displayMap(motion_, fan_.xfA.data(), fan_.xfB.data(), slot, n, P, Q))
+            vibewf::stampNoteRow(stamps_, frameCount_, P, Q * n, vibewf::stampSettleRows(fan_.rowRate));
+        if (!stamps_.stamps.empty()) vibewf::stampPrune(stamps_, frameCount_, std::min(RING_ROWS - 8, viewRows + 8));
+        if (stamps_.gen != stampSeen_) {
+            stampSeen_ = stamps_.gen;
+            std::lock_guard<std::mutex> lk(mx_);
+            outStamps_ = stamps_.stamps; stampGen_++; outVer_++;
+        }
+    }
     // ★★ V12 THE FULL-CAPTURE LAYER: this row's layer row at the same slot, in capture space (wf_wide.h) — only once a
     //    server has sent one. Through the detailed rows' own dB → index mapping (proc_'s range and brightness).
     if (fan_.layer) {

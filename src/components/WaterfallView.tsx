@@ -64,7 +64,10 @@ import {
   type SkData,
   type SkImage,
   type SkPath,
+  type SkFont,
   Group,
+  Text as SkText,
+  useTypeface,
 } from '@shopify/react-native-skia';
 import {
   useSharedValue,
@@ -73,6 +76,7 @@ import {
   runOnJS,
   runOnUI,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
 import { INACTIVE_INTENSITY, SWITCH_FADE_MS } from '../services/vfoAB';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -88,7 +92,9 @@ import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../servi
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { needleGeometry } from '../utils/needleGeometry';
-import { fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { displayMap, fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { newStampState, stampAlpha, stampColour, stampJump, stampLine, stampNoteRow, stampPrune, stampSettleRows, stampsShown,
+         stampSweepRows, stampTicks, STAMP_MIN_GAP_LABELS, type WfStamp } from '../utils/wfStamps';
 import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
 import { setWideSink } from '../services/wideRowBus';
 import { contAtWholeRow, contPace, easeAt, easeCompose, paceToCont, paceToSettled, PLAYOUT_MS, rowPace, rowRate, shownRate, traceLagMs } from '../utils/wfPace';
@@ -472,7 +478,9 @@ interface SpectrumEngineHost {
    *  (cpp/spectrum/wf_av_sync.h). Optional: a binary built before it holds nothing. */
   setAudioDelay?(ms: number): void;
   setConfig(c: { width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
-                 smoothTune: boolean; targetRows: number; displayCapHz?: number; panelHz?: number }): void;
+                 smoothTune: boolean; targetRows: number; displayCapHz?: number; panelHz?: number;
+                 /** ★★ the scale stamps (cpp/spectrum/wf_stamps.h): rows on screen, fewest rows between two */
+                 stampViewRows?: number; stampMinGapRows?: number }): void;
   setSettings(s: Record<string, number | boolean>): void;
   setBackground(bg: boolean): void;
   setCovered(c: boolean): void;
@@ -486,8 +494,89 @@ interface SpectrumEngineHost {
     moLo?: number; moHi?: number; fanK?: number; fanC?: number;
     specGen: number; specHidden: boolean; spec?: number[];
     peakGen: number; peak?: SkPath;
+    /** ★★ the scale stamps (wf_stamps.h): stampGen changes when they do; `stamps` comes with the change (absent from an
+     *  older binary — then there are none). */
+    stampGen?: number; stamps?: WfStamp[];
   } | null;
 }
+
+// ── SCALE STAMPS (utils/wfStamps.ts) ──────────────────────────────────────────
+/* ★★★ Stuart, 2026-10-30 (#57): "zoom in and a stamp of the previous frequency scale as it was is added onto the old
+ *     waterfall position and it gently drops off the bottom of the screen, same with tuning too if needed" — and "a
+ *     simple label at the old zoom/tune/pan position then the diagonals then the bandplan/frequency ticker at the top is
+ *     then the current". A thin ruler of the old scale (the ticker's own step and units) laid on the history at the top
+ *     of the rows it describes; it scrolls with them and fades off the bottom. An OVERLAY in the waterfall canvas only —
+ *     no row, uniform or clock is touched.
+ *  ★ COLOUR: the user's VFO colour with a dark shadow ("an opposite colour to the waterfall … i'd simply use orange like
+ *    my VFO"), white if that clashes with the palette (stampColour).
+ *  ★ COST: each stamp's ticks and text are built ONCE (its own memo); per display frame only its translate and opacity
+ *    move, worked out on the UI thread from the same uniforms that scroll the picture (stampLine) — so it never drifts
+ *    from its rows, through a resize or rotation too. No stamps = this renders nothing. At most STAMP_MAX (3).
+ *  ★ A LABEL LAYER, not a stamp-only one: an item is an anchor row + the view that row was drawn at (lo, span), so x is
+ *    (hz − lo) / span × width and y follows the row — a known-signal label (RTTY/WEFAX/FT8) is the same item with a
+ *    frequency and text instead of a ruler. */
+const STAMP_BAND = 13;          // pt — the faint band's height (the label is ~9.5 pt)
+const STAMP_FONT_PT = 9.5;
+const ATKINSON_TTF = require('../../assets/fonts/AtkinsonHyperlegible-Regular.ttf');
+
+type StampSink = React.MutableRefObject<((s: WfStamp[]) => void) | null>;
+
+const WfStampItem = React.memo(function WfStampItem({ s, width, rowPt, wfH, font, color, uHead, scrollFrac, uN, uQuant }: {
+  s: WfStamp; width: number; rowPt: number; wfH: number; font: SkFont; color: string;
+  uHead: SharedValue<number>; scrollFrac: SharedValue<number>; uN: SharedValue<number>; uQuant: SharedValue<number>;
+}) {
+  // Built once per stamp (and per width / font): the ticks, the labels and where each sits.
+  const els = useMemo(() => {
+    const ticks = stampTicks(s.lo, s.span, width, (sp) => {
+      const target = Math.max(4, Math.min(8, Math.floor(width / 70)));
+      let step = niceTick(sp / target);
+      while (step * width / sp < 52) step *= 2;
+      return step;
+    }, (hz) => fmtHz(hz), 52);
+    return ticks.map((t, i) => {
+      const w = t.label ? font.measureText(t.label).width : 0;
+      const lx = Math.max(2, Math.min(width - w - 2, t.x - w / 2));
+      return { key: i, x: t.x, label: t.label, lx };
+    });
+  }, [s.lo, s.span, width, font]);
+  const tr = useDerivedValue(() => {
+    const y = stampLine(uHead.value, s.frame, scrollFrac.value, uN.value, uQuant.value > 0.5) * rowPt;
+    return [{ translateY: y }];
+  }, [rowPt, s.frame]);
+  const op = useDerivedValue(() => {
+    const y = stampLine(uHead.value, s.frame, scrollFrac.value, uN.value, uQuant.value > 0.5) * rowPt;
+    return stampAlpha(y, STAMP_BAND, wfH, uHead.value - 1 - s.born);
+  }, [rowPt, wfH, s.frame, s.born]);
+  const ty = 4 + STAMP_FONT_PT;
+  return (
+    <Group transform={tr} opacity={op}>
+      <Rect x={0} y={0} width={width} height={STAMP_BAND} color="rgba(0,0,0,0.55)" />
+      <Rect x={0} y={0} width={width} height={0.75} color={hexRgba(color, 0.55)} />
+      {els.map((e) => <Rect key={'t' + e.key} x={e.x - 0.5} y={0} width={1} height={3.5} color={hexRgba(color, 0.85)} />)}
+      {els.map((e) => e.label ? <SkText key={'s' + e.key} x={e.lx} y={ty + 1} text={e.label} font={font} color="rgba(0,0,0,0.95)" /> : null)}
+      {els.map((e) => e.label ? <SkText key={'l' + e.key} x={e.lx} y={ty} text={e.label} font={font} color={color} /> : null)}
+    </Group>
+  );
+});
+
+const WfStampLayer = React.memo(function WfStampLayer({ sink, width, rowPt, wfH, color, uHead, scrollFrac, uN, uQuant }: {
+  sink: StampSink; width: number; rowPt: number; wfH: number; color: string;
+  uHead: SharedValue<number>; scrollFrac: SharedValue<number>; uN: SharedValue<number>; uQuant: SharedValue<number>;
+}) {
+  const [stamps, setStamps] = useState<WfStamp[]>([]);
+  useEffect(() => { sink.current = setStamps; return () => { sink.current = null; }; }, [sink]);
+  const typeface = useTypeface(ATKINSON_TTF);
+  const font = useMemo(() => { if (!typeface) return null; const f = Skia.Font(typeface, STAMP_FONT_PT); f.setEmbolden(true); return f; }, [typeface]);
+  if (!stamps.length || !font) return null;
+  return (
+    <>
+      {stampsShown(stamps, rowPt, STAMP_BAND).map((s) => (
+        <WfStampItem key={s.id} s={s} width={width} rowPt={rowPt} wfH={wfH} font={font} color={color}
+                     uHead={uHead} scrollFrac={scrollFrac} uN={uN} uQuant={uQuant} />
+      ))}
+    </>
+  );
+});
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -638,9 +727,17 @@ function WaterfallView({
   /** THE ZOOM FAN (utils/wfRowPlace.ts): per-slot maps + the displayed ring, made only once a zoom happens. */
   const fanSt = useRef<ReturnType<typeof newFanState> | null>(null);
   if (!fanSt.current) fanSt.current = newFanState(RING_ROWS);
+  // ★★ SCALE STAMPS (utils/wfStamps.ts): the detector (JS path) and the layer's setter; stampCfg = what pushRow needs.
+  const stampSt = useRef(newStampState());
+  const stampSink: StampSink = useRef(null);
+  const stampCfg = useRef({ minGapRows: 45, sweepRows: 0, keepRows: RING_ROWS });
   /** Ring rows that can be on screen (the shader's visible depth, + its blend row and margin): a zoom re-makes only these. */
   const fanVisible = useRef(RING_ROWS);
   fanVisible.current = Math.min(RING_ROWS, Math.ceil(shaderRows) + 4);
+  const stampRowPt = shaderRows > 0 ? wfRenderH / shaderRows : 1;   // one ring row's height on screen, pt
+  stampCfg.current.minGapRows = Math.ceil(STAMP_MIN_GAP_LABELS * STAMP_BAND / stampRowPt);
+  stampCfg.current.keepRows = Math.min(RING_ROWS - 8, Math.ceil(shaderRows) + 8);
+  stampCfg.current.sweepRows = stampSweepRows(fanSt.current!.rowRate, shaderRows);
   const proc = useRef(new SignalProcessor());
   /** ★★ V12 THE FULL-CAPTURE LAYER (utils/wfWide.ts; docs/v12/WATERFALL-FULL-CAPTURE.md): the newest picture of the whole
    *  capture (null until a VibeServer that sends SPWB has sent one — an older server allocates nothing), the detailed
@@ -713,6 +810,7 @@ function WaterfallView({
 
   // ── Colormap LUT + derived spectrum colours (9 stops, idx 15→235) ───────────
   const lut = useMemo(() => getColorLUT(colormap), [colormap]);
+  const stampCol = useMemo(() => stampColour(needleColor, lut), [needleColor, lut]);
   const specGradColors = useMemo(() => {
     // Sample LUT 90→235 (was 15→235): black-based palettes (Sonar etc.) are
     // near-invisible below ~idx 90, so the fill's baseline starts where the
@@ -1186,6 +1284,17 @@ function WaterfallView({
     // ★★ V12 THE FULL-CAPTURE LAYER: this row's layer row at the same slot, in capture space (utils/wfWide.ts) — the
     //    blended newest picture of the whole capture through the detailed rows' own dB → index mapping. Only once a
     //    server has sent one (fanSt.layer is null until then).
+    // ★★ SCALE STAMPS: the row as DISPLAYED (its placement through its fan map — eased rows included) to the detector;
+    //    a jump moved every row, so it moves the stamps too. The layer hears only when the stamps change.
+    {
+      const fs = fanSt.current!, ss = stampSt.current, g0 = ss.gen, sc = stampCfg.current;
+      if (fs.jumpHz) stampJump(ss, fs.jumpHz);
+      ss.minGapRows = sc.minGapRows; ss.sweepRows = sc.sweepRows;
+      const m = displayMap(motionSt.current!, fs.xfA, fs.xfB, slot, n);
+      if (m) stampNoteRow(ss, frameCount.current, m[0], m[1] * n, stampSettleRows(fs.rowRate));
+      if (ss.stamps.length) stampPrune(ss, frameCount.current, sc.keepRows);
+      if (ss.gen !== g0) stampSink.current?.(ss.stamps.slice());
+    }
     const layer = fanSt.current!.layer;
     if (layer) {
       const w = frameCfg.current.width;
@@ -1648,6 +1757,8 @@ function WaterfallView({
     console.log(`[VibeDiag] wf pace rows/frame 0..5: ${h} | gap ${gap} ms | rate ${rate} rows/s | lead ${lead} rows`);
   }, []);
   const engAvail = useSharedValue(0);    // the newest row in the image
+  const engStampGen = useSharedValue(0);
+  const applyEngineStamps = useCallback((list: WfStamp[]) => { stampSink.current?.(list); }, []);
   const enginePoll = useFrameCallback((fi) => {
     'worklet';
     if (specDead.value || !engine) return;
@@ -1697,6 +1808,11 @@ function WaterfallView({
         if (pClocked.value !== p.rowRate > 0) pClocked.value = p.rowRate > 0;
       }
       uNSv.value = 1;
+      // ★★ SCALE STAMPS: the engine detects (wf_stamps.h), the layer draws — handed over only when the list changed.
+      if (p.stampGen != null && p.stampGen !== engStampGen.value && p.stamps) {
+        engStampGen.value = p.stampGen;
+        runOnJS(applyEngineStamps)(p.stamps);
+      }
       if (p.specGen !== engSpec.value) {
         engSpec.value = p.specGen;
         if (p.specHidden) {
@@ -2409,12 +2525,14 @@ function WaterfallView({
   }, [frameSink, enqueueFrame, engine, lastInteractAt]);
 
   const engineCfg = useRef<{ width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
-                             smoothTune: boolean; targetRows: number; displayCapHz: number; panelHz?: number } | null>(null);
+                             smoothTune: boolean; targetRows: number; displayCapHz: number; panelHz?: number;
+                             stampViewRows?: number; stampMinGapRows?: number } | null>(null);
   // ── Native engine: the state JS owns, forwarded when it changes ──────────────────────────────────────────
   useEffect(() => {
-    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value, panelHz: uiPanelMaxHz.value };
+    engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value, panelHz: uiPanelMaxHz.value,
+                          stampViewRows: Math.ceil(shaderRows), stampMinGapRows: stampCfg.current.minGapRows };
     engine?.setConfig(engineCfg.current);
-  }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS]);
+  }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS, shaderRows]);
   useEffect(() => { engine?.setCovered(covered); }, [engine, covered]);
   useEffect(() => {
     if (!engine) return;
@@ -2945,6 +3063,10 @@ function WaterfallView({
               </Shader>
             </Fill>
           ))}
+          {texReady && (
+            <WfStampLayer sink={stampSink} width={width} rowPt={stampRowPt} wfH={wfH} color={stampCol}
+                          uHead={uHead} scrollFrac={scrollFrac} uN={uNSv} uQuant={uQuantDrawSv} />
+          )}
           {needleInWaterfall}
         </Canvas>
         )}
