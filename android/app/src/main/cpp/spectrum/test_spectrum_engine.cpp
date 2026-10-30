@@ -513,6 +513,82 @@ int main() {
         CHECK(std::abs(off - lag) <= 1000.0 / rate / 2 + 3, "cap %d: the trace follows its row by traceLag %.1f ms (got %.1f)", cap, lag, off);
         delete e;
     }
+    // ── ★★★ V12 2026-10-30 THE WATERFALL WAITS FOR THE SOUND (wf_av_sync.h; scripts/test_wf_avsync.ts proves the rule).
+    //    The same 10 fps feed with no audio delay and with 300 ms of it (polled at 4 Hz, as JS does): every frame's row
+    //    reaches the ring later by the hold (300 − the clock's own route), the trace still follows its row by traceLag,
+    //    the rows keep coming one per tick (the hold's growth is the clock's repeats — Stuart: "simply duplicate the
+    //    previous lines if needed"), and during a drag (12–14 s) nothing is held at all. ──
+    for (int cap : {20, 60}) {
+        struct R { double latRest = 0, latDrag = 0, latAfter = 0, off = 0; int missing = 0, gaps = 0, nT = 0; };
+        auto runOne = [&](double audio) {
+            auto* e = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+            EngineConfig c; c.width = 400; c.wfTop = 120; c.specH = 78; c.targetRows = cap;
+            e->setConfig(c); e->setView(100e6, 2.048e6);
+            uint32_t seed = 777; auto rnd = [&] { seed = seed * 1664525u + 1013904223u; return (seed >> 8) / 16777216.0; };
+            const double T0 = gClock; double next = 0; int fi = 0; double lastHeadT = -1, head = 0;
+            const double tick = 1000.0 / (cap == 20 ? 30 : 60);
+            std::vector<double> arrAt, ringAt, specAt;
+            R r;
+            for (double t = 0; t < 22000; t += 1) {
+                gClock = T0 + t;
+                const bool drag = t >= 12000 && t < 14000;
+                if (audio >= 0 && std::fmod(t, 250) == 0) e->setAudioDelay(audio + 20 * std::fmod(t / 20, 1) - 10);
+                if (t >= next) {
+                    if (drag) e->setLastInteractAt(gClock);
+                    auto b = frame(1024, 100 + 40 * (fi % 20)); e->pushFrame(b.data(), 1024, 100e6, 2.048e6, 100e6);
+                    arrAt.push_back(t); ringAt.push_back(-1); specAt.push_back(-1); fi++;
+                    next = fi * 100.0 + (rnd() * 2 - 1) * 15;
+                }
+                e->testStep(gClock);
+                UiUpdate u;
+                if (e->pollUi(u)) {
+                    if (u.image) {
+                        if (u.head != head) {
+                            const bool calm = t > 5000 && (t < 11500 || t > 16000);
+                            if (calm && lastHeadT >= 0 && t - lastHeadT > tick + 2) r.gaps++;
+                            lastHeadT = t; head = u.head;
+                        }
+                        const uint8_t* rr = rowOf((FakeImage*)u.image, u.head); int pos = -1;
+                        for (int b = 0; b < 1024; b++) if (rr[b] > 200) { pos = b; break; }
+                        for (int k = fi - 1; k >= 0 && k >= fi - 8; k--) if (std::abs(100 + 40 * (k % 20) - pos) <= 4) { if (ringAt[k] < 0) ringAt[k] = t; break; }
+                        rlImage(u.image);
+                    }
+                    if (!u.specTarget.empty()) {
+                        int best = 0; for (int k = 1; k < (int)u.specTarget.size(); k++) if (u.specTarget[k] > u.specTarget[best]) best = k;
+                        const int bin = (int)std::lround(best * 1024.0 / u.specTarget.size());
+                        for (int k = fi - 1; k >= 0 && k >= fi - 8; k--) if (std::abs(100 + 40 * (k % 20) - bin) <= 8) { if (specAt[k] < 0) specAt[k] = t; break; }
+                    }
+                    if (u.peakPath) rlPath(u.peakPath);
+                }
+            }
+            int nR = 0, nD = 0, nA = 0;
+            for (size_t k = 0; k + 8 < arrAt.size(); k++) {
+                const double a = arrAt[k];
+                if (a < 5000) continue;
+                const bool rest = a < 11000, dragW = a >= 12200 && a < 14000, after = a >= 16000;
+                if (!rest && !dragW && !after) continue;
+                if (ringAt[k] < 0) { if (rest || after) r.missing++; continue; }
+                const double l = ringAt[k] - a;
+                if (rest) { r.latRest += l; nR++; } else if (dragW) { r.latDrag += l; nD++; } else { r.latAfter += l; nA++; }
+                if ((rest || after) && specAt[k] >= 0) { r.off += specAt[k] - ringAt[k]; r.nT++; }
+            }
+            r.latRest /= std::max(1, nR); r.latDrag /= std::max(1, nD); r.latAfter /= std::max(1, nA); r.off /= std::max(1, r.nT);
+            delete e;
+            return r;
+        };
+        const R b = runOne(-1), a = runOne(300);
+        const double rate = cap == 20 ? 30 : 60, lag = vibewf::traceLagMs(rate);
+        const double want = 300 - vibewf::clockOwnMs(100, rate);
+        std::printf("  A/V hold, %s: arrival → ring %.1f → %.1f ms at rest (hold %.0f), %.1f after a drag; during the drag %.1f → %.1f; "
+                    "ring → trace %.1f (traceLag %.1f); row gaps %d → %d; missing %d\n",
+                    cap == 20 ? "Default" : "Smooth", b.latRest, a.latRest, want, a.latAfter, b.latDrag, a.latDrag, a.off, lag, b.gaps, a.gaps, a.missing);
+        CHECK(std::abs((a.latRest - b.latRest) - want) <= 1000.0 / rate + 6, "cap %d: held by %.0f ms at rest (got %.1f)", cap, want, a.latRest - b.latRest);
+        CHECK(std::abs((a.latAfter - b.latRest) - want) <= 1000.0 / rate + 6, "cap %d: held again after the drag (%.1f)", cap, a.latAfter - b.latRest);
+        CHECK(std::abs(a.latDrag - b.latDrag) <= 3, "cap %d: nothing held during a drag (%.1f vs %.1f ms)", cap, a.latDrag, b.latDrag);
+        CHECK(std::abs(a.off - lag) <= 1000.0 / rate / 2 + 3, "cap %d: the trace still follows its row by traceLag %.1f (got %.1f)", cap, lag, a.off);
+        CHECK(a.gaps <= b.gaps, "cap %d: no row gaps the clock did not already have (%d → %d)", cap, b.gaps, a.gaps);
+        CHECK(a.missing == 0, "cap %d: every frame reaches the ring (%d missing)", cap, a.missing);
+    }
     // ── ★★★ THE INTERACTION BOOST (wf_row_clock.h boostRowRate — Stuart 2026-10-29): during a tune the clock's rate steps
     //    up to the display's maximum as set (≤ 120, ≤ 12 × the feed), from frames already here, and back after the tail;
     //    NATIVE is untouched (no rate, one row a frame, through the same tune). ──
