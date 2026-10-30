@@ -59,6 +59,9 @@ interface ServerStation {
   bandwidth_high?: number;
   /** DAB identity for a learnt DAB service (mode "dab"). */
   sid?: number; eid?: number; ecc?: number;
+  /** ★ VibeServer's GET /bookmarks: saved by the owner (true) or learnt from RDS (false); the PI heard; where a learnt
+   *  name came from (src/services/stations.ts ServerBookmark) — read by the known-signal labels. */
+  manual?: boolean; pi?: number; nameSrc?: number;
 }
 
 let stations: ServerStation[] = [];

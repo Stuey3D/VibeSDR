@@ -91,6 +91,7 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
+import { labelLayout, estimateLabelWidth, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
 import { needleGeometry } from '../utils/needleGeometry';
 import { displayMap, fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { hzOnRow, rowAtLine, newStampState, stampAlpha, stampColour, stampJump, stampLine, stampNoteRow, stampPrune, stampSettleRows, stampsShown,
@@ -296,6 +297,9 @@ export interface WaterfallViewProps {
   /** ★★ V12 beta25: the radio's DC spike (Hz; 0 = none) — a small red "DC Spike / Not a real signal" label at it. The
    *  caller decides when (FREE tuning on a radio with a real spike — SDRScreen dcSpikeShown). */
   dcSpikeHz?: number;
+  /** ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts): the sorted list in force (the curated table + EiBi's on-air utility
+   *  entries), or null/empty = off. The caller (SDRScreen) owns the toggle; nothing is laid out or drawn while it is off. */
+  knownSignals?: readonly KnownSignal[] | null;
   /**
    * ★★ THE OPAQUE CONTROL DECK, in WINDOW coordinates (x, y, w, h, corner radius) — or null when nothing opaque
    * covers the waterfall (Transparency on, the deck hidden, mid-rotation). The waterfall shader is then drawn only
@@ -599,7 +603,7 @@ function WaterfallView({
   bgImageUrl = null, bgOpacity = 0, stationId = null, onStationIdHeight, stationIdRight = 6, stationIdLeft,
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
-  centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0,
+  centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0, knownSignals = null,
   deckOcclusion = null,
 }: WaterfallViewProps) {
 
@@ -2652,6 +2656,24 @@ function WaterfallView({
     return x >= 0 && x <= width ? x : null;
   }, [dcSpikeHz, hzToX, width, bwHz]);
 
+  // ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts — Stuart, 2026-10-30: "those labels should sit just in the spectrum so as
+  //    to not overcrowd the waterfall, only in the waterfall when spectrum is disabled", "similar to the RF centre and DC
+  //    spike and the frequency band labels"). On the two rows the boundary labels use — LISTEN's (markerLabelBase) and RF
+  //    CENTRE's (14 above) — with their boxes BLOCKED, so a label is never drawn over them; the dB axis's left edge too.
+  //    Laid out only when the view, the dial or the list changes; null while the toggle is off or none is in view.
+  //    ★ The same layout as the web's (waterfall.ts _drawKnown). RN cannot measure text synchronously, so a label's box
+  //      is estimated (estimateLabelWidth) — generous, and the box sizes itself to the text when drawn.
+  const knownNX = needle && showCenterMarker ? needle.nX : null;
+  const knownCX = centerMarker ? centerMarker.x : null;
+  const knownPlaced = useMemo(() => {
+    if (!knownSignals || !knownSignals.length || !(bwHz > 0) || !(width > 0)) return null;
+    const blocked: BlockedBox[] = [{ row: 0, x0: 0, x1: 30 }, { row: 1, x0: 0, x1: 30 }];
+    if (knownNX !== null) { const l = Math.min(width - 96, knownNX + 3); blocked.push({ row: 0, x0: l, x1: l + 90 }); }
+    if (knownCX !== null) { const l = Math.min(width - 96, knownCX + 3); blocked.push({ row: 1, x0: l, x1: l + 96 }); }
+    const p = labelLayout(knownSignals, visStart, bwHz, width, (t) => estimateLabelWidth(t, 9, 3, 0.62), tuneHz, blocked, 4);
+    return p.length ? p : null;
+  }, [knownSignals, visStart, bwHz, width, tuneHz, knownNX, knownCX]);
+
   // ── Visible tiles (deckOcclusion) ───────────────────────────────────────────
   // The deck arrives in WINDOW coordinates; this view's own window origin turns it into canvas coordinates.
   const rootRef = useRef<View | null>(null);
@@ -3173,6 +3195,28 @@ function WaterfallView({
           <View pointerEvents="none" style={[styles.dcSpikeTick, { left: dcSpikeX - 0.5, top: markerLabelBase - 44 }]} />
         )}
 
+        {/* ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts): a thin tick at the signal down to the spectrum's floor (beside the
+            box on the waterfall when the spectrum is hidden), a bar along a digital mode's span, and the decoder's name on
+            RF CENTRE's dark box in a fixed pale lilac — never the VFO colour, which LISTEN uses on the same row. */}
+        {knownPlaced && knownPlaced.map((p, i) => {
+          const top = p.row === 0 ? markerLabelBase : markerLabelBase - 14;
+          const tickBot = specShow && specH > 40 ? wfTop : top + 13;
+          const s = p.sig;
+          const bx0 = s.lo != null ? Math.max(0, hzToX(s.lo)) : 0, bx1 = s.hi != null ? Math.min(width, hzToX(s.hi)) : 0;
+          return (
+            <React.Fragment key={'ks' + i + ':' + s.hz}>
+              <View pointerEvents="none" style={[styles.knownTick, { left: Math.round(p.x), top, height: Math.max(1, tickBot - top) }]} />
+              {bx1 - bx0 >= 3 && (
+                <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }]} />
+              )}
+              <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ')}
+                    style={[styles.knownBox, { left: p.lx, top }]}>
+                <Text numberOfLines={1} style={[styles.knownText, { fontFamily }]}>{s.label}</Text>
+              </View>
+            </React.Fragment>
+          );
+        })}
+
         {/* Wall labels — an unlabelled line is just clutter: say WHICH edge of the
             captured band it is, and at what frequency. (Web-client parity.) */}
         {wallOverlay?.loX != null && (
@@ -3300,6 +3344,11 @@ const styles = StyleSheet.create({
   dcSpikeSub: { position: 'relative', width: 90, textAlign: 'right', fontSize: 8, fontWeight: 'normal', color: 'rgba(255,110,110,0.9)',
                 textShadowColor: 'rgba(0,0,0,0.85)', textShadowRadius: 3 },
   dcSpikeTick: { position: 'absolute', width: 1, height: 22, backgroundColor: '#ff4d4d' },
+  // ★★ known-signal labels (utils/knownSignals.ts) — RF CENTRE's size and dark box, a fixed pale lilac
+  knownTick: { position: 'absolute', width: 1, backgroundColor: KNOWN_LABEL_COLOUR, opacity: 0.8 },
+  knownSpan: { position: 'absolute', height: 2, backgroundColor: KNOWN_LABEL_COLOUR, opacity: 0.55 },
+  knownBox: { position: 'absolute', height: 13, paddingHorizontal: 3, backgroundColor: KNOWN_LABEL_BOX, justifyContent: 'center' },
+  knownText: { fontSize: 9, fontWeight: 'bold', color: KNOWN_LABEL_COLOUR },
   dbLabel: {
     position: 'absolute', left: 4,
     fontSize: 11, fontWeight: 'bold', color: 'rgba(255,180,60,0.90)',

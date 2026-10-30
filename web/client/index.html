@@ -6267,6 +6267,16 @@ select.btn { padding: 6px 8px; }
     <label>PEAK HOLD</label>
     <div class="seg"><button class="btn on" id="peakHold">ON</button></div>
   </div>
+  <!-- ★★ KNOWN-SIGNAL LABELS (src/utils/knownSignals.ts — Stuart, 2026-10-30: "should be a toggle in the display
+       settings"). Remembered in this browser; ON by default — the whole point is that someone new sees them. -->
+  <div class="mrow">
+    <label for="knownLabels">SIGNAL LABELS</label>
+    <div class="seg"><button class="btn on" id="knownLabels">ON</button></div>
+  </div>
+  <div class="hint" id="knownLabelsHint">Names the decoder for well-known signals in view — RTTY on DWD's 4583 kHz, WEFAX on
+    Northwood's 4610, NAVTEX, DSC, FT8, time signals — and EiBi's utility stations on air now; and by name your own
+    bookmarks, the receiver's saved ones and, on FM, station names it learnt from RDS. Drawn at the foot of the spectrum,
+    or at the top of the waterfall when the spectrum is hidden. EiBi's broadcast schedule stays in the station strip.</div>
 
   <h2>VFO</h2>
   <div class="mrow">

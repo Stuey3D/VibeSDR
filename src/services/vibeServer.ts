@@ -575,6 +575,11 @@ export async function getLearnedBookmarksNow(): Promise<ServerBookmark[]> {
         frequency: Number(b.frequency),
         mode: b.mode ?? 'wfm',
         source: 'server' as const,
+        // ★ what the known-signal labels need to tell a SAVED row from a LEARNED one, and a heard name from a guess
+        ...(typeof b.manual === 'boolean' ? { manual: b.manual } : {}),
+        ...(typeof b.pi === 'number' ? { pi: b.pi } : {}),
+        ...(typeof b.nameSrc === 'number' ? { nameSrc: b.nameSrc } : {}),
+        ...(typeof b.sid === 'number' ? { sid: b.sid } : {}),
       })) as ServerBookmark[];
   } catch { return []; }
 }

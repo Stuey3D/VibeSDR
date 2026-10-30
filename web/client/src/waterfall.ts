@@ -54,6 +54,8 @@ import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type Row
 import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRow, stampPrune, stampReset, stampSettleRows, stampSweepRows, stampsShown, stampTicks, stampColour }
   from '../../../src/utils/wfStamps.ts';
 import { tickStep, fmtTick } from './freqScale';
+import { labelLayout, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
+  from '../../../src/utils/knownSignals.ts';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -255,6 +257,14 @@ export class Waterfall {
   rfCenterHz: number | null = null;
   /** ★★ V12 beta25: the radio's DC spike — a small red "DC Spike / Not a real signal" label (main.ts decides when). */
   dcSpikeHz: number | null = null;
+  /** ★★ KNOWN-SIGNAL LABELS (src/utils/knownSignals.ts; Stuart, 2026-10-30: "this is more for a user to know what decoder
+   *  to use"): the sorted list in force (the curated table + EiBi's on-air utility entries), or null = the toggle is off.
+   *  main.ts sets it; bump `knownGen` whenever the list changes. */
+  knownSignals: readonly KnownSignal[] | null = null;
+  knownGen = 0;
+  private knownKey = '';
+  private knownPlaced: PlacedLabel[] = [];
+  private knownWidth = new Map<string, number>();
   /** Edges of the CAPTURED band right now (dongle ± Fs/2). Distinct from the
    *  walls: the walls are how far you may ever pan, this is what the radio is
    *  actually receiving at this moment — outside it there is no spectrum, and
@@ -1165,6 +1175,7 @@ export class Waterfall {
       this._drawSpec(ctx, W, specH);
       this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
     }
+    if (this.knownSignals && this.knownSignals.length && this.spanHz > 0) this._drawKnown(ctx, W, H);
     this._drawVfo(ctx, W, H);
   }
 
@@ -1600,6 +1611,70 @@ export class Waterfall {
     this.markerLabel(ctx, x, W, this.markerLabelY(H, 1),
       `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M${this.rfCenterNote}`,
       'rgba(120,200,255,0.95)');
+    ctx.restore();
+  }
+
+  /** ★★ KNOWN-SIGNAL LABELS (src/utils/knownSignals.ts — Stuart, 2026-10-30: "those labels should sit just in the spectrum
+   *  so as to not overcrowd the waterfall, only in the waterfall when spectrum is disabled", "similar to the RF centre and
+   *  DC spike and the frequency band labels"). On the two rows the boundary labels use (markerLabelY 0 and 1 — LISTEN's and
+   *  RF CENTRE's, whose boxes are BLOCKED so they are never drawn over): a thin tick at the signal down to the spectrum's
+   *  floor, a bar along the span a digital mode's signals occupy, and the decoder's name on RF CENTRE's dark box in a
+   *  fixed pale lilac (KNOWN_LABEL_COLOUR — never the VFO's, which LISTEN uses on the same row). With the spectrum hidden
+   *  they sit where RF CENTRE does then, at the top of the waterfall — the CURRENT view, not anchored to history.
+   *  ★ COST: the layout (and every text width) is cached against the view, the dial and the list; a frame that changes
+   *    none of them draws a handful of fillRect/fillText calls. Nothing at all while the toggle is off. */
+  private _drawKnown(ctx: CanvasRenderingContext2D, W: number, H: number) {
+    const dpr = renderDpr();
+    const span = this.spanHz, lo = this.displayCenterHz() - span / 2;
+    const font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+    const showSpec = this._showSpec && H - this.wf.height > 40 * dpr;
+    const key = `${lo}|${span}|${W}|${H}|${dpr}|${this.vfoHz}|${this.rfCenterHz}|${this.knownGen}|${showSpec}|${this.vfoHidden}`;
+    if (key !== this.knownKey) {
+      this.knownKey = key;
+      ctx.save(); ctx.font = font;
+      const measure = (t: string) => {
+        let w = this.knownWidth.get(t);
+        if (w === undefined) { w = ctx.measureText(t).width + 6 * dpr; if (this.knownWidth.size > 512) this.knownWidth.clear(); this.knownWidth.set(t, w); }
+        return w;
+      };
+      // The boxes LISTEN (row 0) and RF CENTRE (row 1) draw — markerLabel's own geometry — and the dB axis at the left.
+      const blocked: BlockedBox[] = [{ row: 0, x0: 0, x1: 30 * dpr }, { row: 1, x0: 0, x1: 30 * dpr }];
+      const box = (row: number, x: number, text: string) => {
+        const tw = ctx.measureText(text).width;
+        const lx = x + 6 * dpr + tw > W ? x - tw - 6 * dpr : x + 6 * dpr;
+        blocked.push({ row, x0: lx - 3 * dpr, x1: lx + tw + 3 * dpr });
+      };
+      if (this.vfoHz && !this.vfoHidden) box(0, this.hzToX(this.vfoHz, W), this.vfoLiveLabel || `LISTEN ${(this.vfoHz / 1e6).toFixed(3)}M`);
+      if (this.rfCenterHz != null) box(1, this.hzToX(this.rfCenterHz, W), `RF CENTRE ${(this.rfCenterHz / 1e6).toFixed(3)}M${this.rfCenterNote}`);
+      this.knownPlaced = labelLayout(this.knownSignals!, lo, span, W, measure, this.vfoHz, blocked, 4 * dpr);
+      ctx.restore();
+    }
+    if (!this.knownPlaced.length) return;
+    const specH = H - this.wf.height;
+    ctx.save();
+    ctx.font = font;
+    ctx.textBaseline = 'alphabetic';
+    ctx.textAlign = 'left';
+    const tickW = Math.max(1, Math.round(dpr));
+    for (const p of this.knownPlaced) {
+      const y = this.markerLabelY(H, p.row);
+      const boxTop = y - 9 * dpr, boxBot = y + 4 * dpr;
+      ctx.fillStyle = KNOWN_LABEL_COLOUR;
+      ctx.globalAlpha = 0.8;
+      // the tick: from the box down to the spectrum's floor, or beside the box on the waterfall
+      const t0 = boxTop, t1 = showSpec ? specH : boxBot;
+      ctx.fillRect(Math.round(p.x), t0, tickW, Math.max(1, t1 - t0));
+      const s = p.sig;
+      if (s.lo != null && s.hi != null) {
+        const x0 = Math.max(0, this.hzToX(s.lo, W)), x1 = Math.min(W, this.hzToX(s.hi, W));
+        if (x1 - x0 >= 3 * dpr) { ctx.globalAlpha = 0.55; ctx.fillRect(x0, (showSpec ? specH : boxBot) - 2 * dpr, x1 - x0, 2 * dpr); }
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = KNOWN_LABEL_BOX;
+      ctx.fillRect(p.lx, boxTop, p.w, 13 * dpr);
+      ctx.fillStyle = KNOWN_LABEL_COLOUR;
+      ctx.fillText(s.label, p.lx + 3 * dpr, y);
+    }
     ctx.restore();
   }
 
