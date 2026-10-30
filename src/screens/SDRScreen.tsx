@@ -12662,8 +12662,11 @@ export default function SDRScreen({ route, navigation }: Props) {
     //      AudioSheet, MenuSheet and FreqModal — VFO A/B itself is in the STEP sheet, said on the 'step' card.
     //    ★ Again 2026-10-27 (build 498) when VFO A/B moved to the frequency card and VFO B gained its own needle colour
     //      (MenuSheet, display settings, beside VFO A's): this card names neither, so nothing here pointed at them.
+    //    ★ Again 2026-10-30 for KNOWN-SIGNAL LABELS (a new Display settings switch, SIGNAL LABELS, under PEAK HOLD): the
+    //      new sentence names it; the rest re-read against AudioSheet (NR, notch, squelch, binaural, VFO stereo,
+    //      de-emphasis, stereo), MenuSheet and FreqModal — unchanged.
     { id: 'menu', title: 'Everything else: the settings cog',
-      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch (one row for each VFO, with its MUTE, while VFO B is on), binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
+      body: 'Display and control settings, recordings and server settings live behind the settings cog — on a small screen held sideways the key reads SET. Its DISPLAY SETTINGS hold SIGNAL LABELS: the decoder to use, named on well-known signals in view (RTTY on DWD\u2019s 4583 kHz, WEFAX on Northwood\u2019s 4610, NAVTEX, DSC, FT8, time signals) at the foot of the spectrum. Audio is separate — recording (REC, and its record buffer), noise reduction, the auto notch, squelch (one row for each VFO, with its MUTE, while VFO B is on), binaural tuning, VFO stereo, FM de-emphasis and stereo are under the speaker button — and bookmarks live in the frequency card. The radio\u2019s own controls are in the cog under its name: on an Icom transceiver, its modes, filters, scope span, preamp, attenuator and AGC.',
       target: tourRef('menuBtn') },
     // ★ DISCOVERY. Neither of these is findable without opening the menu and
     //   reading every row, so the tour is where people meet them at all.
