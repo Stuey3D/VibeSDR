@@ -72,6 +72,16 @@ export function loadWfSpeed(v: unknown): WfSpeedSetting | null {
   return isWfSpeedSetting(v) ? v : null;
 }
 
+/** ★★ THE WEB'S OLD "WATERFALL DATA RATE" (AUTO/20/10/5 — removed 2026-10-30, GitHub #57: it overlapped the speed keys
+ *  and on DEFAULT/SMOOTH its use looked like nothing happened). A saved rate is never applied again; this says what
+ *  speed it leaves. Only where it was clearly the same choice is it carried over — NATIVE with 5 is exactly LOW (5 real
+ *  rows a second, 5 asked of the server), NATIVE with 10 exactly ECO on a ≥ 10 fps server. Anything else keeps the speed
+ *  the listener chose (the cap simply stops: on DEFAULT/SMOOTH it never changed the scroll, only the data). */
+export function migrateWfDataRate(speed: WfSpeedSetting, savedRate: unknown): WfSpeedSetting {
+  if (speed !== 'sharp') return speed;
+  return savedRate === 5 ? 'low' : savedRate === 10 ? 'eco' : speed;
+}
+
 /** The link ceiling for a setting, fps — 0 = none (NATIVE / DEFAULT / SMOOTH). */
 export const linkCapFor = (s: WfSpeedSetting): number =>
   (s === 'min2' || s === 'low' || s === 'eco' ? LINK_CAP[s] : 0);

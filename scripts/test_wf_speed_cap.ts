@@ -14,7 +14,7 @@
  * Run: node --no-warnings scripts/test_wf_speed_cap.ts
  */
 import { capLadder, capFps, capHasEffect, linkCapFor, speedNumbers, uberDivisorFor, isWfSpeedSetting, KIWI_SPEED_CAPS,
-         MIN_WF_FPS, LOW_WF_FPS, loadWfSpeed, offeredWithoutLever, WF_SPEED_LABEL } from '../src/assets/wfSpeedCap.ts';
+         MIN_WF_FPS, LOW_WF_FPS, loadWfSpeed, migrateWfDataRate, offeredWithoutLever, WF_SPEED_LABEL } from '../src/assets/wfSpeedCap.ts';
 import { rowTargetFor, stepRowTarget, newRowTargetState, rowsForArrival, type WfScroll } from '../src/assets/wfRowTarget.ts';
 import { LinkManager as UberLM, LADDERS } from '../src/services/linkManager.ts';
 import { LinkManager as VibeLM } from '../src/services/vibeLinkManager.ts';
@@ -37,6 +37,14 @@ ok("migration: the new MINIMUM is stored as 'min2' and loads as itself (2 fps)",
 ok("migration: every current value loads unchanged; junk / null → null (keep the default)",
    (['min2', 'low', 'eco', 'sharp', 'default', 'smooth'] as const).every(v => loadWfSpeed(v) === v)
    && loadWfSpeed('half') === null && loadWfSpeed(null) === null && loadWfSpeed(undefined) === null && loadWfSpeed(5) === null);
+// ★★ The web's removed WATERFALL DATA RATE row (#57): a saved rate never caps the speed keys again; NATIVE + 5 / 10 is
+//    exactly LOW / ECO and is carried over; every other speed is left as the listener chose it.
+ok('saved data rate: NATIVE + 5 → LOW, NATIVE + 10 → ECO (the same rows and data)',
+   migrateWfDataRate('sharp', 5) === 'low' && migrateWfDataRate('sharp', 10) === 'eco');
+ok('saved data rate: NATIVE + AUTO/20 stays NATIVE; DEFAULT / SMOOTH / MINIMUM / ECO + 5 keep their speed (the cap just stops)',
+   migrateWfDataRate('sharp', 0) === 'sharp' && migrateWfDataRate('sharp', 20) === 'sharp'
+   && migrateWfDataRate('default', 5) === 'default' && migrateWfDataRate('smooth', 10) === 'smooth'
+   && migrateWfDataRate('min2', 5) === 'min2' && migrateWfDataRate('eco', 5) === 'eco' && migrateWfDataRate('sharp', 'x') === 'sharp');
 ok("'minimum' is no longer a CURRENT value (so it is always migrated, never kept)", !isWfSpeedSetting('minimum'));
 ok('OpenWebRX (no lever): MINIMUM offered (thinned on the client), LOW / ECO hidden, the rest offered',
    offeredWithoutLever('min2') && !offeredWithoutLever('low') && !offeredWithoutLever('eco')
