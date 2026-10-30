@@ -136,6 +136,7 @@ struct VagcIn {
     int    nStates = 10;       // LNA states in this band
     int    lnaFloor = 0;       // the owner's RF cap as the lowest state allowed (0 = full RF gain allowed)
     bool   rfOwned = true;     // false = the owner runs the LNA by hand; we keep to the IF
+    int    grFloor = 20;       // the owner's IF cap as the least reduction allowed (20 = no cap)
     int    band = 1;           // SdrplaySource::lnaBandId
     double learnedRed[28];     // learned LNA reduction per state in this band, any common offset; NaN unknown
     VagcIn() { for (double& d : learnedRed) d = NAN; }
@@ -194,6 +195,7 @@ public:
 
     VagcOut tick(const VagcIn& in) {
         VagcOut o; o.lna = lna_; o.gr = gr_;
+        grFloor_ = std::clamp(in.grFloor, kGrMin, kGrMax);
         // ── fresh measurement only ──
         if (in.windows == lastWindows_) return o;
         // ★ the source restarted its measurement (adcRestart on a retune, a rate change, a stream restart): the count
@@ -308,7 +310,7 @@ public:
         }
         const double eDec = dec - p_.targetPk;
         if (haveSecond && eDec < -p_.deadDb) {                     // quiet for a whole second: more gain, gently
-            if (!ifAllowed(in.now, false) || gr_ <= kGrMin) return o;
+            if (!ifAllowed(in.now, false) || gr_ <= grFloor_) return o;
             const int step = (int)std::clamp(std::floor((-eDec - p_.deadDb * 0.5) * (acquiring_ ? 1.0 : 0.5)), 1.0,
                                              acquiring_ ? kAcqIfStepDb : p_.maxIfStepDb);
             const int grTo = clampGr(gr_ - step);
@@ -349,7 +351,8 @@ private:
     unsigned writes_ = 0, ifWrites_ = 0, lnaWrites_ = 0; int maxPerSec_ = 0;
 
     void forgetJudgements() { loadedSince_ = roomSince_ = -1; ceilingState_ = -1; lastLnaDir_ = 0; }
-    static int clampGr(int g) { return std::clamp(g, kGrMin, kGrMax); }
+    int grFloor_ = kGrMin;
+    int clampGr(int g) const { return std::clamp(g, grFloor_, kGrMax); }
     bool budgetOk(double now) {
         while (!writeTimes_.empty() && now - writeTimes_.front() >= 1.0) writeTimes_.pop_front();
         return (int)writeTimes_.size() < kMaxWritesPerSec;

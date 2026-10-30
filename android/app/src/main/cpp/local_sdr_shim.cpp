@@ -5322,6 +5322,7 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
     in.now = now; in.windows = sdrp->adcWindows(); in.peak = sdrp->adcPeakDbfs(); in.clipPct = sdrp->adcClipPct();
     in.overload = sdrp->overloadReal(); in.nStates = std::max(1, sdrp->lnaStateCount()); in.lnaFloor = lnaFloor;
     in.rfOwned = rfOwned; in.band = band;
+    { const int f = LocalSdrShim::ifGrFloorAt(centreHz); if (f >= 20) in.grFloor = f; }   // ★ the owner's IF cap holds here too
     for (int q = 0; q < std::min(28, in.nStates); ++q) {
         const float g = sdrp->lnaGainDb(q);
         if (std::isfinite(g)) in.learnedRed[q] = -(double)g;     // reduction = −gain, any common offset
