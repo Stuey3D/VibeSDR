@@ -103,6 +103,93 @@ function timingSafeEqual(a, b) {
   return diff === 0;
 }
 
+/** HMAC-SHA256(key, msg) as lowercase hex — what the server's shim answers a dirNonce with (dirProofFor). */
+async function hmacHex(key, msg) {
+  const mac = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', mac, new TextEncoder().encode(msg));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/* ★★★ SAME NETWORK → GO DIRECT (V12; Stuart, 2026-10-30: "i always use the tunnel from the directory as its
+ *     easier"). Opening his own Lenovo from the directory sent every byte Lenovo → cloudflared → Cloudflare → back
+ *     home: ~80 ms pings, a jitter buffer grown to 390 ms and 3-4 s drops when the tunnel stalled, against ~6 ms and
+ *     no loss across the room. So a server now tells the directory its LAN address(es) on every ping, and the
+ *     directory hands them to a listener who is on the SAME NETWORK as that server, and to nobody else.
+ *
+ *  ★★★ THE DISCLOSURE RULE IS THE WHOLE FEATURE. A LAN address must never leak to the public. "Same network" =
+ *      the visitor's CF-Connecting-IP is the server's own (the address its ping arrived from — the server pings us
+ *      directly from home, never through its tunnel) for IPv4, or in the same /64 for IPv6 (a home LAN shares one
+ *      prefix, and each device has its own address inside it). The comparison is done IN SQL (`lan_net = ?`), so a
+ *      row whose network does not match is never even read for a stranger.
+ *   ★★ THE SERVER'S PUBLIC ADDRESS IS NOT STORED. Only a hash of its network (lanNetHash) — enough to answer "is
+ *      this visitor on it?", not to say what it is. PRIVACY.md says so.
+ *   ★ Known limit: a carrier-grade NAT shares one public IPv4 among many customers, so a stranger behind the same
+ *     CGNAT address would also be offered the LAN address. It is a private, unroutable address (it says nothing
+ *     a stranger can reach), and the client still PROVES the server before using it — below.
+ *
+ *  ★★★ SAME PUBLIC ADDRESS IS NOT REACHABILITY (guest Wi-Fi, CGNAT, phone data on the same carrier), and a
+ *      192.168.x.x elsewhere may be a different box. So the listing also carries a nonce and the HMAC proof the
+ *      server's own shim gives for it (dirProofFor — the SAME challenge verifyAddress uses, so every server that
+ *      can be listed at all can already answer it). The client asks http://<lan>/vibeserver.json?dirNonce=<nonce>
+ *      and goes direct only when dirProof matches; anything else and it uses the tunnel exactly as before.
+ *   ★ The nonce is kept across pings (it changes only with the key), so a listing fetched a while ago still proves.
+ *     It is useless for the directory's own check: verifyAddress always asks with a fresh random nonce. */
+const LAN_MAX = 4;
+/** The LAN addresses a server sent, cleaned: private IPv4 (10/8, 172.16/12, 192.168/16) with a port, at most four.
+ *  ★ Nothing else survives — not a hostname, not loopback, not CGNAT/link-local, not IPv6. */
+export function cleanLan(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const x of v.slice(0, 16)) {
+    if (typeof x !== 'string') continue;
+    const m = x.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{1,5})$/);
+    if (!m) continue;
+    const o = m.slice(1, 5).map(Number), port = Number(m[5]);
+    if (o.some((n) => n > 255) || port < 1 || port > 65535) continue;
+    const lan = o[0] === 10 || (o[0] === 192 && o[1] === 168) || (o[0] === 172 && o[1] >= 16 && o[1] <= 31);
+    if (!lan) continue;
+    const s = `${o.join('.')}:${port}`;
+    if (!out.includes(s)) out.push(s);
+    if (out.length >= LAN_MAX) break;
+  }
+  return out;
+}
+/** The visitor's NETWORK as a comparable string: an IPv4 address itself, an IPv6 address's /64. '' if unreadable. */
+export function netKeyOf(ip) {
+  const s = String(ip || '').trim().toLowerCase();
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(s)) return s;
+  const v4 = s.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);      // a v4-mapped literal is the v4 address
+  if (v4) return v4[1];
+  const full = s.includes(':') ? expandV6(s) : '';
+  return full ? full.split(':').slice(0, 4).join(':') + '::/64' : '';
+}
+/** What is stored and compared: a hash of the network, never the address (see above). */
+export async function lanNetHash(ip) {
+  const k = netKeyOf(ip);
+  return k ? sha256Hex('vibesdr-lan-net:' + k) : '';
+}
+/** The `lan` object a same-network client gets, or null. Checked again on the way OUT (a row is data). */
+function lanOut(r) {
+  if (!r) return null;
+  let hosts = [];
+  try { hosts = cleanLan(JSON.parse(r.lan_json || '[]')); } catch { hosts = []; }
+  const nonce = String(r.lan_nonce || ''), proof = String(r.lan_proof || '');
+  if (!hosts.length || !/^[a-z0-9]{8,64}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(proof)) return null;
+  return { hosts, nonce, proof };
+}
+/** The LAN columns a ping writes (or clears, when the server sent none — an older server, or one that stopped). */
+async function lanColumnsFor(body, row, request) {
+  const hosts = cleanLan(body && body.lan);
+  if (!hosts.length) return { lan_json: '', lan_net: '', lan_nonce: '', lan_proof: '' };
+  const net = await lanNetHash(request.headers.get('cf-connecting-ip'));
+  if (!net) return { lan_json: '', lan_net: '', lan_nonce: '', lan_proof: '' };
+  const nonce = /^[a-z0-9]{8,64}$/.test(String(row.lan_nonce || '')) ? String(row.lan_nonce)
+              : 'lan' + crypto.randomUUID().replace(/-/g, '');
+  return { lan_json: JSON.stringify(hosts), lan_net: net, lan_nonce: nonce,
+           lan_proof: await hmacHex(String(body.key || ''), nonce) };
+}
+
 /**
  * Maidenhead locator to the CENTRE of the square.
  *
@@ -468,10 +555,7 @@ async function verifyAddress(url, key, why) {
     const given = typeof j?.dirProof === 'string' ? j.dirProof.toLowerCase() : '';
     if (given.length !== 64) { if (why) why.reason = 'no-proof'; return false; }
 
-    const mac = await crypto.subtle.importKey(
-      'raw', new TextEncoder().encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-    const sig = await crypto.subtle.sign('HMAC', mac, new TextEncoder().encode(nonce));
-    const want = [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    const want = await hmacHex(key, nonce);
     const ok = timingSafeEqual(given, want);
     if (why && !ok) why.reason = 'mismatch';
     return ok;
@@ -720,6 +804,22 @@ async function ping(request, env) {
          //   without a log pipeline. Cleared the moment it succeeds.
          verified ? '' : JSON.stringify(why).slice(0, 200),
          row.id).run();
+  /* ★★ SAME NETWORK → GO DIRECT: the LAN columns (lanColumnsFor). Only where migration 0008 has been applied —
+   *  `SELECT *` (findServer) returns lan_json exactly when the column exists — so a Worker deployed ahead of its
+   *  migration never fails a ping over a feature. A separate statement rather than more columns in the one above
+   *  for the same reason, and logged, never thrown: a listing must not be lost to the LAN half. */
+  if ('lan_json' in row) {
+    try {
+      const L = await lanColumnsFor(body, row, request);
+      if (L.lan_json !== (row.lan_json || '') || L.lan_net !== (row.lan_net || '')
+          || L.lan_nonce !== (row.lan_nonce || '') || L.lan_proof !== (row.lan_proof || '')) {
+        await env.DB.prepare('UPDATE servers SET lan_json = ?, lan_net = ?, lan_nonce = ?, lan_proof = ? WHERE id = ?')
+          .bind(L.lan_json, L.lan_net, L.lan_nonce, L.lan_proof, row.id).run();
+      }
+    } catch (e) {
+      console.error('ping: lan fields not stored', row.id, (e && e.stack) || String(e));
+    }
+  }
   // ★ RETAIN_SEC housekeeping rides ~1 ping in 50 (every live server pings every 15 min, so it runs many times a day
   //   without costing every ping a DELETE). After the update, so it never touches this row.
   if (Math.random() < 0.02) await purgeStale(env, t);
@@ -928,7 +1028,29 @@ async function list(env, url, request) {
     lat: Number.isFinite(+cf.latitude)  ? +cf.latitude  : null,
     lon: Number.isFinite(+cf.longitude) ? +cf.longitude : null,
   };
-  return json({ servers, count: servers.length, pingSec: PING_SEC, you });
+  /* ★★★ SAME NETWORK → GO DIRECT — a server's LAN address, ONLY to a visitor on that server's own network (see
+   *     lanColumnsFor). The match is the WHERE clause: rows on any other network are never selected, so there is no
+   *     code path that could hand one to a stranger. Separate from the listing query and caught, so a Worker running
+   *     before migration 0008 lists exactly as before. ★ `private, no-store` whenever one is attached: this answer
+   *     belongs to this visitor and must not sit in any shared cache. */
+  let personal = false;
+  try {
+    const net = request ? await lanNetHash(request.headers.get('cf-connecting-ip')) : '';
+    if (net && servers.length) {
+      const { results: mine } = await env.DB.prepare(
+        `SELECT id, lan_json, lan_nonce, lan_proof FROM servers WHERE lan_net = ?2 AND lan_net != '' AND ${LIVE_WHERE}`
+      ).bind(now(), net).all();
+      const byId = new Map((mine || []).map((r) => [r.id, lanOut(r)]));
+      for (const s of servers) {
+        const l = byId.get(s.id);
+        if (l) { s.lan = l; personal = true; }
+      }
+    }
+  } catch (e) {
+    console.warn('list: no lan lookup', String((e && e.message) || e).slice(0, 120));
+  }
+  return json({ servers, count: servers.length, pingSec: PING_SEC, you }, 200,
+              personal ? { 'cache-control': 'private, no-store' } : {});
 }
 
 /**
@@ -1585,7 +1707,25 @@ async function serveBySlug(host, request, env) {
   //    older than the meta reader.
   const html = await res.text();
   const direct = new URL(origin).host;
-  const inject = `<meta name="vibe-direct-host" content="${direct.replace(/[^A-Za-z0-9.:\[\]-]/g, '')}">`
+  /* ★★★ SAME NETWORK → GO DIRECT, for the BROWSER (the app reads `lan` from /api/directory). A visitor on this
+   *     server's own network gets <meta name="vibe-lan" content="host:port,…|nonce|proof">; the page proves the
+   *     server at that address and moves there (web/client/src/lanHop.ts). Same rule as list(): the network is
+   *     matched in SQL, so nobody else's page ever carries it — and the document is no-store (below). Caught: a
+   *     missing migration costs the hop, never the page. The content is lanOut's, re-checked: digits, dots, colons,
+   *     commas, [a-z0-9] — nothing that needs escaping in an attribute. */
+  let lanMeta = '';
+  try {
+    const net = await lanNetHash(request.headers.get('cf-connecting-ip'));
+    if (net) {
+      const l = lanOut(await env.DB.prepare(
+        `SELECT lan_json, lan_nonce, lan_proof FROM servers WHERE slug = ? AND lan_net = ? AND lan_net != ''`
+      ).bind(slug, net).first());
+      if (l) lanMeta = `<meta name="vibe-lan" content="${l.hosts.join(',')}|${l.nonce}|${l.proof}">`;
+    }
+  } catch (e) {
+    console.warn('slug: no lan lookup', String((e && e.message) || e).slice(0, 120));
+  }
+  const inject = `<meta name="vibe-direct-host" content="${direct.replace(/[^A-Za-z0-9.:\[\]-]/g, '')}">` + lanMeta
                + `<script>window.__VIBE_DIRECT_HOST__=${JSON.stringify(direct).replace(/</g, '\\u003c')};</script>`;
   const out = html.includes('</head>')
     ? html.replace('</head>', inject + '</head>')
