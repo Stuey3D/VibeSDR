@@ -4539,6 +4539,9 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
      *     returns here: every step after it was taken on a number that could not change, and on
      *     2026-10-16 those steps were five rungs of RF gain into an FM band (8 -> 1, overload). */
     static int    walkFrom = -1;
+    /* ★ The last rung we MEASURED (gainVals.curr across our own write), for the HOLD's own sentence —
+     *   it said "a rung is worth ~21 dB here" on Band II, where the same log had just measured 6.3. */
+    static double lastRungDb = NAN;
 
     const int gr = sdrp->currentIfGr();
     if (gr <= 0) return;                                  // not reported yet
@@ -4752,6 +4755,8 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         e.structAtStep = structGainAtStep; e.structNow = sdrp->structGainDb();
         e.peakAtStep = peakAtStep; e.peakNow = meanPeak;
         e.dir = stepDirAt; e.setPointDbfs = sdrp->ifAgcSetPointDbfs();
+        if (e.structNow > -998.0f && e.structAtStep > -998.0f)
+            lastRungDb = std::fabs((double)e.structNow - (double)e.structAtStep);
         const vibersp::RfStepVerdict v = vibersp::judgeRfStep(e);
         if (v == vibersp::RfStepVerdict::Unhonoured)  { ++unhonoured; deadSteps = 0; }
         else if (v == vibersp::RfStepVerdict::Frozen) {
@@ -4788,10 +4793,10 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
         if (!deadWarned) {
             deadWarned = true;
             LOGI("RSP RF AGC: HOLDING — our writes are landing, but the IF reduction has read "
-                 "exactly %.0f dB through %d of our own LNA steps. A rung is worth ~21 dB here, so "
-                 "a live AGC cannot sit still through that: this number is frozen, not measured, "
-                 "and every further step would be taken on evidence that cannot change. Holding RF "
-                 "gain at state %d.", mean, deadSteps, sdrp->currentLnaState());
+                 "exactly %.0f dB through %d of our own LNA steps (the last rung measured %.1f dB), so "
+                 "this number is frozen, not measured. RF gain at state %d; from here it is steered "
+                 "by our own ADC peak (%.1f dBFS, set point %d), not by the reduction.",
+                 mean, deadSteps, lastRungDb, sdrp->currentLnaState(), meanPeak, sdrp->ifAgcSetPointDbfs());
             /* ★★★ AND TAKE BACK THE STEPS THAT NUMBER BOUGHT. Holding where the walk stopped keeps every
              *     rung it took on dead evidence — on 2026-10-16 that was RF 1/9 on the FM band, overloaded,
              *     and the gain memory then handed that state to the next listener. The state before the
@@ -4799,7 +4804,15 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
              *     Within the owner's cap, and the memory follows so a re-open does not restore the walk. */
             const int n   = sdrp->lnaStateCount();
             const int cur = sdrp->currentLnaState();
-            const int back = walkFrom;
+            /* ★★★ BUT NEVER BACK TO MORE RF GAIN INTO A LEVEL WE CAN SEE IS TOO HOT. 2026-10-30 16:02, Band II:
+             *     the walk 0 -> 1 -> 2 was SHEDDING gain off a real 59 rail, the hold "undid" it to state 0 —
+             *     full RF gain — with our peak at -8.4 dBFS, 22 dB over the set point, and then held there
+             *     for good. Undoing a walk INTO gain (10-16) is always safe; undoing one OUT of it is not. */
+            const int back = vibersp::holdUndoTarget(cur, walkFrom, meanPeak, sdrp->ifAgcSetPointDbfs(),
+                                                     sdrp->overloadReal());
+            if (walkFrom >= 0 && back == cur && walkFrom != cur)
+                LOGI("RSP RF AGC: NOT undoing to state %d — that is more RF gain, and our own ADC peak "
+                     "(%.1f dBFS) says the front end is already swamped", walkFrom, meanPeak);
             walkFrom = -1;
             if (back >= 0 && back < n && back >= std::max(0, lnaFloor) && back != cur) {
                 LOGI("RSP RF AGC: undoing the steps taken on the frozen reading — RF gain state %d -> %d, "
@@ -4824,6 +4837,35 @@ static void vsSdrplayRfAgcTick(SdrplaySource* sdrp, int lnaFloor, bool ifAgcOn) 
          *   writes are demonstrably NOT LANDING, which is a fact rather than an inference.
          *   ▶ If a frozen readout should ever warn, it needs its own hysteresis and its own
          *   evidence — not a share of this one's. */
+        /* ★★★ HELD IS NOT BLIND. The reduction cannot be steered by; our own ADC peak can — see
+         *     vibersp::heldSteerDir. Swamped (or a real overload) sheds a rung, starved adds one, and
+         *     2 s of agreement and 6 s between steps apply. A live IF AGC behind a dead readout keeps
+         *     the peak between the two lines, so this cannot walk the 09-13 / 10-16 way.
+         *  ★ The verdict stays standing: only a reduction that MOVES, or a repair, clears the hold. */
+        const int hdir = vibersp::heldSteerDir(meanPeak, sdrp->ifAgcSetPointDbfs(), sdrp->overloadReal());
+        if (hdir == 0) { outMs = 0; outDir = 0; return; }
+        if (hdir != outDir) { outDir = hdir; outMs = 0; }
+        outMs += kWindowMs;
+        if (outMs < 2000) return;
+        if (lastMove.time_since_epoch().count() != 0 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(now - lastMove).count() < 6000)
+            return;
+        const int hn = sdrp->lnaStateCount(), hcur = sdrp->currentLnaState();
+        const int hwant = std::min(hn - 1, std::max(std::max(0, lnaFloor), hcur + hdir));
+        if (hn <= 1 || hwant == hcur) { outMs = 0; return; }
+        LOGI("RSP RF AGC (held, by our own ADC peak): %.1f dBFS against a %d dBFS set point%s — RF gain "
+             "state %d -> %d (%s gain)", meanPeak, sdrp->ifAgcSetPointDbfs(),
+             sdrp->overloadReal() ? ", OVERLOAD" : "", hcur, hwant, hdir > 0 ? "less" : "more");
+        LocalSdrShim::instance().setLnaState(hwant);
+        g_vibeAgcRspLastLna.store(hwant, std::memory_order_relaxed);
+        g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_relaxed);
+        /* ★ And arm the open-loop test again: if this rung MOVES the reduction, the readout was alive
+         *   after all and the hold clears itself (Answered resets deadSteps). */
+        grAtLastStep = (int)llround(mean); structGainAtStep = sdrp->structGainDb();
+        peakAtStep = meanPeak; stepDirAt = hdir; lnaBeforeStep = hcur;
+        lastMove = now; lastDir = hdir; lastMean = mean;
+        lastStepAt = std::chrono::steady_clock::now();
         outMs = 0; outDir = 0;
         return;
     }
