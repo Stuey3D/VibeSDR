@@ -43,9 +43,11 @@ import { crumb } from './crumbs';
 import {
   DUAL_OFF, attachSecond, beginPicking, bgSide, clampBalance, dualEligible, dualTargets, endSide, holds,
   markEnded, sameServer, sameRadio, swap, terminalWhy, transportFor, detachSecond, pickSameServer,
-  sideHasAudio, withSideMuted, DUAL_STALL_MS, audioKindOf, firstMovesToAux, normBase,
+  sideHasAudio, withSideMuted, DUAL_STALL_MS, audioKindOf, firstMovesToAux, normBase, uberAudioUrl, vibeAuxUrl,
+  endedWhy, type UberLink,
   type AudioKind, type DualCore, type DualOutput, type DualRouteLike, type DualSideCore, type Transport,
 } from './dualMix';
+export { uberAudioUrl, vibeAuxUrl, endedWhy, type UberLink };
 import type { BackendCallbacks, SDRBackend } from './SDRBackend';
 
 /** The native second voice (ios/VibeSDR/VibeDualAudio.swift, android …/VibeDualAudio.kt). Absent = an older binary
@@ -476,22 +478,8 @@ function backgroundCallbacks(id: string): BackendCallbacks {
   } as unknown as BackendCallbacks;
 }
 
-/** A receiver's own refusal, shortened for the card (the screen shows the whole sentence when it is in front). */
-export function endedWhy(msg: string): string {
-  const m = String(msg ?? '');
-  if (/allowance|time limit|per day|daily|expired/i.test(m)) return 'its time limit was reached';
-  if (/inactiv|idle/i.test(m)) return 'nobody answered "still listening?"';
-  if (/busy|full|no free|all .*channels/i.test(m)) return 'the radio is busy';
-  if (/kick|ban|block|refus/i.test(m)) return 'the owner ended the session';
-  return 'the server ended the session';
-}
-
 /* ─────────────────────────────── UBERSDR: its audio socket on either voice ─────────────────────────────── */
 
-/** What reopens an UberSDR side's audio on either voice — the same session (`uuid` = its side id), so the server
- *  re-affirms the slot it registered (POST /connection) rather than meeting a stranger. Kept per side from its screen. */
-export interface UberLink { baseUrl: string; uuid: string; password: string; adminAuth: string;
-                            freq: number; mode: string; bwLow?: number; bwHigh?: number }
 const uberLinks = new Map<string, UberLink>();
 export function noteUberLink(id: string, l: UberLink) {
   const prev = uberLinks.get(id);
@@ -499,21 +487,6 @@ export function noteUberLink(id: string, l: UberLink) {
   if (uberLinks.size > 8) uberLinks.delete(uberLinks.keys().next().value as string);
 }
 
-/** UberSDR's audio socket URL — the native engine's audioWsURL, one rule two readers (VibePowerModule.swift /
- *  VibeStreamService.kt): the session, Opus, the dial it should open on, the filter when it is within ±12 kHz (out of
- *  range the server REFUSES the socket), our name, the bypass password, the owner's credential. */
-export function uberAudioUrl(l: UberLink, client: string): string {
-  const base = l.baseUrl.trim().replace(/^https:\/\//, 'wss://').replace(/^http:\/\//, 'ws://').replace(/\/+$/, '');
-  let q = `/ws?user_session_id=${encodeURIComponent(l.uuid)}&format=opus&version=2`;
-  if (l.freq > 0) q += `&frequency=${Math.round(l.freq)}&mode=${encodeURIComponent(l.mode)}`;
-  if (l.bwLow != null && l.bwHigh != null && Math.abs(l.bwLow) <= 12_000 && Math.abs(l.bwHigh) <= 12_000) {
-    q += `&bandwidthLow=${Math.round(l.bwLow)}&bandwidthHigh=${Math.round(l.bwHigh)}`;
-  }
-  q += `&client=${encodeURIComponent(client)}`;
-  if (l.password) q += `&password=${encodeURIComponent(l.password)}`;
-  const adm = l.adminAuth ? (l.adminAuth.startsWith('&') ? l.adminAuth : `&${l.adminAuth}`) : '';
-  return base + q + adm;
-}
 let uberClient = 'VibeSDR';
 /** The User-Agent the app names itself with (constants/version USER_AGENT), handed in by the player. */
 export function setUberClientName(c: string) { if (c) uberClient = c; }
@@ -993,12 +966,6 @@ export function moveToAux(id: string) {
     if (releaseNative(id)) Vibe?.stopLocalAudio?.();
     if (l) auxOpen({ id, url: vibeAuxUrl(l), hello: null, proto: 'vibe' }, true);
   }
-}
-
-/** A VibeServer's second-voice socket — LocalAudioPlayer's own aux URL (`channels=1`: each server owns ONE ear). */
-export function vibeAuxUrl(l: DualLink): string {
-  const root = (l.wsBase || `ws://${l.host}:${l.port}`).replace(/\/+$/, '');
-  return `${root}/ws/audio?${(l.suffix + '&channels=1').replace(/^&/, '')}`;
 }
 
 /** "Stop listening to <the background server>" in the server chip's menu. */
