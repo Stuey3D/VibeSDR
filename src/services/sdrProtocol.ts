@@ -529,7 +529,11 @@ export interface SDRCallbacks {
                     agcInit: boolean; agcReinit: boolean;
                     /** ★ The SDRplay gain API has frozen: every figure above is stale and a reset
                      *  is available. See the gain-API chip. */
-                    gainStuck: boolean }) => void;
+                    gainStuck: boolean;
+                    /** ★★★ THE AGC READOUT (VibeAGC for SDRplay, 2026-10-30) — absent from older servers. See the
+                     *  rspstat send site in local_sdr_shim.cpp and src/services/rspAgcReadout.ts for the meanings. */
+                    vagc?: number; vst?: number; vrs?: number; vtgt?: number;
+                    vwpm?: number; vmiss?: number; vblind?: number; vrail?: number }) => void;
   /** ★ Admin lock state. `set` = this server HAS a password; `ok` = we are through it.
    *  `refused` fires when a protected control was rejected — the honest moment to say why. */
   onAdminState?: (st: { set: boolean; ok: boolean; refused?: boolean; superseded?: boolean }) => void;

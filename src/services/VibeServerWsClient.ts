@@ -2818,6 +2818,14 @@ export abstract class VibeServerWsClient {
         agcInit:   Number(msg.agcInit) === 1,
         agcReinit: Number(msg.agcReinit) === 1,
         gainStuck: Number(msg.gainStuck) === 1,
+        /* ★★★ THE AGC READOUT (2026-10-30) — what VibeAGC for SDRplay is doing and whether it has stuck. Passed through
+         *  as numbers, undefined when absent (an older server), so rspAgcReadout.ts can tell "not sent" from 0. */
+        ...(() => {
+          const o: Record<string, number> = {};
+          for (const k of ['vagc', 'vst', 'vrs', 'vtgt', 'vwpm', 'vmiss', 'vblind', 'vrail'] as const)
+            if (typeof msg[k] === 'number' && Number.isFinite(msg[k])) o[k] = msg[k];
+          return o;
+        })(),
       });
       return;
     }

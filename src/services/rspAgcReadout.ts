@@ -78,10 +78,10 @@ export function rspAgcCause(s: RspAgcSample): [string, string] | null {
   if ((s.vmiss ?? 0) > 0)
     return ['WRITE MISSED', `${s.vmiss} gain write${s.vmiss === 1 ? '' : 's'} did not land in the last minute`];
   if ((s.vagc ?? 0) === 1 && (s.vblind ?? 0) >= WARN_BLIND_S)
-    return ['NO ADC LEVEL', `no fresh ADC level for ${s.vblind} s — the loop cannot see the signal`];
+    return ['NO ADC LEVEL', `No fresh ADC level for ${s.vblind} s — the loop cannot see the signal`];
   const rail = s.vrail ?? 0;
-  if (rail >= WARN_RAIL_S) return ['IF RAIL', `the IF has sat at its 59 dB rail for ${rail} s with RF gain still to cut`];
-  if (-rail >= WARN_RAIL_S) return ['IF FLOOR', `the IF has sat at its floor for ${-rail} s with RF gain still to add`];
+  if (rail >= WARN_RAIL_S) return ['IF RAIL', `The IF has sat at its 59 dB rail for ${rail} s with RF gain still to cut`];
+  if (-rail >= WARN_RAIL_S) return ['IF FLOOR', `The IF has sat at its floor for ${-rail} s with RF gain still to add`];
   return null;
 }
 
