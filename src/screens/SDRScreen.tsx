@@ -274,7 +274,7 @@ import { ImpulseDetector, scanPolicy, scanTiming, bandChoices, bookmarkTag, defa
          normaliseConfig, nameAt, BUNDLED_PRESETS, type ScannerController, type ScanSample, type ScanBackendKind,
          type ScanPreset, type ScanSource, type NamedFreq, type FoundSignal } from '../services/scanner';
 import { loadScanPresets, saveScanPresets } from '../services/scanPresets';
-import { type WfSpeedSetting, isWfSpeedSetting, linkCapFor, speedNumbers, KIWI_SPEED_CAPS } from '../assets/wfSpeedCap';
+import { type WfSpeedSetting, loadWfSpeed, linkCapFor, offeredWithoutLever, speedNumbers, KIWI_SPEED_CAPS } from '../assets/wfSpeedCap';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -3652,9 +3652,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'>('20fps');
   // ★ SHARP by default: one row per received frame, exactly what the app has always drawn.
   const [wfScroll,      setWfScroll]      = useState<WfSpeedSetting>('sharp');
-  /* ★★ V12 MINIMUM / ECO (src/assets/wfSpeedCap.ts): caps the LINK at 5 / 10 fps so the SERVER sends less — pushed to the
-   *  live client like linkMode (VibeServer + UberSDR link managers, Kiwi's wf_speed). MINIMUM draws like NATIVE; ECO
-   *  is also a 10 rows/s row mode (wfRowTarget ROW_RULE.eco). */
+  /* ★★ V12 MINIMUM / LOW / ECO (src/assets/wfSpeedCap.ts): caps the LINK at 2 / 5 / 10 fps so the SERVER sends less —
+   *  pushed to the live client like linkMode (VibeServer + UberSDR link managers, Kiwi's wf_speed). Each is also a row
+   *  mode at that rate (wfRowTarget ROW_RULE): a feed the server could not slow is thinned to it. */
   const wfLinkCapRef = useRef(0);
   useEffect(() => {
     wfLinkCapRef.current = linkCapFor(wfScroll);
@@ -8259,7 +8259,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Apply the persisted link mode too — the [linkMode] effect only fires on a CHANGE, so a mode
     // restored before this client existed would be lost (UI shows Low Data, wire runs adaptive 10fps).
     { const cc = c as unknown as { linkMode?: string }; if ('linkMode' in cc) cc.linkMode = linkModeRef.current; }
-    // …and the MINIMUM waterfall speed (a 5 fps link ceiling), for the same reason.
+    // …and the MINIMUM / LOW / ECO waterfall speed (a 2 / 5 / 10 fps link ceiling), for the same reason.
     { const cc = c as unknown as { wfLinkCap?: number; wfNativeFps?: number };
       if ('wfLinkCap' in cc) cc.wfLinkCap = wfLinkCapRef.current;
       setWfNativeFps(cc.wfNativeFps ?? 0); }
@@ -9115,16 +9115,20 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
   }, []);
 
-  /** ★ MINIMUM / ECO need a server that can be ASKED for fewer frames (VibeServer, UberSDR, Kiwi/Web-888). */
+  /** ★ LOW / ECO need a server that can be ASKED for fewer frames (VibeServer, UberSDR, Kiwi/Web-888). MINIMUM is
+   *  offered everywhere — on OpenWebRX the client thins its feed to 2 rows/s (wfSpeedCap.offeredWithoutLever). */
   const wfCapsOk = route.params.serverType !== 'owrx';
-  const wfShown: WfSpeedSetting = wfCapsOk || linkCapFor(wfScroll) === 0 ? wfScroll : 'sharp';
+  const wfShown: WfSpeedSetting = wfCapsOk || offeredWithoutLever(wfScroll) ? wfScroll : 'sharp';
   const onWfScroll = useCallback((v: WfSpeedSetting) => {
     setWfScroll(v);
     AsyncStorage.setItem('lsv_wf_scroll', v).catch(() => {});
   }, []);
   useEffect(() => {
     AsyncStorage.getItem('lsv_wf_scroll').then((v: string | null) => {
-      if (isWfSpeedSetting(v)) setWfScroll(v);
+      // ★ loadWfSpeed: an old 'minimum' was the 5 fps choice — it lands on LOW (and is re-saved as 'low'), never on
+      //   the new 2 fps MINIMUM ('min2').
+      const s = loadWfSpeed(v);
+      if (s) { setWfScroll(s); if (s !== v) AsyncStorage.setItem('lsv_wf_scroll', s).catch(() => {}); }
     }).catch(() => {});
   }, []);
   const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps') => {
@@ -13179,7 +13183,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfSharpness={wfSharpness}
         minRangeDb={dabOn ? 15 : 30}
         frameRate={frameRate}
-        wfScroll={icom ? 'sharp' : wfShown}   /* ★ every speed is a row mode (wfRowTarget) — MINIMUM / ECO included */
+        wfScroll={icom ? 'sharp' : wfShown}   /* ★ every speed is a row mode (wfRowTarget) — MINIMUM / LOW / ECO included */
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
@@ -14409,9 +14413,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         peakHold={peakHold}             onPeakHold={setPeakHold}
         knownLabels={knownLabels}       onKnownLabels={setKnownLabels}
         frameRate={frameRate}           onFrameRate={onFrameRate}
-        /* ★ MINIMUM / ECO only where the SERVER can be asked for fewer frames (VibeServer, UberSDR, Kiwi/Web-888).
+        /* ★ LOW / ECO only where the SERVER can be asked for fewer frames (VibeServer, UberSDR, Kiwi/Web-888).
            OpenWebRX has no rate lever, so there they would save nothing (and ECO on its ~9 fps feed IS native) — hidden
-           (AGENTS.md: no one-radio controls), and a saved one shows as what it draws there: NATIVE. */
+           (AGENTS.md: no one-radio controls), and a saved one shows as what it draws there: NATIVE. MINIMUM (2) stays
+           everywhere: its point is the slow scroll (#57), which thinning gives on any feed. */
         wfScroll={wfShown}  onWfScroll={icom ? undefined : onWfScroll}
         wfCapsOk={wfCapsOk}
         wfSpeedNums={speedNumbers(wfNativeFps, isKiwi ? KIWI_SPEED_CAPS : undefined)}

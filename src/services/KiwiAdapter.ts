@@ -1071,11 +1071,12 @@ export class KiwiAdapter implements SDRBackend {
   pauseSpectrum(): void { this.wfSend('SET wf_speed=0'); }
   resumeSpectrum(): void { this.wfSend(`SET wf_speed=${this.wfSpeedLever()}`); }
 
-  /** ★ V12 MINIMUM / ECO waterfall speed (src/assets/wfSpeedCap.ts). Kiwi has no link manager, but it does have a rate
+  /** ★ V12 MINIMUM / LOW / ECO waterfall speed (src/assets/wfSpeedCap.ts). Kiwi has no link manager, but it does have a rate
    *  lever: wf_speed 4 ≈ 23 fps (fast — what we always ask for), 3 ≈ 13, 2 ≈ 5 (measured — linkManager.ts LADDERS.kiwi).
    *  So the cap goes to the Kiwi itself: less data for the listener AND less work for someone else's receiver.
-   *  ★ ECO (10) is a step Kiwi does not have: 5 would make it MINIMUM, so it takes 3 (≈13 fps) — and the button's live
-   *    number says 13, not 10 (SDRScreen passes KIWI_SPEED_CAPS). */
+   *  ★ ECO (10) is a step Kiwi does not have: 5 would make it LOW, so it takes 3 (≈13 fps), thinned to 10.
+   *  ★ MINIMUM (2) takes 2 (≈5 fps) as LOW does, thinned to 2 on the client: wf_speed 1 (1 Hz) is below the 2 floor and
+   *    would be filled in with repeats (SDRScreen passes KIWI_SPEED_CAPS for the live numbers). */
   private _wfLinkCap = 0;
   private wfSpeedLever(): number { return this._wfLinkCap <= 0 ? 4 : this._wfLinkCap <= 5 ? 2 : 3; }
   get wfLinkCap(): number { return this._wfLinkCap; }

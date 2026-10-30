@@ -15,7 +15,7 @@
  * slipped — a hitch. Native at 10 fps has a whole 100 ms row of cover; the interpolated modes had about 40 ms.
  *
  * THE DESIGN.
- *  1. THE OUTPUT RATE IS FIXED at the chosen row rate (Minimum 5, Eco 10, Default 30, Smooth 60 — the rule in
+ *  1. THE OUTPUT RATE IS FIXED at the chosen row rate (Minimum 2, Low 5, Eco 10, Default 30, Smooth 60 — the rule in
  *     wfRowTarget.ts decides it from the feed, latched; clockRowRate below keeps it from flapping). Rows come off a
  *     steady clock (tick k at t0 + k·1000/R), never off an arrival.
  *  2. EACH ROW IS THE MOST RECENT REAL FRAME presented by its tick — sample-and-hold, a REPEAT, never a blend (Stuart's
@@ -207,7 +207,7 @@ export function clockRowRate(st: RowTargetState & { clockRate?: number }, scroll
 export function clockRateUnderCap(rate: number, capHz: number): number {
   if (!(rate > 0) || !(capHz > 0) || capHz >= 60) return rate;
   let best = 0;
-  for (const r of [5, ...ROW_RATES]) if (r <= rate && r <= capHz && capHz % r === 0) best = r;
+  for (const r of [2, 5, ...ROW_RATES]) if (r <= rate && r <= capHz && capHz % r === 0) best = r;
   return best || rate;
 }
 

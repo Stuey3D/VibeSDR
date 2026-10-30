@@ -242,7 +242,7 @@ export interface WaterfallViewProps {
    *    SMOOTH   4 — continuous motion on a slow feed, at the cost of largely synthesised rows.
    *  ★ Scroll SPEED therefore follows the data rate (rows/s = multiplier x fps), which is what
    *    SHARP has always done and what nobody has ever objected to. */
-  wfScroll?:       WfScroll;   // ★ V12 'eco' = 10 rows/s, 'minimum' = actual rows (5 rows/s under a sub-5 feed) — wfRowTarget ROW_RULE
+  wfScroll?:       WfScroll;   // ★ V12 'eco' = 10 rows/s, 'low' = 5, 'min2' (MINIMUM) = 2 — actual rows at that feed, else thinned/filled — wfRowTarget ROW_RULE
   /** ★★ THE SLOWEST FRAME RATE THIS BACKEND EVER DELIVERS — what the fixed multiplier is sized
    *  against. It is a property of the SERVER, not a measurement, so it is known at connect and
    *  never moves: UberSDR bottoms out at 3.3 fps (→ 6x for a 20 rows/s scroll), VibeServer at
@@ -745,7 +745,7 @@ function WaterfallView({
   //   (1, 2, 1, 2 rows per frame). The web client now uses these same three (web/client/src/main.ts WF_PRESET).
   // ★★★ AND THESE ARE NOW CAPS (Stuart 10-20): the rows aimed for follow the measured feed — min(cap, 3x / 6x the feed),
   //     snapped to a divisor of 60 (src/assets/wfRowTarget.ts; handleFrame / spectrum_engine.cpp apply it).
-  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 20 : wfScroll === 'eco' ? 10 : wfScroll === 'minimum' ? 5 : 0;
+  const WF_TARGET_ROWS = wfScroll === 'smooth' ? 60 : wfScroll === 'default' ? 20 : wfScroll === 'eco' ? 10 : wfScroll === 'low' ? 5 : wfScroll === 'min2' ? 2 : 0;
   // ★★ WF_ROWS (a lines-per-frame figure LATCHED from the measured feed rate) is GONE
   //     (2026-10-03). Since uN was pinned to 1 nothing read it — it only fed `cfg.rowsPerFrame`,
   //     which no code read either. Its latch never latched (handleFrame is a []-deps callback and

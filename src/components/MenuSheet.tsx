@@ -72,7 +72,7 @@ import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import type { Textures } from '../constants/assetDensity';
 import { appAlert } from './AppAlert';
 import { autoVfoBColour, VFO_B_AUTO } from '../services/vfoAB';
-import type { WfSpeedSetting } from '../assets/wfSpeedCap';
+import { type WfSpeedSetting, WF_SPEED_LABEL, linkCapFor } from '../assets/wfSpeedCap';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -356,7 +356,8 @@ export interface MenuSheetProps {
   onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
   wfScroll?:          WfSpeedSetting;
   onWfScroll?:        (v: WfSpeedSetting) => void;
-  /** ★ V12: offer MINIMUM / ECO (5 / 10 fps link ceilings) — false where the server has no rate lever (OpenWebRX). */
+  /** ★ V12: offer LOW / ECO (5 / 10 fps link ceilings) — false where the server has no rate lever (OpenWebRX). MINIMUM (2)
+   *  is offered regardless. */
   wfCapsOk?:          boolean;
   /** ★ V12: the live rows/s each Waterfall Speed choice gives on this server (wfSpeedCap.speedNumbers); null = unknown. */
   wfSpeedNums?:       Record<WfSpeedSetting, number> | null;
@@ -1999,10 +2000,12 @@ function MenuSheetBody({
                     history, so anything that changes it rescales the picture — deriving it from the
                     live data rate is what made the waterfall compress and expand. A constant cannot
                     do that. Speed therefore follows the data rate, which is what SHARP always did. */}
-                {/* ★★ V12 MINIMUM · ECO · NATIVE · [DEFAULT · SMOOTH] — slowest to smoothest (Stuart 2026-10-28). NATIVE is
-                    what was SHARP (stored value still 'sharp'). The two that add interpolated rows sit in an outlined group;
-                    MINIMUM / ECO cap the LINK so the server sends less (src/assets/wfSpeedCap.ts) and are offered only where
-                    the server has a rate lever (not OpenWebRX). Each key carries its LIVE rows/s on this server. */}
+                {/* ★★ V12 MINIMUM · LOW · ECO · NATIVE · [DEFAULT · SMOOTH] — slowest to smoothest (Stuart 2026-10-28; the 2
+                    fps MINIMUM 2026-10-30, GitHub #57 — the old 5 fps MINIMUM is now LOW). NATIVE is what was SHARP (stored
+                    value still 'sharp'). The two that add interpolated rows sit in an outlined group; MINIMUM / LOW / ECO
+                    cap the LINK so the server sends less (src/assets/wfSpeedCap.ts). LOW / ECO are offered only where the
+                    server has a rate lever (not OpenWebRX); MINIMUM everywhere — its point is the slow scroll. Each key
+                    carries its LIVE rows/s on this server. */}
                 {!!onWfScroll && (() => {
                   const lbl = (name: string, k: WfSpeedSetting) => wfSpeedNums ? `${name} ${wfSpeedNums[k]}` : name;
                   const key = (name: string, k: WfSpeedSetting) => (
@@ -2012,7 +2015,8 @@ function MenuSheetBody({
                   return (<>
                 <SubLabel label="Waterfall Speed" />
                 <BtnRow>
-                  {wfCapsOk && key('MINIMUM', 'minimum')}
+                  {key('MINIMUM', 'min2')}
+                  {wfCapsOk && key('LOW', 'low')}
                   {wfCapsOk && key('ECO', 'eco')}
                   {key('NATIVE', 'sharp')}
                   <View style={styles.wfInterpGroup}>
@@ -2025,11 +2029,11 @@ function MenuSheetBody({
                 </BtnRow>
                 <Text style={styles.wfNote}>
                   {(wfCapsOk
-                    ? '5 fps is the minimum waterfall rate. Minimum and Eco save data by asking the server for less — no effect when it already sends that little. Eco — 10 rows a second: asks a faster server for less, fills in a slower one. '
-                    : '')
+                    ? 'Minimum (2 rows a second) is the slowest — for spotting an intermittent signal in the history. Minimum, Low (5) and Eco (10) save data by asking the server for less — no effect when it already sends that little; a faster feed the server cannot slow is combined down to the rate, keeping short bursts. '
+                    : 'Minimum (2 rows a second) is the slowest — for spotting an intermittent signal in the history; this server cannot send less, so its frames are combined down to 2, keeping short bursts. ')
                   // ★ 2026-10-29 (Stuart, a 23 fps Kiwi: "ECO 13" beside "10 rows a second"): every choice but Native now
                   //   runs at a rate that divides the screen's refresh — the numbers on the keys are what runs.
-                  + 'Every speed but Native runs at a rate that divides the screen\'s refresh (5, 10, 15, 20, 30 or 60 rows a second), filling in rows or dropping them evenly. Native is the server\'s own rate, every row a real frame. Default and Smooth add interpolated rows for a smoother scroll.'}
+                  + 'Every speed but Native runs at a rate that divides the screen\'s refresh (2, 5, 10, 15, 20, 30 or 60 rows a second), filling in rows or combining them evenly. Native is the server\'s own rate, every row a real frame. Default and Smooth add interpolated rows for a smoother scroll.'}
                 </Text>
                   </>);
                 })()}
@@ -2208,9 +2212,9 @@ function MenuSheetBody({
                 <Btn label="LOW DATA" active={linkMode==='lowData'}  onPress={() => onLinkMode('lowData')} />
               </BtnRow>
               {/* ★ V12: a Waterfall Speed cap is a ceiling on all three — say so where FULL would otherwise look broken. */}
-              {wfCapsOk && (wfScroll === 'minimum' || wfScroll === 'eco') && (
+              {wfCapsOk && (wfScroll === 'min2' || wfScroll === 'low' || wfScroll === 'eco') && (
                 <Text style={styles.wfNote}>
-                  {`Waterfall Speed ${wfScroll === 'minimum' ? 'MINIMUM' : 'ECO'} caps the rate at ${wfScroll === 'minimum' ? 5 : 10} fps — Auto still steps down on a poor link.`}
+                  {`Waterfall Speed ${WF_SPEED_LABEL[wfScroll]} caps the rate at ${linkCapFor(wfScroll)} fps — Auto still steps down on a poor link.`}
                 </Text>
               )}
             </>)}

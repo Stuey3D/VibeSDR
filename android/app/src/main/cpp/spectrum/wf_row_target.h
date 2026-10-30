@@ -4,7 +4,7 @@
 //
 // ★★★ Stuart 10-20: Sharp = actual rows (x1); Default = min(20, 3 x feed fps); Smooth = min(60, 6 x feed fps); each
 //     snapped DOWN to {10, 12, 15, 20, 30, 60} (rates that divide 60). ★ 2026-10-29: a faster feed is thinned (Eco,
-//     Minimum) or Default/Smooth go up to the next rate — every choice but Native divides 60 (nominalRowRate).
+//     Low, Minimum) or Default/Smooth go up to the next rate — every choice but Native divides 60 (nominalRowRate).
 //     5 fps → 5/15/30 · 10 → 10/20/60 · 20 → 20/20/60 · UberSDR 3.3 → 3.3/10/20 · OWRX ~9 → 9/20/30. Never above x6.
 // ★★ Hysteresis on the FEED (a latch): a 9 <-> 10 fps wobble cannot flap Smooth 30/60; a governor step changes it once.
 #pragma once
@@ -13,8 +13,8 @@
 
 namespace vibewf {
 
-/** `cap` 20 = Default, 60 = Smooth, 10 = Eco, 5 = Minimum (V12), 0 = Sharp/Native (EngineConfig::targetRows carries the cap). */
-inline int rowMultFor(int cap) { return cap >= 60 || cap == 10 || cap == 5 ? 6 : 3; }   // ★ Eco 10 / Minimum 5 = mult 6, as wfRowTarget.ts
+/** `cap` 20 = Default, 60 = Smooth, 10 = Eco, 5 = Low, 2 = Minimum (V12), 0 = Sharp/Native (EngineConfig::targetRows carries the cap). */
+inline int rowMultFor(int cap) { return cap >= 60 || cap == 10 || cap == 5 || cap == 2 ? 6 : 3; }   // ★ Eco 10 / Low 5 / Minimum 2 = mult 6, as wfRowTarget.ts
 
 
 /** The largest of {10,12,15,20,30,60} ≤ min(cap, mult × fps) (3 % slack: 3.33 × 6 → 20), or 0. */
@@ -24,7 +24,8 @@ inline double snappedRowTarget(int cap, double fps) {
     // ★ Default (carried as 20) runs up to 30 — Stuart, 2026-10-29, a 10 fps UberSDR: "we should be smoothing to 30".
     const double top = cap == 20 ? 30.0 : (double)cap;
     const double raw = std::min(top, rowMultFor(cap) * fps) * 1.03;
-    if (cap == 5) return raw >= 5 ? 5 : 0;   // ★ V12 MINIMUM: its one rate, 5 (only a sub-5 feed is filled in)
+    if (cap == 5) return raw >= 5 ? 5 : 0;   // ★ V12 LOW (was MINIMUM): its one rate, 5 (only a sub-5 feed is filled in)
+    if (cap == 2) return raw >= 2 ? 2 : 0;   // ★ V12 MINIMUM (#57): its one rate, 2 — a faster feed thinned, a slower filled in
     if (cap == 20) {   // ★★ DEFAULT never runs at 20 (Stuart 2026-10-29): 10 / 15 / 30, 3 × the feed rounded UP, ≤ 6 × the feed
         if (3 * fps * 1.03 < 10) return 0;   // the idle floor: a 2 fps feed stays actual rows
         const double want = std::min(30.0, 3 * fps) / 1.03;
@@ -38,7 +39,7 @@ inline double snappedRowTarget(int cap, double fps) {
 }
 
 /** ★★★ The rate a choice RUNS at (wfRowTarget.ts nominalRowRate, 2026-10-29 — Stuart on a 23 fps Kiwi: "interpolate and
- *  discard"): always a divisor of 60. Eco/Minimum thin a faster feed to 10/5; Default/Smooth never thin below the feed —
+ *  discard"): always a divisor of 60. Eco/Low/Minimum thin a faster feed to 10/5/2; Default/Smooth never thin below the feed —
  *  they go UP to the next rate (23 → 30); above 60, 60. 0 for Native or no feed. */
 inline double nominalRowRate(int cap, double fps) {
     if (cap <= 0 || !(fps > 0)) return 0;

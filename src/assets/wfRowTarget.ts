@@ -32,15 +32,20 @@
  *  The LINK is capped at 10 (a 20 fps server sends half); a slower feed is filled in to 10 by the same over-generate-and-
  *  discard pacing Default and Smooth use ("the interpolation always over interpolates and discards leaving headroom to
  *  account for link rate judder") — 9 fps → 10, 5 → 10, 3.3 → 10, never 9 × 2 = 18 or a feed multiple. */
-/* ★ V12 MINIMUM: the server is ASKED for 5 fps and the rows are actual rows — EXCEPT on a feed below 5 (a 2 fps server,
- *  UberSDR's 3.3 emergency rung), which is filled in to an even 5 rows/s by the same rule. 5 is MINIMUM's one rate. */
-export type WfScroll = 'minimum' | 'sharp' | 'eco' | 'default' | 'smooth';
+/* ★ V12 LOW (was MINIMUM until 2026-10-30 — stored 'low' now; an old saved 'minimum' loads as LOW, wfSpeedCap.ts
+ *  loadWfSpeed): the server is ASKED for 5 fps and the rows are actual rows — EXCEPT on a feed below 5 (a 2 fps server,
+ *  UberSDR's 3.3 emergency rung), which is filled in to an even 5 rows/s by the same rule. 5 is LOW's one rate. */
+/* ★★ V12 MINIMUM, stored 'min2' (GitHub #57, Stuart 2026-10-30): 2 rows a second, the floor ("1fps would look like no
+ *  motion at all"). The server is ASKED for 2 fps; a feed it cannot slow (a 3.3 fps UberSDR shared channel, an OpenWebRX
+ *  ~9, a Kiwi's 5) is THINNED to an even 2 by the same rule, and a slower one filled in. 2 divides 60. */
+export type WfScroll = 'min2' | 'low' | 'sharp' | 'eco' | 'default' | 'smooth';
 
 /** Rates that divide 60 evenly (and so 120): each is a whole number of frames per row on 60/120 Hz panels. */
 export const ROW_RATES = [10, 12, 15, 20, 30, 60] as const;
 /** The cap and the multiplier for each setting. */
 export const ROW_RULE: Record<Exclude<WfScroll, 'sharp'>, { cap: number; mult: number }> = {
-  minimum: { cap: 5,  mult: 6 },
+  min2:    { cap: 2,  mult: 6 },   // MINIMUM
+  low:     { cap: 5,  mult: 6 },   // LOW
   eco:     { cap: 10, mult: 6 },   // ★ mult 6 (the repeat limit) so even a 1.7 fps feed is lifted to 10
   default: { cap: 30, mult: 3 },   // ★ 30, was 20 (Stuart, 2026-10-29, a 10 fps UberSDR: "incoming is 10 we should be smoothing to 30")
   smooth:  { cap: 60, mult: 6 },
@@ -48,10 +53,10 @@ export const ROW_RULE: Record<Exclude<WfScroll, 'sharp'>, { cap: number; mult: n
 /** ±15 %: how far the measured feed may move before the target follows it. */
 export const ROW_HYST = 0.15;
 
-/** The scroll mode for a row-rate cap (WaterfallView carries the cap as targetRows): 0 sharp, 5 minimum, 10 eco, 20
- *  default, 60 smooth. */
+/** The scroll mode for a row-rate cap (WaterfallView carries the cap as targetRows): 0 sharp, 2 min2 (MINIMUM), 5 low,
+ *  10 eco, 20 default, 60 smooth. */
 export const scrollForCap = (cap: number): WfScroll =>
-  (cap >= 60 ? 'smooth' : cap >= 20 ? 'default' : cap >= 10 ? 'eco' : cap > 0 ? 'minimum' : 'sharp');
+  (cap >= 60 ? 'smooth' : cap >= 20 ? 'default' : cap >= 10 ? 'eco' : cap >= 5 ? 'low' : cap > 0 ? 'min2' : 'sharp');
 /** A target computed from a feed 3 % short still snaps up to the rate it was meant to be (3.33 fps x 6 = 19.98 → 20). */
 const SNAP_SLACK = 1.03;
 
@@ -71,8 +76,9 @@ export function snappedTarget(scroll: WfScroll, fps: number): number {
     for (const r of [30, 15, 10]) if (r >= want && r <= 6 * fps * SNAP_SLACK) best = r;
     return best || (raw >= 10 ? 10 : 0);
   }
-  // ★ MINIMUM's one rate, 5, is not a ROW_RATE (Default must not start lifting a 1.7 fps feed to 5); 5 divides 60 too.
-  for (const r of scroll === 'minimum' ? [5] : ROW_RATES) if (r <= raw && r <= cap) best = r;
+  // ★ LOW's one rate, 5, is not a ROW_RATE (Default must not start lifting a 1.7 fps feed to 5); 5 divides 60 too.
+  //   MINIMUM's one rate, 2, the same (V12 #57).
+  for (const r of scroll === 'low' ? [5] : scroll === 'min2' ? [2] : ROW_RATES) if (r <= raw && r <= cap) best = r;
   return best;
 }
 
@@ -122,7 +128,9 @@ export const ROW_LATCH_FRAMES = 20;
  *  DEFAULT 23": "on Kiwi those FPS numbers look weird and won't line up with any refresh rate, so we need to interpolate
  *  and discard"). Every choice but NATIVE now runs at a rate that divides 60 (and 120), so each row gets a whole number
  *  of refreshes:
- *    MINIMUM  5   — a faster feed is THINNED to 5 (rows discarded evenly), a slower one filled in.
+ *    MINIMUM  2   — a faster feed is THINNED to 2 (V12 #57: a server that cannot be asked for 2 fps), a slower one
+ *                   filled in.
+ *    LOW      5   — a faster feed is THINNED to 5 (rows discarded evenly), a slower one filled in.
  *    ECO      10  — the same: a 13 fps Kiwi (its wf_speed 3) is thinned to 10, a 5 fps server filled in to 10.
  *    DEFAULT  min(20, 3 × feed), snapped — but the interpolated pair NEVER drops real frames: a feed faster than that
  *             goes UP to the next rate that divides 60 (23 fps → 30, filled in), and only a feed above 60 is thinned.
@@ -130,11 +138,11 @@ export const ROW_LATCH_FRAMES = 20;
  *    NATIVE   unchanged — the server's own rate, every row a real frame, no snapping (Stuart: "native will stay at a
  *             weird fps").
  *  A feed within 2.5 % of the rate is simply shown as it comes (actual rows, ROW_ACTUAL_TOL).
- *    feed      MIN  ECO  DEFAULT  SMOOTH        feed      MIN  ECO  DEFAULT  SMOOTH
- *    3.3       5    10   10       20            20        5    10   20 (x1) 60
- *    5         5(x1)10   15       30            23 Kiwi   5    10   30       60
- *    9 OWRX    5    10   20       30            30        5    10   30 (x1) 60
- *    10        5    10(x1)20      60            ~13 Kiwi ECO     10 (thinned)          */
+ *    feed      MIN LOW  ECO  DEFAULT  SMOOTH        feed      MIN LOW  ECO  DEFAULT  SMOOTH
+ *    3.3       2   5    10   10       20            20        2   5    10   20 (x1) 60
+ *    5         2   5(x1)10   15       30            23 Kiwi   2   5    10   30       60
+ *    9 OWRX    2   5    10   20       30            30        2   5    10   30 (x1) 60
+ *    10        2   5    10(x1)20      60            ~13 Kiwi ECO          10 (thinned)          */
 /** ★ A feed this close to the rate is shown as it comes (actual rows): 2.5 % — a 20 fps server measured at 19.8 is not
  *  worth a repeat every 5 s, but a 21 fps one (the Lenovo) is a slip every second and is thinned/filled to a divisor. */
 export const ROW_ACTUAL_TOL = 0.025;
