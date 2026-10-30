@@ -18,6 +18,21 @@ import { pickNext, type Box, type Dir } from '../utils/gamepadNav';
 
 const nodes = new Map<string, any>();
 const presses = new Map<string, () => void>();
+/** ★ ADJUSTABLE stops (a slider): left / right on it change its value instead of moving the highlight (Stuart,
+ *  2026-10-30, the two-server balance: "the navigation moves to the control and left/right adjusts it"). */
+const adjusts = new Map<string, (step: -1 | 1) => void>();
+/** ★ A stop's fixed neighbour in one direction, where the geometric pick would land elsewhere (the balance's UP is the
+ *  card's collapse key — Stuart: "move up again selects the collapse button"). */
+const links = new Map<string, Partial<Record<Dir, string>>>();
+
+/** Make `id` adjustable with left / right (undefined = not any more). */
+export function screenNavAdjust(id: string, step: ((s: -1 | 1) => void) | undefined) {
+  if (step) adjusts.set(id, step); else adjusts.delete(id);
+}
+/** Fix where the highlight goes from `id` in some directions (undefined = the geometric pick again). */
+export function screenNavLink(id: string, to: Partial<Record<Dir, string>> | undefined) {
+  if (to) links.set(id, to); else links.delete(id);
+}
 
 /** Attach to a control the screen highlight can land on. `press` is what Enter does there. */
 export function screenNavRef(id: string, press: (() => void) | undefined) {
@@ -102,7 +117,17 @@ export function useScreenHighlight(show: boolean, color: string, relayout: unkno
     hlRef.current = id; setHlState(id); place(id ? b ?? null : null);
   }, [place]);
   const move = useCallback(async (dir: Dir) => {
-    const r = await screenNavMove(hlRef.current, dir);
+    const cur = hlRef.current;
+    // ★ A slider under the highlight takes left / right itself.
+    const adj = cur && nodes.has(cur) ? adjusts.get(cur) : undefined;
+    if (adj && (dir === 'left' || dir === 'right')) { adj(dir === 'left' ? -1 : 1); return; }
+    // ★ A fixed neighbour, when it is there and pressable.
+    const to = cur ? links.get(cur)?.[dir] : undefined;
+    if (to && presses.has(to)) {
+      const b = await screenNavBox(to);
+      if (b) { set(to, b); return; }
+    }
+    const r = await screenNavMove(cur, dir);
     if (r) set(r.id, r.box);
   }, [set]);
   /** Enter: press the highlighted control, or — with nothing highlighted yet — show where you are. */

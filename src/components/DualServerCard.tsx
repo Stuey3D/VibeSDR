@@ -28,7 +28,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { G, Path } from 'react-native-svg';
 import { EDGE_TAB_W, edgeChipGeometry } from './edgeChipGeometry';
 import { useIslandSide } from '../hooks/useIslandSide';
-import { screenNavRef } from './ScreenNav';
+import { screenNavAdjust, screenNavLink, screenNavRef } from './ScreenNav';
+import { useKeyboardMode } from './PanelNav';
+import { mergeRefs } from './Coachmark';
 import { bookmarkFreqLabel } from '../utils/bookmarkName';
 import { answerStillHere, dualEar, dualLevels, setDualBalance, setSideMuted, useDual } from '../services/dualServer';
 import { bgSide, countdownStage, earIcon, fmtLeft, shouldPopOut } from '../services/dualMix';
@@ -154,6 +156,27 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
    *  so the card slid under the finger and the knob jumped. Now the track refuses to hand the touch over, and the card's
    *  tuck gesture stands down entirely while the balance is open (the ‹ button still tucks it on a plain tap). */
   const balOpenRef = useRef(false); balOpenRef.current = balOpen;
+  /* ★★★ A CONTROLLER OR KEYBOARD HAS NO HOLD (Stuart, 2026-10-30: "when controller and keyboard is detected simply put
+   *  the balance controls in the chip all the time and then the navigation moves to the control and left/right adjusts
+   *  it. move up again selects the collapse button"). Driving by keys, the card shows its balance whenever it is out; the
+   *  slider is a highlight stop of its own — left / right move it a tenth at a time (ScreenNav screenNavAdjust), Enter
+   *  centres it, and UP goes to the collapse key ‹. Touch is unchanged (hold for the balance). */
+  const tuckNow = () => {
+    setBalOpen(false);
+    if (balTimer.current) clearTimeout(balTimer.current);
+    Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true }).start(() => setTucked(true));
+  };
+  const keys = useKeyboardMode();
+  const balShown = (balOpen || keys) && !tucked;
+  const navLive = keys && !tucked && !ended;
+  useEffect(() => {
+    screenNavAdjust('dualBal', navLive ? (step) => {
+      const b = Math.max(-1, Math.min(1, Math.round((balRef.current + step * 0.1) * 10) / 10));
+      setDualBalance(Math.abs(b) < 0.05 ? 0 : b, true);
+    } : undefined);
+    screenNavLink('dualBal', navLive ? { up: 'dualTuck' } : undefined);
+    return () => { screenNavAdjust('dualBal', undefined); screenNavLink('dualBal', undefined); };
+  }, [navLive]);
   const balPan = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onStartShouldSetPanResponderCapture: () => true,
@@ -302,10 +325,11 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
                 </TouchableOpacity>
               </View>
             )}
-            {balOpen && !ended && (
+            {balShown && !ended && (
               <View style={s.balRow}>
                 <Text style={[s.balEnd, { color: colour }]} numberOfLines={1}>{short(st.sides[0]?.name)}</Text>
-                <View ref={trackRef} style={s.track} {...balPan.panHandlers}
+                <View ref={mergeRefs(trackRef, screenNavRef('dualBal', navLive ? () => setDualBalance(0, true) : undefined))}
+                      style={s.track} {...balPan.panHandlers}
                       onLayout={(e) => { trackW.current = Math.max(1, e.nativeEvent.layout.width); }}
                       accessibilityRole="adjustable" accessibilityLabel="Balance between the two servers">
                   <View pointerEvents="none" style={[s.rail, { backgroundColor: colour }]} />
@@ -329,11 +353,7 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
           )}
           {/* ★ Tucking closes the balance first: the card is measured again without its slider row, and the slide
                *  ends exactly at the compact card's tucked position (the lastOff effect re-places it if the width moves). */}
-          <TouchableOpacity onPress={() => {
-              setBalOpen(false);
-              if (balTimer.current) clearTimeout(balTimer.current);
-              Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true }).start(() => setTucked(true));
-            }}
+          <TouchableOpacity ref={screenNavRef('dualTuck', tucked ? undefined : tuckNow)} onPress={tuckNow}
             hitSlop={{ top: 8, bottom: 8, left: 2, right: 8 }} accessibilityRole="button"
             accessibilityLabel={`Hide ${bg.name}`} style={s.arrowHit}>
             <Text style={[s.arrow, { color: tabColour }]}>‹</Text>
@@ -342,7 +362,8 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
       </Animated.View>
       <Animated.View {...tabPan.panHandlers} pointerEvents={tucked ? 'auto' : 'none'}
         style={[s.tabWrap, { top, left: 0, transform: [{ translateX: tabX }] }]}>
-        <TouchableOpacity onPress={() => setTucked(false)} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 4, right: 10 }}
+        <TouchableOpacity ref={screenNavRef('dualTab', tucked ? () => setTucked(false) : undefined)}
+          onPress={() => setTucked(false)} activeOpacity={0.7} hitSlop={{ top: 6, bottom: 6, left: 4, right: 10 }}
           accessibilityRole="button" accessibilityLabel={`Show ${bg.name}`}
           style={[s.tab, { borderColor: tabColour, width: geo.tabW, paddingLeft: geo.tabW - EDGE_TAB_W }]}>
           <Text style={[s.chev, { color: tabColour }]}>›</Text>
