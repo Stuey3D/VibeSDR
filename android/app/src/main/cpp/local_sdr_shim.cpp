@@ -12618,6 +12618,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     g_rspVagcActive.store(false, std::memory_order_relaxed);
                     LOGI("VibeAGC (RSP): stopping — %s", !sdrpAgcWanted ? "the IF AGC was switched off (manual gain)"
                                                                        : "switched off by the owner");
+                    /* ★ HANDED BACK AT A SENSIBLE SET POINT (the radio menu's AGC choice, 2026-10-30): the API's AGC
+                     *   aims at the owner's target, or SDRplay's own −30 working point if they never chose one —
+                     *   re-stated before the kick below enables it, never left to whatever the register last held. */
+                    if (sdrpAgcWanted) sdrp->setIfAgcSetPoint(vsDesiredAgcSet() > -999 ? vsDesiredAgcSet() : -30);
                 }
                 if (g_rspVagcActive.load(std::memory_order_relaxed)) {
                     const int capPosV = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
@@ -18346,6 +18350,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (jsonNum(msg, "biast", v) && adminGate("bias-T")) {
                 LocalSdrShim::instance().setBiasT(v != 0);
                 vsPersist(std::string("{\"biasT\":") + (v != 0 ? "true" : "false") + "}");
+                LocalSdrShim::instance().broadcastHwInfo();
+            }
+            /* ★★★ WHICH AGC RUNS THIS RADIO — the owner's choice, from the radio menu (2026-10-30). Stuart, on his
+             *     unlocked Lenovo RSP1A with VibeAGC running: "i assume this isnt vibeagc" / "no option for it here
+             *     either". It lived only on the setup page (rspVibeAgc), which RESTARTS to apply; this is the same
+             *     setting, LIVE: 0 automatic (VibeAGC with OpenRSP, the SDRplay's own with the official API),
+             *     1 VibeAGC, 2 the SDRplay's own IF AGC.
+             * ★★ OWNER-ONLY (adminGate), like bias-T: it decides how hard the front end is driven for everybody.
+             * ★ The switch itself is the heartbeat's (vsRspVagcTakeOver / the stop branch): VibeAGC → SDRplay re-runs
+             *   the kick, which hands the IF back to the API's AGC from safe parking values at the owner's set point;
+             *   SDRplay → VibeAGC adopts the gains the radio is at. Saved like the setup page saves it, so a restart
+             *   keeps it; hwinfo re-sent, so every panel shows the new choice. */
+            if (jsonNum(msg, "vagcmode", v) && adminGate("the AGC choice")) {
+                const int c = std::max(0, std::min(2, (int)v));
+                LocalSdrShim::setVibeServerRspVibeAgc(c);
+                vsPersist("{\"rspVibeAgc\":" + std::to_string(c) + "}");
+                LOGI("VibeAGC (RSP): the owner chose %s from the radio menu",
+                     c == 1 ? "VibeAGC" : c == 2 ? "the SDRplay's own IF AGC" : "automatic");
                 LocalSdrShim::instance().broadcastHwInfo();
             }
             return;
@@ -40834,6 +40856,18 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
     if (d.hasAmNotch())   j += std::string(",\"amNotchOn\":") + (g_dsp.rspAmNotch.load() > 0 ? "true" : "false");
     j += std::string(",\"extRef\":")  + (d.hasExtRefOut() ? "true" : "false");
     if (d.hasExtRefOut()) j += std::string(",\"extRefOn\":")  + (g_dsp.rspExtRef.load()  > 0 ? "true" : "false");
+    /* ★★★ WHICH AGC, AND WHAT AUTO MEANS ON THIS SERVER (the radio menu's AGC row, 2026-10-30). `vagcMode` is the
+     *     owner's choice (0 auto · 1 VibeAGC · 2 the SDRplay's own); `vagcAuto` is what AUTO resolves to with the
+     *     driver this server loaded — VibeAGC with OpenRSP, the SDRplay's own with the official API — so the row can
+     *     say "AUTO → VibeAGC" rather than leaving an owner to know which driver is installed. Whether VibeAGC is
+     *     RUNNING right now (it may have handed back, or manual gain may be on) is rspstat's `vagc`, the live fact.
+     *     The presence of `vagcMode` is also the capability: an older server never sends it, and no row is drawn. */
+    {
+        const int own = g_rspVagcOwner.load(std::memory_order_relaxed);
+        const bool autoV = vibe::sdrplaylib::vagcEnabled(0, (vibe::sdrplaylib::RspDriver)SdrplaySource::driverKind());
+        j += ",\"vagcMode\":" + std::to_string(own);
+        j += std::string(",\"vagcAuto\":") + (autoV ? "true" : "false");
+    }
     j += "}";
     return j;
 }

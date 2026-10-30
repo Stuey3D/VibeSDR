@@ -3340,6 +3340,10 @@ int main(int argc, char** argv) {
             // ★★ AND THE REST OF THE RSP SWEEP (2026-10-22, the RSP setup audit): rsp_control persisted these three,
             //    and they were never folded into this radio's entry, so a toggle survived only until the next restart.
             r.rspHdr = disk.rspHdr; r.rspAmNotch = disk.rspAmNotch; r.rspExtRef = disk.rspExtRef;
+            /* ★★ AND WHICH AGC RUNS THE RSP (the radio menu's AGC row, 2026-10-30) — the owner's live switch is only
+             *    worth having if a restart keeps it. rfAgc rides with it: the menu's RF AGC key has persisted it since
+             *    09-11 and it was never folded here either, so it too lasted only until the next restart. */
+            r.rspVibeAgc = disk.rspVibeAgc; r.rfAgc = disk.rfAgc;
             // ★ The converter travels with the rest of the per-radio set — it describes what is
             //   bolted to THIS radio's aerial, so it is saved exactly where the gain and the ppm
             //   are. Left out, the setup page would appear to accept it and lose it on save.
