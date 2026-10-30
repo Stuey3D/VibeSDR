@@ -452,8 +452,11 @@ console.log('the card\'s balance owns the finger; the one-time hint (Stuart 2026
   ok(/x\.setValue\(Math\.min\(offRef\.current,/.test(card), 'a flick never drags the card past its tucked position');
   ok(/setBalOpen\(false\);[\s\S]{0,120}Animated\.timing\(x, \{ toValue: offRef\.current/.test(card),
      'the ‹ closes the balance before it tucks');
-  ok(/HINT_SEEN_KEY = 'lsv_dual_card_hint_seen'/.test(card) && /AsyncStorage\.setItem\(HINT_SEEN_KEY, '1'\)/.test(card),
-     'the hint is shown once and remembered');
+  // ★ Once per PAIRING (37b44301c — Stuart, 2026-10-30: "it needs to show once per session … just to remind a user its
+  //   there"), keyed by the pairing, not remembered on the device for good.
+  ok(/let hintSeenFor: string \| null = null;/.test(card) && /hintSeenFor = pairKey;/.test(card)
+     && !/AsyncStorage\.setItem\(HINT_SEEN_KEY/.test(card),
+     'the hint is shown once per pairing (until a tap, a hold or ✕), not once per device for good');
   ok(/DUAL_CARD_HINT = 'Tap to return to the other server · hold for balance'/.test(card), '…in Stuart\'s words');
   ok((card.match(/hintDone\(\)/g) ?? []).length >= 2 && /onPress=\{hintDone\}/.test(card),
      '…and goes on ✕, on a tap and on a hold');
