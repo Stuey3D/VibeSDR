@@ -17,6 +17,11 @@
  *   step is two multiply-adds per ring row in JS (2560 rows); each frame the renderer walks the visible rows once to
  *   find runs that share a map and draws each run with its own uniforms — one draw when nobody has zoomed, a handful
  *   after a pinch, and the old runs scroll away.
+ * ★★★ SUPERSEDED FOR A ZOOM (2026-10-28, Stuart: "a thin line signal should expand out to the width and the history
+ *     remains the thin line"): a zoom no longer re-maps the history — the rows stay as drawn and the new ones ease in
+ *     (wfGlide.ts). The maps now move the history only on a JUMP (waterfall.ts _jumpHistory: a move of a whole view or
+ *     more, every row by the jump's Hz in its own scale); mapRuns/visibleSpan still draw them. applyViewChange is kept
+ *     for its test.
  * PURE — scripts/test_wf_zoom_fan.ts. */
 
 /** Rows' maps after the view's span/position changed from (lo0, span0) to (lo1, span1), in Hz. Only call it when the
@@ -66,4 +71,27 @@ export function visibleSpan(a: number, b: number): [number, number, number, numb
   const u0 = Math.max(0, b), u1 = Math.min(1, a + b);
   if (!(u1 > u0)) return null;
   return [(u0 - b) / a, (u1 - b) / a, u0, u1];
+}
+
+/** mapRuns with a third per-row value — the full-capture layer's extent X (wfWide.ts) — in the key: writes
+ *  [j0, j1, a, b, X] quintuples. Rows at one zoom share X, so a tune does not split runs any more than before. */
+export function mapRunsX(xfA: Float64Array, xfB: Float64Array, xfX: Float64Array, head: number, visible: number,
+                         out: { buf: Float64Array }): number {
+  const rows = xfA.length;
+  if (!rows || visible <= 0 || xfX.length !== rows) return 0;
+  let n = 0, j0 = 0;
+  let a = xfA[head % rows], b = xfB[head % rows], x = xfX[head % rows];
+  const push = (j1: number) => {
+    if ((n + 1) * 5 > out.buf.length) { const g = new Float64Array(out.buf.length * 2 + 80); g.set(out.buf); out.buf = g; }
+    const o = n * 5;
+    out.buf[o] = j0; out.buf[o + 1] = j1; out.buf[o + 2] = a; out.buf[o + 3] = b; out.buf[o + 4] = x; n++;
+  };
+  const vis = Math.min(visible, rows);
+  for (let j = 1; j < vis; j++) {
+    const r = (head + j) % rows;
+    const ra = xfA[r], rb = xfB[r], rx = xfX[r];
+    if (ra !== a || rb !== b || rx !== x) { push(j); j0 = j; a = ra; b = rb; x = rx; }
+  }
+  push(vis);
+  return n;
 }

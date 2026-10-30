@@ -7,6 +7,8 @@
  */
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
+import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
+import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
@@ -26,6 +28,7 @@ import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { FrameClock, renderEvery } from './wfPacing';
+import { tickStep, fmtTick } from './freqScale';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
@@ -1116,7 +1119,7 @@ async function connect(host: string, pin: string) {
   //    sharper at the SAME bin count, so resolution was never what the eye was seeing —
   //    processing is (Stuart, 2026-08-01: "I bet its the FFT averaging").
   // ★ `dab=2`: the DAB report in pieces (src/services/dabAssemble.ts) — a server that predates it ignores the flag.
-  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2', auth)}`;
+  const specUrl  = `${wsBaseUrl}${withAuth('/ws/user-spectrum?user_session_id=' + sid + '&bid=' + browserId() + '&mode=binary8&bins=1024&proto=1&dab=2&wide=1', auth)}`;   // ★ V12 wide=1: the full-capture row (wfWide.ts)
   // Ask for Opus ONLY if this browser can decode it (WebCodecs). If not, the server sends raw PCM —
   // heavier, but it just works. The native apps always have Opus; this gate is purely for the
   // unknown browser a web visitor might bring (esp. the public demo). See AudioPlayer.supportsOpus.
@@ -1194,6 +1197,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
   spec = new SpectrumClient(specUrl, {
     onBins: (bins, centerHz, bwHz) => {
       noteFrame();
+      linkFrames++;   // ★ the DATA control's AUTO controller counts what arrives
       wf!.push(bins, centerHz, bwHz);
       updateSignal(bins, centerHz, bwHz);
       syncNfmVoiceRow();
@@ -1212,6 +1216,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       mobileUi?.paintSignal();
       updateRangeGap(centerHz, bwHz);
     },
+    onWide: (row) => wf?.pushWide(row),   // ★ V12 the full-capture layer under the history (wfWide.ts)
     onConfig: (cfg) => {
       /* ★★★ THE RECEIVER HAS ANSWERED A TUNE — which is what a sweep must pace against. See
        *  sweepAwaitingEcho: the ping cannot see how long a retune actually takes. */
@@ -1228,8 +1233,14 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // with what's on screen, and letting it scroll out takes ~30s at 18 rows/s.
       const span = cfg.binCount * cfg.binBandwidth;
       const lo = cfg.centerFreq - span / 2, hi = cfg.centerFreq + span / 2;
-      if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
-      lastWindow = { lo, hi };
+      // ★★★ NO LONGER CLEARED (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms so it is not
+      //     lost"): the old rows stay as drawn, a scale stamp says what they were, and a tap on them tunes by their scale.
+      // if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
+      // ★★ V12 THE HISTORY COVERS THE CAPTURE, not just the view (the full-capture layer, wfWide.ts): a PAN or a tune to
+      //    anywhere inside what the radio was capturing still has history to show there, so only a move clear of the
+      //    whole capture is a jump (Stuart: black "ONLY when absolutely necessary").
+      { const cap = wf?.captureWindow();
+        lastWindow = cap ? { lo: Math.min(lo, cap.lo), hi: Math.max(hi, cap.hi) } : { lo, hi }; }
 
       /* ★★★ THE NON-DAB DIAL, REMEMBERED AND — IF SOMEBODY JUST LEFT DAB — HANDED BACK. Both halves
        *  belong here because this message is the truth about where the radio is; see dabNoteNonDab
@@ -3235,25 +3246,7 @@ function renderFrame(frameTs: number) {
 
 // ── Frequency scale ──────────────────────────────────────────────────────────
 
-/** Pick a tick step that yields ~6-10 labels across the span, from a 1/2/5 ladder. */
-function tickStep(spanHz: number, targetTicks: number): number {
-  const raw = spanHz / targetTicks;
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-  for (const m of [1, 2, 5, 10]) if (raw <= mag * m) return mag * m;
-  return mag * 10;
-}
-
-/** Label a frequency at a resolution matched to the tick step — the units must
- *  SWITCH with the span, not just the decimal places, or a wide span overflows
- *  the label and a narrow one shows nothing changing. */
-function fmtTick(hz: number, step: number): string {
-  if (step >= 1e6) return (hz / 1e6).toFixed(0) + 'M';
-  if (step >= 1e5) return (hz / 1e6).toFixed(1) + 'M';
-  if (step >= 1e4) return (hz / 1e6).toFixed(2) + 'M';
-  if (step >= 1e3) return (hz / 1e6).toFixed(3) + 'M';
-  if (step >= 100) return (hz / 1e3).toFixed(1) + 'k';
-  return (hz / 1e3).toFixed(2) + 'k';
-}
+// tickStep / fmtTick live in freqScale.ts — shared with the waterfall's scale stamps.
 
 function drawScale() {
   const c = $<HTMLCanvasElement>('scale');
@@ -8056,19 +8049,21 @@ function updateMediaSession() {
  * ★ Audio is untouched either way: you leave it listening and walk away.
  */
 /** The listener's chosen full rate. Their machine's limit, not the server's — see wantedFps().
- *  DERIVED from the Speed + Data Rate controls (computeActiveFps); not set directly by the UI. */
+ *  DERIVED from the Waterfall speed key (computeActiveFps); not set directly by the UI. */
 let activeFps = 20;
 const IDLE_FPS = 5;
 
-// ── Waterfall Speed (on-screen scroll) + Data Rate (server frames) ──────────────
-// Two separate axes. SPEED is the interpolated scroll rate (screen rows/sec); DATA RATE is how many
-// real frames/sec the server sends. AUTO data = bring in as much as we'll display, capped at server.
+// ── Waterfall Speed (on-screen scroll AND, since V12, server frames) ──────────────
+// ★ V12: ONE control. The speed key sets the scroll and — MINIMUM / LOW / ECO — what the server sends; the old separate
+//   DATA RATE row is gone (#57). The request is the server's rate under the key's cap (computeActiveFps).
 let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
 // ★ SHARP = one row per received frame (the app's waterfall). SMOOTH = interpolate up to wfSpeed.
 // ★★ DEFAULTS TO SMOOTH *HERE* AND SHARP IN THE APP — each keeps the waterfall it already had, so
 //    nobody's picture changes on upgrade and the other one is a tap away. The two are not better
 //    and worse, they trade detail against motion (Stuart: "they both have their merits").
-let wfScroll: 'sharp' | 'default' | 'smooth' = 'default';
+/** ★★ V12 "SPEED UP WHILE TUNING" — kept so a waterfall built later (a reconnect) takes it too (applyWaterfallRates). */
+let wfBoostWanted = true;
+let wfScroll: WfSpeedSetting = 'default';   // ★ V12 + 'min2' (MINIMUM, 2) / 'low' (LOW, 5) / 'eco' (wfSpeedCap.ts); 'sharp' is labelled NATIVE
 // Rows synthesised per received frame for each preset. DETAILED is 1 = no interpolation at all.
 // ★ Each preset is a TARGET ROW RATE (rows/sec on screen), not a multiplier: this renderer works
 //   out how many rows to synthesise per frame pair to hit it, which is why a slow feed and a fast
@@ -8079,65 +8074,103 @@ let wfScroll: 'sharp' | 'default' | 'smooth' = 'default';
 //     feed: 5 fps → 5/15/30, 10 → 10/20/60, 20 → 20/20/60, UberSDR 3.3 → 3.3/10/20, OWRX ~9 → 9/20/30. Rates are
 //     SCREEN rows (points) — the app's row is one point. Every row is a REAL frame, repeated, never a blend (7bce170d).
 //     `rate` is the cap (it also sizes the render clock, renderHz).
-const WF_PRESET: Record<string, { rate: number; note: string }> = {
-  sharp:   { rate: 0,  note: 'One row per received frame — nothing repeated, and it scrolls at the data rate.' },
-  default: { rate: 20, note: 'Up to 20 rows/sec — three times the data rate, real rows repeated on a slow feed.' },
-  smooth:  { rate: 60, note: 'Up to 60 rows/sec — six times the data rate: the smoothest scroll, more repeats.' },
+// ★ V12: one fixed note explains all five (index.html #wfScrollNote) — `rate` is the row cap, for renderHz.
+const WF_PRESET: Record<string, { rate: number }> = {
+  min2:    { rate: 2 },    // MINIMUM
+  low:     { rate: 5 },    // LOW (the old MINIMUM)
+  eco:     { rate: 10 },
+  sharp:   { rate: 0 },
+  default: { rate: 20 },
+  smooth:  { rate: 60 },
 };
-let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
+/* ★★★ V12 2026-10-30 — DATA · LOW · AUTO · FULL (src/assets/wfSpeedCap.ts), the web's twin of the app's control. Stuart:
+ *   "we cannot slow the incoming data rate down automatically when the waterfall is slowed down as that will effect the
+ *   spectrum too. We need a minimum of 5FPS incoming … So we need a separate data control but dont mention frame rates,
+ *   just call it low auto full". The speed keys are display only; this alone decides what the server sends:
+ *     LOW  the 5 fps floor · AUTO the app's own adaptive controller (vibeLinkManager) on this socket — as much as the
+ *     connection carries, stepping down on a poor one, never below the floor · FULL the server's full rate.
+ *   Replaces the old WATERFALL DATA RATE row (AUTO/20/10/5): a saved 5 → LOW, 20 → FULL, 0 and 10 → AUTO. */
+let wfData: DataMode = 'auto';
+/** The rate the controller asks for now (0 = not started). */
+let linkFps = 0;
+let webLink: WebLinkManager | null = null;
+let webLinkTop = 0;
+let linkFrames = 0;   // frames counted for the controller's 1 s tick
+/** The ladder for this server: its full rate, then 10, then the floor (5) — nothing below the floor. */
+function webLadder(): number[] {
+  const top = serverFpsCap();
+  const out = [top, 10, DATA_FLOOR_FPS].filter((f, i, a) => f <= top && (i === 0 || f < a[i - 1]));
+  return out.length ? out : [top];
+}
+/** (Re)build the controller when the server's full rate changes; set its mode otherwise. */
+function ensureWebLink() {
+  const top = serverFpsCap();
+  if (!webLink || webLinkTop !== top) {
+    webLinkTop = top;
+    const ladder = webLadder();
+    webLink = new WebLinkManager({
+      ladder, lowDataRung: lowDataRungFor(ladder), mode: linkModeFor(wfData),
+      // ★ A rate WE chose changes the spacing of the frames: the link meter re-learns it from scratch (gapHist), or the
+      //   new, wider gaps read as a stalling link — 1 bar, then back to 3 (Stuart, 2026-10-30, beta47 on the Lenovo).
+      apply: (_r, f) => { if (f !== linkFps) { linkFps = f; gapHist.length = 0; activeFps = computeActiveFps(); if (spec) spec.setFftRate(wantedFps()); updateStatus(); } },
+    });
+    webLink.forceApply();
+  } else webLink.setMode(linkModeFor(wfData));
+}
+setInterval(() => {
+  const n = linkFrames; linkFrames = 0;
+  // Not while the tab is hidden: that rate is ours on purpose (throttleHidden), not a symptom.
+  if (webLink && spec && !throttled) webLink.tick(n, n > 0 || document.visibilityState === 'visible', true);
+}, 1000);
 
 /** The server's fps ceiling (its advertised max, else the built-in 20). */
 function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
 
-/** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps). AUTO never asks
- *  for more than the chosen Speed — no point receiving frames the display would only throw away. */
+/** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps): the DATA control's controller.
+ *  ★ V12 2026-10-30: the speed keys never change it — they are display only. */
 function computeActiveFps(): number {
-  return wfDataRate === 0 ? Math.min(wfSpeed, serverFpsCap()) : wfDataRate;
+  return linkFps > 0 ? linkFps : serverFpsCap();
+}
+
+/** ★ V12: the live rows/s on each Waterfall speed key, from the server's own rate (its advertised max — the rate NATIVE
+ *  asks for). Unknown (no hwinfo yet) → names only. */
+function refreshWfScrollSeg() {
+  // ★ from the rate the server sends — its own, or the floor under DATA LOW (the keys are display only)
+  const nums = speedNumbers(serverMaxFps > 0 ? (wfData === 'low' ? Math.min(DATA_FLOOR_FPS, serverMaxFps) : serverMaxFps) : 0);
+  for (const b of Array.from(document.querySelectorAll<HTMLButtonElement>('#wfScrollSeg [data-wfscroll]'))) {
+    const k = b.dataset.wfscroll as WfSpeedSetting;
+    b.classList.toggle('on', k === wfScroll);
+    const n = b.querySelector('.wfNum');
+    if (n) n.textContent = nums ? String(nums[k]) : '';
+  }
 }
 
 /** Apply both controls: recompute the data rate, set the scroll speed, request the rate, refresh UI. */
 function applyWaterfallRates() {
+  ensureWebLink();
   activeFps = computeActiveFps();
   wf?.setSpeed(wfSpeed);
   // ★★★ The rows follow the FEED now (Stuart 10-20): the preset is a scroll MODE, its rate a cap (wfRowTarget.ts).
   wf?.setScroll(wfScroll);
+  wf?.setBoost(wfBoostWanted);
   // The speed control belongs to SMOOTH: under SHARP the data rate decides, so showing it would be
   // a control whose every use is a no-op.
   // ★ The old 10/20/30 SPEED row is gone from the UI: the preset decides it. Kept hidden rather
   //   than deleted so a saved wfSpeed still loads without a migration.
   { const r = document.getElementById('rowWfSpeed');    if (r) r.hidden = true;
     const n = document.getElementById('wfSpeedNote');   if (n) n.hidden = true;
-    const t = document.getElementById('wfScrollNote');
-    if (t) t.textContent = WF_PRESET[wfScroll]?.note ?? '';
-    for (const b of Array.from(document.getElementById('wfScrollSeg')?.children ?? []) as HTMLButtonElement[])
-      b.classList.toggle('on', b.dataset.wfscroll === wfScroll); }
+    refreshWfScrollSeg(); }
   spec?.setFftRate(wantedFps());
   refreshSpeedSeg();
-  refreshDataRateSeg();
   updateStatus();
 }
 
-/** Speed buttons are filtered to >= the chosen Data Rate (Data 20 hides Speed 10). AUTO shows all. */
+/** The hidden legacy speed row's lit key (kept so a saved wfSpeed loads). */
 function refreshSpeedSeg() {
   const seg = document.getElementById('wfSpeedSeg'); if (!seg) return;
-  const minSpeed = wfDataRate > 0 ? wfDataRate : 0;
-  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
-    const v = Number((b as HTMLButtonElement).dataset.wfspeed);
-    (b as HTMLButtonElement).hidden = v < minSpeed;
-    b.classList.toggle('on', v === wfSpeed);
-  }
+  for (const b of Array.from(seg.children) as HTMLButtonElement[]) b.classList.toggle('on', Number(b.dataset.wfspeed) === wfSpeed);
 }
 
-/** Data-rate buttons above the server's ceiling are hidden; AUTO (0) is always available. */
-function refreshDataRateSeg() {
-  const seg = document.getElementById('wfRateSeg'); if (!seg) return;
-  const cap = serverFpsCap();
-  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
-    const v = Number((b as HTMLButtonElement).dataset.wfrate);
-    (b as HTMLButtonElement).hidden = v > cap;   // 0 (AUTO) is never > cap
-    b.classList.toggle('on', v === wfDataRate);
-  }
-}
 /** The owner's cap, from hwinfo. 0 = uncapped. */
 let serverMaxFps = 0;
 /** The last fps we actually asked the server for — see onHwInfo. */
@@ -8795,18 +8828,10 @@ function onSummoned() {
 let lastInteraction = Date.now();
 let throttled = false;
 
-/**
- * Offer only the rates the owner actually permits.
- *
- * A ceiling of 10 fps means 20 is not on the menu; a ceiling of 5 leaves no choice at all, so the
- * whole row goes — a control with one option is just a label pretending to be a control. Same rule
- * as the pinned sample rate and the enforced idle saver: never show a switch we would ignore.
- */
+/** The owner's ceiling changed (hwinfo): re-apply the waterfall rates under it. */
 function applyRateOptions() {
-  // The server ceiling changed (hwinfo). A manual data rate above it falls back to AUTO (which caps
-  // itself to the ceiling), then the segments re-filter and the request re-clamps.
-  const cap = serverFpsCap();
-  if (wfDataRate > cap) wfDataRate = 0;   // AUTO adapts to the new, lower ceiling
+  // The server ceiling changed (hwinfo): the request re-clamps (wantedFps). (The Data Rate row it used to re-filter is
+  // gone — V12, #57.)
   applyWaterfallRates();
 }
 
@@ -13525,9 +13550,9 @@ function buildMenu() {
   // wondering whether the switch did anything.
   // Waterfall SPEED — on-screen scroll rate (10/20/30). Screen-relative (× dpr inside the waterfall),
   // so render resolution no longer changes the speed.
-  for (const b of Array.from($('wfScrollSeg').children) as HTMLButtonElement[]) {
+  for (const b of Array.from($('wfScrollSeg').querySelectorAll<HTMLButtonElement>('[data-wfscroll]'))) {
     b.onclick = () => {
-      wfScroll = (b.dataset.wfscroll as typeof wfScroll) || 'default';
+      wfScroll = isWfSpeedSetting(b.dataset.wfscroll) ? b.dataset.wfscroll : 'default';
       savePref('wfScroll', wfScroll);
       applyWaterfallRates();
     };
@@ -13539,21 +13564,41 @@ function buildMenu() {
       applyWaterfallRates();
     };
   }
-  // Waterfall DATA RATE — server frames/sec (AUTO/20/10/5). Applied immediately. Picking a data rate
-  // above the current Speed bumps the Speed up (you can't display slower than you receive).
-  for (const b of Array.from($('wfRateSeg').children) as HTMLButtonElement[]) {
-    b.onclick = () => {
-      wfDataRate = Number(b.dataset.wfrate);
-      if (wfDataRate > 0 && wfSpeed < wfDataRate) { wfSpeed = wfDataRate; savePref('wfSpeed', wfSpeed); }
-      savePref('wfDataRate', wfDataRate);
-      applyWaterfallRates();
-    };
-  }
+  // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (#57): the interaction boost on/off, default on, per device.
+  { let on = true;
+    try { on = prefs().wfBoost !== false; } catch { /* storage blocked: default on */ }
+    const paint = () => { for (const b of Array.from($('wfBoostSeg').querySelectorAll<HTMLButtonElement>('[data-wfboost]')))
+      b.classList.toggle('on', (b.dataset.wfboost === '1') === on); };
+    wf?.setBoost(on); wfBoostWanted = on; paint();
+    for (const b of Array.from($('wfBoostSeg').querySelectorAll<HTMLButtonElement>('[data-wfboost]'))) {
+      b.onclick = () => {
+        on = b.dataset.wfboost === '1'; wfBoostWanted = on;
+        try { savePref('wfBoost', on); } catch { /* storage blocked: this visit only */ }
+        wf?.setBoost(on); paint();
+      };
+    } }
   // Restore saved choices, then apply once.
   { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
-  { const v = prefs().wfScroll;   if (v === 'sharp' || v === 'default' || v === 'smooth') wfScroll = v; }
-  { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
-  if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
+  // ★ an old 'sharp' loads as NATIVE; an old 'minimum' was the 5 fps choice — it loads as LOW and is re-saved as 'low',
+  //   never as the new 2 fps MINIMUM ('min2') (wfSpeedCap.loadWfSpeed).
+  { const v = prefs().wfScroll, s = loadWfSpeed(v); if (s) { wfScroll = s; if (s !== v) savePref('wfScroll', s); } }
+  // ★★ DATA · LOW · AUTO · FULL (V12 2026-10-30): the saved choice, or the old WATERFALL DATA RATE row's mapped across
+  //    once (5 → LOW, 20 → FULL, 0 / 10 → AUTO — wfSpeedCap.dataModeFromWebRate) and the old pref removed.
+  try {
+    const p = prefs();
+    if (p.wfData === 'low' || p.wfData === 'auto' || p.wfData === 'full') wfData = p.wfData;
+    else if (p.wfDataRate !== undefined) { wfData = dataModeFromWebRate(p.wfDataRate); savePref('wfData', wfData); savePref('wfDataRate', undefined); }
+  } catch { /* storage blocked: AUTO */ }
+  { const paint = () => { for (const b of Array.from($('wfDataSeg').querySelectorAll<HTMLButtonElement>('[data-wfdata]')))
+      b.classList.toggle('on', b.dataset.wfdata === wfData); };
+    paint();
+    for (const b of Array.from($('wfDataSeg').querySelectorAll<HTMLButtonElement>('[data-wfdata]'))) {
+      b.onclick = () => {
+        const v = b.dataset.wfdata; if (v !== 'low' && v !== 'auto' && v !== 'full') return;
+        wfData = v; try { savePref('wfData', v); } catch { /* this visit only */ }
+        paint(); applyWaterfallRates();
+      };
+    } }
   applyWaterfallRates();
 
   toggle('biasT', (on) => spec!.setHwBiasT(on), 'biasT');
@@ -16243,7 +16288,8 @@ function initWaterfallInput() {
       const rect = c.getBoundingClientRect();
       // Snap the click to the step grid, so the arrows carry on from a round number.
       // (snapToStep: exact 25000/3 on the airband's 8.33 kHz step — src/utils/airband.ts.)
-      const hz = snapToStep(wf.xToHz(e.clientX - rect.left), step);
+      // ★★ by the ROW under the tap (wf.xyToHz — Stuart, 2026-10-30, #57): an old trace tunes to ITS frequency
+      const hz = snapToStep(wf.xyToHz(e.clientX - rect.left, e.clientY - rect.top), step);
       airDesig = null;
       spec.tune(clampTune(hz));
       syncStep();
@@ -16337,7 +16383,7 @@ function initPointerFreq(c: HTMLCanvasElement) {
     const x = px - rect.left, y = py - rect.top;
     if (x < 0 || y < 0 || x > W || y > H) { setShown(false); return; }
     if (measure && shown) { measure = false; lw = el.offsetWidth; lh = el.offsetHeight; }
-    const t = clickTarget(wf.xToHz(x, cw));
+    const t = clickTarget(wf.xyToHz(x, y, cw, H));   // ★★ the row under the pointer's own scale (#57)
     // ── then writes ──
     if (t.hz !== shownHz || freqUnit !== shownUnit) {
       shownHz = t.hz; shownUnit = freqUnit;

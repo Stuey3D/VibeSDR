@@ -16,6 +16,8 @@
  *     §9 — it restarted the ring on every zoom).
  * PURE. */
 
+import { layerFillRow, type LayerRing } from './wfWide.ts';   // ★ .ts: node runs this file directly (the tests)
+
 /** Bins to slide a row by so it lands under the CURRENT view: the gap between the row's own centre and the view's, in the
  *  row's bins. 0 when it cannot be placed honestly — unknown centres, a different bin scale (a frame from another span
  *  would draw the right signal at the wrong width), or no overlap at all. */
@@ -27,6 +29,19 @@ export function rowViewOffset(rowCenterHz: number, rowHzPerBin: number, viewCent
   return Math.abs(off) >= n ? 0 : off;
 }
 
+/** ★★★ A ROW'S OWN GEOMETRY: [centre Hz, Hz a bin] of the bins in this frame — the TRUE centre and span when the client
+ *  states them (SDRStatus.trueCenterHz / trueBwHz), else the status's. While a zoom is in flight centerHz/bwHz are the
+ *  PREDICTED view, but the bins are at the server's own rung (UberSDR's ladder, measured 2026-10-29: 200/300/500/1000/2000
+ *  Hz a bin — 244 asked → 200, 1953 → 2000). Placing a row by the prediction made every pinch step and the settle's snap to
+ *  the real rung look like zoom steps the data never made: each started a fan ease that magnified real rows by a ratio
+ *  they never had, and the joins warped rows of one scale as if another — the sideways smears under a zoom out (beta37,
+ *  iPhone on UberSDR). scripts/test_wf_zoomout_fan.ts. */
+export function rowGeometry(s: { centerHz: number; bwHz: number; trueCenterHz?: number; trueBwHz?: number }, len: number): [number, number] {
+  const c = s.trueCenterHz ?? s.centerHz;
+  const bw = s.trueBwHz != null && s.trueBwHz > 0 ? s.trueBwHz : s.bwHz;
+  return [c, bw > 0 && len > 0 ? bw / len : 0];
+}
+
 /** Write `row` (n bins) into `ring` at `slot`, slid by `off` bins; the vacated edge is the floor (0) — the "slight gap"
  *  at a newly exposed edge, never a smear of the edge bin. */
 export function writeRow(ring: Uint8Array, slot: number, row: Uint8Array, n: number, off: number): void {
@@ -36,37 +51,66 @@ export function writeRow(ring: Uint8Array, slot: number, row: Uint8Array, n: num
   else         ring.set(row.subarray(-off, n), slot);
 }
 
-/* ── GLIDE: one continuous trail through a tune (Stuart, 2026-10-28, build 501 on a Mac at 20 fps: "the signal glide into
- *    place looks broken") ───────────────────────────────────────────────────────────────────────────────────────────────
- *  Placement above is honest but SPARSE in time: a row is one device-pixel row (2 px on a Retina Mac) and a fast tune
- *  moves a station tens of bins between two rows, so its diagonal trail was drawn as separate dots/dashes with gaps
- *  between them. A row is a moment, not a line — so when a row's placement differs from the row before it, the SIGNAL in
- *  it is drawn as a short horizontal streak from where it sat in the previous row to where it sits now: consecutive
- *  streaks join end to end and the trail reads as one continuous diagonal, however few rows the move spanned.
- *  ★ Only the new row is touched, once, as it is written: nothing already in the ring is rewritten (the hard rule) and
- *    nothing runs per display frame. Steady rows (same placement as the one before) are byte-for-byte what they were.
- *  ★ Only SIGNAL streaks, never the floor: a column streaks only when it stands GLIDE_MARGIN above the row's median, so
- *    the noise floor is not max-filtered into a bright band.
- *  ★ A ZOOM IS NOT STREAKED (2026-10-28): a change of SPAN re-maps the whole history to the new view (THE ZOOM FAN,
- *    below), so the previous row already shows each signal where this one does — a streak on top of that would be the
- *    fan drawn twice. (Before the fan, a small pinch was streaked here as a stand-in for it; a ×2 step left a gap.)
- *    A move of more than GLIDE_MAX_FRAC of the width (a bookmark, a typed frequency, a spin faster than the radio) is
- *    NOT streaked either — a gap there is what Stuart accepts, a bar across the whole picture is not.
- *  ★ Synthesised pixels: a streak draws the signal at columns between two measurements. That is the point (frame
- *    generation for the trail), and it only ever happens while the placement is moving. */
+/* ── MOTION: a tune drawn as ONE continuous trail, by the SHADER (Stuart, 2026-10-28: "I just wanted the chunky broken
+ *    diagonal lines joined up so they looked solid"; the reference is the first native build's MW sweep) ────────────────
+ *  Placement above is honest but SPARSE in time: a ring row is one display line (devRowPx device px) and a tune moves a
+ *  station several columns between two rows, so its diagonal was drawn as dashes. The first build never had that because
+ *  its rows were thick (a 256-row ring stretched over the whole height, 2–3 lines a frame) and the shader blended
+ *  neighbouring frames across them — the trail was soft and solid. Rows are one device line now (the scroll pace and
+ *  the history depth Stuart settled on), so the blend alone has nothing to blend across.
+ *  ★★ THE FIX IS MOTION-COMPENSATED INTERPOLATION, in the shader: each ring slot carries how far its trail moves (in
+ *    DISPLAY columns) to the next newer row — `h`, from the two rows' own placement maps — and a line drawn between
+ *    frames f and f+1 at fraction t samples f at x − t·h and f+1 at x + (1−t)·h. A moving station (and the noise with it:
+ *    the WHOLE row moves, as in the video) slides continuously between data rows instead of cross-fading between two
+ *    places. Settled (whole-row steps) the same warp is applied to the ONE frame a row shows, so a row bends into the next
+ *    instead of jumping — a real measurement, displaced, never an average of two moments.
+ *  ★ It replaces the GLIDE STREAK (glideRow: a moved row's signal max-smeared back to the previous row's place). That
+ *    drew the motion twice once the shader interpolates, and it was the "over-sharpened, smeared" look Stuart rejected.
+ *  ★ NOTHING STORED IS REWRITTEN: `h` is metadata beside the ring (two extra IMAGE rows, MOTION_ROWS, made with the ring
+ *    image so the two can never be out of step). Steady rows have h = 0 and draw exactly as before.
+ *  ★ Both cases from one rule — each row's OWN placement map: a view-only pan over a fixed capture (UberSDR/Kiwi/OWRX:
+ *    every row arrives already for its view) and a TUNER that moves (VibeServer FREE tuning, a locked VFO retuning the
+ *    dongle — #57: each row placed at the tuner position its samples came from). h is the difference of the two maps,
+ *    whatever moved them.
+ *  ★ A move of more than MOTION_MAX_FRAC of the width between two rows is a JUMP (a bookmark, a typed frequency, a spin
+ *    faster than the radio): not interpolated — the history is RE-MAPPED to the new view instead (THE FAN below, with a
+ *    translation), so it stays visible, shifted into place, black only where the radio has not captured yet.
+ *  ★★ A ZOOM IS MOTION TOO (2026-10-28): the history is left at the scale it was drawn (Stuart: "a thin line signal
+ *    should expand out to the width and the history remains the thin line"), so each slot also carries g, the change of
+ *    scale to the next row, and the shader draws the FAN — a station's trail spreading out on a zoom in, drawing in on a
+ *    zoom out — as one continuous line between the two rows instead of a step.
+ *  ★ FOR A SECOND (COARSE) RING: the maps are in Hz (column x of slot r shows P_r + Q_r·x), not in another ring's
+ *    columns, so a coarse full-capture ring with its own slots and maps can be related to the same view and drawn
+ *    under this one where it is blank — BUILT (V12): wfWide.ts, the full-capture layer, filled in by fanRegen.
+ *  PURE — scripts/test_wf_row_place.ts (motion section); the native twin is cpp/spectrum/wf_glide.h. */
 
-/** Index units above the row's median a column must stand to streak (the ring is 0..255 over the display range). */
-export const GLIDE_MARGIN = 24;
-/** The longest streak, as a fraction of the row width: past it the move is a jump, left as a gap. */
-export const GLIDE_MAX_FRAC = 1 / 8;
-
-/** The previous row's column map plus reusable scratch — allocated once, never per row. */
-export interface GlideState {
-  has: boolean; startHz: number; hzPerCol: number;
-  mask: Uint8Array; dq: Int32Array; hist: Uint32Array;
+/** The motion PLANES below the ring: plane 0 / 1 = the high / low byte of each slot's h (the move at the CENTRE column),
+ *  2 / 3 = the high / low byte of its zoom g (log2, see encodeZoom).
+ *  ★★ A PLANE IS ceil(rows / n) IMAGE ROWS (2026-10-30, the growing ring — utils/wfRingGrow.ts): one column a slot, so a
+ *     ring of up to n (1024) rows keeps exactly the old layout (plane p = image row rows + p, column = slot); a 2048- or
+ *     4096-row ring wraps each plane onto 2 / 4 image rows (slot r at column r % n of the plane's row floor(r / n)). The
+ *     shader (WaterfallView WF_SKSL) reads it the same way. motionImageRows() is the image rows the planes take. */
+export const MOTION_ROWS = 4;
+/** Image rows the motion planes take below a `rows`-slot ring of width n (4 for any ring up to n rows). */
+export function motionImageRows(rows: number, n: number): number {
+  return MOTION_ROWS * Math.max(1, Math.ceil(rows / n));
 }
-export function newGlideState(n: number): GlideState {
-  return { has: false, startHz: 0, hzPerCol: 0, mask: new Uint8Array(n), dq: new Int32Array(n), hist: new Uint32Array(256) };
+/** Byte offset (from the start of the motion block) of plane p for slot r — see MOTION_ROWS. */
+export function motionAt(rows: number, n: number, p: number, r: number): number {
+  const k = Math.max(1, Math.ceil(rows / n));
+  return (p * k + Math.floor(r / n)) * n + (r % n);
+}
+/** g is stored as round(log2(g) × ZOOM_SCALE) + MOTION_ZERO in 16 bits: ±8 octaves at 1/4096 of one. */
+export const ZOOM_SCALE = 4096;
+/** h is stored as round(h × MOTION_SCALE) + MOTION_ZERO in 16 bits: ±512 columns at 1/64 of a column. */
+export const MOTION_SCALE = 64;
+export const MOTION_ZERO = 32768;
+/** The largest move between two rows that is interpolated, as a fraction of the width; past it is a jump (re-mapped). */
+export const MOTION_MAX_FRAC = 1 / 8;
+
+/** True when two rows' bin scales differ enough to count as a zoom (not float noise). */
+export function spanChanged(span0: number, span1: number): boolean {
+  return span0 > 0 && span1 > 0 && Math.abs(span1 - span0) > span0 * 1e-6;
 }
 
 /** Where the row's bins went: column c of the WRITTEN row is startHz + c × hzPerCol. `off` is what writeRow slid it by.
@@ -76,98 +120,157 @@ export function placedStartHz(rowCenterHz: number, rowHzPerBin: number, off: num
   return rowCenterHz - (off + n / 2) * rowHzPerBin;
 }
 
-/** The map from a column of the NEW row to where the same frequency sat in the PREVIOUS row: p(c) = c + b (a is always
- *  1 — a change of scale is a zoom, which the fan handles). Null when the two rows sit in the same place (steady — draw
- *  as today), the span changed (a zoom: the fan re-mapped the history), or the move is a jump (see the guards). */
-export function glideMap(prevStartHz: number, prevHzPerCol: number, startHz: number, hzPerCol: number, n: number): [number, number] | null {
-  if (!(prevHzPerCol > 0 && hzPerCol > 0 && n > 0) || !isFinite(prevStartHz) || !isFinite(startHz)) return null;
-  if (spanChanged(prevHzPerCol, hzPerCol)) return null;   // ★ a zoom: the fan placed the history — never streak it too
-  const b = (startHz - prevStartHz) / prevHzPerCol;
-  const span = Math.abs(b);
-  if (span < 0.5) return null;                    // steady: untouched
-  if (span > n * GLIDE_MAX_FRAC) return null;     // a jump: a gap is honest, a bar across the picture is not
-  return [1, b];
+/** Per-slot placement + the move to the next newer row, and the image's motion rows. Allocated once. */
+export interface MotionState {
+  /** Column c of the STORED row in slot r is startHz[r] + c·hzPerCol[r] Hz (NaN = unknown). */
+  startHz: Float64Array; hzPerCol: Float64Array;
+  /** Slot r → the row written after it: a station at display column x (from the centre m = n/2) is at
+   *  m + g[r]·(x − m) + h[r] in the newer row. g = 1, h = 0: steady / none. h alone: a tune; g: a ZOOM (the fan). */
+  h: Float32Array; g: Float32Array;
+  /** motionImageRows(rows, n) × n bytes: the image's tail rows (motionAt: plane p, slot r). */
+  bytes: Uint8Array;
+  /** The ring's slots and width the planes are laid out for. */
+  rows: number; n: number;
+  /** Absolute frames f whose pair (f → f+1) moves: [lo, hi]; lo > hi = none. The shader fetches h only inside it. */
+  lo: number; hi: number;
+}
+export function newMotionState(rows: number, n: number): MotionState {
+  const bytes = new Uint8Array(motionImageRows(rows, n) * n);
+  const pl = bytes.length / MOTION_ROWS;   // one plane
+  bytes.fill(MOTION_ZERO >> 8, 0, pl); bytes.fill(MOTION_ZERO & 255, pl, 2 * pl);
+  bytes.fill(MOTION_ZERO >> 8, 2 * pl, 3 * pl); bytes.fill(MOTION_ZERO & 255, 3 * pl);
+  return { startHz: new Float64Array(rows).fill(NaN), hzPerCol: new Float64Array(rows), h: new Float32Array(rows),
+           g: new Float32Array(rows).fill(1), bytes, rows, n, lo: 1, hi: 0 };
 }
 
-/** The row's median (its noise floor, in index units) — histogram, O(n), no allocation. */
-function rowMedian(ring: Uint8Array, at: number, n: number, hist: Uint32Array): number {
-  hist.fill(0);
-  for (let i = 0; i < n; i++) hist[ring[at + i]]++;
-  const half = n >> 1;
-  let acc = 0;
-  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > half) return v; }
-  return 255;
+export function encodeMotion(h: number): number {
+  return Math.max(0, Math.min(65535, Math.round(h * MOTION_SCALE) + MOTION_ZERO));
+}
+/** What the shader reads back (hi, lo bytes → columns). */
+export function decodeMotion(hi: number, lo: number): number {
+  return ((hi * 256 + lo) - MOTION_ZERO) / MOTION_SCALE;
+}
+export function encodeZoom(g: number): number {
+  return Math.max(0, Math.min(65535, Math.round(Math.log2(g) * ZOOM_SCALE) + MOTION_ZERO));
+}
+export function decodeZoom(hi: number, lo: number): number {
+  return Math.pow(2, ((hi * 256 + lo) - MOTION_ZERO) / ZOOM_SCALE);
 }
 
-/** Streak the signal in the row at ring[at .. at+n) along p(c) = a·c + b (see glideMap), in place. Returns the number
- *  of columns raised (0 = nothing stood above the floor). */
-export function glideStreak(ring: Uint8Array, at: number, n: number, a: number, b: number, st: GlideState): number {
-  const thr = rowMedian(ring, at, n, st.hist) + GLIDE_MARGIN;
-  const mask = st.mask;
-  let any = false;
-  for (let i = 0; i < n; i++) { const v = ring[at + i]; if (v > thr) { mask[i] = v; any = true; } else mask[i] = 0; }
-  if (!any) return 0;
-  let raised = 0;
-  if (a === 1) {
-    // A pure tune: every column moved by the same s. Column x is covered by the signal columns c whose path [c, c+s]
-    // contains it — a sliding-window max of the mask (monotonic deque, O(n) whatever s is).
-    const s = Math.round(b);
-    if (s === 0) return 0;
-    const dq = st.dq;
-    let h = 0, t = 0;
-    if (s > 0) {
-      for (let x = 0; x < n; x++) {                     // window c ∈ [x − s, x]
-        while (t > h && mask[dq[t - 1]] <= mask[x]) t--;
-        dq[t++] = x;
-        while (dq[h] < x - s) h++;
-        const m = mask[dq[h]];
-        if (m > ring[at + x]) { ring[at + x] = m; raised++; }
-      }
-    } else {
-      const k = -s;
-      for (let x = n - 1; x >= 0; x--) {                // window c ∈ [x, x + k]
-        while (t > h && mask[dq[t - 1]] <= mask[x]) t--;
-        dq[t++] = x;
-        while (dq[h] > x + k) h++;
-        const m = mask[dq[h]];
-        if (m > ring[at + x]) { ring[at + x] = m; raised++; }
-      }
-    }
-    return raised;
+/** The DISPLAY map of slot r: screen column x (0..n) shows P + Q·x Hz — its stored placement through its fan map
+ *  (stored column u = a·x + b·n). Null when the slot's placement is unknown. */
+export function displayMap(ms: MotionState, xfA: Float64Array, xfB: Float64Array, r: number, n: number): [number, number] | null {
+  const s = ms.startHz[r], hz = ms.hzPerCol[r];
+  if (!isFinite(s) || !(hz > 0)) return null;
+  return [s + hz * xfB[r] * n, hz * xfA[r]];
+}
+
+/** How a trail moves on screen from slot `a` (older) to slot `b` (the next newer): [g, h] — a station at display column
+ *  x in a is at m + g·(x − m) + h in b (m = n/2). [1, 0] when steady, unknown or a jump.
+ *  ★ A TUNE is h alone (g = 1), interpolated up to MOTION_MAX_FRAC of the width; past it is a JUMP (the fan moves the
+ *    history instead). ★★ A ZOOM is g (2026-10-28): the history is left as drawn, so the rows either side of a zoom step
+ *    differ in scale and the shader draws the FAN between them — a station's trail spreads out (zoom in) or draws in
+ *    (zoom out) as one continuous line instead of dashes. Not when the centre move is past ±511 columns (cannot be
+ *    stored — drawn as a step). */
+export function pairMotion(ms: MotionState, xfA: Float64Array, xfB: Float64Array, a: number, b: number, n: number): [number, number] {
+  const ma = displayMap(ms, xfA, xfB, a, n), mb = displayMap(ms, xfA, xfB, b, n);
+  if (!ma || !mb) return [1, 0];
+  const m = n / 2;
+  let g = ma[1] / mb[1];
+  const c = (ma[0] - mb[0]) / mb[1];          // x_b = g·x_a + c
+  if (!isFinite(g) || !isFinite(c)) return [1, 0];
+  if (Math.abs(g - 1) <= 1e-3) {
+    g = 1;
+    if (Math.abs(c) < 1 / MOTION_SCALE || Math.abs(c) > n * MOTION_MAX_FRAC) return [1, 0];
+    return [1, c];
   }
-  // A scale change is a zoom — the fan's job (glideMap never asks for one). Nothing to streak.
-  return raised;
+  if (g < 1 / 256 || g > 256) return [1, 0];
+  const h = c + (g - 1) * m;                  // the move at the centre column
+  if (Math.abs(h) > 511) return [1, 0];
+  return [g, Math.abs(h) < 1 / MOTION_SCALE ? 0 : h];
 }
 
-/** pushRow's one call after writeRow: streak the row just written if its placement moved since the previous row, and
- *  remember this row's placement for the next. Returns the streak span in columns (0 = drawn as written). */
-export function glideRow(ring: Uint8Array, at: number, n: number,
-                         rowCenterHz: number, rowHzPerBin: number, off: number, st: GlideState): number {
-  const start = placedStartHz(rowCenterHz, rowHzPerBin, off, n);
-  if (!isFinite(start)) { st.has = false; return 0; }
-  let span = 0;
-  if (st.has) {
-    const m = glideMap(st.startHz, st.hzPerCol, start, rowHzPerBin, n);
-    if (m) {
-      glideStreak(ring, at, n, m[0], m[1], st);
-      span = Math.abs(m[1]);
-    }
+export function setMotion(ms: MotionState, slot: number, g: number, h: number, n: number): void {
+  ms.h[slot] = h; ms.g[slot] = g;
+  const v = encodeMotion(h), z = encodeZoom(g), b = ms.bytes;
+  if (ms.rows <= n) {   // ≤ 1024 rows: the original layout (plane p = row p), no division on the hot path
+    b[slot] = v >> 8; b[n + slot] = v & 255; b[2 * n + slot] = z >> 8; b[3 * n + slot] = z & 255;
+    return;
   }
-  st.has = true; st.startHz = start; st.hzPerCol = rowHzPerBin;
-  return span;
+  const R = ms.rows;
+  b[motionAt(R, n, 0, slot)] = v >> 8; b[motionAt(R, n, 1, slot)] = v & 255;
+  b[motionAt(R, n, 2, slot)] = z >> 8; b[motionAt(R, n, 3, slot)] = z & 255;
+}
+const moves = (g: number, h: number) => g !== 1 || h !== 0;
+
+/** Recompute every pair among the newest `rows` frames (after a fan re-mapped them all) and the moving range. */
+export function motionRecompute(ms: MotionState, xfA: Float64Array, xfB: Float64Array, n: number, rows: number, frames: number): void {
+  ms.lo = 1; ms.hi = 0;
+  const first = Math.max(0, frames - rows);
+  for (let f = first; f < frames; f++) {
+    const r = f % rows;
+    const [g, h] = f + 1 < frames ? pairMotion(ms, xfA, xfB, r, (f + 1) % rows, n) : [1, 0];
+    setMotion(ms, r, g, h, n);
+    if (moves(g, h)) { if (ms.lo > ms.hi) ms.lo = f; ms.hi = f; }
+  }
 }
 
-/* ── THE ZOOM FAN: a zoom re-maps the whole history to the new view (Stuart, 2026-10-27/28: zooming left the history in
- *    horizontal SLICES — every old row kept the scale it was drawn at, so the waterfall read as bands of different zoom;
- *    the web client was fixed first on V12 — web/client/src/wfZoomFan.ts there — and this is the same design for the ring)
- *  The STORED ring (what writeRow + glideRow make) is never rewritten. Each slot carries ONE affine map from the screen's
+/** AFTER frame `f` (absolute) is written into `slot` at placement (startHz, hzPerCol): note it, set the move of the pair
+ *  (f−1 → f), clear this slot's own (it has no newer row yet) — or recompute all when the fan just re-mapped. */
+export function motionAfterRow(ms: MotionState, xfA: Float64Array, xfB: Float64Array, n: number, rows: number, f: number,
+                               startHz: number, hzPerCol: number, refanned: boolean): void {
+  const slot = f % rows;
+  ms.startHz[slot] = isFinite(startHz) && hzPerCol > 0 ? startHz : NaN;
+  ms.hzPerCol[slot] = hzPerCol > 0 ? hzPerCol : 0;
+  if (refanned) { motionRecompute(ms, xfA, xfB, n, rows, f + 1); return; }
+  setMotion(ms, slot, 1, 0, n);
+  if (f > 0) {
+    const p = (f - 1) % rows;
+    const [g, h] = pairMotion(ms, xfA, xfB, p, slot, n);
+    setMotion(ms, p, g, h, n);
+    if (moves(g, h)) { if (ms.lo > ms.hi) ms.lo = f - 1; ms.hi = f - 1; }
+  }
+  // Pairs older than the ring are gone: keep the range inside it (conservative — it may span steady pairs).
+  const oldest = f + 1 - rows;
+  if (ms.hi < oldest) { ms.lo = 1; ms.hi = 0; } else if (ms.lo < oldest) ms.lo = oldest;
+}
+
+/** The shader's motion-compensated sample, on the CPU — the reference the tests (and the comparison render) run.
+ *  `rowF(r, x)` reads the DISPLAYED ring at slot r, column x (0 outside 0..n: a vacated edge is the floor).
+ *  Between frames f (slot ra) and f+1 (slot rb) at fraction t, a trail moving h columns: f sampled at x − t·h, f+1 at
+ *  x + (1−t)·h, blended by t. `blend` false = settled: frame f alone, warped toward f+1 by t. */
+export function motionSample(rowF: (r: number, x: number) => number, ra: number, rb: number, x: number, t: number, h: number,
+                             blend: boolean, g = 1, m = 0): number {
+  // The point that is at x at fraction t: x = m + (1 + t(g−1))·(xa − m) + t·h  (g = 1: xa = x − t·h, xb = xa + h).
+  const xa = m + ((x - m) - t * h) / (1 + t * (g - 1));
+  const xb = m + g * (xa - m) + h;
+  const a = rowF(ra, xa);
+  if (!blend) return a;
+  return a + (rowF(rb, xb) - a) * t;
+}
+
+/* ── THE FAN MAPS — NOW FOR JUMPS ONLY (2026-10-28). ★★★ A ZOOM NO LONGER RE-MAPS THE HISTORY: beta27 did (below, as it was
+ *    designed), and Stuart rejected it on sight — "you are simply expanding the whole signal history … what should happen
+ *    is a thin line signal should expand out to the width and the history remains the thin line" (it stretched each old
+ *    bin into a fat block across the screen). A zoom is drawn by the MOTION join (g) instead; fanNoteRow re-maps only a
+ *    same-span JUMP. The design notes below are kept for the jump, which still works this way. ────────────────────────────
+ *  The STORED ring (what writeRow makes) is never rewritten. Each slot carries ONE affine map from the screen's
  *  x (0..1 across the view) to its own u (0..1 across the row as stored): u = a·x + b, the identity when it is written.
  *  When a row arrives at a different SPAN than the row before (a zoom — drum, pinch, buttons, all read off the rows), every
  *  slot's map composes the screen move that zoom made (applyViewChange, the web's maths) and the DISPLAYED ring is
  *  regenerated from the stored one through the maps: the history stretches out on a zoom in and draws in toward the
  *  anchor on a zoom out, blank only where it never had data.
  *  ★ A change of CENTRE alone (a tune) does NOT touch the maps — that is the trail that bends and then runs straight
- *    (#57). A zoom that also moves the centre takes its translation with it, so the anchor stays put.
+ *    (#57), drawn continuous by the shader's motion compensation (MOTION above). A zoom that also moves the centre takes
+ *    its translation with it, so the anchor stays put.
+ *  ★★ A JUMP IS RE-MAPPED LIKE A ZOOM (2026-10-28, Stuart's spec: "NO SLICING when zooming or tuning … MINIMAL black gaps
+ *    ONLY when absolutely necessary due to the SDR catching up from a large move or rapid tuning"): a row placed more than
+ *    MOTION_MAX_FRAC of the width from the row before (a bookmark, a typed frequency, a spin faster than the radio) is too
+ *    far to draw as a bend, so the whole history is translated to the new view — still visible, shifted into place, black
+ *    only at the newly exposed edge. A bend is continuous; a jump left in place would be a slice.
+ *  ★ THE SCREEN EASES THE STEP (stepK/stepC, takeFanStep): each fan composes the move it made, and the UI thread eases
+ *    the shader from the old geometry to the new over one row interval at display rate — so a pinch, a drum step or a
+ *    jump fans/slides in smoothly at 120 Hz instead of snapping once per data row. Two uniforms; no texture reads.
  *  ★ LOSSLESS: the display is always made from the stored rows, so zoom in then back out gives the edges back exactly
  *    (the maps return to the identity and the displayed ring is the stored one, byte for byte).
  *  ★ THIN CARRIERS SURVIVE a zoom out: a pixel that covers several stored bins takes their MAX (as the resample into the
@@ -184,11 +287,6 @@ export function glideRow(ring: Uint8Array, at: number, n: number,
  *          whole ring): 0.4–0.75 ms a step on an M-series host, so a few ms on a slow phone — on the engine's own thread. The GPU pays NOTHING — the shader is unchanged (the XCover 4s is GPU-bound; a per-row map in the shader
  *          would cost every pixel of every display frame, and could not take the max under a pixel).
  *  PURE — scripts/test_wf_row_place.ts (zoom-fan section), the native twin is cpp/spectrum/wf_zoom_fan.h. */
-
-/** True when two rows' bin scales differ enough to count as a zoom (not float noise). */
-export function spanChanged(span0: number, span1: number): boolean {
-  return span0 > 0 && span1 > 0 && Math.abs(span1 - span0) > span0 * 1e-6;
-}
 
 /** Every map after the view moved from (lo0, span0) to (lo1, span1), in Hz: screen x in the new view sits at
  *  x_old = (lo1 − lo0)/span0 + x·span1/span0 in the old one, so a' = a·k and b' = a·c + b. A map that comes back to the
@@ -217,10 +315,121 @@ export interface FanState {
   /** The oldest frame whose displayed row is current — older ones were off screen at the last fan (fanRefresh). */
   validFrom: number;
   lo: Int32Array | null; hi: Int32Array | null;
+  /** The screen move every fan since the last takeFanStep made, composed: x_old = stepC + stepK·x_new (0..1 units). */
+  stepK: number; stepC: number;
+  /** ★ V12 THE FULL-CAPTURE LAYER (wfWide.ts): one layer row per slot, in capture space — null until the first SPWB (an
+   *  older server never allocates it). fanRegen fills each regenerated row's texels outside its detailed extent from it. */
+  layer: LayerRing | null;
+  /** ★★ THE ZOOM EASE (2026-10-28): the geometry (Hz at the left edge, Hz across) the newest rows are DRAWN at while a
+   *  zoom eases in, and how many rows it has left (0 = none). See fanAfterRow. */
+  dLo: number; dSpan: number; easeLeft: number;
+  /** The ease's start geometry, the rows done and the rows it takes (zoomEaseRows). */
+  eLo0: number; eSpan0: number; eJ: number; eT: number;
+  /** Each slot's own span in Hz (0 = unknown) — a jump moves every row by the same Hz, in ITS scale. */
+  span: Float64Array;
+  /** ★ The rows/s the waterfall is running at (the fixed clock's rate, or the feed's in Native) — the ease is by TIME
+   *  (zoomEaseRows / tuneEaseRows). The caller keeps it current; EASE_ROW_RATE until it does. */
+  rowRate: number;
+  /** ★ The Hz the LAST row's jump moved the history by (0 = it was not a jump) — the scale stamps move with it
+   *  (wfStamps.ts stampJump). */
+  jumpHz: number;
 }
 export function newFanState(rows: number): FanState {
   return { lastLo: 0, lastSpan: 0, xfA: new Float64Array(rows).fill(1), xfB: new Float64Array(rows), disp: null, sinceZoom: 0,
-           validFrom: 0, lo: null, hi: null };
+           validFrom: 0, lo: null, hi: null, stepK: 1, stepC: 0, layer: null, dLo: NaN, dSpan: NaN, easeLeft: 0, eLo0: NaN, eSpan0: NaN, eJ: 0, eT: 0,
+           span: new Float64Array(rows), rowRate: EASE_ROW_RATE, jumpHz: 0 };
+}
+
+/** ★★★ HOW LONG A STEP EASES — BY TIME, AT THE RUNNING ROW RATE (Stuart, 2026-10-29: "do what you feel is the best for
+ *  having the zoom curves show the signal back to its historic view, the same applies to the tune curves too, the lines
+ *  are simply too sharp" / "a longer more rounded curve everywhere … similar to how it was back in the early builds").
+ *  ★ WHY THE OLD COUNT SLICED: 4 rows per ×2 made a ×√2 key (VibeServer's zoom step) TWO rows on an ease-out — 75 % of
+ *    the move in the first row — so every press was a stair-step joined by the shader's one-row hairline (his
+ *    screenshot 21:12, the Lenovo RSP at 12058 kHz: six bands, each carrier straight inside one and jumping sideways at
+ *    each boundary).
+ *  ★ THE EARLY BUILD (9c297f390, "waterfall is perfect"): no fan — the drum sent a STREAM of small zoom changes, so each
+ *    row was drawn at a slightly different scale and the stacked rows made a smooth curve with the signal's own width for
+ *    as long as the hand turned. A step now EMULATES THE HAND: it is spread at a steady zoom rate (constant in
+ *    log-span) over a fixed TIME — 0.33 s per ×2, never under 0.25 s for a key or detent (×√2), capped at 0.5 s for a big
+ *    step — so 10 rows at Default 30 and 20 at Smooth 60 for a ×2, every one a whole real row at its in-between zoom.
+ *    A pinch's own small steps (< 0.2 octave) take their proportional time (one or two rows): a continuous gesture still
+ *    draws its own curve, as the drum did.
+ *  ★★ IT MOVES FROM THE FIRST ROW (easeView: steady, a soft landing) — the 10-28 S-curve's slow start ("oddly delayed")
+ *     is not repeated, and a ×2 has landed within 0.33 s, the spectrum's own step.
+ *  Every eased row keeps the geometry it was drawn at, like any history row. Shared: the app (here), the Android engine
+ *  (wf_zoom_fan.h — the twin) and the web (web/client/src/wfGlide.ts, in device rows). */
+export const ZOOM_EASE_S_PER_OCTAVE = 0.33;
+export const ZOOM_EASE_MIN_S = 0.25;
+export const ZOOM_EASE_MAX_S = 0.5;
+/** A tune step glides the same way: 0.25 s for a step, up to 0.35 s for a move of most of the view. */
+export const TUNE_EASE_S = 0.25;
+export const TUNE_EASE_MAX_S = 0.35;
+/** The row rate the counts assume when the caller has not said (Default 30). */
+export const EASE_ROW_RATE = 30;
+/** Seconds a zoom by k eases over (see above). */
+export function zoomEaseSec(k: number): number {
+  const oct = Math.abs(Math.log2(k));
+  if (!(oct > 0)) return 0;
+  const t = oct * ZOOM_EASE_S_PER_OCTAVE;
+  return oct < 0.2 ? t : Math.max(ZOOM_EASE_MIN_S, Math.min(ZOOM_EASE_MAX_S, t));
+}
+/** Seconds a tune of `frac` of the view eases over. */
+export function tuneEaseSec(frac: number): number {
+  return TUNE_EASE_S + (TUNE_EASE_MAX_S - TUNE_EASE_S) * Math.min(1, Math.max(0, frac));
+}
+/** Rows a zoom step by k eases over at `rowRate` rows/s. */
+export function zoomEaseRows(k: number, rowRate = EASE_ROW_RATE): number {
+  const r = rowRate > 0 ? rowRate : EASE_ROW_RATE;
+  return Math.max(1, Math.round(zoomEaseSec(k) * r));
+}
+/** A ×2 step's rows at the default rate (the tests' reference). */
+export const ZOOM_EASE_ROWS = zoomEaseRows(2);
+/** A tune eases once it moves more than two columns of a 1024-wide row (a tuning step, not float noise). */
+export const TUNE_EASE_MIN_FRAC = 2 / 1024;
+/** Rows a tune of `frac` of the view eases over at `rowRate` rows/s (at least 2). */
+export function tuneEaseRows(frac: number, rowRate = EASE_ROW_RATE): number {
+  const r = rowRate > 0 ? rowRate : EASE_ROW_RATE;
+  return Math.max(2, Math.round(tuneEaseSec(frac) * r));
+}
+
+/** ★★★ THE SLOPE CAP (2026-10-29, Stuart on the Pi 500's AM band: "higher step rates turn into sharp lines with no detail"
+ *  and, on a zoom, "same with zooming"). An ease's length was set by TIME alone (0.25 s a tune step, 0.33 s per ×2), so
+ *  how far a carrier moved per row was whatever the move asked: a fast run of 9 kHz steps restarted the ease from where it
+ *  had got to with the SAME short length and a growing distance (each restart compressing the move), and near the edges
+ *  of a zoom a carrier crossed hundreds of pixels in ten rows — near-horizontal streaks, the join smearing each row
+ *  across its whole path. Now an ease is ALSO at least as long as it takes to keep the largest on-screen move of any row
+ *  under SLOPE_CAP_FRAC of the view (per SCREEN row) — up to EASE_CEIL_S, past which the slope is allowed to rise (a
+ *  bigger lag would feel like the waterfall ignoring the dial). A step the cap does not bind (every small step, a single
+ *  key) is EXACTLY what it was. Rows are never made for it: the ease is spread over more of the rows the clock makes
+ *  anyway (and the interaction boost, wfClock.ts boostRowRate, makes those come twice as fast while a hand is on the
+ *  dial). Shared: the app (fanNoteRow), the engine (wf_zoom_fan.h) and the web (wfGlide.ts rowView, per device row). */
+export const SLOPE_CAP_FRAC = 1 / 256;
+export const EASE_CEIL_S = 1.0;
+/** The largest move, as a FRACTION of the view, of any frequency on screen between views (L0, S0) and (L1, S1) — at one
+ *  of the old view's two edges, since x(F) = (F − L)/S is linear in F. */
+export function viewMoveFrac(L0: number, S0: number, L1: number, S1: number): number {
+  if (!(S0 > 0 && S1 > 0)) return 0;
+  return Math.max(Math.abs((L0 - L1) / S1), Math.abs((L0 + S0 - L1) / S1 - 1));
+}
+/** The rows an ease from (lo0, span0) to (lo1, span1) takes: `base` (the time rule's rows), or more so that its first
+ *  row — the fastest of easeView (1.5× the mean pace) or of a linear ease (`linear`) — moves nothing on screen by more
+ *  than the cap. `px` = rows a screen row (the web's device rows); `rowRate` = rows/s (sets the ceiling). */
+export function cappedEaseRows(lo0: number, span0: number, lo1: number, span1: number, base: number, rowRate = EASE_ROW_RATE,
+                               px = 1, linear = false): number {
+  const r = rowRate > 0 ? rowRate : EASE_ROW_RATE;
+  const ceil = Math.max(base, Math.round(EASE_CEIL_S * r));
+  const cap = SLOPE_CAP_FRAC / Math.max(1, px);
+  if (!(span0 > 0 && span1 > 0) || !isFinite(lo0) || !isFinite(lo1)) return base;
+  let N = Math.max(1, base);
+  for (let i = 0; i < 6 && N < ceil; i++) {
+    let L: number, S: number;
+    if (linear) { L = lo0 + (lo1 - lo0) / N; S = span0 * Math.pow(span1 / span0, 1 / N); }
+    else [L, S] = easeView(lo0, span0, lo1, span1, 1 / N);
+    const d = viewMoveFrac(lo0, span0, L, S);
+    if (!(d > cap * 1.0001)) break;
+    N = Math.min(ceil, Math.ceil(N * d / cap));
+  }
+  return Math.max(base, N);
 }
 
 /** Per output pixel x of an n-wide row, the stored bins [lo[x], hi[x]] it shows under map (a, b) — lo = -1 where the
@@ -258,31 +467,110 @@ export function fanRegen(st: FanState, ring: Uint8Array, n: number, rows: number
     if (a !== ta || b !== tb) { fanTable(a, b, n, lo, hi); ta = a; tb = b; }   // rows zoomed together share a map
     if (a <= 1) {                                                              // magnified: one gather per pixel
       for (let x = 0; x < n; x++) { const l = lo[x]; disp[at + x] = l < 0 ? 0 : ring[at + l]; }
-      continue;
+    } else {
+      for (let x = 0; x < n; x++) {                                            // shrunk: the max under the pixel
+        const l = lo[x];
+        if (l < 0) { disp[at + x] = 0; continue; }
+        const h = hi[x];
+        let m = ring[at + l];
+        for (let k = l + 1; k <= h; k++) { const v = ring[at + k]; if (v > m) m = v; }
+        disp[at + x] = m;
+      }
     }
-    for (let x = 0; x < n; x++) {                                              // shrunk: the max under the pixel
-      const l = lo[x];
-      if (l < 0) { disp[at + x] = 0; continue; }
-      const h = hi[x];
-      let m = ring[at + l];
-      for (let k = l + 1; k <= h; k++) { const v = ring[at + k]; if (v > m) m = v; }
-      disp[at + x] = m;
-    }
+    // ★★ V12: outside the detailed extent, the row's own full-capture layer through the same map (black only where
+    //    the radio was not capturing) — wfWide.ts layerFillRow.
+    if (st.layer) layerFillRow(st.layer, r, a, b, n, disp, at, lo);
   }
 }
+
+/** Make ONE displayed row (slot r) from the stored ring through its map — the eased rows of a zoom, and again once its
+ *  full-capture layer row is written (WaterfallView writes that after placeRow). No-op when the row is the identity. */
+export function fanRow(st: FanState, ring: Uint8Array, n: number, r: number, rows = 0): void {
+  const a = st.xfA[r], b = st.xfB[r];
+  if (!st.disp || (a === 1 && b === 0)) return;
+  if (!st.lo) { st.lo = new Int32Array(n); st.hi = new Int32Array(n); }
+  const lo = st.lo, hi = st.hi!, disp = st.disp, at = r * n;
+  // ★ A zoom-in's eased row is drawn wider than its own data: where it has none, it CONTINUES the row below as that was
+  //   drawn (0.04 s older), so the history runs on up the edges instead of a black wedge. The full-capture layer, where
+  //   there is one, then draws the real capture there instead (below).
+  const pv = rows > 0 ? ((r + rows - 1) % rows) * n : -1;
+  fanTable(a, b, n, lo, hi);
+  for (let x = 0; x < n; x++) {
+    const l = lo[x];
+    if (l < 0) { disp[at + x] = pv >= 0 ? disp[pv + x] : 0; continue; }
+    let m = ring[at + l];
+    for (let k = l + 1, h = hi[x]; k <= h; k++) { const v = ring[at + k]; if (v > m) m = v; }
+    disp[at + x] = m;
+  }
+  if (st.layer) layerFillRow(st.layer, r, a, b, n, disp, at, lo);
+}
+
+/** ★★★ A JUMP KEEPS THE HISTORY AS DRAWN (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms so
+ *  it is not lost" — Gesiima: "I look back in the waterfall to see where exactly the signal was, and then I tune onto that
+ *  position and wait for the next transmission"). A move of a whole view or more used to translate every row into place
+ *  (rows slid off, the exposed edge went dark); now, like every zoom and tune, nothing is moved or blanked — the old rows
+ *  stay where they were drawn, a SCALE STAMP (wfStamps.ts) marks the boundary, and a tap on them tunes by THEIR scale
+ *  (WaterfallView tapHz). The re-map below is kept behind this switch, not deleted. The C++ twin: wf_zoom_fan.h. */
+export const JUMP_KEEPS_HISTORY = true;
 
 /** BEFORE a row placed at (lo, span) Hz goes in: a change of span fans the history. `frames` = rows written so far;
  *  `visible` = how many of the newest can be on screen. Returns true when it fanned. */
 export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: number, frames: number, visible: number,
                            lo: number, span: number): boolean {
+  st.jumpHz = 0;
   if (!(span > 0)) return false;
   if (!isFinite(lo)) {                         // centre unknown: assume it held (a zoom about the centre)
     if (!(st.lastSpan > 0)) return false;
     lo = st.lastLo + (st.lastSpan - span) / 2;
   }
   let fanned = false;
-  if (spanChanged(st.lastSpan, span) && frames > 0) {
-    const zoomed = applyViewChange(st.xfA, st.xfB, st.lastLo, st.lastSpan, lo, span);
+  // A zoom step starts (or restarts) the ease from where the newest row was DRAWN (fanAfterRow).
+  if (frames > 0 && st.lastSpan > 0 && spanChanged(st.lastSpan, span)) {
+    if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }   // else: on from where the ease has got to
+    st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
+    // ★ A step mid-ease (a pinch after a drum step) carries on for at least what the ease had left — never a snap.
+    // ★★★ …and long enough that no carrier on screen moves more than the slope cap a row (cappedEaseRows) — the edges of
+    //     a zoom were near-horizontal streaks.
+    st.eT = st.easeLeft = Math.max(cappedEaseRows(st.dLo, st.dSpan, lo, span, zoomEaseRows(span / st.dSpan, st.rowRate), st.rowRate),
+                                   st.easeLeft > 0 ? st.easeLeft : 0);
+  }
+  // ★★★ A ZOOM LEAVES THE HISTORY AS IT WAS DRAWN (Stuart, 2026-10-28, on beta27's re-map: "you are simply expanding the
+  //     whole signal history … what should happen is a thin line signal should expand out to the width and the history
+  //     remains the thin line"). The first build (v2) never re-mapped: new rows arrive at the new zoom, old ones keep
+  //     theirs, so a station FANS out/in down the waterfall. Only a JUMP at the same span (a bookmark, a typed
+  //     frequency, a spin faster than the radio) moves the history into place.
+  // ★★ A TUNE TOO BIG TO JOIN IN ONE ROW BUT WITHIN THE VIEW EASES TOO (Stuart, 2026-10-28, the iPhone: "the tuning still
+  //    looks a little sliced up so wonder if that can be blended like the zoom"). A drum spin moves the view more than
+  //    MOTION_MAX_FRAC between rows; that used to count as a JUMP and shift the whole history at once — a horizontal slice
+  //    across every trail. Now the new rows are drawn sliding across from where the last was drawn (the zoom's ease, the
+  //    span unchanged), the history stays as drawn and the shader joins row to row. Only a move of a whole view or more
+  //    (a bookmark, a typed frequency — nothing on screen in common) is a jump.
+  const moved = Math.abs(lo - st.lastLo);
+  // ★★★ EVERY STEP, not only big ones (Stuart, build 511: "still slicing up the tune" — a 9 kHz press/detent is under
+  //     MOTION_MAX_FRAC, so it was joined in ONE row: a dash, then a block, a staircase). Any move past two columns eases.
+  if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * TUNE_EASE_MIN_FRAC && moved < st.lastSpan) {
+    if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
+    st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
+    // ★★★ The slope cap (cappedEaseRows): a run of fast steps restarts from where the ease has got to, and the distance
+    //     left grows with every step — the length grows with it, so the move is not compressed into the old rows.
+    st.eT = st.easeLeft = Math.max(cappedEaseRows(st.dLo, st.dSpan, lo, span, tuneEaseRows(moved / st.lastSpan, st.rowRate), st.rowRate),
+                                   st.easeLeft > 0 ? st.easeLeft : 0);
+  }
+  if (!JUMP_KEEPS_HISTORY && frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
+    const k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
+    st.stepC += st.stepK * c; st.stepK *= k;   // x0 = c1 + k1·(c2 + k2·x2)
+    st.easeLeft = 0;                           // a jump re-maps everything to the new view: no zoom left to ease
+    // ★ Every row moves by the jump's Hz in its OWN scale (rows keep the zoom they were drawn at — a fraction of the
+    //   live screen would move a row drawn at another zoom by the wrong amount).
+    const dHz = lo - st.lastLo;
+    st.jumpHz = dHz;
+    let zoomed = false;
+    for (let r = 0; r < st.xfA.length; r++) {
+      const sp = st.span[r] > 0 ? st.span[r] : span;
+      let nb = st.xfB[r] + dHz / sp;
+      if (st.xfA[r] === 1 && Math.abs(nb) < 1e-9) nb = 0; else zoomed = true;
+      st.xfB[r] = nb;
+    }
     if (zoomed) {
       if (!st.disp) st.disp = new Uint8Array(ring.length);
       fanRegen(st, ring, n, rows, frames, visible);
@@ -294,8 +582,40 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
   return fanned;
 }
 
-/** AFTER the row at `slot` (0..rows-1) is written (and glided): it is the identity, and the display gets it as is. */
+/** THE EASE's geometry at fraction u (0..1) from (lo0, span0) to (lo1, span1), in Hz: STEADY with a soft landing
+ *  (e = 1.5u − 0.5u²: the hand's constant rate, moving from the first row at 1.5× the mean pace and arriving at half it —
+ *  the 2026-10-29 time-based ease; it was a quadratic ease-out, 1 − (1 − u)², which put 75 % of a two-row step in its
+ *  first row), the span geometric (each step the same ratio) about the zoom's FIXED POINT (the anchor — the dial for the
+ *  drum, the finger for a pinch); a tune (same span) slides lo. Shared by the app (fanAfterRow) and the web
+ *  (web/client/src/wfGlide.ts) — one formula, so the two fan alike. */
+export function easeView(lo0: number, span0: number, lo1: number, span1: number, u: number): [number, number] {
+  const x = u < 0 ? 0 : u > 1 ? 1 : u, e = x * (1.5 - 0.5 * x);
+  const S = span0 * Math.pow(span1 / span0, e);
+  const ds = span0 - span1;
+  if (Math.abs(ds) <= span1 * 1e-9) return [lo0 + (lo1 - lo0) * e, S];
+  const xs = (lo1 - lo0) / ds;
+  return [lo0 + span0 * xs - S * xs, S];
+}
+
+/** AFTER the row at `slot` (0..rows-1) is written: it is the identity, and the display gets it as is — unless a zoom is
+ *  easing in, when it is drawn one step further from the old zoom to the new (its own row's geometry, lastLo/lastSpan).
+ *  ★ The step keeps the zoom's FIXED POINT (the anchor — the dial for the drum, the finger for a pinch) where it is, and
+ *    moves the span geometrically, so every row of the ease is the same ratio from the last: an even fan. */
 export function fanAfterRow(st: FanState, ring: Uint8Array, slot: number, n: number, rows: number): void {
+  st.span[slot] = st.lastSpan;
+  if (st.easeLeft > 0 && st.lastSpan > 0 && st.eSpan0 > 0 && isFinite(st.eLo0)) {
+    const tl = st.lastLo, ts = st.lastSpan;
+    st.eJ++; st.easeLeft = st.eT - st.eJ;
+    const [nl, ns] = easeView(st.eLo0, st.eSpan0, tl, ts, st.eJ / st.eT);
+    st.dLo = nl; st.dSpan = ns;
+    if (st.easeLeft > 0) {
+      st.xfA[slot] = ns / ts; st.xfB[slot] = (nl - tl) / ts;
+      if (!st.disp) st.disp = ring.slice();   // every other row is the identity: the display starts as the stored ring
+      fanRow(st, ring, n, slot, rows);
+      st.sinceZoom = 0;
+      return;
+    }
+  } else st.easeLeft = 0;
   st.xfA[slot] = 1; st.xfB[slot] = 0;
   if (!st.disp) return;
   const at = slot * n;
@@ -311,21 +631,41 @@ export function fanRefresh(st: FanState, ring: Uint8Array, n: number, rows: numb
   return true;
 }
 
+/** The screen move the fans made since the last call (x_old = c + k·x_new), reset to none. The UI eases from it. */
+export function takeFanStep(st: FanState): [number, number] {
+  const r: [number, number] = [st.stepK, st.stepC];
+  st.stepK = 1; st.stepC = 0;
+  return r;
+}
+
+/** The bytes to make the waterfall image from: the displayed ring with the motion rows written into its tail (the buffer
+ *  is n × (rows + motionImageRows(rows, n)); the image is made that tall). Copies the motion block (4 × n bytes ≤ 1024 rows). */
+export function wfImageBytes(st: FanState, ms: MotionState, ring: Uint8Array, n: number, rows: number): Uint8Array {
+  const b = st.disp ?? ring;
+  if (b.length >= rows * n + ms.bytes.length) b.set(ms.bytes, rows * n);
+  return b;
+}
+
 /** The bytes to make the waterfall image from. */
 export function fanImage(st: FanState, ring: Uint8Array): Uint8Array { return st.disp ?? ring; }
 
 /** pushRow's whole placement, in one place (WaterfallView's JS path; the Android engine's twin is wf_zoom_fan.h
- *  placeRow): slide the row onto the view (rowViewOffset/writeRow), fan the history if the span changed, streak a moved
- *  row (glideRow), keep the display in step. `frames` = rows written before this one; `visible` = how many of the newest
- *  rows can be on screen (the fan makes only those). Returns the slot written. */
+ *  placeRow): slide the row onto the view (rowViewOffset/writeRow), fan the history if the span changed or the row
+ *  jumped, keep the display in step, note the row's placement and the move from the row before (MOTION). `frames` = rows
+ *  written before this one; `visible` = how many of the newest rows can be on screen (the fan makes only those);
+ *  `placed` (optional) receives the row's placement (column 0's Hz, its span) — the full-capture layer's k and m. Returns
+ *  the slot written. */
 export function placeRow(ring: Uint8Array, rows: number, n: number, frames: number, row: Uint8Array,
                          rowCenterHz: number, rowHzPerBin: number, viewCenterHz: number, viewBwHz: number,
-                         glide: GlideState, fan: FanState, visible = rows): number {
+                         motion: MotionState, fan: FanState, visible = rows,
+                         placed?: { startHz: number; spanHz: number }): number {
   const slot = frames % rows;
   const off = rowViewOffset(rowCenterHz, rowHzPerBin, viewCenterHz, viewBwHz, n);
-  if (rowHzPerBin > 0) fanNoteRow(fan, ring, n, rows, frames, visible, placedStartHz(rowCenterHz, rowHzPerBin, off, n), rowHzPerBin * n);
+  const start = placedStartHz(rowCenterHz, rowHzPerBin, off, n);
+  if (placed) { placed.startHz = start; placed.spanHz = rowHzPerBin * n; }   // ★ V12: where the layer row goes (wfWide.ts)
+  const fanned = rowHzPerBin > 0 ? fanNoteRow(fan, ring, n, rows, frames, visible, start, rowHzPerBin * n) : false;
   writeRow(ring, slot * n, row, n, off);
-  glideRow(ring, slot * n, n, rowCenterHz, rowHzPerBin, off, glide);
   fanAfterRow(fan, ring, slot, n, rows);
+  motionAfterRow(motion, fan.xfA, fan.xfB, n, rows, frames, start, rowHzPerBin, fanned);
   return slot;
 }

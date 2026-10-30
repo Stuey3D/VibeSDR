@@ -219,6 +219,9 @@ if node scripts/check-gain-write-path.mjs; then pass=$((pass+1)); else fail=$((f
 # ★★ A Wi-Fi name typed with the wrong apostrophe is saved as it is on the air (Portable road test, 2026-10-14).
 if node scripts/test-setup-wifi-name.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-wifi-wired.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ A new card's one update check, as the setup page shows it (2026-10-28): updated / up to date / offline / failed (never
+#     asked again) / Cancel. The helper's half, with real apt + dpkg, is vibeserver/linux/test_first_update_docker.sh (docker).
+if node scripts/test-setup-first-update.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ New Wi-Fi hardware on a set-up box (a USB dongle added later, 2026-10-25): "configure it now?" — Configure / Not now.
 if node scripts/test-setup-wifi-new.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ Fork labelling (directory forkOf): a fork's name is shown, checked; official names refused as fork names.
@@ -243,6 +246,10 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #    stays one continuous trail (no torn rows, on the wire and on the canvas), and a resize keeps the history. Headless
 #    Edge, --mute-audio, the real server. Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --max-old-space-size=512 scripts/test-web-waterfall-history.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ The full-capture row (SPWB v2): only to a socket that asked `wide=1`, only while zoomed, one per 4 SPEC frames, no
+#    extra frames, the capture's centre/span, a one-bin carrier outside the view kept. Same VIBESERVER_BIN rule.
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-wide-rows.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node scripts/test-setup-tabswitch.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The admin log folds a visit's per-radio rows into one. Pure logic, so it is testable without a
@@ -510,14 +517,49 @@ if node --no-warnings scripts/test_wf_pacing.ts; then pass=$((pass+1)); else fai
 # ★★★ GitHub #57 / Stuart's hard rule: the APP's waterfall history — each row placed once against its view, a locked tune
 #    and a zoom draw one continuous (bending / fanning) trail, nothing older is ever rewritten. Pure logic.
 if node --no-warnings scripts/test_wf_row_place.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE APP'S WATERFALL SHADER, RUN FOR REAL (CanvasKit, the same WF_SKSL): a swept station is ONE continuous trail
+#    (view pan AND tuner retune), control: dashes without motion compensation; steady rows pixel-identical; a zoom fans
+#    with no slices and the screen ease has no seam; a resize keeps the rows. Skips if canvaskit-wasm is absent.
+if node --no-warnings scripts/test_wf_shader_motion.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ A STEADY PACE through a tune (wfPace.ts, Stuart 2026-10-28): rows/s the same settled, interacting and after; no
+#    lurch at the hand-overs; continuous every 120 Hz frame while interacting; a paused feed comes back at the same pace.
+if node --no-warnings scripts/test_wf_pace.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ The web waterfall's ZOOM FAN (web/client/src/wfZoomFan.ts): a zoom re-maps the history to the new span, a tune
 #    does not move it, in-then-out is lossless (Stuart 2026-10-27: zooming SLICED the web waterfall).
 if node --no-warnings scripts/test_wf_zoom_fan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 the full-capture layer under the web waterfall's history (wfWide.ts): SPWB parse, extent, placement, no-data.
+if node --no-warnings scripts/test_wf_wide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the APP's full-capture layer (src/utils/wfWide.ts): SPWB v2 parse, the layer ring, the fill through each row's fan map.
+if node --no-warnings scripts/test_wf_wide_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ `&wide=1` only for a server that said "wide" ≥ 2 in its preflight or hwinfo (src/services/wideCapsCore.ts).
+if node --no-warnings scripts/test_wide_caps.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ The Android native spectrum engine's twins of the above (host builds): motion + zoom fan + layer, the engine, SPEC/SPWB decode.
+SPX=android/app/src/main/cpp/spectrum
+if g++ -std=c++17 -O2 "$SPX/test_wf_motion.cpp" -o "$OUT/test_wf_motion" && "$OUT/test_wf_motion"; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if g++ -std=c++17 -O2 -I "$VDSP" "$SPX/test_spectrum_engine.cpp" "$SPX/spectrum_engine.cpp" "$VDSP/spectrum_processor.cpp" -o "$OUT/test_spectrum_engine" && "$OUT/test_spectrum_engine"; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if g++ -std=c++17 -O2 "$SPX/test_spec_decoder.cpp" "$SPX/spec_decoder.cpp" -o "$OUT/test_spec_decoder" && "$OUT/test_spec_decoder"; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ The web waterfall's GLIDE (web/client/src/wfGlide.ts): a fast tune draws one continuous trail, the noise floor unsmeared.
 if node --no-warnings scripts/test_wf_glide.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE ROW TARGET FOLLOWS THE FEED (src/assets/wfRowTarget.ts, Stuart 10-20): Default min(20, 3x), Smooth min(60, 6x),
 #    snapped to a divisor of 60 — the app, the web client and the native engine (wf_row_target.h) share the rule.
 if node --no-warnings scripts/test_wf_row_target.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ The V12 waterfall (backported to 11.0.16): the five speeds' link caps and live numbers, the FIXED OUTPUT CLOCK
+#    (over-interpolate and discard; NATIVE untouched), the zoom-out fan by the bins' own span, and the interaction boost
+#    + slope cap on a fast run of tune/zoom steps.
+if node --no-warnings scripts/test_wf_speed_cap.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_fixed_clock.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_zoomout_fan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_spin.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts, V12 2026-10-30): the fixed clock's frames held by the
+#     audio's playout delay — at rest, after a ratchet, after a drag and a shrink within ±30 ms; growth carried by repeats
+#     (Stuart: "simply duplicate the previous lines"), a shrink by discards; no hold while the dial moves; zero extra stalls
+#     or bursts; NATIVE unchanged.
+if node --no-warnings scripts/test_wf_avsync.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ The rest of the V12 waterfall backported for 11.0.16: the scale stamps (and a jump that keeps the history), the
+#    history ring growing by RAM tier, and thinned frames COMBINED into the row (MINIMUM 2 · LOW 5 · ECO 10, display only).
+if node --no-warnings scripts/test_wf_stamps.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_ring_grow.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_combine.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE 10-FPS DEFAULT (2026-10-20): the serving phone's tiers read Smoother · 20 / Default · 10 / Half · 5, the stored
 #    keys still mean 20 / 10 / 5, and a new server starts on Default · 10.
 if node --no-warnings scripts/test_fps_tiers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

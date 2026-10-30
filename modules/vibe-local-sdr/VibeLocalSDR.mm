@@ -226,6 +226,7 @@ static const char kVibeFpsRequestKey = 0;
 static NSObject *gFpsSync;
 static NSHashTable *gFpsLinks;                // weak — a link's lifetime is its owner's business
 static NSInteger gFpsCap = 0;                 // 0 = no cap (the panel's own maximum)
+static NSInteger gFpsSteady = 0;             // the waterfall is scrolling: every link pinned at this rate (setSteadyRefresh), 0 = off
 static __thread int gFpsInOriginal = 0;
 
 static id   (*gOrigMake)(id, SEL, id, SEL);
@@ -259,8 +260,21 @@ static void vibeFpsApply(CADisplayLink *link, VibeFpsRequest q, NSInteger cap) {
     if (cap > 0 && (f <= 0 || f > cap)) f = cap;
     gOrigSetFps(link, @selector(setPreferredFramesPerSecond:), f);
   } else {
-    gOrigSetRange(link, @selector(setPreferredFrameRateRange:),
-                  vibeFpsClamp(q.kind == 1 ? q.range : CAFrameRateRangeDefault, (float)cap));
+    CAFrameRateRange r = vibeFpsClamp(q.kind == 1 ? q.range : CAFrameRateRangeDefault, (float)cap);
+    // ★★ STEADY while the waterfall scrolls (2026-10-28, Stuart's first ProMotion Mac: the Lenovo's 21 fps waterfall
+    //   juddered, and starting a SCREEN RECORDING fixed it — a recording holds the panel at one rate). With a floor
+    //   below the ceiling the panel wanders (60…120, ~90 measured) and whole-row steps land on an uneven beat. While
+    //   rows flow every link is pinned at ONE rate; when they stop the link goes back to what it asked for, so an
+    //   idle screen still steps down (the cap's own rule). The cap still sets the ceiling.
+    // ★★ POWER (Stuart, 2026-10-28: "only ramp up the FPS on interaction and then when the waterfall/spectrum is running
+    //   slow the Pro Motion down to 30fps or whatever the spectrum etc runs at"): the JS side picks the rate — 120 (or
+    //   the cap) during a gesture, a whole multiple of the feed at rest (30/40/60) — and it is applied as min = max, so
+    //   the panel cannot wander and every row gets the same number of refreshes.
+    if (gFpsSteady > 0) {
+      float top = (float)(cap > 0 ? MIN(gFpsSteady, cap) : gFpsSteady);
+      r = CAFrameRateRangeMake(top, top, top);
+    }
+    gOrigSetRange(link, @selector(setPreferredFrameRateRange:), r);
   }
   gFpsInOriginal--;
 }
@@ -326,6 +340,29 @@ RCT_EXPORT_METHOD(setFrameRateCap:(double)hz) {
   NSInteger cap = (std::isfinite(hz) && hz > 0) ? (NSInteger)lround(hz) : 0;
   [[NSUserDefaults standardUserDefaults] setInteger:cap forKey:kVibeFrameRateCapKey];
   dispatch_async(dispatch_get_main_queue(), ^{ vibeFpsSetCap(cap); });
+}
+
+// Hz while waterfall rows are flowing (every range link pinned there, see gFpsSteady); 0 = release. Live.
+RCT_EXPORT_METHOD(setSteadyRefresh:(double)hz) {
+  NSInteger want = (std::isfinite(hz) && hz > 0) ? (NSInteger)lround(hz) : 0;
+  // ★★ ON A MAC: the full rate, not the feed-matched one. macOS runs the panel at whatever the whole screen asks (Stuart's
+  //   ProMotion Mac showed 90–100 Hz with the app asking for 40), so a low pin only spaces OUR frames unevenly across its
+  //   refreshes; at the full rate the row pacer places rows by time (build 507 — "judder seems to be gone"). The
+  //   feed-matched low rate (the power saving) is for iPhone/iPad, where the request is honoured.
+  if (want > 0) {
+    NSProcessInfo *pi = [NSProcessInfo processInfo];
+    BOOL onMac = pi.isMacCatalystApp;
+    if (@available(iOS 14.0, *)) onMac = onMac || pi.isiOSAppOnMac;
+    if (onMac) want = 120;
+  }
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!gFpsSync) return;
+    @synchronized (gFpsSync) {
+      if (gFpsSteady == want) return;
+      gFpsSteady = want;
+      for (CADisplayLink *link in gFpsLinks.allObjects) vibeFpsApply(link, vibeFpsRequestOf(link), gFpsCap);
+    }
+  });
 }
 
 // The panel's top rate: 120 on ProMotion, 60 elsewhere. ★ UIKit — read on the main thread.

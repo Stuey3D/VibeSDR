@@ -127,8 +127,20 @@ void StereoPLL::advance(float mpx) {
     //
     // ★ Re-seed rather than zero: a zeroed oscillator would sit dead, whereas this
     // re-acquires exactly as it does at start-up.
-    if (!std::isfinite(oscC_) || !std::isfinite(oscS_) || !std::isfinite(lockAmp_)) {
+    // ★★★ AND THE LOOP'S OWN STATE, OR THE "GLITCH" IS FOREVER AFTER ALL (2026-10-30). This reset
+    //     the oscillator and the metric but not df_ or phase_ — and one NaN in the MPX has already
+    //     been integrated into BOTH by the time we get here (df_ += beta*err, phase_ += w0 + d; the
+    //     ±200 Hz clamp above cannot catch it, every comparison with NaN is false). So the next
+    //     sample's rotator was NaN again, this guard fired again, and lockAmp sat at exactly 0 for
+    //     ever: stereo and RDS gone, mono audio carrying on, the MPX S/N frozen at its last figure.
+    //     Measured on the Lenovo RSP1A's 6 MS/s capture through the direct path (iq_replay): LOCK
+    //     at 0.5 s, then "dev 0.00 kHz" for the rest of the file, the guard firing on every
+    //     sample. The NaN came from the CEQ (see CmaEqualiser's per-sample guard) — but whatever
+    //     the source, this is the one place that promised to make it a glitch.
+    if (!std::isfinite(oscC_) || !std::isfinite(oscS_) || !std::isfinite(lockAmp_)
+        || !std::isfinite(df_) || !std::isfinite(phase_)) {
         oscC_ = 1.0f; oscS_ = 0.0f; sinceNorm_ = 0;
+        df_ = 0.0; phase_ = 0.0; cycle_ = 0;
         lockAmp_ = 0.0f; lockState_ = false; trackState_ = false; belowRelease_ = 0;
         return;
     }

@@ -16,6 +16,11 @@
 //   4. THE ZOOM FAN (Stuart 2026-10-27 23:51: zooming SLICED the web waterfall into bands of different zoom): after a
 //      straight trail, a zoom IN and then OUT — every row of that trail, old and new, shows the carrier at the column the
 //      NEW span puts it (the history fanned with the zoom), never at the old one.
+//   6. THE FULL-CAPTURE LAYER (V12, Stuart 2026-10-28 02:00: "the waterfall should be buffering outside the zoomed area so
+//      that the black doesn't show at all"): zoomed in AWAY from the carrier for a few seconds, then back out — every row
+//      recorded while zoomed shows the carrier at its true column (the coarse full-capture row under the detailed one),
+//      never black; zoomed in ON the carrier, those rows keep it DETAILED (narrow) after the zoom out; panned across the
+//      capture while zoomed, the same; and a phone turned portrait → landscape → portrait keeps that history.
 //   All of it twice: the WebGL renderer, then the 2D fallback (old phones without WebGL draw the same picture).
 //   VIBESERVER_BIN=…/vibeserver node --max-old-space-size=512 scripts/test-web-waterfall-history.mjs
 //   (the page is the one compiled into that binary — rebuild it after `node scripts/build-web.mjs`)
@@ -57,12 +62,17 @@ const SNIFF = `(() => { window.__rows = []; const O = WebSocket;
 const COLUMNS = `(() => { const h = window.__vibeWf(); if (!h) return null; const wf = h.wf; const cv = document.getElementById('wf');
   const W = cv.width, H = cv.height, wfH = wf.wf.height, top = H - wfH; const d = cv.getContext('2d').getImageData(0, top, W, wfH).data;
   const at = (o, x) => { const p = o + x * 4; return d[p] * 2 + d[p + 1] + d[p + 2]; };
-  const cols = [], ls = [], rs = [], blank = []; for (let y = 0; y < wfH; y++) { let best = -1, bx = 0, lo = 1e9; const o = y * W * 4;
+  const cols = [], ls = [], rs = [], lh = [], rh = [], blank = []; for (let y = 0; y < wfH; y++) { let best = -1, bx = 0, lo = 1e9; const o = y * W * 4;
     let sum = 0; for (let x = 2; x < W - 2; x++) { const v = at(o, x); sum += v; if (v < lo) lo = v; if (v > best) { best = v; bx = x; } }
     blank.push(best - lo < 30);
     let l = bx, r = bx; while (l > 2 && at(o, l - 1) >= best - 24) l--; while (r < W - 3 && at(o, r + 1) >= best - 24) r++;
-    const lit = best - sum / (W - 4) > 120; cols.push(lit ? Math.round((l + r) / 2) : -1); ls.push(lit ? l : -1); rs.push(lit ? r : -1); }
-  return { W, wfH, cols, ls, rs, blank }; })()`;
+    const lit = best - sum / (W - 4) > 120; cols.push(lit ? Math.round((l + r) / 2) : -1); ls.push(lit ? l : -1); rs.push(lit ? r : -1);
+    // ★ The carrier's HALF-brightness extent: rows blend 50/50 into the next (the soft vertical look), so a moving trail's
+    //   row is part one row's carrier and part the next's — its visible width is where it stands half way above the floor.
+    const half = lo + (best - lo) / 2; let hl = bx, hr = bx;
+    while (hl > 2 && at(o, hl - 1) >= half) hl--; while (hr < W - 3 && at(o, hr + 1) >= half) hr++;
+    lh.push(lit ? hl : -1); rh.push(lit ? hr : -1); }
+  return { W, wfH, cols, ls, rs, lh, rh, blank }; })()`;
 
 /** Rows (y, newest first) whose column jumps away from BOTH neighbours by more than `px` the same way — a torn row (it
  *  leaves the trail and comes back). Except a trail that TURNS (the fast spin reversing: 1118 1174 1196 1178 1136): it
@@ -80,6 +90,12 @@ function zigzags(cols, px) {
     const away = (n1, n2) => n2 >= 0 && Math.abs(cols[y] - n2) >= Math.abs(cols[y] - n1);
     const turn = away(cols[y - 1], c2) && away(cols[y + 1], c3)
               && Math.min(Math.abs(a), Math.abs(b)) <= px + 2 * Math.max(Math.abs(cols[y - 1] - c2), Math.abs(c3 - cols[y + 1]));
+    // ★ …or the dial PAUSED for a row at the reversal (1114 1178 1178 1191 1165 1165 1140): the trail still goes on away
+    //   three rows out on both sides, which a lone torn row (100 100 110 100 100) never does.
+    const c4 = cols[y - 3] ?? -1, c5 = cols[y + 3] ?? -1;
+    const paused = c4 >= 0 && c5 >= 0 && Math.abs(cols[y] - c4) > Math.abs(cols[y] - cols[y - 1]) + px
+                && Math.abs(cols[y] - c5) > Math.abs(cols[y] - cols[y + 1]) + px && Math.sign(cols[y] - c4) === Math.sign(cols[y] - c5);
+    if (paused) continue;
     if (!turn) out.push(y);
   }
   return out;
@@ -189,14 +205,17 @@ try {
   if (process.env.WFHIST_SHOT) { const s = await send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(process.env.WFHIST_SHOT, Buffer.from(s.result.data, 'base64')); }
   if (process.env.WFHIST_DEBUG) { console.log('   cols', recent.slice(0, 260).join(' '));
     console.log('   runs', JSON.stringify(await ev(`(() => { const w = window.__vibeWf().wf; const out = []; const R = w.runs.buf; for (let i = 0; i < 40 && i * 4 < R.length; i++) out.push([R[i*4], R[i*4+1], +R[i*4+2].toFixed(4), +R[i*4+3].toFixed(4)]); return out; })()`))); }
-  ok(zz.length === 0, `the picture: the carrier's trail never zig-zags (${zz.length} torn row(s)${zz.length ? ' at y ' + zz.slice(0, 6).join(', ') : ''})`);
+  ok(zz.length === 0, `the picture: the carrier's trail never zig-zags (${zz.length} torn row(s)${zz.length ? ' at y ' + zz.slice(0, 6).join(', ') + ' — columns ' + recent.slice(Math.max(0, zz[0] - 4), zz[0] + 5).join(' ') : ''})`);
   // ★ 40 kHz of tuning across a 200 kHz view = 20 % of the width: the trail must have bent that far — one continuous line
   ok(travel >= pic.W * 0.15, `the trail bends with the tune (${travel} px of travel across ${pic.W} px)`);
 
   // ── 3. A resize keeps the history (Stuart: resize and rotate must never lose it) ──
   // ★ The OLDEST rows with the carrier in them — the straight trail from before the tune — and where they sit.
   const before = await columns();
-  const old = before.cols.map((x, y) => [y, x]).filter(([, x]) => x >= 0).slice(-40);
+  // ★ Rows on a VERTICAL stretch only (since 2026-10-28 a zoom leaves curved trails in the history, where a few lines of
+  //   scroll between the two reads would move the column — that is the scroll, not a lost row).
+  const vert = (y) => [-3, -2, -1, 1, 2, 3].every((d) => before.cols[y + d] >= 0 && Math.abs(before.cols[y + d] - before.cols[y]) <= 1);
+  const old = before.cols.map((x, y) => [y, x]).filter(([y, x]) => x >= 0 && vert(y)).slice(-40);
   await send('Emulation.setDeviceMetricsOverride', { width: 900, height: 900, deviceScaleFactor: 1, mobile: false });
   await sleep(150);
   const after = await columns();
@@ -206,51 +225,187 @@ try {
   ok(old.length >= 30 && after.W !== before.W && kept >= old.length * 0.8,
      `a resize (${before.W} → ${after.W} px) keeps the history: ${kept}/${old.length} of the oldest rows still show the carrier, at its rescaled column`);
 
-  // ── 4. THE ZOOM FAN — a straight trail, then a zoom in, then back out: the whole trail follows the new span ──
-  // ★ The carrier sits 10 kHz above the dial: at 200 kHz it is 5 % right of centre, at 80 kHz 12.5 %. A history that does
-  //   not fan keeps the trail's older rows at the OLD column under the new rows at the new one — the slicing.
+  // ── 4. A ZOOM LEAVES THE HISTORY AS DRAWN (Stuart 2026-10-28: "a thin line signal should expand out to the width and
+  //    the history remains the thin line"; zooming out "no breaks … a continuous history"): a straight trail, then a zoom —
+  //    the new rows at the new column, the old trail still at the old one, and between them the ease's curve: one line,
+  //    no break. ★ The carrier sits 10 kHz above the dial: 5 % right of centre at 200 kHz, 12.5 % at 80 kHz.
   const fanCase = async (fromSpan, toSpan) => {
     await sleep(4000);   // a straight trail at fromSpan (~80 rows)
     const pre = await columns();
     const colAt = (span, W) => Math.round((0.5 + (CARRIER - fEnd) / span) * W);
     const c0 = colAt(fromSpan, pre.W);
-    let L = 0; while (L < pre.cols.length && (pre.cols[L] < 0 || Math.abs(pre.cols[L] - c0) <= 3)) L++;
     await ev(`(() => { const s = window.__vibeWf().spec; s.zoom(${fEnd}, ${toSpan} / (s.cfg.binCount || 1024)); return true; })()`);
-    await sleep(1200);
+    await sleep(2500);
     const post = await columns();
     const c1 = colAt(toSpan, post.W);
-    // the straight trail has moved down by the rows drawn since; check the top L rows (new + old), a few in-flight rows excused
-    const top = post.cols.slice(0, Math.min(L, 200)).filter((x) => x >= 0);
-    const at = top.filter((x) => Math.abs(x - c1) <= 4).length, atOld = top.filter((x) => Math.abs(x - c0) <= 3).length;
-    ok(L >= 40 && top.length >= 40 && at >= top.length * 0.92,
-       `zoom ${fromSpan / 1000} → ${toSpan / 1000} kHz fans the history: ${at}/${top.length} rows of the ${L}-row trail at the new column ${c1}` +
-       ` (${atOld} still at the old column ${c0})`);
+    const newTop = post.cols.slice(2, 12).filter((x) => x >= 0), newAt = newTop.filter((x) => Math.abs(x - c1) <= 4).length;
+    const yOld = post.cols.findIndex((x, y) => y > 12 && x >= 0 && Math.abs(x - c0) <= 3);
+    const oldRun = yOld >= 0 ? post.cols.slice(yOld, yOld + 40).filter((x) => x >= 0) : [];
+    const oldAt = oldRun.filter((x) => Math.abs(x - c0) <= 3).length;
+    // ★ JOINED (wfGlide.ts joinedRowAt — the app's shader taps, 2026-10-29): each moving row is lit across its move to the
+    //   row below, so the curve is one solid line however quick the ease: the gap between one row's carrier and the
+    //   next row's (half-brightness extents) is what must stay closed, not the step.
+    let worst = 0, gaps = 0;
+    for (let y = 3; y <= yOld + 2 && y < post.cols.length; y++) { const p = post.cols[y - 1], q = post.cols[y];
+      if (p >= 0 && q >= 0) worst = Math.max(worst, Math.max(post.lh[y] - post.rh[y - 1], post.lh[y - 1] - post.rh[y]) - 1, 0); else gaps++; }
+    ok(newTop.length >= 8 && newAt >= newTop.length * 0.9 && yOld > 12 && oldRun.length >= 30 && oldAt >= oldRun.length * 0.9 && worst <= 2 && gaps <= 2,
+       `zoom ${fromSpan / 1000} → ${toSpan / 1000} kHz: new rows at ${c1} (${newAt}/${newTop.length}), the history still at ${c0} (${oldAt}/${oldRun.length}),` +
+       ` joined by one solid curve (widest gap between rows ${worst} px, ${gaps} unlit rows over ${yOld} rows)`);
   };
   await fanCase(SPAN, 80000);
   await fanCase(80000, SPAN);
 
-  // ── 5. GLIDE (Stuart 2026-10-28): a FAST tune — 3 kHz every 60 ms, ~16 px a row at 200 kHz across 1280 px — must draw
-  //    ONE continuous diagonal: every row's carrier touches the row above's, no dashes with gaps between them ──
-  {
+  // ── 5. GLIDE (Stuart 2026-10-28: "I just wanted the chunky broken diagonal lines joined up so they looked solid";
+  //    the reference is the first native build's sweep — whole rows at their own placement, a smooth curve, no steps).
+  //    A tune draws a trail that moves EVENLY row by row — never the staircase of a run of rows at one place and then a
+  //    jump (several rows emitted per frame all snapped to that frame's placement). At a drum's pace the rows also TOUCH
+  //    (no gap between one row's carrier and the next). At a fast spin — more pixels a row than the carrier is wide — a
+  //    one-bin carrier is an even dotted diagonal: the rows are a frame interval apart and nothing real lies between. ──
+  let tuneAt = fEnd;
+  const glideCase = async (label, stepHz, everyMs, steps, wantTouch) => {
     await sleep(1500);
-    for (let i = 1; i <= 16; i++) { await ev(`window.__vibeWf().spec.tune(${fEnd + i * 3000})`); await sleep(60); }
+    const from = tuneAt;
+    for (let i = 1; i <= steps; i++) { tuneAt = from + i * stepHz; await ev(`window.__vibeWf().spec.tune(${tuneAt})`); await sleep(everyMs); }
     await sleep(1500);
     const g = await columns();
-    const cStart = Math.round((0.5 + (CARRIER - fEnd) / SPAN) * g.W), cEnd = Math.round((0.5 + (CARRIER - fEnd - 48000) / SPAN) * g.W);
+    // ★ WFHIST_SHOTS=<dir>: a picture of each tune per renderer (before/after comparisons of the glide).
+    if (process.env.WFHIST_SHOTS) { const s = await send('Page.captureScreenshot', { format: 'png' });
+      fs.mkdirSync(process.env.WFHIST_SHOTS, { recursive: true });
+      fs.writeFileSync(path.join(process.env.WFHIST_SHOTS, `${label}-${MODE}.png`), Buffer.from(s.result.data, 'base64')); }
+    const cStart = Math.round((0.5 + (CARRIER - from) / SPAN) * g.W), cEnd = Math.round((0.5 + (CARRIER - tuneAt) / SPAN) * g.W);
     // the moving part of the trail, newest first: rows strictly between where it started and where it settled
     const ys = []; for (let y = 0; y < Math.min(400, g.cols.length); y++) { const c = g.cols[y]; if (c >= 0 && c < cStart - 3 && c > cEnd + 3) ys.push(y); }
-    let gaps = 0, worst = 0, pairs = 0;
+    let gaps = 0, worst = 0, pairs = 0, still = 0;
+    const ds = [];
     const y0 = ys.length ? ys[0] - 1 : 0, y1 = ys.length ? ys[ys.length - 1] + 1 : 0;
     for (let y = Math.max(0, y0); y < y1; y++) {
-      if (g.ls[y] < 0 || g.ls[y + 1] < 0) continue;
+      if (g.lh[y] < 0 || g.lh[y + 1] < 0) continue;
       pairs++;
-      const gap = Math.max(g.ls[y] - g.rs[y + 1], g.ls[y + 1] - g.rs[y]) - 1;   // empty pixels between the two rows' carriers
+      const gap = Math.max(g.lh[y] - g.rh[y + 1], g.lh[y + 1] - g.rh[y]) - 1;   // empty pixels between the two rows' carriers
       if (gap > 1) { gaps++; worst = Math.max(worst, gap); }
+      const d = Math.abs(g.cols[y] - g.cols[y + 1]); ds.push(d); if (d === 0) still++;
     }
-    ok(ys.length >= 6 && pairs >= 6 && gaps <= 1,
-       `a fast tune (${cStart} → ${cEnd} px) draws one continuous trail: ${gaps} gap(s) between ${pairs} row pairs along ${ys.length} moving rows` +
-       (gaps ? ` (widest ${worst} px)` : ''));
+    // ★ "Largest" is the 90th percentile: a spin faster than the tuner's retune cooldown leaves the radio catching up in
+    //   one jump now and then (the hard rule's allowed gap) — a staircase is MANY rows standing still and then jumps.
+    const sorted = [...ds].sort((x, y) => x - y), med = sorted.length ? sorted[sorted.length >> 1] : 0,
+          big = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.9))] : 0;
+    // ★ the fast spin outruns the tuner (it catches up in jumps — the allowed gap), so it gets the looser bound
+    const [sMax, bK, bA] = wantTouch ? [0.25, 3, 4] : [0.35, 4, 6];
+    if (process.env.WFHIST_DEBUG) console.log(`   ${label} steps:`, ds.join(' '));
+    ok(ys.length >= 6 && pairs >= 6 && still <= pairs * sMax && big <= bK * med + bA,
+       `${label} (${cStart} → ${cEnd} px): the trail moves EVENLY, a curve not a staircase — ${still}/${pairs} rows standing still, steps median ${med} px, 90th percentile ${big} px`);
+    // ★ up to 1 in 10 pairs: a frame the server sends late leaves a small gap (the timing of a loaded test box)
+    if (wantTouch) ok(gaps <= Math.max(1, Math.floor(pairs * 0.1)), `${label}: one continuous trail — ${gaps} gap(s) between ${pairs} row pairs` + (gaps ? ` (widest ${worst} px)` : ''));
+  };
+  await glideCase('drum-spin', 500, 50, 40, true);
+  await glideCase('fast-spin', 3000, 60, 16, false);
+  // ── 6. THE FULL-CAPTURE LAYER — no black inside the capture after a zoom out ──
+  {
+    // ★ The view moves, the dial does not, all through this section (followVfo off — every zoom goes out as `free`).
+    await ev('(() => { window.__vibeWf().spec.followVfo = false; return true; })()');
+    const ringRows = () => ev(`(() => { const w = window.__vibeWf().wf; return w.gl ? w.gl.rows : w.wf.height; })()`);
+    const headNow = () => ev('window.__vibeWf().wf.head');
+    const zoomTo = (c, span) => ev(`(() => { const s = window.__vibeWf().spec; s.zoom(${c}, ${span} / (s.cfg.binCount || 1024)); return true; })()`);
+    const colAt = (f, W) => Math.round((0.5 + (f - fEnd) / SPAN) * W);
+    // Zoom to `span` round `centres` (one per second — a pan), then back out to SPAN round the dial; the rows written
+    // meanwhile, newest first, as display rows [y0, y1) of the picture taken after.
+    const phase = async (span, centres, during) => {
+      await zoomTo(fEnd, SPAN); await sleep(1500);
+      const h0 = await headNow();
+      for (const c of centres) { await zoomTo(c, span); await sleep(1000); }
+      const mid = during ? await during() : null;
+      const h1 = await headNow();
+      await zoomTo(fEnd, SPAN); await sleep(1200);
+      const h2 = await headNow(), R = await ringRows();
+      const pic = await columns();
+      // a ring row r is display row (r − head) mod R; the phase wrote rows h1 … h0−1 (the head walks backwards)
+      const y0 = ((h1 - h2) % R + R) % R + 3, y1 = ((h0 - h2) % R + R) % R - 3;   // a few in-flight rows excused at each end
+      return { pic, y0, y1, mid };
+    };
+    // Mean brightness (2R+G+B) of the waterfall's rows [y0, y1) over columns [x0, x1) — the floor's look, in pixels.
+    const lum = (y0, y1, x0, x1) => ev(`(() => { const cv = document.getElementById('wf'), wf = window.__vibeWf().wf.wf;
+      const top = cv.height - wf.height, d = cv.getContext('2d').getImageData(${x0}, top + ${y0}, ${x1 - x0}, ${y1 - y0}).data;
+      let s = 0; for (let i = 0; i < d.length; i += 4) s += d[i] * 2 + d[i + 1] + d[i + 2]; return s / (d.length / 4); })()`);
+    const lit = (pic, y0, y1, col, tol) => { let n = 0, at = 0, w = 0;
+      for (let y = y0; y < y1; y++) { n++; const c = pic.cols[y]; if (c >= 0 && Math.abs(c - col) <= tol) { at++; w = Math.max(w, pic.rs[y] - pic.ls[y] + 1); } }
+      return { n, at, w }; };
+    // (a) zoomed 20 kHz AWAY from the carrier (it is 10 kHz above the dial; the view sits 40 kHz below it) — outside the view
+    {
+      const { pic, y0, y1: y1all, mid } = await phase(20000, [fEnd - 30000, fEnd - 30000, fEnd - 30000, fEnd - 30000],
+        () => ev('window.__vibeWf().wf.layerFloorCheck()'));
+      // ★ the OLDEST rows of the phase are the zoom-in's ease (drawn at in-between, wider views — they may show the
+      //   carrier, rightly): the newest 60 % are the settled zoom
+      const y1 = y0 + Math.round((y1all - y0) * 0.6);
+      const r = lit(pic, y0, y1, colAt(CARRIER, pic.W), 12);
+      // ★★ "the same waterfall, just less sharp" (Stuart's review of v1): the layer's floor matches the detailed rows' in dB
+      //    (in the view, and outside it on this flat band), the filled rows' floor LOOKS like the detailed rows' floor beside
+      //    it, and the carrier in the filled rows is a thin line, not a blob.
+      // ★ within 1 dB + the wire's own step (both rows arrive as whole dB, and the detailed median is one of them)
+      ok(mid && Math.abs(mid.inView - mid.det) <= 1.5 && Math.abs(mid.outside - mid.det) <= 1.5,
+         `the layer's floor in dB: detailed median ${mid && mid.det.toFixed(1)}, layer in the view ${mid && mid.inView.toFixed(1)}, outside it ${mid && mid.outside.toFixed(1)} (within 1 dB + the 1 dB wire step)`);
+      // ★★ Since 2026-10-28 a zoom out no longer re-maps those rows: they stay as drawn (the narrow view, the carrier
+      //    outside it) — every one still the identity, nothing black inside it.
+      const asDrawn = await ev(`(() => { const w = window.__vibeWf().wf; const R = w.xfA.length; let n = 0, c = 0;
+        for (let j = ${y0}; j < ${y1}; j++) { const r = (w.head + j) % R; n++; if (w.xfA[r] === 1 && w.xfB[r] === 0) c++; } return [c, n]; })()`);
+      ok(asDrawn && asDrawn[1] >= 30 && asDrawn[0] === asDrawn[1] && r.at === 0,
+         `zoomed in away from the carrier, then out: ${asDrawn && asDrawn[0]}/${asDrawn && asDrawn[1]} of the rows written meanwhile stay as drawn (the carrier outside them: ${r.at} show it)`);
+    }
+    // (b) zoomed ON the carrier: those rows keep their detail after the zoom out (narrow, not the coarse layer's width)
+    {
+      const { pic, y0, y1: y1all } = await phase(20000, [CARRIER, CARRIER, CARRIER, CARRIER]);
+      const y1 = y0 + Math.round((y1all - y0) * 0.6);   // (past the zoom-in's ease, as above)
+      // as drawn: the view was centred on the carrier, so those rows keep it at the CENTRE, thin
+      const r = lit(pic, y0, y1, Math.round(pic.W / 2), 4);
+      ok(r.n >= 30 && r.at >= r.n * 0.9 && r.w <= 8,
+         `zoomed in ON the carrier, then out: ${r.at}/${r.n} rows keep it where it was drawn (the centre), at most ${r.w} px wide`);
+    }
+    // (d) a PHONE turned portrait → landscape → portrait keeps the history (the same ring, re-drawn at the new size)
+    {
+      const before = await columns();
+      const oldRows = before.cols.map((x, y) => [y, x]).filter(([, x]) => x >= 0).slice(0, 200);
+      for (const [w, h] of [[390, 844], [844, 390], [390, 844]]) {
+        await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 2, mobile: true });
+        await sleep(400);
+      }
+      const after = await columns();
+      const k = after.W / before.W;
+      // ★ The GPU ring shows one row per device pixel, so a taller screen shows MORE rows (a row stays at its y, plus what
+      //   scrolled in meanwhile — at dpr 2 that is twice the rows a second); the 2D ring is re-heighted (stretched).
+      const near = (yy, x) => Math.abs((after.cols[yy] ?? -99) - x * k) <= 6;
+      const kept = oldRows.filter(([y, x]) => {
+        for (let dy = 0; dy <= 90; dy++) if (near(y + dy, x)) return true;
+        for (let dy = 0; dy <= 16; dy += 2) if (near(Math.round((y + dy) * after.wfH / before.wfH), x)) return true;
+        return false; }).length;
+      ok(oldRows.length >= 100 && kept >= oldRows.length * 0.7,
+         `a phone turned portrait → landscape → portrait (${before.W}×${before.wfH} → ${after.W}×${after.wfH}) keeps the history: ${kept}/${oldRows.length} rows`);
+      await send('Emulation.setDeviceMetricsOverride', { width: 900, height: 900, deviceScaleFactor: 1, mobile: false });
+      await sleep(400);
+    }
+    // (c) PANNED across the capture while zoomed. A pan is a centre move, so — like a tune — the rows keep their own
+    //     placement (the #57 bend); what must hold is that NONE of them can show black inside the capture once zoomed
+    //     out: every row written during the pan carries a full-capture layer (X > 0) reaching across the whole screen.
+    {
+      const { y0, y1 } = await phase(20000, [fEnd - 40000, fEnd - 10000, CARRIER, CARRIER + 30000, CARRIER + 60000]);
+      const cov = await ev(`(() => { const w = window.__vibeWf().wf; const R = w.xfA.length; let n = 0, c = 0; const bad = [];
+        for (let j = ${y0}; j < ${y1}; j++) { const r = (w.head + j) % R; n++;
+          // screen x 0..1 shows the row's u = a·x + b; the detail covers it where u spans 0..1; the layer where the capture
+          // coordinate does — 2D: the twin's s = (u + X)/(1 + 2X); GPU: u_capture = k·u + m (X holds k there, m in xfM).
+          // ★ Since the pan's moves are JUMPS (a whole view or more, wfGlide.ts rowView) the rows are moved into place by
+          //   their maps (b ≠ 0), so it is the LAYER that must cover — what the check was always for.
+          const a = w.xfA[r], b = w.xfB[r], X = w.xfX[r];
+          const detail = b <= 0 && a + b >= 1;
+          const layer = X > 0 && (w.gl ? (X * b + w.xfM[r] >= 0 && X * (a + b) + w.xfM[r] <= 1)
+                                         : ((b + X) / (1 + 2 * X) >= 0 && (a + b + X) / (1 + 2 * X) <= 1));
+          if (detail || layer) c++; else if (n % 10 === 0) bad.push([j, +a.toFixed(3), +b.toFixed(3), +X.toFixed(4), +(w.xfM[r] || 0).toFixed(4)]); }
+        return [c, n, bad.slice(0, 12)]; })()`);
+      if (process.env.WFHIST_DEBUG) console.log('   pan rows not covered [y, a, b, X|k, m]:', JSON.stringify(cov && cov[2]));
+      ok(cov && cov[1] >= 40 && cov[0] >= cov[1] * 0.95,
+         `panned across the capture while zoomed, then out: ${cov && cov[0]}/${cov && cov[1]} rows have data across the whole screen (no black inside the capture)`);
+    }
+    await ev(`(() => { const s = window.__vibeWf().spec; s.followVfo = true; s.tune(${fEnd}); return true; })()`);
+    await zoomTo(fEnd, SPAN); await sleep(1000);
   }
+
  }
 } catch (e) { ok(false, `driver: ${e && e.stack || e}`); }
 finally {

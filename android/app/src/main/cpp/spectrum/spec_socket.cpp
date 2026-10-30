@@ -113,6 +113,14 @@ bool SpecSocketSink::onBinary(const uint8_t* p, size_t len) {
     }
     double freq = 0;
     const SpecDecoder::Result r = dec_.feed(p, len, freq);
+    if (r == SpecDecoder::kWide) {
+        // ★★ V12 the full-capture row: straight to the engine's layer (wf_wide.h), on this thread, at its arrival. NOT queued
+        //    for JS — the JS path would hand it to the engine again; its bytes are already in the link meter's count.
+        std::shared_ptr<SpectrumEngine> e;
+        { std::lock_guard<std::mutex> lk(gEngMx); e = gEngine.lock(); }
+        if (e) e->pushWideNative(p, len);
+        return false;
+    }
     if (r == SpecDecoder::kSpectrum) {
         feedEngine(dec_.bins(), freq);
         nFrames_.fetch_add(1, std::memory_order_relaxed);
@@ -147,7 +155,7 @@ void SpecSocketSink::feedEngine(const std::vector<float>& bins, double freq) {
     const int half = n >> 1;
     std::memcpy(display_.data(), bins.data() + half, sizeof(float) * half);
     std::memcpy(display_.data() + half, bins.data(), sizeof(float) * half);
-    e->pushFrameNative(display_.data(), n, centerHz, bwHz, freq);
+    e->pushFrameNative(display_.data(), n, centerHz, bwHz, freq, statusBinBw_ > 0 ? statusBinBw_ * bc : NAN);   // ★ the bins' real span
 }
 
 }  // namespace vibespec

@@ -214,6 +214,7 @@ import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
+import { type WfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS } from '../assets/wfSpeedCap';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -2535,7 +2536,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const idx = DAB_BLOCKS.findIndex(b => Math.abs(b.hz - hz) < 50_000);
     if (idx < 0) return false;
     if (askGate()) return true;   // ★★ ask before tuning — handled (refused), so no fallback tune either
-    markInteract();
+    markMove();
     dabStepper.current?.cancel();             // ★ a bookmark is a pick — a pending burst must not override it
     const svc = sid >= 0 ? sid : undefined;   // ★ no service id = the block, whatever plays
     AsyncStorage.setItem(dabBlockKeyRef.current, DAB_BLOCKS[idx].name).catch(() => {});
@@ -2667,6 +2668,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // (reference-skin parity).
   const onCentreVfo = useCallback(() => {
     const c = client.current; if (!c) return;
+    markMove();   // a pan of the view — the waterfall eases it
     const v = c.getView();
     if (v.binBandwidth > 0) c.zoom(c.getStatus().frequency, v.binBandwidth);
   }, []);
@@ -2882,7 +2884,14 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [wfCoarse,      setWfCoarse]      = useState<'auto'|'manual'>('auto');
   const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'>('20fps');
   // ★ SHARP by default: one row per received frame, exactly what the app has always drawn.
-  const [wfScroll,      setWfScroll]      = useState<'sharp'|'default'|'smooth'>('sharp');
+  const [wfScroll,      setWfScroll]      = useState<WfSpeedSetting>('sharp');
+  /* ★★ V12 2026-10-30: the speed keys are DISPLAY ONLY (src/assets/wfSpeedCap.ts) — rows drawn a second, a faster feed
+   *  combined down. What the server sends is the separate DATA control (LOW · AUTO · FULL = linkMode below). Stuart: "we
+   *  cannot slow the incoming data rate down automatically when the waterfall is slowed down as that will effect the
+   *  spectrum too". */
+  /** The server's own top waterfall rate (the link controller's uncapped top rung; 0 = not known) — the live numbers on
+   *  the Waterfall Speed buttons are worked out from it. */
+  const [wfNativeFps, setWfNativeFps] = useState(0);
   // Smooth tune: 120Hz interpolated scroll while interacting; discrete row
   // steps + ~30fps spectrum tween once settled (ProMotion idles → battery).
   const [smoothTune,    setSmoothTune]    = useState(true);
@@ -2894,6 +2903,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [srvTz, setSrvTz] = useState<{ offsetMin: number | null; abbr: string }>({ offsetMin: null, abbr: '' });
   // Adaptive waterfall-rate policy — see services/linkManager.ts. 'adaptive' is the default:
   // follow what the link will actually carry rather than asking for the maximum and stuttering.
+  // ★★ V12 2026-10-30: this is the DATA control — LOW · AUTO · FULL on screen (wfSpeedCap.ts DATA_LABEL; 'lowData' /
+  //    'adaptive' / 'full' stored, so a saved Link Management choice loads as it was). LOW is the 5 fps floor; AUTO never
+  //    drops below it. Separate from the speed keys, which are display only (Stuart, 2026-10-30).
   const [linkMode,      setLinkMode]      = useState<'full'|'adaptive'|'lowData'>('adaptive');
   const linkModeRef = useRef<'full'|'adaptive'|'lowData'>('adaptive');
   useEffect(() => {
@@ -3323,9 +3335,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.getItem('lsv_frame_rate').then((v: string | null) => {
       if (v === 'native' || v === '10fps') setFrameRate('10fps');   // 'native' migrated → 10 FPS
       else if (v === '20fps' || v === '30fps') setFrameRate(v);
-    }).catch(() => {});
-    AsyncStorage.getItem('lsv_link_mode').then((v: string | null) => {
-      if (v === 'full' || v === 'adaptive' || v === 'lowData') setLinkMode(v);
     }).catch(() => {});
   }, []);
   const [modeSelOpen,   setModeSelOpen]   = useState(false);
@@ -5434,6 +5443,9 @@ export default function SDRScreen({ route, navigation }: Props) {
         // Low Data) is a preference, not a symptom, and must never show red.
         rungBars.current = Math.max(1, 4 - Math.max(1, rung)) as 1|2|3;
         settlingRef.current = settling;
+        // ★ V12: the server's own rate, for the Waterfall Speed buttons' live numbers (an hwinfo ceiling can move it).
+        { const nf = (client.current as unknown as { wfNativeFps?: number } | null)?.wfNativeFps;
+          if (typeof nf === 'number') setWfNativeFps(nf); }
         // Spectrum (from the client) + audio (counted here) = what the LINK is
         // actually carrying, which is the only figure worth showing.
         const audioKb = audioBytes.current / 1024;
@@ -6136,7 +6148,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           // bug — confirmed on the watch). Fall back to centerHz for any adapter that doesn't
           // set it. The main app's full-spectrum draw keeps using the predicted centre.
           centerHz:   s.trueCenterHz ?? s.centerHz,
-          bwHz:       s.bwHz,
+          bwHz:       s.trueBwHz ?? s.bwHz,   // ★ the bins' real span with their real centre (SDRStatus.trueBwHz)
           tuneHz:     s.frequency,
           filterLow:  s.bandwidthLow,
           filterHigh: s.bandwidthHigh,
@@ -6534,9 +6546,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                              listeners: 0, decoding: false });
     // Apply the persisted VFO-lock follow mode to the fresh connection.
     c.setFollowMode(vfoLockedRef.current);
-    // Apply the persisted link mode too — the [linkMode] effect only fires on a CHANGE, so a mode
+    // Apply the persisted link mode (the DATA control) too — the [linkMode] effect only fires on a CHANGE, so a mode
     // restored before this client existed would be lost (UI shows Low Data, wire runs adaptive 10fps).
     { const cc = c as unknown as { linkMode?: string }; if ('linkMode' in cc) cc.linkMode = linkModeRef.current; }
+    { const cc = c as unknown as { wfNativeFps?: number }; setWfNativeFps(cc.wfNativeFps ?? 0); }
     // Local hardware: thread the live device sample rate for panSpan()'s window.
     if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
     // VibeServer PIN: append the auth suffix to the spectrum WS.
@@ -7271,6 +7284,15 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  timer any more, so there is nothing for a touch to undo — and a touch that quietly re-sent
      *  the rate would be a second owner of it again, which is the fault the removal was for. */
   }, []);
+  /** ★★★ A TUNE OR ZOOM, not just a touch (Stuart, 2026-10-30: "any touch of the screen such as interacting with the
+   *  health chips or touching the controls to open the menu etc is speeding up the motion, this should only be for
+   *  tuning and zooming"). The waterfall's interaction boost and smooth-tune window read lastMoveRef; lastInteractRef
+   *  stays the presence stamp every touch writes (the root responder capture, idle release, hands-on). */
+  const lastMoveRef = useRef(0);
+  const markMove = useCallback(() => {
+    markInteract();
+    lastMoveRef.current = Date.now();
+  }, [markInteract]);
 
   /* ★★★ THE IDLE SLOWDOWN IS GONE. Only BACKGROUNDING now saves power.
    *
@@ -7359,25 +7381,45 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_smooth_tune', v ? '1' : '0').catch(() => {});
   }, []);
 
+
+  /** ★ The DATA control needs a server that can be ASKED for fewer frames (VibeServer, UberSDR, Kiwi/Web-888). OpenWebRX
+   *  has no rate lever, so there it is not drawn (AGENTS.md: no control that is dead on one radio). Every speed key is
+   *  offered everywhere — they are display only. */
+  const dataOk = route.params.serverType !== 'owrx';
+  const wfShown: WfSpeedSetting = wfScroll;
   const onLinkMode = useCallback((m: 'full'|'adaptive'|'lowData') => {
     setLinkMode(m);
     AsyncStorage.setItem('lsv_link_mode', m).catch(() => {});
     // Live: the controller reads this on its next tick, so the change is felt within a second
     // rather than needing a reconnect.
-    // The adapter wraps UberSDRClient; only that backend has a rate lever, so this is a soft
-    // reach rather than a protocol addition. Other backends simply have no linkMode to set.
     const c = client.current as unknown as { linkMode?: string; inner?: { linkMode?: string } } | null;
     if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
   }, []);
-
-  const onWfScroll = useCallback((v: 'sharp'|'default'|'smooth') => {
+  const onWfScroll = useCallback((v: WfSpeedSetting) => {
     setWfScroll(v);
     AsyncStorage.setItem('lsv_wf_scroll', v).catch(() => {});
   }, []);
   useEffect(() => {
-    AsyncStorage.getItem('lsv_wf_scroll').then((v: string | null) => {
-      if (v === 'sharp' || v === 'default' || v === 'smooth') setWfScroll(v);
+    AsyncStorage.multiGet(['lsv_wf_scroll', 'lsv_link_mode']).then(([[, v], [, lm]]) => {
+      // ★ loadWfSpeed: an old 'minimum' was the 5 fps choice — it lands on LOW (and is re-saved as 'low'), never on
+      //   the new 2 fps MINIMUM ('min2'). (The speed is display only now; the old 5 fps LINK cap it carried is not
+      //   applied.)
+      const s = loadWfSpeed(v);
+      if (s) { setWfScroll(s); if (s !== v) AsyncStorage.setItem('lsv_wf_scroll', s).catch(() => {}); }
+      // The DATA control: a saved Link Management choice loads as it was (LOW DATA → LOW, FULL → FULL, AUTO → AUTO).
+      if (lm === 'full' || lm === 'adaptive' || lm === 'lowData') setLinkMode(lm);
     }).catch(() => {});
+  }, []);
+  /* ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (GitHub #57 — the interaction boost raced the waterfall just as a phone user
+   *  zoomed toward a signal spotted on MINIMUM). Default ON (the behaviour as it was); OFF = the rows stay at the chosen
+   *  speed through a tune or zoom (wfClock.ts boostRowRate). Per device, every radio. */
+  const [wfBoost, setWfBoost] = useState(true);
+  const onWfBoost = useCallback((v: boolean) => {
+    setWfBoost(v);
+    AsyncStorage.setItem('lsv_wf_boost', v ? '1' : '0').catch(() => {});
+  }, []);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_wf_boost').then((v: string | null) => { if (v === '0') setWfBoost(false); }).catch(() => {});
   }, []);
   const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps') => {
     setFrameRate(v);
@@ -7469,7 +7511,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // stop every aircraft decoding. One predicate now, so the next data mode can't
     // fall through the same gap. Ignore drum input.
     if (isWholeProfileMode(String(c.getStatus().mode))) return;
-    markInteract();
+    markMove();
     const s = stepRef.current;
     // Velocity-adaptive sensitivity: EMA of |px|/dt. A gesture gap resets to
     // 0 so a fresh slow touch starts fully fine; a fast flick's EMA catches
@@ -7525,7 +7567,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bwZoomAcc = useRef({ base: 0, px: 0, t: 0 });
   const onBwDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
-    markInteract();
+    markMove();   // ★ the ZOOM drum — a zoom (it was left on markInteract 2026-10-30 by mistake: no boost, and the A/V hold)
     const s = c.getView(); // predicted view — getStatus() is one RTT stale mid-gesture
     if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
     const a = bwZoomAcc.current;
@@ -7563,8 +7605,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     const anchor = tuned > 0 ? tuned : v.centerHz;
     c.zoom(anchor, Math.max(1, v.binBandwidth * factor));
   }, []);
-  const onZoomIn  = useCallback(() => zoomBy(0.5), [zoomBy]);
-  const onZoomOut = useCallback(() => zoomBy(2),   [zoomBy]);
+  /* ★★ ONE PRESS = ×√2 ON OUR OWN RADIO (Stuart, 2026-10-28: "the zoom steps seem a lot coarser than before like big
+   *  chunky steps … i am sure there were more levels"). An octave a press was always the step; the whole-history stretch
+   *  hid it, and now that a zoom leaves the history as drawn every press shows. VibeServer (and the phone's own radio)
+   *  serves ANY span, so half an octave is a real level — the same one view send a press, no extra data. A server that
+   *  snaps to an octave ladder (UberSDR — see onZoomStep) keeps ×2, or a tap would snap straight back. */
+  const zoomStepK = isLocal ? Math.SQRT2 : 2;
+  // ★ markMove: a zoom from the menu is a ZOOM — the waterfall's boost and its no-hold window follow it (Stuart, 2026-10-30).
+  const onZoomIn  = useCallback(() => { markMove(); zoomBy(1 / zoomStepK); }, [zoomBy, zoomStepK, markMove]);
+  const onZoomOut = useCallback(() => { markMove(); zoomBy(zoomStepK); },     [zoomBy, zoomStepK, markMove]);
 
   // ── HiFi tuner keys (BRIEF-inputs §2) ───────────────────────────────────────
   // One press = one step. The VFO key reuses the MEDIA-SKIP path deliberately:
@@ -7626,7 +7675,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onVfoStep = useCallback((dir: -1 | 1) => {
     if (askGate()) return;   // ★★ ask before tuning — see askGate
-    markInteract();
+    markMove();
     /* ★★★ IN DAB THE MAIN TUNING ARROWS STEP THE MULTIPLEX. Stuart, 2026-09-08: "the main tuning
      *  buttons do not cycle through the blocks and 2 extremely tiny buttons in the decoder header
      *  are there instead which we moved away from in the client."
@@ -7673,22 +7722,22 @@ export default function SDRScreen({ route, navigation }: Props) {
       // Trailing send — the last step of a sweep must always reach the radio.
       st.timer = setTimeout(flush, SWEEP_SEND_MS - (now - st.sentAt));
     }
-  }, [markInteract, stepTarget]);
+  }, [markMove, stepTarget]);
   // ★ A TAP must move a WHOLE LADDER RUNG. The server snaps binBandwidth to a ladder,
   // so a fractional request is snapped straight back and nothing happens — the symptom
   // was a single tap making the waterfall lurch and return, with only a double tap
   // actually zooming (Stuart, on air). One octave is the rung the menu ± buttons have
   // always used.
   const onZoomStep = useCallback((dir: -1 | 1) => {
-    markInteract();
-    zoomBy(dir === 1 ? 0.5 : 2);
-  }, [zoomBy, markInteract]);
+    markMove();
+    zoomBy(dir === 1 ? 1 / zoomStepK : zoomStepK);
+  }, [zoomBy, markMove, zoomStepK]);
   // ★ A HELD sweep wants the opposite: small compounding factors, which DO cross rungs
   // cumulatively and give a smooth ramp instead of leaping an octave per tick.
   const onZoomSweep = useCallback((dir: -1 | 1) => {
-    markInteract();
+    markMove();
     zoomBy(Math.pow(2, -dir / 3));
-  }, [zoomBy, markInteract]);
+  }, [zoomBy, markMove]);
 
   // Per-control drum-or-keys. TWO independent settings, not one global switch —
   // "VFO keys + zoom drum" is a real combination somebody will want, and the
@@ -7715,15 +7764,17 @@ export default function SDRScreen({ route, navigation }: Props) {
   // floor / full-span cap, OWRX/Kiwi to their own limits), so a tiny bandwidth =
   // full zoom in and a huge one = full span out.
   const onZoomMax = useCallback(() => {       // MAX = zoom all the way in
+    markMove();
     const c = client.current; if (!c) return;
     const v = c.getView(); if (!v.centerHz) return;
     c.zoom(zoomAnchorHz(v), 1);
-  }, [zoomAnchorHz]);
+  }, [zoomAnchorHz, markMove]);
   const onZoomMin = useCallback(() => {       // MIN = full span out
+    markMove();
     const c = client.current; if (!c) return;
     const v = c.getView(); if (!v.centerHz) return;
     c.zoom(zoomAnchorHz(v), Number.MAX_SAFE_INTEGER);
-  }, [zoomAnchorHz]);
+  }, [zoomAnchorHz, markMove]);
 
   // Toggle: SET DEFAULT when this instance isn't the default, CLEAR when it is
   const [isDefault, setIsDefault] = useState(false);
@@ -7775,7 +7826,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onWfPanDelta = useCallback((dxPx: number) => {
     const c = client.current; if (!c) return;
     if (vfoLockedRef.current) return;                 // no free pan while locked
-    markInteract();
+    markMove();
     // Predicted view: pan() updates it synchronously, so successive deltas
     // compound correctly. Re-basing on getStatus() made every delta in an RTT
     // window re-apply from the same stale centre (rubber-banding).
@@ -7809,7 +7860,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  which knocks the multiplex tuning off"). The client refuses it; this stops the UI acting as
      *  though it worked, which is the difference between a locked control and a broken one. */
     if (dabOnRef.current) return;
-    markInteract();
+    markMove();
     const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     const a = wfZoomAcc.current;
     const now = Date.now();
@@ -7835,7 +7886,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (isWholeProfileMode(String(c.getStatus().mode))) return;
-    markInteract();
+    markMove();
     /* ★★ SNAP TO THE STEP. A finger lands a few hundred hertz off; on 5 kHz steps 9568.45 kHz
      *  means 9570, on 1 kHz 7073.14 means 7074 — the channel, not the pixel. The web client
      *  already does this and SDR++ is the reference (DL8LDN, 2026-09-14: "Typing with finger on
@@ -8223,7 +8274,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onTuneHz = useCallback((hz: number, mode?: SDRMode) => {
     const c = client.current; if (!c) return;
     if (askGate()) return;   // ★★ ask before tuning — see askGate
-    markInteract();
+    markMove();
     const [loHz, hiHz] = tuneBoundsOf(c);
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
     // Discrete jump (freq modal, bookmark/VTS, Siri, search) → always land
@@ -8360,7 +8411,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         //  ★ Exclusive receivers are unaffected: the dial is yours, and arming your own radio to
         //    turn your own knob would be pure ceremony.
         if (sharedDialRef.current && !armed) return;
-        markInteract();           // a watch tune is an interaction — wake the idle saver + clear its pill
+        markMove();           // a watch tune is an interaction — wake the idle saver + clear its pill
         wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
         if (isWholeProfileMode(String(c.getStatus().mode))) return;   // locked to its ensemble
         const s = stepRef.current; if (!(s > 0)) return;
@@ -8456,7 +8507,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       onZoomDelta: (delta: number) => {
         if (!delta) return;
-        markInteract();           // watch zoom is an interaction too — wake the idle saver
+        markMove();           // watch zoom is an interaction too — wake the idle saver
         // DEBOUNCE to 100ms, same as tuning: accumulate the zoom detents and apply the
         // combined factor ≤1/100ms (trailing-edge), so a fast zoom spin doesn't hammer the
         // zoom path / flood the server with config echoes.
@@ -10672,13 +10723,14 @@ export default function SDRScreen({ route, navigation }: Props) {
         peakHold={peakHold}
         spatialSmooth={spatialSmooth}
         smoothTune={smoothTune}
-        lastInteractAt={lastInteractRef}
+        lastInteractAt={lastMoveRef}
         wfBrightness={wfBrightness}
         wfContrast={wfContrast}
         wfSharpness={wfSharpness}
         minRangeDb={dabOn ? 15 : 30}
         frameRate={frameRate}
-        wfScroll={wfScroll}
+        wfScroll={wfShown}   /* ★ every speed is a row mode (wfRowTarget) — MINIMUM / LOW / ECO included */
+        wfBoost={wfBoost}
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
@@ -11717,9 +11769,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
         frameRate={frameRate}           onFrameRate={onFrameRate}
-        wfScroll={wfScroll}             onWfScroll={onWfScroll}
+        /* ★ LOW / ECO only where the SERVER can be asked for fewer frames (VibeServer, UberSDR, Kiwi/Web-888).
+           OpenWebRX has no rate lever, so there they would save nothing (and ECO on its ~9 fps feed IS native) — hidden
+           (AGENTS.md: no one-radio controls), and a saved one shows as what it draws there: NATIVE. MINIMUM (2) stays
+           everywhere: its point is the slow scroll (#57), which thinning gives on any feed. */
+        wfScroll={wfShown}  onWfScroll={onWfScroll}
+        wfBoost={wfBoost}  onWfBoost={onWfBoost}
+        linkMode={linkMode}  onLinkMode={!dataOk ? undefined : onLinkMode}   /* ★ DATA · LOW · AUTO · FULL */
+        wfSpeedNums={speedNumbers(linkMode === 'lowData' && dataOk ? Math.min(DATA_FLOOR_FPS, wfNativeFps) : wfNativeFps)}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
-        linkMode={linkMode}             onLinkMode={onLinkMode}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
         hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}

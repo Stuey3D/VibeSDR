@@ -74,6 +74,13 @@ export interface SDRStatus {
    *  from the VFO (the "signal next to the VFO" bug). The full-spectrum display can keep using
    *  centerHz for gesture continuity. */
   trueCenterHz?: number;
+  /** ★★ The ACTUAL span of the bins in THIS frame (binBandwidth × bins from the server's own config), never the
+   *  predicted display span. Goes with trueCenterHz: while a zoom is in flight bwHz is the PREDICTED view (the axis
+   *  moves under the finger at once) but the bins are still at the server's real rung — UberSDR snaps every request
+   *  to its ladder (measured 2026-10-29: 244 Hz/bin asked → 200 given, 1953 → 2000, 700 → 500). Anything that places
+   *  or indexes the bins (the waterfall's rows, the watch crop, channel levels) must use this pair, or a row is drawn
+   *  at a scale it does not have (the zoom-out smears, beta37). Undefined = bwHz is already the bins' own. */
+  trueBwHz?: number;
 }
 
 /** ★ ONE FRAME OF THE ADVANCED RDS ANALYSER, exactly as VibeServer computes it.

@@ -18,7 +18,7 @@ import type { SDRStatus } from './sdrProtocol';
 
 export interface FrameSlot { bins: Float32Array; status: SDRStatus }
 
-/** Copy every field of `src` into `dst` — and CLEAR trueCenterHz when `src` has none, so a reused slot can
+/** Copy every field of `src` into `dst` — and CLEAR trueCenterHz/trueBwHz when `src` has none, so a reused slot can
  *  never carry the previous frame's true centre into a frame that did not state one (the watch crops by it). */
 export function copyStatusInto(dst: SDRStatus, src: SDRStatus): SDRStatus {
   dst.frequency = src.frequency;
@@ -30,6 +30,7 @@ export function copyStatusInto(dst: SDRStatus, src: SDRStatus): SDRStatus {
   dst.centerHz = src.centerHz;
   dst.bwHz = src.bwHz;
   dst.trueCenterHz = src.trueCenterHz;
+  dst.trueBwHz = src.trueBwHz;
   return dst;
 }
 

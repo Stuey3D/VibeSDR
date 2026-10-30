@@ -14,6 +14,12 @@ This builds a **VibeServer Portable** card for a board that is not a Raspberry P
 - **SSH off** until the owner switches it on in the admin page (login `vibe`, the owner's password; never root);
 - a USB Wi-Fi adapter added **after** setup is left switched off, and the setup page asks "New Wi-Fi hardware detected —
   configure it now?".
+- **one VibeServer update check, during setup** (from 11.0.16). Once the network is set up, the setup page checks for
+  a newer VibeServer and installs only that package, never the OS. The page shows each step and has a Cancel. With no
+  internet it says so and setup carries on. It never runs again by itself, whatever the outcome. See
+  [`image/pocket/README.md`](../pocket/README.md#a-new-card-checks-for-a-vibeserver-update-once-during-setup).
+  `build.sh` checks that it is armed and has never run. A card built from an older package is built without it, and
+  the build says so.
 
 The plan, which board families exist, and why each board needs its own card: [`docs/SBC-IMAGES-PLAN.md`](../../docs/SBC-IMAGES-PLAN.md).
 

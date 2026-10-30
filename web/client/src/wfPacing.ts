@@ -1,4 +1,6 @@
 import { newRowTargetState, stepRowTarget, type WfScroll } from '../../../src/assets/wfRowTarget.ts';
+import { boostActive, boostNote, boostRowRate, clockArrive, clockReset, clockRowRate, displayClockStep, holdLimitMs, newBoost,
+  newDisplayClock, newRowClock } from '../../../src/assets/wfClock.ts';
 
 /**
  * ★★★ WATERFALL ROW PACING — pure functions, so the cadence can be proved without a browser
@@ -127,7 +129,18 @@ export function rowsDueThisFrame(frameTick: number, framesPerRow: number, availa
 
 /** ★★★ THE WATERFALL'S ROW PACER — the arrival/display-frame state machine waterfall.ts drives
  *  (push → onArrival, tick → onFrame). Pure: no DOM, no clock of its own, so the test can feed it a
- *  simulated display and feed and measure exactly what the screen would show. */
+ *  simulated display and feed and measure exactly what the screen would show.
+ *
+ *  ★★★ V12 2026-10-29 — A FIXED OUTPUT CLOCK, over-interpolate and discard (src/assets/wfClock.ts; Stuart: "if we are
+ *  only doing a straight 2x 3x interpolation an incoming rate that drifts about will make it feel juddery which is why I
+ *  said to over interpolate and discard"). Every mode but NATIVE: rows come off the display clock at the mode's rate
+ *  (displayClockStep — locked to whole frames where the panel divides it, exact by time where it does not), and each
+ *  row is the newest REAL frame PRESENTED by then (clockArrive's de-jittered schedule: a frame a little late is still
+ *  on time; a later one costs a repeat of the one before, never a stall). Before this, the rows came from a pair sized
+ *  per arrival (rowsForPair) and a gap longer than the worst seen ran it dry — a stall — and the cadence was one row
+ *  every round(Hz / rate) frames, so the Mac's 95 Hz panel ran Default 30 at 31.7 and Smooth 60 at 47.5 rows/s.
+ *  NATIVE (sharp) is unchanged: one real row per arrival on a whole-frame cadence (Stuart: "native is pure unmodified
+ *  lines direct from the server no modification at all"). */
 export class RowPacer {
   rowsPerSec = 40;     // DEVICE rows/sec the setting asks for (screen speed × dpr)
   sharp = false;       // SHARP: one row per received frame, no repeats
@@ -136,43 +149,98 @@ export class RowPacer {
   private slowGap = 0;        // worst recent arrival gap (jumps up, decays ×0.98 per arrival)
   private avgGap = 0;         // smoothed arrival gap — the trace tween's span
   private frameTick = 0;
-  framesPerRow = 0;           // display frames per EMISSION (0 = re-decide at the next arrival)
+  framesPerRow = 0;           // display frames per EMISSION (0 = re-decide; on the clock: its locked count, 0 = exact)
   /** Device rows drawn per emission — all the SAME real row. 1, except: SMOOTH on a Retina canvas
    *  (60 screen rows/s = 120 device rows/s, two per frame at 60 Hz), and SHARP, whose one row per
    *  received frame is one SCREEN row (rowPx device rows) — the app's look, one point per frame. */
   rowsPerEmit = 1;
   /** Device pixels per screen row (round(dpr), ≥ 1). */
   rowPx = 1;
-  /** Device rows the last onFrame() asked for (0 or rowsPerEmit). */
+  /** Device rows the last onFrame() asked for (0 or a multiple of rowsPerEmit). */
   rowsNow = 0;
+  /** Which real row the last onFrame() asked for: true = the newest (cur), false = the one before (prev). */
+  useCur = true;
   emitStart = 0;
   emitInterval = 0;
   emitTotal = 0;
   emitted = 0;
 
   /** ★★★ FOLLOW THE FEED (Stuart 10-20, src/assets/wfRowTarget.ts — the app's rule, shared): the setting is a
-   *  SCROLL MODE, and the rows aimed for come from the measured feed — Default min(20, 3x), Smooth min(60, 6x),
-   *  snapped to a divisor of 60, latched against wobble; 0 = actual rows (drawn as Sharp is). Screen rows × dpr. */
+   *  SCROLL MODE, and the rate comes from the measured feed, latched (wfClock clockRowRate — it does not step DOWN while
+   *  the feed still supports it within 15 %: a 9-11 fps UberSDR keeps Smooth at 60); 0 = actual rows (drawn as Sharp
+   *  is). Screen rows × dpr. */
   scroll: WfScroll | null = null;
   private dpr = 1;
-  private tgt = newRowTargetState();
+  private tgt: ReturnType<typeof newRowTargetState> & { clockRate?: number } = newRowTargetState();
   private feedMs = 0;          // the feed estimate the target follows — a stall's one long gap is clipped (≤ 2×)
+  private rc = newRowClock();  // the feed's schedule (clockArrive): when each frame is PRESENTED
+  private dc = newDisplayClock();
+  private arrId = 0;
+  private curP = 0;            // when the newest frame (cur) is presented
+  private onClock = false;     // rows come off the fixed clock (every mode but NATIVE / actual rows)
+  /** Rows come off the fixed clock — the only place a feed is thinned, so the only place frames are combined
+   *  (wfCombine.ts WfRowMerge). */
+  get clocked(): boolean { return this.onClock; }
   /** Screen rows/s aimed for now (0 = actual rows) — for the test and diagnostics. */
   screenTarget = 0;
+  /** ★★★ THE INTERACTION BOOST (wfClock.ts boostRowRate — Stuart 2026-10-29: "increase during interaction … even if it
+   *  means a 12x frame generation" / "if the app is set to 120 we do 120"). The feed-following rate (`baseTarget`) steps
+   *  up to the display's rate (≤ 120, ≤ 12 × the feed) from the first frame placed somewhere new until BOOST_TAIL_MS after
+   *  the last one AND the ease has landed (`easing`, set by the waterfall), then back down — both at a whole-row
+   *  boundary (the display clock counts whole rows). Every extra row is the newest frame already here, drawn at its own
+   *  in-between view; nothing is asked of the server. NATIVE is never boosted. */
+  private boost = newBoost();
+  /** ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (main.ts, default on): false = the boost never raises the rate. */
+  boostEnabled = true;
+  /** The waterfall's ease is still drawing (wfGlide rowView eN > 0) — the boost holds until it lands. */
+  easing = false;
+  /** The rate without the boost, screen rows/s (0 = not on the clock). */
+  baseTarget = 0;
+  /** Is the boost on now. */
+  boosted = false;
+  /** The display maximum the boost may use (web: the measured panel, ≤ 120). */
+  displayHz(): number { return Math.min(120, this.clock.hz()); }
+  /** A tune or zoom moved the picture (a frame placed somewhere new) at `now`. */
+  noteMove(now: number) {
+    if (!this.scroll || this.scroll === 'sharp' || this.sharp) return;   // ★ NATIVE: untouched — no boost, no generated rows
+    boostNote(this.boost, now);
+  }
+  /** Re-decide the clock's rate: the boost or the base, in device rows. Only on the clock. */
+  private applyRate(now: number) {
+    if (!this.onClock || !(this.baseTarget > 0)) { this.boosted = false; return; }
+    const on = boostActive(this.boost, now, this.easing);
+    const fps = 1000 / Math.max(1, this.feedMs || this.avgGap || 100);
+    const t = on ? boostRowRate(this.baseTarget, fps, this.displayHz(), this.boostEnabled) : this.baseTarget;
+    this.boosted = on && t > this.baseTarget;
+    const rps = t * this.dpr;
+    if (rps !== this.rowsPerSec) {
+      this.rowsPerSec = rps; this.framesPerRow = 0;
+      this.rowsPerEmit = emitShape(this.clock.hz(), this.rowsPerSec, this.rowPx).per;
+    }
+    this.screenTarget = t;
+  }
   setScroll(scroll: WfScroll, dpr: number) {
     if (scroll !== this.scroll || dpr !== this.dpr) { this.tgt = newRowTargetState(); this.framesPerRow = 0; }
     this.scroll = scroll; this.dpr = dpr; this.rowPx = Math.max(1, Math.round(dpr));
     this.sharp = scroll === 'sharp';
+    this.onClock = false;
   }
 
-  /** A FIXED rate (no feed-following) — the cadence tests drive this directly. */
+  /** ★ DEVICE rows/s actually drawn — what the zoom/tune ease's TIME is counted in (wfGlide.ts rowView): the setting's
+   *  rate on the clock, one screen row per frame in Sharp. */
+  easeRowRate(): number {
+    return this.sharp ? this.rowPx * 1000 / Math.max(15, this.avgGap || 50) : this.rowsPerSec;
+  }
+
+  /** A FIXED rate (no feed-following) — the cadence tests drive this directly. Not sharp → on the clock. */
   setRate(rowsPerSec: number, sharp: boolean, rowPx = 1) {
     const px = Math.max(1, Math.round(rowPx));
     if (rowsPerSec !== this.rowsPerSec || sharp !== this.sharp || px !== this.rowPx) this.framesPerRow = 0;
     this.rowsPerSec = rowsPerSec; this.sharp = sharp; this.rowPx = px;
+    this.onClock = !sharp;
   }
 
-  /** A real row arrived at `now` (ms). Unemitted repeats of the last pair are DROPPED, never flushed. */
+  /** A real row arrived at `now` (ms). On the clock it is presented on the feed's schedule; NATIVE draws it next. */
   onArrival(now: number) {
     this.emitted = this.emitTotal;
     const first = !this.lastArrival;
@@ -182,41 +250,69 @@ export class RowPacer {
     this.avgGap = this.avgGap ? this.avgGap * 0.85 + gap * 0.15 : gap;
     if (this.scroll && !first) {       // ★ the first arrival has no gap to measure — never feed it a guess
       this.feedMs = this.feedMs ? this.feedMs * 0.8 + Math.min(gap, this.feedMs * 2) * 0.2 : gap;
-      const t = stepRowTarget(this.tgt, this.scroll, 1000 / Math.max(1, this.feedMs));
+      const fps = 1000 / Math.max(1, this.feedMs);
+      // NATIVE: wfRowTarget's rule as it always was (0). The rest: the clock's latched rate.
+      const t = this.scroll === 'sharp' ? stepRowTarget(this.tgt, 'sharp', fps) : clockRowRate(this.tgt, this.scroll, fps);
       const sharp = t === 0, rps = sharp ? this.rowsPerSec : t * this.dpr;
-      // ★ A new target re-decides the cadence; frameTick and the pair run on, so nothing jumps.
+      // ★ A new target re-decides the cadence; frameTick and the clock's phase run on, so nothing jumps.
       if (sharp !== this.sharp || rps !== this.rowsPerSec) { this.sharp = sharp; this.rowsPerSec = rps; this.framesPerRow = 0; }
+      this.onClock = !sharp;
       this.screenTarget = t;
+      this.baseTarget = sharp ? 0 : t;
+      if (!sharp) this.applyRate(now);   // ★ the interaction boost on top (a no-op at rest)
     }
     const refreshHz = this.clock.hz();
+    if (this.onClock) {
+      // ★★★ THE FIXED CLOCK: the frame is PRESENTED on the feed's de-jittered schedule; onFrame draws whichever real row
+      //     is presented when the clock says a row is due. The emission shape (emitShape) is unchanged: Default 20 on
+      //     Retina at 60 Hz is still a screen row every 3 frames, not the 1.5-frame knife-edge.
+      if (first) clockReset(this.rc);
+      this.curP = clockArrive(this.rc, ++this.arrId, now);
+      const per = emitShape(refreshHz, this.rowsPerSec, this.rowPx).per;
+      if (per !== this.rowsPerEmit) { this.rowsPerEmit = per; this.framesPerRow = 0; }
+      this.emitTotal = 1;
+      this.emitInterval = this.avgGap || Math.max(20, Math.min(1000, gap));
+      this.emitStart = now;
+      this.emitted = 0;
+      return;
+    }
+    // ── NATIVE (sharp / actual rows): exactly as before 2026-10-29 ──
     // ★ SHARP paces at the FEED's rate (one real row per arrival, nothing repeated) — but still on a
     //   whole-frame cadence. Drawing each row on the first frame after it lands put every arrival
     //   that jittered across a vsync boundary on screen as 2, 4, 2, 4 frames apart (measured up to
     //   9 hitches/s at 20 fps). On a cadence, a row that just misses its slot goes out one frame late
     //   and the cadence restarts from THERE, so the phase settles where arrivals precede slots.
-    // ★ FASTER THAN THE DISPLAY → several device rows per frame. Smooth at dpr 2 is 120 device
-    //   rows/s; one row a frame would cap it at 60 (half the app's speed). Rounded, from the nominal
-    //   refresh, so it cannot wobble: 120/60 = 2, 60/60 = 1, 120/120 = 1.
-    // ★ And a rate that is not a whole number of frames per DEVICE row is drawn a SCREEN row at a time:
-    //   Default's 20 rows/s is 40 device rows/s on Retina — 1.5 frames each at 60 Hz, the knife-edge —
-    //   so it goes as 2 device rows every 3 frames instead (the app's own one-point step).
-    const per = this.sharp ? this.rowPx : emitShape(refreshHz, this.rowsPerSec, this.rowPx).per;
+    const per = this.rowPx;
     if (per !== this.rowsPerEmit) { this.rowsPerEmit = per; this.framesPerRow = 0; }
-    const target = this.sharp ? 1000 / Math.max(1, this.avgGap) : this.rowsPerSec / per;
+    const target = 1000 / Math.max(1, this.avgGap);
     this.framesPerRow = framesPerRowFor(refreshHz, target, this.framesPerRow);
-    const rowMs = 1000 / (refreshHz / this.framesPerRow);
-    this.emitTotal = this.sharp ? 1 : rowsForPair(gap, this.slowGap, rowMs);
-    this.emitInterval = (this.avgGap || Math.max(20, Math.min(1000, gap))) / this.emitTotal;
+    this.emitTotal = 1;
+    this.emitInterval = this.avgGap || Math.max(20, Math.min(1000, gap));
     this.emitStart = now;
     this.emitted = 0;
   }
 
   /** One display frame at `frameTs`. Returns 0, or t ∈ (0, 1] for the row to draw now (`rowsNow`
-   *  device rows of it): t < 0.5 shows the PREVIOUS real row, otherwise the newest — whole rows,
-   *  never a blend. `hasRow` = a row exists. */
+   *  device rows of it, `useCur` which real row): t = how far through the frame interval the newest
+   *  frame is (the glide's position). Whole rows, never a blend. `hasRow` = a row exists. */
   onFrame(frameTs: number, hasRow: boolean): number {
     this.clock.tick(frameTs);
     this.rowsNow = 0;
+    if (this.onClock) {
+      // The clock runs whether or not a row exists, so its phase never restarts.
+      if (this.boost.lastMove > 0) this.applyRate(frameTs);   // ★ the boost's end (tail + ease landed), between arrivals
+      const per = Math.max(1, this.rowsPerEmit);
+      const n = displayClockStep(this.dc, frameTs, this.rowsPerSec / per, this.clock.frameMs());
+      this.framesPerRow = this.dc.m;
+      if (!hasRow || n <= 0) return 0;
+      // ★ A dead link stops the scroll (the newest frame held past holdLimitMs) — it does not paint one row down the screen.
+      if (frameTs - this.curP > holdLimitMs(this.rc.ivl)) return 0;
+      this.useCur = frameTs >= this.curP;
+      this.emitted++;
+      this.rowsNow = n * per;
+      const ivl = Math.max(1, this.rc.ivl);
+      return Math.max(0.01, Math.min(1, (frameTs - this.emitStart) / ivl));
+    }
     if (!hasRow) return 0;
     const fpr = Math.max(1, this.framesPerRow);
     const due = rowsDueThisFrame(this.frameTick, fpr, this.emitTotal - this.emitted);
@@ -224,9 +320,7 @@ export class RowPacer {
     if (!due.rows) return 0;
     this.emitted++;
     this.rowsNow = this.rowsPerEmit;
-    // ★ t against the pair WITHOUT rowsForPair's +1 headroom row, so the headroom never changes which
-    //   real row is shown (prev/cur) — only how long the pair can last. Surplus rows show the newest.
-    const nominal = this.sharp ? 1 : Math.max(1, this.emitTotal - 1);
-    return Math.min(1, this.emitted / nominal);
+    this.useCur = true;
+    return 1;
   }
 }

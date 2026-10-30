@@ -48,6 +48,7 @@
 #include <csignal>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <cerrno>
 #include <sys/file.h>
 #include <dirent.h>
 #include <limits.h>       // PATH_MAX, for selfExePath()
@@ -3317,7 +3318,14 @@ int main(int argc, char** argv) {
     //    Same rule as AGENTS.md: remove a control that cannot work rather than leave it visible.
 #if defined(__linux__) && !defined(__ANDROID__)
     // ★ beta-on / beta-off / update-stable: the "Receive beta updates" tick-box and its way back (2026-10-22).
-    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics,beta-on,beta-off,update-stable");
+    // ★★ first-update / first-update-cancel: a NEW CARD's one update check, run by the setup page once the network is set
+    //    up (2026-10-28). Offered ONLY where the card was built to do it (the image's arm file, root's directory — the
+    //    daemon cannot create it); everywhere else the two names do not exist. The helper refuses a second run anyway.
+    {
+        std::string acts = "restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics,beta-on,beta-off,update-stable";
+        if (::access("/etc/vibeserver-pocket/first-update", F_OK) == 0) acts += ",first-update,first-update-cancel";
+        LocalSdrShim::setMaintenanceActions(acts);
+    }
 #else
     LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
 #endif
@@ -4287,7 +4295,36 @@ int main(int argc, char** argv) {
         j += ",\"offer\":\"" + (stale ? std::string() : offer) + "\"";
         j += ",\"version\":\"" + (stale ? std::string() : version) + "\"";
         j += std::string(",\"stale\":") + (stale ? "true" : "false");
-        j += ",\"checked\":" + std::to_string(checked.empty() ? 0LL : std::atoll(checked.c_str())) + "}";
+        j += ",\"checked\":" + std::to_string(checked.empty() ? 0LL : std::atoll(checked.c_str()));
+        /* ★★ A NEW CARD'S ONE UPDATE CHECK (2026-10-28): present only on a card built to do it (the image's arm file).
+         *  `state` is the helper's record on the settings partition — "" = never run (the setup page then asks for it,
+         *  once), checking | downloading | installing while it runs, then updated | uptodate | offline | failed |
+         *  cancelled. Written BEFORE anything touches the network, so a run that died (power cut) reads as its last
+         *  step — the page reports it as not finished, and nothing ever runs it again. */
+        if (::access("/etc/vibeserver-pocket/first-update", F_OK) == 0) {
+            std::string fs, ffrom, fto, fwhy;
+            struct stat fst{};
+            const bool there = ::lstat("/var/lib/vibeserver-pocket/first-update", &fst) == 0;
+            const int ff = ::open("/var/lib/vibeserver-pocket/first-update", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            if (ff >= 0) {
+                char buf[512]; const ssize_t n = ::read(ff, buf, sizeof buf - 1); ::close(ff);
+                std::istringstream in(std::string(buf, n > 0 ? (size_t)n : 0));
+                std::string line;
+                while (std::getline(in, line)) {
+                    const size_t eq = line.find('=');
+                    if (eq == std::string::npos) continue;
+                    const std::string k = line.substr(0, eq);
+                    std::string v;
+                    for (char c : line.substr(eq + 1))
+                        if (std::isalnum((unsigned char)c) || c == '.' || c == '+' || c == '~' || c == ':' || c == '-') v += c;
+                    if (k == "state") fs = v; else if (k == "from") ffrom = v; else if (k == "to") fto = v; else if (k == "why") fwhy = v;
+                }
+            }
+            if (there && fs.empty()) fs = "failed";   // ★ a record that cannot be read still means "it ran" — never again
+            j += ",\"first\":{\"state\":\"" + fs + "\",\"from\":\"" + ffrom + "\",\"to\":\"" + fto
+               + "\",\"why\":\"" + fwhy + "\"}";
+        }
+        j += "}";
         return j;
     });
 #endif
@@ -4367,11 +4404,26 @@ int main(int argc, char** argv) {
                                            *  the beta apt source; update-stable is the one DOWNGRADE, sent only
                                            *  by a person pressing BACK TO STABLE — never by the schedule, which
                                            *  sends `update` (--only-upgrade). See the helper. */
-                                          "beta-on", "beta-off", "update-stable" };
+                                          "beta-on", "beta-off", "update-stable",
+                                          /* ★★ A NEW CARD'S ONE UPDATE CHECK (2026-10-28) — see the helper's
+                                           *  first_update. Cancel is handled just below, never by the helper. */
+                                          "first-update", "first-update-cancel" };
         bool known = false;
         for (const char* a : kActions) if (action == a) { known = true; break; }
         if (!known) { err = "unknown action: " + action; return false; }
 
+        /* ★★ CANCEL THE NEW CARD'S UPDATE CHECK. The helper is BUSY with it (a oneshot; a second request would wait
+         *  behind it), so Cancel is not a request: it is one empty file in our own directory that the running helper
+         *  looks for every second. Only its existence is read there, never its contents. The helper stops a download
+         *  and leaves the installed VibeServer as it was; once dpkg has started it lets it finish (and says so). */
+        if (action == "first-update-cancel") {
+            const int fd = ::open("/var/lib/vibeserver/first-update.cancel",
+                                  O_WRONLY | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0640);
+            if (fd < 0 && errno != EEXIST) { err = "could not write the cancel request"; return false; }
+            if (fd >= 0) ::close(fd);
+            std::printf("VibeServer: first-update cancel requested\n");
+            return true;
+        }
         // ★ The helper is what makes any of this possible; if it is not installed, say that
         //   plainly instead of writing a request nothing will ever read.
         if (::access("/usr/lib/vibeserver/vibeserver-maintenance", X_OK) != 0) {

@@ -25,6 +25,16 @@ export const CADENCE_RUN_SHARE = 0.75;
 
 /** The cap the frame callbacks honour, Hz; 0 = none. Set by FaceplateContext from the FRAME RATE setting. */
 export const uiFrameCapHz = makeMutable(0);
+/** ★ The panel's maximum refresh, Hz (0 = not known yet) — set by FaceplateContext from readMaxRefreshRate. The waterfall's
+ *  interaction boost (wfClock.ts boostRowRate) runs up to the cap above, or this when there is none ("if the app is set
+ *  to 120 we do 120", Stuart 2026-10-29). */
+export const uiPanelMaxHz = makeMutable(0);
+/** The display maximum as the app is set: the FRAME RATE cap, or the panel's maximum (60 when neither is known). */
+export function uiDisplayMaxHz(): number {
+  'worklet';
+  const cap = uiFrameCapHz.value, pm = uiPanelMaxHz.value;
+  return cap > 0 ? (pm > 0 ? Math.min(cap, pm) : cap) : (pm > 0 ? pm : 60);
+}
 
 /**
  * Call first in a frame callback with its own `last` (a SharedValue<number> starting at 0) and the frame's timestamp.

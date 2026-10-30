@@ -14,6 +14,7 @@ inline float rdf(const uint8_t* p) { uint32_t u = rd32(p); float f; std::memcpy(
 
 SpecDecoder::Result SpecDecoder::feed(const uint8_t* p, size_t len, double& frequency) {
     if (isGzip(p, len)) return kNotSpec;
+    if (isWide(p, len)) return kWide;                              // ★ V12 the full-capture row — before the magic check
     if (len < 22) return kFault;                                   // short-frame
     if (rd32(p) != SPEC_MAGIC) return kFault;                      // bad-magic
     const uint8_t flags = p[5];

@@ -71,6 +71,9 @@ proc.reset() and the ring are never reset.
 - Jitter buffer: enqueue drops in background; interacting (< 1 s since lastInteractAt, NOT gated by smoothTune)
   bypasses — clear queue, prefill = true, handle synchronously. Else arrival EMA 0.8/0.2 (init 150), queue ≤ 3
   (drop oldest), drain via timer: prefill gate, handle one, re-arm max(40, min(1000, q>1 ? 0.6·arr : arr)).
+  ★ V12 2026-10-29 (v12-wf-no-jb): on the fixed clock (the clock running, any mode but NATIVE) frames SKIP the buffer
+  — handled on arrival, the clock's own presentation delay the only de-jitter — and the spectrum target waits until
+  its row is on screen (presentation + traceLagMs; WaterfallView traceShow, engine traceQ_/runTrace).
 - handleFrame: skip bg / empty / width < 4; interacting = smoothTune && < 1 s; process(bins, centerHz (predicted),
   bwHz, interacting); liveRange = round(dbMin/dbMax) with 2 dB hysteresis; avgFrameMs EMA 0.8/0.2 unless boost
   (→ uAvgMs); lowFps = avg > 66; wfBoost = boost || (smoothTune && lowFps); avgWfGapMs EMA (0 < dt < 2000);

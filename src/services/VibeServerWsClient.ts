@@ -62,11 +62,15 @@ import { noteUnhandled, noteDecision } from './protocolLog';
 import { guard, guardJson, noteFault, msgKind } from './faultLog';
 import { resolveStationIso, receiverIso } from './rdsCountry';
 import { LinkManager, LADDERS, type LinkMode } from './vibeLinkManager';
+import { uberDivisorFor, lowDataRungFor } from '../assets/wfSpeedCap';
 
 /** ★ Re-exported so each subclass names its own ladder without reaching past this file. */
 export const LADDERS_FOR = LADDERS;
 import { USER_AGENT, APP_PROTO } from '../constants/version';
 import { NativeSpecSocket, nativeSpecSocketAvailable } from './nativeSpecSocket';
+import { loadWideCaps, noteWideCaps, wideSuffix } from './wideCaps';   // ★ the full-capture row (SPWB) — who sends it
+import { emitWide } from './wideRowBus';
+import { isWideFrame } from '../utils/wfWide';
 
 /**
  * ★★★ NAME OURSELVES IN THE QUERY, because the header is not ours to set. React Native's WebSocket
@@ -439,6 +443,9 @@ export abstract class VibeServerWsClient {
     // somewhere else it has to be told — otherwise the readout shows one frequency while the audio
     // plays another.
     if (opts?.allowServerDefault) this.callbacks.onStatus({ ...this.status });
+
+    await loadWideCaps();   // ★ which servers send the full-capture row (wideCapsCore.ts) — a storage read; never fails
+    if (this.destroyed) return;
 
     try {
       await this._checkConnection();
@@ -1182,6 +1189,8 @@ export abstract class VibeServerWsClient {
    * Data: "the interpolation can hide 5; 3.3 is reserved for connection issues
    * only"). Powersave is chosen behaviour, so it gets the same floor — and it can
    * never make things worse than the rung it replaces.
+   * ★ V12 (2026-10-30): the Waterfall Speed MINIMUM is a 2 fps choice, below this floor — the min() with the rung keeps
+   *   it at 2 (powersave never raises a rate the listener lowered).
    */
   setPowersaveRate() {
     const target = Math.min(POWERSAVE_FPS, this.ladderFps > 0 ? this.ladderFps : POWERSAVE_FPS);
@@ -1435,6 +1444,8 @@ export abstract class VibeServerWsClient {
       throw new Error(`The server is in a low power state to protect its battery (${lv}%). It comes back once the battery is above ${ra}%.`);
     }
     if (!json.allowed) throw new Error(json.reason ?? 'Server rejected connection');
+    // ★ V12: a server that says here that it sends the full-capture row decides the FIRST socket too (wideCapsCore.ts).
+    if ('wide' in json) noteWideCaps(this.baseUrl, (json as { wide?: unknown }).wide);
     // ★★★ ONLY NOW MAY THE AUDIO SOCKET OPEN. Proved against a live UberSDR (2026-08-18): a WS
     //     carrying a session id this POST has not registered gets a 101 and 213 bytes — the
     //     handshake and nothing else — while the identical id, POSTed first, streams 28 KB in the
@@ -1471,7 +1482,9 @@ export abstract class VibeServerWsClient {
       pending: this.wantTune, frequency: Number(this.status.frequency), mode: this.status.mode,
     });
 
-    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}`);
+    // ★★ `&wide=1` — the full-capture row (SPWB, utils/wfWide.ts) — ONLY for a server whose hwinfo said "wide" ≥ 2
+    //    (remembered per server, wideCapsCore.ts). An older server gets exactly the URL it always got.
+    const url = this._wsUrl(`/ws/user-spectrum?user_session_id=${this.uuid}&mode=binary8${this._binsSuffix()}${this._pwSuffix()}${this.authSuffix}${this.adminSuffix}${CLIENT_Q}${wideSuffix(this.baseUrl)}`);
     // ★★★ SAY WHO WE ARE ON THE SOCKET. The server's connection log records the User-Agent of the
     //     WS upgrade, and React Native's WebSocket sends none by default — so every app session
     //     appeared in the owner's log as "—", indistinguishable from a bot or a bare script, while
@@ -1643,6 +1656,10 @@ export abstract class VibeServerWsClient {
       guard('vibe-spec', msgKind(m), () => this._handleSpectrumMessage(m));
       return;
     }
+
+    // ★★ V12 THE FULL-CAPTURE ROW (SPWB) — BEFORE the SPEC checks, which count any other magic as a fault. Only a socket
+    //    that asked `wide=1` receives one; it goes to the waterfall's layer (services/wideRowBus.ts → utils/wfWide.ts).
+    if (isWideFrame(bytes)) { emitWide(bytes); return; }
 
     if (buf.byteLength < 22) {
       noteFault('vibe-spec', 'short-frame', new Error('frame too short'), `len=${buf.byteLength}`);
@@ -1822,10 +1839,11 @@ export abstract class VibeServerWsClient {
     const mode = (this.linkMode ?? 'adaptive') as LinkMode;
     this.link = new LinkManager({
       ladder: this.ladderFor(),
-      // 5 fps is the deepest a USER may pin — below that is adaptive-only, because the
-      // interpolation can hide 5 but not 3.3.
-      lowDataRung: 2,
+      // ★★ DATA LOW = the 5 fps floor on every backend (wfSpeedCap.ts DATA_FLOOR_FPS — VibeServer's rung 3, UberSDR's 2;
+      //    VibeServer's Low Data was its 10 fps rung 2 until 2026-10-30). Nothing below it: AUTO's floor is the same.
+      lowDataRung: lowDataRungFor(this.ladderFor()),
       mode,
+      userCapFps: this._wfLinkCap,  // a generic ceiling (0 = none) — since 2026-10-30 no speed key sets it (display only)
       apply: (rung, fps) => {
         if (this.isVibe) {
           this.ladderFps = fps;
@@ -1843,7 +1861,9 @@ export abstract class VibeServerWsClient {
             this.spectrumWs.send(JSON.stringify({ type: 'fftRate', value: fps }));
           }
         } else {
-          this.setRate(rung);          // UberSDR: rung IS the poll divisor
+          // UberSDR: a divisor off the full rate — from the rung's FPS, since a capped ladder ([5, 3.3]) no longer
+          // numbers its rungs as divisors.
+          this.setRate(uberDivisorFor(this.ladderFor()[0], fps));
         }
       },
     });
@@ -1910,6 +1930,15 @@ export abstract class VibeServerWsClient {
   private _linkMode: LinkMode = 'adaptive';
   get linkMode(): LinkMode { return this._linkMode; }
   set linkMode(m: LinkMode) { this._linkMode = m; this.link?.setMode(m); }
+  /** ★ V12 a listener ceiling in fps (0 = none — nothing sets it since 2026-10-30: the speed keys are display only) on the link
+   *  controller, so the SERVER sends fewer frames. A setter for the same reason as linkMode — it reconfigures the
+   *  running controller live. */
+  private _wfLinkCap = 0;
+  get wfLinkCap(): number { return this._wfLinkCap; }
+  set wfLinkCap(fps: number) { this._wfLinkCap = fps > 0 ? fps : 0; this.link?.setUserCap(this._wfLinkCap); }
+  /** The server's own top rate as the link controller knows it (0 = no controller yet) — the waterfall-speed buttons'
+   *  live numbers are worked out from it (wfSpeedCap.speedNumbers). */
+  get wfNativeFps(): number { return this.link?.nativeFps ?? 0; }
   private lastFrameAt    = 0;
   private lastReconnectAt = 0;
   private pingSentAt     = 0;
@@ -2185,6 +2214,9 @@ export abstract class VibeServerWsClient {
     // The REAL centre of these bins — never overridden below. The watch crop indexes bins by
     // this; using the predicted emit.centerHz draws the signal offset from the VFO.
     emit.trueCenterHz = frequency;
+    // ★★ …and their REAL span: the bins are at the server's rung (s.binBandwidth, from its config) even while bwHz below
+    //   is the predicted view's. The waterfall places rows by this pair (SDRStatus.trueBwHz — the zoom-out smears).
+    emit.trueBwHz = s.binBandwidth > 0 ? s.binBandwidth * n : undefined;
     const v = this.view;
     if (this._inFlight() && v.binBandwidth > 0) {
       emit.centerHz     = v.centerHz;
@@ -2573,6 +2605,8 @@ export abstract class VibeServerWsClient {
     }
     if (msg.type === 'hwinfo') {
       this.squelchSpeaksOn = msg.sqlOn === true;   // ★ see setSquelchDb / vibeSquelch.ts
+      // ★ does this server send the full-capture row (SPWB v2)? Remembered for its next spectrum socket (wideCapsCore.ts).
+      noteWideCaps(this.baseUrl, msg.wide);
       if (typeof msg.autoDs === 'boolean')
         this.callbacks.onHwDirectSampling?.(msg.autoDs, Number(msg.dsBelowHz) || 0, Number(msg.ds) || 0);
       // ★★★ RE-ASSERT OUR OWN TUNE WHEN THE RADIO ANNOUNCES ITSELF ON A *RETURNING* SOCKET.

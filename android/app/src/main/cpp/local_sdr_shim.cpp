@@ -113,6 +113,7 @@
 #include "decoders/fsk_decoder.h"   // RTTY/NAVTEX (audio-extension decoder)
 #include "decoders/wefax_decoder.h" // WEFAX (audio-extension decoder)
 #include "decoders/ft8_decoder.h"   // FT8/FT4 → digital spots
+#include "vibe_wide_row.h"      // ★ V12 the full-capture row (SPWB v2)
 #include "opus_audio_encoder.h" // VibeServer compressed audio (Opus; VIBE_HAVE_OPUS-gated)
 #include "vibe_dab_service.h"   // DAB (experimental) — see briefs/BRIEF-dab.md
 #include "vibe_dab_txdb_e1.h"    // the UK DAB transmitter directory (generated)
@@ -2521,6 +2522,12 @@ static std::atomic<bool>    g_vsSessionLimitSoft{false};
  *  bites on a SHARED DIAL with more than one listener: a newcomer's tune is refused until the room says yes, or
  *  nobody answers in 15 s. Default OFF, so an upgrade changes nothing. See vibe_tune_etiquette.h. */
 static std::atomic<bool>    g_vsAskBeforeTuning{false};
+/** ★★★ THIS ZOOM IS A VIEW ONLY — set by the WebSocket reader (clientFrame) for the length of ONE handleControl call when
+ *  the frame is a `zoom` from a listener ask-before-tuning is holding back (Lenovo, 2026-10-30: a refused listener's
+ *  zoom with `"free":1` walked the RSP's centre to 94.975 MHz — the tune they had just been refused, by the back door).
+ *  The zoom handler then moves the VIEW inside the capture the radio already has and never the hardware centre.
+ *  ★ Thread-local, so the server's own landing and resume calls (other frames, other threads) never see it. */
+static thread_local bool    t_askViewOnly = false;
 /** ★★★ DISCONNECT A LISTENER WHO HAS GONE AWAY — minutes, 0 = OFF, and off is the default.
  *
  *  ★★★ "NO INTERACTION" IS NOT "NOT LISTENING", and that is the whole difficulty. Somebody sitting
@@ -6079,6 +6086,79 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else       { d = -d; std::memmove(v.data() + d, v.data(), sizeof(float) * (size_t)(n - d)); std::fill(v.begin(), v.begin() + d, v[d]); }
     }
     std::vector<float> wideRowAvg_;
+    /* ★★★ V12 THE FULL-CAPTURE ROW — "SPWB" (Stuart, 2026-10-28 02:00, beta26 web, Lenovo RSP1A, MW, zoomed in then out:
+     *  "the waterfall should be buffering outside the zoomed area so that the black doesn't show at all"). A listener
+     *  zoomed into part of the capture only ever received rows of that part, so after zooming out the history recorded
+     *  meanwhile was a narrow strip in a black frame. Black is allowed ONLY where the radio was not capturing.
+     *  ★ So while a listener who ASKED for it (`&wide=1` on /ws/user-spectrum — an older client never asks and sees no
+     *    change at all) views less than the capture, every kWideEvery-th spectrum frame it is sent is followed by a row of
+     *    the WHOLE capture at the capture's own centre and span: its FLOOR (medians) and its PEAKS (thin, where they are)
+     *    — vibe_wide_row.h, which says why (v1's max-held bins drew hot blobs). The client keeps it as the layer UNDER its
+     *    detailed history.
+     *  ★ ZERO EXTRA FFT: the wide FFT runs anyway (the crop path IS it, and it keeps running while the zoom path owns the
+     *    waterfall) — this is one pass over its averaged row, on the thread that already made that row (never the
+     *    audio's), only when a subscriber is about to be sent one. No extra frame rate: it rides the listener's own frames.
+     *  ★ Wire: vibe_wide_row.h / docs/PROTOCOL.md, 2026-10-28. */
+    static constexpr int kWideVersion = 2;
+    static constexpr int kWideEvery = 4;
+    std::atomic<bool> wideWant_{false};                   // ★ a subscriber is one frame from its next row — build one
+    vibe::wide::Scratch wideScratch_;                     // DSP thread only
+    struct WideSub { int n = 0; bool zoomed = false; };
+    std::mutex wideMtx_;
+    std::map<net::Socket*, WideSub> wideSubs_;          // ★ under wideMtx_
+    std::atomic<int> wideZoomed_{0};                     // subscribers zoomed right now (changed under wideMtx_)
+    std::vector<uint8_t> wideFrame_;                      // ★ the newest full-capture row, under wideMtx_ (empty = none)
+    double wideFrameAt_ = 0.0;                            // when it was built (nowSecs) — a stale row is never sent
+    /** Build the full-capture row from wideRowAvg_ (fftshifted, DC = bins/2, physical DC at accumCentre_). DSP thread. */
+    void buildWideFrame(int bins, float specComp) {
+        if ((int)wideRowAvg_.size() != bins || !(sampleRate > 0) || !(accumCentre_ > 0)) return;
+        std::vector<uint8_t> fr;
+        vibe::wide::encode(wideRowAvg_.data(), bins, accumCentre_, sampleRate, specComp, fr, wideScratch_);
+        if (fr.empty()) return;
+        const uint64_t ts = (uint64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::memcpy(&fr[6], &ts, 8);
+        std::lock_guard<std::mutex> lk(wideMtx_);
+        wideFrame_.swap(fr);
+        wideFrameAt_ = nowSecs();
+    }
+    /** After a spectrum frame went to `s` for a view `viewSpanHz` wide: every kWideEvery-th such frame, while that view is
+     *  narrower than the capture, follow it with the full-capture row. The first one goes with the first zoomed frame. */
+    void wideAfterFrame(const std::shared_ptr<net::Socket>& s, double viewSpanHz) {
+        if (!s) return;
+        std::vector<uint8_t> out;
+        {
+            std::lock_guard<std::mutex> lk(wideMtx_);
+            auto it = wideSubs_.find(s.get());
+            if (it == wideSubs_.end()) return;
+            WideSub& w = it->second;
+            const bool z = !useSpy() && sampleRate > 0 && viewSpanHz > 0 && viewSpanHz < sampleRate * 0.98;
+            if (z != w.zoomed) {
+                w.zoomed = z; w.n = kWideEvery - 2;   // ★ the first row goes with the next frame (one is built for it)
+                if (wideZoomed_.fetch_add(z ? 1 : -1) + (z ? 1 : -1) <= 0) { wideFrame_.clear(); }
+            }
+            if (!z) return;
+            ++w.n;
+            if (w.n == kWideEvery - 1) { wideWant_.store(true, std::memory_order_relaxed); return; }   // build for next
+            if (w.n < kWideEvery) return;
+            if (wideFrame_.empty() || nowSecs() - wideFrameAt_ > 1.0) {   // none fresh yet: ask again, try next frame
+                w.n = kWideEvery - 1; wideWant_.store(true, std::memory_order_relaxed); return; }
+            w.n = 0;
+            out = wideFrame_;
+        }
+        sendWs(s, 0x2, out.data(), out.size(), Out::Wide);
+        vsSpecBytes.fetch_add(out.size(), std::memory_order_relaxed);
+    }
+    /** A spectrum socket opened (subscribe = it asked `wide=1`) or closed (false). */
+    void wideSubscribe(net::Socket* s, bool subscribe) {
+        std::lock_guard<std::mutex> lk(wideMtx_);
+        auto it = wideSubs_.find(s);
+        if (it != wideSubs_.end()) {
+            if (it->second.zoomed && wideZoomed_.fetch_sub(1) - 1 <= 0) wideFrame_.clear();
+            wideSubs_.erase(it);
+        }
+        if (subscribe) wideSubs_[s] = WideSub{};
+    }
     void slowPush(SlowAvg& a, const float* row, int n) {
         a.ring.emplace_back(row, row + n);
         while ((int)a.ring.size() > kSlowAvgMax) a.ring.pop_front();
@@ -6884,6 +6964,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
         }
     }
+    /** ★ How far the VIEW's centre may sit from the hardware centre and still be inside the capture (dongleForView's
+     *  halfRoom) — the room a held-back listener's zoom is kept inside (askViewOnly). */
+    double viewHalfRoom(double viewSpan) { return std::max(0.0, sampleRate / 2.0 - viewSpan / 2.0 - viewDongleMargin() * 0.5); }
     double dongleForView(double view, double viewSpan) {
         // ★★★ THE VFO IS NOT A POINT — IT HAS A BANDWIDTH, AND THE EDGES ARE WHERE IT DIES.
         //     This margin used to protect the VFO's CENTRE only, so a WFM signal could sit within
@@ -8542,6 +8625,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double off   = c->vfoHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
+        // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …") — this listener and this dial, fixed here where both change.
+        { char lb[96]; snprintf(lb, sizeof lb, "listener %.8s's own channel, %.4f MHz %s", c->session.c_str(), c->vfoHz / 1e6, c->mode.c_str());
+          c->rx->setLogLabel([l = std::string(lb)] { return l; }); }
         // ★ After the pipeline exists, so setRdsEnabled has something to act on. A FULL resweep,
         //   because this listener moving can free a frequency somebody else is sitting on — see
         //   rdsResweep().
@@ -8649,6 +8735,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         sendWs(sock, 0x2, frame.data(), frame.size(), Out::Spectrum);
         vsSpecBytes.fetch_add(frame.size(), std::memory_order_relaxed);
+        wideAfterFrame(sock, c->viewSpanHz);   // ★ V12 SPWB — this listener's own view, the capture around it
     }
 
     /** Encode and send one block of this listener's audio to ITS OWN socket. */
@@ -9678,6 +9765,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return true;
     }
 
+    /** ★★★ A ZOOM FROM A LISTENER THE LOCK IS HOLDING BACK IS A VIEW, NEVER A TUNE.
+     *  ★★★ Zoom and pan stay free (above: "that shouldn't move the tuning or audio") — but the zoom handler moves the
+     *      HARDWARE centre whenever the view walks off the capture (dongleForView), and a FREE-mode recentre is exactly
+     *      that. Moving the centre retunes the front end for everybody: the spectrum shifts under every listener, the
+     *      PLL relocks through the audio, and with a pan far enough the VFO drags along. That is a tune, and it needs
+     *      the same permission as one (Lenovo, 2026-10-30: refused, then `"zoom","free":1` put the RSP on 94.975 MHz).
+     *  ★ So the frame is NOT refused — the listener still pans and zooms across what the radio already captures — it is
+     *    marked view-only, and the handler clamps it inside the capture (t_askViewOnly).
+     *  Call WITHOUT clientMtx held. */
+    bool askViewOnly(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (!g_vsAskBeforeTuning.load() || !sock) return false;
+        if (jsonStr(msg, "type") != "zoom") return false;
+        std::lock_guard<std::mutex> lk(clientMtx);
+        if (!askInForceLocked()) return false;
+        static const std::string kNoSession;
+        auto it = sockSession.find(sock.get());
+        const std::string& sess = it == sockSession.end() ? kNoSession : it->second;
+        return askBook.locked(askRoomLocked(Impl::nowSecs()), sess);
+    }
+    /** ★★ EVERY FRAME A CLIENT SENT goes in here, and nothing else does: the lock's refusal, the view-only mark for the
+     *  length of this one call, then the frame. The server's own calls go straight to handleControl (askRefuses). */
+    void clientFrame(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
+        if (askRefuses(sock, msg)) return;
+        struct ViewOnly { explicit ViewOnly(bool on) { t_askViewOnly = on; } ~ViewOnly() { t_askViewOnly = false; } } vo(askViewOnly(sock, msg));
+        handleControl(sock, msg);
+    }
+
     /** ★ Would this gated frame change nothing — the radio is already where it asks? Call WITH clientMtx held. */
     bool askNoopLocked(const std::string& type, const std::string& msg) {
         double v = 0;
@@ -10148,7 +10262,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     that says the front end is clipping almost never arrived.
      *  ★ The enum note above adc already warned "NOT Out::Sig" — the separation was understood and
      *    then undone by a third message quietly reusing the class. One class, one quantity. */
-    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx };
+    enum class Out { Control, Spectrum, Audio, Sig, Adc, RspStat, Lx, Wide };   // ★ Wide: the full-capture row (SPWB)
 
     /** ★ Backlog ceiling per client. Reached = THIS listener cannot keep up, so THIS listener is
      *  dropped — which is the honest outcome and, crucially, a local one. The old code punished
@@ -10342,6 +10456,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     rather than freezing. Back to full rate once the audio has been clear for ~1 s.
         std::lock_guard<std::mutex> lk(ob->m);
         if (ob->closing) return;
+        // ★ The full-capture row (SPWB) is the first thing to go: while the audio is backed up it is not sent at all.
+        if (cls == Out::Wide && ob->gate && !ob->isAudio && ob->gate->yielding()) return;
         if (cls == Out::Spectrum && ob->gate && !ob->isAudio && !ob->gate->waterfallMaySend(qosNowMs())) {
             noteWaterfallYield(ob);
             return;
@@ -10353,7 +10469,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Each newest-wins class supersedes only ITS OWN kind — a fresh signal reading must not
         //   discard the pending gain telemetry, which is a different quantity that has not changed.
         if (cls == Out::Spectrum || cls == Out::Sig || cls == Out::Adc
-            || cls == Out::RspStat || cls == Out::Lx) {
+            || cls == Out::RspStat || cls == Out::Lx || cls == Out::Wide) {
             for (auto it = ob->q.begin(); it != ob->q.end(); ) {
                 if (it->first == cls) { ob->bytes -= it->second.size(); it = ob->q.erase(it); }
                 else ++it;
@@ -10537,7 +10653,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         size_t sent = 0;
         for (size_t pi = 0; pi < peers.size(); pi++)
             if (due[pi] && peers[pi].bins == outBins)
-                { sendWs(peers[pi].sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++; }
+                { sendWs(peers[pi].sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++;
+                  wideAfterFrame(peers[pi].sock, displaySpan() / zoomFactor.load()); }   // ★ V12 SPWB
         vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
         }   // end per-width loop
         // ★ The FIRST frame stays at LOGI — it is the proof the zoom path started. The every-100
@@ -10622,6 +10739,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if ((int)wideRowAvg_.size() != bins) wideRowAvg_.assign(bins, 0.0f);
             for (int i = 0; i < bins; i++) wideRowAvg_[i] = fftAccum[i] * inv;
             slowPush(wideSlow_, wideRowAvg_.data(), bins);
+            // ★ V12 the full-capture row (SPWB) — only while a subscriber is zoomed; see buildWideFrame.
+            if (wideZoomed_.load(std::memory_order_relaxed) > 0 && !useSpy() && wideWant_.exchange(false, std::memory_order_relaxed))
+                buildWideFrame(bins, specComp);
         }
 
         /* ── Lightning, from the same averaged frame (see SfericDetect) ─────────────────────
@@ -10796,7 +10916,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (emit && useSpy() && shownHz > sampleRate * 0.95) emit = false;
         // ★ While the zoom path is delivering, it owns the waterfall — emitting both would double
         //   the frame rate and make the two fight over the same texture rows.
-        if (emit && rx.zoomSpanHz() > 0.0) emit = false;
+        //   ★★ …but only once it IS delivering (rx.zoomPrimed): after a change of decimation its window refills from
+        //   empty, and until its first frame the wide spectrum carries on — a magnified, softer row instead of NO row
+        //   (Stuart, 2026-10-28: zooming stuttered on the Lenovo, the feed dipping to 9 fps).
+        if (emit && rx.zoomSpanHz() > 0.0 && rx.zoomPrimed()) emit = false;
 
         // ★★★ PER-LISTENER RATE, applied HERE and not in the engine. The engine runs at the
         //     fastest rate anyone asked for (recomputeEngineRate); this drops the frames a slower
@@ -10955,6 +11078,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const double ce = (c && c->viewSpanHz > 0) ? c->viewCentreHz : viewCenter.load();
                 if (std::fabs(sp - view.span) >= 1 || std::fabs(ce - view.centre) >= 1) continue;
                 sendWs(p.sock, 0x2, frame.data(), frame.size(), Out::Spectrum); sent++;
+                wideAfterFrame(p.sock, view.span);   // ★ V12 SPWB — the rest of the capture, under this view
             }
             vsSpecBytes.fetch_add(frame.size() * sent, std::memory_order_relaxed);
             }   // end per-width loop
@@ -14002,6 +14126,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         cb.stereo   = &Impl::stereoCb;
         cb.iq       = &Impl::iqCb;
         fftAccum.assign(fftSize, 0.0f); accumCount = 0;
+        // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …"): the one pipeline every listener on a shared dial hears, and the
+        //    dial it is on now (atomics only — this runs on the DSP/demod thread, see setLogLabel).
+        rx.setLogLabel([this] {
+            char lb[96];
+            snprintf(lb, sizeof lb, "the radio's pipeline (%s), %.4f MHz", perClientDsp() ? "per-listener mode — fed nothing" : "the shared dial",
+                     audioFreq.load(std::memory_order_relaxed) / 1e6);
+            return std::string(lb);
+        });
         rx.start(sampleRate, fftSize, fftRate * FFT_AVG, (int)AUDIO_SR, cb);
     }
 
@@ -14328,6 +14460,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // VFO leaves the FFT span entirely (handled in the zoom/pan path).
             if (!useSpy()) viewCenter.store(freq);
             tuneHw(freq);
+            /* ★★★ AND THE ZOOM CHANNEL WITH IT (V12, 2026-10-29). The zoom channel is an OFFSET from rtlCenter +
+             *  hwOffsetHz() (updateZoomView), and the other two branches below re-derive it after their move — this one
+             *  did not. Stuart typed 7100 kHz on the Lenovo's RSP from 4208: the app's view message came first and fitted
+             *  the tuner to 5406.675 MHz (offset +1678 kHz, the view at 7100), then this recentre put the tuner on 7100
+             *  and left the offset at +1678 — so for nine seconds the zoom rows were built for ~8.79 MHz, OUTSIDE the
+             *  capture (the IF filter's stopband), and the app showed "around 8000" until a tune step re-sent the view.
+             *  Those rows, re-placed into the 40 m view afterwards, drew the full-capture layer through their stopband
+             *  range: the white bar. */
+            if (!useSpy()) updateZoomView();
             // USB/rtl_tcp path: the capture just recentred, but tuneHw only pushes
             // a fresh config to the spectrum client on the SpyServer path. A LOCAL
             // client self-tracks the centre natively; a REMOTE VibeServer client
@@ -15961,6 +16102,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     : displaySpan() / zoomFactor.load();
                 double dongle = dongleForView(v, viewSpan);
                 bool moved = std::fabs(dongle - rtlCenter.load()) > 1.0;
+                /* ★★★ A LISTENER WHO MAY NOT TUNE MAY NOT MOVE THE CENTRE EITHER (askViewOnly). Their view is kept
+                 *     inside the capture the radio already has — the same room dongleForView allows a pan without a
+                 *     retune — and the hardware stays exactly where the room left it. */
+                if (moved && t_askViewOnly) {
+                    const double cur = rtlCenter.load(), room = viewHalfRoom(viewSpan);
+                    const double kept = std::min(cur + room, std::max(cur - room, v));
+                    LOGI("zoom from a listener ask-before-tuning is holding back: view %.4f -> %.4f MHz, the centre stays "
+                         "on %.4f MHz (it would have moved to %.4f — a tune, which needs the room's yes)",
+                         v / 1e6, kept / 1e6, cur / 1e6, dongle / 1e6);
+                    viewCenter.store(kept);
+                    moved = false;
+                }
                 // Cooldown: a hardware retune is a PLL relock, and doing it on every
                 // pan message audibly breaks the audio. The crop keeps the display
                 // honest in between, so skipping a retune costs nothing visible.
@@ -16022,7 +16175,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // and the zoom channel is tuned to that centre, so it has to follow.
             else updateZoomView();
             // ★ Auto IF follows the zoom, so every zoom and every pan is a reason to re-derive it.
-            applyAutoIf();
+            // ★★ …except a held-back listener's (askViewOnly): the tuner's IF filter is a receiver setting everybody hears
+            //    (`tunerbw` is on the lock's list) and every move of it resets the AGC — a view does not get to do that.
+            if (!t_askViewOnly) applyAutoIf();
             sendConfig(sock);
             return;
         }
@@ -17006,6 +17161,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        *  on an older server and must treat <= -100 as off, or it would draw a gate
                        *  the server is not applying. */
                       + ",\"sqlOn\":true"
+                      /* ★ V12: this server sends the full-capture row (SPWB) to a spectrum socket that asks `wide=1`. */
+                      + ",\"wide\":" + std::to_string(kWideVersion)
                       + std::string(",\"gainCap\":")
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))
@@ -18359,6 +18516,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ The DAB report in pieces (sendDab) — the client's own word, like proto; it grants nothing.
                 const bool dabV2 = queryParam(reqLine, "dab") == "2";
                 { std::lock_guard<std::mutex> pl(dabPeerMtx); dabPeers[sock.get()] = DabPeer{ dabV2 }; }
+                // ★ V12 the full-capture row (SPWB) — the client's own word; a socket that does not ask never gets one.
+                wideSubscribe(sock.get(), queryParam(reqLine, "wide") == "1");
                 const std::string bq = queryParam(reqLine, "bins");
                 wantBins = bq.empty() ? WIRE_BINS_DEFAULT : atoi(bq.c_str());
                 if (wantBins < 128) wantBins = 128; else if (wantBins > OUT_BINS) wantBins = OUT_BINS;
@@ -18497,7 +18656,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                   + ",\"minProto\":" + std::to_string(VS_MIN_PROTO) + ",\"webUrl\":\"/\"}"
                 : busy
                 ? "{\"allowed\":false,\"reason\":\"in-use\"}"
-                : "{\"allowed\":true}";
+                : "{\"allowed\":true,\"wide\":2}";   // ★ V12: the full-capture row (SPWB v2) is offered — the app asks with &wide=1 on its FIRST socket
             sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                           "Access-Control-Allow-Origin: *\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(body.size()) + "\r\n\r\n" + body);
@@ -21566,7 +21725,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (m.empty()) return;
             // ★★ ASK BEFORE TUNING gates what a CLIENT sent, here at the reader — never inside handleControl, which
             //    the server's own landing and resume paths also call (askRefuses).
-            if (!askRefuses(sock, m)) handleControl(sock, m);
+            clientFrame(sock, m);
             tuneHold.applied(monoMs());
         };
         while (serverRunning.load() && sock->isOpen()) {
@@ -21612,8 +21771,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const uint64_t mergedBefore = tuneHold.merged;
                 const std::string first = tuneHold.offer(payload, monoMs(), [&] { return tunePaceMs(); }, passThrough);
                 if (tuneHold.merged != mergedBefore) g_tunesMerged.fetch_add(1, std::memory_order_relaxed);
-                if (!first.empty()) { if (!askRefuses(sock, first)) handleControl(sock, first); tuneHold.applied(monoMs()); }
-                if (passThrough && !askRefuses(sock, payload)) handleControl(sock, payload);
+                if (!first.empty()) { clientFrame(sock, first); tuneHold.applied(monoMs()); }
+                if (passThrough) clientFrame(sock, payload);
             }
         }
         // ★ The last tune is never lost: one still held when the socket goes is applied, exactly as it
@@ -21668,6 +21827,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           clientFps.erase(sock.get());
           clientFpsAcc.erase(sock.get());
           clientSpecAudit.erase(sock.get());
+          wideSubscribe(sock.get(), false);   // ★ V12 SPWB (wideMtx_ is a leaf lock — taking it under clientMtx is safe)
           // ★ Close the log entry for whoever this socket was. The reason is "closed" — the
           //   paths that end a session for a REASON (kicked, banned, timeout) each record their
           //   own before getting here, and ConnLog::close only ever fills the most recent
@@ -22950,6 +23110,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         rtlCenter.store(dongle);
         tuneHw(dongle);
         rx.setTune(vfoOffsetNow(), rxMode, rxBwHz);
+        updateZoomView();   // ★ the zoom channel is measured from rtlCenter + hwOffsetHz() — see retune()'s recentre
         LOGI("deferred retune applied: dongle -> %.0f Hz", dongle);
     }
 

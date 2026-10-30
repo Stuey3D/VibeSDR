@@ -39,7 +39,7 @@ import { readNativeDeviceClass } from '../services/deviceClass';
 import {
   applyFrameRateCap, frameWatchAvailable, powerSaveOn, readMaxRefreshRate, startFrameWatch, stopFrameWatch, takeFrameWatch,
 } from '../services/frameRate';
-import { uiFrameCapHz } from '../services/uiCadence';
+import { uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { setArtColour } from '../services/appIcon';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 
@@ -191,7 +191,7 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   // ★★ AUTO (Stuart's spec, 2026-10-11/12): count late frames in ~5 s windows; two late windows in a row step one rung
   //   down (constants/faceplate.ts autoWindowLate / autoFrameRungs), never back up within the session. Android only —
   //   frameWatchAvailable says why. The rung is NOT stored: every launch measures afresh.
-  const [autoHz, setAutoHz] = useState(Platform.OS === 'android' ? 60 : 0);   // ★ Android AUTO is 60 from the first frame (autoFrameRungs)
+  const [autoHz, setAutoHz] = useState(Platform.OS === 'android' ? 60 : 0);   // ★ Android AUTO is 60 from the first frame (autoFrameRungs); iOS the panel's maximum
   const [maxRefreshHz, setMaxRefreshHz] = useState<number | null>(null);
   const autoOn = settings.frameRate === 'auto';
   useEffect(() => {
@@ -253,7 +253,7 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   useEffect(() => { if (capKnown) setArtColour(settings.iconColour); }, [capKnown, settings.iconColour]);
   useEffect(() => {
     let live = true;
-    readMaxRefreshRate().then((hz: number | null) => { if (live) setMaxRefreshHz(hz); });
+    readMaxRefreshRate().then((hz: number | null) => { if (live) { setMaxRefreshHz(hz); if (hz && hz > 0) uiPanelMaxHz.value = hz; } });
     return () => { live = false; };
   }, []);
 

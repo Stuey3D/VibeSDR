@@ -116,6 +116,10 @@ for (const m of ['setFrameRateCap', 'maxRefreshRate']) {
 ok('iOS wraps all three display-link entry points',
    ['displayLinkWithTarget:selector:', 'setPreferredFrameRateRange:', 'setPreferredFramesPerSecond:']
      .every(s => ios.includes(`@selector(${s})`)));
+// ★ NO REFRESH PIN from the waterfall (Stuart 2026-10-28: ProMotion varies its rate to suit; a fixed screen has vsync)
+// ★ NO REFRESH HOLD from the waterfall (2026-10-28, reverted: "the frame rate locks make the app feel laggy")
+ok('the waterfall holds no refresh rate', !/setSteadyRefresh\(/.test(read('src/components/WaterfallView.tsx')));
+ok('iOS still exports setSteadyRefresh (unused, kept for a screen that needs a pin)', /RCT_EXPORT_METHOD\(setSteadyRefresh:/.test(ios));
 ok('Android re-applies on resume', /onHostResume\(\)\s*\{\s*applyFrameRateCap\(\)/.test(android));
 
 console.log(`frame rate: ${passes} passed, ${fails} failed`);

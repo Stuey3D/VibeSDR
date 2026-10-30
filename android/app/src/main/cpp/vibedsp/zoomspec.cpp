@@ -131,6 +131,7 @@ void ZoomSpectrum::configure(double offsetHz, double spanHz, double rateHz) {
 
 void ZoomSpectrum::rebuild_() {
     accN_ = 0; winCount_ = 0;
+    primed_ = false;   // the window is empty: no frame until it refills (see primed())
 
     if (method_ == Method::Direct) {
         chan_.reset();
@@ -217,6 +218,7 @@ void ZoomSpectrum::push_(const cf32* x, int n, const std::function<void(const fl
             for (int o = 0; o < bins_; ++o) out_[o] = acc2_[o] * inv;
             std::fill(acc2_.begin(), acc2_.end(), 0.0f);
             avgN_ = 0;
+            primed_ = true;
             cb(out_.data(), bins_);
         }
 

@@ -74,8 +74,8 @@ public:
                 });
         };
         // ── JS thread ──
-        if (name == "push") return fn(5, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
-            // push(bins: Float32Array, centerHz, bwHz, trueCenterHz | undefined, lastInteractAt)
+        if (name == "push") return fn(6, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            // push(bins: Float32Array, centerHz, bwHz, trueCenterHz | undefined, lastInteractAt, trueBwHz | undefined)
             if (c < 3 || !a[0].isObject()) return jsi::Value::undefined();
             const jsi::Object arr = a[0].asObject(r);
             const jsi::ArrayBuffer buf = arr.getProperty(r, "buffer").asObject(r).getArrayBuffer(r);
@@ -85,7 +85,19 @@ public:
             const float* bins = reinterpret_cast<const float*>(buf.data(r) + off);
             const double tc = (c > 3 && a[3].isNumber()) ? a[3].asNumber() : NAN;
             if (c > 4 && a[4].isNumber()) en.setLastInteractAt(a[4].asNumber());   // read at arrival, as enqueueFrame did
-            en.pushFrame(bins, (int)len, a[1].asNumber(), a[2].asNumber(), tc);
+            const double tb = (c > 5 && a[5].isNumber()) ? a[5].asNumber() : NAN;
+            en.pushFrame(bins, (int)len, a[1].asNumber(), a[2].asNumber(), tc, tb);
+            return jsi::Value::undefined();
+        });
+        if (name == "pushWide") return fn(1, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            // pushWide(frame: Uint8Array) — ★ V12 an SPWB full-capture row the JS socket received (wf_wide.h)
+            if (c < 1 || !a[0].isObject()) return jsi::Value::undefined();
+            const jsi::Object arr = a[0].asObject(r);
+            const jsi::ArrayBuffer buf = arr.getProperty(r, "buffer").asObject(r).getArrayBuffer(r);
+            const size_t off = (size_t)arr.getProperty(r, "byteOffset").asNumber();
+            const size_t len = (size_t)arr.getProperty(r, "length").asNumber();
+            if (off + len > buf.size(r)) return jsi::Value::undefined();
+            en.pushWide(buf.data(r) + off, len);
             return jsi::Value::undefined();
         });
         if (name == "setView") return fn(2, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
@@ -98,7 +110,12 @@ public:
             vibespec::EngineConfig k;
             k.width = num(r, o, "width", 0); k.wfTop = num(r, o, "wfTop", 0); k.specH = num(r, o, "specH", 0);
             k.specShow = flag(r, o, "specShow", true); k.peakHold = flag(r, o, "peakHold", true);
-            k.smoothTune = flag(r, o, "smoothTune", true); k.targetRows = (int)num(r, o, "targetRows", 0);
+            k.smoothTune = flag(r, o, "smoothTune", true); k.boost = flag(r, o, "boost", true); k.targetRows = (int)num(r, o, "targetRows", 0);
+            k.displayCapHz = (int)num(r, o, "displayCapHz", 0);
+            k.panelHz = (int)num(r, o, "panelHz", 0);
+            k.stampViewRows = (int)num(r, o, "stampViewRows", 0);       // ★★ the scale stamps (wf_stamps.h)
+            k.stampMinGapRows = (int)num(r, o, "stampMinGapRows", 0);
+            k.ringRows = (int)num(r, o, "ringRows", 0);                 // ★★ the ring depth to grow to (wf_ring_grow.h)
             en.setConfig(k);
             return jsi::Value::undefined();
         });
@@ -124,6 +141,17 @@ public:
             if (c >= 1) en.setBackground(a[0].isBool() && a[0].getBool());
             return jsi::Value::undefined();
         });
+        // ★★ V12 2026-10-30 the audio's playout delay, ms (−1 = unknown) — the clock waits for the sound (wf_av_sync.h).
+        if (name == "rowGeom") return fn(1, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            double lo = 0, span = 0;   // ★★ a tap on an old row tunes by its own scale (#57)
+            if (c < 1 || !a[0].isNumber() || !en.rowGeom(a[0].asNumber(), lo, span)) return jsi::Value::null();
+            jsi::Array arr(r, 2); arr.setValueAtIndex(r, 0, lo); arr.setValueAtIndex(r, 1, span);
+            return arr;
+        });
+        if (name == "setAudioDelay") return fn(1, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            en.setAudioDelay(c >= 1 && a[0].isNumber() ? a[0].asNumber() : -1);
+            return jsi::Value::undefined();
+        });
         if (name == "setCovered") return fn(1, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
             if (c >= 1) en.setCovered(a[0].isBool() && a[0].getBool());
             return jsi::Value::undefined();
@@ -145,15 +173,33 @@ public:
             o.setProperty(r, "texReady", u.texReady);
             o.setProperty(r, "quant", u.quant);
             o.setProperty(r, "avgMs", u.avgFrameMs);
+            o.setProperty(r, "rowRate", u.rowRate);   // ★ V12 the fixed output clock's rate (0 = NATIVE / actual rows)
             o.setProperty(r, "scrollGen", (double)u.scrollGen);
             o.setProperty(r, "glide", u.glide);
             o.setProperty(r, "glideDur", u.glideDur);
+            if (u.image) {                                   // ride with the image (WaterfallView enginePoll)
+                o.setProperty(r, "moLo", u.moLo); o.setProperty(r, "moHi", u.moHi);
+                o.setProperty(r, "fanK", u.fanK); o.setProperty(r, "fanC", u.fanC);
+                o.setProperty(r, "ringRows", u.ringRows);    // ★★ the depth of THIS image (the shader's uRows)
+            }
             o.setProperty(r, "specGen", (double)u.specGen);
             o.setProperty(r, "specHidden", u.specHidden);
             if (!u.specTarget.empty()) {
                 jsi::Array arr(r, u.specTarget.size());
                 for (size_t i = 0; i < u.specTarget.size(); i++) arr.setValueAtIndex(r, i, (double)u.specTarget[i]);
                 o.setProperty(r, "spec", arr);
+            }
+            o.setProperty(r, "stampGen", (double)u.stampGen);   // ★★ the scale stamps (wf_stamps.h), when they changed
+            if (u.stampsNew) {
+                jsi::Array arr(r, u.stamps.size());
+                for (size_t i = 0; i < u.stamps.size(); i++) {
+                    const auto& st = u.stamps[i];
+                    jsi::Object so(r);
+                    so.setProperty(r, "id", (double)st.id); so.setProperty(r, "frame", st.frame);
+                    so.setProperty(r, "lo", st.lo); so.setProperty(r, "span", st.span); so.setProperty(r, "born", st.born);
+                    arr.setValueAtIndex(r, i, so);
+                }
+                o.setProperty(r, "stamps", arr);
             }
             o.setProperty(r, "peakGen", (double)u.peakGen);
             if (u.peakPath) o.setProperty(r, "peak", vibe_rnskia::wrapPath(r, u.peakPath));   // adopts the handle

@@ -509,7 +509,7 @@ export class KiwiAdapter implements SDRBackend {
       this.wfSend('SERVER DE CLIENT openwebrx.js W/F');
       this.wfSend('SET send_dB=1');
       this.wfSend('SET wf_comp=1');
-      this.wfSend('SET wf_speed=4');
+      this.wfSend(`SET wf_speed=${this.wfSpeedLever()}`);
       this.wfSend('SET maxdb=-10 mindb=-110');
       this.sendZoom();              // initial full-span view
     };
@@ -1062,7 +1062,22 @@ export class KiwiAdapter implements SDRBackend {
 
   setRate(_divisor: number): void { /* Kiwi waterfall speed is server-fixed (wf_speed) */ }
   pauseSpectrum(): void { this.wfSend('SET wf_speed=0'); }
-  resumeSpectrum(): void { this.wfSend('SET wf_speed=4'); }
+  resumeSpectrum(): void { this.wfSend(`SET wf_speed=${this.wfSpeedLever()}`); }
+
+  /** ★★ V12 2026-10-30 THE DATA CONTROL (src/assets/wfSpeedCap.ts — LOW · AUTO · FULL; the speed keys are display only).
+   *  Kiwi has no link manager, but it has a rate lever: wf_speed 4 ≈ 23 fps (fast — what we always ask for), 2 ≈ 5 fps
+   *  (measured — linkManager.ts LADDERS.kiwi). LOW = wf_speed 2, the 5 fps floor; AUTO and FULL = wf_speed 4 (there is no
+   *  controller to adapt with — AUTO is the full rate here). A setter like the link-managed clients' linkMode. */
+  private _linkMode: 'full' | 'adaptive' | 'lowData' = 'adaptive';
+  private wfSpeedLever(): number { return this._linkMode === 'lowData' ? 2 : 4; }
+  get linkMode(): 'full' | 'adaptive' | 'lowData' { return this._linkMode; }
+  set linkMode(m: 'full' | 'adaptive' | 'lowData') {
+    if (this._linkMode === m) return;
+    this._linkMode = m;
+    if (this.wfOpened) this.wfSend(`SET wf_speed=${this.wfSpeedLever()}`);
+  }
+  /** wf_speed 4's measured rate — the base of the waterfall-speed buttons' live numbers. */
+  get wfNativeFps(): number { return 23; }
 
   getStatus(): SDRStatus {
     return this.statusForRow(this.viewInit ? WF_BINS : 0);

@@ -295,6 +295,13 @@ check() { if eval "$2"; then echo "  ok  $1"; else die "CHECK FAILED: $1"; fi; }
 wants() { [ -L "$R/etc/systemd/system/$2.wants/$1" ]; }
 say "checking the root"
 check "the Portable marker"                     '[ -f "$R/etc/vibeserver-pocket/enabled" ]'
+# ★ A package from before 11.0.16 has no first-update: such a card is built (and says so in customise.sh), unarmed.
+if grep -q '^first_update()' "$R/usr/lib/vibeserver/vibeserver-maintenance" 2>/dev/null; then
+  check "the one update check at setup is armed, and has never run" \
+        '[ -f "$R/etc/vibeserver-pocket/first-update" ] && [ ! -e "$R/var/lib/vibeserver-pocket/first-update" ]'
+else
+  say "!! this vibeserver package predates the one update check at setup — the card will not check for an update"
+fi
 check "hostname vibeserversetup"                '[ "$(cat "$R/etc/hostname")" = vibeserversetup ]'
 check "first-boot config (not configured)"      'grep -q "\"configured\": false" "$R/etc/vibeserver/config.json"'
 check "vibeserver-pocket enabled"               'wants vibeserver-pocket.service multi-user.target'
