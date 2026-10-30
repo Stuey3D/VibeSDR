@@ -20,7 +20,8 @@ import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
-import { RspAgcWatch, rspAgcSampleOf } from '../../../src/services/rspAgcReadout';
+import { RspAgcWatch, rspAgcSampleOf, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText }
+  from '../../../src/services/rspAgcReadout';
 /* ★ Every contained fault on this page — dropped socket messages, UI callbacks that threw, render
  *  sections that failed — counted per source and type. Type __vibeFaults() in the console. */
 (window as unknown as { __vibeFaults: () => unknown }).__vibeFaults =
@@ -2177,6 +2178,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  Fed every report, drawn at most twice a second and written only on a CHANGE (the same reason as the gain-stuck
        *  chip: replacing textContent under the pointer eats clicks). See rspAgcReadout.ts. */
       rspAgcFeed(m, $<HTMLButtonElement>('rspIfAgc').classList.contains('on'));
+      // ★ The AGC choice's live facts (renderRspVagc): is VibeAGC running, and at what target.
+      if (m.vagc !== undefined) rspVagcRunning = m.vagc === true || Number(m.vagc) === 1;
+      if (typeof m.vtgt === 'number') rspVagcTgt = m.vtgt;
       /* ★★★ THE WHOLE START-UP CYCLE, NOT THE SIX-STEP KICK. This read `settling`, which is the
        *  kick alone — a few seconds — and then went out while the visible settling was still to
        *  come: the grace, the liveness check, the one coarse placement (which momentarily removes
@@ -2310,11 +2314,15 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         if (m.dabNotch !== undefined) setToggleTo('rspDabNotch', Number(m.dabNotch) !== 0, 'rsp_dabnotch');
       }
       if (m.rfAgc !== undefined) setToggleTo('rspRfAgc', Number(m.rfAgc) !== 0, 'rsp_rfagc');
-      if (typeof m.agcSet === 'number') {
+      /* ★★ UNDER VibeAGC THE SLIDER SHOWS VibeAGC's TARGET (vtgt, read-only) — not the SDRplay set point, which
+       *  drives a loop that is switched off. Stuart saw "−30 · not in use" while VibeAGC held −20 (2026-10-30). */
+      const tgtNow = rspVagcRunning && typeof rspVagcTgt === 'number' ? rspVagcTgt
+                   : typeof m.agcSet === 'number' ? m.agcSet : undefined;
+      if (typeof tgtNow === 'number') {
         const el = $<HTMLInputElement>('rspAgcSet');
         const pressedAt = recentPress.get('rspAgcSet') ?? 0;
-        if (Date.now() - pressedAt > 4000 && Number(el.value) !== m.agcSet) {
-          el.value = String(m.agcSet);
+        if (Date.now() - pressedAt > 4000 && Number(el.value) !== tgtNow) {
+          el.value = String(tgtNow);
           renderRspVals();
         }
       }
@@ -3221,7 +3229,56 @@ function rspAgcFeed(m: any, ifAgc: boolean): void {
   rspAgcWatch.push(rspAgcSampleOf(m, ifAgc), now);
   if (now - rspAgcDrawnAt >= 500) { rspAgcDrawnAt = now; rspAgcDraw(); }
 }
-function rspAgcClear(): void { rspAgcWatch.reset(); rspAgcDraw(); }
+function rspAgcClear(): void { rspAgcWatch.reset(); rspAgcDraw(); rspVagcRunning = null; rspVagcTgt = undefined; }
+/* ★★★ THE AGC CHOICE (the radio menu's AGC row, 2026-10-30). Stuart, on his unlocked RSP1A with VibeAGC running: "i assume
+ *  this isnt vibeagc" / "no option for it here either". Whether VibeAGC is RUNNING (rspstat `vagc`) and its real target
+ *  (`vtgt`) — the facts every AGC row now names; the owner's CHOICE is hwinfo radio.vagcMode (renderRspVagc). */
+let rspVagcRunning: boolean | null = null;
+let rspVagcTgt: number | undefined;
+/** ★ May this page choose the AGC? The server's rule (adminGate): an unlocked owner, or — on a receiver with no admin
+ *  password — only the machine it runs on. Anybody else is shown the choice in words. */
+function rspVagcOwner(): boolean { return adminUnlocked || (!srvAdminProtected && srvLocal); }
+/** The AGC row, and the "· VIBEAGC" / "· SDRPLAY" beside IF AGC and RF AGC. Cheap; called from applyRspLock. */
+function renderRspVagc(): void {
+  const row = document.getElementById('rowRspVagc');
+  const ifBy = document.getElementById('rspIfAgcBy');
+  const rfBy = document.getElementById('rspRfAgcBy');
+  const mode = radioCaps?.driver === 'sdrplay' && typeof radioCaps.vagcMode === 'number' ? radioCaps.vagcMode : null;
+  const running = rspVagcRunning === true;
+  const ifOn = !!document.getElementById('rspIfAgc')?.classList.contains('on');
+  const rfOn = !!document.getElementById('rspRfAgc')?.classList.contains('on');
+  /* ★ The tags need only the live fact, so an older server (no vagcMode) still gets "· VIBEAGC" while it runs. Nothing
+   *  under manual gain: no AGC is running then, whatever was chosen. */
+  const ifTag = ifOn && (running || mode !== null) ? ` · ${vagcIfOwner(running).toUpperCase()}` : '';
+  const rfTag = ifOn && rfOn && running ? ' · VIBEAGC' : '';
+  if (ifBy && ifBy.textContent !== ifTag) ifBy.textContent = ifTag;
+  if (rfBy && rfBy.textContent !== rfTag) rfBy.textContent = rfTag;
+  if (!row) return;
+  row.hidden = mode === null;
+  if (mode === null) return;
+  const auto = !!radioCaps?.vagcAuto;
+  const owner = rspVagcOwner();
+  const seg = document.getElementById('rspVagcSeg');
+  if (seg) {
+    seg.style.display = owner ? '' : 'none';   // ★ .seg is display:flex, which beats [hidden]
+    seg.querySelectorAll<HTMLButtonElement>('button[data-vagc]').forEach((b) => {
+      b.classList.toggle('on', Number(b.dataset.vagc) === mode);
+      b.onclick = () => {
+        if (!rspVagcOwner()) return;          // ★ the server would refuse it (adminGate) — never send a no-op
+        const want = Number(b.dataset.vagc);
+        if (radioCaps) radioCaps.vagcMode = want;   // ★ lit now; the hwinfo the server re-sends confirms it
+        rspSend({ vagcmode: want });
+        applyRspLock(); renderRspVals();
+      };
+    });
+  }
+  const val = document.getElementById('rspVagcVal');
+  if (val) {
+    const t = owner ? vagcAutoNote(mode, auto) : vagcChoiceText(mode, auto);
+    if (val.textContent !== t) val.textContent = t;
+    val.classList.toggle('inline', !owner);
+  }
+}
 let rspLastLna: number | null = null;
 let rspLastIf: number | null = null;
 /** ★ When the RSP's gain last moved, so the status chip can breathe for a moment after. */
@@ -18583,7 +18640,8 @@ function rspRestricted(): boolean {
 /** ★ Is the automatic RF gain driving the LNA? The only loop VibeSDR runs on an SDRplay: it
  *  moves the LNA from the IF AGC's reported reduction and touches nothing else. The radio's own
  *  IF AGC owns the IF stage, so the IF reduction, its AGC switch and its target all remain the
- *  owner's controls. (VibeAGC is an RTL-SDR loop and has no part on this radio.) */
+ *  owner's controls. ★ (2026-10-30) With VibeAGC (SDRplay) running instead, this key is VibeAGC's licence to move the
+ *  LNA — the same answer: the LNA is not the slider's. Which loop runs is the AGC row (renderRspVagc). */
 function rfAgcDrivesLna(): boolean {
   return !!document.getElementById('rspRfAgc')?.classList.contains('on');
 }
@@ -18597,25 +18655,32 @@ function applyRspLock() {
    *     tonight: a control that accepts input and changes nothing.
    * ★ The AGC TARGET is the deliberate exception and stays live — it is VibeAGC's own set point,
    *   the one thing here you still steer it with. Grey what is taken, never what still works. */
+  /* ★★★ AND "VibeAGC" NOW MEANS THE LOOP THAT IS RUNNING (rspstat `vagc`), not the RF AGC key (2026-10-30). The key
+   *     used to be VibeAGC's switch; it is now the RF half (our walker under the SDRplay's AGC, or VibeAGC's licence to
+   *     move the LNA) — so reading it as "VibeAGC is on" greyed the IF AGC key and the AGC TARGET on a radio whose
+   *     SDRplay AGC was running and steerable, and left the AUTO/MANUAL key dead under VibeAGC. The IF AGC key stays
+   *     LIVE in every mode: MANUAL still overrides, VibeAGC or not. */
   const rfAgcBtn  = document.getElementById('rspRfAgc');
-  const vibeAgcOn = !!rfAgcBtn && rfAgcBtn.classList.contains('on');
+  const rfAgcKey  = !!rfAgcBtn && rfAgcBtn.classList.contains('on');
   const agcOn = $('rspIfAgc').classList.contains('on');
+  const vibeAgcOn = agcOn && rspVagcRunning === true;
+  renderRspVagc();
   const gr = $<HTMLInputElement>('rspIfGr');
-  gr.classList.toggle('agc', agcOn || vibeAgcOn || restricted);
+  gr.classList.toggle('agc', agcOn || restricted);
   /* ★ THE RF HALF, EXACTLY AS ABOVE. VibeAGC steps the LNA, so while it is on the slider is
    *  read-only and greyed — and still live, so you can watch it move. Guarded because an older
    *  server sends no rfAgc and the button may not exist on a non-RSP radio. */
   const lna = document.getElementById('rspLna') as HTMLInputElement | null;
-  if (lna) lna.classList.toggle('agc', vibeAgcOn || restricted);
+  if (lna) lna.classList.toggle('agc', (agcOn && rfAgcKey) || restricted);
   /* ★★ AND THE RADIO'S OWN IF AGC SWITCH. VibeAGC turns it off and re-asserts that every tick, so
    *    a listener pressing it would watch it spring back — worse than a greyed control, because
    *    it looks like the radio fighting them. Greyed, and the title says who has it. */
   const ifAgcBtn = document.getElementById('rspIfAgc') as HTMLButtonElement | null;
   if (ifAgcBtn) {
-    ifAgcBtn.classList.toggle('agc', vibeAgcOn);
-    if (vibeAgcOn) ifAgcBtn.title =
-      'Handled by VibeAGC — it drives the IF and RF stages together and keeps the '
-      + "radio's own IF AGC off. Turn VibeAGC off to use it.";
+    ifAgcBtn.classList.remove('agc');
+    ifAgcBtn.title = vibeAgcOn
+      ? 'AUTO: VibeAGC runs the IF (and the RF, with RF AGC on). Tap for MANUAL gain — that stops VibeAGC.'
+      : 'AUTO: the SDRplay\'s own IF AGC. Tap for MANUAL gain.';
   }
   /* ★★★ AND THE AGC TARGET, WHICH I WRONGLY KEPT LIVE. That slider is the TUNER's AGC set point
    *     (sdrplay_api agc.setPoint_dBfs) — VibeAGC switches that AGC off, so under VibeAGC the
@@ -18624,7 +18689,7 @@ function applyRspLock() {
    *     only for the traditional IF agc"). Greyed, not hidden: it is a real control of a real
    *     feature, just not this one. */
   const sp = document.getElementById('rspAgcSet') as HTMLInputElement | null;
-  if (sp) sp.classList.toggle('agc', vibeAgcOn || restricted);
+  if (sp) sp.classList.toggle('agc', vibeAgcOn || restricted);   // ★ read-only under VibeAGC: "set by VibeAGC"
   /* ★★★ THE NOTCHES, WHEN THE SERVER OWNS THEM. With automatic notch filtering on, the receiver
    *     sets both from the tuned frequency and REFUSES a manual flip — so clicking them changed
    *     the button, changed nothing else, and said nothing (Stuart, 2026-09-12: "oh no i turned
@@ -18659,10 +18724,10 @@ function applyRspLock() {
   }
   if (vibeAgcOn) {
     gr.title  = 'Handled by VibeAGC — it sets the IF gain reduction from the measured ADC level.';
-    if (lna) lna.title = 'Handled by VibeAGC — it keeps the RF gain as high as the ADC allows.';
-    if (sp)  sp.title  = "Handled by VibeAGC — this is the tuner's own AGC set point, and VibeAGC "
-                       + 'keeps that AGC switched off. VibeAGC works out its own target.';
-  }
+    if (lna) lna.title = rfAgcKey ? 'Handled by VibeAGC — it keeps the RF gain as high as the ADC allows.' : '';
+    if (sp)  sp.title  = "VibeAGC's own target (the ADC peak it holds), set per band by VibeAGC — not adjustable "
+                       + "here. Choose SDRPLAY on the AGC row to steer the SDRplay's own AGC with this slider.";
+  } else if (sp) sp.title = '';
 
   // ★ HIDDEN, not greyed, for a listener who cannot use them — a disabled control still reads
   //   as an offer, and there is nothing here for them to unlock without the password.
@@ -18703,11 +18768,13 @@ function renderRspVals() {
    *   touch, on the one radio where confusing those two controllers has cost the most. */
   const rfAgcOwns = !!document.getElementById('rspRfAgc')?.classList.contains('on');
   const ifAgcOwns = !!document.getElementById('rspIfAgc')?.classList.contains('on');
+  // ★ And WHICH loop, now there are two that can hold both stages (the radio menu's AGC row, 2026-10-30).
+  const vagcRuns = ifAgcOwns && rspVagcRunning === true;
   $('rspLnaVal').textContent =
     `${pos}/${lnaMax} · LNA ${lna}${lna === 0 ? ' · max' : lna === lnaMax ? ' · min' : ''}`
-    + (rfAgcOwns ? ' · RF AGC' : '');
+    + (ifAgcOwns && rfAgcOwns ? (vagcRuns ? ' · VibeAGC' : ' · RF AGC') : '');
   $('rspIfGrVal').textContent = `${gr} dB${gr <= 20 ? ' · max gain' : gr >= 59 ? ' · min gain' : ''}`
-    + (ifAgcOwns ? ' · IF AGC' : '');
+    + (ifAgcOwns ? (vagcRuns ? ' · VibeAGC' : ' · IF AGC') : '');
   const sp = Number($<HTMLInputElement>('rspAgcSet').value);
   // ★ Say which way it drives. "-45 dBfs" alone tells nobody whether that is more or less.
   // ★ Name the default where it sits. -30 dBFS is SDRplay's OWN working point (the API's
@@ -18722,12 +18789,11 @@ function renderRspVals() {
   // ★ dabOn, not dabState: the explicit mode flag, cleared the moment DAB ends. dabState is a
   //   report that can outlive the mode by a beat, and a label that lies for a beat is still a lie.
   const dabOwns = dabOn && sp !== AGC_DEFAULT;
-  const vibeOwns = rfAgcOwns;   // ★ VibeAGC owns the target too — see applyRspLock
-  /* ★ Under VibeAGC this number describes the TUNER's AGC, which is switched off — so it is not
-   *  "the AGC target" any more, it is a setting for a loop that is not running. Say that, rather
-   *  than printing a figure that looks like it is in force. */
-  $('rspAgcSetVal').textContent = vibeOwns
-    ? `${sp} dBfs · not in use`
+  /* ★★★ UNDER VibeAGC THIS ROW SHOWS VibeAGC's OWN TARGET, read-only (2026-10-30). It said "−30 dBfs · not in use" —
+   *     true of the SDRplay set point, and no help to anybody: VibeAGC was holding −20 and nothing said so. Not
+   *     settable: VibeAGC's targets are per band and tuned on air, and it has no setter (rspAgcReadout.ts). */
+  $('rspAgcSetVal').textContent = vagcRuns
+    ? vagcTargetText(rspVagcTgt)
     : `${sp} dBfs${dabOwns ? ' · DAB' :
        sp === AGC_DEFAULT ? ' · default' : sp >= -25 ? ' · hard' : sp <= -60 ? ' · gentle' : ''}`;
 }
@@ -18873,6 +18939,7 @@ function initRspControls() {
   };
   const sp = $<HTMLInputElement>('rspAgcSet');
   sp.oninput = () => {
+    if (sp.classList.contains('agc')) return;   // ★ VibeAGC's target, read-only (renderRspVals)
     // ★ A SOFT DETENT AT THE DEFAULT. Dragging near -30 snaps to it, so getting back to
     // SDRplay's working point is a gesture rather than a pixel-hunt. Narrow enough (±2 dB)
     // that it never fights someone deliberately choosing -28 or -32.

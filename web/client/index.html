@@ -1139,6 +1139,11 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #rspAgcLine { font-size: 11px; color: var(--text-dim); letter-spacing: 0.3px; margin: 2px 0 6px; line-height: 1.35; }
 #rspAgcLine.warn { color: var(--amber, #ffb833); }
 #rspAgcLine:empty { display: none; }
+/* ★ The radio menu's AGC choice (2026-10-30): which loop owns a row, said beside its name — "IF AGC · VIBEAGC". */
+.agcBy { color: var(--amber, #ffb833); font-size: 0.8em; }
+#rspVagcVal { flex-basis: 100%; text-align: left; font-size: 11px; }
+#rspVagcVal:empty { display: none; }
+#rspVagcVal.inline { flex-basis: auto; text-align: right; font-size: 12px; color: var(--hi); }
 #rspAgcLine .why { display: block; font-weight: 600; margin-top: 3px; padding: 1px 5px; width: fit-content;
   border: 1px solid rgba(255,180,60,0.8); border-radius: 3px; }
 
@@ -5695,8 +5700,22 @@ select.btn { padding: 6px 8px; }
       <input type="range" id="rspIfGr" min="20" max="59" value="40">
       <span class="val" id="rspIfGrVal">—</span>
     </div>
+    <!-- ★★★ WHICH AGC RUNS THIS RADIO — the owner's choice, LIVE (2026-10-30). Stuart, on his unlocked RSP1A with VibeAGC
+         running: "i assume this isnt vibeagc" / "no option for it here either" — it was only on the setup page. AUTO =
+         VibeAGC with the OpenRSP driver, the SDRplay's own with the official API; the note beside the keys says which.
+         Owner-only (the server refuses anybody else — adminGate); a listener sees the choice in words, not keys.
+         Drawn only when the server reports radio.vagcMode. -->
+    <div class="mrow" id="rowRspVagc" hidden>
+      <label>AGC</label>
+      <div class="seg" id="rspVagcSeg">
+        <button class="btn" data-vagc="0" title="VibeAGC with the OpenRSP driver, the SDRplay's own IF AGC with SDRplay's official API">AUTO</button>
+        <button class="btn" data-vagc="1" title="VibeAGC: VibeSDR's own gain control for both stages of the RSP">VIBEAGC</button>
+        <button class="btn" data-vagc="2" title="The RSP's own IF AGC (in the SDRplay API), with the RF AGC row stepping the LNA">SDRPLAY</button>
+      </div>
+      <span class="val" id="rspVagcVal"></span>
+    </div>
     <div class="mrow">
-      <label>IF AGC</label>
+      <label>IF AGC<span class="agcBy" id="rspIfAgcBy"></span></label>
       <div class="seg"><button class="btn on" id="rspIfAgc">AUTO</button></div>
     </div>
     <!-- ★★★ THE OTHER HALF OF THE LOOP. The RSP's own AGC moves the IF gain reduction and NEVER
@@ -5705,7 +5724,7 @@ select.btn { padding: 6px 8px; }
          ★ It belongs NEXT TO the IF one because an owner reading "IF AGC: AUTO" reasonably assumes
            the whole gain chain is automatic, and until this switch existed only half of it was. -->
     <div class="mrow" id="rowRspRfAgc">
-      <label>RF AGC</label>
+      <label>RF AGC<span class="agcBy" id="rspRfAgcBy"></span></label>
       <div class="seg"><button class="btn on" id="rspRfAgc">AUTO</button></div>
     </div>
     <!-- ★ The AGC's TARGET, as SDRconnect exposes it. It is a target, not a limit: a higher

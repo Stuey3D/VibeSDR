@@ -169,3 +169,39 @@ export function rspAgcSampleOf(m: any, ifAgc: boolean): RspAgcSample {
     vwpm: n(m?.vwpm), vmiss: n(m?.vmiss), vblind: n(m?.vblind), vrail: n(m?.vrail),
   };
 }
+
+/* ── ★★★ THE AGC CHOICE (the radio menu's AGC row, 2026-10-30) ─────────────────────────────────────────────────────
+ * Stuart, on his unlocked Lenovo RSP1A with VibeAGC running: "i assume this isnt vibeagc" / "no option for it here
+ * either". The menu said IF AGC AUTO (which reads as the SDRplay's own) and an AGC TARGET of −30 "not in use" while
+ * VibeAGC held −20 — and the only switch was on the setup page. One set of words for both clients, here:
+ *   · hwinfo radio.vagcMode — the owner's choice, rsp_control `vagcmode`: 0 AUTO · 1 VIBEAGC · 2 SDRPLAY;
+ *   · hwinfo radio.vagcAuto — what AUTO resolves to with the driver the server loaded (VibeAGC with OpenRSP);
+ *   · rspstat vagc — whether VibeAGC is RUNNING now (it may have handed back, or manual gain may be on).
+ * ★ The AGC TARGET is NOT settable under VibeAGC: its targets are per profile (−20 dBFS peak; DAB's freeze band
+ *   around it) and tuned on air, and the controller has no setter — so it is shown read-only, "set by VibeAGC". */
+export const VAGC_AUTO = 0, VAGC_ON = 1, VAGC_SDRPLAY = 2;
+export const VAGC_KEYS: { mode: number; label: string }[] = [
+  { mode: VAGC_AUTO, label: 'AUTO' }, { mode: VAGC_ON, label: 'VIBEAGC' }, { mode: VAGC_SDRPLAY, label: 'SDRPLAY' },
+];
+/** Does this choice mean VibeAGC (with AUTO resolved for this server's driver)? */
+export function vagcResolved(mode: number, auto: boolean): boolean {
+  return mode === VAGC_ON || (mode === VAGC_AUTO && auto);
+}
+/** The owner's row, beside the keys: what AUTO means here. '' unless AUTO is chosen. */
+export function vagcAutoNote(mode: number, auto: boolean): string {
+  if (mode !== VAGC_AUTO) return '';
+  return auto ? '→ VibeAGC (OpenRSP driver)' : "→ SDRplay's own (official API)";
+}
+/** A listener's read-only row: the choice in words. */
+export function vagcChoiceText(mode: number, auto: boolean): string {
+  const who = vagcResolved(mode, auto) ? 'VibeAGC' : "SDRplay's own";
+  return mode === VAGC_AUTO ? `${who} (auto)` : who;
+}
+/** Who runs the IF stage while the IF AGC is on: VibeAGC if it is running, otherwise the SDRplay's own AGC. */
+export function vagcIfOwner(running: boolean): string {
+  return running ? 'VibeAGC' : 'SDRplay';
+}
+/** The AGC TARGET while VibeAGC runs: its real target, read-only. */
+export function vagcTargetText(vtgt: number | undefined): string {
+  return typeof vtgt === 'number' ? `${dbfs(vtgt)} dBFS · set by VibeAGC` : 'set by VibeAGC';
+}

@@ -291,6 +291,9 @@ export interface RadioCaps {
   hdr?: boolean;     hdrOn?: boolean;        // RSPdx: high dynamic range below 2 MHz
   amNotch?: boolean; amNotchOn?: boolean;    // RSPduo: AM broadcast notch on the Hi-Z port
   extRef?: boolean;  extRefOn?: boolean;     // RSP2 / Duo: 24 MHz reference output
+  /** ★ VibeAGC (SDRplay): the owner's choice (0 auto · 1 VibeAGC · 2 the SDRplay's own) and what AUTO resolves to with
+   *  this server's driver — the radio menu's AGC row (2026-10-30). Absent from an older server: no row is drawn. */
+  vagcMode?: number; vagcAuto?: boolean;
   /** ★ Bias-T state, beside the `biasT` capability (RSP: from the radio's own setting since 2026-10-22). */
   biasTOn?: boolean;
   // ── ★★★ ICOM TRANSCEIVER (driver === 'icom', RECEIVE ONLY — docs/ICOM-SUPPORT-PLAN.md) ──
