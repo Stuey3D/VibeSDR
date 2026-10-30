@@ -1122,22 +1122,27 @@ export default function TunerScreen({ route, navigation }: Props) {
       { name: dualScreenOf(p), params: p },
     ] } as never);
   }, [navigation]);
-  /* ★★ THE BACK KEY OFFERS IT (Stuart: "all we need to do is add the option in the back button to connect a 2nd
-   *  server"). FM-DX has no ‹ Servers chip — its control island's menu slot IS Back — so where a second server can be
-   *  added (or one is playing behind this) Back asks, with the Servers chip's own rows and words: ‹ Back to server
-   *  list, Listen to a 2nd server, Stop listening to <the other>. Nowhere to add one and nothing behind: Back is Back,
-   *  one tap, exactly as before — never a menu with one choice in it. */
+  /* ★★ THE BACK KEY CARRIES IT (Stuart: "all we need to do is add the option in the back button to connect a 2nd
+   *  server" — FM-DX has no ‹ Servers chip; its control island's menu slot IS Back). TAP stays Back, one tap, exactly as
+   *  before, for everybody not using two servers. HOLD Back for the two-server options, in the Servers chip's own rows
+   *  and words: ‹ Back to server list, Listen to a 2nd server (with its hint), Stop listening to <the other>.
+   *  ★ While two are playing a TAP asks too: leaving now leaves the other playing alone, and "Stop listening to …" has
+   *    nowhere else to live on this screen. */
   const offerSecond = !!dualMyId && canListenSecond(dualParams) && dualShape.phase === 'off';
-  const onTunerBack = useCallback(() => {
-    if (!offerSecond && !dualBg) { leaveTuner(); return; }
+  const tunerBackMenu = useCallback(() => {
     const rows: { text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }[] = [
       { text: '‹ Back to server list', onPress: leaveTuner },
     ];
     if (offerSecond) rows.push({ text: 'Listen to a 2nd server', onPress: onListenSecond });
     if (dualBg) rows.push({ text: `Stop listening to ${dualBg.name}`, style: 'destructive', onPress: stopBackground });
     rows.push({ text: 'Cancel', style: 'cancel' });
-    appAlert(instanceName ?? 'FM-DX', offerSecond ? secondServerHint(false) : `${dualBg?.name ?? ''} is playing too.`, rows);
+    appAlert(instanceName ?? 'FM-DX',
+             offerSecond ? secondServerHint(false) : dualBg ? `${dualBg.name} is playing too.` : undefined, rows);
   }, [offerSecond, dualBg, leaveTuner, onListenSecond, instanceName]);
+  const onTunerBack = useCallback(() => { if (dualBg) tunerBackMenu(); else leaveTuner(); }, [dualBg, tunerBackMenu, leaveTuner]);
+  /** HOLD: only when there is a two-server choice to make — otherwise a hold is just a slow tap. */
+  const onTunerBackHold = useCallback(() => { if (offerSecond || dualBg) tunerBackMenu(); else leaveTuner(); },
+                                      [offerSecond, dualBg, tunerBackMenu, leaveTuner]);
   const resumeFromPause = useCallback(() => { (VibePowerModule as any)?.setMuted?.(false); }, []);
   /* ★★★ THE STATION STRIP IS THE APP'S OWN VTS (Stuart, 2026-10-02: "make the bottom card part of the VTS
    *  instead so it matches the main theme"). It replaces the FM-DX card (logo · flag · name · ST/TP/TA ·
@@ -1365,6 +1370,7 @@ export default function TunerScreen({ route, navigation }: Props) {
         onMode={() => {}}
         onStep={setStep}
         onMenu={onTunerBack}
+        onMenuLongPress={onTunerBackHold}
         onChat={openChat}
         onAudio={() => setAudioSheetOpen(true)}
         audioAsRecord

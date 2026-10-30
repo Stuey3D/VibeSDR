@@ -352,6 +352,8 @@ export interface DomeKeyProps {
    *  (TunerKeys' step and hold-to-sweep, §6.2), which `onPress` (on release, §5) cannot give. */
   onPressIn?:  () => void;
   onPressOut?: () => void;
+  /** ★ A HOLD — only where a key has a second, rarer action (FM-DX's Back: the two-server options). Absent = none. */
+  onLongPress?: () => void;
   /** The legend, given the press progress for its flare. */
   children:  (progress: SharedValue<number>) => React.ReactNode;
   /**
@@ -369,7 +371,7 @@ export interface DomeKeyProps {
 
 export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   onPress, disabled, height, radius = 10, style, hitSlop = 10, outline, minHeight, overlay,
-  accessibilityLabel, accessibilityHint, onPressIn, onPressOut, children, lightReach = 0, lightSlot,
+  accessibilityLabel, accessibilityHint, onPressIn, onPressOut, children, lightReach = 0, lightSlot, onLongPress,
 }, ref) {
   const fp = useFaceplate();
   const ct = fp.chassis;
@@ -435,7 +437,7 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
     //   inner corner radius instead (4 less the 1 pt border), so nothing pokes out of the corners.
     //   Unlit, the key is exactly today's, overflow and all.
     return (
-      <Pressable ref={ref} onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut}
+      <Pressable ref={ref} onPress={disabled ? undefined : onPress} onLongPress={disabled ? undefined : onLongPress} onPressIn={onIn} onPressOut={onOut}
         disabled={disabled} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint}
         onLayout={e => measureBox(e.nativeEvent.layout.width, e.nativeEvent.layout.height)}
         style={[{ ...(minHeight ? { minHeight: height } : { height }), borderWidth: 1, borderRadius: 4, borderColor: outline ?? outlineTint,
@@ -463,7 +465,7 @@ export const DomeKey = React.forwardRef<View, DomeKeyProps>(function DomeKey({
   const capH = Math.max(8, height - 4);
   const capR = Math.max(2, radius - 2);
   return (
-    <Pressable ref={ref} onPress={disabled ? undefined : onPress} onPressIn={onIn} onPressOut={onOut}
+    <Pressable ref={ref} onPress={disabled ? undefined : onPress} onLongPress={disabled ? undefined : onLongPress} onPressIn={onIn} onPressOut={onOut}
       disabled={disabled} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel={accessibilityLabel} accessibilityHint={accessibilityHint}
       style={[{ height, borderRadius: radius, backgroundColor: dome.slotBg }, style]}
       onLayout={e => {
