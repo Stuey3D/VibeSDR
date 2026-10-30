@@ -212,6 +212,9 @@ export type RootStackParamList = {
     // only stops the shim if this is still the latest session, so a stale screen
     // can't tear down a newer one when switching instances.
     localGen?:       number;
+    /** ★ V12 SAME NETWORK → GO DIRECT: a directory VibeServer reached at its PROVED LAN address rather than its tunnel
+     *  (InstancePickerScreen openDirectoryVibeServer) — the receiver's name line says "local network". */
+    viaLan?:         boolean;
     /** ★ 'rtl:<serial>' / 'airspyhf:…' / 'hackrf:…' — local settings are remembered per radio. */
     localRadio?:     string;
     // vibesdr:// deep link: connect and optionally apply an initial tune. These

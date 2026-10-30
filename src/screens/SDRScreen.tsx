@@ -3818,9 +3818,13 @@ export default function SDRScreen({ route, navigation }: Props) {
         const callsign = (r.callsign ?? '').trim();
         const name     = (r.name ?? '').trim();
         if (!callsign && !name) return;
+        /* ★ V12 SAME NETWORK → GO DIRECT: say, subtly, that this session skipped the tunnel — under the server's own
+         *  name, where its place already sits (Stuart wanted to SEE that it is direct). Only on the proved LAN path. */
+        const place = (r.location ?? '').trim();
+        const lan = route.params.viaLan === true ? 'local network' : '';
         setStationId({
           line1: callsign && name ? `${callsign} - ${name}` : (callsign || name),
-          line2: (r.location ?? '').trim() || undefined,
+          line2: [place, lan].filter(Boolean).join(' · ') || undefined,
           color: idColor,
         });
       }).catch(() => {});
