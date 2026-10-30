@@ -550,6 +550,11 @@ if node --no-warnings scripts/test_wf_speed_cap.ts; then pass=$((pass+1)); else 
 if node --no-warnings scripts/test_wf_fixed_clock.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_wf_zoomout_fan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_wf_spin.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts, V12 2026-10-30): the fixed clock's frames held by the
+#     audio's playout delay — at rest, after a ratchet, after a drag and a shrink within ±30 ms; growth carried by repeats
+#     (Stuart: "simply duplicate the previous lines"), a shrink by discards; no hold while the dial moves; zero extra stalls
+#     or bursts; NATIVE unchanged.
+if node --no-warnings scripts/test_wf_avsync.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE 10-FPS DEFAULT (2026-10-20): the serving phone's tiers read Smoother · 20 / Default · 10 / Half · 5, the stored
 #    keys still mean 20 / 10 / 5, and a new server starts on Default · 10.
 if node --no-warnings scripts/test_fps_tiers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
