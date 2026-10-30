@@ -524,13 +524,15 @@ const WfStampItem = React.memo(function WfStampItem({ s, width, rowPt, wfH, font
       return { key: i, x: t.x, label: t.label, lx };
     });
   }, [s.lo, s.span, width, font]);
+  // ★ Never a NaN or an infinity into the canvas: an unusable position is off-screen and invisible.
   const tr = useDerivedValue(() => {
     const y = stampLine(uHead.value, s.frame, scrollFrac.value, uN.value, uQuant.value > 0.5) * rowPt;
-    return [{ translateY: y }];
-  }, [rowPt, s.frame]);
+    return [{ translateY: Number.isFinite(y) ? Math.max(-4 * STAMP_BAND, Math.min(wfH + STAMP_BAND, y)) : -4 * STAMP_BAND }];
+  }, [rowPt, wfH, s.frame]);
   const op = useDerivedValue(() => {
     const y = stampLine(uHead.value, s.frame, scrollFrac.value, uN.value, uQuant.value > 0.5) * rowPt;
-    return stampAlpha(y, STAMP_BAND, wfH, uHead.value - 1 - s.born);
+    const a = stampAlpha(y, STAMP_BAND, wfH, uHead.value - 1 - s.born);
+    return Number.isFinite(a) ? Math.max(0, Math.min(1, a)) : 0;
   }, [rowPt, wfH, s.frame, s.born]);
   const ty = 4 + STAMP_FONT_PT;
   return (
@@ -544,22 +546,22 @@ const WfStampItem = React.memo(function WfStampItem({ s, width, rowPt, wfH, font
   );
 });
 
-const WfStampLayer = React.memo(function WfStampLayer({ sink, width, rowPt, wfH, color, uHead, scrollFrac, uN, uQuant }: {
-  sink: StampSink; width: number; rowPt: number; wfH: number; color: string;
+const WfStampLayer = React.memo(function WfStampLayer({ sink, width, rowPt, wfH, color, top, uHead, scrollFrac, uN, uQuant }: {
+  sink: StampSink; width: number; rowPt: number; wfH: number; color: string; top: number;
   uHead: SharedValue<number>; scrollFrac: SharedValue<number>; uN: SharedValue<number>; uQuant: SharedValue<number>;
 }) {
   const [stamps, setStamps] = useState<WfStamp[]>([]);
   useEffect(() => { sink.current = setStamps; return () => { sink.current = null; }; }, [sink]);
   const typeface = useTypeface(ATKINSON_TTF);
   const font = useMemo(() => { if (!typeface) return null; const f = Skia.Font(typeface, STAMP_FONT_PT); f.setEmbolden(true); return f; }, [typeface]);
-  if (!stamps.length || !font) return null;
+  if (!stamps.length || !font || !(rowPt > 0) || !(wfH > 0)) return null;
   return (
-    <>
+    <Canvas pointerEvents="none" style={{ position: 'absolute', left: 0, top, width, height: wfH }}>
       {stampsShown(stamps, rowPt, STAMP_BAND).map((s) => (
         <WfStampItem key={s.id} s={s} width={width} rowPt={rowPt} wfH={wfH} font={font} color={color}
                      uHead={uHead} scrollFrac={scrollFrac} uN={uN} uQuant={uQuant} />
       ))}
-    </>
+    </Canvas>
   );
 });
 
@@ -2997,12 +2999,16 @@ function WaterfallView({
               </Shader>
             </Fill>
           ))}
-          {texReady && (
-            <WfStampLayer sink={stampSink} width={width} rowPt={stampRowPt} wfH={wfH} color={stampCol}
-                          uHead={uHead} scrollFrac={scrollFrac} uN={uNSv} uQuant={uQuantDrawSv} />
-          )}
           {needleInWaterfall}
         </Canvas>
+        )}
+        {/* ★★★ THE SCALE STAMPS ON THEIR OWN CANVAS (Stuart, 2026-10-30, Mac build 531: the waterfall went black at rest and
+            flickered back only while it was moved — the history all there). They were drawn in the waterfall's canvas,
+            after its shader; whatever a stamp did there took the whole picture with it. Now a separate transparent canvas
+            over the same rectangle, mounted only while a stamp exists: the waterfall cannot be blanked by one. */}
+        {active && texReady && (
+          <WfStampLayer sink={stampSink} width={width} rowPt={stampRowPt} wfH={wfH} color={stampCol} top={wfTop}
+                        uHead={uHead} scrollFrac={scrollFrac} uN={uNSv} uQuant={uQuantDrawSv} />
         )}
 
         {active && Platform.OS !== 'android' && staticOverlayCanvas}
