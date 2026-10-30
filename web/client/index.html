@@ -291,6 +291,11 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 }
 #splash button:hover { background: var(--btn-active-bg); border-color: var(--btn-active-bdr); color: var(--btn-active-tx); }
 #splash button[disabled] { opacity: 0.45; cursor: default; }
+/* ★ V12 SAME NETWORK → GO DIRECT (lanHop.ts): one quiet line, the splash's own amber; the action reads as a key. */
+#splashLan { margin-top: 2px; font-size: 11px; opacity: 0.9; }
+#splashLan .lanGo { font: inherit; letter-spacing: inherit; color: var(--amber); background: none; border: 1px solid var(--amber);
+  border-radius: 4px; padding: 2px 8px; cursor: pointer; text-decoration: none; display: inline-block; width: auto; }
+#splashLan .lanGo:disabled { opacity: 0.6; cursor: default; }
 #splashMsg { min-height: 18px; font-size: 12px; color: var(--red); text-align: center; }
 #splashMsg.info { color: var(--text-dim); }
 
@@ -3941,6 +3946,9 @@ select.btn { padding: 6px 8px; }
        until the ticket expires or the tab closes. -->
   <div id="splashAdminBanner" hidden>ADMIN MODE</div>
   <div id="splashListeners" class="sub" style="margin-top:-4px;opacity:0.8"></div>
+  <!-- ★ V12 SAME NETWORK → GO DIRECT: shown only to a visitor on this server's own network whose browser did not
+       move there by itself (web/client/src/lanHop.ts) — a button that asks, or a plain link. -->
+  <div id="splashLan" class="sub" hidden></div>
   <!-- ★★ SEVERAL RADIOS ON ONE MACHINE. Populated only when there is more than one, so a
        single-radio server's landing page is exactly what it always was. See showSplashRadios(). -->
   <!-- ★ The aerial on a SINGLE-radio server, which has no picker to put it on. Multi-radio
