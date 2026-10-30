@@ -45,6 +45,9 @@ struct EngineConfig {
     // ★★ SCALE STAMPS (wf_stamps.h): the waterfall's rows on screen (WaterfallView shaderRows) and the fewest rows
     //    between two stamps (three label heights) — 0 = unknown (an older JS): defaults.
     int    stampViewRows = 0;
+    // ★★★ THE RING'S DEPTH (src/utils/wfRingSize.ts decides it in JS — the view's rows, capped by the device's RAM tier):
+    //     grow-only — the engine copies its history into the deeper ring (wf_ring_grow.h). 0 / ≤ the current = no change.
+    int    ringRows = 0;
     int    stampMinGapRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
 };
 
@@ -62,6 +65,7 @@ struct UiUpdate {
     double   glideDur = 100;
     double   moLo = 1, moHi = 0;   // the image's motion range (absolute frames; lo > hi = none) — uMoLo/uMoHi
     double   fanK = 1, fanC = 0;   // the fans' screen move since the last image the UI took (x_old = fanC + fanK·x)
+    int      ringRows = 1024;      // ★★ the ring depth of THIS image (the shader's uRows) — rides with the image
     // Spectrum
     uint32_t specGen = 0;          // changed → specTarget is new
     std::vector<float> specTarget; // the decimated trace target (specToSv)
@@ -84,7 +88,8 @@ public:
     using Clock     = double (*)();
 
     static constexpr int RING_W = 1024;
-    static constexpr int RING_ROWS = 1024;
+    static constexpr int RING_ROWS = 1024;   // the ring's STARTING (and the low RAM tier's only) depth — ringRows_ grows
+    static constexpr int RING_MAX_ROWS = 4096;   // the top RAM tier (wfRingSize.ts) — a sanity bound on what JS asks for
 
     SpectrumEngine(MakeImage makeImage, MakePath makePath, Release releaseImage, Release releasePath,
                    Clock clock = nullptr);
@@ -129,6 +134,12 @@ public:
     static SpectrumEngine* makeForTest(MakeImage, MakePath, Release, Release, Clock);
     /** Host tests: the layer ring (null until the first SPWB) and the full-capture state's floor offset. */
     const vibewf::LayerRing* layerForTest() const { return fan_.layer.get(); }
+    int ringRowsForTest() const { return ringRows_; }
+    /** Host tests: the bytes the next image is made from (the displayed ring + motion planes) and its geometry. */
+    const uint8_t* imageBytesForTest() { return vibewf::wfImageBytes(fan_, motion_, ring_.data(), RING_W, ringRows_); }
+    const vibewf::MotionState& motionForTest() const { return motion_; }
+    const vibewf::FanState& fanForTest() const { return fan_; }
+    double framesForTest() const { return frameCount_; }
     const vibewf::StampState& stampsForTest() const { return stamps_; }
     double wideOffForTest() const { return wide_ ? wide_->off : NAN; }
 
@@ -185,7 +196,10 @@ private:
     std::deque<Frame> jbQueue_;
     double jbArrivalMs_ = 150, jbLastArrival_ = 0, jbDueAt_ = -1;
     bool jbPrefill_ = true;
-    std::vector<uint8_t> ring_;           // RING_W × (RING_ROWS + MOTION_ROWS): the ring + the motion rows the image carries
+    std::vector<uint8_t> ring_;           // RING_W × (ringRows_ + motionImageRows): the ring + the motion rows the image carries
+    int ringRows_ = RING_ROWS;            // ★★ the ring's depth (engine thread) — grows only (growRingTo, wf_ring_grow.h)
+    int imgRows_ = RING_ROWS;             // the depth of the image just made (engine thread) → outRingRows_
+    void growRingTo(int rows);
     std::vector<uint8_t> rowBuf_;         // resample scratch
     vibewf::MotionState motion_{RING_ROWS, RING_W};   // each slot's placement + its move to the next row (wf_motion.h)
     vibewf::FanState fan_{RING_ROWS};     // the zoom fan: per-row maps + the displayed ring, made at the first zoom (wf_zoom_fan.h)
@@ -232,6 +246,7 @@ private:
     double imgK_ = 1, imgC_ = 0;                     // the fans' screen move taken with the image just made (engine thread)
     double imgMoLo_ = 1, imgMoHi_ = 0;               // …and its motion range
     double outK_ = 1, outC_ = 0, outMoLo_ = 1, outMoHi_ = 0;   // composed for the UI until it takes an image (mx_)
+    int outRingRows_ = RING_ROWS;                     // the depth of outImage_ (mx_)
     int outQuant_ = 1; double outAvgMs_ = 150, outRowRate_ = 0;
     uint32_t scrollGen_ = 0; bool glide_ = false; double glideDur_ = 100;
     uint32_t specGen_ = 0; std::vector<float> outSpec_; bool specHidden_ = false;

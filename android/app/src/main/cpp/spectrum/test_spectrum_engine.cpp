@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include <vector>
 
 using namespace vibespec;
@@ -732,6 +733,72 @@ int main() {
         std::printf("  scale stamps: %zu published over %u updates\n", got.size(), gens);
         if (lastImg) rlImage(lastImg);
         delete e;
+    }
+    // ── 8. ★★★ THE GROWING RING (wf_ring_grow.h; Stuart, 2026-10-30: "the history only goes when it genuinely goes off
+    //        screen"). Engine A runs at 1024 rows (it wraps), a zoom eases in, and JS asks for 2048 mid-ease; engine B was
+    //        2048 from the start. Fed the same frames, A's images after the growth equal B's for every frame A still held —
+    //        the stored/displayed rows, the motion planes (now two image rows each), the tap lookup — and A's image is the
+    //        new depth with ringRows riding on it. No ringRows in the config (the 1 GB tier, an older JS) = 1024 forever. ──
+    {
+        auto* A = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        auto* B = SpectrumEngine::makeForTest(mkImage, mkPath, rlImage, rlPath, clockFn);
+        EngineConfig ca; ca.width = 400; ca.wfTop = 120; ca.specH = 78; ca.targetRows = 0;
+        EngineConfig cb = ca; cb.ringRows = 2048;
+        A->setConfig(ca); B->setConfig(cb);
+        void* ia = nullptr; void* ib = nullptr; double ha = 0, hb = 0; int rowsA = 0, rowsB = 0;
+        auto step = [&](int f) {
+            const double bw = f < 1290 ? 2.048e6 : 1.024e6;                 // a zoom in at 1290 (eases over the growth)
+            const int bin = 300 + (f % 400);                                // a carrier walking across
+            for (auto* e : { A, B }) e->setView(100e6 + (f >= 600 && f < 900 ? (f - 600) * 400.0 : 0), bw);
+            auto b = frame(1024, bin);
+            for (auto* e : { A, B }) e->pushFrame(b.data(), 1024, 100e6 + (f >= 600 && f < 900 ? (f - 600) * 400.0 : 0), bw, NAN);
+            gClock += 50; A->testStep(gClock); B->testStep(gClock);
+            UiUpdate u;
+            if (A->pollUi(u)) { if (u.image) { if (ia) rlImage(ia); ia = u.image; ha = u.head; rowsA = u.ringRows; } if (u.peakPath) rlPath(u.peakPath); }
+            UiUpdate v;
+            if (B->pollUi(v)) { if (v.image) { if (ib) rlImage(ib); ib = v.image; hb = v.head; rowsB = v.ringRows; } if (v.peakPath) rlPath(v.peakPath); }
+        };
+        for (int f = 0; f < 1293; f++) step(f);
+        CHECK(A->ringRowsForTest() == 1024 && rowsA == 1024, "no ringRows asked: 1024 (%d, image %d)", A->ringRowsForTest(), rowsA);
+        CHECK(B->ringRowsForTest() == 2048 && rowsB == 2048, "asked 2048 from the start: 2048 (%d, image %d)", B->ringRowsForTest(), rowsB);
+        CHECK(A->framesForTest() > 1100, "A has wrapped its 1024-row ring (%g rows)", A->framesForTest());
+        CHECK(A->fanForTest().easeLeft > 0 && !A->fanForTest().disp.empty(), "the growth lands mid zoom-ease, a displayed ring live (%d)", A->fanForTest().easeLeft);
+        const double grownAt = A->framesForTest();
+        ca.ringRows = 2048; A->setConfig(ca);
+        for (int f = 1293; f < 1700; f++) step(f);
+        CHECK(A->ringRowsForTest() == 2048 && rowsA == 2048, "grown: 2048 rows, the image says so (%d, %d)", A->ringRowsForTest(), rowsA);
+        CHECK(((FakeImage*)ia)->px.size() == (size_t)1024 * (2048 + 8), "the grown image: 2048 rows + 8 motion rows (%zu)", ((FakeImage*)ia)->px.size());
+        CHECK(ha == hb && A->framesForTest() == B->framesForTest(), "both made the same rows (%g / %g)", ha, hb);
+        const uint8_t* pa = A->imageBytesForTest(); const uint8_t* pb = B->imageBytesForTest();
+        const double F = A->framesForTest();
+        int diffRows = 0, rows = 0, geoBad = 0;
+        for (double f = grownAt - 1024; f < F; f++) {
+            const size_t s = (size_t)std::fmod(f, 2048.0) * 1024;
+            if (std::memcmp(pa + s, pb + s, 1024) != 0) diffRows++;
+            rows++;
+            double la = 0, sa = 0, lb = 0, sb = 0;
+            const bool ga = A->rowGeom(f, la, sa), gb = B->rowGeom(f, lb, sb);
+            if (ga != gb || la != lb || sa != sb) geoBad++;
+        }
+        CHECK(diffRows == 0, "grown ≡ born at 2048: %d of %d displayed rows differ (every frame A held + every one since)", diffRows, rows);
+        CHECK(geoBad == 0, "tap-to-tune's row geometry identical for every held frame (%d differ)", geoBad);
+        CHECK(std::memcmp(pa + (size_t)2048 * 1024, pb + (size_t)2048 * 1024, (size_t)8 * 1024) == 0, "the motion planes are identical");
+        const auto& ma = A->motionForTest(); const auto& mb = B->motionForTest();
+        int mBad = 0;
+        for (double f = grownAt - 1024; f < F; f++) { const size_t s = (size_t)std::fmod(f, 2048.0); if (ma.h[s] != mb.h[s] || ma.g[s] != mb.g[s] || !(ma.startHz[s] == mb.startHz[s] || (std::isnan(ma.startHz[s]) && std::isnan(mb.startHz[s])))) mBad++; }
+        CHECK(mBad == 0 && ma.lo == mb.lo && ma.hi == mb.hi, "placement + motion per slot identical (%d differ; range %g..%g vs %g..%g)", mBad, ma.lo, ma.hi, mb.lo, mb.hi);
+        int moving = 0; for (double f = ma.lo; f <= ma.hi; f++) if ((size_t)std::fmod(f, 2048.0) >= 1024 && (ma.g[(size_t)std::fmod(f, 2048.0)] != 1 || ma.h[(size_t)std::fmod(f, 2048.0)] != 0)) moving++;
+        CHECK(moving > 0, "moving slots ≥ 1024 exist (the planes' second image row is exercised): %d", moving);
+        // never shrinks: a smaller ask is ignored
+        ca.ringRows = 1024; A->setConfig(ca); step(1700);
+        CHECK(A->ringRowsForTest() == 2048, "never shrinks (%d)", A->ringRowsForTest());
+        // a silly ask is bounded by the top tier
+        ca.ringRows = 100000; A->setConfig(ca); step(1701);
+        CHECK(A->ringRowsForTest() == SpectrumEngine::RING_MAX_ROWS, "bounded at %d (%d)", SpectrumEngine::RING_MAX_ROWS, A->ringRowsForTest());
+        std::printf("  growing ring: grown at row %g, %d held rows compared\n", grownAt, rows);
+        if (ia) rlImage(ia);
+        if (ib) rlImage(ib);
+        delete A; delete B;
     }
     std::printf("images made %d freed %d · paths made %d freed %d\n", gImagesMade, gImagesFreed, gPathsMade, gPathsFreed);
     CHECK(gImagesMade == gImagesFreed, "image leak: %d made, %d freed", gImagesMade, gImagesFreed);

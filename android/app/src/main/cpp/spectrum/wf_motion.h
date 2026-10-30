@@ -22,7 +22,15 @@
 
 namespace vibewf {
 
-constexpr int MOTION_ROWS = 4;          // image rows below the ring: h high/low byte, then g (log2) high/low byte
+constexpr int MOTION_ROWS = 4;          // motion PLANES below the ring: h high/low byte, then g (log2) high/low byte
+// ★★ A PLANE IS ceil(rows / n) IMAGE ROWS (2026-10-30, the growing ring — wf_ring_grow.h; the twin of wfRowPlace.ts
+//    motionImageRows / motionAt): a ring of up to n (1024) rows keeps the old layout (plane p = image row rows + p,
+//    column = slot); 2048 / 4096 rows wrap each plane onto 2 / 4 image rows (slot r at column r % n, row r / n).
+inline int motionImageRows(int rows, int n) { return MOTION_ROWS * std::max(1, (rows + n - 1) / n); }
+inline size_t motionAt(int rows, int n, int p, int r) {
+    const int k = std::max(1, (rows + n - 1) / n);
+    return (size_t)(p * k + r / n) * n + (size_t)(r % n);
+}
 constexpr int ZOOM_SCALE = 4096;        // log2(g) in 1/4096 of an octave
 constexpr int MOTION_SCALE = 64;        // 1/64 column
 constexpr int MOTION_ZERO = 32768;
@@ -43,13 +51,16 @@ struct MotionState {
     std::vector<double> startHz, hzPerCol;   // per slot (NaN start = unknown)
     std::vector<float> h;                    // per slot: display columns to the next newer row, at the centre
     std::vector<float> g;                    // per slot: the zoom to the next newer row (1 = none)
-    std::vector<uint8_t> bytes;              // MOTION_ROWS × n — the image's tail rows
+    std::vector<uint8_t> bytes;              // motionImageRows(rows, n) × n — the image's tail rows (motionAt)
     double lo = 1, hi = 0;                   // absolute frames whose pair moves; lo > hi = none
-    MotionState(int rows = 0, int n = 0) : startHz(rows, NAN), hzPerCol(rows, 0.0), h(rows, 0.f), g(rows, 1.f), bytes((size_t)MOTION_ROWS * n) {
-        for (int r = 0; r < n; r++) {
-            bytes[r] = MOTION_ZERO >> 8; bytes[n + r] = MOTION_ZERO & 255;
-            bytes[2 * n + r] = MOTION_ZERO >> 8; bytes[3 * n + r] = MOTION_ZERO & 255;
-        }
+    int rows = 0, n = 0;                     // the ring's slots and width the planes are laid out for
+    MotionState(int rows_ = 0, int n_ = 0) : startHz(rows_, NAN), hzPerCol(rows_, 0.0), h(rows_, 0.f), g(rows_, 1.f),
+        bytes(n_ > 0 ? (size_t)motionImageRows(rows_, n_) * n_ : 0), rows(rows_), n(n_) {
+        const size_t pl = bytes.size() / MOTION_ROWS;   // one plane
+        std::fill(bytes.begin(), bytes.begin() + pl, (uint8_t)(MOTION_ZERO >> 8));
+        std::fill(bytes.begin() + pl, bytes.begin() + 2 * pl, (uint8_t)(MOTION_ZERO & 255));
+        std::fill(bytes.begin() + 2 * pl, bytes.begin() + 3 * pl, (uint8_t)(MOTION_ZERO >> 8));
+        std::fill(bytes.begin() + 3 * pl, bytes.end(), (uint8_t)(MOTION_ZERO & 255));
     }
 };
 
@@ -93,10 +104,16 @@ inline void pairMotion(const MotionState& ms, const double* xfA, const double* x
 
 inline void setMotion(MotionState& ms, int slot, double g, double h, int n) {
     ms.h[slot] = (float)h; ms.g[slot] = (float)g;
-    const int v = encodeMotion(h);
-    ms.bytes[slot] = (uint8_t)(v >> 8); ms.bytes[n + slot] = (uint8_t)(v & 255);
-    const int z = encodeZoom(g);
-    ms.bytes[2 * n + slot] = (uint8_t)(z >> 8); ms.bytes[3 * n + slot] = (uint8_t)(z & 255);
+    const int v = encodeMotion(h), z = encodeZoom(g);
+    uint8_t* b = ms.bytes.data();
+    if (ms.rows <= n) {   // ≤ 1024 rows: the original layout
+        b[slot] = (uint8_t)(v >> 8); b[n + slot] = (uint8_t)(v & 255);
+        b[2 * n + slot] = (uint8_t)(z >> 8); b[3 * n + slot] = (uint8_t)(z & 255);
+        return;
+    }
+    const int R = ms.rows;
+    b[motionAt(R, n, 0, slot)] = (uint8_t)(v >> 8); b[motionAt(R, n, 1, slot)] = (uint8_t)(v & 255);
+    b[motionAt(R, n, 2, slot)] = (uint8_t)(z >> 8); b[motionAt(R, n, 3, slot)] = (uint8_t)(z & 255);
 }
 inline bool moves(double g, double h) { return g != 1 || h != 0; }
 
