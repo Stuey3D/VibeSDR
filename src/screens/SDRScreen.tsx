@@ -5143,6 +5143,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [rspAgcSet,   setRspAgcSet]   = useState(-30);
   const [rspLnaN,     setRspLnaN]     = useState(0);
   const [rspGainStuck, setRspGainStuck] = useState(false);
+  /* ★★★ THE AGC CHOICE'S LIVE FACTS (the radio panel's AGC row, 2026-10-30): is VibeAGC running (rspstat `vagc`) and at
+   *  what target (`vtgt`). The owner's choice itself is hwinfo radio.vagcMode, read by the panel from `radio`. */
+  const [rspVagcRunning, setRspVagcRunning] = useState<boolean | undefined>(undefined);
+  const [rspVagcTgt,     setRspVagcTgt]     = useState<number | undefined>(undefined);
   /* ★★★ THE WHOLE AGC START-UP CYCLE, not the six-step kick. The app has no initialising chip on
    *  the main screen at all — only "settling…" inside the hardware panel, which nobody is looking
    *  at when they first connect. Stuart, 2026-09-13: "maybe the VTS should scroll it too as in the
@@ -5183,6 +5187,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     setRspAutoNotch(r.autoNotch); setRspUserNotch(r.userNotch);
     setRspRfAgc(r.rfAgc); setRspAgcSet(r.agcSet);
     setRspLnaN(r.lnaN); setRspGainStuck(r.gainStuck);
+    if (r.vagc !== undefined) setRspVagcRunning(r.vagc === 1);
+    if (r.vtgt !== undefined) setRspVagcTgt(r.vtgt);
   };
   useEffect(() => {
     if (hwOpen && rspLatestRef.current) { applyRspStat(rspLatestRef.current); drawRspAgc(true); }
@@ -14990,6 +14996,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           rspLnaN={rspLnaN}
           rspGainStuck={rspGainStuck}
           rspAgcLine={rspAgcLine} rspAgcWarn={rspAgcWarn} rspAgcWhy={rspAgcWhy}
+          rspVagcRunning={rspVagcRunning} rspVagcTgt={rspVagcTgt}
+          onRspVagcMode={(m) => { (client.current as any)?.rspControl?.({ vagcmode: m }); }}
           onRspAgcRestart={() => { setRspGainStuck(false); (client.current as any)?.rspAgcRestart?.(); }}
           rspRfNotch={rspRfNotch}
           onRspRfNotch={(v) => { setRspRfNotch(v); (client.current as any)?.rspControl?.({ rfNotch: v }); }}

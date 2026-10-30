@@ -46,6 +46,8 @@ type Step = {
   /** ★ Text, or a function of the receiver — an Icom's zoom is the radio's span ladder, so the card says so. */
   body: string | (() => string);
 };
+/** ★ The radio menu has the SDRplay AGC row (renderRspVagc drew it: an RSP whose server reports the choice). */
+const onVagcRow = (): boolean => { const r = document.getElementById('rowRspVagc'); return !!r && !r.hidden; };
 /** ★ The server is serving an Icom transceiver (main.ts sets body.icom from hwinfo.radio.driver). */
 const onIcom = () => document.body.classList.contains('icom');
 /** ★★ V12 VFO A/B is offered here (main.ts abPaint shows the audio panel's STEREO row only where hwinfo says watch). */
@@ -102,6 +104,12 @@ const STEPS: Step[] = [
         + (onIcom()
           ? 'On this Icom those are the radio\u2019s own: mode, filter, span, ATT, preamp, AGC, RF gain, and its noise '
             + 'blanker, noise reduction and notch. VibeSDR only listens through it \u2014 it never transmits. '
+          : '')
+        /* ★ 2026-10-30: the SDRplay AGC row (main.ts renderRspVagc) — only where it is drawn, i.e. an RSP on a server
+         *  that reports the choice. Read from the page, so the card can never describe a row this receiver lacks. */
+        + (onVagcRow()
+          ? 'On this SDRplay RSP, RADIO\u2019s AGC row says which gain control runs it \u2014 VibeAGC, VibeSDR\u2019s own, or '
+            + 'the SDRplay\u2019s own \u2014 and once the protected settings are unlocked the owner can switch it there, live. '
           : '')
         + 'Its CONTROLS section sets the colours of these controls, and how see-through the panels are.',
   },

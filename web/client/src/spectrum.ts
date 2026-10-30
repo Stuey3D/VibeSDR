@@ -289,6 +289,9 @@ export interface RadioCaps {
   amNotchOn?: boolean;
   extRef?: boolean;         // has a 24 MHz reference output
   extRefOn?: boolean;
+  /** ★ VibeAGC (SDRplay): the owner's choice (0 auto · 1 VibeAGC · 2 the SDRplay's own) and what AUTO resolves to with
+   *  this server's driver — the radio menu's AGC row (2026-10-30). Absent from an older server: no row is drawn. */
+  vagcMode?: number; vagcAuto?: boolean;
   // ── Airspy HF+ ────────────────────────────────────────────────────────────
   attSteps?: number;      // count of attenuator positions (9 = 0..8)
   // ★ HackRF (EXPERIMENTAL): three MANUAL stages and no AGC. `amp`/`lna`/`vga`/`biast` are the

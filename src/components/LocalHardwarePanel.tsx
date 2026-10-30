@@ -17,6 +17,7 @@ import IcomSetupCard from './IcomSetupCard';
 import GainSlider, { gainSliderInk } from './GainSlider';
 import Slider from '@react-native-community/slider';
 import type { RadioCaps } from '../services/UberSDRClient';
+import { VAGC_KEYS, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText } from '../services/rspAgcReadout';
 import {
   type IcomRadio, type IcomControlFields, icomMayTune, icomMayRf, icomFollowNote, icomModeLabel,
   icomFilterWidths, fmtWidth, fmtSpan, fmtAtt, fmtPreamp, rfGainPct, icomBanner,
@@ -246,6 +247,10 @@ export interface LocalHardwarePanelProps {
    *  VibeAGC's state and why, the ADC peak against its target, gain writes in the last minute; or which AGC runs
    *  instead. `rspAgcWarn` = it has stuck (latched), `rspAgcWhy` the reason in words. */
   rspAgcLine?: string; rspAgcWarn?: boolean; rspAgcWhy?: string;
+  /** ★★★ WHICH AGC (2026-10-30): VibeAGC running now (rspstat `vagc`), its real target (`vtgt`), and the owner's switch —
+   *  rsp_control `vagcmode`. The CHOICE is read from `radio.vagcMode` / `radio.vagcAuto` (hwinfo). Same words as the web
+   *  client's AGC row (src/services/rspAgcReadout.ts). */
+  rspVagcRunning?: boolean; rspVagcTgt?: number; onRspVagcMode?: (mode: number) => void;
   rspRfNotch?: boolean;  onRspRfNotch?: (on: boolean) => void;
   /* ★ The RSP sweep (GitHub #29, 2026-09-24). The VALUES are read from `radio` — the caps the
    *  radio itself publishes — rather than mirrored into props here, so the panel always shows the
@@ -744,6 +749,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   + 'free there.'
                 : 'The gain is managed by this receiver: its owner has fixed the automatic gain '
                   + 'control on, so it is the same for everybody listening.'}
+              {/* ★ And WHICH automatic gain, on an SDRplay — the owner's AGC choice, read-only (2026-10-30). */}
+              {p.radio?.driver === 'sdrplay' && typeof p.radio?.vagcMode === 'number'
+                ? `\nAGC: ${vagcChoiceText(p.radio.vagcMode, !!p.radio.vagcAuto)}.` : ''}
             </Text>
           )}
           {/* ★★★ AND THIS IS HOW THE GAIN GETS SET IN THE FIRST PLACE. Stuart: "all controls should
@@ -902,6 +910,30 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   {p.rspAgcLine}{p.rspAgcWarn && p.rspAgcWhy ? `\n${p.rspAgcWhy}` : ''}
                 </Text>
               )}
+              {/* ★★★ WHICH AGC RUNS THIS RADIO — the owner's choice, live (2026-10-30). Stuart, on his unlocked RSP1A
+                  with VibeAGC running: "i assume this isnt vibeagc" / "no option for it here either" — it was only on
+                  the setup page. AUTO = VibeAGC with the OpenRSP driver, the SDRplay's own with the official API; the
+                  note says which. Owner-only, the bias-T gate (canProtected; the server's adminGate refuses anyone
+                  else) — a listener sees the choice in words. Drawn only when the server reports radio.vagcMode. */}
+              {typeof p.radio?.vagcMode === 'number' && (canProtected && p.onRspVagcMode ? (
+                <>
+                  <Text style={styles.section}>AGC</Text>
+                  <Seg slot={slot} options={VAGC_KEYS.map((k) => k.mode)} value={p.radio.vagcMode}
+                       onChange={(m) => p.onRspVagcMode?.(m)}
+                       fmt={(m) => VAGC_KEYS.find((k) => k.mode === m)?.label ?? String(m)} />
+                  <Text style={styles.note}>
+                    {vagcAutoNote(p.radio.vagcMode, !!p.radio.vagcAuto)
+                      ? `AUTO ${vagcAutoNote(p.radio.vagcMode, !!p.radio.vagcAuto)}. ` : ''}
+                    VibeAGC is VibeSDR's own gain control for both stages; SDRPLAY is the radio's own IF AGC, with
+                    RF AGC stepping the LNA. Switches live, for everybody listening.
+                  </Text>
+                </>
+              ) : (
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>AGC</Text>
+                  <Text style={styles.stepVal}>{vagcChoiceText(p.radio.vagcMode, !!p.radio.vagcAuto)}</Text>
+                </View>
+              ))}
               {/* ★ The radio raises OVERLOAD itself when its ADC clips — no inference from the
                   spectrum, unlike a dongle. It is also the thing that destroys RDS, so it is
                   worth shouting about rather than burying. */}
@@ -925,7 +957,11 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <Text style={styles.note}>0 = most RF gain. Higher states attenuate the front end.</Text>
 
               <View style={styles.toggleRow}>
-                <Text style={styles.toggleLabel}>IF AGC</Text>
+                {/* ★ "IF AGC · VibeAGC" — which loop holds the IF while it is automatic (2026-10-30). */}
+                <Text style={styles.toggleLabel}>
+                  IF AGC{p.rspIfAgc !== false && (p.rspVagcRunning !== undefined || typeof p.radio?.vagcMode === 'number')
+                    ? ` · ${vagcIfOwner(!!p.rspVagcRunning)}` : ''}
+                </Text>
                 <Switch value={p.rspIfAgc !== false} onValueChange={(v) => p.onRspIfAgc?.(v)}
                   trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.rspIfAgc !== false ? K.gold : '#ccc'} />
               </View>
@@ -939,7 +975,9 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               {p.onRspRfAgc && (
                 <>
                   <View style={styles.toggleRow}>
-                    <Text style={styles.toggleLabel}>RF AGC</Text>
+                    <Text style={styles.toggleLabel}>
+                      RF AGC{p.rspIfAgc !== false && p.rspRfAgc !== false && p.rspVagcRunning ? ' · VibeAGC' : ''}
+                    </Text>
                     <Switch value={p.rspRfAgc !== false} onValueChange={(v) => p.onRspRfAgc?.(v)}
                       trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.rspRfAgc !== false ? K.gold : '#ccc'} />
                   </View>
@@ -961,7 +999,16 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                     gain, −20 aims loud and applies more. Easy to get backwards — it has been.
                   ★ The server MOVES it on its own (DAB drops it to −40 for OFDM headroom), so the
                     value shown is the live one from rspstat, never a remembered slider position. */}
-              {p.onRspAgcSet && p.rspIfAgc !== false && (
+              {/* ★★★ UNDER VibeAGC: ITS OWN TARGET, READ-ONLY (2026-10-30). The slider is the SDRplay AGC's set point,
+                  which drives a loop VibeAGC keeps switched off; VibeAGC's targets are per band, tuned on air, and have
+                  no setter — so the row says what it holds and who sets it, rather than offering a dead slider. */}
+              {p.rspIfAgc !== false && p.rspVagcRunning && (
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>AGC target</Text>
+                  <Text style={styles.stepVal}>{vagcTargetText(p.rspVagcTgt)}</Text>
+                </View>
+              )}
+              {p.onRspAgcSet && p.rspIfAgc !== false && !p.rspVagcRunning && (
                 <>
                   <Text style={styles.section}>AGC TARGET</Text>
                   <View style={styles.stepperRow}>

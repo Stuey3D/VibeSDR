@@ -3,6 +3,7 @@
 // ★★ The point of the latch: NO FLICKER on a healthy radio (rsp_frozen_readout_warning_design), amber on a rail held
 //    10 s and on a hand-back, held once raised, cleared only after the cause has been gone a while.
 import { RspAgcWatch, rspAgcCause, rspAgcLine, rspAgcStatus, rspAgcSampleOf, HOLD_MS, CLEAR_MS,
+         vagcResolved, vagcAutoNote, vagcChoiceText, vagcIfOwner, vagcTargetText, VAGC_KEYS,
          type RspAgcSample } from '../src/services/rspAgcReadout.ts';
 
 let fails = 0;
@@ -106,5 +107,18 @@ const healthy = (t: number): RspAgcSample => ({
 // 10. The floor rail.
 ok(rspAgcCause({ ...healthy(0), ifgr: 20, vrail: -12 })?.[0] === 'IF FLOOR', 'IF at its floor 12 s with RF to add: amber');
 ok(CLEAR_MS < HOLD_MS, 'clear dwell shorter than the hold');
+
+// 11. The radio menu's AGC choice (2026-10-30): AUTO resolves by driver, and every row says which AGC it is.
+ok(VAGC_KEYS.map((k) => k.label).join(' · ') === 'AUTO · VIBEAGC · SDRPLAY', 'three keys: AUTO · VIBEAGC · SDRPLAY');
+ok(vagcResolved(0, true) && !vagcResolved(0, false) && vagcResolved(1, false) && !vagcResolved(2, true),
+   'AUTO = VibeAGC with OpenRSP, the SDRplay\'s own with the official API; ON / SDRPLAY regardless');
+ok(vagcAutoNote(0, true) === '→ VibeAGC (OpenRSP driver)' && vagcAutoNote(0, false) === "→ SDRplay's own (official API)"
+   && vagcAutoNote(1, true) === '' && vagcAutoNote(2, true) === '', 'the owner\'s row says what AUTO resolved to, only under AUTO');
+ok(vagcChoiceText(0, true) === 'VibeAGC (auto)' && vagcChoiceText(2, true) === "SDRplay's own" && vagcChoiceText(1, false) === 'VibeAGC',
+   'a listener\'s read-only row names the choice');
+ok(vagcIfOwner(true) === 'VibeAGC' && vagcIfOwner(false) === 'SDRplay', 'IF AGC row: VibeAGC while it runs, SDRplay otherwise');
+ok(vagcTargetText(-20) === '−20 dBFS · set by VibeAGC' && vagcTargetText(undefined) === 'set by VibeAGC'
+   && vagcTargetText(-20, true) === '−20 dBFS · VibeAGC',
+   'AGC TARGET under VibeAGC: its real target, read-only');
 
 process.exit(fails ? 1 : 0);
