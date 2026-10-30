@@ -51,6 +51,9 @@ import { spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
 import { TUNE_EASE_MIN_FRAC } from '../../../src/utils/wfRowPlace.ts';
 import { WIDE_TEX, wideExtent, wideRowInto, rowInCapture, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
 import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type RowView } from './wfGlide';
+import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRow, stampPrune, stampReset, stampSettleRows, stampSweepRows, stampsShown, stampTicks, stampColour }
+  from '../../../src/utils/wfStamps.ts';
+import { tickStep, fmtTick } from './freqScale';
 
 export interface WaterfallOpts {
   /** Fraction of the canvas given to the spectrum trace (0 = waterfall only). */
@@ -212,6 +215,11 @@ export class Waterfall {
   private rowImgC: ImageData | null = null;
   /** ★ GLIDE (wfGlide.ts): scratch for the in-between rows. */
   private glideScratch = newGlideScratch(1024);
+  // ★★ SCALE STAMPS (src/utils/wfStamps.ts — Stuart, 2026-10-30, #57): the old scale laid on the history when a zoom or a
+  //    tune lands. rowSeq counts every row drawn (the newest is rowSeq); a stamp sits rowSeq − its row device rows down.
+  private stamps = newStampState();
+  private rowSeq = 0;
+  private stampTickCache = new Map<number, { W: number; lo: number; span: number; dpr: number; ticks: { x: number; label: string | null; w: number }[] }>();
   private curRow: Uint8Array | null = null;    // newest received row
   private blendRow: Uint8Array | null = null;  // scratch for the synthesised line
   /** ★ Arrival gaps, display rate, cadence and the per-pair row budget — all in wfPacing.ts's
@@ -447,6 +455,15 @@ export class Waterfall {
         this.rowImgC = this.wfCCtx.createImageData(WIDE_TEX, 1);
       }
     }
+    // ★ The scale stamps follow their rows into the re-heighted buffer (row j ← reading row j·oh/wfH), as the maps do.
+    if (old && old.height > 0) {
+      const oh = old.height;
+      for (const st of this.stamps.stamps) {
+        st.frame = this.rowSeq - Math.round((this.rowSeq - st.frame) * wfH / oh);
+        st.born = this.rowSeq - Math.round((this.rowSeq - st.born) * wfH / oh);
+      }
+      this.stamps.refFrame = Math.min(this.stamps.refFrame, this.rowSeq);
+    } else stampReset(this.stamps);
     this.head = 0;
     // drawRow() bails without this, so the waterfall silently never draws.
     this.rowImg = this.ctx.createImageData(w, 1);
@@ -471,6 +488,7 @@ export class Waterfall {
     this.xfA.fill(1); this.xfB.fill(0);   // a blank ring has nothing to fan
     this.xfX.fill(0); this.xfS.fill(0);
     this.ease = newRowEase(); this.outRow = null;   // ★ the next row starts afresh: nothing below it to join to or ease from
+    stampReset(this.stamps); this.stampTickCache.clear();   // ★ no history, nothing to label
     this.wide = null; this.wFloorP = null; this.wCellP = null;   // ★ a jump: the old full-capture row is another band
     if (this.wfCCtx && this.wfC) { this.wfCCtx.fillStyle = '#000'; this.wfCCtx.fillRect(0, 0, this.wfC.width, this.wfC.height); }
   }
@@ -829,7 +847,7 @@ export class Waterfall {
     const v = rowView(this.ease, sLo, sSpan, this.pacer.rowPx, this.rv, this.pacer.easeRowRate());
     const cLo = v.lo, cSpan = v.span;
     this.pacer.easing = this.ease.eN > 0;   // ★ the boost holds until the ease has landed
-    if (v.jumpHz) this._jumpHistory(v.jumpHz, cSpan);
+    if (v.jumpHz) { this._jumpHistory(v.jumpHz, cSpan); stampJump(this.stamps, v.jumpHz); }
     // ★★ THE JOIN (wfGlide.ts joinedRowAt — the app's shader motion taps): a row drawn somewhere other than the row below
     //    is drawn across its footprint toward it, so the trail is ONE solid line through the ease, not dashes. A steady row
     //    (the same view as the row below) is the frame exactly; a jump is not joined (the history moved instead).
@@ -844,6 +862,12 @@ export class Waterfall {
     this._noteRowView(cLo, cSpan);
     if (!this.outRow || this.outRow.length !== n) this.outRow = new Uint8Array(n);
     this.outRow.set(blend); this.outLo = cLo; this.outSpan = cSpan;
+    // ★★ The scale stamps watch every row as DRAWN (the eased ones too): one stamp of the old scale once a move lands.
+    this.rowSeq++;
+    this.stamps.minGapRows = STAMP_MIN_GAP_LABELS * Math.round(15 * renderDpr());   // ★ three label heights, in device rows
+    this.stamps.sweepRows = stampSweepRows(this.pacer.easeRowRate(), wfH);   // ★ a long tune/pan sweep: now and then
+    stampNoteRow(this.stamps, this.rowSeq, cLo, cSpan, stampSettleRows(this.pacer.easeRowRate()));
+    if (this.stamps.stamps.length) stampPrune(this.stamps, this.rowSeq, wfH + 64);
 
     // ★ NO SELF-COPY. This used to scroll with `wfCtx.drawImage(this.wf, 0, 1)` — drawing the
     // waterfall canvas onto ITSELF one pixel down, every frame. Safari optimises that; Chromium
@@ -1116,11 +1140,68 @@ export class Waterfall {
       }
     }
 
+    if (this.stamps.stamps.length) this._drawStamps(ctx, W, specH, wfH);
+
     if (specH > 4 && this.spec && this._showSpec) {
       this._drawSpec(ctx, W, specH);
       this.onDrawAxis?.(ctx, W, specH);   // dB axis, drawn by main (owns the labels)
     }
     this._drawVfo(ctx, W, H);
+  }
+
+  /** ★★ THE SCALE STAMPS (src/utils/wfStamps.ts; Stuart, 2026-10-30, #57: "zoom in and a stamp of the previous frequency
+   *  scale as it was is added onto the old waterfall position and it gently drops off the bottom of the screen, same with
+   *  tuning too if needed"). Each is a thin ruler of the scale its rows were drawn at — the live scale's own step and
+   *  units (freqScale.ts), in the user's VFO colour with a dark shadow (stampColour — white if that clashes with the
+   *  palette; Stuart: "an opposite colour to the waterfall … i'd simply use orange like my VFO") — on a faint dark band, laid on the top of those rows: rowSeq − its row device rows down,
+   *  so it scrolls with them exactly. It fades in over a few rows and out over the bottom of the waterfall. An overlay
+   *  only: nothing in the ring is touched. A few fillRect/fillText calls a stamp; nothing at all when there are none. */
+  private _drawStamps(ctx: CanvasRenderingContext2D, W: number, top: number, wfH: number) {
+    const dpr = renderDpr();
+    const band = Math.round(15 * dpr);
+    const shown = stampsShown(this.stamps.stamps, 1, band);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, top, W, wfH); ctx.clip();
+    ctx.font = `${10 * dpr}px ui-monospace, Menlo, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const hair = Math.max(1, Math.round(dpr * 0.75)), tickW = Math.max(1, Math.round(dpr)), tickH = Math.round(4 * dpr);
+    const live = new Set<number>();
+    const col = stampColour(this.vfoLiveColor || this.vfoColor, this.lut);
+    ctx.shadowColor = 'rgba(0,0,0,0.95)';
+    ctx.shadowOffsetX = 0; ctx.shadowOffsetY = Math.max(1, Math.round(dpr));
+    ctx.shadowBlur = NO_GLOW ? 0 : Math.round(2 * dpr);
+    for (const s of shown) {
+      const yr = this.rowSeq - s.frame;                 // device rows from the top of the waterfall to the stamp's rows
+      const a = stampAlpha(yr, band, wfH, this.rowSeq - s.born);
+      if (!(a > 0.01)) continue;
+      live.add(s.id);
+      let c = this.stampTickCache.get(s.id);
+      if (!c || c.W !== W || c.lo !== s.lo || c.span !== s.span || c.dpr !== dpr) {
+        const t = stampTicks(s.lo, s.span, W, (sp) => tickStep(sp, 8), fmtTick, 56 * dpr);
+        c = { W, lo: s.lo, span: s.span, dpr, ticks: t.map(k => ({ ...k, w: k.label ? ctx.measureText(k.label).width : 0 })) };
+        this.stampTickCache.set(s.id, c);
+      }
+      const y = top + yr;
+      ctx.globalAlpha = a;
+      ctx.shadowColor = 'transparent';
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, y, W, band);
+      ctx.shadowColor = 'rgba(0,0,0,0.95)';
+      ctx.fillStyle = rgba(col, 0.55);                 // the line where the scale changed
+      ctx.fillRect(0, y, W, hair);
+      for (const k of c.ticks) {
+        ctx.fillStyle = rgba(col, 0.85);
+        ctx.fillRect(Math.round(k.x - tickW / 2), y, tickW, tickH);
+        if (!k.label) continue;
+        // ★ kept whole at the edges (the live scale's end labels are cut; a stamp's would read as a glitch)
+        const x = Math.max(k.w / 2 + 2, Math.min(W - k.w / 2 - 2, k.x));
+        ctx.fillStyle = rgba(col, 0.95);
+        ctx.fillText(k.label, x, y + tickH + Math.round(dpr));
+      }
+    }
+    ctx.restore();
+    for (const id of this.stampTickCache.keys()) if (!live.has(id) && !this.stamps.stamps.some(s => s.id === id)) this.stampTickCache.delete(id);
   }
 
   /** Trace blended prev->cur by elapsed time. Runs at the display's refresh rate,

@@ -27,6 +27,7 @@ import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
 import { Waterfall, setRenderScale, renderDpr } from './waterfall';
 import { FrameClock, renderEvery } from './wfPacing';
+import { tickStep, fmtTick } from './freqScale';
 import { resolveAuth, resolveAdminOverride, withAuth, fetchAuthChallenge, vibeAuthToken, readAuthUrl, setReadAuth,
          type AuthState } from './auth';
 import { COLORMAP_NAMES } from '../../../src/assets/colormapUtils';
@@ -3241,25 +3242,7 @@ function renderFrame(frameTs: number) {
 
 // ── Frequency scale ──────────────────────────────────────────────────────────
 
-/** Pick a tick step that yields ~6-10 labels across the span, from a 1/2/5 ladder. */
-function tickStep(spanHz: number, targetTicks: number): number {
-  const raw = spanHz / targetTicks;
-  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
-  for (const m of [1, 2, 5, 10]) if (raw <= mag * m) return mag * m;
-  return mag * 10;
-}
-
-/** Label a frequency at a resolution matched to the tick step — the units must
- *  SWITCH with the span, not just the decimal places, or a wide span overflows
- *  the label and a narrow one shows nothing changing. */
-function fmtTick(hz: number, step: number): string {
-  if (step >= 1e6) return (hz / 1e6).toFixed(0) + 'M';
-  if (step >= 1e5) return (hz / 1e6).toFixed(1) + 'M';
-  if (step >= 1e4) return (hz / 1e6).toFixed(2) + 'M';
-  if (step >= 1e3) return (hz / 1e6).toFixed(3) + 'M';
-  if (step >= 100) return (hz / 1e3).toFixed(1) + 'k';
-  return (hz / 1e3).toFixed(2) + 'k';
-}
+// tickStep / fmtTick live in freqScale.ts — shared with the waterfall's scale stamps.
 
 function drawScale() {
   const c = $<HTMLCanvasElement>('scale');
