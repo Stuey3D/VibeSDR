@@ -51,6 +51,18 @@ enum class RfStepVerdict {
 constexpr double kMinJudgeRungDb   = 5.0;   // smaller rungs hide in the peak's own wander
 constexpr double kRungShareDb      = 0.5;   // the peak must carry at least half the rung
 constexpr double kStarvedBelowSetDb = 3.0;  // 20-rail exemption: peak this far under the set point
+/* ★★★ THE SWAMPED RAIL — the 59-rail twin of the starved exemption (2026-10-30, Lenovo RSP1A, Band II).
+ *     Our peak is the largest |I|,|Q| in a 0.1 s window, so with a LIVE IF AGC holding its set point it
+ *     reads ~10 dB OVER that set point (measured in DAB 09-15; ~-20 dBFS against -30). A peak 16 dB or
+ *     more over the set point means the IF is NOT holding its target — it has run out of reduction —
+ *     and that is a fact about the samples, which the API's event path cannot freeze. A live AGC behind
+ *     a frozen readout would have pulled the level back to ~set point + 10, so this cannot be confused
+ *     with the 09-13 freeze (peaks -13.3 .. -20.6 there; the first only 0.3 dB inside this line). */
+constexpr double kSwampedOverSetDb  = 16.0;
+/* ★ The held loop's "more RF" line: the peak this far UNDER the set point is a front end with nothing to
+ *   give the IF — the converter is nearly idle. Deliberately far (a live AGC sits ~20 dB above it), so a
+ *   frozen readout over a working IF never gets a rung from here: that walk is the 10-16 overload. */
+constexpr double kStarvedUnderSetDb = 10.0;
 
 struct RfStepEvidence {
     int    grAtStep      = -1;       // the reduction we stepped ON (rounded window mean)
@@ -65,6 +77,14 @@ struct RfStepEvidence {
 
 inline bool rfReadingAtRail(double grMean) { return grMean <= 20.5 || grMean >= 58.5; }
 
+/** Our own samples say the IF has run out of reduction — see kSwampedOverSetDb. */
+inline bool peakSwamped(double peakDbfs, int setPointDbfs) {
+    return std::isfinite(peakDbfs) && peakDbfs > setPointDbfs + kSwampedOverSetDb;
+}
+inline bool peakStarved(double peakDbfs, int setPointDbfs) {
+    return std::isfinite(peakDbfs) && peakDbfs > -98.0 && peakDbfs < setPointDbfs - kStarvedUnderSetDb;
+}
+
 inline RfStepVerdict judgeRfStep(const RfStepEvidence& e) {
     const bool haveG    = e.structNow > -998.0f && e.structAtStep > -998.0f;
     const bool wrLanded = haveG && std::fabs(e.structNow - e.structAtStep) > 0.05f;
@@ -77,6 +97,15 @@ inline RfStepVerdict judgeRfStep(const RfStepEvidence& e) {
     if (maxGainRail && std::isfinite(e.peakNow) && e.peakNow < e.setPointDbfs - kStarvedBelowSetDb)
         return RfStepVerdict::Answered;
 
+    /* ★★★ A SWAMPED MIN-GAIN RAIL STANDS — the exact mirror of the starved one above. 2026-10-30 16:02, RSP1A
+     *     moving to Band II at LNA 0: IF 59 through 0 -> 1 -> 2, our peak -8.1 -> -5.7 -> -8.6 dBFS against a
+     *     -30 set point. The rungs were 6.3 dB, and half of one (3.15) is inside what this peak does on its
+     *     own on a full FM band — a compressing front end, a dozen carriers beating — so "+2.4, -2.7" was
+     *     read as "absorbed" and the loop HELD, then undid both steps back to FULL RF gain and stayed there
+     *     with the IF pinned and the station overloading. The level 20 dB over the set point already said
+     *     what the rung test was straining to: the IF cannot get down to its target, so the 59 is real. */
+    if (!maxGainRail && peakSwamped(e.peakNow, e.setPointDbfs)) return RfStepVerdict::Answered;
+
     const double rung = haveG ? std::fabs((double)e.structNow - (double)e.structAtStep) : NAN;
     if (!std::isfinite(rung) || rung < kMinJudgeRungDb || e.dir == 0 ||
         !std::isfinite(e.peakAtStep) || !std::isfinite(e.peakNow))
@@ -84,6 +113,28 @@ inline RfStepVerdict judgeRfStep(const RfStepEvidence& e) {
     // More RF gain (dir -1) must raise the peak; less (dir +1) must lower it.
     const double moved = (e.peakNow - e.peakAtStep) * (e.dir < 0 ? 1.0 : -1.0);
     return moved >= rung * kRungShareDb ? RfStepVerdict::Answered : RfStepVerdict::Frozen;
+}
+
+/** ★★★ WHERE A HOLD MAY SEND THE LNA BACK TO. The hold returns to the state the blind walk began in
+ *  (10-16: it had walked five rungs INTO gain on a frozen 20, so going back was going to less gain — safe).
+ *  ✗ Never back to MORE RF gain into a level our own samples call swamped or the API calls overloaded:
+ *    2026-10-30 that undo was 2 -> 0, full RF gain on Band II, and the loop then held there for good. */
+inline int holdUndoTarget(int cur, int walkFrom, double peakDbfs, int setPointDbfs, bool overloaded) {
+    if (walkFrom < 0 || walkFrom == cur) return cur;
+    if (walkFrom < cur && (overloaded || peakSwamped(peakDbfs, setPointDbfs))) return cur;
+    return walkFrom;
+}
+
+/** ★★★ A HELD LOOP STEERS BY WHAT WE MEASURE. The hold exists because the IF readout cannot be steered by;
+ *  it was never a reason to stop steering altogether — "holding blind at full" is how 10-30 ended. Our ADC
+ *  peak never comes from the API's event path, so: swamped (or overloaded) = one rung LESS RF gain;
+ *  starved = one rung MORE; anywhere between = leave it. A live IF AGC behind a dead readout keeps the
+ *  level near set point + 10 dB, between the two lines, so this cannot repeat the 09-13 / 10-16 walks.
+ *  +1 = LNA state up (less RF gain), -1 = down (more), 0 = hold. */
+inline int heldSteerDir(double peakDbfs, int setPointDbfs, bool overloaded) {
+    if (overloaded || peakSwamped(peakDbfs, setPointDbfs)) return +1;
+    if (peakStarved(peakDbfs, setPointDbfs)) return -1;
+    return 0;
 }
 
 }  // namespace vibersp

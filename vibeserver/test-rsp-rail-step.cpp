@@ -84,6 +84,20 @@ int main() {
            "59 'rail', 21 dB taken out, peak fell 1.8 dB — frozen (09-13 walked six rungs on this)");
     }
 
+    printf("\n2026-10-30 16:02, replayed: Band II at LNA 0, a REAL 59 rail with the peak 20 dB over the set point\n");
+    {
+        // System gain 51.5 -> 45.3 -> 39.0 (the 6.3 dB rungs); peaks from the journal.
+        ok(judgeRfStep(ev(59, 59.0, 51.5f, 45.2f, -8.1, -5.7, +1)) == RfStepVerdict::Answered,
+           "0 -> 1: the peak went UP 2.4 dB, but at -5.7 dBFS the IF is plainly not holding -30 — a real rail");
+        ok(judgeRfStep(ev(59, 59.0, 45.3f, 39.0f, -5.9, -8.6, +1)) == RfStepVerdict::Answered,
+           "1 -> 2: -2.7 dB on a 6.3 dB rung, at -8.6 dBFS — still a real rail (it HELD and undid to 0 on air)");
+        ok(holdUndoTarget(2, 0, -8.4, -30, false) == 2,
+           "and a hold would never undo 2 -> 0 (more RF gain) into a -8.4 dBFS peak");
+        ok(heldSteerDir(-8.4, -30, false) == +1, "a held loop at -8.4 dBFS sheds RF gain by our own peak");
+        ok(heldSteerDir(-20.0, -30, false) == 0, "and leaves a level at set point + 10 alone");
+        ok(heldSteerDir(-22.0, -30, true) == +1, "a real overload sheds whatever the peak says");
+    }
+
     printf("\nWhat the 09-13 test already did is unchanged\n");
     {
         ok(judgeRfStep(ev(45, 52.0, 30.0f, 36.0f, -25.0, -25.0, -1)) == RfStepVerdict::Answered,
