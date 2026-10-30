@@ -1388,6 +1388,8 @@ export abstract class VibeServerWsClient {
    * Data: "the interpolation can hide 5; 3.3 is reserved for connection issues
    * only"). Powersave is chosen behaviour, so it gets the same floor — and it can
    * never make things worse than the rung it replaces.
+   * ★ V12 (2026-10-30): the Waterfall Speed MINIMUM is a 2 fps choice, below this floor — the min() with the rung keeps
+   *   it at 2 (powersave never raises a rate the listener lowered).
    */
   setPowersaveRate() {
     const target = Math.min(POWERSAVE_FPS, this.ladderFps > 0 ? this.ladderFps : POWERSAVE_FPS);
@@ -2078,7 +2080,7 @@ export abstract class VibeServerWsClient {
       // interpolation can hide 5 but not 3.3.
       lowDataRung: 2,
       mode,
-      userCapFps: this._wfLinkCap,  // ★ V12 MINIMUM / ECO waterfall speed — a 5 / 10 fps ceiling (src/assets/wfSpeedCap.ts)
+      userCapFps: this._wfLinkCap,  // ★ V12 MINIMUM / LOW / ECO waterfall speed — a 2 / 5 / 10 fps ceiling (src/assets/wfSpeedCap.ts)
       apply: (rung, fps) => {
         if (this.isVibe) {
           this.ladderFps = fps;
@@ -2168,7 +2170,7 @@ export abstract class VibeServerWsClient {
   private _linkMode: LinkMode = 'adaptive';
   get linkMode(): LinkMode { return this._linkMode; }
   set linkMode(m: LinkMode) { this._linkMode = m; this.link?.setMode(m); }
-  /** ★ V12 MINIMUM / ECO waterfall speed (src/assets/wfSpeedCap.ts): a ceiling in fps (5 / 10; 0 = none) on the link
+  /** ★ V12 MINIMUM / LOW / ECO waterfall speed (src/assets/wfSpeedCap.ts): a ceiling in fps (2 / 5 / 10; 0 = none) on the link
    *  controller, so the SERVER sends fewer frames. A setter for the same reason as linkMode — it reconfigures the
    *  running controller live. */
   private _wfLinkCap = 0;

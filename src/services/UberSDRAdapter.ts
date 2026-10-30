@@ -158,7 +158,7 @@ export class UberSDRAdapter implements SDRBackend {
    *  default). The client's own setter reconfigures the running LinkManager live. */
   get linkMode(): UberSDRClient['linkMode'] { return this.client.linkMode; }
   set linkMode(m: UberSDRClient['linkMode']) { this.client.linkMode = m; }
-  /** ★ V12 MINIMUM / ECO waterfall speed (fps ceiling) — FORWARD, the same trap as linkMode: SDRScreen sets it here. */
+  /** ★ V12 MINIMUM / LOW / ECO waterfall speed (fps ceiling) — FORWARD, the same trap as linkMode: SDRScreen sets it here. */
   get wfLinkCap(): number { return this.client.wfLinkCap; }
   set wfLinkCap(fps: number) { this.client.wfLinkCap = fps; }
   get wfNativeFps(): number { return this.client.wfNativeFps; }
