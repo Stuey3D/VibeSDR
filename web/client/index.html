@@ -4929,8 +4929,8 @@ select.btn { padding: 6px 8px; }
     </div>
   </div>
   <div class="rowNote" id="wfScrollNote">Minimum (2 rows a second) is the slowest — for spotting an intermittent signal in
-    the history. Minimum, Low (5) and Eco (10) save data by asking the server for less — no effect when it already sends
-    that little. Eco — 10 rows a second: asks a faster server for less, fills in a slower one. Every speed but Native runs
+    the history. Minimum, Low (5) and Eco (10) also set how much the server sends — they save data by asking it for less, with
+    no effect when it already sends that little; the other speeds take the server's own rate. Eco — 10 rows a second: asks a faster server for less, fills in a slower one. Every speed but Native runs
     at a rate that divides the screen's refresh (2, 5, 10, 15, 20, 30 or 60 rows a second), filling in rows or combining
     them evenly, keeping short bursts. Native is the server's own rate, every row a real frame. Default
     and Smooth add interpolated rows for a smoother scroll.</div>
@@ -4944,20 +4944,9 @@ select.btn { padding: 6px 8px; }
   </div>
   <div class="rowNote" id="wfSpeedNote">How fast the waterfall scrolls on screen. Higher scrolls smoother, but paired with
     a low data rate it fills the gaps by interpolation — smooth motion, less real detail.</div>
-  <!-- WATERFALL DATA RATE — real frames/sec from the SERVER. Auto = adaptive link management (brings in
-       as much as the link carries, up to the chosen Speed, capped at the server's 20). Speed options
-       above are filtered to >= this so you never ask for frames you'd only throw away. -->
-  <div class="mrow">
-    <label>WATERFALL DATA RATE</label>
-    <div class="seg" id="wfRateSeg">
-      <button class="btn on" data-wfrate="0">AUTO</button>
-      <button class="btn" data-wfrate="20">20</button>
-      <button class="btn" data-wfrate="10">10</button>
-      <button class="btn" data-wfrate="5">5</button>
-    </div>
-  </div>
-  <div class="rowNote">How many real frames per second the server sends. Lower cuts the data used but can
-    miss brief signals. Auto adapts to the link, up to your chosen speed.</div>
+  <!-- ★★ V12 2026-10-30 (GitHub #57): the WATERFALL DATA RATE row (AUTO/20/10/5) is gone — the speed keys above decide
+       what the server sends (MINIMUM 2 · LOW 5 · ECO 10 ask for less), and on DEFAULT/SMOOTH a lower data rate never
+       changed the scroll, so the row looked dead. main.ts migrates a saved rate (wfSpeedCap.migrateWfDataRate). -->
   <!-- ★ The IDLE SAVER switch went with the feature. It slowed the spectrum after 30 s without a
        touch, which read "nobody is looking" from "nobody is touching" — backwards on a waterfall,
        the one thing you watch without touching it. A hidden TAB still throttles (nothing is being

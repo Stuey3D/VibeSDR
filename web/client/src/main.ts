@@ -7,7 +7,7 @@
  */
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
-import { capFps, linkCapFor, isWfSpeedSetting, loadWfSpeed, speedNumbers, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
+import { capFps, linkCapFor, isWfSpeedSetting, loadWfSpeed, migrateWfDataRate, speedNumbers, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
@@ -8047,13 +8047,13 @@ function updateMediaSession() {
  * ★ Audio is untouched either way: you leave it listening and walk away.
  */
 /** The listener's chosen full rate. Their machine's limit, not the server's — see wantedFps().
- *  DERIVED from the Speed + Data Rate controls (computeActiveFps); not set directly by the UI. */
+ *  DERIVED from the Waterfall speed key (computeActiveFps); not set directly by the UI. */
 let activeFps = 20;
 const IDLE_FPS = 5;
 
-// ── Waterfall Speed (on-screen scroll) + Data Rate (server frames) ──────────────
-// Two separate axes. SPEED is the interpolated scroll rate (screen rows/sec); DATA RATE is how many
-// real frames/sec the server sends. AUTO data = bring in as much as we'll display, capped at server.
+// ── Waterfall Speed (on-screen scroll AND, since V12, server frames) ──────────────
+// ★ V12: ONE control. The speed key sets the scroll and — MINIMUM / LOW / ECO — what the server sends; the old separate
+//   DATA RATE row is gone (#57). The request is the server's rate under the key's cap (computeActiveFps).
 let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
 // ★ SHARP = one row per received frame (the app's waterfall). SMOOTH = interpolate up to wfSpeed.
 // ★★ DEFAULTS TO SMOOTH *HERE* AND SHARP IN THE APP — each keeps the waterfall it already had, so
@@ -8079,7 +8079,12 @@ const WF_PRESET: Record<string, { rate: number }> = {
   default: { rate: 20 },
   smooth:  { rate: 60 },
 };
-let wfDataRate = 0;    // 0 = AUTO, else 20 / 10 / 5
+/* ★★ V12 2026-10-30 (GitHub #57): THE "WATERFALL DATA RATE" ROW (AUTO/20/10/5) IS GONE. Gesiima set it to 5 on DEFAULT and
+ *   saw no change — DEFAULT still scrolls 15 or 30 rows a second from a 5 fps feed — and only MINIMUM slowed the scroll.
+ *   Since V12 the Waterfall speed keys decide what the server sends (MINIMUM 2 · LOW 5 · ECO 10 ask for less; the rest
+ *   take the server's rate), so the second row only overlapped them, and its use looked like a no-op (AGENTS.md).
+ *   AUTO is what remains: the rate follows the speed key, the server's ceiling and the hidden tab. A saved rate is
+ *   migrated once (migrateWfDataRate) and never applied again. */
 
 /** The server's fps ceiling (its advertised max, else the built-in 20). */
 function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
@@ -8087,9 +8092,9 @@ function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
 /** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps). AUTO never asks
  *  for more than the chosen Speed — no point receiving frames the display would only throw away. */
 function computeActiveFps(): number {
-  // ★ V12 MINIMUM / LOW / ECO: a CEILING on whatever else decides the rate (Auto or a pinned Data Rate) — 2 / 5 / 10,
+  // ★ V12 MINIMUM / LOW / ECO: a CEILING on whatever else decides the rate (the server's rate) — 2 / 5 / 10,
   //   never a divider, so a 5 pinned stays 5 (wfSpeedCap.capFps).
-  return capFps(wfDataRate === 0 ? Math.min(wfSpeed, serverFpsCap()) : wfDataRate, linkCapFor(wfScroll));
+  return capFps(Math.min(wfSpeed, serverFpsCap()), linkCapFor(wfScroll));
 }
 
 /** ★ V12: the live rows/s on each Waterfall speed key, from the server's own rate (its advertised max — the rate NATIVE
@@ -8119,34 +8124,15 @@ function applyWaterfallRates() {
     refreshWfScrollSeg(); }
   spec?.setFftRate(wantedFps());
   refreshSpeedSeg();
-  refreshDataRateSeg();
   updateStatus();
 }
 
-/** Speed buttons are filtered to >= the chosen Data Rate (Data 20 hides Speed 10). AUTO shows all. */
+/** The hidden legacy speed row's lit key (kept so a saved wfSpeed loads). */
 function refreshSpeedSeg() {
   const seg = document.getElementById('wfSpeedSeg'); if (!seg) return;
-  const minSpeed = wfDataRate > 0 ? wfDataRate : 0;
-  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
-    const v = Number((b as HTMLButtonElement).dataset.wfspeed);
-    (b as HTMLButtonElement).hidden = v < minSpeed;
-    b.classList.toggle('on', v === wfSpeed);
-  }
+  for (const b of Array.from(seg.children) as HTMLButtonElement[]) b.classList.toggle('on', Number(b.dataset.wfspeed) === wfSpeed);
 }
 
-/** Data-rate buttons above the server's ceiling are hidden; AUTO (0) is always available. */
-function refreshDataRateSeg() {
-  const seg = document.getElementById('wfRateSeg'); if (!seg) return;
-  // ★ V12: under MINIMUM / LOW / ECO a rate above that cap would ask for nothing more — hidden like one above the server's,
-  //   and the chosen one shown at what it now gets (20 under ECO lights 10). Choosing NATIVE etc. brings them back.
-  const cap = capFps(serverFpsCap(), linkCapFor(wfScroll));
-  const lit = wfDataRate > cap ? (Math.max(0, ...[20, 10, 5].filter(v => v <= cap))) : wfDataRate;
-  for (const b of Array.from(seg.children) as HTMLButtonElement[]) {
-    const v = Number((b as HTMLButtonElement).dataset.wfrate);
-    (b as HTMLButtonElement).hidden = v > cap;   // 0 (AUTO) is never > cap
-    b.classList.toggle('on', v === lit);
-  }
-}
 /** The owner's cap, from hwinfo. 0 = uncapped. */
 let serverMaxFps = 0;
 /** The last fps we actually asked the server for — see onHwInfo. */
@@ -8804,18 +8790,10 @@ function onSummoned() {
 let lastInteraction = Date.now();
 let throttled = false;
 
-/**
- * Offer only the rates the owner actually permits.
- *
- * A ceiling of 10 fps means 20 is not on the menu; a ceiling of 5 leaves no choice at all, so the
- * whole row goes — a control with one option is just a label pretending to be a control. Same rule
- * as the pinned sample rate and the enforced idle saver: never show a switch we would ignore.
- */
+/** The owner's ceiling changed (hwinfo): re-apply the waterfall rates under it. */
 function applyRateOptions() {
-  // The server ceiling changed (hwinfo). A manual data rate above it falls back to AUTO (which caps
-  // itself to the ceiling), then the segments re-filter and the request re-clamps.
-  const cap = serverFpsCap();
-  if (wfDataRate > cap) wfDataRate = 0;   // AUTO adapts to the new, lower ceiling
+  // The server ceiling changed (hwinfo): the request re-clamps (wantedFps). (The Data Rate row it used to re-filter is
+  // gone — V12, #57.)
   applyWaterfallRates();
 }
 
@@ -13548,23 +13526,21 @@ function buildMenu() {
       applyWaterfallRates();
     };
   }
-  // Waterfall DATA RATE — server frames/sec (AUTO/20/10/5). Applied immediately. Picking a data rate
-  // above the current Speed bumps the Speed up (you can't display slower than you receive).
-  for (const b of Array.from($('wfRateSeg').children) as HTMLButtonElement[]) {
-    b.onclick = () => {
-      wfDataRate = Number(b.dataset.wfrate);
-      if (wfDataRate > 0 && wfSpeed < wfDataRate) { wfSpeed = wfDataRate; savePref('wfSpeed', wfSpeed); }
-      savePref('wfDataRate', wfDataRate);
-      applyWaterfallRates();
-    };
-  }
   // Restore saved choices, then apply once.
   { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
   // ★ an old 'sharp' loads as NATIVE; an old 'minimum' was the 5 fps choice — it loads as LOW and is re-saved as 'low',
   //   never as the new 2 fps MINIMUM ('min2') (wfSpeedCap.loadWfSpeed).
   { const v = prefs().wfScroll, s = loadWfSpeed(v); if (s) { wfScroll = s; if (s !== v) savePref('wfScroll', s); } }
-  { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
-  if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
+  // ★★ A SAVED DATA RATE (the row is gone — V12, #57): never applied again, so it cannot silently cap the speed keys.
+  //    Only where it was clearly the same choice is it carried over (wfSpeedCap.migrateWfDataRate): NATIVE + 5 → LOW,
+  //    NATIVE + 10 → ECO (the same rows, the same data); with any other speed the speed stays as it was and the cap
+  //    just stops. The pref is removed either way.
+  { const d = prefs().wfDataRate;
+    if (d !== undefined) {
+      const s = migrateWfDataRate(wfScroll, d);
+      if (s !== wfScroll) { wfScroll = s; savePref('wfScroll', s); }
+      savePref('wfDataRate', undefined);
+    } }
   applyWaterfallRates();
 
   toggle('biasT', (on) => spec!.setHwBiasT(on), 'biasT');
