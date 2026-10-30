@@ -2992,7 +2992,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const n = ismNeighbours(ismCapRef.current, ismReportRef.current);
     if ((d < 0 && !n.prev) || (d > 0 && !n.next)) return;
     if (askGate()) return;
-    markInteract();
+    markMove();
     c.ism(true, { step: d > 0 ? 1 : -1 });
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3074,7 +3074,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const idx = DAB_BLOCKS.findIndex(b => Math.abs(b.hz - hz) < 50_000);
     if (idx < 0) return false;
     if (askGate()) return true;   // ★★ ask before tuning — handled (refused), so no fallback tune either
-    markInteract();
+    markMove();
     dabStepper.current?.cancel();             // ★ a bookmark is a pick — a pending burst must not override it
     const svc = sid >= 0 ? sid : undefined;   // ★ no service id = the block, whatever plays
     AsyncStorage.setItem(dabBlockKeyRef.current, DAB_BLOCKS[idx].name).catch(() => {});
@@ -8902,6 +8902,15 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  timer any more, so there is nothing for a touch to undo — and a touch that quietly re-sent
      *  the rate would be a second owner of it again, which is the fault the removal was for. */
   }, []);
+  /** ★★★ A TUNE OR ZOOM, not just a touch (Stuart, 2026-10-30: "any touch of the screen such as interacting with the
+   *  health chips or touching the controls to open the menu etc is speeding up the motion, this should only be for
+   *  tuning and zooming"). The waterfall's interaction boost and smooth-tune window read lastMoveRef; lastInteractRef
+   *  stays the presence stamp every touch writes (the root responder capture, idle release, hands-on). */
+  const lastMoveRef = useRef(0);
+  const markMove = useCallback(() => {
+    markInteract();
+    lastMoveRef.current = Date.now();
+  }, [markInteract]);
 
   /* ★★★ THE IDLE SLOWDOWN IS GONE. Only BACKGROUNDING now saves power.
    *
@@ -9117,7 +9126,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // stop every aircraft decoding. One predicate now, so the next data mode can't
     // fall through the same gap. Ignore drum input.
     if (noTuneNow(c)) return;
-    markInteract();
+    markMove();
     const s = stepRef.current;
     // Velocity-adaptive sensitivity: EMA of |px|/dt. A gesture gap resets to
     // 0 so a fresh slow touch starts fully fine; a fast flick's EMA catches
@@ -9280,7 +9289,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   const onVfoStep = useCallback((dir: -1 | 1) => {
     if (askGate()) return;   // ★★ ask before tuning — see askGate
-    markInteract();
+    markMove();
     /* ★★★ IN DAB THE MAIN TUNING ARROWS STEP THE MULTIPLEX. Stuart, 2026-09-08: "the main tuning
      *  buttons do not cycle through the blocks and 2 extremely tiny buttons in the decoder header
      *  are there instead which we moved away from in the client."
@@ -9330,22 +9339,22 @@ export default function SDRScreen({ route, navigation }: Props) {
       // Trailing send — the last step of a sweep must always reach the radio.
       st.timer = setTimeout(flush, SWEEP_SEND_MS - (now - st.sentAt));
     }
-  }, [markInteract, stepTarget]);
+  }, [markMove, stepTarget]);
   // ★ A TAP must move a WHOLE LADDER RUNG. The server snaps binBandwidth to a ladder,
   // so a fractional request is snapped straight back and nothing happens — the symptom
   // was a single tap making the waterfall lurch and return, with only a double tap
   // actually zooming (Stuart, on air). One octave is the rung the menu ± buttons have
   // always used.
   const onZoomStep = useCallback((dir: -1 | 1) => {
-    markInteract();
+    markMove();
     zoomBy(dir === 1 ? 1 / zoomStepK : zoomStepK);
-  }, [zoomBy, markInteract, zoomStepK]);
+  }, [zoomBy, markMove, zoomStepK]);
   // ★ A HELD sweep wants the opposite: small compounding factors, which DO cross rungs
   // cumulatively and give a smooth ramp instead of leaping an octave per tick.
   const onZoomSweep = useCallback((dir: -1 | 1) => {
-    markInteract();
+    markMove();
     zoomBy(Math.pow(2, -dir / 3));
-  }, [zoomBy, markInteract]);
+  }, [zoomBy, markMove]);
 
   // Per-control drum-or-keys. TWO independent settings, not one global switch —
   // "VFO keys + zoom drum" is a real combination somebody will want, and the
@@ -9432,7 +9441,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onWfPanDelta = useCallback((dxPx: number) => {
     const c = client.current; if (!c) return;
     if (vfoLockedRef.current) return;                 // no free pan while locked
-    markInteract();
+    markMove();
     // Predicted view: pan() updates it synchronously, so successive deltas
     // compound correctly. Re-basing on getStatus() made every delta in an RTT
     // window re-apply from the same stale centre (rubber-banding).
@@ -9466,7 +9475,7 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  which knocks the multiplex tuning off"). The client refuses it; this stops the UI acting as
      *  though it worked, which is the difference between a locked control and a broken one. */
     if (dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current) return;   // ★ ADS-B (and NDB): the server owns the view as well
-    markInteract();
+    markMove();
     const s = c.getView(); if (!s.binBandwidth || !s.centerHz) return;
     const a = wfZoomAcc.current;
     const now = Date.now();
@@ -9492,7 +9501,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     // Whole-profile data modes (DAB, ADS-B, ISM…) have nothing to tune — the only
     // thing a VFO can do is drag you OFF the block and kill the decode.
     if (noTuneNow(c)) return;
-    markInteract();
+    markMove();
     /* ★★ SNAP TO THE STEP. A finger lands a few hundred hertz off; on 5 kHz steps 9568.45 kHz
      *  means 9570, on 1 kHz 7073.14 means 7074 — the channel, not the pixel. The web client
      *  already does this and SDR++ is the reference (DL8LDN, 2026-09-14: "Typing with finger on
@@ -9919,9 +9928,9 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (askGate()) return;   // ★★ ask before tuning — see askGate
     /* ★ V12 ISM: a frequency typed (or a bookmark) puts the CAPTURE on it for an odd device — {"type":"ism","on":1,"hz":N};
      *  the server keeps the list. A mode with it means a different demodulator: that leaves ISM (onMode's door) first. */
-    if (ismOnRef.current && !mode) { markInteract(); c.ism?.(true, { hz }); return; }
+    if (ismOnRef.current && !mode) { markMove(); c.ism?.(true, { hz }); return; }
     if (ismOnRef.current && mode) { c.ism?.(false); ismUiOff(); }
-    markInteract();
+    markMove();
     const [loHz, hiHz] = tuneBoundsOf(c);
     const clamped = Math.max(loHz, Math.min(hiHz, hz));
     // Discrete jump (freq modal, bookmark/VTS, Siri, search) → always land
@@ -9943,7 +9952,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const tuneVfoHz = useCallback((v: VfoId, hz: number, mode?: SDRMode) => {
     const c = client.current as unknown as { abTuneVfo?: (v: VfoId, f: number, m?: SDRMode, o?: { recenter?: boolean }) => void } | null;
     if (!abInfoRef.current?.on || v === abActiveRef.current || !c?.abTuneVfo) { onTuneHz(hz, mode); return; }
-    markInteract();
+    markMove();
     const st = client.current;
     const [loHz, hiHz] = st ? tuneBoundsOf(st) : [hz, hz];
     userTuneSeq.current++;   // ★ a PERSON asked — see the note on userTuneSeq
@@ -10019,7 +10028,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       return true;
     }
     if (askGate()) return true;
-    markInteract();
+    markMove();
     bandSpotsGo(b.hz, b.id);
     return true;
   };
@@ -10152,7 +10161,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         //  ★ Exclusive receivers are unaffected: the dial is yours, and arming your own radio to
         //    turn your own knob would be pure ceremony.
         if (sharedDialRef.current && !armed) return;
-        markInteract();           // a watch tune is an interaction — wake the idle saver + clear its pill
+        markMove();           // a watch tune is an interaction — wake the idle saver + clear its pill
         wakeSpectrumForWatch();   // a turning crown is proof the watch is watching
         if (noTuneNow(c)) return;   // locked to its ensemble
         const s = stepRef.current; if (!(s > 0)) return;
@@ -10253,7 +10262,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
       onZoomDelta: (delta: number) => {
         if (!delta) return;
-        markInteract();           // watch zoom is an interaction too — wake the idle saver
+        markMove();           // watch zoom is an interaction too — wake the idle saver
         // DEBOUNCE to 100ms, same as tuning: accumulate the zoom detents and apply the
         // combined factor ≤1/100ms (trailing-edge), so a fast zoom spin doesn't hammer the
         // zoom path / flood the server with config echoes.
@@ -12945,7 +12954,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         peakHold={peakHold}
         spatialSmooth={icom ? false : spatialSmooth}
         smoothTune={smoothTune}
-        lastInteractAt={lastInteractRef}
+        lastInteractAt={lastMoveRef}
         wfBrightness={wfBrightness}
         wfContrast={wfContrast}
         wfSharpness={wfSharpness}
@@ -13164,11 +13173,11 @@ export default function SDRScreen({ route, navigation }: Props) {
             const out: Array<{ id: string; label: string; a11y: string; on: boolean; offer?: boolean; distress?: boolean; press: () => void }> = [];
             if (offer && canReach(offer.hz)) {
               out.push({ id: 'offer', label: offer.text, a11y: `${offer.text}: a listed DSC frequency is the assigned one, the dial goes 1.7 kHz below it in USB`,
-                         on: false, offer: true, press: () => { markInteract(); onDscTune(offer.ch); } });
+                         on: false, offer: true, press: () => { markMove(); onDscTune(offer.ch); } });
             }
             for (const c of dscChannelsForDial(dial, canReach).channels) {
               out.push({ id: String(c.hz), label: c.label, a11y: dscKeyTitle(c), on: dscChannelOn(c, dial, md), distress: c.kind === 'distress',
-                         press: () => { markInteract(); onDscTune(c); } });
+                         press: () => { markMove(); onDscTune(c); } });
             }
             return out;
           })() } : null}
