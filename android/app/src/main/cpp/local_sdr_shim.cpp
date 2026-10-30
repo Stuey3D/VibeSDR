@@ -4342,6 +4342,9 @@ static std::atomic<int> g_vibeAgcRspOn{0};
 static std::atomic<int>  g_rspVagcOwner{0};
 static std::atomic<bool> g_rspVagcActive{false};
 static std::atomic<bool> g_rspVagcTripped{false};
+/* ★ WHY it handed back, for the live readout (rspstat `vrs` with `vst` 5): 11 device failure, 12 the service stopped
+ *   answering, 13 writes rejected, 14 LNA writes not honoured. Words in src/services/rspAgcReadout.ts. */
+static std::atomic<int>  g_rspVagcTripCode{0};
 /* ★★ OUR OWN GAIN WRITE, TOLD TO THE CAPTURE SMOOTHER BEFORE IT LANDS. The heartbeat writes; the DSP thread reads this
  *    mailbox before it handles the packet the radio flags (grChanged), so the step is placed, not searched for
  *    (GainStepSmoother::noteKnownStep / noteKnownPair). Written BEFORE the Update call, so the flagged packet — which
@@ -5203,8 +5206,15 @@ struct RspVagcState {
     // the landed test: did gainVals.curr move after an LNA write?
     double checkLandAt = -1.0; float structBefore = -999.0f; int unlanded = 0;
     std::string lastProfile;
+    /* ★★ THE LIVE READOUT (rspstat vwpm / vmiss / vblind, 2026-10-30). Stuart: "do we get to see a readout of what the
+     *    AGC is doing for both the RF and IF so I can see if it is working or got stuck". Rolling minutes, not totals:
+     *    "12 gain writes in the last minute" is a rate somebody can judge at a glance, and a write that failed an hour
+     *    ago must not keep a warning lit on a radio that has been fine since. ≤ 5 writes a second, so ≤ 300 entries. */
+    std::deque<double> writeTimes, missTimes;
+    unsigned lastWindowsSeen = 0; double lastFreshAt = 0.0;
 };
 static RspVagcState g_rspVagc;
+static void vsRspVagcPrune(std::deque<double>& d, double now) { while (!d.empty() && now - d.front() > 60.0) d.pop_front(); }
 
 /** The take-over: the API's IF AGC off (one write), the loop adopts the gain the radio is at. */
 static void vsRspVagcTakeOver(SdrplaySource* sdrp, const char* why) {
@@ -5213,6 +5223,8 @@ static void vsRspVagcTakeOver(SdrplaySource* sdrp, const char* why) {
     g_rspVagc.rejectsAtStart = SdrplaySource::gainRejects(); g_rspVagc.rejectsSeen = 0;
     g_rspVagc.unlanded = 0; g_rspVagc.checkLandAt = -1.0; g_rspVagc.lastProfile.clear();
     g_rspVagc.minuteFrom = vibersp::monoNowSec();
+    g_rspVagc.writeTimes.clear(); g_rspVagc.missTimes.clear();
+    g_rspVagc.lastWindowsSeen = sdrp->adcWindows(); g_rspVagc.lastFreshAt = g_rspVagc.minuteFrom;
     g_rspVagcActive.store(true, std::memory_order_relaxed);
     sfericForget(6.0);
     LOGI("VibeAGC (RSP): taking both gain stages — driver %s, %s. The API's own IF AGC is OFF; LNA state %d/%d, IF "
@@ -5222,8 +5234,9 @@ static void vsRspVagcTakeOver(SdrplaySource* sdrp, const char* why) {
          vibersp::VibeAgcRsp::kMaxWritesPerSec);
 }
 /** Stop: the caller re-runs the kick, which hands the IF back to the API's AGC from a safe parking value. */
-static void vsRspVagcTrip(const char* why) {
+static void vsRspVagcTrip(const char* why, int code) {
     if (!g_rspVagcActive.load(std::memory_order_relaxed)) return;
+    g_rspVagcTripCode.store(code, std::memory_order_relaxed);
     g_rspVagcActive.store(false, std::memory_order_relaxed);
     g_rspVagcTripped.store(true, std::memory_order_relaxed);
     LOGI("VibeAGC (RSP): HANDING BACK to the API's IF AGC + the RF walker — %s. It stays off until the radio is reopened "
@@ -5236,13 +5249,14 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
     auto& st = g_rspVagc;
     const double now = vibersp::monoNowSec();
     // ── the driver's own word first ──
-    if (sdrp->apiFailed())           { vsRspVagcTrip("the SDRplay API reported a device failure"); return false; }
-    if (sdrp->serviceUnresponsive()) { vsRspVagcTrip("the RSP service stopped answering"); return false; }
+    if (sdrp->apiFailed())           { vsRspVagcTrip("the SDRplay API reported a device failure", 11); return false; }
+    if (sdrp->serviceUnresponsive()) { vsRspVagcTrip("the RSP service stopped answering", 12); return false; }
     const int rej = (int)(SdrplaySource::gainRejects() - st.rejectsAtStart);
     if (rej > st.rejectsSeen) {
         st.rejectsSeen = rej;
         LOGI("VibeAGC (RSP): the driver REJECTED a gain write (%d since take-over)", rej);
-        if (rej >= 3) { vsRspVagcTrip("the driver rejected 3 gain writes"); return false; }
+        st.missTimes.push_back(now);
+        if (rej >= 3) { vsRspVagcTrip("the driver rejected 3 gain writes", 13); return false; }
     }
     // ── anybody else's write (a listener's slider, the owner's saved gain): adopt it, do not fight it ──
     if (sdrp->ifAgcEnabled()) {
@@ -5273,9 +5287,10 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
         const float g = sdrp->structGainDb();
         if (g > -998.0f && st.structBefore > -998.0f && std::fabs(g - st.structBefore) < 0.05f) {
             ++st.unlanded;
+            st.missTimes.push_back(now);
             LOGI("VibeAGC (RSP): an LNA write did not move the API's own gain figure (%.1f dB) — %d in a row",
                  g, st.unlanded);
-            if (st.unlanded >= 3) { vsRspVagcTrip("3 LNA writes in a row were not honoured"); return false; }
+            if (st.unlanded >= 3) { vsRspVagcTrip("3 LNA writes in a row were not honoured", 14); return false; }
         } else if (g > -998.0f) {
             st.unlanded = 0;
             sdrp->noteLnaGain(sdrp->currentLnaState(), g, sdrp->currentIfGr());   // ★ the ladder learns from our own rungs
@@ -5317,6 +5332,9 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
             }
         }
     }
+    /* ★ BLIND: the loop only acts on a FRESH 0.1 s window, so a measurement that stopped arriving stops the AGC dead
+     *   while every figure still looks plausible. The readout says how long it has been (rspstat vblind). */
+    if (sdrp->adcWindows() != st.lastWindowsSeen) { st.lastWindowsSeen = sdrp->adcWindows(); st.lastFreshAt = now; }
     // ── the loop ──
     vibersp::VagcIn in;
     in.now = now; in.windows = sdrp->adcWindows(); in.peak = sdrp->adcPeakDbfs(); in.clipPct = sdrp->adcClipPct();
@@ -5347,9 +5365,12 @@ static bool vsRspVagcTick(SdrplaySource* sdrp, int lnaFloor, bool rfOwned, const
     LOGI("VibeAGC (RSP): %s", o.why);
     if (!sdrp->setGainPair(o.lna, o.gr)) {
         LOGI("VibeAGC (RSP): the write was not sent (the API's IF AGC owned the register) — re-adopting");
+        st.missTimes.push_back(now);
         st.agc.adopt(sdrp->currentLnaState(), sdrp->currentIfGr());
         return false;
     }
+    st.writeTimes.push_back(now);
+    vsRspVagcPrune(st.writeTimes, now);
     if (o.lnaChanged) {
         g_vibeAgcRspLastLna.store(o.lna, std::memory_order_relaxed);      // ★ the gain memory the kick hands over from
         g_vibeAgcRspLastLnaAt.store((long long)std::chrono::duration_cast<std::chrono::seconds>(
@@ -13293,7 +13314,55 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 /* ★ 250 bytes measured on air, and every added field eats the margin.
                  *   A silent truncation here reads as a DEAD FEATURE — the check below
                  *   exists because of one. Grown with the field, not after it. */
-                char gb[448];   // ★ +32 for "vagc" (VibeAGC for SDRplay, 2026-10-30)
+                /* ★★★ THE AGC READOUT (2026-10-30). Stuart: "do we get to see a readout of what the AGC is doing for both
+                 *     the RF and IF so I can see if it is working or got stuck". lna/ifgr were already here; these say what
+                 *     the loop is DOING with them, small enough to ride ten times a second (older clients ignore them):
+                 *   vst    0 VibeAGC not running · 1 settling (acquiring) · 2 holding · 3 cutting RF · 4 adding RF
+                 *          (an RF move in the last 5 s) · 5 handed back to the API's IF AGC + the RF walker
+                 *   vrs    why (vibe_rsp_vibeagc.h VagcAct for 3/4; g_rspVagcTripCode for 5)
+                 *   vtgt   VibeAGC's ADC peak target, dBFS (the profile's; agcSet is the API AGC's)
+                 *   vwpm   gain writes landed in the last 60 s · vmiss writes rejected / not honoured / not sent, last 60 s
+                 *   vblind seconds since VibeAGC last had a fresh ADC window
+                 *   vrail  seconds the IF has sat at a rail WHILE THE RF STAGE HAD ROOM TO TAKE THE LOAD OFF IT: + at the
+                 *          59 dB rail with RF still to cut, − at its floor with RF still to add; 0 otherwise. Both AGC
+                 *          arrangements, since either one can stick there.
+                 *  ★★ The rail counts only when the OTHER stage could have moved — an IF at its floor with the LNA at
+                 *     full gain on a quiet band is a receiver giving all it has, not a stuck one, and it must never light
+                 *     a warning (rsp_frozen_readout_warning_design: a warning that comes and goes on a working receiver is
+                 *     worse than none). And not while it is still starting, nor while VibeAGC holds an add ON PURPOSE
+                 *     (its overload ceiling, the reversal guard — addHeld). The client adds the hysteresis. */
+                int vst = 0, vrs = 0, vtgt = -20, vwpm = 0, vmiss = 0, vblind = 0, vrail = 0;
+                {
+                    const double nowR = vibersp::monoNowSec();
+                    const bool vAct = g_rspVagcActive.load(std::memory_order_relaxed);
+                    auto& vs = g_rspVagc;
+                    vtgt = (int)std::lround(vs.agc.profile().targetPk);
+                    if (vAct) {
+                        vst = vs.agc.acquiring() ? 1 : 2;
+                        if (nowR - vs.agc.lastLnaAt() < 5.0) { vst = vs.agc.lastLnaDir() < 0 ? 3 : 4; vrs = vs.agc.lastLnaAct(); }
+                        vsRspVagcPrune(vs.writeTimes, nowR); vsRspVagcPrune(vs.missTimes, nowR);
+                        vwpm = (int)vs.writeTimes.size(); vmiss = (int)vs.missTimes.size();
+                        vblind = std::max(0, (int)(nowR - vs.lastFreshAt));
+                    } else if (g_rspVagcTripped.load(std::memory_order_relaxed)) {
+                        vst = 5; vrs = g_rspVagcTripCode.load(std::memory_order_relaxed);
+                    }
+                    static double railSince = 0.0; static int railDir = 0;
+                    int dir = 0;
+                    const bool agcRuns = sdrpAgcWanted && !sdrpInitAgc && !sdrpSettling && !(vAct && vs.agc.acquiring());
+                    if (agcRuns && g_vibeAgcRspOn.load(std::memory_order_relaxed) != 0) {
+                        const double cHz = rtlCenter.load() + hwOffsetHz();
+                        const int gr = sdrp->currentIfGr(), lna = sdrp->currentLnaState(), nS = sdrp->lnaStateCount();
+                        const int capPos = LocalSdrShim::gainCapAt(LocalSdrShim::instance().listenFrequency());
+                        const int lnaFloor = capPos >= 0 ? std::max(0, nS - 1 - capPos) : 0;
+                        const int f = LocalSdrShim::ifGrFloorAt(cHz);
+                        const int grFloor = f >= 20 ? f : vibersp::VibeAgcRsp::kGrMin;
+                        if (gr >= vibersp::VibeAgcRsp::kGrMax && lna + 1 < nS) dir = +1;
+                        else if (gr <= grFloor && lna - 1 >= lnaFloor && !(vAct && vs.agc.addHeld(nowR))) dir = -1;
+                    }
+                    if (dir != railDir) { railDir = dir; railSince = nowR; }
+                    vrail = railDir * (int)(nowR - railSince);
+                }
+                char gb[512];   // ★ +32 for "vagc" (VibeAGC for SDRplay, 2026-10-30) · +64 for the AGC readout's seven
                 const int need = snprintf(gb, sizeof gb,
                     /* ★ The notch state rides with the gain figures because it is the same kind of
                      *   thing: what the FRONT END is doing right now. Stuart asked for the readout
@@ -13322,7 +13391,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                      *   moment I'd be happy to leave it frozen." Leaving it frozen is a legitimate
                      *   outcome, so this informs and then stops talking. */
                     "\"adcPeak\":%.1f,\"adcClip\":%.4f,\"lnaN\":%d,\"agcReinit\":%d,"
-                    "\"agcInit\":%d,\"gainStuck\":%d,\"vagc\":%d}",
+                    "\"agcInit\":%d,\"gainStuck\":%d,\"vagc\":%d,"
+                    "\"vst\":%d,\"vrs\":%d,\"vtgt\":%d,\"vwpm\":%d,\"vmiss\":%d,\"vblind\":%d,\"vrail\":%d}",
                     sdrp->systemGainDb(), sdrp->currentLnaState(), sdrp->currentIfGr(),
                     /* ★ CORROBORATED, not the raw latch — see overloadReal(). The badge and
                      *   VibeAGC must answer to the same fact. */
@@ -13419,7 +13489,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         return (saturated || starved) ? 1 : 0;
                     }(),
                     /* ★ VibeAGC for SDRplay is running: ifgr/lna/sysGain are what WE set, never an echo (vsRspVagcTick). */
-                    g_rspVagcActive.load(std::memory_order_relaxed) ? 1 : 0);
+                    g_rspVagcActive.load(std::memory_order_relaxed) ? 1 : 0,
+                    vst, vrs, vtgt, vwpm, vmiss, vblind, vrail);
                 if (need < 0 || (size_t)need >= sizeof gb)
                     LOGI("rspstat truncated (%d of %zu bytes) — not sent", need, sizeof gb);
                 else
