@@ -23,8 +23,12 @@
  *  ★ COST: nothing while there are none — one compare a row. A handful of labels a frame at most (STAMP_MAX).
  * PURE — scripts/test_wf_stamps.ts. */
 
-/** The most stamps kept; a new one past it drops the oldest. */
-export const STAMP_MAX = 6;
+/** ★★ The most stamps kept; a new one past it drops the oldest (Stuart, 2026-10-30: rapid tuning, panning and zooming
+ *  must never crowd the screen or load the CPU — a hard cap of 3 on screen). */
+export const STAMP_MAX = 3;
+/** ★★ …and the closest two may be, in label heights: a new stamp within this of the one below REPLACES it instead of
+ *  adding a second (rapid separate gestures). The caller sets StampState.minGapRows from its label height in rows. */
+export const STAMP_MIN_GAP_LABELS = 3;
 /** How long a geometry must hold before a move counts as landed (the ease is over, the dial stopped). */
 export const STAMP_SETTLE_S = 0.5;
 /** …and never fewer rows than this (Native on a slow feed). */
@@ -58,13 +62,22 @@ export interface StampState {
   /** Newest first. */
   stamps: WfStamp[];
   nextId: number;
+  /** The fewest rows allowed between two stamps (STAMP_MIN_GAP_LABELS label heights, in rows — set by the caller, which
+   *  knows its row and label heights). */
+  minGapRows: number;
+  /** ★★ A LONG TUNE/PAN SWEEP: rows between mid-run stamps (the caller's max(STAMP_SWEEP_S of rows, a quarter of the
+   *  waterfall)); 0 = never. Run state: the first row of the move, the newest stamp of this run, whether the pre-run
+   *  stamp is already down, and whether the run changed the span (a zoom run never gets mid-run stamps). */
+  sweepRows: number;
+  moveFrom: number; runStampFrame: number; preDone: boolean; runZoomed: boolean;
   /** Bumped on every change to `stamps` (a stamp added, dropped, or moved by a jump). */
   gen: number;
 }
 
 export function newStampState(): StampState {
   return { refLo: NaN, refSpan: NaN, refFrame: -1, moving: false, candLo: NaN, candSpan: NaN, candFrom: -1,
-           stamps: [], nextId: 1, gen: 0 };
+           stamps: [], nextId: 1, gen: 0, minGapRows: 45,
+           sweepRows: 0, moveFrom: -1, runStampFrame: -1, preDone: false, runZoomed: false };
 }
 
 /** Forget everything (the history was cleared). */
@@ -73,6 +86,25 @@ export function stampReset(st: StampState): void {
   st.refLo = NaN; st.refSpan = NaN; st.refFrame = -1; st.moving = false; st.candLo = NaN; st.candSpan = NaN; st.candFrom = -1;
   st.stamps.length = 0;
   if (had) st.gen++;
+}
+
+/** ★★ A long continuous tune or pan sweep gets an occasional stamp on its slanted history (Stuart, 2026-10-30: "the only
+ *  time a label should be on a long slanted run should be if a user is doing a long sweep tune or pan and only every now
+ *  and then so it doesnt overwhelm things") — no more often than this… */
+export const STAMP_SWEEP_S = 2.5;
+/** …and only once the history has scrolled this fraction of the waterfall since the last one. */
+export const STAMP_SWEEP_VIEW_FRAC = 0.25;
+/** The rows between mid-sweep stamps, at `rowRate` rows/s on a waterfall `viewRows` rows tall. */
+export function stampSweepRows(rowRate: number, viewRows: number): number {
+  return Math.max(Math.ceil((rowRate > 0 ? rowRate : 30) * STAMP_SWEEP_S), Math.ceil(viewRows * STAMP_SWEEP_VIEW_FRAC));
+}
+
+function addStamp(st: StampState, frame: number, lo: number, span: number, born: number): void {
+  // ★★ Never crowded: a stamp within minGapRows of the one below REPLACES it (one label for that stretch, not two).
+  if (st.stamps.length && frame - st.stamps[0].frame < st.minGapRows) st.stamps.shift();
+  st.stamps.unshift({ id: st.nextId++, frame, lo, span, born });
+  if (st.stamps.length > STAMP_MAX) st.stamps.length = STAMP_MAX;
+  st.gen++;
 }
 
 /** Rows a move must hold still for before it counts as landed, at `rowRate` rows/s. */
@@ -102,18 +134,32 @@ export function stampNoteRow(st: StampState, frame: number, lo: number, span: nu
   if (!st.moving) {
     if (same(lo, span, st.refLo, st.refSpan)) { st.refFrame = frame; return false; }
     st.moving = true; st.candLo = lo; st.candSpan = span; st.candFrom = frame;
+    st.moveFrom = frame; st.runStampFrame = -1; st.preDone = false; st.runZoomed = false;
+    if (Math.abs(span - st.refSpan) > st.refSpan * STAMP_ZOOM_FRAC) st.runZoomed = true;
     return false;
+  }
+  if (Math.abs(span - st.refSpan) > st.refSpan * STAMP_ZOOM_FRAC) st.runZoomed = true;
+  // ★★ A LONG TUNE/PAN SWEEP (never a zoom run): every sweepRows of continuous motion, one stamp on the slanted history
+  //    at the row being drawn now — with the pre-run stamp put down first, the moment the sweep proves long.
+  if (st.sweepRows > 0 && !st.runZoomed && frame - Math.max(st.moveFrom, st.runStampFrame) >= st.sweepRows
+      && stampMeaningful(st.refLo, st.refSpan, lo, span)) {
+    if (!st.preDone && st.refFrame >= 0) addStamp(st, st.refFrame, st.refLo, st.refSpan, frame);
+    addStamp(st, frame, lo, span, frame);
+    st.preDone = true; st.runStampFrame = frame;
+    if (!same(lo, span, st.candLo, st.candSpan)) { st.candLo = lo; st.candSpan = span; st.candFrom = frame; }
+    return true;
   }
   if (!same(lo, span, st.candLo, st.candSpan)) { st.candLo = lo; st.candSpan = span; st.candFrom = frame; return false; }
   if (frame - st.candFrom + 1 < settleRows) return false;
   // ★ LANDED: the rows have held one geometry long enough. One stamp for the whole move, describing the rows below it.
   st.moving = false;
   let changed = false;
-  if (stampMeaningful(st.refLo, st.refSpan, lo, span) && st.refFrame >= 0) {
-    st.stamps.unshift({ id: st.nextId++, frame: st.refFrame, lo: st.refLo, span: st.refSpan, born: frame });
-    if (st.stamps.length > STAMP_MAX) st.stamps.length = STAMP_MAX;
-    st.gen++; changed = true;
+  // ★ (a long sweep already put its pre-run stamp down; the live scale at the top is the landed one — no stamp for it)
+  if (!st.preDone && stampMeaningful(st.refLo, st.refSpan, lo, span) && st.refFrame >= 0) {
+    addStamp(st, st.refFrame, st.refLo, st.refSpan, frame);
+    changed = true;
   }
+  st.preDone = false; st.runZoomed = false; st.runStampFrame = -1;
   st.refLo = lo; st.refSpan = span; st.refFrame = frame;
   return changed;
 }
@@ -193,4 +239,31 @@ export function stampLine(head: number, frame: number, frac: number, uN: number,
   'worklet';
   const R = quant ? Math.floor(frac * uN + 0.0001) : frac * uN;
   return (head - 3 - frame) * uN + R + (quant ? 1 : 0);
+}
+
+/** ★★ THE STAMP'S COLOUR (Stuart, 2026-10-30: "the colour of the labels must be shadowed and be an opposite colour to the
+ *  waterfall so they are readable, on my personal setup i'd simply use orange like my VFO"): the user's own VFO/needle
+ *  colour, drawn with a dark shadow. THE ONE FALLBACK, kept simple: when that colour's HUE is within STAMP_HUE_CLASH° of
+ *  the palette's own at any of its busy levels (LUT 96, 160, 224 — what most of a waterfall is drawn in), and both are
+ *  saturated, the stamp is white instead (a green VFO over a green palette). `lut` = 256 × RGBA. Returns '#rrggbb'. */
+export const STAMP_HUE_CLASH = 35;
+export function stampColour(needleHex: string, lut: ArrayLike<number> | null): string {
+  const h = /^#?([0-9a-f]{6})$/i.exec(needleHex || '');
+  if (!h) return '#ffffff';
+  const n = parseInt(h[1], 16);
+  const hs = (r: number, g: number, b: number): [number, number] => {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (mx <= 0 || d === 0) return [0, 0];
+    const hue = mx === r ? ((g - b) / d + 6) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [hue * 60, d / mx];
+  };
+  const [nh, ns] = hs((n >> 16) & 255, (n >> 8) & 255, n & 255);
+  if (lut && lut.length >= 1024 && ns > 0.3) {
+    for (const i of [96, 160, 224]) {
+      const [ph, ps] = hs(lut[i * 4], lut[i * 4 + 1], lut[i * 4 + 2]);
+      const dh = Math.min(Math.abs(ph - nh), 360 - Math.abs(ph - nh));
+      if (ps > 0.3 && dh < STAMP_HUE_CLASH) return '#ffffff';
+    }
+  }
+  return '#' + h[1].toLowerCase();
 }
