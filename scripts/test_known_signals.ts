@@ -7,13 +7,19 @@
  *   • EiBi rows are classed by EiBi's codes / the name, filtered to on-air, named shortly, de-duplicated against ours;
  *     broadcasts never label;
  *   • the visible set is exactly the view; the layout keeps priority, then nearness to the dial; overlaps drop to row 2,
- *     then out; a blocked box (LISTEN) is never overdrawn; the cap holds; a label near the right edge flips left.
+ *     then out; a blocked box (LISTEN) is never overdrawn; the cap holds; a label near the right edge flips left;
+ *   • TAPPED (Stuart, 2026-10-30: "can they be tapped to tune and chose the decoder?"): every curated entry's dial, mode
+ *     and decoder preset are valid; the plan opens only a decoder the receiver runs; a tap hits a box over ≥ 30 pt, the
+ *     nearer box where two rows' areas overlap; a drag or a hold is never a tap.
  * Run: node --no-warnings scripts/test_known_signals.ts
  */
 import { readFileSync } from 'node:fs';
 import { KNOWN_SIGNALS, DIGI_DIALS, eibiKnownSignals, eibiPlace, eibiOnAir, knownSignalList, signalsInView, labelLayout,
          estimateLabelWidth, bookmarkSignals, bookmarkLabel, isLearntFm, LABEL_MAX, PRIO_SAFETY, PRIO_PERSONAL, PRIO_SERVER,
-         PRIO_LEARNT, PRIO_EIBI, PRIO_TABLE, type KnownSignal } from '../src/utils/knownSignals.ts';
+         PRIO_LEARNT, PRIO_EIBI, PRIO_TABLE, knownTapPlan, knownLabelHit, isLabelTap, LABEL_HIT_MIN_H, type KnownSignal,
+         type PlacedLabel } from '../src/utils/knownSignals.ts';
+import { RTTY_WEATHER, RTTY_SHIFTS, RTTY_BAUD_ROWS } from '../src/utils/rttySpec.ts';
+import { dscTuneFor, DSC_ALL } from '../src/utils/dscChannels.ts';
 
 let pass = 0, fail = 0;
 const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -131,6 +137,64 @@ const T = labelLayout(two, 990000, 20000, 400, () => 60, 1000100, [], 3, 1);
 ok(T.length === 1 && T[0].sig.label === 'B', 'equal priority: the one nearer the dial keeps the row');
 const edge = labelLayout(two.slice(0, 1), 990000, 10100, 400, () => 60, 0);
 ok(edge.length === 1 && edge[0].lx + edge[0].w <= edge[0].x, 'near the right edge a label flips to the left of its marker');
+
+console.log('tapped: the preset table');
+const MODES = new Set(['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl', 'wfm', 'drm']);   // sdrTypes.ts SDRMode
+const DECS = new Set(['rtty', 'wefax', 'navtex', 'dsc', 'spots', 'time', 'hfdl', 'cw', '']);
+const TIME_ST = new Set(['msf', 'dcf77', 'wwv', 'wwvb', 'rwm']);   // DecoderClient TimeStation
+const bad: string[] = [];
+for (const s of KNOWN_SIGNALS) {
+  const why = !MODES.has(s.mode) ? `mode ${s.mode}` : !DECS.has(s.dec) ? `decoder ${s.dec}` : !(s.dialHz > 0) ? 'no dial'
+    : Math.abs(s.hz - s.dialHz) > 3000 ? 'dial > 3 kHz from the marker'
+    : s.dec === 'rtty' && s.src === 'table' && !s.preset?.rtty ? 'curated RTTY without its preset'
+    : s.preset?.rtty && (!(RTTY_SHIFTS as readonly number[]).includes(s.preset.rtty.shift) || !RTTY_BAUD_ROWS.flat().includes(s.preset.rtty.baud as never)) ? 'RTTY preset off the menu'
+    : s.dec === 'wefax' && (s.preset?.wefaxLpm !== 120 || s.preset?.wefaxIoc !== 576) ? 'WEFAX not 120 LPM / IOC 576'
+    : s.dec === 'time' && !(s.preset?.time?.length && s.preset.time.every(t => TIME_ST.has(t))) ? 'TIME without its stations'
+    : s.dec === 'spots' && !(s.preset?.spots && s.label === s.preset.spots) ? 'spots without its mode'
+    : s.preset && !s.dec ? 'a preset with no decoder' : '';
+  if (why) bad.push(`${s.label} @ ${s.hz}: ${why}`);
+}
+ok(bad.length === 0, `every curated entry (${KNOWN_SIGNALS.length}) has a valid dial, mode, decoder and preset${bad.length ? ' — ' + bad.slice(0, 4).join('; ') : ''}`);
+ok(JSON.stringify(ddk!.preset?.rtty) === JSON.stringify(RTTY_WEATHER) && RTTY_WEATHER.baud === 50 && RTTY_WEATHER.shift === 450 && RTTY_WEATHER.encoding === 'ITA2',
+   'DWD RTTY: the WEATHER preset — 50 Bd, 450 Hz, ITA2 (rttySpec.ts RTTY_WEATHER, the menu\'s own)');
+ok(nw!.preset?.wefaxLpm === 120 && nw!.preset?.wefaxIoc === 576, 'Northwood WEFAX: 120 LPM, IOC 576');
+ok(at(60000, 'TIME')?.preset?.time?.join() === 'msf,wwvb' && at(60000)!.mode === 'cwu' && at(10000000, 'TIME')?.mode === 'am',
+   'TIME 60 kHz: MSF or WWVB, tuned CW (cwu); WWV in AM');
+ok(DSC_ALL.every(c => { const k = KNOWN_SIGNALS.find(s => s.dec === 'dsc' && s.hz === c.hz); const t = dscTuneFor(c); return !!k && k.dialHz === t.hz && k.mode === t.mode; }),
+   'DSC: every channel tunes by dscChannels\' own rule');
+const ALL = { rtty: true, wefax: true, navtex: true, dsc: true, spots: true, time: true, hfdl: true, cw: true };
+const pd = knownTapPlan(ddk!, ALL);
+ok(pd.hz === 4582000 && pd.mode === 'usb' && pd.dec === 'rtty' && pd.preset?.rtty?.baud === 50 && pd.preset?.rtty?.shift === 450,
+   'tap DWD 4583: tune 4582 USB, open RTTY at 50 Bd / 450 Hz');
+const pn = knownTapPlan(ddk!, { ...ALL, rtty: false });
+ok(pn.hz === 4582000 && pn.dec === '' && !pn.preset, 'RTTY not offered here (blocked / not on this server): the tap still tunes, opens nothing');
+ok(knownTapPlan(at(3414500, 'VOLMET')!, ALL).dec === '' && knownTapPlan(at(3414500)!, ALL).hz === 3413000, 'VOLMET: just tune (3413 USB), no decoder');
+ok(knownTapPlan(ft8!, ALL).dec === 'spots' && knownTapPlan(ft8!, ALL).hz === 14074000, 'FT8 14.074: tune the dial, open DIGI SPOTS');
+const bmk = bs.find(s => s.label === 'Classic FM')!;
+const pb = knownTapPlan(bmk, ALL);
+ok(pb.dec === '' && pb.mode === 'wfm' && pb.hz === 100900000, 'a learnt FM name: just tune, in WFM');
+ok(knownTapPlan({ ...bmk, mode: 'CW' }, ALL).mode === 'cwu', 'a bookmark saved as "cw" tunes CW upper');
+const hfdl = e.find(s => s.label === 'HFDL · Shannon')!;
+ok(knownTapPlan(hfdl, ALL).dec === 'hfdl' && knownTapPlan(hfdl, { ...ALL, hfdl: false }).dec === '', 'HFDL: its decoder only where the receiver has it');
+
+console.log('tapped: hit-testing, tap vs drag');
+// two rows: row 0's box top at 100, row 1's at 86 (14 above), 13 tall — the app's geometry
+const rowTop = (r: number) => (r === 0 ? 100 : 86);
+const P: PlacedLabel[] = [
+  { sig: ddk!, x: 200, lx: 203, w: 60, row: 0 },
+  { sig: nw!, x: 220, lx: 223, w: 80, row: 1 },
+  { sig: ft8!, x: 500, lx: 503, w: 30, row: 0 },
+];
+const hitL = (x: number, y: number) => knownLabelHit(P, x, y, rowTop, 13)?.sig.label ?? null;
+ok(hitL(230, 106) === 'RTTY · DWD' && hitL(250, 92) === 'WEFAX · Northwood', 'inside a box: that label');
+ok(hitL(515, 106 + LABEL_HIT_MIN_H / 2 - 1) === 'FT8' && hitL(515, 106 - LABEL_HIT_MIN_H / 2 + 1) === 'FT8', `a lone box is hit over ${LABEL_HIT_MIN_H} pt, centred on it`);
+ok(hitL(515, 106 + LABEL_HIT_MIN_H / 2 + 2) === null, 'beyond that: not a label (tap-to-tune)');
+ok(hitL(240, 99.7) === 'RTTY · DWD' && hitL(240, 98.5) === 'WEFAX · Northwood' && hitL(240, 118) === 'RTTY · DWD' && hitL(240, 80) === 'WEFAX · Northwood', 'where two rows\' areas overlap, the nearer box wins');
+ok(hitL(203 - 3, 106) === 'RTTY · DWD' && hitL(203 - 6, 106) === null, 'a few points of slop either side, no more');
+ok(hitL(400, 106) === null && knownLabelHit(null, 230, 106, rowTop, 13) === null, 'between labels, or with none drawn: no hit');
+ok(isLabelTap(0, 0, 80) && isLabelTap(6, -5, 250), 'a tap: still, short');
+ok(!isLabelTap(14, 0, 80) && !isLabelTap(0, 30, 120), 'a drag starting on a label is not a tap (it pans)');
+ok(!isLabelTap(0, 0, 900), 'a long hold is not a tap');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

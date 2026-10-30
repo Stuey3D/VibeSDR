@@ -54,7 +54,7 @@ import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type Row
 import { STAMP_MIN_GAP_LABELS, newStampState, stampAlpha, stampJump, stampNoteRow, stampPrune, stampReset, stampSettleRows, stampSweepRows, stampsShown, stampTicks, stampColour }
   from '../../../src/utils/wfStamps.ts';
 import { tickStep, fmtTick } from './freqScale';
-import { labelLayout, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
+import { labelLayout, knownLabelHit, LABEL_HIT_MIN_H, LABEL_HIT_PAD_X, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type PlacedLabel, type BlockedBox }
   from '../../../src/utils/knownSignals.ts';
 
 export interface WaterfallOpts {
@@ -1676,6 +1676,19 @@ export class Waterfall {
       ctx.fillText(s.label, p.lx + 3 * dpr, y);
     }
     ctx.restore();
+  }
+
+  /** ★★ THE KNOWN-SIGNAL LABEL UNDER A POINT (CSS px on the canvas), or null — main.ts's click asks this BEFORE
+   *  click-to-tune (Stuart, 2026-10-30: "can they be tapped to tune and chose the decoder?"). The boxes as last drawn
+   *  (knownPlaced, _drawKnown's own geometry), each hit over at least LABEL_HIT_MIN_H CSS px, the nearer box winning
+   *  where the two rows' areas overlap (knownSignals.ts knownLabelHit). Nothing while the toggle is off. */
+  knownLabelAt(cssX: number, cssY: number): KnownSignal | null {
+    if (!this.knownSignals || !this.knownSignals.length || !this.knownPlaced.length || !(this.spanHz > 0)) return null;
+    const c = this.canvas, k = c.width / Math.max(1, c.clientWidth), ky = c.height / Math.max(1, c.clientHeight);
+    const dpr = renderDpr(), H = c.height;
+    const hit = knownLabelHit(this.knownPlaced, cssX * k, cssY * ky, (row) => this.markerLabelY(H, row) - 9 * dpr, 13 * dpr,
+                              LABEL_HIT_MIN_H * ky, LABEL_HIT_PAD_X * k);
+    return hit ? hit.sig : null;
   }
 
   /** ★★ V12 beta25 — THE DC SPIKE, LABELLED (Stuart, 2026-10-27: "put a little red label on the DC spike, we know where it

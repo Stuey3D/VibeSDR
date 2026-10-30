@@ -29,9 +29,26 @@
  */
 import { DSC_ALL, dscTuneFor } from './dscChannels.ts';
 import { NAVTEX_BANDS_KHZ } from './navtexStations.generated.ts';
+import { RTTY_WEATHER } from './rttySpec.ts';
 
 /** Decoder ids, as the decoder panel names them (decoderBands.ts DECODER_PLACES). '' = no decoder (a voice service). */
 export type KnownDecoder = 'rtty' | 'wefax' | 'navtex' | 'dsc' | 'spots' | 'time' | 'hfdl' | 'cw' | '';
+
+/** ★★ A DECODER PRESET (Stuart, 2026-10-30: "can they be tapped to tune and chose the decoder?"). The settings the signal
+ *  itself was PUBLISHED with, applied for this session when its label is tapped — never written over the user's own saved
+ *  choice (the callers' preset path, see SDRScreen onKnownTap / main.ts knownTap). Only where the signal fixes them:
+ *  NAVTEX and DSC have nothing to choose (DSC's tones come from the dial — dscParams), and a bookmark or an EiBi row
+ *  carries none (it keeps whatever the user has set). */
+export interface KnownPreset {
+  /** RTTY: shift, baud, alphabet, polarity — DWD's are rttySpec.ts RTTY_WEATHER (the menu's WEATHER key). */
+  rtty?: { shift: number; baud: number; encoding: 'ITA2' | 'ASCII' | 'CCIR476'; inverted: boolean };
+  /** WEFAX: lines a minute and the index of co-operation (IOC 576 = the decoders' 1809-pixel line, the only one built). */
+  wefaxLpm?: 60 | 120 | 240; wefaxIoc?: 576;
+  /** TIME: the stations that share this frequency (60 kHz is MSF AND WWVB — where the receiver is decides). */
+  time?: readonly string[];
+  /** Digital spots: the mode published on this dial. */
+  spots?: 'FT8' | 'FT4' | 'WSPR' | 'JS8';
+}
 
 export interface KnownSignal {
   /** Where the marker goes: the signal's centre / carrier as seen on the spectrum (Hz). */
@@ -47,6 +64,8 @@ export interface KnownSignal {
   /** Higher wins a collision (PRIO_*). */
   prio: number;
   src: 'table' | 'eibi' | 'personal' | 'server' | 'learnt';
+  /** The decoder's settings for this signal, where they are published (curated entries only). */
+  preset?: KnownPreset;
 }
 
 /** ★★ Collision priority (Stuart, 2026-10-30): safety > curated decoder labels > personal bookmarks > bookmarks saved to
@@ -78,23 +97,27 @@ const kHz = (k: number) => Math.round(k * 1000);
 
 function rtty(khz: number, who: string): KnownSignal {
   const hz = kHz(khz);
-  return { hz, label: `RTTY · ${who}`, dec: 'rtty', dialHz: hz - RTTY_AF, mode: 'usb', prio: PRIO_TABLE, src: 'table' };
+  return { hz, label: `RTTY · ${who}`, dec: 'rtty', dialHz: hz - RTTY_AF, mode: 'usb', prio: PRIO_TABLE, src: 'table',
+           preset: { rtty: { ...RTTY_WEATHER } } };
 }
 function wefax(khz: number, who: string): KnownSignal {
   const hz = kHz(khz);
-  return { hz, label: `WEFAX · ${who}`, dec: 'wefax', dialHz: hz - WEFAX_AF, mode: 'usb', prio: PRIO_TABLE, src: 'table' };
+  return { hz, label: `WEFAX · ${who}`, dec: 'wefax', dialHz: hz - WEFAX_AF, mode: 'usb', prio: PRIO_TABLE, src: 'table',
+           preset: { wefaxLpm: 120, wefaxIoc: 576 } };
 }
 function volmet(khz: number, who: string): KnownSignal {
   const d = kHz(khz);
   return { hz: d + VOICE_AF, lo: d + 300, hi: d + 2700, label: `VOLMET · ${who}`, dec: '', dialHz: d, mode: 'usb',
            prio: PRIO_TABLE, src: 'table' };
 }
-function time(hz: number, who: string, mode: KnownSignal['mode'] = 'am', dec: KnownDecoder = 'time'): KnownSignal {
-  return { hz, label: dec ? `TIME · ${who}` : `${who} · time`, dec, dialHz: hz, mode, prio: PRIO_TABLE, src: 'table' };
+function time(hz: number, who: string, mode: KnownSignal['mode'] = 'am', dec: KnownDecoder = 'time', stations: readonly string[] = []): KnownSignal {
+  const s: KnownSignal = { hz, label: dec ? `TIME · ${who}` : `${who} · time`, dec, dialHz: hz, mode, prio: PRIO_TABLE, src: 'table' };
+  if (dec && stations.length) s.preset = { time: stations };
+  return s;
 }
-function digi(mode: string, dial: number, top = 3000, bottom = 0): KnownSignal {
+function digi(mode: 'FT8' | 'FT4' | 'WSPR' | 'JS8', dial: number, top = 3000, bottom = 0): KnownSignal {
   return { hz: dial, lo: dial + bottom, hi: dial + top, label: mode, dec: 'spots', dialHz: dial, mode: 'usb',
-           prio: PRIO_TABLE, src: 'table' };
+           prio: PRIO_TABLE, src: 'table', preset: { spots: mode } };
 }
 
 /**
@@ -151,10 +174,13 @@ function buildTable(): KnownSignal[] {
   for (const d of DIGI_DIALS.WSPR) { const s = digi('WSPR', d, 1600, 1400); s.hz = d + 1500; t.push(s); }
   for (const d of DIGI_DIALS.JS8) t.push(digi('JS8', d));
   for (const k of SHANNON_VOLMET) t.push(volmet(k, 'Shannon'));
-  t.push(time(60_000, 'MSF/WWVB', 'cw'), time(77_500, 'DCF77', 'cw'), time(66_666, 'RBU', 'cw'));
-  for (const f of [4_996_000, 9_996_000, 14_996_000]) t.push(time(f, 'RWM', 'cw'));
-  for (const f of [2_500_000, 5_000_000, 10_000_000, 15_000_000]) t.push(time(f, 'WWV/WWVH'));
-  for (const f of [20_000_000, 25_000_000]) t.push(time(f, 'WWV'));
+  // ★ the stations each one is decoded as — DecoderClient timeStationFor's own map (RBU's 66.666 kHz reads as 'rwm')
+  // ★ CW = 'cwu' on the wire (sdrTypes.ts SDRMode has no plain 'cw'): the carrier keyed in amplitude becomes a beat note
+  t.push(time(60_000, 'MSF/WWVB', 'cwu', 'time', ['msf', 'wwvb']), time(77_500, 'DCF77', 'cwu', 'time', ['dcf77']),
+         time(66_666, 'RBU', 'cwu', 'time', ['rwm']));
+  for (const f of [4_996_000, 9_996_000, 14_996_000]) t.push(time(f, 'RWM', 'cwu', 'time', ['rwm']));
+  for (const f of [2_500_000, 5_000_000, 10_000_000, 15_000_000]) t.push(time(f, 'WWV/WWVH', 'am', 'time', ['wwv']));
+  for (const f of [20_000_000, 25_000_000]) t.push(time(f, 'WWV', 'am', 'time', ['wwv']));
   for (const k of [3330, 7850, 14670]) t.push(time(kHz(k), 'CHU', 'am', ''));
   return t.sort((a, b) => a.hz - b.hz);
 }
@@ -222,7 +248,7 @@ export function eibiKnownSignals(rows: readonly EibiRow[], nowMin: number, curat
     if (curated.some(k => Math.abs(k.hz - hz) <= 1000) || out.some(k => k.label.startsWith(c.kind) && Math.abs(k.hz - hz) <= 1000)) continue;
     const place = eibiPlace(r.name);
     const sig: KnownSignal = { hz, label: place ? `${c.kind} · ${place}` : c.kind, dec: c.dec, dialHz,
-                               mode: c.dec === 'cw' ? 'cw' : 'usb', prio: PRIO_EIBI, src: 'eibi' };
+                               mode: c.dec === 'cw' ? 'cwu' : 'usb', prio: PRIO_EIBI, src: 'eibi' };
     if (c.voice) { sig.lo = f + 300; sig.hi = f + 2700; }
     out.push(sig);
   }
@@ -357,6 +383,68 @@ export function labelLayout(list: readonly KnownSignal[], lo: number, span: numb
  *  box's padding. k = 0.6 covers the app's display faces at 9 pt (wide letters and the "·" included). */
 export function estimateLabelWidth(label: string, fontSize: number, padX = 3, k = 0.6): number {
   return Math.ceil(label.length * fontSize * k + 2 * padX);
+}
+
+// ── Tapped: tune, and open the right decoder ──────────────────────────────────────────────────────────────────────
+/* ★★★ STUART (2026-10-30): "can they be tapped to tune and chose the decoder?" — ONE TAP on a label's box tunes to the
+ *     signal's DIAL in its MODE and opens its decoder with the settings the signal was published with (`preset`). A tap is
+ *     a listener's own tune — the callers send it down the same road as tap-to-tune (ask-before-tuning on a shared dial,
+ *     the VFO lock, a whole-radio mode refusing it). A DRAG that starts on a label still pans: only a tap ever hits one.
+ *  ★ A decoder this receiver does not run (the owner's block list, an older server, a backend without it) is not opened —
+ *    the tap still tunes (AGENTS.md: never a dead control; the label stays useful as a bookmark). */
+/** Which decoders this receiver can open now (absent = no). */
+export type KnownAvail = Partial<Record<Exclude<KnownDecoder, ''>, boolean>>;
+export interface KnownTapPlan {
+  /** Where to tune (the dial, not the marker) and in which mode. */
+  hz: number; mode: string;
+  /** The decoder to open ('' = just tune: a voice service, a bookmark, or one this receiver does not run). */
+  dec: KnownDecoder;
+  /** Its settings for this session (only with a decoder). */
+  preset?: KnownPreset;
+}
+export function knownTapPlan(sig: KnownSignal, avail: KnownAvail): KnownTapPlan {
+  const dec: KnownDecoder = sig.dec && avail[sig.dec] ? sig.dec : '';
+  // ★ a bookmark saved as plain "cw" (OpenWebRX's name) is CW upper here — sdrTypes.ts SDRMode has no 'cw'
+  const mode = String(sig.mode || '').toLowerCase();
+  const plan: KnownTapPlan = { hz: sig.dialHz, mode: mode === 'cw' ? 'cwu' : mode, dec };
+  if (dec && sig.preset) plan.preset = sig.preset;
+  return plan;
+}
+
+/** The smallest hit area a label's box gets (pt / CSS px): a finger is bigger than a 13-pt box. */
+export const LABEL_HIT_MIN_H = 30;
+/** Extra hit width either side of a box (pt / CSS px). */
+export const LABEL_HIT_PAD_X = 4;
+/**
+ * ★★ THE LABEL UNDER A TAP. Each placed box (`lx`..`lx + w` across, `rowTop(row)`..`+ boxH` down) is hit over a larger
+ * area — `padX` wider each side and at least `minH` tall, centred on the box — and where two such areas OVERLAP (the
+ * second row sits 14 above the first) the point goes to the NEARER box, so a neighbour's enlarged area never steals a tap
+ * aimed at its neighbour. Null = no label there (the caller tunes to the point instead). Units are the caller's.
+ */
+export function knownLabelHit(placed: readonly PlacedLabel[] | null | undefined, x: number, y: number,
+                              rowTop: (row: number) => number, boxH: number,
+                              minH = LABEL_HIT_MIN_H, padX = LABEL_HIT_PAD_X): PlacedLabel | null {
+  if (!placed || !placed.length || !Number.isFinite(x) || !Number.isFinite(y)) return null;
+  let best: PlacedLabel | null = null, bestD = Infinity;
+  const half = Math.max(boxH, minH) / 2;
+  for (const p of placed) {
+    const t = rowTop(p.row), cy = t + boxH / 2;
+    if (x < p.lx - padX || x > p.lx + p.w + padX || y < cy - half || y > cy + half) continue;
+    // distance from the point to the box itself (0 inside it)
+    const dx = x < p.lx ? p.lx - x : x > p.lx + p.w ? x - p.lx - p.w : 0;
+    const dy = y < t ? t - y : y > t + boxH ? y - t - boxH : 0;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) { bestD = d; best = p; }
+  }
+  return best;
+}
+
+/** ★★ TAP, NOT DRAG — the rule both clients' gestures keep: a press that moved more than `slop` (pt / CSS px) or was
+ *  held longer than `maxMs` is a pan or a hold, never a label tap. The app's Tap gesture (maxDuration 300, maxDist) and
+ *  the web's pointer handler (its 2-px pan threshold) are this rule; the test proves it in one place. */
+export const LABEL_TAP_SLOP = 10, LABEL_TAP_MAX_MS = 300;
+export function isLabelTap(dx: number, dy: number, ms: number, slop = LABEL_TAP_SLOP, maxMs = LABEL_TAP_MAX_MS): boolean {
+  return Math.hypot(dx, dy) <= slop && ms <= maxMs;
 }
 
 /** ★ THE LABELS' COLOUR — fixed, not the VFO's: they share the boundary rows with LISTEN (drawn in the VFO colour), so a

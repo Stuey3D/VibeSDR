@@ -7,6 +7,13 @@
  *   on space is ITA2's; 1.5 stop bits is the 5-bit Baudot case only; SITOR-B (CCIR476) has its own fixed 4-of-7 framing.
  *   There is no AFC row — the decoder has none (AUTO re-centres on the tones instead).
  */
+/** ★★ THE WEATHER PRESET — DWD's RTTY (Deutscher Wetterdienst, Pinneberg: DDH47 147.3, DDK2 4583, DDH7 7646, DDK9
+ *  10100.8, DDH9 11039, DDH8 14467.3 kHz): 50 Bd, 450 Hz shift, ITA2 (5N1.5), REVERSE as heard in USB 1 kHz below the
+ *  carrier. The skin's RPRESETS "weather" row (the app's and the web's RTTY_PRESETS.weather are this object), the one
+ *  Stuart decodes 4582 USB with (2026-08-13). One place, so the known-signal labels' DWD preset (knownSignals.ts) and the
+ *  RTTY menu's WEATHER key can never disagree. */
+export const RTTY_WEATHER = { shift: 450, baud: 50, encoding: 'ITA2', inverted: true } as const;
+
 export const RTTY_SHIFTS = [85, 170, 200, 425, 450, 850] as const;
 /** Two rows of baud keys, so nine fit a phone. */
 export const RTTY_BAUD_ROWS = [[45.45, 50, 56.88, 75, 100], [110, 150, 200, 300]] as const;

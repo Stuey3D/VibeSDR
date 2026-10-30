@@ -92,7 +92,8 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { labelLayout, estimateLabelWidth, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
+import { labelLayout, estimateLabelWidth, knownLabelHit, isLabelTap, KNOWN_LABEL_COLOUR, KNOWN_LABEL_BOX, type KnownSignal, type BlockedBox } from '../utils/knownSignals';
+import { screenNavRef } from './ScreenNav';
 import { needleGeometry } from '../utils/needleGeometry';
 import { displayMap, fanRefresh, fanRow, motionImageRows, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
 import { ringCapFromDeviceClass, ringNextRows, RING_MIN_ROWS } from '../utils/wfRingSize';
@@ -307,6 +308,10 @@ export interface WaterfallViewProps {
   /** ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts): the sorted list in force (the curated table + EiBi's on-air utility
    *  entries), or null/empty = off. The caller (SDRScreen) owns the toggle; nothing is laid out or drawn while it is off. */
   knownSignals?: readonly KnownSignal[] | null;
+  /** ★★ A TAP ON A LABEL'S BOX (Stuart, 2026-10-30: "can they be tapped to tune and chose the decoder?") — the caller
+   *  tunes to the signal's dial and opens its decoder (SDRScreen onKnownTap). Only a TAP: a drag starting on a label pans
+   *  as ever. Absent = the labels are not tappable (and not screen-nav stops). */
+  onKnownTap?: (sig: KnownSignal) => void;
   /**
    * ★★ THE OPAQUE CONTROL DECK, in WINDOW coordinates (x, y, w, h, corner radius) — or null when nothing opaque
    * covers the waterfall (Transparency on, the deck hidden, mid-rotation). The waterfall shader is then drawn only
@@ -643,7 +648,7 @@ function WaterfallView({
   smoothTune = true, lastInteractAt,
   panLoHz, panHiHz, showWalls = false,
   centerMarkerHz, showCenterMarker = false, centerMarkerColor = '#36c5f0', dcSpikeHz = 0, knownSignals = null,
-  deckOcclusion = null,
+  onKnownTap, deckOcclusion = null,
 }: WaterfallViewProps) {
 
   // ── Vertical layout ─────────────────────────────────────────────────────────
@@ -2895,6 +2900,7 @@ function WaterfallView({
   const panBlocked   = useRef(false);
   const pinchBlocked = useRef(false);
   const tapStartGuarded = useRef(false);          // touch-down began in the home-bar gap
+  const tapStart = useRef({ x: 0, y: 0, t: 0 });  // ★ where and when the touch went down — a label takes only a TAP
 
   const tapGesture = useMemo(() =>
     Gesture.Tap().runOnJS(true).maxDuration(300)
@@ -2903,12 +2909,23 @@ function WaterfallView({
         // so an onEnd-only check let it slip through and retune. Latch the
         // touch-down position and reject in onEnd.
         tapStartGuarded.current = bottomGuard > 0 && e.y >= guardTop;
+        tapStart.current = { x: e.x, y: e.y, t: Date.now() };
       })
       .onEnd((e: any) => {
         if (!bwHz || !centerHz) return;
         if (tapStartGuarded.current) return;            // began in home-bar gap
         if (e.y < BAND_H) return; // band strip taps reserved (future: band jump)
         if (bottomGuard > 0 && e.y >= guardTop) return; // home-bar gap
+        /* ★★ A KNOWN-SIGNAL LABEL FIRST (knownSignals.ts knownLabelHit — Stuart, 2026-10-30: "can they be tapped to tune
+         *  and chose the decoder?"). Its box (RF CENTRE's 13 pt row) is hit over at least LABEL_HIT_MIN_H (30 pt), the
+         *  nearer box winning where the two rows' areas overlap. Only a TAP — no further than the slop from where it went
+         *  down, no longer than LABEL_TAP_MAX_MS: a drag starting on a label is the Pan gesture's, as before. A miss tunes
+         *  to the point exactly as it always did. */
+        if (onKnownTap && knownPlaced) {
+          const hit = knownLabelHit(knownPlaced, e.x, e.y, (row) => (row === 0 ? markerLabelBase : markerLabelBase - 14), 13);
+          const t0 = tapStart.current;
+          if (hit && isLabelTap(e.x - t0.x, e.y - t0.y, Date.now() - t0.t)) { onKnownTap(hit.sig); return; }
+        }
         // ★★ BY THE ROW UNDER THE TAP (Stuart, 2026-10-30, #57 — Gesiima tunes from the history onto a signal that is quiet
         //    now): on the waterfall, the frequency x had on THAT row (its own scale, as it was drawn — a row from before a
         //    zoom, a tune or a band change), from the same uniforms that scroll the picture. On the newest rows, the spectrum
@@ -2923,7 +2940,7 @@ function WaterfallView({
           }
         }
         onTapTune?.(Math.round(hzOnRow(e.x / width, geo, visStart, bwHz)));
-      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop, wfTop, stampRowPt, engine]);
+      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop, wfTop, stampRowPt, engine, onKnownTap, knownPlaced, markerLabelBase]);
 
   // Pan runs as a WORKLET (UI thread): event delivery + accumulation never wait
   // on the JS thread, so a laggy connection / heavy data can't make the drag
@@ -3287,7 +3304,12 @@ function WaterfallView({
               {bx1 - bx0 >= 3 && (
                 <View pointerEvents="none" style={[styles.knownSpan, { left: bx0, width: bx1 - bx0, top: tickBot - 2 }]} />
               )}
+              {/* ★ A screen-nav stop when tappable (ScreenNav — Enter = the tap); one id per slot, LABEL_MAX at most. */}
               <View pointerEvents="none" accessible accessibilityLabel={s.label.replace(' · ', ', ')}
+                    accessibilityRole={onKnownTap ? 'button' : undefined}
+                    accessibilityHint={onKnownTap ? (s.dec ? 'Tunes to it and opens its decoder' : 'Tunes to it') : undefined}
+                    onAccessibilityTap={onKnownTap ? () => onKnownTap(s) : undefined}
+                    ref={onKnownTap ? screenNavRef('known' + i, () => onKnownTap(s)) : undefined}
                     style={[styles.knownBox, { left: p.lx, top }]}>
                 <Text numberOfLines={1} style={[styles.knownText, { fontFamily }]}>{s.label}</Text>
               </View>

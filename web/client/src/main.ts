@@ -61,7 +61,7 @@ import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassb
 import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
-import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
+import { rttyFraming, RTTY_WEATHER, type RttyParity } from '../../../src/utils/rttySpec';
 import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../../../src/utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
@@ -91,7 +91,7 @@ import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   /
 import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
-import { knownSignalList, eibiKnownSignals, bookmarkSignals } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
+import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, isLabelTap, type KnownSignal, type KnownAvail } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
@@ -11364,7 +11364,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
   // ★★ AUTO (2026-10-04): the server finds shift, centre, baud and polarity itself — the default, one click.
   auto:      { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false, auto: true },
   ham:       { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false },
-  weather:   { shift: 450, baud: 50,    encoding: 'ITA2',    inverted: true  },
+  weather:   { ...RTTY_WEATHER },   // ★ rttySpec.ts RTTY_WEATHER — DWD's 50 Bd / 450 Hz, shared with the known-signal labels
   'sitor-b': { shift: 170, baud: 100,   encoding: 'CCIR476', inverted: false },
 };
 
@@ -15920,6 +15920,62 @@ function applyKnownSignals() {
   wf.knownSignals = knownSignalList(eibiKnownSignals(getStations(), d.getUTCHours() * 60 + d.getUTCMinutes()), bms);
   wf.knownGen++;
 }
+/** ★ A decoder key in the panel this receiver offers now (the owner's block list, vibeserver.json's own decoders) —
+ *  initChat's canDecode rule. */
+function decKeyOffered(d: string): HTMLButtonElement | null {
+  const b = document.querySelector(`#decodersPanel [data-dec="${d}"]`) as HTMLButtonElement | null;
+  return decoders && b && !b.hidden && !blockedModes.has(d) ? b : null;
+}
+function knownAvail(): KnownAvail {
+  const sb = document.getElementById('spotsBtn') as HTMLButtonElement | null;
+  return {
+    rtty: !!decKeyOffered('rtty'), navtex: !!decKeyOffered('navtex'), wefax: !!decKeyOffered('wefax'),
+    time: !!decKeyOffered('time'), dsc: !!decKeyOffered('dsc'), cw: !!decKeyOffered('cw'),
+    spots: !!decoders && !!sb && !sb.hidden && !blockedModes.has('spots'),
+    hfdl: false,   // ★ no HFDL decoder or map on this page — the tap just tunes there
+  };
+}
+/**
+ * ★★★ A KNOWN-SIGNAL LABEL CLICKED (knownSignals.ts knownTapPlan — Stuart, 2026-10-30: "can they be tapped to tune and
+ *     chose the decoder?"): tune to the signal's DIAL in its MODE, then open its decoder with the settings the signal was
+ *     published with — the app's onKnownTap, the same rules.
+ *  ★★ THE SAME ROAD AS CLICK-TO-TUNE: spec.tune — ask-before-tuning on a shared dial and the Icom owner lock refuse it
+ *     there (and then nothing opens), a whole-radio mode refuses it, the VFO lock decides whether the view follows, and
+ *     with VFO B selected it tunes B, where the decoder then runs (abStartVfo).
+ *  ★★ THE PRESET IS THE PANEL'S OWN: RTTY_PRESETS.weather for DWD (the RTTY settings light it, as pressing WEATHER does),
+ *     WEFAX's 120 LPM key, the TIME station's key. This page remembers none of them between visits, so nothing saved is
+ *     overwritten. A decoder this receiver does not offer is not opened — the click still tunes. */
+function knownTap(sig: KnownSignal) {
+  if (!spec || !wf) return;
+  if (heldMode()) return;
+  const plan = knownTapPlan(sig, knownAvail());
+  const m = plan.mode.toLowerCase() as SDRMode;
+  const want = m && m !== spec.mode && offeredModes().includes(m) ? m : undefined;
+  // ★ refused (ask first / the owner's Icom lock): tune() says so and nothing else happens — never a decoder opened on
+  //   somebody else's dial
+  if (spec.isTuneLocked() || spec.icomFollowLocked) { spec.tune(clampTune(plan.hz), want); return; }
+  airDesig = null;
+  spec.tune(clampTune(plan.hz), want);
+  syncStep();
+  airbandFollowPassband();
+  renderFreq();
+  if (!plan.dec || !decoders) return;
+  const p = plan.preset;
+  if (plan.dec === 'spots') {
+    if (!decoders.spotsEnabled) (document.getElementById('spotsBtn') as HTMLButtonElement | null)?.click();
+    return;
+  }
+  if (plan.dec === 'rtty' && p?.rtty) { rtty = { ...RTTY_PRESETS.weather, ...p.rtty, auto: false }; syncRttyControls(); }
+  const seg = (host: string, attr: string, v: string) => {
+    const b = document.querySelector(`#${host} [data-${attr}="${v}"]`) as HTMLButtonElement | null;
+    if (b) { const was = activeDec; activeDec = null; b.click(); activeDec = was; }   // ★ the key lit, the value set; no re-attach yet
+  };
+  if (plan.dec === 'wefax' && p?.wefaxLpm) seg('wefaxLpm', 'lpm', String(p.wefaxLpm));
+  if (plan.dec === 'time' && p?.time?.length) seg('timeStation', 'station', p.time.includes(timeStation) ? timeStation : p.time[0]);
+  // ★ the panel's own key starts it (its VFO, its box, its settings row); already running = re-attach with the preset
+  if (activeDec === plan.dec) reattachIf(plan.dec);
+  else decKeyOffered(plan.dec)?.click();
+}
 
 function toggle(id: string, apply: (on: boolean) => void, prefKey?: string, initial = false,
                 pushOnInit = true) {
@@ -18822,6 +18878,7 @@ function initWaterfallInput() {
   let dragging = false;
   let moved = false;
   let startX = 0;
+  let startY = 0, downAt = 0;   // ★ a known-signal label takes only a TAP (isLabelTap)
   let startCenter = 0;   // view centre when the drag began
 
   c.addEventListener('pointerdown', (e) => {
@@ -18829,6 +18886,7 @@ function initWaterfallInput() {
     dragging = true;
     moved = false;
     startX = e.clientX;
+    startY = e.clientY; downAt = performance.now();
     // Anchor to our PREDICTED view, not the rendered frame. wf.centerHz is the
     // centre of the last frame the SERVER sent — it lags by a frame or two, so
     // panning relative to it measures from a stale base, fights the frames still
@@ -18866,6 +18924,15 @@ function initWaterfallInput() {
     c.classList.remove('panning');
     if (!moved && spec && wf) {
       const rect = c.getBoundingClientRect();
+      /* ★★ A KNOWN-SIGNAL LABEL FIRST (wf.knownLabelAt — Stuart, 2026-10-30: "can they be tapped to tune and chose the
+       *  decoder?"): a click on its box (hit over ≥ 30 px) tunes to the signal's dial and opens its decoder. A press that
+       *  moved is a pan (moved, above) and never reaches here; one held long on a label does nothing rather than tune to
+       *  the box's own pixel. */
+      const ks = wf.knownLabelAt(e.clientX - rect.left, e.clientY - rect.top);
+      if (ks) {
+        if (isLabelTap(e.clientX - startX, e.clientY - startY, performance.now() - downAt)) knownTap(ks);
+        return;
+      }
       // Snap the click to the step grid, so the arrows carry on from a round number.
       // (snapToStep: exact 25000/3 on the airband's 8.33 kHz step — src/utils/airband.ts.)
       // ★★ V12 VFO A/B: a tap ON the other needle selects it rather than tuning onto it.

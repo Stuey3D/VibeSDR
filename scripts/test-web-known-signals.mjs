@@ -8,6 +8,10 @@
 //   • 14.06–14.10 MHz: FT8 / FT4 / JS8 / WSPR with their spans;
 //   • spectrum hidden: the labels at the top of the waterfall; toggle off: none at all.
 //   • the FM band: a personal bookmark, a server-saved one and learnt RDS names (Stuart's follow-ups, 2026-10-30).
+//   • TAPPED — the REAL BUILT PAGE (web/dist, `node scripts/build-web.mjs` first) against scripts/mock-vibeserver.mjs
+//     (Stuart, 2026-10-30: "can they be tapped to tune and chose the decoder?"): a trusted click on DWD's label tunes
+//     4582 kHz USB (what reached the "server", GET /debug/controls) and opens RTTY with 50 Bd / 450 Hz lit; a drag that
+//     starts on a label pans the view and tunes nothing; a click beside the labels still tunes to the point.
 // Pictures to KNOWN_PNG=<dir>.   node scripts/test-web-known-signals.mjs
 import fs from 'node:fs';
 import os from 'node:os';
@@ -147,11 +151,91 @@ try {
   await ev('__wfDrv.run(200)');
   const k1 = await ev('__wfDrv.wf.knownKey'); await ev('__wfDrv.run(500)'); const k2 = await ev('__wfDrv.wf.knownKey');
   ok(k1 === k2, 'a steady view keeps its cached layout (no re-layout per frame)');
+
+  // ── 5. TAPPED: the real page against the mock server ──
+  if (!fs.existsSync(path.join(root, 'web/dist/vibesdr.html'))) { console.log('   (tap part not run — build the page first: node scripts/build-web.mjs)'); }
+  else await tapPart(send, ev);
 } catch (e) {
   console.log('   FAIL', e?.message || e); fail++;
 } finally {
   clearTimeout(deadline);
   try { edge.kill(); } catch {}
+  try { mock?.kill(); } catch {}
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
+}
+
+var mock = null;
+async function tapPart(send, ev) {
+  console.log('tapped (the built page, the mock server)');
+  const port = await freePort();
+  mock = spawn('nice', ['-n', '10', process.execPath, path.join(root, 'scripts/mock-vibeserver.mjs'), '--no-pin', '--port', String(port)], { stdio: 'ignore' });
+  await sleep(800);
+  const controls = async () => (await fetch(`http://127.0.0.1:${port}/debug/controls`)).json();
+  const until = async (x, ms) => { for (let t = 0; t < ms; t += 200) { if (await ev(x)) return true; await sleep(200); } return !!(await ev(x)); };
+  const mouse = async (type, x, y) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1 });
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
+  await send('Page.navigate', { url: `http://localhost:${port}/index.html?join` });
+  await sleep(4500);
+  await ev(`(() => { const b = [...document.querySelectorAll('button')].find(x => /^START$/i.test(x.textContent.trim()) && x.offsetParent); if (b) b.click(); return !!b; })()`);
+  // ★ START RADIO needs a trusted click (the audio gate) — the waterfall plays out in step with the audio
+  if (await until(`!!document.querySelector('#audioGate button')`, 8000)) {
+    const r = JSON.parse(await ev(`JSON.stringify(document.querySelector('#audioGate button').getBoundingClientRect())`));
+    await mouse('mousePressed', r.x + r.width / 2, r.y + r.height / 2); await mouse('mouseReleased', r.x + r.width / 2, r.y + r.height / 2);
+    await sleep(1500);
+  }
+  ok(await until(`!!(window.__vibeWf && window.__vibeWf())`, 15000), 'the page is up (its waterfall and spectrum client)');
+  // the labels on, the spectrum shown, the dial on 4.6 MHz in AM (the tap must bring USB) and the view 4.5–4.7 MHz (as the controls do it)
+  await ev(`(() => { const { wf, spec } = window.__vibeWf(); spec.tune(4600000, 'am'); spec.zoom(4600000, 200000 / (spec.cfg?.binCount || 4096)); return true; })()`);
+  const placedQ = `(() => { const { wf } = window.__vibeWf(); return (wf.knownPlaced || []).map(p => p.sig.label).join('|'); })()`;
+  ok(await until(`${placedQ}.includes('RTTY · DWD')`, 10000), `DWD's label is drawn (${await ev(placedQ)})`);
+  // a label's box centre in CSS px on the page (the waterfall's own geometry — _drawKnown)
+  const boxAt = (label) => ev(`(() => { const { wf } = window.__vibeWf(); const c = wf.canvas, r = c.getBoundingClientRect();
+    const p = wf.knownPlaced.find(q => q.sig.label === ${JSON.stringify(label)}); if (!p) return null;
+    const k = c.width / c.clientWidth, ky = c.height / c.clientHeight, dpr = c.width / c.clientWidth;
+    const y = wf.markerLabelY(c.height, p.row) - 9 * dpr + 6.5 * dpr;
+    return { x: r.left + (p.lx + p.w / 2) / k, y: r.top + y / ky }; })()`);
+  const decOpen = `(() => { const t = document.getElementById('decTitle'); return document.getElementById('decBox').classList.contains('open') ? t.textContent : ''; })()`;
+  const lit = (host, attr, v) => ev(`!!document.querySelector('#${host} [data-${attr}="${v}"]')?.classList.contains('on')`);
+
+  // ── a DRAG that starts on a label pans and tunes nothing ──
+  const before = await controls();
+  const c0 = await ev(`window.__vibeWf().spec.viewCenterHz()`);
+  let b = await boxAt('WEFAX · Northwood') || await boxAt('RTTY · DWD');
+  await mouse('mousePressed', b.x, b.y);
+  for (let i = 1; i <= 6; i++) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: b.x + i * 15, y: b.y, button: 'left', buttons: 1 }); await sleep(30); }
+  await mouse('mouseReleased', b.x + 90, b.y);
+  await sleep(700);
+  const c1 = await ev(`window.__vibeWf().spec.viewCenterHz()`);
+  const after = await controls();
+  ok(Math.abs(c1 - c0) > 5000, `a drag starting on a label pans the view (centre ${(c0 / 1e3).toFixed(1)} → ${(c1 / 1e3).toFixed(1)} kHz)`);
+  ok(JSON.stringify(after.tune) === JSON.stringify(before.tune) && !(await ev(decOpen)), 'and tunes nothing, opens nothing');
+  // back to the view, labels re-laid out
+  await ev(`(() => { const { spec } = window.__vibeWf(); spec.zoom(4600000, 200000 / (spec.cfg?.binCount || 4096)); return true; })()`);
+  await until(`${placedQ}.includes('RTTY · DWD')`, 6000);
+  await sleep(600);
+
+  // ── a CLICK on DWD's label: 4582 USB, RTTY open at 50 Bd / 450 Hz ──
+  b = await boxAt('RTTY · DWD');
+  ok(!!b, 'DWD\'s label is on the page');
+  await mouse('mousePressed', b.x, b.y); await mouse('mouseReleased', b.x, b.y);
+  let tuned = null;
+  for (let i = 0; i < 20; i++) { await sleep(200); tuned = (await controls()).tune; if (tuned?.frequency === 4582000) break; }
+  ok(tuned?.frequency === 4582000, `tuned to 4582 kHz (the dial 1 kHz below DWD's 4583) — the server got ${tuned?.frequency}`);
+  const modeNow = await ev(`window.__vibeWf().spec.mode`);
+  ok(modeNow === 'usb' && tuned?.mode === 'usb', `in USB, in the same tune message, from AM (page ${modeNow}, server ${tuned?.mode})`);
+  ok(await until(`${decOpen} === 'RTTY'`, 4000), `the RTTY decoder is open ("${await ev(decOpen)}")`);
+  ok(await lit('rttyBaud', 'baud', '50') && await lit('rttyShift', 'shift', '450') && await lit('rttyPreset', 'preset', 'weather'),
+     'at 50 Bd / 450 Hz shift — the WEATHER preset lit');
+  ok(await ev(`document.getElementById('rttyInv').classList.contains('on')`), 'polarity reversed, as the WEATHER preset (DWD heard in USB)');
+
+  // ── a click BESIDE the labels still tunes to the point ──
+  // ★ high in the spectrum, well clear of the label rows and of the decoder box now open over the waterfall
+  const pt = await ev(`(() => { const { wf } = window.__vibeWf(); const r = wf.canvas.getBoundingClientRect(); return { x: r.left + r.width * 0.3, y: r.top + r.height * 0.12 }; })()`);
+  ok(await ev(`document.elementFromPoint(${pt.x}, ${pt.y})?.id === 'wf'`), 'the point beside the labels is the waterfall canvas itself');
+  const want = await ev(`(() => { const { wf } = window.__vibeWf(); const r = wf.canvas.getBoundingClientRect(); return wf.xyToHz(r.width * 0.3, r.height * 0.12); })()`);
+  await mouse('mousePressed', pt.x, pt.y); await mouse('mouseReleased', pt.x, pt.y);
+  await sleep(700);
+  const t2 = (await controls()).tune?.frequency;
+  ok(t2 && t2 !== 4582000 && Math.abs(t2 - want) < 5000, `a click away from the labels tunes to the point (${t2} ≈ ${Math.round(want)})`);
 }

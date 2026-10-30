@@ -46,7 +46,7 @@
 
 import { noteDecision } from './protocolLog';
 import { USER_AGENT } from '../constants/version';
-import { rttyFraming } from '../utils/rttySpec';
+import { rttyFraming, RTTY_WEATHER } from '../utils/rttySpec';
 import { guard, guardJson } from './faultLog';
 import { cleanText, cleanMode } from '../utils/safeText';
 import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, type CwList, type CwSpot } from './cwList';
@@ -123,7 +123,7 @@ export interface RttySettings {
 export const RTTY_PRESETS: Record<string, RttySettings> = {
   auto:      { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false, auto: true },
   ham:       { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false },
-  weather:   { shift: 450, baud: 50,    encoding: 'ITA2',    inverted: true  },
+  weather:   { ...RTTY_WEATHER },   // ★ rttySpec.ts RTTY_WEATHER — DWD's 50 Bd / 450 Hz, shared with the known-signal labels
   'sitor-b': { shift: 170, baud: 100,   encoding: 'CCIR476', inverted: false },
 };
 
