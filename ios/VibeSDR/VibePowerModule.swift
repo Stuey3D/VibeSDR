@@ -355,7 +355,18 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
   // with no accounting let the queue grow after any delivery burst, so
   // playback ran seconds behind live FOREVER — tuning sounded delayed because
   // you kept hearing the backlog. queuedSeconds is mutated on audioQ only.
-  private var queuedSeconds: Double = 0
+  private var queuedSeconds: Double = 0 { didSet { avPublish() } }
+  /* ★★ V12 2026-10-30 THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts): JS asks, a few times a second, how far
+   *  behind its arrival the audio is being HEARD — what is queued on the player, what the pre-roll is still gathering, and
+   *  what the output adds after the player (AVAudioSession's outputLatency + one IO buffer: a Bluetooth headset is ~150 ms
+   *  of it). queuedSeconds and preRoll live on audioQ; they are copied here under a lock as they change, so the JS thread
+   *  never touches audioQ state and never waits on it. See audioPlayoutMs. */
+  private let avLock = NSLock()
+  private var avQueuedPub: Double = 0
+  private var avPreRollPub: Double = 0
+  private func avPublish() {
+    avLock.lock(); avQueuedPub = queuedSeconds; avPreRollPub = preRoll; avLock.unlock()
+  }
   /** ★ The cushion that absorbs a source gap — see scheduleOut. An RTL gain change costs ~40 ms of
    *  broken audio at the hardware, so this has to be several times that to be worth having, and
    *  small enough that the dial still feels immediate. */
@@ -377,7 +388,7 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
    *    faster than real time. It is a safety valve, and this widens it for the one source whose
    *    normal delivery pattern was tripping it. */
   private var liveEdgeCap: Double = 0.4
-  private var preRoll: Double = 0
+  private var preRoll: Double = 0 { didSet { avPublish() } }
   private var preRollBufs: [AVAudioPCMBuffer] = []
   // Now-playing overrides — JS computes a VTS-aware title/artist (station or
   // band name, user's frequency unit, tune step) and pushes them here. A
@@ -1824,6 +1835,21 @@ class VibePowerModule: RCTEventEmitter, CLLocationManagerDelegate {
 
   @objc func clearCrumbs() {
     if let url = VibeCrumbs.fileURL { try? FileManager.default.removeItem(at: url) }
+  }
+
+  /// ★★ V12 2026-10-30: the audio's playout delay, ms — how long after a packet ARRIVES its sound reaches the ear: the
+  /// player's queue (queuedSeconds — the 220 ms pre-roll, deeper after a burst, up to liveEdgeCap), anything the pre-roll is
+  /// still gathering, and the output's own latency + IO buffer. −1 when no audio is playing (the waterfall then holds
+  /// nothing — wfAvSync.ts). Synchronous and cheap: a lock and two AVAudioSession reads. The waterfall polls it at 4 Hz.
+  /// ★ Not measured: the server's own encode delay and any difference between the audio and spectrum sockets' transit —
+  ///   both are taken as equal.
+  @objc func audioPlayoutMs() -> NSNumber {
+    guard isRunning, playerNode != nil else { return -1 }
+    avLock.lock(); let q = avQueuedPub, pr = avPreRollPub; avLock.unlock()
+    let s = AVAudioSession.sharedInstance()
+    let out = max(0, s.outputLatency) + max(0, s.ioBufferDuration)
+    let gathering = pr < kPreRollSeconds ? pr : 0   // the pre-roll's buffers are not on the player yet
+    return NSNumber(value: (q + gathering + out) * 1000)
   }
 
   @objc func getDebugInfoSync() -> String {
