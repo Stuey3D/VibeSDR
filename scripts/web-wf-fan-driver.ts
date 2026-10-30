@@ -50,12 +50,15 @@ const S: any = (window as any).__wfDrv = {
   bins: new Float32Array(N),
   cost: [] as number[],
   mode: 'webgl',
-  setup(mode: string, w: number, h: number, scroll = 'default') {
+  setup(mode: string, w: number, h: number, scroll = 'default', stamps = false) {
     S.mode = mode;
     const cv = document.getElementById('wf') as HTMLCanvasElement;
     cv.style.width = w + 'px'; cv.style.height = h + 'px';
     const wf = new Waterfall(cv, { specRatio: 0, palette: 'gqrx' });
     (wf as any)._drawVfo = () => {};
+    // ★ the scale stamps are an overlay on the picture: off for the history checks (they count pixels), on for
+    //   scripts/test-web-wf-stamps.mjs
+    if (!stamps) (wf as any)._drawStamps = () => {};
     if (mode === '2d') { (wf as any).gl = null; (wf as any).glCanvas = null; (wf as any).wf.width = 0; wf.resize(); }
     wf.setScroll(scroll as any);
     // a fixed range with the floor well above the palette's 0, and no unsharp mask: palette index 0 (black) is then ONLY
@@ -129,6 +132,9 @@ const S: any = (window as any).__wfDrv = {
     }
     return { W, H, lum, geo, carriers: CARRIERS, black: (() => { const lut = (wf.lut as Uint8Array); return lut[0] * 2 + lut[1] + lut[2]; })() };
   },
+  /** The scale stamps (src/utils/wfStamps.ts) and the row counter they hang from. */
+  stampInfo() { const w = S.wf as any; return { rowSeq: w.rowSeq, H: w.wf.height, top: w.canvas.height - w.wf.height,
+    stamps: w.stamps.stamps.map((s: any) => ({ ...s })), minGap: w.stamps.minGapRows }; },
   png() { return (document.getElementById('wf') as HTMLCanvasElement).toDataURL('image/png'); },
   costStats() { const c = S.cost.slice().sort((a: number, b: number) => a - b); const m = c.reduce((s: number, v: number) => s + v, 0) / Math.max(1, c.length);
     return { n: c.length, mean: m, p50: c[c.length >> 1], p95: c[Math.floor(c.length * 0.95)], max: c[c.length - 1] }; },

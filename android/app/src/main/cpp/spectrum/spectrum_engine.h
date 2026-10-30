@@ -15,7 +15,10 @@
 #pragma once
 #include "wf_row_target.h"
 #include "wf_row_clock.h"
+#include "wf_row_combine.h"   // ★★ V12 2026-10-30 thinned frames combined, not dropped
+#include "wf_av_sync.h"
 #include "wf_zoom_fan.h"   // + wf_motion.h
+#include "wf_stamps.h"
 #include "spectrum_processor.h"
 #include <atomic>
 #include <cmath>
@@ -37,9 +40,17 @@ struct EngineConfig {
     bool   specShow = true;
     bool   peakHold = true;
     bool   smoothTune = true;
+    bool   boost = true;       // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (wf_row_clock.h boostRowRate `enabled`)
     int    displayCapHz = 0;   // the FRAME RATE cap (0 = none): under 60 the row target divides it (wf_row_target.h rowTargetUnderCap)
     int    panelHz = 0;        // ★ the panel's maximum refresh (0 = unknown): the interaction boost's ceiling when there is no cap
-    int    targetRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
+    int    targetRows = 0;
+    // ★★ SCALE STAMPS (wf_stamps.h): the waterfall's rows on screen (WaterfallView shaderRows) and the fewest rows
+    //    between two stamps (three label heights) — 0 = unknown (an older JS): defaults.
+    int    stampViewRows = 0;
+    // ★★★ THE RING'S DEPTH (src/utils/wfRingSize.ts decides it in JS — the view's rows, capped by the device's RAM tier):
+    //     grow-only — the engine copies its history into the deeper ring (wf_ring_grow.h). 0 / ≤ the current = no change.
+    int    ringRows = 0;
+    int    stampMinGapRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
 };
 
 /** What the UI thread picks up. Handles are OWNED by the receiver once taken (wrap them or release them). */
@@ -56,10 +67,15 @@ struct UiUpdate {
     double   glideDur = 100;
     double   moLo = 1, moHi = 0;   // the image's motion range (absolute frames; lo > hi = none) — uMoLo/uMoHi
     double   fanK = 1, fanC = 0;   // the fans' screen move since the last image the UI took (x_old = fanC + fanK·x)
+    int      ringRows = 1024;      // ★★ the ring depth of THIS image (the shader's uRows) — rides with the image
     // Spectrum
     uint32_t specGen = 0;          // changed → specTarget is new
     std::vector<float> specTarget; // the decimated trace target (specToSv)
     bool     specHidden = false;   // spectrum hidden → reset the trace paths, peak empty
+    // ★★ Scale stamps (wf_stamps.h): changed → `stamps` is the new list (newest first)
+    uint32_t stampGen = 0;
+    bool stampsNew = false;
+    std::vector<vibewf::WfStamp> stamps;
     // Peak
     uint32_t peakGen = 0;          // changed → peakPath is new (nullptr = the empty path)
     void*    peakPath = nullptr;
@@ -74,7 +90,8 @@ public:
     using Clock     = double (*)();
 
     static constexpr int RING_W = 1024;
-    static constexpr int RING_ROWS = 1024;
+    static constexpr int RING_ROWS = 1024;   // the ring's STARTING (and the low RAM tier's only) depth — ringRows_ grows
+    static constexpr int RING_MAX_ROWS = 4096;   // the top RAM tier (wfRingSize.ts) — a sanity bound on what JS asks for
 
     SpectrumEngine(MakeImage makeImage, MakePath makePath, Release releaseImage, Release releasePath,
                    Clock clock = nullptr);
@@ -99,10 +116,16 @@ public:
     void setConfig(const EngineConfig& c);
     void setSettings(const vibedsp::SpectrumProcessorSettings& s);
     void setLastInteractAt(double ms);                       // lastInteractAt.current
+    /** ★★ V12 2026-10-30 the audio's playout delay, ms (−1 = unknown) — the clock waits for the sound (wf_av_sync.h).
+     *  JS polls it at 4 Hz (VibeStreamService.audioPlayoutMs) and forwards it. */
+    void setAudioDelay(double ms);
     void setBackground(bool bg);
     void setCovered(bool covered);
     /** dB window for the axis labels (2 dB hysteresis, as liveRange). Returns true when it changed since last read. */
     bool liveRange(int& dbMin, int& dbMax);
+    /** ★★ The scale row `frame` (absolute) is DISPLAYED at — Hz at the left edge and across — while it is in the ring; false
+     *  if not. A tap on an old row tunes by its own scale (Stuart, 2026-10-30, #57). Any thread (under mx_). */
+    bool rowGeom(double frame, double& lo, double& span);
 
     // ── From the UI thread ──
     /** Fill `out` with everything new since the last poll. Cheap when nothing is (returns false). */
@@ -113,6 +136,13 @@ public:
     static SpectrumEngine* makeForTest(MakeImage, MakePath, Release, Release, Clock);
     /** Host tests: the layer ring (null until the first SPWB) and the full-capture state's floor offset. */
     const vibewf::LayerRing* layerForTest() const { return fan_.layer.get(); }
+    int ringRowsForTest() const { return ringRows_; }
+    /** Host tests: the bytes the next image is made from (the displayed ring + motion planes) and its geometry. */
+    const uint8_t* imageBytesForTest() { return vibewf::wfImageBytes(fan_, motion_, ring_.data(), RING_W, ringRows_); }
+    const vibewf::MotionState& motionForTest() const { return motion_; }
+    const vibewf::FanState& fanForTest() const { return fan_; }
+    double framesForTest() const { return frameCount_; }
+    const vibewf::StampState& stampsForTest() const { return stamps_; }
     double wideOffForTest() const { return wide_ ? wide_->off : NAN; }
 
 private:
@@ -132,7 +162,7 @@ private:
     void storeRingImageLocked(void* img);   // with mx_ held
     void emitRepeatRow();
     /** `at` > `now`: the trace waits for its row (WaterfallView traceShow) — queued, published by runTrace. */
-    void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at = 0, double now = 0);
+    void buildSpectrum(const vibedsp::SpectrumFrameOut& fr, bool boost, double at = 0, double now = 0, bool shrunk = false);
     void publishTrace(const std::vector<float>& spec, void* peak);
     void runTrace(double now);
     void traceDrop();
@@ -153,6 +183,7 @@ private:
     EngineConfig cfg_;
     double viewCenterHz_ = 0, viewBwHz_ = 0;
     double lastInteractAt_ = 0;
+    double audioMs_ = -1; bool audioNew_ = false;   // ★ V12 the audio's playout delay, as JS last sent it
     bool bg_ = false, covered_ = false;
     bool settingsDirty_ = false;
     double nativeFedUntil_ = 0;
@@ -167,7 +198,10 @@ private:
     std::deque<Frame> jbQueue_;
     double jbArrivalMs_ = 150, jbLastArrival_ = 0, jbDueAt_ = -1;
     bool jbPrefill_ = true;
-    std::vector<uint8_t> ring_;           // RING_W × (RING_ROWS + MOTION_ROWS): the ring + the motion rows the image carries
+    std::vector<uint8_t> ring_;           // RING_W × (ringRows_ + motionImageRows): the ring + the motion rows the image carries
+    int ringRows_ = RING_ROWS;            // ★★ the ring's depth (engine thread) — grows only (growRingTo, wf_ring_grow.h)
+    int imgRows_ = RING_ROWS;             // the depth of the image just made (engine thread) → outRingRows_
+    void growRingTo(int rows);
     std::vector<uint8_t> rowBuf_;         // resample scratch
     vibewf::MotionState motion_{RING_ROWS, RING_W};   // each slot's placement + its move to the next row (wf_motion.h)
     vibewf::FanState fan_{RING_ROWS};     // the zoom fan: per-row maps + the displayed ring, made at the first zoom (wf_zoom_fan.h)
@@ -182,9 +216,14 @@ private:
     int extrasLeft_ = 0; double extraSpacing_ = 0, extraDueAt_ = -1;
     // ★★★ V12 THE FIXED OUTPUT CLOCK (wf_row_clock.h — every mode but NATIVE): rows made on its ticks, each the newest real
     //     frame presented by then; the frames it may still show are kept here by id (a few — its queue is 4 deep).
-    struct ClockRow { long id = -1; std::vector<uint8_t> row; double c = 0, h = 0; };
+    struct ClockRow { long id = -1; std::vector<uint8_t> row; double c = 0, h = 0, k = 0; };   // k: dB per unit (wf_row_combine.h)
+    // ★★ V12 2026-10-30 (wf_row_combine.h — WaterfallView's twin): the last frame the clock has SHOWN; the frames after it
+    //    are kept (≤ COMBINE_MAX_FRAMES) and combined into the next one shown instead of dropped.
+    long clockShown_ = 0;
+    vibewf::RowCombiner clockComb_;
     vibewf::RowClock rowClock_;
     vibewf::BoostState boost_;   // ★ the interaction boost (wf_row_clock.h boostRowRate)
+    vibewf::AvSyncState av_;     // ★★ V12 2026-10-30 the waterfall waits for the sound (wf_av_sync.h)
     int lastEaseLeft_ = 0;
     std::vector<ClockRow> clockRows_;
     std::vector<long> clockOut_;
@@ -205,16 +244,22 @@ private:
     vibewf::WideRow wideRow_;
     double detP50_ = NAN, placedLo_ = NAN, placedSpan_ = 0;
     std::vector<float> p50Scratch_;
+    vibewf::StampState stamps_;            // ★★ the scale stamps' detector (engine thread)
+    unsigned stampSeen_ = 0;
 
     // Outbox for the UI (under mx_)
     void* outImage_ = nullptr; double outHead_ = 0; bool texReady_ = false;
     double imgK_ = 1, imgC_ = 0;                     // the fans' screen move taken with the image just made (engine thread)
     double imgMoLo_ = 1, imgMoHi_ = 0;               // …and its motion range
     double outK_ = 1, outC_ = 0, outMoLo_ = 1, outMoHi_ = 0;   // composed for the UI until it takes an image (mx_)
+    int outRingRows_ = RING_ROWS;                     // the depth of outImage_ (mx_)
     int outQuant_ = 1; double outAvgMs_ = 150, outRowRate_ = 0;
     uint32_t scrollGen_ = 0; bool glide_ = false; double glideDur_ = 100;
     uint32_t specGen_ = 0; std::vector<float> outSpec_; bool specHidden_ = false;
     uint32_t peakGen_ = 0; void* outPeak_ = nullptr;
+    uint32_t stampGen_ = 0, uiStamp_ = 0; std::vector<vibewf::WfStamp> outStamps_;
+    struct RowGeo { double frame = -1, lo = 0, span = 0; };
+    std::vector<RowGeo> rowGeo_;                     // ★★ per slot, as displayed when written (mx_) — rowGeom
     uint64_t outVer_ = 0, uiSeenVer_ = 0;
     uint32_t uiSpec_ = 0;
     // liveRange (under mx_)

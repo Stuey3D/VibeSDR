@@ -5,7 +5,7 @@
 // ★★★ Stuart (2026-10-29): "if we are only doing a straight 2x 3x interpolation an incoming rate that drifts about will
 //     make it feel juddery which is why I said to over interpolate and discard to avoid this issue" — and, in the Eco
 //     note, "the interpolation always over interpolates and discards leaving headroom to account for link rate judder".
-//  • The OUTPUT rate is fixed (Minimum 5, Eco 10, Default 30, Smooth 60): tick k at t0 + k·1000/rate, never an arrival.
+//  • The OUTPUT rate is fixed (Minimum 2, Low 5, Eco 10, Default 30, Smooth 60): tick k at t0 + k·1000/rate, never an arrival.
 //  • Each tick's row is the newest REAL frame presented by then — a repeat, never a blend (7bce170d); none new = the last
 //    again. A late frame costs one more repeat; two frames in one tick drop the older (a faster feed thinned evenly).
 //  • Frames are PRESENTED on a de-jittered schedule (≈0.2 × the feed interval, ≤ 40 ms, after the mean arrival), so a
@@ -30,18 +30,30 @@ inline double holdLimitMs(double ivl) { return std::max(300.0, 2.5 * ivl + 100);
  *  on the same schedule, lands with the row it goes with. `rate` rows/s; 0 = off the clock (no wait). */
 inline double traceLagMs(double rate) { return rate > 0 ? std::max(1.0, rate * 40.0 / 1000.0) * 1000.0 / rate : 0; }
 
-struct ClockFrame { long id; double p; };
+struct ClockFrame { long id; double p; double h = 0; };   // h: the A/V hold it entered with (wf_av_sync.h)
 struct RowClock {
     double base = 0, ivl = 100, lastT = 0, ps = 0;   // the feed's schedule
     std::deque<ClockFrame> q;                        // waiting for their presentation time, oldest first
     long cur = -1; double curP = 0;                  // the frame held
+    double curH = 0, hold = 0;                       // ★ the A/V hold it entered with; the last arrival's
     double rate = 0, t0 = 0; long long k = 0;        // the output clock
 };
 
-/** A real frame arrived at `t`; `instant` (a gesture) presents it at once. Returns its presentation time. */
-inline double clockArrive(RowClock& c, long id, double t, bool instant = false) {
-    const double gap = c.lastT > 0 ? t - c.lastT : 0;
-    c.lastT = t;
+/** A real frame arrived at `t`; `instant` (a gesture) presents it at once. Returns its presentation time.
+ *  ★★★ V12 2026-10-30 `holdMs` — THE WATERFALL WAITS FOR THE SOUND (wf_av_sync.h; src/assets/wfClock.ts clockArrive, line
+ *      for line). The frame enters the schedule `holdMs` after it arrived; the schedule moves with the hold, the feed's
+ *      interval is measured on the REAL arrivals. Stuart (2026-10-30): "to prevent scrolling judder whilst the jitter
+ *      buffer enables we can simply duplicate the previous lines if needed and then the waterfall still reacts to the
+ *      audio in time but still stays smooth" — a hold that GROWS is carried by the ticks repeating the row on screen (the
+ *      dead-link limit lengthened by the growth); one that SHRINKS discards the frames now due after a newer one. 0 is
+ *      the clock exactly as it was. */
+inline double clockArrive(RowClock& c, long id, double t0, bool instant = false, double holdMs = 0) {
+    const double dH = holdMs - c.hold;
+    c.hold = holdMs;
+    if (dH != 0 && c.base > 0) { c.base += dH; c.ps += dH; }   // the schedule moves with the hold
+    const double t = t0 + holdMs;
+    const double gap = c.lastT > 0 ? t0 - c.lastT : 0;         // the feed's interval: real arrivals
+    c.lastT = t0;
     double p;
     if (instant || c.base <= 0 || !(gap > 0) || gap > 4 * c.ivl || gap > 2000) {
         if (gap > 0 && gap <= 2000 && c.base > 0 && !instant) c.ivl = c.ivl * 0.5 + std::min(gap, 4 * c.ivl) * 0.5;
@@ -61,10 +73,13 @@ inline double clockArrive(RowClock& c, long id, double t, bool instant = false) 
         if (e > dead) c.ps += e - dead; else if (e < -dead) c.ps += e + dead;
         p = std::min(std::max(t, c.ps), t + d + 0.25 * c.ivl);
     }
+    // ★ The hold shrank: frames still waiting later than this one are older than it — discarded, not shown after it.
+    if (dH < 0) while (!c.q.empty() && c.q.back().p > p) c.q.pop_back();
     const double lastP = !c.q.empty() ? c.q.back().p : (c.cur >= 0 ? c.curP : -INFINITY);
     if (p < lastP) p = lastP;
-    c.q.push_back({id, p});
-    while (c.q.size() > 4) c.q.pop_front();
+    c.q.push_back({id, p, holdMs});
+    const size_t qMax = holdMs > 0 ? 4 + (size_t)std::ceil(holdMs / std::max(10.0, c.ivl)) : 4;
+    while (c.q.size() > qMax) c.q.pop_front();
     return p;
 }
 
@@ -90,17 +105,17 @@ inline int clockRun(RowClock& c, double now, std::vector<long>& out, int maxRows
     for (long long i = 0; i < due; i++) {
         const double tt = c.t0 + (double)c.k * per;
         c.k++;
-        while (!c.q.empty() && c.q.front().p <= tt) { c.cur = c.q.front().id; c.curP = c.q.front().p; c.q.pop_front(); }
+        while (!c.q.empty() && c.q.front().p <= tt) { c.cur = c.q.front().id; c.curP = c.q.front().p; c.curH = c.q.front().h; c.q.pop_front(); }
         if (c.cur < 0) continue;
-        if (tt - c.curP > holdLimitMs(c.ivl)) continue;
+        if (tt - c.curP > holdLimitMs(c.ivl) + std::max(0.0, c.hold - c.curH)) continue;   // ★ + the A/V hold's growth (repeats, not a dead link)
         out.push_back(c.cur); made++;
     }
     if (c.k > 1000000) { c.t0 += (double)c.k * per; c.k = 0; }
     return made;
 }
 
-inline void clockReset(RowClock& c) { c.q.clear(); c.cur = -1; c.curP = 0; c.base = 0; c.lastT = 0; c.ps = 0; }
-inline bool clockIdle(const RowClock& c, double now) { return c.q.empty() && (c.cur < 0 || now - c.curP > holdLimitMs(c.ivl)); }
+inline void clockReset(RowClock& c) { c.q.clear(); c.cur = -1; c.curP = 0; c.curH = 0; c.hold = 0; c.base = 0; c.lastT = 0; c.ps = 0; }
+inline bool clockIdle(const RowClock& c, double now) { return c.q.empty() && (c.cur < 0 || now - c.curP > holdLimitMs(c.ivl) + std::max(0.0, c.hold - c.curH)); }
 
 /** The clock's rate from the feed (wfClock.ts clockRowRate): the rule on the latched feed, taking a step the feed is
  *  within 5 % of (Smooth only), and not stepping DOWN while the feed still supports the rate within 15 %. `cap` as EngineConfig. */
@@ -116,10 +131,10 @@ inline double clockRowRate(RowTargetState& st, int cap, double feedFps) {
     return r;
 }
 
-/** Under a FRAME RATE cap below 60: the largest of {5,10,12,15,20,30,60} ≤ the rate that divides the cap. */
+/** Under a FRAME RATE cap below 60: the largest of {2,5,10,12,15,20,30,60} ≤ the rate that divides the cap. */
 inline double clockRateUnderCap(double rate, int capHz) {
     if (!(rate > 0) || capHz <= 0 || capHz >= 60) return rate;
-    static const int rates[] = {5, 10, 12, 15, 20, 30, 60};
+    static const int rates[] = {2, 5, 10, 12, 15, 20, 30, 60};
     int best = 0;
     for (int r : rates) if (r <= rate && r <= capHz && capHz % r == 0) best = r;
     return best > 0 ? best : rate;
@@ -132,8 +147,9 @@ inline double clockRateUnderCap(double rate, int capHz) {
 //     maximum as set, ≤ 120, ≤ 12 × the feed; every extra row is a frame already received. Nothing is asked of the
 //     server. NATIVE (base 0) → 0, untouched. Change one, change both.
 constexpr double BOOST_MAX_RATE = 120, BOOST_FEED_X = 12, BOOST_TAIL_MS = 750;
-inline double boostRowRate(double base, double feedFps, double displayHz) {
+inline double boostRowRate(double base, double feedFps, double displayHz, bool enabled = true) {
     if (!(base > 0)) return 0;
+    if (!enabled) return base;   // ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" off (wfClock.ts): never raised
     const double hz = displayHz > 0 ? displayHz : 60;
     const double lim = std::min(std::min(BOOST_MAX_RATE, hz * 1.02), (feedFps > 0 ? feedFps : 0) * BOOST_FEED_X * 1.0001);
     static const double R[] = {120, 60, 30, 20, 15, 12, 10, 5};

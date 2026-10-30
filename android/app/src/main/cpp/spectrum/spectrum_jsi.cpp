@@ -110,9 +110,12 @@ public:
             vibespec::EngineConfig k;
             k.width = num(r, o, "width", 0); k.wfTop = num(r, o, "wfTop", 0); k.specH = num(r, o, "specH", 0);
             k.specShow = flag(r, o, "specShow", true); k.peakHold = flag(r, o, "peakHold", true);
-            k.smoothTune = flag(r, o, "smoothTune", true); k.targetRows = (int)num(r, o, "targetRows", 0);
+            k.smoothTune = flag(r, o, "smoothTune", true); k.boost = flag(r, o, "boost", true); k.targetRows = (int)num(r, o, "targetRows", 0);
             k.displayCapHz = (int)num(r, o, "displayCapHz", 0);
             k.panelHz = (int)num(r, o, "panelHz", 0);
+            k.stampViewRows = (int)num(r, o, "stampViewRows", 0);       // ★★ the scale stamps (wf_stamps.h)
+            k.stampMinGapRows = (int)num(r, o, "stampMinGapRows", 0);
+            k.ringRows = (int)num(r, o, "ringRows", 0);                 // ★★ the ring depth to grow to (wf_ring_grow.h)
             en.setConfig(k);
             return jsi::Value::undefined();
         });
@@ -136,6 +139,17 @@ public:
         });
         if (name == "setBackground") return fn(1, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
             if (c >= 1) en.setBackground(a[0].isBool() && a[0].getBool());
+            return jsi::Value::undefined();
+        });
+        // ★★ V12 2026-10-30 the audio's playout delay, ms (−1 = unknown) — the clock waits for the sound (wf_av_sync.h).
+        if (name == "rowGeom") return fn(1, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            double lo = 0, span = 0;   // ★★ a tap on an old row tunes by its own scale (#57)
+            if (c < 1 || !a[0].isNumber() || !en.rowGeom(a[0].asNumber(), lo, span)) return jsi::Value::null();
+            jsi::Array arr(r, 2); arr.setValueAtIndex(r, 0, lo); arr.setValueAtIndex(r, 1, span);
+            return arr;
+        });
+        if (name == "setAudioDelay") return fn(1, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            en.setAudioDelay(c >= 1 && a[0].isNumber() ? a[0].asNumber() : -1);
             return jsi::Value::undefined();
         });
         if (name == "setCovered") return fn(1, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
@@ -166,6 +180,7 @@ public:
             if (u.image) {                                   // ride with the image (WaterfallView enginePoll)
                 o.setProperty(r, "moLo", u.moLo); o.setProperty(r, "moHi", u.moHi);
                 o.setProperty(r, "fanK", u.fanK); o.setProperty(r, "fanC", u.fanC);
+                o.setProperty(r, "ringRows", u.ringRows);    // ★★ the depth of THIS image (the shader's uRows)
             }
             o.setProperty(r, "specGen", (double)u.specGen);
             o.setProperty(r, "specHidden", u.specHidden);
@@ -173,6 +188,18 @@ public:
                 jsi::Array arr(r, u.specTarget.size());
                 for (size_t i = 0; i < u.specTarget.size(); i++) arr.setValueAtIndex(r, i, (double)u.specTarget[i]);
                 o.setProperty(r, "spec", arr);
+            }
+            o.setProperty(r, "stampGen", (double)u.stampGen);   // ★★ the scale stamps (wf_stamps.h), when they changed
+            if (u.stampsNew) {
+                jsi::Array arr(r, u.stamps.size());
+                for (size_t i = 0; i < u.stamps.size(); i++) {
+                    const auto& st = u.stamps[i];
+                    jsi::Object so(r);
+                    so.setProperty(r, "id", (double)st.id); so.setProperty(r, "frame", st.frame);
+                    so.setProperty(r, "lo", st.lo); so.setProperty(r, "span", st.span); so.setProperty(r, "born", st.born);
+                    arr.setValueAtIndex(r, i, so);
+                }
+                o.setProperty(r, "stamps", arr);
             }
             o.setProperty(r, "peakGen", (double)u.peakGen);
             if (u.peakPath) o.setProperty(r, "peak", vibe_rnskia::wrapPath(r, u.peakPath));   // adopts the handle

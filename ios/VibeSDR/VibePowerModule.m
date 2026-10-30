@@ -75,6 +75,8 @@ RCT_EXTERN_METHOD(appIconSupported:(RCTPromiseResolveBlock)resolve rejecter:(RCT
 RCT_EXTERN_METHOD(setAppIcon:(NSString *)colour resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject)
 RCT_EXTERN_METHOD(setStationLogo:(NSString *)url)
 RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(getDebugInfoSync)
+// ★★ V12 2026-10-30: the audio's playout delay, ms (−1 = none) — the waterfall waits for the sound (src/assets/wfAvSync.ts).
+RCT_EXTERN__BLOCKING_SYNCHRONOUS_METHOD(audioPlayoutMs)
 // ★★★ BOOT BREADCRUMBS. Exported here as well as declared in Swift — a Swift @objc func that is
 //     not listed in this file is simply NOT THERE as far as JS is concerned, and calling it gets
 //     `undefined`, silently. That has cost us twice.

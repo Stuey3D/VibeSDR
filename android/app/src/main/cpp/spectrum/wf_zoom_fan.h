@@ -59,6 +59,7 @@ struct FanState {
     double dLo = NAN, dSpan = NAN, eLo0 = NAN, eSpan0 = NAN;
     int easeLeft = 0, eJ = 0, eT = 0;
     std::vector<double> span;
+    double jumpHz = 0;     // ★ the Hz the LAST row's jump moved the history by (0 = not a jump) — the scale stamps follow (wf_stamps.h)
     double rowRate = 30;   // ★ rows/s the waterfall runs at — the ease is by TIME (zoomEaseRows / tuneEaseRows); the engine keeps it current
     explicit FanState(int rows = 0) : xfA(rows, 1.0), xfB(rows, 0.0), span(rows, 0.0) {}
 };
@@ -186,9 +187,15 @@ inline void fanRow(FanState& st, const uint8_t* ring, int n, int r, int rows = 0
     if (st.layer) layerFillRow(*st.layer, r, a, b, n, d, lo);
 }
 
+/** ★★★ A JUMP KEEPS THE HISTORY AS DRAWN (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms so
+ *  it is not lost") — the twin of wfRowPlace.ts JUMP_KEEPS_HISTORY: no re-map; a scale stamp marks the boundary, and a tap
+ *  tunes by the row's own scale (SpectrumEngine::rowGeom). The re-map is kept behind the switch. */
+constexpr bool JUMP_KEEPS_HISTORY = true;
+
 /** BEFORE a row placed at (lo, span) Hz goes in: a zoom starts the ease; a same-span JUMP moves the history. */
 inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n, int rows, double frames, int visible,
                        double lo, double span) {
+    st.jumpHz = 0;
     if (!(span > 0)) return false;
     if (!std::isfinite(lo)) {
         if (!(st.lastSpan > 0)) return false;
@@ -210,12 +217,13 @@ inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n,
         st.eT = st.easeLeft = std::max(cappedEaseRows(st.dLo, st.dSpan, lo, span, tuneEaseRows(moved / st.lastSpan, st.rowRate), st.rowRate),
                                         st.easeLeft > 0 ? st.easeLeft : 0);   // ★★★ + the slope cap
     }
-    if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
+    if (!JUMP_KEEPS_HISTORY && frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
         const double k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
         st.stepC += st.stepK * c; st.stepK *= k;   // x0 = c1 + k1·(c2 + k2·x2)
         st.easeLeft = 0;
         // every row moves by the jump's Hz in ITS own scale (rows keep the zoom they were drawn at)
         const double dHz = lo - st.lastLo;
+        st.jumpHz = dHz;
         bool zoomed = false;
         for (size_t r = 0; r < st.xfA.size(); r++) {
             const double sp = st.span[r] > 0 ? st.span[r] : span;
@@ -249,7 +257,7 @@ inline void fanAfterRow(FanState& st, const uint8_t* ring, int slot, int n, int 
         st.dLo = nl; st.dSpan = ns;
         if (st.easeLeft > 0) {
             st.xfA[slot] = ns / ts; st.xfB[slot] = (nl - tl) / ts;
-            if (st.disp.empty()) st.disp.assign(ring, ring + (size_t)(rows + MOTION_ROWS) * n);
+            if (st.disp.empty()) st.disp.assign(ring, ring + (size_t)(rows + motionImageRows(rows, n)) * n);
             fanRow(st, ring, n, slot, rows);
             st.sinceZoom = 0;
             return;
@@ -266,15 +274,15 @@ inline void fanAfterRow(FanState& st, const uint8_t* ring, int slot, int n, int 
 inline void takeFanStep(FanState& st, double& k, double& c) { k = st.stepK; c = st.stepC; st.stepK = 1; st.stepC = 0; }
 
 /** The bytes to make the waterfall image from: the displayed ring with the motion rows in its tail (the buffers are
- *  n × (rows + MOTION_ROWS); the image is made that tall). */
+ *  n × (rows + motionImageRows(rows, n)); the image is made that tall). */
 inline const uint8_t* wfImageBytes(FanState& st, const MotionState& ms, uint8_t* ring, int n, int rows) {
     uint8_t* b = st.disp.empty() ? ring : st.disp.data();
-    std::memcpy(b + (size_t)rows * n, ms.bytes.data(), (size_t)MOTION_ROWS * n);
+    std::memcpy(b + (size_t)rows * n, ms.bytes.data(), ms.bytes.size());
     return b;
 }
 
 /** pushRow's whole placement (WaterfallView's placeRow): slide onto the view, fan on a span change or a jump, keep the
- *  display in step, note the placement and the move from the row before (MOTION). `ring` is n × (rows + MOTION_ROWS).
+ *  display in step, note the placement and the move from the row before (MOTION). `ring` is n × (rows + motionImageRows).
  *  `frames` = rows written before this one; `startOut` receives column 0's Hz (the layer's placement). Returns the slot. */
 inline int placeRow(uint8_t* ring, int rows, int n, double frames, const uint8_t* row, double rowCenterHz, double rowHzPerBin,
                     double viewCenterHz, double viewBwHz, MotionState& motion, FanState& fan, int visible = -1,
@@ -292,7 +300,7 @@ inline int placeRow(uint8_t* ring, int rows, int n, double frames, const uint8_t
     const double start = placedStartHz(rowCenterHz, rowHzPerBin, off, n);
     if (startOut) *startOut = start;   // ★ V12: where the layer row goes (its k and m — wf_wide.h)
     const bool fanned = rowHzPerBin > 0
-        && fanNoteRow(fan, ring, (size_t)(rows + MOTION_ROWS) * n, n, rows, frames, visible, start, rowHzPerBin * n);
+        && fanNoteRow(fan, ring, (size_t)(rows + motionImageRows(rows, n)) * n, n, rows, frames, visible, start, rowHzPerBin * n);
     uint8_t* dst = ring + (size_t)slot * n;
     if (off == 0) {
         std::memcpy(dst, row, n);

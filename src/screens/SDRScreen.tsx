@@ -214,7 +214,7 @@ import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
-import { type WfSpeedSetting, isWfSpeedSetting, linkCapFor, speedNumbers, KIWI_SPEED_CAPS } from '../assets/wfSpeedCap';
+import { type WfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS } from '../assets/wfSpeedCap';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -2885,15 +2885,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'>('20fps');
   // ★ SHARP by default: one row per received frame, exactly what the app has always drawn.
   const [wfScroll,      setWfScroll]      = useState<WfSpeedSetting>('sharp');
-  /* ★★ V12 MINIMUM / ECO (src/assets/wfSpeedCap.ts): caps the LINK at 5 / 10 fps so the SERVER sends less — pushed to the
-   *  live client like linkMode (VibeServer + UberSDR link managers, Kiwi's wf_speed). MINIMUM draws like NATIVE; ECO
-   *  is also a 10 rows/s row mode (wfRowTarget ROW_RULE.eco). */
-  const wfLinkCapRef = useRef(0);
-  useEffect(() => {
-    wfLinkCapRef.current = linkCapFor(wfScroll);
-    const c = client.current as unknown as { wfLinkCap?: number } | null;
-    if (c && 'wfLinkCap' in c) c.wfLinkCap = wfLinkCapRef.current;
-  }, [wfScroll]);
+  /* ★★ V12 2026-10-30: the speed keys are DISPLAY ONLY (src/assets/wfSpeedCap.ts) — rows drawn a second, a faster feed
+   *  combined down. What the server sends is the separate DATA control (LOW · AUTO · FULL = linkMode below). Stuart: "we
+   *  cannot slow the incoming data rate down automatically when the waterfall is slowed down as that will effect the
+   *  spectrum too". */
   /** The server's own top waterfall rate (the link controller's uncapped top rung; 0 = not known) — the live numbers on
    *  the Waterfall Speed buttons are worked out from it. */
   const [wfNativeFps, setWfNativeFps] = useState(0);
@@ -2908,6 +2903,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [srvTz, setSrvTz] = useState<{ offsetMin: number | null; abbr: string }>({ offsetMin: null, abbr: '' });
   // Adaptive waterfall-rate policy — see services/linkManager.ts. 'adaptive' is the default:
   // follow what the link will actually carry rather than asking for the maximum and stuttering.
+  // ★★ V12 2026-10-30: this is the DATA control — LOW · AUTO · FULL on screen (wfSpeedCap.ts DATA_LABEL; 'lowData' /
+  //    'adaptive' / 'full' stored, so a saved Link Management choice loads as it was). LOW is the 5 fps floor; AUTO never
+  //    drops below it. Separate from the speed keys, which are display only (Stuart, 2026-10-30).
   const [linkMode,      setLinkMode]      = useState<'full'|'adaptive'|'lowData'>('adaptive');
   const linkModeRef = useRef<'full'|'adaptive'|'lowData'>('adaptive');
   useEffect(() => {
@@ -3337,9 +3335,6 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.getItem('lsv_frame_rate').then((v: string | null) => {
       if (v === 'native' || v === '10fps') setFrameRate('10fps');   // 'native' migrated → 10 FPS
       else if (v === '20fps' || v === '30fps') setFrameRate(v);
-    }).catch(() => {});
-    AsyncStorage.getItem('lsv_link_mode').then((v: string | null) => {
-      if (v === 'full' || v === 'adaptive' || v === 'lowData') setLinkMode(v);
     }).catch(() => {});
   }, []);
   const [modeSelOpen,   setModeSelOpen]   = useState(false);
@@ -6551,13 +6546,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                              listeners: 0, decoding: false });
     // Apply the persisted VFO-lock follow mode to the fresh connection.
     c.setFollowMode(vfoLockedRef.current);
-    // Apply the persisted link mode too — the [linkMode] effect only fires on a CHANGE, so a mode
+    // Apply the persisted link mode (the DATA control) too — the [linkMode] effect only fires on a CHANGE, so a mode
     // restored before this client existed would be lost (UI shows Low Data, wire runs adaptive 10fps).
     { const cc = c as unknown as { linkMode?: string }; if ('linkMode' in cc) cc.linkMode = linkModeRef.current; }
-    // …and the MINIMUM waterfall speed (a 5 fps link ceiling), for the same reason.
-    { const cc = c as unknown as { wfLinkCap?: number; wfNativeFps?: number };
-      if ('wfLinkCap' in cc) cc.wfLinkCap = wfLinkCapRef.current;
-      setWfNativeFps(cc.wfNativeFps ?? 0); }
+    { const cc = c as unknown as { wfNativeFps?: number }; setWfNativeFps(cc.wfNativeFps ?? 0); }
     // Local hardware: thread the live device sample rate for panSpan()'s window.
     if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
     // VibeServer PIN: append the auth suffix to the spectrum WS.
@@ -7389,28 +7381,45 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_smooth_tune', v ? '1' : '0').catch(() => {});
   }, []);
 
+
+  /** ★ The DATA control needs a server that can be ASKED for fewer frames (VibeServer, UberSDR, Kiwi/Web-888). OpenWebRX
+   *  has no rate lever, so there it is not drawn (AGENTS.md: no control that is dead on one radio). Every speed key is
+   *  offered everywhere — they are display only. */
+  const dataOk = route.params.serverType !== 'owrx';
+  const wfShown: WfSpeedSetting = wfScroll;
   const onLinkMode = useCallback((m: 'full'|'adaptive'|'lowData') => {
     setLinkMode(m);
     AsyncStorage.setItem('lsv_link_mode', m).catch(() => {});
     // Live: the controller reads this on its next tick, so the change is felt within a second
     // rather than needing a reconnect.
-    // The adapter wraps UberSDRClient; only that backend has a rate lever, so this is a soft
-    // reach rather than a protocol addition. Other backends simply have no linkMode to set.
     const c = client.current as unknown as { linkMode?: string; inner?: { linkMode?: string } } | null;
     if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
   }, []);
-
-  /** ★ MINIMUM / ECO need a server that can be ASKED for fewer frames (VibeServer, UberSDR, Kiwi/Web-888). */
-  const wfCapsOk = route.params.serverType !== 'owrx';
-  const wfShown: WfSpeedSetting = wfCapsOk || linkCapFor(wfScroll) === 0 ? wfScroll : 'sharp';
   const onWfScroll = useCallback((v: WfSpeedSetting) => {
     setWfScroll(v);
     AsyncStorage.setItem('lsv_wf_scroll', v).catch(() => {});
   }, []);
   useEffect(() => {
-    AsyncStorage.getItem('lsv_wf_scroll').then((v: string | null) => {
-      if (isWfSpeedSetting(v)) setWfScroll(v);
+    AsyncStorage.multiGet(['lsv_wf_scroll', 'lsv_link_mode']).then(([[, v], [, lm]]) => {
+      // ★ loadWfSpeed: an old 'minimum' was the 5 fps choice — it lands on LOW (and is re-saved as 'low'), never on
+      //   the new 2 fps MINIMUM ('min2'). (The speed is display only now; the old 5 fps LINK cap it carried is not
+      //   applied.)
+      const s = loadWfSpeed(v);
+      if (s) { setWfScroll(s); if (s !== v) AsyncStorage.setItem('lsv_wf_scroll', s).catch(() => {}); }
+      // The DATA control: a saved Link Management choice loads as it was (LOW DATA → LOW, FULL → FULL, AUTO → AUTO).
+      if (lm === 'full' || lm === 'adaptive' || lm === 'lowData') setLinkMode(lm);
     }).catch(() => {});
+  }, []);
+  /* ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (GitHub #57 — the interaction boost raced the waterfall just as a phone user
+   *  zoomed toward a signal spotted on MINIMUM). Default ON (the behaviour as it was); OFF = the rows stay at the chosen
+   *  speed through a tune or zoom (wfClock.ts boostRowRate). Per device, every radio. */
+  const [wfBoost, setWfBoost] = useState(true);
+  const onWfBoost = useCallback((v: boolean) => {
+    setWfBoost(v);
+    AsyncStorage.setItem('lsv_wf_boost', v ? '1' : '0').catch(() => {});
+  }, []);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_wf_boost').then((v: string | null) => { if (v === '0') setWfBoost(false); }).catch(() => {});
   }, []);
   const onFrameRate = useCallback((v: '10fps'|'20fps'|'30fps') => {
     setFrameRate(v);
@@ -7558,7 +7567,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bwZoomAcc = useRef({ base: 0, px: 0, t: 0 });
   const onBwDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
-    markMove();   // ★ the ZOOM drum — a zoom (left on markInteract by mistake: the interaction boost never followed it)
+    markMove();   // ★ the ZOOM drum — a zoom (it was left on markInteract 2026-10-30 by mistake: no boost, and the A/V hold)
     const s = c.getView(); // predicted view — getStatus() is one RTT stale mid-gesture
     if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
     const a = bwZoomAcc.current;
@@ -7602,7 +7611,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  serves ANY span, so half an octave is a real level — the same one view send a press, no extra data. A server that
    *  snaps to an octave ladder (UberSDR — see onZoomStep) keeps ×2, or a tap would snap straight back. */
   const zoomStepK = isLocal ? Math.SQRT2 : 2;
-  // ★ markMove: a zoom from the menu is a ZOOM — the waterfall's interaction boost follows it (Stuart, 2026-10-30).
+  // ★ markMove: a zoom from the menu is a ZOOM — the waterfall's boost and its no-hold window follow it (Stuart, 2026-10-30).
   const onZoomIn  = useCallback(() => { markMove(); zoomBy(1 / zoomStepK); }, [zoomBy, zoomStepK, markMove]);
   const onZoomOut = useCallback(() => { markMove(); zoomBy(zoomStepK); },     [zoomBy, zoomStepK, markMove]);
 
@@ -10720,7 +10729,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         wfSharpness={wfSharpness}
         minRangeDb={dabOn ? 15 : 30}
         frameRate={frameRate}
-        wfScroll={wfShown}   /* ★ every speed is a row mode (wfRowTarget) — MINIMUM / ECO included */
+        wfScroll={wfShown}   /* ★ every speed is a row mode (wfRowTarget) — MINIMUM / LOW / ECO included */
+        wfBoost={wfBoost}
         /* ★ The floor this backend can drop to — see WaterfallView.feedFloorFps. A property of the
            server, so the frame-generation multiplier stays constant for the whole session. */
         feedFloorFps={route.params?.isLocal ? 4 : (route.params?.serverType ?? 'ubersdr') === 'ubersdr' ? 3.3 : 5}
@@ -11759,14 +11769,15 @@ export default function SDRScreen({ route, navigation }: Props) {
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
         frameRate={frameRate}           onFrameRate={onFrameRate}
-        /* ★ MINIMUM / ECO only where the SERVER can be asked for fewer frames (VibeServer, UberSDR, Kiwi/Web-888).
+        /* ★ LOW / ECO only where the SERVER can be asked for fewer frames (VibeServer, UberSDR, Kiwi/Web-888).
            OpenWebRX has no rate lever, so there they would save nothing (and ECO on its ~9 fps feed IS native) — hidden
-           (AGENTS.md: no one-radio controls), and a saved one shows as what it draws there: NATIVE. */
+           (AGENTS.md: no one-radio controls), and a saved one shows as what it draws there: NATIVE. MINIMUM (2) stays
+           everywhere: its point is the slow scroll (#57), which thinning gives on any feed. */
         wfScroll={wfShown}  onWfScroll={onWfScroll}
-        wfCapsOk={wfCapsOk}
-        wfSpeedNums={speedNumbers(wfNativeFps, isKiwi ? KIWI_SPEED_CAPS : undefined)}
+        wfBoost={wfBoost}  onWfBoost={onWfBoost}
+        linkMode={linkMode}  onLinkMode={!dataOk ? undefined : onLinkMode}   /* ★ DATA · LOW · AUTO · FULL */
+        wfSpeedNums={speedNumbers(linkMode === 'lowData' && dataOk ? Math.min(DATA_FLOOR_FPS, wfNativeFps) : wfNativeFps)}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
-        linkMode={linkMode}             onLinkMode={onLinkMode}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}
         hapticsEnabled={hapticsEnabled} onHaptics={onHaptics}
