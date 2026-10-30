@@ -61,7 +61,7 @@ import { airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassb
 import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
-import { rttyFraming, type RttyParity } from '../../../src/utils/rttySpec';
+import { rttyFraming, RTTY_WEATHER, type RttyParity } from '../../../src/utils/rttySpec';
 import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../../../src/utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
@@ -11364,7 +11364,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
   // ★★ AUTO (2026-10-04): the server finds shift, centre, baud and polarity itself — the default, one click.
   auto:      { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false, auto: true },
   ham:       { shift: 170, baud: 45.45, encoding: 'ITA2',    inverted: false },
-  weather:   { shift: 450, baud: 50,    encoding: 'ITA2',    inverted: true  },
+  weather:   { ...RTTY_WEATHER },   // ★ rttySpec.ts RTTY_WEATHER — DWD's 50 Bd / 450 Hz, shared with the known-signal labels
   'sitor-b': { shift: 170, baud: 100,   encoding: 'CCIR476', inverted: false },
 };
 

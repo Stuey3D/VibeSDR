@@ -240,7 +240,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
-import { knownSignalList, eibiKnownSignals, bookmarkSignals } from '../utils/knownSignals';
+import { knownSignalList, eibiKnownSignals, bookmarkSignals, knownTapPlan, type KnownSignal, type KnownAvail } from '../utils/knownSignals';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
@@ -11979,6 +11979,83 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (bw && !isBand) onFilterBoth(bw[0], bw[1]);
   }, [onTuneHz, onMode, ituRegion, canSetMode, dabGoTo, onFilterBoth]);
 
+  /* ★★★ A KNOWN-SIGNAL LABEL TAPPED (utils/knownSignals.ts knownTapPlan — Stuart, 2026-10-30: "can they be tapped to tune
+   *     and chose the decoder?"). ONE TAP: tune to the signal's DIAL in its MODE, then open its decoder with the settings
+   *     the signal was published with.
+   *  ★★ THE SAME ROAD AS TAP-TO-TUNE (onWfTapTune): a listener's own tune — ask-before-tuning on a shared dial refuses it
+   *     (and nothing opens), a whole-radio mode refuses it, the VFO lock decides whether the view follows (no forced
+   *     recentre: the label is on screen already), and with VFO B selected it tunes B, where the decoder then runs
+   *     (openDecoder takes the VFO selected now). The mode travels IN the tune message, as onTuneHz's band crossing does.
+   *  ★★ THE PRESET IS FOR THIS SESSION, NEVER SAVED. RTTY's settings (lsv_rtty) and WEFAX's LPM (lsv_wefax_lpm) are the
+   *     user's remembered choice; a label sets the live value only (setRttySettings / setWefaxLpm without the storage write
+   *     onRttySettings / onWefaxLpm do), so the next launch comes back to the user's own. TIME: a station the user FORCED
+   *     that is not this signal's goes back to AUTO for the session (the dial then picks — the effect that follows it).
+   *  ★ A decoder this receiver does not run (the owner's block list, an older server, OpenWebRX) is not opened — the tap
+   *    still tunes (knownAvailRef, ModeSelector's own rules). A bookmark or a voice service just tunes. */
+  const knownAvailRef = useRef<KnownAvail>({});
+  {
+    // ★ What this receiver can open — ModeSelector's own rules (decoderControls / spotsControls / showServerMaps), so a
+    //   label never opens a decoder the sheet would not offer.
+    const notOwrx = (route.params.serverType ?? 'ubersdr') !== 'owrx';
+    const isVibe = !!(client.current as { isVibe?: boolean } | null)?.isVibe;
+    const ext = srvExtensions;
+    const clientDec = (k: string, slug: string) => notOwrx && !blockedModes.has(k) && (!ext || !ext.length || ext.includes(slug));
+    knownAvailRef.current = {
+      rtty: clientDec('rtty', 'fsk'), navtex: clientDec('navtex', 'navtex'), wefax: clientDec('wefax', 'wefax'),
+      time: clientDec('time', 'clock'),
+      dsc: dscCapable && isVibe && !blockedModes.has('dsc'),
+      cw: cwCapable && isVibe && !blockedModes.has('cw'),
+      spots: notOwrx && !blockedModes.has('spots'),
+      // ★ HFDL: an UberSDR's own decoder, seen as its HFDL MAP (a VibeServer runs none — the tap just tunes there)
+      hfdl: notOwrx && !isLocal && !isKiwi && !isVibe && !IS_APPLE_TV,
+    };
+  }
+  const onKnownTap = useCallback((sig: KnownSignal) => {
+    const c = client.current; if (!c) return;
+    markInteract();
+    if (askGate()) return;                 // ★★ ask before tuning — see askGate
+    if (dabOnRef.current || adsbOnRef.current || ismOnRef.current || ndbOnRef.current || aisOnRef.current) return;
+    if (noTuneNow(c)) return;
+    const plan = knownTapPlan(sig, knownAvailRef.current);
+    const m = plan.mode.toLowerCase();
+    if (m === 'dab') { dabGoTo(plan.hz, -1); return; }   // ★ a DAB bookmark is a block — onSearchTune's rule
+    const want = m && m !== String(c.getStatus().mode) && canSetMode(m) ? (m as SDRMode) : undefined;
+    markMove();
+    const [loHz, hiHz] = tuneBoundsOf(c);
+    const hz = Math.max(loHz, Math.min(hiHz, Math.round(plan.hz)));
+    userTuneSeq.current++;   // ★ a PERSON asked (a tap) — see the note on userTuneSeq
+    c.tune(hz, want);
+    if (want) {
+      setStatus({ ...c.getStatus() });           // ★ the passband travels with the mode (_adoptMode)
+      if (want !== 'wfm') setFmStereo(false);
+    } else {
+      setStatus((prev: SDRStatus) => ({ ...prev, frequency: hz }));
+    }
+    if (!plan.dec) return;
+    const dc = decoderClient.current;
+    const p = plan.preset;
+    if (plan.dec === 'spots') {
+      if (spotsKindRef.current !== 'digi') onSpotsToggle('digi');   // ★ Single — Band already running keeps its band
+      return;
+    }
+    if (plan.dec === 'hfdl') { setMapKind('hfdl'); return; }      // ★ an UberSDR's HFDL map (knownAvail says where)
+    if (plan.dec === 'rtty' && p?.rtty) {
+      const next: RttySettings = { ...rttySettings, ...p.rtty, auto: false, stop: 1.5, usos: false };
+      setRttySettings(next);
+      if (dc) dc.rttySettings = { ...next };
+    }
+    if (plan.dec === 'wefax' && p?.wefaxLpm) {
+      setWefaxLpm(p.wefaxLpm);
+      if (dc) dc.wefaxLpm = p.wefaxLpm;
+    }
+    if (plan.dec === 'time' && p?.time && timeStationPref !== 'auto' && !p.time.includes(timeStationPref)) setTimeStationPref('auto');
+    // ★ onDecToggle's "start" half — and a decoder already open re-attaches (openDecoder restarts it with the preset)
+    const d = plan.dec as 'rtty' | 'navtex' | 'wefax' | 'time' | 'cw' | 'dsc';
+    stopSpots();
+    setSelDecoder(d);
+    openDecoder(d);
+  }, [askGate, dabGoTo, canSetMode, onSpotsToggle, rttySettings, timeStationPref, stopSpots, openDecoder]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   /* ★★★ CHECK OUT [Bookmark] [Manual] (canned chat, shared dial — Stuart, 2026-10-01, replacing the
    *  picker that listed every bookmark inside the chat pad). [Bookmark] is TWO STEPS: the drawer drops,
    *  the frequency card opens in PICK mode on its search and bookmark lists (yours, the receiver's
@@ -13102,6 +13179,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
         dcSpikeHz={dcSpikeShown ? hwDcHz : 0}
         knownSignals={knownSignals}
+        onKnownTap={onKnownTap}
       />
       </PanelBoundary>
       </View>
