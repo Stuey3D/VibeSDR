@@ -91,6 +91,7 @@ import { fmtSpotTime, FMT_SPOT_TIME_JS } from '../../../src/utils/spotTime';   /
 import { DIGI_MARKER_RIM, digiModeStyle, digiModeFamily, readSpotBands, spotBandAt, stepSpotBand, landingSpotBand, bandPassband, type SpotBand } from '../../../src/utils/digiModes';
 import { lookupStationLogo, tidyStationName } from '../../../src/services/stationLogo';
 import { dabSlideQuery } from '../../../src/services/dabSlide';
+import { knownSignalList, eibiKnownSignals } from '../../../src/utils/knownSignals';   // ★★ known-signal labels
 import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
@@ -9125,7 +9126,10 @@ function buildControls() {
   void loadServerLocation(currentHost);
   void loadStations(currentHost).then((n) => {
     if (n) console.info(`stations: ${n} from server`);
+    applyKnownSignals();
   });
+  // ★ EiBi's utility entries come and go with the schedule — re-read which are on air every ten minutes.
+  setInterval(() => { if (knownLabelsOn) applyKnownSignals(); }, 10 * 60_000);
   // Stations this receiver has actually HEARD (learned from RDS by the shim). The
   // auth suffix goes with it so the SAVE path can write back — the shim gates
   // POST/DELETE on the same PIN that guards the stream.
@@ -15898,6 +15902,19 @@ function slider(
  *      dutifully sent it. Fixing the writer did nothing for the value already written — "auto BW
  *      is not default on". A stale pref outlives the bug that made it, so the cure has to be that
  *      the stale pref is never authoritative in the first place. */
+/** ★★ KNOWN-SIGNAL LABELS (src/utils/knownSignals.ts — Stuart, 2026-10-30: "this is more for a user to know what decoder
+ *  to use, the VTS shows the bookmarks"): the curated table plus the server's EiBi utility entries on air now (GET
+ *  /stations — its comment carries the schedule's time and language codes), handed to the waterfall, which lays them out
+ *  and draws them. Off = null: nothing is computed or drawn. */
+let knownLabelsOn = true;
+function applyKnownSignals() {
+  if (!wf) return;
+  if (!knownLabelsOn) { wf.knownSignals = null; wf.knownGen++; return; }
+  const d = new Date();
+  wf.knownSignals = knownSignalList(eibiKnownSignals(getStations(), d.getUTCHours() * 60 + d.getUTCMinutes()));
+  wf.knownGen++;
+}
+
 function toggle(id: string, apply: (on: boolean) => void, prefKey?: string, initial = false,
                 pushOnInit = true) {
   const el = $<HTMLButtonElement>(id);
@@ -16292,6 +16309,8 @@ function buildMenu() {
   slider('specAlpha', 'specAlphaVal', (v) => `${v}%`,
     (v) => { wf!.specAlpha = v / 100; }, 'specAlpha');
   toggle('peakHold', (on) => wf!.applySettings({ peakHold: on }), 'peakHold', true);
+  // ★★ KNOWN-SIGNAL LABELS (src/utils/knownSignals.ts) — this browser's choice, ON by default.
+  toggle('knownLabels', (on) => { knownLabelsOn = on; applyKnownSignals(); }, 'knownLabels', true);
 
   applyCoarse((prefs().wfCoarse as string) || 'auto');
 
@@ -16314,7 +16333,7 @@ function buildMenu() {
     for (const k of ['autoContrast', 'minDb', 'maxDb', 'wfBrightness', 'wfContrast',
                      'wfSharpness', 'smoothingFrames', 'specFloor', 'specPeakScale',
                      'specAlpha', 'specRatio', 'spatialSmooth', 'peakHold', 'specShow',
-                     'wfCoarse', 'palette']) {
+                     'wfCoarse', 'palette', 'knownLabels']) {
       const p = localPrefs();
       delete p[k];
       localStorage.setItem(LS_PREFS, JSON.stringify(p));

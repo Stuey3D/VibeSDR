@@ -349,6 +349,9 @@ export interface MenuSheetProps {
   onSpecPeakScale?:   (v: number) => void;
   peakHold?:          boolean;
   onPeakHold?:        (v: boolean) => void;
+  /** ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts) — the decoder's name on well-known signals in view. */
+  knownLabels?:       boolean;
+  onKnownLabels?:     (v: boolean) => void;
   frameRate?:         '10fps' | '20fps' | '30fps';
   onFrameRate?:       (v: '10fps' | '20fps' | '30fps') => void;
   wfScroll?:          WfSpeedSetting;
@@ -1331,6 +1334,7 @@ function MenuSheetBody({
   specFloor = 0, onSpecFloor, visualGain = 0, onVisualGain,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
+  knownLabels = true, onKnownLabels,
   frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll, wfCapsOk = true, wfSpeedNums = null,
   smoothTune = true, onSmoothTune,
   onSpecRatio,
@@ -1972,6 +1976,21 @@ function MenuSheetBody({
                 <BtnRow>
                   <Btn label="PEAK HOLD" active={peakHold} onPress={() => onPeakHold?.(!peakHold)} />
                 </BtnRow>
+
+                {/* ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts — Stuart, 2026-10-30: "should be a toggle in the display
+                    settings"; "this is more for a user to know what decoder to use, the VTS shows the bookmarks"). */}
+                {!!onKnownLabels && (<>
+                  <SubLabel label="Signal labels" />
+                  <BtnRow>
+                    <Btn label="SIGNAL LABELS" active={knownLabels} onPress={() => onKnownLabels(!knownLabels)} />
+                  </BtnRow>
+                  <Text style={styles.kbSkipNote}>
+                    Names the decoder for well-known signals in view — RTTY on DWD's 4583 kHz, WEFAX on Northwood's 4610,
+                    NAVTEX, DSC, FT8, time signals — and EiBi's utility stations on air now. Drawn at the foot of the
+                    spectrum, or at the top of the waterfall when the spectrum is hidden. Your bookmarks are in the
+                    station strip, not here.
+                  </Text>
+                </>)}
 
                 {/* ★★★ SCROLL SPEED AS A FIXED FRAME-GENERATION MULTIPLIER. Not a frame rate: the
                     number of rows drawn per RECEIVED frame, held CONSTANT. It maps all waterfall

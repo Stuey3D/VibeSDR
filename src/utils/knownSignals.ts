@@ -205,7 +205,7 @@ export function eibiClass(row: EibiRow): { dec: KnownDecoder; kind: string; af: 
 export function eibiKnownSignals(rows: readonly EibiRow[], nowMin: number, curated: readonly KnownSignal[] = KNOWN_SIGNALS): KnownSignal[] {
   const out: KnownSignal[] = [];
   for (const r of rows) {
-    if (!(r.frequency > 0) || (r.source && r.source !== 'eibi' && r.source !== 'server')) continue;
+    if (!(r.frequency > 0) || r.source !== 'eibi') continue;   // ★ the schedule only — bookmarks are never labels
     const c = eibiClass(r);
     if (!c || !eibiOnAir(r.comment, nowMin)) continue;
     const f = r.frequency;

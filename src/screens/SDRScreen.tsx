@@ -240,6 +240,7 @@ import {
 } from '../services/userBookmarks';
 import { getBandsAtRegion, bandTuneDefaults, bandJumpDefaults, BAND_PLAN, type Band } from '../constants/bandPlan';
 import { loadActiveEibi, eibiLanguagesAt } from '../services/eibi';
+import { knownSignalList, eibiKnownSignals } from '../utils/knownSignals';
 import { languagesNear, countryNear } from '../services/regionLanguages';
 import { getUserLocation, sessionLimitForUrl } from '../services/instancesApi';
 import { distanceKmToGrid, gridToLatLon } from '../services/grid';
@@ -3625,6 +3626,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => { visualGainRef.current = visualGain; }, [visualGain]);
   const [specPeakScale, setSpecPeakScale] = useState(10);
   const [peakHold,      setPeakHold]      = useState(true);
+  /** ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts — Stuart, 2026-10-30): Display settings' SIGNAL LABELS, ON by default,
+   *  remembered with the rest of the display prefs on this device. */
+  const [knownLabels,   setKnownLabels]   = useState(true);
   const [wfBrightness,  setWfBrightness]  = useState(0);
   const [wfContrast,    setWfContrast]    = useState(0);
   const [wfSharpness,   setWfSharpness]   = useState(5);
@@ -4288,6 +4292,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           num('specRatioPortrait', setSpecRatioPortrait);
           num('specRatioLandscape', setSpecRatioLandscape);
           bool('specShow', setSpecShow);          bool('peakHold', setPeakHold);
+          bool('knownLabels', setKnownLabels);
           bool('spatialSmooth', setSpatialSmooth);
           if (p.wfCoarse === 'auto' || p.wfCoarse === 'manual') setWfCoarse(p.wfCoarse);
           if (p.signalMode === 'snr' || p.signalMode === 'smeter' || p.signalMode === 'dbfs') setSignalMode(p.signalMode);
@@ -4310,7 +4315,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoNeedleB, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
-      specRatioPortrait, specRatioLandscape, avgFrames,
+      specRatioPortrait, specRatioLandscape, avgFrames, knownLabels,
     });
     latestPrefsJson.current = json;
     const key = prefsTarget.current === 'server'
@@ -4323,7 +4328,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [dbMin, dbMax, colormap, specShow, specSmoothing, specFloor, visualGain,
       specPeakScale, peakHold, wfBrightness, wfContrast, wfSharpness,
       autoContrast, spatialSmooth, wfCoarse, vfoNeedle, vfoNeedleB, vfoIntensity, vfoFrost, bgOpacity, signalMode, step,
-      specRatioPortrait, specRatioLandscape, avgFrames, baseUrl]);
+      specRatioPortrait, specRatioLandscape, avgFrames, knownLabels, baseUrl]);
 
   // Display-panel save row (skin parity): RESET = defaults + drop the server
   // override; THIS SERVER = per-instance override; GLOBAL = the shared blob.
@@ -4333,7 +4338,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     prefsTarget.current = 'global';
     setDbMin(-120); setDbMax(-20); setColormap('Jet');
     setSpecShow(true); setSpecSmoothing(5); setSpecFloor(0);
-    setSpecPeakScale(10); setPeakHold(true);
+    setSpecPeakScale(10); setPeakHold(true); setKnownLabels(true);
     setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
     setAutoContrast(5); setSpatialSmooth(true); setWfCoarse('auto');
     setVfoNeedle('#ffffff'); setVfoNeedleB(VFO_B_AUTO); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3); setSignalMode('snr'); setStep(1000);
@@ -11123,6 +11128,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [serverBookmarks, eibiBookmarks, eibiEnabled, userBookmarks, baseUrl, ituRegion,
       isLocal, route.params.serverType, bookmarkScope, legacyScopes]);
 
+  // ★★ KNOWN-SIGNAL LABELS (utils/knownSignals.ts — Stuart, 2026-10-30: "this is more for a user to know what decoder to
+  //    use, the VTS shows the bookmarks"): the curated table plus EiBi's utility entries ON AIR NOW — the app's own
+  //    schedule (already filtered to now) and a server's schedule rows (their comment carries the time). Bookmarks never.
+  //    Re-read every ten minutes while on, as the schedule rolls; null while off — WaterfallView then does nothing.
+  const [knownClock, setKnownClock] = useState(0);
+  useEffect(() => {
+    if (!knownLabels) return;
+    const iv = setInterval(() => setKnownClock((n) => n + 1), 10 * 60_000);
+    return () => clearInterval(iv);
+  }, [knownLabels]);
+  const knownSignals = useMemo(() => {
+    if (!knownLabels) return null;
+    const d = new Date();
+    const rows = [...(eibiEnabled ? eibiBookmarks : []), ...serverBookmarks.filter((b: ServerBookmark) => b.source === 'eibi')];
+    return knownSignalList(eibiKnownSignals(rows, d.getUTCHours() * 60 + d.getUTCMinutes()));
+  }, [knownLabels, eibiEnabled, eibiBookmarks, serverBookmarks, knownClock]);
+
   // Push the car browse tree (Bookmarks + Band Plan folders) to the native
   // media-browser service. Bookmarks come from the merged list; the band plan is
   // region-deduped. Native caches it and serves Android Auto / CarPlay; a no-op
@@ -13068,6 +13090,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         deckOcclusion={deckOcclusion}
         showCenterMarker={isLocal && (!vfoLocked || hwLockedCentre > 0)}
         dcSpikeHz={dcSpikeShown ? hwDcHz : 0}
+        knownSignals={knownSignals}
       />
       </PanelBoundary>
       </View>
@@ -14213,7 +14236,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           setDbMin(-120); setDbMax(-20); setColormap('Jet');
           setStep(1000);
           setSpecShow(true); setSpecSmoothing(5); setSpecFloor(0);
-          setSpecPeakScale(10); setPeakHold(true);
+          setSpecPeakScale(10); setPeakHold(true); setKnownLabels(true);
           setWfBrightness(0); setWfContrast(0); setWfSharpness(5);
           setAutoContrast(5); setSpatialSmooth(true);
           setWfCoarse('auto'); setFrameRate('20fps'); setVfoNeedle('#ffffff'); setVfoNeedleB(VFO_B_AUTO); setVfoIntensity(5); setVfoFrost(5); setBgOpacity(3);
@@ -14258,6 +14281,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         visualGain={visualGain}         onVisualGain={setVisualGain}
         specPeakScale={specPeakScale}   onSpecPeakScale={setSpecPeakScale}
         peakHold={peakHold}             onPeakHold={setPeakHold}
+        knownLabels={knownLabels}       onKnownLabels={setKnownLabels}
         frameRate={frameRate}           onFrameRate={onFrameRate}
         /* ★ MINIMUM / ECO only where the SERVER can be asked for fewer frames (VibeServer, UberSDR, Kiwi/Web-888).
            OpenWebRX has no rate lever, so there they would save nothing (and ECO on its ~9 fps feed IS native) — hidden
