@@ -67,7 +67,10 @@ async function session(tag, radioExtra, run) {
     const shot = async (name) => { const s = await send('Page.captureScreenshot', { format: 'png' }); const f = path.join(SHOTS, `web-${name}.png`); fs.writeFileSync(f, Buffer.from(s.result.data, 'base64')); return f; };
     const until = async (x, ms) => { for (let i = 0; i < ms / 200; i++) { if (await ev(x)) return true; await sleep(200); } return false; };
     const click = async (sel) => {
-      const r = JSON.parse(await ev(`JSON.stringify(document.querySelector(${JSON.stringify(sel)})?.getBoundingClientRect() || null)`) || 'null');
+      // ★ Scrolled into view first ('nearest' leaves a visible one alone): the A/B BALANCE row pushed VFO STEREO below the
+      //   audio panel's fold, and a click at off-screen coordinates hits whatever is there instead.
+      const r = JSON.parse(await ev(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e) return 'null';
+        e.scrollIntoView({ block: 'nearest' }); return JSON.stringify(e.getBoundingClientRect()); })()`) || 'null');
       if (!r) return false;
       const x = r.x + r.width / 2, y = r.y + r.height / 2;
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });

@@ -77,6 +77,9 @@ export function clampBalance(b: number): number {
  *   EVEN, not 0.999. ★ And at the ENDS: a finger at the end of a 120-pt track lands at 0.97, and "nearly all server 1"
  *   should be ALL server 1 — which now also CENTRES it (dualTargets), so the end has to be reachable.
  */
+/* ★★★ ONE RULE, MANY READERS: the VFO A ⟷ B balance on one VibeServer is this same rule (Stuart, 2026-10-30) — the app and
+ *  the web import balanceGains / clampBalance from here (vfoAB.ts, AudioSheet, web main.ts); the SERVER mirrors them line
+ *  for line in vibe_watch.h (kBalanceMidDead / kBalanceEndSnap / balanceGains) and applies them in PanMixer. Change both. */
 export const BALANCE_MID_DEAD = 0.04;
 export const BALANCE_END_SNAP = 0.96;
 export function balanceGains(balance: number): { s1: number; s2: number } {
