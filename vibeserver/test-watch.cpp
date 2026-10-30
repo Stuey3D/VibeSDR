@@ -11,6 +11,9 @@
 //   8. the squelch: hysteresis, tail, open/closed with the time it changed; a closed gate silences ITS channel only;
 //   9. the FIFO primes, bounds its latency and re-primes after an underrun;
 //  10. MUTE (round 3): a muted VFO fades out over the same 400 ms ramp and the other pans home to both ears; unmute reverses;
+//  10b. THE A ⟷ B BALANCE (Stuart, 2026-10-30): balanceGains at −1/−0.5/0/0.5/1 (+ the dead zone and end snap) is
+//      dualMix.ts's rule; in the mixer it only LOWERS the VFO leaned away from, in STEREO and in MONO; a full lean is
+//      that VFO alone, centred; a VFO alone has no claim on it; every change a ramp with no step;
 //  11. the RF centre for two VFOs on a personal receiver (fitCentre): stays put, moves to fit both, refuses too far apart;
 //  12. DECODE ON EITHER VFO (run inside 1, on its channel): the audio tap a decoder on VFO B is fed — every frame, the
 //      same samples the mix gets, still while MUTED, nothing while PARKED or once removed.
@@ -336,6 +339,88 @@ int main() {
         ok(!a.mx.restingMono(), "B removed, A unmuted: not resting while A fades back in");
         for (int i = 0; i < settle / blk; i++) a.run({S(0, 7.0e6), S(1, 7.01e6, false)}, blk, {0, 0}, {0.25f, 0.0f});
         ok(a.mx.restingMono() && std::fabs(a.tail(1)[0] - 0.25f) < 1e-4, "…then resting: A centre at unity, the ordinary path takes over with no step");
+    }
+
+    std::printf("── 10b. THE A ⟷ B BALANCE: the two-server rule, a level before placement, stereo and mono, no click ──\n");
+    {
+        const float h = 0.70710678f;   // cos(π/4)
+        auto near = [](float a, float b) { return std::fabs(a - b) < 1e-5f; };
+        BalanceGains g;
+        g = balanceGains(-1.0f);  ok(near(g.a, 1) && near(g.b, 0), "−1: all A (B silent)");
+        g = balanceGains(-0.5f);  ok(near(g.a, 1) && near(g.b, h), "−0.5: A as it is, B down to cos(π/4)");
+        g = balanceGains(0.0f);   ok(near(g.a, 1) && near(g.b, 1), "0: both as they are — the balance never raises");
+        g = balanceGains(0.5f);   ok(near(g.a, h) && near(g.b, 1), "+0.5: A down to cos(π/4), B as it is");
+        g = balanceGains(1.0f);   ok(near(g.a, 0) && near(g.b, 1), "+1: all B");
+        g = balanceGains(0.03f);  ok(near(g.a, 1) && near(g.b, 1), "dead zone: 0.03 IS even");
+        g = balanceGains(-0.97f); ok(near(g.a, 1) && near(g.b, 0), "end snap: −0.97 IS all A");
+        g = balanceGains(NAN);    ok(near(g.a, 1) && near(g.b, 1), "NaN → even");
+        g = balanceGains(5.0f);   ok(near(g.a, 0) && near(g.b, 1), "out of range → clamped");
+        // STEREO: A (DC 0.25) at 7.0 MHz hard left, B (DC 0.25) at 7.01 hard right — each ear is one VFO.
+        Bench s;
+        for (int i = 0; i < settle / blk; i++) s.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.25f});
+        const float side = 0.25f * 1.41421356f;
+        ok(std::fabs(s.tail(1)[0] - side) < 2e-3 && std::fabs(s.tail(1)[1] - side) < 2e-3, "stereo, even: A left, B right, both at their own level");
+        s.mx.setBalance(0.5f);
+        for (int i = 0; i < settle / blk; i++) s.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.25f});
+        ok(std::fabs(s.tail(1)[0] - side * h) < 2e-3 && std::fabs(s.tail(1)[1] - side) < 2e-3, "stereo, +0.5: A's ear down by cos(π/4), B's untouched");
+        s.mx.setBalance(-0.5f);
+        for (int i = 0; i < settle / blk; i++) s.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.25f});
+        ok(std::fabs(s.tail(1)[0] - side) < 2e-3 && std::fabs(s.tail(1)[1] - side * h) < 2e-3, "stereo, −0.5: B's ear down, A's untouched");
+        // full lean to A: B fades out AND gives up its place — A alone, centred, both ears at unity
+        s.mx.setBalance(-1.0f);
+        for (int i = 0; i < settle / blk; i++) s.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 600}, {0.25f, 0.25f});
+        const float* t = s.tail(blk * 8);
+        ok(goertzel(t, blk * 8, 2, 600, kOutRate) < 1e-6 && goertzel(t + 1, blk * 8, 2, 600, kOutRate) < 1e-6, "stereo, −1: B gone from both ears");
+        double lA = 0, rA = 0; for (int i = 0; i < blk * 8; i++) { lA += t[2 * i]; rA += t[2 * i + 1]; }
+        lA /= blk * 8; rA /= blk * 8;
+        ok(std::fabs(lA - 0.25) < 2e-3 && std::fabs(rA - 0.25) < 2e-3, "…and A alone, centred, both ears at unity (as the two-server full lean)");
+        // ★ It IS exactly the mono a hand-back would give (as with B muted) — the shim keeps mixing while B exists
+        //   (watchMix: activeLocked), so B comes straight back when the balance moves off the end.
+        ok(s.mx.restingMono(), "…exactly today's mono (B muted by the balance — the shim still mixes while B exists)");
+        s.mx.setBalance(1.0f);
+        for (int i = 0; i < settle / blk; i++) s.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.25f});
+        ok(std::fabs(s.tail(1)[0] - 0.25f) < 2e-3 && std::fabs(s.tail(1)[1] - 0.25f) < 2e-3, "stereo, +1: B alone, centred, both ears at unity");
+        // MONO OUTPUT (Stuart: "the balance also applies if the user is in Mono mode too"): both centre; A tone 600, B DC
+        Bench m;
+        m.mx.setMonoOut(true);
+        for (int i = 0; i < settle / blk; i++) m.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.0f});
+        const float aEven = m.tail(1)[0];
+        m.mx.setBalance(0.5f);
+        for (int i = 0; i < settle / blk; i++) m.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.0f});
+        ok(std::fabs(aEven - 0.25f) < 2e-3 && std::fabs(m.tail(1)[0] - 0.25f * h) < 2e-3 && std::fabs(m.tail(1)[1] - 0.25f * h) < 2e-3,
+           "mono, +0.5: A (both ears) turned down by cos(π/4)");
+        Bench mb; mb.mx.setMonoOut(true); mb.mx.setBalance(0.5f);
+        for (int i = 0; i < settle / blk; i++) mb.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.0f, 0.25f});
+        ok(std::fabs(mb.tail(1)[0] - 0.25f) < 2e-3 && std::fabs(mb.tail(1)[1] - 0.25f) < 2e-3, "mono, +0.5: B (both ears) untouched");
+        mb.mx.setBalance(-1.0f);
+        for (int i = 0; i < settle / blk; i++) mb.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.0f, 0.25f});
+        ok(std::fabs(mb.tail(1)[0]) < 1e-4 && std::fabs(mb.tail(1)[1]) < 1e-4, "mono, −1: B silent — A alone");
+        // STEREO OFF (both in both ears) behaves as mono
+        Bench so; so.mx.setStereo(false); so.mx.setBalance(-0.5f);
+        for (int i = 0; i < settle / blk; i++) so.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.0f, 0.25f});
+        ok(std::fabs(so.tail(1)[0] - 0.25f * h) < 2e-3 && std::fabs(so.tail(1)[1] - 0.25f * h) < 2e-3, "stereo off, −0.5: B in both ears, turned down");
+        // THE RAMP: a balance change is a 400 ms raised cosine — half way it is part way, and no step; re-aimed mid-glide too
+        Bench r;
+        for (int i = 0; i < settle / blk; i++) r.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.0f});
+        r.mx.setBalance(1.0f);
+        const int half = (int)(kRampSec * kOutRate / 2);
+        r.run({S(0, 7.0e6), S(1, 7.01e6)}, half, {0, 0}, {0.25f, 0.0f});
+        const float lHalf = r.tail(1)[0];
+        ok(lHalf > 0.05f && lHalf < side - 0.05f, "a full lean glides (half way: part way down), not a cut");
+        r.mx.setBalance(-0.5f);   // re-aimed mid-glide: from where it is
+        for (int i = 0; i < settle / blk; i++) r.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.0f});
+        ok(r.maxStep(settle + half) < 0.25 * 1.41421356 * 3.0 / (kRampSec * kOutRate), "…no step anywhere, re-aimed mid-glide included");
+        ok(std::fabs(r.tail(1)[0] - side) < 2e-3, "…and lands: A back at its own level in its own ear");
+        // A VFO ALONE has no claim on the balance: B muted, balance leaning to B — A stays at unity, centred
+        Bench al; al.mx.setBalance(0.9f);
+        auto SM = [](int key, double hz, bool muted) { PanMixer::Src x = S(key, hz); x.muted = muted; return x; };
+        for (int i = 0; i < settle / blk; i++) al.run({S(0, 7.0e6), SM(1, 7.01e6, true)}, blk, {0, 0}, {0.25f, 0.25f});
+        ok(std::fabs(al.tail(1)[0] - 0.25f) < 2e-3 && std::fabs(al.tail(1)[1] - 0.25f) < 2e-3, "B muted, balance +0.9: A alone at unity (not turned down)");
+        // B removed with A leaned away: A comes home to unity and the hand-back happens
+        Bench rm; rm.mx.setBalance(0.5f);
+        for (int i = 0; i < settle / blk; i++) rm.run({S(0, 7.0e6), S(1, 7.01e6)}, blk, {0, 0}, {0.25f, 0.0f});
+        for (int i = 0; i < settle / blk; i++) rm.run({S(0, 7.0e6), S(1, 7.01e6, false)}, blk, {0, 0}, {0.25f, 0.0f});
+        ok(rm.mx.restingMono() && std::fabs(rm.tail(1)[0] - 0.25f) < 1e-4, "B removed while leaned away from A: A home at unity, hand-back with no step");
     }
 
     std::printf("── 11. the RF centre for two VFOs (fitCentre) ──\n");

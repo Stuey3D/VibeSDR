@@ -8228,6 +8228,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /** ★★ Round 3: VFO A muted in this listener's mix (the listener's own channel, source 0 of the PanMixer). Only
          *  while VFO B exists — B's removal unmutes A, which fades back in before the hand-back (PanMixer::restingMono). */
         bool muteA = false;
+        /** ★★★ The listener's A ⟷ B BALANCE, −1 (all A) … 0 … +1 (all B) — vibewatch::balanceGains (the two-server rule,
+         *  dualMix.ts). Per listener session, like stereo and mute; kept while B comes and goes (the client re-sends it). */
+        float balance = 0.0f;
         uint64_t order = 0;                                             // creation order — the newest yields first
         /** The per-channel slice state on a range-locked radio (the listener's thread only). */
         struct Slice { int id = 0; int bins = 0; vibedsp::Channelizer::ExtractCtx ctx; std::vector<cf32> buf; };
@@ -19807,6 +19810,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                       + ",\"wide\":" + std::to_string(kWideVersion)
                       /* ★★ V12 VFO A/B: how many watch channels a listener may add here (0 = none — no toggle). */
                       + ",\"watch\":" + std::to_string(watchMaxFor(sock))   // ★ 0 for a listener in DRM
+                      /* ★★★ …and it takes {"type":"watch","balance":x} — the A ⟷ B balance. An older server never
+                       *  says so, and the clients then draw no balance row (no dead control). */
+                      + ",\"watchBal\":true"
                       + std::string(",\"gainCap\":")
                       + std::to_string(LocalSdrShim::gainCapAt(
                             LocalSdrShim::instance().listenFrequency()))
@@ -26701,7 +26707,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (w) {
             std::lock_guard<std::mutex> lk(w->m);
             j += std::string(",\"stereo\":") + (w->stereo ? "true" : "false") + ",\"monoOut\":" + (w->monoOut ? "true" : "false")
-               + ",\"muteA\":" + (w->muteA ? "true" : "false") + ",\"chans\":[";
+               + ",\"muteA\":" + (w->muteA ? "true" : "false");
+            snprintf(b, sizeof b, ",\"bal\":%.2f", (double)w->balance); j += b;   // ★★★ the A ⟷ B balance (watchBal)
+            j += ",\"chans\":[";
             bool first = true;
             for (auto& ch : w->chans) {
                 const auto wd = ch->wanted();
@@ -26803,7 +26811,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *      mode the RF centre should move accordingly so that both VFO's can be tuned as if they have the full 2.4MSPS
      *      window"). The dial is this listener's alone there, so a B that no longer fits beside A moves the radio to hold
      *      both (vibewatch::fitCentre) — refused only when the two are further apart than one capture can hold.
-     *  ★ Round 3 also: {"muteA":bool} and {"id":1,"mute":bool} — a VFO out of the mix, the other home to both ears. */
+     *  ★ Round 3 also: {"muteA":bool} and {"id":1,"mute":bool} — a VFO out of the mix, the other home to both ears.
+     *  ★★★ And {"balance":−1…1} — the A ⟷ B balance (vibewatch::balanceGains; hwinfo `watchBal`). A setting only. */
     void handleWatch(const std::shared_ptr<net::Socket>& sock, const std::string& msg) {
         const std::string sess = sessionOfSock(sock.get());
         auto refuse = [&](const char* why, const std::string& note) {
@@ -26839,6 +26848,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             std::lock_guard<std::mutex> lk(w->m);
             w->muteA = jsonOn(msg, "muteA") && !w->chans.empty();   // ★ only beside a VFO B (no mute of the only VFO here)
         }
+        // ★★★ THE A ⟷ B BALANCE (Stuart, 2026-10-30: "to compensate for a louder broadcast station and an SSB contact").
+        //     Clamped here (the network talking); the mixer glides to it over kRampSec. Any message may carry it.
+        double balV = 0;
+        const bool hasBal = jsonNum(msg, "balance", balV);
+        if (hasBal && w) { std::lock_guard<std::mutex> lk(w->m); w->balance = vibewatch::clampBalance((float)balV); }
         if (jsonOn(msg, "off")) {
             if (w) {
                 watchRemove(w, id, "VFO B was switched off");
@@ -26856,7 +26870,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                        || msg.find("\"bandwidth") != std::string::npos || msg.find("\"sql") != std::string::npos
                        || jsonOn(msg, "on");   // ★ {"on":true} = create at VFO A's frequency
         if (hasStereo && w) { std::lock_guard<std::mutex> lk(w->m); w->stereo = stereoOn; }
-        if (!aims) {   // ★ settings only (stereo, monoOut, mute): never creates a channel, never re-aims one
+        if (!aims) {   // ★ settings only (stereo, monoOut, mute, balance): never creates a channel, never re-aims one
             if (!w) sendText(sock, watchStateJson(nullptr, std::string(",\"stereo\":") + (stereoOn ? "true" : "false")));
             else sendText(sock, watchStateJson(w.get()));
             return;
@@ -26950,6 +26964,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::lock_guard<std::mutex> lk(w->m);
                 if (hasStereo) w->stereo = stereoOn;
                 if (hasMonoOut) w->monoOut = monoOutV;
+                if (hasBal) w->balance = vibewatch::clampBalance((float)balV);
                 // a channel with this id still fading out is dropped from the fade — the new one replaces it
                 w->fading.erase(std::remove_if(w->fading.begin(), w->fading.end(),
                     [&](const std::shared_ptr<vibewatch::WatchChannel>& c) { return c->id() == id; }), w->fading.end());
@@ -27123,6 +27138,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         w->mixing = true;
         w->mixer.setStereo(w->stereo);
         w->mixer.setMonoOut(monoOut || w->monoOut);
+        w->mixer.setBalance(w->balance);   // ★★★ the A ⟷ B balance — a level, before stereo or mono placement
         const size_t nch = w->chans.size() + w->fading.size();
         if (w->chanPcm.size() < nch) w->chanPcm.resize(nch);
         std::vector<vibewatch::PanMixer::Src> srcs;
