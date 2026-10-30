@@ -7558,7 +7558,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const bwZoomAcc = useRef({ base: 0, px: 0, t: 0 });
   const onBwDelta = useCallback((pxDelta: number) => {
     const c = client.current; if (!c) return;
-    markMove();   // ★ the ZOOM drum — a zoom (left on markInteract by mistake: the interaction boost never followed it)
+    markMove();   // ★ the ZOOM drum — a zoom (it was left on markInteract 2026-10-30 by mistake: no boost, and the A/V hold)
     const s = c.getView(); // predicted view — getStatus() is one RTT stale mid-gesture
     if (!s.binBandwidth || !s.centerHz || !s.binCount) return;
     const a = bwZoomAcc.current;
@@ -7602,7 +7602,7 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  serves ANY span, so half an octave is a real level — the same one view send a press, no extra data. A server that
    *  snaps to an octave ladder (UberSDR — see onZoomStep) keeps ×2, or a tap would snap straight back. */
   const zoomStepK = isLocal ? Math.SQRT2 : 2;
-  // ★ markMove: a zoom from the menu is a ZOOM — the waterfall's interaction boost follows it (Stuart, 2026-10-30).
+  // ★ markMove: a zoom from the menu is a ZOOM — the waterfall's boost and its no-hold window follow it (Stuart, 2026-10-30).
   const onZoomIn  = useCallback(() => { markMove(); zoomBy(1 / zoomStepK); }, [zoomBy, zoomStepK, markMove]);
   const onZoomOut = useCallback(() => { markMove(); zoomBy(zoomStepK); },     [zoomBy, zoomStepK, markMove]);
 
