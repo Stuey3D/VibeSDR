@@ -69,7 +69,7 @@ const healthy = (t: number): RspAgcSample => ({
   const r = w.read();
   ok(r.warn && r.status === 'RF 4 · IF 44 · AGC HANDED BACK', `hand-back: amber at once (${r.status})`);
   ok(r.why.includes('rejected 3 gain writes'), `hand-back reason: ${r.why}`);
-  ok(r.line.startsWith('VibeAGC handed back · The SDRplay\'s own IF AGC + our RF walker'), `hand-back line: ${r.line}`);
+  ok(r.line.startsWith('The SDRplay\'s own IF AGC + our RF walker'), `hand-back line names what runs now: ${r.line}`);
   for (let t = 0; t < 120_000; t += 100) w.push({ lna: 4, ifgr: 44, ifAgc: true, vagc: 0, vst: 5, vrs: 13 }, t);
   ok(w.warn, 'a hand-back stays amber while it stands (it is a state, not an event)');
 }

@@ -1126,6 +1126,21 @@ html #vts { bottom: calc(var(--mcard-bottom) + var(--mcard-h, 190px) + 0.7em); }
 #dspTags { font-size: 0.78em; letter-spacing: 0.1em; white-space: nowrap; color: var(--amber, #ffb833);
   cursor: pointer; }
 #dspTags:empty { display: none; }
+/* ★ The SDRplay AGC readout beside the link numbers: the status line's own quiet colour while it is working, the warn
+   amber when it has stuck — the one time it is meant to be NOTICED. */
+#rspAgcTag { font-size: 0.78em; letter-spacing: 0.1em; white-space: nowrap; color: var(--ctl-status, #c9922e); }
+/* ★ Stuck: the DIRECT SAMPLING chip's voice — amber, boxed and STILL (no breathing: it is a state to look into, not an
+   alarm). Boxed because on the amber faceplate the colour alone would not stand out from the figures beside it. */
+#rspAgcTag.warn { color: var(--amber, #ffb833); font-weight: 600; border: 1px solid rgba(255,180,60,0.8);
+  border-radius: 3px; padding: 0 4px; }
+#rspAgcTag:empty { display: none; }
+#mStatus #rspAgcTag { flex: 0 0 auto; }
+/* …and its line in the radio panel. */
+#rspAgcLine { font-size: 11px; color: var(--text-dim); letter-spacing: 0.3px; margin: 2px 0 6px; line-height: 1.35; }
+#rspAgcLine.warn { color: var(--amber, #ffb833); }
+#rspAgcLine:empty { display: none; }
+#rspAgcLine .why { display: block; font-weight: 600; margin-top: 3px; padding: 1px 5px; width: fit-content;
+  border: 1px solid rgba(255,180,60,0.8); border-radius: 3px; }
 
 /* Link-quality bars — same semantics as the app: 3 green solid, 2 amber jitter,
    1 red stalling, ✕ disconnected. Driven by SPEC frame timing, not just RTT:
@@ -4511,6 +4526,11 @@ select.btn { padding: 6px 8px; }
         ★ THE BARS SIT WITH THE NUMBERS THEY DESCRIBE (Stuart, 2026-08-21). -->
         <span id="linkBars" title="Link quality"><i></i><i></i><i></i></span>
         <span id="status">—</span><!--
+        ★★★ AN SDRplay's AGC AT A GLANCE (2026-10-30): "RF 3 · IF 42" — the LNA state and the IF gain reduction the AGC
+            has chosen; amber with a short reason when it has stuck (the reason in full on hover and in the radio panel).
+            Stuart: "do we get to see a readout of what the AGC is doing for both the RF and IF so I can see if it is
+            working or got stuck". Empty on every other radio, so it costs nothing there.
+        --><span id="rspAgcTag"></span><!--
         ★★★ WHAT IS BEING DONE TO THE AUDIO — shown only when something is. This page restores noise
             reduction, the auto-notch and the blanker on every connect (see restorePrefs); a listener who
             left NR on last week hears the artefacts and concludes the RECEIVER is broken (Stuart,
@@ -5657,6 +5677,10 @@ select.btn { padding: 6px 8px; }
       <span class="val" id="rspSysGain" style="flex:1">—</span>
       <span id="rspOverload" hidden>OVERLOAD</span>
     </div>
+    <!-- ★★★ WHAT THE AGC IS DOING, AND WHETHER IT HAS STUCK (2026-10-30): VibeAGC's state and why, the ADC peak against
+         its target, gain writes in the last minute — or which AGC is running instead. Amber with the reason when it has
+         stuck, latched so it never flickers on a healthy radio (src/services/rspAgcReadout.ts, shared with the app). -->
+    <div id="rspAgcLine"></div>
     <div class="mrow">
       <label for="rspLna">RF GAIN (LNA)</label>
       <!-- ★ RIGHT IS MORE GAIN, like every other slider anywhere. The underlying LNA STATE

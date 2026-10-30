@@ -100,10 +100,10 @@ export function rspAgcLine(s: RspAgcSample): string {
     const w = typeof s.vwpm === 'number' ? ` · ${s.vwpm} gain write${s.vwpm === 1 ? '' : 's'} in the last minute` : '';
     return `VibeAGC: ${st} · ADC ${peak} dBFS${tgt}${w}`;
   }
-  const back = s.vst === VST_HANDED_BACK ? 'VibeAGC handed back · ' : '';
   const who = `the SDRplay's own IF AGC${s.rfAgc !== false ? ' + our RF walker' : ''}`;
   const tgt = typeof s.agcSet === 'number' ? ` · target ${dbfs(s.agcSet)}` : '';
-  return `${back}${who[0].toUpperCase()}${who.slice(1)} · ADC ${peak} dBFS${tgt}`;
+  // ★ After a hand-back the line names what runs NOW; the hand-back and its reason are the amber line under it (why).
+  return `${who[0].toUpperCase()}${who.slice(1)} · ADC ${peak} dBFS${tgt}`;
 }
 
 /** ★ The status fragment without the warning: "RF 3 · IF 42". Empty on manual gain (no AGC has chosen anything). */
