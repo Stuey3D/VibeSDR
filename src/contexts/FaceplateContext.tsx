@@ -39,7 +39,7 @@ import { readNativeDeviceClass } from '../services/deviceClass';
 import {
   applyFrameRateCap, frameWatchAvailable, powerSaveOn, readMaxRefreshRate, startFrameWatch, stopFrameWatch, takeFrameWatch,
 } from '../services/frameRate';
-import { uiFrameCapHz } from '../services/uiCadence';
+import { uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { setArtColour } from '../services/appIcon';
 import { useReduceMotion } from '../hooks/useReduceMotion';
 
@@ -253,7 +253,7 @@ export function FaceplateProvider({ children, legacyThemeName = 'white' }:
   useEffect(() => { if (capKnown) setArtColour(settings.iconColour); }, [capKnown, settings.iconColour]);
   useEffect(() => {
     let live = true;
-    readMaxRefreshRate().then((hz: number | null) => { if (live) setMaxRefreshHz(hz); });
+    readMaxRefreshRate().then((hz: number | null) => { if (live) { setMaxRefreshHz(hz); if (hz && hz > 0) uiPanelMaxHz.value = hz; } });
     return () => { live = false; };
   }, []);
 

@@ -112,6 +112,7 @@ public:
             k.specShow = flag(r, o, "specShow", true); k.peakHold = flag(r, o, "peakHold", true);
             k.smoothTune = flag(r, o, "smoothTune", true); k.targetRows = (int)num(r, o, "targetRows", 0);
             k.displayCapHz = (int)num(r, o, "displayCapHz", 0);
+            k.panelHz = (int)num(r, o, "panelHz", 0);
             en.setConfig(k);
             return jsi::Value::undefined();
         });

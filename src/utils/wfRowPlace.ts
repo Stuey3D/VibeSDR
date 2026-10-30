@@ -371,6 +371,46 @@ export function tuneEaseRows(frac: number, rowRate = EASE_ROW_RATE): number {
   return Math.max(2, Math.round(tuneEaseSec(frac) * r));
 }
 
+/** ★★★ THE SLOPE CAP (2026-10-29, Stuart on the Pi 500's AM band: "higher step rates turn into sharp lines with no detail"
+ *  and, on a zoom, "same with zooming"). An ease's length was set by TIME alone (0.25 s a tune step, 0.33 s per ×2), so
+ *  how far a carrier moved per row was whatever the move asked: a fast run of 9 kHz steps restarted the ease from where it
+ *  had got to with the SAME short length and a growing distance (each restart compressing the move), and near the edges
+ *  of a zoom a carrier crossed hundreds of pixels in ten rows — near-horizontal streaks, the join smearing each row
+ *  across its whole path. Now an ease is ALSO at least as long as it takes to keep the largest on-screen move of any row
+ *  under SLOPE_CAP_FRAC of the view (per SCREEN row) — up to EASE_CEIL_S, past which the slope is allowed to rise (a
+ *  bigger lag would feel like the waterfall ignoring the dial). A step the cap does not bind (every small step, a single
+ *  key) is EXACTLY what it was. Rows are never made for it: the ease is spread over more of the rows the clock makes
+ *  anyway (and the interaction boost, wfClock.ts boostRowRate, makes those come twice as fast while a hand is on the
+ *  dial). Shared: the app (fanNoteRow), the engine (wf_zoom_fan.h) and the web (wfGlide.ts rowView, per device row). */
+export const SLOPE_CAP_FRAC = 1 / 256;
+export const EASE_CEIL_S = 1.0;
+/** The largest move, as a FRACTION of the view, of any frequency on screen between views (L0, S0) and (L1, S1) — at one
+ *  of the old view's two edges, since x(F) = (F − L)/S is linear in F. */
+export function viewMoveFrac(L0: number, S0: number, L1: number, S1: number): number {
+  if (!(S0 > 0 && S1 > 0)) return 0;
+  return Math.max(Math.abs((L0 - L1) / S1), Math.abs((L0 + S0 - L1) / S1 - 1));
+}
+/** The rows an ease from (lo0, span0) to (lo1, span1) takes: `base` (the time rule's rows), or more so that its first
+ *  row — the fastest of easeView (1.5× the mean pace) or of a linear ease (`linear`) — moves nothing on screen by more
+ *  than the cap. `px` = rows a screen row (the web's device rows); `rowRate` = rows/s (sets the ceiling). */
+export function cappedEaseRows(lo0: number, span0: number, lo1: number, span1: number, base: number, rowRate = EASE_ROW_RATE,
+                               px = 1, linear = false): number {
+  const r = rowRate > 0 ? rowRate : EASE_ROW_RATE;
+  const ceil = Math.max(base, Math.round(EASE_CEIL_S * r));
+  const cap = SLOPE_CAP_FRAC / Math.max(1, px);
+  if (!(span0 > 0 && span1 > 0) || !isFinite(lo0) || !isFinite(lo1)) return base;
+  let N = Math.max(1, base);
+  for (let i = 0; i < 6 && N < ceil; i++) {
+    let L: number, S: number;
+    if (linear) { L = lo0 + (lo1 - lo0) / N; S = span0 * Math.pow(span1 / span0, 1 / N); }
+    else [L, S] = easeView(lo0, span0, lo1, span1, 1 / N);
+    const d = viewMoveFrac(lo0, span0, L, S);
+    if (!(d > cap * 1.0001)) break;
+    N = Math.min(ceil, Math.ceil(N * d / cap));
+  }
+  return Math.max(base, N);
+}
+
 /** Per output pixel x of an n-wide row, the stored bins [lo[x], hi[x]] it shows under map (a, b) — lo = -1 where the
  *  row has no data (blank). Magnified (a ≤ 1): the one bin under the pixel's centre. Shrunk: every bin it covers. */
 export function fanTable(a: number, b: number, n: number, lo: Int32Array, hi: Int32Array): void {
@@ -459,7 +499,10 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
     if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }   // else: on from where the ease has got to
     st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
     // ★ A step mid-ease (a pinch after a drum step) carries on for at least what the ease had left — never a snap.
-    st.eT = st.easeLeft = Math.max(zoomEaseRows(span / st.dSpan, st.rowRate), st.easeLeft > 0 ? st.easeLeft : 0);
+    // ★★★ …and long enough that no carrier on screen moves more than the slope cap a row (cappedEaseRows) — the edges of
+    //     a zoom were near-horizontal streaks.
+    st.eT = st.easeLeft = Math.max(cappedEaseRows(st.dLo, st.dSpan, lo, span, zoomEaseRows(span / st.dSpan, st.rowRate), st.rowRate),
+                                   st.easeLeft > 0 ? st.easeLeft : 0);
   }
   // ★★★ A ZOOM LEAVES THE HISTORY AS IT WAS DRAWN (Stuart, 2026-10-28, on beta27's re-map: "you are simply expanding the
   //     whole signal history … what should happen is a thin line signal should expand out to the width and the history
@@ -478,7 +521,10 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
   if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved > st.lastSpan * TUNE_EASE_MIN_FRAC && moved < st.lastSpan) {
     if (!(st.easeLeft > 0)) { st.dLo = st.lastLo; st.dSpan = st.lastSpan; }
     st.eLo0 = st.dLo; st.eSpan0 = st.dSpan; st.eJ = 0;
-    st.eT = st.easeLeft = Math.max(tuneEaseRows(moved / st.lastSpan, st.rowRate), st.easeLeft > 0 ? st.easeLeft : 0);
+    // ★★★ The slope cap (cappedEaseRows): a run of fast steps restarts from where the ease has got to, and the distance
+    //     left grows with every step — the length grows with it, so the move is not compressed into the old rows.
+    st.eT = st.easeLeft = Math.max(cappedEaseRows(st.dLo, st.dSpan, lo, span, tuneEaseRows(moved / st.lastSpan, st.rowRate), st.rowRate),
+                                   st.easeLeft > 0 ? st.easeLeft : 0);
   }
   if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
     const k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
