@@ -69,7 +69,7 @@ import { Canvas, LinearGradient, Rect, vec } from '@shopify/react-native-skia';
 import { isLegacyPackage, openLegacyNotice } from './LegacyPackageNotice';
 import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import type { Textures } from '../constants/assetDensity';
-import type { WfSpeedSetting } from '../assets/wfSpeedCap';
+import { type WfSpeedSetting, DATA_LABEL, DATA_NOTE } from '../assets/wfSpeedCap';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -345,9 +345,10 @@ export interface MenuSheetProps {
   /** ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (the interaction boost), default on. */
   wfBoost?:           boolean;
   onWfBoost?:         (v: boolean) => void;
-  /** ★ V12: offer LOW / ECO (5 / 10 fps link ceilings) — false where the server has no rate lever (OpenWebRX). MINIMUM (2)
-   *  is offered regardless. */
-  wfCapsOk?:          boolean;
+  /** ★★ V12 2026-10-30 THE DATA CONTROL (LOW · AUTO · FULL — the link mode; wfSpeedCap.ts). Absent = not drawn (an Icom,
+   *  OpenWebRX: no rate lever). */
+  linkMode?:          'full' | 'adaptive' | 'lowData';
+  onLinkMode?:        (m: 'full' | 'adaptive' | 'lowData') => void;
   /** ★ V12: the live rows/s each Waterfall Speed choice gives on this server (wfSpeedCap.speedNumbers); null = unknown. */
   wfSpeedNums?:       Record<WfSpeedSetting, number> | null;
   smoothTune?:        boolean;
@@ -1293,7 +1294,7 @@ function MenuSheetBody({
   specFloor = 0, onSpecFloor, visualGain = 0, onVisualGain,
   specPeakScale = 10, onSpecPeakScale,
   peakHold = false, onPeakHold,
-  frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll, wfBoost = true, onWfBoost, wfCapsOk = true, wfSpeedNums = null,
+  frameRate = '20fps', onFrameRate, wfScroll = 'sharp', onWfScroll, wfBoost = true, onWfBoost, wfSpeedNums = null, linkMode = 'adaptive', onLinkMode,
   smoothTune = true, onSmoothTune,
   onSpecRatio,
 }: MenuSheetProps) {
@@ -1910,10 +1911,9 @@ function MenuSheetBody({
                     do that. Speed therefore follows the data rate, which is what SHARP always did. */}
                 {/* ★★ V12 MINIMUM · LOW · ECO · NATIVE · [DEFAULT · SMOOTH] — slowest to smoothest (Stuart 2026-10-28; the 2
                     fps MINIMUM 2026-10-30, GitHub #57 — the old 5 fps MINIMUM is now LOW). NATIVE is what was SHARP (stored
-                    value still 'sharp'). The two that add interpolated rows sit in an outlined group; MINIMUM / LOW / ECO
-                    cap the LINK so the server sends less (src/assets/wfSpeedCap.ts). LOW / ECO are offered only where the
-                    server has a rate lever (not OpenWebRX); MINIMUM everywhere — its point is the slow scroll. Each key
-                    carries its LIVE rows/s on this server. */}
+                    value still 'sharp'). The two that add interpolated rows sit in an outlined group. DISPLAY ONLY since
+                    2026-10-30 (src/assets/wfSpeedCap.ts): rows drawn a second, never what the server sends — that is DATA
+                    (LOW · AUTO · FULL, in the SERVER section). Offered on every server. Each key carries its LIVE rows/s. */}
                 {!!onWfScroll && (() => {
                   const lbl = (name: string, k: WfSpeedSetting) => wfSpeedNums ? `${name} ${wfSpeedNums[k]}` : name;
                   const key = (name: string, k: WfSpeedSetting) => (
@@ -1924,8 +1924,8 @@ function MenuSheetBody({
                 <SubLabel label="Waterfall Speed" />
                 <BtnRow>
                   {key('MINIMUM', 'min2')}
-                  {wfCapsOk && key('LOW', 'low')}
-                  {wfCapsOk && key('ECO', 'eco')}
+                  {key('LOW', 'low')}
+                  {key('ECO', 'eco')}
                   {key('NATIVE', 'sharp')}
                   <View style={styles.wfInterpGroup}>
                     <View style={styles.wfInterpRow}>
@@ -1936,9 +1936,7 @@ function MenuSheetBody({
                   </View>
                 </BtnRow>
                 <Text style={styles.wfNote}>
-                  {(wfCapsOk
-                    ? 'Minimum (2 rows a second) is the slowest — for spotting an intermittent signal in the history. Minimum, Low (5) and Eco (10) save data by asking the server for less — no effect when it already sends that little; a faster feed the server cannot slow is combined down to the rate, keeping short bursts. '
-                    : 'Minimum (2 rows a second) is the slowest — for spotting an intermittent signal in the history; this server cannot send less, so its frames are combined down to 2, keeping short bursts. ')
+                  {'How fast the waterfall scrolls — it does not change what the server sends. Minimum (2 rows a second) is the slowest, for spotting an intermittent signal in the history; Low is 5 and Eco 10. When the server sends faster than the speed, its frames are combined into each row, keeping short bursts. '
                   // ★ 2026-10-29 (Stuart, a 23 fps Kiwi: "ECO 13" beside "10 rows a second"): every choice but Native now
                   //   runs at a rate that divides the screen's refresh — the numbers on the keys are what runs.
                   + 'Every speed but Native runs at a rate that divides the screen\'s refresh (2, 5, 10, 15, 20, 30 or 60 rows a second), filling in rows or combining them evenly. Native is the server\'s own rate, every row a real frame. Default and Smooth add interpolated rows for a smoother scroll.'}
@@ -2108,9 +2106,19 @@ function MenuSheetBody({
             {/* ── INSTANCE ───────────────────────────────────────── */}
             <SectionLabel label="SERVER" icon="instance" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
-            {/* ★★ V12 2026-10-30: the LINK MANAGEMENT row (AUTO / FULL / LOW DATA) is gone — AUTO always (GitHub #57; Stuart:
-                "default to the auto mode … and use the chosen frame rate to set the incoming data rate where possible").
-                The Waterfall Speed keys set what the server sends; AUTO steps down underneath on a poor connection. */}
+            {/* ★★ V12 2026-10-30 DATA · LOW · AUTO · FULL — what the server sends, back where Link Management was (it is a
+                SERVER control). Stuart: "we need a separate data control but dont mention frame rates, just call it low
+                auto full" — so no rates in its label or note. LOW = the 5 fps floor; AUTO adapts, never below it; FULL =
+                the server's full rate. The speed keys are display only. */}
+            {onLinkMode && (<>
+              <SubLabel label="Data" />
+              <BtnRow>
+                <Btn label={DATA_LABEL.low}  active={linkMode==='lowData'}  onPress={() => onLinkMode('lowData')} />
+                <Btn label={DATA_LABEL.auto} active={linkMode==='adaptive'} onPress={() => onLinkMode('adaptive')} />
+                <Btn label={DATA_LABEL.full} active={linkMode==='full'}     onPress={() => onLinkMode('full')} />
+              </BtnRow>
+              <Text style={styles.wfNote}>{DATA_NOTE}</Text>
+            </>)}
             {/* Back-to-list, Favourite and Set-default moved OUT to the ServersChip
                 (top-left of the spectrum) — they're the "which server am I on / how
                 do I leave" actions, and burying them here behind a settings-looking

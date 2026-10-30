@@ -214,7 +214,7 @@ import { useGlassTheme, type PopupTokens } from '../components/PopupShell';
 import { meaningText } from '../constants/decoderTokens';
 import { checkTlsAfterFailure } from '../services/tlsTrust';
 import { tlsTarget } from '../utils/tlsPin';
-import { type WfSpeedSetting, loadWfSpeed, migrateLinkMode, linkCapFor, offeredWithoutLever, speedNumbers, KIWI_SPEED_CAPS } from '../assets/wfSpeedCap';
+import { type WfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS } from '../assets/wfSpeedCap';
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -2885,15 +2885,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [frameRate,     setFrameRate]     = useState<'10fps'|'20fps'|'30fps'>('20fps');
   // ★ SHARP by default: one row per received frame, exactly what the app has always drawn.
   const [wfScroll,      setWfScroll]      = useState<WfSpeedSetting>('sharp');
-  /* ★★ V12 MINIMUM / LOW / ECO (src/assets/wfSpeedCap.ts): caps the LINK at 2 / 5 / 10 fps so the SERVER sends less —
-   *  pushed to the live client like linkMode (VibeServer + UberSDR link managers, Kiwi's wf_speed). Each is also a row
-   *  mode at that rate (wfRowTarget ROW_RULE): a feed the server could not slow is thinned to it. */
-  const wfLinkCapRef = useRef(0);
-  useEffect(() => {
-    wfLinkCapRef.current = linkCapFor(wfScroll);
-    const c = client.current as unknown as { wfLinkCap?: number } | null;
-    if (c && 'wfLinkCap' in c) c.wfLinkCap = wfLinkCapRef.current;
-  }, [wfScroll]);
+  /* ★★ V12 2026-10-30: the speed keys are DISPLAY ONLY (src/assets/wfSpeedCap.ts) — rows drawn a second, a faster feed
+   *  combined down. What the server sends is the separate DATA control (LOW · AUTO · FULL = linkMode below). Stuart: "we
+   *  cannot slow the incoming data rate down automatically when the waterfall is slowed down as that will effect the
+   *  spectrum too". */
   /** The server's own top waterfall rate (the link controller's uncapped top rung; 0 = not known) — the live numbers on
    *  the Waterfall Speed buttons are worked out from it. */
   const [wfNativeFps, setWfNativeFps] = useState(0);
@@ -2906,15 +2901,21 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ The RECEIVER's clock, from hwinfo — shown in the status row instead of the phone's own time,
    *  which the phone is already displaying two centimetres higher. null = not yet told. */
   const [srvTz, setSrvTz] = useState<{ offsetMin: number | null; abbr: string }>({ offsetMin: null, abbr: '' });
-  // Adaptive waterfall-rate policy — see services/linkManager.ts. Follow what the link will actually carry rather than
-  // asking for the maximum and stuttering.
-  // ★★ V12 2026-10-30 — ALWAYS AUTO. The LINK MANAGEMENT row (AUTO / FULL / LOW DATA) is gone (GitHub #57; Stuart: "may as
-  //    well remove it, default to the auto mode which drops the incoming data rate on poor connections and use the
-  //    chosen frame rate to set the incoming data rate where possible"). The Waterfall Speed key sets the incoming rate
-  //    (MINIMUM 2 · LOW 5 · ECO 10 ask for less; NATIVE / DEFAULT / SMOOTH take the server's own), and AUTO lowers it on a
-  //    poor connection underneath. A saved FULL / LOW DATA is migrated once (wfSpeedCap.migrateLinkMode). The clients
-  //    keep their modes (the watch still pins Low Data); the phone just never asks for another.
+  // Adaptive waterfall-rate policy — see services/linkManager.ts. 'adaptive' is the default:
+  // follow what the link will actually carry rather than asking for the maximum and stuttering.
+  // ★★ V12 2026-10-30: this is the DATA control — LOW · AUTO · FULL on screen (wfSpeedCap.ts DATA_LABEL; 'lowData' /
+  //    'adaptive' / 'full' stored, so a saved Link Management choice loads as it was). LOW is the 5 fps floor; AUTO never
+  //    drops below it. Separate from the speed keys, which are display only (Stuart, 2026-10-30).
+  const [linkMode,      setLinkMode]      = useState<'full'|'adaptive'|'lowData'>('adaptive');
   const linkModeRef = useRef<'full'|'adaptive'|'lowData'>('adaptive');
+  useEffect(() => {
+    linkModeRef.current = linkMode;
+    // PUSH the mode to the live client whenever it changes — including the async restore below, which
+    // otherwise only updated the UI and left the client in adaptive (came back showing "Low Data" but
+    // running 10fps, Stuart 2026-07-24). Idempotent with onLinkMode's own push (setMode no-ops if same).
+    const c = client.current as unknown as { linkMode?: string } | null;
+    if (c && 'linkMode' in c) c.linkMode = linkMode;
+  }, [linkMode]);
   /** ★★ THE OWNER'S uncompressed-audio POLICY, straight from /vibeserver.json. Three-way, and only
    *  'choice' puts a switch in the audio sheet — 'compat' is an automatic fallback with no control
    *  and 'off' never offers raw PCM at all. Null until fetched, and for every non-VibeServer
@@ -6545,12 +6546,10 @@ export default function SDRScreen({ route, navigation }: Props) {
                              listeners: 0, decoding: false });
     // Apply the persisted VFO-lock follow mode to the fresh connection.
     c.setFollowMode(vfoLockedRef.current);
-    // The link mode — always AUTO since V12 (the row is gone, #57) — pushed to every fresh client.
+    // Apply the persisted link mode (the DATA control) too — the [linkMode] effect only fires on a CHANGE, so a mode
+    // restored before this client existed would be lost (UI shows Low Data, wire runs adaptive 10fps).
     { const cc = c as unknown as { linkMode?: string }; if ('linkMode' in cc) cc.linkMode = linkModeRef.current; }
-    // …and the MINIMUM / LOW / ECO waterfall speed (a 2 / 5 / 10 fps link ceiling): its effect only fires on a CHANGE.
-    { const cc = c as unknown as { wfLinkCap?: number; wfNativeFps?: number };
-      if ('wfLinkCap' in cc) cc.wfLinkCap = wfLinkCapRef.current;
-      setWfNativeFps(cc.wfNativeFps ?? 0); }
+    { const cc = c as unknown as { wfNativeFps?: number }; setWfNativeFps(cc.wfNativeFps ?? 0); }
     // Local hardware: thread the live device sample rate for panSpan()'s window.
     if (route.params.isLocal) (c as { setLocalSampleRate?: (hz: number) => void }).setLocalSampleRate?.(hwSampleRate);
     // VibeServer PIN: append the auth suffix to the spectrum WS.
@@ -7383,10 +7382,19 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, []);
 
 
-  /** ★ LOW / ECO need a server that can be ASKED for fewer frames (VibeServer, UberSDR, Kiwi/Web-888). MINIMUM is
-   *  offered everywhere — on OpenWebRX the client thins its feed to 2 rows/s (wfSpeedCap.offeredWithoutLever). */
-  const wfCapsOk = route.params.serverType !== 'owrx';
-  const wfShown: WfSpeedSetting = wfCapsOk || offeredWithoutLever(wfScroll) ? wfScroll : 'sharp';
+  /** ★ The DATA control needs a server that can be ASKED for fewer frames (VibeServer, UberSDR, Kiwi/Web-888). OpenWebRX
+   *  has no rate lever, so there it is not drawn (AGENTS.md: no control that is dead on one radio). Every speed key is
+   *  offered everywhere — they are display only. */
+  const dataOk = route.params.serverType !== 'owrx';
+  const wfShown: WfSpeedSetting = wfScroll;
+  const onLinkMode = useCallback((m: 'full'|'adaptive'|'lowData') => {
+    setLinkMode(m);
+    AsyncStorage.setItem('lsv_link_mode', m).catch(() => {});
+    // Live: the controller reads this on its next tick, so the change is felt within a second
+    // rather than needing a reconnect.
+    const c = client.current as unknown as { linkMode?: string; inner?: { linkMode?: string } } | null;
+    if (c) { if ('linkMode' in c) c.linkMode = m; if (c.inner) c.inner.linkMode = m; }
+  }, []);
   const onWfScroll = useCallback((v: WfSpeedSetting) => {
     setWfScroll(v);
     AsyncStorage.setItem('lsv_wf_scroll', v).catch(() => {});
@@ -7394,14 +7402,12 @@ export default function SDRScreen({ route, navigation }: Props) {
   useEffect(() => {
     AsyncStorage.multiGet(['lsv_wf_scroll', 'lsv_link_mode']).then(([[, v], [, lm]]) => {
       // ★ loadWfSpeed: an old 'minimum' was the 5 fps choice — it lands on LOW (and is re-saved as 'low'), never on
-      //   the new 2 fps MINIMUM ('min2').
-      // ★★ …and the removed LINK MANAGEMENT row (V12, #57): a saved LOW DATA on NATIVE is exactly LOW (5 real rows a
-      //    second, 5 asked of the server) and is carried over; FULL, or LOW DATA on any other speed, keeps the speed —
-      //    the pin just stops (wfSpeedCap.migrateLinkMode). The old key is removed so it can never cap anyone again.
-      const loaded = loadWfSpeed(v);
-      const s = lm != null ? migrateLinkMode(loaded ?? 'sharp', lm) : loaded;
+      //   the new 2 fps MINIMUM ('min2'). (The speed is display only now; the old 5 fps LINK cap it carried is not
+      //   applied.)
+      const s = loadWfSpeed(v);
       if (s) { setWfScroll(s); if (s !== v) AsyncStorage.setItem('lsv_wf_scroll', s).catch(() => {}); }
-      if (lm != null) AsyncStorage.removeItem('lsv_link_mode').catch(() => {});
+      // The DATA control: a saved Link Management choice loads as it was (LOW DATA → LOW, FULL → FULL, AUTO → AUTO).
+      if (lm === 'full' || lm === 'adaptive' || lm === 'lowData') setLinkMode(lm);
     }).catch(() => {});
   }, []);
   /* ★★ V12 2026-10-30 "SPEED UP WHILE TUNING" (GitHub #57 — the interaction boost raced the waterfall just as a phone user
@@ -11768,9 +11774,9 @@ export default function SDRScreen({ route, navigation }: Props) {
            (AGENTS.md: no one-radio controls), and a saved one shows as what it draws there: NATIVE. MINIMUM (2) stays
            everywhere: its point is the slow scroll (#57), which thinning gives on any feed. */
         wfScroll={wfShown}  onWfScroll={onWfScroll}
-        wfCapsOk={wfCapsOk}
         wfBoost={wfBoost}  onWfBoost={onWfBoost}
-        wfSpeedNums={speedNumbers(wfNativeFps, isKiwi ? KIWI_SPEED_CAPS : undefined)}
+        linkMode={linkMode}  onLinkMode={!dataOk ? undefined : onLinkMode}   /* ★ DATA · LOW · AUTO · FULL */
+        wfSpeedNums={speedNumbers(linkMode === 'lowData' && dataOk ? Math.min(DATA_FLOOR_FPS, wfNativeFps) : wfNativeFps)}
         smoothTune={smoothTune}         onSmoothTune={onSmoothTune}
         drumMode={drumMode}             onDrumMode={onDrumMode}
         mediaSkip={mediaSkip}           onMediaSkip={onMediaSkip}

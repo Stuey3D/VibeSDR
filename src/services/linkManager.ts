@@ -30,7 +30,9 @@ export type LinkMode = 'full' | 'adaptive' | 'lowData';
 export const linkDebug = { line: '—' };
 
 export const LADDERS: Record<string, number[]> = {
-  ubersdr:    [10, 5, 3.3],
+  // ★★ V12 2026-10-30: no 3.3 rung — the incoming rate never goes below 5 (wfSpeedCap.ts DATA_FLOOR_FPS; Stuart: "We
+  //    need a minimum of 5FPS incoming for the spectrum to feel smooth still"). set_rate ÷3 is never sent now.
+  ubersdr:    [10, 5],
   vibeserver: [20, 10, 5],
   kiwi:       [23, 13, 5],
 };
@@ -80,7 +82,7 @@ export class LinkManager {
   private lowDataRung: number;
   private apply: (rung: number, fps: number) => void;
   private mode: LinkMode;
-  /** ★ V12 MINIMUM / LOW / ECO (src/assets/wfSpeedCap.ts): the backend's own ladder and Low Data rung, before any ceiling —
+  /** ★ V12 a listener ceiling (userCapFps — set by the speed keys until 2026-10-30, which are display only now; unused, kept generic): the backend's own ladder and Low Data rung, before any ceiling —
    *  so a ceiling can be LIFTED again (the cap chosen off, or the owner raising maxFftRate), not only ever clamp down. */
   private readonly baseLadder: number[];
   private readonly baseLowDataRung: number;
@@ -296,7 +298,7 @@ export class LinkManager {
   }
 
   /** The ladder from the backend's own rungs: the owner's ceiling (rung INDEX kept for Low Data, as it always was),
-   *  then the listener's MINIMUM / LOW / ECO cap (wfSpeedCap.capLadder — Low Data keeps its RATE, so 5 stays 5). */
+   *  then a listener ceiling, if any (wfSpeedCap.capLadder — Low Data keeps its RATE, so 5 stays 5). */
   private computeLadder(cap = this.userCap): { ladder: number[]; lowDataRung: number } {
     let ladder = this.baseLadder.slice();
     if (this.serverMax > 0) {
@@ -324,7 +326,7 @@ export class LinkManager {
   get nativeFps(): number { return this.computeLadder(0).ladder[0] ?? 0; }
 
   /**
-   * ★★★ V12 MINIMUM / LOW / ECO WATERFALL SPEED, LIVE (src/assets/wfSpeedCap.ts; Stuart 2026-10-28). A CEILING on this
+   * ★★★ V12 A LISTENER CEILING, LIVE (built for the speed keys 2026-10-28; since 2026-10-30 they are display only and nothing sets it — the DATA control is the link mode). A CEILING on this
    * controller, not a mode: Auto keeps managing the link underneath it, Full is capped to it, Low Data keeps its rate.
    * Applied at once in every mode — the point is that the SERVER sends fewer frames, so the request goes out now.
    * ★ LIFTING it in Auto re-opens like a fresh connect — on the middle rung, earning the top — rather than sitting
@@ -340,7 +342,7 @@ export class LinkManager {
     if (this.mode === 'full')         this.set(1, false, true);
     else if (this.mode === 'lowData') this.set(this.lowDataRung, false, true);
     else if (!lifted) {
-      // Keep any back-off the link has earned: the rung at or below the rate we were on (UberSDR's 3.3 stays 3.3).
+      // Keep any back-off the link has earned: the rung at or below the rate we were on (5 stays 5).
       const i = this.ladder.findIndex(f => f <= wasFps);
       const r = i >= 0 ? i + 1 : 1;
       this.set(r, r > 1, true);
