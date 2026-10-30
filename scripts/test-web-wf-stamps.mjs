@@ -99,12 +99,23 @@ try {
     ok(ys.every((v, i) => i === 0 || v - ys[i - 1] >= s.minGap), `none closer than the minimum gap (${ys.join(', ')}; gap ${s.minGap})`);
     await shot('3-zoom-run');
     void before;
+    // A BAND CHANGE (7 → 14 MHz, a jump): the history is KEPT as drawn and stamped; a tap on an old row tunes by ITS scale
+    await D('ask(14150000, 48000)'); await D('run(2500)');
+    s = await D('stampInfo()');
+    ok(Math.abs(s.stamps[0].lo + s.stamps[0].span / 2 - 7159600) < 2000, `a band change: stamped with the 7 MHz scale the old rows were drawn at (${s.stamps[0].lo}+${s.stamps[0].span})`);
+    { const yy = s.rowSeq - s.stamps[0].frame + 4;   // css px (dpr 1) under the stamp's top, on the old rows
+      const tap = await ev(`__wfDrv.wf.xyToHz(250, ${s.top + yy}, 1000, 600)`);
+      const want = s.stamps[0].lo + 0.25 * s.stamps[0].span;
+      ok(Math.abs(tap - want) < 50, `a tap on an old 7 MHz row tunes to ITS frequency (${tap.toFixed(0)}, want ${want.toFixed(0)})`);
+      const live = await ev(`__wfDrv.wf.xyToHz(250, ${s.top + 2}, 1000, 600)`), liveX = await ev(`__wfDrv.wf.xToHz(250, 1000)`);
+      ok(Math.abs(live - liveX) < 1, `a tap on the newest row: the live scale, as before (${live.toFixed(0)})`); }
+    await shot('4-band-change');
     // RESIZE (a rotation-like change): the stamp stays at its rows
     await D('resize(800, 500)'); await D('run(300)');
     s = await D('stampInfo()');
     if (s.stamps.length) { const yy = s.top + (s.rowSeq - s.stamps[0].frame);
       ok(yy < s.top + s.H ? await amberAt(yy, yy + 15) > 20 : true, `after a resize the newest stamp is still drawn at its rows (y ${yy})`); }
-    await shot('4-resized');
+    await shot('5-resized');
     // they drop off the bottom
     await D('run(40000)');
     s = await D('stampInfo()');

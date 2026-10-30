@@ -141,6 +141,12 @@ public:
             return jsi::Value::undefined();
         });
         // ★★ V12 2026-10-30 the audio's playout delay, ms (−1 = unknown) — the clock waits for the sound (wf_av_sync.h).
+        if (name == "rowGeom") return fn(1, [](jsi::Runtime& r, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
+            double lo = 0, span = 0;   // ★★ a tap on an old row tunes by its own scale (#57)
+            if (c < 1 || !a[0].isNumber() || !en.rowGeom(a[0].asNumber(), lo, span)) return jsi::Value::null();
+            jsi::Array arr(r, 2); arr.setValueAtIndex(r, 0, lo); arr.setValueAtIndex(r, 1, span);
+            return arr;
+        });
         if (name == "setAudioDelay") return fn(1, [](jsi::Runtime&, SpectrumEngine& en, const jsi::Value* a, size_t c) -> jsi::Value {
             en.setAudioDelay(c >= 1 && a[0].isNumber() ? a[0].asNumber() : -1);
             return jsi::Value::undefined();

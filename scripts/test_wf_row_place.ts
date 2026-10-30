@@ -30,7 +30,7 @@
  *
  * Run: node --no-warnings scripts/test_wf_row_place.ts
  */
-import { applyViewChange, decodeMotion, decodeZoom, encodeMotion, fanImage, fanRefresh, MOTION_MAX_FRAC, MOTION_ROWS, MOTION_ZERO, motionSample, newFanState,
+import { JUMP_KEEPS_HISTORY, applyViewChange, decodeMotion, decodeZoom, encodeMotion, fanImage, fanRefresh, MOTION_MAX_FRAC, MOTION_ROWS, MOTION_ZERO, motionSample, newFanState,
          newMotionState, placeRow, rowViewOffset, takeFanStep, wfImageBytes, writeRow, fanRow, ZOOM_EASE_ROWS, zoomEaseRows, tuneEaseRows, cappedEaseRows, EASE_CEIL_S } from '../src/utils/wfRowPlace.ts';
 import { floorIdx, layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, WIDE_HDR } from '../src/utils/wfWide.ts';
 
@@ -194,14 +194,19 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     ok(`…the new rows slide across to the live column and stay (${cs.join(' ')})`, mono && Math.abs(cs[cs.length - 1] - live) <= 1.01);
     const st = takeFanStep(mf);
     ok('…and the screen is not moved (no ease handed to the UI)', st[0] === 1 && st[1] === 0, `${st}`); }
-  // a JUMP (a bookmark, a typed frequency — a whole view or more): the history is moved (out of the view: the honest gap)
+  // a JUMP (a bookmark, a typed frequency — a whole view or more): ★★★ the history is KEPT AS DRAWN (Stuart, 2026-10-30,
+  // #57: "can we preserve the history on longer tunes and zooms so it is not lost" — JUMP_KEEPS_HISTORY; a scale stamp
+  // marks the boundary, scripts/test_wf_stamps.ts). Before that rule it was moved out of the view (black).
   { for (let i = 0; i < 10; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
-    const jf = mfr; vc += vbw * 1.2; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
-    const d = img(); let lit = 0; for (let f = jf - 5; f < jf; f++) { const s0 = (f % MR) * N; for (let x = 0; x < N; x++) if (d[s0 + x] !== 0) lit++; }
-    ok('a JUMP of 1.2 views: the old rows are moved with it — out of the view, black (the gap the rule allows), no slice', lit === 0, `${lit} lit`);
+    const jf = mfr;
+    const kept: number[] = []; { const d0 = img(); for (let f = jf - 5; f < jf; f++) { const s0 = (f % MR) * N; let n = 0; for (let x = 0; x < N; x++) if (d0[s0 + x] !== 0) n++; kept.push(n); } }
+    vc += vbw * 1.2; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
+    const d = img(); const after: number[] = []; for (let f = jf - 5; f < jf; f++) { const s0 = (f % MR) * N; let n = 0; for (let x = 0; x < N; x++) if (d[s0 + x] !== 0) n++; after.push(n); }
+    ok(`a JUMP of 1.2 views: the old rows are KEPT as drawn — nothing moved, nothing blanked (${after.join(',')} lit = ${kept.join(',')})`,
+       JUMP_KEEPS_HISTORY && after.every((v, i) => v === kept[i] && v > 0));
     ok('…and the jump is not interpolated', ms.h[(jf - 1) % MR] === 0);
     const st = takeFanStep(mf);
-    ok('…and the UI is handed the slide to ease (k 1, c = 1.2)', st[0] === 1 && Math.abs(st[1] - 1.2) < 1e-9, `${st}`); }
+    ok('…and no slide is handed to the UI (k 1, c 0)', st[0] === 1 && st[1] === 0, `${st}`); }
   // a small tune is a BEND, not a re-map (the history stays where it was drawn — #57)
   { const from = mfr; vc += 2_000; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
     const st = takeFanStep(mf);
@@ -460,9 +465,12 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     P.v = { c: CAR + 20_000, bw: 100_000 }; push(P);
     // (the zoom's eased rows are drawn at their in-between zoom — the fan — so the column check starts after them)
     const e0 = p0 + EZc, [atCol, black2] = scan(P, e0, P.fr - 1);
-    ok(`the layer: …and panned onto the carrier, every row past the ease shows it at its column (${atCol}/${P.fr - 1 - e0}, ${black2} black)`, atCol === P.fr - 1 - e0 && black2 === 0); }
+    // ★ (a jump of a whole view re-mapped the history onto the carrier — JUMP_KEEPS_HISTORY keeps it as drawn instead)
+    if (!JUMP_KEEPS_HISTORY) ok(`the layer: …and panned onto the carrier, every row past the ease shows it at its column (${atCol}/${P.fr - 1 - e0}, ${black2} black)`, atCol === P.fr - 1 - e0 && black2 === 0);
+    else ok(`the layer: …and a jump onto the carrier leaves the history as drawn — no black (${black2})`, black2 === 0); }
   // ROTATION / RESIZE: a JUMP at the narrow zoom made only the 32 rows on screen; a taller view makes the rest — layer and all
-  { const Q = mk(true); for (let i = 0; i < 4; i++) push(Q);
+  // (only while a jump re-maps — JUMP_KEEPS_HISTORY leaves every row as drawn, so there is nothing to re-make)
+  if (!JUMP_KEEPS_HISTORY) { const Q = mk(true); for (let i = 0; i < 4; i++) push(Q);
     Q.v = { c: 1_200_000, bw: 100_000 }; const q0 = Q.fr + EZc; for (let i = 0; i < 90; i++) push(Q, 32);
     Q.v = { c: CAR + 20_000, bw: 100_000 }; push(Q, 32); const q1 = Q.fr - 1;
     const [before] = scan(Q, q0, q1);

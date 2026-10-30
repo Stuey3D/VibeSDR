@@ -487,6 +487,14 @@ export function fanRow(st: FanState, ring: Uint8Array, n: number, r: number, row
   if (st.layer) layerFillRow(st.layer, r, a, b, n, disp, at, lo);
 }
 
+/** ★★★ A JUMP KEEPS THE HISTORY AS DRAWN (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms so
+ *  it is not lost" — Gesiima: "I look back in the waterfall to see where exactly the signal was, and then I tune onto that
+ *  position and wait for the next transmission"). A move of a whole view or more used to translate every row into place
+ *  (rows slid off, the exposed edge went dark); now, like every zoom and tune, nothing is moved or blanked — the old rows
+ *  stay where they were drawn, a SCALE STAMP (wfStamps.ts) marks the boundary, and a tap on them tunes by THEIR scale
+ *  (WaterfallView tapHz). The re-map below is kept behind this switch, not deleted. The C++ twin: wf_zoom_fan.h. */
+export const JUMP_KEEPS_HISTORY = true;
+
 /** BEFORE a row placed at (lo, span) Hz goes in: a change of span fans the history. `frames` = rows written so far;
  *  `visible` = how many of the newest can be on screen. Returns true when it fanned. */
 export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: number, frames: number, visible: number,
@@ -530,7 +538,7 @@ export function fanNoteRow(st: FanState, ring: Uint8Array, n: number, rows: numb
     st.eT = st.easeLeft = Math.max(cappedEaseRows(st.dLo, st.dSpan, lo, span, tuneEaseRows(moved / st.lastSpan, st.rowRate), st.rowRate),
                                    st.easeLeft > 0 ? st.easeLeft : 0);
   }
-  if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
+  if (!JUMP_KEEPS_HISTORY && frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
     const k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
     st.stepC += st.stepK * c; st.stepK *= k;   // x0 = c1 + k1·(c2 + k2·x2)
     st.easeLeft = 0;                           // a jump re-maps everything to the new view: no zoom left to ease

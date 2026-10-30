@@ -1366,7 +1366,9 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       // with what's on screen, and letting it scroll out takes ~30s at 18 rows/s.
       const span = cfg.binCount * cfg.binBandwidth;
       const lo = cfg.centerFreq - span / 2, hi = cfg.centerFreq + span / 2;
-      if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
+      // ★★★ NO LONGER CLEARED (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms so it is not
+      //     lost"): the old rows stay as drawn, a scale stamp says what they were, and a tap on them tunes by their scale.
+      // if (wf && lastWindow && (hi <= lastWindow.lo || lo >= lastWindow.hi)) wf.clearHistory();
       // ★★ V12 THE HISTORY COVERS THE CAPTURE, not just the view (the full-capture layer, wfWide.ts): a PAN or a tune to
       //    anywhere inside what the radio was capturing still has history to show there, so only a move clear of the
       //    whole capture is a jump (Stuart: black "ONLY when absolutely necessary").
@@ -18844,7 +18846,8 @@ function initWaterfallInput() {
         const x = e.clientX - rect.left, ox = wf.hzToX(spec.abOther.frequency, c.clientWidth);
         if (Math.abs(x - ox) <= 10) { spec.swapVfo(); return; }
       }
-      const hz = snapToStep(wf.xToHz(e.clientX - rect.left), step);
+      // ★★ by the ROW under the tap (wf.xyToHz — Stuart, 2026-10-30, #57): an old trace tunes to ITS frequency
+      const hz = snapToStep(wf.xyToHz(e.clientX - rect.left, e.clientY - rect.top), step);
       airDesig = null;
       spec.tune(clampTune(hz));
       syncStep();
@@ -18944,7 +18947,7 @@ function initPointerFreq(c: HTMLCanvasElement) {
     const x = px - rect.left, y = py - rect.top;
     if (x < 0 || y < 0 || x > W || y > H) { setShown(false); return; }
     if (measure && shown) { measure = false; lw = el.offsetWidth; lh = el.offsetHeight; }
-    const t = clickTarget(wf.xToHz(x, cw));
+    const t = clickTarget(wf.xyToHz(x, y, cw, H));   // ★★ the row under the pointer's own scale (#57)
     // ── then writes ──
     if (t.hz !== shownHz || freqUnit !== shownUnit) {
       shownHz = t.hz; shownUnit = freqUnit;

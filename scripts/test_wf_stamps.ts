@@ -15,7 +15,7 @@
  * Run: node --no-warnings scripts/test_wf_stamps.ts
  */
 import { newStampState, stampNoteRow, stampJump, stampPrune, stampReset, stampSettleRows, stampsShown, stampAlpha, stampTicks,
-         stampMeaningful, stampLine, stampSweepRows, stampColour, STAMP_MAX, type StampState } from '../src/utils/wfStamps.ts';
+         stampMeaningful, stampLine, stampSweepRows, stampColour, rowAtLine, hzOnRow, STAMP_MAX, type StampState } from '../src/utils/wfStamps.ts';
 import { newFanState, newMotionState, placeRow, displayMap } from '../src/utils/wfRowPlace.ts';
 
 let pass = 0, fail = 0;
@@ -40,7 +40,7 @@ function rig() {
     f++;
   };
   const hold = (centre: number, span: number, rows: number) => { for (let i = 0; i < rows; i++) push(centre, span); };
-  return { st, push, hold, get f() { return f; }, get events() { return events; } };
+  return { st, push, hold, ms, fan, get f() { return f; }, get events() { return events; } };
 }
 
 console.log('A ZOOM');
@@ -160,16 +160,21 @@ console.log('A LONG SWEEP (Stuart 2026-10-30: "only every now and then so it doe
   ok(z.st.stamps.length === 1 && z.st.stamps[0].frame === zOld, `a 4 s zoom run: exactly ONE stamp, pre-run (${z.st.stamps.length})`);
 }
 
-console.log('A JUMP');
+console.log('A JUMP — KEEPS THE HISTORY, STAMPED (Stuart 2026-10-30: "can we preserve the history on longer tunes and zooms so it is not lost")');
 {
   const r = rig();
   r.hold(7_100_000, 200_000, 100);
   r.hold(7_100_000, 100_000, 60);                       // a zoom: stamp of 200 kHz at lo 7.0 MHz
   ok(r.st.stamps.length === 1, 'the zoom stamp');
-  r.hold(9_500_000, 100_000, 60);                       // a bookmark: the history moves into place
-  ok(r.st.stamps.length === 1, `the jump places none of its own (${r.st.stamps.length})`);
+  const zoomRow = r.f - 1;
+  r.hold(14_200_000, 100_000, 60);                      // a band change, 7 → 14 MHz: the history is kept as drawn…
+  ok(r.st.stamps.length === 2, `…so it is stamped like any move (${r.st.stamps.length})`);
   const s = r.st.stamps[0];
-  ok(s && Math.abs(s.lo - (7_000_000 + 2_400_000)) < 1, `the stamp moved with the history (+2.4 MHz: ${s?.lo})`);
+  ok(s && s.frame === zoomRow && Math.abs(s.lo - 7_050_000) < 1 && Math.abs(s.span - 100_000) < 1, `the stamp: the 7 MHz scale the rows were drawn at (${s?.lo} + ${s?.span})`);
+  ok(Math.abs(r.st.stamps[1].lo - 7_000_000) < 1, 'and the older stamp is untouched (nothing moved)');
+  // (a caller that still re-maps on a jump moves the stamps with it)
+  const st = newStampState(); st.stamps = [{ id: 1, frame: 5, lo: 100, span: 50, born: 9 }];
+  ok(stampJump(st, 25) && st.stamps[0].lo === 125, 'stampJump moves stamps with a re-mapped history');
 }
 
 console.log('SEVERAL, THE CAP, THE SQUEEZE');
@@ -235,6 +240,29 @@ console.log('THE THRESHOLD, THE TICKS');
   const t = stampTicks(7_000_000, 200_000, 400, () => 20_000, (hz) => (hz / 1e6).toFixed(2) + 'M', 52);
   ok(t.length === 11 && t[0].x === 0 && Math.abs(t[10].x - 400) < 1e-9, `ticks at the step across the width (${t.length})`);
   ok(t.filter(k => k.label).length === 6 && t[0].label === '7.00M', `labels no closer than the gap (${t.filter(k => k.label).map(k => k.label).join(' ')})`);
+}
+
+console.log('TAP-TO-TUNE ON THE HISTORY (Stuart 2026-10-30, #57: "I look back in the waterfall to see where exactly the signal was, and then I tune onto that position")');
+{
+  const tapHz = (r: ReturnType<typeof rig>, head: number, line: number, x: number, liveLo: number, liveSpan: number) => {
+    const f = rowAtLine(head, line + 0.5, 1, 1, true);
+    const m = f >= 0 && f < r.f && f >= r.f - ROWS ? displayMap(r.ms, r.fan.xfA, r.fan.xfB, f % ROWS, N) : null;
+    return hzOnRow(x, m ? [m[0], m[1] * N] : null, liveLo, liveSpan);
+  };
+  // a ×2 zoom in: a signal at 7.150 MHz was drawn at x 0.75 on the 7.0–7.2 MHz rows
+  const r = rig(); r.hold(7_100_000, 200_000, 100); const oldRow = r.f - 1; r.hold(7_100_000, 100_000, 60);
+  const head = r.f;   // settled: uHead = rows written
+  const line = Math.round(stampLine(head, oldRow, 1, 1, true));
+  ok(rowAtLine(head, line + 0.5, 1, 1, true) === oldRow, `the line a row is drawn at maps back to it (row ${oldRow})`);
+  const got = tapHz(r, head, line, 0.75, 7_050_000, 100_000);
+  ok(Math.abs(got - 7_150_000) < 1, `a tap on a row drawn before a ×2 zoom-in tunes to its OWN frequency (${got}, the live scale would say ${7_050_000 + 0.75 * 100_000})`);
+  const top = tapHz(r, head, 0, 0.75, 7_050_000, 100_000);
+  ok(Math.abs(top - (7_050_000 + 0.75 * 100_000)) < 1, `a tap on the newest row: the live scale, exactly as before (${top})`);
+  // a 5 kHz tune
+  const t = rig(); t.hold(7_100_000, 50_000, 100); const tOld = t.f - 1; t.hold(7_105_000, 50_000, 60);
+  const tl = Math.round(stampLine(t.f, tOld, 1, 1, true));
+  const tg = tapHz(t, t.f, tl, 0.5, 7_080_000, 50_000);
+  ok(Math.abs(tg - 7_100_000) < 1, `a tap on a row drawn before a 5 kHz tune: its own centre (${tg}; live would be 7105000)`);
 }
 
 console.log('THE COLOUR');

@@ -129,6 +129,15 @@ bool SpectrumEngine::liveRange(int& dbMin, int& dbMax) {
 
 // ── From the UI thread ──────────────────────────────────────────────────────────────────────────────────────────
 
+bool SpectrumEngine::rowGeom(double frame, double& lo, double& span) {
+    std::lock_guard<std::mutex> lk(mx_);
+    if (rowGeo_.empty() || !(frame >= 0)) return false;
+    const RowGeo& g = rowGeo_[(size_t)std::fmod(frame, (double)RING_ROWS)];
+    if (g.frame != frame || !(g.span > 0)) return false;
+    lo = g.lo; span = g.span;
+    return true;
+}
+
 bool SpectrumEngine::pollUi(UiUpdate& out) {
     std::lock_guard<std::mutex> lk(mx_);
     if (outVer_ == uiSeenVer_) return false;
@@ -491,8 +500,13 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
         stamps_.minGapRows = cfgNow_.stampMinGapRows > 0 ? cfgNow_.stampMinGapRows : 45;
         stamps_.sweepRows = std::max((int)std::ceil((fan_.rowRate > 0 ? fan_.rowRate : 30) * 2.5), (int)std::ceil(viewRows * 0.25));
         double P = 0, Q = 0;
-        if (vibewf::displayMap(motion_, fan_.xfA.data(), fan_.xfB.data(), slot, n, P, Q))
-            vibewf::stampNoteRow(stamps_, frameCount_, P, Q * n, vibewf::stampSettleRows(fan_.rowRate));
+        const bool known = vibewf::displayMap(motion_, fan_.xfA.data(), fan_.xfB.data(), slot, n, P, Q);
+        if (known) vibewf::stampNoteRow(stamps_, frameCount_, P, Q * n, vibewf::stampSettleRows(fan_.rowRate));
+        {   // ★★ the row's own scale for a tap on it (rowGeom) — fixed once written now that a jump keeps the history as drawn
+            std::lock_guard<std::mutex> lk(mx_);
+            if (rowGeo_.empty()) rowGeo_.resize(RING_ROWS);
+            rowGeo_[slot] = known ? RowGeo{ frameCount_, P, Q * n } : RowGeo{};
+        }
         if (!stamps_.stamps.empty()) vibewf::stampPrune(stamps_, frameCount_, std::min(RING_ROWS - 8, viewRows + 8));
         if (stamps_.gen != stampSeen_) {
             stampSeen_ = stamps_.gen;

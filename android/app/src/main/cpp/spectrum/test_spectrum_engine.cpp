@@ -721,6 +721,14 @@ int main() {
         CHECK(got.size() == 2 && std::fabs(got[0].span - 100e3) < 1, "a rapid zoom run: ONE more, the pre-run scale (%zu, newest %.0f)",
               got.size(), got.empty() ? 0 : got[0].span);
         CHECK(got.size() < 2 || got[0].frame - got[1].frame >= 45, "never crowded (%g rows apart)", got.size() < 2 ? 0 : got[0].frame - got[1].frame);
+        {   // ★★ a tap on a row drawn before the zoom reads THAT row's scale (rowGeom), the newest row the live one
+            double lo = 0, span = 0;
+            const bool okOld = e->rowGeom(got.back().frame, lo, span);
+            CHECK(okOld && std::fabs(span - 200e3) < 1 && std::fabs(lo - 7.0e6) < 1, "rowGeom on an old row: %d %.0f + %.0f", okOld, lo, span);
+            UiUpdate u; double head = 0; if (e->pollUi(u)) { head = u.head; if (u.image) rlImage(u.image); if (u.peakPath) rlPath(u.peakPath); }
+            (void)head;
+            CHECK(!e->rowGeom(-5, lo, span), "rowGeom of a row never written");
+        }
         std::printf("  scale stamps: %zu published over %u updates\n", got.size(), gens);
         if (lastImg) rlImage(lastImg);
         delete e;
