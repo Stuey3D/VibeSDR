@@ -8616,6 +8616,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const double off   = c->vfoHz - rtlCenter.load() - hwOffsetHz();
         const double resid = off - std::lround(off / binHz) * binHz;
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
+        // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …") — this listener and this dial, fixed here where both change.
+        { char lb[96]; snprintf(lb, sizeof lb, "listener %.8s's own channel, %.4f MHz %s", c->session.c_str(), c->vfoHz / 1e6, c->mode.c_str());
+          c->rx->setLogLabel([l = std::string(lb)] { return l; }); }
         // ★ After the pipeline exists, so setRdsEnabled has something to act on. A FULL resweep,
         //   because this listener moving can free a frequency somebody else is sitting on — see
         //   rdsResweep().
@@ -14087,6 +14090,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         cb.stereo   = &Impl::stereoCb;
         cb.iq       = &Impl::iqCb;
         fftAccum.assign(fftSize, 0.0f); accumCount = 0;
+        // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …"): the one pipeline every listener on a shared dial hears, and the
+        //    dial it is on now (atomics only — this runs on the DSP/demod thread, see setLogLabel).
+        rx.setLogLabel([this] {
+            char lb[96];
+            snprintf(lb, sizeof lb, "the radio's pipeline (%s), %.4f MHz", perClientDsp() ? "per-listener mode — fed nothing" : "the shared dial",
+                     audioFreq.load(std::memory_order_relaxed) / 1e6);
+            return std::string(lb);
+        });
         rx.start(sampleRate, fftSize, fftRate * FFT_AVG, (int)AUDIO_SR, cb);
     }
 
