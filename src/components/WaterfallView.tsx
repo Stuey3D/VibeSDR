@@ -2201,9 +2201,8 @@ function WaterfallView({
   //     (wfClock.ts: each frame presented on the feed's smoothed schedule, a late one costs a repeat), so the buffer in
   //     front of it only added latency — 80–190 ms of the app's ~160–260 ms. Stuart: "if the buffer isnt needed for the
   //     waterfall improve the latency there too please". Those frames go straight to handleFrame on arrival (enqueueFrame)
-  //     and the trace rides the clock's schedule (traceShow). NATIVE skips it as well (one real row per frame on arrival —
-  //     see enqueueFrame). Still through here: the first frame after a start or a cover, and a feed too slow for the clock
-  //     to fill (it runs per arrival, as before).
+  //     and the trace rides the clock's schedule (traceShow). Still through here: NATIVE (no clock), and a feed too slow
+  //     for the clock to fill (it runs per arrival, as before).
   const jbQueue       = useRef<FrameSlot[]>([]);
   /* ★★ The queued copies come from a small pool, not a fresh `bins.slice()` + status spread per frame
    *  (framePool.ts — the biggest steady-state allocation in the 2026-10-03 iPhone profile). A slot goes back
@@ -2242,13 +2241,7 @@ function WaterfallView({
     // ★★★ ON THE FIXED CLOCK: straight through, on arrival (see the note above). The clock running (rate > 0) means the
     //     last frame was clocked; the first frame of a session, a covered view or a feed too slow to fill comes through
     //     the buffer once and starts it. Anything still banked from before goes — it is older than this frame.
-    // ★★★ NATIVE TOO (a separate commit, for Stuart to keep or drop): "pure unmodified lines direct from the server no
-    //     modification at all". The buffer was the one thing between Native's frames and the screen — each still one
-    //     row, in order, never repeated or dropped (the buffer could drop one when 3 were queued; this cannot), and the
-    //     display pacer (rowPace, unchanged) still releases them on the panel's beat. Simulated: arrival → on screen
-    //     ~420 → ~230 ms, stalls about the same (493 → 464 over every case). Revert = drop the `isNative ||`.
-    const isNative = scrollForCap(frameCfg.current.targetRows) === 'sharp';
-    if (!interacting && (isNative || rowClock.current.rate > 0)) {
+    if (!interacting && rowClock.current.rate > 0 && scrollForCap(frameCfg.current.targetRows) !== 'sharp') {
       if (jbTimer.current) { clearTimeout(jbTimer.current); jbTimer.current = null; }
       if (jbQueue.current.length) jbClear();
       jbPrefill.current = true;

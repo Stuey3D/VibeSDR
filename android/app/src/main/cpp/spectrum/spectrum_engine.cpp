@@ -255,11 +255,8 @@ void SpectrumEngine::enqueue(Frame&& f, double now) {
     //     `now` is the frame's real arrival (arrivedMs), and the clock's own presentation delay is the only de-jitter.
     //     Stuart: "if the buffer isnt needed for the waterfall improve the latency there too please". The clock running
     //     means the last frame was clocked; the first frame, a covered view or a feed too slow to fill comes through the
-    //     buffer once and starts it. Anything banked from before goes.
-    // ★★★ NATIVE TOO (targetRows 0; a separate commit for Stuart to keep or drop — "pure unmodified lines direct from the
-    //     server no modification at all"): one row per frame on arrival, in order, none repeated or dropped; the UI's
-    //     rowPace still releases them on the panel's beat. Revert = drop the `cfgNow_.targetRows == 0 ||`.
-    if (cfgNow_.targetRows == 0 || rowClock_.rate > 0) {
+    //     buffer once and starts it. NATIVE (targetRows 0) keeps the buffer. Anything banked from before goes.
+    if (rowClock_.rate > 0 && cfgNow_.targetRows > 0) {
         jbDueAt_ = -1;
         { std::lock_guard<std::mutex> lk(mx_); for (auto& q : jbQueue_) framePool_.push_back(std::move(q)); }
         jbQueue_.clear();

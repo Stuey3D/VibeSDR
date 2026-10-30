@@ -74,7 +74,6 @@ proc.reset() and the ring are never reset.
   ★ V12 2026-10-29 (v12-wf-no-jb): on the fixed clock (the clock running, any mode but NATIVE) frames SKIP the buffer
   — handled on arrival, the clock's own presentation delay the only de-jitter — and the spectrum target waits until
   its row is on screen (presentation + traceLagMs; WaterfallView traceShow, engine traceQ_/runTrace).
-  NATIVE skips the buffer too (one real row per frame on arrival; the UI's rowPace releases them, unchanged).
 - handleFrame: skip bg / empty / width < 4; interacting = smoothTune && < 1 s; process(bins, centerHz (predicted),
   bwHz, interacting); liveRange = round(dbMin/dbMax) with 2 dB hysteresis; avgFrameMs EMA 0.8/0.2 unless boost
   (→ uAvgMs); lowFps = avg > 66; wfBoost = boost || (smoothTune && lowFps); avgWfGapMs EMA (0 < dt < 2000);
