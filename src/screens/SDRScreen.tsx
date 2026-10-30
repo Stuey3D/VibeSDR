@@ -12573,7 +12573,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     //   card spent on something not being there. Said alongside the way OUT it becomes
     //   the reason for the chip rather than a complaint about the gesture.
     { id: 'servers', title: 'Switch receiver, or go back',
-      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. On a VibeServer it can also keep this one playing while you add a second server, or a second radio on this one: Listen to a 2nd server. Two servers or VFO A/B, never both — with VFO B on, that closes B first, and VFO A/B comes back when you are down to one server.",
+      body: "There's no Back swipe on this screen — it would fight the drum — so the Servers strip along the top is your Back button. Tap it to return to the server list, to favourite this server and set it as your default, or — if the connection is behaving oddly — to refresh it, the same as reloading a web page. It can also keep this one playing while you add a second server — any kind: VibeServer, UberSDR, KiwiSDR, Web-888, OpenWebRX or FM-DX — or a second radio on a VibeServer: Listen to a 2nd server. Two servers or VFO A/B, never both — with VFO B on, that closes B first, and VFO A/B comes back when you are down to one server.",
       target: tourRef('serversChip'), illustration: chipMock },
     // ★ The meter is the most MISREAD thing on the screen — people see bars drop and
     //   assume the app is broken, when it is usually the receiver or the path to it.

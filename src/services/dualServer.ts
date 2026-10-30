@@ -783,9 +783,10 @@ export function roleOnMount(params: Record<string, unknown> & DualRouteLike & { 
   if (state.phase !== 'picking' || !dualEligible(params)
       || state.sides.some((s) => sameServer(s.params as DualRouteLike, params) && !s.radioKey)) {
     /* ★★★ A RECEIVER SCREEN THAT IS NOT PART OF THE PAIRING ENDS IT — before its own audio starts on the same engine.
-     *  Somewhere the second voice cannot go (an UberSDR, a Kiwi, local hardware), the same RADIO again (the picker
-     *  should have caught that), or a screen that arrived from outside the pairing altogether (the watch, a link, the
-     *  crash guard). Leaving either server playing under it would put two streams into one player.
+     *  Something that cannot take part (this device's own radio, RTL-TCP / SpyServer — dualMix.audioKindOf), the same
+     *  SERVER again (the picker should have caught that: a second session would be a second slot for one person), or a
+     *  screen that arrived from outside the pairing altogether (the watch, a link, the crash guard). Leaving either
+     *  server playing under it would put two streams into one player.
      *  ★★ The same SERVER is not the same radio: a server whose playing side is one radio behind its front door
      *     (`radioKey`) is opened again so its radio list can offer the OTHER radio (Gesiima, #57). Choosing the radio
      *     already playing there goes back to it (isFirstRadio). */
