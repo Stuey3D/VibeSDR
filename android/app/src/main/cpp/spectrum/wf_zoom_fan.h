@@ -257,7 +257,7 @@ inline void fanAfterRow(FanState& st, const uint8_t* ring, int slot, int n, int 
         st.dLo = nl; st.dSpan = ns;
         if (st.easeLeft > 0) {
             st.xfA[slot] = ns / ts; st.xfB[slot] = (nl - tl) / ts;
-            if (st.disp.empty()) st.disp.assign(ring, ring + (size_t)(rows + MOTION_ROWS) * n);
+            if (st.disp.empty()) st.disp.assign(ring, ring + (size_t)(rows + motionImageRows(rows, n)) * n);
             fanRow(st, ring, n, slot, rows);
             st.sinceZoom = 0;
             return;
@@ -274,15 +274,15 @@ inline void fanAfterRow(FanState& st, const uint8_t* ring, int slot, int n, int 
 inline void takeFanStep(FanState& st, double& k, double& c) { k = st.stepK; c = st.stepC; st.stepK = 1; st.stepC = 0; }
 
 /** The bytes to make the waterfall image from: the displayed ring with the motion rows in its tail (the buffers are
- *  n × (rows + MOTION_ROWS); the image is made that tall). */
+ *  n × (rows + motionImageRows(rows, n)); the image is made that tall). */
 inline const uint8_t* wfImageBytes(FanState& st, const MotionState& ms, uint8_t* ring, int n, int rows) {
     uint8_t* b = st.disp.empty() ? ring : st.disp.data();
-    std::memcpy(b + (size_t)rows * n, ms.bytes.data(), (size_t)MOTION_ROWS * n);
+    std::memcpy(b + (size_t)rows * n, ms.bytes.data(), ms.bytes.size());
     return b;
 }
 
 /** pushRow's whole placement (WaterfallView's placeRow): slide onto the view, fan on a span change or a jump, keep the
- *  display in step, note the placement and the move from the row before (MOTION). `ring` is n × (rows + MOTION_ROWS).
+ *  display in step, note the placement and the move from the row before (MOTION). `ring` is n × (rows + motionImageRows).
  *  `frames` = rows written before this one; `startOut` receives column 0's Hz (the layer's placement). Returns the slot. */
 inline int placeRow(uint8_t* ring, int rows, int n, double frames, const uint8_t* row, double rowCenterHz, double rowHzPerBin,
                     double viewCenterHz, double viewBwHz, MotionState& motion, FanState& fan, int visible = -1,
@@ -300,7 +300,7 @@ inline int placeRow(uint8_t* ring, int rows, int n, double frames, const uint8_t
     const double start = placedStartHz(rowCenterHz, rowHzPerBin, off, n);
     if (startOut) *startOut = start;   // ★ V12: where the layer row goes (its k and m — wf_wide.h)
     const bool fanned = rowHzPerBin > 0
-        && fanNoteRow(fan, ring, (size_t)(rows + MOTION_ROWS) * n, n, rows, frames, visible, start, rowHzPerBin * n);
+        && fanNoteRow(fan, ring, (size_t)(rows + motionImageRows(rows, n)) * n, n, rows, frames, visible, start, rowHzPerBin * n);
     uint8_t* dst = ring + (size_t)slot * n;
     if (off == 0) {
         std::memcpy(dst, row, n);

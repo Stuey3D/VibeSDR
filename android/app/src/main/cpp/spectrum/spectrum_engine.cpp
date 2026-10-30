@@ -2,6 +2,7 @@
 // line numbers, in docs/NATIVE-SPECTRUM-ENGINE.md ("WaterfallView per-frame behaviour"). Names follow the TS.
 #include "spectrum_engine.h"
 #include "wf_row_target.h"
+#include "wf_ring_grow.h"   // ★★ the growing ring
 #include "../vibedsp/vibe_denormals.h"
 #include <algorithm>
 #include <chrono>
@@ -132,7 +133,7 @@ bool SpectrumEngine::liveRange(int& dbMin, int& dbMax) {
 bool SpectrumEngine::rowGeom(double frame, double& lo, double& span) {
     std::lock_guard<std::mutex> lk(mx_);
     if (rowGeo_.empty() || !(frame >= 0)) return false;
-    const RowGeo& g = rowGeo_[(size_t)std::fmod(frame, (double)RING_ROWS)];
+    const RowGeo& g = rowGeo_[(size_t)std::fmod(frame, (double)rowGeo_.size())];
     if (g.frame != frame || !(g.span > 0)) return false;
     lo = g.lo; span = g.span;
     return true;
@@ -144,6 +145,7 @@ bool SpectrumEngine::pollUi(UiUpdate& out) {
     uiSeenVer_ = outVer_;
     if (outImage_) {                                        // the motion range + screen move ride with the image
         out.moLo = outMoLo_; out.moHi = outMoHi_; out.fanK = outK_; out.fanC = outC_;
+        out.ringRows = outRingRows_;
         outK_ = 1; outC_ = 0;
     }
     out.image = outImage_; outImage_ = nullptr;            // ownership moves to the UI
@@ -211,6 +213,9 @@ void SpectrumEngine::runDue(double now) {
         for (auto& f : jbQueue_) framePool_.push_back(std::move(f));
         jbQueue_.clear(); jbPrefill_ = true; jbDueAt_ = -1;
     }
+    // ★★★ THE RING GROWS (wf_ring_grow.h — JS asked for a deeper one: the view became taller than the ring holds). Here,
+    //     between rows, on this thread; the next image carries the new depth.
+    if (cfgNow_.ringRows > ringRows_) growRingTo(std::min(cfgNow_.ringRows, (int)RING_MAX_ROWS));
     if (!covNow_ && wasCov && ringDirty_) publishRing();        // uncover: ONE texture from the ring as it stands
 
     // ★★ A WALL CLOCK PUT BACK strands every deadline in the future: the next drain would wait the whole
@@ -247,7 +252,7 @@ void SpectrumEngine::applyWide(const std::vector<uint8_t>& bytes, double at) {
     vibewf::wideArrive(*wide_, wideRow_, at, placedLo_, placedSpan_, detP50_);
     const int F = (int)wideRow_.floor.size(), C = wideRow_.cells;
     // ★ allocated at the FIRST row only (~0.8 MB), and again only if the server's grid ever changed
-    if (!fan_.layer || fan_.layer->F != F || fan_.layer->C != C) fan_.layer = std::make_unique<vibewf::LayerRing>(RING_ROWS, F, C);
+    if (!fan_.layer || fan_.layer->F != F || fan_.layer->C != C) fan_.layer = std::make_unique<vibewf::LayerRing>(ringRows_, F, C);
 }
 
 // enqueueFrame (WaterfallView 1612-1637)
@@ -479,7 +484,7 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
         }
         row = dst; n = RING_W;
     }
-    if (ring_.empty()) ring_.assign((size_t)RING_W * (RING_ROWS + vibewf::MOTION_ROWS), 0);
+    if (ring_.empty()) ring_.assign((size_t)RING_W * (ringRows_ + vibewf::motionImageRows(ringRows_, RING_W)), 0);
     if (srcN != RING_W && rowHzPerBin > 0) rowHzPerBin = rowHzPerBin * srcN / RING_W;
     // Placed against the view (rowViewOffset/writeRow), then:
     // ★★ MOTION (2026-10-28): the row's placement and its move from the row before are noted beside the ring (two image
@@ -489,7 +494,7 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
     //    the history in and out instead of leaving slices of the old scale. The stored ring is never rewritten; the
     //    image is made from the displayed ring (wf_zoom_fan.h fanImage), regenerated through per-row maps on a zoom.
     double start = NAN;
-    const int slot = vibewf::placeRow(ring_.data(), RING_ROWS, n, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_,
+    const int slot = vibewf::placeRow(ring_.data(), ringRows_, n, frameCount_, row, rowCenterHz, rowHzPerBin, viewC_, viewBw_,
                                       motion_, fan_, -1, &start);
     placedLo_ = start; placedSpan_ = rowHzPerBin * n;
     // ★★ SCALE STAMPS (wf_stamps.h; Stuart, 2026-10-30, #57): the row as DISPLAYED (through its fan map — eased rows too)
@@ -504,10 +509,10 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
         if (known) vibewf::stampNoteRow(stamps_, frameCount_, P, Q * n, vibewf::stampSettleRows(fan_.rowRate));
         {   // ★★ the row's own scale for a tap on it (rowGeom) — fixed once written now that a jump keeps the history as drawn
             std::lock_guard<std::mutex> lk(mx_);
-            if (rowGeo_.empty()) rowGeo_.resize(RING_ROWS);
+            if ((int)rowGeo_.size() != ringRows_) rowGeo_.resize(ringRows_);
             rowGeo_[slot] = known ? RowGeo{ frameCount_, P, Q * n } : RowGeo{};
         }
-        if (!stamps_.stamps.empty()) vibewf::stampPrune(stamps_, frameCount_, std::min(RING_ROWS - 8, viewRows + 8));
+        if (!stamps_.stamps.empty()) vibewf::stampPrune(stamps_, frameCount_, std::min(ringRows_ - 8, viewRows + 8));
         if (stamps_.gen != stampSeen_) {
             stampSeen_ = stamps_.gen;
             std::lock_guard<std::mutex> lk(mx_);
@@ -521,7 +526,7 @@ void SpectrumEngine::pushRow(const uint8_t* src, int srcN, double rowCenterHz, d
         fan_.layer->fadeTx = w > 0 ? std::max(2.0, std::min(24.0, 6.0 * RING_W / w)) : 6.0;   // ~6 pt soft edge
         const vibewf::ToIdx toIdx(proc_.dbMin(), proc_.dbMax(), proc_.settings().wfBrightness, wide_ ? wide_->off : 0);
         vibewf::layerWriteRow(*fan_.layer, slot, wide_.get(), placedLo_, placedSpan_, now(), toIdx);
-        vibewf::fanRow(fan_, ring_.data(), n, slot, RING_ROWS);   // ★ a zoom's eased row: again, now its layer row exists
+        vibewf::fanRow(fan_, ring_.data(), n, slot, ringRows_);   // ★ a zoom's eased row: again, now its layer row exists
     }
     frameCount_ += 1;
     if (covNow_ || !publish) { ringDirty_ = true; return; }
@@ -541,7 +546,29 @@ void* SpectrumEngine::makeRingImage() {
     ringDirty_ = false;
     vibewf::takeFanStep(fan_, imgK_, imgC_);
     imgMoLo_ = motion_.lo; imgMoHi_ = motion_.hi;
-    return makeImage_(vibewf::wfImageBytes(fan_, motion_, ring_.data(), RING_W, RING_ROWS), RING_W, RING_ROWS + vibewf::MOTION_ROWS, RING_W);
+    imgRows_ = ringRows_;
+    return makeImage_(vibewf::wfImageBytes(fan_, motion_, ring_.data(), RING_W, ringRows_), RING_W,
+                      ringRows_ + vibewf::motionImageRows(ringRows_, RING_W), RING_W);
+}
+// ★★★ GROW THE RING (wf_ring_grow.h; the JS path's twin is WaterfallView's growth effect + utils/wfRingGrow.ts): every row
+//     and its per-row state copied into the deeper ring, the tap lookup (rowGeo_) too; then one image at the new depth.
+void SpectrumEngine::growRingTo(int rows) {
+    if (!(rows > ringRows_)) return;
+    const int old = ringRows_;
+    vibewf::growRing(ring_, motion_, fan_, RING_W, old, rows, frameCount_);
+    ringRows_ = rows;
+    {
+        std::lock_guard<std::mutex> lk(mx_);
+        if (!rowGeo_.empty()) {
+            std::vector<RowGeo> g2((size_t)rows);
+            for (double f = std::max(0.0, frameCount_ - old); f < frameCount_; f++)
+                g2[(size_t)std::fmod(f, (double)rows)] = rowGeo_[(size_t)std::fmod(f, (double)old)];
+            rowGeo_.swap(g2);
+        }
+    }
+    if (ring_.empty()) return;
+    if (covNow_ || bgNow_) { ringDirty_ = true; return; }
+    publishRing();
 }
 void SpectrumEngine::storeRingImageLocked(void* img) {
     if (outImage_) releaseImage_(outImage_);   // superseded before the UI took it: never wrapped
@@ -550,6 +577,7 @@ void SpectrumEngine::storeRingImageLocked(void* img) {
     outC_ += outK_ * imgC_; outK_ *= imgK_;           // composed until the UI takes an image (a superseded one's move kept)
     imgK_ = 1; imgC_ = 0;
     outMoLo_ = imgMoLo_; outMoHi_ = imgMoHi_;
+    outRingRows_ = imgRows_;
     texReady_ = true;
 }
 
