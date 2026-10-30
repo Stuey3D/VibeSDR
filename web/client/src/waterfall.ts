@@ -48,6 +48,7 @@ function resampleRow(src: Uint8Array, n: number, dst: Uint8Array): Uint8Array {
 import { getColorLUT } from '../../../src/assets/colormapUtils';
 import { WaterfallGL } from './wfgl';
 import { spanChanged, mapRunsX, visibleSpan } from './wfZoomFan';
+import { TUNE_EASE_MIN_FRAC } from '../../../src/utils/wfRowPlace.ts';
 import { WIDE_TEX, wideExtent, wideRowInto, rowInCapture, percentile, floorAt, floorIdx, cellsOf, denseRow, encodeM, type WideRow, type DenseRow } from './wfWide';
 import { newGlideScratch, easedRowAt, joinedRowAt, newRowEase, rowView, type RowView } from './wfGlide';
 
@@ -744,6 +745,12 @@ export class Waterfall {
     //     worst seen. Both in wfPacing.ts, proved by scripts/test_wf_pacing.ts.
     // Smoothed, so arrival jitter does not become scroll-rate jitter. Falls back to the observed
     // gap until the average has anything in it.
+    // ★★★ THE INTERACTION BOOST (wfPacing.ts RowPacer.noteMove — wfClock.ts boostRowRate): a frame placed somewhere new (a
+    //     tune or zoom, ours or a shared dial's) steps the clock's row rate up until the move has settled. Nothing is
+    //     asked of the server; the extra rows are this frame, drawn at their in-between views.
+    if (this.prevSpan > 0 && this.curSpan > 0 &&
+        (spanChanged(this.prevSpan, this.curSpan) || Math.abs(this.curLo - this.prevLo) > this.curSpan * TUNE_EASE_MIN_FRAC))
+      this.pacer.noteMove(now);
     this.pacer.onArrival(now);
   }
 
@@ -832,6 +839,7 @@ export class Waterfall {
     const sLo = useCur ? this.curLo : this.prevLo, sSpan = useCur ? this.curSpan : this.prevSpan;
     const v = rowView(this.ease, sLo, sSpan, this.pacer.rowPx, this.rv, this.pacer.easeRowRate());
     const cLo = v.lo, cSpan = v.span;
+    this.pacer.easing = this.ease.eN > 0;   // ★ the boost holds until the ease has landed
     if (v.jumpHz) this._jumpHistory(v.jumpHz, cSpan);
     // ★★ THE JOIN (wfGlide.ts joinedRowAt — the app's shader motion taps): a row drawn somewhere other than the row below
     //    is drawn across its footprint toward it, so the trail is ONE solid line through the ease, not dashes. A steady row

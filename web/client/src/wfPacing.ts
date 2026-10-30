@@ -1,6 +1,6 @@
 import { newRowTargetState, stepRowTarget, type WfScroll } from '../../../src/assets/wfRowTarget.ts';
-import { clockArrive, clockReset, clockRowRate, displayClockStep, holdLimitMs, newDisplayClock, newRowClock }
-  from '../../../src/assets/wfClock.ts';
+import { boostActive, boostNote, boostRowRate, clockArrive, clockReset, clockRowRate, displayClockStep, holdLimitMs, newBoost,
+  newDisplayClock, newRowClock } from '../../../src/assets/wfClock.ts';
 
 /**
  * ★★★ WATERFALL ROW PACING — pure functions, so the cadence can be proved without a browser
@@ -180,6 +180,40 @@ export class RowPacer {
   private onClock = false;     // rows come off the fixed clock (every mode but NATIVE / actual rows)
   /** Screen rows/s aimed for now (0 = actual rows) — for the test and diagnostics. */
   screenTarget = 0;
+  /** ★★★ THE INTERACTION BOOST (wfClock.ts boostRowRate — Stuart 2026-10-29: "increase during interaction … even if it
+   *  means a 12x frame generation" / "if the app is set to 120 we do 120"). The feed-following rate (`baseTarget`) steps
+   *  up to the display's rate (≤ 120, ≤ 12 × the feed) from the first frame placed somewhere new until BOOST_TAIL_MS after
+   *  the last one AND the ease has landed (`easing`, set by the waterfall), then back down — both at a whole-row
+   *  boundary (the display clock counts whole rows). Every extra row is the newest frame already here, drawn at its own
+   *  in-between view; nothing is asked of the server. NATIVE is never boosted. */
+  private boost = newBoost();
+  /** The waterfall's ease is still drawing (wfGlide rowView eN > 0) — the boost holds until it lands. */
+  easing = false;
+  /** The rate without the boost, screen rows/s (0 = not on the clock). */
+  baseTarget = 0;
+  /** Is the boost on now. */
+  boosted = false;
+  /** The display maximum the boost may use (web: the measured panel, ≤ 120). */
+  displayHz(): number { return Math.min(120, this.clock.hz()); }
+  /** A tune or zoom moved the picture (a frame placed somewhere new) at `now`. */
+  noteMove(now: number) {
+    if (!this.scroll || this.scroll === 'sharp' || this.sharp) return;   // ★ NATIVE: untouched — no boost, no generated rows
+    boostNote(this.boost, now);
+  }
+  /** Re-decide the clock's rate: the boost or the base, in device rows. Only on the clock. */
+  private applyRate(now: number) {
+    if (!this.onClock || !(this.baseTarget > 0)) { this.boosted = false; return; }
+    const on = boostActive(this.boost, now, this.easing);
+    const fps = 1000 / Math.max(1, this.feedMs || this.avgGap || 100);
+    const t = on ? boostRowRate(this.baseTarget, fps, this.displayHz()) : this.baseTarget;
+    this.boosted = on && t > this.baseTarget;
+    const rps = t * this.dpr;
+    if (rps !== this.rowsPerSec) {
+      this.rowsPerSec = rps; this.framesPerRow = 0;
+      this.rowsPerEmit = emitShape(this.clock.hz(), this.rowsPerSec, this.rowPx).per;
+    }
+    this.screenTarget = t;
+  }
   setScroll(scroll: WfScroll, dpr: number) {
     if (scroll !== this.scroll || dpr !== this.dpr) { this.tgt = newRowTargetState(); this.framesPerRow = 0; }
     this.scroll = scroll; this.dpr = dpr; this.rowPx = Math.max(1, Math.round(dpr));
@@ -219,6 +253,8 @@ export class RowPacer {
       if (sharp !== this.sharp || rps !== this.rowsPerSec) { this.sharp = sharp; this.rowsPerSec = rps; this.framesPerRow = 0; }
       this.onClock = !sharp;
       this.screenTarget = t;
+      this.baseTarget = sharp ? 0 : t;
+      if (!sharp) this.applyRate(now);   // ★ the interaction boost on top (a no-op at rest)
     }
     const refreshHz = this.clock.hz();
     if (this.onClock) {
@@ -259,6 +295,7 @@ export class RowPacer {
     this.rowsNow = 0;
     if (this.onClock) {
       // The clock runs whether or not a row exists, so its phase never restarts.
+      if (this.boost.lastMove > 0) this.applyRate(frameTs);   // ★ the boost's end (tail + ease landed), between arrivals
       const per = Math.max(1, this.rowsPerEmit);
       const n = displayClockStep(this.dc, frameTs, this.rowsPerSec / per, this.clock.frameMs());
       this.framesPerRow = this.dc.m;

@@ -31,7 +31,7 @@
  * Run: node --no-warnings scripts/test_wf_row_place.ts
  */
 import { applyViewChange, decodeMotion, decodeZoom, encodeMotion, fanImage, fanRefresh, MOTION_MAX_FRAC, MOTION_ROWS, MOTION_ZERO, motionSample, newFanState,
-         newMotionState, placeRow, rowViewOffset, takeFanStep, wfImageBytes, writeRow, fanRow, ZOOM_EASE_ROWS, zoomEaseRows, tuneEaseRows } from '../src/utils/wfRowPlace.ts';
+         newMotionState, placeRow, rowViewOffset, takeFanStep, wfImageBytes, writeRow, fanRow, ZOOM_EASE_ROWS, zoomEaseRows, tuneEaseRows, cappedEaseRows, EASE_CEIL_S } from '../src/utils/wfRowPlace.ts';
 import { floorIdx, layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, WIDE_HDR } from '../src/utils/wfWide.ts';
 
 let fails = 0, passes = 0;
@@ -180,13 +180,13 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   // a VIEW-ONLY pan over a fixed capture (UberSDR / Kiwi / OWRX): each row arrives already for its view — same rule
   { const from = mfr;
     for (let i = 1; i <= 12; i++) { vc -= 2_300; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw); }
-    let bad = 0; for (let f = from - 1; f < mfr - 1; f++) { const h = ms.h[f % MR], a = mcol(f), b = mcol(f + 1); if (Math.abs(a + h - b) > 1.01 || h === 0) bad++; }
-    ok('motion (view pan over a fixed capture): every pair carries the pan', bad === 0, `${bad}`); }
+    let bad = 0; const dbg: string[] = []; for (let f = from - 1; f < mfr - 1; f++) { const h = ms.h[f % MR], a = mcol(f), b = mcol(f + 1); dbg.push(`${a}+${h.toFixed(2)}→${b}`); if (Math.abs(a + h - b) > 1.51 || h === 0) bad++; }   // (±½ column: with the slope cap the pan's rows are EASED — resampled, as the tuner retune above)
+    ok('motion (view pan over a fixed capture): every pair carries the pan', bad === 0, `${bad} ${dbg.join(' ')}`); }
   // ★★ A TUNE PAST MOTION_MAX_FRAC BUT WITHIN THE VIEW EASES (Stuart 2026-10-28: "the tuning still looks a little sliced
   //    up … blended like the zoom"): the history stays as drawn, the new rows slide across, no screen move, no slice
   { for (let i = 0; i < 5; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
     const jf = mfr, before = mcol(jf - 3); vc += vbw * MOTION_MAX_FRAC * 1.5;
-    for (let i = 0; i < 8; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
+    for (let i = 0; i < 32; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);   // ★★★ (+ the slope cap: ≤ 1 s = 30 rows)
     const live = N / 2 + (CARRIER - vc) / (vbw / N);
     ok('a drum-spin tune (3/16 of the view): the history stays as drawn (no slice)', mcol(jf - 3) === before, `${mcol(jf - 3)} vs ${before}`);
     const cs: number[] = []; for (let f = jf - 1; f < mfr; f++) cs.push(mcol(f));
@@ -207,7 +207,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     const st = takeFanStep(mf);
     ok('a small tune bends (motion), the history is not re-mapped', ms.h[(from - 1) % MR] !== 0 && st[0] === 1 && st[1] === 0, `${ms.h[(from - 1) % MR]} ${st}`); }
   // a PINCH (about the centre) is a ZOOM join on every pair: g = 1/0.95 (the newer row spreads), no shift, no re-map
-  { for (let i = 0; i < 8; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);   // (past the tune's ease)
+  { for (let i = 0; i < 32; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);   // (past the tune's ease — ≤ 1 s with the slope cap)
     const from = mfr; let bw = vbw;
     for (let i = 0; i < 12; i++) { bw *= 0.95; mpush(noisyRow(vc, bw), vc, bw, vc, bw); }
     let bad = 0; for (let f = from - 1; f < mfr - 1; f++) if (!(ms.g[f % MR] > 1.0005) || Math.abs(ms.h[f % MR]) > 1 / 64) bad++;
@@ -303,31 +303,35 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   v = { c: 1_030_000, bw: 100_000 };
   fpush(1_030_000, 200_000);
   const zf = fr;
-  for (let i = 0; i < 24; i++) fpush(v.c, v.bw);
+  // ★★★ THE SLOPE CAP (cappedEaseRows): a ×2's edges move half a view — the ease is as long as keeps every carrier under the
+  //     cap a row, up to its 1 s ceiling (30 rows at 30/s)
+  const ZR = cappedEaseRows(1_030_000 - 100_000, 200_000, 1_030_000 - 50_000, 100_000, ZOOM_EASE_ROWS);
+  ok(`the zoom: the slope cap lengthens a ×2 from ${ZOOM_EASE_ROWS} to ${ZR} rows (≤ 1 s)`, ZR > ZOOM_EASE_ROWS && ZR <= EASE_CEIL_S * 30);
+  for (let i = 0; i < ZR + 4; i++) fpush(v.c, v.bw);
   const asDrawn = (f0: number, f1: number) => { const d = D(); let k = 0; for (let i = f0 * N; i < f1 * N; i++) if (d[i] !== S[i]) k++; return k; };
   { const bad = atHist(0, 60);
     ok('the zoom: after a ×2 zoom in, the history is untouched — the carrier stays a one-texel line where it was drawn', bad.length === 0 && asDrawn(0, 60) === 0, bad.slice(0, 4).join('; ')); }
   ok('the zoom: the stored rows are never rewritten by a zoom', stored0.every((x, i) => x === S[i]));
-  { const bad = offCol(zf + ZOOM_EASE_ROWS - 1, fr);
+  { const bad = offCol(zf + ZR - 1, fr);
     ok('the zoom: once eased, the new rows are at the new zoom (the live column)', bad.length === 0, bad.slice(0, 4).join('; ')); }
-  { const cs: number[] = []; for (let f = zf - 1; f < zf + ZOOM_EASE_ROWS; f++) cs.push(dlit(f)![0]);
+  { const cs: number[] = []; for (let f = zf - 1; f < zf + ZR; f++) cs.push(dlit(f)![0]);
     let mono = true; for (let i = 1; i < cs.length; i++) if (!(cs[i] > cs[i - 1])) mono = false;
     const steps = cs.slice(1).map((c, i) => c - cs[i]);
     const mean = steps.reduce((x, y) => x + y, 0) / steps.length;
-    ok(`the zoom: the ease FANS the carrier out over ${ZOOM_EASE_ROWS} rows — STEADY from the first row, landing soft (${cs.join(' ')})`,
-       ZOOM_EASE_ROWS >= 8 && mono && steps[0] >= 0.8 * mean && Math.max(...steps) <= 1.6 * mean && steps[steps.length - 1] < steps[0], steps.join(' ')); }
+    ok(`the zoom: the ease FANS the carrier out over ${ZR} rows — STEADY from the first row, landing soft (${cs.join(' ')})`,
+       ZR >= 8 && mono && steps[0] >= 0.8 * mean && Math.max(...steps) <= 1.6 * mean && steps[steps.length - 1] < steps[0], steps.join(' ')); }
   ok('control: the live column is far from the history\'s (the fan the eye sees)', Math.abs(liveCol() - histCol) > 50, `${liveCol()} vs ${histCol}`);
   { const [k, c] = takeFanStep(fan); ok('the zoom: no screen ease (the history is not moved)', k === 1 && c === 0, `${k} ${c}`); }
 
   // a ZOOM OUT (×4 from here): the history still as drawn, the new rows at the new zoom
   v = { c: 1_030_000, bw: 400_000 };
-  for (let i = 0; i < 30; i++) fpush(v.c, v.bw);
+  for (let i = 0; i < 40; i++) fpush(v.c, v.bw);
   { const bad = atHist(0, 60).concat(offCol(fr - 4, fr));
     ok('the zoom: after a zoom OUT, the history is as drawn and the new rows at the live column', bad.length === 0 && asDrawn(0, 60) === 0, bad.slice(0, 4).join('; ')); }
 
   // a PINCH chain (5 % a row, about the centre): each row at its own zoom — the carrier FANS out, and each pair's (g, h)
   // predicts where it went, so the shader joins the steps into one line
-  v = { c: 1_030_000, bw: 200_000 }; for (let i = 0; i < 30; i++) fpush(v.c, v.bw);   // (past the ×2 step's ease)
+  v = { c: 1_030_000, bw: 200_000 }; for (let i = 0; i < 40; i++) fpush(v.c, v.bw);   // (past the ×2 step's ease)
   { const from = fr - 1;
     for (let i = 0; i < 12; i++) { v = { c: v.c, bw: v.bw * 0.95 }; fpush(v.c, v.bw); }
     const bad = atHist(0, 60); let pred = 0, moved = 0;
@@ -346,7 +350,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   // a TUNE of 0.4 of the view at the same span: eased like a zoom — the history stays as drawn, the new rows land live
   const preTune = fr, histTune = dlit(preTune - 3);
   v = { c: v.c + v.bw * 0.4, bw: v.bw };
-  for (let i = 0; i < tuneEaseRows(0.4) + 4; i++) fpush(v.c, v.bw);   // (the glide is by time: tuneEaseRows rows)
+  for (let i = 0; i < 34; i++) fpush(v.c, v.bw);   // (the glide is by time: tuneEaseRows rows, + the slope cap ≤ 1 s)
   { const bad = offCol(fr - 3, fr); const h2 = dlit(preTune - 3);
     ok('the tune ease: a 0.4-view tune leaves the history as drawn and the new rows land at the live column', bad.length === 0 && !!histTune && !!h2 && h2[0] === histTune[0], bad.slice(0, 4).join('; ')); }
   // MOTION with jumped history on screen: every moved pair's h predicts the displayed move
@@ -356,7 +360,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     ok('the tune + motion: a fast tune after the eased one — each pair\'s h is the move on screen', bad === 0, `${bad}`); }
 
   // RING rows after the last jump, every row is the identity: the second buffer is dropped
-  for (let i = 0; i < R + 8; i++) fpush(v.c, v.bw);   // (+ the last ease's rows)
+  for (let i = 0; i < R + 32; i++) fpush(v.c, v.bw);   // (+ the last ease's rows)
   ok('once the eased rows have scrolled away, the display buffer is freed', fan.disp === null && D() === S);
 
   // (the jump's rows-on-screen / fanRefresh cases: the full-capture layer section's 3-view pan below)
@@ -379,6 +383,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
 //    carry a layer row of the whole capture, drawn through the SAME per-row map wherever the detailed row has no data ──
 {
   const R = 256, CAPC = 1_500_000, CAPS = 2_400_000, CLO = CAPC - CAPS / 2, C = 1024, F = 128, CAR = 1_050_000;
+  const EZc = Math.max(zoomEaseRows(100_000 / CAPS), Math.round(EASE_CEIL_S * 30));   // ★★★ the zoom ease, up to the slope cap's ceiling
   const toIdx = makeToIdx(-125, -50, 0, 0);
   let seed = 5; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
   const gauss = () => { let s = 0; for (let i = 0; i < 6; i++) s += rnd(); return (s - 3) * Math.SQRT2; };   // σ ≈ 1
@@ -441,7 +446,7 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
 
   // A ZOOM IN AND OUT no longer re-maps (Stuart 2026-10-28): the rows written while zoomed stay as drawn, the layer unused
   { const W = mk(true); const [z0, z1] = zoomInOut(W, 1_400_000, 60);
-    let diff = 0; for (let f = z0 + zoomEaseRows(100_000 / CAPS); f < z1; f++) { const s0 = (f % R) * N; for (let x = 0; x < N; x++) if (D(W)[s0 + x] !== W.S[s0 + x]) diff++; }
+    let diff = 0; for (let f = z0 + EZc; f < z1; f++) { const s0 = (f % R) * N; for (let x = 0; x < N; x++) if (D(W)[s0 + x] !== W.S[s0 + x]) diff++; }
     const [, black] = scan(W, z0, z1);
     ok(`the layer: after a zoom in and out the zoomed rows are shown as drawn (${diff} texels differ past the ease), no black in the ease (${black})`, diff === 0 && black === 0); }
   // PAN across the capture at the narrow zoom (a jump of 300 kHz — re-mapped, not bent): every row has data across the screen
@@ -450,15 +455,15 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
     P.v = { c: 1_500_000, bw: 100_000 }; push(P);
     // (the zoom's first eased rows are drawn nearly as wide as the capture: a 300 kHz pan takes them past its edge — black
     //  there is honest, the radio never captured it — so the check starts after the ease)
-    const [, black] = scan(P, p0 + zoomEaseRows(100_000 / CAPS), P.fr - 1);
+    const [, black] = scan(P, p0 + EZc, P.fr - 1);
     ok(`the layer: a pan across the capture at a narrow zoom — no black in the history (${black} rows with a black texel)`, black === 0);
     P.v = { c: CAR + 20_000, bw: 100_000 }; push(P);
     // (the zoom's eased rows are drawn at their in-between zoom — the fan — so the column check starts after them)
-    const e0 = p0 + zoomEaseRows(100_000 / CAPS), [atCol, black2] = scan(P, e0, P.fr - 1);
+    const e0 = p0 + EZc, [atCol, black2] = scan(P, e0, P.fr - 1);
     ok(`the layer: …and panned onto the carrier, every row past the ease shows it at its column (${atCol}/${P.fr - 1 - e0}, ${black2} black)`, atCol === P.fr - 1 - e0 && black2 === 0); }
   // ROTATION / RESIZE: a JUMP at the narrow zoom made only the 32 rows on screen; a taller view makes the rest — layer and all
   { const Q = mk(true); for (let i = 0; i < 4; i++) push(Q);
-    Q.v = { c: 1_200_000, bw: 100_000 }; const q0 = Q.fr + zoomEaseRows(100_000 / CAPS); for (let i = 0; i < 60; i++) push(Q, 32);
+    Q.v = { c: 1_200_000, bw: 100_000 }; const q0 = Q.fr + EZc; for (let i = 0; i < 90; i++) push(Q, 32);
     Q.v = { c: CAR + 20_000, bw: 100_000 }; push(Q, 32); const q1 = Q.fr - 1;
     const [before] = scan(Q, q0, q1);
     const did = fanRefresh(Q.fan, Q.S, N, R, Q.fr, R);
@@ -505,8 +510,13 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
       for (let i = 0; i < st.cols.length; i++) { const d = Math.abs(st.cols[i] - prev); worst = Math.max(worst, d / total); prev = st.cols[i];
         if (Math.abs(st.cols[i] - st.to) > 0.6) n = i + 2; }
       rowsTo = Math.max(rowsTo, n);
-      if (!(Math.abs(st.cols[0] - st.from) > 0.5)) firstMoves = false;
-      for (let i = 0; i < n; i++) if (st.widths[i] < 3) widthOk = false;   // the carrier at its own width, never a 1-texel hairline
+      // ★ moves from its first row: by the first row whose ease (1.5u − 0.5u², over the rows it takes) has carried this
+      //   carrier a whole column — the first row itself for a carrier far from the fixed point; with the slope cap's longer
+      //   ease, one near it moves a fraction of a column a row at first, which a texel cannot show.
+      { const N = Math.max(1, n - 1); let k = 0; while (k < st.cols.length - 1) { const u = (k + 1) / N, e = Math.min(1, u * (1.5 - 0.5 * u)); if (total * e >= 1.5) break; k++; }   // (1.5: the rest column is ± ½ texel of `from`)
+        if (!(Math.abs(st.cols[k] - st.from) > 0.5)) firstMoves = false; }
+      // the carrier at its own width (3 bins → 2–4 texels as an in-between scale rounds), never a 1-texel hairline
+      for (let i = 0; i < n; i++) if (st.widths[i] < 2) widthOk = false;
     }
     console.log(`  ${name}: ${steps.length} steps — the largest one-row move ${(worst * 100).toFixed(0)} % of a step, landed in ${rowsTo} rows = ${(rowsTo / rate).toFixed(2)} s`);
     return { worst, rowsTo, firstMoves, widthOk };
@@ -515,16 +525,17 @@ ok('no overlap at all is drawn as it came', rowViewOffset(2_000_000, 200_000 / N
   const a = report('VibeServer ×√2 keys at 20 fps → 30 rows/s', runZoom(keys, 30), 30);
   ok('the ×√2 keys: no slice — no single row carries more than a quarter of a step (it was 75 % in one row)', a.worst <= 0.25, `${(a.worst * 100).toFixed(0)} %`);
   ok('the ×√2 keys: every step MOVES from its first row and the trail keeps the carrier\'s own width', a.firstMoves && a.widthOk);
-  ok('the ×√2 keys: each lands within 0.3 s', a.rowsTo / 30 <= 0.3, `${a.rowsTo} rows`);
+  // ★★★ + THE SLOPE CAP (2026-10-29): the ease is as long as keeps the outermost carrier under the cap a row — up to 1 s
+  ok('the ×√2 keys: each lands within the ease ceiling (1 s)', a.rowsTo / 30 <= EASE_CEIL_S + 0.05, `${a.rowsTo} rows`);
   const b = report('VibeServer ×√2 keys, Smooth 60', runZoom(keys, 60), 60);
-  ok('Smooth 60: twice the rows, the same time (≤ 0.3 s), no slice', b.worst <= 0.2 && b.rowsTo / 60 <= 0.3, `${(b.worst * 100).toFixed(0)} % ${b.rowsTo} rows`);
+  ok('Smooth 60: twice the rows, no longer (≤ 1 s), no slice', b.worst <= 0.2 && b.rowsTo / 60 <= EASE_CEIL_S + 0.05 && b.rowsTo / 60 <= a.rowsTo / 30 + 0.05, `${(b.worst * 100).toFixed(0)} % ${b.rowsTo} rows`);
   const rungs = [200_000, 400_000, 800_000, 400_000, 200_000];                    // UberSDR's ×2 rungs (a pinch snapped)
   CAR = 12_120_000;   // 62 kHz off: on screen at 200 kHz
   const c = report('UberSDR ×2 rungs at 30 rows/s', runZoom(rungs, 30), 30);
-  ok('×2 rungs: reach the new zoom in ≤ 0.4 s, no row more than 20 % of the step, from the first row', c.rowsTo / 30 <= 0.4 && c.worst <= 0.25 && c.firstMoves && c.widthOk,
+  ok('×2 rungs: reach the new zoom in ≤ 1 s, no row more than 20 % of the step, from the first row', c.rowsTo / 30 <= EASE_CEIL_S + 0.05 && c.worst <= 0.25 && c.firstMoves && c.widthOk,
      `${c.rowsTo} rows, ${(c.worst * 100).toFixed(0)} %`);
   const big = report('a ×4 step at 30 rows/s', runZoom([200_000, 800_000], 30), 30);
-  ok('a ×4 step: capped at 0.5 s, no slice', big.rowsTo / 30 <= 0.55 && big.worst <= 0.2, `${big.rowsTo} rows, ${(big.worst * 100).toFixed(0)} %`);
+  ok('a ×4 step: capped at 1 s, no slice', big.rowsTo / 30 <= EASE_CEIL_S + 0.05 && big.worst <= 0.2, `${big.rowsTo} rows, ${(big.worst * 100).toFixed(0)} %`);
 }
 
 console.log(`  waterfall row placement: ${passes} passed, ${fails} failed`);

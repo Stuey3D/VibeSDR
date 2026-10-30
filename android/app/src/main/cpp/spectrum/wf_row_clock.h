@@ -125,4 +125,30 @@ inline double clockRateUnderCap(double rate, int capHz) {
     return best > 0 ? best : rate;
 }
 
+
+// ★★★ THE INTERACTION BOOST — the twin of src/assets/wfClock.ts boostRowRate (Stuart 2026-10-29: "increase during
+//     interaction … we dont try to pull down more data than a server can supply even if it means a 12x frame generation"
+//     / "if the app is set to 120 we do 120"). While a tune/zoom is in flight the clock's rate steps up to the display's
+//     maximum as set, ≤ 120, ≤ 12 × the feed; every extra row is a frame already received. Nothing is asked of the
+//     server. NATIVE (base 0) → 0, untouched. Change one, change both.
+constexpr double BOOST_MAX_RATE = 120, BOOST_FEED_X = 12, BOOST_TAIL_MS = 750;
+inline double boostRowRate(double base, double feedFps, double displayHz) {
+    if (!(base > 0)) return 0;
+    const double hz = displayHz > 0 ? displayHz : 60;
+    const double lim = std::min(std::min(BOOST_MAX_RATE, hz * 1.02), (feedFps > 0 ? feedFps : 0) * BOOST_FEED_X * 1.0001);
+    static const double R[] = {120, 60, 30, 20, 15, 12, 10, 5};
+    for (double r : R) {
+        if (r > lim) continue;
+        if (r == 120 && hz < 119) continue;
+        return std::max(base, r);
+    }
+    return base;
+}
+struct BoostState { double lastMove = 0; bool on = false; };
+inline void boostNote(BoostState& b, double now) { b.lastMove = now; b.on = true; }
+inline bool boostActive(BoostState& b, double now, bool easing) {
+    b.on = b.lastMove > 0 && (now - b.lastMove < BOOST_TAIL_MS || (b.on && easing));
+    return b.on;
+}
+
 }  // namespace vibewf

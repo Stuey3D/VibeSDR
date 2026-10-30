@@ -38,6 +38,7 @@ struct EngineConfig {
     bool   peakHold = true;
     bool   smoothTune = true;
     int    displayCapHz = 0;   // the FRAME RATE cap (0 = none): under 60 the row target divides it (wf_row_target.h rowTargetUnderCap)
+    int    panelHz = 0;        // ★ the panel's maximum refresh (0 = unknown): the interaction boost's ceiling when there is no cap
     int    targetRows = 0;     // WF_TARGET_ROWS = the setting's CAP: 60 smooth / 20 default / 0 sharp — the rows actually aimed for follow the feed (wf_row_target.h)
 };
 
@@ -183,6 +184,8 @@ private:
     //     frame presented by then; the frames it may still show are kept here by id (a few — its queue is 4 deep).
     struct ClockRow { long id = -1; std::vector<uint8_t> row; double c = 0, h = 0; };
     vibewf::RowClock rowClock_;
+    vibewf::BoostState boost_;   // ★ the interaction boost (wf_row_clock.h boostRowRate)
+    int lastEaseLeft_ = 0;
     std::vector<ClockRow> clockRows_;
     std::vector<long> clockOut_;
     long clockSeq_ = 0;
