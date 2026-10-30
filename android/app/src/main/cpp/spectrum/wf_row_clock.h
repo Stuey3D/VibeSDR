@@ -5,7 +5,7 @@
 // ★★★ Stuart (2026-10-29): "if we are only doing a straight 2x 3x interpolation an incoming rate that drifts about will
 //     make it feel juddery which is why I said to over interpolate and discard to avoid this issue" — and, in the Eco
 //     note, "the interpolation always over interpolates and discards leaving headroom to account for link rate judder".
-//  • The OUTPUT rate is fixed (Minimum 5, Eco 10, Default 30, Smooth 60): tick k at t0 + k·1000/rate, never an arrival.
+//  • The OUTPUT rate is fixed (Minimum 2, Low 5, Eco 10, Default 30, Smooth 60): tick k at t0 + k·1000/rate, never an arrival.
 //  • Each tick's row is the newest REAL frame presented by then — a repeat, never a blend (7bce170d); none new = the last
 //    again. A late frame costs one more repeat; two frames in one tick drop the older (a faster feed thinned evenly).
 //  • Frames are PRESENTED on a de-jittered schedule (≈0.2 × the feed interval, ≤ 40 ms, after the mean arrival), so a
@@ -131,10 +131,10 @@ inline double clockRowRate(RowTargetState& st, int cap, double feedFps) {
     return r;
 }
 
-/** Under a FRAME RATE cap below 60: the largest of {5,10,12,15,20,30,60} ≤ the rate that divides the cap. */
+/** Under a FRAME RATE cap below 60: the largest of {2,5,10,12,15,20,30,60} ≤ the rate that divides the cap. */
 inline double clockRateUnderCap(double rate, int capHz) {
     if (!(rate > 0) || capHz <= 0 || capHz >= 60) return rate;
-    static const int rates[] = {5, 10, 12, 15, 20, 30, 60};
+    static const int rates[] = {2, 5, 10, 12, 15, 20, 30, 60};
     int best = 0;
     for (int r : rates) if (r <= rate && r <= capHz && capHz % r == 0) best = r;
     return best > 0 ? best : rate;

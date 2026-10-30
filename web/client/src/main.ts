@@ -7,7 +7,7 @@
  */
 
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
-import { capFps, linkCapFor, isWfSpeedSetting, speedNumbers, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
+import { capFps, linkCapFor, isWfSpeedSetting, loadWfSpeed, speedNumbers, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATCHES, FONT_SWATCHES, CTL_KEYS, TODAY,
@@ -8059,7 +8059,7 @@ let wfSpeed = 20;      // 10 / 20 / 30 screen rows/sec
 // ★★ DEFAULTS TO SMOOTH *HERE* AND SHARP IN THE APP — each keeps the waterfall it already had, so
 //    nobody's picture changes on upgrade and the other one is a tap away. The two are not better
 //    and worse, they trade detail against motion (Stuart: "they both have their merits").
-let wfScroll: WfSpeedSetting = 'default';   // ★ V12 + 'minimum' / 'eco' (wfSpeedCap.ts); 'sharp' is labelled NATIVE
+let wfScroll: WfSpeedSetting = 'default';   // ★ V12 + 'min2' (MINIMUM, 2) / 'low' (LOW, 5) / 'eco' (wfSpeedCap.ts); 'sharp' is labelled NATIVE
 // Rows synthesised per received frame for each preset. DETAILED is 1 = no interpolation at all.
 // ★ Each preset is a TARGET ROW RATE (rows/sec on screen), not a multiplier: this renderer works
 //   out how many rows to synthesise per frame pair to hit it, which is why a slow feed and a fast
@@ -8072,7 +8072,8 @@ let wfScroll: WfSpeedSetting = 'default';   // ★ V12 + 'minimum' / 'eco' (wfSp
 //     `rate` is the cap (it also sizes the render clock, renderHz).
 // ★ V12: one fixed note explains all five (index.html #wfScrollNote) — `rate` is the row cap, for renderHz.
 const WF_PRESET: Record<string, { rate: number }> = {
-  minimum: { rate: 5 },
+  min2:    { rate: 2 },    // MINIMUM
+  low:     { rate: 5 },    // LOW (the old MINIMUM)
   eco:     { rate: 10 },
   sharp:   { rate: 0 },
   default: { rate: 20 },
@@ -8086,8 +8087,8 @@ function serverFpsCap(): number { return serverMaxFps > 0 ? serverMaxFps : 20; }
 /** The data rate we actually ASK for (before the idle/serverMax clamp in wantedFps). AUTO never asks
  *  for more than the chosen Speed — no point receiving frames the display would only throw away. */
 function computeActiveFps(): number {
-  // ★ V12 MINIMUM / ECO: a CEILING on whatever else decides the rate (Auto or a pinned Data Rate) — 5 / 10, never a
-  //   divider, so a 5 pinned stays 5 (wfSpeedCap.capFps).
+  // ★ V12 MINIMUM / LOW / ECO: a CEILING on whatever else decides the rate (Auto or a pinned Data Rate) — 2 / 5 / 10,
+  //   never a divider, so a 5 pinned stays 5 (wfSpeedCap.capFps).
   return capFps(wfDataRate === 0 ? Math.min(wfSpeed, serverFpsCap()) : wfDataRate, linkCapFor(wfScroll));
 }
 
@@ -8136,7 +8137,7 @@ function refreshSpeedSeg() {
 /** Data-rate buttons above the server's ceiling are hidden; AUTO (0) is always available. */
 function refreshDataRateSeg() {
   const seg = document.getElementById('wfRateSeg'); if (!seg) return;
-  // ★ V12: under MINIMUM / ECO a rate above that cap would ask for nothing more — hidden like one above the server's,
+  // ★ V12: under MINIMUM / LOW / ECO a rate above that cap would ask for nothing more — hidden like one above the server's,
   //   and the chosen one shown at what it now gets (20 under ECO lights 10). Choosing NATIVE etc. brings them back.
   const cap = capFps(serverFpsCap(), linkCapFor(wfScroll));
   const lit = wfDataRate > cap ? (Math.max(0, ...[20, 10, 5].filter(v => v <= cap))) : wfDataRate;
@@ -13559,7 +13560,9 @@ function buildMenu() {
   }
   // Restore saved choices, then apply once.
   { const s = prefs().wfSpeed;    if (typeof s === 'number' && [10, 20, 30].includes(s)) wfSpeed = s; }
-  { const v = prefs().wfScroll;   if (isWfSpeedSetting(v)) wfScroll = v; }   // an old 'sharp' loads as NATIVE
+  // ★ an old 'sharp' loads as NATIVE; an old 'minimum' was the 5 fps choice — it loads as LOW and is re-saved as 'low',
+  //   never as the new 2 fps MINIMUM ('min2') (wfSpeedCap.loadWfSpeed).
+  { const v = prefs().wfScroll, s = loadWfSpeed(v); if (s) { wfScroll = s; if (s !== v) savePref('wfScroll', s); } }
   { const d = prefs().wfDataRate; if (typeof d === 'number' && [0, 20, 10, 5].includes(d)) wfDataRate = d; }
   if (wfDataRate > 0 && wfSpeed < wfDataRate) wfSpeed = wfDataRate;
   applyWaterfallRates();

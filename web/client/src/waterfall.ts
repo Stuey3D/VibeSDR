@@ -17,6 +17,7 @@
  */
 
 import { RowPacer } from './wfPacing';
+import type { WfScroll } from '../../../src/assets/wfRowTarget.ts';
 import { SignalProcessor, type SignalProcessorSettings } from '../../../src/assets/signalProcessor';
 
 /** Fixed ring width — see the note at the GPU push. Must never depend on bin count. */
@@ -146,11 +147,11 @@ export class Waterfall {
   setSharpRows(on: boolean) { this.sharpRows = on; if (!this.scroll) this.pacer.setRate(this.rowsPerSec, on, renderDpr()); }
   /** ★★★ THE SCROLL MODE, and the rows follow the FEED (Stuart 10-20, src/assets/wfRowTarget.ts — the app's rule):
    *  Sharp = actual rows; Default = min(20, 3 x feed); Smooth = min(60, 6 x feed); snapped to a divisor of 60. */
-  setScroll(scroll: 'minimum' | 'sharp' | 'eco' | 'default' | 'smooth') {
+  setScroll(scroll: WfScroll) {
     this.scroll = scroll; this.sharpRows = scroll === 'sharp';
     this.pacer.setScroll(scroll, renderDpr());
   }
-  private scroll: 'minimum' | 'sharp' | 'eco' | 'default' | 'smooth' | null = null;
+  private scroll: WfScroll | null = null;
   private sharpRows = false;
 
 

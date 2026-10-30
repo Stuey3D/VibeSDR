@@ -4911,13 +4911,15 @@ select.btn { padding: 6px 8px; }
                    that are largely made up.
        ★ Neither the renderer nor the SPECTRUM TRACE changes; this only decides how many rows are
          synthesised between real frames. -->
-  <!-- ★★ V12 (Stuart 2026-10-28): MINIMUM · ECO · NATIVE · [DEFAULT · SMOOTH], slowest to smoothest. NATIVE was SHARP
-       (the stored value is still 'sharp'). MINIMUM / ECO ask the server for 5 / 10 fps (src/assets/wfSpeedCap.ts); the
+  <!-- ★★ V12 (Stuart 2026-10-28; the 2 fps MINIMUM 2026-10-30, GitHub #57): MINIMUM · LOW · ECO · NATIVE · [DEFAULT ·
+       SMOOTH], slowest to smoothest. NATIVE was SHARP (the stored value is still 'sharp'); LOW was MINIMUM (a saved
+       'minimum' loads as LOW). MINIMUM / LOW / ECO ask the server for 2 / 5 / 10 fps (src/assets/wfSpeedCap.ts); the
        outlined pair add interpolated rows. Each key carries its live rows/s on this server (main.ts refreshWfScrollSeg). -->
   <div class="mrow">
     <label>WATERFALL</label>
     <div class="seg" id="wfScrollSeg">
-      <button class="btn" data-wfscroll="minimum">MINIMUM<span class="wfNum"></span></button>
+      <button class="btn" data-wfscroll="min2">MINIMUM<span class="wfNum"></span></button>
+      <button class="btn" data-wfscroll="low">LOW<span class="wfNum"></span></button>
       <button class="btn" data-wfscroll="eco">ECO<span class="wfNum"></span></button>
       <button class="btn" data-wfscroll="sharp">NATIVE<span class="wfNum"></span></button>
       <span class="wfInterp"><span class="wfInterpRow">
@@ -4926,10 +4928,11 @@ select.btn { padding: 6px 8px; }
       </span><span class="wfInterpCap">interpolated for smoothness</span></span>
     </div>
   </div>
-  <div class="rowNote" id="wfScrollNote">5 fps is the minimum waterfall rate. Minimum and Eco save data by asking the server
-    for less — no effect when it already sends that little. Eco — 10 rows a second: asks a faster server for less, fills
-    in a slower one. Every speed but Native runs at a rate that divides the screen's refresh (5, 10, 15, 20, 30 or 60 rows
-    a second), filling in rows or dropping them evenly. Native is the server's own rate, every row a real frame. Default
+  <div class="rowNote" id="wfScrollNote">Minimum (2 rows a second) is the slowest — for spotting an intermittent signal in
+    the history. Minimum, Low (5) and Eco (10) save data by asking the server for less — no effect when it already sends
+    that little. Eco — 10 rows a second: asks a faster server for less, fills in a slower one. Every speed but Native runs
+    at a rate that divides the screen's refresh (2, 5, 10, 15, 20, 30 or 60 rows a second), filling in rows or combining
+    them evenly, keeping short bursts. Native is the server's own rate, every row a real frame. Default
     and Smooth add interpolated rows for a smoother scroll.</div>
   <div class="mrow" id="rowWfSpeed">
     <label>WATERFALL SPEED</label>
