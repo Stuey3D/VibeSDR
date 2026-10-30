@@ -17,6 +17,7 @@
 //     E  the DAB rapid channel-step repro (a hop every 0.8 s, ±15 dB per block): writes/s within budget
 //     F  a slow ±8 dB fade on HF: no LNA hunting
 //     G  a rung bigger than its prior (25 dB where the table says 19): still no hunting
+//     T  the take-over: the IF at its parking 59 walking down is not a loaded front end (on air 10-30)
 //     H  no new ADC windows (a stalled stream): no writes at all
 // PART 2 — THE SOUND (real gainstep.h + RxPipeline, the twin method of test-gain-step.cpp):
 //     I  AM, eight 1-2 dB IF steps 0.25 s apart: before = flagged only (as under the hardware IF AGC today),
@@ -299,6 +300,15 @@ static void caseG() {
     ok(s.lnaMoves <= 2, "≤ 2 LNA moves in 3 min");
 }
 
+static void caseT() {
+    std::printf("\n── T  the take-over: IF parked at 59, the level under target (the Lenovo, 10-30, MW) ──\n");
+    // at LNA 5 the IF wants ~40: the walk down from 59 is not a loaded front end
+    SimRsp r; r.band = 0; r.red = ladder(0); r.lna = 5; r.gr = 59; r.sigs = {-50.0}; r.wanted = -60.0;
+    const LoopStats s = runLoop(r, VagcBand::AmMw, 60, [](double, SimRsp&) {}, true, true);
+    ok(s.lnaMoveT.empty() || s.lnaMoveT.front() > 10.0, "no RF rung thrown away while the IF walks down from its parking value");
+    ok(s.finalGr >= 30 && s.finalGr <= 52, "the IF settles inside the window");
+}
+
 static void caseH() {
     std::printf("\n── H  the stream stalls (no new ADC windows) at 10 s ──\n");
     SimRsp r; r.band = 1; r.red = ladder(1); r.lna = 0; r.gr = 59; r.sigs = {-30, -33}; r.wanted = -50;
@@ -505,7 +515,7 @@ static void caseK() {
 
 int main() {
     std::printf("VibeAGC for SDRplay — closed loop and sound\n");
-    caseA(); caseB(); caseC(); caseD(); caseE(); caseF(); caseG(); caseH();
+    caseA(); caseB(); caseC(); caseD(); caseE(); caseF(); caseG(); caseT(); caseH();
     snd::caseI(); snd::caseJ(); snd::caseK();
     std::printf("\n%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;

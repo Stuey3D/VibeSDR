@@ -144,7 +144,8 @@ public:
      *  how the last known step was placed and how far (samples) from the flagged packet's first sample.
      *  how: 0 = at the flag (the level jumped there), 1 = elsewhere, found by the level, 2 = at the flag because the
      *  level said nothing, 3 = a pair, both edges found (offset = first edge, offset2 = second), 4 = a pair handed to
-     *  the finder. Also the jump the level showed there (dB). */
+     *  the finder, 5 = a pair whose two registers landed together (no dip: placed as one step of their sum). Also the
+     *  jump the level showed there (dB). */
     int lastKnownHow() const { return lkHow_; }
     long long lastKnownOffset() const { return lkOff_; }
     long long lastKnownOffset2() const { return lkOff2_; }
@@ -343,7 +344,8 @@ private:
             const double net = d1 + d2;
             if (std::fabs(net) < kKnownDirectDb) {
                 const EdgeFind e = enough ? edgeSearch(L, a0, knownLocFrom_, knownLocTo_, net > 0 ? 1.0 : -1.0) : EdgeFind{};
-                if (std::fabs(net) >= 0.3 && matches(e, net)) { ++knownLocated_; placeKnown(e.at, net); }
+                lkHow_ = 5; lkOff_ = 0; lkJump_ = e.at >= 0 ? e.j : 0.0;
+                if (std::fabs(net) >= 0.3 && matches(e, net)) { ++knownLocated_; lkOff_ = e.at - knownLocFlag_; placeKnown(e.at, net); }
                 else placeKnown(knownLocFlag_, net);
                 return;
             }

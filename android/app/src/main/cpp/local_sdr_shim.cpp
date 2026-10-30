@@ -27964,10 +27964,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (said < 40 || said % 20 == 0) {
                 static const char* how[] = {"at the flag (the level jumped there)", "found by the level, off the flag",
                                             "at the flag (the level said nothing)", "a pair, both edges found",
-                                            "a pair not found — handed to the finder"};
+                                            "a pair not found — handed to the finder",
+                                            "a pair that landed together (no dip), placed as one step"};
                 const int h = gainSmooth_.lastKnownHow();
                 LOGI("VibeAGC (RSP): step #%u %+.1f dB — %s, %+lld samples from the flagged packet's start%s (level jump %+.2f dB)",
-                     vagcAppliedSeen_, gainSmooth_.lastStepDb(), (h >= 0 && h <= 4) ? how[h] : "?",
+                     vagcAppliedSeen_, gainSmooth_.lastStepDb(), (h >= 0 && h <= 5) ? how[h] : "?",
                      gainSmooth_.lastKnownOffset(),
                      h == 3 ? (" / second edge " + std::to_string(gainSmooth_.lastKnownOffset2())).c_str() : "",
                      gainSmooth_.lastKnownJump());

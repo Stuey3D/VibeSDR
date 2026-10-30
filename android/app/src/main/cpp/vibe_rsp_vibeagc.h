@@ -227,7 +227,11 @@ public:
         const double addDwell = acquiring_ ? kAcqAddDwellSec : p_.rfAddDwellSec;
 
         // ── the front-end judgements, on OUR gRdB ──
-        const bool loaded = gr_ > p_.grHigh;
+        /* ★★ gRdB is the load meter ONLY while the IF is actually holding the target. Just after a take-over it sits at
+         *    its parking 59 with the level well under target, walking down — measured on the Lenovo 10-30: the load rule
+         *    read that walk as "loaded" and threw a 19 dB MW rung away 1.8 s in. Over the target counts (the IF is
+         *    behind); under it does not. */
+        const bool loaded = gr_ > p_.grHigh && atk >= p_.targetPk - p_.deadDb;
         if (loaded) { if (loadedSince_ < 0) loadedSince_ = in.now; } else loadedSince_ = -1;
         const double rungUp = rungDbFor(in, lna_ - 1, lna_);     // what one more rung of RF gain adds
         const bool roomForRung = lna_ - 1 >= in.lnaFloor
