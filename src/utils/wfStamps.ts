@@ -267,3 +267,19 @@ export function stampColour(needleHex: string, lut: ArrayLike<number> | null): s
   }
   return '#' + h[1].toLowerCase();
 }
+
+/** ★★ The row drawn at display line L (the inverse of stampLine): a tap at y on the waterfall is on this row — and tunes by
+ *  ITS scale (Stuart, 2026-10-30, #57 — Gesiima: "I look back in the waterfall to see where exactly the signal was, and
+ *  then I tune onto that position"). Same uniforms as the shader. */
+export function rowAtLine(head: number, L: number, frac: number, uN: number, quant: boolean): number {
+  const Lq = quant ? Math.floor(L) : L;
+  const R = quant ? Math.floor(frac * uN + 0.0001) : frac * uN;
+  return Math.floor(((head - 2) * uN + R - Lq) / uN);
+}
+
+/** The frequency at x (0..1 across the view) on a row displayed at (lo, span) — the live scale when the row's own is
+ *  unknown. */
+export function hzOnRow(x: number, rowGeom: readonly [number, number] | null, liveLo: number, liveSpan: number): number {
+  if (rowGeom && rowGeom[1] > 0 && isFinite(rowGeom[0])) return rowGeom[0] + x * rowGeom[1];
+  return liveLo + x * liveSpan;
+}

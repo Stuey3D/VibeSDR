@@ -116,6 +116,9 @@ public:
     void setCovered(bool covered);
     /** dB window for the axis labels (2 dB hysteresis, as liveRange). Returns true when it changed since last read. */
     bool liveRange(int& dbMin, int& dbMax);
+    /** ★★ The scale row `frame` (absolute) is DISPLAYED at — Hz at the left edge and across — while it is in the ring; false
+     *  if not. A tap on an old row tunes by its own scale (Stuart, 2026-10-30, #57). Any thread (under mx_). */
+    bool rowGeom(double frame, double& lo, double& span);
 
     // ── From the UI thread ──
     /** Fill `out` with everything new since the last poll. Cheap when nothing is (returns false). */
@@ -234,6 +237,8 @@ private:
     uint32_t specGen_ = 0; std::vector<float> outSpec_; bool specHidden_ = false;
     uint32_t peakGen_ = 0; void* outPeak_ = nullptr;
     uint32_t stampGen_ = 0, uiStamp_ = 0; std::vector<vibewf::WfStamp> outStamps_;
+    struct RowGeo { double frame = -1, lo = 0, span = 0; };
+    std::vector<RowGeo> rowGeo_;                     // ★★ per slot, as displayed when written (mx_) — rowGeom
     uint64_t outVer_ = 0, uiSeenVer_ = 0;
     uint32_t uiSpec_ = 0;
     // liveRange (under mx_)

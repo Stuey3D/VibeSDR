@@ -91,7 +91,7 @@ import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../servi
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
 import { displayMap, fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
-import { newStampState, stampAlpha, stampColour, stampJump, stampLine, stampNoteRow, stampPrune, stampSettleRows, stampsShown,
+import { hzOnRow, rowAtLine, newStampState, stampAlpha, stampColour, stampJump, stampLine, stampNoteRow, stampPrune, stampSettleRows, stampsShown,
          stampSweepRows, stampTicks, STAMP_MIN_GAP_LABELS, type WfStamp } from '../utils/wfStamps';
 import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
 import { setWideSink } from '../services/wideRowBus';
@@ -466,6 +466,9 @@ interface SpectrumEngineHost {
   setSettings(s: Record<string, number | boolean>): void;
   setBackground(bg: boolean): void;
   setCovered(c: boolean): void;
+  /** ★★ the scale row `frame` is displayed at, [lo Hz, span Hz], or null (not in the ring) — a tap on an old row tunes by
+   *  it (#57). Optional: an older binary has none, and then the live scale is used. */
+  rowGeom?(frame: number): [number, number] | null;
   liveRange(): [number, number] | null;
   poll(): {
     image?: SkImage; head: number; texReady: boolean; quant: number; avgMs: number;
@@ -2766,8 +2769,21 @@ function WaterfallView({
         if (tapStartGuarded.current) return;            // began in home-bar gap
         if (e.y < BAND_H) return; // band strip taps reserved (future: band jump)
         if (bottomGuard > 0 && e.y >= guardTop) return; // home-bar gap
-        onTapTune?.(Math.round(visStart + (e.x / width) * bwHz));
-      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop]);
+        // ★★ BY THE ROW UNDER THE TAP (Stuart, 2026-10-30, #57 — Gesiima tunes from the history onto a signal that is quiet
+        //    now): on the waterfall, the frequency x had on THAT row (its own scale, as it was drawn — a row from before a
+        //    zoom, a tune or a band change), from the same uniforms that scroll the picture. On the newest rows, the spectrum
+        //    or a row with no known scale it is the live scale, exactly as before.
+        let geo: [number, number] | null = null;
+        if (e.y >= wfTop && stampRowPt > 0) {
+          const f = rowAtLine(uHead.value, (e.y - wfTop) / stampRowPt, scrollFrac.value, uNSv.value, uQuantDrawSv.value > 0.5);
+          if (engine) geo = engine.rowGeom?.(f) ?? null;
+          else if (f >= 0 && f < frameCount.current && f >= frameCount.current - RING_ROWS) {
+            const m = displayMap(motionSt.current!, fanSt.current!.xfA, fanSt.current!.xfB, f % RING_ROWS, RING_W);
+            geo = m ? [m[0], m[1] * RING_W] : null;
+          }
+        }
+        onTapTune?.(Math.round(hzOnRow(e.x / width, geo, visStart, bwHz)));
+      }), [bwHz, centerHz, visStart, width, onTapTune, bottomGuard, guardTop, wfTop, stampRowPt, engine]);
 
   // Pan runs as a WORKLET (UI thread): event delivery + accumulation never wait
   // on the JS thread, so a laggy connection / heavy data can't make the drag

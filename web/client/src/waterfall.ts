@@ -176,6 +176,9 @@ export class Waterfall {
   private rv: RowView = { lo: 0, span: 0, jumpHz: 0 };
   /** Per ring row, the span (Hz) it was drawn at — a jump moves every row by the same Hz in ITS OWN scale. 0 = blank. */
   private xfS = new Float64Array(0);
+  /** ★★ Per ring row, the Hz at the left edge it was drawn at (with xfS its whole scale) — a tap on an OLD row tunes by
+   *  THAT row's scale (xyToHz; Stuart, 2026-10-30, #57). */
+  private xfL = new Float64Array(0);
   /** GPU path: per ring row, the full-capture layer's m (where the row's u = 0 sits in the capture, 0..1) — the shader
    *  reads it from its own texture; kept here too so the coverage can be checked (scripts/test-web-waterfall-history.mjs). */
   private xfM = new Float64Array(0);
@@ -439,10 +442,10 @@ export class Waterfall {
                                               0, wfH * (firstRows / oh), w, wfH * (this.head / oh));
       // ★ The zoom fan's maps follow their rows into the unwrapped, re-heighted buffer (row j ← reading row j·oh/wfH).
       if (this.xfA.length === oh) {
-        const a = new Float64Array(wfH), b = new Float64Array(wfH), x = new Float64Array(wfH), sp = new Float64Array(wfH);
-        const hasX = this.xfX.length === oh, hasS = this.xfS.length === oh;
-        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; x[j] = hasX ? this.xfX[r] : 0; sp[j] = hasS ? this.xfS[r] : 0; }
-        this.xfA = a; this.xfB = b; this.xfX = x; this.xfS = sp;
+        const a = new Float64Array(wfH), b = new Float64Array(wfH), x = new Float64Array(wfH), sp = new Float64Array(wfH), lo = new Float64Array(wfH);
+        const hasX = this.xfX.length === oh, hasS = this.xfS.length === oh, hasL = this.xfL.length === oh;
+        for (let j = 0; j < wfH; j++) { const r = (this.head + Math.min(oh - 1, Math.floor(j * oh / wfH))) % oh; a[j] = this.xfA[r]; b[j] = this.xfB[r]; x[j] = hasX ? this.xfX[r] : 0; sp[j] = hasS ? this.xfS[r] : 0; lo[j] = hasL ? this.xfL[r] : 0; }
+        this.xfA = a; this.xfB = b; this.xfX = x; this.xfS = sp; this.xfL = lo;
       }
       // ★ V12 and the full-capture layer's rows follow theirs, the same way (unwrapped, re-heighted).
       if (this.wfC && this.wfCCtx && this.wfC.height === oh) {
@@ -486,7 +489,7 @@ export class Waterfall {
     else { this.wfCtx.fillStyle = '#000'; this.wfCtx.fillRect(0, 0, this.wf.width, this.wf.height); }
     this.head = 0;      // an all-black ring has no meaningful head
     this.xfA.fill(1); this.xfB.fill(0);   // a blank ring has nothing to fan
-    this.xfX.fill(0); this.xfS.fill(0);
+    this.xfX.fill(0); this.xfS.fill(0); this.xfL.fill(0);
     this.ease = newRowEase(); this.outRow = null;   // ★ the next row starts afresh: nothing below it to join to or ease from
     stampReset(this.stamps); this.stampTickCache.clear();   // ★ no history, nothing to label
     this.wide = null; this.wFloorP = null; this.wCellP = null;   // ★ a jump: the old full-capture row is another band
@@ -847,7 +850,11 @@ export class Waterfall {
     const v = rowView(this.ease, sLo, sSpan, this.pacer.rowPx, this.rv, this.pacer.easeRowRate());
     const cLo = v.lo, cSpan = v.span;
     this.pacer.easing = this.ease.eN > 0;   // ★ the boost holds until the ease has landed
-    if (v.jumpHz) { this._jumpHistory(v.jumpHz, cSpan); stampJump(this.stamps, v.jumpHz); }
+    // ★★★ A JUMP KEEPS THE HISTORY AS DRAWN TOO (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and
+    //     zooms so it is not lost" — Gesiima tunes from the history onto a signal that is quiet now). It used to move every
+    //     row into place (_jumpHistory — rows slid off, the edge went dark); now nothing is moved or blanked: the old rows
+    //     stay where they were drawn, a scale stamp marks the boundary, and a tap on them tunes by THEIR scale (xyToHz).
+    //     (_jumpHistory and stampJump are kept for a re-mapping caller; v.jumpHz still stops the join across the jump.)
     // ★★ THE JOIN (wfGlide.ts joinedRowAt — the app's shader motion taps): a row drawn somewhere other than the row below
     //    is drawn across its footprint toward it, so the trail is ONE solid line through the ease, not dashes. A steady row
     //    (the same view as the row below) is the frame exactly; a jump is not joined (the history moved instead).
@@ -899,7 +906,7 @@ export class Waterfall {
       this._ensureXf(rows);
       this.head = (this.head - 1 + rows) % rows;
       this.gl.pushRow(rowIn, this.head);
-      this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan;
+      this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan; this.xfL[this.head] = cLo;
       // ★★ V12 the full-capture layer: this row's coarse twin, at the same ring row (wfWide.ts).
       this.xfX[this.head] = 0;
       if (this.wideEver && this.gFloor.length && this.gPeak.length) {
@@ -915,7 +922,7 @@ export class Waterfall {
     const H = wfH;
     this._ensureXf(H);
     this.head = (this.head - 1 + H) % H;
-    this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan;
+    this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan; this.xfL[this.head] = cLo;
     this.xfX[this.head] = 0;
     // ★★ V12 the full-capture layer on the 2D path: a coloured WIDE_TEX-wide row in its own ring canvas, same row index.
     if (this.wideEver) {
@@ -956,6 +963,7 @@ export class Waterfall {
     this.xfB = new Float64Array(rows);
     this.xfX = new Float64Array(rows);
     this.xfS = new Float64Array(rows);
+    this.xfL = new Float64Array(rows);
     this.xfM = new Float64Array(rows);
   }
 
@@ -1575,6 +1583,25 @@ export class Waterfall {
 
   /** CSS pixel x -> Hz. `cssW` lets a per-frame caller (the pointer-frequency label) pass a cached
    *  width instead of reading clientWidth — a layout read — every frame; same arithmetic either way. */
+  /** ★★ THE FREQUENCY UNDER A POINT, BY THE ROW UNDER IT (Stuart, 2026-10-30, #57 — Gesiima: "I look back in the waterfall
+   *  to see where exactly the signal was, and then I tune onto that position"). On the waterfall, the row's OWN scale (the
+   *  view it was drawn at, through its map) — a trace drawn before a zoom or a tune tunes to that signal's frequency, not
+   *  to whatever the live scale has there now. Above the waterfall, or on a row with no geometry, the live scale (xToHz):
+   *  a row at the live scale gives exactly what xToHz does. */
+  xyToHz(cssX: number, cssY: number, cssW = this.canvas.clientWidth, cssH = this.canvas.clientHeight): number {
+    const H = this.canvas.height, wfH = this.wf.height, rows = this.xfA.length;
+    const y = cssY * H / Math.max(1, cssH), specH = H - wfH;
+    if (rows > 0 && wfH > 0 && y >= specH && y < H) {
+      const j = Math.floor(y - specH);
+      if (j < this.rowSeq) {
+        const r = (this.head + j) % rows;
+        const S = this.xfS[r], L = this.xfL[r];
+        if (S > 0 && L > 0) return L + S * (this.xfA[r] * (cssX / Math.max(1, cssW)) + this.xfB[r]);
+      }
+    }
+    return this.xToHz(cssX, cssW);
+  }
+
   xToHz(cssX: number, cssW = this.canvas.clientWidth): number {
     const lo = this.displayCenterHz() - this.spanHz / 2;
     const frac = cssX / Math.max(1, cssW);

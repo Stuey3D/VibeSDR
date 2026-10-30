@@ -150,7 +150,7 @@ try {
       const c = await D('costStats()'); cpu[`${MODE} ${name}`] = c;
       await shot(name);
       // ★ HISTORY PRESERVED: the rows from before the move are still on screen with their carriers at their own geometry
-      //   (a jump past the view moves them off it — `histGone`; the jump back brings them home)
+      //   (`histGone`: a stage whose old rows are expected off screen — none since a jump keeps the history, 2026-10-30)
       const newRows = after - before, old = analyse(p, Math.min(p.H, newRows + 2), p.H);
       const histOk = name === 'start' || (histGone ? old.placed === 0 : old.placed > 0);
       ok(a.misplaced <= a.placed * 0.01 && a.slices === 0 && a.blackIn === 0 && histOk,
@@ -176,7 +176,9 @@ try {
     await stage('tune-step', () => D('ask(7159000, 96000)'), 'a 9 kHz tune step');
     await stage('tune-spin', () => D('sweep(30, -500, 1, 60)'), 'a drum spin (500 Hz every 60 ms)');
     await stage('tune-large', () => D('ask(7104000, 96000)'), 'a large tune (40 kHz, inside the view)');
-    await stage('jump', () => D('ask(7254000, 96000)'), 'a jump of more than the view (150 kHz): the history moves off with the band', true);
+    // ★★★ A JUMP KEEPS THE HISTORY AS DRAWN (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms
+    //     so it is not lost") — it used to move off with the band (histGone); now the old rows stay, stamped with their scale.
+    await stage('jump', () => D('ask(7254000, 96000)'), 'a jump of more than the view (150 kHz): the history from before stays as drawn', false);
     await stage('jump-back', () => D('ask(7150000, 96000)'), 'and back: the history from before the jump is in place again', false, true);
     // ── resize, and a rotate ──
     { const p0 = await pic();

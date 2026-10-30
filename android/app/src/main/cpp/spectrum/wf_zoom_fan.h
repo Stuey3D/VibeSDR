@@ -187,6 +187,11 @@ inline void fanRow(FanState& st, const uint8_t* ring, int n, int r, int rows = 0
     if (st.layer) layerFillRow(*st.layer, r, a, b, n, d, lo);
 }
 
+/** ★★★ A JUMP KEEPS THE HISTORY AS DRAWN (Stuart, 2026-10-30, #57: "can we preserve the history on longer tunes and zooms so
+ *  it is not lost") — the twin of wfRowPlace.ts JUMP_KEEPS_HISTORY: no re-map; a scale stamp marks the boundary, and a tap
+ *  tunes by the row's own scale (SpectrumEngine::rowGeom). The re-map is kept behind the switch. */
+constexpr bool JUMP_KEEPS_HISTORY = true;
+
 /** BEFORE a row placed at (lo, span) Hz goes in: a zoom starts the ease; a same-span JUMP moves the history. */
 inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n, int rows, double frames, int visible,
                        double lo, double span) {
@@ -212,7 +217,7 @@ inline bool fanNoteRow(FanState& st, const uint8_t* ring, size_t ringLen, int n,
         st.eT = st.easeLeft = std::max(cappedEaseRows(st.dLo, st.dSpan, lo, span, tuneEaseRows(moved / st.lastSpan, st.rowRate), st.rowRate),
                                         st.easeLeft > 0 ? st.easeLeft : 0);   // ★★★ + the slope cap
     }
-    if (frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
+    if (!JUMP_KEEPS_HISTORY && frames > 0 && st.lastSpan > 0 && !spanChanged(st.lastSpan, span) && moved >= st.lastSpan) {
         const double k = span / st.lastSpan, c = (lo - st.lastLo) / st.lastSpan;
         st.stepC += st.stepK * c; st.stepK *= k;   // x0 = c1 + k1·(c2 + k2·x2)
         st.easeLeft = 0;

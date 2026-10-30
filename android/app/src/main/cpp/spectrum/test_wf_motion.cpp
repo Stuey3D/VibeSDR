@@ -97,7 +97,9 @@ int main() {
         const int jj = mfr; vc += vbw * 1.2; mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);
         const uint8_t* d = wfImageBytes(mf, ms, M.data(), N, MR); int lit = 0;
         for (int f = jj - 5; f < jj; f++) for (int x = 0; x < N; x++) if (d[(size_t)(f % MR) * N + x] != 0) lit++;
-        CHECK(lit == 0, "jump of 1.2 views: %d texels still lit in the moved history (want out of view, black)", lit);
+        // ★★★ JUMP_KEEPS_HISTORY (Stuart, 2026-10-30, #57): the old rows stay as drawn — lit, not moved out and blanked
+        if (JUMP_KEEPS_HISTORY) CHECK(lit > 0, "jump of 1.2 views: the history was blanked (%d texels lit) — it must be kept as drawn", lit);
+        else CHECK(lit == 0, "jump of 1.2 views: %d texels still lit in the moved history (want out of view, black)", lit);
         CHECK(ms.h[(jj - 1) % MR] == 0, "jump pair interpolated (%g)", ms.h[(jj - 1) % MR]);
         for (int i = 0; i < 10; i++) mpush(noisyRow(vc, vbw), vc, vbw, vc, vbw);   // (past any ease before the pinch)
     }
@@ -294,8 +296,9 @@ int main() {
             for (int f = z0 + EZ; f < z0 + 60; f++) for (int x = 0; x < N; x++) if (d[(size_t)(f % R) * N + x] != W.S[(size_t)(f % R) * N + x]) diff++;
             CHECK(diff == 0 && scan(W, z0, z0 + 60).black == 0, "the layer: zoomed rows not as drawn past the ease (%d texels) or black in the ease", diff);
         }
-        // a pan across the capture at the narrow zoom
-        {
+        // a pan across the capture at the narrow zoom (a jump: re-mapped and filled from the layer — only while jumps re-map;
+        // JUMP_KEEPS_HISTORY leaves the rows as drawn, test_wf_stamps.ts / wf_stamps.h label them instead)
+        if (!JUMP_KEEPS_HISTORY) {
             Run P(R, true); for (int i = 0; i < 4; i++) push(P);
             P.vc = 1'200'000; P.vbw = 100'000; const int p0 = P.fr; for (int i = 0; i < 40; i++) push(P);
             P.vc = 1'500'000; push(P);
@@ -304,8 +307,8 @@ int main() {
             const Scan s = scan(P, p0 + EZ, P.fr - 1);
             CHECK(s.atCol == P.fr - 1 - (p0 + EZ) && s.black == 0, "the layer: panned onto the carrier, every row past the ease shows it (%d/%d)", s.atCol, P.fr - 1 - (p0 + EZ));
         }
-        // rotation / resize: portrait (32 rows made) → landscape (all) → portrait
-        {
+        // rotation / resize: portrait (32 rows made) → landscape (all) → portrait (after a re-mapping jump — as above)
+        if (!JUMP_KEEPS_HISTORY) {
             Run Q(R, true); for (int i = 0; i < 4; i++) push(Q);
             Q.vc = 1'200'000; Q.vbw = 100'000; const int q0 = Q.fr + EZ; for (int i = 0; i < 90; i++) push(Q, 32);
             Q.vc = CAR + 20'000; push(Q, 32); const int q1 = Q.fr - 1;
