@@ -84,9 +84,22 @@ export function writeRow(ring: Uint8Array, slot: number, row: Uint8Array, n: num
  *    under this one where it is blank — BUILT (V12): wfWide.ts, the full-capture layer, filled in by fanRegen.
  *  PURE — scripts/test_wf_row_place.ts (motion section); the native twin is cpp/spectrum/wf_glide.h. */
 
-/** Extra image rows below the ring: RING_ROWS / +1 = the high / low byte of each slot's h (the move at the CENTRE column),
- *  +2 / +3 = the high / low byte of its zoom g (log2, see encodeZoom). */
+/** The motion PLANES below the ring: plane 0 / 1 = the high / low byte of each slot's h (the move at the CENTRE column),
+ *  2 / 3 = the high / low byte of its zoom g (log2, see encodeZoom).
+ *  ★★ A PLANE IS ceil(rows / n) IMAGE ROWS (2026-10-30, the growing ring — utils/wfRingGrow.ts): one column a slot, so a
+ *     ring of up to n (1024) rows keeps exactly the old layout (plane p = image row rows + p, column = slot); a 2048- or
+ *     4096-row ring wraps each plane onto 2 / 4 image rows (slot r at column r % n of the plane's row floor(r / n)). The
+ *     shader (WaterfallView WF_SKSL) reads it the same way. motionImageRows() is the image rows the planes take. */
 export const MOTION_ROWS = 4;
+/** Image rows the motion planes take below a `rows`-slot ring of width n (4 for any ring up to n rows). */
+export function motionImageRows(rows: number, n: number): number {
+  return MOTION_ROWS * Math.max(1, Math.ceil(rows / n));
+}
+/** Byte offset (from the start of the motion block) of plane p for slot r — see MOTION_ROWS. */
+export function motionAt(rows: number, n: number, p: number, r: number): number {
+  const k = Math.max(1, Math.ceil(rows / n));
+  return (p * k + Math.floor(r / n)) * n + (r % n);
+}
 /** g is stored as round(log2(g) × ZOOM_SCALE) + MOTION_ZERO in 16 bits: ±8 octaves at 1/4096 of one. */
 export const ZOOM_SCALE = 4096;
 /** h is stored as round(h × MOTION_SCALE) + MOTION_ZERO in 16 bits: ±512 columns at 1/64 of a column. */
@@ -114,19 +127,20 @@ export interface MotionState {
   /** Slot r → the row written after it: a station at display column x (from the centre m = n/2) is at
    *  m + g[r]·(x − m) + h[r] in the newer row. g = 1, h = 0: steady / none. h alone: a tune; g: a ZOOM (the fan). */
   h: Float32Array; g: Float32Array;
-  /** MOTION_ROWS × n bytes: the image's tail rows (column r = slot r). */
+  /** motionImageRows(rows, n) × n bytes: the image's tail rows (motionAt: plane p, slot r). */
   bytes: Uint8Array;
+  /** The ring's slots and width the planes are laid out for. */
+  rows: number; n: number;
   /** Absolute frames f whose pair (f → f+1) moves: [lo, hi]; lo > hi = none. The shader fetches h only inside it. */
   lo: number; hi: number;
 }
 export function newMotionState(rows: number, n: number): MotionState {
-  const bytes = new Uint8Array(MOTION_ROWS * n);
-  for (let r = 0; r < n; r++) {
-    bytes[r] = MOTION_ZERO >> 8; bytes[n + r] = MOTION_ZERO & 255;
-    bytes[2 * n + r] = MOTION_ZERO >> 8; bytes[3 * n + r] = MOTION_ZERO & 255;
-  }
+  const bytes = new Uint8Array(motionImageRows(rows, n) * n);
+  const pl = bytes.length / MOTION_ROWS;   // one plane
+  bytes.fill(MOTION_ZERO >> 8, 0, pl); bytes.fill(MOTION_ZERO & 255, pl, 2 * pl);
+  bytes.fill(MOTION_ZERO >> 8, 2 * pl, 3 * pl); bytes.fill(MOTION_ZERO & 255, 3 * pl);
   return { startHz: new Float64Array(rows).fill(NaN), hzPerCol: new Float64Array(rows), h: new Float32Array(rows),
-           g: new Float32Array(rows).fill(1), bytes, lo: 1, hi: 0 };
+           g: new Float32Array(rows).fill(1), bytes, rows, n, lo: 1, hi: 0 };
 }
 
 export function encodeMotion(h: number): number {
@@ -176,12 +190,16 @@ export function pairMotion(ms: MotionState, xfA: Float64Array, xfB: Float64Array
   return [g, Math.abs(h) < 1 / MOTION_SCALE ? 0 : h];
 }
 
-function setMotion(ms: MotionState, slot: number, g: number, h: number, n: number): void {
+export function setMotion(ms: MotionState, slot: number, g: number, h: number, n: number): void {
   ms.h[slot] = h; ms.g[slot] = g;
-  const v = encodeMotion(h);
-  ms.bytes[slot] = v >> 8; ms.bytes[n + slot] = v & 255;
-  const z = encodeZoom(g);
-  ms.bytes[2 * n + slot] = z >> 8; ms.bytes[3 * n + slot] = z & 255;
+  const v = encodeMotion(h), z = encodeZoom(g), b = ms.bytes;
+  if (ms.rows <= n) {   // ≤ 1024 rows: the original layout (plane p = row p), no division on the hot path
+    b[slot] = v >> 8; b[n + slot] = v & 255; b[2 * n + slot] = z >> 8; b[3 * n + slot] = z & 255;
+    return;
+  }
+  const R = ms.rows;
+  b[motionAt(R, n, 0, slot)] = v >> 8; b[motionAt(R, n, 1, slot)] = v & 255;
+  b[motionAt(R, n, 2, slot)] = z >> 8; b[motionAt(R, n, 3, slot)] = z & 255;
 }
 const moves = (g: number, h: number) => g !== 1 || h !== 0;
 
@@ -621,10 +639,10 @@ export function takeFanStep(st: FanState): [number, number] {
 }
 
 /** The bytes to make the waterfall image from: the displayed ring with the motion rows written into its tail (the buffer
- *  is RING_W × (RING_ROWS + MOTION_ROWS); the image is made that tall). Copies 2 × n bytes. */
+ *  is n × (rows + motionImageRows(rows, n)); the image is made that tall). Copies the motion block (4 × n bytes ≤ 1024 rows). */
 export function wfImageBytes(st: FanState, ms: MotionState, ring: Uint8Array, n: number, rows: number): Uint8Array {
   const b = st.disp ?? ring;
-  if (b.length >= (rows + MOTION_ROWS) * n) b.set(ms.bytes, rows * n);
+  if (b.length >= rows * n + ms.bytes.length) b.set(ms.bytes, rows * n);
   return b;
 }
 

@@ -91,7 +91,10 @@ import { useScreenCovered } from '../hooks/useScreenCovered';
 import { cadenceGap, uiDisplayMaxHz, uiFrameCapHz, uiPanelMaxHz } from '../services/uiCadence';
 import { watchProvider } from '../services/watchProvider';
 import { BAND_PLAN_DRAW_ORDER, BAND_HEX, type Band } from '../constants/bandPlan';
-import { displayMap, fanRefresh, fanRow, MOTION_ROWS, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { displayMap, fanRefresh, fanRow, motionImageRows, newFanState, newMotionState, placeRow, rowGeometry, takeFanStep, wfImageBytes } from '../utils/wfRowPlace';
+import { ringCapFromDeviceClass, ringNextRows, RING_MIN_ROWS } from '../utils/wfRingSize';
+import { growRing } from '../utils/wfRingGrow';
+import { readNativeDeviceClass } from '../services/deviceClass';
 import { hzOnRow, rowAtLine, newStampState, stampAlpha, stampColour, stampJump, stampLine, stampNoteRow, stampPrune, stampSettleRows, stampsShown,
          stampSweepRows, stampTicks, stampTimeLabel, STAMP_MIN_GAP_LABELS, type WfStamp } from '../utils/wfStamps';
 import { layerWriteRow, makeToIdx, medianOf, newLayerRing, newWideState, parseWide, wideArrive, type WideState } from '../utils/wfWide';
@@ -108,13 +111,16 @@ const TICK_H   = 22;   // frequency ticker height
 // Derived from BAND_HEX (bandPlan.ts) so the phone's band plan and the WATCH's band
 // label can never drift apart. Same values as before: ham #CF0000, broadcast #0900FF,
 // utility #07BD00, cb #FF7700, all at 0.92.
-// FIXED ring depth (history frames). ★ MUST stay fixed across resize/rotation — reallocating it on a
-// size change wipes the ring, and the waterfall persisting through a rotation/resize with NO redraw is
-// a hero feature (the Mac app resizes fluidly where other SDR apps blank and rebuild). The DISPLAY
-// mapping (how many rows fill the view height, 1 row per point) is the separate `uVisibleRows` uniform,
-// so orientation changes the mapping — never the ring. Depth ≥ any view's point-height so 1 row = 1
-// point holds without the mapping exceeding the ring.
-const RING_ROWS = 1024;
+// The ring's depth (history frames). ★ Reallocating it on a size change WIPES the ring, and the waterfall persisting
+// through a rotation/resize with NO redraw is a hero feature (the Mac app resizes fluidly where other SDR apps blank and
+// rebuild). The DISPLAY mapping (how many rows fill the view height, 1 row per point) is the separate `uVisibleRows`
+// uniform, so orientation changes the mapping — never the history.
+// ★★★ GROW-ONLY SINCE 2026-10-30 (utils/wfRingSize.ts; Stuart: "the history only goes when it genuinely goes off
+//     screen"): it starts at RING_ROWS (1024, as it always was) and grows, capped by the device's RAM, whenever the view
+//     is taller than it holds — every row and its per-row geometry COPIED into the new ring (utils/wfRingGrow.ts), so the
+//     rule above still holds: nothing is lost, nothing is redrawn from scratch, nothing ever shrinks. The live depth is
+//     ringRows (a ref) and, for the shader, uRowsSv (set with the image it belongs to).
+const RING_ROWS = RING_MIN_ROWS;
 /** Fixed waterfall texture WIDTH. Incoming rows are resampled into it, so a
  *  server changing its bin count (UberSDR does this on every zoom) can never
  *  reallocate the ring, reset the frame counter or destroy history. 1024 matches
@@ -304,7 +310,7 @@ uniform float uHeadF;    // ABSOLUTE frame counter (next write index)
 uniform float uFrac;     // 0..1 progress through the current frame interval
 uniform float uN;        // lines per data frame (1/2/3 = native/20fps/30fps)
 uniform float uQuant;    // 1 = crisp whole-line steps (settled), 0 = continuous (boost)
-uniform float uRows;         // ring rows (FIXED history depth — never changes on resize)
+uniform float uRows;         // ring rows (the history depth — grows, never shrinks, with the image: utils/wfRingSize.ts)
 uniform float uVisibleRows;  // rows mapped across the view height (each a whole number of device px — devRowPx)
 uniform float uTexW;     // bins
 uniform float uDrawW;    // draw width (screen px)
@@ -359,7 +365,7 @@ half4 main(float2 xy) {
   float tx = (uZA * (xy.x / uDrawW) + uZB) * uTexW;   // the ease is (1, 0) at rest: exactly the old column
   // ★★ MOTION-COMPENSATED INTERPOLATION (2026-10-28 — Stuart: "the chunky broken diagonal lines joined up so they looked
   //    solid", the first build's MW sweep). Each ring slot carries h: how many columns its trail moves to the next newer
-  //    row (wfRowPlace.ts MOTION; 16 bits in the two image rows below the ring — RING_ROWS <= RING_W, one column a slot).
+  //    row (wfRowPlace.ts MOTION; 16 bits in two image planes below the ring, one column a slot — see the read below).
   //    A line between frames f and f+1 at progress t samples f at x - t*h and f+1 at x + (1-t)*h: the WHOLE row (the
   //    noise with the stations) slides between data rows instead of cross-fading two places. Settled, the ONE frame a
   //    row shows is warped the same way toward the row above it (a real measurement, displaced, never a blend), so each
@@ -369,12 +375,17 @@ half4 main(float2 xy) {
   float h = 0.0;
   float g = 1.0;   // ★ the ZOOM to the next row (utils/wfRowPlace.ts pairMotion): x_b = m + g·(x_a − m) + h, m = the centre
   if (fI >= uMoLo && fI <= uMoHi && (uQuant < 0.5 || t == 0.0)) {
-    float mc = mod(fI, uRows) + 0.5;
-    float hb = wf.eval(float2(mc, uRows + 0.5)).r;
-    float lb = wf.eval(float2(mc, uRows + 1.5)).r;
+    // ★★ The planes (utils/wfRowPlace.ts MOTION_ROWS / motionAt): each is ceil(uRows/uTexW) image rows, slot s at column
+    //    s mod uTexW of the plane's row floor(s / uTexW) — for a ring of up to 1024 rows exactly the old layout.
+    float ms = mod(fI, uRows);
+    float mk = ceil(uRows / uTexW);
+    float mc = mod(ms, uTexW) + 0.5;
+    float my = uRows + floor(ms / uTexW) + 0.5;
+    float hb = wf.eval(float2(mc, my)).r;
+    float lb = wf.eval(float2(mc, my + mk)).r;
     h = (floor(hb * 255.0 + 0.5) * 256.0 + floor(lb * 255.0 + 0.5) - 32768.0) / 64.0;
-    float gh = wf.eval(float2(mc, uRows + 2.5)).r;
-    float gl = wf.eval(float2(mc, uRows + 3.5)).r;
+    float gh = wf.eval(float2(mc, my + 2.0 * mk)).r;
+    float gl = wf.eval(float2(mc, my + 3.0 * mk)).r;
     g = exp2((floor(gh * 255.0 + 0.5) * 256.0 + floor(gl * 255.0 + 0.5) - 32768.0) / 4096.0);
   }
   float mid = uTexW * 0.5;
@@ -439,6 +450,11 @@ half4 main(float2 xy) {
       }
     }
   }
+  // ★★ OLDER THAN THE RING = THE FLOOR (2026-10-30, the growing ring — utils/wfRingSize.ts). A row the ring no longer
+  //    holds is never drawn (it would wrap to a NEWER row). At rest the view is always inside the ring (devRowPx, the
+  //    margin) and this never fires; it covers the frame or two after a resize while the grown ring's image is on its
+  //    way — the bottom rows show what the grown ring will show there anyway: no history, so no jump and no blank.
+  if (fI + uRows < uHeadF + 8.0) { c = 0.0; }
   float raw = clamp(c, 0.0, 1.0);
   float s   = raw * raw * (3.0 - 2.0 * raw);
   float v   = uContrast > 0.0
@@ -463,7 +479,9 @@ interface SpectrumEngineHost {
   setConfig(c: { width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
                  smoothTune: boolean; targetRows: number; displayCapHz?: number; panelHz?: number;
                  /** ★★ the scale stamps (cpp/spectrum/wf_stamps.h): rows on screen, fewest rows between two */
-                 stampViewRows?: number; stampMinGapRows?: number }): void;
+                 stampViewRows?: number; stampMinGapRows?: number;
+                 /** ★★ the ring depth to grow to (utils/wfRingSize.ts; grow-only — an older binary ignores it and stays 1024) */
+                 ringRows?: number }): void;
   setSettings(s: Record<string, number | boolean>): void;
   setBackground(bg: boolean): void;
   setCovered(c: boolean): void;
@@ -478,6 +496,8 @@ interface SpectrumEngineHost {
     scrollGen: number; glide: boolean; glideDur: number;
     /** The motion range of this image (absolute frames) and the fans' screen move since the last image (x_old = c + k·x). */
     moLo?: number; moHi?: number; fanK?: number; fanC?: number;
+    /** ★★ the ring depth of THIS image (the shader's uRows) — absent from an older binary: 1024. */
+    ringRows?: number;
     specGen: number; specHidden: boolean; spec?: number[];
     peakGen: number; peak?: SkPath;
     /** ★★ the scale stamps (wf_stamps.h): stampGen changes when they do; `stamps` comes with the change (absent from an
@@ -643,8 +663,15 @@ function WaterfallView({
    *  px (1 on the Tab, 2 on the XCover and Moto) — every row the same height for its whole trip down the screen.
    *  ★ The trade, as rows are no longer exactly a point: the Tab scrolls ~25 % slower in points and shows ~⅓ more
    *    history; the XCover ~14 % faster; the Moto ~6 % slower. More rows than the ring holds would wrap, so a row
-   *    grows a pixel before it ever maps past RING_ROWS. */
-  const devRowPx  = Math.max(1, Math.round(PixelRatio.get()), Math.ceil(wfRenderH * PixelRatio.get() / (RING_ROWS - 16)));
+   *    grows a pixel before it ever maps past the ring's depth.
+   *  ★★★ THE RING GROWS FIRST (2026-10-30, utils/wfRingSize.ts): a view taller than the ring asks for a deeper one (up to
+   *    the device's RAM tier — 1024 under 2 GB or unknown, 2048 under 4 GB, 4096 above), and only past THAT does a row
+   *    grow a pixel. ringTarget is what the ring is or is about to be (the growth runs in the effect below, between rows). */
+  const natRowPx  = Math.max(1, Math.round(PixelRatio.get()));
+  const ringRows  = useRef(RING_ROWS);   // the ring's live depth (pushRow, publishRing, the fan) — grows only
+  const ringCap   = useMemo(() => ringCapFromDeviceClass(readNativeDeviceClass()), []);
+  const ringTarget = ringNextRows(ringRows.current, wfRenderH * PixelRatio.get() / natRowPx, ringCap);
+  const devRowPx  = Math.max(natRowPx, Math.ceil(wfRenderH * PixelRatio.get() / (ringTarget - 16)));
   const shaderRows = wfRenderH * PixelRatio.get() / devRowPx;   // uVisibleRows: rows across uDrawH, each devRowPx tall
   // ★★ The shader's pixel footprint, computed HERE on the JS thread: wfUniforms is a UI-thread worklet and PixelRatio.get()
   //   is not callable there — calling it inside threw on the first frame and crashed V12 beta27 on connect.
@@ -731,20 +758,20 @@ function WaterfallView({
   const rowBuf = useRef(new Uint8Array(RING_W));
   /** Each ring slot's placement + the move to the next row (utils/wfRowPlace.ts MOTION) — allocated once, ~22 KB. */
   const motionSt = useRef<ReturnType<typeof newMotionState> | null>(null);
-  if (!motionSt.current) motionSt.current = newMotionState(RING_ROWS, RING_W);   // ★ lazily: not per render
+  if (!motionSt.current) motionSt.current = newMotionState(ringRows.current, RING_W);   // ★ lazily: not per render
   /** THE ZOOM FAN (utils/wfRowPlace.ts): per-slot maps + the displayed ring, made only once a zoom happens. */
   const fanSt = useRef<ReturnType<typeof newFanState> | null>(null);
-  if (!fanSt.current) fanSt.current = newFanState(RING_ROWS);
+  if (!fanSt.current) fanSt.current = newFanState(ringRows.current);
   // ★★ SCALE STAMPS (utils/wfStamps.ts): the detector (JS path) and the layer's setter; stampCfg = what pushRow needs.
   const stampSt = useRef(newStampState());
   const stampSink: StampSink = useRef(null);
-  const stampCfg = useRef({ minGapRows: 45, sweepRows: 0, keepRows: RING_ROWS });
+  const stampCfg = useRef({ minGapRows: 45, sweepRows: 0, keepRows: ringRows.current });
   /** Ring rows that can be on screen (the shader's visible depth, + its blend row and margin): a zoom re-makes only these. */
-  const fanVisible = useRef(RING_ROWS);
-  fanVisible.current = Math.min(RING_ROWS, Math.ceil(shaderRows) + 4);
+  const fanVisible = useRef(ringRows.current);
+  fanVisible.current = Math.min(ringTarget, Math.ceil(shaderRows) + 4);
   const stampRowPt = shaderRows > 0 ? wfRenderH / shaderRows : 1;   // one ring row's height on screen, pt
   stampCfg.current.minGapRows = Math.ceil(STAMP_MIN_GAP_LABELS * STAMP_BAND / stampRowPt);
-  stampCfg.current.keepRows = Math.min(RING_ROWS - 8, Math.ceil(shaderRows) + 8);
+  stampCfg.current.keepRows = Math.min(ringTarget - 8, Math.ceil(shaderRows) + 8);
   stampCfg.current.sweepRows = stampSweepRows(fanSt.current!.rowRate, shaderRows);
   const proc = useRef(new SignalProcessor());
   /** ★★ V12 THE FULL-CAPTURE LAYER (utils/wfWide.ts; docs/v12/WATERFALL-FULL-CAPTURE.md): the newest picture of the whole
@@ -907,8 +934,10 @@ function WaterfallView({
   // props); empty path = draw nothing (Path doesn't take null).
   const wfImage  = useSharedValue<SkImage | null>(null);
   /** publishRing → the UI thread, in ONE value: the image, its newest row, its motion range, the fans' screen move. */
-  const jsPending = useSharedValue<{ gen: number; img: SkImage | null; avail: number; moLo: number; moHi: number; k: number; c: number }>(
-    { gen: 0, img: null, avail: 0, moLo: 1, moHi: 0, k: 1, c: 0 });
+  const jsPending = useSharedValue<{ gen: number; img: SkImage | null; avail: number; moLo: number; moHi: number; k: number; c: number; rows: number }>(
+    { gen: 0, img: null, avail: 0, moLo: 1, moHi: 0, k: 1, c: 0, rows: RING_ROWS });
+  /** ★ The ring depth of the image ON SCREEN (the shader's uRows) — set with the image, never ahead of it. */
+  const uRowsSv = useSharedValue(RING_ROWS);
   const jsPendGen = useRef(0);
   const uMoLoSv = useSharedValue(1);     // the motion range (utils/wfRowPlace.ts MOTION) — lo > hi = none
   const uMoHiSv = useSharedValue(0);
@@ -1002,7 +1031,7 @@ function WaterfallView({
     uFrac:     scrollFrac.value,
     uN:        uNSv.value,
     uQuant:    uQuantDrawSv.value,   // what the display driver is DRAWING (it finishes a row before it settles)
-    uRows:        RING_ROWS,   // fixed ring depth (never changes on resize → no waterfall redraw)
+    uRows:        uRowsSv.value,   // the ring's depth — grows (never shrinks) with the image it came with
     uVisibleRows: shaderRows,  // whole device px per row (see devRowPx) — same scroll both orientations
     uTexW:     uTexW.value,
     uDrawW:    width,
@@ -1241,8 +1270,9 @@ function WaterfallView({
     }
     // Allocated ONCE. No bin count can reallocate it, so history always survives.
     if (!idxBuf.current) {
-      // ★ + MOTION_ROWS: the motion rows (move + zoom) the image carries below the ring (utils/wfRowPlace.ts wfImageBytes).
-      idxBuf.current = new Uint8Array(RING_W * (RING_ROWS + MOTION_ROWS));
+      // ★ + the motion rows (move + zoom) the image carries below the ring (utils/wfRowPlace.ts wfImageBytes, motionImageRows).
+      const R = ringRows.current;
+      idxBuf.current = new Uint8Array(RING_W * (R + motionImageRows(R, RING_W)));
       uTexW.value = RING_W;
     }
     // The resample changes how much spectrum each stored bin covers, so the
@@ -1285,7 +1315,8 @@ function WaterfallView({
     //    (wfImageBytes), so a zoom undone gives the edges back exactly. A tune does not touch it (the bend above).
     const v = viewRef.current;
     const placed = placedRef.current;
-    const slot = placeRow(idxBuf.current, RING_ROWS, n, frameCount.current, row, rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz,
+    const R = ringRows.current;
+    const slot = placeRow(idxBuf.current, R, n, frameCount.current, row, rowCenterHz, rowHzPerBin, v.centerHz, v.bwHz,
                           motionSt.current!, fanSt.current!, fanVisible.current, placed);
     // ★★ V12 THE FULL-CAPTURE LAYER: this row's layer row at the same slot, in capture space (utils/wfWide.ts) — the
     //    blended newest picture of the whole capture through the detailed rows' own dB → index mapping. Only once a
@@ -1308,7 +1339,7 @@ function WaterfallView({
       const r = proc.current.getRange(), ws = wideSt.current;
       layerWriteRow(layer, slot, ws, placed.startHz, placed.spanHz, Date.now(),
                     makeToIdx(r.dbMin, r.dbMax, proc.current.getSettings().wfBrightness || 0, ws ? ws.off : 0));
-      fanRow(fanSt.current!, idxBuf.current, n, slot, RING_ROWS);   // ★ a zoom's eased row: drawn again now its layer row exists
+      fanRow(fanSt.current!, idxBuf.current, n, slot, R);   // ★ a zoom's eased row: drawn again now its layer row exists
     }
     frameCount.current += 1;
     // ★★ COVERED (an opaque full-screen overlay — the map, recordings, About): the ROW is kept, the
@@ -1333,13 +1364,15 @@ function WaterfallView({
     if (!idxBuf.current) return;
     ringDirty.current = false;
     const n = RING_W;
-    // ★★ The image is RING_ROWS + MOTION_ROWS tall: the motion rows ride with the rows they describe, so the shader can
-    //   never see one image's rows with another's motion (utils/wfRowPlace.ts wfImageBytes).
+    // ★★ The image is the ring + its motion rows tall: the motion rows ride with the rows they describe, so the shader can
+    //   never see one image's rows with another's motion (utils/wfRowPlace.ts wfImageBytes). ★ Its depth rides with it
+    //   too (jsPending.rows → uRowsSv): a grown ring's image and its uRows reach the shader in the same frame.
     // ★ V11: the stock Skia image path (the no-pressure __vibeMakeGray8Image skia patch is V12-only).
-    const bytes = wfImageBytes(fanSt.current!, motionSt.current!, idxBuf.current, n, RING_ROWS);
+    const R = ringRows.current, H = R + motionImageRows(R, n);
+    const bytes = wfImageBytes(fanSt.current!, motionSt.current!, idxBuf.current, n, R);
     const data = Skia.Data.fromBytes(bytes);
     const img = Skia.Image.MakeImage(
-      { width: n, height: RING_ROWS + MOTION_ROWS, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
+      { width: n, height: H, colorType: ColorType.Gray_8, alphaType: AlphaType.Opaque },
       data,
       n,
     );
@@ -1351,16 +1384,32 @@ function WaterfallView({
     const [k, c] = takeFanStep(fanSt.current!);
     const ms = motionSt.current!;
     jsPendGen.current += 1;
-    jsPending.value = { gen: jsPendGen.current, img, avail: frameCount.current, moLo: ms.lo, moHi: ms.hi, k, c };
+    jsPending.value = { gen: jsPendGen.current, img, avail: frameCount.current, moLo: ms.lo, moHi: ms.hi, k, c, rows: R };
     if (!texReadyRef.current) { texReadyRef.current = true; setTexReady(true); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapWfImage]);
+
+  // ★★★ THE RING GROWS (utils/wfRingSize.ts, utils/wfRingGrow.ts — Stuart, 2026-10-30: "the history only goes when it
+  //     genuinely goes off screen"). The view became taller than the ring holds: every row it has, and everything kept
+  //     per row (motion, the fan's maps and displayed ring, the full-capture layer), is copied into a deeper ring HERE, on
+  //     the JS thread between two pushRow calls, and the new image goes out with its depth (jsPending.rows) — so the shader
+  //     switches ring and uRows in one frame. Until then it draws the old image; rows older than it are the floor (the
+  //     shader's guard) — exactly what the grown ring holds there. Never shrinks. The engine grows its own (setConfig).
+  useEffect(() => {
+    const R0 = ringRows.current;
+    if (!(ringTarget > R0)) return;
+    ringRows.current = ringTarget;
+    if (engine) return;   // the native engine keeps its own ring — it is told the depth in its config
+    idxBuf.current = growRing(idxBuf.current, motionSt.current!, fanSt.current!, RING_W, R0, ringTarget, frameCount.current);
+    if (!idxBuf.current) return;
+    if (coveredRef.current) ringDirty.current = true; else publishRing();
+  }, [ringTarget, engine, publishRing]);
 
   // ★ THE ZOOM FAN makes only the rows that can be on screen; a resize that shows more (rotate to a taller view, a Mac
   //   window dragged taller) makes the newly visible ones from the stored ring before they are seen — the history the
   //   hard rule says a resize must keep, at the zoom it is now shown at.
   useEffect(() => {
-    if (!idxBuf.current || !fanRefresh(fanSt.current!, idxBuf.current, RING_W, RING_ROWS, frameCount.current, fanVisible.current)) return;
+    if (!idxBuf.current || !fanRefresh(fanSt.current!, idxBuf.current, RING_W, ringRows.current, frameCount.current, fanVisible.current)) return;
     if (coveredRef.current) ringDirty.current = true; else publishRing();
   }, [shaderRows, publishRing]);
 
@@ -1725,6 +1774,7 @@ function WaterfallView({
       jsSeen.value = pend.gen;
       wfImage.value = pend.img;
       jsAvail.value = pend.avail;
+      if (uRowsSv.value !== pend.rows) uRowsSv.value = pend.rows;
       uMoLoSv.value = pend.moLo; uMoHiSv.value = pend.moHi;
       easeStep(pend.k, pend.c, fi.timestamp);
     }
@@ -1778,6 +1828,8 @@ function WaterfallView({
         wfImage.value = p.image;
         engImg.value = p.image;
         engAvail.value = p.head;
+        const rr = p.ringRows ?? RING_ROWS;   // ★ the depth of THIS image — with it, never ahead of it
+        if (uRowsSv.value !== rr) uRowsSv.value = rr;
         // ★ The engine composes the motion range and the fans' screen move for exactly the image it hands over.
         if (p.moLo != null && p.moHi != null) { uMoLoSv.value = p.moLo; uMoHiSv.value = p.moHi; }
         easeStep(p.fanK ?? 1, p.fanC ?? 0, fi.timestamp);
@@ -2471,7 +2523,7 @@ function WaterfallView({
           wideArrive(st, row, Date.now(), placedRef.current.startHz, placedRef.current.spanHz, detP50.current);
           const fan = fanSt.current!, L = fan.layer;
           // ★ allocated at the FIRST row only (~0.8 MB), and again only if the server's grid ever changed
-          if (!L || L.F !== row.floor.length || L.C !== row.cells) fan.layer = newLayerRing(RING_ROWS, row.floor.length, row.cells);
+          if (!L || L.F !== row.floor.length || L.C !== row.cells) fan.layer = newLayerRing(ringRows.current, row.floor.length, row.cells);
         };
     setWideSink(sink);
     return () => setWideSink(null, sink);
@@ -2511,13 +2563,14 @@ function WaterfallView({
 
   const engineCfg = useRef<{ width: number; wfTop: number; specH: number; specShow: boolean; peakHold: boolean;
                              smoothTune: boolean; targetRows: number; displayCapHz: number; panelHz?: number;
-                             stampViewRows?: number; stampMinGapRows?: number } | null>(null);
+                             stampViewRows?: number; stampMinGapRows?: number; ringRows?: number } | null>(null);
   // ── Native engine: the state JS owns, forwarded when it changes ──────────────────────────────────────────
   useEffect(() => {
     engineCfg.current = { width, wfTop, specH, specShow, peakHold, smoothTune, targetRows: WF_TARGET_ROWS, displayCapHz: uiFrameCapHz.value, panelHz: uiPanelMaxHz.value,
-                          stampViewRows: Math.ceil(shaderRows), stampMinGapRows: stampCfg.current.minGapRows };
+                          stampViewRows: Math.ceil(shaderRows), stampMinGapRows: stampCfg.current.minGapRows,
+                          ringRows: ringTarget };   // ★ the ring depth (grow-only; the engine copies its history across)
     engine?.setConfig(engineCfg.current);
-  }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS, shaderRows]);
+  }, [engine, width, wfTop, specH, specShow, peakHold, smoothTune, WF_TARGET_ROWS, shaderRows, ringTarget]);
   useEffect(() => { engine?.setCovered(covered); }, [engine, covered]);
   useEffect(() => {
     if (!engine) return;
@@ -2809,8 +2862,8 @@ function WaterfallView({
         if (e.y >= wfTop && stampRowPt > 0) {
           const f = rowAtLine(uHead.value, (e.y - wfTop) / stampRowPt, scrollFrac.value, uNSv.value, uQuantDrawSv.value > 0.5);
           if (engine) geo = engine.rowGeom?.(f) ?? null;
-          else if (f >= 0 && f < frameCount.current && f >= frameCount.current - RING_ROWS) {
-            const m = displayMap(motionSt.current!, fanSt.current!.xfA, fanSt.current!.xfB, f % RING_ROWS, RING_W);
+          else if (f >= 0 && f < frameCount.current && f >= frameCount.current - ringRows.current) {
+            const m = displayMap(motionSt.current!, fanSt.current!.xfA, fanSt.current!.xfB, f % ringRows.current, RING_W);
             geo = m ? [m[0], m[1] * RING_W] : null;
           }
         }
