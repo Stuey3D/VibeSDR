@@ -1935,7 +1935,9 @@ function MenuSheetBody({
                   {(wfCapsOk
                     ? '5 fps is the minimum waterfall rate. Minimum and Eco save data by asking the server for less — no effect when it already sends that little. Eco — 10 rows a second: asks a faster server for less, fills in a slower one. '
                     : '')
-                  + 'Native is the server\'s own rate, every row a real frame. Default and Smooth add interpolated rows for a smoother scroll.'}
+                  // ★ 2026-10-29 (Stuart, a 23 fps Kiwi: "ECO 13" beside "10 rows a second"): every choice but Native now
+                  //   runs at a rate that divides the screen's refresh — the numbers on the keys are what runs.
+                  + 'Every speed but Native runs at a rate that divides the screen\'s refresh (5, 10, 15, 20, 30 or 60 rows a second), filling in rows or dropping them evenly. Native is the server\'s own rate, every row a real frame. Default and Smooth add interpolated rows for a smoother scroll.'}
                 </Text>
                   </>);
                 })()}

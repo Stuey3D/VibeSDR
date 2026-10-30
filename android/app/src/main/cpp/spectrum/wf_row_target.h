@@ -3,7 +3,8 @@
 // scripts/test_wf_row_target.ts. Change one, change both.
 //
 // ★★★ Stuart 10-20: Sharp = actual rows (x1); Default = min(20, 3 x feed fps); Smooth = min(60, 6 x feed fps); each
-//     snapped DOWN to {10, 12, 15, 20, 30, 60} (rates that divide 60) and never below the feed (then actual rows).
+//     snapped DOWN to {10, 12, 15, 20, 30, 60} (rates that divide 60). ★ 2026-10-29: a faster feed is thinned (Eco,
+//     Minimum) or Default/Smooth go up to the next rate — every choice but Native divides 60 (nominalRowRate).
 //     5 fps → 5/15/30 · 10 → 10/20/60 · 20 → 20/20/60 · UberSDR 3.3 → 3.3/10/20 · OWRX ~9 → 9/20/30. Never above x6.
 // ★★ Hysteresis on the FEED (a latch): a 9 <-> 10 fps wobble cannot flap Smooth 30/60; a governor step changes it once.
 #pragma once
@@ -27,10 +28,35 @@ inline double snappedRowTarget(int cap, double fps) {
     return best;
 }
 
-/** The rule on a settled feed rate: rows/s, or 0 = actual rows (a target within 5 % of the feed is the feed). */
+/** ★★★ The rate a choice RUNS at (wfRowTarget.ts nominalRowRate, 2026-10-29 — Stuart on a 23 fps Kiwi: "interpolate and
+ *  discard"): always a divisor of 60. Eco/Minimum thin a faster feed to 10/5; Default/Smooth never thin below the feed —
+ *  they go UP to the next rate (23 → 30); above 60, 60. 0 for Native or no feed. */
+inline double nominalRowRate(int cap, double fps) {
+    if (cap <= 0 || !(fps > 0)) return 0;
+    double t = snappedRowTarget(cap, fps);
+    if ((cap == 20 || cap >= 60) && t > 0 && t < fps / 1.025) {   // (0 = too slow to fill: actual rows)
+        static const double kRates[] = {10, 12, 15, 20, 30, 60};
+        t = 60;
+        for (int i = 5; i >= 0; i--) if (kRates[i] >= fps / 1.025) t = kRates[i];
+    }
+    return t;
+}
+
+/** The rule on a settled feed rate: rows/s, or 0 = actual rows (a rate within 2.5 % of the feed is the feed). Below the
+ *  feed the rows are THINNED (the engine discards evenly). */
 inline double rowTargetFor(int cap, double fps) {
-    const double s = snappedRowTarget(cap, fps);
-    return s > fps * 1.05 ? s : 0;
+    const double s = nominalRowRate(cap, fps);
+    return s > 0 && std::abs(s - fps) > fps * 0.025 ? s : 0;   // ROW_ACTUAL_TOL 2.5 %
+}
+
+/** Rows one arrival becomes at `target` rows/s over `durMs`, with a fractional carry: 0 = discarded, 1 = the frame,
+ *  more = the frame and repeats; at most 9. target 0 = 1 (wfRowTarget.ts rowsForArrival). */
+inline int rowsForArrival(double& carry, double durMs, double target) {
+    if (!(target > 0) || !(durMs > 0)) return 1;
+    carry += durMs * target / 1000.0;
+    const int n = (int)std::floor(carry);
+    carry -= n;
+    return std::min(n, 9);
 }
 
 /** One waterfall's latch: the target is the rule on a LATCHED feed rate, which moves at once past ±15 % or after 20
@@ -58,7 +84,7 @@ inline double rowTargetUnderCap(double target, double feedFps, int capHz) {
     static const int rates[] = {10, 12, 15, 20, 30, 60};
     int best = 0;
     for (int r : rates) if (r <= target && r <= capHz && capHz % r == 0) best = r;
-    return best > feedFps * 1.05 ? best : 0;
+    return best > 0 && std::abs(best - feedFps) > feedFps * 0.025 ? best : 0;   // ★ thinned below the feed too (2026-10-29)
 }
 
 }  // namespace vibewf

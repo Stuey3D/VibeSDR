@@ -330,23 +330,18 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     //   one row on with the old glide still at 1 — the whole waterfall a row forward for one frame, then back —
     //   at every real frame: the judder on an 8 fps feed (XCover 4s, 2026-10-12). The JS path does both in one
     //   synchronous call, so it never could.
-    pushRow(fr.row, n, rowCentre, rowHzBin, false);
+    const double revealMs = avgWfGapMs_ > 0 ? avgWfGapMs_ : avgFrameMs_;
+    const double dur = std::max(15.0, std::min(1000.0, revealMs));   // ★ 15, not 50 (2026-10-29): a > 20 fps feed over-ran the target
+    // ★★★ FILLED IN OR THINNED (2026-10-29, WaterfallView's twin): 0 = this frame is DISCARDED from the waterfall (a feed
+    //     faster than the rate, thinned evenly); the trace below still gets it. At most 9 (the stall guard).
+    const int rowsNow = vibewf::rowsForArrival(rowCarry_, dur, rowTarget);
+    if (rowsNow > 0) pushRow(fr.row, n, rowCentre, rowHzBin, false);
     lastRow_.assign(fr.row, fr.row + n);
     lastRowCenterHz_ = rowCentre; lastRowHzPerBin_ = rowHzBin;
 
     if (covNow_) return;
-    const double revealMs = avgWfGapMs_ > 0 ? avgWfGapMs_ : avgFrameMs_;
-    const double dur = std::max(50.0, std::min(1000.0, revealMs));
-    const double rowMs = rowTarget > 0 ? 1000.0 / rowTarget : 0;
-    int extras = 0;
-    if (rowMs > 0) {
-        rowCarry_ += dur / rowMs;
-        extras = std::max(0, (int)std::floor(rowCarry_) - 1);
-        rowCarry_ -= std::floor(rowCarry_);
-        // ★ The rule never asks for more than 6 rows a frame (Stuart 10-20, wf_row_target.h), so 8 is headroom
-        //   again — kept as the stall guard it always was.
-        if (extras > 8) extras = 8;
-    }
+    if (rowsNow == 0) { buildSpectrum(fr, boost); return; }   // nothing new in the ring: no image, no scroll step
+    const int extras = rowsNow - 1;
     // scheduleExtraRows: always clear the pending chain first
     extrasLeft_ = extras;
     extraSpacing_ = dur / (extras + 1);

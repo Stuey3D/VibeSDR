@@ -25,7 +25,7 @@
  * ONE rule for the app (linkManager.ts / vibeLinkManager.ts, KiwiAdapter, MenuSheet) and the web client
  * (web/client/src/main.ts). Pure, so scripts/test_wf_speed_cap.ts proves it.
  */
-import { rowTargetFor, type WfScroll } from './wfRowTarget.ts';
+import { nominalRowRate, type WfScroll } from './wfRowTarget.ts';
 
 /** The waterfall speed the user picks — every one is also a row mode (wfRowTarget); 'sharp' is labelled NATIVE, and
  *  'minimum' / 'eco' are link caps as well. */
@@ -74,22 +74,24 @@ export const uberDivisorFor = (fullFps: number, fps: number): number =>
 
 /**
  * The LIVE NUMBER on each button: rows per second that choice gives on a server whose own rate is `nativeFps`.
- * MINIMUM = min(cap, native), filled in to 5 below 5; ECO = the row rule on its capped feed (10 whenever a feed is known) — `caps` lets a backend
- * whose lever is coarser say what it really gets (Kiwi's ECO step is ~13 fps); NATIVE = native; DEFAULT / SMOOTH = the
- * row-target rule (wfRowTarget.ts), or native when that is actual rows. Unknown native (0) → null: no number.
- *   20 fps server → 5 · 10 · 20 · 20 · 60       5 fps server → 5 · 10 · 5 · 15 · 30
+ * Every one but NATIVE is a rate that divides 60 (wfRowTarget.ts nominalRowRate): MINIMUM 5 and ECO 10 (the capped feed
+ * filled in or thinned — `caps` says what a coarser lever really sends, Kiwi's ECO step ~13 fps, thinned to 10); NATIVE =
+ * native, as it comes; DEFAULT / SMOOTH = the row rule, up to the next rate above a faster feed. Unknown native → null.
+ *   20 fps server → 5 · 10 · 20 · 20 · 60     5 fps → 5 · 10 · 5 · 15 · 30     23 fps Kiwi → 5 · 10 · 23 · 30 · 60
  */
 export function speedNumbers(nativeFps: number, caps: { minimum: number; eco: number } = LINK_CAP):
     Record<WfSpeedSetting, number> | null {
   if (!(nativeFps > 0)) return null;
   const r = (x: number) => Math.round(x * 10) / 10;
-  const rows = (s: WfScroll) => { const t = rowTargetFor(s, nativeFps); return r(t > 0 ? t : nativeFps); };
+  // ★ 2026-10-29: the RATE each runs at (nominalRowRate — always a divisor of 60), not the feed it is made from: a 23 fps
+  //   Kiwi showed "ECO 13 · DEFAULT 23" — its ECO lever gives ~13 fps, thinned to 10; Default fills 23 up to 30.
+  const rows = (s: WfScroll, f: number) => { const t = nominalRowRate(s, f); return r(t > 0 ? t : f); };
   return {
-    minimum: (() => { const f = Math.min(caps.minimum, nativeFps), t = rowTargetFor('minimum', f); return r(t > 0 ? t : f); })(),
-    eco:     (() => { const f = Math.min(caps.eco, nativeFps), t = rowTargetFor('eco', f); return r(t > 0 ? t : f); })(),
+    minimum: rows('minimum', Math.min(caps.minimum, nativeFps)),
+    eco:     rows('eco', Math.min(caps.eco, nativeFps)),
     sharp:   r(nativeFps),
-    default: rows('default'),
-    smooth:  rows('smooth'),
+    default: rows('default', nativeFps),
+    smooth:  rows('smooth', nativeFps),
   };
 }
 

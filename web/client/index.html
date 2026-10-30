@@ -4928,8 +4928,9 @@ select.btn { padding: 6px 8px; }
   </div>
   <div class="rowNote" id="wfScrollNote">5 fps is the minimum waterfall rate. Minimum and Eco save data by asking the server
     for less — no effect when it already sends that little. Eco — 10 rows a second: asks a faster server for less, fills
-    in a slower one. Native is the server's own rate, every row a real frame. Default and Smooth add interpolated rows for
-    a smoother scroll.</div>
+    in a slower one. Every speed but Native runs at a rate that divides the screen's refresh (5, 10, 15, 20, 30 or 60 rows
+    a second), filling in rows or dropping them evenly. Native is the server's own rate, every row a real frame. Default
+    and Smooth add interpolated rows for a smoother scroll.</div>
   <div class="mrow" id="rowWfSpeed">
     <label>WATERFALL SPEED</label>
     <div class="seg" id="wfSpeedSeg">
