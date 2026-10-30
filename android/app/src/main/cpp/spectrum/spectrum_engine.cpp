@@ -414,8 +414,19 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
         const long id = ++clockSeq_;
         ClockRow* slot = nullptr;
         for (auto& r : clockRows_) if (r.id < 0) { slot = &r; break; }
+        if (!slot && (int)clockRows_.size() >= vibewf::COMBINE_MAX_FRAMES + 2) {
+            // ★ The store is full of frames not yet shown (a feed far faster than the row rate): the oldest that is not
+            //   held or queued goes — it is dropped, as every surplus frame was before 2026-10-30.
+            for (auto& r : clockRows_) {
+                if (r.id == rowClock_.cur) continue;
+                bool queued = false;
+                for (auto& q : rowClock_.q) if (q.id == r.id) { queued = true; break; }
+                if (!queued && (!slot || r.id < slot->id)) slot = &r;
+            }
+        }
         if (!slot) { clockRows_.emplace_back(); slot = &clockRows_.back(); }
         slot->id = id; slot->row.assign(fr.row, fr.row + n); slot->c = rowCentre; slot->h = rowHzBin;
+        slot->k = vibewf::dbPerUnit(fr.dbMin, fr.dbMax);
         vibewf::clockSetRate(rowClock_, rowTarget, now);
         // ★★★ THE WATERFALL WAITS FOR THE SOUND (wf_av_sync.h — WaterfallView's twin, Stuart 2026-10-30): the frame enters
         //     the clock `hold` ms after it arrived (the audio's playout delay less this route's own), so row and trace come
@@ -593,16 +604,22 @@ void SpectrumEngine::runClock(double now) {
     clockOut_.clear();
     vibewf::clockRun(rowClock_, now, clockOut_);
     bool any = false;
+    auto find = [&](long id) -> ClockRow* { for (auto& r : clockRows_) if (r.id == id) return &r; return nullptr; };
     for (long id : clockOut_) {
-        for (auto& r : clockRows_) if (r.id == id) { pushRow(r.row.data(), (int)r.row.size(), r.c, r.h, false); any = true; break; }
+        ClockRow* t = find(id);
+        // ★★ A frame shown for the first time takes in the frames the clock passed over since the last one shown —
+        //    combined in linear power with the peaks kept (wf_row_combine.h; WaterfallView combineInto), not dropped.
+        if (t && id > clockShown_ + 1) {
+            vibewf::combineReset(clockComb_);
+            for (long j = std::max(clockShown_ + 1, id - vibewf::COMBINE_MAX_FRAMES + 1); j <= id; j++)
+                if (ClockRow* f = find(j)) vibewf::combineAdd(clockComb_, f->row.data(), f->row.size(), f->c, f->h, f->k);
+            vibewf::combineTake(clockComb_, t->row.data(), t->row.size());
+        }
+        if (id > clockShown_) clockShown_ = id;
+        if (t) { pushRow(t->row.data(), (int)t->row.size(), t->c, t->h, false); any = true; }
     }
-    // Free the frames the clock can no longer show (not held, not queued).
-    for (auto& r : clockRows_) {
-        if (r.id < 0 || r.id == rowClock_.cur) continue;
-        bool queued = false;
-        for (auto& f : rowClock_.q) if (f.id == r.id) { queued = true; break; }
-        if (!queued) r.id = -1;
-    }
+    // Free the frames the clock can no longer show or merge: shown already, but the one it holds.
+    for (auto& r : clockRows_) if (r.id >= 0 && r.id <= clockShown_ && r.id != rowClock_.cur) r.id = -1;
     if (!any || covNow_ || bgNow_) return;
     void* img = makeRingImage();
     std::lock_guard<std::mutex> lk(mx_);
