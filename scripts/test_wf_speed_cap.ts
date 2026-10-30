@@ -44,7 +44,7 @@ ok("'minimum' is no longer a CURRENT value (so it is always migrated, never kept
   const lever = kiwi.slice(kiwi.indexOf('private wfSpeedLever'), kiwi.indexOf('\n', kiwi.indexOf('private wfSpeedLever')));
   ok("Kiwi: wf_speed follows the DATA control only (LOW → 2, AUTO/FULL → 4)", /_linkMode === 'lowData' \? 2 : 4/.test(lever), lever);
   ok('OpenWebRX: no DATA control (no rate lever) — the app draws it only where serverType is not owrx',
-     /const dataOk = route\.params\.serverType !== 'owrx'/.test(sdr) && /onLinkMode=\{icom \|\| !dataOk \? undefined : onLinkMode\}/.test(sdr));
+     /const dataOk = route\.params\.serverType !== 'owrx'/.test(sdr) && /onLinkMode=\{!dataOk \? undefined : onLinkMode\}/.test(sdr));
 }
 
 // ── 1b. DATA · LOW · AUTO · FULL ─────────────────────────────────────────────────────────────────────────────────
