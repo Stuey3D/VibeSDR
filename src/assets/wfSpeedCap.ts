@@ -82,6 +82,12 @@ export function migrateWfDataRate(speed: WfSpeedSetting, savedRate: unknown): Wf
   return savedRate === 5 ? 'low' : savedRate === 10 ? 'eco' : speed;
 }
 
+/** ★★ THE APP'S OLD LINK MANAGEMENT (AUTO / FULL / LOW DATA — removed 2026-10-30, GitHub #57: AUTO always, the speed key
+ *  sets the incoming rate). LOW DATA pinned 5 fps — the web's data rate 5 by another name — so it migrates the same way:
+ *  on NATIVE it is exactly LOW; on any other speed the speed is kept and the pin stops. FULL / AUTO keep the speed. */
+export const migrateLinkMode = (speed: WfSpeedSetting, saved: unknown): WfSpeedSetting =>
+  saved === 'lowData' ? migrateWfDataRate(speed, 5) : speed;
+
 /** The link ceiling for a setting, fps — 0 = none (NATIVE / DEFAULT / SMOOTH). */
 export const linkCapFor = (s: WfSpeedSetting): number =>
   (s === 'min2' || s === 'low' || s === 'eco' ? LINK_CAP[s] : 0);

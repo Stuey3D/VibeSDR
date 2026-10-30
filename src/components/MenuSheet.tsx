@@ -72,7 +72,7 @@ import { TABLET_MIN_SIDE } from '../hooks/useUiScale';
 import type { Textures } from '../constants/assetDensity';
 import { appAlert } from './AppAlert';
 import { autoVfoBColour, VFO_B_AUTO } from '../services/vfoAB';
-import { type WfSpeedSetting, WF_SPEED_LABEL, linkCapFor } from '../assets/wfSpeedCap';
+import type { WfSpeedSetting } from '../assets/wfSpeedCap';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -134,8 +134,6 @@ export interface MenuSheetProps {
   onSnrSquelch?:  (v: number) => void;
   /** Adaptive waterfall-rate policy. 'adaptive' follows the link, 'full' never throttles,
    *  'lowData' pins the floor by choice (so it must never read as a poor link). */
-  linkMode?:      'full' | 'adaptive' | 'lowData';
-  onLinkMode?:    (m: 'full' | 'adaptive' | 'lowData') => void;
   // Local SDR power-based squelch (dBFS, -100 = off). Replaces the (dead) SNR
   // squelch slider on local instances.
   localSquelch?:   number;
@@ -1285,7 +1283,6 @@ function MenuSheetBody({
   filterLow, filterHigh, bwEdgeMax = 6000, onFilterLow, onFilterHigh, onFilterBoth,
   nr = false, onNr, nb = false, onNb, recording = false, onRec, recSeconds = 0,
   snrSquelch = -999, onSnrSquelch,
-  linkMode = 'adaptive', onLinkMode,
   localSquelch = -100, onLocalSquelch,
   localNR = 0, onLocalNR, notchOn = false, onNotch, eibiEnabled = true, onEibiToggle, kiwiSquelch = 0, onKiwiSquelch,
   fmSquelch  = -999, onFmSquelch, isFmMode = false,
@@ -2199,25 +2196,9 @@ function MenuSheetBody({
             {/* ── INSTANCE ───────────────────────────────────────── */}
             <SectionLabel label="SERVER" icon="instance" />
             <Text style={styles.instanceUrl} numberOfLines={1}>{serverName || serverUrl}</Text>
-            {/* AUTO LINK MANAGEMENT — a SERVER control (it changes what the server sends): asks for
-                fewer waterfall frames when the link can't carry them, climbs back when it recovers.
-                AUTO default; FULL never throttles (may stutter); LOW DATA pins the floor for metered
-                connections. The waterfall interpolates regardless, so a lower rate costs TIME
-                RESOLUTION, not smooth scrolling. Moved here from Display settings. */}
-            {onLinkMode && (<>
-              <SubLabel label="Link Management" />
-              <BtnRow>
-                <Btn label="AUTO"     active={linkMode==='adaptive'} onPress={() => onLinkMode('adaptive')} />
-                <Btn label="FULL"     active={linkMode==='full'}     onPress={() => onLinkMode('full')} />
-                <Btn label="LOW DATA" active={linkMode==='lowData'}  onPress={() => onLinkMode('lowData')} />
-              </BtnRow>
-              {/* ★ V12: a Waterfall Speed cap is a ceiling on all three — say so where FULL would otherwise look broken. */}
-              {wfCapsOk && (wfScroll === 'min2' || wfScroll === 'low' || wfScroll === 'eco') && (
-                <Text style={styles.wfNote}>
-                  {`Waterfall Speed ${WF_SPEED_LABEL[wfScroll]} caps the rate at ${linkCapFor(wfScroll)} fps — Auto still steps down on a poor link.`}
-                </Text>
-              )}
-            </>)}
+            {/* ★★ V12 2026-10-30: the LINK MANAGEMENT row (AUTO / FULL / LOW DATA) is gone — AUTO always (GitHub #57; Stuart:
+                "default to the auto mode … and use the chosen frame rate to set the incoming data rate where possible").
+                The Waterfall Speed keys set what the server sends; AUTO steps down underneath on a poor connection. */}
             {/* Back-to-list, Favourite and Set-default moved OUT to the ServersChip
                 (top-left of the spectrum) — they're the "which server am I on / how
                 do I leave" actions, and burying them here behind a settings-looking
