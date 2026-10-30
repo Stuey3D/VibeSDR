@@ -41,6 +41,7 @@ import { type MorseQuality, type SpotRow, type SpotsKind } from '../services/Dec
 import { abbrCountry } from '../assets/countryAbbr';
 import AircraftPanel from './AircraftPanel';
 import CwView, { CallLink, cwItems } from './CwView';
+import TranscriptText from './TranscriptText';   // ★ V12 callsigns in the captions
 import JttyView, { jttyItems } from './JttyView';
 import DscView, { dscHasPos, type DscBoxKey } from './DscView';
 import AprsView from './AprsView';   // ★ V12 APRS
@@ -1558,7 +1559,11 @@ export default function DecoderPanel({
             showsVerticalScrollIndicator
           >
             <Text style={[dp.output, { color: dc.output, fontFamily: FONT }]} selectable>
-              {decoderText}
+              {/* ★ V12 TRANSCRIBE: every callsign heard is a QRZ.com link (TranscriptText — spelled-out calls replaced
+                  by the call, the spoken words kept as its label). Every other text decoder draws its text as is. */}
+              {activeDecoder === 'transcribe'
+                ? <TranscriptText text={decoderText} linkStyle={{ color: tk.accent, fontWeight: '700' }} />
+                : decoderText}
             </Text>
           </ScrollView>
         )}
