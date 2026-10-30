@@ -21,6 +21,8 @@ const Vibe = NativeModules.VibePowerModule as {
   pushExternalOpus?:  (b64: string, sampleRate: number, channels: number) => void;
   sendLocalTune?:     (json: string) => void;
   stopLocalAudio?:    () => void;
+  /** A renewed admin credential for the pump's NEXT handshake; the open socket is left alone. */
+  refreshLocalAudioAuth?: (authSuffix: string) => void;
   /** Is the pump's socket still delivering? Reopens it if not (VibePowerModule.swift / VibeStreamService.kt). */
   reviveLocalAudio?:  () => void;
   startExternalAudio?: (rate: number, pauseMode?: string) => void;
@@ -174,6 +176,29 @@ export default function LocalAudioPlayer(
 ) {
   const started = useRef(false);
   const ws      = useRef<WebSocket | null>(null);
+  /* ★★★ A RENEWED TICKET IS NOT A NEW CREDENTIAL — IT MUST NOT OPEN A NEW SOCKET. The screen renews the admin ticket
+   *     every four minutes (SDRScreen: mintAdminTicket), and each renewal is a new string. Keyed on that string, this
+   *     effect tore the audio down and reopened it every 3m59s for as long as the owner was signed in: a gap in the
+   *     sound each time, and — when the spectrum socket happened to be away at that moment — the server saw its last
+   *     listener leave, switched DAB off, put the radio back on its FM carrier and resumed the block five seconds
+   *     later. A retune nobody asked for, invisible in the admin log because nobody did it (Sony, Lite 11.0.15,
+   *     2026-10-30: "the server tuned to a different multiplex and changed station").
+   *  ★★ The server decides admin ONCE, when it accepts the socket, and never re-reads the ticket. So what the socket
+   *     needs re-opening for is a change of KIND — none → challenge pair → ticket, or the takeover answer — and the URL
+   *     it builds simply uses the newest string, kept in a ref. A fresh value of the same kind goes to the native
+   *     pump for its NEXT handshake only (refreshLocalAudioAuth). */
+  const adminAuthRef = useRef(adminAuth);
+  adminAuthRef.current = adminAuth;
+  const adminKind = !adminAuth ? ''
+    : (/vs_admin_ticket=/.test(adminAuth) ? 'ticket' : 'pair') + (/vs_takeover=1/.test(adminAuth) ? '+takeover' : '');
+  /** The pump's query WITHOUT the credential, while the native pump is this mount's socket; null otherwise. */
+  const pumpSuffix = useRef<string | null>(null);
+  useEffect(() => {
+    const base = pumpSuffix.current;
+    if (base == null || !adminAuth) return;
+    Vibe?.refreshLocalAudioAuth?.(base + (adminAuth.startsWith('&') ? adminAuth : `&${adminAuth}`));
+  }, [adminAuth]);
+
   const extStarted = useRef(false);
 
   // Latest tune, so start can send it immediately without a stale closure.
@@ -227,9 +252,12 @@ export default function LocalAudioPlayer(
     //    refused at the handshake, which reads to a user as exactly the connection error they
     //    reported." I read that warning, wrote a comment claiming the normalisation had happened,
     //    and did not check. An assumption stated confidently in a comment is not evidence.
-    const adminQ = !adminAuth || adminAuth.startsWith('&') ? (adminAuth || '') : `&${adminAuth}`;
-    const combinedSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
-      + (raw ? '' : '&codec=opus') + authSuffix + adminQ;
+    const adminNow = adminAuthRef.current;
+    const adminQ = !adminNow || adminNow.startsWith('&') ? (adminNow || '') : `&${adminNow}`;
+    const baseSuffix = (sessionId ? `&user_session_id=${encodeURIComponent(sessionId)}` : '')
+      + (raw ? '' : '&codec=opus') + authSuffix;
+    pumpSuffix.current = null;
+    const combinedSuffix = baseSuffix + adminQ;
 
     if (USE_NATIVE_PUMP) {
       // ★ Log the SUFFIX, not a boolean. "[admin]" told me a credential was held and nothing about
@@ -240,6 +268,7 @@ export default function LocalAudioPlayer(
       //   `laTune` empty and skips the send on ready, Kotlin stores null and never sends.
       Vibe?.startLocalAudio?.(host, port, assertTune ? tuneJson(f, m, bl, bh) : '',
                               combinedSuffix, wsBase ?? '');
+      pumpSuffix.current = baseSuffix;
       started.current = true;
       // ★★ THE LINK METER MUST STILL SEE THE AUDIO. The JS reader below counted every byte as it
       //    arrived; with the socket native, only native can count it — so the pump reports a tally
@@ -280,7 +309,7 @@ export default function LocalAudioPlayer(
     //   and any /r/<id> prefix. Only fall back to host:port when there is none.
     const wsRoot = (wsBase || `ws://${host}:${port}`).replace(/\/+$/, '');
     noteAudioEvent(`js socket opening → ${wsRoot}/ws/audio`
-                   + (adminAuth ? ' [admin]' : ' [no admin]'));
+                   + (adminNow ? ' [admin]' : ' [no admin]'));
     const sock = new WebSocket(`${wsRoot}/ws/audio${authQ}`);
     sock.binaryType = 'arraybuffer';
     ws.current = sock;
@@ -350,9 +379,9 @@ export default function LocalAudioPlayer(
       started.current = false;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  // ★ adminAuth is a dependency: it arrives AFTER the connection, because the password is typed on
-  //   a receiver you are already looking at. Without it here the socket keeps the empty credential
-  //   it opened with, which is the whole fault.
+  // ★ The credential's KIND is a dependency: it arrives AFTER the connection, because the password is
+  //   typed on a receiver you are already looking at. Without it here the socket keeps the empty
+  //   credential it opened with, which is the whole fault. Its VALUE is not — see adminAuthRef.
   // ★★★ AND SO IS wsBase — THE ADDRESS THIS SOCKET GOES TO ARRIVES LATE TOO. `connectBase` starts
   //     as the FRONT DOOR and only becomes `/r/<id>` when the door's radio list comes back, which
   //     is a round trip. With only [port, raw, adminAuth] here, a socket opened before that answer
@@ -365,7 +394,7 @@ export default function LocalAudioPlayer(
   //    a dep list is a list you must remember, so it WILL be wrong. Name everything the URL is
   //    built from.
   // ★ restartKey: a reconnect asked for a NEW socket — see the prop.
-  }, [port, raw, adminAuth, wsBase, host, authSuffix, sessionId, assertTune, restartKey]);
+  }, [port, raw, adminKind, wsBase, host, authSuffix, sessionId, assertTune, restartKey]);
 
   /* Forward tune/mode/bandwidth changes — native sends on its own WS on BOTH platforms now; the
    * JS branch remains for the fallback reader.
