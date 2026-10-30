@@ -41,6 +41,7 @@
  */
 
 import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, rowsForArrival, type WfScroll } from '../assets/wfRowTarget';
+import { newRowCombiner, combineInto, dbPerUnit, COMBINE_MAX_FRAMES, type CombFrame } from '../assets/wfCombine';
 import { boostActive, boostNote, boostRowRate, BOOST_TAIL_MS, clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockReset, clockRowRate, clockRun, clockSetRate, newBoost, newRowClock }
   from '../assets/wfClock';
 import { avHold, avNoteAudio, clockOwnMs, newAvSync } from '../assets/wfAvSync';
@@ -1535,8 +1536,13 @@ function WaterfallView({
   const clockOut   = useRef<number[]>([]);
   const clockSeq   = useRef(0);
   /** The real frames the clock may still show, by id (a few: the clock's queue is 4 deep, plus the one it holds). */
-  const clockFrames = useRef(new Map<number, { row: Uint8Array; c: number; h: number }>());
-  const clockPool   = useRef<{ row: Uint8Array; c: number; h: number }[]>([]);   // their buffers, reused (no per-frame allocation)
+  const clockFrames = useRef(new Map<number, CombFrame>());
+  const clockPool   = useRef<CombFrame[]>([]);   // their buffers, reused (no per-frame allocation)
+  /** ★★ V12 2026-10-30 (src/assets/wfCombine.ts): the id of the last frame the clock has SHOWN, and the combiner that merges
+   *  the frames it passed over into the next one shown — "rather than simply dropping the excess frames can we average
+   *  them" (Stuart). The frames since the last shown are kept (≤ COMBINE_MAX_FRAMES) until then. */
+  const clockShown  = useRef(0);
+  const clockComb   = useRef(newRowCombiner());
   const clockStop = useCallback(() => {
     if (clockTimer.current) { clearTimeout(clockTimer.current); clockTimer.current = null; }
   }, []);
@@ -1545,14 +1551,23 @@ function WaterfallView({
     const rc = rowClock.current, now = performance.now(), out = clockOut.current;
     out.length = 0;
     clockRun(rc, now, out);
+    const fr = clockFrames.current;
     for (let i = 0; i < out.length; i++) {
-      const f = clockFrames.current.get(out[i]);
+      // ★★ A frame shown for the first time takes in the frames the clock passed over since the last one shown — combined
+      //    in linear power with the peaks kept (wfCombine.ts), not dropped. A feed at or below the rate: nothing to merge.
+      if (out[i] > clockShown.current) { combineInto(clockComb.current, fr, clockShown.current, out[i]); clockShown.current = out[i]; }
+      const f = fr.get(out[i]);
       if (f) pushRow(f.row, f.c, f.h, i === out.length - 1);   // several due (a busy JS thread): ONE image for them all
     }
-    // Forget frames the clock can no longer show (older than the one it holds and not queued).
-    if (clockFrames.current.size > 6) {
-      const keep = new Set<number>(rc.q.map(f => f.id)); keep.add(rc.cur);
-      for (const [id, f] of clockFrames.current) if (!keep.has(id)) { clockFrames.current.delete(id); if (clockPool.current.length < 8) clockPool.current.push(f); }
+    // Forget frames the clock can no longer show or merge: shown already (but the one it holds), or — past the cap — the
+    // oldest not held or queued.
+    if (fr.size > 6) {
+      const free = (id: number, f: CombFrame) => { fr.delete(id); if (clockPool.current.length < COMBINE_MAX_FRAMES + 4) clockPool.current.push(f); };
+      for (const [id, f] of fr) if (id <= clockShown.current && id !== rc.cur) free(id, f);
+      if (fr.size > COMBINE_MAX_FRAMES + 2) {
+        const keep = new Set<number>(rc.q.map(f => f.id)); keep.add(rc.cur);
+        for (const [id, f] of fr) { if (fr.size <= COMBINE_MAX_FRAMES + 2) break; if (!keep.has(id)) free(id, f); }   // (Map: oldest first)
+      }
     }
     if (bgRef.current || coveredRef.current || clockIdle(rc, now)) return;   // a dead link stops; the next frame restarts it
     const nx = clockNextAt(rc);
@@ -2241,9 +2256,9 @@ function WaterfallView({
       //     Simulated (scripts/test_wf_fixed_clock.ts): arrival → on screen ~220 → ~80 ms, stalls and bursts still 0.
       const id = ++clockSeq.current, t = performance.now();
       let slot = clockPool.current.pop();
-      if (!slot || slot.row.length !== frame.row.length) slot = { row: new Uint8Array(frame.row.length), c: 0, h: 0 };
+      if (!slot || slot.row.length !== frame.row.length) slot = { row: new Uint8Array(frame.row.length), c: 0, h: 0, k: 0 };
       clockFrames.current.set(id, slot);
-      slot.row.set(frame.row); slot.c = rowCentre; slot.h = rowHzBin;
+      slot.row.set(frame.row); slot.c = rowCentre; slot.h = rowHzBin; slot.k = dbPerUnit(frame.dbMin, frame.dbMax);
       clockSetRate(rowClock.current, rowTarget, t);
       // ★★★ THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts, Stuart 2026-10-30). The frame enters the clock
       //     `hold` ms after it arrived — the audio's playout delay less what this route already takes — so the row and
