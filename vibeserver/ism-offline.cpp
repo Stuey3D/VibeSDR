@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     std::vector<float> fb(1 << 20);
     std::vector<cf> x;
     const auto t0 = std::chrono::steady_clock::now();
-    auto onBurst = [&](const Burst& b) {
+    auto onBurstBody = [&](const Burst& b) {
         ++nb;
         std::vector<Reading> got;
         Service::decodeBurst(b, centre, got, &wst);
@@ -100,6 +100,13 @@ int main(int argc, char** argv) {
             std::printf("%8.3f s  %9.4f MHz  %s\n", b.tSec, r.freqHz / 1e6, readable(r, 0).c_str());
         }
     };
+#if defined(VIBE_ISM_PROF)
+    // ★ VIBE_ISM_PROF: the decoders' share, taken out of the front end's detect figure (vibe_ism.h IsmProf)
+    double tLora = 0;
+    auto onBurst = [&](const Burst& b) { const double tp0 = ismProfNow(); onBurstBody(b); fe.prof.decode += ismProfNow() - tp0; };
+#else
+    auto& onBurst = onBurstBody;
+#endif
     for (;;) {
         size_t n;
         if (f32) { n = std::fread(fb.data(), sizeof(float), fb.size(), f) / 2; x.resize(n); for (size_t i = 0; i < n; ++i) x[i] = cf(fb[2 * i], fb[2 * i + 1]); }
@@ -107,7 +114,13 @@ int main(int argc, char** argv) {
         if (!n) break;
         fe.feed(x.data(), n, onBurst);
         if (lora) {
+#if defined(VIBE_ISM_PROF)
+            const double tl0 = ismProfNow();
             le.process(x.data(), n);
+            tLora += ismProfNow() - tl0;
+#else
+            le.process(x.data(), n);
+#endif
             for (auto& h : le.take()) {
                 ++nl;
                 const auto& m = h.m;
@@ -135,6 +148,20 @@ int main(int argc, char** argv) {
         std::printf("meters: %llu bursts at 868.30 / 868.95 tried, %llu frames (%llu damaged), %llu from collectors; "
                     "★ encrypted payloads are never printed — only their length\n", (unsigned long long)wst.tried,
                     (unsigned long long)wst.frames, (unsigned long long)wst.damaged, (unsigned long long)wst.collector);
+#if defined(VIBE_ISM_PROF)
+    {
+        const IsmProf& p = fe.prof;
+        const double tot = p.copy + p.detect + p.mix + p.slice + p.decode + tLora;
+        std::printf("PROF  (s of CPU over %.1f s of capture; %% of one core in real time)\n", t);
+        auto row = [&](const char* k, double v) { std::printf("PROF  %-8s %8.3f s  %6.2f %%\n", k, v, 100.0 * v / t); };
+        row("copy", p.copy); row("detect", p.detect); row("mix", p.mix); row("slice", p.slice); row("decode", p.decode); row("lora", tLora); row("sum", tot);
+        std::printf("PROF  detects %llu  opens %llu  cancels %llu  promotes %llu  closeQuiet %llu  closeLong %llu  fewHits %llu  sliceNo %llu\n",
+                    (unsigned long long)p.detects, (unsigned long long)p.opens, (unsigned long long)p.cancels, (unsigned long long)p.promotes,
+                    (unsigned long long)p.closeQuiet, (unsigned long long)p.closeLong, (unsigned long long)p.fewHits, (unsigned long long)p.sliceNo);
+        std::printf("PROF  mixed %.2f Msamp (%.2f channels on average)  sliced %.2f Msamp  in ran-too-long channels %.2f Msamp\n",
+                    p.mixSamp / 1e6, double(p.mixSamp) / std::max(1.0, t * fe.workRate()), p.sliceSamp / 1e6, p.longSamp / 1e6);
+    }
+#endif
     if (lora) std::printf("LoRa: %llu frames; per detector that heard anything:\n%s", (unsigned long long)nl, le.stats().c_str());
     const auto loraRows = mesh.rowsJson(t);
     std::printf("\nthe device list (as the clients get it):\n%s\n", tr.json(t, &loraRows).c_str());

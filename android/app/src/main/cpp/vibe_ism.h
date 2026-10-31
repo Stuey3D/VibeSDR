@@ -32,8 +32,28 @@
 #if defined(VIBE_DAB_PFFFT)
 #include "vibe_dab_fft.h"
 #endif
+#if defined(VIBE_ISM_PROF)
+#include <cstdio>
+#include <cstdlib>
+#include <time.h>
+#endif
 
 namespace vibeism {
+
+/* ★ VIBE_ISM_PROF (2026-10-31, the Pi 2 thread split): where the front end's time goes, stage by stage, for ism-offline on
+ *  the Pi itself. Compiled out of every real build — the server and the app never define it. */
+#if defined(VIBE_ISM_PROF)
+struct IsmProf {
+    double copy = 0, detect = 0, mix = 0, slice = 0, decode = 0;   ///< seconds (monotonic; the bench is single-threaded). decode: the caller's onBurst
+    uint64_t detects = 0, opens = 0, cancels = 0, promotes = 0, closeQuiet = 0, closeLong = 0, fewHits = 0, sliceNo = 0;
+    uint64_t mixSamp = 0, sliceSamp = 0, longSamp = 0;  ///< capture samples mixed; channel samples sliced; of those, in "ran too long" channels
+    bool log = std::getenv("VIBE_ISM_PROF_LOG") != nullptr;   ///< every channel close to stderr
+};
+inline double ismProfNow() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return double(t.tv_sec) + 1e-9 * double(t.tv_nsec); }
+#define VIBE_ISM_P(...) __VA_ARGS__
+#else
+#define VIBE_ISM_P(...)
+#endif
 
 using cf = std::complex<float>;
 /** Signed run lengths, µs: + = mark (carrier on / high tone), − = space (carrier off / low tone). */
@@ -252,6 +272,9 @@ public:
     /** ★ V12 wM-Bus: hand each burst's complex baseband on in Burst::bb (the 868 band only — see Burst::bb). */
     void setKeepBaseband(bool on) { keepBb_ = on; }
     uint64_t bursts() const { return bursts_; }
+#if defined(VIBE_ISM_PROF)
+    IsmProf prof;
+#endif
     /** The detector's median bin floor, dBFS per bin (for the status line and the gain rule). */
     double noiseDb() const { return noiseDb_; }
     /** Share of detector frames in the last second where any sample neared full scale — the gain rule's overload. */
@@ -279,6 +302,7 @@ public:
         while (i < n) {
             const size_t toFft = size_t(hop_ - sinceFft_), toChan = 1024 - size_t(total_ & 1023);
             const size_t room = std::min(n - i, std::min(toFft, toChan));
+            VIBE_ISM_P(const double tp0 = ismProfNow();)
             float pk = blockPeak_;
             size_t pos = size_t(total_ & mask);
             for (size_t k = 0; k < room; ++k) {
@@ -287,6 +311,7 @@ public:
                 pk = std::max(pk, std::max(std::fabs(v.real()), std::fabs(v.imag())));
             }
             blockPeak_ = pk;
+            VIBE_ISM_P(prof.copy += ismProfNow() - tp0;)
             total_ += room; sinceFft_ += int(room); i += room;
             if ((total_ & 1023) == 0) for (auto& c : ch_) if (c.on && !c.pending) runChan(c, total_);
             if (sinceFft_ >= hop_) { sinceFft_ = 0; detect(onBurst); }
@@ -378,6 +403,7 @@ private:
          *  one output's M samples the rotator is rot₀·incʲ, so the falling and rising weights × incʲ are tables built when
          *  the channel opens; a sample is then two four-lane multiply-adds (macRun), and the rotator steps once an OUTPUT
          *  (rot₀ ·= inc^M), renormalised as before. Same sums, in another order. */
+        VIBE_ISM_P(const double tp0 = ismProfNow(); prof.mixSamp += upto - c.next;)
         const size_t size = ring_.size(), mask = size - 1;
         const int M = c.M;
         const float norm = 1.0f / (float(M) * float(M + 1));
@@ -401,9 +427,15 @@ private:
         }
         c.sF = cf(acc[0], acc[1]); c.sR = cf(acc[2], acc[3]); c.mcnt = j; c.peakAbs = pk;
         c.next = upto;
+        VIBE_ISM_P(prof.mix += ismProfNow() - tp0;)
     }
 
     template <class F> void detect(F& onBurst) {
+        VIBE_ISM_P(const double tp0 = ismProfNow(), nest0 = prof.mix + prof.slice + prof.decode; ++prof.detects;)
+        detectBody(onBurst);
+        VIBE_ISM_P(prof.detect += ismProfNow() - tp0 - (prof.mix + prof.slice + prof.decode - nest0);)
+    }
+    template <class F> void detectBody(F& onBurst) {
         const size_t mask = ring_.size() - 1;
         const uint64_t s0 = total_ - kN;
         for (int i = 0; i < kN; ++i) fbuf_[size_t(i)] = ring_[size_t((s0 + i) & mask)] * win_[size_t(i)];
@@ -469,7 +501,7 @@ private:
             for (auto& c : ch_) if (c.on && std::fabs(c.offHz - f) < kMatchHz) { hit = &c; break; }
             if (hit) {
                 hit->lastHit = total_; ++hit->hits; hit->peakPow = std::max(hit->peakPow, gr.pmax); hit->framePow = std::max(hit->framePow, gr.pmax);
-                if (hit->pending) { hit->pending = false; runChan(*hit, total_); }   // ★ a second sighting: now it is worth mixing
+                if (hit->pending) { VIBE_ISM_P(++prof.promotes;) hit->pending = false; runChan(*hit, total_); }   // ★ a second sighting: now it is worth mixing
                 continue;
             }
             /* ★★ SPLATTER IS NOT A BURST. A strong OOK transmitter's keying edges spread −30…−45 dB sidebands hundreds of
@@ -483,16 +515,22 @@ private:
             Chan* freeC = nullptr;
             for (auto& c : ch_) if (!c.on) { freeC = &c; break; }
             if (!freeC) continue;                              // ★ four bursts at once already: the fifth is lost
+            VIBE_ISM_P(++prof.opens;)
             openChan(*freeC, f);
             freeC->peakPow = freeC->framePow = gr.pmax;
         }
         // close channels that went quiet, or ran too long
         for (auto& c : ch_) {
             if (!c.on) continue;
-            if (c.pending) { if (double(total_ - c.lastHit) > std::max(3.0 * hop_, 0.004 * w_)) { c.on = false; c.pending = false; } continue; }
+            if (c.pending) { if (double(total_ - c.lastHit) > std::max(3.0 * hop_, 0.004 * w_)) { VIBE_ISM_P(++prof.cancels;) c.on = false; c.pending = false; } continue; }
             const double quiet = double(total_ - c.lastHit) / w_;
             const double len = double(total_ - c.start) / w_;
-            if (quiet > kCloseS || len > kMaxBurstS) { runChan(c, total_); closeChan(c, onBurst); }
+            if (quiet > kCloseS || len > kMaxBurstS) {
+                VIBE_ISM_P(if (quiet > kCloseS) ++prof.closeQuiet; else { ++prof.closeLong; prof.longSamp += total_ - c.start; })
+                VIBE_ISM_P(if (prof.log) std::fprintf(stderr, "close %9.3f s  %+9.1f kHz  len %6.1f ms  hits %5d  peak %5.1f dB  %s\n", double(c.start) / w_,
+                                                     c.offHz / 1e3, 1e3 * len, c.hits, 10.0 * std::log10(std::max(1e-20f, c.peakPow)), quiet > kCloseS ? "quiet" : "LONG");)
+                runChan(c, total_); closeChan(c, onBurst);
+            }
         }
     }
     /** The bin tables: scan order (most negative frequency first), each bin's frequency, and whether it may detect. */
@@ -546,7 +584,10 @@ private:
         b.offHz = c.offHz;
         b.clipped = c.peakAbs > 0.85f;
         // ★ fewer than 3 detector frames = a noise spike (1 frame in ~0.3 ms; the shortest real burst spans dozens)
-        if (c.hits >= 3 && slice(c.bb, chanRate(), b)) {
+        VIBE_ISM_P(const double tp0 = ismProfNow(); if (c.hits < 3) ++prof.fewHits; else prof.sliceSamp += c.bb.size();)
+        const bool sliced = c.hits >= 3 && slice(c.bb, chanRate(), b);
+        VIBE_ISM_P(prof.slice += ismProfNow() - tp0; if (c.hits >= 3 && !sliced) ++prof.sliceNo;)
+        if (sliced) {
             ++bursts_;
             // ★ moved, not copied: the channel's buffer becomes the burst's (a new one is reserved at the next open)
             if (keepBb_) { b.bb = std::make_shared<const std::vector<cf>>(std::move(c.bb)); b.bbRate = chanRate(); }
