@@ -1222,7 +1222,10 @@ same change.
   30 s, every submode's cut; FT2: 15 s). One pass ("loaded"), as the FT8 row. A mode with no transmitter here still gets
   a row, searching noise, and says so in its label.
 - NDB is its Service on fed slices; AIS and ISM are their Services fed in REAL TIME (no queue to wait on), 1 s warm-up
-  then 3 s measured; a row that dropped says "(fell behind)".
+  then 3 s measured; a row that dropped says "(fell behind)". ★ **AIS, ISM 433 and ISM 868 are scored by their HOTTEST
+  SINGLE THREAD against one core, as ADS-B is** (Stuart's decision: a single thread over 100 % is the real failure on a
+  Pi 2); the process total is kept in the row's `threads` ("process"). Per-thread CPU: /proc/self/task on Linux and
+  Android, Mach thread_info on macOS (`benchdec::threadTimes`).
 - Tone ID, noise reduction and the auto notch are the listener's own filters, timed directly.
 - **Budget per row**: a continuous row feeds until it has used 3 s of wall AND fed 4 s of signal, or fed 12 s. A slotted
   mode finishes its period (half a WSPR minute measures nothing). Every row reports `decoded` and `ms`; the result has
@@ -1230,7 +1233,8 @@ same change.
 
 **Real clips where a real band sets the cost** (Stuart: *"put samples on github that get downloaded when running the
 benchmark"*). The CW and PSK skimmers, the NDB skimmer and ISM's burst finder work in proportion to what is on the band,
-so they run on `decoders-bench.vbu8` — Stuart's own recordings, 9.0 MB (5.0 MB gzipped), fetched once like the DAB and
+so they run on `decoders-bench.vbu8` — Stuart's own recordings, every record 8-bit, 7.9 MB (**3.8 MB gzipped**; the CW
+and PSK records were 16-bit until Stuart chose the smaller download — the skimmers decode the same 4 and 2 signals), fetched once like the DAB and
 ADS-B clips (`ensureDecoderClip`, `VibeBenchmark.kt`). The ISM records hold no real device: a window where ISM's own
 detector finds no burst on the whole capture (and LoRa no preamble), with the tests' synthetic sensors and meters added
 (`vibeserver/bench-clip/README-decoders.txt`). Without the clip those five rows read "not measured"; every other row
@@ -1239,17 +1243,21 @@ always (private messages).
 
 **The defaults — ONE rule, in the server** (`benchdec::ruleFor`, sent as `decoders.defaultOff` / `flagged`; the setup
 page's `benchApplyDefaults` and the app's `applyBench` only apply it, on a fresh setup):
-- a row that is its switch's main decoder (`dec_dsc` → "dsc", `dec_ndb` → "ndb", …) and measured below GREEN starts that
+- ★ **the first eight rows (RTTY, NAVTEX, WEFAX, SSTV, time, FT8+FT4, Band, LoRa) keep their old behaviour** (Stuart):
+  below green they are FLAGGED, never switched off by this rule — a box that has been fine never loses RTTY or FT8 on a
+  fresh setup. Band and Advanced RDS keep the rules the readers already had for them;
+- a NEW row that is its switch's main decoder (`dec_dsc` → "dsc", `dec_ndb` → "ndb", …) and measured below GREEN starts that
   switch OFF — offered, never hidden, with the reason beside it ("…is off: it measured N % of a core here. Tick it to
   offer it anyway.");
 - a companion row — the CW and PSK skimmers, RTTY AUTO, each digital-spots mode, the wM-Bus row — never switches its
   switch off (that would take the green decoder away too); below green it is flagged ("Too heavy for this box" lists the
   red ones);
-- **the decoder limit's yardstick is now the heaviest GREEN decoder slot.** Band spots, LoRa and the whole-radio modes
+- **the decoder limit's yardstick is now the heaviest GREEN decoder slot** (a first-eight row below green is flagged,
+  its switch stays on, and it is not the yardstick either — alone it is already past the green budget). Band spots, LoRa and the whole-radio modes
   (NDB, AIS, ISM) are not slots; a slot that is not green is off by default or, alone, more than the green budget already.
   Before, the heaviest of every row bar Band was used — LoRa (not a slot) set the limit on the Mac.
-- The first eight rows follow the same rule now (before, only Band, Advanced RDS, keep-sharp zoom and the DAB scan set
-  defaults): on a box where RTTY or FT8 measured below green, "rtty" / "spots" would start off. No such box is known.
+- Heavy digital-spots modes in Band (Q65 …): flagged only (Stuart); the Band governor's budget still applies.
+- AUTO bandwidth (on `v12-am-sync`): no owner switch (Stuart); its rows show the cost only.
 - Tone ID, noise reduction and the notch have no owner switch (the listener turns them on): shown, nothing set.
 
 **Switches added so the owner can switch each one back on**: "cw" on the setup page (the server enforced it, the page
@@ -1274,6 +1282,9 @@ New rows (% of one core · decoded · ms):
 | MFSK AUTO | 0.3 | 27 chars | 210 | | AIS (real time) | 3.1 | 24 msgs | 4214 |
 | Feld Hell | 0.0 | 784 lines | 201 | | ISM 433 (clip, real time) | 9.6 | 1 device | 4115 |
 | APRS | 0.2 | 2 stations | 191 | | ISM 868 meters (clip) | 2.8 | 2 meters | 4116 |
+
+(AIS / ISM above were process CPU, the first cut. Scored by the hottest thread, with the 8-bit clip: AIS 2.6 % (process
+3.0), ISM 433 8.3 % (8.6), ISM 868 1.6 % (1.8); the skimmers 4 and 2 signals as before.)
 | Tone ID | 0.0 | 1 lock | 5 | | Noise reduction / notch | 0.1 / 0.1 | — | 9 / 20 |
 
 Paging (Android library only, `-DVIBE_PAGING` test build): 0.1 %, 144 chars, 328 ms.
@@ -1305,8 +1316,9 @@ synthetic signals and public recordings only (FLEX and fldigi files kept out of 
 
 Ninth run (section 22): **every decoder has its own benchmark row** — 29 more, real decodes, per-row wall time, one
 defaults rule in the server, a real-band clip for the skimmers / NDB / ISM. ★ Stuart must publish
-`decoders-bench.vbu8.gz` as release asset `bench-clip-v3` (README-decoders.txt) — until then those five rows read
-"not measured". ★ ISM's row must be re-checked after the decaudit ISM threading work lands.
+`decoders-bench.vbu8.gz` (3.8 MB, sha256 ae1571da…150f) as release asset `bench-clip-v3` (README-decoders.txt) — AFTER
+his own privacy check of it; until then those five rows read "not measured". Stuart's decisions (2026-10-31): 8-bit clip,
+the first eight rows flagged only, Band's heavy modes flagged only, no AUTO owner switch, AIS/ISM by hottest thread. ★ ISM's row must be re-checked after the decaudit ISM threading work lands.
 
 Next, in order:
 0. ✓ DONE (section 20): **test-web-textmodes 10/10**, test-web-hell 19/19. The "E" was a stale presence slot after a

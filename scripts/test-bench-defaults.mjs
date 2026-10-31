@@ -40,7 +40,7 @@ ok(/j\.decoders\?\.defaultOff/.test(app) && /BLOCKABLE\.some\(\(m\) => m\.id ===
    'ServerModeScreen.tsx applyBench applies the same list, and only for a switch it can show');
 // ★ every switch the rule can name is on both screens (the app's list mirrors the page's)
 const sws = new Set([...more.matchAll(/\{ "(?:dec|spot)_[a-z0-9]+",\s*\{ "([a-z]+)",\s*(true|false)/g)].filter((m) => m[2] === 'true').map((m) => m[1]));
-ok(sws.size >= 15, `the rule's primary switches were found (${[...sws].join(', ')})`);
+ok(sws.size >= 13 && !sws.has('rtty') && !sws.has('spots'), `the rule's primary switches were found, and none of the first eight's (${[...sws].join(', ')})`);
 for (const sw of sws) {
   ok(new RegExp(`\\{ id: "${sw}",`).test(src) && new RegExp(`\\{ id: '${sw}',`).test(app), `"${sw}" is on the setup page and in the app`);
 }

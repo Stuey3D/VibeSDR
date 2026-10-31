@@ -4,17 +4,18 @@ Why: the CW and PSK skimmers, the NDB skimmer and ISM's burst finder do work in 
 their benchmark rows run on a few seconds of real band, looped. Every other decoder row is synthetic (one signal costs
 the same whatever else is on the air) and needs no download.
 
-What is in it (five records, 9.0 MB, 5.0 MB gzipped):
-  cw40    6 s, 48 kHz IQ s16, 7.020 MHz — Stuart's UberSDR (RX888), 2026-10-29 evening, 40 m CW
+What is in it (five records, 7.9 MB, 3.8 MB gzipped — every record 8-bit since 2026-10-31):
+  cw40    6 s, 48 kHz IQ u8, 7.020 MHz — Stuart's UberSDR (RX888), 2026-10-29 evening, 40 m CW
           (~/VibeSDR-test-audio/cw/uber_40m_7020000_iq48_2026-10-29.wav from 60 s)
-  psk20   6 s, 48 kHz IQ s16, 14.0715 MHz — Stuart's UberSDR, 2026-10-26 16:05 UTC, 20 m PSK31
+  psk20   6 s, 48 kHz IQ u8, 14.0715 MHz — Stuart's UberSDR, 2026-10-26 16:05 UTC, 20 m PSK31
           (~/VibeSDR-test-audio/psk/uber_20m_14071500_iq48_afternoon.wav from 30 s)
   ndb     10 s, 96 kHz IQ u8, 352.5 kHz — Stuart's UberSDR, 2026-10-26 07:29 UTC, the NDB band
           (~/VibeSDR-test-audio/ndb/uber_ndb_352500_iq192_20261026T0729_330s.wav from 60 s, FFT-resampled to 96 kHz)
   ism433  0.5 s, 2.4 MS/s IQ u8, 433.92 MHz — Stuart's Pi 500 RTL-SDR (pi500-rtl4-433920-2400k-30s.u8), REAL FLOOR ONLY
   ism868  0.5 s, 2.4 MS/s IQ u8, 868.6 MHz — Stuart's Pi 500 RTL-SDR (pi500-rtl4-868600-2400k-30s.u8), REAL FLOOR ONLY
 The skimmer windows are where the skimmer itself confirmed the most signals (a probe ran CwRun / PskRun over every
-window): CW 4 signals, PSK 2. The 40 m PSK recording held no PSK at all (RTTY and a wide data signal), so 20 m is used.
+window): CW 4 signals, PSK 2 — the same from the 8-bit records as from the 16-bit ones they replaced (Stuart chose
+the smaller download for slow links; the skimmers decode the same signals, test-bench-decoders with the clip). The 40 m PSK recording held no PSK at all (RTTY and a wide data signal), so 20 m is used.
 
 Whose: all Stuart's own recordings. CW and PSK are amateur stations identifying themselves; NDBs are aeronautical
 beacons sending their idents — public transmissions, sent for anyone to receive. No broadcast audio, no paging.

@@ -64,6 +64,12 @@ int main() {
         }
         ok(r.pct > 0.0 && r.pct < 400.0, r.id + ": " + std::to_string(r.pct).substr(0, 5) + " % of a core");
         if (!filter) ok(r.decoded > 0, r.id + " decoded its signal (" + std::to_string(r.decoded) + ")");
+        // ★★ whole-radio rows are scored by their HOTTEST thread (as ADS-B), the process total kept in the detail
+        if (r.id == "dec_ais" || r.id == "dec_ism" || r.id == "dec_wmbus") {
+            double proc = -1; for (const auto& t : r.threads) if (t.first == "process") proc = t.second;
+            ok(!r.hottest.empty() && proc >= 0 && r.pct <= proc + 0.5, r.id + ": scored by its hottest thread (" + r.hottest + " "
+               + std::to_string(r.pct).substr(0, 5) + " %), process " + std::to_string(proc).substr(0, 5) + " % kept in the detail");
+        }
         ok(ruleFor(r.id).sw != nullptr, r.id + " has a defaults rule");
     }
     // every digital-spots mode registered has its own row
@@ -80,6 +86,9 @@ int main() {
     ok(!ruleFor("dec_cwskim").primary && std::string(ruleFor("dec_cwskim").sw) == "cw", "the CW skimmer never switches CW off (the one-signal decoder is green)");
     ok(!ruleFor("spot_q65").primary && ruleFor("spot_q65").slot, "a digital-spots mode is a slot, flagged but never switched off");
     ok(!ruleFor("dec_ndb").slot && !ruleFor("dec_lora").slot && !ruleFor("dec_ft8band").slot, "whole-radio modes and Band are not the decoder limit's yardstick");
+    // ★ Stuart, 2026-10-31: the first eight rows keep their old behaviour — flagged below green, never switched off.
+    for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora" })
+        ok(!ruleFor(id).primary, std::string(id) + " is never switched off by the benchmark (flagged only)");
 
     std::printf("── how many at once ──\n");
     // Stuart's case: a box that carries ten listeners with room for about four decoders more.

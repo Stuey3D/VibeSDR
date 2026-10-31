@@ -10,6 +10,8 @@
    is what is on the band. A few seconds of a real busy band, looped, is that; a synthetic band would be a guess.
 ★ The skimmers' windows are where the skimmer itself confirmed the most signals (see CW_START_S below), so the row
   measures a working band rather than a lull. Levels are kept as recorded (scaled only to fit the sample format).
+★ Every record is 8-bit (u8 offset binary, as rtl_sdr writes it), peak scaled to ±120: 3.8 MB gzipped, for hosts on
+  slow links. The CW and PSK skimmers decode the same signals from it as from 16-bit (checked 2026-10-31).
 ★ Format: "VIBEDC81", then per record: char id[8], double rate, double centreHz, uint32 bits (8 = u8 offset binary,
   16 = s16), uint32 nComplex, the I/Q samples (little-endian).
 """
@@ -52,10 +54,10 @@ def main():
         #   A "most energy" pick chose RTTY and a wide data signal on 40 m, where there was no PSK at all (docs/v12/PSK.md).
         # CW: 40 m at 7.020 MHz, 48 kHz IQ (2026-10-29 evening)
         p = os.path.join(d, 'cw/uber_40m_7020000_iq48_2026-10-29.wav')
-        fs, x = read_wav(p, CW_START_S, 6.0); record(f, 'cw40', fs, 7020000.0, x, 16)
+        fs, x = read_wav(p, CW_START_S, 6.0); record(f, 'cw40', fs, 7020000.0, x, 8)
         # PSK: 20 m at 14.0715 MHz, 48 kHz IQ (2026-10-26 16:05 UTC — four PSK31 stations; docs/v12/PSK.md "Real signals")
         p = os.path.join(d, 'psk/uber_20m_14071500_iq48_afternoon.wav')
-        fs, x = read_wav(p, PSK_START_S, 6.0); record(f, 'psk20', fs, 14071500.0, x, 16)
+        fs, x = read_wav(p, PSK_START_S, 6.0); record(f, 'psk20', fs, 14071500.0, x, 8)
         # NDB: 192 kHz around 352.5 kHz (2026-10-26 07:29 UTC) → 96 kHz around 352.5 kHz, 10 s, 8-bit (beacons are strong)
         p = os.path.join(d, 'ndb/uber_ndb_352500_iq192_20261026T0729_330s.wav')
         fs, x = read_wav(p, 60.0, 10.0)

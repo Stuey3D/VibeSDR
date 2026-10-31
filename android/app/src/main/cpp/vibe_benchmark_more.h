@@ -12,7 +12,8 @@
 //    radio is stopped). A continuous decoder is fed as fast as its queue takes it, never dropping (the feed waits on
 //    queued()), so the figure is the decoder's work; a slotted mode lets its worker finish each period before the next.
 //    AIS and ISM have no queue to wait on: they are fed in REAL TIME, as the ADS-B rows are, and a row that dropped
-//    says so in its label.
+//    says so in its label. ★★ They are SCORED as ADS-B is — by their HOTTEST THREAD against one core (Stuart,
+//    2026-10-31: a single thread past 100 % is the real failure on a Pi 2), with the process total in the row's detail.
 // ★★ A TIME BUDGET PER ROW (kRowWallSec): a continuous row stops feeding once it has used that much wall time and fed
 //    at least kRowMinSec of signal — a Pi 2 measures less signal, never longer. A slotted row must finish its period
 //    (a half-decoded WSPR minute measures nothing), so its cost is the period's decode, once. Every row reports its own
@@ -73,9 +74,80 @@ extern "C" {
 #include <string>
 #include <thread>
 #include <vector>
+#include <map>
+#if defined(__linux__) || defined(__ANDROID__)
+#include <dirent.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#endif
 
 namespace vibe {
 namespace benchdec {
+
+/** ★★ CPU seconds per THREAD of this process, with each thread's name — the whole-radio rows (AIS, ISM) are scored by
+ *  their HOTTEST thread against one core, as ADS-B is (Stuart, 2026-10-31: a single thread past 100 % is the real
+ *  failure on a Pi 2; total process CPU hides it across cores). Linux / Android: /proc/self/task; macOS: Mach
+ *  thread_info. Empty where neither exists — the row then falls back to process CPU and says so. */
+struct ThreadTime { double sec = 0; std::string name; };
+inline std::map<uint64_t, ThreadTime> threadTimes() {
+    std::map<uint64_t, ThreadTime> out;
+#if defined(__linux__) || defined(__ANDROID__)
+    const double hz = (double)sysconf(_SC_CLK_TCK);
+    if (DIR* d = opendir("/proc/self/task")) {
+        while (dirent* e = readdir(d)) {
+            if (e->d_name[0] == '.') continue;
+            char path[96]; std::snprintf(path, sizeof path, "/proc/self/task/%s/stat", e->d_name);
+            FILE* f = std::fopen(path, "r");
+            if (!f) continue;
+            char buf[1024]; const size_t n = std::fread(buf, 1, sizeof buf - 1, f); std::fclose(f); buf[n] = 0;
+            const char* p = std::strrchr(buf, ')'); const char* q = std::strchr(buf, '(');
+            unsigned long ut = 0, st = 0;
+            if (!p || !q || std::sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &ut, &st) != 2) continue;
+            ThreadTime t; t.sec = (ut + st) / hz; t.name.assign(q + 1, p);
+            out[(uint64_t)std::atoll(e->d_name)] = t;
+        }
+        closedir(d);
+    }
+#elif defined(__APPLE__)
+    thread_act_array_t th = nullptr; mach_msg_type_number_t n = 0;
+    if (task_threads(mach_task_self(), &th, &n) != KERN_SUCCESS) return out;
+    for (mach_msg_type_number_t i = 0; i < n; ++i) {
+        thread_basic_info_data_t b; mach_msg_type_number_t c = THREAD_BASIC_INFO_COUNT;
+        thread_identifier_info_data_t id; mach_msg_type_number_t ci = THREAD_IDENTIFIER_INFO_COUNT;
+        thread_extended_info_data_t x; mach_msg_type_number_t cx = THREAD_EXTENDED_INFO_COUNT;
+        if (thread_info(th[i], THREAD_BASIC_INFO, (thread_info_t)&b, &c) == KERN_SUCCESS
+            && thread_info(th[i], THREAD_IDENTIFIER_INFO, (thread_info_t)&id, &ci) == KERN_SUCCESS) {
+            ThreadTime t;
+            t.sec = b.user_time.seconds + b.user_time.microseconds / 1e6 + b.system_time.seconds + b.system_time.microseconds / 1e6;
+            if (thread_info(th[i], THREAD_EXTENDED_INFO, (thread_info_t)&x, &cx) == KERN_SUCCESS) t.name = x.pth_name;
+            out[id.thread_id] = t;
+        }
+        mach_port_deallocate(mach_task_self(), th[i]);
+    }
+    vm_deallocate(mach_task_self(), (vm_address_t)th, n * sizeof(thread_act_t));
+#endif
+    return out;
+}
+/** Score a stretch by its hottest thread: `a` and `b` are threadTimes() at its start and end, `secs` its length. Fills
+ *  `r.pct` (the hottest thread, % of one core), `r.hottest`, and `r.threads` — every thread that worked, and "process"
+ *  (the total, kept visible in the row's detail). Falls back to `processPct` where threads cannot be read. */
+inline void scoreHottest(Row& r, const std::map<uint64_t, ThreadTime>& a, const std::map<uint64_t, ThreadTime>& b,
+                         double secs, double processPct) {
+    double best = -1; std::string who;
+    for (const auto& kv : b) {
+        auto it = a.find(kv.first);
+        const double used = 100.0 * (kv.second.sec - (it != a.end() ? it->second.sec : 0.0)) / secs;
+        if (used < 0.05) continue;
+        std::string nm = kv.second.name.empty() ? "thread" : kv.second.name;
+        int same = 0; for (const auto& t : r.threads) same += t.first.rfind(nm, 0) == 0;
+        if (same) nm += "#" + std::to_string(same + 1);   // ★ unnamed or twin threads: keys stay distinct in the JSON
+        r.threads.push_back({ nm, used });
+        if (used > best) { best = used; who = nm; }
+    }
+    r.threads.push_back({ "process", processPct });
+    if (best >= 0) { r.pct = best; r.hottest = who; }
+    else { r.pct = processPct; r.hottest = "process"; }   // ★ no per-thread clock here: the total, said as such
+}
 
 /** ★ The per-row budget. A continuous row feeds until it has used kRowWallSec of wall time AND fed kRowMinSec of signal,
  *  or fed kRowMaxSec — so a fast box measures a longer stretch and a Pi 2 a shorter one, in about the same time. */
@@ -529,6 +601,9 @@ inline std::vector<float> spotAudio(const digi::ModeDef& m, double& utc0, double
 // ── which rows set what (ONE RULE — both readers apply what this says) ───────────────────────────────────────────
 
 /** ★★★ THE DEFAULTS RULE for a decoder row.
+ *   • ★ THE FIRST EIGHT ROWS (RTTY, NAVTEX, WEFAX, SSTV, time, FT8+FT4, Band, LoRa) keep their old behaviour (Stuart,
+ *     2026-10-31): below green they are FLAGGED, never switched off here — a box that has been fine never loses RTTY or
+ *     FT8 on a fresh setup. Band and Advanced RDS keep the rules the readers already had for them.
  *   • `sw`: the owner's switch the row stands for (the setup page's BLOCKABLE id, vsModeBlocked). When the row is the
  *     switch's MAIN decoder (`primary`) and it measured below GREEN, the switch starts OFF on a fresh setup — offered,
  *     never hidden: the owner can tick it back on (Stuart, 2026-10-25: "never hide any controls").
@@ -543,10 +618,10 @@ struct RowRule { const char* sw; bool primary; bool slot; };
 inline RowRule ruleFor(const std::string& id) {
     struct E { const char* id; RowRule r; };
     static const E t[] = {
-        { "dec_rtty",     { "rtty",   true,  true  } }, { "dec_rttyauto", { "rtty",   false, true  } },
-        { "dec_navtex",   { "navtex", true,  true  } }, { "dec_wefax",    { "wefax",  true,  true  } },
-        { "dec_sstv",     { "sstv",   true,  true  } }, { "dec_time",     { "time",   true,  true  } },
-        { "dec_ft8",      { "spots",  true,  true  } }, { "dec_ft8band",  { "",       false, false } },   // ★ its own rule (spotsband)
+        { "dec_rtty",     { "rtty",   false,  true  } }, { "dec_rttyauto", { "rtty",   false, true  } },
+        { "dec_navtex",   { "navtex", false,  true  } }, { "dec_wefax",    { "wefax",  false,  true  } },
+        { "dec_sstv",     { "sstv",   false,  true  } }, { "dec_time",     { "time",   false,  true  } },
+        { "dec_ft8",      { "spots",  false,  true  } }, { "dec_ft8band",  { "",       false, false } },   // ★ its own rule (spotsband)
         { "dec_lora",     { "",       false, false } },   // ★ its own budget (vibelora::budgetFromBench)
         { "dec_cw",       { "cw",     true,  true  } }, { "dec_cwskim",   { "cw",     false, true  } },
         { "dec_psk",      { "psk",    true,  true  } }, { "dec_pskskim",  { "psk",    false, true  } },
@@ -758,15 +833,18 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         svc.start(162.0e6, fs);
         const size_t blk = (size_t)(fs / 100);
         const double t0 = wallNow(); double fed = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+        std::map<uint64_t, ThreadTime> th0;
         while (fed < kRtWarmSec + kRtSec) {
-            if (!measuring && fed >= kRtWarmSec) { c0 = processCpu(); measuring = true; }
+            if (!measuring && fed >= kRtWarmSec) { c0 = processCpu(); th0 = threadTimes(); measuring = true; }
             svc.feed(x.data() + pos, blk);
             pos = (pos + blk) % x.size(); fed += blk / fs;
             const double ahead = fed - (wallNow() - t0);
             if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        r.pct = 100.0 * (processCpu() - c0) / kRtSec;
+        // ★★ SCORED BY THE HOTTEST THREAD against one core, as ADS-B (a whole-radio mode on its own worker); the
+        //    process total stays in the row's detail.
+        scoreHottest(r, th0, threadTimes(), kRtSec, 100.0 * (processCpu() - c0) / kRtSec);
         const std::string j = svc.report();
         if (const char* p = std::strstr(j.c_str(), "\"msgs\":")) r.decoded = std::atoi(p + 7);
         if (svc.droppedBlocks()) r.label += " (fell behind)";
@@ -785,8 +863,9 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
             svc.start(*band, c->centre, c->rate);
             const size_t blk = (size_t)(c->rate / 100);
             const double t0 = wallNow(); double fed = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+            std::map<uint64_t, ThreadTime> th0;
             while (fed < kRtWarmSec + kRtSec) {
-                if (!measuring && fed >= kRtWarmSec) { c0 = processCpu(); measuring = true; }
+                if (!measuring && fed >= kRtWarmSec) { c0 = processCpu(); th0 = threadTimes(); measuring = true; }
                 const size_t n = std::min(blk, c->iq.size() - pos);
                 svc.feed(c->iq.data() + pos, n);
                 pos = (pos + n) % c->iq.size(); fed += (double)n / c->rate;
@@ -794,7 +873,7 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
                 if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            r.pct = 100.0 * (processCpu() - c0) / kRtSec;
+            scoreHottest(r, th0, threadTimes(), kRtSec, 100.0 * (processCpu() - c0) / kRtSec);   // ★ as AIS, as ADS-B
             const std::string j = svc.report();
             int devices = 0;
             for (size_t p = j.find("\"model\":"); p != std::string::npos; p = j.find("\"model\":", p + 1)) ++devices;

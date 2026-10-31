@@ -187,7 +187,9 @@ inline std::vector<std::complex<float>> busyBandSlice(const digi::Span& span, do
 
 /** One row. `decoded`: what it got out of its signal (−1 = not counted); `ms`: the wall time the row took (the total is
  *  shown to the owner — vibe_benchmark.h "benchSec"). */
-struct Row { std::string id, label; double pct = -1; int decoded = -1; int ms = -1; };
+struct Row { std::string id, label; double pct = -1; int decoded = -1; int ms = -1;
+             /** ★ Rows scored by their hottest thread (AIS, ISM): which thread, and every thread's % plus "process". */
+             std::string hottest; std::vector<std::pair<std::string, double>> threads; };
 inline double rowClock() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
 /** Time one decoder: `seconds` of its signal, fed as fast as it will take it; `settle` waits for

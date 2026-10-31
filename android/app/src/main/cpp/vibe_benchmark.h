@@ -500,8 +500,8 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         for (auto& m : benchdec::runMoreDecoderRows(benchdec::loadDecoderClips(decoderClip), stepFn)) rows.push_back(std::move(m));
         std::set<std::string> offSw;
         for (const auto& d : rows) {
-            Result r; r.id = d.id; r.label = d.label; r.rate = 48000; r.pct = d.pct; r.hottest = "decoder";
-            r.decoded = d.decoded; r.ms = d.ms;
+            Result r; r.id = d.id; r.label = d.label; r.rate = 48000; r.pct = d.pct; r.hottest = d.hottest.empty() ? "decoder" : d.hottest;
+            r.decoded = d.decoded; r.ms = d.ms; r.threads = d.threads;
             res.push_back(r);
             const benchdec::RowRule rule = benchdec::ruleFor(d.id);
             const std::string g = grade(d.pct);
