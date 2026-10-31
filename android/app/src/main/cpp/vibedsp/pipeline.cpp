@@ -252,11 +252,12 @@ static bool chainBand(RxPipeline::Mode mode, double bwHz, double& lo, double& hi
     //     BW_EDGE_MAX is per EDGE, so the total width is twice it: SSB 12 k, AM 40 k, NFM 60 k,
     //     WFM 500 k. These ladders clear all four with a band to spare.
     switch (mode) {
-        case M::AM:  { static const double e[] = { 1000.0, 6000.0, 12000.0, 24000.0, 48000.0 };
+        case M::AM: case M::SAM: case M::SAM_U: case M::SAM_L: case M::AM_STEREO:
+                     { static const double e[] = { 1000.0, 6000.0, 12000.0, 24000.0, 48000.0 };
                        return pickBand(e, 5, bwHz, lo, hi); }
         case M::NFM: { static const double e[] = { 4000.0, 8000.0, 16000.0, 32000.0, 64000.0 };
                        return pickBand(e, 5, bwHz, lo, hi); }
-        case M::SSB_USB: case M::SSB_LSB: case M::CW:
+        case M::SSB_USB: case M::SSB_LSB: case M::CW: case M::ECSS_U: case M::ECSS_L:
                      { static const double e[] = { 200.0, 1500.0, 3000.0, 6000.0, 12000.0 };
                        return pickBand(e, 5, bwHz, lo, hi); }
         // ★★★ WFM IS ON THIS PATH TOO, AND EXCLUDING IT WAS A MISREADING OF AdaptiveIf. That
@@ -338,7 +339,7 @@ bool RxPipeline::applySmoothBandwidth() {
     if (!smoothBw_ || decs_.empty() || lastFs_ <= 0.0) return false;
     if (bwHz_ < chainBwLo_ || bwHz_ > chainBwHi_)       return false;
     const bool ssbLike = (mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB || mode_ == Mode::CW);
-    const double chHalf = std::max(1.0, ssbLike ? bwHz_ : bwHz_ * 0.5);
+    const double chHalf = std::max(1.0, (ssbLike || isEcss(mode_)) ? bwHz_ : bwHz_ * 0.5);
     const double cutoff = std::min(0.45 / lastDecim_, chHalf / lastFs_);
     // Same transition the chain was built with, so the design comes out the same length and the
     // swap is accepted; deepStop matches the last stage — this IS the adjacent-channel rejection.
@@ -358,6 +359,11 @@ bool RxPipeline::applySmoothBandwidth() {
     if (mode_ == Mode::NFM) {
         if (!fm_) return false;
         fm_->setGain((float)(chFs_ / (2.0 * M_PI * std::max(1.0, bwHz_ * 0.5))));
+    }
+    // ★ V12 the AM family: the listener's width is auto bandwidth's ceiling — it moves with the drag
+    if (isAmFamily(mode_)) {
+        if (!sync_) return false;
+        sync_->setUserEdge(audioEdgeHz(mode_, bwHz_));
     }
     return true;
 }
@@ -444,8 +450,9 @@ void RxPipeline::rebuildAudio() {
     // and sloppily leaked 1.4-2.8 kHz back through. Tightening the filter did its job
     // properly and made the missing top half of the voice audible — measured against
     // an UberSDR recording of the same signal, we were 37 dB down over 2.0-2.7 kHz.
+    // ★ V12 ECSS is one-sided like SSB: its width is the sideband's, so the channel holds ±bw (the carrier at 0)
     const bool ssbLike = (mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB ||
-                          mode_ == Mode::CW);
+                          mode_ == Mode::CW || isEcss(mode_));
     // ★★★ bw/2, AND THE ATTEMPT TO WIDEN IT IS RECORDED HERE SO IT IS NOT REPEATED.
     //
     // The observation that started it is real: at bw/2 the recovered RDS subcarrier is 1.86 dB
@@ -615,7 +622,7 @@ void RxPipeline::rebuildAudio() {
 
     // Construct the demod for the active mode. FM gain maps radians/sample to a
     // unit-ish audio level at the channel rate.
-    am_.reset(); fm_.reset(); ssb_.reset(); audioLpf_.reset(); lmrLpf_.reset();
+    am_.reset(); fm_.reset(); ssb_.reset(); sync_.reset(); audioLpf_.reset(); lmrLpf_.reset();
     // ★ Was the audio AGC already running and converged? If so its envelope is still a
     // good estimate of the signal we are listening to, and wiping it costs a full
     // re-acquisition (gain 1.0, then a 400 ms climb) — audible as a hard attenuation.
@@ -629,12 +636,26 @@ void RxPipeline::rebuildAudio() {
     audioDecim_ = 1; audFs_ = chFs_;
     useFmDc_ = false;   // FM-only; must not survive a switch to AM/SSB
     switch (mode_) {
-        case Mode::AM:                          am_ = std::make_unique<AmDemod>();
-                                                useAgc_ = true; agc_.configure(chFs_);
-                                                if (!hadAgc) agc_.reset();
-                                                agc_.guard(); break;
+        /* ★★ V12 THE AM FAMILY IS ONE DETECTOR (SyncAm). Plain AM with auto bandwidth off is AmDemod inside it,
+         *  sample for sample; everything else starts from the carrier PLL. The synchronous modes arrive levelled
+         *  against the carrier, so the AGC behind them is held to 12 dB of lift (see Agc::setMaxGain). */
+        case Mode::AM: case Mode::SAM: case Mode::SAM_U: case Mode::SAM_L:
+        case Mode::ECSS_U: case Mode::ECSS_L: case Mode::AM_STEREO:
+            sync_ = std::make_unique<SyncAm>();
+            sync_->configure(syncDet(mode_), chFs_, audioEdgeHz(mode_, bwHz_));
+            sync_->setAutoBw(amAutoBw_.load(std::memory_order_relaxed));
+            useAgc_ = true; agc_.configure(chFs_);
+            agc_.setMaxGain(sync_->carrierLevelled() ? 4.0f : 256.0f);
+            if (!hadAgc) agc_.reset();
+            agc_.guard();
+            if (mode_ == Mode::AM_STEREO) {
+                resampR_ = std::make_unique<RationalResampler>(audFs_, outRate_, RationalResampler::ExactRate{});
+                lastAmStereo_ = false;
+            }
+            break;
         case Mode::SSB_USB: case Mode::SSB_LSB:
         case Mode::CW:
+            agc_.setMaxGain(256.0f);
             ssb_ = std::make_unique<SsbDemod>();
             ssb_->configure(mode_ == Mode::SSB_LSB ? SsbDemod::Side::LSB : SsbDemod::Side::USB,
                             bwHz_, chFs_, smoothBw_ ? chainBwLo_ : 0.0);
@@ -858,6 +879,9 @@ void RxPipeline::feed(const cf32* iq, int n) {
         // ★ Here rather than in the resync, because THIS is the event that means "different
         //   signal". A decoder being attached does not.
         if (chFs_ > 0.0) pll_.configure(19000.0, chFs_);
+        // ★★ V12 and the AM family re-finds ITS carrier, and forgets every auto-bandwidth verdict — a limit
+        //    decided for the last station must never travel with the dial ([[never_limit_permanently]])
+        if (sync_) sync_->retune();
         ++measGen_;                      // …and so does the instrument: a different station
         // ★★★ AND THE IF GOES BACK TO WIDE, BECAUSE NARROWING IS A DECISION ABOUT A STATION.
         //     The engage rule needs 3 dB of benefit in EITHER direction — deliberately, so it
@@ -1309,7 +1333,14 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
             const float need = multipathValid_ ? 10.0f : 13.0f;
             multipathValid_ = snrValid_ && multipath_.plausible() && (blendSnrDb_ > need);
         } else { multipathCorr_ = 0.0f; multipathValid_ = false; }
-        if (am_)       am_->process(chB.data(), demodBuf_.data(), nc);
+        if (sync_) {
+            sync_->setAutoBw(amAutoBw_.load(std::memory_order_relaxed));
+            { const unsigned a = amArms_.load(std::memory_order_relaxed); sync_->setArms(a & 1, a & 2, a & 4, a & 8); }
+            if (mode_ == Mode::AM_STEREO) amR_.resize((size_t)nc);
+            sync_->process(chB.data(), demodBuf_.data(), mode_ == Mode::AM_STEREO ? amR_.data() : nullptr, nc);
+            { std::lock_guard<std::mutex> lk(amStMtx_); amSt_ = sync_->status(); }
+        }
+        else if (am_)  am_->process(chB.data(), demodBuf_.data(), nc);
         else if (fm_)  fm_->process(chB.data(), demodBuf_.data(), nc);
         else if (ssb_) ssb_->process(chB.data(), demodBuf_.data(), nc);
         trace_("demod", demodBuf_.data(), nc);
@@ -1432,7 +1463,31 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
             audioHiCutHz_ = 15000.0f;
         }
 
-        if (stereo_) {
+        if (mode_ == Mode::AM_STEREO && sync_ && resampR_) {
+            // ── ★★ V12 AM STEREO (C-QUAM compatible): L and R from SyncAm, one LINKED level for both ──
+            //    (an AGC per channel would pan the image whenever one side is louder)
+            float* l = demodBuf_.data(); float* r = amR_.data();
+            if (useAgc_) {
+                tmpLink_.resize((size_t)nc);
+                for (int i = 0; i < nc; ++i) tmpLink_[i] = std::max(std::fabs(l[i]), std::fabs(r[i]));
+                agc_.gainsFor(tmpLink_.data(), nc);
+                for (int i = 0; i < nc; ++i) { l[i] *= tmpLink_[i]; r[i] *= tmpLink_[i]; }
+                agc_.guard();
+            }
+            audioBuf_.resize(resamp_->maxOut(nc));
+            rOutBuf_.resize(resampR_->maxOut(nc));
+            const int na = resamp_->process(l, nc, audioBuf_.data());
+            const int nb = resampR_->process(r, nc, rOutBuf_.data());
+            const int no = std::min(na, nb);
+            if (no > 0) {
+                ilvBuf_.resize(no * 2);
+                interleave2(audioBuf_.data(), rOutBuf_.data(), ilvBuf_.data(), no);
+                cb_.audio(cb_.ctx, ilvBuf_.data(), no, 2, outRate_);
+            }
+            const bool lk = sync_->status().pilot;
+            const bool forced = stereoReport_.exchange(false, std::memory_order_relaxed);
+            if (cb_.stereo && (lk != lastAmStereo_ || forced)) { lastAmStereo_ = lk; cb_.stereo(cb_.ctx, lk); }
+        } else if (stereo_) {
             // ── WFM stereo MPX decode ────────────────────────────────────────
             // demodBuf_ is the MPX. L+R = LPF(mpx); L-R = LPF(mpx * 38kHz_ref).
             // Only generate the 57 kHz reference and bit clock when something is
@@ -1842,7 +1897,7 @@ void RxPipeline::stop() {
     meas_.stop();
     stopDemodThread_();
     stopSpecThread_();
-    cfft_.reset(); zoom_.reset(); decs_.clear(); am_.reset(); resamp_.reset();
+    cfft_.reset(); zoom_.reset(); decs_.clear(); am_.reset(); sync_.reset(); resamp_.reset();
 }
 
 /** Thread-safe request; the DSP thread applies it in feed(). Only a CHANGE marks dirty, so a

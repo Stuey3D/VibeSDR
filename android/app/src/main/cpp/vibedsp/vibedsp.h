@@ -1399,6 +1399,17 @@ public:
      *  this AGC is only a gentle leveller + anti-clip there: a ceiling of 4 (12 dB) stops it lifting
      *  the noise in every programme pause, which is the "pumping" SAM is meant to cure. */
     void setMaxGain(float g) { maxGain_ = g > 1.0f ? g : 1.0f; }
+    /** The same AGC, but x[] holds a LEVEL per sample (max |L|,|R|) and gets the GAIN back — so two
+     *  channels share one gain (AM stereo: per-channel gains would pan the image). */
+    void gainsFor(float* x, int n) {
+        for (int i = 0; i < n; ++i) {
+            const float a = x[i];
+            env_ += (a > env_ ? atk_ : rel_) * (a - env_);
+            float g = kTarget / (env_ + 1e-6f);
+            if (g > maxGain_) g = maxGain_;
+            x[i] = g;
+        }
+    }
 private:
     float env_ = kTarget, atk_ = 0.05f, rel_ = 1e-4f;
     float maxGain_ = 256.0f;                   // ceiling (don't amplify silence)
@@ -2763,7 +2774,13 @@ private:
     // config
     Det det_ = Det::ENV;
     double fs_ = 0.0, userEdge_ = 5000.0;
-    bool autoBw_ = true, armNoise_ = true, armInterf_ = true, armMrc_ = true, armNotch_ = true;
+    /* ★★★ THE NOISE ARM IS OFF — MEASURED, NOT ASSUMED (2026-10-31, docs/v12/AM-SYNC.md). On real skywave the
+     *  two sidebands lose their mirror coherence (selective fading turns H(f) and H(−f) different), so the
+     *  mirror estimator under-reads the programme and called a healthy station noise above 2 kHz: 6060 kHz cut to
+     *  2 kHz, −1.8 dB on the coherence score; 7350 −1.3 dB. The interference arm (one side 6 dB dirtier than the
+     *  other) does not depend on that coherence and won +3.5 dB (AM) / +2.8 dB (SAM) on 7355 under a 5 kHz
+     *  neighbour. Kept as a bench switch (setArms). */
+    bool autoBw_ = true, armNoise_ = false, armInterf_ = true, armMrc_ = true, armNotch_ = true;
     bool safety_ = true, carrierLevel_ = true;
     float forceLo_ = 0.0f, forceHi_ = 0.0f;
     // tracker
@@ -2831,7 +2848,28 @@ private:
 // land in later phases behind the same interface.
 class RxPipeline {
 public:
-    enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM, WFM /* mono; stereo+RDS later */ };
+    /** ★★ V12: SAM … AM_STEREO are the synchronous AM family (SyncAm). They are APPENDED so every existing
+     *  integer value (VIBE_DSP_PLAN's mode=%d, any stored enum) keeps its meaning. */
+    enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM, WFM, SAM, SAM_U, SAM_L, ECSS_U, ECSS_L, AM_STEREO };
+    /** AM-shaped: the passband straddles the carrier, width = both sides (AM, SAM, SAM-U/L, AM stereo). */
+    static bool isAmShaped(Mode m) {
+        return m == Mode::AM || m == Mode::SAM || m == Mode::SAM_U || m == Mode::SAM_L || m == Mode::AM_STEREO;
+    }
+    /** ECSS: one carrier-locked sideband, the width given ONE-SIDED like an SSB filter. */
+    static bool isEcss(Mode m) { return m == Mode::ECSS_U || m == Mode::ECSS_L; }
+    /** Every mode SyncAm demodulates (all of the AM family, AM itself included). */
+    static bool isAmFamily(Mode m) { return isAmShaped(m) || isEcss(m); }
+    /** The SyncAm detector for a mode (ENV for plain AM). */
+    static SyncAm::Det syncDet(Mode m) {
+        switch (m) {
+            case Mode::SAM: return SyncAm::Det::SAM;       case Mode::SAM_U: return SyncAm::Det::SAM_U;
+            case Mode::SAM_L: return SyncAm::Det::SAM_L;   case Mode::ECSS_U: return SyncAm::Det::ECSS_U;
+            case Mode::ECSS_L: return SyncAm::Det::ECSS_L; case Mode::AM_STEREO: return SyncAm::Det::STEREO;
+            default: return SyncAm::Det::ENV;
+        }
+    }
+    /** The listener's ONE-SIDED audio edge for a width in mode m. */
+    static double audioEdgeHz(Mode m, double bwHz) { return isEcss(m) ? bwHz : bwHz * 0.5; }
     /** ★★★ THE NARROWEST WFM PASSBAND (total width, both sides). setTune() clamps to it, and it
      *  is the bottom edge of WFM's width ladder (chainBand in pipeline.cpp).
      *  ★ Why 40 kHz: a broadcast carrier swings ±75 kHz, and the narrowest IF anyone listens to
@@ -2859,10 +2897,11 @@ public:
     static constexpr double kWfmMaxBwHz = 500000.0;
     static double maxBwHz(Mode m) {
         switch (m) {
-            case Mode::AM:  return kAmMaxBwHz;
+            case Mode::AM:  case Mode::SAM: case Mode::SAM_U: case Mode::SAM_L: case Mode::AM_STEREO:
+                            return kAmMaxBwHz;
             case Mode::NFM: return kNfmMaxBwHz;
             case Mode::WFM: return kWfmMaxBwHz;
-            case Mode::SSB_USB: case Mode::SSB_LSB: case Mode::CW: break;
+            case Mode::SSB_USB: case Mode::SSB_LSB: case Mode::CW: case Mode::ECSS_U: case Mode::ECSS_L: break;
         }
         return kSsbMaxBwHz;
     }
@@ -3396,6 +3435,15 @@ public:
      *     are combined rather than arbitrated — the narrower request wins, which is the only
      *     answer that satisfies both. */
     void setAutoBandwidth(double hz) { autoBwReq_.store(hz, std::memory_order_relaxed); }
+    /** ★★ V12 AM AUTO BANDWIDTH (AM, SAM, SAM-U/L, ECSS-U/L, AM stereo) — SyncAm measures and cuts by itself;
+     *  this is only the switch. ON by default, like the FM one. The listener's width stays the ceiling. */
+    void setAmAutoBandwidth(bool on) { amAutoBw_.store(on, std::memory_order_relaxed); }
+    bool amAutoBandwidth() const { return amAutoBw_.load(std::memory_order_relaxed); }
+    /** The AM family's lock / carrier offset / applied edges / pilot — a copy taken once per block. */
+    SyncAm::Status amSyncStatus() const { std::lock_guard<std::mutex> lk(amStMtx_); return amSt_; }
+    bool amSyncActive() const { return isAmFamily(mode_); }
+    /** Bench only: switch auto bandwidth's arms (1 noise, 2 interference, 4 MRC, 8 notch); default 0xE. */
+    void setAmAutoArms(unsigned mask) { amArms_.store(mask, std::memory_order_relaxed); }
     double autoBandwidth() const { return autoBwReq_.load(std::memory_order_relaxed); }
     /** How much better (dB) the signal would measure with the IF narrowed to ifCandidateHz().
      *  Positive = narrowing helps. Measured continuously on a shadow copy of the real signal. */
@@ -3510,6 +3558,14 @@ private:
     // and cheapest. Same audio, ~3x less CPU. See rebuildAudio().
     std::vector<std::unique_ptr<FirDecimator>> decs_;
     std::unique_ptr<AmDemod> am_;
+    /** ★★ V12 the AM family's detector (plain AM included — with auto bandwidth off it IS AmDemod). */
+    std::unique_ptr<SyncAm> sync_;
+    std::atomic<bool> amAutoBw_{true};
+    std::atomic<unsigned> amArms_{0xE};      // ★ the noise arm off by default — see SyncAm::armNoise_
+    mutable std::mutex amStMtx_;
+    SyncAm::Status amSt_{};
+    std::vector<float> amR_, tmpLink_;     // AM stereo: the right channel; the linked AGC's level/gain
+    bool lastAmStereo_ = false;
     std::unique_ptr<FmDemod> fm_;
     std::unique_ptr<SsbDemod> ssb_;
     Agc  agc_;                              // audio AGC (AM/SSB/CW)
