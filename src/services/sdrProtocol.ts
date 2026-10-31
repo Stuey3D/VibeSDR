@@ -397,6 +397,9 @@ export interface SDRCallbacks {
    *  missing field into a false one and pinned its AUTO BW button off for ever. */
   onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
                       autobw?: boolean; nbx?: boolean;
+                      /** ★★ V12 the modes this server's AUTO (bandwidth) can act on, for THIS listener (bwAuto.ts).
+                       *  [] from an older server — no AUTO key is drawn. */
+                      autoBwModes?: string[];
                       /** ★ NFM Voice (true) vs Raw; undefined from a server without the filter. */
                       nfmVoice?: boolean }) => void;
   /** ★★★ FM de-emphasis (SECONDS: 0, 50e-6, 75e-6) and stereo as the SERVER is running them. Each is
@@ -426,6 +429,8 @@ export interface SDRCallbacks {
   onDrm?:       (s: import('./drm').DrmState) => void;
   /** ★ V12 synchronous AM, VIBESERVER-ONLY: carrier lock + offset, the AUTO BW edges applied, AM stereo's pilot (amSync.ts). */
   onAmSync?:    (s: import('./amSync').AmSyncState) => void;
+  /** ★★ V12 VIBESERVER-ONLY: what AUTO has done to this listener's passband (bwAuto.ts) — on a change, ~once a second. */
+  onBwAuto?:    (s: import('./bwAuto').BwAutoState) => void;
   /** ★ V12 AIS, VIBESERVER-ONLY: a report about once a second while the receiver is in AIS (its arrival MEANS AIS is on);
    *  null = it ended (`ais_off`); `err` = the refusal (`ais_error`). */
   onAis?:       (r: AisReport | null, err?: string) => void;

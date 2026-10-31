@@ -137,6 +137,7 @@ import { hzReachable } from '../utils/tuneWindow';
 import DrmPanel from '../components/DrmPanel';
 import { drmOffered, type DrmState } from '../services/drm';
 import { amSyncOffered, amSyncReadout, AM_SYNC_LABEL, AM_SYNC_NAME, isAmFamily, type AmSyncId, type AmSyncState } from '../services/amSync';   // ★ V12
+import { autoBwOffered, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
 import { landingSpotBand, spotBandAt, stepSpotBand, bandPassband } from '../utils/digiModes';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
@@ -842,7 +843,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setDabCapable(false);
     setCwCapable(false);
     setPskCapable(false); setJttyCapable(false); setDscCapable(false); setSitoraCapable(false); setRadioTunable([]);
-    setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]);
+    setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setAutoBwModes([]); setBwAutoState(null);
     setAdsbCap(undefined);
     setIsmCap(undefined);
     setNdbCap(undefined);   // ★ V12 NDB
@@ -2527,6 +2528,10 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [drmCapable, setDrmCapable] = useState(false);
   /** ★★ V12 the synchronous AM family this server lists (vibeserver.json modes) — none on an older VibeServer. */
   const [amSyncCap, setAmSyncCap] = useState<AmSyncId[]>([]);
+  /* ★★ V12 THE AUTO KEY BY THE PASSBAND SLIDERS (bwAuto.ts): the modes the server says AUTO can act on, and what it has
+   *  done. Both from the server only; reset with the connection. */
+  const [autoBwModes, setAutoBwModes] = useState<string[]>([]);
+  const [bwAutoState, setBwAutoState] = useState<BwAutoState | null>(null);
   const [amSyncState, setAmSyncState] = useState<AmSyncState | null>(null);
   const [drmState, setDrmState] = useState<DrmState | null>(null);
   const spotsBandCapRef = useRef<SpotsBandCap | undefined>(undefined);
@@ -6896,6 +6901,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       onDrm: (d) => { if (!destroyed.current && client.current?.getStatus().mode === 'drm') setDrmState(d); },
       // ★ V12 the AM family's lock / applied width / pilot — a report after leaving AM is a ghost (as onDrm)
       onAmSync: (a) => { if (!destroyed.current) setAmSyncState(isAmFamily(client.current?.getStatus().mode) ? a : null); },
+      onBwAuto: (b) => { if (!destroyed.current) setBwAutoState(b); },   // ★★ V12 what AUTO has done to the passband
       /* ★ V12 AIS: a report (on — arriving MEANS AIS is on, whoever put the receiver there: the map opens on the transition),
        *  the server's ais_off (null), or a refusal (the map that opened on the press closes; the reason as an alert, after
        *  the modal has gone — onAdsb's note). */
@@ -7435,6 +7441,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         // ★ Only when the server actually stated it — see the note on onFmDsp. A server that says
         //   nothing leaves the button where it is rather than being read as "off".
         if (typeof st.autobw === 'boolean') setFmAutoBw(st.autobw);
+        if (st.autoBwModes) setAutoBwModes(st.autoBwModes);   // ★★ V12 where the AUTO key is drawn (bwAuto.ts)
         if (typeof st.nbx === 'boolean') setFmNbx(st.nbx);
         /* ★★ THE SERVER SAYS WHAT IT IS DOING; THE LISTENER'S REMEMBERED CHOICE IS STATED ONCE.
          *  A new connection starts at the server's default (Voice). If this listener chose Raw last
@@ -9710,6 +9717,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setStatus({ ...c.getStatus() });
     if (m !== 'wfm' && m !== 'amst') setFmStereo(false);  // stereo icon only applies to WFM (and V12 AM stereo)
     if (!isAmFamily(m)) setAmSyncState(null);
+    setBwAutoState(null);   // ★★ V12 the new mode's AUTO edges come from the server (bwauto) within a second
     // OWRX image decoders (SSTV/Fax) ride on top of the analog carrier — sync the
     // decoder canvas to the adapter's REAL decoder state (it auto-keeps/clears the
     // decoder when the carrier changes), so changing the carrier doesn't close it.
@@ -12766,7 +12774,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears), and under them a BALANCE between A and B to turn the louder one down; VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers them, synchronous AM sits beside AM — SAM (locked to the carrier, so selective fading does not distort), SAM-U and SAM-L (one sideband, away from a neighbour), ECSS-U and ECSS-L (the same lock with an SSB-style filter) and AM-ST (AM Stereo, C-QUAM compatible: the stereo rings light while its pilot is received); AM AUTO BW for them is in the audio menu. DRM sits beside AM too: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs, opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, SSTV, APRS) and Utility or Broadcast (TIME, ADV RDS). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers them, synchronous AM sits beside AM — SAM (locked to the carrier, so selective fading does not distort), SAM-U and SAM-L (one sideband, away from a neighbour), ECSS-U and ECSS-L (the same lock with an SSB-style filter) and AM-ST (AM Stereo, C-QUAM compatible: the stereo rings light while its pilot is received). Where the server offers it for the mode you are in, AUTO sits above SYNC between the bandwidth sliders: the receiver sets the width itself (SSB to the voice being sent, CW round the keyed tone, AM away from a neighbour, FM narrower for a weak station) and the sliders show what it chose. Move a slider and AUTO switches off. DRM sits beside AM too: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs, opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, SSTV, APRS) and Utility or Broadcast (TIME, ADV RDS). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
     // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
@@ -14632,6 +14640,10 @@ export default function SDRScreen({ route, navigation }: Props) {
         bwEdgeMax={client.current ? filterEdgeMax(client.current.caps, status.mode) : 6000}
         bwEdgeMin={client.current ? filterEdgeMin(client.current.caps, status.mode) : 0}
         onFilterBoth={status.mode === 'drm' ? undefined : onFilterBoth}   // ★ V12 DRM: the width row is not offered
+        /* ★★ V12 AUTO above SYNC — only where this server lists the mode (autoBwModes); the sliders show what AUTO chose
+         *  while it cuts; a drag is a manual override, so ModeSelector turns AUTO off first (onAutoBw(false)). */
+        autoBw={autoBwOffered(icom ? [] : autoBwModes, status.mode)
+          ? { on: fmAutoBw, onToggle: askWrap(onFmAutoBw), state: bwAutoState } : undefined}
         onSelect={onMode}
         onClose={() => setModeSelOpen(false)}
         showServerMaps={(route.params.serverType ?? 'ubersdr') !== 'owrx' && !isLocal && !isKiwi}
@@ -14932,9 +14944,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         fmNr={fmNr}   onFmNr={vibeFmDsp && !icom ? askWrap(onFmNr) : undefined}
         fmIms={fmIms} onFmIms={vibeFmDsp && !icom ? askWrap(onFmIms) : undefined}
         fmAutoBw={fmAutoBw} onFmAutoBw={vibeFmDsp && !icom ? askWrap(onFmAutoBw) : undefined}
-        /* ★★ V12 AM AUTO BW — the SAME server switch (one AUTO BW), offered where this VibeServer has the synchronous AM
-         *  family and never on an Icom; its line says what the carrier lock and auto bandwidth are doing right now. */
-        onAmAutoBw={amSyncCap.length && !icom ? askWrap(onFmAutoBw) : undefined}
+        /* ★★ V12 the AM SYNC line — what the carrier lock and auto bandwidth are doing right now. Its switch MOVED to the
+         *  AUTO key by the passband sliders (ModeSelector `autoBw`). */
         amSyncLine={amSyncReadout(amSyncState, status.mode)}
         fmCeq={fmCeq} onFmCeq={vibeFmDsp && !icom ? askWrap(onFmCeq) : undefined}
         fmNb={fmNb}   onFmNb={vibeFmDsp && !icom ? askWrap(onFmNb) : undefined}

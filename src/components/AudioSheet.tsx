@@ -693,10 +693,7 @@ export interface AudioSheetProps {
   fmNr?: boolean;   onFmNr?: (on: boolean) => void;
   fmIms?: boolean;  onFmIms?: (on: boolean) => void;
   fmAutoBw?: boolean;  onFmAutoBw?: (on: boolean) => void;
-  /** ★★ V12 AM AUTO BW — the SAME server switch as A-BW (fmAutoBw), its own row where an AM listener looks; given only
-   *  on a VibeServer with the synchronous AM family (never an Icom). `amSyncLine` = what the carrier lock and auto
-   *  bandwidth are doing now (amSync.ts amSyncReadout), '' outside the AM family. */
-  onAmAutoBw?: (on: boolean) => void;
+  /** ★★ V12 `amSyncLine` = what the AM family's carrier lock and auto bandwidth are doing (amSyncReadout), or empty. */
   amSyncLine?: string;
   fmCeq?: boolean;  onFmCeq?: (on: boolean) => void;
   fmNb?: boolean;   onFmNb?: (on: boolean) => void;
@@ -740,7 +737,7 @@ export default function AudioSheet({
   notchOn = false, onNotch, binaural = false, onBinaural, vfoStereo = true, onVfoStereo, vfoABOn = false, vfoRows,
   dualStereo = true, onDualStereo, dualMuted = false, onDualMute,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
-  fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw, onAmAutoBw, amSyncLine,
+  fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw, amSyncLine,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
   onOwrxSquelch, onOwrxSquelchAuto, onOwrxNr, owrxDspDefaults, visualGain = 0,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -1119,20 +1116,14 @@ export default function AudioSheet({
             </View>
           )}
 
-          {/* ★★ V12 AM AUTO BW (docs/v12/AM-SYNC.md): when a neighbour splatters into one sideband, SAM and ECSS narrow
-              ONLY that side (AM and AM stereo narrow both), judged on the whole signal all the time so it widens again
-              by itself; the listener's width is the ceiling. The line under it is the live answer — the carrier lock and
-              its offset, the width applied — in the standard font (a menu, not a main control). */}
-          {onAmAutoBw && (
+          {/* ★★ V12 THE AM SYNC LINE (docs/v12/AM-SYNC.md) — the carrier lock and its offset, the width AUTO applied, a
+              heterodyne notch — in the standard font (a menu, not a main control). ★ Its AM AUTO BW switch MOVED to the
+              AUTO key by the passband sliders (mode sheet, §11), which serves every mode with an automatic width. */}
+          {!!amSyncLine && (
             <View style={[st.bwRow, askDim]}>
-              <View style={{ flex: 1 }}>
-                <Text style={[st.bwLabel, { width: undefined }]}>AM AUTO BW</Text>
-                {!!amSyncLine && (
-                  <Text style={[st.bwLabel, { width: undefined, opacity: 0.7, fontSize: 10 }]} accessibilityLiveRegion="none"
-                        numberOfLines={1}>{amSyncLine}</Text>
-                )}
-              </View>
-              <Toggle label={fmAutoBw ? 'ON' : 'OFF'} on={fmAutoBw === true} onPress={() => onAmAutoBw?.(!fmAutoBw)} a11y={`AM auto bandwidth, ${fmAutoBw ? 'on' : 'off'}`} />
+              <Text style={[st.bwLabel, { width: 78 }]}>AM SYNC</Text>
+              <Text style={[st.bwLabel, { flex: 1, width: undefined, opacity: 0.7, fontSize: 10 }]} accessibilityLiveRegion="none"
+                    numberOfLines={1}>{amSyncLine}</Text>
             </View>
           )}
 

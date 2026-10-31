@@ -157,6 +157,7 @@ import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeSt
 import { plainEnglish } from '../../../src/utils/cwVocab';
 import { cwHasWpmRange, cwWpmText } from '../../../src/utils/cwFormat';
 import { callHtml, wireQrz } from './qrzLink';
+import { autoBwOffered, shownEdges, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
 import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, modeLegend, type AmSyncId, type AmSyncState } from '../../../src/services/amSync';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
@@ -837,7 +838,6 @@ async function loadAudioPolicy(httpBase: string) {
     drmCap = Array.isArray(j.modes) && j.modes.includes('drm');   // ★ V12 DRM — see offeredModes
     // ★ V12 synchronous AM: the family THIS server lists (an older one played "sam" as plain AM — never offered there)
     amSyncCap = amSyncOffered(Array.isArray(j.modes) ? j.modes : []);
-    setHidden($('amAutoBwRow'), amSyncCap.length === 0);
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
@@ -1919,8 +1919,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         srvAutoBw = s.autobw;
         setToggleTo('autoBwBtn', s.autobw, 'autobw',
                     (on) => on ? 'AUTO BW ON' : 'AUTO BW OFF');
-        setToggleTo('amAutoBwBtn', s.autobw, 'autobw', (on) => on ? 'ON' : 'OFF');   // ★ V12 the same switch
+        setToggleTo('bwAuto', s.autobw, 'autobw', () => 'AUTO');   // ★★ V12 the same switch
       }
+      // ★★ V12 where the AUTO key is drawn — the server's list, never ours (bwAuto.ts)
+      if (s.autoBwModes) { autoBwModesSrv = s.autoBwModes; syncBw(); }
       // ★ The RSP front-end notches, which are sticky in exactly the same way and were the
       //   other half of the same report. Absent = the server has no opinion; leave the
       //   control alone rather than inventing an "off" it never said.
@@ -2509,6 +2511,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       rdsExt = x;
       if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
     },
+    onBwAuto: (b) => { bwAutoState = b; syncBw(); },   // ★★ V12 what AUTO has done to the passband
     onAmSync: (a) => {
       if (!spec || !isAmFamily(spec.mode)) { amSyncState = null; amSyncSync(); return; }   // ★ a ghost after leaving AM
       amSyncState = a; amSyncSync();
@@ -16509,13 +16512,16 @@ function buildMenu() {
   toggle('autoBwBtn', (on) => {
     $('autoBwBtn').textContent = on ? 'AUTO BW ON' : 'AUTO BW OFF';
     spec!.setAutoBw(on);
-    setToggleTo('amAutoBwBtn', on, 'autobw', (v) => v ? 'ON' : 'OFF');
+    setToggleTo('bwAuto', on, 'autobw', () => 'AUTO'); syncBw();   // ★★ V12 the AUTO key is the same switch
   }, 'autobw', srvAutoBw ?? true, /*pushOnInit=*/false);
-  // ★★ V12 AM AUTO BW — one server switch with two homes (see #amAutoBwRow); each keeps the other in step.
-  toggle('amAutoBwBtn', (on) => {
+  // ★★ V12 THE AUTO KEY by the bandwidth sliders (#bwAuto) — the same per-listener server switch as AUTO BW above; each
+  //    keeps the other in step. Shown only where the server lists the mode (syncBw).
+  toggle('bwAuto', (on) => {
     spec!.setAutoBw(on);
     setToggleTo('autoBwBtn', on, 'autobw', (v) => v ? 'AUTO BW ON' : 'AUTO BW OFF');
+    syncBw();
   }, 'autobw', srvAutoBw ?? true, /*pushOnInit=*/false);
+  $('bwAuto').textContent = 'AUTO';
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 
   // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
@@ -17126,6 +17132,7 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   // ★ V12 DRM: the box follows the mode; a new mode forgets the old station
   if (m !== 'drm') drmState = null;
   amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second
+  bwAutoState = null;                 // ★★ V12 …and so are AUTO's edges
   drmBoxSync();
   updateVts();
   syncBw();
@@ -17151,6 +17158,17 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
 };
 
 let bwSync = false;
+/* ★★ V12 THE AUTO KEY (bwAuto.ts): the modes the server can act on, and what it has done. Server state only. */
+let autoBwModesSrv: string[] = [];
+let bwAutoState: BwAutoState | null = null;
+const autoOn = () => !$('bwAuto').hidden && $('bwAuto').classList.contains('on');
+/** A drag is a manual override: AUTO goes off for this session, then the edge moves as it always did. */
+function autoOffForDrag() {
+  if (!autoOn() || !spec) return;
+  spec.setAutoBw(false);
+  setToggleTo('bwAuto', false, 'autobw', () => 'AUTO');
+  setToggleTo('autoBwBtn', false, 'autobw', (v) => v ? 'AUTO BW ON' : 'AUTO BW OFF');
+}
 
 function fmtHz(hz: number): string {
   const a = Math.abs(hz);
@@ -17194,10 +17212,13 @@ function syncBw() {
   const edgeMin = spec.mode === 'wfm' ? WFM_MIN_BW_HZ / 2 : 0;
   lo.min = String(edgeMin); lo.max = String(max); lo.step = String(step);
   hi.min = String(edgeMin); hi.max = String(max); hi.step = String(step);
-  lo.value = String(-Math.max(-max, Math.min(0, spec.bandwidthLow)));   // signed -> magnitude
-  hi.value = String(Math.min(max, Math.max(0, spec.bandwidthHigh)));
-  $('bwLoVal').textContent = edgeLabel(spec.bandwidthLow);
-  $('bwHiVal').textContent = edgeLabel(spec.bandwidthHigh);
+  // ★★ V12 AUTO: drawn only where the server lists this mode; while it cuts, the sliders SHOW its edges (never sent)
+  setHidden($('bwAuto'), !autoBwOffered(autoBwModesSrv, spec.mode));
+  const shown = shownEdges({ low: spec.bandwidthLow, high: spec.bandwidthHigh }, autoOn(), bwAutoState);
+  lo.value = String(-Math.max(-max, Math.min(0, shown.low)));   // signed -> magnitude
+  hi.value = String(Math.min(max, Math.max(0, shown.high)));
+  $('bwLoVal').textContent = edgeLabel(shown.low);
+  $('bwHiVal').textContent = edgeLabel(shown.high);
 }
 
 function initBw() {
@@ -17205,11 +17226,13 @@ function initBw() {
   const hi = $<HTMLInputElement>('bwHi');
 
   lo.oninput = () => {
+    autoOffForDrag();                   // ★★ V12 a drag is a manual override
     const v = -Number(lo.value);        // slider holds a magnitude; the edge is negative
     if (bwSync) applyBw(v, -v);
     else applyBw(v, spec!.bandwidthHigh);
   };
   hi.oninput = () => {
+    autoOffForDrag();
     const v = Number(hi.value);
     if (bwSync) applyBw(-v, v);
     else applyBw(spec!.bandwidthLow, v);

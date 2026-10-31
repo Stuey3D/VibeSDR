@@ -36,6 +36,7 @@ import { parseIcomStatus, icomControlMsg, nearestSpanIndex, spanStep,
 
 import type { DrmState } from './drm';
 import { AM_SYNC_PASSBAND, AM_SYNC_MAX_BW, parseAmSync, type AmSyncState } from '../../../src/services/amSync';
+import { parseAutoBwModes, parseBwAuto, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
 import type { WholeKind } from '../../../src/services/wholeModeResume';   // ★ V12: coming back to a whole-radio mode
 // ★ V12 synchronous AM: sau / sal / ecssu / ecssl / amst (src/services/amSync.ts) — offered only where the server lists them
 export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
@@ -557,6 +558,8 @@ export interface SpectrumCallbacks {
     /** ★ TEF-style automatic demodulator bandwidth, and the width it has settled on (Hz). */
     autobw?: boolean;
     autobwHz?: number;
+    /** ★★ V12 the modes this server's AUTO (bandwidth) can act on, for this listener (bwAuto.ts); [] = older server. */
+    autoBwModes?: string[];
     imsBlend?: number;
     nrStrength?: number;      // 0..1.4 (>1 = over-subtraction), absent = never set
     rfNotch?: boolean; dabNotch?: boolean; rfAgc?: boolean;
@@ -654,6 +657,8 @@ export interface SpectrumCallbacks {
   onDrm?: (d: DrmState) => void;
   /** ★ V12 the AM family's carrier lock, applied auto-bandwidth edges and AM-stereo pilot (shim sendAmSync). */
   onAmSync?: (s: AmSyncState) => void;
+  /** ★★ V12 what AUTO has done to this listener's passband (shim sendBwAutoAll) — see bwAuto.ts. */
+  onBwAuto?: (s: BwAutoState) => void;
   /** ★★ V12: the DAB band scan's state as the server publishes it (`dab_scan`) — see src/services/dabBandScan.ts. */
   onDabScan?: (m: unknown) => void;
   /** ★★ V12: hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
@@ -1158,6 +1163,7 @@ export class SpectrumClient {
        *  are only stored; a `dab` comes back whole, in the legacy shape — and an older server's full report passes
        *  straight through. */
       case 'amsync': { const a = parseAmSync(msg); if (a) this.cb.onAmSync?.(a); return; }
+      case 'bwauto': { const b = parseBwAuto(msg); if (b) this.cb.onBwAuto?.(b); return; }
       case 'drm':
         this.cb.onDrm?.(msg as DrmState);
         return;
@@ -1675,6 +1681,7 @@ export class SpectrumClient {
              *    comment above this callback says, and the renderer leaves the control alone. */
             autobw:   typeof msg.autobw === 'boolean' ? msg.autobw : undefined,
             autobwHz: typeof msg.autobwHz === 'number' ? msg.autobwHz : undefined,
+            autoBwModes: parseAutoBwModes(msg.autoBwModes),   // ★★ V12 where the AUTO key is drawn
             nrStrength: typeof msg.nrStrength === 'number' ? msg.nrStrength : undefined,
             rfNotch:  typeof msg.rfNotch  === 'boolean' ? msg.rfNotch  : undefined,
             dabNotch: typeof msg.dabNotch === 'boolean' ? msg.dabNotch : undefined,

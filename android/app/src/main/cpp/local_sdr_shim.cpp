@@ -8688,6 +8688,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     working". Seeded from the server's configured values when the listener arrives, so
         //     the owner still sets the house default and only this listener can change it.
         std::atomic<bool> wspOn{true}, imsOn{true}, ceqOn{true}, nbOn{true}, nbxOn{false};
+        /** ★★ V12 THIS LISTENER'S AUTO (bandwidth) — the AUTO key by the passband sliders. Per listener where each has
+         *  their own pipeline; ON for a new listener (a joiner inherits nobody's choice). See the `autobw` handler. */
+        std::atomic<bool> autoBwOn{true};
+        std::string lastBwAuto;            // ★ V12 the last bwauto state this listener was sent (sendBwAuto)
         // ★★★ ADMIN IS PER LISTENER TOO, and the radio-wide flag it replaces was already
         //     DESCRIBED as "per connected client" while being one atomic for the whole process.
         //     On a shared receiver that means two owners share one bit: whoever unlocks last
@@ -9556,7 +9560,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ And the four FM treatments, for exactly the reason above. Adding a per-listener
             //   control without adding it here is how it comes to look like it is working.
             c->rx->setWeakSignalProc(c->wspOn.load());
-            c->rx->setAmAutoBandwidth(g_autoBwOn.load());   // ★ V12 AM auto bandwidth follows the one AUTO BW switch
+            c->rx->setAmAutoBandwidth(c->autoBwOn.load());   // ★ V12 this listener's AUTO (AM family, SSB, CW)
             c->rx->setIms(c->imsOn.load());
             c->rx->setCeq(c->ceqOn.load());
             c->rx->setNoiseBlanker(c->nbOn.load());
@@ -16704,7 +16708,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *    can draw the applied width inside the listener's; auto = the switch, cut = narrower than the listener asked.
      *  · pilot — AM stereo's 25 Hz pilot (the STEREO light rides the existing rds message as for FM).
      *  ADDITIVE: an older client ignores the type. Sent only on a change of what a client would draw. */
-    void sendAmSync(const std::shared_ptr<net::Socket>& sock) {
+    void sendAmSync(const std::shared_ptr<net::Socket>& sock, std::string* out = nullptr) {
         auto c = dspFor(sock);
         vibedsp::RxPipeline* P = c ? c->rx.get() : &rx;
         if (!P || !P->amSyncActive()) { if (c) c->lastAmSync.clear(); else lastAmSync_.clear(); return; }
@@ -16718,12 +16722,83 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (last == buf) return;
         last = buf;
         sendText(sock, buf);
+        if (out) *out = buf;
     }
     std::string lastAmSync_;
+    /** ★★ V12 WHAT AUTO HAS DONE TO THE PASSBAND, in the listener's own coordinates (Hz from the dial, as the
+     *  sliders draw them): {"type":"bwauto","on":bool,"cut":bool,"lo":Hz|null,"hi":Hz|null}. While `cut`, a client
+     *  shows these edges on its sliders instead of the listener's own (null = that edge is the listener's own);
+     *  `cut:false` = back to the listener's. Display only — a client never sends them back as a bandwidth.
+     *  Built once per pipeline and sent on a change, ~once a second (sendFmMetaAll). ADDITIVE: an older client
+     *  ignores the type. */
+    std::string bwAutoJson(vibedsp::RxPipeline* P, const std::string& md, double bw, bool on) {
+        using RM = vibedsp::RxPipeline::Mode;
+        auto num = [](double v) { char b[32]; snprintf(b, sizeof b, "%.0f", v); return std::string(b); };
+        std::string lo = "null", hi = "null"; bool cut = false;
+        if (on && P) {
+            if (P->amSyncActive()) {
+                const auto st = P->amSyncStatus();
+                cut = st.autoCut;
+                const auto pm = paramsFor(md).amMode;
+                if (pm == RM::ECSS_U)      { if (st.edgeHiHz > 0) hi = num(st.edgeHiHz); }
+                else if (pm == RM::ECSS_L) { if (st.edgeLoHz > 0) lo = num(-st.edgeLoHz); }
+                else { if (st.edgeLoHz > 0) lo = num(-st.edgeLoHz); if (st.edgeHiHz > 0) hi = num(st.edgeHiHz); }
+            } else if (P->autoPassbandActive()) {
+                const auto st = P->autoPassbandStatus();
+                cut = st.cut;
+                // ★ SSB: only the edge AUTO moved (the bottom at 0 Hz or the top at the listener's width is theirs: null)
+                const bool loCut = st.loHz > 0.5f, hiCut = st.hiHz < bw - 1.0;
+                if (md == "lsb")                   { if (hiCut) lo = num(-st.hiHz); if (loCut) hi = num(-st.loHz); }
+                else if (md == "cwu" || md == "cwl" || md == "cw") { lo = num(st.loHz - bw * 0.5); hi = num(st.hiHz - bw * 0.5); }
+                else                               { if (loCut) lo = num(st.loHz); if (hiCut) hi = num(st.hiHz); }
+            } else if (md == "wfm" && !perClientDsp()) {
+                const double a = g_autoBwNowHz.load(std::memory_order_relaxed);
+                cut = a > 0.0 && a < bw - 1.0;
+                if (cut) { lo = num(-a * 0.5); hi = num(a * 0.5); }
+            }
+        }
+        if (!cut) { lo = "null"; hi = "null"; }
+        return std::string("{\"type\":\"bwauto\",\"on\":") + (on ? "true" : "false") + ",\"cut\":" + (cut ? "true" : "false")
+             + ",\"lo\":" + lo + ",\"hi\":" + hi + "}";
+    }
+    std::string lastBwAuto_;
+    void sendBwAutoAll(const std::vector<SpecPeer>& peers) {
+        if (perClientDsp()) {
+            for (auto& pr : peers) {
+                if (!pr.sock || !pr.sock->isOpen()) continue;
+                auto c = dspFor(pr.sock);
+                if (!c) continue;
+                std::string j;
+                { std::lock_guard<std::mutex> lk(c->mtx);   // ★ the pipeline is replaced under mtx on a mode change
+                  j = bwAutoJson(c->rx.get(), c->mode, c->bwHz, c->autoBwOn.load()); }
+                if (j == c->lastBwAuto) continue;
+                c->lastBwAuto = j;
+                sendText(pr.sock, j);
+            }
+            return;
+        }
+        // ★ ONE pipeline: ask once, tell everybody (the sendFmMetaAll lesson — a shared "last sent" stamped by the
+        //   first peer told every other listener nothing had changed)
+        std::string md; double bw;
+        { std::lock_guard<std::recursive_mutex> lk(modeMtx); md = mode; bw = rxBwHz; }
+        const std::string j = bwAutoJson(&rx, md, bw, g_autoBwOn.load());
+        if (j == lastBwAuto_) return;
+        lastBwAuto_ = j;
+        for (auto& pr : peers) if (pr.sock && pr.sock->isOpen()) sendText(pr.sock, j);
+    }
     void sendFmMetaAll() {
         auto peers = allSpecPeers();
         if (peers.empty()) return;
-        for (auto& pr : peers) if (pr.sock && pr.sock->isOpen()) sendAmSync(pr.sock);
+        /* ★★ ONE PIPELINE: ask once, tell everybody — the shared lastAmSync_ was stamped by the first peer and every
+         *  other listener on a shared dial was never sent the AM sync line (the lesson in the note above). */
+        if (perClientDsp()) { for (auto& pr : peers) if (pr.sock && pr.sock->isOpen()) sendAmSync(pr.sock); }
+        else {
+            std::string sent;
+            sendAmSync(peers[0].sock, &sent);
+            if (!sent.empty())
+                for (size_t i = 1; i < peers.size(); ++i) if (peers[i].sock && peers[i].sock->isOpen()) sendText(peers[i].sock, sent);
+        }
+        sendBwAutoAll(peers);
         if (perClientDsp()) { for (auto& p : peers) sendFmMeta(p.sock); return; }
         std::string sent;
         if (!sendFmMeta(peers[0].sock, &sent) || sent.empty()) return;
@@ -20064,22 +20139,37 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         if (type == "autobw") {
-            /* ★★★ TEF6686-style automatic demodulator bandwidth — see g_autoBwOn.
-             *  ★★ NOT perListener(), and the reason is worth stating: the other four are PIPELINE
-             *     switches, while this one drives the shim's rxBwHz. It therefore acts on the ONE
-             *     shared pipeline — which is exactly right for a single listener and for a shared
-             *     VFO ("a toggle like the rest of the FM enhancements as it will apply to
-             *     everybody"), and is why the client hides it on a locked-centre receiver, where
-             *     each listener has their own DSP and this would move a pipeline nobody hears. */
+            /* ★★★ AUTO BANDWIDTH — ONE SWITCH PER LISTENER, FOR EVERY MODE THAT HAS ONE (V12, docs/v12/AM-SYNC.md §11).
+             *  The AUTO key by the passband sliders, the FM menu's A-BW and the AM AUTO BW row all send this.
+             *  · A RECEIVER WITH PER-LISTENER DSP: it is THIS listener's own (their pipeline's AM / SSB / CW auto) —
+             *    nobody else's audio moves, so it is perListener() like the other DSP switches.
+             *  · ONE SHARED PIPELINE (a single listener, or a shared dial): it is the dial's, exactly as the passband
+             *    itself is — gated like it (ask-before-tuning's kGated list), broadcast to the room in hwinfo, and a
+             *    joiner adopts it and never sends it (the shared-dial contract: the client transmits only on a user
+             *    action). That is also where FM's TEF-style auto (g_autoBwOn → rxBwHz) lives, which is why WFM is
+             *    offered AUTO only there (autoBwModes in hwinfo).
+             *  ★ The listener's width is always the ceiling; a slider drag is a manual override the CLIENT turns AUTO
+             *    off for (it sends this message) — the server never infers it from a bandwidth frame, because a
+             *    mode change carries edges too and is not a drag. */
             const bool on = jsonOn(msg);
+            // ★★ V12 and this listener's VFO B (vibe_watch.h WatchChannel::setAutoBw) — the same switch, B's own pipeline
+            if (auto ws = watchFind(sessionOfSock(sock.get()))) {
+                std::lock_guard<std::mutex> wl(ws->m);
+                for (auto& ch : ws->chans) ch->setAutoBw(on);
+            }
+            if (auto dsp = dspFor(sock)) {
+                dsp->autoBwOn.store(on);
+                if (dsp->rx) dsp->rx->setAmAutoBandwidth(on);
+                dsp->lastBwAuto.clear();
+                LOGI("listener DSP: auto bandwidth %s", on ? "on" : "off");
+                sendHwInfo(sock);
+                return;
+            }
             g_autoBwOn.store(on, std::memory_order_relaxed);
             LOGI("auto bandwidth: %s", on ? "on" : "off");
-            /* ★★ V12 AND THE AM FAMILY'S — the same switch (one AUTO BW), applied to every pipeline: AM auto bandwidth
-             *  lives inside each pipeline (SyncAm), so on a per-listener receiver each listener's own is set too. */
             rx.setAmAutoBandwidth(on);
-            { std::lock_guard<std::mutex> lk2(clientMtx);
-              for (auto& kv : clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setAmAutoBandwidth(on); }
             if (!on) g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
+            lastBwAuto_.clear();
             LocalSdrShim::instance().broadcastHwInfo();
             return;
         }
@@ -20715,8 +20805,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         j += std::string(",\"wsp\":") + (mine(&ClientDsp::wspOn, weakProcOn) ? "true" : "false");
         // ★ Auto bandwidth is server-wide (see the autobw handler), so it is reported as it is
         //   rather than through mine() — there is no per-listener value to disagree with.
-        j += std::string(",\"autobw\":") + (g_autoBwOn.load() ? "true" : "false")
+        j += std::string(",\"autobw\":") + (mine(&ClientDsp::autoBwOn, g_autoBwOn) ? "true" : "false")
            + ",\"autobwHz\":" + std::to_string(g_autoBwNowHz.load());
+        /* ★★ V12 WHERE AUTO CAN ACT, BY MODE — the AUTO key by the passband sliders is drawn only in these (the app
+         *  and the web client hold no list of their own: feedback_app_no_hardcoded_settings). WFM's auto is the
+         *  shim's TEF-style one on the shared pipeline, so it is listed only where there is no per-listener DSP.
+         *  NFM is not listed: measured, no automatic width helps it (docs/v12/AM-SYNC.md §11). An Icom demodulates
+         *  in the radio: nothing is listed. */
+        if (!useIcom()) {
+            std::string m = "[";
+            const char* fam[] = { "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst", "usb", "lsb", "cwu", "cwl" };
+            bool first = true;
+            if (!myDsp && !perClientDsp()) { m += "\"wfm\""; first = false; }
+            for (const char* id : fam) { m += (first ? "\"" : ",\"") + std::string(id) + "\""; first = false; }
+            j += ",\"autoBwModes\":" + m + "]";
+        }
         j += std::string(",\"ims\":") + (mine(&ClientDsp::imsOn, imsOn)      ? "true" : "false");
         j += std::string(",\"ceq\":") + (mine(&ClientDsp::ceqOn, ceqOn)      ? "true" : "false");
         j += std::string(",\"nb\":")  + (mine(&ClientDsp::nbOn,  nbOn)       ? "true" : "false");
@@ -27430,6 +27533,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 watchSetCount_.store((int)watchSets.size(), std::memory_order_release);
             }
             ch = std::make_shared<vibewatch::WatchChannel>(id);
+            { auto dsp = dspFor(sock); ch->setAutoBw(dsp ? dsp->autoBwOn.load() : g_autoBwOn.load()); }   // ★★ V12 B follows AUTO
             /* ★★ DECODE ON EITHER VFO: B's audio, before the mix, to this listener's VFO B decoder host whenever one is
              *  decoding (DecoderHost::feed copies and returns — queued, never decoded on the feeding thread). Looked up per
              *  block so a host made later, or remade, is found; with nothing decoding B it is one map lookup a block. */

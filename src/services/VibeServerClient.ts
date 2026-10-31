@@ -26,6 +26,7 @@ import { ismSanitise } from './ism';
 import { ndbSanitise, parseNdbFound, parseNdbStats } from './ndb';
 import { drmSanitise } from './drm';   // ★ V12 DRM
 import { parseAmSync } from './amSync';   // ★ V12 synchronous AM
+import { parseBwAuto } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { aisSanitise, aisTrailSanitise } from './tracks';   // ★ V12 AIS
 import { parseDabScan } from './dabBandScan';
 import type { WholeKind } from './wholeModeResume';   // ★ V12: coming back to a whole-radio mode
@@ -406,6 +407,8 @@ export class VibeServerClient extends VibeServerWsClient {
       /* ★ V12 the AM family's state (carrier lock + offset, the applied AUTO BW edges, AM stereo's pilot) — once a second
        *  on a change, only while the listener is in AM, SAM, ECSS or AM stereo (shim sendAmSync). */
       case 'amsync': { const a = parseAmSync(msg); if (a) this.callbacks.onAmSync?.(a); return true; }
+      /* ★★ V12 what AUTO has done to this listener's passband — the sliders show it while it cuts (bwAuto.ts). */
+      case 'bwauto': { const b = parseBwAuto(msg); if (b) this.callbacks.onBwAuto?.(b); return true; }
       /* ★ V12 AIS: a report about once a second — ITS ARRIVAL MEANS AIS IS ON (a second listener joining a radio somebody
        *  else put there); `ais_off` ended it (the restored config follows); `ais_error` is the refusal, with its reason. */
       case 'ais': {
