@@ -24,3 +24,17 @@ servers.
 - Unchanged from the earlier decision: **ONE "PAGE" button**; **Android local hardware only** (the phone's own
   plugged-in radio) — never on any server, not even to LAN clients; **nothing to the gallery**.
 
+### SIMD — hard requirement for every decoder in this wave (Stuart, 2026-10-31)
+
+> "make sure EVERYTHING that can be optimised by SIMD NEON SSE2 etc do it. I want these decoders to be so lightweight
+> they run on potato spec hardware but powerful enough to hang with the big players whilst doing so."
+
+- Profile each decoder; vectorise every hot loop: FFT/filterbanks (PFFFT, as the CW skimmer), mixers/NCOs,
+  FIR/decimation, correlators/sync search, soft demod/LLRs, LDPC/BP and Viterbi inner loops, power spectra.
+- NEON (ARMv7 armhf `-marm`, Pi 2; and ARM64), SSE2 baseline on x86 (Atom N450), and a SCALAR fallback giving
+  identical decodes.
+- Targets: Pi 2 (900 MHz ARMv7), 2009 Atom N450 hosts, 32-bit 1 GB Android phones.
+- Each section reports scalar vs SIMD CPU (Mac + Pi 2 instruction estimate) and sensitivity / decode counts vs the
+  reference (jt9 as a black box, UberSDR / PSKReporter). Never trade decodes for speed. Where SIMD does not pay on a
+  loop, say so rather than forcing it.
+
