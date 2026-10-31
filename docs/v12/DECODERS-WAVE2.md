@@ -359,15 +359,28 @@ Checked, not built:
 
 ---
 
-## RESUME HERE — the queue from MSK144 on (not started)
+## RESUME HERE (updated 2026-10-31 ≈ 05:40 UTC, after MSK144, FST4's gap, CTCSS/DCS, JJY)
 
-3. ~~MSK144~~ DONE (section 3). ~~FST4 gap~~ halved (section 2b). ~~CTCSS/DCS engine~~ (section 4; wiring owed).
-   ~~Time stations~~ (section 5: JJY built; BPC/TDF/CHU checked). NEXT: CHU (owed), then ACARS.
-4. CTCSS/DCS — NOTE: the decoder host's audio is post-voice-filter in NFM VOICE (the 300 Hz high-pass cuts CTCSS by
-   ≥ 40 dB: vibedsp.h setNfmVoice); the tone decoder needs the listener's RAW discriminator or its own FM
-   discriminator on the per-client IQ tap (`iqTap` in local_sdr_shim.cpp) — outside RxPipeline as asked.
-5. JJY/BPC/TDF/CHU · 6. ACARS → VDL2 · 7. HFDL · 8. RS41 · 9. PAGING (spec at the top) · 10. MFSK/Hell/SELCAL/EAS.
+Done this run (commits on `v12-decoders-wave2`): MSK144 (section 3), FST4 gap halved + Pi 2 count + SIMD identity +
+SIMD LDPC (2b), the shared `ldpc_small` BP/OSD + `vmath4.h`, CTCSS/DCS engine (4, wiring owed), JJY (5).
+
+Next, in order:
+1. **CTCSS/DCS wiring** (section 4 "Owed": the shim hook beside `iqTap`, a `tone` JSON message, the VTS-line suffix
+   in app + web, copy) — small, and it makes the engine visible.
+2. **CHU** (section 5) — burst Bell-103 FSK in seconds 31–39; NRC's published format.
+3. **ACARS** → VDL2 → HFDL → RS41 → PAGING (spec at the top: one AUTO demodulator, Android local hardware only) →
+   MFSK/Olivia/Contestia/Thor + Hell → SELCAL → EAS/SAME (DECODER-RESEARCH.md has each row).
+4. Owed across the wave: real-air MSK144 (50.280 at a morning peak / Geminids), real FST4W (630 m / 40 m night on the
+   UberSDR), FST4's last ≈ 1 dB, FST4 twiddle recurrence (8 % of the Pi 2 count), Android gradle + iOS
+   `build_ios.sh` compiles (not run this session), `neon_compat.h`'s compare fix for `vmath4.h`'s one vcgtq once
+   v12-decoder-simd-audit merges, build-web for the web edits before any release.
+5. Note for the identity checks: the Android build compiles decoders with `-ffp-contract=fast` (vibelocalsdr in
+   `android/app/src/main/cpp/CMakeLists.txt`); the SIMD = scalar identity is proven in the bench builds (default
+   contraction). Under `fast`, GCC/clang may fuse a scalar multiply-add differently from the NEON path — decodes stay
+   correct, but bit-identity is then not guaranteed on Android. Decide whether the decoders want `-ffp-contract=off`.
 
 Black-box kit (not in git): `~/wsjtx-blackbox/` — `dl/x/usr/bin/*` (WSJT-X 2.7.0 arm64 binaries), docker image
 `wsjtx-bb` (`img/Dockerfile`), corpora and sims. Colima was started with 2 CPUs / 2 GB for it.
-No server session was used this run (all tests synthetic or black-box): the server log above is empty.
+No server session was used by either run (all tests synthetic or black-box): the server log above is empty.
+Colima was stopped at the end of this run; the fst4sim/jt9 comparison files were deleted (regenerate with the run.sh
+scripts in `~/wsjtx-blackbox/cmpf4b` and `~/wsjtx-blackbox/msk`).
