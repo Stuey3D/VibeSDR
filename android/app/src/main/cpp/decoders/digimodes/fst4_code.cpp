@@ -1,6 +1,10 @@
 // decoders/digimodes/fst4_code.cpp — the FST4 / FST4W frame and codes (fst4_code.h for where they came from).
 #include "fst4_code.h"
 #include "fst4_tables.h"
+#include "ldpc_small.h"
+#include <functional>
+#include <cstdlib>
+#include <vector>
 
 #include <algorithm>
 #include <cmath>
@@ -22,30 +26,6 @@ const int kGroupStart[5] = {0, 38, 76, 114, 152};
 const uint8_t kPowers[19] = {0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37, 40, 43, 47, 50, 53, 57, 60};
 
 int groupOf(int i) { for (int g = 0; g < 5; ++g) if (i >= kGroupStart[g] && i < kGroupStart[g] + 8) return g; return -1; }
-
-struct Graph {
-    int M = 0, K = 0;                       // checks, information bits (message + CRC)
-    int deg[170] = {};
-    int16_t var[170][6] = {};
-    int vdeg[kN] = {};
-    int16_t vchk[kN][3] = {}, vslot[kN][3] = {};
-    template <size_t R> void build(const int16_t (&c)[R][6], int k) {
-        M = (int)R; K = k;
-        for (int r = 0; r < M; ++r)
-            for (int s = 0; s < 6; ++s) {
-                const int v = c[r][s];
-                if (v < 0) continue;
-                var[r][deg[r]] = (int16_t)v;
-                if (vdeg[v] < 3) { vchk[v][vdeg[v]] = (int16_t)r; vslot[v][vdeg[v]] = (int16_t)deg[r]; ++vdeg[v]; }
-                ++deg[r];
-            }
-    }
-};
-const Graph& graph(Code c) {
-    static const Graph g101 = [] { Graph g; g.build(kFst4Check101, 101); return g; }();
-    static const Graph g74 = [] { Graph g; g.build(kFst4Check74, 74); return g; }();
-    return c == Code::K101 ? g101 : g74;
-}
 
 bool htLookup(ftx_callsign_hash_type_t type, uint32_t hash, char* callsign) {
     const int bits = type == FTX_CALLSIGN_HASH_10_BITS ? 10 : type == FTX_CALLSIGN_HASH_12_BITS ? 12 : 22;
@@ -136,37 +116,27 @@ bool crcOk(Code c, const uint8_t cw[kN]) {
     return crc24(cw, K) == want;
 }
 
-int bpDecode(Code c, const float llr[kN], int maxIter, uint8_t cw[kN]) {
-    const Graph& g = graph(c);
-    // ★ log P(0)/P(1) inside (the tanh rule's sign convention); the caller's is log P(1)/P(0)
-    float L[kN], v2c[170][6], c2v[170][6];
-    for (int j = 0; j < kN; ++j) L[j] = -llr[j];
-    for (int r = 0; r < g.M; ++r) for (int s = 0; s < g.deg[r]; ++s) { v2c[r][s] = L[g.var[r][s]]; c2v[r][s] = 0; }
-    for (int it = 1; it <= maxIter; ++it) {
-        // check → variable
-        for (int r = 0; r < g.M; ++r) {
-            const int d = g.deg[r];
-            float t[6];
-            for (int s = 0; s < d; ++s) { float x = std::tanh(0.5f * std::max(-30.f, std::min(30.f, v2c[r][s]))); if (std::fabs(x) < 1e-12f) x = 1e-12f; t[s] = x; }
-            for (int s = 0; s < d; ++s) {
-                float p = 1.f;
-                for (int q = 0; q < d; ++q) if (q != s) p *= t[q];
-                p = std::max(-0.9999999f, std::min(0.9999999f, p));
-                c2v[r][s] = std::log((1.f + p) / (1.f - p));   // 2·atanh(p)
-            }
-        }
-        // variable → check, and the decision
-        int bad = 0;
-        for (int j = 0; j < kN; ++j) {
-            float tot = L[j];
-            for (int k = 0; k < g.vdeg[j]; ++k) tot += c2v[g.vchk[j][k]][g.vslot[j][k]];
-            cw[j] = tot < 0 ? 1 : 0;
-            for (int k = 0; k < g.vdeg[j]; ++k) v2c[g.vchk[j][k]][g.vslot[j][k]] = tot - c2v[g.vchk[j][k]][g.vslot[j][k]];
-        }
-        for (int r = 0; r < g.M && !bad; ++r) { int x = 0; for (int s = 0; s < g.deg[r]; ++s) x ^= cw[g.var[r][s]]; bad = x; }
-        if (!bad) return crcOk(c, cw) ? it : 0;
-    }
-    return 0;
+const ldpc::Code& ldpcOf(Code c) {
+    auto build = [](const auto& tab, int k) {
+        std::vector<std::vector<int>> ch;
+        for (const auto& row : tab) { std::vector<int> v; for (int16_t x : row) if (x >= 0) v.push_back(x); ch.push_back(v); }
+        return ldpc::Code(kN, k, ch);
+    };
+    static const ldpc::Code c101 = build(kFst4Check101, 101);
+    static const ldpc::Code c74 = build(kFst4Check74, 74);
+    return c == Code::K101 ? c101 : c74;
+}
+
+int bpDecode(Code c, const float llr[kN], int maxIter, uint8_t cw[kN], int* unsat, float* post) {
+    // ★ the shared small-LDPC sum-product (ldpc_small.h: SIMD, identical scalar), the CRC on top
+    const int it = ldpcOf(c).bp(llr, maxIter, cw, unsat, 12, post);
+    return it > 0 && crcOk(c, cw) ? it : 0;
+}
+
+static const int kOsdTries = std::getenv("FST4_OSDTRIES") ? std::atoi(std::getenv("FST4_OSDTRIES")) : 3000;
+bool osdDecode(Code c, const float llr[kN], int pairSpan, const std::function<bool(const uint8_t*)>& accept, uint8_t cw[kN], int* flips) {
+    // ★ up to 1500 trials: the CRC-24 leaves ≈ 1500 / 2²⁴ ≈ 1e-4 a decode to the message checks after it
+    return ldpcOf(c).osd(llr, pairSpan, [&](const uint8_t* x) { return crcOk(c, x) && accept(x); }, cw, nullptr, flips, 0, kOsdTries);
 }
 
 bool unpack77(const uint8_t cw[kN], bool learn, std::string& text, std::string& call, std::string& grid, bool& plausible) {

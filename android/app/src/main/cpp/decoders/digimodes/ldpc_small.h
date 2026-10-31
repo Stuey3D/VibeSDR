@@ -41,14 +41,16 @@ public:
     /** Sum-product BP. Returns the iteration that satisfied every check (≥ 1), or 0 (then `cw` is the last hard decision
      *  and `*unsat`, if given, its unsatisfied check count). `giveUp` = stop after this many iterations without the
      *  unsatisfied count improving (0 = never). */
-    int bp(const float* llr, int maxIter, uint8_t* cw, int* unsat = nullptr, int giveUp = 12) const;
+    int bp(const float* llr, int maxIter, uint8_t* cw, int* unsat = nullptr, int giveUp = 12, float* post = nullptr) const;
+    /* ★ `post` (if given): the SUM over the iterations run of each bit's a-posteriori LLR (log P(1)/P(0)) — a better
+     *  reliability ordering for OSD after BP fails than the channel's own (the iterations' evidence accumulated). */
 
     /** OSD (order 1 + pairs among the `pairSpan` least reliable information positions). Calls `accept(cw)` on
      *  candidates cheapest first and returns true with the first accepted one in `cw`, `*cost` its discrepancy (Σ|LLR|
      *  where it disagrees with the hard decisions) and `*flips` how many hard decisions it overturned. `maxCost` > 0
      *  bounds what is tried. */
     bool osd(const float* llr, int pairSpan, const std::function<bool(const uint8_t*)>& accept, uint8_t* cw,
-             float* cost = nullptr, int* flips = nullptr, float maxCost = 0) const;
+             float* cost = nullptr, int* flips = nullptr, float maxCost = 0, int maxTries = 96) const;
 
 private:
     int n_, k_, m_, dmax_ = 0, groups_ = 0;

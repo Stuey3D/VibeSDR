@@ -74,7 +74,7 @@ int Code::unsatisfied(const uint8_t* cw) const {
 }
 bool Code::checksOk(const uint8_t* cw) const { return unsatisfied(cw) == 0; }
 
-int Code::bp(const float* llr, int maxIter, uint8_t* cw, int* unsatOut, int giveUp) const {
+int Code::bp(const float* llr, int maxIter, uint8_t* cw, int* unsatOut, int giveUp, float* post) const {
     using namespace q65v;
     const size_t E = evar_.size();
     thread_local std::vector<float> v2c, c2v, L, pre, suf;
@@ -85,6 +85,7 @@ int Code::bp(const float* llr, int maxIter, uint8_t* cw, int* unsatOut, int give
         L[(size_t)j] = std::max(-kClampMsg, std::min(kClampMsg, x));
     }
     for (size_t e = 0; e < E; ++e) if (evar_[e] < n_) v2c[e] = L[(size_t)evar_[e]];
+    if (post) for (int j = 0; j < n_; ++j) post[j] = 0.f;
     int best = m_ + 1, since = 0;
     const V one = set1(1.f), cmsg = set1(kClampMsg), cp = set1(kClampP), cpn = set1(-kClampP);
     for (int it = 1; it <= maxIter; ++it) {
@@ -118,6 +119,7 @@ int Code::bp(const float* llr, int maxIter, uint8_t* cw, int* unsatOut, int give
             float tot = L[(size_t)j];
             for (int e : ed) tot = tot + c2v[(size_t)e];
             cw[j] = tot < 0.f ? 1 : 0;
+            if (post) post[j] = post[j] - tot;                                  // ★ back to log P(1)/P(0)
             for (int e : ed) {
                 const float m = tot - c2v[(size_t)e];
                 v2c[(size_t)e] = std::max(-kClampMsg, std::min(kClampMsg, m));
@@ -133,7 +135,7 @@ int Code::bp(const float* llr, int maxIter, uint8_t* cw, int* unsatOut, int give
 }
 
 bool Code::osd(const float* llr, int pairSpan, const std::function<bool(const uint8_t*)>& accept, uint8_t* cw,
-               float* costOut, int* flipsOut, float maxCost) const {
+               float* costOut, int* flipsOut, float maxCost, int maxTries) const {
     if (n_ > 256 || m_ > 256) return false;
     // reliability order, most reliable first (stable: deterministic on ties)
     std::vector<int> idx((size_t)n_);
@@ -201,7 +203,7 @@ bool Code::osd(const float* llr, int pairSpan, const std::function<bool(const ui
     int tried = 0;
     for (const Cand& c : cands) {
         if (maxCost > 0 && c.cost > maxCost) break;
-        if (++tried > 96) break;
+        if (++tried > maxTries) break;
         Bits xi = xinfo;
         if (c.a >= 0) xi.flip(c.a);
         if (c.b >= 0) xi.flip(c.b);

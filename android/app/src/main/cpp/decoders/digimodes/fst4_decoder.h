@@ -44,6 +44,8 @@ enum class Mode { FST4, FST4W };
 
 struct Period { int sec; int nsps; double lead; int ns4; int ns4w; };   // ns* = baseband samples a symbol (0 = not run)
 const Period* periodFor(int sec);
+/** The bench's oracle (debug only, FST4_VDBG): the tones it sent, for per-view bit-error counts. */
+extern const uint8_t* g_truthTones;
 constexpr double kWinLeadSec = 1.0, kWinTailSec = 1.0;
 
 struct Result {
@@ -53,6 +55,7 @@ struct Result {
     float  dt = 0;          ///< s from the nominal start
     int    snr = 0;         ///< dB in 2500 Hz
     int    iters = 0;
+    bool   osd = false;     ///< recovered by OSD after every view's BP failed
     float  sync = 0;
     bool   k101 = true;     ///< which code decoded it
     double slotUtc = NAN;
@@ -67,6 +70,7 @@ struct SlotOptions {
     int   maxIter = 40;
     float syncMin = 1.0f;            ///< candidate threshold (sync score; noise peaks ≈ 1.0 — 0.7 found 1 more in 20 at −26 for 5× the work)
     bool  loaded = false;
+    bool  osd = true;                ///< OSD after BP (off when loaded)
     const std::atomic<bool>* abort = nullptr;
 };
 

@@ -21,9 +21,11 @@
 //     ("<K1ABC> FN42AB 37") is sent as a 77-bit message with the (240,101) code — the receiver tries both codes.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace vibe {
+namespace ldpc { class Code; }
 namespace fst4 {
 
 constexpr int kSymbols = 160, kData = 120, kN = 240;
@@ -44,8 +46,13 @@ bool encodeText(const char* text, uint8_t tones[kSymbols]);
 bool encodeWspr(const char* call, const char* grid, int dbm, uint8_t tones[kSymbols]);
 
 /* ★★ BELIEF PROPAGATION. `llr` = 240 log-likelihood ratios in codeword order, log P(1)/P(0). Returns the iterations
- *  used when every parity check holds AND the CRC-24 matches (cw filled), else 0. Sum-product in the log domain. */
-int  bpDecode(Code c, const float llr[kN], int maxIter, uint8_t cw[kN]);
+ *  used when every parity check holds AND the CRC-24 matches (cw filled), else 0 (`*unsat` = the checks still failing).
+ *  Sum-product on ldpc_small.h's shared decoder (four checks a time, NEON / SSE2, identical scalar). */
+int  bpDecode(Code c, const float llr[kN], int maxIter, uint8_t cw[kN], int* unsat = nullptr, float* post = nullptr);
+/** ★ OSD after BP fails (ldpc_small.h): the cheapest codeword whose CRC-24 holds and that `accept` takes. */
+bool osdDecode(Code c, const float llr[kN], int pairSpan, const std::function<bool(const uint8_t*)>& accept, uint8_t cw[kN], int* flips = nullptr);
+/** The code itself. */
+const ldpc::Code& ldpcOf(Code c);
 /** The CRC of a decoded codeword. */
 bool crcOk(Code c, const uint8_t cw[kN]);
 

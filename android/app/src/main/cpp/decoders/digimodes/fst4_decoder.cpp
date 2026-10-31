@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <functional>
 
 #include "vibedsp/vibedsp.h"
 #include "vibedsp/third_party/pffft/pffft.h"
@@ -46,9 +48,61 @@ inline void cdot(const cf* z, const float* cr, const float* ci, int n, float& ar
 void twiddle(double cyc, int N, float* cr, float* ci) {
     for (int n = 0; n < N; ++n) { const double ph = -kTwoPi * cyc * n; cr[n] = (float)std::cos(ph); ci[n] = (float)std::sin(ph); }
 }
+/** cdot for any n (the tail one lane at a time, in the same order on every path). */
+inline void cdotAny(const cf* z, const float* cr, const float* ci, int n, float& ar, float& ai) {
+    const int n4 = n & ~3;
+    ar = 0; ai = 0;
+    if (n4) cdot(z, cr, ci, n4, ar, ai);
+    for (int i = n4; i < n; ++i) {
+        const float zr = z[i].real(), zi = z[i].imag();
+        const float pr = zr * cr[i] - zi * ci[i], pi = zr * ci[i] + zi * cr[i];
+        ar += pr; ai += pi;
+    }
+}
+/** ★ FST4's frequency pulse: a one-symbol rectangle through a Gaussian of BT = 1 (the GFSK the protocol sends). */
+const double kFst4Bt = std::getenv("FST4_TBT") ? std::atof(std::getenv("FST4_TBT")) : 1.0;
+/** The 64 (previous, this, next) templates of one symbol, integrated over its 32 sub-blocks, relative to the tones'
+ *  centre (1.5 baud): e^{j2π(a·G(u+1) + b·G(u) + c·G(u−1) − 1.5u)}, G = the pulse's running integral. */
+struct TrellisTables {
+    std::vector<double> energy;            // Σ_j |T_j|², per triple
+    mutable std::mutex m;
+    mutable std::vector<std::pair<int, std::vector<cf>>> byNs;
+    const std::vector<cf>& forNs(int Ns, double bt) const {
+        std::lock_guard<std::mutex> lk(m);
+        for (auto& e : byNs) if (e.first == Ns) return e.second;
+        constexpr int J = 32;
+        const double sig = std::sqrt(std::log(2.0)) / (kTwoPi * bt);
+        auto Phi = [](double x) { return 0.5 * std::erfc(-x / std::sqrt(2.0)); };
+        auto I = [&](double x) { return x * Phi(x / sig) + sig * std::exp(-0.5 * x * x / (sig * sig)) / std::sqrt(kTwoPi); };
+        auto G = [&](double u) { return I(u) - I(u - 1); };
+        std::vector<cf> t((size_t)64 * J);
+        std::vector<double> en(64, 0.0);
+        for (int h = 0; h < 64; ++h) {
+            const int a = h / 16, b = (h / 4) % 4, c = h % 4;
+            for (int j = 0; j < J; ++j) {
+                const int m0 = j * Ns / J, m1 = (j + 1) * Ns / J;
+                std::complex<double> acc(0, 0);
+                for (int m = m0; m < m1; ++m) {
+                    const double u = (double)m / Ns;
+                    const double ph = kTwoPi * (a * G(u + 1) + b * G(u) + c * G(u - 1) - 1.5 * u);
+                    acc += std::complex<double>(std::cos(ph), std::sin(ph));
+                }
+                t[(size_t)h * J + (size_t)j] = cf((float)acc.real(), (float)acc.imag());
+                en[(size_t)h] += std::norm(acc);
+            }
+        }
+        // ★ energies are kept per Ns too (the last Ns asked for is the one in use — one SlotDecoder, one Ns)
+        const_cast<TrellisTables*>(this)->energy = en;
+        byNs.emplace_back(Ns, std::move(t));
+        return byNs.back().second;
+    }
+};
+const TrellisTables& trellisTables() { static TrellisTables t; return t; }
+
 inline float li0(float x) { return x < 3.75f ? std::log1p(x * x * 0.25f + x * x * x * x * (1.0f / 64)) : x - 0.5f * std::log(6.2831853f * x); }
 } // namespace
 
+const uint8_t* g_truthTones = nullptr;
 const Period* periodFor(int sec) { for (const Period& p : kPeriods) if (p.sec == sec) return &p; return nullptr; }
 
 std::string Result::modeName() const { return std::string(mode == Mode::FST4W ? "FST4W-" : "FST4-") + std::to_string(periodSec); }
@@ -323,16 +377,32 @@ bool SlotDecoder::tryCand(const cf* z, int n, const Cand& c, const SlotOptions& 
     //    COHERENT sum of all 40 sync symbols (±1/64 baud in 1/2048ths — 160 symbols at 1/2048 baud drift < 0.5 rad);
     //    the best view on a stable path. The symbol values are recomputed at that frequency. ──
     std::vector<cf> Xg;
-    auto globalLlr = [&](float* llr) {
-        double bs = -1, bdf = bestDf;
+    double dfGlobal = bestDf;
+    /* ★ (V12 wave 2) the coherent sum of the five sync groups has GRATING LOBES 1/38 baud apart (the groups are 38
+     *  symbols apart); at threshold noise can lift a neighbour over the true one, and then every coherent view is
+     *  wrong (≈ 100 of 240 bits). So the search covers ±1/32 baud, keeps its local maxima, and the views are built at
+     *  the best lobe and again at the second. */
+    std::vector<std::pair<double, double>> lobes;     // (power, df)
+    auto globalLlr = [&](float* llr, int lobe, double dfForce) {
+        double bdf = bestDf;
         std::vector<cf> keep = X;
-        for (int fi = -32; fi <= 32; ++fi) {
-            const double df = bestDf + fi / 2048.0;
-            symbolValues(df, false);
-            cf acc(0, 0);
-            for (int i = 0; i < kSymbols; ++i) if (isSync(i)) acc += X[(size_t)i * 4 + syncTone(i)];
-            if (std::norm(acc) > bs) { bs = std::norm(acc); bdf = df; }
+        if (lobes.empty() && !std::isfinite(dfForce)) {
+            std::vector<double> pw;
+            for (int fi = -64; fi <= 64; ++fi) {
+                symbolValues(bestDf + fi / 2048.0, false);
+                cf acc(0, 0);
+                for (int i = 0; i < kSymbols; ++i) if (isSync(i)) acc += X[(size_t)i * 4 + syncTone(i)];
+                pw.push_back(std::norm(acc));
+            }
+            for (int k = 0; k < (int)pw.size(); ++k) {
+                const bool peak = (k == 0 || pw[(size_t)k] >= pw[(size_t)k - 1]) && (k + 1 == (int)pw.size() || pw[(size_t)k] > pw[(size_t)k + 1]);
+                if (peak) lobes.push_back({pw[(size_t)k], bestDf + (k - 64) / 2048.0});
+            }
+            std::sort(lobes.begin(), lobes.end(), [](const std::pair<double, double>& a, const std::pair<double, double>& b) { return a.first > b.first; });
         }
+        if (std::isfinite(dfForce)) bdf = dfForce;
+        else if (lobe < (int)lobes.size()) bdf = lobes[(size_t)lobe].second;
+        dfGlobal = bdf;
         symbolValues(bdf, true);
         for (cf& v : X) v *= sn;
         cf acc(0, 0);
@@ -351,17 +421,195 @@ bool SlotDecoder::tryCand(const cf* z, int n, const Cand& c, const SlotOptions& 
         }
         X = keep;
     };
-    float llrs[5][kN];
+    /* ── the GFSK-MATCHED view (V12 wave 2): a coherent maximum-a-posteriori detector for the waveform actually sent.
+     *    FST4's tones are Gaussian-smoothed (BT = kFst4Bt): each symbol's waveform depends on its neighbours, so a
+     *    one-symbol DFT (the views above) both loses energy at every tone change and sees the neighbours as noise.
+     *    Here the symbol is correlated with the exact waveform of every (previous, this, next) tone triple — 64
+     *    templates, integrated over 32 sub-blocks a symbol — and a forward-backward pass over the 16 (previous, this)
+     *    states turns those into each tone's probability, the sync symbols pinned. With h = 1 the phase at a symbol's
+     *    start depends only on the triple, so one carrier phase (global, or interpolated between the sync groups when
+     *    `piecewise`) holds for every template. ── */
+    auto trellisLlr = [&](bool piecewise, float* llr) {
+        constexpr int J = 32;
+        const TrellisTables& T = trellisTables();
+        const double cyc = (sb0 + 1.5 + dfGlobal) / Ns;
+        std::vector<float> twr((size_t)Ns), twi((size_t)Ns);
+        twiddle(cyc, Ns, twr.data(), twi.data());
+        std::vector<int> bj(J + 1); for (int j = 0; j <= J; ++j) bj[(size_t)j] = j * Ns / J;
+        // y[i][j]: the symbol's sub-block sums, mixed to the tones' centre, absolute phase, × (−1)^i
+        std::vector<cf> y((size_t)kSymbols * J, cf(0, 0));
+        for (int i = 0; i < kSymbols; ++i) {
+            const int a0 = bestN0 + i * Ns;
+            if (a0 < 0 || a0 + Ns > n) continue;
+            const double ph0 = -kTwoPi * cyc * (double)a0;
+            const cf r0((float)std::cos(ph0), (float)std::sin(ph0));
+            for (int j = 0; j < J; ++j) {
+                float ar, ai;
+                const int m0 = bj[(size_t)j], len = bj[(size_t)j + 1] - m0;
+                cdotAny(z + a0 + m0, twr.data() + m0, twi.data() + m0, len, ar, ai);
+                cf v = cf(ar, ai) * r0;
+                if (i & 1) v = -v;
+                y[(size_t)i * J + (size_t)j] = v;
+            }
+        }
+        const std::vector<cf>& tp = T.forNs(Ns, kFst4Bt);
+        // Z[i][abc] = Σ_j y·conj(T)
+        std::vector<cf> Z((size_t)kSymbols * 64);
+        for (int i = 0; i < kSymbols; ++i)
+            for (int h = 0; h < 64; ++h) {
+                cf acc(0, 0);
+                for (int j = 0; j < J; ++j) acc += y[(size_t)i * J + (size_t)j] * std::conj(tp[(size_t)h * J + (size_t)j]);
+                Z[(size_t)i * 64 + (size_t)h] = acc;
+            }
+        auto tri = [](int a, int b, int c) { return a * 16 + b * 4 + c; };
+        auto toneAt = [&](int i) { return i < 0 ? -2 : i >= kSymbols ? -3 : isSync(i) ? syncTone(i) : -1; };
+        // carrier phase: interior sync symbols (both neighbours sync), their known triple
+        double phg[5]; cf tot(0, 0);
+        for (int g = 0; g < 5; ++g) {
+            cf acc(0, 0);
+            for (int k = 1; k < 7; ++k) { const int i = 38 * g + k; acc += Z[(size_t)i * 64 + (size_t)tri(syncTone(i - 1), syncTone(i), syncTone(i + 1))]; }
+            phg[g] = std::arg(acc); tot += acc;
+            if (g) { while (phg[g] - phg[g - 1] > M_PI) phg[g] -= 2 * M_PI; while (phg[g] - phg[g - 1] < -M_PI) phg[g] += 2 * M_PI; }
+        }
+        const double phAll = std::arg(tot);
+        const double centre[5] = {3.5, 41.5, 79.5, 117.5, 155.5};
+        auto thetaAt = [&](int i) {
+            if (!piecewise) return phAll;
+            int g = 0; while (g < 3 && i > centre[g + 1]) ++g;
+            const double w = (i - centre[g]) / (centre[g + 1] - centre[g]);
+            return phg[g] + w * (phg[g + 1] - phg[g]);
+        };
+        // amplitude and noise per sample: n0 is the DFT noise of Ns samples; rho the per-symbol SNR
+        const double n0s = n0 / Ns;                                  // per sample
+        const double A = std::sqrt(rho * n0) / Ns;
+        const double L = (double)Ns / J;
+        const double k1 = 2.0 * A / (L * n0s), k2e = A * A / (L * n0s);
+        std::vector<float> M((size_t)kSymbols * 64);
+        for (int i = 0; i < kSymbols; ++i) {
+            const double th = thetaAt(i);
+            const cf rot((float)std::cos(th), (float)-std::sin(th));
+            for (int h = 0; h < 64; ++h) M[(size_t)i * 64 + (size_t)h] = (float)(k1 * (Z[(size_t)i * 64 + (size_t)h] * rot).real() - k2e * T.energy[(size_t)h]);
+        }
+        // forward-backward over states (prev, this): α_i(a,b) before symbol i's branch
+        const float NEG = -1e30f;
+        auto lse2 = [](float a, float b) { if (a < b) std::swap(a, b); return b < -1e29f ? a : a + std::log1p(std::exp(b - a)); };
+        std::vector<float> alpha((size_t)(kSymbols + 1) * 16, NEG), beta((size_t)(kSymbols + 1) * 16, NEG);
+        auto allowed = [&](int i, int t) { const int s0 = toneAt(i); return s0 < 0 || s0 == t; };
+        for (int b = 0; b < 4; ++b) if (allowed(0, b)) alpha[(size_t)(b * 4 + b)] = 0;   // ★ before the start: the first tone
+        for (int i = 0; i < kSymbols; ++i)
+            for (int a = 0; a < 4; ++a) for (int b = 0; b < 4; ++b) {
+                const float al = alpha[(size_t)i * 16 + (size_t)(a * 4 + b)];
+                if (al <= NEG) continue;
+                for (int c = 0; c < 4; ++c) {
+                    if (i + 1 < kSymbols ? !allowed(i + 1, c) : c != b) continue;   // ★ after the end: the last tone
+                    float& d = alpha[(size_t)(i + 1) * 16 + (size_t)(b * 4 + c)];
+                    d = lse2(d, al + M[(size_t)i * 64 + (size_t)tri(a, b, c)]);
+                }
+            }
+        for (int s0 = 0; s0 < 16; ++s0) beta[(size_t)kSymbols * 16 + (size_t)s0] = 0;
+        for (int i = kSymbols - 1; i >= 0; --i)
+            for (int a = 0; a < 4; ++a) for (int b = 0; b < 4; ++b) {
+                float acc = NEG;
+                for (int c = 0; c < 4; ++c) {
+                    if (i + 1 < kSymbols ? !allowed(i + 1, c) : c != b) continue;
+                    const float be = beta[(size_t)(i + 1) * 16 + (size_t)(b * 4 + c)];
+                    if (be <= NEG) continue;
+                    acc = lse2(acc, be + M[(size_t)i * 64 + (size_t)tri(a, b, c)]);
+                }
+                beta[(size_t)i * 16 + (size_t)(a * 4 + b)] = acc;
+            }
+        for (int d = 0; d < kData; ++d) {
+            const int i = dataPos[d];
+            float pt[4] = {NEG, NEG, NEG, NEG};
+            for (int a = 0; a < 4; ++a) for (int b = 0; b < 4; ++b) {
+                const float v = alpha[(size_t)i * 16 + (size_t)(a * 4 + b)] + beta[(size_t)i * 16 + (size_t)(a * 4 + b)];
+                if (v > NEG / 2) pt[b] = lse2(pt[b], v);
+            }
+            float l1 = NEG, l0 = NEG, h1 = NEG, h0 = NEG;
+            for (int t = 0; t < 4; ++t) {
+                if (kBit0[t]) l1 = lse2(l1, pt[t]); else l0 = lse2(l0, pt[t]);
+                if (kBit1[t]) h1 = lse2(h1, pt[t]); else h0 = lse2(h0, pt[t]);
+            }
+            llr[2 * d] = std::max(-40.f, std::min(40.f, l1 - l0)); llr[2 * d + 1] = std::max(-40.f, std::min(40.f, h1 - h0));
+        }
+    };
+    /* ★★ DECISION-DIRECTED FREQUENCY (V12 wave 2). At threshold the 40 sync symbols alone often pin the wrong
+     *  frequency (a grating lobe, or noise): measured at −27 dB, HALF the trials had every coherent view wrong (≈ 120
+     *  of 240 bits) while the 4-symbol non-coherent view was ≈ 80 % right. So the 4-symbol view's tone decisions (and
+     *  the sync's known tones) make a 160-symbol reference: |Σ X_i[t̂_i]·e^{−j2πδi}|² over δ (±1/16 baud, 1/4096
+     *  steps, a parabola) — all 160 symbols, no grating lobes — and the coherent views are rebuilt at that frequency;
+     *  then once more from the best coherent view's own decisions. */
+    auto ddRefine = [&](const float* ref) {
+        static const uint8_t toneOf[4] = {0, 1, 3, 2};     // bits (b0 b1) → tone
+        std::vector<cf> v((size_t)kSymbols);
+        for (int i = 0, d = 0; i < kSymbols; ++i) {
+            int t;
+            if (isSync(i)) t = syncTone(i);
+            else { t = toneOf[((ref[2 * d] > 0) << 1) | (ref[2 * d + 1] > 0)]; ++d; }
+            v[(size_t)i] = X[(size_t)i * 4 + (size_t)t];
+        }
+        const int H = 256; const double step = 1.0 / 4096;
+        std::vector<double> pw((size_t)(2 * H + 1));
+        int bk = 0;
+        for (int k = -H; k <= H; ++k) {
+            const double dlt = k * step;
+            const cf w((float)std::cos(-kTwoPi * dlt), (float)std::sin(-kTwoPi * dlt));
+            cf rot(1, 0), acc(0, 0);
+            for (int i = 0; i < kSymbols; ++i) { acc += v[(size_t)i] * rot; rot *= w; }
+            pw[(size_t)(k + H)] = std::norm(acc);
+            if (pw[(size_t)(k + H)] > pw[(size_t)(bk + H)]) bk = k;
+        }
+        double fr = 0;
+        if (bk > -H && bk < H) {
+            const double a0 = pw[(size_t)(bk + H - 1)], b0 = pw[(size_t)(bk + H)], c0 = pw[(size_t)(bk + H + 1)], den = a0 - 2 * b0 + c0;
+            if (den < 0) fr = std::max(-0.5, std::min(0.5, 0.5 * (a0 - c0) / den));
+        }
+        return bestDf + (bk + fr) * step;
+    };
+    float llrs[16][kN];
     static const int kEnvNb = std::getenv("FST4_NB") ? std::atoi(std::getenv("FST4_NB")) : -1;   // ★ the bench: one view only (0 piecewise, 9 global, 1/2/4 blocks)
-    int nViews = 0;
-    if (kEnvNb >= 0) { if (kEnvNb == 0) coherentLlr(llrs[0]); else if (kEnvNb == 9) globalLlr(llrs[0]); else blockLlr(kEnvNb, llrs[0]); nViews = 1; }
-    else if (o.loaded) { globalLlr(llrs[0]); blockLlr(4, llrs[1]); nViews = 2; }
-    else { globalLlr(llrs[0]); coherentLlr(llrs[1]); blockLlr(4, llrs[2]); blockLlr(2, llrs[3]); blockLlr(1, llrs[4]); nViews = 5; }
+    // ★ the views, made one at a time and each tried before the next is made (most decodes need only the first)
+    std::vector<std::function<void(float*)>> views;
+    double dd1 = NAN;
+    if (kEnvNb >= 0) {
+        if (kEnvNb == 0) views.push_back([&](float* l) { coherentLlr(l); });
+        else if (kEnvNb == 9) views.push_back([&](float* l) { globalLlr(l, 0, NAN); });
+        else if (kEnvNb == 7 || kEnvNb == 8) views.push_back([&](float* l) { globalLlr(l, 0, NAN); trellisLlr(kEnvNb == 8, l); });
+        else if (kEnvNb == 6) views.push_back([&](float* l) { blockLlr(4, l); dd1 = ddRefine(l); globalLlr(l, 0, dd1); trellisLlr(false, l); });
+        else views.push_back([&, nb = kEnvNb](float* l) { blockLlr(nb, l); });
+    } else if (o.loaded) {
+        views.push_back([&](float* l) { globalLlr(l, 0, NAN); });
+        views.push_back([&](float* l) { blockLlr(4, l); });
+    } else {
+        views.push_back([&](float* l) { globalLlr(l, 0, NAN); });                       // pins dfGlobal (best lobe)
+        views.push_back([&](float* l) { trellisLlr(false, l); });
+        views.push_back([&](float* l) { blockLlr(4, l); });
+        views.push_back([&](float* l) { dd1 = ddRefine(llrs[2]); globalLlr(l, 0, dd1); });   // decision-directed
+        views.push_back([&](float* l) { trellisLlr(false, l); });
+        views.push_back([&](float* l) { trellisLlr(true, l); });
+        views.push_back([&](float* l) { const double dd2 = ddRefine(llrs[4]); globalLlr(l, 0, dd2); trellisLlr(false, l); });
+        views.push_back([&](float* l) { globalLlr(l, 1, NAN); trellisLlr(false, l); });  // the second lobe
+        views.push_back([&](float* l) { coherentLlr(l); });
+        views.push_back([&](float* l) { blockLlr(2, l); });
+        views.push_back([&](float* l) { blockLlr(1, l); });
+    }
+    const int nViews = (int)views.size();
+    int bestUnsat = 1 << 20, bestK = 0, made = 0;
+    float postTmp[kN], postBest[kN];
+    struct OsdIn { int unsat; int k; std::vector<float> post; };
+    std::vector<OsdIn> osdPool;
+    static const int kOsdPost = std::getenv("FST4_OSDCH") ? 0 : 1;   // ★ OSD orders by BP's accumulated posteriors (FST4_OSDCH: the channel's)
     for (int k = 0; k < nTry * nViews && !got; ++k) {
+        if (k % nTry == 0) { views[(size_t)(k / nTry)](llrs[k / nTry]); made = k / nTry + 1; }
         ++st.attempts;
         const float* llr = llrs[k / nTry];
-        it = bpDecode(codes[k % nTry], llr, o.maxIter, cw);
-        if (!it) continue;
+        int unsat = 0;
+        it = bpDecode(codes[k % nTry], llr, o.maxIter, cw, &unsat, postTmp);
+        if (!it) {
+            if (unsat < bestUnsat) { bestUnsat = unsat; bestK = k; std::memcpy(postBest, postTmp, sizeof postTmp); }
+            osdPool.push_back({unsat, k, std::vector<float>(postTmp, postTmp + kN)});
+            continue;
+        }
         bool plausible = true;
         if (codes[k % nTry] == Code::K74) {
             if (!unpack50(cw, r.text, r.call, r.grid, r.dbm)) continue;
@@ -372,6 +620,43 @@ bool SlotDecoder::tryCand(const cf* z, int n, const Cand& c, const SlotOptions& 
         }
         r.k101 = codes[k % nTry] == Code::K101;
         got = true;
+    }
+    if (g_truthTones && std::getenv("FST4_VDBG")) {   // ★ the bench's oracle: bit errors per view made vs the sent tones
+        static const int inv[4] = {0, 1, 3, 2};
+        uint8_t tb[kN]; for (int d = 0; d < kData; ++d) { const int t = g_truthTones[dataPos[d]]; tb[2 * d] = (uint8_t)(inv[t] >> 1); tb[2 * d + 1] = (uint8_t)(inv[t] & 1); }
+        std::fprintf(stderr, "oracle bit errors (%s):", got ? "decoded" : "failed ");
+        for (int v = 0; v < made; ++v) { int e = 0; for (int j = 0; j < kN; ++j) e += (llrs[v][j] > 0) != (tb[j] != 0); std::fprintf(stderr, " %3d", e); }
+        std::fprintf(stderr, "  rho %.2f\n", rho);
+    }
+    /* ★★ OSD (V12 wave 2): when every view's BP failed, ordered-statistics decoding on the view BP came closest with
+     *  (ldpc_small.h: order 1 + pairs among the 16 least reliable information bits). The CRC-24 vets its trials — 2⁻²⁴ a
+     *  trial, ≤ 96 trials — and the decode must still unpack to a message people send (FST4: ft8OsdPlausible's rules;
+     *  FST4W: a real call and grid), then pass the guards below like any other. Not when loaded. */
+    bool viaOsd = false;
+    static const int kOsdSpan = std::getenv("FST4_OSDSPAN") ? std::atoi(std::getenv("FST4_OSDSPAN")) : 101;
+    if (!got && o.osd && !o.loaded) {
+        const Code cc = codes[bestK % nTry];
+        std::string t2, c2, g2; int d2 = 0; bool pl = false;
+        auto acc = [&](const uint8_t* x) {
+            if (cc == Code::K74) return unpack50(x, t2, c2, g2, d2);
+            return unpack77(x, false, t2, c2, g2, pl) && pl;
+        };
+        // ★ the views BP came closest with, best first (FST4_OSDN of them, default 3)
+        static const int kOsdN = std::getenv("FST4_OSDN") ? std::atoi(std::getenv("FST4_OSDN")) : 3;
+        std::stable_sort(osdPool.begin(), osdPool.end(), [](const OsdIn& a, const OsdIn& b) { return a.unsat < b.unsat; });
+        bool okOsd = false;
+        for (int q = 0; q < (int)osdPool.size() && q < kOsdN && !okOsd; ++q) {
+            if (codes[osdPool[(size_t)q].k % nTry] != cc) continue;
+            ++st.attempts;
+            okOsd = osdDecode(cc, kOsdPost ? osdPool[(size_t)q].post.data() : llrs[osdPool[(size_t)q].k / nTry], kOsdSpan, acc, cw);
+        }
+        if (std::getenv("FST4_VDBG")) std::fprintf(stderr, "  OSD (best unsat %d): %s\n", bestUnsat, okOsd ? "decoded" : "nothing");
+        if (okOsd) {
+            if (cc == Code::K74) unpack50(cw, r.text, r.call, r.grid, r.dbm);
+            else unpack77(cw, true, r.text, r.call, r.grid, pl);
+            r.k101 = cc == Code::K101;
+            got = viaOsd = true; it = 0;
+        }
     }
     if (!got) return false;
     // one copy per message
@@ -392,7 +677,7 @@ bool SlotDecoder::tryCand(const cf* z, int n, const Cand& c, const SlotOptions& 
     r.f0 = (float)(fc_ + (sb0 + bestDf) * baud_);
     r.dt = (float)(bestN0 / rate_ - kWinLeadSec - p_->lead);
     r.snr = (int)std::lround(10.0 * std::log10(rhoAll * baud_ / 2500.0));
-    r.iters = it; r.sync = c.score;
+    r.iters = it; r.sync = c.score; r.osd = viaOsd;
     out.push_back(r);
     ++st.decodes;
     return true;

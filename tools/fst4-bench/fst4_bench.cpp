@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     const bool w = m == fst4::Mode::FST4W;
     const double fc = w ? 1500 : 1500;
     fst4::SlotOptions o; if (w) { o.loHz = 1400; o.hiHz = 1600; }
+    if (std::getenv("FST4_NOOSD")) o.osd = false;
     fst4::SlotDecoder d(m, P, fc);
     if (!d.ok()) { std::fprintf(stderr, "no such mode/period\n"); return 2; }
     if (cmd == "sweep" && argc >= 8) {
@@ -39,6 +40,7 @@ int main(int argc, char** argv) {
                 auto a = fst4synth::noiseWindow(P, 100u + (uint32_t)t * 37u + (uint32_t)(snr * 10 + 500));
                 const double f0 = w ? 1450 + 7.3 * (t % 9) : 900 + 61.7 * (t % 13), dt = -0.4 + 0.17 * (t % 6);
                 fst4synth::addSignal(a, P, tones, f0, dt, snr);
+                fst4::g_truthTones = tones;
                 auto z = fst4synth::toBaseband(a, m, P, fc);
                 std::vector<fst4::Result> res; fst4::SlotStats st;
                 d.decode(z.data(), (int)z.size(), o, res, &st);
@@ -49,6 +51,7 @@ int main(int argc, char** argv) {
                     else { ++wrong; std::printf("  WRONG %s (sent %s)\n", r.text.c_str(), want.c_str()); }
                 }
                 got += ok;
+                if (!ok && std::getenv("FST4_MISS")) std::printf("  MISS t=%d f0=%.1f dt=%.2f\n", t, f0, dt);
             }
             std::printf("snr %6.1f  decoded %3d/%d (%5.1f%%)  wrong %d  max|dt| %.3f  max|df| %.3f  snrBias %+.1f\n", snr, got, trials, 100.0 * got / trials, wrong, de, fe, got ? se / got : 0);
             std::fflush(stdout);
@@ -76,6 +79,8 @@ int main(int argc, char** argv) {
         std::vector<int16_t> s((size_t)(sz - 44) / 2); size_t got = std::fread(s.data(), 2, s.size(), f); std::fclose(f);
         std::vector<float> a((size_t)(P + 2) * 12000, 0.f);
         for (size_t i = 0; i < got && i + 12000 < a.size(); ++i) a[i + 12000] = s[i] / 32768.f;
+        static uint8_t truth[160];
+        if (const char* tm = std::getenv("FST4_TRUTH")) { if (fst4::encodeText(tm, truth)) fst4::g_truthTones = truth; }
         auto z = fst4synth::toBaseband(a, m, P, fc);
         std::vector<fst4::Result> res; fst4::SlotStats st;
         d.decode(z.data(), (int)z.size(), o, res, &st);

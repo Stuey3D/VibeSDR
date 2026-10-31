@@ -258,10 +258,48 @@ About: V12 note. DIGITAL-SPOTS.md row. Dials: digi_bands.h note (IARU R1 VHF Han
 
 ---
 
+## 2b. FST4 / FST4W — the gap to jt9 closed by about half (2026-10-31)
+
+What changed (`fst4_decoder.cpp`, `fst4_code.{h,cpp}`, `ldpc_small.*`):
+- **BP on the shared SIMD decoder** (`ldpc_small`: four checks a lane, our own exp/log, identical scalar); the old
+  scalar sum-product removed.
+- **Decision-directed frequency.** The oracle (the bench's sent tones, `FST4_VDBG`) showed that at −27 dB HALF the
+  trials had every coherent view wrong (≈ 120 of 240 bits) while the 4-symbol non-coherent view was ≈ 80 % right: the
+  40 sync symbols alone pin a wrong frequency (grating lobes 1/38 baud apart, or noise). Now the 4-symbol view's tone
+  decisions + the sync make a 160-symbol reference, |Σ X_i[t̂_i]e^{−j2πδi}|² over ±1/16 baud (1/4096 steps,
+  parabola), and the coherent views are rebuilt there — then once more from the best coherent view's decisions. The
+  sync-only search now covers ±1/32 baud and also tries its second lobe.
+- **A GFSK-matched view**: a coherent MAP (forward-backward) detector over (previous, this) tone states with the 64
+  exact BT = 1 waveforms of each tone triple, integrated over 32 sub-blocks a symbol — global and piecewise phase.
+  Measured: a few bits better than the one-symbol coherent view, not a large gain (the coherent views were already
+  at the ideal coherent 4-FSK error rate once the frequency is right: ≈ 35 of 240 bits at −26 dB, theory 37).
+- **OSD**: order 1 + every pair of the 101 (or 74) information positions, up to 3000 trials, on the three views BP came
+  closest with, ORDERED BY BP'S ACCUMULATED POSTERIORS (the iterations' evidence summed — this, not the channel LLRs,
+  is what made OSD pay: −27 dB 4 → 9 of 20). The CRC-24 vets the trials; the message must unpack as a message people
+  send / a real FST4W call + grid; then the energy and one-tone guards.
+- Views are made lazily (each tried before the next is made).
+
+| | before | now |
+|---|---|---|
+| FST4-60, our synth, 50 % | −26.1 | ≈ −26.7 dB |
+| FST4-15, 50 % | −18.7 | ≈ −19.5 |
+| FST4W-120, 50 % | −29.6 | ≈ −30.1 |
+| fst4sim files (20 per point, same files for both) | −26: ours 10, jt9 20 · −27: 4 / 19 | −25: 15→(not rerun) · **−26: 15 / 20 · −27: 9 / 19 · −28: 1–2 / 9** |
+| gap to jt9 at 50 % | ≈ 2–2.5 dB | **≈ 1 dB** |
+| False decodes | — | FST4-15 × 6000, FST4-60 × 400, FST4W-120 × 200 noise windows: **0** |
+| SIMD vs scalar | not checked | `SCALAR=1` build: 40 fst4sim files and a FST4W sweep **bit-identical** |
+| Pi 2 (qemu-arm count, `tools/fst4-bench/qemu.sh`) | not measured | one FST4-60 window of noise incl. its whole stream ≈ 0.6 G instructions NEON (scalar ≈ 0.95 G) → FST4 (60/120/300 sharing the mix) ≈ 0.7–0.9 G a minute ≈ 1–1.5 s of a 900 MHz core (ESTIMATE). Hot: the FIR/resampler (vibedsp, NEON), OSD on noise candidates (≈ 12 %), the double-precision twiddles (`sincos`, 8 %: a recurrence would remove most — owed) |
+| Mac decode (noise, worst case) | 10.4 ms / FST4-60 window | 11.7 ms |
+
+Still owed: the last ≈ 1 dB (candidates: order-3 OSD restricted to the least reliable, iterating BP ↔ detector,
+non-coherent GFSK-matched views for fading paths); real LF/MF/HF FST4W (a night of 630 m / 40 m on the UberSDR);
+twiddle recurrence.
+
+---
+
 ## RESUME HERE — the queue from MSK144 on (not started)
 
-3. ~~MSK144~~ DONE (section 3). NEXT: FST4's gap to jt9 (OSD via ldpc_small + a GFSK-matched detector; Pi 2 count;
-   SIMD identity), then CTCSS/DCS.
+3. ~~MSK144~~ DONE (section 3). ~~FST4 gap~~ halved (section 2b). NEXT: CTCSS/DCS.
 4. CTCSS/DCS — NOTE: the decoder host's audio is post-voice-filter in NFM VOICE (the 300 Hz high-pass cuts CTCSS by
    ≥ 40 dB: vibedsp.h setNfmVoice); the tone decoder needs the listener's RAW discriminator or its own FM
    discriminator on the per-client IQ tap (`iqTap` in local_sdr_shim.cpp) — outside RxPipeline as asked.
