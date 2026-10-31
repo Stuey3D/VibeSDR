@@ -53,6 +53,7 @@ g++ $FLAGS \
   "$DSP/rds.cpp" \
   "$DSP/pipeline.cpp" \
   "$DSP/amsync.cpp" \
+  "$DSP/autobw.cpp" \
   "$DSP/mpxmeasure.cpp" \
   "$DSP/third_party/kissfft/kiss_fft.c" \
   "$DSP/third_party/kissfft/kiss_fftr.c" \

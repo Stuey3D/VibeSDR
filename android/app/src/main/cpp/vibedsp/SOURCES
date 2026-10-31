@@ -37,4 +37,5 @@ iqclean.cpp
 spectrum_processor.cpp
 ssb_offset.cpp
 amsync.cpp
+autobw.cpp
 binaural.cpp

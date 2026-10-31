@@ -2851,6 +2851,88 @@ private:
     std::vector<float> d_;
 };
 
+// ── AutoPassband — V12 auto bandwidth for SSB and CW ─────────────────────────────────────────
+/** ★★ V12 AUTO BANDWIDTH FOR SSB AND CW (autobw.cpp; docs/v12/AM-SYNC.md §11, with every measurement).
+ *  The AM family has its own (SyncAm) and WFM has the shim's TEF-style one; this is the third: it works on the
+ *  DEMODULATED audio of USB/LSB/CW, which for those modes is a linear image of the RF passband (0 Hz = the dial's
+ *  suppressed carrier), so cutting the audio IS cutting the RF passband — before the AGC, so the AGC no longer
+ *  levels on what was cut.
+ *
+ *  ★★★ MEASURED ON THE UNCUT AUDIO, ALWAYS, then filtered — so a cut can never confirm itself.
+ *
+ *  SSB — "fit the passband to the voice that is there". Per 100 Hz band, the CORRELATION of that band's log power
+ *  over time with the log power of the voice's core (500–1500 Hz), over ~5 s. A band carrying THIS talker rises and
+ *  falls with the core syllable by syllable; a band of noise, another talker splattering in, or a steady carrier
+ *  does not. The passband is trimmed from each edge to the outermost band that still correlates — the top never
+ *  below 2 kHz, the bottom never above 300 Hz — and the listener's width is always the ceiling.
+ *  CW — "narrow round the keyed tone". The strongest tone within ±250 Hz of the beat note the dial puts a signal on
+ *  (the middle of the listener's CW passband), confirmed on two decisions running, gets a ±150 Hz passband — less
+ *  where another signal is closer than that. Widens again when the tone has gone for 3 s.
+ *  Time rules (both): 3 s of evidence before any cut; narrowing needs four decisions (2 s) and goes to the widest of
+ *  them; widening is at once; a retune clears everything.
+ *  ★ The filter is a linear-phase FIR (RealFir: NEON / SSE2 / scalar — the same kernel the Weaver pair uses),
+ *    redesigned in place (retune keeps the history) when the edges move. While auto is on and not cutting it is a
+ *    pure delay, so the audio does not jump in time when a cut comes and goes. */
+class AutoPassband {
+public:
+    enum class Kind { SSB, CW };
+    struct Status {
+        bool  cut = false;       // narrower than the listener's passband right now
+        float loHz = 0.0f;       // applied audio passband (0 Hz = the dial / BFO zero), lower edge
+        float hiHz = 0.0f;       // … upper edge
+        float toneHz = 0.0f;     // CW: the tone it is centred on (audio Hz), 0 = none
+    };
+    AutoPassband();
+    ~AutoPassband();
+    AutoPassband(const AutoPassband&) = delete;
+    AutoPassband& operator=(const AutoPassband&) = delete;
+    /** @param userHiHz the listener's audio passband top (SSB: its width; CW: the CW filter, tone at the middle). */
+    void configure(Kind k, double fs, double userHiHz);
+    void setUserHi(double userHiHz);
+    /** A retune: every verdict forgotten (a limit must never travel with the dial). */
+    void retune();
+    /** Measures x (uncut), then filters it in place. Delay: (taps − 1) / 2 samples. */
+    void process(float* x, int n);
+    Status status() const { return st_; }
+    Kind kind() const { return kind_; }
+    int taps() const { return taps_; }
+    /** Bench: pin the passband (Hz; hi ≤ 0 = back to automatic). */
+    void forceEdges(float loHz, float hiHz) { forceLo_ = loHz; forceHi_ = hiHz; }
+private:
+    void measureSsb_(const cf32* X);
+    void measureCw_(const cf32* X);
+    void decideSsb_();
+    void decideCw_();
+    void propose_(float lo, float hi, float tone);
+    void apply_(float lo, float hi);
+    Kind kind_ = Kind::SSB;
+    double fs_ = 0.0, userHi_ = 2700.0;
+    int taps_ = 0;
+    std::unique_ptr<RealFir> fir_;
+    std::vector<float> out_;
+    float curLo_ = 0.0f, curHi_ = 0.0f;   // the passband the FIR has now (curHi_ ≤ 0 = pure delay)
+    Status st_{};
+    float forceLo_ = 0.0f, forceHi_ = 0.0f;
+    // measurement
+    std::unique_ptr<RealFFT> fft_;
+    int N_ = 0, fill_ = 0, frames_ = 0, sinceDecide_ = 0, decideEvery_ = 1;
+    float fps_ = 1.0f;
+    std::vector<float> buf_, win_, frame_;
+    std::vector<cf32> spec_;
+    // SSB: per-band log-power moments against the core's (double: E[x²] − E[x]² cancels badly in float)
+    int nBands_ = 0, coreLo_ = 0, coreHi_ = 0;
+    std::vector<int> bandOf_;
+    std::vector<float> bandP_;
+    std::vector<double> mB_, mBB_, mBC_;
+    double mC_ = 0.0, mCC_ = 0.0, aMom_ = 0.0;
+    // CW: per-bin average power
+    std::vector<float> avg_;
+    float aAvg_ = 0.0f;
+    float pendTone_ = 0.0f; int pendCount_ = 0, lostCount_ = 0;
+    // decisions
+    int narrowVotes_ = 0; float narrowLo_ = 0.0f, narrowHi_ = 0.0f;
+};
+
 // ── RxPipeline (the native engine) ───────────────────────────────────────--
 // The complete IQ -> {spectrum, audio} chain that the shim's "Local Hardware
 // (Native)" path runs, replacing the SDR++ Brown graph. Feed it raw IQ from the
@@ -3452,6 +3534,12 @@ public:
     bool amAutoBandwidth() const { return amAutoBw_.load(std::memory_order_relaxed); }
     /** The AM family's lock / carrier offset / applied edges / pilot — a copy taken once per block. */
     SyncAm::Status amSyncStatus() const { std::lock_guard<std::mutex> lk(amStMtx_); return amSt_; }
+    /** ★★ V12 SSB / CW auto bandwidth (AutoPassband) — the SAME switch as the AM family's (setAmAutoBandwidth): one
+     *  AUTO per listener, acting in whichever mode can use it. The applied AUDIO passband (0 Hz = the dial's zero beat). */
+    AutoPassband::Status autoPassbandStatus() const { std::lock_guard<std::mutex> lk(amStMtx_); return apbSt_; }
+    bool autoPassbandActive() const { return mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB || mode_ == Mode::CW; }
+    /** Bench only: pin SSB/CW auto's passband (audio Hz; hi ≤ 0 = automatic). Read at the next block. */
+    void setAutoPassbandForce(float lo, float hi) { apbForceLo_.store(lo); apbForceHi_.store(hi); }
     bool amSyncActive() const { return isAmFamily(mode_); }
     /** Bench only: switch auto bandwidth's arms (1 noise, 2 interference, 4 MRC, 8 notch); default 0xE. */
     void setAmAutoArms(unsigned mask) { amArms_.store(mask, std::memory_order_relaxed); }
@@ -3582,6 +3670,11 @@ private:
     mutable std::mutex amStMtx_;
     SyncAm::Status amSt_{};
     std::vector<float> amR_, tmpLink_;     // AM stereo: the right channel; the linked AGC's level/gain
+    /** ★★ V12 SSB / CW auto bandwidth — built with the SSB demod, run only while amAutoBw_ is on. */
+    std::unique_ptr<AutoPassband> apb_;
+    bool apbWasOn_ = false;
+    AutoPassband::Status apbSt_{};
+    std::atomic<float> apbForceLo_{0.0f}, apbForceHi_{0.0f};
     bool lastAmStereo_ = false;
     std::unique_ptr<FmDemod> fm_;
     std::unique_ptr<SsbDemod> ssb_;

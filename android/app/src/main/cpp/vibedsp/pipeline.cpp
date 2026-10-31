@@ -353,6 +353,7 @@ bool RxPipeline::applySmoothBandwidth() {
     //     moved, and a rebuild is what puts the whole chain back in agreement.
     if (ssbLike) {
         if (!ssb_) return false;
+        if (apb_) apb_->setUserHi(bwHz_);   // ★ V12 auto bandwidth: the listener's width is its ceiling
         return ssb_->retune(mode_ == Mode::SSB_LSB ? SsbDemod::Side::LSB : SsbDemod::Side::USB,
                             bwHz_);
     }
@@ -629,7 +630,7 @@ void RxPipeline::rebuildAudio() {
 
     // Construct the demod for the active mode. FM gain maps radians/sample to a
     // unit-ish audio level at the channel rate.
-    am_.reset(); fm_.reset(); ssb_.reset(); sync_.reset(); audioLpf_.reset(); lmrLpf_.reset();
+    am_.reset(); fm_.reset(); ssb_.reset(); sync_.reset(); audioLpf_.reset(); lmrLpf_.reset(); apb_.reset();
     // ★ Was the audio AGC already running and converged? If so its envelope is still a
     // good estimate of the signal we are listening to, and wiping it costs a full
     // re-acquisition (gain 1.0, then a 400 ms climb) — audible as a hard attenuation.
@@ -668,6 +669,11 @@ void RxPipeline::rebuildAudio() {
             ssb_ = std::make_unique<SsbDemod>();
             ssb_->configure(mode_ == Mode::SSB_LSB ? SsbDemod::Side::LSB : SsbDemod::Side::USB,
                             bwHz_, chFs_, smoothBw_ ? chainBwLo_ : 0.0);
+            /* ★★ V12 auto bandwidth for SSB and CW (AutoPassband): built here, run before the AGC while it is on.
+             *  The demodulated audio runs 0..bw (0 Hz = the dial / zero beat), the CW tone at bw/2. */
+            apb_ = std::make_unique<AutoPassband>();
+            apb_->configure(mode_ == Mode::CW ? AutoPassband::Kind::CW : AutoPassband::Kind::SSB, chFs_, bwHz_);
+            apbWasOn_ = false;
             useAgc_ = true; agc_.configure(chFs_);
             if (!hadAgc) agc_.reset();
             agc_.guard(); break;
@@ -891,6 +897,7 @@ void RxPipeline::feed(const cf32* iq, int n) {
         // ★★ V12 and the AM family re-finds ITS carrier, and forgets every auto-bandwidth verdict — a limit
         //    decided for the last station must never travel with the dial ([[never_limit_permanently]])
         if (sync_) sync_->retune();
+        if (apb_) apb_->retune();        // ★ V12 SSB / CW auto bandwidth: the same rule
         ++measGen_;                      // …and so does the instrument: a different station
         // ★★★ AND THE IF GOES BACK TO WIDE, BECAUSE NARROWING IS A DECISION ABOUT A STATION.
         //     The engage rule needs 3 dB of benefit in EITHER direction — deliberately, so it
@@ -1890,6 +1897,20 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
                 hiCutYM_ = std::isfinite(y) ? y : 0.0f;
             } else if (nd > 0) {   // ★★ bypassed: follow the signal (see lmrHiCutY_)
                 hiCutYM_ = std::isfinite(audioIn[nd - 1]) ? audioIn[nd - 1] : 0.0f;
+            }
+            /* ★★ V12 SSB / CW AUTO BANDWIDTH — before the AGC, so the AGC levels on what is kept. Off: bypassed
+             *  entirely (byte for byte the old path). Switched on: starts from a clean slate. */
+            if (apb_ && nd > 0) {
+                const bool on = amAutoBw_.load(std::memory_order_relaxed);
+                if (on) {
+                    if (!apbWasOn_) apb_->retune();
+                    apb_->forceEdges(apbForceLo_.load(std::memory_order_relaxed), apbForceHi_.load(std::memory_order_relaxed));
+                    apb_->process(const_cast<float*>(audioIn), nd);
+                }
+                apbWasOn_ = on;
+                AutoPassband::Status s = on ? apb_->status() : AutoPassband::Status{};
+                if (!on) { s.cut = false; s.hiHz = (float)bwHz_; }
+                std::lock_guard<std::mutex> lk(amStMtx_); apbSt_ = s;
             }
             if (useAgc_) { agc_.process(audioIn, nd); agc_.guard(); }  // AM/SSB/CW level + anti-clip
             trace_("mono_out", audioIn, nd);
