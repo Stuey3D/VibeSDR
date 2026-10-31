@@ -519,29 +519,63 @@ index.html, then build-web).
 | Decodes | three bursts → one alert (heard 3) + one end; a 50 ms drop-out in one burst → still right; 48, 24 and 12 kHz; 20 s of attention signal → nothing |
 | Sensitivity (white noise, SNR in 3 kHz, ±1 % clock, ±20 Hz tones, 20 alerts a point) | +2 dB 5/20 · **+4 dB 19/20** · +6 dB and up 20/20; **0 wrong in the whole sweep** |
 | False alerts | 2 h white noise: 0 alerts, 0 ends; 20 min of random AFSK bytes at 520.83 bit/s: 0 |
-| CPU | Mac ≈ 0.31 ms per second of 48 kHz audio incl. the noise generator. Pi 2: not counted under qemu (owed; by the Mac→Pi 2 ratios of the other decoders ≈ 10–20 ms a second, ≈ 1–2 %, ESTIMATE) |
-| SIMD | the mixer products in q65v lanes; boxcar and DPLL per-sample feedback (≈ 20 flops a sample at 12 kHz), not vectorised. Mac NEON = scalar: whole test output identical (fingerprint 69b64f10b37cc543). No per-sample divide (one per BIT for the soft value), no modulo (the table index walks) |
+| CPU | Mac ≈ 0.31 ms per second of 48 kHz audio incl. the noise generator. **Pi 2 (qemu-arm count, `tools/alert-bench/qemu.sh`)**: first build NEON 150 M / scalar 141 M instructions a minute — the gathered SIMD mixer did not pay, so it was rebuilt planar with contiguous padded tables: **NEON 129 M / scalar 148 M a minute → ≈ 0.2 s of a 900 MHz core a minute (≈ 0.3–0.4 %)**, ESTIMATE at 0.6–0.8 IPC; output unchanged (same fingerprint, NEON = scalar) |
+| SIMD | the mixer products in q65v lanes (planar, contiguous loads); boxcar and DPLL per-sample feedback (≈ 20 flops a sample at 12 kHz), not vectorised. Mac NEON = scalar: whole test output identical (fingerprint 69b64f10b37cc543). No per-sample divide (one per BIT for the soft value), no modulo (the table index walks) |
 
 Owed: **a real NOAA Weather Radio capture** (not receivable in the UK; no server session this run — the weekly test,
 RWT, Wednesdays ≈ 11:00–12:00 local, on a US receiver would do), the web key + build-web, Canada's Weatheradio
-location codes (shown raw today), a qemu Pi 2 count.
+location codes (shown raw today).
 
-## RESUME HERE (updated 2026-10-31 ≈ 06:00 UTC, after the second run: CTCSS/DCS wiring, CHU, ACARS block, POCSAG)
+## 9. SELCAL — DONE, wired to server and app (2026-10-31, third run)
 
-Done this run (commits on `v12-decoders-wave2`): CTCSS/DCS wired end to end (section 4 — server, app, web, e2e test),
-CHU dropped (off the air since 22 June 2026, section 5), ACARS/VDL2/HFDL/RS41 blocked with the reason (section 6),
-POCSAG engine with AUTO (section 7).
+Files: `decoders/selcal_decoder.{h,cpp}`, `vibeserver/test-selcal.cpp` (run-tests), host ext `selcal`, vibeserver.json
+`"selcal"`, the owner's switch, CMake ×2 + `build_ios.sh`; app: DecoderClient, sdrTypes, ModeSelector (key + hint),
+DecoderPanel, decoderBands (Aviation on HF beside HFDL, and a new Aviation group on VHF), modeIcons (aircraft),
+SDRScreen (capability, tour), About. `tools/alert-bench/` (bench + `qemu.sh`, shared with SAME). **No web key** (owed).
+
+- **Standard — found free and authoritative**: ICAO Annex 10 Vol III Part II Ch 3 as amended by **Amendment 91**
+  (adopted 6 Nov 2020, applicable 3 Nov 2022), its text reproduced in ICAO's own working paper "Amendment 91 to Annex
+  10 Volume III on Selective Calling Codes" (APAC CNS SG/28 WP/21, 2024, icao.int — downloaded and read with
+  pdftotext): two pulses of two simultaneous tones, 1.0 ± 0.25 s each, 0.2 ± 0.1 s apart, tones ± 0.15 %, within
+  3 dB; Table 3-1: 32 tones, Red A–S (312.6–1479.1 Hz) + SELCAL32's Red T–9 (329.2–1557.8 Hz), log⁻¹ 0.0225 apart.
+  (The ordering of the two letters inside a pulse is not in that text: ours is Table 3-1's order.)
+- **Receiver**: 48 → 8 kHz box average; every 50 ms a 200 ms Hann window; Goertzel at the 32 tones × three dial
+  offsets (−4/0/+4 Hz), four tones a lane; a pulse window = at the best offset, two tones ≥ 9 dB over the median of
+  the 32, within 6 dB, the third ≥ 8 dB under; a pulse = the same pair 0.6–1.6 s; a code = two disjoint pulses with a
+  change-over gap (a window straddling a short gap pairs one tone of each pulse — that ≤ 0.4 s "pair" is ignored, it
+  does not discard the first pulse). One report per code per 20 s.
+
+| | |
+|---|---|
+| Table | A–S at log⁻¹ 0.045, T–9 each log⁻¹ 0.0225 above its partner (checked); no I, N, O |
+| Codes | **300/300 random codes right** over all 32 tones (pulses 0.75–1.25 s, gaps 0.1–0.3 s, ±3 dB, ±0.15 %), 0 wrong; the same code twice → once |
+| Dial | 40/40 at every mistuning 0–10 Hz; beyond (12 Hz, measured in an earlier build) a neighbouring SELCAL32 tone can be read — the hint asks for the dial within ≈ 10 Hz |
+| Sensitivity (white noise, SNR in 3 kHz, 40 codes a point) | −8 dB 5 · **−6 dB 37** · −4 dB and up 40; 0 wrong in the sweep |
+| False codes | 2 h white noise: 0; 3 × the 16 DTMF digits at SELCAL timing: 0; ≈ 5 min of speech-like harmonic syllables: 0 |
+| CPU | Mac ≈ 1.6 ms per second of 48 kHz audio incl. the noise generator. **Pi 2 (qemu-arm count, `tools/alert-bench/qemu.sh`)**: NEON 552 M instructions a minute, scalar 1150 M → ≈ 0.8–1.0 s of a 900 MHz core a minute (≈ 1.3–1.7 %), ESTIMATE |
+| SIMD | Goertzel four tones a lane (q65v); Mac NEON = scalar (fingerprint 06a45fcba7f214e0 both). No per-sample divide or round |
+
+Owed: real SELCAL on air (Shanwick/Gander HF, e.g. 8.891 / 8.864 / 5.598 MHz USB — there was no server session this
+run), the web key + build-web.
+
+## RESUME HERE (updated 2026-10-31 ≈ 06:40 UTC, after the third run: paging wired, EAS/SAME, SELCAL)
+
+Done this run (commits on `v12-decoders-wave2`): PAGING wired, Android local hardware only (section 7b); EAS / SAME
+(section 8); SELCAL — unblocked by ICAO's own free text of Amendment 91 (section 9). No server or device was touched.
 
 Next, in order:
-1. **PAGING wiring** (section 7 "Not done"), Android local hardware only; then FLEX once Stuart picks a source.
-2. **ACARS → VDL2 → HFDL → RS41** once Stuart answers section 6 (a capture / permission to tune, and the standard).
-3. **MFSK/Olivia/Contestia/Thor + Hell → SELCAL → EAS/SAME.** SELCAL (tones in ICAO Annex 10; widely published) and
-   SAME (47 CFR §11.31, free) are small and fully specified — good next picks while 1–2 wait.
-4. Owed across the wave (unchanged): real-air MSK144 / FST4W, FST4's last ≈ 1 dB and twiddle recurrence, Android gradle
-   + iOS `build_ios.sh` compiles, `neon_compat.h` for `vmath4.h`'s vcgtq, **build-web** before any release (the web
-   edits for JJY and the tone suffix are not in `vibe_web_page.h` yet), `-ffp-contract` decision for Android identity.
+1. **MFSK16/32, Olivia, Contestia, Thor, Feld Hell — NOT STARTED.** Plan: published amateur descriptions only
+   (IZ8BLY's MFSK16 notes, ZL1BPU's MFSK/Hell articles, Pawel Jalocha SP9VRC's Olivia description, the Contestia and
+   Thor authors' notes); fldigi (GPL) may be READ for ideas, never copied — and is better used as a BLACK BOX (its
+   binary generating reference WAVs in a container, as jt9 was) to settle the varicode / interleaver / Walsh-Hadamard
+   details the prose leaves open. Feld Hell is an image-like text (columns), so it wants the image path, not text.
+2. **ACARS → VDL2 → HFDL → RS41, FLEX, BPC, TDF** — still waiting on Stuart (sections 5–7).
+3. Web keys for SAME and SELCAL (web/client decoders.ts / main.ts / index.html) + **build-web**.
+4. Owed across the wave (unchanged + new): real-air tests (paging on a phone, NOAA Weather Radio, HF SELCAL, MSK144,
+   FST4W, Q65), Android gradle and iOS `build_ios.sh` compiles, FST4's last ≈ 1 dB, `-ffp-contract` decision (measured
+   this run: armhf NEON = scalar bit for bit with `off`, decodes identical either way), build-web before any release.
 
-Build used this run: `~/VibeSDR-builds/decoders2-server` (cmake of this worktree's vibeserver, deps from
+Build used (second run; this run only syntax-checked the shim with its flags): `~/VibeSDR-builds/decoders2-server` (cmake of this worktree's vibeserver, deps from
 `~/VibeSDR-v12/vibeserver/mac/deps/prefix` — the main tree's prefix lacks FAAD2). The tone e2e test:
 `VIBESERVER_BIN=…/vibeserver VIBE_TONE_CLIP=clip.cu8 node scripts/test-server-tone.mjs` (clip: `test-tone-id
 --write-clip clip.cu8`). Colima was started for the paging qemu count and stopped again. No server session took place

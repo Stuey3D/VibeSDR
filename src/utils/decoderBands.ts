@@ -6,11 +6,12 @@
  *
  *   TUNES THE RADIO ITSELF (above the tabs, never dimmed — WHOLE_RADIO_IDS):
  *                     ADS-B · AIS · DAB · ISM · NDB · DIGITAL SPOTS: BAND
- *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map)
+ *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map) · SELCAL
  *                     ⚓ Maritime  NAVTEX · DSC · SITOR-A · WEFAX
  *                     Amateur     DIGITAL SPOTS · CW · PSK · RTTY · JTTY · SSTV · APRS (300 Bd HF packet)
  *                     Utility     TIME
- *   VHF               ⚓ Maritime  DSC (channel 70)
+ *   VHF               ✈ Aviation  SELCAL (AM)
+ *                     ⚓ Maritime  DSC (channel 70)
  *                     Amateur     APRS · DIGITAL SPOTS (6 m / 2 m) · CW · SSTV
  *                     Broadcast   ADV RDS · SAME (EAS alert headers, NOAA Weather Radio)
  *                     Paging      PAGE (POCSAG — Android local hardware only: the phone's own radio)
@@ -79,12 +80,13 @@ export function decoderGroupIcon(g: DecoderGroup, band: RadioBand): string {
  */
 export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: DecoderGroup; ids: readonly string[] }>>> = {
   hf: [
-    { group: 'aviation', ids: ['hfdl'] },
+    { group: 'aviation', ids: ['hfdl', 'selcal'] },
     { group: 'maritime', ids: ['navtex', 'dsc', 'sitora', 'wefax'] },
     { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'sstv', 'aprs'] },
     { group: 'other',    ids: ['time'] },
   ],
   vhf: [
+    { group: 'aviation', ids: ['selcal'] },   // ★ V12: SELCAL on VHF AM too
     { group: 'maritime', ids: ['dsc'] },
     { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv'] },
     { group: 'paging',   ids: ['paging'] },   // ★ V12: only drawn on the phone's own radio (Android local hardware)
@@ -156,6 +158,7 @@ const HF_MARITIME: readonly Range[] = [
 ];
 const NEAR: Record<string, (hz: number) => boolean> = {
   hfdl:   hz => anyNear(hz, HFDL, 5e3),
+  selcal: hz => anyNear(hz, HFDL, 5e3) || anyNear(hz, [MHz(118, 137)]),   // HF aeronautical (R) bands, VHF airband
   navtex: hz => pointsNear(hz, NAVTEX_BANDS_KHZ.map(k => k * 1e3), 5e3),
   dsc:    hz => DSC_ALL.some(c => Math.abs(hz - c.hz) <= (c.vhf ? 50e3 : 5e3)),
   sitora: hz => anyNear(hz, HF_MARITIME, 2e3),

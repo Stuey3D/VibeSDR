@@ -2664,6 +2664,8 @@ const BLOCKABLE = [
   { id: "sitora", label: "SITOR-A" },
   /* ★ V12 EAS / SAME (2026-10-31) — US Emergency Alert System headers (NOAA Weather Radio, EAS broadcasts). */
   { id: "same", label: "EAS / SAME" },
+  /* ★ V12 SELCAL (2026-10-31) — the aeronautical selective call (ICAO, 32 tones). */
+  { id: "selcal", label: "SELCAL" },
   /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio
    *  reaches LF; this switch takes it off a radio that could. */
   { id: "ndb",    label: "NDB beacons" },

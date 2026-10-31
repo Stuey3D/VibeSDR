@@ -49,6 +49,7 @@
 #include "vibe_dsc_run.h"
 #include "vibe_sitora_run.h"
 #include "decoders/same_decoder.h"   // ★ V12 EAS / SAME (47 CFR § 11.31)
+#include "decoders/selcal_decoder.h" // ★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91)
 #if defined(VIBE_PAGING)
 #include "vibe_paging_run.h"   // ★ V12 PAGING — Android local hardware only (the define is the Android library's)
 #endif
@@ -618,7 +619,7 @@ public:
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : same_ ? "same" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -760,7 +761,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -806,7 +807,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || same_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || same_ || selcal_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -824,6 +825,7 @@ private:
         dsc_.reset();
         sitora_.reset();
         same_.reset();
+        selcal_.reset();
 #if defined(VIBE_PAGING)
         if (paging_) { paging_.reset(); if (pagingIq_.exchange(false)) pagingRunning().fetch_sub(1); }
 #endif
@@ -1023,6 +1025,8 @@ private:
             buildSitoraLocked_(msg);
         } else if (ext == "same") {
             buildSameLocked_();
+        } else if (ext == "selcal") {
+            buildSelcalLocked_();
 #if defined(VIBE_PAGING)
         } else if (ext == "paging") {
             buildPagingLocked_(msg);
@@ -1179,6 +1183,19 @@ private:
         same_->onEom = [this] { textFrame("[SAME] end of message (NNNN)\n"); };
         same_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
         log("decoder attached: EAS / SAME");
+    }
+    /** ★★ SELCAL (V12, 2026-10-31): the aeronautical selective call (decoders/selcal_decoder.h — ICAO Annex 10 Vol III,
+     *  Amendment 91's 32 tones) on the listener's audio: HF USB on the aeronautical bands, or VHF AM. One line per call. */
+    void buildSelcalLocked_() {
+        selcal_.reset(new SelcalDecoder(48000));
+        selcal_->onCode = [this](const SelcalDecoder::Code& c) {
+            char b[160];
+            std::snprintf(b, sizeof b, "[SELCAL] %s \xc2\xb7 pulses %.1f s + %.1f s, gap %.2f s \xc2\xb7 %.0f dB\n",
+                          c.code.c_str(), c.pulse1, c.pulse2, c.gap, c.snrDb);
+            textFrame(b);
+        };
+        selcal_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+        log("decoder attached: SELCAL");
     }
 #if defined(VIBE_PAGING)
     /** ★★ PAGING (V12, 2026-10-31): POCSAG with AUTO (vibe_paging_run.h). "mode" = a PagingDecoder::modes() id ("auto",
@@ -1502,6 +1519,11 @@ private:
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
+            if (selcal_) {
+                selcal_->feed(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (same_) {
                 // ★ EAS / SAME: float audio straight in; its lines and state are sent from inside (buildSameLocked_)
                 same_->feed(data, count);
@@ -1595,6 +1617,7 @@ private:
     std::unique_ptr<vibeaprs::Run> aprs_;     // ★ APRS (V12): the modem + the station list (vibe_aprs_run.h)
     std::unique_ptr<SitorARun> sitora_;       // ★ SITOR-A: the ARQ listener (buildSitoraLocked_)
     std::unique_ptr<SameDecoder> same_;       // ★ EAS / SAME (buildSameLocked_)
+    std::unique_ptr<SelcalDecoder> selcal_;   // ★ SELCAL (buildSelcalLocked_)
 #if defined(VIBE_PAGING)
     std::unique_ptr<PagingRun> paging_;       // ★ PAGING: fed the channel IQ (feedChannelIq) — Android local hardware only
 #endif

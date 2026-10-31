@@ -67,7 +67,7 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'paging' | 'scanner' | 'aprs' | null;
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'paging' | 'scanner' | 'aprs' | null;
 const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
 
 export interface DecoderPanelProps {
@@ -265,6 +265,7 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   paging:  'PAGING',
   // ★ V12: US Emergency Alert System headers (NOAA Weather Radio, EAS broadcasts)
   same:    'EAS / SAME',
+  selcal:  'SELCAL',
   // ★ V12: a VibeServer's own APRS packet decoder (VHF 1200 / HF 300; the title says which).
   aprs:    'APRS',
   // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).

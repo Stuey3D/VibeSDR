@@ -56,8 +56,8 @@ SameDecoder::SameDecoder(double rateHz) {
     fs_ = rateHz / dec_;
     L_ = (int)std::floor(fs_ / kBaud + 0.5);
     inc_ = (float)(kBaud / fs_);
-    cm_.resize(kTab); sm_.resize(kTab); cs_.resize(kTab); ss_.resize(kTab);
-    for (int i = 0; i < kTab; ++i) {
+    cm_.resize(kTab + 3); sm_.resize(kTab + 3); cs_.resize(kTab + 3); ss_.resize(kTab + 3);
+    for (int i = 0; i < kTab + 3; ++i) {
         const double a = 2 * M_PI * kMark * i / fs_, b = 2 * M_PI * kSpace * i / fs_;
         cm_[(size_t)i] = (float)std::cos(a); sm_[(size_t)i] = (float)std::sin(a);
         cs_[(size_t)i] = (float)std::cos(b); ss_[(size_t)i] = (float)std::sin(b);
@@ -81,33 +81,27 @@ void SameDecoder::feed(const float* x, int n) {
     for (int i = 0; i < n; ++i) { decAcc_ += x[i]; if (++decN_ == dec_) { y.push_back(decAcc_ * inv); decAcc_ = 0; decN_ = 0; } }
     const int m = (int)y.size();
     if (!m) return;
-    // ★ the four mixer products, four samples at a time from the exact tables (q65v lanes; the tail through the same lanes)
-    std::vector<float> pr((size_t)m * 4);
+    // ★ the four mixer products, four samples at a time: planar outputs, the tables read straight (padded by 3 at the end
+    //   with their first entries, so a load across the wrap is still one contiguous load) — q65v lanes
+    y.resize(((size_t)m + 3) & ~(size_t)3, 0.f);
+    const size_t m4 = y.size();
+    pMr_.resize(m4); pMi_.resize(m4); pSr_.resize(m4); pSi_.resize(m4);
     {
-        float bx[4], c0[4], c1[4], c2[4], c3[4], o[4];
-        int t = tPos_;   // ★ the table index walks and wraps — no modulo (an integer divide on ARMv7) per sample
-        for (int i = 0; i < m; i += 4) {
-            for (int q = 0; q < 4; ++q) {
-                const int k = i + q;
-                bx[q] = k < m ? y[(size_t)k] : 0.f;
-                c0[q] = cm_[(size_t)t]; c1[q] = sm_[(size_t)t]; c2[q] = cs_[(size_t)t]; c3[q] = ss_[(size_t)t];
-                if (k < m && ++t == kTab) t = 0;
-            }
-            const V xv = ld(bx);
-            float* outs[4] = {c0, c1, c2, c3};
-            for (int j = 0; j < 4; ++j) {
-                st(o, mul(xv, ld(outs[j])));
-                for (int q = 0; q < 4 && i + q < m; ++q) pr[(size_t)(i + q) * 4 + (size_t)j] = o[q];
-            }
+        int t = tPos_;
+        for (size_t i = 0; i < m4; i += 4) {
+            const V xv = ld(&y[i]);
+            st(&pMr_[i], mul(xv, ld(&cm_[(size_t)t]))); st(&pMi_[i], mul(xv, ld(&sm_[(size_t)t])));
+            st(&pSr_[i], mul(xv, ld(&cs_[(size_t)t]))); st(&pSi_[i], mul(xv, ld(&ss_[(size_t)t])));
+            t += 4; if (t >= kTab) t -= kTab;
         }
-        tPos_ = t;
+        tPos_ += m; while (tPos_ >= kTab) tPos_ -= kTab;   // ★ the real count (the padding is not signal)
     }
     for (int i = 0; i < m; ++i) {
         // ★ one-bit boxcar correlators — running sums, the oldest product out (per-sample feedback: scalar)
         float* r = &ring_[(size_t)rPos_ * 4];
-        const float* p = &pr[(size_t)i * 4];
-        sMr_ += p[0] - r[0]; sMi_ += p[1] - r[1]; sSr_ += p[2] - r[2]; sSi_ += p[3] - r[3];
-        r[0] = p[0]; r[1] = p[1]; r[2] = p[2]; r[3] = p[3];
+        const float p0 = pMr_[(size_t)i], p1 = pMi_[(size_t)i], p2 = pSr_[(size_t)i], p3 = pSi_[(size_t)i];
+        sMr_ += p0 - r[0]; sMi_ += p1 - r[1]; sSr_ += p2 - r[2]; sSi_ += p3 - r[3];
+        r[0] = p0; r[1] = p1; r[2] = p2; r[3] = p3;
         if (++rPos_ == L_) {
             rPos_ = 0;
             // ★ the running sums re-made from the ring once a bit, so float rounding never accumulates

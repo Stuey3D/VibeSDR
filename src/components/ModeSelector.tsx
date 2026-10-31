@@ -39,10 +39,12 @@ import { modeIconFor } from '../utils/modeIcons';
 import { DSC_HINT, dscChannelOn } from '../services/dsc';
 import { PAGING_HINT, type PagingMode } from '../services/paging';   // ★ V12 PAGING
 /** ★ V12 EAS / SAME: where it is heard. */
+/** ★ V12 SELCAL: where it is heard, and the one thing that matters (the dial). */
+const SELCAL_HINT = 'SELCAL: the two-tone calls a ground station sends to wake one aircraft\u2019s radio, shown as its code (AB-CD), with all 32 ICAO tones. Tune an HF aeronautical channel in USB (the dial within about 10 Hz) or a VHF one in AM.';
 const SAME_HINT = 'US alert headers (EAS / SAME): tune a NOAA Weather Radio channel, 162.400–162.550 MHz in NFM, or an EAS broadcast station. Each alert is shown once, with its event, areas and times, after two of its three header bursts agree.';
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -476,6 +478,8 @@ interface ModeSelectorProps {
     sitoraAvail?: boolean;
     /** ★★ V12 EAS / SAME — only where `"same": true` (US alert headers: NOAA Weather Radio and EAS broadcasts). */
     sameAvail?: boolean;
+    /** ★★ V12 SELCAL — only where `"selcal": true` (the aeronautical selective call, ICAO's 32 tones). */
+    selcalAvail?: boolean;
     /** ★★★ V12 PAGING — ANDROID LOCAL HARDWARE ONLY (the phone's own radio, in this app; the server offers it nowhere else).
      *  Its settings: one key per `pagingModes` entry — the server's data, AUTO first — so FLEX later needs no change here. */
     pagingAvail?: boolean; pagingModes?: PagingMode[]; pagingMode?: string; onPagingMode?: (id: string) => void;
@@ -572,9 +576,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
   const sitoraShown = !!decoderControls?.sitoraAvail && !isBlocked('sitora');   // ★ V12 SITOR-A
   const sameShown = !!decoderControls?.sameAvail && !isBlocked('same');   // ★ V12 EAS / SAME
+  const selcalShown = !!decoderControls?.selcalAvail && !isBlocked('selcal');   // ★ V12 SELCAL
   const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
-  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || sameShown || pagingShown || aprsShown;
+  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || sameShown || selcalShown || pagingShown || aprsShown;
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
@@ -750,7 +755,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     const active = dc.decMode === id && dc.decOn;
     const lit = dc.decMode === id;
@@ -1054,6 +1059,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'dsc':  return dscShown ? srvKey('dsc', 'DSC', 'Maritime DSC decoder') : null;
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
       case 'same':   return sameShown ? srvKey('same', 'SAME', 'EAS and SAME emergency alert header decoder') : null;
+      case 'selcal': return selcalShown ? srvKey('selcal', 'SELCAL', 'SELCAL aeronautical selective call decoder') : null;
       case 'paging': return pagingShown ? srvKey('paging', 'PAGE', 'Pager decoder, POCSAG, rate found automatically') : null;
       case 'aprs': return aprsShown ? srvKey('aprs', 'APRS', 'APRS packet decoder') : null;
       case 'rds':  return advRdsShown ? advRdsKey() : null;
@@ -1068,7 +1074,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
       case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;
-      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'paging': return pagingShown; case 'aprs': return aprsShown;
+      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'paging': return pagingShown; case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
       case 'spots': return spotsInBands; case 'hfdl': return hfdlInBands;
       default: return false;
@@ -1461,6 +1467,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       /* ★ V12 EAS / SAME: no settings — the hint only. */
       case 'same':
         return <Text style={capText}>{SAME_HINT}</Text>;
+      case 'selcal':
+        return <Text style={capText}>{SELCAL_HINT}</Text>;
       /* ★★★ V12 PAGING: the RATE row is the server's own list (AUTO first) — never a list of ours — and the hint. */
       case 'paging':
         return (<>

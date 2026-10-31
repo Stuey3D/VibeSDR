@@ -74,7 +74,8 @@ private:
     int dec_ = 4;            // input samples per 12 kHz sample (box average)
     double fs_ = 12000;
     int decN_ = 0; float decAcc_ = 0;
-    std::vector<float> cm_, sm_, cs_, ss_;   // tables (576): cos/sin of mark, space
+    std::vector<float> cm_, sm_, cs_, ss_;   // tables (576 + 3 padding): cos/sin of mark, space
+    std::vector<float> pMr_, pMi_, pSr_, pSi_;   // the block's mixer products, planar
     int tPos_ = 0;
     // boxcar
     int L_ = 23;

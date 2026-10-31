@@ -453,6 +453,8 @@ export interface ServerOccupancy {
    *  as data, AUTO first (services/paging.ts). Absent = no PAGE key. */
   /** ★ V12 EAS / SAME: this server's US alert-header decoder ('same'). */
   same?: boolean;
+  /** ★ V12 SELCAL: this server's aeronautical selective-call decoder ('selcal'). */
+  selcal?: boolean;
   paging?: boolean;
   pagingModes?: PagingMode[];
   /** ★ V12: where this radio can be tuned (Hz windows after the owner's lists) — decides which channel / band keys draw. */
@@ -525,6 +527,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
       same:      j.same === true,
+      selcal:    j.selcal === true,
       paging:    j.paging === true,
       pagingModes: parsePagingModes(j.pagingModes),
       tunable:   parseTunable(j.tunable),
