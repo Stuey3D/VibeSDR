@@ -1387,17 +1387,22 @@ public:
             const float a = std::fabs(x[i]);
             env_ += (a > env_ ? atk_ : rel_) * (a - env_);
             float g = kTarget / (env_ + 1e-6f);
-            if (g > kMaxGain) g = kMaxGain;
+            if (g > maxGain_) g = maxGain_;
             x[i] *= g;
         }
     }
     void reset() { env_ = kTarget; }
     /** Same latch risk as Deemphasis/DcBlocker: env_ is recursive. Checked per block. */
     void guard() { if (!std::isfinite(env_)) env_ = kTarget; }
+    /** ★★ V12 AM SYNC: the ceiling is the mode's to choose. Envelope AM/SSB/CW keep 256 (unchanged).
+     *  The synchronous AM detectors arrive already LEVELLED against the tracked carrier (SyncAm), so
+     *  this AGC is only a gentle leveller + anti-clip there: a ceiling of 4 (12 dB) stops it lifting
+     *  the noise in every programme pause, which is the "pumping" SAM is meant to cure. */
+    void setMaxGain(float g) { maxGain_ = g > 1.0f ? g : 1.0f; }
 private:
     float env_ = kTarget, atk_ = 0.05f, rel_ = 1e-4f;
+    float maxGain_ = 256.0f;                   // ceiling (don't amplify silence)
     static constexpr float kTarget  = 0.25f;   // output setpoint
-    static constexpr float kMaxGain = 256.0f;  // ceiling (don't amplify silence)
 };
 
 // ── RDS data-link decoder ────────────────────────────────────────────────--
@@ -2640,6 +2645,183 @@ private:
     int mpxAccN_ = 0;
 };
 
+
+// ── V12 SYNCHRONOUS AM: SAM, SAM-U/L, ECSS-U/L, AM STEREO (C-QUAM compatible) + AM AUTO BANDWIDTH ──
+/**
+ * ★★★ ONE CARRIER TRACKER, SIX DETECTORS. Every one of these modes starts from the same thing: the
+ *     station's carrier, found and followed by a phase-locked loop, so the channel can be rotated
+ *     until the carrier sits still at 0 Hz and 0 degrees. From that one rotated signal y = I + jQ:
+ *       · SAM     both sidebands, coherently (I) — or, when one side is dirtier, weighted toward the
+ *                 cleaner one (maximum-ratio combining of the two sidebands);
+ *       · SAM-U/L one sideband (I ∓ Hilbert(Q)), the other side's splatter rejected;
+ *       · ECSS-U/L the same detector with an SSB-shaped passband (one-sided width, as a DXer sets an
+ *                 SSB filter when zero-beating a carrier) — see docs/v12/AM-SYNC.md for why both exist;
+ *       · STEREO  AM stereo, C-QUAM compatible: L+R from the envelope, L−R from the carrier phase with
+ *                 the 1/cos correction, the 25 Hz pilot detected and removed, stereo only while it is;
+ *       · ENV     ordinary envelope AM (AmDemod, unchanged) — the tracker runs only so AM AUTO
+ *                 BANDWIDTH can measure the station; with auto bandwidth off nothing here runs at all.
+ *
+ * ★★★ WHAT MAKES SAM BETTER, NOT JUST DIFFERENT (Stuart: "whenever I've enabled it on other servers
+ *     it either makes no difference or makes the signal worse"). The cases where SAM sounds worse are
+ *     all loop faults, so the loop is built around them:
+ *       1. THE LOOP LISTENS TO THE CARRIER ONLY. The phase detector reads a two-pole low-pass of y
+ *          (30 Hz tracking), never the per-sample phase — the sidebands, a neighbour and the noise
+ *          barely reach it. A loop that hears modulation turns it into phase noise = distortion.
+ *       2. FLYWHEEL THROUGH CARRIER FADES. The error is weighted by (carrier / its 0.5 s average)²,
+ *          so when selective fading takes the carrier down the loop simply coasts on its frequency
+ *          integrator — exactly the moment envelope detection distorts and SAM must hold.
+ *       3. NARROW (5 Hz natural frequency) once locked, wide (20 Hz) only to pull in, after a coarse
+ *          FFT search of ±1 kHz has put the oscillator on the carrier — fast acquire, no hunting.
+ *       4. CARRIER-REFERENCED LEVEL. Audio is divided by a 1 s average of the received amplitude, so
+ *          it does not swing with the fades, and the AGC behind it is capped at 12 dB (Agc::setMaxGain)
+ *          so it cannot lift the noise in every pause.
+ *       5. A SAFETY NET. Lock quality (the amplitude-weighted mean of cos 2φ) drives a blend toward the
+ *          envelope detector; poor lock eases to plain AM, it never produces garbage. No squeal: the
+ *          oscillator is never heard, it only rotates.
+ *
+ * ★★ AM AUTO BANDWIDTH, judged while WIDE, always. The measurement is an FFT of y BEFORE any cut, so
+ *    a narrowing can never confirm itself ([[never_limit_permanently]]). For DSB AM the two sidebands
+ *    carry the same programme mirrored, so Re(Y(f)·Y(−f)) averages to the PROGRAMME power at f while
+ *    noise and a neighbour (which are not mirrored) average to zero: S(f), and each side's own
+ *    noise+interference N±(f) = |Y(±f)|² − S(f). That is a per-frequency, PER-SIDEBAND S/N from one
+ *    FFT — the edge per side is the highest 250 Hz band still above +3 dB, and a side whose
+ *    interference rises 6 dB over the other's is cut below it. Coherent modes cut each sideband on its
+ *    own (an asymmetric passband — narrow only the side the neighbour is on); envelope AM and stereo
+ *    cut symmetrically on the RF (AdaptiveIf). A steady carrier on ONE side only is a heterodyne and
+ *    gets a notch. The user's width is always the ceiling: auto only ever narrows under it, and a
+ *    retune clears every verdict.
+ *
+ * ★ SIMD: the rotator (rotateBlockIlv), the magnitudes, the Hilbert kernel (four outputs per tap,
+ *   contiguous loads — NEON / SSE2 / scalar), the sideband sums, the C-QUAM decode and the FFT
+ *   (pffft) are vectorised. The loop itself runs once per 32 samples, so it costs nothing. The
+ *   sideband low-passes are biquads (recursive; not vectorisable along time) — documented in the doc.
+ * ★ Not C-QUAM: "C-QUAM" is Motorola's trademark. This decodes signals compatible with it, built from
+ *   the published description (envelope = 1+L+R, tan φ = (L−R)/(1+L+R), 25 Hz pilot on L−R).
+ */
+class SyncAm {
+public:
+    enum class Det { ENV, SAM, SAM_U, SAM_L, ECSS_U, ECSS_L, STEREO };
+    struct Status {
+        bool  locked = false;      // carrier PLL locked (and blended in)
+        float offsetHz = 0.0f;     // carrier frequency relative to the tuned frequency (Hz)
+        float lockQ = 0.0f;        // 0..1 lock quality
+        float blend = 0.0f;        // 0 = envelope fallback, 1 = fully synchronous
+        bool  pilot = false;       // STEREO: 25 Hz pilot present → stereo
+        float pilotLevel = 0.0f;   // STEREO: pilot amplitude relative to the carrier
+        float sep = 0.0f;          // STEREO: L−R blend 0..1
+        float edgeLoHz = 0.0f;     // applied audio edge, LOWER sideband (Hz) — 0 = not applicable
+        float edgeHiHz = 0.0f;     // applied audio edge, UPPER sideband (Hz)
+        bool  autoCut = false;     // auto bandwidth is narrower than the listener's width on some side
+        float notchHz = 0.0f;      // heterodyne notch frequency (audio Hz; <0 = lower sideband), 0 = none
+        float mrcUpper = 0.5f;     // SAM: weight given to the upper sideband (0.5 = plain DSB)
+    };
+    SyncAm();
+    ~SyncAm();
+    SyncAm(const SyncAm&) = delete;
+    SyncAm& operator=(const SyncAm&) = delete;
+    /** @param userEdgeHz the listener's one-sided audio edge (AM-shaped modes: width/2; ECSS: width). */
+    void configure(Det d, double rate, double userEdgeHz);
+    void setUserEdge(double userEdgeHz);
+    void setAutoBw(bool on) { autoBw_ = on; }
+    bool autoBw() const { return autoBw_; }
+    /** ★ A RETUNE: re-acquire the carrier and forget every auto-bandwidth verdict (a limit must never
+     *  travel with the dial). */
+    void retune();
+    void reset();
+    /** outR may be null except in STEREO. Output: mono (or L/R) audio at the channel rate. */
+    void process(const cf32* in, float* outL, float* outR, int n);
+    Det det() const { return det_; }
+    bool stereo() const { return det_ == Det::STEREO; }
+    bool coherent() const { return det_ != Det::ENV && det_ != Det::STEREO; }
+    /** True when the detector levels its own output against the carrier (everything but ENV). */
+    bool carrierLevelled() const { return det_ != Det::ENV; }
+    Status status() const;
+    // ── test / bench hooks ─────────────────────────────────────────────────
+    /** Force the per-sideband audio edges (Hz, ≤0 = auto). Bypasses the measurement. */
+    void forceEdges(float loHz, float hiHz) { forceLo_ = loHz; forceHi_ = hiHz; }
+    /** Disable individual auto-bandwidth arms for A/B measurement. */
+    void setArms(bool noise, bool interference, bool mrc, bool notch) {
+        armNoise_ = noise; armInterf_ = interference; armMrc_ = mrc; armNotch_ = notch; }
+    /** Disable the envelope safety net (bench only: measure the raw coherent detector). */
+    void setSafetyNet(bool on) { safety_ = on; }
+    /** Disable carrier-referenced levelling (bench only). */
+    void setCarrierLevel(bool on) { carrierLevel_ = on; }
+    int hilbertTaps() const { return 2 * hM_ + 1; }
+private:
+    struct Biq { float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+                 void lp(double fs, double f, double q); void notch(double fs, double f, double q);
+                 inline float step(float x) { const float y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y; }
+                 void clear() { z1 = z2 = 0; } };
+    struct Lp8 { Biq s[4]; float f = -1.0f; void design(double fs, double fc); void run(float* x, int n);
+                 void clear() { for (auto& b : s) b.clear(); } };
+    void loopUpdate_();
+    void acquire_(const cf32* in, int n);
+    void measure_(const float* yI, const float* yQ, int n);
+    void decide_();
+    void hilbert_(const float* x, int n, float* out, bool compute);   // out[i] = H{x} delayed by hM_
+    void applyEdges_();
+    // config
+    Det det_ = Det::ENV;
+    double fs_ = 0.0, userEdge_ = 5000.0;
+    bool autoBw_ = true, armNoise_ = true, armInterf_ = true, armMrc_ = true, armNotch_ = true;
+    bool safety_ = true, carrierLevel_ = true;
+    float forceLo_ = 0.0f, forceHi_ = 0.0f;
+    // tracker
+    static constexpr int K = 32;          // samples per loop update
+    int   pos_ = 0;
+    float cr_ = 1.0f, ci_ = 0.0f;         // oscillator phasor e^{jθ}
+    float stepC_ = 1.0f, stepS_ = 0.0f;   // per-sample rotation
+    double omega_ = 0.0;                  // rad per UPDATE (K samples)
+    double maxOmega_ = 0.0;
+    float sI_ = 0, sQ_ = 0, sM_ = 0;      // sub-block sums of y and |z|
+    float s1r_ = 0, s1i_ = 0, s2r_ = 0, s2i_ = 0;   // two-pole carrier low-pass
+    float aLp_ = 0, aLpAcq_ = 0, aLpTrk_ = 0;
+    float kp_ = 0, ki_ = 0, kpAcq_ = 0, kiAcq_ = 0, kpTrk_ = 0, kiTrk_ = 0;
+    float ampRef_ = 0;                    // 0.5 s average of the carrier amplitude (loop weighting)
+    float aRef_ = 0;
+    float lockNum_ = 0, lockDen_ = 0, aLock_ = 0;
+    float dcE1_ = 0, dcE2_ = 0, aDc_ = 0; // envelope DC (two-pole on mean |z|)
+    float lvl_ = 0, aLvl_ = 0, aLvlUp_ = 0;   // level reference (mean |z|: up 0.3 s, down 2 s)
+    float blend_ = 0, aBlUp_ = 0, aBlDn_ = 0;
+    // ramps (start → end over the current sub-block)
+    float dcIa_ = 0, dcIb_ = 0, dcEa_ = 0, dcEb_ = 0, ga_ = 0, gb_ = 0, bla_ = 0, blb_ = 0;
+    enum class St { ACQ, PULL, TRACK } st_ = St::ACQ;
+    int   stCount_ = 0, badCount_ = 0;
+    bool  everLocked_ = false;
+    // acquisition
+    std::unique_ptr<ComplexFFT> acqFft_;
+    std::vector<cf32> acqBuf_, acqOut_;
+    int acqN_ = 0, acqFill_ = 0;
+    // detector buffers
+    std::vector<float> yI_, yQ_, mag_, dcI_, dcE_, g_, bl_, hq_, tmpA_, tmpB_, tmpC_;
+    std::vector<float> dI_, dE_;          // delay lines [hM_ history][block]
+    std::vector<float> hBuf_;             // Hilbert history [2hM history][block]
+    std::vector<float> hTaps_;            // h[1], h[3], … (odd taps, positive side)
+    int hM_ = 0;
+    // sideband filters / cut
+    Lp8 lpA_, lpW1_, lpW2_;               // SAM: combined @fmin, wider side @fmax and @fmin
+    float edgeU_ = 0, edgeL_ = 0;         // applied edges
+    float mrcA_ = 0.5f, mrcTarget_ = 0.5f;
+    Biq notch_[2], notchR_[2]; float notchF_[2] = {0, 0}, notchPend_[2] = {0, 0};
+    std::unique_ptr<AmDemod> env_;        // ENV path — the shipping AM detector, unchanged
+    std::unique_ptr<AdaptiveIf> rfCut_;   // ENV / STEREO symmetric RF cut
+    std::vector<cf32> yc_;
+    // measurement
+    std::unique_ptr<ComplexFFT> mFft_;
+    int mN_ = 0, mFill_ = 0, mSkip_ = 0, mHop_ = 0;
+    std::vector<cf32> mBuf_, mOut_;
+    std::vector<float> mWin_, pU_, pL_, pX_;
+    int mFrames_ = 0, sinceDecide_ = 0, decideEvery_ = 0, narrowVotes_[2] = {0, 0};
+    float mAlpha_ = 0.05f;
+    // stereo
+    float pilotPh_ = 0, pilotStep_ = 0, p1r_ = 0, p1i_ = 0, p2r_ = 0, p2i_ = 0, aPil_ = 0;
+    float pilotAmp_ = 0, pilotPrevPh_ = 0, pilotDrift_ = 0;
+    bool  pilotOn_ = false; int pilotCount_ = 0;
+    float sep_ = 0, sepA_ = 0, sepB_ = 0, aSep_ = 0;
+    float pilA_r_ = 0, pilA_i_ = 0, pilB_r_ = 0, pilB_i_ = 0;   // pilot phasor ramp (subtraction)
+    float dSum_ = 0; int dPos_ = 0;
+    std::vector<float> d_;
+};
 
 // ── RxPipeline (the native engine) ───────────────────────────────────────--
 // The complete IQ -> {spectrum, audio} chain that the shim's "Local Hardware

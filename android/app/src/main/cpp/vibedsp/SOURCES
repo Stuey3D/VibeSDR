@@ -36,4 +36,5 @@ mpxmeasure.cpp
 iqclean.cpp
 spectrum_processor.cpp
 ssb_offset.cpp
+amsync.cpp
 binaural.cpp
