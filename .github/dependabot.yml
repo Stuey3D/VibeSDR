@@ -38,6 +38,15 @@ updates:
       - dependency-name: "@react-native/*"
       - dependency-name: "@react-native-community/*"
       - dependency-name: "@shopify/react-native-skia"
+      # ★ Majors that need a deliberate migration, not a weekly bump (2026-10-31): pako 3 drops `to: 'string'`, which
+      #   src/utils/boundedInflate.ts (the size-capped gzip decoder) relies on — its test fails 2 of 6 on 3.0.3; and
+      #   TypeScript 7 is the native compiler rewrite. Minor and patch releases still come through.
+      - dependency-name: "pako"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/pako"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: gradle
     directory: /android
