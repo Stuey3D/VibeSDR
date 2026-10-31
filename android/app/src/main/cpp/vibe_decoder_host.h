@@ -50,6 +50,7 @@
 #include "vibe_sitora_run.h"
 #include "decoders/same_decoder.h"   // ★ V12 EAS / SAME (47 CFR § 11.31)
 #include "decoders/selcal_decoder.h" // ★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91)
+#include "decoders/textmodes.h"      // ★ V12 MFSK16/32, OLIVIA/CONTESTIA, THOR (one object per family, AUTO)
 #if defined(VIBE_PAGING)
 #include "vibe_paging_run.h"   // ★ V12 PAGING — Android local hardware only (the define is the Android library's)
 #endif
@@ -619,7 +620,7 @@ public:
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -761,7 +762,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -807,7 +808,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || same_ || selcal_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || same_ || selcal_ || tm_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -826,6 +827,7 @@ private:
         sitora_.reset();
         same_.reset();
         selcal_.reset();
+        tm_.reset();
 #if defined(VIBE_PAGING)
         if (paging_) { paging_.reset(); if (pagingIq_.exchange(false)) pagingRunning().fetch_sub(1); }
 #endif
@@ -1027,6 +1029,8 @@ private:
             buildSameLocked_();
         } else if (ext == "selcal") {
             buildSelcalLocked_();
+        } else if (ext == "mfsk" || ext == "olivia" || ext == "thor") {
+            buildTextModeLocked_(ext, msg);
 #if defined(VIBE_PAGING)
         } else if (ext == "paging") {
             buildPagingLocked_(msg);
@@ -1186,6 +1190,20 @@ private:
     }
     /** ★★ SELCAL (V12, 2026-10-31): the aeronautical selective call (decoders/selcal_decoder.h — ICAO Annex 10 Vol III,
      *  Amendment 91's 32 tones) on the listener's audio: HF USB on the aeronautical bands, or VHF AM. One line per call. */
+    /** ★★ THE MFSK KEYBOARD MODES (V12, 2026-10-31): "mfsk" (MFSK16/32), "olivia" (OLIVIA and CONTESTIA), "thor" — one
+     *  TextModeDecoder per family on the listener's audio (decoders/textmodes.h). "mode" = one of its modes() ids, AUTO
+     *  for anything else. Text as it decodes (0x01), 0x03 0 searching / 1 locked, and {"type":"textmode_status"} on
+     *  change: {detected, hz} — the sub-mode AUTO found and where. */
+    void buildTextModeLocked_(const std::string& ext, const std::string& msg) {
+        TextModeDecoder::familyOf(ext, tmFam_);
+        std::string mode = str(msg, "mode");
+        if (mode.empty()) mode = "auto";
+        tm_.reset(new TextModeDecoder(tmFam_, 48000, mode));
+        tm_->onText = [this](const std::string& t) { textFrame(t); };
+        tm_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+        tm_->onStatus = [this](const std::string& j) { broadcastText("{\"type\":\"textmode_status\",\"data\":" + j + "}", -1); };
+        log("decoder attached: " + ext + " " + mode);
+    }
     void buildSelcalLocked_() {
         selcal_.reset(new SelcalDecoder(48000));
         selcal_->onCode = [this](const SelcalDecoder::Code& c) {
@@ -1519,6 +1537,12 @@ private:
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
+            if (tm_) {
+                // ★ MFSK / OLIVIA / THOR: float audio straight in; text, state and status are sent from inside
+                tm_->feed(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (selcal_) {
                 selcal_->feed(data, count);
                 if (DecoderTapPtr t = tap()) t->tick();
@@ -1618,6 +1642,8 @@ private:
     std::unique_ptr<SitorARun> sitora_;       // ★ SITOR-A: the ARQ listener (buildSitoraLocked_)
     std::unique_ptr<SameDecoder> same_;       // ★ EAS / SAME (buildSameLocked_)
     std::unique_ptr<SelcalDecoder> selcal_;   // ★ SELCAL (buildSelcalLocked_)
+    std::unique_ptr<TextModeDecoder> tm_;     // ★ MFSK / OLIVIA / THOR (buildTextModeLocked_)
+    TextModeDecoder::Family tmFam_ = TextModeDecoder::Family::Mfsk;
 #if defined(VIBE_PAGING)
     std::unique_ptr<PagingRun> paging_;       // ★ PAGING: fed the channel IQ (feedChannelIq) — Android local hardware only
 #endif

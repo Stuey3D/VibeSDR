@@ -55,6 +55,7 @@ import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
 import { sameStateText, selcalStateText } from './alertDecoders';   // ★ V12 EAS / SAME and SELCAL
+import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -63,6 +64,7 @@ import { parseSpotsStatus, type SpotModeState } from './spotsBand';
  *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
 /** ★ V12 PSK31/63 ('psk' / 'pskskim' — `pskSkim`), JTTY ('jtty') and DSC ('dsc') — a VibeServer's own decoders. */
 export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw' | 'psk' | 'jtty' | 'dsc'
+  | 'mfsk' | 'olivia' | 'thor'   // ★ V12 the MFSK keyboard modes (textModes.ts): text as it decodes, 0x03, textmode_status
   | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
   | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
@@ -315,6 +317,9 @@ export class DecoderClient {
   aprsBaud: 1200 | 300 = 1200;
   /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */
   pagingMode = 'auto';
+  /** ★ V12 MFSK / OLIVIA / THOR: each family's chosen sub-mode (a server `<family>Modes` id, 'auto' first) — a change is a re-attach. */
+  textMode: Record<TextFamily, string> = { mfsk: 'auto', olivia: 'auto', thor: 'auto' };
+  private tmLast: TextModeStatus | null = null;
 
   constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string, authSuffix = '') {
     this.baseUrl  = baseUrl.replace(/\/+$/, '');
@@ -646,6 +651,11 @@ export class DecoderClient {
             if (this.active !== 'jtty') return;
             const sp = parseJttySpot(m.data, Date.now());
             if (sp) this.cb.onJttySpot?.(sp);
+          } else if (m.type === 'textmode_status' && m.data) {
+            const fam = this.active;
+            if (!isTextFamily(fam)) return;
+            const st = parseTextModeStatus(m.data);
+            if (st) { this.tmLast = st; this.cb.onStatus(textModeStatusText(fam, this.textMode[fam], st)); this.cb.onDot(st.detected ? 'active' : 'idle'); }
           } else if (m.type === 'paging_status' && m.data) {
             if (this.active !== 'paging') return;
             const st = parsePagingStatus(m.data);
@@ -815,6 +825,8 @@ export class DecoderClient {
       case 'same':    return { extension_name: 'same', params: {} };
       // ★ V12 SELCAL: nothing to set (ICAO's 32 tones, found by themselves).
       case 'selcal':  return { extension_name: 'selcal', params: {} };
+      // ★ V12 MFSK / OLIVIA / THOR: "mode" is one of the server's own ids — the server falls back to AUTO for any other.
+      case 'mfsk': case 'olivia': case 'thor': this.tmLast = null; return { extension_name: name, params: { mode: this.textMode[name] } };
       case 'paging':  this.pagingLast = null; return { extension_name: 'paging', params: { mode: this.pagingMode } };
     }
   }
@@ -832,13 +844,17 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal') {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || isTextFamily(name)) {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);
         if (tl <= 0 || u8.length < 13 + tl) return;
         if (name !== 'jtty' && name !== 'dsc') this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
         this.cb.onDot('active');
+      } else if (isTextFamily(name) && t === 0x03) {
+        if (u8.length < 2) return;
+        if (!u8[1]) { this.tmLast = null; this.cb.onStatus(textModeStatusText(name, this.textMode[name], null)); }
+        this.cb.onDot(u8[1] ? 'active' : 'idle');
       } else if (name === 'selcal' && t === 0x03) {
         if (u8.length < 2) return;
         this.cb.onStatus(selcalStateText(u8[1]));

@@ -38,10 +38,11 @@ import { DECODER_PLACES, RADIO_BANDS, WHOLE_RADIO_IDS, WHOLE_RADIO_LABEL, WHOLE_
 import { modeIconFor } from '../utils/modeIcons';
 import { DSC_HINT, dscChannelOn } from '../services/dsc';
 import { PAGING_HINT, type PagingMode } from '../services/paging';   // ★ V12 PAGING
-import { SAME_HINT, SELCAL_HINT } from '../services/alertDecoders';   // ★ V12 EAS / SAME and SELCAL (one copy, both clients)
+import { SAME_HINT, SELCAL_HINT } from '../services/alertDecoders';
+import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -477,6 +478,8 @@ interface ModeSelectorProps {
     sameAvail?: boolean;
     /** ★★ V12 SELCAL — only where `"selcal": true` (the aeronautical selective call, ICAO's 32 tones). */
     selcalAvail?: boolean;
+    /** ★★ V12 MFSK / OLIVIA / THOR — a family is offered where the server lists it (`<family>Modes`, AUTO first: its keys). */
+    tmModes?: Partial<Record<TextFamily, TextMode[]>>; tmMode?: Record<TextFamily, string>; onTextMode?: (f: TextFamily, id: string) => void;
     /** ★★★ V12 PAGING — ANDROID LOCAL HARDWARE ONLY (the phone's own radio, in this app; the server offers it nowhere else).
      *  Its settings: one key per `pagingModes` entry — the server's data, AUTO first — so FLEX later needs no change here. */
     pagingAvail?: boolean; pagingModes?: PagingMode[]; pagingMode?: string; onPagingMode?: (id: string) => void;
@@ -576,7 +579,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const selcalShown = !!decoderControls?.selcalAvail && !isBlocked('selcal');   // ★ V12 SELCAL
   const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
-  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || sameShown || selcalShown || pagingShown || aprsShown;
+  const tmShown = (f: TextFamily) => !!decoderControls?.tmModes?.[f] && !isBlocked(f);   // ★ V12 MFSK / OLIVIA / THOR
+  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || sameShown || selcalShown || pagingShown || aprsShown
+    || tmShown('mfsk') || tmShown('olivia') || tmShown('thor');
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
@@ -752,7 +757,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     const active = dc.decMode === id && dc.decOn;
     const lit = dc.decMode === id;
@@ -1057,6 +1062,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
       case 'same':   return sameShown ? srvKey('same', 'SAME', 'EAS and SAME emergency alert header decoder') : null;
       case 'selcal': return selcalShown ? srvKey('selcal', 'SELCAL', 'SELCAL aeronautical selective call decoder') : null;
+      case 'mfsk': case 'olivia': case 'thor':
+        return tmShown(id as TextFamily) ? srvKey(id as TextFamily, TEXT_FAMILY_KEY[id as TextFamily], `${TEXT_FAMILY_KEY[id as TextFamily]} decoder, sub-mode found automatically`) : null;
       case 'paging': return pagingShown ? srvKey('paging', 'PAGE', 'Pager decoder, POCSAG, rate found automatically') : null;
       case 'aprs': return aprsShown ? srvKey('aprs', 'APRS', 'APRS packet decoder') : null;
       case 'rds':  return advRdsShown ? advRdsKey() : null;
@@ -1071,7 +1078,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
       case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;
-      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'paging': return pagingShown; case 'aprs': return aprsShown;
+      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'paging': return pagingShown;
+      case 'mfsk': case 'olivia': case 'thor': return tmShown(id as TextFamily); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
       case 'spots': return spotsInBands; case 'hfdl': return hfdlInBands;
       default: return false;
@@ -1466,6 +1474,19 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         return <Text style={capText}>{SAME_HINT}</Text>;
       case 'selcal':
         return <Text style={capText}>{SELCAL_HINT}</Text>;
+      /* ★★ V12 MFSK / OLIVIA / THOR: the MODE row is the server's own list (AUTO first) — never a list of ours — and the hint. */
+      case 'mfsk': case 'olivia': case 'thor': {
+        const fam = id as TextFamily; const list = dc.tmModes?.[fam] ?? [];
+        return (<>
+          {!!list.length && (<>
+            <SubLabel label="MODE" />
+            <OptRow>{list.map((m) => (
+              <SegBtn key={m.id} label={m.label} active={(dc.tmMode?.[fam] ?? 'auto') === m.id} onPress={() => dc.onTextMode?.(fam, m.id)} />
+            ))}</OptRow>
+          </>)}
+          <Text style={capText}>{TEXT_FAMILY_HINT[fam]}</Text>
+        </>);
+      }
       /* ★★★ V12 PAGING: the RATE row is the server's own list (AUTO first) — never a list of ours — and the hint. */
       case 'paging':
         return (<>

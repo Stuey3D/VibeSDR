@@ -5308,6 +5308,10 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 EAS / SAME and SELCAL — decoded on the server; hidden unless it says "same" / "selcal". -->
     <button class="btn" data-dec="selcal" hidden title="SELCAL — the two-tone selective calls a ground station sends to one aircraft, shown as its code (AB-CD); HF aeronautical channels in USB, VHF airband in AM">SELCAL</button>
     <button class="btn" data-dec="same" hidden title="EAS / SAME — US emergency alert headers from NOAA Weather Radio (162.400–162.550 MHz NFM) and EAS broadcasts: event, areas and times">SAME</button>
+    <!-- ★★ V12 the MFSK keyboard modes — decoded on the server; hidden unless it says "mfsk" / "olivia" / "thor". -->
+    <button class="btn" data-dec="mfsk" hidden title="MFSK16 and MFSK32 — the 16-tone keyboard modes with FEC; AUTO finds the speed">MFSK</button>
+    <button class="btn" data-dec="olivia" hidden title="OLIVIA and CONTESTIA — the many-tone weak-signal keyboard modes; AUTO finds the tones and bandwidth">OLIVIA</button>
+    <button class="btn" data-dec="thor" hidden title="THOR — the IFK+ keyboard mode with FEC; AUTO finds the speed (THOR 4 to 22)">THOR</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
     <button class="btn" data-dec="sstv">SSTV</button>
     <!-- ★ The LF time signals. The title says CW because that is the mode that works: the carrier
@@ -5420,6 +5424,15 @@ select.btn { padding: 6px 8px; }
 
   <!-- ★★ JTTY (V12, 2026-10-26): the announced calling frequencies (USB dial) — only those this radio reaches are drawn
        (main.ts initJttyDials). Preliminary: the WSJT-X 3.2 release candidates' list, not band-plan allocations. -->
+  <!-- ★★ V12 MFSK / OLIVIA / THOR: one MODE row for whichever family is open — the server's own list, AUTO first
+       (vibeserver.json "<family>Modes"; src/services/textModes.ts). -->
+  <div class="subPanel" id="tmSettings" hidden>
+    <div class="mrow">
+      <label>MODE</label>
+      <div class="seg" id="tmModes"></div>
+    </div>
+    <div class="hint" id="tmHint"></div>
+  </div>
   <div class="subPanel" id="jttySettings" hidden>
     <div class="mrow">
       <label>BAND</label>

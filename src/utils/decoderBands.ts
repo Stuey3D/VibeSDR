@@ -82,7 +82,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
   hf: [
     { group: 'aviation', ids: ['hfdl', 'selcal'] },
     { group: 'maritime', ids: ['navtex', 'dsc', 'sitora', 'wefax'] },
-    { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'sstv', 'aprs'] },
+    { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'mfsk', 'olivia', 'thor', 'sstv', 'aprs'] },   // ★ V12 the MFSK keyboard modes
     { group: 'other',    ids: ['time'] },
   ],
   vhf: [
@@ -168,6 +168,7 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   psk:    hz => anyNear(hz, HAM),
   rtty:   hz => anyNear(hz, HAM),
   jtty:   hz => anyNear(hz, HAM),
+  mfsk:   hz => anyNear(hz, HAM), olivia: hz => anyNear(hz, HAM), thor: hz => anyNear(hz, HAM),
   sstv:   hz => anyNear(hz, HAM),
   aprs:   hz => anyNear(hz, HAM),
   time:   hz => pointsNear(hz, TIME_SIGNAL_HZ, 5e3),

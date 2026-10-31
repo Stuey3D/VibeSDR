@@ -581,28 +581,116 @@ the hints and the state words, ONE copy: the app's `ModeSelector` and `DecoderCl
 - Copy: the web lists no decoders on the website and the web client has no tour card for decoder keys; the app's tour
   and About already name SAME and SELCAL (sections 8, 9).
 
-## RESUME HERE (updated 2026-10-31 ≈ 06:40 UTC, after the third run: paging wired, EAS/SAME, SELCAL)
+## 11. MFSK16/32, OLIVIA + CONTESTIA, THOR — DONE, wired to server, app and web (2026-10-31, fourth run)
 
-Done this run (commits on `v12-decoders-wave2`): PAGING wired, Android local hardware only (section 7b); EAS / SAME
-(section 8); SELCAL — unblocked by ICAO's own free text of Amendment 91 (section 9). No server or device was touched.
+Files: `decoders/textmodes.{h,cpp}` (all four families, AUTO, the test transmitter), `decoders/mfsk_varicode.h` (the
+published table, transcribed by script), host ext `mfsk` / `olivia` / `thor` (`buildTextModeLocked_`, param `mode`),
+vibeserver.json `"mfsk"/"olivia"/"thor"` + `mfskModes`/`oliviaModes`/`thorModes` (AUTO first — the clients draw one MODE
+key per entry), the owner's switches, CMake ×2, `build_ios.sh`'s list, `scripts/run-tests.sh`; `vibeserver/test-textmodes.cpp`;
+`tools/textmode-bench/` (`tm_file`, `tm_bench` sweep/cost, `qemu.sh`). App: `src/services/textModes.ts` (NEW, shared
+with the web), DecoderClient, sdrTypes, ModeSelector (three keys + MODE row + hint), DecoderPanel, decoderBands (HF
+Amateur, beside JTTY), modeIcons (keyboard), SDRScreen (caps, remembered mode per family, tour card), About. Web:
+index.html (three keys + `tmSettings`), decoders.ts, decoderBandsDom.ts, main.ts.
+
+### Clean room — how each detail was settled
+- **MFSK16/32**: ZL1BPU's MFSK16 Technical Specification rev 1.2 (qsl.net) and the ARRL copy; "The MFSK FEC Coder"
+  (IZ8BLY/ZL1BPU: K = 7, taps O1+O3+O4+O6+O7 / O1+O2+O3+O4+O7, dibit 1 first); "The IZ8BLY Diagonal Interleaver"; the
+  IZ8BLY MFSK Varicode table. Open points (Gray direction, which bit is first, the interleaver's delays) settled by
+  decoding three PUBLIC reference recordings with a throw-away Python prototype: Wikimedia Commons
+  "Wikipedia-Slogan MFSK.ogg" (German slogan) and sigidwiki's MFSK_16 / MFSK_32 samples ("The quick brown fox …").
+  Result: tone k carries the Gray code of k as its weight, the first-arriving bit is the heaviest, bit i of a symbol
+  leaves 10·i symbols later, "001" ends a character.
+- **OLIVIA**: Jalocha's description as Wikipedia reproduces it (Walsh 64, the scrambler 0xE257E6D0291574EC rotated
+  13·j, the diagonal bit interleave, the window formula). Open points settled against the two Wikimedia reference
+  recordings (16/500 and 32/1000, "Welcome to Wikipedia, …") by a variant search: chip k uses scrambler bit k (LSB
+  first), symbol bit i weighs 2^i, the tone is the Gray code of the value, and the character's top bit is the Walsh
+  sign XOR the parity of its index.
+- **CONTESTIA**: the description gives 32-symbol blocks of 6-bit characters but NOT the scrambler. Olivia's constant
+  gave no lock on public recordings (sigidwiki Contestia 8/250, 16/500); **0xEDB88320 rotated right 5·j** did (block
+  quality 0.27 vs 0.11). Space is code 59, code 0 idle, the rest ASCII − 32. ★ This is a FINDING, not a published fact
+  (question for Stuart below). The CRC-32 constant was a guess tried among others, not read from any source.
+- **THOR**: ZL1BPU's DominoEX page (IFK+, 18 tones, offset 2) + "THOR = DominoEX IFK+ with MFSK16's FEC, interleaver and
+  varicode". Settled on sigidwiki THOR 4/8/11/16/22 recordings: the value is the step itself (no Gray).
+- fldigi was neither read nor run: the reference recordings settled everything. WSJT-X not involved.
+- The recordings are NOT in git (licences vary): `~/VibeSDR-mfsk-refs/samples` (8 kHz float32), used by
+  `VIBE_TEXTMODE_SAMPLES=… test-textmodes`.
+
+### Receiver
+One real FFT (PFFFT) of 2 × the symbol every quarter symbol per symbol length in use (rectangular one-symbol window
+zero-padded for MFSK/THOR, Jalocha's shape for OLIVIA); a finder per sub-mode (strongest of M tones less the
+stronger neighbour outside, van Herk sliding max, EMA per quarter-phase); soft bits from one exp a tone; MFSK/THOR: the
+diagonal de-interleaver and two Viterbis (the two dibit pairings); OLIVIA/CONTESTIA: three tone hypotheses (the finder
+is often a tone out with 32/64 tones), every block alignment's Walsh quality, a lock only when the same (hypothesis,
+alignment) is best twice, the two blocks before the lock shown if they were strong. AUTO runs the common sub-modes
+side by side and shows only the locked one with the best quality, with a "[OLIVIA 8/250 · 1500 Hz]" line.
+**The lock evidence for the K = 7 code is the CONTRAST between the two dibit pairings** — on anything else the best path
+agrees ≈ 89 % either way (measured 0.75/0.75 on OLIVIA 16/500 through MFSK32, which has MFSK32's very tones and baud;
+0.99/0.75 on MFSK32 itself) — plus tone-repeat, tone-split and tone-coverage gates (a slower or faster signal of the
+same family, or an 8-tone signal in a 16-tone window). Characters are shown only while the signal was present across
+the bit's whole path through the de-interleaver and the Viterbi (no "TaTaT" after an over).
+
+| | |
+|---|---|
+| Reference recordings (all public, AUTO) | 11/11: MFSK16 ×2, MFSK32, OLIVIA 16/500, 32/1000, 8/250, CONTESTIA 8/250, 16/500, THOR 8, 16, 11 — the published text |
+| Synthetic, every sub-mode (21) at +10 dB, manual and AUTO | all right; the wrong family prints nothing |
+| Sensitivity (whole 31-character message, 10 trials, SNR in 3 kHz, AWGN, 48 kHz in) | MFSK16 −8 dB 7/10, −6 10/10 · MFSK32 −8 7/10, −6 10/10 · THOR4 −16 10/10 · THOR5 −14 6/10, −12 9/10 · THOR8 −12 8/10 · THOR11 −12 7/10, −10 9/10 · THOR16 −6 6/10, −4 8/10 (the misses lose the first word while locking) · THOR22 −8 7/10, −6 10/10 · OLIVIA 4/125 −12 8/10, −10 10/10 · 8/250 −10 10/10 · 8/500 −8 9/10 · 16/500 −10 10/10 · 16/1000 −6 10/10 · 32/1000 −10 6/10, −6 10/10 · CONTESTIA 8/250 −10 10/10 · 16/500 −10 10/10 · 32/1000 −6 9/10. AUTO = manual (MFSK16, THOR11, OLIVIA 8/250, CONTESTIA 16/500 checked) |
+| False decodes | white noise 60 min through EACH family's AUTO (3 h): 0 characters, never locked; RTTY 45.45/170 and a carrier, 60 s each through every AUTO: nothing |
+| CPU (qemu-arm count, `tools/textmode-bench/qemu.sh`, 60 s of noise through AUTO — every common sub-mode running) | MFSK 537 M instr/min NEON (779 M scalar) → ≈ 1.2–1.7 % of a Pi 2 core · THOR (6 sub-modes, two sample rates) 1604 M (2566 M) → ≈ 3.0–4.0 % · OLIVIA+CONTESTIA (9 sub-modes) 2172 M (2604 M) → ≈ 4.0–5.4 %; ESTIMATES at 0.6–0.8 IPC. A manual sub-mode costs a fraction of its AUTO |
+| SIMD | PFFFT (its own NEON/SSE), powers four bins a lane, the finder's EMA four bases a lane, the Walsh transforms four butterflies a lane (q65v). Mac NEON = q65v-scalar = q65v-scalar + PFFFT_SIMD_DISABLE: whole test output identical; armhf NEON/scalar × `-ffp-contract` off/fast: four builds identical. Mac vs armhf differ in ONE character (a CONTESTIA 64/2000 start-up "0" vs "00" before the message — libm exp/log, not SIMD) |
+| Per-sample divide / round | none. The first build spent 60 % of its Pi 2 time in `__aeabi_idivmod` (`i % s`, `n % K` on an int64) — all replaced by wrapping counters; one divide a frame (the band's mean), a symbol (tone split) and a character (Walsh quality) remain |
+
+Scalar left on purpose: the Viterbi (64 states at ≤ 62 bit/s ≈ 8 k compare-adds a second, < 0.1 % of the cost), the
+van Herk scans (sequential; ≈ 3 compares a bin a frame), the soft bits (one exp a tone a symbol).
+
+Dead ends (kept for the record): Viterbi agreement as the lock test (0.75 on garbage); a pre-lock character buffer
+(printed the code's start-up guesses " tnj" even at +20 dB); unlocking on contrast during an idle carrier (lost the
+last word); a decode gate on the finder's score (2.2× cheaper on noise, but OLIVIA 16/500 at −10 dB 10/10 → 8/10 —
+never decodes for speed); OLIVIA thresholds 0.16/0.11 (2 dB worse than 0.12/0.085); showing the pre-lock blocks only above the lock threshold (16/500 at −10 dB 10/10 → 8/10 — so a block above the hold threshold is shown, which can print one start-up character, e.g. CONTESTIA 64/2000 "0" at +10 dB).
+
+**Two signals in one passband — the hunt**: a sub-mode that cannot lock at a place that clearly holds a signal (finder
+score ≥ 4.5, and no sign of the mode — contrast < 0.04 / block quality at noise level) sets that place aside for a
+while, so a second signal gets its turn. Before it, OLIVIA 16/500 beside a stronger MFSK16 never decoded; with it, both
+decode from the same audio (`tm_clip` audio through `tm_file`). The first version set places aside on noise too and
+broke every sub-mode; the second set aside a weak real signal while it was still locking (THOR16 −6 dB CER 4 % → 38 %);
+the third (above) leaves the sweep as it was.
+
+**Web e2e** (`scripts/test-web-textmodes.mjs`, `tools/textmode-bench/tm_clip`: OLIVIA 16/500 + MFSK16 as USB IQ, a real
+vibeserver, headless Edge muted): keys offered and placed (HF Amateur), MODE row = the server's list with AUTO lit, MFSK16
+text and its "[MFSK16 · 797 Hz]" line — **but FLAKY, 11–12 of 15 on three runs**: the 20 s clip loops, OLIVIA (2 s
+blocks) joins mid-over and once printed "CQPDE" (one wrong character) and once locked on the MFSK16 signal at 766 Hz
+(printing nothing). Not fixed this run: a longer, non-looping clip (or OLIVIA alone) is the next step, and the false
+OLIVIA lock on an MFSK16 signal wants a look (the block quality reached the lock threshold on it).
+
+Owed: real air (an OLIVIA calling channel, e.g. 14.0715 USB; MFSK/THOR are rare on air), the flaky web e2e above, the Android gradle / iOS `build_ios.sh` compiles
+(the shim and host compiled on the Mac only), sharing one finder between OLIVIA and CONTESTIA of the same tones (≈ 17 %
+of OLIVIA AUTO's cost, decode-neutral), CONTESTIA's newline code (no recording carries one).
+
+## RESUME HERE (updated 2026-10-31 ≈ 08:30 UTC, after the fourth run: SAME/SELCAL web keys, MFSK/OLIVIA/CONTESTIA/THOR)
+
+Done this run (commits on `v12-decoders-wave2`): the web keys for SAME and SELCAL (section 10); MFSK16/32, OLIVIA with
+CONTESTIA, and THOR — engine, server, app and web (section 11). No server or device was touched; synthetic signals and
+public reference recordings only.
 
 Next, in order:
-1. **MFSK16/32, Olivia, Contestia, Thor, Feld Hell — NOT STARTED.** Plan: published amateur descriptions only
-   (IZ8BLY's MFSK16 notes, ZL1BPU's MFSK/Hell articles, Pawel Jalocha SP9VRC's Olivia description, the Contestia and
-   Thor authors' notes); fldigi (GPL) may be READ for ideas, never copied — and is better used as a BLACK BOX (its
-   binary generating reference WAVs in a container, as jt9 was) to settle the varicode / interleaver / Walsh-Hadamard
-   details the prose leaves open. Feld Hell is an image-like text (columns), so it wants the image path, not text.
-2. **ACARS → VDL2 → HFDL → RS41, FLEX, BPC, TDF** — still waiting on Stuart (sections 5–7).
-3. Web keys for SAME and SELCAL (web/client decoders.ts / main.ts / index.html) + **build-web**.
-4. Owed across the wave (unchanged + new): real-air tests (paging on a phone, NOAA Weather Radio, HF SELCAL, MSK144,
-   FST4W, Q65), Android gradle and iOS `build_ios.sh` compiles, FST4's last ≈ 1 dB, `-ffp-contract` decision (measured
-   this run: armhf NEON = scalar bit for bit with `off`, decodes identical either way), build-web before any release.
+1. **Feld Hell — NOT STARTED.** Plan: the published description (ZL1BPU's Hell pages, the Feld-Hell standard: 122.5
+   columns/s, 7 × 14 half-pixel matrix, 245 baud OOK, each character 7 columns, sent twice tall so it reads despite
+   slant). It is an IMAGE-LIKE text: send greyscale columns down the WEFAX image path (0x01 lines, as WEFAX) so the eye
+   reads it; no OCR. Reference recordings already downloaded: `~/VibeSDR-mfsk-refs/samples/` Hellschreiber.ogg,
+   Wikipedia-Slogan_Hellschreiber.ogg (Wikimedia Commons, "Welcome to Wikipedia…" / slogan) and sigidwiki FeldHell.mp3
+   (8 kHz float32 copies beside them).
+2. **build-web** before any release (sections 10, 11): the web keys for SAME, SELCAL, MFSK, OLIVIA and THOR are in the
+   source and were tested against a locally built page; `vibe_web_page.h` is NOT committed.
+3. **ACARS → VDL2 → HFDL → RS41, FLEX, BPC, TDF, CHU labels** — still waiting on Stuart (sections 5–7).
+4. Owed across the wave: real-air tests (paging on a phone, NOAA Weather Radio, HF SELCAL, MSK144, FST4W, Q65, OLIVIA
+   on a calling channel), Android gradle and iOS `build_ios.sh` compiles, FST4's last ≈ 1 dB, sharing OLIVIA/CONTESTIA
+   finders (≈ 17 % of OLIVIA AUTO, decode-neutral).
 
-Build used (second run; this run only syntax-checked the shim with its flags): `~/VibeSDR-builds/decoders2-server` (cmake of this worktree's vibeserver, deps from
-`~/VibeSDR-v12/vibeserver/mac/deps/prefix` — the main tree's prefix lacks FAAD2). The tone e2e test:
-`VIBESERVER_BIN=…/vibeserver VIBE_TONE_CLIP=clip.cu8 node scripts/test-server-tone.mjs` (clip: `test-tone-id
---write-clip clip.cu8`). Colima was started for the paging qemu count and stopped again. No server session took place
-(the one attempted — ACARS on the Lenovo — was refused before tuning; the log table stays empty).
+Builds used: `~/VibeSDR-builds/decoders2-server` (cmake of this worktree, deps from `~/VibeSDR-v12/vibeserver/mac/deps/
+prefix`). The worktree's `node_modules` is a symlink to `~/VibeSDR-v12/node_modules`, excluded in `.git/info/exclude`
+(not in git). The web type check (`tsc` in web/client) does not fit the 512 MB cap; services were type-checked alone
+(`tsc --ignoreConfig … src/services/textModes.ts …`), components syntax-checked with esbuild. Colima was started for the
+qemu counts and stopped again.
 
 Black-box kit (not in git, unchanged): `~/wsjtx-blackbox/` — WSJT-X 2.7.0 arm64 binaries, docker image `wsjtx-bb`,
-corpora; the comparison files are regenerated with the run.sh scripts in `~/wsjtx-blackbox/cmpf4b` and `~/wsjtx-blackbox/msk`.
+corpora. Reference recordings for the text modes: `~/VibeSDR-mfsk-refs/` (spec pages, the parsed varicode, samples,
+the Python prototypes used to settle the formats — `proto/`).
