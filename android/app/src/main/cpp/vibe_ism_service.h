@@ -556,6 +556,7 @@ public:
         meters_ = wantsMeters(band, customHz);
         keepBb_ = meters_;
         if (meters_) mix_->setChanRate(500e3);
+        det_->setChanRate(mix_->chanRate());   // ★ how far a pending channel's mix centre may move (vibe_ism.h DChan::mixHz)
         // ★ detect inside the band's own span (+ a margin for drifting sensors), not on the tuner's skirts
         if (customHz <= 0) {
             const double mid = band.centreHz - hwCentreHz, half = band.needHz + 40e3;

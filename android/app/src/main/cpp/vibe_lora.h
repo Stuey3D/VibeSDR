@@ -780,7 +780,7 @@ public:
      *  channel's inverse FFT, the block's phase, the residual NCO and the resampler; then pushOut() into the streams the
      *  detectors read. Same arithmetic in the same order: inline, feed() runs them all, exactly as before. */
     /** One block's channels: each its Lc bins × the filter, not yet inverse-transformed. */
-    struct Spectra { int64_t blk = 0; std::vector<std::vector<cf>> Y; };
+    struct Spectra { int64_t blk = 0; std::vector<vibeism::cfvec16> Y; };   // ★ aligned: each inverse FFT runs in place
     /** Chip-rate samples per channel (the resampler's output), for pushOut(). */
     using ChipOut = std::vector<std::vector<cf>>;
     /** Capture samples in; each completed block's Spectra to `onBlock(Spectra&&)`. */
@@ -861,7 +861,7 @@ private:
             const int Lc = c.Lc, cmask = Lc - 1;
             const cf* X = X_.data();
             const cf* H = c.H.data();
-            std::vector<cf>& Yv = sp.Y[ci];
+            vibeism::cfvec16& Yv = sp.Y[ci];
             Yv.resize(size_t(Lc));
             cf* Y = Yv.data();
             // the inverse transform by the forward one: conjugate in, conjugate out. In runs where both the capture's
@@ -901,7 +901,8 @@ private:
     int L_ = 0, S_ = 0, fill_ = 0;
     int64_t blocks_ = 0, nextBlk_ = 0;   ///< blocks transformed (first half); the next block deliver() expects
     std::unique_ptr<vibeism::DetFft> fft_;
-    std::vector<cf> in_, X_;
+    std::vector<cf> in_;
+    vibeism::cfvec16 X_;   // ★ aligned: the capture FFT runs in place (vibeism::Aligned16)
     std::vector<Ch> ch_;
     uint64_t ffts_ = 0;
 };

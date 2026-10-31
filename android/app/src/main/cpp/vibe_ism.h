@@ -19,9 +19,14 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <new>
 #include <vector>
+#if defined(_WIN32)
+#include <malloc.h>   // _aligned_malloc (Aligned16)
+#endif
 #if !defined(VIBE_FORCE_SCALAR) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #include <arm_neon.h>
 #define VIBE_ISM_NEON 1
@@ -47,6 +52,7 @@ struct IsmProf {
     double copy = 0, detect = 0, mix = 0, slice = 0, decode = 0;   ///< seconds (monotonic; the bench is single-threaded). decode: the caller's onBurst
     uint64_t detects = 0, opens = 0, cancels = 0, promotes = 0, closeQuiet = 0, closeLong = 0, fewHits = 0, sliceNo = 0;
     uint64_t holds = 0, held = 0;                       ///< hogs held (kHoldQuietS); detections a hold swallowed
+    uint64_t moves = 0;                                 ///< pending channels whose mix centre moved to the burst (DChan::mixHz)
     uint64_t mixSamp = 0, sliceSamp = 0, longSamp = 0;  ///< capture samples mixed; channel samples sliced; of those, in "ran too long" channels
     bool log = std::getenv("VIBE_ISM_PROF_LOG") != nullptr;   ///< every channel close to stderr
 };
@@ -57,6 +63,39 @@ inline double ismProfNow() { timespec t; clock_gettime(CLOCK_MONOTONIC, &t); ret
 #endif
 
 using cf = std::complex<float>;
+
+/** ★★ 16-BYTE-ALIGNED BUFFERS FOR THE FFTs (2026-10-31). vibedab::Fft runs PFFFT in place only on a 16-byte-aligned
+ *  buffer, and otherwise copies the whole transform in and out (vibe_dab_fft.h). A std::vector is only 8-byte aligned on
+ *  32-bit glibc, so whether a buffer took the copying path was the luck of the heap: on the Pi 2 one unrelated 12-byte
+ *  change elsewhere in ISM moved LoRa's capture FFT onto it and cost vibe-lora ~7 points of a core (47 → 54 %, reproduced
+ *  A/B twice). Same transform, same data: the output is bit-identical either way. posix_memalign, not aligned new
+ *  (absent on older Android API levels). */
+template <class T> struct Aligned16 {
+    using value_type = T;
+    Aligned16() = default;
+    template <class U> Aligned16(const Aligned16<U>&) {}
+    T* allocate(size_t n) {
+        void* p = nullptr;
+#if defined(_WIN32)
+        p = _aligned_malloc(n * sizeof(T), 16);
+#else
+        if (posix_memalign(&p, 16, n * sizeof(T)) != 0) p = nullptr;
+#endif
+        if (!p) throw std::bad_alloc();
+        return static_cast<T*>(p);
+    }
+    void deallocate(T* p, size_t) {
+#if defined(_WIN32)
+        _aligned_free(p);
+#else
+        std::free(p);
+#endif
+    }
+    template <class U> bool operator==(const Aligned16<U>&) const { return true; }
+    template <class U> bool operator!=(const Aligned16<U>&) const { return false; }
+};
+using cfvec16 = std::vector<cf, Aligned16<cf>>;
+
 /** Signed run lengths, µs: + = mark (carrier on / high tone), − = space (carrier off / low tone). */
 using Runs = std::vector<int>;
 
@@ -284,7 +323,7 @@ struct ChanEvent {
     uint32_t serial = 0;       ///< which opening of that slot (a mixer that lost the open ignores the rest)
     uint64_t at = 0;
     uint64_t start = 0;        ///< kOpen: the channel's first sample (the pre-roll before the detection)
-    double offHz = 0;          ///< kOpen: its centre, relative to the capture centre
+    double offHz = 0;          ///< kOpen, kPromote: the centre to MIX at, relative to the capture centre (see DChan::mixHz)
 };
 
 /** A closed channel, mixed and not yet sliced: the mixer's output, the slicer's input. */
@@ -365,6 +404,9 @@ public:
     /** Detect only between these offsets from the capture centre (the band's own span): the tuner's filter skirts
      *  outside it are where the floor moves fastest and false bursts cluster (Pi 500 RTL, 433.92, 2026-10-25). */
     void setUsableHz(double lo, double hi) { useLo_ = lo; useHi_ = hi; tablesOk_ = false; }
+    /** The channel rate the mixer runs at: a pending channel's mix centre may move by a quarter of it (DChan::mixHz). */
+    void setChanRate(double hz) { moveCapHz_ = 0.25 * hz; }
+    static constexpr float kMoveOver = 4.0f;   ///< (6 dB) a sighting this far over the first is the burst itself
 #if defined(VIBE_ISM_PROF)
     IsmProf* prof_ = nullptr;
 #endif
@@ -425,10 +467,22 @@ private:
         int hits = 0;           ///< detector frames that saw it — a noise spike is one; a burst is many
         float peakPow = 0, framePow = 0;   ///< its strongest bin power, ever and in the current detector frame
         uint32_t serial = 0;
+        /** ★★ WHERE IT IS MIXED, which may differ from where it CLAIMS (offHz) — 2026-10-31. A pending candidate is often a
+         *  noise blip (one bin in a few thousand crosses the threshold), and a real burst within kMatchHz of it promotes it:
+         *  on the Pi 2 a C1-B meter's frame (power 0.09, 22 bins wide) was matched to a blip 106 kHz away (power 5e-5,
+         *  2 bins) and mixed there, its far tone on the channel filter's edge, and missed (test-wmbus --diag-c1 B -60 1.02
+         *  0 106). So while it is pending — nothing mixed yet, so it is free — the mixer's centre moves to a sighting that
+         *  stands well over the first (kMoveOver), is not splatter (the splatter rule's own test) and is within the move
+         *  cap (a quarter of the channel rate: the move must leave the burst well inside the channel). The CLAIM stays
+         *  where it was: matching, closing and the hog hold behave exactly as before, so no channel opens, merges or
+         *  holds differently; only the frequency the burst is mixed at, and reported at, is better. */
+        double mixHz = 0;
+        float firstPow = 0;
     };
     void emit(std::vector<ChanEvent>& ev, ChanEvent::Kind k, int slot) {
         ChanEvent e; e.kind = k; e.slot = uint8_t(slot); e.serial = ch_[slot].serial; e.at = total_;
-        if (k == ChanEvent::kOpen) { e.start = ch_[slot].start; e.offHz = ch_[slot].offHz; }
+        if (k == ChanEvent::kOpen) e.start = ch_[slot].start;
+        if (k == ChanEvent::kOpen || k == ChanEvent::kPromote) e.offHz = ch_[slot].mixHz;
         ev.push_back(e);
     }
     /** Capture sample `s` (absolute work position), from the current block or the history before it. */
@@ -505,7 +559,17 @@ private:
             if (hit >= 0) {
                 DChan& h = ch_[hit];
                 h.lastHit = total_; ++h.hits; h.peakPow = std::max(h.peakPow, gr.pmax); h.framePow = std::max(h.framePow, gr.pmax);
-                if (h.pending) { VIBE_ISM_P(if (prof_) ++prof_->promotes;) h.pending = false; emit(ev, ChanEvent::kPromote, hit); }   // ★ a second sighting: now it is worth mixing
+                VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "sight   %9.4f s  slot %d  %+9.1f kHz  pow %.3g  pmax %.3g  width %d  %s (chan %+.1f)\n", double(total_) / w_, hit,
+                                                              f / 1e3, gr.wsum, double(gr.pmax), gr.width, h.pending ? "PENDING" : "on", h.offHz / 1e3);)
+                if (h.pending) {   // ★ a second sighting: now it is worth mixing — re-centred if this is the burst (DChan::mixHz)
+                    VIBE_ISM_P(if (prof_) ++prof_->promotes;)
+                    if (gr.pmax >= h.firstPow * kMoveOver && std::fabs(f - h.offHz) <= moveCapHz_) {
+                        bool splat = false;
+                        for (int s2 = 0; s2 < kMaxChans; ++s2) if (s2 != hit && ch_[s2].on && ch_[s2].peakPow > gr.pmax * 300.0f) { splat = true; break; }
+                        if (!splat) { h.mixHz = f; VIBE_ISM_P(if (prof_) ++prof_->moves;) }
+                    }
+                    h.pending = false; emit(ev, ChanEvent::kPromote, hit);
+                }
                 continue;
             }
             // ★★ a held hog (see kHoldQuietS): seen again — refresh it, open nothing, unless this stands well clear of it
@@ -530,9 +594,10 @@ private:
             int freeS = -1;
             for (int s = 0; s < kMaxChans; ++s) if (!ch_[s].on) { freeS = s; break; }
             if (freeS < 0) continue;                           // ★ four bursts at once already: the fifth is lost
-            VIBE_ISM_P(if (prof_) ++prof_->opens;)
+            VIBE_ISM_P(if (prof_) ++prof_->opens;
+                       if (prof_ && prof_->log) std::fprintf(stderr, "open    %9.4f s  slot %d  %+9.1f kHz  pow %.3g  pmax %.3g  width %d\n", double(total_) / w_, freeS, f / 1e3, gr.wsum, double(gr.pmax), gr.width);)
             openChan(freeS, f, ev);
-            ch_[freeS].peakPow = ch_[freeS].framePow = gr.pmax;
+            ch_[freeS].peakPow = ch_[freeS].framePow = ch_[freeS].firstPow = gr.pmax;
         }
         // close channels that went quiet, or ran too long
         for (int s = 0; s < kMaxChans; ++s) {
@@ -596,6 +661,7 @@ private:
         DChan& c = ch_[s];
         c.on = true;
         c.offHz = f;
+        c.mixHz = f;
         const uint64_t pre = uint64_t(kPrerollS * w_) + kN;
         c.start = total_ > pre ? total_ - pre : 0;
         c.lastHit = total_;
@@ -608,7 +674,7 @@ private:
 
     int pre_ = 1, preCnt_ = 0, hop_ = kN, sinceFft_ = 0;
     cf preAcc_{0, 0};
-    double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0, useLo_ = -1e12, useHi_ = 1e12;
+    double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0, useLo_ = -1e12, useHi_ = 1e12, moveCapHz_ = 0;
     int clipWin_ = 0, clipFrames_ = 0;
     float blockPeak_ = 0;
     std::vector<cf> hist_;
@@ -620,7 +686,7 @@ private:
     std::vector<uint8_t> usable_;
     bool tablesOk_ = false;
     float thr_ = 10.0f, thrDbCached_ = -1.0f;
-    std::vector<cf> fbuf_;
+    cfvec16 fbuf_;   // ★ aligned: the detector FFT runs in place (Aligned16)
     DChan ch_[kMaxChans];
     struct Hold { bool on = false; double f = 0; uint64_t lastHit = 0; float peak = 0; };
     Hold hold_[kMaxHolds];
@@ -696,7 +762,11 @@ private:
         const uint64_t at = std::min(e.at, total_);
         if (e.kind == ChanEvent::kOpen) { openChan(c, e); return; }
         if (!c.on || c.serial != e.serial) return;      // ★ its open was lost with a dropped block
-        if (e.kind == ChanEvent::kPromote) { c.pending = false; runChan(c, at); return; }
+        if (e.kind == ChanEvent::kPromote) {
+            // ★ re-centred while pending (Detector::DChan::mixHz): nothing is mixed yet, so the tables are simply rebuilt
+            if (c.pending && e.offHz != c.offHz) { c.offHz = e.offHz; tune(c); }
+            c.pending = false; runChan(c, at); return;
+        }
         if (e.kind == ChanEvent::kCancel) { abandon(c); return; }
         runChan(c, at);
         c.on = false;
@@ -793,7 +863,14 @@ private:
         c.offHz = e.offHz;
         c.start = std::max(e.start, validFrom_);   // ★ never into the hole a dropped block left
         c.next = c.start;
-        const double ph = -2.0 * M_PI * e.offHz / w_;
+        tune(c);
+        c.peakAbs = 0;
+        c.bb.clear();
+        c.bb.reserve(size_t(0.1 * chanRate()));
+    }
+    /** The channel's mixer tables for c.offHz, and its sums reset — at open, and at promotion if it moved. */
+    void tune(Chan& c) {
+        const double ph = -2.0 * M_PI * c.offHz / w_;
         c.M = chanM_;
         c.wA.resize(size_t(4 * c.M)); c.wB.resize(size_t(4 * c.M));
         for (int j = 0; j < c.M; ++j) {   // incʲ in double: the table is exact where the per-sample recurrence drifted
@@ -807,9 +884,6 @@ private:
         c.incM = cf(float(std::cos(ph * c.M)), float(std::sin(ph * c.M)));
         c.rot = cf(1, 0);
         c.mcnt = 0; c.renorm = 0; c.sF = 0; c.sR = 0; c.carry = 0;
-        c.peakAbs = 0;
-        c.bb.clear();
-        c.bb.reserve(size_t(0.1 * chanRate()));
     }
 
     int chanM_ = 1;
@@ -827,6 +901,7 @@ public:
     float threshDb = 10.0f;                        ///< detection: a bin this far over its own noise floor
 
     explicit FrontEnd(double rateHz) : det_(rateHz), mix_(rateHz) {
+        det_.setChanRate(mix_.chanRate());
 #if defined(VIBE_ISM_PROF)
         det_.prof_ = &prof; mix_.prof_ = &prof;
 #endif
@@ -837,7 +912,7 @@ public:
     /** ★ V12 wM-Bus: a wider burst channel — the work rate over the integer nearest `hz` (2.4 MS/s → 480 kS/s, 2.048 →
      *  512 k). The 868 band asks for ~500 kS/s: a T1/C1 chip is 10 µs, 2.5 samples at 250 kS/s. The slicer's smoothing is
      *  in µs (slice()), so every other family slices as it did at 250 k. Call before feeding. */
-    void setChanRate(double hz) { mix_.setChanRate(hz); }
+    void setChanRate(double hz) { mix_.setChanRate(hz); det_.setChanRate(mix_.chanRate()); }
     /** ★ V12 wM-Bus: hand each burst's complex baseband on in Burst::bb (the 868 band only — see Burst::bb). */
     void setKeepBaseband(bool on) { keepBb_ = on; }
     uint64_t bursts() const { return bursts_; }

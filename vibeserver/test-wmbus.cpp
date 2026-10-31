@@ -739,7 +739,7 @@ int main(int argc, char** argv) {
         const std::string files = slurpDir(dir);
         CHECK(files.find("Water meter \xc2\xb7 Sensus \xc2\xb7 12345678") != std::string::npos, "the serial is in the log and the card");
         CHECK(files.find("2 devices: 2 meters (1 cold water, 1 water)") != std::string::npos, "the card counts meters by type: %s",
-              files.substr(files.find("devices"), 60).c_str());
+              files.substr(std::min(files.find("devices"), files.size()), 60).c_str());   // ★ a failing check reports, never throws
         CHECK(json.find("12345678") != std::string::npos, "the serial is in the JSON");
         // ★★★ never a run of the encrypted payload (A0 … BF): every 4-byte window, hex both cases, spaced or not, and decimal
         int leaks = 0;
