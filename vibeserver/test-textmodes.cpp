@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 #include <string>
 #include <vector>
@@ -41,8 +42,8 @@ static Got run(F f, const std::string& mode, const std::vector<float>& x, double
 }
 /** AUTO holds the common sub-modes (textmodes.cpp kSubs, `common`); the rest are tried only by their manual setting */
 static bool inAuto(const std::string& id) {
-    static const char* manualOnly[] = {"olivia-4-250", "olivia-64-2000", "contestia-4-125", "contestia-4-250", "contestia-4-500",
-        "contestia-4-1000", "contestia-4-2000", "contestia-8-125", "contestia-8-500", "contestia-8-1000", "contestia-8-2000",
+    static const char* manualOnly[] = {"olivia-4-250", "olivia-64-2000", "contestia-4-125", "contestia-4-250",
+        "contestia-4-1000", "contestia-4-2000", "contestia-8-125", "contestia-8-500", "contestia-8-2000",
         "contestia-16-250", "contestia-16-1000", "contestia-16-2000", "contestia-32-2000", "contestia-64-500",
         "contestia-64-1000", "contestia-64-2000"};
     for (const char* m : manualOnly) if (id == m) return false;
@@ -105,7 +106,9 @@ int main() {
             if (!inAuto(id)) continue;   // manual only
             auto x = withNoise(textModeSynth(c.f, c.id, msg, fs, c.hz), fs, 10, 11);
             Got a = run(F::All, "auto", x, fs);
-            ok(body(a.text).find(msg) != std::string::npos, id + " through the one AUTO (named " + a.detected + ")");
+            std::string lab = id; for (auto& m : TextModeDecoder::modes(F::All)) if (m.id == id) lab = m.group + " " + m.label;
+            if (id.rfind("mfsk", 0) == 0) lab = "MFSK" + id.substr(4); else if (id.rfind("thor", 0) == 0) lab = "THOR " + id.substr(4);
+            ok(body(a.text).find(msg) != std::string::npos && a.detected == lab, id + " through the one AUTO (named " + a.detected + ")");
         }
         const auto L = TextModeDecoder::modes(F::All);
         std::string groups; for (auto& m : L) if (!m.group.empty() && groups.find(m.group) == std::string::npos) groups += m.group + ",";
@@ -171,6 +174,12 @@ int main() {
                 const bool edge = snr == sb.edge;
                 ok(whole >= (edge ? 2 : 3), std::string(sb.id) + " at " + std::to_string((int)snr) + " dB: " + std::to_string(whole) + "/3 whole");
             }
+            // ★ …and through the one key's AUTO: a sub-mode in AUTO is found and named; a manual-only one locks NOTHING
+            //   (no other receiver of the same spacing and rate — e.g. 16/2000 under 4/500 and 8/1000 — reads it)
+            Got g = run(F::All, "auto", a, 8000);
+            const std::string label = std::string("CONTESTIA ") + (std::strchr(sb.id + 10, '-') ? std::string(sb.id + 10).replace(std::string(sb.id + 10).find('-'), 1, "/") : "");
+            if (inAuto(sb.id)) ok(g.detected == label && body(g.text).find(want + 1) != std::string::npos, std::string(sb.id) + " through the one AUTO: named " + g.detected);
+            else ok(g.text.empty() && !g.everLocked, std::string(sb.id) + " (manual only) through the one AUTO: nothing" + (g.detected.empty() ? "" : " — locked " + g.detected));
         }
     }
 
