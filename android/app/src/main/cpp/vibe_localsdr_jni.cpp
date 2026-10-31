@@ -934,14 +934,15 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGetServerStatus(JNIEnv* env, jobject) {
  *    is the upload speed Kotlin measured, because the C++ path shells out to curl, which Android does not have. */
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeRunBenchmark(JNIEnv* env, jobject, jstring clipPath, jstring adsbClipPath,
-                                                     jdouble uplinkKBps) {
+                                                     jstring decoderClipPath, jdouble uplinkKBps) {
     auto str = [&](jstring s) { std::string o; if (!s) return o; const char* c = env->GetStringUTFChars(s, nullptr);
                                 if (c) { o = c; env->ReleaseStringUTFChars(s, c); } return o; };
-    const std::string clip = str(clipPath), adsbClip = str(adsbClipPath);
+    const std::string clip = str(clipPath), adsbClip = str(adsbClipPath), decoderClip = str(decoderClipPath);
+    // ★ decoderClip: the decoder rows' real band (vibe_benchmark_more.h) — empty = those rows read "not measured"
     const std::string j = vibe::runBenchmark(nullptr, 6.0, (double)uplinkKBps,
                                              [&] { auto r = vibe::runDabRows(clip, 6.0);
                                                    for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
-                                                   return r; }, 4);
+                                                   return r; }, 4, decoderClip);
     return env->NewStringUTF(j.c_str());
 }
 

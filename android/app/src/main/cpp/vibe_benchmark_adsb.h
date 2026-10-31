@@ -133,6 +133,29 @@ inline std::string ensureAdsbClip(const std::string& cacheDir,
 #endif
 }
 
+/** ★★ THE DECODER ROWS' CLIP (vibe_benchmark_more.h, 2026-10-31): decoders-bench.vbu8 — seconds of real band for the
+ *  CW and PSK skimmers, the NDB skimmer and ISM (vibeserver/bench-clip/README-decoders.txt). Fetched once and kept, exactly
+ *  as the ADS-B clip (here because this header already has the fetcher; Android's Kotlin fetches its own copy). Without it
+ *  those rows read "not measured" and every other row still runs — a box with no internet still measures itself. */
+inline std::string ensureDecoderClip(const std::string& cacheDir,
+                                     const std::string& url = "https://github.com/Stuey3D/VibeSDR/releases/download/bench-clip-v3/decoders-bench.vbu8.gz") {
+#if defined(__ANDROID__)
+    (void)cacheDir; (void)url; return "";
+#else
+    const std::string path = cacheDir + "/decoders-bench.vbu8";
+    if (!benchdec::loadDecoderClips(path).empty()) return path;
+    const std::string tmp = path + ".part";
+    const std::string gz  = path + ".part.gz";
+    auto fail = [&]() { std::remove(gz.c_str()); std::remove(tmp.c_str()); return std::string(); };
+    if (vibeproc::run({ "curl", "-sSL", "--max-time", "900", "-o", gz, url }) != 0) return fail();
+    if (vibeproc::runToFile({ "gzip", "-dc", "--", gz }, tmp) != 0) return fail();
+    std::remove(gz.c_str());
+    if (benchdec::loadDecoderClips(tmp).empty()) { std::remove(tmp.c_str()); return ""; }
+    if (std::rename(tmp.c_str(), path.c_str()) != 0) { std::remove(tmp.c_str()); return ""; }
+    return path;
+#endif
+}
+
 /** Both ADS-B rows — 2.4 and 3.0 MS/s — or none if no clip. Ids adsb_2400 / adsb_3000, from each record's own rate. */
 inline std::vector<benchdetail::Result> runAdsbRows(const std::string& clipPath, double seconds) {
     std::vector<benchdetail::Result> out;

@@ -115,7 +115,9 @@ flags_for() {
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
     test-bm-names) echo "-O2 -I android/app/src/main/cpp" ;;
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
-    test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★ …and every row after the first eight (vibe_benchmark_more.h, 2026-10-31): the host's decoders, every digital-spots
+    #    engine, NDB / AIS / ISM, tone ID and the audio filters. VIBE_BENCH_CLIP=<decoders-bench.vbu8> runs the clip rows.
+    test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib -I $VDSP -I $KISS -lpthread" ;;
     # ★ Hostile attach messages through the real decoders (audit 2026-10-03) — same deps as the hosts.
     test-decoder-hardening) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ SSTV geometry + colour on synthetic pictures with a known sender clock error (audit 2026-10-04)
@@ -320,7 +322,9 @@ deps_for() {
     test-msk144)        echo "android/app/src/main/cpp/decoders/digimodes/msk144_code.cpp android/app/src/main/cpp/decoders/digimodes/msk144_decoder.cpp android/app/src/main/cpp/decoders/digimodes/ldpc_small.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-q65)           echo "android/app/src/main/cpp/decoders/digimodes/q65_code.cpp android/app/src/main/cpp/decoders/digimodes/q65_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
-    test-decoder-hosts|test-bench-decoders|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-bench-decoders) echo "$(deps_for test-decoder-hosts) android/app/src/main/cpp/decoders/tone_id.cpp android/app/src/main/cpp/decoders/audio_nr.cpp \
+                              android/app/src/main/cpp/decoders/auto_notch.cpp android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;
+    test-decoder-hosts|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
                               android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)

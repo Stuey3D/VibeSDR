@@ -616,6 +616,8 @@ public:
     /** Frames waiting for the decode thread — a feeder that must NOT lose audio (a test, the
      *  benchmark) paces itself on this; the server never does, it drops. */
     size_t queued() { std::lock_guard<std::mutex> lk(qM_); return qFrames_; }
+    /** …and the same for a skimmer's IQ, in seconds (the benchmark's skimmer rows pace on it — vibe_benchmark_more.h). */
+    double queuedIq() { return queuedIqSec(); }
     /** "fsk"/"wefax"/"sstv"/"time"/"none" — WHICH decoder object actually exists (see the admin note
      *  on decoderKind: "attached" was once true while nothing had been constructed). */
     std::string kind() {

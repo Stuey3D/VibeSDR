@@ -2221,10 +2221,11 @@ int main(int argc, char** argv) {
                 const bool released = held && shim.releaseRadio();
                 const std::string clip = vibe::ensureDabClip(vsBenchDir());
                 const std::string adsbClip = vibe::ensureAdsbClip(vsBenchDir());
+                const std::string decoderClip = vibe::ensureDecoderClip(vsBenchDir());   // ★ the skimmers', NDB's and ISM's real band
                 const std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
                                                          [&] { auto r = vibe::runDabRows(clip, 6.0);
                                                                for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
-                                                               return r; }, 4);
+                                                               return r; }, 4, decoderClip);
                 vsBenchSave(j);
                 if (released) {
                     /* ★★★ GIVE THE DEVICE TIME TO LET GO, AND KEEP ASKING. An immediate reacquire lost the race

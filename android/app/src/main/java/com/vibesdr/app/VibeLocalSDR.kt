@@ -122,8 +122,8 @@ object VibeLocalSDR {
     fun getVibeServerStatus(): String { return if (loaded) nativeGetVibeServerStatus() else "{\"running\":false}" }
     /** ★ The server benchmark — see VibeBenchmark, which stops the radio first and calls this off the main
      *  thread. Blocks for a minute or two. */
-    fun runBenchmark(clipPath: String, adsbClipPath: String, uplinkKBps: Double): String =
-        if (loaded) nativeRunBenchmark(clipPath, adsbClipPath, uplinkKBps) else ""
+    fun runBenchmark(clipPath: String, adsbClipPath: String, decoderClipPath: String, uplinkKBps: Double): String =
+        if (loaded) nativeRunBenchmark(clipPath, adsbClipPath, decoderClipPath, uplinkKBps) else ""
     fun getNetStatus(): String { return if (loaded) nativeGetNetStatus() else "{\"tcp\":false}" }
     /** ★ Live benchmark progress — {running, step, steps, label}. See nativeBenchProgress. */
     fun benchProgress(): String =
@@ -536,5 +536,5 @@ object VibeLocalSDR {
     private external fun nativeSetServerSampleRate(rate: Double)
     private external fun nativeGetServerStatus(): String
     private external fun nativeGetVibeServerStatus(): String
-    private external fun nativeRunBenchmark(clipPath: String, adsbClipPath: String, uplinkKBps: Double): String
+    private external fun nativeRunBenchmark(clipPath: String, adsbClipPath: String, decoderClipPath: String, uplinkKBps: Double): String
 }
