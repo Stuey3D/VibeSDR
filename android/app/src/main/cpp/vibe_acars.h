@@ -160,11 +160,42 @@ inline void envMix(const cf32* z, int n, float dc, const float* loRe, const floa
     *envSum = sum;
 }
 
+/** out[i] = (a[i] − dc) · lo[i] for a REAL audio a (the coherent AM detector's output); envSum = Σ a. */
+inline void realMix(const float* a, int n, float dc, const float* loRe, const float* loIm, cf32* out, float* aSum) {
+    float* of = reinterpret_cast<float*>(out);
+    float sum = 0;
+    int i = 0;
+#if VIBE_NEON
+    float32x4_t acc = vdupq_n_f32(0), vdc = vdupq_n_f32(dc);
+    for (; i + 4 <= n; i += 4) {
+        const float32x4_t x = vld1q_f32(a + i);
+        acc = vaddq_f32(acc, x);
+        const float32x4_t d = vsubq_f32(x, vdc);
+        float32x4x2_t o;
+        o.val[0] = vmulq_f32(d, vld1q_f32(loRe + i));
+        o.val[1] = vmulq_f32(d, vld1q_f32(loIm + i));
+        vst2q_f32(of + 2 * i, o);
+    }
+    sum = vaddvq_f32(acc);
+#elif VIBE_SSE
+    __m128 acc = _mm_setzero_ps(), vdc = _mm_set1_ps(dc);
+    for (; i + 4 <= n; i += 4) {
+        const __m128 x = _mm_loadu_ps(a + i);
+        acc = _mm_add_ps(acc, x);
+        const __m128 d = _mm_sub_ps(x, vdc);
+        vibedsp::sseStore2(of + 2 * i, _mm_mul_ps(d, _mm_loadu_ps(loRe + i)), _mm_mul_ps(d, _mm_loadu_ps(loIm + i)));
+    }
+    sum = vibedsp::sseAddv(acc);
+#endif
+    for (; i < n; ++i) { sum += a[i]; const float d = a[i] - dc; of[2 * i] = d * loRe[i]; of[2 * i + 1] = d * loIm[i]; }
+    *aSum = sum;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  ONE CHANNEL
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** ★ Experiment switches (test-acars only; the defaults are the shipped receiver). */
-struct Tuning { bool repair = true; };
+struct Tuning { bool repair = true; bool twoSided = true; int W = 16; int phases = 4; bool coherentAm = true; int cohA = 32; };
 inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("ACARS_DEBUG") != nullptr; return d; }
 
@@ -172,7 +203,7 @@ struct Stats { uint64_t syncs = 0, bcsFail = 0, good = 0, repaired = 0, dupes = 
 
 class Demod {
 public:
-    static constexpr int kPhases = 4;
+    static constexpr int kPhases = 8;   ///< the most bit clocks (Tuning::phases runs)
     explicit Demod(double fs) : fs_(fs), sps_(fs / kBaud) {
         // the 1800 Hz table: the shortest whole number of cycles (≤ 8192 samples), else a rotator refills it per call
         const double cyc = kSubHz / fs;
@@ -190,7 +221,8 @@ public:
         for (float& t : taps) t /= s;
         mf_.reset(new vibedsp::FirDecimator(taps, 1));
         delay_ = half;
-        for (int p = 0; p < kPhases; ++p) { ph_[p].clk = double(p) / kPhases; }
+        nph_ = std::max(1, std::min(kPhases, tuning().phases));
+        for (int p = 0; p < nph_; ++p) { ph_[p].clk = double(p) / nph_; }
         sync_ = syncWord();
     }
     /** `out(const Block&)` for every block that passed the BCS (repaired or not). */
@@ -210,7 +242,11 @@ public:
             lr = loRe_.data(); li = loIm_.data();
         }
         float esum = 0;
-        envMix(z, n, dc_, lr, li, mix_.data(), &esum);
+        if (tuning().coherentAm) {
+            cohAm_(z, n);
+            realMix(am_.data(), n, dc_, lr, li, mix_.data(), &esum);
+        } else
+            envMix(z, n, dc_, lr, li, mix_.data(), &esum);
         // the carrier level (AM DC): a block mean, smoothed; it also normalises (AGC) below
         const float mean = esum / n;
         dc_ = dcInit_ ? dc_ + (mean - dc_) * std::min(1.0f, n / (0.004f * float(fs_))) : mean;
@@ -222,7 +258,7 @@ public:
         const float inv = 1.0f / std::max(dc_, 1e-9f);
         for (int i = 0; i < k; ++i) {
             const cf32 v = y_[size_t(i)] * inv;
-            for (int p = 0; p < kPhases; ++p) {
+            for (int p = 0; p < nph_; ++p) {
                 Path& P = ph_[p];
                 P.clk += 1.0 / sps_;
                 if (P.clk >= 1.0) {
@@ -244,6 +280,49 @@ public:
     void setChannel(int c, double hz) { chan_ = c; hz_ = hz; }
 
 private:
+    /* ★★ COHERENT AM (Tuning::coherentAm). The envelope |z| has a threshold: below ~10 dB carrier-to-noise in its own
+     *  bandwidth the noise multiplies into the audio, and the weak aircraft ACARS has to decode sit at 3–9 dB in the
+     *  channel. The AM carrier is a strong, clean reference instead: the MSK audio has a spectral NULL at 0 Hz (1800 Hz
+     *  from its centre, the matched pulse's first zero), so a narrow filter around the carrier sees the carrier alone.
+     *   1. Its frequency, every 128 samples while something is on the channel: arg Σ z[n]·z*[n−4] / (2π·4) — exact for
+     *      AM (the envelope product is real and positive), unbiased by white noise at lag 4, unambiguous to ±fs/8.
+     *   2. z turned down by it; the carrier's phase from a one-pole low-pass (~90 Hz at 18.75 kS/s, cohA = 32).
+     *   3. The audio = the in-phase part, Re(u·ĉ*)/|ĉ| — linear in the signal, so no threshold, and an over-modulated
+     *      aircraft (its envelope touching zero, common on ACARS) is not clipped. */
+    void cohAm_(const cf32* z, int n) {
+        am_.resize(size_t(n));
+        const float a = 1.0f / float(std::max(2, tuning().cohA));
+        for (int i = 0; i < n; ++i) {
+            // the frequency estimator, over the raw samples
+            const cf32 x = z[i];
+            fR_ += x * std::conj(lag_[lagP_ & 3]);
+            fP_ += std::norm(x);
+            lag_[lagP_ & 3] = x; ++lagP_;
+            if (++fN_ == 128) {
+                const float pw = fP_ / 128;
+                nfl_ = nfl_ <= 0 ? pw : (pw < nfl_ ? nfl_ + (pw - nfl_) * 0.3f : nfl_ * 1.002f);
+                if (pw > 2.0f * nfl_ && std::abs(fR_) > 0.25f * fP_) {
+                    const float f = std::arg(fR_) / (2 * float(M_PI) * 4);   // cycles a sample
+                    float d = f - cf_;
+                    // a new carrier (a different aircraft) is adopted outright; the same one is smoothed
+                    cf_ = std::fabs(d) > 30.0f / float(fs_) ? f : cf_ + 0.5f * d;
+                    rot_ = cf32(std::cos(-2 * float(M_PI) * cf_), std::sin(-2 * float(M_PI) * cf_));
+                }
+                fR_ = cf32(0, 0); fP_ = 0; fN_ = 0;
+                nco_ /= std::abs(nco_);
+            }
+            const cf32 u = x * nco_;
+            nco_ *= rot_;
+            car_ += (u - car_) * a;
+            const float m = std::abs(car_) + 1e-12f;
+            am_[size_t(i)] = (u.real() * car_.real() + u.imag() * car_.imag()) / m;
+        }
+    }
+    std::vector<float> am_;
+    cf32 fR_{0, 0}, lag_[4] = {}, nco_{1, 0}, rot_{1, 0}, car_{0, 0};
+    float fP_ = 0, nfl_ = 0, cf_ = 0;
+    int fN_ = 0; unsigned lagP_ = 0;
+
     struct Path {
         double clk = 0;
         int k = 0;                       // bit index (for the quarter-turn derotation)
@@ -253,7 +332,10 @@ private:
         int have = 0;
         // frame collection
         bool inFrame = false; bool inv = false;
-        std::vector<float> soft;         // bits since SOH (signed: + = 1)
+        std::vector<float> soft;         // bits since SOH (signed: + = 1), causal θ
+        cf32 hist[64];                   // the last 64 derotated samples (the sync word and the pre-key before SOH)
+        std::vector<cf32> wv;            // derotated samples: 64 before SOH, then every bit since
+        std::vector<float> soft2;        // ★ the frame again with a TWO-SIDED θ (Tuning::twoSided)
     };
     static constexpr int kMaxChars = 240;
 
@@ -271,6 +353,8 @@ private:
         switch (P.k & 3) { case 0: w = x; break; case 1: w = cf32(x.imag(), -x.real()); break;
                            case 2: w = -x; break; default: w = cf32(-x.imag(), x.real()); }
         P.k++;
+        P.hist[P.k & 63] = w;
+        if (P.inFrame) P.wv.push_back(w);
         // θ from w² (data-free), smoothed over ~16 bits, the half-angle unwrapped next to the last
         P.sq += (w * w - P.sq) * 0.0625f;
         float th = 0.5f * std::arg(P.sq);
@@ -290,6 +374,8 @@ private:
                 const int e0 = __builtin_popcountll(s ^ sync_), e1 = __builtin_popcountll(s ^ (~sync_ & m));
                 if (e0 <= 3 || e1 <= 3) {
                     P.inFrame = true; P.inv = e1 < e0; P.soft.clear(); st_.syncs++;
+                    P.wv.clear();
+                    for (int j = 63; j >= 0; --j) P.wv.push_back(P.hist[(P.k - j) & 63]);
                 }
             }
             return;
@@ -347,8 +433,43 @@ private:
     template <class Out> bool tryEnd_(Path& P, size_t e, bool repair, Out& out) {
         const size_t nb = (e + 3) * 8;
         if (P.soft.size() < nb) return false;
+        if (tuning().twoSided) { resoft_(P); if (tryEndOn_(P, P.soft2, e, repair, out)) return true; }
+        return tryEndOn_(P, P.soft, e, repair, out);
+    }
+    /** ★ The frame's soft bits again, θ from w² summed over ±W bits around each (the causal estimate lags a drifting
+     *  phase and is noisiest exactly where the frame starts). Unwrapped bit to bit; the polarity is the sync word's. */
+    void resoft_(Path& P) {
+        const int W = std::max(2, tuning().W);
+        const size_t n = P.wv.size();
+        P.soft2.assign(P.soft.size(), 0.f);
+        std::vector<cf32> sq(n + 1, cf32(0, 0));
+        for (size_t i = 0; i < n; ++i) sq[i + 1] = sq[i] + P.wv[i] * P.wv[i];
+        float prevTh = 0; bool first = true;
+        for (size_t i = 0; i < n; ++i) {
+            const size_t a = i >= size_t(W) ? i - size_t(W) : 0, b = std::min(n, i + size_t(W) + 1);
+            const cf32 m = sq[b] - sq[a];
+            float th = 0.5f * std::arg(m);
+            if (!first) {
+                float d = th - prevTh;
+                while (d > float(M_PI / 2)) { th -= float(M_PI); d -= float(M_PI); }
+                while (d < -float(M_PI / 2)) { th += float(M_PI); d += float(M_PI); }
+            }
+            first = false; prevTh = th;
+            if (i < 64) continue;
+            const size_t j = i - 64;                       // bit j after SOH
+            if (j >= P.soft2.size()) break;
+            const float amp = std::sqrt(std::abs(m) / float(b - a)) + 1e-9f;
+            const float v = (P.wv[i].real() * std::cos(th) + P.wv[i].imag() * std::sin(th)) / amp;
+            P.soft2[j] = v;
+        }
+        // the polarity: whichever agrees with the causal decisions (which the sync word set)
+        float agree = 0;
+        for (size_t j = 0; j < P.soft.size() && j < P.soft2.size(); ++j) agree += (P.soft[j] > 0) == (P.soft2[j] > 0) ? 1.f : -1.f;
+        if (agree < 0) for (auto& v : P.soft2) v = -v;
+    }
+    template <class Out> bool tryEndOn_(Path& P, const std::vector<float>& S, size_t e, bool repair, Out& out) {
         std::vector<uint8_t> by(e + 3);
-        for (size_t i = 0; i < e + 3; ++i) by[i] = charAt_(P.soft, i);
+        for (size_t i = 0; i < e + 3; ++i) by[i] = charAt_(S, i);
         // the suffix itself: force a damaged one to the nearer of ETX / ETB
         uint8_t& sf = by[e];
         if ((sf & 0x7F) != ETX && (sf & 0x7F) != ETB) {
@@ -364,7 +485,7 @@ private:
             a = b = bit0;
             float fa = 1e9f, fb = 1e9f;
             for (size_t j = bit0; j < bit0 + nbits; ++j) {
-                const float v = std::fabs(P.soft[j]);
+                const float v = std::fabs(S[j]);
                 if (v < fa) { b = a; fb = fa; a = j; fa = v; } else if (v < fb) { b = j; fb = v; }
             }
         };
@@ -421,6 +542,7 @@ private:
     float dc_ = 0, floor_ = 0; bool dcInit_ = false;
     cf32 prev_{0, 0};
     Path ph_[kPhases];
+    int nph_ = 4;
     uint64_t sync_ = 0, t_ = 0;
     struct Rec { uint32_t h = 0; uint64_t t = 0; };
     Rec recent_[8]; int rp_ = 0;

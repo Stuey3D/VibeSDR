@@ -177,7 +177,23 @@ static int cu8(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    // ★ experiment switches: ACARS_TUNE="two=0 W=8 ph=8 rep=0"
+    if (const char* t = std::getenv("ACARS_TUNE")) {
+        auto& T = vibeacars::tuning();
+        std::string s(t);
+        auto val = [&](const char* k, int& v) { const size_t p = s.find(k); if (p != std::string::npos) v = std::atoi(s.c_str() + p + std::strlen(k)); };
+        int two = T.twoSided, rep = T.repair, coh = T.coherentAm;
+        val("two=", two); val("W=", T.W); val("ph=", T.phases); val("rep=", rep); val("coh=", coh); val("A=", T.cohA);
+        T.twoSided = two; T.repair = rep; T.coherentAm = coh;
+    }
     if (argc > 1 && !std::strcmp(argv[1], "--cu8")) return cu8(argc, argv);
+    if (argc > 1 && !std::strcmp(argv[1], "--sens")) {   // the sensitivity table alone, 30 blocks a point
+        for (double fs : { 2.4e6, 2.048e6 }) for (double cn0 = 42; cn0 <= 51; cn0 += 1.5) {
+            Res r = synth(fs, cn0, 10, uint32_t(cn0 * 10 + fs / 1e5));
+            std::printf("%.3f MS/s %4.1f dB-Hz: %2d of 30 (%d repaired) wrong %d\n", fs / 1e6, cn0, r.good, r.rep, r.wrong);
+        }
+        return 0;
+    }
     const bool quick = argc > 1 && !std::strcmp(argv[1], "--quick");
 
     std::printf("1. the BCS and parity on a real block (9V-SWK, 131.725 MHz)\n");
