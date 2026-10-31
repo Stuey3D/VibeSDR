@@ -33,11 +33,15 @@ interface StepPickerProps {
   steps?:      number[];   // band-aware list (VHF/UHF gets larger steps); defaults to HF
   onSelect:    (hz: number) => void;
   onClose:     () => void;
+  /** ★ SNAP TAPS TO THE STEP (Stuart, 2026-10-31). On by default (today's behaviour); off = a tap on the waterfall
+   *  tunes to exactly where it lands — a listener on a 5 kHz step kept landing beside the signal and had to retune. */
+  snapTap?:    boolean;
+  onSnapTap?:  (on: boolean) => void;
   // ★★ V12 VFO A/B's ON/OFF is NOT here any more — it moved to the frequency card (FreqModal), where a second frequency
   //    belongs (Stuart, build 498: "The button for some reason is in the step rate which took me a while to find it").
 }
 
-export default function StepPicker({ visible, currentStep, steps, onSelect, onClose }: StepPickerProps) {
+export default function StepPicker({ visible, currentStep, steps, onSelect, onClose, snapTap = true, onSnapTap }: StepPickerProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const stepList = steps && steps.length ? steps : STEPS_HZ;
   const { theme: t } = useTheme();
@@ -46,14 +50,16 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
   const surf = usePopupSurface();
   const metalFrame = usePopupFrame(14, true);
 
-  // Keyboard / D-pad navigation. The steps are a wrapped grid and CLOSE is the last
-  // entry, so arrows walk the ladder and then land on CLOSE — no separate rule for it.
+  // Keyboard / D-pad navigation. The steps are a wrapped grid, then the SNAP switch, then CLOSE
+  // last, so arrows walk the ladder and then land on the switch and CLOSE — no separate rule for them.
   // Shared machinery, so the game controller's D-pad drives this unchanged.
-  const closeIdx = stepList.length;
+  const snapIdx = onSnapTap ? stepList.length : -1;
+  const closeIdx = stepList.length + (onSnapTap ? 1 : 0);
   const navFocus = useListNav(
     visible,
     closeIdx + 1,
     (i) => {
+      if (i === snapIdx) { onSnapTap?.(!snapTap); return; }
       if (i >= stepList.length) { onClose(); return; }
       onSelect(stepList[i]); onClose();
     },
@@ -116,6 +122,33 @@ export default function StepPicker({ visible, currentStep, steps, onSelect, onCl
               </TouchableOpacity>
             ))}
           </View>
+          {/* ★ SNAP TAPS TO THE STEP — a switch, so it stays open: the sheet is where the step lives, and the step is
+              what a tap snaps to. On = today's behaviour. */}
+          {onSnapTap && (pt.metal ? (
+            <PopupKey label="SNAP WATERFALL TUNING TO STEP RATE" active={snapTap} pip
+              focused={navFocus === snapIdx} height={36} fontSize={12} onPress={() => onSnapTap(!snapTap)}
+              accessibilityLabel={`Snap waterfall tuning to step rate: ${snapTap ? 'on' : 'off'}`}
+              style={{ alignSelf: 'stretch', marginTop: 12 }} />
+          ) : (
+            <TouchableOpacity
+              style={[st.snapBtn, { borderColor: pt.ink.keyBorder },
+                      snapTap && { backgroundColor: pt.ink.keyBgAct, borderColor: pt.gold.selBorder },
+                      navFocus === snapIdx && { borderColor: focusC.ring, borderWidth: 2 }]}
+              onPress={() => onSnapTap(!snapTap)} activeOpacity={0.75}
+              accessibilityRole="switch" accessibilityState={{ checked: snapTap }}
+              accessibilityLabel="Snap waterfall tuning to step rate">
+              <Text style={[st.btnText, { fontFamily: t.font, fontSize: isWhite ? 14 : 13, color: snapTap ? pt.gold.sel : pt.ink.key }]}>
+                {'SNAP WATERFALL TUNING TO STEP RATE · ' + (snapTap ? 'ON' : 'OFF')}
+              </Text>
+            </TouchableOpacity>
+          ))}
+          {onSnapTap && (
+            <Text style={[st.snapHint, { fontFamily: t.font, color: pt.ink.section }, pt.metal && { ...engraveText(pt) }]}>
+              {snapTap
+                ? 'On: tapping the waterfall to tune snaps to the nearest step rate chosen above.'
+                : 'Off: the radio tunes to exactly where you tap on the waterfall.'}
+            </Text>
+          )}
           {pt.metal ? (
             <PopupKey label="CLOSE" onPress={onClose} focused={navFocus === closeIdx} height={32}
               style={{ alignSelf: 'center', width: 110, marginTop: 14 }} />
@@ -158,6 +191,11 @@ const st = StyleSheet.create({
     paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center',
   },
   btnText:       { textAlign: 'center' },
+  snapBtn: {
+    alignSelf: 'stretch', marginTop: 12, backgroundColor: 'transparent',
+    borderWidth: 1, borderRadius: 3, paddingVertical: 11, alignItems: 'center', justifyContent: 'center',
+  },
+  snapHint:      { textAlign: 'center', fontSize: 11, marginTop: 6, lineHeight: 15 },
   closeBtn: {
     alignSelf: 'center', marginTop: 14, backgroundColor: 'transparent',
     borderWidth: 1, borderRadius: 3, paddingVertical: 7, paddingHorizontal: 24,

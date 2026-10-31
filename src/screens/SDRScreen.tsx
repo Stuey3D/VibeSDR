@@ -9628,7 +9628,8 @@ export default function SDRScreen({ route, navigation }: Props) {
      *  already does this and SDR++ is the reference (DL8LDN, 2026-09-14: "Typing with finger on
      *  the waterfall never reach the right frequency"). */
     const s = stepRef.current;
-    const snapped = snapToStep(hz, s);   // exact 25/3 kHz on the 8.33 step — utils/airband.ts
+    // ★ …unless the listener switched it off at the foot of the step sheet (snapTap): then exactly where the tap lands.
+    const snapped = snapTapRef.current ? snapToStep(hz, s) : Math.round(hz);   // exact 25/3 kHz on the 8.33 step — utils/airband.ts
     const [loHz, hiHz] = tuneBoundsOf(c);
     const clamped = Math.max(loHz, Math.min(hiHz, snapped));
     userTuneSeq.current++;   // ★ a PERSON asked (entry) — see the note on userTuneSeq
@@ -12311,6 +12312,23 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_wheel', m).catch(() => {});
   }, []);
 
+  /* ★ SNAP TAPS TO THE STEP (Stuart, 2026-10-31) — the switch at the foot of the step sheet. ON by default, as it has
+   *  always been; OFF = a tap on the waterfall tunes to exactly where it lands (a listener on a 5 kHz step kept landing
+   *  beside the signal). Remembered on this device, like the wheel. Only the TAP is affected: the arrows, the drum and
+   *  the wheel still move by the step. */
+  const [snapTap, setSnapTap] = useState(true);
+  const snapTapRef = useRef(true);
+  useEffect(() => { snapTapRef.current = snapTap; }, [snapTap]);
+  useEffect(() => {
+    AsyncStorage.getItem('lsv_tapsnap').then((v: string | null) => {
+      if (v === '0') setSnapTap(false);
+    }).catch(() => {});
+  }, []);
+  const onSnapTap = useCallback((on: boolean) => {
+    setSnapTap(on);
+    AsyncStorage.setItem('lsv_tapsnap', on ? '1' : '0').catch(() => {});
+  }, []);
+
   // ★ HOVER DECIDES THE TARGET. A scroll or two-finger swipe with the pointer OVER a
   // control drives THAT control, whatever the wheel setting says — over the VFO drum
   // it tunes, over the zoom drum it zooms. This is what makes a plain wheel mouse
@@ -12756,7 +12774,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       target: tourRef('vfoDrum') },
     // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
     { id: 'step', title: 'Step rate',
-      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change.',
+      body: 'Sets how far each drum move jumps — a small step for fine tuning, a large one to skip across bands. Tap it to change. A tap on the waterfall lands on the same step; the switch at the foot of the list turns that off, so a tap tunes to exactly where your finger lands.',
       target: tourRef('stepBtn') },
     // ★ The 'back' step ("no back-swipe here") was FOLDED INTO the servers-chip step
     //   in V10 rather than kept: on its own it explained an ABSENCE, which is a whole
@@ -14577,6 +14595,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         steps={stepsForFreq(status.frequency, ituRegion)}
         onSelect={hz => { airStepSeq.current++; setStep(hz); }}
         onClose={() => setStepOpen(false)}
+        snapTap={snapTap}
+        onSnapTap={onSnapTap}
       />
       </PanelBoundary>
 

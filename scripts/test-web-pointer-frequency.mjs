@@ -76,6 +76,22 @@ async function start(p) {
   const at = await p.js(`(() => { const b = [...document.querySelectorAll("button")].find((x) => /^\\s*START( RADIO)?\\s*$/i.test(x.textContent || "") && x.getBoundingClientRect().width > 2);
     if (!b) return null; const r = b.getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
   if (at) await p.tap(at.x, at.y);
+  // ★ The audio gate (#audioGate, "START RADIO") can arrive AFTER that first look — after a reload it often does — and
+  //   then it covers the waterfall, so no mouse event reaches the canvas (the "switched back ON" flake, 2026-10-31). Wait
+  //   until it is gone, pressing its button with a real tap whenever it is up.
+  const GATE_UP = `(() => { const g = document.getElementById("audioGate"); return !!g && g.isConnected && g.style.display !== "none" && getComputedStyle(g).display !== "none"; })()`;
+  for (let i = 0; i < 40; i++) {
+    if (!(await p.js(GATE_UP))) { await sleep(250); if (!(await p.js(GATE_UP))) break; continue; }
+    // "Press anywhere to start listening" — but NOT on its other buttons (View tutorial, the Transparency switch): find a
+    //   spot on the gate whose top element is the gate itself or its START text, never a button.
+    const g = await p.js(`(() => { const gate = document.getElementById("audioGate"); const r = gate.getBoundingClientRect();
+      for (const fy of [0.08, 0.15, 0.25, 0.92, 0.5]) for (const fx of [0.1, 0.5, 0.9]) {
+        const x = Math.round(r.left + r.width * fx), y = Math.round(r.top + r.height * fy), e = document.elementFromPoint(x, y);
+        if (e && gate.contains(e) && !e.closest("button, a, input, label")) return { x, y };
+      } return null; })()`);
+    if (g) await p.tap(g.x, g.y);
+    await sleep(300);
+  }
   return p.until(`parseFloat(document.getElementById("freqInput").value) > 0 && ${CARD_HZ} > 0`);
 }
 
@@ -144,6 +160,36 @@ try {
   }
 
   // ── Leave ──
+  // ── SNAP WATERFALL TUNING TO STEP RATE (Stuart, 2026-10-31): the switch at the foot of the step menu ──
+  //   ON (default) a click lands on the step grid; OFF it tunes to exactly where the click lands. The label agrees both ways.
+  const stepHz = await p.js(`(() => { const t = document.getElementById("mStep").textContent.trim(); const n = parseFloat(t);
+    return /MHz/.test(t) ? n * 1e6 : /kHz/.test(t) ? n * 1e3 : n; })()`);
+  await p.js(`document.getElementById("mStep").click(); 1`);
+  ok(await p.until(`!!document.getElementById("tapSnapSw")`, 2000), `the step menu has the SNAP switch at its foot (step ${stepHz} Hz)`);
+  ok(await p.js(`document.getElementById("tapSnapSw").getAttribute("aria-checked") === "true"`), "…ON by default");
+  const qx = wx + 37;
+  // ★ Off the canvas and back on, then WAIT for the label (a single move after a reload does not always raise it).
+  await p.mouse("mouseMoved", 2, 2); await p.mouse("mouseMoved", qx - 3, wy); await p.mouse("mouseMoved", qx, wy);
+  await p.until(SHOWN, 2000);
+  const snapHzOn = await p.js(LABEL_HZ);
+  ok(stepHz > 1 && snapHzOn % stepHz === 0, `ON: the click target is on the step grid (${snapHzOn} Hz)`);
+  await p.js(`document.getElementById("tapSnapSw").click(); 1`);
+  ok(await p.js(`document.getElementById("tapSnapSw").getAttribute("aria-checked") === "false" && !!document.getElementById("stepMenu")`),
+     "switched OFF — and the menu stays open (flicking it is not choosing a step)");
+  ok(await p.js(`/exactly where/.test(document.getElementById("tapSnapHint").textContent)`), "…the line under it says what OFF does");
+  await p.js(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); document.getElementById("stepMenu")?.remove(); 1`);
+  await p.mouse("mouseMoved", 2, 2); await p.mouse("mouseMoved", qx + 1, wy); await p.mouse("mouseMoved", qx, wy);
+  await p.until(SHOWN, 2000); await sleep(100);
+  const freeHz = await p.js(LABEL_HZ);
+  ok(freeHz > 0 && freeHz % stepHz !== 0, `OFF: the pointer reads the exact frequency, off the step grid (${freeHz} Hz; step ${stepHz} Hz)`);
+  await p.mouse("mousePressed", qx, wy, { button: "left", clickCount: 1, buttons: 1 }); await sleep(80);
+  await p.mouse("mouseReleased", qx, wy, { button: "left", clickCount: 1 });
+  ok(await p.until(`${CARD_HZ} === ${freeHz}`, 4000), `OFF: a click tunes to exactly there (card ${await p.js(CARD_HZ)} Hz)`);
+  ok(await p.js(`JSON.parse(localStorage.getItem("vibesdr_web_prefs_v1") || "{}").tapSnap === false`), "…remembered in this browser's settings");
+  await p.js(`document.getElementById("mStep").click(); 1`);
+  await p.until(`!!document.getElementById("tapSnapSw")`, 2000);
+  await p.js(`document.getElementById("tapSnapSw").click(); document.getElementById("stepMenu")?.remove(); 1`);
+  ok(await p.js(`JSON.parse(localStorage.getItem("vibesdr_web_prefs_v1") || "{}").tapSnap === true`), "switched back ON");
   await p.mouse("mouseMoved", wx, Math.round(r.y - 30));            // off the canvas, onto the scale above it
   ok(await p.until(`!${SHOWN}`, 2000), "the label hides when the mouse leaves the waterfall");
 

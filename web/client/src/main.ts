@@ -201,6 +201,13 @@ const LS_PREFS   = 'vibesdr_web_prefs_v1';
 let step = 1000;                 // tuning step, Hz (restored from prefs on load)
 /** ★ Wheel = TUNE rather than ZOOM. Same choice the app offers; see the wheel handler. */
 let wheelTunes = false;
+/** ★ SNAP CLICKS TO THE STEP (Stuart, 2026-10-31) — the switch at the foot of the step menu. ON by default, as it has
+ *  always been; OFF = a click or tap on the waterfall tunes to exactly where it lands (a listener on a 5 kHz step kept
+ *  landing beside the signal). Local to this browser, like the wheel. Only the click is affected: arrows and wheel still
+ *  move by the step. The same rule as the app's snapTap (SDRScreen onWfTapTune). */
+let tapSnap = true;
+/** Where a click at `rawHz` lands before any range rules: on the step grid, or the exact hertz with snapping off. */
+function tapHz(rawHz: number): number { return tapSnap ? snapToStep(rawHz, step) : Math.round(rawHz); }
 /** ★ The frequency label that follows the mouse over the waterfall (initPointerFreq). Default ON;
  *  the menu's FREQUENCY AT POINTER switch turns it off. `hidePtrFreq` is set once the label exists. */
 let ptrFreqOn = true;
@@ -17347,6 +17354,7 @@ function attachHoldSweep(el: HTMLElement, tap: () => void, sweep: () => void = t
 function buildVfo() {
   const saved = prefs().step;
   if (typeof saved === 'number' && saved > 0) step = saved;
+  tapSnap = prefs()['tapSnap'] !== false;
   syncStep();
   renderFreq();
 }
@@ -17395,6 +17403,32 @@ function openStepMenu(anchor?: HTMLElement) {
     b.onclick = () => { setStep(v); close(); };
     m.appendChild(b);
   }
+  // ★ SNAP CLICKS TO THE STEP — a switch at the foot (tapSnap). It stays open: flicking it is not choosing a step.
+  const sw = document.createElement('button');
+  sw.id = 'tapSnapSw';
+  sw.setAttribute('role', 'switch');
+  const paintSw = () => {
+    sw.setAttribute('aria-checked', String(tapSnap));
+    sw.textContent = 'SNAP WATERFALL TUNING TO STEP RATE · ' + (tapSnap ? 'ON' : 'OFF');
+    sw.title = tapSnap
+      ? 'On: clicking or tapping the waterfall to tune snaps to the nearest step rate chosen above.'
+      : 'Off: the radio tunes to exactly where you click or tap on the waterfall.';
+    sw.style.color = tapSnap ? '#ffe566' : '#999';
+  };
+  sw.style.cssText = 'background:none;border:0;border-top:1px solid rgba(255,160,0,.35);margin-top:2px;'
+    + 'padding:8px 14px 6px;text-align:right;cursor:pointer;border-radius:0 0 5px 5px;font:inherit;font-size:11px;white-space:nowrap';
+  paintSw();
+  sw.onmouseenter = () => { sw.style.background = 'rgba(255,160,0,.18)'; };
+  sw.onmouseleave = () => { sw.style.background = 'none'; };
+  // A phone has no hover, so the explanation is a line under the switch as well as its tooltip.
+  const hint = document.createElement('div');
+  hint.id = 'tapSnapHint';
+  hint.style.cssText = 'color:#999;font-size:10px;padding:0 14px 6px;text-align:right;max-width:24em;margin-left:auto';
+  const paintHint = () => { hint.textContent = sw.title; };
+  paintHint();
+  sw.onclick = () => { tapSnap = !tapSnap; savePref('tapSnap', tapSnap); paintSw(); paintHint(); };
+  m.appendChild(sw);
+  m.appendChild(hint);
   document.body.appendChild(m);
 
   // Anchor ABOVE the button when there is no room below — the VFO sits at the
@@ -19172,7 +19206,7 @@ function initWaterfallInput() {
         if (Math.abs(x - ox) <= 10) { spec.swapVfo(); return; }
       }
       // ★★ by the ROW under the tap (wf.xyToHz — Stuart, 2026-10-30, #57): an old trace tunes to ITS frequency
-      const hz = snapToStep(wf.xyToHz(e.clientX - rect.left, e.clientY - rect.top), step);
+      const hz = tapHz(wf.xyToHz(e.clientX - rect.left, e.clientY - rect.top));   // ★ the step grid, unless switched off (tapSnap)
       airDesig = null;
       spec.tune(clampTune(hz));
       syncStep();
@@ -19207,7 +19241,7 @@ function initWaterfallInput() {
  *  bounce and shows the toast). The same snap as the click handler: snapToStep, then clampTune's own
  *  rules. `out` = a frequency the radio or its owner does not allow — a click there parks on the edge. */
 function clickTarget(rawHz: number): { hz: number; out: boolean } {
-  const want = Math.round(snapToStep(rawHz, step));
+  const want = Math.round(tapHz(rawHz));
   const win = lockedWindow();
   if (win) return { hz: Math.max(win[0], Math.min(win[1], want)), out: false };
   const ranges = allowedRanges() ?? tuneRanges();
