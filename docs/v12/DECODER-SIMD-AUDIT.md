@@ -382,6 +382,9 @@ set the server picks on armhf with no benchmark yet (the default tier). 2.4 MS/s
 about 17 % lighter. The feeding thread (u8 to float, the server's `vibe-rtl` / `vibe-dsp` work) is listed apart. % of
 one core.
 
+"Final" in these tables is the split with 32-bit ARM's old 640 µs detector hop. The hop is now 320 µs on every machine;
+its figures are [the next subsection](#the-320-µs-detector-hop-on-32-bit-arm-restored-follow-up).
+
 **433, Stuart's Pi 500 capture** (30 s; a repeat run agreed within 0.8 points on every thread):
 
 | Thread | Old | Split, no hold, LoRa on one thread | **Final** |
@@ -439,6 +442,54 @@ one core.
   They run at a lower IPC (0.46 against 0.52 when every stage runs flat out at once), because the stages share the
   Cortex-A7's 512 KB L2.
 
+### The 320 µs detector hop on 32-bit ARM, restored (follow-up)
+
+32-bit ARM's detector used to look every 640 µs instead of 320 µs, to save CPU on the Pi 2. That cost a decode: on
+Stuart's car-key capture the Pi 2 missed the Oregon Scientific THN132N (11.3 °C, ch 1, at 25.6 s) that every other
+machine finds. Stuart's standing rule is never to trade decodes for speed, and the detector now has a thread of its
+own, so the hop is 320 µs everywhere (`FeConst::kHopUs`).
+
+- **The decode is back.** `ism-offline --bursts` on the Pi 2 now finds the Oregon on the car-key capture. Its output on
+  all three captures is now identical, burst for burst, to the Mac's and i686's (which always used 320 µs).
+- **Cost on the Pi 2, real time, same gating** (0 listeners, 900 MHz, no throttle bit, at most 41 °C). % of one core:
+
+| Case | `vibe-ism` | `vibe-ism2` | `vibe-ism3` | `vibe-lora` / `lora2` / `lora3` | total | drops |
+|---|---|---|---|---|---|---|
+| 433 (repeat within 0.6) | **18.9** (was 11.3) | 20.7 | 11.5 | 46.9 / 16.6 / 4.6 | 141.9 (was 127.5) | none |
+| hog-heavy | 19.3 | 24.2 | 25.4 | 48.1 / 16.8 / 4.6 | 160.8 | none |
+| car key (60 s) | 18.7 | 11.6 | 12.0 | 48.0 / 16.6 / 4.7 | 136.3; **1 decode** (was 0) | none |
+| 868 | 18.4 | 6.7 | 0.3 | **58.8** / 36.9 / 37.4 | 185.8 | none |
+| 433, every LoRa channel | 18.5 | 22.3 | 12.2 | 65.3 / 57.2 / 42.5 | 242.4 | none |
+| 868, every LoRa channel | 17.8 | 7.8 | 0.4 | 67.5 / **81.6** / **84.2** | 288.1 | none |
+
+- **Unit tests on the Pi 2 at 320 µs (32-bit NEON):**
+  - test-ism: 160/160, once one of the hog test's checks was corrected. That check looked for the strong sensor's burst
+    within 40 kHz of it. On 32-bit NEON its channel opened 107 kHz off, still its own channel, 160 kHz from the hog's,
+    and the reading was decoded. The window is now `kMatchHz`, the front end's own matching distance.
+  - test-wmbus: **"S1: frequency"**, which failed on armhf at 640 µs, **now passes**. **One frame of "C1 A/B over ±60 ppm ×
+    ±2 % × both polarities" is now missed** (C1-B, −60 ppm, rate ×1.02, seed 106); it is 16/16 on the Mac, on i686, and
+    at 640 µs. The new `test-wmbus --diag-c1 B -60 1.02 0 106` shows why:
+
+    | build | channel opened at | frame at | |
+    |---|---|---|---|
+    | Mac, 320 µs | +298.1 kHz | +297.9 kHz | decoded |
+    | Pi 2, 640 µs | +300.3 kHz | +297.9 kHz | decoded |
+    | Pi 2, 320 µs | +191.9 kHz | +297.9 kHz | missed |
+
+    On the Pi at 320 µs the frame's first detection fell on its rising edge, and the group centroid was pulled 106 kHz
+    low. **A channel is placed once, when it opens**, so the far tone sat on the 500 kS/s channel's filter edge. Any hop
+    can meet this on some frame; at 640 µs the same mechanism is what broke "S1: frequency" on armhf.
+  - **Proposed, not done:** re-centre a channel while it is still pending. A pending channel mixes nothing, so the
+    detector could move its centre to the average of its sightings until promotion, at no cost. It changes every
+    burst's channel placement, so it needs its own full validation (every capture, test-ism, test-wmbus, the threaded
+    identity).
+- **The detector costs about 7.5 points more**, as expected. The mixer and slicer gain a little: more bursts (20 against
+  11 on the 433 capture) are found and sliced.
+- **On every default set no thread goes over 59 %**; the heaviest is still `vibe-lora`.
+- **Over ~70 %:** only the owner-forced "lora+all" on 868 (`vibe-lora2` 81.6 %, `vibe-lora3` 84.2 %), which the hop
+  does not touch (those are LoRa's own threads). It keeps up, with nothing dropped, and stays owner-only (decided
+  2026-10-31).
+
 ### Decodes: identical
 
 - **`ism-offline --bursts` over the three Pi 500 captures, inline:**
@@ -465,7 +516,7 @@ one core.
     capture's bursts identical to the Mac NEON build.
 - **End to end against the new server binary (Mac):** `test-server-ism` 34/34, `test-web-ism` 25/25,
   `test-server-ism-gallery` 33/33, `test-server-lora` 18/18, `test-web-lora` 21/21, all silent (`--mute-audio`).
-  `test-web-ism-gallery` fails one check: it expects the gallery chips "ALL NAVTEX RTTY WEFAX SSTV FT8 CW ISM", and the web
+  `test-web-ism-gallery` failed one check (since fixed, 19/19): it expected the gallery chips "ALL NAVTEX RTTY WEFAX SSTV FT8 CW ISM", and the web
   client now shows more (DIGITAL SPOTS, PSK, NDB, AIS, APRS, DSC, SITOR-A). That expectation is stale; this work touches
   no web code.
 - **Builds:** the server on the Mac (`make -j2`) and cross-built for armhf (`-DVIBESERVER_ALLOW_NO_TUNNEL=ON`: a compile
@@ -495,13 +546,15 @@ one core.
 
 ### Questions for Stuart
 
-1. **The ARM detector hop.** 32-bit ARM looks every 640 µs instead of 320 µs (an earlier CPU saving). On Stuart's
-   car-key capture that misses the one Oregon decode the 320 µs hop finds. The detector is now its own thread at ~11 %
-   of a Pi 2 core, so 320 µs would cost about another 8–10 points there. Restore it on ARM? Not changed here: decodes
-   had to stay as they were.
-2. **"lora+all" on 868 on a Pi 2** keeps up now, but its detector and channel threads are at 81–84 %. Keep it as
-   owner-only, or show a warning when it is chosen on a Pi 2?
-3. **`test-web-ism-gallery`'s chip list** is stale (see above). Update the expected chips?
+All three answered on 2026-10-31:
+1. **The ARM detector hop:** restored to 320 µs (above). The Oregon decode is back.
+2. **"lora+all" on 868 on a Pi 2** (two LoRa threads at 81–84 %, keeping up): stays owner-only, as it is.
+3. **`test-web-ism-gallery`'s chip list:** updated to the chips the client shows. Every one was added deliberately:
+   - FT8 renamed DIGITAL SPOTS (`3c10a4056`);
+   - PSK, NDB, AIS, APRS, DSC (2026-10-26);
+   - SITOR-A (`e50c1cc02`).
+
+   It now passes 19/19.
 
 ### Not tested
 
@@ -514,6 +567,17 @@ one core.
 - **x86 SSE2** was checked for identical output under qemu-i386, not timed.
 - **868 meters (wM-Bus) through the threads:** the 868 capture holds no meter. test-wmbus covers the meter decoder
   (unchanged, identical), and test-server-ism's meter clip passed through the threaded server.
+
+## Merge notes
+
+- **The ISM / LoRa thread names: keep this branch's.** `v12-experimental` has `690f084b9` ("ISM and LoRa workers name
+  their own threads (vibe-ism, vibe-lora)"). It adds `vibeThreadName("vibe-ism")` / `("vibe-lora")` at the top of
+  `Service::loop()` and `Engine::loop()`, a name only, at the creator's priority. This branch supersedes it:
+  - `Service::loop()` no longer exists (it is `detLoop` / `mixLoop` / `decLoop`);
+  - the threads take the decoder rungs (`vibeDecoderThread`, `vibeDecoderLagThread`), not just a name;
+  - LoRa has three threads (`vibe-lora`, `vibe-lora2`, `vibe-lora3`).
+
+  On conflict, take this branch's `vibe_ism_service.h` and `vibe_lora_service.h` and drop `690f084b9`'s two lines.
 
 ## Not tested
 
