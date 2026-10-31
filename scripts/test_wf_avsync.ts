@@ -249,6 +249,17 @@ const repeatsIn = (sh: Shown, from: number, to: number) => {
   let n = 0; for (let k = 1; k < sh.rowIds.length; k++) { const r = sh.rowIds[k]; if (r.t >= from && r.t < to && r.id === sh.rowIds[k - 1].id) n++; } return n;
 };
 /** Frames arriving in [from, to) never shown (discarded). */
+/** ★ THE PAUSE AFTER A TUNE OR ZOOM (Stuart, 2026-10-31): the longest a NEW frame takes to reach the screen in
+ *  [from, to) — the newest frame id on screen standing still (the clock repeating its row) — ms. */
+function freezeIn(sh: Shown, from: number, to: number): number {
+  let best = 0, maxId = -1, since = from;
+  for (const r of sh.rowIds) {
+    if (r.t < from) { maxId = Math.max(maxId, r.id); continue; }
+    if (r.t >= to) break;
+    if (r.id > maxId) { best = Math.max(best, r.t - since); maxId = r.id; since = r.t; }
+  }
+  return best;
+}
 const discardsIn = (sh: Shown, feed: Feed, from: number, to: number) => feed.arr.filter((a, id) => a >= from && a < to && !sh.first.has(id)).length;
 
 type Acc = { st0: number; bu0: number; st1: number; bu1: number; lat0: number[]; lat1: number[]; off0: number[]; off1: number[];
@@ -275,6 +286,8 @@ for (const feed of FEEDS) for (const d of DISPS) for (const scroll of ['default'
   const dis0 = discardsIn(b, feed, SHRINK - 500, SHRINK + 1500), dis1 = discardsIn(a, feed, SHRINK - 500, SHRINK + 1500);
   const srep0 = repeatsIn(b, SHRINK, SHRINK + 2000), srep1 = repeatsIn(a, SHRINK, SHRINK + 2000);
   const sbS = stallsBursts(a, d, R, feed.fps, SHRINK, SHRINK + 2500);
+  const fz0 = freezeIn(b, PASS_END - 300, PASS_END + 2500), fz1 = freezeIn(a, PASS_END - 300, PASS_END + 2500);
+  if (process.env.WF_AV_FREEZE) console.log(`FREEZE ${tag.padEnd(46)} after the tune lands ${fz0.toFixed(0)} → ${fz1.toFixed(0)} ms (rest ${freezeIn(b, WIN.rest[0], WIN.rest[1]).toFixed(0)} → ${freezeIn(a, WIN.rest[0], WIN.rest[1]).toFixed(0)})`);
   let steep = 0;
   for (let k = 1; k < a.holds.length; k++) {
     const x = a.holds[k - 1], y = a.holds[k];
