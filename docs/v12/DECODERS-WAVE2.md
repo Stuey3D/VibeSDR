@@ -284,7 +284,7 @@ What changed (`fst4_decoder.cpp`, `fst4_code.{h,cpp}`, `ldpc_small.*`):
 | FST4-60, our synth, 50 % | −26.1 | ≈ −26.7 dB |
 | FST4-15, 50 % | −18.7 | ≈ −19.5 |
 | FST4W-120, 50 % | −29.6 | ≈ −30.1 |
-| fst4sim files (20 per point, same files for both) | −26: ours 10, jt9 20 · −27: 4 / 19 | −25: 15→(not rerun) · **−26: 15 / 20 · −27: 9 / 19 · −28: 1–2 / 9** |
+| fst4sim files (20 per point, same files for both) | −25: ours 15, jt9 20 · −26: 10 / 20 · −27: 4 / 19 | **−25: 19 / 20 (jt9 20) · −26: 15 / 20 · −27: 9 / 19 · −28: 1–2 / 9** |
 | gap to jt9 at 50 % | ≈ 2–2.5 dB | **≈ 1 dB** |
 | False decodes | — | FST4-15 × 6000, FST4-60 × 400, FST4W-120 × 200 noise windows: **0** |
 | SIMD vs scalar | not checked | `SCALAR=1` build: 40 fst4sim files and a FST4W sweep **bit-identical** |
