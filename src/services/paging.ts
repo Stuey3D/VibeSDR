@@ -42,4 +42,5 @@ export function pagingStatusText(s: PagingStatus | null): string {
 }
 export const PAGING_HINT =
   'Tune a paging channel in NFM with the filter at 12.5 kHz or wider. AUTO finds the rate (POCSAG 512, 1200 or 2400) ' +
-  'and names it; pick a rate only if AUTO cannot lock. Pages are shown here only — never saved or sent anywhere.';
+  'and names it; pick a rate only if AUTO cannot lock. The speaker is muted while PAGE runs and comes back as it was ' +
+  'when you close it. Pages are shown here only — never saved or sent anywhere.';

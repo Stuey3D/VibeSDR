@@ -454,8 +454,8 @@ int main(int argc, char** argv) {
         }
         ok(inside, "every published dial (and its passband above it) lies inside its band " + bad);
         const auto& bs = digi::bands();
-        ok(bs.size() == 16 && std::string(bs.front().id) == "2200m" && std::string(bs[11].id) == "10m" && std::string(bs[12].id) == "6m"
-           && std::string(bs.back().id) == "70cm", "step order 2200 m … 10 m, then 6 m, 4 m, 2 m, 70 cm");
+        ok(bs.size() == 17 && std::string(bs.front().id) == "2200m" && std::string(bs[11].id) == "10m" && std::string(bs[12].id) == "6m"
+           && std::string(bs[15].id) == "70cm" && std::string(bs.back().id) == "23cm", "step order 2200 m … 10 m, then 6 m, 4 m, 2 m, 70 cm, 23 cm");
         ok(std::string(digi::bandAt(14074000)->id) == "20m" && digi::bandAt(14500000) == nullptr, "bandAt names the band a frequency is in");
         // ★ The spans with today's registry: FT8 + FT4 + FT2 + JS8 + WSPR (WSPR at 14.0956 is the top of 20 m's cluster).
         const auto& ms = digi::modes();
@@ -503,14 +503,21 @@ int main(int argc, char** argv) {
         auto everywhere = [](double, double) { return true; };
         const auto spans = digi::reachableSpans(ms, everywhere);
         std::string ids; for (auto& s : spans) ids += std::string(s.band->id) + " ";
-        ok(ids == "2200m 630m 160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m 4m 2m 70cm ", "FT8/FT4/WSPR bands in step order: " + ids);
+        ok(ids == "2200m 630m 160m 80m 60m 40m 30m 20m 17m 15m 12m 10m 6m 4m 2m 70cm 23cm ", "FT8/FT4/WSPR (+ Q65's 23 cm) bands in step order: " + ids);
+        {   // ★ V12 (2026-10-31, Stuart): 23 cm carries Q65 only — its 17 tiled dials on two slices, every one decoded
+            const digi::Span s23 = digi::spanOf(*digi::bandById("23cm"), ms);
+            const auto all23 = s23.allModes();
+            ok(s23.ok && all23.size() == 1 && all23[0] == "Q65" && s23.widthHz() <= digi::kMaxSpanHz && s23.extras.size() >= 1,
+               "23 cm: Q65 only, the main slice ≤ 48 kHz and the rest on an extra slice (" + std::to_string((int)s23.widthHz()) + " Hz, " + std::to_string(s23.extras.size()) + " extra)");
+            ok(digi::dialsOf(*digi::modeByName("Q65"), "23cm").size() == 17, "23 cm: 17 Q65 dials (1296.050–1296.122, every 4.5 kHz)");
+        }
         auto at = [&](int i) { return i < 0 ? std::string("-") : std::string(spans[(size_t)i].band->id); };
         ok(at(digi::stepSpan(spans, 14074000, +1)) == "17m" && at(digi::stepSpan(spans, 14074000, -1)) == "30m", "20 m: up → 17 m, down → 30 m");
         ok(at(digi::stepSpan(spans, 28074000, +1)) == "6m", "10 m → 6 m (HF, then VHF)");
-        ok(at(digi::stepSpan(spans, 432174000, +1)) == "70cm" && at(digi::stepSpan(spans, 136000, -1)) == "2200m", "clamped at both ends, never wrapped");
+        ok(at(digi::stepSpan(spans, 432174000, +1)) == "23cm" && at(digi::stepSpan(spans, 1296100000, +1)) == "23cm" && at(digi::stepSpan(spans, 136000, -1)) == "2200m", "70 cm up → 23 cm; clamped at both ends, never wrapped");
         ok(at(digi::stepSpan(spans, 1840000, -1)) == "630m", "160 m down → 630 m (WSPR's LF bands)");
         ok(at(digi::stepSpan(spans, 12000000, +1)) == "20m" && at(digi::stepSpan(spans, 12000000, -1)) == "30m", "between bands: the nearest one that way");
-        ok(at(digi::stepSpan(spans, 0, +1)) == "2200m" && at(digi::stepSpan(spans, 9e9, -1)) == "70cm", "from nowhere: the first / the last");
+        ok(at(digi::stepSpan(spans, 0, +1)) == "2200m" && at(digi::stepSpan(spans, 9e9, -1)) == "23cm", "from nowhere: the first / the last");
         auto hfPlus = [](double lo, double hi) { return lo >= 0 && hi <= 260e6; };
         const auto hp = digi::reachableSpans(ms, hfPlus);
         ok(!hp.empty() && std::string(hp.back().band->id) == "2m", "an HF+ (≤ 260 MHz) reaches up to 2 m, never 70 cm");

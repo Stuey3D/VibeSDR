@@ -19,7 +19,7 @@ export const HELL_STRIP_ROWS = 28;
  *  to fit until the letters were a thread (the picture view fits the whole picture by default). */
 export const HELL_PAGE_STRIPS = 8;
 
-export const HELL_HINT = 'FELD HELL: drawn, not read — the text is painted as it is heard, a strip at a time, and you read it. Every column is printed twice, one copy above the other, so a slant or a fade that cuts one copy leaves the other whole. Tune USB so the signal is in your passband (the tone is found by itself); each new page puts the last one under PREV.';
+export const HELL_HINT = 'FELD HELL (Hellschreiber): drawn, not read — the text is painted as it is heard, a strip at a time, and you read it. Every column is printed twice, one copy above the other, so a slant or a fade that cuts one copy leaves the other whole. Tune USB so the signal is in your passband (the tone is found by itself); each new page puts the last one under PREV.';
 
 export interface HellStatus { hz: number; signal: boolean }
 export function parseHellStatus(d: any): HellStatus | null {

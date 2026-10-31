@@ -152,6 +152,7 @@ import { parseSitorStatus, sitorStatusText, SITORA_HINT, type SitorStatus } from
 import { SAME_HINT, SELCAL_HINT, sameStateText, selcalStateText } from '../../../src/services/alertDecoders';   // ★ V12 EAS / SAME, SELCAL
 import { TEXT_FAMILIES, TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, isTextFamily, parseTextModeStatus, parseTextModes, textModeStatusText,
          type TextFamily, type TextMode } from '../../../src/services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { sessionChoice, setSessionChoice } from '../../../src/services/decoderSession';   // ★★★ AUTO first; manual for the session only
 import { HELL_HINT, HELL_STRIP_ROWS, HellPager, hellStatusText, parseHellStatus } from '../../../src/services/feldHell';   // ★ V12 FELD HELL
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
@@ -11360,7 +11361,7 @@ function bandSpotsStep(dir: number) {
 // Spot filters — the app's sf-mode / sf-band / sf-age cyclers.
 /* ★ V12: the mode filter cycles the modes THIS server decodes (vibeserver.json spotModes — FT8 and FT4 on an older one). */
 let SF_MODES = ['ALL', 'FT8', 'FT4'];
-const SF_BANDS = ['ALL', '2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm'];
+const SF_BANDS = ['ALL', '2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '23cm'];
 const SF_AGES: Array<{ label: string; minutes: number }> = [
   { label: 'AGE', minutes: 0 }, { label: '15m', minutes: 15 },
   { label: '30m', minutes: 30 }, { label: '1h', minutes: 60 },
@@ -11678,7 +11679,8 @@ let selcalCap = false;
  *  family's choices — the server's own list, AUTO first. Offered only where vibeserver.json says "<family>": true. */
 let tmCaps: Partial<Record<TextFamily, TextMode[]>> = {};
 const tmMode: Record<TextFamily, string> = { mfsk: 'auto', olivia: 'auto', thor: 'auto' };
-for (const fam of TEXT_FAMILIES) { try { const v = localStorage.getItem('vs_textmode_' + fam); if (v && /^[a-z0-9-]{1,24}$/.test(v)) tmMode[fam] = v; } catch { /* private mode */ } }
+// ★★★ AUTO unless picked by hand THIS session (src/services/decoderSession.ts) — never stored; a reload starts in AUTO
+for (const fam of TEXT_FAMILIES) tmMode[fam] = sessionChoice('textmode.' + fam, 'auto');
 function renderTmModes() {
   const host = document.getElementById('tmModes'); const hint = document.getElementById('tmHint');
   if (!host || !hint) return;
@@ -11691,7 +11693,7 @@ function renderTmModes() {
     b.textContent = m.label;
     b.onclick = () => {
       tmMode[fam] = m.id;
-      try { localStorage.setItem('vs_textmode_' + fam, m.id); } catch { /* private mode */ }
+      setSessionChoice('textmode.' + fam, m.id, 'auto');
       renderTmModes(); reattachIf(fam);
       decStateText = textModeStatusText(fam, tmMode[fam], null); $('decStatus').textContent = decStateText;
     };

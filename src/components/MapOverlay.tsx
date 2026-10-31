@@ -494,7 +494,7 @@ ${isSpots ? `
 <div id="filters">
   <span class="flabel">FILTER</span>
   ${kind === 'digi' ? `<select id="fMode"><option value="ALL">All</option>${legendModes.map((m) => `<option>${esc(m)}</option>`).join('')}</select>` : ''}
-  <select id="fBand"><option value="ALL">All</option>${['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm'].map((b) => `<option>${b}</option>`).join('')}</select>
+  <select id="fBand"><option value="ALL">All</option>${['2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '23cm'].map((b) => `<option>${b}</option>`).join('')}</select>
   <select id="fAge">${kind === 'digi'
     ? `<option value="ALL">All</option><option value="2m" selected>2 min</option><option value="5m">5 min</option><option value="15m">15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option>`
     : `<option value="ALL">All</option><option value="15m" selected>15 min</option><option value="30m">30 min</option><option value="1h">1 hour</option><option value="3h">3 hours</option>`}</select>
@@ -1561,8 +1561,8 @@ if(KIND==='digi'||KIND==='cw'){
   var BAND_RANGES={'2200m':[135700,137800],'630m':[472000,479000],'160m':[1800000,2000000],'80m':[3500000,4000000],
     '60m':[5250000,5450000],'40m':[7000000,7300000],'30m':[10100000,10150000],'20m':[14000000,14350000],
     '17m':[18068000,18168000],'15m':[21000000,21450000],'12m':[24890000,24990000],'11m':[26965000,27405000],'10m':[28000000,29700000],
-    '6m':[50000000,54000000],'4m':[70000000,70500000],'2m':[144000000,148000000],'70cm':[420000000,450000000]};
-  var BAND_ORDER=['2200m','630m','160m','80m','60m','40m','30m','20m','17m','15m','12m','11m','10m','6m','4m','2m','70cm'];
+    '6m':[50000000,54000000],'4m':[70000000,70500000],'2m':[144000000,148000000],'70cm':[420000000,450000000],'23cm':[1240000000,1300000000]};
+  var BAND_ORDER=['2200m','630m','160m','80m','60m','40m','30m','20m','17m','15m','12m','11m','10m','6m','4m','2m','70cm','23cm'];
 
   function spotHz(f){f=numOr(f,0);if(!f)return 0;return f<1000?Math.round(f*1e6):Math.round(f);}
   function bandFromHz(hz){for(var b in BAND_RANGES){var r=BAND_RANGES[b];if(hz>=r[0]&&hz<=r[1])return b;}return null;}

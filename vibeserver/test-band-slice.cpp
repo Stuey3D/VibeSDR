@@ -478,7 +478,8 @@ int main(int argc, char** argv) {
                             const Resp r = toneThrough(fs, fft, sls[(size_t)best].bins, sls[(size_t)best].cb, rf - hw);
                             if (verbose) std::printf("    %4.0fk %-6s %-5s %.1f Hz (slice %d): %+6.2f dB (mirror %+6.1f)\n", fs / 1e3, b.id, m.name.c_str(), rf, best, r.db, r.mirrorDb);
                             if (r.db < worst) { worst = r.db; char t[160]; std::snprintf(t, sizeof t, "%s %s %.0f Hz at %.0f S/s", b.id, m.name.c_str(), rf, fs); worstAt = t; }
-                            worstMirror = std::max(worstMirror, r.mirrorDb);
+                            // ★ a tone AT the slice's centre is its own mirror (23 cm's Q65 tiling puts one edge there): not a test of it
+                            if (std::fabs(rf - sls[(size_t)best].centre) > 2 * binHz) worstMirror = std::max(worstMirror, r.mirrorDb);
                         }
                     }
                 }

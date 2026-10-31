@@ -201,7 +201,7 @@ static void testNoise() {
 
 static void testLive() {
     std::printf("\n── the live decoder ──\n");
-    q65::LiveDecoder live({30, 60});
+    q65::LiveDecoder live({15, 30, 60});   // ★ the engine's periods (q65.h; 15 s added 2026-10-31)
     std::vector<q65::Result> got;
     live.onResult = [&](const q65::Result& r) { got.push_back(r); };
     const double t0 = 1800000000.0 - 20;     // 20 s before a minute
@@ -210,8 +210,8 @@ static void testLive() {
     std::mt19937 rng(3); std::normal_distribution<float> g(0, 1);
     for (float& v : a) v = g(rng);
     // a 60A transmission in the minute starting t0+20 (window starts 1 s before), a 30A one in the half minute at t0+80
-    uint8_t t60[q65::kSymbols], t30[q65::kSymbols];
-    q65::encodeText("CQ K1ABC FN42", t60); q65::encodeText("G4ABC DL1AAA JO62", t30);
+    uint8_t t60[q65::kSymbols], t30[q65::kSymbols], t15[q65::kSymbols];
+    q65::encodeText("CQ K1ABC FN42", t60); q65::encodeText("G4ABC DL1AAA JO62", t30); q65::encodeText("CQ F5ABC JN18", t15);
     auto put = [&](const uint8_t* tones, int P, double periodStart, double f0) {
         std::vector<float> w((size_t)q65::windowSamples(*q65::periodFor(P)), 0.f);
         q65synth::Sig s; s.tones = tones; s.submode = 0; s.f0 = f0; s.dt = 0.2; s.snrDb = -18;
@@ -219,18 +219,19 @@ static void testLive() {
         const long off = std::lround((periodStart - 1.0 - t0) * 12000);
         for (size_t i = 0; i < w.size(); ++i) if (off + (long)i >= 0 && off + (long)i < total) a[(size_t)(off + (long)i)] += w[i];
     };
-    put(t60, 60, t0 + 20, 1200); put(t30, 30, t0 + 80, 2100);
+    put(t60, 60, t0 + 20, 1200); put(t30, 30, t0 + 80, 2100); put(t15, 15, t0 + 125, 800);
     // ★ faster than real time, so wait for each decode (a real feed gives the worker the period itself)
     for (int i = 0; i < total; i += 960) { live.process(&a[(size_t)i], 960, t0 + (i + 960) / 12000.0); live.drain(); }
     live.drain();
-    int n60 = 0, n30 = 0;
+    int n60 = 0, n30 = 0, n15 = 0;
     for (auto& r : got) {
         std::printf("     %s %s slot %+.0f s\n", r.mode().c_str(), r.text.c_str(), r.slotUtc - t0);
         if (r.text == "CQ K1ABC FN42" && r.mode() == "Q65-60A" && std::fabs(r.slotUtc - (t0 + 20)) < 0.01) ++n60;
         if (r.text == "G4ABC DL1AAA JO62" && r.mode() == "Q65-30A" && std::fabs(r.slotUtc - (t0 + 80)) < 0.01) ++n30;
+        if (r.text == "CQ F5ABC JN18" && r.mode() == "Q65-15A" && std::fabs(r.slotUtc - (t0 + 125)) < 0.01) ++n15;
     }
-    ok(n60 == 1 && n30 == 1, "one spot each, the right period and mode (" + std::to_string(n60) + ", " + std::to_string(n30) + ")");
-    ok(got.size() == 2, "nothing else (" + std::to_string(got.size()) + ")");
+    ok(n60 == 1 && n30 == 1 && n15 == 1, "one spot each, the right period and mode (" + std::to_string(n60) + ", " + std::to_string(n30) + ", " + std::to_string(n15) + ")");
+    ok(got.size() == 3, "nothing else (" + std::to_string(got.size()) + ")");
 }
 
 int main() {

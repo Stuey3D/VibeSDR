@@ -841,6 +841,68 @@ built locally for the tests and `vibe_web_page.h` was put back, not committed.
 Untested: the APP side runs nowhere here (no simulator or device build this run) — its files were syntax-checked with
 esbuild, the small shared files type-checked alone; the full app/web `tsc` does not fit the 512 MB cap. Real air.
 
+## 16. Stuart's answers, 2026-10-31 (seventh run) — PAGE silent, Q65 coverage, Hellschreiber, AUTO first
+
+### 16a. PAGE is silent while it runs
+`SDRScreen.tsx`: the speaker mute is DERIVED from one fact — the open decoder is `paging` — in an effect shaped like
+Band's (`prePagingMuteRef`), never set by the PAGE key. Opening PAGE saves the listener's own mute state and mutes;
+closing it, switching to another decoder, a disconnect that clears the decoder, or leaving the screen (an unmount
+cleanup) puts that state back. A reconnect while PAGE stays open restarts the audio unmuted (each native start clears
+its mute), so the effect also re-mutes whenever `isMuted` goes false while PAGE is open. A crash needs nothing: the mute
+is not stored and the next start is unmuted. The local "AUDIO MUTED — TAP TO UNMUTE" banner would have been a key whose
+every press is undone, so while PAGE runs it is replaced by a plain notice "AUDIO MUTED WHILE PAGE RUNS" (not a key).
+Copy: `PAGING_HINT`, the sdrTour mode card's Android clause, the About note. **Untested on a phone** (no device here).
+
+### 16b. Q65 — 23 cm, 6 m, Q65-15, the labels
+- PSKReporter's Q65 reports for the 24 h to 11:00 UTC (381, every receiver; RF = dial + audio) were fetched again:
+  144.117–144.139 (most at 144.135–.137, which NO dial held), 432.066–432.101, **1296.053–1296.126**, 50.276–50.277.
+  The 28.07–28.11 "Q65" reports are all one EME station's receive (a 2 m transverter's IF); 222.095 is 1.25 m (Region 2,
+  not in the Band list).
+- So the EME segments are TILED: a window every 4–4.5 kHz (each 200–4800 Hz above its dial), joined without a gap —
+  2 m 144.115–144.1375 (six) + 144.180; 70 cm 432.074–432.096 (six — eight from 432.065 were tried first and failed
+  test-band-slice: the wider cluster's slice no longer fits a 300 kS/s capture beside FT8, so 432.065 was dropped and the
+  tiling starts where the reports thicken: 39 of the day's 43); **23 cm 1296.050–1296.122 (seventeen) — a "23 cm"
+  band (1240–1300 MHz) joins the Band list after 70 cm, carrying only Q65**; 6 m 50.310 (Stuart's) and 50.275 (where
+  the 6 m reports were). 23 cm's 77 kHz is a 48 kHz main slice + an extra slice (`spanOf`, unchanged code;
+  test-digi-spots checks it).
+- **Q65-15 enabled**: the engine runs 15, 30 and 60 s, submodes A–D (`q65.h`). 120/300 s and submode E stay built but off
+  (10 GHz and up). test-q65's live test now carries a 15A transmission too (three spots, nothing else).
+- Known-signal labels: Q65 had none. Now one "Q65" label per RUN of joined windows (`q65Runs` in `knownSignals.ts` —
+  17 labels on 23 cm would crowd out everything), the bar over the run, a tap tunes the run's first dial and opens DIGI
+  SPOTS; `test_known_signals` checks the dials against `digi_bands.h` and the runs. (Two stale JJY expectations in that
+  test, failing before this run, were brought up to date.) test-band-slice's mirror check skips a tone AT a slice's centre
+  (its own mirror — one of 23 cm's tiled edges lands there; it read 0 dB). The web spot filter and the app map's band list gained 23cm.
+- ★ COST is the trade-off: EVERY dial is its own Q65 engine (≈ 5–7 % of a Pi 2 core each, measured section 1). Sitting
+  on 23 cm in Band runs 17; on 70 cm, 8 beside FT8. The governor sheds Q65 first (priority 100), so a weak host keeps
+  its established modes and decodes the Q65 dials it can afford.
+
+### 16c. Q65-15's extra CPU — it doubles Q65
+| | 15 s | 30 s | 60 s |
+|---|---|---|---|
+| Mac (M-series, noise, worst case), per window | 23.9 ms | 31.1 ms | 39.0 ms |
+| a minute | 96 ms (4 windows) | 62 ms | 39 ms |
+| Pi 2 (qemu-arm count, NEON, marginal per window) | ≈ 0.55 G instr | ≈ 0.68 G (section 1) | ≈ 0.84–0.88 G |
+
+So Q65-15 adds ≈ 96 ms a minute on the Mac to the 30 + 60 s periods' ≈ 101 ms (**+95 %**, not the +40 % first
+guessed), and ≈ 2.2 G instructions a minute on the Pi 2 model → ≈ 4.4 G a minute a dial in all, ≈ 6–8 s of a 900 MHz
+core a minute (≈ 10–14 %, ESTIMATE at 0.6–0.8 IPC). `costVsFt8` 2.6 → 4.7 (light 1.2 → 2.2) so the governor plans with
+the real figure. With 17 dials on 23 cm a Pi 2 cannot run them all: the governor sheds Q65 first. ★ Question for Stuart
+below: keep Q65-15 on every dial, or only where it is used (6 m and 2 m scatter)?
+
+### 16d. Feld Hell = Hellschreiber
+The HELL key's hint (`HELL_HINT`), the web key's title, the About note and the tour card now say "Feld Hell
+(Hellschreiber)".
+
+### 16e. AUTO first; manual choices for the session only
+Stuart: "decoder default to auto when activated, unless a user has set manual settings in the same session".
+`src/services/decoderSession.ts` (NEW, shared by app and web) holds the choices in memory only — the app's process
+(across servers and screens) or the web page (until reload). Using it: RTTY (the app used to restore its manual values
+from storage underneath AUTO — now not stored at all), TIME's station override (was stored), the text modes (stored on
+both sides) and PAGE (stored). Nothing is written to storage. The web's RTTY was already page-memory only; its TIME
+station is a preset with no AUTO (MSF first) and is unchanged. Choices that are not AUTO choices (CW's view, WEFAX's LPM,
+APRS's packet rate) are untouched. Test: `scripts/test_decoder_session.ts` (in run-tests) — first open AUTO, a manual
+choice kept on re-open in the same session, AUTO after a new session, and no storage key read or written on either side.
+
 ## RESUME HERE (updated 2026-10-31, after the sixth run: Feld Hell's clients)
 
 Done this run (commits on `v12-decoders-wave2`): section 15 — Feld Hell offered in vibeserver.json and wired to the web

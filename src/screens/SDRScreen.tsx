@@ -136,6 +136,7 @@ import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type J
 import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, dscPanelChannels, dscBandLabel, dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle,
          dscItems, dscListRows, dscKey, DSC_MAP_EMPTY, type DscCall } from '../services/dsc';
 import type { PagingMode } from '../services/paging';   // ★ V12 PAGING (Android local hardware only)
+import { sessionChoice, setSessionChoice } from '../services/decoderSession';   // ★★★ AUTO first; manual for the session only
 import { hzReachable } from '../utils/tuneWindow';
 import DrmPanel from '../components/DrmPanel';
 import { drmOffered, type DrmState } from '../services/drm';
@@ -5028,6 +5029,29 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Decoder ───────────────────────────────────────────────────────────────
 
   const [activeDecoder,  setActiveDecoder]  = useState<DecoderType>(null);
+  /* ★★★ V12 PAGING IS SILENT WHILE IT RUNS (Stuart, 2026-10-31): the pager data is not played out of the speaker. The
+   *  mute is DERIVED from one fact — the open decoder is `paging` — never set by the PAGE key itself, so nothing can leave
+   *  it stuck on: closing the box, switching to another decoder, a disconnect that clears the decoder, or leaving the
+   *  screen all end it, and the listener's own mute state from before PAGE comes back. A reconnect while PAGE stays open
+   *  restarts the audio unmuted (every native start clears its mute) — the second branch mutes it again. A crash needs
+   *  nothing: the mute is not stored, and the next start is unmuted. Same shape as Band's mute (preBandMuteRef). */
+  const prePagingMuteRef = useRef<boolean | null>(null);
+  const pagingOn = activeDecoder === 'paging';
+  useEffect(() => {
+    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
+    if (pagingOn) {
+      if (prePagingMuteRef.current === null) prePagingMuteRef.current = isMutedRef.current;
+      if (!isMuted) { VM?.setMuted?.(true); setIsMuted(true); }
+    } else if (prePagingMuteRef.current !== null) {
+      const back = prePagingMuteRef.current; prePagingMuteRef.current = null; VM?.setMuted?.(back); setIsMuted(back);
+    }
+  }, [pagingOn, isMuted]);
+  useEffect(() => () => {
+    if (prePagingMuteRef.current !== null) {
+      (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(prePagingMuteRef.current);
+      prePagingMuteRef.current = null;
+    }
+  }, []);
   // ★ Advanced RDS. Separate from activeDecoder on purpose: it is a server-side analyser, not
   // a DecoderClient decoder, and the two can be open at once without fighting.
   const [advRdsOpen, setAdvRdsOpen] = useState(false);
@@ -5732,12 +5756,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [advRdsOpen, status.mode, connected]);
 
   /** Time-signal station: 'auto' picks from the tuned frequency (see timeStationFor). */
-  const [timeStationPref, setTimeStationPref] = useState<string>('auto');
-  useEffect(() => {
-    AsyncStorage.getItem('lsv_time_station').then((v) => {
-      if (v) setTimeStationPref(v);
-    }).catch(() => {});
-  }, []);
+  //  ★★★ AUTO unless a station was picked by hand THIS session (decoderSession.ts) — never stored.
+  const [timeStationPref, setTimeStationPref] = useState<string>(() => sessionChoice('time.station', 'auto'));
   /** What the running TIME decoder was actually attached AS, so a retune can notice a change. */
   const timeStationRef = useRef<string>('');
 
@@ -6090,6 +6110,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       timeStationRef.current = st;
       setDecoderStatus(`${st.toUpperCase()}${forced ? '' : ' (auto)'} — waiting for the minute`);
     }
+    if (type === 'rtty' && decoderClient.current) decoderClient.current.rttySettings = { ...rttySettingsRef.current };   // ★★★ this session's
     if (isTextFamily(type) && decoderClient.current) {
       decoderClient.current.textMode = { ...tmModeRef.current };
       setDecoderStatus(textModeStatusText(type, tmModeRef.current[type], null));
@@ -6246,7 +6267,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [closeDecoder, stopSpots, startSpotFlush, abStartVfo]);
 
   // RTTY settings — applying requires a re-attach (server reads params at attach)
-  const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.auto });
+  const [rttySettings, setRttySettings] = useState<RttySettings>(() => ({ ...sessionChoice<RttySettings>('rtty', RTTY_PRESETS.auto) }));
+  const rttySettingsRef = useRef(rttySettings);
+  useEffect(() => { rttySettingsRef.current = rttySettings; }, [rttySettings]);
   /**
    * ★★★ REMEMBERED, because RTTY IS NOT ONE THING. The ham preset (170 shift, 45.45 baud) and the
    *     weather preset (450, 50, inverted) decode different stations, and a decoder pointed at the
@@ -6258,34 +6281,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★ Restored before any decoder can attach, and written on every change — one line each way,
    *   which is all this ever needed.
    */
-  useEffect(() => {
-    AsyncStorage.getItem('lsv_rtty').then((j) => {
-      if (!j) return;
-      try {
-        const p = JSON.parse(j) as Partial<RttySettings>;
-        if (typeof p?.shift === 'number' && typeof p?.baud === 'number') {
-          const next: RttySettings = {
-            shift: p.shift, baud: p.baud,
-            encoding: p.encoding === 'CCIR476' || p.encoding === 'ASCII' ? p.encoding : 'ITA2',
-            inverted: !!p.inverted,
-            /* ★★ ALWAYS STARTS IN AUTO (Stuart, 2026-10-04: "it doesnt default to auto though"). The memory was for ham vs
-             *  weather chosen BY HAND; AUTO now finds both (and PBB's 1 stop bit), so a launch starts in AUTO and the last
-             *  manual values wait underneath — one tap on any of them turns AUTO off with the rest as they were. */
-            auto: true,
-            stop: p.stop === 1 || p.stop === 2 ? p.stop : 1.5,
-            usos: p.usos === true,
-            dataBits: p.dataBits === 8 ? 8 : 7,
-            parity: p.parity && 'NEOMS'.includes(p.parity) ? p.parity : 'N',
-          };
-          setRttySettings(next);
-          if (decoderClient.current) decoderClient.current.rttySettings = { ...next };
-        }
-      } catch {}
-    }).catch(() => {});
-  }, []);
+  /* ★★★ SUPERSEDED 2026-10-31 (Stuart: "decoder default to auto when activated, unless a user has set manual settings in
+   *  the same session"): RTTY is no longer restored from storage. It starts in AUTO; a manual choice made this session is
+   *  kept (decoderSession.ts) until the app is closed. The note above is why it WAS remembered — AUTO now finds both. */
   const onRttySettings = useCallback((s: RttySettings) => {
     setRttySettings(s);
-    AsyncStorage.setItem('lsv_rtty', JSON.stringify(s)).catch(() => {});
+    setSessionChoice('rtty', s, RTTY_PRESETS.auto);   // ★★★ for this session only (decoderSession.ts)
     const dc = decoderClient.current;
     if (!dc) return;
     dc.rttySettings = { ...s };
@@ -6354,24 +6355,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_psk_width', String(v)).catch(() => {});
     if (activeDecRef.current === 'psk' && pskSkimRef.current) openDecoder('psk');
   }, [openDecoder]);
-  /** ★ V12 MFSK / OLIVIA / THOR: AUTO or a sub-mode (a server `<family>Modes` id) — remembered; a re-attach while it runs. */
+  /** ★ V12 MFSK / OLIVIA / THOR: AUTO or a sub-mode (a server `<family>Modes` id) — kept for the session; a re-attach while it runs. */
   const onTextMode = useCallback((fam: TextFamily, id: string) => {
     tmModeRef.current = { ...tmModeRef.current, [fam]: id }; setTmMode(tmModeRef.current);
-    AsyncStorage.setItem('lsv_textmode_' + fam, id).catch(() => {});
+    setSessionChoice('textmode.' + fam, id, 'auto');   // ★★★ for this session only (decoderSession.ts)
     if (activeDecRef.current === fam) openDecoder(fam);
   }, [openDecoder]);
-  useEffect(() => {
-    for (const fam of TEXT_FAMILIES) AsyncStorage.getItem('lsv_textmode_' + fam).then((v) => {
-      if (v && /^[a-z0-9-]{1,24}$/.test(v)) { tmModeRef.current = { ...tmModeRef.current, [fam]: v }; setTmMode(tmModeRef.current); }
-    }).catch(() => {});
+  useEffect(() => {   // ★★★ AUTO unless picked by hand THIS session (decoderSession.ts) — never stored
+    const m = { ...tmModeRef.current };
+    for (const fam of TEXT_FAMILIES) m[fam] = sessionChoice('textmode.' + fam, 'auto');
+    tmModeRef.current = m; setTmMode(m);
   }, []);
-  /** ★ V12 PAGING: AUTO or a rate (a server `pagingModes` id) — remembered; a re-attach while it runs. */
+  /** ★ V12 PAGING: AUTO or a rate (a server `pagingModes` id) — kept for the session; a re-attach while it runs. */
   const onPagingMode = useCallback((id: string) => {
     pagingModeRef.current = id; setPagingMode(id);
-    AsyncStorage.setItem('lsv_paging_mode', id).catch(() => {});
+    setSessionChoice('paging.mode', id, 'auto');   // ★★★ for this session only (decoderSession.ts)
     if (activeDecRef.current === 'paging') openDecoder('paging');
   }, [openDecoder]);
-  useEffect(() => { AsyncStorage.getItem('lsv_paging_mode').then((v) => { if (v && /^[a-z0-9]{1,24}$/.test(v)) { pagingModeRef.current = v; setPagingMode(v); } }).catch(() => {}); }, []);
+  useEffect(() => { const v = sessionChoice('paging.mode', 'auto'); pagingModeRef.current = v; setPagingMode(v); }, []);   // ★★★ session only
   /** ★ V12 APRS: VHF 1200 / HF 300 — remembered; a different decoder on the server, so a re-attach while it runs. */
   const onAprsBaud = useCallback((b: AprsBaud) => {
     aprsBaudRef.current = b; setAprsBaud(b);
@@ -12847,7 +12848,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears), and under them a BALANCE between A and B to turn the louder one down; VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK, OLIVIA, THOR \u2014 each with AUTO naming the sub-mode it finds \u2014, HELL \u2014 Feld Hell, drawn as it is heard: the strips build up in the picture box a page at a time and you read them, with PREV for the page before \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG, the rate found by AUTO and named in the box, with RATE under the key for a manual choice; pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK, OLIVIA, THOR \u2014 each with AUTO naming the sub-mode it finds \u2014, HELL \u2014 Feld Hell (Hellschreiber), drawn as it is heard: the strips build up in the picture box a page at a time and you read them, with PREV for the page before \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG, the rate found by AUTO and named in the box, with RATE under the key for a manual choice; the speaker is muted while it runs, and pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
     // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
@@ -13865,7 +13866,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Local hardware muted (media-control pause): the RTL/waterfall keep running,
           only audio is muted. Tap unmutes + clears the media-control paused state.
           (Network instances disconnect on pause, so this is local-only.) */}
-      {isLocal && isMuted && !dataSaverOff && !reconnectFailedUi && (
+      {/* ★★ V12 PAGING mutes the speaker while PAGE runs: the banner says so and is not a key (an unmute would be undone at
+          once — a control whose every use is a no-op is not offered). Closing PAGE puts the audio back as it was. */}
+      {isLocal && isMuted && pagingOn && !dataSaverOff && !reconnectFailedUi && (
+        <View style={[styles.mutedBanner, { top: insets.top + 46 }]} pointerEvents="none">
+          <Text style={styles.mutedBannerText}>🔇 AUDIO MUTED WHILE PAGE RUNS</Text>
+        </View>
+      )}
+      {isLocal && isMuted && !pagingOn && !dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           ref={screenNavRef('mutedBanner', unmute)}
           onPress={unmute} activeOpacity={0.85}>
@@ -14741,7 +14749,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           timeStation: timeStationPref,
           onTimeStation: (v: string) => {
             setTimeStationPref(v);
-            AsyncStorage.setItem('lsv_time_station', v).catch(() => {});
+            setSessionChoice('time.station', v, 'auto');   // ★★★ for this session only (decoderSession.ts)
             // ★ Applied at once when the decoder is already running, so choosing a station is a
             //   correction you SEE rather than one that needs stopping and starting.
             if (activeDecRef.current === 'time') openDecoder('time');
