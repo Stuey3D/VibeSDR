@@ -404,6 +404,13 @@ void RxPipeline::rebuildAudio() {
     if (!smoothBw_) { chainBwLo_ = chainBwHi_ = 0.0; }
     const double chainBw = smoothBw_ ? chainBwHi_ : bwHz_;
     double targetCh = std::max(chainBw * 3.0, 12000.0);
+    /* ★★ V12 THE SYNCHRONOUS AM FAMILY RUNS ITS CHANNEL AT 2x, NOT 3x (2026-10-31, measured on the Pi 2's build under
+     *  qemu). Its sideband split is a Hilbert FIR whose length is set by its LOWEST audio frequency (~150 Hz), so its
+     *  cost goes as the channel rate SQUARED: SAM-U at a 48 kHz channel was +68 M instructions/s over AM — about 10 %
+     *  of a Pi 2 core for one listener. Twice the band top still holds the whole channel (the selectivity filter caps
+     *  at 0.45 of the rate) and the audio is resampled to 48 kHz afterwards as always. Envelope AM keeps 3x: its
+     *  shipping behaviour is not touched. */
+    if (isAmFamily(mode_) && mode_ != Mode::AM) targetCh = std::max(chainBw * 2.0, 12000.0);
     // WFM is the exception: its MPX runs to 57 kHz (RDS) + sidebands, so it needs a
     // real channel regardless of the RF bandwidth the user picked.
     // ★★★ FM-DX NO LONGER WIDENS THE CHANNEL — the premise was wrong, and measurement killed

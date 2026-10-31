@@ -166,8 +166,12 @@ export function composeModeLabel(mode: string, decoder: string | null | undefine
   // ★ V12 the SCANNER neither: it moves the demod about, it does not decode on top of it.
   const dec = decoder && decoder !== 'transcribe' && decoder !== 'scanner' ? (decoder === 'wefax' ? 'fax' : decoder) : '';
   // ★ V12 CW on a CW demod reads "CW", never "CW: CW" (modeDisplay folds cwu / cwl to CW).
-  return modeDisplay(mode) + (dec && dec.toLowerCase() !== String(mode).toLowerCase()
-    && dec.toUpperCase() !== modeDisplay(mode) ? `: ${dec.toUpperCase()}` : '');
+  /* ★ V12 with a decoder riding, the synchronous AM family reads as its FAMILY — SAM (SAM-U/L and ECSS are synchronous
+   *  detection too) or AM (AM stereo): "SAM-U: NAVTEX" / "ECSS-L: WHISPER" did not fit the field on any faceplate
+   *  (test_faceplate_segfield / dotfield / meters / landscape caught all of them). Bare, the box keeps the exact name. */
+  const base = dec && isAmSync(String(mode).toLowerCase()) ? (String(mode).toLowerCase() === 'amst' ? 'AM' : 'SAM') : modeDisplay(mode);
+  return base + (dec && dec.toLowerCase() !== String(mode).toLowerCase()
+    && dec.toUpperCase() !== base ? `: ${dec.toUpperCase()}` : '');
 }
 
 /** The longest reading the box's second line shows (formatReading: "-120dB", "S9+60", "120 dBf"). */

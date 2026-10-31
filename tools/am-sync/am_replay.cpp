@@ -72,7 +72,14 @@ static std::vector<float> run(const std::vector<cf32>& z, int rate, double off, 
     if (st) *st = s.st;
     return s.mono;
 }
-static void writeWav(const std::string& path, const std::vector<float>& x, int ch = 1) {
+static void writeWav(const std::string& path, const std::vector<float>& xin, int ch = 1) {
+    // ★ AMR_CLIP=start,seconds writes only that stretch (an A/B for a listener, not the whole capture)
+    std::vector<float> x = xin;
+    if (const char* c = getenv("AMR_CLIP")) {
+        double a = 0, l = 0; std::sscanf(c, "%lf,%lf", &a, &l);
+        const size_t s0 = std::min(x.size(), (size_t)(a * 48000) * ch), s1 = std::min(x.size(), s0 + (size_t)(l * 48000) * ch);
+        x.assign(xin.begin() + s0, xin.begin() + s1);
+    }
     double e = 0; for (float v : x) e += (double)v * v;
     const double rms = std::sqrt(e / std::max<size_t>(1, x.size()));
     const float g = rms > 0 ? (float)(0.1 / rms) : 1.0f;           // −20 dBFS
@@ -201,7 +208,14 @@ int main(int argc, char** argv) {
             double s = 0, s2 = 0; int wins = 0, n = 0;
             for (size_t k = 0; k < v.size() && k < b.size(); ++k) { const double d = snr(v[k]) - snr(b[k]); s += d; s2 += d * d; wins += d > 0; ++n; }
             const double mean = s / n, sd = std::sqrt(std::max(0.0, s2 / n - mean * mean)), se = sd / std::sqrt((double)n);
-            std::printf("  paired %-6s vs %-5s: %+5.2f dB ± %.2f (SE), better in %d/%d windows\n", want[m].c_str(), want[0].c_str(), mean, se, wins, n);
+            // ★ and the same, only over the windows where THIS station's carrier was ≥ 6 dB down (selective fading)
+            double fs_ = 0, fs2 = 0; int fw = 0, fn = 0;
+            for (size_t k = 0; k < v.size() && k < b.size() && k < cdb.size(); ++k) if (cdb[k] <= -6.0) {
+                const double d = snr(v[k]) - snr(b[k]); fs_ += d; fs2 += d * d; fw += d > 0; ++fn; }
+            char fade[96] = "";
+            if (fn >= 3) { const double fm = fs_ / fn, fse = std::sqrt(std::max(0.0, fs2 / fn - fm * fm)) / std::sqrt((double)fn);
+                           std::snprintf(fade, sizeof fade, " | in fades %+5.2f ± %.2f, better in %d/%d", fm, fse, fw, fn); }
+            std::printf("  paired %-6s vs %-5s: %+5.2f dB ± %.2f (SE), better in %d/%d windows%s\n", want[m].c_str(), want[0].c_str(), mean, se, wins, n, fade);
         }
     }
     // per-window detail for the first two modes (for the doc)
