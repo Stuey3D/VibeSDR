@@ -239,6 +239,16 @@ void SpectrumEngine::runDue(double now) {
         extrasLeft_--;
         extraDueAt_ = extrasLeft_ > 0 ? now + extraSpacing_ : -1;
     }
+    // ★★★ The boost's end and its taper on the clock's own time (wf_row_clock.h boostTaper) — not only on an arrival.
+    if (rateBase_ > 0 && rowClock_.rate > 0 && (boost_.on || boost_.peak > 0)) {
+        vibewf::boostActive(boost_, now, fan_.easeLeft > 0);
+        const double r = vibewf::boostTaper(boost_, rateBase_, rateBoosted_, now, rateHz_);
+        if (r > 0 && r != rowClock_.rate) {
+            vibewf::clockSetRate(rowClock_, r, now);
+            fan_.rowRate = r;
+            std::lock_guard<std::mutex> lk(mx_); outRowRate_ = r;
+        }
+    }
     if (rowClock_.rate > 0 && !bgNow_ && !covNow_) { const double c = vibewf::clockNextAt(rowClock_); if (c >= 0 && now >= c) runClock(now); }
     if (!traceQ_.empty() && now >= traceQ_.front().at) runTrace(now);
     std::lock_guard<std::mutex> lk(mx_);
@@ -371,8 +381,12 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
     const bool boostOn = clocked && baseRowTarget > 0 && vibewf::boostActive(boost_, now, easing);
     const double dispHz = cfg.displayCapHz > 0 ? (cfg.panelHz > 0 ? std::min(cfg.displayCapHz, cfg.panelHz) : cfg.displayCapHz)
                                                : (cfg.panelHz > 0 ? cfg.panelHz : 60);
-    const double rowTarget = boostOn ? vibewf::boostRowRate(baseRowTarget, avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, dispHz, cfg.boost)
-                                     : baseRowTarget;
+    // ★★★ …and TAPERS OUT when it ends (wf_row_clock.h boostTaper, 2026-10-31); runDue walks the same taper between frames.
+    const double boostRate = clocked && baseRowTarget > 0
+        ? vibewf::boostRowRate(baseRowTarget, avgFrameMs_ > 0 ? 1000.0 / avgFrameMs_ : 0, dispHz, cfg.boost) : baseRowTarget;
+    const double rowTarget = clocked && baseRowTarget > 0 ? vibewf::boostTaper(boost_, baseRowTarget, boostRate, now, dispHz)
+                                                          : baseRowTarget;
+    rateBase_ = clocked ? baseRowTarget : 0; rateBoosted_ = boostRate; rateHz_ = dispHz;
     const bool repeatsCarry = rowTarget > 0;
     // ★★ The zoom/tune ease is by TIME (wf_zoom_fan.h zoomEaseRows): the rows/s the waterfall runs at — the clock's rate, or
     //    one row a frame in Native.
@@ -437,7 +451,7 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
         //   2026-10-30: "noticable delay when operating the zoom controls"). WaterfallView's avPass, the same rule.
         const bool avPass = now - interactAt_ < 1000 || boostOn || easing;
         const double holdWas = av_.hold;
-        const double hold = vibewf::avHold(av_, vibewf::clockOwnMs(rowClock_.ivl, rowTarget), avPass);
+        const double hold = vibewf::avHold(av_, vibewf::clockOwnMs(rowClock_.ivl, rowTarget), avPass, now);   // ★ a growth ramps (wf_av_sync.h)
         const double pAt = vibewf::clockArrive(rowClock_, id, now, boost, hold);
         runClock(now);
         {

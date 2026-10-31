@@ -223,6 +223,7 @@ private:
     vibewf::RowCombiner clockComb_;
     vibewf::RowClock rowClock_;
     vibewf::BoostState boost_;   // ★ the interaction boost (wf_row_clock.h boostRowRate)
+    double rateBase_ = 0, rateBoosted_ = 0, rateHz_ = 60;   // ★ what the last frame set the clock's rate from (the taper)
     vibewf::AvSyncState av_;     // ★★ V12 2026-10-30 the waterfall waits for the sound (wf_av_sync.h)
     int lastEaseLeft_ = 0;
     std::vector<ClockRow> clockRows_;

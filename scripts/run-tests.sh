@@ -908,6 +908,7 @@ if node --no-warnings scripts/test_wf_row_target.ts; then pass=$((pass+1)); else
 #     (Stuart: "simply duplicate the previous lines"), a shrink by discards; no hold while the dial moves; zero extra stalls
 #     or bursts; NATIVE unchanged.
 if node --no-warnings scripts/test_wf_avsync.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_wf_boost_taper.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ THE 10-FPS DEFAULT (2026-10-20): the serving phone's tiers read Smoother · 20 / Default · 10 / Half · 5, the stored
 #    keys still mean 20 / 10 / 5, and a new server starts on Default · 10.
 if node --no-warnings scripts/test_fps_tiers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

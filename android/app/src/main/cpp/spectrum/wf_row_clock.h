@@ -160,11 +160,30 @@ inline double boostRowRate(double base, double feedFps, double displayHz, bool e
     }
     return base;
 }
-struct BoostState { double lastMove = 0; bool on = false; };
+struct BoostState { double lastMove = 0; bool on = false; double peak = 0, offAt = 0; };
 inline void boostNote(BoostState& b, double now) { b.lastMove = now; b.on = true; }
 inline bool boostActive(BoostState& b, double now, bool easing) {
     b.on = b.lastMove > 0 && (now - b.lastMove < BOOST_TAIL_MS || (b.on && easing));
     return b.on;
+}
+// ★★★ THE BOOST TAPERS OUT — the twin of wfClock.ts boostTaper (Stuart 2026-10-31: "the sudden FPS drop from 120→30 is
+//     causing what appears to be a slight pause"): down through the rates the panel draws on whole frames, each step
+//     1.5-2×, equal rows a rung, over BOOST_TAPER_MS. An input during it is the boost again at once. Change one, change both.
+constexpr double BOOST_TAPER_MS = 600;
+inline double boostTaper(BoostState& b, double base, double boosted, double now, double displayHz) {
+    if (!(base > 0)) { b.peak = 0; b.offAt = 0; return base; }
+    if (b.on) { b.peak = std::max(base, boosted); b.offAt = 0; return b.peak; }
+    if (!(b.peak > base)) { b.peak = 0; b.offAt = 0; return base; }
+    if (!(b.offAt > 0)) b.offAt = now;
+    static const double TR[] = {120, 60, 40, 30, 24, 20, 15, 12, 10, 5};
+    const double hz = displayHz > 0 ? displayHz : 60, whole = hz >= 119 ? 120 : 60;
+    double rungs[10]; int n = 0; double prev = b.peak, inv = 0;
+    for (double x : TR)
+        if (x < b.peak && x > base && std::fmod(whole, x) == 0 && prev / x >= 1.5 - 1e-9) { rungs[n++] = x; prev = x; inv += 1 / x; }
+    double t = now - b.offAt;
+    for (int i = 0; i < n; i++) { const double d = BOOST_TAPER_MS * (1 / rungs[i]) / inv; if (t < d) return rungs[i]; t -= d; }
+    b.peak = 0; b.offAt = 0;
+    return base;
 }
 
 }  // namespace vibewf
