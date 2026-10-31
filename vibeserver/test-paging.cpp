@@ -17,6 +17,11 @@
 //     a fingerprint of the discriminator + the lines, equal in a VIBE_FORCE_SCALAR build (printed — compare by hand).
 #include "decoders/paging_decoder.h"
 #include "vibe_paging_run.h"   // ★ the wiring's run: own discriminator on the channel IQ, the lines and the status
+#include "../tools/paging-bench/flex_synth.h"   // ★ our own FLEX transmitter (synthetic pages only)
+#include <cstdlib>
+#include <cstring>
+#include <iterator>
+#include <fstream>
 
 #include <chrono>
 #include <complex>
@@ -193,8 +198,160 @@ static bool linesRight(const RunGot& g, int baud) {
 }
 
 static uint64_t wiredFingerprint(uint64_t* linesOnly = nullptr);
+
+// ── FLEX ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+struct FlexSpeedT { int bps, levels; std::vector<int> phases; };
+static const std::vector<FlexSpeedT>& flexSpeeds() {
+    static const std::vector<FlexSpeedT> v = { {1600, 2, {0}}, {3200, 2, {0, 2}}, {3200, 4, {0, 2}}, {6400, 4, {0, 1, 2, 3}} };
+    return v;
+}
+/** Synthetic pages for a speed: on every phase it has an alpha page (one long-addressed), a numeric and a tone. */
+static std::vector<flexsyn::TxPage> flexPages(const FlexSpeedT& sp) {
+    std::vector<flexsyn::TxPage> v;
+    for (int p : sp.phases) {
+        flexsyn::TxPage a; a.cap = 100000u + (uint32_t)p * 1111u; a.kind = "alpha"; a.text = "TEST PAGE " + std::string(1, (char)('A' + p)) + " 0123 ok?"; a.phase = p; v.push_back(a);
+        flexsyn::TxPage n; n.cap = 200000u + (uint32_t)p; n.kind = "numeric"; n.text = "5551234-9"; n.phase = p; v.push_back(n);
+        flexsyn::TxPage t; t.cap = 300000u + (uint32_t)p; t.kind = "tone"; t.phase = p; v.push_back(t);
+        flexsyn::TxPage l; l.cap = 2500000u + (uint32_t)p * 7u; l.lng = true; l.kind = "alpha"; l.text = "LONG ADDRESS " + std::to_string(p); l.phase = p; v.push_back(l);
+    }
+    return v;
+}
+static std::string flexLine(const FlexSpeedT& sp, const flexsyn::TxPage& t) {
+    PagingDecoder::Page p; p.proto = "FLEX"; p.speed = std::to_string(sp.bps) + "/" + std::to_string(sp.levels); p.address = t.cap;
+    p.phase = (char)('A' + t.phase); p.kind = t.kind; p.text = t.kind == "tone" ? "" : t.text;
+    return PagingRun::line(p);
+}
+static std::vector<std::complex<float>> flexIq(const FlexSpeedT& sp, int frames, double fs, double clk, bool inv, double cnr, uint32_t seed,
+                                               const std::vector<flexsyn::TxPage>* pages = nullptr) {
+    std::vector<flexsyn::Sym> s;
+    const auto P = pages ? *pages : flexPages(sp);
+    for (int f = 0; f < frames; ++f) { auto fr = flexsyn::frame(sp.bps, sp.levels, 3, 40 + f, f == 0 ? P : std::vector<flexsyn::TxPage>{}); s.insert(s.end(), fr.begin(), fr.end()); }
+    return flexsyn::fmIq(s, fs, clk, inv, cnr, seed, std::min(16000.0, fs * 0.8));
+}
+/** Every expected line once, nothing else. */
+static bool flexAllRight(const RunGot& g, const FlexSpeedT& sp, std::string* why = nullptr) {
+    const auto P = flexPages(sp);
+    int hit = 0;
+    for (auto& t : P) { const std::string want = flexLine(sp, t); int c = 0; for (auto& l : g.lines) c += l == want; hit += c == 1; if (c != 1 && why) *why += " missing: " + want; }
+    if (why && g.lines.size() != P.size()) for (auto& l : g.lines) *why += " got: " + l;
+    return hit == (int)P.size() && g.lines.size() == P.size();
+}
+
+static void testFlex() {
+    std::printf("\n── FLEX: the code helpers ──\n");
+    {
+        int okc = 0;
+        for (uint32_t v : {0x000000u, 0x1FFFF0u, 0x123450u, 0x0ABCD0u}) okc += PagingDecoder::flexChecksumOk(PagingDecoder::flexWithChecksum(v));
+        ok(okc == 4, "the 4-bit checksum (M.584-2 Annex 2): the five nibbles and i20 sum to 0xF");
+        ok(!PagingDecoder::flexChecksumOk(PagingDecoder::flexWithChecksum(0x123450u) ^ 0x10u), "a flipped field bit fails it");
+        ok(PagingDecoder::flexInfo(1u) == (1u << 20) && PagingDecoder::flexInfo(1u << 20) == 1u, "fields go least significant bit first: i0 is the word's first information bit");
+        ok(PagingDecoder::flexModeCode(1600, 2) == 0x870C && PagingDecoder::flexModeCode(6400, 4) == 0xDEA0, "the A word's mode codes for 1600/2 and 6400/4 (both confirmed outside the GPL source)");
+    }
+    std::printf("\n── FLEX: every speed, every phase, alpha (short + long address), numeric, tone ──\n");
+    for (const auto& sp : flexSpeeds())
+        for (double fs : {25000.0, 31250.0, 48000.0})
+            for (bool inv : {false, true}) {
+                const double clk = inv ? 0.0002 : -0.0002;
+                auto x = flexIq(sp, 2, fs, clk, inv, 30.0, 7u + (uint32_t)fs + (uint32_t)sp.bps + (inv ? 1u : 0u));
+                RunGot g = runIq(x, fs, Mode::Auto);
+                std::string why; const bool good = flexAllRight(g, sp, &why);
+                bool named = false; for (auto& j : g.json) named |= j.find("\"detected\":\"FLEX " + std::to_string(sp.bps) + "/" + std::to_string(sp.levels) + "\"") != std::string::npos;
+                ok(good && named, "FLEX " + std::to_string(sp.bps) + "/" + std::to_string(sp.levels) + " @ " + std::to_string((int)fs) + " Hz" + (inv ? " inverted" : "") + ": all "
+                   + std::to_string(flexPages(sp).size()) + " pages, AUTO names it" + (good ? "" : why));
+            }
+    std::printf("\n── FLEX: manual modes ──\n");
+    {
+        const auto& sp = flexSpeeds()[3];
+        auto x = flexIq(sp, 2, 31250, 0, false, 30.0, 5);
+        RunGot f = runIq(x, 31250, Mode::Flex), pc = runIq(x, 31250, Mode::Pocsag);
+        ok(flexAllRight(f, sp), "FLEX (manual) decodes FLEX");
+        ok(pc.lines.empty(), "POCSAG (manual, every rate) prints nothing on FLEX (" + std::to_string(pc.lines.size()) + ")");
+        const auto bits = transmission(testPages());
+        auto y = fmIq(bits, 1200, 31250, 4500, 0.0, false, 24.0, 9, 16000);
+        RunGot fl = runIq(y, 31250, Mode::Flex), po = runIq(y, 31250, Mode::Pocsag);
+        ok(fl.lines.empty(), "FLEX (manual) prints nothing on POCSAG (" + std::to_string(fl.lines.size()) + ")");
+        ok(linesRight(po, 1200), "POCSAG (any rate) decodes POCSAG 1200");
+    }
+    std::printf("\n── FLEX: a channel carrying both (POCSAG, then FLEX, then POCSAG; AUTO) ──\n");
+    {
+        const double fs = 31250;
+        const auto bits = transmission(testPages());
+        auto a = fmIq(bits, 1200, fs, 4800, 0.0, false, 24.0, 11, 16000);
+        auto b = flexIq(flexSpeeds()[2], 2, fs, 0.0, false, 30.0, 12);
+        auto c = fmIq(bits, 2400, fs, 4800, 0.0, false, 24.0, 13, 16000);
+        std::vector<std::complex<float>> x = a; x.insert(x.end(), b.begin(), b.end()); x.insert(x.end(), c.begin(), c.end());
+        RunGot g = runIq(x, fs, Mode::Auto);
+        int pocsag = 0, flex = 0; for (auto& l : g.lines) { pocsag += l.rfind("[POCSAG", 0) == 0; flex += l.rfind("[FLEX", 0) == 0; }
+        bool n1 = false, n2 = false, n3 = false;
+        for (auto& j : g.json) { n1 |= j.find("POCSAG 1200") != std::string::npos; n2 |= j.find("FLEX 3200/4") != std::string::npos; n3 |= j.find("POCSAG 2400") != std::string::npos; }
+        ok(pocsag == 2 * (int)testPages().size() && flex == (int)flexPages(flexSpeeds()[2]).size() && n1 && n2 && n3,
+           "both protocols on one channel: " + std::to_string(pocsag) + " POCSAG + " + std::to_string(flex) + " FLEX pages, each named in turn");
+    }
+    std::printf("\n── FLEX: a fragmented alphanumeric message across two frames ──\n");
+    {
+        const auto& sp = flexSpeeds()[0];
+        std::vector<flexsyn::Sym> s;
+        flexsyn::TxPage p1; p1.cap = 123456; p1.kind = "alpha"; p1.text = "FIRST HALF / "; p1.cont = true; p1.frag = 3; p1.msgNum = 9;
+        flexsyn::TxPage p2 = p1; p2.text = "SECOND HALF"; p2.cont = false; p2.frag = 0;
+        auto f1 = flexsyn::frame(1600, 2, 1, 10, {p1}), f2 = flexsyn::frame(1600, 2, 1, 11, {p2});
+        s = f1; s.insert(s.end(), f2.begin(), f2.end());
+        auto x = flexsyn::fmIq(s, 31250, 0, false, 30.0, 21, 16000);
+        RunGot g = runIq(x, 31250, Mode::Auto);
+        flexsyn::TxPage whole = p1; whole.text = "FIRST HALF / SECOND HALF";
+        ok(g.lines.size() == 1 && g.lines[0] == flexLine(sp, whole), "one page, the two fragments joined: " + (g.lines.empty() ? std::string("(none)") : g.lines[0].substr(0, g.lines[0].size() - 1)));
+    }
+    std::printf("\n── FLEX: sensitivity (CNR in the 12.5 kHz channel, 10 transmissions a point, every page right) ──\n");
+    for (const auto& sp : flexSpeeds()) {
+        double fifty = NAN;
+        std::string row;
+        for (double cnr = 0; cnr <= 24; cnr += 2) {
+            int good = 0;
+            for (int t = 0; t < 10; ++t) { auto x = flexIq(sp, 1, 31250, 0.0001, false, cnr + 10 * std::log10(16000.0 / 12500.0), 100u + (uint32_t)t * 7u + (uint32_t)cnr); good += flexAllRight(runIq(x, 31250, Mode::Auto), sp); }
+            row += " " + std::to_string((int)cnr) + ":" + std::to_string(good);
+            if (std::isnan(fifty) && good >= 5) fifty = cnr;
+            if (good == 10) break;
+        }
+        std::printf("    FLEX %d/%d —%s → 50 %% ≈ %.0f dB CNR\n", sp.bps, sp.levels, row.c_str(), fifty);
+        const double lim = sp.levels == 2 ? 16 : 22;
+        ok(!std::isnan(fifty) && fifty <= lim, "FLEX " + std::to_string(sp.bps) + "/" + std::to_string(sp.levels) + " reaches 50 % by " + std::to_string((int)lim) + " dB CNR");
+    }
+    std::printf("\n── FLEX: a public recording (VIBE_FLEX_IQ=… a 16-bit stereo IQ WAV; never in git; content NOT printed) ──\n");
+    if (const char* path = std::getenv("VIBE_FLEX_IQ")) {
+        std::ifstream f(path, std::ios::binary);
+        std::vector<char> raw((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        if (raw.size() > 44) {
+            uint32_t rate = 0; std::memcpy(&rate, raw.data() + 24, 4);
+            size_t off = 12; size_t dataAt = 0, dataLen = 0;
+            while (off + 8 <= raw.size()) { uint32_t len; std::memcpy(&len, raw.data() + off + 4, 4); if (!std::memcmp(raw.data() + off, "data", 4)) { dataAt = off + 8; dataLen = std::min<size_t>(len, raw.size() - off - 8); break; } off += 8 + len; }
+            std::vector<std::complex<float>> x(dataLen / 4);
+            for (size_t i = 0; i < x.size(); ++i) { int16_t a, b; std::memcpy(&a, raw.data() + dataAt + 4 * i, 2); std::memcpy(&b, raw.data() + dataAt + 4 * i + 2, 2); x[i] = {a / 32768.f, b / 32768.f}; }
+            RunGot g = runIq(x, rate, Mode::Auto);
+            std::string det; for (auto& j : g.json) { auto p = j.find("\"detected\":\"FLEX"); if (p != std::string::npos) det = j.substr(p + 12, 11); }
+            int alpha = 0; for (auto& l : g.lines) alpha += l.find("(tone only)") == std::string::npos;
+            std::printf("    %u Hz, %.1f s: %zu pages (%d with content), detected %s — content withheld (real traffic)\n", rate, x.size() / (double)rate, g.lines.size(), alpha, det.c_str());
+            ok(!g.lines.empty() && !det.empty(), "the public recording decodes and is named");
+        }
+    } else std::printf("    (not set — skipped)\n");
+    std::printf("\n── FLEX: nothing where there is nothing ──\n");
+    {
+        const double fs = 31250; const int secs = 600;
+        std::mt19937 r(77); std::normal_distribution<float> g(0.f, 1.f);
+        RunGot got; PagingRun::Out o; o.text = [&](const std::string& t) { got.lines.push_back(t); };
+        PagingRun run(Mode::Flex, std::move(o));
+        std::vector<std::complex<float>> x((size_t)fs); bool det = false;
+        for (int s = 0; s < secs; ++s) { for (auto& v : x) v = std::complex<float>(g(r), g(r)); run.feedIq(x.data(), (int)x.size(), fs); det |= !run.detected().empty(); }
+        ok(got.lines.empty() && !det, "10 minutes of channel noise (FLEX alone): " + std::to_string(got.lines.size()) + " pages, detected " + (det ? "yes" : "no"));
+        // random 4-level symbols at 3200 baud (FLEX-like, never a sync): nothing
+        std::vector<flexsyn::Sym> s; std::mt19937 rr(5);
+        for (int k = 0; k < 3200 * 300; ++k) { const int q = (int)(rr() & 3); s.push_back({q == 0 ? -1.f : q == 1 ? -1.f / 3 : q == 2 ? 1.f / 3 : 1.f, 1.0 / 3200}); }
+        RunGot rg = runIq(flexsyn::fmIq(s, fs, 0, false, 30.0, 3, 16000), fs, Mode::Auto);
+        ok(rg.lines.empty(), "5 minutes of random 4-level symbols at 3200 baud (AUTO): " + std::to_string(rg.lines.size()) + " pages");
+    }
+}
+
 int main(int argc, char** argv) {
     // ★ --fingerprint: only the wired path's fingerprint (for the NEON / SSE2 / scalar identity runs under qemu)
+    if (argc > 1 && std::string(argv[1]) == "--flex") { testFlex(); std::printf("\n%s (%d failed)\n", fails ? "FAILED" : "ALL PASS", fails); return fails ? 1 : 0; }   // ★ FLEX only
     if (argc > 1 && std::string(argv[1]) == "--fingerprint") { uint64_t l = 0; const uint64_t f = wiredFingerprint(&l); std::printf("fingerprint %016llx  lines %016llx\n", (unsigned long long)f, (unsigned long long)l); return 0; }
     std::printf("test-paging — POCSAG (ITU-R M.584-2 Annex 1)\n\n── the code against the ITU's tables ──\n");
     {
@@ -290,8 +447,10 @@ int main(int argc, char** argv) {
         p.kind = "tone"; p.text.clear(); p.truncated = true; p.address = 777;
         ok(PagingRun::line(p) == "[POCSAG 1200 \xc2\xb7 0000777 \xc2\xb7 F3] (tone only) (cut short)\n", "a tone-only page cut short reads so");
         const std::string caps = pagingCapsJson();
-        ok(caps.find("\"paging\":true") != std::string::npos && caps.find("{\"id\":\"auto\",\"label\":\"AUTO\"}") == caps.find('{')
-           && caps.find("pocsag2400") != std::string::npos, "vibeserver.json fields: paging + the manual choices as data, AUTO first");
+        ok(caps.find("\"paging\":true") != std::string::npos && caps.find("{\"id\":\"auto\",\"label\":\"AUTO\",\"group\":\"\"}") == caps.find('{')
+           && caps.find("{\"id\":\"pocsag2400\",\"label\":\"2400\",\"group\":\"POCSAG\"}") != std::string::npos
+           && caps.find("{\"id\":\"flex\",\"label\":\"ANY\",\"group\":\"FLEX\"}") != std::string::npos,
+           "vibeserver.json fields: paging + the manual choices as data, AUTO first, each with its protocol group (FLEX one entry)");
         ok(PagingDecoder::modeFromId("pocsag512") == Mode::Pocsag512 && PagingDecoder::modeFromId("nonsense") == Mode::Auto
            && std::string(PagingDecoder::idOf(Mode::Pocsag2400)) == "pocsag2400", "mode ids round-trip; unknown → AUTO");
     }
@@ -353,6 +512,7 @@ int main(int argc, char** argv) {
         std::printf("    cost (incl. the noise generator): %.3f ms per second of 31.25 kHz IQ\n", ms / secs);
     }
 
+    testFlex();
     std::printf("\n%s (%d failed)\n", fails ? "FAILED" : "ALL PASS", fails);
     return fails ? 1 : 0;
 }
@@ -369,6 +529,13 @@ static uint64_t wiredFingerprint(uint64_t* linesOnly) {
             fpMix(fpAll, &g.fp, sizeof g.fp);
             fpMix(fpL, &g.fpLines, sizeof g.fpLines);
         }
+    // ★ FLEX too (every speed, 31.25 kHz): the same discriminator, then the FLEX receiver's lines
+    for (const auto& sp : flexSpeeds()) {
+        auto x = flexIq(sp, 2, 31250, 0.0002, false, 14.0, 90u + (uint32_t)sp.bps + (uint32_t)sp.levels);
+        const RunGot g = runIq(x, 31250, Mode::Auto);
+        fpMix(fpAll, &g.fp, sizeof g.fp);
+        fpMix(fpL, &g.fpLines, sizeof g.fpLines);
+    }
     if (linesOnly) *linesOnly = fpL;
     return fpAll;
 }

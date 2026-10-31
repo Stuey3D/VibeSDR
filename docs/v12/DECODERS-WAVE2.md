@@ -903,6 +903,67 @@ station is a preset with no AUTO (MSF first) and is unchanged. Choices that are 
 APRS's packet rate) are untouched. Test: `scripts/test_decoder_session.ts` (in run-tests) — first open AUTO, a manual
 choice kept on re-open in the same session, AUTO after a new session, and no storage key read or written on either side.
 
+## 17. FLEX — our own receiver in PAGE's AUTO (2026-10-31, seventh run)
+
+Stuart: "I'd like to get flex if we can". Files: `decoders/paging_decoder.{h,cpp}` (`FlexRx`, the FLEX helpers, the
+modes list with groups), `vibe_paging_run.h` (the FLEX line, `group` in `pagingModes`), `tools/paging-bench/flex_synth.h`
+(NEW — our own FLEX transmitter, synthetic pages only), `paging_bench.cpp` (mode + fresh-noise arguments),
+`vibeserver/test-paging.cpp` (`--flex`, the FLEX sections, FLEX in the fingerprint).
+
+### Clean room — which source informed what
+Free published material first; no paid or leaked standard (ARIB STD-43, Motorola FLEX-93001 not used); OpenWebRX not read;
+no code copied from anywhere. A research pass (sources and every fact tagged) gave:
+| Fact | Source |
+|---|---|
+| 1.875 s frames, 128 a cycle, 15 cycles an hour; Sync 1 + FIW at 1600 bit/s 2-level; 11 blocks of 160 ms; 1600/3200/6400 bit/s; the 4-bit checksum rule (five nibbles + i20 → 0xF); BCH(31,21) + parity as POCSAG; fields least significant bit first; idle | ITU-R M.584-2 Annex 2 (itu.int, free) |
+| Sync 1 layout (comma, A, B, A inverted), the four Sync 1 words, Sync 2 at the data rate | US 5,627,860; US 6,396,411; McCulley, Virginia Tech thesis 1997 (hdl.handle.net/10919/35557) |
+| ±4.8 kHz deviation; 4 levels −4.8/−1.6/+1.6/+4.8 kHz = 00/01/11/10 (Gray) | HP application note 5965-1131E; US 5,995,850; US 10,681,581; US 5,627,860 Fig. 2; the thesis |
+| Phases (A; A + C; A–D), 8 words per phase per block, the bit interleave; BIW, address ranges, capcodes (short, long set 1–2), vector types and fields, alphanumeric/numeric message layouts, the 10-bit fragment check, fragmentation | Motorola MC68175 FLEXchip datasheet (nxp.com, free), Appendices A and B; TI SPRA193 (ti.com, free); BIW fields cross-checked on a public recording |
+| A-word mode codes 0x870C (1600/2), 0xB068 (3200/4 at 1600 baud), 0x7B18 (3200/2), 0xDEA0 (6400/4); the fixed half 0xA6C6, B 0xAAAA | READ in multimon-ng's FLEX source (GPL, for understanding only — nothing copied); 0x870C + A6C6AAAA confirmed by a hobbyist page (GopherTrunk's docs), 0xDEA0 by the public recording. 0xB068 and 0x7B18 are confirmed by nothing else |
+| The data take the sense OPPOSITE to the sync constants'; the even/odd symbol split at 3200 baud | measured on the public recording |
+| Real-air check | sigidwiki's public "FLEX Pager IQ 20150816 929.613 kHz" (6400/4, 39.06 kHz IQ, 28 s) — kept OUT of git (real traffic; content never printed) |
+
+### The receiver
+Fed the same discriminator as POCSAG (the channel IQ, `PagingRun`). One per-sample loop as a POCSAG rate's (DC tracker,
+crossing DPLL, integrate-and-dump), at 1600 baud while hunting, switching to the frame's baud after the FIW. Sync 1: a
+64-bit window (A, B, half of A inverted) against the four patterns, both senses, ≤ 4 bits wrong. **Levels from the sync
+itself**: A + B + A inverted hold exactly 40 ones and 40 zeros, so the mean of those 80 RAW symbol levels is the true
+centre and their spread the outer level — then the DC is HELD for the frame (FLEX's blocks are not balanced: a tracker
+following them moved every level by a sixth of the deviation and lost every 4-level frame — measured, fixed). Symbols are
+averaged over their LATE part only (from 0.35 of the symbol): a whole-symbol average carries ≈ a quarter of the previous
+symbol, which an inner 4-level symbol after an opposite outer one does not survive (measured, fixed). 4-level: inner/outer
+halfway between the two learnt levels (decision-directed). Per phase 88 words → BIW1 (checksum) → addresses → vectors
+(checksum) → messages. Alphanumeric pages need their 10-bit fragment check; fragments are joined by (capcode, message
+number), a lost continuation shown "(cut short)" after 128 frames. Long addresses of set 1–2 give a capcode; the other long
+sets are not resolved (their formula is not fully published) and are skipped. Instruction vectors (temporary addresses)
+are not pages. Binary and secure messages are reported as such, without content.
+
+AUTO = POCSAG 512/1200/2400 + FLEX side by side; `detected()` names "FLEX 6400/4". Manual (`pagingModes`, grouped):
+AUTO · POCSAG (ANY, 512, 1200, 2400) · FLEX (ANY — every FLEX frame names its own speed, so a FLEX rate key would be a
+no-op and is not offered). Line: `[FLEX 6400/4 · 1234567 · A] text` (capcode, phase).
+
+### Numbers
+| | |
+|---|---|
+| Synthetic decodes (FM IQ ±4.8 kHz, 30 dB CNR, ±200 ppm clock, channel filter) | every speed (1600/2, 3200/2, 3200/4, 6400/4) × 25 / 31.25 / 48 kHz × both senses: every page right on every phase — alpha (short and long address), numeric, tone — and AUTO names the speed (24/24) |
+| Manual | FLEX decodes FLEX; POCSAG (any rate) prints nothing on FLEX; FLEX prints nothing on POCSAG |
+| A channel carrying both (POCSAG 1200 → FLEX 3200/4 → POCSAG 2400, AUTO) | every page of all three, each named in turn |
+| Fragmented alphanumeric across two frames | joined into one page |
+| Sensitivity, 50 % of frames with EVERY page right (CNR in 12.5 kHz, 10 frames a point; the FM synth and channel filter of the POCSAG IQ test) | 1600/2 ≈ 2–4 dB · 3200/2 ≈ 6 · 3200/4 ≈ 6 · 6400/4 ≈ 6 dB (10/10 by 4, 6, 8, 8 dB). ★ Synthetic: the 4-level figures look optimistic beside the 2-level ones and need a real-air check |
+| Public recording (6400/4) | 29 pages decoded in 28 s, the speed named; every alphanumeric page passed its 10-bit check (content not printed or kept) |
+| False pages | 12 h of channel noise through FLEX alone, 2 h through AUTO (fresh noise every second): **0**, never detected; 10 min of noise and 5 min of random 4-level symbols at 3200 baud in the test: 0 |
+| Pi 2 (qemu-arm count, `tools/paging-bench/qemu.sh 60 31250 iq`, AUTO = POCSAG ×3 + FLEX) | NEON 469 M instructions a minute (325 M before FLEX), scalar 566 M → ≈ 0.6–0.9 % of a 900 MHz core (ESTIMATE at 0.6–0.8 IPC); FLEX's own share ≈ 144 M a minute |
+| SIMD identity | FLEX has no SIMD of its own (a per-sample feedback loop, as POCSAG — section 7); the shared discriminator is q65v lanes. Fingerprint (discriminator + every line, POCSAG and FLEX): Mac NEON = Mac scalar (`2d0c91e800abc1d9` / lines `ed9346f86d06ee97`); armhf `-marm` NEON = scalar with the Android CMake's `-ffp-contract=fast` (`568aa2a092975c25`), lines identical to the Mac's |
+| Per-sample divide / round | none: one divide a SYMBOL (the late window's mean) |
+
+### Untested / gaps
+- Real air on a phone (no device here). The 1600/2, 3200/2 and 3200/4 mode codes were never seen on air by us (only
+  6400/4 is in the public recording) — 0xB068 and 0x7B18 rest on one source.
+- The FIW's bits i15–i20 (roaming, repeat) and BIW1's i4–7 and i16–20 are undocumented in free sources: read past, not used.
+- 1600/4's second phase is labelled C (the datasheet's "A and C at 3200 bit/s"); one other source calls it B.
+- Long-address sets other than 1–2: skipped. Numeric pages' 6-bit check: its algorithm is not in the free sources — a
+  numeric page relies on every word's BCH and the vector's checksum.
+
 ## RESUME HERE (updated 2026-10-31, after the sixth run: Feld Hell's clients)
 
 Done this run (commits on `v12-decoders-wave2`): section 15 — Feld Hell offered in vibeserver.json and wired to the web

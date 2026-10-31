@@ -109,9 +109,14 @@ public:
     /** The page as one line of text (the 0x01 frame). Public for the test. */
     static std::string line(const PagingDecoder::Page& p) {
         char head[96];
-        std::snprintf(head, sizeof head, "[%s %d \xc2\xb7 %07u \xc2\xb7 F%d] ", p.proto.c_str(), p.baud, (unsigned)p.address, p.function);
+        if (p.proto == "FLEX")   // ★ FLEX: its speed, the capcode, the phase it came on
+            std::snprintf(head, sizeof head, "[FLEX %s \xc2\xb7 %07u \xc2\xb7 %c] ", p.speed.c_str(), (unsigned)p.address, p.phase ? p.phase : 'A');
+        else
+            std::snprintf(head, sizeof head, "[%s %d \xc2\xb7 %07u \xc2\xb7 F%d] ", p.proto.c_str(), p.baud, (unsigned)p.address, p.function);
         std::string s = head;
         if (p.kind == "tone") s += "(tone only)";
+        else if (p.kind == "binary") s += "(binary data)";
+        else if (p.kind == "secure") s += "(secure message)";
         else s += p.text;
         if (p.truncated) s += " (cut short)";
         return s + "\n";
@@ -151,7 +156,7 @@ inline std::string pagingCapsJson() {
     for (const auto& m : PagingDecoder::modes()) {
         if (!first) j += ',';
         first = false;
-        j += std::string("{\"id\":\"") + m.id + "\",\"label\":\"" + m.label + "\"}";
+        j += std::string("{\"id\":\"") + m.id + "\",\"label\":\"" + m.label + "\",\"group\":\"" + m.group + "\"}";
     }
     return j + "]";
 }
