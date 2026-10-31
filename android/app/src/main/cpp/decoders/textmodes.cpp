@@ -691,7 +691,10 @@ struct OliviaRx : Rx {
      *  its finder slides inside the 2 kHz signal); renaming the hypotheses on a whole-tone move (the same); parking
      *  each place's qualities and taking them back on a return (CONTESTIA 8/250 8 → 6). */
     int64_t farMoveN = -1;   // symbols pushed when the finder last moved off the tone set (see push: a block across it)
+    /** symbols pushed when the finder last moved by half the tone set or more (see push: a block shown at the lock) */
+    int64_t settleN = -1;
     void moved(int delta) override {
+        if (std::abs(delta) >= fd.s * sub->M / 2) settleN = n;
         if (std::abs(delta) <= fd.s * (sub->M + 1)) return;
         farMoveN = n;
         if (lock) return;
@@ -830,7 +833,13 @@ struct OliviaRx : Rx {
         // remember this block's characters at this alignment (the last two blocks, those good enough to show)
         for (int h = 0; h < 3; ++h) {
             std::vector<int>& pb = hyp[h].past[a];
-            if (q[h] <= thrOff || straddles) { pb.clear(); continue; }   // ★ (see straddles above)   // (thrOn here lost OLIVIA 16/500 at −10 dB 10/10 → 8/10; thrOff can show one start-up character)
+            // ★ (see straddles above) …and, for a block to be SHOWN at the lock, read wholly after the finder's last move of
+            //   half the tone set or more (2026-10-31, eighth run): an over's first, idle block was read for its first
+            //   10 symbols at the noise 8 tones off, before the finder reached the over — half its chips from another
+            //   place — and its first character read 32 for 0: " CQ DE G4XYZ OLIVIA K" (a web run, and 1 in 1200 offline
+            //   joins). Any move of more than a tone (tried first) also caught a weak signal's finder sliding inside its
+            //   own tone set: OLIVIA 16/500 at −12 dB 12/200 → 10/200. Half the tone set: 12/200.
+            if (q[h] <= thrOff || straddles || n - K < settleN) { pb.clear(); continue; }   // (thrOn here lost OLIVIA 16/500 at −10 dB 10/10 → 8/10; thrOff can show one start-up character)
             pb.insert(pb.end(), code[h], code[h] + b);
             if ((int)pb.size() > 3 * b) pb.erase(pb.begin(), pb.begin() + b);
         }

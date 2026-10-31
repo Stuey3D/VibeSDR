@@ -1131,6 +1131,26 @@ was not touched.
 - False decodes: white noise **60 min through each AUTO** (MFSK, OLIVIA, THOR and the one key): nothing.
 - `test-web-hell` (its expectation was changed in section 19 and not re-run then): 19 passed, 0 failed.
 
+### Afterwards: a fifth fault, found by the web test after section 21 (2026-10-31, eighth run)
+Three web runs on section 21's build (its decodes byte-identical to the above) gave one failure: " CQ DE G4XYZ OLIVIA K"
+— the same kind as the one offline failure left in the table above (1 in 1200). Traced offline: an OLIVIA over's first,
+idle block was read for its first 10 symbols at the noise 8 tones off, before the finder reached the over; half its
+chips came from another place, and its first character read 32 (space) for 0 (idle) — the top bit of the Walsh index is
+exactly what half a block cannot settle. The block was not "across a move off the tone set" (fault 4: those moves are
+the tone set's width or more), so it was kept and shown at the lock. **Fix**: a block is shown at the lock only if read
+wholly after the finder's last move of half the tone set or more. Tried first: any move of more than a tone — it also
+caught a weak signal's finder sliding inside its own tone set (OLIVIA 16/500 at −12 dB 12/200 → 10/200); moves onto a
+place with a signal (score ≥ 4.5) — the same 10/200. Half the tone set: 12/200.
+
+| after the fifth fix | |
+|---|---|
+| 1200 joins of the web clip | **0 wrong, 0 misnamed**, whole overs 1200, MFSK16 + OLIVIA overs 922 + 1783 (unchanged) |
+| 200 trials at every OLIVIA/CONTESTIA edge (16 points) | identical but OLIVIA 8/500 −8 dB 176 → 175 (CER 5 % both) |
+| 20-trial sweep of every sub-mode, manual and AUTO | identical but OLIVIA 32/1000 −8 dB CER 5 → 4 % |
+| `test-textmodes` with the recordings and the fldigi files | whole output identical (11/11, 8/8) |
+| `test-web-textmodes`, 10 runs in a row (section 21's build + this fix) | **10/10** (23 checks each); `test-web-hell` 19/19 |
+| cost (qemu-arm, section 21's measure) | 1844 M NEON / 3933 M scalar — the same as section 21's 1845 / 3933 |
+
 ## 21. The one key's AUTO at less than half the cost — the tone search shared, OLIVIA's chips read in a row; decodes byte-identical (2026-10-31, eighth run)
 
 Section 19 measured the one MFSK key's AUTO (MFSK16/32, THOR ×6, OLIVIA ×6, CONTESTIA ×3 — 17 receivers) at ≈ 3.97 G
@@ -1192,12 +1212,14 @@ Done this run (commits on `v12-decoders-wave2`): section 16 — PAGE silent whil
 (23 cm band, 6 m, Q65-15 — it doubles Q65's cost), Feld Hell (Hellschreiber) copy, AUTO first / manual for the session
 only (`decoderSession.ts`); section 17 — FLEX in PAGE's AUTO; section 18 — CONTESTIA confirmed with fldigi as a black
 box (newline fixed, a narrower-signal false lock fixed); section 19 — one MFSK key for MFSK/OLIVIA/CONTESTIA/THOR and
-every AUTO decoder's fallback rows (RTTY's pattern). No server or device was touched; synthetic signals and public
-recordings only (FLEX and fldigi files kept out of git).
+every AUTO decoder's fallback rows (RTTY's pattern). Eighth run: section 20 (the web test's lost "E" and four join
+faults) and section 21 (the one key's AUTO −54 % on a Pi 2, decodes byte-identical). No server or device was touched;
+synthetic signals and public recordings only (FLEX and fldigi files kept out of git).
 
 Next, in order:
 0. ✓ DONE (section 20): **test-web-textmodes 10/10**, test-web-hell 19/19. The "E" was a stale presence slot after a
-   skipped symbol; four join faults fixed on the way.
+   skipped symbol; four join faults fixed on the way, and a fifth (an OLIVIA block read half before the finder arrived,
+   shown at the lock) found by the web test afterwards — section 20's addendum; 10/10 again with it.
    ✓ DONE (section 21): the one key's AUTO **4023 → 1845 M instructions a minute** on the Pi 2 model (−54 %; ≈ 4.3–5.7 %
    of a core, was 9–12 %), decodes byte-identical. Left on the table: the 9 streams' FFTs (a third of what remains) and
    OLIVIA's soft bits (exp/log per tone, shared by the twins only if their places agree — not done).
@@ -1213,7 +1235,10 @@ Builds used: `~/VibeSDR-builds/decoders2-server` (cmake of this worktree, deps f
 prefix`). The worktree's `node_modules` is a symlink to `~/VibeSDR-v12/node_modules`, excluded in `.git/info/exclude`
 (not in git). The web type check (`tsc` in web/client) does not fit the 512 MB cap; services were type-checked alone
 (`tsc --ignoreConfig … src/services/textModes.ts …`), components syntax-checked with esbuild. Colima was started for the
-qemu counts and stopped again.
+qemu counts and stopped again. Eighth run's kit (scratch, not in git): the web clip's 48 kHz audio for
+`tools/textmode-bench/tm_loops.py` comes from `tm_clip` with `VIBE_TM_DUMP`; the server's own decoder audio was dumped
+by a throw-away line in `TextModeDecoder::feed` (never committed) — worth repeating whenever a web run fails and the
+offline loops do not.
 
 Black-box kit (not in git, unchanged): `~/wsjtx-blackbox/` — WSJT-X 2.7.0 arm64 binaries, docker image `wsjtx-bb`,
 corpora. Reference recordings for the text modes: `~/VibeSDR-mfsk-refs/` (spec pages, the parsed varicode, samples,
