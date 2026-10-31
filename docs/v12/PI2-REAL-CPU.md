@@ -35,6 +35,15 @@ cycle. This file replaces those estimates with measurements on Stuart's Pi 2.
 - **Plain WFM stereo at 1.024 MS/s is 81 % of a core** (with the waterfall), WFM + RDS 104 %, WFM + Advanced RDS 212 %.
 - **Throttling: none.** The Pi stayed at 900 MHz and ≤ 41 °C throughout, with no live throttle bit set.
 
+
+> ★★★ **CORRECTION (Stuart, 2026-10-31): DAB plays perfectly on this Pi 2.** The DAB row is NOT the live server's
+> cost. It is `dab-offline`, a debugging replay that runs the WHOLE chain in ONE thread, including a 2.4 → 2.048 MS/s
+> resample of a 2.4 MS/s capture. The live server feeds DAB from the DSP thread and decodes on its own worker thread
+> (`vibe_dab_service.h` workerLoop), so the work is split, and its input is not this capture. The "slower than real
+> time on one core / does not fit" verdicts for DAB are withdrawn. The ISM 433 row is also an offline bench and needs
+> the same check. Neither should change a default until it is measured on the live server (per-thread CPU from /proc
+> while a listener is on it).
+
 ## 1. The V12 decoders and DSP (the qemu-estimated ones)
 
 % of one 900 MHz Cortex-A7 core in real time. "qemu instr" = the doc's count; "Pi instr" = the Pi's own counter for the
