@@ -12,16 +12,20 @@ import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBan
 import { parseNdbCapability } from './ndb';
 import { parsePagingModes, type PagingMode } from './paging';   // ★ V12 PAGING (Android local hardware only)
 import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';   // ★ V12 AIS / APRS
+import { AM_SYNC_LABEL } from './amSync.ts';
+const { sam: _samLabel, ...AM_SYNC_LABEL_NO_SAM } = AM_SYNC_LABEL;   // 'sam' keeps its own entry below
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 // ★ V12 'drm' = Digital Radio Mondiale, a VibeServer demodulator offered only where its vibeserver.json `modes` lists it
 //   (docs/v12/DRM.md); not in MODES. The server receives it whole per listener; the client draws the DRM box.
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm';
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
+                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst';   // ★ V12 synchronous AM (amSync.ts)
 export type Mode = SDRMode; // alias
 
 export const MODES: SDRMode[] = ['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl'];
 export const MODE_LABELS: Record<SDRMode, string> = {
   usb: 'USB', lsb: 'LSB', am: 'AM', sam: 'SAM',
   fm: 'FM', nfm: 'NFM', cwu: 'CWU', cwl: 'CWL', wfm: 'WFM', drm: 'DRM',
+  ...AM_SYNC_LABEL_NO_SAM,   // ★ V12 synchronous AM (amSync.ts)
 };
 
 // ★ 5 kHz is the shortwave BROADCAST raster (the 49 m to 16 m bands channel on it) — a DL8LDN

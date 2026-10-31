@@ -193,8 +193,12 @@ public:
             rate_ = rate; lastOff_ = 1e300; dirty = true;
         }
         if (dirty || offsetHz != lastOff_) { rx_->setTune(offsetHz, w.rxMode, w.bwHz); lastOff_ = offsetHz; }
+        rx_->setAmAutoBandwidth(autoBw_.load(std::memory_order_relaxed));   // ★★ V12 an atomic store: cheap every block
         rx_->feed(x, n);
     }
+    /** ★★ V12 VFO B FOLLOWS ITS LISTENER'S AUTO (bandwidth): the AM family's, SSB's and CW's auto in B's own pipeline.
+     *  Any thread; read by the feeding thread at its next block. */
+    void setAutoBw(bool on) { autoBw_.store(on, std::memory_order_relaxed); }
     /** Forget the audio queued so far (the channel was parked outside the window, or re-armed). */
     void flush() { fifo_.clear(); }
 
@@ -259,6 +263,7 @@ private:
     bool dirty_ = true;
     SquelchGate gate_;
     std::atomic<bool> open_{true}, parked_{false}, muted_{false}, hasTap_{false};
+    std::atomic<bool> autoBw_{true};   // ★★ V12 the listener's AUTO (bandwidth) — VFO B follows it (setAutoBw)
     std::mutex tapMtx_;
     AudioTap tap_;
     std::atomic<float> levelDb_{-200.0f};

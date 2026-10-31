@@ -11,6 +11,7 @@ import CwTermsGuide from './CwTermsGuide';
 import { SIGID_HOME } from '../services/dialChat';
 import Slider from '@react-native-community/slider';
 import { Mode, MODES } from '../services/sdrTypes';
+import { shownEdges, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key
 import { useTheme } from '../contexts/ThemeContext';
 import { NavCtx, NavRow, usePanelNav, useNavButton, useNavRange, noteTouchInteraction, useNavFocus, NAV_ADJUST } from './PanelNav';
 import {
@@ -112,14 +113,16 @@ function MoreItem({ onPress, onReveal, children }: {
  * or on/off group (lit = selected; the legend lights in the controls colour too) — never on a plain
  * action (MAP, FILES, the server maps, CLOSE). Default chassis: never drawn — every site keeps today's key.
  */
-function MetalKey({ navRef, focused, label, active = false, pip = false, onPress, fontSize = 12, style, iconId, stack, legendStyle }: {
+function MetalKey({ navRef, focused, label, active = false, pip = false, onPress, fontSize = 12, style, iconId, stack, legendStyle, a11y }: {
   navRef: React.MutableRefObject<View | null>; focused: boolean; label: string; active?: boolean; pip?: boolean;
+  /** ★ V12 the spoken name where the legend is an abbreviation (SAM-U → "Synchronous AM, upper sideband"). */
+  a11y?: string;
   onPress?: () => void; fontSize?: number; style?: object; legendStyle?: TextStyle;
   /** ★ V12: the mode's category glyph before the legend (utils/modeIcons) — above it when `stack` (narrowest phones). */
   iconId?: string; stack?: boolean;
 }) {
   return (
-    <PopupKey ref={navRef as any} label={label} active={active} pip={pip} onPress={onPress} focused={focused}
+    <PopupKey ref={navRef as any} label={label} active={active} pip={pip} onPress={onPress} focused={focused} accessibilityLabel={a11y}
       icon={iconId ? modeKeyIcon(iconId, stack ? 12 : 13) : undefined} iconStack={stack} iconGap={stack ? undefined : 5}
       height={36} fontSize={fontSize} legendStyle={legendStyle} style={[{ flex: 1, minWidth: '22%' }, style]} />
   );
@@ -155,7 +158,8 @@ function fmtHz(hz: number) {
 // Common analog/voice demodulators shown as buttons; everything else the server
 // offers (digital, decoders, sondes…) goes into the in-popup dropdown.
 // ★ V12 'drm' is a demodulator beside AM (a VibeServer's DRM receiver; OpenWebRX's own DRM too) — a main key, not a decoder
-const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'drm', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
+// ★ V12 the synchronous AM family (sau … amst) — VibeServer's own, offered only where its server lists them (amSync.ts)
+const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'drm', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
 const DEC_COL = '#52dc64';   // active-decoder accent (matches VTS live-data green)
 
 // ── Decoder-settings helpers (moved with the decoders from MenuSheet §4.3) ──────
@@ -434,6 +438,11 @@ interface ModeSelectorProps {
   bwEdgeMax?:    number;   // per-edge half-width cap (Hz) for the active mode
   bwEdgeMin?:    number;   // per-edge half-width floor (Hz) — VibeServer WFM has one
   onFilterBoth?: (low: number, high: number) => void;
+  /** ★★ V12 AUTO (bandwidth) — drawn ABOVE SYNC, between the sliders, only when given: SDRScreen gives it only where
+   *  the server lists the current mode (hwinfo autoBwModes, bwAuto.ts). Absent = the row exactly as it always was.
+   *  While on and cutting, the sliders SHOW AUTO's edges (`state`, display only); a drag is a manual override, so
+   *  it turns AUTO off first (docs/v12/AM-SYNC.md §11). */
+  autoBw?: { on: boolean; onToggle: (on: boolean) => void; state: BwAutoState | null };
   // SERVER MAPS (relocated from MenuSheet §4.4). SDRScreen computes the guard
   // (UberSDR feeds only — hidden for OWRX/Kiwi/local); we just render the buttons.
   showServerMaps?: boolean;
@@ -581,7 +590,7 @@ interface ModeSelectorProps {
 }
 
 export default function ModeSelector({ visible, current, modes, activeDecoder, onSelect, onClose,
-  filterLow = 0, filterHigh = 0, bwEdgeMax = 6000, bwEdgeMin = 0, onFilterBoth,
+  filterLow: ownLow = 0, filterHigh: ownHigh = 0, bwEdgeMax = 6000, bwEdgeMin = 0, onFilterBoth, autoBw,
   showServerMaps = false, onServerMap, owrxPages,
   decoderControls, spotsControls, transcribeControls, blocked, dcSpikeOnScreen = false, dialHz }: ModeSelectorProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
@@ -1363,11 +1372,21 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   // ★★ Keyed on the CLASS, not the mode, so it flips only when crossing between symmetric and
   // single-sideband. Toggling it by hand within a mode therefore STICKS — switching AM→SAM will not
   // undo your choice, and we are not fighting the user every render.
-  const symmetric = ['am', 'sam', 'dsb', 'fm', 'nfm', 'wfm'].includes(String(current).toLowerCase());
+  const symmetric = ['am', 'sam', 'sau', 'sal', 'amst', 'dsb', 'fm', 'nfm', 'wfm'].includes(String(current).toLowerCase());
   const [bwSync, setBwSync] = useState(symmetric);
   useEffect(() => { setBwSync(symmetric); }, [symmetric]);
   const bwStep = bwEdgeMax > 20000 ? 1000 : 50;
   const showBw = onFilterBoth != null;
+  /* ★★ V12 AUTO: what the sliders show (AUTO's edges while it cuts — never sent back), and the manual override — a
+   *  drag while AUTO is on turns it off for this session first, then moves the edge as it always did. */
+  const { low: filterLow, high: filterHigh } = shownEdges({ low: ownLow, high: ownHigh }, !!autoBw?.on, autoBw?.state ?? null);
+  const autoCutting = !!autoBw?.on && !!autoBw.state?.cut;
+  const autoOffSent = useRef(false);   // ★ one "off" per drag, not one per slider event before the re-render lands
+  useEffect(() => { if (autoBw?.on) autoOffSent.current = false; }, [autoBw?.on]);
+  const dragBw = (low: number, high: number) => {
+    if (autoBw?.on && !autoOffSent.current) { autoOffSent.current = true; autoBw.onToggle(false); }
+    onFilterBoth?.(low, high);
+  };
   // Collapse the decoder dropdown when the sheet closes, so reopening it lands on
   // the current decoder (the scroll-to-active effect only fires on open) instead
   // of staying open scrolled to the top.
@@ -1638,7 +1657,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           {common.map(m => (
             <NavItem key={m.id} onPress={() => pick(m.id)}>{(navFocused, navRef) => pt.metal ? (
               <MetalKey navRef={navRef} focused={navFocused} label={m.label.toUpperCase()} active={m.id === current} pip
-                onPress={() => pick(m.id)} fontSize={13} />
+                onPress={() => pick(m.id)} fontSize={13} a11y={(m as { a11y?: string }).a11y} />
             ) : (
             <TouchableOpacity
               ref={navRef as any}
@@ -1649,6 +1668,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 },
               ]}
               onPress={() => pick(m.id)}
+              accessibilityRole="button" accessibilityState={{ selected: m.id === current }}
+              accessibilityLabel={(m as { a11y?: string }).a11y ?? m.label}
             >
               <Text style={[
                 st.btnText,
@@ -1700,11 +1721,43 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               minimumValue={-bwEdgeMax} maximumValue={-bwEdgeMin} step={bwStep}
               value={Math.max(-bwEdgeMax, Math.min(-bwEdgeMin, filterLow))}
               onValueChange={(v: number) => {
-                if (bwSync) onFilterBoth?.(v, -v);
-                else        onFilterBoth?.(v, filterHigh);
+                if (v === filterLow) return;   // ★★ V12 an echo of the value we drew (AUTO's edge moving it) is not a drag
+                if (bwSync) dragBw(v, -v);
+                else        dragBw(v, filterHigh);
               }}
               minimumTrackTintColor={bwRest} maximumTrackTintColor={bwFill}
               thumbTintColor={pt.gold.thumb} />
+            {/* ★★ V12 AUTO stacked ABOVE SYNC in the middle column — only where the server offers it for this mode.
+                Without it the column is SYNC alone, exactly the row it always was. */}
+            {autoBw ? (
+              <View style={st.bwMidCol}>
+              <NavRow><NavItem onPress={() => autoBw?.onToggle(!autoBw.on)}>{(navFocused, navRef) => pt.metal ? (
+                <PopupKey ref={navRef as any} label="AUTO" active={!!autoBw?.on} pip onPress={() => autoBw?.onToggle(!autoBw.on)}
+                  focused={navFocused} height={32} fontSize={11} hitSlop={6} style={{ minWidth: 62 }}
+                  accessibilityLabel={`Automatic bandwidth, ${autoBw?.on ? (autoCutting ? 'on, narrowed' : 'on') : 'off'}`} />
+              ) : (
+              <TouchableOpacity hitSlop={6} ref={navRef as any}
+                style={[st.bwSyncBtn, { borderColor: pt.ink.keyBorder }, autoBw?.on && { borderColor: pt.gold.selBorder, backgroundColor: pt.ink.keyBgAct },
+                        navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+                onPress={() => autoBw?.onToggle(!autoBw.on)} activeOpacity={0.7}
+                accessibilityRole="button" accessibilityState={{ selected: !!autoBw?.on }}
+                accessibilityLabel={`Automatic bandwidth, ${autoBw?.on ? (autoCutting ? 'on, narrowed' : 'on') : 'off'}`}>
+                <Text style={[st.bwSyncTxt, { color: autoBw?.on ? pt.gold.sel : pt.ink.key }]}>AUTO</Text>
+              </TouchableOpacity>
+              )}</NavItem></NavRow>
+              <NavRow><NavItem onPress={() => setBwSync(p => !p)}>{(navFocused, navRef) => pt.metal ? (
+                <PopupKey ref={navRef as any} label="SYNC" active={bwSync} pip onPress={() => setBwSync(p => !p)}
+                  focused={navFocused} height={32} fontSize={11} hitSlop={6} style={{ minWidth: 62 }} />
+              ) : (
+              <TouchableOpacity hitSlop={6} ref={navRef as any}
+                style={[st.bwSyncBtn, { borderColor: pt.ink.keyBorder }, bwSync && { borderColor: pt.gold.selBorder, backgroundColor: pt.ink.keyBgAct },
+                        navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+                onPress={() => setBwSync(p => !p)} activeOpacity={0.7}>
+                <Text style={[st.bwSyncTxt, { color: bwSync ? pt.gold.sel : pt.ink.key }]}>SYNC</Text>
+              </TouchableOpacity>
+              )}</NavItem></NavRow>
+              </View>
+            ) : (
             <NavRow><NavItem onPress={() => setBwSync(p => !p)}>{(navFocused, navRef) => pt.metal ? (
               <PopupKey ref={navRef as any} label="SYNC" active={bwSync} pip onPress={() => setBwSync(p => !p)}
                 focused={navFocused} height={32} fontSize={11} hitSlop={6} style={{ minWidth: 62 }} />
@@ -1716,12 +1769,14 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
               <Text style={[st.bwSyncTxt, { color: bwSync ? pt.gold.sel : pt.ink.key }]}>SYNC</Text>
             </TouchableOpacity>
             )}</NavItem></NavRow>
+            )}
             <NavSlider style={st.bwHalfSlider}
               minimumValue={bwEdgeMin} maximumValue={bwEdgeMax} step={bwStep}
               value={Math.min(bwEdgeMax, Math.max(bwEdgeMin, filterHigh))}
               onValueChange={(v: number) => {
-                if (bwSync) onFilterBoth?.(-v, v);
-                else        onFilterBoth?.(filterLow, v);
+                if (v === filterHigh) return;  // ★★ V12 the same: only a real move is a manual override
+                if (bwSync) dragBw(-v, v);
+                else        dragBw(filterLow, v);
               }}
               minimumTrackTintColor={bwFill} maximumTrackTintColor={bwRest}
               thumbTintColor={pt.gold.thumb} />
@@ -2023,6 +2078,7 @@ const st = StyleSheet.create({
   bwMirrorRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 12 },
   bwHalfSlider: { flex: 1, height: 32 },
   bwEdgeVal:    { color: BW_GOLD, fontFamily: 'Atkinson Hyperlegible', fontSize: 10, minWidth: 44, textAlign: 'center' },
+  bwMidCol:     { gap: 6, alignItems: 'stretch' },   // ★ V12 AUTO above SYNC
   bwSyncBtn:    { borderWidth: 1, borderColor: 'rgba(255,255,255,0.30)', borderRadius: 5, paddingHorizontal: 12, paddingVertical: 8, alignItems: 'center', justifyContent: 'center' },
   bwSyncTxt:    { color: BW_MUTED, fontFamily: 'Atkinson Hyperlegible', fontSize: 12, fontWeight: 'bold', letterSpacing: 0.5 },
   btn: {

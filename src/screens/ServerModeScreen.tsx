@@ -38,10 +38,14 @@ const BLOCKABLE: { id: string; label: string }[] = [
   { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR' }, { id: 'hell', label: 'Feld Hell' },
   { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
   { id: 'ais', label: 'AIS ships' }, { id: 'aprs', label: 'APRS' },
+  /* ★★ V12 synchronous AM (docs/v12/AM-SYNC.md) — on the setup page since they shipped; here too now, because the
+   *  benchmark can start one OFF (applyBench) and the owner must be able to switch it back on from this screen. */
+  { id: 'sam', label: 'SAM' }, { id: 'sau', label: 'SAM-U' }, { id: 'sal', label: 'SAM-L' },
+  { id: 'ecssu', label: 'ECSS-U' }, { id: 'ecssl', label: 'ECSS-L' }, { id: 'amst', label: 'AM Stereo (C-QUAM compatible)' },
 ];
 /** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
- *  need IQ, which an Icom's audio is not. */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds', 'spotsband', 'ism', 'lora', 'ndb', 'ais'];   // ★ these need IQ too
+ *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS need IQ too; the Icom demodulates the AM family itself. */
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds', 'spotsband', 'ism', 'lora', 'ndb', 'ais', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
@@ -499,6 +503,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm);
       const label = String(row(o.row)?.label || sw).replace(/^Decoder: /, '');
       notes.push(`${label} is off — it measured ${Math.round(Number(o.pct) || 0)}% of a core here. Switch it on to offer it anyway.`);
+    }
+    /* ★★ V12 DEMODULATORS — the same rule as vibe_setup_page.h benchApplyDefaults: a SAM / SAM-U/L / ECSS-U/L / AM stereo
+     *  listener that measured below green starts that mode off; the owner can switch it back on above. */
+    for (const [rid, sw] of [['lk_sam', 'sam'], ['lk_sau', 'sau'], ['lk_sal', 'sal'], ['lk_ecssu', 'ecssu'], ['lk_ecssl', 'ecssl'], ['lk_amst', 'amst']]) {
+      const r = row(rid);
+      if (!r || r.grade === 'green' || r.grade === 'none' || new RegExp('(^|,)' + sw + '(,|$)').test(bm)) continue;
+      bm = bm ? bm + ',' + sw : sw;
+      setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm);
+      notes.push(`${String(r.label).replace(/^Locked range, per | listener$/g, '')} is off — one listener measured ${Math.round(r.pct)}% of a core here. Switch it on to offer it anyway.`);
     }
     if (scan && scan.grade === 'red' && dabScanLabels === 1) {
       setDabScanLabels(0); AsyncStorage.setItem(K.dabScanLabels, '0');

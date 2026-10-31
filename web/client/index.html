@@ -606,6 +606,11 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 #mChan { font-size: 0.62em; color: rgba(255,255,255,0.72); letter-spacing: 0.04em; white-space: nowrap;
          font-variant-numeric: tabular-nums; }
 #mChan[hidden] { display: none; }
+/* ★ V12 THE AM SYNC LINE — carrier lock and offset ("SYNC +3.2 Hz"), the width AUTO BW applied, a notch: the same
+   small dimmed detail as the airband channel line, present only in the AM family. */
+#mAmSync { font-size: 0.62em; color: rgba(255,255,255,0.72); letter-spacing: 0.04em; white-space: nowrap;
+           font-variant-numeric: tabular-nums; margin-left: 0.5em; }
+#mAmSync[hidden] { display: none; }
 /* ★ min-width in em, so the demod chip cannot shrink to a stub. It was the narrowest thing in
    the pill and the first to be squeezed — at the tightest width WFM had collapsed to a fraction
    of the frequency's height beside it, reading as a label rather than the button it is. */
@@ -814,7 +819,7 @@ body.askLocked #rowGain, body.askLocked #rspCtls, body.askLocked #ahfCtls, body.
 body.askLocked #hrfCtls, body.askLocked #rowTunerBw, body.askLocked #rowRate, body.askLocked #agc,
 body.askLocked #dsSeg, body.askLocked #antSeg, body.askLocked #rspAntSeg, body.askLocked #nr, body.askLocked #notch,
 body.askLocked #deemphSeg, body.askLocked #stereoBtn, body.askLocked #wspBtn, body.askLocked #imsBtn,
-body.askLocked #ceqBtn, body.askLocked #autoBwBtn, body.askLocked #nbBtn, body.askLocked #nbxBtn,
+body.askLocked #ceqBtn, body.askLocked #autoBwBtn, body.askLocked #bwAuto, body.askLocked #nbBtn, body.askLocked #nbxBtn,
 body.askLocked #nfmVoiceBtn { opacity: 0.35; }
 /* ★★★ AN ICOM (driver "icom", RECEIVE ONLY): everything the IQ path powers does not exist on this radio — the sample
    rate, the gain table and VibeAGC, the IF filter, direct sampling, bias-T, ppm, the other radios' panels, OUR squelch
@@ -3179,7 +3184,8 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 
 /* Mirrored bandwidth sliders. */
 .bwHalf { flex: 1 1 auto; width: auto; min-width: 4em; }
-#bwSync { padding: 0.35em 0.6em; font-size: 0.8em; }
+#bwSync, #bwAuto { padding: 0.35em 0.6em; font-size: 0.8em; }
+.bwMid { display: flex; flex-direction: column; gap: 4px; }   /* ★ V12 AUTO above SYNC */
 #bwLoVal, #bwHiVal { min-width: 4em; }
 #bwLoVal { text-align: right; }
 
@@ -4462,7 +4468,7 @@ select.btn { padding: 6px 8px; }
                frequency entry must have a padlock and advise it is locked due to DAB mode"). -->
           <span id="mFreqBox" role="button" tabindex="0"><span id="mFreqLock" hidden aria-hidden="true"><svg viewBox="0 0 10 13" width="9" height="12"
             fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="1" y="5.5" width="8" height="6.5" rx="1"/><path
-            d="M2.9 5.5V3.6a2.1 2.1 0 0 1 4.2 0v1.9"/></svg></span><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span><span id="mChan" hidden></span></span>
+            d="M2.9 5.5V3.6a2.1 2.1 0 0 1 4.2 0v1.9"/></svg></span><span id="mFreq">—</span><span id="mFreqFine"></span><span id="mUnit">MHz</span><span id="mChan" hidden></span><span id="mAmSync" hidden aria-live="off"></span></span>
           <span id="mMode" role="button" tabindex="0">NFM</span><!--
           ★★ THE APP'S INTERLOCKING RINGS, not a green "ST". The lettering was the least legible
              thing on a bar that runs to bright green, and the app already has a symbol for this
@@ -4562,7 +4568,9 @@ select.btn { padding: 6px 8px; }
     <div class="bwRow">
       <span class="val" id="bwLoVal">−5.0k</span>
       <input type="range" id="bwLo" class="bwHalf">
-      <button class="btn" id="bwSync" title="Mirror both edges">SYNC</button>
+      <!-- ★★ V12 AUTO stacked above SYNC — shown only where the server lists this mode in hwinfo autoBwModes; without
+           it the middle column is SYNC alone, the row it always was. -->
+      <span class="bwMid"><button class="btn" id="bwAuto" hidden title="AUTO bandwidth — the receiver fits the passband to the signal by itself (SSB: to the voice that is there; CW: round the keyed tone; AM: away from a neighbour; FM: narrower for a weak station). The sliders show what it chose. Move a slider and AUTO switches off: your width wins.">AUTO</button><button class="btn" id="bwSync" title="Mirror both edges">SYNC</button></span>
       <input type="range" id="bwHi" class="bwHalf">
       <span class="val" id="bwHiVal">+5.0k</span>
     </div>
@@ -5179,6 +5187,8 @@ select.btn { padding: 6px 8px; }
     <div class="seg"><button class="btn on" id="abStereoBtn" title="With VFO A/B on: the lower-frequency VFO plays in your LEFT ear and the higher in your RIGHT, so the waterfall and your ears agree. Off: both VFOs in both ears.">ON</button></div>
   </div>
   <div class="lbl wrap" id="abMonoHint" hidden>Mono output — both VFOs are mixed.</div>
+  <!-- ★★ V12 the AM AUTO BW row MOVED to the AUTO key in the bandwidth row (#bwAuto, docs/v12/AM-SYNC.md §11), which
+       serves every mode the server can widen and narrow by itself. -->
   <div class="mrow" id="nbxRow" hidden>
     <label>NOISE BLANKER</label>
     <div class="seg"><button class="btn" id="nbxBtn" title="Impulse noise blanker on your own channel — the crackle of distant lightning, power-line hash, ignition, thermostats, switch-mode supplies. Removes the moments an impulse occupies rather than filtering continuously; on a clean signal it blanks nothing. Not for broadcast FM, which has its own NB below. The owner may also run a wider one on the whole receiver.">OFF</button></div>

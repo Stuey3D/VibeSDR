@@ -18,6 +18,7 @@
 
 import type { DecoderType } from '../components/DecoderPanel';
 import type { SDRMode } from '../services/sdrTypes';
+import { isAmSync, AM_SYNC_LABEL } from '../services/amSync.ts';   // ★ .ts: node faceplate tests load this file directly
 
 /** Advance widths (em) of Atkinson Hyperlegible Regular, read from assets/fonts' hmtx table — every
  *  glyph a mode label or reading can contain. The app asks for BOLD; both platforms SYNTHESISE it
@@ -148,6 +149,7 @@ export function stereoWidth(fontSize: number): number {
  *  so show it as plain "CW" to match the button. */
 export function modeDisplay(mode: string): string {
   const m = mode.toLowerCase();
+  if (isAmSync(m)) return AM_SYNC_LABEL[m];   // ★ V12 SAM-U, ECSS-L, AM-ST … (amSync.ts)
   return (m === 'cwu' || m === 'cwl' || m === 'cw') ? 'CW' : mode.toUpperCase();
 }
 
@@ -164,8 +166,12 @@ export function composeModeLabel(mode: string, decoder: string | null | undefine
   // ★ V12 the SCANNER neither: it moves the demod about, it does not decode on top of it.
   const dec = decoder && decoder !== 'transcribe' && decoder !== 'scanner' ? (decoder === 'wefax' ? 'fax' : decoder) : '';
   // ★ V12 CW on a CW demod reads "CW", never "CW: CW" (modeDisplay folds cwu / cwl to CW).
-  return modeDisplay(mode) + (dec && dec.toLowerCase() !== String(mode).toLowerCase()
-    && dec.toUpperCase() !== modeDisplay(mode) ? `: ${dec.toUpperCase()}` : '');
+  /* ★ V12 with a decoder riding, the synchronous AM family reads as its FAMILY — SAM (SAM-U/L and ECSS are synchronous
+   *  detection too) or AM (AM stereo): "SAM-U: NAVTEX" / "ECSS-L: WHISPER" did not fit the field on any faceplate
+   *  (test_faceplate_segfield / dotfield / meters / landscape caught all of them). Bare, the box keeps the exact name. */
+  const base = dec && isAmSync(String(mode).toLowerCase()) ? (String(mode).toLowerCase() === 'amst' ? 'AM' : 'SAM') : modeDisplay(mode);
+  return base + (dec && dec.toLowerCase() !== String(mode).toLowerCase()
+    && dec.toUpperCase() !== base ? `: ${dec.toUpperCase()}` : '');
 }
 
 /** The longest reading the box's second line shows (formatReading: "-120dB", "S9+60", "120 dBf"). */
@@ -181,7 +187,8 @@ type MissingDecoder = Exclude<NonNullable<DecoderType>, typeof CLIENT_DECODERS[n
 const everyDecoderListed: [MissingDecoder] extends [never] ? true : MissingDecoder = true;
 
 /** Every demod the app can be in (sdrTypes' SDRMode, held to it exactly by `satisfies`). */
-export const DEMODS = { usb: 1, lsb: 1, am: 1, sam: 1, fm: 1, nfm: 1, cwu: 1, cwl: 1, wfm: 1, drm: 1 } as const satisfies
+export const DEMODS = { usb: 1, lsb: 1, am: 1, sam: 1, fm: 1, nfm: 1, cwu: 1, cwl: 1, wfm: 1, drm: 1,
+                        sau: 1, sal: 1, ecssu: 1, ecssl: 1, amst: 1 } as const satisfies
   Record<SDRMode, 1>;
 
 /**
@@ -196,7 +203,7 @@ export function modeLabelCandidates(standalone: readonly string[]): { label: str
   for (const m of Object.keys(DEMODS)) for (const d of [null, ...CLIENT_DECODERS]) {
     const label = composeModeLabel(m, d);
     out.push({ label, stereo: false });
-    if (m === 'wfm') out.push({ label, stereo: true });
+    if (m === 'wfm' || m === 'amst') out.push({ label, stereo: true });   // ★ V12 AM stereo carries the rings too
   }
   for (const m of standalone) out.push({ label: composeModeLabel(m, m, m === 'dab'), stereo: false });
   out.push({ label: composeModeLabel('wfm', null, true), stereo: true });

@@ -87,6 +87,8 @@ flags_for() {
     #   followed the WFM cliff (2026-09-29). Optimised for the same reason.
     test-passband-cost)    echo "-O2 -I $VDSP -I $KISS" ;;
     test-watch|test-watch-cost) echo "-O2 -I $VDSP -I $KISS -lpthread" ;;   # ★ V12 VFO A/B (vibe_watch.h)
+    test-am-sync)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★ V12 SAM / ECSS / AM stereo / AM auto bandwidth (amsync.cpp)
+    test-auto-bw)          echo "-O2 -I $VDSP -I $KISS" ;;   # ★★ V12 SSB / CW auto bandwidth (autobw.cpp) through the real pipeline
     # ★★★ Every chain delivers exactly 48 000 audio samples per second of capture (2026-10-07: the RSPs
     #     ran 32-34 ppm short through a rounded, approximated resampler ratio). Optimised: 21 s of input per chain.
     test-resampler-rate)   echo "-O2 -I $VDSP -I $KISS" ;;
@@ -204,31 +206,35 @@ flags_for() {
 deps_for() {
   case "$1" in
     test-wspr)          echo "android/app/src/main/cpp/decoders/digimodes/wspr_decoder.cpp $VDSP/third_party/pffft/pffft.c" ;;
-    test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-wfm-stereo)    echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-stereo-highblend) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-stereo-highblend) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-gain-step) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-gain-step) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-multipath-meter) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-multipath-meter) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-mpx-measure|test-rds-ps-frames) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-mpx-measure|test-rds-ps-frames) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-wfm-narrow-cost) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-wfm-narrow-cost) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-passband-cost)   echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-passband-cost)   echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-am-sync)         echo "$VDSP/amsync.cpp $VDSP/ddc.cpp $VDSP/fft.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-auto-bw)         echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-resampler-rate)  echo "$VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-watch|test-watch-cost) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+                              $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
+                              $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
+    test-resampler-rate)  echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-ssb-offset) echo "$VDSP/ssb_offset.cpp $VDSP/resampler.cpp $VDSP/fft.cpp $VDSP/ddc.cpp \
@@ -245,7 +251,7 @@ deps_for() {
     # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link — nor pffft,
     #   which they carry too since monitor.c's STFT runs through it (2026-10-25).
     # ★ V12 2026-10-27: test-bg-ndb — the same, plus the NDB skimmer (the background NDB skimmer VFO, vibe_bgdecode_ndb.h)
-    test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty) echo "$([ "$1" = test-bg-ndb ] && echo android/app/src/main/cpp/decoders/ndb_skimmer.cpp) $VDSP/pipeline.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty) echo "$([ "$1" = test-bg-ndb ] && echo android/app/src/main/cpp/decoders/ndb_skimmer.cpp) $VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp \
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
@@ -600,6 +606,8 @@ if npx tsx scripts/test_spots_band_app.ts; then pass=$((pass+1)); else fail=$((f
 # ★★ V12 APP PARITY 2: the app's DRM box against the web's drmRender (the same words in the same order), the sanitiser,
 #    the capability (vibeserver.json modes lists "drm").
 if npx tsx scripts/test_drm_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if node --no-warnings scripts/test_am_sync.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★ V12 synchronous AM (amSync.ts)
+if node --no-warnings scripts/test_bw_auto.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi   # ★★ V12 the AUTO key (bwAuto.ts)
 # ★★ V12 NDB (src/services/ndb.ts): the app's NDB against the web's — sanitiser, every cell, bars (and the map layer's),
 #    NM, rows, tiles, the map feed, Find / stats, the readings' memory, the capability, the wiring (V12 NDB).
 if npx tsx scripts/test_ndb_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

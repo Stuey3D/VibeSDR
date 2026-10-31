@@ -693,6 +693,8 @@ export interface AudioSheetProps {
   fmNr?: boolean;   onFmNr?: (on: boolean) => void;
   fmIms?: boolean;  onFmIms?: (on: boolean) => void;
   fmAutoBw?: boolean;  onFmAutoBw?: (on: boolean) => void;
+  /** ★★ V12 `amSyncLine` = what the AM family's carrier lock and auto bandwidth are doing (amSyncReadout), or empty. */
+  amSyncLine?: string;
   fmCeq?: boolean;  onFmCeq?: (on: boolean) => void;
   fmNb?: boolean;   onFmNb?: (on: boolean) => void;
 
@@ -735,7 +737,7 @@ export default function AudioSheet({
   notchOn = false, onNotch, binaural = false, onBinaural, vfoStereo = true, onVfoStereo, vfoABOn = false, vfoRows,
   dualStereo = true, onDualStereo, dualMuted = false, onDualMute,
   deemph = 50e-6, onDeemph, stereo = true, onStereo,
-  fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw,
+  fmNr, onFmNr, fmIms, onFmIms, fmCeq, onFmCeq, fmNb, onFmNb, fmAutoBw, onFmAutoBw, amSyncLine,
   rawAudio = false, onRawAudio, iq = null, onIqOut, iqLocal = false,
   onOwrxSquelch, onOwrxSquelchAuto, onOwrxNr, owrxDspDefaults, visualGain = 0,
   serverDspEnabled = false, serverDspFilter = '', serverDspParams = {},
@@ -1111,6 +1113,17 @@ export default function AudioSheet({
               <Text style={[st.bwLabel, { width: 78 }]}>NOISE BLANKER</Text>
               <View style={{ flex: 1 }} />
               <Toggle label={nbx ? 'ON' : 'OFF'} on={nbx} onPress={() => onNbx?.(!nbx)} />
+            </View>
+          )}
+
+          {/* ★★ V12 THE AM SYNC LINE (docs/v12/AM-SYNC.md) — the carrier lock and its offset, the width AUTO applied, a
+              heterodyne notch — in the standard font (a menu, not a main control). ★ Its AM AUTO BW switch MOVED to the
+              AUTO key by the passband sliders (mode sheet, §11), which serves every mode with an automatic width. */}
+          {!!amSyncLine && (
+            <View style={[st.bwRow, askDim]}>
+              <Text style={[st.bwLabel, { width: 78 }]}>AM SYNC</Text>
+              <Text style={[st.bwLabel, { flex: 1, width: undefined, opacity: 0.7, fontSize: 10 }]} accessibilityLiveRegion="none"
+                    numberOfLines={1}>{amSyncLine}</Text>
             </View>
           )}
 

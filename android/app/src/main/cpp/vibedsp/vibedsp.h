@@ -1387,17 +1387,33 @@ public:
             const float a = std::fabs(x[i]);
             env_ += (a > env_ ? atk_ : rel_) * (a - env_);
             float g = kTarget / (env_ + 1e-6f);
-            if (g > kMaxGain) g = kMaxGain;
+            if (g > maxGain_) g = maxGain_;
             x[i] *= g;
         }
     }
     void reset() { env_ = kTarget; }
     /** Same latch risk as Deemphasis/DcBlocker: env_ is recursive. Checked per block. */
     void guard() { if (!std::isfinite(env_)) env_ = kTarget; }
+    /** ★★ V12 AM SYNC: the ceiling is the mode's to choose. Envelope AM/SSB/CW keep 256 (unchanged).
+     *  The synchronous AM detectors arrive already LEVELLED against the tracked carrier (SyncAm), so
+     *  this AGC is only a gentle leveller + anti-clip there: a ceiling of 4 (12 dB) stops it lifting
+     *  the noise in every programme pause, which is the "pumping" SAM is meant to cure. */
+    void setMaxGain(float g) { maxGain_ = g > 1.0f ? g : 1.0f; }
+    /** The same AGC, but x[] holds a LEVEL per sample (max |L|,|R|) and gets the GAIN back — so two
+     *  channels share one gain (AM stereo: per-channel gains would pan the image). */
+    void gainsFor(float* x, int n) {
+        for (int i = 0; i < n; ++i) {
+            const float a = x[i];
+            env_ += (a > env_ ? atk_ : rel_) * (a - env_);
+            float g = kTarget / (env_ + 1e-6f);
+            if (g > maxGain_) g = maxGain_;
+            x[i] = g;
+        }
+    }
 private:
     float env_ = kTarget, atk_ = 0.05f, rel_ = 1e-4f;
+    float maxGain_ = 256.0f;                   // ceiling (don't amplify silence)
     static constexpr float kTarget  = 0.25f;   // output setpoint
-    static constexpr float kMaxGain = 256.0f;  // ceiling (don't amplify silence)
 };
 
 // ── RDS data-link decoder ────────────────────────────────────────────────--
@@ -2641,6 +2657,282 @@ private:
 };
 
 
+// ── V12 SYNCHRONOUS AM: SAM, SAM-U/L, ECSS-U/L, AM STEREO (C-QUAM compatible) + AM AUTO BANDWIDTH ──
+/**
+ * ★★★ ONE CARRIER TRACKER, SIX DETECTORS. Every one of these modes starts from the same thing: the
+ *     station's carrier, found and followed by a phase-locked loop, so the channel can be rotated
+ *     until the carrier sits still at 0 Hz and 0 degrees. From that one rotated signal y = I + jQ:
+ *       · SAM     both sidebands, coherently (I) — or, when one side is dirtier, weighted toward the
+ *                 cleaner one (maximum-ratio combining of the two sidebands);
+ *       · SAM-U/L one sideband (I ∓ Hilbert(Q)), the other side's splatter rejected;
+ *       · ECSS-U/L the same detector with an SSB-shaped passband (one-sided width, as a DXer sets an
+ *                 SSB filter when zero-beating a carrier) — see docs/v12/AM-SYNC.md for why both exist;
+ *       · STEREO  AM stereo, C-QUAM compatible: L+R from the envelope, L−R from the carrier phase with
+ *                 the 1/cos correction, the 25 Hz pilot detected and removed, stereo only while it is;
+ *       · ENV     ordinary envelope AM (AmDemod, unchanged) — the tracker runs only so AM AUTO
+ *                 BANDWIDTH can measure the station; with auto bandwidth off nothing here runs at all.
+ *
+ * ★★★ WHAT MAKES SAM BETTER, NOT JUST DIFFERENT (Stuart: "whenever I've enabled it on other servers
+ *     it either makes no difference or makes the signal worse"). The cases where SAM sounds worse are
+ *     all loop faults, so the loop is built around them:
+ *       1. THE LOOP LISTENS TO THE CARRIER ONLY. The phase detector reads a two-pole low-pass of y
+ *          (30 Hz tracking), never the per-sample phase — the sidebands, a neighbour and the noise
+ *          barely reach it. A loop that hears modulation turns it into phase noise = distortion.
+ *       2. FLYWHEEL THROUGH CARRIER FADES. The error is weighted by (carrier / its 0.5 s average)²,
+ *          so when selective fading takes the carrier down the loop simply coasts on its frequency
+ *          integrator — exactly the moment envelope detection distorts and SAM must hold.
+ *       3. NARROW (5 Hz natural frequency) once locked, wide (20 Hz) only to pull in, after a coarse
+ *          FFT search of ±1 kHz has put the oscillator on the carrier — fast acquire, no hunting.
+ *       4. CARRIER-REFERENCED LEVEL. Audio is divided by a 1 s average of the received amplitude, so
+ *          it does not swing with the fades, and the AGC behind it is capped at 12 dB (Agc::setMaxGain)
+ *          so it cannot lift the noise in every pause.
+ *       5. A SAFETY NET. Lock quality (the amplitude-weighted mean of cos 2φ) drives a blend toward the
+ *          envelope detector; poor lock eases to plain AM, it never produces garbage. No squeal: the
+ *          oscillator is never heard, it only rotates.
+ *
+ * ★★ AM AUTO BANDWIDTH, judged while WIDE, always. The measurement is an FFT of y BEFORE any cut, so
+ *    a narrowing can never confirm itself ([[never_limit_permanently]]). For DSB AM the two sidebands
+ *    carry the same programme mirrored, so Re(Y(f)·Y(−f)) averages to the PROGRAMME power at f while
+ *    noise and a neighbour (which are not mirrored) average to zero: S(f), and each side's own
+ *    noise+interference N±(f) = |Y(±f)|² − S(f). That is a per-frequency, PER-SIDEBAND S/N from one
+ *    FFT — the edge per side is the highest 250 Hz band still above +3 dB, and a side whose
+ *    interference rises 6 dB over the other's is cut below it. Coherent modes cut each sideband on its
+ *    own (an asymmetric passband — narrow only the side the neighbour is on); envelope AM and stereo
+ *    cut symmetrically on the RF (AdaptiveIf). A steady carrier on ONE side only is a heterodyne and
+ *    gets a notch. The user's width is always the ceiling: auto only ever narrows under it, and a
+ *    retune clears every verdict.
+ *
+ * ★ SIMD: the rotator (rotateBlockIlv), the magnitudes, the Hilbert kernel (four outputs per tap,
+ *   contiguous loads — NEON / SSE2 / scalar), the sideband sums, the C-QUAM decode and the FFT
+ *   (pffft) are vectorised. The loop itself runs once per 32 samples, so it costs nothing. The
+ *   sideband low-passes are biquads (recursive; not vectorisable along time) — documented in the doc.
+ * ★ Not C-QUAM: "C-QUAM" is Motorola's trademark. This decodes signals compatible with it, built from
+ *   the published description (envelope = 1+L+R, tan φ = (L−R)/(1+L+R), 25 Hz pilot on L−R).
+ */
+class SyncAm {
+public:
+    enum class Det { ENV, SAM, SAM_U, SAM_L, ECSS_U, ECSS_L, STEREO };
+    struct Status {
+        bool  locked = false;      // carrier PLL locked (and blended in)
+        float offsetHz = 0.0f;     // carrier frequency relative to the tuned frequency (Hz)
+        float lockQ = 0.0f;        // 0..1 lock quality
+        float blend = 0.0f;        // 0 = envelope fallback, 1 = fully synchronous
+        bool  pilot = false;       // STEREO: 25 Hz pilot present → stereo
+        float pilotLevel = 0.0f;   // STEREO: pilot amplitude relative to the carrier
+        float sep = 0.0f;          // STEREO: L−R blend 0..1
+        float edgeLoHz = 0.0f;     // applied audio edge, LOWER sideband (Hz) — 0 = not applicable
+        float edgeHiHz = 0.0f;     // applied audio edge, UPPER sideband (Hz)
+        bool  autoCut = false;     // auto bandwidth is narrower than the listener's width on some side
+        float notchHz = 0.0f;      // heterodyne notch frequency (audio Hz; <0 = lower sideband), 0 = none
+        float mrcUpper = 0.5f;     // SAM: weight given to the upper sideband below the split (0.5 = plain DSB)
+        float mrcUpperHi = 0.5f;   // SAM: …and above it (where a neighbour is)
+    };
+    SyncAm();
+    ~SyncAm();
+    SyncAm(const SyncAm&) = delete;
+    SyncAm& operator=(const SyncAm&) = delete;
+    /** @param userEdgeHz the listener's one-sided audio edge (AM-shaped modes: width/2; ECSS: width). */
+    void configure(Det d, double rate, double userEdgeHz);
+    void setUserEdge(double userEdgeHz);
+    void setAutoBw(bool on) { autoBw_ = on; }
+    bool autoBw() const { return autoBw_; }
+    /** ★ A RETUNE: re-acquire the carrier and forget every auto-bandwidth verdict (a limit must never
+     *  travel with the dial). */
+    void retune();
+    void reset();
+    /** outR may be null except in STEREO. Output: mono (or L/R) audio at the channel rate. */
+    void process(const cf32* in, float* outL, float* outR, int n);
+    Det det() const { return det_; }
+    bool stereo() const { return det_ == Det::STEREO; }
+    bool coherent() const { return det_ != Det::ENV && det_ != Det::STEREO; }
+    /** True when the detector levels its own output against the carrier (everything but ENV). */
+    bool carrierLevelled() const { return det_ != Det::ENV; }
+    Status status() const;
+    // ── test / bench hooks ─────────────────────────────────────────────────
+    /** Force the per-sideband audio edges (Hz, ≤0 = auto). Bypasses the measurement. */
+    void forceEdges(float loHz, float hiHz) { forceLo_ = loHz; forceHi_ = hiHz; }
+    /** Disable individual auto-bandwidth arms for A/B measurement. */
+    void setArms(bool noise, bool interference, bool mrc, bool notch) {
+        armNoise_ = noise; armInterf_ = interference; armMrc_ = mrc; armNotch_ = notch; }
+    /** Disable the envelope safety net (bench only: measure the raw coherent detector). */
+    void setSafetyNet(bool on) { safety_ = on; }
+    /** Disable carrier-referenced levelling (bench only). */
+    void setCarrierLevel(bool on) { carrierLevel_ = on; }
+    int hilbertTaps() const { return 2 * hM_ + 1; }
+    /** Bench: how much dirtier (power ratio) one sideband must be than the other to count as a neighbour. */
+    void setInterfRatio(float r) { if (r > 1.0f) interfRatio_ = r; }
+private:
+    struct Biq { float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
+                 void lp(double fs, double f, double q); void notch(double fs, double f, double q);
+                 inline float step(float x) { const float y = b0 * x + z1; z1 = b1 * x - a1 * y + z2; z2 = b2 * x - a2 * y; return y; }
+                 void clear() { z1 = z2 = 0; } };
+    struct Lp8 { Biq s[4]; float f = -1.0f; void design(double fs, double fc); void run(float* x, int n);
+                 void clear() { for (auto& b : s) b.clear(); } };
+    void loopUpdate_();
+    void acquire_(const cf32* in, int n);
+    void measure_(const float* yI, const float* yQ, int n);
+    void decide_();
+    void hilbert_(const float* x, int n, float* out, bool compute, float* outLow = nullptr);   // out[i] = H{x} delayed by hM_
+    void hilbertLow_(int n, float* out);   // the band-limited Hilbert (|f| < hLowF_), same delay — SAM's region split
+    void designHilbertLow_(double fSplit);
+    void applyEdges_();
+    // config
+    Det det_ = Det::ENV;
+    double fs_ = 0.0, userEdge_ = 5000.0;
+    /* ★★★ THE NOISE ARM IS OFF — MEASURED, NOT ASSUMED (2026-10-31, docs/v12/AM-SYNC.md). On real skywave the
+     *  two sidebands lose their mirror coherence (selective fading turns H(f) and H(−f) different), so the
+     *  mirror estimator under-reads the programme and called a healthy station noise above 2 kHz: 6060 kHz cut to
+     *  2 kHz, −1.8 dB on the coherence score; 7350 −1.3 dB. The interference arm (one side 6 dB dirtier than the
+     *  other) does not depend on that coherence and won +3.5 dB (AM) / +2.8 dB (SAM) on 7355 under a 5 kHz
+     *  neighbour. Kept as a bench switch (setArms). */
+    bool autoBw_ = true, armNoise_ = false, armInterf_ = true, armMrc_ = true, armNotch_ = true;
+    bool safety_ = true, carrierLevel_ = true;
+    float forceLo_ = 0.0f, forceHi_ = 0.0f;
+    float interfRatio_ = 16.0f;
+    // tracker
+    static constexpr int K = 32;          // samples per loop update
+    int   pos_ = 0;
+    float cr_ = 1.0f, ci_ = 0.0f;         // oscillator phasor e^{jθ}
+    float stepC_ = 1.0f, stepS_ = 0.0f;   // per-sample rotation
+    double omega_ = 0.0;                  // rad per UPDATE (K samples)
+    double maxOmega_ = 0.0;
+    float sI_ = 0, sQ_ = 0, sM_ = 0;      // sub-block sums of y and |z|
+    float s1r_ = 0, s1i_ = 0, s2r_ = 0, s2i_ = 0;   // two-pole carrier low-pass
+    float aLp_ = 0, aLpAcq_ = 0, aLpTrk_ = 0;
+    float kp_ = 0, ki_ = 0, kpAcq_ = 0, kiAcq_ = 0, kpTrk_ = 0, kiTrk_ = 0;
+    float ampRef_ = 0;                    // 0.5 s average of the carrier amplitude (loop weighting)
+    float aRef_ = 0;
+    float lockNum_ = 0, lockDen_ = 0, aLock_ = 0;
+    float dcE1_ = 0, dcE2_ = 0, aDc_ = 0; // envelope DC (two-pole on mean |z|)
+    float lvl_ = 0, aLvl_ = 0, aLvlUp_ = 0;   // level reference (mean |z|: up 0.3 s, down 2 s)
+    float blend_ = 0, aBlUp_ = 0, aBlDn_ = 0;
+    // ramps (start → end over the current sub-block)
+    float dcIa_ = 0, dcIb_ = 0, dcEa_ = 0, dcEb_ = 0, ga_ = 0, gb_ = 0, bla_ = 0, blb_ = 0;
+    enum class St { ACQ, PULL, TRACK } st_ = St::ACQ;
+    int   stCount_ = 0, badCount_ = 0;
+    bool  everLocked_ = false;
+    // acquisition
+    std::unique_ptr<ComplexFFT> acqFft_;
+    std::vector<cf32> acqBuf_, acqOut_;
+    int acqN_ = 0, acqFill_ = 0;
+    // detector buffers
+    std::vector<float> yI_, yQ_, mag_, dcI_, dcE_, g_, bl_, hq_, tmpA_, tmpB_, tmpC_;
+    std::vector<float> dI_, dE_;          // delay lines [hM_ history][block]
+    std::vector<float> hBuf_;             // Hilbert history [2hM history][block]
+    std::vector<float> hTaps_;            // h[1], h[3], … (odd taps, positive side)
+    std::vector<float> hLowTaps_, hqLow_; // the band-limited Hilbert's h[1..M], and its output
+    float hLowF_ = -1.0f;
+    int hM_ = 0;
+    // sideband filters / cut
+    Lp8 lpA_, lpW1_, lpW2_;               // SAM-U/L, ECSS: the sideband's cut (lpA_); SAM: the region split (lpW1_)
+    float edgeU_ = 0, edgeL_ = 0;         // applied edges
+    /* ★★ SAM's two-region sideband combining: below splitF_ the upper sideband gets weight mrcA_, above it mrcHi_
+     *  (maximum-ratio weights from each side's measured noise+interference). No neighbour: one region, 0.5 = DSB. */
+    float mrcA_ = 0.5f, mrcTarget_ = 0.5f, mrcHi_ = 0.5f, mrcHiT_ = 0.5f, splitF_ = 0.0f;
+    Biq notch_[2], notchR_[2]; float notchF_[2] = {0, 0}, notchPend_[2] = {0, 0};
+    std::unique_ptr<AmDemod> env_;        // ENV path — the shipping AM detector, unchanged
+    std::unique_ptr<AdaptiveIf> rfCut_;   // ENV / STEREO symmetric RF cut
+    std::vector<cf32> yc_;
+    // measurement
+    std::unique_ptr<ComplexFFT> mFft_;
+    int mN_ = 0, mFill_ = 0, mSkip_ = 0, mHop_ = 0;
+    std::vector<cf32> mBuf_, mOut_;
+    std::vector<float> mWin_, pU_, pL_, pX_;
+    int mFrames_ = 0, sinceDecide_ = 0, decideEvery_ = 0, narrowVotes_[2] = {0, 0}, widenVotes_[2] = {0, 0};
+    float narrowMax_[2] = {0, 0}, widenMin_[2] = {0, 0};
+    float mAlpha_ = 0.05f;
+    // stereo
+    float pilotPh_ = 0, pilotStep_ = 0, p1r_ = 0, p1i_ = 0, p2r_ = 0, p2i_ = 0, aPil_ = 0;
+    float pilotAmp_ = 0, pilotPrevPh_ = 0, pilotDrift_ = 0;
+    bool  pilotOn_ = false; int pilotCount_ = 0;
+    float sep_ = 0, sepA_ = 0, sepB_ = 0, aSep_ = 0;
+    float pilA_r_ = 0, pilA_i_ = 0, pilB_r_ = 0, pilB_i_ = 0;   // pilot phasor ramp (subtraction)
+    float dSum_ = 0; int dPos_ = 0;
+    std::vector<float> d_;
+};
+
+// ── AutoPassband — V12 auto bandwidth for SSB and CW ─────────────────────────────────────────
+/** ★★ V12 AUTO BANDWIDTH FOR SSB AND CW (autobw.cpp; docs/v12/AM-SYNC.md §11, with every measurement).
+ *  The AM family has its own (SyncAm) and WFM has the shim's TEF-style one; this is the third: it works on the
+ *  DEMODULATED audio of USB/LSB/CW, which for those modes is a linear image of the RF passband (0 Hz = the dial's
+ *  suppressed carrier), so cutting the audio IS cutting the RF passband — before the AGC, so the AGC no longer
+ *  levels on what was cut.
+ *
+ *  ★★★ MEASURED ON THE UNCUT AUDIO, ALWAYS, then filtered — so a cut can never confirm itself.
+ *
+ *  SSB — "fit the passband to the voice that is there". Per 100 Hz band, the CORRELATION of that band's log power
+ *  over time with the log power of the voice's core (500–1500 Hz), over ~5 s. A band carrying THIS talker rises and
+ *  falls with the core syllable by syllable; a band of noise, another talker splattering in, or a steady carrier
+ *  does not. The passband is trimmed from each edge to the outermost band that still correlates — the top never
+ *  below 2 kHz, the bottom never above 300 Hz — and the listener's width is always the ceiling.
+ *  CW — "narrow round the keyed tone". The strongest tone within ±250 Hz of the beat note the dial puts a signal on
+ *  (the middle of the listener's CW passband), confirmed on two decisions running, gets a ±150 Hz passband — less
+ *  where another signal is closer than that. Widens again when the tone has gone for 3 s.
+ *  Time rules (both): 3 s of evidence before any cut; narrowing needs four decisions (2 s) and goes to the widest of
+ *  them; widening is at once; a retune clears everything.
+ *  ★ The filter is a linear-phase FIR (RealFir: NEON / SSE2 / scalar — the same kernel the Weaver pair uses),
+ *    redesigned in place (retune keeps the history) when the edges move. While auto is on and not cutting it is a
+ *    pure delay, so the audio does not jump in time when a cut comes and goes. */
+class AutoPassband {
+public:
+    enum class Kind { SSB, CW };
+    struct Status {
+        bool  cut = false;       // narrower than the listener's passband right now
+        float loHz = 0.0f;       // applied audio passband (0 Hz = the dial / BFO zero), lower edge
+        float hiHz = 0.0f;       // … upper edge
+        float toneHz = 0.0f;     // CW: the tone it is centred on (audio Hz), 0 = none
+    };
+    AutoPassband();
+    ~AutoPassband();
+    AutoPassband(const AutoPassband&) = delete;
+    AutoPassband& operator=(const AutoPassband&) = delete;
+    /** @param userHiHz the listener's audio passband top (SSB: its width; CW: the CW filter, tone at the middle). */
+    void configure(Kind k, double fs, double userHiHz);
+    void setUserHi(double userHiHz);
+    /** A retune: every verdict forgotten (a limit must never travel with the dial). */
+    void retune();
+    /** Measures x (uncut), then filters it in place. Delay: (taps − 1) / 2 samples. */
+    void process(float* x, int n);
+    Status status() const { return st_; }
+    Kind kind() const { return kind_; }
+    int taps() const { return taps_; }
+    /** Bench: pin the passband (Hz; hi ≤ 0 = back to automatic). */
+    void forceEdges(float loHz, float hiHz) { forceLo_ = loHz; forceHi_ = hiHz; }
+private:
+    void measureSsb_(const cf32* X);
+    void measureCw_(const cf32* X);
+    void decideSsb_();
+    void decideCw_();
+    void propose_(float lo, float hi, float tone);
+    void apply_(float lo, float hi);
+    Kind kind_ = Kind::SSB;
+    double fs_ = 0.0, userHi_ = 2700.0;
+    int taps_ = 0;
+    std::unique_ptr<RealFir> fir_;
+    std::vector<float> out_;
+    float curLo_ = 0.0f, curHi_ = 0.0f;   // the passband the FIR has now (curHi_ ≤ 0 = pure delay)
+    Status st_{};
+    float forceLo_ = 0.0f, forceHi_ = 0.0f;
+    // measurement
+    std::unique_ptr<RealFFT> fft_;
+    int N_ = 0, fill_ = 0, frames_ = 0, sinceDecide_ = 0, decideEvery_ = 1;
+    float fps_ = 1.0f;
+    std::vector<float> buf_, win_, frame_;
+    std::vector<cf32> spec_;
+    // SSB: per-band log-power moments against the core's (double: E[x²] − E[x]² cancels badly in float)
+    int nBands_ = 0, coreLo_ = 0, coreHi_ = 0;
+    std::vector<int> bandOf_;
+    std::vector<float> bandP_;
+    std::vector<double> mB_, mBB_, mBC_;
+    double mC_ = 0.0, mCC_ = 0.0, aMom_ = 0.0;
+    // CW: per-bin average power
+    std::vector<float> avg_;
+    float aAvg_ = 0.0f;
+    float pendTone_ = 0.0f; int pendCount_ = 0, lostCount_ = 0;
+    // decisions
+    int narrowVotes_ = 0; float narrowLo_ = 0.0f, narrowHi_ = 0.0f;
+};
+
 // ── RxPipeline (the native engine) ───────────────────────────────────────--
 // The complete IQ -> {spectrum, audio} chain that the shim's "Local Hardware
 // (Native)" path runs, replacing the SDR++ Brown graph. Feed it raw IQ from the
@@ -2649,7 +2941,28 @@ private:
 // land in later phases behind the same interface.
 class RxPipeline {
 public:
-    enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM, WFM /* mono; stereo+RDS later */ };
+    /** ★★ V12: SAM … AM_STEREO are the synchronous AM family (SyncAm). They are APPENDED so every existing
+     *  integer value (VIBE_DSP_PLAN's mode=%d, any stored enum) keeps its meaning. */
+    enum class Mode { AM, SSB_USB, SSB_LSB, CW, NFM, WFM, SAM, SAM_U, SAM_L, ECSS_U, ECSS_L, AM_STEREO };
+    /** AM-shaped: the passband straddles the carrier, width = both sides (AM, SAM, SAM-U/L, AM stereo). */
+    static bool isAmShaped(Mode m) {
+        return m == Mode::AM || m == Mode::SAM || m == Mode::SAM_U || m == Mode::SAM_L || m == Mode::AM_STEREO;
+    }
+    /** ECSS: one carrier-locked sideband, the width given ONE-SIDED like an SSB filter. */
+    static bool isEcss(Mode m) { return m == Mode::ECSS_U || m == Mode::ECSS_L; }
+    /** Every mode SyncAm demodulates (all of the AM family, AM itself included). */
+    static bool isAmFamily(Mode m) { return isAmShaped(m) || isEcss(m); }
+    /** The SyncAm detector for a mode (ENV for plain AM). */
+    static SyncAm::Det syncDet(Mode m) {
+        switch (m) {
+            case Mode::SAM: return SyncAm::Det::SAM;       case Mode::SAM_U: return SyncAm::Det::SAM_U;
+            case Mode::SAM_L: return SyncAm::Det::SAM_L;   case Mode::ECSS_U: return SyncAm::Det::ECSS_U;
+            case Mode::ECSS_L: return SyncAm::Det::ECSS_L; case Mode::AM_STEREO: return SyncAm::Det::STEREO;
+            default: return SyncAm::Det::ENV;
+        }
+    }
+    /** The listener's ONE-SIDED audio edge for a width in mode m. */
+    static double audioEdgeHz(Mode m, double bwHz) { return isEcss(m) ? bwHz : bwHz * 0.5; }
     /** ★★★ THE NARROWEST WFM PASSBAND (total width, both sides). setTune() clamps to it, and it
      *  is the bottom edge of WFM's width ladder (chainBand in pipeline.cpp).
      *  ★ Why 40 kHz: a broadcast carrier swings ±75 kHz, and the narrowest IF anyone listens to
@@ -2677,10 +2990,11 @@ public:
     static constexpr double kWfmMaxBwHz = 500000.0;
     static double maxBwHz(Mode m) {
         switch (m) {
-            case Mode::AM:  return kAmMaxBwHz;
+            case Mode::AM:  case Mode::SAM: case Mode::SAM_U: case Mode::SAM_L: case Mode::AM_STEREO:
+                            return kAmMaxBwHz;
             case Mode::NFM: return kNfmMaxBwHz;
             case Mode::WFM: return kWfmMaxBwHz;
-            case Mode::SSB_USB: case Mode::SSB_LSB: case Mode::CW: break;
+            case Mode::SSB_USB: case Mode::SSB_LSB: case Mode::CW: case Mode::ECSS_U: case Mode::ECSS_L: break;
         }
         return kSsbMaxBwHz;
     }
@@ -3214,6 +3528,25 @@ public:
      *     are combined rather than arbitrated — the narrower request wins, which is the only
      *     answer that satisfies both. */
     void setAutoBandwidth(double hz) { autoBwReq_.store(hz, std::memory_order_relaxed); }
+    /** ★★ V12 AM AUTO BANDWIDTH (AM, SAM, SAM-U/L, ECSS-U/L, AM stereo) — SyncAm measures and cuts by itself;
+     *  this is only the switch. ON by default, like the FM one. The listener's width stays the ceiling. */
+    void setAmAutoBandwidth(bool on) { amAutoBw_.store(on, std::memory_order_relaxed); }
+    bool amAutoBandwidth() const { return amAutoBw_.load(std::memory_order_relaxed); }
+    /** The AM family's lock / carrier offset / applied edges / pilot — a copy taken once per block. */
+    SyncAm::Status amSyncStatus() const { std::lock_guard<std::mutex> lk(amStMtx_); return amSt_; }
+    /** ★★ V12 SSB / CW auto bandwidth (AutoPassband) — the SAME switch as the AM family's (setAmAutoBandwidth): one
+     *  AUTO per listener, acting in whichever mode can use it. The applied AUDIO passband (0 Hz = the dial's zero beat). */
+    AutoPassband::Status autoPassbandStatus() const { std::lock_guard<std::mutex> lk(amStMtx_); return apbSt_; }
+    bool autoPassbandActive() const { return mode_ == Mode::SSB_USB || mode_ == Mode::SSB_LSB || mode_ == Mode::CW; }
+    /** Bench only: pin SSB/CW auto's passband (audio Hz; hi ≤ 0 = automatic). Read at the next block. */
+    void setAutoPassbandForce(float lo, float hi) { apbForceLo_.store(lo); apbForceHi_.store(hi); }
+    bool amSyncActive() const { return isAmFamily(mode_); }
+    /** Bench only: switch auto bandwidth's arms (1 noise, 2 interference, 4 MRC, 8 notch); default 0xE. */
+    void setAmAutoArms(unsigned mask) { amArms_.store(mask, std::memory_order_relaxed); }
+    /** Bench only (A/B of SAM's own parts): 1 = AGC ceiling 256 as envelope AM, 2 = no carrier levelling,
+     *  4 = no envelope safety net. Read at the next rebuild. */
+    void setAmBenchFlags(unsigned f) { amBench_ = f; dirty_ = true; }
+    void setAmInterfRatio(float r) { amIRatio_.store(r, std::memory_order_relaxed); }
     double autoBandwidth() const { return autoBwReq_.load(std::memory_order_relaxed); }
     /** How much better (dB) the signal would measure with the IF narrowed to ifCandidateHz().
      *  Positive = narrowing helps. Measured continuously on a shadow copy of the real signal. */
@@ -3328,6 +3661,21 @@ private:
     // and cheapest. Same audio, ~3x less CPU. See rebuildAudio().
     std::vector<std::unique_ptr<FirDecimator>> decs_;
     std::unique_ptr<AmDemod> am_;
+    /** ★★ V12 the AM family's detector (plain AM included — with auto bandwidth off it IS AmDemod). */
+    std::unique_ptr<SyncAm> sync_;
+    std::atomic<bool> amAutoBw_{true};
+    unsigned amBench_ = 0;
+    std::atomic<float> amIRatio_{0.0f};
+    std::atomic<unsigned> amArms_{0xE};      // ★ the noise arm off by default — see SyncAm::armNoise_
+    mutable std::mutex amStMtx_;
+    SyncAm::Status amSt_{};
+    std::vector<float> amR_, tmpLink_;     // AM stereo: the right channel; the linked AGC's level/gain
+    /** ★★ V12 SSB / CW auto bandwidth — built with the SSB demod, run only while amAutoBw_ is on. */
+    std::unique_ptr<AutoPassband> apb_;
+    bool apbWasOn_ = false;
+    AutoPassband::Status apbSt_{};
+    std::atomic<float> apbForceLo_{0.0f}, apbForceHi_{0.0f};
+    bool lastAmStereo_ = false;
     std::unique_ptr<FmDemod> fm_;
     std::unique_ptr<SsbDemod> ssb_;
     Agc  agc_;                              // audio AGC (AM/SSB/CW)

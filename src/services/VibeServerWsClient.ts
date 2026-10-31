@@ -103,6 +103,7 @@ import { TunePacer, tunePaceMs, healthThrottled } from './tunePace';
 import { vsSquelchMsg } from './vibeSquelch';
 import { VfoABCore, watchOffered, watchBalOffered, watchMaxOf, vfoB, RESYNC_MS, type VfoId, type TuneStatus, type VfoABInfo } from './vfoAB';
 import { parseAsk, askLocked, ASK_SHARED_SETTINGS, setChatLangInputs } from './dialChat';
+import { parseAutoBwModes } from './bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 
 /** ★★ THE SERVER'S OWN HEALTH, AS LEVELS AND NOTHING ELSE — 0 OK, 1 elevated, 2 high, 3 critical.
  *
@@ -3011,6 +3012,7 @@ export abstract class VibeServerWsClient {
           autobw: typeof msg.autobw === 'boolean' ? msg.autobw : undefined,
           nbx: typeof msg.nbx === 'boolean' ? msg.nbx : undefined,
           nfmVoice: typeof msg.nfmvoice === 'boolean' ? msg.nfmvoice : undefined,
+          autoBwModes: parseAutoBwModes(msg.autoBwModes),   // ★★ V12 where the AUTO key is drawn (bwAuto.ts)
         });
       }
       // ★★★ DE-EMPHASIS AND STEREO, AS THE SERVER RUNS THEM (from 11.0.4). The app used to draw the

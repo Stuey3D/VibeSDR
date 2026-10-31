@@ -2135,6 +2135,17 @@ function benchApplyDefaults() {
     benchNote(box, (r.label || sw).replace(/^Decoder: /, "") + " is off: it measured " + Math.round(Number(o.pct) || 0)
               + "% of a core here. Tick it to offer it anyway.");
   }
+  /* ★★ V12 DEMODULATORS (2026-10-31, docs/v12/AM-SYNC.md §12): SAM, SAM-U/L, ECSS-U/L and AM stereo each have a per-
+   *  listener row; one that measured below green starts its mode OFF on a fresh setup — offered, never hidden: the
+   *  owner can tick it back. Same rule as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS). */
+  for (const [rid, sw] of [["lk_sam", "sam"], ["lk_sau", "sau"], ["lk_sal", "sal"], ["lk_ecssu", "ecssu"], ["lk_ecssl", "ecssl"], ["lk_amst", "amst"]]) {
+    const r = row(rid), box = document.querySelector('input[data-mode="' + sw + '"]');
+    if (!r || r.grade === "green" || r.grade === "none" || !box || !box.checked) continue;
+    box.checked = false;
+    box.dispatchEvent(new Event("change"));
+    benchNote(box, r.label.replace(/^Locked range, per | listener$/g, "") + " is off: one listener measured " + Math.round(r.pct)
+              + "% of a core here. Tick it to offer it anyway.");
+  }
   if (scan && scan.grade === "red" && $("dabScanLabels")) {
     $("dabScanLabels").value = "0";
     benchNote($("dabScanLabels"), "The station-label scan is off: it measured " + Math.round(scan.pct) + "% of a core here.");
@@ -2658,6 +2669,10 @@ function bandLabel(entry) {
 const BLOCKABLE = [
   { id: "wfm",    label: "WFM"      }, { id: "nfm",  label: "NFM"    },
   { id: "am",     label: "AM"       }, { id: "usb",  label: "USB"    },
+  /* ★ V12 synchronous AM (docs/v12/AM-SYNC.md) — each its own switch, as every demodulator is. */
+  { id: "sam",    label: "SAM"      }, { id: "sau",  label: "SAM-U"  },
+  { id: "sal",    label: "SAM-L"    }, { id: "ecssu", label: "ECSS-U" },
+  { id: "ecssl",  label: "ECSS-L"   }, { id: "amst", label: "AM Stereo (C-QUAM compatible)" },
   { id: "lsb",    label: "LSB"      }, { id: "cwu",  label: "CW-U"   },
   { id: "cwl",    label: "CW-L"     },
   { id: "dab",    label: "DAB"      }, { id: "rds",  label: "Adv RDS" },

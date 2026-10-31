@@ -28,7 +28,8 @@ const VIBESERVER_CAPS: BackendCapabilities = {
    *    came from: "the bandwith slider in the app reaches a maximum of +-100k, whereas in
    *    vibeserver it reaches a maximum of +-250k" (Onfliner, 2026-09-24). One receiver should not
    *    offer two different passbands depending on which client is looking at it. */
-  maxBandwidth:   { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 250000 },
+  maxBandwidth:   { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 250000,
+                    sam: 10000, sau: 10000, sal: 10000, amst: 10000 },   // ★ V12 synchronous AM: AM's per-edge cap (ECSS = SSB's default)
   // ★ WFM's floor — mirrors RxPipeline::kWfmMinBwHz (40 kHz total). See SDRBackend.minBandwidth.
   minBandwidth:   { wfm: WFM_MIN_BW_HZ / 2 },
 };
@@ -41,7 +42,7 @@ const VIBESERVER_CAPS: BackendCapabilities = {
 const LOCAL_CAPS: BackendCapabilities = {
   ...VIBESERVER_CAPS,
   freqRange: [100_000, 1_766_000_000],
-  maxBandwidth: { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 250000 },
+  maxBandwidth: { default: 6000, nfm: 8000, fm: 8000, am: 10000, wfm: 250000, sam: 10000, sau: 10000, sal: 10000, amst: 10000 },
 };
 
 /**

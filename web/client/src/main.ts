@@ -164,6 +164,8 @@ import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeSt
 import { plainEnglish } from '../../../src/utils/cwVocab';
 import { cwHasWpmRange, cwWpmText } from '../../../src/utils/cwFormat';
 import { callHtml, wireQrz } from './qrzLink';
+import { autoBwOffered, shownEdges, type BwAutoState } from '../../../src/services/bwAuto';   // ★★ V12 the AUTO key
+import { amSyncOffered, amSyncReadout, isAmFamily, AM_SYNC_NAME, isAmSync, modeLegend, type AmSyncId, type AmSyncState } from '../../../src/services/amSync';
 
 /* ★★ THE DAB MARK IN THE STATION BAR (2026-10-02, mirrors the app's DabMark): the official WorldDAB path
  *  (dabplusLogo.ts), in the bar's own colour, split into two electrodes by a thin cut through the box's left
@@ -852,6 +854,8 @@ async function loadAudioPolicy(httpBase: string) {
      *  V4 locked to FM or held below 2.048 MS/s never draws the button at all. */
     dabCapable = j.dab === true;
     drmCap = Array.isArray(j.modes) && j.modes.includes('drm');   // ★ V12 DRM — see offeredModes
+    // ★ V12 synchronous AM: the family THIS server lists (an older one played "sam" as plain AM — never offered there)
+    amSyncCap = amSyncOffered(Array.isArray(j.modes) ? j.modes : []);
     adsbReadCap(j);              // ★ ADS-B (V12): offered, disabled with the reason, or absent — see adsbReadCap
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
@@ -1947,7 +1951,10 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
         srvAutoBw = s.autobw;
         setToggleTo('autoBwBtn', s.autobw, 'autobw',
                     (on) => on ? 'AUTO BW ON' : 'AUTO BW OFF');
+        setToggleTo('bwAuto', s.autobw, 'autobw', () => 'AUTO');   // ★★ V12 the same switch
       }
+      // ★★ V12 where the AUTO key is drawn — the server's list, never ours (bwAuto.ts)
+      if (s.autoBwModes) { autoBwModesSrv = s.autoBwModes; syncBw(); }
       // ★ The RSP front-end notches, which are sticky in exactly the same way and were the
       //   other half of the same report. Absent = the server has no opinion; leave the
       //   control alone rather than inventing an "off" it never said.
@@ -2535,6 +2542,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       } else grpPrev = { tot: x.gtot, at: now };
       rdsExt = x;
       if (rdsPanelOpen()) { renderRds(); drawConstellation(); drawEye(); drawMpx(); drawMpxEye(); }
+    },
+    onBwAuto: (b) => { bwAutoState = b; syncBw(); },   // ★★ V12 what AUTO has done to the passband
+    onAmSync: (a) => {
+      if (!spec || !isAmFamily(spec.mode)) { amSyncState = null; amSyncSync(); return; }   // ★ a ghost after leaving AM
+      amSyncState = a; amSyncSync();
     },
     onDrm: (d) => {
       if (!spec || spec.mode !== 'drm') return;   // ★ a report after leaving DRM is a ghost
@@ -6938,9 +6950,26 @@ let drmState: DrmState | null = null;
 /** ★★ V12 CTCSS / DCS TONE ID (the server's `tone`): the NFM channel's tone — the VTS line's QUIET SUFFIX, in the message
  *  slot after a bookmark's name ("GB3NB: CTCSS 82.5 Hz") or alone; the app's SDRScreen does the same. '' = none. */
 let toneLabel = '';
-/** The demodulators to offer: the fixed set, plus DRM where this server has it — minus what the owner switched off. */
+/** ★★ V12 the synchronous AM family this server lists (vibeserver.json modes) — empty on every older server. */
+let amSyncCap: AmSyncId[] = [];
+let amSyncState: AmSyncState | null = null;
+/** The demodulators to offer: the fixed set, plus the synchronous AM family and DRM where this server has them (beside
+ *  AM, where an AM listener looks) — minus what the owner switched off. */
 function offeredModes(): SDRMode[] {
-  return [...MODES, ...(drmCap ? ['drm' as SDRMode] : [])].filter((m) => !isModeBlocked(m));
+  const out: SDRMode[] = [];
+  for (const m of MODES) { out.push(m); if (m === 'am') out.push(...(amSyncCap as SDRMode[])); }
+  if (drmCap) out.push('drm');
+  return out.filter((m) => !isModeBlocked(m));
+}
+/** ★ V12 the AM sync line beside the frequency (amSync.ts amSyncReadout): lock + offset, the applied width, a notch. */
+function amSyncSync() {
+  const el = document.getElementById('mAmSync');
+  if (!el) return;
+  const txt = spec ? amSyncReadout(amSyncState, spec.mode) : '';
+  if (el.textContent !== txt) el.textContent = txt;
+  const h = !txt;
+  if (el.hidden !== h) el.hidden = h;
+  el.title = spec && isAmSync(spec.mode) ? AM_SYNC_NAME[spec.mode] : '';
 }
 /** ★★ V12 THE DRM SIGNAL PANE (2026-10-26): the compact box ('station', the default) or DAB's kind of advanced pane
  *  ('signal', drm.ts drmSignalRows). Kept across reports and retunes, like DAB's; the key in the box's header says where
@@ -9605,7 +9634,7 @@ function updateMediaSession() {
   const dabSvc = dabOn && dabState
     ? (dabState.services.find(x => x.sid === dabState!.sid)?.label || dabState.label || '')
     : '';
-  const modeText = dabOn ? 'DAB' : adsbOn ? 'ADS-B' : spec.mode.toUpperCase();
+  const modeText = dabOn ? 'DAB' : adsbOn ? 'ADS-B' : modeLegend(spec.mode);
   const station = dabSvc || rdsName || $('vtsName').textContent || '';
   // Artwork: the RTL-TCP art the app uses, so Now Playing looks the same whether
   // you're listening on the phone or in the browser. If the station has an RDS
@@ -12477,7 +12506,7 @@ function initDecoders(host: string, auth: AuthState) {
      *  on the band's default mode. Arriving never calls this — only a tap does. */
     tuneShare: (s) => {
       if (s.kind === 'dab') { dabGoTo(s.hz, s.sid ?? -1); return; }
-      const m = s.mode && (MODES as string[]).includes(s.mode) ? s.mode : undefined;
+      const m = s.mode && (offeredModes() as string[]).includes(s.mode) ? s.mode : undefined;
       tuneTo({ name: '', frequency: s.hz, mode: m, source: 'server',
                bandwidthLow: typeof s.bwLo === 'number' ? s.bwLo : null,
                bandwidthHigh: typeof s.bwHi === 'number' ? s.bwHi : null });
@@ -16647,7 +16676,16 @@ function buildMenu() {
   toggle('autoBwBtn', (on) => {
     $('autoBwBtn').textContent = on ? 'AUTO BW ON' : 'AUTO BW OFF';
     spec!.setAutoBw(on);
+    setToggleTo('bwAuto', on, 'autobw', () => 'AUTO'); syncBw();   // ★★ V12 the AUTO key is the same switch
   }, 'autobw', srvAutoBw ?? true, /*pushOnInit=*/false);
+  // ★★ V12 THE AUTO KEY by the bandwidth sliders (#bwAuto) — the same per-listener server switch as AUTO BW above; each
+  //    keeps the other in step. Shown only where the server lists the mode (syncBw).
+  toggle('bwAuto', (on) => {
+    spec!.setAutoBw(on);
+    setToggleTo('autoBwBtn', on, 'autobw', (v) => v ? 'AUTO BW ON' : 'AUTO BW OFF');
+    syncBw();
+  }, 'autobw', srvAutoBw ?? true, /*pushOnInit=*/false);
+  $('bwAuto').textContent = 'AUTO';
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 
   // ★★ UNCOMPRESSED AUDIO — the one control in this panel that is NOT a live setter. Every
@@ -17257,6 +17295,8 @@ function setMode(m: SDRMode, send: boolean, keepPassband = false) {
   }
   // ★ V12 DRM: the box follows the mode; a new mode forgets the old station
   if (m !== 'drm') drmState = null;
+  amSyncState = null; amSyncSync();   // ★ V12: a new demodulator's lock is its own — the server re-reports within a second
+  bwAutoState = null;                 // ★★ V12 …and so are AUTO's edges
   drmBoxSync();
   updateVts();
   syncBw();
@@ -17277,9 +17317,22 @@ const BW_EDGE_MAX: Record<SDRMode, number> = {
   fm: 30000,    nfm: 30000,
   wfm: 250000,
   drm: 5000,   // ★ V12 DRM: unused — the bandwidth row is hidden in DRM (see syncBw)
+  // ★ V12 synchronous AM: AM-shaped as AM; ECSS's edges are SSB's (one sideband, up to 6 kHz like USB/LSB)
+  sau: 20000, sal: 20000, amst: 20000, ecssu: 6000, ecssl: 6000,
 };
 
 let bwSync = false;
+/* ★★ V12 THE AUTO KEY (bwAuto.ts): the modes the server can act on, and what it has done. Server state only. */
+let autoBwModesSrv: string[] = [];
+let bwAutoState: BwAutoState | null = null;
+const autoOn = () => !$('bwAuto').hidden && $('bwAuto').classList.contains('on');
+/** A drag is a manual override: AUTO goes off for this session, then the edge moves as it always did. */
+function autoOffForDrag() {
+  if (!autoOn() || !spec) return;
+  spec.setAutoBw(false);
+  setToggleTo('bwAuto', false, 'autobw', () => 'AUTO');
+  setToggleTo('autoBwBtn', false, 'autobw', (v) => v ? 'AUTO BW ON' : 'AUTO BW OFF');
+}
 
 function fmtHz(hz: number): string {
   const a = Math.abs(hz);
@@ -17323,10 +17376,13 @@ function syncBw() {
   const edgeMin = spec.mode === 'wfm' ? WFM_MIN_BW_HZ / 2 : 0;
   lo.min = String(edgeMin); lo.max = String(max); lo.step = String(step);
   hi.min = String(edgeMin); hi.max = String(max); hi.step = String(step);
-  lo.value = String(-Math.max(-max, Math.min(0, spec.bandwidthLow)));   // signed -> magnitude
-  hi.value = String(Math.min(max, Math.max(0, spec.bandwidthHigh)));
-  $('bwLoVal').textContent = edgeLabel(spec.bandwidthLow);
-  $('bwHiVal').textContent = edgeLabel(spec.bandwidthHigh);
+  // ★★ V12 AUTO: drawn only where the server lists this mode; while it cuts, the sliders SHOW its edges (never sent)
+  setHidden($('bwAuto'), !autoBwOffered(autoBwModesSrv, spec.mode));
+  const shown = shownEdges({ low: spec.bandwidthLow, high: spec.bandwidthHigh }, autoOn(), bwAutoState);
+  lo.value = String(-Math.max(-max, Math.min(0, shown.low)));   // signed -> magnitude
+  hi.value = String(Math.min(max, Math.max(0, shown.high)));
+  $('bwLoVal').textContent = edgeLabel(shown.low);
+  $('bwHiVal').textContent = edgeLabel(shown.high);
 }
 
 function initBw() {
@@ -17334,11 +17390,13 @@ function initBw() {
   const hi = $<HTMLInputElement>('bwHi');
 
   lo.oninput = () => {
+    autoOffForDrag();                   // ★★ V12 a drag is a manual override
     const v = -Number(lo.value);        // slider holds a magnitude; the edge is negative
     if (bwSync) applyBw(v, -v);
     else applyBw(v, spec!.bandwidthHigh);
   };
   hi.oninput = () => {
+    autoOffForDrag();
     const v = Number(hi.value);
     if (bwSync) applyBw(-v, v);
     else applyBw(spec!.bandwidthLow, v);
@@ -17350,7 +17408,7 @@ function initBw() {
   // a two-step and lets a user lopside a filter that has no reason to be. SSB and CW keep them
   // independent. ★ A SAVED preference still wins — this only changes the starting point.
   const savedSync = prefs().bwSync;
-  const symmetricMode = ['am', 'sam', 'dsb', 'fm', 'nfm', 'wfm']
+  const symmetricMode = ['am', 'sam', 'sau', 'sal', 'amst', 'dsb', 'fm', 'nfm', 'wfm']
     .includes(String(spec?.mode ?? '').toLowerCase());
   bwSync = typeof savedSync === 'boolean' ? savedSync : symmetricMode;
   sync.classList.toggle('on', bwSync);

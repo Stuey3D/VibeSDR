@@ -718,6 +718,19 @@ struct ControlMenu: View {
   // Mirrors sdrTypes.ts. Kept in the order the phone lists them.
   // FM (narrow) + WFM (wide), matching the phone. `nfm` was a second NARROW-FM entry (redundant
   // with `fm`) and there was no wide FM at all — so broadcast FM couldn't be selected on the watch.
+  /// ★ V12 the synchronous AM family's legends (src/services/amSync.ts AM_SYNC_LABEL), for when the dial is IN one — set
+  ///   from the phone or another listener. ✗ Deliberately NOT offered in the Demod list: that list is fixed per backend on
+  ///   the wrist, and nothing on the link says which demodulators THIS VibeServer has (docs/v12/AM-SYNC.md, Watch).
+  static func demodName(_ m: String) -> String {
+    switch m {
+      case "sau": return "SAM-U"
+      case "sal": return "SAM-L"
+      case "ecssu": return "ECSS-U"
+      case "ecssl": return "ECSS-L"
+      case "amst": return "AM-ST"
+      default: return m.uppercased()
+    }
+  }
   static let modes = ["usb", "lsb", "am", "sam", "fm", "wfm", "cwu", "cwl", "dab", "adsb"]
   // ★ 5 kHz = the shortwave broadcast raster (DL8LDN, 2026-09-14). Mirrors sdrTypes.ts.
   static let steps: [Double] = [10, 100, 500, 1_000, 5_000, 9_000, 10_000, 12_500, 25_000, 100_000]

@@ -13,6 +13,7 @@ import type { AdsbReport } from './adsbTypes';
 import type { IsmReport } from './ism';
 import type { AisReport } from './tracks';   // ★ V12 AIS
 import type { AskState } from './dialChat';
+import { AM_SYNC_PASSBAND } from './amSync.ts';   // ★ .ts: node tests import this file directly
 
 /** The one sentence a refused-as-too-old client shows; SDRScreen matches on it to add the button. */
 export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the app, or open the receiver in your browser for now.';
@@ -20,7 +21,8 @@ export const UPDATE_APP_MESSAGE = 'This server needs a newer VibeSDR. Update the
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 // 'wfm' = broadcast FM (stereo); local-hardware (RTL-SDR) only — UberSDR is HF.
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm';   // ★ V12 'drm' — sdrTypes.ts
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'   // ★ V12 'drm' — sdrTypes.ts
+                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst';   // ★ V12 synchronous AM (amSync.ts) — VibeServer only
 
 /** ★★★ VibeServer's narrowest WFM passband (total width, Hz) — mirrors RxPipeline::kWfmMinBwHz,
  *  which the server clamps to anyway. A broadcast carrier swings ±75 kHz and the narrowest real
@@ -37,6 +39,7 @@ export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
   fm:  64_000, nfm: 64_000,
   wfm: 500_000,
   drm: 10_000,   // ★ V12 DRM: fixed — the server's DRM receiver cuts its own channel; no width control in DRM
+  sau: 48_000, sal: 48_000, amst: 48_000, ecssu: 12_000, ecssl: 12_000,   // ★ V12 synchronous AM (AM_SYNC_MAX_BW)
 };
 
 /** The passband VibeServer will actually run — WFM's floor (widened about its own centre) and
@@ -56,6 +59,7 @@ export function clampVibePassband(mode: SDRMode, low: number, high: number): [nu
 
 /** Server-side mode bandwidth defaults (websocket.go, verbatim). */
 export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
+  ...AM_SYNC_PASSBAND,  // ★ V12 synchronous AM: AM-shaped ±5 kHz, ECSS one-sided (the same table the web reads)
   usb: [50, 2700],     lsb: [-2700, -50],
   am:  [-5000, 5000],  sam: [-5000, 5000],
   cwu: [-200, 200],    cwl: [-200, 200],
@@ -393,6 +397,9 @@ export interface SDRCallbacks {
    *  missing field into a false one and pinned its AUTO BW button off for ever. */
   onFmDsp?:     (s: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
                       autobw?: boolean; nbx?: boolean;
+                      /** ★★ V12 the modes this server's AUTO (bandwidth) can act on, for THIS listener (bwAuto.ts).
+                       *  [] from an older server — no AUTO key is drawn. */
+                      autoBwModes?: string[];
                       /** ★ NFM Voice (true) vs Raw; undefined from a server without the filter. */
                       nfmVoice?: boolean }) => void;
   /** ★★★ FM de-emphasis (SECONDS: 0, 50e-6, 75e-6) and stereo as the SERVER is running them. Each is
@@ -424,6 +431,10 @@ export interface SDRCallbacks {
    *  ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), sent when it changes; '' = none locked. Shown as the VTS line's quiet
    *  suffix (SDRScreen toneLabel). */
   onToneId?:    (label: string) => void;
+  /** ★ V12 synchronous AM, VIBESERVER-ONLY: carrier lock + offset, the AUTO BW edges applied, AM stereo's pilot (amSync.ts). */
+  onAmSync?:    (s: import('./amSync').AmSyncState) => void;
+  /** ★★ V12 VIBESERVER-ONLY: what AUTO has done to this listener's passband (bwAuto.ts) — on a change, ~once a second. */
+  onBwAuto?:    (s: import('./bwAuto').BwAutoState) => void;
   /** ★ V12 AIS, VIBESERVER-ONLY: a report about once a second while the receiver is in AIS (its arrival MEANS AIS is on);
    *  null = it ended (`ais_off`); `err` = the refusal (`ais_error`). */
   onAis?:       (r: AisReport | null, err?: string) => void;
