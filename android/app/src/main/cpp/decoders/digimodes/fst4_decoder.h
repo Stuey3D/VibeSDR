@@ -107,6 +107,10 @@ public:
     ~Stream();
     /** Appends the baseband for `n` audio samples to `out`. */
     void push(const float* audio, int n, std::vector<std::complex<float>>& out);
+    /** The two halves of push(): the mix + first decimation (identical for every period of a mode — the live decoder
+     *  runs it once), then this period's resampler. */
+    void stage1(const float* audio, int n, std::vector<std::complex<float>>& d);
+    void stage2(const std::complex<float>* d, int m, std::vector<std::complex<float>>& out);
     double rate() const { return rate_; }
     /** The chain's delay, in baseband samples: subtract from an index to get the audio time it came from. */
     double delay() const { return delay_; }
@@ -146,7 +150,7 @@ private:
     Mode mode_;
     SlotOptions opts_;
     std::vector<Per> per_;
-    std::vector<std::complex<float>> tmp_;
+    std::vector<std::complex<float>> tmp_, d1_;
     int64_t audioTotal_ = 0;
     double utc0_ = 0; bool anchored_ = false;
     std::thread th_;

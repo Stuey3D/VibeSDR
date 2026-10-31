@@ -2,7 +2,8 @@
 // (digimodes/fst4_decoder.h, clean room — docs/v12/DECODERS-WAVE2.md "FST4 / FST4W"). V12, 2026-10-31.
 // ★ Periods 60, 120 and 300 s (the LF/MF QSO periods); the spot's mode names it ("FST4-120"). Audio 300–1500 Hz (on 630 m 474.5–475.7 kHz, where the activity is 475.1–475.5).
 // ★ Dials: digi_bands.h's "FST4" rows (630 m and 2200 m, where PSKReporter shows FST4 in use).
-// ★ COST: measured in docs/v12/DECODERS-WAVE2.md (three streams + a decode a period; small).
+// ★ COST: docs/v12/DECODERS-WAVE2.md "FST4 / FST4W" (one shared mix and decimation, a resampler per period, a decode
+//   per period: ≈ 36 ms a minute on the Mac — under one FT8 engine).
 #pragma once
 #include "../digi_mode.h"
 #include "fst4_decoder.h"
@@ -40,7 +41,7 @@ inline ModeDef vibeDigiMode_fst4() {
     m.slotSec = 60.0;                // ★ the activity gate's period (the 120/300 s periods ride along)
     m.sampleRate = 12000;
     m.audioLoHz = 250; m.audioHiHz = 1550;   // ★ 2200 m: 136.0 + 1.55 kHz + the tuner guard stays under the band top (137.8)
-    m.costVsFt8 = 1.0; m.lightCostVsFt8 = 0.7;   // measured, see the doc
+    m.costVsFt8 = 0.9; m.lightCostVsFt8 = 0.6;   // ★ Mac ≈ 36 ms a minute (one shared mix + 3 resamplers + decodes) vs FT8 42
     m.priority = 100;
     m.make = [] { return std::unique_ptr<Engine>(new Fst4Engine(false)); };
     return m;

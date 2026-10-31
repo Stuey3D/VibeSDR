@@ -14,7 +14,7 @@ inline ModeDef vibeDigiMode_fst4w() {
     m.slotSec = 120.0;
     m.sampleRate = 12000;
     m.audioLoHz = 1350; m.audioHiHz = 1650;     // ★ as WSPR's: the search 1400–1600 is flat passband
-    m.costVsFt8 = 0.6; m.lightCostVsFt8 = 0.4;  // measured, see the doc
+    m.costVsFt8 = 0.25; m.lightCostVsFt8 = 0.2; // ★ Mac ≈ 10 ms a minute (a 1.5 kHz mix, 4 resamplers, rare decodes)
     m.priority = 100;
     m.singleDialTolHz = 150;                    // ★ Single mode: only on a WSPR/FST4W dial (as WSPR)
     m.make = [] { return std::unique_ptr<Engine>(new Fst4Engine(true)); };

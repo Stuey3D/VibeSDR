@@ -432,20 +432,30 @@ Stream::Stream(Mode m, const Period& p, double centreHz) {
 }
 Stream::~Stream() = default;
 
-void Stream::push(const float* audio, int n, std::vector<cf>& out) {
+void Stream::stage1(const float* audio, int n, std::vector<cf>& d) {
+    d.clear();
     if (n <= 0) return;
     a_.resize((size_t)n); b_.resize((size_t)n);
     for (int i = 0; i < n; ++i) a_[(size_t)i] = cf(audio[i], 0.f);
     nco_->mix(a_.data(), b_.data(), n);
-    std::vector<cf> d((size_t)dec_->maxOut(n));
-    const int m = dec_->process(b_.data(), n, d.data());
+    d.resize((size_t)dec_->maxOut(n));
+    d.resize((size_t)dec_->process(b_.data(), n, d.data()));
+}
+
+void Stream::stage2(const cf* d, int m, std::vector<cf>& out) {
     re_.resize((size_t)m); im_.resize((size_t)m);
-    for (int i = 0; i < m; ++i) { re_[(size_t)i] = d[(size_t)i].real(); im_[(size_t)i] = d[(size_t)i].imag(); }
+    for (int i = 0; i < m; ++i) { re_[(size_t)i] = d[i].real(); im_[(size_t)i] = d[i].imag(); }
     ore_.resize((size_t)rr_->maxOut(m)); oim_.resize((size_t)ri_->maxOut(m));
     const int k1 = rr_->process(re_.data(), m, ore_.data());
     const int k2 = ri_->process(im_.data(), m, oim_.data());
     const int k = std::min(k1, k2);
     for (int i = 0; i < k; ++i) out.push_back(cf(ore_[(size_t)i], oim_[(size_t)i]));
+}
+
+void Stream::push(const float* audio, int n, std::vector<cf>& out) {
+    std::vector<cf> d;
+    stage1(audio, n, d);
+    stage2(d.data(), (int)d.size(), out);
 }
 
 // ── The live decoder ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -480,10 +490,13 @@ void LiveDecoder::process(const float* audio, int n, double captureUtc) {
         }
     } else if (!anchored_) return;
     audioTotal_ += n;
+    // ★ the mix and the first decimation are the same for every period of a mode: done ONCE, on the first period's
+    //   stream, and only each period's resampler runs per period (FST4: 3 streams ≈ 35 → ≈ 17 ms a minute on the Mac)
+    if (!per_.empty()) per_[0].st->stage1(audio, n, d1_);
     for (size_t pi = 0; pi < per_.size(); ++pi) {
         Per& q = per_[pi];
         tmp_.clear();
-        q.st->push(audio, n, tmp_);
+        q.st->stage2(d1_.data(), (int)d1_.size(), tmp_);
         const size_t R = q.ring.size();
         size_t w = (size_t)(q.total % (int64_t)R);
         for (const cf& v : tmp_) { q.ring[w] = v; if (++w == R) w = 0; }
