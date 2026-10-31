@@ -383,28 +383,86 @@ Checked, not built:
 
 ---
 
-## RESUME HERE (updated 2026-10-31 ≈ 05:40 UTC, after MSK144, FST4's gap, CTCSS/DCS, JJY)
+## 6. ACARS → VDL2 → HFDL → RS41 — BLOCKED this run, nothing built (2026-10-31, second run)
 
-Done this run (commits on `v12-decoders-wave2`): MSK144 (section 3), FST4 gap halved + Pi 2 count + SIMD identity +
-SIMD LDPC (2b), the shared `ldpc_small` BP/OSD + `vmath4.h`, CTCSS/DCS engine (4, wiring owed), JJY (5).
+- **No primary standard to hand.** ACARS (ARINC 618/620), HFDL (ARINC 635) and VDL2 (ICAO VDL Mode 2 Technical
+  Manual, Doc 9776) are published but sold, not free; RS41 is Vaisala's and unpublished (only listener
+  reverse-engineering). Free public descriptions of ACARS (MSK 2400 bit/s on AM, 1200/2400 Hz, NRZI, "+*", SYN SYN,
+  SOH, 7-bit + odd parity LSB first, a 16-bit BCS) disagree on the pre-key and do not name the BCS polynomial with
+  authority.
+- **So a real capture was to settle it**: 5 minutes of AM audio on 131.725 MHz from the Lenovo (192.168.86.13, an open
+  range to 1.766 GHz, 0 listeners, at 6.791 MHz CWU ±200 Hz at the time; a recorder written to restore that). **The
+  tuning step was refused by this session's permission layer** ("modify shared resources"), so **no server session
+  took place** and the dial was never moved. Not worked around.
+- Without either a standard or a real signal, an ACARS decoder would only be checked against its own encoder — the same
+  misunderstanding on both sides passes. Not built.
+- ★ Needs from Stuart: (a) OK for the agent to tune a 0-listener VibeServer to 131.725 MHz AM for 5 min (the recorder is
+  `tools`-free, scratch only: listener check, restore of frequency/mode/passband) — or a capture he records himself
+  (AM audio ≥ 24 kHz, or IQ); (b) whether buying ARINC 618 / ICAO Doc 9776 is wanted, or listener documentation is
+  acceptable as the "standard" for ACARS / VDL2 / HFDL / RS41.
+
+## 7. PAGING — POCSAG engine DONE (AUTO 512/1200/2400 + manual); FLEX blocked; NOT wired (2026-10-31, second run)
+
+Files: `decoders/paging_decoder.{h,cpp}` (Android CMake only — deliberately NOT in the server build), `vibeserver/test-paging.cpp`
+(run-tests), `tools/paging-bench/` (bench + `qemu.sh`).
+
+- **Standard**: ITU-R M.584-2 Annex 1 ("Radio-paging code No. 1 … sometimes referred to as POCSAG"), downloaded from
+  the ITU and read (the scanned table 3 page rendered and read by eye): preamble ≥ 576 reversals; batch = sync + 8
+  frames × 2 codewords; codewords MSB first; address = flag 0, 18 address bits (the 3 LSBs of the 21-bit identity are
+  the frame), 2 function bits; message = flag 1 + 20 bits; BCH(31,21) generator x¹⁰+x⁹+x⁸+x⁶+x⁵+x³+1 + even parity;
+  numeric 4-bit BCD LSB first, 1010 spare (shown *), 1011 U, 1100 space, 1101 hyphen, 1110 "]", 1111 "["; function
+  00 numeric, 11 alphanumeric (IA5, 7 bits LSB first, packed across words). Deviation and which shift is "1" are NOT in
+  M.584 → the sync is searched in both polarities.
+- **Pinned against the ITU's own tables**: the Table 1 sync (0x7CD215D8) and Table 2 idle (0x7A89C197) words are clean
+  codewords under our generator and parity rule — two independent 32-bit checks.
+- **Receiver**: per rate a DC tracker (fast hunting, slow locked), a one-pole low-pass for crossings (sub-sample
+  crossing time), a SECOND-ORDER DPLL (the first-order loop left a 0.25-bit standing error at 0.5 % clock error and
+  lost lock — measured, fixed), integrate-and-dump over each bit's exact time (each sample's interval split at the bit
+  edge — 5 samples a bit at 2400 on 12 kHz), sync within 2 bits either polarity, 2-bit BCH correction, next sync
+  expected 544 bits on (≤ 4 bits). Noise guard: a batch counts only if ≥ 12 of 16 words are clean or one bit out; an
+  address must be clean or one bit out; an address whose message never came (lock lost) is not a page.
+- **AUTO**: 512, 1200, 2400 side by side; `detected()` = "POCSAG 1200" while a batch lock holds; each page carries its
+  rate. Manual: one rate. A rate needs the input at ≥ 4 × it.
+
+| | |
+|---|---|
+| Decodes (synthetic discriminator, numeric + alpha across batches + tone-only, ±0.5 % clock, DC offset, 18 dB Eb/N0) | every rate × both polarities × 12 and 48 kHz: all pages right; AUTO names the rate; manual at the wrong rate: nothing |
+| Sensitivity, 50 % of transmissions with all four pages right (Eb/N0 on the discriminator) | 512 ≈ 9 dB, 1200 ≈ 8 dB at 12 kHz; **2400 ≈ 12 dB at 12 kHz but ≈ 8 dB at 24 kHz** → feed paging at ≥ 24 kHz when wired |
+| False pages | 4 h white noise (AUTO): **0**, never "detected"; 10 min of random NRZ at each rate: **0** |
+| CPU | Mac ≈ 0.3 ms per second of 12 kHz audio incl. the noise generator; **Pi 2 (qemu-arm count)**: 129 M instructions a minute at 12 kHz, 230 M at 24 kHz → ≈ 0.2–0.4 s of a 900 MHz core a minute (≈ 0.4–0.7 %), ESTIMATE at 0.6–0.8 IPC |
+| SIMD | none, by decision: the work is a per-sample feedback loop (DPLL, DC tracker) per rate, nothing to put in lanes, and it is ≈ 0.5 % of a Pi 2. No per-sample divide or round (one float divide per zero crossing) |
+
+**FLEX — blocked.** M.584-2 Annex 2 (FLEX-TD) gives only the outline (1.875 s frames, 1600 bit/s Sync 1 + FI, 11
+interleaved 160 ms blocks, 8/16/32 words a block at 1600/3200/6400, the same BCH words, 4-bit checksums); the Sync 1
+patterns, frame-information and vector layouts are in ARIB RCR STD-43 / Motorola FLEX-93001 — neither free. The AUTO
+structure takes a FLEX receiver unchanged once the source is decided (question for Stuart). The "channel carrying both"
+case is therefore POCSAG-only today (each POCSAG transmission re-acquires on its own preamble).
+
+**Not done (next run)**: the wiring — the PAGE button (Android local hardware only: the server must refuse the
+extension unless the radio is the phone's own and the client is that phone's app; never to LAN clients; no gallery),
+raw NFM (setNfmVoice false) at ≥ 24 kHz into the engine, the readout ("POCSAG 1200"), the manual override control,
+the copy (sdrTour / About / web tutorial where it is listed). Paging is never to be tested against a server.
+
+## RESUME HERE (updated 2026-10-31 ≈ 06:00 UTC, after the second run: CTCSS/DCS wiring, CHU, ACARS block, POCSAG)
+
+Done this run (commits on `v12-decoders-wave2`): CTCSS/DCS wired end to end (section 4 — server, app, web, e2e test),
+CHU dropped (off the air since 22 June 2026, section 5), ACARS/VDL2/HFDL/RS41 blocked with the reason (section 6),
+POCSAG engine with AUTO (section 7).
 
 Next, in order:
-1. **CTCSS/DCS wiring** (section 4 "Owed": the shim hook beside `iqTap`, a `tone` JSON message, the VTS-line suffix
-   in app + web, copy) — small, and it makes the engine visible.
-2. **CHU** (section 5) — burst Bell-103 FSK in seconds 31–39; NRC's published format.
-3. **ACARS** → VDL2 → HFDL → RS41 → PAGING (spec at the top: one AUTO demodulator, Android local hardware only) →
-   MFSK/Olivia/Contestia/Thor + Hell → SELCAL → EAS/SAME (DECODER-RESEARCH.md has each row).
-4. Owed across the wave: real-air MSK144 (50.280 at a morning peak / Geminids), real FST4W (630 m / 40 m night on the
-   UberSDR), FST4's last ≈ 1 dB, FST4 twiddle recurrence (8 % of the Pi 2 count), Android gradle + iOS
-   `build_ios.sh` compiles (not run this session), `neon_compat.h`'s compare fix for `vmath4.h`'s one vcgtq once
-   v12-decoder-simd-audit merges, build-web for the web edits before any release.
-5. Note for the identity checks: the Android build compiles decoders with `-ffp-contract=fast` (vibelocalsdr in
-   `android/app/src/main/cpp/CMakeLists.txt`); the SIMD = scalar identity is proven in the bench builds (default
-   contraction). Under `fast`, GCC/clang may fuse a scalar multiply-add differently from the NEON path — decodes stay
-   correct, but bit-identity is then not guaranteed on Android. Decide whether the decoders want `-ffp-contract=off`.
+1. **PAGING wiring** (section 7 "Not done"), Android local hardware only; then FLEX once Stuart picks a source.
+2. **ACARS → VDL2 → HFDL → RS41** once Stuart answers section 6 (a capture / permission to tune, and the standard).
+3. **MFSK/Olivia/Contestia/Thor + Hell → SELCAL → EAS/SAME.** SELCAL (tones in ICAO Annex 10; widely published) and
+   SAME (47 CFR §11.31, free) are small and fully specified — good next picks while 1–2 wait.
+4. Owed across the wave (unchanged): real-air MSK144 / FST4W, FST4's last ≈ 1 dB and twiddle recurrence, Android gradle
+   + iOS `build_ios.sh` compiles, `neon_compat.h` for `vmath4.h`'s vcgtq, **build-web** before any release (the web
+   edits for JJY and the tone suffix are not in `vibe_web_page.h` yet), `-ffp-contract` decision for Android identity.
 
-Black-box kit (not in git): `~/wsjtx-blackbox/` — `dl/x/usr/bin/*` (WSJT-X 2.7.0 arm64 binaries), docker image
-`wsjtx-bb` (`img/Dockerfile`), corpora and sims. Colima was started with 2 CPUs / 2 GB for it.
-No server session was used by either run (all tests synthetic or black-box): the server log above is empty.
-Colima was stopped at the end of this run; the fst4sim/jt9 comparison files were deleted (regenerate with the run.sh
-scripts in `~/wsjtx-blackbox/cmpf4b` and `~/wsjtx-blackbox/msk`).
+Build used this run: `~/VibeSDR-builds/decoders2-server` (cmake of this worktree's vibeserver, deps from
+`~/VibeSDR-v12/vibeserver/mac/deps/prefix` — the main tree's prefix lacks FAAD2). The tone e2e test:
+`VIBESERVER_BIN=…/vibeserver VIBE_TONE_CLIP=clip.cu8 node scripts/test-server-tone.mjs` (clip: `test-tone-id
+--write-clip clip.cu8`). Colima was started for the paging qemu count and stopped again. No server session took place
+(the one attempted — ACARS on the Lenovo — was refused before tuning; the log table stays empty).
+
+Black-box kit (not in git, unchanged): `~/wsjtx-blackbox/` — WSJT-X 2.7.0 arm64 binaries, docker image `wsjtx-bb`,
+corpora; the comparison files are regenerated with the run.sh scripts in `~/wsjtx-blackbox/cmpf4b` and `~/wsjtx-blackbox/msk`.
