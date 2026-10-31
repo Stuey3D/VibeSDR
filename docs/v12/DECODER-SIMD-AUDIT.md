@@ -136,7 +136,7 @@ pi-bench WFM + RDS at 2.4 MS/s, 2 s, against WFM alone.
 - **CPU, Pi 2:** RdsDemod went 66.9 → 30.0 M per 2 s. RDS's cost over plain WFM went 216.7 → 179.8 M (−17 %). WFM
   itself went 828.5 → 801.3 M, from FmDemod's atan2 compares and the blanker.
 - **Parity:** `test_rds`, `test_rds_dsp` and `rds_snr_probe` (the BER sweep and the subcarrier phase sweep) print the
-  same output, SIMD and `VIBE_FORCE_SCALAR`. i686: see the x86 section.
+  same output, SIMD and `VIBE_FORCE_SCALAR`. i686 SSE2: `test_rds_dsp` and `rds_snr_probe` are identical to the i686 base.
 
 ### CW skimmer (`decoders/cw_skimmer.cpp`) — FIXED (small); PFFFT filterbank verified
 
@@ -220,7 +220,7 @@ end.
 The prediction and the tap energy were two `dotReal` passes over the same 160-tap history. `dotPair()` does both in
 one pass, keeping dotReal's accumulators and reduction.
 
-- **Parity:** the output hash over 15.9 s of 48 kHz audio is bit-identical (Mac and armhf).
+- **Parity:** the output hash over 15.9 s of 48 kHz audio is bit-identical (Mac, armhf and i686 SSE2).
 - **CPU, Pi 2:** 677.6 → 584.6 M (−14 %; ~6 % of a Pi 2 core per listener with the notch on).
 
 ### Already optimal / measured, not changed
@@ -274,7 +274,9 @@ bit-identical and needs its own validation.
   conversion assumes an IPC.
 - **x86 timings:** SSE2 paths were checked for parity only, under qemu-i386 (not timed). These were run on i686:
   - `test-ism`, `test-lora`, JTTY;
-  - RDS and auto notch (see below).
+  - RDS (`test_rds_dsp`, `rds_snr_probe`) and auto notch (output hash).
+
+  Every one was identical to its own i686 base.
 - **The NEON-compare inline asm** was built and run under qemu-arm (DAB, RDS, ADS-B, CW, NDB, ISM). It was not run on
   real Cortex-A7/A53 hardware. It is the same instruction clang emits for Android armeabi-v7a.
 - **iOS:** the vibedsp changes (`rds.cpp`, `neon_compat.h`) reach iOS only after `build_ios.sh` rebuilds the prebuilt
