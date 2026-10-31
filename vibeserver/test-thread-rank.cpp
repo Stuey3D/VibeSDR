@@ -76,12 +76,13 @@ int main() {
     const Rank iq    = on([] { vibeIqThread("vibe-rtl"); });
     const Rank spec  = on([] { vibeSpectrumThread("vibe-spec"); });
     const Rank dec   = on([] { vibeDecoderThread("vibe-decode"); });
+    const Rank lag   = on([] { vibeDecoderLagThread("vibe-ism2"); });
     const Rank bulk  = on([] { vibeBulkThread("vibe-bulk"); });
     std::printf("  process nice %d · vibeTx %d · vibeTx-audio %d · vibeTx-wf %d · vibe-dsp %d · vibe-rtl %d · vibe-spec %d"
                 " · vibe-decode %d · vibe-bulk %d\n",
                 base, net.nice, sendA.nice, sendW.nice, audio.nice, iq.nice, spec.nice, dec.nice, bulk.nice);
 
-    for (const Rank* r : { &net, &sendA, &sendW, &audio, &iq, &spec, &dec, &bulk })
+    for (const Rank* r : { &net, &sendA, &sendW, &audio, &iq, &spec, &dec, &lag, &bulk })
         ok(r->nice == r->procNice, "getpriority and /proc/<tid>/stat agree for " + r->comm + " (" + std::to_string(r->nice)
            + " / " + std::to_string(r->procNice) + ") — what we read is what top shows");
     ok(sendA.comm == "vibeTx-audio" && sendW.comm == "vibeTx-wf",
@@ -89,6 +90,8 @@ int main() {
 
     // ★ The rungs any user may take: raising nice never needs a privilege.
     ok(dec.nice == std::max(base, vibeprio::kDecoder), "decoders at nice " + std::to_string(vibeprio::kDecoder) + " (" + std::to_string(dec.nice) + ")");
+    ok(lag.nice == std::max(base, vibeprio::kDecoderLag), "a decoder's later stage at nice " + std::to_string(vibeprio::kDecoderLag) + " (" + std::to_string(lag.nice) + ")");
+    ok(lag.nice >= dec.nice && bulk.nice >= lag.nice, "decoders not below their later stages, those not below bulk");
     ok(bulk.nice == std::max(base, vibeprio::kBulk), "bulk HTTP at nice " + std::to_string(vibeprio::kBulk) + " (" + std::to_string(bulk.nice) + ")");
     // ★ Started niced (`nice ctest`, base 10), spectrum and decoders both sit AT the base, so only the order that can
     //   still differ is checked — a niced runner is not a fault in the ladder.
@@ -145,6 +148,7 @@ int main() {
     const qos_class_t audio = on([] { vibeAudioThread("vibe-dsp"); });
     const qos_class_t spec  = on([] { vibeSpectrumThread("vibe-spec"); });
     const qos_class_t dec   = on([] { vibeDecoderThread("vibe-decode"); });
+    const qos_class_t lag   = on([] { vibeDecoderLagThread("vibe-ism2"); });
     std::printf("  vibeTx-audio %s · vibe-dsp %s · vibeTx-wf %s · vibe-spec %s · vibe-decode %s\n",
                 nm(sendA), nm(audio), nm(sendW), nm(spec), nm(dec));
     // ★ QoS classes are ordered numerically: a larger value is the higher class.
@@ -153,6 +157,7 @@ int main() {
     ok(audio > sendW, "★★ DSP > waterfall send (a writer CAN step down its own class)");
     ok(sendW >= spec, "waterfall send ≥ spectrum");
     ok(spec > dec, "spectrum > decoders");
+    ok(lag == dec, "a decoder's later stage in the decoders' class (a lower priority within it)");
     std::printf("\n%s (%d failed)\n", fails ? "FAILED" : "all ok", fails);
     return fails ? 1 : 0;
 }

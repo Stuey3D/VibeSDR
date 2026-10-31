@@ -12,6 +12,7 @@
 #include "vibe_lorawan.h"
 #include "vibe_meshtastic.h"
 #include "vibe_meshcore.h"
+#include "vibe_thread.h"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -254,6 +255,9 @@ private:
         }
     }
     void loop() {
+        /* ★★ NAMED AND AT THE DECODERS' RUNG (2026-10-31). Unnamed, it inherited whatever thread started ISM mode — on the
+         *  Pi 2 a connection thread, so /proc called it "vibe-conn" at nice 0, level with nothing it should be level with. */
+        vibeDecoderThread("vibe-lora");
         std::unique_lock<std::mutex> lk(mtx_);
         while (run_) {
             cv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !queue_.empty(); });

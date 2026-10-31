@@ -47,6 +47,7 @@
       constexpr int kSendWf    = -10;   // the waterfall/control/decoder socket's send
       constexpr int kSpectrum  = -5;
       constexpr int kDecoder   = 10;
+      constexpr int kDecoderLag = 12;  // a decoder's later stage that may lag its own first stage (vibe-ism2, vibe-ism3)
       constexpr int kBulk      = 15;
   }
 
@@ -79,7 +80,8 @@
   /* ★★★ THE LADDER, IN ONE PLACE (2026-10-20). Network sends sit at the top, the waterfall's send
    *  one rung BELOW the audio chain and one ABOVE the spectrum work that feeds it:
    *     audio send -20  ≥  IQ input -20  >  audio chain (DSP, demod, DAB, encode) -19
-   *     >  waterfall/control send -10  >  spectrum -5  >  default 0  >  decoders 10  >  bulk HTTP 15
+   *     >  waterfall/control send -10  >  spectrum -5  >  default 0  >  decoders 10  >  a decoder's later stages 12
+   *     >  bulk HTTP 15
    *  ★★ WHY THE WATERFALL'S SEND STEPS DOWN: on a multi-radio server every radio is its own process,
    *     and nice is compared across all of them. One radio's DSP must not lose to another radio's
    *     waterfall — but it must never beat another radio's AUDIO send either, which is the rule
@@ -105,6 +107,13 @@
   }
   inline void vibeSpectrumThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kSpectrum); }
   inline void vibeDecoderThread(const char* name)  { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kDecoder); }
+  /* ★★ A DECODER IN STAGES (2026-10-31, ISM on the Pi 2: vibe_ism_service.h). When a decoder is a pipeline, only its
+   *  first stage must keep real time — ISM's detector, which decides where every burst is. The stages after it (the
+   *  channel mixer, the slicer and protocol decoders) work from a bounded queue and may lag, then drop with a counter.
+   *  So they sit one notch BELOW the decoders' rung: on a single core, or a box the DSP already fills, the scheduler
+   *  gives the first stage its time first (CFS weight 110 at nice 10 against 70 at 12), and what gives way is the
+   *  stage built to give way. Still above bulk HTTP (15). */
+  inline void vibeDecoderLagThread(const char* name) { vibe::vibeFlushDenormals(); vibeNiceThread_(name, vibeprio::kDecoderLag); }
   /* ★★ AN AUDIO CODEC OFF THE CHAIN'S OWN THREADS (V12, 2026-10-26 — DAB+ through FAAD2, vibe-faad2). It IS the audio
    *  path, so it sits far above spectrum and decoders — but one rung BELOW the chain that feeds it (-19: the IQ reader,
    *  the DAB OFDM/Viterbi, the DSP): a unit that never leaves the demodulator cannot be decoded at all, and a codec a
@@ -183,6 +192,12 @@
       vibe::vibeFlushDenormals();
       pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
   }
+  // ★ A decoder's later stage (see the Linux note): the decoders' class, a step below the first stage within it.
+  inline void vibeDecoderLagThread(const char* name) {
+      pthread_setname_np(name);
+      vibe::vibeFlushDenormals();
+      pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, -4);
+  }
   // ★ The audio codec's own thread (see the Linux note): the audio class, one step below the chain within it.
   inline void vibeAudioDecodeThread(const char* name) {
       pthread_setname_np(name);
@@ -207,6 +222,7 @@
   inline void vibeSendRank(bool) {}
   inline void vibeSpectrumThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeDecoderThread(const char*) { vibe::vibeFlushDenormals(); }
+  inline void vibeDecoderLagThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeAudioDecodeThread(const char*) { vibe::vibeFlushDenormals(); }
   inline void vibeBulkThread(const char*) {}
   inline void vibeIqThread(const char*) { vibe::vibeFlushDenormals(); }
