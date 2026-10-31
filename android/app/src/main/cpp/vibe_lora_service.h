@@ -8,6 +8,7 @@
 // ★★ ONLY CHANNELS INSIDE THE CAPTURE RUN. A plan channel whose edge falls past ±45 % of the capture rate is left out
 //    (the report says how many the capture holds).
 #pragma once
+#include "vibe_thread.h"
 #include "vibe_lora.h"
 #include "vibe_lorawan.h"
 #include "vibe_meshtastic.h"
@@ -254,6 +255,7 @@ private:
         }
     }
     void loop() {
+        vibeThreadName("vibe-lora");   // ★ its own name: started from a listener's connection, it would otherwise inherit "vibe-conn" and read as network load in top/health
         std::unique_lock<std::mutex> lk(mtx_);
         while (run_) {
             cv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !queue_.empty(); });

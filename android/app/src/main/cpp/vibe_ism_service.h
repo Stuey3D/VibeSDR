@@ -10,6 +10,7 @@
 //     process's memory. The ID itself is wiped from the Reading the moment it is hashed. Public and private servers alike.
 #pragma once
 
+#include "vibe_thread.h"
 #include "vibe_ism_protocols.h"
 #include "vibe_wmbus.h"        // ★ V12 2026-10-26: Wireless M-Bus meters on the 868 band (docs/v12/WMBUS-DECODER.md)
 #include "vibe_ism_bands.h"    // the four bands, reachability, the landing band
@@ -694,6 +695,7 @@ private:
     double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }
 
     void loop() {
+        vibeThreadName("vibe-ism");   // ★ its own name: started from a listener's connection, it would otherwise inherit "vibe-conn" and read as network load in top/health
         std::unique_lock<std::mutex> lk(mtx_);
         double winStart = 0;
         while (run_) {
