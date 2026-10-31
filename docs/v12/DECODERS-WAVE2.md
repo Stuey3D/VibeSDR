@@ -1206,6 +1206,93 @@ section 13); the FFTs (each stream's symbol length is its own).
   (fingerprint 44ca51b976226297 — the same as section 19's: the join fixes did not touch the synthetic tests). x86 SSE2 (a static i686 `-msse2 -mfpmath=sse` build under
   qemu-i386 — the SSE2 ld4/st4 path, which no other test runs): the whole output identical before and after, all passed — and its fingerprint is the armhf builds' one.
 
+## 22. Every decoder has its own benchmark row (2026-10-31, ninth run)
+
+Stuart: *"all these decoders need their own lines in the initial setup benchmark too"*. The setup benchmark had eight
+decoder rows (RTTY, NAVTEX, WEFAX, SSTV, time signals, FT8+FT4, Band spots, LoRa). `vibe_benchmark_more.h` adds the rest
+— 29 on a desktop build, 30 on the Android library (paging). A decoder added from now on adds its row there, in the
+same change.
+
+**How each row is measured.** Average process CPU (getrusage) ÷ signal seconds, as the first rows, with the radio stopped.
+- A listener's decoder runs through a real `DecoderHost` — the socket's `start(ext, msg)`, its queue and its decode thread
+  at decoder priority — fed 48 kHz audio our own transmitters make (the decoders' encoders, `benchsynth/`). The feed waits
+  on `queued()`, so nothing is dropped and the figure is the decoder's work.
+- A digital-spots mode is its registered engine (`digi::modes()`), fed whole periods at its own rate with real
+  transmissions on the period boundaries (Q65: 60 s with a 60A, a 30A and a 15A; WSPR and FST4W: 120 s; FST4: 60 s; JS8:
+  30 s, every submode's cut; FT2: 15 s). One pass ("loaded"), as the FT8 row. A mode with no transmitter here still gets
+  a row, searching noise, and says so in its label.
+- NDB is its Service on fed slices; AIS and ISM are their Services fed in REAL TIME (no queue to wait on), 1 s warm-up
+  then 3 s measured; a row that dropped says "(fell behind)".
+- Tone ID, noise reduction and the auto notch are the listener's own filters, timed directly.
+- **Budget per row**: a continuous row feeds until it has used 3 s of wall AND fed 4 s of signal, or fed 12 s. A slotted
+  mode finishes its period (half a WSPR minute measures nothing). Every row reports `decoded` and `ms`; the result has
+  `benchSec`, shown under the table on the setup page and in the app.
+
+**Real clips where a real band sets the cost** (Stuart: *"put samples on github that get downloaded when running the
+benchmark"*). The CW and PSK skimmers, the NDB skimmer and ISM's burst finder work in proportion to what is on the band,
+so they run on `decoders-bench.vbu8` — Stuart's own recordings, 9.0 MB (5.0 MB gzipped), fetched once like the DAB and
+ADS-B clips (`ensureDecoderClip`, `VibeBenchmark.kt`). The ISM records hold no real device: a window where ISM's own
+detector finds no burst on the whole capture (and LoRa no preamble), with the tests' synthetic sensors and meters added
+(`vibeserver/bench-clip/README-decoders.txt`). Without the clip those five rows read "not measured"; every other row
+runs offline. Everything else is synthetic: one signal costs the same whatever else is on the air. Paging is synthetic
+always (private messages).
+
+**The defaults — ONE rule, in the server** (`benchdec::ruleFor`, sent as `decoders.defaultOff` / `flagged`; the setup
+page's `benchApplyDefaults` and the app's `applyBench` only apply it, on a fresh setup):
+- a row that is its switch's main decoder (`dec_dsc` → "dsc", `dec_ndb` → "ndb", …) and measured below GREEN starts that
+  switch OFF — offered, never hidden, with the reason beside it ("…is off: it measured N % of a core here. Tick it to
+  offer it anyway.");
+- a companion row — the CW and PSK skimmers, RTTY AUTO, each digital-spots mode, the wM-Bus row — never switches its
+  switch off (that would take the green decoder away too); below green it is flagged ("Too heavy for this box" lists the
+  red ones);
+- **the decoder limit's yardstick is now the heaviest GREEN decoder slot.** Band spots, LoRa and the whole-radio modes
+  (NDB, AIS, ISM) are not slots; a slot that is not green is off by default or, alone, more than the green budget already.
+  Before, the heaviest of every row bar Band was used — LoRa (not a slot) set the limit on the Mac.
+- The first eight rows follow the same rule now (before, only Band, Advanced RDS, keep-sharp zoom and the DAB scan set
+  defaults): on a box where RTTY or FT8 measured below green, "rtty" / "spots" would start off. No such box is known.
+- Tone ID, noise reduction and the notch have no owner switch (the listener turns them on): shown, nothing set.
+
+**Switches added so the owner can switch each one back on**: "cw" on the setup page (the server enforced it, the page
+never offered it); the app's list gained cw, psk, dsc, sitora, same, selcal, mfsk, hell, ndb, jtty, ais, aprs, ism and
+lora (it had stopped at Band spots). On an Icom, ism / lora / ndb / ais are not offered (they need IQ).
+
+**The Mac (M-series), 2026-10-31**, `vibeserver-bench 6` offline (no ADS-B clip): before **26.4 s**, after **48.7 s**.
+New rows (% of one core · decoded · ms):
+
+| row | % | decoded | ms | | row | % | decoded | ms |
+|---|---|---|---|---|---|---|---|---|
+| RTTY AUTO | 0.4 | 75 chars | 222 | | FT2 | 0.1 | 3 spots | 870 |
+| CW | 0.0 | 14 chars | 198 | | JS8 | 0.2 | 2 spots | 1260 |
+| CW skimmer (clip) | 0.0 | 4 signals | 1357 | | WSPR | 0.0 | 2 spots | 259 |
+| PSK31 | 0.1 | 21 chars | 211 | | JTTY (spots) | 1.1 | 3 frames | 261 |
+| PSK skimmer (clip) | 0.5 | 2 signals | 1375 | | PSK (spots) | 0.0 | 1 spot | 164 |
+| JTTY | 0.9 | 27 | 284 | | FST4W | 0.0 | 1 spot | 422 |
+| SITOR-A | 0.1 | 147 chars | 221 | | FST4 | 0.0 | 1 spot | 335 |
+| DSC | 0.1 | 120 | 206 | | Q65 (15/30/60) | 0.4 | 3 spots | 1170 |
+| EAS / SAME | 0.0 | 117 | 199 | | MSK144 | 0.1 | 7 frames | 170 |
+| SELCAL | 0.3 | 41 | 207 | | NDB (clip) | 0.2 | 1 beacon | 228 |
+| MFSK AUTO | 0.3 | 27 chars | 210 | | AIS (real time) | 3.1 | 24 msgs | 4214 |
+| Feld Hell | 0.0 | 784 lines | 201 | | ISM 433 (clip, real time) | 9.6 | 1 device | 4115 |
+| APRS | 0.2 | 2 stations | 191 | | ISM 868 meters (clip) | 2.8 | 2 meters | 4116 |
+| Tone ID | 0.0 | 1 lock | 5 | | Noise reduction / notch | 0.1 / 0.1 | — | 9 / 20 |
+
+Paging (Android library only, `-DVIBE_PAGING` test build): 0.1 %, 144 chars, 328 ms.
+
+**Not run**: an Android phone, the Pi 2, any server (none touched). The Pi 2's Cortex-A7 runs NEON code at 0.35–0.48 IPC
+(`PI2-REAL-CPU.md` on `v12-am-sync`) — the benchmark measures the box itself, so nothing is scaled, but expect the Pi 2's
+figures far above these and its run longer: the real-time rows are a fixed 12 s, the rest scale with the CPU (the
+continuous rows are capped at 3 s of wall each; Q65's minute and WSPR's two are not capped). The copy now says "a few
+minutes", and the result says how long it took.
+
+★★ **ISM's row must be re-checked** once the ISM threading work (another agent, `~/VibeSDR-decaudit`) lands: it measures
+the ISM Service as it is on this branch (process CPU, fed in real time), and a change to its threads changes both the
+figure and whether process CPU or the hottest thread is the right yardstick for it.
+
+Tests: `test-bench-decoders` (every new row decodes its signal; without the clip the clip rows read "not measured"; the
+progress bar's count is the rows made; the rule), `scripts/test-bench-defaults.mjs` (both readers apply `defaultOff`;
+every switch the rule names is on both setup screens). The synthesisers moved from `tools/*-bench/` to
+`android/app/src/main/cpp/benchsynth/` (forwarders left behind); the 13 suites that use them pass.
+
 ## RESUME HERE (updated 2026-10-31, eighth run: the lost "E", and the one key at less than half the cost)
 
 Done this run (commits on `v12-decoders-wave2`): section 16 — PAGE silent while it runs, Q65 tiling of the EME segments
@@ -1215,6 +1302,11 @@ box (newline fixed, a narrower-signal false lock fixed); section 19 — one MFSK
 every AUTO decoder's fallback rows (RTTY's pattern). Eighth run: section 20 (the web test's lost "E" and four join
 faults) and section 21 (the one key's AUTO −54 % on a Pi 2, decodes byte-identical). No server or device was touched;
 synthetic signals and public recordings only (FLEX and fldigi files kept out of git).
+
+Ninth run (section 22): **every decoder has its own benchmark row** — 29 more, real decodes, per-row wall time, one
+defaults rule in the server, a real-band clip for the skimmers / NDB / ISM. ★ Stuart must publish
+`decoders-bench.vbu8.gz` as release asset `bench-clip-v3` (README-decoders.txt) — until then those five rows read
+"not measured". ★ ISM's row must be re-checked after the decaudit ISM threading work lands.
 
 Next, in order:
 0. ✓ DONE (section 20): **test-web-textmodes 10/10**, test-web-hell 19/19. The "E" was a stale presence slot after a
