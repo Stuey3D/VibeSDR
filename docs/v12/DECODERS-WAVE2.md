@@ -438,10 +438,54 @@ patterns, frame-information and vector layouts are in ARIB RCR STD-43 / Motorola
 structure takes a FLEX receiver unchanged once the source is decided (question for Stuart). The "channel carrying both"
 case is therefore POCSAG-only today (each POCSAG transmission re-acquires on its own preamble).
 
-**Not done (next run)**: the wiring — the PAGE button (Android local hardware only: the server must refuse the
-extension unless the radio is the phone's own and the client is that phone's app; never to LAN clients; no gallery),
-raw NFM (setNfmVoice false) at ≥ 24 kHz into the engine, the readout ("POCSAG 1200"), the manual override control,
-the copy (sdrTour / About / web tutorial where it is listed). Paging is never to be tested against a server.
+### 7b. PAGING WIRED — Android local hardware only (2026-10-31, third run)
+
+Files: `vibe_paging_run.h` (new), `vibe_decoder_host.h`, `local_sdr_shim.{h,cpp}`, `CMakeLists.txt` (Android),
+`decoders/paging_decoder.{h,cpp}` (+ the modes list), `src/services/paging.ts` (new), `DecoderClient.ts`,
+`sdrTypes.ts`, `ModeSelector.tsx`, `DecoderPanel.tsx`, `MenuSheet.tsx`, `modeBox.ts`, `decoderBands.ts`,
+`modeIcons.ts`, `SDRScreen.tsx` (gate, state, tour), `AboutOverlay.tsx`, `scripts/test_decoder_bands.ts`,
+`vibeserver/test-paging.cpp`, `tools/paging-bench/`.
+
+- **Where it can run — three locks, each enough on its own.** (1) Compiled only with `VIBE_PAGING`, which the Android
+  CMake defines for the CLIENT app's library and NOT for VibeServer Lite (`VIBE_LITE_APP`) — the desktop/Linux
+  VibeServer does not compile the engine at all. (2) `LocalSdrShim::pagingCapable()`: not serving (`g_serveOnLan`
+  false — the engine bound to 127.0.0.1, so no LAN, tunnel or proxy client can exist) and a USB radio with our own IQ
+  (not rtl_tcp, SpyServer or an Icom). Only then does vibeserver.json carry `"paging":true` + `pagingModes`. (3) The
+  attach handler refuses `paging` unless (2) holds AND the decoder socket is loopback; never on VFO B. The app gates
+  the key again: Android, `isLocal`, no `localHost`, not `isTcp`, not a SpyServer (`pagingHere`).
+- **Fed the CHANNEL IQ, not the audio** (the pipeline's `cb_.iq`: post-NCO, dial at DC, cut to the passband, at the
+  channel rate — ≈ 31 kHz for a 12.5 kHz NFM filter, never under 2.5 × the band). Its own discriminator, so the NFM
+  Voice filter (300 Hz high-pass), de-emphasis, squelch and the 48 kHz resampler are all out of the path whatever the
+  listener chose. The DSP thread only copies (`DecoderRouter::feedChannelIq{Session,Shared}` → `DecoderHost::
+  feedChannelIq` → its own bounded queue `qc_`, 2 s, oldest dropped); the decode thread runs `PagingRun`. One relaxed
+  atomic (`pagingRunning()`) per channel block when nothing pages. Counts as a consumer for the idle gate
+  (`sharedWantsAudio`).
+- **Never to the gallery**: no tap is made for `paging` (`start()`); not in background decoding; status JSON not in
+  the gap log (the page lines are, in memory, for the phone's own held session).
+- **Wire**: 0x01 one line per page `[POCSAG 1200 · 1234567 · F3] text` ("(tone only)", "(cut short)"); 0x03 lock
+  0/1; `{"type":"paging_status","data":{mode,detected,pages,rate,short}}` on change (`short` = channel rate < 24 kHz).
+- **AUTO, FLEX-ready**: the manual choices are DATA (`PagingDecoder::modes()` → vibeserver.json `pagingModes`, AUTO
+  first); the app draws one RATE key per entry. A FLEX receiver joins as more entries + an `Rx` in the engine; the
+  client does not change.
+- **App**: PAGE key in a new Paging group on the VHF and UHF tabs (pager glyph), RATE row + hint under it, the status
+  line ("POCSAG 1200 · 3 pages", the narrow-filter warning). Copy: sdrTour mode card (Android-only clause, built with
+  `Platform.OS`), About V12 note ("PAGING ON ANDROID …" — every sentence names Android, so platformCopy drops it on
+  iOS). The website lists no decoders: nothing to change. No web client key (the web is never local hardware).
+
+| | |
+|---|---|
+| Wired path decodes (FM IQ ±4.5 kHz, 24 dB Eb/N0, ±0.4 % clock, channel filter in the synth) | 20 / 25 / 31.25 / 48 kHz × 512 / 1200 / 2400 (1200 inverted): all 4 pages right everywhere, status names the rate, `short` flagged below 24 kHz |
+| Sensitivity, IQ path, 12.5 kHz passband, 50 % of transmissions all four pages right | 512 ≈ 15 dB Eb/N0 (≈ 1 dB CNR), 1200 ≈ 14 dB (≈ 4 dB CNR), 2400 ≈ 12 dB (≈ 5 dB CNR) at 31.25 kHz; 2400 ≈ 12 dB at 20 kHz. The limit is the discriminator's FM threshold, not the engine (on clean discriminator audio the engine reaches 8–9 dB) |
+| False pages | 15 min of channel noise at 31.25 kHz through the whole run: 0, never detected (plus the engine's 4 h noise / 30 min random NRZ: 0) |
+| CPU | Mac ≈ 0.9 ms per second of 31.25 kHz IQ incl. the noise generator. **Pi 2 (qemu-arm count, `tools/paging-bench/qemu.sh 60 31250 iq`)**: NEON 325 M instructions a minute, scalar 421 M → ≈ 0.4–0.6 s of a 900 MHz core a minute (≈ 0.7–1 %), ESTIMATE at 0.6–0.8 IPC |
+| SIMD identity | The discriminator is q65v lanes (vatan2: sign-bit selects, no float compares). Mac NEON = scalar bit for bit (whole test output); x86-64 SSE2 = scalar bit for bit (qemu-x86_64); armhf `-marm` NEON = scalar bit for bit with `-ffp-contract=off`; with GCC's default `fast` (and the Android CMake's explicit `-ffp-contract=fast`) the discriminator's low bits differ, but **the decoded lines are identical on every build** (one lines fingerprint across Mac, armhf ×4, x86-64 ×2) |
+| Per-sample divide | vatan2's one float divide a sample (VFP VDIV, ≈ 15 cycles on Cortex-A7): 1.9 M a minute ≈ 28 M cycles ≈ 0.05 % of a core; a reciprocal estimate + Newton would break identity with the scalar path. No integer divide, no round. The engine's per-rate loops: per-sample feedback (DPLL, DC tracker), not vectorised (section 7) |
+
+Not done / owed: **real-air test on a phone** (Android gradle build not run — the shim was syntax-checked with and
+without `VIBE_PAGING` on the Mac; the app's TS: services type-checked, the TSX files syntax-checked only — full `tsc`
+of the components runs out of the 512 MB cap); a tone-filter (non-coherent FSK) detector would beat the
+discriminator's threshold at 512/1200 (≈ several dB) — a later improvement; switching the mode to NFM on PAGE is
+left to the user (the hint says so).
 
 ## RESUME HERE (updated 2026-10-31 ≈ 06:00 UTC, after the second run: CTCSS/DCS wiring, CHU, ACARS block, POCSAG)
 

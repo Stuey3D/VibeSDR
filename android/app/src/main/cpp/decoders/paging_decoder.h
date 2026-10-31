@@ -54,6 +54,15 @@ public:
         bool     truncated = false;   ///< the lock was lost before the message ended
     };
 
+    /** ★★ THE MANUAL CHOICES, AS DATA (V12 wiring, 2026-10-31): the server sends this list to the client, which draws one
+     *  key per entry — so a FLEX receiver joins as more entries here, and no client changes (Stuart: "AUTO … so FLEX can
+     *  be added later without changing the UI"). The first entry is AUTO. Ids are stable wire names. */
+    struct ModeInfo { Mode mode; const char* id; const char* label; };
+    static const std::vector<ModeInfo>& modes();
+    /** The mode for a wire id ("auto", "pocsag1200" …); unknown → Auto. */
+    static Mode modeFromId(const std::string& id);
+    static const char* idOf(Mode m);
+
     explicit PagingDecoder(double rateHz, Mode m = Mode::Auto);
     ~PagingDecoder();
     PagingDecoder(const PagingDecoder&) = delete;

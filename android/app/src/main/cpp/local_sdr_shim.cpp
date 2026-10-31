@@ -9250,6 +9250,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (c->drm) c->drm->feedIq(x, n, rateHz);
         // ★ V12 tone ID: one bool when the listener is not on NFM (and nothing left to clear)
         if ((c->toneWant || !c->toneSent.empty()) && c->owner) c->owner->toneFeedClient(c, x, n, rateHz);
+        // ★ V12 PAGING (Android local hardware only): one relaxed load unless a paging receiver runs in this process
+        if (c->owner && DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed))
+            c->owner->decoders_.feedChannelIqSession(c->session, x, n, rateHz);
     }
     /** ★ The {"type":"tone"} message — the label is our own fixed text ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), no
      *  escaping needed. */
@@ -25838,6 +25841,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         // ★ V12 tone ID on the shared dial: one relaxed load unless the dial is on NFM (or a label is left to clear)
         if (p->toneSharedWant.load(std::memory_order_relaxed) || p->toneShared) p->toneFeedShared(x, n, rateHz);
+        // ★ V12 PAGING on the one pipeline (the phone's own radio, one listener): one relaxed load unless paging runs
+        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) > 0 && !g_serveOnLan.load(std::memory_order_relaxed) && !p->perClientDsp())
+            p->decoders_.feedChannelIqShared(x, n, rateHz);
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));
@@ -26354,6 +26360,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (decoderBlocked(ext)) {
                     LOGI("decoder %s refused — the server owner has switched it off on this receiver", ext.c_str());
                     continue;
+                }
+                /* ★★★ PAGING: THE PHONE'S OWN APP ON THE PHONE'S OWN RADIO, NOTHING ELSE (Stuart's spec). Refused unless
+                 *  the engine may run it here (not serving, a USB radio) AND this socket is loopback; never on VFO B. */
+                if (ext == "paging") {
+                    if (!LocalSdrShim::instance().pagingCapable() || !isLoopback(sock->peerAddress()) || wantsB(payload)) {
+                        LOGI("decoder paging refused — it runs only in the app, on the phone's own radio");
+                        sendDecoderRefusal(sock, "decoder", ext, "local_only",
+                            "Paging runs only in the VibeSDR app, on a radio plugged into this phone.");
+                        continue;
+                    }
                 }
                 // ★★ ADVANCED RDS. Not an audio decoder — it turns on the extended RDS stream (the
                 //    fields we normally discard, plus the constellation). SELECTING IT IS THE TOGGLE,
@@ -34963,6 +34979,12 @@ static std::string vsTunableJson() {
     j += std::string(",\"dsc\":") + (vsModeBlocked("dsc") ? "false" : "true");
     // ★ V12 SITOR-A (2026-10-29): the maritime ARQ teleprinter, decoded by the server (vibe_sitora_run.h)
     j += std::string(",\"sitora\":") + (vsModeBlocked("sitora") ? "false" : "true");
+#if defined(VIBE_PAGING)
+    /* ★★★ V12 PAGING — ANDROID LOCAL HARDWARE ONLY. Present only where it may run (LocalSdrShim::pagingCapable: this
+     *  phone's own USB radio, the engine not serving); absent on every server, so no client draws a PAGE key there.
+     *  The manual choices travel as data (pagingModes), so FLEX later is more entries, not a new client. */
+    if (LocalSdrShim::instance().pagingCapable()) j += vibe::pagingCapsJson();
+#endif
     /* ★★ JTTY (V12, 2026-10-26): the WSJT-X 3.2 keyboard mode, every JTTY signal in the passband (decoders/jtty_decoder.h).
      *  Absent on an older server, so its clients draw no JTTY button there; false where the owner has blocked it. */
     j += std::string(",\"jtty\":") + (vsModeBlocked("jtty") ? "false" : "true");
@@ -35296,7 +35318,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";
@@ -39976,6 +39998,16 @@ void LocalSdrShim::setFftRate(double fps) {
 }
 bool LocalSdrShim::isAirspyHf() const { return p && p->useAirspyHf(); }
 bool LocalSdrShim::isIcom() const { return p && p->useIcom(); }
+bool LocalSdrShim::pagingCapable() const {
+#if defined(VIBE_PAGING)
+    // ★★★ Android local hardware only (docs/v12/DECODERS-WAVE2.md "PAGING"): never while serving — then LAN, tunnel and
+    //     proxy visitors exist — and only a radio plugged into this phone (IQ of our own: not rtl_tcp, SpyServer, Icom).
+    if (g_serveOnLan.load()) return false;
+    return p && !p->useTcp() && !p->useSpy() && !p->useIcom();
+#else
+    return false;
+#endif
+}
 void LocalSdrShim::setIcomNext(const IcomStart& o) {
     std::lock_guard<std::mutex> lk(g_icomNextMtx);
     g_icomNext = o;

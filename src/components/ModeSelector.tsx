@@ -37,9 +37,10 @@ import { DECODER_PLACES, RADIO_BANDS, WHOLE_RADIO_IDS, WHOLE_RADIO_LABEL, WHOLE_
          type RadioBand } from '../utils/decoderBands';   // ★ V12 band tabs + groups + dimming (Stuart 2026-10-28)
 import { modeIconFor } from '../utils/modeIcons';
 import { DSC_HINT, dscChannelOn } from '../services/dsc';
+import { PAGING_HINT, type PagingMode } from '../services/paging';   // ★ V12 PAGING
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -471,6 +472,9 @@ interface ModeSelectorProps {
     onDscChan?: (ch: { hz: number; label: string; vhf: boolean }) => void;
     /** ★★ V12 SITOR-A — only where `"sitora": true` (the maritime ARQ teleprinter, both stations of a link). */
     sitoraAvail?: boolean;
+    /** ★★★ V12 PAGING — ANDROID LOCAL HARDWARE ONLY (the phone's own radio, in this app; the server offers it nowhere else).
+     *  Its settings: one key per `pagingModes` entry — the server's data, AUTO first — so FLEX later needs no change here. */
+    pagingAvail?: boolean; pagingModes?: PagingMode[]; pagingMode?: string; onPagingMode?: (id: string) => void;
     /** The dial now — lights the JTTY band / DSC channel key the radio is on. */
     tunedHz?: number;
     /** ★★★ THE SLUGS THIS RECEIVER PUBLISHES (`/api/extensions`), or null for "never asked".
@@ -563,8 +567,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const jttyShown = !!decoderControls?.jttyAvail && !isBlocked('jtty');
   const dscShown = !!decoderControls?.dscAvail && !isBlocked('dsc');
   const sitoraShown = !!decoderControls?.sitoraAvail && !isBlocked('sitora');   // ★ V12 SITOR-A
+  const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
-  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || aprsShown;
+  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || pagingShown || aprsShown;
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
@@ -740,7 +745,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     const active = dc.decMode === id && dc.decOn;
     const lit = dc.decMode === id;
@@ -1043,6 +1048,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'jtty': return jttyShown ? srvKey('jtty', 'JTTY', 'JTTY keyboard-mode decoder') : null;
       case 'dsc':  return dscShown ? srvKey('dsc', 'DSC', 'Maritime DSC decoder') : null;
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
+      case 'paging': return pagingShown ? srvKey('paging', 'PAGE', 'Pager decoder, POCSAG, rate found automatically') : null;
       case 'aprs': return aprsShown ? srvKey('aprs', 'APRS', 'APRS packet decoder') : null;
       case 'rds':  return advRdsShown ? advRdsKey() : null;
       case 'spots': return spotsInBands ? spotsKey(true) : null;
@@ -1056,7 +1062,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
       case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;
-      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'aprs': return aprsShown;
+      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'paging': return pagingShown; case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
       case 'spots': return spotsInBands; case 'hfdl': return hfdlInBands;
       default: return false;
@@ -1445,6 +1451,17 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
             <SegBtn label={aprsTuneFor(dc.aprsBaud ?? 1200, dc.aprsHz ?? 144.8e6).label} active={false} onPress={() => dc.onAprsTune?.()} />
           </OptRow>
           <Text style={capText}>{aprsHintText(dc.aprsBaud ?? 1200, dc.aprsHz ?? 144.8e6)}</Text>
+        </>);
+      /* ★★★ V12 PAGING: the RATE row is the server's own list (AUTO first) — never a list of ours — and the hint. */
+      case 'paging':
+        return (<>
+          {!!dc.pagingModes?.length && (<>
+            <SubLabel label="RATE" />
+            <OptRow>{dc.pagingModes.map((m) => (
+              <SegBtn key={m.id} label={m.label} active={(dc.pagingMode ?? 'auto') === m.id} onPress={() => dc.onPagingMode?.(m.id)} />
+            ))}</OptRow>
+          </>)}
+          <Text style={capText}>{PAGING_HINT}</Text>
         </>);
       case 'wefax':
         return (<>

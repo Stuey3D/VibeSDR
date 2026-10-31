@@ -27,7 +27,7 @@
 
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
-  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture';
+  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -114,6 +114,11 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
     { c: [8.5, 15, 3], w: 1.6 },
     { d: 'M14.5 12.5h4M14.5 15h4M14.5 17.5h4', w: 1.5 },
   ],
+  pager: [   // a pager: the case, its screen, one key
+    { r: [3, 6, 18, 12, 2.5] },
+    { r: [6, 9, 9, 4, 1], w: 1.5 },
+    { c: [17.5, 15, 1.3], fill: true },
+  ],
   clock: [
     { c: [12, 12, 9] },
     { d: 'M12 6.8V12l3.6 2.2' },
@@ -143,6 +148,7 @@ export function modeIconFor(id: string): ModeIconName | null {
     case 'ais': case 'dsc': case 'navtex': case 'sitora': case 'sitor': case 'amtor': return 'ship';   // ★ SITOR-A beside NAVTEX (SITOR-B)
     case 'ndb': return 'beacon';
     case 'ism': return 'sensor';
+    case 'paging': case 'pocsag': case 'flex': case 'pager': return 'pager';   // ★ V12 PAGING (and OpenWebRX's POCSAG)
     case 'aprs': case 'packet': return 'aprs';
     case 'sstv': return 'tv';
     case 'wefax': case 'fax': return 'fax';

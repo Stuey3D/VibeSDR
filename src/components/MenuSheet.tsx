@@ -110,9 +110,9 @@ export interface MenuSheetProps {
   isFavourite?: boolean;
   onToggleFavourite?: () => void;
   /** Client decoders — skin semantics: toggle start/stop, menu stays open. */
-  decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'aprs'|null;
+  decMode?:        'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'paging'|'aprs'|null;
   decOn?:          boolean;
-  onDecToggle?:    (m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'aprs') => void;
+  onDecToggle?:    (m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'paging'|'aprs') => void;
   /** Digital/CW spots feeds (skin lsvSpots). */
   spotsKind?:      'digi'|'cw'|null;
   onSpotsToggle?:  (k: 'digi'|'cw') => void;

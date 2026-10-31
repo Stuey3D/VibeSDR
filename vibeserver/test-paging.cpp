@@ -11,9 +11,15 @@
 //     MANUAL mode at the wrong rate decodes nothing.
 //   • Nothing on noise: hours of white noise, and of random NRZ at each rate, give zero pages and no detection.
 //   • Sensitivity (Eb/N0 on the discriminator, 50 %) and the cost, printed.
+//   • THE WIRED PATH (PagingRun — what the Android host runs): FM IQ at the channel rates the pipeline gives NFM
+//     (20, 25, 31.25, 48 kHz), ±4.5 kHz deviation, AWGN filtered to the passband as the channel filter does; every rate
+//     decodes; the line format and the status JSON; the modes list as data; minutes of channel noise → 0 pages;
+//     a fingerprint of the discriminator + the lines, equal in a VIBE_FORCE_SCALAR build (printed — compare by hand).
 #include "decoders/paging_decoder.h"
+#include "vibe_paging_run.h"   // ★ the wiring's run: own discriminator on the channel IQ, the lines and the status
 
 #include <chrono>
+#include <complex>
 #include <cmath>
 #include <cstdio>
 #include <random>
@@ -118,7 +124,78 @@ static bool allRight(const Got& g, int baud, bool inv) {
     return true;
 }
 
-int main() {
+
+// ── the wired path: FM IQ like the pipeline's channel IQ ─────────────────────────────────────────────────────────────
+/** POCSAG as FM IQ at `fs`: NRZ (1 = +dev) smoothed, phase-integrated; complex AWGN at Eb/N0 (C = 1, N0 = 2σ²/fs per
+ *  dimension pair), then signal + noise through a windowed-sinc low-pass of `passHz` (the channel filter's job). */
+static std::vector<std::complex<float>> fmIq(const std::vector<int>& bits, int baud, double fs, double devHz, double clockErr,
+                                             bool invert, double ebn0Db, uint32_t seed, double passHz, double lead = 0.5, double tail = 0.5) {
+    std::mt19937 rng(seed); std::normal_distribution<float> g(0.f, 1.f);
+    const double sigma = std::isfinite(ebn0Db) ? std::sqrt(fs / (2.0 * baud * std::pow(10.0, ebn0Db / 10.0))) : 0.0;
+    const double br = baud * (1.0 + clockErr);
+    const int n = (int)((lead + tail) * fs + bits.size() * fs / br);
+    const double a = 1.0 - std::exp(-2 * M_PI * 0.6 * baud / fs);
+    std::vector<std::complex<float>> x((size_t)n);
+    double y = 0, ph = 0.7;
+    for (int i = 0; i < n; ++i) {
+        const double t = i / fs - lead;
+        double s = 0;
+        if (t >= 0) { const size_t k = (size_t)(t * br); if (k < bits.size()) s = (bits[k] ^ (invert ? 1 : 0)) ? 1.0 : -1.0; }
+        y += a * (s - y);
+        ph += 2 * M_PI * devHz * y / fs;
+        x[(size_t)i] = std::complex<float>((float)(std::cos(ph) + sigma * g(rng)), (float)(std::sin(ph) + sigma * g(rng)));
+    }
+    // the channel filter: 63-tap Hamming-windowed sinc, cut-off passHz/2
+    const int T = 63; std::vector<float> h(T); double hs = 0;
+    for (int k = 0; k < T; ++k) {
+        const double m = k - (T - 1) / 2.0, fc = 0.5 * passHz / fs;
+        const double v = (m == 0 ? 2 * fc : std::sin(2 * M_PI * fc * m) / (M_PI * m)) * (0.54 - 0.46 * std::cos(2 * M_PI * k / (T - 1)));
+        h[(size_t)k] = (float)v; hs += v;
+    }
+    for (auto& v : h) v = (float)(v / hs);
+    std::vector<std::complex<float>> o((size_t)n);
+    for (int i = 0; i < n; ++i) {
+        std::complex<float> acc(0, 0);
+        for (int k = 0; k < T; ++k) { const int j = i - k; if (j >= 0) acc += h[(size_t)k] * x[(size_t)j]; }
+        o[(size_t)i] = acc;
+    }
+    return o;
+}
+struct RunGot { std::vector<std::string> lines; std::vector<std::string> json; std::vector<int> states; uint64_t fp = 1469598103934665603ull, fpLines = 1469598103934665603ull; };
+static void fpMix(uint64_t& h, const void* d, size_t n) { const uint8_t* p = (const uint8_t*)d; for (size_t i = 0; i < n; ++i) { h ^= p[i]; h *= 1099511628211ull; } }
+static RunGot runIq(const std::vector<std::complex<float>>& x, double fs, PagingDecoder::Mode m) {
+    RunGot g;
+    PagingRun::Out o;
+    o.text = [&](const std::string& t) { g.lines.push_back(t); fpMix(g.fp, t.data(), t.size()); fpMix(g.fpLines, t.data(), t.size()); };
+    o.json = [&](const std::string& j) { g.json.push_back(j); };
+    o.state = [&](uint8_t s) { g.states.push_back(s); };
+    PagingRun r(m, std::move(o));
+    const int blk = (int)(fs * 0.02);
+    std::complex<float> last{1.f, 0.f};
+    std::vector<float> d((size_t)blk);
+    for (size_t i = 0; i < x.size(); i += (size_t)blk) {
+        const int k = (int)std::min<size_t>((size_t)blk, x.size() - i);
+        r.feedIq(x.data() + i, k, fs);
+        PagingRun::discriminate(x.data() + i, k, last, d.data());   // ★ the same discriminator again, for the fingerprint
+        fpMix(g.fp, d.data(), (size_t)k * sizeof(float));
+    }
+    return g;
+}
+static bool linesRight(const RunGot& g, int baud) {
+    const auto& P = testPages();
+    if (g.lines.size() != P.size()) return false;
+    for (size_t i = 0; i < P.size(); ++i) {
+        PagingDecoder::Page p; p.proto = "POCSAG"; p.baud = baud; p.address = P[i].addr; p.function = P[i].fn;
+        p.kind = P[i].text.empty() ? "tone" : P[i].numeric ? "numeric" : "alpha"; p.text = P[i].text;
+        if (g.lines[i] != PagingRun::line(p)) return false;
+    }
+    return true;
+}
+
+static uint64_t wiredFingerprint(uint64_t* linesOnly = nullptr);
+int main(int argc, char** argv) {
+    // ★ --fingerprint: only the wired path's fingerprint (for the NEON / SSE2 / scalar identity runs under qemu)
+    if (argc > 1 && std::string(argv[1]) == "--fingerprint") { uint64_t l = 0; const uint64_t f = wiredFingerprint(&l); std::printf("fingerprint %016llx  lines %016llx\n", (unsigned long long)f, (unsigned long long)l); return 0; }
     std::printf("test-paging — POCSAG (ITU-R M.584-2 Annex 1)\n\n── the code against the ITU's tables ──\n");
     {
         uint32_t s = PagingDecoder::kSync, i = PagingDecoder::kIdle;
@@ -204,6 +281,94 @@ int main() {
         ok(g.pages.empty() && g.detected.empty(), "10 minutes of random " + std::to_string(baud) + " bit/s NRZ: " + std::to_string(g.pages.size()) + " pages");
     }
 
+
+    std::printf("\n── the wired path: PagingRun on FM IQ at the pipeline's NFM channel rates ──\n");
+    {
+        // the line format and the modes as data
+        PagingDecoder::Page p; p.proto = "POCSAG"; p.baud = 1200; p.address = 1234567; p.function = 3; p.kind = "alpha"; p.text = "HELLO";
+        ok(PagingRun::line(p) == "[POCSAG 1200 \xc2\xb7 1234567 \xc2\xb7 F3] HELLO\n", "line: " + PagingRun::line(p).substr(0, PagingRun::line(p).size() - 1));
+        p.kind = "tone"; p.text.clear(); p.truncated = true; p.address = 777;
+        ok(PagingRun::line(p) == "[POCSAG 1200 \xc2\xb7 0000777 \xc2\xb7 F3] (tone only) (cut short)\n", "a tone-only page cut short reads so");
+        const std::string caps = pagingCapsJson();
+        ok(caps.find("\"paging\":true") != std::string::npos && caps.find("{\"id\":\"auto\",\"label\":\"AUTO\"}") == caps.find('{')
+           && caps.find("pocsag2400") != std::string::npos, "vibeserver.json fields: paging + the manual choices as data, AUTO first");
+        ok(PagingDecoder::modeFromId("pocsag512") == Mode::Pocsag512 && PagingDecoder::modeFromId("nonsense") == Mode::Auto
+           && std::string(PagingDecoder::idOf(Mode::Pocsag2400)) == "pocsag2400", "mode ids round-trip; unknown → AUTO");
+    }
+    uint64_t fpAll = 1469598103934665603ull;
+    for (double fs : {20000.0, 25000.0, 31250.0, 48000.0})
+        for (int baud : {512, 1200, 2400}) {
+            const bool inv = baud == 1200;
+            auto x = fmIq(bits, baud, fs, 4500, inv ? 0.004 : -0.004, inv, 24.0, 40u + (uint32_t)baud + (uint32_t)fs, std::min(16000.0, fs * 0.8));
+            const RunGot g = runIq(x, fs, Mode::Auto);
+            fpMix(fpAll, &g.fp, sizeof g.fp);
+            bool sawDet = false, sawShort = false;
+            for (auto& j : g.json) { sawDet |= j.find("\"detected\":\"POCSAG " + std::to_string(baud) + "\"") != std::string::npos; sawShort |= j.find("\"short\":true") != std::string::npos; }
+            char w[200]; std::snprintf(w, sizeof w, "%5.0f Hz IQ, POCSAG %4d%s: %zu lines right, status names it, locked state sent%s",
+                                       fs, baud, inv ? " inverted" : "", g.lines.size(), fs < 24000 ? ", 'short' flagged" : "");
+            ok(linesRight(g, baud) && sawDet && !g.states.empty() && g.states[0] == 1 && (sawShort == (fs < 24000)), w);
+            if (!linesRight(g, baud)) for (auto& l : g.lines) std::printf("      %s", l.c_str());
+        }
+    std::printf("    fingerprint (discriminator + lines, every rate above): %016llx — must equal the VIBE_FORCE_SCALAR build's\n", (unsigned long long)fpAll);
+    {
+        std::printf("    sensitivity on IQ (Eb/N0, 12 transmissions a point, all four pages right, 12.5 kHz passband):\n");
+        for (int cfg = 0; cfg < 4; ++cfg) {
+            const int baud = cfg == 0 ? 512 : cfg == 1 ? 1200 : 2400; const double fs = cfg == 3 ? 20000.0 : 31250.0;
+            std::printf("      POCSAG %4d @ %5.0f Hz:", baud, fs);
+            double fifty = NAN;
+            for (double eb = 6; eb <= 16.01; eb += 1) {
+                int right = 0;
+                for (int k = 0; k < 12; ++k) {
+                    auto x = fmIq(bits, baud, fs, 4500, 0.002 * ((k % 3) - 1), k & 1, eb, 5000u + (uint32_t)k + (uint32_t)(eb * 37) + (uint32_t)baud, 12500);
+                    right += linesRight(runIq(x, fs, Mode::Auto), baud);
+                }
+                std::printf(" %2.0f:%2d", eb, right);
+                if (std::isnan(fifty) && right >= 6) fifty = eb;
+            }
+            // ★ the CNR in the 12.5 kHz passband = Eb/N0 + 10·log10(baud / 12500): the discriminator's FM threshold (≈ 3–5 dB
+            //   CNR here) is what sets these — 512 bit/s at 15 dB Eb/N0 is ≈ 1 dB CNR. A tone-filter (non-coherent FSK)
+            //   detector would beat it at the low rates; pager receivers and the usual decoders use the discriminator too.
+            std::printf("  → 50 %% ≈ %.0f dB (CNR in 12.5 kHz ≈ %.1f dB)\n", fifty, fifty + 10 * std::log10(baud / 12500.0));
+            const double lim = baud == 512 ? 16 : baud == 1200 ? 15 : 13;
+            ok(!std::isnan(fifty) && fifty <= lim, "IQ path, POCSAG " + std::to_string(baud) + " @ " + std::to_string((int)fs) + " Hz reaches 50 % by " + std::to_string((int)lim) + " dB Eb/N0");
+        }
+    }
+    {
+        // channel noise only (the squelch is not in this path: the pager is fed noise whenever nothing transmits)
+        const double fs = 31250; const int secs = 900;
+        std::mt19937 r(123); std::normal_distribution<float> g(0.f, 1.f);
+        RunGot got; PagingRun::Out o;
+        o.text = [&](const std::string& t) { got.lines.push_back(t); };
+        PagingRun run(Mode::Auto, std::move(o));
+        std::vector<std::complex<float>> x((size_t)fs);
+        bool det = false;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int s = 0; s < secs; ++s) {
+            for (auto& v : x) v = std::complex<float>(g(r), g(r));
+            run.feedIq(x.data(), (int)x.size(), fs);
+            det |= !run.detected().empty();
+        }
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        ok(got.lines.empty() && !det, "15 minutes of channel noise at 31.25 kHz (AUTO): " + std::to_string(got.lines.size()) + " pages, detected " + (det ? "yes" : "no"));
+        std::printf("    cost (incl. the noise generator): %.3f ms per second of 31.25 kHz IQ\n", ms / secs);
+    }
+
     std::printf("\n%s (%d failed)\n", fails ? "FAILED" : "ALL PASS", fails);
     return fails ? 1 : 0;
+}
+
+/** The wired path's fingerprint alone: the same twelve IQ runs as the test above (same seeds), discriminator + lines. */
+static uint64_t wiredFingerprint(uint64_t* linesOnly) {
+    const auto bits = transmission(testPages());
+    uint64_t fpAll = 1469598103934665603ull, fpL = 1469598103934665603ull;
+    for (double fs : {20000.0, 25000.0, 31250.0, 48000.0})
+        for (int baud : {512, 1200, 2400}) {
+            const bool inv = baud == 1200;
+            auto x = fmIq(bits, baud, fs, 4500, inv ? 0.004 : -0.004, inv, 24.0, 40u + (uint32_t)baud + (uint32_t)fs, std::min(16000.0, fs * 0.8));
+            const RunGot g = runIq(x, fs, Mode::Auto);
+            fpMix(fpAll, &g.fp, sizeof g.fp);
+            fpMix(fpL, &g.fpLines, sizeof g.fpLines);
+        }
+    if (linesOnly) *linesOnly = fpL;
+    return fpAll;
 }

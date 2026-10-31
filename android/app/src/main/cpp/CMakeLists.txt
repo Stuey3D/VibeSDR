@@ -153,7 +153,7 @@ add_library(vibelocalsdr SHARED
     decoders/auto_notch.cpp
     decoders/time_decoder.cpp
     decoders/tone_id.cpp   # ★ V12: CTCSS / DCS tone ID on NFM
-    decoders/paging_decoder.cpp   # ★ V12: PAGING (POCSAG, AUTO) — Android local hardware only; engine, not yet wired
+    decoders/paging_decoder.cpp   # ★ V12: PAGING (POCSAG, AUTO) — Android local hardware only (VIBE_PAGING, vibe_paging_run.h)
     decoders/cw_skimmer.cpp
     decoders/ndb_skimmer.cpp
     decoders/drm/drm_receiver.cpp   # ★ V12 DRM (decoders/drm/, vibe_drm_listener.h)
@@ -220,6 +220,10 @@ endif()
 # ★ Set only by lite/android/app/build.gradle — see the flavour report in local_sdr_shim.cpp.
 if (VIBE_LITE_APP)
   target_compile_definitions(vibelocalsdr PRIVATE VIBE_LITE_APP=1)
+else()
+  # ★★★ V12 PAGING — the CLIENT app's library only (Android local hardware: the phone's own radio, its own app). Never
+  #     VibeServer Lite (a server) and never the desktop VibeServer, which does not compile the engine at all.
+  target_compile_definitions(vibelocalsdr PRIVATE VIBE_PAGING=1)
 endif()
 target_compile_definitions(vibelocalsdr PRIVATE VIBESERVER_VERSION_STR="${VIBESERVER_VERSION}"
     VIBE_DAB_PFFFT=1)   # ★ the DAB OFDM transform uses the PFFFT this target already links — see vibe_dab_fft.h

@@ -9,6 +9,7 @@ import { parseIsmCapability, type IsmCap } from './ism';
 import { parseTunable } from '../utils/tuneWindow';
 import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBand';
 import { parseNdbCapability } from './ndb';
+import { parsePagingModes, type PagingMode } from './paging';   // ★ V12 PAGING (Android local hardware only)
 import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';   // ★ V12 AIS / APRS
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 // ★ V12 'drm' = Digital Radio Mondiale, a VibeServer demodulator offered only where its vibeserver.json `modes` lists it
@@ -448,6 +449,10 @@ export interface ServerOccupancy {
   dsc?: boolean;
   /** ★ V12 SITOR-A: this server's maritime ARQ listener ('sitora'). False or absent = no key. */
   sitora?: boolean;
+  /** ★★★ V12 PAGING — present ONLY on the phone's own engine (Android local hardware, not serving): the manual choices
+   *  as data, AUTO first (services/paging.ts). Absent = no PAGE key. */
+  paging?: boolean;
+  pagingModes?: PagingMode[];
   /** ★ V12: where this radio can be tuned (Hz windows after the owner's lists) — decides which channel / band keys draw. */
   tunable?: Array<[number, number]>;
   /** ★ V12 digital spots (docs/v12/DIGITAL-SPOTS.md): the modes this server decodes, Band mode's capability and bands. */
@@ -517,6 +522,8 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       jtty:      j.jtty === true,
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
+      paging:    j.paging === true,
+      pagingModes: parsePagingModes(j.pagingModes),
       tunable:   parseTunable(j.tunable),
       spotModes: parseSpotModes(j.spotModes),
       spotsBand: parseSpotsBandCap(j),

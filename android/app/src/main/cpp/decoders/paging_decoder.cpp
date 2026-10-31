@@ -219,6 +219,24 @@ struct PagingDecoder::Rx {
     }
 };
 
+const std::vector<PagingDecoder::ModeInfo>& PagingDecoder::modes() {
+    static const std::vector<ModeInfo> m = {
+        { Mode::Auto,       "auto",       "AUTO" },
+        { Mode::Pocsag512,  "pocsag512",  "POCSAG 512" },
+        { Mode::Pocsag1200, "pocsag1200", "POCSAG 1200" },
+        { Mode::Pocsag2400, "pocsag2400", "POCSAG 2400" },
+    };
+    return m;
+}
+PagingDecoder::Mode PagingDecoder::modeFromId(const std::string& id) {
+    for (const auto& i : modes()) if (id == i.id) return i.mode;
+    return Mode::Auto;
+}
+const char* PagingDecoder::idOf(Mode m) {
+    for (const auto& i : modes()) if (i.mode == m) return i.id;
+    return "auto";
+}
+
 PagingDecoder::PagingDecoder(double rateHz, Mode m) : fs_(rateHz), mode_(m) { build_(); }
 PagingDecoder::~PagingDecoder() = default;
 

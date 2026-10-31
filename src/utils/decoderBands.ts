@@ -13,7 +13,9 @@
  *   VHF               ⚓ Maritime  DSC (channel 70)
  *                     Amateur     APRS · DIGITAL SPOTS (6 m / 2 m) · CW · SSTV
  *                     Broadcast   ADV RDS
- *   UHF               (nothing yet: ADS-B and ISM tune the radio themselves — no tab is drawn for an empty band)
+ *                     Paging      PAGE (POCSAG — Android local hardware only: the phone's own radio)
+ *   UHF               Paging      PAGE (the 450 MHz and 900 MHz paging bands)
+ *                     (ADS-B and ISM tune the radio themselves — no tab is drawn for an empty band)
  *   Every band        SCANNER · GALLERY · TRANSCRIBE (tools, not decoders of one band)
  *
  * ★★★ TUNES THE RADIO ITSELF (Stuart, 2026-10-28: "any decoders that trigger their own view Digital Spots (Full Band) DAB
@@ -40,12 +42,12 @@ import { NAVTEX_BANDS_KHZ } from './navtexStations.generated.ts';
 import { DSC_ALL } from './dscChannels.ts';
 
 export type RadioBand = 'hf' | 'vhf' | 'uhf';
-export type DecoderGroup = 'aviation' | 'maritime' | 'amateur' | 'other';
+export type DecoderGroup = 'aviation' | 'maritime' | 'amateur' | 'paging' | 'other';
 
 export const RADIO_BANDS: ReadonlyArray<{ id: RadioBand; label: string }> = [
   { id: 'hf', label: 'HF' }, { id: 'vhf', label: 'VHF' }, { id: 'uhf', label: 'UHF' },
 ];
-export const DECODER_GROUPS: readonly DecoderGroup[] = ['aviation', 'maritime', 'amateur', 'other'];
+export const DECODER_GROUPS: readonly DecoderGroup[] = ['aviation', 'maritime', 'amateur', 'paging', 'other'];
 
 /** The band a (displayed) frequency is in: HF below 30 MHz (LF and MF with it), VHF to 300 MHz, UHF above. */
 export function radioBandOf(hz: number): RadioBand {
@@ -58,6 +60,7 @@ export function decoderGroupLabel(g: DecoderGroup, band: RadioBand): string {
   if (g === 'aviation') return 'AVIATION';
   if (g === 'maritime') return 'MARITIME';
   if (g === 'amateur') return 'AMATEUR';
+  if (g === 'paging') return 'PAGING';
   return band === 'hf' ? 'UTILITY' : band === 'vhf' ? 'BROADCAST' : 'SENSORS';
 }
 /** The id whose ModeIcon a group's heading carries (utils/modeIcons modeIconFor; 'amateur' is the transceiver). */
@@ -65,6 +68,7 @@ export function decoderGroupIcon(g: DecoderGroup, band: RadioBand): string {
   if (g === 'aviation') return 'adsb';
   if (g === 'maritime') return 'ais';
   if (g === 'amateur') return 'amateur';
+  if (g === 'paging') return 'paging';
   return band === 'hf' ? 'time' : band === 'vhf' ? 'rds' : 'ism';
 }
 
@@ -83,9 +87,12 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
   vhf: [
     { group: 'maritime', ids: ['dsc'] },
     { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv'] },
+    { group: 'paging',   ids: ['paging'] },   // ★ V12: only drawn on the phone's own radio (Android local hardware)
     { group: 'other',    ids: ['rds'] },
   ],
-  uhf: [],
+  uhf: [
+    { group: 'paging',   ids: ['paging'] },
+  ],
 };
 
 /**

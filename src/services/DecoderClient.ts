@@ -53,6 +53,7 @@ import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, type 
 import { parseJttySignals, parseJttySpot, jttyStateText, type JttySignal, type JttySpot } from './jtty';
 import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
+import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -61,6 +62,7 @@ import { parseSpotsStatus, type SpotModeState } from './spotsBand';
  *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
 /** ★ V12 PSK31/63 ('psk' / 'pskskim' — `pskSkim`), JTTY ('jtty') and DSC ('dsc') — a VibeServer's own decoders. */
 export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw' | 'psk' | 'jtty' | 'dsc'
+  | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
   | 'sitora'  // ★ V12 SITOR-A — a VibeServer's maritime ARQ listener (vibe_sitora_run.h): text, link state, status JSON
   | 'aprs';   // ★ V12 APRS — a VibeServer's own packet decoder (vibe_aprs_run.h): JSON lists and packets, no text frame
 
@@ -280,6 +282,8 @@ export class DecoderClient {
   private active:  DecoderName | null = null;
   /** ★ SITOR-A: the last status the server sent (the status line is drawn from it and the 0x03 link state). */
   private sitorLast: SitorStatus | null = null;
+  /** ★ PAGING: the last status (the line is drawn from it). */
+  private pagingLast: PagingStatus | null = null;
   /** This server reports WEFAX phases (0x04) — set by the first one, cleared on every attach. */
   private wefaxPhases = false;
   private destroyed = false;
@@ -306,6 +310,8 @@ export class DecoderClient {
   dscParams: Record<string, unknown> = { band: 'hf', center_frequency: 1700 };
   /** ★ V12 APRS: 1200 Bd (VHF, NFM) or 300 Bd (HF packet, USB) — a change is a re-attach (start('aprs') again). */
   aprsBaud: 1200 | 300 = 1200;
+  /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */
+  pagingMode = 'auto';
 
   constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string, authSuffix = '') {
     this.baseUrl  = baseUrl.replace(/\/+$/, '');
@@ -637,6 +643,10 @@ export class DecoderClient {
             if (this.active !== 'jtty') return;
             const sp = parseJttySpot(m.data, Date.now());
             if (sp) this.cb.onJttySpot?.(sp);
+          } else if (m.type === 'paging_status' && m.data) {
+            if (this.active !== 'paging') return;
+            const st = parsePagingStatus(m.data);
+            if (st) { this.pagingLast = st; this.cb.onStatus(pagingStatusText(st)); this.cb.onDot(st.detected ? 'active' : 'idle'); }
           } else if (m.type === 'sitora_status' && m.data) {
             if (this.active !== 'sitora') return;
             const st = parseSitorStatus(m.data);
@@ -797,6 +807,8 @@ export class DecoderClient {
       case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };
       // ★ V12 SITOR-A: the tones around 1 kHz (as RTTY); polarity, timing and each station's offset are found.
       case 'sitora':  this.sitorLast = null; return { extension_name: 'sitora', params: { center_frequency: 1000 } };
+      // ★ V12 PAGING: the mode is one of the server's own `pagingModes` ids — the server falls back to AUTO for any other.
+      case 'paging':  this.pagingLast = null; return { extension_name: 'paging', params: { mode: this.pagingMode } };
     }
   }
 
@@ -813,13 +825,18 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora') {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora' || name === 'paging') {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);
         if (tl <= 0 || u8.length < 13 + tl) return;
         if (name !== 'jtty' && name !== 'dsc') this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
         this.cb.onDot('active');
+      } else if (name === 'paging' && t === 0x03) {
+        // ★ PAGING's lock: 0 hunting · 1 a batch lock at some rate (the status JSON names it)
+        if (u8.length < 2) return;
+        this.cb.onDot(u8[1] ? 'active' : 'idle');
+        if (!u8[1] && this.pagingLast) { this.pagingLast.detected = ''; this.cb.onStatus(pagingStatusText(this.pagingLast)); }
       } else if (name === 'sitora' && t === 0x03) {
         // ★ SITOR-A's link state (0 no signal … 7 ended) — the status line keeps who is printing and the RQ count
         if (u8.length < 2) return;
