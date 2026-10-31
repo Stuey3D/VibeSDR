@@ -329,8 +329,11 @@ struct Rx {
     virtual void moved(int delta) { (void)delta; }
     int huntAge = 0;   // quarter-symbols a signal place has shown no sign of the mode
     float hz() const { return fd.curB < 0 ? 0.f : (float)((fd.lo + fd.curB + fd.s * toneShift() + 0.5 * fd.s * (sub->M - 1)) * st->binHz()); }
+    /** (1 − α)^frames: the part of the finder's score that is still its zero start (≈ 0 once it is warm) */
+    float warmD = 1.f;
     void frame(int64_t f, const float* P) {
         const int nBins = st->N / 2, p = (int)(f & 3);
+        if (warmD > 0.f) { warmD *= 1.f - fd.alpha; if (warmD < 1e-6f) warmD = 0.f; }
         fd.update(P, nBins, p);
         if (p != 3) return;   // choose once a symbol
         // ★ a ban counts HUNTING symbols only: run down during a lock, it expired in the over's tail and the next over
@@ -357,9 +360,20 @@ struct Rx {
         }
         // the symbol of the chosen phase, if this frame is it — handled on the frame of that phase below
     }
+    /** ★★ A PHASE MOVE ACROSS THE WRAP IS A QUARTER OF A SYMBOL, NOT A WHOLE ONE (2026-10-31, eighth run; found while
+     *  hunting the web test's lost "E" — see presRing for that one). The symbol index was (frame − phase) / 4, so a
+     *  finder moving its phase 3 → 0 (a quarter later) counted a symbol that never came — one erasure INSERTED into the
+     *  stream — and 0 → 3 (a quarter earlier) skipped one — a symbol DELETED. Either shifts every later symbol against the de-interleaver until it has passed through
+     *  (≈ 30 symbols of wrong bits, 4–7 characters), and an OLIVIA block's chips against their alignment. Measured on
+     *  the web test's clip (OLIVIA 16/500 + MFSK16) looped from 400 start offsets: a wrong MFSK16 join ("'E G4XYZ",
+     *  "c G4XYZ", "ÐZ MFSK") — the phase settles most while a receiver joins an over, which is why it showed
+     *  as a JOIN fault. Moves of 1 or 2 within 0 … 3 were always right; a move of 3 is now read as the quarter it is. */
+    int symP = -1; int64_t idxAdj = 0;
     void maybeSymbol(int64_t f, const float* P) {
         if (fd.curB < 0 || (int)(f & 3) != fd.curP) return;
-        const int64_t idx = (f - fd.curP) >> 2;
+        if (symP >= 0) { const int dP = fd.curP - symP; if (dP == 3) ++idxAdj; else if (dP == -3) --idxAdj; }
+        symP = fd.curP;
+        const int64_t idx = ((f - fd.curP) >> 2) + idxAdj;
         if (idx <= lastIdx) return;
         const int gap = lastIdx < 0 ? 0 : (int)std::min<int64_t>(64, idx - lastIdx - 1);
         lastIdx = idx;
@@ -499,8 +513,19 @@ struct MfskRx : Rx {
             recent[nRecent++ & 31] = (uint8_t)cur;
             float xm = 0; for (int k = 0; k < M; ++k) xm = std::max(xm, x[k]);
             presence += 0.125f * (xm - presence);
-            if (fd.current() < 4.5f) joinN = -1;   // the place quiet (the hunt's test): what follows is an over's start
-            presRing[n & 63] = presence;
+            // the place quiet (the hunt's test): what follows is an over's start. ★ Judged against the finder's WARM-UP
+            //   (2026-10-31, eighth run): its score is an average that starts from zero, so on the first symbols even a
+            //   strong over read "quiet" — the join rule was switched off at once on every receiver opened mid-over, and
+            //   the first characters it shows were the Viterbi's start-up guesses ("'E G4XYZ", "c G4XYZ", "cST PSE K":
+            //   9 in 1200 joins of the web test's clip).
+            if (fd.current() < 4.5f * (1.f - warmD)) joinN = -1;
+            // ★★ EVERY SYMBOL'S SLOT, the skipped ones too (2026-10-31, eighth run — THE WEB TEST'S LOST "E"): a phase move
+            //   to an earlier quarter (3 → 2) skips a symbol, pushed below as an erasure, and its slot here kept the
+            //   presence of 64 symbols before — the quiet before the over. 54 symbols later presentThen() read that stale
+            //   slot for the "E" of "DE" and hid it: "CQ CQ D G4XYZ", reproduced exactly from the server's own decoder
+            //   audio (dumped from a failing run of test-web-textmodes). Section 12 saw the same stale slots (THOR16, a
+            //   128-slot ring) and kept the 64; filling them is the fix.
+            for (int g = 0; g <= gap; ++g) presRing[(n + g) & 63] = presence;
         }
         {   float m1 = 0, m2 = 0;
             for (int k = 0; k < M; ++k) { if (T[k] > m1) { m2 = m1; m1 = T[k]; } else if (T[k] > m2) m2 = T[k]; }
@@ -510,7 +535,12 @@ struct MfskRx : Rx {
         push(soft);
         // ★ the lock is TAKEN on all three (a code that agrees, tones that change, one tone a symbol) and HELD on the code
         //   alone — the idle carrier at the end of an over repeats one tone, and the last words are still in the Viterbi
-        if (!lock && contrast() > 0.12f && repeat < 0.15f && split < 0.3f && nRecent >= 32 && distinct() >= (M * 3) / 4) {
+        // ★ …and not before the Viterbi has given its first bit (D steps): its quality is an average of the first few
+        //   steps only, and read 2 steps in it said 1.00 / 0.00 — a "contrast" of 1 — on a place one tone off an MFSK16
+        //   over the receiver had just joined; the lock held through the over's idle tail and printed its garbage
+        //   ("teî tttzA", measured once the phase fix above had moved the timing of that join). D steps is n ≈ 55: an
+        //   over that begins after quiet still locks before its first character leaves the pipeline (n ≈ 70).
+        if (!lock && vit[0].steps >= Viterbi7::D && contrast() > 0.12f && repeat < 0.15f && split < 0.3f && nRecent >= 32 && distinct() >= (M * 3) / 4) {
             lock = true; lockAge = 0; lockK = vit[1].quality() > vit[0].quality() ? 1 : 0;
         } else if (lock && ((repeat < 0.3f && zeroRun < 24 && contrast() < 0.05f) || (repeat < 0.25f && distinct() < M / 2))) lock = false;
         // ★ (an idle carrier — one tone held, repeat → 1 — keeps the lock: the over's last words are still in the pipeline)   // tones that vary over too few
@@ -536,7 +566,7 @@ struct OliviaRx : Rx {
     struct Hyp { std::vector<float> ring; std::vector<float> E; std::vector<std::vector<int>> past; };   // past: K × (2 blocks of b codes, q)
     Hyp hyp[3];
     int64_t n = 0; int pos = 0;
-    int lockH = 1, lockA = -1; bool lock = false; int candH = -1, candA = -1, candB = -1;
+    int lockH = 1, lockA = -1; bool lock = false; int candH = -1, candA = -1, candB = -1; float candScore = 0;
     int val[64];
     std::vector<uint64_t> scrJ;  // per character: the scrambler rotated
     explicit OliviaRx(const Sub* s) : Rx(s) {
@@ -565,8 +595,11 @@ struct OliviaRx : Rx {
      *  every such move (OLIVIA 4/125 13/20 → 3/20); wiping on any move of three tones (OLIVIA 64/2000 at −6 dB 13 → 11,
      *  its finder slides inside the 2 kHz signal); renaming the hypotheses on a whole-tone move (the same); parking
      *  each place's qualities and taking them back on a return (CONTESTIA 8/250 8 → 6). */
+    int64_t farMoveN = -1;   // symbols pushed when the finder last moved off the tone set (see push: a block across it)
     void moved(int delta) override {
-        if (lock || std::abs(delta) <= fd.s * (sub->M + 1)) return;
+        if (std::abs(delta) <= fd.s * (sub->M + 1)) return;
+        farMoveN = n;
+        if (lock) return;
         const float cap = K == 64 ? 0.085f : 0.13f;   // = thrOff in push()
         for (Hyp& h : hyp) { for (float& e : h.E) e = std::min(e, cap); for (auto& p : h.past) p.clear(); }
         candH = candA = -1;
@@ -657,20 +690,37 @@ struct OliviaRx : Rx {
         //   REMOVED: it cost decodes at the edge (OLIVIA 16/500 at −10 dB 10/10 → 8/10). Never decodes for speed.)
         const int a = pos;         // the alignment: where the block ends, modulo K
         int code[3][8]; float q[3];
+        // noise reads ≈ 0.057 (64 chips) / 0.10 (32): the best of 64 / 32 alignments × 3 hypotheses must not reach thrOn
+        const float thrOn = K == 64 ? 0.12f : 0.17f, thrOff = K == 64 ? 0.085f : 0.13f;
+        // ★★ A BLOCK ACROSS A MOVE OFF THE TONE SET NAMES NO CANDIDATE AND IS NOT KEPT TO BE SHOWN (2026-10-31, eighth
+        //   run). moved() caps what was measured before the move, but the K blocks read in the K symbols AFTER it still
+        //   hold symbols read at the old place: the first of them is nearly all old signal. Measured on the web test's
+        //   clip (400 start offsets): (1) an OLIVIA's last block before its finder left for the MFSK16 read 0.50 and
+        //   became the lock candidate; one noise-level block later the lock was taken ON THE MFSK16 ("[OLIVIA 16/500 ·
+        //   797 Hz]", the MFSK16's text lost while it was the winner); (2) a block read half at the old place was kept
+        //   for the lock and printed "OLIvIA K" / "iAK" (one bit wrong a character). Its quality still counts as before:
+        //   capping it at the hold threshold too (tried first) cost a weak signal whose finder hops to the noise and back
+        //   (OLIVIA 4/125 at −12 dB 101/200 → 90/200) — its evidence must survive the trip (section 12).
+        const bool straddles = n - K < farMoveN;
         for (int h = 0; h < 3; ++h) { q[h] = block(hyp[h], code[h]); hyp[h].E[a] += 0.5f * (q[h] - hyp[h].E[a]); }
         // lock: the best (hypothesis, alignment)
         int bh = 1, ba = 0;
         for (int h = 0; h < 3; ++h) for (int i = 0; i < K; ++i) if (hyp[h].E[i] > hyp[bh].E[ba]) { bh = h; ba = i; }
-        // noise reads ≈ 0.057 (64 chips) / 0.10 (32): the best of 64 / 32 alignments × 3 hypotheses must not reach thrOn
-        const float thrOn = K == 64 ? 0.12f : 0.17f, thrOff = K == 64 ? 0.085f : 0.13f;
         // ★ a lock is taken only when the same (hypothesis, alignment) is still the best one block later — a block
         //   half in silence or a neighbouring hypothesis can top the table once (measured: "=Q00GDG0D" at +10 dB)
         bool take = false;
         // ★ …and not when the finder has since slid off to the noise: the over ended between the two blocks and the lock
         //   was taken on the old evidence 250 Hz above its signal ("[OLIVIA 16/500 · 1750 Hz]", nothing after; measured)
         if (!lock && a == ba && hyp[bh].E[ba] > thrOn) {
-            const bool stayed = std::abs(fd.curB - candB) < fd.s * sub->M / 2 || fd.current() >= 4.5f;
-            if (candH == bh && candA == ba && stayed) take = true; else { candH = bh; candA = ba; candB = fd.curB; }
+            // ★ …nor when the place has gone QUIET since the candidate block (its finder score under half what it was):
+            //   the over's last block (0.92) and one noise block after it still average over the threshold, and the lock
+            //   was taken on the noise 200 Hz above the signal ("[OLIVIA 16/500 · 1703 Hz]", nothing printed but the
+            //   MFSK16 beside it lost the box; measured 2 in 1200 joins of the web test's clip with noise added). A weak
+            //   signal's score stays about level from block to block, so this asks nothing of it.
+            const bool stayed = (std::abs(fd.curB - candB) < fd.s * sub->M / 2 && fd.current() > 0.5f * candScore) || fd.current() >= 4.5f;
+            if (candH == bh && candA == ba && stayed) take = true;
+            else if (straddles) candH = candA = -1;   // ★ (see straddles above)
+            else { candH = bh; candA = ba; candB = fd.curB; candScore = fd.current(); }
         }
         if (take && coverage() < coverNeed()) take = false;   // ★ a narrower signal of the same spacing (see coverage)
         if (take) {
@@ -684,7 +734,7 @@ struct OliviaRx : Rx {
         // remember this block's characters at this alignment (the last two blocks, those good enough to show)
         for (int h = 0; h < 3; ++h) {
             std::vector<int>& pb = hyp[h].past[a];
-            if (q[h] <= thrOff) { pb.clear(); continue; }   // (thrOn here lost OLIVIA 16/500 at −10 dB 10/10 → 8/10; thrOff can show one start-up character)
+            if (q[h] <= thrOff || straddles) { pb.clear(); continue; }   // ★ (see straddles above)   // (thrOn here lost OLIVIA 16/500 at −10 dB 10/10 → 8/10; thrOff can show one start-up character)
             pb.insert(pb.end(), code[h], code[h] + b);
             if ((int)pb.size() > 3 * b) pb.erase(pb.begin(), pb.begin() + b);
         }

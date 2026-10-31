@@ -1054,9 +1054,84 @@ with no added noise gives 4 wrong joins (a wrong first character, "QCQ", "ÐZ") 
 MFSK-only AUTO (identical output); the web run opens the box at a near-constant phase of the 20 s loop, which before
 this change came only after the OLIVIA section. A "sticky winner" (the box stays with a locked winner) was tried as a
 fix and dropped: offline it lost the start of every MFSK over to an idle OLIVIA lock (whole overs 40/40 → 36/40). ★
-OWED FIRST: the MFSK join at fine offsets — then the 10/10. `test-web-hell` now expects HELL beside MFSK (not re-run this time).
+OWED FIRST: the MFSK join at fine offsets — then the 10/10. ★ DONE in section 20 (the cause was a stale presence slot after a skipped symbol, not the join itself; 10/10). `test-web-hell` now expects HELL beside MFSK (not re-run this time).
 
-## RESUME HERE (updated 2026-10-31, after the seventh run: Stuart's answers)
+## 20. The web test's lost "E" was the RECEIVER — a stale presence slot, and four join faults found on the way; test-web-textmodes 10/10 (2026-10-31, eighth run)
+
+Section 19 left `scripts/test-web-textmodes.mjs` at 5 of 10: in AUTO, with OLIVIA 16/500 and MFSK16 both in the passband
+when the box opens, an MFSK16 over printed "CQ CQ D G4XYZ MFSK TEST PSE K". Every fault below was the decoder; the test
+was not touched.
+
+### Method
+- **Offline, finer than before**: the web clip's audio (`tm_clip` with `VIBE_TM_DUMP`) looped three times from **400 start
+  offsets × 3 noise levels** (none, σ 0.02, σ 0.04 at 48 kHz) = 1200 joins through `tm_file mfsk auto` (the one key); each
+  run checked for anything printed that was not sent AND for a "[MODE · Hz]" line naming anything but the two real signals
+  (the web test's two checks). This found faults 1–4 below — but, once they were fixed, NOT the web test's "E".
+- **The server's own decoder audio**: a throw-away build (not committed) wrote what `TextModeDecoder::feed` received to a
+  file; a failing web run's audio, replayed through `tm_file`, printed the same "CQ CQ D G4XYZ" — then traced (fault 0).
+  The server's audio is the USB demodulator's, after AGC and the 8-bit IQ: the finder's phase moves differently there.
+
+### The faults (decoders/textmodes.cpp, each measured in its comment)
+0. ★★★ **The web test's "E": a stale presence slot.** MfskRx shows a character only if the signal was present when its bits
+   left (`presentThen`: the presence ring 54 and 24 symbols back). A finder phase move to an earlier quarter (3 → 2) skips
+   a symbol — pushed as an erasure, correctly — but its ring slot was never written and kept the presence of 64 symbols
+   before: the quiet before the over. 54 symbols later the "E" of "DE" read that slot and was hidden. Section 12 had seen
+   the same stale slots (THOR16 lost a character with a 128-slot ring) and kept the 64-slot ring; every skipped symbol's
+   slot is now written.
+1. ★★ **A phase move across the wrap counted a whole symbol.** `Rx::maybeSymbol` numbered symbols (frame − phase) / 4, so
+   the finder moving its phase 3 → 0 (a quarter LATER) counted a symbol that never came — an erasure inserted — and 0 → 3
+   (a quarter earlier) skipped one. Either shifts every later symbol against MFSK's de-interleaver (≈ 30 symbols of wrong
+   bits: "'E G4XYZ", "c G4XYZ", "ÐZ MFSK") and an OLIVIA block's chips against their alignment. The phase settles most
+   while a receiver JOINS an over, so it looked like a join fault (the old MFSK-only key had it too). A move of 3 is now
+   read as the quarter it is; moves of 1 and 2 were always right.
+2. **No lock before the Viterbi's first bit.** Its quality is an average of the steps so far; two steps in it read 1.00 /
+   0.00 — a contrast of 1 — on a place one tone off an over just joined, and the lock held through the idle tail printing
+   garbage ("teî tttzA"). The lock now waits D = 48 steps (n ≈ 55). (2 D was tried first: it lost the first "CQ" of an over
+   that began 0.5 s after the box opened — measured, halved.)
+3. **The join rule was switched off by the finder's own warm-up.** Section 12's rule (no character whose first bit came in
+   the first 24 symbols after a mid-over start) is cleared when the place is quiet — but the finder's score is an average
+   that starts from zero, so on the first symbols even a strong over read "quiet". Now judged against the warm-up
+   ((1 − α)^frames of the score is still its zero start). Measured: 9 wrong joins in 1200 → 0.
+4. **OLIVIA: a block read across a move off the tone set.** moved() caps what was measured before a move, but the K blocks
+   read in the K symbols after it still hold old symbols. (a) An OLIVIA's last block before its finder left for the MFSK16
+   (0.50) became the lock candidate, and one noise-level block later the lock was taken ON the MFSK16 ("[OLIVIA 16/500 ·
+   797 Hz]" — prints nothing, but takes the box); (b) a block read half at the old place was kept for the lock and printed
+   "OLIvIA K" / "iAK" (half the chips from elsewhere leave the top bit of each character's Walsh index ambiguous). Such a
+   block now names no candidate and is not kept to be shown; its quality counts as before. **And** a candidate is not
+   taken after its place has gone quiet (score under half the candidate's): the over's last block plus one noise block
+   still averaged over the threshold and locked 200 Hz above the signal ("· 1703 Hz").
+
+| | before (section 19's code) | after |
+|---|---|---|
+| 1200 joins of the web clip: a wrong character printed | 50 (18 of the 400 with no noise) | **1** (an OLIVIA over's first idle block read half in silence at the heaviest noise: " CQ DE …") |
+| … a mode named that is not on the air ("OLIVIA 16/500 · 797 Hz", "THOR 16 · 797 Hz", "· 1703 Hz") | 74 | **0** |
+| … a whole over printed | 1199 | 1200 |
+| … whole MFSK16 + OLIVIA overs in the three loops | 851 + 1830 = 2681 | 922 + 1783 = **2705** (the two trade the box; MFSK16 keeps it more often) |
+| the failing web run's own server audio, replayed | "CQ CQ D G4XYZ" | "CQ CQ DE G4XYZ" |
+| `test-web-textmodes`, 10 runs in a row (headless Edge, muted, real vibeserver, locally built page) | 5/10 | **10/10** (23 checks each); `test-web-hell` 19/19 |
+
+### Dead ends (kept for the record)
+- Capping a block read across a move at the hold threshold (as moved() caps the rest): fixed 4(a) and 4(b) but cost a weak
+  signal whose finder hops to the noise and back — OLIVIA 4/125 at −12 dB **101/200 → 90/200**. Its evidence must survive
+  the trip (section 12's lesson, again). Replaced by "names no candidate, not shown": 101 → 100.
+- The lock gate at 2 D steps (fault 2).
+- The first round of this run fixed faults 1–4 and passed 1200 offline joins — and the web test still failed 3 in 6: the
+  offline clip is clean 48 kHz audio, the server's is not. The server's own audio found fault 0.
+
+### Decodes elsewhere — unchanged within the trials' noise; THOR 5 better
+- `tm_bench` 20-trial sweep, every sub-mode manual (−14 … −6 dB OLIVIA/CONTESTIA, −12 … −4 MFSK, −16 … −4 THOR) and the
+  family AUTOs: identical except THOR 5 (better at every SNR from −12 dB: 18, 16, 17, 17, 17 of 20 → **19, 19, 19, 19,
+  19**; CER 6 % → 0–1 %), CONTESTIA 32/1000 −6 dB 17 → 18, CONTESTIA 8/500 −8 dB CER 3 → 2 %, and three points one trial
+  down with the same CER (MFSK32 −8 dB 10 → 9, OLIVIA 4/250 −8 dB 18 → 17, THOR 5 −14 dB 12 → 11 with CER 23 → 13 %).
+- Those re-run at **200 trials** — every sub-mode at its edge, 22 points (`tm_bench` with trials past 20 spread over
+  700–2300 Hz): MFSK16 −8 dB 166 → **170**, MFSK32 −8 dB 75 → **81**, THOR 5 −14 dB 141 → 142 (CER 8 → 6 %), OLIVIA 4/250
+  −8 dB 172 → 170, THOR 11 −10 dB 177 → 175, THOR 16 −6 dB 172 → 170, the rest within ±1; CER identical everywhere but THOR 5.
+  The ±2 points are the trials' noise (faults 1–3 move the timing of every lock a little), not a loss: no CER moved.
+- `test-textmodes` with the 11 reference recordings (11/11) and the eight fldigi CONTESTIA files (8/8): all passed.
+- False decodes: white noise **60 min through each AUTO** (MFSK, OLIVIA, THOR and the one key): nothing.
+- `test-web-hell` (its expectation was changed in section 19 and not re-run then): 19 passed, 0 failed.
+
+## RESUME HERE (updated 2026-10-31, eighth run: the web test's lost "E")
 
 Done this run (commits on `v12-decoders-wave2`): section 16 — PAGE silent while it runs, Q65 tiling of the EME segments
 (23 cm band, 6 m, Q65-15 — it doubles Q65's cost), Feld Hell (Hellschreiber) copy, AUTO first / manual for the session
@@ -1066,9 +1141,9 @@ every AUTO decoder's fallback rows (RTTY's pattern). No server or device was tou
 recordings only (FLEX and fldigi files kept out of git).
 
 Next, in order:
-0. ★ **test-web-textmodes is 5/10** (section 19): the MFSK16 receiver's join at some start offsets (pre-existing, now
-   exposed). Reproduce offline: `tm_clip` with `VIBE_TM_DUMP`, the loop script in section 19's method (61 offsets, no
-   noise) through `tm_file mfsk auto`; fix without losing decodes; then the web test 10 in a row.
+0. ✓ DONE (section 20): **test-web-textmodes 10/10**, test-web-hell 19/19. The "E" was a stale presence slot after a
+   skipped symbol; four join faults fixed on the way. NEXT: make the one key's AUTO lighter (≈ 3.97 G instructions a
+   minute on a Pi 2, 48 % of it each receiver's own tone search) — share the tone search, decodes byte-identical.
 1. **build-web** before any release (sections 10–12, 15, 16, 19): `vibe_web_page.h` is NOT committed.
 2. **The app** has not run on a simulator or device this run (esbuild syntax checks; the small services type-checked):
    PAGE's mute and banner, PROTOCOL/RATE rows, the MFSK key's FAMILY/MODE rows, the session rule, Feld Hell.
