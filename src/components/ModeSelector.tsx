@@ -38,10 +38,7 @@ import { DECODER_PLACES, RADIO_BANDS, WHOLE_RADIO_IDS, WHOLE_RADIO_LABEL, WHOLE_
 import { modeIconFor } from '../utils/modeIcons';
 import { DSC_HINT, dscChannelOn } from '../services/dsc';
 import { PAGING_HINT, type PagingMode } from '../services/paging';   // ★ V12 PAGING
-/** ★ V12 EAS / SAME: where it is heard. */
-/** ★ V12 SELCAL: where it is heard, and the one thing that matters (the dial). */
-const SELCAL_HINT = 'SELCAL: the two-tone calls a ground station sends to wake one aircraft\u2019s radio, shown as its code (AB-CD), with all 32 ICAO tones. Tune an HF aeronautical channel in USB (the dial within about 10 Hz) or a VHF one in AM.';
-const SAME_HINT = 'US alert headers (EAS / SAME): tune a NOAA Weather Radio channel, 162.400–162.550 MHz in NFM, or an EAS broadcast station. Each alert is shown once, with its event, areas and times, after two of its three header bursts agree.';
+import { SAME_HINT, SELCAL_HINT } from '../services/alertDecoders';   // ★ V12 EAS / SAME and SELCAL (one copy, both clients)
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
 type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'paging' | 'aprs';

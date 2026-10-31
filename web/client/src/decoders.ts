@@ -51,6 +51,9 @@
  *     0x01 text (both stations; each passage starts "[n · IDENT] ") · 0x03 | u8 link state (0 no signal … 7 ended)
  *     {"type":"sitora_status","data":{link,iss,master,heard,ids,numbers,idChecked,blocks,repeats,lost,combined,snr,offset}}
  *
+ *   EAS / SAME ('same') and SELCAL ('selcal') — V12, decoders/same_decoder.h and selcal_decoder.h
+ *     0x01 text (one line per alert / call) · 0x03 | u8 state (0 listening, 1 a header burst / a tone pair being read)
+ *
  *   JTTY ('jtty' — V12, the WSJT-X 3.2 keyboard mode, vibe_jtty_run.h)
  *     0x01 text (one line per finished message) · 0x03 | u8 state (0 listening, 3 signals being decoded)
  *     {"type":"jtty_signals","data":{signals:[{id,hz,audio,snr,q,active,last,first,frames,call,country,text}]}}
@@ -65,7 +68,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'jtty' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'jtty' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -196,6 +199,9 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   // ★ V12 DSC: MF/HF on SSB or VHF channel 70 on NFM — which is a parameter ("band"), as the time station is.
   dsc: 'dsc',
   sitora: 'sitora',
+  // ★ V12 EAS / SAME and SELCAL: nothing to set (47 CFR § 11.31 and ICAO's 32 tones fix everything).
+  same: 'same',
+  selcal: 'selcal',
   // ★ V12 JTTY: every JTTY signal in the listener's passband — nothing to set.
   jtty: 'jtty',
 };
@@ -496,6 +502,9 @@ export class DecoderClient {
       case 'dsc':
       // ★ SITOR-A: the link's text (both stations, labelled) and its state; the status line comes as JSON.
       case 'sitora':
+      // ★ EAS / SAME and SELCAL: one line per alert / call and the state (0 listening, 1 reading) — src/services/alertDecoders.ts.
+      case 'same':
+      case 'selcal':
       // ★ JTTY: a finished message's line (the box draws its rows from the JSON) and the state.
       case 'jtty':
         if (op === 0x01 && buf.byteLength >= 13) {

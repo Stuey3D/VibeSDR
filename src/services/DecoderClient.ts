@@ -54,6 +54,7 @@ import { parseJttySignals, parseJttySpot, jttyStateText, type JttySignal, type J
 import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
+import { sameStateText, selcalStateText } from './alertDecoders';   // ★ V12 EAS / SAME and SELCAL
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -840,12 +841,12 @@ export class DecoderClient {
         this.cb.onDot('active');
       } else if (name === 'selcal' && t === 0x03) {
         if (u8.length < 2) return;
-        this.cb.onStatus(u8[1] ? 'tones…' : 'listening for SELCAL');
+        this.cb.onStatus(selcalStateText(u8[1]));
         this.cb.onDot(u8[1] ? 'sync' : 'idle');
       } else if (name === 'same' && t === 0x03) {
         // ★ EAS / SAME: 0 listening · 1 reading a header burst
         if (u8.length < 2) return;
-        this.cb.onStatus(u8[1] ? 'reading an alert header…' : 'listening for alert headers');
+        this.cb.onStatus(sameStateText(u8[1]));
         this.cb.onDot(u8[1] ? 'sync' : 'idle');
       } else if (name === 'paging' && t === 0x03) {
         // ★ PAGING's lock: 0 hunting · 1 a batch lock at some rate (the status JSON names it)

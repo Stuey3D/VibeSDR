@@ -558,6 +558,29 @@ SDRScreen (capability, tour), About. `tools/alert-bench/` (bench + `qemu.sh`, sh
 Owed: real SELCAL on air (Shanwick/Gander HF, e.g. 8.891 / 8.864 / 5.598 MHz USB — there was no server session this
 run), the web key + build-web.
 
+## 10. Web keys for SAME and SELCAL — DONE (2026-10-31, fourth run); BUILD-WEB STILL NEEDED
+
+Files: `web/client/index.html` (two `data-dec` keys, hidden unless vibeserver.json says `"same"` / `"selcal"`),
+`web/client/src/decoders.ts` (the modes, their extensions, the text + state frames as SITOR-A's), `web/client/src/main.ts`
+(caps, the hide rule, the state line, the box title and hint, `anyDecoderLeft`), `src/services/alertDecoders.ts` (NEW —
+the hints and the state words, ONE copy: the app's `ModeSelector` and `DecoderClient` now import them too),
+`scripts/test-web-alerts.mjs` (NEW), `tools/alert-bench/alert_clip.cpp` (NEW — its clip).
+
+- Placement comes from the shared table (`src/utils/decoderBands.ts`, unchanged): SELCAL in HF **Aviation** (alone on the
+  web — HFDL is the app's), SAME on the **VHF** tab's Broadcast group beside ADV RDS. Icons from the shared map.
+- No settings: the status line is the state ("listening for alert headers" / "reading an alert header…", "listening for
+  SELCAL" / "tones…"), the hint is its title, as SITOR-A's.
+- `test-web-alerts.mjs` — a real vibeserver fed by `fake-rtl-tcp` replaying `alert_clip` (SAME header ×3, SELCAL BH-DM,
+  NNNN ×3 as USB audio on 8891 kHz), headless Edge `--mute-audio`: **18/18** — both keys offered and placed, the alert
+  line once across two loops, the end of message, the SELCAL code, the hints, nothing sideways at 390 px, no exception.
+  Run: `alert_clip alerts.cu8; VIBESERVER_BIN=… VIBE_ALERT_CLIP=alerts.cu8 node scripts/test-web-alerts.mjs`.
+- ★ **build-web is needed before any release**: the test ran against a locally built page (`scripts/build-web.mjs`, then
+  vibeserver rebuilt), but `vibe_web_page.h` was put back and NOT committed — the generated page is a release step.
+- The web type check (`tsc --noEmit` in web/client) runs out of memory under the 512 MB cap (and at 900 MB); esbuild
+  bundled the page cleanly and the headless run exercised every new line.
+- Copy: the web lists no decoders on the website and the web client has no tour card for decoder keys; the app's tour
+  and About already name SAME and SELCAL (sections 8, 9).
+
 ## RESUME HERE (updated 2026-10-31 ≈ 06:40 UTC, after the third run: paging wired, EAS/SAME, SELCAL)
 
 Done this run (commits on `v12-decoders-wave2`): PAGING wired, Android local hardware only (section 7b); EAS / SAME
