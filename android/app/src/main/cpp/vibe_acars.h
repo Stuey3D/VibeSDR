@@ -26,6 +26,7 @@
 #include "vibedsp/simd_internal.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <complex>
 #include <cstdint>
@@ -109,6 +110,79 @@ inline bool parse(const std::vector<uint8_t>& b, Block& out) {
     return true;
 }
 
+/** ★ Experiment switches (test-acars only; the defaults are the shipped receiver). */
+struct Tuning { bool repair = true; bool twoSided = true; int W = 16; int phases = 4; int maxBad = 4, cand = 2; };
+inline Tuning& tuning() { static Tuning t; return t; }
+
+/** A repaired block must also LOOK like a block: `by` with parity, the suffix at `e`. Mode and label printable, the
+ *  address of registration characters (A–Z 0–9 . -), a block id that is a digit or a letter, the text printable (CR LF
+ *  allowed). A clean BCS pass is never second-guessed; this only gates the repair. */
+inline bool plausible(const std::vector<uint8_t>& by, size_t e) {
+    auto c = [&](size_t i) { return char(by[i] & 0x7F); };
+    auto pr = [](char x) { return x >= 0x20 && x < 0x7F; };
+    if (!pr(c(0))) return false;
+    for (size_t i = 1; i <= 7; ++i) { const char x = c(i); if (!((x >= 'A' && x <= 'Z') || (x >= '0' && x <= '9') || x == '.' || x == '-')) return false; }
+    if (!(pr(c(9)) || c(9) == DEL) || !(pr(c(10)) || c(10) == DEL)) return false;
+    const char b = c(11);
+    if (!((b >= '0' && b <= '9') || (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z'))) return false;
+    if (e > 12) {
+        if (c(12) != STX) return false;
+        for (size_t i = 13; i < e; ++i) { const char x = c(i); if (!pr(x) && x != '\r' && x != '\n') return false; }
+    }
+    return true;
+}
+
+/** Every character's parity good and the BCS (over mode … suffix, then the two BCS bytes) leaves zero. */
+inline bool good(const std::vector<uint8_t>& by, size_t e) {
+    for (size_t i = 0; i <= e; ++i) if (!oddParity(by[i])) return false;
+    return bcs(by.data(), e + 3) == 0;
+}
+/** ★ Chase, by syndrome: repair `by` (with parity, the suffix at `e`, its BCS after) from the soft bits `S` (8 a
+ *  character, + = 1). True = repaired in place (`flipsOut` bits). Tuning::maxBad / cand bound the search. */
+inline bool chaseRepair(std::vector<uint8_t>& by, const std::vector<float>& S, size_t e, int& flipsOut) {
+        // ★ Chase, by syndrome. The BCS is linear (preset 0, no final XOR), so flipping bit j changes the residue by a
+        //   fixed δ_j: each candidate's δ is computed once and a combination is an XOR of them. Candidates: the `cand`
+        //   weakest bits of each character whose parity failed (≤ maxBad of them), and none / one of the two weakest BCS
+        //   bits. ★ Accepted only when EXACTLY ONE combination clears the residue and the block it makes is plausible
+        //   (printable, a well-formed address and label) — two solutions mean the flips are guessing.
+        std::vector<size_t> badc;
+        for (size_t i = 0; i < e; ++i) if (!oddParity(by[i])) { badc.push_back(i); if (int(badc.size()) > tuning().maxBad) return false; }
+        const int K = std::max(1, std::min(3, tuning().cand));
+        auto weakest = [&](size_t bit0, size_t nbits, int k, size_t* idx) {
+            std::vector<std::pair<float, size_t>> v;
+            for (size_t j = bit0; j < bit0 + nbits; ++j) v.push_back({ std::fabs(S[j]), j });
+            std::partial_sort(v.begin(), v.begin() + k, v.end());
+            for (int q = 0; q < k; ++q) idx[q] = v[size_t(q)].second;
+        };
+        const size_t len = e + 3;
+        auto delta = [&](size_t bit) { std::vector<uint8_t> u(len, 0); u[bit / 8] = uint8_t(1u << (bit % 8)); return bcs(u.data(), len); };
+        const uint16_t res = bcs(by.data(), len);
+        std::vector<std::array<size_t, 3>> cb(badc.size());
+        std::vector<std::array<uint16_t, 3>> cd(badc.size());
+        for (size_t i = 0; i < badc.size(); ++i) { weakest(badc[i] * 8, 8, K, cb[i].data()); for (int q = 0; q < K; ++q) cd[i][size_t(q)] = delta(cb[i][size_t(q)]); }
+        size_t bw[2]; weakest((e + 1) * 8, 16, 2, bw);
+        const uint16_t bd[3] = { 0, delta(bw[0]), delta(bw[1]) };
+        size_t combos = 1; for (size_t i = 0; i < badc.size(); ++i) combos *= size_t(K);
+        int found = 0; size_t fc = 0; int fo = 0;
+        for (size_t c = 0; c < combos && found < 2; ++c)
+            for (int o = 0; o < 3; ++o) {
+                if (badc.empty() && o == 0) continue;
+                uint16_t r = res ^ bd[o];
+                size_t m = c;
+                for (size_t i = 0; i < badc.size(); ++i) { r ^= cd[i][m % size_t(K)]; m /= size_t(K); }
+                if (r == 0) { if (++found == 1) { fc = c; fo = o; } else break; }
+            }
+        if (found != 1) return false;
+        std::vector<uint8_t> t = by;
+        int flips = 0;
+        size_t m = fc;
+        for (size_t i = 0; i < badc.size(); ++i) { const size_t bit = cb[i][m % size_t(K)]; m /= size_t(K); t[bit / 8] ^= uint8_t(1u << (bit % 8)); ++flips; }
+        if (fo) { t[bw[fo - 1] / 8] ^= uint8_t(1u << (bw[fo - 1] % 8)); ++flips; }
+        if (!good(t, e) || !plausible(t, e)) return false;
+        by = t; flipsOut = flips;
+        return true;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE SIMD KERNEL: the AM envelope, the carrier level taken out, mixed down by the MSK centre
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -160,43 +234,9 @@ inline void envMix(const cf32* z, int n, float dc, const float* loRe, const floa
     *envSum = sum;
 }
 
-/** out[i] = (a[i] − dc) · lo[i] for a REAL audio a (the coherent AM detector's output); envSum = Σ a. */
-inline void realMix(const float* a, int n, float dc, const float* loRe, const float* loIm, cf32* out, float* aSum) {
-    float* of = reinterpret_cast<float*>(out);
-    float sum = 0;
-    int i = 0;
-#if VIBE_NEON
-    float32x4_t acc = vdupq_n_f32(0), vdc = vdupq_n_f32(dc);
-    for (; i + 4 <= n; i += 4) {
-        const float32x4_t x = vld1q_f32(a + i);
-        acc = vaddq_f32(acc, x);
-        const float32x4_t d = vsubq_f32(x, vdc);
-        float32x4x2_t o;
-        o.val[0] = vmulq_f32(d, vld1q_f32(loRe + i));
-        o.val[1] = vmulq_f32(d, vld1q_f32(loIm + i));
-        vst2q_f32(of + 2 * i, o);
-    }
-    sum = vaddvq_f32(acc);
-#elif VIBE_SSE
-    __m128 acc = _mm_setzero_ps(), vdc = _mm_set1_ps(dc);
-    for (; i + 4 <= n; i += 4) {
-        const __m128 x = _mm_loadu_ps(a + i);
-        acc = _mm_add_ps(acc, x);
-        const __m128 d = _mm_sub_ps(x, vdc);
-        vibedsp::sseStore2(of + 2 * i, _mm_mul_ps(d, _mm_loadu_ps(loRe + i)), _mm_mul_ps(d, _mm_loadu_ps(loIm + i)));
-    }
-    sum = vibedsp::sseAddv(acc);
-#endif
-    for (; i < n; ++i) { sum += a[i]; const float d = a[i] - dc; of[2 * i] = d * loRe[i]; of[2 * i + 1] = d * loIm[i]; }
-    *aSum = sum;
-}
-
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  ONE CHANNEL
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-/** ★ Experiment switches (test-acars only; the defaults are the shipped receiver). */
-struct Tuning { bool repair = true; bool twoSided = true; int W = 16; int phases = 4; bool coherentAm = true; int cohA = 32; };
-inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("ACARS_DEBUG") != nullptr; return d; }
 
 struct Stats { uint64_t syncs = 0, bcsFail = 0, good = 0, repaired = 0, dupes = 0; };
@@ -242,11 +282,7 @@ public:
             lr = loRe_.data(); li = loIm_.data();
         }
         float esum = 0;
-        if (tuning().coherentAm) {
-            cohAm_(z, n);
-            realMix(am_.data(), n, dc_, lr, li, mix_.data(), &esum);
-        } else
-            envMix(z, n, dc_, lr, li, mix_.data(), &esum);
+        envMix(z, n, dc_, lr, li, mix_.data(), &esum);
         // the carrier level (AM DC): a block mean, smoothed; it also normalises (AGC) below
         const float mean = esum / n;
         dc_ = dcInit_ ? dc_ + (mean - dc_) * std::min(1.0f, n / (0.004f * float(fs_))) : mean;
@@ -280,49 +316,6 @@ public:
     void setChannel(int c, double hz) { chan_ = c; hz_ = hz; }
 
 private:
-    /* ★★ COHERENT AM (Tuning::coherentAm). The envelope |z| has a threshold: below ~10 dB carrier-to-noise in its own
-     *  bandwidth the noise multiplies into the audio, and the weak aircraft ACARS has to decode sit at 3–9 dB in the
-     *  channel. The AM carrier is a strong, clean reference instead: the MSK audio has a spectral NULL at 0 Hz (1800 Hz
-     *  from its centre, the matched pulse's first zero), so a narrow filter around the carrier sees the carrier alone.
-     *   1. Its frequency, every 128 samples while something is on the channel: arg Σ z[n]·z*[n−4] / (2π·4) — exact for
-     *      AM (the envelope product is real and positive), unbiased by white noise at lag 4, unambiguous to ±fs/8.
-     *   2. z turned down by it; the carrier's phase from a one-pole low-pass (~90 Hz at 18.75 kS/s, cohA = 32).
-     *   3. The audio = the in-phase part, Re(u·ĉ*)/|ĉ| — linear in the signal, so no threshold, and an over-modulated
-     *      aircraft (its envelope touching zero, common on ACARS) is not clipped. */
-    void cohAm_(const cf32* z, int n) {
-        am_.resize(size_t(n));
-        const float a = 1.0f / float(std::max(2, tuning().cohA));
-        for (int i = 0; i < n; ++i) {
-            // the frequency estimator, over the raw samples
-            const cf32 x = z[i];
-            fR_ += x * std::conj(lag_[lagP_ & 3]);
-            fP_ += std::norm(x);
-            lag_[lagP_ & 3] = x; ++lagP_;
-            if (++fN_ == 128) {
-                const float pw = fP_ / 128;
-                nfl_ = nfl_ <= 0 ? pw : (pw < nfl_ ? nfl_ + (pw - nfl_) * 0.3f : nfl_ * 1.002f);
-                if (pw > 2.0f * nfl_ && std::abs(fR_) > 0.25f * fP_) {
-                    const float f = std::arg(fR_) / (2 * float(M_PI) * 4);   // cycles a sample
-                    float d = f - cf_;
-                    // a new carrier (a different aircraft) is adopted outright; the same one is smoothed
-                    cf_ = std::fabs(d) > 30.0f / float(fs_) ? f : cf_ + 0.5f * d;
-                    rot_ = cf32(std::cos(-2 * float(M_PI) * cf_), std::sin(-2 * float(M_PI) * cf_));
-                }
-                fR_ = cf32(0, 0); fP_ = 0; fN_ = 0;
-                nco_ /= std::abs(nco_);
-            }
-            const cf32 u = x * nco_;
-            nco_ *= rot_;
-            car_ += (u - car_) * a;
-            const float m = std::abs(car_) + 1e-12f;
-            am_[size_t(i)] = (u.real() * car_.real() + u.imag() * car_.imag()) / m;
-        }
-    }
-    std::vector<float> am_;
-    cf32 fR_{0, 0}, lag_[4] = {}, nco_{1, 0}, rot_{1, 0}, car_{0, 0};
-    float fP_ = 0, nfl_ = 0, cf_ = 0;
-    int fN_ = 0; unsigned lagP_ = 0;
-
     struct Path {
         double clk = 0;
         int k = 0;                       // bit index (for the quarter-turn derotation)
@@ -476,43 +469,12 @@ private:
             if (!repair) return false;
             sf = __builtin_popcount(unsigned(sf ^ withParity(ETX))) <= __builtin_popcount(unsigned(sf ^ withParity(ETB))) ? withParity(ETX) : withParity(ETB);
         }
-        if (good_(by, e)) { emit_(by, e, 0, out); return true; }
+        if (good(by, e)) { emit_(by, e, 0, out); return true; }
         if (!repair) return false;
-        // Chase: the failing characters (≤ 3), each one of its two weakest bits, × the BCS's two weakest bits
-        std::vector<size_t> badc;
-        for (size_t i = 0; i < e; ++i) if (!oddParity(by[i])) { badc.push_back(i); if (badc.size() > 3) return false; }
-        auto weakest2 = [&](size_t bit0, size_t nbits, size_t& a, size_t& b) {
-            a = b = bit0;
-            float fa = 1e9f, fb = 1e9f;
-            for (size_t j = bit0; j < bit0 + nbits; ++j) {
-                const float v = std::fabs(S[j]);
-                if (v < fa) { b = a; fb = fa; a = j; fa = v; } else if (v < fb) { b = j; fb = v; }
-            }
-        };
-        std::vector<std::pair<size_t, size_t>> cand(badc.size());
-        for (size_t i = 0; i < badc.size(); ++i) weakest2(badc[i] * 8, 8, cand[i].first, cand[i].second);
-        size_t ba, bb;
-        weakest2((e + 1) * 8, 16, ba, bb);
-        const size_t bcsOpt[3] = { SIZE_MAX, ba, bb };
-        const unsigned combos = 1u << badc.size();
-        for (unsigned m = 0; m < combos; ++m)
-            for (int o = 0; o < 3; ++o) {
-                if (m == 0 && o == 0) continue;
-                std::vector<uint8_t> t = by;
-                int flips = 0;
-                for (size_t i = 0; i < badc.size(); ++i) {
-                    const size_t bit = (m >> i) & 1 ? cand[i].second : cand[i].first;
-                    t[bit / 8] ^= uint8_t(1u << (bit % 8)); ++flips;
-                }
-                if (bcsOpt[o] != SIZE_MAX) { t[bcsOpt[o] / 8] ^= uint8_t(1u << (bcsOpt[o] % 8)); ++flips; }
-                if (good_(t, e)) { emit_(t, e, flips, out); st_.repaired++; return true; }
-            }
-        return false;
-    }
-    /** Every character's parity good and the BCS (over mode … suffix, then the two BCS bytes) leaves zero. */
-    static bool good_(const std::vector<uint8_t>& by, size_t e) {
-        for (size_t i = 0; i <= e; ++i) if (!oddParity(by[i])) return false;
-        return bcs(by.data(), e + 3) == 0;
+        int flips = 0;
+        if (!chaseRepair(by, S, e, flips)) return false;
+        emit_(by, e, flips, out); st_.repaired++;
+        return true;
     }
     template <class Out> void emit_(const std::vector<uint8_t>& by, size_t e, int flips, Out& out) {
         std::vector<uint8_t> b(e + 1);

@@ -182,9 +182,9 @@ int main(int argc, char** argv) {
         auto& T = vibeacars::tuning();
         std::string s(t);
         auto val = [&](const char* k, int& v) { const size_t p = s.find(k); if (p != std::string::npos) v = std::atoi(s.c_str() + p + std::strlen(k)); };
-        int two = T.twoSided, rep = T.repair, coh = T.coherentAm;
-        val("two=", two); val("W=", T.W); val("ph=", T.phases); val("rep=", rep); val("coh=", coh); val("A=", T.cohA);
-        T.twoSided = two; T.repair = rep; T.coherentAm = coh;
+        int two = T.twoSided, rep = T.repair;
+        val("two=", two); val("W=", T.W); val("ph=", T.phases); val("rep=", rep); val("bad=", T.maxBad); val("cand=", T.cand);
+        T.twoSided = two; T.repair = rep;
     }
     if (argc > 1 && !std::strcmp(argv[1], "--cu8")) return cu8(argc, argv);
     if (argc > 1 && !std::strcmp(argv[1], "--sens")) {   // the sensitivity table alone, 30 blocks a point
@@ -224,6 +224,40 @@ int main(int argc, char** argv) {
         auto noText = makeBlock('2', ".A7-BAP", 'E', "_\x7f", '3', "");
         b.clear(); for (size_t i = 0; i + 3 < noText.size(); ++i) b.push_back(noText[i] & 0x7F);
         CHECK(vibeacars::parse(b, o) && o.text.empty() && o.reg == "A7-BAP", "no text");
+    }
+
+    std::printf("2b. the repair: real errors on weak bits fixed; errors it cannot see never 'fixed' into a wrong block\n");
+    {
+        std::mt19937 rng(11);
+        std::uniform_real_distribution<float> u(0.2f, 1.0f);
+        int fixed = 0, tries = 0, falseOk = 0, ftries = 0;
+        for (int it = 0; it < 20000; ++it) {
+            char txt[120]; std::snprintf(txt, sizeof txt, "M%02dABA%04d/POS N51%03d W001%03d,%05d TEST %d", it % 100, int(rng() % 10000),
+                                         int(rng() % 1000), int(rng() % 1000), int(rng() % 40000), it);
+            auto blk = makeBlock('2', ".G-EUPT", 0x15, "H1", char('0' + it % 10), txt);
+            blk.pop_back();                                   // the DEL
+            const size_t e = blk.size() - 3;
+            std::vector<float> soft(blk.size() * 8);
+            for (size_t j = 0; j < soft.size(); ++j) soft[j] = ((blk[j / 8] >> (j % 8)) & 1 ? 1.f : -1.f) * u(rng);
+            std::vector<uint8_t> by = blk;
+            const int nerr = 1 + int(rng() % 3);
+            const bool unseen = it & 1;                       // odd: also a 2-bit error in one character (parity blind)
+            std::vector<size_t> chars;
+            for (int q = 0; q < nerr; ++q) {
+                const size_t c = 1 + rng() % (e - 1), bit = c * 8 + rng() % 8;
+                by[c] ^= uint8_t(1u << (bit % 8)); soft[bit] = -soft[bit] * 0.05f;   // a weak, wrong bit
+            }
+            if (unseen) { const size_t c = 1 + rng() % (e - 1); by[c] ^= 0x06; soft[c * 8 + 1] *= -0.1f; soft[c * 8 + 2] *= -0.1f; }
+            int flips = 0;
+            std::vector<uint8_t> t = by;
+            const bool ok = vibeacars::chaseRepair(t, soft, e, flips);
+            if (unseen) { ++ftries; if (ok && t != blk) ++falseOk; }
+            else { ++tries; if (ok && t == blk) ++fixed; CHECK(!ok || t == blk, "a repair produced a different block"); }
+        }
+        std::printf("   weak-bit errors (1-3 characters): %d of %d repaired; parity-blind errors: %d of %d wrongly accepted\n", fixed, tries,
+                    falseOk, ftries);
+        CHECK(fixed > tries * 9 / 10, "repairs %d of %d", fixed, tries);
+        CHECK(falseOk * 1000 <= ftries, "false repairs %d of %d (must be <= 0.1 %%)", falseOk, ftries);
     }
 
     std::printf("3. the SIMD kernel against a double-precision reference\n");
