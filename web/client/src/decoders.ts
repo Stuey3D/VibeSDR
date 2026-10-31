@@ -54,7 +54,7 @@
  *   EAS / SAME ('same') and SELCAL ('selcal') — V12, decoders/same_decoder.h and selcal_decoder.h
  *     0x01 text (one line per alert / call) · 0x03 | u8 state (0 listening, 1 a header burst / a tone pair being read)
  *
- *   MFSK ('mfsk'), OLIVIA ('olivia', with CONTESTIA) and THOR ('thor') — V12, decoders/textmodes.h; params {mode}
+ *   MFSK ('mfsk': MFSK16/32, OLIVIA, CONTESTIA and THOR on one key) — V12, decoders/textmodes.h; params {mode}
  *     0x01 text as it decodes · 0x03 | u8 (0 searching, 1 locked) · {"type":"textmode_status","data":{detected,hz}}
  *
  *   FELD HELL ('hell' — V12, decoders/feld_hell.h; drawn, not read — see src/services/feldHell.ts)
@@ -75,7 +75,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'jtty' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -214,9 +214,7 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   same: 'same',
   selcal: 'selcal',
   // ★ V12 the MFSK keyboard modes: "mode" = one of the server's own ids (textModes.ts), AUTO otherwise
-  mfsk: 'mfsk',
-  olivia: 'olivia',
-  thor: 'thor',
+  mfsk: 'mfsk',   // ★ ONE key: MFSK16/32, OLIVIA, CONTESTIA and THOR
   // ★ V12 FELD HELL: nothing to set — the tone is found
   hell: 'hell',
   // ★ V12 JTTY: every JTTY signal in the listener's passband — nothing to set.
@@ -447,7 +445,7 @@ export class DecoderClient {
       return;
     }
     if (msg.type === 'textmode_status' && msg.data) {
-      if (this.mode !== 'mfsk' && this.mode !== 'olivia' && this.mode !== 'thor') return;
+      if (this.mode !== 'mfsk') return;
       this.cb.onTextModeStatus?.(msg.data);
       return;
     }
@@ -534,8 +532,6 @@ export class DecoderClient {
       case 'selcal':
       // ★ MFSK / OLIVIA / THOR: the text as it decodes and the state (0 searching, 1 locked); textmode_status comes as JSON.
       case 'mfsk':
-      case 'olivia':
-      case 'thor':
       // ★ JTTY: a finished message's line (the box draws its rows from the JSON) and the state.
       case 'jtty':
         if (op === 0x01 && buf.byteLength >= 13) {

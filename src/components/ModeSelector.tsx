@@ -40,10 +40,11 @@ import { DSC_HINT, dscChannelOn } from '../services/dsc';
 import { PAGING_HINT, type PagingMode } from '../services/paging';   // ★ V12 PAGING
 import { SAME_HINT, SELCAL_HINT } from '../services/alertDecoders';
 import { HELL_HINT } from '../services/feldHell';   // ★ V12 FELD HELL
-import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
+import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow, type GroupedMode } from '../services/autoModes';   // ★★★ AUTO's fallback rows
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -368,6 +369,31 @@ function RttySettingsRows({ s, onChange }: { s: RttySettings; onChange: (s: Rtty
   );
 }
 
+/** ★★★ An AUTO decoder's fallback rows (autoModes.ts — RTTY's pattern): AUTO + the server's groups, then the chosen
+ *  group's own entries when it has a choice to make. Under AUTO nothing in the second row is drawn or lit. */
+function GroupedModeRows({ list, value, first, second, onChange }:
+  { list: readonly GroupedMode[]; value: string; first: string; second: string; onChange: (id: string) => void }) {
+  if (!list.length) return null;
+  const g = groupOfMode(list, value);
+  return (
+    <>
+      <SubLabel label={first} />
+      <OptRow>
+        <SegBtn label="AUTO" active={!g} onPress={() => onChange('auto')} />
+        {modeGroups(list).map((x) => (
+          <SegBtn key={x} label={x} active={g === x} onPress={() => onChange(firstOfGroup(list, x))} />
+        ))}
+      </OptRow>
+      {showSecondRow(list, value) && (<>
+        <SubLabel label={second} />
+        <OptRow>{modesInGroup(list, g).map((m) => (
+          <SegBtn key={m.id} label={m.label} active={value === m.id} onPress={() => onChange(m.id)} />
+        ))}</OptRow>
+      </>)}
+    </>
+  );
+}
+
 /** ★★ V12 beta25 — the DC spike, explained for listeners (the web's mode menu carries the same words). */
 export const DC_SPIKE_EXPLAINED =
   'Your radio converts the frequency it is tuned to down to zero hertz (DC). Small imperfections in the radio \u2014 its ' +
@@ -583,9 +609,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const hellShown = !!decoderControls?.hellAvail && !isBlocked('hell');   // ★ V12 FELD HELL
   const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
-  const tmShown = (f: TextFamily) => !!decoderControls?.tmModes?.[f] && !isBlocked(f);   // ★ V12 MFSK / OLIVIA / THOR
+  const tmShown = (f: TextFamily) => !!decoderControls?.tmModes?.[f] && !isBlocked(f);   // ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR)
   const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || sameShown || selcalShown || hellShown || pagingShown || aprsShown
-    || tmShown('mfsk') || tmShown('olivia') || tmShown('thor');
+    || tmShown('mfsk');
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
    *  decoders section is dropped and DAB is drawn with the demodulators. */
@@ -761,7 +787,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     const active = dc.decMode === id && dc.decOn;
     const lit = dc.decMode === id;
@@ -1066,10 +1092,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'sitora': return sitoraShown ? srvKey('sitora', 'SITOR-A', 'SITOR-A maritime teleprinter decoder') : null;
       case 'same':   return sameShown ? srvKey('same', 'SAME', 'EAS and SAME emergency alert header decoder') : null;
       case 'selcal': return selcalShown ? srvKey('selcal', 'SELCAL', 'SELCAL aeronautical selective call decoder') : null;
-      case 'mfsk': case 'olivia': case 'thor':
-        return tmShown(id as TextFamily) ? srvKey(id as TextFamily, TEXT_FAMILY_KEY[id as TextFamily], `${TEXT_FAMILY_KEY[id as TextFamily]} decoder, sub-mode found automatically`) : null;
+      case 'mfsk':
+        return tmShown('mfsk') ? srvKey('mfsk', TEXT_FAMILY_KEY.mfsk, 'MFSK, OLIVIA, CONTESTIA and THOR decoder, mode found automatically') : null;
       case 'hell':   return hellShown ? srvKey('hell', 'HELL', 'Feld Hell, drawn as it is heard') : null;
-      case 'paging': return pagingShown ? srvKey('paging', 'PAGE', 'Pager decoder, POCSAG, rate found automatically') : null;
+      case 'paging': return pagingShown ? srvKey('paging', 'PAGE', 'Pager decoder, POCSAG and FLEX, found automatically') : null;
       case 'aprs': return aprsShown ? srvKey('aprs', 'APRS', 'APRS packet decoder') : null;
       case 'rds':  return advRdsShown ? advRdsKey() : null;
       case 'spots': return spotsInBands ? spotsKey(true) : null;
@@ -1084,7 +1110,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
       case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;
       case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'hell': return hellShown; case 'paging': return pagingShown;
-      case 'mfsk': case 'olivia': case 'thor': return tmShown(id as TextFamily); case 'aprs': return aprsShown;
+      case 'mfsk': return tmShown('mfsk'); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
       case 'spots': return spotsInBands; case 'hfdl': return hfdlInBands;
       default: return false;
@@ -1482,28 +1508,18 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       /* ★ V12 FELD HELL: no settings — the hint only (the tone is found by itself). */
       case 'hell':
         return <Text style={capText}>{HELL_HINT}</Text>;
-      /* ★★ V12 MFSK / OLIVIA / THOR: the MODE row is the server's own list (AUTO first) — never a list of ours — and the hint. */
-      case 'mfsk': case 'olivia': case 'thor': {
-        const fam = id as TextFamily; const list = dc.tmModes?.[fam] ?? [];
+      /* ★★★ V12 AUTO DECODERS' FALLBACK CONTROLS, RTTY's pattern (autoModes.ts): a first row of AUTO and the groups, then
+          the chosen group's own row — every key the SERVER's data, never a list of ours — and the hint. */
+      case 'mfsk':
         return (<>
-          {!!list.length && (<>
-            <SubLabel label="MODE" />
-            <OptRow>{list.map((m) => (
-              <SegBtn key={m.id} label={m.label} active={(dc.tmMode?.[fam] ?? 'auto') === m.id} onPress={() => dc.onTextMode?.(fam, m.id)} />
-            ))}</OptRow>
-          </>)}
-          <Text style={capText}>{TEXT_FAMILY_HINT[fam]}</Text>
+          <GroupedModeRows list={dc.tmModes?.mfsk ?? []} value={dc.tmMode?.mfsk ?? 'auto'} first="FAMILY" second="MODE"
+                           onChange={(v) => dc.onTextMode?.('mfsk', v)} />
+          <Text style={capText}>{TEXT_FAMILY_HINT.mfsk}</Text>
         </>);
-      }
-      /* ★★★ V12 PAGING: the RATE row is the server's own list (AUTO first) — never a list of ours — and the hint. */
       case 'paging':
         return (<>
-          {!!dc.pagingModes?.length && (<>
-            <SubLabel label="RATE" />
-            <OptRow>{dc.pagingModes.map((m) => (
-              <SegBtn key={m.id} label={m.label} active={(dc.pagingMode ?? 'auto') === m.id} onPress={() => dc.onPagingMode?.(m.id)} />
-            ))}</OptRow>
-          </>)}
+          <GroupedModeRows list={dc.pagingModes ?? []} value={dc.pagingMode ?? 'auto'} first="PROTOCOL" second="RATE"
+                           onChange={(v) => dc.onPagingMode?.(v)} />
           <Text style={capText}>{PAGING_HINT}</Text>
         </>);
       case 'wefax':

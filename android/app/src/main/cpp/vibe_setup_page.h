@@ -2666,9 +2666,8 @@ const BLOCKABLE = [
   { id: "same", label: "EAS / SAME" },
   /* ★ V12 SELCAL (2026-10-31) — the aeronautical selective call (ICAO, 32 tones). */
   { id: "selcal", label: "SELCAL" },
-  { id: "mfsk", label: "MFSK16 / MFSK32" },
-  { id: "olivia", label: "Olivia / Contestia" },
-  { id: "thor", label: "THOR" },
+  /* ★ V12 (2026-10-31): ONE switch — MFSK16/32, Olivia, Contestia and THOR are one key with one AUTO. */
+  { id: "mfsk", label: "MFSK, Olivia, Contestia, THOR" },
   /* ★ V12 FELD HELL (2026-10-31) — drawn, not read: the text painted as it is heard. */
   { id: "hell", label: "Feld Hell" },
   /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio

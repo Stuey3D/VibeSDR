@@ -90,6 +90,28 @@ int main() {
         ok(run(F::Olivia, "auto", y, fs).text.empty(), "an MFSK16 signal through OLIVIA AUTO: nothing");
     }
 
+    std::printf("\n── ONE key (Family::All, the server's \"mfsk\"): its AUTO decodes every family; its grouped list; a family's ANY ──\n");
+    {
+        for (const Case& c : cases) {
+            const std::string id = c.id;
+            if (id == "olivia-4-250" || id == "olivia-64-2000" || id == "contestia-4-125" || id == "contestia-4-250" ||
+                id == "contestia-8-500" || id == "contestia-16-1000" || id == "contestia-64-2000") continue;   // manual only
+            auto x = withNoise(textModeSynth(c.f, c.id, msg, fs, c.hz), fs, 10, 11);
+            Got a = run(F::All, "auto", x, fs);
+            ok(body(a.text).find(msg) != std::string::npos, id + " through the one AUTO (named " + a.detected + ")");
+        }
+        const auto L = TextModeDecoder::modes(F::All);
+        std::string groups; for (auto& m : L) if (!m.group.empty() && groups.find(m.group) == std::string::npos) groups += m.group + ",";
+        bool every = true; for (const Case& c : cases) { bool f = false; for (auto& m : L) f |= m.id == c.id; every &= f; }
+        ok(L[0].id == "auto" && groups == "MFSK,OLIVIA,CONTESTIA,THOR," && every && L.size() == 29, "the list: AUTO, then each family's ANY and every sub-mode (" + std::to_string(L.size()) + " entries, " + groups + ")");
+        ok(TextModeDecoder::modesJson(F::All).find("{\"id\":\"olivia-8-250\",\"label\":\"8/250\",\"group\":\"OLIVIA\"}") != std::string::npos, "each entry carries its family (the FAMILY row) and a short label (the MODE row)");
+        auto y = withNoise(textModeSynth(F::Olivia, "olivia-8-250", msg, fs, 1500), fs, 10, 41);
+        ok(body(run(F::All, "any-olivia", y, fs).text).find(msg) != std::string::npos, "ANY under OLIVIA decodes OLIVIA 8/250");
+        ok(run(F::All, "any-thor", y, fs).text.empty(), "ANY under THOR prints nothing on it");
+        ok(run(F::All, "any-contestia", y, fs).text.empty(), "ANY under CONTESTIA prints nothing on it");
+        F f2; ok(TextModeDecoder::familyOf("mfsk", f2) && f2 == F::All, "the wire's \"mfsk\" is the one key");
+    }
+
     std::printf("\n── CONTESTIA's alphabet (confirmed with fldigi as a black box) and a narrower signal ──\n");
     {
         auto x = withNoise(textModeSynth(F::Olivia, "contestia-8-250", "CQ DE G4XYZ\nQRZ? 73", fs, 1500), fs, 10, 31);
@@ -130,7 +152,7 @@ int main() {
         for (size_t i = 0; i < rtty.size(); ++i) { if (i % spb == 0) bit = r() & 1; ph += 2 * M_PI * (bit ? 1585 : 1415) / fs; rtty[i] = (float)std::sin(ph); }
         for (size_t i = 0; i < car.size(); ++i) car[i] = (float)std::sin(2 * M_PI * 1234.5 * i / fs);
         auto a = withNoise(rtty, fs, 10, 21), c = withNoise(car, fs, 10, 22);
-        for (F f : {F::Mfsk, F::Olivia, F::Thor}) {
+        for (F f : {F::Mfsk, F::Olivia, F::Thor, F::All}) {
             ok(run(f, "auto", a, fs).text.empty(), std::string(TextModeDecoder::extName(f)) + " AUTO on RTTY: nothing");
             ok(run(f, "auto", c, fs).text.empty(), std::string(TextModeDecoder::extName(f)) + " AUTO on a carrier: nothing");
         }
@@ -138,7 +160,7 @@ int main() {
 
     const int noiseMin = std::getenv("VIBE_TM_NOISE_MIN") ? std::atoi(std::getenv("VIBE_TM_NOISE_MIN")) : 3;
     std::printf("\n── white noise, %d min through each family's AUTO ──\n", noiseMin);
-    for (F f : {F::Mfsk, F::Olivia, F::Thor}) {
+    for (F f : {F::Mfsk, F::Olivia, F::Thor, F::All}) {
         TextModeDecoder d(f, fs, "auto"); std::string t; bool locked = false;
         d.onText = [&](const std::string& s) { t += s; };
         d.onState = [&](int s) { if (s) locked = true; };

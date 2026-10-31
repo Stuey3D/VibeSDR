@@ -103,7 +103,7 @@ try {
      return JSON.stringify({ group: h ? h.textContent.trim().toUpperCase() : '', icon: !!(b && b.querySelector('svg')),
                              with: g ? [...g.querySelectorAll('[data-dec]')].map(x => x.dataset.dec).join(',') : '' }); })()`);
   const pl = JSON.parse(place || '{}');
-  ok(/AMATEUR/.test(pl.group) && /thor,hell/.test(pl.with) && pl.icon, `in the HF Amateur group beside THOR, with its icon (${place})`);
+  ok(/AMATEUR/.test(pl.group) && /mfsk,hell/.test(pl.with) && pl.icon, `in the HF Amateur group beside MFSK, with its icon (${place})`);
   const s0 = await shot('hell-decoders.png');
   await ev(`document.querySelector('#decodersPanel [data-dec="hell"]').click()`);
   ok(await until(`document.getElementById('decBox').classList.contains('open') && document.getElementById('decTitle').textContent === 'FELD HELL'`, 5000), 'the box opens, titled FELD HELL');

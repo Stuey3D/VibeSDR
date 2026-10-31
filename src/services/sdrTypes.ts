@@ -456,9 +456,10 @@ export interface ServerOccupancy {
   same?: boolean;
   /** ★ V12 SELCAL: this server's aeronautical selective-call decoder ('selcal'). */
   selcal?: boolean;
-  /** ★ V12 MFSK / OLIVIA / THOR: this server's text-mode decoders and each family's choices (AUTO first) — textModes.ts. */
-  mfsk?: boolean; olivia?: boolean; thor?: boolean;
-  mfskModes?: TextMode[]; oliviaModes?: TextMode[]; thorModes?: TextMode[];
+  /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
+   *  first) — textModes.ts. */
+  mfsk?: boolean;
+  mfskModes?: TextMode[];
   /** ★ V12 FELD HELL: this server draws Feld Hell ('hell') — feldHell.ts. */
   hell?: boolean;
   paging?: boolean;
@@ -534,8 +535,8 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       sitora:    j.sitora === true,
       same:      j.same === true,
       selcal:    j.selcal === true,
-      mfsk:      j.mfsk === true, olivia: j.olivia === true, thor: j.thor === true,
-      mfskModes: parseTextModes(j.mfskModes), oliviaModes: parseTextModes(j.oliviaModes), thorModes: parseTextModes(j.thorModes),
+      mfsk:      j.mfsk === true,
+      mfskModes: parseTextModes(j.mfskModes),
       hell:      j.hell === true,
       paging:    j.paging === true,
       pagingModes: parsePagingModes(j.pagingModes),

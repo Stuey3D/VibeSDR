@@ -55,7 +55,7 @@ import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
 import { sameStateText, selcalStateText } from './alertDecoders';   // ★ V12 EAS / SAME and SELCAL
-import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 
@@ -65,7 +65,7 @@ import { parseSpotsStatus, type SpotModeState } from './spotsBand';
  *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
 /** ★ V12 PSK31/63 ('psk' / 'pskskim' — `pskSkim`), JTTY ('jtty') and DSC ('dsc') — a VibeServer's own decoders. */
 export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw' | 'psk' | 'jtty' | 'dsc'
-  | 'mfsk' | 'olivia' | 'thor'   // ★ V12 the MFSK keyboard modes (textModes.ts): text as it decodes, 0x03, textmode_status
+  | 'mfsk'   // ★ V12 the MFSK keyboard modes — MFSK16/32, OLIVIA, CONTESTIA, THOR on ONE key (textModes.ts): text as it decodes, 0x03, textmode_status
   | 'hell'    // ★ V12 FELD HELL — drawn by a VibeServer (feldHell.ts): WEFAX's grey lines (re-sent as a strip fills), hell_status
   | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
   | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
@@ -320,7 +320,9 @@ export class DecoderClient {
   /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */
   pagingMode = 'auto';
   /** ★ V12 MFSK / OLIVIA / THOR: each family's chosen sub-mode (a server `<family>Modes` id, 'auto' first) — a change is a re-attach. */
-  textMode: Record<TextFamily, string> = { mfsk: 'auto', olivia: 'auto', thor: 'auto' };
+  textMode: Record<TextFamily, string> = { mfsk: 'auto' };
+  /** The server's `mfskModes` (for the status line's mode name). */
+  textModes: TextMode[] = [];
   private tmLast: TextModeStatus | null = null;
 
   constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string, authSuffix = '') {
@@ -657,7 +659,7 @@ export class DecoderClient {
             const fam = this.active;
             if (!isTextFamily(fam)) return;
             const st = parseTextModeStatus(m.data);
-            if (st) { this.tmLast = st; this.cb.onStatus(textModeStatusText(fam, this.textMode[fam], st)); this.cb.onDot(st.detected ? 'active' : 'idle'); }
+            if (st) { this.tmLast = st; this.cb.onStatus(textModeStatusText(fam, this.textMode[fam], st, this.textModes)); this.cb.onDot(st.detected ? 'active' : 'idle'); }
           } else if (m.type === 'hell_status' && m.data) {
             if (this.active !== 'hell') return;
             const st = parseHellStatus(m.data);
@@ -831,8 +833,8 @@ export class DecoderClient {
       case 'same':    return { extension_name: 'same', params: {} };
       // ★ V12 SELCAL: nothing to set (ICAO's 32 tones, found by themselves).
       case 'selcal':  return { extension_name: 'selcal', params: {} };
-      // ★ V12 MFSK / OLIVIA / THOR: "mode" is one of the server's own ids — the server falls back to AUTO for any other.
-      case 'mfsk': case 'olivia': case 'thor': this.tmLast = null; return { extension_name: name, params: { mode: this.textMode[name] } };
+      // ★ V12 MFSK (+ OLIVIA, CONTESTIA, THOR): "mode" is one of the server's own ids — the server falls back to AUTO for any other.
+      case 'mfsk': this.tmLast = null; return { extension_name: name, params: { mode: this.textMode[name] } };
       // ★ V12 FELD HELL: nothing to set — the tone is found by itself.
       case 'hell':    return { extension_name: 'hell', params: {} };
       case 'paging':  this.pagingLast = null; return { extension_name: 'paging', params: { mode: this.pagingMode } };
@@ -861,7 +863,7 @@ export class DecoderClient {
         this.cb.onDot('active');
       } else if (isTextFamily(name) && t === 0x03) {
         if (u8.length < 2) return;
-        if (!u8[1]) { this.tmLast = null; this.cb.onStatus(textModeStatusText(name, this.textMode[name], null)); }
+        if (!u8[1]) { this.tmLast = null; this.cb.onStatus(textModeStatusText(name, this.textMode[name], null, this.textModes)); }
         this.cb.onDot(u8[1] ? 'active' : 'idle');
       } else if (name === 'selcal' && t === 0x03) {
         if (u8.length < 2) return;

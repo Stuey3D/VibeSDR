@@ -38,10 +38,13 @@ namespace vibe {
 
 class TextModeDecoder {
 public:
-    enum class Family { Mfsk, Olivia, Thor };
-    struct ModeInfo { std::string id, label; };
+    /** ★★ All (2026-10-31, Stuart: one key) = MFSK16/32, OLIVIA, CONTESTIA and THOR in one AUTO — the server's "mfsk".
+     *  Mfsk / Olivia / Thor remain for the tests and benches (one family's AUTO). */
+    enum class Family { Mfsk, Olivia, Thor, All };
+    /** `group` (All only): "MFSK", "OLIVIA", "CONTESTIA", "THOR", "" for AUTO; `label` within it ("16", "8/250", "ANY"). */
+    struct ModeInfo { std::string id, label, group; };
 
-    /** `mode` is "auto" or one of modes(family)'s ids; anything else is AUTO. */
+    /** `mode` is "auto", one of modes(family)'s ids, or (All) "any-<group>" = that group's AUTO; anything else is AUTO. */
     TextModeDecoder(Family f, double inRate, const std::string& mode = "auto");
     ~TextModeDecoder();
     void feed(const float* x, int n);
@@ -55,7 +58,7 @@ public:
 
     static std::vector<ModeInfo> modes(Family f);        ///< AUTO first; the server sends this list as data
     static std::string modesJson(Family f);               ///< [{"id":"auto","label":"AUTO"}, …] for vibeserver.json
-    static bool familyOf(const std::string& ext, Family& f);   ///< "mfsk" | "olivia" | "thor"
+    static bool familyOf(const std::string& ext, Family& f);   ///< "mfsk" (= All, the server's one key) | "olivia" | "thor"
     static const char* extName(Family f);
 
     struct Impl;

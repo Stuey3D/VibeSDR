@@ -56,6 +56,13 @@ TextModeDecoder::Family familyOfKind(Kind k) {
     return k == kMfsk ? TextModeDecoder::Family::Mfsk : k == kThor ? TextModeDecoder::Family::Thor : TextModeDecoder::Family::Olivia;
 }
 const Sub* subById(const std::string& id) { for (const Sub& s : kSubs) if (id == s.id) return &s; return nullptr; }
+const char* groupOfKind(int k) { return k == kMfsk ? "MFSK" : k == kThor ? "THOR" : k == kOlivia ? "OLIVIA" : "CONTESTIA"; }
+const char* groupId(int k) { return k == kMfsk ? "mfsk" : k == kThor ? "thor" : k == kOlivia ? "olivia" : "contestia"; }
+/** "any-olivia" → kOlivia; −1 for anything else */
+int kindOfAny(const std::string& id) {
+    for (int k : {kMfsk, kOlivia, kContestia, kThor}) if (id == std::string("any-") + groupId(k)) return k;
+    return -1;
+}
 
 constexpr uint64_t kOliviaScr = 0xE257E6D0291574ECull;
 constexpr uint64_t kContestiaScr = 0xEDB88320ull;
@@ -755,9 +762,14 @@ struct TextModeDecoder::Impl {
 TextModeDecoder::TextModeDecoder(Family f, double inRate, const std::string& mode) : d_(new Impl) {
     d_->fam = f; d_->inRate = inRate; d_->self = this;
     const Sub* one = subById(mode);
+    const int anyK = f == Family::All ? kindOfAny(mode) : -1;
     for (const Sub& s : kSubs) {
-        if (familyOfKind(s.kind) != f) continue;
-        if (one ? &s == one : s.common) d_->add(&s);
+        // ★ All: every family's common sub-modes in ONE Impl, so the ones with the same symbol length and rate share a
+        //   stream (one FFT) and the same tone set shares a finder (OLIVIA ↔ CONTESTIA, section 13)
+        if (f != Family::All && familyOfKind(s.kind) != f) continue;
+        if (one) { if (&s == one) d_->add(&s); }
+        else if (anyK >= 0) { if (s.kind == anyK && s.common) d_->add(&s); }
+        else if (s.common) d_->add(&s);
     }
     if (d_->need8) d_->rs8.init(inRate, 8000);
     if (d_->need11) d_->rs11.init(inRate, 11025);
@@ -780,22 +792,41 @@ std::string TextModeDecoder::detected() const { return d_->winner ? d_->winner->
 float TextModeDecoder::hz() const { return d_->winner ? d_->winner->hz() : 0.f; }
 
 std::vector<TextModeDecoder::ModeInfo> TextModeDecoder::modes(Family f) {
-    std::vector<ModeInfo> v{{"auto", "AUTO"}};
-    for (const Sub& s : kSubs) if (familyOfKind(s.kind) == f) v.push_back({s.id, s.label});
+    std::vector<ModeInfo> v{{"auto", "AUTO", ""}};
+    if (f == Family::All) {
+        // ★★★ grouped (src/services/autoModes.ts draws FAMILY, then MODE): each group's ANY (its own AUTO) first, then
+        //     EVERY sub-mode we decode — the common ones and the manual-only ones (OLIVIA 64/2000, CONTESTIA 4/125 …)
+        for (int k : {kMfsk, kOlivia, kContestia, kThor}) {
+            const char* g = groupOfKind(k);
+            v.push_back({std::string("any-") + groupId(k), "ANY", g});
+            for (const Sub& s : kSubs) if (s.kind == k) {
+                std::string l = s.label; const size_t sp = l.find(' ');
+                l = sp == std::string::npos ? l.substr(4) : l.substr(sp + 1);   // "MFSK16" → "16", "OLIVIA 8/250" → "8/250"
+                v.push_back({s.id, l, g});
+            }
+        }
+        return v;
+    }
+    for (const Sub& s : kSubs) if (familyOfKind(s.kind) == f) v.push_back({s.id, s.label, ""});
     return v;
 }
 std::string TextModeDecoder::modesJson(Family f) {
     std::string j = "[";
-    for (const ModeInfo& m : modes(f)) { if (j.size() > 1) j += ','; j += "{\"id\":\"" + m.id + "\",\"label\":\"" + m.label + "\"}"; }
+    for (const ModeInfo& m : modes(f)) {
+        if (j.size() > 1) j += ',';
+        j += "{\"id\":\"" + m.id + "\",\"label\":\"" + m.label + "\"";
+        if (f == Family::All) j += ",\"group\":\"" + m.group + "\"";
+        j += "}";
+    }
     return j + "]";
 }
 bool TextModeDecoder::familyOf(const std::string& ext, Family& f) {
-    if (ext == "mfsk") { f = Family::Mfsk; return true; }
+    if (ext == "mfsk") { f = Family::All; return true; }
     if (ext == "olivia") { f = Family::Olivia; return true; }
     if (ext == "thor") { f = Family::Thor; return true; }
     return false;
 }
-const char* TextModeDecoder::extName(Family f) { return f == Family::Mfsk ? "mfsk" : f == Family::Olivia ? "olivia" : "thor"; }
+const char* TextModeDecoder::extName(Family f) { return f == Family::Mfsk || f == Family::All ? "mfsk" : f == Family::Olivia ? "olivia" : "thor"; }
 
 // ── the test transmitter ─────────────────────────────────────────────────────────────────────────────────────────────
 std::vector<float> textModeSynth(TextModeDecoder::Family, const std::string& mode, const std::string& text, double fs,

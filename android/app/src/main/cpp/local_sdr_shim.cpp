@@ -34983,13 +34983,13 @@ static std::string vsTunableJson() {
     j += std::string(",\"same\":") + (vsModeBlocked("same") ? "false" : "true");
     // ★ V12 SELCAL (2026-10-31): the aeronautical selective call on the listener's audio (decoders/selcal_decoder.h)
     j += std::string(",\"selcal\":") + (vsModeBlocked("selcal") ? "false" : "true");
-    /* ★ V12 MFSK / OLIVIA / THOR (2026-10-31): the MFSK keyboard modes on the listener's audio (decoders/textmodes.h), one
-     *  key a family. Each family's choices travel as data (AUTO first), so a client draws one MODE key per entry. */
-    for (vibe::TextModeDecoder::Family f : { vibe::TextModeDecoder::Family::Mfsk, vibe::TextModeDecoder::Family::Olivia, vibe::TextModeDecoder::Family::Thor }) {
-        const std::string e = vibe::TextModeDecoder::extName(f);
-        const bool on = !vsModeBlocked(e);
-        j += ",\"" + e + "\":" + (on ? "true" : "false");
-        if (on) j += ",\"" + e + "Modes\":" + vibe::TextModeDecoder::modesJson(f);
+    /* ★ V12 THE MFSK KEYBOARD MODES (2026-10-31): MFSK16/32, OLIVIA, CONTESTIA and THOR on the listener's audio
+     *  (decoders/textmodes.h) — ONE key, "mfsk" (Stuart: "if it makes it easier for users then add it"). Its choices
+     *  travel as data (AUTO first, each with its family), so a client draws FAMILY then MODE (src/services/autoModes.ts). */
+    {
+        const bool on = !vsModeBlocked("mfsk");
+        j += std::string(",\"mfsk\":") + (on ? "true" : "false");
+        if (on) j += ",\"mfskModes\":" + vibe::TextModeDecoder::modesJson(vibe::TextModeDecoder::Family::All);
     }
     // ★ V12 FELD HELL (2026-10-31): drawn on the listener's audio (decoders/feld_hell.h), strips down WEFAX's image path
     j += std::string(",\"hell\":") + (vsModeBlocked("hell") ? "false" : "true");
@@ -35180,7 +35180,7 @@ static std::string vsTunableJson() {
      *    off to save CPU still serves basic RDS, so the card must not read "no RDS". */
     {
         static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "olivia", "thor", "hell", "jtty", "drm" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "hell", "jtty", "drm" };
         std::string m = "[";
         bool first = true;
         for (const char* id : kOffer) {
@@ -35332,7 +35332,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK / Olivia / Contestia / THOR"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

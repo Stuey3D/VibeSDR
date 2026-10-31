@@ -5308,10 +5308,8 @@ select.btn { padding: 6px 8px; }
     <!-- ★★ V12 EAS / SAME and SELCAL — decoded on the server; hidden unless it says "same" / "selcal". -->
     <button class="btn" data-dec="selcal" hidden title="SELCAL — the two-tone selective calls a ground station sends to one aircraft, shown as its code (AB-CD); HF aeronautical channels in USB, VHF airband in AM">SELCAL</button>
     <button class="btn" data-dec="same" hidden title="EAS / SAME — US emergency alert headers from NOAA Weather Radio (162.400–162.550 MHz NFM) and EAS broadcasts: event, areas and times">SAME</button>
-    <!-- ★★ V12 the MFSK keyboard modes — decoded on the server; hidden unless it says "mfsk" / "olivia" / "thor". -->
-    <button class="btn" data-dec="mfsk" hidden title="MFSK16 and MFSK32 — the 16-tone keyboard modes with FEC; AUTO finds the speed">MFSK</button>
-    <button class="btn" data-dec="olivia" hidden title="OLIVIA and CONTESTIA — the many-tone weak-signal keyboard modes; AUTO finds the tones and bandwidth">OLIVIA</button>
-    <button class="btn" data-dec="thor" hidden title="THOR — the IFK+ keyboard mode with FEC; AUTO finds the speed (THOR 4 to 22)">THOR</button>
+    <!-- ★★ V12 the MFSK keyboard modes — ONE key (MFSK16/32, OLIVIA, CONTESTIA, THOR); hidden unless the server says "mfsk". -->
+    <button class="btn" data-dec="mfsk" hidden title="MFSK16/32, OLIVIA, CONTESTIA and THOR — the multi-tone keyboard modes; AUTO finds which one and its sub-mode">MFSK</button>
     <!-- ★★ V12 FELD HELL — drawn on the server, read by eye; hidden unless it says "hell". -->
     <button class="btn" data-dec="hell" hidden title="FELD HELL (Hellschreiber) — the text is drawn as it is heard and you read the strip; every column printed twice, so a slant or fade in one copy leaves the other whole">HELL</button>
     <button class="btn" data-dec="wefax">WEFAX</button>
@@ -5429,9 +5427,14 @@ select.btn { padding: 6px 8px; }
   <!-- ★★ V12 MFSK / OLIVIA / THOR: one MODE row for whichever family is open — the server's own list, AUTO first
        (vibeserver.json "<family>Modes"; src/services/textModes.ts). -->
   <div class="subPanel" id="tmSettings" hidden>
+    <!-- ★★★ AUTO's fallback rows, RTTY's pattern (src/services/autoModes.ts): FAMILY, then that family's MODE -->
     <div class="mrow">
+      <label>FAMILY</label>
+      <div class="seg" id="tmGroups" style="flex-wrap:wrap"></div>
+    </div>
+    <div class="mrow" id="tmModeRow" hidden>
       <label>MODE</label>
-      <div class="seg" id="tmModes"></div>
+      <div class="seg" id="tmModes" style="flex-wrap:wrap"></div>
     </div>
     <div class="hint" id="tmHint"></div>
   </div>

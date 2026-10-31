@@ -1194,8 +1194,9 @@ private:
     }
     /** ★★ SELCAL (V12, 2026-10-31): the aeronautical selective call (decoders/selcal_decoder.h — ICAO Annex 10 Vol III,
      *  Amendment 91's 32 tones) on the listener's audio: HF USB on the aeronautical bands, or VHF AM. One line per call. */
-    /** ★★ THE MFSK KEYBOARD MODES (V12, 2026-10-31): "mfsk" (MFSK16/32), "olivia" (OLIVIA and CONTESTIA), "thor" — one
-     *  TextModeDecoder per family on the listener's audio (decoders/textmodes.h). "mode" = one of its modes() ids, AUTO
+    /** ★★ THE MFSK KEYBOARD MODES (V12, 2026-10-31): "mfsk" = ONE key for MFSK16/32, OLIVIA, CONTESTIA and THOR (one
+     *  TextModeDecoder, Family::All — every family's AUTO in one, sharing spectra; "any-<family>" a family's AUTO); the old
+     *  "olivia" / "thor" names still attach their family alone (no client offers them) — decoders/textmodes.h. "mode" = one of its modes() ids, AUTO
      *  for anything else. Text as it decodes (0x01), 0x03 0 searching / 1 locked, and {"type":"textmode_status"} on
      *  change: {detected, hz} — the sub-mode AUTO found and where. */
     void buildTextModeLocked_(const std::string& ext, const std::string& msg) {

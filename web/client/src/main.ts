@@ -153,6 +153,7 @@ import { SAME_HINT, SELCAL_HINT, sameStateText, selcalStateText } from '../../..
 import { TEXT_FAMILIES, TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, isTextFamily, parseTextModeStatus, parseTextModes, textModeStatusText,
          type TextFamily, type TextMode } from '../../../src/services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { sessionChoice, setSessionChoice } from '../../../src/services/decoderSession';   // ★★★ AUTO first; manual for the session only
+import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow } from '../../../src/services/autoModes';   // ★★★ AUTO's fallback rows
 import { HELL_HINT, HELL_STRIP_ROWS, HellPager, hellStatusText, parseHellStatus } from '../../../src/services/feldHell';   // ★ V12 FELD HELL
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
@@ -11608,7 +11609,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'jtty' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | null = null;
 /* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
  *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
  *  first, coloured by confidence) over the SPOTS; the settings hold the announced calling frequencies. Offered only where
@@ -11678,27 +11679,30 @@ let selcalCap = false;
  *  text box; the status line names what AUTO locked ("OLIVIA 8/250 · 1500 Hz"); one MODE row (tmSettings) holds the
  *  family's choices — the server's own list, AUTO first. Offered only where vibeserver.json says "<family>": true. */
 let tmCaps: Partial<Record<TextFamily, TextMode[]>> = {};
-const tmMode: Record<TextFamily, string> = { mfsk: 'auto', olivia: 'auto', thor: 'auto' };
+const tmMode: Record<TextFamily, string> = { mfsk: 'auto' };
 // ★★★ AUTO unless picked by hand THIS session (src/services/decoderSession.ts) — never stored; a reload starts in AUTO
 for (const fam of TEXT_FAMILIES) tmMode[fam] = sessionChoice('textmode.' + fam, 'auto');
 function renderTmModes() {
-  const host = document.getElementById('tmModes'); const hint = document.getElementById('tmHint');
-  if (!host || !hint) return;
-  host.textContent = '';
+  const groups = document.getElementById('tmGroups'), host = document.getElementById('tmModes'), hint = document.getElementById('tmHint');
+  const row = document.getElementById('tmModeRow');
+  if (!groups || !host || !hint || !row) return;
+  groups.textContent = ''; host.textContent = '';
   if (!isTextFamily(activeDec)) return;
   const fam = activeDec;
-  for (const m of tmCaps[fam] ?? []) {
-    const b = document.createElement('button');
-    b.className = 'btn' + (tmMode[fam] === m.id ? ' on' : '');
-    b.textContent = m.label;
-    b.onclick = () => {
-      tmMode[fam] = m.id;
-      setSessionChoice('textmode.' + fam, m.id, 'auto');
-      renderTmModes(); reattachIf(fam);
-      decStateText = textModeStatusText(fam, tmMode[fam], null); $('decStatus').textContent = decStateText;
-    };
-    host.appendChild(b);
-  }
+  const list = tmCaps[fam] ?? [];
+  const pick = (id: string) => {
+    tmMode[fam] = id;
+    setSessionChoice('textmode.' + fam, id, 'auto');
+    renderTmModes(); reattachIf(fam);
+    decStateText = textModeStatusText(fam, tmMode[fam], null, list); $('decStatus').textContent = decStateText;
+  };
+  // ★★★ AUTO's fallback rows (autoModes.ts, RTTY's pattern): AUTO + the server's families, then the chosen family's own
+  const g = groupOfMode(list, tmMode[fam]);
+  const key = (label: string, on: boolean, f: () => void) => { const b = document.createElement('button'); b.className = 'btn' + (on ? ' on' : ''); b.textContent = label; b.onclick = f; return b; };
+  groups.appendChild(key('AUTO', !g, () => pick('auto')));
+  for (const x of modeGroups(list)) groups.appendChild(key(x, g === x, () => pick(firstOfGroup(list, x))));
+  row.hidden = !showSecondRow(list, tmMode[fam]);
+  if (!row.hidden) for (const m of modesInGroup(list, g)) host.appendChild(key(m.label, tmMode[fam] === m.id, () => pick(m.id)));
   hint.textContent = TEXT_FAMILY_HINT[fam];
 }
 /* ★★ FELD HELL (V12, 2026-10-31) — drawn on the server (decoders/feld_hell.h), read by eye: its strips come down the
@@ -12268,7 +12272,7 @@ function initDecoders(host: string, auth: AuthState) {
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
       if (activeDec === 'sitora') { if (sitorLast) sitorLast.link = st; renderSitorStatus(st); setDecLive(st >= 2 && st <= 6); return; }
-      if (isTextFamily(activeDec)) { if (!st) { decStateText = textModeStatusText(activeDec, tmMode[activeDec], null); if (!decTuneHint) $('decStatus').textContent = decStateText; } setDecLive(!!st); return; }
+      if (isTextFamily(activeDec)) { if (!st) { decStateText = textModeStatusText(activeDec, tmMode[activeDec], null, tmCaps[activeDec] ?? []); if (!decTuneHint) $('decStatus').textContent = decStateText; } setDecLive(!!st); return; }
       if (activeDec === 'same' || activeDec === 'selcal') {
         decStateText = activeDec === 'same' ? sameStateText(st) : selcalStateText(st);
         if (!decTuneHint) $('decStatus').textContent = decStateText;
@@ -12382,7 +12386,7 @@ function initDecoders(host: string, auth: AuthState) {
       if (!isTextFamily(activeDec)) return;
       const st = parseTextModeStatus(d);
       if (!st) return;
-      decStateText = textModeStatusText(activeDec, tmMode[activeDec], st);
+      decStateText = textModeStatusText(activeDec, tmMode[activeDec], st, tmCaps[activeDec] ?? []);
       if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
     onSitorStatus: (d) => {
@@ -12500,7 +12504,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'jtty';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12: the decoder runs on the VFO selected NOW (decode on either VFO) — Advanced RDS is always A's (no VFO B on FM)
       decVfo = mode === 'rds' ? 'A' : abStartVfo();
@@ -13179,7 +13183,7 @@ function showDecBox(what: string) {
   else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
   else if (what === 'hell') { hellPager.reset(); decStateText = hellStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HELL_HINT; }
-  else if (isTextFamily(what)) { decStateText = textModeStatusText(what, tmMode[what], null); $('decStatus').textContent = decStateText; $('decStatus').title = TEXT_FAMILY_HINT[what]; }
+  else if (isTextFamily(what)) { decStateText = textModeStatusText(what, tmMode[what], null, tmCaps[what] ?? []); $('decStatus').textContent = decStateText; $('decStatus').title = TEXT_FAMILY_HINT[what]; }
   else $('decStatus').title = '';
   if (isJtty) { jttyLast = []; jttySpots.clear(); jttyPinAt = null; renderJtty(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The

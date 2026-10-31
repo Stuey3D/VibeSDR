@@ -994,20 +994,88 @@ Tests (`test-textmodes`): the newline and space codes; CONTESTIA 4/125 through A
 through AUTO still itself; and with `VIBE_FLDIGI_DIR=~/fldigi-blackbox/out` the eight fldigi files decode exactly (from
 "!" on). Colima stopped afterwards; the image `fldigi-bb` can be removed with `docker rmi fldigi-bb`.
 
-## RESUME HERE (updated 2026-10-31, after the sixth run: Feld Hell's clients)
+## 19. ONE text-mode key (MFSK, OLIVIA, CONTESTIA, THOR) and every AUTO decoder's fallback rows (2026-10-31, seventh run)
 
-Done this run (commits on `v12-decoders-wave2`): section 15 — Feld Hell offered in vibeserver.json and wired to the web
-page and the app (HELL key in HF Amateur, drawn plainly in the picture box a page at a time, no gallery), the copy (tour
-card, About), and a web e2e (10/10). No server or device was touched; synthetic signals only.
+Stuart: "10% of a pi2 core doesnt seem too bad and if it makes it easier for users then add it"; and "dont forget with
+any decoders that are auto mode we can pop open extra controls underneath like we do for RTTY if auto fails to decode".
+
+### One key
+- Server: `TextModeDecoder::Family::All` — every family's common sub-modes in ONE decoder, so receivers with the same
+  symbol length and rate share a stream (one FFT) and the same tone set shares a finder (OLIVIA ↔ CONTESTIA, section
+  13). vibeserver.json offers `"mfsk":true` + `mfskModes` only (no `olivia`/`thor`): AUTO, then per family
+  (MFSK, OLIVIA, CONTESTIA, THOR) its "ANY" (`any-<family>`, that family's own AUTO) and EVERY sub-mode we decode — the
+  manual-only ones too (OLIVIA 4/250 and 64/2000, CONTESTIA 4/125 … 64/2000): 29 entries, each with its `group` and a
+  short label. The host still attaches the old `olivia` / `thor` names (a family alone); no client offers them. The
+  owner's three switches became one ("MFSK, Olivia, Contestia, THOR").
+- Key name: "MFSK" — Olivia, Contestia and THOR are multi-tone FSK modes too, so the family's own name covers them
+  (question for Stuart below).
+- App and web: one MFSK key in HF Amateur; `textModes.ts` shrank to the one family.
+
+### The fallback rows, RTTY's pattern (`src/services/autoModes.ts`, shared)
+RTTY: under the key a first row with AUTO and the presets, then the manual rows; a hand-picked value turns AUTO off and
+under AUTO nothing manual is lit. The same for decoders whose manual choices are server data: a first row (PROTOCOL for
+PAGE, FAMILY for MFSK) = AUTO + the server's groups; a second row (RATE / MODE) = the chosen group's own entries, drawn only
+when the group has more than one. App: `GroupedModeRows` in ModeSelector; web: `tmGroups` + `tmModeRow`.
+- PAGE: AUTO · POCSAG (ANY, 512, 1200, 2400) · FLEX (no RATE row — a FLEX frame names its own speed, so a FLEX rate key
+  would do nothing).
+- MFSK: AUTO · MFSK (ANY, 16, 32) · OLIVIA (ANY, 4/125 … 64/2000) · CONTESTIA (ANY, 4/125 … 64/2000) · THOR (ANY, 4 … 22).
+- Polarity (PAGE) was considered and NOT offered: both POCSAG and FLEX already try both senses on every sync, so a
+  polarity key could never rescue a decode AUTO missed.
+- The other AUTO-style decoders on this branch get no rows, each for a reason (a control whose every use is a no-op is
+  not offered): SAME (47 CFR 11.31 fixes the tones, rate and format — nothing to choose); SELCAL (the 32 ICAO tones are
+  all searched at three dial offsets at once; the hint already asks for the dial within ≈ 10 Hz); CTCSS/DCS (not a
+  decoder key at all — a label on the VTS line, every tone and code searched together); MSK144 (a Digital-spots mode on
+  its dials, no key). Time stations already have STATION (AUTO first).
+
+### Cost on a Pi 2 (qemu-arm count, `tools/textmode-bench/qemu.sh`, 60 s of noise through AUTO — every common sub-mode)
+| | NEON | scalar |
+|---|---|---|
+| ONE key's AUTO (MFSK16/32 + THOR ×6 + OLIVIA ×6 + CONTESTIA ×3, one decoder) | **3966 M instr / min** | 5471 M |
+| the three old keys' AUTOs, each alone (MFSK 556 M from section 12, OLIVIA+CONTESTIA 1931 M, THOR 1673 M) | 4160 M summed | — |
+
+So the one AUTO costs **≈ 4.7 % less than the three did together** (their shared 8 kHz / 11.025 kHz resamplers and the
+streams of equal symbol length now computed once) → ≈ 5.5–7.3 s of a 900 MHz core a minute, **≈ 9–12 % of one Pi 2
+core** (ESTIMATE at 0.6–0.8 IPC) — the ≈ 10 % Stuart accepted. Where it goes: 48 % the per-frame finder of each of the
+17 receivers (`Finder` — the next place to make it lighter, e.g. sharing scores between receivers of one stream and tone
+spacing beyond OLIVIA ↔ CONTESTIA), 18 % OLIVIA/CONTESTIA's Walsh blocks, 13 % PFFFT, 10 % the resamplers. Nothing was
+traded for speed: every sub-mode decodes through the one AUTO as through its own. Identity: armhf NEON/scalar ×
+`-ffp-contract` off/fast — one test-textmodes fingerprint (`44ca51b976226297`) across all four builds.
+
+### Tests
+`test-textmodes`: every common sub-mode through the one AUTO; the grouped list (29 entries, the four families, every
+sub-mode, `group` in the JSON); `any-olivia` decodes OLIVIA, `any-thor` / `any-contestia` print nothing on it; the wire's
+"mfsk" is the one key; noise and RTTY/carrier through the one AUTO: nothing. `test-web-textmodes` rewritten for one key
+(see its header). ★★ **10 runs in a row: 5 pass, 5 fail — NOT the required 10/10.** Every other check passed 10/10 (one
+key, FAMILY/MODE rows, OLIVIA via FAMILY, MFSK via FAMILY, the session rule on re-open and after a reload, 390 px, no
+exception). The one failure, the same each time: in AUTO, with OLIVIA 16/500 and MFSK16 both in the passband from the
+moment the box opens, the first MFSK16 over printed "CQ CQ D G4XYZ …" — one "E" lost. It is the MFSK receiver's JOIN
+(a receiver started mid-over — section 12's fault 5 family), not the one key: the same clip offline at 61 start offsets
+with no added noise gives 4 wrong joins (a wrong first character, "QCQ", "ÐZ") with the one AUTO AND with the old
+MFSK-only AUTO (identical output); the web run opens the box at a near-constant phase of the 20 s loop, which before
+this change came only after the OLIVIA section. A "sticky winner" (the box stays with a locked winner) was tried as a
+fix and dropped: offline it lost the start of every MFSK over to an idle OLIVIA lock (whole overs 40/40 → 36/40). ★
+OWED FIRST: the MFSK join at fine offsets — then the 10/10. `test-web-hell` now expects HELL beside MFSK (not re-run this time).
+
+## RESUME HERE (updated 2026-10-31, after the seventh run: Stuart's answers)
+
+Done this run (commits on `v12-decoders-wave2`): section 16 — PAGE silent while it runs, Q65 tiling of the EME segments
+(23 cm band, 6 m, Q65-15 — it doubles Q65's cost), Feld Hell (Hellschreiber) copy, AUTO first / manual for the session
+only (`decoderSession.ts`); section 17 — FLEX in PAGE's AUTO; section 18 — CONTESTIA confirmed with fldigi as a black
+box (newline fixed, a narrower-signal false lock fixed); section 19 — one MFSK key for MFSK/OLIVIA/CONTESTIA/THOR and
+every AUTO decoder's fallback rows (RTTY's pattern). No server or device was touched; synthetic signals and public
+recordings only (FLEX and fldigi files kept out of git).
 
 Next, in order:
-1. **build-web** before any release (sections 10–12, 15): `vibe_web_page.h` is NOT committed.
-2. **The app's Feld Hell** has not been run on a simulator or device (syntax-checked only): open HELL on a VibeServer,
-   watch a page fill, CLR / PREV / SAVE, rotate (the page is kept in the image store).
-3. **ACARS → VDL2 → HFDL → RS41, FLEX, BPC, TDF, CHU labels, CONTESTIA's constant** — still waiting on Stuart.
-4. Owed across the wave: real-air tests (paging on a phone, NOAA Weather Radio, HF SELCAL, MSK144, FST4W, Q65, OLIVIA on a
-   calling channel, Feld Hell), Android gradle and iOS `build_ios.sh` compiles (Feld Hell added to both lists, compiled on
-   the Mac only), FST4's last ≈ 1 dB, Feld Hell's weak-signal reach (−6 dB is the edge).
+0. ★ **test-web-textmodes is 5/10** (section 19): the MFSK16 receiver's join at some start offsets (pre-existing, now
+   exposed). Reproduce offline: `tm_clip` with `VIBE_TM_DUMP`, the loop script in section 19's method (61 offsets, no
+   noise) through `tm_file mfsk auto`; fix without losing decodes; then the web test 10 in a row.
+1. **build-web** before any release (sections 10–12, 15, 16, 19): `vibe_web_page.h` is NOT committed.
+2. **The app** has not run on a simulator or device this run (esbuild syntax checks; the small services type-checked):
+   PAGE's mute and banner, PROTOCOL/RATE rows, the MFSK key's FAMILY/MODE rows, the session rule, Feld Hell.
+3. Real air: FLEX on a phone (US 929–932 MHz or UK 153 MHz paging), Q65 on 23 cm/70 cm/2 m EME, the rest as before.
+4. Questions in section 16–19 / the final report: Q65-15 everywhere or only on 6 m/2 m; the MFSK key's name; FLEX's two
+   mode codes seen in one source only.
+5. Still waiting on Stuart from earlier runs: ACARS → VDL2 → HFDL → RS41 (standard or a capture), BPC, TDF, CHU labels.
 
 Builds used: `~/VibeSDR-builds/decoders2-server` (cmake of this worktree, deps from `~/VibeSDR-v12/vibeserver/mac/deps/
 prefix`). The worktree's `node_modules` is a symlink to `~/VibeSDR-v12/node_modules`, excluded in `.git/info/exclude`
