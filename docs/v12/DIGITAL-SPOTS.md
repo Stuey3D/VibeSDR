@@ -421,7 +421,7 @@ mindful of CPU running that many decoders at once."*
 |---|---|---|---|
 | JTTY | `decoders/digimodes/jtty.h` (our `jtty::Decoder`, slot-less) | 7.090 · 14.090 · 21.090 (PSKReporter: all 128 JTTY reports in the day to 2026-10-26 17:35 were on these, 88 on 20 m) · 28.090 · 50.160 · 144.160 (announced, clear of other modes) | mode `JTTY`, `how` CQ / QSO, the caller's grid when a GRID4 frame follows its CQ in the same message |
 | PSK | `decoders/digimodes/psk.h` (our `psk::Skimmer`, spots only) | 3.580 · 7.040 · 10.142 · 14.070 (PSKReporter: every PSK31 report 14.0700–14.0718) · 18.100 · 21.070 · 24.920 · 28.120 | mode `PSK31` / `PSK63`, `how` CQ / DE / TEST, SNR converted from Es/N0 to 2500 Hz |
-| Q65 (V12, 2026-10-31, wave 2) | `decoders/digimodes/q65.h` (our `q65::LiveDecoder`, clean room — DECODERS-WAVE2.md) | 2 m 144.115 · 144.120 · 144.180 · 70 cm 432.055 · 432.065 · 432.087 (IARU R1 MGM/EME segments where PSKReporter shows Q65); audio 200–4800 Hz | mode `Q65-30A` … `Q65-60D`, the sender's call and own grid, SNR in 2500 Hz |
+| Q65 (V12, 2026-10-31, wave 2) | `decoders/digimodes/q65.h` (our `q65::LiveDecoder`, clean room — DECODERS-WAVE2.md) | 2 m 144.115 · 144.120 · 144.180 · 70 cm 432.065 · 432.087 (IARU R1 MGM/EME segments where PSKReporter shows Q65); audio 200–4800 Hz | mode `Q65-30A` … `Q65-60D`, the sender's call and own grid, SNR in 2500 Hz |
 
 JTTY's announced 1.838, 3.575, 10.140, 18.100 and 24.920 are LEFT OUT: each sits in an FT8 or FT4 window (3.575 and 10.140
 are FT4's dials, 18.100 FT8's), nobody was heard there, and the costliest engine would be held open by FT8 energy all

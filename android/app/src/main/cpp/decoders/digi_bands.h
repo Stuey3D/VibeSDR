@@ -32,8 +32,9 @@
 //     Q65 reports for the 24 h to 2026-10-31 01:57 UTC (all receivers): 1296.056–1296.121, 432.058–432.092, 144.181 MHz
 //     and nothing on HF, 6 m or 4 m. The Q65 window is 200–4800 Hz above the dial (EME stations spread across their
 //     segment), so: 2 m 144.115 and 144.120 (the plan's 144.110–144.160 "EME MGM"; random digital EME centres on
-//     144.125) and 144.180 (the reports; 144.150–144.400 is SSB/telegraphy/MGM); 70 cm 432.055, 432.065 and 432.087
-//     (the plan's 432.025–432.100 telegraphy/MGM, which holds every report). LEFT OUT: 6 m (50.310–50.320 is the plan's
+//     144.125) and 144.180 (the reports; 144.150–144.400 is SSB/telegraphy/MGM); 70 cm 432.065 and 432.087 (the plan's
+//     432.025–432.100 telegraphy/MGM, which holds every report; a third at 432.055 made the cluster too wide for a
+//     narrow capture to hold beside FT8's 432.174 — test-band-slice). LEFT OUT: 6 m (50.310–50.320 is the plan's
 //     EME centre of activity, but it is FT8's 50.313 and nobody was heard on Q65 there) and 23 cm (where most of the
 //     reports are: the Band list stops at 70 cm — Stuart to decide whether 23 cm joins it).
 //   • 60 m WSPR is 5.3647 (inside the WRC-15 allocation 5351.5–5366.5 kHz that every region shares), not the older
@@ -103,6 +104,8 @@ inline const std::vector<Dial>& publishedDials() {
         {"WSPR", "60m",   5364700}, {"WSPR", "40m",  7038600}, {"WSPR", "30m", 10138700}, {"WSPR", "20m", 14095600},
         {"WSPR", "17m",  18104600}, {"WSPR", "15m", 21094600}, {"WSPR", "12m", 24924600}, {"WSPR", "10m", 28124600},
         {"WSPR", "4m",   70091000}, {"WSPR", "2m", 144490500},
+        // FST4 (V12 — PSKReporter's FST4 receivers 2026-10-31: 475.1–475.5 and 136.5 kHz; WSJT-X's LF/MF dials)
+        {"FST4", "630m", 474200}, {"FST4", "2200m", 136000},
         // FST4W shares WSPR's sub-bands (the same dials)
         {"FST4W", "2200m", 136000}, {"FST4W", "630m", 474200}, {"FST4W", "160m", 1836600}, {"FST4W", "80m", 3568600},
         {"FST4W", "40m",  7038600}, {"FST4W", "30m", 10138700}, {"FST4W", "20m", 14095600},
@@ -119,7 +122,7 @@ inline const std::vector<Dial>& publishedDials() {
         {"JTTY", "6m",  50160000}, {"JTTY", "2m", 144160000},
         // Q65 (V12 — EME/scatter; see the file note)
         {"Q65", "2m", 144115000}, {"Q65", "2m", 144120000}, {"Q65", "2m", 144180000},
-        {"Q65", "70cm", 432055000}, {"Q65", "70cm", 432065000}, {"Q65", "70cm", 432087000},
+        {"Q65", "70cm", 432065000}, {"Q65", "70cm", 432087000},
         // PSK31/63 (V12 — the PSK31 calling frequencies; 14.070 confirmed)
         {"PSK", "80m",   3580000}, {"PSK", "40m",  7040000}, {"PSK", "30m", 10142000}, {"PSK", "20m", 14070000},
         {"PSK", "17m",  18100000}, {"PSK", "15m", 21070000}, {"PSK", "12m", 24920000}, {"PSK", "10m", 28120000},
@@ -245,7 +248,12 @@ inline Span spanOf(const Band& b, const std::vector<ModeDef>& ms) {
         }
         SubSpan e;
         e.centreHz = std::round((elo + ehi) / 2.0 / 100.0) * 100.0;
-        const double half = std::max(kMinSliceHz / 2.0, std::max(e.centreHz - elo, ehi - e.centreHz) + kSpanGuardHz);
+        /* ★ V12 wave 2 (2026-10-31, Q65's 37 kHz cluster on 70 cm): a tuner reads only the slice's FLAT middle,
+         *  ±DigiTuner::kFlatHalfFrac (0.4325) of its rate, so an extra slice WIDER than the 24 kHz minimum must be sized
+         *  for its extent to fit that, not the whole slice — the dials at a wide cluster's edges were otherwise off it
+         *  (test-band-slice). A slice at the minimum already has the room; those are unchanged. */
+        const double ext = std::max(e.centreHz - elo, ehi - e.centreHz) + kSpanGuardHz;
+        const double half = std::max(kMinSliceHz / 2.0, ext > kMinSliceHz * 0.4325 ? ext / (2.0 * 0.4325) : ext);
         e.loHz = e.centreHz - half; e.hiHz = e.centreHz + half;
         for (size_t k = 0; k < ms.size(); ++k)
             for (size_t i : members) if (iv[i].mode == k) { e.modes.push_back(ms[k].name); break; }
