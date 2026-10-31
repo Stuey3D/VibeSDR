@@ -26,6 +26,18 @@
  *     moving it on every frame. The audio's measured depth is smoothed first (it saw-tooths by a packet as buffers are
  *     queued and played).
  *
+ * ★★★★ BUT A GROWTH IS RAMPED IN, NEVER STEPPED (2026-10-31 — Stuart, Mac, every server type: "a noticeable pause after
+ *     zooming or tuning" / "the spectrum stops too"). A step of the hold stops the PICTURE for the whole step: the clock
+ *     keeps scrolling with repeats, but no NEW frame — and no new spectrum trace, which rides its row — reaches the screen
+ *     until the held ones fall due. Leaving a passthrough the hold went 0 → audio − route in one go: 140-320 ms (up to
+ *     AV_MAX_MS) with no new frame, ~250 ms after the boost ended (SMOOTH_TUNE_TAIL_MS 1000 vs BOOST_TAIL_MS 750) — after
+ *     EVERY tune or zoom. Measured in scripts/test_wf_avsync.ts (freezeIn): 366-433 ms against 50-134 before the hold.
+ *     The web had learned this on 2026-08-10 (waterfall.ts _effectiveHold: "switching straight to a full hold would
+ *     stall the picture for holdMs while it filled — a fresh stutter after every tune") and grows its hold at 15 % of
+ *     real time; the app's port stepped it. Now the same: a growth is at most AV_GROW × the time since the last frame,
+ *     so each frame waits a little longer than the one before (10 fps frames reach the screen ~125 ms apart instead of
+ *     100 for about a second) and nothing ever stops. A SHRINK still steps (discards — never a pause).
+ *
  * ★★★ GET OUT OF THE WAY WHILE THE DIAL MOVES (the web's lesson, Stuart 2026-08-10: "when I tune the RSP everything freezes
  *     completely then resumes when I stop tuning"). A held row is `hold` ms from the screen, so a dial moving faster than
  *     that would never show a fresh row. While a tune or zoom is in hand the hold is ZERO — PASSTHROUGH, rows exactly as
@@ -50,14 +62,22 @@ export const AV_MAX_MS = 500;
 export const AV_DEAD_MS = 8;
 /** The audio depth's smoothing time constant, ms (its samples saw-tooth by a packet, 20–40 ms). */
 export const AV_SMOOTH_MS = 500;
+/** ★ How fast a hold may GROW, ms per ms of real time. The web ramps at 0.15 (waterfall.ts _effectiveHold); the app takes
+ *  0.25, picked in scripts/test_wf_avsync.ts: the picture never stands still longer than at rest (freezeIn, within one
+ *  row) at either, but 0.15 takes ~1.9-2.1 s to come back in step with the sound after a tune and 0.25 ~1.1 s. The cost:
+ *  for that second each frame reaches the screen up to 25 % later than the one before (a 10 fps trace steps every
+ *  ~125 ms instead of 100) — the scroll itself never changes speed (the clock repeats). 0.35 started to add a row. */
+export const AV_GROW = 0.25;
 
 export interface AvSyncState {
   aud: number;     // the audio's playout delay, smoothed (ms; < 0 = unknown)
   audT: number;    // when it was last sampled
   hold: number;    // the hold now, ms
   pass: boolean;   // in a passthrough (a tune or zoom in hand)
+  holdT: number;   // ★ when the hold was last decided (the growth ramp's clock; 0 = never)
+  ramp: boolean;   // ★ a growth is still ramping toward its target
 }
-export const newAvSync = (): AvSyncState => ({ aud: -1, audT: 0, hold: 0, pass: false });
+export const newAvSync = (): AvSyncState => ({ aud: -1, audT: 0, hold: 0, pass: false, holdT: 0, ramp: false });
 
 /** A sample of the audio's playout delay (ms from arrival to the speaker; < 0 = unknown) at `now`. */
 export function avNoteAudio(s: AvSyncState, ms: number, now: number): void {
@@ -69,12 +89,20 @@ export function avNoteAudio(s: AvSyncState, ms: number, now: number): void {
 
 /** What to hold a frame arriving now: the audio's delay − `ownMs` (what the clock's route already takes), ≥ 0,
  *  ≤ AV_MAX_MS, as a STEP (the clock repeats and discards around it); a change under AV_DEAD_MS is let be.
- *  `passthrough` (a tune or zoom in hand): 0. Returns the hold, ms. */
-export function avHold(s: AvSyncState, ownMs: number, passthrough: boolean): number {
+ *  `passthrough` (a tune or zoom in hand): 0. Returns the hold, ms.
+ *  ★ `now` (ms): a GROWTH is ramped — at most AV_GROW × the time since the last call (see the header). Without `now` (the
+ *    old callers, the rule tests) it steps as before. */
+export function avHold(s: AvSyncState, ownMs: number, passthrough: boolean, now?: number): number {
   s.pass = passthrough;
-  if (passthrough) { s.hold = 0; return 0; }
+  const dt = now !== undefined && s.holdT > 0 ? Math.max(0, Math.min(1000, now - s.holdT)) : -1;
+  if (now !== undefined) s.holdT = now;
+  if (passthrough) { s.hold = 0; s.ramp = false; return 0; }
   const want = s.aud >= 0 ? Math.max(0, Math.min(AV_MAX_MS, s.aud - ownMs)) : 0;
-  if (Math.abs(want - s.hold) > AV_DEAD_MS || (want === 0 && s.hold > 0)) s.hold = want;
+  // (a ramp under way runs on to its target — stopping it inside the deadband left the picture up to 8 ms early)
+  if (Math.abs(want - s.hold) > AV_DEAD_MS || (want === 0 && s.hold > 0) || (s.ramp && want > s.hold)) {
+    s.hold = want > s.hold && dt >= 0 ? Math.min(want, s.hold + AV_GROW * dt) : want;
+  }
+  s.ramp = s.hold < want;
   return s.hold;
 }
 

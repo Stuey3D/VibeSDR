@@ -2291,7 +2291,9 @@ function WaterfallView({
       //   view waited for the sound. The hold comes back once it has landed (repeats carry the growth).
       const avPass = now - (lastInteractAt?.current ?? 0) < SMOOTH_TUNE_TAIL_MS || boostOn || easing;
       const holdWas = avSt.current.hold;
-      const hold = avHold(avSt.current, clockOwnMs(rowClock.current.ivl, rowTarget), avPass);
+      // ★★★ `now`: a growth RAMPS in (wfAvSync.ts AV_GROW, 2026-10-31) — stepped, it stopped the picture and the trace for
+      //     the whole step ~250 ms after every tune or zoom ("a noticeable pause", "the spectrum stops too").
+      const hold = avHold(avSt.current, clockOwnMs(rowClock.current.ivl, rowTarget), avPass, now);
       const pAt = clockArrive(rowClock.current, id, t, boost, hold);
       clockStop();
       pumpClock();

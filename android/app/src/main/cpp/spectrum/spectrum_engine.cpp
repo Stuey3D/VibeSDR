@@ -437,7 +437,7 @@ void SpectrumEngine::handleFrame(const Frame& f, double now) {
         //   2026-10-30: "noticable delay when operating the zoom controls"). WaterfallView's avPass, the same rule.
         const bool avPass = now - interactAt_ < 1000 || boostOn || easing;
         const double holdWas = av_.hold;
-        const double hold = vibewf::avHold(av_, vibewf::clockOwnMs(rowClock_.ivl, rowTarget), avPass);
+        const double hold = vibewf::avHold(av_, vibewf::clockOwnMs(rowClock_.ivl, rowTarget), avPass, now);   // ★ a growth ramps (wf_av_sync.h)
         const double pAt = vibewf::clockArrive(rowClock_, id, now, boost, hold);
         runClock(now);
         {

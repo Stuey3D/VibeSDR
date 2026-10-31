@@ -28,7 +28,7 @@
 import { newRowTargetState, type WfScroll } from '../src/assets/wfRowTarget.ts';
 import { clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockRowRate, clockRun, clockSetRate,
          newRowClock } from '../src/assets/wfClock.ts';
-import { AV_DEAD_MS, avHold, avNoteAudio, newAvSync, clockOwnMs } from '../src/assets/wfAvSync.ts';
+import { AV_DEAD_MS, AV_GROW, avHold, avNoteAudio, newAvSync, clockOwnMs } from '../src/assets/wfAvSync.ts';
 import { rowPace, rowRate } from '../src/utils/wfPace.ts';
 
 let fails = 0, passes = 0;
@@ -164,7 +164,7 @@ function appRun(feed: Feed, d: Disp, scroll: WfScroll, hold: boolean, engine: bo
       const rate = clockRateUnderCap(clockRowRate(st, scroll, 1000 / avgFrameMs), 0);
       if (rate <= 0) { push(t, id); pTgt = 0; return; }
       clockSetRate(clk, rate, t);
-      const h = hold ? avHold(av, clockOwnMs(clk.ivl, rate), inHand) : 0;   // (a passthrough is a shrink to 0: clockArrive discards what is held)
+      const h = hold ? avHold(av, clockOwnMs(clk.ivl, rate), inHand, t) : 0;   // (a passthrough is a shrink to 0: clockArrive discards what is held)
       out.holds.push({ t, h });
       clockArrive(clk, id, t, inHand, h);
       pTgt = rate / 1000;
@@ -287,6 +287,11 @@ for (const feed of FEEDS) for (const d of DISPS) for (const scroll of ['default'
   const srep0 = repeatsIn(b, SHRINK, SHRINK + 2000), srep1 = repeatsIn(a, SHRINK, SHRINK + 2000);
   const sbS = stallsBursts(a, d, R, feed.fps, SHRINK, SHRINK + 2500);
   const fz0 = freezeIn(b, PASS_END - 300, PASS_END + 2500), fz1 = freezeIn(a, PASS_END - 300, PASS_END + 2500);
+  // ★★★ THE PAUSE AFTER A TUNE OR ZOOM (2026-10-31): leaving the passthrough the hold RAMPS in (wfAvSync.ts AV_GROW) —
+  //     the newest frame on screen never stands still longer than it does without the hold, beyond one row (a stepped
+  //     hold measured 366-433 ms here against 50-134).
+  if (!native) ok(`${tag}: no pause once a tune lands — the newest frame waits ${fz1.toFixed(0)} ms at most (no hold: ${fz0.toFixed(0)})`,
+                  fz1 <= fz0 + 50);
   if (process.env.WF_AV_FREEZE) console.log(`FREEZE ${tag.padEnd(46)} after the tune lands ${fz0.toFixed(0)} → ${fz1.toFixed(0)} ms (rest ${freezeIn(b, WIN.rest[0], WIN.rest[1]).toFixed(0)} → ${freezeIn(a, WIN.rest[0], WIN.rest[1]).toFixed(0)})`);
   let steep = 0;
   for (let k = 1; k < a.holds.length; k++) {
@@ -351,6 +356,17 @@ for (const [k, S] of Object.entries(sum)) {
   ok('a passthrough holds nothing, at once', h === 0 && s.pass);
   avNoteAudio(s, -1, 3200); h = avHold(s, 80, false);
   ok('an unknown audio delay is no hold (the waterfall as it was)', h === 0);
+  // ★ with `now`: a growth ramps at AV_GROW, a passthrough still drops to 0 at once, a shrink still steps
+  const r = newAvSync(); avNoteAudio(r, 300, 0);
+  avHold(r, 80, true, 1000);
+  const g1 = avHold(r, 80, false, 1100), g2 = avHold(r, 80, false, 1200);
+  ok(`a growth RAMPS (${g1.toFixed(0)}, ${g2.toFixed(0)} after 100 / 200 ms toward 220)`, Math.abs(g1 - 100 * AV_GROW) < 1e-6 && Math.abs(g2 - 200 * AV_GROW) < 1e-6);
+  let gN = g2; for (let t = 1300; t < 4000; t += 100) gN = avHold(r, 80, false, t);
+  ok(`…and reaches its target exactly (${gN})`, gN === 220);
+  avNoteAudio(r, 150, 4000); avNoteAudio(r, 150, 9000);
+  const sh = avHold(r, 80, false, 9000);
+  ok(`a shrink still steps (${sh.toFixed(0)})`, Math.abs(sh - (r.aud - 80)) < 1e-6);
+  ok('a passthrough is still 0 at once', avHold(r, 80, true, 9050) === 0);
   const c = newRowClock(); clockSetRate(c, 30, 0);
   const p0 = clockArrive(c, 1, 0); const p1 = clockArrive(c, 2, 100);
   const c2 = newRowClock(); clockSetRate(c2, 30, 0);
