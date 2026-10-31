@@ -1089,13 +1089,91 @@ struct Decoder::Impl {
                 for (int d = 0; d < 2; ++d) t[ns][d] = toneOfReg((uint32_t)ns | ((uint32_t)d << 9)); } };
         static const Tab tab;
         const auto& toneTab = tab.t;
-        float pm[kStates], npm[kStates];
-        uint8_t dec[kDataSyms][kStates];
+        alignas(16) float pm[kStates], npm[kStates];
+        alignas(16) uint8_t dec[kDataSyms][kStates];
         std::fill(pm, pm + kStates, 0.0f);
+        /* ★★ THE BUTTERFLY, FOUR AT A TIME (2026-10-31, the decoder SIMD audit). This add-compare-select was over half of
+         *  JTTY on the Pi 2 (qemu-arm count over Stuart's 600 s 20 m recording), all scalar. Predecessors j and j+256 feed
+         *  successors 2j and 2j+1, so four j at a time read pm[j..j+3] and pm[j+256..j+259] as two vectors and write
+         *  eight successors interleaved. The branch metrics are a lookup of one of four tone metrics per state and bit:
+         *  NEON does it with vtbl (byte indices built once), SSE2 gathers the sixteen scalars. The same adds, the same
+         *  strict compare, the same select, the same max — every metric and decision bit-identical to the scalar loop. */
+        static_assert(kStates == 512, "the butterfly below pairs j with j + 256");
+#if VIBE_NEON || VIBE_SSE
+        // the tone of each successor's two branches, grouped as the vector loop reads them: [group j/4][E0 E1 O0 O1][lane],
+        // j = 0 … 255 (E = successor 2j, O = 2j + 1; 0/1 = the branch from j / from j + 256)
+        struct BTab { uint8_t tone[64][4][4]; BTab(const uint8_t (&tt)[kStates][2]) {
+            for (int g = 0; g < 64; ++g) for (int l = 0; l < 4; ++l) {
+                const int j = 4 * g + l;
+                tone[g][0][l] = tt[2 * j][0];     tone[g][1][l] = tt[2 * j][1];
+                tone[g][2][l] = tt[2 * j + 1][0]; tone[g][3][l] = tt[2 * j + 1][1];
+            } } };
+        static const BTab btab(toneTab);
+#endif
+#if VIBE_NEON
+        // byte indices into the 16-byte table of the four metrics: tone k → bytes 4k … 4k+3
+        struct NTab { uint8_t idx[64][4][16]; NTab(const BTab& b) {
+            for (int g = 0; g < 64; ++g) for (int a = 0; a < 4; ++a) for (int l = 0; l < 4; ++l)
+                for (int k = 0; k < 4; ++k) idx[g][a][4 * l + k] = (uint8_t)(4 * b.tone[g][a][l] + k); } };
+        static const NTab ntab(btab);
+#endif
         for (int pass = 0; pass < 2; ++pass) {
             for (int t = 0; t < kDataSyms; ++t) {
                 const float* m = met[t];
                 float mx = -1e30f;
+#if VIBE_NEON
+                {
+                    const uint8x16_t mb = vreinterpretq_u8_f32(vld1q_f32(m));
+                    uint8x8x2_t tb; tb.val[0] = vget_low_u8(mb); tb.val[1] = vget_high_u8(mb);
+                    auto bm = [&](const uint8_t* ix) {
+                        return vreinterpretq_f32_u8(vcombine_u8(vtbl2_u8(tb, vld1_u8(ix)), vtbl2_u8(tb, vld1_u8(ix + 8))));
+                    };
+                    float32x4_t vmx = vdupq_n_f32(-1e30f);
+                    const uint8x8_t one8 = vdup_n_u8(1);
+                    for (int g = 0; g < 64; ++g) {   // j = 0 … 255: predecessors j and j + 256
+                        const int j = 4 * g;
+                        const float32x4_t A = vld1q_f32(pm + j), B = vld1q_f32(pm + j + 256);
+                        const float32x4_t e0 = vaddq_f32(A, bm(ntab.idx[g][0])), e1 = vaddq_f32(B, bm(ntab.idx[g][1]));
+                        const float32x4_t o0 = vaddq_f32(A, bm(ntab.idx[g][2])), o1 = vaddq_f32(B, bm(ntab.idx[g][3]));
+                        const uint32x4_t ge = vcgtq_f32(e1, e0), go = vcgtq_f32(o1, o0);
+                        float32x4x2_t r; r.val[0] = vbslq_f32(ge, e1, e0); r.val[1] = vbslq_f32(go, o1, o0);
+                        vst2q_f32(npm + 2 * j, r);
+                        vmx = vmaxq_f32(vmx, vmaxq_f32(r.val[0], r.val[1]));
+                        const uint16x4x2_t z = vzip_u16(vmovn_u32(ge), vmovn_u32(go));
+                        vst1_u8(&dec[t][2 * j], vand_u8(vmovn_u16(vcombine_u16(z.val[0], z.val[1])), one8));
+                    }
+                    float32x2_t h = vmax_f32(vget_low_f32(vmx), vget_high_f32(vmx));
+                    h = vpmax_f32(h, h);
+                    mx = vget_lane_f32(h, 0);
+                    const float32x4_t vm = vdupq_n_f32(mx);
+                    for (int s = 0; s < kStates; s += 4) vst1q_f32(pm + s, vsubq_f32(vld1q_f32(npm + s), vm));
+                }
+#elif VIBE_SSE
+                {
+                    __m128 vmx = _mm_set1_ps(-1e30f);
+                    alignas(16) float g4[4][4];
+                    for (int g = 0; g < 64; ++g) {   // j = 0 … 255: predecessors j and j + 256
+                        const int j = 4 * g;
+                        for (int a = 0; a < 4; ++a) for (int l = 0; l < 4; ++l) g4[a][l] = m[btab.tone[g][a][l]];
+                        const __m128 A = _mm_load_ps(pm + j), B = _mm_load_ps(pm + j + 256);
+                        const __m128 e0 = _mm_add_ps(A, _mm_load_ps(g4[0])), e1 = _mm_add_ps(B, _mm_load_ps(g4[1]));
+                        const __m128 o0 = _mm_add_ps(A, _mm_load_ps(g4[2])), o1 = _mm_add_ps(B, _mm_load_ps(g4[3]));
+                        const __m128 ge = _mm_cmpgt_ps(e1, e0), go = _mm_cmpgt_ps(o1, o0);
+                        const __m128 re = _mm_or_ps(_mm_and_ps(ge, e1), _mm_andnot_ps(ge, e0));
+                        const __m128 ro = _mm_or_ps(_mm_and_ps(go, o1), _mm_andnot_ps(go, o0));
+                        _mm_store_ps(npm + 2 * j, _mm_unpacklo_ps(re, ro));
+                        _mm_store_ps(npm + 2 * j + 4, _mm_unpackhi_ps(re, ro));
+                        vmx = _mm_max_ps(vmx, _mm_max_ps(re, ro));
+                        const int me = _mm_movemask_ps(ge), mo = _mm_movemask_ps(go);
+                        uint8_t* d = &dec[t][2 * j];
+                        for (int l = 0; l < 4; ++l) { d[2 * l] = (uint8_t)(me >> l & 1); d[2 * l + 1] = (uint8_t)(mo >> l & 1); }
+                    }
+                    alignas(16) float l4[4]; _mm_store_ps(l4, vmx);
+                    mx = std::max(std::max(l4[0], l4[1]), std::max(l4[2], l4[3]));
+                    const __m128 vm = _mm_set1_ps(mx);
+                    for (int s = 0; s < kStates; s += 4) _mm_store_ps(pm + s, _mm_sub_ps(_mm_load_ps(npm + s), vm));
+                }
+#else
                 for (int ns = 0; ns < kStates; ++ns) {
                     const int p0 = ns >> 1, p1 = p0 | 256;
                     const float m0 = pm[p0] + m[toneTab[ns][0]], m1 = pm[p1] + m[toneTab[ns][1]];
@@ -1104,6 +1182,7 @@ struct Decoder::Impl {
                     if (npm[ns] > mx) mx = npm[ns];
                 }
                 for (int s = 0; s < kStates; ++s) pm[s] = npm[s] - mx;
+#endif
             }
         }
         struct P { float m; uint64_t bits; };
