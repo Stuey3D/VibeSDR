@@ -107,14 +107,16 @@ function MoreItem({ onPress, onReveal, children }: {
  * or on/off group (lit = selected; the legend lights in the controls colour too) — never on a plain
  * action (MAP, FILES, the server maps, CLOSE). Default chassis: never drawn — every site keeps today's key.
  */
-function MetalKey({ navRef, focused, label, active = false, pip = false, onPress, fontSize = 12, style, iconId, stack, legendStyle }: {
+function MetalKey({ navRef, focused, label, active = false, pip = false, onPress, fontSize = 12, style, iconId, stack, legendStyle, a11y }: {
   navRef: React.MutableRefObject<View | null>; focused: boolean; label: string; active?: boolean; pip?: boolean;
+  /** ★ V12 the spoken name where the legend is an abbreviation (SAM-U → "Synchronous AM, upper sideband"). */
+  a11y?: string;
   onPress?: () => void; fontSize?: number; style?: object; legendStyle?: TextStyle;
   /** ★ V12: the mode's category glyph before the legend (utils/modeIcons) — above it when `stack` (narrowest phones). */
   iconId?: string; stack?: boolean;
 }) {
   return (
-    <PopupKey ref={navRef as any} label={label} active={active} pip={pip} onPress={onPress} focused={focused}
+    <PopupKey ref={navRef as any} label={label} active={active} pip={pip} onPress={onPress} focused={focused} accessibilityLabel={a11y}
       icon={iconId ? modeKeyIcon(iconId, stack ? 12 : 13) : undefined} iconStack={stack} iconGap={stack ? undefined : 5}
       height={36} fontSize={fontSize} legendStyle={legendStyle} style={[{ flex: 1, minWidth: '22%' }, style]} />
   );
@@ -150,7 +152,8 @@ function fmtHz(hz: number) {
 // Common analog/voice demodulators shown as buttons; everything else the server
 // offers (digital, decoders, sondes…) goes into the in-popup dropdown.
 // ★ V12 'drm' is a demodulator beside AM (a VibeServer's DRM receiver; OpenWebRX's own DRM too) — a main key, not a decoder
-const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'drm', 'sam', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
+// ★ V12 the synchronous AM family (sau … amst) — VibeServer's own, offered only where its server lists them (amSync.ts)
+const COMMON_IDS = ['nfm', 'fm', 'wfm', 'am', 'drm', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst', 'lsb', 'usb', 'cw', 'cwu', 'cwl', 'data'];
 const DEC_COL = '#52dc64';   // active-decoder accent (matches VTS live-data green)
 
 // ── Decoder-settings helpers (moved with the decoders from MenuSheet §4.3) ──────
@@ -1309,7 +1312,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   // ★★ Keyed on the CLASS, not the mode, so it flips only when crossing between symmetric and
   // single-sideband. Toggling it by hand within a mode therefore STICKS — switching AM→SAM will not
   // undo your choice, and we are not fighting the user every render.
-  const symmetric = ['am', 'sam', 'dsb', 'fm', 'nfm', 'wfm'].includes(String(current).toLowerCase());
+  const symmetric = ['am', 'sam', 'sau', 'sal', 'amst', 'dsb', 'fm', 'nfm', 'wfm'].includes(String(current).toLowerCase());
   const [bwSync, setBwSync] = useState(symmetric);
   useEffect(() => { setBwSync(symmetric); }, [symmetric]);
   const bwStep = bwEdgeMax > 20000 ? 1000 : 50;
@@ -1562,7 +1565,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
           {common.map(m => (
             <NavItem key={m.id} onPress={() => pick(m.id)}>{(navFocused, navRef) => pt.metal ? (
               <MetalKey navRef={navRef} focused={navFocused} label={m.label.toUpperCase()} active={m.id === current} pip
-                onPress={() => pick(m.id)} fontSize={13} />
+                onPress={() => pick(m.id)} fontSize={13} a11y={(m as { a11y?: string }).a11y} />
             ) : (
             <TouchableOpacity
               ref={navRef as any}
@@ -1573,6 +1576,8 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 },
               ]}
               onPress={() => pick(m.id)}
+              accessibilityRole="button" accessibilityState={{ selected: m.id === current }}
+              accessibilityLabel={(m as { a11y?: string }).a11y ?? m.label}
             >
               <Text style={[
                 st.btnText,

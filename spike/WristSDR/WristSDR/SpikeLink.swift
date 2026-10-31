@@ -464,7 +464,7 @@ final class SpikeLink: ObservableObject {
   /// The radio's own mode for this watch's labels ("USB-D"); the client-vocabulary `mode` everywhere else.
   var modeLabel: String {
     if let ic = icom, !ic.modeNow.isEmpty { return IcomRadio.modeLabel(ic.modeNow) }
-    return mode.uppercased()
+    return ControlMenu.demodName(mode)   // ★ V12 SAM-U, ECSS-L, AM-ST … when another listener put the dial there
   }
   func setIcomMode(_ radioMode: String) { noteActivity(); vibe?.setIcomMode(radioMode) }
   func setIcomFil(_ fil: Int) { noteActivity(); vibe?.setIcomFil(fil) }

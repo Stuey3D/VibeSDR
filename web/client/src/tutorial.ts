@@ -84,7 +84,10 @@ const STEPS: Step[] = [
     ids: ['mMode'],
     title: 'The demodulator button',
     body: 'The demodulator button [[@mMode]] opens the audio modes and the decoders — how you listen, '
-        + 'plus things like RTTY and weather fax. In DECODERS… there, the modes that tune the radio themselves and open '
+        + 'plus things like RTTY and weather fax. Where this server has them, synchronous AM sits beside AM: SAM (locked to '
+        + 'the carrier, so selective fading does not distort), SAM-U and SAM-L (one sideband), ECSS-U and ECSS-L (the same '
+        + 'lock with an SSB-style filter) and AM-ST (AM Stereo, C-QUAM compatible); AM AUTO BW for them is in the audio menu. '
+        + 'In DECODERS… there, the modes that tune the radio themselves and open '
         + 'their own view (ADS-B, AIS, DAB, ISM, NDB, DIGI BAND) come first, under TUNES THE RADIO ITSELF — they '
         + 'are in this menu too. The rest sit in HF and VHF tabs, opening on the band you are tuned to, grouped by use '
         + '— Aviation, Maritime, Amateur, Utility or Broadcast — each with an icon. With the VFO FREE, a small red DC Spike label marks the radio\u2019s DC '

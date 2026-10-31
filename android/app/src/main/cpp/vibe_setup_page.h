@@ -2636,6 +2636,10 @@ function bandLabel(entry) {
 const BLOCKABLE = [
   { id: "wfm",    label: "WFM"      }, { id: "nfm",  label: "NFM"    },
   { id: "am",     label: "AM"       }, { id: "usb",  label: "USB"    },
+  /* ★ V12 synchronous AM (docs/v12/AM-SYNC.md) — each its own switch, as every demodulator is. */
+  { id: "sam",    label: "SAM"      }, { id: "sau",  label: "SAM-U"  },
+  { id: "sal",    label: "SAM-L"    }, { id: "ecssu", label: "ECSS-U" },
+  { id: "ecssl",  label: "ECSS-L"   }, { id: "amst", label: "AM Stereo (C-QUAM compatible)" },
   { id: "lsb",    label: "LSB"      }, { id: "cwu",  label: "CW-U"   },
   { id: "cwl",    label: "CW-L"     },
   { id: "dab",    label: "DAB"      }, { id: "rds",  label: "Adv RDS" },

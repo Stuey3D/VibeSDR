@@ -20,6 +20,7 @@ import { openCwGuide } from './cwGuide';
 import { QRZ_HOME, QRZ_SIGN_IN_NOTE } from '../../../src/utils/cwFormat';
 import { DAB_SEARCHING, type DabQuality } from '../../../src/utils/dabQuality';
 import { setModeLabel } from './modeIconDom';   // ★ V12 mode icons
+import { modeLegend, isAmSync, AM_SYNC_NAME } from '../../../src/services/amSync';
 
 /** ★★ V12 beta25 — the DC spike, explained for listeners (the app's ModeSelector carries the same words). */
 export const DC_SPIKE_EXPLAINED =
@@ -303,7 +304,8 @@ export function initMobileControls(deps: MobileDeps) {
     const cur = deps.mode().toLowerCase();
     for (const m of deps.modes()) {
       const b = document.createElement('button');
-      b.textContent = m.toUpperCase();
+      b.textContent = modeLegend(m);   // ★ V12: SAM-U, ECSS-L, AM-ST … (amSync.ts); everything else upper-cased as before
+      if (isAmSync(m)) { b.title = AM_SYNC_NAME[m]; b.setAttribute('aria-label', AM_SYNC_NAME[m]); }
       b.className = 'mModeOpt' + (m.toLowerCase() === cur ? ' on' : '');
       b.onclick = () => { deps.setMode(m); close(); refresh(); };
       grid.appendChild(b);
@@ -550,7 +552,7 @@ export function initMobileControls(deps: MobileDeps) {
     const chEl = document.getElementById('mChan');
     // ★ Write-on-change (4 Hz poll; the value almost never moves).
     if (chEl) { const h = !ft?.chan; if (chEl.hidden !== h) chEl.hidden = h; put(chEl, ft?.chan ?? ''); }
-    put($('mMode'), deps.mode().toUpperCase());
+    put($('mMode'), modeLegend(deps.mode()));
     put($('mStep'), deps.stepLabel());
     // ★ The stereo light, mute, LOCK/FREE and the recorder are NOT polled here: main.ts has ONE
     //   writer for each (syncStereoLight, setMuted, the lock button, initRecorder/updateRecTime)

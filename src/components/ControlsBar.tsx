@@ -1287,7 +1287,7 @@ function useModeReading(bus: MeterBus | undefined, snrText: string | undefined, 
 /** The mode label (+ stereo rings) over the reading / breathing SQL — the mode box's contents. */
 /** ★ Room for the stereo rings: whenever they are lit, and always in WFM (where they come and go). */
 function stereoSlot(modeLabel: string, fmStereo: boolean | undefined): boolean {
-  return !!fmStereo || /^WFM\b/i.test(modeLabel);
+  return !!fmStereo || /^(WFM|AM-ST)\b/i.test(modeLabel);   // ★ V12 AM stereo: the same rings, lit by its 25 Hz pilot
 }
 
 /** Text → 14-segment cells, one string per cell ('' = dark): displayText's toSegCells, the VTS strip's own rules

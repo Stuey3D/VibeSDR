@@ -822,6 +822,9 @@ struct ModeParams {
     double ifRate;
     double bandwidth;
     int channels;
+    /** ★★ V12 the AM family's exact demodulator. Its kind stays AM, so every AM rule here (the level trim, the
+     *  carrier-centred measurement, the DRM path) still applies; only the detector differs. */
+    vibedsp::RxPipeline::Mode amMode = vibedsp::RxPipeline::Mode::AM;
 };
 // Pick the FFT size for a given sample rate to hold ~constant Hz/bin so detail
 // stays uniform and scales with bandwidth. ~75 Hz/bin → fine enough that
@@ -879,7 +882,17 @@ int fftSizeForRate(double rate) {
 ModeParams paramsFor(const std::string& mode) {
     if (mode == "usb")            return {ModeParams::SSB_USB, 24000, 2700, 1};
     if (mode == "lsb")            return {ModeParams::SSB_LSB, 24000, 2700, 1};
-    if (mode == "am" || mode == "sam") return {ModeParams::AM, 15000, 10000, 1};
+    if (mode == "am")             return {ModeParams::AM, 15000, 10000, 1};
+    /* ★★ V12 SYNCHRONOUS AM (vibedsp SyncAm, docs/v12/AM-SYNC.md). "sam" used to be accepted and played as plain AM;
+     *  it is now the real thing. SAM-U/L and AM stereo take AM's width (both sides); ECSS takes an SSB-shaped one —
+     *  the sideband's own width, 4.5 kHz by default. AM stereo is two channels. */
+    { using RM = vibedsp::RxPipeline::Mode;
+      if (mode == "sam")   return {ModeParams::AM, 15000, 10000, 1, RM::SAM};
+      if (mode == "sau")   return {ModeParams::AM, 15000, 10000, 1, RM::SAM_U};
+      if (mode == "sal")   return {ModeParams::AM, 15000, 10000, 1, RM::SAM_L};
+      if (mode == "ecssu") return {ModeParams::AM, 15000,  4500, 1, RM::ECSS_U};
+      if (mode == "ecssl") return {ModeParams::AM, 15000,  4500, 1, RM::ECSS_L};
+      if (mode == "amst")  return {ModeParams::AM, 15000, 10000, 2, RM::AM_STEREO}; }
     /* ★★ V12 DRM (vibe_drm_listener.h): an AM-shaped channel whose COMPLEX baseband goes to the DRM receiver; the AM
      *  detector's own audio is discarded and the decoded programme takes its place. 10 kHz = spectrum occupancy 3. */
     if (mode == "drm")            return {ModeParams::AM, 15000, 10000, 1};
@@ -893,6 +906,11 @@ ModeParams paramsFor(const std::string& mode) {
 }
 
 // Map the shim's mode kind onto the V5 engine's demod mode.
+vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k);
+/** ★★ V12: the mode's own demodulator — the AM family's exact one where it has one. Use this, not the Kind form. */
+vibedsp::RxPipeline::Mode rxModeFor(const ModeParams& mp) {
+    return mp.kind == ModeParams::AM ? mp.amMode : rxModeFor(mp.kind);
+}
 vibedsp::RxPipeline::Mode rxModeFor(ModeParams::Kind k) {
     using M = vibedsp::RxPipeline::Mode;
     switch (k) {
@@ -1592,7 +1610,8 @@ struct LogoLookupSlot {
  *  to every client. Every path that ACCEPTS a mode asks vsModeRefused (below), which is this plus the owner's list. */
 static bool vsModeKnown(const std::string& m) {
     static const char* const kModes[] = { "usb", "lsb", "am", "sam", "cw", "cwu", "cwl",
-                                          "fm", "nfm", "wfm", "fmdx", "dab", "drm" };
+                                          "fm", "nfm", "wfm", "fmdx", "dab", "drm",
+                                          "sau", "sal", "ecssu", "ecssl", "amst" };   // ★ V12 AM sync
     for (const char* k : kModes) if (m == k) return true;
     return false;
 }
@@ -8524,6 +8543,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     uint64_t              watchOrder_ = 0;
 
     struct ClientDsp {
+        std::string lastAmSync;            // ★ V12 the last amsync state this listener was sent (sendAmSync)
         std::shared_ptr<IqOut> iq;              // ★ raw IQ out, while the listener has it on
         /** Whose channel this is. ★★ May be CLOSED while the channel lives on: a pocketed app keeps
          *  only its audio socket, and the channel survives on that (see "THE CHANNEL OUTLIVES ITS
@@ -9475,7 +9495,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  The pipeline clamps again in setTune; doing it here too keeps chanBinsFor() honest. */
         { const double cap = g_vsMaxBandwidth.load();
           if (g_serveOnLan.load() && cap > 0 && bw > cap) bw = cap; }
-        bw = vibedsp::RxPipeline::clampBwHz(rxModeFor(mp.kind), bw);
+        bw = vibedsp::RxPipeline::clampBwHz(rxModeFor(mp), bw);
         // ★★★ THE CHANNEL IS SIZED BY THE DEMODULATOR, AND BY NOTHING ELSE.
         //     It used to be sized by max(audio, view) so one channel could serve both. That is
         //     tidy and it is wrong: changing the ZOOM then changed the channel WIDTH, which
@@ -9536,6 +9556,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ And the four FM treatments, for exactly the reason above. Adding a per-listener
             //   control without adding it here is how it comes to look like it is working.
             c->rx->setWeakSignalProc(c->wspOn.load());
+            c->rx->setAmAutoBandwidth(g_autoBwOn.load());   // ★ V12 AM auto bandwidth follows the one AUTO BW switch
             c->rx->setIms(c->imsOn.load());
             c->rx->setCeq(c->ceqOn.load());
             c->rx->setNoiseBlanker(c->nbOn.load());
@@ -9567,7 +9588,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         c->drmOn.store(c->mode == "drm");
         // ★ VFO B allowance may have changed: DRM, WFM, or a dial into / out of the FM broadcast band (watchMaxFor)
         watchAllowDirty_.store(true, std::memory_order_relaxed);
-        c->rx->setTune(resid, rxModeFor(mp.kind), bw);
+        c->rx->setTune(resid, rxModeFor(mp), bw);
         // ★★ ITS NAME IN ITS OWN LOG LINES ("[pilot] …") — this listener and this dial, fixed here where both change.
         { char lb[96]; snprintf(lb, sizeof lb, "listener %.8s's own channel, %.4f MHz %s", c->session.c_str(), c->vfoHz / 1e6, c->mode.c_str());
           c->rx->setLogLabel([l = std::string(lb)] { return l; }); }
@@ -16517,7 +16538,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // pitch is a future engine refinement.
         demodOffset = (mp.kind == ModeParams::CW) ? -mp.bandwidth * 0.5 : 0.0;
 
-        rxMode = rxModeFor(mp.kind);
+        rxMode = rxModeFor(mp);
         // Clamp to what the IQ can actually carry. Most public SpyServers cap the
         // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
         // can exceed the whole capture — WFM's 200 kHz on a 12 kS/s stream. Asking
@@ -16676,9 +16697,33 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *     as the audio fan-out and the config broadcast — one demod, one decode, N sends.
      *  ★ The per-client path is untouched: there each listener has its own decoder AND its own
      *    change-detect, so the loop is right there. */
+    /** ★★ V12 THE AM FAMILY'S STATE, once a second while a listener is in it (docs/v12/AM-SYNC.md):
+     *  {"type":"amsync","lock":bool,"off":Hz,"q":0-1,"lo":Hz,"hi":Hz,"auto":bool,"cut":bool,"pilot":bool,"notch":Hz}
+     *  · lock/off — the carrier PLL (the carrier's offset from the dial, to a tenth of a hertz: a DX tool on its own).
+     *  · lo/hi — the audio edges AUTO BW has APPLIED to each sideband (0 = that side is not reproduced), so a client
+     *    can draw the applied width inside the listener's; auto = the switch, cut = narrower than the listener asked.
+     *  · pilot — AM stereo's 25 Hz pilot (the STEREO light rides the existing rds message as for FM).
+     *  ADDITIVE: an older client ignores the type. Sent only on a change of what a client would draw. */
+    void sendAmSync(const std::shared_ptr<net::Socket>& sock) {
+        auto c = dspFor(sock);
+        vibedsp::RxPipeline* P = c ? c->rx.get() : &rx;
+        if (!P || !P->amSyncActive()) { if (c) c->lastAmSync.clear(); else lastAmSync_.clear(); return; }
+        const auto st = P->amSyncStatus();
+        char buf[320];
+        snprintf(buf, sizeof buf, "{\"type\":\"amsync\",\"lock\":%s,\"off\":%.1f,\"q\":%.2f,\"lo\":%.0f,\"hi\":%.0f,"
+                 "\"auto\":%s,\"cut\":%s,\"pilot\":%s,\"notch\":%.0f}",
+                 st.locked ? "true" : "false", st.locked ? st.offsetHz : 0.0f, st.lockQ, st.edgeLoHz, st.edgeHiHz,
+                 P->amAutoBandwidth() ? "true" : "false", st.autoCut ? "true" : "false", st.pilot ? "true" : "false", st.notchHz);
+        std::string& last = c ? c->lastAmSync : lastAmSync_;
+        if (last == buf) return;
+        last = buf;
+        sendText(sock, buf);
+    }
+    std::string lastAmSync_;
     void sendFmMetaAll() {
         auto peers = allSpecPeers();
         if (peers.empty()) return;
+        for (auto& pr : peers) if (pr.sock && pr.sock->isOpen()) sendAmSync(pr.sock);
         if (perClientDsp()) { for (auto& p : peers) sendFmMeta(p.sock); return; }
         std::string sent;
         if (!sendFmMeta(peers[0].sock, &sent) || sent.empty()) return;
@@ -16724,7 +16769,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  last FM station's answer for as long as DAB played — "the stereo icon from WFM also is
          *  stuck when in DAB mode even when on Mono stations" (Stuart, 2026-10-01). In DAB the
          *  light is the SERVICE's own, sent as "stereo" in the `dab` state (vibe_dab_stereo.h). */
-        const bool st = wfm && !g_dabMode.load(std::memory_order_relaxed) && S.stereoDetected.load();
+        const bool amst = c ? (c->mode == "amst") : (mode == "amst");   // ★ V12 AM stereo: its 25 Hz pilot
+        const bool st = (wfm && !g_dabMode.load(std::memory_order_relaxed) && S.stereoDetected.load())
+                        || (amst && S.stereoDetected.load());
         // Only send when something actually CHANGED — re-sending identical RDS each
         // second re-triggers the client's notification marquee (text "repopulates"
         // and flickers). Change-detect ps/rt/pi/ecc/stereo and skip otherwise.
@@ -20027,6 +20074,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool on = jsonOn(msg);
             g_autoBwOn.store(on, std::memory_order_relaxed);
             LOGI("auto bandwidth: %s", on ? "on" : "off");
+            /* ★★ V12 AND THE AM FAMILY'S — the same switch (one AUTO BW), applied to every pipeline: AM auto bandwidth
+             *  lives inside each pipeline (SyncAm), so on a per-listener receiver each listener's own is set too. */
+            rx.setAmAutoBandwidth(on);
+            { std::lock_guard<std::mutex> lk2(clientMtx);
+              for (auto& kv : clientDsp) if (kv.second && kv.second->rx) kv.second->rx->setAmAutoBandwidth(on); }
             if (!on) g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
             LocalSdrShim::instance().broadcastHwInfo();
             return;
@@ -27327,7 +27379,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         const auto mp = paramsFor(wd.mode);
         if (!(wd.bwHz > 0)) wd.bwHz = mp.bandwidth;
         { const double cap = g_vsMaxBandwidth.load(); if (g_serveOnLan.load() && cap > 0 && wd.bwHz > cap) wd.bwHz = cap; }
-        wd.rxMode = rxModeFor(mp.kind);
+        wd.rxMode = rxModeFor(mp);
         wd.bwHz = vibedsp::RxPipeline::clampBwHz(wd.rxMode, wd.bwHz);
         // ★★★ Round 3: no VFO B on the FM broadcast band (watchFmBroadcast) — B may not be tuned into it either.
         if (wd.hz >= kFmBandLoHz && wd.hz <= kFmBandHiHz) {
@@ -27578,7 +27630,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             ch->fifo().pop(buf.data(), (size_t)frames);
             // ★ The SHARED path trims AM by 6 dB (audioGain, "AM is hotter"); a watch channel mixed beside it takes the
             //   same trim, or VFO B would sit 6 dB above VFO A. A listener's own channel has no trim, so neither does B there.
-            if (sharedTrim && ch->wanted().rxMode == vibewatch::Mode::AM) for (auto& v : buf) v *= 0.5f;
+            if (sharedTrim && vibedsp::RxPipeline::isAmFamily(ch->wanted().rxMode)) for (auto& v : buf) v *= 0.5f;   // ★ V12: the whole AM family, as audioGain
             vibewatch::PanMixer::Src s;
             s.key = ch->id(); s.hz = ch->wanted().hz; s.present = present;
             s.gateOpen = ch->open() && !ch->parked(); s.muted = present && ch->muted(); s.pcm = buf.data();
@@ -35069,12 +35121,17 @@ static std::string vsTunableJson() {
      *  ★ `rdsx` is its own flag because it is its own badge: an owner who switches Advanced RDS
      *    off to save CPU still serves basic RDS, so the card must not read "no RDS". */
     {
-        static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
+        /* ★★ V12 the synchronous AM family (sam … amst) is listed: a client draws those keys ONLY where this list has
+         *  them, so an older VibeServer (which played "sam" as plain AM) never shows them. */
+        static const char* kOffer[] = { "wfm", "nfm", "am", "sam", "sau", "sal", "ecssu", "ecssl", "amst",
+                                        "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
                                         "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "jtty", "drm" };
         std::string m = "[";
         bool first = true;
         for (const char* id : kOffer) {
             const std::string k = id;
+            // ★ an Icom demodulates in the radio: our synchronous AM family does not exist there (AGENTS.md)
+            if ((k == "sam" || k == "sau" || k == "sal" || k == "ecssu" || k == "ecssl" || k == "amst") && g_icomOn.load()) continue;
             if (k == "dab") { if (!vsDabCapable()) continue; }
             else if (k == "adsb") { if (!vsAdsbWhyNot().empty()) continue; }
             else if (k == "ism") { if (!vsIsmAnyBand() || !vsIsmWhyNot().empty()) continue; }

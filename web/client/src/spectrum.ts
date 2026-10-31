@@ -35,12 +35,16 @@ import { parseIcomStatus, icomControlMsg, nearestSpanIndex, spanStep,
          type IcomStatus, type IcomRadio, type IcomControlFields } from '../../../src/services/icomRadio';
 
 import type { DrmState } from './drm';
+import { AM_SYNC_PASSBAND, AM_SYNC_MAX_BW, parseAmSync, type AmSyncState } from '../../../src/services/amSync';
 import type { WholeKind } from '../../../src/services/wholeModeResume';   // ★ V12: coming back to a whole-radio mode
-export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm';
+// ★ V12 synchronous AM: sau / sal / ecssu / ecssl / amst (src/services/amSync.ts) — offered only where the server lists them
+export type SDRMode = 'usb' | 'lsb' | 'am' | 'sam' | 'fm' | 'nfm' | 'cwu' | 'cwl' | 'wfm' | 'drm'
+                    | 'sau' | 'sal' | 'ecssu' | 'ecssl' | 'amst';
 
 /** The server applies these on every mode change and never reports bandwidth
  *  back, so the client mirrors the table to stay in sync. */
 export const MODE_BANDWIDTHS: Record<SDRMode, [number, number]> = {
+  ...AM_SYNC_PASSBAND,   // ★ V12 synchronous AM (amSync.ts): AM-shaped ±5 kHz, ECSS one-sided like SSB
   usb: [50, 2700],     lsb: [-2700, -50],
   am:  [-5000, 5000],  sam: [-5000, 5000],
   cwu: [-200, 200],    cwl: [-200, 200],
@@ -61,6 +65,7 @@ export const WFM_MIN_BW_HZ = 40_000;
  *  linear (USB at 500 kHz measured 55x its default; test-passband-cost.cpp), so the server refuses
  *  it; mirrored here so a bookmark, a shared link or a typed width shows what is actually running. */
 export const MODE_MAX_BW_HZ: Record<SDRMode, number> = {
+  ...AM_SYNC_MAX_BW,   // ★ V12 synchronous AM (RxPipeline::maxBwHz)
   usb: 12_000, lsb: 12_000, cwu: 12_000, cwl: 12_000,
   am:  48_000, sam: 48_000,
   fm:  64_000, nfm: 64_000,
@@ -647,6 +652,8 @@ export interface SpectrumCallbacks {
   onDab?: (d: DabState) => void;
   /** ★ V12 DRM: the listener's DRM receiver reports (vibe_drm_listener.h) — see drm.ts. */
   onDrm?: (d: DrmState) => void;
+  /** ★ V12 the AM family's carrier lock, applied auto-bandwidth edges and AM-stereo pilot (shim sendAmSync). */
+  onAmSync?: (s: AmSyncState) => void;
   /** ★★ V12: the DAB band scan's state as the server publishes it (`dab_scan`) — see src/services/dabBandScan.ts. */
   onDabScan?: (m: unknown) => void;
   /** ★★ V12: hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
@@ -1150,6 +1157,7 @@ export class SpectrumClient {
       /* ★★★ THE REPORT IN PIECES (dab=2 — src/services/dabAssemble.ts, shared with the app). `dab_list` / `dab_dls`
        *  are only stored; a `dab` comes back whole, in the legacy shape — and an older server's full report passes
        *  straight through. */
+      case 'amsync': { const a = parseAmSync(msg); if (a) this.cb.onAmSync?.(a); return; }
       case 'drm':
         this.cb.onDrm?.(msg as DrmState);
         return;
