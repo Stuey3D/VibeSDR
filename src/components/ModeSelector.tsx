@@ -39,10 +39,11 @@ import { modeIconFor } from '../utils/modeIcons';
 import { DSC_HINT, dscChannelOn } from '../services/dsc';
 import { PAGING_HINT, type PagingMode } from '../services/paging';   // ★ V12 PAGING
 import { SAME_HINT, SELCAL_HINT } from '../services/alertDecoders';
+import { HELL_HINT } from '../services/feldHell';   // ★ V12 FELD HELL
 import { TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { aprsHintText, aprsTuneFor, type AprsBaud } from '../services/tracks';   // ★ V12 APRS
 
-type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'paging' | 'aprs';
+type DecId = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'paging' | 'aprs';
 
 const BW_GOLD  = '#ffe566';
 const BW_MUTED = 'rgba(255,255,255,0.92)';
@@ -478,6 +479,8 @@ interface ModeSelectorProps {
     sameAvail?: boolean;
     /** ★★ V12 SELCAL — only where `"selcal": true` (the aeronautical selective call, ICAO's 32 tones). */
     selcalAvail?: boolean;
+    /** ★★ V12 FELD HELL — only where `"hell": true` (drawn by the server, read by eye: the picture box). */
+    hellAvail?: boolean;
     /** ★★ V12 MFSK / OLIVIA / THOR — a family is offered where the server lists it (`<family>Modes`, AUTO first: its keys). */
     tmModes?: Partial<Record<TextFamily, TextMode[]>>; tmMode?: Record<TextFamily, string>; onTextMode?: (f: TextFamily, id: string) => void;
     /** ★★★ V12 PAGING — ANDROID LOCAL HARDWARE ONLY (the phone's own radio, in this app; the server offers it nowhere else).
@@ -577,10 +580,11 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   const sitoraShown = !!decoderControls?.sitoraAvail && !isBlocked('sitora');   // ★ V12 SITOR-A
   const sameShown = !!decoderControls?.sameAvail && !isBlocked('same');   // ★ V12 EAS / SAME
   const selcalShown = !!decoderControls?.selcalAvail && !isBlocked('selcal');   // ★ V12 SELCAL
+  const hellShown = !!decoderControls?.hellAvail && !isBlocked('hell');   // ★ V12 FELD HELL
   const pagingShown = !!decoderControls?.pagingAvail;   // ★ V12 PAGING — the caller's gate is the whole rule (local hardware)
   const aprsShown = !!decoderControls?.aprsAvail && !isBlocked('aprs');   // ★ V12 APRS
   const tmShown = (f: TextFamily) => !!decoderControls?.tmModes?.[f] && !isBlocked(f);   // ★ V12 MFSK / OLIVIA / THOR
-  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || sameShown || selcalShown || pagingShown || aprsShown
+  const srvDecShown = cwShown || pskShown || jttyShown || dscShown || sitoraShown || sameShown || selcalShown || hellShown || pagingShown || aprsShown
     || tmShown('mfsk') || tmShown('olivia') || tmShown('thor');
   const spotsShown = !!spotsControls && !isBlocked('spots');
   /* ★ DAB is the lone survivor: nothing else to decode, no spots section either — so the
@@ -757,7 +761,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
    *  under the row (adsbWhyLine), and it stays pressable so a press explains — never a greyed key that silently does
    *  nothing, which a listener reports as "ADS-B is missing". */
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
-  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'paging' | 'aprs', label: string, a11y: string) => {
+  const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
     const active = dc.decMode === id && dc.decOn;
     const lit = dc.decMode === id;
@@ -1064,6 +1068,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'selcal': return selcalShown ? srvKey('selcal', 'SELCAL', 'SELCAL aeronautical selective call decoder') : null;
       case 'mfsk': case 'olivia': case 'thor':
         return tmShown(id as TextFamily) ? srvKey(id as TextFamily, TEXT_FAMILY_KEY[id as TextFamily], `${TEXT_FAMILY_KEY[id as TextFamily]} decoder, sub-mode found automatically`) : null;
+      case 'hell':   return hellShown ? srvKey('hell', 'HELL', 'Feld Hell, drawn as it is heard') : null;
       case 'paging': return pagingShown ? srvKey('paging', 'PAGE', 'Pager decoder, POCSAG, rate found automatically') : null;
       case 'aprs': return aprsShown ? srvKey('aprs', 'APRS', 'APRS packet decoder') : null;
       case 'rds':  return advRdsShown ? advRdsKey() : null;
@@ -1078,7 +1083,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     switch (id) {
       case 'rtty': case 'navtex': case 'wefax': case 'sstv': case 'time': return clientDecs.includes(id as DecId);
       case 'cw': return cwShown;   case 'psk': return pskShown;   case 'jtty': return jttyShown;
-      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'paging': return pagingShown;
+      case 'dsc': return dscShown; case 'sitora': return sitoraShown; case 'same': return sameShown; case 'selcal': return selcalShown; case 'hell': return hellShown; case 'paging': return pagingShown;
       case 'mfsk': case 'olivia': case 'thor': return tmShown(id as TextFamily); case 'aprs': return aprsShown;
       case 'rds': return advRdsShown;
       case 'spots': return spotsInBands; case 'hfdl': return hfdlInBands;
@@ -1474,6 +1479,9 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
         return <Text style={capText}>{SAME_HINT}</Text>;
       case 'selcal':
         return <Text style={capText}>{SELCAL_HINT}</Text>;
+      /* ★ V12 FELD HELL: no settings — the hint only (the tone is found by itself). */
+      case 'hell':
+        return <Text style={capText}>{HELL_HINT}</Text>;
       /* ★★ V12 MFSK / OLIVIA / THOR: the MODE row is the server's own list (AUTO first) — never a list of ours — and the hint. */
       case 'mfsk': case 'olivia': case 'thor': {
         const fam = id as TextFamily; const list = dc.tmModes?.[fam] ?? [];

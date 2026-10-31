@@ -57,6 +57,10 @@
  *   MFSK ('mfsk'), OLIVIA ('olivia', with CONTESTIA) and THOR ('thor') — V12, decoders/textmodes.h; params {mode}
  *     0x01 text as it decodes · 0x03 | u8 (0 searching, 1 locked) · {"type":"textmode_status","data":{detected,hz}}
  *
+ *   FELD HELL ('hell' — V12, decoders/feld_hell.h; drawn, not read — see src/services/feldHell.ts)
+ *     0x02 a new picture · 0x01 | u32 line | u32 width | grey (WEFAX's line, re-sent as a strip fills) ·
+ *     {"type":"hell_status","data":{hz,signal}}
+ *
  *   JTTY ('jtty' — V12, the WSJT-X 3.2 keyboard mode, vibe_jtty_run.h)
  *     0x01 text (one line per finished message) · 0x03 | u8 state (0 listening, 3 signals being decoded)
  *     {"type":"jtty_signals","data":{signals:[{id,hz,audio,snr,q,active,last,first,frames,call,country,text}]}}
@@ -71,7 +75,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'jtty' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'jtty' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -151,6 +155,8 @@ export interface DecoderCallbacks {
   onSitorStatus?: (data: unknown) => void;
   /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
   onTextModeStatus?: (data: unknown) => void;
+  /** ★ V12 FELD HELL: {hz, signal} when it changes (feldHell.ts parseHellStatus); its lines come through onImageLine. */
+  onHellStatus?: (data: unknown) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
    *  `message` is the server's own words, shown as they are (one definition, every client). */
   onRefused?: (message: string, what: 'decoder' | 'spots') => void;
@@ -211,6 +217,8 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   mfsk: 'mfsk',
   olivia: 'olivia',
   thor: 'thor',
+  // ★ V12 FELD HELL: nothing to set — the tone is found
+  hell: 'hell',
   // ★ V12 JTTY: every JTTY signal in the listener's passband — nothing to set.
   jtty: 'jtty',
 };
@@ -443,6 +451,11 @@ export class DecoderClient {
       this.cb.onTextModeStatus?.(msg.data);
       return;
     }
+    if (msg.type === 'hell_status' && msg.data) {
+      if (this.mode !== 'hell') return;
+      this.cb.onHellStatus?.(msg.data);
+      return;
+    }
     if (msg.type === 'sitora_status' && msg.data) {
       if (this.mode !== 'sitora') return;
       this.cb.onSitorStatus?.(msg.data);
@@ -553,6 +566,17 @@ export class DecoderClient {
         } else if (op === 0x08) {
           // ★ The decoder's own account of a phasing decision (2026-10-07) — for whoever opens the console.
           console.info('[wefax]', new TextDecoder().decode(new Uint8Array(buf, 1)));
+        }
+        return;
+
+      // ★ FELD HELL: WEFAX's grey line, re-sent as the strip fills (a line simply replaces itself), and 0x02 a new picture.
+      case 'hell':
+        if (op === 0x01 && buf.byteLength >= 9) {
+          const line = dv.getUint32(1, false);
+          const width = dv.getUint32(5, false);
+          this.cb.onImageLine?.(line, width, new Uint8Array(buf, 9, Math.min(width, buf.byteLength - 9)), false);
+        } else if (op === 0x02) {
+          this.cb.onImageStart?.(0, 0);
         }
         return;
 

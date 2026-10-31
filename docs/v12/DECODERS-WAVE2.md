@@ -788,23 +788,69 @@ Bugs found by the tests and fixed: the column clock started when the tone was fo
 hops' raw periodograms found tones in noise; the part-empty first column set the levels from uninitialised samples (NaN on
 armhf — every pixel black on 4 seeds in 20).
 
-**Owed (next):** the CLIENTS. vibeserver.json does not offer `hell` yet and no client shows a key, so nothing is visible
+**Owed (next):** the CLIENTS — ★ DONE in section 15. vibeserver.json does not offer `hell` yet and no client shows a key, so nothing is visible
 (AGENTS.md: no control until it works). To wire: vibeserver.json `"hell": true` (and the shim's `kOffer`/owner switch),
 the web client (`decoders.ts` mode `hell` reusing the `wefax` 0x01 path into `drawDecLine`, a key in HF Amateur via
 `decoderBands.ts`, the status line from `hell_status`, hint), the app (`DecoderClient`, `ModeSelector`, `DecoderPanel`'s
 image view as WEFAX's, `decoderBands`, `modeIcons`), then the copy: `sdrTour`, `AboutOverlay` feature list and release
 note, the website. A web e2e like `test-web-textmodes` (fake rtl_tcp replaying `feldHellSynth`). Then build-web.
 
-## RESUME HERE (updated 2026-10-31 ≈ 09:15 UTC, after the fifth run: the flaky test, the shared finder, Feld Hell)
+## 15. FELD HELL — clients wired: server offer, web, app, copy, web e2e (2026-10-31, sixth run)
 
-Done this run (commits on `v12-decoders-wave2`): section 12 (the web test's flakiness was five receiver faults — fixed,
-10/10, the test tightened), section 13 (OLIVIA/CONTESTIA share finder scores: −14.6 % on a Pi 2, decodes identical),
-section 14 (Feld Hell engine + host + test; clients not wired). No server or device was touched; synthetic signals and
-public reference recordings only. Colima was started for the qemu counts and stopped again.
+Section 14's "Owed" list, done. Files: `local_sdr_shim.cpp` (vibeserver.json `"hell"` from the owner's switch, `kOffer`'s
+`modes` list, the admin label "Feld Hell"), `vibe_setup_page.h` (the owner's switch), `src/services/feldHell.ts` (NEW,
+shared: the hint, the status line, `HellPager`), `decoderBands.ts` (HF Amateur, after THOR; bright on the amateur bands),
+`modeIcons.ts` (keyboard). Web: `index.html` (HELL key, hidden), `decoders.ts` (mode `hell`: 0x01 grey line, 0x02, JSON
+`hell_status`), `main.ts` (cap, key, `drawHellLine`, CLR, status). App: `DecoderClient` (name `hell`, frames, status),
+`sdrTypes` (`hell` in the occupancy), `DecoderImageCanvas` (`hellLine` / `hellStart`), `DecoderPanel` (an image decoder,
+title FELD HELL), `ModeSelector` (HELL key + hint), `MenuSheet` / `modeBox` (types), `SDRScreen` (cap, routing, status,
+tour card). Copy: `sdrTour`'s mode card (Amateur list), `AboutOverlay` V12 note. `website/index.html` does not list
+decoders by name — unchanged. `tools/hell-bench/hell_clip.cpp`, `scripts/test-web-hell.mjs`, `scripts/run-tests.sh`.
+
+**How it is drawn.** Through the picture box (PREV, SAVE, CLR, zoom) but NOT through WEFAX's line code: WEFAX's margin,
+slant and level finding would bend the letters, and its "line count went back = a new chart" rule fires on every re-send
+of a strip (Hell re-sends a strip's 28 lines every character). So a line is painted plainly, grey as sent, at the row its
+number says. **Pages**: the picture view fits the whole picture by default, so an endless roll would shrink to a thread;
+Hell is drawn a page of 8 strips (96 s of keyed text, 210 × 224) at a time, the next page putting this one under PREV —
+`HELL_PAGE_STRIPS` in `feldHell.ts`, the same on both clients. The page grows a strip at a time on white paper, so there
+is never unwritten black under the text. CLR banks the page and starts a new one at the strip arriving.
+
+**Gallery: none** (the choice the brief asked to note). The WEFAX path stores CHARTS (`galleryKindFor` "wefax"), but
+Feld Hell is a keyboard mode's over, and the MFSK keys store nothing; `galleryKindFor` returns "" for `hell`, so no tap is
+made. SAVE in the box still writes the page shown (a download on the web, the share sheet in the app), as for any picture.
+
+**Web e2e** (`scripts/test-web-hell.mjs`; `hell_clip`: one Feld Hell over at 1000 Hz, USB IQ, looping every 20 s, dial
+14063 kHz; a real vibeserver; headless Edge with `--mute-audio --disable-audio-output`): vibeserver.json `hell` and `modes`;
+the key offered, in HF Amateur beside THOR with its icon; the box a picture titled FELD HELL; the status line "drawing ·
+1000 Hz"; a second strip under the first; 210 wide in whole 28-row strips, ink on white paper; every finished strip's
+lower copy identical to its upper copy (so every line, re-sends included, landed at its own row); SAVE offered; CLR → PREV
+and a one-strip page; PREV shows the old page; 390 px no sideways scroll; no exception. **19 checks. 10/10 in a row** on the final test
+(headless Edge, muted, real vibeserver, a locally built page). Before that: 9/10 on the first loop — run 10 read the page
+back with EVERY pixel transparent (its white paper included, so not the server's lines); the test was then made to record
+the server's Hell frames off the wire (980 lines a run, none all ink, in 10/10), and to treat a wholly transparent read as
+the headless readback: read once more and SAID ("note: … read again"), with an added check that the page is opaque. That
+note never fired in the final 10. ★ The cause is not proven — if Stuart ever sees the Hell page flash empty in a browser,
+this is where to look.
+
+Other suites run before the commit: test-textmodes, test-feld-hell, test-decoder-hosts, test-decoder-hardening (4/4, via
+`VIBE_TESTS`), test_decoder_bands, the faceplate segfield/dotfield label checks (modeBox's list grew), check-setup-page,
+test-web-textmodes (17/17), test-web-alerts (18/18). The engine is unchanged: replayed offline from 320 join points (four
+noise/level/lead-in variants) it drew no all-ink line and no page over 40 % ink. ★ build-web is STILL needed: the page was
+built locally for the tests and `vibe_web_page.h` was put back, not committed.
+
+Untested: the APP side runs nowhere here (no simulator or device build this run) — its files were syntax-checked with
+esbuild, the small shared files type-checked alone; the full app/web `tsc` does not fit the 512 MB cap. Real air.
+
+## RESUME HERE (updated 2026-10-31, after the sixth run: Feld Hell's clients)
+
+Done this run (commits on `v12-decoders-wave2`): section 15 — Feld Hell offered in vibeserver.json and wired to the web
+page and the app (HELL key in HF Amateur, drawn plainly in the picture box a page at a time, no gallery), the copy (tour
+card, About), and a web e2e (10/10). No server or device was touched; synthetic signals only.
 
 Next, in order:
-1. **Feld Hell clients** — section 14's "Owed" list (vibeserver.json, web, app, copy, a web e2e, build-web).
-2. **build-web** before any release (sections 10–12): `vibe_web_page.h` is NOT committed.
+1. **build-web** before any release (sections 10–12, 15): `vibe_web_page.h` is NOT committed.
+2. **The app's Feld Hell** has not been run on a simulator or device (syntax-checked only): open HELL on a VibeServer,
+   watch a page fill, CLR / PREV / SAVE, rotate (the page is kept in the image store).
 3. **ACARS → VDL2 → HFDL → RS41, FLEX, BPC, TDF, CHU labels, CONTESTIA's constant** — still waiting on Stuart.
 4. Owed across the wave: real-air tests (paging on a phone, NOAA Weather Radio, HF SELCAL, MSK144, FST4W, Q65, OLIVIA on a
    calling channel, Feld Hell), Android gradle and iOS `build_ios.sh` compiles (Feld Hell added to both lists, compiled on

@@ -15,6 +15,7 @@
  */
 
 import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode,
          icomWatchState, sMeter, type IcomStatus } from '../services/icomRadio';
@@ -835,7 +836,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     let dead = false;
     setDabCapable(false);
     setCwCapable(false);
-    setPskCapable(false); setJttyCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setPagingModes([]); setRadioTunable([]);
+    setPskCapable(false); setJttyCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
     setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false);
     setAdsbCap(undefined);
     setIsmCap(undefined);
@@ -851,6 +852,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
         // ★ V12 PSK31/63, JTTY, DSC — the same per-radio answer; and where it can be tuned (which channel keys draw)
         setPskCapable(o?.psk === true); setJttyCapable(o?.jtty === true); setDscCapable(o?.dsc === true); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true); setSelcalCapable(o?.selcal === true);
+        setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
         // ★ V12 MFSK / OLIVIA / THOR: a family is offered where its flag is true; its choices are the server's list
         setTmModes({ mfsk: o?.mfsk === true ? (o?.mfskModes ?? []) : undefined, olivia: o?.olivia === true ? (o?.oliviaModes ?? []) : undefined,
                      thor: o?.thor === true ? (o?.thorModes ?? []) : undefined });
@@ -2519,6 +2521,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [sitoraCapable, setSitoraCapable] = useState(false);   // ★ V12 SITOR-A: this VibeServer decodes it
   const [sameCapable, setSameCapable] = useState(false);       // ★ V12 EAS / SAME: this VibeServer decodes it
   const [selcalCapable, setSelcalCapable] = useState(false);   // ★ V12 SELCAL: this VibeServer decodes it
+  const [hellCapable, setHellCapable] = useState(false);       // ★ V12 FELD HELL: this VibeServer draws it
   /** ★ V12 MFSK / OLIVIA / THOR: each family this VibeServer offers, with its choices (AUTO first); absent = not offered. */
   const [tmModes, setTmModes] = useState<Partial<Record<TextFamily, TextMode[]>>>({});
   const [tmMode, setTmMode] = useState<Record<TextFamily, string>>({ mfsk: 'auto', olivia: 'auto', thor: 'auto' });
@@ -5530,9 +5533,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       onDot:    (d)          => setDecoding(d === 'active' || d === 'rx'),
       // WEFAX/SSTV — drive the panel's image canvas (skin canvas parity).
       // WEFAX lines are greyscale, SSTV lines are RGB; route by active decoder.
-      onImageStart: (w: number, h: number) => decoderImageRef.current?.imageStart(w, h),
+      onImageStart: (w: number, h: number) => {
+        if (activeDecRef.current === 'hell') decoderImageRef.current?.hellStart();   // ★ FELD HELL: a fresh decoder, a new page next
+        else decoderImageRef.current?.imageStart(w, h);
+      },
       onImageLine:  (ln: number, w: number, px: Uint8Array) => {
         if (activeDecRef.current === 'sstv') decoderImageRef.current?.sstvLine(ln, w, px);
+        else if (activeDecRef.current === 'hell') decoderImageRef.current?.hellLine(ln, w, px);   // ★ FELD HELL: drawn plainly
         else                                 decoderImageRef.current?.wefaxLine(ln, w, px);
       },
       onImageDone: ()            => decoderImageRef.current?.imageDone(),
@@ -5654,7 +5661,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'olivia'|'thor'|'paging'|'aprs'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'olivia'|'thor'|'hell'|'paging'|'aprs'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -6087,6 +6094,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       decoderClient.current.textMode = { ...tmModeRef.current };
       setDecoderStatus(textModeStatusText(type, tmModeRef.current[type], null));
     }
+    if (type === 'hell') setDecoderStatus(hellStatusText(null));   // ★ V12 FELD HELL: the tone is found by itself
     if (type === 'paging' && decoderClient.current) {
       decoderClient.current.pagingMode = pagingModeRef.current;
       setDecoderStatus(pagingModeRef.current === 'auto' ? 'listening — AUTO (rate from the signal)' : 'listening');
@@ -6203,7 +6211,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'olivia'|'thor'|'paging'|'aprs') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'olivia'|'thor'|'hell'|'paging'|'aprs') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -12839,7 +12847,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears), and under them a BALANCE between A and B to turn the louder one down; VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK, OLIVIA, THOR \u2014 each with AUTO naming the sub-mode it finds \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG, the rate found by AUTO and named in the box, with RATE under the key for a manual choice; pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK, OLIVIA, THOR \u2014 each with AUTO naming the sub-mode it finds \u2014, HELL \u2014 Feld Hell, drawn as it is heard: the strips build up in the picture box a page at a time and you read them, with PREV for the page before \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG, the rate found by AUTO and named in the box, with RATE under the key for a manual choice; pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
     // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
@@ -14814,6 +14822,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           sitoraAvail: sitoraCapable && !!(client.current as any)?.isVibe,
           sameAvail: sameCapable && !!(client.current as any)?.isVibe,
           selcalAvail: selcalCapable && !!(client.current as any)?.isVibe,
+          hellAvail: hellCapable && !!(client.current as any)?.isVibe,   // ★ V12 FELD HELL
           tmModes: (client.current as any)?.isVibe ? tmModes : {}, tmMode, onTextMode,
           // ★★★ V12 PAGING: Android, the phone's OWN radio (a loopback session — not a VibeServer, rtl_tcp or SpyServer), and
           //     the engine offering it. Nowhere else, whatever a server says (AGENTS.md: no control where it cannot work).

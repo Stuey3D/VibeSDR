@@ -56,6 +56,7 @@ import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
 import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
 import { sameStateText, selcalStateText } from './alertDecoders';   // ★ V12 EAS / SAME and SELCAL
 import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -65,6 +66,7 @@ import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 /** ★ V12 PSK31/63 ('psk' / 'pskskim' — `pskSkim`), JTTY ('jtty') and DSC ('dsc') — a VibeServer's own decoders. */
 export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw' | 'psk' | 'jtty' | 'dsc'
   | 'mfsk' | 'olivia' | 'thor'   // ★ V12 the MFSK keyboard modes (textModes.ts): text as it decodes, 0x03, textmode_status
+  | 'hell'    // ★ V12 FELD HELL — drawn by a VibeServer (feldHell.ts): WEFAX's grey lines (re-sent as a strip fills), hell_status
   | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
   | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
@@ -656,6 +658,10 @@ export class DecoderClient {
             if (!isTextFamily(fam)) return;
             const st = parseTextModeStatus(m.data);
             if (st) { this.tmLast = st; this.cb.onStatus(textModeStatusText(fam, this.textMode[fam], st)); this.cb.onDot(st.detected ? 'active' : 'idle'); }
+          } else if (m.type === 'hell_status' && m.data) {
+            if (this.active !== 'hell') return;
+            const st = parseHellStatus(m.data);
+            if (st) { this.cb.onStatus(hellStatusText(st)); this.cb.onDot(st.signal ? 'rx' : 'idle'); }
           } else if (m.type === 'paging_status' && m.data) {
             if (this.active !== 'paging') return;
             const st = parsePagingStatus(m.data);
@@ -827,6 +833,8 @@ export class DecoderClient {
       case 'selcal':  return { extension_name: 'selcal', params: {} };
       // ★ V12 MFSK / OLIVIA / THOR: "mode" is one of the server's own ids — the server falls back to AUTO for any other.
       case 'mfsk': case 'olivia': case 'thor': this.tmLast = null; return { extension_name: name, params: { mode: this.textMode[name] } };
+      // ★ V12 FELD HELL: nothing to set — the tone is found by itself.
+      case 'hell':    return { extension_name: 'hell', params: {} };
       case 'paging':  this.pagingLast = null; return { extension_name: 'paging', params: { mode: this.pagingMode } };
     }
   }
@@ -930,6 +938,16 @@ export class DecoderClient {
         this.cb.onStatus('transmission complete');
         this.cb.onDot('active');
         this.cb.onImageDone?.();
+      }
+
+    } else if (name === 'hell') {
+      // ★ FELD HELL: a strip's grey line, drawn at its own place (a re-sent line replaces itself); 0x02 = a fresh decoder,
+      //   so the next line starts a new page (DecoderImageCanvas hellLine / hellStart).
+      if (t === 0x01) {
+        if (u8.length < 9) return;
+        this.cb.onImageLine?.(v.getUint32(1, false), v.getUint32(5, false), u8.subarray(9));
+      } else if (t === 0x02) {
+        this.cb.onImageStart?.(0, 0);
       }
 
     } else if (name === 'sstv') {

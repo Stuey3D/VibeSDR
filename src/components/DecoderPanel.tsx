@@ -67,8 +67,9 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'paging' | 'scanner' | 'aprs' | null;
-const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'paging' | 'scanner' | 'aprs' | null;
+// ★ V12 FELD HELL is drawn, so it is a picture here (PREV, SAVE, CLR, zoom) — plainly, without WEFAX's ADJ
+const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv', 'hell'];
 
 export interface DecoderPanelProps {
   /** Called with true while the box is open and not minimised — the screen hides the station strip then. */
@@ -270,6 +271,8 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   mfsk:    'MFSK',
   olivia:  'OLIVIA',
   thor:    'THOR',
+  // ★ V12: Feld Hell, drawn not read (services/feldHell.ts) — the picture box, a page at a time
+  hell:    'FELD HELL',
   // ★ V12: a VibeServer's own APRS packet decoder (VHF 1200 / HF 300; the title says which).
   aprs:    'APRS',
   // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).

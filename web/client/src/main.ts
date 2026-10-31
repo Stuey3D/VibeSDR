@@ -152,6 +152,7 @@ import { parseSitorStatus, sitorStatusText, SITORA_HINT, type SitorStatus } from
 import { SAME_HINT, SELCAL_HINT, sameStateText, selcalStateText } from '../../../src/services/alertDecoders';   // ★ V12 EAS / SAME, SELCAL
 import { TEXT_FAMILIES, TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, isTextFamily, parseTextModeStatus, parseTextModes, textModeStatusText,
          type TextFamily, type TextMode } from '../../../src/services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { HELL_HINT, HELL_STRIP_ROWS, HellPager, hellStatusText, parseHellStatus } from '../../../src/services/feldHell';   // ★ V12 FELD HELL
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
@@ -805,6 +806,7 @@ async function loadAudioPolicy(httpBase: string) {
   sameCap = false;             // ★ …nor EAS / SAME
   selcalCap = false;           // ★ …nor SELCAL
   tmCaps = {};                 // ★ …nor the MFSK keyboard modes
+  hellCap = false;             // ★ …nor FELD HELL
   jttyCap = false;             // ★ …nor JTTY
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
@@ -871,6 +873,9 @@ async function loadAudioPolicy(httpBase: string) {
       const b = document.querySelector(`#decodersPanel [data-dec="${fam}"]`) as HTMLElement | null;
       if (b) b.hidden = !tmCaps[fam] || blockedModes.has(fam);
     }
+    hellCap = j.hell === true;   // ★ FELD HELL (V12): drawn by this server, read by eye
+    { const b = document.querySelector('#decodersPanel [data-dec="hell"]') as HTMLElement | null;
+      if (b) b.hidden = !hellCap || blockedModes.has('hell'); }
     jttyCap = j.jtty === true;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="jtty"]') as HTMLElement | null;
       if (b) b.hidden = !jttyCap || blockedModes.has('jtty'); }
@@ -1970,7 +1975,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'jtty' && !jttyCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -11602,7 +11607,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'jtty' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'jtty' | null = null;
 /* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
  *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
  *  first, coloured by confidence) over the SPOTS; the settings hold the announced calling frequencies. Offered only where
@@ -11693,6 +11698,52 @@ function renderTmModes() {
     host.appendChild(b);
   }
   hint.textContent = TEXT_FAMILY_HINT[fam];
+}
+/* ★★ FELD HELL (V12, 2026-10-31) — drawn on the server (decoders/feld_hell.h), read by eye: its strips come down the
+ *  picture box's road (WEFAX's grey lines) but are drawn plainly — no margin, slant or level finding, which would bend
+ *  the letters — at the place their line number says, a page at a time (src/services/feldHell.ts HellPager). The status
+ *  line is the tone; nothing goes to the gallery (the MFSK keys' rule). Offered only where vibeserver.json says "hell". */
+let hellCap = false;
+const hellPager = new HellPager();
+/** A fresh page, white paper, one strip tall — the page before it (with lines on it) goes under PREV. */
+function hellNewPage(w: number) {
+  if (decLiveCv && decLiveMaxY >= 0) decLiveComplete = true;
+  startDecImage(w, HELL_STRIP_ROWS);
+  if (decLiveCtx && decLiveCv) { decLiveCtx.fillStyle = '#fff'; decLiveCtx.fillRect(0, 0, decLiveCv.width, decLiveCv.height); }
+  if (!decViewingPrev) blitToVisible(decLiveCv);
+}
+function drawHellLine(line: number, w: number, px: Uint8Array) {
+  if (!(w > 0) || w > 4096) return;
+  decIsRgb = false;
+  const { y, newPage } = hellPager.place(line);
+  if (newPage || !decLiveCv || !decLiveCtx || decLiveCv.width !== w) hellNewPage(w);
+  let cv = decLiveCv, ctx = decLiveCtx;
+  if (!cv || !ctx) return;
+  if (y >= cv.height) {   // ★ the page grows a strip at a time, so there is never unwritten black under the text
+    const keep = ctx.getImageData(0, 0, cv.width, cv.height);
+    const h0 = cv.height;
+    cv.height = (Math.floor(y / HELL_STRIP_ROWS) + 1) * HELL_STRIP_ROWS;
+    ctx = decLiveCtx = cv.getContext('2d');
+    if (!ctx) return;
+    ctx.putImageData(keep, 0, 0);
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, h0, cv.width, cv.height - h0);
+    if (!decViewingPrev) blitToVisible(cv);
+  }
+  const img = ctx.createImageData(w, 1);
+  for (let x = 0; x < w; x++) { const v = x < px.length ? px[x] : 255, o = x << 2; img.data[o] = img.data[o + 1] = img.data[o + 2] = v; img.data[o + 3] = 255; }
+  ctx.putImageData(img, 0, y);
+  if (y > decLiveMaxY) decLiveMaxY = y;
+  if (!decViewingPrev) {
+    const vis = $<HTMLCanvasElement>('decImage');
+    if (vis.width !== cv.width || vis.height !== cv.height) blitToVisible(cv);
+    else vis.getContext('2d')?.putImageData(img, 0, y);
+  }
+  updateDecImageButtons();
+}
+function clearHellPage() {
+  hellPager.reset();
+  if (decLiveCv && decLiveMaxY >= 0) { decViewingPrev = false; hellNewPage(decLiveCv.width); }
+  $('decStatus').textContent = 'cleared — the last page is under PREV';
 }
 let sitorLast: SitorStatus | null = null;
 function renderSitorStatus(state?: number) {
@@ -12235,9 +12286,11 @@ function initDecoders(host: string, auth: AuthState) {
     },
     // ★ NAVTEX: the server's own FEC count for the message its NNNN just closed — into the title (2026-10-05).
     onNavtexFec: (fec) => { if (activeDec === 'navtex' && navtexAsm.setFec(fec)) queueNavtexRender(); },
-    onImageStart: (w, h) => startDecImage(w, h),
+    // ★ FELD HELL's 0x02 (a fresh decoder): the next line starts a new page; the one on screen stays until it does.
+    onImageStart: (w, h) => { if (activeDec === 'hell') { hellPager.reset(); return; } startDecImage(w, h); },
     // ★ Once the server reports WEFAX phases, a line alone no longer lights the LED — noise draws lines too.
     onImageLine: (y, w, px, rgb) => {
+      if (activeDec === 'hell') { drawHellLine(y, w, px); setDecLive(true); return; }
       // ★ After CLR, WEFAX lines count from the first one that arrives; a count below that base is the server's own
       //   new chart (a start tone), numbered from 0 again (see clearDecImage).
       // ★★ A RETUNE STARTS A NEW CHART (2026-10-07 — the app's DecoderPanel does the same): a move of 3 kHz or more is a
@@ -12259,6 +12312,13 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(p >= 1 && p <= 3);
     },
     onImageDone: () => { $('decStatus').textContent = 'image complete'; markDecImageComplete(); },
+    onHellStatus: (d) => {
+      if (activeDec !== 'hell') return;
+      const st = parseHellStatus(d);
+      if (!st) return;
+      decStateText = hellStatusText(st); $('decStatus').textContent = decStateText;
+      setDecLive(st.signal);
+    },
     // ★ SSTV 0x08: the same picture repainted in place (see decoders.ts) — the lines overwrite it.
     onImageRedraw: () => { decLiveComplete = false; },
     onSstvMode: (name) => { $('decStatus').textContent = name; },
@@ -12438,7 +12498,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'jtty';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'olivia' | 'thor' | 'hell' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12: the decoder runs on the VFO selected NOW (decode on either VFO) — Advanced RDS is always A's (no VFO B on FM)
       decVfo = mode === 'rds' ? 'A' : abStartVfo();
@@ -12580,6 +12640,7 @@ function initDecoders(host: string, auth: AuthState) {
     if (activeDec === 'cw') queueCwPlainText();
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
+    if (activeDec === 'hell') clearHellPage();
     if (kbOn()) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
     if (activeDec === 'aprs') { aprsLog.length = 0; renderAprs(); }
     if (activeDec === 'dsc') { dscCalls.clear(); renderDsc(); }
@@ -13003,7 +13064,7 @@ function anyDecoderLeft(): boolean {
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
     || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal'))
-    || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f))
+    || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
     || (jttyCap && !blockedModes.has('jtty'));
 }
 
@@ -13064,7 +13125,7 @@ function syncDecButtons() {
 }
 
 function showDecBox(what: string) {
-  const image = what === 'wefax' || what === 'sstv';
+  const image = what === 'wefax' || what === 'sstv' || what === 'hell';
   const isSpots = what === 'spots';
   const isRds = what === 'rds';
   $('decBox').classList.add('open');
@@ -13079,6 +13140,7 @@ function showDecBox(what: string) {
                             : what === 'aprs'  ? (aprsBaud === 300 ? 'APRS · HF 300' : 'APRS')
                             : what === 'sitora' ? 'SITOR-A'
                             : isTextFamily(what) ? TEXT_FAMILY_KEY[what]
+                            : what === 'hell'  ? 'FELD HELL'
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -13114,6 +13176,7 @@ function showDecBox(what: string) {
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
   else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
   else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
+  else if (what === 'hell') { hellPager.reset(); decStateText = hellStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HELL_HINT; }
   else if (isTextFamily(what)) { decStateText = textModeStatusText(what, tmMode[what], null); $('decStatus').textContent = decStateText; $('decStatus').title = TEXT_FAMILY_HINT[what]; }
   else $('decStatus').title = '';
   if (isJtty) { jttyLast = []; jttySpots.clear(); jttyPinAt = null; renderJtty(); }

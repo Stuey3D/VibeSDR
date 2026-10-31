@@ -34991,6 +34991,8 @@ static std::string vsTunableJson() {
         j += ",\"" + e + "\":" + (on ? "true" : "false");
         if (on) j += ",\"" + e + "Modes\":" + vibe::TextModeDecoder::modesJson(f);
     }
+    // ★ V12 FELD HELL (2026-10-31): drawn on the listener's audio (decoders/feld_hell.h), strips down WEFAX's image path
+    j += std::string(",\"hell\":") + (vsModeBlocked("hell") ? "false" : "true");
 #if defined(VIBE_PAGING)
     /* ★★★ V12 PAGING — ANDROID LOCAL HARDWARE ONLY. Present only where it may run (LocalSdrShim::pagingCapable: this
      *  phone's own USB radio, the engine not serving); absent on every server, so no client draws a PAGE key there.
@@ -35178,7 +35180,7 @@ static std::string vsTunableJson() {
      *    off to save CPU still serves basic RDS, so the card must not read "no RDS". */
     {
         static const char* kOffer[] = { "wfm", "nfm", "am", "usb", "lsb", "cwu", "cwl", "dab", "adsb", "ism", "ndb", "ais", "aprs",
-                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "olivia", "thor", "jtty", "drm" };
+                                        "rds", "rtty", "navtex", "wefax", "sstv", "ft8", "time", "dsc", "sitora", "same", "selcal", "mfsk", "olivia", "thor", "hell", "jtty", "drm" };
         std::string m = "[";
         bool first = true;
         for (const char* id : kOffer) {
@@ -35330,7 +35332,7 @@ static std::atomic<bool>   g_healthValid{false};
 static std::string decoderLabel(const std::string& ext, bool spots) {
     static const std::map<std::string, std::string> names = {
         {"rtty", "RTTY"}, {"navtex", "NAVTEX"}, {"wefax", "WEFAX"}, {"sstv", "SSTV"}, {"time", "Time signals"},
-        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
+        {"cw", "CW"}, {"cwskim", "CW skimmer"}, {"psk", "PSK"}, {"pskskim", "PSK skimmer"}, {"aprs", "APRS"}, {"dsc", "DSC"}, {"sitora", "SITOR-A"}, {"same", "EAS / SAME"}, {"selcal", "SELCAL"}, {"mfsk", "MFSK"}, {"olivia", "Olivia / Contestia"}, {"thor", "THOR"}, {"hell", "Feld Hell"}, {"paging", "Paging"}, {"jtty", "JTTY"}, {"ft8", "Digital spots"}, {"spots", "Digital spots"}, {"hfdl", "HFDL"}, {"rds", "RDS"}};
     std::string n;
     if (!ext.empty()) { auto it = names.find(ext); n = it != names.end() ? it->second : ext; }
     if (spots && n != "Digital spots") n += n.empty() ? "Digital spots" : " + Digital spots";

@@ -459,6 +459,8 @@ export interface ServerOccupancy {
   /** ★ V12 MFSK / OLIVIA / THOR: this server's text-mode decoders and each family's choices (AUTO first) — textModes.ts. */
   mfsk?: boolean; olivia?: boolean; thor?: boolean;
   mfskModes?: TextMode[]; oliviaModes?: TextMode[]; thorModes?: TextMode[];
+  /** ★ V12 FELD HELL: this server draws Feld Hell ('hell') — feldHell.ts. */
+  hell?: boolean;
   paging?: boolean;
   pagingModes?: PagingMode[];
   /** ★ V12: where this radio can be tuned (Hz windows after the owner's lists) — decides which channel / band keys draw. */
@@ -534,6 +536,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       selcal:    j.selcal === true,
       mfsk:      j.mfsk === true, olivia: j.olivia === true, thor: j.thor === true,
       mfskModes: parseTextModes(j.mfskModes), oliviaModes: parseTextModes(j.oliviaModes), thorModes: parseTextModes(j.thorModes),
+      hell:      j.hell === true,
       paging:    j.paging === true,
       pagingModes: parsePagingModes(j.pagingModes),
       tunable:   parseTunable(j.tunable),

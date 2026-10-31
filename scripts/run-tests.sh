@@ -1460,6 +1460,15 @@ if [ -n "${VIBESERVER_BIN:-}" ] && cc -O2 -c -o "$OUT/pffft_tm.o" android/app/sr
   VIBE_TM_CLIP="$OUT/tm.cu8" node scripts/test-web-textmodes.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 else notrun=$((notrun+1)); fi
+# ★★ V12 FELD HELL in the WEB client (2026-10-31): a real server fed tools/hell-bench/hell_clip, headless Edge.
+printf '\n\033[1m── FELD HELL (end to end: the web client on a real server) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && cc -O2 -c -o "$OUT/pffft_hell.o" android/app/src/main/cpp/vibedsp/third_party/pffft/pffft.c \
+   && c++ -std=c++17 -O2 -I android/app/src/main/cpp -o "$OUT/hell_clip" tools/hell-bench/hell_clip.cpp android/app/src/main/cpp/decoders/feld_hell.cpp "$OUT/pffft_hell.o" \
+   && "$OUT/hell_clip" "$OUT/hell.cu8" >/dev/null; then
+  VIBE_HELL_CLIP="$OUT/hell.cu8" node scripts/test-web-hell.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/hell.cu8"
+else notrun=$((notrun+1)); fi
 printf '\n\033[1m── SITOR-A (end to end: the web client on a real server) ──\033[0m\n'
 if [ -n "${VIBESERVER_BIN:-}" ] && c++ -std=c++17 -O2 -I android/app/src/main/cpp -I tools/sitor-bench -o "$OUT/sitor_clip" tools/sitor-bench/sitor_clip.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp \
    && "$OUT/sitor_clip" "$OUT/sitora.cu8" >/dev/null; then
