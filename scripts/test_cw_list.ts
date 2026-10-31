@@ -8,7 +8,7 @@
  */
 import { readFileSync } from 'node:fs';
 import {
-  CW_Q_COLOURS, cwAge, cwDrawnPassband, cwFreqText, cwHintText, cwPinFromScroll, cwPinRestore, cwSnrText, cwWidthOf,
+  CW_Q_COLOURS, cwAge, cwDrawnPassband, cwFreqText, cwHintText, readAnchorsOf, readAnchorRestore, cwSnrText, cwWidthOf,
   mergeCwSpot, parseCwSignals, parseCwSpot, sortCwSignals, type CwSignal, type CwSpot,
 } from '../src/services/cwList.ts';
 
@@ -96,15 +96,24 @@ eq('the skimmer hint names half the segment', cwHintText(true, 96000).startsWith
 eq('skimming: ±width/2', cwDrawnPassband(true, 96000, 300, 900), { low: -48000, high: 48000 });
 eq('not skimming: the listener’s own', cwDrawnPassband(false, 96000, 300, 900), { low: 300, high: 900 });
 
-// ── 7. The scroll pin ──
+// ── 7. The view never leaves the row being read (Stuart, 2026-10-31) ──
 {
-  eq('at the top: not pinned', cwPinFromScroll(0, 400), null);
-  const pin = cwPinFromScroll(250, 400);          // heading 150 pt below the view's top
-  eq('scrolled: the heading’s place in the view', pin, 150);
-  eq('three rows (60 pt) arrive above: follow the heading', cwPinRestore(pin, 460, 250), 310);
-  eq('nothing moved: leave the view', cwPinRestore(pin, 400, 250), null);
-  eq('not pinned: leave the view', cwPinRestore(null, 900, 0), null);
-  eq('never above the top', cwPinRestore(300, 100, 50), 0);
+  // the view: row s5 is cut off at the top, s7 is the one being read, then s9 and the heading
+  const before = [
+    { key: 's5', top: -30, bottom: -2 }, { key: 's7', top: -2, bottom: 40 }, { key: 's9', top: 40, bottom: 80 },
+    { key: 'head', top: 80, bottom: 100 }, { key: '', top: 100, bottom: 120 },
+  ];
+  const anchors = readAnchorsOf(before);
+  eq('anchors: on screen only, top first, unkeyed skipped', anchors.map((a) => a.key), ['s7', 's9', 'head']);
+  // a new signal (44 px) arrives ABOVE s7 — s7 now starts 44 px further down the content; scrollTop was 300
+  const after = new Map([['s3', 254], ['s5', 314], ['s7', 342], ['s9', 384], ['head', 424]]);
+  eq('a row arrives above the one being read: it stays put', readAnchorRestore(anchors, (k) => after.get(k), 300), 344);
+  eq('nothing moved: leave the view', readAnchorRestore(anchors, (k) => new Map([['s7', 298]]).get(k), 300), null);
+  eq('its signal left: the next one visible holds', readAnchorRestore(anchors, (k) => new Map([['s9', 360]]).get(k), 300), 320);
+  eq('at the very top, a row arrives above: still held', readAnchorRestore(readAnchorsOf([{ key: 's1', top: 0, bottom: 44 }]),
+     (k) => new Map([['s1', 44]]).get(k), 0), 44);
+  eq('nothing keyed (idle text): leave the view', readAnchorRestore(readAnchorsOf([]), () => 0, 0), null);
+  eq('never above the top', readAnchorRestore([{ key: 's1', top: 50, bottom: 90 }], () => 10, 30), 0);
 }
 
 console.log(`cw list: ${passes} passed, ${fails} failed`);

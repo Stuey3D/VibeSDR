@@ -141,6 +141,27 @@ try {
   ok(top0 > 0 && top1 > 0 && Math.abs(y1 - y0) <= 2, `scrolled to SPOTS, the view stays put through the list updates (heading at ${y0} → ${y1} px, scrollTop ${top0} → ${top1})`);
   await ev(`(() => { const b = document.getElementById('decBody'); b.style.maxHeight = ''; b.style.height = ''; b.style.overflowAnchor = '';
                      document.getElementById('cwGrowTest')?.remove(); b.scrollTop = 0; return 1; })()`);
+  // ★★★ READING A MESSAGE, the view never leaves its row (Stuart, 2026-10-31: "do not keep pulling the view away from me
+  //     when I am reading a message"). The SECOND signal row at the top of a short box; content grows ABOVE it (as a new,
+  //     lower signal does) and the list is redrawn three times — that row must not move on screen.
+  await ev(`(() => { const b = document.getElementById('decBody'); b.style.maxHeight = '140px'; b.style.height = '140px';
+                     b.style.overflowAnchor = 'none';
+                     const r = document.querySelectorAll('#cwRows .cwr')[1];
+                     b.scrollTop += r.getBoundingClientRect().top - b.getBoundingClientRect().top;
+                     b.dispatchEvent(new Event('scroll'));
+                     window.__cwReadKey = r.dataset.ra; return 1; })()`);
+  await sleep(300);
+  const readY = () => ev(`(() => { const r = document.querySelector('#cwRows [data-ra="' + window.__cwReadKey + '"]');
+                     return r ? Math.round(r.getBoundingClientRect().top - document.getElementById('decBody').getBoundingClientRect().top) : null; })()`);
+  const r0 = await readY(), rt0 = await ev(`document.getElementById('decBody').scrollTop`);
+  await ev(`(() => { window.__cwRenders = 0; const g = document.createElement('div'); g.id = 'cwGrowTest'; g.style.height = '70px';
+                     const l = document.getElementById('cwList'); l.parentNode.insertBefore(g, l); return 1; })()`);
+  await sleep(3200);
+  const r1 = await readY(), rt1 = await ev(`document.getElementById('decBody').scrollTop`);
+  ok(await ev(`window.__cwRenders`) >= 2 && rt0 > 0 && r0 !== null && r1 !== null && Math.abs(r1 - r0) <= 2,
+     `reading a row: it stays where it was on screen through the updates (${await ev(`window.__cwReadKey`)} at ${r0} → ${r1} px, scrollTop ${rt0} → ${rt1})`);
+  await ev(`(() => { const b = document.getElementById('decBody'); b.style.maxHeight = ''; b.style.height = ''; b.style.overflowAnchor = '';
+                     document.getElementById('cwGrowTest')?.remove(); b.scrollTop = 0; return 1; })()`);
   // ★★ Lowest frequency first, whatever the confidence; the message coloured by it (Stuart, 2026-10-25).
   const order = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#cwRows .cwr')].map(r => ({ f: parseFloat(r.querySelector('.f').textContent), q: (r.className.match(/q-(\\w+)/) || [])[1], col: getComputedStyle(r.querySelector('.tx')).color })))`));
   ok(order.length >= 2 && order.every((r, i) => i === 0 || r.f >= order[i - 1].f), `the list runs lowest frequency first (${order.map((r) => r.f).join(' ')})`);
@@ -159,19 +180,19 @@ try {
   const speeds = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#cwRows .cwr .w, #cwSpots .cws .w')].map(w => w.textContent))`));
   ok(speeds.length >= 5 && speeds.every((w) => /^\d+(\u2013\d+)? wpm$/.test(w)),
      `every speed reads "21 wpm" or "17–21 wpm" (${speeds.slice(0, 8).join(', ')}; ${speeds.filter((w) => w.includes('\u2013')).length} ranges)`);
-  ok(await ev(`getComputedStyle(document.getElementById('cwPlain')).display !== 'none' && !document.getElementById('cwPlain').classList.contains('on')`),
+  ok(await ev(`getComputedStyle(document.getElementById('cwPlain')).display !== 'none' && document.getElementById('cwPlain').getAttribute('aria-pressed') === 'false' && document.getElementById('cwPlain').textContent === 'EXPLAIN'`),
      'PLAIN is in the CW box header, beside CLR, not lit');
   const rawTx = () => ev(`[...document.querySelectorAll('#cwRows .cwr')].map(r => r.querySelector('.tx').textContent).join(' | ')`);
   const tx0 = await rawTx();
   await ev(`document.getElementById('cwPlain').click()`);
-  ok(await ev(`document.getElementById('cwPlain').classList.contains('on')`), 'PLAIN pressed: the key lights');
+  ok(await ev(`(document.getElementById('cwPlain').getAttribute('aria-pressed') === 'true' && document.getElementById('cwPlain').textContent === 'RAW')`), 'PLAIN pressed: the key reads RAW, pressed (never lit — the legend carries it, 2026-10-30)');
   const tx1 = await rawTx();
   ok(/calling anyone/.test(tx1) && /this is/.test(tx1) && / over\b/.test(tx1) && !/\bCQ\b/.test(tx1),
      `the rows read in plain English ("${tx1.slice(0, 70)}…")`);
   ok(/G4ABC G4ABC/.test(tx1), 'a callsign sent twice stays exactly as sent');
   ok(await ev(`[...document.querySelectorAll('#cwRows .cwr .c')].some(c => c.textContent === 'G4ABC')`), 'the call column is unchanged');
   await ev(`document.getElementById('cwPlain').click()`);
-  ok(await ev(`!document.getElementById('cwPlain').classList.contains('on')`) && /\bCQ\b/.test(await rawTx()) && !/calling anyone/.test(await rawTx()),
+  ok(await ev(`!(document.getElementById('cwPlain').getAttribute('aria-pressed') === 'true' && document.getElementById('cwPlain').textContent === 'RAW')`) && /\bCQ\b/.test(await rawTx()) && !/calling anyone/.test(await rawTx()),
      `pressed again: unlit, the CW as sent ("${(await rawTx()).slice(0, 50)}…"; before: "${tx0.slice(0, 30)}…")`);
   await ev(`document.getElementById('cwPlain').click()`);   // ★ left ON: ONE SIGNAL below, and the reload at the end
   ok(await ev(`(() => { try { return localStorage.getItem('vibe.cwPlain') === '1'; } catch { return false; } })()`), 'PLAIN saved in this browser');
@@ -269,7 +290,7 @@ try {
                      document.getElementById('decodersPanel').classList.add('open'); return false; })()`);
   await sleep(500);
   await ev(`document.querySelector('#decodersPanel [data-dec="cw"]').click()`);
-  ok(await until(`getComputedStyle(document.getElementById('cwPlain')).display !== 'none' && document.getElementById('cwPlain').classList.contains('on')`, 5000),
+  ok(await until(`getComputedStyle(document.getElementById('cwPlain')).display !== 'none' && (document.getElementById('cwPlain').getAttribute('aria-pressed') === 'true' && document.getElementById('cwPlain').textContent === 'RAW')`, 5000),
      'after a reload, PLAIN is still on (lit) when CW opens');
   await ev(`document.getElementById('cwPlain').click()`);
   ok(await ev(`(() => { try { return localStorage.getItem('vibe.cwPlain') === '0'; } catch { return false; } })()`), '…and off again is remembered too');

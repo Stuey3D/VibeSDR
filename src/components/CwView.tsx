@@ -9,12 +9,12 @@
  * health pill's: red poor, orange low, amber medium, green high — cwList CW_Q_COLOURS). Lowest frequency first, always.
  * Tap a row or a spot = tune to it in CW. A keyboard / pad reaches every row (DecoderPanel's list zone; `focusIdx`).
  *
- * ★★ THE VIEW STAYS WHERE THE LISTENER PUT IT (cwList cwPinFromScroll / cwPinRestore): scrolled down at all, the SPOTS
- *    heading keeps its place on screen while rows come and go above it; at the top, the view stays at the top.
+ * ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (useSpotsPin): whatever is at the top of the view stays put while
+ *    signals arrive above it — even at the very top (Stuart, 2026-10-31).
  * ★ The decoder font throughout (DECODER_FONT) — never the display font (memory: display font on the main controls + VTS
  *   only).
  */
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View, type StyleProp, type ViewStyle } from 'react-native';
 import { DECODER_FONT, useDecoderStyles, useDecoderTokens, type DecoderTokens } from './DecoderShell';
 import { scrollLane } from '../constants/popupTokens';
@@ -23,7 +23,7 @@ import { plainEnglish } from '../utils/cwVocab';
 import { cwHasWpmRange, qrzCallUrl } from '../utils/cwFormat';
 import { openWebPage } from '../utils/openWebPage';
 import {
-  CW_Q_COLOURS, cwAge, cwFreqText, cwPinFromScroll, cwPinRestore, cwSnrText, kbIdleText, kbRateText, kbSpotRateText,
+  CW_Q_COLOURS, cwAge, cwFreqText, cwSnrText, kbIdleText, kbRateText, kbSpotRateText,
   sortCwSignals, type CwList, type CwSignal, type CwSpot,
 } from '../services/cwList';
 
@@ -62,59 +62,34 @@ export function cwItems(list: CwList | null, spots: readonly CwSpot[]): Array<{ 
 /** ★ The confidence marker, short enough for an SE in Display Zoom; the colour carries it as much as the word. */
 export const Q_SHORT: Record<CwSignal['q'], string> = { high: 'HIGH', medium: 'MED', low: 'LOW', poor: 'POOR' };
 
-/** ★★ THE VIEW STAYS WHERE THE LISTENER PUT IT (cwList cwPinFromScroll / cwPinRestore) — the CW list's scroll pin as a hook,
- *  shared by every list-with-SPOTS view (CW, PSK, JTTY): scrolled down at all, the SPOTS heading keeps its place on screen
- *  while rows come and go above it; at the top, the view stays at the top. A keyboard / pad row is brought into view. */
+/** ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (Stuart, 2026-10-31: "when I am trying to read messages on it it keeps
+ *  getting pulled away by new signals being detected … do not keep pulling the view away from me when I am reading a
+ *  message"). Shared by every list-with-SPOTS view (CW, PSK, JTTY).
+ *  The old pin held the SPOTS HEADING still — so a new signal at a LOWER frequency (rows are lowest first, always) was
+ *  inserted above the row being read and pushed it off the screen, and at the very top nothing was held at all.
+ *  Now the anchor is whatever is at the top of the view — a signal row (keyed by its id), the heading or a spot —
+ *  and it stays exactly where it is on screen while rows arrive, go, or grow above it: maintainVisibleContentPosition,
+ *  natively, before the frame is drawn, so nothing flickers. minIndexForVisible 0 and NO autoscrollToTopThreshold:
+ *  even at the top, a new row above does not move you (scroll up to see it). The order (frequency) and the confidence
+ *  colours are untouched. A keyboard / pad row is still brought into view. */
 export function useSpotsPin(scrollRef: React.RefObject<ScrollView | null> | undefined, onScrollY: ((y: number) => void) | undefined,
                             focusIdx: number) {
   const own = useRef<ScrollView | null>(null);
   const sv = scrollRef ?? own;
-  const scrollY = useRef(0);
-  const headY = useRef(0);
-  const pinAt = useRef<number | null>(null);
-  const userScrolling = useRef(false);
-  const noteUser = (y: number) => { pinAt.current = cwPinFromScroll(y, headY.current); };
-  const onScroll = (e: any) => {
-    const y = e?.nativeEvent?.contentOffset?.y ?? 0;
-    scrollY.current = y;
-    onScrollY?.(y);
-    if (userScrolling.current) noteUser(y);
-  };
-  const settle = (e: any) => {
-    const y = e?.nativeEvent?.contentOffset?.y ?? scrollY.current;
-    scrollY.current = y; onScrollY?.(y);
-    noteUser(y);
-  };
-  /** The heading moved in the content (rows came or went above it): put it back where the listener left it. */
-  const onHeadLayout = useCallback((e: any) => {
-    headY.current = e?.nativeEvent?.layout?.y ?? 0;
-    if (userScrolling.current) return;   // ★ never fight a finger
-    const want = cwPinRestore(pinAt.current, headY.current, scrollY.current);
-    if (want === null) return;
-    scrollY.current = want;
-    try { sv.current?.scrollTo({ y: want, animated: false }); } catch { /* detached */ }
-  }, [sv]);
   const rowY = useRef<number[]>([]);
   useEffect(() => {
     if (focusIdx < 0) return;
     const y = rowY.current[focusIdx];
     if (y == null) return;
     try { sv.current?.scrollTo({ y: Math.max(0, y - 40), animated: false }); } catch { /* detached */ }
-    // ★ a row reached by the keyboard is where the listener is looking — pin from there
-    scrollY.current = Math.max(0, y - 40);
-    noteUser(scrollY.current);
   }, [focusIdx]);   // eslint-disable-line react-hooks/exhaustive-deps
   const scrollProps = {
     ref: sv as any,
     scrollEventThrottle: 32,
-    onScroll,
-    onScrollBeginDrag: () => { userScrolling.current = true; },
-    onScrollEndDrag: (e: any) => { settle(e); },
-    onMomentumScrollBegin: () => { userScrolling.current = true; },
-    onMomentumScrollEnd: (e: any) => { userScrolling.current = false; settle(e); },
-    onTouchEnd: () => { setTimeout(() => { userScrolling.current = false; }, 400); },
+    onScroll: (e: any) => { onScrollY?.(e?.nativeEvent?.contentOffset?.y ?? 0); },
+    maintainVisibleContentPosition: { minIndexForVisible: 0 },
   };
-  return { scrollProps, onHeadLayout, rowY };
+  return { scrollProps, rowY };
 }
 
 
@@ -145,7 +120,7 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
   const sigs = useMemo(() => sortCwSignals(list?.signals ?? []), [list]);
   const shownSpots = spots.slice(0, CW_SPOTS_SHOWN);
   const now = Date.now();
-  const { scrollProps, onHeadLayout, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
+  const { scrollProps, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
 
   const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
   const read = (t: string) => (plain && !psk ? plainEnglish(t) : t);
@@ -193,7 +168,7 @@ export default function CwView({ skim, psk = false, list, spots, text, bodySize,
           </TouchableOpacity>
         );
       })}
-      <View onLayout={onHeadLayout} style={[cs.head, { borderBottomColor: tk.divider }]}>
+      <View style={[cs.head, { borderBottomColor: tk.divider }]}>
         <Text style={[cs.headTxt, { color: tk.label }]}>SPOTS</Text>
       </View>
       {!shownSpots.length && (

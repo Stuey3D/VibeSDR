@@ -101,6 +101,7 @@ export function renderJttyRows(host: HTMLElement, sigs: JttySignal[], onTune: (h
     const r = document.createElement('div');
     // ★ q-<confidence> colours the message (#jttyList .jtr.q-low .tx …): red poor, orange low, amber medium, green high.
     r.className = 'jtr q-' + sg.q + (sg.active ? '' : ' gone');
+    r.dataset.ra = 'jt-s' + sg.id;   // ★ the reading anchor (main.ts keepReadingPlace)
     r.innerHTML =
       `<span class="f">${esc(jttyFreq(sg))}</span>` +
       `<span class="c${sg.call ? '' : ' none'}">${sg.call ? callHtml(sg.call, esc) : '—'}</span>` +
@@ -128,6 +129,7 @@ export function renderJttySpots(host: HTMLElement, spots: JttySpot[], fmtTime: (
   for (const s of spots.slice(0, 80)) {
     const r = document.createElement('div');
     r.className = 'jts' + (s.how === 'CQ' ? ' cq' : '');
+    r.dataset.ra = 'jt-p' + s.callsign;
     r.innerHTML = `<span class="t">${esc(fmtTime(s.timestamp))}</span>` +
       `<span class="f">${esc(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
       `<span class="c">${callHtml(s.callsign, esc)}</span>` +

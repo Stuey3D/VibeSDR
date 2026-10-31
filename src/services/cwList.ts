@@ -1,7 +1,7 @@
 /* cwList.ts — V12 CW on a VibeServer (docs/v12/CW-SKIMMER.md), the pure part of the app's CW box.
  *
  * ★★ ONE RULE, TWO READERS: the web client's CW panel (web/client/src/decoders.ts + main.ts renderCw / cwTune /
- *    cwPinWatch) is the reference, and every rule here is that one — the wire's sanitiser, the order of the list, the
+ *    keepReadingPlace) is the reference, and every rule here is that one — the wire's sanitiser, the order of the list, the
  *    confidence colours, the spots kept, the age and frequency text, the scroll pin. scripts/test_cw_list.ts tests them.
  *
  * Wire (vibe_cw_run.h, on /ws/dxcluster after `audio_extension_attach` 'cw' or 'cwskim' {width}):
@@ -159,22 +159,36 @@ export function cwSnrText(snr: number): string {
   return `${snr >= 0 ? '+' : ''}${Math.round(snr)} dB`;
 }
 
-/* ★★ THE VIEW STAYS WHERE THE LISTENER PUT IT (Stuart, 2026-10-25: "trying to look at the spots at the bottom … the new
- *  text above kept pulling the view up again"). The rows are rebuilt about once a second and new signals add rows ABOVE
- *  the spots, so a plain scroll offset jumps. Scrolled down at all = pinned to the SPOTS heading: it keeps its place on
- *  screen whatever happens above it. At the top = stays at the top (new rows arrive where the eye already is).
- *  The web's cwPinWatch / renderCw, as two pure steps: */
+/* ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (Stuart, 2026-10-31: "when I am trying to read messages on it it
+ *  keeps getting pulled away by new signals being detected … do not keep pulling the view away from me when I am reading
+ *  a message"). Rows are lowest frequency first, so a NEW signal below the one being read in frequency is inserted ABOVE
+ *  it; the old rule held only the SPOTS heading still (and nothing at the very top), so the row being read was pushed off
+ *  the screen. Now the anchor is whatever is at the top of the view — a signal row (by its id), the heading or a spot —
+ *  and after the rows are rebuilt it is put back at the same place on screen. If that row has gone, the next one that
+ *  was visible is used. The web's keepReadingPlace (main.ts) uses these; the app does the same natively
+ *  (maintainVisibleContentPosition, CwView useSpotsPin). Two pure steps: */
 
-/** On the LISTENER's scroll: where the SPOTS heading sits in the view (its content y less the offset), or null at the top. */
-export function cwPinFromScroll(scrollY: number, headY: number): number | null {
-  return scrollY > 0 ? headY - scrollY : null;
+/** One keyed element: its key and where it sits relative to the TOP OF THE VIEW (px; negative = scrolled past). */
+export interface ReadAnchor { key: string; top: number; bottom: number }
+
+/** Before the rebuild: the keyed elements still on screen (bottom inside the view), top first — the first is the anchor,
+ *  the rest are fall-backs should its signal leave the list. At most `max`. */
+export function readAnchorsOf(items: readonly ReadAnchor[], max = 8): ReadAnchor[] {
+  return items.filter((it) => it.key && it.bottom > 1).slice(0, max);
 }
-/** After the content changed: the offset that puts the heading back where the listener left it, or null to leave the view
- *  alone (at the top, or already there to the pixel). */
-export function cwPinRestore(pinAt: number | null, headY: number, scrollY: number): number | null {
-  if (pinAt === null) return null;
-  const want = Math.max(0, headY - pinAt);
-  return Math.abs(want - scrollY) >= 1 ? want : null;
+
+/** After the rebuild: the scroll offset that puts the first surviving anchor back where it was on screen, or null to leave
+ *  the view alone (no anchor survived, or it is already there to the pixel). `contentTopOf` = an element's top in the
+ *  scroll CONTENT (its distance from the view's top plus the current offset), undefined when it is gone. */
+export function readAnchorRestore(anchors: readonly ReadAnchor[], contentTopOf: (key: string) => number | undefined,
+                                  scrollTop: number): number | null {
+  for (const a of anchors) {
+    const y = contentTopOf(a.key);
+    if (y === undefined) continue;
+    const want = Math.max(0, y - a.top);
+    return Math.abs(want - scrollTop) >= 1 ? want : null;
+  }
+  return null;
 }
 
 /** The hint under the CW key's settings — the web's cwHint, word for word. */

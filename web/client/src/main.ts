@@ -10,6 +10,7 @@ import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, V
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
+import { readAnchorsOf, readAnchorRestore, type ReadAnchor } from '../../../src/services/cwList.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
 import { DABPLUS_LOGO_SVG } from './dabplusLogo';
 import { fmLogoKey, retryDelay } from '../../../src/services/logoCachePolicy.ts';
@@ -11578,29 +11579,12 @@ let jttyCap = false;
 let jttyLast: JttySignal[] = [];
 const jttySpots = new JttySpots();
 function renderJtty() {
-  const body = document.getElementById('decBody');
-  const head = $('jttySpotsHead');
-  jttyPinWatch(body);
-  renderJttyRows($('jttyRows'), jttyLast, jttyTune);
-  renderJttySpots($('jttySpots'), jttySpots.list, fmtSpotTime, jttyTune);
-  // ★ THE VIEW STAYS WHERE THE LISTENER PUT IT (CW's rule): scrolled down at all = pinned to the SPOTS heading
-  if (body && jttyPinAt !== null) {
-    const want = Math.max(0, head.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop - jttyPinAt);
-    if (Math.abs(want - body.scrollTop) >= 1) { jttyPinSetting = true; body.scrollTop = want; }
-  }
-}
-let jttyPinAt: number | null = null;
-let jttyPinSetting = false;
-let jttyPinBody: HTMLElement | null = null;
-function jttyPinWatch(body: HTMLElement | null) {
-  if (!body || jttyPinBody === body) return;
-  jttyPinBody = body;
-  body.addEventListener('scroll', () => {
-    if (jttyPinSetting) { jttyPinSetting = false; return; }   // ★ our own restore, not the listener
-    if (activeDec !== 'jtty') { jttyPinAt = null; return; }
-    const head = $('jttySpotsHead');
-    jttyPinAt = body.scrollTop > 0 ? head.getBoundingClientRect().top - body.getBoundingClientRect().top : null;
-  }, { passive: true });
+  $('jttySpotsHead').dataset.ra = 'jt-head';
+  // ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (CW's rule — keepReadingPlace)
+  keepReadingPlace(document.getElementById('decBody'), () => {
+    renderJttyRows($('jttyRows'), jttyLast, jttyTune);
+    renderJttySpots($('jttySpots'), jttySpots.list, fmtSpotTime, jttyTune);
+  });
 }
 /** ★ Tap a row or a spot: USB, the dial 1500 Hz below the station's tone 0 (its tones then sit mid-passband). */
 function jttyTune(rfHz: number) {
@@ -11826,13 +11810,14 @@ function cwTune(hz: number) {
 function renderCw() {
   const rows = $('cwRows');
   const l = cwLast;
-  /* ★★ THE VIEW STAYS WHERE THE LISTENER PUT IT (Stuart, 2026-10-25: "trying to look at the spots at the bottom … the new
-   *  text above kept pulling the view up again"). The rows are rebuilt about once a second and new signals add rows ABOVE
-   *  the spots, so a plain scrollTop jumped. Scrolled down at all = pinned to the SPOTS heading: it keeps its place on
-   *  screen whatever happens above it. At the top = stays at the top (new rows arrive where the eye already is). */
+  /* ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (Stuart, 2026-10-31) — keepReadingPlace: the rows are rebuilt about
+   *  once a second and a new signal lower in frequency lands ABOVE the one being read; whatever is at the top of the view
+   *  is put back where it was. */
   const body = document.getElementById('decBody');
-  const head = $('cwSpotsHead');
-  cwPinWatch(body);
+  $('cwSpotsHead').dataset.ra = 'cw-head';
+  keepReadingPlace(body, () => renderCwRows(rows, l));
+}
+function renderCwRows(rows: HTMLElement, l: typeof cwLast) {
   rows.textContent = '';
   if (!l || !l.signals.length) {
     const d = document.createElement('div'); d.className = 'idle';
@@ -11853,6 +11838,7 @@ function renderCw() {
     const r = document.createElement('div');
     // ★ q-<confidence> colours the message (#cwList .cwr.q-low .tx …): red poor, orange low, amber medium, green high (Stuart).
     r.className = 'cwr q-' + sg.q + (sg.active ? '' : ' gone') + (!l!.skimmer && sg.id === l!.primary ? ' primary' : '');
+    r.dataset.ra = 'cw-s' + sg.id;
     // ★ PSK: its mode where CW has its speed, and its IMD (where measured) in the title
     const psk = sg.baud !== undefined;
     r.innerHTML =
@@ -11882,6 +11868,7 @@ function renderCw() {
   for (const s of cwSpotsSeen.slice(0, 60)) {
     const r = document.createElement('div');
     r.className = 'cws';
+    r.dataset.ra = 'cw-p' + s.callsign;
     r.innerHTML = `<span class="t">${fmtSpotTime(s.timestamp)}</span>` +
       `<span class="f">${escapeHtml(s.frequency > 0 ? (s.frequency / 1e3).toFixed(2) : `${Math.round(s.audio)} Hz`)}</span>` +
       `<span class="c">${callHtml(s.callsign, escapeHtml)}</span>` +
@@ -11892,29 +11879,41 @@ function renderCw() {
     r.onclick = () => cwTune(s.frequency);
     sp.appendChild(r);
   }
-  // ★ Where the LISTENER left the heading — taken from their own scrolling (cwPinWatch), so growth that happened between two
-  //   updates is undone too, not just growth made by this one.
-  if (body && cwPinAt !== null) {
-    const want = Math.max(0, cwHeadInBox(body, head) - cwPinAt);
-    if (Math.abs(want - body.scrollTop) >= 1) { cwPinSetting = true; body.scrollTop = want; }
-  }
 }
-/** Where the heading sits in the box's CONTENT (not offsetTop: that is measured from the nearest positioned ancestor,
- *  which growth above the list does not move). */
-function cwHeadInBox(body: HTMLElement, head: HTMLElement): number {
-  return head.getBoundingClientRect().top - body.getBoundingClientRect().top + body.scrollTop;
+/** ★★★ THE VIEW NEVER LEAVES THE ROW YOU ARE READING (cwList readAnchorsOf / readAnchorRestore; Stuart, 2026-10-31: "do not
+ *  keep pulling the view away from me when I am reading a message"). Rebuild the keyed rows ([data-ra]) inside the scroll
+ *  box, then put whatever was at the top of the view back at the same place on screen — even at the very top, so a new
+ *  signal arriving above is not allowed to push the one being read down. One rule for CW, PSK and JTTY. */
+function keepReadingPlace(body: HTMLElement | null, rebuild: () => void) {
+  if (!body) { rebuild(); return; }
+  readWatch(body);
+  // ★ The anchor is taken where the LISTENER left the view (their own scrolling), so growth that happened between two
+  //   updates — ONE SIGNAL's text streaming in above — is undone too. Never scrolled: what is on screen now.
+  const anchors = readAnchors.length ? readAnchors : readAnchorsOf(readProbe(body));
+  rebuild();
+  if (!anchors.length) return;
+  const now = new Map(readProbe(body).map((it) => [it.key, it.top + body.scrollTop] as const));
+  const want = readAnchorRestore(anchors, (k) => now.get(k), body.scrollTop);
+  if (want !== null) body.scrollTop = want;
+  readAnchors = readAnchorsOf(readProbe(body));
 }
-/** The SPOTS heading's distance from the top of the box's view as the listener last scrolled it; null = at the top. */
-let cwPinAt: number | null = null;
-let cwPinSetting = false;
-let cwPinBody: HTMLElement | null = null;
-function cwPinWatch(body: HTMLElement | null) {
-  if (!body || cwPinBody === body) return;
-  cwPinBody = body;
+/** Every keyed row in the box, where it sits relative to the top of the view. */
+function readProbe(body: HTMLElement): ReadAnchor[] {
+  const boxTop = body.getBoundingClientRect().top;
+  return Array.from(body.querySelectorAll<HTMLElement>('[data-ra]')).map((el) => {
+    const r = el.getBoundingClientRect();
+    return { key: el.dataset.ra ?? '', top: r.top - boxTop, bottom: r.bottom - boxTop };
+  });
+}
+let readAnchors: ReadAnchor[] = [];
+let readBody: HTMLElement | null = null;
+function readWatch(body: HTMLElement) {
+  if (readBody === body) return;
+  readBody = body;
   body.addEventListener('scroll', () => {
-    if (cwPinSetting) { cwPinSetting = false; return; }   // ★ our own restore, not the listener
-    if (!kbOn()) { cwPinAt = null; return; }
-    cwPinAt = body.scrollTop > 0 ? cwHeadInBox(body, $('cwSpotsHead')) - body.scrollTop : null;
+    // ★ No "was it ours?" flag: re-reading the view after our own restore gives the same anchor, and a flag left set by a
+    //   restore the browser clamped (no scroll event) would swallow the listener's next real scroll.
+    readAnchors = readAnchorsOf(readProbe(body));
   }, { passive: true });
 }
 /* ★★★ NAVTEX — A MESSAGE AT A TIME (Stuart, 2026-10-05): "a hybrid of RTTY & WEFAX … message arrives and is displayed
@@ -13027,7 +13026,7 @@ function showDecBox(what: string) {
   $('jttyList').classList.toggle('on', isJtty);
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
   else $('decStatus').title = '';
-  if (isJtty) { jttyLast = []; jttySpots.clear(); jttyPinAt = null; renderJtty(); }
+  if (isJtty) { jttyLast = []; jttySpots.clear(); renderJtty(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The
   // bar is a compressed version of the same data; showing both would be saying everything
   // twice, with the smaller copy competing for attention (Stuart, 2026-07-26).

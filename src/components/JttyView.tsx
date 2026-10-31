@@ -40,7 +40,7 @@ export default function JttyView({ list, spots, bodySize, focusIdx, onTune, scro
   const sigs = useMemo(() => sortJtty(list), [list]);
   const shownSpots = spots.slice(0, JTTY_SPOTS_SHOWN);
   const now = Date.now();
-  const { scrollProps, onHeadLayout, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
+  const { scrollProps, rowY } = useSpotsPin(scrollRef, onScrollY, focusIdx);
   const ring = (i: number) => (i === focusIdx ? { borderColor: tk.focus, borderWidth: 2, borderRadius: 6 } : null);
 
   return (
@@ -68,7 +68,7 @@ export default function JttyView({ list, spots, bodySize, focusIdx, onTune, scro
           </TouchableOpacity>
         );
       })}
-      <View onLayout={onHeadLayout} style={[cs.head, { borderBottomColor: tk.divider }]}>
+      <View style={[cs.head, { borderBottomColor: tk.divider }]}>
         <Text style={[cs.headTxt, { color: tk.label }]}>SPOTS</Text>
       </View>
       {!shownSpots.length && <Text style={[cs.idle, { color: tk.muted }]}>{JTTY_IDLE_SPOTS}</Text>}
