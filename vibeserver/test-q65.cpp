@@ -15,6 +15,7 @@
 //   • the LIVE decoder: 3½ minutes of audio blocks with capture times → the 60 s and 30 s transmissions each spotted
 //     once, in the right period, with the right mode name ("Q65-60A", "Q65-30A").
 // ★ Silent: nothing is played. Deterministic: fixed seeds.
+#include "decoders/digimodes/q65.h"   // ★ the mode (its periods by dial)
 #include "decoders/digimodes/q65_decoder.h"
 #include "q65_synth.h"
 extern "C" {
@@ -234,8 +235,21 @@ static void testLive() {
     ok(got.size() == 3, "nothing else (" + std::to_string(got.size()) + ")");
 }
 
+// ★★ Q65-15 only on the 6 m and 2 m dials (Stuart, 2026-10-31) — every other dial keeps 30 + 60 s.
+static void testPeriodsByDial() {
+    std::printf("\n── which periods run on which dial ──\n");
+    auto has15 = [](double hz) { for (int p : vibe::digi::q65PeriodsAt(hz)) if (p == 15) return true; return false; };
+    ok(has15(50.275e6) && has15(50.310e6), "6 m dials (50.275, 50.310): Q65-15 runs");
+    ok(has15(144.115e6) && has15(144.180e6), "2 m dials (144.115, 144.180): Q65-15 runs");
+    ok(!has15(432.074e6) && !has15(1296.050e6), "70 cm and 23 cm dials: no Q65-15");
+    ok(vibe::digi::q65PeriodsAt(432.074e6) == std::vector<int>({30, 60}), "…they keep 30 + 60 s");
+    const auto m = vibe::digi::vibeDigiMode_q65();
+    ok(m.makeAt && m.variantAt && m.variantAt(144.180e6) != m.variantAt(432.074e6), "the mode makes each dial's engine for that dial");
+}
+
 int main() {
     std::printf("test-q65 — Q65, our own receiver\n");
+    testPeriodsByDial();
     testFrame();
     testBp();
     testSensitivity();

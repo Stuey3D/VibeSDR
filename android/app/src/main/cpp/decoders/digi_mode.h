@@ -107,6 +107,12 @@ struct ModeDef {
     std::vector<std::pair<std::string, double>> dials;
     /** A fresh engine. Called on a socket thread when spots start or the band changes; may throw (the host catches). */
     std::function<std::unique_ptr<Engine>()> make;
+    /** ★ Optional: a fresh engine for ONE dial (Hz) — a mode whose set-up depends on where it listens (Q65: its 15 s
+     *  period only on 6 m and 2 m). The spotter prefers it to `make` when set. `variantAt` says which set-up a dial gets,
+     *  so Single remakes the engine only when the listener's dial moves to a dial that needs a different one. */
+    std::function<std::unique_ptr<Engine>(double dialHz)> makeAt;
+    std::function<int(double dialHz)> variantAt;
+    std::unique_ptr<Engine> makeFor(double dialHz) const { return makeAt ? makeAt(dialHz) : make(); }
 };
 
 /** The registered modes, in registration order (FT8 first). Built once, never changed after — read freely. */

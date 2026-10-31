@@ -331,7 +331,8 @@ inline Row engineRow(const digi::ModeDef& m, const std::vector<float>& audio, do
     double pct = -1; uint64_t skipped = 0, frames = 0;
     {
         std::unique_ptr<digi::Engine> e;
-        try { e = m.make(); } catch (...) { return r; }
+        // ★ a mode whose set-up depends on its dial is timed at its HEAVIEST dial: Q65 on 6 m, where Q65-15 runs too
+        try { e = m.makeAt ? m.makeAt(m.name == "Q65" ? 50.310e6 : 0.0) : m.make(); } catch (...) { return r; }
         if (!e) return r;
         e->onSpot = [&](const digi::Spot&) { got.fetch_add(1); };
         e->loaded = [] { return true; };   // ★ ONE PASS — what a loaded box pays (the FT8 row's rule)

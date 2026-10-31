@@ -39,7 +39,9 @@ void Spotter::planSingle(double dialHz) {
     auto wanted = [&](const std::string& n) { for (const auto& w : want) if (w == n) return true; return false; };
     std::lock_guard<std::mutex> lk(statMtx_);
     for (auto it = single_.begin(); it != single_.end();) {
-        if (wanted(it->def->name)) { ++it; continue; }
+        // ★ kept while still wanted — unless its set-up depends on the dial and this one needs another (Q65's 15 s period)
+        const bool sameSetup = !it->def->variantAt || !std::isfinite(dialHz) || it->def->variantAt(it->dial) == it->def->variantAt(dialHz);
+        if (wanted(it->def->name) && sameSetup) { ++it; continue; }
         retiredSkips_ += it->eng->slotsSkipped(); retiredDecodes_ += it->eng->slotsDecoded();
         it = single_.erase(it);
     }
@@ -48,8 +50,8 @@ void Spotter::planSingle(double dialHz) {
         bool have = false;
         for (const Run& r : single_) if (r.def == &m) have = true;
         if (have) continue;
-        Run r; r.def = &m; r.dial = 0;
-        try { r.eng = m.make(); } catch (const std::exception&) { continue; }
+        Run r; r.def = &m; r.dial = std::isfinite(dialHz) ? dialHz : 0;
+        try { r.eng = m.makeFor(r.dial); } catch (const std::exception&) { continue; }
         if (!r.eng) continue;
         wire(r);
         single_.push_back(std::move(r));
@@ -166,7 +168,7 @@ void Spotter::plan() {
             for (Run& r : c.runs) if (r.def == md.first) have = true;
             if (have) continue;
             Run r; r.def = md.first; r.dial = md.second;
-            try { r.eng = md.first->make(); } catch (const std::exception&) { continue; }
+            try { r.eng = md.first->makeFor(md.second); } catch (const std::exception&) { continue; }
             if (!r.eng) continue;
             wire(r);
             r.gate.reset(new Gate());

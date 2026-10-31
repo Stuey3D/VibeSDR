@@ -196,6 +196,7 @@ paper. Two rules follow from the measurements:
 | Band spots + JS8 + WSPR + PSK + CW skimmer | +67 +7 +16 +13 +29 | ≈ 213 % | just — that is the whole decoder budget |
 | one Q65 dial with Q65-15 | +21.6 | ≈ 103 % | yes |
 | Q65 on all 17 dials of 23 cm, with Q65-15 | +368 | ≈ 450 % | **no** — at most ≈ 9 dials in the budget (≈ 18 without Q65-15) |
+<!-- ★ 2026-10-31: Q65-15 now runs only on the 6 m and 2 m dials (DECODERS-WAVE2.md §16c), so 23 cm's dials are the "without Q65-15" figure. -->
 | MFSK one-key AUTO ×3 listeners | +36 | ≈ 117 % | yes |
 | FT8 + FT4 + MSK144 + FST4 + FST4W + SELCAL + SAME + PAGE + Feld Hell (one each) | +3 +2.5 +6.4 +0.8 +2.3 +0.3 +1.5 +0.5 | ≈ 98 % | yes |
 | ADS-B (its own radio) | +43 | ≈ 124 % | yes |

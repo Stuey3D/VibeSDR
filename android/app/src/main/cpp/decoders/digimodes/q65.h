@@ -3,8 +3,7 @@
 //
 // ★★ ONE ENGINE, THREE PERIODS. Q65 has no single T/R period: EME on 2 m and 70 cm is mostly Q65-60 (A–D by the band's
 //    Doppler spread), ionoscatter and 6 m Q65-30A, and Q65-15 is used for quick scatter contacts. The engine decodes the
-//    15, 30 AND 60 s periods of the same audio (15 s added 2026-10-31 — Stuart: "make sure we cover everything"), every
-//    submode A–D, and the spot's mode names what it was ("Q65-60B") — the map and the list file it under Q65
+//    30 AND 60 s periods of the same audio, every submode A–D, and the spot's mode names what it was ("Q65-60B") — the map and the list file it under Q65
 //    (src/utils/digiModes.ts digiModeFamily). 120/300 s and submode E (10 GHz and up, outside our bands) are built in the
 //    engine but not run here.
 // ★★ DIALS (digi_bands.h's "Q65" rows): only where the IARU Region 1 plans allow MGM AND PSKReporter shows Q65 being
@@ -15,7 +14,11 @@
 //   ≈ 2.6. Pi 2 (qemu-arm instruction count, NEON build): ≈ 0.84 G instructions per 60 s window, ≈ 0.68 G per 30 s →
 //   ≈ 2.2 G a minute → ≈ 3–4 s of one 900 MHz core a minute at 0.6–0.8 IPC (≈ 5–7 %, ESTIMATED). The scalar build is
 //   2.3× that (belief propagation is 4/5 of it unvectorised). Loaded: one submode, half the candidates, no a-priori.
-// ★★ Q65-15 (2026-10-31) DOUBLES IT: Mac 23.9 ms per 15 s window (× 4 a minute = 96 ms) beside 30 s 31.1 + 60 s 39.0 ms
+// ★★★ Q65-15 ONLY ON THE 6 m AND 2 m DIALS (Stuart, 2026-10-31). Q65-15 is the quick-scatter period, used on 6 m and 2 m;
+//    the 70 cm and 23 cm dials (EME, Q65-60) keep 30 + 60 s. q65PeriodsAt() decides by the dial; the spotter makes each
+//    dial's engine with its own set (ModeDef::makeAt), and Single remakes it when the listener moves between the two
+//    kinds of dial (ModeDef::variantAt). It was every dial at first (8fa07987b, "make sure we cover everything").
+// ★★ Q65-15 (2026-10-31) DOUBLES A DIAL'S COST where it runs: Mac 23.9 ms per 15 s window (× 4 a minute = 96 ms) beside 30 s 31.1 + 60 s 39.0 ms
 //    (101 ms a minute); Pi 2 count ≈ 0.55 G instructions a 15 s window → +2.2 G a minute, ≈ 4.4 G a minute in all →
 //    ≈ 6–8 s of a 900 MHz core a minute per dial (≈ 10–14 %, ESTIMATE). costVsFt8 2.6 → 4.7. The governor sheds Q65
 //    first (priority 100).
@@ -31,7 +34,7 @@ namespace digi {
 
 class Q65Engine : public Engine {
 public:
-    Q65Engine() : d_(std::vector<int>{15, 30, 60}) {
+    explicit Q65Engine(std::vector<int> periods = {30, 60}) : d_(std::move(periods)) {
         d_.opts.loHz = 200; d_.opts.hiHz = 4800;
         d_.opts.submodes = 0x0F;                       // A–D
         d_.loadProbe = [this] { return loaded ? loaded() : false; };
@@ -51,16 +54,27 @@ private:
     q65::LiveDecoder d_;
 };
 
+/** ★ Is this dial a 6 m or 2 m one (where Q65-15 runs)? Region-neutral band edges: 50–54 MHz and 144–148 MHz. */
+inline bool q65FifteenAt(double dialHz) {
+    return (dialHz >= 50.0e6 && dialHz < 54.0e6) || (dialHz >= 144.0e6 && dialHz < 148.0e6);
+}
+/** The T/R periods a Q65 engine on this dial decodes: 15 + 30 + 60 s on 6 m and 2 m, 30 + 60 s everywhere else. */
+inline std::vector<int> q65PeriodsAt(double dialHz) {
+    return q65FifteenAt(dialHz) ? std::vector<int>{15, 30, 60} : std::vector<int>{30, 60};
+}
+
 inline ModeDef vibeDigiMode_q65() {
     ModeDef m;
     m.name = "Q65";
     m.slotSec = 60.0;              // ★ the activity gate's period: a minute (the 30 s periods within it ride along)
     m.sampleRate = 12000;
     m.audioLoHz = 200; m.audioHiHz = 4800;
-    m.costVsFt8 = 4.7;             // measured, see the file note (2.6 before Q65-15 joined, 2026-10-31)
+    m.costVsFt8 = 4.7;             // measured with Q65-15, see the file note — the worst dial (6 m / 2 m); 70 cm and 23 cm ≈ 2.6
     m.lightCostVsFt8 = 2.2;        // loaded: one submode, half the candidates, no a-priori pass (scaled with the 15 s period)
     m.priority = 100;              // ★ the governor sheds it before every established mode
-    m.make = [] { return std::unique_ptr<Engine>(new Q65Engine()); };
+    m.make = [] { return std::unique_ptr<Engine>(new Q65Engine()); };   // ★ no dial known: 30 + 60 s
+    m.makeAt = [](double dialHz) { return std::unique_ptr<Engine>(new Q65Engine(q65PeriodsAt(dialHz))); };
+    m.variantAt = [](double dialHz) { return q65FifteenAt(dialHz) ? 1 : 0; };
     return m;                      // dials: digi_bands.h's "Q65" rows
 }
 

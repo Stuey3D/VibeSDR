@@ -865,7 +865,8 @@ Copy: `PAGING_HINT`, the sdrTour mode card's Android clause, the About note. **U
   band (1240–1300 MHz) joins the Band list after 70 cm, carrying only Q65**; 6 m 50.310 (Stuart's) and 50.275 (where
   the 6 m reports were). 23 cm's 77 kHz is a 48 kHz main slice + an extra slice (`spanOf`, unchanged code;
   test-digi-spots checks it).
-- **Q65-15 enabled**: the engine runs 15, 30 and 60 s, submodes A–D (`q65.h`). 120/300 s and submode E stay built but off
+- **Q65-15 enabled** — ★ since narrowed (Stuart, 2026-10-31, section 16c): 15 s runs on the 6 m and 2 m dials only; 70 cm
+  and 23 cm run 30 + 60 s. The engine runs 15, 30 and 60 s, submodes A–D (`q65.h`). 120/300 s and submode E stay built but off
   (10 GHz and up). test-q65's live test now carries a 15A transmission too (three spots, nothing else).
 - Known-signal labels: Q65 had none. Now one "Q65" label per RUN of joined windows (`q65Runs` in `knownSignals.ts` —
   17 labels on 23 cm would crowd out everything), the bar over the run, a tap tunes the run's first dial and opens DIGI
@@ -888,6 +889,14 @@ guessed), and ≈ 2.2 G instructions a minute on the Pi 2 model → ≈ 4.4 G a 
 core a minute (≈ 10–14 %, ESTIMATE at 0.6–0.8 IPC). `costVsFt8` 2.6 → 4.7 (light 1.2 → 2.2) so the governor plans with
 the real figure. With 17 dials on 23 cm a Pi 2 cannot run them all: the governor sheds Q65 first. ★ Question for Stuart
 below: keep Q65-15 on every dial, or only where it is used (6 m and 2 m scatter)?
+
+**★★ Answered (Stuart, 2026-10-31): only on the 6 m and 2 m Q65 dials.** `q65.h` `q65PeriodsAt(dial)`: 15 + 30 + 60 s on
+50–54 MHz and 144–148 MHz, 30 + 60 s on every other dial (70 cm, 23 cm EME). The spotter builds each dial's engine for
+that dial (`ModeDef::makeAt`, used by Band per dial and by Single at the listener's dial), and Single remakes the engine when
+the listener moves between the two kinds of dial (`ModeDef::variantAt`). `costVsFt8` stays 4.7 — the worst dial, which is
+what the governor must plan for on 6 m and 2 m; a 70 cm or 23 cm dial costs ≈ 2.6. So 23 cm's 17 dials cost about half
+what this section measured. The benchmark's Q65 row is timed at a 6 m dial (its heaviest set-up). test-q65 checks the
+periods by dial.
 
 ### 16d. Feld Hell = Hellschreiber
 The HELL key's hint (`HELL_HINT`), the web key's title, the About note and the tour card now say "Feld Hell
@@ -1331,7 +1340,7 @@ Next, in order:
 2. **The app** has not run on a simulator or device this run (esbuild syntax checks; the small services type-checked):
    PAGE's mute and banner, PROTOCOL/RATE rows, the MFSK key's FAMILY/MODE rows, the session rule, Feld Hell.
 3. Real air: FLEX on a phone (US 929–932 MHz or UK 153 MHz paging), Q65 on 23 cm/70 cm/2 m EME, the rest as before.
-4. Questions in section 16–19 / the final report: Q65-15 everywhere or only on 6 m/2 m; the MFSK key's name; FLEX's two
+4. Questions in section 16–19 / the final report: ~~Q65-15 everywhere or only on 6 m/2 m~~ (answered: 6 m and 2 m only); the MFSK key's name; FLEX's two
    mode codes seen in one source only.
 5. Still waiting on Stuart from earlier runs: ACARS → VDL2 → HFDL → RS41 (standard or a capture), BPC, TDF, CHU labels.
 
