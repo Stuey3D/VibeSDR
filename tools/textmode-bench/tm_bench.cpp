@@ -1,6 +1,7 @@
 // tools/textmode-bench/tm_bench.cpp — sensitivity of the text-mode receivers on synthetic AWGN (SNR in 3 kHz, signal
 // power over the transmission) and their cost.   tm_bench sweep MODE[,MODE…] SNR_LO SNR_HI STEP TRIALS [auto]
-//                                                 tm_bench cost FAMILY SECONDS     (noise through AUTO, for qemu counts)
+//                                                 tm_bench cost FAMILY SECONDS [MODE]   (noise through AUTO — or MODE, a
+//                                                   manual sub-mode or "any-<family>" — for qemu counts)
 #include "decoders/textmodes.h"
 #include <cmath>
 #include <cstdio>
@@ -24,12 +25,12 @@ int main(int argc, char** argv) {
     if (argc >= 4 && !std::strcmp(argv[1], "cost")) {
         F f; TextModeDecoder::familyOf(argv[2], f);
         const int secs = std::atoi(argv[3]);
-        TextModeDecoder d(f, 48000, "auto"); int chars = 0;
+        TextModeDecoder d(f, 48000, argc > 4 ? argv[4] : "auto"); int chars = 0;
         d.onText = [&](const std::string& s) { chars += (int)s.size(); };
         std::vector<float> x(48000); uint32_t s = 12345;
         for (auto& v : x) { s = s * 1664525u + 1013904223u; v = 0.3f * (float)((int32_t)s) * (1.0f / 2147483648.0f); }
         for (int k = 0; k < secs; ++k) for (int i = 0; i < 48000; i += 960) d.feed(x.data() + i, 960);
-        std::printf("tm_bench cost %s: %d s, %d characters\n", argv[2], secs, chars);
+        std::printf("tm_bench cost %s %s: %d s, %d characters\n", argv[2], argc > 4 ? argv[4] : "auto", secs, chars);
         return 0;
     }
     if (argc < 7) return 2;

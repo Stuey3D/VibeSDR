@@ -39,6 +39,15 @@ static Got run(F f, const std::string& mode, const std::vector<float>& x, double
     for (size_t i = 0; i < x.size(); i += blk) d.feed(x.data() + i, (int)std::min<size_t>(blk, x.size() - i));
     return g;
 }
+/** AUTO holds the common sub-modes (textmodes.cpp kSubs, `common`); the rest are tried only by their manual setting */
+static bool inAuto(const std::string& id) {
+    static const char* manualOnly[] = {"olivia-4-250", "olivia-64-2000", "contestia-4-125", "contestia-4-250", "contestia-4-500",
+        "contestia-4-1000", "contestia-4-2000", "contestia-8-125", "contestia-8-500", "contestia-8-1000", "contestia-8-2000",
+        "contestia-16-250", "contestia-16-1000", "contestia-16-2000", "contestia-32-2000", "contestia-64-500",
+        "contestia-64-1000", "contestia-64-2000"};
+    for (const char* m : manualOnly) if (id == m) return false;
+    return true;
+}
 static std::string body(const std::string& t) {   // the text without the "[MODE · Hz]" lines
     std::string o; size_t i = 0;
     while (i < t.size()) { size_t e = t.find('\n', i); if (e == std::string::npos) e = t.size(); std::string l = t.substr(i, e - i);
@@ -60,6 +69,11 @@ int main() {
         {F::Olivia, "olivia-32-1000", 1500}, {F::Olivia, "olivia-64-2000", 1500},
         {F::Olivia, "contestia-4-125", 1500}, {F::Olivia, "contestia-8-250", 1500}, {F::Olivia, "contestia-16-500", 1500},
         {F::Olivia, "contestia-32-1000", 1500}, {F::Olivia, "contestia-64-2000", 1500},
+        // ★ the other eleven of fldigi's standard Contestia sub-modes (2026-10-31, ninth run: DECODERS-WAVE2.md section 23)
+        {F::Olivia, "contestia-4-500", 1500}, {F::Olivia, "contestia-4-1000", 1500}, {F::Olivia, "contestia-4-2000", 1500},
+        {F::Olivia, "contestia-8-125", 1500}, {F::Olivia, "contestia-8-1000", 1500}, {F::Olivia, "contestia-8-2000", 1500},
+        {F::Olivia, "contestia-16-250", 1500}, {F::Olivia, "contestia-16-2000", 1500}, {F::Olivia, "contestia-32-2000", 1500},
+        {F::Olivia, "contestia-64-500", 1500}, {F::Olivia, "contestia-64-1000", 1500},
     };
     std::printf("\n── each sub-mode at +10 dB (3 kHz), 48 kHz: its manual setting, and AUTO where it is in AUTO ──\n");
     for (const Case& c : cases) {
@@ -68,13 +82,7 @@ int main() {
         auto x = withNoise(textModeSynth(c.f, c.id, msg, fs, c.hz), fs, 10, 11);
         Got m = run(c.f, c.id, x, fs);
         ok(body(m.text).find(want) != std::string::npos, std::string(c.id) + " manual: " + body(m.text).substr(0, 60));
-        bool inAuto = false;
-        for (auto& mi : TextModeDecoder::modes(c.f)) (void)mi;
-        // AUTO holds the common sub-modes (textmodes.cpp kSubs); the rest are tried only by their manual setting
-        const std::string id = c.id;
-        inAuto = !(id == "olivia-4-250" || id == "olivia-64-2000" || id == "contestia-4-125" || id == "contestia-4-250" ||
-                   id == "contestia-8-500" || id == "contestia-16-1000" || id == "contestia-64-2000");
-        if (inAuto) {
+        if (inAuto(c.id)) {
             Got a = run(c.f, "auto", x, fs);
             std::string lab = a.detected;
             ok(body(a.text).find(want) != std::string::npos, std::string(c.id) + " AUTO (named " + lab + ")");
@@ -94,8 +102,7 @@ int main() {
     {
         for (const Case& c : cases) {
             const std::string id = c.id;
-            if (id == "olivia-4-250" || id == "olivia-64-2000" || id == "contestia-4-125" || id == "contestia-4-250" ||
-                id == "contestia-8-500" || id == "contestia-16-1000" || id == "contestia-64-2000") continue;   // manual only
+            if (!inAuto(id)) continue;   // manual only
             auto x = withNoise(textModeSynth(c.f, c.id, msg, fs, c.hz), fs, 10, 11);
             Got a = run(F::All, "auto", x, fs);
             ok(body(a.text).find(msg) != std::string::npos, id + " through the one AUTO (named " + a.detected + ")");
@@ -103,7 +110,7 @@ int main() {
         const auto L = TextModeDecoder::modes(F::All);
         std::string groups; for (auto& m : L) if (!m.group.empty() && groups.find(m.group) == std::string::npos) groups += m.group + ",";
         bool every = true; for (const Case& c : cases) { bool f = false; for (auto& m : L) f |= m.id == c.id; every &= f; }
-        ok(L[0].id == "auto" && groups == "MFSK,OLIVIA,CONTESTIA,THOR," && every && L.size() == 29, "the list: AUTO, then each family's ANY and every sub-mode (" + std::to_string(L.size()) + " entries, " + groups + ")");
+        ok(L[0].id == "auto" && groups == "MFSK,OLIVIA,CONTESTIA,THOR," && every && L.size() == 40, "the list: AUTO, then each family's ANY and every sub-mode (" + std::to_string(L.size()) + " entries, " + groups + ")");
         ok(TextModeDecoder::modesJson(F::All).find("{\"id\":\"olivia-8-250\",\"label\":\"8/250\",\"group\":\"OLIVIA\"}") != std::string::npos, "each entry carries its family (the FAMILY row) and a short label (the MODE row)");
         auto y = withNoise(textModeSynth(F::Olivia, "olivia-8-250", msg, fs, 1500), fs, 10, 41);
         ok(body(run(F::All, "any-olivia", y, fs).text).find(msg) != std::string::npos, "ANY under OLIVIA decodes OLIVIA 8/250");
@@ -127,21 +134,43 @@ int main() {
         ok(b.detected == "OLIVIA 4/125" && body(b.text).find(msg) != std::string::npos, "OLIVIA 4/125 through AUTO: still itself (" + b.detected + ")");
     }
     if (const char* dir = std::getenv("VIBE_FLDIGI_DIR")) {   // ★ fldigi's own Contestia audio (8 kHz float32, not in git)
-        std::printf("\n── fldigi as a black box: CONTESTIA, every sub-mode we offer (%s) ──\n", dir);
+        std::printf("\n── fldigi as a black box: CONTESTIA, all 19 standard sub-modes (%s) ──\n", dir);
         const char* want = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ??????ABCDEFGHIJKLMNOPQRSTUVWXYZ????\nNEW LINE";
-        const char* subs[][2] = { {"Cont-4-125", "contestia-4-125"}, {"Cont-4-250", "contestia-4-250"}, {"Cont-8-250", "contestia-8-250"},
-                                  {"Cont-8-500", "contestia-8-500"}, {"Cont-16-500", "contestia-16-500"}, {"Cont-16-1K", "contestia-16-1000"},
-                                  {"Cont-32-1K", "contestia-32-1000"}, {"Cont-64-2K", "contestia-64-2000"} };
-        for (auto& sb : subs) {
-            FILE* fp = std::fopen((std::string(dir) + "/" + sb[0] + ".raw").c_str(), "rb");
-            if (!fp) { ok(false, std::string(sb[0]) + ": missing"); continue; }
+        // file, id, and the SNR (dB in 3 kHz) of the edge: the lowest 2 dB step where 10 of 10 noise seeds gave the whole
+        // text in the ninth run's sweep (DECODERS-WAVE2.md section 23)
+        struct Fl { const char* file; const char* id; double edge; };
+        const Fl subs[] = {
+            {"Cont-4-125", "contestia-4-125", -10}, {"Cont-4-250", "contestia-4-250", -8}, {"Cont-4-500", "contestia-4-500", -4},
+            {"Cont-4-1K", "contestia-4-1000", -2}, {"Cont-4-2K", "contestia-4-2000", 2}, {"Cont-8-125", "contestia-8-125", -14},
+            {"Cont-8-250", "contestia-8-250", -12}, {"Cont-8-500", "contestia-8-500", -8}, {"Cont-8-1K", "contestia-8-1000", -4},
+            {"Cont-8-2K", "contestia-8-2000", -2}, {"Cont-16-250", "contestia-16-250", -12}, {"Cont-16-500", "contestia-16-500", -10},
+            {"Cont-16-1K", "contestia-16-1000", -4}, {"Cont-16-2K", "contestia-16-2000", -4}, {"Cont-32-1K", "contestia-32-1000", -8},
+            {"Cont-32-2K", "contestia-32-2000", -4}, {"Cont-64-500", "contestia-64-500", -12}, {"Cont-64-1K", "contestia-64-1000", -10},
+            {"Cont-64-2K", "contestia-64-2000", -10} };
+        for (const Fl& sb : subs) {
+            FILE* fp = std::fopen((std::string(dir) + "/" + sb.file + ".raw").c_str(), "rb");
+            if (!fp) { ok(false, std::string(sb.file) + ": missing"); continue; }
             std::vector<float> a; float buf[4096]; size_t k;
             while ((k = std::fread(buf, 4, 4096, fp)) > 0) a.insert(a.end(), buf, buf + k);
             std::fclose(fp);
-            const std::string t = body(run(F::Olivia, sb[1], a, 8000).text);
+            const std::string t = body(run(F::Olivia, sb.id, a, 8000).text);
             // ★ from '!' on: 16/500 shows one start-up character ("0") between the first space and '!' (the pre-lock
             //   block — section 11's known dead end); everything after it is exact on every sub-mode
-            ok(t.find(want + 1) != std::string::npos, std::string(sb[1]) + ": every printable character and the newline as fldigi sent them");
+            ok(t.find(want + 1) != std::string::npos, std::string(sb.id) + ": every printable character and the newline as fldigi sent them");
+            // ★ the same audio in white noise (seeds 1000…, the sweep's): at the edge 2 of 3 whole, 4 dB above it 3 of 3
+            double p = 0; size_t np = 0; for (float v : a) if (std::fabs(v) > 1e-4f) { p += v * v; ++np; } p /= np ? np : 1;
+            for (double snr : {sb.edge, sb.edge + 4}) {
+                int whole = 0;
+                for (int seed = 1000; seed < 1003; ++seed) {
+                    std::vector<float> x(a);
+                    const float sig = (float)std::sqrt(p / std::pow(10.0, snr / 10.0) * 4000.0 / 3000.0);
+                    std::mt19937 r(seed); std::normal_distribution<float> g(0.f, 1.f);
+                    for (auto& v : x) v += sig * g(r);
+                    whole += run(F::Olivia, sb.id, x, 8000).text.find(want + 1) != std::string::npos;
+                }
+                const bool edge = snr == sb.edge;
+                ok(whole >= (edge ? 2 : 3), std::string(sb.id) + " at " + std::to_string((int)snr) + " dB: " + std::to_string(whole) + "/3 whole");
+            }
         }
     }
 
@@ -168,6 +197,22 @@ int main() {
         std::vector<float> b(960);
         for (long i = 0; i < (long)noiseMin * 60 * 50; ++i) { for (auto& v : b) v = g(r); d.feed(b.data(), 960); }
         ok(t.empty() && !locked, std::string(TextModeDecoder::extName(f)) + ": " + (t.empty() ? "nothing" : "\"" + t.substr(0, 40) + "\""));
+    }
+
+    std::printf("\n── white noise, 1 min through every CONTESTIA sub-mode's manual setting ──\n");
+    {
+        int quiet = 0, total = 0; std::string loud;
+        for (const auto& m : TextModeDecoder::modes(F::All)) {
+            if (m.group != "CONTESTIA") continue;
+            TextModeDecoder d(F::All, fs, m.id); std::string t; bool locked = false;
+            d.onText = [&](const std::string& s) { t += s; };
+            d.onState = [&](int s) { if (s) locked = true; };
+            std::mt19937 r(300 + total); std::normal_distribution<float> g(0.f, 0.3f);
+            std::vector<float> b(960);
+            for (long i = 0; i < 60L * 50; ++i) { for (auto& v : b) v = g(r); d.feed(b.data(), 960); }
+            ++total; if (t.empty() && !locked) ++quiet; else loud += m.id + " ";
+        }
+        ok(total == 20 && quiet == total, "nothing printed, never locked: " + std::to_string(quiet) + "/" + std::to_string(total) + (loud.empty() ? "" : " (" + loud + ")"));
     }
 
     if (const char* dir = std::getenv("VIBE_TEXTMODE_SAMPLES")) {

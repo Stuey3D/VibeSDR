@@ -43,13 +43,26 @@ const Sub kSubs[] = {
     {"olivia-16-1000", "OLIVIA 16/1000", kOlivia, 16, 128, 8000, 2, true},
     {"olivia-32-1000", "OLIVIA 32/1000", kOlivia, 32, 256, 8000, 2, true},
     {"olivia-64-2000", "OLIVIA 64/2000", kOlivia, 64, 256, 8000, 2, false},
+    // ★ CONTESTIA: all 19 of the standard tones/bandwidth pairs (fldigi's list, confirmed against its audio as a black
+    //   box — DECODERS-WAVE2.md sections 18 and 23). sps = 8000·M/BW as Olivia's.
     {"contestia-4-125",   "CONTESTIA 4/125",   kContestia, 4, 256, 8000, 2, false},
     {"contestia-4-250",   "CONTESTIA 4/250",   kContestia, 4, 128, 8000, 2, false},
+    {"contestia-4-500",   "CONTESTIA 4/500",   kContestia, 4, 64, 8000, 2, false},
+    {"contestia-4-1000",  "CONTESTIA 4/1000",  kContestia, 4, 32, 8000, 2, false},
+    {"contestia-4-2000",  "CONTESTIA 4/2000",  kContestia, 4, 16, 8000, 2, false},
+    {"contestia-8-125",   "CONTESTIA 8/125",   kContestia, 8, 512, 8000, 2, false},
     {"contestia-8-250",   "CONTESTIA 8/250",   kContestia, 8, 256, 8000, 2, true},
     {"contestia-8-500",   "CONTESTIA 8/500",   kContestia, 8, 128, 8000, 2, false},
+    {"contestia-8-1000",  "CONTESTIA 8/1000",  kContestia, 8, 64, 8000, 2, false},
+    {"contestia-8-2000",  "CONTESTIA 8/2000",  kContestia, 8, 32, 8000, 2, false},
+    {"contestia-16-250",  "CONTESTIA 16/250",  kContestia, 16, 512, 8000, 2, false},
     {"contestia-16-500",  "CONTESTIA 16/500",  kContestia, 16, 256, 8000, 2, true},
     {"contestia-16-1000", "CONTESTIA 16/1000", kContestia, 16, 128, 8000, 2, false},
+    {"contestia-16-2000", "CONTESTIA 16/2000", kContestia, 16, 64, 8000, 2, false},
     {"contestia-32-1000", "CONTESTIA 32/1000", kContestia, 32, 256, 8000, 2, true},
+    {"contestia-32-2000", "CONTESTIA 32/2000", kContestia, 32, 128, 8000, 2, false},
+    {"contestia-64-500",  "CONTESTIA 64/500",  kContestia, 64, 1024, 8000, 2, false},
+    {"contestia-64-1000", "CONTESTIA 64/1000", kContestia, 64, 512, 8000, 2, false},
     {"contestia-64-2000", "CONTESTIA 64/2000", kContestia, 64, 256, 8000, 2, false},
 };
 TextModeDecoder::Family familyOfKind(Kind k) {
@@ -679,7 +692,11 @@ struct OliviaRx : Rx {
     float quality() const override { return lockA < 0 ? 0.f : hyp[lockH].E[lockA]; }
     bool locked() const override { return lock; }
     int toneShift() const override { return lockH - 1; }
-    int huntLimit() const override { return 4 * K; }   // four blocks: two to lock, and room for the blocks before
+    /** four blocks: two to lock, and room for the blocks before — ★ and never under 2 s (2026-10-31, ninth run): fldigi
+     *  starts every Contestia over with ≈ 1 s of preamble tones, which read "hopeless" (no Walsh block); at 125 Bd and up
+     *  four blocks are ≤ 1 s, so the place was set aside during the preamble and the first 0.4–2 s of text were lost
+     *  (fldigi's 4/500, 4/1K, 4/2K, 8/1K, 8/2K, 16/2K as a black box). 2 s leaves every sub-mode up to 62.5 Bd as it was. */
+    int huntLimit() const override { return std::max(4 * K, 2 * sub->rate / sub->sps); }
     /** ★ STRONG EVIDENCE MUST NOT TRAVEL. The block qualities are kept per hypothesis and alignment; carried to another
      *  signal they let a lock be taken there on the old one's blocks (measured: an OLIVIA idle block read at 1500 Hz,
      *  the finder then moved to an MFSK16 signal at 766 Hz and locked there on the decaying 0.58 — "[OLIVIA 16/500 ·
