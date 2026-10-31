@@ -392,6 +392,7 @@ struct Skimmer::Impl {
      *  so four of them for each signal cost less than a twentieth of the FFT. */
     struct Lane {
         int L = 1, minRun = 1; float uLo = 1, uHi = 100, dotLane = 11.25f;   // ★ dotLane: the dot at the lane's own speed
+        float floorK = 1;              // ★ stepLane's noise floor factor for this L (a square root — once, not every hop)
         float sm[24] = {}; int smPos = 0; float smSum = 0;
         float markLvl = 0, mu = 1;     // ★ mu: the noise under it, this hop
         bool on = false; int run = 0, pend = 0;
@@ -526,6 +527,7 @@ struct Skimmer::Impl {
         // ★★ THE MATCHED FILTER, ROUGHLY: the window already integrates ≈ 10 ms; the moving sum brings the total to about
         //    three quarters of the lane's dot — most of the noise out, the gaps left their depth.
         l.L = std::max(1, std::min(24, (int)std::lround((0.75 * dot * hopSec * 1000.0 - 10.0) / (hopSec * 1000.0))));
+        l.floorK = 1.0f + 3.0f / std::sqrt(std::max(1.0f, 0.5f * (float)l.L));   // ★ see stepLane
         l.minRun = std::max(1, (int)std::lround(0.35f * dot));   // ★ a run shorter than a third of a dot is a flicker
         l.uLo = dotHops(sp.hi); l.uHi = dotHops(sp.lo); l.dotLane = dot;
         l.unit = dot; l.markSplit = 2.0f * dot; l.charSplit = 2.0f * dot; l.wordSplit = 5.0f * dot;
@@ -652,7 +654,9 @@ struct Skimmer::Impl {
     }
     void stepLane(Sig& s, int li, float p, float mu) {
         Lane& l = s.lane[li];
-        l.smSum += p - l.sm[l.smPos]; l.sm[l.smPos] = p; l.smPos = (l.smPos + 1) % l.L;
+        // ★ No `% l.L`: 32-bit ARMv7-A has no divide instruction, and a library divide per lane per hop was a visible
+        //   share of the skimmer on the Pi 2 (decoder audit 2026-10-31). The same wrap.
+        l.smSum += p - l.sm[l.smPos]; l.sm[l.smPos] = p; if (++l.smPos >= l.L) l.smPos = 0;
         const float e = std::max(0.0f, l.smSum / (float)l.L);
         // ★★ THE MARK LEVEL IS THE MARKS' MEAN, NOT THEIR PEAKS: while keyed it follows the envelope over ≈ 0.25 s (so QSB
         //    is followed, up and down, mark by mark); a mark clearly stronger than it lifts it at once (a new signal, a
@@ -669,7 +673,7 @@ struct Skimmer::Impl {
         // ★★ …and never below what the NOISE alone reaches at this lane's smoothing (≈ 3σ of an L-hop average, its hops
         //    half-overlapped): when a station stops, its mark level takes seconds to sink and the threshold with it — which
         //    used to print a tail of noise ("E E T E E") after every over.
-        const float floorK = 1.0f + 3.0f / std::sqrt(std::max(1.0f, 0.5f * (float)l.L));
+        const float floorK = l.floorK;   // 1 + 3/√(max(1, L/2)), kept by initLane
         bool raw = false;
         if (l.markLvl > 1.4f * floorK * mu) {
             const float thr = std::max(mu + 0.5f * (l.markLvl - mu), floorK * mu);
