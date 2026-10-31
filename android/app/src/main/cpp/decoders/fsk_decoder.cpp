@@ -429,7 +429,11 @@ void FskDecoder::process(const int16_t* samples, int count) {
             bitDuration = 0;
         }
         oldMarkState = markState;
-        if (sampleCount % bitSampleCount == 0) {
+        // ★ sampleCount % bitSampleCount, counted (decoder audit 2026-10-31): a library divide per sample on 32-bit ARMv7-A
+        //   was a fifth of RTTY auto on the Pi 2. bitSampleCount is fixed at construction; the same test, every sample.
+        const bool bitBoundary = sampleInBit_ == 0;
+        if (++sampleInBit_ == bitSampleCount) sampleInBit_ = 0;
+        if (bitBoundary) {
             zeroCrossingCount++;
             if (zeroCrossingCount >= zeroCrossingSamples) {
                 int best = 0, bestIndex = 0;
@@ -667,7 +671,8 @@ void NavtexRx::process(const int16_t* samples, int count) {
         double y = dv;
         if (decim_ > 1) {
             const int N = (int)decH_.size();
-            decPos_ = (decPos_ + 1) % N; decBuf_[decPos_] = decBuf_[decPos_ + N] = dv;
+            if (++decPos_ >= N) decPos_ = 0;   // ★ no % N: a library divide per sample on 32-bit ARM (audit 2026-10-31)
+            decBuf_[decPos_] = decBuf_[decPos_ + N] = dv;
             if (++decCount_ < decim_) continue;
             decCount_ = 0; y = 0;
             const double* b = &decBuf_[decPos_ + 1];
@@ -682,7 +687,7 @@ void NavtexRx::process(const int16_t* samples, int count) {
             g = 1.0 / std::hypot(sRe_, sIm_); sRe_ *= g; sIm_ *= g;
         }
         const int N = (int)rcH_.size();
-        rcPos_ = (rcPos_ + 1) % N;
+        if (++rcPos_ >= N) rcPos_ = 0;   // ★ the same wrap as % N, without the divide
         for (int c = 0; c < 4; c++) rcBuf_[c][rcPos_] = rcBuf_[c][rcPos_ + N] = in[c];
         if (++rcCount_ < rcStep_) continue;
         rcCount_ = 0;
