@@ -71,7 +71,7 @@ struct SlotOptions {
     float loHz = 300, hiHz = 3500;   ///< tone 0 is searched from loHz; every tone of the widest submode tried stays ≤ hiHz
     unsigned submodes = 0x0F;        ///< bit m = try submode m (A=bit 0 … E=bit 4)
     int   maxCands = 16;
-    int   maxIter = 0;                ///< BP iterations; 0 = by period (50 for 15/30 s, 100 for 60 s and longer)
+    int   maxIter = 0;                ///< BP iterations; 0 = the default, 50
     float syncMin = 0.9f;            ///< candidate threshold on the sync score (noise σ ≈ 0.25)
     bool  apCq = true;               ///< try "CQ ? ?" when blind decoding fails
     bool  loaded = false;            ///< the server is busy: no AP pass, fewer candidates
@@ -111,8 +111,9 @@ private:
     void bigFft(const float* win, int n);
     struct Ext { int m = 0; long kc = 0; double ft0 = 0, df = 0; int n0 = 0; float rho = 0; double z = 0; std::vector<float> symPow; };
     bool extract(const Cand& c, int m, const SlotOptions& o, Ext& x);
-    bool decodeExt(const Cand& c, const Ext& x, const SlotOptions& o, std::vector<Result>& out, SlotStats& st);
+    bool decodeExt(const Cand& c, const Ext& x, const SlotOptions& o, std::vector<Result>& out, SlotStats& st, bool tryAp);
     Ext ext_[5];
+    bool refined_ = false; double refStart_ = 0, refF0_ = 0;   // the candidate's refined start (window samples) and tone 0 (Hz)
 
     const Period* p_ = nullptr;
     double baud_ = 0;
@@ -137,6 +138,12 @@ private:
     std::vector<uint8_t> seen_; // payloads decoded this slot (10 bytes each)
 };
 
+/** ★★ ONE SlotDecoder PER PERIOD FOR THE WHOLE PROCESS (its scratch is ≈ 7 MB for 30 s, ≈ 13 MB for 60 s — a Pi 2 on
+ *  Band can run a Q65 engine on several dials of a band). Lock its mutex around decode(): the decodes of all engines
+ *  queue on it, one at a time, which is also what one slow core can do anyway. */
+struct SharedSlotDecoder { std::mutex m; SlotDecoder dec; explicit SharedSlotDecoder(int s) : dec(s) {} };
+SharedSlotDecoder& sharedSlotDecoder(int periodSec);
+
 /* ★★ THE LIVE DECODER: real USB audio at 12 kHz with its capture UTC in; it keeps a ring long enough for its longest
  *  period, and at the end of each period's window copies the window to its worker thread, which decodes it. A window
  *  that arrives while the same period's previous one is still queued is SKIPPED and counted, never waited for. */
@@ -157,7 +164,7 @@ private:
     struct Job { int pi; double slotUtc; std::vector<float> win; };
     void worker();
     std::vector<int> periods_;
-    std::vector<std::unique_ptr<SlotDecoder>> dec_;
+    std::vector<SharedSlotDecoder*> dec_;
     std::vector<double> next_;             // per period: UTC of the next period start to decode
     std::vector<float> ring_;
     int64_t total_ = 0;                    // samples ever written

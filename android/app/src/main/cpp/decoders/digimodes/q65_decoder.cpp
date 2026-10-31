@@ -198,7 +198,7 @@ bool SlotDecoder::extract(const Cand& c, int m, const SlotOptions& o, Ext& x) {
     const int M = s.M, half = M / 2;
     for (int i = 0; i < M; ++i) {
         const long k = kc + i - half;
-        const int pos = (i - half + M) % M;
+        const int pos = i < half ? i + half : i - half;   // (i − half) mod M, with no divide (ARMv7 has none)
         float re = 0, im = 0;
         if (k >= 1 && k < nBig_ / 2) { re = bigBuf_[2 * k]; im = bigBuf_[2 * k + 1]; }
         s.z[2 * pos] = re; s.z[2 * pos + 1] = im;
@@ -234,8 +234,16 @@ bool SlotDecoder::extract(const Cand& c, int m, const SlotOptions& o, Ext& x) {
         }
         bestScore = bs; bestN0 = bn; bestDf = bdf;
     };
-    stage(n0c, 0.0, 9, std::max(1, Ns / 24), 4, 1.0 / 8);
-    stage(bestN0, bestDf, 3, std::max(1, Ns / 72), 4, 1.0 / 32);
+    // ★ Tone 0 is the same whatever the submode: refine once per candidate (on the first, narrowest submode tried)
+    //   and carry the start and frequency to the others.
+    if (refined_) {
+        bestN0 = (int)std::lround(refStart_ * Ns / p_->nsps);
+        bestDf = (refF0_ - f0c) / baud_;
+    } else {
+        stage(n0c, 0.0, 9, std::max(1, Ns / 24), 4, 1.0 / 8);
+        stage(bestN0, bestDf, 3, std::max(1, Ns / 72), 4, 1.0 / 32);
+        refStart_ = (double)bestN0 * p_->nsps / Ns; refF0_ = f0c + bestDf * baud_; refined_ = true;
+    }
     (void)bestScore;
     // ── symbols: mix tone 0 to DC, a DFT per symbol ──
     const double cyc = ft0 + bestDf / Ns;
@@ -253,7 +261,7 @@ bool SlotDecoder::extract(const Cand& c, int m, const SlotOptions& o, Ext& x) {
         }
         pffft_transform_ordered(S(s.setupN), s.y, s.y, s.yw, PFFFT_FORWARD);
         for (int t = 0; t <= 64; ++t) {
-            const int bin = ((t << m) * pf) % s.nfft;
+            int bin = (t << m) * pf; if (bin >= s.nfft) bin -= s.nfft;   // < 2·nfft always
             symPow[(size_t)i * 65 + t] = s.y[2 * bin] * s.y[2 * bin] + s.y[2 * bin + 1] * s.y[2 * bin + 1];
         }
         (void)qs;
@@ -299,7 +307,7 @@ bool SlotDecoder::extract(const Cand& c, int m, const SlotOptions& o, Ext& x) {
     return true;
 }
 
-bool SlotDecoder::decodeExt(const Cand& c, const Ext& x, const SlotOptions& o, std::vector<Result>& out, SlotStats& st) {
+bool SlotDecoder::decodeExt(const Cand& c, const Ext& x, const SlotOptions& o, std::vector<Result>& out, SlotStats& st, bool tryAp) {
     const int m = x.m;
     const std::vector<float>& symPow = x.symPow;
     const float rho = x.rho;
@@ -332,9 +340,9 @@ bool SlotDecoder::decodeExt(const Cand& c, const Ext& x, const SlotOptions& o, s
     uint8_t msg[kMsg];
     int it = 0, ap = 0;
     ++st.attempts;
-    const int iters = o.maxIter > 0 ? o.maxIter : (p_->sec >= 60 ? 100 : 50);
+    const int iters = o.maxIter > 0 ? o.maxIter : 50;   // ★ 100 decoded 1.7 % more at 60A's threshold, for twice the cost on noise
     it = bpDecode(intr_.data(), iters, msg, bp_);
-    if (!it && o.apCq && !o.loaded) { ++st.attempts; it = bpDecode(intr_.data(), iters, msg, bp_, cqMask_, cqVal_); ap = it ? 1 : 0; }
+    if (!it && tryAp && o.apCq && !o.loaded) { ++st.attempts; it = bpDecode(intr_.data(), iters, msg, bp_, cqMask_, cqVal_); ap = it ? 1 : 0; }
     if (!it) return false;
     // ── guard ──
     uint8_t tones[kSymbols];
@@ -410,6 +418,7 @@ int SlotDecoder::decode(const float* win, int n, const SlotOptions& o, std::vect
     for (const Cand& c : cands) {
         if (o.abort && o.abort->load()) break;
         int nx = 0;
+        refined_ = false;
         for (int m = 0; m < 5; ++m) {
             if (!(o.submodes & (1u << m))) continue;
             if (extract(c, m, o, ext_[nx])) ++nx;
@@ -417,7 +426,7 @@ int SlotDecoder::decode(const float* win, int n, const SlotOptions& o, std::vect
         int order[5] = {0, 1, 2, 3, 4};
         std::sort(order, order + nx, [&](int a, int b) { return ext_[a].z > ext_[b].z; });
         const int tries = std::min(nx, o.loaded ? 1 : 2);
-        for (int k = 0; k < tries; ++k) if (decodeExt(c, ext_[order[k]], o, out, st)) break;
+        for (int k = 0; k < tries; ++k) if (decodeExt(c, ext_[order[k]], o, out, st, k == 0)) break;   // ★ a-priori on the likeliest submode only
     }
     st.candMs = nowMs() - t2;
     st.totalMs = nowMs() - t0;
@@ -425,11 +434,20 @@ int SlotDecoder::decode(const float* win, int n, const SlotOptions& o, std::vect
     return (int)(out.size() - first);
 }
 
+SharedSlotDecoder& sharedSlotDecoder(int periodSec) {
+    static std::mutex mtx;
+    static std::vector<std::unique_ptr<SharedSlotDecoder>> all;
+    std::lock_guard<std::mutex> lk(mtx);
+    for (auto& d : all) if (d->dec.ok() && d->dec.period().sec == periodSec) return *d;
+    all.emplace_back(new SharedSlotDecoder(periodSec));
+    return *all.back();
+}
+
 // ── The live decoder ──────────────────────────────────────────────────────────────────────────────────────────────
 LiveDecoder::LiveDecoder(std::vector<int> periods) {
     int maxSec = 0;
     for (int p : periods) if (periodFor(p)) { periods_.push_back(p); maxSec = std::max(maxSec, p); }
-    for (int p : periods_) dec_.emplace_back(new SlotDecoder(p));
+    for (int p : periods_) dec_.push_back(&sharedSlotDecoder(p));
     next_.assign(periods_.size(), NAN);
     queued_.assign(periods_.size(), false);
     ring_.assign((size_t)(maxSec + kWinLeadSec + kWinTailSec + 8) * kRate, 0.f);
@@ -463,13 +481,16 @@ void LiveDecoder::process(const float* audio, int n, double captureUtc) {
         return;
     }
     const size_t R = ring_.size();
-    for (int i = 0; i < n; ++i) ring_[(size_t)((total_ + i) % (int64_t)R)] = audio[i];
+    {   // ★ one 64-bit modulo per block, not per sample (ARMv7 has no divide: each is a library call)
+        size_t w = (size_t)(total_ % (int64_t)R);
+        for (int i = 0; i < n; ++i) { ring_[w] = audio[i]; if (++w == R) w = 0; }
+    }
     total_ += n;
     const double tEnd = utc0_ + (double)total_ / kRate;       // UTC just after the last sample
     const double tStart = utc0_ + (double)std::max<int64_t>(0, total_ - (int64_t)R + kRate) / kRate;
     for (size_t pi = 0; pi < periods_.size(); ++pi) {
-        const Period& p = dec_[pi]->period();
-        if (!dec_[pi]->ok()) continue;
+        if (!dec_[pi]->dec.ok()) continue;
+        const Period& p = dec_[pi]->dec.period();
         if (!std::isfinite(next_[pi])) {
             // the first period whose whole window is still ahead of us
             double s = std::ceil((tEnd - kWinLeadSec * 0) / p.sec) * p.sec;
@@ -486,7 +507,8 @@ void LiveDecoder::process(const float* audio, int n, double captureUtc) {
                 } else {
                     Job j; j.pi = (int)pi; j.slotUtc = next_[pi]; j.win.resize(W);
                     const int64_t s0 = (int64_t)std::llround((ws - utc0_) * kRate);
-                    for (int k = 0; k < W; ++k) j.win[k] = ring_[(size_t)((s0 + k) % (int64_t)R)];
+                    size_t r = (size_t)(((s0 % (int64_t)R) + (int64_t)R) % (int64_t)R);
+                    for (int k = 0; k < W; ++k) { j.win[k] = ring_[r]; if (++r == R) r = 0; }
                     q_.push_back(std::move(j)); queued_[pi] = true;
                     cv_.notify_one();
                 }
@@ -511,7 +533,10 @@ void LiveDecoder::worker() {
         o.abort = &abort_;
         std::vector<Result> res;
         SlotStats st;
-        dec_[(size_t)j.pi]->decode(j.win.data(), (int)j.win.size(), o, res, &st);
+        {
+            std::lock_guard<std::mutex> lk(dec_[(size_t)j.pi]->m);
+            dec_[(size_t)j.pi]->dec.decode(j.win.data(), (int)j.win.size(), o, res, &st);
+        }
         lastDecodeMs.store(st.totalMs);
         slotsDecoded.fetch_add(1);
         for (Result& r : res) { r.slotUtc = j.slotUtc; if (onResult) onResult(r); }

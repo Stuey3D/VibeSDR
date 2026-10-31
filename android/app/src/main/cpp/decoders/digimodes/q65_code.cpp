@@ -3,6 +3,7 @@
 #include "q65_code.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -129,35 +130,96 @@ bool encodeText(const char* text, uint8_t tones[kSymbols]) {
 //   SIMD and scalar builds give bit-identical messages and identical decodes.
 void wht64(float* v) {
 #if Q65_NEON
+    // ★ All 64 values live in the 16 quad registers at once (ARMv7 has exactly 16): one load and one store each, every
+    //   stage in registers — no stage's stores reloaded by the next (the looped form measured 2.6× slower on qemu-arm).
+    float32x4_t r[16];
+    for (int i = 0; i < 16; ++i) r[i] = vld1q_f32(v + 4 * i);
     const float32x4_t s1 = {1.f, -1.f, 1.f, -1.f}, s2 = {1.f, 1.f, -1.f, -1.f};
-    for (int i = 0; i < 64; i += 4) {
-        float32x4_t x = vld1q_f32(v + i);
-        float32x4x2_t t = vtrnq_f32(x, x);                         // [a a c c], [b b d d]
-        x = vaddq_f32(t.val[0], vmulq_f32(t.val[1], s1));          // h = 1
+    for (int i = 0; i < 16; ++i) {
+        float32x4x2_t t = vtrnq_f32(r[i], r[i]);                  // [a a c c], [b b d d]
+        float32x4_t x = vaddq_f32(t.val[0], vmulq_f32(t.val[1], s1));          // h = 1
         float32x4_t lo = vcombine_f32(vget_low_f32(x), vget_low_f32(x)), hi = vcombine_f32(vget_high_f32(x), vget_high_f32(x));
-        vst1q_f32(v + i, vaddq_f32(lo, vmulq_f32(hi, s2)));       // h = 2
+        r[i] = vaddq_f32(lo, vmulq_f32(hi, s2));                  // h = 2
     }
-    for (int h = 4; h < 64; h <<= 1)
-        for (int i = 0; i < 64; i += 2 * h)
-            for (int j = i; j < i + h; j += 4) {
-                const float32x4_t a = vld1q_f32(v + j), b = vld1q_f32(v + j + h);
-                vst1q_f32(v + j, vaddq_f32(a, b)); vst1q_f32(v + j + h, vsubq_f32(a, b));
-            }
+    // h = 4 … 32 in floats (1 … 8 in vectors), written out so the array stays in registers
+    { const float32x4_t a = r[0], b = r[1]; r[0] = vaddq_f32(a, b); r[1] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[2], b = r[3]; r[2] = vaddq_f32(a, b); r[3] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[4], b = r[5]; r[4] = vaddq_f32(a, b); r[5] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[6], b = r[7]; r[6] = vaddq_f32(a, b); r[7] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[8], b = r[9]; r[8] = vaddq_f32(a, b); r[9] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[10], b = r[11]; r[10] = vaddq_f32(a, b); r[11] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[12], b = r[13]; r[12] = vaddq_f32(a, b); r[13] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[14], b = r[15]; r[14] = vaddq_f32(a, b); r[15] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[0], b = r[2]; r[0] = vaddq_f32(a, b); r[2] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[1], b = r[3]; r[1] = vaddq_f32(a, b); r[3] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[4], b = r[6]; r[4] = vaddq_f32(a, b); r[6] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[5], b = r[7]; r[5] = vaddq_f32(a, b); r[7] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[8], b = r[10]; r[8] = vaddq_f32(a, b); r[10] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[9], b = r[11]; r[9] = vaddq_f32(a, b); r[11] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[12], b = r[14]; r[12] = vaddq_f32(a, b); r[14] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[13], b = r[15]; r[13] = vaddq_f32(a, b); r[15] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[0], b = r[4]; r[0] = vaddq_f32(a, b); r[4] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[1], b = r[5]; r[1] = vaddq_f32(a, b); r[5] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[2], b = r[6]; r[2] = vaddq_f32(a, b); r[6] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[3], b = r[7]; r[3] = vaddq_f32(a, b); r[7] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[8], b = r[12]; r[8] = vaddq_f32(a, b); r[12] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[9], b = r[13]; r[9] = vaddq_f32(a, b); r[13] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[10], b = r[14]; r[10] = vaddq_f32(a, b); r[14] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[11], b = r[15]; r[11] = vaddq_f32(a, b); r[15] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[0], b = r[8]; r[0] = vaddq_f32(a, b); r[8] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[1], b = r[9]; r[1] = vaddq_f32(a, b); r[9] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[2], b = r[10]; r[2] = vaddq_f32(a, b); r[10] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[3], b = r[11]; r[3] = vaddq_f32(a, b); r[11] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[4], b = r[12]; r[4] = vaddq_f32(a, b); r[12] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[5], b = r[13]; r[5] = vaddq_f32(a, b); r[13] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[6], b = r[14]; r[6] = vaddq_f32(a, b); r[14] = vsubq_f32(a, b); }
+    { const float32x4_t a = r[7], b = r[15]; r[7] = vaddq_f32(a, b); r[15] = vsubq_f32(a, b); }
+    for (int i = 0; i < 16; ++i) vst1q_f32(v + 4 * i, r[i]);
 #elif Q65_SSE2
+    // SSE2 has 8 (i386) or 16 (x86-64) registers: the compiler spills what does not fit; still one pass.
+    __m128 r[16];
+    for (int i = 0; i < 16; ++i) r[i] = _mm_loadu_ps(v + 4 * i);
     const __m128 s1 = _mm_setr_ps(1.f, -1.f, 1.f, -1.f), s2 = _mm_setr_ps(1.f, 1.f, -1.f, -1.f);
-    for (int i = 0; i < 64; i += 4) {
-        __m128 x = _mm_loadu_ps(v + i);
+    for (int i = 0; i < 16; ++i) {
+        __m128 x = r[i];
         __m128 a = _mm_shuffle_ps(x, x, _MM_SHUFFLE(2, 2, 0, 0)), b = _mm_shuffle_ps(x, x, _MM_SHUFFLE(3, 3, 1, 1));
         x = _mm_add_ps(a, _mm_mul_ps(b, s1));
         a = _mm_shuffle_ps(x, x, _MM_SHUFFLE(1, 0, 1, 0)); b = _mm_shuffle_ps(x, x, _MM_SHUFFLE(3, 2, 3, 2));
-        _mm_storeu_ps(v + i, _mm_add_ps(a, _mm_mul_ps(b, s2)));
+        r[i] = _mm_add_ps(a, _mm_mul_ps(b, s2));
     }
-    for (int h = 4; h < 64; h <<= 1)
-        for (int i = 0; i < 64; i += 2 * h)
-            for (int j = i; j < i + h; j += 4) {
-                const __m128 a = _mm_loadu_ps(v + j), b = _mm_loadu_ps(v + j + h);
-                _mm_storeu_ps(v + j, _mm_add_ps(a, b)); _mm_storeu_ps(v + j + h, _mm_sub_ps(a, b));
-            }
+    { const __m128 a = r[0], b = r[1]; r[0] = _mm_add_ps(a, b); r[1] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[2], b = r[3]; r[2] = _mm_add_ps(a, b); r[3] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[4], b = r[5]; r[4] = _mm_add_ps(a, b); r[5] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[6], b = r[7]; r[6] = _mm_add_ps(a, b); r[7] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[8], b = r[9]; r[8] = _mm_add_ps(a, b); r[9] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[10], b = r[11]; r[10] = _mm_add_ps(a, b); r[11] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[12], b = r[13]; r[12] = _mm_add_ps(a, b); r[13] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[14], b = r[15]; r[14] = _mm_add_ps(a, b); r[15] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[0], b = r[2]; r[0] = _mm_add_ps(a, b); r[2] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[1], b = r[3]; r[1] = _mm_add_ps(a, b); r[3] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[4], b = r[6]; r[4] = _mm_add_ps(a, b); r[6] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[5], b = r[7]; r[5] = _mm_add_ps(a, b); r[7] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[8], b = r[10]; r[8] = _mm_add_ps(a, b); r[10] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[9], b = r[11]; r[9] = _mm_add_ps(a, b); r[11] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[12], b = r[14]; r[12] = _mm_add_ps(a, b); r[14] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[13], b = r[15]; r[13] = _mm_add_ps(a, b); r[15] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[0], b = r[4]; r[0] = _mm_add_ps(a, b); r[4] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[1], b = r[5]; r[1] = _mm_add_ps(a, b); r[5] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[2], b = r[6]; r[2] = _mm_add_ps(a, b); r[6] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[3], b = r[7]; r[3] = _mm_add_ps(a, b); r[7] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[8], b = r[12]; r[8] = _mm_add_ps(a, b); r[12] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[9], b = r[13]; r[9] = _mm_add_ps(a, b); r[13] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[10], b = r[14]; r[10] = _mm_add_ps(a, b); r[14] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[11], b = r[15]; r[11] = _mm_add_ps(a, b); r[15] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[0], b = r[8]; r[0] = _mm_add_ps(a, b); r[8] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[1], b = r[9]; r[1] = _mm_add_ps(a, b); r[9] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[2], b = r[10]; r[2] = _mm_add_ps(a, b); r[10] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[3], b = r[11]; r[3] = _mm_add_ps(a, b); r[11] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[4], b = r[12]; r[4] = _mm_add_ps(a, b); r[12] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[5], b = r[13]; r[5] = _mm_add_ps(a, b); r[13] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[6], b = r[14]; r[6] = _mm_add_ps(a, b); r[14] = _mm_sub_ps(a, b); }
+    { const __m128 a = r[7], b = r[15]; r[7] = _mm_add_ps(a, b); r[15] = _mm_sub_ps(a, b); }
+    for (int i = 0; i < 16; ++i) _mm_storeu_ps(v + 4 * i, r[i]);
 #else
     for (int h = 1; h < 64; h <<= 1)
         for (int i = 0; i < 64; i += 2 * h)
@@ -204,7 +266,7 @@ inline void vnorm(float* v) {
     const float s = (l[0] + l[1]) + (l[2] + l[3]);
     if (!(s > 0.f) || !std::isfinite(s)) { for (int i = 0; i < 64; ++i) v[i] = 1.f / 64.f; return; }
     const float k = 1.f / s;
-    for (int i = 0; i < 64; ++i) v[i] = v[i] * k + kFloor;
+    for (int i = 0; i < 64; ++i) { const float t = v[i] * k; v[i] = t + kFloor; }   // ★ two statements: never fused (the vector path is a multiply then an add)
 #endif
 }
 /** o = normalised inverse transform of (wa · wb): the XOR-convolution of the two distributions whose transforms they are. */
@@ -309,20 +371,32 @@ int bpDecode(const float* intr, int maxIter, uint8_t msgOut[kMsg], BpScratch* s,
             vnorm(s->r[k]);
         }
         // ── decide ──
+        float conf = 0;
         for (int j = 0; j < kInfo; ++j) {
             std::memcpy(s->t, s->L[j], sizeof s->t);
             for (int f = 0; f < E.n[j]; ++f) vmul(s->t, s->t, s->r[E.k[j][f]]);
-            int best = 0; float bv = s->t[0];
+            int best = 0; float bv = s->t[0], sum = 0;
+            for (int v = 0; v < 64; ++v) sum += s->t[v];
             for (int v = 1; v < 64; ++v) if (s->t[v] > bv) { bv = s->t[v]; best = v; }
             x[j] = (uint8_t)best;
+            conf += sum > 0 ? bv / sum : 0;
         }
+        static const bool kTrace = std::getenv("Q65_TRACE") != nullptr;
+        if (kTrace && (it % 5 == 0)) std::fprintf(stderr, "TR %d %.3f\n", it, conf / kInfo);
+        // ★★ GIVING UP EARLY. The mean posterior of the 15 decisions: on an attempt that will fail it sits at ≈ 0.30
+        //   (p90 0.52) from the fifth iteration on; every attempt that went on to decode (60A/30A at their thresholds,
+        //   q65-bench --trace) was at ≥ 0.49 by the tenth and ≥ 0.56 by the twentieth. So: below 0.40 at ten, or 0.45 at
+        //   twenty, stop — most of a noise candidate's 50 iterations are not spent.
+        if (!kTrace && ((it == 10 && conf < 0.40f * kInfo) || (it == 20 && conf < 0.45f * kInfo))) break;
         uint8_t c[2];
         crc12(x, c);
         if (c[0] == x[13] && c[1] == x[14] && (x[12] & 1) == 0) {
             std::memcpy(msgOut, x, kMsg);
+            if (kTrace) std::fprintf(stderr, "TR OK %d\n", it);
             return it;
         }
     }
+    if (std::getenv("Q65_TRACE")) std::fprintf(stderr, "TR FAIL\n");
     return 0;
 }
 

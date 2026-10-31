@@ -28,6 +28,14 @@
 //     The others are published plan, not seen on air this week (Monday's 07:30 sweep of every PSK segment on the
 //     UberSDR heard no PSK at all). 21.070, not 21.080: the PSK31 segment's own frequency. 18.100 is shared with FT8 —
 //     both run on one tuner there (the PSK skimmer reads nothing from FT8: docs/v12/PSK.md).
+//   • Q65 (V12, 2026-10-31): only where the IARU Region 1 plan allows MGM AND PSKReporter shows Q65 in use. PSKReporter's
+//     Q65 reports for the 24 h to 2026-10-31 01:57 UTC (all receivers): 1296.056–1296.121, 432.058–432.092, 144.181 MHz
+//     and nothing on HF, 6 m or 4 m. The Q65 window is 200–4800 Hz above the dial (EME stations spread across their
+//     segment), so: 2 m 144.115 and 144.120 (the plan's 144.110–144.160 "EME MGM"; random digital EME centres on
+//     144.125) and 144.180 (the reports; 144.150–144.400 is SSB/telegraphy/MGM); 70 cm 432.055, 432.065 and 432.087
+//     (the plan's 432.025–432.100 telegraphy/MGM, which holds every report). LEFT OUT: 6 m (50.310–50.320 is the plan's
+//     EME centre of activity, but it is FT8's 50.313 and nobody was heard on Q65 there) and 23 cm (where most of the
+//     reports are: the Band list stops at 70 cm — Stuart to decide whether 23 cm joins it).
 //   • 60 m WSPR is 5.3647 (inside the WRC-15 allocation 5351.5–5366.5 kHz that every region shares), not the older
 //     national 5.2872, which would stretch the 60 m passband to 73 kHz for one beacon frequency.
 //
@@ -109,6 +117,9 @@ inline const std::vector<Dial>& publishedDials() {
         // JTTY (V12 — see the file note: confirmed 40/20/15 m; announced and clear 10/6/2 m)
         {"JTTY", "40m",  7090000}, {"JTTY", "20m", 14090000}, {"JTTY", "15m", 21090000}, {"JTTY", "10m", 28090000},
         {"JTTY", "6m",  50160000}, {"JTTY", "2m", 144160000},
+        // Q65 (V12 — EME/scatter; see the file note)
+        {"Q65", "2m", 144115000}, {"Q65", "2m", 144120000}, {"Q65", "2m", 144180000},
+        {"Q65", "70cm", 432055000}, {"Q65", "70cm", 432065000}, {"Q65", "70cm", 432087000},
         // PSK31/63 (V12 — the PSK31 calling frequencies; 14.070 confirmed)
         {"PSK", "80m",   3580000}, {"PSK", "40m",  7040000}, {"PSK", "30m", 10142000}, {"PSK", "20m", 14070000},
         {"PSK", "17m",  18100000}, {"PSK", "15m", 21070000}, {"PSK", "12m", 24920000}, {"PSK", "10m", 28120000},
