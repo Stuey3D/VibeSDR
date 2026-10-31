@@ -270,6 +270,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/audio_nr.cpp"
     "${CPP_DIR}/decoders/auto_notch.cpp"
     "${CPP_DIR}/decoders/time_decoder.cpp"
+    "${CPP_DIR}/decoders/tone_id.cpp"   # ★ V12: CTCSS / DCS tone ID on NFM (decoders/tone_id.h)
     # ★ V12: CW — the listener's decoder and the skimmer (one FFT filterbank; decoders/cw_skimmer.h)
     "${CPP_DIR}/decoders/cw_skimmer.cpp"
     # ★ V12: NDB — every beacon in the LF band, idents by consensus (decoders/ndb_skimmer.h)
@@ -282,6 +283,10 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/dsc_decoder.cpp"
     # ★ V12: SITOR-A — the maritime ARQ teleprinter listener (decoders/sitor_a.h, ITU-R M.476/M.625)
     "${CPP_DIR}/decoders/sitor_a.cpp"
+    "${CPP_DIR}/decoders/same_decoder.cpp"   # ★ V12 EAS / SAME
+    "${CPP_DIR}/decoders/selcal_decoder.cpp"   # ★ V12 SELCAL
+    "${CPP_DIR}/decoders/textmodes.cpp"   # ★ V12 MFSK / OLIVIA / THOR
+    "${CPP_DIR}/decoders/feld_hell.cpp"   # ★ V12 FELD HELL, drawn
     # ★ V12: JTTY — the WSJT-X 3.2 keyboard mode, every signal in the passband, no slots (decoders/jtty_decoder.h)
     "${CPP_DIR}/decoders/jtty_decoder.cpp"
     # ★ V12: digital spots — the mode registry, Band mode's tuners and the spotter (decoders/digi_mode.h), and every

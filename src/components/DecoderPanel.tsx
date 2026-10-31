@@ -67,8 +67,9 @@ const RETUNE_NEW_CHART_HZ = 3000;
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export type DecoderType = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'ft8'
-                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'scanner' | 'aprs' | null;
-const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv'];
+                        | 'time' | 'transcribe' | 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'scanner' | 'aprs' | null;
+// ★ V12 FELD HELL is drawn, so it is a picture here (PREV, SAVE, CLR, zoom) — plainly, without WEFAX's ADJ
+const IMAGE_DECODERS: DecoderType[] = ['wefax', 'sstv', 'hell'];
 
 export interface DecoderPanelProps {
   /** Called with true while the box is open and not minimised — the screen hides the station strip then. */
@@ -261,6 +262,17 @@ const DECODER_LABELS: Record<NonNullable<DecoderType>, string> = {
   jtty:    'JTTY',
   dsc:     'DSC',
   sitora:  'SITOR-A',
+  // ★ V12: POCSAG paging with AUTO — only on the phone's own radio (services/paging.ts)
+  paging:  'PAGING',
+  // ★ V12: US Emergency Alert System headers (NOAA Weather Radio, EAS broadcasts)
+  same:    'EAS / SAME',
+  selcal:  'SELCAL',
+  // ★ V12: the MFSK keyboard modes, one key a family (services/textModes.ts); the status line names the sub-mode
+  mfsk:    'MFSK',
+  olivia:  'OLIVIA',
+  thor:    'THOR',
+  // ★ V12: Feld Hell, drawn not read (services/feldHell.ts) — the picture box, a page at a time
+  hell:    'FELD HELL',
   // ★ V12: a VibeServer's own APRS packet decoder (VHF 1200 / HF 300; the title says which).
   aprs:    'APRS',
   // ★ V12: ON-DEVICE speech-to-text (+ translation) of the audio we play — any backend. Not UberSDR's STT (`whisper`).

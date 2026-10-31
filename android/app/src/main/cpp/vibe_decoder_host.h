@@ -48,6 +48,13 @@
 #include "vibe_aprs_run.h"    // ★ V12 APRS (1200 Bd VHF, 300 Bd HF) on the listener's audio — docs/v12/AIS-APRS.md
 #include "vibe_dsc_run.h"
 #include "vibe_sitora_run.h"
+#include "decoders/same_decoder.h"   // ★ V12 EAS / SAME (47 CFR § 11.31)
+#include "decoders/selcal_decoder.h" // ★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91)
+#include "decoders/textmodes.h"      // ★ V12 MFSK16/32, OLIVIA/CONTESTIA, THOR (one object per family, AUTO)
+#include "decoders/feld_hell.h"      // ★ V12 FELD HELL, drawn: strips down the image path (0x01 lines, as WEFAX)
+#if defined(VIBE_PAGING)
+#include "vibe_paging_run.h"   // ★ V12 PAGING — Android local hardware only (the define is the Android library's)
+#endif
 #include "vibe_jtty_run.h"
 #include "vibe_clock.h"
 #include "vibe_thread.h"
@@ -346,7 +353,8 @@ public:
                     log(std::string("decoder attach failed: ") + ex.what());
                     return Start::Refused;
                 }
-                if (env_.tap) { DecoderTapPtr t = env_.tap(ext, msg); std::lock_guard<std::mutex> tl(tapMtx_); tap_ = std::move(t); }
+                // ★★ PAGING NEVER REACHES THE GALLERY (Stuart's spec): no tap for it at all
+                if (env_.tap && ext != "paging") { DecoderTapPtr t = env_.tap(ext, msg); std::lock_guard<std::mutex> tl(tapMtx_); tap_ = std::move(t); }
                 return Start::Ok;
             }
         }
@@ -520,6 +528,46 @@ public:
     }
     /** ★ Band's IQ blocks dropped behind the decode thread (monotonic) — the health pill's TOO HEAVY line reads it. */
     uint64_t iqBlocksDropped() const { return iqDropped_.load(std::memory_order_relaxed); }
+    /** ★★ PAGING (V12): built into this library at all? (VIBE_PAGING — the Android native library only.) */
+    static constexpr bool pagingBuilt() {
+#if defined(VIBE_PAGING)
+        return true;
+#else
+        return false;
+#endif
+    }
+    /** ★ How many paging receivers run in this process — the one atomic the DSP thread reads before it looks for a host. */
+    static std::atomic<int>& pagingRunning() { static std::atomic<int> n{0}; return n; }
+    /** ★ Paging runs here: it wants the pipeline's CHANNEL IQ (feedChannelIq). Cheap: read on every channel block. */
+    bool wantsChannelIq() const { return pagingIq_.load(std::memory_order_relaxed); }
+    /** Hand paging `n` samples of the listener's channel IQ (post-NCO, dial at DC, cut to the passband) at `rate` Hz.
+     *  Copies and returns at once, as feed() — the DSP thread never decodes. Two seconds behind and the oldest goes. */
+    void feedChannelIq(const std::complex<float>* iq, int n, double rate) {
+        if (n <= 0 || !iq || !(rate > 0) || !wantsChannelIq()) return;
+        IqBlock b; b.rate = rate; b.v.assign(iq, iq + n);
+        fed_.fetch_add((uint64_t)n, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lk(qM_);
+            if (!qThread_.joinable()) { qStop_ = false; replayStop_.store(false); qThread_ = std::thread([this] { loop_(); }); }
+            qcSec_ += (double)n / rate;
+            qc_.push_back(std::move(b));
+            while (qc_.size() > 1 && qcSec_ > 2.0) {
+                qcSec_ -= (double)qc_.front().v.size() / qc_.front().rate;
+                dropped_.fetch_add(qc_.front().v.size(), std::memory_order_relaxed);
+                qc_.pop_front();
+            }
+        }
+        qCv_.notify_one();
+    }
+    /** ★ What paging has locked ("POCSAG 1200"), or "" — for the admin page. */
+    std::string pagingDetected() {
+#if defined(VIBE_PAGING)
+        std::lock_guard<std::mutex> lk(decMtx_);
+        return paging_ ? paging_->detected() : std::string();
+#else
+        return std::string();
+#endif
+    }
     /** Hand the decoders `count` frames of 48 kHz audio, `stride` floats apart (1 = mono, 2 = take the
      *  left of interleaved stereo). Copies and returns at once — NEVER decodes on the caller's thread.
      *  ★ `captureUtc`: the corrected UTC of the block's LAST frame, stamped HERE, on the audio thread — the
@@ -568,12 +616,14 @@ public:
     /** Frames waiting for the decode thread — a feeder that must NOT lose audio (a test, the
      *  benchmark) paces itself on this; the server never does, it drops. */
     size_t queued() { std::lock_guard<std::mutex> lk(qM_); return qFrames_; }
+    /** …and the same for a skimmer's IQ, in seconds (the benchmark's skimmer rows pace on it — vibe_benchmark_more.h). */
+    double queuedIq() { return queuedIqSec(); }
     /** "fsk"/"wefax"/"sstv"/"time"/"none" — WHICH decoder object actually exists (see the admin note
      *  on decoderKind: "attached" was once true while nothing had been constructed). */
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : sitora_ ? "sitora" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -715,7 +765,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "dsc" || e == "sitora" || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -726,7 +776,7 @@ private:
                                "deviation", "bandwidth", "width", "centre" }) {
             double v; k += num(msg, f, v) ? std::to_string(v) : std::string("-"); k += ',';
         }
-        for (const char* f : { "encoding", "framing", "station", "band" }) { k += str(msg, f); k += ','; }
+        for (const char* f : { "encoding", "framing", "station", "band", "mode" }) { k += str(msg, f); k += ','; }
         for (const char* f : { "\"inverted\":true", "\"use_phasing\":false", "\"auto_stop\":true", "\"auto_start\":true",
                                "\"auto\":true", "\"usos\":true" })
             k += msg.find(f) != std::string::npos ? '1' : '0';
@@ -754,7 +804,14 @@ private:
         return j.substr(p + 1, e - p - 1);
     }
 
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || sitora_ || aprs_ || jtty_; }
+    bool pagingOn_() const {
+#if defined(VIBE_PAGING)
+        return (bool)paging_;
+#else
+        return false;
+#endif
+    }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -771,6 +828,13 @@ private:
         aprs_.reset();
         dsc_.reset();
         sitora_.reset();
+        same_.reset();
+        selcal_.reset();
+        tm_.reset();
+        hell_.reset();
+#if defined(VIBE_PAGING)
+        if (paging_) { paging_.reset(); if (pagingIq_.exchange(false)) pagingRunning().fetch_sub(1); }
+#endif
         jtty_.reset();
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(cwTap_); } if (t) t->finish(true); }
         if (!bandIq_.load()) { std::lock_guard<std::mutex> lk(qM_); qi_.clear(); qiFrames_ = 0; }   // ★ Band spots may still want it
@@ -937,7 +1001,7 @@ private:
             sstv_->onComplete = [this]() { std::vector<uint8_t> m; m.push_back(0x05); put32(m, 0); sendSstv(m); };
             sstv_->onRedrawStart = [this]() { std::vector<uint8_t> m{ 0x08 }; sendSstv(m); };
             log("decoder attached: sstv");
-        } else if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") {
+        } else if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy") {
             std::string which = ext == "time" ? str(msg, "station") : ext;
             if (which.empty()) which = "msf";
             buildTimeLocked_(which);
@@ -965,6 +1029,19 @@ private:
             buildDscLocked_(msg);
         } else if (ext == "sitora") {
             buildSitoraLocked_(msg);
+        } else if (ext == "same") {
+            buildSameLocked_();
+        } else if (ext == "selcal") {
+            buildSelcalLocked_();
+        } else if (ext == "mfsk" || ext == "olivia" || ext == "thor") {
+            buildTextModeLocked_(ext, msg);
+        } else if (ext == "hell") {
+            buildHellLocked_();
+#if defined(VIBE_PAGING)
+        } else if (ext == "paging") {
+            buildPagingLocked_(msg);
+            return;   // ★ fed the channel IQ (feedChannelIq), not the audio: active_ stays false
+#endif
         } else if (ext == "jtty") {
             buildJttyLocked_();
         } else if (ext != "navtex" && msg.find("\"auto\":true") != std::string::npos) {
@@ -1107,6 +1184,73 @@ private:
         sitora_.reset(new SitorARun(cf, std::move(o)));
         log("decoder attached: SITOR-A, tones around " + std::to_string((int)cf) + " Hz");
     }
+    /** ★★ EAS / SAME (V12, 2026-10-31): the US Emergency Alert System headers (decoders/same_decoder.h, 47 CFR § 11.31)
+     *  on the listener's audio — NOAA Weather Radio (162.400–162.550 MHz NFM) or any EAS participant's broadcast. Text:
+     *  one line per alert; 0x03: 0 listening · 1 reading a burst; an end-of-message line once per NNNN. No parameters. */
+    void buildSameLocked_() {
+        same_.reset(new SameDecoder(48000));
+        same_->onAlert = [this](const SameDecoder::Alert& a) { textFrame(SameDecoder::line(a)); };
+        same_->onEom = [this] { textFrame("[SAME] end of message (NNNN)\n"); };
+        same_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+        log("decoder attached: EAS / SAME");
+    }
+    /** ★★ SELCAL (V12, 2026-10-31): the aeronautical selective call (decoders/selcal_decoder.h — ICAO Annex 10 Vol III,
+     *  Amendment 91's 32 tones) on the listener's audio: HF USB on the aeronautical bands, or VHF AM. One line per call. */
+    /** ★★ THE MFSK KEYBOARD MODES (V12, 2026-10-31): "mfsk" = ONE key for MFSK16/32, OLIVIA, CONTESTIA and THOR (one
+     *  TextModeDecoder, Family::All — every family's AUTO in one, sharing spectra; "any-<family>" a family's AUTO); the old
+     *  "olivia" / "thor" names still attach their family alone (no client offers them) — decoders/textmodes.h. "mode" = one of its modes() ids, AUTO
+     *  for anything else. Text as it decodes (0x01), 0x03 0 searching / 1 locked, and {"type":"textmode_status"} on
+     *  change: {detected, hz} — the sub-mode AUTO found and where. */
+    void buildTextModeLocked_(const std::string& ext, const std::string& msg) {
+        TextModeDecoder::familyOf(ext, tmFam_);
+        std::string mode = str(msg, "mode");
+        if (mode.empty()) mode = "auto";
+        tm_.reset(new TextModeDecoder(tmFam_, 48000, mode));
+        tm_->onText = [this](const std::string& t) { textFrame(t); };
+        tm_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+        tm_->onStatus = [this](const std::string& j) { broadcastText("{\"type\":\"textmode_status\",\"data\":" + j + "}", -1); };
+        log("decoder attached: " + ext + " " + mode);
+    }
+    /** ★★ FELD HELL (V12, 2026-10-31): drawn, not read (decoders/feld_hell.h). The strip being drawn goes out as WEFAX's
+     *  0x01 lines (line number, width, grey bytes) — re-sent as it fills, so a client that draws line y at y watches it
+     *  grow; 0x02 once at the start (a new picture); {"type":"hell_status","data":{hz, signal}} on change. Not kept for
+     *  replay (imageKind_ 0): a strip is seconds of text, not a chart. */
+    void buildHellLocked_() {
+        hell_.reset(new FeldHellDecoder(48000));
+        hell_->onLine = [this](uint32_t ln, uint32_t w, const uint8_t* px) {
+            std::vector<uint8_t> m; m.reserve(9 + w);
+            m.push_back(0x01); put32(m, ln); put32(m, w); m.insert(m.end(), px, px + w);
+            broadcast(m.data(), m.size());
+        };
+        hell_->onStatus = [this](const std::string& j) { broadcastText("{\"type\":\"hell_status\",\"data\":" + j + "}", -1); };
+        { uint8_t b = 0x02; broadcast(&b, 1); }
+        log("decoder attached: hell");
+    }
+    void buildSelcalLocked_() {
+        selcal_.reset(new SelcalDecoder(48000));
+        selcal_->onCode = [this](const SelcalDecoder::Code& c) {
+            char b[160];
+            std::snprintf(b, sizeof b, "[SELCAL] %s \xc2\xb7 pulses %.1f s + %.1f s, gap %.2f s \xc2\xb7 %.0f dB\n",
+                          c.code.c_str(), c.pulse1, c.pulse2, c.gap, c.snrDb);
+            textFrame(b);
+        };
+        selcal_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
+        log("decoder attached: SELCAL");
+    }
+#if defined(VIBE_PAGING)
+    /** ★★ PAGING (V12, 2026-10-31): POCSAG with AUTO (vibe_paging_run.h). "mode" = a PagingDecoder::modes() id ("auto",
+     *  "pocsag1200" …; unknown → auto). The shim has already checked it may run here (vsPagingAllowed). */
+    void buildPagingLocked_(const std::string& msg) {
+        const PagingDecoder::Mode m = PagingDecoder::modeFromId(str(msg, "mode"));
+        PagingRun::Out o;
+        o.text = [this](const std::string& t) { textFrame(t); };
+        o.state = [this](uint8_t st) { uint8_t b[2] = { 0x03, st }; broadcast(b, 2); };
+        o.json = [this](const std::string& j) { broadcastText(j, -1); };   // ★ a status, re-sent on change: not in the gap log
+        paging_.reset(new PagingRun(m, std::move(o)));
+        if (!pagingIq_.exchange(true)) pagingRunning().fetch_add(1);
+        log(std::string("decoder attached: paging, ") + PagingDecoder::idOf(m));
+    }
+#endif
     /** ★★ JTTY (V12, 2026-10-26): the WSJT-X 3.2 keyboard mode — every JTTY signal in the listener's passband at once
      *  (decoders/jtty_decoder.h); vibe_jtty_run.h shapes what is sent. No parameters: there is nothing to set. */
     void buildJttyLocked_() {
@@ -1129,6 +1273,7 @@ private:
               which == "dcf77" ? TimeDecoder::Station::DCF77
             : which == "rwm"   ? TimeDecoder::Station::RWM
             : which == "wwvb"  ? TimeDecoder::Station::WWVB
+            : which == "jjy"   ? TimeDecoder::Station::JJY
             : which == "wwv"   ? TimeDecoder::Station::WWV
                                : TimeDecoder::Station::MSF;
         time_ = new TimeDecoder(48000, st);
@@ -1148,9 +1293,10 @@ private:
             const char* dstChange = (t.hasDst2 && t.dst2 != t.dst)
                                   ? (t.dst2 ? " DST BEGINS TODAY" : " DST ENDS TODAY") : "";
             char buf[200];
-            std::snprintf(buf, sizeof(buf), "%s  %s %04d-%02d-%02d %02d:%02d  %s%s%s%s\n",
+            // ★ JJY sends JST (UTC+9) — said, so a Japanese clock is not read as UTC
+            std::snprintf(buf, sizeof(buf), "%s  %s %04d-%02d-%02d %02d:%02d%s  %s%s%s%s\n",
                           name.c_str(), kDay[t.weekday >= 1 && t.weekday <= 7 ? t.weekday : 0],
-                          t.year, t.month, t.day, t.hour, t.minute,
+                          t.year, t.month, t.day, t.hour, t.minute, name == "JJY" ? " JST" : "",
                           t.dst ? "(summer time)" : "", t.leapSecondPending ? " LEAP SECOND PENDING" : "",
                           dstChange, extra);
             std::lock_guard<std::mutex> bl(textMtx_);
@@ -1313,8 +1459,21 @@ private:
         vibeDecoderThread("vibe-decode");
         std::unique_lock<std::mutex> lk(qM_);
         for (;;) {
-            qCv_.wait(lk, [this] { return !q_.empty() || !qi_.empty() || qStop_; });
+            qCv_.wait(lk, [this] { return !q_.empty() || !qi_.empty() || !qc_.empty() || qStop_; });
             if (qStop_) return;
+            if (!qc_.empty()) {   // ★ PAGING's channel IQ — small, so before the skimmer's and the audio
+                IqBlock b = std::move(qc_.front());
+                qc_.pop_front();
+                qcSec_ = std::max(0.0, qcSec_ - (double)b.v.size() / b.rate);
+                lk.unlock();
+                const uint64_t c0 = vibeThreadCpuNs();
+#if defined(VIBE_PAGING)
+                { std::lock_guard<std::mutex> dl(decMtx_); if (paging_) paging_->feedIq(b.v.data(), (int)b.v.size(), b.rate); }
+#endif
+                cpuNs_.fetch_add(vibeThreadCpuNs() - c0, std::memory_order_relaxed);
+                lk.lock();
+                continue;
+            }
             if (!qi_.empty()) {
                 IqBlock b = std::move(qi_.front());
                 qi_.pop_front();
@@ -1370,7 +1529,7 @@ private:
         { std::lock_guard<std::mutex> tl(replayThrMtx_);
           for (auto& j : replayThreads_) if (j->th.joinable()) j->th.join();
           replayThreads_.clear(); }
-        { std::lock_guard<std::mutex> lk(qM_); qStop_ = true; q_.clear(); qUtc_.clear(); qFrames_ = 0; qi_.clear(); qiFrames_ = 0; }
+        { std::lock_guard<std::mutex> lk(qM_); qStop_ = true; q_.clear(); qUtc_.clear(); qFrames_ = 0; qi_.clear(); qiFrames_ = 0; qc_.clear(); qcSec_ = 0; }
         qCv_.notify_all();
         if (qThread_.joinable()) qThread_.join();
     }
@@ -1397,6 +1556,28 @@ private:
             if (jtty_) {
                 // ★ JTTY: float audio straight in; its lines, lists, spots and state are sent from inside (JttyRun).
                 jtty_->feedAudio(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
+            if (tm_) {
+                // ★ MFSK / OLIVIA / THOR: float audio straight in; text, state and status are sent from inside
+                tm_->feed(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
+            if (hell_) {
+                hell_->feed(data, count);   // ★ FELD HELL: its lines and status are sent from inside
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
+            if (selcal_) {
+                selcal_->feed(data, count);
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
+            if (same_) {
+                // ★ EAS / SAME: float audio straight in; its lines and state are sent from inside (buildSameLocked_)
+                same_->feed(data, count);
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
@@ -1486,6 +1667,15 @@ private:
     std::unique_ptr<CwRun> cw_;               // ★ CW: a listener's decoder or a skimmer (buildCwLocked_)
     std::unique_ptr<vibeaprs::Run> aprs_;     // ★ APRS (V12): the modem + the station list (vibe_aprs_run.h)
     std::unique_ptr<SitorARun> sitora_;       // ★ SITOR-A: the ARQ listener (buildSitoraLocked_)
+    std::unique_ptr<SameDecoder> same_;       // ★ EAS / SAME (buildSameLocked_)
+    std::unique_ptr<SelcalDecoder> selcal_;   // ★ SELCAL (buildSelcalLocked_)
+    std::unique_ptr<TextModeDecoder> tm_;     // ★ MFSK / OLIVIA / THOR (buildTextModeLocked_)
+    std::unique_ptr<FeldHellDecoder> hell_;   // ★ FELD HELL (buildHellLocked_)
+    TextModeDecoder::Family tmFam_ = TextModeDecoder::Family::Mfsk;
+#if defined(VIBE_PAGING)
+    std::unique_ptr<PagingRun> paging_;       // ★ PAGING: fed the channel IQ (feedChannelIq) — Android local hardware only
+#endif
+    std::atomic<bool> pagingIq_{false};       // ★ paging runs: the shim hands this host its channel IQ (wantsChannelIq)
     std::unique_ptr<DscRun> dsc_;             // ★ DSC: MF/HF or VHF channel 70 (buildDscLocked_)
     std::unique_ptr<JttyRun> jtty_;           // ★ JTTY: every JTTY signal in the passband (buildJttyLocked_)
     std::atomic<bool>   cwIq_{false};         // ★ the skimmer wants IQ (wantsIq)
@@ -1577,6 +1767,8 @@ private:
     double qiMainSec_ = 0;               // ★ seconds of the MAIN slice queued (qM_)
     std::atomic<uint64_t> iqDropped_{0};
     std::deque<IqBlock> qi_;             // ★ a CW skimmer's IQ (feedIq), served before audio by the same thread
+    std::deque<IqBlock> qc_;             // ★ PAGING's channel IQ (feedChannelIq), the same thread; bounded by qcSec_
+    double qcSec_ = 0;
     size_t qiFrames_ = 0;
     size_t qFrames_ = 0;
     bool   qStop_ = false;
@@ -1636,6 +1828,22 @@ public:
         { std::lock_guard<std::mutex> lk(m_); h = shared_; }
         if (h) h->feed(pcm, count, stride);
     }
+    /** ★★ PAGING (V12): a listener's channel IQ (per-VFO). One relaxed load when nothing pages anywhere. */
+    void feedChannelIqSession(const std::string& session, const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0 || !anyPer_.load(std::memory_order_relaxed)) return;
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_);
+          auto it = bySession_.find(session);
+          if (it != bySession_.end()) h = it->second; }
+        if (h) h->feedChannelIq(iq, n, rate);
+    }
+    /** ★★ …and the one pipeline's (a shared dial, or one listener). */
+    void feedChannelIqShared(const std::complex<float>* iq, int n, double rate) {
+        if (DecoderHost::pagingRunning().load(std::memory_order_relaxed) <= 0) return;
+        std::shared_ptr<DecoderHost> h;
+        { std::lock_guard<std::mutex> lk(m_); h = shared_; }
+        if (h) h->feedChannelIq(iq, n, rate);
+    }
     /** A listener's host is finished with — every decoder stopped, every slot released, NOW. */
     void drop(const std::string& session) {
         std::shared_ptr<DecoderHost> h;
@@ -1685,7 +1893,7 @@ public:
      *  Leaf lock, atomic reads: safe under the shim's clientMtx and on its DSP thread. */
     bool sharedWantsAudio() const {
         std::lock_guard<std::mutex> lk(m_);
-        return shared_ && shared_->wantsAudio();
+        return shared_ && (shared_->wantsAudio() || shared_->wantsChannelIq());   // ★ paging runs on the channel IQ
     }
     /** ★ …and is it a CW skimmer, wanting IQ (V12)? The same leaf lock. */
     bool sharedWantsIq() const {
@@ -1694,7 +1902,7 @@ public:
     }
     /** Is anything decoding anywhere on this radio? */
     bool anyRunning() {
-        for (auto& kv : all()) if (kv.second->wantsAudio() || kv.second->wantsIq()) return true;
+        for (auto& kv : all()) if (kv.second->wantsAudio() || kv.second->wantsIq() || kv.second->wantsChannelIq()) return true;
         return false;
     }
     void shutdownAll() {

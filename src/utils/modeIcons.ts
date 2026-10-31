@@ -27,7 +27,7 @@
 
 export type ModeIconName =
   | 'aircraft' | 'ship' | 'beacon' | 'sensor' | 'aprs' | 'tv' | 'fax' | 'teleprinter'
-  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture';
+  | 'morseKey' | 'keyboard' | 'spots' | 'broadcast' | 'clock' | 'radio' | 'map' | 'picture' | 'pager';
 
 /** One primitive of a glyph. `fill` = solid in the label colour; otherwise stroked (`w` = stroke width, default 1.8). */
 export type ModeIconPart =
@@ -114,6 +114,11 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
     { c: [8.5, 15, 3], w: 1.6 },
     { d: 'M14.5 12.5h4M14.5 15h4M14.5 17.5h4', w: 1.5 },
   ],
+  pager: [   // a pager: the case, its screen, one key
+    { r: [3, 6, 18, 12, 2.5] },
+    { r: [6, 9, 9, 4, 1], w: 1.5 },
+    { c: [17.5, 15, 1.3], fill: true },
+  ],
   clock: [
     { c: [12, 12, 9] },
     { d: 'M12 6.8V12l3.6 2.2' },
@@ -139,19 +144,20 @@ export const MODE_ICONS: Record<ModeIconName, ModeIconPart[]> = {
 export function modeIconFor(id: string): ModeIconName | null {
   const k = id.toLowerCase().replace(/[^a-z0-9]/g, '');
   switch (k) {
-    case 'adsb': case 'hfdl': case 'acars': case 'vdl2': case 'vdl': case 'hfdlmap': return 'aircraft';
+    case 'adsb': case 'hfdl': case 'selcal': case 'acars': case 'vdl2': case 'vdl': case 'hfdlmap': return 'aircraft';
     case 'ais': case 'dsc': case 'navtex': case 'sitora': case 'sitor': case 'amtor': return 'ship';   // ★ SITOR-A beside NAVTEX (SITOR-B)
     case 'ndb': return 'beacon';
     case 'ism': return 'sensor';
+    case 'paging': case 'pocsag': case 'flex': case 'pager': return 'pager';   // ★ V12 PAGING (and OpenWebRX's POCSAG)
     case 'aprs': case 'packet': return 'aprs';
     case 'sstv': return 'tv';
     case 'wefax': case 'fax': return 'fax';
     case 'rtty': case 'rtty45': case 'rtty50': case 'rtty85': case 'rtty170': case 'rtty450': case 'mfrtty': return 'teleprinter';
     case 'cw': case 'morse': case 'cwdecoder': case 'cwskimmer': return 'morseKey';
-    case 'psk': case 'bpsk31': case 'bpsk63': case 'psk31': case 'psk63': case 'jtty': return 'keyboard';
+    case 'psk': case 'bpsk31': case 'bpsk63': case 'psk31': case 'psk63': case 'jtty': case 'mfsk': case 'hell': return 'keyboard';
     case 'ft8': case 'ft4': case 'wspr': case 'js8': case 'jt65': case 'jt9': case 'q65': case 'fst4': case 'fst4w':
     case 'msk144': case 'digi': case 'spots': case 'spotsband': return 'spots';
-    case 'dab': case 'rds': case 'advrds': return 'broadcast';
+    case 'dab': case 'rds': case 'advrds': case 'same': case 'eas': return 'broadcast';
     case 'amateur': return 'radio';
     case 'time': return 'clock';
     case 'map': case 'spotsmap': case 'owrxmap': return 'map';

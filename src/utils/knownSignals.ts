@@ -47,7 +47,7 @@ export interface KnownPreset {
   /** TIME: the stations that share this frequency (60 kHz is MSF AND WWVB — where the receiver is decides). */
   time?: readonly string[];
   /** Digital spots: the mode published on this dial. */
-  spots?: 'FT8' | 'FT4' | 'WSPR' | 'JS8';
+  spots?: 'FT8' | 'FT4' | 'WSPR' | 'JS8' | 'Q65';
 }
 
 export interface KnownSignal {
@@ -115,7 +115,7 @@ function time(hz: number, who: string, mode: KnownSignal['mode'] = 'am', dec: Kn
   if (dec && stations.length) s.preset = { time: stations };
   return s;
 }
-function digi(mode: 'FT8' | 'FT4' | 'WSPR' | 'JS8', dial: number, top = 3000, bottom = 0): KnownSignal {
+function digi(mode: 'FT8' | 'FT4' | 'WSPR' | 'JS8' | 'Q65', dial: number, top = 3000, bottom = 0): KnownSignal {
   return { hz: dial, lo: dial + bottom, hi: dial + top, label: mode, dec: 'spots', dialHz: dial, mode: 'usb',
            prio: PRIO_TABLE, src: 'table', preset: { spots: mode } };
 }
@@ -131,7 +131,7 @@ function digi(mode: 'FT8' | 'FT4' | 'WSPR' | 'JS8', dial: number, top = 3000, bo
  *    2618.5 as "GYA Northwood Meteo Fax". Stuart tunes 4608.1 USB = 4610 − 1.9 kHz.
  *  • NAVTEX 424 / 490 / 518 / 4209.5 kHz — NGA Pub. 117 via navtexStations.generated.ts.
  *  • DSC — dscChannels.ts (ITU RR Appendix 15 distress, ITU-R M.541 routine), its own tune rule.
- *  • FT8 / FT4 / WSPR / JS8 dials — the published dials the server's Band mode uses (android/app/src/main/cpp/
+ *  • FT8 / FT4 / WSPR / JS8 / Q65 dials — the published dials the server's Band mode uses (android/app/src/main/cpp/
  *    decoders/digi_bands.h publishedDials, which records where each came from); scripts/test_known_signals.ts reads
  *    that header and fails if the two disagree. WSPR's signals sit 1400–1600 Hz above its dial.
  *  • Shannon VOLMET 3413 · 5505 · 8957 · 13264 kHz USB (Irish Aviation Authority; EiBi A26 "Shannon Volmet" 3413).
@@ -145,15 +145,35 @@ const DWD_RTTY = [147.3, 4583, 7646, 10100.8, 11039, 14467.3];
 const DWD_FAX = [3855, 7880, 13882.5];
 const NORTHWOOD_FAX = [2618.5, 4610, 8040, 11086.5];
 const SHANNON_VOLMET = [3413, 5505, 8957, 13264];
-/** digi_bands.h publishedDials — FT8, FT4, WSPR, JS8 (Hz). Kept in step by scripts/test_known_signals.ts. */
-export const DIGI_DIALS: Readonly<Record<'FT8' | 'FT4' | 'WSPR' | 'JS8', readonly number[]>> = {
+/** digi_bands.h publishedDials — FT8, FT4, WSPR, JS8, Q65 (Hz). Kept in step by scripts/test_known_signals.ts. */
+export const DIGI_DIALS: Readonly<Record<'FT8' | 'FT4' | 'WSPR' | 'JS8' | 'Q65', readonly number[]>> = {
   FT8: [1840000, 3573000, 5357000, 7074000, 10136000, 14074000, 18100000, 21074000, 24915000, 28074000, 50313000,
         70154000, 144174000, 432174000],
   FT4: [3575000, 7047500, 10140000, 14080000, 18104000, 21140000, 24919000, 28180000, 50318000, 144170000],
   WSPR: [136000, 474200, 1836600, 3568600, 5364700, 7038600, 10138700, 14095600, 18104600, 21094600, 24924600,
          28124600, 70091000, 144490500],
   JS8: [1842000, 3578000, 7078000, 10130000, 14078000, 18104000, 21078000, 24922000, 28078000, 50318000],
+  // ★ V12: Q65's EME segments are TILED (a window every 4–4.5 kHz) — one label per run of joined windows (q65Runs)
+  Q65: [50275000, 50310000, 144115000, 144119500, 144124000, 144128500, 144133000, 144137500, 144180000,
+        432074000, 432078500, 432083000, 432087000, 432091500, 432096000,
+        1296050000, 1296054500, 1296059000, 1296063500, 1296068000, 1296072500,
+        1296077000, 1296081500, 1296086000, 1296090500, 1296095000, 1296099500,
+        1296104000, 1296108500, 1296113000, 1296117500, 1296122000],
 };
+/** Q65's window: 200–4800 Hz above each dial (digimodes/q65.h). */
+const Q65_LO = 200, Q65_HI = 4800;
+/** ★ Q65's tiled dials as RUNS: dials whose windows join (or overlap) make one label — 17 labels on 23 cm would crowd
+ *  out everything else. The label's dial is the run's first (a tap tunes there and opens DIGI SPOTS, which runs every
+ *  Q65 dial the listener's window reaches); its bar covers the whole run. */
+export function q65Runs(dials: readonly number[]): { dial: number; lo: number; hi: number }[] {
+  const out: { dial: number; lo: number; hi: number }[] = [];
+  for (const d of [...dials].sort((a, b) => a - b)) {
+    const last = out[out.length - 1];
+    if (last && d + Q65_LO <= last.hi + 1) last.hi = Math.max(last.hi, d + Q65_HI);
+    else out.push({ dial: d, lo: d + Q65_LO, hi: d + Q65_HI });
+  }
+  return out;
+}
 
 function buildTable(): KnownSignal[] {
   const t: KnownSignal[] = [];
@@ -173,10 +193,12 @@ function buildTable(): KnownSignal[] {
   for (const d of DIGI_DIALS.FT4) t.push(digi('FT4', d));
   for (const d of DIGI_DIALS.WSPR) { const s = digi('WSPR', d, 1600, 1400); s.hz = d + 1500; t.push(s); }
   for (const d of DIGI_DIALS.JS8) t.push(digi('JS8', d));
+  for (const r of q65Runs(DIGI_DIALS.Q65)) t.push(digi('Q65', r.dial, r.hi - r.dial, r.lo - r.dial));
   for (const k of SHANNON_VOLMET) t.push(volmet(k, 'Shannon'));
   // ★ the stations each one is decoded as — DecoderClient timeStationFor's own map (RBU's 66.666 kHz reads as 'rwm')
   // ★ CW = 'cwu' on the wire (sdrTypes.ts SDRMode has no plain 'cw'): the carrier keyed in amplitude becomes a beat note
-  t.push(time(60_000, 'MSF/WWVB', 'cwu', 'time', ['msf', 'wwvb']), time(77_500, 'DCF77', 'cwu', 'time', ['dcf77']),
+  t.push(time(40_000, 'JJY', 'cwu', 'time', ['jjy']),
+         time(60_000, 'MSF/WWVB/JJY', 'cwu', 'time', ['msf', 'wwvb', 'jjy']), time(77_500, 'DCF77', 'cwu', 'time', ['dcf77']),
          time(66_666, 'RBU', 'cwu', 'time', ['rwm']));
   for (const f of [4_996_000, 9_996_000, 14_996_000]) t.push(time(f, 'RWM', 'cwu', 'time', ['rwm']));
   for (const f of [2_500_000, 5_000_000, 10_000_000, 15_000_000]) t.push(time(f, 'WWV/WWVH', 'am', 'time', ['wwv']));

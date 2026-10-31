@@ -1,0 +1,1349 @@
+# Decoders, wave 2 (V12) — status log
+
+Branch `v12-decoders-wave2` (worktree `~/VibeSDR-decoders2`), off `v12-experimental`. One section per decoder, in queue
+order, appended as each lands, so a follow-up agent can resume exactly where the last one stopped.
+
+Queue (Stuart's order): Q65 → FST4W → FST4 → MSK144 → CTCSS/DCS → JJY/BPC/TDF/CHU → ACARS → VDL2 → HFDL → RS41 →
+PAGING (POCSAG + FLEX) → MFSK family + Hell → SELCAL → EAS/SAME. Never: HD Radio, AMBE voice, anything encrypted, TV on
+servers.
+
+## Standing specs recorded before the work reached them
+
+### PAGING (queue item 7) — spec as refined by Stuart, 2026-10-31
+
+- **ONE paging demodulator with an AUTO mode**, built like our other auto decoders (`decoders/rtty_auto.*` is the
+  pattern: candidates run side by side, scored, the winner's text shown, what it chose said in the text, keeps watching).
+- It detects and decodes on its own, picking encoding and rate from the signal:
+  - **POCSAG** 512 / 1200 / 2400 baud (2-FSK). Tell: the preamble (alternating 1010…, ≥ 576 bits) and the frame sync
+    codeword **0x7CD215D8**.
+  - **FLEX** 1600 / 3200 / 6400 bps, 2-level and 4-level FSK. Tell: bit sync, the A-word and the frame sync.
+  - **A channel that carries both** must work (a shared paging channel switching between POCSAG and FLEX).
+- **Show the detected mode/rate on the readout** (e.g. "POCSAG 1200", "FLEX 3200/4").
+- **Manual override** to a specific mode/rate when auto cannot lock.
+- **0 false decodes on noise** (long noise runs, measured, as every other decoder).
+- Unchanged from the earlier decision: **ONE "PAGE" button**; **Android local hardware only** (the phone's own
+  plugged-in radio) — never on any server, not even to LAN clients; **nothing to the gallery**.
+
+### SIMD — hard requirement for every decoder in this wave (Stuart, 2026-10-31)
+
+> "make sure EVERYTHING that can be optimised by SIMD NEON SSE2 etc do it. I want these decoders to be so lightweight
+> they run on potato spec hardware but powerful enough to hang with the big players whilst doing so."
+
+- Profile each decoder; vectorise every hot loop: FFT/filterbanks (PFFFT, as the CW skimmer), mixers/NCOs,
+  FIR/decimation, correlators/sync search, soft demod/LLRs, LDPC/BP and Viterbi inner loops, power spectra.
+- NEON (ARMv7 armhf `-marm`, Pi 2; and ARM64), SSE2 baseline on x86 (Atom N450), and a SCALAR fallback giving
+  identical decodes.
+- Targets: Pi 2 (900 MHz ARMv7), 2009 Atom N450 hosts, 32-bit 1 GB Android phones.
+- Each section reports scalar vs SIMD CPU (Mac + Pi 2 instruction estimate) and sensitivity / decode counts vs the
+  reference (jt9 as a black box, UberSDR / PSKReporter). Never trade decodes for speed. Where SIMD does not pay on a
+  loop, say so rather than forcing it.
+
+### Real-signal servers — standing permission for this wave (Stuart, overnight 2026-10-31)
+
+"if you need UberSDR or any server to test on real signals use mine": UberSDR (RX888, 192.168.86.11:8080,
+`tools/ubersdr-rec`); VibeServers Pi 500 192.168.86.88, Lenovo i5 192.168.86.13, Pi 2 192.168.86.129 (ports
+48000/48001). Rules: check the listener count first and take a dial only at 0 listeners; restore frequency, mode, gain
+and settings afterwards (Pi 2: `agcLock` back to 1 if borrowed); recording and tuning ONLY — no install, update,
+restart or reconfiguration; no builds on the Lenovo; never adb keys into the Sony/XCover UIs; recordings stay local and
+out of git (paging captures: decode-test only, never commit message content). Every session is logged below.
+
+#### Server session log
+
+| UTC | Server | Frequency / mode | Listeners at start | Restored |
+|---|---|---|---|---|
+
+
+---
+
+## 1. Q65 — DONE (2026-10-31)
+
+Files: `decoders/digimodes/q65_code.{h,cpp}` (frame, code, BP), `q65_decoder.{h,cpp}` (receiver), `q65_simd.h`,
+`q65.h` (the Digital-spots mode), `digi_bands.h` ("Q65" rows), `tools/q65-bench/` (bench, synth, `qemu.sh`),
+`vibeserver/test-q65.cpp` (in `scripts/run-tests.sh`).
+
+### How the protocol was learnt — clean room
+No WSJT-X source was read. WSJT-X 2.7.0's arm64 .deb was downloaded into its own directory (`~/wsjtx-blackbox/`, not in
+git) and its shipped utilities run as black boxes in a Debian container:
+- `q65code "<message>"` prints the 90 bits (78 message + 12 CRC), the 65-symbol codeword and the 85 tones. 265 messages
+  (160 random 71-bit telemetry words — near-arbitrary bit patterns —, 60 standard QSO messages, 30 free texts, 15
+  others) were run through it.
+- From those, by linear algebra over GF(2) (scratch Python, not shipped): bit 78 is always 0 (77-bit payload + 0); the
+  CRC-12 is affine with constant 0, has linear complexity 12 only when each six-bit symbol is fed LSB first, and
+  brute force then gives polynomial 0x80F (reflected register 0xF01; low six bits → info symbol 13, high → 14); the
+  65-symbol codeword is systematic (15 info) + 50 parity, and consecutive parity differences each depend on ONE info
+  symbol through a 6×6 GF(2) matrix that is multiplication by a field element in GF(64) with x⁶+x+1 — i.e. a
+  repeat-accumulate code; the 50 (info index, weight) steps are the table in `q65_code.cpp`. Channel: tone 0 at the 22
+  positions where every vector has 0; data tone = codeword symbol + 1 with the two CRC symbols punctured.
+- All 265 black-box codewords and tone sequences reproduce exactly (test-q65 pins 17).
+- `q65sim` audio (noise-free) measured: samples per symbol 1800/3600/7200/16000/41472 for 15/30/60/120/300 s; start
+  0.5 s (15/30 s) or 1.0 s (60 s+) into the period; tone spacing = baud × 2^submode (A–E).
+- jt9 was run only as a black box to COMPARE decodes on the same files.
+- ft8_lib (MIT) packs/unpacks the 77-bit payload. It agrees with q65code on standard messages; it does NOT pack hex
+  telemetry from text and packs a few contest types and "RR73" differently (q65code sends RR73 as the GRID RR73) —
+  irrelevant to receiving, since we only unpack.
+
+### The receiver
+Search spectrogram (half-baud bins, quarter-symbol hop, per-bin median noise) → sync contrast (sync minus data
+positions at tone 0, so carriers score 0) → candidates → per candidate one slice of the window's single big FFT back
+to a baseband at exactly 72·2^m samples a symbol → two-stage start/frequency refinement on the 22 sync symbols (once,
+shared by all submodes) → per-symbol DFT energies, per-bin carrier normalisation → AWGN metric ln I0(2√(ρE)) ×1.5 →
+belief propagation over GF(64) in the Walsh-Hadamard domain, forward-backward along the accumulator chain, 50
+iterations with an early give-up → CRC-12 → guards. Submodes ranked by tone concentration; BP on the best two; "CQ ? ?"
+a-priori on the best one. Engine: 30 s and 60 s periods, A–D, audio 200–4800 Hz; one SlotDecoder per period shared by
+every engine in the process.
+
+### Numbers
+| | |
+|---|---|
+| Sensitivity, blind, 50 % (synthetic AWGN, 60 trials/point) | 15A ≈ −21.6 · 30A ≈ −24.6 · 60A ≈ −27.5 dB (2500 Hz); 60B/C/D within ≈ 0.5 dB of 60A; all four submodes searched at once costs ≈ 0.3 dB |
+| vs jt9 (black box, same q65sim files, 60A, 20 files/point, jt9 given unrelated MyCall/DxCall so no AP) | −25: jt9 20/20, ours 20/20 · −26: 20/19 · −27: 12/10 · −28: 0/0. (jt9 with its default calls decodes all to −29 by AP "q3" — it is being told the calls) |
+| False decodes on noise (all guards) | 15 s × 3000, 30 s × 1500, 60 s × 1000 windows (≈ 42 h of periods): **0** |
+| Guard calibration | guard off at threshold: 21 blind CRC-passing wrong decodes (max score 2.59, next 1.76) vs true ≥ 2.89; a-priori wrong ≤ 1.65 (one 2.32 later on noise) vs true ≥ 2.37 → blind 2.75; a-priori 2.6 + CQ with a real grid; non-standard messages +0.5; a codeword that is > 12/63 one tone (a carrier) rejected |
+| CPU Mac (M-series, noise, worst case) | 60 s window 42 ms, 30 s 34 ms → ≈ 110 ms/min (FT8 ≈ 42 ms/min) → costVsFt8 2.6 |
+| CPU Pi 2 (qemu-arm count, `tools/q65-bench/qemu.sh`) | 60 s window 0.84 G instr NEON / 1.89 G scalar; 30 s 0.68 G / 1.78 G → ≈ 2.2 G/min → ≈ 3–4 s of a 900 MHz core per minute (≈ 5–7 %), ESTIMATE at 0.6–0.8 IPC |
+| SIMD | NEON = scalar decodes bit for bit (Mac: sweep + noise); SSE2 = scalar bit for bit (x86-64 build under qemu, 33 decodes + noise). Hot loops vectorised: WHT64 (register-resident), BP products/normalise, sync search row sums, complex dot/mix. Not vectorised (does not pay): the GF(64) permutation gathers, the per-symbol exp/log metric (4 k per attempt) |
+| 70 cm dials | 432.055 was dropped (FST4 commit): with it the Q65 cluster was too wide for a narrow capture to hold beside FT8 (test-band-slice); 432.065 + 432.087 remain |
+| Memory | per engine: 3.4 MB ring + transient window copy; shared: ≈ 7 MB (30 s) + 13 MB (60 s) process-wide |
+
+Optimisation history (60 s noise window, Mac): 222 ms → 140 (submode ranking) → 83 (a-priori on the best submode,
+50 iterations) → 70 (refine shared) → 42 ms (BP early give-up). Pi 2 count 3.4 G → 0.84 G instructions.
+
+### Clients
+Server (Single + Band, governor priority 100, cost 2.6/1.2), web and app: spots arrive as any mode does; the map
+colour/letter (blue Q) and the family filter ("Q65-60A" → Q65) were already in `src/utils/digiModes.ts`. The mode is
+offered only on bands the radio reaches (`reachableSpans`). About: V12 release note updated. Android local hardware:
+same engine (the native lib globs `digimodes/*.cpp`) — not compile-checked with gradle this session.
+
+### Owed
+- **Real signals.** Not validated on air: there is no Q65 on HF, and none of Stuart's servers has a 2 m / 70 cm EME
+  antenna. PSKReporter shows Q65 almost only on 1296 MHz EME (this weekend) plus 432/144. A real-air capture is owed.
+- Q65's averaging over successive periods (EME practice), Doppler-spread energy summing (K > 1 bins) and drift
+  tracking; a heard-calls AP book like FT8's (`FtxApBook`).
+- 15 s and 120/300 s periods are built and tested but not run by the engine (cost; outside our bands).
+- Android gradle and iOS `build_ios.sh` compile not run.
+
+### Questions for Stuart
+1. 23 cm: most live Q65 is 1296.05–1296.12 MHz EME. Add a 23 cm band to Band mode's list (it would carry only Q65)?
+2. 6 m: the IARU R1 EME centre 50.310–50.320 overlaps FT8's 50.313 and no Q65 was heard there today. Add 50.310 anyway?
+3. Run Q65-15 too (≈ +40 % cost)?
+
+---
+
+## 2. FST4 and FST4W — DONE, with a stated sensitivity gap (2026-10-31)
+
+Files: `decoders/digimodes/fst4_code.{h,cpp}`, `fst4_tables.h` (generated), `fst4_decoder.{h,cpp}`, `fst4.h`,
+`fst4w.h`, `digi_bands.h` ("FST4" rows; FST4W uses its existing WSPR-dial rows), `tools/fst4-bench/`,
+`vibeserver/test-fst4.cpp`.
+
+### Clean room
+`fst4sim` (WSJT-X 2.7.0, black box) prints a message's bits, its CRC-24 and its 160 tones. 177 FST4 + 236 FST4W
+messages (telemetry words for arbitrary bit patterns; random calls/grids/powers; compound calls) were solved:
+- FST4's printed 77 bits = the FT8 payload XOR FT4's published scrambling sequence (constant XOR across all 130
+  telemetry words); CRC-24 = 0x100065B, register 0, MSB first over those 77 bits, no padding (all 134 printed CRCs);
+- FST4W: 50 bits = FT8 c28 (call) + g15 (grid) + 5-bit power index (0,3,7…60 dBm → 0…18) + 2 type bits; not scrambled;
+  same CRC. Compound calls (type ≠ 00) carry the base call's c28 and an unsolved field → decoded, **not unpacked**;
+- systematic, Gray (00→0, 01→1, 11→2, 10→3), sync 5 × 8 at 0/38/76/114/152 (A B A B A);
+- the LDPC parity checks: sparse vectors of the dual of the observed codewords by an information-set search
+  (scratch Python): (240,101) 139 checks weight 5–6, (240,74) 166 checks weight 4–5, every column weight 3. All 413
+  black-box vectors reproduce; BP on BPSK/AWGN gives 50 % FER at Eb/N0 ≈ 1.1 dB (a healthy code).
+- Timing from the audio: nsps 720/1680/3888/8200/21504/66560/134400; start 0.5 s (15 s) or 1.0 s.
+
+### Receiver
+Per (mode, period) stream: vibedsp NCO + FIR (shared by all periods of a mode) then a polyphase resampler to a
+baseband with an exact FFT-friendly samples-per-symbol (FST4 ≈ 2.65 kHz, FST4W ≈ 260–280 Hz) → STFT sync search (SIMD
+over bins) → refine → coherent fine frequency on the sync groups → five detection views tried in turn: one global
+carrier phase (all 40 sync symbols), piecewise phase between sync groups, coherent 4-, 2- and 1-symbol blocks →
+sum-product BP → CRC-24 → guards (one-tone codeword, mean tone energy ≥ 1.6, plausible message; FST4W: a real call
+and grid). FST4W tries its (240,74) code then (240,101) (hashed-call messages use the 77-bit form).
+
+### Numbers
+| | |
+|---|---|
+| Sensitivity, 50 % (synthetic GFSK BT=1, AWGN) | FST4-15 ≈ −18.7 · FST4-60 ≈ −26.1 · FST4W-120 ≈ −29.6 dB (2500 Hz) |
+| vs jt9 (black box, fst4sim FST4-60 files, 16 distinct per point, no AP calls) | −24: 16/16 both · −25: jt9 16, ours 6 · −26: 16 / 2 · −27: 15 / 0 · −28: 6 / 0 → **jt9 ≈ 2–2.5 dB better** |
+| Ideal detection (our BP, perfect phase, simulated symbols) | coherent 50 % at −27.2 dB, single-symbol non-coherent −24.7 — so our receiver loses ≈ 1 dB to ideal coherent, and jt9 has ≈ 1 dB more (OSD or a better detector) |
+| False decodes on noise | FST4-15 × 1000, FST4-60 × 300, FST4W-120 × 200 windows: **0** |
+| CPU Mac | FST4 engine (60/120/300) ≈ 36 ms a minute (FT8 ≈ 42) → costVsFt8 0.9; FST4W (120/300/900/1800) ≈ 10 ms a minute → 0.25 |
+| CPU Pi 2 | NOT MEASURED under qemu yet; at Q65's measured Mac→Pi 2 ratio (≈ 30–35×) ≈ 1.1–1.3 s/min FST4, ≈ 0.3 s/min FST4W (ESTIMATE) |
+| SIMD | sync search, complex dot products (q65_simd.h), vibedsp's NEON/SSE2 NCO/FIR/resampler. Not vectorised yet: the LDPC BP (scalar sum-product with tanh/log) — it is small here (few candidates per long period) but should get the FT8 BP kernels' treatment; scalar-vs-SIMD identity not yet checked for FST4 |
+
+### Clients
+Server Single (FST4 window 250–1550 Hz on 474.2/136.0; FST4W ±150 Hz of WSPR's dials) and Band (+ the background Band
+profile, so FST4W runs beside WSPR there). Spots `FST4-60` … / `FST4W-120` …, colour/letter already in digiModes.ts.
+About updated. FST4 window was narrowed to 1.55 kHz so 2200 m's 136.0 dial stays inside the band (137.8).
+
+### Owed
+- The ≈ 2 dB gap to jt9: OSD after BP (as ft8_decoder's), a GFSK-matched multi-symbol detector, and a joint
+  phase/frequency track (drift on LF paths). Validate on REAL LF/MF/HF FST4W (PSKReporter shows FST4W on 136/475 kHz
+  and 3.570/7.040 MHz; Stuart's UberSDR reaches all of them — record a night of 630 m and 40 m WSPR/FST4W windows).
+- FST4W compound-call field layout (more black-box runs with systematic prefixes/suffixes).
+- qemu Pi 2 count and SIMD-vs-scalar identity check for FST4 (as Q65's `tools/q65-bench/qemu.sh`).
+
+---
+
+## 3. MSK144 — DONE (2026-10-31)
+
+Files: `decoders/digimodes/msk144_code.{h,cpp}` (frame, CRC, code), `msk144_tables.h` (generated checks),
+`msk144_decoder.{h,cpp}` (receiver), `msk144.h` (the Digital-spots mode), `ldpc_small.{h,cpp}` + `vmath4.h` (a shared
+small-LDPC BP + OSD, SIMD — FST4 moves onto it next), `digi_bands.h` ("MSK144" rows), `tools/msk144-bench/` (bench,
+synth, `qemu.sh`), `vibeserver/test-msk144.cpp` (in `scripts/run-tests.sh`).
+
+### Clean room
+No WSJT-X source read. `msk144code` (WSJT-X 2.7.0, black box, Colima container) prints a message's 144 "channel
+symbols". 400 messages (272 telemetry words: 200 random, the 71 single-bit words, zero; 128 standard / compound / free
+text) → solved in scratch Python (not shipped):
+- the printed symbols are TONES (1 = upper). A tone sequence synthesised as CPFSK ±500 Hz around 1500 Hz decodes in jt9
+  only with 1 = +500 Hz — that settled the polarity (jt9 used only to compare decodes);
+- tone i = C[i] ⊕ C[i+1 mod 144], C = frame ⊕ 0011 0011 … (period 4). Equivalently offset-QPSK with half-sine pulses:
+  each frame bit is the sign of one matched-filter sample, on I (even bits) or Q (odd), against ONE carrier phase for
+  the whole transmission (verified: 144/144 bits at the ideal instant on a clean synthetic frame);
+- frame: sync 0x72 at bits 0–7 and 56–63; codeword bits 8–55 and 64–143; systematic: the 77-bit FT8-family payload
+  (unscrambled), CRC-13, 38 parity;
+- CRC-13 = 0x15D7 (x¹³+x¹²+x¹⁰+x⁸+x⁷+x⁶+x⁴+x²+x+1), register 0, MSB first over 77 bits + 6 zeros: all 400;
+- the (128,90) LDPC: the dual of the observed codewords is 51-dimensional (13 CRC + 38 LDPC); an information-set
+  search for sparse dual vectors found EXACTLY 38, weight 10–11, rank 38, every column weight 3. All 400 re-encode.
+- ft8_lib packs a few messages differently from WSJT-X (free text that looks like a call, "RR73", two compound CQs):
+  22 of the 398 tone sequences differ for that reason only — irrelevant to receiving (we unpack).
+- MSK40 (short hashed-call messages) not decoded: no callsign for a spot.
+
+### The receiver (free-running)
+12 kHz audio → NCO at 1500 Hz + FIR ÷2 → 6 kHz complex (3 samples a bit) → 5-tap half-sine matched filter. Every 1 s
+an analysis of the last 1.5 s: for 9 coarse offsets (±200 Hz, 50 Hz steps; rotation by a table, SIMD) the 8-bit sync
+correlation at every sample (adds/subtracts only, SIMD four starts at a time); frame score = both words' power over
+the noise (the matched filter's 20th-percentile power, median of 8 windows). Folded at the frame period: runs of 1, 2,
+4, 8, 16 frames at each phase against Gamma tails (false alarm 1e-5 a trial) — SIMD four phases at a time with a
+vmax screen, so the exact tail is computed only for groups that cross. Top 6 candidates → timing to a fraction of a
+sample → frequency from the FFT of the run's SQUARED bits (data-free; peak at 2Δf; ±75 Hz in one FFT, parabola) →
+each bit weighted by the ping's ENVELOPE at its instant (maximal-ratio combining in time; a neighbour frame each side,
+so a ping's ragged ends count) and summed coherently over the frames → LLRs → BP (40 iterations, early give-up) →
+CRC-13 → plausible message → guards (≤ 45 hard errors of 144, agreement ≥ 0.3). Second detector: each frame its own
+phase (a drifting ping). The two sync words are identical: a ping holding one word of each of two frames is tried at
+both readings (start ±168 samples). One report per message per 30 s.
+
+**OSD is OFF.** With only a CRC-13 the trials of OSD cannot be vetted: in a 240-ping sweep 19 of 31 OSD decodes were
+wrong (plausible-looking calls). BP alone: 0 false in 48 h of noise (429 k BP attempts) and 0 wrong in every sweep.
+
+### Numbers
+| | |
+|---|---|
+| Sensitivity, 50 % (synthetic CPFSK, AWGN, 40 trials/point, random frame offset and ±50 Hz) | one 72 ms frame ≈ +1.3 dB · 4 frames ≈ −5.3 · a 1 s ping (14 frames) ≈ −8.2 dB (2500 Hz) |
+| vs jt9 (black box, `jt9 -k -p 15 -F 100`, the SAME 180 files, 10/point) | 1 frame +3: jt9 8, ours 10 · 0: 1 / 1 · 4 frames −3: 8 / 9 · −6: 0 / 1 · 1 s −6: **0 / 8** · −9: **0 / 5** → equal on single frames, ≈ 1.5 dB better on 4 frames, ≈ 3–4 dB better on long pings (coherent combining over the ping) |
+| False decodes | white noise 48 h (BP only): **0**; 8 h after the SIMD fold: 0; every sweep: 0 wrong |
+| SNR | calibrated +2.3 dB; within ±1 dB on short pings; a ping filling a whole window reads low (its own power in the noise floor) |
+| Frequency | ≤ 2 Hz on one frame, ≤ 0.35 Hz on a 1 s ping |
+| CPU Mac (M-series, whole receiver on noise) | 15.7 ms a minute (search + decodes 10 ms; mix + FIR 5.6 ms) → costVsFt8 ≈ 0.4 (ModeDef says 0.8 — margin for busy pings; refine after real-air use) |
+| CPU Pi 2 (qemu-arm count, `tools/msk144-bench/qemu.sh cpu 60`) | NEON 0.58 G instructions a minute of audio (the noise generator excluded), scalar 1.2 G → ≈ 0.8–1.1 s of a 900 MHz core a minute (≈ 1.5 %), ESTIMATE at 0.6–0.8 IPC |
+| SIMD | NEON = SSE2 = scalar by construction (q65_simd lanes, our own exp/log); Mac SIMD vs `SCALAR=1` builds: the 180 jt9 files and a sweep **bit-identical**. Vectorised: rotation, sync correlation, fold screen, BP check update (vmath4.h). GCC armhf compares: `vmath4.h`'s log uses one vcgtq — route through `neon_compat.h`'s fix when v12-decoder-simd-audit merges |
+| Memory | ≈ 1 MB per engine (window, 9 score arrays, FFT buffers) |
+
+### Clients
+Server Single + Band (free-running, gate 2 s, priority 100), web and app: spots `MSK144`, grey M (digiModes.ts had it).
+About: V12 note. DIGITAL-SPOTS.md row. Dials: digi_bands.h note (IARU R1 VHF Handbook 10.03 — downloaded and read
+2026-10-31: 6 m 50.320–380 MS centre + the plan's accepted legacy MGM below 50.300 where activity is (50.280); 4 m
+70.250 MS centre; 2 m MS MGM range 144.360–144.397; 70 cm 432.370 MS centre). test-band-slice / test-digi-spots pass.
+
+### Owed
+- **Real meteor pings.** Not validated on air: no server session was used (it was ≈ 04 UTC, few MSK144 operators
+  on, and no server was checked for a 6 m / 2 m antenna). A real capture on 50.280 at a morning peak, or during a
+  shower (Geminids 13–14 Dec), is owed.
+- The gate: a short weak lone ping does not light Band's 2 s activity gate. Measure with real pings; MSK144 may
+  want gate-off by default during showers (Stuart to decide).
+- MSK40 short messages; AP decoding with the operator's own call (we have none); averaging repeated pings of the
+  same message across periods (WSJT-X-style message averaging).
+- Android gradle / iOS `build_ios.sh` not compiled this session.
+
+### Questions for Stuart
+1. MSK144 dials: 50.280 (where it is) and 50.360 (where R1 put it) both run — keep both? 70.250 vs 70.230 on 4 m?
+2. Gate default for MSK144: Auto (now) or Always?
+
+---
+
+## 2b. FST4 / FST4W — the gap to jt9 closed by about half (2026-10-31)
+
+What changed (`fst4_decoder.cpp`, `fst4_code.{h,cpp}`, `ldpc_small.*`):
+- **BP on the shared SIMD decoder** (`ldpc_small`: four checks a lane, our own exp/log, identical scalar); the old
+  scalar sum-product removed.
+- **Decision-directed frequency.** The oracle (the bench's sent tones, `FST4_VDBG`) showed that at −27 dB HALF the
+  trials had every coherent view wrong (≈ 120 of 240 bits) while the 4-symbol non-coherent view was ≈ 80 % right: the
+  40 sync symbols alone pin a wrong frequency (grating lobes 1/38 baud apart, or noise). Now the 4-symbol view's tone
+  decisions + the sync make a 160-symbol reference, |Σ X_i[t̂_i]e^{−j2πδi}|² over ±1/16 baud (1/4096 steps,
+  parabola), and the coherent views are rebuilt there — then once more from the best coherent view's decisions. The
+  sync-only search now covers ±1/32 baud and also tries its second lobe.
+- **A GFSK-matched view**: a coherent MAP (forward-backward) detector over (previous, this) tone states with the 64
+  exact BT = 1 waveforms of each tone triple, integrated over 32 sub-blocks a symbol — global and piecewise phase.
+  Measured: a few bits better than the one-symbol coherent view, not a large gain (the coherent views were already
+  at the ideal coherent 4-FSK error rate once the frequency is right: ≈ 35 of 240 bits at −26 dB, theory 37).
+- **OSD**: order 1 + every pair of the 101 (or 74) information positions, up to 3000 trials, on the three views BP came
+  closest with, ORDERED BY BP'S ACCUMULATED POSTERIORS (the iterations' evidence summed — this, not the channel LLRs,
+  is what made OSD pay: −27 dB 4 → 9 of 20). The CRC-24 vets the trials; the message must unpack as a message people
+  send / a real FST4W call + grid; then the energy and one-tone guards.
+- Views are made lazily (each tried before the next is made).
+
+| | before | now |
+|---|---|---|
+| FST4-60, our synth, 50 % | −26.1 | ≈ −26.7 dB |
+| FST4-15, 50 % | −18.7 | ≈ −19.5 |
+| FST4W-120, 50 % | −29.6 | ≈ −30.1 |
+| fst4sim files (20 per point, same files for both) | −25: ours 15, jt9 20 · −26: 10 / 20 · −27: 4 / 19 | **−25: 19 / 20 (jt9 20) · −26: 15 / 20 · −27: 9 / 19 · −28: 1–2 / 9** |
+| gap to jt9 at 50 % | ≈ 2–2.5 dB | **≈ 1 dB** |
+| False decodes | — | FST4-15 × 6000, FST4-60 × 400, FST4W-120 × 200 noise windows: **0** |
+| SIMD vs scalar | not checked | `SCALAR=1` build: 40 fst4sim files and a FST4W sweep **bit-identical** |
+| Pi 2 (qemu-arm count, `tools/fst4-bench/qemu.sh`) | not measured | one FST4-60 window of noise incl. its whole stream ≈ 0.6 G instructions NEON (scalar ≈ 0.95 G) → FST4 (60/120/300 sharing the mix) ≈ 0.7–0.9 G a minute ≈ 1–1.5 s of a 900 MHz core (ESTIMATE). Hot: the FIR/resampler (vibedsp, NEON), OSD on noise candidates (≈ 12 %), the double-precision twiddles (`sincos`, 8 %: a recurrence would remove most — owed) |
+| Mac decode (noise, worst case) | 10.4 ms / FST4-60 window | 11.7 ms |
+
+Still owed: the last ≈ 1 dB (candidates: order-3 OSD restricted to the least reliable, iterating BP ↔ detector,
+non-coherent GFSK-matched views for fading paths); real LF/MF/HF FST4W (a night of 630 m / 40 m on the UberSDR);
+twiddle recurrence.
+
+---
+
+## 4. CTCSS / DCS tone ID — DONE, wired to server, app and web (2026-10-31)
+
+Files: `decoders/tone_id.{h,cpp}` (outside RxPipeline), `digimodes/vmath4.h` (+ branch-free `vatan2`, `signBit01`),
+`vibeserver/test-tone-id.cpp` (in `scripts/run-tests.sh`).
+
+- **Own discriminator** on the listener's CHANNEL IQ (`feedIq`; or `feedDisc` for a raw discriminator): arg(x·x*₋₁)
+  with our vector atan2 (4.8e-6 rad, no float compares — sign-bit selects, so GCC armhf's compare problem cannot
+  bite), then CIC³ to ≈ 2 kHz, a 63-tap 300 Hz low-pass ÷2 → ≈ 1 kHz.
+- **CTCSS**: 2 s Hann FFT every 0.5 s; peak in 60–260 Hz ≥ 15 dB over the band median AND ≥ 10 dB over the band's
+  second peak (a DCS word's line spectrum fails that), log-parabola frequency within ±0.6 % (and < 0.45 of the gap to
+  the neighbour) of one of the 51 tones; three agreeing looks lock (≈ 3.5 s from cold), five misses unlock.
+- **DCS**: 134.4 bit/s; best of 16 bit phases; ≈ 2 s folded at the 23-bit period (fold consistency ≥ 0.7);
+  every cyclic shift × both bit orders × both polarities against Golay (23,12). The generator and frame layout were
+  PINNED by the published inverted-code equivalences: 12/12 pairs (023N = 047I, 025 = 244, 026 = 464, 031 = 627,
+  032 = 051, 043 = 445, 054 = 413, 065 = 271, 071 = 306, 072 = 245, 073 = 506, 074 = 174) reproduced only by
+  0xC75 with the 9-bit code under "100" (of 16 polynomial/layout/order combinations). The N/I polarity convention is
+  not pinned by that (an inverted code IS another code's normal): the label says both, "DCS 023N (= 047I)".
+- Measured (synthetic NFM at 24 kHz, ±600 Hz sub-audible under ±3 kHz voice-band audio): **51/51 CTCSS tones right**
+  (±0.4 % transmitter error, 15 dB CNR, lock ≤ 3.5 s), 151.4 beside 150.0 at 10 dB CNR; **32/32 DCS** (16 codes N + I);
+  weak: CTCSS and DCS 10/10 down to 3 dB CNR (16 kHz), 5/10 and 4/10 at 0 dB. **0 locks** in 10 min of noise, 5 min of
+  voice with no tone; DCS never read as CTCSS. Cost 0.13 ms a second of 24 kHz IQ on the Mac (≈ 0.013 %).
+  SIMD = scalar: the whole test's output identical with `-DVIBE_FORCE_SCALAR`.
+
+### The wiring (done, second run of 2026-10-31)
+- **Where it is fed — one change from the plan above.** Not the raw slice beside `iqTap`: that slice is ≥ 2.5 × the
+  passband (≈ 31–62 kHz for a 12.5 kHz NFM channel), so a neighbouring channel inside it would capture the
+  discriminator, and it sits up to half a bin off the dial. Instead the PIPELINE's channel-IQ callback, which already
+  exists for DRM (`clientIqCb`, `cb_.iq` in `demodTail_`): post-NCO, the dial at DC, cut to the passband, at `chFs_`.
+  Per listener (`ClientDsp::tone`, `toneFeedClient`): built on the first block in NFM, rebuilt when the channel rate
+  changes, `reset()` when the dial moved (`toneAtHz` set in `clientRetune`), destroyed off NFM. Shared dial
+  (`toneFeedShared` from `iqCb`): one ToneId, the dial read from `audioFreq`, `toneSharedWant` set in `buildAudio`; not
+  on a per-listener radio. All on the DSP thread under the locks those callbacks already hold (c->mtx, then clientMtx
+  — the order `onClientAudio` uses).
+- **Message**: `{"type":"tone","label":"CTCSS 88.5 Hz"}` / `"DCS 023N (= 047I)"` / `""` (cleared), on change only, to
+  the listener's spectrum socket (shared dial: every spectrum socket, and a listener arriving gets the current one in
+  `sendFullState`).
+- **App** (`VibeServerClient` `tone` → `onToneId`, SDRScreen `toneLabel`): the VTS line's quiet suffix in the MESSAGE
+  slot — "GB3NB: CTCSS 82.5 Hz" (text colour, not the name's) after a bookmark on the dial, or the label alone; held
+  while locked; NFM only (dropped at once on any other mode). **Web** (`spectrum.ts` `tone`, `main.ts` `toneLabel` in
+  `updateVts`): the same sentence through `vtsLine.ts` line mode. ⚠ Web edits need build-web (`vibe_web_page.h`).
+- **Copy**: About V12 note ("CTCSS AND DCS ON NFM"). Not a control, so no tour card; the website has no NFM text.
+- **Tests**: `test-tone-id` + all 51 tones / 32 DCS at seven channel rates (12–93.75 kHz: 14/14) and a `--write-clip`
+  for the new end-to-end `scripts/test-server-tone.mjs` (the REAL server, fake rtl_tcp, three NFM carriers at 2 m):
+  shared dial — the right label on each carrier, '' first on a retune, nothing on a toneless carrier for 10 s, cleared
+  leaving NFM, a joiner told at once; range-locked — two listeners each their own, never the other's. **13/13**.
+  Cost on the Mac (optimised): ≈ 0.13 ms per second of 24 kHz IQ (`-O0` in run-tests prints ≈ 1.5).
+- Not compiled: Android gradle, iOS `build_ios.sh` (the shim is not in the iOS lib). Full app `tsc` exceeds the 1 GB
+  memory cap — syntax-checked the edited files and type-checked `VibeServerClient.ts` alone instead.
+
+### Still owed
+- **Real signals**: a 2 m / 70 cm repeater with a known tone (UK repeaters publish theirs) and a PMR446 DCS user;
+  confirm the N/I convention on one known DCS radio.
+
+---
+
+## 5. Time stations — JJY DONE; BPC, TDF, CHU checked and NOT built (2026-10-31)
+
+**JJY (40 / 60 kHz, NICT)** in `decoders/time_decoder.*` as `Station::JJY`: the format from NICT's published page
+(signal levels, markers, field order, parity, JST meaning) and the second map as Wikipedia's "JJY" tabulates it.
+It is WWVB's layout (minute, hour, day-of-year at the same seconds, markers 0/9/19…59, the same flywheel and
+framing) with the OPPOSITE envelope (full carrier 0.8 / 0.5 / 0.2 s from the second's start, then 10 %), so it is
+read inverted as WWV is. Checks WWVB never gets: PA1 (hour) and PA2 (minute) even parity, and the weekday must be the
+date's. :15 / :45 (callsign minutes): seconds 40–48 are Morse, not symbols — not asked for; the year then comes from
+the host clock. Time shown as JST. Wired: decoder host (`jjy`), shim key, app (`TimeStation`, station override row,
+auto-pick: 40 kHz always, 60 kHz east of 100°E), web (button + hint), known-signal labels (40 kHz "JJY", 60 kHz
+"MSF/WWVB/JJY"), the "tune to a time signal" message, About. test-time-decoder: decodes, +1 minute, date, weekday,
+parity catches a flipped hour bit, the :15 minute. **Not validated on air** (JJY is not receivable in the UK).
+⚠ The web page is embedded in the server as `vibe_web_page.h`: run build-web before any release (the gates).
+
+Checked, not built:
+- **BPC (68.5 kHz, Shangqiu)**: no official public format from NTSC — what exists is hobbyist reverse engineering.
+  "Published standard first" rules it out unless Stuart accepts a documented-by-listeners format.
+- **TDF / ALS162 (162 kHz)**: the time code is carrier PHASE modulation (±1 rad), needing a carrier PLL — the
+  synchronous-AM work on branch v12-am-sync. Build it there, after that merges.
+- **CHU (3.330 / 7.850 / 14.670 MHz, NRC)**: published (NRC's CHU broadcast format); Bell-103 300 bit/s FSK
+  (2225/2025 Hz) in seconds 31–39 of each minute, two 10-character frames (A: day/hour/min/sec, B: year, DUT1, DST,
+  leap, with a redundancy check). Needs a burst FSK demodulator beside the envelope reader — a day's job; next in
+  this queue when it is picked up again. Its known-signal labels already exist (no decoder).
+  **→ NOT BUILT: CHU IS OFF THE AIR (checked 2026-10-31, second run).** NRC ended the shortwave broadcast on
+  **22 June 2026** (NRC's own page: "As of June 22, 2026, the shortwave radio broadcast of the NRC's official time
+  signal will no longer be available"; recordings of the final minutes exist). A decoder for a station that no longer
+  transmits cannot be tested on air and would show nothing to anyone, so it was dropped from the queue. ★ Question
+  for Stuart: the CHU known-signal labels (3.330 / 7.850 / 14.670 MHz) now name a silent channel — remove them?
+
+---
+
+## 6. ACARS → VDL2 → HFDL → RS41 — BLOCKED this run, nothing built (2026-10-31, second run)
+
+- **No primary standard to hand.** ACARS (ARINC 618/620), HFDL (ARINC 635) and VDL2 (ICAO VDL Mode 2 Technical
+  Manual, Doc 9776) are published but sold, not free; RS41 is Vaisala's and unpublished (only listener
+  reverse-engineering). Free public descriptions of ACARS (MSK 2400 bit/s on AM, 1200/2400 Hz, NRZI, "+*", SYN SYN,
+  SOH, 7-bit + odd parity LSB first, a 16-bit BCS) disagree on the pre-key and do not name the BCS polynomial with
+  authority.
+- **So a real capture was to settle it**: 5 minutes of AM audio on 131.725 MHz from the Lenovo (192.168.86.13, an open
+  range to 1.766 GHz, 0 listeners, at 6.791 MHz CWU ±200 Hz at the time; a recorder written to restore that). **The
+  tuning step was refused by this session's permission layer** ("modify shared resources"), so **no server session
+  took place** and the dial was never moved. Not worked around.
+- Without either a standard or a real signal, an ACARS decoder would only be checked against its own encoder — the same
+  misunderstanding on both sides passes. Not built.
+- ★ Needs from Stuart: (a) OK for the agent to tune a 0-listener VibeServer to 131.725 MHz AM for 5 min (the recorder is
+  `tools`-free, scratch only: listener check, restore of frequency/mode/passband) — or a capture he records himself
+  (AM audio ≥ 24 kHz, or IQ); (b) whether buying ARINC 618 / ICAO Doc 9776 is wanted, or listener documentation is
+  acceptable as the "standard" for ACARS / VDL2 / HFDL / RS41.
+
+## 7. PAGING — POCSAG engine DONE (AUTO 512/1200/2400 + manual); FLEX blocked; NOT wired (2026-10-31, second run)
+
+Files: `decoders/paging_decoder.{h,cpp}` (Android CMake only — deliberately NOT in the server build), `vibeserver/test-paging.cpp`
+(run-tests), `tools/paging-bench/` (bench + `qemu.sh`).
+
+- **Standard**: ITU-R M.584-2 Annex 1 ("Radio-paging code No. 1 … sometimes referred to as POCSAG"), downloaded from
+  the ITU and read (the scanned table 3 page rendered and read by eye): preamble ≥ 576 reversals; batch = sync + 8
+  frames × 2 codewords; codewords MSB first; address = flag 0, 18 address bits (the 3 LSBs of the 21-bit identity are
+  the frame), 2 function bits; message = flag 1 + 20 bits; BCH(31,21) generator x¹⁰+x⁹+x⁸+x⁶+x⁵+x³+1 + even parity;
+  numeric 4-bit BCD LSB first, 1010 spare (shown *), 1011 U, 1100 space, 1101 hyphen, 1110 "]", 1111 "["; function
+  00 numeric, 11 alphanumeric (IA5, 7 bits LSB first, packed across words). Deviation and which shift is "1" are NOT in
+  M.584 → the sync is searched in both polarities.
+- **Pinned against the ITU's own tables**: the Table 1 sync (0x7CD215D8) and Table 2 idle (0x7A89C197) words are clean
+  codewords under our generator and parity rule — two independent 32-bit checks.
+- **Receiver**: per rate a DC tracker (fast hunting, slow locked), a one-pole low-pass for crossings (sub-sample
+  crossing time), a SECOND-ORDER DPLL (the first-order loop left a 0.25-bit standing error at 0.5 % clock error and
+  lost lock — measured, fixed), integrate-and-dump over each bit's exact time (each sample's interval split at the bit
+  edge — 5 samples a bit at 2400 on 12 kHz), sync within 2 bits either polarity, 2-bit BCH correction, next sync
+  expected 544 bits on (≤ 4 bits). Noise guard: a batch counts only if ≥ 12 of 16 words are clean or one bit out; an
+  address must be clean or one bit out; an address whose message never came (lock lost) is not a page.
+- **AUTO**: 512, 1200, 2400 side by side; `detected()` = "POCSAG 1200" while a batch lock holds; each page carries its
+  rate. Manual: one rate. A rate needs the input at ≥ 4 × it.
+
+| | |
+|---|---|
+| Decodes (synthetic discriminator, numeric + alpha across batches + tone-only, ±0.5 % clock, DC offset, 18 dB Eb/N0) | every rate × both polarities × 12 and 48 kHz: all pages right; AUTO names the rate; manual at the wrong rate: nothing |
+| Sensitivity, 50 % of transmissions with all four pages right (Eb/N0 on the discriminator) | 512 ≈ 9 dB, 1200 ≈ 8 dB at 12 kHz; **2400 ≈ 12 dB at 12 kHz but ≈ 8 dB at 24 kHz** → feed paging at ≥ 24 kHz when wired |
+| False pages | 4 h white noise (AUTO): **0**, never "detected"; 10 min of random NRZ at each rate: **0** |
+| CPU | Mac ≈ 0.3 ms per second of 12 kHz audio incl. the noise generator; **Pi 2 (qemu-arm count)**: 129 M instructions a minute at 12 kHz, 230 M at 24 kHz → ≈ 0.2–0.4 s of a 900 MHz core a minute (≈ 0.4–0.7 %), ESTIMATE at 0.6–0.8 IPC |
+| SIMD | none, by decision: the work is a per-sample feedback loop (DPLL, DC tracker) per rate, nothing to put in lanes, and it is ≈ 0.5 % of a Pi 2. No per-sample divide or round (one float divide per zero crossing) |
+
+**FLEX — blocked.** M.584-2 Annex 2 (FLEX-TD) gives only the outline (1.875 s frames, 1600 bit/s Sync 1 + FI, 11
+interleaved 160 ms blocks, 8/16/32 words a block at 1600/3200/6400, the same BCH words, 4-bit checksums); the Sync 1
+patterns, frame-information and vector layouts are in ARIB RCR STD-43 / Motorola FLEX-93001 — neither free. The AUTO
+structure takes a FLEX receiver unchanged once the source is decided (question for Stuart). The "channel carrying both"
+case is therefore POCSAG-only today (each POCSAG transmission re-acquires on its own preamble).
+
+### 7b. PAGING WIRED — Android local hardware only (2026-10-31, third run)
+
+Files: `vibe_paging_run.h` (new), `vibe_decoder_host.h`, `local_sdr_shim.{h,cpp}`, `CMakeLists.txt` (Android),
+`decoders/paging_decoder.{h,cpp}` (+ the modes list), `src/services/paging.ts` (new), `DecoderClient.ts`,
+`sdrTypes.ts`, `ModeSelector.tsx`, `DecoderPanel.tsx`, `MenuSheet.tsx`, `modeBox.ts`, `decoderBands.ts`,
+`modeIcons.ts`, `SDRScreen.tsx` (gate, state, tour), `AboutOverlay.tsx`, `scripts/test_decoder_bands.ts`,
+`vibeserver/test-paging.cpp`, `tools/paging-bench/`.
+
+- **Where it can run — three locks, each enough on its own.** (1) Compiled only with `VIBE_PAGING`, which the Android
+  CMake defines for the CLIENT app's library and NOT for VibeServer Lite (`VIBE_LITE_APP`) — the desktop/Linux
+  VibeServer does not compile the engine at all. (2) `LocalSdrShim::pagingCapable()`: not serving (`g_serveOnLan`
+  false — the engine bound to 127.0.0.1, so no LAN, tunnel or proxy client can exist) and a USB radio with our own IQ
+  (not rtl_tcp, SpyServer or an Icom). Only then does vibeserver.json carry `"paging":true` + `pagingModes`. (3) The
+  attach handler refuses `paging` unless (2) holds AND the decoder socket is loopback; never on VFO B. The app gates
+  the key again: Android, `isLocal`, no `localHost`, not `isTcp`, not a SpyServer (`pagingHere`).
+- **Fed the CHANNEL IQ, not the audio** (the pipeline's `cb_.iq`: post-NCO, dial at DC, cut to the passband, at the
+  channel rate — ≈ 31 kHz for a 12.5 kHz NFM filter, never under 2.5 × the band). Its own discriminator, so the NFM
+  Voice filter (300 Hz high-pass), de-emphasis, squelch and the 48 kHz resampler are all out of the path whatever the
+  listener chose. The DSP thread only copies (`DecoderRouter::feedChannelIq{Session,Shared}` → `DecoderHost::
+  feedChannelIq` → its own bounded queue `qc_`, 2 s, oldest dropped); the decode thread runs `PagingRun`. One relaxed
+  atomic (`pagingRunning()`) per channel block when nothing pages. Counts as a consumer for the idle gate
+  (`sharedWantsAudio`).
+- **Never to the gallery**: no tap is made for `paging` (`start()`); not in background decoding; status JSON not in
+  the gap log (the page lines are, in memory, for the phone's own held session).
+- **Wire**: 0x01 one line per page `[POCSAG 1200 · 1234567 · F3] text` ("(tone only)", "(cut short)"); 0x03 lock
+  0/1; `{"type":"paging_status","data":{mode,detected,pages,rate,short}}` on change (`short` = channel rate < 24 kHz).
+- **AUTO, FLEX-ready**: the manual choices are DATA (`PagingDecoder::modes()` → vibeserver.json `pagingModes`, AUTO
+  first); the app draws one RATE key per entry. A FLEX receiver joins as more entries + an `Rx` in the engine; the
+  client does not change.
+- **App**: PAGE key in a new Paging group on the VHF and UHF tabs (pager glyph), RATE row + hint under it, the status
+  line ("POCSAG 1200 · 3 pages", the narrow-filter warning). Copy: sdrTour mode card (Android-only clause, built with
+  `Platform.OS`), About V12 note ("PAGING ON ANDROID …" — every sentence names Android, so platformCopy drops it on
+  iOS). The website lists no decoders: nothing to change. No web client key (the web is never local hardware).
+
+| | |
+|---|---|
+| Wired path decodes (FM IQ ±4.5 kHz, 24 dB Eb/N0, ±0.4 % clock, channel filter in the synth) | 20 / 25 / 31.25 / 48 kHz × 512 / 1200 / 2400 (1200 inverted): all 4 pages right everywhere, status names the rate, `short` flagged below 24 kHz |
+| Sensitivity, IQ path, 12.5 kHz passband, 50 % of transmissions all four pages right | 512 ≈ 15 dB Eb/N0 (≈ 1 dB CNR), 1200 ≈ 14 dB (≈ 4 dB CNR), 2400 ≈ 12 dB (≈ 5 dB CNR) at 31.25 kHz; 2400 ≈ 12 dB at 20 kHz. The limit is the discriminator's FM threshold, not the engine (on clean discriminator audio the engine reaches 8–9 dB) |
+| False pages | 15 min of channel noise at 31.25 kHz through the whole run: 0, never detected (plus the engine's 4 h noise / 30 min random NRZ: 0) |
+| CPU | Mac ≈ 0.9 ms per second of 31.25 kHz IQ incl. the noise generator. **Pi 2 (qemu-arm count, `tools/paging-bench/qemu.sh 60 31250 iq`)**: NEON 325 M instructions a minute, scalar 421 M → ≈ 0.4–0.6 s of a 900 MHz core a minute (≈ 0.7–1 %), ESTIMATE at 0.6–0.8 IPC |
+| SIMD identity | The discriminator is q65v lanes (vatan2: sign-bit selects, no float compares). Mac NEON = scalar bit for bit (whole test output); x86-64 SSE2 = scalar bit for bit (qemu-x86_64); armhf `-marm` NEON = scalar bit for bit with `-ffp-contract=off`; with GCC's default `fast` (and the Android CMake's explicit `-ffp-contract=fast`) the discriminator's low bits differ, but **the decoded lines are identical on every build** (one lines fingerprint across Mac, armhf ×4, x86-64 ×2) |
+| Per-sample divide | vatan2's one float divide a sample (VFP VDIV, ≈ 15 cycles on Cortex-A7): 1.9 M a minute ≈ 28 M cycles ≈ 0.05 % of a core; a reciprocal estimate + Newton would break identity with the scalar path. No integer divide, no round. The engine's per-rate loops: per-sample feedback (DPLL, DC tracker), not vectorised (section 7) |
+
+Not done / owed: **real-air test on a phone** (Android gradle build not run — the shim was syntax-checked with and
+without `VIBE_PAGING` on the Mac; the app's TS: services type-checked, the TSX files syntax-checked only — full `tsc`
+of the components runs out of the 512 MB cap); a tone-filter (non-coherent FSK) detector would beat the
+discriminator's threshold at 512/1200 (≈ several dB) — a later improvement; switching the mode to NFM on PAGE is
+left to the user (the hint says so).
+
+## 8. EAS / SAME — DONE, wired to server and app (2026-10-31, third run)
+
+Files: `decoders/same_decoder.{h,cpp}`, `vibeserver/test-same.cpp` (run-tests), host ext `same` (`vibe_decoder_host.h`
+`buildSameLocked_`), vibeserver.json `"same"`, the owner's switch (`vibe_setup_page.h`), CMake (server, Android) and
+`build_ios.sh`'s list; app: `DecoderClient` ('same'), `sdrTypes`, `ModeSelector` (SAME key + hint), `DecoderPanel`,
+`decoderBands` (VHF → Broadcast, beside ADV RDS; near 162.400–162.550 MHz), `modeIcons` (broadcast glyph),
+`SDRScreen` (capability, tour card), `AboutOverlay` (V12 note). **No web key yet** (owed: decoders.ts / main.ts /
+index.html, then build-web).
+
+- **Standard**: 47 CFR § 11.31 (LII's copy of the eCFR text; eCFR itself refused the fetch): AFSK 520.83 bit/s, mark
+  2083.3 Hz, space 1562.5 Hz, 7-bit ASCII + a null eighth bit, preamble 16 × 0xAB, `ZCZC-ORG-EEE-PSSCCC…+TTTT-JJJHHMM-
+  LLLLLLLL-` three times ≥ 1 s apart, attention signal 853 + 960 Hz, `NNNN` three times; the ORG list, the national and
+  state/local event codes (§ 11.31(e)), the FIPS state numbers (§ 11.31(f)), marine areas 57–98. LSB first (the null
+  bit last) — pinned: the same header sent MSB first decodes nothing.
+- **Receiver**: box-average 48 → 12 kHz; the two tones mixed from exact tables (25 bits = 576 samples, whole cycles of
+  both tones), q65v lanes; one-bit boxcar correlators (running sums, re-made from the ring every bit); second-order DPLL
+  (leaking while hunting so noise cannot walk its rate to the clamp); acquire on 32 exact preamble bits; bytes read with
+  their soft values; three bad bytes in a row end a burst.
+- **No checksum in SAME — so two readings must agree.** The bursts are soft-summed bit by bit (a burst that slipped and
+  agrees with no other on ≥ 80 % of its characters is left out), and the alert is shown only if two bursts' hard
+  characters equal the result, or (three bursts) their character majority does. A lone burst (tuned in mid-alert) is
+  NOT shown: measured, its clean-looking bits (mean margin 0.8) still misread digits. One alert per header per 10 min;
+  `[SAME] end of message (NNNN)` once per run.
+- Line: `[SAME] Tornado Warning (TOR) · National Weather Service · areas 024031 (MD), 024033 (MD) · issued day 304
+  13:45 UTC · valid 0 h 30 min · from KLWX/NWS` (synthetic).
+
+| | |
+|---|---|
+| Format | the § 11.31 header parses field by field; 10 malformed headers (bad ORG, a letter in a location, day 367, minute 60, a 9-character sender, no trailing '-', '-' for '+', hour 24 …) all refused |
+| Decodes | three bursts → one alert (heard 3) + one end; a 50 ms drop-out in one burst → still right; 48, 24 and 12 kHz; 20 s of attention signal → nothing |
+| Sensitivity (white noise, SNR in 3 kHz, ±1 % clock, ±20 Hz tones, 20 alerts a point) | +2 dB 5/20 · **+4 dB 19/20** · +6 dB and up 20/20; **0 wrong in the whole sweep** |
+| False alerts | 2 h white noise: 0 alerts, 0 ends; 20 min of random AFSK bytes at 520.83 bit/s: 0 |
+| CPU | Mac ≈ 0.31 ms per second of 48 kHz audio incl. the noise generator. **Pi 2 (qemu-arm count, `tools/alert-bench/qemu.sh`)**: first build NEON 150 M / scalar 141 M instructions a minute — the gathered SIMD mixer did not pay, so it was rebuilt planar with contiguous padded tables: **NEON 129 M / scalar 148 M a minute → ≈ 0.2 s of a 900 MHz core a minute (≈ 0.3–0.4 %)**, ESTIMATE at 0.6–0.8 IPC; output unchanged (same fingerprint, NEON = scalar) |
+| SIMD | the mixer products in q65v lanes (planar, contiguous loads); boxcar and DPLL per-sample feedback (≈ 20 flops a sample at 12 kHz), not vectorised. Mac NEON = scalar: whole test output identical (fingerprint 69b64f10b37cc543). No per-sample divide (one per BIT for the soft value), no modulo (the table index walks) |
+
+Owed: **a real NOAA Weather Radio capture** (not receivable in the UK; no server session this run — the weekly test,
+RWT, Wednesdays ≈ 11:00–12:00 local, on a US receiver would do), the web key + build-web, Canada's Weatheradio
+location codes (shown raw today).
+
+## 9. SELCAL — DONE, wired to server and app (2026-10-31, third run)
+
+Files: `decoders/selcal_decoder.{h,cpp}`, `vibeserver/test-selcal.cpp` (run-tests), host ext `selcal`, vibeserver.json
+`"selcal"`, the owner's switch, CMake ×2 + `build_ios.sh`; app: DecoderClient, sdrTypes, ModeSelector (key + hint),
+DecoderPanel, decoderBands (Aviation on HF beside HFDL, and a new Aviation group on VHF), modeIcons (aircraft),
+SDRScreen (capability, tour), About. `tools/alert-bench/` (bench + `qemu.sh`, shared with SAME). **No web key** (owed).
+
+- **Standard — found free and authoritative**: ICAO Annex 10 Vol III Part II Ch 3 as amended by **Amendment 91**
+  (adopted 6 Nov 2020, applicable 3 Nov 2022), its text reproduced in ICAO's own working paper "Amendment 91 to Annex
+  10 Volume III on Selective Calling Codes" (APAC CNS SG/28 WP/21, 2024, icao.int — downloaded and read with
+  pdftotext): two pulses of two simultaneous tones, 1.0 ± 0.25 s each, 0.2 ± 0.1 s apart, tones ± 0.15 %, within
+  3 dB; Table 3-1: 32 tones, Red A–S (312.6–1479.1 Hz) + SELCAL32's Red T–9 (329.2–1557.8 Hz), log⁻¹ 0.0225 apart.
+  (The ordering of the two letters inside a pulse is not in that text: ours is Table 3-1's order.)
+- **Receiver**: 48 → 8 kHz box average; every 50 ms a 200 ms Hann window; Goertzel at the 32 tones × three dial
+  offsets (−4/0/+4 Hz), four tones a lane; a pulse window = at the best offset, two tones ≥ 9 dB over the median of
+  the 32, within 6 dB, the third ≥ 8 dB under; a pulse = the same pair 0.6–1.6 s; a code = two disjoint pulses with a
+  change-over gap (a window straddling a short gap pairs one tone of each pulse — that ≤ 0.4 s "pair" is ignored, it
+  does not discard the first pulse). One report per code per 20 s.
+
+| | |
+|---|---|
+| Table | A–S at log⁻¹ 0.045, T–9 each log⁻¹ 0.0225 above its partner (checked); no I, N, O |
+| Codes | **300/300 random codes right** over all 32 tones (pulses 0.75–1.25 s, gaps 0.1–0.3 s, ±3 dB, ±0.15 %), 0 wrong; the same code twice → once |
+| Dial | 40/40 at every mistuning 0–10 Hz; beyond (12 Hz, measured in an earlier build) a neighbouring SELCAL32 tone can be read — the hint asks for the dial within ≈ 10 Hz |
+| Sensitivity (white noise, SNR in 3 kHz, 40 codes a point) | −8 dB 5 · **−6 dB 37** · −4 dB and up 40; 0 wrong in the sweep |
+| False codes | 2 h white noise: 0; 3 × the 16 DTMF digits at SELCAL timing: 0; ≈ 5 min of speech-like harmonic syllables: 0 |
+| CPU | Mac ≈ 1.6 ms per second of 48 kHz audio incl. the noise generator. **Pi 2 (qemu-arm count, `tools/alert-bench/qemu.sh`)**: NEON 552 M instructions a minute, scalar 1150 M → ≈ 0.8–1.0 s of a 900 MHz core a minute (≈ 1.3–1.7 %), ESTIMATE |
+| SIMD | Goertzel four tones a lane (q65v); Mac NEON = scalar (fingerprint 06a45fcba7f214e0 both). No per-sample divide or round |
+
+Owed: real SELCAL on air (Shanwick/Gander HF, e.g. 8.891 / 8.864 / 5.598 MHz USB — there was no server session this
+run), the web key + build-web.
+
+## 10. Web keys for SAME and SELCAL — DONE (2026-10-31, fourth run); BUILD-WEB STILL NEEDED
+
+Files: `web/client/index.html` (two `data-dec` keys, hidden unless vibeserver.json says `"same"` / `"selcal"`),
+`web/client/src/decoders.ts` (the modes, their extensions, the text + state frames as SITOR-A's), `web/client/src/main.ts`
+(caps, the hide rule, the state line, the box title and hint, `anyDecoderLeft`), `src/services/alertDecoders.ts` (NEW —
+the hints and the state words, ONE copy: the app's `ModeSelector` and `DecoderClient` now import them too),
+`scripts/test-web-alerts.mjs` (NEW), `tools/alert-bench/alert_clip.cpp` (NEW — its clip).
+
+- Placement comes from the shared table (`src/utils/decoderBands.ts`, unchanged): SELCAL in HF **Aviation** (alone on the
+  web — HFDL is the app's), SAME on the **VHF** tab's Broadcast group beside ADV RDS. Icons from the shared map.
+- No settings: the status line is the state ("listening for alert headers" / "reading an alert header…", "listening for
+  SELCAL" / "tones…"), the hint is its title, as SITOR-A's.
+- `test-web-alerts.mjs` — a real vibeserver fed by `fake-rtl-tcp` replaying `alert_clip` (SAME header ×3, SELCAL BH-DM,
+  NNNN ×3 as USB audio on 8891 kHz), headless Edge `--mute-audio`: **18/18** — both keys offered and placed, the alert
+  line once across two loops, the end of message, the SELCAL code, the hints, nothing sideways at 390 px, no exception.
+  Run: `alert_clip alerts.cu8; VIBESERVER_BIN=… VIBE_ALERT_CLIP=alerts.cu8 node scripts/test-web-alerts.mjs`.
+- ★ **build-web is needed before any release**: the test ran against a locally built page (`scripts/build-web.mjs`, then
+  vibeserver rebuilt), but `vibe_web_page.h` was put back and NOT committed — the generated page is a release step.
+- The web type check (`tsc --noEmit` in web/client) runs out of memory under the 512 MB cap (and at 900 MB); esbuild
+  bundled the page cleanly and the headless run exercised every new line.
+- Copy: the web lists no decoders on the website and the web client has no tour card for decoder keys; the app's tour
+  and About already name SAME and SELCAL (sections 8, 9).
+
+## 11. MFSK16/32, OLIVIA + CONTESTIA, THOR — DONE, wired to server, app and web (2026-10-31, fourth run)
+
+Files: `decoders/textmodes.{h,cpp}` (all four families, AUTO, the test transmitter), `decoders/mfsk_varicode.h` (the
+published table, transcribed by script), host ext `mfsk` / `olivia` / `thor` (`buildTextModeLocked_`, param `mode`),
+vibeserver.json `"mfsk"/"olivia"/"thor"` + `mfskModes`/`oliviaModes`/`thorModes` (AUTO first — the clients draw one MODE
+key per entry), the owner's switches, CMake ×2, `build_ios.sh`'s list, `scripts/run-tests.sh`; `vibeserver/test-textmodes.cpp`;
+`tools/textmode-bench/` (`tm_file`, `tm_bench` sweep/cost, `qemu.sh`). App: `src/services/textModes.ts` (NEW, shared
+with the web), DecoderClient, sdrTypes, ModeSelector (three keys + MODE row + hint), DecoderPanel, decoderBands (HF
+Amateur, beside JTTY), modeIcons (keyboard), SDRScreen (caps, remembered mode per family, tour card), About. Web:
+index.html (three keys + `tmSettings`), decoders.ts, decoderBandsDom.ts, main.ts.
+
+### Clean room — how each detail was settled
+- **MFSK16/32**: ZL1BPU's MFSK16 Technical Specification rev 1.2 (qsl.net) and the ARRL copy; "The MFSK FEC Coder"
+  (IZ8BLY/ZL1BPU: K = 7, taps O1+O3+O4+O6+O7 / O1+O2+O3+O4+O7, dibit 1 first); "The IZ8BLY Diagonal Interleaver"; the
+  IZ8BLY MFSK Varicode table. Open points (Gray direction, which bit is first, the interleaver's delays) settled by
+  decoding three PUBLIC reference recordings with a throw-away Python prototype: Wikimedia Commons
+  "Wikipedia-Slogan MFSK.ogg" (German slogan) and sigidwiki's MFSK_16 / MFSK_32 samples ("The quick brown fox …").
+  Result: tone k carries the Gray code of k as its weight, the first-arriving bit is the heaviest, bit i of a symbol
+  leaves 10·i symbols later, "001" ends a character.
+- **OLIVIA**: Jalocha's description as Wikipedia reproduces it (Walsh 64, the scrambler 0xE257E6D0291574EC rotated
+  13·j, the diagonal bit interleave, the window formula). Open points settled against the two Wikimedia reference
+  recordings (16/500 and 32/1000, "Welcome to Wikipedia, …") by a variant search: chip k uses scrambler bit k (LSB
+  first), symbol bit i weighs 2^i, the tone is the Gray code of the value, and the character's top bit is the Walsh
+  sign XOR the parity of its index.
+- **CONTESTIA**: the description gives 32-symbol blocks of 6-bit characters but NOT the scrambler. Olivia's constant
+  gave no lock on public recordings (sigidwiki Contestia 8/250, 16/500); **0xEDB88320 rotated right 5·j** did (block
+  quality 0.27 vs 0.11). Space is code 59, code 0 idle, the rest ASCII − 32. ★ This was a FINDING — ★ CONFIRMED with fldigi as a black box in
+  section 18 (and the newline corrected to code 60). The CRC-32 constant was a guess tried among others, not read from any source.
+- **THOR**: ZL1BPU's DominoEX page (IFK+, 18 tones, offset 2) + "THOR = DominoEX IFK+ with MFSK16's FEC, interleaver and
+  varicode". Settled on sigidwiki THOR 4/8/11/16/22 recordings: the value is the step itself (no Gray).
+- fldigi was neither read nor run: the reference recordings settled everything. WSJT-X not involved.
+- The recordings are NOT in git (licences vary): `~/VibeSDR-mfsk-refs/samples` (8 kHz float32), used by
+  `VIBE_TEXTMODE_SAMPLES=… test-textmodes`.
+
+### Receiver
+One real FFT (PFFFT) of 2 × the symbol every quarter symbol per symbol length in use (rectangular one-symbol window
+zero-padded for MFSK/THOR, Jalocha's shape for OLIVIA); a finder per sub-mode (strongest of M tones less the
+stronger neighbour outside, van Herk sliding max, EMA per quarter-phase); soft bits from one exp a tone; MFSK/THOR: the
+diagonal de-interleaver and two Viterbis (the two dibit pairings); OLIVIA/CONTESTIA: three tone hypotheses (the finder
+is often a tone out with 32/64 tones), every block alignment's Walsh quality, a lock only when the same (hypothesis,
+alignment) is best twice, the two blocks before the lock shown if they were strong. AUTO runs the common sub-modes
+side by side and shows only the locked one with the best quality, with a "[OLIVIA 8/250 · 1500 Hz]" line.
+**The lock evidence for the K = 7 code is the CONTRAST between the two dibit pairings** — on anything else the best path
+agrees ≈ 89 % either way (measured 0.75/0.75 on OLIVIA 16/500 through MFSK32, which has MFSK32's very tones and baud;
+0.99/0.75 on MFSK32 itself) — plus tone-repeat, tone-split and tone-coverage gates (a slower or faster signal of the
+same family, or an 8-tone signal in a 16-tone window). Characters are shown only while the signal was present across
+the bit's whole path through the de-interleaver and the Viterbi (no "TaTaT" after an over).
+
+| | |
+|---|---|
+| Reference recordings (all public, AUTO) | 11/11: MFSK16 ×2, MFSK32, OLIVIA 16/500, 32/1000, 8/250, CONTESTIA 8/250, 16/500, THOR 8, 16, 11 — the published text |
+| Synthetic, every sub-mode (21) at +10 dB, manual and AUTO | all right; the wrong family prints nothing |
+| Sensitivity (whole 31-character message, 10 trials, SNR in 3 kHz, AWGN, 48 kHz in) | MFSK16 −8 dB 7/10, −6 10/10 · MFSK32 −8 7/10, −6 10/10 · THOR4 −16 10/10 · THOR5 −14 6/10, −12 9/10 · THOR8 −12 8/10 · THOR11 −12 7/10, −10 9/10 · THOR16 −6 6/10, −4 8/10 (the misses lose the first word while locking) · THOR22 −8 7/10, −6 10/10 · OLIVIA 4/125 −12 8/10, −10 10/10 · 8/250 −10 10/10 · 8/500 −8 9/10 · 16/500 −10 10/10 · 16/1000 −6 10/10 · 32/1000 −10 6/10, −6 10/10 · CONTESTIA 8/250 −10 10/10 · 16/500 −10 10/10 · 32/1000 −6 9/10. AUTO = manual (MFSK16, THOR11, OLIVIA 8/250, CONTESTIA 16/500 checked) |
+| False decodes | white noise 60 min through EACH family's AUTO (3 h): 0 characters, never locked; RTTY 45.45/170 and a carrier, 60 s each through every AUTO: nothing |
+| CPU (qemu-arm count, `tools/textmode-bench/qemu.sh`, 60 s of noise through AUTO — every common sub-mode running) | MFSK 537 M instr/min NEON (779 M scalar) → ≈ 1.2–1.7 % of a Pi 2 core · THOR (6 sub-modes, two sample rates) 1604 M (2566 M) → ≈ 3.0–4.0 % · OLIVIA+CONTESTIA (9 sub-modes) 2172 M (2604 M) → ≈ 4.0–5.4 %; ESTIMATES at 0.6–0.8 IPC. A manual sub-mode costs a fraction of its AUTO |
+| SIMD | PFFFT (its own NEON/SSE), powers four bins a lane, the finder's EMA four bases a lane, the Walsh transforms four butterflies a lane (q65v). Mac NEON = q65v-scalar = q65v-scalar + PFFFT_SIMD_DISABLE: whole test output identical; armhf NEON/scalar × `-ffp-contract` off/fast: four builds identical. Mac vs armhf differ in ONE character (a CONTESTIA 64/2000 start-up "0" vs "00" before the message — libm exp/log, not SIMD) |
+| Per-sample divide / round | none. The first build spent 60 % of its Pi 2 time in `__aeabi_idivmod` (`i % s`, `n % K` on an int64) — all replaced by wrapping counters; one divide a frame (the band's mean), a symbol (tone split) and a character (Walsh quality) remain |
+
+Scalar left on purpose: the Viterbi (64 states at ≤ 62 bit/s ≈ 8 k compare-adds a second, < 0.1 % of the cost), the
+van Herk scans (sequential; ≈ 3 compares a bin a frame), the soft bits (one exp a tone a symbol).
+
+Dead ends (kept for the record): Viterbi agreement as the lock test (0.75 on garbage); a pre-lock character buffer
+(printed the code's start-up guesses " tnj" even at +20 dB); unlocking on contrast during an idle carrier (lost the
+last word); a decode gate on the finder's score (2.2× cheaper on noise, but OLIVIA 16/500 at −10 dB 10/10 → 8/10 —
+never decodes for speed); OLIVIA thresholds 0.16/0.11 (2 dB worse than 0.12/0.085); showing the pre-lock blocks only above the lock threshold (16/500 at −10 dB 10/10 → 8/10 — so a block above the hold threshold is shown, which can print one start-up character, e.g. CONTESTIA 64/2000 "0" at +10 dB).
+
+**Two signals in one passband — the hunt**: a sub-mode that cannot lock at a place that clearly holds a signal (finder
+score ≥ 4.5, and no sign of the mode — contrast < 0.04 / block quality at noise level) sets that place aside for a
+while, so a second signal gets its turn. Before it, OLIVIA 16/500 beside a stronger MFSK16 never decoded; with it, both
+decode from the same audio (`tm_clip` audio through `tm_file`). The first version set places aside on noise too and
+broke every sub-mode; the second set aside a weak real signal while it was still locking (THOR16 −6 dB CER 4 % → 38 %);
+the third (above) leaves the sweep as it was.
+
+**Web e2e** (`scripts/test-web-textmodes.mjs`, `tools/textmode-bench/tm_clip`: OLIVIA 16/500 + MFSK16 as USB IQ, a real
+vibeserver, headless Edge muted): keys offered and placed (HF Amateur), MODE row = the server's list with AUTO lit, MFSK16
+text and its "[MFSK16 · 797 Hz]" line — **but FLAKY, 11–12 of 15 on three runs**: the 20 s clip loops, OLIVIA (2 s
+blocks) joins mid-over and once printed "CQPDE" (one wrong character) and once locked on the MFSK16 signal at 766 Hz
+(printing nothing). ★ FIXED in section 12 — every failure was the decoder, not the clip.
+
+Owed: real air (an OLIVIA calling channel, e.g. 14.0715 USB; MFSK/THOR are rare on air), the flaky web e2e above, the Android gradle / iOS `build_ios.sh` compiles
+(the shim and host compiled on the Mac only), sharing one finder between OLIVIA and CONTESTIA of the same tones (DONE, section 13: −14.6 %,
+decodes identical), CONTESTIA's newline code (no recording carries one).
+
+## 12. The flaky web test was the DECODER — five finder faults fixed (2026-10-31, fifth run)
+
+`scripts/test-web-textmodes.mjs` passed 11–12 of 15. Every failure was reproduced offline first: the web clip's audio
+(`tm_clip` with `VIBE_TM_DUMP`), looped three times from each of 20 start offsets × 2 noise seeds (40 runs), through
+`tm_file` AUTO — the same joins the web test makes when it opens the box mid-over. None of it was a test fault: each was
+the receiver. Before → after on those 40 runs:
+
+| | before | after |
+|---|---|---|
+| OLIVIA AUTO: a whole over printed within the three loops | 10/40 | **40/40** |
+| OLIVIA AUTO: a wrong character printed ("OLI6", "OLIVI!", the web run's "CQPDE") | 9/40 | **0/40** |
+| OLIVIA AUTO: locked on the MFSK16 beside it ("[OLIVIA 16/500 · 766 Hz]") | 17/40 | **0/40** |
+| MFSK AUTO: a whole over printed | 31/40 | **40/40** |
+| MFSK AUTO: a wrong character at the join (" rMFSK" for "Z MFSK") | 4/40 | **0/40** |
+| Web test, 10 runs in a row (headless Edge, muted, real vibeserver) | 11–12 of 15 | **10/10** (17 checks each) |
+
+The faults, each fixed in `decoders/textmodes.cpp` with the measurement in its comment:
+
+1. **Stale evidence travelled.** OLIVIA's block qualities (per hypothesis × alignment) were kept when the finder moved to
+   ANOTHER signal; an idle block read at 1500 Hz then locked the receiver on the MFSK16 at 766 Hz. Now a move off the tone
+   set caps every quality at the hold threshold (below the lock's) and forgets the characters kept for a lock.
+2. **A lock did not follow its signal.** A locked receiver's finder could jump to any place 1.8× stronger — a locked OLIVIA
+   left its own over for the MFSK16 and printed "OLI6". Now a locked finder moves only within a tone, and only to a
+   place with a signal on it (it had also wandered on the noise in the over's tail and met the next over a few tones off).
+3. **Bans ran down during a lock**, so the next over began with the finder back on the other signal. Bans now count
+   hunting symbols only; a place set aside again soon after is set aside for longer (×2, ×4, forgotten later).
+4. **The hunt aged across overs.** The age now belongs to one stretch of signal at one place (reset when the place goes
+   quiet, the finder moves off the tone set or to a much stronger view of it). An idle carrier ages at a quarter rate.
+   ★ This also mended a REFERENCE RECORDING the previous run's hunt had broken unnoticed: the Wikimedia MFSK16 slogan idles
+   ≈ 8 s and was set aside after 6 s — `test-textmodes` with the recordings failed it (10/11) at the start of this run;
+   11/11 again now.
+5. **A receiver started mid-over printed a wrong first character** (the coder in an unknown state, the Viterbi's first
+   bits guesses): a character whose first bit came through the first 24 symbols after a start on a signal already sending
+   is not shown; cleared as soon as the place is quiet, so an over that starts after quiet loses nothing.
+
+Plus a hole: a place set aside skipped the move bookkeeping (the old place was read after `setAside` cleared it).
+
+**Decodes unchanged elsewhere** — `tm_bench` sweeps, baseline vs fixed build, same seeds: every OLIVIA/CONTESTIA sub-mode
+at its edge (−12/−10 dB; 8/500, 16/1000, CONTESTIA 32/1000, 64/2000 at −10/−8/−6) × 20 trials, manual and AUTO; MFSK16/32
+(−10/−8/−6 × 20), THOR 4/5/8/11/16/22 (−14 … −6 × 10), AUTO rows: **identical counts everywhere** (one CER 32 → 31 %).
+`test-textmodes` with the recordings: all passed, the one difference from the baseline being the slogan now passing.
+
+**Dead ends, kept for the record** (each measured, 20 trials at the edge): wiping OLIVIA's qualities on every move off
+the tone set (4/125 at −12 dB 13/20 → 3/20 — a weak signal's finder hops to the noise and back, and its evidence must
+survive the trip); wiping on any move of three tones (64/2000 at −6 dB 13 → 11 — its finder slides inside the 2 kHz
+signal); renaming the hypotheses on whole-tone moves (the same); parking each place's qualities and restoring them on a
+return (CONTESTIA 8/250 at −12 dB 8 → 6); gating the lock on the current block's quality (4/125 13 → 3); the hunt age
+reset on any move of a tone (OLIVIA never set the MFSK16 aside: its finder jitters inside it); for MFSK's join, the
+presence check applied to the character's first bit (MFSK32 lost a first "C" at −6 dB), an unbiased Viterbi start
+(still 6/40 wrong, THOR lost decodes), and the join rule on every finder move (MFSK16 at −6 dB 20/20 → 13/20); a 128-slot
+presence ring (THOR16 lost a character: symbols skipped by a phase change leave stale slots, and the ring size changes
+which — the original 64 is kept).
+
+The test was TIGHTENED, not loosened: a WHOLE over of each mode (not just its end) within three loops, nothing printed
+that was not sent (every passage between the "[MODE · Hz]" lines must be a piece of the over), and OLIVIA AUTO naming
+only the OLIVIA signal.
+
+False decodes after the fixes: white noise 60 min through EACH family's AUTO — nothing, never locked (and RTTY / a carrier
+60 s each, as before). ★ **build-web is still needed before any release**: the 10 runs used a locally built page
+(`scripts/build-web.mjs`, vibeserver rebuilt); `vibe_web_page.h` was put back, NOT committed. No web source changed here.
+
+## 13. OLIVIA ↔ CONTESTIA share one finder's scores — 13–15 % of OLIVIA AUTO on a Pi 2, decodes identical (2026-10-31, fifth run)
+
+`Finder` (decoders/textmodes.cpp): a receiver whose spectra and tone set are an earlier receiver's (OLIVIA and CONTESTIA
+8/250, 16/500, 32/1000 in AUTO) reads that receiver's scores instead of computing them (`shareScoresOf`; its `update()`
+returns at once). Each keeps its own place, bans and hunt. The owner is registered first, so its scores are this
+frame's when the twin reads them — the same numbers it would have computed.
+
+| | before (section 12's code) | shared |
+|---|---|---|
+| Pi 2 model, qemu-arm count, 60 s of noise through OLIVIA AUTO (NEON) | 2257 M | **1927 M (−14.6 %)** |
+| the same, scalar (`VIBE_FORCE_SCALAR` + `PFFFT_SIMD_DISABLE`) | 2690 M | **2346 M (−12.8 %)** |
+| Pi 2 estimate (0.6–0.8 IPC at 900 MHz) | ≈ 5.2–7.0 % of a core | **≈ 4.5–5.9 %** |
+| Mac, 20 min of noise through OLIVIA AUTO | 2.39 s | 1.91 s (−20 %) |
+
+Below the ≈ 17 % first estimated: the Walsh transforms and the spectra are the rest of the cost. **Identical decodes,
+proved**: `test-textmodes` with the reference recordings — whole output identical; every OLIVIA/CONTESTIA recording through
+AUTO with the per-second trace (`VIBE_TM_DEBUG`: every receiver's quality, score, place, Hz) — byte-identical; seven of the
+web clip's looped runs, traces byte-identical; AUTO sweeps (5 sub-modes × −12…−8 dB × 10) identical; armhf NEON/scalar ×
+`-ffp-contract` off/fast under qemu: one fingerprint (e626f1d2), the same before and after.
+(Section 12's fixes measured +3.5–4 % on noise against section 11's counts for every family — MFSK 537 → 556 M, THOR
+1604 → 1666 M, OLIVIA 2172 → 2257 M — the hunt's bookkeeping; the sharing more than pays it back for OLIVIA.)
+
+## 14. FELD HELL — engine, host and test DONE; clients NOT wired (2026-10-31, fifth run)
+
+Files: `decoders/feld_hell.{h,cpp}` (receiver + test transmitter), host ext `hell` (`buildHellLocked_` in
+`vibe_decoder_host.h`), CMake ×2, `build_ios.sh`, `scripts/run-tests.sh` (`test-feld-hell`, and Hell in the host tests'
+deps), `vibeserver/test-feld-hell.cpp`, `tools/hell-bench/` (`hell_file` draws a file or the transmitter into a PGM;
+`--cost` for qemu; `qemu.sh`).
+
+**Clean room.** Published descriptions only: Wikipedia "Hellschreiber" (each received column printed twice, one copy below
+the other, so timing errors slant the text instead of cutting it; on-off keying) and the Signal Identification Wiki's table
+(Feld Hell 122.5 Bd, ≈ 2.5 characters/s, a column every 1/17.5 s, OOK, ≈ 350 Hz). So 7 elements a column (122.5 / 17.5),
+7 columns a character; the receiver samples half-elements (14 a column). ★ The RESUME note's "122.5 columns/s" was a slip
+(122.5 is the element rate). Which end of a column comes first was settled by drawing the public recordings: **bottom
+first** — the Wikimedia slogan reads "Wir sammeln das Wissen der Menschheit – auch Deines… WIKIPEDIA – Die freie
+Enzyklopädie", Hellschreiber.ogg "WELCOME TO WIKIPEDIA. THE FREE ENCYCLOPEDIA THAT ANYONE CAN EDIT", sigidwiki
+FeldHell "…THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 1234567890". fldigi was not read or run; no other decoder's code
+was read. The test transmitter's 5 × 7 font is this test's own drawing.
+
+**Receiver.** Drawn, not read (no OCR): the strongest steady tone in 300–2700 Hz (a 1024-point PFFFT every 64 ms, power EMA;
+found at 8× the band mean after the average has settled, held while 4×), mixed down (four samples a lane, q65v), a running
+box over one half-element, sampled every half-element by the receiver's own clock (unsynchronised, as the printer was —
+the doubled print absorbs drift), a two-level slicer (the running means of "on" and "off") to grey. Strips of 210 columns
+(12 s, 30 characters) × 28 rows (the column twice); each strip's rows go out as WEFAX's 0x01 lines and are re-sent every
+character, so a client that draws line y at y watches the strip grow; 0x02 once at the start; `{"type":"hell_status",
+"data":{hz,signal}}` on change. Nothing is drawn while no tone is keyed. Not kept for replay.
+
+| | |
+|---|---|
+| Synthetic, upper copy against the transmitter's elements | +10 dB 99.4 % (48 kHz in), 99.2 % (12 kHz in), sender 300 ppm fast 94.8 %, 0 dB 97.8 %; 20 noise seeds at +10 dB (0 and 300 ppm) and 0 dB: all ≥ 95 % |
+| Weaker (informational) | −3 dB 91.8 %, −6 dB 58–83 % over 20 seeds, −9 dB ≈ 62 %, −12 dB nothing drawn (the tone is not found) |
+| False draws | white noise 60 min: 0 lines |
+| Reference recordings | all three draw legibly (above); the test checks they draw (rows, 15–22 % ink) |
+| Pi 2 cost (qemu count, 60 s drawing all the time) | 202.5 M instr NEON / 237.8 M scalar → ≈ 0.5–0.6 % of a core |
+| SIMD | PFFFT; spectrum powers and EMA four bins a lane; the mixer four samples a lane; the box filter scalar (sequential running sums, two adds a sample). Mac NEON = scalar: identical output. armhf NEON = scalar with `-ffp-contract=off`; with the Android CMake's `fast` the grey values differ in the last bits (the compiler fuses the scalar mixer's multiply-adds), every decision and percentage the same |
+
+Dead ends (measured): moving the column phase to the least-inked row, a half-element a column (the recordings' letters
+wobbled) or once after 2 s (still moved mid-word); a peak-and-floor level tracker (−6 dB drew as noise); a box one element
+long (+3 dB, but every edge shifted: 0 dB 90.2 → 87.6 %); finding at 6× / holding at 3× (2884 lines of noise in 60 min).
+Bugs found by the tests and fixed: the column clock started when the tone was found (every letter a row out); the first
+hops' raw periodograms found tones in noise; the part-empty first column set the levels from uninitialised samples (NaN on
+armhf — every pixel black on 4 seeds in 20).
+
+**Owed (next):** the CLIENTS — ★ DONE in section 15. vibeserver.json does not offer `hell` yet and no client shows a key, so nothing is visible
+(AGENTS.md: no control until it works). To wire: vibeserver.json `"hell": true` (and the shim's `kOffer`/owner switch),
+the web client (`decoders.ts` mode `hell` reusing the `wefax` 0x01 path into `drawDecLine`, a key in HF Amateur via
+`decoderBands.ts`, the status line from `hell_status`, hint), the app (`DecoderClient`, `ModeSelector`, `DecoderPanel`'s
+image view as WEFAX's, `decoderBands`, `modeIcons`), then the copy: `sdrTour`, `AboutOverlay` feature list and release
+note, the website. A web e2e like `test-web-textmodes` (fake rtl_tcp replaying `feldHellSynth`). Then build-web.
+
+## 15. FELD HELL — clients wired: server offer, web, app, copy, web e2e (2026-10-31, sixth run)
+
+Section 14's "Owed" list, done. Files: `local_sdr_shim.cpp` (vibeserver.json `"hell"` from the owner's switch, `kOffer`'s
+`modes` list, the admin label "Feld Hell"), `vibe_setup_page.h` (the owner's switch), `src/services/feldHell.ts` (NEW,
+shared: the hint, the status line, `HellPager`), `decoderBands.ts` (HF Amateur, after THOR; bright on the amateur bands),
+`modeIcons.ts` (keyboard). Web: `index.html` (HELL key, hidden), `decoders.ts` (mode `hell`: 0x01 grey line, 0x02, JSON
+`hell_status`), `main.ts` (cap, key, `drawHellLine`, CLR, status). App: `DecoderClient` (name `hell`, frames, status),
+`sdrTypes` (`hell` in the occupancy), `DecoderImageCanvas` (`hellLine` / `hellStart`), `DecoderPanel` (an image decoder,
+title FELD HELL), `ModeSelector` (HELL key + hint), `MenuSheet` / `modeBox` (types), `SDRScreen` (cap, routing, status,
+tour card). Copy: `sdrTour`'s mode card (Amateur list), `AboutOverlay` V12 note. `website/index.html` does not list
+decoders by name — unchanged. `tools/hell-bench/hell_clip.cpp`, `scripts/test-web-hell.mjs`, `scripts/run-tests.sh`.
+
+**How it is drawn.** Through the picture box (PREV, SAVE, CLR, zoom) but NOT through WEFAX's line code: WEFAX's margin,
+slant and level finding would bend the letters, and its "line count went back = a new chart" rule fires on every re-send
+of a strip (Hell re-sends a strip's 28 lines every character). So a line is painted plainly, grey as sent, at the row its
+number says. **Pages**: the picture view fits the whole picture by default, so an endless roll would shrink to a thread;
+Hell is drawn a page of 8 strips (96 s of keyed text, 210 × 224) at a time, the next page putting this one under PREV —
+`HELL_PAGE_STRIPS` in `feldHell.ts`, the same on both clients. The page grows a strip at a time on white paper, so there
+is never unwritten black under the text. CLR banks the page and starts a new one at the strip arriving.
+
+**Gallery: none** (the choice the brief asked to note). The WEFAX path stores CHARTS (`galleryKindFor` "wefax"), but
+Feld Hell is a keyboard mode's over, and the MFSK keys store nothing; `galleryKindFor` returns "" for `hell`, so no tap is
+made. SAVE in the box still writes the page shown (a download on the web, the share sheet in the app), as for any picture.
+
+**Web e2e** (`scripts/test-web-hell.mjs`; `hell_clip`: one Feld Hell over at 1000 Hz, USB IQ, looping every 20 s, dial
+14063 kHz; a real vibeserver; headless Edge with `--mute-audio --disable-audio-output`): vibeserver.json `hell` and `modes`;
+the key offered, in HF Amateur beside THOR with its icon; the box a picture titled FELD HELL; the status line "drawing ·
+1000 Hz"; a second strip under the first; 210 wide in whole 28-row strips, ink on white paper; every finished strip's
+lower copy identical to its upper copy (so every line, re-sends included, landed at its own row); SAVE offered; CLR → PREV
+and a one-strip page; PREV shows the old page; 390 px no sideways scroll; no exception. **19 checks. 10/10 in a row** on the final test
+(headless Edge, muted, real vibeserver, a locally built page). Before that: 9/10 on the first loop — run 10 read the page
+back with EVERY pixel transparent (its white paper included, so not the server's lines); the test was then made to record
+the server's Hell frames off the wire (980 lines a run, none all ink, in 10/10), and to treat a wholly transparent read as
+the headless readback: read once more and SAID ("note: … read again"), with an added check that the page is opaque. That
+note never fired in the final 10. ★ The cause is not proven — if Stuart ever sees the Hell page flash empty in a browser,
+this is where to look.
+
+Other suites run before the commit: test-textmodes, test-feld-hell, test-decoder-hosts, test-decoder-hardening (4/4, via
+`VIBE_TESTS`), test_decoder_bands, the faceplate segfield/dotfield label checks (modeBox's list grew), check-setup-page,
+test-web-textmodes (17/17), test-web-alerts (18/18). The engine is unchanged: replayed offline from 320 join points (four
+noise/level/lead-in variants) it drew no all-ink line and no page over 40 % ink. ★ build-web is STILL needed: the page was
+built locally for the tests and `vibe_web_page.h` was put back, not committed.
+
+Untested: the APP side runs nowhere here (no simulator or device build this run) — its files were syntax-checked with
+esbuild, the small shared files type-checked alone; the full app/web `tsc` does not fit the 512 MB cap. Real air.
+
+## 16. Stuart's answers, 2026-10-31 (seventh run) — PAGE silent, Q65 coverage, Hellschreiber, AUTO first
+
+### 16a. PAGE is silent while it runs
+`SDRScreen.tsx`: the speaker mute is DERIVED from one fact — the open decoder is `paging` — in an effect shaped like
+Band's (`prePagingMuteRef`), never set by the PAGE key. Opening PAGE saves the listener's own mute state and mutes;
+closing it, switching to another decoder, a disconnect that clears the decoder, or leaving the screen (an unmount
+cleanup) puts that state back. A reconnect while PAGE stays open restarts the audio unmuted (each native start clears
+its mute), so the effect also re-mutes whenever `isMuted` goes false while PAGE is open. A crash needs nothing: the mute
+is not stored and the next start is unmuted. The local "AUDIO MUTED — TAP TO UNMUTE" banner would have been a key whose
+every press is undone, so while PAGE runs it is replaced by a plain notice "AUDIO MUTED WHILE PAGE RUNS" (not a key).
+Copy: `PAGING_HINT`, the sdrTour mode card's Android clause, the About note. **Untested on a phone** (no device here).
+
+### 16b. Q65 — 23 cm, 6 m, Q65-15, the labels
+- PSKReporter's Q65 reports for the 24 h to 11:00 UTC (381, every receiver; RF = dial + audio) were fetched again:
+  144.117–144.139 (most at 144.135–.137, which NO dial held), 432.066–432.101, **1296.053–1296.126**, 50.276–50.277.
+  The 28.07–28.11 "Q65" reports are all one EME station's receive (a 2 m transverter's IF); 222.095 is 1.25 m (Region 2,
+  not in the Band list).
+- So the EME segments are TILED: a window every 4–4.5 kHz (each 200–4800 Hz above its dial), joined without a gap —
+  2 m 144.115–144.1375 (six) + 144.180; 70 cm 432.074–432.096 (six — eight from 432.065 were tried first and failed
+  test-band-slice: the wider cluster's slice no longer fits a 300 kS/s capture beside FT8, so 432.065 was dropped and the
+  tiling starts where the reports thicken: 39 of the day's 43); **23 cm 1296.050–1296.122 (seventeen) — a "23 cm"
+  band (1240–1300 MHz) joins the Band list after 70 cm, carrying only Q65**; 6 m 50.310 (Stuart's) and 50.275 (where
+  the 6 m reports were). 23 cm's 77 kHz is a 48 kHz main slice + an extra slice (`spanOf`, unchanged code;
+  test-digi-spots checks it).
+- **Q65-15 enabled**: the engine runs 15, 30 and 60 s, submodes A–D (`q65.h`). 120/300 s and submode E stay built but off
+  (10 GHz and up). test-q65's live test now carries a 15A transmission too (three spots, nothing else).
+- Known-signal labels: Q65 had none. Now one "Q65" label per RUN of joined windows (`q65Runs` in `knownSignals.ts` —
+  17 labels on 23 cm would crowd out everything), the bar over the run, a tap tunes the run's first dial and opens DIGI
+  SPOTS; `test_known_signals` checks the dials against `digi_bands.h` and the runs. (Two stale JJY expectations in that
+  test, failing before this run, were brought up to date.) test-band-slice's mirror check skips a tone AT a slice's centre
+  (its own mirror — one of 23 cm's tiled edges lands there; it read 0 dB). The web spot filter and the app map's band list gained 23cm.
+- ★ COST is the trade-off: EVERY dial is its own Q65 engine (≈ 5–7 % of a Pi 2 core each, measured section 1). Sitting
+  on 23 cm in Band runs 17; on 70 cm, 8 beside FT8. The governor sheds Q65 first (priority 100), so a weak host keeps
+  its established modes and decodes the Q65 dials it can afford.
+
+### 16c. Q65-15's extra CPU — it doubles Q65
+| | 15 s | 30 s | 60 s |
+|---|---|---|---|
+| Mac (M-series, noise, worst case), per window | 23.9 ms | 31.1 ms | 39.0 ms |
+| a minute | 96 ms (4 windows) | 62 ms | 39 ms |
+| Pi 2 (qemu-arm count, NEON, marginal per window) | ≈ 0.55 G instr | ≈ 0.68 G (section 1) | ≈ 0.84–0.88 G |
+
+So Q65-15 adds ≈ 96 ms a minute on the Mac to the 30 + 60 s periods' ≈ 101 ms (**+95 %**, not the +40 % first
+guessed), and ≈ 2.2 G instructions a minute on the Pi 2 model → ≈ 4.4 G a minute a dial in all, ≈ 6–8 s of a 900 MHz
+core a minute (≈ 10–14 %, ESTIMATE at 0.6–0.8 IPC). `costVsFt8` 2.6 → 4.7 (light 1.2 → 2.2) so the governor plans with
+the real figure. With 17 dials on 23 cm a Pi 2 cannot run them all: the governor sheds Q65 first. ★ Question for Stuart
+below: keep Q65-15 on every dial, or only where it is used (6 m and 2 m scatter)?
+
+### 16d. Feld Hell = Hellschreiber
+The HELL key's hint (`HELL_HINT`), the web key's title, the About note and the tour card now say "Feld Hell
+(Hellschreiber)".
+
+### 16e. AUTO first; manual choices for the session only
+Stuart: "decoder default to auto when activated, unless a user has set manual settings in the same session".
+`src/services/decoderSession.ts` (NEW, shared by app and web) holds the choices in memory only — the app's process
+(across servers and screens) or the web page (until reload). Using it: RTTY (the app used to restore its manual values
+from storage underneath AUTO — now not stored at all), TIME's station override (was stored), the text modes (stored on
+both sides) and PAGE (stored). Nothing is written to storage. The web's RTTY was already page-memory only; its TIME
+station is a preset with no AUTO (MSF first) and is unchanged. Choices that are not AUTO choices (CW's view, WEFAX's LPM,
+APRS's packet rate) are untouched. Test: `scripts/test_decoder_session.ts` (in run-tests) — first open AUTO, a manual
+choice kept on re-open in the same session, AUTO after a new session, and no storage key read or written on either side.
+
+## 17. FLEX — our own receiver in PAGE's AUTO (2026-10-31, seventh run)
+
+Stuart: "I'd like to get flex if we can". Files: `decoders/paging_decoder.{h,cpp}` (`FlexRx`, the FLEX helpers, the
+modes list with groups), `vibe_paging_run.h` (the FLEX line, `group` in `pagingModes`), `tools/paging-bench/flex_synth.h`
+(NEW — our own FLEX transmitter, synthetic pages only), `paging_bench.cpp` (mode + fresh-noise arguments),
+`vibeserver/test-paging.cpp` (`--flex`, the FLEX sections, FLEX in the fingerprint).
+
+### Clean room — which source informed what
+Free published material first; no paid or leaked standard (ARIB STD-43, Motorola FLEX-93001 not used); OpenWebRX not read;
+no code copied from anywhere. A research pass (sources and every fact tagged) gave:
+| Fact | Source |
+|---|---|
+| 1.875 s frames, 128 a cycle, 15 cycles an hour; Sync 1 + FIW at 1600 bit/s 2-level; 11 blocks of 160 ms; 1600/3200/6400 bit/s; the 4-bit checksum rule (five nibbles + i20 → 0xF); BCH(31,21) + parity as POCSAG; fields least significant bit first; idle | ITU-R M.584-2 Annex 2 (itu.int, free) |
+| Sync 1 layout (comma, A, B, A inverted), the four Sync 1 words, Sync 2 at the data rate | US 5,627,860; US 6,396,411; McCulley, Virginia Tech thesis 1997 (hdl.handle.net/10919/35557) |
+| ±4.8 kHz deviation; 4 levels −4.8/−1.6/+1.6/+4.8 kHz = 00/01/11/10 (Gray) | HP application note 5965-1131E; US 5,995,850; US 10,681,581; US 5,627,860 Fig. 2; the thesis |
+| Phases (A; A + C; A–D), 8 words per phase per block, the bit interleave; BIW, address ranges, capcodes (short, long set 1–2), vector types and fields, alphanumeric/numeric message layouts, the 10-bit fragment check, fragmentation | Motorola MC68175 FLEXchip datasheet (nxp.com, free), Appendices A and B; TI SPRA193 (ti.com, free); BIW fields cross-checked on a public recording |
+| A-word mode codes 0x870C (1600/2), 0xB068 (3200/4 at 1600 baud), 0x7B18 (3200/2), 0xDEA0 (6400/4); the fixed half 0xA6C6, B 0xAAAA | READ in multimon-ng's FLEX source (GPL, for understanding only — nothing copied); 0x870C + A6C6AAAA confirmed by a hobbyist page (GopherTrunk's docs), 0xDEA0 by the public recording. 0xB068 and 0x7B18 are confirmed by nothing else |
+| The data take the sense OPPOSITE to the sync constants'; the even/odd symbol split at 3200 baud | measured on the public recording |
+| Real-air check | sigidwiki's public "FLEX Pager IQ 20150816 929.613 kHz" (6400/4, 39.06 kHz IQ, 28 s) — kept OUT of git (real traffic; content never printed) |
+
+### The receiver
+Fed the same discriminator as POCSAG (the channel IQ, `PagingRun`). One per-sample loop as a POCSAG rate's (DC tracker,
+crossing DPLL, integrate-and-dump), at 1600 baud while hunting, switching to the frame's baud after the FIW. Sync 1: a
+64-bit window (A, B, half of A inverted) against the four patterns, both senses, ≤ 4 bits wrong. **Levels from the sync
+itself**: A + B + A inverted hold exactly 40 ones and 40 zeros, so the mean of those 80 RAW symbol levels is the true
+centre and their spread the outer level — then the DC is HELD for the frame (FLEX's blocks are not balanced: a tracker
+following them moved every level by a sixth of the deviation and lost every 4-level frame — measured, fixed). Symbols are
+averaged over their LATE part only (from 0.35 of the symbol): a whole-symbol average carries ≈ a quarter of the previous
+symbol, which an inner 4-level symbol after an opposite outer one does not survive (measured, fixed). 4-level: inner/outer
+halfway between the two learnt levels (decision-directed). Per phase 88 words → BIW1 (checksum) → addresses → vectors
+(checksum) → messages. Alphanumeric pages need their 10-bit fragment check; fragments are joined by (capcode, message
+number), a lost continuation shown "(cut short)" after 128 frames. Long addresses of set 1–2 give a capcode; the other long
+sets are not resolved (their formula is not fully published) and are skipped. Instruction vectors (temporary addresses)
+are not pages. Binary and secure messages are reported as such, without content.
+
+AUTO = POCSAG 512/1200/2400 + FLEX side by side; `detected()` names "FLEX 6400/4". Manual (`pagingModes`, grouped):
+AUTO · POCSAG (ANY, 512, 1200, 2400) · FLEX (ANY — every FLEX frame names its own speed, so a FLEX rate key would be a
+no-op and is not offered). Line: `[FLEX 6400/4 · 1234567 · A] text` (capcode, phase).
+
+### Numbers
+| | |
+|---|---|
+| Synthetic decodes (FM IQ ±4.8 kHz, 30 dB CNR, ±200 ppm clock, channel filter) | every speed (1600/2, 3200/2, 3200/4, 6400/4) × 25 / 31.25 / 48 kHz × both senses: every page right on every phase — alpha (short and long address), numeric, tone — and AUTO names the speed (24/24) |
+| Manual | FLEX decodes FLEX; POCSAG (any rate) prints nothing on FLEX; FLEX prints nothing on POCSAG |
+| A channel carrying both (POCSAG 1200 → FLEX 3200/4 → POCSAG 2400, AUTO) | every page of all three, each named in turn |
+| Fragmented alphanumeric across two frames | joined into one page |
+| Sensitivity, 50 % of frames with EVERY page right (CNR in 12.5 kHz, 10 frames a point; the FM synth and channel filter of the POCSAG IQ test) | 1600/2 ≈ 2–4 dB · 3200/2 ≈ 6 · 3200/4 ≈ 6 · 6400/4 ≈ 6 dB (10/10 by 4, 6, 8, 8 dB). ★ Synthetic: the 4-level figures look optimistic beside the 2-level ones and need a real-air check |
+| Public recording (6400/4) | 29 pages decoded in 28 s, the speed named; every alphanumeric page passed its 10-bit check (content not printed or kept) |
+| False pages | 12 h of channel noise through FLEX alone, 2 h through AUTO (fresh noise every second): **0**, never detected; 10 min of noise and 5 min of random 4-level symbols at 3200 baud in the test: 0 |
+| Pi 2 (qemu-arm count, `tools/paging-bench/qemu.sh 60 31250 iq`, AUTO = POCSAG ×3 + FLEX) | NEON 469 M instructions a minute (325 M before FLEX), scalar 566 M → ≈ 0.6–0.9 % of a 900 MHz core (ESTIMATE at 0.6–0.8 IPC); FLEX's own share ≈ 144 M a minute |
+| SIMD identity | FLEX has no SIMD of its own (a per-sample feedback loop, as POCSAG — section 7); the shared discriminator is q65v lanes. Fingerprint (discriminator + every line, POCSAG and FLEX): Mac NEON = Mac scalar (`2d0c91e800abc1d9` / lines `ed9346f86d06ee97`); armhf `-marm` NEON = scalar with the Android CMake's `-ffp-contract=fast` (`568aa2a092975c25`), lines identical to the Mac's |
+| Per-sample divide / round | none: one divide a SYMBOL (the late window's mean) |
+
+### Untested / gaps
+- Real air on a phone (no device here). The 1600/2, 3200/2 and 3200/4 mode codes were never seen on air by us (only
+  6400/4 is in the public recording) — 0xB068 and 0x7B18 rest on one source.
+- The FIW's bits i15–i20 (roaming, repeat) and BIW1's i4–7 and i16–20 are undocumented in free sources: read past, not used.
+- 1600/4's second phase is labelled C (the datasheet's "A and C at 3200 bit/s"); one other source calls it B.
+- Long-address sets other than 1–2: skipped. Numeric pages' 6-bit check: its algorithm is not in the free sources — a
+  numeric page relies on every word's BCH and the vector's checksum.
+
+## 18. CONTESTIA's scrambler CONFIRMED with fldigi as a black box; newline fixed; a narrower signal no longer locks a wider receiver (2026-10-31, seventh run)
+
+Stuart asked for the trial-found scrambler (0xEDB88320 rotated right 5 bits a character; space = 59, 0 = idle) to be
+confirmed. fldigi was run strictly as a BLACK BOX — its source was not read: Debian bookworm's `fldigi` 4.1.23 in a
+disposable Docker image under Colima (`~/fldigi-blackbox/`, not in git: Dockerfile, a PulseAudio null sink, Xvfb, a
+minimal `fldigi_def.xml` so the first-run wizard does not hold the XML-RPC server, and `drive.py`, which sets each modem
+by name over XML-RPC, transmits a known text and records the sink's monitor at 8 kHz). The text: every printable ASCII
+character 0x20–0x7E, a newline, "NEW LINE 2", a newline. All 19 of fldigi's "Cont-" sub-modes were generated.
+
+| Result | |
+|---|---|
+| Scrambler 0xEDB88320, rotated right 5·j; space = 59; code 0 idle | **CONFIRMED**: all 8 sub-modes we offer (4/125, 4/250, 8/250, 8/500, 16/500, 16/1000, 32/1000, 64/2000) decode fldigi's audio character for character |
+| Newline | ★ was WRONG: fldigi sends it as code **60** (we printed "\"); our test transmitter had used 0. Fixed both ways |
+| The rest of the alphabet | fldigi sends lower case as upper case and `[ \ ] ^ _ \` { \| } ~` as "?"; codes 61–63 never appear |
+| 16/500 | one start-up character ("0") after the first space — the pre-lock block, section 11's known dead end — and the last block of the over was lost once (the recording ends 3 s after the signal; not investigated further) |
+| fldigi's other 11 Contestia sub-modes (4/500, 4/1K, 4/2K, 8/125, 8/1K, 8/2K, 16/250, 16/2K, 32/2K, 64/500, 64/1K) | not offered by us; AUTO prints nothing on any of them (checked) |
+
+★★ **A false decode found on the way, and fixed.** fldigi's CONTESTIA 4/125 through our AUTO printed half-right garbage as
+"[CONTESTIA 16/500] EFKYGH*BIJ!CKLR@…": a 4/125 signal uses 4 of a 16/500 receiver's 16 tones at the SAME spacing and
+symbol rate, and the wider receiver's Walsh blocks still read about half the characters. Fix (`OliviaRx`, textmodes.cpp):
+a lock also needs the strongest tone of the last max(2K, 4M) symbols to have visited ¾ of the tone set (3 of 4 for
+4-tone modes), and a held lock drops only below half — a scrambled signal uses its tones evenly, noise wanders everywhere,
+so only a narrower signal fails it. (First try with a 2K window and no hysteresis: CONTESTIA 32/1000 dropped its lock
+mid-message — measured, widened.) Cost of the gate in decodes: **none** — `tm_bench` sweeps of OLIVIA 4/125 … 64/2000 and
+CONTESTIA 8/250 … 64/2000 at −12 … −6 dB, 20 trials, manual AND AUTO: byte-identical tables before and after.
+
+Tests (`test-textmodes`): the newline and space codes; CONTESTIA 4/125 through AUTO locks nothing wider; OLIVIA 4/125
+through AUTO still itself; and with `VIBE_FLDIGI_DIR=~/fldigi-blackbox/out` the eight fldigi files decode exactly (from
+"!" on). Colima stopped afterwards; the image `fldigi-bb` can be removed with `docker rmi fldigi-bb`.
+
+## 19. ONE text-mode key (MFSK, OLIVIA, CONTESTIA, THOR) and every AUTO decoder's fallback rows (2026-10-31, seventh run)
+
+Stuart: "10% of a pi2 core doesnt seem too bad and if it makes it easier for users then add it"; and "dont forget with
+any decoders that are auto mode we can pop open extra controls underneath like we do for RTTY if auto fails to decode".
+
+### One key
+- Server: `TextModeDecoder::Family::All` — every family's common sub-modes in ONE decoder, so receivers with the same
+  symbol length and rate share a stream (one FFT) and the same tone set shares a finder (OLIVIA ↔ CONTESTIA, section
+  13). vibeserver.json offers `"mfsk":true` + `mfskModes` only (no `olivia`/`thor`): AUTO, then per family
+  (MFSK, OLIVIA, CONTESTIA, THOR) its "ANY" (`any-<family>`, that family's own AUTO) and EVERY sub-mode we decode — the
+  manual-only ones too (OLIVIA 4/250 and 64/2000, CONTESTIA 4/125 … 64/2000): 29 entries, each with its `group` and a
+  short label. The host still attaches the old `olivia` / `thor` names (a family alone); no client offers them. The
+  owner's three switches became one ("MFSK, Olivia, Contestia, THOR").
+- Key name: "MFSK" — Olivia, Contestia and THOR are multi-tone FSK modes too, so the family's own name covers them
+  (question for Stuart below).
+- App and web: one MFSK key in HF Amateur; `textModes.ts` shrank to the one family.
+
+### The fallback rows, RTTY's pattern (`src/services/autoModes.ts`, shared)
+RTTY: under the key a first row with AUTO and the presets, then the manual rows; a hand-picked value turns AUTO off and
+under AUTO nothing manual is lit. The same for decoders whose manual choices are server data: a first row (PROTOCOL for
+PAGE, FAMILY for MFSK) = AUTO + the server's groups; a second row (RATE / MODE) = the chosen group's own entries, drawn only
+when the group has more than one. App: `GroupedModeRows` in ModeSelector; web: `tmGroups` + `tmModeRow`.
+- PAGE: AUTO · POCSAG (ANY, 512, 1200, 2400) · FLEX (no RATE row — a FLEX frame names its own speed, so a FLEX rate key
+  would do nothing).
+- MFSK: AUTO · MFSK (ANY, 16, 32) · OLIVIA (ANY, 4/125 … 64/2000) · CONTESTIA (ANY, 4/125 … 64/2000) · THOR (ANY, 4 … 22).
+- Polarity (PAGE) was considered and NOT offered: both POCSAG and FLEX already try both senses on every sync, so a
+  polarity key could never rescue a decode AUTO missed.
+- The other AUTO-style decoders on this branch get no rows, each for a reason (a control whose every use is a no-op is
+  not offered): SAME (47 CFR 11.31 fixes the tones, rate and format — nothing to choose); SELCAL (the 32 ICAO tones are
+  all searched at three dial offsets at once; the hint already asks for the dial within ≈ 10 Hz); CTCSS/DCS (not a
+  decoder key at all — a label on the VTS line, every tone and code searched together); MSK144 (a Digital-spots mode on
+  its dials, no key). Time stations already have STATION (AUTO first).
+
+### Cost on a Pi 2 (qemu-arm count, `tools/textmode-bench/qemu.sh`, 60 s of noise through AUTO — every common sub-mode)
+| | NEON | scalar |
+|---|---|---|
+| ONE key's AUTO (MFSK16/32 + THOR ×6 + OLIVIA ×6 + CONTESTIA ×3, one decoder) | **3966 M instr / min** | 5471 M |
+| the three old keys' AUTOs, each alone (MFSK 556 M from section 12, OLIVIA+CONTESTIA 1931 M, THOR 1673 M) | 4160 M summed | — |
+
+So the one AUTO costs **≈ 4.7 % less than the three did together** (their shared 8 kHz / 11.025 kHz resamplers and the
+streams of equal symbol length now computed once) → ≈ 5.5–7.3 s of a 900 MHz core a minute, **≈ 9–12 % of one Pi 2
+core** (ESTIMATE at 0.6–0.8 IPC) — the ≈ 10 % Stuart accepted. Where it goes: 48 % the per-frame finder of each of the
+17 receivers (`Finder` — the next place to make it lighter, e.g. sharing scores between receivers of one stream and tone
+spacing beyond OLIVIA ↔ CONTESTIA), 18 % OLIVIA/CONTESTIA's Walsh blocks, 13 % PFFFT, 10 % the resamplers. Nothing was
+traded for speed: every sub-mode decodes through the one AUTO as through its own. Identity: armhf NEON/scalar ×
+`-ffp-contract` off/fast — one test-textmodes fingerprint (`44ca51b976226297`) across all four builds.
+
+### Tests
+`test-textmodes`: every common sub-mode through the one AUTO; the grouped list (29 entries, the four families, every
+sub-mode, `group` in the JSON); `any-olivia` decodes OLIVIA, `any-thor` / `any-contestia` print nothing on it; the wire's
+"mfsk" is the one key; noise and RTTY/carrier through the one AUTO: nothing. `test-web-textmodes` rewritten for one key
+(see its header). ★★ **10 runs in a row: 5 pass, 5 fail — NOT the required 10/10.** Every other check passed 10/10 (one
+key, FAMILY/MODE rows, OLIVIA via FAMILY, MFSK via FAMILY, the session rule on re-open and after a reload, 390 px, no
+exception). The one failure, the same each time: in AUTO, with OLIVIA 16/500 and MFSK16 both in the passband from the
+moment the box opens, the first MFSK16 over printed "CQ CQ D G4XYZ …" — one "E" lost. It is the MFSK receiver's JOIN
+(a receiver started mid-over — section 12's fault 5 family), not the one key: the same clip offline at 61 start offsets
+with no added noise gives 4 wrong joins (a wrong first character, "QCQ", "ÐZ") with the one AUTO AND with the old
+MFSK-only AUTO (identical output); the web run opens the box at a near-constant phase of the 20 s loop, which before
+this change came only after the OLIVIA section. A "sticky winner" (the box stays with a locked winner) was tried as a
+fix and dropped: offline it lost the start of every MFSK over to an idle OLIVIA lock (whole overs 40/40 → 36/40). ★
+OWED FIRST: the MFSK join at fine offsets — then the 10/10. ★ DONE in section 20 (the cause was a stale presence slot after a skipped symbol, not the join itself; 10/10). `test-web-hell` now expects HELL beside MFSK (not re-run this time).
+
+## 20. The web test's lost "E" was the RECEIVER — a stale presence slot, and four join faults found on the way; test-web-textmodes 10/10 (2026-10-31, eighth run)
+
+Section 19 left `scripts/test-web-textmodes.mjs` at 5 of 10: in AUTO, with OLIVIA 16/500 and MFSK16 both in the passband
+when the box opens, an MFSK16 over printed "CQ CQ D G4XYZ MFSK TEST PSE K". Every fault below was the decoder; the test
+was not touched.
+
+### Method
+- **Offline, finer than before**: the web clip's audio (`tm_clip` with `VIBE_TM_DUMP`) looped three times from **400 start
+  offsets × 3 noise levels** (none, σ 0.02, σ 0.04 at 48 kHz) = 1200 joins through `tm_file mfsk auto` (the one key); each
+  run checked for anything printed that was not sent AND for a "[MODE · Hz]" line naming anything but the two real signals
+  (the web test's two checks). This found faults 1–4 below — but, once they were fixed, NOT the web test's "E".
+- **The server's own decoder audio**: a throw-away build (not committed) wrote what `TextModeDecoder::feed` received to a
+  file; a failing web run's audio, replayed through `tm_file`, printed the same "CQ CQ D G4XYZ" — then traced (fault 0).
+  The server's audio is the USB demodulator's, after AGC and the 8-bit IQ: the finder's phase moves differently there.
+
+### The faults (decoders/textmodes.cpp, each measured in its comment)
+0. ★★★ **The web test's "E": a stale presence slot.** MfskRx shows a character only if the signal was present when its bits
+   left (`presentThen`: the presence ring 54 and 24 symbols back). A finder phase move to an earlier quarter (3 → 2) skips
+   a symbol — pushed as an erasure, correctly — but its ring slot was never written and kept the presence of 64 symbols
+   before: the quiet before the over. 54 symbols later the "E" of "DE" read that slot and was hidden. Section 12 had seen
+   the same stale slots (THOR16 lost a character with a 128-slot ring) and kept the 64-slot ring; every skipped symbol's
+   slot is now written.
+1. ★★ **A phase move across the wrap counted a whole symbol.** `Rx::maybeSymbol` numbered symbols (frame − phase) / 4, so
+   the finder moving its phase 3 → 0 (a quarter LATER) counted a symbol that never came — an erasure inserted — and 0 → 3
+   (a quarter earlier) skipped one. Either shifts every later symbol against MFSK's de-interleaver (≈ 30 symbols of wrong
+   bits: "'E G4XYZ", "c G4XYZ", "ÐZ MFSK") and an OLIVIA block's chips against their alignment. The phase settles most
+   while a receiver JOINS an over, so it looked like a join fault (the old MFSK-only key had it too). A move of 3 is now
+   read as the quarter it is; moves of 1 and 2 were always right.
+2. **No lock before the Viterbi's first bit.** Its quality is an average of the steps so far; two steps in it read 1.00 /
+   0.00 — a contrast of 1 — on a place one tone off an over just joined, and the lock held through the idle tail printing
+   garbage ("teî tttzA"). The lock now waits D = 48 steps (n ≈ 55). (2 D was tried first: it lost the first "CQ" of an over
+   that began 0.5 s after the box opened — measured, halved.)
+3. **The join rule was switched off by the finder's own warm-up.** Section 12's rule (no character whose first bit came in
+   the first 24 symbols after a mid-over start) is cleared when the place is quiet — but the finder's score is an average
+   that starts from zero, so on the first symbols even a strong over read "quiet". Now judged against the warm-up
+   ((1 − α)^frames of the score is still its zero start). Measured: 9 wrong joins in 1200 → 0.
+4. **OLIVIA: a block read across a move off the tone set.** moved() caps what was measured before a move, but the K blocks
+   read in the K symbols after it still hold old symbols. (a) An OLIVIA's last block before its finder left for the MFSK16
+   (0.50) became the lock candidate, and one noise-level block later the lock was taken ON the MFSK16 ("[OLIVIA 16/500 ·
+   797 Hz]" — prints nothing, but takes the box); (b) a block read half at the old place was kept for the lock and printed
+   "OLIvIA K" / "iAK" (half the chips from elsewhere leave the top bit of each character's Walsh index ambiguous). Such a
+   block now names no candidate and is not kept to be shown; its quality counts as before. **And** a candidate is not
+   taken after its place has gone quiet (score under half the candidate's): the over's last block plus one noise block
+   still averaged over the threshold and locked 200 Hz above the signal ("· 1703 Hz").
+
+| | before (section 19's code) | after |
+|---|---|---|
+| 1200 joins of the web clip: a wrong character printed | 50 (18 of the 400 with no noise) | **1** (an OLIVIA over's first idle block read half in silence at the heaviest noise: " CQ DE …") |
+| … a mode named that is not on the air ("OLIVIA 16/500 · 797 Hz", "THOR 16 · 797 Hz", "· 1703 Hz") | 74 | **0** |
+| … a whole over printed | 1199 | 1200 |
+| … whole MFSK16 + OLIVIA overs in the three loops | 851 + 1830 = 2681 | 922 + 1783 = **2705** (the two trade the box; MFSK16 keeps it more often) |
+| the failing web run's own server audio, replayed | "CQ CQ D G4XYZ" | "CQ CQ DE G4XYZ" |
+| `test-web-textmodes`, 10 runs in a row (headless Edge, muted, real vibeserver, locally built page) | 5/10 | **10/10** (23 checks each); `test-web-hell` 19/19 |
+
+### Dead ends (kept for the record)
+- Capping a block read across a move at the hold threshold (as moved() caps the rest): fixed 4(a) and 4(b) but cost a weak
+  signal whose finder hops to the noise and back — OLIVIA 4/125 at −12 dB **101/200 → 90/200**. Its evidence must survive
+  the trip (section 12's lesson, again). Replaced by "names no candidate, not shown": 101 → 100.
+- The lock gate at 2 D steps (fault 2).
+- The first round of this run fixed faults 1–4 and passed 1200 offline joins — and the web test still failed 3 in 6: the
+  offline clip is clean 48 kHz audio, the server's is not. The server's own audio found fault 0.
+
+### Decodes elsewhere — unchanged within the trials' noise; THOR 5 better
+- `tm_bench` 20-trial sweep, every sub-mode manual (−14 … −6 dB OLIVIA/CONTESTIA, −12 … −4 MFSK, −16 … −4 THOR) and the
+  family AUTOs: identical except THOR 5 (better at every SNR from −12 dB: 18, 16, 17, 17, 17 of 20 → **19, 19, 19, 19,
+  19**; CER 6 % → 0–1 %), CONTESTIA 32/1000 −6 dB 17 → 18, CONTESTIA 8/500 −8 dB CER 3 → 2 %, and three points one trial
+  down with the same CER (MFSK32 −8 dB 10 → 9, OLIVIA 4/250 −8 dB 18 → 17, THOR 5 −14 dB 12 → 11 with CER 23 → 13 %).
+- Those re-run at **200 trials** — every sub-mode at its edge, 22 points (`tm_bench` with trials past 20 spread over
+  700–2300 Hz): MFSK16 −8 dB 166 → **170**, MFSK32 −8 dB 75 → **81**, THOR 5 −14 dB 141 → 142 (CER 8 → 6 %), OLIVIA 4/250
+  −8 dB 172 → 170, THOR 11 −10 dB 177 → 175, THOR 16 −6 dB 172 → 170, the rest within ±1; CER identical everywhere but THOR 5.
+  The ±2 points are the trials' noise (faults 1–3 move the timing of every lock a little), not a loss: no CER moved.
+- `test-textmodes` with the 11 reference recordings (11/11) and the eight fldigi CONTESTIA files (8/8): all passed.
+- False decodes: white noise **60 min through each AUTO** (MFSK, OLIVIA, THOR and the one key): nothing.
+- `test-web-hell` (its expectation was changed in section 19 and not re-run then): 19 passed, 0 failed.
+
+### Afterwards: a fifth fault, found by the web test after section 21 (2026-10-31, eighth run)
+Three web runs on section 21's build (its decodes byte-identical to the above) gave one failure: " CQ DE G4XYZ OLIVIA K"
+— the same kind as the one offline failure left in the table above (1 in 1200). Traced offline: an OLIVIA over's first,
+idle block was read for its first 10 symbols at the noise 8 tones off, before the finder reached the over; half its
+chips came from another place, and its first character read 32 (space) for 0 (idle) — the top bit of the Walsh index is
+exactly what half a block cannot settle. The block was not "across a move off the tone set" (fault 4: those moves are
+the tone set's width or more), so it was kept and shown at the lock. **Fix**: a block is shown at the lock only if read
+wholly after the finder's last move of half the tone set or more. Tried first: any move of more than a tone — it also
+caught a weak signal's finder sliding inside its own tone set (OLIVIA 16/500 at −12 dB 12/200 → 10/200); moves onto a
+place with a signal (score ≥ 4.5) — the same 10/200. Half the tone set: 12/200.
+
+| after the fifth fix | |
+|---|---|
+| 1200 joins of the web clip | **0 wrong, 0 misnamed**, whole overs 1200, MFSK16 + OLIVIA overs 922 + 1783 (unchanged) |
+| 200 trials at every OLIVIA/CONTESTIA edge (16 points) | identical but OLIVIA 8/500 −8 dB 176 → 175 (CER 5 % both) |
+| 20-trial sweep of every sub-mode, manual and AUTO | identical but OLIVIA 32/1000 −8 dB CER 5 → 4 % |
+| `test-textmodes` with the recordings and the fldigi files | whole output identical (11/11, 8/8) |
+| `test-web-textmodes`, 10 runs in a row (section 21's build + this fix) | **10/10** (23 checks each); `test-web-hell` 19/19 |
+| cost (qemu-arm, section 21's measure) | 1844 M NEON / 3933 M scalar — the same as section 21's 1845 / 3933 |
+
+## 21. The one key's AUTO at less than half the cost — the tone search shared, OLIVIA's chips read in a row; decodes byte-identical (2026-10-31, eighth run)
+
+Section 19 measured the one MFSK key's AUTO (MFSK16/32, THOR ×6, OLIVIA ×6, CONTESTIA ×3 — 17 receivers) at ≈ 3.97 G
+instructions a minute on a Pi 2, 48 % of it each receiver's own tone search. Measured here with the same tooling
+(`tools/textmode-bench/qemu.sh`'s build: armhf `-marm` NEON, `-O3 -ffp-contract=fast`, static, under qemu-arm with the
+instruction counter; 60 s of noise through AUTO; per-function split with `~/Library/Caches/decaudit/fnsum.py`).
+
+| Pi 2 model, qemu-arm count, 60 s of noise through the one key's AUTO | NEON | scalar (`VIBE_FORCE_SCALAR` + `PFFFT_SIMD_DISABLE`) |
+|---|---|---|
+| section 19 | 3966 M | 5471 M |
+| section 20 (the join fixes: +1.4 %) | 4023 M | 5469 M |
+| + one ladder of window maxima per stream and stride | 2539 M | 4546 M |
+| + OLIVIA's chips kept by diagonal, the FHT's first two stages in lanes, the stream's double ring | 1945 M | 4065 M |
+| + choose() by each phase's maximum, the finder's score and EMA in one pass, the resampler's buffer | **1845 M (−54 %)** | **3933 M (−28 %)** |
+| Pi 2 estimate (0.6–0.8 IPC at 900 MHz) | 9.3–12.4 % of a core → **4.3–5.7 %** | |
+
+Where the 1845 M goes now: PFFFT 33 % (the 9 streams' transforms — untouched), OLIVIA/CONTESTIA's soft bits and Walsh
+blocks 20 %, the finders (ladders, scores, choose) 17 %, the resamplers and the streams' windows and powers 15 %, MFSK/THOR
+symbols 7 %, exp/log 4 %.
+
+### What changed (decoders/textmodes.cpp; ld4/st4 added to digimodes/q65_simd.h)
+1. ★★ **One ladder of window maxima per stream and tone stride** (`Ladder`). Every finder asked the same question of the
+   same spectrum — the strongest of M bins s apart from each base — and receivers on one stream and stride differ only
+   in M (OLIVIA 4/8/16/32 and CONTESTIA at 31.25 Bd; MFSK16 and THOR16; …). Level k holds the strongest of 2^k bins (a
+   maximum of two of the level below, four bins a lane); a finder for M reads two overlapping entries of the level just
+   under M. It replaces each finder's own van Herk / Gil-Werman scan (scalar, one residue at a time). A maximum is exact,
+   so the scores are the same floats. The band's mean (the divide a frame) is summed once a ladder: its span does not
+   depend on M.
+2. **OLIVIA/CONTESTIA: the soft bits kept by diagonal.** Character j of a block reads chip k from bit (j + k) mod b of the
+   block's k-th symbol — a diagonal, gathered one float at a time with two wrapping counters and a select. Stored as b
+   rows (bit i of symbol t in row (t − i) mod b), a character's chips are one row in order; each column is written twice
+   (t mod K and + K), so a block's K chips are K floats in a row — read four a lane and descrambled by a multiply with ±1
+   (exact: the same floats as the select it replaces). The Walsh transform's first two stages, which were scalar, run in
+   lanes with ld4/st4 (every fourth value a lane): the same adds in the same pairs.
+3. **The stream's ring is kept twice over** (each sample at wp and wp + N): the window, oldest first, is N floats from
+   ring[wp] — no copy a frame to put the halves in order.
+4. **Small ones**: choose() with no ban takes each phase's maximum four bases a lane and scans one phase for it (the same
+   place the scalar scan picks — the first strictly greater); a ban tick is skipped while no ban or memory of one is
+   left; the finder's score and its EMA in one pass; the resampler writes into a buffer instead of push_back.
+
+Not shared, on purpose: the sequential sum in each Walsh block's quality (four lanes would round differently — and q
+decides the lock); the per-sub-mode EMAs (each M has its own scores; OLIVIA ↔ CONTESTIA twins already share theirs,
+section 13); the FFTs (each stream's symbol length is its own).
+
+### Byte-identical — proved
+- `test-textmodes` with the 11 reference recordings and the eight fldigi CONTESTIA files: the whole output identical,
+  before and after (Mac).
+- The 20-trial `tm_bench` sweep of every sub-mode, manual and the family AUTOs (section 20's set): identical files.
+- 1200 joins of the web clip (`tools/textmode-bench/tm_loops.py`, new — the method of sections 12 and 20 as a tool): the
+  same counts and the same one failure; per-second traces (`VIBE_TM_DEBUG`: every receiver's quality, score, place, Hz)
+  of seven loop files byte-identical.
+- armhf NEON/scalar × `-ffp-contract` off/fast under qemu: the four whole outputs identical to each other and to section 20's
+  (fingerprint 44ca51b976226297 — the same as section 19's: the join fixes did not touch the synthetic tests). x86 SSE2 (a static i686 `-msse2 -mfpmath=sse` build under
+  qemu-i386 — the SSE2 ld4/st4 path, which no other test runs): the whole output identical before and after, all passed — and its fingerprint is the armhf builds' one.
+
+## 22. Every decoder has its own benchmark row (2026-10-31, ninth run)
+
+Stuart: *"all these decoders need their own lines in the initial setup benchmark too"*. The setup benchmark had eight
+decoder rows (RTTY, NAVTEX, WEFAX, SSTV, time signals, FT8+FT4, Band spots, LoRa). `vibe_benchmark_more.h` adds the rest
+— 29 on a desktop build, 30 on the Android library (paging). A decoder added from now on adds its row there, in the
+same change.
+
+**How each row is measured.** Average process CPU (getrusage) ÷ signal seconds, as the first rows, with the radio stopped.
+- A listener's decoder runs through a real `DecoderHost` — the socket's `start(ext, msg)`, its queue and its decode thread
+  at decoder priority — fed 48 kHz audio our own transmitters make (the decoders' encoders, `benchsynth/`). The feed waits
+  on `queued()`, so nothing is dropped and the figure is the decoder's work.
+- A digital-spots mode is its registered engine (`digi::modes()`), fed whole periods at its own rate with real
+  transmissions on the period boundaries (Q65: 60 s with a 60A, a 30A and a 15A; WSPR and FST4W: 120 s; FST4: 60 s; JS8:
+  30 s, every submode's cut; FT2: 15 s). One pass ("loaded"), as the FT8 row. A mode with no transmitter here still gets
+  a row, searching noise, and says so in its label.
+- NDB is its Service on fed slices; AIS and ISM are their Services fed in REAL TIME (no queue to wait on), 1 s warm-up
+  then 3 s measured; a row that dropped says "(fell behind)". ★ **AIS, ISM 433 and ISM 868 are scored by their HOTTEST
+  SINGLE THREAD against one core, as ADS-B is** (Stuart's decision: a single thread over 100 % is the real failure on a
+  Pi 2); the process total is kept in the row's `threads` ("process"). Per-thread CPU: /proc/self/task on Linux and
+  Android, Mach thread_info on macOS (`benchdec::threadTimes`).
+- Tone ID, noise reduction and the auto notch are the listener's own filters, timed directly.
+- **Budget per row**: a continuous row feeds until it has used 3 s of wall AND fed 4 s of signal, or fed 12 s. A slotted
+  mode finishes its period (half a WSPR minute measures nothing). Every row reports `decoded` and `ms`; the result has
+  `benchSec`, shown under the table on the setup page and in the app.
+
+**Real clips where a real band sets the cost** (Stuart: *"put samples on github that get downloaded when running the
+benchmark"*). The CW and PSK skimmers, the NDB skimmer and ISM's burst finder work in proportion to what is on the band,
+so they run on `decoders-bench.vbu8` — Stuart's own recordings, every record 8-bit, 7.9 MB (**3.8 MB gzipped**; the CW
+and PSK records were 16-bit until Stuart chose the smaller download — the skimmers decode the same 4 and 2 signals), fetched once like the DAB and
+ADS-B clips (`ensureDecoderClip`, `VibeBenchmark.kt`). The ISM records hold no real device: a window where ISM's own
+detector finds no burst on the whole capture (and LoRa no preamble), with the tests' synthetic sensors and meters added
+(`vibeserver/bench-clip/README-decoders.txt`). Without the clip those five rows read "not measured"; every other row
+runs offline. Everything else is synthetic: one signal costs the same whatever else is on the air. Paging is synthetic
+always (private messages).
+
+**The defaults — ONE rule, in the server** (`benchdec::ruleFor`, sent as `decoders.defaultOff` / `flagged`; the setup
+page's `benchApplyDefaults` and the app's `applyBench` only apply it, on a fresh setup):
+- ★ **the first eight rows (RTTY, NAVTEX, WEFAX, SSTV, time, FT8+FT4, Band, LoRa) keep their old behaviour** (Stuart):
+  below green they are FLAGGED, never switched off by this rule — a box that has been fine never loses RTTY or FT8 on a
+  fresh setup. Band and Advanced RDS keep the rules the readers already had for them;
+- a NEW row that is its switch's main decoder (`dec_dsc` → "dsc", `dec_ndb` → "ndb", …) and measured below GREEN starts that
+  switch OFF — offered, never hidden, with the reason beside it ("…is off: it measured N % of a core here. Tick it to
+  offer it anyway.");
+- a companion row — the CW and PSK skimmers, RTTY AUTO, each digital-spots mode, the wM-Bus row — never switches its
+  switch off (that would take the green decoder away too); below green it is flagged ("Too heavy for this box" lists the
+  red ones);
+- **the decoder limit's yardstick is now the heaviest GREEN decoder slot** (a first-eight row below green is flagged,
+  its switch stays on, and it is not the yardstick either — alone it is already past the green budget). Band spots, LoRa and the whole-radio modes
+  (NDB, AIS, ISM) are not slots; a slot that is not green is off by default or, alone, more than the green budget already.
+  Before, the heaviest of every row bar Band was used — LoRa (not a slot) set the limit on the Mac.
+- Heavy digital-spots modes in Band (Q65 …): flagged only (Stuart); the Band governor's budget still applies.
+- AUTO bandwidth (on `v12-am-sync`): no owner switch (Stuart); its rows show the cost only.
+- Tone ID, noise reduction and the notch have no owner switch (the listener turns them on): shown, nothing set.
+
+**Switches added so the owner can switch each one back on**: "cw" on the setup page (the server enforced it, the page
+never offered it); the app's list gained cw, psk, dsc, sitora, same, selcal, mfsk, hell, ndb, jtty, ais, aprs, ism and
+lora (it had stopped at Band spots). On an Icom, ism / lora / ndb / ais are not offered (they need IQ).
+
+**The Mac (M-series), 2026-10-31**, `vibeserver-bench 6` offline (no ADS-B clip): before **26.4 s**, after **48.7 s**.
+New rows (% of one core · decoded · ms):
+
+| row | % | decoded | ms | | row | % | decoded | ms |
+|---|---|---|---|---|---|---|---|---|
+| RTTY AUTO | 0.4 | 75 chars | 222 | | FT2 | 0.1 | 3 spots | 870 |
+| CW | 0.0 | 14 chars | 198 | | JS8 | 0.2 | 2 spots | 1260 |
+| CW skimmer (clip) | 0.0 | 4 signals | 1357 | | WSPR | 0.0 | 2 spots | 259 |
+| PSK31 | 0.1 | 21 chars | 211 | | JTTY (spots) | 1.1 | 3 frames | 261 |
+| PSK skimmer (clip) | 0.5 | 2 signals | 1375 | | PSK (spots) | 0.0 | 1 spot | 164 |
+| JTTY | 0.9 | 27 | 284 | | FST4W | 0.0 | 1 spot | 422 |
+| SITOR-A | 0.1 | 147 chars | 221 | | FST4 | 0.0 | 1 spot | 335 |
+| DSC | 0.1 | 120 | 206 | | Q65 (15/30/60) | 0.4 | 3 spots | 1170 |
+| EAS / SAME | 0.0 | 117 | 199 | | MSK144 | 0.1 | 7 frames | 170 |
+| SELCAL | 0.3 | 41 | 207 | | NDB (clip) | 0.2 | 1 beacon | 228 |
+| MFSK AUTO | 0.3 | 27 chars | 210 | | AIS (real time) | 3.1 | 24 msgs | 4214 |
+| Feld Hell | 0.0 | 784 lines | 201 | | ISM 433 (clip, real time) | 9.6 | 1 device | 4115 |
+| APRS | 0.2 | 2 stations | 191 | | ISM 868 meters (clip) | 2.8 | 2 meters | 4116 |
+
+(AIS / ISM above were process CPU, the first cut. Scored by the hottest thread, with the 8-bit clip: AIS 2.6 % (process
+3.0), ISM 433 8.3 % (8.6), ISM 868 1.6 % (1.8); the skimmers 4 and 2 signals as before.)
+| Tone ID | 0.0 | 1 lock | 5 | | Noise reduction / notch | 0.1 / 0.1 | — | 9 / 20 |
+
+Paging (Android library only, `-DVIBE_PAGING` test build): 0.1 %, 144 chars, 328 ms.
+
+**Not run**: an Android phone, the Pi 2, any server (none touched). The Pi 2's Cortex-A7 runs NEON code at 0.35–0.48 IPC
+(`PI2-REAL-CPU.md` on `v12-am-sync`) — the benchmark measures the box itself, so nothing is scaled, but expect the Pi 2's
+figures far above these and its run longer: the real-time rows are a fixed 12 s, the rest scale with the CPU (the
+continuous rows are capped at 3 s of wall each; Q65's minute and WSPR's two are not capped). The copy now says "a few
+minutes", and the result says how long it took.
+
+★★ **ISM's row must be re-checked** once the ISM threading work (another agent, `~/VibeSDR-decaudit`) lands: it measures
+the ISM Service as it is on this branch (process CPU, fed in real time), and a change to its threads changes both the
+figure and whether process CPU or the hottest thread is the right yardstick for it.
+
+Tests: `test-bench-decoders` (every new row decodes its signal; without the clip the clip rows read "not measured"; the
+progress bar's count is the rows made; the rule), `scripts/test-bench-defaults.mjs` (both readers apply `defaultOff`;
+every switch the rule names is on both setup screens). The synthesisers moved from `tools/*-bench/` to
+`android/app/src/main/cpp/benchsynth/` (forwarders left behind); the 13 suites that use them pass.
+
+## RESUME HERE (updated 2026-10-31, eighth run: the lost "E", and the one key at less than half the cost)
+
+Done this run (commits on `v12-decoders-wave2`): section 16 — PAGE silent while it runs, Q65 tiling of the EME segments
+(23 cm band, 6 m, Q65-15 — it doubles Q65's cost), Feld Hell (Hellschreiber) copy, AUTO first / manual for the session
+only (`decoderSession.ts`); section 17 — FLEX in PAGE's AUTO; section 18 — CONTESTIA confirmed with fldigi as a black
+box (newline fixed, a narrower-signal false lock fixed); section 19 — one MFSK key for MFSK/OLIVIA/CONTESTIA/THOR and
+every AUTO decoder's fallback rows (RTTY's pattern). Eighth run: section 20 (the web test's lost "E" and four join
+faults) and section 21 (the one key's AUTO −54 % on a Pi 2, decodes byte-identical). No server or device was touched;
+synthetic signals and public recordings only (FLEX and fldigi files kept out of git).
+
+Ninth run (section 22): **every decoder has its own benchmark row** — 29 more, real decodes, per-row wall time, one
+defaults rule in the server, a real-band clip for the skimmers / NDB / ISM. ★ Stuart must publish
+`decoders-bench.vbu8.gz` (3.8 MB, sha256 ae1571da…150f) as release asset `bench-clip-v3` (README-decoders.txt) — AFTER
+his own privacy check of it; until then those five rows read "not measured". Stuart's decisions (2026-10-31): 8-bit clip,
+the first eight rows flagged only, Band's heavy modes flagged only, no AUTO owner switch, AIS/ISM by hottest thread. ★ ISM's row must be re-checked after the decaudit ISM threading work lands.
+
+Next, in order:
+0. ✓ DONE (section 20): **test-web-textmodes 10/10**, test-web-hell 19/19. The "E" was a stale presence slot after a
+   skipped symbol; four join faults fixed on the way, and a fifth (an OLIVIA block read half before the finder arrived,
+   shown at the lock) found by the web test afterwards — section 20's addendum; 10/10 again with it.
+   ✓ DONE (section 21): the one key's AUTO **4023 → 1845 M instructions a minute** on the Pi 2 model (−54 %; ≈ 4.3–5.7 %
+   of a core, was 9–12 %), decodes byte-identical. Left on the table: the 9 streams' FFTs (a third of what remains) and
+   OLIVIA's soft bits (exp/log per tone, shared by the twins only if their places agree — not done).
+1. **build-web** before any release (sections 10–12, 15, 16, 19): `vibe_web_page.h` is NOT committed.
+2. **The app** has not run on a simulator or device this run (esbuild syntax checks; the small services type-checked):
+   PAGE's mute and banner, PROTOCOL/RATE rows, the MFSK key's FAMILY/MODE rows, the session rule, Feld Hell.
+3. Real air: FLEX on a phone (US 929–932 MHz or UK 153 MHz paging), Q65 on 23 cm/70 cm/2 m EME, the rest as before.
+4. Questions in section 16–19 / the final report: Q65-15 everywhere or only on 6 m/2 m; the MFSK key's name; FLEX's two
+   mode codes seen in one source only.
+5. Still waiting on Stuart from earlier runs: ACARS → VDL2 → HFDL → RS41 (standard or a capture), BPC, TDF, CHU labels.
+
+Builds used: `~/VibeSDR-builds/decoders2-server` (cmake of this worktree, deps from `~/VibeSDR-v12/vibeserver/mac/deps/
+prefix`). The worktree's `node_modules` is a symlink to `~/VibeSDR-v12/node_modules`, excluded in `.git/info/exclude`
+(not in git). The web type check (`tsc` in web/client) does not fit the 512 MB cap; services were type-checked alone
+(`tsc --ignoreConfig … src/services/textModes.ts …`), components syntax-checked with esbuild. Colima was started for the
+qemu counts and stopped again. Eighth run's kit (scratch, not in git): the web clip's 48 kHz audio for
+`tools/textmode-bench/tm_loops.py` comes from `tm_clip` with `VIBE_TM_DUMP`; the server's own decoder audio was dumped
+by a throw-away line in `TextModeDecoder::feed` (never committed) — worth repeating whenever a web run fails and the
+offline loops do not.
+
+Black-box kit (not in git, unchanged): `~/wsjtx-blackbox/` — WSJT-X 2.7.0 arm64 binaries, docker image `wsjtx-bb`,
+corpora. Reference recordings for the text modes: `~/VibeSDR-mfsk-refs/` (spec pages, the parsed varicode, samples,
+the Python prototypes used to settle the formats — `proto/`).

@@ -53,6 +53,10 @@ import { parseCwSignals, parseCwSpot, CW_DEFAULT_WIDTH, PSK_DEFAULT_WIDTH, type 
 import { parseJttySignals, parseJttySpot, jttyStateText, type JttySignal, type JttySpot } from './jtty';
 import { parseDscCall, dscStateText, type DscCall } from './dsc';
 import { parseSitorStatus, sitorStatusText, type SitorStatus } from './sitora';
+import { parsePagingStatus, pagingStatusText, type PagingStatus } from './paging';
+import { sameStateText, selcalStateText } from './alertDecoders';   // ★ V12 EAS / SAME and SELCAL
+import { isTextFamily, parseTextModeStatus, textModeStatusText, type TextFamily, type TextMode, type TextModeStatus } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { hellStatusText, parseHellStatus } from './feldHell';   // ★ V12 FELD HELL
 import { parseSpotsStatus, type SpotModeState } from './spotsBand';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -61,12 +65,17 @@ import { parseSpotsStatus, type SpotModeState } from './spotsBand';
  *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
 /** ★ V12 PSK31/63 ('psk' / 'pskskim' — `pskSkim`), JTTY ('jtty') and DSC ('dsc') — a VibeServer's own decoders. */
 export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw' | 'psk' | 'jtty' | 'dsc'
+  | 'mfsk'   // ★ V12 the MFSK keyboard modes — MFSK16/32, OLIVIA, CONTESTIA, THOR on ONE key (textModes.ts): text as it decodes, 0x03, textmode_status
+  | 'hell'    // ★ V12 FELD HELL — drawn by a VibeServer (feldHell.ts): WEFAX's grey lines (re-sent as a strip fills), hell_status
+  | 'selcal'  // ★ V12 SELCAL — a VibeServer's aeronautical selective-call decoder: one text line per call
+  | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
+  | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
   | 'sitora'  // ★ V12 SITOR-A — a VibeServer's maritime ARQ listener (vibe_sitora_run.h): text, link state, status JSON
   | 'aprs';   // ★ V12 APRS — a VibeServer's own packet decoder (vibe_aprs_run.h): JSON lists and packets, no text frame
 
 /** The time signal stations the server can decode. Each is a separate extension name on the
  *  wire — the shim builds a TimeDecoder for the one asked for. */
-export type TimeStation = 'msf' | 'dcf77' | 'wwv' | 'wwvb' | 'rwm';
+export type TimeStation = 'msf' | 'dcf77' | 'wwv' | 'wwvb' | 'rwm' | 'jjy';
 
 /**
  * ★★★ WHICH STATION IS ON THIS FREQUENCY. Nobody tunes 60 kHz by accident, but plenty of people
@@ -85,8 +94,12 @@ export function timeStationFor(hz: number, receiverLonDeg?: number | null): Time
   //     confident nonsense rather than failing. Decided by where the RECEIVER is, which is the
   //     only thing that actually predicts which one is audible; west of 30°W means the Americas.
   //     ★ Falls back to MSF when the receiver's position is unknown, and the user can override.
-  if (near(60_000, 2_000))
+  // ★ V12: and JJY's Hagane-yama is on 60 kHz too — east of 100°E (Japan and its neighbours) it is the one heard.
+  if (near(60_000, 2_000)) {
+    if (typeof receiverLonDeg === 'number' && receiverLonDeg > 100) return 'jjy';
     return (typeof receiverLonDeg === 'number' && receiverLonDeg < -30) ? 'wwvb' : 'msf';
+  }
+  if (near(40_000, 2_000))    return 'jjy';     // ★ V12: JJY Ohtakadoya-yama — 40 kHz is JJY's alone
   if (near(77_500, 2_000))    return 'dcf77';
   if (near(66_666, 2_000))    return 'rwm';
   // ★★★ RWM IS TESTED FIRST, AND THE TOLERANCE IS TIGHT, because 4996 and 9996 kHz sit just
@@ -276,6 +289,8 @@ export class DecoderClient {
   private active:  DecoderName | null = null;
   /** ★ SITOR-A: the last status the server sent (the status line is drawn from it and the 0x03 link state). */
   private sitorLast: SitorStatus | null = null;
+  /** ★ PAGING: the last status (the line is drawn from it). */
+  private pagingLast: PagingStatus | null = null;
   /** This server reports WEFAX phases (0x04) — set by the first one, cleared on every attach. */
   private wefaxPhases = false;
   private destroyed = false;
@@ -302,6 +317,13 @@ export class DecoderClient {
   dscParams: Record<string, unknown> = { band: 'hf', center_frequency: 1700 };
   /** ★ V12 APRS: 1200 Bd (VHF, NFM) or 300 Bd (HF packet, USB) — a change is a re-attach (start('aprs') again). */
   aprsBaud: 1200 | 300 = 1200;
+  /** ★ V12 PAGING: a `pagingModes` id from the server ('auto' first) — a change is a re-attach (start('paging') again). */
+  pagingMode = 'auto';
+  /** ★ V12 MFSK / OLIVIA / THOR: each family's chosen sub-mode (a server `<family>Modes` id, 'auto' first) — a change is a re-attach. */
+  textMode: Record<TextFamily, string> = { mfsk: 'auto' };
+  /** The server's `mfskModes` (for the status line's mode name). */
+  textModes: TextMode[] = [];
+  private tmLast: TextModeStatus | null = null;
 
   constructor(baseUrl: string, uuid: string, callbacks: DecoderCallbacks, password?: string, authSuffix = '') {
     this.baseUrl  = baseUrl.replace(/\/+$/, '');
@@ -633,6 +655,19 @@ export class DecoderClient {
             if (this.active !== 'jtty') return;
             const sp = parseJttySpot(m.data, Date.now());
             if (sp) this.cb.onJttySpot?.(sp);
+          } else if (m.type === 'textmode_status' && m.data) {
+            const fam = this.active;
+            if (!isTextFamily(fam)) return;
+            const st = parseTextModeStatus(m.data);
+            if (st) { this.tmLast = st; this.cb.onStatus(textModeStatusText(fam, this.textMode[fam], st, this.textModes)); this.cb.onDot(st.detected ? 'active' : 'idle'); }
+          } else if (m.type === 'hell_status' && m.data) {
+            if (this.active !== 'hell') return;
+            const st = parseHellStatus(m.data);
+            if (st) { this.cb.onStatus(hellStatusText(st)); this.cb.onDot(st.signal ? 'rx' : 'idle'); }
+          } else if (m.type === 'paging_status' && m.data) {
+            if (this.active !== 'paging') return;
+            const st = parsePagingStatus(m.data);
+            if (st) { this.pagingLast = st; this.cb.onStatus(pagingStatusText(st)); this.cb.onDot(st.detected ? 'active' : 'idle'); }
           } else if (m.type === 'sitora_status' && m.data) {
             if (this.active !== 'sitora') return;
             const st = parseSitorStatus(m.data);
@@ -793,6 +828,16 @@ export class DecoderClient {
       case 'dsc':     return { extension_name: 'dsc', params: { ...this.dscParams } };
       // ★ V12 SITOR-A: the tones around 1 kHz (as RTTY); polarity, timing and each station's offset are found.
       case 'sitora':  this.sitorLast = null; return { extension_name: 'sitora', params: { center_frequency: 1000 } };
+      // ★ V12 PAGING: the mode is one of the server's own `pagingModes` ids — the server falls back to AUTO for any other.
+      // ★ V12 EAS / SAME: nothing to set (47 CFR § 11.31 fixes the tones and the rate).
+      case 'same':    return { extension_name: 'same', params: {} };
+      // ★ V12 SELCAL: nothing to set (ICAO's 32 tones, found by themselves).
+      case 'selcal':  return { extension_name: 'selcal', params: {} };
+      // ★ V12 MFSK (+ OLIVIA, CONTESTIA, THOR): "mode" is one of the server's own ids — the server falls back to AUTO for any other.
+      case 'mfsk': this.tmLast = null; return { extension_name: name, params: { mode: this.textMode[name] } };
+      // ★ V12 FELD HELL: nothing to set — the tone is found by itself.
+      case 'hell':    return { extension_name: 'hell', params: {} };
+      case 'paging':  this.pagingLast = null; return { extension_name: 'paging', params: { mode: this.pagingMode } };
     }
   }
 
@@ -809,13 +854,31 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora') {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same' || name === 'selcal' || isTextFamily(name)) {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);
         if (tl <= 0 || u8.length < 13 + tl) return;
         if (name !== 'jtty' && name !== 'dsc') this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
         this.cb.onDot('active');
+      } else if (isTextFamily(name) && t === 0x03) {
+        if (u8.length < 2) return;
+        if (!u8[1]) { this.tmLast = null; this.cb.onStatus(textModeStatusText(name, this.textMode[name], null, this.textModes)); }
+        this.cb.onDot(u8[1] ? 'active' : 'idle');
+      } else if (name === 'selcal' && t === 0x03) {
+        if (u8.length < 2) return;
+        this.cb.onStatus(selcalStateText(u8[1]));
+        this.cb.onDot(u8[1] ? 'sync' : 'idle');
+      } else if (name === 'same' && t === 0x03) {
+        // ★ EAS / SAME: 0 listening · 1 reading a header burst
+        if (u8.length < 2) return;
+        this.cb.onStatus(sameStateText(u8[1]));
+        this.cb.onDot(u8[1] ? 'sync' : 'idle');
+      } else if (name === 'paging' && t === 0x03) {
+        // ★ PAGING's lock: 0 hunting · 1 a batch lock at some rate (the status JSON names it)
+        if (u8.length < 2) return;
+        this.cb.onDot(u8[1] ? 'active' : 'idle');
+        if (!u8[1] && this.pagingLast) { this.pagingLast.detected = ''; this.cb.onStatus(pagingStatusText(this.pagingLast)); }
       } else if (name === 'sitora' && t === 0x03) {
         // ★ SITOR-A's link state (0 no signal … 7 ended) — the status line keeps who is printing and the RQ count
         if (u8.length < 2) return;
@@ -877,6 +940,16 @@ export class DecoderClient {
         this.cb.onStatus('transmission complete');
         this.cb.onDot('active');
         this.cb.onImageDone?.();
+      }
+
+    } else if (name === 'hell') {
+      // ★ FELD HELL: a strip's grey line, drawn at its own place (a re-sent line replaces itself); 0x02 = a fresh decoder,
+      //   so the next line starts a new page (DecoderImageCanvas hellLine / hellStart).
+      if (t === 0x01) {
+        if (u8.length < 9) return;
+        this.cb.onImageLine?.(v.getUint32(1, false), v.getUint32(5, false), u8.subarray(9));
+      } else if (t === 0x02) {
+        this.cb.onImageStart?.(0, 0);
       }
 
     } else if (name === 'sstv') {

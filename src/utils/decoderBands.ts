@@ -6,14 +6,17 @@
  *
  *   TUNES THE RADIO ITSELF (above the tabs, never dimmed — WHOLE_RADIO_IDS):
  *                     ADS-B · AIS · DAB · ISM · NDB · DIGITAL SPOTS: BAND
- *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map)
+ *   HF (incl. LF/MF)  ✈ Aviation  HFDL (a server map) · SELCAL
  *                     ⚓ Maritime  NAVTEX · DSC · SITOR-A · WEFAX
  *                     Amateur     DIGITAL SPOTS · CW · PSK · RTTY · JTTY · SSTV · APRS (300 Bd HF packet)
  *                     Utility     TIME
- *   VHF               ⚓ Maritime  DSC (channel 70)
+ *   VHF               ✈ Aviation  SELCAL (AM)
+ *                     ⚓ Maritime  DSC (channel 70)
  *                     Amateur     APRS · DIGITAL SPOTS (6 m / 2 m) · CW · SSTV
- *                     Broadcast   ADV RDS
- *   UHF               (nothing yet: ADS-B and ISM tune the radio themselves — no tab is drawn for an empty band)
+ *                     Broadcast   ADV RDS · SAME (EAS alert headers, NOAA Weather Radio)
+ *                     Paging      PAGE (POCSAG — Android local hardware only: the phone's own radio)
+ *   UHF               Paging      PAGE (the 450 MHz and 900 MHz paging bands)
+ *                     (ADS-B and ISM tune the radio themselves — no tab is drawn for an empty band)
  *   Every band        SCANNER · GALLERY · TRANSCRIBE (tools, not decoders of one band)
  *
  * ★★★ TUNES THE RADIO ITSELF (Stuart, 2026-10-28: "any decoders that trigger their own view Digital Spots (Full Band) DAB
@@ -40,12 +43,12 @@ import { NAVTEX_BANDS_KHZ } from './navtexStations.generated.ts';
 import { DSC_ALL } from './dscChannels.ts';
 
 export type RadioBand = 'hf' | 'vhf' | 'uhf';
-export type DecoderGroup = 'aviation' | 'maritime' | 'amateur' | 'other';
+export type DecoderGroup = 'aviation' | 'maritime' | 'amateur' | 'paging' | 'other';
 
 export const RADIO_BANDS: ReadonlyArray<{ id: RadioBand; label: string }> = [
   { id: 'hf', label: 'HF' }, { id: 'vhf', label: 'VHF' }, { id: 'uhf', label: 'UHF' },
 ];
-export const DECODER_GROUPS: readonly DecoderGroup[] = ['aviation', 'maritime', 'amateur', 'other'];
+export const DECODER_GROUPS: readonly DecoderGroup[] = ['aviation', 'maritime', 'amateur', 'paging', 'other'];
 
 /** The band a (displayed) frequency is in: HF below 30 MHz (LF and MF with it), VHF to 300 MHz, UHF above. */
 export function radioBandOf(hz: number): RadioBand {
@@ -58,6 +61,7 @@ export function decoderGroupLabel(g: DecoderGroup, band: RadioBand): string {
   if (g === 'aviation') return 'AVIATION';
   if (g === 'maritime') return 'MARITIME';
   if (g === 'amateur') return 'AMATEUR';
+  if (g === 'paging') return 'PAGING';
   return band === 'hf' ? 'UTILITY' : band === 'vhf' ? 'BROADCAST' : 'SENSORS';
 }
 /** The id whose ModeIcon a group's heading carries (utils/modeIcons modeIconFor; 'amateur' is the transceiver). */
@@ -65,6 +69,7 @@ export function decoderGroupIcon(g: DecoderGroup, band: RadioBand): string {
   if (g === 'aviation') return 'adsb';
   if (g === 'maritime') return 'ais';
   if (g === 'amateur') return 'amateur';
+  if (g === 'paging') return 'paging';
   return band === 'hf' ? 'time' : band === 'vhf' ? 'rds' : 'ism';
 }
 
@@ -75,17 +80,21 @@ export function decoderGroupIcon(g: DecoderGroup, band: RadioBand): string {
  */
 export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: DecoderGroup; ids: readonly string[] }>>> = {
   hf: [
-    { group: 'aviation', ids: ['hfdl'] },
+    { group: 'aviation', ids: ['hfdl', 'selcal'] },
     { group: 'maritime', ids: ['navtex', 'dsc', 'sitora', 'wefax'] },
-    { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'sstv', 'aprs'] },
+    { group: 'amateur',  ids: ['spots', 'cw', 'psk', 'rtty', 'jtty', 'mfsk', 'hell', 'sstv', 'aprs'] },   // ★ V12 the MFSK keyboard modes, FELD HELL
     { group: 'other',    ids: ['time'] },
   ],
   vhf: [
+    { group: 'aviation', ids: ['selcal'] },   // ★ V12: SELCAL on VHF AM too
     { group: 'maritime', ids: ['dsc'] },
     { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv'] },
-    { group: 'other',    ids: ['rds'] },
+    { group: 'paging',   ids: ['paging'] },   // ★ V12: only drawn on the phone's own radio (Android local hardware)
+    { group: 'other',    ids: ['rds', 'same'] },   // ★ V12 SAME: NOAA Weather Radio, 162.400–162.550 MHz
   ],
-  uhf: [],
+  uhf: [
+    { group: 'paging',   ids: ['paging'] },
+  ],
 };
 
 /**
@@ -149,6 +158,7 @@ const HF_MARITIME: readonly Range[] = [
 ];
 const NEAR: Record<string, (hz: number) => boolean> = {
   hfdl:   hz => anyNear(hz, HFDL, 5e3),
+  selcal: hz => anyNear(hz, HFDL, 5e3) || anyNear(hz, [MHz(118, 137)]),   // HF aeronautical (R) bands, VHF airband
   navtex: hz => pointsNear(hz, NAVTEX_BANDS_KHZ.map(k => k * 1e3), 5e3),
   dsc:    hz => DSC_ALL.some(c => Math.abs(hz - c.hz) <= (c.vhf ? 50e3 : 5e3)),
   sitora: hz => anyNear(hz, HF_MARITIME, 2e3),
@@ -158,10 +168,13 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   psk:    hz => anyNear(hz, HAM),
   rtty:   hz => anyNear(hz, HAM),
   jtty:   hz => anyNear(hz, HAM),
+  mfsk:   hz => anyNear(hz, HAM),   // ★ one key: MFSK16/32, OLIVIA, CONTESTIA, THOR
+  hell:   hz => anyNear(hz, HAM),
   sstv:   hz => anyNear(hz, HAM),
   aprs:   hz => anyNear(hz, HAM),
   time:   hz => pointsNear(hz, TIME_SIGNAL_HZ, 5e3),
-  rds:    hz => anyNear(hz, [MHz(87.5, 108)], 500e3),   // Japan's 76–95 MHz FM is below; a hint only
+  rds:    hz => anyNear(hz, [MHz(87.5, 108)], 500e3),
+  same:   hz => anyNear(hz, [MHz(162.4, 162.55)], 25e3),   // NOAA Weather Radio's seven channels   // Japan's 76–95 MHz FM is below; a hint only
 };
 
 /**

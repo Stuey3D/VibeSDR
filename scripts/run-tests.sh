@@ -115,7 +115,9 @@ flags_for() {
     test-decfeed-resampler) echo "-O2 -I android/app/src/main/cpp" ;;
     test-bm-names) echo "-O2 -I android/app/src/main/cpp" ;;
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
-    test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
+    # ★★ …and every row after the first eight (vibe_benchmark_more.h, 2026-10-31): the host's decoders, every digital-spots
+    #    engine, NDB / AIS / ISM, tone ID and the audio filters. VIBE_BENCH_CLIP=<decoders-bench.vbu8> runs the clip rows.
+    test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib -I $VDSP -I $KISS -lpthread" ;;
     # ★ Hostile attach messages through the real decoders (audit 2026-10-03) — same deps as the hosts.
     test-decoder-hardening) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ SSTV geometry + colour on synthetic pictures with a known sender clock error (audit 2026-10-04)
@@ -141,6 +143,10 @@ flags_for() {
     test-js8)              echo "-O2 -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
     # ★★ FT2 (FtxMode::FT2 of the FT8/FT4 decoder): threshold, clock range, noise, the 3.75 s live slots (2026-10-26).
     test-ft2)              echo "-O2 -I android/app/src/main/cpp/ft8_lib -lpthread" ;;
+    # ★ V12 Q65, our own (docs/v12/DECODERS-WAVE2.md): the frame against the shipped encoder's vectors, sensitivity, noise.
+    test-q65)              echo "-O2 -I android/app/src/main/cpp/ft8_lib -I tools/q65-bench -lpthread" ;;
+    test-fst4)             echo "-O2 -I android/app/src/main/cpp/ft8_lib -I $VDSP -I tools/fst4-bench -lpthread" ;;
+    test-msk144)           echo "-O2 -I android/app/src/main/cpp/ft8_lib -I $VDSP -I tools/msk144-bench -lpthread" ;;
     # ★★ V12 ADS-B (vibe_adsb.h): CRC, fields and CPR on the published worked examples, then the demodulator on
     #    frames modulated into noisy IQ at every capture rate a radio runs — optimised, it demodulates ~40 s of IQ.
     test-adsb)             echo "-O2" ;;
@@ -245,7 +251,7 @@ deps_for() {
                               android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp \
                               android/app/src/main/cpp/decoders/wefax_decoder.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp \
                               android/app/src/main/cpp/decoders/time_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp \
-                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;
+                              android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;
     test-converter)     echo "$SRC/vibeserver_config.cpp" ;;
     test-rtl-eeprom)    echo "$SRC/rtl_eeprom.cpp" ;;
     test-fd-passing)    echo "android/app/src/main/cpp/fd_passing.cpp" ;;
@@ -291,7 +297,7 @@ deps_for() {
     test-power-dips)    echo "" ;;
     test-decoder-hardening) echo "$VDSP/ddc.cpp android/app/src/main/cpp/spyserver/spyserver_messages.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     # ★ NAVTEX's CCIR 476 coder, word by word (audit 2026-10-04, rows 11-13); the audio half is scripts/test-navtex.sh.
     test-navtex-fec)    echo "android/app/src/main/cpp/decoders/fsk_decoder.cpp" ;;
     # ★★ RTTY's letters/figures shift across a lost signal: a lost LTRS → letters, a synop line → figures (2026-10-13).
@@ -302,10 +308,25 @@ deps_for() {
     test-ftx-sensitivity) echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
     test-js8)           echo "android/app/src/main/cpp/decoders/digimodes/js8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/digimodes/js8_ldpc.cpp android/app/src/main/cpp/decoders/digimodes/js8_message.cpp" ;;
     test-ft2)           echo "android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
-    test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
-    test-decoder-hosts|test-bench-decoders|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
+    test-fst4)          echo "android/app/src/main/cpp/decoders/digimodes/fst4_code.cpp android/app/src/main/cpp/decoders/digimodes/fst4_decoder.cpp android/app/src/main/cpp/decoders/digimodes/ldpc_small.cpp $VDSP/ddc.cpp $VDSP/resampler.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
+    test-tone-id)       echo "android/app/src/main/cpp/decoders/tone_id.cpp" ;;
+    # ★★ V12 PAGING (ITU-R M.584-2 Annex 1, POCSAG 512/1200/2400, AUTO): the ITU's sync/idle words as codewords, every rate both
+    #    polarities, hours of noise with zero pages. Android local hardware only — the engine is all that is tested here.
+    test-paging)        echo "android/app/src/main/cpp/decoders/paging_decoder.cpp" ;;
+    # ★★ V12 EAS / SAME (47 CFR § 11.31): the header format, LSB-first bits, the three bursts soft-combined, hours of noise → 0.
+    test-same)          echo "android/app/src/main/cpp/decoders/same_decoder.cpp" ;;
+    # ★★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91 Table 3-1): 300 random codes over 32 tones, the dial, noise, DTMF, speech.
+    test-selcal)        echo "android/app/src/main/cpp/decoders/selcal_decoder.cpp" ;;
+    test-textmodes)     echo "android/app/src/main/cpp/decoders/textmodes.cpp" ;;   # ★ V12 MFSK / OLIVIA / THOR (pffft: cobj-ndb)
+    test-feld-hell)     echo "android/app/src/main/cpp/decoders/feld_hell.cpp" ;;   # ★ V12 FELD HELL, drawn (pffft: cobj-ndb)
+    test-msk144)        echo "android/app/src/main/cpp/decoders/digimodes/msk144_code.cpp android/app/src/main/cpp/decoders/digimodes/msk144_decoder.cpp android/app/src/main/cpp/decoders/digimodes/ldpc_small.cpp $VDSP/ddc.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
+    test-q65)           echo "android/app/src/main/cpp/decoders/digimodes/q65_code.cpp android/app/src/main/cpp/decoders/digimodes/q65_decoder.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp" ;;
+    test-band-slice|test-band-dc) echo "$VDSP/channelizer.cpp $VDSP/fft.cpp android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/jtty_decoder.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp $VDSP/ddc.cpp $VDSP/iqclean.cpp" ;;   # ★ kiss + pffft from the ft8 objects (cobjs_for)
+    test-bench-decoders) echo "$(deps_for test-decoder-hosts) android/app/src/main/cpp/decoders/tone_id.cpp android/app/src/main/cpp/decoders/audio_nr.cpp \
+                              android/app/src/main/cpp/decoders/auto_notch.cpp android/app/src/main/cpp/decoders/ndb_skimmer.cpp $VDSP/channelizer.cpp $VDSP/fft.cpp" ;;
+    test-decoder-hosts|test-digi-spots) echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/fsk_decoder.cpp android/app/src/main/cpp/decoders/rtty_auto.cpp android/app/src/main/cpp/decoders/wefax_decoder.cpp \
                               android/app/src/main/cpp/decoders/sstv_decoder.cpp android/app/src/main/cpp/decoders/time_decoder.cpp \
-                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
+                              android/app/src/main/cpp/decoders/ft8_decoder.cpp android/app/src/main/cpp/decoders/ftx_fine.cpp android/app/src/main/cpp/decoders/cw_skimmer.cpp android/app/src/main/cpp/decoders/psk_skimmer.cpp android/app/src/main/cpp/decoders/digi_modes.cpp android/app/src/main/cpp/decoders/digi_tuner.cpp android/app/src/main/cpp/decoders/digi_spotter.cpp $VDSP/resampler.cpp $DIGIMODES android/app/src/main/cpp/decoders/dsc_decoder.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp android/app/src/main/cpp/decoders/textmodes.cpp android/app/src/main/cpp/decoders/feld_hell.cpp android/app/src/main/cpp/decoders/jtty_decoder.cpp" ;;  # ★ pffft comes with the ft8 objects (cobjs_for)
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
@@ -326,7 +347,7 @@ deps_for() {
 FT8C=android/app/src/main/cpp/ft8_lib
 cobjs_for() {
   case "$1" in
-    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty)
+    test-decoder-hosts|test-bench-decoders|test-digi-spots|test-band-slice|test-band-dc|test-decoder-hardening|test-sstv-quality|test-ft8-callhash|test-ft8-passes|test-ft8-fast|test-ftx-sensitivity|test-js8|test-ft2|test-q65|test-fst4|test-msk144|test-bgdecode|test-bg-priority|test-bg-band|test-bg-ndb|test-cw|test-dsc|test-sitora|test-psk|test-jtty)
       local d="$OUT/cobj-ft8"; mkdir -p "$d"
       # ★ + pffft.c: monitor.c's STFT runs through PFFFT (2026-10-25). ★ Rebuilt when any ft8_lib header is newer
       #   too: ldpc_tables.h / vibe_simd4.h changes would otherwise leave a stale object passing the tests.
@@ -335,7 +356,7 @@ cobjs_for() {
         { [ "$o" -nt "$f" ] && [ -z "$(find $FT8C -name '*.h' -newer "$o" 2>/dev/null | head -1)" ]; } || cc -O2 -c -I "$FT8C" -o "$o" "$f" || return 1
         printf '%s ' "$o"
       done ;;
-    test-ndb|test-drm|test-drm-faad|test-drm-signal)
+    test-ndb|test-drm|test-drm-faad|test-drm-signal|test-tone-id|test-textmodes|test-feld-hell)
       local d="$OUT/cobj-ndb"; mkdir -p "$d"
       for f in $VDSP/third_party/pffft/pffft.c $KISS/kiss_fft.c $KISS/kiss_fftr.c; do
         local o="$d/$(basename "$f" .c).o"
@@ -588,10 +609,15 @@ if npx tsx scripts/test_ais_aprs_app.ts; then pass=$((pass+1)); else fail=$((fai
 #    defensively, the mode styles readable on both map themes and colour-blind safe (src/utils/digiModes.ts).
 if npx tsx scripts/test_digi_modes.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if npx tsx scripts/test_decoder_bands.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 (2026-10-31, Stuart): every AUTO decoder starts in AUTO; a manual choice lasts the session only (decoderSession.ts).
+if npx tsx scripts/test_decoder_session.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 (2026-10-26, M7EIW): every spot's time is HH:MM:SS UTC, its slot's START — one helper for web, app and maps.
 if npx tsx scripts/test_spot_time.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and Band's DEFAULT from the benchmark (the setup page's benchApplyDefaults + the app's applyBench), owner override kept.
 if node scripts/test-spots-band-default.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and EVERY decoder's default (2026-10-31): the server's defaultOff list applied by both readers, every switch it can
+#    name on both setup screens (vibe_benchmark_more.h ruleFor).
+if node scripts/test-bench-defaults.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …and the iOS/Mac ring + the prefix-then-live writer order (macOS only: needs xcrun swiftc).
 if command -v xcrun >/dev/null 2>&1; then if bash scripts/test_recordBuffer_swift.sh; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi; fi
 # ★★★ V12 ICOM, CLIENT SIDE (icomRadio.ts): hwinfo.radio + the status line as the server builds them, the hide list against the
@@ -1428,8 +1454,32 @@ fi
 #     sitor_clip — call, identification, traffic both ways, the end), and the web client in headless Edge (--mute-audio): the
 #     key in the HF Maritime group, both stations' labelled passages, the status line, every repeat printed once, 390 px.
 #     The engine's numbers are vibeserver/test-sitora.cpp; the measuring bench is tools/sitor-bench/sitor_bench.sh.
+# ★★ V12 EAS / SAME and SELCAL in the WEB client (2026-10-31): a real server fed tools/alert-bench/alert_clip, headless Edge.
+printf '\n\033[1m── SAME + SELCAL (end to end: the web client on a real server) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && c++ -std=c++17 -O2 -I android/app/src/main/cpp -o "$OUT/alert_clip" tools/alert-bench/alert_clip.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp \
+   && "$OUT/alert_clip" "$OUT/alerts.cu8" >/dev/null; then
+  VIBE_ALERT_CLIP="$OUT/alerts.cu8" node scripts/test-web-alerts.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+else notrun=$((notrun+1)); fi
+# ★★ V12 MFSK / OLIVIA / THOR in the WEB client (2026-10-31): a real server fed tools/textmode-bench/tm_clip, headless Edge.
+printf '\n\033[1m── MFSK + OLIVIA + THOR (end to end: the web client on a real server) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && cc -O2 -c -o "$OUT/pffft_tm.o" android/app/src/main/cpp/vibedsp/third_party/pffft/pffft.c \
+   && c++ -std=c++17 -O2 -I android/app/src/main/cpp -o "$OUT/tm_clip" tools/textmode-bench/tm_clip.cpp android/app/src/main/cpp/decoders/textmodes.cpp "$OUT/pffft_tm.o" \
+   && "$OUT/tm_clip" "$OUT/tm.cu8" >/dev/null; then
+  VIBE_TM_CLIP="$OUT/tm.cu8" node scripts/test-web-textmodes.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+else notrun=$((notrun+1)); fi
+# ★★ V12 FELD HELL in the WEB client (2026-10-31): a real server fed tools/hell-bench/hell_clip, headless Edge.
+printf '\n\033[1m── FELD HELL (end to end: the web client on a real server) ──\033[0m\n'
+if [ -n "${VIBESERVER_BIN:-}" ] && cc -O2 -c -o "$OUT/pffft_hell.o" android/app/src/main/cpp/vibedsp/third_party/pffft/pffft.c \
+   && c++ -std=c++17 -O2 -I android/app/src/main/cpp -o "$OUT/hell_clip" tools/hell-bench/hell_clip.cpp android/app/src/main/cpp/decoders/feld_hell.cpp "$OUT/pffft_hell.o" \
+   && "$OUT/hell_clip" "$OUT/hell.cu8" >/dev/null; then
+  VIBE_HELL_CLIP="$OUT/hell.cu8" node scripts/test-web-hell.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  rm -f "$OUT/hell.cu8"
+else notrun=$((notrun+1)); fi
 printf '\n\033[1m── SITOR-A (end to end: the web client on a real server) ──\033[0m\n'
-if [ -n "${VIBESERVER_BIN:-}" ] && c++ -std=c++17 -O2 -I android/app/src/main/cpp -I tools/sitor-bench -o "$OUT/sitor_clip" tools/sitor-bench/sitor_clip.cpp android/app/src/main/cpp/decoders/sitor_a.cpp \
+if [ -n "${VIBESERVER_BIN:-}" ] && c++ -std=c++17 -O2 -I android/app/src/main/cpp -I tools/sitor-bench -o "$OUT/sitor_clip" tools/sitor-bench/sitor_clip.cpp android/app/src/main/cpp/decoders/sitor_a.cpp android/app/src/main/cpp/decoders/same_decoder.cpp android/app/src/main/cpp/decoders/selcal_decoder.cpp \
    && "$OUT/sitor_clip" "$OUT/sitora.cu8" >/dev/null; then
   VIBE_SITORA_CLIP="$OUT/sitora.cu8" node scripts/test-web-sitora.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

@@ -884,6 +884,10 @@ public:
     };
     int startIcom(const IcomStart& o, std::string& err);
     bool isIcom() const;
+    /** ★★ V12 PAGING: may the paging receiver run here at all? Only in the Android library (VIBE_PAGING), only while the
+     *  engine is NOT serving (bound to loopback — the phone's own app is the only client), and only on a USB radio with
+     *  IQ (not rtl_tcp, a SpyServer or an Icom). The attach handler also requires the decoder socket to be loopback. */
+    bool pagingCapable() const;
     /** ★★ ANDROID (plan Phase 4): the owner's Icom settings for the NEXT start(fd, vid, pid) of an Icom — the app
      *  sets them, then calls the same start() every radio uses, and start() routes the radio's CP210x / Icom-VID
      *  descriptor to startIcom with port "fd:<our dup>" and audio "push". Static: set before a shim exists. */

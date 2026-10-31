@@ -26,6 +26,7 @@ import { PanResponder, ScrollView, Share, StyleSheet, Text, View, useWindowDimen
 import { File, Paths } from 'expo-file-system';
 import { WEFAX_ALIGN_ZERO, chartAlignStep, drawnAlign, wefaxOffset, type ChartAlignState, type WefaxAlign, type WefaxFormat } from '../utils/wefaxAlign';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../utils/wefaxCrisp';
+import { HELL_STRIP_ROWS, HellPager } from '../services/feldHell';   // ★ V12 FELD HELL: a page of strips
 import {
   Canvas, Image as SkiaImage, Skia,
   AlphaType, ColorType, ImageFormat, type SkData, type SkImage,
@@ -74,16 +75,21 @@ interface PixBuf {
 // gives every image decoder the 1-image PREV buffer for free.
 /** ★ `lineBase` / `rebase` (2026-10-07, CLR): the decoder numbers WEFAX lines from its last start tone, and CLR starts a
  *  chart without one — so the canvas counts lines from the first one after CLR (see clear()). */
-interface ImgStore { live: PixBuf | null; prev: PixBuf | null; lineBase: number; rebase: boolean }
+/** ★ `hell` (V12 FELD HELL): where each strip line lands on the page being drawn (services/feldHell.ts HellPager). */
+interface ImgStore { live: PixBuf | null; prev: PixBuf | null; lineBase: number; rebase: boolean; hell: HellPager }
 const imgStores: Record<string, ImgStore> = {};
 function getImgStore(name: string): ImgStore {
-  return (imgStores[name] ??= { live: null, prev: null, lineBase: 0, rebase: false });
+  return (imgStores[name] ??= { live: null, prev: null, lineBase: 0, rebase: false, hell: new HellPager() });
 }
 
 export interface DecoderImageHandle {
   imageStart: (w: number, h: number) => void;
   wefaxLine:  (ln: number, w: number, px: Uint8Array) => void;
   sstvLine:   (ln: number, w: number, px: Uint8Array) => void;
+  /** ★ V12 FELD HELL: a strip's grey line at its own place on the page (a re-sent line replaces itself). */
+  hellLine:   (ln: number, w: number, px: Uint8Array) => void;
+  /** ★ V12 FELD HELL: a fresh decoder (0x02) — the next line starts a new page; the one on screen stays until then. */
+  hellStart:  () => void;
   imageDone:  () => void;
   /** ★ CLR (2026-10-07): the picture so far goes to PREV, and the next line starts a fresh one — its own auto-align. */
   clear:      (why?: string) => void;
@@ -175,6 +181,9 @@ function redrawAll(buf: PixBuf, a: WefaxAlign) {
   fillLost(buf, 0, buf.maxLine);
   paintRows(buf, 0, buf.maxLine);
 }
+
+/** Rows y0…y1-1 of a buffer to white paper (Feld Hell's page: never unwritten black under the text). */
+function paper(buf: PixBuf, y0: number, y1: number) { buf.data.fill(255, y0 * buf.w * 4, Math.min(y1, buf.h) * buf.w * 4); }
 
 function mkBuf(w: number, h: number): PixBuf {
   const data = new Uint8Array(w * h * 4); // zero-filled = black, alpha set on write
@@ -446,6 +455,36 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         if (!viewingPrev) rebuild(buf);
       },
 
+      /* ★★ FELD HELL (V12, 2026-10-31): drawn plainly — no margin, slant or level finding (they would bend the letters),
+       *  each line at the place its number says, a page of HELL_PAGE_STRIPS strips at a time; the next page puts this one
+       *  under PREV (services/feldHell.ts). Grey as sent: 255 paper, 0 ink. */
+      hellLine(ln: number, w: number, px: Uint8Array) {
+        if (!(w > 0) || w > 4096) return;
+        const { y, newPage } = store.hell.place(ln);
+        if (newPage || !live.current || live.current.w !== w) {
+          rollToPrev();
+          live.current = mkBuf(w, HELL_STRIP_ROWS); paper(live.current, 0, HELL_STRIP_ROWS); store.live = live.current;
+          onInfo(`${w}x${HELL_STRIP_ROWS}`);
+        }
+        let buf = live.current;
+        if (y >= buf.h) {
+          const h0 = buf.h;
+          buf = live.current = growTo(buf, (Math.floor(y / HELL_STRIP_ROWS) + 1) * HELL_STRIP_ROWS); store.live = buf;
+          paper(buf, h0, buf.h);
+          onInfo(`${w}x${buf.h}`);
+        }
+        const off = y * buf.w * 4;
+        for (let x = 0; x < buf.w; x++) {
+          const g = x < px.length ? px[x] : 255, o = off + x * 4;
+          buf.data[o] = g; buf.data[o + 1] = g; buf.data[o + 2] = g; buf.data[o + 3] = 255;
+        }
+        if (y > buf.maxLine) buf.maxLine = y;
+        linesSince.current++;
+        if (!viewingPrev) rebuild(buf);
+      },
+
+      hellStart() { store.hell.reset(); },
+
       imageDone() {
         if (live.current) {
           live.current.complete = true;
@@ -465,6 +504,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
         rollToPrev();
         live.current = null;  store.live = null;
         store.rebase = true;                    // the next WEFAX line is line 0 of a new chart (lazy init → onNewChart)
+        store.hell.reset();                     // ★ …and the next Feld Hell line starts a new page
         setViewingPrev(false);
         rebuild(null, true);
         onPrevState(!!prev.current, false);
@@ -475,7 +515,7 @@ const DecoderImageCanvas = forwardRef<DecoderImageHandle, DecoderImageCanvasProp
 
       reset() {
         live.current = null;  store.live = null;
-        store.lineBase = 0;  store.rebase = false;
+        store.lineBase = 0;  store.rebase = false;  store.hell.reset();
         prev.current = null;  store.prev = null;
         setViewingPrev(false);
         rebuild(null, true);   // clears any trailing rebuild and retires the shown image

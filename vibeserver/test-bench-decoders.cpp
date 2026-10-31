@@ -1,12 +1,19 @@
-// test-bench-decoders.cpp — the benchmark's decoder rows (vibe_benchmark_decoders.h) and the
+// test-bench-decoders.cpp — the benchmark's decoder rows (vibe_benchmark_decoders.h, vibe_benchmark_more.h) and the
 // "how many at once" recommendation that becomes the owner's default decoder limit (B6).
 //
 // ★ Every decoder the server has gets a row with a real, positive cost — a row that reads 0 % is a
 //   decoder that never ran (the WEFAX-that-was-never-dispatched shape), and it would recommend an
 //   unlimited box. SSTV must actually COMMIT to a picture (its VIS is decoded), or the row measures
 //   only the listening loop. The recommendation is checked against the cases Stuart described.
+// ★★ 2026-10-31 (Stuart: "all these decoders need their own lines in the initial setup benchmark too"): every row after
+//    the first eight must DECODE its signal (`decoded` > 0) — a row that decoded nothing timed only the search — except
+//    the filters (tone ID counts its lock; noise reduction and the notch decode nothing) and the clip rows, which read
+//    "not measured" without decoders-bench.vbu8 (VIBE_BENCH_CLIP=<path> runs them).
+// ★ Silent: no audio device is opened anywhere.
 #include "vibe_benchmark_decoders.h"
+#include "vibe_benchmark_more.h"
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 using namespace vibe::benchdec;
@@ -16,7 +23,9 @@ static void ok(bool c, const std::string& w) { std::printf("  [%s] %s\n", c ? "P
 int main() {
     std::printf("── every decoder, timed on this machine ──\n");
     const int64_t clk = vibe::clockOffsetUs().load();
-    const auto rows = runDecoderRows(2.0, nullptr);
+    const double t0 = rowClock();
+    auto rows = runDecoderRows(2.0, nullptr);
+    const double firstSec = rowClock() - t0;
     const char* want[] = { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8" };
     for (const char* id : want) {
         const Row* r = nullptr;
@@ -30,6 +39,56 @@ int main() {
          + std::to_string(b->decoded) + " spots decoded — " + b->label : "missing")); }
     for (auto& x : rows) if (x.id == "dec_sstv") ok(x.label.find("listening") == std::string::npos, "SSTV committed to a picture (its VIS decoded), so the row is the decoding cost");
     ok(vibe::clockOffsetUs().load() == clk, "the FT8 row puts the UTC correction back exactly as it found it");
+    for (auto& x : rows) ok(x.ms >= 0, x.id + " reports its own wall time (" + std::to_string(x.ms) + " ms)");
+
+    std::printf("── every decoder after the first eight ──\n");
+    const char* clipPath = std::getenv("VIBE_BENCH_CLIP");
+    const auto clips = loadDecoderClips(clipPath ? clipPath : "");
+    std::printf("   clip: %s (%zu records)\n", clipPath ? clipPath : "none", clips.size());
+    int counted = 0;
+    const auto more = runMoreDecoderRows(clips, [](const std::string& l) { std::fprintf(stderr, "   … %s\n", l.c_str()); });
+    runMoreDecoderRows({}, nullptr, &counted);
+    ok(counted == (int)more.size() && moreDecoderSteps() == counted, "the progress bar's count (" + std::to_string(counted) + ") is the rows made (" + std::to_string(more.size()) + ")");
+    double moreMs = 0;
+    std::printf("   %-14s %7s %8s %7s  %s\n", "id", "% core", "decoded", "ms", "label");
+    for (const auto& r : more) {
+        std::printf("   %-14s %7.2f %8d %7d  %s\n", r.id.c_str(), r.pct, r.decoded, r.ms, r.label.c_str());
+        moreMs += r.ms;
+    }
+    for (const auto& r : more) {
+        const bool clipRow = r.id == "dec_cwskim" || r.id == "dec_pskskim" || r.id == "dec_ndb" || r.id == "dec_ism" || r.id == "dec_wmbus";
+        const bool filter = r.id == "dec_nr" || r.id == "dec_notch";
+        if (clipRow && clips.empty()) {
+            ok(r.pct < 0 && r.label.find("no clip") != std::string::npos, r.id + ": no clip → not measured (pct −1, said in its label), never a guess");
+            continue;
+        }
+        ok(r.pct > 0.0 && r.pct < 400.0, r.id + ": " + std::to_string(r.pct).substr(0, 5) + " % of a core");
+        if (!filter) ok(r.decoded > 0, r.id + " decoded its signal (" + std::to_string(r.decoded) + ")");
+        // ★★ whole-radio rows are scored by their HOTTEST thread (as ADS-B), the process total kept in the detail
+        if (r.id == "dec_ais" || r.id == "dec_ism" || r.id == "dec_wmbus") {
+            double proc = -1; for (const auto& t : r.threads) if (t.first == "process") proc = t.second;
+            ok(!r.hottest.empty() && proc >= 0 && r.pct <= proc + 0.5, r.id + ": scored by its hottest thread (" + r.hottest + " "
+               + std::to_string(r.pct).substr(0, 5) + " %), process " + std::to_string(proc).substr(0, 5) + " % kept in the detail");
+        }
+        ok(ruleFor(r.id).sw != nullptr, r.id + " has a defaults rule");
+    }
+    // every digital-spots mode registered has its own row
+    for (const auto& m : vibe::digi::modes()) {
+        if (m.name == "FT8" || m.name == "FT4") continue;
+        std::string id = "spot_" + m.name; for (auto& c : id) c = (char)std::tolower((unsigned char)c);
+        bool have = false; for (const auto& r : more) have |= r.id == id;
+        ok(have, "digital-spots mode " + m.name + " has its own row");
+    }
+    std::printf("   first eight rows: %.1f s · the rest: %.1f s · all: %.1f s\n", firstSec, moreMs / 1000.0, firstSec + moreMs / 1000.0);
+
+    std::printf("── the defaults rule ──\n");
+    ok(ruleFor("dec_dsc").primary && std::string(ruleFor("dec_dsc").sw) == "dsc", "DSC's row is its switch's main decoder: below green, \"dsc\" starts off");
+    ok(!ruleFor("dec_cwskim").primary && std::string(ruleFor("dec_cwskim").sw) == "cw", "the CW skimmer never switches CW off (the one-signal decoder is green)");
+    ok(!ruleFor("spot_q65").primary && ruleFor("spot_q65").slot, "a digital-spots mode is a slot, flagged but never switched off");
+    ok(!ruleFor("dec_ndb").slot && !ruleFor("dec_lora").slot && !ruleFor("dec_ft8band").slot, "whole-radio modes and Band are not the decoder limit's yardstick");
+    // ★ Stuart, 2026-10-31: the first eight rows keep their old behaviour — flagged below green, never switched off.
+    for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora" })
+        ok(!ruleFor(id).primary, std::string(id) + " is never switched off by the benchmark (flagged only)");
 
     std::printf("── how many at once ──\n");
     // Stuart's case: a box that carries ten listeners with room for about four decoders more.

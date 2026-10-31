@@ -45,11 +45,21 @@ ok(KNOWN_SIGNALS.every((s, i) => i === 0 || KNOWN_SIGNALS[i - 1].hz <= s.hz), 't
 
 console.log('digital dials agree with digi_bands.h');
 const h = readFileSync(new URL('../android/app/src/main/cpp/decoders/digi_bands.h', import.meta.url), 'utf8');
-for (const m of ['FT8', 'FT4', 'WSPR', 'JS8'] as const) {
+for (const m of ['FT8', 'FT4', 'WSPR', 'JS8', 'Q65'] as const) {
   const re = new RegExp(`\\{"${m}",\\s*"[0-9a-z]+",\\s*(\\d+)\\}`, 'g');
   const hdr = [...h.matchAll(re)].map(x => +x[1]).sort((a, b) => a - b);
   const ours = [...DIGI_DIALS[m]].sort((a, b) => a - b);
   ok(hdr.length > 0 && JSON.stringify(hdr) === JSON.stringify(ours), `${m}: ${ours.length} dials, the same as publishedDials()`);
+}
+
+{ // ★ V12: Q65's tiled dials are one label per joined run (17 labels on 23 cm would crowd out the rest)
+  const q = KNOWN_SIGNALS.filter(s => s.label === 'Q65');
+  const at = (lo: number, hi: number) => q.filter(s => s.hz >= lo && s.hz <= hi);
+  const r23 = at(1240e6, 1300e6), r70 = at(420e6, 450e6), r2 = at(144e6, 148e6);
+  ok(r23.length === 1 && r23[0].lo === 1296050200 && r23[0].hi === 1296126800, `Q65 23 cm: one label, its bar 1296.0502–1296.1268 MHz (${r23.map(s => `${s.lo}-${s.hi}`)})`);
+  ok(r70.length === 1 && r70[0].hi === 432100800, `Q65 70 cm: one label to 432.1008 (${r70.map(s => `${s.lo}-${s.hi}`)})`);
+  ok(r2.length === 2, `Q65 2 m: the EME run and 144.180 (${r2.length})`);
+  ok(q.every(s => s.dec === 'spots' && s.preset?.spots === 'Q65' && s.dialHz === s.hz), 'Q65 labels: tune the run\'s first dial and open DIGI SPOTS');
 }
 
 console.log('EiBi');
@@ -141,7 +151,7 @@ ok(edge.length === 1 && edge[0].lx + edge[0].w <= edge[0].x, 'near the right edg
 console.log('tapped: the preset table');
 const MODES = new Set(['usb', 'lsb', 'am', 'sam', 'fm', 'nfm', 'cwu', 'cwl', 'wfm', 'drm']);   // sdrTypes.ts SDRMode
 const DECS = new Set(['rtty', 'wefax', 'navtex', 'dsc', 'spots', 'time', 'hfdl', 'cw', '']);
-const TIME_ST = new Set(['msf', 'dcf77', 'wwv', 'wwvb', 'rwm']);   // DecoderClient TimeStation
+const TIME_ST = new Set(['msf', 'dcf77', 'wwv', 'wwvb', 'rwm', 'jjy']);   // DecoderClient TimeStation (JJY: V12 wave 2)
 const bad: string[] = [];
 for (const s of KNOWN_SIGNALS) {
   const why = !MODES.has(s.mode) ? `mode ${s.mode}` : !DECS.has(s.dec) ? `decoder ${s.dec}` : !(s.dialHz > 0) ? 'no dial'
@@ -158,8 +168,8 @@ ok(bad.length === 0, `every curated entry (${KNOWN_SIGNALS.length}) has a valid 
 ok(JSON.stringify(ddk!.preset?.rtty) === JSON.stringify(RTTY_WEATHER) && RTTY_WEATHER.baud === 50 && RTTY_WEATHER.shift === 450 && RTTY_WEATHER.encoding === 'ITA2',
    'DWD RTTY: the WEATHER preset — 50 Bd, 450 Hz, ITA2 (rttySpec.ts RTTY_WEATHER, the menu\'s own)');
 ok(nw!.preset?.wefaxLpm === 120 && nw!.preset?.wefaxIoc === 576, 'Northwood WEFAX: 120 LPM, IOC 576');
-ok(at(60000, 'TIME')?.preset?.time?.join() === 'msf,wwvb' && at(60000)!.mode === 'cwu' && at(10000000, 'TIME')?.mode === 'am',
-   'TIME 60 kHz: MSF or WWVB, tuned CW (cwu); WWV in AM');
+ok(at(60000, 'TIME')?.preset?.time?.join() === 'msf,wwvb,jjy' && at(60000)!.mode === 'cwu' && at(10000000, 'TIME')?.mode === 'am',
+   'TIME 60 kHz: MSF, WWVB or JJY, tuned CW (cwu); WWV in AM');
 ok(DSC_ALL.every(c => { const k = KNOWN_SIGNALS.find(s => s.dec === 'dsc' && s.hz === c.hz); const t = dscTuneFor(c); return !!k && k.dialHz === t.hz && k.mode === t.mode; }),
    'DSC: every channel tunes by dscChannels\' own rule');
 const ALL = { rtty: true, wefax: true, navtex: true, dsc: true, spots: true, time: true, hfdl: true, cw: true };

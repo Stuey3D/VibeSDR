@@ -46,6 +46,13 @@ public:
          *  other produces a confidently wrong clock, which is the worst failure this decoder has —
          *  and neither carries parity to catch it. */
         WWVB,
+        /** ★★ JJY (V12, 2026-10-31) — Ohtakadoya-yama 40 kHz and Hagane-yama 60 kHz (NICT). WWVB's frame layout
+         *  (minute, hour, day-of-year at the same seconds, markers at 0, 9, 19 … 59) but the OPPOSITE envelope: the
+         *  carrier is at FULL power from each second's start for 0.8 s (0), 0.5 s (1) or 0.2 s (a marker), then 10 %
+         *  — so it is read inverted, as WWV is. It HAS parity (PA1 over the hour, PA2 over the minute) and a weekday,
+         *  which WWVB lacks. Time is JST (UTC+9), the minute that begins at the frame's marker. At :15 and :45 the year
+         *  seconds carry the callsign in Morse (the year then comes from the host clock). Tune it in CW / AM. */
+        JJY,
     };
 
     /** What the decoder is doing, so the UI can be honest rather than blank. */
@@ -167,6 +174,7 @@ private:
     bool  decodeMsf(TimeStamp& out) const;
     bool  decodeDcf77(TimeStamp& out) const;
     bool  decodeWwv(TimeStamp& out) const;
+    bool  decodeJjy(TimeStamp& out) const;
     bool  decodeWwvb(TimeStamp& out) const;
     void  emitPartial();
     void  pushBit(int bit);

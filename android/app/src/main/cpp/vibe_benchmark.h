@@ -24,6 +24,7 @@
 //   "undeclared identifier vibehealth" — found by the first build_ios.sh since (2026-09-28).
 #include "vibe_health.h"
 #include "vibe_benchmark_decoders.h"   // ★ every decoder timed, and how many at once (B6)
+#include "vibe_benchmark_more.h"       // ★ …every decoder after the first eight, and the defaults rule (2026-10-31)
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -33,6 +34,7 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include <dirent.h>
@@ -165,6 +167,7 @@ inline std::vector<cf32> nbSignal(double fs, double seconds, double offset) {
 }
 
 struct Result { std::string id, label; double rate = 0, pct = 0; std::string hottest;
+                int decoded = -1, ms = -1;   // ★ decoder rows: what was decoded; every row: its wall time
                 std::vector<std::pair<std::string, double>> threads; };   // every thread's own % — see runOne
 
 static void noAudio(void*, const float*, int, int, int) {}
@@ -363,7 +366,8 @@ inline double measureUplinkKBps() {
 inline std::string runBenchmark(const std::function<void(int, int, const std::string&)>& progress = nullptr,
                                 double secondsPerScenario = 4.0, double uplinkKBps = -2,
                                 const std::function<std::vector<benchdetail::Result>()>& moreRows = nullptr,
-                                int moreRowSteps = 2) {
+                                int moreRowSteps = 2, const std::string& decoderClip = "") {
+    const double benchT0 = benchdec::rowClock();
     /* ★★ THIS THREAD PLAYS vibe-dsp — it feeds every scenario (runOne) and runs the decoder rows — so it flushes
      *  denormals as the served one does (vibeAudioThread). Without it the bench would charge a quiet signal's
      *  denormals to a box whose server never pays them. See vibedsp/vibe_denormals.h. */
@@ -377,7 +381,10 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         auto& p = benchProgress();
         p.running.store(true);
         p.step.store(0);
-        p.steps.store(1 + 1 + 7 + 1 + 4 + 6 + (moreRows ? moreRowSteps : 0));   // ★ 7 scenarios + keep-sharp zoom; DAB's 2, + ADS-B's 2 where the host adds them
+        // ★ 7 scenarios + keep-sharp zoom, the 4 locked-range listeners, the first 8 decoder rows and every row after them
+        //   (counted by a dry run of the same list, so a new decoder cannot leave the bar short); DAB's 2 + ADS-B's 2
+        //   where the host adds them. (It said 6 decoder rows after two more had joined — the bar ran past its end.)
+        p.steps.store(1 + 1 + 7 + 1 + 4 + 8 + benchdec::moreDecoderSteps() + (moreRows ? moreRowSteps : 0));
         { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
     }
     /* ★★★ FIRST, WHILE THE MACHINE IS COOLEST: the all-core clock calibration the throttle snail is
@@ -422,8 +429,10 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         auto& cache = sc[i].fm ? fmCache : nbCache;
         if (!cache.count(sc[i].fs))
             cache[sc[i].fs] = sc[i].fm ? fmStation(sc[i].fs, 1.0, 200000.0) : nbSignal(sc[i].fs, 1.0, 200000.0);
+        const double t0 = benchdec::rowClock();
         res.push_back(runOne(sc[i].id, sc[i].label, sc[i].fs, sc[i].mode, sc[i].bw, cache[sc[i].fs],
                              secondsPerScenario, sc[i].rds));
+        res.back().ms = (int)std::lround(1000.0 * (benchdec::rowClock() - t0));
     }
     /* ★★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29: "add it into the initial setup benchmark and then enable it or disable
      *  it depending on CPU, default to on in most cases"). WFM stereo at 2.048 MS/s with a listener zoomed in to a
@@ -435,8 +444,10 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         benchStep(zl);
         if (progress) progress(N - 1, N, zl);
         if (!fmCache.count(2048000)) fmCache[2048000] = fmStation(2048000, 1.0, 200000.0);
+        const double tz = benchdec::rowClock();
         res.push_back(runOne("zoom_2048", zl, 2048000, M::WFM, 200000, fmCache[2048000], secondsPerScenario,
                              false, 25000.0));
+        res.back().ms = (int)std::lround(1000.0 * (benchdec::rowClock() - tz));
     }
     /* ★★★ LOCKED RANGE — THE LISTENER'S WHOLE CHAIN, NOT JUST ITS DEMODULATOR (2026-09-19).
      *  This timed a bare RxPipeline at channel rate, and on a Pi 2 read 3.4 % for an NFM listener the live
@@ -470,20 +481,46 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
             const double need = std::max(l.bw * 2.5, 24000.0);
             while (chanBins < fftSize && fs * chanBins / fftSize < need) chanBins <<= 1;
             const double chanRate = fs * chanBins / fftSize;
+            const double tl = benchdec::rowClock();
             res.push_back(runListener(l.id, l.label, fs, fftSize, chanBins, chanRate, l.mode, l.bw,
                                       wide, secondsPerScenario));
+            res.back().ms = (int)std::lround(1000.0 * (benchdec::rowClock() - tl));
             perListener[l.id] = res.back().pct;
         }
     }
     /* ★★★ THE DECODERS, EACH ON THIS BOX (B6) — see vibe_benchmark_decoders.h. Their rows join the
      *  table like any other; the recommendation below is what becomes the owner's decoder limit. */
+    /* ★★★ …AND EVERY DECODER AFTER THE FIRST EIGHT (2026-10-31) — vibe_benchmark_more.h. The clip rows (the skimmers,
+     *  NDB, ISM) read decoders-bench.vbu8 when the host has it, and "not measured" when it has not. */
     double heaviestDec = 0; std::string heaviestId;
-    for (const auto& d : benchdec::runDecoderRows(secondsPerScenario, [&](const std::string& l) {
-             benchStep(l); if (progress) progress(N, N, l); })) {
-        Result r; r.id = d.id; r.label = d.label; r.rate = 48000; r.pct = d.pct; r.hottest = "decoder";
-        res.push_back(r);
-        // ★ Band spots is its own default, not the decoder limit's yardstick — see its row in vibe_benchmark_decoders.h.
-        if (d.pct > heaviestDec && d.id != "dec_ft8band") { heaviestDec = d.pct; heaviestId = d.id; }
+    std::string defaultOff, flagged;   // ★ JSON arrays' bodies — the defaults rule's answer (benchdec::ruleFor)
+    {
+        auto stepFn = [&](const std::string& l) { benchStep(l); if (progress) progress(N, N, l); };
+        auto rows = benchdec::runDecoderRows(secondsPerScenario, stepFn);
+        for (auto& m : benchdec::runMoreDecoderRows(benchdec::loadDecoderClips(decoderClip), stepFn)) rows.push_back(std::move(m));
+        std::set<std::string> offSw;
+        for (const auto& d : rows) {
+            Result r; r.id = d.id; r.label = d.label; r.rate = 48000; r.pct = d.pct; r.hottest = d.hottest.empty() ? "decoder" : d.hottest;
+            r.decoded = d.decoded; r.ms = d.ms; r.threads = d.threads;
+            res.push_back(r);
+            const benchdec::RowRule rule = benchdec::ruleFor(d.id);
+            const std::string g = grade(d.pct);
+            /* ★★ THE DECODER LIMIT'S YARDSTICK: the heaviest decoder SLOT that measured green — what a full house of
+             *  decoders can actually be made of on this box. Band spots, LoRa and the whole-radio modes are not slots;
+             *  a slot that is not green is off by default (its switch) or, alone, more than the green budget already. */
+            if (rule.slot && g == "green" && d.pct > heaviestDec) { heaviestDec = d.pct; heaviestId = d.id; }
+            if (g == "green" || g == "none") continue;
+            char b[160];
+            if (rule.primary && rule.sw[0] && !offSw.count(rule.sw)) {
+                offSw.insert(rule.sw);
+                std::snprintf(b, sizeof b, "%s{\"switch\":\"%s\",\"row\":\"%s\",\"pct\":%.1f}", defaultOff.empty() ? "" : ",",
+                              rule.sw, d.id.c_str(), d.pct);
+                defaultOff += b;
+            } else {
+                std::snprintf(b, sizeof b, "%s{\"row\":\"%s\",\"pct\":%.1f}", flagged.empty() ? "" : ",", d.id.c_str(), d.pct);
+                flagged += b;
+            }
+        }
     }
     if (moreRows) { if (progress) progress(N, N, "DAB+"); for (auto& r : moreRows()) res.push_back(r); }
     if (progress) progress(N, N, "done");
@@ -505,10 +542,13 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     std::string j = "{\"v\":1,\"at\":" + std::to_string((long long)time(nullptr)) + ",\"rows\":[";
     for (size_t i = 0; i < res.size(); ++i) {
         char b[320];
-        snprintf(b, sizeof b, "%s{\"id\":\"%s\",\"label\":\"%s\",\"rate\":%.0f,\"pct\":%.1f,\"grade\":\"%s\",\"thread\":\"%s\",\"threads\":{",
+        snprintf(b, sizeof b, "%s{\"id\":\"%s\",\"label\":\"%s\",\"rate\":%.0f,\"pct\":%.1f,\"grade\":\"%s\",\"thread\":\"%s\",",
                  i ? "," : "", res[i].id.c_str(), res[i].label.c_str(), res[i].rate, res[i].pct, grade(res[i].pct),
                  res[i].hottest.c_str());
         j += b;
+        if (res[i].decoded >= 0) j += "\"decoded\":" + std::to_string(res[i].decoded) + ",";
+        if (res[i].ms >= 0) j += "\"ms\":" + std::to_string(res[i].ms) + ",";
+        j += "\"threads\":{";
         for (size_t t = 0; t < res[i].threads.size(); ++t) {
             snprintf(b, sizeof b, "%s\"%s\":%.1f", t ? "," : "", res[i].threads[t].first.c_str(), res[i].threads[t].second);
             j += b;
@@ -541,8 +581,19 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         const int rec = benchdec::recommendDecoders(cores, per, house, heaviestDec);
         char db[256];
         snprintf(db, sizeof db, ",\"decoders\":{\"recommend\":%d,\"forUsers\":%d,\"perListenerPct\":%.1f,"
-                 "\"heaviest\":\"%s\",\"heaviestPct\":%.1f}", rec, house, per, heaviestId.c_str(), heaviestDec);
+                 "\"heaviest\":\"%s\",\"heaviestPct\":%.1f", rec, house, per, heaviestId.c_str(), heaviestDec);
         j += db;
+        /* ★★★ THE DEFAULTS RULE'S ANSWER (benchdec::ruleFor — ONE RULE, here; vibe_setup_page.h benchApplyDefaults and
+         *  ServerModeScreen.tsx applyBench only APPLY it, on a fresh setup): `defaultOff` — the owner's switches that
+         *  start OFF, each with the row that measured below green (offered, never hidden); `flagged` — rows below green
+         *  whose switch stays on because it also carries a green decoder (a skimmer, RTTY AUTO, a digital-spots mode). */
+        j += ",\"defaultOff\":[" + defaultOff + "],\"flagged\":[" + flagged + "]}";
+    }
+    // ★ How long the whole measurement took, seconds — shown to the owner beside the table (Stuart: a two-minute blank is
+    //   a hang to a human; a number that says what it cost is not).
+    {
+        char tb[48]; snprintf(tb, sizeof tb, ",\"benchSec\":%.1f", benchdec::rowClock() - benchT0);
+        j += tb;
     }
     j += "}";
     return j;

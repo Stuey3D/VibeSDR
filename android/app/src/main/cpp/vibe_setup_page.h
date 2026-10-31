@@ -452,7 +452,7 @@ body.wifiFirst .wifiFirstOnly { display: block; }
            work this machine will have to do, and until it has been measured nobody — owner or us — knows which
            of those promises it can keep. On VibeServer Lite this runs ITSELF at first setup and switches red
            features off; everywhere else it is a button, because a full-sized box is assumed to cope.
-           ★★ It is NOT free to run: the radio goes off the air for about two minutes and the server restarts
+           ★★ It is NOT free to run: the radio goes off the air for a few minutes and the server restarts
               afterwards, so the page says so before the owner presses it rather than after. -->
       <!-- ★★ RADIO ORDER — display only. The tabs above, the landing page, the public directory and
            the VibeSDR app list the radios in this order; no radio's port changes with it. -->
@@ -468,8 +468,9 @@ body.wifiFirst .wifiFirstOnly { display: block; }
       <div class="card" id="benchCard">
       <h2>What this box can carry</h2>
       <p class="why">Measures this machine with the real receiver, so the settings below can be set to what it
-         can actually keep up with. The radio is off the air while it runs (about two minutes) and the server
-         comes back by itself when it finishes.</p>
+         can actually keep up with. Every decoder is timed on a test signal it decodes. The radio is off the air
+         while it runs (a few minutes; the result says how long) and the server comes back by itself when it
+         finishes.</p>
       <div class="row">
         <button id="benchRun" type="button">Run benchmark</button>
         <span class="note" id="benchWhen"></span>
@@ -2042,7 +2043,9 @@ function renderBench(j) {
   if (!BENCH) { if (tbl) tbl.classList.add("hide"); if (when) when.textContent = "Never run on this machine."; return; }
   if (when) {
     const d = new Date((BENCH.at || 0) * 1000);
-    when.textContent = "Last run " + (isFinite(d.getTime()) ? d.toLocaleString() : "recently") + ".";
+    // ★ What the measurement cost (2026-10-31: every decoder has a row now, so the run is longer — say how long).
+    const took = Number(BENCH.benchSec) > 0 ? " It took " + Math.round(BENCH.benchSec) + " seconds." : "";
+    when.textContent = "Last run " + (isFinite(d.getTime()) ? d.toLocaleString() : "recently") + "." + took;
   }
   rows.innerHTML = "";
   for (const r of (BENCH.rows || [])) {
@@ -2050,6 +2053,9 @@ function renderBench(j) {
     // ★ "none" = the row could not be measured (the DAB clip could not be fetched). Saying "0 %" would be a lie
     //   and saying nothing would look like a feature that does not exist here.
     const pct = r.grade === "none" ? "not measured" : (Math.round(r.pct) + "% of a core");
+    // ★ A decoder row says, on hover, what it decoded from its test signal and how long it took to measure.
+    if (r.decoded >= 0 || r.ms >= 0) tr.title = (r.decoded >= 0 ? r.decoded + " decoded from the test signal" : "")
+      + (r.decoded >= 0 && r.ms >= 0 ? " \u00b7 " : "") + (r.ms >= 0 ? (r.ms / 1000).toFixed(1) + " s to measure" : "");
     tr.innerHTML = `<td style="padding:3px 6px 3px 0;border-bottom:1px solid var(--line)">${esc(r.label || r.id)}</td>`
       + `<td style="padding:3px 0;border-bottom:1px solid var(--line);text-align:right;color:${benchGradeColour(r.grade)}">${esc(pct)}</td>`;
     rows.appendChild(tr);
@@ -2112,6 +2118,22 @@ function benchApplyDefaults() {
     radioList().forEach(r => { r.zoomSpectrum = false; });
     $("zoomSpectrum").checked = false;
     benchNote($("zoomSpectrum"), "Keep the spectrum sharp is off: zooming in measured " + Math.round(zoom.pct) + "% of a core here. Tick it to use it anyway.");
+  }
+  /* ★★★ EVERY OTHER DECODER (2026-10-31) — the server's defaults rule (vibe_benchmark_more.h ruleFor) sends the owner's
+   *  switches that start OFF: each one's main decoder measured below green here. Unticked, with the reason beside it —
+   *  offered, never hidden; the owner can tick it back. Band spots and Advanced RDS keep their own rules above.
+   *  Same as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS). */
+  const offList = (BENCH.decoders && Array.isArray(BENCH.decoders.defaultOff)) ? BENCH.decoders.defaultOff : [];
+  for (const o of offList) {
+    const sw = String((o && o.switch) || "");
+    if (!sw || sw === "spotsband" || sw === "rds") continue;
+    const box = document.querySelector('input[data-mode="' + sw.replace(/[^a-z0-9+-]/gi, "") + '"]');
+    if (!box || !box.checked) continue;
+    box.checked = false;
+    box.dispatchEvent(new Event("change"));
+    const r = row(o.row) || {};
+    benchNote(box, (r.label || sw).replace(/^Decoder: /, "") + " is off: it measured " + Math.round(Number(o.pct) || 0)
+              + "% of a core here. Tick it to offer it anyway.");
   }
   if (scan && scan.grade === "red" && $("dabScanLabels")) {
     $("dabScanLabels").value = "0";
@@ -2220,7 +2242,7 @@ async function benchRun(force) {
   const btn = $("benchRun"), msg = $("benchMsg");
   if (benchPoll) { clearInterval(benchPoll); benchPoll = 0; }
   if (btn) { btn.disabled = true; btn.textContent = "Measuring\u2026"; }
-  if (msg) msg.textContent = "Measuring this machine. The radio is off the air; this takes about two minutes. "
+  if (msg) msg.textContent = "Measuring this machine. The radio is off the air; this takes a few minutes. "
     + "Leave it be \u2014 do not switch the machine off while it runs.";
   benchBar(0, "Starting\u2026");
   try {
@@ -2656,12 +2678,23 @@ const BLOCKABLE = [
   /* ★ V12 LoRa inside ISM mode (docs/v12/LORA-MESH.md) — LoRaWAN devices, Meshtastic and MeshCore nodes, and the mesh
    *  networks' PUBLIC messages. Its own switch: an owner may want the weather stations and not the mesh chat. */
   { id: "lora",   label: "LoRa / Meshtastic / MeshCore" },
+  /* ★ V12 CW — the listener's decoder and the skimmer (docs/v12/CW-SKIMMER.md), one switch. It was enforced by the server
+   *  ("cw") but missing here, so an owner could not switch it off — nor back on after the benchmark did (2026-10-31). */
+  { id: "cw",     label: "CW decoder and skimmer" },
   /* ★ V12 PSK31/63 — the listener's decoder and the skimmer (docs/v12/PSK.md), one switch. */
   { id: "psk",    label: "PSK31/63" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
   /* ★ V12 SITOR-A (2026-10-29) — the maritime ARQ teleprinter (AMTOR mode A), both stations of a link. */
   { id: "sitora", label: "SITOR-A" },
+  /* ★ V12 EAS / SAME (2026-10-31) — US Emergency Alert System headers (NOAA Weather Radio, EAS broadcasts). */
+  { id: "same", label: "EAS / SAME" },
+  /* ★ V12 SELCAL (2026-10-31) — the aeronautical selective call (ICAO, 32 tones). */
+  { id: "selcal", label: "SELCAL" },
+  /* ★ V12 (2026-10-31): ONE switch — MFSK16/32, Olivia, Contestia and THOR are one key with one AUTO. */
+  { id: "mfsk", label: "MFSK, Olivia, Contestia, THOR" },
+  /* ★ V12 FELD HELL (2026-10-31) — drawn, not read: the text painted as it is heard. */
+  { id: "hell", label: "Feld Hell" },
   /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio
    *  reaches LF; this switch takes it off a radio that could. */
   { id: "ndb",    label: "NDB beacons" },
@@ -6692,7 +6725,7 @@ async function signIn(fromTicket) {
     await benchLoad();
     if (IS_LITE && !cfg.configured && !BENCH) {
       $("benchMsg").textContent = "First setup on VibeServer Lite: measuring what this box can carry "
-        + "before you choose anything. About two minutes.";
+        + "before you choose anything. A few minutes.";
       benchRun(false);
     }
   } catch (e) { $("signinErr").textContent = "Could not reach the server."; }

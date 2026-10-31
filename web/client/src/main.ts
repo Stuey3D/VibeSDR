@@ -150,6 +150,12 @@ import { JTTY_DIALS, JttySpots, jttySignalsFromJson, jttySpotFromJson, jttyTuneF
 import { DSC_DISTRESS, DscCalls, dscFromJson, dscMapHtml, dscParams, dscTuneFor, renderDscRows, dscBandOf, dscBandLabel, dscBandChannels,
          dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle, type DscCall, type DscPin, type DscChannel } from './dsc';
 import { parseSitorStatus, sitorStatusText, SITORA_HINT, type SitorStatus } from '../../../src/services/sitora';
+import { SAME_HINT, SELCAL_HINT, sameStateText, selcalStateText } from '../../../src/services/alertDecoders';   // ★ V12 EAS / SAME, SELCAL
+import { TEXT_FAMILIES, TEXT_FAMILY_HINT, TEXT_FAMILY_KEY, isTextFamily, parseTextModeStatus, parseTextModes, textModeStatusText,
+         type TextFamily, type TextMode } from '../../../src/services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { sessionChoice, setSessionChoice } from '../../../src/services/decoderSession';   // ★★★ AUTO first; manual for the session only
+import { firstOfGroup, groupOfMode, modeGroups, modesInGroup, showSecondRow } from '../../../src/services/autoModes';   // ★★★ AUTO's fallback rows
+import { HELL_HINT, HELL_STRIP_ROWS, HellPager, hellStatusText, parseHellStatus } from '../../../src/services/feldHell';   // ★ V12 FELD HELL
 // ★★ The VTS station line and the pill's drop order — ONE file shared with the app's VTSBar.
 import {
   vtsHex, vtsLine, vtsLineSegments, vtsFit, VTS_DROP_ORDER, type VtsDroppable, type VtsLineParts,
@@ -807,6 +813,10 @@ async function loadAudioPolicy(httpBase: string) {
   pskCap = false;              // ★ …nor a PSK one
   dscCap = false;              // ★ …nor DSC
   sitoraCap = false;           // ★ …nor SITOR-A
+  sameCap = false;             // ★ …nor EAS / SAME
+  selcalCap = false;           // ★ …nor SELCAL
+  tmCaps = {};                 // ★ …nor the MFSK keyboard modes
+  hellCap = false;             // ★ …nor FELD HELL
   jttyCap = false;             // ★ …nor JTTY
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
@@ -862,6 +872,20 @@ async function loadAudioPolicy(httpBase: string) {
     sitoraCap = j.sitora === true;   // ★ SITOR-A (V12): the maritime ARQ teleprinter, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="sitora"]') as HTMLElement | null;
       if (b) b.hidden = !sitoraCap || blockedModes.has('sitora'); }
+    sameCap = j.same === true;       // ★ EAS / SAME (V12): US alert headers, decoded by this server
+    { const b = document.querySelector('#decodersPanel [data-dec="same"]') as HTMLElement | null;
+      if (b) b.hidden = !sameCap || blockedModes.has('same'); }
+    selcalCap = j.selcal === true;   // ★ SELCAL (V12): the aeronautical selective call, decoded by this server
+    { const b = document.querySelector('#decodersPanel [data-dec="selcal"]') as HTMLElement | null;
+      if (b) b.hidden = !selcalCap || blockedModes.has('selcal'); }
+    for (const fam of TEXT_FAMILIES) {   // ★ MFSK / OLIVIA / THOR (V12): a family where the server lists it, with its choices
+      if (j[fam] === true) tmCaps[fam] = parseTextModes(j[fam + 'Modes']);
+      const b = document.querySelector(`#decodersPanel [data-dec="${fam}"]`) as HTMLElement | null;
+      if (b) b.hidden = !tmCaps[fam] || blockedModes.has(fam);
+    }
+    hellCap = j.hell === true;   // ★ FELD HELL (V12): drawn by this server, read by eye
+    { const b = document.querySelector('#decodersPanel [data-dec="hell"]') as HTMLElement | null;
+      if (b) b.hidden = !hellCap || blockedModes.has('hell'); }
     jttyCap = j.jtty === true;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="jtty"]') as HTMLElement | null;
       if (b) b.hidden = !jttyCap || blockedModes.has('jtty'); }
@@ -1961,7 +1985,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
        *  is not what an HF radio wants to say about WFM. */
       for (const b of Array.from(document.querySelectorAll('[data-dec]')) as HTMLElement[]) {
         const id = (b.dataset.dec || '').toLowerCase();
-        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'jtty' && !jttyCap);
+        b.hidden = blockedModes.has(id) || (id === 'cw' && !cwCap) || (id === 'psk' && !pskCap) || (id === 'aprs' && !aprsCap) || (id === 'dsc' && !dscCap) || (id === 'sitora' && !sitoraCap) || (id === 'same' && !sameCap) || (id === 'selcal' && !selcalCap) || (isTextFamily(id) && !tmCaps[id]) || (id === 'hell' && !hellCap) || (id === 'jtty' && !jttyCap);
       }
       if (isPanelOpen('decodersPanel')) queueMicrotask(() => layoutDecoderBands(spec?.frequency ?? NaN));   // ★ V12 tabs follow what is drawn
       /* ★ DIGITAL SPOTS AND THE MAP ARE ONE OWNER SWITCH ('spots'). A receiver held to FM and
@@ -2515,6 +2539,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onDrm: (d) => {
       if (!spec || spec.mode !== 'drm') return;   // ★ a report after leaving DRM is a ghost
       drmState = d; drmBoxSync(); updateVts();
+    },
+    // ★ V12 tone ID: NFM only (a label after leaving NFM is a ghost)
+    onToneId: (l) => {
+      toneLabel = spec && (spec.mode === 'nfm' || spec.mode === 'fm') ? l : '';
+      updateVts();
     },
     onRds: (m) => {
       rdsStereo = m.stereo; syncStereoLight();   // ★ the pilot's — DAB's own light wins in DAB
@@ -4406,6 +4435,13 @@ function updateVts() {
     flag = isoToFlag(rdsIso);
   }
 
+  /* ★ V12 CTCSS / DCS tone ID (toneLabel): on NFM, with no live station, the tone rides in the line after the bookmark's
+   *  name — or alone — and the bar holds while it is locked (the server unlocks ≈ 2.5 s after the carrier drops). */
+  const tone = (spec.mode === 'nfm' || spec.mode === 'fm') && !live && rdsPi <= 0 ? toneLabel : '';
+  const toneOn = !!tone;
+  const toneName = toneOn ? name : '';
+  if (toneOn) { if (!name) name = tone; live = true; }
+
   // Nothing known here — hide it rather than show an empty bar. ★ A confirmed PI counts as
   // known (see the fallback above); a block-error figure does NOT. Diagnostics belong in the
   // Advanced RDS decoder, not on the bar an ordinary listener reads (Stuart, 2026-07-26).
@@ -4481,9 +4517,10 @@ function updateVts() {
    *   2026-10-01). The same goes for the RDS mark — DAB is not RDS.
    *   ★ A bookmark / EiBi guess is not live and keeps the old layout: a name that slides once. */
   const inDab = !!dabSvcSid;
-  const lineMode = live || rdsPi > 0;
+  const lineMode = live || rdsPi > 0 || toneOn;
   const lineParts: VtsLineParts = inDab
     ? { id: vtsHex(dabSvcSid), idLabel: 'SId', name, text: dabRt }
+    : toneOn ? { name: toneName, text: tone }
     : { id: vtsHex(rdsPi), idLabel: 'PI', name: rdsName, text: rdsName ? rdsText : '' };
   setClass(vts, 'line', lineMode);
   applyVtsScroll(lineMode);
@@ -6898,6 +6935,9 @@ let dabCapable = false;
  *  where the server lists 'drm' in vibeserver.json's modes (an older server has no such mode — a dead button). */
 let drmCap = false;
 let drmState: DrmState | null = null;
+/** ★★ V12 CTCSS / DCS TONE ID (the server's `tone`): the NFM channel's tone — the VTS line's QUIET SUFFIX, in the message
+ *  slot after a bookmark's name ("GB3NB: CTCSS 82.5 Hz") or alone; the app's SDRScreen does the same. '' = none. */
+let toneLabel = '';
 /** The demodulators to offer: the fixed set, plus DRM where this server has it — minus what the owner switched off. */
 function offeredModes(): SDRMode[] {
   return [...MODES, ...(drmCap ? ['drm' as SDRMode] : [])].filter((m) => !isModeBlocked(m));
@@ -11330,7 +11370,7 @@ function bandSpotsStep(dir: number) {
 // Spot filters — the app's sf-mode / sf-band / sf-age cyclers.
 /* ★ V12: the mode filter cycles the modes THIS server decodes (vibeserver.json spotModes — FT8 and FT4 on an older one). */
 let SF_MODES = ['ALL', 'FT8', 'FT4'];
-const SF_BANDS = ['ALL', '2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm'];
+const SF_BANDS = ['ALL', '2200m', '630m', '160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '70cm', '23cm'];
 const SF_AGES: Array<{ label: string; minutes: number }> = [
   { label: 'AGE', minutes: 0 }, { label: '15m', minutes: 15 },
   { label: '30m', minutes: 30 }, { label: '1h', minutes: 60 },
@@ -11577,7 +11617,7 @@ const RTTY_PRESETS: Record<string, RttySettings> = {
 
 let rtty: RttySettings = { ...RTTY_PRESETS.auto };
 let wefaxLpm = 120;
-let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'jtty' | null = null;
+let activeDec: 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | null = null;
 /* ★★ JTTY (V12, 2026-10-26) — the WSJT-X 3.2 keyboard mode, decoded on the server (decoders/jtty_decoder.h): every JTTY
  *  signal in this listener's passband at once, with no time slots. The box is one row per station (lowest frequency
  *  first, coloured by confidence) over the SPOTS; the settings hold the announced calling frequencies. Offered only where
@@ -11621,6 +11661,87 @@ let dscCap = false;
  *  text box (both stations' passages, each labelled by the server), its status line the link state, who is printing
  *  and the RQ count (src/services/sitora.ts). Offered only where vibeserver.json says "sitora": true. */
 let sitoraCap = false;
+/* ★★ EAS / SAME and SELCAL (V12, 2026-10-31) — decoded on the server (decoders/same_decoder.h, selcal_decoder.h): the
+ *  text box, one line per alert or call; the status line from the 0x03 state, the hint as its title
+ *  (src/services/alertDecoders.ts — the app's words). Offered only where vibeserver.json says "same" / "selcal": true. */
+let sameCap = false;
+let selcalCap = false;
+/* ★★ MFSK / OLIVIA / THOR (V12, 2026-10-31) — the MFSK keyboard modes, decoded on the server (decoders/textmodes.h): the
+ *  text box; the status line names what AUTO locked ("OLIVIA 8/250 · 1500 Hz"); one MODE row (tmSettings) holds the
+ *  family's choices — the server's own list, AUTO first. Offered only where vibeserver.json says "<family>": true. */
+let tmCaps: Partial<Record<TextFamily, TextMode[]>> = {};
+const tmMode: Record<TextFamily, string> = { mfsk: 'auto' };
+// ★★★ AUTO unless picked by hand THIS session (src/services/decoderSession.ts) — never stored; a reload starts in AUTO
+for (const fam of TEXT_FAMILIES) tmMode[fam] = sessionChoice('textmode.' + fam, 'auto');
+function renderTmModes() {
+  const groups = document.getElementById('tmGroups'), host = document.getElementById('tmModes'), hint = document.getElementById('tmHint');
+  const row = document.getElementById('tmModeRow');
+  if (!groups || !host || !hint || !row) return;
+  groups.textContent = ''; host.textContent = '';
+  if (!isTextFamily(activeDec)) return;
+  const fam = activeDec;
+  const list = tmCaps[fam] ?? [];
+  const pick = (id: string) => {
+    tmMode[fam] = id;
+    setSessionChoice('textmode.' + fam, id, 'auto');
+    renderTmModes(); reattachIf(fam);
+    decStateText = textModeStatusText(fam, tmMode[fam], null, list); $('decStatus').textContent = decStateText;
+  };
+  // ★★★ AUTO's fallback rows (autoModes.ts, RTTY's pattern): AUTO + the server's families, then the chosen family's own
+  const g = groupOfMode(list, tmMode[fam]);
+  const key = (label: string, on: boolean, f: () => void) => { const b = document.createElement('button'); b.className = 'btn' + (on ? ' on' : ''); b.textContent = label; b.onclick = f; return b; };
+  groups.appendChild(key('AUTO', !g, () => pick('auto')));
+  for (const x of modeGroups(list)) groups.appendChild(key(x, g === x, () => pick(firstOfGroup(list, x))));
+  row.hidden = !showSecondRow(list, tmMode[fam]);
+  if (!row.hidden) for (const m of modesInGroup(list, g)) host.appendChild(key(m.label, tmMode[fam] === m.id, () => pick(m.id)));
+  hint.textContent = TEXT_FAMILY_HINT[fam];
+}
+/* ★★ FELD HELL (V12, 2026-10-31) — drawn on the server (decoders/feld_hell.h), read by eye: its strips come down the
+ *  picture box's road (WEFAX's grey lines) but are drawn plainly — no margin, slant or level finding, which would bend
+ *  the letters — at the place their line number says, a page at a time (src/services/feldHell.ts HellPager). The status
+ *  line is the tone; nothing goes to the gallery (the MFSK keys' rule). Offered only where vibeserver.json says "hell". */
+let hellCap = false;
+const hellPager = new HellPager();
+/** A fresh page, white paper, one strip tall — the page before it (with lines on it) goes under PREV. */
+function hellNewPage(w: number) {
+  if (decLiveCv && decLiveMaxY >= 0) decLiveComplete = true;
+  startDecImage(w, HELL_STRIP_ROWS);
+  if (decLiveCtx && decLiveCv) { decLiveCtx.fillStyle = '#fff'; decLiveCtx.fillRect(0, 0, decLiveCv.width, decLiveCv.height); }
+  if (!decViewingPrev) blitToVisible(decLiveCv);
+}
+function drawHellLine(line: number, w: number, px: Uint8Array) {
+  if (!(w > 0) || w > 4096) return;
+  decIsRgb = false;
+  const { y, newPage } = hellPager.place(line);
+  if (newPage || !decLiveCv || !decLiveCtx || decLiveCv.width !== w) hellNewPage(w);
+  let cv = decLiveCv, ctx = decLiveCtx;
+  if (!cv || !ctx) return;
+  if (y >= cv.height) {   // ★ the page grows a strip at a time, so there is never unwritten black under the text
+    const keep = ctx.getImageData(0, 0, cv.width, cv.height);
+    const h0 = cv.height;
+    cv.height = (Math.floor(y / HELL_STRIP_ROWS) + 1) * HELL_STRIP_ROWS;
+    ctx = decLiveCtx = cv.getContext('2d');
+    if (!ctx) return;
+    ctx.putImageData(keep, 0, 0);
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, h0, cv.width, cv.height - h0);
+    if (!decViewingPrev) blitToVisible(cv);
+  }
+  const img = ctx.createImageData(w, 1);
+  for (let x = 0; x < w; x++) { const v = x < px.length ? px[x] : 255, o = x << 2; img.data[o] = img.data[o + 1] = img.data[o + 2] = v; img.data[o + 3] = 255; }
+  ctx.putImageData(img, 0, y);
+  if (y > decLiveMaxY) decLiveMaxY = y;
+  if (!decViewingPrev) {
+    const vis = $<HTMLCanvasElement>('decImage');
+    if (vis.width !== cv.width || vis.height !== cv.height) blitToVisible(cv);
+    else vis.getContext('2d')?.putImageData(img, 0, y);
+  }
+  updateDecImageButtons();
+}
+function clearHellPage() {
+  hellPager.reset();
+  if (decLiveCv && decLiveMaxY >= 0) { decViewingPrev = false; hellNewPage(decLiveCv.width); }
+  $('decStatus').textContent = 'cleared — the last page is under PREV';
+}
 let sitorLast: SitorStatus | null = null;
 function renderSitorStatus(state?: number) {
   decStateText = sitorStatusText(sitorLast, state);
@@ -12023,6 +12144,9 @@ const TIME_STATIONS: Record<string, { label: string; hint: string }> = {
   dcf77: { label: 'DCF77', hint: 'DCF77, Mainflingen — tune <b>77.500 kHz</b> in <b>CW</b>.' },
   wwvb:  { label: 'WWVB', hint: 'WWVB, Fort Collins — tune <b>60.000 kHz</b> in <b>CW</b>. '
                                  + 'Note MSF shares this frequency: which one you hear is geography.' },
+  // ★ V12: JJY (NICT) — 40 kHz Ohtakadoya-yama, 60 kHz Hagane-yama; JST (UTC+9).
+  jjy:   { label: 'JJY',   hint: 'JJY, Japan — tune <b>40.000 kHz</b> (Ohtakadoya-yama) or <b>60.000 kHz</b> (Hagane-yama) '
+                                 + 'in <b>CW</b>. The time shown is <b>JST</b> (UTC+9). Strongest in East Asia.' },
   // ★★ AM, not CW, and the only station here that is: WWV's code rides a 100 Hz subcarrier on the
   //    AM signal rather than switching the carrier. Tuned in CW there is nothing to decode.
   // ★ The year is not shown from the air — see decodeWwv: its year field could not be identified
@@ -12067,7 +12191,8 @@ function decParams(mode: string): Record<string, unknown> {
   if (mode === 'psk') return pskSkim ? { width: pskWidth } : { centre: passbandCentreHz() };
   if (mode === 'aprs') return { baud_rate: aprsBaud };
   if (mode === 'dsc') { const v = vfoNow(decVfo); return dscParams(v.frequency, String(v.mode ?? '')); }   // ★ the decoding VFO's dial
-  if (mode === 'sitora') return { center_frequency: 1000 };   // ★ the tones around 1 kHz, as RTTY; the polarity is found
+  if (mode === 'sitora') return { center_frequency: 1000 };
+  if (isTextFamily(mode)) return { mode: tmMode[mode] };   // ★ the tones around 1 kHz, as RTTY; the polarity is found
   return {};
 }
 
@@ -12153,6 +12278,12 @@ function initDecoders(host: string, auth: AuthState) {
       // ★ The FSK state is 0 no signal, 1/2 sync, 3 decoding (DecoderClient.ts header) — "decoding…" while only
       //   syncing told the listener text was coming when it was still hunting (2026-10-05).
       if (activeDec === 'sitora') { if (sitorLast) sitorLast.link = st; renderSitorStatus(st); setDecLive(st >= 2 && st <= 6); return; }
+      if (isTextFamily(activeDec)) { if (!st) { decStateText = textModeStatusText(activeDec, tmMode[activeDec], null, tmCaps[activeDec] ?? []); if (!decTuneHint) $('decStatus').textContent = decStateText; } setDecLive(!!st); return; }
+      if (activeDec === 'same' || activeDec === 'selcal') {
+        decStateText = activeDec === 'same' ? sameStateText(st) : selcalStateText(st);
+        if (!decTuneHint) $('decStatus').textContent = decStateText;
+        setDecLive(!!st); return;
+      }
       decStateText = activeDec === 'dsc' ? (st ? 'receiving a call…' : 'listening…')
                    : activeDec === 'jtty' ? (st ? 'decoding…' : 'listening…')
                    : kbOn() ? (st >= 3 ? 'decoding…' : st ? 'carriers found…' : 'listening…')
@@ -12167,9 +12298,11 @@ function initDecoders(host: string, auth: AuthState) {
     },
     // ★ NAVTEX: the server's own FEC count for the message its NNNN just closed — into the title (2026-10-05).
     onNavtexFec: (fec) => { if (activeDec === 'navtex' && navtexAsm.setFec(fec)) queueNavtexRender(); },
-    onImageStart: (w, h) => startDecImage(w, h),
+    // ★ FELD HELL's 0x02 (a fresh decoder): the next line starts a new page; the one on screen stays until it does.
+    onImageStart: (w, h) => { if (activeDec === 'hell') { hellPager.reset(); return; } startDecImage(w, h); },
     // ★ Once the server reports WEFAX phases, a line alone no longer lights the LED — noise draws lines too.
     onImageLine: (y, w, px, rgb) => {
+      if (activeDec === 'hell') { drawHellLine(y, w, px); setDecLive(true); return; }
       // ★ After CLR, WEFAX lines count from the first one that arrives; a count below that base is the server's own
       //   new chart (a start tone), numbered from 0 again (see clearDecImage).
       // ★★ A RETUNE STARTS A NEW CHART (2026-10-07 — the app's DecoderPanel does the same): a move of 3 kHz or more is a
@@ -12191,6 +12324,13 @@ function initDecoders(host: string, auth: AuthState) {
       setDecLive(p >= 1 && p <= 3);
     },
     onImageDone: () => { $('decStatus').textContent = 'image complete'; markDecImageComplete(); },
+    onHellStatus: (d) => {
+      if (activeDec !== 'hell') return;
+      const st = parseHellStatus(d);
+      if (!st) return;
+      decStateText = hellStatusText(st); $('decStatus').textContent = decStateText;
+      setDecLive(st.signal);
+    },
     // ★ SSTV 0x08: the same picture repainted in place (see decoders.ts) — the lines overwrite it.
     onImageRedraw: () => { decLiveComplete = false; },
     onSstvMode: (name) => { $('decStatus').textContent = name; },
@@ -12247,6 +12387,13 @@ function initDecoders(host: string, auth: AuthState) {
       const sp = jttySpotFromJson(d);
       if (!sp) return;
       jttySpots.push(sp); renderJtty();
+    },
+    onTextModeStatus: (d) => {
+      if (!isTextFamily(activeDec)) return;
+      const st = parseTextModeStatus(d);
+      if (!st) return;
+      decStateText = textModeStatusText(activeDec, tmMode[activeDec], st, tmCaps[activeDec] ?? []);
+      if (!decTuneHint) $('decStatus').textContent = decStateText;
     },
     onSitorStatus: (d) => {
       if (activeDec !== 'sitora') return;
@@ -12363,7 +12510,7 @@ function initDecoders(host: string, auth: AuthState) {
   { const b = document.getElementById('mapBtn'); if (b) addModeIcon(b, 'map'); }   // ★ the line glyph, not the 🗺 emoji
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.onclick = () => {
-      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'jtty';
+      const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
       // ★★★ V12: the decoder runs on the VFO selected NOW (decode on either VFO) — Advanced RDS is always A's (no VFO B on FM)
       decVfo = mode === 'rds' ? 'A' : abStartVfo();
@@ -12505,6 +12652,7 @@ function initDecoders(host: string, auth: AuthState) {
     if (activeDec === 'cw') queueCwPlainText();
     if (activeDec === 'navtex') { clearNavtexLive(); renderNavtex(); }
     if (activeDec === 'wefax' || activeDec === 'sstv') clearDecImage();
+    if (activeDec === 'hell') clearHellPage();
     if (kbOn()) { cwSpotsSeen.length = 0; cwLast = null; renderCw(); }
     if (activeDec === 'aprs') { aprsLog.length = 0; renderAprs(); }
     if (activeDec === 'dsc') { dscCalls.clear(); renderDsc(); }
@@ -12927,6 +13075,8 @@ function anyDecoderLeft(): boolean {
   // ★ V12: CW and APRS count only where this server has them (vibeserver.json "cw", "aprs") — hidden otherwise.
   return ['rtty', 'navtex', 'wefax', 'sstv', 'time', 'rds', 'ft8', 'spots'].some(d => !blockedModes.has(d))
     || (cwCap && !blockedModes.has('cw')) || (pskCap && !blockedModes.has('psk')) || (aprsCap && !blockedModes.has('aprs')) || (dscCap && !blockedModes.has('dsc')) || (sitoraCap && !blockedModes.has('sitora'))
+    || (sameCap && !blockedModes.has('same')) || (selcalCap && !blockedModes.has('selcal'))
+    || TEXT_FAMILIES.some(f => !!tmCaps[f] && !blockedModes.has(f)) || (hellCap && !blockedModes.has('hell'))
     || (jttyCap && !blockedModes.has('jtty'));
 }
 
@@ -12980,12 +13130,14 @@ function syncDecButtons() {
   if (activeDec === 'dsc') initDscChannels();   // ★ the radio's range may have changed since the page loaded
   $('jttySettings').hidden = activeDec !== 'jtty';
   if (activeDec === 'jtty') initJttyDials();
+  $('tmSettings').hidden = !isTextFamily(activeDec) || !(tmCaps[activeDec]?.length);
+  renderTmModes();
   renderDscKeys();
   placeOptions(activeDec);   // ★★★ V12: the settings pop out of the decoder's own key (decoderBandsDom.ts)
 }
 
 function showDecBox(what: string) {
-  const image = what === 'wefax' || what === 'sstv';
+  const image = what === 'wefax' || what === 'sstv' || what === 'hell';
   const isSpots = what === 'spots';
   const isRds = what === 'rds';
   $('decBox').classList.add('open');
@@ -12999,6 +13151,8 @@ function showDecBox(what: string) {
                             : what === 'psk'   ? (pskSkim ? 'PSK SKIMMER' : 'PSK')
                             : what === 'aprs'  ? (aprsBaud === 300 ? 'APRS · HF 300' : 'APRS')
                             : what === 'sitora' ? 'SITOR-A'
+                            : isTextFamily(what) ? TEXT_FAMILY_KEY[what]
+                            : what === 'hell'  ? 'FELD HELL'
                             : what.toUpperCase();
   $('decStatus').textContent = 'listening…';
   $('decImage').classList.toggle('on', image);
@@ -13032,6 +13186,10 @@ function showDecBox(what: string) {
   const isJtty = what === 'jtty';
   $('jttyList').classList.toggle('on', isJtty);
   if (what === 'sitora') { sitorLast = null; $('decStatus').textContent = 'searching for a link…'; $('decStatus').title = SITORA_HINT; }
+  else if (what === 'same') { decStateText = sameStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SAME_HINT; }
+  else if (what === 'selcal') { decStateText = selcalStateText(0); $('decStatus').textContent = decStateText; $('decStatus').title = SELCAL_HINT; }
+  else if (what === 'hell') { hellPager.reset(); decStateText = hellStatusText(null); $('decStatus').textContent = decStateText; $('decStatus').title = HELL_HINT; }
+  else if (isTextFamily(what)) { decStateText = textModeStatusText(what, tmMode[what], null, tmCaps[what] ?? []); $('decStatus').textContent = decStateText; $('decStatus').title = TEXT_FAMILY_HINT[what]; }
   else $('decStatus').title = '';
   if (isJtty) { jttyLast = []; jttySpots.clear(); renderJtty(); }
   // ★★ Advanced RDS owns the whole body, and HIDES THE STATION BAR while it is open. The

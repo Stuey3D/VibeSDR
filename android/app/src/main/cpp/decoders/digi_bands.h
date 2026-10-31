@@ -28,6 +28,29 @@
 //     The others are published plan, not seen on air this week (Monday's 07:30 sweep of every PSK segment on the
 //     UberSDR heard no PSK at all). 21.070, not 21.080: the PSK31 segment's own frequency. 18.100 is shared with FT8 —
 //     both run on one tuner there (the PSK skimmer reads nothing from FT8: docs/v12/PSK.md).
+//   • Q65 (V12, 2026-10-31): only where the IARU Region 1 plan allows MGM AND PSKReporter shows Q65 in use. PSKReporter's
+//     Q65 reports for the 24 h to 2026-10-31 01:57 UTC (all receivers): 1296.056–1296.121, 432.058–432.092, 144.181 MHz
+//     and nothing on HF, 6 m or 4 m. The Q65 window is 200–4800 Hz above the dial (EME stations spread across their
+//     segment), so: 2 m 144.115 and 144.120 (the plan's 144.110–144.160 "EME MGM"; random digital EME centres on
+//     144.125) and 144.180 (the reports; 144.150–144.400 is SSB/telegraphy/MGM); 70 cm 432.065 and 432.087 (the plan's
+//     432.025–432.100 telegraphy/MGM, which holds every report; a third at 432.055 made the cluster too wide for a
+//     narrow capture to hold beside FT8's 432.174 — test-band-slice). LEFT OUT at first: 6 m and 23 cm.
+//     ★ WIDENED 2026-10-31 (Stuart: "add the 23cm band, want to make sure we cover everything"): PSKReporter's Q65
+//     reports for the 24 h to 2026-10-31 11:00 UTC (381, all receivers; RF = dial + audio) were 144.117–144.139 (most
+//     at 144.135–144.137, which no dial held), 432.066–432.101, 1296.053–1296.126 and 50.276–50.277. So the EME
+//     segments are now TILED — a window every 4–4.5 kHz, each 200–4800 Hz above its dial, joined without a gap:
+//     2 m 144.115–144.1375 (six dials, to 144.142) + 144.180; 70 cm 432.074–432.096 (six, to 432.101 — ★ 432.065 and 432.0695
+//     were tried and dropped: an 8-dial cluster's slice no longer fit a 300 kS/s capture beside FT8 (test-band-slice), so the
+//     tiling starts where the reports thicken, 39 of the day's 43 reports); 23 cm 1296.050–1296.122 (seventeen —
+//     a 23 cm band joins the Band list, Q65 only); 6 m 50.310 (the plan's EME centre, Stuart's choice, beside FT8's
+//     50.313) and 50.275 (where 6 m Q65 was reported). Each dial is its own Q65 engine (≈ 5–7 % of a Pi 2 core): the
+//     governor sheds Q65 first (priority 100). The "10 m" Q65 reports (28.07–28.11, all one EME station's receive)
+//     are a 2 m transverter's IF, not 10 m; 222.095 is 1.25 m (Region 2 only, not in the Band list).
+//   • MSK144 (V12, 2026-10-31): the IARU Region 1 VHF Managers Handbook 10.03 (February 2026) — 6 m "50.320–380 MS
+//     centre of activity" (50.360, where MSK144 was designated in 2018) and 50.280, where nearly all European MSK144
+//     still is (the plan: "legacy usage for MGM below 50.300 is accepted"); 4 m "70.250 centre of activity MS"; 2 m the
+//     MS procedure's "MGM range of 144.360 to 144.397" (144.360, MSK144's frequency since 2018); 70 cm "432.370 meteor
+//     scatter centre of activity". Audio 200–2800 Hz above each dial (MSK144 sits at 1500 Hz ± 1.2 kHz).
 //   • 60 m WSPR is 5.3647 (inside the WRC-15 allocation 5351.5–5366.5 kHz that every region shares), not the older
 //     national 5.2872, which would stretch the 60 m passband to 73 kHz for one beacon frequency.
 //
@@ -51,7 +74,7 @@ namespace digi {
  *  three IARU regions — the server's own band plan decides what may be TUNED; this only names the band). */
 struct Band { const char* id; const char* name; double loHz, hiHz; };
 
-/** In STEP ORDER: 2200 m … 10 m, then 6 m, 4 m, 2 m, 70 cm (Stuart's order). */
+/** In STEP ORDER: 2200 m … 10 m, then 6 m, 4 m, 2 m, 70 cm, 23 cm (Stuart's order; 23 cm added 2026-10-31). */
 inline const std::vector<Band>& bands() {
     static const std::vector<Band> b = {
         {"2200m", "2200 m",   135700,    137800},
@@ -70,6 +93,7 @@ inline const std::vector<Band>& bands() {
         {"4m",    "4 m",    70000000,  70500000},
         {"2m",    "2 m",   144000000, 148000000},
         {"70cm",  "70 cm", 420000000, 450000000},
+        {"23cm",  "23 cm", 1240000000, 1300000000},   // ★ V12 (2026-10-31, Stuart): carries only Q65 (EME) today
     };
     return b;
 }
@@ -95,6 +119,8 @@ inline const std::vector<Dial>& publishedDials() {
         {"WSPR", "60m",   5364700}, {"WSPR", "40m",  7038600}, {"WSPR", "30m", 10138700}, {"WSPR", "20m", 14095600},
         {"WSPR", "17m",  18104600}, {"WSPR", "15m", 21094600}, {"WSPR", "12m", 24924600}, {"WSPR", "10m", 28124600},
         {"WSPR", "4m",   70091000}, {"WSPR", "2m", 144490500},
+        // FST4 (V12 — PSKReporter's FST4 receivers 2026-10-31: 475.1–475.5 and 136.5 kHz; WSJT-X's LF/MF dials)
+        {"FST4", "630m", 474200}, {"FST4", "2200m", 136000},
         // FST4W shares WSPR's sub-bands (the same dials)
         {"FST4W", "2200m", 136000}, {"FST4W", "630m", 474200}, {"FST4W", "160m", 1836600}, {"FST4W", "80m", 3568600},
         {"FST4W", "40m",  7038600}, {"FST4W", "30m", 10138700}, {"FST4W", "20m", 14095600},
@@ -109,6 +135,22 @@ inline const std::vector<Dial>& publishedDials() {
         // JTTY (V12 — see the file note: confirmed 40/20/15 m; announced and clear 10/6/2 m)
         {"JTTY", "40m",  7090000}, {"JTTY", "20m", 14090000}, {"JTTY", "15m", 21090000}, {"JTTY", "10m", 28090000},
         {"JTTY", "6m",  50160000}, {"JTTY", "2m", 144160000},
+        // Q65 (V12 — EME/scatter; see the file note)
+        {"Q65", "6m", 50275000}, {"Q65", "6m", 50310000},
+        {"Q65", "2m", 144115000}, {"Q65", "2m", 144119500}, {"Q65", "2m", 144124000}, {"Q65", "2m", 144128500},
+        {"Q65", "2m", 144133000}, {"Q65", "2m", 144137500}, {"Q65", "2m", 144180000},
+        {"Q65", "70cm", 432074000}, {"Q65", "70cm", 432078500}, {"Q65", "70cm", 432083000}, {"Q65", "70cm", 432087000},
+        {"Q65", "70cm", 432091500}, {"Q65", "70cm", 432096000},
+        // ★ 23 cm: one window every 4.5 kHz from 1296.050 (each 200–4800 Hz above its dial, so they join with 100 Hz
+        //   overlap) — 1296.0502–1296.1268 MHz without a gap, the whole of the EME MGM activity (the file note)
+        {"Q65", "23cm", 1296050000}, {"Q65", "23cm", 1296054500}, {"Q65", "23cm", 1296059000}, {"Q65", "23cm", 1296063500},
+        {"Q65", "23cm", 1296068000}, {"Q65", "23cm", 1296072500}, {"Q65", "23cm", 1296077000}, {"Q65", "23cm", 1296081500},
+        {"Q65", "23cm", 1296086000}, {"Q65", "23cm", 1296090500}, {"Q65", "23cm", 1296095000}, {"Q65", "23cm", 1296099500},
+        {"Q65", "23cm", 1296104000}, {"Q65", "23cm", 1296108500}, {"Q65", "23cm", 1296113000}, {"Q65", "23cm", 1296117500},
+        {"Q65", "23cm", 1296122000},
+        // MSK144 (V12 — meteor scatter; the IARU Region 1 VHF Handbook 10.03's MS segments, see the file note)
+        {"MSK144", "6m", 50280000}, {"MSK144", "6m", 50360000}, {"MSK144", "4m", 70250000},
+        {"MSK144", "2m", 144360000}, {"MSK144", "70cm", 432370000},
         // PSK31/63 (V12 — the PSK31 calling frequencies; 14.070 confirmed)
         {"PSK", "80m",   3580000}, {"PSK", "40m",  7040000}, {"PSK", "30m", 10142000}, {"PSK", "20m", 14070000},
         {"PSK", "17m",  18100000}, {"PSK", "15m", 21070000}, {"PSK", "12m", 24920000}, {"PSK", "10m", 28120000},
@@ -234,7 +276,12 @@ inline Span spanOf(const Band& b, const std::vector<ModeDef>& ms) {
         }
         SubSpan e;
         e.centreHz = std::round((elo + ehi) / 2.0 / 100.0) * 100.0;
-        const double half = std::max(kMinSliceHz / 2.0, std::max(e.centreHz - elo, ehi - e.centreHz) + kSpanGuardHz);
+        /* ★ V12 wave 2 (2026-10-31, Q65's 37 kHz cluster on 70 cm): a tuner reads only the slice's FLAT middle,
+         *  ±DigiTuner::kFlatHalfFrac (0.4325) of its rate, so an extra slice WIDER than the 24 kHz minimum must be sized
+         *  for its extent to fit that, not the whole slice — the dials at a wide cluster's edges were otherwise off it
+         *  (test-band-slice). A slice at the minimum already has the room; those are unchanged. */
+        const double ext = std::max(e.centreHz - elo, ehi - e.centreHz) + kSpanGuardHz;
+        const double half = std::max(kMinSliceHz / 2.0, ext > kMinSliceHz * 0.4325 ? ext / (2.0 * 0.4325) : ext);
         e.loHz = e.centreHz - half; e.hiHz = e.centreHz + half;
         for (size_t k = 0; k < ms.size(); ++k)
             for (size_t i : members) if (iv[i].mode == k) { e.modes.push_back(ms[k].name); break; }

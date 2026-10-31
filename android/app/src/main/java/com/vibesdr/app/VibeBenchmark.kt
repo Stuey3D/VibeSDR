@@ -26,6 +26,10 @@ object VibeBenchmark {
     // ★ The ADS-B rows' clip (vibe_benchmark_adsb.h) — one second each of Stuart's 1090 MHz sky at 2.4 and 3.2 MS/s.
     private const val ADSB_CLIP_URL =
         "https://github.com/Stuey3D/VibeSDR/releases/download/bench-clip-v2/adsb-bench.vbu8.gz"
+    // ★ The decoder rows' clip (vibe_benchmark_more.h, 2026-10-31) — seconds of real band for the CW / PSK / NDB skimmers
+    //   and ISM (vibeserver/bench-clip/README-decoders.txt), ~5 MB. Without it those rows read "not measured".
+    private const val DECODER_CLIP_URL =
+        "https://github.com/Stuey3D/VibeSDR/releases/download/bench-clip-v3/decoders-bench.vbu8.gz"
     private const val SPEEDTEST_URL = "https://vibeserver.vibesdr.net/api/speedtest"
     private const val RESULT = "benchmark.json"
 
@@ -43,9 +47,10 @@ object VibeBenchmark {
         val clip = if (wantDab) ensureClip(ctx) else ""
         // ★ CPU only — the ADS-B rows never touch the radio (the capture Test beside the 3.2 MS/s switch does that).
         val adsbClip = ensureClip(ctx, ADSB_CLIP_URL, "adsb-bench.vbu8", "VIBEAB81")
+        val decoderClip = ensureClip(ctx, DECODER_CLIP_URL, "decoders-bench.vbu8", "VIBEDC81")
         val uplink = measureUplinkKBps()
         val json = try {
-            VibeLocalSDR.runBenchmark(clip, adsbClip, uplink)
+            VibeLocalSDR.runBenchmark(clip, adsbClip, decoderClip, uplink)
         } catch (t: Throwable) {
             Log.w(TAG, "benchmark failed: $t"); return null
         }

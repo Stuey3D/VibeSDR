@@ -1,4 +1,5 @@
 // Shared SDR types used across clients and UI
+import { parseTextModes, type TextMode } from './textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { parseServerUrl, withScheme, toHttpUrl, buildServerUrl, type ParseOpts } from '../utils/serverUrl';
 import { STEP_833, STEP_FM_ODD, isAirbandCom } from '../utils/airband';
 import { cleanText } from '../utils/safeText';
@@ -9,6 +10,7 @@ import { parseIsmCapability, type IsmCap } from './ism';
 import { parseTunable } from '../utils/tuneWindow';
 import { parseSpotModes, parseSpotsBandCap, type SpotsBandCap } from './spotsBand';
 import { parseNdbCapability } from './ndb';
+import { parsePagingModes, type PagingMode } from './paging';   // ★ V12 PAGING (Android local hardware only)
 import { parseAisCapability, parseAprsCapability, type AisCap } from './tracks';   // ★ V12 AIS / APRS
 // 'wfm' = broadcast FM (V4 local hardware only); not in MODES (HF default list).
 // ★ V12 'drm' = Digital Radio Mondiale, a VibeServer demodulator offered only where its vibeserver.json `modes` lists it
@@ -448,6 +450,20 @@ export interface ServerOccupancy {
   dsc?: boolean;
   /** ★ V12 SITOR-A: this server's maritime ARQ listener ('sitora'). False or absent = no key. */
   sitora?: boolean;
+  /** ★★★ V12 PAGING — present ONLY on the phone's own engine (Android local hardware, not serving): the manual choices
+   *  as data, AUTO first (services/paging.ts). Absent = no PAGE key. */
+  /** ★ V12 EAS / SAME: this server's US alert-header decoder ('same'). */
+  same?: boolean;
+  /** ★ V12 SELCAL: this server's aeronautical selective-call decoder ('selcal'). */
+  selcal?: boolean;
+  /** ★ V12 MFSK (with OLIVIA, CONTESTIA, THOR — one key): this server's text-mode decoder and its grouped choices (AUTO
+   *  first) — textModes.ts. */
+  mfsk?: boolean;
+  mfskModes?: TextMode[];
+  /** ★ V12 FELD HELL: this server draws Feld Hell ('hell') — feldHell.ts. */
+  hell?: boolean;
+  paging?: boolean;
+  pagingModes?: PagingMode[];
   /** ★ V12: where this radio can be tuned (Hz windows after the owner's lists) — decides which channel / band keys draw. */
   tunable?: Array<[number, number]>;
   /** ★ V12 digital spots (docs/v12/DIGITAL-SPOTS.md): the modes this server decodes, Band mode's capability and bands. */
@@ -517,6 +533,13 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       jtty:      j.jtty === true,
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
+      same:      j.same === true,
+      selcal:    j.selcal === true,
+      mfsk:      j.mfsk === true,
+      mfskModes: parseTextModes(j.mfskModes),
+      hell:      j.hell === true,
+      paging:    j.paging === true,
+      pagingModes: parsePagingModes(j.pagingModes),
       tunable:   parseTunable(j.tunable),
       spotModes: parseSpotModes(j.spotModes),
       spotsBand: parseSpotsBandCap(j),

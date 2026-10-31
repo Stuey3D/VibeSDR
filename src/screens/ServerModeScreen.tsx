@@ -28,10 +28,20 @@ const BLOCKABLE: { id: string; label: string }[] = [
   { id: 'spots', label: 'Digital spots / map' },
   // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
   { id: 'spotsband', label: 'Digital spots: Band' },
+  /* ★★ V12 (2026-10-31): every decoder the server has, as on the setup page. The benchmark now times each one and starts a
+   *  switch OFF where its decoder measured below green (applyBench) — so every such switch must be HERE, or the owner
+   *  could not switch it back on from this screen (Stuart: "never hide any controls"). */
+  { id: 'ism', label: 'ISM sensors and meters' }, { id: 'lora', label: 'LoRa / Meshtastic / MeshCore' },
+  { id: 'cw', label: 'CW decoder and skimmer' }, { id: 'psk', label: 'PSK31/63' },
+  { id: 'dsc', label: 'DSC' }, { id: 'sitora', label: 'SITOR-A' },
+  { id: 'same', label: 'EAS / SAME' }, { id: 'selcal', label: 'SELCAL' },
+  { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR' }, { id: 'hell', label: 'Feld Hell' },
+  { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
+  { id: 'ais', label: 'AIS ships' }, { id: 'aprs', label: 'APRS' },
 ];
 /** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
  *  need IQ, which an Icom's audio is not. */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds', 'spotsband'];
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds', 'spotsband', 'ism', 'lora', 'ndb', 'ais'];   // ★ these need IQ too
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
@@ -437,6 +447,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
    *  may switch it back on. Everywhere else it is a button and nothing is changed without being asked.
    *  ★ Never on an already-running server: it takes the radio off the air. */
   const [benchRows, setBenchRows] = useState<any[]>([]);
+  /** ★ How long the last measurement took, s (0 = not said — an older engine). Shown under the table. */
+  const [benchSec, setBenchSec] = useState(0);
   const [benchBusy, setBenchBusy] = useState(false);
   const [benchNote, setBenchNote] = useState('');
   /** ★ {step, steps, label} while it runs — polled from the engine. See runBench. */
@@ -444,6 +456,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
 
   const applyBench = React.useCallback((j: any, firstSetup: boolean) => {
     setBenchRows(Array.isArray(j?.rows) ? j.rows : []);
+    setBenchSec(Number(j?.benchSec) > 0 ? Number(j.benchSec) : 0);
     if (!j || !firstSetup) return;
     const row = (id: string) => (j.rows || []).find((r: any) => r.id === id);
     const notes: string[] = [];
@@ -473,6 +486,19 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     if (zoom && zoom.grade === 'red' && zoomSpec) {
       setZoomSpec(false); AsyncStorage.setItem(K.zoomSpectrum, '0');
       notes.push(`Keep the spectrum sharp is off — zooming in measured ${Math.round(zoom.pct)}% of a core here. Switch it on to use it anyway.`);
+    }
+    /* ★★★ EVERY OTHER DECODER (2026-10-31) — the server's defaults rule (vibe_benchmark_more.h ruleFor) says which owner
+     *  switches start OFF: each one's main decoder measured below green on this device. Offered, never hidden — the
+     *  switch is in BLOCKABLE and the owner can turn it back on. The same as vibe_setup_page.h benchApplyDefaults. */
+    const offList: any[] = Array.isArray(j.decoders?.defaultOff) ? j.decoders.defaultOff : [];
+    for (const o of offList) {
+      const sw = String(o?.switch || '').replace(/[^a-z0-9+-]/gi, '');
+      if (!sw || sw === 'spotsband' || sw === 'rds' || new RegExp('(^|,)' + sw + '(,|$)').test(bm)) continue;
+      if (!BLOCKABLE.some((m) => m.id === sw)) continue;   // ★ never switch off what this screen cannot switch back on
+      bm = bm ? bm + ',' + sw : sw;
+      setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm);
+      const label = String(row(o.row)?.label || sw).replace(/^Decoder: /, '');
+      notes.push(`${label} is off — it measured ${Math.round(Number(o.pct) || 0)}% of a core here. Switch it on to offer it anyway.`);
     }
     if (scan && scan.grade === 'red' && dabScanLabels === 1) {
       setDabScanLabels(0); AsyncStorage.setItem(K.dabScanLabels, '0');
@@ -2417,6 +2443,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 </Text>
               </View>
             ))}
+            {benchSec > 0 && (
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4, marginBottom: 0 }]}>
+                {`The measurement took ${Math.round(benchSec)} seconds.`}
+              </Text>
+            )}
           </View>
         )}
         {/* ★ The bar, while it runs — see runBench. Steps rather than seconds, because the engine
@@ -2437,9 +2468,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
         )}
         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginBottom: 8 }]}>
           {benchBusy
-            ? 'Measuring this device with the real receiver. About two minutes — leave it be.'
+            ? 'Measuring this device with the real receiver. A few minutes — leave it be.'
             : benchNote || 'Measures this device with the real receiver, so the settings below match what it '
-              + 'can keep up with. The radio is off the air while it runs (about two minutes).'}
+              + 'can keep up with. Every decoder is timed on a test signal it decodes. The radio is off the air '
+              + 'while it runs (a few minutes).'}
         </Text>
         <OptRow C={C} F={F} active={false}
           label={benchBusy ? 'Measuring…' : (benchRows.length ? 'Measure again' : 'Measure this device')}

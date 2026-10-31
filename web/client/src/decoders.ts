@@ -51,6 +51,16 @@
  *     0x01 text (both stations; each passage starts "[n · IDENT] ") · 0x03 | u8 link state (0 no signal … 7 ended)
  *     {"type":"sitora_status","data":{link,iss,master,heard,ids,numbers,idChecked,blocks,repeats,lost,combined,snr,offset}}
  *
+ *   EAS / SAME ('same') and SELCAL ('selcal') — V12, decoders/same_decoder.h and selcal_decoder.h
+ *     0x01 text (one line per alert / call) · 0x03 | u8 state (0 listening, 1 a header burst / a tone pair being read)
+ *
+ *   MFSK ('mfsk': MFSK16/32, OLIVIA, CONTESTIA and THOR on one key) — V12, decoders/textmodes.h; params {mode}
+ *     0x01 text as it decodes · 0x03 | u8 (0 searching, 1 locked) · {"type":"textmode_status","data":{detected,hz}}
+ *
+ *   FELD HELL ('hell' — V12, decoders/feld_hell.h; drawn, not read — see src/services/feldHell.ts)
+ *     0x02 a new picture · 0x01 | u32 line | u32 width | grey (WEFAX's line, re-sent as a strip fills) ·
+ *     {"type":"hell_status","data":{hz,signal}}
+ *
  *   JTTY ('jtty' — V12, the WSJT-X 3.2 keyboard mode, vibe_jtty_run.h)
  *     0x01 text (one line per finished message) · 0x03 | u8 state (0 listening, 3 signals being decoded)
  *     {"type":"jtty_signals","data":{signals:[{id,hz,audio,snr,q,active,last,first,frames,call,country,text}]}}
@@ -65,7 +75,7 @@ import { wsBase } from './origin';
 import { guard, guardCallbacks, guardJson } from '../../../src/services/faultLog';
 import { cwWpmRangeOf } from '../../../src/utils/cwFormat';
 
-export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'jtty' | null;
+export type DecoderMode = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'time' | 'cw' | 'cwskim' | 'psk' | 'pskskim' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty' | null;
 
 /** ★ V12 CW: one signal the server's CW engine is decoding (or heard recently). `hz` is RF; `audio` the tone (listener). */
 export interface CwSignal {
@@ -143,6 +153,10 @@ export interface DecoderCallbacks {
   onDscCall?: (data: unknown) => void;
   /** ★ SITOR-A: the link status (src/services/sitora.ts parseSitorStatus checks it). */
   onSitorStatus?: (data: unknown) => void;
+  /** ★ MFSK / OLIVIA / THOR: what AUTO locked and where (src/services/textModes.ts parseTextModeStatus checks it). */
+  onTextModeStatus?: (data: unknown) => void;
+  /** ★ V12 FELD HELL: {hz, signal} when it changes (feldHell.ts parseHellStatus); its lines come through onImageLine. */
+  onHellStatus?: (data: unknown) => void;
   /** ★★ The server REFUSED a decoder — most often because every decoder slot on the box is in use.
    *  `message` is the server's own words, shown as they are (one definition, every client). */
   onRefused?: (message: string, what: 'decoder' | 'spots') => void;
@@ -196,6 +210,13 @@ const EXT: Record<Exclude<DecoderMode, null>, string> = {
   // ★ V12 DSC: MF/HF on SSB or VHF channel 70 on NFM — which is a parameter ("band"), as the time station is.
   dsc: 'dsc',
   sitora: 'sitora',
+  // ★ V12 EAS / SAME and SELCAL: nothing to set (47 CFR § 11.31 and ICAO's 32 tones fix everything).
+  same: 'same',
+  selcal: 'selcal',
+  // ★ V12 the MFSK keyboard modes: "mode" = one of the server's own ids (textModes.ts), AUTO otherwise
+  mfsk: 'mfsk',   // ★ ONE key: MFSK16/32, OLIVIA, CONTESTIA and THOR
+  // ★ V12 FELD HELL: nothing to set — the tone is found
+  hell: 'hell',
   // ★ V12 JTTY: every JTTY signal in the listener's passband — nothing to set.
   jtty: 'jtty',
 };
@@ -423,6 +444,16 @@ export class DecoderClient {
       if (msg.type === 'jtty_signals') this.cb.onJttySignals?.(msg.data); else this.cb.onJttySpot?.(msg.data);
       return;
     }
+    if (msg.type === 'textmode_status' && msg.data) {
+      if (this.mode !== 'mfsk') return;
+      this.cb.onTextModeStatus?.(msg.data);
+      return;
+    }
+    if (msg.type === 'hell_status' && msg.data) {
+      if (this.mode !== 'hell') return;
+      this.cb.onHellStatus?.(msg.data);
+      return;
+    }
     if (msg.type === 'sitora_status' && msg.data) {
       if (this.mode !== 'sitora') return;
       this.cb.onSitorStatus?.(msg.data);
@@ -496,6 +527,11 @@ export class DecoderClient {
       case 'dsc':
       // ★ SITOR-A: the link's text (both stations, labelled) and its state; the status line comes as JSON.
       case 'sitora':
+      // ★ EAS / SAME and SELCAL: one line per alert / call and the state (0 listening, 1 reading) — src/services/alertDecoders.ts.
+      case 'same':
+      case 'selcal':
+      // ★ MFSK / OLIVIA / THOR: the text as it decodes and the state (0 searching, 1 locked); textmode_status comes as JSON.
+      case 'mfsk':
       // ★ JTTY: a finished message's line (the box draws its rows from the JSON) and the state.
       case 'jtty':
         if (op === 0x01 && buf.byteLength >= 13) {
@@ -526,6 +562,17 @@ export class DecoderClient {
         } else if (op === 0x08) {
           // ★ The decoder's own account of a phasing decision (2026-10-07) — for whoever opens the console.
           console.info('[wefax]', new TextDecoder().decode(new Uint8Array(buf, 1)));
+        }
+        return;
+
+      // ★ FELD HELL: WEFAX's grey line, re-sent as the strip fills (a line simply replaces itself), and 0x02 a new picture.
+      case 'hell':
+        if (op === 0x01 && buf.byteLength >= 9) {
+          const line = dv.getUint32(1, false);
+          const width = dv.getUint32(5, false);
+          this.cb.onImageLine?.(line, width, new Uint8Array(buf, 9, Math.min(width, buf.byteLength - 9)), false);
+        } else if (op === 0x02) {
+          this.cb.onImageStart?.(0, 0);
         }
         return;
 

@@ -14,6 +14,8 @@
  *   └── AudioPlayer           (renderless; plays Opus stream)
  */
 
+import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
+import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
 import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode,
          icomWatchState, sMeter, type IcomStatus } from '../services/icomRadio';
@@ -133,6 +135,9 @@ import { mergeCwSpot, cwWidthOf, cwDrawnPassband, CW_DEFAULT_WIDTH, PSK_DEFAULT_
 import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type JttySpot } from '../services/jtty';
 import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, dscPanelChannels, dscBandLabel, dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle,
          dscItems, dscListRows, dscKey, DSC_MAP_EMPTY, type DscCall } from '../services/dsc';
+import type { PagingMode } from '../services/paging';   // ★ V12 PAGING (Android local hardware only)
+import { sessionChoice, setSessionChoice } from '../services/decoderSession';   // ★★★ AUTO first; manual for the session only
+import { fullModeName } from '../services/autoModes';   // ★★★ AUTO's fallback rows (RTTY's pattern)
 import { hzReachable } from '../utils/tuneWindow';
 import DrmPanel from '../components/DrmPanel';
 import { drmOffered, type DrmState } from '../services/drm';
@@ -833,7 +838,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     let dead = false;
     setDabCapable(false);
     setCwCapable(false);
-    setPskCapable(false); setJttyCapable(false); setDscCapable(false); setSitoraCapable(false); setRadioTunable([]);
+    setPskCapable(false); setJttyCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
     setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false);
     setAdsbCap(undefined);
     setIsmCap(undefined);
@@ -848,7 +853,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         setDabCapable(o?.dab === true);
         setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
         // ★ V12 PSK31/63, JTTY, DSC — the same per-radio answer; and where it can be tuned (which channel keys draw)
-        setPskCapable(o?.psk === true); setJttyCapable(o?.jtty === true); setDscCapable(o?.dsc === true); setSitoraCapable(o?.sitora === true);
+        setPskCapable(o?.psk === true); setJttyCapable(o?.jtty === true); setDscCapable(o?.dsc === true); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true); setSelcalCapable(o?.selcal === true);
+        setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
+        // ★ V12 MFSK / OLIVIA / THOR: a family is offered where its flag is true; its choices are the server's list
+        setTmModes({ mfsk: o?.mfsk === true ? (o?.mfskModes ?? []) : undefined });   // ★ ONE key: MFSK, OLIVIA, CONTESTIA, THOR
+        // ★★★ V12 PAGING — the phone's own engine says so only for its own radio; its manual choices are data (paging.ts)
+        setPagingModes(o?.paging === true ? (o?.pagingModes ?? []) : []);
         setRadioTunable(o?.tunable ?? []);
         // ★ V12 digital spots: the modes this server decodes, and Band mode (absent / greyed with why / offered)
         setSpotModesSrv(o?.spotModes); setSpotsBandCap(o?.spotsBand);
@@ -1198,6 +1208,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   // True when the local session's IQ comes from a SpyServer: most RTL-specific
   // hardware controls then belong to the server operator, not us.
   const [isSpy, setIsSpy] = useState(false);
+  /** ★★★ V12 PAGING'S GATE (docs/v12/DECODERS-WAVE2.md "PAGING"): Android, and the radio plugged into THIS phone — a
+   *  loopback session (no localHost), not rtl_tcp, not a SpyServer. The engine says the same from its side. */
+  const pagingHere = Platform.OS === 'android' && isLocal && !route.params.localHost && !route.params.isTcp && !isSpy;
   // Session limit (minutes) from the directory. The server enforces it; we just
   // warn up front and count down, rather than letting it look like a crash.
   // ★★ Route param FIRST (SpyServer passes one), then the directory, keyed off the
@@ -2507,6 +2520,22 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [jttyCapable, setJttyCapable] = useState(false);
   const [dscCapable, setDscCapable] = useState(false);
   const [sitoraCapable, setSitoraCapable] = useState(false);   // ★ V12 SITOR-A: this VibeServer decodes it
+  const [sameCapable, setSameCapable] = useState(false);       // ★ V12 EAS / SAME: this VibeServer decodes it
+  const [selcalCapable, setSelcalCapable] = useState(false);   // ★ V12 SELCAL: this VibeServer decodes it
+  const [hellCapable, setHellCapable] = useState(false);       // ★ V12 FELD HELL: this VibeServer draws it
+  /** ★ V12 MFSK / OLIVIA / THOR: each family this VibeServer offers, with its choices (AUTO first); absent = not offered. */
+  const [tmModes, setTmModes] = useState<Partial<Record<TextFamily, TextMode[]>>>({});
+  const tmModesRef = useRef<Partial<Record<TextFamily, TextMode[]>>>({});
+  useEffect(() => { tmModesRef.current = tmModes; }, [tmModes]);
+  const [tmMode, setTmMode] = useState<Record<TextFamily, string>>({ mfsk: 'auto' });
+  const tmModeRef = useRef<Record<TextFamily, string>>({ mfsk: 'auto' });
+  /** ★★★ V12 PAGING — ANDROID LOCAL HARDWARE ONLY: the server's `pagingModes` (AUTO first), [] = not offered. The server
+   *  offers it only on the phone's own engine; the key is ALSO gated here on a genuine local USB session (pagingHere). */
+  const [pagingModes, setPagingModes] = useState<PagingMode[]>([]);
+  const pagingModesRef = useRef<PagingMode[]>([]);
+  useEffect(() => { pagingModesRef.current = pagingModes; }, [pagingModes]);
+  const [pagingMode, setPagingMode] = useState('auto');
+  const pagingModeRef = useRef('auto');
   /** ★ V12: vibeserver.json `tunable` — the windows this radio can be tuned in (DSC / JTTY keys outside them are not drawn). */
   const [radioTunable, setRadioTunable] = useState<Array<[number, number]>>([]);
   /** ★ V12 DIGITAL SPOTS (docs/v12/DIGITAL-SPOTS.md): vibeserver.json spotModes / spotsBand + spotBands. */
@@ -5004,6 +5033,29 @@ export default function SDRScreen({ route, navigation }: Props) {
   // ── Decoder ───────────────────────────────────────────────────────────────
 
   const [activeDecoder,  setActiveDecoder]  = useState<DecoderType>(null);
+  /* ★★★ V12 PAGING IS SILENT WHILE IT RUNS (Stuart, 2026-10-31): the pager data is not played out of the speaker. The
+   *  mute is DERIVED from one fact — the open decoder is `paging` — never set by the PAGE key itself, so nothing can leave
+   *  it stuck on: closing the box, switching to another decoder, a disconnect that clears the decoder, or leaving the
+   *  screen all end it, and the listener's own mute state from before PAGE comes back. A reconnect while PAGE stays open
+   *  restarts the audio unmuted (every native start clears its mute) — the second branch mutes it again. A crash needs
+   *  nothing: the mute is not stored, and the next start is unmuted. Same shape as Band's mute (preBandMuteRef). */
+  const prePagingMuteRef = useRef<boolean | null>(null);
+  const pagingOn = activeDecoder === 'paging';
+  useEffect(() => {
+    const VM = NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void };
+    if (pagingOn) {
+      if (prePagingMuteRef.current === null) prePagingMuteRef.current = isMutedRef.current;
+      if (!isMuted) { VM?.setMuted?.(true); setIsMuted(true); }
+    } else if (prePagingMuteRef.current !== null) {
+      const back = prePagingMuteRef.current; prePagingMuteRef.current = null; VM?.setMuted?.(back); setIsMuted(back);
+    }
+  }, [pagingOn, isMuted]);
+  useEffect(() => () => {
+    if (prePagingMuteRef.current !== null) {
+      (NativeModules.VibePowerModule as { setMuted?: (m: boolean) => void })?.setMuted?.(prePagingMuteRef.current);
+      prePagingMuteRef.current = null;
+    }
+  }, []);
   // ★ Advanced RDS. Separate from activeDecoder on purpose: it is a server-side analyser, not
   // a DecoderClient decoder, and the two can be open at once without fighting.
   const [advRdsOpen, setAdvRdsOpen] = useState(false);
@@ -5509,9 +5561,13 @@ export default function SDRScreen({ route, navigation }: Props) {
       onDot:    (d)          => setDecoding(d === 'active' || d === 'rx'),
       // WEFAX/SSTV — drive the panel's image canvas (skin canvas parity).
       // WEFAX lines are greyscale, SSTV lines are RGB; route by active decoder.
-      onImageStart: (w: number, h: number) => decoderImageRef.current?.imageStart(w, h),
+      onImageStart: (w: number, h: number) => {
+        if (activeDecRef.current === 'hell') decoderImageRef.current?.hellStart();   // ★ FELD HELL: a fresh decoder, a new page next
+        else decoderImageRef.current?.imageStart(w, h);
+      },
       onImageLine:  (ln: number, w: number, px: Uint8Array) => {
         if (activeDecRef.current === 'sstv') decoderImageRef.current?.sstvLine(ln, w, px);
+        else if (activeDecRef.current === 'hell') decoderImageRef.current?.hellLine(ln, w, px);   // ★ FELD HELL: drawn plainly
         else                                 decoderImageRef.current?.wefaxLine(ln, w, px);
       },
       onImageDone: ()            => decoderImageRef.current?.imageDone(),
@@ -5633,7 +5689,7 @@ export default function SDRScreen({ route, navigation }: Props) {
 
   // Selected decoder mode — persists across stop/start (skin _mode vs _on)
   const [selDecoder, setSelDecoder] =
-    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'aprs'|null>(null);
+    useState<'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs'|null>(null);
 
   // Digital/CW spots — share the dxcluster WS; mutually exclusive with decoders.
   // Spots are BUFFERED in a ref and flushed to state on a 400ms tick: the
@@ -5704,12 +5760,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [advRdsOpen, status.mode, connected]);
 
   /** Time-signal station: 'auto' picks from the tuned frequency (see timeStationFor). */
-  const [timeStationPref, setTimeStationPref] = useState<string>('auto');
-  useEffect(() => {
-    AsyncStorage.getItem('lsv_time_station').then((v) => {
-      if (v) setTimeStationPref(v);
-    }).catch(() => {});
-  }, []);
+  //  ★★★ AUTO unless a station was picked by hand THIS session (decoderSession.ts) — never stored.
+  const [timeStationPref, setTimeStationPref] = useState<string>(() => sessionChoice('time.station', 'auto'));
   /** What the running TIME decoder was actually attached AS, so a retune can notice a change. */
   const timeStationRef = useRef<string>('');
 
@@ -6055,12 +6107,23 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!st) {
         timeStationRef.current = '';
         setDecoderStatus('Tune to a time signal first — MSF 60kHz, DCF77 77.5kHz, '
-                       + 'WWVB 60kHz, WWV 2.5/5/10/15/20MHz, RWM 4996/9996/14996kHz');
+                       + 'WWVB 60kHz, JJY 40/60kHz, WWV 2.5/5/10/15/20MHz, RWM 4996/9996/14996kHz');
         return;
       }
       if (decoderClient.current) decoderClient.current.timeStation = st as any;
       timeStationRef.current = st;
       setDecoderStatus(`${st.toUpperCase()}${forced ? '' : ' (auto)'} — waiting for the minute`);
+    }
+    if (type === 'rtty' && decoderClient.current) decoderClient.current.rttySettings = { ...rttySettingsRef.current };   // ★★★ this session's
+    if (isTextFamily(type) && decoderClient.current) {
+      decoderClient.current.textMode = { ...tmModeRef.current };
+      decoderClient.current.textModes = tmModesRef.current[type] ?? [];
+      setDecoderStatus(textModeStatusText(type, tmModeRef.current[type], null, tmModesRef.current[type] ?? []));
+    }
+    if (type === 'hell') setDecoderStatus(hellStatusText(null));   // ★ V12 FELD HELL: the tone is found by itself
+    if (type === 'paging' && decoderClient.current) {
+      decoderClient.current.pagingMode = pagingModeRef.current;
+      setDecoderStatus(pagingModeRef.current === 'auto' ? 'listening — AUTO (POCSAG or FLEX, from the signal)' : `listening — ${fullModeName(pagingModesRef.current, pagingModeRef.current)}`);
     }
     if (type === 'aprs' && decoderClient.current) {
       decoderClient.current.aprsBaud = aprsBaudRef.current;
@@ -6174,7 +6237,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   // Menu decoder toggle — skin semantics: same mode running → stop (selection
   // kept, settings stay visible); otherwise select + start. Menu stays open.
   // Spots and audio decoders share the panel — starting one stops the other.
-  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'aprs') => {
+  const onDecToggle = useCallback((m: 'rtty'|'navtex'|'wefax'|'sstv'|'morse'|'whisper'|'time'|'transcribe'|'cw'|'psk'|'jtty'|'dsc'|'sitora'|'same'|'selcal'|'mfsk'|'hell'|'paging'|'aprs') => {
     if (activeDecRef.current === m) {
       closeDecoder();
       setSelDecoder(null); // tapping the active decoder off COLLAPSES its settings callout
@@ -6209,7 +6272,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [closeDecoder, stopSpots, startSpotFlush, abStartVfo]);
 
   // RTTY settings — applying requires a re-attach (server reads params at attach)
-  const [rttySettings, setRttySettings] = useState<RttySettings>({ ...RTTY_PRESETS.auto });
+  const [rttySettings, setRttySettings] = useState<RttySettings>(() => ({ ...sessionChoice<RttySettings>('rtty', RTTY_PRESETS.auto) }));
+  const rttySettingsRef = useRef(rttySettings);
+  useEffect(() => { rttySettingsRef.current = rttySettings; }, [rttySettings]);
   /**
    * ★★★ REMEMBERED, because RTTY IS NOT ONE THING. The ham preset (170 shift, 45.45 baud) and the
    *     weather preset (450, 50, inverted) decode different stations, and a decoder pointed at the
@@ -6221,34 +6286,12 @@ export default function SDRScreen({ route, navigation }: Props) {
    * ★ Restored before any decoder can attach, and written on every change — one line each way,
    *   which is all this ever needed.
    */
-  useEffect(() => {
-    AsyncStorage.getItem('lsv_rtty').then((j) => {
-      if (!j) return;
-      try {
-        const p = JSON.parse(j) as Partial<RttySettings>;
-        if (typeof p?.shift === 'number' && typeof p?.baud === 'number') {
-          const next: RttySettings = {
-            shift: p.shift, baud: p.baud,
-            encoding: p.encoding === 'CCIR476' || p.encoding === 'ASCII' ? p.encoding : 'ITA2',
-            inverted: !!p.inverted,
-            /* ★★ ALWAYS STARTS IN AUTO (Stuart, 2026-10-04: "it doesnt default to auto though"). The memory was for ham vs
-             *  weather chosen BY HAND; AUTO now finds both (and PBB's 1 stop bit), so a launch starts in AUTO and the last
-             *  manual values wait underneath — one tap on any of them turns AUTO off with the rest as they were. */
-            auto: true,
-            stop: p.stop === 1 || p.stop === 2 ? p.stop : 1.5,
-            usos: p.usos === true,
-            dataBits: p.dataBits === 8 ? 8 : 7,
-            parity: p.parity && 'NEOMS'.includes(p.parity) ? p.parity : 'N',
-          };
-          setRttySettings(next);
-          if (decoderClient.current) decoderClient.current.rttySettings = { ...next };
-        }
-      } catch {}
-    }).catch(() => {});
-  }, []);
+  /* ★★★ SUPERSEDED 2026-10-31 (Stuart: "decoder default to auto when activated, unless a user has set manual settings in
+   *  the same session"): RTTY is no longer restored from storage. It starts in AUTO; a manual choice made this session is
+   *  kept (decoderSession.ts) until the app is closed. The note above is why it WAS remembered — AUTO now finds both. */
   const onRttySettings = useCallback((s: RttySettings) => {
     setRttySettings(s);
-    AsyncStorage.setItem('lsv_rtty', JSON.stringify(s)).catch(() => {});
+    setSessionChoice('rtty', s, RTTY_PRESETS.auto);   // ★★★ for this session only (decoderSession.ts)
     const dc = decoderClient.current;
     if (!dc) return;
     dc.rttySettings = { ...s };
@@ -6317,6 +6360,24 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_psk_width', String(v)).catch(() => {});
     if (activeDecRef.current === 'psk' && pskSkimRef.current) openDecoder('psk');
   }, [openDecoder]);
+  /** ★ V12 MFSK / OLIVIA / THOR: AUTO or a sub-mode (a server `<family>Modes` id) — kept for the session; a re-attach while it runs. */
+  const onTextMode = useCallback((fam: TextFamily, id: string) => {
+    tmModeRef.current = { ...tmModeRef.current, [fam]: id }; setTmMode(tmModeRef.current);
+    setSessionChoice('textmode.' + fam, id, 'auto');   // ★★★ for this session only (decoderSession.ts)
+    if (activeDecRef.current === fam) openDecoder(fam);
+  }, [openDecoder]);
+  useEffect(() => {   // ★★★ AUTO unless picked by hand THIS session (decoderSession.ts) — never stored
+    const m = { ...tmModeRef.current };
+    for (const fam of TEXT_FAMILIES) m[fam] = sessionChoice('textmode.' + fam, 'auto');
+    tmModeRef.current = m; setTmMode(m);
+  }, []);
+  /** ★ V12 PAGING: AUTO or a rate (a server `pagingModes` id) — kept for the session; a re-attach while it runs. */
+  const onPagingMode = useCallback((id: string) => {
+    pagingModeRef.current = id; setPagingMode(id);
+    setSessionChoice('paging.mode', id, 'auto');   // ★★★ for this session only (decoderSession.ts)
+    if (activeDecRef.current === 'paging') openDecoder('paging');
+  }, [openDecoder]);
+  useEffect(() => { const v = sessionChoice('paging.mode', 'auto'); pagingModeRef.current = v; setPagingMode(v); }, []);   // ★★★ session only
   /** ★ V12 APRS: VHF 1200 / HF 300 — remembered; a different decoder on the server, so a re-attach while it runs. */
   const onAprsBaud = useCallback((b: AprsBaud) => {
     aprsBaudRef.current = b; setAprsBaud(b);
@@ -6882,6 +6943,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       onNdbStats: (st) => { if (!destroyed.current) setNdbStats(st); },
       // ★ V12 DRM: a report after leaving DRM is a ghost (the web's onDrm)
       onDrm: (d) => { if (!destroyed.current && client.current?.getStatus().mode === 'drm') setDrmState(d); },
+      // ★ V12 tone ID: NFM only (a label after leaving NFM is a ghost)
+      onToneId: (l) => {
+        if (destroyed.current) return;
+        const m = client.current?.getStatus().mode;
+        setToneLabel(m === 'nfm' || m === 'fm' ? l : '');
+      },
       /* ★ V12 AIS: a report (on — arriving MEANS AIS is on, whoever put the receiver there: the map opens on the transition),
        *  the server's ais_off (null), or a refusal (the map that opened on the press closes; the reason as an alert, after
        *  the modal has gone — onAdsb's note). */
@@ -11017,6 +11084,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [radioCaps?.driver, hwTunerBwAuto, hwVibeAgc, showVtsNotice]);
 
   const vtsLastStation    = useRef('');
+  /* ★★ V12 CTCSS / DCS TONE ID (VibeServer, onToneId): the NFM channel's tone as the server reads it — "CTCSS 88.5 Hz",
+   *  "DCS 023N (= 047I)" — shown as the VTS line's QUIET SUFFIX: in the message slot after a bookmark's name
+   *  ("GB3NB: CTCSS 82.5 Hz", the text colour, not the name's), or on its own when nothing else names the channel. Held
+   *  while the tone is locked; the server unlocks it ≈ 2.5 s after the carrier drops, and clears it on a retune. */
+  const [toneLabel, setToneLabel] = useState('');
+  const toneLabelRef      = useRef('');
+  const toneNotifKey      = useRef(0);
   const vtsBandKey        = useRef<string | null>(null);
   const vtsBandInit       = useRef(false);
   const vtsArrowJumpUntil = useRef(0);
@@ -11691,9 +11765,37 @@ export default function SDRScreen({ route, navigation }: Props) {
       // the QSO is live (rather than the bookmark timing out under the caller).
       const voiceMode = ['dmr', 'ysf', 'dstar', 'nxdn', 'm17', 'radel', 'radeu']
         .includes(String(client.current?.getStatus().mode ?? ''));
-      setVtsNotif({ key: vtsKey.current, name: nearest.name, kind: 'station-on', hold: voiceMode, source: nearest.source, flag: nearest.flag });
+      setVtsNotif({ key: vtsKey.current, name: nearest.name, rt: toneLabelRef.current || undefined, kind: 'station-on',
+                    hold: voiceMode || !!toneLabelRef.current, source: nearest.source, flag: nearest.flag });
     }
   }, [ituRegion, showBandNotif, onMode]);
+
+  // ★ V12 tone ID: a new tone (or its end) re-draws the line — after a bookmark's name, or alone. A live station (RDS /
+  //   DAB / a DMR caller) owns the bar, and a notice keeps its turn (vtsNoticeUntil); the next tune picks the tone up.
+  useEffect(() => {
+    toneLabelRef.current = toneLabel;
+    if (liveStationRef.current || Date.now() < vtsNoticeUntil.current) return;
+    const hz = status.frequency;
+    const nearest = hz ? findNearest(vtsBookmarks.current, hz) : null;
+    if (nearest && Math.abs(nearest.offset) <= VTS_ON_HZ) {
+      toneNotifKey.current = 0;
+      vtsLastStation.current = nearest.name;
+      vtsKey.current++;
+      setVtsNotif({ key: vtsKey.current, name: nearest.name, rt: toneLabel || undefined, kind: 'station-on',
+                    hold: !!toneLabel, source: nearest.source, flag: nearest.flag });
+    } else if (toneLabel) {
+      vtsKey.current++;
+      toneNotifKey.current = vtsKey.current;
+      setVtsNotif({ key: vtsKey.current, name: '', rt: toneLabel, kind: 'station-on', hold: true });
+    } else if (toneNotifKey.current) {
+      const k = toneNotifKey.current;
+      toneNotifKey.current = 0;
+      setVtsNotif((n) => (n && n.key === k ? null : n));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toneLabel]);
+  // ★ …and it belongs to NFM only: any other mode drops it at once, without waiting for the server's ''.
+  useEffect(() => { if (status.mode !== 'nfm' && status.mode !== 'fm') setToneLabel(''); }, [status.mode]);
 
   // Watch the tuned frequency (debounced — the drum emits many per second)
   useEffect(() => {
@@ -12769,7 +12871,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears), and under them a BALANCE between A and B to turn the louder one down; VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs, opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, SSTV, APRS) and Utility or Broadcast (TIME, ADV RDS). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers it, DRM sits beside AM: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK \u2014 one key for MFSK16/32, OLIVIA, CONTESTIA and THOR: AUTO names the one it finds, and FAMILY and MODE under the key pick one by hand when AUTO cannot lock \u2014, HELL \u2014 Feld Hell (Hellschreiber), drawn as it is heard: the strips build up in the picture box a page at a time and you read them, with PREV for the page before \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG and FLEX, the protocol and rate found by AUTO and named in the box, with PROTOCOL (and RATE for POCSAG) under the key for when AUTO cannot lock; the speaker is muted while it runs, and pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
     // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
@@ -13787,7 +13889,14 @@ export default function SDRScreen({ route, navigation }: Props) {
       {/* Local hardware muted (media-control pause): the RTL/waterfall keep running,
           only audio is muted. Tap unmutes + clears the media-control paused state.
           (Network instances disconnect on pause, so this is local-only.) */}
-      {isLocal && isMuted && !dataSaverOff && !reconnectFailedUi && (
+      {/* ★★ V12 PAGING mutes the speaker while PAGE runs: the banner says so and is not a key (an unmute would be undone at
+          once — a control whose every use is a no-op is not offered). Closing PAGE puts the audio back as it was. */}
+      {isLocal && isMuted && pagingOn && !dataSaverOff && !reconnectFailedUi && (
+        <View style={[styles.mutedBanner, { top: insets.top + 46 }]} pointerEvents="none">
+          <Text style={styles.mutedBannerText}>🔇 AUDIO MUTED WHILE PAGE RUNS</Text>
+        </View>
+      )}
+      {isLocal && isMuted && !pagingOn && !dataSaverOff && !reconnectFailedUi && (
         <TouchableOpacity style={[styles.mutedBanner, { top: insets.top + 46 }]}
           ref={screenNavRef('mutedBanner', unmute)}
           onPress={unmute} activeOpacity={0.85}>
@@ -14665,7 +14774,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           timeStation: timeStationPref,
           onTimeStation: (v: string) => {
             setTimeStationPref(v);
-            AsyncStorage.setItem('lsv_time_station', v).catch(() => {});
+            setSessionChoice('time.station', v, 'auto');   // ★★★ for this session only (decoderSession.ts)
             // ★ Applied at once when the decoder is already running, so choosing a station is a
             //   correction you SEE rather than one that needs stopping and starting.
             if (activeDecRef.current === 'time') openDecoder('time');
@@ -14744,6 +14853,14 @@ export default function SDRScreen({ route, navigation }: Props) {
           onJttyDial: (hz: number) => { markInteract(); onTuneHz(hz, 'usb' as SDRMode); },
           dscAvail: dscCapable && !!(client.current as any)?.isVibe,
           sitoraAvail: sitoraCapable && !!(client.current as any)?.isVibe,
+          sameAvail: sameCapable && !!(client.current as any)?.isVibe,
+          selcalAvail: selcalCapable && !!(client.current as any)?.isVibe,
+          hellAvail: hellCapable && !!(client.current as any)?.isVibe,   // ★ V12 FELD HELL
+          tmModes: (client.current as any)?.isVibe ? tmModes : {}, tmMode, onTextMode,
+          // ★★★ V12 PAGING: Android, the phone's OWN radio (a loopback session — not a VibeServer, rtl_tcp or SpyServer), and
+          //     the engine offering it. Nowhere else, whatever a server says (AGENTS.md: no control where it cannot work).
+          pagingAvail: pagingHere && pagingModes.length > 0,
+          pagingModes, pagingMode, onPagingMode,
           dscChans: dscChannelsReachable(canReach),
           /* ★★ V12 + the band's ROUTINE channels (ITU-R M.541) — of the band the dial is on (Stuart, 2026-10-29) */
           ...(() => { const p = dscPanelChannels(status.frequency, canReach);
