@@ -43,6 +43,9 @@ const SNIFF = `(() => { window.__sent = []; const o = WebSocket.prototype.send;
 
 async function session(tag, radioExtra, run) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-webab-${tag}-`));
+  // ★ The browser profile (~0.5 GB) never outlives the run — a failed or timed-out run keeps its logs, not Edge's cache
+  //   (53 kept waterfall-history runs held 25 GB of /var/folders, 2026-10-31).
+  process.on('exit', () => { try { fs.rmSync(path.join(dir, 'edge'), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {} });
   for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'VFO A/B web test', locator: 'IO92nh', adminPass: 'vfoab-web-admin',
     radios: [{ serial: `${tag}-web`, label: 'Test radio', enabled: true, configured: true, users: 1, ...radioExtra }] }));

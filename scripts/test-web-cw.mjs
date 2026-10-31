@@ -50,6 +50,9 @@ const logPath = path.join(dir, 'server.log');
 const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), '--freq', String(CENTRE), '--mode', 'cwu', '--users', '1'],
                   { env, stdio: ['ignore', fs.openSync(logPath, 'w'), fs.openSync(logPath, 'a')] });
 const prof = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-webcw-edge-'));
+// ★ The browser profile (~0.5 GB) never outlives the run — a failed or timed-out run keeps its logs, not Edge's cache
+//   (53 kept waterfall-history runs held 25 GB of /var/folders, 2026-10-31).
+process.on('exit', () => { try { fs.rmSync(prof, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {} });
 let edge = null;
 const shotsV12 = [];
 try {

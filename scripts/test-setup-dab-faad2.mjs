@@ -33,6 +33,9 @@ const until = async (f, ms = 8000) => { for (let t = 0; t < ms; t += 100) { if (
 
 const ADMIN = 'faad2-admin-pass', SERIAL = 'faad-rtl';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-faad2-'));
+// ★ The browser profile (~0.5 GB) never outlives the run — a failed or timed-out run keeps its logs, not Edge's cache
+//   (53 kept waterfall-history runs held 25 GB of /var/folders, 2026-10-31).
+process.on('exit', () => { try { fs.rmSync(path.join(dir, 'edge'), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {} });
 for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
 let P = 0;
 for (let i = 0; i < 20 && !P; i++) {

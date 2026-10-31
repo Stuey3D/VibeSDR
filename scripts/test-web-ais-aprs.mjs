@@ -24,6 +24,9 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 
 async function session(tag, clip, centre, freq, mode, run) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-web${tag}-`));
+  // ★ The browser profile (~0.5 GB) never outlives the run — a failed or timed-out run keeps its logs, not Edge's cache
+  //   (53 kept waterfall-history runs held 25 GB of /var/folders, 2026-10-31).
+  process.on('exit', () => { try { fs.rmSync(path.join(dir, 'edge'), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {} });
   for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'AIS/APRS web test', locator: 'IO90bs', adminPass: 'aisaprs-web-admin',
     radios: [{ serial: `${tag}-web`, label: 'Test radio', enabled: true, configured: true, users: 1 }] }));

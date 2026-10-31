@@ -21,6 +21,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-webism-'));
+// ★ The browser profile (~0.5 GB) never outlives the run — a failed or timed-out run keeps its logs, not Edge's cache
+//   (53 kept waterfall-history runs held 25 GB of /var/folders, 2026-10-31).
+process.on('exit', () => { try { fs.rmSync(path.join(dir, 'edge'), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {} });
 for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'ISM web test', locator: 'IO92nh', adminPass: 'ism-web-admin',
   radios: [{ serial: 'ism-web', label: 'Test radio', enabled: true, configured: true, users: 1 }] }));

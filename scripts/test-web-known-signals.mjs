@@ -32,6 +32,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-known-'));
+// ★ The browser profile (~0.5 GB) never outlives the run — a failed or timed-out run keeps its logs, not Edge's cache
+//   (53 kept waterfall-history runs held 25 GB of /var/folders, 2026-10-31).
+process.on('exit', () => { try { fs.rmSync(path.join(dir, 'edge'), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {} });
 // the driver, plus the labels module on the page's window
 fs.writeFileSync(path.join(dir, 'entry.ts'), `import '${path.join(root, 'scripts/web-wf-fan-driver.ts')}';
 import * as K from '${path.join(root, 'src/utils/knownSignals.ts')}';
@@ -162,6 +165,7 @@ try {
   try { edge.kill(); } catch {}
   try { mock?.kill(); } catch {}
   console.log(`\n${pass} passed, ${fail} failed`);
+  if (!fail) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   process.exit(fail ? 1 : 0);
 }
 

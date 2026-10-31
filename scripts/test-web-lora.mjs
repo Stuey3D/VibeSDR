@@ -22,6 +22,9 @@ const freePort = () => new Promise((res) => { const s = net.createServer(); s.li
 const watchdog = setTimeout(() => { console.log('   FAIL watchdog: 240 s'); process.exit(1); }, 240_000);
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-weblora-'));
+// ★ The browser profile (~0.5 GB) never outlives the run — a failed or timed-out run keeps its logs, not Edge's cache
+//   (53 kept waterfall-history runs held 25 GB of /var/folders, 2026-10-31).
+process.on('exit', () => { try { fs.rmSync(path.join(dir, 'edge'), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); } catch {} });
 for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'LoRa web test', locator: 'IO92nh', adminPass: 'lora-web-admin',
   radios: [{ serial: 'lora-web', label: 'Test radio', enabled: true, configured: true, users: 1 }] }));
