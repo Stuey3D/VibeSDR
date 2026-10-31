@@ -160,8 +160,14 @@ int main(int argc, char** argv) {
         // ★ The server's own pipeline: Service, its threads and queues, fed in the radio's 32 ms blocks.
         Service svc;
         std::mutex printMtx;
+#if defined(VIBE_ISM_OLD_SERVICE)
+        // ★ The bench's "before": this file built against the headers from before the thread split (one worker), real time
+        //   only — the old service had none of the test hooks.
+        if (!realtime) { std::fprintf(stderr, "VIBE_ISM_OLD_SERVICE: --realtime only\n"); return 2; }
+#else
         svc.setLossless(!realtime);
         if (!realtime) svc.setTap([&](const Burst& b, const std::vector<Reading>&) { std::lock_guard<std::mutex> g(printMtx); onBurstBody(b); });
+#endif
         svc.setLora(lora, loraBudget);
         svc.start(*band, centre, rate, 0, false, galLog);
         const size_t blk = size_t(rate * 0.032);
@@ -180,10 +186,13 @@ int main(int argc, char** argv) {
             if (realtime) std::this_thread::sleep_until(w0 + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(fed)));
         }
         std::fclose(f);
+#if !defined(VIBE_ISM_OLD_SERVICE)
         if (!realtime) svc.endOfStream();   // ★ close what is open, as the inline run's flush() does
         // drain: lossless waits until every stage is idle; real time gives the stages a last second, as a live server would
         if (!realtime) { while (!svc.idle()) std::this_thread::sleep_for(std::chrono::milliseconds(20)); }
-        else std::this_thread::sleep_for(std::chrono::seconds(1));
+        else
+#endif
+        std::this_thread::sleep_for(std::chrono::seconds(1));
         const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count();
         const auto cpu = threadCpu();
         std::string rep = svc.report();

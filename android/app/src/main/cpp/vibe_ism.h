@@ -516,6 +516,7 @@ private:
                     Hold& hd = hold_[held];
                     hd.lastHit = total_;
                     if (gr.pmax <= hd.peak * kHoldOver) { ++heldN_; VIBE_ISM_P(if (prof_) ++prof_->held;) continue; }
+                    VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "over    %9.3f s  %+9.1f kHz  %5.1f dB over the hold's peak\n", double(total_) / w_, f / 1e3, 10.0 * std::log10(gr.pmax / hd.peak));)
                 }
             }
             /* ★★ SPLATTER IS NOT A BURST. A strong OOK transmitter's keying edges spread −30…−45 dB sidebands hundreds of
@@ -559,7 +560,10 @@ private:
             }
         }
         // release the holds that went quiet
-        for (auto& hd : hold_) if (hd.on && double(total_ - hd.lastHit) > kHoldQuietS * w_) hd.on = false;
+        for (auto& hd : hold_) if (hd.on && double(total_ - hd.lastHit) > kHoldQuietS * w_) {
+            hd.on = false;
+            VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "release %9.3f s  %+9.1f kHz\n", double(total_) / w_, hd.f / 1e3);)
+        }
     }
     void holdAt(double f, float peak) {
         Hold* slot = nullptr;
@@ -568,6 +572,7 @@ private:
         if (!slot) { slot = &hold_[0]; for (auto& hd : hold_) if (hd.lastHit < slot->lastHit) slot = &hd; }   // full: the stalest
         if (!slot->on || std::fabs(slot->f - f) >= kMatchHz) { slot->peak = 0; VIBE_ISM_P(if (prof_) ++prof_->holds;) }
         slot->on = true; slot->f = f; slot->lastHit = total_; slot->peak = std::max(slot->peak, peak);
+        VIBE_ISM_P(if (prof_ && prof_->log) std::fprintf(stderr, "hold    %9.3f s  %+9.1f kHz  peak %5.1f dB\n", double(total_) / w_, f / 1e3, 10.0 * std::log10(std::max(1e-20f, slot->peak)));)
     }
 public:
     /** Frequencies held right now (kHoldQuietS): carriers and spurs that are being ignored — for the status. */
