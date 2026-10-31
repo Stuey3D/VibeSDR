@@ -661,8 +661,8 @@ blocks) joins mid-over and once printed "CQPDE" (one wrong character) and once l
 (printing nothing). ★ FIXED in section 12 — every failure was the decoder, not the clip.
 
 Owed: real air (an OLIVIA calling channel, e.g. 14.0715 USB; MFSK/THOR are rare on air), the flaky web e2e above, the Android gradle / iOS `build_ios.sh` compiles
-(the shim and host compiled on the Mac only), sharing one finder between OLIVIA and CONTESTIA of the same tones (≈ 17 %
-of OLIVIA AUTO's cost, decode-neutral), CONTESTIA's newline code (no recording carries one).
+(the shim and host compiled on the Mac only), sharing one finder between OLIVIA and CONTESTIA of the same tones (DONE, section 13: −14.6 %,
+decodes identical), CONTESTIA's newline code (no recording carries one).
 
 ## 12. The flaky web test was the DECODER — five finder faults fixed (2026-10-31, fifth run)
 
@@ -725,25 +725,90 @@ False decodes after the fixes: white noise 60 min through EACH family's AUTO —
 60 s each, as before). ★ **build-web is still needed before any release**: the 10 runs used a locally built page
 (`scripts/build-web.mjs`, vibeserver rebuilt); `vibe_web_page.h` was put back, NOT committed. No web source changed here.
 
-## RESUME HERE (updated 2026-10-31 ≈ 08:30 UTC, after the fourth run: SAME/SELCAL web keys, MFSK/OLIVIA/CONTESTIA/THOR)
+## 13. OLIVIA ↔ CONTESTIA share one finder's scores — 13–15 % of OLIVIA AUTO on a Pi 2, decodes identical (2026-10-31, fifth run)
 
-Done this run (commits on `v12-decoders-wave2`): the web keys for SAME and SELCAL (section 10); MFSK16/32, OLIVIA with
-CONTESTIA, and THOR — engine, server, app and web (section 11). No server or device was touched; synthetic signals and
-public reference recordings only.
+`Finder` (decoders/textmodes.cpp): a receiver whose spectra and tone set are an earlier receiver's (OLIVIA and CONTESTIA
+8/250, 16/500, 32/1000 in AUTO) reads that receiver's scores instead of computing them (`shareScoresOf`; its `update()`
+returns at once). Each keeps its own place, bans and hunt. The owner is registered first, so its scores are this
+frame's when the twin reads them — the same numbers it would have computed.
+
+| | before (section 12's code) | shared |
+|---|---|---|
+| Pi 2 model, qemu-arm count, 60 s of noise through OLIVIA AUTO (NEON) | 2257 M | **1927 M (−14.6 %)** |
+| the same, scalar (`VIBE_FORCE_SCALAR` + `PFFFT_SIMD_DISABLE`) | 2690 M | **2346 M (−12.8 %)** |
+| Pi 2 estimate (0.6–0.8 IPC at 900 MHz) | ≈ 5.2–7.0 % of a core | **≈ 4.5–5.9 %** |
+| Mac, 20 min of noise through OLIVIA AUTO | 2.39 s | 1.91 s (−20 %) |
+
+Below the ≈ 17 % first estimated: the Walsh transforms and the spectra are the rest of the cost. **Identical decodes,
+proved**: `test-textmodes` with the reference recordings — whole output identical; every OLIVIA/CONTESTIA recording through
+AUTO with the per-second trace (`VIBE_TM_DEBUG`: every receiver's quality, score, place, Hz) — byte-identical; seven of the
+web clip's looped runs, traces byte-identical; AUTO sweeps (5 sub-modes × −12…−8 dB × 10) identical; armhf NEON/scalar ×
+`-ffp-contract` off/fast under qemu: one fingerprint (e626f1d2), the same before and after.
+(Section 12's fixes measured +3.5–4 % on noise against section 11's counts for every family — MFSK 537 → 556 M, THOR
+1604 → 1666 M, OLIVIA 2172 → 2257 M — the hunt's bookkeeping; the sharing more than pays it back for OLIVIA.)
+
+## 14. FELD HELL — engine, host and test DONE; clients NOT wired (2026-10-31, fifth run)
+
+Files: `decoders/feld_hell.{h,cpp}` (receiver + test transmitter), host ext `hell` (`buildHellLocked_` in
+`vibe_decoder_host.h`), CMake ×2, `build_ios.sh`, `scripts/run-tests.sh` (`test-feld-hell`, and Hell in the host tests'
+deps), `vibeserver/test-feld-hell.cpp`, `tools/hell-bench/` (`hell_file` draws a file or the transmitter into a PGM;
+`--cost` for qemu; `qemu.sh`).
+
+**Clean room.** Published descriptions only: Wikipedia "Hellschreiber" (each received column printed twice, one copy below
+the other, so timing errors slant the text instead of cutting it; on-off keying) and the Signal Identification Wiki's table
+(Feld Hell 122.5 Bd, ≈ 2.5 characters/s, a column every 1/17.5 s, OOK, ≈ 350 Hz). So 7 elements a column (122.5 / 17.5),
+7 columns a character; the receiver samples half-elements (14 a column). ★ The RESUME note's "122.5 columns/s" was a slip
+(122.5 is the element rate). Which end of a column comes first was settled by drawing the public recordings: **bottom
+first** — the Wikimedia slogan reads "Wir sammeln das Wissen der Menschheit – auch Deines… WIKIPEDIA – Die freie
+Enzyklopädie", Hellschreiber.ogg "WELCOME TO WIKIPEDIA. THE FREE ENCYCLOPEDIA THAT ANYONE CAN EDIT", sigidwiki
+FeldHell "…THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG 1234567890". fldigi was not read or run; no other decoder's code
+was read. The test transmitter's 5 × 7 font is this test's own drawing.
+
+**Receiver.** Drawn, not read (no OCR): the strongest steady tone in 300–2700 Hz (a 1024-point PFFFT every 64 ms, power EMA;
+found at 8× the band mean after the average has settled, held while 4×), mixed down (four samples a lane, q65v), a running
+box over one half-element, sampled every half-element by the receiver's own clock (unsynchronised, as the printer was —
+the doubled print absorbs drift), a two-level slicer (the running means of "on" and "off") to grey. Strips of 210 columns
+(12 s, 30 characters) × 28 rows (the column twice); each strip's rows go out as WEFAX's 0x01 lines and are re-sent every
+character, so a client that draws line y at y watches the strip grow; 0x02 once at the start; `{"type":"hell_status",
+"data":{hz,signal}}` on change. Nothing is drawn while no tone is keyed. Not kept for replay.
+
+| | |
+|---|---|
+| Synthetic, upper copy against the transmitter's elements | +10 dB 99.4 % (48 kHz in), 99.2 % (12 kHz in), sender 300 ppm fast 94.8 %, 0 dB 97.8 %; 20 noise seeds at +10 dB (0 and 300 ppm) and 0 dB: all ≥ 95 % |
+| Weaker (informational) | −3 dB 91.8 %, −6 dB 58–83 % over 20 seeds, −9 dB ≈ 62 %, −12 dB nothing drawn (the tone is not found) |
+| False draws | white noise 60 min: 0 lines |
+| Reference recordings | all three draw legibly (above); the test checks they draw (rows, 15–22 % ink) |
+| Pi 2 cost (qemu count, 60 s drawing all the time) | 202.5 M instr NEON / 237.8 M scalar → ≈ 0.5–0.6 % of a core |
+| SIMD | PFFFT; spectrum powers and EMA four bins a lane; the mixer four samples a lane; the box filter scalar (sequential running sums, two adds a sample). Mac NEON = scalar: identical output. armhf NEON = scalar with `-ffp-contract=off`; with the Android CMake's `fast` the grey values differ in the last bits (the compiler fuses the scalar mixer's multiply-adds), every decision and percentage the same |
+
+Dead ends (measured): moving the column phase to the least-inked row, a half-element a column (the recordings' letters
+wobbled) or once after 2 s (still moved mid-word); a peak-and-floor level tracker (−6 dB drew as noise); a box one element
+long (+3 dB, but every edge shifted: 0 dB 90.2 → 87.6 %); finding at 6× / holding at 3× (2884 lines of noise in 60 min).
+Bugs found by the tests and fixed: the column clock started when the tone was found (every letter a row out); the first
+hops' raw periodograms found tones in noise; the part-empty first column set the levels from uninitialised samples (NaN on
+armhf — every pixel black on 4 seeds in 20).
+
+**Owed (next):** the CLIENTS. vibeserver.json does not offer `hell` yet and no client shows a key, so nothing is visible
+(AGENTS.md: no control until it works). To wire: vibeserver.json `"hell": true` (and the shim's `kOffer`/owner switch),
+the web client (`decoders.ts` mode `hell` reusing the `wefax` 0x01 path into `drawDecLine`, a key in HF Amateur via
+`decoderBands.ts`, the status line from `hell_status`, hint), the app (`DecoderClient`, `ModeSelector`, `DecoderPanel`'s
+image view as WEFAX's, `decoderBands`, `modeIcons`), then the copy: `sdrTour`, `AboutOverlay` feature list and release
+note, the website. A web e2e like `test-web-textmodes` (fake rtl_tcp replaying `feldHellSynth`). Then build-web.
+
+## RESUME HERE (updated 2026-10-31 ≈ 09:15 UTC, after the fifth run: the flaky test, the shared finder, Feld Hell)
+
+Done this run (commits on `v12-decoders-wave2`): section 12 (the web test's flakiness was five receiver faults — fixed,
+10/10, the test tightened), section 13 (OLIVIA/CONTESTIA share finder scores: −14.6 % on a Pi 2, decodes identical),
+section 14 (Feld Hell engine + host + test; clients not wired). No server or device was touched; synthetic signals and
+public reference recordings only. Colima was started for the qemu counts and stopped again.
 
 Next, in order:
-1. **Feld Hell — NOT STARTED.** Plan: the published description (ZL1BPU's Hell pages, the Feld-Hell standard: 122.5
-   columns/s, 7 × 14 half-pixel matrix, 245 baud OOK, each character 7 columns, sent twice tall so it reads despite
-   slant). It is an IMAGE-LIKE text: send greyscale columns down the WEFAX image path (0x01 lines, as WEFAX) so the eye
-   reads it; no OCR. Reference recordings already downloaded: `~/VibeSDR-mfsk-refs/samples/` Hellschreiber.ogg,
-   Wikipedia-Slogan_Hellschreiber.ogg (Wikimedia Commons, "Welcome to Wikipedia…" / slogan) and sigidwiki FeldHell.mp3
-   (8 kHz float32 copies beside them).
-2. **build-web** before any release (sections 10, 11): the web keys for SAME, SELCAL, MFSK, OLIVIA and THOR are in the
-   source and were tested against a locally built page; `vibe_web_page.h` is NOT committed.
-3. **ACARS → VDL2 → HFDL → RS41, FLEX, BPC, TDF, CHU labels** — still waiting on Stuart (sections 5–7).
-4. Owed across the wave: real-air tests (paging on a phone, NOAA Weather Radio, HF SELCAL, MSK144, FST4W, Q65, OLIVIA
-   on a calling channel), Android gradle and iOS `build_ios.sh` compiles, FST4's last ≈ 1 dB, sharing OLIVIA/CONTESTIA
-   finders (≈ 17 % of OLIVIA AUTO, decode-neutral).
+1. **Feld Hell clients** — section 14's "Owed" list (vibeserver.json, web, app, copy, a web e2e, build-web).
+2. **build-web** before any release (sections 10–12): `vibe_web_page.h` is NOT committed.
+3. **ACARS → VDL2 → HFDL → RS41, FLEX, BPC, TDF, CHU labels, CONTESTIA's constant** — still waiting on Stuart.
+4. Owed across the wave: real-air tests (paging on a phone, NOAA Weather Radio, HF SELCAL, MSK144, FST4W, Q65, OLIVIA on a
+   calling channel, Feld Hell), Android gradle and iOS `build_ios.sh` compiles (Feld Hell added to both lists, compiled on
+   the Mac only), FST4's last ≈ 1 dB, Feld Hell's weak-signal reach (−6 dB is the edge).
 
 Builds used: `~/VibeSDR-builds/decoders2-server` (cmake of this worktree, deps from `~/VibeSDR-v12/vibeserver/mac/deps/
 prefix`). The worktree's `node_modules` is a symlink to `~/VibeSDR-v12/node_modules`, excluded in `.git/info/exclude`

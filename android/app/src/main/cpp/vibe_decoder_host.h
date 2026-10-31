@@ -51,6 +51,7 @@
 #include "decoders/same_decoder.h"   // ★ V12 EAS / SAME (47 CFR § 11.31)
 #include "decoders/selcal_decoder.h" // ★ V12 SELCAL (ICAO Annex 10 Vol III, Amendment 91)
 #include "decoders/textmodes.h"      // ★ V12 MFSK16/32, OLIVIA/CONTESTIA, THOR (one object per family, AUTO)
+#include "decoders/feld_hell.h"      // ★ V12 FELD HELL, drawn: strips down the image path (0x01 lines, as WEFAX)
 #if defined(VIBE_PAGING)
 #include "vibe_paging_run.h"   // ★ V12 PAGING — Android local hardware only (the define is the Android library's)
 #endif
@@ -620,7 +621,7 @@ public:
     std::string kind() {
         std::lock_guard<std::mutex> lk(decMtx_);
         return wefax_ ? "wefax" : sstv_ ? "sstv" : (fsk_ || rttyAuto_) ? "fsk" : time_ ? "time" : cw_ ? (cw_->skimmer() ? "cwskim" : "cw")
-             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
+             : psk_ ? (psk_->skimmer() ? "pskskim" : "psk") : dsc_ ? "dsc" : same_ ? "same" : selcal_ ? "selcal" : tm_ ? TextModeDecoder::extName(tmFam_) : hell_ ? "hell" : sitora_ ? "sitora" : pagingOn_() ? "paging" : aprs_ ? "aprs" : jtty_ ? "jtty" : "none";
     }
     /** RTTY health for the admin page, or false when no FSK decoder runs. */
     bool fskHealth(unsigned long& resyncs, double& level, double& threshold, int& state) {
@@ -762,7 +763,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "same" || e == "selcal" || e == "mfsk" || e == "olivia" || e == "thor" || e == "hell" || e == "sitora" || (pagingBuilt() && e == "paging") || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -808,7 +809,7 @@ private:
         return false;
 #endif
     }
-    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || same_ || selcal_ || tm_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
+    bool running_() const { return fsk_ || rttyAuto_ || wefax_ || sstv_ || time_ || cw_ || psk_ || dsc_ || same_ || selcal_ || tm_ || hell_ || sitora_ || pagingOn_() || aprs_ || jtty_; }
     void clearLocked_() {
         // ★ The gallery's copy is finished FIRST, while nothing more can arrive: what it holds is written now.
         { DecoderTapPtr t; { std::lock_guard<std::mutex> tl(tapMtx_); t.swap(tap_); }
@@ -828,6 +829,7 @@ private:
         same_.reset();
         selcal_.reset();
         tm_.reset();
+        hell_.reset();
 #if defined(VIBE_PAGING)
         if (paging_) { paging_.reset(); if (pagingIq_.exchange(false)) pagingRunning().fetch_sub(1); }
 #endif
@@ -1031,6 +1033,8 @@ private:
             buildSelcalLocked_();
         } else if (ext == "mfsk" || ext == "olivia" || ext == "thor") {
             buildTextModeLocked_(ext, msg);
+        } else if (ext == "hell") {
+            buildHellLocked_();
 #if defined(VIBE_PAGING)
         } else if (ext == "paging") {
             buildPagingLocked_(msg);
@@ -1203,6 +1207,21 @@ private:
         tm_->onState = [this](int st) { uint8_t m[2] = { 0x03, (uint8_t)st }; broadcast(m, 2); };
         tm_->onStatus = [this](const std::string& j) { broadcastText("{\"type\":\"textmode_status\",\"data\":" + j + "}", -1); };
         log("decoder attached: " + ext + " " + mode);
+    }
+    /** ★★ FELD HELL (V12, 2026-10-31): drawn, not read (decoders/feld_hell.h). The strip being drawn goes out as WEFAX's
+     *  0x01 lines (line number, width, grey bytes) — re-sent as it fills, so a client that draws line y at y watches it
+     *  grow; 0x02 once at the start (a new picture); {"type":"hell_status","data":{hz, signal}} on change. Not kept for
+     *  replay (imageKind_ 0): a strip is seconds of text, not a chart. */
+    void buildHellLocked_() {
+        hell_.reset(new FeldHellDecoder(48000));
+        hell_->onLine = [this](uint32_t ln, uint32_t w, const uint8_t* px) {
+            std::vector<uint8_t> m; m.reserve(9 + w);
+            m.push_back(0x01); put32(m, ln); put32(m, w); m.insert(m.end(), px, px + w);
+            broadcast(m.data(), m.size());
+        };
+        hell_->onStatus = [this](const std::string& j) { broadcastText("{\"type\":\"hell_status\",\"data\":" + j + "}", -1); };
+        { uint8_t b = 0x02; broadcast(&b, 1); }
+        log("decoder attached: hell");
     }
     void buildSelcalLocked_() {
         selcal_.reset(new SelcalDecoder(48000));
@@ -1543,6 +1562,11 @@ private:
                 if (DecoderTapPtr t = tap()) t->tick();
                 return;
             }
+            if (hell_) {
+                hell_->feed(data, count);   // ★ FELD HELL: its lines and status are sent from inside
+                if (DecoderTapPtr t = tap()) t->tick();
+                return;
+            }
             if (selcal_) {
                 selcal_->feed(data, count);
                 if (DecoderTapPtr t = tap()) t->tick();
@@ -1643,6 +1667,7 @@ private:
     std::unique_ptr<SameDecoder> same_;       // ★ EAS / SAME (buildSameLocked_)
     std::unique_ptr<SelcalDecoder> selcal_;   // ★ SELCAL (buildSelcalLocked_)
     std::unique_ptr<TextModeDecoder> tm_;     // ★ MFSK / OLIVIA / THOR (buildTextModeLocked_)
+    std::unique_ptr<FeldHellDecoder> hell_;   // ★ FELD HELL (buildHellLocked_)
     TextModeDecoder::Family tmFam_ = TextModeDecoder::Family::Mfsk;
 #if defined(VIBE_PAGING)
     std::unique_ptr<PagingRun> paging_;       // ★ PAGING: fed the channel IQ (feedChannelIq) — Android local hardware only

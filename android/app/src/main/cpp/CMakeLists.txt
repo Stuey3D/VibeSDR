@@ -156,6 +156,7 @@ add_library(vibelocalsdr SHARED
     decoders/same_decoder.cpp     # ★ V12: EAS / SAME (47 CFR § 11.31)
     decoders/selcal_decoder.cpp   # ★ V12: SELCAL (ICAO Annex 10 Vol III, Amendment 91)
     decoders/textmodes.cpp        # ★ V12: MFSK16/32, OLIVIA/CONTESTIA, THOR
+    decoders/feld_hell.cpp        # ★ V12: FELD HELL, drawn
     decoders/paging_decoder.cpp   # ★ V12: PAGING (POCSAG, AUTO) — Android local hardware only (VIBE_PAGING, vibe_paging_run.h)
     decoders/cw_skimmer.cpp
     decoders/ndb_skimmer.cpp
