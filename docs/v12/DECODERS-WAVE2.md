@@ -297,9 +297,46 @@ twiddle recurrence.
 
 ---
 
+## 4. CTCSS / DCS tone ID — ENGINE DONE, not wired to clients yet (2026-10-31)
+
+Files: `decoders/tone_id.{h,cpp}` (outside RxPipeline), `digimodes/vmath4.h` (+ branch-free `vatan2`, `signBit01`),
+`vibeserver/test-tone-id.cpp` (in `scripts/run-tests.sh`).
+
+- **Own discriminator** on the listener's CHANNEL IQ (`feedIq`; or `feedDisc` for a raw discriminator): arg(x·x*₋₁)
+  with our vector atan2 (4.8e-6 rad, no float compares — sign-bit selects, so GCC armhf's compare problem cannot
+  bite), then CIC³ to ≈ 2 kHz, a 63-tap 300 Hz low-pass ÷2 → ≈ 1 kHz.
+- **CTCSS**: 2 s Hann FFT every 0.5 s; peak in 60–260 Hz ≥ 15 dB over the band median AND ≥ 10 dB over the band's
+  second peak (a DCS word's line spectrum fails that), log-parabola frequency within ±0.6 % (and < 0.45 of the gap to
+  the neighbour) of one of the 51 tones; three agreeing looks lock (≈ 3.5 s from cold), five misses unlock.
+- **DCS**: 134.4 bit/s; best of 16 bit phases; ≈ 2 s folded at the 23-bit period (fold consistency ≥ 0.7);
+  every cyclic shift × both bit orders × both polarities against Golay (23,12). The generator and frame layout were
+  PINNED by the published inverted-code equivalences: 12/12 pairs (023N = 047I, 025 = 244, 026 = 464, 031 = 627,
+  032 = 051, 043 = 445, 054 = 413, 065 = 271, 071 = 306, 072 = 245, 073 = 506, 074 = 174) reproduced only by
+  0xC75 with the 9-bit code under "100" (of 16 polynomial/layout/order combinations). The N/I polarity convention is
+  not pinned by that (an inverted code IS another code's normal): the label says both, "DCS 023N (= 047I)".
+- Measured (synthetic NFM at 24 kHz, ±600 Hz sub-audible under ±3 kHz voice-band audio): **51/51 CTCSS tones right**
+  (±0.4 % transmitter error, 15 dB CNR, lock ≤ 3.5 s), 151.4 beside 150.0 at 10 dB CNR; **32/32 DCS** (16 codes N + I);
+  weak: CTCSS and DCS 10/10 down to 3 dB CNR (16 kHz), 5/10 and 4/10 at 0 dB. **0 locks** in 10 min of noise, 5 min of
+  voice with no tone; DCS never read as CTCSS. Cost 0.13 ms a second of 24 kHz IQ on the Mac (≈ 0.013 %).
+  SIMD = scalar: the whole test's output identical with `-DVIBE_FORCE_SCALAR`.
+
+### Owed (the wiring — deliberately not done tonight)
+- **Server**: in `local_sdr_shim.cpp` `feedOneClient`, beside the raw-IQ tap (`iqTap(c.get(), c->slice.data(), got)`),
+  feed a per-client `ToneId` while the listener is in NFM (create on NFM, `reset()` on retune), at `c->chanRate`;
+  push `{"type":"tone","label":"CTCSS 88.5 Hz"}` to that listener on `onChange`. Not RxPipeline. Cost per listener is
+  below the noise of that loop; if the thread-priority rule wants it off the DSP worker, hand the slice to the
+  decoder host's queue instead.
+- **Clients**: the VTS line's quiet suffix (DECODER-RESEARCH.md §CTCSS), app + web; the AGENTS.md copy rule applies
+  (tour/About mention it).
+- **Real signals**: a 2 m / 70 cm repeater with a known tone (UK repeaters publish theirs) and a PMR446 DCS user;
+  confirm the N/I convention on one known DCS radio.
+
+---
+
 ## RESUME HERE — the queue from MSK144 on (not started)
 
-3. ~~MSK144~~ DONE (section 3). ~~FST4 gap~~ halved (section 2b). NEXT: CTCSS/DCS.
+3. ~~MSK144~~ DONE (section 3). ~~FST4 gap~~ halved (section 2b). ~~CTCSS/DCS engine~~ (section 4; wiring owed).
+   NEXT: time stations (JJY/BPC/TDF/CHU check).
 4. CTCSS/DCS — NOTE: the decoder host's audio is post-voice-filter in NFM VOICE (the 300 Hz high-pass cuts CTCSS by
    ≥ 40 dB: vibedsp.h setNfmVoice); the tone decoder needs the listener's RAW discriminator or its own FM
    discriminator on the per-client IQ tap (`iqTap` in local_sdr_shim.cpp) — outside RxPipeline as asked.

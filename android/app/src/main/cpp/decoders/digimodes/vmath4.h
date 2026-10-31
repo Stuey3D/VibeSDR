@@ -37,6 +37,8 @@ inline V withSign(V m, V s) {
     const uint32x4_t sb = vandq_u32(vreinterpretq_u32_f32(s), vdupq_n_u32(0x80000000u));
     return vreinterpretq_f32_u32(vorrq_u32(vreinterpretq_u32_f32(m), sb));
 }
+/** 1.0 where x's sign bit is set (x < 0, or −0), else 0.0 — a select without a float compare. */
+inline V signBit01(V x) { return vcvtq_f32_u32(vshrq_n_u32(vreinterpretq_u32_f32(x), 31)); }
 /** e^x for x in [−87, 0]. */
 inline V expNeg(V x) {
     const V y = vmulq_f32(x, vdupq_n_f32(1.44269504f));
@@ -77,6 +79,7 @@ inline V vmin(V a, V b) { return _mm_min_ps(a, b); }
 inline V vabs(V a) { return _mm_andnot_ps(_mm_set1_ps(-0.0f), a); }
 inline V div(V a, V b) { return _mm_div_ps(a, b); }
 inline V withSign(V m, V s) { return _mm_or_ps(m, _mm_and_ps(s, _mm_set1_ps(-0.0f))); }
+inline V signBit01(V x) { return _mm_cvtepi32_ps(_mm_srli_epi32(_mm_castps_si128(x), 31)); }
 inline V expNeg(V x) {
     const V y = _mm_mul_ps(x, _mm_set1_ps(1.44269504f));
     const __m128i n = _mm_cvttps_epi32(y);
@@ -119,6 +122,7 @@ inline V withSign(V m, V s) {
     for (int i = 0; i < 4; ++i) { uint32_t a, b; std::memcpy(&a, &m.v[i], 4); std::memcpy(&b, &s.v[i], 4); a |= b & 0x80000000u; std::memcpy(&r.v[i], &a, 4); }
     return r;
 }
+inline V signBit01(V x) { V r; for (int i = 0; i < 4; ++i) { uint32_t u; std::memcpy(&u, &x.v[i], 4); r.v[i] = (float)(u >> 31); } return r; }
 inline float expNeg1(float x) {
     const float y = x * 1.44269504f;
     const int32_t n = (int32_t)y;
@@ -156,6 +160,28 @@ inline float vlog1(float x) {
 inline V expNeg(V x) { V r; for (int i = 0; i < 4; ++i) r.v[i] = expNeg1(x.v[i]); return r; }
 inline V vlog(V x) { V r; for (int i = 0; i < 4; ++i) r.v[i] = vlog1(x.v[i]); return r; }
 #endif
+
+/** atan2(y, x) to ≈ 5e-6 rad, branch-free (no float compare): atan of min/max by a polynomial, then the octant and
+ *  quadrant folded in with sign-bit selects. (0, 0) gives 0. */
+inline V vatan2(V y, V x) {
+    const V ax = vabs(x), ay = vabs(y);
+    const V mx = vmax(ax, ay), mn = vmin(ax, ay);
+    const V r = div(mn, add(mx, set1(1e-30f)));
+    const V r2 = mul(r, r);
+    // atan(r), r in [0, 1]: odd polynomial (our own least-squares fit, max error 4.8e-6 rad)
+    V p = set1(-0.01229974f);
+    p = add(mul(p, r2), set1(0.05408272f));
+    p = add(mul(p, r2), set1(-0.11769517f));
+    p = add(mul(p, r2), set1(0.19401986f));
+    p = add(mul(p, r2), set1(-0.33269442f));
+    p = add(mul(p, r2), set1(0.99998007f));
+    V t = mul(p, r);
+    const V swap = signBit01(sub(ax, ay));                       // ay > ax → 1
+    t = add(t, mul(swap, sub(set1(1.57079633f), add(t, t))));    // π/2 − t
+    const V neg = signBit01(x);                                  // x < 0 → 1
+    t = add(t, mul(neg, sub(set1(3.14159265f), add(t, t))));     // π − t
+    return withSign(t, y);
+}
 
 } // namespace q65v
 } // namespace vibe
