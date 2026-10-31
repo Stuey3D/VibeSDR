@@ -56,6 +56,14 @@ constexpr BcdField kDcfYear      = { 8, {50,51,52,53,54,55,56,57},          {1,2
 /** ★ MSF's minute identifier, bits A52-A59 (NPL): 0 1 1 1 1 1 1 0. Port of the check in
  *  madpsy/ubersdr-ntp (GPL-3.0-or-later), MsfDecoder.cpp identifierAt(). */
 constexpr int kMsfIdentifier[8] = { 0, 1, 1, 1, 1, 1, 1, 0 };
+/** ★ JJY (NICT's published format; its second map as Wikipedia's "JJY" tabulates it): minute, hour and day-of-year
+ *  at WWVB's seconds; the year at 41–48 (80 … 1), the weekday at 50–52 (4 2 1, 0 = Sunday), PA1 at 36 = even parity
+ *  of the hour (12–18), PA2 at 37 = even parity of the minute (1–8), LS1/LS2 at 53/54. Always 0: 4 10 11 14 20 21
+ *  24 34 35, SU1 38, SU2 40, 55–58 — except at :15 and :45, when 40–48 are the Morse callsign and 50–55 ST1–ST6. */
+constexpr BcdField kJjyYear      = { 8, {41,42,43,44,45,46,47,48},          {80,40,20,10,8,4,2,1} };
+constexpr BcdField kJjyWeekday   = { 3, {50,51,52},                         {4,2,1} };
+constexpr int kJjyZeroBits[10]   = { 4, 10, 11, 14, 20, 21, 24, 34, 35, 38 };
+constexpr int kJjyZeroNormal[5]  = { 40, 55, 56, 57, 58 };
 /** ★ WWVB seconds that are always 0 (SP 432 Table 2.3). */
 constexpr int kWwvbZeroBits[11] = { 4, 10, 11, 14, 20, 21, 24, 34, 35, 44, 54 };
 
@@ -361,6 +369,9 @@ const ClsDef kDcfCls[]  = { {kData,0,0,1,{{0,100},{0,0}}}, {kData,1,0,1,{{0,200}
                             {kNone,0,0,0,{{0,0},{0,0}}} };
 const ClsDef kWwvbCls[] = { {kData,0,0,1,{{0,200},{0,0}}}, {kData,1,0,1,{{0,500},{0,0}}},
                             {kMark,0,0,1,{{0,800},{0,0}}}, {kNone,0,0,0,{{0,0},{0,0}}} };
+// ★ JJY: read INVERTED (as WWV) — "low" there is the carrier at FULL power, from the second's start.
+const ClsDef kJjyCls[]  = { {kData,0,0,1,{{0,800},{0,0}}}, {kData,1,0,1,{{0,500},{0,0}}},
+                            {kMark,0,0,1,{{0,200},{0,0}}}, {kNone,0,0,0,{{0,0},{0,0}}} };
 // WWV: measured from the pulse's START, which is 30 ms after the second's tick.
 const ClsDef kWwvCls[]  = { {kData,0,0,1,{{0,170},{0,0}}}, {kData,1,0,1,{{0,470},{0,0}}},
                             {kMark,0,0,1,{{0,770},{0,0}}}, {kNone,0,0,0,{{0,0},{0,0}}} };
@@ -385,6 +396,7 @@ void TimeDecoder::initReader() {
     switch (station_) {
         case Station::DCF77: t = kDcfCls;  n = 3; winMs = 250; break;
         case Station::WWVB:  t = kWwvbCls; n = 4; winMs = 830; break;
+        case Station::JJY:   t = kJjyCls;  n = 4; winMs = 830; break;
         case Station::WWV:   t = kWwvCls;  n = 4; winMs = 830; break;
         default: break;
     }
@@ -420,7 +432,7 @@ double TimeDecoder::zAt(double pos) const {
     const double e = envAt(i0) * (1.0 - f) + envAt(i0 + 1) * f;
     const double span = pHi_ - pLo_;
     double z = span > 1e-9 ? (e - pLo_) / span : 0.5;
-    return station_ == Station::WWV ? 1.0 - z : z;
+    return (station_ == Station::WWV || station_ == Station::JJY) ? 1.0 - z : z;
 }
 
 bool TimeDecoder::contrastOk() const {
@@ -737,6 +749,7 @@ void TimeDecoder::onSecond(const SecRec& r) {
         if (p == 58) closeFrame();
         return;
     }
+    case Station::JJY:      // ★ WWVB's framing exactly: P0 at 59, then M at 0
     case Station::WWVB: {
         if (anchorIdx_ < 0) {
             if (strongKind(p1, kMark) && strongKind(r, kMark)) {
@@ -887,6 +900,7 @@ const char* TimeDecoder::stationTag() const {
         case Station::MSF:   return "MSF";
         case Station::DCF77: return "DCF77";
         case Station::WWVB:  return "WWVB";
+        case Station::JJY:   return "JJY";
         case Station::RWM:   return "RWM";
         default: return tag_ == 1 ? "WWV" : tag_ == 2 ? "WWVH" : "WWV/WWVH";
     }
@@ -997,6 +1011,21 @@ void TimeDecoder::closeFrame() {
             ok = framed && decodeWwvb(ts);
             break;
         }
+        case Station::JJY: {
+            // ★ WWVB's framing check, except that at :15 and :45 seconds 40–48 are the Morse callsign (on-off keying,
+            //   not symbols): there they may be unreadable, and nothing is asked of them.
+            const int minute = readField(bitsA_, kWwvbMinute);
+            const bool cs = minute == 15 || minute == 45;
+            bool complete = true, framed = true;
+            for (int i = 0; i < 60; i++) {
+                if (cs && i >= 40 && i <= 48) continue;
+                if (slot_[i] != 1) { complete = false; continue; }
+                if ((sym_[i] == 2) != (i == 0 || i % 10 == 9)) framed = false;
+            }
+            if (complete && !framed) { finishMinute(false, ts); loseFrame(); return; }
+            ok = complete && framed && decodeJjy(ts);
+            break;
+        }
         default: break;
     }
     pushVoteFrame(anchorIdx_, 60);
@@ -1090,6 +1119,18 @@ void TimeDecoder::encodeFrame(const TimeStamp& f, signed char* A, signed char* B
         writeField(A, kWwvbDoy, doy); writeField(A, kWwvbYear, yy);
         for (int s : kWwvbZeroBits) A[s] = 0;
         A[55] = isLeap(f.year) ? 1 : 0;
+        break;
+    }
+    case Station::JJY: {
+        const int doy = (int)(daysFromCivil(f.year, f.month, f.day) - daysFromCivil(f.year, 1, 1)) + 1;
+        writeField(A, kWwvbMinute, f.minute); writeField(A, kWwvbHour, f.hour); writeField(A, kWwvbDoy, doy);
+        for (int s : kJjyZeroBits) A[s] = 0;
+        A[36] = (signed char)parityOf(A, 12, 18); A[37] = (signed char)parityOf(A, 1, 8);
+        if (f.minute != 15 && f.minute != 45) {
+            writeField(A, kJjyYear, yy);
+            writeField(A, kJjyWeekday, isoWeekday(f.year, f.month, f.day) % 7);
+            for (int s : kJjyZeroNormal) A[s] = 0;
+        }
         break;
     }
     case Station::WWV: {
@@ -1235,9 +1276,9 @@ void TimeDecoder::tryVote() {
         bitsA_[i] = eA[i] >= 0 ? eA[i] : pooled(i, false);
         bitsB_[i] = eB[i] >= 0 ? eB[i] : (station_ == Station::MSF ? pooled(i, true) : 0);
         slot_[i] = 1;
-        sym_[i] = (signed char)((station_ == Station::WWVB && (i == 0 || i % 10 == 9)) ? 2 : bitsA_[i]);
+        sym_[i] = (signed char)(((station_ == Station::WWVB || station_ == Station::JJY) && (i == 0 || i % 10 == 9)) ? 2 : bitsA_[i]);
     }
-    if (station_ == Station::WWVB) for (int i = 0; i < 60; i++) if (i == 0 || i % 10 == 9) bitsA_[i] = 0;
+    if (station_ == Station::WWVB || station_ == Station::JJY) for (int i = 0; i < 60; i++) if (i == 0 || i % 10 == 9) bitsA_[i] = 0;
     if (station_ == Station::DCF77) { bitsA_[17] = pooled(17, false); bitsA_[18] = 1 - bitsA_[17]; }
     if (station_ == Station::MSF) for (int i = 1; i <= 16; i++) bitsB_[i] = 0;   // DUT1: not voted
     TimeStamp ts;
@@ -1391,6 +1432,13 @@ void TimeDecoder::emitPartial() {
             if (p.year) dateFromDoy(kWwvbDoy);
             break;
         }
+        case Station::JJY: {
+            take(kWwvbMinute, p.minute, p.minuteBad, p.t.minute);
+            take(kWwvbHour,   p.hour,   p.hourBad,   p.t.hour);
+            take(kJjyYear,    p.year,   p.yearBad,   p.t.year, 2000);
+            if (p.year) dateFromDoy(kWwvbDoy);
+            break;
+        }
         case Station::RWM:
             break;      // nothing to fill in — it carries no timecode
     }
@@ -1474,6 +1522,7 @@ bool TimeDecoder::decodeMinute(TimeStamp& out) const {
         case Station::MSF:  return decodeMsf(out);
         case Station::WWV:  return decodeWwv(out);
         case Station::WWVB: return decodeWwvb(out);
+        case Station::JJY:  return decodeJjy(out);
         case Station::RWM:  return false;          // no timecode — see onRwmEdge
         default:            return decodeDcf77(out);
     }
@@ -1549,6 +1598,55 @@ bool TimeDecoder::decodeWwvb(TimeStamp& out) const {
     //     bits describe the minute that STARTED at this frame's second 0. We decode at second 59,
     //     0.2-0.8 s before the next minute begins, and announce THAT minute, as MSF/DCF77 do;
     //     reporting the frame's own value made the clock a minute late.
+    addMinute(out);
+    return true;
+}
+
+/**
+ * JJY, NICT's 40 / 60 kHz format (Station::JJY's note). ★ Unlike WWVB it carries PARITY (PA1 over the hour, PA2 over
+ * the minute) and a WEEKDAY, and the weekday must agree with the date — three checks WWVB never gets. Time is JST.
+ * ★ At :15 and :45 the year seconds are the callsign: the year comes from the host clock (believable, as WWV's rule),
+ *   and the weekday and leap bits are ST1–ST6 there, so they are not read.
+ */
+bool TimeDecoder::decodeJjy(TimeStamp& out) const {
+    const int* b = bitsA_;
+    const int minute = readField(b, kWwvbMinute);
+    const int hour   = readField(b, kWwvbHour);
+    const int doy    = readField(b, kWwvbDoy);
+    if (hour > 23 || minute > 59 || doy < 1 || doy > 366) return false;
+    if (!digitsOk(b, kWwvbMinute) || !digitsOk(b, kWwvbHour) || !digitsOk(b, kWwvbDoy)) return false;
+    int ph = 0, pm = 0;
+    for (int s = 12; s <= 18; s++) ph ^= b[s] ? 1 : 0;
+    for (int s = 1; s <= 8; s++) pm ^= b[s] ? 1 : 0;
+    if (ph != (b[36] ? 1 : 0) || pm != (b[37] ? 1 : 0)) return false;           // PA1, PA2 (even)
+    for (int s : kJjyZeroBits) if (b[s]) return false;
+    const bool cs = minute == 15 || minute == 45;
+    int year = 0;
+    if (!cs) {
+        for (int s : kJjyZeroNormal) if (b[s]) return false;
+        if (!digitsOk(b, kJjyYear)) return false;
+        year = 2000 + readField(b, kJjyYear);
+    } else {
+        const time_t nowT = time(nullptr);
+        const struct tm* utc = gmtime(&nowT);
+        const int hy = utc ? utc->tm_year + 1900 : 0, hd = utc ? utc->tm_yday : 0;
+        if (hy < 2024) return false;
+        year = (doy > 300 && hd < 31) ? hy - 1 : hy;
+    }
+    int month = 0, day = 0;
+    if (!doyToDate(year, doy, month, day)) return false;
+    const int iso = isoWeekday(year, month, day);          // 1 = Monday … 7 = Sunday
+    if (!cs) {
+        const int w = readField(b, kJjyWeekday);           // 0 = Sunday … 6 = Saturday
+        if (w > 6 || w != iso % 7) return false;           // ★ the weekday must be the date's
+    }
+    out.year = year; out.month = month; out.day = day;
+    out.hour = hour; out.minute = minute;
+    out.weekday = iso;
+    out.dst = false;                                       // JST has none (SU1/SU2 are reserved for it, 0)
+    out.leapSecondPending = !cs && b[53] != 0;
+    // ★ The frame carries the minute that BEGAN at its marker M (NICT: "the time of the head marker") — decoded at
+    //   second 59, so the minute about to begin is announced, as for WWVB.
     addMinute(out);
     return true;
 }

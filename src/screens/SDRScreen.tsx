@@ -6055,7 +6055,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       if (!st) {
         timeStationRef.current = '';
         setDecoderStatus('Tune to a time signal first — MSF 60kHz, DCF77 77.5kHz, '
-                       + 'WWVB 60kHz, WWV 2.5/5/10/15/20MHz, RWM 4996/9996/14996kHz');
+                       + 'WWVB 60kHz, JJY 40/60kHz, WWV 2.5/5/10/15/20MHz, RWM 4996/9996/14996kHz');
         return;
       }
       if (decoderClient.current) decoderClient.current.timeStation = st as any;

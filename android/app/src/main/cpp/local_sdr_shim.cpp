@@ -25655,7 +25655,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     static bool decoderBlocked(const std::string& ext) {
         std::string key = ext;
         if (ext == "fsk") key = "rtty";
-        else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") key = "time";
+        else if (ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy") key = "time";
         else if (ext == "cwskim") key = "cw";        // ★ the skimmer is CW's too — one owner switch
         else if (ext == "pskskim") key = "psk";      // ★ …and PSK's skimmer is PSK's
         return !key.empty() && vsModeBlocked(key);

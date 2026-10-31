@@ -12017,6 +12017,9 @@ const TIME_STATIONS: Record<string, { label: string; hint: string }> = {
   dcf77: { label: 'DCF77', hint: 'DCF77, Mainflingen — tune <b>77.500 kHz</b> in <b>CW</b>.' },
   wwvb:  { label: 'WWVB', hint: 'WWVB, Fort Collins — tune <b>60.000 kHz</b> in <b>CW</b>. '
                                  + 'Note MSF shares this frequency: which one you hear is geography.' },
+  // ★ V12: JJY (NICT) — 40 kHz Ohtakadoya-yama, 60 kHz Hagane-yama; JST (UTC+9).
+  jjy:   { label: 'JJY',   hint: 'JJY, Japan — tune <b>40.000 kHz</b> (Ohtakadoya-yama) or <b>60.000 kHz</b> (Hagane-yama) '
+                                 + 'in <b>CW</b>. The time shown is <b>JST</b> (UTC+9). Strongest in East Asia.' },
   // ★★ AM, not CW, and the only station here that is: WWV's code rides a 100 Hz subcarrier on the
   //    AM signal rather than switching the carrier. Tuned in CW there is nothing to decode.
   // ★ The year is not shown from the air — see decodeWwv: its year field could not be identified

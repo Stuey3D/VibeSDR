@@ -333,10 +333,36 @@ Files: `decoders/tone_id.{h,cpp}` (outside RxPipeline), `digimodes/vmath4.h` (+ 
 
 ---
 
+## 5. Time stations — JJY DONE; BPC, TDF, CHU checked and NOT built (2026-10-31)
+
+**JJY (40 / 60 kHz, NICT)** in `decoders/time_decoder.*` as `Station::JJY`: the format from NICT's published page
+(signal levels, markers, field order, parity, JST meaning) and the second map as Wikipedia's "JJY" tabulates it.
+It is WWVB's layout (minute, hour, day-of-year at the same seconds, markers 0/9/19…59, the same flywheel and
+framing) with the OPPOSITE envelope (full carrier 0.8 / 0.5 / 0.2 s from the second's start, then 10 %), so it is
+read inverted as WWV is. Checks WWVB never gets: PA1 (hour) and PA2 (minute) even parity, and the weekday must be the
+date's. :15 / :45 (callsign minutes): seconds 40–48 are Morse, not symbols — not asked for; the year then comes from
+the host clock. Time shown as JST. Wired: decoder host (`jjy`), shim key, app (`TimeStation`, station override row,
+auto-pick: 40 kHz always, 60 kHz east of 100°E), web (button + hint), known-signal labels (40 kHz "JJY", 60 kHz
+"MSF/WWVB/JJY"), the "tune to a time signal" message, About. test-time-decoder: decodes, +1 minute, date, weekday,
+parity catches a flipped hour bit, the :15 minute. **Not validated on air** (JJY is not receivable in the UK).
+⚠ The web page is embedded in the server as `vibe_web_page.h`: run build-web before any release (the gates).
+
+Checked, not built:
+- **BPC (68.5 kHz, Shangqiu)**: no official public format from NTSC — what exists is hobbyist reverse engineering.
+  "Published standard first" rules it out unless Stuart accepts a documented-by-listeners format.
+- **TDF / ALS162 (162 kHz)**: the time code is carrier PHASE modulation (±1 rad), needing a carrier PLL — the
+  synchronous-AM work on branch v12-am-sync. Build it there, after that merges.
+- **CHU (3.330 / 7.850 / 14.670 MHz, NRC)**: published (NRC's CHU broadcast format); Bell-103 300 bit/s FSK
+  (2225/2025 Hz) in seconds 31–39 of each minute, two 10-character frames (A: day/hour/min/sec, B: year, DUT1, DST,
+  leap, with a redundancy check). Needs a burst FSK demodulator beside the envelope reader — a day's job; next in
+  this queue when it is picked up again. Its known-signal labels already exist (no decoder).
+
+---
+
 ## RESUME HERE — the queue from MSK144 on (not started)
 
 3. ~~MSK144~~ DONE (section 3). ~~FST4 gap~~ halved (section 2b). ~~CTCSS/DCS engine~~ (section 4; wiring owed).
-   NEXT: time stations (JJY/BPC/TDF/CHU check).
+   ~~Time stations~~ (section 5: JJY built; BPC/TDF/CHU checked). NEXT: CHU (owed), then ACARS.
 4. CTCSS/DCS — NOTE: the decoder host's audio is post-voice-filter in NFM VOICE (the 300 Hz high-pass cuts CTCSS by
    ≥ 40 dB: vibedsp.h setNfmVoice); the tone decoder needs the listener's RAW discriminator or its own FM
    discriminator on the per-client IQ tap (`iqTap` in local_sdr_shim.cpp) — outside RxPipeline as asked.

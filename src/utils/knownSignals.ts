@@ -176,7 +176,8 @@ function buildTable(): KnownSignal[] {
   for (const k of SHANNON_VOLMET) t.push(volmet(k, 'Shannon'));
   // ★ the stations each one is decoded as — DecoderClient timeStationFor's own map (RBU's 66.666 kHz reads as 'rwm')
   // ★ CW = 'cwu' on the wire (sdrTypes.ts SDRMode has no plain 'cw'): the carrier keyed in amplitude becomes a beat note
-  t.push(time(60_000, 'MSF/WWVB', 'cwu', 'time', ['msf', 'wwvb']), time(77_500, 'DCF77', 'cwu', 'time', ['dcf77']),
+  t.push(time(40_000, 'JJY', 'cwu', 'time', ['jjy']),
+         time(60_000, 'MSF/WWVB/JJY', 'cwu', 'time', ['msf', 'wwvb', 'jjy']), time(77_500, 'DCF77', 'cwu', 'time', ['dcf77']),
          time(66_666, 'RBU', 'cwu', 'time', ['rwm']));
   for (const f of [4_996_000, 9_996_000, 14_996_000]) t.push(time(f, 'RWM', 'cwu', 'time', ['rwm']));
   for (const f of [2_500_000, 5_000_000, 10_000_000, 15_000_000]) t.push(time(f, 'WWV/WWVH', 'am', 'time', ['wwv']));

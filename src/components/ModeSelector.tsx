@@ -1368,7 +1368,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       case 'time':
         return (<>
           <SubLabel label="STATION" />
-          <OptRow>{(['auto', 'msf', 'dcf77', 'wwv', 'wwvb', 'rwm'] as const).map(v => (
+          <OptRow>{(['auto', 'msf', 'dcf77', 'wwv', 'wwvb', 'jjy', 'rwm'] as const).map(v => (
             <SegBtn key={v} label={v.toUpperCase()} active={(dc.timeStation ?? 'auto') === v} onPress={() => dc.onTimeStation?.(v)} />
           ))}</OptRow>
         </>);

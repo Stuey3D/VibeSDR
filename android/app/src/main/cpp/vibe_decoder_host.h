@@ -715,7 +715,7 @@ private:
 
     static bool knownExt(const std::string& e) {
         return e == "fsk" || e == "navtex" || e == "wefax" || e == "sstv" || e == "time"
-            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "cw" || e == "cwskim" || e == "dsc" || e == "sitora" || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
+            || e == "msf" || e == "dcf77" || e == "rwm" || e == "wwv" || e == "wwvb" || e == "jjy" || e == "cw" || e == "cwskim" || e == "dsc" || e == "sitora" || e == "aprs" || e == "psk" || e == "pskskim" || e == "jtty";
     }
     /** ★ "Same decoder, same settings": the parameters a decoder is built from, in a fixed order.
      *  A whitelist rather than "the message minus its envelope", so field ORDER, a session id or a
@@ -937,7 +937,7 @@ private:
             sstv_->onComplete = [this]() { std::vector<uint8_t> m; m.push_back(0x05); put32(m, 0); sendSstv(m); };
             sstv_->onRedrawStart = [this]() { std::vector<uint8_t> m{ 0x08 }; sendSstv(m); };
             log("decoder attached: sstv");
-        } else if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb") {
+        } else if (ext == "time" || ext == "msf" || ext == "dcf77" || ext == "rwm" || ext == "wwv" || ext == "wwvb" || ext == "jjy") {
             std::string which = ext == "time" ? str(msg, "station") : ext;
             if (which.empty()) which = "msf";
             buildTimeLocked_(which);
@@ -1129,6 +1129,7 @@ private:
               which == "dcf77" ? TimeDecoder::Station::DCF77
             : which == "rwm"   ? TimeDecoder::Station::RWM
             : which == "wwvb"  ? TimeDecoder::Station::WWVB
+            : which == "jjy"   ? TimeDecoder::Station::JJY
             : which == "wwv"   ? TimeDecoder::Station::WWV
                                : TimeDecoder::Station::MSF;
         time_ = new TimeDecoder(48000, st);
@@ -1148,9 +1149,10 @@ private:
             const char* dstChange = (t.hasDst2 && t.dst2 != t.dst)
                                   ? (t.dst2 ? " DST BEGINS TODAY" : " DST ENDS TODAY") : "";
             char buf[200];
-            std::snprintf(buf, sizeof(buf), "%s  %s %04d-%02d-%02d %02d:%02d  %s%s%s%s\n",
+            // ★ JJY sends JST (UTC+9) — said, so a Japanese clock is not read as UTC
+            std::snprintf(buf, sizeof(buf), "%s  %s %04d-%02d-%02d %02d:%02d%s  %s%s%s%s\n",
                           name.c_str(), kDay[t.weekday >= 1 && t.weekday <= 7 ? t.weekday : 0],
-                          t.year, t.month, t.day, t.hour, t.minute,
+                          t.year, t.month, t.day, t.hour, t.minute, name == "JJY" ? " JST" : "",
                           t.dst ? "(summer time)" : "", t.leapSecondPending ? " LEAP SECOND PENDING" : "",
                           dstChange, extra);
             std::lock_guard<std::mutex> bl(textMtx_);

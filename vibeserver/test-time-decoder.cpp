@@ -218,6 +218,39 @@ static void wwvbMinuteDamaged(std::vector<int16_t>& out, const Hhmm& t, int drop
     }
 }
 
+// ── JJY (NICT): full carrier from the second's start for 0.8 s (0) / 0.5 s (1) / 0.2 s (marker), then 10 % ──
+//    The frame is the JST minute that BEGINS at its marker M (second 0); markers at 0, 9, 19 … 59.
+static void jjyMinute(std::vector<int16_t>& out, const Hhmm& t, int corruptSec = -1) {
+    int sym[60] = {0};
+    for (int p2 : { 0, 9, 19, 29, 39, 49, 59 }) sym[p2] = 2;
+    auto put = [&](const int* bits, const int* wts, int n, int val) {
+        int rem = val; for (int i = 0; i < n; i++) if (rem >= wts[i]) { sym[bits[i]] = 1; rem -= wts[i]; }
+    };
+    { const int bi[] = {1,2,3,5,6,7,8};     const int wt[] = {40,20,10,8,4,2,1};  put(bi,wt,7,t.mi); }
+    { const int bi[] = {12,13,15,16,17,18}; const int wt[] = {20,10,8,4,2,1};     put(bi,wt,6,t.h); }
+    { const int bi[] = {22,23,25,26,27,28,30,31,32,33};
+      const int wt[] = {200,100,80,40,20,10,8,4,2,1};                              put(bi,wt,10,doyOf(t)); }
+    const bool cs = t.mi == 15 || t.mi == 45;
+    if (!cs) {
+        { const int bi[] = {41,42,43,44,45,46,47,48}; const int wt[] = {80,40,20,10,8,4,2,1}; put(bi,wt,8,t.y % 100); }
+        { const int bi[] = {50,51,52}; const int wt[] = {4,2,1}; put(bi,wt,3,isoWd(t) % 7); }   // 0 = Sunday
+    }
+    int ph = 0, pm = 0;
+    for (int i = 12; i <= 18; i++) ph ^= sym[i] == 1;
+    for (int i = 1; i <= 8; i++) pm ^= sym[i] == 1;
+    sym[36] = ph; sym[37] = pm;
+    if (corruptSec >= 0) sym[corruptSec] ^= 1;
+    for (int sec = 0; sec < 60; sec++) {
+        if (cs && sec >= 40 && sec <= 48) {   // ★ the callsign in Morse: on-off keying, not symbols
+            for (int k = 0; k < 5; k++) { emit(out, 100.0, ((sec + k) % 3) ? 1.0 : 0.1); emit(out, 100.0, 0.1); }
+            continue;
+        }
+        const double high = sym[sec] == 2 ? 200.0 : sym[sec] == 1 ? 500.0 : 800.0;
+        emit(out, high, 1.0);
+        emit(out, 1000.0 - high, 0.1);
+    }
+}
+
 // ── WWV (SP 432 Table 3.13): 100 Hz subcarrier, pulse = symbol, frame = minute at its START ──
 static void wwvMinuteSpec(std::vector<int16_t>& out, const Hhmm& t, int yy, bool dst, bool lsw,
                           int corruptSec = -1, int fadeSec = -1) {
@@ -575,6 +608,37 @@ int main() {
         // ★★ AND THE CORROBORATION KEY MUST COUNT REAL MINUTES: it packed every month as 31 days,
         //    so 30 April 23:59 -> 1 May 00:00 looked 1441 minutes apart and nothing was announced.
         carry({2026, 4, 30, 23, 57}, {2026, 5, 1, 0, 0}, "★★ WWVB: 30 Apr 23:59 -> 1 May 00:00 (short month)");
+    }
+
+    // ── JJY (V12, 2026-10-31): WWVB's layout, the opposite envelope, parity and a weekday ──
+    {
+        auto run = [&](Hhmm f0, int n, int corrupt) {
+            std::vector<int16_t> v;
+            emit(v, 3000.0, 0.1);
+            for (int k = 0; k < n; k++) jjyMinute(v, plus(f0, k), k == 1 ? corrupt : -1);
+            TimeDecoder d(SR, TimeDecoder::Station::JJY);
+            return runTimed(d, v);
+        };
+        auto h = run({2026, 10, 31, 13, 32}, 3, -1);
+        ok(!h.empty(), "★★★ JJY: a corroborated timestamp came out");
+        if (!h.empty()) {
+            const auto& t = h.back().t;
+            std::printf("    decoded: %04d-%02d-%02d %02d:%02d JST, weekday %d\n", t.year, t.month, t.day, t.hour, t.minute, t.weekday);
+            ok(t.hour == 13 && t.minute == 35, "★★★ JJY: the minute about to begin is announced (13:35 JST)");
+            ok(t.year == 2026 && t.month == 10 && t.day == 31, "★★ JJY: year 2026, day-of-year 304 → 31 October");
+            ok(t.weekday == 6, "★ JJY: weekday Saturday (sent 6 = Saturday, 0 = Sunday)");
+        }
+        // a parity-breaking misread in the hour (second 16) of the middle minute: that minute must not decode
+        int wrong = 0;
+        for (const auto& x : run({2026, 10, 31, 13, 32}, 3, 16)) if (x.t.hour != 13) ++wrong;
+        ok(wrong == 0, "★★ JJY: PA1 catches a flipped hour bit (no wrong hour announced)");
+        // the callsign minutes: :15 is read with the host's year
+        auto hc = run({2026, 10, 31, 14, 13}, 4, -1);
+        bool saw16 = false; for (const auto& x : hc) if (x.t.hour == 14 && x.t.minute == 16) saw16 = true;
+        ok(saw16, "★ JJY: the :15 callsign minute still decodes (year from the host clock) → 14:16 announced");
+        int wrongTime = 0;
+        for (const auto& x : hc) if (x.t.hour != 14 || x.t.minute < 14 || x.t.minute > 17) ++wrongTime;
+        ok(wrongTime == 0, "JJY: nothing out of place around the callsign minute");
     }
 
     // ── ONE DIP DELETED, ONE DIP ADDED — MSF, DCF77, WWVB (audit row 9) ─────

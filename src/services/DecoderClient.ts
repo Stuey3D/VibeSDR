@@ -66,7 +66,7 @@ export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whis
 
 /** The time signal stations the server can decode. Each is a separate extension name on the
  *  wire — the shim builds a TimeDecoder for the one asked for. */
-export type TimeStation = 'msf' | 'dcf77' | 'wwv' | 'wwvb' | 'rwm';
+export type TimeStation = 'msf' | 'dcf77' | 'wwv' | 'wwvb' | 'rwm' | 'jjy';
 
 /**
  * ★★★ WHICH STATION IS ON THIS FREQUENCY. Nobody tunes 60 kHz by accident, but plenty of people
@@ -85,8 +85,12 @@ export function timeStationFor(hz: number, receiverLonDeg?: number | null): Time
   //     confident nonsense rather than failing. Decided by where the RECEIVER is, which is the
   //     only thing that actually predicts which one is audible; west of 30°W means the Americas.
   //     ★ Falls back to MSF when the receiver's position is unknown, and the user can override.
-  if (near(60_000, 2_000))
+  // ★ V12: and JJY's Hagane-yama is on 60 kHz too — east of 100°E (Japan and its neighbours) it is the one heard.
+  if (near(60_000, 2_000)) {
+    if (typeof receiverLonDeg === 'number' && receiverLonDeg > 100) return 'jjy';
     return (typeof receiverLonDeg === 'number' && receiverLonDeg < -30) ? 'wwvb' : 'msf';
+  }
+  if (near(40_000, 2_000))    return 'jjy';     // ★ V12: JJY Ohtakadoya-yama — 40 kHz is JJY's alone
   if (near(77_500, 2_000))    return 'dcf77';
   if (near(66_666, 2_000))    return 'rwm';
   // ★★★ RWM IS TESTED FIRST, AND THE TOLERANCE IS TIGHT, because 4996 and 9996 kHz sit just
