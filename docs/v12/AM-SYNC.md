@@ -494,6 +494,7 @@ handling anyway. Agreeing with the analysis, nothing was measured.
   silver and black faceplates, transparency on/off, phone and iPad, is code-reviewed and type-checked
   (`ModeSelector.tsx` clean) but not looked at. `SDRScreen.tsx` itself could not be type-checked (tsc runs out of
   memory at 512 MB on it); its changes are a few lines of state and props.
+- The iOS prebuilt DSP library is rebuilt and committed (`build_ios.sh`: link check clean, FAAD2-free).
 - Not run: an Android NDK build, the full run-tests.sh, a real C-QUAM station (§7), any of Stuart's VibeServers.
 - RN Slider: a programmatic value change (AUTO's edge moving the thumb) must not count as a drag; both sliders ignore a
   value equal to the one drawn. Whether `@react-native-community/slider` raises onValueChange for a prop change on
