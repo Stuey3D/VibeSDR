@@ -645,7 +645,9 @@ void RxPipeline::rebuildAudio() {
             sync_->configure(syncDet(mode_), chFs_, audioEdgeHz(mode_, bwHz_));
             sync_->setAutoBw(amAutoBw_.load(std::memory_order_relaxed));
             useAgc_ = true; agc_.configure(chFs_);
-            agc_.setMaxGain(sync_->carrierLevelled() ? 4.0f : 256.0f);
+            agc_.setMaxGain(sync_->carrierLevelled() && !(amBench_ & 1) ? 4.0f : 256.0f);
+            if (amBench_ & 2) sync_->setCarrierLevel(false);
+            if (amBench_ & 4) sync_->setSafetyNet(false);
             if (!hadAgc) agc_.reset();
             agc_.guard();
             if (mode_ == Mode::AM_STEREO) {
@@ -1336,6 +1338,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
         if (sync_) {
             sync_->setAutoBw(amAutoBw_.load(std::memory_order_relaxed));
             { const unsigned a = amArms_.load(std::memory_order_relaxed); sync_->setArms(a & 1, a & 2, a & 4, a & 8); }
+            { const float r = amIRatio_.load(std::memory_order_relaxed); if (r > 1.0f) sync_->setInterfRatio(r); }
             if (mode_ == Mode::AM_STEREO) amR_.resize((size_t)nc);
             sync_->process(chB.data(), demodBuf_.data(), mode_ == Mode::AM_STEREO ? amR_.data() : nullptr, nc);
             { std::lock_guard<std::mutex> lk(amStMtx_); amSt_ = sync_->status(); }

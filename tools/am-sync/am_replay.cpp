@@ -56,9 +56,17 @@ static std::vector<float> run(const std::vector<cf32>& z, int rate, double off, 
     p.start(rate, 1024, 20.0, 48000, cb);
     p.setAmAutoBandwidth(m.autoBw);
     if (const char* a = getenv("AMR_ARMS")) p.setAmAutoArms((unsigned)std::strtoul(a, nullptr, 0));
+    if (const char* r = getenv("AMR_IRATIO")) p.setAmInterfRatio((float)std::atof(r));
+    if (const char* b = getenv("AMR_BENCH")) p.setAmBenchFlags((unsigned)std::strtoul(b, nullptr, 0));
     p.setTune(off, m.mode, m.bw);
     const int blk = rate / 50;
-    for (size_t i = 0; i < z.size(); i += blk) p.feed(z.data() + i, (int)std::min<size_t>(blk, z.size() - i));
+    const bool trace = getenv("AMR_TRACE") != nullptr;
+    for (size_t i = 0; i < z.size(); i += blk) {
+        p.feed(z.data() + i, (int)std::min<size_t>(blk, z.size() - i));
+        if (trace && (i / blk) % 50 == 0) { const auto t = p.amSyncStatus();
+            std::fprintf(stderr, "    t %5.1f lockQ %.2f blend %.2f off %+.2f edges %.0f/%.0f mrc %.2f/%.2f notch %.0f\n", i / (double)rate, t.lockQ, t.blend,
+                         t.offsetHz, t.edgeLoHz, t.edgeHiHz, t.mrcUpper, t.mrcUpperHi, t.notchHz); }
+    }
     if (last) *last = p.amSyncStatus();
     p.stop();
     if (st) *st = s.st;
@@ -157,7 +165,11 @@ int main(int argc, char** argv) {
         const auto y48 = run(zA, rA, offA, *m, &st, &stereo);
         writeWav(out + "/" + tag + "_" + id + ".wav", m->mode == M::AM_STEREO ? stereo : y48, m->mode == M::AM_STEREO ? 2 : 1);
         const auto y = to8k(y48);
-        if (!haveLag) { lag = bestLag(y, ref, 2400); haveLag = true; }
+        /* ★★★ THE LAG IS FOUND PER MODE. The coherent modes carry the Hilbert's ~10 ms delay and auto bandwidth's
+         *  RF cut its FIR's; one lag for all (the first mode's) misaligned every other mode by that much and cost it
+         *  ~15 % of γ² — the first version of this tool reported SAM 0.4-0.7 dB WORSE than AM on clean stations
+         *  for exactly that reason. */
+        lag = bestLag(y, ref, 2400); haveLag = true;
         std::vector<double>& v = score[id];
         for (int k = 0; k < nWin; ++k) v.push_back(coherence(y, ref, (size_t)((t0 + k * win) * 8000), (size_t)(win * 8000), lag));
         std::fprintf(stderr, "  %-6s locked %d offset %+.1f Hz lockQ %.2f edges L %.0f / U %.0f notch %.0f mrc %.2f\n", id.c_str(), st.locked,
@@ -178,6 +190,19 @@ int main(int argc, char** argv) {
         const double med = all.empty() ? 0 : all[all.size() / 2], w10 = all.empty() ? 0 : all[all.size() / 10];
         const double fm = fades.empty() ? NAN : fades[fades.size() / 2];
         std::printf("  %-7s %8.2f %8.2f %8.2f %8.3f\n", id.c_str(), med, fm, w10, mg / std::max<size_t>(1, v.size()));
+    }
+    // ★ PAIRED against the first mode, window by window — the honest test of a small difference: the mean gain, its
+    //   standard error, and in how many windows the mode beat the first one.
+    if (!want.empty() && score.count(want[0])) {
+        const auto& b = score[want[0]];
+        for (size_t m = 1; m < want.size(); ++m) {
+            if (!score.count(want[m])) continue;
+            const auto& v = score[want[m]];
+            double s = 0, s2 = 0; int wins = 0, n = 0;
+            for (size_t k = 0; k < v.size() && k < b.size(); ++k) { const double d = snr(v[k]) - snr(b[k]); s += d; s2 += d * d; wins += d > 0; ++n; }
+            const double mean = s / n, sd = std::sqrt(std::max(0.0, s2 / n - mean * mean)), se = sd / std::sqrt((double)n);
+            std::printf("  paired %-6s vs %-5s: %+5.2f dB ± %.2f (SE), better in %d/%d windows\n", want[m].c_str(), want[0].c_str(), mean, se, wins, n);
+        }
     }
     // per-window detail for the first two modes (for the doc)
     if (getenv("AMR_DETAIL")) for (int k = 0; k < nWin; ++k) {

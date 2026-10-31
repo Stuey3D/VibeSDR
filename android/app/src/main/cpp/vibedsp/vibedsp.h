@@ -2724,7 +2724,8 @@ public:
         float edgeHiHz = 0.0f;     // applied audio edge, UPPER sideband (Hz)
         bool  autoCut = false;     // auto bandwidth is narrower than the listener's width on some side
         float notchHz = 0.0f;      // heterodyne notch frequency (audio Hz; <0 = lower sideband), 0 = none
-        float mrcUpper = 0.5f;     // SAM: weight given to the upper sideband (0.5 = plain DSB)
+        float mrcUpper = 0.5f;     // SAM: weight given to the upper sideband below the split (0.5 = plain DSB)
+        float mrcUpperHi = 0.5f;   // SAM: …and above it (where a neighbour is)
     };
     SyncAm();
     ~SyncAm();
@@ -2758,6 +2759,8 @@ public:
     /** Disable carrier-referenced levelling (bench only). */
     void setCarrierLevel(bool on) { carrierLevel_ = on; }
     int hilbertTaps() const { return 2 * hM_ + 1; }
+    /** Bench: how much dirtier (power ratio) one sideband must be than the other to count as a neighbour. */
+    void setInterfRatio(float r) { if (r > 1.0f) interfRatio_ = r; }
 private:
     struct Biq { float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0, z1 = 0, z2 = 0;
                  void lp(double fs, double f, double q); void notch(double fs, double f, double q);
@@ -2769,7 +2772,9 @@ private:
     void acquire_(const cf32* in, int n);
     void measure_(const float* yI, const float* yQ, int n);
     void decide_();
-    void hilbert_(const float* x, int n, float* out, bool compute);   // out[i] = H{x} delayed by hM_
+    void hilbert_(const float* x, int n, float* out, bool compute, float* outLow = nullptr);   // out[i] = H{x} delayed by hM_
+    void hilbertLow_(int n, float* out);   // the band-limited Hilbert (|f| < hLowF_), same delay — SAM's region split
+    void designHilbertLow_(double fSplit);
     void applyEdges_();
     // config
     Det det_ = Det::ENV;
@@ -2783,6 +2788,7 @@ private:
     bool autoBw_ = true, armNoise_ = false, armInterf_ = true, armMrc_ = true, armNotch_ = true;
     bool safety_ = true, carrierLevel_ = true;
     float forceLo_ = 0.0f, forceHi_ = 0.0f;
+    float interfRatio_ = 16.0f;
     // tracker
     static constexpr int K = 32;          // samples per loop update
     int   pos_ = 0;
@@ -2814,11 +2820,15 @@ private:
     std::vector<float> dI_, dE_;          // delay lines [hM_ history][block]
     std::vector<float> hBuf_;             // Hilbert history [2hM history][block]
     std::vector<float> hTaps_;            // h[1], h[3], … (odd taps, positive side)
+    std::vector<float> hLowTaps_, hqLow_; // the band-limited Hilbert's h[1..M], and its output
+    float hLowF_ = -1.0f;
     int hM_ = 0;
     // sideband filters / cut
-    Lp8 lpA_, lpW1_, lpW2_;               // SAM: combined @fmin, wider side @fmax and @fmin
+    Lp8 lpA_, lpW1_, lpW2_;               // SAM-U/L, ECSS: the sideband's cut (lpA_); SAM: the region split (lpW1_)
     float edgeU_ = 0, edgeL_ = 0;         // applied edges
-    float mrcA_ = 0.5f, mrcTarget_ = 0.5f;
+    /* ★★ SAM's two-region sideband combining: below splitF_ the upper sideband gets weight mrcA_, above it mrcHi_
+     *  (maximum-ratio weights from each side's measured noise+interference). No neighbour: one region, 0.5 = DSB. */
+    float mrcA_ = 0.5f, mrcTarget_ = 0.5f, mrcHi_ = 0.5f, mrcHiT_ = 0.5f, splitF_ = 0.0f;
     Biq notch_[2], notchR_[2]; float notchF_[2] = {0, 0}, notchPend_[2] = {0, 0};
     std::unique_ptr<AmDemod> env_;        // ENV path — the shipping AM detector, unchanged
     std::unique_ptr<AdaptiveIf> rfCut_;   // ENV / STEREO symmetric RF cut
@@ -2828,7 +2838,8 @@ private:
     int mN_ = 0, mFill_ = 0, mSkip_ = 0, mHop_ = 0;
     std::vector<cf32> mBuf_, mOut_;
     std::vector<float> mWin_, pU_, pL_, pX_;
-    int mFrames_ = 0, sinceDecide_ = 0, decideEvery_ = 0, narrowVotes_[2] = {0, 0};
+    int mFrames_ = 0, sinceDecide_ = 0, decideEvery_ = 0, narrowVotes_[2] = {0, 0}, widenVotes_[2] = {0, 0};
+    float narrowMax_[2] = {0, 0}, widenMin_[2] = {0, 0};
     float mAlpha_ = 0.05f;
     // stereo
     float pilotPh_ = 0, pilotStep_ = 0, p1r_ = 0, p1i_ = 0, p2r_ = 0, p2i_ = 0, aPil_ = 0;
@@ -3444,6 +3455,10 @@ public:
     bool amSyncActive() const { return isAmFamily(mode_); }
     /** Bench only: switch auto bandwidth's arms (1 noise, 2 interference, 4 MRC, 8 notch); default 0xE. */
     void setAmAutoArms(unsigned mask) { amArms_.store(mask, std::memory_order_relaxed); }
+    /** Bench only (A/B of SAM's own parts): 1 = AGC ceiling 256 as envelope AM, 2 = no carrier levelling,
+     *  4 = no envelope safety net. Read at the next rebuild. */
+    void setAmBenchFlags(unsigned f) { amBench_ = f; dirty_ = true; }
+    void setAmInterfRatio(float r) { amIRatio_.store(r, std::memory_order_relaxed); }
     double autoBandwidth() const { return autoBwReq_.load(std::memory_order_relaxed); }
     /** How much better (dB) the signal would measure with the IF narrowed to ifCandidateHz().
      *  Positive = narrowing helps. Measured continuously on a shadow copy of the real signal. */
@@ -3561,6 +3576,8 @@ private:
     /** ★★ V12 the AM family's detector (plain AM included — with auto bandwidth off it IS AmDemod). */
     std::unique_ptr<SyncAm> sync_;
     std::atomic<bool> amAutoBw_{true};
+    unsigned amBench_ = 0;
+    std::atomic<float> amIRatio_{0.0f};
     std::atomic<unsigned> amArms_{0xE};      // ★ the noise arm off by default — see SyncAm::armNoise_
     mutable std::mutex amStMtx_;
     SyncAm::Status amSt_{};

@@ -237,8 +237,8 @@ void SyncAm::retune() {
     s1r_ = s1i_ = s2r_ = s2i_ = 0; ampRef_ = 0; lockNum_ = lockDen_ = 0;
     // measurement + every auto-bandwidth verdict: a limit never travels with the dial
     std::fill(pU_.begin(), pU_.end(), 0.0f); std::fill(pL_.begin(), pL_.end(), 0.0f); std::fill(pX_.begin(), pX_.end(), 0.0f);
-    mFrames_ = 0; mFill_ = 0; mSkip_ = 0; sinceDecide_ = 0; narrowVotes_[0] = narrowVotes_[1] = 0;
-    edgeU_ = edgeL_ = (float)userEdge_; mrcTarget_ = 0.5f; notchF_[0] = notchF_[1] = 0.0f;
+    mFrames_ = 0; mFill_ = 0; mSkip_ = 0; sinceDecide_ = 0; narrowVotes_[0] = narrowVotes_[1] = 0; widenVotes_[0] = widenVotes_[1] = 0;
+    edgeU_ = edgeL_ = (float)userEdge_; mrcTarget_ = 0.5f; mrcHiT_ = 0.5f; splitF_ = (float)userEdge_; notchF_[0] = notchF_[1] = 0.0f;
     pilotOn_ = false; pilotCount_ = 0; p1r_ = p1i_ = p2r_ = p2i_ = 0; pilotAmp_ = 0;
     applyEdges_();
 }
@@ -247,7 +247,7 @@ void SyncAm::reset() {
     pos_ = 0; cr_ = 1.0f; ci_ = 0.0f; omega_ = 0.0; stepC_ = 1.0f; stepS_ = 0.0f;
     sI_ = sQ_ = sM_ = 0; dcE1_ = dcE2_ = 0; lvl_ = 0; blend_ = 0;
     dcIa_ = dcIb_ = dcEa_ = dcEb_ = ga_ = gb_ = bla_ = blb_ = 0;
-    everLocked_ = false; mrcA_ = 0.5f;
+    everLocked_ = false; mrcA_ = 0.5f; mrcHi_ = 0.5f;
     pU_.assign((size_t)mN_ / 2, 0.0f); pL_.assign((size_t)mN_ / 2, 0.0f); pX_.assign((size_t)mN_ / 2, 0.0f);
     dI_.assign((size_t)hM_, 0.0f); dE_.assign((size_t)hM_, 0.0f); hBuf_.assign((size_t)(2 * hM_), 0.0f);
     lpA_ = Lp8{}; lpW1_ = Lp8{}; lpW2_ = Lp8{};
@@ -270,7 +270,9 @@ void SyncAm::applyEdges_() {
         case Det::SAM_U: case Det::ECSS_U: lpA_.design(fs_, fu); break;
         case Det::SAM_L: case Det::ECSS_L: lpA_.design(fs_, fl); break;
         case Det::SAM:
-            lpA_.design(fs_, std::min(fu, fl)); lpW1_.design(fs_, std::max(fu, fl)); lpW2_.design(fs_, std::min(fu, fl));
+            // ★ no hard cut in SAM: the dirtier side's region above the split is weighted down, not removed
+            splitF_ = (float)std::min(eu, el);
+            if (splitF_ < E - 1.0 && splitF_ != hLowF_ && hM_ > 0) designHilbertLow_(splitF_);
             break;
         case Det::ENV: case Det::STEREO: {
             const double e = std::min(eu, el);
@@ -358,7 +360,7 @@ void SyncAm::loopUpdate_() {
             if (badCount_ > 2 * fu) {
                 st_ = St::ACQ; acqFill_ = 0;
                 // ★ no lock = no honest measurement: open the filter back up rather than hold a cut
-                edgeU_ = edgeL_ = (float)userEdge_; notchF_[0] = notchF_[1] = 0.0f; mrcTarget_ = 0.5f;
+                edgeU_ = edgeL_ = (float)userEdge_; notchF_[0] = notchF_[1] = 0.0f; mrcTarget_ = 0.5f; mrcHiT_ = 0.5f;
                 mFrames_ = 0; applyEdges_();
             }
         }
@@ -379,10 +381,50 @@ void SyncAm::loopUpdate_() {
 }
 
 // ── Hilbert: out[i] = Σ h_m (x[i−M−m] − x[i−M+m]) — four outputs per tap ────
-void SyncAm::hilbert_(const float* x, int n, float* out, bool compute) {
+/** ★★ The BAND-LIMITED Hilbert, |f| < splitF_: h[m] = (1 − cos ω_s m)/(π m) for every m ≠ 0 (the full Hilbert is its
+ *  ω_s = π case, where the even taps vanish). Same length and window as the full one, so the SAME delay — which is what
+ *  lets SAM split the band into two regions with no phase error between them (an IIR split did not: −0.9 dB on 1044 kHz). */
+void SyncAm::hilbertLow_(int n, float* out) {
+    const int M = hM_;
+    const float* b = hBuf_.data();
+    const float* h = hLowTaps_.data();
+    int i = 0;
+#if VIBE_NEON
+    for (; i + 4 <= n; i += 4) {
+        float32x4_t acc = vdupq_n_f32(0.0f);
+        const float* c = b + i + M;
+        for (int m = 1; m <= M; ++m) acc = vmlaq_n_f32(acc, vsubq_f32(vld1q_f32(c - m), vld1q_f32(c + m)), h[m - 1]);
+        vst1q_f32(out + i, acc);
+    }
+#elif VIBE_SSE
+    for (; i + 4 <= n; i += 4) {
+        __m128 acc = _mm_setzero_ps();
+        const float* c = b + i + M;
+        for (int m = 1; m <= M; ++m) acc = _mm_add_ps(acc, _mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(c - m), _mm_loadu_ps(c + m)), _mm_set1_ps(h[m - 1])));
+        _mm_storeu_ps(out + i, acc);
+    }
+#endif
+    for (; i < n; ++i) {
+        float acc = 0.0f;
+        const float* c = b + i + M;
+        for (int m = 1; m <= M; ++m) acc += h[m - 1] * (c[-m] - c[m]);
+        out[i] = acc;
+    }
+}
+void SyncAm::designHilbertLow_(double fSplit) {
+    hLowTaps_.assign((size_t)hM_, 0.0f);
+    const double ws = 2.0 * M_PI * fSplit / fs_;
+    for (int m = 1; m <= hM_; ++m) {
+        const double w = 0.42 + 0.5 * std::cos(M_PI * m / (hM_ + 1)) + 0.08 * std::cos(2.0 * M_PI * m / (hM_ + 1));
+        hLowTaps_[(size_t)(m - 1)] = (float)((1.0 - std::cos(ws * m)) / (M_PI * m) * w);
+    }
+    hLowF_ = (float)fSplit;
+}
+void SyncAm::hilbert_(const float* x, int n, float* out, bool compute, float* outLow) {
     const int M = hM_, H = 2 * M;
     hBuf_.resize((size_t)(H + n));
     std::memcpy(hBuf_.data() + H, x, sizeof(float) * (size_t)n);
+    if (outLow) hilbertLow_(n, outLow);
     if (!compute) {                 // ★ history kept, so the day it is needed its first output is already right
         std::memset(out, 0, sizeof(float) * (size_t)n);
         std::memmove(hBuf_.data(), hBuf_.data() + n, sizeof(float) * (size_t)H);
@@ -447,8 +489,8 @@ void SyncAm::measure_(const float* yI, const float* yQ, int n) {
 
 void SyncAm::decide_() {
     if (!autoBw_) {
-        if (edgeU_ < userEdge_ || edgeL_ < userEdge_ || notchF_[0] > 0 || notchF_[1] > 0 || mrcTarget_ != 0.5f) {
-            edgeU_ = edgeL_ = (float)userEdge_; notchF_[0] = notchF_[1] = 0; mrcTarget_ = 0.5f; applyEdges_();
+        if (edgeU_ < userEdge_ || edgeL_ < userEdge_ || notchF_[0] > 0 || notchF_[1] > 0 || mrcTarget_ != 0.5f || mrcHiT_ != 0.5f) {
+            edgeU_ = edgeL_ = (float)userEdge_; notchF_[0] = notchF_[1] = 0; mrcTarget_ = 0.5f; mrcHiT_ = 0.5f; applyEdges_();
         }
         return;
     }
@@ -477,10 +519,19 @@ void SyncAm::decide_() {
             if (prog > 0.0) e = std::max(2000.0, prog + 200.0);
         }
         if (armInterf_) {
+            /* ★★ A NEIGHBOUR, not noise: this side 6 dB dirtier than the other AND the dirt above OUR programme in
+             *  that band (twice it where the cut is symmetric, envelope/stereo: there it costs both sides). The cut
+             *  goes at the lowest band from which MOST (≥ 60 %) of the bands up to the edge are dirty — a neighbour's
+             *  sideband is contiguous to the edge; a single dirty band is not a reason to throw away everything above.
+             *  The first version took the first dirty band at all and chattered 1.5 ↔ 4.4 kHz on 7350 under 7355. */
+            const double need = 4.0;   // ★ measured: 1× (coherent) / 2× (envelope) narrowed MW skywave stations it then hurt
+            std::vector<char> dirty((size_t)nb, 0);
+            for (int b = 0; b < nb; ++b) dirty[b] = Ns[b] > interfRatio_ * No[b] && Ns[b] > need * S[b];
             for (int b = 0; b < nb; ++b) {
                 const double f0 = kLow + b * kBand;
                 if (f0 < 1500.0) continue;
-                if (Ns[b] > 4.0 * No[b] && Ns[b] > 0.5 * S[b]) { e = std::min(e, std::max(1500.0, f0 - 250.0)); break; }
+                int d = 0; for (int c = b; c < nb; ++c) d += dirty[c];
+                if (dirty[b] && d >= 0.6 * (nb - b)) { e = std::min(e, std::max(1500.0, f0 - 250.0)); break; }
             }
         }
         want[side] = std::min(e, E);
@@ -510,23 +561,22 @@ void SyncAm::decide_() {
             }
         }
     }
-    // MRC: weight the cleaner sideband (SAM only), from the noise under the narrower edge
-    float mrc = 0.5f;
-    if (armMrc_ && det_ == Det::SAM) {
-        const double fmin = std::min(want[0], want[1]);
-        double nu = 0.0, nl = 0.0;
-        for (int b = 0; b < nb; ++b) if (kLow + (b + 1) * kBand <= fmin) { nu += Nu[b]; nl += Nl[b]; }
-        if (nu > 0.0 && nl > 0.0 && (nu > 2.0 * nl || nl > 2.0 * nu)) mrc = (float)std::max(0.05, std::min(0.95, nl / (nu + nl)));
-    }
-    mrcTarget_ = mrc;
     bool changed = false;
     float* cur[2] = { &edgeL_, &edgeU_ };
     for (int side = 0; side < 2; ++side) {
+        /* ★★ NARROW SLOWLY, WIDEN SOON, NEVER CHATTER. A narrowing needs four decisions running (2 s) and goes to
+         *  the WIDEST of them (the least it can do that all four agreed on); a widening needs two (1 s). Each move
+         *  is audible, so a late one beats a wrong one — the lesson of the FM controller. */
         const float w = (float)want[side];
         if (w < *cur[side] - 250.0f) {
-            if (++narrowVotes_[side] >= 2) { *cur[side] = w; narrowVotes_[side] = 0; changed = true; }
-        } else if (w > *cur[side] + 250.0f) { *cur[side] = w; narrowVotes_[side] = 0; changed = true; }   // ★ widen at once
-        else narrowVotes_[side] = 0;
+            narrowMax_[side] = narrowVotes_[side] == 0 ? w : std::max(narrowMax_[side], w);
+            widenVotes_[side] = 0;
+            if (++narrowVotes_[side] >= 4) { *cur[side] = narrowMax_[side]; narrowVotes_[side] = 0; changed = true; }
+        } else if (w > *cur[side] + 250.0f) {
+            narrowVotes_[side] = 0;
+            widenMin_[side] = widenVotes_[side] == 0 ? w : std::min(widenMin_[side], w);
+            if (++widenVotes_[side] >= 2) { *cur[side] = widenMin_[side]; widenVotes_[side] = 0; changed = true; }
+        } else { narrowVotes_[side] = 0; widenVotes_[side] = 0; }
         // notch: adopt only a line seen on two decisions running (±2 bins)
         if (newNotch[side] > 0.0f && notchF_[side] > 0.0f && std::fabs(newNotch[side] - notchF_[side]) < 2.0 * bin) {
             /* hold */
@@ -535,6 +585,26 @@ void SyncAm::decide_() {
             notchPend_[side] = newNotch[side];
         } else if (notchF_[side] > 0.0f) { notchF_[side] = 0.0f; changed = true; }
     }
+    /* ★★★ SAM DOES NOT CUT, IT WEIGHS (2026-10-31, measured). A hard cut of the dirty side throws away the 3 dB a
+     *  second copy of the programme is worth: on 972 kHz under a stronger 963 it cost 1.9 dB of coherence score
+     *  against plain SAM. So the band is split where the neighbour starts, and each region combines the two
+     *  sidebands with maximum-ratio weights from their own measured noise+interference (w_U = N_L / (N_U + N_L)):
+     *  below the split usually 0.5 (plain DSB), above it the clean side dominates without the dirty one going to
+     *  zero. Without a neighbour there is one region and the weights stay at 0.5 unless the sides differ by 3 dB. */
+    if (det_ == Det::SAM) {
+        const double split = std::min(edgeU_, edgeL_);
+        double nuLo = 0, nlLo = 0, nuHi = 0, nlHi = 0;
+        for (int b = 0; b < nb; ++b) {
+            const double f1 = kLow + (b + 1) * kBand;
+            if (f1 <= split) { nuLo += Nu[b]; nlLo += Nl[b]; } else { nuHi += Nu[b]; nlHi += Nl[b]; }
+        }
+        float lo = 0.5f, hi = 0.5f;
+        if (armMrc_ && nuLo > 0 && nlLo > 0 && (nuLo > 4.0 * nlLo || nlLo > 4.0 * nuLo))
+            lo = (float)std::max(0.05, std::min(0.95, nlLo / (nuLo + nlLo)));
+        if (split < userEdge_ - 1.0 && nuHi > 0 && nlHi > 0) hi = (float)std::max(0.02, std::min(0.98, nlHi / (nuHi + nlHi)));
+        else hi = lo;
+        mrcTarget_ = lo; mrcHiT_ = hi;
+    } else { mrcTarget_ = 0.5f; mrcHiT_ = 0.5f; }
     if (changed) applyEdges_();
 }
 
@@ -570,6 +640,8 @@ void SyncAm::process(const cf32* in, float* outL, float* outR, int n) {
     } else if (edgeU_ < userEdge_ || edgeL_ < userEdge_ || notchF_[0] > 0.0f || notchF_[1] > 0.0f) decide_();
     mrcA_ += 0.02f * (mrcTarget_ - mrcA_);
     if (std::fabs(mrcA_ - mrcTarget_) < 0.001f) mrcA_ = mrcTarget_;
+    mrcHi_ += 0.02f * (mrcHiT_ - mrcHi_);
+    if (std::fabs(mrcHi_ - mrcHiT_) < 0.001f) mrcHi_ = mrcHiT_;
     // 3. the detector
     switch (det_) {
         case Det::ENV: {
@@ -647,9 +719,12 @@ void SyncAm::process(const cf32* in, float* outL, float* outR, int n) {
             std::memcpy(dE_.data() + M, mag_.data(), sizeof(float) * N);
             /* ★ Plain DSB (equal weights, equal edges) is a·U + (1−a)·L = I exactly: the Hilbert term cancels, so it
              *  is not computed — that is most of SAM's cost, and the usual case. */
-            const bool dsbPlain = det_ == Det::SAM && std::fabs(mrcA_ - 0.5f) < 0.002f && std::fabs(mrcTarget_ - 0.5f) < 0.002f
-                                  && lpW1_.f == lpW2_.f && notchF_[0] <= 0.0f && notchF_[1] <= 0.0f;
-            hilbert_(yQ_.data(), n, hq_.data(), !dsbPlain);
+            const bool dsbPlain = det_ == Det::SAM && mrcA_ == 0.5f && mrcTarget_ == 0.5f && mrcHi_ == 0.5f && mrcHiT_ == 0.5f
+                                  && notchF_[0] <= 0.0f && notchF_[1] <= 0.0f;
+            const bool split = det_ == Det::SAM && splitF_ < (float)userEdge_ - 1.0f && std::fabs(mrcA_ - mrcHi_) > 1e-4f
+                               && hLowF_ == splitF_;
+            hqLow_.resize(N);
+            hilbert_(yQ_.data(), n, hq_.data(), !dsbPlain, split ? hqLow_.data() : nullptr);
             sideSplit(dI_.data(), dcI_.data(), hq_.data(), U, L, n);
             if (notchF_[1] > 0.0f) for (int k = 0; k < n; ++k) U[k] = notch_[1].step(U[k]);
             if (notchF_[0] > 0.0f) for (int k = 0; k < n; ++k) L[k] = notch_[0].step(L[k]);
@@ -657,19 +732,16 @@ void SyncAm::process(const cf32* in, float* outL, float* outR, int n) {
             switch (det_) {
                 case Det::SAM_U: case Det::ECSS_U: lpA_.run(U, n); break;
                 case Det::SAM_L: case Det::ECSS_L: lpA_.run(L, n); C = L; break;
-                default: {                                 // SAM: both sides
-                    const bool upperWider = edgeU_ >= edgeL_;
-                    float* W = tmpC_.data();
-                    std::memcpy(W, upperWider ? U : L, sizeof(float) * N);
-                    mix2(U, L, mrcA_, n);                  // C = a·U + (1−a)·L
-                    lpA_.run(U, n);
-                    if (lpW1_.f != lpW2_.f) {
-                        // ★ the band only the wider side covers: LP_fmax(W) − LP_fmin(W). From a cleared state both
-                        //   start identical, so the term fades in from exactly zero when the cut first goes asymmetric.
-                        std::memcpy(L, W, sizeof(float) * N);
-                        lpW1_.run(W, n); lpW2_.run(L, n);
-                        for (int k = 0; k < n; ++k) U[k] += W[k] - L[k];
-                    } else { lpW1_.clear(); lpW2_.clear(); }
+                default: {                                 // SAM: both sides, two regions
+                    /* C = a·U + (1−a)·L with U − L = −2·H{Q}: above the split a = aHi, below it aLo, so
+                     *   out = aHi·U + (1−aHi)·L − 2(aLo − aHi)·H_low{Q}
+                     * where H_low is the Hilbert band-limited to the split — linear phase, the full Hilbert's own delay. */
+                    mix2(U, L, mrcHi_, n);
+                    if (split) {
+                        const float k2 = -2.0f * (mrcA_ - mrcHi_);
+                        const float* hl = hqLow_.data();
+                        for (int k = 0; k < n; ++k) U[k] += k2 * hl[k];
+                    }
                     break;
                 }
             }
@@ -698,12 +770,16 @@ SyncAm::Status SyncAm::status() const {
     switch (det_) {
         case Det::SAM_U: case Det::ECSS_U: s.edgeLoHz = 0.0f; s.edgeHiHz = hi; break;
         case Det::SAM_L: case Det::ECSS_L: s.edgeLoHz = lo; s.edgeHiHz = 0.0f; break;
-        case Det::SAM: s.edgeLoHz = lo; s.edgeHiHz = hi; break;
+        case Det::SAM:   // ★ shown as an edge only where that side is really weighted down (< 0.5) above the split
+            s.edgeLoHz = (lo < E - 1.0f && mrcHi_ > 0.5f) ? lo : E;
+            s.edgeHiHz = (hi < E - 1.0f && mrcHi_ < 0.5f) ? hi : E;
+            break;
         default: s.edgeLoHz = s.edgeHiHz = std::min(lo, hi); break;
     }
     s.autoCut = (s.edgeLoHz > 0.0f && s.edgeLoHz < E - 1.0f) || (s.edgeHiHz > 0.0f && s.edgeHiHz < E - 1.0f);
     s.notchHz = notchF_[1] > 0.0f ? notchF_[1] : (notchF_[0] > 0.0f ? -notchF_[0] : 0.0f);
     s.mrcUpper = mrcA_;
+    s.mrcUpperHi = mrcHi_;
     return s;
 }
 
