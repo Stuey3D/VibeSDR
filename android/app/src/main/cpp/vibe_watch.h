@@ -263,7 +263,7 @@ private:
     bool dirty_ = true;
     SquelchGate gate_;
     std::atomic<bool> open_{true}, parked_{false}, muted_{false}, hasTap_{false};
-    std::atomic<bool> autoBw_{true};   // ★★ V12 the listener's AUTO (bandwidth) — VFO B follows it (setAutoBw)
+    std::atomic<bool> autoBw_{false};  // ★★ V12 the listener's AUTO (bandwidth) — VFO B follows it (setAutoBw); OFF by default (2026-10-31)
     std::mutex tapMtx_;
     AudioTap tap_;
     std::atomic<float> levelDb_{-200.0f};

@@ -16673,18 +16673,20 @@ function buildMenu() {
   //    costs a listener nothing where it cannot help.
   // ★ SERVER-WIDE, so it is READ from the state report and never asserted from storage — see the
   //   pushOnInit note on toggle(). The button below is only its first paint.
+  // ★★ V12 (2026-10-31): the report is the CURRENT mode's AUTO — WFM's (on by default) or the passband AUTO of AM, SSB
+  //    and CW (OFF by default: Stuart, "a new untested option"). Until it arrives, the first paint is off.
   toggle('autoBwBtn', (on) => {
     $('autoBwBtn').textContent = on ? 'AUTO BW ON' : 'AUTO BW OFF';
     spec!.setAutoBw(on);
     setToggleTo('bwAuto', on, 'autobw', () => 'AUTO'); syncBw();   // ★★ V12 the AUTO key is the same switch
-  }, 'autobw', srvAutoBw ?? true, /*pushOnInit=*/false);
+  }, 'autobw', srvAutoBw ?? false, /*pushOnInit=*/false);
   // ★★ V12 THE AUTO KEY by the bandwidth sliders (#bwAuto) — the same per-listener server switch as AUTO BW above; each
   //    keeps the other in step. Shown only where the server lists the mode (syncBw).
   toggle('bwAuto', (on) => {
     spec!.setAutoBw(on);
     setToggleTo('autoBwBtn', on, 'autobw', (v) => v ? 'AUTO BW ON' : 'AUTO BW OFF');
     syncBw();
-  }, 'autobw', srvAutoBw ?? true, /*pushOnInit=*/false);
+  }, 'autobw', srvAutoBw ?? false, /*pushOnInit=*/false);
   $('bwAuto').textContent = 'AUTO';
   segment('deemphSeg', 'tau', (us) => spec!.setDeemph(us * 1e-6), 'deemph');
 

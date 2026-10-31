@@ -3663,7 +3663,7 @@ private:
     std::unique_ptr<AmDemod> am_;
     /** ★★ V12 the AM family's detector (plain AM included — with auto bandwidth off it IS AmDemod). */
     std::unique_ptr<SyncAm> sync_;
-    std::atomic<bool> amAutoBw_{true};
+    std::atomic<bool> amAutoBw_{false};   // ★★ OFF by default on every mode (Stuart, 2026-10-31) — the AUTO key switches it on
     unsigned amBench_ = 0;
     std::atomic<float> amIRatio_{0.0f};
     std::atomic<unsigned> amArms_{0xE};      // ★ the noise arm off by default — see SyncAm::armNoise_

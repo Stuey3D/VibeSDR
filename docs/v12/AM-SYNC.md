@@ -330,14 +330,21 @@ to the layout we have now with just the sync button."*
 ### 11.2 One switch, per listener; the shared dial
 
 - `{"type":"autobw","on":bool}` — the existing message, so FM's A-BW, AUTO and an older client all drive the same thing.
-- **Per-listener DSP** (a locked range with several VFOs): it is THIS listener's (`ClientDsp::autoBwOn`, ON for a new
+- **★★ OFF BY DEFAULT on every passband mode (Stuart, 2026-10-31: "a new untested option and I didn't even realise we
+  could get it working on SSB").** AM, the AM family, SSB and CW start with AUTO off — `vibedsp::RxPipeline`'s
+  `amAutoBw_`, `ClientDsp::autoBwOn`, VFO B's `WatchChannel::autoBw_` and the shared pipeline's own `g_autoBwPassOn` all
+  default false. The AUTO key is still drawn wherever the server lists the mode (`autoBwModes`), so a listener can switch it
+  on. FM's TEF-style A-BW keeps its own flag (`g_autoBwOn`) and its default (on): on the shared pipeline the one
+  `autobw` message sets whichever of the two the dial's current mode uses, and the state report carries that one. The
+  app states its remembered A-BW only when a connection starts in WFM.
+- **Per-listener DSP** (a locked range with several VFOs): it is THIS listener's (`ClientDsp::autoBwOn`, OFF for a new
   listener — a joiner inherits nobody's choice), applied to their pipeline and re-applied when it is rebuilt. Nobody
   else's audio moves.
 - **One pipeline** (a single listener, or a shared dial): it is the dial's, exactly as the passband is — in the
   ask-before-tuning gated list, broadcast to the room in hwinfo, adopted by a joiner, and never sent by a client except
   on a person's tap or drag ([[shared_dial_contract]]: the server states its full state, the client has no vote).
 - **The owner's A-BW switch does not exist** — the brief assumed one. `autobw` has always been a listener control
-  (server-wide on a single pipeline), default ON at start. So there is no owner "offer AUTO" setting; the server offers
+  (server-wide on a single pipeline), default OFF at start outside WFM (above). So there is no owner "offer AUTO" setting; the server offers
   AUTO by mode. If Stuart wants an owner switch (offer it at all / its default for new listeners), it is a small
   addition: a config key read where `autoBwModes` is built and where `ClientDsp::autoBwOn` is initialised (§11.8 Q1).
 - **VFO B follows its listener's AUTO** (`vibe_watch.h WatchChannel::setAutoBw`, set when B is created and whenever the
@@ -504,8 +511,8 @@ handling anyway. Agreeing with the analysis, nothing was measured.
 
 1. An owner switch for AUTO (offer it at all, and its default for new listeners)? There is none today — `autobw` was
    always a listener control.
-2. SSB/CW AUTO default ON for everybody after the update (as FM and AM are), or default OFF for SSB/CW until heard?
-   CW's sound changes noticeably (±150 Hz).
+2. ~~SSB/CW AUTO default ON for everybody after the update, or default OFF until heard?~~ **Answered 2026-10-31: OFF on
+   every passband mode (AM included); the key stays, so a listener can switch it on.** FM's A-BW is unchanged (on).
 3. NFM: worth building the CNR-steered narrowing (it would need its own noise measure outside the cut, and a width
    change that does not move the level)? Gains only on weak signals below the FM threshold.
 4. SSB AUTO costs ~1.6–2.1 % of a Pi 2 core per listener; a softer cut edge would cost ~40 % less. Keep the sharp one?

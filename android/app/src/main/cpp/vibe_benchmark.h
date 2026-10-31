@@ -537,7 +537,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
             perListener[d.id] = res.back().pct;
         }
         /* ★★ AUTO BANDWIDTH'S OWN COST, per listener, in each mode that has it (AM-SYNC.md §11: WFM, the AM family, USB /
-         *  LSB, CW). The listener rows above run it as served (ON); each row here is the SAME chain with AUTO on minus
+         *  LSB, CW). The listener rows above run it as served (OFF since 2026-10-31); each row here is the SAME chain with AUTO on minus
          *  AUTO off — what the switch adds. WFM's AUTO is decided by the shim and applied as a narrower IF
          *  (setAutoBandwidth): its row is that IF narrowed to 110 kHz against wide open. No owner switch exists (AUTO is
          *  the listener's), so these rows set nothing — they say what it costs. A difference of two measurements: a

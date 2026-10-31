@@ -1388,7 +1388,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [fmNr,  setFmNr]  = useState(true);
   const [fmIms, setFmIms] = useState(true);
   // ★ Server-wide and DEFAULTS ON, matching the server's own default and the web client's button.
-  const [fmAutoBw, setFmAutoBw] = useState(true);
+  const [fmAutoBw, setFmAutoBw] = useState(false);   // ★★ first paint only — the server reports the current mode's AUTO (off by default outside WFM)
   const [fmCeq, setFmCeq] = useState(true);
   const [fmNb,  setFmNb]  = useState(true);
   const [fmNbx, setFmNbx] = useState(false);   // the audio-menu NOISE BLANKER (every mode but WFM); off until chosen, as the web
@@ -2019,9 +2019,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     fmWantSent.current = true;
     const c = fmClient();
     c?.setWeakProc?.(want.wsp); c?.setIms?.(want.ims); c?.setCeq?.(want.ceq);
-    c?.setNoiseBlanker?.(want.nb); c?.setNoiseBlankerHf?.(want.nbx); c?.setAutoBw?.(want.autobw);
+    c?.setNoiseBlanker?.(want.nb); c?.setNoiseBlankerHf?.(want.nbx);
+    /* ★★ V12 (2026-10-31): `autobw` is the CURRENT mode's AUTO on the server — WFM's TEF-style one, or the passband AUTO
+     *  of AM / SSB / CW, which starts OFF (Stuart: "a new untested option"). The remembered A-BW is FM's, so it is stated
+     *  only when this connection starts in WFM; anywhere else the server's own default (off) stands. */
+    const m0 = client.current?.getStatus().mode;
+    if (m0 === 'wfm' || m0 === 'fm') { c?.setAutoBw?.(want.autobw); setFmAutoBw(want.autobw); }
     setFmNr(want.wsp); setFmIms(want.ims); setFmCeq(want.ceq);
-    setFmNb(want.nb); setFmNbx(want.nbx); setFmAutoBw(want.autobw);
+    setFmNb(want.nb); setFmNbx(want.nbx);
   }, [isLocal, vibeFmDsp, fmClient, route.params.localHost]);
 
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
