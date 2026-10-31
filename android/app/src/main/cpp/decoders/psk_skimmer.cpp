@@ -550,9 +550,14 @@ struct Skimmer::Impl {
         v.assign((size_t)nb, 0.0f);
         for (int j = 0; j < nb; ++j) v[(size_t)j] = std::min(blk[(size_t)j + 1], std::max(blk[(size_t)j], blk[(size_t)j + 2])) * kFloorBias;
         // ★ then straight lines between the blocks' centres
+        // ★ floor(x) by integers (decoder audit 2026-10-31): x = (2i + 1 − B) / 2B exactly, so its floor is that numerator
+        //   shifted down (an arithmetic shift is a floor for negatives too). std::floor is a library routine on 32-bit ARM
+        //   (no rounding instruction before ARMv8) and this ran it for every searched bin every hop: the skimmer's
+        //   largest single call on the Pi 2. Bit-identical.
+        static_assert(B == 32, "the shift below is a floor division by 2B = 64");
         for (int i = 0; i < nS; ++i) {
             const double x = (i + 0.5) / B - 0.5;
-            const int j0 = std::max(0, std::min(nb - 1, (int)std::floor(x))), j1 = std::min(nb - 1, j0 + 1);
+            const int j0 = std::max(0, std::min(nb - 1, (2 * i + 1 - B) >> 6)), j1 = std::min(nb - 1, j0 + 1);
             const double t = std::max(0.0, std::min(1.0, x - j0));
             floorV[(size_t)i] = std::max((float)(v[(size_t)j0] * (1 - t) + v[(size_t)j1] * t), 1e-30f);
         }
@@ -750,15 +755,19 @@ struct Skimmer::Impl {
         cf rot((float)std::cos(ph0), (float)std::sin(ph0));
         const cf step((float)std::cos(-kTwoPi / sps), (float)std::sin(-kTwoPi / sps));
         const float beta = (float)(1.0 / (sps * kTimingSyms));
+        // ★ l.n as a double, kept alongside (exact below 2^53): a uint64 → double conversion is a library call on 32-bit
+        //   ARM, and the loop asked for it every output (decoder audit 2026-10-31). The rotator by plain products — no
+        //   std::complex NaN check per output.
+        double nd = (double)l.n;
         for (int j = 0; j < kOut; ++j) {
             const cf y(l.yr[(size_t)j], l.yi[(size_t)j]);
             const float e = std::norm(y);
             l.C += beta * (e * rot - l.C);
             l.eAvg += beta * (e - l.eAvg);
-            rot *= step;
+            rot = cf(rot.real() * step.real() - rot.imag() * step.imag(), rot.real() * step.imag() + rot.imag() * step.real());
             l.yh[l.n & 31] = y;
-            ++l.n;
-            while ((double)l.n - 1.0 >= l.tNext + 2.0) {
+            ++l.n; nd += 1.0;
+            while (nd - 1.0 >= l.tNext + 2.0) {
                 const double t = l.tNext;
                 const uint64_t i = (uint64_t)std::floor(t);
                 const float mu = (float)(t - (double)i);
