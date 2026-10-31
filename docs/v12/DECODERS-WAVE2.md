@@ -102,6 +102,7 @@ every engine in the process.
 | CPU Mac (M-series, noise, worst case) | 60 s window 42 ms, 30 s 34 ms → ≈ 110 ms/min (FT8 ≈ 42 ms/min) → costVsFt8 2.6 |
 | CPU Pi 2 (qemu-arm count, `tools/q65-bench/qemu.sh`) | 60 s window 0.84 G instr NEON / 1.89 G scalar; 30 s 0.68 G / 1.78 G → ≈ 2.2 G/min → ≈ 3–4 s of a 900 MHz core per minute (≈ 5–7 %), ESTIMATE at 0.6–0.8 IPC |
 | SIMD | NEON = scalar decodes bit for bit (Mac: sweep + noise); SSE2 = scalar bit for bit (x86-64 build under qemu, 33 decodes + noise). Hot loops vectorised: WHT64 (register-resident), BP products/normalise, sync search row sums, complex dot/mix. Not vectorised (does not pay): the GF(64) permutation gathers, the per-symbol exp/log metric (4 k per attempt) |
+| 70 cm dials | 432.055 was dropped (FST4 commit): with it the Q65 cluster was too wide for a narrow capture to hold beside FT8 (test-band-slice); 432.065 + 432.087 remain |
 | Memory | per engine: 3.4 MB ring + transient window copy; shared: ≈ 7 MB (30 s) + 13 MB (60 s) process-wide |
 
 Optimisation history (60 s noise window, Mac): 222 ms → 140 (submode ranking) → 83 (a-priori on the best submode,
@@ -125,3 +126,70 @@ same engine (the native lib globs `digimodes/*.cpp`) — not compile-checked wit
 1. 23 cm: most live Q65 is 1296.05–1296.12 MHz EME. Add a 23 cm band to Band mode's list (it would carry only Q65)?
 2. 6 m: the IARU R1 EME centre 50.310–50.320 overlaps FT8's 50.313 and no Q65 was heard there today. Add 50.310 anyway?
 3. Run Q65-15 too (≈ +40 % cost)?
+
+---
+
+## 2. FST4 and FST4W — DONE, with a stated sensitivity gap (2026-10-31)
+
+Files: `decoders/digimodes/fst4_code.{h,cpp}`, `fst4_tables.h` (generated), `fst4_decoder.{h,cpp}`, `fst4.h`,
+`fst4w.h`, `digi_bands.h` ("FST4" rows; FST4W uses its existing WSPR-dial rows), `tools/fst4-bench/`,
+`vibeserver/test-fst4.cpp`.
+
+### Clean room
+`fst4sim` (WSJT-X 2.7.0, black box) prints a message's bits, its CRC-24 and its 160 tones. 177 FST4 + 236 FST4W
+messages (telemetry words for arbitrary bit patterns; random calls/grids/powers; compound calls) were solved:
+- FST4's printed 77 bits = the FT8 payload XOR FT4's published scrambling sequence (constant XOR across all 130
+  telemetry words); CRC-24 = 0x100065B, register 0, MSB first over those 77 bits, no padding (all 134 printed CRCs);
+- FST4W: 50 bits = FT8 c28 (call) + g15 (grid) + 5-bit power index (0,3,7…60 dBm → 0…18) + 2 type bits; not scrambled;
+  same CRC. Compound calls (type ≠ 00) carry the base call's c28 and an unsolved field → decoded, **not unpacked**;
+- systematic, Gray (00→0, 01→1, 11→2, 10→3), sync 5 × 8 at 0/38/76/114/152 (A B A B A);
+- the LDPC parity checks: sparse vectors of the dual of the observed codewords by an information-set search
+  (scratch Python): (240,101) 139 checks weight 5–6, (240,74) 166 checks weight 4–5, every column weight 3. All 413
+  black-box vectors reproduce; BP on BPSK/AWGN gives 50 % FER at Eb/N0 ≈ 1.1 dB (a healthy code).
+- Timing from the audio: nsps 720/1680/3888/8200/21504/66560/134400; start 0.5 s (15 s) or 1.0 s.
+
+### Receiver
+Per (mode, period) stream: vibedsp NCO + FIR (shared by all periods of a mode) then a polyphase resampler to a
+baseband with an exact FFT-friendly samples-per-symbol (FST4 ≈ 2.65 kHz, FST4W ≈ 260–280 Hz) → STFT sync search (SIMD
+over bins) → refine → coherent fine frequency on the sync groups → five detection views tried in turn: one global
+carrier phase (all 40 sync symbols), piecewise phase between sync groups, coherent 4-, 2- and 1-symbol blocks →
+sum-product BP → CRC-24 → guards (one-tone codeword, mean tone energy ≥ 1.6, plausible message; FST4W: a real call
+and grid). FST4W tries its (240,74) code then (240,101) (hashed-call messages use the 77-bit form).
+
+### Numbers
+| | |
+|---|---|
+| Sensitivity, 50 % (synthetic GFSK BT=1, AWGN) | FST4-15 ≈ −18.7 · FST4-60 ≈ −26.1 · FST4W-120 ≈ −29.6 dB (2500 Hz) |
+| vs jt9 (black box, fst4sim FST4-60 files, 16 distinct per point, no AP calls) | −24: 16/16 both · −25: jt9 16, ours 6 · −26: 16 / 2 · −27: 15 / 0 · −28: 6 / 0 → **jt9 ≈ 2–2.5 dB better** |
+| Ideal detection (our BP, perfect phase, simulated symbols) | coherent 50 % at −27.2 dB, single-symbol non-coherent −24.7 — so our receiver loses ≈ 1 dB to ideal coherent, and jt9 has ≈ 1 dB more (OSD or a better detector) |
+| False decodes on noise | FST4-15 × 1000, FST4-60 × 300, FST4W-120 × 200 windows: **0** |
+| CPU Mac | FST4 engine (60/120/300) ≈ 36 ms a minute (FT8 ≈ 42) → costVsFt8 0.9; FST4W (120/300/900/1800) ≈ 10 ms a minute → 0.25 |
+| CPU Pi 2 | NOT MEASURED under qemu yet; at Q65's measured Mac→Pi 2 ratio (≈ 30–35×) ≈ 1.1–1.3 s/min FST4, ≈ 0.3 s/min FST4W (ESTIMATE) |
+| SIMD | sync search, complex dot products (q65_simd.h), vibedsp's NEON/SSE2 NCO/FIR/resampler. Not vectorised yet: the LDPC BP (scalar sum-product with tanh/log) — it is small here (few candidates per long period) but should get the FT8 BP kernels' treatment; scalar-vs-SIMD identity not yet checked for FST4 |
+
+### Clients
+Server Single (FST4 window 250–1550 Hz on 474.2/136.0; FST4W ±150 Hz of WSPR's dials) and Band (+ the background Band
+profile, so FST4W runs beside WSPR there). Spots `FST4-60` … / `FST4W-120` …, colour/letter already in digiModes.ts.
+About updated. FST4 window was narrowed to 1.55 kHz so 2200 m's 136.0 dial stays inside the band (137.8).
+
+### Owed
+- The ≈ 2 dB gap to jt9: OSD after BP (as ft8_decoder's), a GFSK-matched multi-symbol detector, and a joint
+  phase/frequency track (drift on LF paths). Validate on REAL LF/MF/HF FST4W (PSKReporter shows FST4W on 136/475 kHz
+  and 3.570/7.040 MHz; Stuart's UberSDR reaches all of them — record a night of 630 m and 40 m WSPR/FST4W windows).
+- FST4W compound-call field layout (more black-box runs with systematic prefixes/suffixes).
+- qemu Pi 2 count and SIMD-vs-scalar identity check for FST4 (as Q65's `tools/q65-bench/qemu.sh`).
+
+---
+
+## RESUME HERE — the queue from MSK144 on (not started)
+
+3. **MSK144** (`msk144code` is in the black-box kit; LDPC (128,90) + CRC; free-running, meteor pings; 6 m 50.260
+   (PSKReporter's active receivers 50.2614) / 50.320–50.380 (IARU R1 MS centre); 2 m 144.360 (US) — check R1).
+4. CTCSS/DCS — NOTE: the decoder host's audio is post-voice-filter in NFM VOICE (the 300 Hz high-pass cuts CTCSS by
+   ≥ 40 dB: vibedsp.h setNfmVoice); the tone decoder needs the listener's RAW discriminator or its own FM
+   discriminator on the per-client IQ tap (`iqTap` in local_sdr_shim.cpp) — outside RxPipeline as asked.
+5. JJY/BPC/TDF/CHU · 6. ACARS → VDL2 · 7. HFDL · 8. RS41 · 9. PAGING (spec at the top) · 10. MFSK/Hell/SELCAL/EAS.
+
+Black-box kit (not in git): `~/wsjtx-blackbox/` — `dl/x/usr/bin/*` (WSJT-X 2.7.0 arm64 binaries), docker image
+`wsjtx-bb` (`img/Dockerfile`), corpora and sims. Colima was started with 2 CPUs / 2 GB for it.
+No server session was used this run (all tests synthetic or black-box): the server log above is empty.
