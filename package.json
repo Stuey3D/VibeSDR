@@ -20,7 +20,7 @@
     "expo-status-bar": "~57.0.0",
     "expo-web-browser": "~57.0.3",
     "opus-decoder": "^0.7.12",
-    "pako": "^2.1.0",
+    "pako": "^2.2.0",
     "react": "19.2.3",
     "react-native": "0.86.0",
     "react-native-draggable-flatlist": "^4.0.3",
