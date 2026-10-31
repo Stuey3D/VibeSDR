@@ -283,6 +283,34 @@ inline const std::vector<float>& sincTable() {
     return t;
 }
 
+/** Σ x[k]·h[k] over the 8 taps. ★ NEON / SSE2 (decoder audit 2026-10-31): the scalar 16 multiply-adds were the
+ *  channeliser's largest line on the Pi 2 once the NCO and the divides were gone. */
+inline cf sinc8(const cf* x, const float* h) {
+    static_assert(kTaps == 8, "sinc8 is the 8-tap interpolator");
+#if VIBE_ISM_NEON
+    const float32x4x2_t a = vld2q_f32(reinterpret_cast<const float*>(x)), b = vld2q_f32(reinterpret_cast<const float*>(x + 4));
+    const float32x4_t h0 = vld1q_f32(h), h1 = vld1q_f32(h + 4);
+    const float32x4_t re = vmlaq_f32(vmulq_f32(a.val[0], h0), b.val[0], h1), im = vmlaq_f32(vmulq_f32(a.val[1], h0), b.val[1], h1);
+    const float32x2_t r2 = vadd_f32(vget_low_f32(re), vget_high_f32(re)), i2 = vadd_f32(vget_low_f32(im), vget_high_f32(im));
+    const float32x2_t s = vpadd_f32(r2, i2);
+    return cf(vget_lane_f32(s, 0), vget_lane_f32(s, 1));
+#elif VIBE_ISM_SSE2
+    const float* f = reinterpret_cast<const float*>(x);
+    // pairs (re, im) × (h, h): four products of two complex samples a load, summed lane-wise
+    __m128 acc = _mm_setzero_ps();
+    for (int k = 0; k < 8; k += 2) {
+        const __m128 hk = _mm_setr_ps(h[k], h[k], h[k + 1], h[k + 1]);
+        acc = _mm_add_ps(acc, _mm_mul_ps(_mm_loadu_ps(f + 2 * k), hk));
+    }
+    float l[4]; _mm_storeu_ps(l, acc);
+    return cf(l[0] + l[2], l[1] + l[3]);
+#else
+    float re = 0, im = 0;
+    for (int k = 0; k < kTaps; ++k) { re += x[k].real() * h[k]; im += x[k].imag() * h[k]; }
+    return cf(re, im);
+#endif
+}
+
 class Stream {
 public:
     explicit Stream(double rate, size_t ringPow2 = 17) : rate_(rate), ring_(size_t(1) << ringPow2), mask_(ring_.size() - 1) {}
@@ -291,6 +319,8 @@ public:
     int64_t written() const { return wr_; }
     int64_t oldest() const { return wr_ - int64_t(ring_.size()) + 1; }
     const cf& at(int64_t i) const { return ring_[size_t(i) & mask_]; }
+    /** Samples i … i+n-1 as one pointer when they do not wrap the ring, else nullptr. */
+    const cf* run(int64_t i, int n) const { const size_t k = size_t(i) & mask_; return k + size_t(n) <= ring_.size() ? &ring_[k] : nullptr; }
     double rate() const { return rate_; }
     size_t capacity() const { return ring_.size(); }
 private:
@@ -374,19 +404,28 @@ public:
             const int ph = std::min(kPhases - 1, int(startFrac * kPhases + 0.5));
             h = &sincTable()[size_t(ph * kTaps)];
         }
-        for (int n = 0; n < N_; ++n) {
-            cf x;
-            if (h) {
-                float re = 0, im = 0;
+        /* ★★ IN THREE VECTOR PASSES (decoder audit 2026-10-31): the samples (interpolated by sinc8, or a straight copy out
+         *  of the ring), the dechirp (cmulRun — conj(x)·r is conj(x·conj(r)), so invertIq is two flags), then the
+         *  fractional-bin rotation (rotateRun, only when asked for). Same products as the per-sample loop it replaced. */
+        cf* B = buf_.data();
+        if (h) {
+            for (int n = 0; n < N_; ++n) {
                 const int64_t b = w + n - (kTaps / 2 - 1);
+                if (const cf* x = s.run(b, kTaps)) { B[n] = sinc8(x, h); continue; }
+                float re = 0, im = 0;
                 for (int k = 0; k < kTaps; ++k) { const cf& v = s.at(b + k); re += v.real() * h[k]; im += v.imag() * h[k]; }
-                x = cf(re, im);
-            } else x = s.at(w + n);
-            if (inv) x = std::conj(x);
-            const cf r = up ? std::conj(up_[size_t(n)]) : up_[size_t(n)];
-            buf_[size_t(n)] = x * r * rot;
-            rot *= inc;
+                B[n] = cf(re, im);
+            }
+        } else {
+            for (int n = 0; n < N_;) {
+                const int64_t at = w + n;
+                const int run = std::min<int>(N_ - n, int(s.capacity() - (size_t(at) & (s.capacity() - 1))));
+                std::memcpy(B + n, &s.at(at), size_t(run) * sizeof(cf));
+                n += run;
+            }
         }
+        vibeism::cmulRun(B, up_.data(), B, N_, up != inv, inv);
+        if (fracBins != 0) vibeism::rotateRun(B, B, N_, false, rot, inc);
         fft_.forward(buf_.data());
         ++ffts_;
         Peak p; double sum = 0; int best = 0; float bm = -1;
@@ -703,8 +742,9 @@ public:
         while (fs_ * c.Lc / L_ < 1.5 * bw) c.Lc *= 2;
         c.ri = fs_ * c.Lc / L_;
         c.step = c.ri / bw;
+        c.ncoDph = -2 * M_PI * c.resid / c.ri;
+        c.ncoInc = cf(float(std::cos(c.ncoDph)), float(std::sin(c.ncoDph)));
         c.ifft.reset(new vibeism::DetFft(c.Lc));
-        c.Y.resize(size_t(c.Lc));
         // the low-pass: Hamming-windowed sinc, M = L/4 + 1 taps, its −6 dB point half a transition past the band edge
         const int M = L_ / 4 + 1;
         const double trans = 3.3 * fs_ / M;
@@ -727,52 +767,113 @@ public:
     }
     size_t channels() const { return ch_.size(); }
     uint64_t ffts() const { return ffts_; }
+#if defined(VIBE_ISM_PROF)
+    double profFft = 0, profIfft = 0, profRot = 0, profRes = 0;   ///< seconds: the capture FFT; per channel the bins × filter
+                                                                  ///< and its inverse FFT (both halves); the phase + NCO; the resampler
+#endif
 
-    void feed(const cf* x, size_t n) {
+    /* ★★ IN STAGES (2026-10-31, the Pi 2 thread split). On the Pi 2 the default 433 set (two channels) spent 36 % of a
+     *  core in the capture FFT and 11 % in the channels' filters and inverse FFTs, against 2 % rotating, 4 % resampling and
+     *  3 % in the detectors (VIBE_ISM_PROF, Stuart's Pi 500 capture) — one thread at ~70 % in real time; the 868 default
+     *  set (five channels, twenty detectors) was over a whole core. So a block is done in parts that may run on separate
+     *  threads, in block order: feedSpectra() the capture FFT and each channel's bins × its filter; deliver() each
+     *  channel's inverse FFT, the block's phase, the residual NCO and the resampler; then pushOut() into the streams the
+     *  detectors read. Same arithmetic in the same order: inline, feed() runs them all, exactly as before. */
+    /** One block's channels: each its Lc bins × the filter, not yet inverse-transformed. */
+    struct Spectra { int64_t blk = 0; std::vector<vibeism::cfvec16> Y; };   // ★ aligned: each inverse FFT runs in place
+    /** Chip-rate samples per channel (the resampler's output), for pushOut(). */
+    using ChipOut = std::vector<std::vector<cf>>;
+    /** Capture samples in; each completed block's Spectra to `onBlock(Spectra&&)`. */
+    template <class F> void feedSpectra(const cf* x, size_t n, F&& onBlock) {
         size_t i = 0;
         while (i < n) {
             const size_t take = std::min(n - i, size_t(L_ - fill_));
             std::memcpy(&in_[size_t(fill_)], x + i, take * sizeof(cf));
             fill_ += int(take); i += take;
-            if (fill_ == L_) block();
+            if (fill_ == L_) { Spectra sp; spectra(sp); onBlock(std::move(sp)); }
         }
     }
+    /** The second half, in block order: the block's phase, the residual NCO and the resampler into each channel's
+     *  Stream. ★ A block missing before `sp` (dropped behind a slow second half) still moves the NCO's phase on, so the
+     *  channel stays on frequency; the samples it held are simply not there. */
+    void deliver(Spectra& sp, ChipOut* chips = nullptr) {
+        if (sp.blk > nextBlk_) for (auto& c : ch_) for (int64_t b = nextBlk_; b < sp.blk; ++b)
+            c.ncoPh = std::remainder(c.ncoPh + double(c.Lc - c.Lc / 4) * c.ncoDph, 2 * M_PI);
+        nextBlk_ = sp.blk + 1;
+        const int lmask = L_ - 1;
+        const int64_t start = sp.blk * int64_t(S_);
+        VIBE_ISM_P(double tq = vibeism::ismProfNow();)
+        if (chips && chips->size() != ch_.size()) chips->resize(ch_.size());
+        for (size_t ci = 0; ci < ch_.size(); ++ci) {
+            Ch& c = ch_[ci];
+            cf* Y = sp.Y[ci].data();
+            c.ifft->forward(Y);
+            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profIfft += t2 - tq; tq = t2; })
+            const int Lc = c.Lc;
+            // the block's phase for where it starts in the capture, and the NCO for the residual offset
+            const int keep0 = Lc / 4, n = Lc - keep0;
+            const double a0 = -2 * M_PI * double(c.kc) * double(start & int64_t(lmask)) / L_ + c.ncoPh;
+            cf rot(float(std::cos(a0)), float(std::sin(a0)));
+            const size_t was = c.pend.size();
+            c.pend.resize(was + size_t(n));
+            cf* out = c.pend.data() + was;
+            vibeism::rotateRun(Y + keep0, out, n, true, rot, c.ncoInc);
+            c.ncoPh = std::remainder(c.ncoPh + double(n) * c.ncoDph, 2 * M_PI);
+            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profRot += t2 - tq; tq = t2; })
+            resample(c, chips ? &(*chips)[ci] : nullptr);
+            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profRes += t2 - tq; tq = t2; })
+        }
+    }
+    /** The last part: deliver()'s chip-rate samples into each channel's stream (the detectors' input). */
+    void pushOut(const ChipOut& out) { for (size_t ci = 0; ci < ch_.size() && ci < out.size(); ++ci) ch_[ci].dst->push(out[ci].data(), out[ci].size()); }
+    void feed(const cf* x, size_t n) { feedSpectra(x, n, [&](Spectra&& sp) { deliver(sp); }); }
 
 private:
     struct Ch {
         Stream* dst = nullptr; double bw = 0;
         int kc = 0, Lc = 0; double resid = 0, ri = 0, step = 0;
         std::unique_ptr<vibeism::DetFft> ifft;
-        std::vector<cf> H, Y, pend;
+        std::vector<cf> H, pend;
         double t = 1.0;
-        double ncoPh = 0;
+        double ncoPh = 0, ncoDph = 0;   ///< the residual NCO's phase at the next output, and its step (rad/sample)
+        cf ncoInc{1, 0};                ///< e^{j·ncoDph}
     };
-    void block() {
+    void spectra(Spectra& sp) {
+        VIBE_ISM_P(double tq = vibeism::ismProfNow();)
         std::memcpy(X_.data(), in_.data(), size_t(L_) * sizeof(cf));
         fft_->forward(X_.data());
         ++ffts_;
-        const int64_t start = blocks_ * int64_t(S_);
-        for (auto& c : ch_) {
-            const int Lc = c.Lc;
-            for (int m = -Lc / 2; m < Lc / 2; ++m) {
-                const int k = ((c.kc + m) % L_ + L_) % L_;
-                // the inverse transform by the forward one: conjugate in, conjugate out
-                c.Y[size_t((m + Lc) % Lc)] = std::conj(X_[size_t(k)] * c.H[size_t((m + Lc) % Lc)]);
+        VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profFft += t2 - tq; tq = t2; })
+        sp.blk = blocks_;
+        sp.Y.resize(ch_.size());
+        /* ★★ PI 2 (2026-10-31, the decoder SIMD audit — qemu-arm instruction count over Stuart's 433.92 capture): this
+         *  loop was over a third of ISM mode. Three things, none of them the arithmetic:
+         *   · two sin/cos in DOUBLE per output sample (the NCO) — 17 % of ISM mode on its own. Now ONE per channel per
+         *     block: the block phase × the NCO's phase at the block start, then a float rotation (a 3/4·Lc-sample run,
+         *     ≤ 768 steps: the rotator drifts ~1e-5 in magnitude, far under the samples' own noise), and the NCO's phase
+         *     carried in double across blocks exactly as before (deliver());
+         *   · `%` with a variable divisor — 32-bit ARMv7-A has no divide instruction, so four library calls a bin
+         *     (13 % of ISM mode). L_ and Lc are powers of two: a mask is the same non-negative remainder;
+         *   · std::complex's NaN-checked products (cmulf). */
+        const int lmask = L_ - 1;
+        for (size_t ci = 0; ci < ch_.size(); ++ci) {
+            Ch& c = ch_[ci];
+            const int Lc = c.Lc, cmask = Lc - 1;
+            const cf* X = X_.data();
+            const cf* H = c.H.data();
+            vibeism::cfvec16& Yv = sp.Y[ci];
+            Yv.resize(size_t(Lc));
+            cf* Y = Yv.data();
+            // the inverse transform by the forward one: conjugate in, conjugate out. In runs where both the capture's
+            // bins (k) and the channel's (j) are contiguous — at most four — four products at a time (cmulRun).
+            for (int m = -Lc / 2; m < Lc / 2;) {
+                const int j = m & cmask, k = (c.kc + m) & lmask;
+                int run = std::min(Lc / 2 - m, L_ - k);
+                if (m < 0) run = std::min(run, -m);
+                vibeism::cmulRun(X + k, H + j, Y + j, run, false, true);
+                m += run;
             }
-            c.ifft->forward(c.Y.data());
-            // the block's phase for where it starts in the capture, and the NCO for the residual offset
-            const double a0 = -2 * M_PI * double(c.kc) * double(start % L_) / L_;
-            const cf bph(float(std::cos(a0)), float(std::sin(a0)));
-            const int keep0 = Lc / 4, dec = L_ / Lc;
-            const double dph = -2 * M_PI * c.resid / c.ri;
-            for (int j = keep0; j < Lc; ++j) {
-                const double ph = c.ncoPh;
-                c.ncoPh += dph;
-                if (c.ncoPh > M_PI) c.ncoPh -= 2 * M_PI; else if (c.ncoPh < -M_PI) c.ncoPh += 2 * M_PI;
-                c.pend.push_back(std::conj(c.Y[size_t(j)]) * bph * cf(float(std::cos(ph)), float(std::sin(ph))));
-            }
-            (void)dec;
-            resample(c);
+            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profIfft += t2 - tq; tq = t2; })
         }
         // keep the last quarter as the next block's overlap
         std::memmove(in_.data(), in_.data() + S_, size_t(L_ - S_) * sizeof(cf));
@@ -781,7 +882,7 @@ private:
     }
     /** From the channel's decimated rate to exactly its chip rate: the 8-tap windowed sinc (sincTable). ★ Not a cubic:
      *  a 4-point Lagrange's phase is visibly non-linear at 0.2 cycles/sample (a 250 kHz channel at 600 kS/s). */
-    static void resample(Ch& c) {
+    static void resample(Ch& c, std::vector<cf>* out = nullptr) {
         auto& p = c.pend;
         const std::vector<float>& tab = sincTable();
         while (c.t + kTaps / 2 < double(p.size())) {
@@ -789,9 +890,7 @@ private:
             const int ph = std::min(kPhases - 1, int((c.t - i) * kPhases + 0.5));
             const float* h = &tab[size_t(ph * kTaps)];
             const cf* x = &p[size_t(i - (kTaps / 2 - 1))];
-            float re = 0, im = 0;
-            for (int k = 0; k < kTaps; ++k) { re += x[k].real() * h[k]; im += x[k].imag() * h[k]; }
-            c.dst->push(cf(re, im));
+            if (out) out->push_back(sinc8(x, h)); else c.dst->push(sinc8(x, h));
             c.t += c.step;
         }
         const int drop = int(c.t) - (kTaps / 2 - 1);
@@ -800,9 +899,10 @@ private:
 
     double fs_;
     int L_ = 0, S_ = 0, fill_ = 0;
-    int64_t blocks_ = 0;
+    int64_t blocks_ = 0, nextBlk_ = 0;   ///< blocks transformed (first half); the next block deliver() expects
     std::unique_ptr<vibeism::DetFft> fft_;
-    std::vector<cf> in_, X_;
+    std::vector<cf> in_;
+    vibeism::cfvec16 X_;   // ★ aligned: the capture FFT runs in place (vibeism::Aligned16)
     std::vector<Ch> ch_;
     uint64_t ffts_ = 0;
 };

@@ -44,17 +44,18 @@ echo
 ATOMIC=""
 if [ "$(uname -s)" = "Linux" ]; then ATOMIC="-latomic"; fi
 
+# ★ THE SOURCE LIST IS vibedsp/SOURCES (2026-10-31): the hand list here had fallen behind it (no channelizer, zoomspec,
+#   iqclean, …, and no PFFFT), so the bench no longer linked. The C files are compiled as C, then linked.
+SRCS=$(grep -E '^[A-Za-z0-9_./-]+\.cpp$' "$DSP/SOURCES" | sed "s#^#$DSP/#")
+OBJ=$(mktemp -d); trap 'rm -rf "$OBJ"' EXIT
+CFLAGS="$(echo "$FLAGS" | sed 's/-std=c++17//')"
+for c in "$DSP/third_party/kissfft/kiss_fft.c" "$DSP/third_party/kissfft/kiss_fftr.c" "$DSP/third_party/pffft/pffft.c"; do
+  gcc $CFLAGS -c "$c" -I"$DSP/third_party/kissfft" -o "$OBJ/$(basename "$c" .c).o"
+done
 g++ $FLAGS \
   bench.cpp \
-  "$DSP/fft.cpp" \
-  "$DSP/ddc.cpp" \
-  "$DSP/resampler.cpp" \
-  "$DSP/stereo.cpp" \
-  "$DSP/rds.cpp" \
-  "$DSP/pipeline.cpp" \
-  "$DSP/mpxmeasure.cpp" \
-  "$DSP/third_party/kissfft/kiss_fft.c" \
-  "$DSP/third_party/kissfft/kiss_fftr.c" \
+  $SRCS \
+  "$OBJ"/*.o \
   -I"$DSP" \
   -I"$DSP/third_party/kissfft" \
   -lm -lpthread $ATOMIC \

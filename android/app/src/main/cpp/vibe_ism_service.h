@@ -1,27 +1,40 @@
-// vibe_ism_service.h — V12 ISM mode's decoder service: the bands, the front end + protocols on their own thread, the
+// vibe_ism_service.h — V12 ISM mode's decoder service: the bands, the front end + protocols on their own threads, the
 // privacy rule (per-server nicknames from a salted in-memory hash), the device list and the JSON the clients draw.
 // docs/v12/ISM-DECODER.md.
 //
 // ★★★ OFF THE DSP THREAD, AND IT DROPS RATHER THAN WAITS — ADS-B's rule (vibe_adsb_service.h): Network > Audio >
 //     Spectrum > Decoders. feed() copies and returns; a full queue loses the OLDEST block and counts it.
+// ★★★ THREE THREADS, ONE PER STAGE (2026-10-31). On the Pi 2 — the minimum spec — ISM 433 at full span was ONE thread at
+//     106 % of a core (measured live): it could not keep up and missed bursts while three cores idled. The front end's
+//     stages (vibe_ism.h) now run apart, each fed by a bounded queue that drops its OLDEST work and counts it:
+//       vibe-ism   the detector (FFT, floor, where each burst is) — the one stage that must keep real time;
+//       vibe-ism2  the channel mixer (each burst's narrow channel), one notch lower (vibeDecoderLagThread);
+//       vibe-ism3  the slicer, the protocol decoders, the device list and the gallery, at the same lower notch.
+//     A later stage may lag (sensors do not need their line this instant) and, if it falls far enough behind, drops; the
+//     detector never waits for it. Every drop shows in the health pill ("too heavy") through droppedBlocks(). Memory
+//     stays bounded: half a second of capture before the detector, half a second of work samples before the mixer, and
+//     before the slicer four of the longest channels and a second more (~34 MB worst case at 2.4 MS/s on 433, ~48 MB on
+//     868's wider channel, all of it only while behind).
+//     It runs on a single core as well: the stages simply share it, and the detector's higher rung keeps it in time.
 // ★★★ PRIVACY (Stuart, 2026-10-25). A TPMS, a key fob, a fixed-code remote is NEVER identified in anything this file
 //     sends, logs or stores: no ID, no code, no raw bits. It is "TPMS #2" — a number handed out in the order the server
 //     first heard each one, keyed by a SipHash of its ID under a salt drawn fresh at every start and held only in this
 //     process's memory. The ID itself is wiped from the Reading the moment it is hashed. Public and private servers alike.
 #pragma once
 
-#include "vibe_thread.h"
 #include "vibe_ism_protocols.h"
 #include "vibe_wmbus.h"        // ★ V12 2026-10-26: Wireless M-Bus meters on the 868 band (docs/v12/WMBUS-DECODER.md)
 #include "vibe_ism_bands.h"    // the four bands, reachability, the landing band
 #include "vibe_ism_sink.h"     // ★ V12 2026-10-25: the gallery's copy of every new reading (vibe_ism_gallery.h)
 #include "vibe_adsb_capture.h"     // vibeadsb::CaptureMeter — the same live "capture N %" as ADS-B
 #include "vibe_lora_track.h"      // ★ V12 2026-10-27: LoRa — LoRaWAN, Meshtastic, MeshCore (docs/v12/LORA-MESH.md)
+#include "vibe_thread.h"          // the threads' names and rungs (vibe-ism, vibe-ism2, vibe-ism3)
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -535,21 +548,32 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         sink_ = std::move(sink);
         band_ = &band; hwCentre_ = hwCentreHz; rate_ = rateHz; customHz_ = customHz;
-        fe_.reset(new FrontEnd(rateHz));
-        fe_->setDcGuardHz(15e3);
+        det_.reset(new Detector(rateHz));
+        det_->setDcGuardHz(15e3);
+        mix_.reset(new ChanMixer(rateHz));
         // ★ V12 wM-Bus: on the 868 band (or a frequency typed inside it) the burst channel is ~500 kS/s and keeps its
         //   baseband — a T1/C1 meter's chip is 10 µs (vibe_wmbus.h). Everything else there slices as before (µs smoothing).
         meters_ = wantsMeters(band, customHz);
-        if (meters_) { fe_->setChanRate(500e3); fe_->setKeepBaseband(true); }
+        keepBb_ = meters_;
+        if (meters_) mix_->setChanRate(500e3);
+        det_->setChanRate(mix_->chanRate());   // ★ how far a pending channel's mix centre may move (vibe_ism.h DChan::mixHz)
         // ★ detect inside the band's own span (+ a margin for drifting sensors), not on the tuner's skirts
         if (customHz <= 0) {
             const double mid = band.centreHz - hwCentreHz, half = band.needHz + 40e3;
-            fe_->setUsableHz(mid - half, mid + half);
+            det_->setUsableHz(mid - half, mid + half);
         }
-        queue_.clear(); queued_ = 0; dropped_ = 0;
         if (!keepList) { t0_ = std::chrono::steady_clock::now(); tracker_.clear(); bursts_ = 0; unknown_ = 0; wm_ = wmbus::Stats{}; }
-        fobs_.clear();   // ★ a new FrontEnd restarts burst time at 0
-        cap_.reset(rateHz, now());
+        fobs_.clear();   // ★ a new front end restarts burst time at 0
+        { std::lock_guard<std::mutex> q(qMtx_); queue_.clear(); queued_ = 0; dropped_ = 0; cap_.reset(rateHz, now()); }
+        { std::lock_guard<std::mutex> m(mMtx_); mixQ_.clear(); mixQueued_ = 0; droppedMix_ = 0; mixCap_ = size_t(det_->workRate() * 0.5); }
+        /* ★★ THE SLICER'S QUEUE HOLDS A WHOLE SET OF THE LONGEST CHANNELS, and a second more. Four channels can close in
+         *  the same block, each up to kMaxBurstS long; at 2 s of channel samples (the first cut) two of them already
+         *  overflowed it, and the hog-heavy bench (tools/ism-bench/add-hogs.cpp) on the Pi 2 dropped 3. That much baseband
+         *  was already in memory while those channels were open, before the split as well: this only bounds how long it
+         *  may wait. 250 kS/s: ~15 MB at most; the 868 band's ~500 kS/s channel: ~28 MB — and only while behind. */
+        { std::lock_guard<std::mutex> d(dMtx_); decQ_.clear(); decQueued_ = 0; droppedDec_ = 0;
+          decCap_ = size_t((FeConst::kMaxChans * FeConst::kMaxBurstS + 1.0) * mix_->chanRate()); }
+        noiseDb_.store(-99, std::memory_order_relaxed); clipFrac_.store(0, std::memory_order_relaxed); carriers_.store(0, std::memory_order_relaxed);
         health_ = Health{};
         // ★ V12 LoRa (vibe_lora_service.h): its own thread and queue; the band's channel plan, only what the capture
         //   holds, as many detectors as the owner's choice and the benchmark allow. Not on a typed frequency.
@@ -557,15 +581,21 @@ public:
         loraChans_ = 0;
         if (loraOn_ && customHz <= 0) loraChans_ = lora_.start(band.id, hwCentreHz, rateHz, loraBudget_);
         run_ = true;
-        worker_ = std::thread([this] { loop(); });
+        detTh_ = std::thread([this] { detLoop(); });
+        mixTh_ = std::thread([this] { mixLoop(); });
+        decTh_ = std::thread([this] { decLoop(); });
     }
     /** ★ V12 LoRa: on/off (the owner's switch) and the detector budget in vibelora::detCost units (∞ = every plan
      *  channel the capture holds; the default tier always runs while LoRa is on). Takes effect at the next start(). */
     void setLora(bool on, double budgetUnits) { std::lock_guard<std::mutex> lk(mtx_); loraOn_ = on; loraBudget_ = budgetUnits; }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
-        cv_.notify_all();
-        if (worker_.joinable()) worker_.join();
+        { std::lock_guard<std::mutex> q(qMtx_); } qCv_.notify_all(); qSpace_.notify_all();
+        { std::lock_guard<std::mutex> m(mMtx_); } mCv_.notify_all(); mSpace_.notify_all();
+        { std::lock_guard<std::mutex> d(dMtx_); } dCv_.notify_all(); dSpace_.notify_all();
+        if (detTh_.joinable()) detTh_.join();
+        if (mixTh_.joinable()) mixTh_.join();
+        if (decTh_.joinable()) decTh_.join();
         lora_.stop();
         // ★ The worker is gone, so nothing else touches the sink: its buffer is written here, once.
         std::shared_ptr<Sink> s;
@@ -575,8 +605,33 @@ public:
     /** ★ See Tracker::reserveNicks. Before start(), from the day's summary card. */
     void reserveNicks(const std::string& kind, int floor) { std::lock_guard<std::mutex> lk(mtx_); tracker_.reserveNicks(kind, floor); }
     bool running() const { return run_.load(std::memory_order_relaxed); }
-    /** Capture blocks dropped because the decoder was behind, since start — the health pill's "too heavy" (vibe_health.h BehindWatch). */
-    uint64_t droppedBlocks() { std::lock_guard<std::mutex> lk(mtx_); return dropped_; }
+    /** Work dropped because a stage was behind, since start — the health pill's "too heavy" (vibe_health.h BehindWatch):
+     *  capture blocks the detector lost, work blocks the mixer lost and closed channels the slicer lost, together. */
+    uint64_t droppedBlocks() {
+        uint64_t n = 0;
+        { std::lock_guard<std::mutex> q(qMtx_); n += dropped_; }
+        { std::lock_guard<std::mutex> m(mMtx_); n += droppedMix_; }
+        { std::lock_guard<std::mutex> d(dMtx_); n += droppedDec_; }
+        return n;
+    }
+    /** ★ For the tests and ism-offline, BEFORE start(): a full queue WAITS instead of dropping (a recording replayed
+     *  faster than real time must not lose work), and `tap` sees every sliced burst with what the decoders made of it,
+     *  on the slicer's thread. Never set by the server. */
+    void setLossless(bool on) { lossless_ = on; lora_.setLossless(on); }
+    void setTap(std::function<void(const Burst&, const std::vector<Reading>&)> tap) { tap_ = std::move(tap); }
+    /** ★ For the tests and ism-offline: the end of a recording — every open channel closes, as FrontEnd::flush closes
+     *  them inline (a live server never calls it: its stream has no end, and stop() drops what is open, as before). */
+    void endOfStream() {
+        { std::lock_guard<std::mutex> lk(qMtx_); queue_.push_back(std::vector<cf>()); }   // ★ an empty block is the marker
+        qCv_.notify_one();
+    }
+    /** ★ For the tests: true when every stage's queue is empty and nothing is being worked on. */
+    bool idle() {
+        { std::lock_guard<std::mutex> q(qMtx_); if (!queue_.empty() || detBusy_) return false; }
+        { std::lock_guard<std::mutex> m(mMtx_); if (!mixQ_.empty() || mixBusy_) return false; }
+        { std::lock_guard<std::mutex> d(dMtx_); if (!decQ_.empty() || decBusy_) return false; }
+        return !lora_.running() || lora_.idle();
+    }
     const Band* band() const { return band_; }
 
     /** From the DSP thread: copy and return. Never blocks on the decoder. */
@@ -585,13 +640,14 @@ public:
         lora_.feed(iq, n);   // ★ its own copy and queue — returns at once
         std::vector<cf> b(iq, iq + n);
         {
-            std::lock_guard<std::mutex> lk(mtx_);
+            std::unique_lock<std::mutex> lk(qMtx_);
+            if (lossless_) qSpace_.wait(lk, [&] { return !run_ || queue_.empty() || queued_ + n <= size_t(rate_ * 0.5); });
             cap_.add(n, now());
             queued_ += n;
             queue_.push_back(std::move(b));
             while (queued_ > size_t(rate_ * 0.5) && queue_.size() > 1) { queued_ -= queue_.front().size(); queue_.pop_front(); ++dropped_; }
         }
-        cv_.notify_one();
+        qCv_.notify_one();
     }
 
     /** {"type":"ism", "band":"433", "bandName":…, "centre":Hz, "rate":…, "devices":[…], …} */
@@ -600,12 +656,20 @@ public:
         const double t = now();
         std::string o = "{\"type\":\"ism\"";
         if (band_) o += std::string(",\"band\":\"") + band_->id + "\",\"bandName\":\"" + jsonEsc(band_->name) + "\"";
-        char b[320];
+        char b[400];
+        uint64_t dq = 0, dm = 0, dd = 0; int capPct = 0;
+        { std::lock_guard<std::mutex> q(qMtx_); dq = dropped_; capPct = cap_.percent(t); }
+        { std::lock_guard<std::mutex> m(mMtx_); dm = droppedMix_; }
+        { std::lock_guard<std::mutex> d(dMtx_); dd = droppedDec_; }
+        // ★ "dropped": everything any stage lost (as before, the health pill's figure); "drops": by stage — capture blocks
+        //   before the detector, work blocks before the mixer, closed channels before the slicer. "carriers": frequencies
+        //   held right now because something there keeps a channel busy for good (a carrier, a spur — vibe_ism.h)
         std::snprintf(b, sizeof b, ",\"centre\":%.0f,\"custom\":%d,\"rate\":%.0f,\"now\":%.1f,\"bursts\":%llu,\"decoded\":%llu,"
-                      "\"unknown\":%llu,\"noise\":%.1f,\"dropped\":%llu,\"capture\":%d,\"devices\":",
+                      "\"unknown\":%llu,\"noise\":%.1f,\"dropped\":%llu,\"drops\":[%llu,%llu,%llu],\"carriers\":%d,\"capture\":%d,\"devices\":",
                       customHz_ > 0 ? customHz_ : (band_ ? band_->centreHz : 0), customHz_ > 0 ? 1 : 0, rate_, t,
                       (unsigned long long)bursts_, (unsigned long long)tracker_.decoded(), (unsigned long long)unknown_,
-                      health_.noiseDb, (unsigned long long)dropped_, cap_.percent(t));
+                      health_.noiseDb, (unsigned long long)(dq + dm + dd), (unsigned long long)dq, (unsigned long long)dm,
+                      (unsigned long long)dd, carriers_.load(std::memory_order_relaxed), capPct);
         o += b;
         const auto loraRows = mesh_.rowsJson(t);
         o += tracker_.json(t, &loraRows);
@@ -694,93 +758,216 @@ public:
 private:
     double now() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0_).count(); }
 
-    void loop() {
-        vibeThreadName("vibe-ism");   // ★ its own name: started from a listener's connection, it would otherwise inherit "vibe-conn" and read as network load in top/health
-        std::unique_lock<std::mutex> lk(mtx_);
-        double winStart = 0;
+    /** One block of work for the mixer: the detector's events and the work samples they refer to (the capture block
+     *  itself, moved, unless the capture is pre-decimated). */
+    struct MixJob { uint64_t start = 0; std::vector<cf> x; std::vector<ChanEvent> ev; };
+
+    // ── STAGE 1: vibe-ism, the detector. Keeps real time; never waits on the stages after it. ──
+    void detLoop() {
+        vibeDecoderThread("vibe-ism");
+        std::unique_lock<std::mutex> lk(qMtx_);
         while (run_) {
-            cv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !queue_.empty(); });
+            qCv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !queue_.empty(); });
             while (run_ && !queue_.empty()) {
                 std::vector<cf> blk = std::move(queue_.front());
                 queue_.pop_front();
                 queued_ -= blk.size();
-                FrontEnd* fe = fe_.get();
-                const double hc = hwCentre_;
+                detBusy_ = true;
                 lk.unlock();
-                std::vector<Reading> got;
-                std::vector<Burst> bs;
-                wmbus::Stats wmLocal;
-                fe->feed(blk.data(), blk.size(), [&](const Burst& b) { bs.push_back(b); });
-                std::vector<double> tOf;
-                for (const Burst& b : bs) {
-                    size_t before = got.size(); decodeBurst(b, hc, got, &wmLocal);
-                    tOf.resize(got.size(), b.tSec);
-                    if (got.size() != before) continue;
-                    ++unknownLocal_;
-                    Reading sf;
-                    if (fobs_.offer(b, hc, sf)) { got.push_back(sf); tOf.push_back(b.tSec); }   // ★ an undecoded press: "Suspected key fob"
+                qSpace_.notify_all();
+                MixJob j;
+                j.start = det_->total();
+                const bool pre = det_->pre() > 1;
+                if (blk.empty()) det_->flush(j.ev);   // ★ endOfStream()
+                else {
+                    if (pre) j.x.reserve(blk.size() / size_t(det_->pre()) + 1);
+                    det_->feed(blk.data(), blk.size(), j.ev, pre ? &j.x : nullptr);
+                    if (!pre) j.x = std::move(blk);
                 }
-                dedupeMeters(got, tOf);
+                noiseDb_.store(det_->noiseDb(), std::memory_order_relaxed);
+                clipFrac_.store(det_->clipFrac(), std::memory_order_relaxed);
+                carriers_.store(det_->holds(), std::memory_order_relaxed);
+                pushMix(std::move(j));
                 lk.lock();
-                for (double hz : fobs_.takePeriodic()) tracker_.forget("suspectfob", hz, 50e3);
-                bursts_ += bs.size();
-                wm_.tried += wmLocal.tried; wm_.frames += wmLocal.frames; wm_.damaged += wmLocal.damaged; wm_.collector += wmLocal.collector;
-                unknownLocal_ -= std::min<uint64_t>(unknownLocal_, wmLocal.collector);   // ★ a collector's frame was identified
-                unknown_ += unknownLocal_; unknownLocal_ = 0;
-                const double t = now();
-                std::vector<Heard> heard;
-                for (auto& r : got) { Heard h; if (tracker_.accept(r, t, sink_ ? &h : nullptr) && sink_) heard.push_back(std::move(h)); }
-                // ★ The gallery's copy OUTSIDE the lock: a report() asked for meanwhile never waits on a file.
-                if (!heard.empty()) { auto s = sink_; lk.unlock(); for (const auto& h : heard) s->heard(h); lk.lock(); }
-            }
-            // ★ V12 LoRa: what the LoRa thread decoded since the last look — into the list, and news to the gallery
-            if (lora_.running()) {
-                lk.unlock();
-                auto lh = lora_.take();
-                lk.lock();
-                if (!lh.empty()) {
-                    const double tl = now();
-                    std::vector<vibelora::Event> ev;
-                    for (const auto& h : lh) mesh_.accept(h.m, tl, sink_ ? &ev : nullptr);
-                    if (!ev.empty() && sink_) {
-                        auto s = sink_; lk.unlock();
-                        for (const auto& e : ev) { Heard hd; hd.kind = e.kind; hd.name = e.name; hd.line = e.line; hd.freqHz = e.freqHz; s->heard(hd); }
-                        lk.lock();
-                    }
-                }
-            }
-            const double t = now();
-            if (t - winStart >= 1.0 && sink_) { auto s = sink_; lk.unlock(); s->tick(); lk.lock(); }
-            if (t - winStart >= 1.0 && fe_) {
-                winStart = t;
-                health_.noiseDb = fe_->noiseDb();
-                health_.clipFrac = fe_->clipFrac();
-                health_.bursts = bursts_;
-                health_.decoded = tracker_.decoded();
-                health_.valid = true;
-                tracker_.prune(t);
+                detBusy_ = false;
             }
         }
     }
+    void pushMix(MixJob&& j) {
+        {
+            std::unique_lock<std::mutex> lk(mMtx_);
+            if (lossless_) mSpace_.wait(lk, [&] { return !run_ || mixQ_.empty() || mixQueued_ + j.x.size() <= mixCap_; });
+            mixQueued_ += j.x.size();
+            mixQ_.push_back(std::move(j));
+            // ★ behind by more than half a second: the OLDEST work goes (the mixer abandons the channels open across it)
+            while (mixQueued_ > mixCap_ && mixQ_.size() > 1) { mixQueued_ -= mixQ_.front().x.size(); mixQ_.pop_front(); ++droppedMix_; }
+        }
+        mCv_.notify_one();
+    }
 
-    std::mutex mtx_;
-    std::condition_variable cv_;
-    std::thread worker_;
+    // ── STAGE 2: vibe-ism2, the channel mixer. May lag; drops (above) rather than slowing the detector. ──
+    void mixLoop() {
+        vibeDecoderLagThread("vibe-ism2");
+        std::unique_lock<std::mutex> lk(mMtx_);
+        while (run_) {
+            mCv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !mixQ_.empty(); });
+            while (run_ && !mixQ_.empty()) {
+                MixJob j = std::move(mixQ_.front());
+                mixQ_.pop_front();
+                mixQueued_ -= j.x.size();
+                mixBusy_ = true;
+                lk.unlock();
+                mSpace_.notify_all();
+                std::vector<RawBurst> raws;
+                mix_->feed(j.x.data(), j.x.size(), j.start, j.ev.data(), j.ev.size(), [&](RawBurst&& r) { raws.push_back(std::move(r)); });
+                if (!raws.empty()) pushDec(std::move(raws));
+                lk.lock();
+                mixBusy_ = false;
+            }
+        }
+    }
+    static size_t samplesOf(const std::vector<RawBurst>& v) { size_t n = 0; for (const auto& r : v) n += r.bb.size(); return n; }
+    /** ★ One batch = the channels that closed in one capture block, kept together as the old single thread saw them
+     *  (dedupeMeters looks for one meter frame's two copies within a batch). */
+    void pushDec(std::vector<RawBurst>&& raws) {
+        const size_t n = samplesOf(raws);
+        {
+            std::unique_lock<std::mutex> lk(dMtx_);
+            if (lossless_) dSpace_.wait(lk, [&] { return !run_ || decQ_.empty() || decQueued_ + n <= decCap_; });
+            decQueued_ += n;
+            decQ_.push_back(std::move(raws));
+            // ★ behind by more than four of the longest channels and a second: the OLDEST closed channels go unsliced
+            while (decQueued_ > decCap_ && decQ_.size() > 1) { decQueued_ -= samplesOf(decQ_.front()); droppedDec_ += decQ_.front().size(); decQ_.pop_front(); }
+        }
+        dCv_.notify_one();
+    }
+
+    // ── STAGE 3: vibe-ism3, the slicer and the protocol decoders, then the device list, the gallery and LoRa's news. ──
+    void decLoop() {
+        vibeDecoderLagThread("vibe-ism3");
+        double winStart = 0;
+        std::unique_lock<std::mutex> dl(dMtx_);
+        while (run_) {
+            dCv_.wait_for(dl, std::chrono::milliseconds(250), [this] { return !run_ || !decQ_.empty(); });
+            while (run_ && !decQ_.empty()) {
+                std::vector<RawBurst> raws = std::move(decQ_.front());
+                decQ_.pop_front();
+                decQueued_ -= samplesOf(raws);
+                decBusy_ = true;
+                dl.unlock();
+                dSpace_.notify_all();
+                decodeBatch(raws);
+                dl.lock();
+                decBusy_ = false;
+            }
+            dl.unlock();
+            housekeeping(winStart);
+            dl.lock();
+        }
+    }
+    void decodeBatch(std::vector<RawBurst>& raws) {
+        const double hc = hwCentre_;
+        std::vector<Burst> bs;
+        for (auto& r : raws) { Burst b; if (FrontEnd::finish(std::move(r), keepBb_, b)) bs.push_back(std::move(b)); }
+        if (bs.empty()) return;
+        std::vector<Reading> got;
+        wmbus::Stats wmLocal;
+        std::vector<double> tOf;
+        for (const Burst& b : bs) {
+            size_t before = got.size(); decodeBurst(b, hc, got, &wmLocal);
+            tOf.resize(got.size(), b.tSec);
+            if (tap_) tap_(b, std::vector<Reading>(got.begin() + long(before), got.end()));
+            if (got.size() != before) continue;
+            ++unknownLocal_;
+            Reading sf;
+            if (fobs_.offer(b, hc, sf)) { got.push_back(sf); tOf.push_back(b.tSec); }   // ★ an undecoded press: "Suspected key fob"
+        }
+        dedupeMeters(got, tOf);
+        std::unique_lock<std::mutex> lk(mtx_);
+        for (double hz : fobs_.takePeriodic()) tracker_.forget("suspectfob", hz, 50e3);
+        bursts_ += bs.size();
+        wm_.tried += wmLocal.tried; wm_.frames += wmLocal.frames; wm_.damaged += wmLocal.damaged; wm_.collector += wmLocal.collector;
+        unknownLocal_ -= std::min<uint64_t>(unknownLocal_, wmLocal.collector);   // ★ a collector's frame was identified
+        unknown_ += unknownLocal_; unknownLocal_ = 0;
+        const double t = now();
+        std::vector<Heard> heard;
+        for (auto& r : got) { Heard h; if (tracker_.accept(r, t, sink_ ? &h : nullptr) && sink_) heard.push_back(std::move(h)); }
+        // ★ The gallery's copy OUTSIDE the lock: a report() asked for meanwhile never waits on a file.
+        if (!heard.empty()) { auto s = sink_; lk.unlock(); for (const auto& h : heard) s->heard(h); }
+    }
+    void housekeeping(double& winStart) {
+        std::unique_lock<std::mutex> lk(mtx_);
+        // ★ V12 LoRa: what the LoRa thread decoded since the last look — into the list, and news to the gallery
+        if (lora_.running()) {
+            lk.unlock();
+            auto lh = lora_.take();
+            lk.lock();
+            if (!lh.empty()) {
+                const double tl = now();
+                std::vector<vibelora::Event> ev;
+                for (const auto& h : lh) mesh_.accept(h.m, tl, sink_ ? &ev : nullptr);
+                if (!ev.empty() && sink_) {
+                    auto s = sink_; lk.unlock();
+                    for (const auto& e : ev) { Heard hd; hd.kind = e.kind; hd.name = e.name; hd.line = e.line; hd.freqHz = e.freqHz; s->heard(hd); }
+                    lk.lock();
+                }
+            }
+        }
+        const double t = now();
+        if (t - winStart >= 1.0 && sink_) { auto s = sink_; lk.unlock(); s->tick(); lk.lock(); }
+        if (t - winStart >= 1.0) {
+            winStart = t;
+            health_.noiseDb = noiseDb_.load(std::memory_order_relaxed);
+            health_.clipFrac = clipFrac_.load(std::memory_order_relaxed);
+            health_.bursts = bursts_;
+            health_.decoded = tracker_.decoded();
+            health_.valid = true;
+            tracker_.prune(t);
+        }
+    }
+
+    std::mutex mtx_;                 ///< the device list, the counts, the health, the sink — and start/stop
     std::atomic<bool> run_{false};
     const Band* band_ = nullptr;
     double hwCentre_ = 0, rate_ = 0, customHz_ = 0;
-    std::unique_ptr<FrontEnd> fe_;
+    std::unique_ptr<Detector> det_;  ///< vibe-ism's alone while running
+    std::unique_ptr<ChanMixer> mix_; ///< vibe-ism2's alone while running
+    bool keepBb_ = false;
+    std::atomic<double> noiseDb_{-99}, clipFrac_{0};   ///< the detector's, for the health (read by vibe-ism3)
+    std::atomic<int> carriers_{0};                       ///< the detector's held hogs right now (vibe_ism.h kHoldQuietS)
+    std::thread detTh_, mixTh_, decTh_;
+    bool lossless_ = false;
+    std::function<void(const Burst&, const std::vector<Reading>&)> tap_;
+    // ★ before the detector: capture blocks (the DSP thread's copies)
+    std::mutex qMtx_;
+    std::condition_variable qCv_, qSpace_;
     std::deque<std::vector<cf>> queue_;
     size_t queued_ = 0;
-    uint64_t dropped_ = 0, bursts_ = 0, unknown_ = 0, unknownLocal_ = 0;
+    uint64_t dropped_ = 0;
+    bool detBusy_ = false;
     vibeadsb::CaptureMeter cap_;
+    // ★ before the mixer: the detector's events with their work samples
+    std::mutex mMtx_;
+    std::condition_variable mCv_, mSpace_;
+    std::deque<MixJob> mixQ_;
+    size_t mixQueued_ = 0, mixCap_ = 0;
+    uint64_t droppedMix_ = 0;
+    bool mixBusy_ = false;
+    // ★ before the slicer: closed channels, one batch per capture block
+    std::mutex dMtx_;
+    std::condition_variable dCv_, dSpace_;
+    std::deque<std::vector<RawBurst>> decQ_;
+    size_t decQueued_ = 0, decCap_ = 0;
+    uint64_t droppedDec_ = 0;
+    bool decBusy_ = false;
+    uint64_t bursts_ = 0, unknown_ = 0, unknownLocal_ = 0;
     std::chrono::steady_clock::time_point t0_;
     Tracker tracker_;
     FobWatch fobs_;
     Health health_;
     bool meters_ = false;
     wmbus::Stats wm_;
-    std::shared_ptr<Sink> sink_;   // ★ only the worker reads it while running; start()/stop() swap it with the worker stopped
+    std::shared_ptr<Sink> sink_;   // ★ only vibe-ism3 reads it while running; start()/stop() swap it with the threads stopped
     // ★ V12 LoRa
     vibelora::Engine lora_;
     vibelora::MeshTable mesh_;

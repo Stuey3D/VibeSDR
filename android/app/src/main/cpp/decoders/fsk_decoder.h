@@ -263,6 +263,7 @@ private:
     double audioAverage = 0.1;
     unsigned long resyncCount_ = 0;
     int signalAccumulator = 0, bitDuration = 0, sampleCount = 0, nextEventCount = 0;
+    int sampleInBit_ = 0;   ///< sampleCount % bitSampleCount, kept by counting (no divide per sample on 32-bit ARM)
     bool averagedMarkState = false, oldMarkState = false, pulseEdgeEvent = false;
 
     int zeroCrossingSamples = 16, zeroCrossingsDivisor = 4, zeroCrossingCount = 0;

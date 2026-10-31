@@ -105,4 +105,41 @@ static inline float32x4_t vdivq_f32(float32x4_t a, float32x4_t b) {
     return vmulq_f32(a, r);
 }
 
+// ── float compares and negate: GCC on ARMv7 turns them into SCALAR VFP code ─────────────────────────────────────────
+/* ★★★ FOUND 2026-10-31 (the decoder SIMD audit, qemu-arm instruction count of the Pi 2 build). GCC's 32-bit arm_neon.h
+ *     writes vcgtq_f32 / vcgeq_f32 / vcltq_f32 / vcleq_f32 / vceqq_f32 and vnegq_f32 as plain vector operators
+ *     ((uint32x4_t)(a > b), -a). Without -ffast-math GCC will not let NEON do IEEE float work on ARMv7 (NEON flushes
+ *     denormals), so it EXPANDS EACH ONE PER LANE: four `vcmpe.f32` + `vmrs` (a flag transfer that stalls a Cortex-A7)
+ *     + moves, ~30 instructions where one was written. Every "NEON" compare in the tree — the ADS-B preamble test, the
+ *     noise blanker, the DAB demapper's guards, the CW/NDB skimmers' gates, the atan2 kernel — ran scalar on the Pi 2,
+ *     Pi 3 and every armhf host. (FT8's kernels had already met it and compare bit patterns — ft8_lib/ft8/vibe_simd4.h.)
+ *  ★ The instructions themselves are what was asked for, so here they are, one each, by inline assembly; the names are
+ *    redirected so every kernel that includes this header gets them without a change. Clang (the Android NDK, the
+ *    armv6 build) already emits vcgt.f32 for these, and AArch64 / x86 never see this block.
+ *  ★ The one difference from the scalar expansion: NEON compares treat a DENORMAL input as zero (flush-to-zero), as
+ *    they already did on every Android armeabi-v7a phone and as AArch64 does not. No kernel compares numbers that
+ *    small (the guards are ≥ 1e-30, far above the 1.2e-38 denormal range). */
+#if defined(__GNUC__) && !defined(__clang__) && !defined(__FAST_MATH__)
+static inline uint32x4_t vibe_vcgtq_f32(float32x4_t a, float32x4_t b) {
+    uint32x4_t r; __asm__("vcgt.f32 %q0, %q1, %q2" : "=w"(r) : "w"(a), "w"(b)); return r;
+}
+static inline uint32x4_t vibe_vcgeq_f32(float32x4_t a, float32x4_t b) {
+    uint32x4_t r; __asm__("vcge.f32 %q0, %q1, %q2" : "=w"(r) : "w"(a), "w"(b)); return r;
+}
+static inline uint32x4_t vibe_vceqq_f32(float32x4_t a, float32x4_t b) {
+    uint32x4_t r; __asm__("vceq.f32 %q0, %q1, %q2" : "=w"(r) : "w"(a), "w"(b)); return r;
+}
+static inline uint32x4_t vibe_vcltq_f32(float32x4_t a, float32x4_t b) { return vibe_vcgtq_f32(b, a); }
+static inline uint32x4_t vibe_vcleq_f32(float32x4_t a, float32x4_t b) { return vibe_vcgeq_f32(b, a); }
+static inline float32x4_t vibe_vnegq_f32(float32x4_t a) {
+    float32x4_t r; __asm__("vneg.f32 %q0, %q1" : "=w"(r) : "w"(a)); return r;
+}
+#define vcgtq_f32 vibe_vcgtq_f32
+#define vcgeq_f32 vibe_vcgeq_f32
+#define vceqq_f32 vibe_vceqq_f32
+#define vcltq_f32 vibe_vcltq_f32
+#define vcleq_f32 vibe_vcleq_f32
+#define vnegq_f32 vibe_vnegq_f32
+#endif  // GCC, ARMv7, no -ffast-math
+
 #endif  // ARMv7 NEON

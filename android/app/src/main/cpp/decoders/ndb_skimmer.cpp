@@ -295,7 +295,7 @@ struct Skimmer::Impl {
     int w0 = 0, w1 = 0, nw = 0;   // work bins (searched ± the tone window)
     int kLo = 0, kHi = 0;         // tone offsets, bins
     std::vector<char> toneOk;     // per offset kLo..kHi: may a tone be there (the ICAO windows)
-    std::vector<float> P, L, Fl, blockQ, scratch;
+    std::vector<float> P, L, Fl, blockQ, scratch, lin_;   // ★ lin_: unroll's buffer for the coherence check
     std::vector<int> cand;
     float aL = 0;
     uint64_t hopN = 0;
@@ -729,10 +729,12 @@ struct Skimmer::Impl {
             const int ma = std::max(2, (int)std::lround(0.2 / hopSec));   // ★ 0.2 s means: noise averaged out, a dot kept
             if (w > hopsPerTick * 3) {
                 scratch.resize((size_t)(w - ma));
+                // ★ the last w hops laid out straight (see unroll): lin_[w − 1 − i] is hop hopN − i
+                unroll(c.c.e, R, hopN + 1 - (uint64_t)w, w, lin_);
                 double a = 0;
                 for (int i = 0; i < w; ++i) {
-                    a += c.c.e[(size_t)((hopN - (uint64_t)i) % (uint64_t)R)];
-                    if (i >= ma) a -= c.c.e[(size_t)((hopN - (uint64_t)(i - ma)) % (uint64_t)R)];
+                    a += lin_[(size_t)(w - 1 - i)];
+                    if (i >= ma) a -= lin_[(size_t)(w - 1 - (i - ma))];
                     if (i >= ma) scratch[(size_t)(i - ma)] = (float)a;
                 }
                 const int nn = (int)scratch.size();
@@ -765,14 +767,25 @@ struct Skimmer::Impl {
     }
 
     // ── the fold ───────────────────────────────────────────────────────────────────────────────────────────────────
+    /** ★★ THE RING, LAID OUT STRAIGHT (decoder audit 2026-10-31): out[i] = ch.e[(start + i) % R] for i < n, with ONE
+     *  64-bit remainder. The loops below indexed the ring as `(start + i) % (uint64_t)R` per sample — on 32-bit ARM a
+     *  library 64-bit divide each time (__udivmoddi4: 38 % of the NDB skimmer on the Pi 2, qemu-arm count over Stuart's
+     *  330 s 192 kHz recording) — and the period search re-read the same samples ~60 times. Same values, same order. */
+    static void unroll(const std::vector<float>& e, int R, uint64_t start, int n, std::vector<float>& out) {
+        out.resize((size_t)std::max(0, n));
+        size_t k = (size_t)(start % (uint64_t)R);
+        for (int i = 0; i < n; ++i) { out[(size_t)i] = e[k]; if (++k == (size_t)R) k = 0; }
+    }
+
     /** The repeat period of a channel's envelope, hops (0 = none): the autocorrelation's first strong peak 3.5–30 s,
      *  coarse on a 4-hop decimation, then refined at full resolution on its third multiple (a third of the error). */
     double findPeriod(const Chan& ch, uint64_t start, int n) const {
         const int D = 4, nd = n / D;
-        std::vector<float> x((size_t)nd);
+        std::vector<float> x((size_t)nd), lin;
+        unroll(ch.e, R, start, n, lin);
         double mean = 0;
         for (int j = 0; j < nd; ++j) {
-            float a = 0; for (int k = 0; k < D; ++k) a += ch.e[(size_t)((start + (uint64_t)(j * D + k)) % (uint64_t)R)];
+            float a = 0; for (int k = 0; k < D; ++k) a += lin[(size_t)(j * D + k)];
             x[(size_t)j] = a / D; mean += a / D;
         }
         mean /= std::max(1, nd);
@@ -804,7 +817,7 @@ struct Skimmer::Impl {
             double ph = 0;
             for (int i = 0; i < n; ++i) {
                 const int b = std::min(Lf - 1, (int)ph);
-                sum[(size_t)b] += ch.e[(size_t)((start + (uint64_t)i) % (uint64_t)R)]; cnt[(size_t)b] += 1;
+                sum[(size_t)b] += lin[(size_t)i]; cnt[(size_t)b] += 1;
                 ph += 1.0; if (ph >= T) ph -= T;
             }
             double m = 0, m2 = 0, w = 0;
@@ -932,7 +945,8 @@ struct Skimmer::Impl {
             std::vector<float> f((size_t)Lf, 0.0f);
             for (int k = k0; k < k1; ++k) {
                 const uint64_t b = (uint64_t)std::llround(base + k * T);
-                for (int i = 0; i < Lf; ++i) f[(size_t)i] += ch.e[(size_t)((b + (uint64_t)i) % (uint64_t)R)];
+                size_t at = (size_t)(b % (uint64_t)R);   // ★ one remainder a period, not one a sample (see unroll)
+                for (int i = 0; i < Lf; ++i) { f[(size_t)i] += ch.e[at]; if (++at == (size_t)R) at = 0; }
             }
             for (auto& v : f) v /= (float)(k1 - k0);
             return f;
@@ -981,11 +995,12 @@ struct Skimmer::Impl {
         // ★ A moving average ≈ one dot long: the matched filter for a rectangular dot, and at half height a smoothed mark
         //   (and gap) keeps its true length.
         const int m = std::max(2, std::min(12, (int)std::lround(0.9f * u0)));
-        std::vector<float> s((size_t)n);
+        std::vector<float> s((size_t)n), lin;
+        unroll(ch.e, R, start, n, lin);   // ★ see unroll
         double acc = 0;
         for (int i = 0; i < n; ++i) {
-            acc += ch.e[(size_t)((start + (uint64_t)i) % (uint64_t)R)];
-            if (i >= m) acc -= ch.e[(size_t)((start + (uint64_t)(i - m)) % (uint64_t)R)];
+            acc += lin[(size_t)i];
+            if (i >= m) acc -= lin[(size_t)(i - m)];
             s[(size_t)i] = (float)(acc / std::min(i + 1, m));
         }
         // ★★ IS IT KEYED AT ALL? The noise level is KNOWN — the floor under the channel's bins — so it is not guessed

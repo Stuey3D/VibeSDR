@@ -205,8 +205,38 @@ static int writeClip(const char* out, double centre, double rate) {
     return 0;
 }
 
+/** ★ --diag-c1 <A|B> <ppm> <rate factor> <0|1 inverted> <seed>: ONE C1 frame of the "C1 A/B over ±60 ppm" check, rendered
+ *  exactly as that check renders it, and every burst the front end makes of it (where its channel sat, what the slicer
+ *  measured, whether the meter decoded) — for a frame one machine misses and another does not (2026-10-31). */
+static int diagC1(bool b, double ppm, double rf, bool inv, uint32_t seed) {
+    Tx t; t.chips = chipsC(b ? frameB(kamBody()) : frameA(kamBody()), b); t.devHz = 45e3;
+    t.offHz += ppm * 868.95; t.chipHz *= rf; t.invert = inv;
+    const auto x = synth({t}, 2.4e6, 0.35, 0.02, seed);
+    FrontEnd fe(2.4e6);
+    fe.setDcGuardHz(15e3);
+    const Band* band = bandById("868");
+    const double mid = band->centreHz - 868.6e6, half = band->needHz + 40e3;
+    fe.setUsableHz(mid - half, mid + half);
+    fe.setChanRate(500e3); fe.setKeepBaseband(true);
+    int found = 0;
+    auto on = [&](const Burst& bu) {
+        std::vector<Reading> r; wmbus::Stats st; Service::decodeBurst(bu, 868.6e6, r, &st);
+        const bool m = findMeter(r, "87654321") != nullptr; found += m;
+        printf("  burst %.4f s  channel %+.1f kHz (the frame at %+.1f)  carrier %+.1f kHz  dev %.1f kHz  %zu samples  tried %llu  %s\n",
+               bu.tSec, bu.offHz / 1e3, t.offHz / 1e3, bu.carrierHz / 1e3, bu.fskDevHz / 1e3, bu.bb ? bu.bb->size() : size_t(0),
+               (unsigned long long)st.tried, m ? "METER" : "-");
+    };
+    for (size_t i = 0; i < x.size(); i += 16384) fe.feed(x.data() + i, std::min<size_t>(16384, x.size() - i), on);
+    fe.flush(on);
+    printf("C1-%c %+.0f ppm ×%.2f %s seed %u (hop %.0f µs): %s\n", b ? 'B' : 'A', ppm, rf, inv ? "inverted" : "normal", seed,
+           FrontEnd::kHopUs, found ? "decoded" : "MISSED");
+    return found ? 0 : 1;
+}
+
 int main(int argc, char** argv) {
     if (argc == 5 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2], std::atof(argv[3]), std::atof(argv[4]));
+    if (argc == 7 && std::string(argv[1]) == "--diag-c1")
+        return diagC1(argv[2][0] == 'B', std::atof(argv[3]), std::atof(argv[4]), std::atoi(argv[5]) != 0, uint32_t(std::atoi(argv[6])));
     printf("test-wmbus — Wireless M-Bus meters in ISM mode\n");
 
     printf(" CRC and the design's worked frames\n");
@@ -535,6 +565,7 @@ int main(int argc, char** argv) {
         for (double ppm : {-60.0, 60.0}) for (double rf : {0.98, 1.02}) for (bool inv : {false, true}) for (int mi : {1, 2}) {
             Tx t = txFor(modes[mi], kamBody()); t.offHz += ppm * 868.95; t.chipHz *= rf; t.invert = inv;
             ++tot; if (findMeter(runFront(synth({t}, 2.4e6, 0.35, 0.02, uint32_t(100 + tot)), 2.4e6), "87654321")) ++ok;
+            else printf("   C1 %s missed: %+.0f ppm, rate ×%.2f, %s (seed %d)\n", mi == 1 ? "A" : "B", ppm, rf, inv ? "inverted" : "normal", 100 + tot);
         }
         CHECK(ok == tot, "C1 A/B over ±60 ppm × ±2 %% × both polarities: %d/%d", ok, tot);
         ok = 0; tot = 0;
@@ -708,7 +739,7 @@ int main(int argc, char** argv) {
         const std::string files = slurpDir(dir);
         CHECK(files.find("Water meter \xc2\xb7 Sensus \xc2\xb7 12345678") != std::string::npos, "the serial is in the log and the card");
         CHECK(files.find("2 devices: 2 meters (1 cold water, 1 water)") != std::string::npos, "the card counts meters by type: %s",
-              files.substr(files.find("devices"), 60).c_str());
+              files.substr(std::min(files.find("devices"), files.size()), 60).c_str());   // ★ a failing check reports, never throws
         CHECK(json.find("12345678") != std::string::npos, "the serial is in the JSON");
         // ★★★ never a run of the encrypted payload (A0 … BF): every 4-byte window, hex both cases, spaced or not, and decimal
         int leaks = 0;

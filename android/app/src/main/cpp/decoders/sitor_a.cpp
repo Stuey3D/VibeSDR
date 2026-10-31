@@ -282,6 +282,7 @@ struct Receiver::Impl {
             B.fm = kShift / 2 + kBinHz[b]; B.fs = -kShift / 2 + kBinHz[b];
             B.stm = std::polar(1.0, -2 * M_PI * B.fm / fi); B.sts = std::polar(1.0, -2 * M_PI * B.fs / fi);
             B.pmBuf.assign((size_t)Ki, {0, 0}); B.psBuf.assign((size_t)Ki, {0, 0});
+            if (B.bp >= Ki) B.bp = 0;   // ★ a shorter ring after a re-measured rate: the index must stay inside it
             B.sgn.assign(256, 0); B.hist.assign((size_t)(kNW * Ci), 0);
             for (auto& c : B.cnt) c.assign((size_t)Ci, 0);
             B.efold.assign((size_t)Ci, 0);
@@ -336,6 +337,10 @@ struct Receiver::Impl {
     void acqSample(int k) {
         const int64_t nn = n;
         const int phase = (int)(nn % Ci), hIdx = (int)(nn % ((int64_t)kNW * Ci));
+        // ★ the seven bit offsets, once a sample rather than once a bin (decoder audit 2026-10-31): std::lround is a library
+        //   routine on 32-bit ARM, and seven per bin per sample were a fifth of SITOR-A on the Pi 2. Same values.
+        int64_t back[7];
+        for (int i = 0; i < 7; i++) back[i] = (int64_t)std::lround((6 - i) * K);
         for (int b = 0; b < kBins; b++) {
             Bin& B = bins[b];
             const cd z(zr[(size_t)k], zi[(size_t)k]);
@@ -344,12 +349,12 @@ struct Receiver::Impl {
             if ((nn & 1023) == 0) { B.pm /= std::abs(B.pm); B.ps /= std::abs(B.ps); }
             B.sm += vm - cd(B.pmBuf[(size_t)B.bp]); B.ss += vs - cd(B.psBuf[(size_t)B.bp]);
             B.pmBuf[(size_t)B.bp] = std::complex<float>(vm); B.psBuf[(size_t)B.bp] = std::complex<float>(vs);
-            B.bp = (B.bp + 1) % Ki;
+            if (++B.bp >= Ki) B.bp = 0;   // ★ % Ki without the divide
             const double em = std::norm(B.sm), es = std::norm(B.ss);
             B.sgn[(size_t)(nn & 255)] = em > es;
             uint8_t code = 0;
             for (int i = 0; i < 7; i++) {
-                const int64_t at = nn - (int64_t)std::lround((6 - i) * K);
+                const int64_t at = nn - back[i];
                 if (B.sgn[(size_t)(at & 255)]) code = (uint8_t)(code | (1 << i));
             }
             const uint8_t inv = (uint8_t)(~code & 0x7f);

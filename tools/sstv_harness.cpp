@@ -2,8 +2,10 @@
 //
 //   clang++ -std=c++17 -O2 tools/sstv_harness.cpp \
 //       android/app/src/main/cpp/decoders/sstv_decoder.cpp \
-//       android/app/src/main/cpp/fft/kiss_fftr.c android/app/src/main/cpp/fft/kiss_fft.c \
-//       -Iandroid/app/src/main/cpp -o /tmp/sstv_harness
+//       android/app/src/main/cpp/ft8_lib/fft/kiss_fftr.c android/app/src/main/cpp/ft8_lib/fft/kiss_fft.c \
+//       android/app/src/main/cpp/vibedsp/third_party/pffft/pffft.c \
+//       -Iandroid/app/src/main/cpp -Iandroid/app/src/main/cpp/ft8_lib -o /tmp/sstv_harness
+//   (★ pffft.c since 2026-10-31: SstvFFT runs on PFFFT. If clang++ refuses a .c file, compile the three with cc first.)
 //   /tmp/sstv_harness in.wav out.ppm
 //
 // ★★★ WHY THIS EXISTS. This bug has been "fixed" three times, each time verified against

@@ -654,7 +654,15 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     // station's actual subcarrier scaled the data by cos(theta) — zero at 90 degrees.
     // Keeping both parts makes the detector indifferent to that angle.
     xI_.resize(n); xQ_.resize(n);
-    for (int i = 0; i < n; ++i) {
+    int i0 = 0;
+#if VIBE_NEON   // ★ the same two products in the same order, four at a time (decoder audit 2026-10-31)
+    for (const float32x4_t two = vdupq_n_f32(2.0f); i0 + 4 <= n; i0 += 4) {
+        const float32x4_t m = vld1q_f32(mpx + i0);
+        vst1q_f32(&xI_[i0], vmulq_f32(vmulq_f32(m, vld1q_f32(ref57 + i0)), two));
+        vst1q_f32(&xQ_[i0], vmulq_f32(vmulq_f32(m, vld1q_f32(ref57q + i0)), two));
+    }
+#endif
+    for (int i = i0; i < n; ++i) {
         xI_[i] = mpx[i] * ref57[i]  * 2.0f;
         xQ_[i] = mpx[i] * ref57q[i] * 2.0f;
     }
@@ -674,6 +682,9 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
     const float twoPi = 2.0f * (float)M_PI;
     const float kPi   = (float)M_PI;
     const float phaseStep = twoPi / NPH;
+    // p × phaseStep for each hypothesis, as the per-hypothesis loop computed it (int × float, in float)
+    float pStep_[NPH];
+    for (int p = 0; p < NPH; ++p) pStep_[p] = p * phaseStep;
 
     // ★★ A HYPOTHESIS SWITCH INVALIDATES THE PLOT. Each hypothesis has its own carrier
     // phase and timing alignment, so points captured either side of a switch are two
@@ -814,52 +825,96 @@ void RdsDemod::process(const float* mpx, const float* ref57, const float* ref57q
         base = std::fmod(base, twoPi);
         if (base < 0.0f) base += twoPi;
 
+        /* ★★ FOUR HYPOTHESES AT A TIME (2026-10-31, the decoder SIMD audit). This loop — sixteen phases, a compare, a sign
+         *  and two accumulates each, per decimated sample — was the largest line of RdsDemod on the Pi 2 (qemu-arm count,
+         *  pi-bench WFM + RDS), and 32-bit GCC never vectorises float. The phase, the sign and the sums are the SAME float
+         *  operations in the same order per hypothesis, so every bit, block and group is identical; only a symbol boundary
+         *  (one sample in ~34 per hypothesis) leaves the vector path, for the scalar decision below. */
+        auto symbol = [&](int p) {
+            const float aI = accI_[p], aQ = accQ_[p];
+            // Differential (DBPSK) decision. The carrier phase cancels in the product
+            // with the previous symbol, so no phase estimate is needed and multipath
+            // rotation cannot invert or null us. RDS is differentially encoded already,
+            // so this hands the decoder the data bit directly.
+            if (havePrev_[p]) {
+                const float dot = aI * prevAI_[p] + aQ * prevAQ_[p];
+                dec_[p].pushBit(dot < 0.0f ? 1 : 0);
+            }
+            if (p == constBest_ && !hold) {
+                // Accumulate the doubled angle as a UNIT vector — every symbol counts equally (this
+                // comment once said "magnitude-weighted"; the code never was). A slow EMA (~500
+                // symbols, ~0.4 s) — see the 2026-10-10 comparison with sdrpp-mpx-analyzer.
+                const float mag2 = aI * aI + aQ * aQ;
+                if (mag2 > 1e-12f) {
+                    const float c = (aI * aI - aQ * aQ) / mag2;   // cos(2*theta)
+                    const float s = (2.0f * aI * aQ) / mag2;      // sin(2*theta)
+                    phCos2_ += 0.002f * (c - phCos2_);
+                    phSin2_ += 0.002f * (s - phSin2_);
+                }
+                // Normalised by the running baseband RMS so the plot's SCALE is stable
+                // and only its SHAPE varies — which is the part that carries meaning.
+                // ★ Divide generously. The symbol accumulator sums ~34 samples, so its
+                // magnitude is many times the per-sample RMS — and the wire format is a
+                // SIGNED BYTE, so anything over 127 clips and the shape is destroyed
+                // rather than merely rescaled. A strong station overflowed and the plot
+                // emptied (Stuart, 2026-07-26). The client rescales to fit, so headroom
+                // here costs nothing and clipping cannot be undone.
+                const float k = (rdsRms_ > 1e-9f) ? 1.0f / (rdsRms_ * 96.0f) : 0.0f;
+                constXY_[constHead_ * 2]     = aI * k;
+                constXY_[constHead_ * 2 + 1] = aQ * k;
+                constHead_ = (constHead_ + 1) % kConstPts;
+            }
+            prevAI_[p] = aI; prevAQ_[p] = aQ; havePrev_[p] = true;
+            accI_[p] = 0.0f; accQ_[p] = 0.0f;
+        };
+        static_assert(NPH % 4 == 0, "four hypotheses a vector");
+#if VIBE_NEON
+        const float32x4_t vbase = vdupq_n_f32(base), v2pi = vdupq_n_f32(twoPi), vpi = vdupq_n_f32(kPi), vz = vdupq_n_f32(0.0f);
+        const float32x4_t vsI = vdupq_n_f32(sI), vsQ = vdupq_n_f32(sQ), one = vdupq_n_f32(1.0f), mone = vdupq_n_f32(-1.0f);
+        for (int p = 0; p < NPH; p += 4) {
+            float32x4_t ph = vsubq_f32(vbase, vld1q_f32(pStep_ + p));
+            ph = vbslq_f32(vcltq_f32(ph, vz), vaddq_f32(ph, v2pi), ph);
+            const float32x4_t sign = vbslq_f32(vcltq_f32(ph, vpi), one, mone);
+            vst1q_f32(accI_ + p, vmlaq_f32(vld1q_f32(accI_ + p), vsI, sign));
+            vst1q_f32(accQ_ + p, vmlaq_f32(vld1q_f32(accQ_ + p), vsQ, sign));
+            if (started_) {
+                const uint32x4_t w = vcltq_f32(ph, vld1q_f32(prevPh_ + p));
+                const uint32x2_t h = vorr_u32(vget_low_u32(w), vget_high_u32(w));
+                if (vget_lane_u32(vpmax_u32(h, h), 0)) {
+                    uint32_t l[4]; vst1q_u32(l, w);
+                    for (int k = 0; k < 4; ++k) if (l[k]) symbol(p + k);
+                }
+            }
+            vst1q_f32(prevPh_ + p, ph);
+        }
+#elif VIBE_SSE
+        const __m128 vbase = _mm_set1_ps(base), v2pi = _mm_set1_ps(twoPi), vpi = _mm_set1_ps(kPi), vz = _mm_setzero_ps();
+        const __m128 vsI = _mm_set1_ps(sI), vsQ = _mm_set1_ps(sQ), one = _mm_set1_ps(1.0f), mone = _mm_set1_ps(-1.0f);
+        for (int p = 0; p < NPH; p += 4) {
+            __m128 ph = _mm_sub_ps(vbase, _mm_loadu_ps(pStep_ + p));
+            ph = _mm_add_ps(ph, _mm_and_ps(_mm_cmplt_ps(ph, vz), v2pi));
+            const __m128 lt = _mm_cmplt_ps(ph, vpi);
+            const __m128 sign = _mm_or_ps(_mm_and_ps(lt, one), _mm_andnot_ps(lt, mone));
+            _mm_storeu_ps(accI_ + p, _mm_add_ps(_mm_loadu_ps(accI_ + p), _mm_mul_ps(vsI, sign)));
+            _mm_storeu_ps(accQ_ + p, _mm_add_ps(_mm_loadu_ps(accQ_ + p), _mm_mul_ps(vsQ, sign)));
+            if (started_) {
+                const int w = _mm_movemask_ps(_mm_cmplt_ps(ph, _mm_loadu_ps(prevPh_ + p)));
+                if (w) for (int k = 0; k < 4; ++k) if (w >> k & 1) symbol(p + k);
+            }
+            _mm_storeu_ps(prevPh_ + p, ph);
+        }
+#else
         for (int p = 0; p < NPH; ++p) {
-            float ph = base - p * phaseStep;
+            float ph = base - pStep_[p];
             if (ph < 0.0f) ph += twoPi;
             // Biphase matched integration: +1 over the first half-bit, -1 over the second.
             const float sign = (ph < kPi) ? 1.0f : -1.0f;
             accI_[p] += sI * sign;
             accQ_[p] += sQ * sign;
-            if (started_ && ph < prevPh_[p]) {          // bit-clock wrap = symbol boundary
-                const float aI = accI_[p], aQ = accQ_[p];
-                // Differential (DBPSK) decision. The carrier phase cancels in the product
-                // with the previous symbol, so no phase estimate is needed and multipath
-                // rotation cannot invert or null us. RDS is differentially encoded already,
-                // so this hands the decoder the data bit directly.
-                if (havePrev_[p]) {
-                    const float dot = aI * prevAI_[p] + aQ * prevAQ_[p];
-                    dec_[p].pushBit(dot < 0.0f ? 1 : 0);
-                }
-                if (p == constBest_ && !hold) {
-                    // Accumulate the doubled angle as a UNIT vector — every symbol counts equally (this
-                    // comment once said "magnitude-weighted"; the code never was). A slow EMA (~500
-                    // symbols, ~0.4 s) — see the 2026-10-10 comparison with sdrpp-mpx-analyzer.
-                    const float mag2 = aI * aI + aQ * aQ;
-                    if (mag2 > 1e-12f) {
-                        const float c = (aI * aI - aQ * aQ) / mag2;   // cos(2*theta)
-                        const float s = (2.0f * aI * aQ) / mag2;      // sin(2*theta)
-                        phCos2_ += 0.002f * (c - phCos2_);
-                        phSin2_ += 0.002f * (s - phSin2_);
-                    }
-                    // Normalised by the running baseband RMS so the plot's SCALE is stable
-                    // and only its SHAPE varies — which is the part that carries meaning.
-                    // ★ Divide generously. The symbol accumulator sums ~34 samples, so its
-                    // magnitude is many times the per-sample RMS — and the wire format is a
-                    // SIGNED BYTE, so anything over 127 clips and the shape is destroyed
-                    // rather than merely rescaled. A strong station overflowed and the plot
-                    // emptied (Stuart, 2026-07-26). The client rescales to fit, so headroom
-                    // here costs nothing and clipping cannot be undone.
-                    const float k = (rdsRms_ > 1e-9f) ? 1.0f / (rdsRms_ * 96.0f) : 0.0f;
-                    constXY_[constHead_ * 2]     = aI * k;
-                    constXY_[constHead_ * 2 + 1] = aQ * k;
-                    constHead_ = (constHead_ + 1) % kConstPts;
-                }
-                prevAI_[p] = aI; prevAQ_[p] = aQ; havePrev_[p] = true;
-                accI_[p] = 0.0f; accQ_[p] = 0.0f;
-            }
+            if (started_ && ph < prevPh_[p]) symbol(p);   // bit-clock wrap = symbol boundary
             prevPh_[p] = ph;
         }
+#endif
 
         started_ = true;
     }
