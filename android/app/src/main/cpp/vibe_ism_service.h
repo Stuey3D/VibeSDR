@@ -12,8 +12,9 @@
 //       vibe-ism3  the slicer, the protocol decoders, the device list and the gallery, at the same lower notch.
 //     A later stage may lag (sensors do not need their line this instant) and, if it falls far enough behind, drops; the
 //     detector never waits for it. Every drop shows in the health pill ("too heavy") through droppedBlocks(). Memory
-//     stays bounded: half a second of capture before the detector, half a second of work samples before the mixer, two
-//     seconds of channel samples before the slicer (~27 MB worst case at 2.4 MS/s, all of it only while behind).
+//     stays bounded: half a second of capture before the detector, half a second of work samples before the mixer, and
+//     before the slicer four of the longest channels and a second more (~34 MB worst case at 2.4 MS/s on 433, ~48 MB on
+//     868's wider channel, all of it only while behind).
 //     It runs on a single core as well: the stages simply share it, and the detector's higher rung keeps it in time.
 // ★★★ PRIVACY (Stuart, 2026-10-25). A TPMS, a key fob, a fixed-code remote is NEVER identified in anything this file
 //     sends, logs or stores: no ID, no code, no raw bits. It is "TPMS #2" — a number handed out in the order the server
@@ -564,7 +565,13 @@ public:
         fobs_.clear();   // ★ a new front end restarts burst time at 0
         { std::lock_guard<std::mutex> q(qMtx_); queue_.clear(); queued_ = 0; dropped_ = 0; cap_.reset(rateHz, now()); }
         { std::lock_guard<std::mutex> m(mMtx_); mixQ_.clear(); mixQueued_ = 0; droppedMix_ = 0; mixCap_ = size_t(det_->workRate() * 0.5); }
-        { std::lock_guard<std::mutex> d(dMtx_); decQ_.clear(); decQueued_ = 0; droppedDec_ = 0; decCap_ = size_t(2.0 * mix_->chanRate()); }
+        /* ★★ THE SLICER'S QUEUE HOLDS A WHOLE SET OF THE LONGEST CHANNELS, and a second more. Four channels can close in
+         *  the same block, each up to kMaxBurstS long; at 2 s of channel samples (the first cut) two of them already
+         *  overflowed it, and the hog-heavy bench (tools/ism-bench/add-hogs.cpp) on the Pi 2 dropped 3. That much baseband
+         *  was already in memory while those channels were open, before the split as well: this only bounds how long it
+         *  may wait. 250 kS/s: ~15 MB at most; the 868 band's ~500 kS/s channel: ~28 MB — and only while behind. */
+        { std::lock_guard<std::mutex> d(dMtx_); decQ_.clear(); decQueued_ = 0; droppedDec_ = 0;
+          decCap_ = size_t((FeConst::kMaxChans * FeConst::kMaxBurstS + 1.0) * mix_->chanRate()); }
         noiseDb_.store(-99, std::memory_order_relaxed); clipFrac_.store(0, std::memory_order_relaxed); carriers_.store(0, std::memory_order_relaxed);
         health_ = Health{};
         // ★ V12 LoRa (vibe_lora_service.h): its own thread and queue; the band's channel plan, only what the capture
@@ -828,7 +835,7 @@ private:
             if (lossless_) dSpace_.wait(lk, [&] { return !run_ || decQ_.empty() || decQueued_ + n <= decCap_; });
             decQueued_ += n;
             decQ_.push_back(std::move(raws));
-            // ★ behind by more than two seconds of channel samples: the OLDEST closed channels go unsliced
+            // ★ behind by more than four of the longest channels and a second: the OLDEST closed channels go unsliced
             while (decQueued_ > decCap_ && decQ_.size() > 1) { decQueued_ -= samplesOf(decQ_.front()); droppedDec_ += decQ_.front().size(); decQ_.pop_front(); }
         }
         dCv_.notify_one();

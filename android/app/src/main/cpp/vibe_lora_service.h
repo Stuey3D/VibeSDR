@@ -223,6 +223,9 @@ public:
         }
         return s;
     }
+#if defined(VIBE_ISM_PROF)
+    double profChan = 0, profDemod = 0;   ///< seconds: the channeliser, and every detector (ism-offline's profile)
+#endif
     /** ★ For the tests and the offline runner: the same work as the thread, inline. */
     void process(const cf* x, size_t n) { work(x, n); }
     /** `edge`: how far out a channel may reach, as a share of the rate (0.5 = a narrow recording made for ONE channel). */
@@ -236,7 +239,9 @@ private:
     struct ChF { double hz, bw; };
     void work(const cf* x, size_t n) {
         if (!ch_) return;
+        VIBE_ISM_P(const double tp0 = vibeism::ismProfNow();)
         ch_->feed(x, n);
+        VIBE_ISM_P(const double tp1 = vibeism::ismProfNow(); profChan += tp1 - tp0;)
         std::vector<Heard> got;
         for (auto& dt : demods_) {
             dt.d->run(*streams_[dt.stream], [&](Frame&& f) {
@@ -245,6 +250,7 @@ private:
                 got.push_back(std::move(h));
             });
         }
+        VIBE_ISM_P(profDemod += vibeism::ismProfNow() - tp1;)
         uint64_t hb = 0, cb = 0;
         for (auto& dt : demods_) { hb += dt.d->badHeaders(); cb += dt.d->badCrc(); }
         { std::lock_guard<std::mutex> lk(statMtx_); okN_ += got.size(); hdrN_ = hb; crcN_ = cb; }
