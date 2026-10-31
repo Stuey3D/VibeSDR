@@ -375,6 +375,11 @@ Checked, not built:
   (2225/2025 Hz) in seconds 31–39 of each minute, two 10-character frames (A: day/hour/min/sec, B: year, DUT1, DST,
   leap, with a redundancy check). Needs a burst FSK demodulator beside the envelope reader — a day's job; next in
   this queue when it is picked up again. Its known-signal labels already exist (no decoder).
+  **→ NOT BUILT: CHU IS OFF THE AIR (checked 2026-10-31, second run).** NRC ended the shortwave broadcast on
+  **22 June 2026** (NRC's own page: "As of June 22, 2026, the shortwave radio broadcast of the NRC's official time
+  signal will no longer be available"; recordings of the final minutes exist). A decoder for a station that no longer
+  transmits cannot be tested on air and would show nothing to anyone, so it was dropped from the queue. ★ Question
+  for Stuart: the CHU known-signal labels (3.330 / 7.850 / 14.670 MHz) now name a silent channel — remove them?
 
 ---
 
