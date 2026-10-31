@@ -53,8 +53,8 @@ try {
   // ★★ V12 (2026-10-31): ONE key, "mfsk" — MFSK16/32, OLIVIA, CONTESTIA and THOR — its choices grouped by family
   const groups = [...new Set((st.mfskModes || []).map((m) => m.group).filter(Boolean))].join(',');
   ok(st.mfsk === true && st.olivia === undefined && st.thor === undefined && st.mfskModes?.[0]?.id === 'auto' && groups === 'MFSK,OLIVIA,CONTESTIA,THOR'
-     && (st.mfskModes || []).some((m) => m.id === 'olivia-64-2000'),
-     `vibeserver.json: one key (mfsk ${st.mfsk}, ${(st.mfskModes || []).length} choices in ${groups}; no olivia/thor keys; OLIVIA 64/2000 listed)`);
+     && (st.mfskModes || []).some((m) => m.id === 'olivia-64-2000') && (st.mfskModes || []).length === 40,
+     `vibeserver.json: one key (mfsk ${st.mfsk}, ${(st.mfskModes || []).length} choices in ${groups}; no olivia/thor keys; OLIVIA 64/2000 listed; 40 = AUTO + 4 ANY + 35 sub-modes)`);
 
   edge = spawn(EDGE, ['--headless=new', `--remote-debugging-port=${cdp}`, '--no-first-run', '--no-default-browser-check', '--mute-audio',
     '--disable-audio-output', `--user-data-dir=${prof}`, '--window-size=1280,800', 'about:blank'], { stdio: 'ignore' });
@@ -135,6 +135,16 @@ try {
   const placesO = await ev(`JSON.stringify([...document.getElementById('decText').textContent.matchAll(/\\[([^\\]]*)\\]/g)].map(m => m[1]))`);
   ok(JSON.parse(placesO || '[]').every((h) => /^OLIVIA 16\/500 · 1[45]\d\d Hz$/.test(h)), `named only the OLIVIA signal (${placesO})`);
   const s1 = await shot('tm-olivia.png');
+  // ★ (2026-10-31, ninth run) FAMILY → CONTESTIA: its MODE row lists all 19 standard sub-modes, ANY first (server data)
+  await openPanel(); await sleep(400);
+  await pickG('CONTESTIA'); await sleep(400);
+  r = await rows();
+  const CON = 'ANY*|4/125|4/250|4/500|4/1000|4/2000|8/125|8/250|8/500|8/1000|8/2000|16/250|16/500|16/1000|16/2000|32/1000|32/2000|64/500|64/1000|64/2000';
+  ok(r.g === 'AUTO|MFSK|OLIVIA|CONTESTIA*|THOR' && r.m === CON, `CONTESTIA lit; its MODE row: ANY and all 19 sub-modes (${r.m})`);
+  const wCon = await ev(`JSON.stringify([document.documentElement.scrollWidth, document.documentElement.clientWidth])`);
+  ok((() => { const [sw, cw] = JSON.parse(wCon || '[1,0]'); return sw <= cw; })(), `the 20-key MODE row wraps, nothing scrolls sideways (${wCon})`);
+  await shot('tm-contestia.png');
+  await ev(`document.getElementById('decodersPanel').classList.remove('open')`);
   console.log('── FAMILY → MFSK ──');
   await openPanel(); await sleep(400);
   await pickG('MFSK'); await sleep(400);

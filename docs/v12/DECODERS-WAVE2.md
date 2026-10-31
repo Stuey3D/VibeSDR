@@ -1313,7 +1313,102 @@ progress bar's count is the rows made; the rule), `scripts/test-bench-defaults.m
 every switch the rule names is on both setup screens). The synthesisers moved from `tools/*-bench/` to
 `android/app/src/main/cpp/benchsynth/` (forwarders left behind); the 13 suites that use them pass.
 
+## 23. CONTESTIA: all 19 standard sub-modes — the other 11 added, two of them in AUTO (2026-10-31, ninth run)
+
+Stuart: *"Contestia has 11 more sub-modes. Add all of them please."* We decoded 8 of fldigi's 19 Contestia sub-modes
+(section 18). Added: **4/500, 4/1000, 4/2000, 8/125, 8/1000, 8/2000, 16/250, 16/2000, 32/2000, 64/500, 64/1000** —
+the same receiver (`OliviaRx`), sps = 8000·M/BW (16 … 1024 samples, 7.8 … 500 Bd). fldigi was again used ONLY as a
+black box: the 19 files section 18 recorded from it (`~/fldigi-blackbox/out`, every printable character, a newline,
+"NEW LINE 2", 8 kHz float32; not in git). No fldigi source was read.
+
+### One fault found: the hunt set fast sub-modes aside during fldigi's preamble
+fldigi starts every Contestia over with ≈ 1 s of preamble tones. They are not Walsh blocks, so the place reads
+"hopeless", and OLIVIA/CONTESTIA's hunt limit was four blocks (4K symbols) — ≤ 1 s at 125 Bd and up. The place was set
+aside during the preamble and the first 0.4–2 s of text were lost (4/500 began at "0", 16/2000 at "="). **Fix**
+(`OliviaRx::huntLimit`): never under 2 s of symbols. It does not bind on any sub-mode up to 62.5 Bd (K = 32: 125 ≤ 128;
+K = 64: ≤ 125 < 256), so every earlier sub-mode is unchanged by construction — the AUTO counts and sweeps below agree.
+
+### Decodes — fldigi's own audio, manual, white noise added (SNR in 3 kHz over the signal, 10 seeds a point)
+Whole text (from "!" to "NEW LINE") / 10. Clean, every one of the 19 decodes whole.
+
+| sub-mode | −16 | −14 | −12 | −10 | −8 | −6 | −4 | −2 | 0 | +2 dB |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 4/125 | 0 | 0 | 9 | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+| 4/250 | 0 | 0 | 0 | 2 | 10 | 10 | 10 | 10 | 10 | 10 |
+| **4/500** ★ AUTO | 0 | 0 | 0 | 0 | 0 | 5 | 10 | 10 | 10 | 10 |
+| **4/1000** | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 10 | 10 | 10 |
+| **4/2000** | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 7 | 10 |
+| **8/125** | 0 | 10 | 10 | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+| 8/250 | 0 | 0 | 10 | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+| 8/500 | 0 | 0 | 0 | 0 | 10 | 10 | 10 | 10 | 10 | 10 |
+| **8/1000** ★ AUTO | 0 | 0 | 0 | 0 | 0 | 7 | 10 | 10 | 10 | 10 |
+| **8/2000** | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 10 | 10 | 10 |
+| **16/250** | 0 | 8 | 10 | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+| 16/500 | 0 | 0 | 3 | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+| 16/1000 | 0 | 0 | 0 | 0 | 7 | 9 | 10 | 10 | 10 | 10 |
+| **16/2000** | 0 | 0 | 0 | 0 | 0 | 2 | 10 | 10 | 10 | 10 |
+| 32/1000 | 0 | 0 | 0 | 8 | 10 | 10 | 10 | 10 | 10 | 10 |
+| **32/2000** | 0 | 0 | 0 | 0 | 3 | 8 | 10 | 10 | 10 | 10 |
+| **64/500** | 6 | 9 | 10 | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+| **64/1000** | 0 | 1 | 8 | 10 | 9 | 10 | 10 | 10 | 10 | 10 |
+| 64/2000 | 0 | 0 | 0 | 10 | 10 | 10 | 10 | 10 | 10 | 10 |
+
+As expected of the format: sensitivity follows the character rate, so the fast wide modes need 10–14 dB more than
+8/125 and 64/500. The two new AUTO sub-modes through the one key's AUTO: fldigi's audio 4/500 −6 dB 5/10, −4 10/10;
+8/1000 −6 7/10, −4 10/10 — the same as manual; synthetic (`tm_bench`, 20 trials) AUTO = manual at every point.
+
+### AUTO or manual — measured, then chosen
+Pi 2 model as section 21 (qemu-arm count, armhf `-marm` NEON `-O3 -ffp-contract=fast`, 60 s of noise through the one
+key's AUTO). Real Pi 2 % from PI2-REAL-CPU.md's measured ratio (3966 M/min = 11.92 % of a core, IPC 0.63).
+
+| one key's AUTO | NEON M instr/min | vs now | ≈ real Pi 2 |
+|---|---|---|---|
+| as it was (8 sub-modes added, all manual) | 1844 | — | 5.5 % |
+| + 4/500 | 2028 | +10.0 % | 6.1 % |
+| + 4/1000 · + 4/2000 | 2101 · 2274 | +14.0 · +23.3 % | |
+| + 8/125 · + 8/1000 · + 8/2000 | 1961 · 2061 · 2170 | +6.4 · +11.8 · +17.7 % | |
+| + 16/250 · + 16/2000 | 1969 · 2107 | +6.8 · +14.3 % | |
+| + 32/2000 | 1960 | +6.3 % | |
+| + 64/500 · + 64/1000 | 1986 · 2000 | +7.7 · +8.4 % | |
+| + 8/125, 16/250, 64/1000 (the slow ones on one stream) | 2048 | +11.1 % | |
+| **+ 4/500 and 8/1000 (one stream, 125 Bd) — CHOSEN** | **2138** (scalar 4456, was 3933) | **+16 %** | **≈ 6.4 %** |
+| + all 11 | 3921 | +113 % | 11.8 % |
+
+All 11 in AUTO would more than double the key's cost (back to the ≈ 12 % before section 21's halving). So AUTO gets the
+two that are neither wide nor slow and share one stream: **4/500 and 8/1000** (125 Bd, the speed of the 500 / 1000 Hz
+pairs already in AUTO). **Manual only** (FAMILY → CONTESTIA → MODE, always offered): the wide, fast ones — 4/1000,
+4/2000, 8/2000, 16/2000, 32/2000 (+6–23 % each, and they need 0 to −4 dB anyway) — and the slow ones — 8/125, 16/250,
+64/500, 64/1000 (7.8–15.6 Bd: two blocks to lock are 4–8 s; cheap, but rarely heard). The benchmark row (`dec_mfsk`)
+measures whatever AUTO runs, so the box's own figure sets its default as before; nothing is hidden.
+
+### No false locks
+- Every fldigi file through the one AUTO: the five AUTO sub-modes (8/250, 16/500, 32/1000, 4/500, 8/1000) found and
+  named, the whole text; the **14 manual-only ones lock nothing** — in particular 16/2000, whose tones and rate are a
+  4/500 or 8/1000 receiver's (the section 18 tone-coverage gate keeps a wider receiver off a narrower signal and the
+  Walsh blocks keep a narrower one off a wider signal).
+- 1 min of white noise through every CONTESTIA manual setting (ANY and the 19): nothing printed, never locked; 3 min
+  through each family's AUTO and the one key: nothing (as before).
+- `tm_bench` AUTO sweep of every earlier OLIVIA/CONTESTIA AUTO sub-mode (−14 … −6 dB, 20 trials), before vs after:
+  **byte-identical**.
+
+### Lists and copy
+The server's `mfskModes` is generated from `kSubs`, so the offer, the app's FAMILY/MODE rows and the web's (one list,
+`autoModes.ts parseGroupedModes`, cap 48) grow from 29 to **40** entries with no client change. About's V12 note says
+"all 19 standard tones/bandwidth pairs". No tour card lists Contestia's sub-modes.
+
+### Tests
+`test-textmodes`: each new sub-mode synthetic at +10 dB, manual (and AUTO for the two); every sub-mode in the one AUTO
+also checked for its NAME; the 19 fldigi files clean, at their edge above (2 of 3 seeds whole) and 4 dB above it (3 of
+3); through the one AUTO (named / nothing); noise as above; the list is 40 entries. All passed (Mac, with the reference
+recordings and the fldigi files). Under qemu (qemu.sh): NEON/scalar × `-ffp-contract` off/fast — all passed, ONE fingerprint across the four (`28308b713559e1ca`), so the
+new sub-modes' SIMD paths (N = 32 … 2048 transforms, the same q65v lanes) decode exactly as scalar. Family AUTO counts
+there: OLIVIA family 1063 M NEON (1945 scalar), THOR 938 M (2184) — THOR unchanged.
+`test-web-textmodes` (real vibeserver rebuilt, headless Edge muted): two checks added — vibeserver.json has 40 choices; FAMILY → CONTESTIA shows ANY and all 19 sub-modes and the 20-key row wraps (no sideways scroll). **10/10 runs, 25 checks each.**
+
 ## RESUME HERE (updated 2026-10-31, eighth run: the lost "E", and the one key at less than half the cost)
+
+★ Ninth run, later (section 23): **CONTESTIA has all 19 standard sub-modes** (11 added, confirmed on fldigi's audio as a black
+box); 4/500 and 8/1000 in the one key's AUTO (1844 → 2138 M instr/min, ≈ 6.4 % of a Pi 2 core), the other nine manual.
 
 Done this run (commits on `v12-decoders-wave2`): section 16 — PAGE silent while it runs, Q65 tiling of the EME segments
 (23 cm band, 6 m, Q65-15 — it doubles Q65's cost), Feld Hell (Hellschreiber) copy, AUTO first / manual for the session
