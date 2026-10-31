@@ -218,12 +218,22 @@ struct Finder {
     int curB = -1, curP = 0, L_ = 0;
     /** ★ THE HUNT: a place where this sub-mode could not lock is set aside for a while (symbols), so a second signal in
      *  the passband gets its turn — measured: OLIVIA 16/500 beside a stronger MFSK16 never decoded before this. */
-    std::vector<int> ban;
+    /** ★ …AND A PLACE SET ASIDE AGAIN SOON AFTER IS SET ASIDE FOR LONGER (×2, ×4): a steady other signal is not worth
+     *  re-checking every time its ban runs out — each re-check is huntLimit() symbols blind to the passband (measured on
+     *  the web test's clip: OLIVIA 16/500 beside a stronger MFSK16, the finder back on the MFSK16 at the start of every
+     *  other over). Forgotten when twice the ban has passed after it without another strike. */
+    std::vector<int> ban, mem; std::vector<uint8_t> strikes;
     void setAside(int around, int halfWidth, int forSymbols) {
-        for (int i = std::max(0, around - halfWidth); i <= std::min(nb - 1, around + halfWidth); ++i) ban[i] = forSymbols;
+        const int i0 = std::max(0, around - halfWidth), i1 = std::min(nb - 1, around + halfWidth);
+        int st = 0; for (int i = i0; i <= i1; ++i) st = std::max<int>(st, strikes[i]);
+        st = std::min(3, st + 1);
+        const int len = forSymbols << (st - 1);
+        for (int i = i0; i <= i1; ++i) { ban[i] = len; mem[i] = 3 * len; strikes[i] = (uint8_t)st; }
         curB = -1;
     }
-    void tickBans() { for (int& b : ban) if (b > 0) --b; }
+    void tickBans() {
+        for (int i = 0; i < nb; ++i) { if (ban[i] > 0) --ban[i]; if (mem[i] > 0 && --mem[i] == 0) strikes[i] = 0; }
+    }
     float alpha;
     void init(int M_, int stride, double binHz, int nBins) {
         M = M_; s = stride;
@@ -233,7 +243,7 @@ struct Finder {
         nb = std::max(0, hi - lo + 1);
         nb = (nb + 3) & ~3;                     // whole lanes (the extra bases read zeros past the band: never chosen)
         for (auto& sc : score) sc.assign(nb, 0.f);
-        v.assign(nb, 0.f); ban.assign(nb, 0);
+        v.assign(nb, 0.f); ban.assign(nb, 0); mem.assign(nb, 0); strikes.assign(nb, 0);
         alpha = 1.f / 12;
         L_ = (nb + s * M + s) / s + M + 2;
         seq.assign((size_t)L_ * s, 0.f); g.assign(seq.size(), 0.f); h.assign(seq.size(), 0.f);
@@ -271,10 +281,15 @@ struct Finder {
     }
     /** the best (base, phase), held unless another beats it by `margin` (15 % hunting; 80 % while a receiver is locked —
      *  enough for a drift of half a bin, never for the noise of an idle carrier, which moved MFSK32's base a tone) */
-    void choose(float margin) {
+    /** `near` ≥ 0: only bases within `near` half-bins of the current one (a locked receiver: one tone, for drift), and
+     *  only to a place scoring `minScore`. ★ A lock follows ITS signal: free to choose, a locked OLIVIA 16/500 left its
+     *  own over for a stronger MFSK16 beside it, read the MFSK16's tones under the lock and printed "OLI6" for "OLIV"
+     *  (measured on the web test's clip, 2026-10-31). */
+    void choose(float margin, int near = -1, float minScore = -1e9f) {
         float best = -1e9f; int bb = -1, bp = 0;
-        for (int p = 0; p < 4; ++p) for (int i = 0; i < nb; ++i) if (!ban[i] && score[p][i] > best) { best = score[p][i]; bb = i; bp = p; }
-        if (bb < 0) return;
+        const int i0 = near >= 0 && curB >= 0 ? std::max(0, curB - near) : 0, i1 = near >= 0 && curB >= 0 ? std::min(nb - 1, curB + near) : nb - 1;
+        for (int p = 0; p < 4; ++p) for (int i = i0; i <= i1; ++i) if (!ban[i] && score[p][i] > best) { best = score[p][i]; bb = i; bp = p; }
+        if (bb < 0 || (curB >= 0 && best < minScore)) return;
         if (curB < 0 || best > margin * score[curP][curB] || score[curP][curB] <= 0) { curB = bb; curP = bp; }
     }
     float current() const { return curB < 0 ? 0.f : score[curP][curB]; }
@@ -294,18 +309,38 @@ struct Rx {
     /** no sign of this mode at all at the place (a weak signal of it shows a rising contrast / block quality first —
      *  setting that aside cost decodes: THOR16 at −6 dB CER 4 % → 38 %) */
     virtual bool hopeless() const { return true; }
-    int huntAge = 0;   // the hypothesis in use, in tones from the finder's base
+    /** how fast a hopeless place ages, in quarters (4 = set aside after huntLimit() symbols) */
+    virtual int huntWeight() const { return 4; }
+    /** the finder's base has moved by `delta` half-bins (what was measured at the old place may not hold at the new one) */
+    virtual void moved(int delta) { (void)delta; }
+    int huntAge = 0;   // quarter-symbols a signal place has shown no sign of the mode
     float hz() const { return fd.curB < 0 ? 0.f : (float)((fd.lo + fd.curB + fd.s * toneShift() + 0.5 * fd.s * (sub->M - 1)) * st->binHz()); }
     void frame(int64_t f, const float* P) {
         const int nBins = st->N / 2, p = (int)(f & 3);
         fd.update(P, nBins, p);
         if (p != 3) return;   // choose once a symbol
-        fd.tickBans();
-        if (locked()) huntAge = 0;
+        // ★ a ban counts HUNTING symbols only: run down during a lock, it expired in the over's tail and the next over
+        //   began with the finder back on the other signal (measured, the web test's clip)
+        if (!locked()) fd.tickBans();
+        const int wasB = fd.curB;   // (before the hunt: a place set aside is a move like any other — see moved())
+        const float wasScore = fd.current();
         // ★ only a place with a SIGNAL on it (finder score ≥ 4.5; noise reads 2–3) is set aside — set aside on noise, the
-        //   bans covered where the signal later came up (measured: every sub-mode failed)
-        else if (fd.curB >= 0 && fd.current() >= 4.5f && hopeless() && ++huntAge > huntLimit()) { fd.setAside(fd.curB, fd.s * sub->M, 2 * huntLimit()); huntAge = 0; }
-        if (!holdFinder()) fd.choose(locked() ? 1.8f : 1.15f);
+        //   bans covered where the signal later came up (measured: every sub-mode failed). ★ The age is of ONE STRETCH of
+        //   signal at one place: it starts again when the place goes quiet, or the finder moves off the tone set or to a
+        //   much stronger view. Carried over, an over's idle tail and the gap after it aged the place so far that the
+        //   NEXT over there was set aside 1.3 s in, before its code could show (MFSK16 on the web test's clip, 7 in 40).
+        if (locked() || fd.curB < 0 || fd.current() < 4.5f) huntAge = 0;
+        else if (hopeless() && (huntAge += huntWeight()) > 4 * huntLimit()) { fd.setAside(fd.curB, fd.s * sub->M, 2 * huntLimit()); huntAge = 0; }
+        // ★ A LOCKED receiver's finder stays within a tone of its signal (see Finder::choose) and moves only to a SIGNAL
+        //   (score ≥ 4.5; noise reads 2–3): in the over's tail it wandered on the noise, and the next over found the
+        //   lock a few tones off its own signal (lost "CQ D", the web test's clip)
+        if (!holdFinder()) { if (locked()) fd.choose(1.8f, fd.s, 4.5f); else fd.choose(1.15f); }
+        if (wasB >= 0 && fd.curB >= 0 && fd.curB != wasB) {
+            // a new stretch: another place, or a much better view of this one (measured: aged at the edge of an MFSK16
+            // signal while its centre was set aside, then set aside 12 symbols after reaching the centre)
+            if (std::abs(fd.curB - wasB) >= fd.s * sub->M || fd.current() > 1.5f * wasScore) huntAge = 0;
+            moved(fd.curB - wasB);
+        }
         // the symbol of the chosen phase, if this frame is it — handled on the frame of that phase below
     }
     void maybeSymbol(int64_t f, const float* P) {
@@ -371,9 +406,24 @@ struct MfskRx : Rx {
     // the oldest and the newest symbol in the bit — and now: the traceback starts from the newest path, so noise that
     // has just begun can still bend the last few bits (measured: "KuåDAR p5W" after an MFSK32 over)
     bool presentThen() const { return presRing[(n + 64 - 54) & 63] > 6.f && presRing[(n + 64 - 24) & 63] > 6.f && presence > 6.f; }
+    /** ★ STARTED MID-OVER (the listener opened the decoder on a signal already sending): the coder is in no known state
+     *  and the Viterbi's first bits are guesses, so a character whose first bit came through the first 24 symbols is
+     *  not shown (measured: " rMFSK" for "Z MFSK", "nK" for "SK" — 4 starts in 40 on the web test's clip). Cleared once
+     *  the place is quiet: an over that begins after quiet starts the coder from idle, as the Viterbi assumes.
+     *  Dead ends (2026-10-31): the presence check applied to the character's first bit too (lost MFSK32's first "C"
+     *  at −6 dB while the presence rose); an unbiased Viterbi start (6 starts in 40 still wrong, and THOR — which
+     *  starts from idle — lost decodes); the same rule on every finder move off the tone set (the finder arrives at an
+     *  over's start that way: MFSK16 at −6 dB 20/20 → 13/20). */
+    int joinN = 0;
+    bool joinedThen(int began) const { return joinN >= 0 && began - 54 < joinN + 24; }
+    int codeStart[2] = {-1, -1};   // the symbol at which each decoder's code in progress took its first bit
     int lockK = 0; int zeroRun = 0;   // decoded zeros in a row on the locked pairing: an idle (THOR's idle is +2 steps, not one tone)
     bool holdFinder() const override { return lock && repeat > 0.4f; }
     bool hopeless() const override { return contrast() < 0.04f; }
+    /** ★ an IDLE CARRIER (one tone held) is how an over starts: it ages at a quarter of the rate, so a long preamble is
+     *  not set aside before the text (measured: the Wikimedia MFSK16 slogan idles ≈ 8 s; set aside after 6 s, its first
+     *  sentence was lost). A birdie still gives way, after four times as long. */
+    int huntWeight() const override { return repeat > 0.5f ? 1 : 4; }
     std::vector<int> pre;  // characters the best decoder read in the seconds before the lock (≤ 8)
     /** ★ THE FRAMING CONTRAST. On anything that is not this mode, the best path of a K = 7 code agrees with ≈ 89 % of
      *  the bits whichever way the dibits are paired (≈ 0.75 here) — so a high agreement proves nothing. A real signal
@@ -392,12 +442,15 @@ struct MfskRx : Rx {
         const int bit = vit[k].push(a, b);
         if (bit < 0) return;
         if (k == lockK) zeroRun = bit ? 0 : zeroRun + 1;
+        const bool starts = bit && (vr[k].len == 0 || vr[k].zeros >= 2);   // this bit begins a code (VaricodeRx::push)
+        const int began = codeStart[k];
         const int c = vr[k].push(bit);
+        if (starts) codeStart[k] = n;
         // ★ the pairing is chosen when the lock is taken and kept while it holds: in an idle carrier both pairings read
         //   the all-zero codeword perfectly, and switching then printed the other decoder's leftovers ("TaTaT")
         const int best = lock ? lockK : (vit[1].quality() > vit[0].quality() ? 1 : 0);
         if (c < 0 || k != best) return;
-        if (lock) { if (presentThen()) appendChar(text, c); }
+        if (lock) { if (presentThen() && !joinedThen(began)) appendChar(text, c); }
         // ★ (no pre-lock buffer: tried, it printed the code's start-up guesses — " tnj" before "CQ" even at +20 dB)
     }
     void symbol(const float* Tg, int gap) override {
@@ -432,6 +485,7 @@ struct MfskRx : Rx {
             recent[nRecent++ & 31] = (uint8_t)cur;
             float xm = 0; for (int k = 0; k < M; ++k) xm = std::max(xm, x[k]);
             presence += 0.125f * (xm - presence);
+            if (fd.current() < 4.5f) joinN = -1;   // the place quiet (the hunt's test): what follows is an over's start
             presRing[n & 63] = presence;
         }
         {   float m1 = 0, m2 = 0;
@@ -468,7 +522,7 @@ struct OliviaRx : Rx {
     struct Hyp { std::vector<float> ring; std::vector<float> E; std::vector<std::vector<int>> past; };   // past: K × (2 blocks of b codes, q)
     Hyp hyp[3];
     int64_t n = 0; int pos = 0;
-    int lockH = 1, lockA = -1; bool lock = false; int candH = -1, candA = -1;
+    int lockH = 1, lockA = -1; bool lock = false; int candH = -1, candA = -1, candB = -1;
     int val[64];
     std::vector<uint64_t> scrJ;  // per character: the scrambler rotated
     explicit OliviaRx(const Sub* s) : Rx(s) {
@@ -487,6 +541,22 @@ struct OliviaRx : Rx {
     bool locked() const override { return lock; }
     int toneShift() const override { return lockH - 1; }
     int huntLimit() const override { return 4 * K; }   // four blocks: two to lock, and room for the blocks before
+    /** ★ STRONG EVIDENCE MUST NOT TRAVEL. The block qualities are kept per hypothesis and alignment; carried to another
+     *  signal they let a lock be taken there on the old one's blocks (measured: an OLIVIA idle block read at 1500 Hz,
+     *  the finder then moved to an MFSK16 signal at 766 Hz and locked there on the decaying 0.58 — "[OLIVIA 16/500 ·
+     *  766 Hz]", the web test's clip). So a move off the tone set (no hypothesis reads a tone of the old place) caps
+     *  every quality at the hold threshold — below the lock's, so a lock elsewhere must be earned by blocks read there —
+     *  and forgets the characters kept for a lock. What a weak signal's finder carries on its hops to the noise and
+     *  back is kept, as before. Dead ends (2026-10-31), each measured at −12 dB, 20 trials: wiping the qualities on
+     *  every such move (OLIVIA 4/125 13/20 → 3/20); wiping on any move of three tones (OLIVIA 64/2000 at −6 dB 13 → 11,
+     *  its finder slides inside the 2 kHz signal); renaming the hypotheses on a whole-tone move (the same); parking
+     *  each place's qualities and taking them back on a return (CONTESTIA 8/250 8 → 6). */
+    void moved(int delta) override {
+        if (lock || std::abs(delta) <= fd.s * (sub->M + 1)) return;
+        const float cap = K == 64 ? 0.085f : 0.13f;   // = thrOff in push()
+        for (Hyp& h : hyp) { for (float& e : h.E) e = std::min(e, cap); for (auto& p : h.past) p.clear(); }
+        candH = candA = -1;
+    }
     bool hopeless() const override {
         float e = 0; for (const Hyp& h : hyp) for (float v : h.E) e = std::max(e, v);
         return e < (K == 64 ? 0.075f : 0.12f);
@@ -560,8 +630,11 @@ struct OliviaRx : Rx {
         // ★ a lock is taken only when the same (hypothesis, alignment) is still the best one block later — a block
         //   half in silence or a neighbouring hypothesis can top the table once (measured: "=Q00GDG0D" at +10 dB)
         bool take = false;
+        // ★ …and not when the finder has since slid off to the noise: the over ended between the two blocks and the lock
+        //   was taken on the old evidence 250 Hz above its signal ("[OLIVIA 16/500 · 1750 Hz]", nothing after; measured)
         if (!lock && a == ba && hyp[bh].E[ba] > thrOn) {
-            if (candH == bh && candA == ba) take = true; else { candH = bh; candA = ba; }
+            const bool stayed = std::abs(fd.curB - candB) < fd.s * sub->M / 2 || fd.current() >= 4.5f;
+            if (candH == bh && candA == ba && stayed) take = true; else { candH = bh; candA = ba; candB = fd.curB; }
         }
         if (take) {
             lock = true; lockH = bh; lockA = ba; candA = -1;

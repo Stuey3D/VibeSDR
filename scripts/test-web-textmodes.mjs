@@ -101,8 +101,18 @@ try {
   await ev(`document.getElementById('decodersPanel').classList.remove('open')`);
   console.log('── OLIVIA ──');
   const textHas = (re) => `(${re}).test(document.getElementById('decText').textContent)`;
-  // ★ the clip loops every 20 s, so a pass can be joined mid-block: the end of the over is the check
-  ok(await until(textHas(/DE G4XYZ OLIVIA K/), 60000), 'the OLIVIA text arrives');
+  // ★ the clip loops every 20 s, so the box is opened mid-over: a WHOLE over must still arrive within three loops, and
+  //   nothing may be printed that was not sent (every passage between the "[MODE · Hz]" lines is a piece of the over —
+  //   before 2026-10-31's finder fixes OLIVIA locked on the MFSK16 at 766 Hz, printed "CQPDE", and missed whole overs)
+  const pieces = (msg) => `(() => { const t = document.getElementById('decText').textContent;
+     const segs = t.split(/\\n?\\[[^\\]]*\\]\\n?/).map(s => s.replace(/\\n/g, '')).filter(s => s.trim());
+     const bad = segs.filter(s => !${JSON.stringify(msg)}.repeat(4).includes(s)); return JSON.stringify(bad); })()`;
+  const OMSG = 'CQ DE G4XYZ OLIVIA K', MMSG = 'CQ CQ DE G4XYZ MFSK TEST PSE K';
+  ok(await until(textHas(/CQ DE G4XYZ OLIVIA K/), 60000), 'a whole OLIVIA over arrives');
+  const badO = await ev(pieces(OMSG));
+  ok(badO === '[]', `nothing printed that was not sent (${badO})`);
+  const placesO = await ev(`JSON.stringify([...document.getElementById('decText').textContent.matchAll(/\\[([^\\]]*)\\]/g)].map(m => m[1]))`);
+  ok(JSON.parse(placesO || '[]').every((h) => /^OLIVIA 16\/500 · 1[45]\d\d Hz$/.test(h)), `AUTO named only the OLIVIA signal (${placesO})`);
   const stO = await ev(`document.getElementById('decStatus').textContent`);
   ok(/OLIVIA 16\/500/.test(stO) || /OLIVIA 16\/500/.test(await ev(`document.getElementById('decText').textContent`)), `AUTO names OLIVIA 16/500 ("${stO}")`);
   const s1 = await shot('tm-olivia.png');
@@ -111,10 +121,14 @@ try {
   await ev(`document.querySelector('#decodersPanel [data-dec="mfsk"]').click()`);
   ok(await until(`/MFSK/.test(document.getElementById('decTitle').textContent)`, 5000), 'the box switches to MFSK');
   await ev(`document.getElementById('decodersPanel').classList.remove('open')`);
-  ok(await until(textHas(/MFSK TEST PSE K/), 60000), 'the MFSK16 text arrives');
+  ok(await until(textHas(/CQ CQ DE G4XYZ MFSK TEST PSE K/), 60000), 'a whole MFSK16 over arrives');
   const t = await ev(`document.getElementById('decText').textContent`);
   const after = t.slice(t.lastIndexOf('[MFSK16'));
   ok(/^\[MFSK16 · \d+ Hz\]/.test(after) && !/OLIVIA/.test(after), 'AUTO names MFSK16; no OLIVIA text after it');
+  const badM = await ev(`(() => { const t = document.getElementById('decText').textContent; const i = t.indexOf('[MFSK16');
+     const segs = t.slice(i).split(/\\n?\\[[^\\]]*\\]\\n?/).map(s => s.replace(/\\n/g, '')).filter(s => s.trim());
+     return JSON.stringify(segs.filter(s => !${JSON.stringify(MMSG)}.repeat(4).includes(s))); })()`);
+  ok(badM === '[]', `nothing printed that was not sent (${badM})`);
   const s1b = await shot('tm-mfsk.png');
 
   console.log('── phone width, 390 px ──');

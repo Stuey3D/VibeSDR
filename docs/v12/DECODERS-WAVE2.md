@@ -658,12 +658,72 @@ the third (above) leaves the sweep as it was.
 vibeserver, headless Edge muted): keys offered and placed (HF Amateur), MODE row = the server's list with AUTO lit, MFSK16
 text and its "[MFSK16 · 797 Hz]" line — **but FLAKY, 11–12 of 15 on three runs**: the 20 s clip loops, OLIVIA (2 s
 blocks) joins mid-over and once printed "CQPDE" (one wrong character) and once locked on the MFSK16 signal at 766 Hz
-(printing nothing). Not fixed this run: a longer, non-looping clip (or OLIVIA alone) is the next step, and the false
-OLIVIA lock on an MFSK16 signal wants a look (the block quality reached the lock threshold on it).
+(printing nothing). ★ FIXED in section 12 — every failure was the decoder, not the clip.
 
 Owed: real air (an OLIVIA calling channel, e.g. 14.0715 USB; MFSK/THOR are rare on air), the flaky web e2e above, the Android gradle / iOS `build_ios.sh` compiles
 (the shim and host compiled on the Mac only), sharing one finder between OLIVIA and CONTESTIA of the same tones (≈ 17 %
 of OLIVIA AUTO's cost, decode-neutral), CONTESTIA's newline code (no recording carries one).
+
+## 12. The flaky web test was the DECODER — five finder faults fixed (2026-10-31, fifth run)
+
+`scripts/test-web-textmodes.mjs` passed 11–12 of 15. Every failure was reproduced offline first: the web clip's audio
+(`tm_clip` with `VIBE_TM_DUMP`), looped three times from each of 20 start offsets × 2 noise seeds (40 runs), through
+`tm_file` AUTO — the same joins the web test makes when it opens the box mid-over. None of it was a test fault: each was
+the receiver. Before → after on those 40 runs:
+
+| | before | after |
+|---|---|---|
+| OLIVIA AUTO: a whole over printed within the three loops | 10/40 | **40/40** |
+| OLIVIA AUTO: a wrong character printed ("OLI6", "OLIVI!", the web run's "CQPDE") | 9/40 | **0/40** |
+| OLIVIA AUTO: locked on the MFSK16 beside it ("[OLIVIA 16/500 · 766 Hz]") | 17/40 | **0/40** |
+| MFSK AUTO: a whole over printed | 31/40 | **40/40** |
+| MFSK AUTO: a wrong character at the join (" rMFSK" for "Z MFSK") | 4/40 | **0/40** |
+| Web test, 10 runs in a row (headless Edge, muted, real vibeserver) | 11–12 of 15 | **10/10** (17 checks each) |
+
+The faults, each fixed in `decoders/textmodes.cpp` with the measurement in its comment:
+
+1. **Stale evidence travelled.** OLIVIA's block qualities (per hypothesis × alignment) were kept when the finder moved to
+   ANOTHER signal; an idle block read at 1500 Hz then locked the receiver on the MFSK16 at 766 Hz. Now a move off the tone
+   set caps every quality at the hold threshold (below the lock's) and forgets the characters kept for a lock.
+2. **A lock did not follow its signal.** A locked receiver's finder could jump to any place 1.8× stronger — a locked OLIVIA
+   left its own over for the MFSK16 and printed "OLI6". Now a locked finder moves only within a tone, and only to a
+   place with a signal on it (it had also wandered on the noise in the over's tail and met the next over a few tones off).
+3. **Bans ran down during a lock**, so the next over began with the finder back on the other signal. Bans now count
+   hunting symbols only; a place set aside again soon after is set aside for longer (×2, ×4, forgotten later).
+4. **The hunt aged across overs.** The age now belongs to one stretch of signal at one place (reset when the place goes
+   quiet, the finder moves off the tone set or to a much stronger view of it). An idle carrier ages at a quarter rate.
+   ★ This also mended a REFERENCE RECORDING the previous run's hunt had broken unnoticed: the Wikimedia MFSK16 slogan idles
+   ≈ 8 s and was set aside after 6 s — `test-textmodes` with the recordings failed it (10/11) at the start of this run;
+   11/11 again now.
+5. **A receiver started mid-over printed a wrong first character** (the coder in an unknown state, the Viterbi's first
+   bits guesses): a character whose first bit came through the first 24 symbols after a start on a signal already sending
+   is not shown; cleared as soon as the place is quiet, so an over that starts after quiet loses nothing.
+
+Plus a hole: a place set aside skipped the move bookkeeping (the old place was read after `setAside` cleared it).
+
+**Decodes unchanged elsewhere** — `tm_bench` sweeps, baseline vs fixed build, same seeds: every OLIVIA/CONTESTIA sub-mode
+at its edge (−12/−10 dB; 8/500, 16/1000, CONTESTIA 32/1000, 64/2000 at −10/−8/−6) × 20 trials, manual and AUTO; MFSK16/32
+(−10/−8/−6 × 20), THOR 4/5/8/11/16/22 (−14 … −6 × 10), AUTO rows: **identical counts everywhere** (one CER 32 → 31 %).
+`test-textmodes` with the recordings: all passed, the one difference from the baseline being the slogan now passing.
+
+**Dead ends, kept for the record** (each measured, 20 trials at the edge): wiping OLIVIA's qualities on every move off
+the tone set (4/125 at −12 dB 13/20 → 3/20 — a weak signal's finder hops to the noise and back, and its evidence must
+survive the trip); wiping on any move of three tones (64/2000 at −6 dB 13 → 11 — its finder slides inside the 2 kHz
+signal); renaming the hypotheses on whole-tone moves (the same); parking each place's qualities and restoring them on a
+return (CONTESTIA 8/250 at −12 dB 8 → 6); gating the lock on the current block's quality (4/125 13 → 3); the hunt age
+reset on any move of a tone (OLIVIA never set the MFSK16 aside: its finder jitters inside it); for MFSK's join, the
+presence check applied to the character's first bit (MFSK32 lost a first "C" at −6 dB), an unbiased Viterbi start
+(still 6/40 wrong, THOR lost decodes), and the join rule on every finder move (MFSK16 at −6 dB 20/20 → 13/20); a 128-slot
+presence ring (THOR16 lost a character: symbols skipped by a phase change leave stale slots, and the ring size changes
+which — the original 64 is kept).
+
+The test was TIGHTENED, not loosened: a WHOLE over of each mode (not just its end) within three loops, nothing printed
+that was not sent (every passage between the "[MODE · Hz]" lines must be a piece of the over), and OLIVIA AUTO naming
+only the OLIVIA signal.
+
+False decodes after the fixes: white noise 60 min through EACH family's AUTO — nothing, never locked (and RTTY / a carrier
+60 s each, as before). ★ **build-web is still needed before any release**: the 10 runs used a locally built page
+(`scripts/build-web.mjs`, vibeserver rebuilt); `vibe_web_page.h` was put back, NOT committed. No web source changed here.
 
 ## RESUME HERE (updated 2026-10-31 ≈ 08:30 UTC, after the fourth run: SAME/SELCAL web keys, MFSK/OLIVIA/CONTESTIA/THOR)
 
