@@ -41,7 +41,7 @@ benches' and tests' synthetic signals.
 
 | Decoder | Pi 2 before → after (est. % of one core) | Change |
 |---|---|---|
-| **ISM + LoRa** (433.92, Stuart's capture) | ~307 % → ~157 % (two threads) | **−49 %** |
+| **ISM + LoRa** (433.92, Stuart's capture) | ~307 % → ~157 % (two threads) | **−49 %**; then split across six threads, no thread over 49 % on the real Pi 2 ([below](#ism-mode-on-the-pi-2-split-across-threads-2026-10-31)) |
 | **NDB skimmer** (192 kHz) | ~15 % → ~8.8 % | **−42 %** |
 | **ADS-B** (FlightAware 2.4 MS/s) | ~27 % → ~17 % | **−37 %** |
 | **JTTY** | ~28 % → ~19 % | **−33 %** |
@@ -264,9 +264,253 @@ bit-identical and needs its own validation.
 6. **The digi_* wiring (Band spots: `digi_spotter`, `digi_tuner`)** is the decoders-wave-2 branch's. Not profiled
    here. Mac `dec_ft8band` is 0.7 % of a core, the heaviest benchmark decoder row. It is worth a Pi 2 count once
    that branch has merged.
-7. **ISM mode on a Pi 2 is still ~1.5 cores** at 2.4 MS/s with the 433 plan, even after −49 %. PFFFT (~25 %) and the
-   LoRa search are what remain. Worth a Pi 2 default (fewer LoRa channels, or LoRa off by benchmark) rather than more
-   SIMD.
+7. ~~**ISM mode on a Pi 2 is still ~1.5 cores** at 2.4 MS/s with the 433 plan, even after −49 %.~~ **Done
+   differently**: the work is split across threads (and steady emitters are held), measured on the real Pi 2. See
+   [ISM mode on the Pi 2: split across threads](#ism-mode-on-the-pi-2-split-across-threads-2026-10-31).
+
+## ISM mode on the Pi 2: split across threads (2026-10-31)
+
+Stuart's Pi 2 (192.168.86.129, the minimum spec) on ISM 433 at a 2.0 MHz span, measured live from `/proc` before this
+work (v12-experimental, without the audit's savings): the whole server at 216 % of a core, one decoder thread at 106 %
+(saturated, so bursts were lost), another at 29 %, `vibe-dsp` 38 %, `vibe-spec` 31 %, `vibe-rtl` 10 %. The health
+chip said "too heavy". The ISM panel showed 248 bursts, 247 of them unidentified, and the waterfall had steady vertical
+lines across 433–434.8 MHz. Stuart: those lines are because 433 is well out of that antenna's range ("OUTSIDE ANTENNA
+RANGE"), so they are spurs and pickup, not signals. Hosts with poor antennas will look like this, so it is a real load
+case.
+
+**Goal:** no single ISM thread over about 60–70 % of a Pi 2 core at the 433 plan's full span, with decodes unchanged.
+
+### What the live figures could not say
+
+- **Neither decoder thread had a name or a priority.** Both were started from the connection thread that switched
+  ISM mode on, so `top` showed them as `vibe-conn` at nice 0. That put them level with the connection threads, above
+  spectrum, against the priority rule (Network > Audio > Spectrum > Decoders).
+- **So which thread was 106 % is not known.** The offline measurements below show that LoRa is the heavier of the two
+  on the default set. On the build measured live (before the audit) it was heavier still. The 106 % thread may well
+  have been LoRa, not the sensor decoder.
+
+### Profile (Pi 2, `perf stat` and stage timers, `nice -n 10`)
+
+Built with `-DVIBE_ISM_PROF` (`ism-offline` prints each stage), on Stuart's Pi 500 recording
+`pi500-rtl4-433920-2400k-30s.u8` (2.4 MS/s), on the Pi 2 itself. % of one core in real time.
+
+| Stage (one thread before) | Pi 500 capture | hog-heavy capture |
+|---|---|---|
+| copy into the ring + overload meter | 7.8 | 7.1 |
+| detector (FFT, floor, groups) | 8.7 | 8.3 |
+| channel mixing (each burst's channel) | 23.7 | 39.0 |
+| slicing (OOK/FSK run lists) | 24.9 | 61.9 |
+| protocol decoders | 0.9 | 1.4 |
+| **sensor front end, one thread** | **~66** | **~118** |
+
+- **Steady emitters.** On the Pi 500 capture, 15 channels ran the full 1.6 s limit. They were two wandering emitters
+  near 433.27 and 434.82 MHz, hit in about half the detector frames over a ±30 kHz spread. The floor cannot absorb
+  them because they move between bins. Each was cut at 1.6 s and re-opened on the next frame, for ever. They held 43 %
+  of the samples mixed, and their 1.6 s slices were most of the slicing.
+- **The hog-heavy case** is that recording with six such emitters added across the band (`tools/ism-bench/add-hogs.cpp`,
+  twice the recording's RMS). Before the changes, 3.2 of the 4 channels were busy on average. One thread needed ~118 %:
+  the live symptom.
+- **The decoders themselves are under 1.5 %.** The cost is the front end.
+
+**LoRa, on its own thread before** (Pi 2, inline, `VIBE_ISM_PROF`, the default set the server picks on armhf), % of
+one core:
+
+| Part | 433 default (2 channels, 2 detectors) | 868 default (5 channels, 20 detectors) |
+|---|---|---|
+| capture FFT (2048 points every 1536 samples) | 35.9 | 41.3 |
+| each channel's filter + inverse FFT | 10.9 | 22.8 |
+| rotation + residual NCO | 2.3 | 5.0 |
+| resampler to the chip rate | 3.5 | 7.8 |
+| detectors | 3.0 | 29.6 |
+| **LoRa, one thread** | **~59** (70 in real time) | **~110** (101 in real time, dropping) |
+
+LoRa was always on its own thread, and after the sensor split it was the heaviest one in ISM mode. On 868 it could not
+keep up at all.
+
+### What changed
+
+1. **The front end in three stages** (`vibe_ism.h`), each its own class:
+   - `Detector` decides where each burst is, and when its channel opens, is promoted, is cancelled or closes. It says so
+     as `ChanEvent`s at sample positions and mixes nothing. It no longer copies the capture: each FFT window is read
+     from the block, and the overload meter is a vector max (`absPeakRun`, NEON / SSE2 / scalar, exact in any order).
+   - `ChanMixer` follows those events over the same samples and hands each closed channel on as a `RawBurst`.
+   - `FrontEnd::finish` is the slicer, unchanged.
+
+   `FrontEnd` keeps its API and runs the three inline. A channel's output depends only on the samples it covers and its
+   frequency, never on when it was mixed, so the bursts are the same bit for bit.
+2. **The service runs them on three threads** (`vibe_ism_service.h`), each fed by a bounded queue that drops its OLDEST
+   work and counts it:
+   - `vibe-ism`, the detector: the one stage that must keep real time. Decoder rung, nice 10.
+   - `vibe-ism2`, the mixer: half a second of work samples may wait.
+   - `vibe-ism3`, the slicer, decoders, device list and gallery: four of the longest channels and a second more may wait.
+
+   The later two sit one notch lower (new `vibeDecoderLagThread`, nice 12; on the Mac, UTILITY −4). On one core, or a
+   box the DSP already fills, the detector gets its time first, and what gives way is the stage built to give way.
+3. **LoRa in three stages too** (`vibe_lora.h`, `vibe_lora_service.h`). The channeliser's block is now three parts,
+   run in block order:
+   - `vibe-lora` (decoder rung): `feedSpectra`, the capture FFT and each channel's bins × its filter;
+   - `vibe-lora2`: `deliver`, each channel's inverse FFT, the block's phase, the residual NCO and the resampler;
+   - `vibe-lora3`: `pushOut` and the detectors.
+
+   The last two sit one notch lower. Half a second of work may wait before each; past that the oldest goes, counted in
+   LoRa's `"dropped"`. A block dropped before `deliver` still moves each channel's NCO phase on, so the channel stays on
+   frequency. Inline, `feed()` runs all three parts in turn: the same arithmetic in the same order.
+4. **A hog is held, not re-opened** (`Detector`, `FeConst::kHoldQuietS`):
+   - When a channel runs the full 1.6 s, its frequency is held. Detections within 120 kHz refresh the hold and open
+     nothing, until none has been seen there for 0.2 s.
+   - A detection 6 dB over the hog's own peak still opens a channel of its own.
+   - **No burst is lost by it.** While the hog's channel was open, any burst within 120 kHz was already folded into it.
+     The splatter rule also treated anything 25 dB under an open hog channel as its splatter, anywhere in the band, so
+     hogs used to hide weak bursts band-wide. Those now get channels.
+5. **Every thread is named and ranked:** `vibe-ism`, `vibe-ism2`, `vibe-ism3`, `vibe-lora`, `vibe-lora2`.
+6. **The report says more.** `"drops":[capture, work, channels]` gives what each stage lost; `"dropped"` (their total)
+   still feeds the health pill's "too heavy". `"carriers"` is the number of frequencies held right now.
+7. **Memory stays bounded**, and the worst case applies only while a stage is behind. In order:
+   - half a second of capture before the detector, and half a second of work samples before the mixer;
+   - before the slicer, four 1.6 s channels and a second more. That baseband was already in memory while those
+     channels were open, before the split as well; the bound only limits how long it may wait.
+
+   In all, ~34 MB at 2.4 MS/s on 433 and ~48 MB on 868's wider channel, plus LoRa's half second (~10 MB). Normally the
+   queues are near empty.
+
+### Before and after on the Pi 2 (real time, per thread)
+
+`ism-offline --realtime` runs the server's own `vibeism::Service` (its threads, queues and priorities), fed at the
+capture's own pace in the radio's 32 ms blocks. Thread CPU comes from `/proc/self/task`. "Old" is the same harness built
+against the headers from before the split (`-DVIBE_ISM_OLD_SERVICE`), so the comparison is like for like. LoRa runs the
+set the server picks on armhf with no benchmark yet (the default tier). 2.4 MS/s; the live Pi ran 2.0 MS/s, which is
+about 17 % lighter. The feeding thread (u8 to float, the server's `vibe-rtl` / `vibe-dsp` work) is listed apart. % of
+one core.
+
+**433, Stuart's Pi 500 capture** (30 s; a repeat run agreed within 0.8 points on every thread):
+
+| Thread | Old | Split, no hold, LoRa on one thread | **Final** |
+|---|---|---|---|
+| sensor worker (one thread) | **63.0** | — | — |
+| `vibe-ism` detector | — | 11.3 | 11.3 |
+| `vibe-ism2` channels | — | 27.6 | 15.8 |
+| `vibe-ism3` slicer + decoders | — | 23.8 | 9.3 |
+| LoRa (one thread) | **70.1** | 70.0 | — |
+| `vibe-lora` / `lora2` / `lora3` | — | — | **47.1** / 16.7 / 4.6 |
+| feeder (u8 → float) | 24.3 | 22.7 | 22.7 |
+| **total** | **157.5** | 155.4 | **127.5** |
+| drops | 0 | 0 | 0 |
+
+**The hog-heavy capture** (six wandering emitters added, `add-hogs … 2`). The old service drops 171 capture blocks in
+30 s: the live "too heavy".
+
+| Thread | Old | **Final** |
+|---|---|---|
+| sensor worker | **96.8** (171 blocks dropped) | — |
+| `vibe-ism` / `ism2` / `ism3` | — | 11.5 / 25.3 / **35.3** |
+| LoRa | 71.9 | 49.0 / 16.7 / 4.6 |
+| **total** | 197.1 (and 5 s of capture never processed) | **160.6**, nothing dropped |
+
+**Stuart's car-key capture** (60 s, 344 short bursts):
+
+| Thread | Old | **Final** |
+|---|---|---|
+| sensor worker | 32.3 (still **4 blocks dropped**: one long slice held it past its half-second queue) | — |
+| `vibe-ism` / `ism2` / `ism3` | — | 11.1 / 10.4 / 10.5, nothing dropped |
+| LoRa | 68.4 | 47.7 / 16.5 / 4.5 |
+| **total** | 125.5 | 125.5 |
+
+**868, the Pi 500 capture**, LoRa default set (five channels, twenty detectors):
+
+| Thread | Old | **Final** |
+|---|---|---|
+| LoRa (one thread) | **101.5**, 109 blocks dropped | `vibe-lora` **58.2** / `lora2` 36.3 / `lora3` 38.2, nothing dropped |
+| sensor worker | 17.8 | 11.0 / 6.8 / 0.5 |
+| **total** | 144.6 (incomplete: LoRa dropped) | 177.1 (all of it done) |
+
+**Every LoRa plan channel** (the owner's "lora+all"; never the Pi 2 default):
+
+| Case | Old (one LoRa thread) | **Final** (`vibe-lora` / `lora2` / `lora3`) |
+|---|---|---|
+| 433 (7 channels, 22 detectors) | 101.8, 265 blocks dropped | 66.9 / 57.2 / 42.5, nothing dropped |
+| 868 (13 channels, 42 detectors) | (not run: would be ~2 cores on one thread) | 67.2 / 81.3 / **83.7**, nothing dropped |
+
+- **The overhead of splitting is nil, measured.** The split without the hold totals 155.4 % against the old 157.5 %.
+  LoRa on three threads costs 68.4 % against 70.1 % on one. The total falls because the hold removes the hog churn.
+  Where the total rises (868), it is work the old service never did: it dropped it.
+- **Every ISM and LoRa thread is under one core with headroom** on the defaults: the heaviest is `vibe-lora` at 47–49 %
+  on 433 and 58 % on 868. The sensor threads are at most 35 % (the hog case).
+- **Instruction counts barely move.** The threaded runs need 2–4 % more instructions than inline (copies and queues).
+  They run at a lower IPC (0.46 against 0.52 when every stage runs flat out at once), because the stages share the
+  Cortex-A7's 512 KB L2.
+
+### Decodes: identical
+
+- **`ism-offline --bursts` over the three Pi 500 captures, inline:**
+  - against the base build (`cb0fabfd4`): identical until the hold (commit 3 of the series), on the Mac (NEON and
+    `VIBE_FORCE_SCALAR`) and on the Pi 2 itself (NEON and scalar, the 640 µs ARM hop);
+  - with the hold: decodes identical on all three (0, 1, 0). Only the 433 capture's burst list changes: the emitters'
+    churn goes, and a few weak bursts the splatter rule had hidden appear (none decodes).
+- **The service's threads equal inline, burst for burst** (`ism-offline --threads`, lossless, against inline
+  `--band-only`). This holds on all three captures on the Mac (NEON and scalar) and on the Pi 2.
+- **test-ism** (160 checks), all passing. It now also checks:
+  - the three threads against inline;
+  - a block dropped before the mixer (the channel across the hole is abandoned, is never stitched, and is counted;
+    every later burst is unchanged);
+  - the hog hold with two wandering emitters and eight sensors: 1.6 s channels 12 → 4, readings 7 → 7, one sensor 20 dB
+    over a hog inside its hold still decoding.
+- **Unit tests identical to base otherwise:**
+  - test-wmbus (311), test-ism-gallery (56), on the Mac and on the Pi 2. On the Pi, test-wmbus has one failure, "S1:
+    frequency 868281666", which the base build has too.
+  - test-lora, which now also checks that its two threads give the inline engine's 11 frames, field for field.
+  - NEON = scalar on every output. i686 SSE2 (qemu): test-ism 160/160, the keyfob capture identical to base, and the 433
+    capture's bursts identical to the Mac NEON build.
+- **End to end against the new server binary (Mac):** `test-server-ism` 34/34, `test-web-ism` 25/25,
+  `test-server-ism-gallery` 33/33, `test-server-lora` 18/18, `test-web-lora` 21/21, all silent (`--mute-audio`).
+  `test-web-ism-gallery` fails one check: it expects the gallery chips "ALL NAVTEX RTTY WEFAX SSTV FT8 CW ISM", and the web
+  client now shows more (DIGITAL SPOTS, PSK, NDB, AIS, APRS, DSC, SITOR-A). That expectation is stale; this work touches
+  no web code.
+- **Builds:** the server on the Mac (`make -j2`) and cross-built for armhf (`-DVIBESERVER_ALLOW_NO_TUNNEL=ON`: a compile
+  check, not a package).
+
+### Single core, weak boxes, Android
+
+- **The same code runs in the Android app's server** (`local_sdr_shim.cpp` → `vibe_ism_service.h`); nothing in it is
+  Linux-only. The Android affinity sweep (`vibe_affinity.cpp`) already moves any non-frame thread off the frame cores,
+  and these threads take its default.
+- **On one core** the stages share it. The detector's rung (nice 10 against the later stages' 12) gets it its time
+  first, so detection keeps real time and a later stage lags or drops, counted. Nothing waits for anything: every queue
+  drops its oldest work and has a size limit.
+- **Not measured:** an actual single-core box or a 32-bit phone (see below).
+
+### What Stuart should check live (after a build reaches the Pi 2)
+
+1. **`top -H` (or `~/bench/v12/threadcpu.sh 30`) in ISM 433.** Expect `vibe-ism`, `vibe-ism2`, `vibe-ism3`, `vibe-lora`,
+   `vibe-lora2` and `vibe-lora3` at nice 10 / 12, and no `vibe-conn` doing decoder work. Expect each under ~60 %;
+   `vibe-lora` should be the heaviest, at ~40–50 % at the live 2.0 MHz span.
+2. **The health chip should stop saying "too heavy"** in ISM 433 at full span. If it does say it, `/vibeserver.json`
+   or the ISM report's `"drops":[capture, work, channels]` (and LoRa's `"dropped"`) says which stage fell behind.
+3. **The report's `"carriers"`** counts the spurs being held. On the Pi 2's out-of-range antenna, expect a few.
+   "Unidentified" should fall well below the 247 of 248 seen, because the hog churn no longer makes bursts.
+4. **A real sensor near one of those steady lines should still appear.** For example, a key fob pressed beside a spur:
+   if it is clearly stronger than the spur, it gets its own channel.
+
+### Questions for Stuart
+
+1. **The ARM detector hop.** 32-bit ARM looks every 640 µs instead of 320 µs (an earlier CPU saving). On Stuart's
+   car-key capture that misses the one Oregon decode the 320 µs hop finds. The detector is now its own thread at ~11 %
+   of a Pi 2 core, so 320 µs would cost about another 8–10 points there. Restore it on ARM? Not changed here: decodes
+   had to stay as they were.
+2. **"lora+all" on 868 on a Pi 2** keeps up now, but its detector and channel threads are at 81–84 %. Keep it as
+   owner-only, or show a warning when it is chosen on a Pi 2?
+3. **`test-web-ism-gallery`'s chip list** is stale (see above). Update the expected chips?
+
+### Not tested
+
+- **Live:** no server was deployed or reconfigured. The live figures above are from before; the after figures are the
+  offline real-time harness on the Pi 2, which runs the server's own `vibeism::Service` but not its DSP, spectrum or
+  network threads. The Pi's live server was idle (0 listeners) during every run, but it was running.
+- **Android:** the app's server was not built (no gradle). The code is the same headers the Mac and armhf server builds
+  compiled, NEON / SSE2 / scalar throughout.
+- **A single-core box and a 32-bit 1 GB phone:** reasoned about, not run.
+- **x86 SSE2** was checked for identical output under qemu-i386, not timed.
+- **868 meters (wM-Bus) through the threads:** the 868 capture holds no meter. test-wmbus covers the meter decoder
+  (unchanged, identical), and test-server-ism's meter clip passed through the threaded server.
 
 ## Not tested
 
@@ -286,6 +530,10 @@ bit-identical and needs its own validation.
 ## Recordings and servers
 
 - No recording sessions were made, and no server (UberSDR, Pi 500, Lenovo, Pi 2) was touched.
+- **The ISM thread split** ran its benches on the Pi 2 itself (192.168.86.129), in `~/bench/v12/` only, through the
+  gated `run.py` (`nice -n 10`, 0 listeners and no live throttle bit before and during each run). Nothing was installed,
+  restarted or reconfigured. Its only new input is synthetic: `hog433.u8`, the Pi 500 433 capture with six emitters
+  added by `tools/ism-bench/add-hogs.cpp` (kept in the Mac's cache, not in `~/VibeSDR-test-audio`).
 - Every input was already in `~/VibeSDR-test-audio`, or was a bench's or test's own synthetic signal:
   - ADS-B `flightaware-…-2.4msps.u8`;
   - ISM `pi500-rtl4-*` ×3;
