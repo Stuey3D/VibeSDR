@@ -28,10 +28,14 @@ const BLOCKABLE: { id: string; label: string }[] = [
   { id: 'spots', label: 'Digital spots / map' },
   // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
   { id: 'spotsband', label: 'Digital spots: Band' },
+  /* ★★ V12 synchronous AM (docs/v12/AM-SYNC.md) — on the setup page since they shipped; here too now, because the
+   *  benchmark can start one OFF (applyBench) and the owner must be able to switch it back on from this screen. */
+  { id: 'sam', label: 'SAM' }, { id: 'sau', label: 'SAM-U' }, { id: 'sal', label: 'SAM-L' },
+  { id: 'ecssu', label: 'ECSS-U' }, { id: 'ecssl', label: 'ECSS-L' }, { id: 'amst', label: 'AM Stereo (C-QUAM compatible)' },
 ];
 /** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
  *  need IQ, which an Icom's audio is not. */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds', 'spotsband'];
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds', 'spotsband', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];   // ★ the Icom demodulates itself
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
@@ -473,6 +477,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     if (zoom && zoom.grade === 'red' && zoomSpec) {
       setZoomSpec(false); AsyncStorage.setItem(K.zoomSpectrum, '0');
       notes.push(`Keep the spectrum sharp is off — zooming in measured ${Math.round(zoom.pct)}% of a core here. Switch it on to use it anyway.`);
+    }
+    /* ★★ V12 DEMODULATORS — the same rule as vibe_setup_page.h benchApplyDefaults: a SAM / SAM-U/L / ECSS-U/L / AM stereo
+     *  listener that measured below green starts that mode off; the owner can switch it back on above. */
+    for (const [rid, sw] of [['lk_sam', 'sam'], ['lk_sau', 'sau'], ['lk_sal', 'sal'], ['lk_ecssu', 'ecssu'], ['lk_ecssl', 'ecssl'], ['lk_amst', 'amst']]) {
+      const r = row(rid);
+      if (!r || r.grade === 'green' || r.grade === 'none' || new RegExp('(^|,)' + sw + '(,|$)').test(bm)) continue;
+      bm = bm ? bm + ',' + sw : sw;
+      setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm);
+      notes.push(`${String(r.label).replace(/^Locked range, per | listener$/g, '')} is off — one listener measured ${Math.round(r.pct)}% of a core here. Switch it on to offer it anyway.`);
     }
     if (scan && scan.grade === 'red' && dabScanLabels === 1) {
       setDabScanLabels(0); AsyncStorage.setItem(K.dabScanLabels, '0');

@@ -2113,6 +2113,17 @@ function benchApplyDefaults() {
     $("zoomSpectrum").checked = false;
     benchNote($("zoomSpectrum"), "Keep the spectrum sharp is off: zooming in measured " + Math.round(zoom.pct) + "% of a core here. Tick it to use it anyway.");
   }
+  /* ★★ V12 DEMODULATORS (2026-10-31, docs/v12/AM-SYNC.md §12): SAM, SAM-U/L, ECSS-U/L and AM stereo each have a per-
+   *  listener row; one that measured below green starts its mode OFF on a fresh setup — offered, never hidden: the
+   *  owner can tick it back. Same rule as ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS). */
+  for (const [rid, sw] of [["lk_sam", "sam"], ["lk_sau", "sau"], ["lk_sal", "sal"], ["lk_ecssu", "ecssu"], ["lk_ecssl", "ecssl"], ["lk_amst", "amst"]]) {
+    const r = row(rid), box = document.querySelector('input[data-mode="' + sw + '"]');
+    if (!r || r.grade === "green" || r.grade === "none" || !box || !box.checked) continue;
+    box.checked = false;
+    box.dispatchEvent(new Event("change"));
+    benchNote(box, r.label.replace(/^Locked range, per | listener$/g, "") + " is off: one listener measured " + Math.round(r.pct)
+              + "% of a core here. Tick it to offer it anyway.");
+  }
   if (scan && scan.grade === "red" && $("dabScanLabels")) {
     $("dabScanLabels").value = "0";
     benchNote($("dabScanLabels"), "The station-label scan is off: it measured " + Math.round(scan.pct) + "% of a core here.");

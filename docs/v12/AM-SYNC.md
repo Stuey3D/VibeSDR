@@ -522,3 +522,31 @@ handling anyway. Agreeing with the analysis, nothing was measured.
 | 12:25–12:45 | this Mac only | a local VibeServer on loopback with a noise / recorded rtl_tcp (protocol check, web pictures) | stopped |
 
 No VibeServer of Stuart's (Pi 500, Lenovo, Pi 2) and no Android server was connected to, tuned or touched; no adb.
+
+## 12. The setup benchmark rates every new demodulator and AUTO (2026-10-31)
+
+Stuart: *"all these decoders need their own lines in the initial setup benchmark too"*. The benchmark already rated
+demodulators (the scenario rows and the four "Locked range, per … listener" rows), so these join that section, in the
+same style — the listener's whole chain (its channel extract, demodulator, AGC, resampler, Opus encode where the build
+has it) through `runListener`, with the server's own widths (`paramsFor`):
+
+- **Per listener**: `lk_sam`, `lk_sau`, `lk_sal`, `lk_ecssu`, `lk_ecssl`, `lk_amst`, and `lk_cw` (CW had no row). AUTO as a
+  new listener gets it (ON). Fed an AM signal WITH a carrier (programme at 700 / 1700 Hz, a 25 Hz tone for AM stereo's
+  pilot detector, a neighbour 5 kHz up for AUTO to act on); CW gets the carrier 700 Hz above its dial. The four old rows
+  keep the FM station they always had, so their figures do not move.
+- **AUTO bandwidth's own cost**: `auto_am`, `auto_ssb`, `auto_cw`, `auto_wfm` — the same listener chain with AUTO on minus
+  AUTO off (WFM: the IF narrowed to 110 kHz by `setAutoBandwidth` against wide open, since the shim decides WFM's AUTO and
+  applies it as a narrower IF). A difference of two measurements; under the noise it reads 0.
+- **Defaults**: each of SAM, SAM-U, SAM-L, ECSS-U, ECSS-L and AM stereo is an owner switch; a row below green starts its
+  mode OFF on a fresh setup, with the reason beside it — offered, never hidden (`benchApplyDefaults` on the setup page,
+  `applyBench` in the app — the app's switch list gains the six modes, not on an Icom, which demodulates itself). AUTO
+  has no owner switch (§11.2), so its rows set nothing: they say what it costs. CW's row sets nothing either (CW-U/L
+  stay as they were).
+- The progress bar's step count was short (it counted 6 decoder rows after 8 existed); it now counts every row.
+
+**Mac (M-series), `vibeserver-bench 6` offline, no ADS-B clip: 26.2 s before, 27.0 s after.** Every new row reads
+0.0–0.2 % of a core there (the table rounds to 0.1 %); the Pi 2 figures will be far higher (`PI2-REAL-CPU.md`: the
+Cortex-A7 runs this NEON code at 0.35–0.48 IPC) — the benchmark measures the box it runs on, so nothing is scaled. **Not
+run on a Pi or a phone.** The decoder rows (every decoder its own line) are on `v12-decoders-wave2`
+(DECODERS-WAVE2.md section 22); the two branches meet in `vibe_benchmark.h`'s step count and the readers' rule blocks.
+

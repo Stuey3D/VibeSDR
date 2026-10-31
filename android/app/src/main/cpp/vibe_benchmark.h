@@ -246,7 +246,7 @@ struct ListenerAudio { OpusAudioEncoder enc; std::vector<int16_t> i16; std::vect
  *  own, and on a real server they land on whichever core is free. */
 inline Result runListener(const std::string& id, const std::string& label, double fs, int fftSize, int chanBins,
                           double chanRate, RxPipeline::Mode mode, double bw, const std::vector<cf32>& iq,
-                          double seconds) {
+                          double seconds, const std::function<void(RxPipeline&)>& setup = nullptr) {
     Result r; r.id = id; r.label = label; r.rate = chanRate;
     /* ★★★ BEFORE THE PIPELINE IS BUILT. Taken after start(), its worker threads are already in `before` and are
      *  skipped as "not ours" — which silently dropped the demodulator AND the Opus encode from every locked-range
@@ -287,6 +287,7 @@ inline Result runListener(const std::string& id, const std::string& label, doubl
 #endif
     pipe.start(chanRate, 1024, 10.0, 48000, cb);
     pipe.setTune(0.0, mode, bw);
+    if (setup) setup(pipe);   // ★ a row's own switch (AUTO bandwidth on or off — see the AUTO rows in runBenchmark)
     std::vector<cf32> slice((size_t)chanBins);
     vibedsp::Channelizer::ExtractCtx ectx;
     const int centreBin = fftSize / 4;                  // a channel off centre, as a listener's would be
@@ -377,7 +378,10 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         auto& p = benchProgress();
         p.running.store(true);
         p.step.store(0);
-        p.steps.store(1 + 1 + 7 + 1 + 4 + 6 + (moreRows ? moreRowSteps : 0));   // ★ 7 scenarios + keep-sharp zoom; DAB's 2, + ADS-B's 2 where the host adds them
+        // ★ 7 scenarios + keep-sharp zoom; the 4 locked-range listeners + the 7 V12 demodulators (SAM … CW) + the 4 AUTO
+        //   bandwidth rows; the 8 decoder rows (it said 6 after two more had joined — the bar ran past its end); DAB's 2,
+        //   + ADS-B's 2 where the host adds them.
+        p.steps.store(1 + 1 + 7 + 1 + 4 + 7 + 4 + 8 + (moreRows ? moreRowSteps : 0));
         { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
     }
     /* ★★★ FIRST, WHILE THE MACHINE IS COOLEST: the all-core clock calibration the throttle snail is
@@ -474,6 +478,75 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
                                       wide, secondsPerScenario));
             perListener[l.id] = res.back().pct;
         }
+        /* ★★★ THE V12 DEMODULATORS, EACH ITS OWN ROW (2026-10-31, Stuart: "all these decoders need their own lines in the
+         *  initial setup benchmark too"; docs/v12/AM-SYNC.md §12). The same per-listener chain as the four above, with the
+         *  server's own widths (local_sdr_shim.cpp paramsFor) and AUTO bandwidth as a new listener gets it (ON). On an AM
+         *  signal with a carrier — a synchronous detector fed the FM station above would hunt for a carrier that is not
+         *  there and measure a loop that never locks — with a neighbour 5 kHz up for AUTO to act on; CW gets a carrier
+         *  700 Hz above its dial (the beat note). Each mode is one the owner can switch off on the setup page: a row
+         *  below green starts it off on a fresh setup (benchApplyDefaults / applyBench), offered, never hidden. */
+        auto amSig = [&](double off) {
+            const int n = (int)fs;
+            std::vector<cf32> v(n);
+            double ph = 0, pn = 0;
+            for (int i = 0; i < n; ++i) {
+                const double t = i / fs;
+                const double m = 0.4 * std::sin(2 * M_PI * 700.0 * t) + 0.25 * std::sin(2 * M_PI * 1700.0 * t + 1.0)
+                               + 0.05 * std::sin(2 * M_PI * 25.0 * t);   // ★ programme, and a pilot-like 25 Hz for AM-ST
+                ph += 2 * M_PI * off / fs;          if (ph > 2 * M_PI) ph -= 2 * M_PI;
+                pn += 2 * M_PI * (off + 5000.0) / fs; if (pn > 2 * M_PI) pn -= 2 * M_PI;
+                v[i] = cf32((float)(0.3 * (1 + m) * std::cos(ph) + 0.08 * std::cos(pn)),
+                            (float)(0.3 * (1 + m) * std::sin(ph) + 0.08 * std::sin(pn)));
+            }
+            return v;
+        };
+        const double chanOff = fs / 4;   // ★ the extract's channel: centreBin = fftSize / 4 (runListener)
+        const auto amIq = amSig(chanOff), cwIq = amSig(chanOff + 700.0);
+        auto listener = [&](const char* id, const char* label, M mode, double bw, const std::vector<cf32>& iq,
+                            const std::function<void(RxPipeline&)>& setup) {
+            benchStep(label);
+            if (progress) progress(N, N, label);
+            int chanBins = 64;
+            const double need = std::max(bw * 2.5, 24000.0);
+            while (chanBins < fftSize && fs * chanBins / fftSize < need) chanBins <<= 1;
+            return runListener(id, label, fs, fftSize, chanBins, fs * chanBins / fftSize, mode, bw, iq, secondsPerScenario, setup);
+        };
+        struct Dm { const char* id; const char* label; M mode; double bw; };
+        const Dm dm[] = {
+            { "lk_sam",   "Locked range, per SAM listener",      M::SAM,       10000 },
+            { "lk_sau",   "Locked range, per SAM-U listener",    M::SAM_U,     10000 },
+            { "lk_sal",   "Locked range, per SAM-L listener",    M::SAM_L,     10000 },
+            { "lk_ecssu", "Locked range, per ECSS-U listener",   M::ECSS_U,     4500 },
+            { "lk_ecssl", "Locked range, per ECSS-L listener",   M::ECSS_L,     4500 },
+            { "lk_amst",  "Locked range, per AM stereo listener", M::AM_STEREO, 10000 },
+            { "lk_cw",    "Locked range, per CW listener",       M::CW,         1200 },
+        };
+        for (const auto& d : dm) {
+            res.push_back(listener(d.id, d.label, d.mode, d.bw, d.mode == M::CW ? cwIq : amIq, nullptr));
+            perListener[d.id] = res.back().pct;
+        }
+        /* ★★ AUTO BANDWIDTH'S OWN COST, per listener, in each mode that has it (AM-SYNC.md §11: WFM, the AM family, USB /
+         *  LSB, CW). The listener rows above run it as served (ON); each row here is the SAME chain with AUTO on minus
+         *  AUTO off — what the switch adds. WFM's AUTO is decided by the shim and applied as a narrower IF
+         *  (setAutoBandwidth): its row is that IF narrowed to 110 kHz against wide open. No owner switch exists (AUTO is
+         *  the listener's), so these rows set nothing — they say what it costs. A difference of two measurements: a
+         *  figure under the noise reads 0. */
+        auto autoRow = [&](const char* id, const char* label, M mode, double bw, const std::vector<cf32>& iq) {
+            const bool wfm = mode == M::WFM;
+            Result on = listener(id, label, mode, bw, iq, [wfm](RxPipeline& p) {
+                if (wfm) p.setAutoBandwidth(110000.0); else p.setAmAutoBandwidth(true); });
+            const Result off = runListener(id, label, fs, fftSize, on.rate > 0 ? (int)std::lround(on.rate * fftSize / fs) : 64,
+                                           on.rate, mode, bw, iq, secondsPerScenario, [wfm](RxPipeline& p) {
+                if (wfm) p.setAutoBandwidth(0.0); else p.setAmAutoBandwidth(false); });
+            on.pct = std::max(0.0, on.pct - off.pct);
+            on.threads.clear(); on.threads.push_back({ "AUTO on − off", on.pct });
+            on.hottest = "per listener";
+            res.push_back(on);
+        };
+        autoRow("auto_am",  "AUTO bandwidth, added per AM listener",  M::AM,      10000, amIq);
+        autoRow("auto_ssb", "AUTO bandwidth, added per SSB listener", M::SSB_USB,  2700, amIq);
+        autoRow("auto_cw",  "AUTO bandwidth, added per CW listener",  M::CW,       1200, cwIq);
+        autoRow("auto_wfm", "AUTO bandwidth, added per WFM listener", M::WFM,    200000, wide);
     }
     /* ★★★ THE DECODERS, EACH ON THIS BOX (B6) — see vibe_benchmark_decoders.h. Their rows join the
      *  table like any other; the recommendation below is what becomes the owner's decoder limit. */
