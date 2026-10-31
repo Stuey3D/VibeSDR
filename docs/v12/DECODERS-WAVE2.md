@@ -181,10 +181,87 @@ About updated. FST4 window was narrowed to 1.55 kHz so 2200 m's 136.0 dial stays
 
 ---
 
+## 3. MSK144 — DONE (2026-10-31)
+
+Files: `decoders/digimodes/msk144_code.{h,cpp}` (frame, CRC, code), `msk144_tables.h` (generated checks),
+`msk144_decoder.{h,cpp}` (receiver), `msk144.h` (the Digital-spots mode), `ldpc_small.{h,cpp}` + `vmath4.h` (a shared
+small-LDPC BP + OSD, SIMD — FST4 moves onto it next), `digi_bands.h` ("MSK144" rows), `tools/msk144-bench/` (bench,
+synth, `qemu.sh`), `vibeserver/test-msk144.cpp` (in `scripts/run-tests.sh`).
+
+### Clean room
+No WSJT-X source read. `msk144code` (WSJT-X 2.7.0, black box, Colima container) prints a message's 144 "channel
+symbols". 400 messages (272 telemetry words: 200 random, the 71 single-bit words, zero; 128 standard / compound / free
+text) → solved in scratch Python (not shipped):
+- the printed symbols are TONES (1 = upper). A tone sequence synthesised as CPFSK ±500 Hz around 1500 Hz decodes in jt9
+  only with 1 = +500 Hz — that settled the polarity (jt9 used only to compare decodes);
+- tone i = C[i] ⊕ C[i+1 mod 144], C = frame ⊕ 0011 0011 … (period 4). Equivalently offset-QPSK with half-sine pulses:
+  each frame bit is the sign of one matched-filter sample, on I (even bits) or Q (odd), against ONE carrier phase for
+  the whole transmission (verified: 144/144 bits at the ideal instant on a clean synthetic frame);
+- frame: sync 0x72 at bits 0–7 and 56–63; codeword bits 8–55 and 64–143; systematic: the 77-bit FT8-family payload
+  (unscrambled), CRC-13, 38 parity;
+- CRC-13 = 0x15D7 (x¹³+x¹²+x¹⁰+x⁸+x⁷+x⁶+x⁴+x²+x+1), register 0, MSB first over 77 bits + 6 zeros: all 400;
+- the (128,90) LDPC: the dual of the observed codewords is 51-dimensional (13 CRC + 38 LDPC); an information-set
+  search for sparse dual vectors found EXACTLY 38, weight 10–11, rank 38, every column weight 3. All 400 re-encode.
+- ft8_lib packs a few messages differently from WSJT-X (free text that looks like a call, "RR73", two compound CQs):
+  22 of the 398 tone sequences differ for that reason only — irrelevant to receiving (we unpack).
+- MSK40 (short hashed-call messages) not decoded: no callsign for a spot.
+
+### The receiver (free-running)
+12 kHz audio → NCO at 1500 Hz + FIR ÷2 → 6 kHz complex (3 samples a bit) → 5-tap half-sine matched filter. Every 1 s
+an analysis of the last 1.5 s: for 9 coarse offsets (±200 Hz, 50 Hz steps; rotation by a table, SIMD) the 8-bit sync
+correlation at every sample (adds/subtracts only, SIMD four starts at a time); frame score = both words' power over
+the noise (the matched filter's 20th-percentile power, median of 8 windows). Folded at the frame period: runs of 1, 2,
+4, 8, 16 frames at each phase against Gamma tails (false alarm 1e-5 a trial) — SIMD four phases at a time with a
+vmax screen, so the exact tail is computed only for groups that cross. Top 6 candidates → timing to a fraction of a
+sample → frequency from the FFT of the run's SQUARED bits (data-free; peak at 2Δf; ±75 Hz in one FFT, parabola) →
+each bit weighted by the ping's ENVELOPE at its instant (maximal-ratio combining in time; a neighbour frame each side,
+so a ping's ragged ends count) and summed coherently over the frames → LLRs → BP (40 iterations, early give-up) →
+CRC-13 → plausible message → guards (≤ 45 hard errors of 144, agreement ≥ 0.3). Second detector: each frame its own
+phase (a drifting ping). The two sync words are identical: a ping holding one word of each of two frames is tried at
+both readings (start ±168 samples). One report per message per 30 s.
+
+**OSD is OFF.** With only a CRC-13 the trials of OSD cannot be vetted: in a 240-ping sweep 19 of 31 OSD decodes were
+wrong (plausible-looking calls). BP alone: 0 false in 48 h of noise (429 k BP attempts) and 0 wrong in every sweep.
+
+### Numbers
+| | |
+|---|---|
+| Sensitivity, 50 % (synthetic CPFSK, AWGN, 40 trials/point, random frame offset and ±50 Hz) | one 72 ms frame ≈ +1.3 dB · 4 frames ≈ −5.3 · a 1 s ping (14 frames) ≈ −8.2 dB (2500 Hz) |
+| vs jt9 (black box, `jt9 -k -p 15 -F 100`, the SAME 180 files, 10/point) | 1 frame +3: jt9 8, ours 10 · 0: 1 / 1 · 4 frames −3: 8 / 9 · −6: 0 / 1 · 1 s −6: **0 / 8** · −9: **0 / 5** → equal on single frames, ≈ 1.5 dB better on 4 frames, ≈ 3–4 dB better on long pings (coherent combining over the ping) |
+| False decodes | white noise 48 h (BP only): **0**; 8 h after the SIMD fold: 0; every sweep: 0 wrong |
+| SNR | calibrated +2.3 dB; within ±1 dB on short pings; a ping filling a whole window reads low (its own power in the noise floor) |
+| Frequency | ≤ 2 Hz on one frame, ≤ 0.35 Hz on a 1 s ping |
+| CPU Mac (M-series, whole receiver on noise) | 15.7 ms a minute (search + decodes 10 ms; mix + FIR 5.6 ms) → costVsFt8 ≈ 0.4 (ModeDef says 0.8 — margin for busy pings; refine after real-air use) |
+| CPU Pi 2 (qemu-arm count, `tools/msk144-bench/qemu.sh cpu 60`) | NEON 0.58 G instructions a minute of audio (the noise generator excluded), scalar 1.2 G → ≈ 0.8–1.1 s of a 900 MHz core a minute (≈ 1.5 %), ESTIMATE at 0.6–0.8 IPC |
+| SIMD | NEON = SSE2 = scalar by construction (q65_simd lanes, our own exp/log); Mac SIMD vs `SCALAR=1` builds: the 180 jt9 files and a sweep **bit-identical**. Vectorised: rotation, sync correlation, fold screen, BP check update (vmath4.h). GCC armhf compares: `vmath4.h`'s log uses one vcgtq — route through `neon_compat.h`'s fix when v12-decoder-simd-audit merges |
+| Memory | ≈ 1 MB per engine (window, 9 score arrays, FFT buffers) |
+
+### Clients
+Server Single + Band (free-running, gate 2 s, priority 100), web and app: spots `MSK144`, grey M (digiModes.ts had it).
+About: V12 note. DIGITAL-SPOTS.md row. Dials: digi_bands.h note (IARU R1 VHF Handbook 10.03 — downloaded and read
+2026-10-31: 6 m 50.320–380 MS centre + the plan's accepted legacy MGM below 50.300 where activity is (50.280); 4 m
+70.250 MS centre; 2 m MS MGM range 144.360–144.397; 70 cm 432.370 MS centre). test-band-slice / test-digi-spots pass.
+
+### Owed
+- **Real meteor pings.** Not validated on air: no server session was used (it was ≈ 04 UTC, few MSK144 operators
+  on, and no server was checked for a 6 m / 2 m antenna). A real capture on 50.280 at a morning peak, or during a
+  shower (Geminids 13–14 Dec), is owed.
+- The gate: a short weak lone ping does not light Band's 2 s activity gate. Measure with real pings; MSK144 may
+  want gate-off by default during showers (Stuart to decide).
+- MSK40 short messages; AP decoding with the operator's own call (we have none); averaging repeated pings of the
+  same message across periods (WSJT-X-style message averaging).
+- Android gradle / iOS `build_ios.sh` not compiled this session.
+
+### Questions for Stuart
+1. MSK144 dials: 50.280 (where it is) and 50.360 (where R1 put it) both run — keep both? 70.250 vs 70.230 on 4 m?
+2. Gate default for MSK144: Auto (now) or Always?
+
+---
+
 ## RESUME HERE — the queue from MSK144 on (not started)
 
-3. **MSK144** (`msk144code` is in the black-box kit; LDPC (128,90) + CRC; free-running, meteor pings; 6 m 50.260
-   (PSKReporter's active receivers 50.2614) / 50.320–50.380 (IARU R1 MS centre); 2 m 144.360 (US) — check R1).
+3. ~~MSK144~~ DONE (section 3). NEXT: FST4's gap to jt9 (OSD via ldpc_small + a GFSK-matched detector; Pi 2 count;
+   SIMD identity), then CTCSS/DCS.
 4. CTCSS/DCS — NOTE: the decoder host's audio is post-voice-filter in NFM VOICE (the 300 Hz high-pass cuts CTCSS by
    ≥ 40 dB: vibedsp.h setNfmVoice); the tone decoder needs the listener's RAW discriminator or its own FM
    discriminator on the per-client IQ tap (`iqTap` in local_sdr_shim.cpp) — outside RxPipeline as asked.

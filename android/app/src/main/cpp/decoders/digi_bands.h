@@ -37,6 +37,11 @@
 //     narrow capture to hold beside FT8's 432.174 — test-band-slice). LEFT OUT: 6 m (50.310–50.320 is the plan's
 //     EME centre of activity, but it is FT8's 50.313 and nobody was heard on Q65 there) and 23 cm (where most of the
 //     reports are: the Band list stops at 70 cm — Stuart to decide whether 23 cm joins it).
+//   • MSK144 (V12, 2026-10-31): the IARU Region 1 VHF Managers Handbook 10.03 (February 2026) — 6 m "50.320–380 MS
+//     centre of activity" (50.360, where MSK144 was designated in 2018) and 50.280, where nearly all European MSK144
+//     still is (the plan: "legacy usage for MGM below 50.300 is accepted"); 4 m "70.250 centre of activity MS"; 2 m the
+//     MS procedure's "MGM range of 144.360 to 144.397" (144.360, MSK144's frequency since 2018); 70 cm "432.370 meteor
+//     scatter centre of activity". Audio 200–2800 Hz above each dial (MSK144 sits at 1500 Hz ± 1.2 kHz).
 //   • 60 m WSPR is 5.3647 (inside the WRC-15 allocation 5351.5–5366.5 kHz that every region shares), not the older
 //     national 5.2872, which would stretch the 60 m passband to 73 kHz for one beacon frequency.
 //
@@ -123,6 +128,9 @@ inline const std::vector<Dial>& publishedDials() {
         // Q65 (V12 — EME/scatter; see the file note)
         {"Q65", "2m", 144115000}, {"Q65", "2m", 144120000}, {"Q65", "2m", 144180000},
         {"Q65", "70cm", 432065000}, {"Q65", "70cm", 432087000},
+        // MSK144 (V12 — meteor scatter; the IARU Region 1 VHF Handbook 10.03's MS segments, see the file note)
+        {"MSK144", "6m", 50280000}, {"MSK144", "6m", 50360000}, {"MSK144", "4m", 70250000},
+        {"MSK144", "2m", 144360000}, {"MSK144", "70cm", 432370000},
         // PSK31/63 (V12 — the PSK31 calling frequencies; 14.070 confirmed)
         {"PSK", "80m",   3580000}, {"PSK", "40m",  7040000}, {"PSK", "30m", 10142000}, {"PSK", "20m", 14070000},
         {"PSK", "17m",  18100000}, {"PSK", "15m", 21070000}, {"PSK", "12m", 24920000}, {"PSK", "10m", 28120000},
