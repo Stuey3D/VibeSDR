@@ -297,7 +297,7 @@ twiddle recurrence.
 
 ---
 
-## 4. CTCSS / DCS tone ID — ENGINE DONE, not wired to clients yet (2026-10-31)
+## 4. CTCSS / DCS tone ID — DONE, wired to server, app and web (2026-10-31)
 
 Files: `decoders/tone_id.{h,cpp}` (outside RxPipeline), `digimodes/vmath4.h` (+ branch-free `vatan2`, `signBit01`),
 `vibeserver/test-tone-id.cpp` (in `scripts/run-tests.sh`).
@@ -320,14 +320,33 @@ Files: `decoders/tone_id.{h,cpp}` (outside RxPipeline), `digimodes/vmath4.h` (+ 
   voice with no tone; DCS never read as CTCSS. Cost 0.13 ms a second of 24 kHz IQ on the Mac (≈ 0.013 %).
   SIMD = scalar: the whole test's output identical with `-DVIBE_FORCE_SCALAR`.
 
-### Owed (the wiring — deliberately not done tonight)
-- **Server**: in `local_sdr_shim.cpp` `feedOneClient`, beside the raw-IQ tap (`iqTap(c.get(), c->slice.data(), got)`),
-  feed a per-client `ToneId` while the listener is in NFM (create on NFM, `reset()` on retune), at `c->chanRate`;
-  push `{"type":"tone","label":"CTCSS 88.5 Hz"}` to that listener on `onChange`. Not RxPipeline. Cost per listener is
-  below the noise of that loop; if the thread-priority rule wants it off the DSP worker, hand the slice to the
-  decoder host's queue instead.
-- **Clients**: the VTS line's quiet suffix (DECODER-RESEARCH.md §CTCSS), app + web; the AGENTS.md copy rule applies
-  (tour/About mention it).
+### The wiring (done, second run of 2026-10-31)
+- **Where it is fed — one change from the plan above.** Not the raw slice beside `iqTap`: that slice is ≥ 2.5 × the
+  passband (≈ 31–62 kHz for a 12.5 kHz NFM channel), so a neighbouring channel inside it would capture the
+  discriminator, and it sits up to half a bin off the dial. Instead the PIPELINE's channel-IQ callback, which already
+  exists for DRM (`clientIqCb`, `cb_.iq` in `demodTail_`): post-NCO, the dial at DC, cut to the passband, at `chFs_`.
+  Per listener (`ClientDsp::tone`, `toneFeedClient`): built on the first block in NFM, rebuilt when the channel rate
+  changes, `reset()` when the dial moved (`toneAtHz` set in `clientRetune`), destroyed off NFM. Shared dial
+  (`toneFeedShared` from `iqCb`): one ToneId, the dial read from `audioFreq`, `toneSharedWant` set in `buildAudio`; not
+  on a per-listener radio. All on the DSP thread under the locks those callbacks already hold (c->mtx, then clientMtx
+  — the order `onClientAudio` uses).
+- **Message**: `{"type":"tone","label":"CTCSS 88.5 Hz"}` / `"DCS 023N (= 047I)"` / `""` (cleared), on change only, to
+  the listener's spectrum socket (shared dial: every spectrum socket, and a listener arriving gets the current one in
+  `sendFullState`).
+- **App** (`VibeServerClient` `tone` → `onToneId`, SDRScreen `toneLabel`): the VTS line's quiet suffix in the MESSAGE
+  slot — "GB3NB: CTCSS 82.5 Hz" (text colour, not the name's) after a bookmark on the dial, or the label alone; held
+  while locked; NFM only (dropped at once on any other mode). **Web** (`spectrum.ts` `tone`, `main.ts` `toneLabel` in
+  `updateVts`): the same sentence through `vtsLine.ts` line mode. ⚠ Web edits need build-web (`vibe_web_page.h`).
+- **Copy**: About V12 note ("CTCSS AND DCS ON NFM"). Not a control, so no tour card; the website has no NFM text.
+- **Tests**: `test-tone-id` + all 51 tones / 32 DCS at seven channel rates (12–93.75 kHz: 14/14) and a `--write-clip`
+  for the new end-to-end `scripts/test-server-tone.mjs` (the REAL server, fake rtl_tcp, three NFM carriers at 2 m):
+  shared dial — the right label on each carrier, '' first on a retune, nothing on a toneless carrier for 10 s, cleared
+  leaving NFM, a joiner told at once; range-locked — two listeners each their own, never the other's. **13/13**.
+  Cost on the Mac (optimised): ≈ 0.13 ms per second of 24 kHz IQ (`-O0` in run-tests prints ≈ 1.5).
+- Not compiled: Android gradle, iOS `build_ios.sh` (the shim is not in the iOS lib). Full app `tsc` exceeds the 1 GB
+  memory cap — syntax-checked the edited files and type-checked `VibeServerClient.ts` alone instead.
+
+### Still owed
 - **Real signals**: a 2 m / 70 cm repeater with a known tone (UK repeaters publish theirs) and a PMR446 DCS user;
   confirm the N/I convention on one known DCS radio.
 

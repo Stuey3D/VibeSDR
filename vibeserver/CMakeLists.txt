@@ -270,6 +270,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/audio_nr.cpp"
     "${CPP_DIR}/decoders/auto_notch.cpp"
     "${CPP_DIR}/decoders/time_decoder.cpp"
+    "${CPP_DIR}/decoders/tone_id.cpp"   # ★ V12: CTCSS / DCS tone ID on NFM (decoders/tone_id.h)
     # ★ V12: CW — the listener's decoder and the skimmer (one FFT filterbank; decoders/cw_skimmer.h)
     "${CPP_DIR}/decoders/cw_skimmer.cpp"
     # ★ V12: NDB — every beacon in the LF band, idents by consensus (decoders/ndb_skimmer.h)

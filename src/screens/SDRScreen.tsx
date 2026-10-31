@@ -6882,6 +6882,12 @@ export default function SDRScreen({ route, navigation }: Props) {
       onNdbStats: (st) => { if (!destroyed.current) setNdbStats(st); },
       // ★ V12 DRM: a report after leaving DRM is a ghost (the web's onDrm)
       onDrm: (d) => { if (!destroyed.current && client.current?.getStatus().mode === 'drm') setDrmState(d); },
+      // ★ V12 tone ID: NFM only (a label after leaving NFM is a ghost)
+      onToneId: (l) => {
+        if (destroyed.current) return;
+        const m = client.current?.getStatus().mode;
+        setToneLabel(m === 'nfm' || m === 'fm' ? l : '');
+      },
       /* ★ V12 AIS: a report (on — arriving MEANS AIS is on, whoever put the receiver there: the map opens on the transition),
        *  the server's ais_off (null), or a refusal (the map that opened on the press closes; the reason as an alert, after
        *  the modal has gone — onAdsb's note). */
@@ -11016,6 +11022,13 @@ export default function SDRScreen({ route, navigation }: Props) {
   }, [radioCaps?.driver, hwTunerBwAuto, hwVibeAgc, showVtsNotice]);
 
   const vtsLastStation    = useRef('');
+  /* ★★ V12 CTCSS / DCS TONE ID (VibeServer, onToneId): the NFM channel's tone as the server reads it — "CTCSS 88.5 Hz",
+   *  "DCS 023N (= 047I)" — shown as the VTS line's QUIET SUFFIX: in the message slot after a bookmark's name
+   *  ("GB3NB: CTCSS 82.5 Hz", the text colour, not the name's), or on its own when nothing else names the channel. Held
+   *  while the tone is locked; the server unlocks it ≈ 2.5 s after the carrier drops, and clears it on a retune. */
+  const [toneLabel, setToneLabel] = useState('');
+  const toneLabelRef      = useRef('');
+  const toneNotifKey      = useRef(0);
   const vtsBandKey        = useRef<string | null>(null);
   const vtsBandInit       = useRef(false);
   const vtsArrowJumpUntil = useRef(0);
@@ -11690,9 +11703,37 @@ export default function SDRScreen({ route, navigation }: Props) {
       // the QSO is live (rather than the bookmark timing out under the caller).
       const voiceMode = ['dmr', 'ysf', 'dstar', 'nxdn', 'm17', 'radel', 'radeu']
         .includes(String(client.current?.getStatus().mode ?? ''));
-      setVtsNotif({ key: vtsKey.current, name: nearest.name, kind: 'station-on', hold: voiceMode, source: nearest.source, flag: nearest.flag });
+      setVtsNotif({ key: vtsKey.current, name: nearest.name, rt: toneLabelRef.current || undefined, kind: 'station-on',
+                    hold: voiceMode || !!toneLabelRef.current, source: nearest.source, flag: nearest.flag });
     }
   }, [ituRegion, showBandNotif, onMode]);
+
+  // ★ V12 tone ID: a new tone (or its end) re-draws the line — after a bookmark's name, or alone. A live station (RDS /
+  //   DAB / a DMR caller) owns the bar, and a notice keeps its turn (vtsNoticeUntil); the next tune picks the tone up.
+  useEffect(() => {
+    toneLabelRef.current = toneLabel;
+    if (liveStationRef.current || Date.now() < vtsNoticeUntil.current) return;
+    const hz = status.frequency;
+    const nearest = hz ? findNearest(vtsBookmarks.current, hz) : null;
+    if (nearest && Math.abs(nearest.offset) <= VTS_ON_HZ) {
+      toneNotifKey.current = 0;
+      vtsLastStation.current = nearest.name;
+      vtsKey.current++;
+      setVtsNotif({ key: vtsKey.current, name: nearest.name, rt: toneLabel || undefined, kind: 'station-on',
+                    hold: !!toneLabel, source: nearest.source, flag: nearest.flag });
+    } else if (toneLabel) {
+      vtsKey.current++;
+      toneNotifKey.current = vtsKey.current;
+      setVtsNotif({ key: vtsKey.current, name: '', rt: toneLabel, kind: 'station-on', hold: true });
+    } else if (toneNotifKey.current) {
+      const k = toneNotifKey.current;
+      toneNotifKey.current = 0;
+      setVtsNotif((n) => (n && n.key === k ? null : n));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toneLabel]);
+  // ★ …and it belongs to NFM only: any other mode drops it at once, without waiting for the server's ''.
+  useEffect(() => { if (status.mode !== 'nfm' && status.mode !== 'fm') setToneLabel(''); }, [status.mode]);
 
   // Watch the tuned frequency (debounced — the drum emits many per second)
   useEffect(() => {

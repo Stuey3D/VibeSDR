@@ -152,6 +152,7 @@ add_library(vibelocalsdr SHARED
     decoders/audio_nr.cpp
     decoders/auto_notch.cpp
     decoders/time_decoder.cpp
+    decoders/tone_id.cpp   # ★ V12: CTCSS / DCS tone ID on NFM
     decoders/cw_skimmer.cpp
     decoders/ndb_skimmer.cpp
     decoders/drm/drm_receiver.cpp   # ★ V12 DRM (decoders/drm/, vibe_drm_listener.h)

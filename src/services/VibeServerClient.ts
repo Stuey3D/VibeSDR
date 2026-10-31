@@ -402,6 +402,9 @@ export class VibeServerClient extends VibeServerWsClient {
       /* ★★ V12 DRM — the listener's own DRM receiver's report (only while their mode is DRM; a ghost after leaving is
        *  dropped by the screen, which checks the mode as the web's onDrm does). */
       case 'drm': { const d = drmSanitise(msg); if (d) this.callbacks.onDrm?.(d); return true; }
+      /* ★ V12 CTCSS / DCS tone ID on NFM (decoders/tone_id.h): the label on change, '' = nothing locked. The server's own
+       *  fixed text ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), still bounded and cleaned as any server text. */
+      case 'tone': this.callbacks.onToneId?.(dabSafeText(msg.label, 40)); return true;
       /* ★ V12 AIS: a report about once a second — ITS ARRIVAL MEANS AIS IS ON (a second listener joining a radio somebody
        *  else put there); `ais_off` ended it (the restored config follows); `ais_error` is the refusal, with its reason. */
       case 'ais': {

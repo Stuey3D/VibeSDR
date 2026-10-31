@@ -139,6 +139,7 @@
 #include "decoders/audio_nr.h"      // self-contained spectral-subtraction audio NR
 #include "decoders/auto_notch.h"    // NLMS automatic notch (adaptive line enhancer)
 #include "decoders/time_decoder.h"    // MSF / DCF77 time signals
+#include "decoders/tone_id.h"         // ★ V12: CTCSS / DCS tone ID on NFM (its own discriminator on the channel IQ)
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
@@ -8583,6 +8584,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         double drmAtHz = 0;                         // ★ the dial `drm` was built for — a new receiver only when it moves
         std::atomic<bool> drmOn{false};             // ★ for the health watch, which must not take mtx (see there)
         std::atomic<uint64_t> drmDropped{0};
+        /** ★★ V12 CTCSS / DCS TONE ID (decoders/tone_id.h) — this listener's, while their mode is NFM. Fed in clientIqCb
+         *  from the pipeline's CHANNEL IQ (post-NCO, the dial at DC, already cut to the passband — so a neighbouring
+         *  12.5 kHz channel inside the wider slice cannot capture its discriminator). Everything below is touched under
+         *  `mtx` only: clientRetune sets toneWant / toneAtHz, the callback (inside feedOneClient) does the rest. The label
+         *  goes to this listener's spectrum socket as {"type":"tone","label":…} when it changes ("" = nothing). */
+        std::unique_ptr<vibe::ToneId> tone;
+        bool        toneWant = false;
+        double      toneRate = 0, toneAtHz = 0, toneFedHz = 0;
+        std::string toneSent;
         double bwHz = 0;
         int    chanBins = 0;                    // power of two dividing fftSize
         double chanRate = 0;
@@ -9236,7 +9246,32 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     /** ★ V12 DRM: the listener's channel IQ (post-NCO, the dial at DC) — copied into their DRM receiver's queue. */
     static void clientIqCb(void* ctx, const cf32* x, int n, double rateHz) {
         auto* c = (ClientDsp*)ctx;
-        if (c && c->drm) c->drm->feedIq(x, n, rateHz);
+        if (!c) return;
+        if (c->drm) c->drm->feedIq(x, n, rateHz);
+        // ★ V12 tone ID: one bool when the listener is not on NFM (and nothing left to clear)
+        if ((c->toneWant || !c->toneSent.empty()) && c->owner) c->owner->toneFeedClient(c, x, n, rateHz);
+    }
+    /** ★ The {"type":"tone"} message — the label is our own fixed text ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), no
+     *  escaping needed. */
+    static std::string toneJson(const std::string& label) { return "{\"type\":\"tone\",\"label\":\"" + label + "\"}"; }
+    /** ★★ V12: this listener's tone ID — feed, and send the label when it changes. On the listener's DSP thread under
+     *  c->mtx (the pipeline callback); clientMtx is taken after c->mtx, the order onClientAudio already uses. A retune
+     *  (toneAtHz moved) forgets the old repeater; a new channel rate (a width change rebuilt the pipeline) builds anew. */
+    void toneFeedClient(ClientDsp* c, const cf32* x, int n, double rateHz) {
+        std::string label;
+        if (c->toneWant && rateHz > 0) {
+            if (!c->tone || c->toneRate != rateHz) { c->tone.reset(new vibe::ToneId(rateHz)); c->toneRate = rateHz; }
+            else if (c->toneFedHz != c->toneAtHz) c->tone->reset();
+            c->toneFedHz = c->toneAtHz;
+            c->tone->feedIq(x, n);
+            label = c->tone->state().label();
+        } else { c->tone.reset(); c->toneRate = 0; }
+        if (label == c->toneSent) return;
+        std::shared_ptr<net::Socket> sk;
+        { std::lock_guard<std::mutex> lk(clientMtx); sk = c->spec; }
+        const std::string j = toneJson(label);
+        if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+        c->toneSent = label;
     }
     /** ★★ V12 DRM: CAN THIS LISTENER'S ZOOM MOVE THE RADIO? — the report's `zoomMovesRadio`, so the DRM card can say so
      *  (Stuart, 2026-10-29: "when auto IF is detected on an RTL a little message on the DRM decoder warning that zooming
@@ -9565,6 +9600,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         else if (c->drm) { c->drm.reset(); c->drmAtHz = 0; c->rx->setIqMinRate(0.0); }
         c->drmOn.store(c->mode == "drm");
+        // ★ V12 tone ID: wanted on NFM only; the callback builds it, forgets a retuned repeater, and clears the label
+        c->toneWant = (mp.kind == ModeParams::NFM);
+        c->toneAtHz = c->vfoHz;
         // ★ VFO B allowance may have changed: DRM, WFM, or a dial into / out of the FM broadcast band (watchMaxFor)
         watchAllowDirty_.store(true, std::memory_order_relaxed);
         c->rx->setTune(resid, rxModeFor(mp.kind), bw);
@@ -11054,6 +11092,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  quiet spell would otherwise see no pill at all until something got worse, which is the
          *  one moment it should look calm rather than absent. */
         { const std::string hj = LocalSdrShim::healthJson(); if (!hj.empty()) sendText(sock, hj); }
+        /* ★ V12: the shared dial's CTCSS / DCS label, if one is locked — it is sent on change only. */
+        { std::string tl; { std::lock_guard<std::mutex> lk(toneSharedMtx); tl = toneSharedLabel; }
+          if (!tl.empty() && !perClientDsp()) sendText(sock, toneJson(tl)); }
         /* ★ A receiver already on a multiplex tells the client NOW, not at the next half-second
          *  tick: the client opens its DAB box on the first block it sees (Stuart, 2026-09-07:
          *  the second listener on a shared radio got audio and no box). */
@@ -16278,6 +16319,36 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // ★ AudioAudit is in vibe_log_latch.h, beside the latch it reports through (and its test).
     AudioAudit audit;
 
+    /** ★★ V12 CTCSS / DCS TONE ID ON THE SHARED DIAL — the one receiver everybody hears, so the one label goes to every
+     *  spectrum socket (and to a listener arriving, in sendFullState). Fed from the shared pipeline's channel IQ (iqCb,
+     *  the DSP thread); `toneSharedWant` is set by buildAudio (NFM); the dial is read from audioFreq, so a retune needs no
+     *  hook of its own. Not on a per-listener radio — each ClientDsp has its own (toneFeedClient). */
+    std::atomic<bool> toneSharedWant{false};
+    std::mutex toneSharedMtx;                       // guards toneSharedLabel (read by sendFullState)
+    std::unique_ptr<vibe::ToneId> toneShared;      // DSP thread only
+    double toneSharedRate = 0, toneSharedHz = -1;
+    std::string toneSharedLabel;
+    void toneFeedShared(const cf32* x, int n, double rateHz) {
+        std::string label;
+        if (toneSharedWant.load(std::memory_order_relaxed) && rateHz > 0 && !perClientDsp()) {
+            const double hz = audioFreq.load();
+            if (!toneShared || toneSharedRate != rateHz) { toneShared.reset(new vibe::ToneId(rateHz)); toneSharedRate = rateHz; }
+            else if (hz != toneSharedHz) toneShared->reset();
+            toneSharedHz = hz;
+            toneShared->feedIq(x, n);
+            label = toneShared->state().label();
+        } else { toneShared.reset(); toneSharedRate = 0; }
+        {
+            std::lock_guard<std::mutex> lk(toneSharedMtx);
+            if (label == toneSharedLabel) return;
+            toneSharedLabel = label;
+        }
+        const std::string j = toneJson(label);
+        std::vector<std::shared_ptr<net::Socket>> socks;
+        { std::lock_guard<std::mutex> lk(clientMtx); socks = allSpecClientsLocked(); }
+        for (auto& sk : socks) if (sk && sk->isOpen()) sendWs(sk, 0x1, (const uint8_t*)j.data(), j.size());
+    }
+
     std::mutex drmSharedMtx;
     std::shared_ptr<vibe::DrmListener> drmShared;
     uint64_t drmSharedVer = 0;
@@ -16518,6 +16589,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         demodOffset = (mp.kind == ModeParams::CW) ? -mp.bandwidth * 0.5 : 0.0;
 
         rxMode = rxModeFor(mp.kind);
+        toneSharedWant.store(mp.kind == ModeParams::NFM);   // ★ V12 tone ID (toneFeedShared)
         // Clamp to what the IQ can actually carry. Most public SpyServers cap the
         // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
         // can exceed the whole capture — WFM's 200 kHz on a 12 kS/s stream. Asking
@@ -25764,6 +25836,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             { std::lock_guard<std::mutex> lk(p->drmSharedMtx); d = p->drmShared; }
             if (d) d->feedIq(x, n, rateHz);
         }
+        // ★ V12 tone ID on the shared dial: one relaxed load unless the dial is on NFM (or a label is left to clear)
+        if (p->toneSharedWant.load(std::memory_order_relaxed) || p->toneShared) p->toneFeedShared(x, n, rateHz);
         std::shared_ptr<IqOut> iq;
         { std::lock_guard<std::mutex> lk(p->iqDirectMtx); iq = p->iqDirect; }
         if (iq && !iq->full) p->iqTapInto(iq, x, n, (int)std::lround(rateHz));

@@ -31,9 +31,14 @@ struct Nfm {
     std::mt19937 rng;
     std::normal_distribution<float> g{0.f, 1.f};
     double ph = 0, v1 = 0, v2 = 0, d1 = 0;
-    explicit Nfm(uint32_t seed) : rng(seed) {}
+    double fs = kFs;                       // ★ the IQ rate (the voice/DCS filters are stated at 24 kHz and scaled)
+    explicit Nfm(uint32_t seed, double rate = kFs) : rng(seed), fs(rate) {}
     std::vector<std::complex<float>> make(double sec, double cnrDb, bool voice, double toneHz, double toneDev,
                                           const std::vector<int>* dcsBits = nullptr, double dcsDev = 0) {
+        const double kFs = fs;
+        const double a1 = 1.0 - std::pow(1.0 - 0.55, 24000.0 / kFs), a2 = 1.0 - std::pow(1.0 - 0.08, 24000.0 / kFs);
+        const double a3 = 1.0 - std::pow(1.0 - 0.06, 24000.0 / kFs);
+        const double vScale = std::sqrt(kFs / 24000.0);   // the same voice-band level at any rate
         const int n = (int)(sec * kFs);
         std::vector<std::complex<float>> x((size_t)n);
         const double noiseAmp = std::sqrt(std::pow(10.0, -cnrDb / 10.0) * (kFs / 16000.0) / 2.0);
@@ -41,15 +46,15 @@ struct Nfm {
         for (int i = 0; i < n; ++i) {
             double dev = 0;
             if (voice) {   // voice-band: noise through a crude 300–3000 Hz band-pass, ≈ ±3 kHz peaks
-                const double w = g(rng);
-                v1 += 0.55 * (w - v1);            // low-pass ≈ 3 kHz
-                const double hp = v1 - v2; v2 += 0.08 * (v1 - v2);   // minus its own ≈ 300 Hz low-pass
+                const double w = g(rng) * vScale;
+                v1 += a1 * (w - v1);              // low-pass ≈ 3 kHz
+                const double hp = v1 - v2; v2 += a2 * (v1 - v2);     // minus its own ≈ 300 Hz low-pass
                 dev += 2600.0 * hp;
             }
             if (toneHz > 0) dev += toneDev * std::sin(2 * M_PI * toneHz * i / kFs);
             if (dcsBits) {
                 const double target = (*dcsBits)[(size_t)(bi % dcsBits->size())] ? dcsDev : -dcsDev;
-                d1 += 0.06 * (target - d1);       // ≈ 230 Hz smoothing (the DCS filter)
+                d1 += a3 * (target - d1);         // ≈ 230 Hz smoothing (the DCS filter)
                 dev += d1;
                 bitPh += 134.4 / kFs; if (bitPh >= 1) { bitPh -= 1; ++bi; }
             }
@@ -80,7 +85,42 @@ static double lockTime(ToneId& t, const std::vector<std::complex<float>>& x, con
     return when;
 }
 
-int main() {
+/** ★ `--write-clip FILE`: the end-to-end clip for scripts/test-server-tone.mjs — unsigned 8-bit IQ at 960 kS/s, 20 s,
+ *  three NFM carriers round the clip's centre: +25 kHz CTCSS 88.5 Hz under voice, −50 kHz DCS 023N under voice,
+ *  +150 kHz a plain carrier with voice and NO tone (it must stay unlabelled). Each made at 48 kHz and interpolated up. */
+static int writeClip(const char* path) {
+    const double R = 960000, sec = 20, sub = 48000;
+    const int up = (int)(R / sub), n = (int)(sec * R);
+    struct St { double off; Nfm s; std::vector<std::complex<float>> x; };
+    auto bits = dcsBitsOf(23, false);
+    St st[3] = {{25000, Nfm(11, sub), {}}, {-50000, Nfm(12, sub), {}}, {150000, Nfm(13, sub), {}}};
+    st[0].x = st[0].s.make(sec, 60, true, 88.5, 600);
+    st[1].x = st[1].s.make(sec, 60, true, 0, 0, &bits, 650);
+    st[2].x = st[2].s.make(sec, 60, true, 0, 0);
+    std::mt19937 rng(77); std::normal_distribution<float> g(0.f, 1.f);
+    std::vector<uint8_t> out((size_t)n * 2);
+    for (int i = 0; i < n; ++i) {
+        std::complex<double> z(0.01 * g(rng), 0.01 * g(rng));
+        for (auto& k : st) {
+            const size_t j = (size_t)(i / up); const double f = (double)(i % up) / up;
+            const std::complex<float> a = k.x[j], b = k.x[std::min(j + 1, k.x.size() - 1)];
+            std::complex<double> c = std::complex<double>(a) * (1 - f) + std::complex<double>(b) * f;
+            c /= std::max(1e-9, std::abs(c));
+            const double ph = 2 * M_PI * k.off * i / R;
+            z += 0.25 * c * std::complex<double>(std::cos(ph), std::sin(ph));
+        }
+        auto q = [](double v) { const long t = std::lround(127.5 + 127.0 * v); return (uint8_t)std::max(0L, std::min(255L, t)); };
+        out[(size_t)i * 2] = q(z.real()); out[(size_t)i * 2 + 1] = q(z.imag());
+    }
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return 1;
+    std::fwrite(out.data(), 1, out.size(), f); std::fclose(f);
+    std::printf("wrote %s (%d samples at 960 kS/s)\n", path, n);
+    return 0;
+}
+
+int main(int argc, char** argv) {
+    if (argc >= 3 && std::string(argv[1]) == "--write-clip") return writeClip(argv[2]);
     std::printf("test-tone-id — CTCSS / DCS identification\n\n── the vector discriminator ──\n");
     {
         double worst = 0;
@@ -133,6 +173,26 @@ int main() {
         auto x = s.make(4.0, 10, true, 151.4, 500);
         std::string last; lockTime(t, x, "", &last);
         ok(last == "CTCSS 151.4 Hz", "151.4 beside 150.0, 10 dB CNR: '" + last + "'");
+    }
+
+    std::printf("\n── at the rates a listener's channel runs at (the shim feeds the pipeline's channel IQ) ──\n");
+    {
+        int good = 0, all = 0;
+        for (double r : {12000.0, 16000.0, 31250.0, 37500.0, 48000.0, 62500.0, 93750.0}) {
+            ToneId t(r); Nfm s(4242u + (uint32_t)r, r);
+            auto x = s.make(4.5, 15, true, 123.0, 600);
+            const int blk = (int)(r * 0.02); std::string last;
+            for (size_t i = 0; i < x.size(); i += (size_t)blk) t.feedIq(x.data() + i, (int)std::min<size_t>((size_t)blk, x.size() - i));
+            last = t.state().label();
+            ToneId t2(r); Nfm s2(5151u + (uint32_t)r, r);
+            auto bits = dcsBitsOf(205, false);
+            auto x2 = s2.make(5.0, 15, true, 0, 0, &bits, 650);
+            for (size_t i = 0; i < x2.size(); i += (size_t)blk) t2.feedIq(x2.data() + i, (int)std::min<size_t>((size_t)blk, x2.size() - i));
+            const ToneId::State d = t2.state();
+            all += 2; good += (last == "CTCSS 123.0 Hz") + (d.dcs && d.dcsCode == 205 && !d.dcsInverted);
+            if (last != "CTCSS 123.0 Hz" || !(d.dcs && d.dcsCode == 205)) std::printf("    %.0f Hz: '%s' / '%s'\n", r, last.c_str(), d.label().c_str());
+        }
+        ok(good == all, std::to_string(good) + "/" + std::to_string(all) + " right at 12 / 16 / 31.25 / 37.5 / 48 / 62.5 / 93.75 kHz");
     }
 
     std::printf("\n── DCS: 16 codes, normal and inverted ──\n");

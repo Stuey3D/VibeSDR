@@ -2508,6 +2508,11 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
       if (!spec || spec.mode !== 'drm') return;   // ★ a report after leaving DRM is a ghost
       drmState = d; drmBoxSync(); updateVts();
     },
+    // ★ V12 tone ID: NFM only (a label after leaving NFM is a ghost)
+    onToneId: (l) => {
+      toneLabel = spec && (spec.mode === 'nfm' || spec.mode === 'fm') ? l : '';
+      updateVts();
+    },
     onRds: (m) => {
       rdsStereo = m.stereo; syncStereoLight();   // ★ the pilot's — DAB's own light wins in DAB
       // RDS is the station naming itself — it outranks any bookmark guess.
@@ -4398,6 +4403,13 @@ function updateVts() {
     flag = isoToFlag(rdsIso);
   }
 
+  /* ★ V12 CTCSS / DCS tone ID (toneLabel): on NFM, with no live station, the tone rides in the line after the bookmark's
+   *  name — or alone — and the bar holds while it is locked (the server unlocks ≈ 2.5 s after the carrier drops). */
+  const tone = (spec.mode === 'nfm' || spec.mode === 'fm') && !live && rdsPi <= 0 ? toneLabel : '';
+  const toneOn = !!tone;
+  const toneName = toneOn ? name : '';
+  if (toneOn) { if (!name) name = tone; live = true; }
+
   // Nothing known here — hide it rather than show an empty bar. ★ A confirmed PI counts as
   // known (see the fallback above); a block-error figure does NOT. Diagnostics belong in the
   // Advanced RDS decoder, not on the bar an ordinary listener reads (Stuart, 2026-07-26).
@@ -4473,9 +4485,10 @@ function updateVts() {
    *   2026-10-01). The same goes for the RDS mark — DAB is not RDS.
    *   ★ A bookmark / EiBi guess is not live and keeps the old layout: a name that slides once. */
   const inDab = !!dabSvcSid;
-  const lineMode = live || rdsPi > 0;
+  const lineMode = live || rdsPi > 0 || toneOn;
   const lineParts: VtsLineParts = inDab
     ? { id: vtsHex(dabSvcSid), idLabel: 'SId', name, text: dabRt }
+    : toneOn ? { name: toneName, text: tone }
     : { id: vtsHex(rdsPi), idLabel: 'PI', name: rdsName, text: rdsName ? rdsText : '' };
   setClass(vts, 'line', lineMode);
   applyVtsScroll(lineMode);
@@ -6890,6 +6903,9 @@ let dabCapable = false;
  *  where the server lists 'drm' in vibeserver.json's modes (an older server has no such mode — a dead button). */
 let drmCap = false;
 let drmState: DrmState | null = null;
+/** ★★ V12 CTCSS / DCS TONE ID (the server's `tone`): the NFM channel's tone — the VTS line's QUIET SUFFIX, in the message
+ *  slot after a bookmark's name ("GB3NB: CTCSS 82.5 Hz") or alone; the app's SDRScreen does the same. '' = none. */
+let toneLabel = '';
 /** The demodulators to offer: the fixed set, plus DRM where this server has it — minus what the owner switched off. */
 function offeredModes(): SDRMode[] {
   return [...MODES, ...(drmCap ? ['drm' as SDRMode] : [])].filter((m) => !isModeBlocked(m));

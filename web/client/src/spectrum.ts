@@ -647,6 +647,8 @@ export interface SpectrumCallbacks {
   onDab?: (d: DabState) => void;
   /** ★ V12 DRM: the listener's DRM receiver reports (vibe_drm_listener.h) — see drm.ts. */
   onDrm?: (d: DrmState) => void;
+  /** ★ V12 CTCSS / DCS tone ID on NFM: the label on change ("CTCSS 88.5 Hz", "DCS 023N (= 047I)"), '' = none locked. */
+  onToneId?: (label: string) => void;
   /** ★★ V12: the DAB band scan's state as the server publishes it (`dab_scan`) — see src/services/dabBandScan.ts. */
   onDabScan?: (m: unknown) => void;
   /** ★★ V12: hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
@@ -1152,6 +1154,9 @@ export class SpectrumClient {
        *  straight through. */
       case 'drm':
         this.cb.onDrm?.(msg as DrmState);
+        return;
+      case 'tone':
+        this.cb.onToneId?.(typeof msg.label === 'string' ? msg.label.replace(/[^\x20-\x7e]/g, '').slice(0, 40) : '');
         return;
       case 'dab_list':
       case 'dab_dls':
