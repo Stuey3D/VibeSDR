@@ -32,7 +32,7 @@ static const char* simdPath() {
 #if defined(__aarch64__)
     return "NEON (aarch64) — fast path";
 #elif defined(__ARM_NEON) || defined(__ARM_NEON__)
-    return "SCALAR — CPU has NEON but vibedsp only enables it on __aarch64__ (32-bit OS)";
+    return "NEON (32-bit ARMv7, via vibedsp/neon_compat.h) — fast path";   // ★ since 2026-09-16; this line was stale
 #elif defined(__x86_64__)
     return "SCALAR (x86-64 host — indicative only, not comparable to a Pi)";
 #else
