@@ -119,7 +119,7 @@ flags_for() {
     # ★ The benchmark's decoder rows — optimised like the server, or the costs are not the server's.
     # ★★ …and every row after the first eight (vibe_benchmark_more.h, 2026-10-31): the host's decoders, every digital-spots
     #    engine, NDB / AIS / ISM, tone ID and the audio filters. VIBE_BENCH_CLIP=<decoders-bench.vbu8> runs the clip rows.
-    test-bench-decoders)   echo "-O2 -I android/app/src/main/cpp/ft8_lib -I $VDSP -I $KISS -lpthread" ;;
+    test-bench-decoders)   echo "-O2 -DVIBE_DAB_PFFFT -I android/app/src/main/cpp/ft8_lib -I $VDSP -I $KISS -lpthread" ;;   # ★ PFFFT as the server builds it (ISM/LoRa DetFft)
     # ★ Hostile attach messages through the real decoders (audit 2026-10-03) — same deps as the hosts.
     test-decoder-hardening) echo "-O2 -I android/app/src/main/cpp/ft8_lib" ;;
     # ★ SSTV geometry + colour on synthetic pictures with a known sender clock error (audit 2026-10-04)

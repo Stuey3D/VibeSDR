@@ -188,6 +188,30 @@ core**; everything (13 channels, 42 detectors) **4.0 %** (SF11/12 search every o
 
 ---
 
+### 4.x The benchmark's two LoRa rows on the Pi 2 and the Mac (2026-10-31)
+
+`tools/lora-bench/lora_rows` runs ONLY `dec_lora` and `dec_lora_all`, through the benchmark's own
+`loraRealTimeRow` (threaded engine, real time, 1 s warm-up + 3 s measured, graded by the hottest thread). Pi 2
+(192.168.86.129): cross-built armhf (`-marm -mfpu=neon-vfpv4`, GCC 12), copied to `~/bench/v12/bin/lorarows/` only, run
+through `~/bench/v12/run.py` (nice 10; 0 listeners before and during; 900 MHz throughout; at most 35 °C; no live
+throttle bit; the live server idle at ~37 % in all). Two repeats each, % of one core:
+
+| row | Pi 2 hottest | Pi 2 threads (lora / lora2 / lora3) · process | Pi 2 grade | Mac (M-series) hottest · grade |
+|---|---|---|---|---|
+| `dec_lora` (868 default, 5 channels) | **50.0 / 50.7** (vibe-lora) | 50 / 37 / 38 · 130–132 | green | 2.1 / 2.2 · green |
+| `dec_lora_all` (13 of 16 channels) | **86.7 / 85.3** (vibe-lora3) | 65 / 78–81 / 85–87 · 236–238 | **red** (85.3 sits on the amber/red line) | 4.4 / 4.3 · green |
+
+Both keep up on the Pi 2 (nothing dropped; 4 and 8 frames decoded). So on the Pi 2 "every channel" starts OFF and the
+advice lists it as too heavy, which matches Stuart's "two Pi 2 threads at 77–83 % and keeps up" (this row's signal adds
+two decoded frames a second, a little heavier than his capture). On the Mac it is green, so a fresh setup ticks it on.
+`dec_lora` is green on the Pi 2 now that it is graded by its hottest thread (its inline total, ~110 %, used to read red).
+
+★ **A dead end on the way, kept for the record:** the first Pi 2 run read `vibe-lora` at 88 % for the default set (the
+audit's harness: 57 % on the same Pi the same evening). Neither the feed's block size (10 ms against the radio's 32 ms)
+nor u8-quantised input moved it (88.0 / 88.3 / 87.0 / 87.0). The cause was the BUILD: `vibeism::DetFft` is PFFFT only
+under `VIBE_DAB_PFFFT` (the server and the app define it), and the one-line test build fell back to the radix-2 FFT. The
+tool now builds with it, and so does `test-bench-decoders` in `scripts/run-tests.sh` (its figures were radix-2 before).
+
 ## 5. The clients (web and app, one rule)
 
 - Chips: MESHTASTIC, MESHCORE, LORAWAN (with unnamed LoRa), MESSAGES. Lines are the server's (no unit choice).
