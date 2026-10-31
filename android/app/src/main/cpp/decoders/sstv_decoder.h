@@ -50,8 +50,15 @@ public:
     int size() const { return n; }
 private:
     int n;
-    kiss_fftr_cfg cfg;
+    kiss_fftr_cfg cfg = nullptr;     ///< only for a size PFFFT cannot do (never one the decoder uses)
     std::vector<kiss_fft_cpx> out;
+    /* ★★ PFFFT, NEON / SSE2 (2026-10-31, the decoder SIMD audit): Kiss FFT is scalar, and these 2048/1024/512-point
+     *  transforms were 45 % of SSTV on the Pi 2 (qemu-arm count, the benchmark's Robot 36). Same convention (forward,
+     *  unscaled); its ordered real output is unpacked to (re, im) per bin below. */
+    void* pf = nullptr;              ///< PFFFT_Setup* (pffft.h is not this header's to include)
+    float *pin = nullptr, *pout = nullptr, *pwork = nullptr;
+    SstvFFT(const SstvFFT&) = delete;
+    SstvFFT& operator=(const SstvFFT&) = delete;
 };
 
 // ── Circular PCM buffer (mirrors pcm_buffer.go) ──────────────────────────────

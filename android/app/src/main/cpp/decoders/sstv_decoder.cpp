@@ -1,5 +1,6 @@
 // VibeSDR V4 — SSTV decoder (C++ port of ka9q audio_extensions/sstv → slowrx).
 #include "sstv_decoder.h"
+#include "../vibedsp/third_party/pffft/pffft.h"   // ★ SstvFFT (decoder audit 2026-10-31)
 #include "../vibedsp/vibe_denormals.h"
 #include <algorithm>
 #include <chrono>
@@ -92,9 +93,29 @@ static double deg2rad(double d) { return d * M_PI / 180.0; }
 static const int MinSlant_ = 30, MaxSlant_ = 150;   // slant search range (degrees)
 
 // ── FFT ──────────────────────────────────────────────────────────────────────
-SstvFFT::SstvFFT(int n_) : n(n_) { cfg = kiss_fftr_alloc(n, 0, nullptr, nullptr); out.resize(n / 2 + 1); }
-SstvFFT::~SstvFFT() { kiss_fftr_free(cfg); }
-void SstvFFT::run(const float* in) { kiss_fftr(cfg, in, out.data()); }
+SstvFFT::SstvFFT(int n_) : n(n_) {
+    out.resize(n / 2 + 1);
+    int r = n; while (r % 2 == 0) r /= 2; while (r % 3 == 0) r /= 3; while (r % 5 == 0) r /= 5;
+    if (n % 32 == 0 && r == 1) pf = pffft_new_setup(n, PFFFT_REAL);
+    if (pf) {
+        pin = (float*)pffft_aligned_malloc(sizeof(float) * (size_t)n);
+        pout = (float*)pffft_aligned_malloc(sizeof(float) * (size_t)n);
+        pwork = (float*)pffft_aligned_malloc(sizeof(float) * (size_t)n);
+    } else cfg = kiss_fftr_alloc(n, 0, nullptr, nullptr);
+}
+SstvFFT::~SstvFFT() {
+    if (pf) { pffft_destroy_setup((PFFFT_Setup*)pf); pffft_aligned_free(pin); pffft_aligned_free(pout); pffft_aligned_free(pwork); }
+    if (cfg) kiss_fftr_free(cfg);
+}
+void SstvFFT::run(const float* in) {
+    if (!pf) { kiss_fftr(cfg, in, out.data()); return; }
+    std::memcpy(pin, in, sizeof(float) * (size_t)n);
+    pffft_transform_ordered((PFFFT_Setup*)pf, pin, pout, pwork, PFFFT_FORWARD);
+    // ordered real layout: [X0.re, X(n/2).re, X1.re, X1.im, X2.re, X2.im, …]
+    out[0].r = pout[0]; out[0].i = 0;
+    out[(size_t)(n / 2)].r = pout[1]; out[(size_t)(n / 2)].i = 0;
+    for (int k = 1; k < n / 2; ++k) { out[(size_t)k].r = pout[2 * k]; out[(size_t)k].i = pout[2 * k + 1]; }
+}
 double SstvFFT::power(int b) const { if (b < 0 || b > n / 2) return 0; return (double)out[b].r * out[b].r + (double)out[b].i * out[b].i; }
 double SstvFFT::re(int b) const { return (b < 0 || b > n / 2) ? 0 : out[b].r; }
 double SstvFFT::im(int b) const { return (b < 0 || b > n / 2) ? 0 : out[b].i; }
