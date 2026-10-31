@@ -11,6 +11,7 @@
 #include <mutex>
 #include <thread>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -653,6 +654,61 @@ int main(int argc, char** argv) {
         CHECK(inHole == 0, "no channel was stitched across the hole (%zu)", inHole);
         CHECK(after > 0 && afterSame == after, "every burst after the hole unchanged (%zu of %zu)", afterSame, after);
         CHECK(holed.size() < all.size(), "the burst across the hole was abandoned (%zu → %zu)", all.size(), holed.size());
+    }
+
+    // 13. ★ HOGS ARE HELD, AND NO SENSOR IS LOST FOR IT (2026-10-31). Two wandering emitters (a carrier swept ±30 kHz at
+    //     0.7 Hz and keyed on and off at random — what Stuart's Pi 500 capture holds near 433.27 and 434.82, and the floor
+    //     cannot absorb because it moves between bins) for the whole 10 s, with sensors far from them, one standing 20 dB
+    //     over a hog inside its hold, and one about as strong as a hog beside it. With the hold, the 1.6 s channels stop
+    //     churning; everything decoded without the hold is decoded with it.
+    printf(" carriers and spurs held\n");
+    {
+        auto wander = [](std::vector<cf>& x, double rate, double offHz, double amp, uint32_t seed) {
+            std::mt19937 g(seed);
+            std::uniform_real_distribution<double> onS(0.002, 0.015), offS(0.001, 0.010);
+            double ph = 0; bool st = true; size_t next = size_t(onS(g) * rate);
+            for (size_t i = 0; i < x.size(); ++i) {
+                if (i >= next) { st = !st; next = i + size_t((st ? onS(g) : offS(g)) * rate); }
+                const double f = offHz + 30e3 * std::sin(2 * M_PI * 0.7 * double(i) / rate);
+                ph = std::fmod(ph + 2 * M_PI * f / rate, 2 * M_PI);
+                if (st) x[i] += cf(float(amp * std::cos(ph)), float(amp * std::sin(ph)));
+            }
+        };
+        const auto oreg = oregonV3(withChecksum(oregonNibbles("F824" "1" "22" "0" "571" "0" "45" "0"), 17));
+        const auto wh = wh1080("a1820d5a0306004e08d3");
+        std::vector<Sig> sigs;
+        const double farHz[6] = {-300e3, -150e3, 100e3, 250e3, -380e3, 180e3};
+        for (int k = 0; k < 6; ++k) { Sig sg{k % 2 ? wh : oreg}; sg.offHz = farHz[k]; sg.startS = 1.0 + 1.3 * k; sigs.push_back(sg); }
+        Sig nearStrong{wh}; nearStrong.offHz = -590e3; nearStrong.startS = 5.2; sigs.push_back(nearStrong);           // 20 dB over the hog
+        Sig nearWeak{oreg}; nearWeak.offHz = -560e3; nearWeak.startS = 7.4; nearWeak.amp = 0.04; sigs.push_back(nearWeak); // about the hog's level
+        auto x = synth(sigs, 2.4e6, 10.0, 0.02, 31);
+        wander(x, 2.4e6, -650e3, 0.03, 41);
+        wander(x, 2.4e6, 500e3, 0.03, 42);
+        struct Out { std::multiset<std::string> lines; uint64_t longs = 0, held = 0; size_t bursts = 0; bool nearStrong = false; };
+        auto run = [&](bool hold) {
+            Out o;
+            FrontEnd fe(2.4e6); fe.setDcGuardHz(15e3); fe.setHoldHogs(hold);
+            auto on = [&](const Burst& b) {
+                ++o.bursts;
+                std::vector<Reading> r; Service::decodeBurst(b, 433.92e6, r);
+                for (const auto& x : r) { o.lines.insert(readable(x, 0)); if (std::fabs(b.offHz - nearStrong.offHz) < 40e3 && b.tSec > 5.0 && b.tSec < 5.6) o.nearStrong = true; }
+            };
+            for (size_t i = 0; i < x.size(); i += 76800) fe.feed(x.data() + i, std::min<size_t>(76800, x.size() - i), on);
+            fe.flush(on);
+            o.longs = fe.longCloses(); o.held = fe.heldHits();
+            return o;
+        };
+        const Out off = run(false), on = run(true);
+        size_t kept = 0;
+        for (const auto& l : off.lines) kept += on.lines.count(l) ? 1 : 0;
+        printf("   10 s, two wandering emitters: 1.6 s channels %llu → %llu, detections held %llu, bursts %zu → %zu, readings %zu → %zu\n",
+               (unsigned long long)off.longs, (unsigned long long)on.longs, (unsigned long long)on.held, off.bursts, on.bursts,
+               off.lines.size(), on.lines.size());
+        CHECK(off.longs >= 8, "without the hold the emitters churn 1.6 s channels (%llu)", (unsigned long long)off.longs);
+        CHECK(on.longs <= 4 && on.held > 0, "with it they are held: %llu 1.6 s channels, %llu detections held", (unsigned long long)on.longs, (unsigned long long)on.held);
+        CHECK(kept == off.lines.size(), "every reading without the hold is there with it (%zu of %zu)", kept, off.lines.size());
+        CHECK(on.nearStrong, "a sensor 20 dB over a held hog, inside its hold, still decodes");
+        CHECK(on.lines.size() >= 6, "the six sensors away from the emitters decode (%zu readings)", on.lines.size());
     }
 
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "ok", checks, fails);

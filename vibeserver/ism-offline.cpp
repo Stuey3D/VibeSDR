@@ -261,6 +261,7 @@ int main(int argc, char** argv) {
         std::printf("PROF  detects %llu  opens %llu  cancels %llu  promotes %llu  closeQuiet %llu  closeLong %llu  fewHits %llu  sliceNo %llu\n",
                     (unsigned long long)p.detects, (unsigned long long)p.opens, (unsigned long long)p.cancels, (unsigned long long)p.promotes,
                     (unsigned long long)p.closeQuiet, (unsigned long long)p.closeLong, (unsigned long long)p.fewHits, (unsigned long long)p.sliceNo);
+        std::printf("PROF  holds %llu  detections held %llu\n", (unsigned long long)p.holds, (unsigned long long)p.held);
         std::printf("PROF  mixed %.2f Msamp (%.2f channels on average)  sliced %.2f Msamp  in ran-too-long channels %.2f Msamp\n",
                     p.mixSamp / 1e6, double(p.mixSamp) / std::max(1.0, t * fe.workRate()), p.sliceSamp / 1e6, p.longSamp / 1e6);
     }

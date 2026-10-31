@@ -565,7 +565,7 @@ public:
         { std::lock_guard<std::mutex> q(qMtx_); queue_.clear(); queued_ = 0; dropped_ = 0; cap_.reset(rateHz, now()); }
         { std::lock_guard<std::mutex> m(mMtx_); mixQ_.clear(); mixQueued_ = 0; droppedMix_ = 0; mixCap_ = size_t(det_->workRate() * 0.5); }
         { std::lock_guard<std::mutex> d(dMtx_); decQ_.clear(); decQueued_ = 0; droppedDec_ = 0; decCap_ = size_t(2.0 * mix_->chanRate()); }
-        noiseDb_.store(-99, std::memory_order_relaxed); clipFrac_.store(0, std::memory_order_relaxed);
+        noiseDb_.store(-99, std::memory_order_relaxed); clipFrac_.store(0, std::memory_order_relaxed); carriers_.store(0, std::memory_order_relaxed);
         health_ = Health{};
         // ★ V12 LoRa (vibe_lora_service.h): its own thread and queue; the band's channel plan, only what the capture
         //   holds, as many detectors as the owner's choice and the benchmark allow. Not on a typed frequency.
@@ -654,13 +654,14 @@ public:
         { std::lock_guard<std::mutex> m(mMtx_); dm = droppedMix_; }
         { std::lock_guard<std::mutex> d(dMtx_); dd = droppedDec_; }
         // ★ "dropped": everything any stage lost (as before, the health pill's figure); "drops": by stage — capture blocks
-        //   before the detector, work blocks before the mixer, closed channels before the slicer
+        //   before the detector, work blocks before the mixer, closed channels before the slicer. "carriers": frequencies
+        //   held right now because something there keeps a channel busy for good (a carrier, a spur — vibe_ism.h)
         std::snprintf(b, sizeof b, ",\"centre\":%.0f,\"custom\":%d,\"rate\":%.0f,\"now\":%.1f,\"bursts\":%llu,\"decoded\":%llu,"
-                      "\"unknown\":%llu,\"noise\":%.1f,\"dropped\":%llu,\"drops\":[%llu,%llu,%llu],\"capture\":%d,\"devices\":",
+                      "\"unknown\":%llu,\"noise\":%.1f,\"dropped\":%llu,\"drops\":[%llu,%llu,%llu],\"carriers\":%d,\"capture\":%d,\"devices\":",
                       customHz_ > 0 ? customHz_ : (band_ ? band_->centreHz : 0), customHz_ > 0 ? 1 : 0, rate_, t,
                       (unsigned long long)bursts_, (unsigned long long)tracker_.decoded(), (unsigned long long)unknown_,
                       health_.noiseDb, (unsigned long long)(dq + dm + dd), (unsigned long long)dq, (unsigned long long)dm,
-                      (unsigned long long)dd, capPct);
+                      (unsigned long long)dd, carriers_.load(std::memory_order_relaxed), capPct);
         o += b;
         const auto loraRows = mesh_.rowsJson(t);
         o += tracker_.json(t, &loraRows);
@@ -777,6 +778,7 @@ private:
                 }
                 noiseDb_.store(det_->noiseDb(), std::memory_order_relaxed);
                 clipFrac_.store(det_->clipFrac(), std::memory_order_relaxed);
+                carriers_.store(det_->holds(), std::memory_order_relaxed);
                 pushMix(std::move(j));
                 lk.lock();
                 detBusy_ = false;
@@ -924,6 +926,7 @@ private:
     std::unique_ptr<ChanMixer> mix_; ///< vibe-ism2's alone while running
     bool keepBb_ = false;
     std::atomic<double> noiseDb_{-99}, clipFrac_{0};   ///< the detector's, for the health (read by vibe-ism3)
+    std::atomic<int> carriers_{0};                       ///< the detector's held hogs right now (vibe_ism.h kHoldQuietS)
     std::thread detTh_, mixTh_, decTh_;
     bool lossless_ = false;
     std::function<void(const Burst&, const std::vector<Reading>&)> tap_;

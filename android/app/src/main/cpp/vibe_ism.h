@@ -46,6 +46,7 @@ namespace vibeism {
 struct IsmProf {
     double copy = 0, detect = 0, mix = 0, slice = 0, decode = 0;   ///< seconds (monotonic; the bench is single-threaded). decode: the caller's onBurst
     uint64_t detects = 0, opens = 0, cancels = 0, promotes = 0, closeQuiet = 0, closeLong = 0, fewHits = 0, sliceNo = 0;
+    uint64_t holds = 0, held = 0;                       ///< hogs held (kHoldQuietS); detections a hold swallowed
     uint64_t mixSamp = 0, sliceSamp = 0, longSamp = 0;  ///< capture samples mixed; channel samples sliced; of those, in "ran too long" channels
     bool log = std::getenv("VIBE_ISM_PROF_LOG") != nullptr;   ///< every channel close to stderr
 };
@@ -257,6 +258,18 @@ struct FeConst {
     static constexpr int    kMaxChans = 4;
     static constexpr float  kMinBurstSnrDb = 6.5f; ///< see slice(): noise alone reads ~4.5 dB
     static constexpr size_t kMaxRuns = 6000;      ///< more transitions than any sensor sends in 1.6 s = noise; not decoded
+    /* ★★ A HOG IS HELD, NOT RE-OPENED (2026-10-31, the Pi 2 thread split). Something that keeps a channel busy for the
+     *  whole kMaxBurstS — a carrier, a spur, a wandering emitter the floor cannot absorb because it moves between bins —
+     *  used to be cut at 1.6 s and re-opened on the very next frame, for ever: a channel mixed and a 1.6 s slice, every
+     *  1.6 s, decoding nothing. On Stuart's Pi 500 capture two such emitters held 43 % of every sample mixed; on a host
+     *  with a poor antenna (the Pi 2 at 433, "OUTSIDE ANTENNA RANGE") several do. Now, when a channel runs the full
+     *  1.6 s, its frequency is HELD: detections within kMatchHz of it refresh the hold and open nothing, until none has
+     *  been seen there for kHoldQuietS. ★ NOTHING A SENSOR SENDS IS LOST BY IT: while the hog's channel was open, any
+     *  burst within kMatchHz of it was folded into that channel anyway — and a burst standing kHoldOverDb clear of the
+     *  hog's own peak still opens a channel of its own (better than before: it used to drown in the hog's). */
+    static constexpr double kHoldQuietS = 0.2;    ///< a held frequency is released after this long with nothing there
+    static constexpr float  kHoldOver = 4.0f;     ///< (6 dB) a newcomer this far over the hog's peak is a burst of its own
+    static constexpr int    kMaxHolds = 8;
     /** The pre-decimation for a capture rate: anything above 2.6 MS/s (an Airspy at 10 MS/s) by an integer boxcar, so the
      *  detector and the channels cost the same whatever the radio runs at. The sensors sit near the middle, the boxcar's
      *  first null is at the new rate — plenty for a detector and a 250 kHz channel. */
@@ -323,6 +336,10 @@ inline float absPeakRun(const cf* x, size_t n, float pk) {
 class Detector : public FeConst {
 public:
     float threshDb = 10.0f;                        ///< detection: a bin this far over its own noise floor
+    bool holdHogs = true;                          ///< kHoldQuietS's rule (off only in test-ism, to compare against)
+    /** Channels that ran the full kMaxBurstS, and detections a hold swallowed (never a channel), since start. */
+    uint64_t longCloses() const { return longs_; }
+    uint64_t heldHits() const { return heldN_; }
 
     explicit Detector(double rateHz) : fft_(kN) {
         pre_ = preFor(rateHz);
@@ -491,6 +508,16 @@ private:
                 if (h.pending) { VIBE_ISM_P(if (prof_) ++prof_->promotes;) h.pending = false; emit(ev, ChanEvent::kPromote, hit); }   // ★ a second sighting: now it is worth mixing
                 continue;
             }
+            // ★★ a held hog (see kHoldQuietS): seen again — refresh it, open nothing, unless this stands well clear of it
+            {
+                int held = -1;
+                for (int h = 0; h < kMaxHolds; ++h) if (hold_[h].on && std::fabs(hold_[h].f - f) < kMatchHz) { held = h; break; }
+                if (held >= 0) {
+                    Hold& hd = hold_[held];
+                    hd.lastHit = total_;
+                    if (gr.pmax <= hd.peak * kHoldOver) { ++heldN_; VIBE_ISM_P(if (prof_) ++prof_->held;) continue; }
+                }
+            }
             /* ★★ SPLATTER IS NOT A BURST. A strong OOK transmitter's keying edges spread −30…−45 dB sidebands hundreds of
              *  kHz either side; each would open a channel of its own. A newcomer 25 dB under a burst that is ON THE AIR
              *  while it is open is taken as its splatter (its keying edges splatter in the frames where it is
@@ -528,9 +555,24 @@ private:
                 // ★ fewer than 3 detector frames = a noise spike (1 frame in ~0.3 ms; the shortest real burst spans dozens)
                 c.on = false;
                 emit(ev, c.hits >= 3 ? ChanEvent::kClose : ChanEvent::kCancel, s);
+                if (quiet <= kCloseS) { ++longs_; if (holdHogs) holdAt(c.offHz, c.peakPow); }   // ★ it ran the full kMaxBurstS: hold it (kHoldQuietS)
             }
         }
+        // release the holds that went quiet
+        for (auto& hd : hold_) if (hd.on && double(total_ - hd.lastHit) > kHoldQuietS * w_) hd.on = false;
     }
+    void holdAt(double f, float peak) {
+        Hold* slot = nullptr;
+        for (auto& hd : hold_) if (hd.on && std::fabs(hd.f - f) < kMatchHz) { slot = &hd; break; }   // the same hog again
+        if (!slot) for (auto& hd : hold_) if (!hd.on) { slot = &hd; break; }
+        if (!slot) { slot = &hold_[0]; for (auto& hd : hold_) if (hd.lastHit < slot->lastHit) slot = &hd; }   // full: the stalest
+        if (!slot->on || std::fabs(slot->f - f) >= kMatchHz) { slot->peak = 0; VIBE_ISM_P(if (prof_) ++prof_->holds;) }
+        slot->on = true; slot->f = f; slot->lastHit = total_; slot->peak = std::max(slot->peak, peak);
+    }
+public:
+    /** Frequencies held right now (kHoldQuietS): carriers and spurs that are being ignored — for the status. */
+    int holds() const { int n = 0; for (const auto& hd : hold_) n += hd.on ? 1 : 0; return n; }
+private:
     /** The bin tables: scan order (most negative frequency first), each bin's frequency, and whether it may detect. */
     void buildTables() {
         const double binHz = w_ / kN;
@@ -575,6 +617,9 @@ private:
     float thr_ = 10.0f, thrDbCached_ = -1.0f;
     std::vector<cf> fbuf_;
     DChan ch_[kMaxChans];
+    struct Hold { bool on = false; double f = 0; uint64_t lastHit = 0; float peak = 0; };
+    Hold hold_[kMaxHolds];
+    uint64_t longs_ = 0, heldN_ = 0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -796,6 +841,12 @@ public:
 #endif
     /** The detector's median bin floor, dBFS per bin (for the status line and the gain rule). */
     double noiseDb() const { return det_.noiseDb(); }
+    /** Carriers / spurs held right now (FeConst::kHoldQuietS); channels that ran the full 1.6 s; detections held. */
+    int holds() const { return det_.holds(); }
+    uint64_t longCloses() const { return det_.longCloses(); }
+    uint64_t heldHits() const { return det_.heldHits(); }
+    /** ★ Tests only: the hog rule off, to compare against (FeConst::kHoldQuietS). */
+    void setHoldHogs(bool on) { det_.holdHogs = on; }
     /** Share of detector frames in the last second where any sample neared full scale — the gain rule's overload. */
     double clipFrac() const { return det_.clipFrac(); }
     /** Ignore detections within this many Hz of the capture centre (the DC remnant). */
