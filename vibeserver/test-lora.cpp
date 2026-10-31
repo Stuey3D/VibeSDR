@@ -347,7 +347,7 @@ int main(int argc, char** argv) {
         if (mt != 5 || mc != 3 || lw != 3) std::printf("%s", e.stats().c_str());
         ok(mt == 5 && mc == 3 && lw == 3, "5 Meshtastic, 3 MeshCore, 3 LoRaWAN frames decoded at +3 dB (" + std::to_string(mt) + "/" + std::to_string(mc) + "/" + std::to_string(lw) + ")");
         std::printf("    CPU: %.1f %% of one core, every plan channel (%zu detectors)\n", 100 * cpu / 10.0, e.detectors());
-        // ★★ THE ENGINE'S TWO THREADS (2026-10-31, the Pi 2 split): vibe-lora transforms, vibe-lora2 delivers and detects —
+        // ★★ THE ENGINE'S THREADS (2026-10-31, the Pi 2 split): vibe-lora the FFT, vibe-lora2 the channels, vibe-lora3 the detectors —
         //    the very frames the inline engine gives, field for field, fed in the radio's 32 ms blocks
         auto key = [](const Heard& h) {
             char b[200]; std::snprintf(b, sizeof b, "%s|%d|%.6f|%.3f|%.3f|%.3f|%zu|", h.f.chan.c_str(), h.f.sf, h.f.tSec, h.f.cfoHz, double(h.f.snrDb), h.f.freqHz, h.f.bytes.size());
@@ -362,7 +362,7 @@ int main(int argc, char** argv) {
             const size_t blk = size_t(fs * 0.032);
             for (size_t i = 0; i < x.size(); i += blk) t.feed(x.data() + i, std::min(blk, x.size() - i));
             for (int w = 0; w < 6000 && !t.idle(); ++w) std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            ok(t.idle(), "the two threads drained");
+            ok(t.idle(), "the three threads drained");
             ok(t.dropped() == 0, "lossless: nothing dropped (" + std::to_string(t.dropped()) + ")");
             for (auto& h : t.take()) have.push_back(key(h));
             t.stop();

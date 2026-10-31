@@ -769,16 +769,20 @@ public:
     uint64_t ffts() const { return ffts_; }
 #if defined(VIBE_ISM_PROF)
     double profFft = 0, profIfft = 0, profRot = 0, profRes = 0;   ///< seconds: the capture FFT; per channel the bins × filter
-                                                                  ///< and its inverse FFT; the phase + NCO; the resampler
+                                                                  ///< and its inverse FFT (both halves); the phase + NCO; the resampler
 #endif
 
-    /* ★★ TWO HALVES (2026-10-31, the Pi 2 thread split). On the Pi 2 the default 433 set (two channels) spent 36 % of a
+    /* ★★ IN STAGES (2026-10-31, the Pi 2 thread split). On the Pi 2 the default 433 set (two channels) spent 36 % of a
      *  core in the capture FFT and 11 % in the channels' filters and inverse FFTs, against 2 % rotating, 4 % resampling and
-     *  3 % in the detectors (VIBE_ISM_PROF, Stuart's Pi 500 capture) — one thread at ~70 % in real time. So a block is
-     *  done in two halves that may run on two threads, the expensive one (spectra) first and the cheap one (deliver)
-     *  after it, in block order. Same arithmetic in the same order: inline, feed() runs both, exactly as before. */
-    /** One block's channels, filtered and inverse-transformed: everything but the rotation and the resampler. */
+     *  3 % in the detectors (VIBE_ISM_PROF, Stuart's Pi 500 capture) — one thread at ~70 % in real time; the 868 default
+     *  set (five channels, twenty detectors) was over a whole core. So a block is done in parts that may run on separate
+     *  threads, in block order: feedSpectra() the capture FFT and each channel's bins × its filter; deliver() each
+     *  channel's inverse FFT, the block's phase, the residual NCO and the resampler; then pushOut() into the streams the
+     *  detectors read. Same arithmetic in the same order: inline, feed() runs them all, exactly as before. */
+    /** One block's channels: each its Lc bins × the filter, not yet inverse-transformed. */
     struct Spectra { int64_t blk = 0; std::vector<std::vector<cf>> Y; };
+    /** Chip-rate samples per channel (the resampler's output), for pushOut(). */
+    using ChipOut = std::vector<std::vector<cf>>;
     /** Capture samples in; each completed block's Spectra to `onBlock(Spectra&&)`. */
     template <class F> void feedSpectra(const cf* x, size_t n, F&& onBlock) {
         size_t i = 0;
@@ -792,16 +796,19 @@ public:
     /** The second half, in block order: the block's phase, the residual NCO and the resampler into each channel's
      *  Stream. ★ A block missing before `sp` (dropped behind a slow second half) still moves the NCO's phase on, so the
      *  channel stays on frequency; the samples it held are simply not there. */
-    void deliver(const Spectra& sp) {
+    void deliver(Spectra& sp, ChipOut* chips = nullptr) {
         if (sp.blk > nextBlk_) for (auto& c : ch_) for (int64_t b = nextBlk_; b < sp.blk; ++b)
             c.ncoPh = std::remainder(c.ncoPh + double(c.Lc - c.Lc / 4) * c.ncoDph, 2 * M_PI);
         nextBlk_ = sp.blk + 1;
         const int lmask = L_ - 1;
         const int64_t start = sp.blk * int64_t(S_);
         VIBE_ISM_P(double tq = vibeism::ismProfNow();)
+        if (chips && chips->size() != ch_.size()) chips->resize(ch_.size());
         for (size_t ci = 0; ci < ch_.size(); ++ci) {
             Ch& c = ch_[ci];
-            const cf* Y = sp.Y[ci].data();
+            cf* Y = sp.Y[ci].data();
+            c.ifft->forward(Y);
+            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profIfft += t2 - tq; tq = t2; })
             const int Lc = c.Lc;
             // the block's phase for where it starts in the capture, and the NCO for the residual offset
             const int keep0 = Lc / 4, n = Lc - keep0;
@@ -813,10 +820,12 @@ public:
             vibeism::rotateRun(Y + keep0, out, n, true, rot, c.ncoInc);
             c.ncoPh = std::remainder(c.ncoPh + double(n) * c.ncoDph, 2 * M_PI);
             VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profRot += t2 - tq; tq = t2; })
-            resample(c);
+            resample(c, chips ? &(*chips)[ci] : nullptr);
             VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profRes += t2 - tq; tq = t2; })
         }
     }
+    /** The last part: deliver()'s chip-rate samples into each channel's stream (the detectors' input). */
+    void pushOut(const ChipOut& out) { for (size_t ci = 0; ci < ch_.size() && ci < out.size(); ++ci) ch_[ci].dst->push(out[ci].data(), out[ci].size()); }
     void feed(const cf* x, size_t n) { feedSpectra(x, n, [&](Spectra&& sp) { deliver(sp); }); }
 
 private:
@@ -864,7 +873,6 @@ private:
                 vibeism::cmulRun(X + k, H + j, Y + j, run, false, true);
                 m += run;
             }
-            c.ifft->forward(Y);
             VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profIfft += t2 - tq; tq = t2; })
         }
         // keep the last quarter as the next block's overlap
@@ -874,7 +882,7 @@ private:
     }
     /** From the channel's decimated rate to exactly its chip rate: the 8-tap windowed sinc (sincTable). ★ Not a cubic:
      *  a 4-point Lagrange's phase is visibly non-linear at 0.2 cycles/sample (a 250 kHz channel at 600 kS/s). */
-    static void resample(Ch& c) {
+    static void resample(Ch& c, std::vector<cf>* out = nullptr) {
         auto& p = c.pend;
         const std::vector<float>& tab = sincTable();
         while (c.t + kTaps / 2 < double(p.size())) {
@@ -882,7 +890,7 @@ private:
             const int ph = std::min(kPhases - 1, int((c.t - i) * kPhases + 0.5));
             const float* h = &tab[size_t(ph * kTaps)];
             const cf* x = &p[size_t(i - (kTaps / 2 - 1))];
-            c.dst->push(sinc8(x, h));
+            if (out) out->push_back(sinc8(x, h)); else c.dst->push(sinc8(x, h));
             c.t += c.step;
         }
         const int drop = int(c.t) - (kTaps / 2 - 1);
