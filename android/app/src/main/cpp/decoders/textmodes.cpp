@@ -583,8 +583,30 @@ struct OliviaRx : Rx {
         }
     }
     /** T holds M + 2 powers: the tone below the finder's base, the M tones, the tone above */
+    /** ★★ TONE COVERAGE (2026-10-31, found with fldigi as a black box): a scrambled Olivia/Contestia signal uses its
+     *  tones evenly, so a receiver for MORE tones at the same spacing and symbol rate sees only a subset — and its Walsh
+     *  blocks still read about half the characters of the narrower signal, well enough to lock: fldigi's CONTESTIA 4/125
+     *  through AUTO printed "[CONTESTIA 16/500] EFKYGH*BIJ!CKLR@…". So a lock also needs the strongest tone of the last
+     *  max(2K, 4M) symbols to have visited ¾ of the tone set (all but one of 4) — and a lock held is dropped only below
+     *  half (a 32-tone signal's 64-symbol window dipped under ¾ mid-message: measured, so 4M and the hysteresis). On noise the strongest tone wanders
+     *  everywhere, so this never costs a weak signal anything; only a narrower signal fails it. */
+    std::vector<uint8_t> top; int topAt = 0;
+    int coverNeed() const { return sub->M <= 4 ? sub->M - 1 : (3 * sub->M) / 4; }
+    int coverHold() const { return sub->M <= 4 ? sub->M - 2 : sub->M / 2; }
+    int coverage() const {
+        uint64_t seen = 0;
+        for (uint8_t t : top) if (t < 64) seen |= 1ull << t;
+        return __builtin_popcountll(seen);
+    }
+    void noteTop(const float* T) {
+        if (top.empty()) top.assign((size_t)std::max(2 * K, 4 * sub->M), 0xFF);
+        const float* x = T + (lock ? lockH : 1);
+        int im = 0; for (int i = 1; i < sub->M; ++i) if (x[i] > x[im]) im = i;
+        top[(size_t)topAt] = (uint8_t)im; if (++topAt == (int)top.size()) topAt = 0;
+    }
     void symbol(const float* T, int gap) override {
         for (int g = 0; g < gap && g < K; ++g) push(nullptr);
+        noteTop(T);
         float soft[3][8];
         for (int h = 0; h < 3; ++h) {
             float x[64];
@@ -643,13 +665,14 @@ struct OliviaRx : Rx {
             const bool stayed = std::abs(fd.curB - candB) < fd.s * sub->M / 2 || fd.current() >= 4.5f;
             if (candH == bh && candA == ba && stayed) take = true; else { candH = bh; candA = ba; candB = fd.curB; }
         }
+        if (take && coverage() < coverNeed()) take = false;   // ★ a narrower signal of the same spacing (see coverage)
         if (take) {
             lock = true; lockH = bh; lockA = ba; candA = -1;
             // ★ the block or two read at this alignment before the lock was sure (a QSO's first words: the call)
             const std::vector<int>& pb = hyp[bh].past[ba];
             for (int c : pb) emitCode(c);   // the blocks before this one (this one is shown below)
         }
-        else if (lock && hyp[lockH].E[lockA] < thrOff) lock = false;
+        else if (lock && (hyp[lockH].E[lockA] < thrOff || coverage() < coverHold())) lock = false;
         if (!lock) { lockH = bh; lockA = ba; }
         // remember this block's characters at this alignment (the last two blocks, those good enough to show)
         for (int h = 0; h < 3; ++h) {
@@ -661,7 +684,9 @@ struct OliviaRx : Rx {
         if (lock && a == lockA && q[lockH] > thrOff) for (int j = 0; j < b; ++j) emitCode(code[lockH][j]);
     }
     void emitCode(int c) {
-        if (sub->kind == kContestia) { if (c == 0) return; c = c == 59 ? ' ' : c + 32; }
+        // ★ CONTESTIA (confirmed against fldigi run as a black box, 2026-10-31): 59 = space, 60 = newline, 0 = idle,
+        //   the rest ASCII − 32 (fldigi sends lower case as upper and [ \ ] ^ _ ` { | } ~ as '?')
+        if (sub->kind == kContestia) { if (c == 0) return; c = c == 59 ? ' ' : c == 60 ? '\n' : c + 32; }
         else if (c == 0) return;
         appendChar(text, c);
     }
@@ -826,7 +851,7 @@ std::vector<float> textModeSynth(TextModeDecoder::Family, const std::string& mod
         int code;
         if (con) {
             int u = (c >= 'a' && c <= 'z') ? c - 32 : c;
-            if (u == ' ') code = 59; else if (u == '\n') code = 0; else if (u > 32 && u < 96 && u != 91) code = u - 32; else continue;
+            if (u == ' ') code = 59; else if (u == '\n') code = 60; else if (u > 32 && u < 91) code = u - 32; else continue;
         } else code = c == '\n' ? 13 : (c & 127);
         codes.push_back(code);
     }

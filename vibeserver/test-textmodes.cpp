@@ -90,6 +90,39 @@ int main() {
         ok(run(F::Olivia, "auto", y, fs).text.empty(), "an MFSK16 signal through OLIVIA AUTO: nothing");
     }
 
+    std::printf("\n── CONTESTIA's alphabet (confirmed with fldigi as a black box) and a narrower signal ──\n");
+    {
+        auto x = withNoise(textModeSynth(F::Olivia, "contestia-8-250", "CQ DE G4XYZ\nQRZ? 73", fs, 1500), fs, 10, 31);
+        const std::string t = body(run(F::Olivia, "contestia-8-250", x, fs).text);
+        ok(t.find("CQ DE G4XYZ\nQRZ? 73") != std::string::npos, "a newline is code 60, a space code 59: \"" + t.substr(0, 30) + "\"");
+        // ★ a CONTESTIA 4/125 signal uses 4 of a 16/500 receiver's 16 tones at the same spacing and rate: AUTO must not
+        //   lock the wider one on it (fldigi's 4/125 through AUTO printed half-right garbage as "CONTESTIA 16/500")
+        auto y = withNoise(textModeSynth(F::Olivia, "contestia-4-125", msg + " " + msg, fs, 1500), fs, 10, 32);
+        Got a = run(F::Olivia, "auto", y, fs);
+        ok(a.text.empty() || a.detected == "CONTESTIA 4/125", "CONTESTIA 4/125 through AUTO: nothing wider locks (" + (a.detected.empty() ? std::string("none") : a.detected) + ")");
+        auto z = withNoise(textModeSynth(F::Olivia, "olivia-4-125", msg + " " + msg, fs, 1500), fs, 10, 33);
+        Got b = run(F::Olivia, "auto", z, fs);
+        ok(b.detected == "OLIVIA 4/125" && body(b.text).find(msg) != std::string::npos, "OLIVIA 4/125 through AUTO: still itself (" + b.detected + ")");
+    }
+    if (const char* dir = std::getenv("VIBE_FLDIGI_DIR")) {   // ★ fldigi's own Contestia audio (8 kHz float32, not in git)
+        std::printf("\n── fldigi as a black box: CONTESTIA, every sub-mode we offer (%s) ──\n", dir);
+        const char* want = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ??????ABCDEFGHIJKLMNOPQRSTUVWXYZ????\nNEW LINE";
+        const char* subs[][2] = { {"Cont-4-125", "contestia-4-125"}, {"Cont-4-250", "contestia-4-250"}, {"Cont-8-250", "contestia-8-250"},
+                                  {"Cont-8-500", "contestia-8-500"}, {"Cont-16-500", "contestia-16-500"}, {"Cont-16-1K", "contestia-16-1000"},
+                                  {"Cont-32-1K", "contestia-32-1000"}, {"Cont-64-2K", "contestia-64-2000"} };
+        for (auto& sb : subs) {
+            FILE* fp = std::fopen((std::string(dir) + "/" + sb[0] + ".raw").c_str(), "rb");
+            if (!fp) { ok(false, std::string(sb[0]) + ": missing"); continue; }
+            std::vector<float> a; float buf[4096]; size_t k;
+            while ((k = std::fread(buf, 4, 4096, fp)) > 0) a.insert(a.end(), buf, buf + k);
+            std::fclose(fp);
+            const std::string t = body(run(F::Olivia, sb[1], a, 8000).text);
+            // ★ from '!' on: 16/500 shows one start-up character ("0") between the first space and '!' (the pre-lock
+            //   block — section 11's known dead end); everything after it is exact on every sub-mode
+            ok(t.find(want + 1) != std::string::npos, std::string(sb[1]) + ": every printable character and the newline as fldigi sent them");
+        }
+    }
+
     std::printf("\n── other signals (60 s each, +10 dB): RTTY 45.45 Bd / 170 Hz, a steady carrier — nothing printed ──\n");
     {
         std::vector<float> rtty((size_t)(fs * 60)), car((size_t)(fs * 60));

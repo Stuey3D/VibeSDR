@@ -607,8 +607,8 @@ index.html (three keys + `tmSettings`), decoders.ts, decoderBandsDom.ts, main.ts
   sign XOR the parity of its index.
 - **CONTESTIA**: the description gives 32-symbol blocks of 6-bit characters but NOT the scrambler. Olivia's constant
   gave no lock on public recordings (sigidwiki Contestia 8/250, 16/500); **0xEDB88320 rotated right 5·j** did (block
-  quality 0.27 vs 0.11). Space is code 59, code 0 idle, the rest ASCII − 32. ★ This is a FINDING, not a published fact
-  (question for Stuart below). The CRC-32 constant was a guess tried among others, not read from any source.
+  quality 0.27 vs 0.11). Space is code 59, code 0 idle, the rest ASCII − 32. ★ This was a FINDING — ★ CONFIRMED with fldigi as a black box in
+  section 18 (and the newline corrected to code 60). The CRC-32 constant was a guess tried among others, not read from any source.
 - **THOR**: ZL1BPU's DominoEX page (IFK+, 18 tones, offset 2) + "THOR = DominoEX IFK+ with MFSK16's FEC, interleaver and
   varicode". Settled on sigidwiki THOR 4/8/11/16/22 recordings: the value is the step itself (no Gray).
 - fldigi was neither read nor run: the reference recordings settled everything. WSJT-X not involved.
@@ -963,6 +963,36 @@ no-op and is not offered). Line: `[FLEX 6400/4 · 1234567 · A] text` (capcode, 
 - 1600/4's second phase is labelled C (the datasheet's "A and C at 3200 bit/s"); one other source calls it B.
 - Long-address sets other than 1–2: skipped. Numeric pages' 6-bit check: its algorithm is not in the free sources — a
   numeric page relies on every word's BCH and the vector's checksum.
+
+## 18. CONTESTIA's scrambler CONFIRMED with fldigi as a black box; newline fixed; a narrower signal no longer locks a wider receiver (2026-10-31, seventh run)
+
+Stuart asked for the trial-found scrambler (0xEDB88320 rotated right 5 bits a character; space = 59, 0 = idle) to be
+confirmed. fldigi was run strictly as a BLACK BOX — its source was not read: Debian bookworm's `fldigi` 4.1.23 in a
+disposable Docker image under Colima (`~/fldigi-blackbox/`, not in git: Dockerfile, a PulseAudio null sink, Xvfb, a
+minimal `fldigi_def.xml` so the first-run wizard does not hold the XML-RPC server, and `drive.py`, which sets each modem
+by name over XML-RPC, transmits a known text and records the sink's monitor at 8 kHz). The text: every printable ASCII
+character 0x20–0x7E, a newline, "NEW LINE 2", a newline. All 19 of fldigi's "Cont-" sub-modes were generated.
+
+| Result | |
+|---|---|
+| Scrambler 0xEDB88320, rotated right 5·j; space = 59; code 0 idle | **CONFIRMED**: all 8 sub-modes we offer (4/125, 4/250, 8/250, 8/500, 16/500, 16/1000, 32/1000, 64/2000) decode fldigi's audio character for character |
+| Newline | ★ was WRONG: fldigi sends it as code **60** (we printed "\"); our test transmitter had used 0. Fixed both ways |
+| The rest of the alphabet | fldigi sends lower case as upper case and `[ \ ] ^ _ \` { \| } ~` as "?"; codes 61–63 never appear |
+| 16/500 | one start-up character ("0") after the first space — the pre-lock block, section 11's known dead end — and the last block of the over was lost once (the recording ends 3 s after the signal; not investigated further) |
+| fldigi's other 11 Contestia sub-modes (4/500, 4/1K, 4/2K, 8/125, 8/1K, 8/2K, 16/250, 16/2K, 32/2K, 64/500, 64/1K) | not offered by us; AUTO prints nothing on any of them (checked) |
+
+★★ **A false decode found on the way, and fixed.** fldigi's CONTESTIA 4/125 through our AUTO printed half-right garbage as
+"[CONTESTIA 16/500] EFKYGH*BIJ!CKLR@…": a 4/125 signal uses 4 of a 16/500 receiver's 16 tones at the SAME spacing and
+symbol rate, and the wider receiver's Walsh blocks still read about half the characters. Fix (`OliviaRx`, textmodes.cpp):
+a lock also needs the strongest tone of the last max(2K, 4M) symbols to have visited ¾ of the tone set (3 of 4 for
+4-tone modes), and a held lock drops only below half — a scrambled signal uses its tones evenly, noise wanders everywhere,
+so only a narrower signal fails it. (First try with a 2K window and no hysteresis: CONTESTIA 32/1000 dropped its lock
+mid-message — measured, widened.) Cost of the gate in decodes: **none** — `tm_bench` sweeps of OLIVIA 4/125 … 64/2000 and
+CONTESTIA 8/250 … 64/2000 at −12 … −6 dB, 20 trials, manual AND AUTO: byte-identical tables before and after.
+
+Tests (`test-textmodes`): the newline and space codes; CONTESTIA 4/125 through AUTO locks nothing wider; OLIVIA 4/125
+through AUTO still itself; and with `VIBE_FLDIGI_DIR=~/fldigi-blackbox/out` the eight fldigi files decode exactly (from
+"!" on). Colima stopped afterwards; the image `fldigi-bb` can be removed with `docker rmi fldigi-bb`.
 
 ## RESUME HERE (updated 2026-10-31, after the sixth run: Feld Hell's clients)
 

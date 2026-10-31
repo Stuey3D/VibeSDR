@@ -20,7 +20,9 @@
 //     tone is the Gray code of the value, and the character's top bit is the Walsh sign XOR the parity of its index.
 //   • CONTESTIA — Olivia's structure with 32-symbol blocks of 6-bit characters (the description). The scrambler is not
 //     in the prose: 0xEDB88320 rotated right 5·j bits was FOUND by search against public recordings (Olivia's constant
-//     gave no lock); space is code 59, code 0 is idle, the rest are ASCII − 32 (uppercase). Named as a finding.
+//     gave no lock); space is code 59, code 0 is idle, the rest are ASCII − 32 (uppercase). ★ CONFIRMED 2026-10-31 by
+//     decoding fldigi's own Contestia audio (fldigi run as a black box, never read): every sub-mode we offer, every
+//     printable character; the newline is code 60 (docs/v12/DECODERS-WAVE2.md section 18).
 //
 // ★ COST: one real FFT (PFFFT — its own NEON/SSE kernels) of 2 × the symbol per quarter symbol per symbol length in use,
 //   powers in q65v lanes, Walsh transforms in q65v lanes, a 64-state Viterbi at the bit rate (≤ 62 bit/s, scalar: ≈ 8 k
