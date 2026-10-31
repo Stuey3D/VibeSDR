@@ -132,9 +132,25 @@ At 2.4 MS/s on 868.6 MHz, 13 of the 16 EU868 channels fit (867.1–867.5 do not)
 MeshCore (910.525) are outside the 915 band's capture.
 
 **Governor.** A detector's cost unit = its rate/125 kHz × (SF+3)/10. The benchmark row `dec_lora` times the 868 default
-set; `budgetFromBench` adds tiers while all of LoRa would stay under 25 % of one core. No benchmark: everything on 64-bit,
-tier 0 only on 32-bit ARM. **The benchmark never hides the default set**; the owner can force everything (mode switch
-`lora+all`, config only for now) or switch LoRa off (`lora`, on the Setup page).
+set through the threaded engine in real time; it is GRADED by its hottest thread (LoRa runs on `vibe-lora` / `lora2` /
+`lora3` since 2026-10-31), and `budgetFromBench` reads the engine's whole work (the sum of those three threads in the row's
+detail, `vsLoraBenchPct`) and adds tiers while all of LoRa would stay under 25 % of one core. No benchmark: everything on
+64-bit, tier 0 only on 32-bit ARM. **The benchmark never hides the default set.**
+
+**The owner's two switches, on the Setup page and the Android server screen** (the modes list, drawn as a tree since
+2026-10-31: ISM › LoRa › every channel):
+- **LoRa / Meshtastic / MeshCore** (`lora` in the blocked list when off). Under ISM: LoRa runs only inside ISM mode, so
+  with ISM off it is greyed with the reason.
+- **LoRa: listen on every channel** (`lora+all` in the list when ON — the "+" convention of `spotsband+wspr`), under LoRa,
+  greyed while LoRa or ISM is off. **Unticked does NOT mean no LoRa**: the default channels above always decode while LoRa
+  is on, plus as many tier 1/2 channels as the benchmark affords. Its hint says so, and how many run now
+  (vibeserver.json `loraChannels`: per band `plan`, `fit` in the capture, `defaults`, `run`).
+- **The benchmark's row `dec_lora_all`** ("Decoder: LoRa (868, every channel)": the same threaded engine on every channel
+  the 868 capture holds, real time, scored by its hottest thread, the process total in the detail) sets its default on a
+  fresh setup: GREEN ticks it on (with "it measured X % … so it was turned on"); anything else leaves it off with "measured
+  X % … tick it to use it anyway". The advice block says "Can be enabled: LoRa on every channel" when green. ONE RULE, TWO
+  READERS (`benchApplyDefaults`, `applyBench`). On the Pi 2 the row grades amber (two threads at ~77–84 %, keeping up),
+  so it starts off there; the owner can tick it.
 
 **Threads.** Network > Audio > Spectrum > Decoders: `Engine::feed` copies and returns; its own queue drops the oldest
 block past half a second and counts it (`lora.dropped`). The ISM worker drains decoded frames each wake and merges them.
@@ -219,5 +235,5 @@ and it took the radio back afterwards):
 
 - Implicit-header frames (none of the three networks needs them).
 - A per-hour node count and "furthest" on the gallery card (the service does not know the receiver's position).
-- A Setup-page control for `lora+all`.
+- ~~A Setup-page control for `lora+all`.~~ Done 2026-10-31 (§3, "The owner's two switches").
 - Soft-decision decoding for CR 4/5–4/6 (~1 dB more).

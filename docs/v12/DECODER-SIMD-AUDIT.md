@@ -631,6 +631,9 @@ listeners, ≥ 899 MHz, no live throttle bit, at most 41 °C; every run valid). 
 All three answered on 2026-10-31:
 1. **The ARM detector hop:** restored to 320 µs (above). The Oregon decode is back.
 2. **"lora+all" on 868 on a Pi 2** (two LoRa threads at 81–84 %, keeping up): stays owner-only, as it is.
+   ★ Since (2026-10-31, after the merge): it is no longer config-only — "LoRa: listen on every channel" is a tick box
+   under LoRa on the Setup page and the Android server screen, and the benchmark's `dec_lora_all` row sets its default
+   (green → on). On the Pi 2 it grades amber, so it still starts off there (LORA-MESH.md §3).
 3. **`test-web-ism-gallery`'s chip list:** updated to the chips the client shows. Every one was added deliberately:
    - FT8 renamed DIGITAL SPOTS (`3c10a4056`);
    - PSK, NDB, AIS, APRS, DSC (2026-10-26);
