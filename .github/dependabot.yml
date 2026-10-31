@@ -22,6 +22,22 @@ updates:
       interval: weekly
     open-pull-requests-limit: 3
     target-branch: v12-experimental
+    # ★★ EXPO OWNS THESE VERSIONS (2026-10-31). Each Expo SDK pins the React Native core and the native modules it was
+    #    tested with (`npx expo install --check`); a bump outside that range is a native build nobody has verified —
+    #    react-native-screens 4.30 and safe-area-context 5.10.1 were proposed while SDK 57 expects ~4.26 and ~5.7.
+    #    They move with an SDK upgrade, via `npx expo install --fix`, never one at a time. `ignore` applies to version
+    #    updates only: a vulnerable one still raises its security alert and PR.
+    ignore:
+      - dependency-name: "expo"
+      - dependency-name: "expo-*"
+      - dependency-name: "@expo/*"
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "react-native"
+      - dependency-name: "react-native-*"
+      - dependency-name: "@react-native/*"
+      - dependency-name: "@react-native-community/*"
+      - dependency-name: "@shopify/react-native-skia"
 
   - package-ecosystem: gradle
     directory: /android
@@ -29,3 +45,8 @@ updates:
       interval: weekly
     open-pull-requests-limit: 3
     target-branch: v12-experimental
+    # ★ The Gradle wrapper and the Android Gradle plugin follow the React Native template for the RN version in use
+    #   (Gradle 9.3.1 for RN 0.86); a newer wrapper is not something the RN Gradle plugin has been released against.
+    ignore:
+      - dependency-name: "gradle-wrapper"
+      - dependency-name: "com.android.tools.build:gradle"
