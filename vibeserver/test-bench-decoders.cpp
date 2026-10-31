@@ -37,6 +37,18 @@ int main() {
     { const Row* b = nullptr; for (auto& x : rows) if (x.id == "dec_ft8band") b = &x;
       ok(b && b->pct > 0.0 && b->pct < 400.0 && b->decoded >= 20, std::string("dec_ft8band: ") + (b ? std::to_string(b->pct).substr(0, 5) + " % of a core, "
          + std::to_string(b->decoded) + " spots decoded — " + b->label : "missing")); }
+    // ★★ LoRa (2026-10-31): threaded since the ISM/LoRa split, so scored by its hottest thread, the engine's threads kept
+    { const Row* l = nullptr; for (auto& x : rows) if (x.id == "dec_lora") l = &x;
+      double proc = -1, lora = 0; int nl = 0;
+      if (l) for (const auto& t : l->threads) { if (t.first == "process") proc = t.second; if (t.first.rfind("vibe-lora", 0) == 0) { lora += t.second; ++nl; } }
+      ok(l && l->pct > 0.0 && proc >= 0 && l->pct <= proc + 0.5 && !l->hottest.empty(),
+         std::string("dec_lora: scored by its hottest thread (") + (l ? l->hottest + " " + std::to_string(l->pct).substr(0, 5) : "missing")
+         + " %), process " + std::to_string(proc).substr(0, 5) + " % in the detail");
+#if defined(__linux__) || defined(__APPLE__)
+      ok(nl == 3, "…and its three engine threads are in the detail (" + std::to_string(nl) + ", " + std::to_string(lora).substr(0, 5)
+         + " % together — what budgetFromBench reads)");
+#endif
+      ok(l && l->decoded >= 1, "dec_lora decodes its default channel's uplink (" + std::to_string(l ? l->decoded : -1) + ")"); }
     for (auto& x : rows) if (x.id == "dec_sstv") ok(x.label.find("listening") == std::string::npos, "SSTV committed to a picture (its VIS decoded), so the row is the decoding cost");
     ok(vibe::clockOffsetUs().load() == clk, "the FT8 row puts the UTC correction back exactly as it found it");
     for (auto& x : rows) ok(x.ms >= 0, x.id + " reports its own wall time (" + std::to_string(x.ms) + " ms)");
@@ -65,7 +77,7 @@ int main() {
         ok(r.pct > 0.0 && r.pct < 400.0, r.id + ": " + std::to_string(r.pct).substr(0, 5) + " % of a core");
         if (!filter) ok(r.decoded > 0, r.id + " decoded its signal (" + std::to_string(r.decoded) + ")");
         // ★★ whole-radio rows are scored by their HOTTEST thread (as ADS-B), the process total kept in the detail
-        if (r.id == "dec_ais" || r.id == "dec_ism" || r.id == "dec_wmbus") {
+        if (r.id == "dec_ais" || r.id == "dec_ism" || r.id == "dec_wmbus" || r.id == "dec_lora_all") {
             double proc = -1; for (const auto& t : r.threads) if (t.first == "process") proc = t.second;
             ok(!r.hottest.empty() && proc >= 0 && r.pct <= proc + 0.5, r.id + ": scored by its hottest thread (" + r.hottest + " "
                + std::to_string(r.pct).substr(0, 5) + " %), process " + std::to_string(proc).substr(0, 5) + " % kept in the detail");
@@ -79,12 +91,21 @@ int main() {
         bool have = false; for (const auto& r : more) have |= r.id == id;
         ok(have, "digital-spots mode " + m.name + " has its own row");
     }
+    // ★★ "every LoRa channel" (lora+all): its own row, after dec_lora's default channels — and it hears more than they do
+    { const Row* a = nullptr; const Row* d = nullptr;
+      for (const auto& r : more) if (r.id == "dec_lora_all") a = &r;
+      for (const auto& r : rows) if (r.id == "dec_lora") d = &r;
+      ok(a && a->label.rfind("Decoder: LoRa (868, every channel)", 0) == 0, "dec_lora_all is a row: " + (a ? a->label : std::string("missing")));
+      ok(a && d && a->decoded > d->decoded, "every channel decodes the uplink on a channel the default set leaves out ("
+         + std::to_string(a ? a->decoded : -1) + " frames against " + std::to_string(d ? d->decoded : -1) + ")"); }
     std::printf("   first eight rows: %.1f s · the rest: %.1f s · all: %.1f s\n", firstSec, moreMs / 1000.0, firstSec + moreMs / 1000.0);
 
     std::printf("── the defaults rule ──\n");
     ok(ruleFor("dec_dsc").primary && std::string(ruleFor("dec_dsc").sw) == "dsc", "DSC's row is its switch's main decoder: below green, \"dsc\" starts off");
     ok(!ruleFor("dec_cwskim").primary && std::string(ruleFor("dec_cwskim").sw) == "cw", "the CW skimmer never switches CW off (the one-signal decoder is green)");
     ok(!ruleFor("spot_q65").primary && ruleFor("spot_q65").slot, "a digital-spots mode is a slot, flagged but never switched off");
+    ok(std::string(ruleFor("dec_lora_all").sw) == "lora+all" && !ruleFor("dec_lora_all").primary && !ruleFor("dec_lora_all").slot,
+       "dec_lora_all names the owner's \"lora+all\", never switches anything off and is no slot (the readers tick it ON when green)");
     ok(!ruleFor("dec_ndb").slot && !ruleFor("dec_lora").slot && !ruleFor("dec_ft8band").slot, "whole-radio modes and Band are not the decoder limit's yardstick");
     // ★ Stuart, 2026-10-31: the first eight rows keep their old behaviour — flagged below green, never switched off.
     for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora" })

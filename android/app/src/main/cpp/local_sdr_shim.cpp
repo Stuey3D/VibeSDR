@@ -35017,7 +35017,12 @@ static int vsBandOverride(const std::string& mode) {
 /** ★ The benchmark's Band row (dec_ft8band: the busiest band, every mode, ONE pass, through the real tuners and engines)
  *  → this machine's budget in FT8 units (digi::budgetUnitsFromBench). No benchmark run, or no Band row: ∞ — the live
  *  skips alone then govern. Parsed from the stored result (GET /vibeserver/benchmark's JSON). */
-/** ★ V12 LoRa: the benchmark's dec_lora row, % of one core (−1 = no benchmark run, or no row). */
+/** ★ V12 LoRa: what the benchmark's dec_lora row says the WHOLE engine costs for the 868 default channels, % of one core
+ *  (−1 = no benchmark run, or no row) — vibelora::budgetFromBench's input.
+ *  ★★ Since LoRa runs on three threads (2026-10-31) the row is SCORED by its hottest thread ("pct"), but the budget is a
+ *     linear model of the engine's total work (more channels = more detectors), so it reads the sum of the row's own
+ *     "vibe-lora…" threads from its detail. A result from before the split has no such threads: its "pct" WAS the inline
+ *     engine's total, the same quantity, and is used as it is. */
 static double vsLoraBenchPct() {
     LocalSdrShim::BenchGetFn getFn;
     { std::lock_guard<std::mutex> lk(g_vsBenchMtx); getFn = g_vsBenchGet; }
@@ -35025,8 +35030,15 @@ static double vsLoraBenchPct() {
     const std::string j = getFn();
     const size_t at = j.find("\"id\":\"dec_lora\"");
     if (at == std::string::npos) return -1;
-    const size_t end = j.find('}', at);
-    const std::string row = j.substr(at, end == std::string::npos ? std::string::npos : end - at);
+    const size_t end = j.find("}}", at);   // ★ the row ends after its "threads" object
+    const std::string row = j.substr(at, end == std::string::npos ? std::string::npos : end - at + 1);
+    double sum = 0; bool any = false;
+    for (size_t p = row.find("\"vibe-lora"); p != std::string::npos; p = row.find("\"vibe-lora", p + 1)) {
+        const size_t c = row.find("\":", p + 1);
+        if (c == std::string::npos) break;
+        sum += std::atof(row.c_str() + c + 2); any = true;
+    }
+    if (any) return sum;
     const size_t pp = row.find("\"pct\":");
     return pp == std::string::npos ? -1 : std::atof(row.c_str() + pp + 6);
 }

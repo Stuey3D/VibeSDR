@@ -624,6 +624,10 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_sstv",     { "sstv",   false,  true  } }, { "dec_time",     { "time",   false,  true  } },
         { "dec_ft8",      { "spots",  false,  true  } }, { "dec_ft8band",  { "",       false, false } },   // ★ its own rule (spotsband)
         { "dec_lora",     { "",       false, false } },   // ★ its own budget (vibelora::budgetFromBench)
+        /* ★★ "every LoRa channel" (2026-10-31): the owner's "lora+all", an option UNDER LoRa. Inverted against every other
+         *  switch — GREEN ticks it ON on a fresh setup, anything else leaves it off with the figure beside it (both readers'
+         *  own rule, as Band and Advanced RDS have). Never primary: it never switches anything off. */
+        { "dec_lora_all", { "lora+all", false, false } },
         { "dec_cw",       { "cw",     true,  true  } }, { "dec_cwskim",   { "cw",     false, true  } },
         { "dec_psk",      { "psk",    true,  true  } }, { "dec_pskskim",  { "psk",    false, true  } },
         { "dec_jtty",     { "jtty",   true,  true  } }, { "dec_sitora",   { "sitora", true,  true  } },
@@ -639,6 +643,58 @@ inline RowRule ruleFor(const std::string& id) {
     for (const auto& e : t) if (id == e.id) return e.r;
     if (id.rfind("spot_", 0) == 0) return { "spots", false, true };   // ★ every digital-spots mode: inside "Digital spots"
     return { "", false, false };
+}
+
+// ── LoRa (ISM mode), threaded and in real time ─────────────────────────────────────────────────────────────────────
+
+/** ★★ LoRa as ISM mode runs it (vibe_lora_service.h): the THREADED engine (vibe-lora / vibe-lora2 / vibe-lora3) on the 868
+ *  plan at the server's own 868 capture (868.6 MHz, 2.4 MS/s), fed in real time like the ISM and AIS rows, and SCORED BY
+ *  THE HOTTEST THREAD — the one that would fall behind first. The process total and each thread stay in the detail.
+ *  `budgetUnits`: 0 = the default channels only (dec_lora); ∞ = every channel the capture holds (dec_lora_all, the
+ *  owner's "lora+all"). The signal is noise at the band's level with two LoRaWAN SF7 uplinks in it — one on a default
+ *  channel (868.1), one on a channel only "every channel" runs (867.9) — so the row also shows the channels decode.
+ *  ★ `decoded` counts good frames over the warm-up and the measured stretch. "(fell behind)" if any stage dropped. */
+inline Row loraRealTimeRow(const char* id, const char* label, double budgetUnits) {
+    Row r; r.id = id; r.label = label;
+    const double w0 = wallNow();
+    const double fs = 2.4e6, centre = 868.6e6;
+    std::vector<vibelora::cf> x((size_t)fs);   // ★ one second, looped
+    { std::mt19937 g(12); std::normal_distribution<float> d(0.f, (float)std::sqrt(0.5e-4)); for (auto& v : x) v = { d(g), d(g) }; }
+    auto uplink = [&](double hz, double at, uint32_t devAddr) {
+        vibelora::Phy p; p.sf = 7; p.bw = 125e3; p.cr = 1; p.sync = 0x34; p.preamble = 8; p.ldro = vibelora::ldroFor(7, 125e3);
+        std::vector<uint8_t> b = { 0x40 };                                   // LoRaWAN unconfirmed data up
+        for (int i = 0; i < 4; ++i) b.push_back(uint8_t(devAddr >> (8 * i)));
+        b.push_back(0); b.push_back(7); b.push_back(0); b.push_back(1);      // FCtrl, FCnt, FPort
+        for (int i = 0; i < 8; ++i) b.push_back(uint8_t(0xE0 + i));          // the (opaque) payload
+        for (int i = 0; i < 4; ++i) b.push_back(0xC3);                       // MIC
+        const auto w = vibelora::modulate(p, vibelora::encode(p, b), fs, hz - centre, 0, 0.4, 0.3);
+        const float amp = (float)std::sqrt(std::pow(10.0, 10.0 / 10) * 1e-4 * p.bw / fs);   // 10 dB SNR in its bandwidth
+        const size_t s0 = (size_t)(at * fs);
+        for (size_t i = 0; i < w.size() && s0 + i < x.size(); ++i) x[s0 + i] += w[i] * amp;
+    };
+    uplink(868.1e6, 0.10, 0x260B1234);
+    uplink(867.9e6, 0.55, 0x260B5678);
+    vibelora::Engine e;
+    if (!e.start("868", centre, fs, budgetUnits)) { r.label += " (no channels)"; return r; }
+    const size_t blk = (size_t)(fs / 100);
+    const double t0 = wallNow(); double fed = 0, c0 = 0; size_t pos = 0; bool measuring = false;
+    std::map<uint64_t, ThreadTime> th0;
+    int frames = 0;
+    while (fed < kRtWarmSec + kRtSec) {
+        if (!measuring && fed >= kRtWarmSec) { c0 = processCpu(); th0 = threadTimes(); measuring = true; }
+        e.feed(x.data() + pos, blk);
+        pos = (pos + blk) % x.size(); fed += blk / fs;
+        const double ahead = fed - (wallNow() - t0);
+        if (ahead > 0) std::this_thread::sleep_for(std::chrono::microseconds((long long)(ahead * 1e6)));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    scoreHottest(r, th0, threadTimes(), kRtSec, 100.0 * (processCpu() - c0) / kRtSec);
+    for (const auto& h : e.take()) if (h.f.crcOk || !h.f.crcOn) ++frames;
+    r.decoded = frames;
+    if (e.dropped()) r.label += " (fell behind)";
+    e.stop();
+    r.ms = (int)std::lround(1000.0 * (wallNow() - w0));
+    return r;
 }
 
 // ── every row ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -886,6 +942,13 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     };
     ismRow("dec_ism", "Decoder: ISM sensors @ 2.4 MS/s (433 MHz)", "ism433", "433");
     ismRow("dec_wmbus", "Decoder: ISM meters (wM-Bus) @ 2.4 MS/s (868 MHz)", "ism868", "868");
+    // ★★ LoRa on every channel the 868 capture holds (the owner's "lora+all") — dec_lora's sibling (the default channels,
+    //    one of the first eight). Its grade decides whether "every channel" starts ticked on a fresh setup.
+    run("Decoder: LoRa (868, every channel)", [&] {
+        Row r = loraRealTimeRow("dec_lora_all", "Decoder: LoRa (868, every channel)", INFINITY);
+        r.ms = -1;   // ★ run() times the row itself
+        return r;
+    });
 
     // ── a listener's own filters (per listener, on their DSP thread — no decoder slot) ──
     run("CTCSS / DCS tone ID", [&] {

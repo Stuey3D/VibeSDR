@@ -191,6 +191,9 @@ struct Row { std::string id, label; double pct = -1; int decoded = -1; int ms = 
              /** ★ Rows scored by their hottest thread (AIS, ISM): which thread, and every thread's % plus "process". */
              std::string hottest; std::vector<std::pair<std::string, double>> threads; };
 inline double rowClock() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+/** ★ LoRa's rows (dec_lora, dec_lora_all): the threaded engine on the 868 plan in real time, scored by its hottest thread.
+ *  Defined in vibe_benchmark_more.h (it needs the per-thread clock), which every user of this header also includes. */
+inline Row loraRealTimeRow(const char* id, const char* label, double budgetUnits);
 
 /** Time one decoder: `seconds` of its signal, fed as fast as it will take it; `settle` waits for
  *  work a decoder does on a thread of its own to finish before the clock stops. */
@@ -325,19 +328,15 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
         }
     }
     {
-        /* ★★ V12 LoRa (vibe_lora_service.h): ISM mode's 868 default channels (LoRaWAN ×3 at SF7-12, Meshtastic LongFast,
-         *  MeshCore) searching 4 s of a 2.4 MS/s capture — the search is the cost; a frame adds one FFT per symbol. It sets
-         *  how many more channels run (vibelora::budgetFromBench); the default set is never hidden by it. */
-        t0 = rowClock(); if (step) step("Decoder: LoRa (868 default channels)");
-        const double rate = 2.4e6, secs = std::max(4.0, seconds);
-        std::vector<vibelora::cf> x(size_t(rate * secs));
-        uint32_t r = 12345;
-        for (auto& v : x) { r = r * 1664525u + 1013904223u; const float a = float(int(r >> 16 & 255) - 128), b = float(int(r >> 24) - 128); v = vibelora::cf(a, b) * (1.0f / 2048); }
-        vibelora::Engine e;
-        e.startInline("868", 868.6e6, rate, 0);
-        const double pct = timeIt(secs, [&] { for (size_t o = 0; o < x.size(); o += 65536) e.process(&x[o], std::min<size_t>(65536, x.size() - o)); }, [] {});
-        rows.push_back({ "dec_lora", "Decoder: LoRa (868 default channels)", pct, 0 });
-        rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
+        /* ★★ V12 LoRa (vibe_lora_service.h): ISM mode's 868 default channels (LoRaWAN 868.1/.3/.5 at SF7-12, Meshtastic
+         *  LongFast, MeshCore) through the THREADED engine, fed in real time — vibe_benchmark_more.h loraRealTimeRow.
+         *  ★★ SCORED BY ITS HOTTEST THREAD since LoRa runs on three (vibe-lora / lora2 / lora3, 2026-10-31), as ISM and AIS
+         *     are: the inline total it used to report (~110 % on a Pi 2) read as "too heavy" for a set that keeps up there
+         *     with no thread over ~55 %. The engine's own total (the three threads) stays in the row's detail, and THAT is
+         *     what sets how many more channels run (vibelora::budgetFromBench via the shim's vsLoraBenchPct) — the same
+         *     quantity the inline figure was, so the governor's arithmetic is unchanged. The default set is never hidden. */
+        if (step) step("Decoder: LoRa (868 default channels)");
+        rows.push_back(loraRealTimeRow("dec_lora", "Decoder: LoRa (868 default channels)", 0.0));
     }
     return rows;
 }

@@ -109,7 +109,9 @@ inline std::vector<const PlanCh*> choose(const std::vector<PlanCh>& plan, double
 }
 
 /** ★★ THE BENCHMARK SETS THE DEFAULT, NEVER HIDES (Stuart's rule). `pctDefault`: the benchmark's dec_lora row — the 868
- *  default tier's cost, % of one core. The default tier always runs while LoRa is on; further tiers are added while the
+ *  default tier's cost, % of one core, as the WHOLE engine's work: since LoRa runs on three threads the row is scored by
+ *  its hottest thread, and the shim's vsLoraBenchPct reads the sum of its vibe-lora threads from the row's detail (a
+ *  result from before the split carries the inline total, the same quantity) — so this arithmetic is unchanged. The default tier always runs while LoRa is on; further tiers are added while the
  *  whole LoRa engine would stay under kCorePct of one core. No benchmark yet: every tier on 64-bit machines, the default
  *  tier only on 32-bit ARM (the Pi 2 — the minimum spec). The owner can force everything ("lora+all") or switch LoRa off. */
 static constexpr double kCorePct = 25.0;
