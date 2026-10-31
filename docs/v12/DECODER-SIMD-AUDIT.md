@@ -457,7 +457,10 @@ one core.
 - **Unit tests identical to base otherwise:**
   - test-wmbus (311), test-ism-gallery (56), on the Mac and on the Pi 2. On the Pi, test-wmbus has one failure, "S1:
     frequency 868281666", which the base build has too.
-  - test-lora, which now also checks that its two threads give the inline engine's 11 frames, field for field.
+  - test-lora, which now also checks that its three threads give the inline engine's 11 frames, field for field. That
+    check passes on the Pi 2 too. There, test-lora is otherwise identical to base, including two failures the base
+    build has on armhf: the SF7 and SF8 sensitivity rows, 72 % and 77 % against "≥ 80 %". It is the same marginal
+    threshold under libstdc++'s noise noted for i686 above.
   - NEON = scalar on every output. i686 SSE2 (qemu): test-ism 160/160, the keyfob capture identical to base, and the 433
     capture's bursts identical to the Mac NEON build.
 - **End to end against the new server binary (Mac):** `test-server-ism` 34/34, `test-web-ism` 25/25,
