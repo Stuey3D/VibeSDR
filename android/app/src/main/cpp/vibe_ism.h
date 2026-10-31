@@ -22,6 +22,13 @@
 #include <cstring>
 #include <memory>
 #include <vector>
+#if !defined(VIBE_FORCE_SCALAR) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
+#include <arm_neon.h>
+#define VIBE_ISM_NEON 1
+#elif !defined(VIBE_FORCE_SCALAR) && (defined(__SSE2__) || defined(_M_X64))
+#include <emmintrin.h>
+#define VIBE_ISM_SSE2 1
+#endif
 #if defined(VIBE_DAB_PFFFT)
 #include "vibe_dab_fft.h"
 #endif
@@ -55,6 +62,105 @@ struct Burst {
     std::shared_ptr<const std::vector<cf>> bb;
     double bbRate = 0;        ///< its sample rate
 };
+
+/** ★★ A complex multiply WITHOUT std::complex's NaN/Inf recovery (2026-10-31, the decoder SIMD audit). C99 Annex G,
+ *  which std::complex<float>::operator* follows under GCC unless -fcx-limited-range, re-tests every product for NaN and
+ *  branches to __mulsc3: on the Pi 2 (qemu-arm instruction count, ISM mode) the products in the per-sample loops cost
+ *  more than the FFTs did, and the branch keeps the compiler from vectorising them. Our samples are always finite. */
+inline cf cmulf(cf a, cf b) {
+    return cf(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
+}
+
+/* ★★ THE PER-SAMPLE COMPLEX RUNS, FOUR AT A TIME (2026-10-31, the decoder SIMD audit). GCC never auto-vectorises a float
+ *  loop for 32-bit ARM NEON (NEON flushes denormals, so it needs -funsafe-math-optimizations, which the server does not
+ *  use) — on the Pi 2 every one of these is NEON by hand or scalar VFP. Scalar tails; same products as the scalar form. */
+/** y[i] = a[i]·b[i], with b conjugated first (conjB) and/or the product conjugated (conjOut). */
+inline void cmulRun(const cf* a, const cf* b, cf* y, int n, bool conjB, bool conjOut) {
+    const float sb = conjB ? -1.0f : 1.0f, so = conjOut ? -1.0f : 1.0f;
+    int i = 0;
+#if VIBE_ISM_NEON
+    const float32x4_t vsb = vdupq_n_f32(sb), vso = vdupq_n_f32(so);
+    for (; i + 4 <= n; i += 4) {
+        const float32x4x2_t x = vld2q_f32(reinterpret_cast<const float*>(a + i));
+        float32x4x2_t h = vld2q_f32(reinterpret_cast<const float*>(b + i));
+        h.val[1] = vmulq_f32(h.val[1], vsb);
+        float32x4x2_t r;
+        r.val[0] = vmlsq_f32(vmulq_f32(x.val[0], h.val[0]), x.val[1], h.val[1]);
+        r.val[1] = vmulq_f32(vmlaq_f32(vmulq_f32(x.val[0], h.val[1]), x.val[1], h.val[0]), vso);
+        vst2q_f32(reinterpret_cast<float*>(y + i), r);
+    }
+#elif VIBE_ISM_SSE2
+    const __m128 vsb = _mm_setr_ps(1, sb, 1, sb), vso = _mm_setr_ps(1, so, 1, so);
+    for (; i + 2 <= n; i += 2) {
+        const __m128 x = _mm_loadu_ps(reinterpret_cast<const float*>(a + i));                  // r0 i0 r1 i1
+        const __m128 h = _mm_mul_ps(_mm_loadu_ps(reinterpret_cast<const float*>(b + i)), vsb);
+        const __m128 hr = _mm_shuffle_ps(h, h, _MM_SHUFFLE(2, 2, 0, 0)), hi = _mm_shuffle_ps(h, h, _MM_SHUFFLE(3, 3, 1, 1));
+        const __m128 xs = _mm_shuffle_ps(x, x, _MM_SHUFFLE(2, 3, 0, 1));                       // i0 r0 i1 r1
+        // r·hr − i·hi in lanes 0/2 (re), i·hr + r·hi in lanes 1/3 (im)
+        const __m128 r = _mm_add_ps(_mm_mul_ps(x, hr), _mm_mul_ps(_mm_mul_ps(xs, hi), _mm_setr_ps(-1, 1, -1, 1)));
+        _mm_storeu_ps(reinterpret_cast<float*>(y + i), _mm_mul_ps(r, vso));
+    }
+#endif
+    for (; i < n; ++i) {
+        const cf h(b[i].real(), sb * b[i].imag());
+        const cf r = cmulf(a[i], h);
+        y[i] = cf(r.real(), so * r.imag());
+    }
+}
+
+/** y[i] = (xConj ? conj(x[i]) : x[i]) · rot·incⁱ; rot is left at rot·incⁿ. ★ Four rotators a step apart, each stepping
+ *  by inc⁴: the one serial chain (rot ·= inc) was what kept this from being vector work. Renormalised once a run. */
+inline void rotateRun(const cf* x, cf* y, int n, bool xConj, cf& rot, cf inc) {
+    int i = 0;
+    const float sx = xConj ? -1.0f : 1.0f;
+#if VIBE_ISM_NEON
+    if (n >= 8) {
+        const cf r1 = cmulf(rot, inc), r2 = cmulf(r1, inc), r3 = cmulf(r2, inc);
+        const cf i2 = cmulf(inc, inc), i4 = cmulf(i2, i2);
+        const float rr[4] = { rot.real(), r1.real(), r2.real(), r3.real() }, ri[4] = { rot.imag(), r1.imag(), r2.imag(), r3.imag() };
+        float32x4_t Rr = vld1q_f32(rr), Ri = vld1q_f32(ri);
+        const float32x4_t Ir = vdupq_n_f32(i4.real()), Ii = vdupq_n_f32(i4.imag()), vsx = vdupq_n_f32(sx);
+        for (; i + 4 <= n; i += 4) {
+            float32x4x2_t v = vld2q_f32(reinterpret_cast<const float*>(x + i));
+            v.val[1] = vmulq_f32(v.val[1], vsx);
+            float32x4x2_t r;
+            r.val[0] = vmlsq_f32(vmulq_f32(v.val[0], Rr), v.val[1], Ri);
+            r.val[1] = vmlaq_f32(vmulq_f32(v.val[0], Ri), v.val[1], Rr);
+            vst2q_f32(reinterpret_cast<float*>(y + i), r);
+            const float32x4_t nr = vmlsq_f32(vmulq_f32(Rr, Ir), Ri, Ii);
+            Ri = vmlaq_f32(vmulq_f32(Rr, Ii), Ri, Ir);
+            Rr = nr;
+        }
+        rot = cf(vgetq_lane_f32(Rr, 0), vgetq_lane_f32(Ri, 0));
+    }
+#elif VIBE_ISM_SSE2
+    if (n >= 8) {
+        const cf r1 = cmulf(rot, inc), r2 = cmulf(r1, inc), r3 = cmulf(r2, inc);
+        const cf i2 = cmulf(inc, inc), i4 = cmulf(i2, i2);
+        __m128 Rr = _mm_setr_ps(rot.real(), r1.real(), r2.real(), r3.real()), Ri = _mm_setr_ps(rot.imag(), r1.imag(), r2.imag(), r3.imag());
+        const __m128 Ir = _mm_set1_ps(i4.real()), Ii = _mm_set1_ps(i4.imag()), vsx = _mm_set1_ps(sx);
+        for (; i + 4 <= n; i += 4) {
+            const __m128 a = _mm_loadu_ps(reinterpret_cast<const float*>(x + i)), b = _mm_loadu_ps(reinterpret_cast<const float*>(x + i + 2));
+            const __m128 vr = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0));
+            const __m128 vi = _mm_mul_ps(_mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1)), vsx);
+            const __m128 orr = _mm_sub_ps(_mm_mul_ps(vr, Rr), _mm_mul_ps(vi, Ri));
+            const __m128 oi = _mm_add_ps(_mm_mul_ps(vr, Ri), _mm_mul_ps(vi, Rr));
+            _mm_storeu_ps(reinterpret_cast<float*>(y + i), _mm_unpacklo_ps(orr, oi));
+            _mm_storeu_ps(reinterpret_cast<float*>(y + i + 2), _mm_unpackhi_ps(orr, oi));
+            const __m128 nr = _mm_sub_ps(_mm_mul_ps(Rr, Ir), _mm_mul_ps(Ri, Ii));
+            Ri = _mm_add_ps(_mm_mul_ps(Rr, Ii), _mm_mul_ps(Ri, Ir));
+            Rr = nr;
+        }
+        float lr[4], li[4]; _mm_storeu_ps(lr, Rr); _mm_storeu_ps(li, Ri);
+        rot = cf(lr[0], li[0]);
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = cmulf(cf(x[i].real(), sx * x[i].imag()), rot);
+        rot = cmulf(rot, inc);
+    }
+    rot /= std::abs(rot);
+}
 
 /** A radix-2 FFT, forward, natural order (the DAB one's shape, kept local so this header links nothing). */
 class SmallFft {
@@ -196,9 +302,10 @@ private:
     struct Chan {
         bool on = false;
         double offHz = 0;
-        cf rot{1, 0}, inc{1, 0};
-        int mcnt = 0, renorm = 0;
-        cf acc{0, 0}, acc2{0, 0};
+        cf rot{1, 0}, incM{1, 0};   ///< the mixer at the current output's first sample, and its step per output
+        int M = 1, mcnt = 0, renorm = 0;
+        std::vector<float> wA, wB;  ///< the triangle's falling / rising weights × incʲ, and × j (runChan, macRun)
+        cf sF{0, 0}, sR{0, 0}, carry{0, 0};
         uint64_t next = 0;      ///< the next working sample (absolute) this channel has not yet consumed
         uint64_t start = 0, lastHit = 0;
         int hits = 0;           ///< detector frames that saw it — a noise spike is one; a burst is many
@@ -226,23 +333,73 @@ private:
      *  A plain integrate-and-dump of M samples leaks a strong burst one output rate away straight onto DC (its sinc's
      *  null is only exact AT k·R), and test-ism's TPMS, 240 kHz from an empty channel, decoded twice. The triangle's
      *  sinc² halves every sidelobe in dB for one more multiply-add per sample. */
+    /** One run of a channel's triangle: `n` ring samples `x` into the four sums acc = {falling re, im, rising re, im},
+     *  weights wA/wB (4 floats a sample: the falling and rising weights × incʲ, and the same × j — see openChan), and
+     *  the run's peak |re|,|im|. ★ NEON / SSE2: two multiply-adds of four lanes a sample and a vector max — the scalar
+     *  form's compares each moved a flag out of the VFP (vmrs), which stalls a Cortex-A7. Same products, same order. */
+    static void macRun(const cf* x, int n, const float* wA, const float* wB, float* acc, float& pk) {
+#if VIBE_ISM_NEON
+        float32x4_t s = vld1q_f32(acc);
+        float32x2_t m = vdup_n_f32(pk);
+        for (int k = 0; k < n; ++k) {
+            const float32x2_t v = vld1_f32(reinterpret_cast<const float*>(x + k));
+            m = vmax_f32(m, vabs_f32(v));
+            s = vmlaq_lane_f32(s, vld1q_f32(wA + 4 * k), v, 0);
+            s = vmlaq_lane_f32(s, vld1q_f32(wB + 4 * k), v, 1);
+        }
+        vst1q_f32(acc, s);
+        pk = std::max(vget_lane_f32(m, 0), vget_lane_f32(m, 1));
+#elif VIBE_ISM_SSE2
+        __m128 s = _mm_loadu_ps(acc);
+        __m128 m = _mm_set1_ps(pk);
+        const __m128 absMask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
+        for (int k = 0; k < n; ++k) {
+            const float* v = reinterpret_cast<const float*>(x + k);
+            const __m128 re = _mm_set1_ps(v[0]), im = _mm_set1_ps(v[1]);
+            m = _mm_max_ps(m, _mm_and_ps(_mm_unpacklo_ps(re, im), absMask));
+            s = _mm_add_ps(s, _mm_add_ps(_mm_mul_ps(re, _mm_loadu_ps(wA + 4 * k)), _mm_mul_ps(im, _mm_loadu_ps(wB + 4 * k))));
+        }
+        _mm_storeu_ps(acc, s);
+        float l[4]; _mm_storeu_ps(l, m);
+        pk = std::max(std::max(l[0], l[1]), pk);
+#else
+        for (int k = 0; k < n; ++k) {
+            const float re = x[k].real(), im = x[k].imag();
+            pk = std::max(pk, std::max(std::fabs(re), std::fabs(im)));
+            for (int l = 0; l < 4; ++l) acc[l] += re * wA[4 * k + l] + im * wB[4 * k + l];
+        }
+#endif
+    }
+
     void runChan(Chan& c, uint64_t upto) {
-        const size_t mask = ring_.size() - 1;
-        const float norm = 1.0f / (float(chanM_) * float(chanM_ + 1));
-        for (uint64_t s = c.next; s < upto; ++s) {
-            const cf v = ring_[size_t(s & mask)];
-            const float pa = std::max(std::fabs(v.real()), std::fabs(v.imag()));
-            if (pa > c.peakAbs) c.peakAbs = pa;
-            const cf m = v * c.rot;
-            c.rot *= c.inc;
-            c.acc  += m * float(chanM_ - c.mcnt);     // the falling half of THIS output
-            c.acc2 += m * float(c.mcnt + 1);          // the rising half of the NEXT
-            if (++c.mcnt >= chanM_) {
-                c.bb.push_back(c.acc * norm);
-                c.acc = c.acc2; c.acc2 = 0; c.mcnt = 0;
+        /* ★★ THE TRIANGLE WITH THE MIXER FOLDED INTO ITS WEIGHTS (2026-10-31, the decoder SIMD audit). Per sample this was
+         *  v·rot, rot·inc and two weighted accumulates — three std::complex products, each NaN-checked, and a recurrence
+         *  the compiler could not vectorise: ~15 % of ISM mode on the Pi 2 (qemu-arm count, Stuart's 433.92 capture). Over
+         *  one output's M samples the rotator is rot₀·incʲ, so the falling and rising weights × incʲ are tables built when
+         *  the channel opens; a sample is then two four-lane multiply-adds (macRun), and the rotator steps once an OUTPUT
+         *  (rot₀ ·= inc^M), renormalised as before. Same sums, in another order. */
+        const size_t size = ring_.size(), mask = size - 1;
+        const int M = c.M;
+        const float norm = 1.0f / (float(M) * float(M + 1));
+        const cf* ring = ring_.data();
+        float acc[4] = { c.sF.real(), c.sF.imag(), c.sR.real(), c.sR.imag() };
+        float pk = c.peakAbs;
+        int j = c.mcnt;
+        for (uint64_t s = c.next; s < upto;) {
+            const size_t pos = size_t(s & mask);
+            // a run inside one output and one unbroken stretch of the ring
+            const int n = int(std::min<uint64_t>(std::min<uint64_t>(uint64_t(M - j), upto - s), uint64_t(size - pos)));
+            macRun(ring + pos, n, c.wA.data() + 4 * j, c.wB.data() + 4 * j, acc, pk);
+            s += uint64_t(n); j += n;
+            if (j >= M) {
+                c.bb.push_back((c.carry + cmulf(c.rot, cf(acc[0], acc[1]))) * norm);
+                c.carry = cmulf(c.rot, cf(acc[2], acc[3]));
+                c.rot = cmulf(c.rot, c.incM);
+                acc[0] = acc[1] = acc[2] = acc[3] = 0; j = 0;
                 if (++c.renorm >= 256) { c.renorm = 0; c.rot /= std::abs(c.rot); }
             }
         }
+        c.sF = cf(acc[0], acc[1]); c.sR = cf(acc[2], acc[3]); c.mcnt = j; c.peakAbs = pk;
         c.next = upto;
     }
 
@@ -364,9 +521,19 @@ private:
         c.pending = true;
         c.peakPow = 0; c.framePow = 0;
         const double ph = -2.0 * M_PI * f / w_;
-        c.inc = cf(float(std::cos(ph)), float(std::sin(ph)));
+        c.M = chanM_;
+        c.wA.resize(size_t(4 * c.M)); c.wB.resize(size_t(4 * c.M));
+        for (int j = 0; j < c.M; ++j) {   // incʲ in double: the table is exact where the per-sample recurrence drifted
+            const double cr = std::cos(ph * j), ci = std::sin(ph * j);
+            const float f = float(c.M - j), r = float(j + 1);   // the falling half of THIS output, the rising of the NEXT
+            const float a[4] = { float(cr) * f, float(ci) * f, float(cr) * r, float(ci) * r };
+            // x·w = re·(w) + im·(j·w): wA is w, wB is j·w = (−w.im, w.re)
+            const float b[4] = { -a[1], a[0], -a[3], a[2] };
+            for (int l = 0; l < 4; ++l) { c.wA[size_t(4 * j + l)] = a[l]; c.wB[size_t(4 * j + l)] = b[l]; }
+        }
+        c.incM = cf(float(std::cos(ph * c.M)), float(std::sin(ph * c.M)));
         c.rot = cf(1, 0);
-        c.mcnt = 0; c.renorm = 0; c.acc = 0; c.acc2 = 0;
+        c.mcnt = 0; c.renorm = 0; c.sF = 0; c.sR = 0; c.carry = 0;
         c.peakAbs = 0;
         c.bb.clear();
         c.bb.reserve(size_t(0.1 * chanRate()));
