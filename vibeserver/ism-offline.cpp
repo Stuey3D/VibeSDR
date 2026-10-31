@@ -212,6 +212,13 @@ int main(int argc, char** argv) {
         std::printf("service: bursts %s, decoded %s, unknown %s, dropped %s %s, capture %s %%\n", field("bursts").c_str(), field("decoded").c_str(),
                     field("unknown").c_str(), field("dropped").c_str(), dp == std::string::npos ? "" : rep.substr(dp, rep.find(']', dp) - dp + 1).c_str(),
                     field("capture").c_str());
+        // ★ LoRa's own counts (its "lora" object: frames, and blocks dropped before either of its threads)
+        const size_t lp = rep.find("\"lora\":{");
+        if (lp != std::string::npos) {
+            const std::string lo = rep.substr(lp, rep.find('}', lp) - lp);
+            auto lf = [&](const char* k) { const size_t p = lo.find(std::string("\"") + k + "\":"); return p == std::string::npos ? std::string("?") : lo.substr(p + std::strlen(k) + 3, lo.find_first_of(",}", p + std::strlen(k) + 3) - (p + std::strlen(k) + 3)); };
+            std::printf("lora: %s channels, %s detectors, %s frames, dropped %s\n", lf("chans").c_str(), lf("dets").c_str(), lf("frames").c_str(), lf("dropped").c_str());
+        }
         if (!realtime) {
             std::printf("\n%.1f s of capture: %llu bursts, %llu decodes, %zu devices\n", t, (unsigned long long)nb, (unsigned long long)nd, tr.size());
             std::printf("\nthe device list (as the clients get it):\n%s\n", tr.json(t, nullptr).c_str());
