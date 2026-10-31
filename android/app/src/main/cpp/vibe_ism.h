@@ -218,10 +218,22 @@ using DetFft = SmallFft;
 #endif
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-//  THE FRONT END
+//  THE FRONT END — three stages (2026-10-31, the Pi 2 thread split)
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-class FrontEnd {
-public:
+/* ★★★ WHY THREE STAGES. On the Pi 2 (the minimum spec) ISM 433 was ONE thread at 106 % of a core: it could not keep up
+ *  and lost bursts, with three cores idle beside it. The work is a pipeline, and only the first stage must keep real
+ *  time:
+ *    1. Detector   — the FFT energy detector over the whole capture. Decides where a burst is, when it starts and ends,
+ *                    and says so as ChanEvents (open / promote / cancel / close, each at a sample position). Mixes nothing.
+ *    2. ChanMixer  — follows those events over the same samples: each burst's narrow channel (the triangle filter with the
+ *                    mixer folded in), handed on as a RawBurst when it closes.
+ *    3. the slicer — FrontEnd::finish: the OOK/FSK slices (slice()), then the decoders.
+ *  FrontEnd runs all three inline (the tests, ism-offline); vibe_ism_service.h runs each on its own thread with a bounded
+ *  queue between them, so a slow decoder lags, then drops, and never costs the detector its real time.
+ * ★★ THE SAME BURSTS, BIT FOR BIT. A channel's output depends only on the samples it covers (start to close) and its
+ *    frequency, never on when it was mixed: macRun carries its sums in floats across calls in sample order. So the mixer
+ *    may run whenever it likes, as long as it applies each event at the event's own sample position. */
+struct FeConst {
     static constexpr int    kN = 256;            ///< detector FFT size (≈ 9.4 kHz bins at 2.4 MS/s)
     /** How often the detector looks: one kN-point FFT every kHopUs of capture (~3 100 a second). ★ 32-BIT ARM (the Pi 2 —
      *  the minimum spec — and Pi 0/1/3 on armhf) looks half as often: the detector FFT is most of the front end's cost on
@@ -245,16 +257,77 @@ public:
     static constexpr int    kMaxChans = 4;
     static constexpr float  kMinBurstSnrDb = 6.5f; ///< see slice(): noise alone reads ~4.5 dB
     static constexpr size_t kMaxRuns = 6000;      ///< more transitions than any sensor sends in 1.6 s = noise; not decoded
+    /** The pre-decimation for a capture rate: anything above 2.6 MS/s (an Airspy at 10 MS/s) by an integer boxcar, so the
+     *  detector and the channels cost the same whatever the radio runs at. The sensors sit near the middle, the boxcar's
+     *  first null is at the new rate — plenty for a detector and a 250 kHz channel. */
+    static int preFor(double rateHz) { return std::max(1, int(std::ceil(rateHz / 2.6e6))); }
+};
+
+/** What the detector tells the mixer, at work-sample position `at` (the detector's sample count when it decided). */
+struct ChanEvent {
+    enum Kind : uint8_t { kOpen, kPromote, kCancel, kClose };
+    Kind kind = kOpen;
+    uint8_t slot = 0;          ///< which of the kMaxChans channels
+    uint32_t serial = 0;       ///< which opening of that slot (a mixer that lost the open ignores the rest)
+    uint64_t at = 0;
+    uint64_t start = 0;        ///< kOpen: the channel's first sample (the pre-roll before the detection)
+    double offHz = 0;          ///< kOpen: its centre, relative to the capture centre
+};
+
+/** A closed channel, mixed and not yet sliced: the mixer's output, the slicer's input. */
+struct RawBurst {
+    double tSec = 0;           ///< capture time of its first sample
+    double offHz = 0;
+    double chanRate = 0;
+    float peakAbs = 0;         ///< its capture samples' peak |re|, |im| (the clip flag)
+    std::vector<cf> bb;        ///< the channel's complex baseband
+};
+
+/** max(pk, every |re| and |im| of x[0..n)) — the capture's overload meter. ★ NEON / SSE2: the scalar form's compares each
+ *  moved a flag out of the VFP (vmrs), which stalls a Cortex-A7. A maximum is exact in any order, so all three agree. */
+inline float absPeakRun(const cf* x, size_t n, float pk) {
+    const float* f = reinterpret_cast<const float*>(x);
+    size_t i = 0;
+    const size_t nf = 2 * n;
+#if VIBE_ISM_NEON
+    if (nf >= 8) {
+        float32x4_t m0 = vdupq_n_f32(pk), m1 = m0;
+        for (; i + 8 <= nf; i += 8) {
+            m0 = vmaxq_f32(m0, vabsq_f32(vld1q_f32(f + i)));
+            m1 = vmaxq_f32(m1, vabsq_f32(vld1q_f32(f + i + 4)));
+        }
+        const float32x4_t m = vmaxq_f32(m0, m1);
+        float32x2_t h = vpmax_f32(vget_low_f32(m), vget_high_f32(m));
+        h = vpmax_f32(h, h);
+        pk = vget_lane_f32(h, 0);
+    }
+#elif VIBE_ISM_SSE2
+    if (nf >= 8) {
+        const __m128 absMask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
+        __m128 m0 = _mm_set1_ps(pk), m1 = m0;
+        for (; i + 8 <= nf; i += 8) {
+            m0 = _mm_max_ps(m0, _mm_and_ps(_mm_loadu_ps(f + i), absMask));
+            m1 = _mm_max_ps(m1, _mm_and_ps(_mm_loadu_ps(f + i + 4), absMask));
+        }
+        float l[4]; _mm_storeu_ps(l, _mm_max_ps(m0, m1));
+        pk = std::max(std::max(l[0], l[1]), std::max(l[2], l[3]));
+    }
+#endif
+    for (; i < nf; ++i) pk = std::max(pk, std::fabs(f[i]));
+    return pk;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  STAGE 1 — THE DETECTOR (keeps real time; mixes nothing)
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+class Detector : public FeConst {
+public:
     float threshDb = 10.0f;                        ///< detection: a bin this far over its own noise floor
 
-    explicit FrontEnd(double rateHz) : fft_(kN) {
-        // ★ Pre-decimate anything above 2.6 MS/s (an Airspy at 10 MS/s) by an integer boxcar: the detector and the
-        //   channels then cost the same whatever the radio runs at. The sensors sit near the middle, the boxcar's
-        //   first null is at the new rate — plenty for a detector and a 250 kHz channel.
-        pre_ = std::max(1, int(std::ceil(rateHz / 2.6e6)));
+    explicit Detector(double rateHz) : fft_(kN) {
+        pre_ = preFor(rateHz);
         w_ = rateHz / pre_;
-        chanM_ = std::max(1, int(std::lround(w_ / kChanRate)));
-        ring_.assign(size_t(1) << 18, cf(0, 0));      // ~109 ms at 2.4 MS/s
+        hist_.assign(kHist, cf(0, 0));
         win_.resize(kN);
         for (int i = 0; i < kN; ++i) win_[size_t(i)] = float(0.5 - 0.5 * std::cos(2 * M_PI * (i + 0.5) / kN));
         floor_.assign(kN, 0.0f);
@@ -262,19 +335,10 @@ public:
         fbuf_.resize(kN);
         hop_ = std::max(kN, int(std::lround(w_ * kHopUs * 1e-6)));
     }
-
     double workRate() const { return w_; }
-    double chanRate() const { return w_ / chanM_; }
-    /** ★ V12 wM-Bus: a wider burst channel — the work rate over the integer nearest `hz` (2.4 MS/s → 480 kS/s, 2.048 →
-     *  512 k). The 868 band asks for ~500 kS/s: a T1/C1 chip is 10 µs, 2.5 samples at 250 kS/s. The slicer's smoothing is
-     *  in µs (slice()), so every other family slices as it did at 250 k. Call before feeding. */
-    void setChanRate(double hz) { chanM_ = std::max(1, int(std::lround(w_ / std::max(1.0, hz)))); }
-    /** ★ V12 wM-Bus: hand each burst's complex baseband on in Burst::bb (the 868 band only — see Burst::bb). */
-    void setKeepBaseband(bool on) { keepBb_ = on; }
-    uint64_t bursts() const { return bursts_; }
-#if defined(VIBE_ISM_PROF)
-    IsmProf prof;
-#endif
+    int pre() const { return pre_; }
+    /** Work samples seen so far = the position of the next one. */
+    uint64_t total() const { return total_; }
     /** The detector's median bin floor, dBFS per bin (for the status line and the gain rule). */
     double noiseDb() const { return noiseDb_; }
     /** Share of detector frames in the last second where any sample neared full scale — the gain rule's overload. */
@@ -284,161 +348,83 @@ public:
     /** Detect only between these offsets from the capture centre (the band's own span): the tuner's filter skirts
      *  outside it are where the floor moves fastest and false bursts cluster (Pi 500 RTL, 433.92, 2026-10-25). */
     void setUsableHz(double lo, double hi) { useLo_ = lo; useHi_ = hi; tablesOk_ = false; }
+#if defined(VIBE_ISM_PROF)
+    IsmProf* prof_ = nullptr;
+#endif
 
-    /** Feed capture samples. `onBurst(const Burst&)` is called on THIS thread when a burst ends. */
-    template <class F> void feed(const cf* x, size_t n, F&& onBurst) {
+    /** Feed capture samples; what the channels must do is appended to `ev` (in sample order). Where the capture is
+     *  pre-decimated (pre() > 1) the work samples are appended to `work` — the mixer's input; otherwise the mixer takes
+     *  `x` itself, and `work` is not touched. */
+    void feed(const cf* x, size_t n, std::vector<ChanEvent>& ev, std::vector<cf>* work) {
         if (pre_ > 1) {
             for (size_t i = 0; i < n; ++i) {
                 preAcc_ += x[i]; if (++preCnt_ < pre_) continue;
-                pushWork(preAcc_ * (1.0f / pre_), onBurst); preAcc_ = 0; preCnt_ = 0;
+                const cf v = preAcc_ * (1.0f / pre_); preAcc_ = 0; preCnt_ = 0;
+                if (work) work->push_back(v);
+                hist_[size_t(total_ & kHistMask)] = v;
+                blockPeak_ = std::max(blockPeak_, std::max(std::fabs(v.real()), std::fabs(v.imag())));
+                ++total_;
+                if (++sinceFft_ >= hop_) { sinceFft_ = 0; detect(ev); }
             }
             return;
         }
-        /* ★★ IN RUNS, NOT SAMPLE BY SAMPLE: the per-sample bookkeeping (ring index, peak, two boundary checks) was ~85 % of
-         *  the front end's cost on the M4 — the FFTs themselves 0.4 % of a core. Copy up to the next boundary (an FFT, or
-         *  the channels' 1024-sample step) in one tight loop the compiler vectorises, then do the boundary's work. */
-        const size_t mask = ring_.size() - 1;
+        /* ★★ NO COPY. The window for each FFT is read straight from the block (and, where it starts before the block,
+         *  from hist_ — the last kHist samples of the blocks before). The overload meter is a vector max over each run. */
+        xCur_ = x; xBase_ = total_;
         size_t i = 0;
         while (i < n) {
-            const size_t toFft = size_t(hop_ - sinceFft_), toChan = 1024 - size_t(total_ & 1023);
-            const size_t room = std::min(n - i, std::min(toFft, toChan));
+            const size_t room = std::min(n - i, size_t(hop_ - sinceFft_));
             VIBE_ISM_P(const double tp0 = ismProfNow();)
-            float pk = blockPeak_;
-            size_t pos = size_t(total_ & mask);
-            for (size_t k = 0; k < room; ++k) {
-                const cf v = x[i + k];
-                ring_[(pos + k) & mask] = v;
-                pk = std::max(pk, std::max(std::fabs(v.real()), std::fabs(v.imag())));
-            }
-            blockPeak_ = pk;
-            VIBE_ISM_P(prof.copy += ismProfNow() - tp0;)
+            blockPeak_ = absPeakRun(x + i, room, blockPeak_);
+            VIBE_ISM_P(if (prof_) prof_->copy += ismProfNow() - tp0;)
             total_ += room; sinceFft_ += int(room); i += room;
-            if ((total_ & 1023) == 0) for (auto& c : ch_) if (c.on && !c.pending) runChan(c, total_);
-            if (sinceFft_ >= hop_) { sinceFft_ = 0; detect(onBurst); }
+            if (sinceFft_ >= hop_) { sinceFft_ = 0; detect(ev); }
         }
+        const size_t keep = std::min(n, kHist);
+        for (size_t k = n - keep; k < n; ++k) hist_[size_t((xBase_ + k) & kHistMask)] = x[k];
+        xCur_ = nullptr;
     }
-
-    /** Close every open channel now (end of stream). */
-    template <class F> void flush(F&& onBurst) {
-        for (auto& c : ch_) if (c.on) { if (c.pending) { c.on = false; c.pending = false; continue; } runChan(c, total_); closeChan(c, onBurst); }
+    /** End of stream: every channel closes now (a pending one is dropped). */
+    void flush(std::vector<ChanEvent>& ev) {
+        for (int s = 0; s < kMaxChans; ++s) {
+            DChan& c = ch_[s];
+            if (!c.on) continue;
+            emit(ev, c.pending || c.hits < 3 ? ChanEvent::kCancel : ChanEvent::kClose, s);
+            c.on = false; c.pending = false;
+        }
     }
 
 private:
-    struct Chan {
+    static constexpr size_t kHist = 1024, kHistMask = kHist - 1;   ///< ≥ kN: the window before the current block
+    /** The detector's view of a channel: where, since when, how often seen. The mixing is the mixer's. */
+    struct DChan {
         bool on = false;
-        double offHz = 0;
-        cf rot{1, 0}, incM{1, 0};   ///< the mixer at the current output's first sample, and its step per output
-        int M = 1, mcnt = 0, renorm = 0;
-        std::vector<float> wA, wB;  ///< the triangle's falling / rising weights × incʲ, and × j (runChan, macRun)
-        cf sF{0, 0}, sR{0, 0}, carry{0, 0};
-        uint64_t next = 0;      ///< the next working sample (absolute) this channel has not yet consumed
-        uint64_t start = 0, lastHit = 0;
-        int hits = 0;           ///< detector frames that saw it — a noise spike is one; a burst is many
         /** ★★ A CANDIDATE until seen twice. One noise bin in a few thousand crosses 10 dB, and mixing a channel for 25 ms
          *  after each was ~75 % of the front end's whole cost on pure noise (M4: 2.8 % of a core → 0.8 %). Nothing is lost
-         *  by waiting: the channel mixes from its pre-roll in the ring when promoted. */
+         *  by waiting: the channel mixes from its pre-roll when promoted. */
         bool pending = false;
+        double offHz = 0;
+        uint64_t start = 0, lastHit = 0;
+        int hits = 0;           ///< detector frames that saw it — a noise spike is one; a burst is many
         float peakPow = 0, framePow = 0;   ///< its strongest bin power, ever and in the current detector frame
-        float peakAbs = 0;
-        std::vector<cf> bb;
+        uint32_t serial = 0;
     };
-
-    template <class F> void pushWork(cf v, F& onBurst) {
-        const size_t mask = ring_.size() - 1;
-        ring_[size_t(total_ & mask)] = v;
-        const float a = std::max(std::fabs(v.real()), std::fabs(v.imag()));
-        if (a > blockPeak_) blockPeak_ = a;
-        ++total_;
-        // ★ channels consume up to "now" every 1024 samples (and at a detection), never more than the ring holds
-        if ((total_ & 1023) == 0) for (auto& c : ch_) if (c.on && !c.pending) runChan(c, total_);
-        if (++sinceFft_ >= hop_) { sinceFft_ = 0; detect(onBurst); }
+    void emit(std::vector<ChanEvent>& ev, ChanEvent::Kind k, int slot) {
+        ChanEvent e; e.kind = k; e.slot = uint8_t(slot); e.serial = ch_[slot].serial; e.at = total_;
+        if (k == ChanEvent::kOpen) { e.start = ch_[slot].start; e.offHz = ch_[slot].offHz; }
+        ev.push_back(e);
     }
+    /** Capture sample `s` (absolute work position), from the current block or the history before it. */
+    cf sampleAt(uint64_t s) const { return xCur_ && s >= xBase_ ? xCur_[s - xBase_] : hist_[size_t(s & kHistMask)]; }
 
-    /* ★★ THE CHANNEL FILTER IS A TRIANGLE (a second-order CIC, done as two weighted accumulators — no integrator to drift).
-     *  A plain integrate-and-dump of M samples leaks a strong burst one output rate away straight onto DC (its sinc's
-     *  null is only exact AT k·R), and test-ism's TPMS, 240 kHz from an empty channel, decoded twice. The triangle's
-     *  sinc² halves every sidelobe in dB for one more multiply-add per sample. */
-    /** One run of a channel's triangle: `n` ring samples `x` into the four sums acc = {falling re, im, rising re, im},
-     *  weights wA/wB (4 floats a sample: the falling and rising weights × incʲ, and the same × j — see openChan), and
-     *  the run's peak |re|,|im|. ★ NEON / SSE2: two multiply-adds of four lanes a sample and a vector max — the scalar
-     *  form's compares each moved a flag out of the VFP (vmrs), which stalls a Cortex-A7. Same products, same order. */
-    static void macRun(const cf* x, int n, const float* wA, const float* wB, float* acc, float& pk) {
-#if VIBE_ISM_NEON
-        float32x4_t s = vld1q_f32(acc);
-        float32x2_t m = vdup_n_f32(pk);
-        for (int k = 0; k < n; ++k) {
-            const float32x2_t v = vld1_f32(reinterpret_cast<const float*>(x + k));
-            m = vmax_f32(m, vabs_f32(v));
-            s = vmlaq_lane_f32(s, vld1q_f32(wA + 4 * k), v, 0);
-            s = vmlaq_lane_f32(s, vld1q_f32(wB + 4 * k), v, 1);
-        }
-        vst1q_f32(acc, s);
-        pk = std::max(vget_lane_f32(m, 0), vget_lane_f32(m, 1));
-#elif VIBE_ISM_SSE2
-        __m128 s = _mm_loadu_ps(acc);
-        __m128 m = _mm_set1_ps(pk);
-        const __m128 absMask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
-        for (int k = 0; k < n; ++k) {
-            const float* v = reinterpret_cast<const float*>(x + k);
-            const __m128 re = _mm_set1_ps(v[0]), im = _mm_set1_ps(v[1]);
-            m = _mm_max_ps(m, _mm_and_ps(_mm_unpacklo_ps(re, im), absMask));
-            s = _mm_add_ps(s, _mm_add_ps(_mm_mul_ps(re, _mm_loadu_ps(wA + 4 * k)), _mm_mul_ps(im, _mm_loadu_ps(wB + 4 * k))));
-        }
-        _mm_storeu_ps(acc, s);
-        float l[4]; _mm_storeu_ps(l, m);
-        pk = std::max(std::max(l[0], l[1]), pk);
-#else
-        for (int k = 0; k < n; ++k) {
-            const float re = x[k].real(), im = x[k].imag();
-            pk = std::max(pk, std::max(std::fabs(re), std::fabs(im)));
-            for (int l = 0; l < 4; ++l) acc[l] += re * wA[4 * k + l] + im * wB[4 * k + l];
-        }
-#endif
+    void detect(std::vector<ChanEvent>& ev) {
+        VIBE_ISM_P(const double tp0 = ismProfNow(); if (prof_) ++prof_->detects;)
+        detectBody(ev);
+        VIBE_ISM_P(if (prof_) prof_->detect += ismProfNow() - tp0;)
     }
-
-    void runChan(Chan& c, uint64_t upto) {
-        /* ★★ THE TRIANGLE WITH THE MIXER FOLDED INTO ITS WEIGHTS (2026-10-31, the decoder SIMD audit). Per sample this was
-         *  v·rot, rot·inc and two weighted accumulates — three std::complex products, each NaN-checked, and a recurrence
-         *  the compiler could not vectorise: ~15 % of ISM mode on the Pi 2 (qemu-arm count, Stuart's 433.92 capture). Over
-         *  one output's M samples the rotator is rot₀·incʲ, so the falling and rising weights × incʲ are tables built when
-         *  the channel opens; a sample is then two four-lane multiply-adds (macRun), and the rotator steps once an OUTPUT
-         *  (rot₀ ·= inc^M), renormalised as before. Same sums, in another order. */
-        VIBE_ISM_P(const double tp0 = ismProfNow(); prof.mixSamp += upto - c.next;)
-        const size_t size = ring_.size(), mask = size - 1;
-        const int M = c.M;
-        const float norm = 1.0f / (float(M) * float(M + 1));
-        const cf* ring = ring_.data();
-        float acc[4] = { c.sF.real(), c.sF.imag(), c.sR.real(), c.sR.imag() };
-        float pk = c.peakAbs;
-        int j = c.mcnt;
-        for (uint64_t s = c.next; s < upto;) {
-            const size_t pos = size_t(s & mask);
-            // a run inside one output and one unbroken stretch of the ring
-            const int n = int(std::min<uint64_t>(std::min<uint64_t>(uint64_t(M - j), upto - s), uint64_t(size - pos)));
-            macRun(ring + pos, n, c.wA.data() + 4 * j, c.wB.data() + 4 * j, acc, pk);
-            s += uint64_t(n); j += n;
-            if (j >= M) {
-                c.bb.push_back((c.carry + cmulf(c.rot, cf(acc[0], acc[1]))) * norm);
-                c.carry = cmulf(c.rot, cf(acc[2], acc[3]));
-                c.rot = cmulf(c.rot, c.incM);
-                acc[0] = acc[1] = acc[2] = acc[3] = 0; j = 0;
-                if (++c.renorm >= 256) { c.renorm = 0; c.rot /= std::abs(c.rot); }
-            }
-        }
-        c.sF = cf(acc[0], acc[1]); c.sR = cf(acc[2], acc[3]); c.mcnt = j; c.peakAbs = pk;
-        c.next = upto;
-        VIBE_ISM_P(prof.mix += ismProfNow() - tp0;)
-    }
-
-    template <class F> void detect(F& onBurst) {
-        VIBE_ISM_P(const double tp0 = ismProfNow(), nest0 = prof.mix + prof.slice + prof.decode; ++prof.detects;)
-        detectBody(onBurst);
-        VIBE_ISM_P(prof.detect += ismProfNow() - tp0 - (prof.mix + prof.slice + prof.decode - nest0);)
-    }
-    template <class F> void detectBody(F& onBurst) {
-        const size_t mask = ring_.size() - 1;
+    void detectBody(std::vector<ChanEvent>& ev) {
         const uint64_t s0 = total_ - kN;
-        for (int i = 0; i < kN; ++i) fbuf_[size_t(i)] = ring_[size_t((s0 + i) & mask)] * win_[size_t(i)];
+        for (int i = 0; i < kN; ++i) fbuf_[size_t(i)] = sampleAt(s0 + uint64_t(i)) * win_[size_t(i)];
         fft_.forward(fbuf_.data());
         const float norm = 1.0f / (float(kN) * float(kN) * 0.375f);   // Hann's power gain, so a bin reads as dBFS-ish
         for (int i = 0; i < kN; ++i) pw_[size_t(i)] = std::norm(fbuf_[size_t(i)]) * norm;
@@ -497,11 +483,12 @@ private:
             // ★ a single bin must be clearly strong; a wider group may be weaker — a real burst spreads over bins
             if (gr.width < 2 && gr.peak < thr * 3.0f) continue;
             const double f = gr.f / gr.wsum;
-            Chan* hit = nullptr;
-            for (auto& c : ch_) if (c.on && std::fabs(c.offHz - f) < kMatchHz) { hit = &c; break; }
-            if (hit) {
-                hit->lastHit = total_; ++hit->hits; hit->peakPow = std::max(hit->peakPow, gr.pmax); hit->framePow = std::max(hit->framePow, gr.pmax);
-                if (hit->pending) { VIBE_ISM_P(++prof.promotes;) hit->pending = false; runChan(*hit, total_); }   // ★ a second sighting: now it is worth mixing
+            int hit = -1;
+            for (int s = 0; s < kMaxChans; ++s) if (ch_[s].on && std::fabs(ch_[s].offHz - f) < kMatchHz) { hit = s; break; }
+            if (hit >= 0) {
+                DChan& h = ch_[hit];
+                h.lastHit = total_; ++h.hits; h.peakPow = std::max(h.peakPow, gr.pmax); h.framePow = std::max(h.framePow, gr.pmax);
+                if (h.pending) { VIBE_ISM_P(if (prof_) ++prof_->promotes;) h.pending = false; emit(ev, ChanEvent::kPromote, hit); }   // ★ a second sighting: now it is worth mixing
                 continue;
             }
             /* ★★ SPLATTER IS NOT A BURST. A strong OOK transmitter's keying edges spread −30…−45 dB sidebands hundreds of
@@ -512,24 +499,35 @@ private:
             bool shadow = false;
             for (auto& c : ch_) if (c.on && c.peakPow > gr.pmax * 300.0f) { shadow = true; break; }
             if (shadow) continue;
-            Chan* freeC = nullptr;
-            for (auto& c : ch_) if (!c.on) { freeC = &c; break; }
-            if (!freeC) continue;                              // ★ four bursts at once already: the fifth is lost
-            VIBE_ISM_P(++prof.opens;)
-            openChan(*freeC, f);
-            freeC->peakPow = freeC->framePow = gr.pmax;
+            int freeS = -1;
+            for (int s = 0; s < kMaxChans; ++s) if (!ch_[s].on) { freeS = s; break; }
+            if (freeS < 0) continue;                           // ★ four bursts at once already: the fifth is lost
+            VIBE_ISM_P(if (prof_) ++prof_->opens;)
+            openChan(freeS, f, ev);
+            ch_[freeS].peakPow = ch_[freeS].framePow = gr.pmax;
         }
         // close channels that went quiet, or ran too long
-        for (auto& c : ch_) {
+        for (int s = 0; s < kMaxChans; ++s) {
+            DChan& c = ch_[s];
             if (!c.on) continue;
-            if (c.pending) { if (double(total_ - c.lastHit) > std::max(3.0 * hop_, 0.004 * w_)) { VIBE_ISM_P(++prof.cancels;) c.on = false; c.pending = false; } continue; }
+            if (c.pending) {
+                if (double(total_ - c.lastHit) > std::max(3.0 * hop_, 0.004 * w_)) {
+                    VIBE_ISM_P(if (prof_) ++prof_->cancels;)
+                    c.on = false; c.pending = false; emit(ev, ChanEvent::kCancel, s);
+                }
+                continue;
+            }
             const double quiet = double(total_ - c.lastHit) / w_;
             const double len = double(total_ - c.start) / w_;
             if (quiet > kCloseS || len > kMaxBurstS) {
-                VIBE_ISM_P(if (quiet > kCloseS) ++prof.closeQuiet; else { ++prof.closeLong; prof.longSamp += total_ - c.start; })
-                VIBE_ISM_P(if (prof.log) std::fprintf(stderr, "close %9.3f s  %+9.1f kHz  len %6.1f ms  hits %5d  peak %5.1f dB  %s\n", double(c.start) / w_,
-                                                     c.offHz / 1e3, 1e3 * len, c.hits, 10.0 * std::log10(std::max(1e-20f, c.peakPow)), quiet > kCloseS ? "quiet" : "LONG");)
-                runChan(c, total_); closeChan(c, onBurst);
+                VIBE_ISM_P(if (prof_) { if (quiet > kCloseS) ++prof_->closeQuiet; else { ++prof_->closeLong; prof_->longSamp += total_ - c.start; }
+                                        if (c.hits < 3) ++prof_->fewHits;
+                                        if (prof_->log) std::fprintf(stderr, "close %9.3f s  %+9.1f kHz  len %6.1f ms  hits %5d  peak %5.1f dB  %s\n",
+                                            double(c.start) / w_, c.offHz / 1e3, 1e3 * len, c.hits, 10.0 * std::log10(std::max(1e-20f, c.peakPow)),
+                                            quiet > kCloseS ? "quiet" : "LONG"); })
+                // ★ fewer than 3 detector frames = a noise spike (1 frame in ~0.3 ms; the shortest real burst spans dozens)
+                c.on = false;
+                emit(ev, c.hits >= 3 ? ChanEvent::kClose : ChanEvent::kCancel, s);
             }
         }
     }
@@ -547,18 +545,205 @@ private:
         }
         tablesOk_ = true;
     }
-
-    void openChan(Chan& c, double f) {
+    void openChan(int s, double f, std::vector<ChanEvent>& ev) {
+        DChan& c = ch_[s];
         c.on = true;
         c.offHz = f;
         const uint64_t pre = uint64_t(kPrerollS * w_) + kN;
         c.start = total_ > pre ? total_ - pre : 0;
-        c.next = c.start;
         c.lastHit = total_;
         c.hits = 1;
         c.pending = true;
         c.peakPow = 0; c.framePow = 0;
-        const double ph = -2.0 * M_PI * f / w_;
+        ++c.serial;
+        emit(ev, ChanEvent::kOpen, s);
+    }
+
+    int pre_ = 1, preCnt_ = 0, hop_ = kN, sinceFft_ = 0;
+    cf preAcc_{0, 0};
+    double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0, useLo_ = -1e12, useHi_ = 1e12;
+    int clipWin_ = 0, clipFrames_ = 0;
+    float blockPeak_ = 0;
+    std::vector<cf> hist_;
+    const cf* xCur_ = nullptr;
+    uint64_t xBase_ = 0, total_ = 0, frames_ = 0;
+    DetFft fft_;
+    std::vector<float> win_, floor_, pw_, freq_;
+    std::vector<int> order_;
+    std::vector<uint8_t> usable_;
+    bool tablesOk_ = false;
+    float thr_ = 10.0f, thrDbCached_ = -1.0f;
+    std::vector<cf> fbuf_;
+    DChan ch_[kMaxChans];
+};
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  STAGE 2 — THE CHANNEL MIXER (may lag the detector; follows its events at their sample positions)
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+class ChanMixer : public FeConst {
+public:
+    explicit ChanMixer(double rateHz) {
+        w_ = rateHz / preFor(rateHz);
+        chanM_ = std::max(1, int(std::lround(w_ / kChanRate)));
+        ring_.assign(size_t(1) << 18, cf(0, 0));      // ~109 ms at 2.4 MS/s
+    }
+    double chanRate() const { return w_ / chanM_; }
+    /** ★ V12 wM-Bus: a wider burst channel — the work rate over the integer nearest `hz` (2.4 MS/s → 480 kS/s, 2.048 →
+     *  512 k). Call before feeding. */
+    void setChanRate(double hz) { chanM_ = std::max(1, int(std::lround(w_ / std::max(1.0, hz)))); }
+    uint64_t total() const { return total_; }
+    /** Times the input jumped (a block dropped before it): every open channel was abandoned. */
+    uint64_t gaps() const { return gaps_; }
+#if defined(VIBE_ISM_PROF)
+    IsmProf* prof_ = nullptr;
+#endif
+
+    /** Work samples x[0..n), the first of them sample number `start`, and the detector's events for them (sorted, each
+     *  at ≤ start + n). `onRaw(RawBurst&&)` is called for each channel that closes. ★ A `start` past where the mixer
+     *  is means work was dropped in between: the channels open across the hole are abandoned, never stitched. */
+    template <class F> void feed(const cf* x, size_t n, uint64_t start, const ChanEvent* ev, size_t nev, F&& onRaw) {
+        if (start != total_) {
+            for (auto& c : ch_) abandon(c);
+            total_ = start; validFrom_ = start; ++gaps_;
+        }
+        const size_t size = ring_.size(), mask = size - 1;
+        size_t i = 0, e = 0;
+        for (;;) {
+            while (e < nev && ev[e].at <= total_) apply(ev[e++], onRaw);
+            if (i >= n) break;
+            size_t room = std::min(n - i, 1024 - size_t(total_ & 1023));
+            if (e < nev) room = std::min(room, size_t(ev[e].at - total_));
+            VIBE_ISM_P(const double tp0 = ismProfNow();)
+            const size_t pos = size_t(total_ & mask), a = std::min(room, size - pos);
+            std::memcpy(ring_.data() + pos, x + i, a * sizeof(cf));
+            if (a < room) std::memcpy(ring_.data(), x + i + a, (room - a) * sizeof(cf));
+            VIBE_ISM_P(if (prof_) prof_->copy += ismProfNow() - tp0;)
+            total_ += room; i += room;
+            // ★ channels consume up to "now" every 1024 samples (and at an event), never more than the ring holds
+            if ((total_ & 1023) == 0) for (auto& c : ch_) if (c.on && !c.pending) runChan(c, total_);
+        }
+        while (e < nev) apply(ev[e++], onRaw);   // ★ defensive: none should lie past the block
+    }
+
+private:
+    struct Chan {
+        bool on = false, pending = false;
+        uint32_t serial = 0;
+        double offHz = 0;
+        cf rot{1, 0}, incM{1, 0};   ///< the mixer at the current output's first sample, and its step per output
+        int M = 1, mcnt = 0, renorm = 0;
+        std::vector<float> wA, wB;  ///< the triangle's falling / rising weights × incʲ, and × j (runChan, macRun)
+        cf sF{0, 0}, sR{0, 0}, carry{0, 0};
+        uint64_t next = 0;      ///< the next working sample (absolute) this channel has not yet consumed
+        uint64_t start = 0;
+        float peakAbs = 0;
+        std::vector<cf> bb;
+    };
+    void abandon(Chan& c) { c.on = false; c.pending = false; c.bb.clear(); c.bb.shrink_to_fit(); }
+
+    template <class F> void apply(const ChanEvent& e, F& onRaw) {
+        Chan& c = ch_[e.slot];
+        const uint64_t at = std::min(e.at, total_);
+        if (e.kind == ChanEvent::kOpen) { openChan(c, e); return; }
+        if (!c.on || c.serial != e.serial) return;      // ★ its open was lost with a dropped block
+        if (e.kind == ChanEvent::kPromote) { c.pending = false; runChan(c, at); return; }
+        if (e.kind == ChanEvent::kCancel) { abandon(c); return; }
+        runChan(c, at);
+        c.on = false;
+        RawBurst r;
+        r.tSec = double(c.start) / w_;
+        r.offHz = c.offHz;
+        r.chanRate = chanRate();
+        r.peakAbs = c.peakAbs;
+        r.bb = std::move(c.bb);     // ★ moved, not copied: a new buffer is reserved at the next open
+        c.bb = std::vector<cf>();
+        onRaw(std::move(r));
+    }
+
+    /* ★★ THE CHANNEL FILTER IS A TRIANGLE (a second-order CIC, done as two weighted accumulators — no integrator to drift).
+     *  A plain integrate-and-dump of M samples leaks a strong burst one output rate away straight onto DC (its sinc's
+     *  null is only exact AT k·R), and test-ism's TPMS, 240 kHz from an empty channel, decoded twice. The triangle's
+     *  sinc² halves every sidelobe in dB for one more multiply-add per sample. */
+    /** One run of a channel's triangle: `n` ring samples `x` into the four sums acc = {falling re, im, rising re, im},
+     *  weights wA/wB (4 floats a sample: the falling and rising weights × incʲ, and the same × j — see openChan), and
+     *  the run's peak |re|,|im|. ★ NEON / SSE2: two multiply-adds of four lanes a sample and a vector max — the scalar
+     *  form's compares each moved a flag out of the VFP (vmrs), which stalls a Cortex-A7. Same products, same order. */
+    static void macRun(const cf* x, int n, const float* wA, const float* wB, float* acc, float& pk) {
+#if VIBE_ISM_NEON
+        float32x4_t s = vld1q_f32(acc);
+        float32x2_t m = vdup_n_f32(pk);
+        for (int k = 0; k < n; ++k) {
+            const float32x2_t v = vld1_f32(reinterpret_cast<const float*>(x + k));
+            m = vmax_f32(m, vabs_f32(v));
+            s = vmlaq_lane_f32(s, vld1q_f32(wA + 4 * k), v, 0);
+            s = vmlaq_lane_f32(s, vld1q_f32(wB + 4 * k), v, 1);
+        }
+        vst1q_f32(acc, s);
+        pk = std::max(vget_lane_f32(m, 0), vget_lane_f32(m, 1));
+#elif VIBE_ISM_SSE2
+        __m128 s = _mm_loadu_ps(acc);
+        __m128 m = _mm_set1_ps(pk);
+        const __m128 absMask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
+        for (int k = 0; k < n; ++k) {
+            const float* v = reinterpret_cast<const float*>(x + k);
+            const __m128 re = _mm_set1_ps(v[0]), im = _mm_set1_ps(v[1]);
+            m = _mm_max_ps(m, _mm_and_ps(_mm_unpacklo_ps(re, im), absMask));
+            s = _mm_add_ps(s, _mm_add_ps(_mm_mul_ps(re, _mm_loadu_ps(wA + 4 * k)), _mm_mul_ps(im, _mm_loadu_ps(wB + 4 * k))));
+        }
+        _mm_storeu_ps(acc, s);
+        float l[4]; _mm_storeu_ps(l, m);
+        pk = std::max(std::max(l[0], l[1]), pk);
+#else
+        for (int k = 0; k < n; ++k) {
+            const float re = x[k].real(), im = x[k].imag();
+            pk = std::max(pk, std::max(std::fabs(re), std::fabs(im)));
+            for (int l = 0; l < 4; ++l) acc[l] += re * wA[4 * k + l] + im * wB[4 * k + l];
+        }
+#endif
+    }
+
+    void runChan(Chan& c, uint64_t upto) {
+        /* ★★ THE TRIANGLE WITH THE MIXER FOLDED INTO ITS WEIGHTS (2026-10-31, the decoder SIMD audit). Per sample this was
+         *  v·rot, rot·inc and two weighted accumulates — three std::complex products, each NaN-checked, and a recurrence
+         *  the compiler could not vectorise: ~15 % of ISM mode on the Pi 2 (qemu-arm count, Stuart's 433.92 capture). Over
+         *  one output's M samples the rotator is rot₀·incʲ, so the falling and rising weights × incʲ are tables built when
+         *  the channel opens; a sample is then two four-lane multiply-adds (macRun), and the rotator steps once an OUTPUT
+         *  (rot₀ ·= inc^M), renormalised as before. Same sums, in another order. */
+        VIBE_ISM_P(const double tp0 = ismProfNow(); if (prof_) prof_->mixSamp += upto - c.next;)
+        const size_t size = ring_.size(), mask = size - 1;
+        const int M = c.M;
+        const float norm = 1.0f / (float(M) * float(M + 1));
+        const cf* ring = ring_.data();
+        float acc[4] = { c.sF.real(), c.sF.imag(), c.sR.real(), c.sR.imag() };
+        float pk = c.peakAbs;
+        int j = c.mcnt;
+        for (uint64_t s = c.next; s < upto;) {
+            const size_t pos = size_t(s & mask);
+            // a run inside one output and one unbroken stretch of the ring
+            const int n = int(std::min<uint64_t>(std::min<uint64_t>(uint64_t(M - j), upto - s), uint64_t(size - pos)));
+            macRun(ring + pos, n, c.wA.data() + 4 * j, c.wB.data() + 4 * j, acc, pk);
+            s += uint64_t(n); j += n;
+            if (j >= M) {
+                c.bb.push_back((c.carry + cmulf(c.rot, cf(acc[0], acc[1]))) * norm);
+                c.carry = cmulf(c.rot, cf(acc[2], acc[3]));
+                c.rot = cmulf(c.rot, c.incM);
+                acc[0] = acc[1] = acc[2] = acc[3] = 0; j = 0;
+                if (++c.renorm >= 256) { c.renorm = 0; c.rot /= std::abs(c.rot); }
+            }
+        }
+        c.sF = cf(acc[0], acc[1]); c.sR = cf(acc[2], acc[3]); c.mcnt = j; c.peakAbs = pk;
+        if (upto > c.next) c.next = upto;
+        VIBE_ISM_P(if (prof_) prof_->mix += ismProfNow() - tp0;)
+    }
+
+    void openChan(Chan& c, const ChanEvent& e) {
+        c.on = true;
+        c.pending = true;
+        c.serial = e.serial;
+        c.offHz = e.offHz;
+        c.start = std::max(e.start, validFrom_);   // ★ never into the hole a dropped block left
+        c.next = c.start;
+        const double ph = -2.0 * M_PI * e.offHz / w_;
         c.M = chanM_;
         c.wA.resize(size_t(4 * c.M)); c.wB.resize(size_t(4 * c.M));
         for (int j = 0; j < c.M; ++j) {   // incʲ in double: the table is exact where the per-sample recurrence drifted
@@ -577,27 +762,74 @@ private:
         c.bb.reserve(size_t(0.1 * chanRate()));
     }
 
-    template <class F> void closeChan(Chan& c, F& onBurst) {
-        c.on = false;
-        Burst b;
-        b.tSec = double(c.start) / w_;
-        b.offHz = c.offHz;
-        b.clipped = c.peakAbs > 0.85f;
-        // ★ fewer than 3 detector frames = a noise spike (1 frame in ~0.3 ms; the shortest real burst spans dozens)
-        VIBE_ISM_P(const double tp0 = ismProfNow(); if (c.hits < 3) ++prof.fewHits; else prof.sliceSamp += c.bb.size();)
-        const bool sliced = c.hits >= 3 && slice(c.bb, chanRate(), b);
-        VIBE_ISM_P(prof.slice += ismProfNow() - tp0; if (c.hits >= 3 && !sliced) ++prof.sliceNo;)
-        if (sliced) {
-            ++bursts_;
-            // ★ moved, not copied: the channel's buffer becomes the burst's (a new one is reserved at the next open)
-            if (keepBb_) { b.bb = std::make_shared<const std::vector<cf>>(std::move(c.bb)); b.bbRate = chanRate(); }
-            onBurst(static_cast<const Burst&>(b));
-        }
-        c.bb.clear();
-        c.bb.shrink_to_fit();
+    int chanM_ = 1;
+    double w_ = 0;
+    std::vector<cf> ring_;
+    uint64_t total_ = 0, validFrom_ = 0, gaps_ = 0;
+    Chan ch_[kMaxChans];
+};
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  THE FRONT END — the three stages inline (the tests, ism-offline); the service threads them
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+class FrontEnd : public FeConst {
+public:
+    float threshDb = 10.0f;                        ///< detection: a bin this far over its own noise floor
+
+    explicit FrontEnd(double rateHz) : det_(rateHz), mix_(rateHz) {
+#if defined(VIBE_ISM_PROF)
+        det_.prof_ = &prof; mix_.prof_ = &prof;
+#endif
     }
 
-public:
+    double workRate() const { return det_.workRate(); }
+    double chanRate() const { return mix_.chanRate(); }
+    /** ★ V12 wM-Bus: a wider burst channel — the work rate over the integer nearest `hz` (2.4 MS/s → 480 kS/s, 2.048 →
+     *  512 k). The 868 band asks for ~500 kS/s: a T1/C1 chip is 10 µs, 2.5 samples at 250 kS/s. The slicer's smoothing is
+     *  in µs (slice()), so every other family slices as it did at 250 k. Call before feeding. */
+    void setChanRate(double hz) { mix_.setChanRate(hz); }
+    /** ★ V12 wM-Bus: hand each burst's complex baseband on in Burst::bb (the 868 band only — see Burst::bb). */
+    void setKeepBaseband(bool on) { keepBb_ = on; }
+    uint64_t bursts() const { return bursts_; }
+#if defined(VIBE_ISM_PROF)
+    IsmProf prof;
+#endif
+    /** The detector's median bin floor, dBFS per bin (for the status line and the gain rule). */
+    double noiseDb() const { return det_.noiseDb(); }
+    /** Share of detector frames in the last second where any sample neared full scale — the gain rule's overload. */
+    double clipFrac() const { return det_.clipFrac(); }
+    /** Ignore detections within this many Hz of the capture centre (the DC remnant). */
+    void setDcGuardHz(double hz) { det_.setDcGuardHz(hz); }
+    /** Detect only between these offsets from the capture centre (the band's own span). */
+    void setUsableHz(double lo, double hi) { det_.setUsableHz(lo, hi); }
+
+    /** Feed capture samples. `onBurst(const Burst&)` is called on THIS thread when a burst ends. */
+    template <class F> void feed(const cf* x, size_t n, F&& onBurst) {
+        ev_.clear(); work_.clear();
+        det_.threshDb = threshDb;
+        const uint64_t s0 = det_.total();
+        const bool pre = det_.pre() > 1;
+        det_.feed(x, n, ev_, pre ? &work_ : nullptr);
+        mix_.feed(pre ? work_.data() : x, pre ? work_.size() : n, s0, ev_.data(), ev_.size(),
+                  [&](RawBurst&& r) { deliver(std::move(r), onBurst); });
+    }
+    /** Close every open channel now (end of stream). */
+    template <class F> void flush(F&& onBurst) {
+        ev_.clear();
+        det_.flush(ev_);
+        mix_.feed(nullptr, 0, mix_.total(), ev_.data(), ev_.size(), [&](RawBurst&& r) { deliver(std::move(r), onBurst); });
+    }
+
+    /** ★ STAGE 3's first half: a mixed channel → a sliced Burst (false = nothing worth decoding). `keepBb`: hand the
+     *  baseband on (the 868 band). The service calls this on its decoder thread. */
+    static bool finish(RawBurst&& r, bool keepBb, Burst& b) {
+        b.tSec = r.tSec;
+        b.offHz = r.offHz;
+        b.clipped = r.peakAbs > 0.85f;
+        if (!slice(r.bb, r.chanRate, b)) return false;
+        if (keepBb) { b.bb = std::make_shared<const std::vector<cf>>(std::move(r.bb)); b.bbRate = r.chanRate; }
+        return true;
+    }
     /** A centred moving average of `w` taps (w odd, ≥ 1). */
     static void boxcar(const std::vector<float>& x, size_t w, std::vector<float>& y) {
         const size_t n = x.size(), h = w / 2;
@@ -762,21 +994,22 @@ public:
     }
 
 private:
-    int pre_ = 1, preCnt_ = 0, chanM_ = 1, hop_ = kN, sinceFft_ = 0;
-    cf preAcc_{0, 0};
-    double w_ = 0, dcGuardHz_ = 0, noiseDb_ = -99, clipFrac_ = 0, useLo_ = -1e12, useHi_ = 1e12;
-    int clipWin_ = 0, clipFrames_ = 0;
-    float blockPeak_ = 0;
-    std::vector<cf> ring_;
-    uint64_t total_ = 0, frames_ = 0, bursts_ = 0;
-    DetFft fft_;
-    std::vector<float> win_, floor_, pw_, freq_;
-    std::vector<int> order_;
-    std::vector<uint8_t> usable_;
-    bool tablesOk_ = false, keepBb_ = false;
-    float thr_ = 10.0f, thrDbCached_ = -1.0f;
-    std::vector<cf> fbuf_;
-    Chan ch_[kMaxChans];
+    template <class F> void deliver(RawBurst&& r, F& onBurst) {
+        VIBE_ISM_P(const double tp0 = ismProfNow(); prof.sliceSamp += r.bb.size();)
+        Burst b;
+        const bool ok = finish(std::move(r), keepBb_, b);
+        VIBE_ISM_P(prof.slice += ismProfNow() - tp0; if (!ok) ++prof.sliceNo;)
+        if (!ok) return;
+        ++bursts_;
+        onBurst(static_cast<const Burst&>(b));
+    }
+
+    Detector det_;
+    ChanMixer mix_;
+    std::vector<ChanEvent> ev_;
+    std::vector<cf> work_;
+    bool keepBb_ = false;
+    uint64_t bursts_ = 0;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
