@@ -1665,6 +1665,23 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             the spots box.</div>
           <div id="bandModeList" class="row" style="flex-wrap:wrap;gap:10px;margin-top:8px"></div>
         </div>
+      <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — DRAWN UNDER DAB in the modes list (2026-10-31: a
+           decoder's options sit under its own switch; modeBlockRender moves it there). SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
+           the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
+           (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
+           listening to. The playing station always has its own live text either way. -->
+      <div id="dabScanRow" class="hide">
+      <label class="row" style="gap:8px;margin-top:2px">
+        <span class="lbl" style="min-width:0">DAB: radio text for every station</span>
+        <select id="dabScanLabels">
+          <option value="-1">This machine's default</option>
+          <option value="1">On — scan the whole multiplex</option>
+          <option value="0">Off — only the station playing</option>
+        </select></label>
+      <div class="note">On, the receiver decodes a few extra stations in turn so the station list shows
+         what every station is playing. It costs processor time; the default is off on a small 32-bit
+         machine and on everywhere else. The station you are listening to always shows its own text.</div>
+      </div>
         <div class="note" id="modeBlockNote"></div>
       </div>
 
@@ -1741,22 +1758,6 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <span>Use 2.56 MS/s sample rate for ADS-B (may drop some samples)</span></label>
       <div class="note" id="adsb256Note" style="margin-left:24px">ADS-B takes the radio to 2.56 MS/s instead of 2.4,
          and back when it ends. Watch the capture figure in ADS-B: below 97 % the dongle is dropping samples.</div>
-      </div>
-      <!-- ★ THE WHOLE-MULTIPLEX LABEL SCAN (Stuart, 2026-09-19) — SHOWN ON LITE ONLY (see "lite" in vibeserver.json):
-           the main VibeServer keeps it on with no switch. Off by default on a small 32-bit machine
-           (VibeServer Lite), where decoding four extra sub-channels costs more than the station you are
-           listening to. The playing station always has its own live text either way. -->
-      <div id="dabScanRow" class="hide">
-      <label class="row" style="gap:8px;margin-top:10px">
-        <span class="lbl" style="min-width:0">DAB: radio text for every station</span>
-        <select id="dabScanLabels">
-          <option value="-1">This machine's default</option>
-          <option value="1">On — scan the whole multiplex</option>
-          <option value="0">Off — only the station playing</option>
-        </select></label>
-      <div class="note">On, the receiver decodes a few extra stations in turn so the station list shows
-         what every station is playing. It costs processor time; the default is off on a small 32-bit
-         machine and on everywhere else. The station you are listening to always shows its own text.</div>
       </div>
       <div id="hwBiasT" class="hide">
         <label style="display:flex;gap:8px;align-items:center">
@@ -2077,6 +2078,15 @@ function renderBench(j) {
     bits.push("With " + (BENCH.decoders.forUsers || 0) + " listeners on it, this box can run about <b>"
               + BENCH.decoders.recommend + "</b> decoders at once");
   }
+  // ★★ V12 WHAT CAN BE ENABLED (Stuart, 2026-10-31: "when the benchmark runs it advises what can be enabled and LoRA all
+  //    should be an option"). LoRa on every channel is an option, not a decoder: green says it can be switched on.
+  const lall = (BENCH.rows || []).find(r => r.id === "dec_lora_all");
+  if (lall && lall.grade === "green") {
+    bits.push("Can be enabled: <b>LoRa on every channel</b> (" + Math.round(lall.pct) + "% of a core at its busiest thread)");
+  } else if (lall && lall.grade !== "none") {
+    bits.push("LoRa on every channel measured <b>" + Math.round(lall.pct) + "%</b> of a core at its busiest thread here, so it"
+              + " starts off \u2014 LoRa still decodes its default channels");
+  }
   const red = (BENCH.rows || []).filter(r => r.grade === "red").map(r => r.label || r.id);
   if (red.length) bits.push("Too heavy for this box: <b>" + red.map(esc).join(", ") + "</b>");
   adv.innerHTML = bits.join("<br>");
@@ -2109,6 +2119,21 @@ function benchApplyDefaults() {
     bandBox.checked = false;
     bandBox.dispatchEvent(new Event("change"));
     benchNote(bandBox, "Digital spots: Band is off: a busy band measured " + Math.round(band.pct) + "% of a core here. Tick it to offer it anyway.");
+  }
+  // ★★ V12 LoRa ON EVERY CHANNEL ("lora+all", an option under LoRa) — the one INVERTED rule: a GREEN dec_lora_all ticks it
+  //    ON on a fresh setup; anything else leaves it off with the figure beside it. The benchmark SETS THE DEFAULT, NEVER
+  //    HIDES: the box stays either way. Unticked, LoRa still decodes its default channels. Same rule as
+  //    ServerModeScreen.tsx applyBench (ONE RULE, TWO READERS).
+  const lall = row("dec_lora_all");
+  const lallBox = document.querySelector('input[data-mode="lora+all"]');
+  if (lall && lall.grade !== "none" && lallBox) {
+    if (lall.grade === "green") {
+      if (!lallBox.checked) { lallBox.checked = true; lallBox.dispatchEvent(new Event("change")); }
+      benchNote(lallBox, "LoRa on every channel is on: it measured " + Math.round(lall.pct) + "% of a core here at its busiest thread, so it was turned on.");
+    } else {
+      if (lallBox.checked) { lallBox.checked = false; lallBox.dispatchEvent(new Event("change")); }
+      benchNote(lallBox, "LoRa on every channel is off: it measured " + Math.round(lall.pct) + "% of a core here at its busiest thread. Tick it to use it anyway \u2014 the default channels decode either way.");
+    }
   }
   // ★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29): ON unless the box measured RED carrying it beside WFM stereo — amber
   //    keeps it, it is what makes a shared receiver worth zooming into. Every radio, because the box is one box.
@@ -2666,8 +2691,22 @@ function bandLabel(entry) {
  *  ★ Only what EXISTS is listed. Offering to block ADS-B before there is an ADS-B decoder would
  *    be a setting with nothing behind it, which is the shape this page exists to avoid — but the
  *    mechanism takes any name, so each decoder joins this list on the day it ships. */
+/* ★★★ V12 (2026-10-31, Stuart: "all the decoders need to be able to be toggled and any options such as LoRA all or All
+ *  station name scanning for DAB need to be options under the enable toggle for the main decoder itself"). EVERY decoder
+ *  has its own switch here, and a decoder's OPTIONS are drawn indented directly UNDER it (`parent`), never elsewhere on
+ *  the page. With the parent off, its options stay on the page greyed with the reason — never hidden.
+ *  ONE LIST, TWO READERS: ServerModeScreen.tsx BLOCKABLE carries the same ids, parents and labels.
+ *  Kinds: an ordinary entry is a BLOCKED-MODES id (ticked = offered, the CSV lists what is OFF); `on: true` is a "+"
+ *  token that is IN the CSV when ticked ("lora+all" — the "spotsband+wspr" convention); `node` moves an existing control
+ *  of the page under its parent (DAB's label scan, Band's mode-by-mode list). The digital-spots modes are added under
+ *  "spots" from the server's own list (spotModes) — `spots-<mode>` off. */
 const BLOCKABLE = [
-  { id: "wfm",    label: "WFM"      }, { id: "nfm",  label: "NFM"    },
+  { id: "wfm",    label: "WFM"      },
+  /* ★ Advanced RDS lives inside WFM: no FM, no RDS of any kind (the shim drops "rds" from the offer without WFM). */
+  { id: "rds",    label: "Advanced RDS", parent: "wfm" },
+  { id: "nfm",    label: "NFM"    },
+  /* ★ V12 CTCSS / DCS tone ID (decoders/tone_id.h) — read on a listener's NFM channel; the server stops reading it. */
+  { id: "tone",   label: "CTCSS / DCS tone ID", parent: "nfm" },
   { id: "am",     label: "AM"       }, { id: "usb",  label: "USB"    },
   /* ★ V12 synchronous AM (docs/v12/AM-SYNC.md) — each its own switch, as every demodulator is. */
   { id: "sam",    label: "SAM"      }, { id: "sau",  label: "SAM-U"  },
@@ -2675,29 +2714,42 @@ const BLOCKABLE = [
   { id: "ecssl",  label: "ECSS-L"   }, { id: "amst", label: "AM Stereo (C-QUAM compatible)" },
   { id: "lsb",    label: "LSB"      }, { id: "cwu",  label: "CW-U"   },
   { id: "cwl",    label: "CW-L"     },
-  { id: "dab",    label: "DAB"      }, { id: "rds",  label: "Adv RDS" },
-  { id: "rtty",   label: "RTTY"     }, { id: "navtex", label: "NAVTEX" },
+  /* ★ V12 DRM (digital shortwave) — a demodulator; the server already refused it when listed here, the page never
+   *  offered the switch. */
+  { id: "drm",    label: "DRM"      },
+  { id: "dab",    label: "DAB"      },
+  /* ★ The whole-multiplex label scan, moved here from the radio's hardware card (2026-10-31). Still drawn only on a
+   *  small 32-bit machine ("lite" in vibeserver.json) — the only place it is a choice; elsewhere it is simply on. */
+  { id: "dabScan", parent: "dab", node: "dabScanRow" },
+  { id: "rtty",   label: "RTTY (and RTTY AUTO)" }, { id: "navtex", label: "NAVTEX" },
   { id: "wefax",  label: "WEFAX"    }, { id: "sstv", label: "SSTV"   },
-  { id: "ft8",    label: "FT8 / FT4" }, { id: "time", label: "Time signals" },
+  { id: "ft8",    label: "FT8 / FT4" },
+  /* ★ Time signals: one decoder for MSF, DCF77, WWV, WWVB, RWM and JJY — the station is the decoder's own choice. */
+  { id: "time",   label: "Time signals (MSF, DCF77, WWV/WWVB, RWM, JJY)" },
   /* ★ The server-side FT8/FT4 spot decoder and the map drawn from it, as ONE switch: the map is
    *  nothing without the spots. A receiver held to FM and DAB never produces a spot, so both
-   *  buttons were dead weight in its clients (Stuart, 2026-09-17). */
+   *  buttons were dead weight in its clients (Stuart, 2026-09-17). Under it: each spots mode (spotModes), then Band. */
   { id: "spots",  label: "Digital spots / map" },
   /* ★★ V12 (2026-10-26): Band spots — a whole band's digital frequencies at once, every mode on its own dial. Off here, a
    *  listener sees the Band button greyed with the reason (never hidden). The benchmark unticks it on a box that measured
-   *  it below green (benchApplyDefaults) — the owner can always tick it back. */
-  { id: "spotsband", label: "Digital spots: Band" },
+   *  it below green (benchApplyDefaults) — the owner can always tick it back. Under it: Band's own mode-by-mode word. */
+  { id: "spotsband", label: "Band: a whole band at once", parent: "spots" },
+  { id: "bandModes", parent: "spotsband", node: "bandModeWrap" },
   /* ★ V12 ISM sensors (docs/v12/ISM-DECODER.md) — weather stations, doorbells, tyres. An owner may not want tyre and fob
    *  presses near their house listed at all, however anonymous the list is: this is the switch. */
   { id: "ism",    label: "ISM sensors and meters" },
   /* ★ V12 LoRa inside ISM mode (docs/v12/LORA-MESH.md) — LoRaWAN devices, Meshtastic and MeshCore nodes, and the mesh
-   *  networks' PUBLIC messages. Its own switch: an owner may want the weather stations and not the mesh chat. */
-  { id: "lora",   label: "LoRa / Meshtastic / MeshCore" },
-  /* ★ V12 CW — the listener's decoder and the skimmer (docs/v12/CW-SKIMMER.md), one switch. It was enforced by the server
-   *  ("cw") but missing here, so an owner could not switch it off — nor back on after the benchmark did (2026-10-31). */
+   *  networks' PUBLIC messages. Its own switch: an owner may want the weather stations and not the mesh chat. It runs
+   *  only inside ISM mode, so it sits under ISM. */
+  { id: "lora",   label: "LoRa / Meshtastic / MeshCore", parent: "ism" },
+  /* ★★ V12 (2026-10-31) "every channel" — the owner's "lora+all", IN the CSV when ticked. Unticked, LoRa still listens:
+   *  the default channels always, plus what the benchmark affords (vibelora::budgetFromBench). */
+  { id: "lora+all", label: "LoRa: listen on every channel", parent: "lora", on: true },
+  /* ★ V12 CW — the listener's decoder and the skimmer (docs/v12/CW-SKIMMER.md), ONE switch: the skimmer is the same
+   *  decoder across a wider slice, and the server enforces both with "cw" (cwskim → cw). */
   { id: "cw",     label: "CW decoder and skimmer" },
-  /* ★ V12 PSK31/63 — the listener's decoder and the skimmer (docs/v12/PSK.md), one switch. */
-  { id: "psk",    label: "PSK31/63" },
+  /* ★ V12 PSK31/63 — the listener's decoder and the skimmer (docs/v12/PSK.md), one switch (pskskim → psk). */
+  { id: "psk",    label: "PSK31/63 decoder and skimmer" },
   /* ★ V12 DSC (docs/v12/DSC.md) — maritime Digital Selective Calling, MF/HF and VHF channel 70. */
   { id: "dsc",    label: "DSC" },
   /* ★ V12 SITOR-A (2026-10-29) — the maritime ARQ teleprinter (AMTOR mode A), both stations of a link. */
@@ -2709,7 +2761,7 @@ const BLOCKABLE = [
   /* ★ V12 (2026-10-31): ONE switch — MFSK16/32, Olivia, Contestia and THOR are one key with one AUTO. */
   { id: "mfsk", label: "MFSK, Olivia, Contestia, THOR" },
   /* ★ V12 FELD HELL (2026-10-31) — drawn, not read: the text painted as it is heard. */
-  { id: "hell", label: "Feld Hell" },
+  { id: "hell", label: "Feld Hell (Hellschreiber)" },
   /* ★ V12 NDB skimmer (docs/v12/NDB-SKIMMER.md) — every aeronautical beacon on 190–535 kHz. Offered only where the radio
    *  reaches LF; this switch takes it off a radio that could. */
   { id: "ndb",    label: "NDB beacons" },
@@ -2718,7 +2770,31 @@ const BLOCKABLE = [
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
   { id: "aprs",   label: "APRS" },
+  /* ★ ADS-B (aircraft on 1090 MHz, a whole-radio mode) — the server enforced "adsb"; the page never offered it. */
+  { id: "adsb",   label: "ADS-B aircraft" },
 ];
+/** The tree as drawn: BLOCKABLE plus one entry per digital-spots mode this server runs (vibeserver.json spotModes), under
+ *  "spots", before Band. Each is `spots-<mode>` in the CSV when off — the server leaves the mode out everywhere. */
+function modeTree() {
+  const out = [];
+  for (const m of BLOCKABLE) {
+    if (m.id === "spotsband")
+      for (const sm of SPOT_MODES) out.push({ id: "spots-" + sm.toLowerCase(), label: sm, parent: "spots", spotMode: true });
+    out.push(m);
+  }
+  return out;
+}
+/** The nearest switch above `id` that is OFF in `off` (null = every one above it is on). */
+function modeOffAncestor(tree, id, off) {
+  let m = tree.find(x => x.id === id);
+  while (m && m.parent) {
+    const p = tree.find(x => x.id === m.parent);
+    if (!p) return null;
+    if (!p.on && !p.node && off.has(p.id)) return p;
+    m = p;
+  }
+  return null;
+}
 
 /** The blocked list as a Set of ids, from this radio's CSV. */
 function modeBlockSet() {
@@ -2740,17 +2816,42 @@ async function readDabDecoder() {
     const j = await (await fetch("/vibeserver.json", {cache:"no-store"})).json();
     if (Array.isArray(j.spotModes)) SPOT_MODES = j.spotModes.filter(m => typeof m === "string").map(m => m.replace(/[^0-9A-Za-z+-]/g, "").slice(0, 12)).filter(Boolean).slice(0, 16);
     if (typeof j.dabDecoder === "boolean") DAB_DECODER = j.dabDecoder;
+    // ★★ V12 LoRa's channel counts per band (the "every channel" hint) — absent on an older server, then nothing is said
+    if (Array.isArray(j.loraChannels)) LORA_CHANNELS = j.loraChannels.filter(c => c && typeof c.band === "string")
+      .map(c => ({ band: c.band.replace(/[^0-9]/g, "").slice(0, 4), plan: c.plan | 0, fit: c.fit | 0, defaults: c.defaults | 0, run: c.run | 0 }));
     // ★ Lite-only choices appear only on a Lite server (a 32-bit ARM build) — see "lite" in the shim.
-    $("dabScanRow").classList.toggle("hide", j.lite !== true);
+    const scanRow = modeNodeEl("dabScanRow");
+    if (scanRow) scanRow.classList.toggle("hide", j.lite !== true);
     IS_LITE = j.lite === true;
   } catch (e) { /* leave it optimistic */ }
+}
+
+/** ★ The page's own controls an entry moves under its parent (`node`) — held by reference, so a re-render that empties
+ *  the list never loses them (their listeners and ids stay theirs). */
+const MODE_NODES = {};
+function modeNodeEl(id) { return MODE_NODES[id] || (MODE_NODES[id] = document.getElementById(id)); }
+
+/** ★★ LoRa's "every channel" hint: what unticked means, and how many channels run (vibeserver.json loraChannels). */
+let LORA_CHANNELS = [];
+function loraAllHint() {
+  let t = "Unticked, LoRa still listens: always on the default channels (on 868 MHz Meshtastic LongFast, MeshCore and"
+        + " LoRaWAN 868.1, 868.3 and 868.5; on 433 MHz Meshtastic LongFast and MeshCore), plus as many more of the band plan's"
+        + " channels as the benchmark says this box can afford. Ticked, it listens on every channel the capture holds.";
+  const bits = LORA_CHANNELS.map(c => `${esc(c.band)} MHz: ${c.run} of the ${c.fit} channels that fit the capture`
+                                      + ` (${c.defaults} default)`);
+  if (bits.length) t += " Running now \u2014 " + bits.join("; ") + ".";
+  return t;
 }
 
 function modeBlockRender() {
   const host = $("modeBlockList");
   if (!host) return;
+  // ★ moved controls out first, so emptying the list cannot take them with it
+  for (const id of ["dabScanRow", "bandModeWrap"]) { const n = modeNodeEl(id); if (n && n.parentNode) n.parentNode.removeChild(n); }
   const off = modeBlockSet();
-  host.innerHTML = BLOCKABLE.map(m => {
+  const tree = modeTree();
+  const kids = id => tree.filter(m => m.parent === id);
+  const box = (m) => {
     /* ★★★ DO NOT OFFER A MODE THE MACHINE CANNOT COMPLETE. DAB+ audio is decoded server-side — by
      *  FAAD2 built in (the Linux and Mac servers since V12), or by the phone's own decoder on Android;
      *  a build without one (a Linux dev build) tunes the multiplex, locks it
@@ -2758,11 +2859,28 @@ function modeBlockRender() {
      *  package (Stuart, 2026-09-11). A tick box that cannot deliver is the fault AGENTS.md names:
      *  branch on what the machine has, or leave it out. */
     const dead = m.id === "dab" && !DAB_DECODER;
-    return `<label class="row" style="gap:6px;flex:0 0 auto;align-items:center`
+    const ticked = m.on ? off.has(m.id) : !off.has(m.id);
+    return `<label class="row modeBox" style="gap:6px;flex:0 0 auto;align-items:center`
     + (dead ? ";opacity:.5" : "") + `"${dead ? ' title="this server has no DAB+ audio decoder"' : ""}>`
-    + `<input type="checkbox" data-mode="${esc(m.id)}"${off.has(m.id) ? "" : " checked"}`
+    + `<input type="checkbox" data-mode="${esc(m.id)}"${m.on ? ' data-on="1"' : ""}${ticked ? " checked" : ""}`
     + (dead ? " disabled" : "") + `>`
-    + `<span class="lbl">${esc(m.label)}</span></label>`; }).join("");
+    + `<span class="lbl">${esc(m.label)}</span></label>`;
+  };
+  const draw = (m) => {
+    if (m.node) return `<div data-node="${esc(m.node)}" style="flex:1 1 100%"></div>`;
+    const k = kids(m.id);
+    let h = box(m);
+    if (m.id === "lora+all") h = `<div style="flex:1 1 100%">${h}<div class="hint" id="loraAllHint" style="margin:2px 0 0 24px">`
+                                + loraAllHint() + `</div></div>`;
+    if (!k.length) return h;
+    return `<div class="modeGroup" data-group="${esc(m.id)}" style="flex:1 1 100%">${h}`
+      + `<div class="modeKids" data-kids-of="${esc(m.id)}" style="display:flex;flex-wrap:wrap;gap:8px 10px;`
+      + `margin:4px 0 4px 10px;padding-left:14px;border-left:2px solid var(--line)">`
+      + `<div class="hint modeKidsWhy hide" style="flex:1 1 100%;margin:0"></div>`
+      + k.map(draw).join("") + `</div></div>`;
+  };
+  host.innerHTML = tree.filter(m => !m.parent).map(draw).join("");
+  for (const ph of host.querySelectorAll("[data-node]")) { const n = modeNodeEl(ph.dataset.node); if (n) ph.appendChild(n); }
   if (!DAB_DECODER) host.insertAdjacentHTML("beforeend",
     `<div class="hint" style="flex:1 1 100%;margin-top:8px">`
     + `<b>DAB is not available on this machine.</b> This server has no decoder for the AAC audio a`
@@ -2776,12 +2894,49 @@ function modeBlockRender() {
       const set = modeBlockSet();
       // ★ CHECKED means OFFERED. The stored list is what is switched OFF, which is the shorter
       //   list on almost every receiver and the one the server enforces.
-      if (el.checked) set.delete(el.dataset.mode); else set.add(el.dataset.mode);
+      // ★★ …EXCEPT a "+" option (data-on: "lora+all"), which is IN the list when ticked. Unticking removes that one
+      //    token and nothing else — it must never fall through the inversion above.
+      if (el.dataset.on) { if (el.checked) set.add(el.dataset.mode); else set.delete(el.dataset.mode); }
+      else if (el.checked) set.delete(el.dataset.mode); else set.add(el.dataset.mode);
       radio().blockedModes = [...set].join(",");
       modeBlockSummary();
-      dabLandOnBlockedChange(el.dataset.mode, !el.checked);
+      if (!el.dataset.on) dabLandOnBlockedChange(el.dataset.mode, !el.checked);
     });
   });
+  modeTreeGrey();
+}
+
+/** ★★ A PARENT OFF GREYS ITS OPTIONS, WITH THE REASON — never hides them (Stuart: never hide controls). Updated in place
+ *  on every change (a re-render would drop the benchmark's notes beside the boxes). */
+function modeTreeGrey() {
+  const host = $("modeBlockList");
+  if (!host) return;
+  const off = modeBlockSet(), tree = modeTree();
+  host.querySelectorAll(".modeKids").forEach(k => {
+    const id = k.dataset.kidsOf;
+    const p = tree.find(m => m.id === id);
+    const self = p && off.has(id) ? p : null;
+    const above = modeOffAncestor(tree, id, off);
+    const why = k.querySelector(":scope > .modeKidsWhy");
+    // ★ only the topmost greyed group says why; the ones inside it are greyed by it
+    const say = self && !above;
+    if (why) {
+      why.classList.toggle("hide", !say);
+      why.textContent = say ? `Off while ${self.label} is off \u2014 tick ${self.label} to use these.` : "";
+    }
+    k.style.opacity = (self || above) ? ".5" : "";
+  });
+  host.querySelectorAll("input[data-mode]").forEach(el => {
+    if (el.dataset.mode === "dab" && !DAB_DECODER) return;
+    const a = modeOffAncestor(tree, el.dataset.mode, off);
+    el.disabled = !!a;
+    el.title = a ? `${a.label} is off` : "";
+  });
+  for (const n of [modeNodeEl("dabScanRow"), modeNodeEl("bandModeWrap")]) {
+    if (!n) continue;
+    const a = modeOffAncestor(tree, n.id === "dabScanRow" ? "dabScan" : "bandModes", off);
+    n.querySelectorAll("select,input").forEach(c => { c.disabled = !!a; });
+  }
 }
 
 /* ── ★★★ THE DAB LANDING STATION (Stuart, 2026-09-28) ─────────────────────────────────────────
@@ -3128,7 +3283,9 @@ function bandModeRender() {
   const wrap = $("bandModeWrap"), host = $("bandModeList");
   if (!wrap || !host) return;
   const set = modeBlockSet();
-  const show = SPOT_MODES.length > 0 && !set.has("spots") && !set.has("spotsband");
+  // ★★ Drawn wherever this server has Band (spotModes); with Band or Digital spots off it stays, GREYED with the reason
+  //    (modeTreeGrey) — the owner's word per mode is still theirs to read (never hidden).
+  const show = SPOT_MODES.length > 0;
   wrap.classList.toggle("hide", !show);
   if (!show) { host.innerHTML = ""; return; }
   host.innerHTML = SPOT_MODES.map(m => {
@@ -3149,19 +3306,24 @@ function bandModeRender() {
       modeBlockSummary();
     });
   });
+  modeTreeGrey();
 }
 function modeBlockSummary() {
   const el = $("modeBlockNote");
   if (!el) return;
   const all = [...modeBlockSet()];
-  const off = all.filter(id => !/^spotsband[+-]/.test(id));
-  const name = (id) => (BLOCKABLE.find(m => m.id === id) || { label: id }).label;
+  const tree = modeTree();
+  // ★ "+" tokens are options switched ON (lora+all), and Band's per-mode words have their own sentence
+  const isOn = id => tree.some(m => m.id === id && m.on);
+  const off = all.filter(id => !/^spotsband[+-]/.test(id) && !isOn(id));
+  const name = (id) => (tree.find(m => m.id === id) || { label: id }).label;
   const band = all.filter(id => /^spotsband[+-]/.test(id))
     .map(id => id.slice(10).toUpperCase() + (id[9] === "-" ? " off" : " always"));
   el.textContent = (off.length
     ? `Switched off: ${off.map(name).join(", ")}.`
     : "Everything this radio can do is offered.")
-    + (band.length ? ` Band spots: ${band.join(", ")}.` : "");
+    + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
+    + (all.includes("lora+all") ? " LoRa listens on every channel." : "");
   bandModeRender();
 }
 

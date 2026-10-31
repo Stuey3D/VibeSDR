@@ -9634,7 +9634,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else if (c->drm) { c->drm.reset(); c->drmAtHz = 0; c->rx->setIqMinRate(0.0); }
         c->drmOn.store(c->mode == "drm");
         // ★ V12 tone ID: wanted on NFM only; the callback builds it, forgets a retuned repeater, and clears the label
-        c->toneWant = (mp.kind == ModeParams::NFM);
+        c->toneWant = (mp.kind == ModeParams::NFM) && !vsModeBlocked("tone");   // ★ V12 the owner's switch (setup page, under NFM)
         c->toneAtHz = c->vfoHz;
         // ★ VFO B allowance may have changed: DRM, WFM, or a dial into / out of the FM broadcast band (watchMaxFor)
         watchAllowDirty_.store(true, std::memory_order_relaxed);
@@ -16622,7 +16622,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         demodOffset = (mp.kind == ModeParams::CW) ? -mp.bandwidth * 0.5 : 0.0;
 
         rxMode = rxModeFor(mp);
-        toneSharedWant.store(mp.kind == ModeParams::NFM);   // ★ V12 tone ID (toneFeedShared)
+        toneSharedWant.store(mp.kind == ModeParams::NFM && !vsModeBlocked("tone"));   // ★ V12 tone ID (toneFeedShared); "tone" = the owner switched it off
         // Clamp to what the IQ can actually carry. Most public SpyServers cap the
         // streamed IQ rate (some as low as 12 kS/s), so a mode's nominal bandwidth
         // can exceed the whole capture — WFM's 200 kHz on a 12 kS/s stream. Asking
@@ -26366,6 +26366,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ V12 Band governor: the owner's word per mode, and the benchmark's budget (both read when Band starts / per period).
         e.bandOverride = [](const std::string& m) { return vsBandOverride(m); };
         e.bandBudgetUnits = [] { return vsBandBudgetUnits(); };
+        /* ★★ V12 (2026-10-31) A DIGITAL-SPOTS MODE THE OWNER SWITCHED OFF ("spots-q65"…, the setup page's per-mode boxes
+         *  under Digital spots) is not run at all: Single leaves its engine out, Band reads it as Off (vsBandOverride). */
+        e.spotModeOff = [](const std::string& m) {
+            std::string k; for (char c : m) k += char(std::tolower((unsigned char)c));
+            return vsModeBlocked("spots-" + k);
+        };
         /* ★★ CW (V12 2026-10-25): a listener's AUDIO frequency → RF, by their mode — USB dial + a, LSB dial − a, and this
          *  server's CW (a USB demodulator tuned so a carrier ON the dial is a 600 Hz tone: buildAudio's -bw/2) dial + a − 600. */
         /* ★★ THE MODE THE DECODER HEARS THROUGH: VFO A's (the listener's own channel, or the radio's) — or, for a VFO B
@@ -35010,6 +35016,7 @@ static std::string vsSpotsBandWhyNot() {
 static int vsBandOverride(const std::string& mode) {
     std::string m;
     for (char c : mode) m += char(std::tolower((unsigned char)c));
+    if (vsModeBlocked("spots-" + m)) return -1;   // ★★ V12 the mode switched off everywhere (setup page, under Digital spots)
     if (vsModeBlocked("spotsband-" + m)) return -1;
     if (vsModeBlocked("spotsband+" + m)) return 1;
     return 0;
@@ -35216,6 +35223,29 @@ static std::string vsTunableJson() {
         j += "]";
         const vibeism::Band* land = vibeism::landingBand(g_bgLat.load(), g_bgLon.load(), [](const vibeism::Band& b) { return vsIsmReach(b); });
         if (land) j += std::string(",\"ismLanding\":\"") + land->id + "\"";
+        /* ★★ V12 LoRa's channels on each band this radio reaches (2026-10-31) — the setup page's "every channel" hint says
+         *  how many run: `plan` the band's plan, `fit` those inside the capture, `defaults` the default set's share of them
+         *  (always on while LoRa is), `run` what runs NOW — the default set plus what the benchmark affords, or all `fit`
+         *  with the owner's "lora+all". The same choose() ISM mode makes, at the band's own capture centre (ismHwCentre). */
+        {
+            const double rate = LocalSdrShim::instance().captureSpanHz() > 0 ? LocalSdrShim::instance().captureSpanHz() : 2.4e6;
+            const double budget = vsModeBlocked("lora+all") ? INFINITY : vibelora::budgetFromBench(vsLoraBenchPct());
+            j += ",\"loraChannels\":[";
+            bool firstL = true;
+            for (const auto& b : vibeism::bands()) {
+                if (!vsIsmReach(b)) continue;
+                const auto& plan = vibelora::planFor(b.id);
+                if (plan.empty()) continue;
+                const double hw = b.dcOffsetHz <= 0 ? b.centreHz
+                                : b.centreHz + std::max(40e3, std::min(b.dcOffsetHz, rate * 0.45 - b.needHz));
+                char e[160];
+                std::snprintf(e, sizeof e, "%s{\"band\":\"%s\",\"plan\":%zu,\"fit\":%zu,\"defaults\":%zu,\"run\":%zu}",
+                              firstL ? "" : ",", b.id, plan.size(), vibelora::choose(plan, hw, rate, INFINITY).size(),
+                              vibelora::choose(plan, hw, rate, 0).size(), vibelora::choose(plan, hw, rate, budget).size());
+                j += e; firstL = false;
+            }
+            j += "]";
+        }
     }
     /* ★★ NDB (V12): offered, or shown DISABLED with its reason — and NOT AT ALL where the radio reaches no LF (an RTL
      *  without direct sampling, a HackRF, an Airspy R2, an Icom). `ndbLo`/`ndbHi`: the part of the band it reaches. */

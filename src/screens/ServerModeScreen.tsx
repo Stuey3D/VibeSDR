@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { DIGI_MODE_STYLE } from '../utils/digiModes';   // ★ V12 the digital-spots modes (per-mode switches)
 import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
 import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } from '../services/antennaSwitch';
@@ -17,35 +18,70 @@ import BandLimitEditor, { Band } from '../components/BandLimitEditor';
  *  ★ Only what EXISTS is listed. Offering to block ADS-B before there is an ADS-B decoder would
  *    be a setting with nothing behind it — but the mechanism takes any name, so each decoder
  *    joins this list on the day it ships. Keep it in step with BLOCKABLE in vibe_setup_page.h. */
-const BLOCKABLE: { id: string; label: string }[] = [
-  { id: 'wfm', label: 'WFM' }, { id: 'nfm', label: 'NFM' }, { id: 'am', label: 'AM' },
-  { id: 'usb', label: 'USB' }, { id: 'lsb', label: 'LSB' },
-  { id: 'cwu', label: 'CW-U' }, { id: 'cwl', label: 'CW-L' },
-  { id: 'dab', label: 'DAB' }, { id: 'rds', label: 'Adv RDS' },
-  { id: 'rtty', label: 'RTTY' }, { id: 'navtex', label: 'NAVTEX' },
-  { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
-  { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals' },
-  { id: 'spots', label: 'Digital spots / map' },
-  // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
-  { id: 'spotsband', label: 'Digital spots: Band' },
-  /* ★★ V12 (2026-10-31): every decoder the server has, as on the setup page. The benchmark now times each one and starts a
-   *  switch OFF where its decoder measured below green (applyBench) — so every such switch must be HERE, or the owner
-   *  could not switch it back on from this screen (Stuart: "never hide any controls"). */
-  { id: 'ism', label: 'ISM sensors and meters' }, { id: 'lora', label: 'LoRa / Meshtastic / MeshCore' },
-  { id: 'cw', label: 'CW decoder and skimmer' }, { id: 'psk', label: 'PSK31/63' },
-  { id: 'dsc', label: 'DSC' }, { id: 'sitora', label: 'SITOR-A' },
-  { id: 'same', label: 'EAS / SAME' }, { id: 'selcal', label: 'SELCAL' },
-  { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR' }, { id: 'hell', label: 'Feld Hell' },
-  { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
-  { id: 'ais', label: 'AIS ships' }, { id: 'aprs', label: 'APRS' },
-  /* ★★ V12 synchronous AM (docs/v12/AM-SYNC.md) — on the setup page since they shipped; here too now, because the
-   *  benchmark can start one OFF (applyBench) and the owner must be able to switch it back on from this screen. */
+type ModeEntry = { id: string; label: string; parent?: string; on?: boolean; node?: string; spotMode?: boolean };
+/* ★★★ V12 (2026-10-31, Stuart: "all the decoders need to be able to be toggled and any options such as LoRA all or All
+ *  station name scanning for DAB need to be options under the enable toggle for the main decoder itself"). The SAME list
+ *  as vibe_setup_page.h BLOCKABLE — ids, parents, labels (ONE LIST, TWO READERS). A decoder's options are drawn indented
+ *  directly UNDER it (`parent`); with the parent off they stay, greyed with the reason — never hidden. `on: true` is a "+"
+ *  token IN the CSV when ticked ("lora+all"); `node` is one of this screen's own controls drawn there (DAB's label scan).
+ *  ★ The page's "Band, mode by mode" list (spotsband±mode) is the setup page's alone: this screen never had it. */
+const BLOCKABLE: ModeEntry[] = [
+  { id: 'wfm', label: 'WFM' }, { id: 'rds', label: 'Advanced RDS', parent: 'wfm' },
+  { id: 'nfm', label: 'NFM' }, { id: 'tone', label: 'CTCSS / DCS tone ID', parent: 'nfm' },
+  { id: 'am', label: 'AM' }, { id: 'usb', label: 'USB' },
+  /* ★★ V12 synchronous AM (docs/v12/AM-SYNC.md) — the benchmark can start one OFF (applyBench), so each is here. */
   { id: 'sam', label: 'SAM' }, { id: 'sau', label: 'SAM-U' }, { id: 'sal', label: 'SAM-L' },
   { id: 'ecssu', label: 'ECSS-U' }, { id: 'ecssl', label: 'ECSS-L' }, { id: 'amst', label: 'AM Stereo (C-QUAM compatible)' },
+  { id: 'lsb', label: 'LSB' }, { id: 'cwu', label: 'CW-U' }, { id: 'cwl', label: 'CW-L' },
+  { id: 'drm', label: 'DRM' },
+  { id: 'dab', label: 'DAB' }, { id: 'dabScan', label: '', parent: 'dab', node: 'dabScan' },
+  { id: 'rtty', label: 'RTTY (and RTTY AUTO)' }, { id: 'navtex', label: 'NAVTEX' },
+  { id: 'wefax', label: 'WEFAX' }, { id: 'sstv', label: 'SSTV' },
+  { id: 'ft8', label: 'FT8 / FT4' }, { id: 'time', label: 'Time signals (MSF, DCF77, WWV/WWVB, RWM, JJY)' },
+  { id: 'spots', label: 'Digital spots / map' },
+  // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
+  { id: 'spotsband', label: 'Band: a whole band at once', parent: 'spots' },
+  /* ★★ V12 (2026-10-31): every decoder the server has, as on the setup page. The benchmark times each one and starts a
+   *  switch OFF where its decoder measured below green (applyBench) — so every such switch must be HERE, or the owner
+   *  could not switch it back on from this screen (Stuart: "never hide any controls"). */
+  { id: 'ism', label: 'ISM sensors and meters' },
+  { id: 'lora', label: 'LoRa / Meshtastic / MeshCore', parent: 'ism' },
+  { id: 'lora+all', label: 'LoRa: listen on every channel', parent: 'lora', on: true },
+  { id: 'cw', label: 'CW decoder and skimmer' }, { id: 'psk', label: 'PSK31/63 decoder and skimmer' },
+  { id: 'dsc', label: 'DSC' }, { id: 'sitora', label: 'SITOR-A' },
+  { id: 'same', label: 'EAS / SAME' }, { id: 'selcal', label: 'SELCAL' },
+  { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR' }, { id: 'hell', label: 'Feld Hell (Hellschreiber)' },
+  { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
+  { id: 'ais', label: 'AIS ships' }, { id: 'aprs', label: 'APRS' },
+  { id: 'adsb', label: 'ADS-B aircraft' },
 ];
+/** The list as drawn: BLOCKABLE plus one switch per digital-spots mode under "spots", before Band — `spots-<mode>` off.
+ *  ★ The modes are this build's own (DIGI_MODE_STYLE, the map legend's list): the server on this phone IS this build. */
+function modeTree(): ModeEntry[] {
+  const out: ModeEntry[] = [];
+  for (const m of BLOCKABLE) {
+    if (m.id === 'spotsband')
+      for (const sm of Object.keys(DIGI_MODE_STYLE)) out.push({ id: 'spots-' + sm.toLowerCase(), label: sm, parent: 'spots', spotMode: true });
+    out.push(m);
+  }
+  return out;
+}
+/** The nearest switch above `id` that is OFF (null = all on). Same as the setup page's modeOffAncestor. */
+function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeEntry | null {
+  let m = tree.find((x) => x.id === id);
+  while (m && m.parent) {
+    const p = tree.find((x) => x.id === m!.parent);
+    if (!p) return null;
+    if (!p.on && !p.node && off.has(p.id)) return p;
+    m = p;
+  }
+  return null;
+}
 /** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
- *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS need IQ too; the Icom demodulates the AM family itself. */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'rds', 'spotsband', 'ism', 'lora', 'ndb', 'ais', 'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
+ *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
+ *  demodulates the AM family itself. */
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'adsb', 'drm', 'tone',
+  'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
   StyleSheet, Platform, PermissionsAndroid, Switch, Alert, NativeModules, BackHandler,
@@ -491,6 +527,19 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       setZoomSpec(false); AsyncStorage.setItem(K.zoomSpectrum, '0');
       notes.push(`Keep the spectrum sharp is off — zooming in measured ${Math.round(zoom.pct)}% of a core here. Switch it on to use it anyway.`);
     }
+    /* ★★ V12 LoRa ON EVERY CHANNEL ("lora+all", under LoRa) — the one INVERTED rule, as vibe_setup_page.h
+     *  benchApplyDefaults: GREEN dec_lora_all ticks it ON, anything else leaves it off with the figure. Never hidden. */
+    const lall = row('dec_lora_all');
+    if (lall && lall.grade !== 'none') {
+      const has = new RegExp('(^|,)lora\\+all(,|$)').test(bm);
+      if (lall.grade === 'green') {
+        if (!has) { bm = bm ? bm + ',lora+all' : 'lora+all'; setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
+        notes.push(`LoRa on every channel is on — it measured ${Math.round(lall.pct)}% of a core here at its busiest thread, so it was turned on.`);
+      } else {
+        if (has) { bm = bm.split(',').filter((t: string) => t !== 'lora+all').join(','); setBlockedModes(bm); AsyncStorage.setItem(K.blockedModes, bm); }
+        notes.push(`LoRa on every channel is off — it measured ${Math.round(lall.pct)}% of a core here at its busiest thread. Switch it on to use it anyway; the default channels decode either way.`);
+      }
+    }
     /* ★★★ EVERY OTHER DECODER (2026-10-31) — the server's defaults rule (vibe_benchmark_more.h ruleFor) says which owner
      *  switches start OFF: each one's main decoder measured below green on this device. Offered, never hidden — the
      *  switch is in BLOCKABLE and the owner can turn it back on. The same as vibe_setup_page.h benchApplyDefaults. */
@@ -935,7 +984,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 </Text>
               </>)}
             </>)}
-            {isLite && (<>
+            {/* ★★ 2026-10-31: on a single-range radio this is drawn UNDER DAB in the modes list (a decoder's options under
+                its own switch); here only where that list is not shown (a locked range), so it is never in two places. */}
+            {isLite && radioUseEff !== 'single' && (<>
               <OptRow C={C} F={F} active={dabScanLabels === 1}
                 label="Read every station's name and text on the multiplex"
                 onPress={() => {
@@ -3948,42 +3999,104 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                       of somebody's decision (AGENTS.md). The server enforces it too, so it holds
                       for an old client or a hand-rolled tool. */}
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 14 }]}>
-                  Modes and decoders — tap to switch off
+                  Modes and decoders — tap to switch off. A decoder's options sit under it.
                 </Text>
-                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
-                  {/* ★ On an Icom, WFM, DAB and Advanced RDS do not exist (an IQ demodulator's, and no Icom row in
-                      icom_models.h has a WFM mode), so a chip to block them would block nothing. */}
-                  {BLOCKABLE.filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id))).map((m) => {
-                    const off = blockedModes.split(/[,;\s]+/).filter(Boolean).includes(m.id);
+                {(() => {
+                  /* ★★★ THE TREE (2026-10-31) — the setup page's, drawn the same way: a decoder's options indented under
+                   *  its switch, greyed with the reason while it is off (never hidden). */
+                  const tree = modeTree().filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id)));
+                  const off = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean));
+                  const kids = (id: string) => tree.filter((m) => m.parent === id);
+                  const toggle = (m: ModeEntry) => {
+                    const set = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean));
+                    // ★ CHECKED means OFFERED (the CSV lists what is OFF) — except a "+" option, IN the CSV when on.
+                    //   Turning one off removes that token and nothing else.
+                    const wasOff = m.on ? !set.has(m.id) : set.has(m.id);
+                    if (m.on) { if (wasOff) set.add(m.id); else set.delete(m.id); }
+                    else if (wasOff) set.delete(m.id); else set.add(m.id);
+                    const v = [...set].join(',');
+                    setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
+                    // ★★★ BLOCKING DAB REMOVES THE DAB LANDING STATION — and says so.
+                    if (m.id === 'dab' && !wasOff && landingDabCh >= 0) {
+                      setDabLanding(-1, 0, '');
+                      setDabLandNote('DAB is blocked on this radio, so its DAB landing station has been '
+                        + `removed \u2014 listeners will start on ${plainLandingWords()} instead.`);
+                    } else if (m.id === 'dab' && wasOff) setDabLandNote('');
+                  };
+                  const chip = (m: ModeEntry, inert: ModeEntry | null) => {
+                    const isOff = m.on ? !off.has(m.id) : off.has(m.id);
                     return (
-                      <TouchableOpacity key={m.id}
-                        onPress={() => {
-                          const set = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean));
-                          if (off) set.delete(m.id); else set.add(m.id);
-                          const v = [...set].join(',');
-                          setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
-                          // ★★★ BLOCKING DAB REMOVES THE DAB LANDING STATION — and says so.
-                          if (m.id === 'dab' && !off && landingDabCh >= 0) {
-                            setDabLanding(-1, 0, '');
-                            setDabLandNote('DAB is blocked on this radio, so its DAB landing station has been '
-                              + `removed \u2014 listeners will start on ${plainLandingWords()} instead.`);
-                          } else if (m.id === 'dab' && off) setDabLandNote('');
-                        }}
+                      <TouchableOpacity key={m.id} disabled={!!inert} onPress={() => toggle(m)}
+                        accessibilityLabel={inert ? `${m.label}: ${inert.label} is off` : m.label}
                         style={{
                           paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6,
                           borderWidth: 1,
-                          borderColor: off ? C.keyBorder : C.keyBorderAct,
-                          opacity: off ? 0.45 : 1,
+                          borderColor: isOff ? C.keyBorder : C.keyBorderAct,
+                          opacity: isOff || inert ? 0.45 : 1,
                         }}>
-                        <Text style={{ color: off ? C.keyQuiet : C.keyAct, fontFamily: F, fontSize: 12 }}>
+                        <Text style={{ color: isOff ? C.keyQuiet : C.keyAct, fontFamily: F, fontSize: 12 }}>
                           {m.label}
                         </Text>
                       </TouchableOpacity>
                     );
-                  })}
-                </View>
+                  };
+                  const draw = (m: ModeEntry): React.ReactNode => {
+                    const inert = modeOffAncestor(tree, m.id, off);
+                    if (m.node === 'dabScan') {
+                      // ★ DAB's whole-multiplex label scan — only on Lite, the only place it is a choice (as before)
+                      if (!isLite) return null;
+                      return (
+                        <View key={m.id} style={{ flexBasis: '100%', opacity: inert ? 0.45 : 1 }}>
+                          <OptRow C={C} F={F} active={dabScanLabels === 1} disabled={!!inert}
+                            label="Read every station's name and text on the multiplex"
+                            onPress={() => {
+                              const v = dabScanLabels === 1 ? 0 : 1;
+                              setDabScanLabels(v); AsyncStorage.setItem(K.dabScanLabels, String(v));
+                              (NativeModules as any).VibeLocalSDR?.setDabScanLabels?.(v);   // ★★ applied now as well as saved
+                            }} />
+                        </View>
+                      );
+                    }
+                    const k = kids(m.id);
+                    const self = !m.on && off.has(m.id) ? m : null;
+                    const box = m.id === 'lora+all' ? (
+                      <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>
+                          Off, LoRa still listens: always on the default channels (on 868 MHz Meshtastic LongFast, MeshCore and
+                          LoRaWAN 868.1, 868.3 and 868.5; on 433 MHz Meshtastic LongFast and MeshCore), plus as many more of the
+                          band plan's channels as the benchmark says this phone can afford. On, it listens on every channel the
+                          capture holds.
+                        </Text>
+                      </View>
+                    ) : chip(m, inert);
+                    if (!k.length) return box;
+                    return (
+                      <View key={m.id + ':group'} style={{ flexBasis: '100%', gap: 6 }}>
+                        <View style={{ flexDirection: 'row' }}>{box}</View>
+                        <View style={{ marginLeft: 10, paddingLeft: 12, borderLeftWidth: 2, borderLeftColor: C.border,
+                                       flexDirection: 'row', flexWrap: 'wrap', gap: 8, opacity: self || inert ? 0.6 : 1 }}>
+                          {self && !inert && (
+                            <Text style={[styles.hint, { color: C.textDim, fontFamily: F, flexBasis: '100%' }]}>
+                              Off while {self.label} is off — switch {self.label} on to use these.
+                            </Text>
+                          )}
+                          {k.map(draw)}
+                        </View>
+                      </View>
+                    );
+                  };
+                  return (
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                      {/* ★ On an Icom, WFM, DAB and Advanced RDS do not exist (an IQ demodulator's, and no Icom row in
+                          icom_models.h has a WFM mode), so a chip to block them would block nothing. */}
+                      {tree.filter((m) => !m.parent).map(draw)}
+                    </View>
+                  );
+                })()}
                 <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
-                  Dimmed means switched off — listeners are never offered it at all.
+                  Dimmed means switched off — listeners are never offered it at all. An option under a switch that is off
+                  stays here, dimmed, until its switch is on again.
                 </Text>
                 </>)}
 

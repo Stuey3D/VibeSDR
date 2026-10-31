@@ -281,6 +281,8 @@ public:
          *  activity gate, never shed), −1 Off, 0 Auto (blocked-modes tokens "spotsband+<mode>" / "spotsband-<mode>").
          *  Empty = Auto for every mode. Asked at each gate period's start (cheap: a CSV lookup). */
         std::function<int(const std::string& mode)> bandOverride;
+        /** ★★ V12: a digital-spots mode the owner switched off (true = never run it, in Single or Band). Empty = none. */
+        std::function<bool(const std::string& mode)> spotModeOff;
         /** ★ What the benchmark says this machine affords for Band, in FT8 units (∞ / NaN = no benchmark). Asked once per
          *  Band start. */
         std::function<double()> bandBudgetUnits;
@@ -392,7 +394,9 @@ public:
             return queued() > 48000 || queuedIqSec() > 1.0;
         };
         auto dial = env_.dialHz;
-        spotter_.reset(new digi::Spotter(scope, digi::modes(),
+        std::vector<digi::ModeDef> ms;   // ★ the modes the owner has not switched off (the Spotter keeps its own copy)
+        for (const auto& m : digi::modes()) if (!(env_.spotModeOff && env_.spotModeOff(m.name))) ms.push_back(m);
+        spotter_.reset(new digi::Spotter(scope, ms,
             [this](const digi::Spot& sp, double rfHz) { emitSpot(sp, rfHz); },
             [dial] { return dial ? dial() : 0.0; }, loaded));
         if (scope == SpotScope::Band) {
