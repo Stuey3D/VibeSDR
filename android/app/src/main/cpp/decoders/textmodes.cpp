@@ -214,7 +214,13 @@ struct Stream {
 // ── the signal finder: where (base bin, quarter-symbol phase) a tone set sits ─────────────────────────────────────────
 struct Finder {
     int M, s, lo, hi, nb;          // bases lo … lo + nb − 1 (half-bins)
-    std::vector<float> score[4], v, g, h, seq;
+    std::vector<float> own[4], v, g, h, seq;
+    /** ★ ONE SET OF SCORES FOR TWINS: OLIVIA and CONTESTIA of the same tones and baud read the same spectra with the
+     *  same finder, so the second of them reads the first's scores instead of computing them again (`score` points at
+     *  the owner's; its update() does nothing). What each does with them — its place, its bans, its hunt — stays its
+     *  own. The owner is registered first, so its update() has run when the twin's frame() reads them. */
+    std::vector<float>* score = own; bool shared = false;
+    void shareScoresOf(Finder& o) { score = o.own; shared = true; }
     int curB = -1, curP = 0, L_ = 0;
     /** ★ THE HUNT: a place where this sub-mode could not lock is set aside for a while (symbols), so a second signal in
      *  the passband gets its turn — measured: OLIVIA 16/500 beside a stronger MFSK16 never decoded before this. */
@@ -242,7 +248,8 @@ struct Finder {
         hi = top - stride * (M - 1);            // last base whose top tone and the bin above it fit
         nb = std::max(0, hi - lo + 1);
         nb = (nb + 3) & ~3;                     // whole lanes (the extra bases read zeros past the band: never chosen)
-        for (auto& sc : score) sc.assign(nb, 0.f);
+        for (auto& sc : own) sc.assign(nb, 0.f);
+        score = own; shared = false;
         v.assign(nb, 0.f); ban.assign(nb, 0); mem.assign(nb, 0); strikes.assign(nb, 0);
         alpha = 1.f / 12;
         L_ = (nb + s * M + s) / s + M + 2;
@@ -250,7 +257,7 @@ struct Finder {
     }
     /** one frame (phase p): the score of every base — the strongest of the M tones less the stronger neighbour outside */
     void update(const float* P, int nBins, int p) {
-        if (nb == 0) return;
+        if (nb == 0 || shared) return;
         double sum = 0; const int a = lo, b = std::min(nBins - 1, hi + s * M);
         for (int k = a; k <= b; ++k) sum += P[k];
         const float inv = (float)((b - a + 1) / (sum + 1e-20));   // one divide a frame: powers in units of the band's mean
@@ -681,6 +688,8 @@ struct TextModeDecoder::Impl {
         const bool shaped = s->kind == kOlivia || s->kind == kContestia;
         r->st = streamFor(s->sps, s->rate, shaped);
         r->fd.init(s->M, s->stride, r->st->binHz(), r->st->N / 2);
+        // an earlier receiver on the same spectra with the same tone set (OLIVIA ↔ CONTESTIA): read its scores
+        for (auto& o : rx) if (o->st == r->st && o->sub->M == s->M && o->sub->stride == s->stride && !o->fd.shared) { r->fd.shareScoresOf(o->fd); break; }
         Rx* p = r.get();
         r->st->sinks.push_back([p](int64_t f, const float* P) { p->frame(f, P); p->maybeSymbol(f, P); });
         if (s->rate == 8000) need8 = true; else need11 = true;
