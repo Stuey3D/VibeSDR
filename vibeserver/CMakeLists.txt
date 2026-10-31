@@ -283,6 +283,7 @@ add_library(vibeserver_core STATIC
     "${CPP_DIR}/decoders/dsc_decoder.cpp"
     # ★ V12: SITOR-A — the maritime ARQ teleprinter listener (decoders/sitor_a.h, ITU-R M.476/M.625)
     "${CPP_DIR}/decoders/sitor_a.cpp"
+    "${CPP_DIR}/decoders/same_decoder.cpp"   # ★ V12 EAS / SAME
     # ★ V12: JTTY — the WSJT-X 3.2 keyboard mode, every signal in the passband, no slots (decoders/jtty_decoder.h)
     "${CPP_DIR}/decoders/jtty_decoder.cpp"
     # ★ V12: digital spots — the mode registry, Band mode's tuners and the spotter (decoders/digi_mode.h), and every

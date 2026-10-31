@@ -62,6 +62,7 @@ import { parseSpotsStatus, type SpotModeState } from './spotsBand';
  *  a segment of IQ centred on the dial). One name here; which extension is attached is `cwSkim`. Not UberSDR's `morse`. */
 /** ★ V12 PSK31/63 ('psk' / 'pskskim' — `pskSkim`), JTTY ('jtty') and DSC ('dsc') — a VibeServer's own decoders. */
 export type DecoderName = 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'morse' | 'whisper' | 'time' | 'cw' | 'psk' | 'jtty' | 'dsc'
+  | 'same'    // ★ V12 EAS / SAME — a VibeServer's US alert-header decoder: one text line per alert, 0x03 state
   | 'paging'  // ★ V12 PAGING — POCSAG with AUTO; only on the phone's own radio (paging.ts), text + status JSON
   | 'sitora'  // ★ V12 SITOR-A — a VibeServer's maritime ARQ listener (vibe_sitora_run.h): text, link state, status JSON
   | 'aprs';   // ★ V12 APRS — a VibeServer's own packet decoder (vibe_aprs_run.h): JSON lists and packets, no text frame
@@ -808,6 +809,8 @@ export class DecoderClient {
       // ★ V12 SITOR-A: the tones around 1 kHz (as RTTY); polarity, timing and each station's offset are found.
       case 'sitora':  this.sitorLast = null; return { extension_name: 'sitora', params: { center_frequency: 1000 } };
       // ★ V12 PAGING: the mode is one of the server's own `pagingModes` ids — the server falls back to AUTO for any other.
+      // ★ V12 EAS / SAME: nothing to set (47 CFR § 11.31 fixes the tones and the rate).
+      case 'same':    return { extension_name: 'same', params: {} };
       case 'paging':  this.pagingLast = null; return { extension_name: 'paging', params: { mode: this.pagingMode } };
     }
   }
@@ -825,13 +828,18 @@ export class DecoderClient {
     // ★ V12 CW too: ONE SIGNAL's primary text is RTTY's 0x01 frame; the skimmer sends only its state (and JSON lists).
     // ★ V12 PSK the same (the primary signal's text); JTTY and DSC send each finished line too, but their boxes draw from
     //   the JSON — the line is the same text, so it is not shown twice (the web's onText).
-    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora' || name === 'paging') {
+    if (name === 'rtty' || name === 'navtex' || name === 'time' || name === 'cw' || name === 'psk' || name === 'jtty' || name === 'dsc' || name === 'sitora' || name === 'paging' || name === 'same') {
       if (t === 0x01) {
         if (u8.length < 13) return;
         const tl = v.getUint32(9, false);
         if (tl <= 0 || u8.length < 13 + tl) return;
         if (name !== 'jtty' && name !== 'dsc') this.cb.onText(utf8(u8.subarray(13, 13 + tl)));
         this.cb.onDot('active');
+      } else if (name === 'same' && t === 0x03) {
+        // ★ EAS / SAME: 0 listening · 1 reading a header burst
+        if (u8.length < 2) return;
+        this.cb.onStatus(u8[1] ? 'reading an alert header…' : 'listening for alert headers');
+        this.cb.onDot(u8[1] ? 'sync' : 'idle');
       } else if (name === 'paging' && t === 0x03) {
         // ★ PAGING's lock: 0 hunting · 1 a batch lock at some rate (the status JSON names it)
         if (u8.length < 2) return;

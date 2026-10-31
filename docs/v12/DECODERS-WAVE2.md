@@ -487,6 +487,45 @@ of the components runs out of the 512 MB cap); a tone-filter (non-coherent FSK) 
 discriminator's threshold at 512/1200 (≈ several dB) — a later improvement; switching the mode to NFM on PAGE is
 left to the user (the hint says so).
 
+## 8. EAS / SAME — DONE, wired to server and app (2026-10-31, third run)
+
+Files: `decoders/same_decoder.{h,cpp}`, `vibeserver/test-same.cpp` (run-tests), host ext `same` (`vibe_decoder_host.h`
+`buildSameLocked_`), vibeserver.json `"same"`, the owner's switch (`vibe_setup_page.h`), CMake (server, Android) and
+`build_ios.sh`'s list; app: `DecoderClient` ('same'), `sdrTypes`, `ModeSelector` (SAME key + hint), `DecoderPanel`,
+`decoderBands` (VHF → Broadcast, beside ADV RDS; near 162.400–162.550 MHz), `modeIcons` (broadcast glyph),
+`SDRScreen` (capability, tour card), `AboutOverlay` (V12 note). **No web key yet** (owed: decoders.ts / main.ts /
+index.html, then build-web).
+
+- **Standard**: 47 CFR § 11.31 (LII's copy of the eCFR text; eCFR itself refused the fetch): AFSK 520.83 bit/s, mark
+  2083.3 Hz, space 1562.5 Hz, 7-bit ASCII + a null eighth bit, preamble 16 × 0xAB, `ZCZC-ORG-EEE-PSSCCC…+TTTT-JJJHHMM-
+  LLLLLLLL-` three times ≥ 1 s apart, attention signal 853 + 960 Hz, `NNNN` three times; the ORG list, the national and
+  state/local event codes (§ 11.31(e)), the FIPS state numbers (§ 11.31(f)), marine areas 57–98. LSB first (the null
+  bit last) — pinned: the same header sent MSB first decodes nothing.
+- **Receiver**: box-average 48 → 12 kHz; the two tones mixed from exact tables (25 bits = 576 samples, whole cycles of
+  both tones), q65v lanes; one-bit boxcar correlators (running sums, re-made from the ring every bit); second-order DPLL
+  (leaking while hunting so noise cannot walk its rate to the clamp); acquire on 32 exact preamble bits; bytes read with
+  their soft values; three bad bytes in a row end a burst.
+- **No checksum in SAME — so two readings must agree.** The bursts are soft-summed bit by bit (a burst that slipped and
+  agrees with no other on ≥ 80 % of its characters is left out), and the alert is shown only if two bursts' hard
+  characters equal the result, or (three bursts) their character majority does. A lone burst (tuned in mid-alert) is
+  NOT shown: measured, its clean-looking bits (mean margin 0.8) still misread digits. One alert per header per 10 min;
+  `[SAME] end of message (NNNN)` once per run.
+- Line: `[SAME] Tornado Warning (TOR) · National Weather Service · areas 024031 (MD), 024033 (MD) · issued day 304
+  13:45 UTC · valid 0 h 30 min · from KLWX/NWS` (synthetic).
+
+| | |
+|---|---|
+| Format | the § 11.31 header parses field by field; 10 malformed headers (bad ORG, a letter in a location, day 367, minute 60, a 9-character sender, no trailing '-', '-' for '+', hour 24 …) all refused |
+| Decodes | three bursts → one alert (heard 3) + one end; a 50 ms drop-out in one burst → still right; 48, 24 and 12 kHz; 20 s of attention signal → nothing |
+| Sensitivity (white noise, SNR in 3 kHz, ±1 % clock, ±20 Hz tones, 20 alerts a point) | +2 dB 5/20 · **+4 dB 19/20** · +6 dB and up 20/20; **0 wrong in the whole sweep** |
+| False alerts | 2 h white noise: 0 alerts, 0 ends; 20 min of random AFSK bytes at 520.83 bit/s: 0 |
+| CPU | Mac ≈ 0.31 ms per second of 48 kHz audio incl. the noise generator. Pi 2: not counted under qemu (owed; by the Mac→Pi 2 ratios of the other decoders ≈ 10–20 ms a second, ≈ 1–2 %, ESTIMATE) |
+| SIMD | the mixer products in q65v lanes; boxcar and DPLL per-sample feedback (≈ 20 flops a sample at 12 kHz), not vectorised. Mac NEON = scalar: whole test output identical (fingerprint 69b64f10b37cc543). No per-sample divide (one per BIT for the soft value), no modulo (the table index walks) |
+
+Owed: **a real NOAA Weather Radio capture** (not receivable in the UK; no server session this run — the weekly test,
+RWT, Wednesdays ≈ 11:00–12:00 local, on a US receiver would do), the web key + build-web, Canada's Weatheradio
+location codes (shown raw today), a qemu Pi 2 count.
+
 ## RESUME HERE (updated 2026-10-31 ≈ 06:00 UTC, after the second run: CTCSS/DCS wiring, CHU, ACARS block, POCSAG)
 
 Done this run (commits on `v12-decoders-wave2`): CTCSS/DCS wired end to end (section 4 — server, app, web, e2e test),

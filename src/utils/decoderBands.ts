@@ -12,7 +12,7 @@
  *                     Utility     TIME
  *   VHF               ⚓ Maritime  DSC (channel 70)
  *                     Amateur     APRS · DIGITAL SPOTS (6 m / 2 m) · CW · SSTV
- *                     Broadcast   ADV RDS
+ *                     Broadcast   ADV RDS · SAME (EAS alert headers, NOAA Weather Radio)
  *                     Paging      PAGE (POCSAG — Android local hardware only: the phone's own radio)
  *   UHF               Paging      PAGE (the 450 MHz and 900 MHz paging bands)
  *                     (ADS-B and ISM tune the radio themselves — no tab is drawn for an empty band)
@@ -88,7 +88,7 @@ export const DECODER_PLACES: Readonly<Record<RadioBand, ReadonlyArray<{ group: D
     { group: 'maritime', ids: ['dsc'] },
     { group: 'amateur',  ids: ['aprs', 'spots', 'cw', 'sstv'] },
     { group: 'paging',   ids: ['paging'] },   // ★ V12: only drawn on the phone's own radio (Android local hardware)
-    { group: 'other',    ids: ['rds'] },
+    { group: 'other',    ids: ['rds', 'same'] },   // ★ V12 SAME: NOAA Weather Radio, 162.400–162.550 MHz
   ],
   uhf: [
     { group: 'paging',   ids: ['paging'] },
@@ -168,7 +168,8 @@ const NEAR: Record<string, (hz: number) => boolean> = {
   sstv:   hz => anyNear(hz, HAM),
   aprs:   hz => anyNear(hz, HAM),
   time:   hz => pointsNear(hz, TIME_SIGNAL_HZ, 5e3),
-  rds:    hz => anyNear(hz, [MHz(87.5, 108)], 500e3),   // Japan's 76–95 MHz FM is below; a hint only
+  rds:    hz => anyNear(hz, [MHz(87.5, 108)], 500e3),
+  same:   hz => anyNear(hz, [MHz(162.4, 162.55)], 25e3),   // NOAA Weather Radio's seven channels   // Japan's 76–95 MHz FM is below; a hint only
 };
 
 /**

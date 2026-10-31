@@ -451,6 +451,8 @@ export interface ServerOccupancy {
   sitora?: boolean;
   /** ★★★ V12 PAGING — present ONLY on the phone's own engine (Android local hardware, not serving): the manual choices
    *  as data, AUTO first (services/paging.ts). Absent = no PAGE key. */
+  /** ★ V12 EAS / SAME: this server's US alert-header decoder ('same'). */
+  same?: boolean;
   paging?: boolean;
   pagingModes?: PagingMode[];
   /** ★ V12: where this radio can be tuned (Hz windows after the owner's lists) — decides which channel / band keys draw. */
@@ -522,6 +524,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       jtty:      j.jtty === true,
       dsc:       j.dsc === true,
       sitora:    j.sitora === true,
+      same:      j.same === true,
       paging:    j.paging === true,
       pagingModes: parsePagingModes(j.pagingModes),
       tunable:   parseTunable(j.tunable),
