@@ -5,6 +5,42 @@
 
 namespace vibe {
 
+namespace {
+/** ★ dotReal(w, s, L) and dotReal(s, s, L) in ONE pass over s (2026-10-31, the decoder SIMD audit): the same two
+ *  accumulators per product, the same partial sums and the same final reduction as vibedsp::dotReal, so both results
+ *  are bit-identical to the two calls — with s loaded once instead of three times. */
+inline void dotPair(const float* w, const float* s, int K, float& fir, float& pwr) {
+#if VIBE_NEON
+    float32x4_t a0 = vdupq_n_f32(0.0f), a1 = vdupq_n_f32(0.0f), b0 = vdupq_n_f32(0.0f), b1 = vdupq_n_f32(0.0f);
+    int j = 0;
+    for (; j + 8 <= K; j += 8) {
+        const float32x4_t s0 = vld1q_f32(s + j), s1 = vld1q_f32(s + j + 4);
+        a0 = vmlaq_f32(a0, vld1q_f32(w + j), s0); a1 = vmlaq_f32(a1, vld1q_f32(w + j + 4), s1);
+        b0 = vmlaq_f32(b0, s0, s0);               b1 = vmlaq_f32(b1, s1, s1);
+    }
+    if (j + 4 <= K) { const float32x4_t s0 = vld1q_f32(s + j); a0 = vmlaq_f32(a0, vld1q_f32(w + j), s0); b0 = vmlaq_f32(b0, s0, s0); j += 4; }
+    float f = vaddvq_f32(vaddq_f32(a0, a1)), p = vaddvq_f32(vaddq_f32(b0, b1));
+    for (; j < K; ++j) { f += w[j] * s[j]; p += s[j] * s[j]; }
+    fir = f; pwr = p;
+#elif VIBE_SSE
+    __m128 a0 = _mm_setzero_ps(), a1 = _mm_setzero_ps(), b0 = _mm_setzero_ps(), b1 = _mm_setzero_ps();
+    int j = 0;
+    for (; j + 8 <= K; j += 8) {
+        const __m128 s0 = _mm_loadu_ps(s + j), s1 = _mm_loadu_ps(s + j + 4);
+        a0 = vibedsp::sseMla(a0, _mm_loadu_ps(w + j), s0); a1 = vibedsp::sseMla(a1, _mm_loadu_ps(w + j + 4), s1);
+        b0 = vibedsp::sseMla(b0, s0, s0);                   b1 = vibedsp::sseMla(b1, s1, s1);
+    }
+    if (j + 4 <= K) { const __m128 s0 = _mm_loadu_ps(s + j); a0 = vibedsp::sseMla(a0, _mm_loadu_ps(w + j), s0); b0 = vibedsp::sseMla(b0, s0, s0); j += 4; }
+    float f = vibedsp::sseAddv(_mm_add_ps(a0, a1)), p = vibedsp::sseAddv(_mm_add_ps(b0, b1));
+    for (; j < K; ++j) { f += w[j] * s[j]; p += s[j] * s[j]; }
+    fir = f; pwr = p;
+#else
+    fir = vibedsp::dotReal(w, s, K);
+    pwr = vibedsp::dotReal(s, s, K);
+#endif
+}
+}  // namespace
+
 AutoNotch::AutoNotch() { buf.assign(2 * M, 0.0f); w.assign(L, 0.0f); }
 
 void AutoNotch::reset() {
@@ -29,8 +65,8 @@ void AutoNotch::process(float* x, int count) {
          *  audio-rate loop in the engine, and it was scalar (2026-09-16). The prediction and
          *  the tap energy are two dot products; the update is an axpy. L is a multiple of 8. */
         const float* s = &buf[(size_t)base];
-        const float fir = vibedsp::dotReal(w.data(), s, L);
-        const float pwr = vibedsp::dotReal(s, s, L);
+        float fir, pwr;
+        dotPair(w.data(), s, L, fir, pwr);
         float err = in - fir;            // tones removed → notch output
         x[n] = err;
 
