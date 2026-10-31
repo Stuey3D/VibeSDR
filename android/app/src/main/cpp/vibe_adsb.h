@@ -38,6 +38,7 @@
 #include <vector>
 #if defined(__ARM_NEON) || defined(__ARM_NEON__)
 #include <arm_neon.h>
+#include "vibedsp/neon_compat.h"   // ★ GCC/ARMv7: vcgeq_f32 as ONE instruction, not four scalar compares (2026-10-31)
 #define VIBE_ADSB_NEON 1
 #elif defined(__SSE2__) || defined(_M_X64)
 #include <emmintrin.h>
