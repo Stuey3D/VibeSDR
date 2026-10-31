@@ -684,14 +684,20 @@ int main(int argc, char** argv) {
         auto x = synth(sigs, 2.4e6, 10.0, 0.02, 31);
         wander(x, 2.4e6, -650e3, 0.03, 41);
         wander(x, 2.4e6, 500e3, 0.03, 42);
-        struct Out { std::multiset<std::string> lines; uint64_t longs = 0, held = 0; size_t bursts = 0; bool nearStrong = false; };
+        struct Out { std::multiset<std::string> lines; uint64_t longs = 0, held = 0; size_t bursts = 0; bool nearStrong = false;
+                     std::vector<std::string> around; };   // ★ the decoded bursts near the strong sensor, for the failure message
         auto run = [&](bool hold) {
             Out o;
             FrontEnd fe(2.4e6); fe.setDcGuardHz(15e3); fe.setHoldHogs(hold);
             auto on = [&](const Burst& b) {
                 ++o.bursts;
                 std::vector<Reading> r; Service::decodeBurst(b, 433.92e6, r);
-                for (const auto& x : r) { o.lines.insert(readable(x, 0)); if (std::fabs(b.offHz - nearStrong.offHz) < 40e3 && b.tSec > 5.0 && b.tSec < 5.6) o.nearStrong = true; }
+                for (const auto& x : r) { o.lines.insert(readable(x, 0)); if (std::fabs(b.offHz - nearStrong.offHz) < FrontEnd::kMatchHz && b.tSec > 5.0 && b.tSec < 5.6) o.nearStrong = true; }
+                // ★ kMatchHz, not tighter: a strong burst's first detection group can sit off its carrier (32-bit NEON put
+                //   this one's channel at -483 kHz for a -590 kHz sensor — still its own channel, 160 kHz from the hog's)
+                if (!r.empty() && b.tSec > 3.0 && b.tSec < 6.0) {
+                    char d[200]; std::snprintf(d, sizeof d, "%.3f s %+.1f kHz: %s", b.tSec, b.offHz / 1e3, readable(r[0], 0).c_str()); o.around.push_back(d);
+                }
             };
             for (size_t i = 0; i < x.size(); i += 76800) fe.feed(x.data() + i, std::min<size_t>(76800, x.size() - i), on);
             fe.flush(on);
@@ -708,6 +714,7 @@ int main(int argc, char** argv) {
         CHECK(on.longs <= 4 && on.held > 0, "with it they are held: %llu 1.6 s channels, %llu detections held", (unsigned long long)on.longs, (unsigned long long)on.held);
         CHECK(kept == off.lines.size(), "every reading without the hold is there with it (%zu of %zu)", kept, off.lines.size());
         CHECK(on.nearStrong, "a sensor 20 dB over a held hog, inside its hold, still decodes");
+        if (!on.nearStrong) for (const auto& d : on.around) printf("     decoded near it: %s\n", d.c_str());
         CHECK(on.lines.size() >= 6, "the six sensors away from the emitters decode (%zu readings)", on.lines.size());
     }
 

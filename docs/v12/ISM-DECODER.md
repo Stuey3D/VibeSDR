@@ -42,7 +42,7 @@ exactly as found). Why not a decoder on the listener's DDC channel:
 
 ### The front end (`vibe_ism.h`)
 
-1. **Detector** — a 256-point Hann FFT of one block every 320 µs (640 µs on 32-bit ARM), power per bin against a
+1. **Detector** — a 256-point Hann FFT of one block every 320 µs (on every machine since 2026-10-31; 32-bit ARM used 640 µs before, and missed decodes), power per bin against a
    **censored-mean noise floor per bin** (a minimum-tracker settles at a fraction of an exponential mean and calls one bin
    in ten a signal). Bins ≥ 10 dB over their floor are grouped (one-bin gaps bridged); a lone bin must be ≥ 15 dB.
    Only the **band's own span** is searched (the tuner's filter skirts are where false detections clustered on the
@@ -283,7 +283,7 @@ Measured with `test-ism`'s CPU row and a front-end profile (10 s of 2.4 MS/s), n
 |---|---|---|
 | Apple M4 (dev Mac), radix-2 | 0.8 % of one core | 1.0–1.3 % |
 | Pi 500, Cortex-A76, arm64, PFFFT (the server's build) | 2.0–2.3 % | 2.9 % |
-| Pi 500, the 32-bit-ARM hop (640 µs), PFFFT | 1.3–1.5 % | — |
+| Pi 500, the old 32-bit-ARM hop (640 µs, until 2026-10-31), PFFFT | 1.3–1.5 % | — |
 | Pi 500 real 433.92 capture under VibeAGC's high gain (`ism-offline`, M4) | — | 4.3 % of real time on the M4 (52 false bursts in 30 s) |
 
 ★ **The Pi 2 (900 MHz Cortex-A7, armhf, the minimum spec) is NOT measured** — I was told never to ssh into it. Estimate:

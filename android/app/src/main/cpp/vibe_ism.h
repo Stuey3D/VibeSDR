@@ -236,14 +236,14 @@ using DetFft = SmallFft;
  *    may run whenever it likes, as long as it applies each event at the event's own sample position. */
 struct FeConst {
     static constexpr int    kN = 256;            ///< detector FFT size (≈ 9.4 kHz bins at 2.4 MS/s)
-    /** How often the detector looks: one kN-point FFT every kHopUs of capture (~3 100 a second). ★ 32-BIT ARM (the Pi 2 —
-     *  the minimum spec — and Pi 0/1/3 on armhf) looks half as often: the detector FFT is most of the front end's cost on
-     *  an in-order core (Pi 500 A76: 2.0 of 3.4 % of a core), and a 10 ms burst still crosses ~15 frames. A TIME, not a
-     *  block count: at 3 MS/s "6 blocks" was a 1 ms hop, and test-ism lost bursts at it. VIBE_ISM_HOP_US overrides. */
+    /** How often the detector looks: one kN-point FFT every kHopUs of capture (~3 100 a second). A TIME, not a block
+     *  count: at 3 MS/s "6 blocks" was a 1 ms hop, and test-ism lost bursts at it. VIBE_ISM_HOP_US overrides.
+     *  ★★ THE SAME ON EVERY MACHINE (2026-10-31). 32-bit ARM used to look half as often (640 µs) to save CPU on the Pi 2,
+     *  and that cost decodes: on Stuart's car-key capture it missed the Oregon THN132N the 320 µs hop finds. Stuart's rule
+     *  is never to trade decodes for speed, and since the thread split the detector has a thread of its own (vibe-ism,
+     *  ~11 % of a Pi 2 core at 640 µs), so the Pi 2 can afford to look as often as everything else. */
 #if defined(VIBE_ISM_HOP_US)
     static constexpr double kHopUs = VIBE_ISM_HOP_US;
-#elif defined(__arm__)
-    static constexpr double kHopUs = 640;
 #else
     static constexpr double kHopUs = 320;
 #endif
