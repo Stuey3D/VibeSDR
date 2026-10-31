@@ -26,6 +26,9 @@ inline V vmax(V a, V b) { return vmaxq_f32(a, b); }
 /** Four interleaved complex values → (re, im). */
 inline void ld2(const float* p, V& re, V& im) { float32x4x2_t t = vld2q_f32(p); re = t.val[0]; im = t.val[1]; }
 inline void st2(float* p, V re, V im) { float32x4x2_t t; t.val[0] = re; t.val[1] = im; vst2q_f32(p, t); }
+/** Sixteen floats → four vectors of every fourth one (a = p0 p4 p8 p12, b = p1 p5 …), and back. */
+inline void ld4(const float* p, V& a, V& b, V& c, V& d) { float32x4x4_t t = vld4q_f32(p); a = t.val[0]; b = t.val[1]; c = t.val[2]; d = t.val[3]; }
+inline void st4(float* p, V a, V b, V c, V d) { float32x4x4_t t; t.val[0] = a; t.val[1] = b; t.val[2] = c; t.val[3] = d; vst4q_f32(p, t); }
 #elif Q65V_SSE2
 typedef __m128 V;
 inline V ld(const float* p) { return _mm_loadu_ps(p); }
@@ -40,6 +43,14 @@ inline void ld2(const float* p, V& re, V& im) {
     re = _mm_shuffle_ps(a, b, _MM_SHUFFLE(2, 0, 2, 0)); im = _mm_shuffle_ps(a, b, _MM_SHUFFLE(3, 1, 3, 1));
 }
 inline void st2(float* p, V re, V im) { _mm_storeu_ps(p, _mm_unpacklo_ps(re, im)); _mm_storeu_ps(p + 4, _mm_unpackhi_ps(re, im)); }
+inline void ld4(const float* p, V& a, V& b, V& c, V& d) {
+    a = _mm_loadu_ps(p); b = _mm_loadu_ps(p + 4); c = _mm_loadu_ps(p + 8); d = _mm_loadu_ps(p + 12);
+    _MM_TRANSPOSE4_PS(a, b, c, d);
+}
+inline void st4(float* p, V a, V b, V c, V d) {
+    _MM_TRANSPOSE4_PS(a, b, c, d);
+    _mm_storeu_ps(p, a); _mm_storeu_ps(p + 4, b); _mm_storeu_ps(p + 8, c); _mm_storeu_ps(p + 12, d);
+}
 #else
 struct V { float v[4]; };
 inline V ld(const float* p) { V r; for (int i = 0; i < 4; ++i) r.v[i] = p[i]; return r; }
@@ -51,6 +62,8 @@ inline V mul(V a, V b) { V r; for (int i = 0; i < 4; ++i) r.v[i] = a.v[i] * b.v[
 inline V vmax(V a, V b) { V r; for (int i = 0; i < 4; ++i) r.v[i] = a.v[i] > b.v[i] ? a.v[i] : b.v[i]; return r; }
 inline void ld2(const float* p, V& re, V& im) { for (int i = 0; i < 4; ++i) { re.v[i] = p[2 * i]; im.v[i] = p[2 * i + 1]; } }
 inline void st2(float* p, V re, V im) { for (int i = 0; i < 4; ++i) { p[2 * i] = re.v[i]; p[2 * i + 1] = im.v[i]; } }
+inline void ld4(const float* p, V& a, V& b, V& c, V& d) { for (int i = 0; i < 4; ++i) { a.v[i] = p[4 * i]; b.v[i] = p[4 * i + 1]; c.v[i] = p[4 * i + 2]; d.v[i] = p[4 * i + 3]; } }
+inline void st4(float* p, V a, V b, V c, V d) { for (int i = 0; i < 4; ++i) { p[4 * i] = a.v[i]; p[4 * i + 1] = b.v[i]; p[4 * i + 2] = c.v[i]; p[4 * i + 3] = d.v[i]; } }
 #endif
 /** The four lanes summed, (l0+l1)+(l2+l3). */
 inline float hsum(V a) { float l[4]; st(l, a); return (l[0] + l[1]) + (l[2] + l[3]); }

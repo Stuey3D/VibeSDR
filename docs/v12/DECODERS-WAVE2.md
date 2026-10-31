@@ -1131,7 +1131,62 @@ was not touched.
 - False decodes: white noise **60 min through each AUTO** (MFSK, OLIVIA, THOR and the one key): nothing.
 - `test-web-hell` (its expectation was changed in section 19 and not re-run then): 19 passed, 0 failed.
 
-## RESUME HERE (updated 2026-10-31, eighth run: the web test's lost "E")
+## 21. The one key's AUTO at less than half the cost — the tone search shared, OLIVIA's chips read in a row; decodes byte-identical (2026-10-31, eighth run)
+
+Section 19 measured the one MFSK key's AUTO (MFSK16/32, THOR ×6, OLIVIA ×6, CONTESTIA ×3 — 17 receivers) at ≈ 3.97 G
+instructions a minute on a Pi 2, 48 % of it each receiver's own tone search. Measured here with the same tooling
+(`tools/textmode-bench/qemu.sh`'s build: armhf `-marm` NEON, `-O3 -ffp-contract=fast`, static, under qemu-arm with the
+instruction counter; 60 s of noise through AUTO; per-function split with `~/Library/Caches/decaudit/fnsum.py`).
+
+| Pi 2 model, qemu-arm count, 60 s of noise through the one key's AUTO | NEON | scalar (`VIBE_FORCE_SCALAR` + `PFFFT_SIMD_DISABLE`) |
+|---|---|---|
+| section 19 | 3966 M | 5471 M |
+| section 20 (the join fixes: +1.4 %) | 4023 M | 5469 M |
+| + one ladder of window maxima per stream and stride | 2539 M | 4546 M |
+| + OLIVIA's chips kept by diagonal, the FHT's first two stages in lanes, the stream's double ring | 1945 M | 4065 M |
+| + choose() by each phase's maximum, the finder's score and EMA in one pass, the resampler's buffer | **1845 M (−54 %)** | **3933 M (−28 %)** |
+| Pi 2 estimate (0.6–0.8 IPC at 900 MHz) | 9.3–12.4 % of a core → **4.3–5.7 %** | |
+
+Where the 1845 M goes now: PFFFT 33 % (the 9 streams' transforms — untouched), OLIVIA/CONTESTIA's soft bits and Walsh
+blocks 20 %, the finders (ladders, scores, choose) 17 %, the resamplers and the streams' windows and powers 15 %, MFSK/THOR
+symbols 7 %, exp/log 4 %.
+
+### What changed (decoders/textmodes.cpp; ld4/st4 added to digimodes/q65_simd.h)
+1. ★★ **One ladder of window maxima per stream and tone stride** (`Ladder`). Every finder asked the same question of the
+   same spectrum — the strongest of M bins s apart from each base — and receivers on one stream and stride differ only
+   in M (OLIVIA 4/8/16/32 and CONTESTIA at 31.25 Bd; MFSK16 and THOR16; …). Level k holds the strongest of 2^k bins (a
+   maximum of two of the level below, four bins a lane); a finder for M reads two overlapping entries of the level just
+   under M. It replaces each finder's own van Herk / Gil-Werman scan (scalar, one residue at a time). A maximum is exact,
+   so the scores are the same floats. The band's mean (the divide a frame) is summed once a ladder: its span does not
+   depend on M.
+2. **OLIVIA/CONTESTIA: the soft bits kept by diagonal.** Character j of a block reads chip k from bit (j + k) mod b of the
+   block's k-th symbol — a diagonal, gathered one float at a time with two wrapping counters and a select. Stored as b
+   rows (bit i of symbol t in row (t − i) mod b), a character's chips are one row in order; each column is written twice
+   (t mod K and + K), so a block's K chips are K floats in a row — read four a lane and descrambled by a multiply with ±1
+   (exact: the same floats as the select it replaces). The Walsh transform's first two stages, which were scalar, run in
+   lanes with ld4/st4 (every fourth value a lane): the same adds in the same pairs.
+3. **The stream's ring is kept twice over** (each sample at wp and wp + N): the window, oldest first, is N floats from
+   ring[wp] — no copy a frame to put the halves in order.
+4. **Small ones**: choose() with no ban takes each phase's maximum four bases a lane and scans one phase for it (the same
+   place the scalar scan picks — the first strictly greater); a ban tick is skipped while no ban or memory of one is
+   left; the finder's score and its EMA in one pass; the resampler writes into a buffer instead of push_back.
+
+Not shared, on purpose: the sequential sum in each Walsh block's quality (four lanes would round differently — and q
+decides the lock); the per-sub-mode EMAs (each M has its own scores; OLIVIA ↔ CONTESTIA twins already share theirs,
+section 13); the FFTs (each stream's symbol length is its own).
+
+### Byte-identical — proved
+- `test-textmodes` with the 11 reference recordings and the eight fldigi CONTESTIA files: the whole output identical,
+  before and after (Mac).
+- The 20-trial `tm_bench` sweep of every sub-mode, manual and the family AUTOs (section 20's set): identical files.
+- 1200 joins of the web clip (`tools/textmode-bench/tm_loops.py`, new — the method of sections 12 and 20 as a tool): the
+  same counts and the same one failure; per-second traces (`VIBE_TM_DEBUG`: every receiver's quality, score, place, Hz)
+  of seven loop files byte-identical.
+- armhf NEON/scalar × `-ffp-contract` off/fast under qemu: the four whole outputs identical to each other and to section 20's
+  (fingerprint 44ca51b976226297 — the same as section 19's: the join fixes did not touch the synthetic tests). x86 SSE2 (a static i686 `-msse2 -mfpmath=sse` build under
+  qemu-i386 — the SSE2 ld4/st4 path, which no other test runs): the whole output identical before and after, all passed — and its fingerprint is the armhf builds' one.
+
+## RESUME HERE (updated 2026-10-31, eighth run: the lost "E", and the one key at less than half the cost)
 
 Done this run (commits on `v12-decoders-wave2`): section 16 — PAGE silent while it runs, Q65 tiling of the EME segments
 (23 cm band, 6 m, Q65-15 — it doubles Q65's cost), Feld Hell (Hellschreiber) copy, AUTO first / manual for the session
@@ -1142,8 +1197,10 @@ recordings only (FLEX and fldigi files kept out of git).
 
 Next, in order:
 0. ✓ DONE (section 20): **test-web-textmodes 10/10**, test-web-hell 19/19. The "E" was a stale presence slot after a
-   skipped symbol; four join faults fixed on the way. NEXT: make the one key's AUTO lighter (≈ 3.97 G instructions a
-   minute on a Pi 2, 48 % of it each receiver's own tone search) — share the tone search, decodes byte-identical.
+   skipped symbol; four join faults fixed on the way.
+   ✓ DONE (section 21): the one key's AUTO **4023 → 1845 M instructions a minute** on the Pi 2 model (−54 %; ≈ 4.3–5.7 %
+   of a core, was 9–12 %), decodes byte-identical. Left on the table: the 9 streams' FFTs (a third of what remains) and
+   OLIVIA's soft bits (exp/log per tone, shared by the twins only if their places agree — not done).
 1. **build-web** before any release (sections 10–12, 15, 16, 19): `vibe_web_page.h` is NOT committed.
 2. **The app** has not run on a simulator or device this run (esbuild syntax checks; the small services type-checked):
    PAGE's mute and banner, PROTOCOL/RATE rows, the MFSK key's FAMILY/MODE rows, the session rule, Feld Hell.

@@ -149,7 +149,7 @@ struct Viterbi7 {
 struct Resampler {
     int q = 1, qn = 0; float acc = 0; float inv = 1;   // box average by q
     double step = 1.0, inc = 1.0, frac = 0; float prev = 0; bool interp = false;
-    std::vector<float> out;
+    std::vector<float> out; int outN = 0;   // out[0 … outN): this call's samples (out is sized for the most a call gives)
     void init(double inRate, double target) {
         q = std::max(1, (int)std::floor(inRate / target + 1e-9));
         while (q > 1 && inRate / q < target * 0.999) --q;
@@ -160,28 +160,33 @@ struct Resampler {
         inc = mid / target;
     }
     void feed(const float* x, int n) {
-        out.clear();
+        const size_t most = (size_t)((double)n / q * step) + 4;   // outputs this call can give, at most
+        if (out.size() < most) out.resize(most);
+        float* o = out.data(); int k = 0;
         for (int i = 0; i < n; ++i) {
             acc += x[i];
             if (++qn < q) continue;
             const float v = acc * inv; acc = 0; qn = 0;
-            if (!interp) { out.push_back(v); continue; }
+            if (!interp) { o[k++] = v; continue; }
             // linear interpolation: outputs fall at mid-sample positions frac … stepping 1/step
-            while (frac < 1.0) { out.push_back(prev + (float)frac * (v - prev)); frac += inc; }
+            while (frac < 1.0) { o[k++] = prev + (float)frac * (v - prev); frac += inc; }
             frac -= 1.0; prev = v;
         }
+        outN = k;
     }
 };
 
 // ── spectra: |FFT|² of 2·sps every sps/4 ─────────────────────────────────────────────────────────────────────────────
 struct Stream {
     int sps, rate, N, hop; bool shaped;
+    /** ★ the last N samples twice over (each written at wp and wp + N), so the window, oldest first, is the N floats
+     *  from ring[wp] — read straight into the transform, with no copy to put the two halves in order (2026-10-31) */
     std::vector<float> ring, win; int wp = 0, sinceHop = 0, filled = 0; int64_t frame = 0;
     PFFFT_Setup* setup = nullptr; float* fin = nullptr; float* fout = nullptr; float* work = nullptr;
     std::vector<float> P;
     std::vector<std::function<void(int64_t, const float*)>> sinks;
     Stream(int sps_, int rate_, bool shaped_) : sps(sps_), rate(rate_), N(2 * sps_), hop(sps_ / 4), shaped(shaped_) {
-        ring.assign(N, 0.f); win.assign(N, 0.f); P.assign(N / 2, 0.f);
+        ring.assign((size_t)2 * N, 0.f); win.assign(N, 0.f); P.assign(N / 2, 0.f);
         for (int i = 0; i < N; ++i) {
             if (shaped) win[i] = (float)(oliviaShape(M_PI * (2.0 * (i + 0.5) / N - 1.0)) / 2.4);
             else win[i] = i >= N - sps ? 1.f : 0.f;   // the last symbol, zero-padded to twice its length (half-spacing bins)
@@ -194,17 +199,23 @@ struct Stream {
     ~Stream() { pffft_destroy_setup(setup); pffft_aligned_free(fin); pffft_aligned_free(fout); pffft_aligned_free(work); }
     double binHz() const { return (double)rate / N; }
     void feed(const float* x, int n) {
-        for (int i = 0; i < n; ++i) {
-            ring[wp] = x[i]; wp = (wp + 1) == N ? 0 : wp + 1;
-            if (filled < N) ++filled;
-            if (++sinceHop < hop) continue;
+        for (int i = 0; i < n; ) {
+            // the samples up to the next hop, in runs that stop at the end of the ring
+            const int run = std::min(n - i, hop - sinceHop);
+            for (int r = 0; r < run; ) {
+                const int seg = std::min(run - r, N - wp);
+                std::memcpy(ring.data() + wp, x + i + r, (size_t)seg * sizeof(float));
+                std::memcpy(ring.data() + wp + N, x + i + r, (size_t)seg * sizeof(float));
+                wp += seg; if (wp == N) wp = 0;
+                r += seg;
+            }
+            i += run; filled = std::min(N, filled + run); sinceHop += run;
+            if (sinceHop < hop) break;
             sinceHop = 0;
             if (filled < N) { ++frame; continue; }
-            // oldest first: ring[wp … N) then ring[0 … wp)
-            const int a = N - wp;
-            std::memcpy(fin, ring.data() + wp, a * sizeof(float));
-            std::memcpy(fin + a, ring.data(), wp * sizeof(float));
-            for (int k = 0; k < N; k += 4) q65v::st(fin + k, q65v::mul(q65v::ld(fin + k), q65v::ld(win.data() + k)));
+            // oldest first: ring[wp … wp + N)
+            const float* o = ring.data() + wp;
+            for (int k = 0; k < N; k += 4) q65v::st(fin + k, q65v::mul(q65v::ld(o + k), q65v::ld(win.data() + k)));
             pffft_transform_ordered(setup, fin, fout, work, PFFFT_FORWARD);
             // fout: [r0, r(N/2), r1, i1, r2, i2, …] — powers four bins a lane (bin 0 fixed after)
             for (int k = 0; k < N / 2; k += 4) {
@@ -218,17 +229,58 @@ struct Stream {
     }
 };
 
+// ── window maxima: ONE ladder per stream and tone stride, shared by every finder on it ──────────────────────────────────
+/** ★★ THE TONE SEARCH SHARED (2026-10-31, eighth run): every finder asks the same question of the same spectrum — the
+ *  strongest of M bins s apart from each base — and the receivers on one stream with one tone stride differ only in M
+ *  (OLIVIA 4/8/16/32 and CONTESTIA 8/16/32 at 31.25 Bd; MFSK16 and THOR16; …). So the maxima are built ONCE a frame as a
+ *  ladder — level k holds the strongest of 2^k bins s apart (a maximum of two of the level below, four bins a lane) —
+ *  and a finder for M reads two overlapping entries of the level just under M. A maximum is exact, so every score is
+ *  the very number the per-finder van Herk / Gil-Werman scans gave (removed; see git history before the eighth run):
+ *  decodes byte-identical (DECODERS-WAVE2.md section 21). The band's mean (one divide a frame) is the same for every
+ *  finder on the ladder too — its span lo … top + s does not depend on M — so it is summed once here. */
+struct Ladder {
+    int s = 0, lo = 0, top = 0, maxM = 1, nbMax = 0, levels = 0, Tx = 0; int64_t at = -1; float inv = 1.f;
+    std::vector<float> lv[7];   // lv[k][t]: the strongest of bins lo − s + t + s·j, j < 2^k (zero past the spectrum)
+    int lim[7] = {};            // entries of each level that are valid
+    void need(int M, int nb) { maxM = std::max(maxM, M); nbMax = std::max(nbMax, nb); }
+    static int floorLog2(int M) { int k = 0; while ((2 << k) <= M) ++k; return k; }
+    void compute(const float* P, int nBins, int64_t f) {
+        if (f == at) return;
+        at = f;
+        if (Tx == 0) {
+            levels = floorLog2(maxM) + 1;
+            Tx = nbMax + 8 + s * (2 * maxM + 2);
+            for (int k = 0; k < levels; ++k) { lv[k].assign((size_t)Tx + 4, 0.f); lim[k] = Tx - (s << k); }
+        }
+        double sum = 0; const int a = lo, b = std::min(nBins - 1, top + s);
+        for (int k = a; k <= b; ++k) sum += P[k];
+        inv = (float)((b - a + 1) / (sum + 1e-20));   // one divide a frame: powers in units of the band's mean
+        float* x = lv[0].data();
+        const int k0 = lo - s, n0 = std::max(0, std::min(Tx, nBins - k0));
+        std::memcpy(x, P + k0, (size_t)n0 * sizeof(float));
+        std::memset(x + n0, 0, (size_t)(Tx - n0) * sizeof(float));
+        for (int k = 1; k < levels; ++k) {
+            const float* u = lv[k - 1].data(); float* w = lv[k].data();
+            const int d = s << (k - 1), n = lim[k];
+            int t = 0;
+            for (; t + 4 <= n; t += 4) q65v::st(w + t, q65v::vmax(q65v::ld(u + t), q65v::ld(u + t + d)));
+            for (; t < n; ++t) w[t] = std::max(u[t], u[t + d]);
+        }
+    }
+};
+
 // ── the signal finder: where (base bin, quarter-symbol phase) a tone set sits ─────────────────────────────────────────
 struct Finder {
     int M, s, lo, hi, nb;          // bases lo … lo + nb − 1 (half-bins)
-    std::vector<float> own[4], v, g, h, seq;
+    std::vector<float> own[4], v;
+    Ladder* lad = nullptr;
     /** ★ ONE SET OF SCORES FOR TWINS: OLIVIA and CONTESTIA of the same tones and baud read the same spectra with the
      *  same finder, so the second of them reads the first's scores instead of computing them again (`score` points at
      *  the owner's; its update() does nothing). What each does with them — its place, its bans, its hunt — stays its
      *  own. The owner is registered first, so its update() has run when the twin's frame() reads them. */
     std::vector<float>* score = own; bool shared = false;
     void shareScoresOf(Finder& o) { score = o.own; shared = true; }
-    int curB = -1, curP = 0, L_ = 0;
+    int curB = -1, curP = 0;
     /** ★ THE HUNT: a place where this sub-mode could not lock is set aside for a while (symbols), so a second signal in
      *  the passband gets its turn — measured: OLIVIA 16/500 beside a stronger MFSK16 never decoded before this. */
     /** ★ …AND A PLACE SET ASIDE AGAIN SOON AFTER IS SET ASIDE FOR LONGER (×2, ×4): a steady other signal is not worth
@@ -242,9 +294,15 @@ struct Finder {
         st = std::min(3, st + 1);
         const int len = forSymbols << (st - 1);
         for (int i = i0; i <= i1; ++i) { ban[i] = len; mem[i] = 3 * len; strikes[i] = (uint8_t)st; }
+        memLeft = std::max(memLeft, 3 * len);
         curB = -1;
     }
+    /** symbols until every ban and every memory of one has run out (a ban never outlasts its memory): while it is 0 —
+     *  nearly always — there is nothing to tick and choose() may take the plain maximum */
+    int memLeft = 0;
     void tickBans() {
+        if (memLeft == 0) return;
+        --memLeft;
         for (int i = 0; i < nb; ++i) { if (ban[i] > 0) --ban[i]; if (mem[i] > 0 && --mem[i] == 0) strikes[i] = 0; }
     }
     float alpha;
@@ -259,38 +317,44 @@ struct Finder {
         score = own; shared = false;
         v.assign(nb, 0.f); ban.assign(nb, 0); mem.assign(nb, 0); strikes.assign(nb, 0);
         alpha = 1.f / 12;
-        L_ = (nb + s * M + s) / s + M + 2;
-        seq.assign((size_t)L_ * s, 0.f); g.assign(seq.size(), 0.f); h.assign(seq.size(), 0.f);
     }
-    /** one frame (phase p): the score of every base — the strongest of the M tones less the stronger neighbour outside */
-    void update(const float* P, int nBins, int p) {
+    /** the ladder of this finder's stream and stride (its lo and top are this finder's: the same for every M) */
+    void useLadder(Ladder* l, int nBins, double binHz) {
+        lad = l;
+        if (l->s == 0) { l->s = s; l->lo = lo; l->top = std::min(nBins - 1 - s, (int)std::floor(kAudioHi / binHz)); }
+        l->need(M, nb);
+    }
+    /** one frame (phase p): the score of every base — the strongest of the M tones less the stronger neighbour outside.
+     *  ★ No divide or modulo anywhere in here: ARMv7 has no hardware divide, and the first build spent 60 % of its Pi 2
+     *  time in __aeabi_idivmod (qemu count) on `i % s`, `j % M` and the like. (Until 2026-10-31 each finder ran its own
+     *  van Herk / Gil-Werman sliding maximum, one residue of s at a time, scalar — 48 % of the one MFSK key's AUTO on a
+     *  Pi 2. The ladder gives the same maxima; see Ladder.) */
+    void update(const float* P, int nBins, int p, int64_t f) {
         if (nb == 0 || shared) return;
-        double sum = 0; const int a = lo, b = std::min(nBins - 1, hi + s * M);
-        for (int k = a; k <= b; ++k) sum += P[k];
-        const float inv = (float)((b - a + 1) / (sum + 1e-20));   // one divide a frame: powers in units of the band's mean
-        // sliding maximum of M tones, stride s (van Herk / Gil-Werman), one residue at a time. ★ No divide or modulo
-        //   anywhere in here: ARMv7 has no hardware divide, and the first build spent 60 % of its Pi 2 time in
-        //   __aeabi_idivmod (qemu count) on `i % s`, `j % M` and the like.
-        const int L = L_;
-        for (int r = 0; r < s; ++r) {
-            float* q = seq.data() + (size_t)r * L; float* G = g.data() + (size_t)r * L; float* H = h.data() + (size_t)r * L;
-            for (int j = 0, k = lo + r; j < L; ++j, k += s) q[j] = k < nBins ? P[k] : 0.f;
-            for (int j = 0, c = 0; j < L; ++j) { G[j] = c == 0 ? q[j] : std::max(G[j - 1], q[j]); if (++c == M) c = 0; }
-            int c = (L - 1) - ((L - 1) / M) * M;   // (L − 1) mod M, once a frame
-            for (int j = L - 1; j >= 0; --j) { H[j] = (c == M - 1 || j == L - 1) ? q[j] : std::max(H[j + 1], q[j]); if (--c < 0) c = M - 1; }
-            for (int j = 0, i = r; i < nb; ++j, i += s) {
-                const float wmax = std::max(H[j], G[std::min(L - 1, j + M - 1)]);
-                const int kb = lo + i - s, ka = lo + i + s * M;
-                const float out = std::max(kb >= 0 && kb < nBins ? P[kb] : 0.f, ka < nBins ? P[ka] : 0.f);
-                v[i] = (lo + i > hi) ? -1e3f : wmax - out;
-            }
-        }
-        // EMA, four bases a lane
+        lad->compute(P, nBins, f);
+        const float inv = lad->inv;
+        // base i: the M tones are ladder entries i + s … i + s + s·(M − 1); below: entry i; above: entry i + s + s·M
+        const int kp = Ladder::floorLog2(M), dM = s * (M - (1 << kp)), dO = s + s * M;
+        const float* x = lad->lv[0].data(); const float* L = lad->lv[kp].data() + s;
+        // and the EMA, four bases a lane, in the same pass (the last lanes, which hold bases past the band, apart)
         const q65v::V A = q65v::set1(alpha), I = q65v::set1(inv);
-        float* sc = score[p].data();
-        for (int i = 0; i < nb; i += 4) {
+        float* sc = score[p].data(); float* vv = v.data();
+        const int whole = std::max(0, hi - lo + 1) & ~3;
+        for (int i = 0; i < whole; i += 4) {
+            const q65v::V w = q65v::vmax(q65v::ld(L + i), q65v::ld(L + i + dM));
+            const q65v::V o = q65v::vmax(q65v::ld(x + i), q65v::ld(x + i + dO));
             const q65v::V cur = q65v::ld(sc + i);
-            q65v::st(sc + i, q65v::add(cur, q65v::mul(A, q65v::sub(q65v::mul(q65v::ld(v.data() + i), I), cur))));
+            q65v::st(sc + i, q65v::add(cur, q65v::mul(A, q65v::sub(q65v::mul(q65v::sub(w, o), I), cur))));
+        }
+        for (int i = whole; i < nb; i += 4) {
+            const q65v::V w = q65v::vmax(q65v::ld(L + i), q65v::ld(L + i + dM));
+            const q65v::V o = q65v::vmax(q65v::ld(x + i), q65v::ld(x + i + dO));
+            q65v::st(vv + i, q65v::sub(w, o));
+        }
+        for (int i = std::max(whole, hi - lo + 1); i < nb; ++i) vv[i] = -1e3f;   // the lanes past the band: never chosen
+        for (int i = whole; i < nb; i += 4) {
+            const q65v::V cur = q65v::ld(sc + i);
+            q65v::st(sc + i, q65v::add(cur, q65v::mul(A, q65v::sub(q65v::mul(q65v::ld(vv + i), I), cur))));
         }
     }
     /** the best (base, phase), held unless another beats it by `margin` (15 % hunting; 80 % while a receiver is locked —
@@ -302,6 +366,27 @@ struct Finder {
     void choose(float margin, int near = -1, float minScore = -1e9f) {
         float best = -1e9f; int bb = -1, bp = 0;
         const int i0 = near >= 0 && curB >= 0 ? std::max(0, curB - near) : 0, i1 = near >= 0 && curB >= 0 ? std::min(nb - 1, curB + near) : nb - 1;
+        if (memLeft == 0 && i1 - i0 >= 15) {
+            // ★ no ban anywhere (2026-10-31, eighth run): the first (phase, base) holding the largest score — the same
+            //   place the scan below picks (the first strictly greater) — found with each phase's maximum four bases a
+            //   lane, then one scan of the first phase that holds it
+            const int nv = (i1 - i0 + 1) & ~3;
+            float pm[4];   // each phase's largest score
+            for (int p = 0; p < 4; ++p) {
+                const float* sc = score[p].data();
+                q65v::V m = q65v::set1(-1e9f); float mt = -1e9f;
+                for (int i = i0; i < i0 + nv; i += 4) m = q65v::vmax(m, q65v::ld(sc + i));
+                for (int i = i0 + nv; i <= i1; ++i) mt = std::max(mt, sc[i]);
+                float l[4]; q65v::st(l, m);
+                pm[p] = std::max(std::max(std::max(l[0], l[1]), std::max(l[2], l[3])), mt);
+            }
+            const float mx = std::max(std::max(pm[0], pm[1]), std::max(pm[2], pm[3]));
+            if (mx > best) {
+                int p = 0; while (pm[p] != mx) ++p;   // the first phase holding it, then its first base
+                const float* sc = score[p].data();
+                for (int i = i0; i <= i1; ++i) if (sc[i] == mx) { best = mx; bb = i; bp = p; break; }
+            }
+        } else
         for (int p = 0; p < 4; ++p) for (int i = i0; i <= i1; ++i) if (!ban[i] && score[p][i] > best) { best = score[p][i]; bb = i; bp = p; }
         if (bb < 0 || (curB >= 0 && best < minScore)) return;
         if (curB < 0 || best > margin * score[curP][curB] || score[curP][curB] <= 0) { curB = bb; curP = bp; }
@@ -334,7 +419,7 @@ struct Rx {
     void frame(int64_t f, const float* P) {
         const int nBins = st->N / 2, p = (int)(f & 3);
         if (warmD > 0.f) { warmD *= 1.f - fd.alpha; if (warmD < 1e-6f) warmD = 0.f; }
-        fd.update(P, nBins, p);
+        fd.update(P, nBins, p, f);
         if (p != 3) return;   // choose once a symbol
         // ★ a ban counts HUNTING symbols only: run down during a lock, it expired in the over's tail and the next over
         //   began with the finder back on the other signal (measured, the web test's clip)
@@ -563,9 +648,16 @@ struct OliviaRx : Rx {
     /** ★ THREE TONE HYPOTHESES: the finder's base, one tone below and one above. With 32 or 64 tones the edge tones are
      *  rarely sent, so the finder alone is often a tone out (measured: CONTESTIA 64/2000 locked 2 times in 7 at +8 dB);
      *  the Walsh transform tells the right one at once. */
-    struct Hyp { std::vector<float> ring; std::vector<float> E; std::vector<std::vector<int>> past; };   // past: K × (2 blocks of b codes, q)
+    /** ★ THE SOFT BITS ARE KEPT BY DIAGONAL (2026-10-31, eighth run): character j of a block reads chip k from bit
+     *  (j + k) mod b of the block's k-th symbol — a diagonal through a symbols × bits ring. Stored instead as b rows in
+     *  which bit i of symbol t sits in row (t − i) mod b, column t mod K, a character's chips are ONE ROW, in order —
+     *  and each column is written twice (t mod K and t mod K + K), so the K chips of any block are K floats in a row:
+     *  read four a lane and descrambled by a multiply with ±1 (exact: the same floats as the select of c or −c it
+     *  replaces). Decodes byte-identical; see DECODERS-WAVE2.md section 21. */
+    struct Hyp { std::vector<float> D; std::vector<float> E; std::vector<std::vector<int>> past; };   // past: K × (2 blocks of b codes, q)
     Hyp hyp[3];
-    int64_t n = 0; int pos = 0;
+    int64_t n = 0; int pos = 0; int nmb = 0, Kmb = 0;   // n mod b and K mod b, kept without a divide
+    std::vector<float> sgn;   // sgn[j·K + k]: +1 where chip k of character j is not inverted by the scrambler, else −1
     int lockH = 1, lockA = -1; bool lock = false; int candH = -1, candA = -1, candB = -1; float candScore = 0;
     int val[64];
     std::vector<uint64_t> scrJ;  // per character: the scrambler rotated
@@ -573,13 +665,16 @@ struct OliviaRx : Rx {
         b = 0; while ((1 << b) < s->M) ++b;
         const bool con = s->kind == kContestia;
         K = con ? 32 : 64; cbits = con ? 6 : 7; scr = con ? kContestiaScr : kOliviaScr; rotStep = con ? 5 : 13;
-        for (Hyp& h : hyp) { h.ring.assign((size_t)K * b, 0.f); h.E.assign(K, 0.f); h.past.assign(K, {}); }
+        for (Hyp& h : hyp) { h.D.assign((size_t)b * 2 * K, 0.f); h.E.assign(K, 0.f); h.past.assign(K, {}); }
+        Kmb = K % b;
         for (int k = 0; k < s->M; ++k) val[k] = grayInv(k);
         const uint64_t mask = K == 64 ? ~0ull : ((1ull << K) - 1);
         for (int j = 0; j < b; ++j) {
             const int r = (rotStep * j) % K;
             scrJ.push_back(r ? (((scr >> r) | (scr << (K - r))) & mask) : scr);
         }
+        sgn.resize((size_t)b * K);
+        for (int j = 0; j < b; ++j) for (int k = 0; k < K; ++k) sgn[(size_t)j * K + k] = ((scrJ[j] >> k) & 1) ? 1.f : -1.f;
     }
     float quality() const override { return lockA < 0 ? 0.f : hyp[lockH].E[lockA]; }
     bool locked() const override { return lock; }
@@ -609,18 +704,19 @@ struct OliviaRx : Rx {
         return e < (K == 64 ? 0.075f : 0.12f);
     }
     static void fht(float* v, int n) {
-        for (int h = 1; h < n; h <<= 1) {
-            if (h >= 4) {   // four butterflies a lane (q65v); the first two stages within a lane, scalar — the same adds
-                for (int i = 0; i < n; i += 2 * h)
-                    for (int j = i; j < i + h; j += 4) {
-                        const q65v::V a = q65v::ld(v + j), c = q65v::ld(v + j + h);
-                        q65v::st(v + j, q65v::add(a, c)); q65v::st(v + j + h, q65v::sub(a, c));
-                    }
-            } else {
-                for (int i = 0; i < n; i += 2 * h)
-                    for (int j = i; j < i + h; ++j) { const float a = v[j], c = v[j + h]; v[j] = a + c; v[j + h] = a - c; }
-            }
+        // the first two stages together, sixteen values at a time: every fourth one a lane (ld4), x0 ± x1 and x2 ± x3,
+        // then those ± each other, stored back in place (st4) — the very adds of the two scalar stages they replace
+        for (int i = 0; i < n; i += 16) {
+            q65v::V x0, x1, x2, x3; q65v::ld4(v + i, x0, x1, x2, x3);
+            const q65v::V y0 = q65v::add(x0, x1), y1 = q65v::sub(x0, x1), y2 = q65v::add(x2, x3), y3 = q65v::sub(x2, x3);
+            q65v::st4(v + i, q65v::add(y0, y2), q65v::add(y1, y3), q65v::sub(y0, y2), q65v::sub(y1, y3));
         }
+        for (int h = 4; h < n; h <<= 1)   // the rest: four butterflies a lane (q65v)
+            for (int i = 0; i < n; i += 2 * h)
+                for (int j = i; j < i + h; j += 4) {
+                    const q65v::V a = q65v::ld(v + j), c = q65v::ld(v + j + h);
+                    q65v::st(v + j, q65v::add(a, c)); q65v::st(v + j + h, q65v::sub(a, c));
+                }
     }
     /** T holds M + 2 powers: the tone below the finder's base, the M tones, the tone above */
     /** ★★ TONE COVERAGE (2026-10-31, found with fldigi as a black box): a scrambled Olivia/Contestia signal uses its
@@ -659,16 +755,12 @@ struct OliviaRx : Rx {
     float block(const Hyp& hy, int* code) {
         alignas(16) float v[64];
         float q = 0;
-        // the oldest symbol of the block sits at ring slot `pos` (the newest was written just before it); no modulo:
-        // slots and bit positions are counters that wrap
+        // the oldest symbol of the block, t0 = n − K, sits in column `pos`; character j's chips are row (t0 − j) mod b
+        int row = nmb - Kmb; if (row < 0) row += b;
         for (int j = 0; j < b; ++j) {
-            int slot = pos, bit = j;
-            for (int k = 0; k < K; ++k) {
-                const float c = hy.ring[(size_t)slot * b + bit];
-                v[k] = ((scrJ[j] >> k) & 1) ? c : -c;     // −(descrambled chip): a 1 is −1
-                if (++slot == K) slot = 0;
-                if (++bit == b) bit = 0;
-            }
+            const float* d = hy.D.data() + (size_t)row * 2 * K + pos; const float* sj = sgn.data() + (size_t)j * K;
+            for (int k = 0; k < K; k += 4) q65v::st(v + k, q65v::mul(q65v::ld(d + k), q65v::ld(sj + k)));   // −(descrambled chip): a 1 is −1
+            if (--row < 0) row = b - 1;
             fht(v, K);
             float mx = 0, sum = 0; int im = 0;
             for (int k = 0; k < K; ++k) { const float a = std::fabs(v[k]); sum += a; if (a > mx) { mx = a; im = k; } }
@@ -680,10 +772,14 @@ struct OliviaRx : Rx {
     }
     void push(const float (*soft)[8]) {
         for (int h = 0; h < 3; ++h) {
-            float* r = hyp[h].ring.data() + (size_t)pos * b;
-            for (int i = 0; i < b; ++i) r[i] = soft ? soft[h][i] : 0.f;
+            float* D = hyp[h].D.data();
+            for (int i = 0, row = nmb; i < b; ++i, --row) {   // bit i of symbol n: row (n − i) mod b, columns pos and pos + K
+                if (row < 0) row += b;
+                const float x = soft ? soft[h][i] : 0.f;
+                D[(size_t)row * 2 * K + pos] = x; D[(size_t)row * 2 * K + pos + K] = x;
+            }
         }
-        ++n;
+        ++n; if (++nmb == b) nmb = 0;
         if (++pos == K) pos = 0;   // now the oldest slot
         if (n < K) return;
         // ★ (a gate that skipped the transforms while the finder saw nothing was tried — 2.2× cheaper on noise — and
@@ -756,6 +852,12 @@ struct TextModeDecoder::Impl {
     Family fam; double inRate;
     Resampler rs8, rs11; bool need8 = false, need11 = false;
     std::vector<std::unique_ptr<Stream>> streams;
+    std::vector<std::pair<std::pair<Stream*, int>, std::unique_ptr<Ladder>>> ladders;
+    Ladder* ladderFor(Stream* st, int stride) {
+        for (auto& l : ladders) if (l.first.first == st && l.first.second == stride) return l.second.get();
+        ladders.emplace_back(std::make_pair(st, stride), std::unique_ptr<Ladder>(new Ladder));
+        return ladders.back().second.get();
+    }
     std::vector<std::unique_ptr<Rx>> rx;
     Rx* winner = nullptr; std::string lastStatus; int state = 0;
     TextModeDecoder* self = nullptr;
@@ -770,6 +872,7 @@ struct TextModeDecoder::Impl {
         const bool shaped = s->kind == kOlivia || s->kind == kContestia;
         r->st = streamFor(s->sps, s->rate, shaped);
         r->fd.init(s->M, s->stride, r->st->binHz(), r->st->N / 2);
+        r->fd.useLadder(ladderFor(r->st, s->stride), r->st->N / 2, r->st->binHz());
         // an earlier receiver on the same spectra with the same tone set (OLIVIA ↔ CONTESTIA): read its scores
         for (auto& o : rx) if (o->st == r->st && o->sub->M == s->M && o->sub->stride == s->stride && !o->fd.shared) { r->fd.shareScoresOf(o->fd); break; }
         Rx* p = r.get();
@@ -829,11 +932,11 @@ TextModeDecoder::~TextModeDecoder() = default;
 void TextModeDecoder::feed(const float* x, int n) {
     if (d_->need8) {
         d_->rs8.feed(x, n);
-        for (auto& s : d_->streams) if (s->rate == 8000) s->feed(d_->rs8.out.data(), (int)d_->rs8.out.size());
+        for (auto& s : d_->streams) if (s->rate == 8000) s->feed(d_->rs8.out.data(), d_->rs8.outN);
     }
     if (d_->need11) {
         d_->rs11.feed(x, n);
-        for (auto& s : d_->streams) if (s->rate == 11025) s->feed(d_->rs11.out.data(), (int)d_->rs11.out.size());
+        for (auto& s : d_->streams) if (s->rate == 11025) s->feed(d_->rs11.out.data(), d_->rs11.outN);
     }
     d_->after();
 }
