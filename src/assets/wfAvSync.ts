@@ -98,7 +98,7 @@ export function avHold(s: AvSyncState, ownMs: number, passthrough: boolean, now?
   if (now !== undefined) s.holdT = now;
   if (passthrough) { s.hold = 0; s.ramp = false; return 0; }
   const want = s.aud >= 0 ? Math.max(0, Math.min(AV_MAX_MS, s.aud - ownMs)) : 0;
-  // (a ramp under way runs on to its target — stopping it inside the deadband left the picture up to 8 ms early)
+  // (a growth under way runs on to its target — stopping it inside the deadband left the picture up to 8 ms early)
   if (Math.abs(want - s.hold) > AV_DEAD_MS || (want === 0 && s.hold > 0) || (s.ramp && want > s.hold)) {
     s.hold = want > s.hold && dt >= 0 ? Math.min(want, s.hold + AV_GROW * dt) : want;
   }

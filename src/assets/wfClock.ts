@@ -289,13 +289,53 @@ export function boostRowRate(base: number, feedFps: number, displayHz: number, e
   }
   return base;
 }
-/** The boost's state: when the last move was seen (ms; 0 = never). */
-export interface BoostState { lastMove: number; on: boolean }
-export const newBoost = (): BoostState => ({ lastMove: 0, on: false });
+/** The boost's state: when the last move was seen (ms; 0 = never); `peak` the boosted rate while on and through the
+ *  taper (0 = none), `offAt` when the taper began (0 = not tapering). */
+export interface BoostState { lastMove: number; on: boolean; peak?: number; offAt?: number }
+export const newBoost = (): BoostState => ({ lastMove: 0, on: false, peak: 0, offAt: 0 });
 /** A tune or zoom moved the picture at `now` (an input, or a frame placed somewhere new). */
 export function boostNote(b: BoostState, now: number): void { b.lastMove = now; b.on = true; }
 /** Whether the boost holds at `now`: within the tail of the last move, or while an ease is still drawing (`easing`). */
 export function boostActive(b: BoostState, now: number, easing: boolean): boolean {
   b.on = b.lastMove > 0 && (now - b.lastMove < BOOST_TAIL_MS || (b.on && easing));
   return b.on;
+}
+
+/* ★★★ THE BOOST TAPERS OUT (Stuart, 2026-10-31, Mac at 120 Hz: "I think the slowdown needs to be tapered. I think the
+ *  sudden FPS drop from 120→30 is causing what appears to be a slight pause"). The boost ended in ONE step — 120 rows/s
+ *  to 30 (or 15 on a 5 fps feed) on the next frame — and a 4× drop in scroll speed reads as a stall even with every
+ *  frame on time. Now, when the boost ends, the clock's rate steps down through rates the panel draws on whole frames
+ *  (120 → 60 → 40 → 30 on a 120 Hz panel), each step 1.5-2×, each rung lasting the SAME NUMBER OF ROWS — which is an
+ *  ease-out in time (the fast rungs pass quickly, the slow ones settle) — the whole taper BOOST_TAPER_MS. Every change is
+ *  clockSetRate's whole-row boundary, as the boost's own. An input during the taper is the boost again at once (`on`
+ *  wins — no fight). Nothing is asked of the server; NATIVE is never boosted, so never tapered. A 60 Hz panel has no
+ *  whole-frame rate between 60 and 30, so there the end of the boost stays one 2× step (it was 2× there already).
+ *  600 ms (scripts/test_wf_boost_taper.ts prints the rungs): 120 → 30 at 120 Hz holds 60 for 240 ms and 40 for 360 —
+ *  14 rows each; 120 → 10 (Eco) passes 60/40/24/15 at 4 rows each. Shorter than ~600 ms and Eco's rungs fall under 4
+ *  rows (a flicker of speeds, not a slope); 1 s keeps the repeat-heavy fast rows going 0.4 s longer for no smoother a
+ *  step. */
+export const BOOST_TAPER_MS = 600;
+const TAPER_RATES = [120, 60, 40, 30, 24, 20, 15, 12, 10, 5];
+/** The rungs between `hi` and `lo` (both excluded) a `displayHz` panel draws on whole frames, each ≥ 1.5× below the one
+ *  before (so 120 → 30 is 60, 40 — not 60, 40, 30-and-a-bit steps). */
+export function taperRungs(lo: number, hi: number, displayHz: number): number[] {
+  const hz = displayHz > 0 ? displayHz : 60, whole = hz >= 119 ? 120 : 60;
+  const out: number[] = []; let prev = hi;
+  for (const x of TAPER_RATES) if (x < hi && x > lo && whole % x === 0 && prev / x >= 1.5 - 1e-9) { out.push(x); prev = x; }
+  return out;
+}
+/** The clock's rate now, the boost's taper included: `boosted` while the boost is on (boostActive decided `b.on`), then
+ *  down to `base` over BOOST_TAPER_MS. `now` is the boost's clock (ms). */
+export function boostTaper(b: BoostState, base: number, boosted: number, now: number, displayHz: number): number {
+  if (!(base > 0)) { b.peak = 0; b.offAt = 0; return base; }
+  if (b.on) { b.peak = Math.max(base, boosted); b.offAt = 0; return b.peak; }
+  const peak = b.peak ?? 0;
+  if (!(peak > base)) { b.peak = 0; b.offAt = 0; return base; }
+  if (!(b.offAt! > 0)) b.offAt = now;
+  const rungs = taperRungs(base, peak, displayHz);
+  let inv = 0; for (const r of rungs) inv += 1 / r;
+  let t = now - b.offAt!;
+  for (const r of rungs) { const d = BOOST_TAPER_MS * (1 / r) / inv; if (t < d) return r; t -= d; }   // equal rows a rung
+  b.peak = 0; b.offAt = 0;
+  return base;
 }

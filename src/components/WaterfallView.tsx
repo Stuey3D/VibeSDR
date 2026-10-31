@@ -42,7 +42,7 @@
 
 import { newRowTargetState, stepRowTarget, rowTargetUnderCap, scrollForCap, rowsForArrival, type WfScroll } from '../assets/wfRowTarget';
 import { newRowCombiner, combineInto, dbPerUnit, COMBINE_MAX_FRAMES, type CombFrame } from '../assets/wfCombine';
-import { boostActive, boostNote, boostRowRate, BOOST_TAIL_MS, clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockReset, clockRowRate, clockRun, clockSetRate, newBoost, newRowClock }
+import { boostActive, boostNote, boostRowRate, boostTaper, BOOST_TAIL_MS, clockArrive, clockIdle, clockNextAt, clockRateUnderCap, clockReset, clockRowRate, clockRun, clockSetRate, newBoost, newRowClock }
   from '../assets/wfClock';
 import { avHold, avNoteAudio, clockOwnMs, newAvSync } from '../assets/wfAvSync';
 import { audioPlayoutMs } from '../utils/audioPlayout';
@@ -1536,6 +1536,8 @@ function WaterfallView({
    *  (utils/wfPace.ts clockPace). Frames are kept here by id until the clock has shown or dropped them. */
   const rowClock   = useRef(newRowClock());
   const boostSt    = useRef(newBoost());   // ★ the interaction boost (wfClock.ts boostRowRate)
+  /** ★ What the last frame decided the clock's rate from — pumpClock walks the boost's taper with it between frames. */
+  const clockRateIn = useRef({ base: 0, boosted: 0, hz: 60 });
   /** ★★ V12 2026-10-30 THE WATERFALL WAITS FOR THE SOUND (src/assets/wfAvSync.ts): the audio's playout delay (polled
    *  below) and the hold each clocked frame enters with. */
   const avSt       = useRef(newAvSync());
@@ -1558,6 +1560,20 @@ function WaterfallView({
     clockTimer.current = null;
     const rc = rowClock.current, now = performance.now(), out = clockOut.current;
     out.length = 0;
+    // ★★★ THE BOOST'S END AND ITS TAPER, ON THE CLOCK'S OWN TICKS (wfClock.ts boostTaper, 2026-10-31): decided per frame
+    //     only, the end waited for the next arrival (up to 200 ms at 5 fps) and the taper's rungs would land on arrivals.
+    //     Same state, same rule as the frame path (boostActive then boostTaper), so the two never disagree.
+    const cri = clockRateIn.current, bs = boostSt.current;
+    if (cri.base > 0 && rc.rate > 0 && (bs.on || (bs.peak ?? 0) > 0)) {
+      const tNow = Date.now();
+      boostActive(bs, tNow, (fanSt.current?.easeLeft ?? 0) > 0);
+      const r = boostTaper(bs, cri.base, cri.boosted, tNow, cri.hz);
+      if (r > 0 && r !== rc.rate) {
+        clockSetRate(rc, r, now);
+        const tg = r / 1000; if (pTgt.value !== tg) pTgt.value = tg;
+        if (fanSt.current) fanSt.current.rowRate = r;
+      }
+    }
     clockRun(rc, now, out);
     const fr = clockFrames.current;
     for (let i = 0; i < out.length; i++) {
@@ -2192,7 +2208,13 @@ function WaterfallView({
     if (inAt > boostSt.current.lastMove && ptNow - inAt < BOOST_TAIL_MS) boostNote(boostSt.current, inAt);
     if (easeStarted) boostNote(boostSt.current, ptNow);
     const boostOn = clocked && baseRowTarget > 0 && boostActive(boostSt.current, ptNow, easing);
-    const rowTarget = boostOn ? boostRowRate(baseRowTarget, feedFps, uiDisplayMaxHz(), cfg.boostOn) : baseRowTarget;
+    // ★★★ …and TAPERS OUT when it ends (wfClock.ts boostTaper, Stuart 2026-10-31: "the sudden FPS drop from 120→30 is
+    //     causing what appears to be a slight pause"): 120 → 60 → 40 → 30 over BOOST_TAPER_MS, equal rows a rung. pumpClock
+    //     walks the same taper between frames (clockRateIn), so a step never waits for the next arrival.
+    const dispHz = uiDisplayMaxHz();
+    const boostRate = clocked && baseRowTarget > 0 ? boostRowRate(baseRowTarget, feedFps, dispHz, cfg.boostOn) : baseRowTarget;
+    const rowTarget = clocked && baseRowTarget > 0 ? boostTaper(boostSt.current, baseRowTarget, boostRate, ptNow, dispHz) : baseRowTarget;
+    const cri = clockRateIn.current; cri.base = clocked ? baseRowTarget : 0; cri.boosted = boostRate; cri.hz = dispHz;
     const repeatsCarry = rowTarget > 0;
     const wfBoost = boost || (cfg.smoothTune && lowFps && !repeatsCarry);
 
