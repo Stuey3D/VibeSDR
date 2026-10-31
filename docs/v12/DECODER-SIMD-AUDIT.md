@@ -479,16 +479,98 @@ own, so the hop is 320 µs everywhere (`FeConst::kHopUs`).
     On the Pi at 320 µs the frame's first detection fell on its rising edge, and the group centroid was pulled 106 kHz
     low. **A channel is placed once, when it opens**, so the far tone sat on the 500 kS/s channel's filter edge. Any hop
     can meet this on some frame; at 640 µs the same mechanism is what broke "S1: frequency" on armhf.
-  - **Proposed, not done:** re-centre a channel while it is still pending. A pending channel mixes nothing, so the
-    detector could move its centre to the average of its sightings until promotion, at no cost. It changes every
-    burst's channel placement, so it needs its own full validation (every capture, test-ism, test-wmbus, the threaded
-    identity).
+  - **Since fixed:** see [A pending channel mixes where the burst is](#a-pending-channel-mixes-where-the-burst-is-follow-up).
 - **The detector costs about 7.5 points more**, as expected. The mixer and slicer gain a little: more bursts (20 against
   11 on the 433 capture) are found and sliced.
 - **On every default set no thread goes over 59 %**; the heaviest is still `vibe-lora`.
 - **Over ~70 %:** only the owner-forced "lora+all" on 868 (`vibe-lora2` 81.6 %, `vibe-lora3` 84.2 %), which the hop
   does not touch (those are LoRa's own threads). It keeps up, with nothing dropped, and stays owner-only (decided
   2026-10-31).
+
+### A pending channel mixes where the burst is (follow-up)
+
+The C1-B frame the 320 µs hop lost on the Pi 2 had a simpler cause than it first looked. `VIBE_ISM_PROF_LOG`, under
+qemu-arm, shows each sighting:
+
+| sighting | when | where | power | width |
+|---|---|---|---|---|
+| the channel opens | 0.0499 s | +191.9 kHz | 5.1e-5 | 2 bins |
+| it is promoted | 0.0502 s | +297.7 kHz | 0.090 | 22 bins |
+
+The first was a **noise blip**: one bin in a few thousand crosses the threshold, and the capture's other noise
+candidates read the same power. The second was the meter frame itself, 1750× stronger and 106 kHz away, inside
+`kMatchHz`. So it promoted the noise candidate and was mixed at the noise's frequency. Its far tone sat on the 500 kS/s
+channel's filter edge.
+
+**What was tried first, and dropped (dead ends):**
+1. **Re-centre to the power-weighted mean of the sightings.**
+   - Fixed the frame, but **lost a decode**: test-ism's hog test went 7 → 6 readings. The sensor 20 dB over an emitter
+     60 kHz away was pulled onto the emitter by the emitter's own sighting.
+   - The hold also weakened (1.6 s channels 12 → 7, against 4).
+   - The frame left a spurious channel at +95 kHz: its own splatter, 24 dB down. That is just short of the splatter
+     rule's 25 dB, and the old mis-centred channel had claimed it.
+2. **Re-centre to the strongest sighting.**
+   - No decode lost, but the hold check failed (12 → 6), and the +96 kHz spurious channel remained.
+3. **The brief's "near the first sighting" test cannot work here.** The burst is 106 kHz from the blip it was matched to.
+
+**What was kept: the claim stays, the mix centre moves.** A channel now has two centres:
+- **where it claims** (`offHz`): matching, closing and the hog hold, exactly as before;
+- **where it is mixed** (`mixHz`).
+
+While a channel is pending (nothing mixed yet, so it is free), the mix centre moves to the promoting sighting if all of
+these hold:
+- it stands **6 dB over the first** (`kMoveOver`, the hold rule's margin);
+- it passes **the splatter rule's own test** (not 25 dB under another open channel);
+- it is **within a quarter of the channel rate** (62.5 kHz at 250 kS/s, 120 kHz on 868's ~480 kS/s), so the burst
+  stays well inside its channel.
+
+The mixer rebuilds its tables at promotion. No channel opens, merges, closes or is held differently. Only the frequency
+a burst is mixed at, and reported at, changes.
+
+**Validation, all of it passing:**
+- **The C1-B frame:** decoded on the Pi 2, with its channel at +297.7 kHz for the frame at +297.9 and **no spurious
+  channel**. test-wmbus is **311/311 on the Pi 2** (C1 A/B 16/16 again, "S1: frequency" still passing) and on the Mac
+  (NEON and scalar). On **i686** (qemu) C1 A/B is 16/16. There, only the two gallery-file checks fail, because the
+  gallery files read back empty under the emulator; that check used to throw while reporting it, and now reports.
+- **The hog test is unchanged:** 1.6 s channels 12 → 4, the same 20 447 detections held, readings 7 → 7, on the Mac;
+  12 → 2, readings 7 → 7, on the Pi 2. test-ism is 160/160 on the Mac, i686 and the Pi 2.
+- **The Pi 500 captures:** the 433 and 868 captures are byte-identical to before. On the car-key capture, 8 of 374
+  bursts change, and only where they are mixed:
+  - the same bursts at the same times, their frequencies moved by 0.1–3.4 kHz;
+  - SNR up on six (e.g. 14.9 → 16.1 dB at 433.2995 MHz, 8.6 → 8.8 dB at 433.8769) and down 0.1–0.2 dB on two;
+  - **decodes and the device list unchanged**, the Oregon included.
+
+  The Pi 2's output equals the Mac's on all three. i686 equals the Mac except one noise burst's run count, 1780 against
+  1778, which differed before this change too.
+- **Threaded = inline** on all three captures, NEON and scalar. NEON = scalar on every output.
+- **test-lora** is identical to base, and its three-thread check passes.
+- **End to end against the new Mac server:** `test-server-ism` 34/34, `test-web-ism` 25/25, `test-server-ism-gallery`
+  33/33, `test-web-ism-gallery` 19/19, `test-server-lora` 18/18, `test-web-lora` 21/21.
+- **Builds:** the server on the Mac and cross-built for armhf.
+
+**A second finding on the way: FFT buffers must be aligned.** The first Pi 2 runs of this change showed `vibe-lora` at
+54 % where it had been 47 %, though LoRa's code had not changed. An A/B, run twice, reproduced it.
+- **The cause:** `vibedab::Fft` runs PFFFT in place only on a 16-byte-aligned buffer, and otherwise copies the whole
+  transform in and out. A `std::vector` is only 8-byte aligned on 32-bit glibc. So whether LoRa's capture FFT (and
+  each channel's inverse FFT, and the detector's FFT) took the copying path was the luck of the heap, and a 12-byte
+  change in an unrelated struct moved it.
+- **The fix:** those buffers now use `Aligned16` (`posix_memalign`). The output is bit-identical.
+- **The A/B since**, the previous build against this one, 433, twice each: `vibe-lora` 47.4 / 47.5 against 47.5 / 47.4;
+  `vibe-ism` 18.8 / 18.8 against 17.9 / 18.0 (its own FFT buffer is aligned now too).
+
+**Per thread on the Pi 2, final** (320 µs hop, re-centring, aligned FFT buffers; real time, the usual gating: 0
+listeners, ≥ 899 MHz, no live throttle bit, at most 41 °C; every run valid). % of one core:
+
+| Case | `vibe-ism` / `ism2` / `ism3` | `vibe-lora` / `lora2` / `lora3` | total | drops |
+|---|---|---|---|---|
+| 433 (two runs) | 17.9 / 20.5 / 11.5 | 47.5 / 16.1 / 4.5 | 138.6–140.6 | none |
+| hog-heavy | 18.2 / 23.9 / 25.1 | 48.1 / 16.2 / 4.6 | 159.1 | none |
+| car key (60 s) | 17.7 / 11.2 / 11.9 | 47.5 / 16.0 / 4.5 | 133.6; the Oregon decoded | none |
+| 868 | 17.2 / 6.6 / 0.3 | 53.1 / 34.7 / 37.6 | 176.3 | none |
+| 433, every LoRa channel | 18.3 / 21.7 / 12.0 | 60.9 / 53.6 / 41.6 | 234.1 | none |
+| 868, every LoRa channel (owner only) | 18.0 / 7.3 / 0.4 | 68.7 / 77.2 / **82.8** | 282.5 | none |
+
+**No thread is over 54 % on any default set.** Over ~70 % only in the owner-forced "lora+all" on 868, which keeps up.
 
 ### Decodes: identical
 
