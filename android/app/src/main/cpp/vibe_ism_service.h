@@ -616,7 +616,7 @@ public:
     /** ★ For the tests and ism-offline, BEFORE start(): a full queue WAITS instead of dropping (a recording replayed
      *  faster than real time must not lose work), and `tap` sees every sliced burst with what the decoders made of it,
      *  on the slicer's thread. Never set by the server. */
-    void setLossless(bool on) { lossless_ = on; }
+    void setLossless(bool on) { lossless_ = on; lora_.setLossless(on); }
     void setTap(std::function<void(const Burst&, const std::vector<Reading>&)> tap) { tap_ = std::move(tap); }
     /** ★ For the tests and ism-offline: the end of a recording — every open channel closes, as FrontEnd::flush closes
      *  them inline (a live server never calls it: its stream has no end, and stop() drops what is open, as before). */
@@ -629,7 +629,7 @@ public:
         { std::lock_guard<std::mutex> q(qMtx_); if (!queue_.empty() || detBusy_) return false; }
         { std::lock_guard<std::mutex> m(mMtx_); if (!mixQ_.empty() || mixBusy_) return false; }
         { std::lock_guard<std::mutex> d(dMtx_); if (!decQ_.empty() || decBusy_) return false; }
-        return true;
+        return !lora_.running() || lora_.idle();
     }
     const Band* band() const { return band_; }
 

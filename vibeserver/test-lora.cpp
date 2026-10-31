@@ -13,6 +13,7 @@
 // Build: g++ -std=c++17 -O2 -I android/app/src/main/cpp -o test-lora vibeserver/test-lora.cpp -lpthread
 #include "vibe_ism_service.h"
 #include <chrono>
+#include <thread>
 #include <cstdio>
 #include <random>
 #include <string>
@@ -346,6 +347,27 @@ int main(int argc, char** argv) {
         if (mt != 5 || mc != 3 || lw != 3) std::printf("%s", e.stats().c_str());
         ok(mt == 5 && mc == 3 && lw == 3, "5 Meshtastic, 3 MeshCore, 3 LoRaWAN frames decoded at +3 dB (" + std::to_string(mt) + "/" + std::to_string(mc) + "/" + std::to_string(lw) + ")");
         std::printf("    CPU: %.1f %% of one core, every plan channel (%zu detectors)\n", 100 * cpu / 10.0, e.detectors());
+        // ★★ THE ENGINE'S TWO THREADS (2026-10-31, the Pi 2 split): vibe-lora transforms, vibe-lora2 delivers and detects —
+        //    the very frames the inline engine gives, field for field, fed in the radio's 32 ms blocks
+        auto key = [](const Heard& h) {
+            char b[200]; std::snprintf(b, sizeof b, "%s|%d|%.6f|%.3f|%.3f|%.3f|%zu|", h.f.chan.c_str(), h.f.sf, h.f.tSec, h.f.cfoHz, double(h.f.snrDb), h.f.freqHz, h.f.bytes.size());
+            std::string k = b; for (uint8_t v : h.f.bytes) k += std::to_string(v) + ","; return k;
+        };
+        std::vector<std::string> want, have;
+        for (auto& h : got) want.push_back(key(h));
+        {
+            Engine t;
+            t.setLossless(true);
+            t.start("868", hc, fs, INFINITY);
+            const size_t blk = size_t(fs * 0.032);
+            for (size_t i = 0; i < x.size(); i += blk) t.feed(x.data() + i, std::min(blk, x.size() - i));
+            for (int w = 0; w < 6000 && !t.idle(); ++w) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            ok(t.idle(), "the two threads drained");
+            ok(t.dropped() == 0, "lossless: nothing dropped (" + std::to_string(t.dropped()) + ")");
+            for (auto& h : t.take()) have.push_back(key(h));
+            t.stop();
+        }
+        ok(!want.empty() && have == want, "threads = inline: " + std::to_string(have.size()) + " frames against " + std::to_string(want.size()) + ", identical");
     }
 
     std::printf("── pure noise: nothing, and the CPU rows ──\n");

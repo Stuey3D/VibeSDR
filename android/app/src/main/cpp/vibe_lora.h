@@ -745,7 +745,6 @@ public:
         c.ncoDph = -2 * M_PI * c.resid / c.ri;
         c.ncoInc = cf(float(std::cos(c.ncoDph)), float(std::sin(c.ncoDph)));
         c.ifft.reset(new vibeism::DetFft(c.Lc));
-        c.Y.resize(size_t(c.Lc));
         // the low-pass: Hamming-windowed sinc, M = L/4 + 1 taps, its −6 dB point half a transition past the band edge
         const int M = L_ / 4 + 1;
         const double trans = 3.3 * fs_ / M;
@@ -768,57 +767,42 @@ public:
     }
     size_t channels() const { return ch_.size(); }
     uint64_t ffts() const { return ffts_; }
+#if defined(VIBE_ISM_PROF)
+    double profFft = 0, profIfft = 0, profRot = 0, profRes = 0;   ///< seconds: the capture FFT; per channel the bins × filter
+                                                                  ///< and its inverse FFT; the phase + NCO; the resampler
+#endif
 
-    void feed(const cf* x, size_t n) {
+    /* ★★ TWO HALVES (2026-10-31, the Pi 2 thread split). On the Pi 2 the default 433 set (two channels) spent 36 % of a
+     *  core in the capture FFT and 11 % in the channels' filters and inverse FFTs, against 2 % rotating, 4 % resampling and
+     *  3 % in the detectors (VIBE_ISM_PROF, Stuart's Pi 500 capture) — one thread at ~70 % in real time. So a block is
+     *  done in two halves that may run on two threads, the expensive one (spectra) first and the cheap one (deliver)
+     *  after it, in block order. Same arithmetic in the same order: inline, feed() runs both, exactly as before. */
+    /** One block's channels, filtered and inverse-transformed: everything but the rotation and the resampler. */
+    struct Spectra { int64_t blk = 0; std::vector<std::vector<cf>> Y; };
+    /** Capture samples in; each completed block's Spectra to `onBlock(Spectra&&)`. */
+    template <class F> void feedSpectra(const cf* x, size_t n, F&& onBlock) {
         size_t i = 0;
         while (i < n) {
             const size_t take = std::min(n - i, size_t(L_ - fill_));
             std::memcpy(&in_[size_t(fill_)], x + i, take * sizeof(cf));
             fill_ += int(take); i += take;
-            if (fill_ == L_) block();
+            if (fill_ == L_) { Spectra sp; spectra(sp); onBlock(std::move(sp)); }
         }
     }
-
-private:
-    struct Ch {
-        Stream* dst = nullptr; double bw = 0;
-        int kc = 0, Lc = 0; double resid = 0, ri = 0, step = 0;
-        std::unique_ptr<vibeism::DetFft> ifft;
-        std::vector<cf> H, Y, pend;
-        double t = 1.0;
-        double ncoPh = 0, ncoDph = 0;   ///< the residual NCO's phase at the next output, and its step (rad/sample)
-        cf ncoInc{1, 0};                ///< e^{j·ncoDph}
-    };
-    void block() {
-        std::memcpy(X_.data(), in_.data(), size_t(L_) * sizeof(cf));
-        fft_->forward(X_.data());
-        ++ffts_;
-        const int64_t start = blocks_ * int64_t(S_);
-        /* ★★ PI 2 (2026-10-31, the decoder SIMD audit — qemu-arm instruction count over Stuart's 433.92 capture): this
-         *  loop was over a third of ISM mode. Three things, none of them the arithmetic:
-         *   · two sin/cos in DOUBLE per output sample (the NCO) — 17 % of ISM mode on its own. Now ONE per channel per
-         *     block: the block phase × the NCO's phase at the block start, then a float rotation (a 3/4·Lc-sample run,
-         *     ≤ 768 steps: the rotator drifts ~1e-5 in magnitude, far under the samples' own noise), and the NCO's phase
-         *     carried in double across blocks exactly as before;
-         *   · `%` with a variable divisor — 32-bit ARMv7-A has no divide instruction, so four library calls a bin
-         *     (13 % of ISM mode). L_ and Lc are powers of two: a mask is the same non-negative remainder;
-         *   · std::complex's NaN-checked products (cmulf). */
+    /** The second half, in block order: the block's phase, the residual NCO and the resampler into each channel's
+     *  Stream. ★ A block missing before `sp` (dropped behind a slow second half) still moves the NCO's phase on, so the
+     *  channel stays on frequency; the samples it held are simply not there. */
+    void deliver(const Spectra& sp) {
+        if (sp.blk > nextBlk_) for (auto& c : ch_) for (int64_t b = nextBlk_; b < sp.blk; ++b)
+            c.ncoPh = std::remainder(c.ncoPh + double(c.Lc - c.Lc / 4) * c.ncoDph, 2 * M_PI);
+        nextBlk_ = sp.blk + 1;
         const int lmask = L_ - 1;
-        for (auto& c : ch_) {
-            const int Lc = c.Lc, cmask = Lc - 1;
-            const cf* X = X_.data();
-            const cf* H = c.H.data();
-            cf* Y = c.Y.data();
-            // the inverse transform by the forward one: conjugate in, conjugate out. In runs where both the capture's
-            // bins (k) and the channel's (j) are contiguous — at most four — four products at a time (cmulRun).
-            for (int m = -Lc / 2; m < Lc / 2;) {
-                const int j = m & cmask, k = (c.kc + m) & lmask;
-                int run = std::min(Lc / 2 - m, L_ - k);
-                if (m < 0) run = std::min(run, -m);
-                vibeism::cmulRun(X + k, H + j, Y + j, run, false, true);
-                m += run;
-            }
-            c.ifft->forward(c.Y.data());
+        const int64_t start = sp.blk * int64_t(S_);
+        VIBE_ISM_P(double tq = vibeism::ismProfNow();)
+        for (size_t ci = 0; ci < ch_.size(); ++ci) {
+            Ch& c = ch_[ci];
+            const cf* Y = sp.Y[ci].data();
+            const int Lc = c.Lc;
             // the block's phase for where it starts in the capture, and the NCO for the residual offset
             const int keep0 = Lc / 4, n = Lc - keep0;
             const double a0 = -2 * M_PI * double(c.kc) * double(start & int64_t(lmask)) / L_ + c.ncoPh;
@@ -828,7 +812,60 @@ private:
             cf* out = c.pend.data() + was;
             vibeism::rotateRun(Y + keep0, out, n, true, rot, c.ncoInc);
             c.ncoPh = std::remainder(c.ncoPh + double(n) * c.ncoDph, 2 * M_PI);
+            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profRot += t2 - tq; tq = t2; })
             resample(c);
+            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profRes += t2 - tq; tq = t2; })
+        }
+    }
+    void feed(const cf* x, size_t n) { feedSpectra(x, n, [&](Spectra&& sp) { deliver(sp); }); }
+
+private:
+    struct Ch {
+        Stream* dst = nullptr; double bw = 0;
+        int kc = 0, Lc = 0; double resid = 0, ri = 0, step = 0;
+        std::unique_ptr<vibeism::DetFft> ifft;
+        std::vector<cf> H, pend;
+        double t = 1.0;
+        double ncoPh = 0, ncoDph = 0;   ///< the residual NCO's phase at the next output, and its step (rad/sample)
+        cf ncoInc{1, 0};                ///< e^{j·ncoDph}
+    };
+    void spectra(Spectra& sp) {
+        VIBE_ISM_P(double tq = vibeism::ismProfNow();)
+        std::memcpy(X_.data(), in_.data(), size_t(L_) * sizeof(cf));
+        fft_->forward(X_.data());
+        ++ffts_;
+        VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profFft += t2 - tq; tq = t2; })
+        sp.blk = blocks_;
+        sp.Y.resize(ch_.size());
+        /* ★★ PI 2 (2026-10-31, the decoder SIMD audit — qemu-arm instruction count over Stuart's 433.92 capture): this
+         *  loop was over a third of ISM mode. Three things, none of them the arithmetic:
+         *   · two sin/cos in DOUBLE per output sample (the NCO) — 17 % of ISM mode on its own. Now ONE per channel per
+         *     block: the block phase × the NCO's phase at the block start, then a float rotation (a 3/4·Lc-sample run,
+         *     ≤ 768 steps: the rotator drifts ~1e-5 in magnitude, far under the samples' own noise), and the NCO's phase
+         *     carried in double across blocks exactly as before (deliver());
+         *   · `%` with a variable divisor — 32-bit ARMv7-A has no divide instruction, so four library calls a bin
+         *     (13 % of ISM mode). L_ and Lc are powers of two: a mask is the same non-negative remainder;
+         *   · std::complex's NaN-checked products (cmulf). */
+        const int lmask = L_ - 1;
+        for (size_t ci = 0; ci < ch_.size(); ++ci) {
+            Ch& c = ch_[ci];
+            const int Lc = c.Lc, cmask = Lc - 1;
+            const cf* X = X_.data();
+            const cf* H = c.H.data();
+            std::vector<cf>& Yv = sp.Y[ci];
+            Yv.resize(size_t(Lc));
+            cf* Y = Yv.data();
+            // the inverse transform by the forward one: conjugate in, conjugate out. In runs where both the capture's
+            // bins (k) and the channel's (j) are contiguous — at most four — four products at a time (cmulRun).
+            for (int m = -Lc / 2; m < Lc / 2;) {
+                const int j = m & cmask, k = (c.kc + m) & lmask;
+                int run = std::min(Lc / 2 - m, L_ - k);
+                if (m < 0) run = std::min(run, -m);
+                vibeism::cmulRun(X + k, H + j, Y + j, run, false, true);
+                m += run;
+            }
+            c.ifft->forward(Y);
+            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profIfft += t2 - tq; tq = t2; })
         }
         // keep the last quarter as the next block's overlap
         std::memmove(in_.data(), in_.data() + S_, size_t(L_ - S_) * sizeof(cf));
@@ -854,7 +891,7 @@ private:
 
     double fs_;
     int L_ = 0, S_ = 0, fill_ = 0;
-    int64_t blocks_ = 0;
+    int64_t blocks_ = 0, nextBlk_ = 0;   ///< blocks transformed (first half); the next block deliver() expects
     std::unique_ptr<vibeism::DetFft> fft_;
     std::vector<cf> in_, X_;
     std::vector<Ch> ch_;

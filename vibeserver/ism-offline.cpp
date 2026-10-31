@@ -266,7 +266,9 @@ int main(int argc, char** argv) {
         const double tot = p.copy + p.detect + p.mix + p.slice + p.decode + tLora;
         std::printf("PROF  (s of CPU over %.1f s of capture; %% of one core in real time)\n", t);
         auto row = [&](const char* k, double v) { std::printf("PROF  %-8s %8.3f s  %6.2f %%\n", k, v, 100.0 * v / t); };
-        row("copy", p.copy); row("detect", p.detect); row("mix", p.mix); row("slice", p.slice); row("decode", p.decode); row("lora", tLora); row(" chan", le.profChan); row(" dets", le.profDemod); row("sum", tot);
+        row("copy", p.copy); row("detect", p.detect); row("mix", p.mix); row("slice", p.slice); row("decode", p.decode); row("lora", tLora); row(" chan", le.profChan);
+        if (const auto* chz = le.channeliser()) { row("  fft", chz->profFft); row("  ifft", chz->profIfft); row("  rot", chz->profRot); row("  resamp", chz->profRes); }
+        row(" dets", le.profDemod); row("sum", tot);
         std::printf("PROF  detects %llu  opens %llu  cancels %llu  promotes %llu  closeQuiet %llu  closeLong %llu  fewHits %llu  sliceNo %llu\n",
                     (unsigned long long)p.detects, (unsigned long long)p.opens, (unsigned long long)p.cancels, (unsigned long long)p.promotes,
                     (unsigned long long)p.closeQuiet, (unsigned long long)p.closeLong, (unsigned long long)p.fewHits, (unsigned long long)p.sliceNo);

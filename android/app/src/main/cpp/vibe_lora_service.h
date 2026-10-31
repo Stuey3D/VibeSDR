@@ -2,8 +2,12 @@
 // channel × spreading-factor detectors run, and the worker thread that channelises the capture and runs them.
 // docs/v12/LORA-MESH.md.
 //
-// ★★★ ITS OWN THREAD, AND IT DROPS RATHER THAN WAITS (Network > Audio > Spectrum > Decoders — ADS-B's and ISM's rule).
+// ★★★ ITS OWN THREADS, AND IT DROPS RATHER THAN WAITS (Network > Audio > Spectrum > Decoders — ADS-B's and ISM's rule).
 //     feed() copies the block and returns; a full queue (half a second of capture) loses its OLDEST block and counts it.
+// ★★★ TWO THREADS (2026-10-31, the Pi 2 thread split): vibe-lora transforms (the channeliser's capture FFT and each
+//     channel's filter and inverse FFT — most of the cost), vibe-lora2 delivers (rotation, resampling into each channel's
+//     stream) and runs the detectors, one notch lower. Half a second of transformed blocks may wait between them; past
+//     that the OLDEST go, counted with the rest. On the Pi 2 the default 433 set was one thread at ~70 % of a core.
 //     The sensor decoder (vibe_ism_service.h) has its own queue, so a LoRa backlog never costs a weather station.
 // ★★ ONLY CHANNELS INSIDE THE CAPTURE RUN. A plan channel whose edge falls past ±45 % of the capture rate is left out
 //    (the report says how many the capture holds).
@@ -175,14 +179,27 @@ public:
             }
         }
         queue_.clear(); queued_ = 0; dropped_ = 0;
+        specQ_.clear(); specQueued_ = 0; droppedSpec_ = 0;
+        specCap_ = size_t(0.5 * rateHz / (0.75 * ch_->fftSize())) + 1;   // half a second of blocks (a block steps 3/4 of the FFT)
         run_ = true;
         worker_ = std::thread([this] { loop(); });
+        worker2_ = std::thread([this] { loop2(); });
         return chosen_.size();
     }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
-        cv_.notify_all();
+        cv_.notify_all(); space_.notify_all();
+        { std::lock_guard<std::mutex> lk(sMtx_); } sCv_.notify_all(); sSpace_.notify_all();
         if (worker_.joinable()) worker_.join();
+        if (worker2_.joinable()) worker2_.join();
+    }
+    /** ★ Tests and ism-offline only, before start(): full queues WAIT instead of dropping. */
+    void setLossless(bool on) { lossless_ = on; }
+    /** ★ Tests: nothing queued and nothing being worked on. */
+    bool idle() {
+        { std::lock_guard<std::mutex> lk(mtx_); if (!queue_.empty() || busy1_) return false; }
+        { std::lock_guard<std::mutex> lk(sMtx_); if (!specQ_.empty() || busy2_) return false; }
+        return true;
     }
     bool running() const { return run_.load(std::memory_order_relaxed); }
     /** From the DSP thread (via the ISM service): copy and return; never waits on the decoder. */
@@ -190,7 +207,8 @@ public:
         if (!run_.load(std::memory_order_relaxed) || !n) return;
         std::vector<cf> b(iq, iq + n);
         {
-            std::lock_guard<std::mutex> lk(mtx_);
+            std::unique_lock<std::mutex> lk(mtx_);
+            if (lossless_) space_.wait(lk, [&] { return !run_ || queue_.empty() || queued_ + n <= size_t(rate_ * 0.5); });
             queued_ += n;
             queue_.push_back(std::move(b));
             while (queued_ > size_t(rate_ * 0.5) && queue_.size() > 1) { queued_ -= queue_.front().size(); queue_.pop_front(); ++dropped_; }
@@ -199,7 +217,13 @@ public:
     }
     /** Everything decoded since the last call. */
     std::vector<Heard> take() { std::lock_guard<std::mutex> lk(outMtx_); std::vector<Heard> v; v.swap(out_); return v; }
-    uint64_t dropped() { std::lock_guard<std::mutex> lk(mtx_); return dropped_; }
+    /** Capture blocks lost before the first thread, and transformed blocks lost before the second. */
+    uint64_t dropped() {
+        uint64_t n = 0;
+        { std::lock_guard<std::mutex> lk(mtx_); n += dropped_; }
+        { std::lock_guard<std::mutex> lk(sMtx_); n += droppedSpec_; }
+        return n;
+    }
     size_t channelsRun() const { return chosen_.size(); }
     size_t planSize() const { return planSize_; }
     size_t detectors() const { return demods_.size(); }
@@ -225,6 +249,7 @@ public:
     }
 #if defined(VIBE_ISM_PROF)
     double profChan = 0, profDemod = 0;   ///< seconds: the channeliser, and every detector (ism-offline's profile)
+    const Channeliser* channeliser() const { return ch_.get(); }
 #endif
     /** ★ For the tests and the offline runner: the same work as the thread, inline. */
     void process(const cf* x, size_t n) { work(x, n); }
@@ -241,7 +266,12 @@ private:
         if (!ch_) return;
         VIBE_ISM_P(const double tp0 = vibeism::ismProfNow();)
         ch_->feed(x, n);
-        VIBE_ISM_P(const double tp1 = vibeism::ismProfNow(); profChan += tp1 - tp0;)
+        VIBE_ISM_P(profChan += vibeism::ismProfNow() - tp0;)
+        detectAll();
+    }
+    /** Every detector over what its stream now holds; frames out, counts kept. */
+    void detectAll() {
+        VIBE_ISM_P(const double tp1 = vibeism::ismProfNow();)
         std::vector<Heard> got;
         for (auto& dt : demods_) {
             dt.d->run(*streams_[dt.stream], [&](Frame&& f) {
@@ -260,6 +290,7 @@ private:
             if (out_.size() > 512) out_.erase(out_.begin(), out_.begin() + long(out_.size() - 512));
         }
     }
+    // ── vibe-lora: the transforms (the expensive half of the channeliser) ──
     void loop() {
         /* ★★ NAMED AND AT THE DECODERS' RUNG (2026-10-31). Unnamed, it inherited whatever thread started ISM mode — on the
          *  Pi 2 a connection thread, so /proc called it "vibe-conn" at nice 0, level with nothing it should be level with. */
@@ -271,16 +302,59 @@ private:
                 std::vector<cf> blk = std::move(queue_.front());
                 queue_.pop_front();
                 queued_ -= blk.size();
+                busy1_ = true;
                 lk.unlock();
-                work(blk.data(), blk.size());
+                space_.notify_all();
+                std::vector<Channeliser::Spectra> batch;
+                ch_->feedSpectra(blk.data(), blk.size(), [&](Channeliser::Spectra&& sp) { batch.push_back(std::move(sp)); });
+                // ★ one batch per capture block: the detectors then run exactly as often as they did on one thread
+                if (!batch.empty()) pushSpec(std::move(batch));
                 lk.lock();
+                busy1_ = false;
+            }
+        }
+    }
+    void pushSpec(std::vector<Channeliser::Spectra>&& batch) {
+        {
+            std::unique_lock<std::mutex> lk(sMtx_);
+            if (lossless_) sSpace_.wait(lk, [&] { return !run_ || specQ_.empty() || specQueued_ + batch.size() <= specCap_; });
+            specQueued_ += batch.size();
+            specQ_.push_back(std::move(batch));
+            while (specQueued_ > specCap_ && specQ_.size() > 1) { specQueued_ -= specQ_.front().size(); specQ_.pop_front(); ++droppedSpec_; }
+        }
+        sCv_.notify_one();
+    }
+    // ── vibe-lora2: rotation, resampling, the detectors — may lag the transforms ──
+    void loop2() {
+        vibeDecoderLagThread("vibe-lora2");
+        std::unique_lock<std::mutex> lk(sMtx_);
+        while (run_) {
+            sCv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !specQ_.empty(); });
+            while (run_ && !specQ_.empty()) {
+                std::vector<Channeliser::Spectra> batch = std::move(specQ_.front());
+                specQ_.pop_front();
+                specQueued_ -= batch.size();
+                busy2_ = true;
+                lk.unlock();
+                sSpace_.notify_all();
+                for (const auto& sp : batch) ch_->deliver(sp);
+                detectAll();
+                lk.lock();
+                busy2_ = false;
             }
         }
     }
 
     std::mutex mtx_, outMtx_, statMtx_;
-    std::condition_variable cv_;
-    std::thread worker_;
+    std::condition_variable cv_, space_;
+    std::thread worker_, worker2_;
+    bool lossless_ = false, busy1_ = false, busy2_ = false;
+    // ★ between the two threads: transformed blocks, one batch per capture block
+    std::mutex sMtx_;
+    std::condition_variable sCv_, sSpace_;
+    std::deque<std::vector<Channeliser::Spectra>> specQ_;
+    size_t specQueued_ = 0, specCap_ = 0;
+    uint64_t droppedSpec_ = 0;
     std::atomic<bool> run_{false};
     double hc_ = 0, rate_ = 0;
     std::unique_ptr<Channeliser> ch_;
