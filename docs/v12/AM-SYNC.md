@@ -1,4 +1,4 @@
-# V12 — Synchronous AM, ECSS, AM Stereo (C-QUAM compatible) and AM AUTO BW
+# V12 — Synchronous AM, ECSS, AM Stereo (C-QUAM compatible), AM AUTO BW and AUTO bandwidth in every mode (§11)
 
 Branch `v12-am-sync` (off `v12-experimental`). VibeServer's own DSP (`vibedsp/amsync.cpp`, class `SyncAm`), so it
 reaches every VibeServer platform, the Android app's local-hardware server and (after `build_ios.sh`) iOS.
@@ -29,15 +29,15 @@ on synthetic signals where the truth is known, and on real night-time skywave re
   filter the listener drives: SAM-U/L keep AM's symmetric ±width passband and pick a side; ECSS-U/L give the SSB
   slider a DXer expects when zero-beating a carrier and taking one sideband (lo/hi edges, one-sided width, SSB's 12 kHz
   ceiling and its chain ladder). The PLL does the zero-beating, so there is no manual BFO to hold.
-- **The AM sync line** (web: beside the frequency, in the airband channel line's style; app: under the AM AUTO BW row
-  in the audio sheet, standard font): `SYNC +3.2 Hz` (the carrier's offset from the dial — a DX tool in its own right),
+- **The AM sync line** (web: beside the frequency, in the airband channel line's style; app: the AM SYNC row in the
+  audio sheet, standard font): `SYNC +3.2 Hz` (the carrier's offset from the dial — a DX tool in its own right),
   `SYNC …` while acquiring, then `AUTO BW L 5.0k · U 3.9k` when auto bandwidth has cut, `NOTCH 1004 Hz` for a
   heterodyne. Carried by a new additive `{"type":"amsync"}` message (once a second, on change, only in the AM family).
 - **AM-ST's light** is the existing stereo rings (web `#mStereo`, app mode box), lit by the 25 Hz pilot via the
   existing `rds` message's `stereo` flag.
-- **AM AUTO BW** is the same server switch as FM's A-BW (one switch — `g_autoBwOn`), now also applied to every
-  pipeline's AM auto bandwidth. It has its own row where an AM listener looks (web audio menu "AM AUTO BW", app audio
-  sheet), each row kept in step with the FM one. **Manual + auto:** the listener's width is always the ceiling; auto only
+- **AM AUTO BW** is the same switch as FM's A-BW. ★ **Superseded by §11**: its rows in the web audio menu and the app
+  audio sheet are gone; the switch is now the AUTO key above SYNC by the passband sliders, per listener, in every mode
+  that has an automatic width. **Manual + auto:** the listener's width is always the ceiling; auto only
   ever narrows inside it (per sideband in SAM/ECSS), and a retune clears every verdict.
 
 ## 2. The design (vibedsp `SyncAm`)
@@ -258,7 +258,7 @@ Pi** (the same convention as DIGITAL-SPOTS.md).
 - The visual check of the new chrome on default / silver / black faceplates, transparency on/off, phone and iPad widths
   (app mode grid with six more keys; the audio sheet row; the web pill line). Code follows the existing rows' patterns.
 - A real C-QUAM station (§7).
-- VFO B (VibeServer's second VFO) does not follow the AUTO BW switch (its pipeline keeps the default, ON).
+- ~~VFO B does not follow the AUTO BW switch~~ — it does now (§11).
 - The app's full type-check and run-tests suite (not run tonight: CPU and memory limits). Run tonight instead: the
   vibedsp pipeline / demod / passband / NaN-recovery tests, test-am-sync (SIMD and scalar), test_am_sync.ts, and the
   four faceplate suites that compose mode legends (segfield, dotfield, meters, landscape) — all pass.
@@ -270,7 +270,7 @@ Pi** (the same convention as DIGITAL-SPOTS.md).
 
 1. ECSS-U/L and SAM-U/L share a detector; ECSS differs by its SSB-style one-sided passband. Is that the ECSS you want,
    or should ECSS also keep the carrier audible (a true "exalted carrier" with a faint beat at zero offset)?
-2. AM AUTO BW rides the FM A-BW switch (one server switch, two rows). Separate switches instead?
+2. ~~AM AUTO BW rides the FM A-BW switch~~ — answered by Stuart's AUTO key (§11): one switch, by the sliders.
 3. The noise arm (narrow to the station's own programme width when that buys S/N) is built but OFF — it misreads
    skywave. Keep it as an experiment, or remove it?
 4. Default the six keys on for owners, or let owners opt in on the setup page?
@@ -291,3 +291,233 @@ Sources (§7): [AM stereo — Wikipedia](https://en.wikipedia.org/wiki/AM_stereo
 [radiodiscussions.com (KBMR, 2025)](https://radiodiscussions.com/goto/post?id=6891810) ·
 [HFUnderground wiki: C-QUAM](https://hfunderground.com/wiki/index.php/C-QUAM) ·
 [Radio World](https://www.radioworld.com/?p=105432) · [JOUF-AM 2021](https://shortwavearchive.com/archive/tag/JOUF)
+
+---
+
+## 11. AUTO above SYNC — automatic bandwidth in every mode that can use it (2026-10-31, afternoon)
+
+Stuart: *"as for bandwidth simply add an auto button above the sync button between the upper and lower sideband sliders
+in the app and make auto work for any mode we can, and when in a mode that we cant use auto bandwidth on simply revert
+to the layout we have now with just the sync button."*
+
+### 11.1 What a listener gets
+
+| mode | what AUTO does | where it lives |
+|---|---|---|
+| WFM | narrows a weak station toward its own occupied width (the shipping TEF-style A-BW) | shim, `g_autoBwOn` → rxBwHz |
+| AM, SAM, SAM-U/L, ECSS-U/L, AM-ST | narrows the side a neighbour splatters into (§2–§4) | vibedsp `SyncAm` |
+| **USB, LSB** | **fits the passband to the voice actually being sent** — new | vibedsp `AutoPassband` (`autobw.cpp`) |
+| **CWU, CWL** | **±150 Hz round the keyed tone nearest the beat note** — new | vibedsp `AutoPassband` |
+| NFM | **not offered** — §11.4 | — |
+| DRM, DAB, ADS-B, ISM, NDB, AIS, decoders | no passband to fit (the row is hidden or the width is the decoder's) | — |
+
+- **The key** (app `ModeSelector`, web bandwidth row): AUTO stacked ABOVE SYNC in the middle column, in both of the
+  app's styles (PopupKey on silver/black, the bordered key on the default). It is drawn only when the server lists the
+  current mode in hwinfo **`autoBwModes`**; otherwise the column is SYNC alone — the row exactly as it was. Nothing in
+  either client knows which modes have AUTO ([[feedback_app_no_hardcoded_settings]]); `src/services/bwAuto.ts` holds
+  the shared rules, pinned by `scripts/test_bw_auto.ts`.
+- **While AUTO is on and cutting, the sliders show the width AUTO chose** — from `{"type":"bwauto","on","cut","lo","hi"}`,
+  in the sliders' own coordinates (Hz from the dial; `null` = that edge is the listener's own). Display only: a client
+  never sends those edges back as a bandwidth.
+- **★ Behaviour chosen for a slider move: AUTO switches OFF for the session — a manual override, and your width wins.**
+  The client sends `autobw off` first (once per drag), then the edge, starting from what the sliders showed. Reasons:
+  it is what a TEF668x radio does when a bandwidth is picked by hand, and the other choice (AUTO stays on with the drag
+  as its new ceiling) leaves a listener dragging a slider whose effect they cannot see. Turning AUTO back on is one tap.
+  The server never infers it from a bandwidth frame, because a mode change carries edges too and is not a drag.
+- **The AM AUTO BW rows are gone** (web audio menu, app audio sheet — both unreleased); the app keeps the AM SYNC
+  readout line. FM's A-BW button stays where FM-DX listeners know it, in step with AUTO (the same switch).
+
+### 11.2 One switch, per listener; the shared dial
+
+- `{"type":"autobw","on":bool}` — the existing message, so FM's A-BW, AUTO and an older client all drive the same thing.
+- **Per-listener DSP** (a locked range with several VFOs): it is THIS listener's (`ClientDsp::autoBwOn`, ON for a new
+  listener — a joiner inherits nobody's choice), applied to their pipeline and re-applied when it is rebuilt. Nobody
+  else's audio moves.
+- **One pipeline** (a single listener, or a shared dial): it is the dial's, exactly as the passband is — in the
+  ask-before-tuning gated list, broadcast to the room in hwinfo, adopted by a joiner, and never sent by a client except
+  on a person's tap or drag ([[shared_dial_contract]]: the server states its full state, the client has no vote).
+- **The owner's A-BW switch does not exist** — the brief assumed one. `autobw` has always been a listener control
+  (server-wide on a single pipeline), default ON at start. So there is no owner "offer AUTO" setting; the server offers
+  AUTO by mode. If Stuart wants an owner switch (offer it at all / its default for new listeners), it is a small
+  addition: a config key read where `autoBwModes` is built and where `ClientDsp::autoBwOn` is initialised (§11.8 Q1).
+- **VFO B follows its listener's AUTO** (`vibe_watch.h WatchChannel::setAutoBw`, set when B is created and whenever the
+  listener switches AUTO) — the AM family, SSB and CW autos in B's own pipeline. B has no WFM.
+- Fixed on the way: on a shared dial the AM sync line reached only the first listener (one shared "last sent" stamp,
+  the bug the `sendFmMetaAll` note already describes); it is now built once and sent to everybody.
+
+### 11.3 The design (vibedsp `AutoPassband`)
+
+USB/LSB/CW are demodulated to audio that is a linear image of the RF passband (0 Hz = the dial's zero beat; CW's tone
+at the middle of its 1200 Hz filter). So the cut is made on that audio, **before the AGC** (so the AGC no longer levels
+on what was cut), with a linear-phase FIR (`RealFir`: the NEON / SSE2 / scalar kernel the Weaver pair uses, retuned in
+place). **Measured on the uncut audio, always** — a cut can never confirm itself. While AUTO is on and not cutting the
+FIR is a pure delay (11 ms at a 12 kHz channel), so the audio does not jump in time as cuts come and go.
+
+- **SSB — envelope correlation.** Per 100 Hz band, the correlation over ~5 s of that band's log power with the log
+  power of the voice's core (500–1500 Hz). A band carrying THIS talker rises and falls with the core syllable by
+  syllable; a band of noise, another talker splattering in, or a steady heterodyne does not. Trimmed from each edge to
+  the outermost band that correlates (≥ 0.15, it and its inner neighbour both — a three-band average leaked the voice
+  outward), with a 75 Hz margin; the top never under 2 kHz, the bottom never over 300 Hz; nothing cut when there is no
+  voice (the core's log power barely moves).
+- **CW — the tone nearest the beat note.** An 11.7 Hz-resolution spectrum averaged over 1.5 s; the significant peak
+  (≥ 6 dB over the median bin) NEAREST the beat note, confirmed on two decisions, gets ±150 Hz — narrower when another
+  signal is closer (never under ±60). A cut tone is HELD while it is there (±40 Hz); gone for 3 s → full width, and only
+  then is a new tone taken.
+- **Time rules** (as the AM auto): 3 s of evidence first (CW 2 s); narrowing needs four decisions running (2 s) and
+  takes the widest; widening is at once; a retune clears every verdict (`RxPipeline` `tuneReq_`, as `SyncAm::retune`).
+- **Default ON**, like FM's and AM's — measured never worse on the test set below.
+
+### 11.4 Measured — the score, synthetic, and off air
+
+**The score** (`vibeserver/autobw_score.h`). AM-SYNC §4 used per-frequency coherence, but for USB/LSB/CW a filter after
+the detector is linear: it scales programme and noise at each frequency alike, so a per-frequency S/N cannot move — that
+score is blind by construction to what a passband does. What a passband changes is the broadband picture: per 2 s
+window, C(f) = the output coherent with the reference (the wanted signal), N(f) = the rest; each run normalised on the
+core band; **score = Σ C ÷ Σ (N + any wanted signal the fixed passband kept and AUTO did not)** — cutting a band that
+held only noise raises it, cutting the voice lowers it. Paired per window against the fixed passband on the same signal.
+
+**Synthetic, through the real pipeline** (`vibeserver/test-auto-bw.cpp`, 20/20 SIMD and `VIBE_FORCE_SCALAR`):
+a pseudo-voice (wandering 95–190 Hz pitch, harmonics under moving formants, ~4 Hz syllables with pauses), a Morse keyed
+tone (20 WPM), in white noise; the known programme is the truth. dB over the fixed passband, mean ± SE (windows won):
+
+| case | AUTO gain | voice kept (worst window) | AUTO's passband |
+|---|---|---|---|
+| USB, TX 300–2700, RX 2.7 k, S/N 6 / 15 / 25 dB | +0.13 ± 0.02 / +0.07 ± 0.01 / +0.01 ± 0.01 | ≥ 99.8 % | 125–2675/2700 |
+| USB, TX 300–2400 (narrow transmitter), RX 2.7 k, S/N 10 | +0.18 ± 0.03 | 99.9 % | 125–2475 |
+| USB, TX 300–2700, **RX opened to 4.0 k**, S/N 10 / S/N 0 | **+0.89 ± 0.12** / **+1.03 ± 0.20** | 99.4 % / 90.7 % | 125–2775 / 300–2775 |
+| USB, WIDE TX 100–3500, RX 4.0 k (must keep it all) | +0.10 ± 0.01 | 100 % | 0–3675 |
+| LSB, RX opened to 4.0 k, S/N 10 | +0.79 ± 0.13 | 99.5 % | 125–2775 |
+| USB + a 2nd talker 2.2 kHz up, equal / **+6 dB** | +0.50 ± 0.21 / **+3.81 ± 1.01** | 99.6 % / 96.4 % | cut some of the time |
+| USB TX 300–2400 + heterodyne at 2.6 kHz (−10 dB) | **+2.24 ± 0.37** | 99.5 % | 0–2575 |
+| noise only | — | — | not cut |
+| CW on the beat note, S/N −6 / +6 / +20 dB (in 1.2 kHz) | **+5.63 ± 0.07** / +5.63 ± 0.07 / +2.94 ± 0.05 | ≥ 97.1 % | 450–750 |
+| CW 100 Hz off the beat note, S/N 0 | +5.67 ± 0.07 | 99.2 % | 549–849 (centred on 700) |
+| CW + a neighbour 250 Hz up, +6 dB louder | **+16.07 ± 0.21** | 94.8 % | 451–751 |
+| CW + a neighbour 150 Hz down, equal | **+14.12 ± 0.16** | 98.2 % | 525–675 |
+| CW noise only | — | — | not cut |
+
+**Off air** (`tools/auto-bw/ab_replay.cpp`; recordings in `~/VibeSDR-test-audio/autobw/` and `cw/`, not in git):
+- **SSB: Shannon VOLMET on 3413 and 5505 kHz, recorded together** (UberSDR iq48, 240 s, 12:17 UTC): the same programme
+  on two paths, one the reference for the other. ★ Their SSB audio drifts in phase (a fraction of a hertz apart), so a
+  Welch cross-spectrum averages to nothing (waveform correlation 0.09; envelopes 0.54) — the reference is used by
+  POWER: per 100 Hz band, the output's power regressed on the reference's, segment by segment (`abscore::cnPower`).
+
+  | judged (reference) | RX 2.7 k | RX opened to 4.0 k |
+  |---|---|---|
+  | 3413 kHz, weak (5505) | +0.06 ± 0.05 (won 27/57) | **+1.03 ± 0.11** (won 46/57) |
+  | 5505 kHz, strong (3413) | +0.00 ± 0.00 (no cut) | +0.05 ± 0.01 (won 56/57) |
+
+  Never significantly worse. On the weak station AUTO sometimes pulled the top to 2.0–2.2 kHz; the estimated voice kept
+  was median 92–96 % (worst windows 74–79 % — the per-band power regression is itself noisy on a −4 dB signal), and the
+  score, which charges every lost band, still came out level or ahead.
+- **CW: four night/evening recordings** (40 m 7.020 MHz iq192, 20 m 14.035 iq192, 80 m 3.550 iq48), eight signals. No
+  second path exists for CW, so the score is the tone (±40 Hz round the tone AUTO centred on) against the rest of
+  0–1400 Hz, fixed vs AUTO: **+5.1 to +13.9 dB** (40 m: +13.9 ± 1.0, +9.9 ± 0.6, +11.5 ± 0.5; 20 m: +5.1 ± 0.5,
+  +11.4 ± 0.1; 80 m: +7.2 ± 0.4, +8.6 ± 0.5, +6.7 ± 0.8), every signal winning 98–100 % of its windows (final code). ★ This proxy measures round the tone AUTO picked, so it cannot see a WRONG pick; the
+  pick itself is what the synthetic neighbour cases pin (nearest the beat note, held through pauses).
+
+**Read plainly:**
+- **CW is the big win** — the 1200 Hz CW passband narrowed round the signal: ~+5.6 dB against noise, +14–16 dB
+  against a neighbour 150–250 Hz away, +5 to +14 dB on real bands.
+- **SSB at the default 2.7 kHz on a standard transmitter: essentially neutral** (+0.0 to +0.2 dB) — the default
+  passband already fits a standard voice; AUTO trims the empty 0–125 Hz and little else. **It earns its place when the
+  passband does not fit**: a listener who opened it wide (+0.8 to +1.0 dB, synthetic and off air), a narrow transmitter
+  (+0.2), and a louder neighbour or a whistle above the voice (+2.2 to +3.8 dB).
+- **Dead ends kept on the record** (found while building, before the first commit, so they are recorded here and in
+  the commit messages rather than as separate commits; the NFM probe is its own commit): CW "strongest tone in reach" locked onto a louder neighbour
+  (−17.5 dB) → nearest the beat note; CW re-centred on a neighbour in the wanted signal's pauses (40 m) → hold the tone;
+  SSB three-band smoothing leaked the voice outward (kept 200–300 Hz for a 300 Hz transmitter, kept a louder second
+  talker's band) → two-in-a-row; SSB fitted a passband to pure noise → "no voice, no cut"; the off-air coherence score
+  read nothing because two SSB paths drift in phase → the power regression.
+
+**NFM — not offered, and why.** `tools/auto-bw/nfm_probe.cpp` asked first whether ANY fixed narrower IF helps (if none
+does, no automatic one can): pseudo-voice FM through the real pipeline, coherence score vs truth (FM's detector is not
+linear, so here it is the right score), 12.5 / 11 / 9 / 7 kHz:
+
+| signal | 12.5 k | 11 k | 9 k | 7 k |
+|---|---|---|---|---|
+| ±2.5 kHz, CNR 20 dB | 4.76 | 4.75 | 4.69 | 4.30 |
+| ±2.5 kHz, CNR 10 dB | −0.73 | −0.72 | −0.72 | −0.85 |
+| ±2.5 kHz, CNR 6 dB | −4.29 | −3.60 | −2.90 | −2.72 |
+| ±2.5 kHz, CNR 3 dB | −10.67 | −9.24 | −7.29 | −5.45 |
+| ±2.5 kHz, CNR 15, a neighbour one channel up, +20 dB | 2.65 | 2.65 | 2.59 | 2.24 |
+| ±5 kHz, CNR 10 dB | 2.62 | 2.56 | 2.28 | 1.59 |
+
+A narrower IF helps NFM **only below the FM threshold** (+1.4 to +5 dB at CNR 3–6) and costs up to 1 dB above it or on
+a wide-deviation signal; the channel filter already rejects a neighbour one channel away. So an NFM AUTO would have to
+know the CNR — and narrowing changes the very noise it would measure it by (a cut confirming itself), and the NFM
+demodulator's gain is tied to its width (a level jump on every change). Not built in this session; NFM is left out of
+`autoBwModes`, so its row is SYNC alone. The probe says what a correct one would be worth (§11.8 Q3).
+
+### 11.5 CPU per listener (Pi 2 estimate, same method as §5)
+
+`tools/auto-bw/bench.cpp`, a 48 kHz listener channel with a pseudo-voice USB signal and a keyed CW tone; the server's
+armhf flags in `vibeserver-cross:bookworm-armhf`, `qemu-arm` + `insncount`, 10 s, signal generation subtracted;
+% of a 900 MHz Cortex-A7 at 0.6–0.8 IPC — **an estimate, not a measurement on a Pi.**
+
+| mode | Mac M5 (SIMD) | Pi 2 SIMD, M instr/s | Pi 2 SIMD, % core | Pi 2 SCALAR, M instr/s |
+|---|---|---|---|---|
+| USB (passband opened to 4 k) | 0.174 % | 45.9 | 6.4–8.5 | 107.1 |
+| USB + AUTO | 0.210 % | 57.1 | 7.9–10.6 | 131.6 |
+| CW | 0.248 % | 60.0 | 8.3–11.1 | 172.3 |
+| CW + AUTO | 0.281 % | 69.1 | 9.6–12.8 | 192.7 |
+
+- **AUTO adds ~11 M instr/s to SSB and ~9 M/s to CW — 1.3–2.1 % of a Pi 2 core per listener**, almost all of it the
+  FIR (423 taps at this chain's 19.2 kHz channel for SSB, 397 at 12 kHz for CW); the measurement (a 256/512- or
+  1024-point real FFT, 12–47 a second) is small. SIMD: 2.2× fewer instructions than scalar for AUTO's share.
+- **Not vectorised**, and why: the per-band moments and the CW peak search (once per FFT frame, ≤ 60 bands / ≤ 103
+  bins — nothing to gain). The FIR is the hot loop and runs on the existing NEON / SSE2 kernel; `test-fir-simd` checks
+  that kernel against the direct convolution sample for sample. Scalar vs SIMD output: equal to float rounding (the dot
+  product's summation order differs), and the `VIBE_FORCE_SCALAR` build passes test-auto-bw's same 20 checks.
+- A cheaper SSB filter is available if wanted: a 250 Hz transition instead of 150 Hz is ~40 % fewer taps, for a softer
+  cut edge (§11.8 Q4).
+
+### 11.6 ECSS — "does it need a carrier, and would that make the signal better?" (Stuart)
+
+**No, and ECSS stays as built.** Our ECSS-U/L lock a PLL to the station's own carrier and demodulate the chosen sideband
+against a clean, noise-free local copy of it — the ideal limit of "exalting" the carrier (an exalted-carrier receiver
+boosts the received carrier before an envelope detector precisely so that detector behaves like this). Re-inserting
+an audible carrier on top of that adds one term: the carrier itself at 0 Hz in the detector's output — DC, a zero beat —
+which carries no programme, cannot raise the programme's S/N, and is removed by the audio chain's own low edge and DC
+handling anyway. Agreeing with the analysis, nothing was measured.
+
+### 11.7 Checked, and not
+
+- Run: test-auto-bw (SIMD and scalar), test-am-sync, test_am_sync.ts, test_bw_auto.ts, the vibedsp pipeline / demod /
+  passband / NaN-recovery / adjacent tests, the vibeserver build (Mac), `build-web` (page header rebuilt and committed,
+  as this branch already does); a local VibeServer (this Mac, loopback, a noise rtl_tcp) over its WebSocket: hwinfo
+  lists the modes, `bwauto` on / off / per mode.
+- **Seen**: the web bandwidth row in headless Edge (`--mute-audio`) at phone (390 px) and iPad (820 px) widths: LSB
+  with AUTO above SYNC, cutting a 4 kHz passband to 3.5 kHz with the edges shown; NFM with SYNC alone. The web client
+  has one look (no faceplates).
+- **NOT seen**: the app. No simulator or device run under this session's CPU limits — the AUTO key on the default,
+  silver and black faceplates, transparency on/off, phone and iPad, is code-reviewed and type-checked
+  (`ModeSelector.tsx` clean) but not looked at. `SDRScreen.tsx` itself could not be type-checked (tsc runs out of
+  memory at 512 MB on it); its changes are a few lines of state and props.
+- Not run: an Android NDK build, the full run-tests.sh, a real C-QUAM station (§7), any of Stuart's VibeServers.
+- RN Slider: a programmatic value change (AUTO's edge moving the thumb) must not count as a drag; both sliders ignore a
+  value equal to the one drawn. Whether `@react-native-community/slider` raises onValueChange for a prop change on
+  Android has not been checked on a device.
+
+### 11.8 Questions for Stuart
+
+1. An owner switch for AUTO (offer it at all, and its default for new listeners)? There is none today — `autobw` was
+   always a listener control.
+2. SSB/CW AUTO default ON for everybody after the update (as FM and AM are), or default OFF for SSB/CW until heard?
+   CW's sound changes noticeably (±150 Hz).
+3. NFM: worth building the CNR-steered narrowing (it would need its own noise measure outside the cut, and a width
+   change that does not move the level)? Gains only on weak signals below the FM threshold.
+4. SSB AUTO costs ~1.6–2.1 % of a Pi 2 core per listener; a softer cut edge would cost ~40 % less. Keep the sharp one?
+5. Fine tuning SSB clears AUTO's verdict on every step (the "a limit must never travel with the dial" rule), so AUTO
+   re-fits ~5 s after the last tune step. Keep, or let steps under ~100 Hz keep the verdict?
+
+### 11.9 Server sessions (this afternoon)
+
+| time (UTC) | server | what | restored |
+|---|---|---|---|
+| 12:06–12:11 | Stuart's UberSDR 192.168.86.11:8080 | iq48 8.957 + 13.264 MHz, 240 s (own channels) — 13.264 was empty by day; deleted | n/a — read-only |
+| 12:15–12:17 | Stuart's UberSDR | 10–20 s iq48 probes of 5.450, 11.253, 5.505, 3.413 MHz (which VOLMETs are audible) | n/a |
+| 12:17–12:22 | Stuart's UberSDR | iq48 3.413 + 5.505 MHz together, 240 s (the SSB two-path pair) | n/a |
+| 12:25–12:45 | this Mac only | a local VibeServer on loopback with a noise / recorded rtl_tcp (protocol check, web pictures) | stopped |
+
+No VibeServer of Stuart's (Pi 500, Lenovo, Pi 2) and no Android server was connected to, tuned or touched; no adb.
