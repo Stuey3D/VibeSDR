@@ -436,7 +436,8 @@ console.log('── decode on either VFO ──');
   const src = (f: string) => readFileSync(fileURLToPath(new URL(f, import.meta.url)), 'utf8');
   const scr = src('../src/screens/SDRScreen.tsx');
   const ws = src('../src/services/VibeServerWsClient.ts'), dc = src('../src/services/DecoderClient.ts');
-  ok(/const wantSpk = spotsBandOn && !abOn, wantA = spotsBandOn && abOn;/.test(scr) && /abSetMute\?\.\(spotsVfo, true\)/.test(scr),
+  // ★ e780493b0: not the speaker while paired with a second server (Band then silences its own server)
+  ok(/const wantSpk = spotsBandOn && !abOn && dualShape\.phase === 'off', wantA = spotsBandOn && abOn;/.test(scr) && /abSetMute\?\.\(spotsVfo, true\)/.test(scr),
      'Band with VFO B on mutes the VFO it runs on in the mix, not the speaker');
   ok(!/abDecodeOnA/.test(scr), 'the forced switch to VFO A is gone');
   ok(/onTuneHz=\{onDecTuneHz\}/.test(scr) && /tuneVfoHz\(decVfoRef\.current, hz, mode\)/.test(scr) && /tuneVfoHz\(spotsVfoRef\.current, hz, 'usb' as SDRMode\)/.test(scr),
