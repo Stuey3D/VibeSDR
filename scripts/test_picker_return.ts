@@ -119,7 +119,9 @@ const sdr = readFileSync('src/screens/SDRScreen.tsx', 'utf8');
 const back = sdr.slice(sdr.indexOf('const onBackToPicker = useCallback'), sdr.indexOf('const onBackToPicker = useCallback') + 700);
 ok(back.includes("navigation.replace('SDR', doorReturnParams(") && back.includes('navigation.goBack()'),
    'the menu\'s ← BACK: the door\'s list when chosen there, else the server list');
-ok(/chooseRadio = useCallback\(async \(id: string\) => \{\s*chosenFromListRef\.current = id;/.test(sdr),
+// ★ 4e185a9dd (two servers, per RADIO): a radio already playing in the other ear bounces back to it FIRST — that is not
+//   a choice on this list, so the guard may come before the arm, and nothing else may.
+ok(/chooseRadio = useCallback\(async \(id: string\) => \{\s*(if \(bounceIfFirstRadio\(radioBaseUrl\(baseUrl, id\)\)\) return;[^\n]*\n\s*)?chosenFromListRef\.current = id;/.test(sdr),
    'only a radio CHOSEN on the list (chooseRadio) arms the return to it');
 
 process.exit(fails ? 1 : 0);
