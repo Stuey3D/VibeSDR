@@ -10556,6 +10556,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // The single occupant's session id (empty = free). Guarded by clientMtx. A client's spectrum +
     // audio sockets share this id; a second client is refused while it is held. See acceptWs.
     std::string occupantSession;
+    /** ★★★ A DISCONNECT THAT LETS THEM STRAIGHT BACK IN IS NOT A DISCONNECT (M7EIW, 2026-11-01:
+     *  "the disconnect feature for kicking out users ... does not seem to be working"). Every
+     *  client reconnects on a dropped socket, and a released app does not know `kicked`, so the
+     *  owner watched the row come straight back. Keyed by session id and by browser id ("bid:" +
+     *  id) — never by address, which a household or a CGNAT network shares. Seconds, monotonic.
+     *  Guarded by clientMtx. BLOCK IP is the tool for someone who should stay out. */
+    std::map<std::string, double> kickedUntil;
+    static constexpr double kKickCoolSec = 5.0 * 60.0;
+    bool kickedLocked(const std::string& session, const std::string& browser, double now) {
+        for (auto it = kickedUntil.begin(); it != kickedUntil.end(); )
+            it = (it->second <= now) ? kickedUntil.erase(it) : std::next(it);
+        return (!session.empty() && kickedUntil.count(session))
+            || (!browser.empty() && kickedUntil.count("bid:" + browser));
+    }
     /** When the current occupant claimed the slot (seconds, monotonic). 0 = nobody. Guarded by
      *  clientMtx alongside occupantSession — one lock for one piece of state. */
     double occupantSince = 0;
@@ -24277,6 +24291,18 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     outboxClose(sock);
                     return;
                 }
+                // ★★ JUST DISCONNECTED BY THE OWNER — see kickedUntil. Told `kicked` again, so a
+                //    client that knows the word stops, and one that does not is refused each try.
+                if (kickedLocked(session, browser, Impl::nowSecs())) {
+                    LOGI("%s WS refused — disconnected by the owner, inside the %d-min cool-off [%s]",
+                         isAudio ? "audio" : "spectrum", (int)(kKickCoolSec / 60), session.c_str());
+                    static const char* kKicked = "{\"type\":\"kicked\"}";
+                    sendWs(sock, 0x1, (const uint8_t*)kKicked, strlen(kKicked));
+                    lk.unlock();
+                    LocalSdrShim::noteConnectionClosed(sock->peerAddress(), session, "kicked");
+                    outboxClose(sock);
+                    return;
+                }
             }
 
             // ★★★ WHO ARE YOU — ESTABLISHED BEFORE ANY REFUSAL THAT ADMIN OUTRANKS.
@@ -34549,13 +34575,30 @@ std::string LocalSdrShim::adminSessionsJson() {
 }
 
 /** Close a listener's sockets. Empty `session` matches on address instead, which is what the
- *  ban path needs. Returns how many were closed. */
+ *  ban path needs. Returns how many LISTENERS (sessions) were disconnected.
+ *
+ *  ★★★ EVERY KIND OF LISTENER, NOT ONLY THE PER-CLIENT DSP ONES (M7EIW, 2026-11-01). This used to
+ *      walk `clientDsp` alone — and clientDsp is filled only on a LOCKED CENTRE with more than one
+ *      user. On a single-user radio (every Airspy HF+ and dongle by default) and on a SHARED DIAL
+ *      it is empty by design, the listener lives in specClient/specExtra + audioClient/audioExtra,
+ *      and the admin table draws those rows (adminSessionsJson) — so DISCONNECT found nothing,
+ *      answered `kicked: 0`, and the owner watched the listener carry on. Same shape as the
+ *      admin table itself, which had to learn "who is on my radio" four times. */
 int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
     if (!p || (session.empty() && ip.empty())) return 0;
     std::vector<std::shared_ptr<net::Socket>> doomed;
-    std::vector<std::pair<std::string, std::string>> logged;   // ip, session
+    std::vector<std::pair<std::string, std::string>> logged;   // ip, session — one per listener
     {
         std::lock_guard<std::mutex> lk(p->clientMtx);
+        const double now = Impl::nowSecs();
+        const auto doom = [&](const std::shared_ptr<net::Socket>& s) {
+            if (s && std::find(doomed.begin(), doomed.end(), s) == doomed.end()) doomed.push_back(s);
+        };
+        const auto log = [&](const std::string& addr, const std::string& sess) {
+            for (auto& e : logged)
+                if (sess.empty() ? (e.second.empty() && e.first == addr) : e.second == sess) return;
+            logged.emplace_back(addr, sess);
+        };
         for (auto& kv : p->clientDsp) {
             auto& c = kv.second;
             // ★ Whichever socket is alive answers — a pocketed listener's spectrum socket is closed
@@ -34566,14 +34609,43 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
             const bool hit = (!session.empty() && c->session == session)
                           || (session.empty() && !ip.empty() && addr == ip);
             if (!hit) continue;
-            doomed.push_back(c->spec);
-            if (c->audio) doomed.push_back(c->audio);
-            logged.emplace_back(addr, c->session);
-            p->noHoldLocked(c->session, "kicked by the owner");   // ★ V12: ended for a reason — never held
-            if (p->occupantSession == c->session) {
+            doom(c->spec);
+            doom(c->audio);
+            log(addr, c->session);
+        }
+        // ★★ The shared dial and the single occupant. A socket's session comes from sockSession,
+        //    filled at the handshake on every radio. A client that sent no session id is the
+        //    occupant "anon:<addr>", which is the id the admin row carries for it.
+        const auto consider = [&](const std::shared_ptr<net::Socket>& s, bool primary) {
+            if (!s || !s->isOpen()) return;
+            std::string sess;
+            { auto it = p->sockSession.find(s.get()); if (it != p->sockSession.end()) sess = it->second; }
+            const std::string addr = s->peerAddress();
+            const bool hit = (!session.empty() && !sess.empty() && sess == session)
+                          || (!session.empty() && sess.empty() && primary && session == p->occupantSession)
+                          || (session.empty() && !ip.empty() && addr == ip);
+            if (!hit) return;
+            doom(s);
+            log(addr, sess.empty() ? (primary ? p->occupantSession : std::string()) : sess);
+        };
+        consider(p->specClient, true);
+        for (auto& s : p->specExtra)  consider(s, false);
+        consider(p->audioClient, true);
+        for (auto& s : p->audioExtra) consider(s, false);
+
+        for (auto& e : logged) {
+            if (!e.second.empty()) p->noHoldLocked(e.second, "kicked by the owner");   // ★ V12: ended for a reason — never held
+            if (!e.second.empty() && p->occupantSession == e.second) {
                 p->occupantSession.clear(); p->occupantSince = 0; p->occupantAddr.clear();
                 g_vsHandoverAt = 0;
             }
+            // ★ Remember them for the cool-off (see kickedUntil) — session AND browser.
+            if (!e.second.empty()) p->kickedUntil[e.second] = now + Impl::kKickCoolSec;
+        }
+        for (auto& s : doomed) {
+            auto it = p->sockBrowser.find(s.get());
+            if (it != p->sockBrowser.end() && !it->second.empty())
+                p->kickedUntil["bid:" + it->second] = now + Impl::kKickCoolSec;
         }
         // ★★ V12: and a HELD session it names — a kick ends it as it would a connected one (finished by holdTick). Any
         //    socket of the session that is open is closed below with the rest.
@@ -34584,6 +34656,7 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
         for (const auto& s : heldHit) {
             const std::string a = p->heldSessions_[s].addr;
             p->noHoldLocked(s, "kicked by the owner");
+            p->kickedUntil[s] = now + Impl::kKickCoolSec;   // ★ the cool-off holds for a held session as for a connected one
             if (std::none_of(logged.begin(), logged.end(), [&](const std::pair<std::string, std::string>& e) { return e.second == s; }))
                 logged.emplace_back(a, s);
         }
@@ -34595,11 +34668,15 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
     //    thread needs is the shape of the freeze that took a whole session to find (see the
     //    per-client outbox note). A client that is merely dropped auto-reconnects; one that is
     //    told `kicked` treats it as terminal and stops.
+    // ★★★ outboxClose, NOT close() — the eviction path's lesson (2026-08-19), never applied here.
+    //     sendWs() only QUEUES; close() straight after it shut the fd before the writer thread had
+    //     sent the frame, so the client got a bare drop, not `kicked`, and reconnected.
     static const char* kMsg = "{\"type\":\"kicked\"}";
     for (auto& s : doomed) {
-        if (!s || !s->isOpen()) continue;
-        p->sendWs(s, 0x1, (const uint8_t*)kMsg, strlen(kMsg));
-        s->close();
+        if (!s) continue;
+        if (s->isOpen()) p->sendWs(s, 0x1, (const uint8_t*)kMsg, strlen(kMsg));
+        p->outboxClose(s, 100);
+        if (s->isOpen()) s->close();   // ★ a socket with no outbox (none registered) still goes
     }
     for (auto& e : logged) g_vsConnLog.close(e.first, e.second, "kicked");
     return (int)logged.size();
@@ -34620,7 +34697,10 @@ int LocalSdrShim::adminKickMatching(const std::string& cidr) {
     vibeadmin::Ban rule;
     rule.cidr = cidr;
     if (!vibeadmin::compile(rule)) return 0;
-    std::vector<std::string> hits;
+    // ★★★ EVERY LISTENER'S ADDRESS — the per-client DSP ones AND the shared dial / single occupant
+    //     (see adminKick: walking clientDsp alone left a banned listener on every single-user radio
+    //     and every shared dial). Collected under the lock, matched outside it.
+    std::set<std::string> addrs;
     {
         std::lock_guard<std::mutex> lk(p->clientMtx);
         for (auto& kv : p->clientDsp) {
@@ -34629,31 +34709,33 @@ int LocalSdrShim::adminKickMatching(const std::string& cidr) {
             //   and its channel lives on its audio one (see "THE CHANNEL OUTLIVES ITS SPECTRUM SOCKET").
             if (!c || (!c->spec && !c->audio)) continue;
             const auto& live = (c->spec && (c->spec->isOpen() || !c->audio)) ? c->spec : c->audio;
-            const std::string addr = live->peerAddress();
-            // ★★ AN ASN RULE MATCHES BY NETWORK, NOT BY ADDRESS — vibeadmin::matches() returns
-            //    false for one by design (its `net` is meaningless). Without this branch a
-            //    "block this network" would store the rule, report success, and leave everyone
-            //    it names still listening: the precise failure the ban-then-kick step exists to
-            //    prevent, reintroduced one rule type later.
-            bool hit = false;
-            if (rule.asn) {
-                LocalSdrShim::AsnFn fn;
-                { std::lock_guard<std::mutex> cl(g_vsConfigMtx); fn = g_vsAsnFn; }
-                uint32_t a = 0; std::string nm;
-                hit = fn && fn(addr, a, nm) && a == rule.asn;
-            } else {
-                hit = vibeadmin::matches(rule, addr);
-            }
-            if (hit) hits.push_back(c->session);
+            addrs.insert(live->peerAddress());
         }
-        // ★ V12: and a HELD session at an address the rule now names — a ban ends it as it ends a connected one
-        if (!rule.asn)
-            for (const auto& kv : p->heldSessions_)
-                if (vibeadmin::matches(rule, kv.second.addr) && std::find(hits.begin(), hits.end(), kv.first) == hits.end())
-                    hits.push_back(kv.first);
+        for (auto* v : { &p->specExtra, &p->audioExtra })
+            for (auto& s : *v) if (s && s->isOpen()) addrs.insert(s->peerAddress());
+        for (auto* s : { &p->specClient, &p->audioClient })
+            if (*s && (*s)->isOpen()) addrs.insert((*s)->peerAddress());
+        // ★ V12: and a HELD session's address — a ban ends it as it ends a connected one (adminKick by address finds it)
+        for (const auto& kv : p->heldSessions_) if (!kv.second.addr.empty()) addrs.insert(kv.second.addr);
     }
+    LocalSdrShim::AsnFn fn;
+    if (rule.asn) { std::lock_guard<std::mutex> cl(g_vsConfigMtx); fn = g_vsAsnFn; }
     int n = 0;
-    for (auto& s : hits) n += adminKick(s, "");
+    for (auto& addr : addrs) {
+        // ★★ AN ASN RULE MATCHES BY NETWORK, NOT BY ADDRESS — vibeadmin::matches() returns
+        //    false for one by design (its `net` is meaningless). Without this branch a
+        //    "block this network" would store the rule, report success, and leave everyone
+        //    it names still listening: the precise failure the ban-then-kick step exists to
+        //    prevent, reintroduced one rule type later.
+        bool hit = false;
+        if (rule.asn) {
+            uint32_t a = 0; std::string nm;
+            hit = fn && fn(addr, a, nm) && a == rule.asn;
+        } else {
+            hit = vibeadmin::matches(rule, addr);
+        }
+        if (hit) n += adminKick("", addr);
+    }
     return n;
 }
 

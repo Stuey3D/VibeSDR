@@ -7355,6 +7355,22 @@ export default function SDRScreen({ route, navigation }: Props) {
               + "iPhone's address, so it counts as the same listener.",
         });
       },
+      onKicked: (banned: boolean) => {
+        if (destroyed.current) return;
+        // ★ Same as onEvicted: the socket is about to close, and this is the honest reason.
+        if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
+        setConnLost(false);
+        terminalRefusal.current = true;
+        setRefusal(banned ? {
+          title: 'NO ACCESS',
+          body: "This receiver's owner has blocked access from your address.",
+          note: 'If you believe that is a mistake, contact whoever runs this receiver.',
+        } : {
+          title: 'DISCONNECTED',
+          body: "This receiver's owner has disconnected your session.",
+          note: 'You can try again in a few minutes, or pick another server.',
+        });
+      },
       onEvicted: () => {
         if (destroyed.current) return;
         // ★ Cancel any armed connection-lost card: the socket is about to close, and "TAKEN BACK"

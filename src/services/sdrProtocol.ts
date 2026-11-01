@@ -595,6 +595,9 @@ export interface SDRCallbacks {
   onElsewhere?: (radio: string) => void;
   /** The owner took their radio back with the admin password. Terminal, and not a fault. */
   onEvicted?: () => void;
+  /** The owner pressed DISCONNECT on this listener, or blocked its address. Terminal — the server
+   *  turns the session away (for a cool-off, or for good), so retrying is only noise. */
+  onKicked?: (banned: boolean) => void;
   /** Still connected — the server's own countdown, at T-120s and T-30s. NOT a refusal.
    *  ★ This is the AUTHORITATIVE remaining time; our local clock is only an interpolation
    *  between these, so re-base on it rather than trusting our own arithmetic. */

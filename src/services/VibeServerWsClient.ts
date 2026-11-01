@@ -2627,6 +2627,16 @@ export abstract class VibeServerWsClient {
       this.callbacks.onEvicted?.();
       return;
     }
+    if (msg.type === 'kicked' || msg.type === 'banned') {
+      // ★★★ THE OWNER'S DISCONNECT, AND HIS BLOCK. The server has sent both since the admin page
+      //     existed and only the browser read them, so a kicked app reconnected 3 s later and the
+      //     owner saw the listener come straight back (M7EIW, 2026-11-01: "the disconnect feature
+      //     ... does not seem to be working"). The app's native audio path already treats both as
+      //     terminal (VibePowerModule.laTerminalTypes); the spectrum socket now agrees.
+      this.refused = true;
+      this.callbacks.onKicked?.(msg.type === 'banned');
+      return;
+    }
     if (msg.type === 'device') {
       /* ★★★ THE RADIO WAS LENT OUT AND ANOTHER PROGRAM STILL HAS IT. The server sends this on arrival
        *  when it could not take its radio back — and the app never read it, so a listener sat on a

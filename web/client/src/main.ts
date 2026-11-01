@@ -1536,6 +1536,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onEvicted: () => showEvicted(),
     onBanned: () => showBanned(),
+    onKicked: () => showKicked(),
     // ★ Drop audio that was demodulated at the old frequency. Without this the previous station
     //   plays on for as long as the buffer is deep — which is what made tuning feel laggy.
     // ★ And the waterfall rows held for pacing, for the same reason: they were computed at the
@@ -10486,6 +10487,12 @@ async function doAdminOverride(password: string, status: HTMLElement) {
 function showBanned() { showRefusal('NO ACCESS',
   'This receiver\'s owner has blocked access from your address.<br><br>' +
   'If you believe that is a mistake, contact whoever runs this receiver.'); }
+
+/** ★★ Disconnected by the owner from the admin page. Not a ban, and not a fault — said so, with
+ *  no retry button: the server turns this session away for a few minutes regardless. */
+function showKicked() { showRefusal('DISCONNECTED',
+  'This receiver\'s owner has disconnected your session.<br><br>' +
+  'You can try again in a few minutes.'); }
 
 /** ★★★ THE IDLE RE-LOCK, as a PILL — not an overlay, and the difference is the whole point.
  *  Nothing has stopped: the audio is still playing, the decoder is still decoding, the session
