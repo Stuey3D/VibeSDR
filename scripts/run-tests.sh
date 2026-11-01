@@ -565,6 +565,9 @@ if node --no-warnings scripts/test-web-control-colours.mjs; then pass=$((pass+1)
 # ★★ The page's panels where they belong: two dropped </div>s put the whole MAIN MENU inside a hidden decoder panel (2026-10-26).
 printf '\n\033[1m── test-web-markup-nesting ──\033[0m\n'
 if node scripts/test-web-markup-nesting.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ THE WEB MEMORY BUDGET (memBudget.ts): a 1 GB Pi or a small-screen handheld gets a small waterfall history, an
+#    unknown desktop keeps today's 2560-row ring, and the ring never drops below the display (2026-11-01).
+if node --no-warnings scripts/test-web-mem-budget.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ THE DESKTOP BAR STAYS GONE. The compact card (#mcard) is the web layout at every width; the old
 #     bar shipped hidden for months, still wired, and fixes landed on it that reached nobody. Checks the
 #     BUILT page (web/dist — run node scripts/build-web.mjs): no removed id as an element, a selector or

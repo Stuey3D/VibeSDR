@@ -17,6 +17,7 @@
  */
 
 import { RowPacer } from './wfPacing';
+import { memClass, ringRowsFor } from './memBudget';
 import type { WfScroll } from '../../../src/assets/wfRowTarget.ts';
 import { WfRowMerge, dbPerUnit } from '../../../src/assets/wfCombine.ts';
 import { SignalProcessor, type SignalProcessorSettings } from '../../../src/assets/signalProcessor';
@@ -99,6 +100,10 @@ export function renderDpr(): number { return Math.min(RENDER_SCALE, window.devic
  *  (history preserved for free) — the display just shows more/fewer of its newest rows. Grows only if a
  *  display is somehow taller than this. */
 const GL_RING_ROWS = 2560;
+/** ★★ What one GPU ring row costs: the detailed row (RING_W bytes), the full-capture layer's row (floor + 2×cells + 4,
+ *  ≤ ~1 KB) and the six per-row Float64 maps (xfA…xfM). The ring is sized from a BYTE budget (memBudget.ts), so a small
+ *  screen on a 1 GB board keeps ~2 screens of history instead of five (2026-11-01). */
+const GL_ROW_BYTES = RING_W + 1024 + 6 * 8;
 
 export class Waterfall {
   private canvas: HTMLCanvasElement;
@@ -934,7 +939,7 @@ export class Waterfall {
       // ANY bin count the server sends.
       const rowIn = resampleRow(blend, n, this.ringBuf);
       if (this.glCols !== RING_W || this.gl.rows < wfH) {
-        this.gl.ensureRing(RING_W, Math.max(GL_RING_ROWS, wfH));
+        this.gl.ensureRing(RING_W, ringRowsFor(GL_ROW_BYTES, wfH, Math.max(GL_RING_ROWS, wfH)));
         this.glCols = RING_W;
       }
       const rows = this.gl.rows;
@@ -960,7 +965,10 @@ export class Waterfall {
     this.xfA[this.head] = 1; this.xfB[this.head] = 0; this.xfS[this.head] = cSpan; this.xfL[this.head] = cLo;
     this.xfX[this.head] = 0;
     // ★★ V12 the full-capture layer on the 2D path: a coloured WIDE_TEX-wide row in its own ring canvas, same row index.
-    if (this.wideEver) {
+    // ★★ Not on a small-memory browser: the layer's ring canvas is WIDE_TEX × the waterfall × 4 bytes (4.9 MB at 600
+    //    rows) ON TOP of the waterfall canvas itself — the 2D path is the one a Pi without GPU acceleration takes. There
+    //    the history outside the view stays black on a zoom-out, as it did before the layer existed (memBudget.ts).
+    if (this.wideEver && memClass() === 'full') {
       this.xfX[this.head] = this._coarseFor(cLo, cSpan);
       this._ensureWfC(H);
       if (this.rowImgC && this.wfCCtx) {
