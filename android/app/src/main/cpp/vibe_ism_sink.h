@@ -24,12 +24,29 @@ struct Heard {
     std::string core;
 };
 
+/** ★ V12 2026-11-01 (the ISM map, "stations received" in the gallery): one packet from a MESH NODE WITH A POSITION.
+ *  ★★★ The position is already the PUBLISHED one (vibe_lora_track.h publishedPos: a person's node rounded to ~1 km and
+ *      `approx`); there is no field a message's text could travel in. */
+struct NodeFix {
+    std::string net;      ///< "meshcore" | "meshtastic"
+    std::string type;     ///< "repeater" | "room" | "sensor" | "companion"
+    std::string name;     ///< the node's advertised name (or its id)
+    std::string node;     ///< its id ("!a1b2c3d4" / a MeshCore key prefix) — what makes two names one node
+    double lat = 0, lon = 0;
+    bool approx = false;
+    int hops = -1;
+    float snr = 0;
+    double freqHz = 0;
+};
+
 /** ★ Called on the ISM decoder's OWN thread (never the DSP thread): heard() for each new reading, tick() about once a
  *  second, finish() once when the service stops (a band change, leaving ISM, a clean shutdown). */
 class Sink {
 public:
     virtual ~Sink() = default;
     virtual void heard(const Heard& h) = 0;
+    /** ★ V12: a mesh node with a position was heard (every packet, not only news — the card counts them). */
+    virtual void node(const NodeFix&) {}
     virtual void tick() {}
     virtual void finish() {}
 };

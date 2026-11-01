@@ -14637,6 +14637,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (ismOrigin_ != "background" && !g_gallerySaveLive.load()) return nullptr;
         vibe::ismgal::DayLog::Options o;
         o.bandId = b.id; o.bandName = b.name; o.bandHz = b.centreHz; o.origin = ismOrigin_; o.profile = ismProfile_;
+        o.rxLat = g_bgLat.load(); o.rxLon = g_bgLon.load();   // ★ V12: the "stations received" card's furthest node (NaN = not set)
         return std::make_shared<vibe::ismgal::DayLog>(g, o);
     }
 

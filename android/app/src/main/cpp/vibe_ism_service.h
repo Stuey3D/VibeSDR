@@ -905,10 +905,16 @@ private:
             if (!lh.empty()) {
                 const double tl = now();
                 std::vector<vibelora::Event> ev;
-                for (const auto& h : lh) mesh_.accept(h.m, tl, sink_ ? &ev : nullptr);
-                if (!ev.empty() && sink_) {
+                std::vector<vibelora::Fix> fx;
+                for (const auto& h : lh) mesh_.accept(h.m, tl, sink_ ? &ev : nullptr, sink_ ? &fx : nullptr);
+                if ((!ev.empty() || !fx.empty()) && sink_) {
                     auto s = sink_; lk.unlock();
                     for (const auto& e : ev) { Heard hd; hd.kind = e.kind; hd.name = e.name; hd.line = e.line; hd.freqHz = e.freqHz; s->heard(hd); }
+                    // ★ V12: positioned mesh nodes — the gallery's "stations received" card (vibe_ism_gallery.h NodeCard)
+                    for (const auto& f : fx) {
+                        NodeFix n; n.net = f.net; n.type = f.type; n.name = f.name; n.node = f.node; n.lat = f.lat; n.lon = f.lon;
+                        n.approx = f.approx; n.hops = f.hops; n.snr = f.snr; n.freqHz = f.freqHz; s->node(n);
+                    }
                     lk.lock();
                 }
             }
