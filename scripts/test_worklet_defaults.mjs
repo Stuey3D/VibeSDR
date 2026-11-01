@@ -291,51 +291,18 @@ function runFrames(what, fc, shared, extra = {}) {
   }
 }
 
-// The waterfall's boost / low-fps glide (WaterfallView.tsx glideCb) — ★★ POWER (audit 2026-10-01): it
-// replaced a withTiming that wrote the full-screen shader's uniform on every 120 Hz frame.
+// The waterfall's boost / low-fps glide (WaterfallView.tsx glideCb / glideTick) — RETIRED by f32816c74 (2026-10-28, "App
+// waterfall: motion-compensated interpolation, a steady pace at 120 Hz"): the per-arrival glide jumped the waterfall a
+// buffer forward at the start of every gesture and stacked a second motion on a slow feed's repeat rows. Its job is the
+// display driver's now (paceTick, src/utils/wfPace.ts — its pace is test_wf_pace.ts), and the 2026-10-01 power audit's
+// rule moved with it: a slow feed's continuous write at REST is ≤ 60 Hz (pWrote). So: the old glide must not come back,
+// and the worklet that carries the ≤ 60 Hz rule must exist.
 {
-  const sleeps = [];
-  const fc = frameCallback('src/components/WaterfallView.tsx', 'glideStart.value');
-  if (fc) {
-    let writes = 0, frac = 0;
-    const scrollFrac = { get value() { return frac; }, set value(v) { writes++; frac = v; } };
-    const S = { specDead: sv(false), glideStart: sv(-1), glideLast: sv(0), glideDur: sv(125),
-                glideAsked: sv(0), glideGen: sv(9), scrollFrac };
-    const closure = {};
-    for (const k of fc.captured) {
-      if (k in S) closure[k] = S[k];
-      else if (k === 'glideSleep') closure[k] = (g) => sleeps.push(g);
-      else if (k === 'runOnJS') closure[k] = (fn) => fn;
-      else { fail(`glideCb captures '${k}', which this harness does not know — teach it`); }
-    }
-    // ★ The glide is glideTick(ts) now — one worklet shared by the JS path's glideCb and the native engine's poll
-    //   (2026-10-12) — returning TRUE when it is time to sleep; the callback then asks with the glide's gen.
-    const tick = onUi({ __initData: { code: fc.code }, __closure: closure });
-    const cb = (fi) => { if (tick(fi.timestamp)) sleeps.push(S.glideGen.value); };
-    const glide = (dt, frames, t0) => { let t = t0; for (let n = 0; n < frames; n++) { t += dt; cb({ timestamp: t, timeSincePreviousFrame: dt }); } return t; };
-    // 120 Hz: a 125 ms glide (an 8 fps feed) is 15 display frames — it must be drawn on ≤ 8 of them,
-    // and land EXACTLY on 1.
-    let t = 0;
-    tryRun('glide at 120 Hz', () => { cb({ timestamp: t, timeSincePreviousFrame: null }); t = glide(1000 / 120, 16, t); });
-    if (frac === 1) pass(); else fail(`the glide must land exactly on 1, it ended at ${frac}`);
-    if (writes >= 6 && writes <= 9) pass(); else fail(`a 125 ms glide at 120 Hz should be drawn ~8 times (≤ 60 Hz), it was drawn ${writes} times`);
-    // 60 Hz: every frame is drawn, as before — a non-ProMotion phone is untouched.
-    frac = 0; writes = 0; S.glideStart.value = -1;
-    tryRun('glide at 60 Hz', () => { cb({ timestamp: t, timeSincePreviousFrame: null }); t = glide(1000 / 60, 8, t); });
-    if (writes >= 7 && frac === 1) pass(); else fail(`at 60 Hz every frame of the glide should draw (${writes} writes, ended ${frac})`);
-    // Linear in time: halfway through, the drawn value is where the withTiming's would be.
-    frac = 0; writes = 0; S.glideStart.value = -1;
-    cb({ timestamp: 1000, timeSincePreviousFrame: null });
-    glide(1000 / 120, 8, 1000);   // 66.7 ms of 125
-    if (Math.abs(frac - 66.67 / 125) < 0.07) pass(); else fail(`halfway the glide should read ~0.53, it read ${frac}`);
-    // Idle after the glide ends: stays alive across a normal gap, then asks to sleep ONCE with its gen.
-    frac = 0; S.glideStart.value = -1; sleeps.length = 0; S.glideAsked.value = 0;
-    cb({ timestamp: 5000, timeSincePreviousFrame: null });
-    glide(1000 / 120, 30, 5000);   // 250 ms: glide done, inside the 250 ms grace
-    if (sleeps.length === 0) pass(); else fail('the glide asked to sleep inside the grace after it ended — a 10 fps feed would stop/start it per row');
-    glide(1000 / 120, 60, 5250);
-    if (sleeps.length === 1 && sleeps[0] === 9) pass(); else fail(`the glide should ask to sleep once with gen 9 after the grace, asked ${JSON.stringify(sleeps)}`);
-  }
+  const wv = workletCodes(compile(path.join(ROOT, 'src/components/WaterfallView.tsx')));
+  if (!wv.some(c => c.includes('glideStart.value'))) pass();
+  else fail('WaterfallView: a worklet still drives the per-arrival glide (glideStart) — retired by f32816c74');
+  const pace = wv.find(c => c.includes('pWrote.value'));
+  if (pace) pass(); else fail('WaterfallView: no worklet carries the ≤ 60 Hz at-rest write rule (pWrote) — has paceTick moved?');
 }
 
 console.log(`worklets as the UI thread runs them: ${passes} passed, ${fails} failed (${scanned} files, ${worklets} worklets)`);
