@@ -32,7 +32,7 @@
 /** ★ 75 s of nothing ends a message whose NNNN was lost. A NAVTEX message never pauses mid-text (100 baud, FEC
  *  repeats every character), so a minute of silence means the transmission has ended, not a gap in it — and it is
  *  short enough that a reader is not left looking at "receiving" long after the station has gone quiet. */
-import { navtexStationLabel } from './navtexStations.generated.ts';   // ★ .ts: Node runs this file directly (scripts/test_navtex.ts)
+import { navtexLabelOf, navtexResolve, navtexStartLostLabel, navtexStartLostResolve, type NavtexResolution } from './navtexStations.generated.ts';   // ★ .ts: Node runs this file directly (scripts/test_navtex.ts)
 export const NAVTEX_END_LOST_MS = 75_000;
 /** Letters/digits an orphan fragment (no header seen) must hold before it is shown as a "[start lost]" message. */
 export const ORPHAN_MIN_ALNUM = 16;
@@ -113,10 +113,26 @@ export interface NavtexPlace { dialHz: number; lat: number; lon: number }
  *  count: "Station G · Met warning · #98 · 2 repaired · 1 lost" — or "· no errors" when every character read clean.
  *  ★ With `place`, the station by name: "B · Oostende, Belgium 🇧🇪 · Met warning · #10" — the server's gallery titles
  *    use the same table and rule (vibe_navtex_stations.h). */
+/** ★ 2026-11-01: the station's resolution for this message — with its start time and header, so a corrupted header letter
+ *  reads "Suspected <station>" on that station's letter; a start-lost message only from its own text. null = none. */
+export function navtexStationOf(m: NavtexMessage, place?: NavtexPlace | null): NavtexResolution | null {
+  if (!place) return null;
+  const utc = m.startedAt > 0 ? Math.floor(m.startedAt / 1000) : NaN;
+  if (m.startLost) return navtexStartLostResolve(place.dialHz, place.lat, place.lon, m.text, utc);
+  return navtexResolve(m.station, place.dialHz, place.lat, place.lon, m.text, utc, m.id ?? '');
+}
+/** Why that station, in plain English — this message's evidence (empty when none was named). */
+export function navtexStationWhy(m: NavtexMessage, place?: NavtexPlace | null): string[] {
+  return navtexStationOf(m, place)?.why ?? [];
+}
+
 export function navtexTitle(m: NavtexMessage, place?: NavtexPlace | null): string {
-  if (m.startLost) return 'Start lost';
+  if (m.startLost) {
+    const l = place ? navtexStartLostLabel(place.dialHz, place.lat, place.lon, m.text, m.startedAt > 0 ? Math.floor(m.startedAt / 1000) : NaN) : null;
+    return l ? `Start lost · ${l}` : 'Start lost';
+  }
   const parts: string[] = [];
-  parts.push(place ? navtexStationLabel(m.station, place.dialHz, place.lat, place.lon, m.text)
+  parts.push(place ? navtexLabelOf(m.station, navtexStationOf(m, place))
                    : m.station ? `Station ${m.station}` : 'Station ?');
   parts.push(navtexSubject(m.subject) ?? 'Subject ?');
   parts.push(m.serial ? `#${m.serial}` : '#??');
@@ -169,7 +185,9 @@ export function navtexFileText(m: NavtexMessage, place?: NavtexPlace | null): st
   const when = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} `
              + `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())} UTC`;
   const pct = navtexLostPct(m);
-  const head = `NAVTEX · ${navtexTitle(m, place)}\nReceived ${when}${pct != null ? ` · ${pct}% of characters lost` : ''}`;
+  const why = navtexStationWhy(m, place);
+  const head = `NAVTEX · ${navtexTitle(m, place)}\nReceived ${when}${pct != null ? ` · ${pct}% of characters lost` : ''}`
+             + (why.length ? `\nWhy: ${why.join('; ')}` : '');
   return `${head}\n\n${navtexBody(m)}\n`;
 }
 

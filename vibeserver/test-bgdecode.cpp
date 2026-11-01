@@ -397,7 +397,7 @@ static void navtexStations() {
     ok(L('B', 489500) == "B \xc2\xb7 Oostende, Belgium \xf0\x9f\x87\xa7\xf0\x9f\x87\xaa", "B on 490 = Oostende, Belgium + flag: " + L('B', 489500));
     ok(starts(L('U', 489500), "U \xc2\xb7 Cullercoats, United Kingdom"), "U on 490 = Cullercoats");
     ok(starts(L('A', 489500), "A \xc2\xb7 Malin Head, Ireland"), "A on 490 = Malin Head");
-    ok(starts(L('L', 489500), "L \xc2\xb7 Hamburg, Germany"), "L on 490 = Hamburg");
+    ok(starts(L('L', 489500), "L \xc2\xb7 Pinneberg, Germany"), "L on 490 = Pinneberg");
     ok(starts(L('G', 517500), "G \xc2\xb7 Cullercoats"), "G on 518 = Cullercoats");
     ok(starts(L('V', 517500), "V \xc2\xb7 Oostende"), "V on 518 = Oostende");
     ok(starts(L('L', 517500), "L \xc2\xb7 Rogaland, Norway"), "L on 518 = Rogaland");
@@ -426,25 +426,27 @@ static void navtexStations() {
           "I SISTEMI DI AUSILIO ALLA NAVIGAZIONE ISTALLATI NON SONO FUNZIONANTI\nNNNN";
       ok(L('E', 489500, MONDOLFO) == "E \xc2\xb7 Mondolfo, Italy " + IT, "\xe2\x98\x85 the Mondolfo message \xe2\x86\x92 Mondolfo, Italy: " + L('E', 489500, MONDOLFO));
       std::string ancona = MONDOLFO; ancona.replace(ancona.find("ZCZC EA17"), 9, "ZCZC TA17"); ancona.replace(ancona.find("MONDOLFO RADIO"), 14, "ANCONA RADIO");
-      ok(L('T', 489500, ancona) == "T \xc2\xb7 Ancona Radio, Italy " + IT + "?", "(b) not in the table, named by its text, positions + Italian rule out Niton/Tarifa: " + L('T', 489500, ancona));
-      ok(L('T', 489500, "ZCZC TA17\nANCONA RADIO\nI SISTEMI DI AUSILIO ALLA NAVIGAZIONE NON SONO FUNZIONANTI SULLE PIATTAFORME") == "T \xc2\xb7 Ancona Radio, Italy " + IT + "?",
-         "(b) Italian, no positions \xe2\x86\x92 Italy from the language");
-      ok(L('T', 489500, "ZCZC TA17\nWIDGET RADIO\nGALE WARNING\nSTORM IN 30-00N 040-00W") == "T \xc2\xb7 Widget Radio?", "(b) no sound country \xe2\x86\x92 the name only");
-      ok(L('M', 517500, "ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E") == "M \xc2\xb7 Oostende, Belgium \xf0\x9f\x87\xa7\xf0\x9f\x87\xaa?",
-         "(b) a table station on another letter names itself");
+      // ★ 2026-11-01: a name the table does not have is NEVER shown ("Condogno Radio, Italy?" did not exist) — the letter only
+      ok(L('T', 489500, ancona) == "Station T", "(b) not in the table, positions + Italian rule out Niton/Tarifa \xe2\x86\x92 the letter only: " + L('T', 489500, ancona));
+      ok(L('T', 489500, "ZCZC TA17\nANCONA RADIO\nI SISTEMI DI AUSILIO ALLA NAVIGAZIONE NON SONO FUNZIONANTI SULLE PIATTAFORME") == "Station T",
+         "(b) Italian, no positions, an unknown name \xe2\x86\x92 the letter only");
+      ok(L('T', 489500, "ZCZC TA17\nWIDGET RADIO\nGALE WARNING\nSTORM IN 30-00N 040-00W").find("Widget") == std::string::npos, "(b) never 'Widget Radio'");
+      ok(L('M', 517500, "ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E") == "M \xc2\xb7 Suspected Oostende, Belgium \xf0\x9f\x87\xa7\xf0\x9f\x87\xaa",
+         "(b) a table station on another letter names itself \xe2\x86\x92 Suspected");
       ok(starts(L('T', 489500, "ZCZC TA17\nWIDGET RADIO\nTHE BUOY IS MISSING AND WILL BE REPLACED FROM MONDAY"), "T \xc2\xb7 Niton, United Kingdom"), "(b) English Niton speaks \xe2\x86\x92 Niton");
       ok(starts(L('T', 489500, "ZCZC TA17\nWIDGET RADIO\nWRECK 50-30N 001-10W"), "T \xc2\xb7 Niton, United Kingdom"), "(b) positions that fit Niton \xe2\x86\x92 Niton");
       const std::string NITON_FR = "ZCZC TA45\n230800 UTC OCT 26\nORIGINE METEO-FRANCE\nBULLETIN METEOROLOGIQUE SPECIAL POUR LA MANCHE\n"
           "AVIS DE GRAND FRAIS A COUP DE VENT SUR LES ZONES ET DANS LE PAS DE CALAIS. MER AGITEE A FORTE ENTRE LE CAP ET LA HAGUE\nNNNN";
       ok(L('T', 489500, NITON_FR) == "T \xc2\xb7 Niton, United Kingdom \xf0\x9f\x87\xac\xf0\x9f\x87\xa7", "\xe2\x98\x85 Niton T in French stays Niton: " + L('T', 489500, NITON_FR));
       ok(starts(L('T', 489500, NITON_FR + "\n49-50N 001-20W 50-10.5N 000-30.0E"), "T \xc2\xb7 Niton, United Kingdom"), "Niton T French with Channel positions");
-      ok(starts(L('S', 517500, "NCC-HAMBURG\nNAUT. WARN."), "S \xc2\xb7 Hamburg, Germany"), "S 518 = Hamburg (supplement)");
+      ok(starts(L('S', 517500, "NCC-HAMBURG\nNAUT. WARN."), "S \xc2\xb7 Pinneberg, Germany"), "S 518 = Pinneberg (supplement)");
       ok(starts(L('S', 4209500, "GREEK NAVTEX 4209.5\n35-20N 025-10E"), "S \xc2\xb7 Irakleio, Greece"), "HF 4209.5 letter from the supplement");
-      ok(navtex::nameable('T', 489500, LA, LO, ancona) && !navtex::nameable('W', 517500, LA, LO, ""), "the gallery names a self-named station, never the 'or' pair");
+      ok(navtex::nameable('M', 517500, LA, LO, "ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E") && !navtex::nameable('W', 517500, LA, LO, ""),
+         "the gallery names a self-named station, never the 'or' pair");
       auto p = navtex::positions(" 44 31.4N A   012 30.6E  GARIBALDI A");
       ok(p.size() == 1 && std::fabs(p[0].first - 44.5233) < 0.01 && std::fabs(p[0].second - 12.51) < 0.01 && navtex::positions("51-10N AND 002-00E").empty(),
          "ITA2: a lost '-' printed as A between the halves; a word is not"); }
-    ok(starts(L('L', 489500, "NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E"), "L \xc2\xb7 Hamburg, Germany"), "German comma decimals");
+    ok(starts(L('L', 489500, "NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E"), "L \xc2\xb7 Pinneberg, Germany"), "German comma decimals");
     ok(starts(L('J', 517500, "SWEDISH NAV WARN 225/26\nBOTHNIAN SEA. 60-40.1N 017-55.0E"), "J \xc2\xb7 Stockholm, Sweden"), "J with a Baltic position → Stockholm");
     ok(L('L', 489500, "NCC-HAMBURG", -33.9, 18.4).find(" \xc2\xb7 DX 9,") != std::string::npos, "named from far away → DX 9,…: " + L('L', 489500, "NCC-HAMBURG", -33.9, 18.4));
     { auto P = navtex::positions;
@@ -455,7 +457,7 @@ static void navtexStations() {
          "a lost '_', out-of-range values and plain numbers are not positions"); }
     ok(L('B', 489500, "", NAN, NAN) == "Station B", "no position → the letter only");
     ok(starts(L('B', 489500, "OOSTENDERADIO NAV WARNING", NAN, NAN), "B \xc2\xb7 Oostende"), "no position, the text names it");
-    ok(starts(L('L', 489500, "NCC-HAMBURG", -33.9, 18.4), "L \xc2\xb7 Hamburg"), "the text wins wherever the server is");
+    ok(starts(L('L', 489500, "NCC-HAMBURG", -33.9, 18.4), "L \xc2\xb7 Pinneberg"), "the text wins wherever the server is");
     ok(L('B', 4209500) == "Station B", "HF: no HF letters in Pub. 117");
     ok(L('B', 10e6) == "Station B", "not a NAVTEX channel");
     ok(L('B', 489500, "", -33.9, 18.4) == "Station B", "Cape Town: nothing within reach");

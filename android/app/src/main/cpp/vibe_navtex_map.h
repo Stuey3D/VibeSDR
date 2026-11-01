@@ -72,7 +72,9 @@ inline bool jnum(const std::string& l, const char* key, double& out) {
  *  "G · Cullercoats, United Kingdom 🇬🇧 · Nav warning · #98 · no errors"   one station named
  *  "G · Name, Country 🇨🇦 · DX 4,700 km · Met warning · #02"                 …and far away
  *  "W · Corsen 🇫🇷 or Valentia 🇮🇪? · Nav warning · #12"                       the label's pair
- *  "W · Somewhere, Country 🇫🇷? · …"                                        named by the message's own text
+ *  "W · Somewhere, Country 🇫🇷? · …"                                        named by the message's own text (before 2026-11-01)
+ *  "E · Suspected Mondolfo, Italy 🇮🇹 · …"                                   the label's LIKELY (2026-11-01)
+ *  "Start lost · N · Suspected Piombino, Italy 🇮🇹 · …"                      a start-lost message named by its own text
  *  "Station G · Met warning · #98"                                           no station could be named */
 struct Title {
     char b1 = 0, b2 = 0;
@@ -101,9 +103,17 @@ inline std::string placeName(std::string s) {
     while (!s.empty() && ((unsigned char)s.back() >= 0x80 || s.back() == ' ' || s.back() == '?')) s.pop_back();   // the flag, "?"
     return s;
 }
+inline Title parseTitle(const std::vector<std::string>& f, bool lostStart);
 inline Title parseTitle(const std::string& title) {
-    Title t;
     const auto f = splitDots(title);
+    if (f.empty()) return Title();
+    // ★ 2026-11-01: "Start lost · N · Suspected Piombino, Italy 🇮🇹 · …" — a start-lost message its own text names (likely)
+    std::vector<std::string> g;
+    if (f[0] == "Start lost" && f.size() > 2 && f[1].size() == 1 && f[1][0] >= 'A' && f[1][0] <= 'Z') { g.assign(f.begin() + 1, f.end()); return parseTitle(g, true); }
+    return parseTitle(f, false);
+}
+inline Title parseTitle(const std::vector<std::string>& f, bool lostStart) {
+    Title t;
     size_t i = 0;
     if (f.empty()) return t;
     if (f[0].size() == 9 && f[0].compare(0, 8, "Station ") == 0 && f[0][8] >= 'A' && f[0][8] <= 'Z') { t.b1 = f[0][8]; t.generic = true; i = 1; }
@@ -112,7 +122,9 @@ inline Title parseTitle(const std::string& title) {
         const std::string& p = f[1];
         const size_t o = p.find(" or ");
         if (o != std::string::npos && !p.empty() && p.back() == '?') { t.pair = true; t.name = placeName(p.substr(0, o)); t.alt = placeName(p.substr(o + 4)); }
-        else { t.name = placeName(p); t.textNamed = !p.empty() && p.back() == '?'; }
+        // ★ 2026-11-01: "Suspected Mondolfo, Italy 🇮🇹" — the label's LIKELY (a clue, a corrected header letter)
+        else if (p.compare(0, 10, "Suspected ") == 0) { t.name = placeName(p.substr(10)); t.textNamed = true; }
+        else { t.name = placeName(p); t.textNamed = (!p.empty() && p.back() == '?') || lostStart; }
         i = 2;
         if (i < f.size() && f[i].compare(0, 3, "DX ") == 0) ++i;
     } else return t;
@@ -129,7 +141,8 @@ inline Title parseTitle(const std::string& title) {
 // ── the stations ─────────────────────────────────────────────────────────────────────────────────────────────────────
 inline const navtex::Station* byName(char b1, double band, const std::string& name, bool anyBand) {
     size_t n = 0; const navtex::Station* t = navtex::stations(n);
-    const std::string want = navtex::letters(name);
+    // ★ an older title's name for the station ("Hamburg", before 2026-11-01) → the one the table shows (Pinneberg)
+    const std::string want = navtex::letters(navtex::canonicalName(name));
     if (want.empty()) return nullptr;
     for (size_t k = 0; k < n; ++k) if (t[k].b1 == b1 && (anyBand || t[k].khz == band) && navtex::letters(t[k].name) == want) return &t[k];
     if (anyBand) for (size_t k = 0; k < n; ++k) if (navtex::letters(t[k].name) == want) return &t[k];
