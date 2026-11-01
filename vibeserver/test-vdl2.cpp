@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
         std::string s(t);
         auto vi = [&](const char* k, bool& v) { const size_t p = s.find(k); if (p != std::string::npos) v = std::atoi(s.c_str() + p + std::strlen(k)) != 0; };
         auto vf = [&](const char* k, float& v) { const size_t p = s.find(k); if (p != std::string::npos) v = float(std::atof(s.c_str() + p + std::strlen(k))); };
-        vi("g=", T.gardner); vf("bw=", T.rxBw); vi("deep=", T.deepStop); { const size_t q = s.find("rx="); if (q != std::string::npos) T.rxKind = std::atoi(s.c_str() + q + 3); } vf("tr=", T.rxTr); vi("coh=", T.coherent); vf("pa=", T.pllA); vf("pb=", T.pllB); vi("er=", T.erasures); vi("rrc=", T.rrc); vf("q=", T.syncQ); vf("fg=", T.freqGain); vf("tg=", T.tGain);
+        vi("g=", T.gardner); vf("bw=", T.rxBw); vi("deep=", T.deepStop); vi("fd=", T.fdFilter); vi("poly=", T.polyInterp); { const size_t q = s.find("nt="); if (q != std::string::npos) T.interpTaps = std::atoi(s.c_str() + q + 3); } vf("beta=", T.kaiserBeta); vf("gate=", T.gate); { const size_t q = s.find("shape="); if (q != std::string::npos) T.fdShape = std::atoi(s.c_str() + q + 6); } vf("bin=", T.binHz); { const size_t q = s.find("rx="); if (q != std::string::npos) T.rxKind = std::atoi(s.c_str() + q + 3); } vf("tr=", T.rxTr); vi("coh=", T.coherent); vf("pa=", T.pllA); vf("pb=", T.pllB); vi("er=", T.erasures); vi("rrc=", T.rrc); vf("q=", T.syncQ); vf("fg=", T.freqGain); vf("tg=", T.tGain);
     }
     if (argc > 1 && !std::strcmp(argv[1], "--cu8")) return cu8(argc, argv);
     const bool quick = argc > 1 && !std::strcmp(argv[1], "--quick");

@@ -46,7 +46,7 @@ static constexpr uint8_t kUw[16] = { 0b000, 0b010, 0b011, 0b110, 0b000, 0b001, 0
 inline int grayOf(int k) { return k ^ (k >> 1); }
 inline int stepOf(int g) { int k = g; for (int s = g >> 1; s; s >>= 1) k ^= s; return k & 7; }
 
-struct Tuning { bool deepStop = true; float rxBw = 5000.f, rxTr = 4000.f; int rxKind = 0; bool rrc = false; bool erasures = true; bool gardner = true; bool coherent = true; float pllA = 0.15f, pllB = 0.004f; float syncQ = 0.75f; float freqGain = 0.03f; float tGain = 0.01f; };
+struct Tuning { float gate = 2.0f; int interpTaps = 12; float kaiserBeta = 6.f; int fdShape = 0; bool polyInterp = true; float binHz = 300.f; bool fdFilter = true; bool deepStop = true; float rxBw = 4800.f, rxTr = 4500.f; int rxKind = 0; bool rrc = false; bool erasures = true; bool gardner = true; bool coherent = true; float pllA = 0.15f, pllB = 0.004f; float syncQ = 0.75f; float freqGain = 0.03f; float tGain = 0.01f; };
 inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("VDL2_DEBUG") != nullptr; return d; }
 
@@ -149,7 +149,9 @@ public:
             float s = 0; for (float v : h) s += v; for (float& v : h) v /= s;
         } else if (!tuning().rrc) h = vibedsp::designLowpass(double(tuning().rxBw + 0.5f * tuning().rxTr) / kWorkRate, double(tuning().rxTr) / kWorkRate, tuning().deepStop);
         else { float s = 0; for (float v : h) s += v * v; for (float& v : h) v /= std::sqrt(s); }
+        if (tuning().fdFilter && !tuning().rrc && tuning().rxKind == 0) h.assign(1, 1.0f);   // ★ the low-pass is the slicer's (Receiver)
         mf_.reset(new vibedsp::FirDecimator(h, 1));
+        passThrough_ = h.size() == 1;
         // the unique word's expected step between symbols i−1 and i (i = 0: from the ramp-up's 000)
         for (int i = 0; i < 16; ++i) {
             const int k = stepOf(kUw[i]);
@@ -161,26 +163,79 @@ public:
     float floorDb() const { return 10 * std::log10(floor_ + 1e-20f); }
 
     template <class Out> void feed(const cf32* z, int n, Out&& out) {
-        // 1. resample to 42 kS/s (cubic, Catmull–Rom) and filter
-        rs_.clear();
-        for (int i = 0; i < n; ++i) {
-            h_[0] = h_[1]; h_[1] = h_[2]; h_[2] = h_[3]; h_[3] = z[i];
-            while (mu_ < 1.0) {
-                const float m = float(mu_);
-                const cf32 p0 = h_[0], p1 = h_[1], p2 = h_[2], p3 = h_[3];
-                const cf32 a0 = -0.5f * p0 + 1.5f * p1 - 1.5f * p2 + 0.5f * p3, a1 = p0 - 2.5f * p1 + 2.0f * p2 - 0.5f * p3,
-                           a2 = -0.5f * p0 + 0.5f * p2;
-                rs_.push_back(((a0 * m + a1) * m + a2) * m + p1);
-                mu_ += step_;
+        // 1. resample to 42 kS/s and filter
+        if (tuning().polyInterp) resamplePoly_(z, n);
+        else {
+            rs_.clear();
+            for (int i = 0; i < n; ++i) {
+                h_[0] = h_[1]; h_[1] = h_[2]; h_[2] = h_[3]; h_[3] = z[i];
+                while (mu_ < 1.0) {
+                    const float m = float(mu_);
+                    const cf32 p0 = h_[0], p1 = h_[1], p2 = h_[2], p3 = h_[3];
+                    const cf32 a0 = -0.5f * p0 + 1.5f * p1 - 1.5f * p2 + 0.5f * p3, a1 = p0 - 2.5f * p1 + 2.0f * p2 - 0.5f * p3,
+                               a2 = -0.5f * p0 + 0.5f * p2;
+                    rs_.push_back(((a0 * m + a1) * m + a2) * m + p1);
+                    mu_ += step_;
+                }
+                mu_ -= 1.0;
             }
-            mu_ -= 1.0;
         }
+        if (passThrough_) { for (const cf32& v : rs_) sample_(v, out); return; }
         y_.resize(rs_.size() + 4);
         const int k = mf_->process(rs_.data(), int(rs_.size()), y_.data());
         for (int i = 0; i < k; ++i) sample_(y_[size_t(i)], out);
     }
 
 private:
+    /* ★★ THE RESAMPLER IS A FILTER TOO (2026-11-01). Catmull–Rom's 4 taps let the images of a ±9 kHz signal at 37.5 kS/s
+     *  fold back to −4.5…−9 kHz of the 42 kS/s stream at only ~25 dB down; the 58-tap FIR after it used to clean that up.
+     *  With the low-pass now in the slicer, the interpolator must reject the images itself: an 8-tap windowed sinc
+     *  (cut at the input's Nyquist, Kaiser β 6), 256 phases, the nearest phase per output. 8 complex MACs an output,
+     *  NEON / SSE2 (vibeavi::dot8). */
+    void resamplePoly_(const cf32* z, int n) {
+        if (pt_.empty()) {
+            pt_.resize(size_t(kPh) * size_t(nt_()));
+            auto bessel0 = [](double x) { double s = 1, t = 1; for (int k = 1; k < 25; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); s += t; } return s; };
+            const double beta = double(tuning().kaiserBeta);
+            for (int p = 0; p < kPh; ++p) {
+                const double mu = p / double(kPh);
+                double sum = 0;
+                const int NT = nt_(), H = NT / 2;
+                for (int j = 0; j < NT; ++j) {
+                    const double t = double(j - (H - 1)) - mu;         // taps at −(H−1)…+H around the output point
+                    const double sc = std::fabs(t) < 1e-9 ? 1.0 : std::sin(M_PI * t) / (M_PI * t);
+                    const double r = t / double(H);
+                    const double w = std::fabs(r) <= 1 ? bessel0(beta * std::sqrt(1 - r * r)) / bessel0(beta) : 0;
+                    pt_[size_t(p * NT + j)] = float(sc * w); sum += sc * w;
+                }
+                for (int j = 0; j < NT; ++j) pt_[size_t(p * NT + j)] = float(pt_[size_t(p * NT + j)] / sum);
+            }
+        }
+        // the input with 7 samples of history in front
+        const int NT = nt_(), HB = NT - 1;
+        if (int(hist_.size()) < HB) hist_.assign(size_t(HB), cf32(0, 0));
+        hist_.resize(size_t(HB) + size_t(n));
+        std::copy(z, z + n, hist_.begin() + HB);
+        rs_.clear();
+        // output k sits at input position pos (relative to hist_[3] = the first of the last-call's tail): taps hist_[i..i+7]
+        while (pos_ < double(n)) {
+            const int i = int(pos_);
+            int ph = int((pos_ - i) * kPh + 0.5), base = i;
+            if (ph == kPh) { ph = 0; ++base; }
+            rs_.push_back(NT == 8 ? vibeavi::dot8(pt_.data() + ph * 8, hist_.data() + base)
+                                  : vibedsp::dotCplx(pt_.data() + size_t(ph) * size_t(NT), reinterpret_cast<const float*>(hist_.data() + base), NT));
+            pos_ += step_;
+        }
+        pos_ -= double(n);
+        std::copy(hist_.end() - HB, hist_.end(), hist_.begin());
+        hist_.resize(size_t(HB));
+    }
+    static int nt_() { return tuning().interpTaps; }
+    static constexpr int kPh = 256;
+    std::vector<float> pt_;
+    std::vector<cf32> hist_;
+    double pos_ = 0;
+    bool passThrough_ = false;
     static constexpr int kRing = 512;      // samples kept (12 ms)
     cf32 at_(int64_t n) const { return ring_[size_t(n & (kRing - 1))]; }
     /** y at a fractional time (samples, absolute): linear between the two neighbours (4 samples a symbol). */
@@ -205,10 +260,10 @@ private:
         if (++pwN_ == 64) {
             const float e = pw_ / 64;
             if (floor_ <= 0) floor_ = e;
-            else if (e < 2.0f * floor_) floor_ += (e - floor_) * 0.02f;
+            else if (e < tuning().gate * floor_) floor_ += (e - floor_) * 0.02f;
             else floor_ *= 1.0002f;                          // a channel that stays busy still lets its floor rise
             lastPw_ = e;
-            active_ = e > 2.0f * floor_ ? 4 : std::max(0, active_ - 1);
+            active_ = e > tuning().gate * floor_ ? 4 : std::max(0, active_ - 1);
             pw_ = 0; pwN_ = 0;
         }
         ++st_.samples;
@@ -479,7 +534,25 @@ inline std::vector<double> defaultChannels() {
 class Receiver {
 public:
     Receiver(double rate, double hwCentreHz, const std::vector<double>& chanHz)
-        : mc_(rate, hwCentreHz, chanHz, 12500, 30000) {
+        : mc_(rate, hwCentreHz, chanHz, 12500, 30000, tuning().binHz) {
+        /* ★★ THE RECEIVE LOW-PASS IN THE FREQUENCY DOMAIN (2026-11-01): flat to rxBw, a raised-cosine roll to rxBw + rxTr,
+         *  nothing beyond — the same corners the 58-tap Blackman FIR had, applied to each channel's slice (bins of 293 Hz:
+         *  the 1024-point FFT keeps the response's tails inside overlap-save's discarded head). */
+        if (tuning().fdFilter) {
+            // ★ the magnitude of the very FIR it replaces (designLowpass, Blackman), so the swept corners hold exactly:
+            //   a raised-cosine 5→9 kHz in its place lost 13 frames on the Pi 500 capture and 7 on the Pi 2's
+            const auto taps = vibedsp::designLowpass(double(tuning().rxBw + 0.5f * tuning().rxTr) / kWorkRate, double(tuning().rxTr) / kWorkRate, tuning().deepStop);
+            for (size_t c = 0; c < chanHz.size(); ++c)
+                mc_.setResponse(c, [&](double f) {
+                    if (tuning().fdShape == 1) {
+                        const double a = std::fabs(f), p = tuning().rxBw, s = tuning().rxBw + tuning().rxTr;
+                        return a <= p ? 1.0 : a >= s ? 0.0 : 0.5 * (1 + std::cos(M_PI * (a - p) / (s - p)));
+                    }
+                    std::complex<double> acc(0, 0);
+                    for (size_t k = 0; k < taps.size(); ++k) acc += double(taps[k]) * std::polar(1.0, -2 * M_PI * f * double(k) / kWorkRate);
+                    return std::abs(acc);
+                });
+        }
         for (size_t c = 0; c < chanHz.size(); ++c) {
             demod_.emplace_back(new Demod(mc_.chanRate()));
             demod_.back()->setChannel(int(c), chanHz[c]);

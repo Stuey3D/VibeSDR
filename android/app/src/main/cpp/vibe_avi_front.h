@@ -14,17 +14,75 @@
 //   NCO at the channel rate, so every channel comes out centred on its own frequency.
 #pragma once
 #include "vibedsp/vibedsp.h"
+#include "vibedsp/simd_internal.h"
 
 #include <algorithm>
 #include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <vector>
 
 namespace vibeavi {
 
 using cf32 = vibedsp::cf32;
+
+/** out[k] = a[k] · b[k] · r (complex). NEON / SSE2 / scalar; the same products in the same order on all three. */
+inline void cmulRun(const cf32* a, const cf32* b, cf32 r, cf32* out, int n) {
+    const float* af = reinterpret_cast<const float*>(a); const float* bf = reinterpret_cast<const float*>(b);
+    float* of = reinterpret_cast<float*>(out);
+    int k = 0;
+#if VIBE_NEON
+    const float32x4_t rr = vdupq_n_f32(r.real()), ri = vdupq_n_f32(r.imag());
+    for (; k + 4 <= n; k += 4) {
+        const float32x4x2_t x = vld2q_f32(af + 2 * k), y = vld2q_f32(bf + 2 * k);
+        const float32x4_t pr = vsubq_f32(vmulq_f32(x.val[0], y.val[0]), vmulq_f32(x.val[1], y.val[1]));
+        const float32x4_t pi = vaddq_f32(vmulq_f32(x.val[0], y.val[1]), vmulq_f32(x.val[1], y.val[0]));
+        float32x4x2_t o;
+        o.val[0] = vsubq_f32(vmulq_f32(pr, rr), vmulq_f32(pi, ri));
+        o.val[1] = vaddq_f32(vmulq_f32(pr, ri), vmulq_f32(pi, rr));
+        vst2q_f32(of + 2 * k, o);
+    }
+#elif VIBE_SSE
+    const __m128 rr = _mm_set1_ps(r.real()), ri = _mm_set1_ps(r.imag());
+    for (; k + 4 <= n; k += 4) {
+        __m128 xr, xi, yr, yi;
+        vibedsp::sseLoad2(af + 2 * k, xr, xi); vibedsp::sseLoad2(bf + 2 * k, yr, yi);
+        const __m128 pr = _mm_sub_ps(_mm_mul_ps(xr, yr), _mm_mul_ps(xi, yi));
+        const __m128 pi = _mm_add_ps(_mm_mul_ps(xr, yi), _mm_mul_ps(xi, yr));
+        vibedsp::sseStore2(of + 2 * k, _mm_sub_ps(_mm_mul_ps(pr, rr), _mm_mul_ps(pi, ri)), _mm_add_ps(_mm_mul_ps(pr, ri), _mm_mul_ps(pi, rr)));
+    }
+#endif
+    for (; k < n; ++k) {
+        const float pr = af[2 * k] * bf[2 * k] - af[2 * k + 1] * bf[2 * k + 1], pi = af[2 * k] * bf[2 * k + 1] + af[2 * k + 1] * bf[2 * k];
+        of[2 * k] = pr * r.real() - pi * r.imag(); of[2 * k + 1] = pr * r.imag() + pi * r.real();
+    }
+}
+
+/** Σ t[j]·z[j], j < 8 (real taps, complex samples). NEON / SSE2 / scalar, the same pairwise order on all three. */
+inline cf32 dot8(const float* t, const cf32* z) {
+    const float* zf = reinterpret_cast<const float*>(z);
+#if VIBE_NEON
+    const float32x4x2_t a = vld2q_f32(zf), b = vld2q_f32(zf + 8);
+    const float32x4_t t0 = vld1q_f32(t), t1 = vld1q_f32(t + 4);
+    const float32x4_t re = vaddq_f32(vmulq_f32(t0, a.val[0]), vmulq_f32(t1, b.val[0]));
+    const float32x4_t im = vaddq_f32(vmulq_f32(t0, a.val[1]), vmulq_f32(t1, b.val[1]));
+    const float32x2_t r2 = vadd_f32(vget_low_f32(re), vget_high_f32(re)), i2 = vadd_f32(vget_low_f32(im), vget_high_f32(im));
+    return cf32(vget_lane_f32(r2, 0) + vget_lane_f32(r2, 1), vget_lane_f32(i2, 0) + vget_lane_f32(i2, 1));
+#elif VIBE_SSE
+    __m128 ar, ai, br, bi;
+    vibedsp::sseLoad2(zf, ar, ai); vibedsp::sseLoad2(zf + 8, br, bi);
+    const __m128 t0 = _mm_loadu_ps(t), t1 = _mm_loadu_ps(t + 4);
+    const __m128 re = _mm_add_ps(_mm_mul_ps(t0, ar), _mm_mul_ps(t1, br)), im = _mm_add_ps(_mm_mul_ps(t0, ai), _mm_mul_ps(t1, bi));
+    alignas(16) float r[4], i[4]; _mm_store_ps(r, re); _mm_store_ps(i, im);
+    return cf32((r[0] + r[2]) + (r[1] + r[3]), (i[0] + i[2]) + (i[1] + i[3]));
+#else
+    float r[4], i[4];
+    for (int l = 0; l < 4; ++l) { r[l] = t[l] * zf[2 * l] + t[l + 4] * zf[2 * l + 8]; i[l] = t[l] * zf[2 * l + 1] + t[l + 4] * zf[2 * l + 9]; }
+    return cf32((r[0] + r[2]) + (r[1] + r[3]), (i[0] + i[2]) + (i[1] + i[3]));
+#endif
+}
 
 class MultiChannel {
 public:
@@ -63,7 +121,7 @@ public:
             c.bin = int(std::lround(off / bin_));
             const double resid = off - c.bin * bin_;
             c.rot = std::polar(1.0, -2.0 * M_PI * resid / chRate_);
-            ch_.push_back(c);
+            ch_.push_back(std::move(c));
         }
     }
 
@@ -77,6 +135,25 @@ public:
     size_t channels() const { return ch_.size(); }
     bool inside(size_t c) const { return ch_[c].inside; }
     double chanHz(size_t c) const { return chanHz_[c]; }
+
+    /** ★★ A CHANNEL'S OWN RESPONSE IN THE FREQUENCY DOMAIN (V12 VDL2, 2026-11-01). `h(fHz)` is sampled on this channel's
+     *  bins (f relative to its centre) and applied to the slice before its inverse FFT, with a linear phase of half the
+     *  discarded head so the response's both tails land where overlap-save throws samples away. It REPLACES a
+     *  time-domain FIR after the channel (VDL2's 58-tap receive low-pass was 22 % of its whole Pi 2 instruction count):
+     *  the multiply is one per bin a block instead of 58 per output. Without a response a channel keeps the slicer's
+     *  standard quarter-taper (ACARS, HFDL unchanged). */
+    template <class H> void setResponse(size_t c, H&& h) {
+        Ch& ch = ch_[c];
+        ch.w.assign(size_t(chanBins_), cf32(0, 0));
+        const int half = chanBins_ / 2, d = chanBins_ / (2 * vibedsp::Channelizer::OVERLAP_DIV);
+        for (int k = 0; k < chanBins_; ++k) {
+            const int off = k < half ? k : k - chanBins_;
+            const double g = h(off * bin_) / double(n_);
+            const double a = -2.0 * M_PI * double(off) * double(d) / double(chanBins_);
+            ch.w[size_t(k)] = cf32(float(g * std::cos(a)), float(g * std::sin(a)));
+        }
+        if (!ch.inv) ch.inv.reset(new vibedsp::ComplexFFT(chanBins_, /*inverse=*/true));
+    }
 
     /** `out(int channel, const cf32* z, int n)`, once per channel per block (in channel order). */
     template <class Out> void feed(const cf32* iq, size_t n, Out&& out) {
@@ -96,7 +173,8 @@ public:
                 for (size_t c = 0; c < ch_.size(); ++c) {
                     Ch& h = ch_[c];
                     if (!h.inside) continue;
-                    const int k = chz_->extract(bins, h.bin, chanBins_, ob_.data(), *ctx_, bi);
+                    const int k = h.w.empty() ? chz_->extract(bins, h.bin, chanBins_, ob_.data(), *ctx_, bi)
+                                              : slice_(h, bins, bi, ob_.data());
                     // the residual offset: a rotator at the channel rate (renormalised each block)
                     std::complex<double> p = h.ph;
                     const std::complex<double> r = h.rot;
@@ -112,7 +190,27 @@ public:
     }
 
 private:
-    struct Ch { int bin = 0; bool inside = false; std::complex<double> rot{1, 0}, ph{1, 0}; };
+    struct Ch {
+        int bin = 0; bool inside = false; std::complex<double> rot{1, 0}, ph{1, 0};
+        std::vector<cf32> w;                       // its own response (setResponse), empty = the standard taper
+        std::unique_ptr<vibedsp::ComplexFFT> inv;
+    };
+    /** The slice × the channel's response × the block's phase reference, inverse-transformed; the head dropped. */
+    int slice_(Ch& h, const cf32* bins, long long bi, cf32* out) {
+        const int cb = chanBins_, half = cb / 2, m = n_ - 1;
+        sl_.resize(size_t(cb));
+        // the block's phase reference (overlap-save restarts each block's time origin), folded into the response
+        const double turns = std::fmod(double(h.bin) * double(bi) * double(chz_->hop()) / double(n_), 1.0);
+        const cf32 rot(float(std::cos(-2 * M_PI * turns)), float(std::sin(-2 * M_PI * turns)));
+        gat_.resize(size_t(cb));
+        for (int k = 0; k < cb; ++k) gat_[size_t(k)] = bins[(h.bin + (k < half ? k : k - cb)) & m];
+        cmulRun(gat_.data(), h.w.data(), rot, sl_.data(), cb);
+        h.inv->forward(sl_.data(), out);
+        const int drop = cb / vibedsp::Channelizer::OVERLAP_DIV, keep = cb - drop;
+        std::memmove(out, out + drop, size_t(keep) * sizeof(cf32));
+        return keep;
+    }
+    std::vector<cf32> sl_, gat_;
     double rate_, hw_, shared_ = 0, bin_ = 0, chRate_ = 0, span_ = 0;
     int n_ = 0, chanBins_ = 0;
     std::vector<double> chanHz_;
