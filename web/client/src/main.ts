@@ -8900,7 +8900,7 @@ function navDraw() {
 }
 async function navMapOpen() {
   if (!navView) navView = new TrackView({
-    title: 'NAVTEX', exitLabel: 'CLOSE MAP', listTitle: 'NAVTEX',
+    title: 'NAVTEX', profile: 'marine', exitLabel: 'CLOSE MAP', listTitle: 'NAVTEX',
     onExit: () => { navView?.hide(); if (navTimer) { clearTimeout(navTimer); navTimer = null; } },
     icon: (it) => it._ic, label: (it) => it._lb, card: (it) => it._cd, labelZoom: 3, focusZoom: 6, heard: (it) => it._h ?? 0,
     labelRank: (it) => it._rk ?? 0, arc: (it) => !!it._arc,
@@ -9036,7 +9036,7 @@ function aisUiOn() {
   if (spec) spec.aisHeld = true;
   closePanels();
   if (!aisView) aisView = new TrackView({
-    title: 'AIS · 161.975 + 162.025 MHz', exitLabel: 'EXIT AIS', listTitle: 'SHIPS', onExit: () => aisSetMode(false),
+    title: 'AIS · 161.975 + 162.025 MHz', profile: 'marine', exitLabel: 'EXIT AIS', listTitle: 'SHIPS', onExit: () => aisSetMode(false),
     icon: aisIcon, label: aisName, card: (v) => aisCard(v, myPos()),
     trail: (key, done) => { const m = Number(key); if (!(m > 0) || !spec) { done([]); return; } aisTrailWait.set(m, done); spec.aisTrail(m); },
   });
