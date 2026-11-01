@@ -9,7 +9,7 @@
 //      (a sensor sends its frame 2-6 times in a row), and only what it counts reaches this file. A belt-and-braces fold
 //      here does the same, so a second source can never double a line.
 //  • THE SUMMARY CARD — FT8's background summary, mirrored (vibe_bgdecode.h Ft8SummaryTap's rolling card): ONE standing
-//    card per band per day, rewritten in place (Store::replace — tmp + rename) at most once a minute and only when
+//    card per band per day, rewritten in place (Store::replace — tmp + rename) at most every 5 minutes and only when
 //    something new was heard, moved to the top of the list; written once more when ISM stops. "14 devices: 6 weather,
 //    5 TPMS, 2 key fobs, 1 doorbell / remote", the most heard, the newest, and the LAST READING OF EACH DEVICE.
 //
@@ -34,6 +34,7 @@
 #include "vibe_ism_sink.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -126,12 +127,63 @@ inline int nickOf(const std::string& name) {
     return n > 0 ? n : 0;
 }
 
+// ── ★★ V12 2026-11-01: "STATIONS RECEIVED" — the day's positioned mesh nodes, for the gallery's MAP ──────────────────────
+// Stuart: "being able to open up the map in the Gallery so that if I have this set as the background profile we can see
+// which stations we received". A third standing item per band per day, beside the log and the summary — the summary's
+// rules exactly: RAM only between writes, rewritten in place (tmp + rename) at most every 5 minutes and only when something
+// was heard, once more when ISM stops; found again and read back after a restart, a band change, a listener arriving
+// over background decoding or a profile switch (each a new DayLog adopting the same slot). Bounded: kMaxNodes, the least
+// recently heard go. It counts against the gallery's size cap like any item (Store).
+// ★★★ PRIVACY: only what NodeFix carries — the PUBLISHED position (a companion's rounded to ~1 km and marked "approx"),
+//     the node's advertised name and type. No message, ever.
+// The body is a readable .txt whose table the clients parse for the map (web/client/src/ism.ts ismNodesParse — keep the
+// two in step): one node a line, " · " between fields.
+struct NodeRow {
+    std::string net, type, name, node, origin;
+    double lat = 0, lon = 0; bool approx = false; int hops = -1; float snr = 0; double freqHz = 0;
+    int64_t first = 0, last = 0; uint64_t count = 0;
+};
+inline const char* netWord(const std::string& n) { return n == "meshcore" ? "MeshCore" : n == "meshtastic" ? "Meshtastic" : "LoRa"; }
+inline std::string netFromWord(const std::string& w) { return w == "MeshCore" ? "meshcore" : w == "Meshtastic" ? "meshtastic" : ""; }
+inline const char* typeWord(const std::string& t, int n) {
+    if (t == "repeater") return n == 1 ? "repeater" : "repeaters";
+    if (t == "room") return n == 1 ? "room server" : "room servers";
+    if (t == "sensor") return n == 1 ? "sensor" : "sensors";
+    return n == 1 ? "companion" : "companions";
+}
+inline std::string typeFromWord(const std::string& w) {
+    if (w == "repeater") return "repeater";
+    if (w == "room server") return "room";
+    if (w == "sensor") return "sensor";
+    if (w == "companion") return "companion";
+    return "";
+}
+/** A name as it may stand in one field of the table: printable, no " · " (the separator) inside it. */
+inline std::string fieldSafe(const std::string& s) {
+    std::string o = gallery::printable(s, 40), r;
+    for (size_t i = 0; i < o.size(); ++i) {
+        if ((unsigned char)o[i] == 0xC2 && i + 1 < o.size() && (unsigned char)o[i + 1] == 0xB7) { r += '-'; ++i; continue; }
+        r += o[i];
+    }
+    while (!r.empty() && r.back() == ' ') r.pop_back();
+    return r.empty() ? std::string("-") : r;
+}
+inline double kmBetween(double la1, double lo1, double la2, double lo2) {
+    const double r = M_PI / 180, p1 = la1 * r, p2 = la2 * r, dl = (lo2 - lo1) * r;
+    const double a = std::sin((p2 - p1) / 2) * std::sin((p2 - p1) / 2) + std::cos(p1) * std::cos(p2) * std::sin(dl / 2) * std::sin(dl / 2);
+    return 12742.0 * std::asin(std::min(1.0, std::sqrt(a)));
+}
+
 // ── One band, one day at a time ─────────────────────────────────────────────────────────────────────────────────────
 class DayLog : public vibeism::Sink {
 public:
     static constexpr size_t   kFlushBytes   = 8192;            // ★ the RAM buffer's size threshold
     static constexpr int64_t  kFlushSec     = 60;              // ★ …and its time threshold
-    static constexpr int64_t  kCardSec      = 60;              // ★ the card is rewritten at most this often
+    /** ★★ 2026-11-01 (SD wear, Stuart): the summary card AND the "stations received" card are rewritten at most every 5
+     *  minutes (was 1), and at once when ISM stops — a band change, a listener leaving ISM or arriving over background
+     *  decoding, a profile switch, a clean shutdown (finish()). A power cut loses at most 5 minutes of the cards' counts
+     *  (the day's log still appends every minute). A busy 868 band: ≤ 12 rewrites an hour per card. */
+    static constexpr int64_t  kCardSec      = 300;             // ★ the cards are rewritten at most this often
     static constexpr uint64_t kPartMaxBytes = 4ull << 20;      // ★ a day's log splits into parts past this
     static constexpr size_t   kMaxRows      = 2000;            // ★ the card's device table (the least recently heard go)
     static constexpr double   kFoldSec      = 3.0;             // ★ Tracker's own fold, repeated here
@@ -139,6 +191,7 @@ public:
      *  reaches the log the first time it is heard in the day, when its reading or status changes (the line without
      *  signal and interval — Heard::core), or once per this many seconds otherwise. */
     static constexpr int64_t  kMeterEverySec = 15 * 60;
+    static constexpr size_t   kMaxNodes      = 500;            // ★ the "stations received" card's table (the least recently heard go)
 
     struct Options {
         std::string bandId;        ///< "433"
@@ -147,6 +200,7 @@ public:
         std::string origin;        ///< "background" | "live"
         std::string profile;       ///< "Profile 1" (background), "" (a listener) — said in the card, not in the index
         std::function<int64_t()> clock;     ///< UTC seconds (tests); empty = the wall clock
+        double      rxLat = NAN, rxLon = NAN;   ///< ★ this server's own position (the card's "furthest"); NaN = not set
     };
 
     DayLog(gallery::Store& store, Options o) : store_(store), o_(std::move(o)) {
@@ -192,6 +246,28 @@ public:
         trimRows();
         if (buf_.size() >= kFlushBytes) flushLog(t);
     }
+    /** ★ V12: a positioned mesh node — the "stations received" card. Never a write here: the tick writes. */
+    void node(const vibeism::NodeFix& f) override {
+        if (!std::isfinite(f.lat) || !std::isfinite(f.lon) || std::fabs(f.lat) > 90 || std::fabs(f.lon) > 180) return;
+        std::lock_guard<std::mutex> lk(m_);
+        if (done_) return;
+        const int64_t t = now();
+        rollIfNewDay(t);
+        NodeRow& n = nodes_[f.net + "|" + (f.node.empty() ? f.name : f.node)];
+        if (n.count == 0) { n.first = t; n.net = f.net; n.node = f.node; }
+        n.count++; n.last = t;
+        n.type = f.type; n.name = f.name; n.lat = f.lat; n.lon = f.lon; n.approx = f.approx;   // ★ newest wins
+        if (f.hops >= 0) n.hops = f.hops;
+        n.snr = f.snr; n.freqHz = f.freqHz;
+        n.origin = n.origin.empty() || n.origin == o_.origin ? o_.origin : "both";
+        nodesDirty_ = true;
+        while (nodes_.size() > kMaxNodes) {
+            auto old = nodes_.begin();
+            for (auto it = nodes_.begin(); it != nodes_.end(); ++it) if (it->second.last < old->second.last) old = it;
+            nodes_.erase(old);
+            nodesDropped_++;
+        }
+    }
     void tick() override {
         std::lock_guard<std::mutex> lk(m_);
         if (done_) return;
@@ -199,6 +275,7 @@ public:
         rollIfNewDay(t);
         if (!buf_.empty() && t - lastFlush_ >= kFlushSec) flushLog(t);
         if (cardDirty_ && t - cardWrite_ >= kCardSec) writeCard(t, false);
+        if (nodesDirty_ && t - nodesWrite_ >= kCardSec) writeNodes(t);
     }
     void finish() override {
         std::lock_guard<std::mutex> lk(m_);
@@ -207,6 +284,7 @@ public:
         const int64_t t = now();
         flushLog(t);
         if (cardDirty_ || !cardName_.empty()) writeCard(t, true);
+        if (nodesDirty_) writeNodes(t);
         closeAll();
     }
 
@@ -225,6 +303,10 @@ public:
     size_t devices() const { std::lock_guard<std::mutex> lk(m_); return devs_.size(); }
     std::string cardText() const { std::lock_guard<std::mutex> lk(m_); return cardBody(now()); }
     std::string cardTitleNow() const { std::lock_guard<std::mutex> lk(m_); return cardTitle(); }
+    std::string nodesName() const { std::lock_guard<std::mutex> lk(m_); return nodesName_; }
+    size_t nodes() const { std::lock_guard<std::mutex> lk(m_); return nodes_.size(); }
+    std::string nodesText() const { std::lock_guard<std::mutex> lk(m_); return nodesBody(now()); }
+    std::string nodesTitleNow() const { std::lock_guard<std::mutex> lk(m_); return nodesTitle(); }
     /** For the admin line: "14 devices · 212 readings today". */
     std::string brief() const {
         std::lock_guard<std::mutex> lk(m_);
@@ -241,6 +323,8 @@ private:
     std::string bandMhz() const { return bandShort() + " MHz"; }
     std::string logSlot(int part) const { return "ismlog-" + o_.bandId + "-" + date(day_) + (part > 1 ? "-" + std::to_string(part) : ""); }
     std::string cardSlot() const { return "ismsum-" + o_.bandId + "-" + date(day_); }
+    /** ★ The clients know a "stations received" card by this slot's prefix ("ismnodes-") and draw its MAP key. */
+    std::string nodesSlot() const { return "ismnodes-" + o_.bandId + "-" + date(day_); }
     gallery::Meta meta(const std::string& slot, const std::string& origin) const {
         gallery::Meta m;
         m.kind = "ism"; m.origin = origin; m.freqHz = o_.bandHz; m.mode = ""; m.decoder = "ism";
@@ -261,7 +345,8 @@ private:
         day_ = day;
         devs_.clear(); readings_ = 0; dropped_ = 0; buf_.clear(); cardDirty_ = false;
         logName_.clear(); cardName_.clear(); logOrigin_.clear(); cardOrigin_.clear();
-        lastFlush_ = cardWrite_ = now();
+        nodes_.clear(); nodesDirty_ = false; nodesDropped_ = 0; nodesName_.clear(); nodesOrigin_.clear();
+        lastFlush_ = cardWrite_ = nodesWrite_ = now();
         part_ = 1;
         // ★ the log: the highest part of the day that exists
         for (int p = 1; p <= 64; ++p) {
@@ -277,16 +362,24 @@ private:
             std::string body;
             if (store_.readItem(cardName_, body)) restore(body);
         }
+        nodesName_ = store_.adoptSlot(meta(nodesSlot(), o_.origin), /*anyOrigin=*/true);
+        if (!nodesName_.empty()) {
+            nodesOrigin_ = store_.field(nodesName_, "o");
+            std::string body;
+            if (store_.readItem(nodesName_, body)) restoreNodes(body);
+        }
     }
     void closeAll() {
         if (!logName_.empty()) store_.close(logName_);
         if (!cardName_.empty()) store_.close(cardName_);
+        if (!nodesName_.empty()) store_.close(nodesName_);
     }
     void rollIfNewDay(int64_t t) {
         if (t / 86400 == day_) return;
         // ★ UTC midnight: yesterday's buffer into yesterday's file, its card written for the last time, then a new day
         flushLog(t);
         if (cardDirty_ || !cardName_.empty()) writeCard(t, true);
+        if (nodesDirty_) writeNodes(t);
         closeAll();
         openDay(t / 86400);
     }
@@ -381,7 +474,7 @@ private:
     std::string cardBody(int64_t t) const {
         std::string o = "ISM summary" + std::string(kDot) + o_.bandName + kDot + date(day_) + " (UTC)\n";
         o += "Heard by " + heardBy(cardOrigin_.empty() ? o_.origin : merged(cardOrigin_)) + ".\n";
-        o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + " \xe2\x80\x94 at most once a minute while ISM runs. Every reading is in the day's log, \"ISM "
+        o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + " \xe2\x80\x94 at most every 5 minutes while ISM runs. Every reading is in the day's log, \"ISM "
            + bandMhz() + kDot + date(day_) + kDot + "every reading\".\n\n";
         o += devicesWord() + (devs_.empty() ? std::string() : ": " + mix()) + "\n";
         char b[200];
@@ -458,6 +551,124 @@ private:
         cardOrigin_ = origin;
     }
 
+    // ── ★ V12 "stations received" (see NodeRow) ──
+    std::string networks() const {
+        bool mc = false, mt = false;
+        for (const auto& kv : nodes_) { mc |= kv.second.net == "meshcore"; mt |= kv.second.net == "meshtastic"; }
+        return mc && mt ? "MeshCore + Meshtastic" : mc ? "MeshCore" : mt ? "Meshtastic" : "mesh";
+    }
+    const NodeRow* furthest(double& km) const {
+        km = 0;
+        if (!std::isfinite(o_.rxLat) || !std::isfinite(o_.rxLon)) return nullptr;
+        const NodeRow* best = nullptr;
+        for (const auto& kv : nodes_) { const double k = kmBetween(o_.rxLat, o_.rxLon, kv.second.lat, kv.second.lon); if (k > km) { km = k; best = &kv.second; } }
+        return best;
+    }
+    /** "23 nodes heard · 9 repeaters · 2 room servers · 12 companions" */
+    std::string nodesMix() const {
+        std::map<std::string, int> n;
+        for (const auto& kv : nodes_) n[kv.second.type]++;
+        std::string o = std::to_string(nodes_.size() + nodesDropped_) + (nodes_.size() + nodesDropped_ == 1 ? " node heard" : " nodes heard");
+        for (const char* t : {"repeater", "room", "sensor", "companion"}) if (n[t]) o += std::string(kDot) + std::to_string(n[t]) + " " + typeWord(t, n[t]);
+        return o;
+    }
+    static std::string kmText(double km) { char b[32]; std::snprintf(b, sizeof b, km < 10 ? "%.1f km" : "%.0f km", km); return b; }
+    /** "LoRa / MeshCore 868 MHz · 2026-11-01: 23 nodes heard · 9 repeaters · furthest 84 km" — what fits 120 bytes. */
+    std::string nodesTitle() const {
+        std::map<std::string, int> n;
+        for (const auto& kv : nodes_) n[kv.second.type]++;
+        std::string t = "LoRa / " + networks() + " " + bandMhz() + kDot + date(day_) + ": " + std::to_string(nodes_.size() + nodesDropped_)
+                      + (nodes_.size() + nodesDropped_ == 1 ? " node heard" : " nodes heard");
+        auto add = [&](const std::string& part) { if (t.size() + 4 + part.size() <= 120) t += kDot + part; };
+        if (n["repeater"]) add(std::to_string(n["repeater"]) + " " + typeWord("repeater", n["repeater"]));
+        double km; if (furthest(km)) add("furthest " + kmText(km));
+        return t;
+    }
+    static std::string posText(const NodeRow& n) {
+        char b[64];
+        if (n.approx) std::snprintf(b, sizeof b, "%.2f, %.2f approx", n.lat, n.lon);
+        else std::snprintf(b, sizeof b, "%.6f, %.6f", n.lat, n.lon);
+        return b;
+    }
+    std::string nodesBody(int64_t t) const {
+        const std::string origin = nodesOrigin_.empty() ? o_.origin : merged(nodesOrigin_);
+        std::string o = "LoRa nodes heard" + std::string(kDot) + o_.bandName + kDot + date(day_) + " (UTC)\n";
+        o += "Heard by " + heardBy(origin) + ".\n";
+        o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + " \xe2\x80\x94 at most every 5 minutes while ISM runs. MAP shows them on the map.\n";
+        if (std::isfinite(o_.rxLat) && std::isfinite(o_.rxLon)) { char b[80]; std::snprintf(b, sizeof b, "Receiver:     %.4f, %.4f\n", o_.rxLat, o_.rxLon); o += b; }
+        o += "Repeaters, room servers and sensors are shown where they advertise. Companion nodes are people: their positions are "
+             "rounded to about 1 km and marked approx. No message is ever kept here.\n\n";
+        o += nodesMix();
+        double km; if (const NodeRow* f = furthest(km)) o += std::string(kDot) + "furthest " + kmText(km) + " (" + fieldSafe(f->name) + ")";
+        o += "\n";
+        if (nodesDropped_) o += "Not listed:   " + std::to_string((unsigned long long)nodesDropped_) + " (this card keeps the " + std::to_string(kMaxNodes) + " most recently heard)\n";
+        o += "\nEach node, most recent first (last heard \xc2\xb7 first heard \xc2\xb7 times heard \xc2\xb7 heard by \xc2\xb7 network \xc2\xb7 type \xc2\xb7 name \xc2\xb7 id \xc2\xb7 position \xc2\xb7 hops \xc2\xb7 SNR dB \xc2\xb7 MHz):\n";
+        std::vector<const NodeRow*> v;
+        for (const auto& kv : nodes_) v.push_back(&kv.second);
+        std::sort(v.begin(), v.end(), [](const NodeRow* a, const NodeRow* b) { return a->last != b->last ? a->last > b->last : a->name < b->name; });
+        for (const NodeRow* n : v) {
+            char tail[64];
+            std::snprintf(tail, sizeof tail, "%s%.1f%s%.3f", kDot, double(n->snr), kDot, n->freqHz / 1e6);
+            o += gallery::utcStamp(n->last, "%H:%M:%S") + kDot + gallery::utcStamp(n->first, "%H:%M:%S") + kDot
+               + std::to_string((unsigned long long)n->count) + kTimes + kDot + (n->origin.empty() ? o_.origin : n->origin) + kDot
+               + netWord(n->net) + kDot + typeWord(n->type, 1) + kDot + fieldSafe(n->name) + kDot + fieldSafe(n->node) + kDot
+               + posText(*n) + kDot + (n->hops >= 0 ? std::to_string(n->hops) : std::string("-")) + tail + "\n";
+        }
+        return o;
+    }
+    /** ★ The card is its own record (the summary's rule): a damaged row costs that row, never the process. */
+    void restoreNodes(const std::string& body) {
+        const size_t at = body.find("Each node, most recent first");
+        if (at == std::string::npos) return;
+        auto hms = [&](const std::string& s, int64_t& out) {
+            int h, m, sec;
+            if (s.size() != 8 || std::sscanf(s.c_str(), "%2d:%2d:%2d", &h, &m, &sec) != 3) return false;
+            out = day_ * 86400 + h * 3600 + m * 60 + sec;
+            return true;
+        };
+        const std::string dot = kDot;
+        size_t p = body.find('\n', at);
+        while (p != std::string::npos && p + 1 < body.size()) {
+            const size_t e = body.find('\n', p + 1);
+            const std::string row = body.substr(p + 1, e == std::string::npos ? std::string::npos : e - p - 1);
+            p = e;
+            std::vector<std::string> f; size_t q = 0;
+            for (;;) { const size_t d = row.find(dot, q); if (d == std::string::npos) { f.push_back(row.substr(q)); break; } f.push_back(row.substr(q, d - q)); q = d + dot.size(); }
+            if (f.size() != 12) continue;
+            NodeRow n;
+            if (!hms(f[0], n.last) || !hms(f[1], n.first)) continue;
+            n.count = std::strtoull(f[2].c_str(), nullptr, 10);
+            if (!n.count) continue;
+            n.origin = f[3] == "background" || f[3] == "live" || f[3] == "both" ? f[3] : o_.origin;
+            n.net = netFromWord(f[4]); n.type = typeFromWord(f[5]);
+            if (n.net.empty() || n.type.empty()) continue;
+            n.name = f[6]; n.node = f[7] == "-" ? std::string() : f[7];
+            n.approx = f[8].find("approx") != std::string::npos;
+            if (std::sscanf(f[8].c_str(), "%lf, %lf", &n.lat, &n.lon) != 2 || std::fabs(n.lat) > 90 || std::fabs(n.lon) > 180) continue;
+            if (!n.approx && n.type == "companion") {   // ★ belt and braces: a person's node is never exact, even from a file
+                n.lat = std::round(n.lat * 100) / 100; n.lon = std::round(n.lon * 100) / 100; n.approx = true;
+            }
+            n.hops = f[9] == "-" ? -1 : std::atoi(f[9].c_str());
+            n.snr = float(std::atof(f[10].c_str())); n.freqHz = std::atof(f[11].c_str()) * 1e6;
+            nodes_[n.net + "|" + (n.node.empty() ? n.name : n.node)] = n;
+        }
+        if (const size_t np = body.find("Not listed:"); np != std::string::npos) { unsigned long long d = 0; if (std::sscanf(body.c_str() + np, "Not listed: %llu", &d) == 1) nodesDropped_ = d; }
+    }
+    void writeNodes(int64_t t) {
+        nodesWrite_ = t; nodesDirty_ = false;
+        if (nodes_.empty()) return;
+        const std::string origin = nodesOrigin_.empty() ? o_.origin : merged(nodesOrigin_);
+        gallery::Meta m = meta(nodesSlot(), origin);
+        m.title = nodesTitle();
+        m.dlName = "LoRa nodes " + bandShort() + " " + date(day_) + ".txt";
+        const std::string body = nodesBody(t);
+        if (nodesName_.empty() || !store_.replace(nodesName_, m, body, /*toNewest=*/true)) {
+            if (!nodesName_.empty()) store_.close(nodesName_);
+            nodesName_ = store_.create(m, "txt", body);
+        }
+        nodesOrigin_ = origin;
+    }
+
     gallery::Store& store_;
     Options o_;
     mutable std::mutex m_;
@@ -468,6 +679,11 @@ private:
     std::map<std::string, Dev> devs_;
     uint64_t readings_ = 0, dropped_ = 0;
     bool cardDirty_ = false;
+    std::map<std::string, NodeRow> nodes_;
+    std::string nodesName_, nodesOrigin_;
+    uint64_t nodesDropped_ = 0;
+    int64_t nodesWrite_ = 0;
+    bool nodesDirty_ = false;
 };
 
 } // namespace ismgal

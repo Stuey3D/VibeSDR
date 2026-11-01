@@ -180,15 +180,80 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('the web\'s messages escape what came off the air', /Hello &lt;b&gt;Racecourse&lt;\/b&gt;/.test(web.ismListHtml(w, 'msgs', { mph: false, pressure: 'psi' })), true);
   eq('MESSAGES empty text, both', app.ismEmptyText('msgs'), web.ismEmptyText('msgs'));
   eq('the map status, both', app.ismMapStatus(a2, rx), web.ismMapStatus(w, rx));
-  eq('…furthest named', /2 on the map · furthest Moulton Rptr \d/.test(web.ismMapStatus(w, rx)), true);
+  eq('…furthest named', /2 on the map · 2 repeaters · furthest Moulton Rptr \d/.test(web.ismMapStatus(w, rx)), true);
   eq('the map icon, both', app.ismMapIcon(a2.devices[0]), web.ismMapIcon(w.devices[0]));
   eq('the map card escapes', /&lt;|<b>Northampton Base<\/b>/.test(app.ismMapCard(a2.devices[0], rx)), true);
   const items = app.ismMapItems(a2, rx);
-  eq('the app\'s pins', items.map((i) => [i.key, i.lat, i.lon, i._lb]), [['m1', 52.24, -0.895, 'NBAS'], ['m2', 52.29, -0.84, 'Moulton Rptr']]);
+  eq('the app\'s pins', items.map((i) => [i.key, i.lat, i.lon, i._lb]), [['m1', 52.24, -0.895, 'Northampton Base'], ['m2', 52.29, -0.84, 'Moulton Rptr']]);
   eq('the app\'s rows nearest first', app.ismMapRows(a2, rx).map((r) => r.key), ['m1', 'm2']);
   eq('the MAP key is a stop only when offered', app.ismNavKeys({ on: true, big: false, chips: false, rows: 0, map: true }).map((k) => k.key), ['down', 'up', 'map', 'exit']);
   eq('…and not otherwise', app.ismNavKeys({ on: true, big: false, chips: false, rows: 0 }).map((k) => k.key), ['down', 'up', 'exit']);
   eq('the chips, both', app.ISM_KINDS, web.ISM_KINDS);
+
+  // ── ★★ V12 2026-11-01 THE ISM MAP: types, privacy, no messages, position links, the gallery's card ──
+  const nodes = { type: 'ism', centre: 868.6e6, devices: [
+    { key: 'n1', kind: 'meshcore', make: 'MeshCore', model: 'repeater', name: 'Benson', long: 'Benson', role: 'repeater', ntype: 'repeater',
+      line: 'MeshCore · Benson · repeater · 51.6223, -1.1028 · 7 hops', lat: 51.6223, lon: -1.1028, hops: 7, freq: 869.618e6, snr: 6.5, seen: 30, age: 600, count: 4,
+      msgs: [{ ago: 20, from: 'Benson', text: 'SECRET-ON-THE-MAP' }] },
+    { key: 'n2', kind: 'meshcore', make: 'MeshCore', model: 'chat node', name: 'Alice', long: 'Alice', role: 'chat node', ntype: 'companion', approx: 1,
+      line: 'MeshCore · Alice · chat node · 52.24, -0.89 approx. · 1 hop', lat: 52.24, lon: -0.89, hops: 1, freq: 869.618e6, snr: 3, seen: 40000, age: 50000, count: 2 },
+    { key: 'n3', kind: 'meshtastic', make: 'Meshtastic', model: 'x', name: 'Room', long: 'Room', role: 'router', line: 'Meshtastic · Room · 52.1000, -1.0000', lat: 52.1, lon: -1, freq: 869.525e6, snr: 1, seen: 5, age: 5, count: 1 },
+  ] };
+  const wn = web.ismSanitise(nodes)!, an = app.ismSanitise(nodes)!;
+  eq('approx and ntype survive the sanitiser, both', [wn.devices[1].approx, wn.devices[1].ntype, an.devices[1].approx, an.devices[0].ntype], [1, 'companion', 1, 'repeater']);
+  eq('a bogus ntype is dropped', web.ismSanitise({ ...nodes, devices: [{ ...nodes.devices[0], ntype: '<x>' }] })!.devices[0].ntype, undefined);
+  eq('node type from the role when an older server sends no ntype', [web.ismNodeType(wn.devices[2]), app.ismNodeType(an.devices[2])], ['repeater', 'repeater']);
+  for (const d of wn.devices) eq(`the icon, both: ${d.key}`, app.ismMapIcon(an.devices.find((x) => x.key === d.key)!), web.ismMapIcon(d));
+  eq('a repeater is a square with the mast; a companion a circle with a person and a dashed ring',
+     /<rect[^>]*fill="#ff9f43"/.test(web.ismMapIcon(wn.devices[0]).html) && /<circle cx="11" cy="11" r="9.5" fill="#ff9f43"/.test(web.ismMapIcon(wn.devices[1]).html)
+     && /stroke-dasharray/.test(web.ismMapIcon(wn.devices[1]).html) && !/stroke-dasharray/.test(web.ismMapIcon(wn.devices[0]).html), true);
+  eq('MeshCore orange, Meshtastic green', /#67ea94/.test(web.ismMapIcon(wn.devices[2]).html), true);
+  eq('fades with age: fresh 1, 11 h ~0.7, 24 h 0.35', [web.ismAgeOpacity(30), Math.round(web.ismAgeOpacity(40000) * 100) / 100, web.ismAgeOpacity(90000)], [1, 0.7, 0.35]);
+  eq('a person is labelled approximate', [web.ismMapLabel(wn.devices[1]), app.ismMapLabel(an.devices[1])], ['Alice (approximate)', 'Alice (approximate)']);
+  eq('NO MESSAGE ON THE MAP — web card', web.ismMapCard(wn.devices[0], rx).includes('SECRET-ON-THE-MAP'), false);
+  eq('NO MESSAGE ON THE MAP — app card', app.ismMapCard(an.devices[0], rx).includes('SECRET-ON-THE-MAP'), false);
+  eq('…but the list\'s detail still has it', web.ismLoraDetail(wn.devices[0], rx).join('|').includes('SECRET-ON-THE-MAP'), true);
+  eq('the card says approximate for a person', /approximate \(~1 km\)/.test(web.ismMapCard(wn.devices[1], rx)), true);
+  eq('map status counts repeaters, both', [web.ismMapStatus(wn, rx), app.ismMapStatus(an, rx)].map((x) => /^3 on the map · 2 repeaters · furthest/.test(x)), [true, true]);
+  // the position link
+  eq('position split', web.ismPosSplit('MeshCore · Benson · repeater · 51.6223, -1.1028 · 7 hops'), { pre: 'MeshCore · Benson · repeater · ', pos: '51.6223, -1.1028', post: ' · 7 hops' });
+  eq('…a person\'s takes "approx." with it', web.ismPosSplit('MeshCore · Alice · 52.24, -0.89 approx. · 1 hop')!.pos, '52.24, -0.89 approx.');
+  eq('…the app the same', app.ismPosSplit('Meshtastic · Room · 52.1000, -1.0000'), web.ismPosSplit('Meshtastic · Room · 52.1000, -1.0000'));
+  eq('…no false match on a temperature or a frequency', [web.ismPosSplit('Oregon · 10.5 °C · 869.618 MHz'), web.ismPosSplit('battery 87 %, 3.91 V')], [null, null]);
+  const html = web.ismListHtml(wn, 'all', { mph: false, pressure: 'psi' });
+  eq('the list draws the position as a link with an aria-label', /<a class="qrz ismPos" href="#" role="button" data-pos="n1" aria-label="Show Benson on the map"[^>]*>51\.6223, -1\.1028<\/a>/.test(html), true);
+  eq('…three links, one per positioned node', (html.match(/class="qrz ismPos"/g) || []).length, 3);
+  eq('pad stops: each positioned row gets a p:i stop after its row', app.ismNavKeys({ on: false, big: false, chips: false, rows: 3, pos: [0, 2] }).map((k) => k.key), ['exit', 'r:0', 'p:0', 'r:1', 'r:2', 'p:2']);
+  // the gallery's card
+  const D = 20393 * 86400;
+  const card = 'LoRa nodes heard · 868 MHz SRD · 2025-11-01 (UTC)\nReceiver:     52.2405, -0.9027\n\n'
+    + 'Each node, most recent first (last heard · first heard · times heard · heard by · network · type · name · id · position · hops · SNR dB · MHz):\n'
+    + '12:01:02 · 09:00:01 · 14× · both · MeshCore · repeater · Benson · 01020304 · 51.622300, -1.102800 · 7 · 6.5 · 869.618\n'
+    + '11:00:00 · 10:00:00 · 2× · live · Meshtastic · companion · Bob · !55667788 · 52.21871, -0.94420 · 2 · 2.5 · 869.525\n'
+    + '10:00:00 · 10:00:00 · 1× · background · MeshCore · room server · Daventry Room · - · 52.257000, -1.161000 · - · 4.0 · 869.618\n'
+    + 'garbage line\n10:00:00 · 10:00:00 · 1× · background · MeshCore · repeater · Far · - · 91.0, 0.0 · - · 4.0 · 869.618\n';
+  const gw = web.ismNodesParse(card, D + 50000, D + 86000), ga = app.ismNodesParse(card, D + 50000, D + 86000);
+  eq('the card parses, both the same', JSON.stringify(gw), JSON.stringify(ga));
+  eq('…3 nodes (garbage and a bad latitude skipped), the receiver read', [gw.nodes.length, gw.rx], [3, { lat: 52.2405, lon: -0.9027 }]);
+  eq('…first/last heard, times, origin', [gw.nodes[0].first - D, gw.nodes[0].last - D, gw.nodes[0].count, gw.nodes[0].origin], [9 * 3600 + 1, 12 * 3600 + 62, 14, 'both']);
+  eq('…a companion written exactly is rounded anyway', [gw.nodes[1].lat, gw.nodes[1].lon, gw.nodes[1].approx], [52.22, -0.94, 1]);
+  eq('…room server type', web.ismNodeType(gw.nodes[2]), 'room');
+  eq('the gallery card: first / last heard, times, background-and-live', /heard in the background and live[\s\S]*first heard 09:00 · last heard 12:01 UTC · 14 times/.test(web.ismGalCard(gw.nodes[0], gw.rx)), true);
+  eq('gallery status', web.ismGalStatus(gw.nodes, gw.rx), app.ismGalStatus(ga.nodes, ga.rx));
+  eq('…words', /^3 nodes heard · 1 repeater · furthest Benson 7\d km$/.test(web.ismGalStatus(gw.nodes, gw.rx)), true);
+  // ── the time filter ──
+  eq('ranges, both', [app.ISM_RANGES.map((r) => r.id), app.ISM_LIVE_RANGES.map((r) => r.id)], [web.ISM_RANGES.map((r) => r.id), ['1h', '24h']]);
+  eq('in range: 1 h keeps the fresh, 24 h the day', [web.ismInRange(wn.devices, '1h').map((d) => d.key), web.ismInRange(wn.devices, '24h').map((d) => d.key)], [['n1', 'n3'], ['n1', 'n2', 'n3']]);
+  eq('defaults: 24 h live, ALL in the gallery; a live map never takes 7 days', [web.ismRangeOf(null, true), web.ismRangeOf(null, false), web.ismRangeOf('7d', true), app.ismRangeOf('30d', false)], ['24h', 'all', '24h', '30d']);
+  const day2 = '11:00:00 · 08:00:00 · 3× · background · MeshCore · repeater · Benson · 01020304 · 51.622300, -1.102800 · 6 · 7.0 · 869.618\n';
+  const c2 = web.ismNodesParse('Each node, most recent first (…):\n' + day2, D - 86400, D + 86000).nodes;
+  const mg = web.ismGalMerge([gw.nodes, c2], D + 86000);
+  const bm = mg.find((n) => n.name === 'Benson')!;
+  eq('merging two days: one Benson, 17 times, first heard the day before, background + live', [mg.length, bm.count, bm.first - D, bm.origin], [3, 17, -86400 + 8 * 3600, 'both']);
+  eq('…a stable key from network + id', bm.key, 'c:01020304');
+  eq('…the app merges the same', JSON.stringify(app.ismGalMerge([ga.nodes, app.ismNodesParse('Each node, most recent first (…):\n' + day2, D - 86400, D + 86000).nodes], D + 86000)), JSON.stringify(mg));
+  eq('the band of a card', [web.ismNodeCardBand('ismnodes-868-2026-11-01'), web.ismNodeCardBand('ismsum-868-2026-11-01')], ['868', '']);
+  eq('the MAP key is drawn for ismnodes- items only', [web.ismIsNodeCard({ s: 'ismnodes-868-2025-11-01' }), web.ismIsNodeCard({ s: 'ismsum-868-x' }), web.ismIsNodeCard({})], [true, false, false]);
 }
 
 console.log(`ism app: ${passes} passed, ${fails} failed`);

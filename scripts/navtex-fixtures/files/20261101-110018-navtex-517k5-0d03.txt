@@ -1,0 +1,26 @@
+NAVTEX · S · Hamburg, Germany 🇩🇪 · Nav warning · #31 · gaps: 2 (108 s)
+Received 2026-11-01 11:00 UTC · 1% of characters lost
+517.500 kHz USB · background decoding (Profile 1)
+
+ZCZC SA31
+NCC-HAMBURG
+290540 UTC OCT 26
+NAV. WARN. NO9 604
+GERMAM BIGHT. NORTH OF OFFSHORE WINDPARK 'DUTSCHU BUCIT'.
+!-..7,8589, !9-,$88,509'858
+,:
+54-19,2
+ 
+GPPTATRNWXE
+ANCHOJIIG AND FSHIIG PRO
+ NTDONPSTHIDNA RADIUS OF JEPPIFPB
+WWF
+NHNDV
+
+CMSY
+[… signal lost 73 s …]
+ZZZZHZDWAOOSA
+SN II_IO
+[… signal lost 35 s …]
+KKKKJKCUC_
+[end lost]

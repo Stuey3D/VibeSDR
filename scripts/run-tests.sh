@@ -170,6 +170,10 @@ flags_for() {
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★★ THE GALLERY'S STORE at any size (vibe_gallery.h, 2026-11-01): the owner's SIZE is the limit (no 5,000 cap), the
+    #     index counted inside it, per-kind counts, oldest-first eviction fair between kinds, append-only + compaction,
+    #     two processes on one folder, the 1,000,000 backstop. ~2 s.
+    test-gallery-store)    echo "-O2 -lpthread" ;;
     # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
     #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
     #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
@@ -198,6 +202,19 @@ flags_for() {
     #    codec, 96 round trips through the channeliser, the sensitivity sweep against Semtech's table (~1 min; LORA_QUICK=1
     #    skips it), the whole 868 band at once, the parsers, the privacy rule on the JSON, noise → nothing, CPU rows.
     test-lora)             echo "-O2 -lpthread" ;;
+    # ★★ V12 the ISM map (2026-11-01): positions parsed, the node table's cap / 24 h expiry / newest wins, the privacy rule
+    #    (a person's node rounded to ~1 km), the gallery's "stations received" card. Fast (no DSP).
+    test-lora-nodes)       echo "-O2 -lpthread" ;;
+    # ★★ V12 the NAVTEX map (2026-11-01): gallery titles read back, the stations placed by the label's own resolver, the
+    #    time of day / history / message text where it could not decide, the fold, the real fixture set. Fast.
+    test-navtex-map)       echo "-O2 -lpthread" ;;
+    # ★★ V12 the NAVTEX map's warnings (2026-11-01): strict positions (garbled ones refused, LAT/LONG, Greek hemispheres),
+    #    the multilingual hazard lexicon, series / cancellations / windows, one marker per warning, the index. Fast.
+    test-navtex-warn)      echo "-O2 -lpthread" ;;
+    # ★★ V12 the NAVTEX map's met labels (vibe_navtex_met.h, 2026-11-01): headings, the first period only, wind / gale words
+    #    and their negations / sea state from words or wave height / visibility; native gale words set only the flag; the
+    #    latest per area; then every forecast of the fixture set. Fast.
+    test-navtex-met)       echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
@@ -597,6 +614,9 @@ if node --no-warnings scripts/test_cw_list.ts; then pass=$((pass+1)); else fail=
 if node --no-warnings scripts/test_cw_vocab.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 ISM (src/services/ism.ts): the app's ISM against the web's — sanitiser, lines in every unit, status, filter, capability.
 if npx tsx scripts/test_ism_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 the NAVTEX map's client rules (src/services/navtexMap.ts, navtexWarn.ts, navtexIcons.ts): sites, the why, the slot,
+#    the app's pins; the warnings (summary, why, shapes, faded, the card); the met labels; the layers; the icons
+if npx tsx scripts/test_navtex_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 APP PARITY 2 (2026-10-26): the app's PSK / JTTY / DSC boxes against the web's own modules — dials, channels, parsers,
 #    order, merges, where a tap tunes, the attach parameters, hints and colours, which keys a radio can reach.
 if npx tsx scripts/test_psk_jtty_dsc_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1375,6 +1395,14 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   VIBE_LORA_CLIP="$OUT/lora-clip.u8" node scripts/test-server-lora.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_LORA_CLIP="$OUT/lora-clip.u8" node scripts/test-web-lora.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 the ISM map (2026-11-01): icons by type, approximate people, position links, the time filter, a live push,
+  #    the gallery's "stations received" MAP — fake nodes added to the real reports in the page, a seeded gallery.
+  VIBE_LORA_CLIP="$OUT/lora-clip.u8" VIBE_LORA_NODES_BIN="$OUT/test-lora-nodes" node scripts/test-web-ism-map.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 the NAVTEX map (2026-11-01): the stations received, the warnings (icons, shapes, clusters, the card with its
+  #    text and TRANSLATE, keyboard focus, live pulse) and the met labels, from a gallery of real NAVTEX (scripts/navtex-fixtures)
+  node scripts/test-web-navtex-map.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/lora-clip.u8"
 else

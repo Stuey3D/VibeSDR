@@ -1,0 +1,10 @@
+NAVTEX · Station U · Nav warning · #51 · gaps: 1 (3 s) · 20 repaired
+Received 2026-11-01 00:42 UTC
+517.500 kHz USB · background decoding (Profile 1)
+
+ZCZC UA51
+WL
+YIEX
+[… signal lost 3 s …]
+KRDTONA HARBOUR BREAKWATER LIGHT 51-04.6N 001-11.7E UNLIT.
+NNNN

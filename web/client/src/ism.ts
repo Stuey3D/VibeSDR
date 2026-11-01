@@ -24,6 +24,9 @@ export interface IsmDevice {
   lat?: number; lon?: number; posAge?: number; prec?: number; alt?: number; battPct?: number; volt?: number; chUtil?: number;
   hops?: number; fcnt?: number; fport?: number; priv?: number; sf?: number; bw?: number; cr?: number; sync?: string;
   msgs?: IsmMsg[];
+  /** ★ V12 the ISM map: 1 = the position is a person's, rounded to ~1 km by the server (vibe_lora_track.h publishedPos);
+   *  `ntype` what the node is — repeater / room / sensor / companion. */
+  approx?: number; ntype?: string;
 }
 /** A public mesh message (Meshtastic's default channel, MeshCore's Public channel — nothing else is ever sent). */
 export interface IsmMsg { ago: number; from: string; text: string; net?: string; node?: string; ch?: string; freq?: number }
@@ -101,15 +104,17 @@ function loraFields(d: any, num: (v: any) => number | undefined, str: (v: any, n
     posAge: num(d.posAge), prec: num(d.prec), alt: num(d.alt), battPct: num(d.battPct), volt: num(d.volt), chUtil: num(d.chUtil), hops: num(d.hops),
     fcnt: num(d.fcnt), fport: num(d.fport), encLen: num(d.encLen), priv: num(d.priv), sf: num(d.sf), bw: num(d.bw), cr: num(d.cr), sync: str(d.sync, 2),
     temp: num(d.temp), hum: num(d.hum), baro: num(d.baro), msgs: msgs.length ? msgs : undefined,
+    approx: num(d.approx), ntype: NODE_TYPES.includes(d.ntype) ? d.ntype : undefined,
   };
 }
+export const NODE_TYPES = ['repeater', 'room', 'sensor', 'companion'];
 /** ★ V12 LoRa: does this row go on the map? */
 export function ismOnMap(d: IsmDevice): boolean { return d.lat !== undefined && d.lon !== undefined; }
 /** The network's name as the list says it. */
 export function ismNetName(kind: string): string { return kind === 'meshtastic' ? 'Meshtastic' : kind === 'meshcore' ? 'MeshCore' : kind === 'lorawan' ? 'LoRaWAN' : 'LoRa'; }
 
 /** ★ A LoRa row's detail (the hover / tap): the radio side, then what the node published, then its recent public messages. */
-export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | null): string[] {
+export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | null, withMsgs = true): string[] {
   const out: string[] = [];
   const head: string[] = [`${(d.freq / 1e6).toFixed(3)} MHz`];
   if (d.sf) head.push(`SF${d.sf}`);
@@ -132,12 +137,13 @@ export function ismLoraDetail(d: IsmDevice, rx?: { lat: number; lon: number } | 
     let p = `${d.lat.toFixed(4)}, ${d.lon.toFixed(4)}`;
     if (d.alt !== undefined) p += ` · ${Math.round(d.alt)} m`;
     if (rx) { const k = rangeKm(rx, d.lat, d.lon); p += ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}`; }
-    if (d.prec && d.prec < 32) p += ' · position deliberately approximate';
+    if (d.approx) p += ' · approximate (~1 km): a companion node is a person';
+    else if (d.prec && d.prec < 32) p += ' · position deliberately approximate';
     out.push(p);
   }
   if (d.kind === 'lorawan') out.push('Payload encrypted by the network — its length is shown, never its bytes.');
   if (d.priv && !d.msgs) out.push(d.kind === 'meshtastic' ? 'Heard on a private channel — only its header is shown.' : 'Encrypted traffic — only headers are shown.');
-  for (const m of d.msgs ?? []) out.push(`${ismAgo(m.ago)} ago${m.from ? ' · ' + m.from : ''}: “${m.text}”`);
+  if (withMsgs) for (const m of d.msgs ?? []) out.push(`${ismAgo(m.ago)} ago${m.from ? ' · ' + m.from : ''}: “${m.text}”`);
   return out;
 }
 /** Range and bearing from the receiver (great circle). */
@@ -275,9 +281,25 @@ export function ismListHtml(r: IsmReport, filter: string, u: IsmUnits, openKey =
     const tip = detail.length ? [...detail, heard].join('\n') : `${mhz} MHz · ${d.snr.toFixed(0)} dB over the noise · ${heard}`;
     const open = detail.length && openKey === d.key;
     return `<div class="ismRow k-${esc(d.kind)}${detail.length ? ' ismTap' : ''}" data-key="${esc(d.key)}" title="${esc(tip)}">`
-         + `<span class="ismAgo">${esc(ismAgo(d.seen))}</span><span class="ismTxt">${esc(ismLine(d, u))}`
+         + `<span class="ismAgo">${esc(ismAgo(d.seen))}</span><span class="ismTxt">${ismPosLinked(d, esc(ismLine(d, u)))}`
          + (open ? `<span class="ismDetail">${detail.map(esc).join('<br>')}</span>` : '') + `</span></div>`;
   }).join('');
+}
+/** ★★ V12 (Stuart, 2026-11-01: "make the coordinates clickable so that you can see where they are on the map"): the
+ *  position in a node's line — "51.6223, -1.1028" or a person's "51.62, -1.10 approx." — as a link (the QRZ callsign
+ *  links' look, a.qrz) that opens the ISM map on that node. The text is the server's own (already rounded for a person),
+ *  so the link goes where the line says. Keyboard / pad: an <a href> is a stop of its own; Enter presses it. */
+export const POS_RE = /(-?\d{1,2}\.\d{2,6}), (-?\d{1,3}\.\d{2,6})( approx\.)?/;
+export function ismPosSplit(line: string): { pre: string; pos: string; post: string } | null {
+  const m = POS_RE.exec(line);
+  return m ? { pre: line.slice(0, m.index), pos: m[0], post: line.slice(m.index + m[0].length) } : null;
+}
+function ismPosLinked(d: IsmDevice, escLine: string): string {
+  if (!ismOnMap(d)) return escLine;
+  const sp = ismPosSplit(escLine);
+  if (!sp) return escLine;
+  const who = esc(`Show ${ismMapLabel(d)} on the map`);
+  return `${sp.pre}<a class="qrz ismPos" href="#" role="button" data-pos="${esc(d.key)}" aria-label="${who}" title="${who}">${sp.pos}</a>${sp.post}`;
 }
 /** ★ V12 LoRa: the public messages, newest first — "12 s · Meshtastic LongFast · Bob: hello". */
 export function ismMsgsHtml(r: IsmReport): string {
@@ -346,7 +368,7 @@ export class IsmBox {
   private openKey = '';   // ★ the meter row whose detail is open (a tap toggles it)
   /** EXIT ISM, and the band steps (±1). The page decides what they send. ★ V12 LoRa: `onMap` opens the map of everything
    *  with a position (main.ts ismMapOpen); `rx` is the receiver's position, for range and bearing in a row's detail. */
-  constructor(private onExit: () => void, private onStep: (d: number) => void, private onMap: () => void = () => {},
+  constructor(private onExit: () => void, private onStep: (d: number) => void, private onMap: (key?: string) => void = () => {},
               private rx: () => { lat: number; lon: number } | null = () => null) {}
 
   private mount(): HTMLElement {
@@ -369,8 +391,11 @@ export class IsmBox {
     (el.querySelector('#ismExit') as HTMLButtonElement).onclick = () => this.onExit();
     (el.querySelector('#ismDown') as HTMLButtonElement).onclick = () => this.onStep(-1);
     (el.querySelector('#ismUp') as HTMLButtonElement).onclick = () => this.onStep(1);
-    (el.querySelector('#ismMap') as HTMLButtonElement).onclick = () => this.onMap();
+    (el.querySelector('#ismMap') as HTMLButtonElement).onclick = () => this.onMap('');
     (el.querySelector('#ismList') as HTMLElement).onclick = (e) => {
+      // ★ a position link: the map, on that node — not the row's detail
+      const pos = (e.target as HTMLElement).closest('.ismPos') as HTMLElement | null;
+      if (pos) { e.preventDefault(); e.stopPropagation(); this.onMap(pos.dataset.pos || ''); return; }
       const row = (e.target as HTMLElement).closest('.ismTap') as HTMLElement | null;
       if (!row) return;
       this.openKey = this.openKey === row.dataset.key ? '' : (row.dataset.key || '');
@@ -449,30 +474,88 @@ export class IsmBox {
     if (!this.el || !this.last) return;
     const r = ismAged(this.last, Math.floor((Date.now() - this.at) / 1000));
     const html = ismListHtml(r, this.prefs.filter, this.prefs.units, this.openKey, this.rx());
-    if (html !== this.lastHtml) { (this.el.querySelector('#ismList') as HTMLElement).innerHTML = html; this.lastHtml = html; }
+    if (html !== this.lastHtml) {
+      const list = this.el.querySelector('#ismList') as HTMLElement;
+      // ★ a focused position link survives the redraw (the ages tick every second) — keyboard and pad keep their place
+      const had = (document.activeElement as HTMLElement | null)?.closest?.('#ismList .ismPos') as HTMLElement | null;
+      const key = had?.dataset.pos;
+      list.innerHTML = html; this.lastHtml = html;
+      if (key) (list.querySelector(`.ismPos[data-pos="${(globalThis as any).CSS?.escape ? (globalThis as any).CSS.escape(key) : key.replace(/["\\]/g, "")}"]`) as HTMLElement | null)?.focus({ preventScroll: true });
+    }
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  ★★ V12 THE ISM MAP — every row with a position (Meshtastic and MeshCore nodes today; any ISM kind that ever carries
 //  one), on the shared map view (tracks.ts TrackView, as APRS's map). These are what the page hands it.
+//  ★★ 2026-11-01 (Stuart: "any LoRa / meshcore etc with GPS coordinates in them like this for the repeaters can we put it
+//     on a map please"): an icon per node TYPE (repeater mast, room server, sensor, companion person) in the NETWORK's
+//     colour (MeshCore orange, Meshtastic green); the name always shown; a node fades as it ages (24 h); a person's node
+//     is drawn where the server put it (~1 km) and labelled approximate.
+//  ★★★ NO MESSAGE CONTENT ON THE MAP — the card is the node's own description and the radio side, never its texts.
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const MAP_COLOURS: Record<string, string> = { meshtastic: '#67ea94', meshcore: '#ff9f43', lorawan: '#7ab8ff', lora: '#b9a7ff' };
 function escM(s: string): string { return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
-/** The marker: a dot in the network's colour with its first letter; a node heard in the last 15 min is solid. */
+/** The node's type: the server's `ntype`, else from its role (an older server). */
+export function ismNodeType(d: { ntype?: string; role?: string; kind: string }): string {
+  if (d.ntype && NODE_TYPES.includes(d.ntype)) return d.ntype;
+  const r = d.role || '';
+  if (r === 'repeater' || r === 'router' || r === 'router-client' || r === 'router (late)') return 'repeater';
+  if (r === 'room server') return 'room';
+  if (r === 'sensor') return 'sensor';
+  return 'companion';
+}
+export const NODE_TYPE_WORD: Record<string, string> = { repeater: 'repeater', room: 'room server', sensor: 'sensor', companion: 'companion' };
+/** ★ How strongly a node is drawn by how long since it was heard: full for 15 min, then down to 0.35 at 24 h. */
+export function ismAgeOpacity(seen: number): number {
+  if (!(seen > 900)) return 1;
+  return Math.max(0.35, 1 - 0.65 * Math.min(1, (seen - 900) / (86400 - 900)));
+}
+/** The glyph of each type, drawn on a 22-px disc (stroke = the dark ink). */
+const GLYPH: Record<string, string> = {
+  // a mast with its waves
+  repeater: '<path d="M11 6.5 L8 17 M11 6.5 L14 17 M9 13 H13" stroke="#111" stroke-width="1.6" fill="none" stroke-linecap="round"/>'
+          + '<path d="M7.2 5.2 a5 5 0 0 0 0 5.6 M14.8 5.2 a5 5 0 0 1 0 5.6" stroke="#111" stroke-width="1.3" fill="none" stroke-linecap="round"/>',
+  // a server: two stacked boxes
+  room: '<rect x="6.5" y="5.5" width="9" height="4.6" rx="1" fill="none" stroke="#111" stroke-width="1.5"/>'
+      + '<rect x="6.5" y="11.6" width="9" height="4.6" rx="1" fill="none" stroke="#111" stroke-width="1.5"/>'
+      + '<circle cx="13.3" cy="7.8" r=".9" fill="#111"/><circle cx="13.3" cy="13.9" r=".9" fill="#111"/>',
+  // a thermometer
+  sensor: '<path d="M11 5.5 V13" stroke="#111" stroke-width="2.6" stroke-linecap="round"/><circle cx="11" cy="15" r="2.6" fill="#111"/>',
+  // a person
+  companion: '<circle cx="11" cy="7.6" r="2.6" fill="#111"/><path d="M6.6 16.6 a4.4 4.4 0 0 1 8.8 0 Z" fill="#111"/>',
+};
+/** The marker: the type's glyph on a disc in the network's colour (a square for infrastructure, a circle for a person),
+ *  fading with age; a person's dashed ring says "approximate". */
 export function ismMapIcon(d: IsmDevice): { html: string; w: number; h: number } {
   const c = MAP_COLOURS[d.kind] || '#ffb833';
-  const fresh = d.seen < 900;
-  const letter = d.kind === 'meshtastic' ? 'T' : d.kind === 'meshcore' ? 'C' : d.kind === 'lorawan' ? 'W' : '•';
-  return { html: `<div style="width:18px;height:18px;border-radius:50%;background:${fresh ? c : 'rgba(20,16,8,0.9)'};border:2px solid ${c};`
-    + `color:${fresh ? '#111' : c};font:bold 10px/18px ui-monospace,Menlo,monospace;text-align:center;box-shadow:0 0 0 1px #111">${letter}</div>`, w: 22, h: 22 };
+  const t = ismNodeType(d);
+  const op = ismAgeOpacity(d.seen).toFixed(2);
+  const shape = t === 'companion'
+    ? `<circle cx="11" cy="11" r="9.5" fill="${c}" stroke="#111" stroke-width="1.2"/>`
+    : `<rect x="1.5" y="1.5" width="19" height="19" rx="4.5" fill="${c}" stroke="#111" stroke-width="1.2"/>`;
+  const ring = d.approx ? `<circle cx="11" cy="11" r="10.6" fill="none" stroke="${c}" stroke-width="1" stroke-dasharray="2 2"/>` : '';
+  return { html: `<svg width="24" height="24" viewBox="-1 -1 24 24" style="opacity:${op}" aria-hidden="true">${shape}${GLYPH[t] || GLYPH.companion}${ring}</svg>`, w: 24, h: 24 };
 }
-export function ismMapLabel(d: IsmDevice): string { return d.short || d.long || d.name || d.node || d.key; }
-/** The card: the name, the network and what it said about itself, range and bearing, and its recent public messages. */
+/** ★ What the layer pulses on: a node heard again (its packet count grew). */
+export function ismMapHeard(d: IsmDevice): number { return d.count; }
+/** ★ Who keeps its name when two labels collide (tracklayer declutter): repeaters first, then room servers and sensors,
+ *  then people; within each, the most recently heard. */
+export function ismMapRank(d: IsmDevice): number {
+  const t = ismNodeType(d);
+  return (t === 'repeater' ? 3e7 : t === 'companion' ? 0 : 2e7) - Math.min(d.seen, 1e7);
+}
+export function ismMapLabel(d: IsmDevice): string {
+  const n = d.long || d.short || d.name || d.node || d.key;
+  return d.approx ? `${n} (approximate)` : n;
+}
+/** The card: the name, the network and what it is, how long ago it was heard, then the radio side and what it said about
+ *  itself (ismLoraDetail WITHOUT its messages). */
 export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null): string {
-  const lines = ismLoraDetail(d, rx);
-  return `<div class="pop"><b>${escM(d.long || d.name)}</b>${d.short ? ` (${escM(d.short)})` : ''}<br>`
-    + `${escM(ismNetName(d.kind))} · heard ${escM(ismAgo(d.seen))}${d.seen >= 2 ? ' ago' : ''} · ${d.count} ${d.count === 1 ? 'packet' : 'packets'}<br>`
+  const lines = ismLoraDetail(d, rx, false);
+  const t = NODE_TYPE_WORD[ismNodeType(d)];
+  return `<div class="pop"><b>${escM(d.long || d.name)}</b>${d.short && d.short !== d.long ? ` (${escM(d.short)})` : ''}<br>`
+    + `${escM(ismNetName(d.kind))} ${escM(t)} · heard ${escM(ismAgo(d.seen))}${d.seen >= 2 ? ' ago' : ''} · ${d.count} ${d.count === 1 ? 'packet' : 'packets'}<br>`
     + lines.map(escM).join('<br>') + '</div>';
 }
 /** The map's list: nearest first when the receiver's position is known, else newest first. */
@@ -481,12 +564,20 @@ export function ismMapRows(r: IsmReport, rx: { lat: number; lon: number } | null
   if (!items.length) return `<div class="trkEmpty">Nothing heard with a position yet — mesh nodes send theirs every 15 min to an hour.</div>`;
   const withKm = items.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat!, d.lon!) : null }));
   if (rx) withKm.sort((a, b) => a.k!.km - b.k!.km);
-  return withKm.map(({ d, k }) => `<div class="trkRow" tabindex="0" data-key="${escM(d.key)}"><b>${escM(ismMapLabel(d))}</b> `
-    + `<span style="opacity:.75">${escM(ismNetName(d.kind))}${k ? ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}` : ''}`
-    + ` · ${escM(ismAgo(d.seen))}${d.hops !== undefined ? ` · ${d.hops === 0 ? 'first-hand' : d.hops + ' hop' + (d.hops === 1 ? '' : 's')}` : ''}`
-    + `${d.battPct !== undefined && d.battPct <= 100 ? ` · ${d.battPct} %` : ''} · ${d.snr.toFixed(0)} dB</span></div>`).join('');
+  return withKm.map(({ d, k }) => {
+    const second = [`${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, d.hops !== undefined ? (d.hops === 0 ? 'first-hand' : `${d.hops} hop${d.hops === 1 ? '' : 's'}`) : '',
+                    d.battPct !== undefined && d.battPct <= 100 ? `${d.battPct} %` : '', `${d.snr.toFixed(0)} dB`].filter(Boolean).join(' · ');
+    return trkRowHtml(d, second, k, ismAgo(d.seen));
+  }).join('');
 }
-/** The map's status line: how many on the map, the furthest. */
+/** ★ One row of the map's list in the shared list's own markup (tracks.ts aprsRows): name over a second line, range, age. */
+function trkRowHtml(d: IsmDevice, second: string, k: { km: number; brg: number } | null, age: string): string {
+  const where = k ? `${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km <span class="brg">${compass(k.brg)}</span>` : '';
+  return `<div class="trkRow" role="button" tabindex="0" data-key="${escM(d.key)}">`
+    + `<span class="id"><b><i class="sw" style="background:${MAP_COLOURS[d.kind] || '#ffb833'}"></i>${escM(ismMapLabel(d))}</b><small>${escM(second)}</small></span>`
+    + `<span class="sp"></span><span class="rg">${where}</span><span class="ag">${escM(age)}</span></div>`;
+}
+/** The map's status line: how many on the map, of which repeaters, the furthest. */
 export function ismMapStatus(r: IsmReport | null, rx: { lat: number; lon: number } | null): string {
   if (!r) return '';
   const items = r.devices.filter(ismOnMap);
@@ -496,5 +587,133 @@ export function ismMapStatus(r: IsmReport | null, rx: { lat: number; lon: number
     for (const d of items) { const k = rangeKm(rx, d.lat!, d.lon!).km; if (k > best) { best = k; who = ismMapLabel(d); } }
     far = ` · furthest ${who} ${best < 10 ? best.toFixed(1) : Math.round(best)} km`;
   }
-  return `${items.length} on the map${far}${r.msgs && r.msgs.length ? ` · ${r.msgs.length} public ${r.msgs.length === 1 ? 'message' : 'messages'}` : ''}`;
+  const rep = items.filter((d) => ismNodeType(d) === 'repeater').length;
+  return `${items.length} on the map${rep ? ` · ${rep} ${rep === 1 ? 'repeater' : 'repeaters'}` : ''}${far}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★ V12 2026-11-01 THE GALLERY'S "STATIONS RECEIVED" (vibe_ism_gallery.h NodeRow — keep the two in step). Stuart: "being
+//  able to open up the map in the Gallery so that if I have this set as the background profile we can see which stations
+//  we received". A gallery item whose slot starts "ismnodes-" has a MAP key; its body's table becomes IsmDevice rows the
+//  map above draws as it draws the live ones — heard in the background or live, first and last heard, how many times.
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+export interface IsmGalNode extends IsmDevice { first: number; last: number; origin: string }
+export function ismIsNodeCard(it: { s?: string }): boolean { return typeof it.s === 'string' && it.s.startsWith('ismnodes-'); }
+/** The card's table → rows. `dayUtc` = the item's day (seconds); `nowSec` = now (for "heard … ago"). Bounded: 500 rows. */
+export function ismNodesParse(body: string, dayUtc: number, nowSec: number): { nodes: IsmGalNode[]; rx: { lat: number; lon: number } | null } {
+  const out: IsmGalNode[] = [];
+  let rx: { lat: number; lon: number } | null = null;
+  const rm = /^Receiver:\s+(-?\d+\.\d+), (-?\d+\.\d+)$/m.exec(body);
+  if (rm) { const la = Number(rm[1]), lo = Number(rm[2]); if (Math.abs(la) <= 90 && Math.abs(lo) <= 180) rx = { lat: la, lon: lo }; }
+  const at = body.indexOf('Each node, most recent first');
+  if (at < 0) return { nodes: out, rx };
+  const day = Math.floor(dayUtc / 86400) * 86400;
+  const hms = (s: string) => { const m = /^(\d\d):(\d\d):(\d\d)$/.exec(s); return m ? day + Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : NaN; };
+  const lines = body.slice(at).split('\n').slice(1);
+  for (const ln of lines) {
+    if (out.length >= 500) break;
+    const f = ln.split(' · ');
+    if (f.length !== 12) continue;
+    const last = hms(f[0]), first = hms(f[1]), count = parseInt(f[2], 10);
+    const net = f[4] === 'MeshCore' ? 'meshcore' : f[4] === 'Meshtastic' ? 'meshtastic' : '';
+    const type = f[5] === 'room server' ? 'room' : NODE_TYPES.includes(f[5]) ? f[5] : '';
+    const pm = /^(-?\d+\.\d+), (-?\d+\.\d+)( approx)?$/.exec(f[8]);
+    if (!isFinite(last) || !isFinite(first) || !(count > 0) || !net || !type || !pm) continue;
+    let lat = Number(pm[1]), lon = Number(pm[2]);
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+    let approx = pm[3] ? 1 : undefined;
+    // ★ belt and braces: a person's node is never drawn exactly, whatever a file says
+    if (type === 'companion' && !approx) { lat = Math.round(lat * 100) / 100; lon = Math.round(lon * 100) / 100; approx = 1; }
+    const name = f[6].slice(0, 40), node = f[7] === '-' ? '' : f[7].slice(0, 16);
+    out.push({
+      key: `g${out.length}`, kind: net, make: ismNetName(net), model: '', name, long: name, node, line: '', ntype: type, approx,
+      lat, lon, hops: f[9] === '-' ? undefined : Number(f[9]), snr: Number(f[10]) || 0, freq: (Number(f[11]) || 0) * 1e6,
+      level: -99, seen: Math.max(0, nowSec - last), age: Math.max(0, nowSec - first), count,
+      first, last, origin: f[3] === 'background' || f[3] === 'live' || f[3] === 'both' ? f[3] : '',
+    });
+  }
+  return { nodes: out, rx };
+}
+const galOrigin = (o: string) => (o === 'background' ? 'heard in the background' : o === 'live' ? 'heard live' : o === 'both' ? 'heard in the background and live' : '');
+const hhmm = (t: number) => { const d = new Date(t * 1000); return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; };
+/** A gallery node's card: as the live one, with first / last heard (UTC), times heard and background / live. */
+export function ismGalCard(d: IsmGalNode, rx: { lat: number; lon: number } | null): string {
+  const t = NODE_TYPE_WORD[ismNodeType(d)];
+  const lines: string[] = [];
+  const head = [`${(d.freq / 1e6).toFixed(3)} MHz`, `SNR ${d.snr.toFixed(1)} dB`];
+  if (d.hops !== undefined) head.push(d.hops === 0 ? 'heard first-hand' : `${d.hops} ${d.hops === 1 ? 'hop' : 'hops'}`);
+  lines.push(head.join(' · '));
+  if (d.node) lines.push(d.kind === 'meshcore' ? `key ${d.node}…` : d.node);
+  let p = `${d.lat!.toFixed(d.approx ? 2 : 4)}, ${d.lon!.toFixed(d.approx ? 2 : 4)}`;
+  if (rx) { const k = rangeKm(rx, d.lat!, d.lon!); p += ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}`; }
+  if (d.approx) p += ' · approximate (~1 km): a companion node is a person';
+  lines.push(p);
+  return `<div class="pop"><b>${escM(d.name)}</b><br>${escM(ismNetName(d.kind))} ${escM(t)} · ${escM(galOrigin(d.origin))}<br>`
+    + `first heard ${hhmm(d.first)} · last heard ${hhmm(d.last)} UTC · ${d.count} ${d.count === 1 ? 'time' : 'times'}<br>`
+    + lines.map(escM).join('<br>') + '</div>';
+}
+const ORIGIN_TAG: Record<string, string> = { background: 'BG', live: 'LIVE', both: 'BG + LIVE' };
+export function ismGalRows(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null): string {
+  if (!nodes.length) return `<div class="trkEmpty">This card holds no node with a position.</div>`;
+  const withKm = nodes.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat!, d.lon!) : null }));
+  if (rx) withKm.sort((a, b) => a.k!.km - b.k!.km);
+  return withKm.map(({ d, k }) => trkRowHtml(d, [ORIGIN_TAG[d.origin] || '', `${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, `${d.count}×`,
+                                                   `${hhmm(d.first)}–${hhmm(d.last)} UTC`].filter(Boolean).join(' · '), k, hhmm(d.last))).join('');
+}
+export function ismGalStatus(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null): string {
+  const rep = nodes.filter((d) => ismNodeType(d) === 'repeater').length;
+  let far = '';
+  if (rx && nodes.length) {
+    let best = 0, who = '';
+    for (const d of nodes) { const k = rangeKm(rx, d.lat!, d.lon!).km; if (k > best) { best = k; who = d.name; } }
+    far = ` · furthest ${who} ${best < 10 ? best.toFixed(1) : Math.round(best)} km`;
+  }
+  return `${nodes.length} ${nodes.length === 1 ? 'node' : 'nodes'} heard${rep ? ` · ${rep} ${rep === 1 ? 'repeater' : 'repeaters'}` : ''}${far}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★ V12 2026-11-01 THE TIME FILTER (Stuart: "filter the map based on last hour last day last week last month all
+//  time"). The live map holds what the receiver keeps — 24 h (vibe_lora_track.h kMeshKeepSec) — so it offers 1 H and
+//  24 H only (no key whose every use is a no-op); the gallery's map merges the day cards still in the gallery and offers
+//  all five. A choice is remembered per map (web: localStorage; app: AsyncStorage).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+export const ISM_RANGES = [
+  { id: '1h', label: '1 H', words: 'Heard in the last hour', sec: 3600 },
+  { id: '24h', label: '24 H', words: 'Heard in the last 24 hours', sec: 86400 },
+  { id: '7d', label: '7 DAYS', words: 'Heard in the last 7 days', sec: 7 * 86400 },
+  { id: '30d', label: '30 DAYS', words: 'Heard in the last 30 days', sec: 30 * 86400 },
+  { id: 'all', label: 'ALL', words: 'Everything still in the gallery', sec: Infinity },
+];
+export const ISM_LIVE_RANGES = ISM_RANGES.slice(0, 2);
+export const ISM_RANGE_HINT_LIVE = 'The receiver keeps 24 hours of nodes; the GALLERY keeps the days before.';
+export const ISM_RANGE_HINT_GAL = 'ALL is every day still in the gallery — the oldest go when it is full.';
+/** The rows heard within the range (`seen` = seconds since last heard). */
+export function ismInRange<T extends { seen: number }>(rows: T[], range: string): T[] {
+  const r = ISM_RANGES.find((x) => x.id === range);
+  return !r || !isFinite(r.sec) ? rows : rows.filter((d) => d.seen <= r.sec);
+}
+/** A remembered choice, or the default (24 h live, ALL in the gallery). */
+export function ismRangeOf(saved: string | null | undefined, live: boolean): string {
+  const ok = (live ? ISM_LIVE_RANGES : ISM_RANGES).some((r) => r.id === saved);
+  return ok ? (saved as string) : live ? '24h' : 'all';
+}
+/** ★ Several day cards → one node per network + id (or name): first heard the earliest, last heard the latest (its
+ *  position, name and radio side the latest), times heard summed, background / live merged. Bounded: 2000 nodes. */
+export function ismGalMerge(cards: IsmGalNode[][], nowSec: number): IsmGalNode[] {
+  const by = new Map<string, IsmGalNode>();
+  for (const c of cards) for (const n of c) {
+    const k = `${n.kind}|${n.node || n.name}`;
+    const had = by.get(k);
+    if (!had) { if (by.size < 2000) by.set(k, { ...n }); continue; }
+    const newer = n.last > had.last ? n : had;
+    by.set(k, { ...newer, first: Math.min(had.first, n.first), last: Math.max(had.last, n.last), count: had.count + n.count,
+                origin: had.origin === n.origin ? had.origin : 'both' });
+  }
+  // ★ a STABLE key (network + id): a card fetched again must not move a marker to another node
+  return [...by.entries()].map(([k, n]) => ({ ...n, key: `${n.kind === "meshcore" ? "c" : "t"}:${n.node || n.name}`.slice(0, 40), seen: Math.max(0, nowSec - n.last), age: Math.max(0, nowSec - n.first) }));
+}
+/** The band a "stations received" card is for ("ismnodes-868-2026-11-01" → "868"). */
+export function ismNodeCardBand(s: string | undefined): string {
+  const m = /^ismnodes-([^-]+)-\d{4}-\d\d-\d\d$/.exec(s || '');
+  return m ? m[1] : '';
 }

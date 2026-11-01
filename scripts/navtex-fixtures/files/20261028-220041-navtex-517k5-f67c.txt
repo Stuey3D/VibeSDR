@@ -1,0 +1,21 @@
+NAVTEX · Station M · Nav warning · #05 · gaps: 2 (75 s)
+Received 2026-10-28 22:00 UTC · 0% of characters lost
+517.500 kHz USB · background decoding (Profile 1)
+
+ZCZC MA05
+251145 UTC OCT 26
+NORWEGIAN NAV. WARNING 396/206
+  CHART 5
+  AREA PORSGRUNNSELVA
+TORSBERGUYTRE,  LIGHTBU
+Y 59-#7.26
+[… signal lost 40 s …]
+VPVVVV
+VV ;
+;
+[… signal lost 36 s …]
+TW ZWIWYXMLSBIGJLVU
+LZ
+
+W
+[end lost]

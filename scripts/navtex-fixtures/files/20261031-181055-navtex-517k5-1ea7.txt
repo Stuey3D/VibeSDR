@@ -1,0 +1,15 @@
+NAVTEX · N · Orlandet, Norway 🇳🇴 · Nav warning · #82 · gaps: 1 (8 s)
+Received 2026-10-31 18:10 UTC · 2% of characters lost
+517.500 kHz USB · background decoding (Profile 1)
+
+ZCZC NA82
+311638 UTC OCT 26
+NORWEGIAN NAVWM WARNING 412/2026
+  CHART 36
+  AREA KVITNESBUKTA
+PIPELINE ANCHORED 311652 _75: 9'5 '2 IN POSITUON 63-07.80 _007-48
+[… signal lost 8 s …]
+MARKED B BUOHS AT TA 3,$'.
+NNNH_T
+U17
+[end lost]

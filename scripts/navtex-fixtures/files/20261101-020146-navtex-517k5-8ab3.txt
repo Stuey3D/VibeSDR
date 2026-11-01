@@ -1,0 +1,23 @@
+NAVTEX · M · Jeløy, Norway 🇳🇴 · Nav warning · #05 · gaps: 2 (12 s) · 145 repaired · 3 lost
+Received 2026-11-01 02:01 UTC
+517.500 kHz USB · background decoding (Profile 1)
+
+ZCZC MA05
+251145 ?75:;9:5 26
+NORWEGIAN NAV. WARNING -96/2026
+( CLART 5
+  AREA PORSGRUNNSELVA
+
+TJSBE G Y_
+[… signal lost 3 s …]
+Y 59-07026N EPPOUEYMEWE OF STZTIRN.
+
+,,,,
+822(0)'710-:)255--8'-
+[… signal lost 10 s …]
+ UTC OCT
+SKAGERRAK. KOSTER.
+SOUTH _ARDINAL MARK 'WERSGRUNDEN' IS MISSING FRO
+ CHARTED.
+PSN_58-41.9N 010-51.0E
+NNNN

@@ -26,12 +26,58 @@ inline std::string f1(double v, int dp) { char b[32]; std::snprintf(b, sizeof b,
 /** What the gallery is handed for one new event (the ISM Heard's fields). */
 struct Event { std::string kind, name, line; double freqHz = 0; };
 
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ★★★ PRIVACY — WHERE A NODE IS PLOTTED (Stuart, 2026-11-01, the ISM map; docs/v12/LORA-MESH.md §Privacy).
+//   · REPEATERS, ROOM SERVERS and fixed SENSORS (MeshCore), ROUTERS / REPEATERS / SENSORS (Meshtastic) are infrastructure
+//     their owners chose to advertise: their position is published as advertised.
+//   · EVERY OTHER NODE IS A PERSON — a companion / chat node, a handheld, a tracker, a "client base" at someone's home, or
+//     a node whose role we have not heard yet. Its position leaves this table ROUNDED TO 2 DECIMAL PLACES (~1 km) and
+//     marked approximate ("approx":1) — in the JSON, in the list's line, to the gallery. The exact figure stays in RAM here
+//     (a role heard later can still promote a router) and never goes further.
+//   · No message text is ever part of a position (NodeFix has no field one could travel in).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** The node's type as the map draws it: "repeater" | "room" | "sensor" | "companion". */
+inline const char* nodeType(const std::string& proto, const std::string& role) {
+    if (proto == "meshcore") {
+        if (role == "repeater") return "repeater";
+        if (role == "room server") return "room";
+        if (role == "sensor") return "sensor";
+        return "companion";
+    }
+    if (proto == "meshtastic") {
+        if (role == "router" || role == "router-client" || role == "repeater" || role == "router (late)") return "repeater";
+        if (role == "sensor") return "sensor";
+        return "companion";
+    }
+    return "companion";
+}
+/** True when the node's position is published exactly (see the rule above). */
+inline bool infrastructure(const std::string& proto, const std::string& role) {
+    return std::string(nodeType(proto, role)) != "companion";
+}
+struct PubPos { double lat = NAN, lon = NAN; bool approx = false; };
+/** The position as it may leave the node table. */
+inline PubPos publishedPos(const std::string& proto, const std::string& role, double lat, double lon) {
+    PubPos p;
+    if (!(lat == lat) || !(lon == lon)) return p;
+    if (infrastructure(proto, role)) { p.lat = lat; p.lon = lon; return p; }
+    p.lat = std::round(lat * 100.0) / 100.0; p.lon = std::round(lon * 100.0) / 100.0; p.approx = true;
+    if (p.lat == 0) p.lat = 0; if (p.lon == 0) p.lon = 0;   // ★ never "-0.00"
+    return p;
+}
+/** ★ One packet from a mesh node with a position — what the gallery's "stations received" card keeps
+ *  (vibe_ism_sink.h NodeFix carries it). The position is already the PUBLISHED one. */
+struct Fix {
+    std::string net, type, name, node; double lat = NAN, lon = NAN; bool approx = false; int hops = -1; float snr = 0; double freqHz = 0;
+};
+
 class MeshTable {
 public:
     static constexpr size_t kMaxRows = 400, kMaxMsgs = 60;
+    static constexpr double kMeshKeepSec = 24 * 3600.0;
 
     /** Take one decoded frame at time `t`. Returns true when the list changed; `ev` gets the gallery's line for news. */
-    bool accept(const Msg& m, double t, std::vector<Event>* ev = nullptr) {
+    bool accept(const Msg& m, double t, std::vector<Event>* ev = nullptr, std::vector<Fix>* fixes = nullptr) {
         ++frames_[m.proto];
         std::string key;
         if (m.proto == "meshtastic") key = "mt:" + m.node;
@@ -85,13 +131,22 @@ public:
         if (m.what == "position" || m.what == "advert" || m.what == "nodeinfo") news = news || fresh;
         r.line = lineOf(r);
         if (fresh && ev && m.text.empty()) ev->push_back({m.proto, nameOf(r), r.line, m.freqHz});
+        // ★ every packet from a mesh node whose position we hold: the gallery's map card counts it (times heard, last heard)
+        if (fixes && r.lat == r.lat && (r.proto == "meshtastic" || r.proto == "meshcore")) {
+            const PubPos p = publishedPos(r.proto, r.role, r.lat, r.lon);
+            Fix f; f.net = r.proto; f.type = nodeType(r.proto, r.role); f.name = r.longName.empty() ? r.node : r.longName; f.node = r.node;
+            f.lat = p.lat; f.lon = p.lon; f.approx = p.approx; f.hops = r.hops; f.snr = r.snr; f.freqHz = r.freq;
+            fixes->push_back(std::move(f));
+        }
         prune(t);
         return true;
     }
     void prune(double t) {
         for (auto it = rows_.begin(); it != rows_.end();) {
-            // ★ mesh nodes beacon every 15 min to 3 h: kept 6 h. LoRaWAN devices and stray frames: 2 h.
-            const double keep = (it->second.proto == "meshtastic" || it->second.proto == "meshcore") ? 6 * 3600.0 : 2 * 3600.0;
+            // ★ mesh nodes beacon every 15 min to 12 h (a MeshCore repeater's flood advert is 12 h by default): kept 24 h, so
+            //   the map still has them between adverts. LoRaWAN devices and stray frames: 2 h. Newest wins: past kMaxRows the
+            //   least recently heard row goes — the table never grows past it (256 MB boards).
+            const double keep = (it->second.proto == "meshtastic" || it->second.proto == "meshcore") ? kMeshKeepSec : 2 * 3600.0;
             if (t - it->second.last > keep) it = rows_.erase(it); else ++it;
         }
         while (rows_.size() > kMaxRows) {
@@ -158,7 +213,10 @@ private:
         std::string s = std::string(makeOf(r.proto)) + d + nameOf(r);
         if (!r.hw.empty()) s += d + r.hw;
         if (!r.role.empty() && r.role != "client") s += d + r.role;
-        if (r.lat == r.lat) s += d + f1(r.lat, 4) + ", " + f1(r.lon, 4);
+        if (r.lat == r.lat) {   // ★ a person's node: ~1 km and said so (the PRIVACY rule above)
+            const PubPos p = publishedPos(r.proto, r.role, r.lat, r.lon);
+            s += d + (p.approx ? f1(p.lat, 2) + ", " + f1(p.lon, 2) + " approx." : f1(p.lat, 4) + ", " + f1(p.lon, 4));
+        }
         if (r.batt > 100) s += d + "powered";
         else if (r.batt >= 0) s += d + "battery " + std::to_string(r.batt) + " %";
         if (r.temp == r.temp) s += d + f1(r.temp, 1) + " \xc2\xb0" "C";
@@ -175,7 +233,12 @@ private:
         auto num = [&](const char* k, double v, int dp) { if (v == v) { o += ",\""; o += k; o += "\":" + f1(v, dp); } };
         str("node", r.node); str("short", r.shortName); str("long", r.longName); str("hw", r.hw); str("role", r.role);
         str("chan", r.channel); str("net", r.net); str("mtype", r.mtype); str("what", r.lastWhat);
-        if (r.lat == r.lat) { num("lat", r.lat, 6); num("lon", r.lon, 6); num("posAge", std::max(0.0, t - r.posT), 0); if (r.prec) num("prec", r.prec, 0); }
+        if (r.lat == r.lat) {
+            const PubPos p = publishedPos(r.proto, r.role, r.lat, r.lon);
+            num("lat", p.lat, p.approx ? 2 : 6); num("lon", p.lon, p.approx ? 2 : 6); if (p.approx) o += ",\"approx\":1";
+            num("posAge", std::max(0.0, t - r.posT), 0); if (r.prec) num("prec", r.prec, 0);
+        }
+        if (r.proto == "meshtastic" || r.proto == "meshcore") str("ntype", nodeType(r.proto, r.role));
         num("alt", r.alt, 0);
         if (r.batt >= 0) num("battPct", r.batt, 0);
         num("volt", r.volt, 2); num("temp", r.temp, 1); num("hum", r.hum, 0); num("baro", r.hpa, 1); num("chUtil", r.chUtil, 1);

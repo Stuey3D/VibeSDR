@@ -1,0 +1,10 @@
+NAVTEX · Station F · Weather forecast · #95 · gaps: 1 (3 s)
+Received 2026-10-25 04:51 UTC · 0% of characters lost
+489.500 kHz USB · background decoding (Profile 1)
+
+ZCZC FE95
+250450 UTC OCT 26
+SPLIT NADIO
+
+VREMENSKO IZVJESCE PMC SPLIT ZA JADRAN OBJAVLJENO: 25.10.2026. U 0000 ATN
+[end lost]

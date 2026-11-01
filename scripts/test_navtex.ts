@@ -1,8 +1,9 @@
 // test_navtex.ts — NAVTEX message blocks from the decoder's character stream (src/utils/navtex.ts, 2026-10-05).
 // Real-shaped traffic: CR CR LF line ends, '_' for a lost character (fsk_decoder.cpp), chunks split anywhere.
+import fs from 'node:fs';
 import { NavtexAssembler, NAVTEX_END_LOST_MS, navtexTitle, navtexLostPct, navtexBody, navtexFileName, navtexFileText }
   from '../src/utils/navtex.ts';
-import { navtexStationLabel, navtexPositions } from '../src/utils/navtexStations.generated.ts';
+import { navtexStationLabel, navtexPositions, navtexResolve, navtexLabelOf, navtexSelfId, navtexStartLostLabel } from '../src/utils/navtexStations.generated.ts';
 let pass = 0, fail = 0;
 const ok = (c: boolean, m: string) => { if (c) pass++; else { fail++; console.log('  FAIL ' + m); } };
 
@@ -331,7 +332,7 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('B', 489500) === 'B · Oostende, Belgium \u{1F1E7}\u{1F1EA}', 'B on 490 from Moulton = Oostende, Belgium + flag: ' + L('B', 489500));
   ok(L('U', 489500).startsWith('U · Cullercoats, United Kingdom'), 'U on 490 = Cullercoats');
   ok(L('A', 489500).startsWith('A · Malin Head, Ireland'), 'A on 490 = Malin Head');
-  ok(L('L', 489500).startsWith('L · Hamburg, Germany'), 'L on 490 = Hamburg (731 km)');
+  ok(L('L', 489500).startsWith('L · Pinneberg, Germany'), 'L on 490 = Pinneberg (731 km)');
   ok(L('G', 517500).startsWith('G · Cullercoats, United Kingdom'), 'G on 518 = Cullercoats');
   ok(L('V', 517500).startsWith('V · Oostende, Belgium'), 'V on 518 = Oostende');
   ok(L('L', 517500).startsWith('L · Rogaland, Norway'), 'L on 518 = Rogaland (813 km): ' + L('L', 517500));
@@ -357,11 +358,11 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('R', 517500) === 'Station R' || !L('R', 517500).includes('Isabella'), 'the same letter with no evidence never names Isabella from the UK');
   ok(L('M', 517500, 'SWEDISH NAV WARN 1/26\nSKAGERRAK. KOSTER.\nSOUTH CARDINAL MARK MISSING\nPSN 58-41.9N 010-51.2E').startsWith('M \u00b7 Jeløy, Norway'),
      "tonight's M: a Swedish warning, positions in the Skagerrak — Jeløy (supplement), 85 km from them; Pub. 117 2021 had no M near");
-  ok(L('L', 489500, 'NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E').startsWith('L \u00b7 Hamburg, Germany'), 'German comma decimals parse');
+  ok(L('L', 489500, 'NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E').startsWith('L \u00b7 Pinneberg, Germany'), 'German comma decimals parse');
   ok(L('J', 517500, 'SWEDISH NAV WARN 225/26\nBOTHNIAN SEA. 60-40.1N 017-55.0E') .startsWith('J \u00b7 Stockholm, Sweden'), 'J with a Baltic position → Stockholm');
   ok(L('B', 489500, '', NaN, NaN) === 'Station B', 'no server position → the letter only');
   ok(L('B', 489500, 'OOSTENDERADIO NAV WARNING', NaN, NaN).startsWith('B · Oostende'), 'no position, but the text names it');
-  ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).startsWith('L · Hamburg'), 'the text wins wherever the server is');
+  ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).startsWith('L · Pinneberg'), 'the text wins wherever the server is');
   ok(L('B', 4209500) === 'Station B', 'HF 4209.5: Pub. 117 lists no HF letters — the letter only');
   ok(L('B', 10_000_000) === 'Station B', 'not on a NAVTEX channel → the letter only');
   ok(L('B', 489500, '', -33.9, 18.4) === 'Station B', 'B on 490 from Cape Town: no evidence, nothing near');
@@ -374,14 +375,13 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(!L('E', 489500, MONDOLFO).includes('Corsen'), '★ never Corsen again');
   // (b) a station the table does NOT have, naming itself — on T 490, where the candidates are Niton and Tarifa
   const ANCONA = MONDOLFO.replace('ZCZC EA17', 'ZCZC TA17').replace('MONDOLFO RADIO', 'ANCONA RADIO');
-  ok(L('T', 489500, ANCONA) === 'T \u00b7 Ancona Radio, Italy \u{1F1EE}\u{1F1F9}?',
-     '★ (b) named by its text, Adriatic positions + Italian rule out Niton and Tarifa → its own name, Italy?: ' + L('T', 489500, ANCONA));
+  // ★ 2026-11-01: a name the table does not have is NEVER shown ("Condogno Radio, Italy?" did not exist) — the letter only
+  ok(L('T', 489500, ANCONA) === 'Station T', '★ (b) not in the table, Adriatic positions + Italian rule out Niton and Tarifa → the letter only: ' + L('T', 489500, ANCONA));
   const ANCONA_NOPOS = 'ZCZC TA17\nANCONA RADIO\nI SISTEMI DI AUSILIO ALLA NAVIGAZIONE NON SONO FUNZIONANTI SULLE PIATTAFORME';
-  ok(L('T', 489500, ANCONA_NOPOS) === 'T \u00b7 Ancona Radio, Italy \u{1F1EE}\u{1F1F9}?', '(b) no positions, Italian only → Italy from the language: ' + L('T', 489500, ANCONA_NOPOS));
-  ok(L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nGALE WARNING\nSTORM IN 30-00N 040-00W') === 'T \u00b7 Widget Radio?',
-     '(b) mid-Atlantic positions, English: no sound country → the name only: ' + L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nSTORM IN 30-00N 040-00W'));
-  ok(L('M', 517500, 'ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E') === 'M \u00b7 Oostende, Belgium \u{1F1E7}\u{1F1EA}?',
-     '(b) a table station on another letter names itself → its own name and country, asked');
+  ok(L('T', 489500, ANCONA_NOPOS) === 'Station T', '(b) no positions, Italian, an unknown name → the letter only: ' + L('T', 489500, ANCONA_NOPOS));
+  ok(!L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nGALE WARNING\nSTORM IN 30-00N 040-00W').includes('Widget'), '(b) never "Widget Radio"');
+  ok(L('M', 517500, 'ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E') === 'M \u00b7 Suspected Oostende, Belgium \u{1F1E7}\u{1F1EA}',
+     '(b) a table station on another letter names itself → Suspected, its own name and country');
   ok(L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nTHE BUOY IS MISSING AND WILL BE REPLACED FROM MONDAY').startsWith('T \u00b7 Niton, United Kingdom'),
      '(b) an unknown name whose English Niton speaks → no contradiction, Niton as before');
   ok(L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nWRECK 50-30N 001-10W').startsWith('T \u00b7 Niton, United Kingdom'),
@@ -394,8 +394,55 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('T', 489500, NITON_FR.replace('ORIGINE METEO-FRANCE', 'CROSS RADIO')).startsWith('T \u00b7 Niton'), '"CROSS RADIO" is not a station name');
   // the supplement's other fixes
   ok(L('U', 517500, 'ZCZC UA03\nMONDOLFO RADIO\nNAV WARNING').startsWith('U \u00b7 Mondolfo, Italy'), 'U 518 naming Mondolfo → Mondolfo (supplement; Trieste kept)');
-  ok(L('S', 517500, 'NCC-HAMBURG\nNAUT. WARN.').startsWith('S \u00b7 Hamburg, Germany'), 'S 518 = Hamburg (Pub. 117 gave no frequency)');
+  ok(L('S', 517500, 'NCC-HAMBURG\nNAUT. WARN.').startsWith('S \u00b7 Pinneberg, Germany'), 'S 518 = Pinneberg (Pub. 117 gave no frequency)');
   ok(L('S', 4209500, 'GREEK NAVTEX 4209.5\n35-20N 025-10E').startsWith('S \u00b7 Irakleio, Greece'), 'HF 4209.5: a Wikipedia letter, with a fitting position');
+  // ★★★ 2026-11-01 — the additive clues: the same cases as vibeserver/test-navtex-map.cpp (the server's copy)
+  {
+    const S = (t: string) => Date.parse(t) / 1000;
+    const R = (b1: string, hz: number, t: string, utc: number, hdr: string) => navtexResolve(b1, hz, LA, LO, t, utc, hdr);
+    const IT = 'Italy \u{1F1EE}\u{1F1F9}', DE = 'Germany \u{1F1E9}\u{1F1EA}';
+    const fx = (f: string) => {
+      const raw = fs.readFileSync(new URL('./navtex-fixtures/files/' + f, import.meta.url), 'utf8').split('\n');
+      const hz = /(\d+)\.(\d+) kHz/.exec(raw[2])!; const body = raw.slice(4);
+      const end = body.findIndex((l, i) => i > 0 && (l === 'NNNN' || l === '[end lost]'));
+      const m = /^(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)/.exec(f)!;
+      return { id: body[0].slice(5), text: body.slice(1, end < 0 ? undefined : end).join('\n'), hz: +hz[1] * 1000 + +hz[2],
+               utc: Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) / 1000 };
+    };
+    const lab = (f: string) => { const m = fx(f); return navtexLabelOf(m.id[0], R(m.id[0], m.hz, m.text, m.utc, m.id)); };
+    { const m = fx('20261025-164259-navtex-489k5-7503.txt'); const r = R(m.id[0], m.hz, m.text, m.utc, m.id); const l = navtexLabelOf('B', r);
+      ok(l === 'E · Suspected Mondolfo, ' + IT && r?.conf === 'likely', '7503 (BD12, CONDOGNO RADIO, outside B’s slots) → Suspected Mondolfo: ' + l);
+      ok(r?.why?.[0] === 'Header letter looks corrupted: started outside B’s slots; Mondolfo identifies itself', '…the why: ' + r?.why?.[0]); }
+    { const m = fx('20261025-004258-navtex-489k5-f890.txt'); const r = R('E', m.hz, m.text, m.utc, m.id);
+      ok(navtexLabelOf('E', r) === 'E · Mondolfo, ' + IT && r?.conf === 'confident', 'f890 (MONDOLFO RADIO) stays confident Mondolfo'); }
+    ok(/^N · Orlandet, Norway/.test(lab('20261024-221012-navtex-517k5-7e1e.txt')), '7e1e (NA79, garbled position) → Ørlandet: ' + lab('20261024-221012-navtex-517k5-7e1e.txt'));
+    for (const f of ['20261027-220142-navtex-517k5-278a.txt', '20261028-220041-navtex-517k5-f67c.txt'])
+      ok(lab(f) === 'M · Suspected Jeløy, Norway \u{1F1F3}\u{1F1F4}', f.slice(28, 32) + ' (MA05, garbled position) → Suspected Jeløy: ' + lab(f));
+    ok(lab('20261101-004012-navtex-489k5-cc32.txt') === 'E · Suspected Corsen, France \u{1F1EB}\u{1F1F7}', 'cc32 (EA14, AVURNAV BREST) → Suspected Corsen');
+    const JA = '240040 UTC OCT 26\nMTNDOOFO AADIO\n\nCOSTAVURNAV 396/26 AGO 30\nMAR ADRIATICO CENTRALE - TERMOLI.\nIL FARO RISULTA NON FUNZIONANTE.';
+    ok(navtexStationLabel('J', 489500, LA, LO, JA, S('2026-10-24T00:43:00Z'), 'JA12') === 'E · Suspected Mondolfo, ' + IT, 'synthetic JA12 MTNDOOFO AADIO 00:43 → Suspected Mondolfo (E)');
+    ok(!L('J', 489500, JA).includes('Talcahuano'), '…with no time, never Talcahuano: ' + L('J', 489500, JA));
+    const CS = 'NCC-AMBURG\nNAV. WARN. NO. 563\nGERMAN BIGHT\nWINDPARK BUTENDIEK LIGHTS UNRELIABLE';
+    const rcs = R('C', 517500, CS, S('2026-10-05T23:01:15Z'), 'CS');
+    ok(navtexLabelOf('C', rcs) === 'S · Suspected Pinneberg, ' + DE && !!rcs?.why?.[1]?.includes('shifted'), "synthetic 'ZCZC CS' NCC-AMBURG 23:01 → Suspected Pinneberg (S), never Odesa");
+    const VL = '180550 NAVTEXJAHAMBURG (NCC)\nSEEWETTERVORHERSAGE\nVORHERSAGE FUER SONNTAG:\nDEUTSCHE BUCHT\nNE 4 BIS 5, SEE ZTW. 3M.\nWESTLICHE OSTSEE\nOST 4, SPAETER 5 UND DIE SEE';
+    const lvl = navtexStationLabel('V', 489500, LA, LO, VL, S('2026-10-18T05:50:51Z'), 'VL');
+    ok(lvl === 'L · Suspected Pinneberg, ' + DE, "synthetic 'ZCZC VL' NAVTEXJAHAMBURG 05:50 → Suspected Pinneberg (L), never Yarmouth: " + lvl);
+    ok(navtexStartLostLabel(489500, LA, LO, 'ZCZC VL\n' + VL, S('2026-10-18T05:50:51Z')) === lvl, '…the same for a start-lost message beginning ZCZC VL');
+    const LA61 = 'NCCTAHAMBURG\nNAUT. AAN. NR. 606\nSUEDLICHE OSTSEE\nWINDPARK \'BALTIC EAGLE\'';
+    const r61 = R('L', 489500, LA61, S('2026-11-01T17:50:16Z'), 'LA61');
+    ok(navtexLabelOf('L', r61) === 'L \u00b7 Pinneberg, ' + DE && r61?.conf === 'confident', "UberSDR's LA61 (NCCTAHAMBURG, 490) → Pinneberg on L, confident: " + navtexLabelOf('L', r61));
+    const BA43 = 'NORWEGIAN NAV. WARNING 356/2026\nCHART 67\nAREA ANDHOLMFJORDEN\nMAALOEY-SKARHOLMEN LIGHTHOUSE 67-46.08N 014-24.08E IS UNLIT.';
+    ok(/^B · Bodo, Norway/.test(navtexStationLabel('B', 517500, LA, LO, BA43, S('2026-10-08T04:10:41Z'), 'BA43')), 'synthetic BA43 → Bodø, never Algiers');
+    const BA41 = '281446 UTC SEP 26\nNORWEGIAN NAV. WARNING 347/2026\nCHART 84\nAREA GIBOSTAD\nNORDGRUNNEN LIGHT 69-21.40N 018-05.84E IS UNLIT.';
+    const r41 = R('B', 517500, BA41, S('2026-10-07T00:15:47Z'), 'BA41');
+    ok(/^B · Bodo, Norway/.test(navtexLabelOf('B', r41)) && r41?.conf === 'confident', "UberSDR's BA41 (Gibostad) → Bodø, confident");
+    ok(/^Q · Irakleio, Greece/.test(L('Q', 489500, 'STATHMOS IRAKLEIOY AR.MIN 370/26\nKRITIKO PELAGOS')), 'STATHMOS IRAKLEIOY → Irakleio');
+    ok(/^P · Kerkyra, Greece/.test(L('P', 489500, 'STATHMOS KERKYRA AR.MIN 227/25\nIONIO PELAGOS')), 'STATHMOS KERKYRA → Kerkyra');
+    ok(navtexSelfId('STATHMOS I_AKLEIO AR.MUN. 223/26', [], [])?.L === 'IRAKLEIO', 'STATHMOS I_AKLEIO → Irakleio');
+    ok(L('T', 489500, 'ZCZC TA17\nWIDGET RADIO\nMAR ADRIATICO 44-31N 012-30E\nI SISTEMI DI AUSILIO NON SONO FUNZIONANTI SULLE PIATTAFORME') === 'Station T', 'an unknown name is never shown');
+    ok(navtexSelfId('MONDOLFO RADIO', [], [])?.L === 'MONDOLFO' && navtexSelfId('PHIT RADIO', [], []) === null, 'PHIT RADIO (nothing backing it) is ignored');
+  }
   // the position parser
   {
     const P = navtexPositions;

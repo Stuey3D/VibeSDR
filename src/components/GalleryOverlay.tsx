@@ -23,11 +23,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
 import { ModeLabel } from './ModeIcon';
 import { withReadAuth } from '../services/vibeAuth';
-import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
+import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
-import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
-         galleryTranslateLines, type GalleryTrLine } from '../utils/galleryTranslate';
-import { detectTextLanguage, langName, textTranslateInfo, translateText } from '../services/transcriber';
+import { langName } from '../services/transcriber';
+// ★ the translate key's plan and run, shared with the NAVTEX map's cards (MapOverlay) — one implementation
+import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
+import { ismIsNodeCard, ismNodesParse, ismGalMerge, ismNodeCardBand, type IsmGalNode } from '../services/ism';
+import { navSanitise, type NavReport } from '../services/navtexMap';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -64,9 +66,15 @@ export function galleryWhen(t: number): string {
 export function galleryFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
 function size(b: number): string { return b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
 
-export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose }: {
+export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap, onNavtexMap }: {
   /** TRANSCRIBE's TRANSLATE TO ('' = off → the phone's own language). */
   visible: boolean; base: string; readAuth?: string; translateTo?: string; onClose: () => void;
+  /** ★★ V12 2026-11-01 (Stuart: "being able to open up the map in the Gallery … we can see which stations we received"):
+   *  a day's "stations received" card (slot "ismnodes-…", vibe_ism_gallery.h) has MAP — its nodes, handed to the screen's
+   *  ISM map. Absent where there is no map (Apple TV): no key. */
+  onNodesMap?: ((title: string, nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, refresh: (() => Promise<IsmGalNode[] | null>) | null) => void) | null;
+  /** ★★ V12 2026-11-01: the NAVTEX stations received — a standing row on the first page of ALL / NAVTEX with MAP. */
+  onNavtexMap?: (() => void) | null;
 }) {
   const pt = usePopupTheme();
   const s = useMemo(() => makeStyles(pt), [pt]);
@@ -81,7 +89,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   const [text, setText] = useState('');
   const [textOk, setTextOk] = useState(false);
   // ★ TRANSLATE: the plan (what is sent, from what, into what), the result, which is shown, and what to say.
-  const [trPlan, setTrPlan] = useState<{ lines: GalleryTrLine[]; source: string; target: string } | null>(null);
+  const [trPlan, setTrPlan] = useState<GalleryTrPlan | null>(null);
   const [trText, setTrText] = useState<string | null>(null);
   const [showTr, setShowTr] = useState(false);
   const [trBusy, setTrBusy] = useState(false);
@@ -103,15 +111,56 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
       if (paged && page > n && j.total > 0) { setPage(n); return; }   // ★ the gallery shrank under us
       setItems(Array.isArray(j.items) ? j.items : []);
       listRef.current?.scrollToOffset({ offset: 0, animated: false });
+      // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
       setNote(j.enabled === false ? 'This server keeps no gallery.'
-        : `${j.count ?? 0} item${j.count === 1 ? '' : 's'} on this server · ${size(j.usedBytes || 0)}. Times are UTC.`);
+        : galleryFooter(j, kind, KINDS.find((k) => k.id === kind)?.label || kind.toUpperCase(), size));
     } catch { setItems([]); setNote('This server has no gallery (it may need updating).'); }
   }, [b, kind, page, readAuth]);
   // ★ Loaded on opening, a filter and a page — NOT on BACK from an item (the list under it is still there).
   useEffect(() => { if (visible) void load(); }, [visible, load]);
   useEffect(() => { if (!visible) { setOpen(null); setPage(1); } }, [visible]);
 
+  // ★ the NAVTEX stations row: asked once per opening, on page 1 of ALL / NAVTEX
+  const [navSum, setNavSum] = useState<NavReport | null>(null);
+  useEffect(() => {
+    if (!visible || !onNavtexMap || page !== 1 || (kind !== '' && kind !== 'navtex')) { setNavSum(null); return; }
+    let live = true;
+    fetch(withReadAuth(`${b}/vibeserver/gallery/navtex-stations.json?since=0`, readAuth), { cache: 'no-store' } as any)
+      .then((r) => (r.ok ? r.json() : null)).then((j) => { if (live) setNavSum(navSanitise(j)); }).catch(() => {});
+    return () => { live = false; };
+  }, [visible, kind, page, b, readAuth, !!onNavtexMap]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fileUrl = (it: GalleryItem) => withReadAuth(`${b}/vibeserver/gallery/file/${encodeURIComponent(it.f)}`, readAuth);
+  /* ★ MAP: every day card of the band still in the gallery (the web's ismGalMapOpen — at most 31, one fetch at a time),
+   *  merged; the screen's time filter picks. Today's card is offered for a refresh each minute (it is rewritten that often
+   *  while ISM runs). */
+  const nodesMap = async (it: GalleryItem) => {
+    try {
+      const band = ismNodeCardBand(it.s);
+      let cards: GalleryItem[] = [];
+      try {
+        const l = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?kind=ism&limit=1000`, readAuth), { cache: 'no-store' } as any);
+        const j = l.ok ? await l.json() as { items?: GalleryItem[] } : {};
+        cards = (j.items ?? []).filter((c) => ismIsNodeCard(c) && ismNodeCardBand(c.s) === band).sort((x, y) => y.t - x.t).slice(0, 31);
+      } catch { /* the one pressed, below */ }
+      if (!cards.some((c) => c.f === it.f)) cards.unshift(it);
+      const per = new Map<string, IsmGalNode[]>();
+      let rx: { lat: number; lon: number } | null = null;
+      const one = async (c: GalleryItem) => {
+        const r = await fetch(fileUrl(c), { cache: 'no-store' } as any);
+        if (!r.ok) return false;
+        const p = ismNodesParse(await r.text(), c.t, Math.floor(Date.now() / 1000));
+        per.set(c.f, p.nodes); rx = rx ?? p.rx;
+        return true;
+      };
+      for (const c of cards) await one(c).catch(() => false);
+      if (!per.size) { setNote('This item is no longer on the server (the gallery is full and keeps the newest).'); return; }
+      const merged = () => ismGalMerge([...per.values()], Math.floor(Date.now() / 1000));
+      const today = cards.find((c) => Math.floor(c.t / 86400) === Math.floor(Date.now() / 86400000));
+      const days = new Set(cards.map((c) => Math.floor(c.t / 86400))).size;
+      onNodesMap?.(`LoRa nodes heard · ${band} MHz · ${days} ${days === 1 ? 'day' : 'days'} in the gallery`, merged(), rx,
+                   today ? async () => ((await one(today).catch(() => false)) ? merged() : null) : null);
+    } catch { setNote('Could not reach the server.'); }
+  };
   const isImage = (it: GalleryItem) => /\.png$/i.test(it.f);
   const show = async (it: GalleryItem) => {
     setOpen(it); setText(''); setTextOk(false);
@@ -127,30 +176,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
     setTrPlan(null); setTrText(null); setShowTr(false); setTrBusy(false); setTrNote('');
     if (!open || !textOk || !text || isImage(open)) return;
     let dead = false;
-    void (async () => {
-      const info = await textTranslateInfo();
-      if (dead || !info.available) return;
-      const target = translateTo || info.deviceLanguage || '';
-      const lines = galleryTranslateLines(text, open.k);
-      const body = galleryTranslatableText(lines);
-      if (!body || !target) return;
-      const hint = galleryHintLanguage(open.title);
-      const guess = galleryGuessLanguage(body, hint);
-      // ★ iOS: NaturalLanguage reads it, with the station's language and the stopword guess as its priors.
-      const source = (info.detect ? await detectTextLanguage(body, [hint, guess].filter(Boolean)) : '') || guess;
-      if (!dead && galleryCanTranslate(lines, source, target)) setTrPlan({ lines, source, target });
-    })();
+    void planGalleryTranslate(text, open.k, open.title, translateTo).then((pl) => { if (!dead && pl) setTrPlan(pl); }).catch(() => {});
     return () => { dead = true; };
   }, [open, text, textOk, translateTo]);
   const onTranslate = async () => {
     if (!trPlan || trBusy) return;
     if (trText != null) { setShowTr(v => !v); return; }
     setTrBusy(true); setTrNote('');
-    const r = await galleryTranslate(trPlan.lines, trPlan.target, (t) => translateText(t, trPlan.source, trPlan.target));
+    const r = await runGalleryTranslate(trPlan);
     setTrBusy(false);
-    if (!r.done) { setTrNote(r.reason || 'The translation did not work on this phone.'); return; }
+    if (!r.ok) { setTrNote(r.note); return; }
     setTrText(r.text); setShowTr(true);
-    setTrNote(r.failed ? `${r.failed} line${r.failed === 1 ? '' : 's'} left as received${r.reason ? ` (${r.reason})` : ''}` : '');
+    setTrNote(r.note);
   };
   const close = () => { setOpen(null); onClose(); };
 
@@ -188,7 +225,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                 <>
                   {(showTr || !!trNote) && (
                     <Text style={s.trNote}>
-                      {(showTr && trPlan ? `MACHINE TRANSLATION · ${langName(trPlan.source)} → ${langName(trPlan.target)} · on this device` : '')
+                      {(showTr && trPlan ? galleryTranslateBanner(trPlan) : '')
                        + (showTr && trNote ? ' · ' : '') + trNote}
                     </Text>
                   )}
@@ -239,6 +276,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       <Text style={s.pageLab}>{galleryPageLabel(page, pages)}</Text>
                     </View>
                   ) : null}
+                  ListHeaderComponent={navSum && navSum.stations.length > 0 && onNavtexMap ? (
+                    <TouchableOpacity onPress={onNavtexMap} accessibilityRole="button"
+                                      accessibilityLabel={`NAVTEX stations received: ${navSum.stations.length} stations, ${navSum.messages} messages. Show them on the map`}
+                                      style={s.row}>
+                      <Text style={s.freq}>NAVTEX</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.name}>{`NAVTEX · stations received: ${navSum.stations.length} stations · ${navSum.messages} messages`}</Text>
+                        <Text style={s.dim}>Every NAVTEX message in this gallery, by the station that sent it</Text>
+                      </View>
+                      <View style={[s.key, s.mapKey]}><Text style={s.keyText}>MAP</Text></View>
+                    </TouchableOpacity>
+                  ) : null}
                   ListEmptyComponent={<Text style={s.dim}>{kind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.'}</Text>}
                   renderItem={({ item: it }) => (
                     <TouchableOpacity onPress={() => { void show(it); }} accessibilityRole="button"
@@ -251,6 +300,12 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                         {/* ★ only the parts an item has (an ISM day has no demodulator) — the web client's rule */}
                         <Text style={s.dim}>{[galleryWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, it.r, size(it.bytes)].filter((x) => !!x).join(' · ')}</Text>
                       </View>
+                      {!!onNodesMap && ismIsNodeCard(it) && (
+                        <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel={`Show the nodes heard on the map: ${it.title}`}
+                                          onPress={() => { void nodesMap(it); }}>
+                          <Text style={s.keyText}>MAP</Text>
+                        </TouchableOpacity>
+                      )}
                     </TouchableOpacity>
                   )} />
               )}
@@ -286,5 +341,6 @@ function makeStyles(pt: PopupTokens) {
     gap: { color: pt.ink.textDim, marginRight: 6, marginBottom: 6 },
     pageLab: { color: pt.ink.textDim, fontSize: 12, marginLeft: 'auto', marginBottom: 6 },
     off: { opacity: 0.35 },
+    mapKey: { alignSelf: 'center', marginLeft: 8, marginBottom: 0 },
   });
 }

@@ -64,7 +64,13 @@ import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioC
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
-import { ismNeighbours, ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, type IsmCap, type IsmReport } from '../services/ism';
+import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
+         type NavReport } from '../services/navtexMap';
+import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
+         navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../services/navtexWarn';
+import { NAV_HAZARD_COLOURS } from '../services/navtexIcons';
+import { ismNeighbours, ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
+         ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmCap, type IsmReport, type IsmGalNode } from '../services/ism';
 import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../services/wholeModeResume';
 // ★ V12 held session: the "VibeSDR paused" note (docs/v12/BACKGROUND-DECODING.md, "The held session")
@@ -2714,6 +2720,42 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  the ISM box's MAP — Meshtastic / MeshCore nodes and anything else ISM lists with a position — on the shared track
    *  layer (MapOverlay 'ism'). CLOSE MAP goes back to the box; ISM carries on under it. */
   const [ismMapOpen, setIsmMapOpen] = useState(false);
+  /** ★ V12 2026-11-01: the node a position link in the ISM list asked for (Stuart: "make the coordinates clickable"). */
+  const [ismFocus, setIsmFocus] = useState('');
+  /** ★ V12 2026-11-01: a gallery "stations received" card on the ISM map (GalleryOverlay MAP); CLOSE MAP goes back to the
+   *  gallery. Its own data — not a live report — so ISM need not be running. */
+  const [ismGal, setIsmGal] = useState<{ title: string; nodes: IsmGalNode[]; rx: { lat: number; lon: number } | null;
+                                         refresh: (() => Promise<IsmGalNode[] | null>) | null } | null>(null);
+  /* ★★ V12 2026-11-01 THE NAVTEX MAP — the stations received (the web's navMapOpen; src/services/navtexMap.ts): this
+   *  server's gallery folded per station by the server, refetched every 30 s while open (a message saved by a listener or
+   *  background decoding appears, pulsing). Opened from the NAVTEX box's MAP and the gallery. `navAvail`: the key is
+   *  drawn only where the server holds NAVTEX (no dead control). */
+  const [navMapOpen, setNavMapOpen] = useState(false);
+  const [navReport, setNavReport] = useState<NavReport | null>(null);
+  const [navRange, setNavRange] = useState('all');
+  /* ★★ V12 2026-11-01 stages 2 and 3: the WARNINGS and the MET LABELS on the same map, each a layer (remembered). */
+  const [navWarnRep, setNavWarnRep] = useState<NavWarnReport | null>(null);
+  const [navMetRep, setNavMetRep] = useState<NavMetReport | null>(null);
+  const [navLayers, setNavLayers] = useState<NavLayers>(navLayersOf(null));
+  useEffect(() => { AsyncStorage.getItem('lsv_nav_map_layers').then((v) => setNavLayers(navLayersOf(v))).catch(() => {}); }, []);
+  const [navAvail, setNavAvail] = useState(false);
+  const navFromGallery = useRef(false);
+  useEffect(() => { AsyncStorage.getItem('lsv_nav_map_range').then((v) => setNavRange(navRangeOf(v))).catch(() => {}); }, []);
+  /* ★★ V12 2026-11-01 THE TIME FILTER (the web's ismMapRange / ismGalRange): 24 h live, ALL in the gallery, remembered. */
+  const [ismRange, setIsmRange] = useState('24h');
+  const [ismGalRange, setIsmGalRange] = useState('all');
+  useEffect(() => {
+    AsyncStorage.multiGet(['lsv_ism_map_range', 'lsv_ism_gal_range']).then((kv) => {
+      setIsmRange(ismRangeOf(kv[0][1], true)); setIsmGalRange(ismRangeOf(kv[1][1], false));
+    }).catch(() => {});
+  }, []);
+  // ★ LIVE in the gallery's map: today's card fetched again each minute while the map is open
+  useEffect(() => {
+    if (!ismGal?.refresh) return;
+    const f = ismGal.refresh;
+    const t = setInterval(() => { void f().then((n) => { if (n) setIsmGal((g) => (g && g.refresh === f ? { ...g, nodes: n } : g)); }); }, 60_000);
+    return () => clearInterval(t);
+  }, [ismGal?.refresh]);
   const [aprsFocus, setAprsFocus] = useState('');
   /** ★ V12 DSC: the box's MAP — the positions sent, on the track layer (MapOverlay 'dsc'), opened on the call pressed. */
   const [dscMapOpen, setDscMapOpen] = useState(false);
@@ -3993,6 +4035,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     : aisViewOpen && !IS_APPLE_TV ? 'ais' : aprsMapOpen && !IS_APPLE_TV ? 'aprs'
     // ★ V12 DSC's positions — the box's MAP (the decoder carries on)
     : dscMapOpen && !IS_APPLE_TV ? 'dsc'
+    : navMapOpen && !IS_APPLE_TV ? 'navtex'
+    : ismGal && !IS_APPLE_TV ? 'ism'
     : ismMapOpen && !IS_APPLE_TV && ismOn ? 'ism' : mapKind;
   // On-device FT8 spots map (Local/Kiwi) + its no-GPS city-picker fallback.
   const [localMapOpen, setLocalMapOpen]   = useState(false);
@@ -10753,10 +10797,110 @@ export default function SDRScreen({ route, navigation }: Props) {
     status: `${dscCalls.filter((c) => c.lat !== null).length} of ${dscCalls.length} calls sent a position`,
     empty: DSC_MAP_EMPTY, focus: dscFocus, trail: () => Promise.resolve([] as [number, number][]),
   }), [dscCalls, trkRx?.lat, trkRx?.lon, dscFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const ismTrk = useMemo(() => ({
-    items: ismMapItems(ismReport, trkRx), rows: ismMapRows(ismReport, trkRx), status: ismMapStatus(ismReport, trkRx),
-    empty: ISM_MAP_EMPTY, focus: '', trail: () => Promise.resolve([] as [number, number][]),
-  }), [ismReport, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const ismTrk = useMemo(() => {
+    // ★ a link to a node outside the chosen range shows 24 h, so the node asked for is there
+    const range = ismFocus && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === ismFocus), ismRange).length ? '24h' : ismRange;
+    const r = ismReport ? { ...ismReport, devices: ismInRange(ismReport.devices, range) } : null;
+    return {
+      items: ismMapItems(r, trkRx), rows: ismMapRows(r, trkRx), status: ismMapStatus(r, trkRx),
+      empty: ISM_MAP_EMPTY, focus: ismFocus, trail: () => Promise.resolve([] as [number, number][]),
+      ranges: ISM_LIVE_RANGES, range, rangeHint: ISM_RANGE_HINT_LIVE,
+      onRange: (id: string) => { setIsmRange(id); setIsmFocus(''); AsyncStorage.setItem('lsv_ism_map_range', id).catch(() => {}); },
+    };
+  }, [ismReport, trkRx?.lat, trkRx?.lon, ismFocus, ismRange]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const ismGalTrk = useMemo(() => {
+    const rx = trkRx ?? ismGal?.rx ?? null;
+    const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);
+    return { items: ismGalItems(nodes, rx), rows: ismGalRows(nodes, rx), status: `${ismGalStatus(nodes, rx)}${ismGal ? ' · ' + ismGal.title.split(' · ').slice(2).join(' · ') : ''}`,
+             empty: 'Nothing heard with a position in this time.', focus: '', trail: () => Promise.resolve([] as [number, number][]),
+             ranges: ISM_RANGES, range: ismGalRange, rangeHint: ISM_RANGE_HINT_GAL,
+             onRange: (id: string) => { setIsmGalRange(id); AsyncStorage.setItem('lsv_ism_gal_range', id).catch(() => {}); } };
+  }, [ismGal, trkRx?.lat, trkRx?.lon, ismGalRange]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const navFetch = useCallback(async (range: string): Promise<NavReport | null> => {
+    try {
+      const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/gallery/navtex-stations.json?since=${navSince(range)}`,
+                                         radioAuthSuffix || route.params.authSuffix || ''), { cache: 'no-store' } as any);
+      return r.ok ? navSanitise(await r.json()) : null;
+    } catch { return null; }
+  }, [connectBase, radioAuthSuffix, route.params.authSuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const navGet = useCallback(async <T,>(path: string, range: string, clean: (j: any) => T | null): Promise<T | null> => {
+    try {
+      const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/gallery/${path}?since=${navSince(range)}`,
+                                         radioAuthSuffix || route.params.authSuffix || ''), { cache: 'no-store' } as any);
+      return r.ok ? clean(await r.json()) : null;
+    } catch { return null; }
+  }, [connectBase, radioAuthSuffix, route.params.authSuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ LIVE: every 30 s while open, every 2 s while the server is still building its warnings index (the backfill: 400
+   *  saved messages a request) — new or updated warnings pulse, the map is never reloaded. */
+  useEffect(() => {
+    if (!navMapOpen) return;
+    let live = true, t: ReturnType<typeof setTimeout> | null = null;
+    const go = async () => {
+      const w = navLayers.warnings || navLayers.weather ? await navGet('navtex-warnings.json', navRange, navWarnSanitise) : null;
+      const m = navLayers.weather ? await navGet('navtex-met.json', navRange, navMetSanitise) : null;
+      const r = await navFetch(navRange);
+      if (!live) return;
+      if (r) setNavReport(r);
+      if (w) setNavWarnRep(w);
+      if (m) setNavMetRep(m);
+      t = setTimeout(() => { void go(); }, w && w.pending > 0 ? 2000 : 30_000);
+    };
+    void go();
+    return () => { live = false; if (t) clearTimeout(t); };
+  }, [navMapOpen, navRange, navFetch, navGet, navLayers]);
+  // ★ MAP in the NAVTEX box only where this server holds NAVTEX in its gallery (asked once per NAVTEX box opening)
+  useEffect(() => {
+    if (activeDecoder !== 'navtex') return;
+    let live = true;
+    void navFetch('all').then((r) => { if (live) setNavAvail(!!r && r.stations.length > 0); });
+    return () => { live = false; };
+  }, [activeDecoder, navFetch]);
+  const navTrk = useMemo(() => {
+    const now = navWarnRep?.now ?? navMetRep?.now ?? navReport?.now ?? Math.floor(Date.now() / 1000);
+    const warns = navLayers.warnings ? navWarnVisible(navWarnRep, navRange) : [];
+    const areas = navLayers.weather ? navMetVisible(navMetRep, navRange) : [];
+    // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
+    const listed = navLayers.weather ? navMetListed(navMetRep) : [];
+    const ago = (sec: number) => (sec < 3600 ? `${Math.round(sec / 60)} min` : sec < 86400 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} d`);
+    const rows = [
+      ...(navLayers.stations ? navListRows(navReport) : []),
+      ...listed.slice().sort((a, b) => Number(a.stale) - Number(b.stale) || Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t).map((a) => ({
+        key: a.key, colour: a.stale ? '#9aa6b2' : navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8', flag: '', name: a.name, second: navMetRowWords(a), sp: '', trend: 0 as const,
+        range: '', brg: '', noPos: a.stale, age: ago(Math.max(0, now - a.fc[0].t)), em: false })),
+      ...warns.slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300).map((w) => ({
+        key: w.key, colour: navWarnTag(w) ? '#9aa6b2' : NAV_HAZARD_COLOURS[w.cls === 'navaid' ? 'light' : (w.cls as keyof typeof NAV_HAZARD_COLOURS)] ?? '#d7dee6', flag: '',
+        name: `${w.id} · ${navWarnSummary({ ...w, hit: '', lang: '' })}`, second: [w.st ? navName(w.st, w.sc) : '', navWarnTag(w)].filter(Boolean).join(' · '),
+        sp: '', trend: 0 as const, range: '', brg: '', noPos: false, age: ago(Math.max(0, now - w.last)), em: false })),
+    ];
+    const building = navBuilding(navWarnRep);
+    return {
+      items: [...(navLayers.stations ? navItems(navReport) : []), ...navMetItems(areas, now, 'app'), ...navWarnItems(warns, now, 'app')],
+      rows, empty: NAV_EMPTY, focus: '',
+      status: [navLayers.stations ? navStatus(navReport) : '', navLayers.warnings ? navWarnStatus(navWarnRep, navRange) : '', navLayers.weather ? navMetStatus(navMetRep, navRange) : '', building].filter(Boolean).join(' · '),
+      note: building,
+      trail: () => Promise.resolve([] as [number, number][]),
+      ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
+      onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
+      toggles: NAV_LAYERS, toggled: navLayers as Record<string, boolean>,
+      onToggle: (id: string, on: boolean) => setNavLayers((cur) => { const nx = { ...cur, [id]: on }; AsyncStorage.setItem('lsv_nav_map_layers', JSON.stringify(nx)).catch(() => {}); return nx; }),
+      // ★ a card's gallery text, with the read auth (the gallery viewer's own fetch)
+      cardText: async (f: string) => {
+        try {
+          const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/gallery/file/${encodeURIComponent(f)}`, radioAuthSuffix || route.params.authSuffix || ''), { cache: 'no-store' } as any);
+          return r.ok ? { ok: true, text: await r.text() } : { ok: false, text: 'This message is no longer in the gallery (it keeps the newest).' };
+        } catch { return { ok: false, text: 'Could not reach the server.' }; }
+      },
+      translateTo: txTarget,
+    };
+  }, [navReport, navWarnRep, navMetRep, navRange, navLayers, connectBase, radioAuthSuffix, txTarget]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const closeNavMap = useCallback(() => {
+    setNavMapOpen(false);
+    if (navFromGallery.current) { navFromGallery.current = false; setGalleryOpen(true); }   // ★ back to the gallery it came from
+  }, []);
+  const closeIsmMap = useCallback(() => {
+    if (ismGal) { setIsmGal(null); setGalleryOpen(true); return; }   // ★ back to the gallery it came from
+    setIsmMapOpen(false); setIsmFocus('');
+  }, [ismGal]);   // eslint-disable-line react-hooks/exhaustive-deps
   const aprsTrk = useMemo(() => ({
     items: aprsItems(aprsList, trkRx), rows: aprsListRows(aprsList, trkRx), status: aprsStatus(aprsList, aprsCap.hz),
     empty: APRS_EMPTY, focus: aprsFocus,
@@ -12899,7 +13043,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears), and under them a BALANCE between A and B to turn the louder one down; VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers them, synchronous AM sits beside AM — SAM (locked to the carrier, so selective fading does not distort), SAM-U and SAM-L (one sideband, away from a neighbour), ECSS-U and ECSS-L (the same lock with an SSB-style filter) and AM-ST (AM Stereo, C-QUAM compatible: the stereo rings light while its pilot is received). Where the server offers it for the mode you are in, AUTO sits above SYNC between the bandwidth sliders: the receiver sets the width itself (SSB to the voice being sent, CW round the keyed tone, AM away from a neighbour, FM narrower for a weak station) and the sliders show what it chose. In AM, SSB and CW it starts off — tap AUTO to try it. Move a slider and AUTO switches off. DRM sits beside AM too: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map; NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK \u2014 one key for MFSK16/32, OLIVIA, CONTESTIA and THOR: AUTO names the one it finds, and FAMILY and MODE under the key pick one by hand when AUTO cannot lock \u2014, HELL \u2014 Feld Hell (Hellschreiber), drawn as it is heard: the strips build up in the picture box a page at a time and you read them, with PREV for the page before \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG and FLEX, the protocol and rate found by AUTO and named in the box, with PROTOCOL (and RATE for POCSAG) under the key for when AUTO cannot lock; the speaker is muted while it runs, and pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers them, synchronous AM sits beside AM — SAM (locked to the carrier, so selective fading does not distort), SAM-U and SAM-L (one sideband, away from a neighbour), ECSS-U and ECSS-L (the same lock with an SSB-style filter) and AM-ST (AM Stereo, C-QUAM compatible: the stereo rings light while its pilot is received). Where the server offers it for the mode you are in, AUTO sits above SYNC between the bandwidth sliders: the receiver sets the width itself (SSB to the voice being sent, CW round the keyed tone, AM away from a neighbour, FM narrower for a weak station) and the sliders show what it chose. In AM, SSB and CW it starts off — tap AUTO to try it. Move a slider and AUTO switches off. DRM sits beside AM too: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map (tap a node\u2019s position in the list to open the map on it; a companion node is a person, so it is placed only to within about 1 km); NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens a map of the ships heard on 162 MHz, with its list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX \u2014 with MAP, the stations this server has received \u2014, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK \u2014 one key for MFSK16/32, OLIVIA, CONTESTIA and THOR: AUTO names the one it finds, and FAMILY and MODE under the key pick one by hand when AUTO cannot lock \u2014, HELL \u2014 Feld Hell (Hellschreiber), drawn as it is heard: the strips build up in the picture box a page at a time and you read them, with PREV for the page before \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG and FLEX, the protocol and rate found by AUTO and named in the box, with PROTOCOL (and RATE for POCSAG) under the key for when AUTO cannot lock; the speaker is muted while it runs, and pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard \u2014 a day\u2019s LoRa nodes card has its own MAP) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
       body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
     // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
@@ -13496,6 +13640,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         <PanelBoundary name="Decoder" onClose={dismissDecoderPanel}>
         <DecoderPanel
           activeDecoder={activeDecoder}
+          onNavtexMap={!IS_APPLE_TV && navAvail ? () => { markInteract(); navFromGallery.current = false; setNavMapOpen(true); } : null}
           tunedHz={status.frequency}
           receiverPos={serverPos ?? recvLoc}
           decoderText={decoderText}
@@ -14386,7 +14531,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           canUp={!!ismNeighbours(ismCap, ismReport).next}
           tall={ismTall} onTall={onIsmTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
-          onMap={IS_APPLE_TV ? null : () => { markInteract(); setIsmMapOpen(true); }}
+          onMap={IS_APPLE_TV ? null : (key?: string) => { markInteract(); setIsmFocus(key ?? ''); setIsmMapOpen(true); }}
           rx={serverPos ?? recvLoc ?? null}
           bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH}
         />
@@ -14712,6 +14857,8 @@ export default function SDRScreen({ route, navigation }: Props) {
         readAuth={radioAuthSuffix || route.params.authSuffix || ''}
         translateTo={txTarget}
         onClose={() => setGalleryOpen(false)}
+        onNodesMap={IS_APPLE_TV ? null : (title, nodes, rx, refresh) => { setGalleryOpen(false); setIsmGal({ title, nodes, rx, refresh }); }}
+        onNavtexMap={IS_APPLE_TV ? null : () => { setGalleryOpen(false); navFromGallery.current = true; setNavMapOpen(true); }}
       />
       <RecordingsOverlay
         visible={recordingsOpen}
@@ -15294,19 +15441,19 @@ export default function SDRScreen({ route, navigation }: Props) {
           adsb_off is what finally takes the map down. A crash in it only puts it away (the mode key brings it back). */}
       {/* ★ IS_TV is true on ANDROID TV as well, which has a WebView: ADS-B's map is drawn there (it is the mode's only
           screen off Apple TV); the other server maps keep their old gate (tv.ts IS_APPLE_TV). */}
-      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
-                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? setIsmMapOpen(false) : setMapKind(null))}
+      {(!IS_TV || ((shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex') && !IS_APPLE_TV)) && <PanelBoundary name="Map"
+                                onClose={() => (shownMap === 'adsb' ? setAdsbViewOpen(false) : shownMap === 'ndb' ? setNdbViewOpen(false) : shownMap === 'ais' ? setAisViewOpen(false) : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : setMapKind(null))}
                                 resetKey={shownMap !== null}><MapOverlay
         visible={shownMap !== null}
         kind={shownMap}
         baseUrl={baseUrl}
         radioUrl={connectBase}
         sessionUuid={sessionUuid}
-        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? setIsmMapOpen(false) : setMapKind(null))}
+        onClose={() => (shownMap === 'adsb' ? exitAdsb() : shownMap === 'ndb' ? exitNdb() : shownMap === 'ais' ? exitAis() : shownMap === 'aprs' ? setAprsMapOpen(false) : shownMap === 'dsc' ? setDscMapOpen(false) : shownMap === 'ism' ? closeIsmMap() : shownMap === 'navtex' ? closeNavMap() : setMapKind(null))}
         /* ★ ADS-B: the receiver is the server's own /location and the aircraft come from our spectrum socket — both
          *  handed in (the page opens no connection of its own). Undefined for the UberSDR maps, which ask for theirs. */
-        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' ? (serverPos ?? recvLoc)?.lat ?? null : undefined}
-        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' ? (serverPos ?? recvLoc)?.lon ?? null : undefined}
+        rxLat={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lat ?? null : undefined}
+        rxLon={shownMap === 'adsb' || shownMap === 'ndb' || shownMap === 'ais' || shownMap === 'aprs' || shownMap === 'dsc' || shownMap === 'ism' || shownMap === 'navtex' ? (serverPos ?? recvLoc ?? (shownMap === 'ism' ? ismGal?.rx : shownMap === 'navtex' ? navReport?.rx : null))?.lon ?? null : undefined}
         /* ★★ V12 NDB: the report, the readings kept, Find and the stats (NdbLiveList) — the page opens no socket of its own. */
         ndb={shownMap === 'ndb' ? {
           report: ndbReport, tracks: ndbTracks.current, seq: ndbSeq, found: ndbFound, findResult: ndbFindResult, stats: ndbStats,
@@ -15314,7 +15461,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           onStats: () => { setNdbStats(null); client.current?.ndbStats?.(); },
         } : undefined}
         /* ★★ V12 AIS / APRS: the items (icon, label, card made here), the live list, its status and the AIS safety strip. */
-        trk={shownMap === 'ais' ? aisTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? ismTrk : null}
+        trk={shownMap === 'ais' ? aisTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? (ismGal ? ismGalTrk : ismTrk) : shownMap === 'navtex' ? navTrk : null}
         /* ★ V12 the spots map's MODE filter and legend: this server's modes (vibeserver.json spotModes), by family */
         spotModes={shownMap === 'digi' ? spotModesSrv : undefined}
         adsbAircraft={shownMap === 'adsb' ? adsbReport?.aircraft ?? null : undefined}

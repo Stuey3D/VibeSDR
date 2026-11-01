@@ -99,6 +99,9 @@ export interface DecoderPanelProps {
   notice?:       { text: string; action?: string; onAction?: () => void } | null;
   /** ★ NAVTEX: the stream cut into messages (utils/navtex), fed by SDRScreen as text arrives. */
   navtex?:       NavtexAssembler | null;
+  /** ★ V12 2026-11-01: MAP — the NAVTEX stations this server has received (its gallery). Null = no key (no map, or a
+   *  server that keeps no NAVTEX). */
+  onNavtexMap?:  (() => void) | null;
   /** ★ V12: the RECEIVING server's position — with the dial, what names a NAVTEX station ("B · Oostende, Belgium 🇧🇪").
    *  null/absent → the letter only ("Station B"), as before. */
   receiverPos?:  { lat: number; lon: number } | null;
@@ -293,7 +296,7 @@ const FONT = DECODER_FONT;
 
 export default function DecoderPanel({
   activeDecoder, decoderText, aircraft, decoderStatus, decoding, notice,
-  bottomOffset, onClear, onClose, navtex,
+  bottomOffset, onClear, onClose, navtex, onNavtexMap,
   imageRef, onImageStatus,
   morseQuality = 'all', onMorseQuality,
   spotsKind = null, spots = [], onTuneHz,
@@ -1213,6 +1216,13 @@ export default function DecoderPanel({
             </HBtn>
           )}
 
+          {/* ★ V12 NAVTEX: MAP — the stations received (the web box's MAP key). Only where the server keeps NAVTEX. */}
+          {isNavtex && !!onNavtexMap && (
+            <HBtn run hitSlop={6} accessibilityLabel="NAVTEX stations received, on the map"
+              onPress={(e: any) => { e?.stopPropagation(); onNavtexMap?.(); }}>
+              <DecoderKeyLabel>MAP</DecoderKeyLabel>
+            </HBtn>
+          )}
           {/* ★ V12 APRS: MAP — the stations on the map (the web box's MAP key). Not where there is no map. */}
           {isAprs && !!aprs!.onMap && (
             <HBtn run hitSlop={6} accessibilityLabel="Show the stations on the map"

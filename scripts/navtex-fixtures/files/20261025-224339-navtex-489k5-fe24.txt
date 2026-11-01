@@ -1,0 +1,19 @@
+NAVTEX · Station Q · Nav warning · #87 · gaps: 2 (18 s)
+Received 2026-10-25 22:43 UTC · 1% of characters lost
+489.500 kHz USB · background decoding (Profile 1)
+
+ZCZC QA87
+140626 !75: '50 26
+
+[… signal lost 7 s …]
+WJDZVWMUFMMKMNSZ_ZJBNBZYBXZMYPSMZJNPZJYSPTXAFMKFJFMDPWBSKGOO
+JJONJFQFMXI MV
+COKGHJOM
+HF 
+8
+7::;..!(0$.&717;1/IJMF
+[… signal lost 11 s …]
+
+AQO 05:;:U
+C EOS VQWW ULF
+[end lost]

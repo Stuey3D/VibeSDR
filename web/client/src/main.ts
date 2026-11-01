@@ -20,8 +20,15 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
-import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus } from './ism';
+import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
+         ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
+         ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
+import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName, navItems,
+         NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
+import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
+         navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
+import { NAV_HAZARD_COLOURS } from '../../../src/services/navtexIcons';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -69,11 +76,11 @@ import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, RTTY_WEATHER, type RttyParity } from '../../../src/utils/rttySpec';
-import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../../../src/utils/galleryPager';
+import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots, type GalleryKinds } from '../../../src/utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines } from '../../../src/utils/galleryTranslate';
-import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
+import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 import { SqlAutoTrack } from '../../../src/utils/sqlAutoTrack';
@@ -8636,7 +8643,7 @@ function ismUiOn() {
   ismOn = true;
   syncAudioQuiet();
   if (spec) spec.ismHeld = true;
-  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d), () => ismMapOpen(), () => myPos());
+  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d), (key) => ismMapOpen(key), () => myPos());
   ismBox.show();
   ismLockControls(true);
   if (wf) wf.vfoHidden = true;   // ★ no LISTEN needle on a band capture
@@ -8770,17 +8777,235 @@ function onIsmReport(r: IsmReport | null) {
  *  Meshtastic and MeshCore nodes today — the receiver and range rings; CLOSE MAP goes back to the list. ISM carries on
  *  under it either way. */
 let ismMapView: TrackView | null = null;
-function ismMapOpen() {
+const ISM_RANGE_LIVE_KEY = 'vibesdr.ismMapRange', ISM_RANGE_GAL_KEY = 'vibesdr.ismGalRange';
+const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* private window */ } };
+let ismMapRange = ismRangeOf(lsGet(ISM_RANGE_LIVE_KEY), true);
+/** ★ `key`: a node's position link in the list (Stuart, 2026-11-01: "make the coordinates clickable") — the map opens on
+ *  it, selected, pulsing, its card open. Empty = the MAP key: every node, fitted. */
+function ismMapOpen(key = '') {
   if (!ismMapView) ismMapView = new TrackView({
     title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(),
-    icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()),
+    icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
+    ranges: ISM_LIVE_RANGES, range: ismMapRange, rangeHint: ISM_RANGE_HINT_LIVE,
+    onRange: (id) => { ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
   });
+  // ★ a link to a node outside the chosen range widens it, so the node asked for is there
+  if (key && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === key), ismMapRange).length) {
+    ismMapRange = '24h';
+    for (const b of Array.from(ismMapView.root.querySelectorAll('[data-rng]'))) b.setAttribute('aria-pressed', String((b as HTMLElement).dataset.rng === '24h'));
+  }
   ismMapView.show(myPos());
   ismMapRender();
+  if (key) ismMapView.focus(key);
+}
+/* ★★ V12 2026-11-01 THE NAVTEX MAP — THE STATIONS RECEIVED (Stuart: "it would be cool to be able to open a map and see
+ *  which navtex stations you've received"). The server folds this gallery's NAVTEX messages per station (vibe_navtex_map.h);
+ *  this draws them on the shared map view: each station where the gallery's own label puts it, a faint great-circle
+ *  line from the receiver, its distance, first / last heard, how many messages, their kinds, the newest ids. Opened from
+ *  the NAVTEX box's MAP and the gallery. ★ LIVE: refetched every 30 s while open (the server caches; a scan of the index
+ *  only when it changed), so a message saved by a listener's decoder or background decoding appears, pulsing. */
+const NAV_RANGE_KEY = 'vibesdr.navMapRange', NAV_LAYERS_KEY = 'vibesdr.navMapLayers';
+let navView: TrackView | null = null;
+let navTimer: ReturnType<typeof setTimeout> | null = null;
+let navRange = navRangeOf((() => { try { return localStorage.getItem(NAV_RANGE_KEY); } catch { return null; } })());
+let navLayers: NavLayers = navLayersOf((() => { try { return localStorage.getItem(NAV_LAYERS_KEY); } catch { return null; } })());
+let navLast: { st: NavReport | null; w: NavWarnReport | null; m: NavMetReport | null } = { st: null, w: null, m: null };
+async function navFetch(range: string): Promise<NavReport | null> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery/navtex-stations.json?since=${navSince(range)}`), { cache: 'no-store' });
+    return r.ok ? navSanitise(await r.json()) : null;
+  } catch { return null; }
+}
+/* ★★ V12 2026-11-01 stages 2 and 3: the WARNINGS (navtex-warnings.json) and the MET LABELS (navtex-met.json) on the same
+ *  map, each a layer (STATIONS · WARNINGS · WEATHER, remembered). The first opening on a big gallery is the server's
+ *  BACKFILL: each request indexes 400 more saved messages, so while it says "pending" the map asks again every 2 s and
+ *  says "Building the map from N saved messages… X %". */
+async function navFetchJson<T>(path: string, range: string, clean: (j: any) => T | null): Promise<T | null> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery/${path}?since=${navSince(range)}`), { cache: 'no-store' });
+    return r.ok ? clean(await r.json()) : null;
+  } catch { return null; }
+}
+async function navFetchAll(range: string) {
+  // ★ one after another: the warnings request does the backfill the met request then reads
+  const w = navLayers.warnings || navLayers.weather ? await navFetchJson('navtex-warnings.json', range, navWarnSanitise) : null;
+  const m = navLayers.weather ? await navFetchJson('navtex-met.json', range, navMetSanitise) : null;
+  const st = await navFetch(range);
+  return { st, w, m };
+}
+/** The gallery texts a card shows (one fetch a message while the map is open). */
+const navTexts = new Map<string, string>();
+let navCardSeq = 0;
+function navCardFill(_key: string, el: HTMLElement) {
+  const pre = el.querySelector('.nvTx') as HTMLElement | null;
+  if (!pre) return;
+  const f = pre.dataset.f || '';
+  const btn = el.querySelector('.nvTr') as HTMLButtonElement | null, note = el.querySelector('.nvTrNote') as HTMLElement | null;
+  const seq = ++navCardSeq;
+  const show = (text: string, okText: boolean) => {
+    if (seq !== navCardSeq || !pre.isConnected) return;
+    pre.textContent = text;
+    if (okText && btn && note) void translateSetup({ kind: 'navtex', title: btn.dataset.title || '', body: text, btn, textEl: pre, note, alive: () => seq === navCardSeq && pre.isConnected });
+  };
+  const have = navTexts.get(f);
+  if (have != null) { show(have, true); return; }
+  void fetch(galUrl(`/vibeserver/gallery/file/${encodeURIComponent(f)}`), { cache: 'no-store' })
+    .then(async (r) => { if (!r.ok) { show('This message is no longer in the gallery (it keeps the newest).', false); return; }
+                         const t = await r.text(); if (navTexts.size > 200) navTexts.clear(); navTexts.set(f, t); show(t, true); })
+    .catch(() => show('Could not reach the server.', false));
+}
+function navRowsHtml(r: NavReport | null, w: NavWarnReport | null, m: NavMetReport | null): string {
+  const out: string[] = [];
+  const sec = (t: string) => `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`;
+  if (navLayers.stations && r) {
+    if (navLayers.warnings || navLayers.weather) out.push(sec('STATIONS'));
+    if (!r.stations.length) out.push(`<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`);
+    for (const { g, second, range } of navRows(r)) out.push(`<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
+      + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(navName(g.name, g.conf))}</b><small>${escapeHtml(second)}</small></span>`
+      + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
+  }
+  if (navLayers.weather && m) {
+    // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
+    const areas = navMetListed(m).slice().sort((a, b) => Number(a.stale) - Number(b.stale) || Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t);
+    if (areas.length) out.push(sec('WEATHER — LATEST PER SEA AREA'));
+    for (const a of areas) out.push(`<div class="trkRow${a.stale ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(a.key)}">`
+      + `<span class="id"><b><i class="sw" style="background:${a.stale ? '#9aa6b2' : navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8'}"></i>${escapeHtml(a.name)}</b><small>${escapeHtml(navMetRowWords(a))}</small></span>`
+      + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, m.now - a.fc[0].t)))}</span></div>`);
+  }
+  if (navLayers.warnings && w) {
+    const list = navWarnVisible(w, navRange).slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300);
+    if (list.length) out.push(sec('WARNINGS'));
+    for (const x of list) out.push(`<div class="trkRow${navWarnTag(x) ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
+      + `<span class="id"><b><i class="sw" style="background:${navWarnTag(x) ? '#9aa6b2' : NAV_HAZARD_COLOURS[x.cls === 'navaid' ? 'light' : (x.cls as keyof typeof NAV_HAZARD_COLOURS)] ?? '#d7dee6'}"></i>${escapeHtml(x.id)} · ${escapeHtml(navWarnSummary({ ...x, hit: '', lang: '' }))}</b>`
+      + `<small>${escapeHtml([x.st ? navName(x.st, x.sc) : '', navWarnTag(x)].filter(Boolean).join(' · '))}</small></span>`
+      + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, w.now - x.last)))}</span></div>`);
+  }
+  return out.join('');
+}
+function navDraw() {
+  if (!navView) return;
+  const { st: r, w, m } = navLast;
+  const rx = myPos() ?? r?.rx ?? null;
+  const now = w?.now ?? m?.now ?? r?.now ?? Math.floor(Date.now() / 1000);
+  const items: any[] = [];
+  if (navLayers.stations) items.push(...navItems(r, 'web'));
+  if (navLayers.weather) items.push(...navMetItems(navMetVisible(m, navRange), now, 'web'));
+  if (navLayers.warnings) items.push(...navWarnItems(navWarnVisible(w, navRange), now, 'web'));
+  const building = navBuilding(w);
+  const status = [navLayers.stations ? navStatus(r) : '', navLayers.warnings ? navWarnStatus(w, navRange) : '', navLayers.weather ? navMetStatus(m, navRange) : '', building]
+    .filter(Boolean).join(' · ');
+  navView.update(items, navRowsHtml(r, w, m), status, items.length, rx);
+  navView.note(building);
+}
+async function navMapOpen() {
+  if (!navView) navView = new TrackView({
+    title: 'NAVTEX', exitLabel: 'CLOSE MAP', listTitle: 'NAVTEX',
+    onExit: () => { navView?.hide(); if (navTimer) { clearTimeout(navTimer); navTimer = null; } },
+    icon: (it) => it._ic, label: (it) => it._lb, card: (it) => it._cd, labelZoom: 3, focusZoom: 6, heard: (it) => it._h ?? 0,
+    labelRank: (it) => it._rk ?? 0, arc: (it) => !!it._arc,
+    shape: (it) => it._sh, cluster: (it) => it._cl || '', clusterZoom: 8, clusterAlways: ['m'], aria: (it) => it._aria || it._lb || '',
+    // ★ the declutter's priority: the selected item, stations, warnings, then the weather labels — which give way first
+    yieldGroups: ['m'],
+    onCard: navCardFill,
+    ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
+    onRange: (id) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true); },
+    toggles: NAV_LAYERS, toggled: navLayers,
+    onToggle: (id, on) => {
+      navLayers = { ...navLayers, [id]: on };
+      try { localStorage.setItem(NAV_LAYERS_KEY, JSON.stringify(navLayers)); } catch { /* private */ }
+      navDraw(); void navPoll(true);
+    },
+  });
+  navView.show(myPos());
+  navLast = { st: null, w: null, m: null };
+  navDraw();
+  await navPoll(true);
+}
+/** ★ LIVE: every 30 s while open (2 s while the server is still building the index) — a message saved by a listener's
+ *  decoder or background decoding appears, pulsing, without the map being reloaded. */
+let navPollSeq = 0;
+async function navPoll(now = false) {
+  if (navTimer) { clearTimeout(navTimer); navTimer = null; }
+  if (!navView?.open) return;
+  const seq = ++navPollSeq;
+  if (now) navView.note(navBuilding(navLast.w) || '');
+  const got = await navFetchAll(navRange);
+  if (seq !== navPollSeq || !navView?.open) return;
+  navLast = { st: got.st ?? navLast.st, w: got.w ?? (navLayers.warnings || navLayers.weather ? navLast.w : null), m: got.m ?? (navLayers.weather ? navLast.m : null) };
+  navDraw();
+  navTimer = setTimeout(() => { void navPoll(); }, navLast.w && navLast.w.pending > 0 ? 2000 : 30_000);
+}
+/** ★ MAP is drawn only where it has something to show (AGENTS.md: no dead control) — this server keeps NAVTEX items. */
+let navMapAvail: boolean | null = null;
+async function navMapProbe(): Promise<boolean> {
+  if (navMapAvail !== null) return navMapAvail;
+  const r = await navFetch('all');
+  navMapAvail = !!r && r.stations.length > 0;
+  return navMapAvail;
+}
+
+/* ★★ V12 2026-11-01 THE GALLERY'S "STATIONS RECEIVED" MAP (Stuart: "being able to open up the map in the Gallery so that if
+ *  I have this set as the background profile we can see which stations we received"). A gallery item whose slot is
+ *  "ismnodes-…" (vibe_ism_gallery.h) has MAP: its table, on the same map view and the same icons as the live ISM map —
+ *  each node with first / last heard, times heard, and whether it was heard in the background or live. */
+let ismGalView: TrackView | null = null;
+let ismGalTimer: ReturnType<typeof setInterval> | null = null;
+/** ★ The band's day cards still in the gallery (newest first, at most 31): MAP merges them, and the time filter picks. */
+async function ismGalCards(band: string): Promise<GalleryItem[]> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery.json?kind=ism&limit=1000`), { cache: 'no-store' });
+    const j = r.ok ? await r.json() as { items?: GalleryItem[] } : {};
+    return (j.items ?? []).filter((it) => ismIsNodeCard(it) && ismNodeCardBand(it.s) === band).sort((a, b) => b.t - a.t).slice(0, 31);
+  } catch { return []; }
+}
+async function ismGalFetch(it: GalleryItem): Promise<{ nodes: IsmGalNode[]; rx: { lat: number; lon: number } | null } | null> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery/file/${encodeURIComponent(it.f)}`), { cache: 'no-store' });
+    return r.ok ? ismNodesParse(await r.text(), it.t, Math.floor(Date.now() / 1000)) : null;
+  } catch { return null; }
+}
+async function ismGalMapOpen(it0: GalleryItem) {
+  const band = ismNodeCardBand(it0.s);
+  // ★ every day card of the band (the one pressed among them); fetched one at a time — a live server
+  const cards = band ? await ismGalCards(band) : [];
+  if (!cards.some((c) => c.f === it0.f)) cards.unshift(it0);
+  const per = new Map<string, IsmGalNode[]>();
+  let cardRx: { lat: number; lon: number } | null = null;
+  for (const c of cards) { const p = await ismGalFetch(c); if (p) { per.set(c.f, p.nodes); cardRx = cardRx ?? p.rx; } }
+  const rx = myPos() ?? cardRx;
+  let range = ismRangeOf(lsGet(ISM_RANGE_GAL_KEY), false);
+  const days = new Set(cards.map((c) => Math.floor(c.t / 86400))).size;
+  const draw = () => {
+    const all = ismGalMerge([...per.values()], Math.floor(Date.now() / 1000));
+    const nodes = ismInRange(all, range);
+    ismGalView?.update(nodes, ismGalRows(nodes, rx), per.size ? `${ismGalStatus(nodes, rx)} · ${days} ${days === 1 ? 'day' : 'days'} in the gallery` : 'This item is no longer on the server.', nodes.length, rx);
+  };
+  ismGalView?.destroy();
+  if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; }
+  const close = () => { if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; } ismGalView?.destroy(); ismGalView = null; };
+  const t = `LoRa nodes heard · ${band ? band + ' MHz' : ''}`;
+  ismGalView = new TrackView({
+    title: t, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: close,
+    icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx), labelZoom: 6, focusZoom: 11, heard: ismMapHeard, labelRank: ismMapRank,
+    ranges: ISM_RANGES, range, rangeHint: ISM_RANGE_HINT_GAL,
+    onRange: (id) => { range = id; lsSet(ISM_RANGE_GAL_KEY, id); draw(); },
+  });
+  ismGalView.show(rx);
+  draw();
+  /* ★ LIVE: today's card is rewritten at most once a minute while ISM runs (a listener, or background decoding) — while
+   *  this map is open it is fetched again each minute, and a node heard since pulses (the layer's `heard`). */
+  const today = cards.find((c) => Math.floor(c.t / 86400) === Math.floor(Date.now() / 86400000));
+  if (today) ismGalTimer = setInterval(async () => {
+    if (!ismGalView?.open) { if (ismGalTimer) clearInterval(ismGalTimer); ismGalTimer = null; return; }
+    const p = await ismGalFetch(today);
+    if (p) { per.set(today.f, p.nodes); draw(); }
+  }, 60_000);
 }
 function ismMapRender() {
   if (!ismMapView?.open) return;
-  const r = ismReport;
+  const r0 = ismReport;
+  const r = r0 ? { ...r0, devices: ismInRange(r0.devices, ismMapRange) } : null;   // ★ the time filter
   const items = r ? r.devices.filter(ismOnMap) : [];
   ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
 }
@@ -12105,6 +12330,8 @@ function renderNavtex() {
   view.classList.toggle('has', !!shown);
   if (shown) {
     $('nvTitle').textContent = navtexTitle(shown, nvPlace());
+    // ★ 2026-11-01: why that station — plain English, this message's evidence (hover)
+    $('nvTitle').title = navtexStationWhy(shown, nvPlace()).join('\n');
     const pct = navtexLostPct(shown);
     // ★ Where it is, under the title too — on a phone the header's status is the first thing squeezed out.
     $('nvMeta').textContent = [nvViewPrev ? 'PREVIOUS' : !shown.done ? 'RECEIVING' : 'STANDING BY',
@@ -12689,6 +12916,7 @@ function initDecoders(host: string, auth: AuthState) {
   };
   // ★ APRS: the map, the packet speed (a re-attach — a different modem on the server), and the region's channel
   $('aprsMapBtn').onclick = () => aprsMapOpen();
+  $('nvMapBtn').onclick = () => { void navMapOpen(); };
   segButtons('aprsBaud', 'aprsbaud', (v) => { aprsBaud = Number(v) === 300 ? 300 : 1200; aprsHintSync(); if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; renderAprs(); reattachIf('aprs'); } });
   $('aprsTune').onclick = () => {
     if (!spec) return;
@@ -13195,6 +13423,9 @@ function showDecBox(what: string) {
   $('decText').classList.toggle('off', image || isSpots || isNavtex);
   $('decBox').classList.toggle('navtex', isNavtex);
   resetNavtex();   // ★ a fresh box: no message, no PREV — standing by
+  // ★ V12 the NAVTEX map: MAP once this server is known to hold NAVTEX in its gallery
+  $('nvMapBtn').style.display = 'none';
+  if (isNavtex) void navMapProbe().then((ok) => { if (ok && activeDec === 'navtex') $('nvMapBtn').style.display = ''; });
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
   // ★ CW: the list under the primary signal's text (ONE SIGNAL), or the list alone (SKIMMER — it is all list).
@@ -15982,7 +16213,7 @@ async function renderGallery(page = galPage) {
   pager.hidden = true;
   try {
     let r = await fetch(galUrl(`/vibeserver/gallery.json?${galleryPageQuery(page, galKind)}`), { cache: 'no-store' });
-    type GJ = { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number; total?: number };
+    type GJ = { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number; total?: number; kinds?: GalleryKinds };
     let j = await r.json() as GJ;
     let paged = typeof j.total === 'number';
     if (r.ok && !j.error && !paged) {   // ★ an older server: its newest 300, no pages
@@ -15995,8 +16226,10 @@ async function renderGallery(page = galPage) {
     host.innerHTML = '';
     if (!r.ok || j.error) { host.innerHTML = ''; note.textContent = j.error || 'This server has no gallery.'; return; }
     const items = j.items || [];
+    // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
+    const chip = galKind ? $('galFilter').querySelector(`[data-kind="${galKind}"]`) : null;
     note.textContent = j.enabled === false ? 'This server keeps no gallery.'
-      : `${j.count ?? items.length} item${(j.count ?? items.length) === 1 ? '' : 's'} on this server · ${formatSize(j.usedBytes || 0)}. Times are UTC.`;
+      : galleryFooter(j, galKind, (chip?.textContent || galKind).trim(), formatSize, items.length);
     if (!items.length) {
       const row = document.createElement('div'); row.className = 'sres';
       const n = document.createElement('span'); n.className = 'n';
@@ -16030,11 +16263,43 @@ async function renderGallery(page = galPage) {
         mb.onclick = (e) => { e.stopPropagation(); openPinsMap([pin]); };
         row.appendChild(mb);
       }
+      // ★ V12 a day's "stations received" (LoRa / MeshCore nodes with positions): MAP, on the ISM map
+      if (ismIsNodeCard(it)) {
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
+        mb.title = 'Every node this card holds, on the map'; mb.setAttribute('aria-label', `Show the nodes heard on the map: ${it.title}`);
+        mb.onclick = (e) => { e.stopPropagation(); void ismGalMapOpen(it); };
+        mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
+        row.appendChild(mb);
+      }
       const open = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = idx; void openGalleryItem(it); };
       row.onclick = open;
       row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
       host.appendChild(row);
     });
+    /* ★★ V12 2026-11-01 THE NAVTEX MAP in the gallery (Nick's 24/7 background NAVTEX): on the first page of ALL or
+     *  NAVTEX, a standing row "NAVTEX · stations received" with MAP — every station in the gallery's NAVTEX messages. */
+    if ((galKind === '' || galKind === 'navtex') && galPage === 1) {
+      void navFetch('all').then((nr) => {
+        if (!nr || !nr.stations.length || host.querySelector('.galNav')) return;
+        const row = document.createElement('div'); row.className = 'sres galNav'; row.tabIndex = 0; row.setAttribute('role', 'button');
+        const f = document.createElement('span'); f.className = 'f'; f.textContent = 'NAVTEX';
+        const n = document.createElement('span'); n.className = 'n';
+        const far = nr.stations.reduce((b, x) => (x.km !== undefined && x.km > (b?.km ?? 0) ? x : b), null as NavStation | null);
+        n.appendChild(document.createTextNode(`NAVTEX · stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
+          + (far ? ` · furthest ${far.name} ${Math.round(far.km!).toLocaleString('en-GB')} km` : '')));
+        n.appendChild(document.createElement('br'));
+        const src = document.createElement('span'); src.className = 'src';
+        src.textContent = 'Every NAVTEX message in this gallery, by the station that sent it — a listener’s decoder and background decoding';
+        n.appendChild(src);
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
+        mb.title = 'The NAVTEX stations received, on the map'; mb.setAttribute('aria-label', 'NAVTEX stations received, on the map');
+        mb.onclick = (e) => { e.stopPropagation(); void navMapOpen(); };
+        row.onclick = () => void navMapOpen();
+        row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void navMapOpen(); } };
+        row.appendChild(f); row.appendChild(n); row.appendChild(mb);
+        host.insertBefore(row, host.firstChild);
+      });
+    }
     if (paged && pages > 1) renderGalleryPager(pages);
   } catch {
     host.innerHTML = '';
@@ -16114,13 +16379,19 @@ const langLabel = (id: string) => { try { return new Intl.DisplayNames([navigato
 async function galTranslateSetup(it: GalleryItem, body: string) {
   galTrReset();
   const seq = galTrSeq;
+  await translateSetup({ kind: it.k, title: it.title, body, btn: $('galTr') as HTMLButtonElement, textEl: $('galText'), note: $('galTrNote'), alive: () => seq === galTrSeq });
+}
+/** ★ The gallery's TRANSLATE, wherever a gallery text is shown (the viewer; the NAVTEX map's cards): its key, the text
+ *  it swaps, the note under it, and whether that text is still the one shown (`alive`). */
+async function translateSetup(o: { kind: string; title: string; body: string; btn: HTMLButtonElement; textEl: HTMLElement; note: HTMLElement; alive: () => boolean }) {
+  const { body, btn, note } = o;
   const TR = (globalThis as any).Translator, LD = (globalThis as any).LanguageDetector;
   if (!TR?.availability || !TR?.create) return;
   const target = (navigator.language || '').split('-')[0];
-  const lines = galleryTranslateLines(body, it.k);
+  const lines = galleryTranslateLines(body, o.kind);
   const text = galleryTranslatableText(lines);
   if (!text || !target) return;
-  const hint = galleryHintLanguage(it.title);
+  const hint = galleryHintLanguage(o.title);
   let source = '';
   try {   // ★ the browser's detector only when it is already here — a download needs the user's press
     if (LD?.availability && (await LD.availability()) === 'available') {
@@ -16129,19 +16400,18 @@ async function galTranslateSetup(it: GalleryItem, body: string) {
     }
   } catch { /* no detector: the stopwords */ }
   source = source || galleryGuessLanguage(text, hint);
-  if (seq !== galTrSeq || !galleryCanTranslate(lines, source, target)) return;
+  if (!o.alive() || !galleryCanTranslate(lines, source, target)) return;
   let avail = 'unavailable';
   try { avail = await TR.availability({ sourceLanguage: source, targetLanguage: target }); } catch { /* unavailable */ }
-  if (seq !== galTrSeq || avail === 'unavailable') return;
+  if (!o.alive() || avail === 'unavailable') return;
   let done: string | null = null, showing = false, busy = false;
-  const btn = $('galTr') as HTMLButtonElement, note = $('galTrNote');
   btn.hidden = false;
   btn.title = `Translate from ${langLabel(source)} into ${langLabel(target)}, in this browser`;
   btn.onclick = async () => {
     if (busy) return;
     if (done != null) {
       showing = !showing;
-      $('galText').textContent = showing ? done : body;
+      o.textEl.textContent = showing ? done : body;
       btn.textContent = showing ? 'ORIGINAL' : 'TRANSLATE'; btn.classList.toggle('on', showing); note.hidden = !showing;
       return;
     }
@@ -16149,16 +16419,16 @@ async function galTranslateSetup(it: GalleryItem, body: string) {
     try {
       const tr = await TR.create({ sourceLanguage: source, targetLanguage: target });
       const r = await galleryTranslate(lines, target, async (t) => ({ ok: true, text: await tr.translate(t) }));
-      if (seq !== galTrSeq) return;
+      if (!o.alive()) return;
       if (!r.done) throw new Error(r.reason || 'nothing translated');
       done = r.text; showing = true;
-      $('galText').textContent = done;
+      o.textEl.textContent = done;
       btn.textContent = 'ORIGINAL'; btn.classList.add('on');
       note.textContent = `MACHINE TRANSLATION \u00b7 ${langLabel(source)} \u2192 ${langLabel(target)} \u00b7 in this browser`
         + (r.failed ? ` \u00b7 ${r.failed} line${r.failed === 1 ? '' : 's'} left as received` : '');
       note.hidden = false;
     } catch (e: any) {
-      if (seq !== galTrSeq) return;
+      if (!o.alive()) return;
       btn.textContent = 'TRANSLATE';
       note.textContent = `This browser could not translate it (${String(e?.message ?? e)}).`; note.hidden = false;
     } finally { busy = false; }

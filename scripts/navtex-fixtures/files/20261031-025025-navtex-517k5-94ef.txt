@@ -1,0 +1,10 @@
+NAVTEX · Station R · Nav warning · #99 · gaps: 1 (8 s)
+Received 2026-10-31 02:50 UTC · 0% of characters lost
+517.500 kHz USB · background decoding (Profile 1)
+
+ZCZC RA99
+[… signal lost 8 s …]
+ARNINGTNO.(560/96 NCT 1  3 R LJASE#
+SOUO
+EEN BIANSBA HEUTOR UASTVQZ NZIPAR
+[end lost]
