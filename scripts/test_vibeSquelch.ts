@@ -84,8 +84,13 @@ ok(!/Squelch(Ref\.current)?\s*>\s*-100/.test(app), 'SDRScreen: no "squelch > -10
 const web = src('web/client/src/main.ts');
 ok(!/(Math\.max\(|\? )SQL_OFF \+ 1/.test(web), 'web: no SQL_OFF + 1 (-99) clamp');
 ok(!/squelchDb > -100/.test(web) && !/_squelchDb > -100/.test(src('web/client/src/audio.ts')), 'web: no "squelchDb > -100" on/off test');
-ok(/setSquelch\(db: number\) \{ this\._send\(vsSquelchMsg\(db\)\); \}/.test(src('web/client/src/spectrum.ts')), 'web: spectrum.setSquelch sends vsSquelchMsg');
-ok(/setSquelchDb\(db: number\) \{ this\._sendCtl\(vsSquelchMsg\(db\)\); \}/.test(src('src/services/VibeServerWsClient.ts')), 'app: VibeServerWsClient.setSquelchDb sends vsSquelchMsg');
+// ★ V12 VFO A/B (387ff7cd4 web, 94bc4954c app, 2026-10-26): each VFO has its own squelch, so the body first hands
+//   VFO B's threshold to the watch channel — and A's (the only VFO when A/B is off) still goes out as vsSquelchMsg.
+const body = (s: string, sig: string) => { const i = s.indexOf(sig); if (i < 0) return ''; let d = 0;
+  for (let k = s.indexOf('{', i); k < s.length; k++) { if (s[k] === '{') d++; else if (s[k] === '}' && --d === 0) return s.slice(i, k + 1); }
+  return ''; };
+ok(/this\._send\(vsSquelchMsg\(db\)\);\s*\}$/.test(body(src('web/client/src/spectrum.ts'), 'setSquelch(db: number) {')), 'web: spectrum.setSquelch sends vsSquelchMsg');
+ok(/this\._sendCtl\(vsSquelchMsg\(db\)\);\s*\}$/.test(body(src('src/services/VibeServerWsClient.ts'), 'setSquelchDb(db: number) {')), 'app: VibeServerWsClient.setSquelchDb sends vsSquelchMsg');
 
 if (fails) { console.log(`\n${fails} FAILED`); process.exit(1); }
 console.log('\nall passed');
