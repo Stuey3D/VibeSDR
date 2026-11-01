@@ -69,6 +69,14 @@ static int cu8(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    // ★ experiment switches: VDL2_TUNE="g=0 er=0 rrc=1 q=0.75 fg=0.03 tg=0.01"
+    if (const char* t = std::getenv("VDL2_TUNE")) {
+        auto& T = vibevdl2::tuning();
+        std::string s(t);
+        auto vi = [&](const char* k, bool& v) { const size_t p = s.find(k); if (p != std::string::npos) v = std::atoi(s.c_str() + p + std::strlen(k)) != 0; };
+        auto vf = [&](const char* k, float& v) { const size_t p = s.find(k); if (p != std::string::npos) v = float(std::atof(s.c_str() + p + std::strlen(k))); };
+        vi("g=", T.gardner); vi("coh=", T.coherent); vf("pa=", T.pllA); vf("pb=", T.pllB); vi("er=", T.erasures); vi("rrc=", T.rrc); vf("q=", T.syncQ); vf("fg=", T.freqGain); vf("tg=", T.tGain);
+    }
     if (argc > 1 && !std::strcmp(argv[1], "--cu8")) return cu8(argc, argv);
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

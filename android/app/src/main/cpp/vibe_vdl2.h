@@ -46,7 +46,7 @@ static constexpr uint8_t kUw[16] = { 0b000, 0b010, 0b011, 0b110, 0b000, 0b001, 0
 inline int grayOf(int k) { return k ^ (k >> 1); }
 inline int stepOf(int g) { int k = g; for (int s = g >> 1; s; s >>= 1) k ^= s; return k & 7; }
 
-struct Tuning { bool rrc = false; bool erasures = true; bool gardner = true; float syncQ = 0.75f; float freqGain = 0.03f; float tGain = 0.01f; };
+struct Tuning { bool rrc = false; bool erasures = true; bool gardner = true; bool coherent = true; float pllA = 0.15f, pllB = 0.004f; float syncQ = 0.75f; float freqGain = 0.03f; float tGain = 0.01f; };
 inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("VDL2_DEBUG") != nullptr; return d; }
 
@@ -211,14 +211,22 @@ private:
          *  edge, where one symbol × another is far above the noise × noise terms (it synced 40 000 times on noise and
          *  edges in the first run). A real unique word has all sixteen products of a similar size. */
         const float q = (s > 0 && mn > 0.2f * s / 16) ? std::abs(d) / s : 0;
-        if (qPrev_ > tuning().syncQ && q < qPrev_ && qPrev_ >= qPrev2_) {
-            // the peak was at n−1: a parabola through q(n−2), q(n−1), q(n)
-            const float den = qPrev2_ - 2 * qPrev_ + q;
-            const float frac = std::fabs(den) > 1e-9f ? 0.5f * (qPrev2_ - q) / den : 0;
-            const double tLast = double(n - 1) + std::max(-0.5f, std::min(0.5f, frac));   // the last UW symbol
-            start_(tLast, dPrev_);
-            qPrev_ = qPrev2_ = 0;
-            return;
+        /* ★ THE BEST PEAK, NOT THE FIRST. The window slides into a burst one sample at a time and a partial alignment
+         *  (a symbol early, the ramp-up's steady phase standing in for the first steps) can cross the threshold before
+         *  the true word arrives. A candidate is held for 6 samples (1.5 symbols) and the highest Q in that span wins; the
+         *  parabola is through its neighbours. */
+        if (cand_ > 0) {
+            if (q > bestQ_) { bestQ_ = q; bestN_ = n; bestD_ = d; bestL_ = qPrev_; bestR_ = -1; }
+            else if (n == bestN_ + 1) bestR_ = q;
+            if (n - candAt_ >= 6 && bestR_ >= 0) {
+                const float den = bestL_ - 2 * bestQ_ + bestR_;
+                const float frac = std::fabs(den) > 1e-9f ? 0.5f * (bestL_ - bestR_) / den : 0;
+                start_(double(bestN_) + std::max(-0.5f, std::min(0.5f, frac)), bestD_);
+                cand_ = 0; qPrev_ = 0;
+                return;
+            }
+        } else if (q > tuning().syncQ) {
+            cand_ = 1; candAt_ = n; bestQ_ = q; bestN_ = n; bestD_ = d; bestL_ = qPrev_; bestR_ = -1;
         }
         qPrev2_ = qPrev_; qPrev_ = q; dPrev_ = d;
     }
@@ -233,6 +241,20 @@ private:
         need_ = 25; hdrDone_ = false;
         sigPw_ = 0; sigN_ = 0;
         syncAt_ = n_;
+        /* ★★ THE CARRIER'S PHASE FROM THE UNIQUE WORD (coherent mode). The 16 symbols' absolute points are known up to
+         *  one common rotation: point(i) = Σ steps up to i (the ramp-up's 000 before them is point 0). Each symbol, turned
+         *  back by its point and by the frequency error over the distance to the last, votes for the phase at the last. */
+        int a = 0;
+        cf32 acc(0, 0);
+        for (int i = 0; i < 16; ++i) {
+            a = (a + stepOf(kUw[i])) & 7;
+            const cf32 zi = atf_(tLast - double(kSps) * (15 - i));
+            acc += zi * std::polar(1.0f, -float(a) * float(M_PI / 4) + w_ * float(15 - i));
+        }
+        phi_ = std::arg(acc) + float(a) * float(M_PI / 4);   // the carrier's phase at the last UW symbol, point a included
+        aPrev_ = a;
+        phi_ -= float(a) * float(M_PI / 4);                  // so that point = round((arg z − phi)/(π/4))
+        prevMargin_ = float(M_PI / 8);
     }
 
     template <class Out> void symbol_(Out& out) {
@@ -244,15 +266,35 @@ private:
             const float e = ((prevZ_ - z) * std::conj(mid)).real() / (std::norm(z) + std::norm(prevZ_) + 1e-12f);
             tAdj_ = std::max(-0.5, std::min(0.5, double(tuning().tGain) * e * 4));
         } else tAdj_ = 0;
-        cf32 dz = z * std::conj(prevZ_) * std::polar(1.0f, -w_);
-        const float ang = std::arg(dz);
-        int k = int(std::lround(ang / float(M_PI / 4)));
-        const float res = ang - float(k) * float(M_PI / 4);
-        k = ((k % 8) + 8) % 8;
-        w_ += tuning().freqGain * res;
+        int k; float r;
+        if (tuning().coherent) {
+            /* ★★★ COHERENT: the symbol's own point, against a decision-directed carrier (phase + frequency loop), and the
+             *  data step = this point − the last. Its noise is the symbol's alone (√2 less than z·z*prev), which at
+             *  15–20 dB is the difference between ~5 % and ~0.5 % wrong symbols — RS(255,249) mends only the second. */
+            phi_ += w_;
+            const float ang = std::arg(z * std::polar(1.0f, -phi_));
+            int a = int(std::lround(ang / float(M_PI / 4)));
+            const float res = ang - float(a) * float(M_PI / 4);
+            a &= 7;
+            phi_ += tuning().pllA * res;
+            w_ += tuning().pllB * res;
+            if (phi_ > float(M_PI)) phi_ -= float(2 * M_PI); else if (phi_ < -float(M_PI)) phi_ += float(2 * M_PI);
+            k = (a - aPrev_) & 7;
+            aPrev_ = a;
+            const float m = float(M_PI / 8) - std::fabs(res);
+            r = std::min(m, prevMargin_);                   // a step is as weak as the weaker of its two points
+            prevMargin_ = m;
+        } else {
+            cf32 dz = z * std::conj(prevZ_) * std::polar(1.0f, -w_);
+            const float ang = std::arg(dz);
+            k = int(std::lround(ang / float(M_PI / 4)));
+            const float res = ang - float(k) * float(M_PI / 4);
+            k = ((k % 8) + 8) % 8;
+            w_ += tuning().freqGain * res;
+            r = float(M_PI / 8) - std::fabs(res);           // margin to the decision boundary
+        }
         sigPw_ += std::norm(z); ++sigN_;
         const int g = grayOf(k);
-        const float r = float(M_PI / 8) - std::fabs(res);   // margin to the decision boundary
         for (int b = 2; b >= 0; --b) { bits_.push_back(uint8_t((g >> b) & 1)); rel_.push_back(r); }
         prevZ_ = z; prevT_ = t;
         nextT_ = t + kSps + tAdj_;
@@ -285,6 +327,13 @@ private:
 
     template <class Out> void decode_(Out& out) {
         st_.bursts++;
+        if (debug()) {
+            double m = 0; for (size_t i = 0; i < rel_.size(); i += 3) m += rel_[i];
+            std::fprintf(stderr, "  [vdl2 ch%d t=%.3f] burst len %d bits, snr %.1f dB, hdr fixed %d, mean margin %.1f deg, w %.3f, symbols:", chan_, double(syncAt_) / kWorkRate, len_,
+                         10 * std::log10((sigN_ ? sigPw_ / float(sigN_) : 0) / (floor_ + 1e-20f) + 1e-20f), hdrFixed_, m / (rel_.size() / 3) * 180 / M_PI, w_);
+            for (size_t i = 0; i < rel_.size() && i < 90; i += 3) std::fprintf(stderr, " %.0f", (M_PI / 8 - rel_[i]) * 180 / M_PI);
+            std::fprintf(stderr, "\n");
+        }
         const Layout L((len_ + 7) / 8);
         // descramble everything after the unique word, then the octets (LSB first) with their weakest margin
         Lfsr l;
@@ -314,7 +363,7 @@ private:
         for (int r = 0; r < L.blocks; ++r) {
             const int len = L.lenOf(r), par = L.parOf(r);
             if (par == 0) continue;
-            auto valid = [&](int i) { return i < len || (i >= Rs::K && i < Rs::K + par); };
+            auto valid = [&](int i) { return i < len || i >= Rs::K; };   // data, parity, and the erased missing parity
             int eras[6], ne = 0;
             for (int i = Rs::K + par; i < Rs::N; ++i) eras[ne++] = i;     // the parity this short block never had
             std::array<uint8_t, 255> cw = blk[size_t(r)];
@@ -338,8 +387,13 @@ private:
                 if (debug()) std::fprintf(stderr, "  [vdl2 ch%d t=%.3f] RS block %d/%d failed (len %d par %d)\n", chan_, double(n_) / kWorkRate, r, L.blocks, len, par);
                 return;
             }
+            for (int i = Rs::K + par; i < Rs::N; ++i) if (cw[size_t(i)] != blk[size_t(r)][size_t(i)]) --res;   // the missing parity, filled
             fixedTot += res;
-            if (debug()) std::fprintf(stderr, "  [vdl2 ch%d t=%.3f] len %d bits: RS block %d/%d len %d par %d fixed %d\n", chan_, double(syncAt_) / kWorkRate, len_, r, L.blocks, len, par, res);
+            if (debug()) {
+                std::fprintf(stderr, "  [vdl2 ch%d t=%.3f] len %d bits: RS block %d/%d len %d par %d fixed %d at", chan_, double(syncAt_) / kWorkRate, len_, r, L.blocks, len, par, res);
+                for (int i = 0; i < Rs::N; ++i) if (cw[size_t(i)] != blk[size_t(r)][size_t(i)] && valid(i) && !(i >= Rs::K + par)) std::fprintf(stderr, " %d(m%.0f)", i, brel[size_t(r)][size_t(i)] * 180 / M_PI);
+                std::fprintf(stderr, "\n");
+            }
             blk[size_t(r)] = cw;
         }
         st_.rsFixed += uint64_t(fixedTot);
@@ -381,8 +435,9 @@ private:
     float pw_ = 0, floor_ = 0, lastPw_ = 0; int pwN_ = 0, active_ = 0;
     int state_ = kSearch;
     float qPrev_ = 0, qPrev2_ = 0; cf32 dPrev_{0, 0};
+    int cand_ = 0; int64_t candAt_ = 0, bestN_ = 0; float bestQ_ = 0, bestL_ = 0, bestR_ = -1; cf32 bestD_{0, 0};
     double nextT_ = 0, prevT_ = 0, tAdj_ = 0;
-    float w_ = 0;
+    float w_ = 0, phi_ = 0, prevMargin_ = 0; int aPrev_ = 0;
     cf32 prevZ_{0, 0};
     std::vector<uint8_t> bits_;
     std::vector<float> rel_;
