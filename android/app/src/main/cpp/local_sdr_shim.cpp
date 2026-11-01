@@ -123,6 +123,7 @@
 #include "vibe_adsb_service.h"  // ADS-B 1090 (V12) — our own decoder, vibe_adsb.h
 #include "vibe_ism_service.h"   // ISM sensors (V12) — our own clean-room decoders, docs/v12/ISM-DECODER.md
 #include "vibe_ism_gallery.h"   // ★★ V12 2026-10-25: ISM in the gallery — the day's log + summary card per band
+#include "vibe_navtex_map.h"   // ★ V12 2026-11-01 the NAVTEX map: the stations received
 #include "vibe_ndb_service.h"   // ★★ V12 2026-10-26: NDB skimmer — every beacon in the LF band, idents by consensus (docs/v12/NDB-SKIMMER.md)
 #include "vibe_ndb_gallery.h"   //    …and its day in the gallery: the heard log and the map
 #include "vibe_ais_service.h"   // ★★ V12 AIS (both VHF channels, M.1371) — our own decoder, docs/v12/AIS-APRS.md
@@ -23482,6 +23483,43 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 std::string j = g.listJson(kind.substr(0, 16), (size_t)limit, offset);
                 // ★ Plus whether this server keeps anything at all — a client shows "this server keeps no gallery" honestly.
                 j.insert(1, std::string("\"enabled\":") + (g.enabled() ? "true" : "false") + ",");
+                reply("200 OK", "application/json", j);
+                return;
+            }
+            /* ★★ V12 2026-11-01 THE NAVTEX MAP — the stations received (vibe_navtex_map.h): this gallery's NAVTEX items,
+             *  folded per station from the index (streamed line by line), placed by the label every client already shows.
+             *  ?since=<seconds back> (0 / absent = everything still in the gallery). The same read rule as the gallery.
+             *  ★ Cached 20 s per `since` while the index is unchanged (a map that polls costs one scan per change). */
+            if (path == "/vibeserver/gallery/navtex-stations.json") {
+                static std::mutex cMtx;
+                static std::map<long, std::pair<std::string, std::string>> cache;   // since → (stamp, json)
+                long since = std::max(0L, std::atol(qv("since").c_str()));
+                if (since > 400L * 86400) since = 0;
+                const std::string idx = g.dir() + "/index.jsonl";
+                struct stat st{};
+                const bool have = !g.dir().empty() && ::stat(idx.c_str(), &st) == 0;
+                const int64_t now = vibe::gallery::nowUtc();
+                const std::string stamp = std::to_string((long long)st.st_mtime) + ":" + std::to_string((long long)st.st_size) + ":" + std::to_string((long long)(now / 20));
+                {
+                    std::lock_guard<std::mutex> lk(cMtx);
+                    auto it = cache.find(since);
+                    if (it != cache.end() && it->second.first == stamp) { reply("200 OK", "application/json", it->second.second); return; }
+                }
+                const double rxLat = g_bgLat.load(), rxLon = g_bgLon.load();
+                auto readText = [&](const std::string& name) {
+                    std::string fp, ct, o;
+                    if (!g.resolve(name, fp, ct)) return o;
+                    const int fd = ::open(fp.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+                    if (fd < 0) return o;
+                    o.resize(16384);
+                    const ssize_t n = ::read(fd, &o[0], o.size());
+                    ::close(fd);
+                    o.resize(n > 0 ? (size_t)n : 0);
+                    return o;
+                };
+                const auto r = have ? vibe::navmap::scanIndex(idx, rxLat, rxLon, since ? now - since : 0, readText) : vibe::navmap::Result{};
+                const std::string j = vibe::navmap::toJson(r, rxLat, rxLon, now);
+                { std::lock_guard<std::mutex> lk(cMtx); if (cache.size() > 8) cache.clear(); cache[since] = { stamp, j }; }
                 reply("200 OK", "application/json", j);
                 return;
             }

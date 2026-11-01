@@ -23,7 +23,8 @@
  *       labelZoom: 11,                                                            // Leaflet zoom from which labels show
  *       focusZoom: 10,                                                            // focus(key) zooms in at least this far
  *       heard: function (item) { return 12; },
- *       labelRank: function (item) { return 5; } });                             // ★ who keeps its label when two collide (higher wins)                                 // ★ a count that grows when the item is heard
+ *       labelRank: function (item) { return 5; },                                // ★ who keeps its label when two collide (higher wins)
+ *       arc: function (item) { return true; } });                                  // ★ a faint great-circle line from the receiver                                 // ★ a count that grows when the item is heard
  *                                                                                 //   again: a new item, or a higher count, pulses
  *   layer.update(items)   // [{key, lat, lon, …}] — the whole list each time; items without a position are skipped
  *   layer.focus(key) · layer.select(key | null) · layer.fit() · layer.setReceiver(lat, lon) · layer.destroy()
@@ -168,6 +169,43 @@
     function elOf(mk) { return mk.getElement ? mk.getElement() : mk._icon; }
     function setCls(mk, cls, on) { var el = elOf(mk); if (el) el.classList.toggle(cls, !!on); }
 
+    /* ★★ ARCS (the NAVTEX stations map, 2026-11-01): a faint great-circle line from the receiver to each item the host
+     *  asks for — the DX map's look; a transatlantic catch spans the ocean as it should. 48 segments; under the markers. */
+    var arcs = new Map();
+    function gc(a, b) {
+      var r = Math.PI / 180, p1 = a[0] * r, l1 = a[1] * r, p2 = b[0] * r, l2 = b[1] * r;
+      var d = 2 * Math.asin(Math.sqrt(Math.pow(Math.sin((p2 - p1) / 2), 2) + Math.cos(p1) * Math.cos(p2) * Math.pow(Math.sin((l2 - l1) / 2), 2)));
+      if (!(d > 1e-6)) return [a, b];
+      var pts = [], prevLon = null;
+      for (var i = 0; i <= 48; i++) {
+        var f = i / 48, A = Math.sin((1 - f) * d) / Math.sin(d), B = Math.sin(f * d) / Math.sin(d);
+        var x = A * Math.cos(p1) * Math.cos(l1) + B * Math.cos(p2) * Math.cos(l2);
+        var y = A * Math.cos(p1) * Math.sin(l1) + B * Math.cos(p2) * Math.sin(l2);
+        var z = A * Math.sin(p1) + B * Math.sin(p2);
+        var lon = Math.atan2(y, x) / r;
+        if (prevLon != null) { while (lon - prevLon > 180) lon -= 360; while (lon - prevLon < -180) lon += 360; }   // ★ no jump at ±180
+        prevLon = lon;
+        pts.push([Math.atan2(z, Math.sqrt(x * x + y * y)) / r, lon]);
+      }
+      return pts;
+    }
+    function syncArcs() {
+      if (!opts.arc) return;
+      var want = new Set();
+      if (rx) items.forEach(function (e, k) {
+        if (e.gone || !opts.arc(e.item)) return;
+        want.add(k);
+        var sig = e.lat + ',' + e.lon + '|' + rx.lat + ',' + rx.lon;
+        var a = arcs.get(k);
+        if (a && a.sig === sig) return;
+        if (a) try { a.line.remove(); } catch (err) { /* gone */ }
+        var line = (L.polyline || L.polygon)(gc([rx.lat, rx.lon], [e.lat, e.lon]), { color: '#9fd8ff', weight: 1.2, opacity: 0.35, fill: false, interactive: false });
+        line.addTo(map);
+        arcs.set(k, { line: line, sig: sig });
+      });
+      arcs.forEach(function (a, k) { if (!want.has(k)) { try { a.line.remove(); } catch (err) { /* gone */ } arcs.delete(k); } });
+      cont.setAttribute('data-vtl-arcs', String(arcs.size));   // ★ for tests (a canvas renderer draws them out of the DOM)
+    }
     function update(list) {
       if (destroyed) return;
       var seen = new Set();
@@ -217,6 +255,7 @@
       });
       if (sel) renderCard();
       if (!fitted && items.size) { fitted = true; fit(); }
+      syncArcs();
       declutterSoon();
     }
 
@@ -293,12 +332,15 @@
         rxMk = L.marker([lat, lon], { icon: L.divIcon({ className: 'vtl-rx', html: RX_HTML, iconSize: [18, 18], iconAnchor: [9, 9] }), interactive: false, keyboard: false });
         rxMk.addTo(map);
       }
+      syncArcs();
     }
     if (opts.receiver) setReceiver(opts.receiver.lat, opts.receiver.lon);
 
     function destroy() {
       destroyed = true;
       items.forEach(function (e) { try { e.mk.remove(); } catch (err) { /* gone with the map */ } });
+      arcs.forEach(function (a) { try { a.line.remove(); } catch (err) { /* gone with the map */ } });
+      arcs.clear();
       items.clear();
       if (trailLine) try { trailLine.remove(); } catch (err) { /* gone with the map */ }
       if (rxMk) try { rxMk.remove(); } catch (err) { /* gone with the map */ }

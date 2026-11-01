@@ -456,7 +456,7 @@ export function aprsApplyPacket(l: AprsList | null, trails: Map<string, [number,
 /** ★ An item for the shared layer: its key, position and — worked out HERE, so the page carries no copy of these rules —
  *  its icon (`_ic`), label (`_lb`) and card (`_cd`). Items without a position are not on the map; an APRS object its
  *  owner removed is not either (the web's). */
-export interface TrackItem { key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string; /** ★ a count that grows when heard again — the layer pulses it */ _h?: number; /** ★ label rank (declutter) */ _rk?: number }
+export interface TrackItem { key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string; /** ★ a count that grows when heard again — the layer pulses it */ _h?: number; /** ★ label rank (declutter) */ _rk?: number; /** ★ a great-circle line from the receiver */ _arc?: boolean }
 export function aisItems(r: AisReport | null, rx: LatLon | null): TrackItem[] {
   if (!r) return [];
   return r.vessels.filter((v) => v.lat != null && v.lon != null)

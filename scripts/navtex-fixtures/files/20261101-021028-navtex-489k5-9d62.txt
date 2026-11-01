@@ -1,0 +1,33 @@
+NAVTEX · N · Piombino, Italy 🇮🇹 · Nav warning · #37 · gaps: 1 (11 s)
+Received 2026-11-01 02:10 UTC · 1% of characters lost
+489.500 kHz USB · background decoding (Profile 1)
+
+ZCZC NA37
+010110 UTC NOV 26
+PIOVBINO _ADAO
+
+ OASTAL WAJNING NR. 598/6 OCT 28
+TYRRHRNIAN SEA 
+AREA
+BOUNDEDUBY FOLLOWING POI_TA:
+ -2 55.653N  ;1: 30.458E
+ 42 55.289I  010 29.377,3
+ &' 55.645N
+EXYQW WUMTUY 
+ 92 5.958_ V010 5.809E
+ ,2 55.776(,  0(0 25
+013E
+ :2 55.995N  011 62.228E
+ WRW TTMUUUN  010720.44)E
+ TW TTMETQMV PPC
+I
+AWKA
+ -2 55
+[… signal lost 11 s …]
+RKE
+ 46 54.526N  :1;
+1.
+74E
+V
+42 3;1
+[end lost]

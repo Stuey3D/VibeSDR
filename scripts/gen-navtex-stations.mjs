@@ -119,6 +119,13 @@ const SUPPLEMENT = [
   { name: 'Talcahuano', country: 'Chile', lat: -36.715, lon: -73.108, tx: [['J', 490]], evidence: '[WP]' },
   { name: 'Puerto Montt', country: 'Chile', lat: -41.490, lon: -72.958, tx: [['K', 490]], evidence: '[WP]' },
   { name: 'Magallanes', country: 'Chile', lat: -52.948, lon: -71.057, tx: [['L', 490]], evidence: '[WP] (Punta Arenas)' },
+  // ★ 2026-11-01 (the NAVTEX map): Tallinn on F 518. Pub. 117 2021 lists Tallinn on U only; [WP] says F, and the
+  //   Lenovo (IO92nh) received 118 "Station F" messages on 518 kHz between 2026-10-05 and 11-01 that are Estonian —
+  //   "ZCZC FA73 / ESTONIAN NAV WARN 173/26 / GULF OF FINLAND / NARVA DGNSS STATION IN POSITION 5928.02N, 02802.36E";
+  //   "ZCZC FE40 / BALTIC SEA WEATHERFORECAST" — no F candidate in the table was within 1 500 km of those positions.
+  //   Stuart's UberSDR (same site) names them Tallinn too. Position: Pub. 117's own Tallinn entry (59.5N 24.5E).
+  //   Pub. 117's U 518 stays a candidate.
+  { name: 'Tallinn', country: 'Estonia', lat: 59.5, lon: 24.5, tx: [['F', 518]], evidence: '[RX] + [WP] (Pub. 117: U 518 — kept)' },
   // HF 4209.5 kHz — Pub. 117 lists no HF letters at all; these are [WP]'s.
   { name: 'Istanbul', country: 'Turkey', lat: 41.067, lon: 28.95, tx: [['M', 4209.5]], evidence: '[WP]' },
   { name: 'Ismailia', country: 'Egypt', lat: 30.470, lon: 32.367, tx: [['X', 4209.5]], evidence: '[WP] (Serapeum)' },

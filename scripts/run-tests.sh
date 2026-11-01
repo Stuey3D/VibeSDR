@@ -201,6 +201,9 @@ flags_for() {
     # ★★ V12 the ISM map (2026-11-01): positions parsed, the node table's cap / 24 h expiry / newest wins, the privacy rule
     #    (a person's node rounded to ~1 km), the gallery's "stations received" card. Fast (no DSP).
     test-lora-nodes)       echo "-O2 -lpthread" ;;
+    # ★★ V12 the NAVTEX map (2026-11-01): gallery titles read back, the stations placed by the label's own resolver, the
+    #    time of day / history / message text where it could not decide, the fold, the real fixture set. Fast.
+    test-navtex-map)       echo "-O2" ;;
     *)               echo "" ;;
   esac
 }
@@ -1382,6 +1385,9 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   # ★★ V12 the ISM map (2026-11-01): icons by type, approximate people, position links, the time filter, a live push,
   #    the gallery's "stations received" MAP — fake nodes added to the real reports in the page, a seeded gallery.
   VIBE_LORA_CLIP="$OUT/lora-clip.u8" VIBE_LORA_NODES_BIN="$OUT/test-lora-nodes" node scripts/test-web-ism-map.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 the NAVTEX map (2026-11-01): the stations received, from a gallery of real NAVTEX (scripts/navtex-fixtures)
+  node scripts/test-web-navtex-map.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/lora-clip.u8"
 else

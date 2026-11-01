@@ -24,6 +24,8 @@ import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
+import { navSanitise, navIcon, navLabel, navCard, navRows, navStatus, navRank, navRangeOf, navSince, navColour, NAV_RANGES, NAV_RANGE_HINT,
+         NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -8794,6 +8796,60 @@ function ismMapOpen(key = '') {
   ismMapRender();
   if (key) ismMapView.focus(key);
 }
+/* ★★ V12 2026-11-01 THE NAVTEX MAP — THE STATIONS RECEIVED (Stuart: "it would be cool to be able to open a map and see
+ *  which navtex stations you've received"). The server folds this gallery's NAVTEX messages per station (vibe_navtex_map.h);
+ *  this draws them on the shared map view: each station where the gallery's own label puts it, a faint great-circle
+ *  line from the receiver, its distance, first / last heard, how many messages, their kinds, the newest ids. Opened from
+ *  the NAVTEX box's MAP and the gallery. ★ LIVE: refetched every 30 s while open (the server caches; a scan of the index
+ *  only when it changed), so a message saved by a listener's decoder or background decoding appears, pulsing. */
+const NAV_RANGE_KEY = 'vibesdr.navMapRange';
+let navView: TrackView | null = null;
+let navTimer: ReturnType<typeof setInterval> | null = null;
+let navRange = navRangeOf((() => { try { return localStorage.getItem(NAV_RANGE_KEY); } catch { return null; } })());
+async function navFetch(range: string): Promise<NavReport | null> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery/navtex-stations.json?since=${navSince(range)}`), { cache: 'no-store' });
+    return r.ok ? navSanitise(await r.json()) : null;
+  } catch { return null; }
+}
+function navRowsHtml(r: NavReport): string {
+  if (!r.stations.length) return `<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`;
+  return navRows(r).map(({ s, second, range }) => `<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(s.key)}">`
+    + `<span class="id"><b><i class="sw" style="background:${navColour(s)}"></i>${escapeHtml(s.b1 + ' · ' + s.name + (s.conf === 'ambiguous' ? '?' : ''))}</b><small>${escapeHtml(second)}</small></span>`
+    + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(s.seen < 3600 ? `${Math.round(s.seen / 60)} min` : s.seen < 86400 ? `${Math.round(s.seen / 3600)} h` : `${Math.round(s.seen / 86400)} d`)}</span></div>`).join('');
+}
+async function navMapOpen() {
+  const draw = (r: NavReport | null) => {
+    if (!navView) return;
+    const rx = myPos() ?? r?.rx ?? null;
+    navView.update(r?.stations ?? [], r ? navRowsHtml(r) : '', navStatus(r), r?.stations.length ?? 0, rx);
+  };
+  if (!navView) navView = new TrackView({
+    title: 'NAVTEX · stations received', exitLabel: 'CLOSE MAP', listTitle: 'STATIONS',
+    onExit: () => { navView?.hide(); if (navTimer) { clearInterval(navTimer); navTimer = null; } },
+    icon: navIcon, label: navLabel, card: (s: NavStation) => navCard(s), labelZoom: 3, focusZoom: 6, heard: (s: NavStation) => s.n,
+    labelRank: navRank, arc: () => true,
+    ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
+    onRange: (id) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navFetch(id).then(draw); },
+  });
+  navView.show(myPos());
+  draw(null);
+  draw(await navFetch(navRange));
+  if (navTimer) clearInterval(navTimer);
+  navTimer = setInterval(async () => {
+    if (!navView?.open) { if (navTimer) clearInterval(navTimer); navTimer = null; return; }
+    draw(await navFetch(navRange));
+  }, 30_000);
+}
+/** ★ MAP is drawn only where it has something to show (AGENTS.md: no dead control) — this server keeps NAVTEX items. */
+let navMapAvail: boolean | null = null;
+async function navMapProbe(): Promise<boolean> {
+  if (navMapAvail !== null) return navMapAvail;
+  const r = await navFetch('all');
+  navMapAvail = !!r && r.stations.length > 0;
+  return navMapAvail;
+}
+
 /* ★★ V12 2026-11-01 THE GALLERY'S "STATIONS RECEIVED" MAP (Stuart: "being able to open up the map in the Gallery so that if
  *  I have this set as the background profile we can see which stations we received"). A gallery item whose slot is
  *  "ismnodes-…" (vibe_ism_gallery.h) has MAP: its table, on the same map view and the same icons as the live ISM map —
@@ -12763,6 +12819,7 @@ function initDecoders(host: string, auth: AuthState) {
   };
   // ★ APRS: the map, the packet speed (a re-attach — a different modem on the server), and the region's channel
   $('aprsMapBtn').onclick = () => aprsMapOpen();
+  $('nvMapBtn').onclick = () => { void navMapOpen(); };
   segButtons('aprsBaud', 'aprsbaud', (v) => { aprsBaud = Number(v) === 300 ? 300 : 1200; aprsHintSync(); if (activeDec === 'aprs') { aprsLast = null; aprsLog.length = 0; renderAprs(); reattachIf('aprs'); } });
   $('aprsTune').onclick = () => {
     if (!spec) return;
@@ -13269,6 +13326,9 @@ function showDecBox(what: string) {
   $('decText').classList.toggle('off', image || isSpots || isNavtex);
   $('decBox').classList.toggle('navtex', isNavtex);
   resetNavtex();   // ★ a fresh box: no message, no PREV — standing by
+  // ★ V12 the NAVTEX map: MAP once this server is known to hold NAVTEX in its gallery
+  $('nvMapBtn').style.display = 'none';
+  if (isNavtex) void navMapProbe().then((ok) => { if (ok && activeDec === 'navtex') $('nvMapBtn').style.display = ''; });
   $('spotList').classList.toggle('on', isSpots);
   $('spotFilters').classList.toggle('show', isSpots);
   // ★ CW: the list under the primary signal's text (ONE SIGNAL), or the list alone (SKIMMER — it is all list).
@@ -16117,6 +16177,30 @@ async function renderGallery(page = galPage) {
       row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
       host.appendChild(row);
     });
+    /* ★★ V12 2026-11-01 THE NAVTEX MAP in the gallery (Nick's 24/7 background NAVTEX): on the first page of ALL or
+     *  NAVTEX, a standing row "NAVTEX · stations received" with MAP — every station in the gallery's NAVTEX messages. */
+    if ((galKind === '' || galKind === 'navtex') && galPage === 1) {
+      void navFetch('all').then((nr) => {
+        if (!nr || !nr.stations.length || host.querySelector('.galNav')) return;
+        const row = document.createElement('div'); row.className = 'sres galNav'; row.tabIndex = 0; row.setAttribute('role', 'button');
+        const f = document.createElement('span'); f.className = 'f'; f.textContent = 'NAVTEX';
+        const n = document.createElement('span'); n.className = 'n';
+        const far = nr.stations.reduce((b, x) => (x.km !== undefined && x.km > (b?.km ?? 0) ? x : b), null as NavStation | null);
+        n.appendChild(document.createTextNode(`NAVTEX · stations received: ${nr.stations.length} stations · ${nr.messages} messages`
+          + (far ? ` · furthest ${far.name} ${Math.round(far.km!).toLocaleString('en-GB')} km` : '')));
+        n.appendChild(document.createElement('br'));
+        const src = document.createElement('span'); src.className = 'src';
+        src.textContent = 'Every NAVTEX message in this gallery, by the station that sent it — a listener’s decoder and background decoding';
+        n.appendChild(src);
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
+        mb.title = 'The NAVTEX stations received, on the map'; mb.setAttribute('aria-label', 'NAVTEX stations received, on the map');
+        mb.onclick = (e) => { e.stopPropagation(); void navMapOpen(); };
+        row.onclick = () => void navMapOpen();
+        row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void navMapOpen(); } };
+        row.appendChild(f); row.appendChild(n); row.appendChild(mb);
+        host.insertBefore(row, host.firstChild);
+      });
+    }
     if (paged && pages > 1) renderGalleryPager(pages);
   } catch {
     host.innerHTML = '';

@@ -29,6 +29,7 @@ import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, gallery
          galleryTranslateLines, type GalleryTrLine } from '../utils/galleryTranslate';
 import { detectTextLanguage, langName, textTranslateInfo, translateText } from '../services/transcriber';
 import { ismIsNodeCard, ismNodesParse, ismGalMerge, ismNodeCardBand, type IsmGalNode } from '../services/ism';
+import { navSanitise, type NavReport } from '../services/navtexMap';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -65,13 +66,15 @@ export function galleryWhen(t: number): string {
 export function galleryFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
 function size(b: number): string { return b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
 
-export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap }: {
+export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap, onNavtexMap }: {
   /** TRANSCRIBE's TRANSLATE TO ('' = off → the phone's own language). */
   visible: boolean; base: string; readAuth?: string; translateTo?: string; onClose: () => void;
   /** ★★ V12 2026-11-01 (Stuart: "being able to open up the map in the Gallery … we can see which stations we received"):
    *  a day's "stations received" card (slot "ismnodes-…", vibe_ism_gallery.h) has MAP — its nodes, handed to the screen's
    *  ISM map. Absent where there is no map (Apple TV): no key. */
   onNodesMap?: ((title: string, nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, refresh: (() => Promise<IsmGalNode[] | null>) | null) => void) | null;
+  /** ★★ V12 2026-11-01: the NAVTEX stations received — a standing row on the first page of ALL / NAVTEX with MAP. */
+  onNavtexMap?: (() => void) | null;
 }) {
   const pt = usePopupTheme();
   const s = useMemo(() => makeStyles(pt), [pt]);
@@ -116,6 +119,15 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   useEffect(() => { if (visible) void load(); }, [visible, load]);
   useEffect(() => { if (!visible) { setOpen(null); setPage(1); } }, [visible]);
 
+  // ★ the NAVTEX stations row: asked once per opening, on page 1 of ALL / NAVTEX
+  const [navSum, setNavSum] = useState<NavReport | null>(null);
+  useEffect(() => {
+    if (!visible || !onNavtexMap || page !== 1 || (kind !== '' && kind !== 'navtex')) { setNavSum(null); return; }
+    let live = true;
+    fetch(withReadAuth(`${b}/vibeserver/gallery/navtex-stations.json?since=0`, readAuth), { cache: 'no-store' } as any)
+      .then((r) => (r.ok ? r.json() : null)).then((j) => { if (live) setNavSum(navSanitise(j)); }).catch(() => {});
+    return () => { live = false; };
+  }, [visible, kind, page, b, readAuth, !!onNavtexMap]);   // eslint-disable-line react-hooks/exhaustive-deps
   const fileUrl = (it: GalleryItem) => withReadAuth(`${b}/vibeserver/gallery/file/${encodeURIComponent(it.f)}`, readAuth);
   /* ★ MAP: every day card of the band still in the gallery (the web's ismGalMapOpen — at most 31, one fetch at a time),
    *  merged; the screen's time filter picks. Today's card is offered for a refresh each minute (it is rewritten that often
@@ -274,6 +286,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                       </TouchableOpacity>
                       <Text style={s.pageLab}>{galleryPageLabel(page, pages)}</Text>
                     </View>
+                  ) : null}
+                  ListHeaderComponent={navSum && navSum.stations.length > 0 && onNavtexMap ? (
+                    <TouchableOpacity onPress={onNavtexMap} accessibilityRole="button"
+                                      accessibilityLabel={`NAVTEX stations received: ${navSum.stations.length} stations, ${navSum.messages} messages. Show them on the map`}
+                                      style={s.row}>
+                      <Text style={s.freq}>NAVTEX</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={s.name}>{`NAVTEX · stations received: ${navSum.stations.length} stations · ${navSum.messages} messages`}</Text>
+                        <Text style={s.dim}>Every NAVTEX message in this gallery, by the station that sent it</Text>
+                      </View>
+                      <View style={[s.key, s.mapKey]}><Text style={s.keyText}>MAP</Text></View>
+                    </TouchableOpacity>
                   ) : null}
                   ListEmptyComponent={<Text style={s.dim}>{kind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.'}</Text>}
                   renderItem={({ item: it }) => (
