@@ -97,6 +97,17 @@ int main(int argc, char** argv) {
         ok(tl && std::fabs(tl->st->lat - 59.5) < 0.01, "…at Pub. 117's Tallinn position");
         bool sorted = true; for (size_t i = 1; i < res.stations.size(); ++i) if (res.stations[i - 1].last < res.stations[i].last) sorted = false;
         ok(sorted, "most recently heard first");
+        // ★ EA14 on 490 kHz, 2026-11-01 00:40 UTC — "AVURNAV BREST … IROISE - OUESSANT …": a French warning, Corsen's. The
+        //   label could not decide between the two E stations on 490 (Corsen 520 km, Mondolfo 1,406 km: no positions, too
+        //   few French words to count as the language), and the map does not guess either: a "?" with Corsen, the nearer,
+        //   first — the issuing authority's series name is not used, because stations relay each other's series (measured:
+        //   264 of 2 290 named messages carry another country's series, e.g. Oostende sending WZ).
+        {
+            const std::string ea14 = read("20261101-004012-navtex-489k5-cc32.txt");
+            const auto r14 = navtex::resolveAll('E', 489500, LA, LO, ea14);
+            ok(r14.stations.size() == 2 && std::string(r14.stations[0]->name) == "Corsen" && std::string(r14.stations[1]->name) == "Mondolfo",
+               "EA14 (AVURNAV BREST): the label's pair, Corsen (520 km) or Mondolfo (1,406 km) — not one station named");
+        }
         const std::string j = navmap::toJson(res, LA, LO, 1793560000);
         ok(j.find("\"stations\":[") != std::string::npos && j.find("\"rx\":{\"lat\":52.3020") != std::string::npos && j.size() < 200000, "the JSON: stations, the receiver, bounded (" + std::to_string(j.size()) + " B)");
     }
