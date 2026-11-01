@@ -30,7 +30,10 @@ const STATIONS = [['FT8', 'G4ABC', 14074600], ['FT8', 'DL1XYZ', 14075450], ['FT8
                   ['JS8', 'G4JSN', 14079000], ['FT2', 'IU8AAA', 14084900],
                   ['JTTY', 'G4JTY', 14091500], ['PSK31', 'G4PSK', 14072400]];   // ★ V12 2026-10-27
 const TOL = { FT2: 21, JTTY: 5, PSK31: 6 };   // ★ RF to a quarter of the tone step: FT2's tones are 41.7 Hz apart
-const MODES = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK"]';
+// ★ 2026-10-31: FST4 + FST4W (9daa458f9), Q65 (133c9f34a) and MSK144 (f8e691200) joined the registry. Every mode is in
+//   spotModes; 20 m carries the ones with a 20 m dial — FST4W beside WSPR (Q65, MSK144 and FST4 have none here).
+const MODES = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK","FST4W","FST4","Q65","MSK144"]';
+const MODES_20M = '["FT8","FT4","FT2","JS8","WSPR","JTTY","PSK","FST4W"]';
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-spots-'));
 const CLIP = path.join(tmp, '20m.cu8');
 execFileSync(DIGI, ['clip', CLIP, String(RATE), String(CENTRE)], { stdio: 'ignore' });
@@ -136,7 +139,7 @@ try {
       ok(st && st.spotsBand === true && !st.spotsBandWhy, `Band offered (spotsBand ${JSON.stringify(st && st.spotsBand)})`);
       const b20 = st && (st.spotBands || []).find((b) => b.id === '20m');
       ok(!!b20 && Math.abs(b20.hz - CENTRE) < 1 && b20.hi - b20.lo > 27000 && b20.hi - b20.lo < 28500
-         && JSON.stringify(b20.modes) === MODES,
+         && JSON.stringify(b20.modes) === MODES_20M,
          `20 m listed: centre ${b20 && b20.hz}, span ${b20 && b20.lo}–${b20 && b20.hi}, modes ${b20 && JSON.stringify(b20.modes)}`);
       ok(st && (st.spotBands || []).map((b) => b.id).join(' ').startsWith('160m 80m') /* ★ WSPR's 2200 m / 630 m lie below this radio */, `bands in step order: ${st && (st.spotBands || []).map((b) => b.id).join(' ')}`);
       const L = await listener(S.port, 'spone001', CENTRE, 'usb');
@@ -147,7 +150,7 @@ try {
       // ★★ V12 governor: the mode chips, and JTTY/PSK saying what the station was doing (+ every spot's country)
       const sts = jsons(L.dx, 'digital_spots_status');
       const last = sts.length ? sts[sts.length - 1].data : null;
-      ok(!!last && last.scope === 'band' && last.modes.length === 7 && last.modes.every((m) => ['active', 'light', 'idle', 'shed', 'off'].includes(m.state)),
+      ok(!!last && last.scope === 'band' && last.modes.length === JSON.parse(MODES_20M).length && last.modes.every((m) => ['active', 'light', 'idle', 'shed', 'off'].includes(m.state)),
          `the spots box's mode chips arrive (${last ? last.modes.map((m) => m.mode + ' ' + m.state).join(', ') : 'none'})`);
       ok(!!last && last.modes.some((m) => m.mode === 'WSPR' && m.live === 0), 'WSPR\'s empty window was never decoded (the activity gate, from the slice\'s own bins)');
       const j = jsons(L.dx, 'digital_spot').find((x) => x.data.callsign === 'G4JTY'), p = jsons(L.dx, 'digital_spot').find((x) => x.data.callsign === 'G4PSK');

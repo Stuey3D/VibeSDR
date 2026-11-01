@@ -36,7 +36,13 @@ const RATE = 960000, CENTRE = 14083700;   // ★ 20 m's Band centre with FT8 FT4
 // ★ The modes' styles, from the one table both clients draw with.
 const STYLE = { FT8: { colour: '#E69F00', letter: '8' }, FT4: { colour: '#56B4E9', letter: '4' },
                 FT2: { colour: '#F0E442', letter: '2' }, JS8: { colour: '#009E73', letter: 'J' }, WSPR: { colour: '#CC79A7', letter: 'W' },
-                JTTY: { colour: '#FFFFFF', letter: 'T' }, PSK: { colour: '#AA3377', letter: 'P' } };   // ★ V12 2026-10-27
+                JTTY: { colour: '#FFFFFF', letter: 'T' }, PSK: { colour: '#AA3377', letter: 'P' },   // ★ V12 2026-10-27
+                // ★ 2026-10-31: FST4/FST4W (9daa458f9), Q65 (133c9f34a), MSK144 (f8e691200) — src/utils/digiModes.ts
+                FST4W: { colour: '#D55E00', letter: 'w' }, FST4: { colour: '#D55E00', letter: 'F' },
+                Q65: { colour: '#0072B2', letter: 'Q' }, MSK144: { colour: '#BBBBBB', letter: 'M' } };
+// ★ The chips are 20 m's modes (FST4W beside WSPR); the legend is every mode the server lists, in its order.
+const CHIPS_20M = 8;
+const LEGEND = 'FT8 FT4 FT2 JS8 WSPR JTTY PSK FST4W FST4 Q65 MSK144';
 const styleOf = (m) => STYLE[m] || STYLE[String(m).replace(/[0-9]+$/, '')];   // ★ PSK31 / PSK63 → PSK
 const styleSrc = fs.readFileSync(path.join(root, 'src/utils/digiModes.ts'), 'utf8');
 for (const [m, s] of Object.entries(STYLE)) if (!styleSrc.includes(`${m}: `) || !styleSrc.includes(`colour: '${s.colour}'`)) { console.log(`   FAIL the test's ${m} style is not digiModes.ts's`); process.exit(1); }
@@ -160,7 +166,7 @@ try {
   ok(times.length >= 6 && times.every(([m, t]) => /^\d\d:\d\d:\d\d$/.test(t) && onGrid(m, t)),
      `every row's time is HH:MM:SS on its mode's slot grid: ${times.map(([m, t]) => m + ' ' + t).join(', ')}`);
   // ★★ V12 BAND GOVERNOR: a chip per mode in the box header — its letter in its colour, and what it is doing
-  ok(await until(`document.querySelectorAll('#spotModeChips .smc').length === 7 && !document.getElementById('spotModeChips').hidden`, 20000),
+  ok(await until(`document.querySelectorAll('#spotModeChips .smc').length === ${CHIPS_20M} && !document.getElementById('spotModeChips').hidden`, 20000),
      `the mode chips: ${await ev(`[...document.querySelectorAll('#spotModeChips .smc')].map(c => c.textContent).join(' · ')`)}`);
   const chips = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('#spotModeChips .smc')].map(c => ({ m: c.dataset.mode, st: c.className.replace('smc ', ''),
       l: c.querySelector('i').textContent, bg: getComputedStyle(c.querySelector('i')).backgroundColor, t: c.title })))`));
@@ -292,13 +298,13 @@ try {
     const msend = (method, params = {}) => Promise.race([new Promise((res) => { const i = ++mid; mp.set(i, res); mws.send(JSON.stringify({ id: i, method, params })); }),
                                                          sleep(10000).then(() => ({}))]);
     const mev = async (x) => (await msend('Runtime.evaluate', { expression: x, returnByValue: true })).result?.result?.value;
-    for (let i = 0; i < 40; i++) { if (await mev(`typeof spots !== 'undefined' && document.querySelectorAll('#legend .lrow[data-mode]').length >= 7`)) break; await sleep(250); }
+    for (let i = 0; i < 40; i++) { if (await mev(`typeof spots !== 'undefined' && document.querySelectorAll('#legend .lrow[data-mode]').length >= 11`)) break; await sleep(250); }
     const pts = JSON.parse(await mev(`JSON.stringify(spots.map(s => ({ m: s.mode, c: s.colour, l: s.letter })))`) || '[]');
     ok(pts.length >= 3 && pts.every((p) => styleOf(p.m) && p.c.toUpperCase() === styleOf(p.m).colour && p.l === styleOf(p.m).letter),
        `map #${round}: every marker is its MODE's colour and letter (${pts.map((p) => `${p.m}:${p.c}:${p.l}`).join(' ')})`);
     if (round === 1) {
       const legend = JSON.parse(await mev(`JSON.stringify([...document.querySelectorAll('#legend .lrow[data-mode]')].map(r => ({ m: r.dataset.mode, l: r.querySelector('.mk').textContent, bg: getComputedStyle(r.querySelector('.mk')).backgroundColor })))`) || '[]');
-      ok(legend.map((x) => x.m).join(' ') === 'FT8 FT4 FT2 JS8 WSPR JTTY PSK' && legend.every((x) => x.l === STYLE[x.m].letter && hex(x.bg) === STYLE[x.m].colour),
+      ok(legend.map((x) => x.m).join(' ') === LEGEND && legend.every((x) => x.l === STYLE[x.m].letter && hex(x.bg) === STYLE[x.m].colour),
          `the legend lists the server's modes with their colours and letters (${legend.map((x) => `${x.m}/${x.l}/${hex(x.bg)}`).join(' ')})`);
       ok(/BY MODE/.test(await mev(`document.getElementById('stats').textContent`)), 'the stats panel counts BY MODE');
     }
