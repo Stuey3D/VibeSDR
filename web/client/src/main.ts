@@ -9,6 +9,7 @@
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
+import { kickedSentence } from '../../../src/services/kickedText';
 import { LinkManager as WebLinkManager } from '../../../src/services/vibeLinkManager.ts';
 import { readAnchorsOf, readAnchorRestore, type ReadAnchor } from '../../../src/services/cwList.ts';
 import { setAntennaBands, setAntennaPort } from './antennaNotice';
@@ -1536,7 +1537,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     },
     onEvicted: () => showEvicted(),
     onBanned: () => showBanned(),
-    onKicked: () => showKicked(),
+    onKicked: (secs: number) => showKicked(secs),
     // ★ Drop audio that was demodulated at the old frequency. Without this the previous station
     //   plays on for as long as the buffer is deep — which is what made tuning feel laggy.
     // ★ And the waterfall rows held for pacing, for the same reason: they were computed at the
@@ -10489,10 +10490,9 @@ function showBanned() { showRefusal('NO ACCESS',
   'If you believe that is a mistake, contact whoever runs this receiver.'); }
 
 /** ★★ Disconnected by the owner from the admin page. Not a ban, and not a fault — said so, with
- *  no retry button: the server turns this session away for a few minutes regardless. */
-function showKicked() { showRefusal('DISCONNECTED',
-  'This receiver\'s owner has disconnected your session.<br><br>' +
-  'You can try again in a few minutes.'); }
+ *  the time LEFT (the server's `secs`) and no retry button: the server turns this session away
+ *  until then regardless. Same card for a refused reconnect during the cool-off. */
+function showKicked(secs: number) { showRefusal('DISCONNECTED', kickedSentence(secs)); }
 
 /** ★★★ THE IDLE RE-LOCK, as a PILL — not an overlay, and the difference is the whole point.
  *  Nothing has stopped: the audio is still playing, the decoder is still decoding, the session

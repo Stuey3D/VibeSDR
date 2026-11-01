@@ -3592,6 +3592,7 @@ a.qrz:hover { text-decoration-thickness: 2px; }
                        max-width: 24ch; overflow: hidden; text-overflow: ellipsis; }
 #adminPanel tr.me td { color: var(--btn-active-tx); }
 #adminPanel td .btn { padding: 2px 8px; font-size: 10.5px; }
+#adminPanel td select.kickFor { padding: 2px 4px; font-size: 10.5px; margin-right: 6px; }
 /* ★ An ended-for-a-REASON row is the one an owner is looking for, so it is the one that is
    coloured. "closed" is the boring majority and stays quiet. */
 #adminPanel td.why-kicked  { color: #ffc447; }
@@ -4715,6 +4716,14 @@ select.btn { padding: 6px 8px; }
     <div id="adminQueue" class="adminQueue" hidden></div>
     <div id="adminVisitors" class="adminQueue" hidden></div>
     <p class="dim" id="adminNoSessions" hidden>Nobody is listening at the moment.</p>
+    <p class="dim wrap" id="kickMsg"></p>
+    <!-- ★ What DISCONNECT does, beside it (Stuart, 2026-11-01): the time is a cool-off, not a ban. -->
+    <p class="dim wrap aNote">
+      DISCONNECT ends a listener's session and keeps them out for the time chosen beside it,
+      30 minutes unless you pick another (5 minutes to 24 hours). It goes by their session and
+      browser, not their address, so others on the same connection can still listen.
+      BLOCK IP keeps that address out until you remove the block below.
+    </p>
 
     </div>
     <div id="secBlocking" hidden>

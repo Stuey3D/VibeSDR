@@ -6338,6 +6338,13 @@ static bool dabSeedGain(ImplT* p, int wantSteps, double now, const char* what = 
     LocalSdrShim::instance().broadcastHwInfo();   // ★ the clients' gain readout follows the radio
     return true;
 }
+/** ★ The admin DISCONNECT's cool-off, in minutes: 1–1440 (24 h), 30 when not given or not a number.
+ *  One clamp for the API handler and adminKick — see Impl::kickedUntil. */
+static int vsKickMinutes(double m, bool given) {
+    if (!given || !std::isfinite(m)) return 30;
+    return m < 1 ? 1 : m > 24 * 60 ? 24 * 60 : (int)m;
+}
+
 struct LocalSdrShim::Impl {
     bool decoderOnly = false;             // sidecar mode: decoders only, no RTL
     vibe::DecFeedResampler decFeed;       // feedDecoderPcm — ONE continuous resampler (vibe_decfeed_resampler.h)
@@ -10560,15 +10567,55 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  "the disconnect feature for kicking out users ... does not seem to be working"). Every
      *  client reconnects on a dropped socket, and a released app does not know `kicked`, so the
      *  owner watched the row come straight back. Keyed by session id and by browser id ("bid:" +
-     *  id) — never by address, which a household or a CGNAT network shares. Seconds, monotonic.
-     *  Guarded by clientMtx. BLOCK IP is the tool for someone who should stay out. */
+     *  id) — NEVER by address, which a household or a CGNAT network shares. Value = when the
+     *  cool-off ends (seconds, monotonic). Guarded by clientMtx.
+     *  ★★ HOW LONG is the owner's choice per kick — 5 min to 24 h, default 30 (Stuart, 2026-11-01:
+     *     "at least 30 mins if not 60 mins before being allowed back on"). BLOCK IP is the tool for
+     *     someone who should stay out for good.
+     *  ★ BOUNDED: at most kKickMax entries, the one ending soonest evicted first, expired ones
+     *    pruned on every look — no growth on a 256 MB board, whatever a script does to the API.
+     *  ★ In memory only: a restart forgets the cool-off (a kicked listener may rejoin after one).
+     *    Deliberate — a restart is rare and the owner can kick again; a file is one more writer. */
     std::map<std::string, double> kickedUntil;
-    static constexpr double kKickCoolSec = 5.0 * 60.0;
-    bool kickedLocked(const std::string& session, const std::string& browser, double now) {
+    static constexpr size_t kKickMax     = 256;
+    static int kickMinutesClamp(double m, bool given) { return vsKickMinutes(m, given); }
+    void kickedPruneLocked(double now) {
         for (auto it = kickedUntil.begin(); it != kickedUntil.end(); )
             it = (it->second <= now) ? kickedUntil.erase(it) : std::next(it);
-        return (!session.empty() && kickedUntil.count(session))
-            || (!browser.empty() && kickedUntil.count("bid:" + browser));
+    }
+    void kickedAddLocked(const std::string& key, double until, double now) {
+        kickedPruneLocked(now);
+        auto it = kickedUntil.find(key);
+        if (it != kickedUntil.end()) { it->second = std::max(it->second, until); return; }
+        while (kickedUntil.size() >= kKickMax) {
+            auto soonest = kickedUntil.begin();
+            for (auto j = kickedUntil.begin(); j != kickedUntil.end(); ++j)
+                if (j->second < soonest->second) soonest = j;
+            kickedUntil.erase(soonest);
+        }
+        kickedUntil[key] = until;
+    }
+    /** Seconds of cool-off left for this session or browser; 0 = free to connect. */
+    int kickedSecsLocked(const std::string& session, const std::string& browser, double now) {
+        kickedPruneLocked(now);
+        double until = 0;
+        if (!session.empty()) { auto it = kickedUntil.find(session); if (it != kickedUntil.end()) until = std::max(until, it->second); }
+        if (!browser.empty()) { auto it = kickedUntil.find("bid:" + browser); if (it != kickedUntil.end()) until = std::max(until, it->second); }
+        return until > now ? (int)std::ceil(until - now) : 0;
+    }
+    /** ★★★ A SOCKET REFUSED AT THE DOOR MUST BE FORGOTTEN. acceptWs records who a socket is
+     *  (sockProto/sockSession/sockBrowser/sockSince/seniority) BEFORE it decides, and only the
+     *  normal close path at the end of the session erased them — so every early refusal (ban,
+     *  cooldown, kick) left them behind under a freed pointer. Found testing the kick cool-off
+     *  (2026-11-01): a released app retries every 3 s, and a refused tab's leftover entry counted
+     *  as "already listening in another tab", so the same browser was STILL refused after its
+     *  cool-off ended — and the maps grew for as long as it kept knocking. Call WITH clientMtx. */
+    void forgetRefusedSockLocked(net::Socket* sk) {
+        sockProto.erase(sk); sockSession.erase(sk); sockBrowser.erase(sk); sockSince.erase(sk);
+        askRankLeaveLocked(sk, Impl::nowSecs());
+    }
+    static std::string kickedMsg(int secs) {
+        return "{\"type\":\"kicked\",\"secs\":" + std::to_string(secs) + "}";
     }
     /** When the current occupant claimed the slot (seconds, monotonic). 0 = nobody. Guarded by
      *  clientMtx alongside occupantSession — one lock for one piece of state. */
@@ -22826,9 +22873,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (isPost && what == "kick") {
                 const std::string session = jsonStr(body, "session");
                 const std::string addr    = jsonStr(body, "ip");
-                const int n = LocalSdrShim::instance().adminKick(session, addr);
-                LOGI("admin kicked %s%s — %d session(s)", session.c_str(), addr.c_str(), n);
-                reply(200, "OK", "{\"ok\":true,\"kicked\":" + std::to_string(n) + "}");
+                // ★ How long they stay out: 1–1440 min, 30 when the page does not say (an older page).
+                double minsV = 0;
+                const bool given = jsonNum(body, "minutes", minsV);
+                const int mins = vsKickMinutes(minsV, given);
+                const int n = LocalSdrShim::instance().adminKick(session, addr, mins);
+                LOGI("admin kicked %s%s for %d min — %d session(s)", session.c_str(), addr.c_str(), mins, n);
+                reply(200, "OK", "{\"ok\":true,\"kicked\":" + std::to_string(n)
+                                 + ",\"minutes\":" + std::to_string(mins) + "}");
                 return;
             }
             if (isPost && what == "decoders") {
@@ -24286,6 +24338,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     //    does for `evicted` and `cooldown`.
                     static const char* kBanned = "{\"type\":\"banned\"}";
                     sendWs(sock, 0x1, (const uint8_t*)kBanned, strlen(kBanned));
+                    forgetRefusedSockLocked(sock.get());
                     lk.unlock();
                     LocalSdrShim::noteConnectionClosed(sock->peerAddress(), session, "banned");
                     outboxClose(sock);
@@ -24293,11 +24346,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 }
                 // ★★ JUST DISCONNECTED BY THE OWNER — see kickedUntil. Told `kicked` again, so a
                 //    client that knows the word stops, and one that does not is refused each try.
-                if (kickedLocked(session, browser, Impl::nowSecs())) {
-                    LOGI("%s WS refused — disconnected by the owner, inside the %d-min cool-off [%s]",
-                         isAudio ? "audio" : "spectrum", (int)(kKickCoolSec / 60), session.c_str());
-                    static const char* kKicked = "{\"type\":\"kicked\"}";
-                    sendWs(sock, 0x1, (const uint8_t*)kKicked, strlen(kKicked));
+                if (const int left = kickedSecsLocked(session, browser, Impl::nowSecs()); left > 0) {
+                    LOGI("%s WS refused — disconnected by the owner, %d s of the cool-off left [%s]",
+                         isAudio ? "audio" : "spectrum", left, session.c_str());
+                    const std::string kKicked = kickedMsg(left);
+                    sendWs(sock, 0x1, (const uint8_t*)kKicked.data(), kKicked.size());
+                    forgetRefusedSockLocked(sock.get());
                     lk.unlock();
                     LocalSdrShim::noteConnectionClosed(sock->peerAddress(), session, "kicked");
                     outboxClose(sock);
@@ -24361,6 +24415,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         const std::string m = "{\"type\":\"cooldown\",\"secs\":"
                                             + std::to_string(left) + "}";
                         sendWs(sock, 0x1, (const uint8_t*)m.data(), m.size());
+                        forgetRefusedSockLocked(sock.get());
                         outboxClose(sock);   // drain, then close — see outboxClose()
                         return;
                     }
@@ -34584,13 +34639,14 @@ std::string LocalSdrShim::adminSessionsJson() {
  *      and the admin table draws those rows (adminSessionsJson) — so DISCONNECT found nothing,
  *      answered `kicked: 0`, and the owner watched the listener carry on. Same shape as the
  *      admin table itself, which had to learn "who is on my radio" four times. */
-int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
+int LocalSdrShim::adminKick(const std::string& session, const std::string& ip, int minutes, bool banned) {
     if (!p || (session.empty() && ip.empty())) return 0;
     std::vector<std::shared_ptr<net::Socket>> doomed;
     std::vector<std::pair<std::string, std::string>> logged;   // ip, session — one per listener
     {
         std::lock_guard<std::mutex> lk(p->clientMtx);
         const double now = Impl::nowSecs();
+        const double coolSec = 60.0 * Impl::kickMinutesClamp(minutes, true);
         const auto doom = [&](const std::shared_ptr<net::Socket>& s) {
             if (s && std::find(doomed.begin(), doomed.end(), s) == doomed.end()) doomed.push_back(s);
         };
@@ -34639,13 +34695,15 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
                 p->occupantSession.clear(); p->occupantSince = 0; p->occupantAddr.clear();
                 g_vsHandoverAt = 0;
             }
-            // ★ Remember them for the cool-off (see kickedUntil) — session AND browser.
-            if (!e.second.empty()) p->kickedUntil[e.second] = now + Impl::kKickCoolSec;
+            // ★ Remember them for the cool-off (see kickedUntil) — session AND browser. Not for a
+            //   ban: the ban list already refuses them, for good, and says `banned`.
+            if (!banned && !e.second.empty()) p->kickedAddLocked(e.second, now + coolSec, now);
         }
         for (auto& s : doomed) {
+            if (banned) break;
             auto it = p->sockBrowser.find(s.get());
             if (it != p->sockBrowser.end() && !it->second.empty())
-                p->kickedUntil["bid:" + it->second] = now + Impl::kKickCoolSec;
+                p->kickedAddLocked("bid:" + it->second, now + coolSec, now);
         }
         // ★★ V12: and a HELD session it names — a kick ends it as it would a connected one (finished by holdTick). Any
         //    socket of the session that is open is closed below with the rest.
@@ -34656,7 +34714,7 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
         for (const auto& s : heldHit) {
             const std::string a = p->heldSessions_[s].addr;
             p->noHoldLocked(s, "kicked by the owner");
-            p->kickedUntil[s] = now + Impl::kKickCoolSec;   // ★ the cool-off holds for a held session as for a connected one
+            if (!banned) p->kickedAddLocked(s, now + coolSec, now);   // ★ the owner's cool-off holds for a held session as for a connected one
             if (std::none_of(logged.begin(), logged.end(), [&](const std::pair<std::string, std::string>& e) { return e.second == s; }))
                 logged.emplace_back(a, s);
         }
@@ -34671,14 +34729,23 @@ int LocalSdrShim::adminKick(const std::string& session, const std::string& ip) {
     // ★★★ outboxClose, NOT close() — the eviction path's lesson (2026-08-19), never applied here.
     //     sendWs() only QUEUES; close() straight after it shut the fd before the writer thread had
     //     sent the frame, so the client got a bare drop, not `kicked`, and reconnected.
-    static const char* kMsg = "{\"type\":\"kicked\"}";
+    // ★ `secs` = how long until they may rejoin, so the client can say so rather than guess.
+    // ★★ A BLOCK SAYS `banned`, not `kicked`: "rejoin in 30 minutes" on someone who is blocked
+    //    for good would be a lie, and the clients show NO ACCESS for it.
+    const std::string kMsg = banned ? std::string("{\"type\":\"banned\"}")
+                                    : Impl::kickedMsg(60 * Impl::kickMinutesClamp(minutes, true));
+    // ★ Queue to every socket FIRST, then drain each: the frames go out in parallel, and a longer
+    //   drain than the eviction's (500 ms, not 100) because clientMtx is NOT held here — a listener
+    //   on a slow link with waterfall rows queued ahead still gets told (a 100 ms bound lost it
+    //   in testing, right after start-up). Kicks are rare; the admin request can wait.
+    for (auto& s : doomed)
+        if (s && s->isOpen()) p->sendWs(s, 0x1, (const uint8_t*)kMsg.data(), kMsg.size());
     for (auto& s : doomed) {
         if (!s) continue;
-        if (s->isOpen()) p->sendWs(s, 0x1, (const uint8_t*)kMsg, strlen(kMsg));
-        p->outboxClose(s, 100);
+        p->outboxClose(s, 500);
         if (s->isOpen()) s->close();   // ★ a socket with no outbox (none registered) still goes
     }
-    for (auto& e : logged) g_vsConnLog.close(e.first, e.second, "kicked");
+    for (auto& e : logged) g_vsConnLog.close(e.first, e.second, banned ? "banned" : "kicked");
     return (int)logged.size();
 }
 
@@ -34734,7 +34801,7 @@ int LocalSdrShim::adminKickMatching(const std::string& cidr) {
         } else {
             hit = vibeadmin::matches(rule, addr);
         }
-        if (hit) n += adminKick("", addr);
+        if (hit) n += adminKick("", addr, 0, /*banned=*/true);
     }
     return n;
 }

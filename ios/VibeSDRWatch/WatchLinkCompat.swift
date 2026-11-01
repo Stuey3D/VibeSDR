@@ -43,7 +43,21 @@ extension WatchLink {
   /// Nor is there a rate to settle on, for the same reason: we never chose one.
   var linkSettling: Bool { false }
   /// The phone surfaces its own refusals in `why`; a second channel would let the two disagree.
-  var connectError: String? { nil }
+  /// ★★ So the ones that END the session are read FROM `why` (Stuart, 2026-11-01: "the apple watch
+  ///    needs to handle being booted"): `kicked:<epoch s when they may rejoin>` — the owner's
+  ///    DISCONNECT — and `banned`. Counted down here from the phone's deadline, so the minutes are
+  ///    the time LEFT, the same words as the phone and the web page, shortened for a wrist.
+  var connectError: String? {
+    if why == "banned" { return "No access to this server." }
+    guard why.hasPrefix("kicked:"), let until = Double(why.dropFirst("kicked:".count)) else { return nil }
+    let m = max(1, Int(((until - Date().timeIntervalSince1970) / 60).rounded(.up)))
+    let left = m < 90 ? "\(m) min" : "\(m / 60) h" + (m % 60 > 0 ? " \(m % 60) min" : "")
+    return "Disconnected by the server owner. You can rejoin in \(left)."
+  }
+  /// The refusal card's title for `connectError` — a kick is not a failure to connect.
+  var connectErrorTitle: String {
+    why == "banned" ? "No access" : why.hasPrefix("kicked:") ? "Disconnected" : "Couldn’t connect"
+  }
   /// "Heavy server for the phone relay" is a judgement about OUR socket. The phone makes its own.
   var bandwidthWarning: String? { nil }
   /// OWRX-specific tutorial line: the phone knows its backend, we do not (yet).

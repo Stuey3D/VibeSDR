@@ -2634,7 +2634,7 @@ export abstract class VibeServerWsClient {
       //     ... does not seem to be working"). The app's native audio path already treats both as
       //     terminal (VibePowerModule.laTerminalTypes); the spectrum socket now agrees.
       this.refused = true;
-      this.callbacks.onKicked?.(msg.type === 'banned');
+      this.callbacks.onKicked?.(msg.type === 'banned', Number(msg.secs) || 0);
       return;
     }
     if (msg.type === 'device') {

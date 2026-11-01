@@ -486,6 +486,12 @@ final class UberClient: ObservableObject {
   @Published var cooldownRefused = false
   /// Seconds before we may return — the server's number, not a guess.
   @Published var cooldownSecs = 0
+  /// ★★ The owner pressed DISCONNECT on us (or we came back inside that cool-off). Terminal —
+  /// the server refuses this session until `kickedSecs` have passed. (Stuart, 2026-11-01.)
+  @Published var kicked = false
+  @Published var kickedSecs = 0
+  /// The owner BLOCKED this address. Terminal, with nothing to wait for.
+  @Published var banned = false
   @Published var sysGainDb = 0.0
   /// ★★ The RSP's gain loop is still SETTLING — from rspstat. Until this clears, the gain
   /// figures above it are a loop in motion, not a reading. Stuart asked for the controls to be
@@ -2700,6 +2706,23 @@ final class UberClient: ObservableObject {
       // terminal refusal must reach EVERY socket, not only the one that heard it.
       goIdle()
       status = "cooldown"
+      return
+    }
+    // ★★★ DISCONNECTED BY THE OWNER, OR BLOCKED. Jr parsed neither, so a kicked watch saw the
+    //     socket close and reconnected — straight back in, or into a refusal it then retried for
+    //     ever (Stuart, 2026-11-01: "the apple watch needs to handle being booted"). `secs` is the
+    //     time LEFT, and comes with every refused reconnect too, so it is never stale.
+    if type == "kicked" {
+      kicked = true
+      kickedSecs = (j["secs"] as? NSNumber)?.intValue ?? 0
+      goIdle()
+      status = "disconnected by the owner"
+      return
+    }
+    if type == "banned" {
+      banned = true
+      goIdle()
+      status = "no access"
       return
     }
     if type == "evicted" {

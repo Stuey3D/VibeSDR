@@ -1498,6 +1498,8 @@ struct ContentView: View {
   private var connectionStatus: (text: String, working: Bool)? {
     let s = link.backendStatus
     guard !s.isEmpty, s != "live", s != "idle" else { return nil }
+    // ★ The refusal card (connectError) owns these — a pill reading "kicked:1793…" under it is noise.
+    if s == "banned" || s.hasPrefix("kicked:") { return nil }
 
     // Live developer read-outs (OWRX's KB/s + fft + cpu line, secondary-decoder debug). Never
     // user-facing — they are numbers for us, noise for everyone else.
@@ -1717,7 +1719,7 @@ struct ContentView: View {
       VStack(spacing: 10) {
         Image(systemName: "antenna.radiowaves.left.and.right.slash")
           .font(.title3).foregroundStyle(.orange)
-        Text("Couldn’t connect").font(.headline).foregroundStyle(.white)
+        Text(link.connectErrorTitle).font(.headline).foregroundStyle(.white)
         Text(msg).font(.caption2).foregroundStyle(.secondary)
           .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         Button { link.backToPicker() } label: {

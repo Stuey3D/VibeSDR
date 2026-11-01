@@ -344,6 +344,17 @@ struct WristSDRApp: App {
                         body: "You have just had a turn on this shared receiver.",
                         note: "Try again in \(link.cooldownText).")
         }
+        // ★★ DISCONNECTED BY THE OWNER — the same words as the phone and the web page, shortened
+        //    for a wrist. Terminal: Try again after the time is up, or Back to servers.
+        else if link.kicked {
+          refusalScreen(title: "DISCONNECTED",
+                        body: "Disconnected by the server owner.",
+                        note: "You can rejoin in \(link.kickedText).")
+        } else if link.banned {
+          refusalScreen(title: "NO ACCESS",
+                        body: "No access to this server.",
+                        note: "The owner has blocked this address.")
+        }
         // ★★★ AUTO-STOPPED — LAST in this chain, so a SERVER's ending always wins the screen. The
         //     server's refusals carry a cooldown and a "try again"; ours carries only an apology,
         //     and showing it over the top of TIME UP would replace the useful explanation with the

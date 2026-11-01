@@ -1036,6 +1036,28 @@ function renderVisitors(list: any[], busyIps: Set<string>) {
     .join('');
 }
 
+/** ★★ HOW LONG A DISCONNECT KEEPS SOMEBODY OUT — the owner's choice per kick (Stuart, 2026-11-01:
+ *  "at least 30 mins if not 60 mins before being allowed back on … all the way up to 24 hours").
+ *  The server clamps to 1–1440 min and keys it by session and browser, never by address. BLOCK IP
+ *  is the permanent one. The last choice is remembered on this browser (localStorage). */
+const KICK_MINUTES: [number, string][] = [
+  [5, '5 min'], [10, '10 min'], [15, '15 min'], [30, '30 min'], [60, '1 h'], [120, '2 h'],
+  [240, '4 h'], [480, '8 h'], [720, '12 h'], [1440, '24 h'],
+];
+const KICK_KEY = 'vsAdminKickMinutes';
+function kickMinutes(): number {
+  let v = 30;
+  try { v = Number(localStorage.getItem(KICK_KEY)) || 30; } catch { /* private mode */ }
+  return KICK_MINUTES.some(([m]) => m === v) ? v : 30;
+}
+function kickSelect(session: string): string {
+  const cur = kickMinutes();
+  return `<select class="btn kickFor" data-kickfor="${esc(session)}"
+            title="How long DISCONNECT keeps this listener out before they may rejoin. BLOCK IP is permanent.">${
+    KICK_MINUTES.map(([m, l]) => `<option value="${m}"${m === cur ? ' selected' : ''}>${l}</option>`).join('')
+  }</select>`;
+}
+
 function renderSessions(s: any) {
   renderQueue(s.queue ?? []);
   renderVisitors(s.visitors ?? [],
@@ -1050,6 +1072,9 @@ function renderSessions(s: any) {
   const rate = (v: any, unit: string) =>
     typeof v === 'number' && v >= 0 ? `${esc(String(v))}<span class="dim">${unit}</span>`
                                     : '<span class="dim">—</span>';
+  // ★ Never yank a dropdown the owner is using: this table is redrawn every poll, and redrawing
+  //   it would close the "for how long" list in their hand. The next poll after they choose draws.
+  if (tb.contains(document.activeElement) && document.activeElement?.tagName === 'SELECT') return;
   tb.innerHTML = list.map((c) => `<tr>
     <td>${withFlag(c.cc, c.ip || '—')}</td>
     <td>${c.radio ? esc(c.radio) : '<span class="dim">—</span>'}</td>
@@ -1090,7 +1115,7 @@ function renderSessions(s: any) {
       : ''}</td>
     <td class="agent">${c.net ? esc(c.net) : '<span class="dim">unknown</span>'}</td>
     <td>
-      <button class="btn" data-kick="${esc(c.session)}">DISCONNECT</button>
+      <button class="btn" data-kick="${esc(c.session)}">DISCONNECT</button>${kickSelect(String(c.session ?? ''))}
       <button class="btn" data-ban="${esc(c.ip)}">BLOCK IP</button>
       ${c.net ? `<button class="btn" data-banasn="${esc(c.net.split(' ')[0])}"
                          data-netname="${esc(c.net)}">BLOCK NETWORK</button>` : ''}
@@ -2010,6 +2035,15 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     }
   });
 
+  // ★ The DISCONNECT duration: remembered at once, so every row's list and the next kick agree.
+  document.getElementById('adminPanelBody')?.addEventListener('change', (ev) => {
+    const t = ev.target as HTMLElement;
+    if (!(t instanceof HTMLSelectElement) || !t.classList.contains('kickFor')) return;
+    try { localStorage.setItem(KICK_KEY, t.value); } catch { /* private mode */ }
+    document.querySelectorAll<HTMLSelectElement>('select.kickFor').forEach((sel) => { sel.value = t.value; });
+    t.blur();
+  });
+
   // Delegated row actions, for both tables.
   document.getElementById('adminPanelBody')?.addEventListener('click', async (ev) => {
     const t = (ev.target as HTMLElement).closest('button');
@@ -2019,7 +2053,15 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     const unban  = t.getAttribute('data-unban');
     const banAsn = t.getAttribute('data-banasn');
     try {
-      if (kick) { await post('kick', { session: kick }); void refresh(); }
+      if (kick) {
+        const minutes = kickMinutes();
+        const r = await post('kick', { session: kick, minutes });
+        const mins = Number(r.minutes) || minutes;
+        msg('kickMsg', r.kicked > 0
+          ? `Disconnected — they can rejoin in ${mins >= 60 ? `${mins / 60} h` : `${mins} min`}.`
+          : 'That listener had already gone.');
+        void refresh();
+      }
       else if (unban) { await post('unban', { cidr: unban }); msg('banMsg', `Removed ${unban}.`); void refresh(); }
       else if (banAsn) {
         // ★★★ THE BIGGEST BUTTON ON THIS PAGE, so it names what it will actually do. Blocking a

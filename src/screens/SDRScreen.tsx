@@ -16,6 +16,7 @@
 
 import { TEXT_FAMILIES, isTextFamily, textModeStatusText, type TextFamily, type TextMode } from '../services/textModes';   // ★ V12 MFSK / OLIVIA / THOR
 import { hellStatusText } from '../services/feldHell';   // ★ V12 FELD HELL
+import { kickedSentence } from '../services/kickedText';
 import { UPDATE_APP_MESSAGE, type SDRCallbacks } from '../services/sdrProtocol';
 import { isIcom, parseIcomRadio, mergeIcomStatus, icomBanner, icomFollowNote, icomClientMode,
          icomWatchState, sMeter, type IcomStatus } from '../services/icomRadio';
@@ -7355,20 +7356,21 @@ export default function SDRScreen({ route, navigation }: Props) {
               + "iPhone's address, so it counts as the same listener.",
         });
       },
-      onKicked: (banned: boolean) => {
+      onKicked: (banned: boolean, secs: number) => {
         if (destroyed.current) return;
         // ★ Same as onEvicted: the socket is about to close, and this is the honest reason.
         if (connLostTimer.current) { clearTimeout(connLostTimer.current); connLostTimer.current = null; }
         setConnLost(false);
         terminalRefusal.current = true;
+        watchProvider.setRefused(banned ? 'banned' : 'kicked', secs);   // ★ and the wrist says so too
         setRefusal(banned ? {
           title: 'NO ACCESS',
           body: "This receiver's owner has blocked access from your address.",
           note: 'If you believe that is a mistake, contact whoever runs this receiver.',
         } : {
           title: 'DISCONNECTED',
-          body: "This receiver's owner has disconnected your session.",
-          note: 'You can try again in a few minutes, or pick another server.',
+          body: kickedSentence(secs),
+          note: 'Or pick another server.',
         });
       },
       onEvicted: () => {

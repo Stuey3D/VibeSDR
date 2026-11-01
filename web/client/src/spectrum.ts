@@ -714,7 +714,7 @@ export interface SpectrumCallbacks {
   onBanned?: () => void;
   /** The owner pressed DISCONNECT on this listener in the admin page. Terminal for a while — the
    *  server refuses this session for a cool-off, so retrying is only noise. */
-  onKicked?: () => void;
+  onKicked?: (secs: number) => void;
   onElsewhere?: (radio: string) => void;
   onHandover?: (secs: number) => void;
   onIdleCheck?: (secs: number) => void;
@@ -1499,7 +1499,7 @@ export class SpectrumClient {
         //     so a kicked listener was simply dropped, auto-reconnected and was back in seconds
         //     (M7EIW, 2026-11-01: "the disconnect feature ... does not seem to be working").
         this.refused = true;
-        this.cb.onKicked?.();
+        this.cb.onKicked?.(Number(msg.secs) || 0);   // ★ time LEFT before they may rejoin
         break;
       // ★★★ SOFT LIMIT: SOMEBODY IS WAITING, AND THIS IS THE ONLY WARNING THERE IS. NOT terminal —
       //     the listener is still connected and still listening, and setting `refused` here would

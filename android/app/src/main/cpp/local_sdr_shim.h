@@ -393,7 +393,9 @@ public:
     std::string adminSessionsJson();
     /** Close a listener's sockets, telling them why. Empty `session` matches on address.
      *  @return how many sessions were closed. */
-    int adminKick(const std::string& session, const std::string& ip);
+    /** `minutes` = how long the session and its browser are refused afterwards (clamped 1–1440).
+     *  `banned` = this is a BLOCK: tell them `banned`, and no cool-off (the ban list refuses them). */
+    int adminKick(const std::string& session, const std::string& ip, int minutes = 30, bool banned = false);
     /** Kick everyone a ban rule matches — a ban that leaves the banned person connected is not
      *  a ban, it is a note about future connections. */
     int adminKickMatching(const std::string& cidr);

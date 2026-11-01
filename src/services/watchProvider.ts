@@ -908,7 +908,26 @@ class WatchProvider {
   private lastSessLeft = -999;
   private lastSessLimit = -999;
 
+  /** ★★ THE SERVER TURNED US AWAY FOR GOOD (or for a while): the owner's DISCONNECT, or a BLOCK.
+   *  The wrist cannot read the phone's card, and without this it drew "iPhone lost the server"
+   *  over a phone that knew exactly why (Stuart, 2026-11-01: "the apple watch needs to handle
+   *  being booted the same disconnected by owner message"). Rides `why` like every other reason —
+   *  `kicked:<epoch s when they may rejoin>` or `banned` — so it needs no new message, and the
+   *  watch counts the minutes down itself. Cleared by a new session or the picker (see
+   *  setPhoneStatus). */
+  setRefused(kind: 'kicked' | 'banned' | null, secsLeft = 0) {
+    const v = kind === 'kicked' ? `kicked:${Math.round(Date.now() / 1000 + Math.max(0, secsLeft))}`
+            : kind === 'banned' ? 'banned' : '';
+    if (v === this.refusedWhy) return;
+    this.refusedWhy = v;
+    this.nudgeState();
+  }
+  private refusedWhy = '';
+
   setPhoneStatus(st: string) {
+    // ★ A NEW session or a trip to the list ends the refusal; 'live'/'idle' are only the phone
+    //   saying it is still here (App.tsx answers the watch's Start with 'live' on the SDR screen).
+    if (this.refusedWhy && st !== 'live' && st !== 'idle') this.setRefused(null);
     if (st === this.phoneStatus) return;
     this.phoneStatus = st;
     this.flushPhone();
@@ -930,6 +949,7 @@ class WatchProvider {
    *  identical from the watch. The state channel still works whenever this matters
    *  (that's why the frequency kept updating), so it can carry the reason. */
   private whyNoRows(): string {
+    if (this.refusedWhy) return this.refusedWhy;               // ★ the server's verdict outranks all
     if (this.specPaused) return 'paused';                      // socket closed for power
     /* ★★★ AN ICOM THAT IS TRANSMITTING OR OFF CI-V SENDS NO SWEEPS ON PURPOSE (the server froze the scope).
      *  Say so — 'radio' — rather than 'idle': idle is drawn as "iPhone lost the server" and, worse, escalates

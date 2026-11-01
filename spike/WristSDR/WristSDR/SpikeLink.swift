@@ -202,6 +202,18 @@ final class SpikeLink: ObservableObject {
   /// Refused because we returned inside our cooldown, and how long is left.
   @Published var cooldownRefused = false
   @Published var cooldownSecs = 0
+  /// ★★ Disconnected by the owner (DISCONNECT on the admin page), and how long until we may
+  /// rejoin; or BLOCKED, for good. Both terminal, both explained — see UberClient.
+  @Published var kicked = false
+  @Published var kickedSecs = 0
+  @Published var banned = false
+  /// "12 minutes" / "2 hours" — the time LEFT, rounded up so it never says 0 with a minute to go.
+  var kickedText: String {
+    let m = max(1, Int((Double(kickedSecs) / 60.0).rounded(.up)))
+    if m < 90 { return "\(m) minute\(m == 1 ? "" : "s")" }
+    let h = m / 60, r = m % 60
+    return "\(h) hour\(h == 1 ? "" : "s")" + (r > 0 ? " \(r) min" : "")
+  }
   /// "about 2 minutes" — the same rounding the web client uses, so the two agree.
   var cooldownText: String {
     let m = max(1, Int((Double(cooldownSecs) / 60.0).rounded()))
@@ -234,6 +246,7 @@ final class SpikeLink: ObservableObject {
     evicted = false
     serverBusy = false
     cooldownRefused = false; cooldownSecs = 0
+    kicked = false; kickedSecs = 0; banned = false
     showSessionPill = false
     sessionNotice = nil
     // ★ A door you walked back out of is a door you knock on again — see unlockedRadios.
@@ -302,7 +315,7 @@ final class SpikeLink: ObservableObject {
     guard mins > 0, !serverName.isEmpty, client != nil else { return }
     // ★ Nothing to stop: the session is ALREADY over and one of these screens owns the ending.
     //   Firing over the top would replace the server's explanation with ours.
-    guard !sessionEnded, !evicted, !serverBusy, !cooldownRefused, !autoStopped else { return }
+    guard !sessionEnded, !evicted, !serverBusy, !cooldownRefused, !kicked, !banned, !autoStopped else { return }
     let ours = Double(mins) * 60 - Date().timeIntervalSince(lastActivityAt)
     // ★★★ A SERVER TIME LIMIT ALWAYS TAKES PRIORITY. When a HARD limit will run out before our
     //     idle window does, we do not fire at all — the server gets there first and its own TIME
@@ -861,6 +874,9 @@ final class SpikeLink: ObservableObject {
       if u.sessionEnded, !sessionEnded { sessionEnded = true }
       if cooldownRefused != u.cooldownRefused { cooldownRefused = u.cooldownRefused }
       if cooldownSecs != u.cooldownSecs { cooldownSecs = u.cooldownSecs }
+      if kicked != u.kicked { kicked = u.kicked }
+      if kickedSecs != u.kickedSecs { kickedSecs = u.kickedSecs }
+      if banned != u.banned { banned = u.banned }
       if serverBusy != u.serverBusy { serverBusy = u.serverBusy }
       if takeoverPossible != u.takeoverPossible { takeoverPossible = u.takeoverPossible }
       if sessionLimitMin != u.sessionLimitMin { sessionLimitMin = u.sessionLimitMin }
