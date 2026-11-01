@@ -84,8 +84,13 @@ type GlyphName = 'cpu' | 'ram' | 'temp' | 'snailFire' | 'snailBolt' | 'snail';
 
 /** ★ THE TORTOISE (Stuart, 2026-11-01) — neck, head and two legs; the shell's height differs per glyph. */
 const TORTOISE_NECK = 'M11.6 11.2l1.1-1';
-const TORTOISE_LEGS = 'M3.4 12v2M9.6 12v2';
+const TORTOISE_LEGS = 'M3.4 12v2M9.6 12v2M1.5 12.2l-1.1 .9';
 const TORTOISE_FLAME = 'M6.5 0.9c.4 1.5 2.4 2.3 2.4 4.3a2.4 2.4 0 0 1-4.8 0c0-.9.5-1.6 1-2 .1.7.5 1.1.9 1.2-.3-1.2-.1-2.5.5-3.5z';
+/** ★ The shell's plates — small solid hexagons (a red-footed tortoise, Stuart's photo): 3 under a flame or
+ *  bolt, 5 when the shell has the box to itself. */
+const TORTOISE_HEX_FIRE = 'M7.50 9.80L7 10.67L6 10.67L5.50 9.80L6 8.93L7 8.93zM4.90 10.33L4.40 11.19L3.40 11.19L2.90 10.33L3.40 9.46L4.40 9.46zM10.10 10.33L9.60 11.19L8.60 11.19L8.10 10.33L8.60 9.46L9.60 9.46z';
+const TORTOISE_HEX_BOLT = 'M7.50 9.70L7 10.57L6 10.57L5.50 9.70L6 8.83L7 8.83zM4.90 10.25L4.40 11.12L3.40 11.12L2.90 10.25L3.40 9.39L4.40 9.39zM10.10 10.25L9.60 11.12L8.60 11.12L8.10 10.25L8.60 9.39L9.60 9.39z';
+const TORTOISE_HEX_PLAIN = 'M7.50 9.30L7 10.17L6 10.17L5.50 9.30L6 8.43L7 8.43zM4.90 10L4.40 10.87L3.40 10.87L2.90 10L3.40 9.13L4.40 9.13zM10.10 10L9.60 10.87L8.60 10.87L8.10 10L8.60 9.13L9.60 9.13zM6.20 6.70L5.70 7.57L4.70 7.57L4.20 6.70L4.70 5.83L5.70 5.83zM8.80 6.70L8.30 7.57L7.30 7.57L6.80 6.70L7.30 5.83L8.30 5.83z';
 const TORTOISE_BOLT = 'M8.4 0.8L4.9 4.2h2.4L5.5 7.2l3.6-3.6H6.7z';
 
 function Glyph({ name, color }: { name: GlyphName; color: string }) {
@@ -132,14 +137,15 @@ function glyphBody(name: GlyphName, color: string) {
      *  throttle, with a lightning bolt = power limit throttled." A plain one says only "slow" and leaves
      *  the owner guessing — and the two causes want opposite fixes: cool it down, or find a better
      *  supply/cable. The plain one survives only for a cap whose cause nothing reports.
-     *  ★ A TORTOISE, NOT THE SNAIL (Stuart, 2026-11-01, from a 16–48 px sheet): plain domed shell, ONE
-     *    SOLID flame, a SOLID bolt — the outline bolt read as a triangle, three tongues as clutter. The
+     *  ★ A TORTOISE, NOT THE SNAIL (Stuart, 2026-11-01, from a 16–48 px sheet): plain domed shell with
+     *    small solid hexagon plates (3, or 5 with no cause marking), ONE SOLID flame, a SOLID bolt — the outline bolt read as a triangle, three tongues as clutter. The
      *    glyph names keep "snail" so nothing else moves. ✗ Same `d` strings as HEALTH_ICONS in
      *    web/client/src/main.ts — change both or neither. */
     case 'snailFire':
       return (
         <>
           <Path d="M1.2 12a5.3 4.4 0 0 1 10.6 0z" />
+          <Path d={TORTOISE_HEX_FIRE} fill={color} stroke="none" />
           <Path d={TORTOISE_NECK} />
           <Circle cx={13.7} cy={9.2} r={1.4} />
           <Path d={TORTOISE_LEGS} />
@@ -150,6 +156,7 @@ function glyphBody(name: GlyphName, color: string) {
       return (
         <>
           <Path d="M1.2 12a5.3 4.6 0 0 1 10.6 0z" />
+          <Path d={TORTOISE_HEX_BOLT} fill={color} stroke="none" />
           <Path d={TORTOISE_NECK} />
           <Circle cx={13.7} cy={9.2} r={1.4} />
           <Path d={TORTOISE_LEGS} />
@@ -160,6 +167,7 @@ function glyphBody(name: GlyphName, color: string) {
       return (
         <>
           <Path d="M1.2 12a5.3 7.4 0 0 1 10.6 0z" />
+          <Path d={TORTOISE_HEX_PLAIN} fill={color} stroke="none" />
           <Path d={TORTOISE_NECK} />
           <Circle cx={13.7} cy={9.2} r={1.4} />
           <Path d={TORTOISE_LEGS} />
