@@ -96,11 +96,18 @@ const fnBody = (name: string) => {
 eq('scheduleBuffer is called only inside scheduleOut (one player, one mixer)',
    (sw.match(/\.scheduleBuffer\(/g) || []).length, (fnBody('scheduleOut').match(/\.scheduleBuffer\(/g) || []).length);
 ok('scheduleOut plays on playerNode', /guard let player = playerNode/.test(fnBody('scheduleOut')));
+// ★ Since the V12 record buffer (c2207faf5, 2026-10-18) every ingress hands its buffer to ONE shared step, deliver()
+//   (notch → transcriber → squelch → binaural → recorder + record buffer → speaker), and deliver() ends in scheduleOut.
+//   So the order is asserted once, in deliver(), and each ingress must go through it (none may schedule on its own).
+const dv = fnBody('deliver');
+ok('deliver ends in scheduleOut', /scheduleOut\(/.test(dv));
+ok('deliver records BEFORE the gain (recordings are pre-volume)',
+   dv.indexOf('writeRecording(') >= 0 && dv.indexOf('writeRecording(') < dv.indexOf('scheduleOut('));
 for (const ingress of ['handlePacket', 'playExternalBuffer', 'playFmdxPcm']) {
   const b = fnBody(ingress);
-  ok(`${ingress} ends in scheduleOut`, /scheduleOut\(/.test(b));
-  ok(`${ingress} records BEFORE the gain (recordings are pre-volume)`,
-     b.indexOf('writeRecording(') >= 0 && b.indexOf('writeRecording(') < b.indexOf('scheduleOut('));
+  ok(`${ingress} ends in deliver() (→ scheduleOut)`, /deliver\(/.test(b));
+  ok(`${ingress} never schedules or records on its own (deliver() owns the order)`,
+     !/scheduleOut\(/.test(b) && !/writeRecording\(/.test(b));
 }
 ok('external PCM and Opus both feed playExternalBuffer',
    /playExternalBuffer\(/.test(fnBody('feedExternalPcm')) && /playExternalBuffer\(/.test(fnBody('feedExternalOpus')));
