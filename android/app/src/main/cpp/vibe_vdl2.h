@@ -46,7 +46,7 @@ static constexpr uint8_t kUw[16] = { 0b000, 0b010, 0b011, 0b110, 0b000, 0b001, 0
 inline int grayOf(int k) { return k ^ (k >> 1); }
 inline int stepOf(int g) { int k = g; for (int s = g >> 1; s; s >>= 1) k ^= s; return k & 7; }
 
-struct Tuning { float rxBw = 5000.f, rxTr = 4000.f; int rxKind = 0; bool rrc = false; bool erasures = true; bool gardner = true; bool coherent = true; float pllA = 0.15f, pllB = 0.004f; float syncQ = 0.75f; float freqGain = 0.03f; float tGain = 0.01f; };
+struct Tuning { bool deepStop = true; float rxBw = 5000.f, rxTr = 4000.f; int rxKind = 0; bool rrc = false; bool erasures = true; bool gardner = true; bool coherent = true; float pllA = 0.15f, pllB = 0.004f; float syncQ = 0.75f; float freqGain = 0.03f; float tGain = 0.01f; };
 inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("VDL2_DEBUG") != nullptr; return d; }
 
@@ -117,7 +117,7 @@ inline bool parseFrame(const std::vector<uint8_t>& f, Frame& o) {
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  ONE CHANNEL
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-struct Stats { uint64_t syncs = 0, hdrBad = 0, bursts = 0, rsFail = 0, frames = 0, fcsBad = 0, rsFixed = 0, erasureSaves = 0; };
+struct Stats { uint64_t searched = 0, samples = 0, syncs = 0, hdrBad = 0, bursts = 0, rsFail = 0, frames = 0, fcsBad = 0, rsFixed = 0, erasureSaves = 0; };
 
 class Demod {
 public:
@@ -147,7 +147,7 @@ public:
                 h.push_back(float(std::fabs(1 - x) < 1e-6 ? M_PI / 4 * std::sin(M_PI / (2 * a)) / (M_PI / (2 * a)) : sc * std::cos(M_PI * a * t) / (1 - x)));
             }
             float s = 0; for (float v : h) s += v; for (float& v : h) v /= s;
-        } else if (!tuning().rrc) h = vibedsp::designLowpass(double(tuning().rxBw + 0.5f * tuning().rxTr) / kWorkRate, double(tuning().rxTr) / kWorkRate, true);
+        } else if (!tuning().rrc) h = vibedsp::designLowpass(double(tuning().rxBw + 0.5f * tuning().rxTr) / kWorkRate, double(tuning().rxTr) / kWorkRate, tuning().deepStop);
         else { float s = 0; for (float v : h) s += v * v; for (float& v : h) v /= std::sqrt(s); }
         mf_.reset(new vibedsp::FirDecimator(h, 1));
         // the unique word's expected step between symbols i−1 and i (i = 0: from the ramp-up's 000)
@@ -196,17 +196,23 @@ private:
         // the lag-4 product (one symbol), kept for the sync correlator
         const cf32 p = v * std::conj(at_(n - kSps));
         prod_[size_t(n & (kRing - 1))] = p;
-        absP_[size_t(n & (kRing - 1))] = std::abs(p);
-        // power gate: 16-sample energy against a slow noise floor
+        absP_[size_t(n & (kRing - 1))] = std::sqrt(std::norm(p));   // ★ not std::abs: hypotf was 2.3 % of the VDL2 bench on its own
+        /* power gate: 64-sample energy against the MEAN of the quiet windows (it was a minimum-tracker over 16 samples:
+         *  noise's own spread kept it crossing 2.5× its low tail, and the sync search ran 97 % of the time on an idle
+         *  channel — 54 % of the VDL2 bench). A burst is ≥ 3 dB over the channel's noise here; the hold covers 4
+         *  windows (6 symbols) so the unique word is searched across the edge. */
         pw_ += std::norm(v);
-        if (++pwN_ == 16) {
-            const float e = pw_ / 16;
-            floor_ = floor_ <= 0 ? e : (e < floor_ ? floor_ + (e - floor_) * 0.05f : floor_ * 1.00003f);
+        if (++pwN_ == 64) {
+            const float e = pw_ / 64;
+            if (floor_ <= 0) floor_ = e;
+            else if (e < 2.0f * floor_) floor_ += (e - floor_) * 0.02f;
+            else floor_ *= 1.0002f;                          // a channel that stays busy still lets its floor rise
             lastPw_ = e;
-            active_ = e > 2.5f * floor_ ? 40 : std::max(0, active_ - 1);
+            active_ = e > 2.0f * floor_ ? 4 : std::max(0, active_ - 1);
             pw_ = 0; pwN_ = 0;
         }
-        if (state_ == kSearch) { if (active_) search_(n); return; }
+        ++st_.samples;
+        if (state_ == kSearch) { if (active_) { ++st_.searched; search_(n); } return; }
         if (state_ == kData && double(n) >= nextT_ + 1.0) symbol_(out);
     }
 
