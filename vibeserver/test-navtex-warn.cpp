@@ -218,6 +218,8 @@ int main(int argc, char** argv) {
         navwarn::Entry back; ok(navwarn::parse(navwarn::format(e).substr(0, navwarn::format(e).size() - 1), back) && back.items.size() == 6 && back.items[5].name == "K12-G", "…the items survive the index line");
         const auto corners = navwarn::fromMessage("cx.txt", 1793500000, 517500, "ZCZC EA50\nWZ 700/26\nA) 51-00.0N 001-00.0E\nB) 51-10.0N 001-00.0E\nC) 51-10.0N 001-10.0E\nNNNN");
         ok(corners.items.empty(), "a corner list (A) B) C) and nothing else) is not a named list");
+        const auto lettered = navwarn::fromMessage("lt.txt", 1793500000, 517500, "ZCZC VA28\nWZ 702/26\nWRECKS:\nA. C22 51-30.0N 002-00.0E\nB. F17 51-35.0N 002-10.0E\nNNNN");
+        ok(lettered.items.size() == 2 && lettered.items[0].name == "C22" && lettered.items[1].name == "F17", "'A. C22' / 'B. F17': a lettered list of designations, the marks dropped");
         const auto ar = navwarn::fromMessage("ar.txt", 1793500000, 517500, "ZCZC EA51\nWZ 701/26\nFIRING IN AREA BOUNDED BY\nALPHA 51-00.0N 001-00.0E\nBRAVO 51-10.0N 001-00.0E\nCHARLIE 51-10.0N 001-10.0E\nNNNN");
         ok(ar.shape == 'a' && ar.items.empty(), "an AREA BOUNDED BY with named corners stays an area");
     }

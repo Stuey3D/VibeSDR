@@ -377,7 +377,7 @@ inline int lostChars(const std::string& b) { int n = 0; for (char c : b) n += c 
 struct Item { std::string name, defect; bool unlit = false; };
 inline std::string itemClean(std::string s, size_t cap) {
     for (auto& ch : s) if (ch == '|' || ch == '~' || ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
-    s = std::regex_replace(s, rx(R"(^[\s,;:.\-]*(\d{1,2}[.)]\s*|[A-Z][)]\s*)?)"), "");
+    s = std::regex_replace(s, rx(R"(^[\s,;:.\-]*(\d{1,2}[.)]\s*|[A-Z][.)]\s+)?)"), "");   // "1." "2)" "A." "B)" list marks
     s = std::regex_replace(s, rx(R"(\b(IN )?(POSITION|POSN|PSN|POS)\b:?\s*$)"), "");
     s = std::regex_replace(s, rx(R"(\s+)"), " ");
     while (!s.empty() && (s.back() == ' ' || s.back() == ',' || s.back() == '.' || s.back() == ';' || s.back() == ':' || s.back() == '-')) s.pop_back();
@@ -390,7 +390,10 @@ inline bool meaningful(const std::string& s) {
     std::string w; int letters = 0;
     for (size_t i = 0; i <= s.size(); ++i) {
         if (i < s.size() && std::isalnum((unsigned char)s[i])) { w += s[i]; continue; }
-        if (!w.empty() && !std::regex_match(w, filler)) for (char ch : w) letters += std::isalpha((unsigned char)ch) ? 1 : 0;
+        if (!w.empty() && !std::regex_match(w, filler)) {
+            int al = 0, dg = 0; for (char ch : w) { al += std::isalpha((unsigned char)ch) ? 1 : 0; dg += std::isdigit((unsigned char)ch) ? 1 : 0; }
+            letters += al >= 1 && dg >= 1 ? 2 : al;   // ★ a designation ("C22", "K6-N") names an item by itself
+        }
         w.clear();
     }
     return letters >= 2;
