@@ -125,7 +125,8 @@ try {
   ok((await tab(p)) === "sticks" && (await title(p)) === "TWO ANALOGUE STICKS", "…on the TWO STICKS tab (the pad in use has two sticks)");
   await sleep(400);
   ok(await p.js(`document.getElementById("pgGuide").classList.contains("pgCols3")`), "wide window: three columns");
-  ok((await lineCount(p)) === 7, `…with a leader line to each of the 7 labels (${await lineCount(p)})`);
+  // ★ 8 since 769c4a844 (V12 VFO A/B): TOP BUTTON — VFO A ↔ B joined the TWO STICKS labels (src/utils/padGuide.ts).
+  ok((await lineCount(p)) === 8, `…with a leader line to each of the 8 labels (${await lineCount(p)})`);
   ok(await p.js(`document.querySelectorAll("#pgPad svg circle").length > 10 && !!document.querySelector(".pgLab.back")`), "the drawing and the labels are there, BACK coloured as back");
   await shot(p, "1200x900-sticks");
   // A line ends beside its number: check the first one lands within a few px of the number's edge.
@@ -193,7 +194,7 @@ try {
     await sleep(400);
     const got = await p.js(`["pgCols1","pgCols2","pgCols3"].find(c => document.getElementById("pgGuide").classList.contains(c))`);
     const lines = await lineCount(p);
-    ok(got === cls && (cls === "pgCols3" ? lines === 7 : lines === 0), `${w}×${h}: ${cls}${cls === "pgCols3" ? ", with lines" : ", no leader lines"} (${got}, ${lines} lines)`);
+    ok(got === cls && (cls === "pgCols3" ? lines === 8 : lines === 0), `${w}×${h}: ${cls}${cls === "pgCols3" ? ", with lines" : ", no leader lines"} (${got}, ${lines} lines)`);
     ok(await p.js(`document.documentElement.scrollWidth <= innerWidth && document.getElementById("padGuide").scrollWidth <= document.getElementById("padGuide").clientWidth + 1`),
        `${w}×${h}: nothing runs off sideways`);
     await shot(p, `${w}x${h}-sticks`);
