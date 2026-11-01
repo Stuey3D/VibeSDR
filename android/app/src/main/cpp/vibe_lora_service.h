@@ -194,12 +194,31 @@ public:
                 : std::max(1, std::min({ 2, int(std::thread::hardware_concurrency()) / 2, int((streams_.size() + 6) / 7) }));
         nLanes_ = std::max(1, std::min(nLanes_, int(streams_.size())));
         for (int l = 0; l < nLanes_; ++l) lanes_.emplace_back(new Lane);
-        for (size_t si = 0; si < streams_.size(); ++si) lanes_[si % size_t(nLanes_)]->chans.push_back(si);
-        for (size_t di = 0; di < demods_.size(); ++di) lanes_[demods_[di].stream % size_t(nLanes_)]->dets.push_back(di);
+        /* ★ BALANCED, NOT ROUND-ROBIN: a channel costs about one unit for its slice and one per detector (SF) on it, so
+         *  the channels go heaviest first to the lightest lane (round-robin left lane 0 at 2.8 % and lane 1 at 1.6 % of a
+         *  Mac core on lora+all). */
+        std::vector<int> laneOf(streams_.size(), 0);
+        {
+            // ★ a channel's work scales with its chip rate (its bandwidth): the slice, the inverse FFT, the resampler and
+            //   every detector's dechirp all run per chip
+            std::vector<double> w(streams_.size(), 1.0), load(size_t(nLanes_), 0.0);
+            for (const auto& d : demods_) w[d.stream] += 1.0;
+            for (size_t si = 0; si < streams_.size(); ++si) w[si] *= chans_[si].bw / 125e3;
+            std::vector<size_t> ord(streams_.size());
+            for (size_t i = 0; i < ord.size(); ++i) ord[i] = i;
+            std::stable_sort(ord.begin(), ord.end(), [&](size_t a, size_t b) { return w[a] > w[b]; });
+            for (size_t si : ord) {
+                const int l = int(std::min_element(load.begin(), load.end()) - load.begin());
+                laneOf[si] = l; load[size_t(l)] += w[si];
+            }
+        }
+        for (size_t si = 0; si < streams_.size(); ++si) lanes_[size_t(laneOf[si])]->chans.push_back(si);
+        for (size_t di = 0; di < demods_.size(); ++di) lanes_[size_t(laneOf[demods_[di].stream])]->dets.push_back(di);
         for (auto& L : lanes_) {
             double bw = 0; for (size_t si : L->chans) bw += chans_[si].bw;
             L->chipCap = size_t(0.5 * bw) + 1;                     // half a second of its channels' chips
         }
+        ch_->setLazySlices(nLanes_ > 1);   // ★ with lanes, each lane slices its own channels too
         run_ = true;
         worker_ = std::thread([this] { loop(); });
         for (int l = 0; l < nLanes_; ++l) {

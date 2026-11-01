@@ -780,7 +780,10 @@ public:
      *  channel's inverse FFT, the block's phase, the residual NCO and the resampler; then pushOut() into the streams the
      *  detectors read. Same arithmetic in the same order: inline, feed() runs them all, exactly as before. */
     /** One block's channels: each its Lc bins × the filter, not yet inverse-transformed. */
-    struct Spectra { int64_t blk = 0; std::vector<vibeism::cfvec16> Y; };   // ★ aligned: each inverse FFT runs in place
+    struct Spectra { int64_t blk = 0; std::vector<vibeism::cfvec16> Y; std::vector<cf> X; };   // X: the block's bins (lazy slicing)
+    /** ★ (2026-11-01, the channel split) the per-channel slice × filter moves out of the FFT's thread into deliver(), on
+     *  the lane that owns the channel: the FFT thread then does the transform and one copy of the bins. */
+    void setLazySlices(bool on) { lazy_ = on; }   // ★ aligned: each inverse FFT runs in place
     /** Chip-rate samples per channel (the resampler's output), for pushOut(). */
     using ChipOut = std::vector<std::vector<cf>>;
     /** Capture samples in; each completed block's Spectra to `onBlock(Spectra&&)`. */
@@ -813,6 +816,7 @@ public:
         for (size_t oi = 0; oi < nOnly; ++oi) {
             const size_t ci = only ? (*only)[oi] : oi;
             Ch& c = ch_[ci];
+            if (sp.Y[ci].empty() && !sp.X.empty()) makeY(sp.X.data(), ci, sp.Y[ci]);
             cf* Y = sp.Y[ci].data();
             c.ifft->forward(Y);
             VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profIfft += t2 - tq; tq = t2; })
@@ -866,30 +870,30 @@ private:
          *   · `%` with a variable divisor — 32-bit ARMv7-A has no divide instruction, so four library calls a bin
          *     (13 % of ISM mode). L_ and Lc are powers of two: a mask is the same non-negative remainder;
          *   · std::complex's NaN-checked products (cmulf). */
-        const int lmask = L_ - 1;
-        for (size_t ci = 0; ci < ch_.size(); ++ci) {
-            Ch& c = ch_[ci];
-            const int Lc = c.Lc, cmask = Lc - 1;
-            const cf* X = X_.data();
-            const cf* H = c.H.data();
-            vibeism::cfvec16& Yv = sp.Y[ci];
-            Yv.resize(size_t(Lc));
-            cf* Y = Yv.data();
-            // the inverse transform by the forward one: conjugate in, conjugate out. In runs where both the capture's
-            // bins (k) and the channel's (j) are contiguous — at most four — four products at a time (cmulRun).
-            for (int m = -Lc / 2; m < Lc / 2;) {
-                const int j = m & cmask, k = (c.kc + m) & lmask;
-                int run = std::min(Lc / 2 - m, L_ - k);
-                if (m < 0) run = std::min(run, -m);
-                vibeism::cmulRun(X + k, H + j, Y + j, run, false, true);
-                m += run;
-            }
-            VIBE_ISM_P({ const double t2 = vibeism::ismProfNow(); profIfft += t2 - tq; tq = t2; })
-        }
+        if (lazy_) sp.X.assign(X_.begin(), X_.end());   // ★ the lanes slice their own channels (makeY in deliver)
+        else for (size_t ci = 0; ci < ch_.size(); ++ci) makeY(X_.data(), ci, sp.Y[ci]);
         // keep the last quarter as the next block's overlap
         std::memmove(in_.data(), in_.data() + S_, size_t(L_ - S_) * sizeof(cf));
         fill_ = L_ - S_;
         ++blocks_;
+    }
+    /** One channel's slice of a block's bins × its filter (the inverse FFT's input). */
+    void makeY(const cf* X, size_t ci, vibeism::cfvec16& Yv) {
+        const int lmask = L_ - 1;
+        Ch& c = ch_[ci];
+        const int Lc = c.Lc, cmask = Lc - 1;
+        const cf* H = c.H.data();
+        Yv.resize(size_t(Lc));
+        cf* Y = Yv.data();
+        // the inverse transform by the forward one: conjugate in, conjugate out. In runs where both the capture's
+        // bins (k) and the channel's (j) are contiguous — at most four — four products at a time (cmulRun).
+        for (int m = -Lc / 2; m < Lc / 2;) {
+            const int j = m & cmask, k = (c.kc + m) & lmask;
+            int run = std::min(Lc / 2 - m, L_ - k);
+            if (m < 0) run = std::min(run, -m);
+            vibeism::cmulRun(X + k, H + j, Y + j, run, false, true);
+            m += run;
+        }
     }
     /** From the channel's decimated rate to exactly its chip rate: the 8-tap windowed sinc (sincTable). ★ Not a cubic:
      *  a 4-point Lagrange's phase is visibly non-linear at 0.2 cycles/sample (a 250 kHz channel at 600 kS/s). */
@@ -910,6 +914,7 @@ private:
 
     double fs_;
     int L_ = 0, S_ = 0, fill_ = 0;
+    bool lazy_ = false;
     int64_t blocks_ = 0, nextBlk_ = 0;   ///< blocks transformed (first half); the next block deliver() expects
     std::unique_ptr<vibeism::DetFft> fft_;
     std::vector<cf> in_;
