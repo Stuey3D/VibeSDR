@@ -29,7 +29,7 @@ import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, n
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
-import { NAV_HAZARD_COLOURS } from '../../../src/services/navtexIcons';
+import { NAV_HAZARD_COLOURS, NAV_HAZARDS, navGlyphSvg } from '../../../src/services/navtexIcons';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -8912,6 +8912,8 @@ async function navMapOpen() {
     onCard: navCardFill,
     ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
     onRange: (id) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true); },
+    // ★ the KEY (Stuart, 2026-11-01: "do we need a legend for the icons") — the same list and glyphs as the app's legend
+    legend: NAV_HAZARDS.map((h) => `<div class="kr">${navGlyphSvg(h.id, 16, NAV_HAZARD_COLOURS[h.id])}<span>${escapeHtml(h.words)}</span></div>`).join(''),
     toggles: NAV_LAYERS, toggled: navLayers,
     onToggle: (id, on) => {
       navLayers = { ...navLayers, [id]: on };

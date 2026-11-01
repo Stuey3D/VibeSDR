@@ -328,6 +328,12 @@ const CSS = `
 .trkTop .btn.exit{background:#5a1f1f;border-color:#8a3434}
 .trkTop .ttl{font:700 13px/1 ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .trkTop .st{color:#9fb0c2;font-size:12px;flex:1 1 200px;min-width:0}
+.trkKey{position:absolute;right:10px;bottom:30px;z-index:900;background:rgba(11,20,32,.92);border:1px solid #2c3e52;border-radius:8px;color:#d7dee6;font:12px/1.3 inherit;max-height:60%;overflow:auto}
+.trkKey>summary{cursor:pointer;padding:6px 10px;font-weight:600;letter-spacing:.08em;list-style:none}
+.trkKey>summary::-webkit-details-marker{display:none}
+.trkKey .kb{padding:2px 10px 8px}
+.trkKey .kr{display:flex;align-items:center;gap:8px;padding:2px 0;white-space:nowrap}
+.trkKey .kr svg{flex:none}
 .trkTop .rng{display:inline-flex;gap:0}
 .trkTop .rng .btn{border-radius:0;margin-left:-1px;padding:6px 8px}
 .trkTop .rng .btn:first-child{border-radius:6px 0 0 6px;margin-left:0}
@@ -411,6 +417,9 @@ export interface TrackViewOpts {
   range?: string;
   onRange?: (id: string) => void;
   rangeHint?: string;
+  /** ★ V12 2026-11-01: a KEY — a folded panel, bottom-right of the map, listing what each icon means (rows of HTML). The
+   *  labels give way when the map is busy or zoomed out (the declutter), so the icons alone must still be readable. */
+  legend?: string;
   /** ★★ V12 2026-11-01 THE NAVTEX MAP's layers (Stations · Warnings · Weather): toggle keys in the top bar. */
   toggles?: Array<{ id: string; label: string; words: string }>;
   toggled?: Record<string, boolean>;
@@ -455,7 +464,9 @@ export class TrackView {
          + o.toggles.map((x) => `<button class="btn" type="button" data-tgl="${esc(x.id)}" aria-pressed="${o.toggled?.[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
       + `<span class="st"></span><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></div>`
       + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span>${esc(o.listTitle)}</span> <span class="n">0</span>`
-      + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="rows"></div></div></div>`;
+      + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="rows"></div></div>`
+      + (o.legend ? `<details class="trkKey"><summary>KEY</summary><div class="kb">${o.legend}</div></details>` : '')
+      + `</div>`;
     this.root = r;
     this.mapHost = r.querySelector('.trkMapHost') as HTMLElement;
     this.list = r.querySelector('.trkList') as HTMLElement;
