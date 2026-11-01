@@ -178,6 +178,9 @@ at 900 MHz × IPC 0.4 = 360 M instructions a second (range 0.35–0.48).
 - **Per thread, measured:** front end (half-bands + one 2048-point PFFFT) 77 M/s; each channel (its slice, response,
   inverse FFT, resampler, gate, sync, demod) 10.5–11.0 M/s (busy 136.975 the same as an idle one: the gate keeps idle
   channels cheap); the ring copies and wakes 3.5 M/s per worker (the 4-worker run minus the inline run).
+- **Parity after the SIMD + threads work:** 60 s of each capture (Pi 500 from 60 s, Pi 2 from 30 s), 0 workers: the
+  whole output is identical line for line on armhf NEON, armhf `VIBE_FORCE_SCALAR` and i686 SSE2 (qemu); natively 0, 1, 2
+  and 4 workers decode the same frames on the full recordings.
 - **A handful of channels per worker beats one per thread**: the hottest thread is the front end either way (21 %),
   and 12 threads cost 3× the copying of 4 on a 1 GB Pi 2.
 - **SIMD, step by step** (whole process incl. the tool's 36 M/s): 377 → 278 M/s (the receive filter into the slicer)
