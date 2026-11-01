@@ -30,7 +30,8 @@ has(S, 'onDeemph={icom ? undefined', 'de-emphasis');
 has(S, 'onStereo={icom ? undefined', 'stereo');
 has(S, '&& !dabOn && !icom ? onBinaural', 'binaural');
 has(S, "rawIqMode !== 'off' && !sharedDial && !icom ?", 'raw IQ out');
-has(S, 'onLinkMode={icom ? undefined', 'link mode / fps');
+// ★ b7471c73d (DATA · LOW · AUTO · FULL): also hidden where the server has no data control (OWRX) — icom still first.
+has(S, 'onLinkMode={icom || !dataOk ? undefined', 'link mode / fps');
 has(S, 'onToggleVfoLock={icom ? undefined', 'VFO lock');
 has(M, '{!!onToggleVfoLock && <BtnRow>', 'the menu honours an absent VFO lock');
 has(S, '!controlsHidden && !icom', 'centre-on-VFO button');

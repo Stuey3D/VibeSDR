@@ -77,7 +77,8 @@ has(S, '{!isIcom && (<>\n                {/* ★★★ REAL BINS AT DEEP ZOOM.',
 has(S, '{!isLite && !isIcom && (<>', 'RAW IQ OUT hidden');
 has(S, "{radioUseEff === 'single' && !isIcom && (<>\n                <Text style={[styles.section, { color: C.section, fontFamily: F }]}>PER-BAND CEILINGS</Text>", 'PER-BAND CEILINGS hidden');
 has(S, '{!isIcom && <Row C={C} F={F} k="SAMPLE RATE"', 'no sample-rate row while serving an Icom');
-has(S, 'BLOCKABLE.filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id)))', 'no WFM / DAB / Adv RDS block chips');
+// ★ e95282d89 (modes and decoders as a tree): the switches are modeTree() — BLOCKABLE plus the spots modes — filtered the same way.
+has(S, 'modeTree().filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id)))', 'no WFM / DAB / Adv RDS block chips');
 
 // ── what IS drawn ──
 has(S, 'androidIcomFacts()', 'the facts come from androidIcomFacts()');
