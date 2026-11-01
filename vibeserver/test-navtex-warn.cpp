@@ -40,6 +40,12 @@ int main(int argc, char** argv) {
         ok(npos("35-28.30B 024-14.10A") == 0, "the same without Greek words: B / A are not hemispheres (refused)");
         ok(navtex::positions(navwarn::posText("51-14.5N 003-11.4W"))[0].first > 0, "an English N stays north");
     }
+    {   // ★ NA79: "02-44.67N 006-21.03E" (62-44.67N with its first digit lost) — far from every N station on 518: not plotted
+        const auto e = navwarn::fromMessage("na79.txt", 1793400000, 517500, "ZCZC NA79\nNORWEGIAN NAV. WARNING 393/2026\nCHART 31\nPOSITION 02-44.67N 006-21.03E\nNNNN");
+        ok(e.pts.empty(), "NA79's garbled 02-44.67N (Gulf of Guinea for a Norwegian chart): not plotted");
+        const auto ok2 = navwarn::fromMessage("na80.txt", 1793400000, 517500, "ZCZC NA80\nNORWEGIAN NAV. WARNING 394/2026\nPOSITION 62-44.67N 006-21.03E\nNNNN");
+        ok(ok2.pts.size() == 1, "…its true 62-44.67N is");
+    }
     std::printf("── the classes ──\n");
     {
         auto c = [](const char* t, char b2 = 'A') { return navwarn::classify(b2, t).id; };

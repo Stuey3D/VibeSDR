@@ -116,6 +116,21 @@ int main(int argc, char** argv) {
             ok(co && has14, "EA14 is on the map at Corsen");
             ok(co && has81 && res.startLostPlaced >= 1, "EA81 (start lost, 'AVUCNAV BREST') inherits Corsen from EA14 beside it");
         }
+        // ★ NORWEGIAN NAV. WARNING, three undecided titles whose positions were garbled ("02-44.67N" for 62-44.67N; a
+        //   longitude "809-36,32_"): placed at the Norwegian station on that letter and band, never left as "Station N/M"
+        {
+            auto has = [&](const char* name, const char* file) { const navmap::Agg* a = nullptr; for (auto& x : res.stations) if (x.name == name) { for (auto& rc : x.recent) if (rc.file == file) a = &x; } return a != nullptr; };
+            ok(has("Orlandet", "20261024-221012-navtex-517k5-7e1e.txt"), "NA79 (NORWEGIAN NAV. WARNING, a garbled position) → Ørlandet");
+            ok(has("Jeløy", "20261027-220142-navtex-517k5-278a.txt") || has("Jeloy", "20261027-220142-navtex-517k5-278a.txt"), "MA05 (a garbled longitude) → Jeløy");
+        }
+        {   // ★ BA43, 518 kHz, a clean NORWEGIAN NAV. WARNING with a position 30 km from Bodø: Bodø, never Algiers
+            const std::string t = "ZCZC BA43\nNORWEGIAN NAV. WARNING 356/2026\nCHART 67\nAREA ANDHOLMFJORDEN\nMAALOEY-SKARHOLMEN LIGHTHOUSE 67-46.08N 014-24.08E IS UNLIT.\nNNNN";
+            const auto r = navtex::resolveAll('B', 517500, LA, LO, t);
+            std::vector<const navtex::Station*> pool; size_t n = 0; const navtex::Station* tb = navtex::stations(n);
+            for (size_t i = 0; i < n; ++i) if (tb[i].b1 == 'B' && tb[i].khz == 518) pool.push_back(&tb[i]);
+            const navtex::Station* sp = navmap::seriesPick(t, pool);
+            ok((r.stations.size() == 1 && std::string(r.stations[0]->name) == "Bodo") || (sp && std::string(sp->name) == "Bodo"), "BA43 (NORWEGIAN NAV. WARNING, 67-46N 014-24E) → Bodø");
+        }
         const std::string j = navmap::toJson(res, LA, LO, 1793560000);
         ok(j.find("\"stations\":[") != std::string::npos && j.find("\"rx\":{\"lat\":52.3020") != std::string::npos && j.size() < 200000, "the JSON: stations, the receiver, bounded (" + std::to_string(j.size()) + " B)");
     }

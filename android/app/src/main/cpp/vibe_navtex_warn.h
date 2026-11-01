@@ -356,6 +356,20 @@ inline Entry fromMessage(const std::string& file, int64_t t, double hz, const st
     for (auto& s : cx.series) e.cSeries += (e.cSeries.empty() ? "" : ";") + s;   // ★ ';' — a series holds a space
     e.cancelAt = cx.at;
     auto pts = navtex::positions(posText(b));
+    /* ★ A position with a digit lost ("02-44.67N" for 62-44.67N in a Norwegian chart area) can still parse. Not plotted
+     *  when it is further than a NAVTEX service area (3 000 km MF, 5 000 km HF) from EVERY transmitter using this letter on
+     *  this band — such a point is damage, not a hazard; it carries no weight either way. */
+    if (e.b1 && e.khz) {
+        size_t n = 0; const navtex::Station* tb = navtex::stations(n);
+        const double reach = e.khz > 1000 ? 5000 : 3000;
+        std::vector<std::pair<double, double>> keep;
+        for (auto& p : pts) {
+            bool nearOne = false, any = false;
+            for (size_t i = 0; i < n && !nearOne; ++i) if (tb[i].b1 == e.b1 && tb[i].khz == e.khz) { any = true; nearOne = navtex::km(p.first, p.second, tb[i].lat, tb[i].lon) <= reach; }
+            if (nearOne || !any) keep.push_back(p);
+        }
+        pts.swap(keep);
+    }
     if (pts.size() > kMaxPts) pts.resize(kMaxPts);
     e.pts = pts;
     return e;
