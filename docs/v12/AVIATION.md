@@ -18,8 +18,8 @@ All headers are in `android/app/src/main/cpp/`. The tests are header-only plus v
 |---|---|---|---|
 | ACARS | Pi 500 V4L, 2.4 MS/s, 483 s, 131.525/.725/.825 | **32 blocks** (6 repaired), 11 synced bursts not decoded | none exists (no other ACARS decoder on the LAN) |
 | ACARS | Pi 2 V4, 2.048 MS/s, 302 s | **17 blocks** (1 repaired), 3 synced bursts not decoded | none |
-| VDL2 | Pi 500 V4L, 2.4 MS/s, 482 s, 12 channels 136.700–136.975 | **381 AVLC frames** (92 ACARS), **36 aircraft** | none |
-| VDL2 | Pi 2 V4, 2.048 MS/s, 302 s | **159 frames** (22 ACARS), **24 aircraft** | none |
+| VDL2 | Pi 500 V4L, 2.4 MS/s, 482 s, 12 channels 136.700–136.975 | **387 AVLC frames** (93 ACARS), **36 aircraft** | none |
+| VDL2 | Pi 2 V4, 2.048 MS/s, 302 s | **162 frames** (22 ACARS), **24 aircraft** | none |
 | HFDL | UberSDR RX888 iq192, 8931 kHz window, 600 s | **12 of 16** reference messages (+ ones the reference did not list) | UberSDR's HFDL add-on |
 | HFDL | UberSDR RX888 iq192, 6598 kHz window, 600 s | **23 of 42** reference messages | UberSDR's HFDL add-on |
 
@@ -142,7 +142,31 @@ only with the owner's opt-in.
 
 ## Cost
 
-[filled in below from the qemu instruction counts]
+**Method** (as `PI2-REAL-CPU.md` / `DECODER-SIMD-AUDIT.md`): armhf static, `-O3 -ffp-contract=fast -marm
+-march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard` (GCC 12, `vibeserver-cross:bookworm-armhf`), counted under qemu-arm
+with the TCG instruction-count plugin (`ft8perf-x86`), on 10 s slices of the REAL recordings (60 s for HFDL). Build and
+run scripts: `~/Library/Caches/decaudit/xb_avi.sh`, `qa_avi.sh`; results in `q/avi/`. The tool's own u8 → float
+conversion (`cu8`, 36 M instr/s at 2.4 MS/s) is subtracted — the server converts once for every mode. "% of a Pi 2
+core" uses the measured IPC of NEON-heavy kernels on that Pi (0.35–0.48, PI2-REAL-CPU.md): 900 MHz × 0.4 = 360 M
+instructions a second, range in brackets. **Not run on the real Pi 2** (optional; not done).
+
+| Decoder | Workload | NEON M instr / s | scalar | % of a Pi 2 core |
+|---|---|---|---|---|
+| ACARS | 3 channels, 2.4 MS/s | **107** | 221 | **≈ 30 %** (22–34) |
+| VDL2 | 12 channels, 2.4 MS/s | **341** (was 545 before the gate fix) | — | **≈ 95 %** (79–108) — heavy |
+| VDL2 | 5 European channels (.725 .775 .825 .875 .975), est. | ≈ 175 | — | ≈ 50 % |
+| HFDL | one listener's dial (demod only) | **≈ 11** | ≈ 12 | **≈ 3 %** |
+
+Where it goes (NEON, VDL2 12 channels, 10 s = 3769 M): the per-channel demod (cubic resampler to 4 samples a symbol,
+gate, sync when active) 34 %, the Blackman receive FIR 22 %, the shared half-band cascade 11 %, the shared FFT (PFFFT)
+~10 %, the slice inverse FFTs 6 %. ACARS (1430 M): half-bands 28 %, FFT ~21 %, the three demods 7.5 %. So the
+**shared front end costs ~80 M instr/s whatever the channel count**; each VDL2 channel adds ~19 M, each ACARS channel ~4.
+NEON vs scalar: ACARS 1.8× fewer instructions, VDL2 1.4×, HFDL 1.08× (its hot loops — the differential correlator,
+the equaliser, the Viterbi — are still scalar; see RESUME HERE).
+
+★ Trade-offs stated (Stuart's rule): the Blackman FIR costs ~+40 % of the FIR's instructions for +2.4 % frames (387 vs
+378); the gate cuts the idle cost by 35 % and decoded MORE. The VDL2 cost on a Pi 2 is the reason the benchmark should
+default it to the CSC + the region's busy channels, not all twelve (the owner can always widen it).
 
 ## Dead ends (all committed)
 
@@ -177,7 +201,10 @@ only with the owner's opt-in.
    from the Tracker; lift `SDRScreen.tsx`'s `!isVibe` gate for HFDL.
 5. **Clients**: the web (`web/client/src/` — copy `ais.ts`'s list + map shape) and the app (`adsbList.ts` /
    `MapOverlay` pattern). AGENTS.md: About V12 note, tours, website copy — only once the mode is visible.
-6. **Decoder work left**: HFDL's misses (23/42 on 6598 kHz) — next try decision feedback from the Viterbi (re-encode
+6. **SIMD left** (the rule: every hot loop NEON + SSE2): VDL2's cubic resampler and sync correlator, HFDL's
+   126-term differential correlator, its equaliser and the Viterbi ACS are scalar today (the front end — half-bands,
+   PFFFT, FirDecimator — and ACARS's `envMix` are SIMD). VDL2's resampler + gate is now the biggest per-channel term.
+7. **Decoder work left**: HFDL's misses (23/42 on 6598 kHz) — next try decision feedback from the Viterbi (re-encode
    the first pass, re-train the equaliser on it); HFDL QPSK/8PSK labelling needs a real 1200/1800 bit/s burst; VDL2
    a soft header Chase and X.25/CLNP summaries; ACARS label/position parsing (labels 16/H1 positions), US channels.
-7. Optional: a real Pi 2 bench run (bench binaries only, 0 listeners, never :48000).
+8. Optional: a real Pi 2 bench run (bench binaries only, 0 listeners, never :48000).
