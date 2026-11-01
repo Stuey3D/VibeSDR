@@ -162,6 +162,22 @@ struct VibeRtlTunerOps {
 };
 #include "vibe_web_page.h"          // GENERATED: the web client served from GET /
 #include "vibe_setup_page.h"
+
+/* ★★★ THE SETUP PAGE IS SENT STRAIGHT FROM THE BINARY — NO COPY PER REQUEST (2026-11-01, found while chasing M7EIW's
+ *  "Out Of Memory crashes on my RPI 3B+ when trying to access the Setup menu"). Each GET /setup built TWO heap copies
+ *  of the ~450 KB page (`std::string page = kVibeSetupPage`, then headers + page concatenated) on the request's own
+ *  thread, and on glibc each thread's arena keeps what it touched: sixteen loads at once left a Linux server ~3.5-10 MB
+ *  bigger for good. The page is a constant: its length is measured once, the headers are a few dozen bytes, and the
+ *  body goes to the socket from the binary's read-only pages, which the kernel can drop and re-read at will. The budget
+ *  is a whole 256 MB board (Stuart, 2026-11-01), so Setup must cost next to nothing to serve. */
+static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
+    static const size_t kLen = std::strlen(kVibeSetupPage);
+    const std::string head = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                             "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
+                             + std::to_string(kLen) + "\r\n\r\n";
+    if (sock->sendstr(head) >= 0) sock->send(reinterpret_cast<const uint8_t*>(kVibeSetupPage), kLen);
+    sock->close();
+}
 #include "vibe_benchmark.h"   // ★ benchProgressJson — the live progress a page draws its bar from
 #include "fd_passing.h"
 #include <poll.h>
@@ -23847,11 +23863,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★ Still admin-gated in the only way that matters: the page can display, but every
         //   value on it comes from GET /vibeserver/config, which refuses without the password.
         } else if (reqLine.rfind("GET /setup", 0) == 0 && !g_vsNativeSetup.load()) {
-            const std::string page = kVibeSetupPage;
-            sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
-                          "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
-                          + std::to_string(page.size()) + "\r\n\r\n" + page);
-            sock->close();
+            vsSendSetupPage(sock);
             return;
 
         // ★★★ "GET / " REQUIRED A LITERAL SPACE, so the root page 404'd for ANY query string.
@@ -23874,11 +23886,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★★ The endpoints stay open while unconfigured — this page needs /vibeserver/auth and
             //    /vibeserver/config to work, and both are admin-gated in their own right.
             if (!g_vsConfigured.load() && !g_vsNativeSetup.load() && g_vsWebEnabled.load()) {
-                const std::string page = kVibeSetupPage;
-                sock->sendstr("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
-                              "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
-                              + std::to_string(page.size()) + "\r\n\r\n" + page);
-                sock->close();
+                vsSendSetupPage(sock);
                 return;
             }
             // VibeServer web client. Compiled in (vibe_web_page.h) because a phone

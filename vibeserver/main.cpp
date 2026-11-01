@@ -3238,7 +3238,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setEibiHandler([](bool refresh, std::string& err, std::string& updated,
                                     std::string& note) -> int {
         int n = refresh ? vseibi::refresh(err) : 0;
-        if (!refresh || n == 0) { const int c = vseibi::loadFromCache(); if (c > n) n = c; }
+        if (!refresh || n == 0) { const int c = vseibi::loadedCount(); if (c > n) n = c; }   // ★ no re-parse when unchanged
         updated = vseibi::status();
         // ★★ "EiBi hasn't published the B26 (winter) schedule yet — using A26 until it appears."
         //    In words, never as a curl error: it is the normal first days of a season.

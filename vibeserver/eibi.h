@@ -21,6 +21,11 @@ void setPublisher(std::function<void(const std::string& json)> fn);
  *    immediately, and waiting on the network to serve a search box is not. */
 int loadFromCache();
 
+/** The number of entries already published, re-reading the cache ONLY when the file has changed since it was
+ *  last loaded (mtime + size). What GET /vibeserver/eibi answers with: opening the setup page must not re-parse a
+ *  megabyte of schedule every time (2026-11-01). */
+int loadedCount();
+
 /** Download this season's schedule, parse, cache and publish. Returns entries, 0 on failure with
  *  `err` set. ★ Never destroys a good cache on a bad download — see the note in the .cpp.
  *  ★★ When EiBi has not published this season's file yet (404, or a page with no entries) it

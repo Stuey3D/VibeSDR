@@ -35,6 +35,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <sys/stat.h>
@@ -112,11 +113,37 @@ std::string toUtf8(const std::string& in) {
     return out;
 }
 
+/* ★★ A CAP ON THE SCHEDULE. EiBi's file is ~0.5 MB and its JSON ~1.1 MB; nothing real comes near 8 MB. Without a cap
+ *  a wrong file in the cache (or a captive portal's page saved by curl) is read whole, and the JSON built from it is
+ *  ~2x bigger again — on a 256 MB board that is the difference between a schedule and the OOM killer. */
+constexpr size_t kMaxCsvBytes = 8u * 1024 * 1024;
+bool readCapped(FILE* f, std::string& csv) {
+    char buf[65536];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof buf, f)) > 0) {
+        if (csv.size() + n > kMaxCsvBytes) { csv.clear(); csv.shrink_to_fit(); return false; }
+        csv.append(buf, n);
+    }
+    return true;
+}
+
+/* ★★★ WHAT IS ALREADY LOADED (2026-11-01). The setup page asks GET /vibeserver/eibi every time it opens, and that
+ *  RE-READ AND RE-PARSED the whole schedule each time: the CSV (~0.5 MB) + a fresh ~1.1 MB JSON + the shim's copy,
+ *  ~3 MB of transient heap per request, on the request's own thread. Measured on Linux (11.0.16 arm64): eight at once
+ *  took the process from 26 MB to a 44 MB peak. The schedule only changes when the file does, so the file's identity
+ *  (mtime + size) decides: unchanged → the count we already published, no work at all. g_loadMtx also means two
+ *  requests can never build two copies at once. */
+std::mutex g_loadMtx;
+struct Loaded { bool ok = false; long long mtime = 0; long long size = 0; int count = 0; };
+Loaded g_loaded;   // ★ under g_loadMtx
+bool cacheId(long long& mtime, long long& size);   // defined below, once cachePath() is
+
 /** CSV → the JSON shape the web client's search already reads (ServerStation).
  *  ★ Fields and column order match `parse()` in src/services/eibi.ts. Deriving the same data two
  *    different ways is how the app and the web client end up disagreeing about a station. */
 std::string toStationsJson(const std::string& csv, int& count) {
     std::string j = "[";
+    j.reserve(csv.size() + csv.size() * 5 / 4);   // ★ ~2.1x the CSV in practice: one allocation, not a doubling ladder
     count = 0;
     size_t pos = 0;
     while (pos <= csv.size()) {
@@ -177,6 +204,12 @@ std::string toStationsJson(const std::string& csv, int& count) {
  *  a hardcoded path there means the schedule can never download. See vsDataDir() in main.cpp. */
 std::string g_dir = "/var/lib/vibeserver";
 std::string cachePath() { return g_dir + "/eibi.csv"; }
+bool cacheId(long long& mtime, long long& size) {
+    struct stat st{};
+    if (stat(cachePath().c_str(), &st) != 0) return false;
+    mtime = (long long)st.st_mtime; size = (long long)st.st_size;
+    return true;
+}
 /** Which season the cache holds. ★ Stored, because the FILE cannot tell us: sked-a26.csv and
  *  sked-b26.csv are the same shape, and a cache fetched yesterday is still stale the moment the
  *  season turns over. Without this a rollover would wait for the age check to expire. */
@@ -235,9 +268,7 @@ Fetch fetchSeason(const std::string& code, const std::string& tmp, std::string& 
     FILE* f = fopen(tmp.c_str(), "rb");
     if (!f) { msg = "the download left no file"; return Fetch::Failed; }
     std::string csv;
-    char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0) csv.append(buf, n);
+    if (!readCapped(f, csv)) { fclose(f); unlink(tmp.c_str()); msg = "the schedule is larger than any EiBi file (over 8 MB) — not loaded"; return Fetch::Failed; }
     fclose(f);
     count = 0;
     json = toStationsJson(csv, count);
@@ -287,19 +318,39 @@ std::string seasonLabel(const std::string& code) {
     return s + (code[0] == 'a' ? " (summer)" : " (winter)");
 }
 
-int loadFromCache() {
+namespace {
+/** loadFromCache's work, with g_loadMtx HELD. */
+int loadFromCacheLocked() {
+    long long mt = 0, sz = 0;
+    const bool have = cacheId(mt, sz);
     FILE* f = fopen(cachePath().c_str(), "rb");
     if (!f) return 0;
     std::string csv;
-    char buf[65536];
-    size_t n;
-    while ((n = fread(buf, 1, sizeof buf, f)) > 0) csv.append(buf, n);
+    if (!readCapped(f, csv)) { fclose(f); return 0; }
     fclose(f);
     if (csv.empty()) return 0;
     int count = 0;
-    const std::string json = toStationsJson(csv, count);
-    if (count > 0) publish(json);
+    {
+        const std::string json = toStationsJson(csv, count);
+        csv.clear(); csv.shrink_to_fit();             // ★ before the shim takes its copy, not after
+        if (count > 0) publish(json);
+    }
+    g_loaded = Loaded{have && count > 0, mt, sz, count};
     return count;
+}
+}  // namespace
+
+int loadFromCache() {
+    std::lock_guard<std::mutex> lk(g_loadMtx);
+    return loadFromCacheLocked();
+}
+
+int loadedCount() {
+    std::lock_guard<std::mutex> lk(g_loadMtx);
+    long long mt = 0, sz = 0;
+    if (!cacheId(mt, sz)) return 0;
+    if (g_loaded.ok && g_loaded.mtime == mt && g_loaded.size == sz) return g_loaded.count;
+    return loadFromCacheLocked();
 }
 
 bool needsRefresh() {
@@ -332,17 +383,21 @@ int refresh(std::string& err) {
     /* ★★★ NO SHELL — see vibeserver/proc.h. The file name is composed from the season and year
      *  here, so this one was not exploitable, but it is the same shape as the RadioDNS path that
      *  WAS, and leaving one shell command line in the daemon is how the next one gets written. */
-    auto commit = [&](const std::string& code, const std::string& json) {
+    auto commit = [&](const std::string& code, const std::string& json, int n) {
+        std::lock_guard<std::mutex> lk(g_loadMtx);
         rename(tmp.c_str(), cachePath().c_str());
         writeSmall(seasonPath(), fileFor(code));
         publish(json);
+        long long mt = 0, sz = 0;
+        const bool have = cacheId(mt, sz);
+        g_loaded = Loaded{have && n > 0, mt, sz, n};
     };
 
     std::string json, msg;
     int count = 0;
     Fetch r = fetchSeason(cur, tmp, json, count, msg);
     if (r == Fetch::Ok) {
-        commit(cur, json);
+        commit(cur, json, count);
         unlink(triedPath().c_str());
         return count;
     }
@@ -362,7 +417,7 @@ int refresh(std::string& err) {
     }
     json.clear(); msg.clear(); count = 0;
     r = fetchSeason(prev, tmp, json, count, msg);
-    if (r == Fetch::Ok) { commit(prev, json); return count; }
+    if (r == Fetch::Ok) { commit(prev, json, count); return count; }
     // ★ Neither file: keep whatever cache there is (an older season beats an empty search).
     const int n = loadFromCache();
     if (n > 0) return n;
