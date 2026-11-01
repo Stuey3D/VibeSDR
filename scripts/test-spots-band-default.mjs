@@ -46,7 +46,9 @@ ok(r.box.checked, 'no Band row (an older benchmark): nothing changes');
 const app = fs.readFileSync(new URL('../src/screens/ServerModeScreen.tsx', import.meta.url), 'utf8');
 ok(/row\('dec_ft8band'\)/.test(app) && /band\.grade !== 'green' && band\.grade !== 'none'/.test(app) && /spotsband/.test(app),
    'ServerModeScreen.tsx applyBench carries the same rule (dec_ft8band, not green → spotsband off)');
-ok(/\{ id: "spotsband", label: "Digital spots: Band" \}/.test(src) && /\{ id: 'spotsband', label: 'Digital spots: Band' \}/.test(app),
+// ★ e95282d89 (modes and decoders as a tree): Band is a child of "Digital spots" now, labelled for its place under it.
+ok(/\{ id: "spots", +label: "[^"]+" \}/.test(src) && /\{ id: 'spots', label: '[^']+' \}/.test(app) &&
+   /\{ id: "spotsband", label: "[^"]*Band[^"]*", parent: "spots" \}/.test(src) && /\{ id: 'spotsband', label: '[^']*Band[^']*', parent: 'spots' \}/.test(app),
    'both setup screens list the switch, so the owner can always turn it on');
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);
