@@ -149,7 +149,7 @@ int main() {
         rig.push(remote(0xA5C3E8));
         rig.log->tick();
         const std::string card = rig.log->cardName();
-        ok(!card.empty(), "a card is written once a minute has passed and something was heard");
+        ok(!card.empty(), "a card is written once 5 minutes have passed and something was heard");
         const std::string text = itemText(st, card);
         ok(text.find("6 devices: 2 weather, 2 TPMS, 1 key fob, 1 doorbell / remote") != std::string::npos,
            "devices by kind: \"6 devices: 2 weather, 2 TPMS, 1 key fob, 1 doorbell / remote\"");
@@ -166,9 +166,11 @@ int main() {
         clk += 10; rig.push(oregon(9.0)); rig.log->tick();
         ok(itemText(st, card) == text, "a reading 10 s after the card was written does not rewrite it yet");
         clk += 60; rig.log->tick();
-        ok(itemText(st, card) != text && itemText(st, card).find("Readings:     18\n") != std::string::npos, "a minute later it does (18 readings), in place");
+        ok(itemText(st, card) == text, "nor a minute later (the cards are rewritten at most every 5 minutes — SD wear)");
+        clk += 240; rig.log->tick();
+        ok(itemText(st, card) != text && itemText(st, card).find("Readings:     18\n") != std::string::npos, "5 minutes after the last write it is (18 readings), in place");
         const std::string t2 = itemText(st, card);
-        clk += 120; rig.log->tick();
+        clk += 600; rig.log->tick();
         ok(itemText(st, card) == t2, "nothing new heard: not rewritten");
         ok(countOf(index(dir), "\"s\":\"ismsum-") == 1, "one card in the index, however often it is rewritten");
         rig.log->finish();

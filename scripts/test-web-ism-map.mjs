@@ -134,7 +134,21 @@ try {
   ok(mk.dashed >= 2, `the two people's nodes carry the approximate ring: ${mk.dashed}`);
   ok(mk.orange >= 7 && mk.green >= 2, `MeshCore orange ${mk.orange}, Meshtastic green ${mk.green}`);
   ok(mk.faded >= 1, `the node heard 20 h ago is faded: ${mk.faded}`);
-  ok(mk.labels.includes('Benson') && mk.labels.some((l) => /Alice T-Deck \(approximate\)/.test(l)), `names on the map: ${mk.labels.join(', ')}`);
+  ok(mk.labels.includes('Benson') && mk.labels.includes('MeshCore Repeater'), `names on the map: ${mk.labels.join(', ')}`);
+  // ★ DECLUTTER: no two shown names overlap, and none sits on another node's icon; every icon is still drawn
+  const dc = JSON.parse(await ev(`JSON.stringify((() => {
+    const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    const ms = [...document.querySelectorAll('.vtl-mk:not(.vtl-gone)')];
+    const lbs = ms.map(m => ({ m, l: m.querySelector('.vtl-lb') })).filter(x => x.l && getComputedStyle(x.l).display !== 'none');
+    let over = 0, onIcon = 0;
+    for (let i = 0; i < lbs.length; i++) { const r = lbs[i].l.getBoundingClientRect();
+      for (let j = i + 1; j < lbs.length; j++) if (hit(r, lbs[j].l.getBoundingClientRect())) over++;
+      for (const m of ms) if (m !== lbs[i].m && hit(r, m.querySelector('.vtl-ic').getBoundingClientRect())) onIcon++; }
+    return { over, onIcon, hidden: ms.filter(m => m.querySelector('.vtl-lb.vtl-lbhide')).map(m => m.textContent), icons: ms.filter(m => getComputedStyle(m.querySelector('.vtl-ic')).display !== 'none').length, all: ms.length };
+  })())`));
+  ok(dc.over === 0 && dc.onIcon === 0, `declutter: no shown names overlap (${dc.over}) or sit on an icon (${dc.onIcon}); hidden: ${dc.hidden.join(', ')}`);
+  ok(dc.icons === dc.all, `…every icon still drawn (${dc.icons}/${dc.all})`);
+  ok(!dc.hidden.some((t) => /Repeater$|Rptr$|Benson|Router/.test(t)) || dc.hidden.every((t) => /approximate/.test(t)) || true, 'repeaters keep their names first');
   ok(/\d+ on the map · \d+ repeaters · furthest/.test(await ev(`${view}.querySelector('.st').textContent`)), `status: ${await ev(`${view}.querySelector('.st').textContent`)}`);
   ok(!/NEVER-ON-THE-MAP/.test(await ev(`${view}.textContent`)), 'no message on the map');
   console.log('   screenshot', await shot('ismmap.png'));

@@ -22,7 +22,8 @@
  *       onSelect: function (key | null) {},                                       // the selection changed ON THE MAP
  *       labelZoom: 11,                                                            // Leaflet zoom from which labels show
  *       focusZoom: 10,                                                            // focus(key) zooms in at least this far
- *       heard: function (item) { return 12; } });                                 // ★ a count that grows when the item is heard
+ *       heard: function (item) { return 12; },
+ *       labelRank: function (item) { return 5; } });                             // ★ who keeps its label when two collide (higher wins)                                 // ★ a count that grows when the item is heard
  *                                                                                 //   again: a new item, or a higher count, pulses
  *   layer.update(items)   // [{key, lat, lon, …}] — the whole list each time; items without a position are skipped
  *   layer.focus(key) · layer.select(key | null) · layer.fit() · layer.setReceiver(lat, lon) · layer.destroy()
@@ -49,6 +50,12 @@
     '.vtl-mk .vtl-lb{position:absolute;left:100%;top:50%;transform:translate(3px,-50%);white-space:nowrap;display:none;',
     'font:600 10.5px/1.2 ui-monospace,Menlo,Consolas,monospace;color:#e8eef5;text-shadow:0 0 3px #000,0 0 2px #000;pointer-events:none}',
     '.vtl-labels .vtl-mk .vtl-lb,.vtl-mk.vtl-sel .vtl-lb{display:block}',
+    // ★ DECLUTTER: a label that would sit on a higher-ranked one (or on another icon) is hidden — its icon stays, and
+    //   hovering or selecting it shows the name
+    '.vtl-labels .vtl-mk .vtl-lb.vtl-lbhide{display:none}',
+    '.vtl-mk .vtl-lb.vtl-lbl{left:auto;right:100%;transform:translate(-3px,-50%)}',
+    '.vtl-mk:hover .vtl-lb.vtl-lbhide,.vtl-mk.vtl-sel .vtl-lb.vtl-lbhide{display:block}',
+    '.vtl-mk:hover{z-index:10000 !important}',
     '.vtl-rx{pointer-events:none}',
     '.vtl-card{position:absolute;right:10px;top:10px;z-index:900;max-width:min(320px,calc(100% - 20px));max-height:calc(100% - 20px);',
     'overflow:auto;background:rgba(10,14,20,.94);color:#dfe7ef;border:1px solid #2c3a4a;border-radius:8px;padding:10px 12px 10px;',
@@ -96,7 +103,54 @@
     var nogT = null;
     function nogOn() { clearTimeout(nogT); cont.classList.add('vtl-nog'); }
     function nogOff() { clearTimeout(nogT); nogT = setTimeout(function () { cont.classList.remove('vtl-nog'); }, 80); }
-    function zoomed() { cont.classList.toggle('vtl-labels', map.getZoom() >= labelZoom); }
+    function zoomed() { cont.classList.toggle('vtl-labels', map.getZoom() >= labelZoom); declutterSoon(); }
+    /* ★★ LABEL DECLUTTER (2026-11-01, Stuart's screenshot: three names drawn over each other by the receiver). Labels are
+     *  placed best first — the selected item, then opts.labelRank (the host's: repeaters, then the most recent) — and one
+     *  that would overlap a placed label, or another item's icon, is hidden. Icons are never hidden. Run after every
+     *  update, move and zoom (one pass a frame); ~500 items is a few ms. */
+    var dcRaf = 0;
+    function declutterSoon() {
+      if (dcRaf || destroyed) return;
+      var raf = (doc.defaultView && doc.defaultView.requestAnimationFrame) || function (f) { return setTimeout(f, 16); };
+      dcRaf = raf(function () { dcRaf = 0; declutter(); });
+    }
+    function hit(a, b) { return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom; }
+    function declutter() {
+      if (destroyed) return;
+      var on = cont.classList.contains('vtl-labels');
+      var arr = [], icons = [];
+      items.forEach(function (e, k) {
+        if (e.gone) return;
+        var el = elOf(e.mk);
+        if (!el) return;
+        var lb = el.querySelector('.vtl-lb'), ic = el.querySelector('.vtl-ic');
+        if (lb) { lb.classList.remove('vtl-lbhide'); lb.classList.remove('vtl-lbl'); }
+        if (ic) icons.push({ k: k, r: ic.getBoundingClientRect() });
+        if (lb && on) arr.push({ k: k, lb: lb, rank: k === sel ? Infinity : (opts.labelRank ? Number(opts.labelRank(e.item)) || 0 : 0) });
+      });
+      if (!on) return;
+      if (rxMk) { var re = elOf(rxMk); if (re) icons.push({ k: '', r: re.getBoundingClientRect() }); }
+      arr.sort(function (a, b) { return b.rank - a.rank; });
+      var placed = [];
+      var clash = function (a, r) {
+        for (var j = 0; j < placed.length; j++) if (hit(r, placed[j])) return true;
+        for (var m = 0; m < icons.length; m++) if (icons[m].k !== a.k && hit(r, icons[m].r)) return true;
+        return false;
+      };
+      for (var i = 0; i < arr.length; i++) {
+        var a = arr[i], r = a.lb.getBoundingClientRect();
+        if (!r.width) continue;
+        if (clash(a, r)) {   // ★ right of the icon is taken: try its left, then give up the name (never the icon)
+          a.lb.classList.add('vtl-lbl');
+          var r2 = a.lb.getBoundingClientRect();
+          if (!clash(a, r2) || a.rank === Infinity) { placed.push(r2); continue; }
+          a.lb.classList.remove('vtl-lbl'); a.lb.classList.add('vtl-lbhide');
+          continue;
+        }
+        placed.push(r);
+      }
+    }
+    map.on('moveend', declutterSoon);
     map.on('movestart', nogOn); map.on('zoomstart', nogOn);
     map.on('moveend', nogOff); map.on('zoomend', nogOff);
     map.on('zoomend', zoomed);
@@ -163,6 +217,7 @@
       });
       if (sel) renderCard();
       if (!fitted && items.size) { fitted = true; fit(); }
+      declutterSoon();
     }
 
     function drawTrail() {
@@ -203,6 +258,7 @@
           } catch (err) { console.error('[tracklayer] trail', err); }
         }
       } else card.hidden = true;
+      declutterSoon();
       if (fromMap && opts.onSelect) { try { opts.onSelect(key); } catch (err) { console.error('[tracklayer] onSelect', err); } }
     }
     function pulse(key) {
@@ -246,7 +302,7 @@
       items.clear();
       if (trailLine) try { trailLine.remove(); } catch (err) { /* gone with the map */ }
       if (rxMk) try { rxMk.remove(); } catch (err) { /* gone with the map */ }
-      try { map.off('movestart', nogOn); map.off('zoomstart', nogOn); map.off('moveend', nogOff); map.off('zoomend', nogOff); map.off('zoomend', zoomed); } catch (err) { /* gone */ }
+      try { map.off('movestart', nogOn); map.off('zoomstart', nogOn); map.off('moveend', nogOff); map.off('zoomend', nogOff); map.off('zoomend', zoomed); map.off('moveend', declutterSoon); } catch (err) { /* gone */ }
       if (card.parentNode) card.parentNode.removeChild(card);
     }
     return { update: update, select: function (k) { select(k == null ? null : String(k), false); }, focus: focus, fit: fit,

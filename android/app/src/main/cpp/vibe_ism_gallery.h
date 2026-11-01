@@ -9,7 +9,7 @@
 //      (a sensor sends its frame 2-6 times in a row), and only what it counts reaches this file. A belt-and-braces fold
 //      here does the same, so a second source can never double a line.
 //  • THE SUMMARY CARD — FT8's background summary, mirrored (vibe_bgdecode.h Ft8SummaryTap's rolling card): ONE standing
-//    card per band per day, rewritten in place (Store::replace — tmp + rename) at most once a minute and only when
+//    card per band per day, rewritten in place (Store::replace — tmp + rename) at most every 5 minutes and only when
 //    something new was heard, moved to the top of the list; written once more when ISM stops. "14 devices: 6 weather,
 //    5 TPMS, 2 key fobs, 1 doorbell / remote", the most heard, the newest, and the LAST READING OF EACH DEVICE.
 //
@@ -130,7 +130,7 @@ inline int nickOf(const std::string& name) {
 // ── ★★ V12 2026-11-01: "STATIONS RECEIVED" — the day's positioned mesh nodes, for the gallery's MAP ──────────────────────
 // Stuart: "being able to open up the map in the Gallery so that if I have this set as the background profile we can see
 // which stations we received". A third standing item per band per day, beside the log and the summary — the summary's
-// rules exactly: RAM only between writes, rewritten in place (tmp + rename) at most once a minute and only when something
+// rules exactly: RAM only between writes, rewritten in place (tmp + rename) at most every 5 minutes and only when something
 // was heard, once more when ISM stops; found again and read back after a restart, a band change, a listener arriving
 // over background decoding or a profile switch (each a new DayLog adopting the same slot). Bounded: kMaxNodes, the least
 // recently heard go. It counts against the gallery's size cap like any item (Store).
@@ -179,7 +179,11 @@ class DayLog : public vibeism::Sink {
 public:
     static constexpr size_t   kFlushBytes   = 8192;            // ★ the RAM buffer's size threshold
     static constexpr int64_t  kFlushSec     = 60;              // ★ …and its time threshold
-    static constexpr int64_t  kCardSec      = 60;              // ★ the card is rewritten at most this often
+    /** ★★ 2026-11-01 (SD wear, Stuart): the summary card AND the "stations received" card are rewritten at most every 5
+     *  minutes (was 1), and at once when ISM stops — a band change, a listener leaving ISM or arriving over background
+     *  decoding, a profile switch, a clean shutdown (finish()). A power cut loses at most 5 minutes of the cards' counts
+     *  (the day's log still appends every minute). A busy 868 band: ≤ 12 rewrites an hour per card. */
+    static constexpr int64_t  kCardSec      = 300;             // ★ the cards are rewritten at most this often
     static constexpr uint64_t kPartMaxBytes = 4ull << 20;      // ★ a day's log splits into parts past this
     static constexpr size_t   kMaxRows      = 2000;            // ★ the card's device table (the least recently heard go)
     static constexpr double   kFoldSec      = 3.0;             // ★ Tracker's own fold, repeated here
@@ -470,7 +474,7 @@ private:
     std::string cardBody(int64_t t) const {
         std::string o = "ISM summary" + std::string(kDot) + o_.bandName + kDot + date(day_) + " (UTC)\n";
         o += "Heard by " + heardBy(cardOrigin_.empty() ? o_.origin : merged(cardOrigin_)) + ".\n";
-        o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + " \xe2\x80\x94 at most once a minute while ISM runs. Every reading is in the day's log, \"ISM "
+        o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + " \xe2\x80\x94 at most every 5 minutes while ISM runs. Every reading is in the day's log, \"ISM "
            + bandMhz() + kDot + date(day_) + kDot + "every reading\".\n\n";
         o += devicesWord() + (devs_.empty() ? std::string() : ": " + mix()) + "\n";
         char b[200];
@@ -590,7 +594,7 @@ private:
         const std::string origin = nodesOrigin_.empty() ? o_.origin : merged(nodesOrigin_);
         std::string o = "LoRa nodes heard" + std::string(kDot) + o_.bandName + kDot + date(day_) + " (UTC)\n";
         o += "Heard by " + heardBy(origin) + ".\n";
-        o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + " \xe2\x80\x94 at most once a minute while ISM runs. MAP shows them on the map.\n";
+        o += "Updated " + gallery::utcStamp(t, "%H:%M UTC") + " \xe2\x80\x94 at most every 5 minutes while ISM runs. MAP shows them on the map.\n";
         if (std::isfinite(o_.rxLat) && std::isfinite(o_.rxLon)) { char b[80]; std::snprintf(b, sizeof b, "Receiver:     %.4f, %.4f\n", o_.rxLat, o_.rxLon); o += b; }
         o += "Repeaters, room servers and sensors are shown where they advertise. Companion nodes are people: their positions are "
              "rounded to about 1 km and marked approx. No message is ever kept here.\n\n";

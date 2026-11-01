@@ -1521,6 +1521,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'){
         label:function(it){return it&&it._lb?String(it._lb):'';},
         card:function(it){return it&&it._cd?String(it._cd):'';},
         heard:function(it){return it&&it._h?Number(it._h)||0:0;},
+        labelRank:function(it){return it&&it._rk!=null?Number(it._rk)||0:0;},
         labelZoom:KIND==='ism'?6:undefined,focusZoom:KIND==='ism'?11:undefined,
         trail:function(key,done){
           trkWait[key]=done;trkPost({t:'trkTrail',key:String(key)});

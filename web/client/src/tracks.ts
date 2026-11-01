@@ -396,6 +396,8 @@ export interface TrackViewOpts {
   focusZoom?: number;
   /** ★ a count that grows when an item is heard again — the layer pulses it (live pushes). */
   heard?: (it: any) => number;
+  /** ★ who keeps its label when two collide (the layer's declutter; higher wins). */
+  labelRank?: (it: any) => number;
   /** ★★ V12 2026-11-01 THE TIME FILTER (Stuart: "filter the map based on last hour last day last week last month all
    *  time"): a segmented control in the top bar — the page filters; `rangeHint` its title (what "All" means here). */
   ranges?: Array<{ id: string; label: string; words: string }>;
@@ -578,7 +580,7 @@ export class TrackView {
     const w = window as any;
     this.layer = w.VibeTrackLayer.create(map, L, {
       receiver: this.rx, icon: this.o.icon, label: this.o.label, card: this.o.card, trail: this.o.trail,
-      labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard,
+      labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard, labelRank: this.o.labelRank,
       onSelect: (k: string | null) => this.markSel(k || ''),
     });
     if (this.pending) { this.layer.update(this.pending); this.pending = null; }

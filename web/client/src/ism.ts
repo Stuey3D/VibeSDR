@@ -539,6 +539,12 @@ export function ismMapIcon(d: IsmDevice): { html: string; w: number; h: number }
 }
 /** ★ What the layer pulses on: a node heard again (its packet count grew). */
 export function ismMapHeard(d: IsmDevice): number { return d.count; }
+/** ★ Who keeps its name when two labels collide (tracklayer declutter): repeaters first, then room servers and sensors,
+ *  then people; within each, the most recently heard. */
+export function ismMapRank(d: IsmDevice): number {
+  const t = ismNodeType(d);
+  return (t === 'repeater' ? 3e7 : t === 'companion' ? 0 : 2e7) - Math.min(d.seen, 1e7);
+}
 export function ismMapLabel(d: IsmDevice): string {
   const n = d.long || d.short || d.name || d.node || d.key;
   return d.approx ? `${n} (approximate)` : n;

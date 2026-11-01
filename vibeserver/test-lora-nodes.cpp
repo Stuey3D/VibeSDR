@@ -228,7 +228,9 @@ int main(int argc, char** argv) {
             lg->tick();
             ok(lg->nodesName().empty() && index(dir).empty(), "22 packets in 20 s: nothing written yet (never a write per packet)");
             clk += 60; lg->tick();
-            ok(!lg->nodesName().empty(), "after a minute: the card is written (" + lg->nodesName() + ")");
+            ok(lg->nodesName().empty(), "a minute later: still nothing (the cards are rewritten at most every 5 minutes — SD wear)");
+            clk += 240; lg->tick();
+            ok(!lg->nodesName().empty(), "after 5 minutes: the card is written (" + lg->nodesName() + ")");
             const std::string body = lg->nodesText();
             ok(body.find("21\xc3\x97 \xc2\xb7 background \xc2\xb7 MeshCore \xc2\xb7 repeater \xc2\xb7 Benson \xc2\xb7 ") != std::string::npos
                && body.find("51.622300, -1.102800") != std::string::npos, "Benson: heard 21×, in the background, at its advertised position");

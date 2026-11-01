@@ -390,6 +390,12 @@ export function ismMapIcon(d: IsmDevice): { html: string; w: number; h: number }
   const ring = d.approx ? `<circle cx="11" cy="11" r="10.6" fill="none" stroke="${c}" stroke-width="1" stroke-dasharray="2 2"/>` : '';
   return { html: `<svg width="24" height="24" viewBox="-1 -1 24 24" style="opacity:${op}" aria-hidden="true">${shape}${GLYPH[t] || GLYPH.companion}${ring}</svg>`, w: 24, h: 24 };
 }
+/** ★ Who keeps its name when two labels collide (tracklayer declutter): repeaters first, then room servers and sensors,
+ *  then people; within each, the most recently heard. */
+export function ismMapRank(d: IsmDevice): number {
+  const t = ismNodeType(d);
+  return (t === 'repeater' ? 3e7 : t === 'companion' ? 0 : 2e7) - Math.min(d.seen, 1e7);
+}
 export function ismMapLabel(d: IsmDevice): string {
   const n = d.long || d.short || d.name || d.node || d.key;
   return d.approx ? `${n} (approximate)` : n;
@@ -403,9 +409,9 @@ export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null
 }
 export const ISM_MAP_EMPTY = 'Nothing heard with a position yet — mesh nodes send theirs every 15 min to an hour.';
 /** The pins: every row with a position. ★ `_lb` is plain text — the layer escapes it. */
-export function ismMapItems(r: IsmReport | null, rx: { lat: number; lon: number } | null): Array<{ key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string; _h: number }> {
+export function ismMapItems(r: IsmReport | null, rx: { lat: number; lon: number } | null): Array<{ key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string; _h: number; _rk: number }> {
   if (!r) return [];
-  return r.devices.filter(ismOnMap).map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismMapCard(d, rx), _h: d.count }));
+  return r.devices.filter(ismOnMap).map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismMapCard(d, rx), _h: d.count, _rk: ismMapRank(d) }));
 }
 type MapRow = { key: string; colour: string; flag: string; name: string; second: string; sp: string; trend: -1 | 0 | 1; range: string; brg: string; noPos: boolean; age: string; em: boolean };
 /** The live list (TrackRow's shape): nearest first when the receiver's position is known, else newest first. */
@@ -498,7 +504,7 @@ export function ismGalCard(d: IsmGalNode, rx: { lat: number; lon: number } | nul
 }
 const ORIGIN_TAG: Record<string, string> = { background: 'BG', live: 'LIVE', both: 'BG + LIVE' };
 export function ismGalItems(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null) {
-  return nodes.map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismGalCard(d, rx), _h: d.count }));
+  return nodes.map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismGalCard(d, rx), _h: d.count, _rk: ismMapRank(d) }));
 }
 export function ismGalRows(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null): MapRow[] {
   const rows = nodes.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat as number, d.lon as number) : null }));
