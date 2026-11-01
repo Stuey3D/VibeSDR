@@ -46,8 +46,8 @@ export const NAV_GLYPHS: Record<NavHazard, string> = {
   works: '<path d="M1.8 11.4h12.4l-1.4 2.4H3.2z"/><path d="M4.6 11.4V3.6l7.6 2.6"/><path d="M12.2 6.2v2.4"/><path d="M11 8.6h2.4l-.5 1.6h-1.4z"/>',
   // a tug and its tow on a line
   towing: '<path d="M1.6 9.6h4.6l-1 2H2.6z"/><path d="M3.4 9.6V7.8h1.6v1.8"/><path d="M6.2 9.4l2.6-.8" stroke-dasharray="1.2 1.2"/><path d="M9.2 7.4h5.2v4.2H9.2z"/><path d="' + 'M1.5 14.2c1.1-.8 2.2-.8 3.3 0s2.2.8 3.3 0 2.2-.8 3.3 0 2.2.8 3.3 0' + '"/>',
-  // a lifebuoy
-  sar: '<circle cx="8" cy="8" r="5.6"/><circle cx="8" cy="8" r="2.4"/><path d="M4 4l2.3 2.3M12 4L9.7 6.3M4 12l2.3-2.3M12 12L9.7 9.7"/>',
+  // ★ a lifebuoy (Stuart, 2026-11-01, M3): a thick ring with four light bands wrapped right round it, edge to edge
+  sar: '<path d="M11.61 12.99A6.0 6.0 0 0 1 4.39 12.99L6.19 10.60A3.0 3.0 0 0 0 9.81 10.60zM3.21 11.81A6.0 6.0 0 0 1 3.21 4.59L5.60 6.39A3.0 3.0 0 0 0 5.60 10.01zM4.39 3.41A6.0 6.0 0 0 1 11.61 3.41L9.81 5.80A3.0 3.0 0 0 0 6.19 5.80zM12.79 4.59A6.0 6.0 0 0 1 12.79 11.81L10.40 10.01A3.0 3.0 0 0 0 10.40 6.39z" fill="currentColor" stroke="none"/>',
   // an iceberg: the peaks above the water, the mass below it
   ice: '<path d="M2.4 9.2l2.4-4 1.8 1.8 2-3.6 3.6 5.8"/><path d="M1.5 9.2h13"/><path d="M3.4 11.2l1.6 2.6h6.2l1.6-2.6" stroke-dasharray="1.4 1.2"/>',
   // the general warning: a triangle and its mark
