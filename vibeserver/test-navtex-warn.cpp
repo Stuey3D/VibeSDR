@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
         ok(c("DANGEROUS WRECK IN POSITION") == "wreck" && c("SUNKEN VESSEL") == "wreck", "WRECK / SUNKEN → wreck");
         ok(c("UNEXPLODED ORDNANCE FOUND") == "uxo" && c("MINE SIGHTED") == "uxo" && c("WWII MUNITIONS DUMPED") == "uxo", "UNEXPLODED ORDNANCE / MINE / MUNITIONS → uxo");
         ok(c("POSITION DETERMINED BY GPS") != "uxo" && c("CHART EXAMINED") != "uxo" && c("MINERAL EXTRACTION") != "uxo", "…never DETERMINED, EXAMINED, MINERAL (whole words)");
-        ok(c("GUNNERY FIRING EXERCISES") == "firing" && c("SUBFACTS AND GUNFACTS WARNING") == "firing", "FIRING / GUNNERY / GUNFACTS → firing");
+        ok(c("GUNNERY FIRING EXERCISES") == "firing" && c("GUNFACTS WARNING") == "firing", "FIRING / GUNNERY / GUNFACTS → firing (SUBFACTS AND GUNFACTS is a submarine bulletin, below)");
         ok(c("WIND FARM CONSTRUCTION") == "structure", "WIND FARM → structure");
         const auto t = navwarn::classify('A', "WIND TURBINE T12 LIGHT INOPERATIVE");
         ok(t.id == "structure" && t.unlit, "a turbine with its light inoperative: structure + unlit");
@@ -61,6 +61,10 @@ int main(int argc, char** argv) {
         ok(c("BUOY MISSING") == "buoy" && c("RACON INOPERATIVE") == "navaid" && c("FOGHORN OUT OF ORDER") == "navaid", "BUOY → buoy (the buoy icon); RACON / FOGHORN → navaid");
         ok(c("KUSTROUTE OOSTENDE\nLICHTBOEI BA-E 51-14.77N 002-55.42E\nLICHT GEDOOFD") == "buoy", "NL: LICHTBOEI (a compound) → buoy");
         ok(c("CONTAINERS LOST OVERBOARD") == "adrift" && c("DERELICT YACHT ADRIFT") == "adrift", "CONTAINERS LOST / DERELICT → adrift");
+        ok(c("DIVED SUBMARINE EXERCISES IN PROGRESS") == "submarine" && c("SUBFACTS AND GUNFACTS") == "submarine" && c("SUBMARINE TORPEDO FIRING") == "submarine", "submarine operations → submarine, before torpedo/firing");
+        ok(c("EXERCICES SOUS-MARINS") == "submarine" && c("U-BOOT UEBUNG") == "submarine" && c("ESERCITAZIONI SOMMERGIBILI") == "submarine", "FR/DE/IT submarines");
+        ok(c("GUNNERY FIRING EXERCISES") == "firing", "gunnery without a submarine stays firing");
+        ok(c("SUBMARINE CABLE REPAIR") == "cable" && c("POSE DE CABLES SOUS-MARINS") == "cable" && c("SUBMARINE PIPELINE") == "cable", "an undersea CABLE or PIPELINE is never a submarine");
         ok(c("CABLE LAYING OPERATIONS") == "cable" && c("SEISMIC SURVEY") == "survey" && c("TOW IN PROGRESS") == "towing", "cable, survey, towing");
         ok(c("VESSEL OVERDUE", 'D') == "sar" && c("ANYTHING", 'D') == "sar", "B2 = D or OVERDUE → sar");
         ok(c("GALE WARNING", 'B') == "met" && c("ICE", 'C') == "ice", "B2 = B → met; C → ice");

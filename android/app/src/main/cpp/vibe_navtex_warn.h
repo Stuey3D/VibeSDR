@@ -47,8 +47,8 @@ static constexpr size_t kMaxGroups = 20000;
 static constexpr int64_t kExpireSec = 72 * 3600;
 static constexpr int64_t kReuseSec = 30 * 86400;
 static constexpr size_t kMaxPts = 24;
-static constexpr const char* kPrefix = "v4\t";   // ★ kVersion's line prefix
-static constexpr int kVersion = 4;   // ★ 4 (2026-11-01): + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
+static constexpr const char* kPrefix = "v5\t";   // ★ kVersion's line prefix
+static constexpr int kVersion = 5;   // ★ 5 (2026-11-01): the submarine class (was folded into firing). 4: + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
 
 // ── the hazard classes (the Lenovo's 3 924 messages decided them — scripts/navtex-survey numbers in the commit) ─────────
 /** Conservative keyword rules on the message body, whole words, in this order (the first that matches wins); when none
@@ -76,6 +76,13 @@ inline const std::vector<Rule>& rules() {
         {"sar", "fr", R"(\bPORTES? DISPARU|\bHOMME A LA MER\b|\bRECHERCHES?\b)"}, {"sar", "es", R"(\bDESAPARECIDOS?\b|\bBUSQUEDA\b)"},
         {"sar", "it", R"(\bDISPERSO\b|\bDISPERSI\b|\bRICERCHE\b)"}, {"sar", "de", R"(\bVERMISST\b|\bSUCHE\b)"}, {"sar", "nl", R"(\bVERMIST\b)"},
         {"sar", "hr", R"(\bNESTA(O|LI|LA)\b|\bTRAGANJE\b)"},
+        // ★ SUBMARINES before mines/firing (Stuart, 2026-11-01: "you are missing a Submarine for submarine operations"):
+        //   a dived-submarine warning names TORPEDO or EXERCISES too, and the submarine is what a mariner must look out for.
+        {"submarine", "en", R"(\bSUBMARINES?\b(?!\s+(CABLES?|PIPELINES?|POWER|TELECOM\w*|COMMUNICATIONS?)\b)|\bSUBFACTS\b|\bDIVED SUBS?\b|\bSUBS AND GUNS\b)"},
+        // ★ French puts the adjective after: CABLES SOUS-MARINS is an undersea cable. Only the NOUN — a submarine — counts.
+        {"submarine", "fr", R"(\b(EXERCICES?|ACTIVITES?|PRESENCE|UN|DES|LES)\s+(DE\s+|D\s)?SOUS[- ]MARINS?\b|\bSOUS[- ]MARINS?\s+EN\s+PLONGEE\b)"}, {"submarine", "es", R"(\bSUBMARINOS?\b)"}, {"submarine", "it", R"(\bSOMMERGIBIL[EI]\b|\bSOTTOMARIN[OI]\b)"},
+        {"submarine", "de", R"(\bU-?BOOTE?\b|\bUNTERSEEBOOT\w*\b)"}, {"submarine", "nl", R"(\bONDERZEEBO{1,2}T(EN)?\b)"},
+        {"submarine", "hr", R"(\bPODMORNIC\w*\b)"}, {"submarine", "el", R"(\bYPOVRYCHI\w*\b)"},
         {"uxo", "en", R"(\bUNEXPLODED\b|\bUXO\b|\bMINES?\b|\bORDNANCE\b|\bEXPLOSIVES?\b|\bMUNITIONS?\b|\bTORPEDO(ES)?\b)"},
         {"uxo", "fr", R"(\bENGINS? (EXPLOSIFS?|DE GUERRE)\b|\bEXPLOSIFS?\b)"}, {"uxo", "it", R"(\bORDIGN[IO]\b|\bESPLOSIV[IO]\b)"},
         {"uxo", "es", R"(\bEXPLOSIVOS?\b|\bARTEFACTOS?\b)"}, {"uxo", "de", R"(\bMUNITION\b|\bKAMPFMITTEL\b|\bBLINDGAENGER\b)"},
@@ -83,7 +90,7 @@ inline const std::vector<Rule>& rules() {
         {"wreck", "en", R"(\bWRECKS?\b|\bSUNKEN\b|\bSUNK\b)"}, {"wreck", "fr", R"(\bEPAVES?\b)"}, {"wreck", "es", R"(\bPECIOS?\b|\bNAUFRAGIO\b)"},
         {"wreck", "it", R"(\bRELITT[OI]\b)"}, {"wreck", "de", R"(\bWRACKS?\b)"}, {"wreck", "nl", R"(\bWRAK(KEN)?\b)"}, {"wreck", "hr", R"(\bOLUPIN[AE]\b)"},
         {"wreck", "el", R"(\bNAYAGIO\b|\bNAVAGIO\b)"},
-        {"firing", "en", R"(\bFIRING\b|\bGUNNERY\b|\bGUNFACTS\b|\bSUBFACTS\b|\bMISSILE\b|\bROCKET LAUNCH|\bLIVE AMMUNITION\b|\bNAVAL (EXERCISES?|OPERATIONS)\b|\bMILITARY (EXERCISES?|OPERATIONS|ACTIVITY)\b|\bSHIPS EXERCISES\b|\bSUBMARINE (EXERCISES?|OPERATIONS)\b)"},
+        {"firing", "en", R"(\bFIRING\b|\bGUNNERY\b|\bGUNFACTS\b|\bMISSILE\b|\bROCKET LAUNCH|\bLIVE AMMUNITION\b|\bNAVAL (EXERCISES?|OPERATIONS)\b|\bMILITARY (EXERCISES?|OPERATIONS|ACTIVITY)\b|\bSHIPS EXERCISES\b)"},
         {"firing", "fr", R"(\bTIRS?\b|\bEXERCICES? MILITAIRES?\b)"}, {"firing", "es", R"(\bEJERCICIOS? (DE TIRO|MILITAR(ES)?)\b|\bTIRO\b)"},
         {"firing", "it", R"(\bESERCITAZION[EI]\b|\bTIRO\b)"}, {"firing", "de", R"(\bSCHIESS\w*\b|\bUEBUNGSGEBIET\b)"}, {"firing", "nl", R"(\bSCHIET\w*\b)"},
         {"firing", "hr", R"(\bGA(D|DJ)ANJ\w*\b|\bVJEZB\w*\b)"}, {"firing", "el", R"(\bASKISEIS PYRON\b|\bVOLES\b)"},

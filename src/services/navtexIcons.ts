@@ -9,15 +9,15 @@
 //    struck through) in its top-right corner. The unlit-light icon is the lighthouse with that mark.
 // ★ PURE strings — no React Native, no DOM: the web client and the app's map page both draw from here.
 
-export type NavHazard = 'wreck' | 'navaid' | 'light' | 'buoy' | 'structure' | 'firing' | 'uxo' | 'cable' | 'survey'
+export type NavHazard = 'wreck' | 'navaid' | 'light' | 'buoy' | 'structure' | 'firing' | 'submarine' | 'uxo' | 'cable' | 'survey'
   | 'obstruction' | 'adrift' | 'works' | 'towing' | 'sar' | 'ice' | 'general';
 
 /** The inner SVG of each glyph (16-unit box). Strokes inherit; `F` marks a filled detail (currentColor). */
 const F = 'fill="currentColor" stroke="none"';
 const WAVE = 'M1.5 13.3c1.1-.9 2.2-.9 3.3 0s2.2.9 3.3 0 2.2-.9 3.3 0 2.2.9 3.3 0';
 export const NAV_GLYPHS: Record<NavHazard, string> = {
-  // a hull heeled over and going down, its mast, the sea over it
-  wreck: '<path d="M2.6 6.2c1.1-.9 2.2-.9 3.3 0s2.2.9 3.3 0 2.2-.9 3.3 0"/><path d="M3.2 10.4l9.4 1.6-1 2.4-6.8-1.1z"/><path d="M7.6 11.1l1.5-4.3"/>',
+  // ★ a wreck (Stuart, 2026-11-01, J1): the sea above, the ship broken in two below — bow and stern apart, jagged edges, the break pointing up
+  wreck: '<path d="M1.2 2.4c1.1-1 2.2-1 3.3 0s2.2 1 3.3 0 2.2-1 3.3 0 2.2 1 3.3 0"/><path d="M0.42 11.06L6.53 9.54L6.16 10.52L6.88 10.93L6.45 11.70L6.99 12.11L2.60 13.20z" fill="currentColor" stroke-width="0.6"/><path d="M15.51 10.82L14.30 13.20L9.04 11.89L9.57 11.49L9.15 10.71L9.87 10.30L9.50 9.32z" fill="currentColor" stroke-width="0.6"/><path d="M11.53 9.83L11.90 8.38L14.32 8.98L13.96 10.44z" fill="currentColor" stroke-width="0.6"/><path d="M12.67 8.57L13.18 7.36L13.96 7.55L13.64 8.81z" fill="currentColor" stroke-width="0.6"/>',
   // the lighthouse: a tapered tower, its lantern, its beams (the unlit version has no beams and the mark)
   light: '<path d="M5.8 14.4l1-8.2h2.4l1 8.2z"/><path d="M6.4 6.2h3.2M7 6.2V4.3h2v1.9"/><path d="M4.9 14.4h6.2"/><path d="M10.9 4.8l2.6-1.1M10.9 6.2h2.8M5.1 4.8L2.5 3.7M5.1 6.2H2.3"/>',
   // a buoy on the water: its body, a pole and a ball topmark
@@ -28,6 +28,8 @@ export const NAV_GLYPHS: Record<NavHazard, string> = {
   structure: '<path d="M7.5 14.4l.25-7M8.5 14.4l-.25-7M6.2 14.4h3.6"/><circle cx="8" cy="6.3" r="1"/><path d="M7.6 5.4L6.6 2.4M8.95 6.5l3 .5M7.5 7.1L5.5 9.4"/>',
   // a gun-sight: the range is in use
   firing: '<circle cx="8" cy="8" r="4.6"/><circle cx="8" cy="8" r=".9" ' + F + '/><path d="M8 1.6v2.6M8 11.8v2.6M1.6 8h2.6M11.8 8h2.6"/>',
+  // ★ a submarine (Stuart, 2026-11-01): the sea above, a dived hull with its fin and a periscope up through the surface
+  submarine: '<path d="M1.2 3.4c1.1-1 2.2-1 3.3 0s2.2 1 3.3 0 2.2-1 3.3 0 2.2 1 3.3 0"/><path d="M2.4 10.2h9.6a2.4 2.1 0 0 1 0 4.2H2.4a1.4 2.1 0 0 1 0-4.2z" fill="currentColor" stroke-width="0.6"/><path d="M6.2 10.2V8.4h3.2l.8 1.8z" fill="currentColor" stroke-width="0.6"/><path d="M8.2 8.4V5.2h1.2" stroke-width="1.1"/><path d="M14.3 11.1l1-.9M14.3 13.5l1 .9" stroke-width="1"/>',
   // ★ a sea mine (Stuart, 2026-11-01, option C): a solid round case split by a band, four dots, short tapered horns
   uxo: '<path d="M3.43 7.90A4.6 4.6 0 0 1 12.57 7.90zM3.43 8.90A4.6 4.6 0 0 0 12.57 8.90zM5.45 6.30a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM9.05 6.30a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM5.45 10.50a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM9.05 10.50a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0z" fill="currentColor" fill-rule="evenodd" stroke="none"/><path d="M8.75 4.20L8.35 2.30L7.65 2.30L7.25 4.20zM11.87 6.61L13.20 5.19L12.80 4.61L11.01 5.38zM4.99 5.38L3.20 4.61L2.80 5.19L4.13 6.61zM11.01 11.42L12.80 12.19L13.20 11.61L11.87 10.19zM4.13 10.19L2.80 11.61L3.20 12.19L4.99 11.42zM7.25 12.60L7.65 14.50L8.35 14.50L8.75 12.60z" fill="currentColor" stroke="none"/>',
   // a cable on the seabed between two joints
@@ -65,6 +67,7 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
   { id: 'buoy', words: 'Buoy or beacon' },
   { id: 'structure', words: 'Wind turbine or platform' },
   { id: 'firing', words: 'Firing or military exercise' },
+  { id: 'submarine', words: 'Submarine operations' },
   { id: 'uxo', words: 'Mine or unexploded ordnance' },
   { id: 'cable', words: 'Cable or pipeline' },
   { id: 'survey', words: 'Survey vessel' },
@@ -80,7 +83,7 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
 /** ★ The family colours (one per icon — the icon itself stays single-colour): danger red-orange, lights amber, work at
  *  sea yellow, rescue pink, ice pale blue, the rest grey-white. Chosen to read on the dark basemap and the light one. */
 export const NAV_HAZARD_COLOURS: Record<NavHazard, string> = {
-  wreck: '#ff7a59', uxo: '#ff5a5a', firing: '#ff5a5a', obstruction: '#ff9d5c', adrift: '#ff9d5c',
+  wreck: '#ff7a59', uxo: '#ff5a5a', firing: '#ff5a5a', submarine: '#ff5a5a', obstruction: '#ff9d5c', adrift: '#ff9d5c',
   light: '#ffc940', navaid: '#ffc940', buoy: '#ffc940',
   structure: '#e8d36a', cable: '#e8d36a', survey: '#e8d36a', works: '#e8d36a', towing: '#e8d36a',
   sar: '#ff7ac8', ice: '#9fdcff', general: '#d7dee6',
