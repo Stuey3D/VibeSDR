@@ -222,10 +222,24 @@ tool now builds with it, and so does `test-bench-decoders` in `scripts/run-tests
 - Status line: "… · LoRa 31 frames · 13 of 16 channels · …".
 - **MAP** in the box header, drawn only while something listed has a position (the spots MAP's rule: no dead key). Web:
   the shared TrackView (APRS's map). App: MapOverlay kind `'ism'` (the shared track layer + TrackLiveList), not on Apple
-  TV. Markers by network (T Meshtastic green, C MeshCore orange; hollow when not heard for 15 min), the receiver's house,
-  a card with the detail, the list nearest first, "N on the map · furthest X km". CLOSE MAP returns to the list; leaving
+  TV. ★ 2026-11-01: an icon per node TYPE (`ntype`: repeater mast / room server / sensor / companion person — a square for
+  infrastructure, a circle for a person) in the NETWORK's colour (Meshtastic green, MeshCore orange), the name always
+  shown (labelZoom 6), fading from 15 min to 0.35 at 24 h; the receiver's house; a card with the detail but NEVER a
+  message; the list nearest first, "N on the map · R repeaters · furthest X km". CLOSE MAP returns to the list; leaving
   ISM closes it. Range rings: not drawn (the track layer has none) — the list gives range and bearing instead.
-- Gallery: nodes, LoRaWAN devices and public messages on the band's day card (kind words in `vibe_ism_gallery.h`).
+- **Position links** (Stuart, 2026-11-01: "make the coordinates clickable"): the position in a node's line is a link (the
+  QRZ links' look) — the map opens on that node, zoomed in, pulsing, its card open. Web: an `<a href>` (Tab / pad stop);
+  app: a nested Text link, a `p:i` pad stop after its row, and a screen-reader action on the row.
+- ★★★ **Privacy — where a node is plotted** (`vibe_lora_track.h publishedPos`): repeaters, room servers and sensors
+  (Meshtastic routers / repeaters / sensors) at their advertised position; EVERY other node — companions, handhelds,
+  trackers, a "client base", a node whose role is not yet known — leaves the server rounded to 2 dp (~1 km) with
+  `"approx":1` and "approx." in its line, and is labelled "(approximate)" on the map. Mesh nodes are kept 24 h (a MeshCore
+  repeater advertises every 12 h); 400 rows; the least recently heard go.
+- Gallery: nodes, LoRaWAN devices and public messages on the band's day card (kind words in `vibe_ism_gallery.h`); and
+  ★ 2026-11-01 a third standing item per band per day, **"stations received"** (`ismnodes-<band>-<date>`, LoRa / MeshCore
+  868 MHz · date: N nodes heard · R repeaters · furthest X km): every positioned node with first / last heard, times heard
+  and background / live / both, rewritten at most once a minute, read back after a restart or a listener arriving over
+  background decoding, 500 nodes at most. Its MAP (web and app gallery) draws it on the same map.
 - Copy: the About V12 note and the receiver tour's mode card mention the networks, MESSAGES and MAP.
 
 ---

@@ -29,7 +29,8 @@ import { scrollLane } from '../constants/popupTokens';
 import { captureRegion, capturedRegion, useKeyboardMode, useListNav, useNavFocus } from './PanelNav';
 import { screenNavRef } from './ScreenNav';
 import { ISM_KINDS, ismAged, ismAgo, ismBandText, ismEmptyText, ismLine, ismMeterDetail, ismRows, ismStatus, nextPressure, parseIsmPrefs,
-         ismNavKeys, ismLoraDetail, ismMsgLines, ismOnMap, LORA_KINDS, type IsmDevice, type IsmNavKey, type IsmReport, type IsmUnits } from '../services/ism';
+         ismNavKeys, ismLoraDetail, ismMsgLines, ismOnMap, ismPosSplit, ismMapLabel, LORA_KINDS, type IsmDevice, type IsmNavKey, type IsmReport,
+         type IsmUnits } from '../services/ism';
 
 const ISM_MAX_W = 760;
 const PREF_KEY = 'lsv_ism_prefs';
@@ -50,8 +51,10 @@ export interface IsmPanelProps {
   onTall: (v: boolean) => void;
   topLimit?: number;
   topSafe?: number;
-  /** ★ V12: MAP — the nodes with a position on the map. Null where there is no map (Apple TV): the key is not drawn. */
-  onMap?: (() => void) | null;
+  /** ★ V12: MAP — the nodes with a position on the map. Null where there is no map (Apple TV): the key is not drawn.
+   *  ★ `key`: a node's position link in the list (Stuart, 2026-11-01: "make the coordinates clickable") — the map opens on
+   *  that node, selected, its card open. Undefined = the MAP key (every node, fitted). */
+  onMap?: ((key?: string) => void) | null;
   /** The receiver's position (range and bearing in a node's detail). */
   rx?: { lat: number; lon: number } | null;
 }
@@ -115,7 +118,10 @@ export default function IsmPanel(p: IsmPanelProps) {
     autoGrabbed.current = true;
     setGrab(true);
   }, [kbOn]);
-  const keys = ismNavKeys({ on: p.on, big: bigUseful, chips: !p.error, rows: p.error || !r ? 0 : rows.length, map: canMap });
+  // ★ the rows whose line carries a position link (only where there is a map to open)
+  const posRows = p.onMap && !p.error && r && filter !== 'msgs'
+    ? rows.map((d, i) => (ismOnMap(d) && ismPosSplit(ismLine(d, units)) ? i : -1)).filter((i) => i >= 0) : [];
+  const keys = ismNavKeys({ on: p.on, big: bigUseful, chips: !p.error, rows: p.error || !r ? 0 : rows.length, map: canMap, pos: posRows });
   const nav = useRef({ keys, filter, units }); nav.current = { keys, filter, units };
   const listRef = useRef<ScrollView | null>(null);
   const rowY = useRef<number[]>([]);
@@ -125,6 +131,7 @@ export default function IsmPanel(p: IsmPanelProps) {
     else if (k === 'up') { if (p.canUp) p.onStep(1); }
     else if (k === 'big') p.onTall(!tall);
     else if (k === 'map') p.onMap?.();
+    else if (k.startsWith('p:')) { const d = rowsRef.current[Number(k.slice(2))]; if (d) p.onMap?.(d.key); }
     else if (k === 'exit') { setGrab(false); p.onExit(); }
     else if (k === 'u:speed') pickUnits({ ...u, mph: !u.mph });
     else if (k === 'u:pressure') pickUnits({ ...u, pressure: nextPressure(u.pressure) });
@@ -147,7 +154,7 @@ export default function IsmPanel(p: IsmPanelProps) {
         if (x != null) chipsRef.current?.scrollTo({ x: Math.max(0, x - 40), animated: false });
         return;
       }
-      if (!k || !k.key.startsWith('r:')) return;
+      if (!k || !(k.key.startsWith('r:') || k.key.startsWith('p:'))) return;
       const y = rowY.current[Number(k.key.slice(2))];
       if (y != null) listRef.current?.scrollTo({ y: Math.max(0, y - 40), animated: false });
     },
@@ -211,11 +218,19 @@ export default function IsmPanel(p: IsmPanelProps) {
             const open = meter && openKey === d.key;
             const label = `${ismLine(d, units)}, heard ${ismAgo(d.seen)}${d.seen >= 2 ? ' ago' : ''}, `
               + `${(d.freq / 1e6).toFixed(3)} megahertz, ${Math.round(d.snr)} dB over the noise, ${d.count} ${d.count === 1 ? 'time' : 'times'}`;
+            // ★★ the position as a link (the QRZ callsign links' look, CwView CallLink): the map, on this node
+            const line = ismLine(d, units);
+            const sp = p.onMap && ismOnMap(d) ? ismPosSplit(line) : null;
+            const posHl = grab && keys[focus]?.key === `p:${i}`;
             const body = (
               <>
                 <Text style={s.ago} numberOfLines={1}>{ismAgo(d.seen)}</Text>
                 <View style={s.txtCol}>
-                  <Text style={s.txt}>{ismLine(d, units)}</Text>
+                  {sp ? (
+                    <Text style={s.txt}>{sp.pre}<Text style={[s.txt, s.posLink, posHl && { backgroundColor: ring, color: '#000' }]} suppressHighlighting={false}
+                      accessibilityRole="link" accessibilityLabel={`Show ${ismMapLabel(d)} on the map`}
+                      onPress={(e: any) => { e?.stopPropagation?.(); p.onMap?.(d.key); }}>{sp.pos}</Text>{sp.post}</Text>
+                  ) : <Text style={s.txt}>{line}</Text>}
                   {open && detail.map((t, k) => <Text key={k} style={s.detail}>{t}</Text>)}
                 </View>
               </>
@@ -226,7 +241,10 @@ export default function IsmPanel(p: IsmPanelProps) {
                                 onLayout={(e) => { rowY.current[i] = e.nativeEvent.layout.y; }}
                                 onPress={() => setOpenKey(open ? '' : d.key)} accessibilityRole="button"
                                 accessibilityLabel={open ? `${label}. ${detail.join('. ')}` : label}
-                                accessibilityHint={d.kind === 'meter' ? "Shows the meter's detail" : 'Shows the detail'}>
+                                accessibilityHint={d.kind === 'meter' ? "Shows the meter's detail" : 'Shows the detail'}
+                                // ★ a screen reader reaches the position link as the row's action (the row groups its text)
+                                accessibilityActions={sp ? [{ name: 'showOnMap', label: `Show ${ismMapLabel(d)} on the map` }] : undefined}
+                                onAccessibilityAction={sp ? (ev) => { if (ev.nativeEvent.actionName === 'showOnMap') p.onMap?.(d.key); } : undefined}>
                 {body}
               </TouchableOpacity>
             ) : (
@@ -277,6 +295,7 @@ const makeStyles = (T: DecoderTokens) => StyleSheet.create({
   ago:     { width: 54, textAlign: 'right', fontFamily: F, fontSize: 12, color: T.muted, fontVariant: ['tabular-nums'] },
   txt:     { fontFamily: F, fontSize: 12, lineHeight: 17, color: T.value },
   txtCol:  { flex: 1, minWidth: 0 },
+  posLink: { textDecorationLine: 'underline' },
   detail:  { fontFamily: F, fontSize: 11, lineHeight: 15, color: T.muted, marginTop: 2 },
   note:    { fontFamily: F, fontSize: 13, color: T.muted, padding: 12, lineHeight: 18 },
 });

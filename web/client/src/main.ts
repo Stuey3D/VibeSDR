@@ -20,7 +20,8 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
          type Swatch, type ControlLook } from './controlColours';
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
-import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus } from './ism';
+import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
+         ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, type IsmGalNode } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
@@ -8636,7 +8637,7 @@ function ismUiOn() {
   ismOn = true;
   syncAudioQuiet();
   if (spec) spec.ismHeld = true;
-  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d), () => ismMapOpen(), () => myPos());
+  if (!ismBox) ismBox = new IsmBox(() => ismSetMode(false), (d) => ismStep(d), (key) => ismMapOpen(key), () => myPos());
   ismBox.show();
   ismLockControls(true);
   if (wf) wf.vfoHidden = true;   // ★ no LISTEN needle on a band capture
@@ -8770,13 +8771,34 @@ function onIsmReport(r: IsmReport | null) {
  *  Meshtastic and MeshCore nodes today — the receiver and range rings; CLOSE MAP goes back to the list. ISM carries on
  *  under it either way. */
 let ismMapView: TrackView | null = null;
-function ismMapOpen() {
+/** ★ `key`: a node's position link in the list (Stuart, 2026-11-01: "make the coordinates clickable") — the map opens on
+ *  it, selected, pulsing, its card open. Empty = the MAP key: every node, fitted. */
+function ismMapOpen(key = '') {
   if (!ismMapView) ismMapView = new TrackView({
     title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(),
-    icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()),
+    icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()), labelZoom: 6, focusZoom: 11,
   });
   ismMapView.show(myPos());
   ismMapRender();
+  if (key) ismMapView.focus(key);
+}
+/* ★★ V12 2026-11-01 THE GALLERY'S "STATIONS RECEIVED" MAP (Stuart: "being able to open up the map in the Gallery so that if
+ *  I have this set as the background profile we can see which stations we received"). A gallery item whose slot is
+ *  "ismnodes-…" (vibe_ism_gallery.h) has MAP: its table, on the same map view and the same icons as the live ISM map —
+ *  each node with first / last heard, times heard, and whether it was heard in the background or live. */
+let ismGalView: TrackView | null = null;
+async function ismGalMapOpen(f: string, day: number, title: string) {
+  let body = '';
+  try { const r = await fetch(galUrl(`/vibeserver/gallery/file/${encodeURIComponent(f)}`), { cache: 'no-store' }); body = r.ok ? await r.text() : ''; } catch { /* below */ }
+  const { nodes, rx: cardRx } = ismNodesParse(body, day, Math.floor(Date.now() / 1000));
+  const rx = myPos() ?? cardRx;
+  ismGalView?.destroy();
+  ismGalView = new TrackView({
+    title: title.length > 60 ? title.slice(0, 58) + '…' : title, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => { ismGalView?.destroy(); ismGalView = null; },
+    icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx), labelZoom: 6, focusZoom: 11,
+  });
+  ismGalView.show(rx);
+  ismGalView.update(nodes, ismGalRows(nodes, rx), body ? ismGalStatus(nodes, rx) : 'This item is no longer on the server.', nodes.length, rx);
 }
 function ismMapRender() {
   if (!ismMapView?.open) return;
@@ -16028,6 +16050,14 @@ async function renderGallery(page = galPage) {
         mb.title = 'Show the position this call sent';
         const pin: DscPin = { lat: it.plat, lon: it.plon, label: it.title, level: it.lv ?? 0 };
         mb.onclick = (e) => { e.stopPropagation(); openPinsMap([pin]); };
+        row.appendChild(mb);
+      }
+      // ★ V12 a day's "stations received" (LoRa / MeshCore nodes with positions): MAP, on the ISM map
+      if (ismIsNodeCard(it)) {
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
+        mb.title = 'Every node this card holds, on the map'; mb.setAttribute('aria-label', `Show the nodes heard on the map: ${it.title}`);
+        mb.onclick = (e) => { e.stopPropagation(); void ismGalMapOpen(it.f, it.t, it.title); };
+        mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
         row.appendChild(mb);
       }
       const open = () => { galScroll = $('galleryPanel').scrollTop; galOpenedRow = idx; void openGalleryItem(it); };

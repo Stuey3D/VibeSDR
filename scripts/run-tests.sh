@@ -198,6 +198,9 @@ flags_for() {
     #    codec, 96 round trips through the channeliser, the sensitivity sweep against Semtech's table (~1 min; LORA_QUICK=1
     #    skips it), the whole 868 band at once, the parsers, the privacy rule on the JSON, noise → nothing, CPU rows.
     test-lora)             echo "-O2 -lpthread" ;;
+    # ★★ V12 the ISM map (2026-11-01): positions parsed, the node table's cap / 24 h expiry / newest wins, the privacy rule
+    #    (a person's node rounded to ~1 km), the gallery's "stations received" card. Fast (no DSP).
+    test-lora-nodes)       echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }

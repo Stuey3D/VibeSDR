@@ -28,6 +28,7 @@ import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines, type GalleryTrLine } from '../utils/galleryTranslate';
 import { detectTextLanguage, langName, textTranslateInfo, translateText } from '../services/transcriber';
+import { ismIsNodeCard, ismNodesParse, type IsmGalNode } from '../services/ism';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -64,9 +65,13 @@ export function galleryWhen(t: number): string {
 export function galleryFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
 function size(b: number): string { return b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
 
-export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose }: {
+export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap }: {
   /** TRANSCRIBE's TRANSLATE TO ('' = off → the phone's own language). */
   visible: boolean; base: string; readAuth?: string; translateTo?: string; onClose: () => void;
+  /** ★★ V12 2026-11-01 (Stuart: "being able to open up the map in the Gallery … we can see which stations we received"):
+   *  a day's "stations received" card (slot "ismnodes-…", vibe_ism_gallery.h) has MAP — its nodes, handed to the screen's
+   *  ISM map. Absent where there is no map (Apple TV): no key. */
+  onNodesMap?: ((title: string, nodes: IsmGalNode[], rx: { lat: number; lon: number } | null) => void) | null;
 }) {
   const pt = usePopupTheme();
   const s = useMemo(() => makeStyles(pt), [pt]);
@@ -112,6 +117,14 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   useEffect(() => { if (!visible) { setOpen(null); setPage(1); } }, [visible]);
 
   const fileUrl = (it: GalleryItem) => withReadAuth(`${b}/vibeserver/gallery/file/${encodeURIComponent(it.f)}`, readAuth);
+  const nodesMap = async (it: GalleryItem) => {
+    try {
+      const r = await fetch(fileUrl(it), { cache: 'no-store' } as any);
+      if (!r.ok) { setNote('This item is no longer on the server (the gallery is full and keeps the newest).'); return; }
+      const { nodes, rx } = ismNodesParse(await r.text(), it.t, Math.floor(Date.now() / 1000));
+      onNodesMap?.(it.title, nodes, rx);
+    } catch { setNote('Could not reach the server.'); }
+  };
   const isImage = (it: GalleryItem) => /\.png$/i.test(it.f);
   const show = async (it: GalleryItem) => {
     setOpen(it); setText(''); setTextOk(false);
@@ -251,6 +264,12 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                         {/* ★ only the parts an item has (an ISM day has no demodulator) — the web client's rule */}
                         <Text style={s.dim}>{[galleryWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, it.r, size(it.bytes)].filter((x) => !!x).join(' · ')}</Text>
                       </View>
+                      {!!onNodesMap && ismIsNodeCard(it) && (
+                        <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel={`Show the nodes heard on the map: ${it.title}`}
+                                          onPress={() => { void nodesMap(it); }}>
+                          <Text style={s.keyText}>MAP</Text>
+                        </TouchableOpacity>
+                      )}
                     </TouchableOpacity>
                   )} />
               )}
@@ -286,5 +305,6 @@ function makeStyles(pt: PopupTokens) {
     gap: { color: pt.ink.textDim, marginRight: 6, marginBottom: 6 },
     pageLab: { color: pt.ink.textDim, fontSize: 12, marginLeft: 'auto', marginBottom: 6 },
     off: { opacity: 0.35 },
+    mapKey: { alignSelf: 'center', marginLeft: 8, marginBottom: 0 },
   });
 }

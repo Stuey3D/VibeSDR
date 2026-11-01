@@ -20,7 +20,8 @@
  *       card:  function (item) { return '<div>…</div>'; },                      // the tapped item's card (escaped HTML)
  *       trail: function (key, done) { done([[lat, lon], …]); },                  // its track so far (async; may be null)
  *       onSelect: function (key | null) {},                                       // the selection changed ON THE MAP
- *       labelZoom: 11 });                                                         // Leaflet zoom from which labels show
+ *       labelZoom: 11,                                                            // Leaflet zoom from which labels show
+ *       focusZoom: 10 });                                                         // focus(key) zooms in at least this far
  *   layer.update(items)   // [{key, lat, lon, …}] — the whole list each time; items without a position are skipped
  *   layer.focus(key) · layer.select(key | null) · layer.fit() · layer.setReceiver(lat, lon) · layer.destroy()
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
@@ -38,6 +39,11 @@
     'filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.75))}',
     '.vtl-mk .vtl-ic svg{display:block;overflow:visible}',
     '.vtl-mk.vtl-sel .vtl-ic{filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 2px #ffd34d)}',
+    // ★ focus(key) — a row or a link chose this item: three rings pulse out from it, then it stays selected
+    '.vtl-mk.vtl-pulse::after{content:"";position:absolute;left:50%;top:50%;width:100%;height:100%;border-radius:50%;',
+    'border:2px solid #ffd34d;box-sizing:border-box;pointer-events:none;animation:vtl-pulse 1.1s ease-out 3}',
+    '@keyframes vtl-pulse{from{transform:translate(-50%,-50%) scale(1);opacity:1}to{transform:translate(-50%,-50%) scale(2.8);opacity:0}}',
+    '@media (prefers-reduced-motion:reduce){.vtl-mk.vtl-pulse::after{animation:none;opacity:0}}',
     '.vtl-mk .vtl-lb{position:absolute;left:100%;top:50%;transform:translate(3px,-50%);white-space:nowrap;display:none;',
     'font:600 10.5px/1.2 ui-monospace,Menlo,Consolas,monospace;color:#e8eef5;text-shadow:0 0 3px #000,0 0 2px #000;pointer-events:none}',
     '.vtl-labels .vtl-mk .vtl-lb,.vtl-mk.vtl-sel .vtl-lb{display:block}',
@@ -198,8 +204,10 @@
       var e = items.get(String(key));
       if (!e) return false;
       select(String(key), false);
-      var z = Math.max(map.getZoom(), 10);
+      var z = Math.max(map.getZoom(), opts.focusZoom || 10);
       map.flyTo([e.lat, e.lon], z, { duration: 0.9 });
+      setCls(e.mk, 'vtl-pulse', true);
+      setTimeout(function () { var cur = items.get(String(key)); if (cur) setCls(cur.mk, 'vtl-pulse', false); }, 3600);
       return true;
     }
     function fit() {

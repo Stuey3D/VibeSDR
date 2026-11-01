@@ -385,6 +385,10 @@ export interface TrackViewOpts {
   label: (it: any) => string;
   card: (it: any) => string;
   trail?: (key: string, done: (pts: [number, number][]) => void) => void;
+  /** ★ V12 the ISM map: the Leaflet zoom from which names show (the layer's own default is 11), and how far a chosen
+   *  item is zoomed in to (10). */
+  labelZoom?: number;
+  focusZoom?: number;
 }
 export class TrackView {
   readonly root: HTMLElement;
@@ -550,6 +554,7 @@ export class TrackView {
     const w = window as any;
     this.layer = w.VibeTrackLayer.create(map, L, {
       receiver: this.rx, icon: this.o.icon, label: this.o.label, card: this.o.card, trail: this.o.trail,
+      labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom,
       onSelect: (k: string | null) => this.markSel(k || ''),
     });
     if (this.pending) { this.layer.update(this.pending); this.pending = null; }
