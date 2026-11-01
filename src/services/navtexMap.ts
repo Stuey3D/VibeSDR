@@ -17,6 +17,9 @@ export interface NavStation {
   conf: 'confident' | 'likely' | 'ambiguous'; km?: number; khz: number[];
   first: number; last: number; n: number; uniq: number; night: number; folded: number;
   subj: Record<string, number>; cands?: NavCand[]; recent: NavRecent[];
+  /** ★ the WHY: messages named outright, messages inside the letter's schedule slot, stations sharing the letter and
+   *  band, the nearest of them to the receiver */
+  outright: number; inSlot: number; share: number; near: Array<{ name: string; iso: string; km: number }>;
   /** seconds since last heard (from the report's `now`) */
   seen: number;
 }
@@ -49,6 +52,8 @@ export function navSanitise(j: any): NavReport | null {
       km: num(s.km), khz: Array.isArray(s.khz) ? s.khz.filter((k: any) => num(k) !== undefined).slice(0, 4) : [],
       first: num(s.first) ?? 0, last, n: num(s.n) ?? 0, uniq: num(s.uniq) ?? 0, night: num(s.night) ?? 0, folded: num(s.folded) ?? 0,
       subj, cands: cands && cands.length > 1 ? cands : undefined, recent, seen: Math.max(0, now - last),
+      outright: num(s.outright) ?? 0, inSlot: num(s.inSlot) ?? 0, share: num(s.share) ?? 0,
+      near: Array.isArray(s.near) ? s.near.slice(0, 3).filter((x: any) => x && num(x.km) !== undefined).map((x: any) => ({ name: str(x.name, 40), iso: str(x.iso, 2), km: x.km })) : [],
     });
   }
   const rx = j.rx && okLat(j.rx.lat) && okLon(j.rx.lon) ? { lat: j.rx.lat, lon: j.rx.lon } : null;
@@ -72,33 +77,66 @@ export function navSince(range: string): number { return NAV_RANGES.find((r) => 
 /** The band's colour: 518 kHz (international, English) cyan, 490 kHz (national language) violet, 4209.5 kHz (HF) amber. */
 export const NAV_BAND_COLOURS: Record<string, string> = { '518': '#4fc3f7', '490': '#c792ea', '4209.5': '#ffb74d', '424': '#9fe870' };
 export function navColour(s: NavStation): string { return NAV_BAND_COLOURS[String(s.khz[0] ?? 518)] || '#4fc3f7'; }
+const kmTxt = (km: number) => (km < 10 ? km.toFixed(1) : Math.round(km).toLocaleString('en-GB'));
 function escN(v: string): string { return v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 /** ★ Fades over a week since last heard (to 0.45) — a station heard last month is still drawn, quieter. */
 export function navAgeOpacity(seen: number): number {
   if (!(seen > 3600)) return 1;
   return Math.max(0.45, 1 - 0.55 * Math.min(1, (seen - 3600) / (7 * 86400)));
 }
-/** The marker: a transmitting mast on a disc in the band's colour, the station's letter beside it; LIKELY has a dashed
- *  rim, AMBIGUOUS a "?" badge. Two bands heard = a split disc (both colours). */
-export function navIcon(s: NavStation): { html: string; w: number; h: number } {
-  const c1 = navColour(s), c2 = s.khz.length > 1 ? (NAV_BAND_COLOURS[String(s.khz[1])] || c1) : c1;
-  const op = navAgeOpacity(s.seen).toFixed(2);
-  const rim = s.conf === 'likely' ? ' stroke-dasharray="2.5 2"' : '';
+// ── ★★ CO-SITED STATIONS ARE ONE SITE (Stuart's screenshot: Niton E/K/I/T, Oostende B/V/T, Cullercoats G/U drawn on top of
+//    each other). Every letter at one place — the same name within ~2 km — is ONE marker ("Niton · E K I T"), one card
+//    listing each letter with its band and counts, one line from the receiver. A "?" station stays on its own.
+export interface NavSite {
+  key: string; name: string; iso: string; country: string; lat: number; lon: number; km?: number;
+  letters: NavStation[];            // ★ most messages first
+  khz: number[]; first: number; last: number; n: number; uniq: number; seen: number;
+  conf: 'confident' | 'likely' | 'ambiguous';   // ★ the surest of its letters
+}
+export function navSites(r: NavReport | null): NavSite[] {
+  const by = new Map<string, NavSite>();
+  const near = (a: NavSite, s: NavStation) => Math.abs(a.lat - s.lat) < 0.5 && Math.abs(a.lon - s.lon) < 0.8;   // ★ ~50 km: one site
+  for (const s of r?.stations ?? []) {
+    let k = s.conf === 'ambiguous' ? `?${s.key}` : `${s.name}|${s.lat.toFixed(2)}|${s.lon.toFixed(2)}`;
+    if (s.conf !== 'ambiguous') for (const [k2, g2] of by) if (!k2.startsWith('?') && g2.name === s.name && near(g2, s)) { k = k2; break; }
+    let g = by.get(k);
+    if (!g) {
+      g = { key: k.slice(0, 40), name: s.name, iso: s.iso, country: s.country, lat: s.lat, lon: s.lon, km: s.km, letters: [], khz: [],
+            first: s.first, last: s.last, n: 0, uniq: 0, seen: s.seen, conf: s.conf };
+      by.set(k, g);
+    }
+    g.letters.push(s);
+    for (const f of s.khz) if (!g.khz.includes(f)) g.khz.push(f);
+    g.first = Math.min(g.first, s.first); g.last = Math.max(g.last, s.last); g.seen = Math.min(g.seen, s.seen);
+    g.n += s.n; g.uniq += s.uniq;
+    if (s.conf === 'confident' || (s.conf === 'likely' && g.conf === 'ambiguous')) g.conf = s.conf;
+  }
+  const out = [...by.values()];
+  for (const g of out) { g.letters.sort((a, b) => b.n - a.n); g.khz.sort((a, b) => b - a === 0 ? 0 : (a === 518 ? -1 : b === 518 ? 1 : a - b)); }
+  return out;
+}
+const lettersOf = (g: NavSite) => g.letters.map((s) => s.b1).join(' ');
+export function navSiteColour(g: NavSite): string { return NAV_BAND_COLOURS[String(g.khz[0] ?? 518)] || '#4fc3f7'; }
+/** The marker: a transmitting mast on a disc in the band's colour (split when the site sends on two bands), its letters
+ *  beside it; LIKELY has a dashed rim, AMBIGUOUS a "?" badge; fades over a week since last heard. */
+export function navIcon(g: NavSite): { html: string; w: number; h: number } {
+  const c1 = navSiteColour(g), c2 = g.khz.length > 1 ? (NAV_BAND_COLOURS[String(g.khz[1])] || c1) : c1;
+  const op = navAgeOpacity(g.seen).toFixed(2);
+  const rim = g.conf === 'likely' ? ' stroke-dasharray="2.5 2"' : '';
   const disc = c1 === c2
     ? `<circle cx="13" cy="13" r="11" fill="${c1}" stroke="#0b1420" stroke-width="1.4"${rim}/>`
     : `<path d="M13 2 A11 11 0 0 0 13 24 Z" fill="${c1}"/><path d="M13 2 A11 11 0 0 1 13 24 Z" fill="${c2}"/><circle cx="13" cy="13" r="11" fill="none" stroke="#0b1420" stroke-width="1.4"${rim}/>`;
   const mast = '<path d="M13 7 L9.5 19 M13 7 L16.5 19 M10.6 15 H15.4" stroke="#0b1420" stroke-width="1.6" fill="none" stroke-linecap="round"/>'
     + '<path d="M9 6 a5 5 0 0 0 0 5 M17 6 a5 5 0 0 1 0 5" stroke="#0b1420" stroke-width="1.2" fill="none" stroke-linecap="round"/>';
-  const letter = `<text x="25" y="9" font-family="ui-monospace,Menlo,monospace" font-size="9.5" font-weight="700" fill="#e8f4ff" stroke="#0b1420" stroke-width="2.4" paint-order="stroke">${escN(s.b1)}</text>`;
-  const q = s.conf === 'ambiguous' ? '<circle cx="22" cy="22" r="5.2" fill="#ffd34d" stroke="#0b1420" stroke-width="1"/><text x="22" y="25" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="8" font-weight="700" fill="#111">?</text>' : '';
-  return { html: `<svg width="32" height="28" viewBox="0 0 32 28" style="opacity:${op}" aria-hidden="true">${disc}${mast}${letter}${q}</svg>`, w: 32, h: 28 };
+  const q = g.conf === 'ambiguous' ? '<circle cx="22" cy="22" r="5.2" fill="#ffd34d" stroke="#0b1420" stroke-width="1"/><text x="22" y="25" text-anchor="middle" font-family="ui-monospace,Menlo,monospace" font-size="8" font-weight="700" fill="#111">?</text>' : '';
+  return { html: `<svg width="28" height="28" viewBox="0 0 28 28" style="opacity:${op}" aria-hidden="true">${disc}${mast}${q}</svg>`, w: 28, h: 28 };
 }
-const kmTxt = (km: number) => (km < 10 ? km.toFixed(1) : Math.round(km).toLocaleString('en-GB'));
-export function navLabel(s: NavStation): string {
-  return `${s.b1} · ${s.name}${s.conf === 'ambiguous' ? '?' : ''}${s.km !== undefined ? ` · ${kmTxt(s.km)} km` : ''}`;
+/** "Niton · E K I T · 195 km" */
+export function navLabel(g: NavSite): string {
+  return `${g.name}${g.conf === 'ambiguous' ? '?' : ''} · ${lettersOf(g)}${g.km !== undefined ? ` · ${kmTxt(g.km)} km` : ''}`;
 }
-/** Who keeps its name when labels collide: the most messages, then the most recent. */
-export function navRank(s: NavStation): number { return s.uniq * 1e6 - Math.min(s.seen, 999999); }
+/** Who keeps its name when labels collide: the most different messages, then the most recent. */
+export function navRank(g: NavSite): number { return g.uniq * 1e6 - Math.min(g.seen, 999999); }
 const CONF_WORDS: Record<string, string> = {
   confident: 'named by its messages',
   likely: 'likely — the label could not decide; the time of day, the message text or the station’s other messages point here',
@@ -111,46 +149,79 @@ export function navAgo(sec: number): string {
   if (sec < 86400) return `${Math.round(sec / 3600)} h ago`;
   return `${Math.round(sec / 86400)} days ago`;
 }
-/** The card: name, country and letter, the bands, how sure, first / last heard, how many messages (and how many
- *  different), the kinds of message, the newest ids. */
-export function navCard(s: NavStation, wrap: 'web' | 'app' = 'web'): string {
-  const kinds = Object.entries(s.subj).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${navtexSubject(k) ?? k} ${n}`);
+/** The schedule slot of a letter: "04:50" (the first of its six a day). */
+export function navSlot(b1: string): string {
+  const i = b1.charCodeAt(0) - 65;
+  if (!(i >= 0 && i < 24)) return '';
+  const m = i * 10;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+const pct = (a: number, b: number) => (b > 0 ? Math.round((100 * a) / b) : 0);
+/** ★★ The WHY of one letter (Stuart's request: the reasons behind confident / likely / ambiguous): how it was named, how
+ *  many stations share the letter and band and which are nearest, the schedule slot, the night path; for a "?" the
+ *  candidates with shares from distance alone (the resolver's own prior, 1 / (1 + (d / 800 km)²)). */
+export function navWhy(s: NavStation): string[] {
+  const out: string[] = [];
+  const band = s.khz[0];
+  if (s.outright) out.push(`named in ${pct(s.outright, s.n)} % of its messages (${s.outright} of ${s.n})`);
+  if (s.folded) out.push(`${s.folded} more settled because only ${s.name} on ${s.b1} was heard named`);
+  if (s.share) out.push(`${s.share} ${s.share === 1 ? 'station uses' : 'stations use'} letter ${s.b1} on ${band} kHz`
+    + (s.near.length ? ` — nearest ${s.near.map((x) => `${x.name} ${kmTxt(x.km)} km`).join(', then ')}` : ''));
+  if (s.n) out.push(`${pct(s.inSlot, s.n)} % ended inside ${s.b1}’s schedule slot (${navSlot(s.b1)} UTC and every 4 h)`);
+  if (s.night) out.push(`${pct(s.night, s.n)} % heard with the path in darkness`);
+  if (s.cands && s.cands.length > 1) {
+    const w = s.cands.map((c) => 1 / (1 + Math.pow((c.km ?? 800) / 800, 2)));
+    const sum = w.reduce((a, b) => a + b, 0);
+    out.push('could be ' + s.cands.map((c, i) => `${c.name} ${Math.round((100 * w[i]) / sum)} %`).join(' or ') + ' (by distance)');
+  }
+  return out;
+}
+/** The card: the site (name, country, distance, first / last heard), then each LETTER: its band, how sure, how many
+ *  messages (and how many different), their kinds, its newest ids, and WHY it is placed here. */
+export function navCard(g: NavSite, wrap: 'web' | 'app' = 'web'): string {
   const lines: string[] = [];
-  lines.push(`<b>${escN(s.name)}${s.conf === 'ambiguous' ? '?' : ''}</b>, ${escN(s.country)} · station ${escN(s.b1)}`);
-  lines.push(`${s.khz.map((k) => `${k} kHz`).join(' + ')}${s.km !== undefined ? ` · ${escN(kmTxt(s.km))} km from the receiver` : ''}`);
-  lines.push(escN(CONF_WORDS[s.conf]));
-  if (s.cands) lines.push('Could be: ' + s.cands.map((c) => `${escN(c.name)}${c.km !== undefined ? ` (${escN(kmTxt(c.km))} km)` : ''}`).join(' or '));
-  lines.push(`first heard ${utc(s.first)} · last heard ${utc(s.last)} UTC (${navAgo(s.seen)})`);
-  lines.push(`${s.n} ${s.n === 1 ? 'message' : 'messages'} received · ${s.uniq} different${s.folded ? ` · ${s.folded} settled from the label’s pair` : ''}`
-    + `${s.night ? ` · ${s.night} after dark on the path` : ''}`);
-  if (kinds.length) lines.push(escN(kinds.join(' · ')));
-  if (s.recent.length) lines.push('Newest: ' + s.recent.slice(0, 8).map((r) => `${escN(r.id)} ${utc(r.t).slice(5)}`).join(' · '));
+  lines.push(`<b>${escN(g.name)}${g.conf === 'ambiguous' ? '?' : ''}</b>, ${escN(g.country)}${g.km !== undefined ? ` · ${escN(kmTxt(g.km))} km from the receiver` : ''}`);
+  lines.push(`first heard ${utc(g.first)} · last heard ${utc(g.last)} UTC (${navAgo(g.seen)})`);
+  for (const s of g.letters) {
+    const kinds = Object.entries(s.subj).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${navtexSubject(k) ?? k} ${n}`);
+    lines.push(`<b>${escN(s.b1)}</b> · ${s.khz.map((k) => `${k} kHz`).join(' + ')} · ${s.n} received, ${s.uniq} different`
+      + `${s.folded ? ` (${s.folded} settled from the label’s pair)` : ''}${s.conf !== 'confident' ? ` · ${escN(CONF_WORDS[s.conf])}` : ''}`);
+    for (const w of navWhy(s)) lines.push('&nbsp;&nbsp;· ' + escN(w));
+    if (kinds.length) lines.push('&nbsp;&nbsp;' + escN(kinds.join(' · ')));
+    // ★ each id once (a warning is repeated every slot until cancelled): its newest reception
+    const seenIds = new Set<string>();
+    const fresh = s.recent.filter((r) => (seenIds.has(r.id) ? false : (seenIds.add(r.id), true)));
+    if (fresh.length) lines.push('&nbsp;&nbsp;Newest: ' + fresh.slice(0, 6).map((r) => `${escN(r.id)} ${utc(r.t).slice(5)}`).join(' · '));
+  }
   const body = lines.join('<br>');
   return wrap === 'app' ? `<div class="trkCard"><div style="white-space:normal;max-width:320px">${body}</div></div>` : `<div class="pop">${body}</div>`;
 }
-/** The list (the web's TrackView rows / the app's TrackLiveList rows): nearest first. */
-export function navRows(r: NavReport): Array<{ s: NavStation; second: string; range: string }> {
-  return [...r.stations].sort((a, b) => (a.km ?? 1e9) - (b.km ?? 1e9)).map((s) => ({
-    s, range: s.km !== undefined ? `${kmTxt(s.km)} km` : '',
-    second: [`${s.b1} · ${s.khz.join('+')} kHz`, `${s.uniq} msg${s.uniq === 1 ? '' : 's'}`, s.conf === 'confident' ? '' : s.conf].filter(Boolean).join(' · '),
+/** The list (the web's TrackView rows / the app's TrackLiveList rows): nearest first, one row a site. */
+export function navRows(r: NavReport): Array<{ g: NavSite; second: string; range: string }> {
+  return navSites(r).sort((a, b) => (a.km ?? 1e9) - (b.km ?? 1e9)).map((g) => ({
+    g, range: g.km !== undefined ? `${kmTxt(g.km)} km` : '',
+    second: [`${lettersOf(g)} · ${g.khz.join('+')} kHz`, `${g.uniq} msg${g.uniq === 1 ? '' : 's'}`, g.conf === 'confident' ? '' : g.conf].filter(Boolean).join(' · '),
   }));
 }
 export function navStatus(r: NavReport | null): string {
   if (!r) return 'Reading the gallery…';
-  const far = r.stations.reduce<NavStation | null>((b, s) => (s.km !== undefined && (!b || s.km > (b.km ?? 0)) ? s : b), null);
-  return `${r.stations.length} ${r.stations.length === 1 ? 'station' : 'stations'} · ${r.messages} messages`
+  const sites = navSites(r);
+  const far = sites.reduce<NavSite | null>((b, s) => (s.km !== undefined && (!b || s.km > (b.km ?? 0)) ? s : b), null);
+  return `${sites.length} ${sites.length === 1 ? 'site' : 'sites'} · ${r.stations.length} ${r.stations.length === 1 ? 'station' : 'stations'} · ${r.messages} messages`
     + (far ? ` · furthest ${far.name} ${kmTxt(far.km!)} km` : '') + (r.unplaced ? ` · ${r.unplaced} not placed` : '');
 }
 export const NAV_EMPTY = 'No NAVTEX message in the gallery for this time — the map fills as messages arrive (a listener’s decoder or background decoding).';
 
-/** ★ The app's pins and rows (MapOverlay kind 'navtex' / TrackLiveList). */
+/** ★ The app's pins and rows (MapOverlay kind 'navtex' / TrackLiveList) — one a site. */
 export function navItems(r: NavReport | null) {
-  return (r?.stations ?? []).map((s) => ({ key: s.key, lat: s.lat, lon: s.lon, _ic: navIcon(s), _lb: navLabel(s), _cd: navCard(s, 'app'), _h: s.n, _rk: navRank(s), _arc: true }));
+  return navSites(r).map((g) => ({ key: g.key, lat: g.lat, lon: g.lon, _ic: navIcon(g), _lb: navLabel(g), _cd: navCard(g, 'app'), _h: g.n, _rk: navRank(g), _arc: true }));
 }
+const ageShort = (sec: number) => (sec < 3600 ? `${Math.round(sec / 60)} min` : sec < 86400 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} d`);
 export function navListRows(r: NavReport | null) {
   if (!r) return [];
-  return navRows(r).map(({ s, second, range }) => ({
-    key: s.key, colour: navColour(s), flag: '', name: `${s.b1} · ${s.name}${s.conf === 'ambiguous' ? '?' : ''}`, second, sp: '', trend: 0 as const,
-    range, brg: '', noPos: false, age: s.seen < 3600 ? `${Math.round(s.seen / 60)} min` : s.seen < 86400 ? `${Math.round(s.seen / 3600)} h` : `${Math.round(s.seen / 86400)} d`, em: false,
+  return navRows(r).map(({ g, second, range }) => ({
+    key: g.key, colour: navSiteColour(g), flag: '', name: `${g.name}${g.conf === 'ambiguous' ? '?' : ''}`, second, sp: '', trend: 0 as const,
+    range, brg: '', noPos: false, age: ageShort(g.seen), em: false,
   }));
 }
+export function navRowAge(sec: number): string { return ageShort(sec); }

@@ -41,7 +41,12 @@ fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: tru
 const rtlPort = await freePort(), port = await freePort(), dbg = await freePort();
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000'], { stdio: 'ignore' });
 await sleep(400);
-const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
+// ★ the real basemap, as an installed server has it: the GPU map's packs and style (test-web-spots' way) and the bundled
+//   vector map — without them the page draws an empty grid and the screenshots show no land
+const MAPGL = path.join(dir, 'mapgl'); fs.mkdirSync(MAPGL);
+for (const n of fs.readdirSync(path.join(root, 'directory/public/mapgl'))) fs.symlinkSync(path.join(root, 'directory/public/mapgl', n), path.join(MAPGL, n));
+fs.copyFileSync(path.join(root, 'web/mapkit/vibemap-style.json'), path.join(MAPGL, 'vibemap-style.json'));
+const env = { ...process.env, VIBESERVER_MAPGL_DIR: MAPGL, VIBESERVER_MAPDATA_DIR: path.join(root, 'assets/mapdata'), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2400000', '--freq', '518000', '--mode', 'usb', '--users', '1'],
                   { env, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'w'), 'ignore'] });
 const edge = spawn(EDGE, ['--headless=new', '--mute-audio', '--disable-audio-output', `--remote-debugging-port=${dbg}`, '--no-first-run', '--no-default-browser-check',
@@ -60,6 +65,10 @@ try {
   ok(all.stations.length >= 5 && all.messages > 0, `stations folded from the gallery: ${all.stations.length}`);
   ok(all.rx && Math.abs(all.rx.lat - 52.3) < 0.2, 'the receiver is the server\'s own position (IO92nh)');
   ok(all.stations.every((s) => s.first <= s.last && s.n >= s.uniq && s.recent.length > 0 && s.recent.length <= 12), 'each: first ≤ last, received ≥ different, newest ids (≤ 12)');
+  // ★ co-sited letters are ONE marker (src/services/navtexMap.ts navSites): the same name and place, a "?" on its own
+  const sitesOf = (j) => { const g = []; for (const x of j.stations) { if (x.conf !== 'ambiguous' && g.some((y) => !y.q && y.name === x.name && Math.abs(y.lat - x.lat) < 0.5 && Math.abs(y.lon - x.lon) < 0.8)) continue; g.push({ q: x.conf === 'ambiguous', name: x.name, lat: x.lat, lon: x.lon }); } return g.length; };
+  const nSites = sitesOf(all);
+  ok(nSites < all.stations.length, `co-sited letters grouped: ${all.stations.length} stations at ${nSites} sites`);
   const day = await fetch(`${H}/vibeserver/gallery/navtex-stations.json?since=3600`).then((r) => r.json());
   ok(day.messages <= all.messages, `the time filter: 1 h holds ${day.messages} of ${all.messages}`);
 
@@ -84,18 +93,18 @@ try {
   await ev(`document.getElementById('galleryBtn').click()`);
   ok(await until(`!!document.querySelector('#galList .galNav')`, 10000), 'the gallery has a standing "NAVTEX · stations received" row');
   const row = await ev(`document.querySelector('#galList .galNav')?.textContent || ''`);
-  ok(new RegExp(`${all.stations.length} stations · ${all.messages} messages`).test(row), `…which counts them: ${row.slice(0, 140)}`);
+  ok(new RegExp(`${nSites} sites · ${all.stations.length} stations · ${all.messages} messages`).test(row), `…which counts them: ${row.slice(0, 140)}`);
   console.log('   screenshot', await shot('navtex-gallery-row.png'));
   await ev(`document.querySelector('#galList .galNav .galMap').click()`);
-  ok(await until(`!!${view} && ${view}.querySelectorAll('.trkRow').length === ${all.stations.length}`, 10000), `MAP: the stations in its list (${await ev(`${view} ? ${view}.querySelectorAll('.trkRow').length : 0`)})`);
-  ok(await until(`document.querySelectorAll('.vtl-mk').length >= ${all.stations.length}`, 15000), `a marker per station: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
+  ok(await until(`!!${view} && ${view}.querySelectorAll('.trkRow').length === ${nSites}`, 10000), `MAP: the sites in its list (${await ev(`${view} ? ${view}.querySelectorAll('.trkRow').length : 0`)})`);
+  ok(await until(`document.querySelectorAll('.vtl-mk').length >= ${nSites}`, 15000), `a marker per site: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
   await sleep(4000);
   const arcs = Number(await ev(`document.querySelector('[data-vtl-arcs]')?.getAttribute('data-vtl-arcs') || 0`));
-  ok(arcs === all.stations.length, `a great-circle line from the receiver to each: ${arcs}`);
+  ok(arcs === nSites, `one great-circle line from the receiver to each site: ${arcs}`);
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
      === '1 H:false 24 H:false 7 DAYS:false 30 DAYS:false ALL:true', 'the time filter: five ranges, ALL by default (a received-stations view)');
   const st = await ev(`${view}.querySelector('.st').textContent`);
-  ok(/\d+ stations · \d+ messages · furthest/.test(st), `status: ${st}`);
+  ok(/\d+ sites · \d+ stations · \d+ messages · furthest/.test(st), `status: ${st}`);
   const dc = JSON.parse(await ev(`JSON.stringify((() => { const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
     const l = [...document.querySelectorAll('.vtl-mk .vtl-lb')].filter(x => getComputedStyle(x).display !== 'none').map(x => x.getBoundingClientRect());
     let o = 0; for (let i = 0; i < l.length; i++) for (let j = i + 1; j < l.length; j++) if (hit(l[i], l[j])) o++; return { o, n: l.length }; })())`));
@@ -105,14 +114,16 @@ try {
   await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Oostende|Cullercoats|Niton/.test(x.textContent)); r && r.click(); })()`);
   await sleep(2500);
   const card = await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`);
-  ok(/station [A-Z]/.test(card) && /first heard \d{4}-\d\d-\d\d/.test(card) && /messages? received · \d+ different/.test(card) && /Newest: [A-Z]{2}\d\d/.test(card), `a station's card: ${card.slice(0, 220)}`);
+  ok(/named in \d+ % of its messages/.test(card) && /stations? uses? letter [A-Z] on \d+(\.\d)? kHz/.test(card) && /schedule slot/.test(card), `the why: ${(card.match(/named in[^·]*|\d+ % ended[^·]*/g) || []).join(' | ')}`);
+  ok(/first heard \d{4}-\d\d-\d\d/.test(card) && /[A-Z] · \d+(\.\d)? kHz · \d+ received, \d+ different/.test(card) && /Newest: [A-Z]{2}\d\d/.test(card), `a station's card: ${card.slice(0, 220)}`);
+  ok(/Niton/.test(card) ? (card.match(/ · \d+(\.\d)? kHz · \d+ received/g) || []).length >= 2 : true, 'a co-sited card lists each of its letters');
   console.log('   screenshot', await shot('navtex-map-station.png'));
   // 7 DAYS by keyboard
   await ev(`${view}.querySelector('[data-rng="7d"]').focus()`);
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter' });
   const wk = await fetch(`${H}/vibeserver/gallery/navtex-stations.json?since=${7 * 86400}`).then((r) => r.json());
-  ok(await until(`${view}.querySelectorAll('.trkRow').length === ${wk.stations.length}`, 6000), `7 DAYS (keyboard): ${wk.stations.length} stations`);
+  ok(await until(`${view}.querySelectorAll('.trkRow').length === ${sitesOf(wk)}`, 6000), `7 DAYS (keyboard): ${sitesOf(wk)} sites`);
   ok(await ev(`localStorage.getItem('vibesdr.navMapRange') === '7d'`), '…remembered');
   await ev(`${view}.querySelector('[data-rng="all"]').click()`);
   await sleep(1500);

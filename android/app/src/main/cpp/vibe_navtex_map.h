@@ -171,10 +171,31 @@ struct Agg {
     std::vector<Recent> recent;                        ///< newest first, kRecent
     uint64_t night = 0;                                ///< receptions at night at the path's midpoint (DX evidence)
     uint64_t folded = 0;                               ///< messages whose label was a pair, settled by this station's own confident copies
+    // ── ★ the WHY (the card's reasons, 2026-11-01) ──
+    uint64_t outright = 0;                             ///< messages whose label named this station outright
+    uint64_t inSlot = 0;                               ///< messages saved inside the letter's transmit slot (slotFits)
 };
+/** ★★ THE NAVTEX SCHEDULE (IMO NAVTEX Manual / ITU-R M.540; NGA Pub. 117 lists the same plan): each letter transmits for
+ *  10 minutes every 4 hours — A at 00:00, 04:00 … B at 00:10 … X at 03:50 UTC. The gallery's time is when the message
+ *  ENDED (saved at NNNN), so a message fits its letter's slot when it ended between the slot's start and 25 minutes
+ *  after (a long message runs over; a station-specific schedule in Pub. 117 is not in our table — those count as not
+ *  fitting, never as evidence against). Evidence for the LETTER (a garbled B1 shows up as a run of misfits). */
+inline bool slotFits(char b1, int64_t t) {
+    if (b1 < 'A' || b1 > 'X') return false;
+    const int64_t start = (int64_t)(b1 - 'A') * 600;
+    const int64_t d = (((t % 14400) - start) % 14400 + 14400) % 14400;
+    return d <= 25 * 60;
+}
+/** How many stations in the world table use this letter on this band. */
+inline int sharing(char b1, double band) {
+    size_t n = 0; const navtex::Station* t = navtex::stations(n);
+    int c = 0; for (size_t i = 0; i < n; ++i) c += t[i].b1 == b1 && t[i].khz == band;
+    return c;
+}
 struct Result {
     std::vector<Agg> stations;                         ///< most recently heard first
     uint64_t messages = 0, unplaced = 0, scanned = 0;
+    uint64_t byRun = 0;                                ///< undecided labels settled by their transmission run
     int64_t oldest = 0;
 };
 
@@ -183,8 +204,15 @@ struct Result {
  *  resolver then gets the message's own evidence (positions, names, language), as the decoder's label would have had
  *  with a fuller table. Empty function = titles only. */
 using ReadText = std::function<std::string(const std::string& file)>;
+/** ★★ A TRANSMISSION RUN: a station sends its messages back to back in its slot, so every message on one band with one
+ *  letter in one slot window (the same 4-hour cycle of that letter's slot) is the same transmitter. The key. */
+inline std::string runKey(char b1, double band, int64_t t) {
+    const int64_t start = b1 >= 'A' && b1 <= 'X' ? (int64_t)(b1 - 'A') * 600 : 0;
+    return std::string(1, b1) + "|" + std::to_string((int)band) + "|" + std::to_string((long long)((t - start) / 14400));
+}
+using Runs = std::map<std::string, const navtex::Station*>;
 inline void take(std::map<std::string, Agg>& by, Result& res, const std::string& line, double rxLat, double rxLon, int64_t since,
-                 const ReadText& readText = nullptr) {
+                 const ReadText& readText = nullptr, Runs* runs = nullptr, bool settle = false) {
     if (line.find("\"k\":\"navtex\"") == std::string::npos) return;
     double t = 0, hz = 0;
     std::string title, file;
@@ -200,7 +228,15 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     const navtex::Station* st = nullptr;
     std::vector<const navtex::Station*> cands;
     std::string conf;
-    if (!ti.pair && !ti.generic && !ti.name.empty()) {
+    bool byRun = false;
+    // ★ the label could not decide, but its run did: a message in the same slot window named the station outright
+    if (settle && runs && (ti.pair || ti.generic)) {
+        const auto it = runs->find(runKey(ti.b1, band, (int64_t)t));
+        if (it != runs->end() && it->second) { st = it->second; conf = "likely"; byRun = true; }
+    }
+    if (byRun) {
+        // settled by the run (above)
+    } else if (!ti.pair && !ti.generic && !ti.name.empty()) {
         st = byName(ti.b1, band, ti.name, false);
         if (st) conf = ti.textNamed ? "likely" : "confident";
         else if ((st = byName(ti.b1, band, ti.name, true))) conf = "likely";     // ★ named by its text, another band in the table
@@ -237,6 +273,11 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
         }
     }
     if (!st) { res.unplaced++; return; }
+    if (runs && conf == "confident" && !ti.textNamed) {
+        auto& slot = (*runs)[runKey(ti.b1, band, (int64_t)t)];
+        if (!slot) slot = st; else if (slot != st) slot = nullptr;   // ★ two stations in one window: no inheritance
+    }
+    if (byRun) res.byRun++;
     const std::string key = conf == "ambiguous"
         ? std::string("?") + ti.b1 + "|" + std::to_string((int)band) + "|" + cands[0]->name + "|" + (cands.size() > 1 ? cands[1]->name : "")
         : std::string(1, ti.b1) + "|" + st->name;
@@ -246,6 +287,8 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     if (!a.n) { a.st = st; a.cands = cands; a.conf = conf; a.b1 = ti.b1; a.name = st->name; a.iso = st->iso; a.country = st->country; a.first = (int64_t)t; }
     else if (conf == "confident") a.conf = "confident";                    // ★ any confident copy settles it
     a.n++;
+    if (conf == "confident" && !ti.textNamed) a.outright++;
+    if (slotFits(ti.b1, (int64_t)t)) a.inSlot++;
     a.khz.insert(band ? band : hz / 1000.0);
     if ((int64_t)t < a.first) a.first = (int64_t)t;
     if ((int64_t)t > a.last) a.last = (int64_t)t;
@@ -258,23 +301,42 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     if (a.recent.size() > kRecent) a.recent.resize(kRecent);
 }
 
-/** ★ Stream the gallery's index (one line at a time) and fold the NAVTEX messages heard since `since` per station. */
-inline Result scanIndex(const std::string& indexPath, double rxLat, double rxLon, int64_t since, const ReadText& readText = nullptr) {
-    Result res;
-    std::map<std::string, Agg> by;
-    FILE* f = std::fopen(indexPath.c_str(), "r");
-    if (f) {
+/** ★★ The source: every live NAVTEX item's current line, oldest first. `each(fn)` calls fn(line) for each — the
+ *  gallery Store's forEachLive (the append-only index read through its table: replaced and removed items never seen
+ *  twice or at all), or a plain file of lines for tests and tools. */
+using EachLine = std::function<void(const std::function<void(const std::string&)>&)>;
+inline EachLine fileLines(const std::string& path) {
+    return [path](const std::function<void(const std::string&)>& fn) {
+        FILE* f = std::fopen(path.c_str(), "r");
+        if (!f) return;
         char buf[4096];
         std::string cur;
         while (std::fgets(buf, sizeof buf, f)) {
             cur += buf;
-            if (cur.back() != '\n') { if (cur.size() > 65536) cur.clear(); continue; }   // ★ a line longer than any we write: dropped
+            if (cur.back() != '\n') { if (cur.size() > 65536) cur.clear(); continue; }
             cur.pop_back();
-            take(by, res, cur, rxLat, rxLon, since, readText);
+            fn(cur);
             cur.clear();
         }
         std::fclose(f);
-    }
+    };
+}
+/** ★ Fold the NAVTEX messages heard since `since` per station. A title the label could not name whose text is wanted
+ *  is DEFERRED (the line kept, at most kDefer) and read after the walk — `each` may hold the Store's lock. */
+static constexpr size_t kDefer = 4000;
+inline Result scan(const EachLine& each, double rxLat, double rxLon, int64_t since, const ReadText& readText = nullptr) {
+    Result res;
+    std::map<std::string, Agg> by;
+    std::vector<std::string> later;
+    Runs runs;
+    // ★ pass 1: every title that names its station (and records its run); the undecided ones — "Station F", a pair —
+    //   are kept (≤ kDefer) for pass 2, after every run is known
+    each([&](const std::string& l) {
+        const bool undecided = l.find("\"title\":\"Station ") != std::string::npos || l.find("? \xc2\xb7 ") != std::string::npos;
+        if (undecided && later.size() < kDefer) { later.push_back(l); return; }
+        take(by, res, l, rxLat, rxLon, since, nullptr, &runs, false);
+    });
+    for (const auto& l : later) take(by, res, l, rxLat, rxLon, since, readText, &runs, true);
     /* ★ A PAIR SETTLED BY THE REST OF THE HISTORY: "M · Jeløy or …?" when Jeløy on that letter and band has been named
      *  outright (or likely, from its messages' own text) by other messages, and no other candidate has — the pair's
      *  messages join it (counted as `folded`). Otherwise the pair stays a "?". */
@@ -289,7 +351,7 @@ inline Result scanIndex(const std::string& indexPath, double rxLat, double rxLon
             }
         if (homes != 1) home = nullptr;
         if (!home) { ++it; continue; }
-        home->n += a.n; home->folded += a.n; home->night += a.night;
+        home->n += a.n; home->folded += a.n; home->night += a.night; home->inSlot += a.inSlot;
         home->first = std::min(home->first, a.first); home->last = std::max(home->last, a.last);
         for (auto& i : a.ids) home->ids.insert(i);
         for (auto& s2 : a.subj) home->subj[s2.first] += s2.second;
@@ -301,6 +363,11 @@ inline Result scanIndex(const std::string& indexPath, double rxLat, double rxLon
     for (auto& kv : by) res.stations.push_back(std::move(kv.second));
     std::sort(res.stations.begin(), res.stations.end(), [](const Agg& x, const Agg& y) { return x.last > y.last; });
     return res;
+}
+
+/** A file of index lines (tests, tools). */
+inline Result scanIndex(const std::string& indexPath, double rxLat, double rxLon, int64_t since, const ReadText& readText = nullptr) {
+    return scan(fileLines(indexPath), rxLat, rxLon, since, readText);
 }
 
 inline std::string jesc(const std::string& s) {
@@ -318,8 +385,8 @@ inline std::string toJson(const Result& r, double rxLat, double rxLon, int64_t n
     std::string o = "{";
     if (std::isfinite(rxLat) && std::isfinite(rxLon)) { std::snprintf(b, sizeof b, "\"rx\":{\"lat\":%.4f,\"lon\":%.4f},", rxLat, rxLon); o += b; }
     else o += "\"rx\":null,";
-    std::snprintf(b, sizeof b, "\"now\":%lld,\"messages\":%llu,\"unplaced\":%llu,\"oldest\":%lld,\"stations\":[", (long long)now,
-                  (unsigned long long)r.messages, (unsigned long long)r.unplaced, (long long)r.oldest);
+    std::snprintf(b, sizeof b, "\"now\":%lld,\"messages\":%llu,\"unplaced\":%llu,\"byRun\":%llu,\"oldest\":%lld,\"stations\":[", (long long)now,
+                  (unsigned long long)r.messages, (unsigned long long)r.unplaced, (unsigned long long)r.byRun, (long long)r.oldest);
     o += b;
     bool firstS = true;
     for (const Agg& a : r.stations) {
@@ -335,6 +402,27 @@ inline std::string toJson(const Result& r, double rxLat, double rxLon, int64_t n
         o += "],\"subj\":{";
         f1 = true; for (const auto& s : a.subj) { if (!f1) o += ','; f1 = false; std::snprintf(b, sizeof b, "\"%c\":%llu", s.first, (unsigned long long)s.second); o += b; }
         o += "}";
+        // ★ the why: messages named outright, inside the letter's slot; how many stations share the letter and band; the
+        //   nearest two of them to the receiver
+        {
+            const double band = a.khz.empty() ? 0 : *a.khz.begin();
+            std::snprintf(b, sizeof b, ",\"outright\":%llu,\"inSlot\":%llu,\"share\":%d", (unsigned long long)a.outright,
+                          (unsigned long long)a.inSlot, sharing(a.b1, band));
+            o += b;
+            if (std::isfinite(rxLat)) {
+                size_t n = 0; const navtex::Station* t = navtex::stations(n);
+                std::vector<std::pair<double, const navtex::Station*>> near;
+                for (size_t i = 0; i < n; ++i) if (t[i].b1 == a.b1 && t[i].khz == band) near.push_back({navtex::km(rxLat, rxLon, t[i].lat, t[i].lon), &t[i]});
+                std::sort(near.begin(), near.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
+                o += ",\"near\":[";
+                for (size_t i = 0; i < near.size() && i < 3; ++i) {
+                    if (i) o += ',';
+                    std::snprintf(b, sizeof b, "{\"km\":%.0f,\"name\":\"", near[i].first);
+                    o += b; o += jesc(near[i].second->name) + "\",\"iso\":\"" + jesc(near[i].second->iso) + "\"}";
+                }
+                o += "]";
+            }
+        }
         if (a.conf == "ambiguous" && a.cands.size() > 1) {
             o += ",\"cands\":[";
             for (size_t i = 0; i < a.cands.size(); ++i) {

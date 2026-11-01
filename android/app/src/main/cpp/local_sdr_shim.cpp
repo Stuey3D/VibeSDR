@@ -23517,7 +23517,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     o.resize(n > 0 ? (size_t)n : 0);
                     return o;
                 };
-                const auto r = have ? vibe::navmap::scanIndex(idx, rxLat, rxLon, since ? now - since : 0, readText) : vibe::navmap::Result{};
+                // ★★ through the Store's live view (the append-only index with its replacements and removals applied)
+                const vibe::navmap::EachLine each = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
+                const auto r = have ? vibe::navmap::scan(each, rxLat, rxLon, since ? now - since : 0, readText) : vibe::navmap::Result{};
                 const std::string j = vibe::navmap::toJson(r, rxLat, rxLon, now);
                 { std::lock_guard<std::mutex> lk(cMtx); if (cache.size() > 8) cache.clear(); cache[since] = { stamp, j }; }
                 reply("200 OK", "application/json", j);

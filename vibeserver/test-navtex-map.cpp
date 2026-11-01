@@ -5,6 +5,8 @@
 //   test-navtex-map [<index.jsonl> <files dir>]   (default: scripts/navtex-fixtures)
 // Build: g++ -std=c++17 -O2 -I android/app/src/main/cpp -o test-navtex-map vibeserver/test-navtex-map.cpp
 #include "vibe_navtex_map.h"
+#include "vibe_gallery.h"
+#include <cstdlib>
 
 #include <cstdio>
 #include <string>
@@ -43,6 +45,14 @@ int main(int argc, char** argv) {
         const navtex::Station* boston = nullptr; for (size_t i = 0; i < n; ++i) if (std::string(t[i].name) == "Boston" && t[i].khz == 518) boston = &t[i];
         ok(boston && navmap::plausible(boston, LA, LO, mid) && !navmap::plausible(boston, LA, LO, noon), "Boston 518 (5 300 km) from England: plausible at night, not at noon");
     }
+    std::printf("── the schedule slot ──\n");
+    {
+        const int64_t day = 1793491200;   // 2026-11-01 00:00 UTC
+        ok(navmap::slotFits('A', day + 300) && navmap::slotFits('T', day + 3 * 3600 + 14 * 60 + 48) && navmap::slotFits('E', day + 4 * 3600 + 40 * 60 + 600),
+           "A ending 00:05, T ending 03:14:48 (slot 03:10), E ending 04:50 (slot 04:40, every 4 h): in their slots");
+        ok(!navmap::slotFits('A', day + 1800) && !navmap::slotFits('Z', day), "A ending 00:30, and Z (no slot): not");
+        ok(navmap::sharing('E', 518) >= 2, "several stations share E on 518 kHz worldwide");
+    }
     std::printf("── the fold ──\n");
     {
         const int64_t T = 1793500000;
@@ -55,6 +65,22 @@ int main(int argc, char** argv) {
         ok(r.unplaced == 1, "a start-lost message is counted as not placed");
         navmap::take(by, r, line(g + "11", 517500, T - 999999), LA, LO, T - 1000);
         ok(by.begin()->second.n == 30, "`since`: an older message is left out");
+    }
+    std::printf("── transmission runs ──\n");
+    {
+        // a run in E's slot (00:40, 04:40 …): one message named Niton outright, then two whose label could not decide
+        const int64_t c = 1793491200 + 4 * 3600 + 40 * 60;   // 04:40 UTC
+        std::vector<std::string> lines = {
+            line("E \xc2\xb7 Niton, United Kingdom \xc2\xb7 Nav warning \xc2\xb7 #11", 517500, c + 120),
+            line("Station E \xc2\xb7 Nav warning \xc2\xb7 #12", 517500, c + 300),
+            line("E \xc2\xb7 Niton \xf0\x9f\x87\xac\xf0\x9f\x87\xa7 or Corsen \xf0\x9f\x87\xab\xf0\x9f\x87\xb7? \xc2\xb7 Nav warning \xc2\xb7 #13", 517500, c + 480),
+            line("Station E \xc2\xb7 Nav warning \xc2\xb7 #14", 517500, c + 4 * 3600 + 300),   // the NEXT cycle: no run with a name
+        };
+        const navmap::EachLine each = [&](const std::function<void(const std::string&)>& fn) { for (auto& l : lines) fn(l); };
+        const auto r = navmap::scan(each, LA, LO, 0, [](const std::string&) { return std::string(); });
+        uint64_t niton = 0; for (auto& a : r.stations) if (a.name == "Niton") niton += a.n;
+        ok(r.byRun == 2, "the two undecided messages in Niton's run inherit it (" + std::to_string((unsigned long long)r.byRun) + ")");
+        ok(niton >= 3, "…Niton holds the run's three messages");
     }
     std::printf("── the real fixture set (Stuart's Lenovo, IO92nh) ──\n");
     {
@@ -73,6 +99,37 @@ int main(int argc, char** argv) {
         ok(sorted, "most recently heard first");
         const std::string j = navmap::toJson(res, LA, LO, 1793560000);
         ok(j.find("\"stations\":[") != std::string::npos && j.find("\"rx\":{\"lat\":52.3020") != std::string::npos && j.size() < 200000, "the JSON: stations, the receiver, bounded (" + std::to_string(j.size()) + " B)");
+    }
+    std::printf("── through the Store's live view (append-only index: replacements and removals) ──\n");
+    {
+        char tmpl[256]; std::snprintf(tmpl, sizeof tmpl, "%s/navmap-store-XXXXXX", std::getenv("TMPDIR") ? std::getenv("TMPDIR") : "/tmp");
+        const std::string dir = mkdtemp(tmpl) ? std::string(tmpl) : std::string("/tmp/navmap-store");
+        gallery::Store st; st.setDir(dir); st.setLimitBytes(64ull << 10);   // ★ 64 KB: older items must go
+        const std::string body(1500, 'x');
+        std::vector<std::string> names;
+        for (int i = 0; i < 80; ++i) {
+            gallery::Meta m; m.kind = "navtex"; m.origin = "background"; m.freqHz = 517500; m.mode = "usb"; m.decoder = "navtex";
+            m.utc = 1793500000 + i * 60;
+            m.title = std::string("G \xc2\xb7 Cullercoats, United Kingdom \xc2\xb7 Nav warning \xc2\xb7 #") + (i < 10 ? "0" : "") + std::to_string(i % 100);
+            const std::string n = st.create(m, "txt", body);
+            st.close(n);
+            names.push_back(n);
+        }
+        // one item replaced in place: it becomes Niton's — counted once, under its new title
+        gallery::Meta m; m.kind = "navtex"; m.origin = "background"; m.freqHz = 517500; m.mode = "usb"; m.decoder = "navtex"; m.utc = 1793500000 + 79 * 60;
+        m.title = "E \xc2\xb7 Niton, United Kingdom \xc2\xb7 Nav warning \xc2\xb7 #79";
+        const bool rep = st.replace(names.back(), m, body);
+        const size_t live = st.itemCount();
+        const std::string rawIdx = [&] { std::string o; FILE* f = std::fopen((dir + "/index.jsonl").c_str(), "r"); char b[4096]; size_t n; while (f && (n = std::fread(b, 1, sizeof b, f)) > 0) o.append(b, n); if (f) std::fclose(f); return o; }();
+        size_t rawLines = 0; for (char c : rawIdx) rawLines += c == '\n';
+        const navmap::EachLine each = [&st](const std::function<void(const std::string&)>& fn) { st.forEachLive("navtex", fn); };
+        const auto r = navmap::scan(each, LA, LO, 0);
+        uint64_t total = 0; for (auto& a : r.stations) total += a.n;
+        auto n = [&](const char* name) { for (auto& a : r.stations) if (a.name == name) return a.n; return (uint64_t)0; };
+        std::printf("    %zu live items, %zu raw index lines; the map counted %llu\n", live, rawLines, (unsigned long long)total);
+        ok(rep && live < 80 && rawLines > live, "the store evicted and replaced (raw index " + std::to_string(rawLines) + " lines, " + std::to_string(live) + " live)");
+        ok(total == live, "the map counts exactly the live items — never a removed or a replaced line");
+        ok(n("Niton") == 1 && n("Cullercoats") == live - 1, "the replaced item counts once, under its new title");
     }
     std::printf("── bounded ──\n");
     {

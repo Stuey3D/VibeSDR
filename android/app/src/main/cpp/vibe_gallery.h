@@ -473,6 +473,29 @@ public:
         if (fd >= 0) ::close(fd);
         return out;
     }
+    /** ★★ V12 2026-11-01 (the NAVTEX map): every LIVE item of `kind` ("" = all), oldest first, as its CURRENT line —
+     *  replacements and removals already applied (the append-only index read through the table, never raw). Streamed:
+     *  one pread an item, under the read lock — so `fn` must NOT call back into the Store (resolve, field …); collect
+     *  what needs it and ask after. Returns false when there is no gallery. */
+    template <class Fn> bool forEachLive(const std::string& kind, Fn&& fn) const {
+        const std::string dir = this->dir();
+        if (dir.empty()) return false;
+        Lock fl(dir, true);
+        std::lock_guard<std::mutex> ck(cacheMtx_);
+        if (!refresh(dir)) return false;
+        int want = -2;
+        if (!kind.empty()) { want = -1; for (size_t k = 0; k < cache_.kinds.size(); k++) if (cache_.kinds[k] == kind) want = (int)k; }
+        if (want == -1) return true;
+        const int fd = openIndex(dir);
+        std::string l;
+        for (size_t i = cache_.firstLive; fd >= 0 && i < cache_.rows.size(); i++) {
+            const Row& r = cache_.rows[i];
+            if ((r.flags & kDead) || (want >= 0 && r.kind != want)) continue;
+            if (lineAt(fd, r, l)) fn(stripRe(l));
+        }
+        if (fd >= 0) ::close(fd);
+        return true;
+    }
     /** ★★★ A NAME FROM THE NETWORK → a path, only if it is one of ours. */
     bool resolve(const std::string& name, std::string& path, std::string& ctype) const {
         std::string l;

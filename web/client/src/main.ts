@@ -24,8 +24,8 @@ import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
-import { navSanitise, navIcon, navLabel, navCard, navRows, navStatus, navRank, navRangeOf, navSince, navColour, NAV_RANGES, NAV_RANGE_HINT,
-         NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
+import { navSanitise, navIcon, navLabel, navCard, navRows, navStatus, navRank, navRangeOf, navSince, navSiteColour, navSites, navRowAge,
+         NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation, type NavSite } from '../../../src/services/navtexMap';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -8814,20 +8814,21 @@ async function navFetch(range: string): Promise<NavReport | null> {
 }
 function navRowsHtml(r: NavReport): string {
   if (!r.stations.length) return `<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`;
-  return navRows(r).map(({ s, second, range }) => `<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(s.key)}">`
-    + `<span class="id"><b><i class="sw" style="background:${navColour(s)}"></i>${escapeHtml(s.b1 + ' · ' + s.name + (s.conf === 'ambiguous' ? '?' : ''))}</b><small>${escapeHtml(second)}</small></span>`
-    + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(s.seen < 3600 ? `${Math.round(s.seen / 60)} min` : s.seen < 86400 ? `${Math.round(s.seen / 3600)} h` : `${Math.round(s.seen / 86400)} d`)}</span></div>`).join('');
+  return navRows(r).map(({ g, second, range }) => `<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
+    + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(g.name + (g.conf === 'ambiguous' ? '?' : ''))}</b><small>${escapeHtml(second)}</small></span>`
+    + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`).join('');
 }
 async function navMapOpen() {
   const draw = (r: NavReport | null) => {
     if (!navView) return;
     const rx = myPos() ?? r?.rx ?? null;
-    navView.update(r?.stations ?? [], r ? navRowsHtml(r) : '', navStatus(r), r?.stations.length ?? 0, rx);
+    const sites = navSites(r);   // ★ co-sited letters are one marker
+    navView.update(sites, r ? navRowsHtml(r) : '', navStatus(r), sites.length, rx);
   };
   if (!navView) navView = new TrackView({
     title: 'NAVTEX · stations received', exitLabel: 'CLOSE MAP', listTitle: 'STATIONS',
     onExit: () => { navView?.hide(); if (navTimer) { clearInterval(navTimer); navTimer = null; } },
-    icon: navIcon, label: navLabel, card: (s: NavStation) => navCard(s), labelZoom: 3, focusZoom: 6, heard: (s: NavStation) => s.n,
+    icon: navIcon, label: navLabel, card: (g: NavSite) => navCard(g), labelZoom: 3, focusZoom: 6, heard: (g: NavSite) => g.n,
     labelRank: navRank, arc: () => true,
     ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
     onRange: (id) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navFetch(id).then(draw); },
@@ -16188,7 +16189,7 @@ async function renderGallery(page = galPage) {
         const f = document.createElement('span'); f.className = 'f'; f.textContent = 'NAVTEX';
         const n = document.createElement('span'); n.className = 'n';
         const far = nr.stations.reduce((b, x) => (x.km !== undefined && x.km > (b?.km ?? 0) ? x : b), null as NavStation | null);
-        n.appendChild(document.createTextNode(`NAVTEX · stations received: ${nr.stations.length} stations · ${nr.messages} messages`
+        n.appendChild(document.createTextNode(`NAVTEX · stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
           + (far ? ` · furthest ${far.name} ${Math.round(far.km!).toLocaleString('en-GB')} km` : '')));
         n.appendChild(document.createElement('br'));
         const src = document.createElement('span'); src.className = 'src';
