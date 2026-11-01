@@ -66,7 +66,8 @@ const J = (o: object) => JSON.parse(JSON.stringify(o));
 {
   const body = cut(/function spotsTitle\(\): string \{\n([\s\S]*?)\n\}/, 'spotsTitle');
   if (body) {
-    const web = new Function('spotBandAt', `return function (bandSpots, spotBandCap, spec, spotModes) {\n${body}\n};`)(spotBandAt) as
+    // ★ aaa2060e3: Band is the VFO it runs on (vfoNow(spotsVfo)) — here VFO A, whose status is `spec`.
+    const web = new Function('spotBandAt', `return function (bandSpots, spotBandCap, spec, spotModes) {\n const spotsVfo = 'A', vfoNow = () => spec;\n${body}\n};`)(spotBandAt) as
       (b: boolean, cap: any, spec: any, modes: string[]) => string;
     const cap = parseSpotsBandCap({ spotsBand: true, spotBands: BANDS })!;
     for (const [band, hz, modes] of [[true, 14_074_000, ['FT8']], [true, 10_136_000, ['FT8']], [false, 14_074_000, ['FT8', 'FT4']],
