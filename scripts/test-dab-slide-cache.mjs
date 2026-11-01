@@ -63,7 +63,7 @@ const srv = spawn('nice', ['-n', '10', BIN, '--tcp', `127.0.0.1:${rtlPort}`, '--
 let br = null;
 const base = `http://127.0.0.1:${port}`;
 const get = async (p, headers = {}) => { const r = await fetch(base + p, { headers, cache: 'no-store' }); const b = Buffer.from(await r.arrayBuffer());
-  return { status: r.status, etag: r.headers.get('etag'), cc: r.headers.get('cache-control') || '', len: b.length }; };
+  return { status: r.status, etag: r.headers.get('etag'), cc: r.headers.get('cache-control') || '', len: b.length, body: b }; };
 
 try {
   for (let i = 0; i < 100; i++) {
@@ -142,9 +142,13 @@ try {
     await call('Page.navigate', { url: `${base}/` });
     await connect();
     // The page joins the multiplex the radio is already on and draws the list; the seeded row falls back to its slide.
+    // ★ 40e0e52a1 (the persistent logo cache): once the keep-a-copy fetch lands, the row draws the SAME picture from the
+    //   data: copy it filed (logoStoreWeb `show`) — within moments of the first draw. Either is this station's own picture.
+    const seeded = (await get('/vibeserver/dabslide?sid=49153')).body.toString('base64');
     let drawn = false;
-    for (let i = 0; i < 200 && !drawn; i++) { await sleep(150); drawn = !!(await js(`!!document.querySelector('img.dabLogo[src*="dabslide?sid=49153"]')`)); }
-    if (!drawn) console.log('      (page: ' + await js(`JSON.stringify({ gate: !!document.getElementById('audioGate'), imgs: [...document.querySelectorAll('img')].map((i) => i.getAttribute('src')).filter((s) => s && s.includes('dab')).slice(0, 8), rows: document.querySelectorAll('.dabRow, .dabSvc, [data-sid]').length, dabOn: document.body.className })`) + ')');
+    for (let i = 0; i < 200 && !drawn; i++) { await sleep(150); drawn = !!(await js(`[...document.querySelectorAll('img.dabLogo')].some((i) => {
+      const s = i.getAttribute('src') || ''; return s.includes('dabslide?sid=49153') || (s.startsWith('data:image/') && s.endsWith(',${seeded}')); })`)); }
+    if (!drawn) console.log('      (page: ' + await js(`JSON.stringify({ gate: !!document.getElementById('audioGate'), imgs: [...document.querySelectorAll('img.dabLogo')].map((i) => (i.getAttribute('src') || '').slice(0, 60)).slice(0, 8), rows: document.querySelectorAll('.dabRow, .dabSvc, [data-sid]').length, dabOn: document.body.className })`) + ')');
     ok(drawn, 'the station list draws the seeded row from its off-air picture');
     const mark = seen.length;
     await sleep(10000);
