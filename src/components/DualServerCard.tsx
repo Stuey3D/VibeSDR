@@ -315,6 +315,7 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
             {hint && !ended && !asking && (
               <View style={s.hintRow}>
                 <Text style={[s.hint, { color: colour }]}>{DUAL_CARD_HINT}</Text>
+                {/* nav-skip: the card itself (dualCard, pad-reachable) dismisses the hint on its press — hintDone(). */}
                 <TouchableOpacity onPress={hintDone} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   accessibilityRole="button" accessibilityLabel="Dismiss the hint">
                   <Text style={[s.hintX, { color: colour }]}>✕</Text>

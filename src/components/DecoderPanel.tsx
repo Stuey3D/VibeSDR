@@ -1649,6 +1649,7 @@ export default function DecoderPanel({
               const fam = sfModes.find((f) => f !== 'ALL' && spotModeMatches(m.mode, f, spotModes ?? SF_MODES_UBERSDR));
               const sel = !!fam && sfMode === fam;
               const dimmed = sfMode !== 'ALL' && !sel;
+              // nav-skip: a touch shortcut for the MODE key (sfMode), which the pad reaches — ALL included.
               return (
                 <Pressable key={m.mode} accessibilityRole="button"
                       accessibilityLabel={spotChipText(m) + (fam ? (sel ? ', showing only this mode — tap for every mode' : ', tap to show only this mode') : '')}
