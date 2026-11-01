@@ -17,6 +17,7 @@
 //       do not decode a block.
 #pragma once
 #include "vibe_avi_front.h"
+#include "vibe_avi_workers.h"
 #include "vibe_vdl2_fec.h"
 #include "vibe_vdl2_simd.h"
 #include "vibe_acars.h"
@@ -30,6 +31,7 @@
 #include <cstdlib>
 #include <numeric>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -579,9 +581,12 @@ inline std::vector<double> defaultChannels() {
     return v;
 }
 
+/** ★ The channels' demodulators run on `workers` threads (vibe_avi_workers.h; default from the core count, 0 = all on the
+ *  caller's thread). Frames are collected per channel and handed out on the CALLER's thread at the next feed()/flush(),
+ *  in channel order then time. `lossless` (offline tools): the front end waits for a worker instead of dropping. */
 class Receiver {
 public:
-    Receiver(double rate, double hwCentreHz, const std::vector<double>& chanHz)
+    Receiver(double rate, double hwCentreHz, const std::vector<double>& chanHz, int workers = vibeavi::defaultWorkers(), bool lossless = false)
         : mc_(rate, hwCentreHz, chanHz, 12500, 30000, tuning().binHz) {
         /* ★★ THE RECEIVE LOW-PASS IN THE FREQUENCY DOMAIN (2026-11-01): flat to rxBw, a raised-cosine roll to rxBw + rxTr,
          *  nothing beyond — the same corners the 58-tap Blackman FIR had, applied to each channel's slice (bins of 293 Hz:
@@ -604,18 +609,42 @@ public:
         for (size_t c = 0; c < chanHz.size(); ++c) {
             demod_.emplace_back(new Demod(mc_.chanRate()));
             demod_.back()->setChannel(int(c), chanHz[c]);
+            got_.emplace_back(new Pending);
         }
+        if (const char* only = std::getenv("VDL2_ONLY")) {   // ★ benches: decode only these channel indices (the front stays the same)
+            active_.assign(chanHz.size(), false);
+            for (const char* p = only; *p;) { const int c = std::atoi(p); if (c >= 0 && c < int(chanHz.size())) active_[size_t(c)] = true; while (*p && *p != ',') ++p; if (*p) ++p; }
+        } else active_.assign(chanHz.size(), true);
+        wk_.reset(new vibeavi::Workers(mc_, workers, [this](int c, const cf32* z, int k) {
+            if (!active_[size_t(c)]) return;
+            Pending& g = *got_[size_t(c)];
+            demod_[size_t(c)]->feed(z, k, [&](const Frame& f) { std::lock_guard<std::mutex> lk(g.m); g.v.push_back(f); });
+        }, lossless));
     }
-    template <class Out> void feed(const cf32* iq, size_t n, Out&& out) {
-        mc_.feed(iq, n, [&](int c, const cf32* z, int k) { demod_[size_t(c)]->feed(z, k, out); });
-    }
+    ~Receiver() { wk_.reset(); }
+    template <class Out> void feed(const cf32* iq, size_t n, Out&& out) { wk_->feed(iq, n); drain_(out); }
+    /** Wait for every worker, then hand out what they found. */
+    template <class Out> void flush(Out&& out) { wk_->flush(); drain_(out); }
     const vibeavi::MultiChannel& front() const { return mc_; }
     const Demod& demod(size_t c) const { return *demod_[c]; }
     size_t channels() const { return demod_.size(); }
+    int workers() const { return wk_->workers(); }
+    uint64_t dropped() const { return wk_->dropped(); }
 
 private:
+    struct Pending { std::mutex m; std::vector<Frame> v; };
+    template <class Out> void drain_(Out& out) {
+        for (auto& g : got_) {
+            std::vector<Frame> v;
+            { std::lock_guard<std::mutex> lk(g->m); v.swap(g->v); }
+            for (const Frame& f : v) out(f);
+        }
+    }
     vibeavi::MultiChannel mc_;
     std::vector<std::unique_ptr<Demod>> demod_;
+    std::vector<std::unique_ptr<Pending>> got_;
+    std::vector<bool> active_;
+    std::unique_ptr<vibeavi::Workers> wk_;
 };
 
 }  // namespace vibevdl2

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <map>
 #include <random>
 #include <string>
@@ -141,7 +142,7 @@ static Res synth(double fs, double snrDb, int nb, uint32_t seed) {
             const double off = (ch[c] - hw) + (double(int(rng() % 801)) - 400.0);
             addBurst(cap, fs, off, A, size_t(fs * (0.02 + per * i + 0.01 * c)), burstSymbols({ f }), (rng() % 1000) * 0.00628);
         }
-    vibevdl2::Receiver rx(fs, hw, ch);
+    vibevdl2::Receiver rx(fs, hw, ch, 0);
     Res r;
     for (size_t o = 0; o < total; o += 65536)
         rx.feed(cap.data() + o, std::min<size_t>(65536, total - o), [&](const vibevdl2::Frame& f) {
@@ -173,7 +174,9 @@ static int cu8(int argc, char** argv) {
     if (ch.empty()) ch = vibevdl2::defaultChannels();
     FILE* f = std::fopen(argv[2], "rb");
     if (!f) { std::perror(argv[2]); return 2; }
-    vibevdl2::Receiver rx(rate, hw, ch);
+    const int nw = std::getenv("VDL2_WORKERS") ? std::atoi(std::getenv("VDL2_WORKERS")) : 0;
+    vibevdl2::Receiver rx(rate, hw, ch, nw, /*lossless=*/true);
+    std::vector<vibevdl2::Frame> all;
     std::vector<uint8_t> buf(1 << 18);
     std::vector<cf32> z(1 << 17);
     size_t samples = 0; int n = 0, acars = 0;
@@ -185,14 +188,18 @@ static int cu8(int argc, char** argv) {
         if (!r) break;
         vibeavi::u8ToCf(buf.data(), r, z.data());
         samples += r;
-        rx.feed(z.data(), r, [&](const vibevdl2::Frame& fr) {
-            ++n; acars += fr.hasAcars;
-            if (fr.src.type == 1) aircraft[fr.src.addr]++;
-            if (fr.dst.type == 1) aircraft[fr.dst.addr]++;
-            if (!quiet) printFrame(fr);
-        });
+        rx.feed(z.data(), r, [&](const vibevdl2::Frame& fr) { all.push_back(fr); });
     }
     std::fclose(f);
+    rx.flush([&](const vibevdl2::Frame& fr) { all.push_back(fr); });
+    // ★ workers hand frames out in their own order: print in (channel, time) order so every run compares line for line
+    std::stable_sort(all.begin(), all.end(), [](const vibevdl2::Frame& a, const vibevdl2::Frame& b) { return a.channel != b.channel ? a.channel < b.channel : a.t < b.t; });
+    for (const auto& fr : all) {
+        ++n; acars += fr.hasAcars;
+        if (fr.src.type == 1) aircraft[fr.src.addr]++;
+        if (fr.dst.type == 1) aircraft[fr.dst.addr]++;
+        if (!quiet) printFrame(fr);
+    }
     const double el = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
     for (size_t c = 0; c < rx.channels(); ++c) {
         const auto& s = rx.demod(c).stats();
@@ -202,8 +209,8 @@ static int cu8(int argc, char** argv) {
                     (unsigned long long)s.rsFail, (unsigned long long)s.frames, (unsigned long long)s.fcsBad,
                     (unsigned long long)s.rsFixed, (unsigned long long)s.erasureSaves);
     }
-    std::printf("frames %d (ACARS %d), aircraft %zu, in %.0f s of capture; %.2f s here = %.2f %% of a core\n", n, acars, aircraft.size(),
-                samples / rate, el, 100.0 * el / (samples / rate));
+    std::printf("frames %d (ACARS %d), aircraft %zu, in %.0f s of capture; %.2f s here = %.2f %% of a core (%d workers, %llu blocks dropped)\n", n, acars, aircraft.size(),
+                samples / rate, el, 100.0 * el / (samples / rate), rx.workers(), (unsigned long long)rx.dropped());
     return 0;
 }
 
@@ -331,7 +338,7 @@ int main(int argc, char** argv) {
     std::printf("6. noise only: %s of capture, zero frames\n", quick ? "1 min" : "10 min");
     {
         const double fs = 2.4e6;
-        vibevdl2::Receiver rx(fs, 136.850e6, vibevdl2::defaultChannels());
+        vibevdl2::Receiver rx(fs, 136.850e6, vibevdl2::defaultChannels(), 0);
         std::normal_distribution<float> g(0.f, 0.05f);
         std::vector<cf32> blk(1 << 16);
         int got = 0;
@@ -345,10 +352,39 @@ int main(int argc, char** argv) {
         CHECK(got == 0, "noise produced %d frames", got);
     }
 
+    std::printf("6b. the worker ring: the producer never waits; overwritten blocks are skipped and counted\n");
+    {
+        vibeavi::BlockRing ring(8, 16);
+        std::atomic<bool> run{true};
+        std::vector<cf32> b(16), o(16);
+        for (int i = 0; i < 20; ++i) { b[0] = cf32(float(i), 0); ring.push(b.data(), i, false, run); }
+        long long bi = -1; int got = 0; float first = -1;
+        while (ring.pop(o.data(), bi)) { if (first < 0) first = o[0].real(); ++got; CHECK(o[0].real() == float(bi), "block %lld carries its own data", bi); }
+        CHECK(got == 8 && first == 12.f && ring.dropped() == 12, "kept the newest 8 (got %d, first %.0f), dropped %llu", got, first, (unsigned long long)ring.dropped());
+        // threaded == inline on a synthetic capture
+        const double fs = 2.4e6;
+        std::vector<std::string> ref;
+        for (int w : { 0, 3 }) {
+            std::mt19937 r2(5);
+            vibevdl2::Receiver rx(fs, 136.850e6, { 136.775e6, 136.875e6, 136.975e6 }, w, true);
+            std::normal_distribution<float> g(0.f, 0.01f);
+            const double A = 0.05;
+            std::vector<cf32> cap(size_t(fs * 0.5));
+            for (auto& v : cap) v = cf32(g(r2), g(r2));
+            for (int c = 0; c < 3; ++c) addBurst(cap, fs, -75e3 + 100e3 * c, A, size_t(fs * (0.02 + 0.1 * c)), burstSymbols({ avlcAcars(0x400100u + uint32_t(c), 0x10949Au, ".G-EZWK", "H1", '1', "THREADS TEST") }), 0.3);
+            std::vector<std::string> got2;
+            auto on = [&](const vibevdl2::Frame& f) { got2.push_back(std::to_string(f.channel) + ":" + std::to_string(f.src.addr)); };
+            for (size_t o2 = 0; o2 < cap.size(); o2 += 65536) rx.feed(cap.data() + o2, std::min<size_t>(65536, cap.size() - o2), on);
+            rx.flush(on);
+            std::sort(got2.begin(), got2.end());
+            if (w == 0) ref = got2; else CHECK(got2 == ref && ref.size() == 3, "3 workers decode what inline does (%zu vs %zu)", got2.size(), ref.size());
+        }
+    }
+
     std::printf("7. CPU: twelve channels at 2.4 MS/s (noise: the idle cost)\n");
     {
         const double fs = 2.4e6;
-        vibevdl2::Receiver rx(fs, 136.850e6, vibevdl2::defaultChannels());
+        vibevdl2::Receiver rx(fs, 136.850e6, vibevdl2::defaultChannels(), 0);
         std::vector<cf32> blk(1 << 16);
         std::normal_distribution<float> g(0.f, 0.05f);
         for (auto& v : blk) v = cf32(g(rng), g(rng));

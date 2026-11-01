@@ -155,8 +155,12 @@ public:
         if (!ch.inv) ch.inv.reset(new vibedsp::ComplexFFT(chanBins_, /*inverse=*/true));
     }
 
-    /** `out(int channel, const cf32* z, int n)`, once per channel per block (in channel order). */
-    template <class Out> void feed(const cf32* iq, size_t n, Out&& out) {
+    /** Per-thread scratch for slice() (a worker owns one). */
+    struct Scratch { vibedsp::Channelizer::ExtractCtx ctx; std::vector<cf32> sl, gat; };
+
+    /** ★ THE SHARED FRONT END ONLY: the half-bands and the one forward FFT. `onBlock(const cf32* bins, long long bi)`
+     *  once a block; the bins are valid during the call. (The workers slice their own channels from a copy.) */
+    template <class OnBlock> void feedBins(const cf32* iq, size_t n, OnBlock&& onBlock) {
         const size_t kBlk = 16384;
         for (size_t o = 0; o < n; o += kBlk) {
             const int m = int(std::min(kBlk, n - o));
@@ -167,26 +171,31 @@ public:
                 cnt = st->process(src, cnt, b_.data());
                 a_.swap(b_); src = a_.data();
             }
-            chz_->feed(src, cnt, [&](const cf32* bins, int) {
-                const long long bi = chz_->blockIndex();
-                ob_.resize(size_t(chanBins_));
-                for (size_t c = 0; c < ch_.size(); ++c) {
-                    Ch& h = ch_[c];
-                    if (!h.inside) continue;
-                    const int k = h.w.empty() ? chz_->extract(bins, h.bin, chanBins_, ob_.data(), *ctx_, bi)
-                                              : slice_(h, bins, bi, ob_.data());
-                    // the residual offset: a rotator at the channel rate (renormalised each block)
-                    std::complex<double> p = h.ph;
-                    const std::complex<double> r = h.rot;
-                    for (int i = 0; i < k; ++i) {
-                        ob_[size_t(i)] *= cf32(float(p.real()), float(p.imag()));
-                        p *= r;
-                    }
-                    h.ph = p / std::abs(p);
-                    out(int(c), ob_.data(), k);
-                }
-            });
+            chz_->feed(src, cnt, [&](const cf32* bins, int) { onBlock(bins, chz_->blockIndex()); });
         }
+    }
+    /** One channel from a block's bins (its slice, its response, its sub-bin rotator) into `out` (≥ chanBins).
+     *  Returns the samples written. A channel's state is touched only here, so one thread per channel at a time. */
+    int slice(size_t c, const cf32* bins, long long bi, cf32* out, Scratch& sc) {
+        Ch& h = ch_[c];
+        if (!h.inside) return 0;
+        const int k = h.w.empty() ? chz_->extract(bins, h.bin, chanBins_, out, sc.ctx, bi) : slice_(h, bins, bi, out, sc);
+        std::complex<double> p = h.ph;
+        const std::complex<double> r = h.rot;
+        for (int i = 0; i < k; ++i) { out[i] *= cf32(float(p.real()), float(p.imag())); p *= r; }
+        h.ph = p / std::abs(p);
+        return k;
+    }
+
+    /** `out(int channel, const cf32* z, int n)`, once per channel per block (in channel order), on this thread. */
+    template <class Out> void feed(const cf32* iq, size_t n, Out&& out) {
+        ob_.resize(size_t(chanBins_));
+        feedBins(iq, n, [&](const cf32* bins, long long bi) {
+            for (size_t c = 0; c < ch_.size(); ++c) {
+                const int k = slice(c, bins, bi, ob_.data(), own_);
+                if (k > 0) out(int(c), ob_.data(), k);
+            }
+        });
     }
 
 private:
@@ -196,8 +205,9 @@ private:
         std::unique_ptr<vibedsp::ComplexFFT> inv;
     };
     /** The slice × the channel's response × the block's phase reference, inverse-transformed; the head dropped. */
-    int slice_(Ch& h, const cf32* bins, long long bi, cf32* out) {
+    int slice_(Ch& h, const cf32* bins, long long bi, cf32* out, Scratch& sc) {
         const int cb = chanBins_, half = cb / 2, m = n_ - 1;
+        std::vector<cf32>& sl_ = sc.sl; std::vector<cf32>& gat_ = sc.gat;
         sl_.resize(size_t(cb));
         // the block's phase reference (overlap-save restarts each block's time origin), folded into the response
         const double turns = std::fmod(double(h.bin) * double(bi) * double(chz_->hop()) / double(n_), 1.0);
@@ -210,7 +220,7 @@ private:
         std::memmove(out, out + drop, size_t(keep) * sizeof(cf32));
         return keep;
     }
-    std::vector<cf32> sl_, gat_;
+    Scratch own_;
     double rate_, hw_, shared_ = 0, bin_ = 0, chRate_ = 0, span_ = 0;
     int n_ = 0, chanBins_ = 0;
     std::vector<double> chanHz_;
