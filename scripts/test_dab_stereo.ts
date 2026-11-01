@@ -59,7 +59,10 @@ eq('server: the DAB+ codec line carries "stereo"', /aacEffRateHz\\":%d,\\"stereo
 eq('server: the Layer II codec line carries "mp2Mode" and "stereo"', /\\"mp2Mode\\":%d,\\"stereo\\":%s/.test(svc), true);
 // ── …and the FM pilot no longer speaks in DAB ──
 const shim = readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8');
-eq('server: the rds stereo flag is false while in DAB', /const bool st = wfm && !g_dabMode\.load/.test(shim), true);
+// ★ V12 AM sync (8f0e275dd) added an AM-stereo pilot branch, `|| (amst && …)` — amst is its own mode, never DAB, so the
+//   WFM half must still be gated on !g_dabMode.
+eq('server: the rds stereo flag is false while in DAB', /const bool st = \(?wfm && !g_dabMode\.load/.test(shim), true);
+eq('server: the only other stereo source is AM stereo\'s own mode', /\|\|\s*\(amst && S\.stereoDetected\.load\(\)\);/.test(shim), true);
 // ── Both clients drive the light from the one function ──
 const web = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
 eq('web: one writer for the light, DAB-aware', /dabOn \? dabServiceStereo\(dabState\) : rdsStereo/.test(web), true);
