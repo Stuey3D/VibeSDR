@@ -74,9 +74,9 @@ const ws = readFileSync(new URL('../src/services/VibeServerWsClient.ts', import.
 const specUrls = ws.match(/`\/ws\/user-spectrum\?[^`]*`/g) || [];   // ★ template literals only, not the comments
 ok(`both app spectrum URLs found (${specUrls.length})`, specUrls.length === 2);
 ok('every app spectrum URL carries the listener id', specUrls.every((u) => u.includes('${listenerIdQuery()}')));
-ok('connect() awaits the id before the preflight', /await loadListenerId\(\);[\s\S]{0,120}await this\._checkConnection\(\)/.test(ws));
+ok('connect() awaits the id before the preflight', /await loadListenerId\(\);[\s\S]{0,400}await this\._checkConnection\(\)/.test(ws));   // ★ 01cdaaa5f put loadWideCaps() between them
 const lap = readFileSync(new URL('../src/components/LocalAudioPlayer.tsx', import.meta.url), 'utf8');
-ok('the audio socket suffix carries bid', /combinedSuffix = [^;]*&bid=\$\{encodeURIComponent\(listenerId\)\}/.test(lap));
+ok('the audio socket suffix carries bid', /baseSuffix = [^;]*&bid=\$\{encodeURIComponent\(listenerId\)\}/.test(lap) && /combinedSuffix = baseSuffix \+/.test(lap));
 ok('the audio socket waits for the id', /if \(!listenerId\) \{[^}]*return; \}/.test(lap));
 ok('listenerId is in the socket effect deps', /dualId, listenerId\]\);/.test(lap));
 const web = readFileSync(new URL('../web/client/src/main.ts', import.meta.url), 'utf8');
