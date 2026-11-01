@@ -199,7 +199,10 @@ eq('live: quiet', app.ndbRowLive(a.beacons[3], NOW * 1000), false);
      && mo.indexOf('${isAdsb || isNdb ? `<script>${ADSB_LAYER_JS}') < mo.indexOf('${isNdb ? `<script>${NDB_LAYER_JS}'));
   ok('map: the layer gets the GPU map or Leaflet, never the compat adapter', mo.includes('VibeNdbLayer.create(GLVM||map'));
   const sc = readFileSync(new URL('../src/screens/SDRScreen.tsx', import.meta.url), 'utf8');
-  ok('screen: audio released in NDB', sc.includes('const audioQuiet = adsbOn || ismOn || ndbOn'));
+  // ★ db0ef3ec1 moved the rule into sessionHoldNotice.audioQuietFor (shared with the paused note) — check both halves.
+  const shn = readFileSync(new URL('../src/services/sessionHoldNotice.ts', import.meta.url), 'utf8');
+  ok('screen: audio released in NDB', sc.includes('const audioQuiet = audioQuietFor({ adsb: adsbOn, ism: ismOn, ndb: ndbOn')
+     && /export function audioQuietFor[^{]*\{\s*return [^;]*m\.ndb/.test(shn));
   ok('screen: no NDB key on Apple TV', sc.includes('ndbAvail: !IS_APPLE_TV'));
   ok('screen: a mode pick leaves NDB', sc.includes('c.ndb?.(false);\n      ndbUiOff();'));
   const gal = readFileSync(new URL('../src/components/GalleryOverlay.tsx', import.meta.url), 'utf8');
