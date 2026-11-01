@@ -106,12 +106,15 @@ public:
         for (auto& w : ws_) if (w->th.joinable()) w->th.join();
     }
     int workers() const { return nW_; }
+    /** Benches only: channels marked false are neither sliced nor worked (the front end is unchanged). */
+    void setActive(const std::vector<bool>& a) { active_ = a; }
     /** The caller's thread: the front end, then each block to every worker (or inline). */
     void feed(const cf32* iq, size_t n) {
         if (nW_ == 0) {
             ob_.resize(size_t(mc_.chanBins()));
             mc_.feedBins(iq, n, [&](const cf32* bins, long long bi) {
                 for (size_t c = 0; c < mc_.channels(); ++c) {
+                    if (!active_.empty() && !active_[c]) continue;
                     const int k = mc_.slice(c, bins, bi, ob_.data(), *inline_);
                     if (k > 0) work_(int(c), ob_.data(), k);
                 }
@@ -163,6 +166,7 @@ private:
             }
             if (lossless_) { std::lock_guard<std::mutex> lk(W.m); W.roomCv.notify_one(); }
             for (int c : W.chans) {
+                if (!active_.empty() && !active_[size_t(c)]) continue;
                 const int k = mc_.slice(size_t(c), W.bins.data(), bi, W.out.data(), W.sc);
                 if (k > 0) work_(c, W.out.data(), k);
             }
@@ -177,6 +181,7 @@ private:
     std::vector<std::unique_ptr<Worker>> ws_;
     std::unique_ptr<MultiChannel::Scratch> inline_;
     std::vector<cf32> ob_;
+    std::vector<bool> active_;
 };
 
 }  // namespace vibeavi

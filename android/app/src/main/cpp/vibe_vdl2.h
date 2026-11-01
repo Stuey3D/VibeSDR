@@ -620,6 +620,7 @@ public:
             Pending& g = *got_[size_t(c)];
             demod_[size_t(c)]->feed(z, k, [&](const Frame& f) { std::lock_guard<std::mutex> lk(g.m); g.v.push_back(f); });
         }, lossless));
+        wk_->setActive(active_);
     }
     ~Receiver() { wk_.reset(); }
     template <class Out> void feed(const cf32* iq, size_t n, Out&& out) { wk_->feed(iq, n); drain_(out); }

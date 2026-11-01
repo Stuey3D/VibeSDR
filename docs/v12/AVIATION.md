@@ -18,8 +18,8 @@ All headers are in `android/app/src/main/cpp/`. The tests are header-only plus v
 |---|---|---|---|
 | ACARS | Pi 500 V4L, 2.4 MS/s, 483 s, 131.525/.725/.825 | **32 blocks** (6 repaired), 11 synced bursts not decoded | none exists (no other ACARS decoder on the LAN) |
 | ACARS | Pi 2 V4, 2.048 MS/s, 302 s | **17 blocks** (1 repaired), 3 synced bursts not decoded | none |
-| VDL2 | Pi 500 V4L, 2.4 MS/s, 482 s, 12 channels 136.700–136.975 | **387 AVLC frames** (93 ACARS), **36 aircraft** | none |
-| VDL2 | Pi 2 V4, 2.048 MS/s, 302 s | **162 frames** (22 ACARS), **24 aircraft** | none |
+| VDL2 | Pi 500 V4L, 2.4 MS/s, 482 s, 12 channels 136.700–136.975 | **387 AVLC frames** (94 ACARS), **34 aircraft** | none |
+| VDL2 | Pi 2 V4, 2.048 MS/s, 302 s | **165 frames** (23 ACARS), **23 aircraft** | none |
 | HFDL | UberSDR RX888 iq192, 8931 kHz window, 600 s | **12 of 16** reference messages (+ ones the reference did not list) | UberSDR's HFDL add-on |
 | HFDL | UberSDR RX888 iq192, 6598 kHz window, 600 s | **23 of 42** reference messages | UberSDR's HFDL add-on |
 
@@ -85,7 +85,11 @@ neighbour 25 kHz away cannot leak in (the integrate-and-dump front ends' first s
 
 ### VDL2 (`vibe_vdl2.h`, `vibe_vdl2_fec.h`)
 
-- Each channel resampled to **4 samples a symbol** (42 kS/s, cubic), then a **low-pass flat to 5 kHz, shut by 9 kHz**.
+- The **receive low-pass is applied in the channel slicer** (frequency domain, bins of 293 Hz): the magnitude of a
+  Blackman low-pass at 4.8 kHz + 4.5 kHz transition, sampled on the slice's bins with a linear phase that keeps its
+  tails inside overlap-save's discarded head. Then each channel goes to **4 samples a symbol** (42 kS/s) by an exact
+  **rational polyphase resampler** (37.5 → 42 kS/s = 28/25, 32 → 42 = 21/16; a 12-tap Kaiser sinc per phase, NEON/SSE2).
+  (Until 2026-11-01: Catmull–Rom + a 58-tap Blackman FIR at 42 kS/s — the FIR was 22 % of VDL2's Pi 2 instructions.)
   ★ Measured: the transmit pulse is a FULL raised cosine — an RRC receive filter left ±0.5-step residuals on a 33 dB
   burst; the RC itself is worse; no filter lets in 3.6× the symbol rate of noise. The sweep is in §Results.
 - A **power gate**: the sync search runs only while the channel's power is up (VDL2 is CSMA, mostly idle).
@@ -150,23 +154,42 @@ conversion (`cu8`, 36 M instr/s at 2.4 MS/s) is subtracted — the server conver
 core" uses the measured IPC of NEON-heavy kernels on that Pi (0.35–0.48, PI2-REAL-CPU.md): 900 MHz × 0.4 = 360 M
 instructions a second, range in brackets. **Not run on the real Pi 2** (optional; not done).
 
-| Decoder | Workload | NEON M instr / s | scalar | % of a Pi 2 core |
-|---|---|---|---|---|
-| ACARS | 3 channels, 2.4 MS/s | **107** | 221 | **≈ 30 %** (22–34) |
-| VDL2 | 12 channels, 2.4 MS/s | **341** (was 545 before the gate fix) | — | **≈ 95 %** (79–108) — heavy |
-| VDL2 | 5 European channels (.725 .775 .825 .875 .975), est. | ≈ 175 | — | ≈ 50 % |
-| HFDL | one listener's dial (demod only) | **≈ 11** | ≈ 12 | **≈ 3 %** |
+| Decoder | Workload | NEON M instr / s | % of a Pi 2 core |
+|---|---|---|---|
+| ACARS | 3 channels, 2.4 MS/s, one thread | **107** (front end ≈ 96, the three demods ≈ 10) | **≈ 30 %** (25–34) |
+| HFDL | one listener's dial (demod only) | **≈ 11** | **≈ 3 %** |
+| **VDL2** | **all 12 channels, 2.4 MS/s** | see the table below | |
 
-Where it goes (NEON, VDL2 12 channels, 10 s = 3769 M): the per-channel demod (cubic resampler to 4 samples a symbol,
-gate, sync when active) 34 %, the Blackman receive FIR 22 %, the shared half-band cascade 11 %, the shared FFT (PFFFT)
-~10 %, the slice inverse FFTs 6 %. ACARS (1430 M): half-bands 28 %, FFT ~21 %, the three demods 7.5 %. So the
-**shared front end costs ~80 M instr/s whatever the channel count**; each VDL2 channel adds ~19 M, each ACARS channel ~4.
-NEON vs scalar: ACARS 1.8× fewer instructions, VDL2 1.4×, HFDL 1.08× (its hot loops — the differential correlator,
-the equaliser, the Viterbi — are still scalar; see RESUME HERE).
+### VDL2: SIMD + worker threads (2026-11-01, all 12 channels — "worldwide")
 
-★ Trade-offs stated (Stuart's rule): the Blackman FIR costs ~+40 % of the FIR's instructions for +2.4 % frames (387 vs
-378); the gate cuts the idle cost by 35 % and decoded MORE. The VDL2 cost on a Pi 2 is the reason the benchmark should
-default it to the CSC + the region's busy channels, not all twelve (the owner can always widen it).
+Counts: 10 s of the Pi 500 capture, armhf NEON, qemu; the tool's u8 conversion (36 M/s) taken out. % of a Pi 2 core
+at 900 MHz × IPC 0.4 = 360 M instructions a second (range 0.35–0.48).
+
+| | total M instr / s | **hottest thread** | % of a Pi 2 core (hottest) |
+|---|---|---|---|
+| before (one thread, 58-tap FIR, gate fixed — 33adaa05e) | 341 | the one thread | **95 %** (79–108) |
+| SIMD, still one thread (9eff85188 with 0 workers) | 205 | the one thread | **57 %** (47–65) |
+| SIMD + 1 worker | 77 front + 132 worker | the worker (12 channels) | **37 %** (31–42) |
+| SIMD + 2 workers | 77 + 2 × 68 | the front end | **21 %** (18–24); workers 19 % each |
+| SIMD + 3 workers | 77 + 3 × 46 | the front end | **21 %**; workers 13 % each |
+| **SIMD + 4 workers (quad core default)** | 77 + 4 × 36 = 221 | **the front end** | **21 %** (18–24); workers 10 % each |
+| one channel per thread (12 workers), for comparison | 77 + 12 × 14 = 245 | the front end | 21 %; +28 M/s more ring copies and wakes than 4 workers, no better hottest thread |
+
+- **Per thread, measured:** front end (half-bands + one 2048-point PFFFT) 77 M/s; each channel (its slice, response,
+  inverse FFT, resampler, gate, sync, demod) 10.5–11.0 M/s (busy 136.975 the same as an idle one: the gate keeps idle
+  channels cheap); the ring copies and wakes 3.5 M/s per worker (the 4-worker run minus the inline run).
+- **A handful of channels per worker beats one per thread**: the hottest thread is the front end either way (21 %),
+  and 12 threads cost 3× the copying of 4 on a 1 GB Pi 2.
+- **SIMD, step by step** (whole process incl. the tool's 36 M/s): 377 → 278 M/s (the receive filter into the slicer)
+  → 299 (a rational resampler whose 64-bit divide per output was 20 % on ARMv7 — `__udivmoddi4`) → 232 (stepped
+  without a divide; the lag products and the 16-term unique-word correlator four samples at a time). The frames never
+  dropped (Pi 500 387, Pi 2 165 against 387 / 162 before).
+- **ACARS is not split**: its front end is ≈ 90 % of it (96 of 107 M/s), the three demods ≈ 10 — a worker would
+  take 3 % off a 30 % thread.
+
+★ Trade-offs stated: the workers cost 14 M instr/s more in total (+7 %) to cut the hottest thread from 57 % to 21 %;
+the slicer filter needs a 2048-point FFT (bins of 293 Hz) where 1024 did before (+~10 % on the FFT, far less than the
+FIR it replaced).
 
 ## Dead ends (all committed)
 
@@ -201,9 +224,10 @@ default it to the CSC + the region's busy channels, not all twelve (the owner ca
    from the Tracker; lift `SDRScreen.tsx`'s `!isVibe` gate for HFDL.
 5. **Clients**: the web (`web/client/src/` — copy `ais.ts`'s list + map shape) and the app (`adsbList.ts` /
    `MapOverlay` pattern). AGENTS.md: About V12 note, tours, website copy — only once the mode is visible.
-6. **SIMD left** (the rule: every hot loop NEON + SSE2): VDL2's cubic resampler and sync correlator, HFDL's
-   126-term differential correlator, its equaliser and the Viterbi ACS are scalar today (the front end — half-bands,
-   PFFFT, FirDecimator — and ACARS's `envMix` are SIMD). VDL2's resampler + gate is now the biggest per-channel term.
+6. **SIMD left**: VDL2 is done (slicer multiply, resampler, lag products, unique-word correlator; the coherent demod
+   and RS run per symbol / per burst and are not in the profile). HFDL's 126-term differential correlator, its
+   equaliser and the Viterbi ACS are still scalar. **Wiring note:** the Service must call `vibevdl2::Receiver` with
+   the default worker count (it does) — its frames come out on the service thread at each feed().
 7. **Decoder work left**: HFDL's misses (23/42 on 6598 kHz) — next try decision feedback from the Viterbi (re-encode
    the first pass, re-train the equaliser on it); HFDL QPSK/8PSK labelling needs a real 1200/1800 bit/s burst; VDL2
    a soft header Chase and X.25/CLNP summaries; ACARS label/position parsing (labels 16/H1 positions), US channels.
