@@ -510,11 +510,12 @@ struct Ft8Tally {
  *   • LAST 10 MINUTES — ONE standing card per VFO (Meta::slot "last10": the same radio, origin, profile and dial find
  *     it again after a restart or a crash, Store::adoptSlot), always the rolling last 10 minutes. Rewritten at most once
  *     a minute (kRefreshSec), only when the window changed (a spot arrived or one aged out), atomically (Store::replace:
- *     tmp + rename, the index the same way) and moved to the top of the list. When the run ends it is written once more,
- *     "to 18:37 UTC", and kept — a listener whose arrival stopped the run finds what it was hearing. It is the instant
- *     look; the hours are the record.
- *     ★ COST, stated: each refresh rewrites index.jsonl whole (~250 bytes an item — 125 KB for 500 items, 1.2 MB at the
- *       5000 cap) — at most once a minute per FT8 VFO, and not at all on a quiet band.
+ *     the file tmp + rename, its new index line appended) and moved to the top of the list. When the run ends it is
+ *     written once more, "to 18:37 UTC", and kept — a listener whose arrival stopped the run finds what it was hearing.
+ *     It is the instant look; the hours are the record.
+ *     ★ COST, stated: each refresh writes the card and APPENDS one index line (~250 bytes) — the index is never
+ *       rewritten for it (2026-11-01; compaction tidies the old lines away) — at most once a minute per FT8 VFO, and
+ *       not at all on a quiet band.
  *   • HOURLY — one card per UTC clock hour, written when the hour closes (store add, never rewritten, evicted oldest
  *     first like everything else): for judging an antenna over days. A run that started or ended inside the hour
  *     writes the part it heard, marked partial, with its minutes. Midnight is just an hour boundary.

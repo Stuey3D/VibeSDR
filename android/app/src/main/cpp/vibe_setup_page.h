@@ -716,15 +716,17 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           figure for this hardware.</div></label>
       <!-- ★★ V12 THE GALLERY (2026-10-22): what the decoders heard — background decoding's, and a listener's own.
            MACHINE-level: one folder every radio writes into. The owner sets its size beside the space left on the
-           disk (Stuart: "showing the REMAINING disk/SD space beside it"); when it is full the OLDEST items go. -->
+           disk (Stuart: "showing the REMAINING disk/SD space beside it"); when it is full the OLDEST items go. ★ 2026-11-01:
+           the space is THE limit — no item count ("we want the limit to be the assigned space"). -->
       <label><span class="lbl">Gallery size</span>
         <span style="display:flex;gap:10px;align-items:center">
           <input type="number" id="galleryMb" min="0" max="100000" step="10" style="max-width:120px"> <span>MB</span>
           <span class="hint" id="galleryDisk" style="margin:0"></span></span>
         <div class="hint">NAVTEX messages, RTTY and later charts and pictures, kept for anyone to look back through
-          (the <b>GALLERY</b> button in the decoders menu). When it is full the <b>oldest</b> items are overwritten,
-          so the newest night is always there. <b>0</b> keeps nothing. On an SD card, a modest figure (100 MB holds
-          tens of thousands of NAVTEX messages) saves the card.</div></label>
+          (the <b>GALLERY</b> button in the decoders menu). The gallery keeps <b>everything</b> until this space is
+          full, then removes the <b>oldest</b> items first, so the newest night is always there. There is no limit on
+          the number of items, only on the space (which counts the gallery's own index too). <b>0</b> keeps nothing.
+          On an SD card, a modest figure saves the card: 100 MB holds about 50,000 NAVTEX messages.</div></label>
       <label style="display:flex;gap:8px;align-items:center">
         <input type="checkbox" id="galleryPublic" style="width:16px;height:16px;accent-color:var(--amber)">
         <span>Everyone may see the gallery</span></label>
