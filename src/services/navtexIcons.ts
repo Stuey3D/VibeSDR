@@ -28,8 +28,8 @@ export const NAV_GLYPHS: Record<NavHazard, string> = {
   structure: '<path d="M7.5 14.4l.25-7M8.5 14.4l-.25-7M6.2 14.4h3.6"/><circle cx="8" cy="6.3" r="1"/><path d="M7.6 5.4L6.6 2.4M8.95 6.5l3 .5M7.5 7.1L5.5 9.4"/>',
   // a gun-sight: the range is in use
   firing: '<circle cx="8" cy="8" r="4.6"/><circle cx="8" cy="8" r=".9" ' + F + '/><path d="M8 1.6v2.6M8 11.8v2.6M1.6 8h2.6M11.8 8h2.6"/>',
-  // a sea mine: the round case and its horns
-  uxo: '<circle cx="8" cy="8.6" r="3.6"/><path d="M8 5V2.6M8 12.2v2.2M4.4 8.6H2.2M11.6 8.6h2.2M5.5 6.1L4 4.6M10.5 6.1L12 4.6"/><circle cx="8" cy="2.2" r=".6" ' + F + '/>',
+  // ★ a sea mine (Stuart, 2026-11-01, option C): a solid round case split by a band, four dots, short tapered horns
+  uxo: '<path d="M3.43 7.90A4.6 4.6 0 0 1 12.57 7.90zM3.43 8.90A4.6 4.6 0 0 0 12.57 8.90zM5.45 6.30a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM9.05 6.30a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM5.45 10.50a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM9.05 10.50a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0z" fill="currentColor" fill-rule="evenodd" stroke="none"/><path d="M8.75 4.20L8.35 2.30L7.65 2.30L7.25 4.20zM11.87 6.61L13.20 5.19L12.80 4.61L11.01 5.38zM4.99 5.38L3.20 4.61L2.80 5.19L4.13 6.61zM11.01 11.42L12.80 12.19L13.20 11.61L11.87 10.19zM4.13 10.19L2.80 11.61L3.20 12.19L4.99 11.42zM7.25 12.60L7.65 14.50L8.35 14.50L8.75 12.60z" fill="currentColor" stroke="none"/>',
   // a cable on the seabed between two joints
   cable: '<path d="M2.6 8.6c2.2 0 2.4-3.6 5.4-3.6s3.2 3.6 5.4 3.6"/><circle cx="2.4" cy="8.6" r="1.2"/><circle cx="13.6" cy="8.6" r="1.2"/><path d="M1.6 12.6h2M5.2 12.6h2M8.8 12.6h2M12.4 12.6h2"/>',
   // a survey vessel and the sounding fanning out beneath it
