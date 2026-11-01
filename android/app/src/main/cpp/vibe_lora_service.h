@@ -19,6 +19,7 @@
 #include "vibe_meshcore.h"
 #include "vibe_thread.h"
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -182,32 +183,54 @@ public:
             }
         }
         queue_.clear(); queued_ = 0; dropped_ = 0;
-        specQ_.clear(); specQueued_ = 0; droppedSpec_ = 0;
         specCap_ = size_t(0.5 * rateHz / (0.75 * ch_->fftSize())) + 1;   // half a second of blocks (a block steps 3/4 of the FFT)
-        chipQ_.clear(); chipQueued_ = 0; droppedChip_ = 0;
-        { double bw = 0; for (const auto& c : chans_) bw += c.bw; chipCap_ = size_t(0.5 * bw) + 1; }   // half a second of chips
+        /* ★★ LANES (2026-11-01, docs/v12/DECODER-THREADING.md). Stages 2 (deliver: each channel's inverse FFT, phase, NCO,
+         *  resampler) and 3 (the detectors) run once per LANE, each lane owning a round-robin share of the channels
+         *  (and every detector on them). One lane is exactly the old vibe-lora2 + vibe-lora3. "lora+all" (13 of 16 868
+         *  channels) had both near 80 % of a Pi 2 core; two lanes halve each. Lanes from the channel count AND the cores:
+         *  one per 7 channels, at most half the cores (each lane is two threads), never more than 2; 1 on ≤ 3 cores. */
+        lanes_.clear();
+        nLanes_ = lanesOverride_ > 0 ? lanesOverride_
+                : std::max(1, std::min({ 2, int(std::thread::hardware_concurrency()) / 2, int((streams_.size() + 6) / 7) }));
+        nLanes_ = std::max(1, std::min(nLanes_, int(streams_.size())));
+        for (int l = 0; l < nLanes_; ++l) lanes_.emplace_back(new Lane);
+        for (size_t si = 0; si < streams_.size(); ++si) lanes_[si % size_t(nLanes_)]->chans.push_back(si);
+        for (size_t di = 0; di < demods_.size(); ++di) lanes_[demods_[di].stream % size_t(nLanes_)]->dets.push_back(di);
+        for (auto& L : lanes_) {
+            double bw = 0; for (size_t si : L->chans) bw += chans_[si].bw;
+            L->chipCap = size_t(0.5 * bw) + 1;                     // half a second of its channels' chips
+        }
         run_ = true;
         worker_ = std::thread([this] { loop(); });
-        worker2_ = std::thread([this] { loop2(); });
-        worker3_ = std::thread([this] { loop3(); });
+        for (int l = 0; l < nLanes_; ++l) {
+            Lane* L = lanes_[size_t(l)].get();
+            L->t2 = std::thread([this, L, l] { loop2(*L, l); });
+            L->t3 = std::thread([this, L, l] { loop3(*L, l); });
+        }
         return chosen_.size();
     }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
         cv_.notify_all(); space_.notify_all();
-        { std::lock_guard<std::mutex> lk(sMtx_); } sCv_.notify_all(); sSpace_.notify_all();
-        { std::lock_guard<std::mutex> lk(cMtx_); } cCv_.notify_all(); cSpace_.notify_all();
+        for (auto& L : lanes_) {
+            { std::lock_guard<std::mutex> lk(L->sMtx); } L->sCv.notify_all(); L->sSpace.notify_all();
+            { std::lock_guard<std::mutex> lk(L->cMtx); } L->cCv.notify_all(); L->cSpace.notify_all();
+        }
         if (worker_.joinable()) worker_.join();
-        if (worker2_.joinable()) worker2_.join();
-        if (worker3_.joinable()) worker3_.join();
+        for (auto& L : lanes_) { if (L->t2.joinable()) L->t2.join(); if (L->t3.joinable()) L->t3.join(); }
     }
     /** ★ Tests and ism-offline only, before start(): full queues WAIT instead of dropping. */
     void setLossless(bool on) { lossless_ = on; }
+    /** Benches / tests: force the lane count (0 = from the channels and the cores). */
+    void setLanes(int n) { lanesOverride_ = n; }
+    int lanes() const { return nLanes_; }
     /** ★ Tests: nothing queued and nothing being worked on. */
     bool idle() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!queue_.empty() || busy1_) return false; }
-        { std::lock_guard<std::mutex> lk(sMtx_); if (!specQ_.empty() || busy2_) return false; }
-        { std::lock_guard<std::mutex> lk(cMtx_); if (!chipQ_.empty() || busy3_) return false; }
+        for (auto& L : lanes_) {
+            { std::lock_guard<std::mutex> lk(L->sMtx); if (!L->specQ.empty() || L->busy2) return false; }
+            { std::lock_guard<std::mutex> lk(L->cMtx); if (!L->chipQ.empty() || L->busy3) return false; }
+        }
         return true;
     }
     bool running() const { return run_.load(std::memory_order_relaxed); }
@@ -230,8 +253,10 @@ public:
     uint64_t dropped() {
         uint64_t n = 0;
         { std::lock_guard<std::mutex> lk(mtx_); n += dropped_; }
-        { std::lock_guard<std::mutex> lk(sMtx_); n += droppedSpec_; }
-        { std::lock_guard<std::mutex> lk(cMtx_); n += droppedChip_; }
+        for (auto& L : lanes_) {
+            { std::lock_guard<std::mutex> lk(L->sMtx); n += L->droppedSpec; }
+            { std::lock_guard<std::mutex> lk(L->cMtx); n += L->droppedChip; }
+        }
         return n;
     }
     size_t channelsRun() const { return chosen_.size(); }
@@ -241,6 +266,7 @@ public:
     /** Frames with a good CRC / headers that failed / CRCs that failed, across every detector (for the status). */
     void counts(uint64_t& ok, uint64_t& badHdr, uint64_t& badCrc) {
         std::lock_guard<std::mutex> lk(statMtx_); ok = okN_; badHdr = hdrN_; badCrc = crcN_;
+        for (auto& L : lanes_) { badHdr += L->hdrN; badCrc += L->crcN; }
     }
 
     /** Per detector: preambles seen, SFDs aligned, headers failed, CRCs failed, frames — for lora-offline and the tests. */
@@ -271,6 +297,17 @@ public:
 
 private:
     struct Det { std::unique_ptr<Demod> d; size_t stream; const PlanCh* ch; };
+    /** A lane: some channels, their detectors, and the two threads (deliver, detect) with their own bounded queues. */
+    struct Lane {
+        std::vector<size_t> chans, dets;
+        std::mutex sMtx; std::condition_variable sCv, sSpace;
+        std::deque<std::shared_ptr<std::vector<Channeliser::Spectra>>> specQ; size_t specQueued = 0; uint64_t droppedSpec = 0;
+        std::mutex cMtx; std::condition_variable cCv, cSpace;
+        std::deque<Channeliser::ChipOut> chipQ; size_t chipQueued = 0, chipCap = 0; uint64_t droppedChip = 0;
+        bool busy2 = false, busy3 = false;
+        uint64_t hdrN = 0, crcN = 0;
+        std::thread t2, t3;
+    };
     struct ChF { double hz, bw; };
     void work(const cf* x, size_t n) {
         if (!ch_) return;
@@ -280,10 +317,14 @@ private:
         detectAll();
     }
     /** Every detector over what its stream now holds; frames out, counts kept. */
-    void detectAll() {
+    void detectAll() { detect(nullptr); }
+    /** The detectors in `dets` (a lane's), or all of them; its own bad-header/CRC counts kept in the lane. */
+    void detect(Lane* lane) {
         VIBE_ISM_P(const double tp1 = vibeism::ismProfNow();)
         std::vector<Heard> got;
-        for (auto& dt : demods_) {
+        const size_t nd = lane ? lane->dets.size() : demods_.size();
+        for (size_t k = 0; k < nd; ++k) {
+            auto& dt = demods_[lane ? lane->dets[k] : k];
             dt.d->run(*streams_[dt.stream], [&](Frame&& f) {
                 f.freqHz = dt.ch->hz + f.cfoHz;
                 Heard h; h.m = interpret(f, dt.ch->net); h.f = std::move(f);
@@ -292,8 +333,12 @@ private:
         }
         VIBE_ISM_P(profDemod += vibeism::ismProfNow() - tp1;)
         uint64_t hb = 0, cb = 0;
-        for (auto& dt : demods_) { hb += dt.d->badHeaders(); cb += dt.d->badCrc(); }
-        { std::lock_guard<std::mutex> lk(statMtx_); okN_ += got.size(); hdrN_ = hb; crcN_ = cb; }
+        for (size_t k = 0; k < nd; ++k) { auto& dt = demods_[lane ? lane->dets[k] : k]; hb += dt.d->badHeaders(); cb += dt.d->badCrc(); }
+        {
+            std::lock_guard<std::mutex> lk(statMtx_);
+            okN_ += got.size();
+            if (lane) { lane->hdrN = hb; lane->crcN = cb; } else { hdrN_ = hb; crcN_ = cb; }
+        }
         if (!got.empty()) {
             std::lock_guard<std::mutex> lk(outMtx_);
             for (auto& h : got) out_.push_back(std::move(h));
@@ -315,95 +360,89 @@ private:
                 busy1_ = true;
                 lk.unlock();
                 space_.notify_all();
-                std::vector<Channeliser::Spectra> batch;
-                ch_->feedSpectra(blk.data(), blk.size(), [&](Channeliser::Spectra&& sp) { batch.push_back(std::move(sp)); });
-                // ★ one batch per capture block: the detectors then run exactly as often as they did on one thread
-                if (!batch.empty()) pushSpec(std::move(batch));
+                auto batch = std::make_shared<std::vector<Channeliser::Spectra>>();
+                ch_->feedSpectra(blk.data(), blk.size(), [&](Channeliser::Spectra&& sp) { batch->push_back(std::move(sp)); });
+                // ★ one batch per capture block, to every lane: the detectors then run exactly as often as on one thread
+                if (!batch->empty()) for (auto& L : lanes_) pushSpec(*L, batch);
                 lk.lock();
                 busy1_ = false;
             }
         }
     }
-    void pushSpec(std::vector<Channeliser::Spectra>&& batch) {
+    /* ★ A BATCH IS SHARED by every lane (a shared_ptr): each lane's deliver() transforms only ITS channels' slices of
+     *  each spectrum in place, so lanes never write the same memory. */
+    using Batch = std::shared_ptr<std::vector<Channeliser::Spectra>>;
+    void pushSpec(Lane& L, const Batch& batch) {
         {
-            std::unique_lock<std::mutex> lk(sMtx_);
-            if (lossless_) sSpace_.wait(lk, [&] { return !run_ || specQ_.empty() || specQueued_ + batch.size() <= specCap_; });
-            specQueued_ += batch.size();
-            specQ_.push_back(std::move(batch));
-            while (specQueued_ > specCap_ && specQ_.size() > 1) { specQueued_ -= specQ_.front().size(); specQ_.pop_front(); ++droppedSpec_; }
+            std::unique_lock<std::mutex> lk(L.sMtx);
+            if (lossless_) L.sSpace.wait(lk, [&] { return !run_ || L.specQ.empty() || L.specQueued + batch->size() <= specCap_; });
+            L.specQueued += batch->size();
+            L.specQ.push_back(batch);
+            while (L.specQueued > specCap_ && L.specQ.size() > 1) { L.specQueued -= L.specQ.front()->size(); L.specQ.pop_front(); ++L.droppedSpec; }
         }
-        sCv_.notify_one();
+        L.sCv.notify_one();
     }
-    // ── vibe-lora2: each channel's inverse FFT, rotation and resampler — may lag the transforms ──
-    void loop2() {
-        vibeDecoderLagThread("vibe-lora2");
-        std::unique_lock<std::mutex> lk(sMtx_);
+    void loop2(Lane& L, int l) {
+        char nm[16]; std::snprintf(nm, sizeof nm, l ? "vibe-lora2.%d" : "vibe-lora2", l);
+        vibeDecoderLagThread(nm);
+        std::unique_lock<std::mutex> lk(L.sMtx);
         while (run_) {
-            sCv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !specQ_.empty(); });
-            while (run_ && !specQ_.empty()) {
-                std::vector<Channeliser::Spectra> batch = std::move(specQ_.front());
-                specQ_.pop_front();
-                specQueued_ -= batch.size();
-                busy2_ = true;
+            L.sCv.wait_for(lk, std::chrono::milliseconds(250), [&] { return !run_ || !L.specQ.empty(); });
+            while (run_ && !L.specQ.empty()) {
+                Batch batch = std::move(L.specQ.front());
+                L.specQ.pop_front();
+                L.specQueued -= batch->size();
+                L.busy2 = true;
                 lk.unlock();
-                sSpace_.notify_all();
+                L.sSpace.notify_all();
                 Channeliser::ChipOut out;
-                for (auto& sp : batch) ch_->deliver(sp, &out);
-                pushChip(std::move(out));   // ★ one per capture block: the detectors run exactly as often as on one thread
+                for (auto& sp : *batch) ch_->deliver(sp, &out, nLanes_ > 1 ? &L.chans : nullptr);
+                pushChip(L, std::move(out));   // ★ one per capture block: the detectors run exactly as often as on one thread
                 lk.lock();
-                busy2_ = false;
+                L.busy2 = false;
             }
         }
     }
     static size_t chipsOf(const Channeliser::ChipOut& o) { size_t n = 0; for (const auto& v : o) n += v.size(); return n; }
-    void pushChip(Channeliser::ChipOut&& out) {
+    void pushChip(Lane& L, Channeliser::ChipOut&& out) {
         const size_t n = chipsOf(out);
         {
-            std::unique_lock<std::mutex> lk(cMtx_);
-            if (lossless_) cSpace_.wait(lk, [&] { return !run_ || chipQ_.empty() || chipQueued_ + n <= chipCap_; });
-            chipQueued_ += n;
-            chipQ_.push_back(std::move(out));
-            while (chipQueued_ > chipCap_ && chipQ_.size() > 1) { chipQueued_ -= chipsOf(chipQ_.front()); chipQ_.pop_front(); ++droppedChip_; }
+            std::unique_lock<std::mutex> lk(L.cMtx);
+            if (lossless_) L.cSpace.wait(lk, [&] { return !run_ || L.chipQ.empty() || L.chipQueued + n <= L.chipCap; });
+            L.chipQueued += n;
+            L.chipQ.push_back(std::move(out));
+            while (L.chipQueued > L.chipCap && L.chipQ.size() > 1) { L.chipQueued -= chipsOf(L.chipQ.front()); L.chipQ.pop_front(); ++L.droppedChip; }
         }
-        cCv_.notify_one();
+        L.cCv.notify_one();
     }
-    // ── vibe-lora3: the detectors over what each stream now holds ──
-    void loop3() {
-        vibeDecoderLagThread("vibe-lora3");
-        std::unique_lock<std::mutex> lk(cMtx_);
+    void loop3(Lane& L, int l) {
+        char nm[16]; std::snprintf(nm, sizeof nm, l ? "vibe-lora3.%d" : "vibe-lora3", l);
+        vibeDecoderLagThread(nm);
+        std::unique_lock<std::mutex> lk(L.cMtx);
         while (run_) {
-            cCv_.wait_for(lk, std::chrono::milliseconds(250), [this] { return !run_ || !chipQ_.empty(); });
-            while (run_ && !chipQ_.empty()) {
-                Channeliser::ChipOut out = std::move(chipQ_.front());
-                chipQ_.pop_front();
-                chipQueued_ -= chipsOf(out);
-                busy3_ = true;
+            L.cCv.wait_for(lk, std::chrono::milliseconds(250), [&] { return !run_ || !L.chipQ.empty(); });
+            while (run_ && !L.chipQ.empty()) {
+                Channeliser::ChipOut out = std::move(L.chipQ.front());
+                L.chipQ.pop_front();
+                L.chipQueued -= chipsOf(out);
+                L.busy3 = true;
                 lk.unlock();
-                cSpace_.notify_all();
-                ch_->pushOut(out);
-                detectAll();
+                L.cSpace.notify_all();
+                ch_->pushOut(out, nLanes_ > 1 ? &L.chans : nullptr);
+                if (nLanes_ > 1) detect(&L); else detectAll();
                 lk.lock();
-                busy3_ = false;
+                L.busy3 = false;
             }
         }
     }
 
     std::mutex mtx_, outMtx_, statMtx_;
     std::condition_variable cv_, space_;
-    std::thread worker_, worker2_, worker3_;
-    bool lossless_ = false, busy1_ = false, busy2_ = false, busy3_ = false;
-    // ★ between the two threads: transformed blocks, one batch per capture block
-    std::mutex sMtx_;
-    std::condition_variable sCv_, sSpace_;
-    std::deque<std::vector<Channeliser::Spectra>> specQ_;
-    size_t specQueued_ = 0, specCap_ = 0;
-    uint64_t droppedSpec_ = 0;
-    // ★ between the second and third: each channel's chip-rate samples, one batch per capture block
-    std::mutex cMtx_;
-    std::condition_variable cCv_, cSpace_;
-    std::deque<Channeliser::ChipOut> chipQ_;
-    size_t chipQueued_ = 0, chipCap_ = 0;
-    uint64_t droppedChip_ = 0;
+    std::thread worker_;
+    bool lossless_ = false, busy1_ = false;
+    size_t specCap_ = 0;
+    std::vector<std::unique_ptr<Lane>> lanes_;
+    int nLanes_ = 1, lanesOverride_ = std::getenv("VIBE_LORA_LANES") ? std::atoi(std::getenv("VIBE_LORA_LANES")) : 0;   // ★ benches: force the lanes
     std::atomic<bool> run_{false};
     double hc_ = 0, rate_ = 0;
     std::unique_ptr<Channeliser> ch_;

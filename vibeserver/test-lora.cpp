@@ -367,6 +367,7 @@ int main(int argc, char** argv) {
             for (auto& h : t.take()) have.push_back(key(h));
             t.stop();
         }
+        std::sort(want.begin(), want.end()); std::sort(have.begin(), have.end());   // ★ lanes hand frames out in their own order
         ok(!want.empty() && have == want, "threads = inline: " + std::to_string(have.size()) + " frames against " + std::to_string(want.size()) + ", identical");
     }
 

@@ -796,15 +796,22 @@ public:
     /** The second half, in block order: the block's phase, the residual NCO and the resampler into each channel's
      *  Stream. ★ A block missing before `sp` (dropped behind a slow second half) still moves the NCO's phase on, so the
      *  channel stays on frequency; the samples it held are simply not there. */
-    void deliver(Spectra& sp, ChipOut* chips = nullptr) {
-        if (sp.blk > nextBlk_) for (auto& c : ch_) for (int64_t b = nextBlk_; b < sp.blk; ++b)
-            c.ncoPh = std::remainder(c.ncoPh + double(c.Lc - c.Lc / 4) * c.ncoDph, 2 * M_PI);
-        nextBlk_ = sp.blk + 1;
+    /** ★ `only` (2026-11-01, the channel split): deliver just these channels — a lane's. Each channel keeps its own
+     *  next-block count, so lanes skip (or lose) blocks independently and every channel's NCO stays right. */
+    void deliver(Spectra& sp, ChipOut* chips = nullptr, const std::vector<size_t>* only = nullptr) {
+        const size_t nOnly = only ? only->size() : ch_.size();
+        for (size_t oi = 0; oi < nOnly; ++oi) {
+            Ch& c = ch_[only ? (*only)[oi] : oi];
+            if (sp.blk > c.nextBlk) for (int64_t b = c.nextBlk; b < sp.blk; ++b)
+                c.ncoPh = std::remainder(c.ncoPh + double(c.Lc - c.Lc / 4) * c.ncoDph, 2 * M_PI);
+            c.nextBlk = sp.blk + 1;
+        }
         const int lmask = L_ - 1;
         const int64_t start = sp.blk * int64_t(S_);
         VIBE_ISM_P(double tq = vibeism::ismProfNow();)
         if (chips && chips->size() != ch_.size()) chips->resize(ch_.size());
-        for (size_t ci = 0; ci < ch_.size(); ++ci) {
+        for (size_t oi = 0; oi < nOnly; ++oi) {
+            const size_t ci = only ? (*only)[oi] : oi;
             Ch& c = ch_[ci];
             cf* Y = sp.Y[ci].data();
             c.ifft->forward(Y);
@@ -825,7 +832,10 @@ public:
         }
     }
     /** The last part: deliver()'s chip-rate samples into each channel's stream (the detectors' input). */
-    void pushOut(const ChipOut& out) { for (size_t ci = 0; ci < ch_.size() && ci < out.size(); ++ci) ch_[ci].dst->push(out[ci].data(), out[ci].size()); }
+    void pushOut(const ChipOut& out, const std::vector<size_t>* only = nullptr) {
+        if (only) { for (size_t ci : *only) if (ci < out.size()) ch_[ci].dst->push(out[ci].data(), out[ci].size()); return; }
+        for (size_t ci = 0; ci < ch_.size() && ci < out.size(); ++ci) ch_[ci].dst->push(out[ci].data(), out[ci].size());
+    }
     void feed(const cf* x, size_t n) { feedSpectra(x, n, [&](Spectra&& sp) { deliver(sp); }); }
 
 private:
@@ -837,6 +847,7 @@ private:
         double t = 1.0;
         double ncoPh = 0, ncoDph = 0;   ///< the residual NCO's phase at the next output, and its step (rad/sample)
         cf ncoInc{1, 0};                ///< e^{j·ncoDph}
+        int64_t nextBlk = 0;            ///< the next block this channel expects (its lane's own count)
     };
     void spectra(Spectra& sp) {
         VIBE_ISM_P(double tq = vibeism::ismProfNow();)
