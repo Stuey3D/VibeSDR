@@ -44,16 +44,18 @@ const hintFromHtml = (id: string) => {
 
   // The web's passbandCentreHz and cwTune (PSK branch), cut out of main.ts and run against the app's on a grid of cases.
   const pc = main.match(/function passbandCentreHz\(\): number \{\n  if \(!spec\) return 1500;\n([\s\S]*?)\n\}/);
-  const tu = main.match(/  if \(activeDec === 'psk'\) \{\n    const lsb = spec\.mode === 'lsb', c = (lsb \|\| spec\.mode === 'usb' \? passbandCentreHz\(\) : 1500);\n    spec\.tune\(clampTune\(Math\.round\((lsb \? hz \+ c : hz - c)\)\), (lsb \? 'lsb' : 'usb')/);
+  // ★ aaa2060e3 (decode on either VFO): the web reads the DECODING VFO (vfoNow(decVfo)) and tunes it with decTune.
+  const tu = main.match(/  if \(activeDec === 'psk'\) \{\n    const md = vfoNow\(decVfo\)\.mode;\n    const lsb = md === 'lsb', c = (lsb \|\| md === 'usb' \? passbandCentreHz\(\) : 1500);\n    decTune\(clampTune\(Math\.round\((lsb \? hz \+ c : hz - c)\)\), (lsb \? 'lsb' : 'usb')/);
   if (!pc || !tu) { fails++; console.error('FAIL the web\'s passbandCentreHz / PSK cwTune were not found in main.ts'); }
   else {
-    const webCentre = new Function('spec', pc[1].replace(/\n/g, ' ')) as (spec: { bandwidthLow: number; bandwidthHigh: number }) => number;
+    const webCentreOf = new Function('vfoNow', 'decVfo', pc[1].replace(/\/\/[^\n]*/g, '').replace(/\n/g, ' ')) as (v: () => unknown, d: string) => number;
+    const webCentre = (spec: { bandwidthLow: number; bandwidthHigh: number }) => webCentreOf(() => spec, 'A');
     const cases: Array<[number, number]> = [[300, 2700], [200, 2800], [-2700, -300], [50, 450], [-4000, 4000], [0, 3000], [1000, 2000]];
     for (const [lo, hi] of cases) eq(`passband centre ${lo}..${hi}`, passbandCentreHz(lo, hi), webCentre({ bandwidthLow: lo, bandwidthHigh: hi }));
     for (const mode of ['usb', 'lsb', 'cwu', 'am']) for (const [lo, hi] of cases.slice(0, 3)) {
       const spec = { mode, bandwidthLow: lo, bandwidthHigh: hi };
       const passbandCentre = () => webCentre(spec);
-      const c = new Function('spec', 'passbandCentreHz', `const lsb = spec.mode === 'lsb'; return ${tu[1]};`)(spec, passbandCentre) as number;
+      const c = new Function('md', 'passbandCentreHz', `const lsb = md === 'lsb'; return ${tu[1]};`)(spec.mode, passbandCentre) as number;
       const hz = 14_070_850;
       const lsb = mode === 'lsb';
       const want = { hz: Math.round(lsb ? hz + c : hz - c), mode: lsb ? 'lsb' : 'usb' };
@@ -145,7 +147,7 @@ const hintFromHtml = (id: string) => {
     [156_530_000, 'usb'], [14_070_000, 'usb'], [4_205_800, 'USB'], [16_802_000, 'usb'], [12_575_300, ''], [2_187_500, 'fm'],
   ];
   for (const [hz, m] of dials) eq(`DSC params ${hz} ${m}`, AD.dscParams(hz, m), WD.dscParams(hz, m));
-  ok('the web attaches DSC with dscParams', main.includes("if (mode === 'dsc') return dscParams(spec?.frequency ?? 0, String(spec?.mode ?? ''));"));
+  ok('the web attaches DSC with dscParams (the decoding VFO\'s dial, aaa2060e3)', main.includes("if (mode === 'dsc') { const v = vfoNow(decVfo); return dscParams(v.frequency, String(v.mode ?? '')); }"));
   const call = { id: 7, utc: 1_700_000_000_000, rf: 8_414_500, repeat: 3, format: 'Distress alert', category: 'distress', level: 3,
     self: '235012345678', selfCountry: 'United Kingdom', lat: 50.2, lon: -4.16, posText: '50°12\'N 004°10\'W', check: 'corrected',
     quality: 0.93, band: 'hf', line: 'DISTRESS · MMSI 235012345 (United Kingdom) · Sinking', freqs: ['8414.5', 1, 'x', 'y', 'z'] };
