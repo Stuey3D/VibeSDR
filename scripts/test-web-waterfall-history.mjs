@@ -157,7 +157,8 @@ try {
   if (MODE === '2d') await ev(`(() => { const w = window.__vibeWf().wf; w.gl = null; w.glCanvas = null; w.wf.width = 0; w.resize(); return true; })()`);
   ok(MODE === 'webgl' ? await ev('!!window.__vibeWf().wf.gl') : await ev('!window.__vibeWf().wf.gl'), `drawing with the ${MODE} renderer`);
   // ★ The needle, its passband and the RF-centre line are drawn over the waterfall — hide them so the brightest pixel is the carrier.
-  await ev(`(() => { const { wf, spec } = window.__vibeWf(); wf._drawVfo = () => {}; spec.followVfo = true;
+  // ★ …and the scale stamps (a1e272deb): an overlay whose labels are brighter than the carrier in their rows
+  await ev(`(() => { const { wf, spec } = window.__vibeWf(); wf._drawVfo = () => {}; wf._drawStamps = () => {}; spec.followVfo = true;
     spec.tune(${CENTRE}); spec.zoom(${CENTRE}, ${SPAN} / (spec.cfg.binCount || 1024)); return true; })()`);
   await sleep(10000);  // a straight trail to start from — it fills the lower part of the picture (the resize check reads it)
 
