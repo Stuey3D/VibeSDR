@@ -26,7 +26,7 @@ import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName, navItems,
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
-import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetItems,
+import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
 import { NAV_HAZARD_COLOURS } from '../../../src/services/navtexIcons';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
@@ -8866,10 +8866,11 @@ function navRowsHtml(r: NavReport | null, w: NavWarnReport | null, m: NavMetRepo
       + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
   }
   if (navLayers.weather && m) {
-    const areas = navMetVisible(m, navRange).slice().sort((a, b) => Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t);
+    // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
+    const areas = navMetListed(m).slice().sort((a, b) => Number(a.stale) - Number(b.stale) || Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t);
     if (areas.length) out.push(sec('WEATHER — LATEST PER SEA AREA'));
     for (const a of areas) out.push(`<div class="trkRow${a.stale ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(a.key)}">`
-      + `<span class="id"><b><i class="sw" style="background:${navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8'}"></i>${escapeHtml(a.name)}</b><small>${escapeHtml(navFcLabel(a.fc[0]))}</small></span>`
+      + `<span class="id"><b><i class="sw" style="background:${a.stale ? '#9aa6b2' : navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8'}"></i>${escapeHtml(a.name)}</b><small>${escapeHtml(navMetRowWords(a))}</small></span>`
       + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, m.now - a.fc[0].t)))}</span></div>`);
   }
   if (navLayers.warnings && w) {

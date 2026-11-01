@@ -15,7 +15,8 @@ mkdirSync(out, { recursive: true });
 const rows = [...NAV_HAZARDS.map((h) => ({ id: h.id, words: h.words, unlit: false })),
   { id: 'light', words: 'Light — UNLIT (the mark)', unlit: true },
   { id: 'buoy', words: 'Buoy — unlit', unlit: true },
-  { id: 'structure', words: 'Wind turbine — no light', unlit: true }];
+  { id: 'structure', words: 'Wind turbine — no light', unlit: true },
+  { id: 'platform', words: 'Platform — UNLIT', unlit: true }];
 const ROW = 46, TOP = 56, W = 1040;
 const H = TOP + rows.length * ROW + 20;
 const col = { name: 14, d16: 250, d24: 290, d32: 336, l16: 470, l24: 510, l32: 556, mk: 700, mkf: 760, mkl: 860, mklf: 920 };
@@ -25,7 +26,7 @@ s += `<rect width="${W}" height="${H}" fill="#ffffff"/>`;
 s += `<rect x="236" y="0" width="200" height="${H}" fill="#14191f"/><rect x="456" y="0" width="200" height="${H}" fill="#f4f1ea"/>`;
 s += `<rect x="686" y="0" width="150" height="${H}" fill="#1d2a36"/><rect x="846" y="0" width="150" height="${H}" fill="#dfe6ea"/>`;
 const hd = (x, t, c = '#000') => `<text x="${x}" y="22" fill="${c}" font-weight="bold">${t}</text>`;
-s += hd(14, 'NAVTEX hazard icons — v1 for review') + hd(250, 'on dark · 16 / 24 / 32', '#fff') + hd(470, 'on light · 16 / 24 / 32')
+s += hd(14, 'NAVTEX hazard icons — v6') + hd(250, 'on dark · 16 / 24 / 32', '#fff') + hd(470, 'on light · 16 / 24 / 32')
   + hd(700, 'map marker', '#fff') + hd(860, 'map marker');
 s += `<text x="700" y="40" fill="#9fb0c2" font-size="10">live · faded</text><text x="860" y="40" fill="#555" font-size="10">live · faded</text>`;
 s += `<text x="250" y="40" fill="#9fb0c2" font-size="10">16-unit box · stroke 1.4 · round caps</text>`;

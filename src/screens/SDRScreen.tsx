@@ -66,7 +66,7 @@ import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
 import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
-import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetItems,
+import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../services/navtexWarn';
 import { NAV_HAZARD_COLOURS } from '../services/navtexIcons';
 import { ismNeighbours, ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
@@ -10859,12 +10859,14 @@ export default function SDRScreen({ route, navigation }: Props) {
     const now = navWarnRep?.now ?? navMetRep?.now ?? navReport?.now ?? Math.floor(Date.now() / 1000);
     const warns = navLayers.warnings ? navWarnVisible(navWarnRep, navRange) : [];
     const areas = navLayers.weather ? navMetVisible(navMetRep, navRange) : [];
+    // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
+    const listed = navLayers.weather ? navMetListed(navMetRep) : [];
     const ago = (sec: number) => (sec < 3600 ? `${Math.round(sec / 60)} min` : sec < 86400 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} d`);
     const rows = [
       ...(navLayers.stations ? navListRows(navReport) : []),
-      ...areas.slice().sort((a, b) => Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t).map((a) => ({
-        key: a.key, colour: navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8', flag: '', name: a.name, second: navFcLabel(a.fc[0]), sp: '', trend: 0 as const,
-        range: '', brg: '', noPos: false, age: ago(Math.max(0, now - a.fc[0].t)), em: false })),
+      ...listed.slice().sort((a, b) => Number(a.stale) - Number(b.stale) || Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t).map((a) => ({
+        key: a.key, colour: a.stale ? '#9aa6b2' : navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8', flag: '', name: a.name, second: navMetRowWords(a), sp: '', trend: 0 as const,
+        range: '', brg: '', noPos: a.stale, age: ago(Math.max(0, now - a.fc[0].t)), em: false })),
       ...warns.slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300).map((w) => ({
         key: w.key, colour: navWarnTag(w) ? '#9aa6b2' : NAV_HAZARD_COLOURS[w.cls === 'navaid' ? 'light' : (w.cls as keyof typeof NAV_HAZARD_COLOURS)] ?? '#d7dee6', flag: '',
         name: `${w.id} · ${navWarnSummary({ ...w, hit: '', lang: '' })}`, second: [w.st ? navName(w.st, w.sc) : '', navWarnTag(w)].filter(Boolean).join(' · '),

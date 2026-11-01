@@ -5,11 +5,12 @@
 // ★★ THE HEALTH GLYPHS' LANGUAGE (src/components/HealthPill.tsx): a 16-unit viewBox, single colour, stroke 1.4, round
 //    caps and joins, a small filled detail only where a stroke would close up at 16 px. The comparison sheet is
 //    scripts/navtex-icon-sheet.mjs (16 / 24 / 32 px, dark and light, to ~/Desktop/navtex-icons/).
-// ★ `unlit` is a MODIFIER: a light, buoy or structure whose light has failed carries the small UNLIT mark (a lamp
+// ★ `unlit` is a MODIFIER: a light, buoy, structure or platform whose light has failed carries the small UNLIT mark (a lamp
 //    struck through) in its top-right corner. The unlit-light icon is the lighthouse with that mark.
 // ★ PURE strings — no React Native, no DOM: the web client and the app's map page both draw from here.
 
-export type NavHazard = 'wreck' | 'navaid' | 'light' | 'buoy' | 'structure' | 'firing' | 'submarine' | 'uxo' | 'cable' | 'survey'
+export type NavHazard = 'wreck' | 'navaid' | 'light' | 'buoy' | 'structure' | 'platform' | 'firing' | 'submarine' | 'uxo'
+  | 'cable' | 'cable_telecom' | 'cable_power' | 'pipeline' | 'pipeline_gas' | 'survey'
   | 'obstruction' | 'adrift' | 'works' | 'towing' | 'sar' | 'ice' | 'general';
 
 /** The inner SVG of each glyph (16-unit box). Strokes inherit; `F` marks a filled detail (currentColor). */
@@ -34,8 +35,16 @@ export const NAV_GLYPHS: Record<NavHazard, string> = {
   submarine: '<path d="M4.2 9.4H13.2C14.6 9.4 15.3 9.9 15.3 10.600000000000001C15.3 11.600000000000001 14.4 11.8 13.2 11.8H4.6C3.4 11.8 2.5 11.100000000000001 1.9 11.05V10.150000000000002C2.5 10.100000000000001 3.2 9.4 4.2 9.4z" fill="currentColor" stroke-width="0.4"/><path d="M0.8 9.900000000000002h1.3v1.4h-1.3z" fill="currentColor" stroke-width="0.4"/><path d="M2.1 10.3L2.4 7.5H3.2L3.6 10.100000000000001z" fill="currentColor" stroke-width="0.4"/><path d="M2.2 10.900000000000002L2.4 12.3H3.1L3.4 11.100000000000001z" fill="currentColor" stroke-width="0.4"/><path d="M8.3 9.5V7.4C8.3 7.0 8.600000000000001 7.0 8.9 7.0H9.600000000000001C10.000000000000002 7.0 10.100000000000001 7.3 10.100000000000001 7.7V9.5z" fill="currentColor" stroke-width="0.4"/><path d="M11.49 9.5V8.81A0.21 0.21 0 0 1 11.91 8.81V9.5z" fill="currentColor" stroke-width="0.4"/><path d="M9.0 7.0v-1.1M9.5 7.0v-0.7" stroke-width="0.5"/>',
   // ★ a sea mine (Stuart, 2026-11-01, option C): a solid round case split by a band, four dots, short tapered horns
   uxo: '<path d="M3.43 7.90A4.6 4.6 0 0 1 12.57 7.90zM3.43 8.90A4.6 4.6 0 0 0 12.57 8.90zM5.45 6.30a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM9.05 6.30a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM5.45 10.50a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0zM9.05 10.50a0.75 0.75 0 1 0 1.5 0a0.75 0.75 0 1 0 -1.5 0z" fill="currentColor" fill-rule="evenodd" stroke="none"/><path d="M8.75 4.20L8.35 2.30L7.65 2.30L7.25 4.20zM11.87 6.61L13.20 5.19L12.80 4.61L11.01 5.38zM4.99 5.38L3.20 4.61L2.80 5.19L4.13 6.61zM11.01 11.42L12.80 12.19L13.20 11.61L11.87 10.19zM4.13 10.19L2.80 11.61L3.20 12.19L4.99 11.42zM7.25 12.60L7.65 14.50L8.35 14.50L8.75 12.60z" fill="currentColor" stroke="none"/>',
-  // a cable on the seabed between two joints
-  cable: '<path d="M2.6 8.6c2.2 0 2.4-3.6 5.4-3.6s3.2 3.6 5.4 3.6"/><circle cx="2.4" cy="8.6" r="1.2"/><circle cx="13.6" cy="8.6" r="1.2"/><path d="M1.6 12.6h2M5.2 12.6h2M8.8 12.6h2M12.4 12.6h2"/>',
+  // ★★ v6 CABLES AND PIPELINES IN FIVE (Stuart's drawings, 2026-11-01): the cable is a simple line on the seabed; the
+  //    telecom cable adds a handset, the power cable a solid bolt; the pipeline is a thick pipe with two flange collars,
+  //    and the GAS pipeline adds a flame that is ALWAYS BLUE (#3d9bff, its own fill — the marker's colour never reaches it)
+  cable: '<path d="M1.4 12.2C4 11.2 6 12.9 8 12.2s4-1.2 6.6 0" stroke-width="1.3"/>',
+  cable_telecom: '<path d="M5.0 3.1c.9-.5 1.6-.2 1.9.5l.5 1.1c.2.5 0 1-.5 1.2l-.7.3c.4 1 1.1 1.8 2.1 2.3l.4-.6c.3-.4.8-.5 1.3-.3l1.1.5c.7.3.9 1.1.4 1.9-.6.9-1.7 1.3-2.8.9C6.4 10.4 4.4 8.2 3.7 5.9c-.3-1.1.3-2.3 1.3-2.8z" fill="currentColor" stroke-width="0.4"/><path d="M1.4 12.2C4 11.2 6 12.9 8 12.2s4-1.2 6.6 0" stroke-width="1.3"/>',
+  cable_power: '<path d="M9.6 1.6L5.9 5.6h2.5L6.5 9.4l4.1-4.6H8.1z" fill="currentColor" stroke-width="0.5"/><path d="M1.4 12.2C4 11.2 6 12.9 8 12.2s4-1.2 6.6 0" stroke-width="1.3"/>',
+  pipeline: '<path d="M1.4 10.9h13.2v2.4H1.4z" fill="currentColor" stroke="none"/><path d="M4.4 10.2h1.2v3.8H4.4zM10.4 10.2h1.2v3.8h-1.2z" fill="currentColor" stroke="none"/>',
+  pipeline_gas: '<path d="M8 2.6c.5 1.5 2.4 2.3 2.4 4.3a2.4 2.4 0 0 1-4.8 0c0-.9.5-1.6 1-2 .1.7.5 1.1.9 1.2-.3-1.2-.1-2.5.5-3.5z" fill="#3d9bff" stroke="none"/><path d="M1.4 10.9h13.2v2.4H1.4z" fill="currentColor" stroke="none"/><path d="M4.4 10.2h1.2v3.8H4.4zM10.4 10.2h1.2v3.8h-1.2z" fill="currentColor" stroke="none"/>',
+  // ★ v6 an oil or gas PLATFORM (Stuart's pick P1): a steel jacket on the water, its deck and a derrick
+  platform: '<path d="M2.6 7.4h10.8"/><path d="M4.0 7.4l-.8 7M12 7.4l.8 7M4.4 10.2l7.2 2.4M11.6 10.2l-7.2 2.4" stroke-width="1.1"/><path d="M6.2 7.4L7.4 1.8h1.2l1.2 5.6M6.8 4.8h2.4" stroke-width="1.1"/><path d="M1.2 12.6c1.1-.9 2.2-.9 3.3 0s2.2.9 3.3 0 2.2-.9 3.3 0 2.2.9 3.3 0" stroke-width="1.1"/>',
   // a survey vessel and the sounding fanning out beneath it
   survey: '<path d="M1.8 6.6h12.4l-1.8 2.8H3.6z"/><path d="M6.4 6.6V4.4h3v2.2"/><path d="M5.6 11.4a3.4 3.4 0 0 0 4.8 0M4.1 13.4a5.6 5.6 0 0 0 7.8 0"/>',
   // an anchor: ring, stock, shank, flukes (anchoring, obstructions, shoals)
@@ -67,11 +76,16 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
   { id: 'wreck', words: 'Wreck' },
   { id: 'light', words: 'Light' },
   { id: 'buoy', words: 'Buoy or beacon' },
-  { id: 'structure', words: 'Wind turbine or platform' },
+  { id: 'structure', words: 'Wind farm or turbine' },
+  { id: 'platform', words: 'Oil or gas platform, rig or wellhead' },
   { id: 'firing', words: 'Firing or military exercise' },
   { id: 'submarine', words: 'Submarine operations' },
   { id: 'uxo', words: 'Mine or unexploded ordnance' },
-  { id: 'cable', words: 'Cable or pipeline' },
+  { id: 'cable', words: 'Cable (kind not stated)' },
+  { id: 'cable_telecom', words: 'Telecom cable' },
+  { id: 'cable_power', words: 'Power cable' },
+  { id: 'pipeline', words: 'Pipeline' },
+  { id: 'pipeline_gas', words: 'Gas pipeline' },
   { id: 'survey', words: 'Survey vessel' },
   { id: 'obstruction', words: 'Obstruction, shoal or anchoring' },
   { id: 'adrift', words: 'Adrift — container, debris, a derelict' },
@@ -87,7 +101,7 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
 export const NAV_HAZARD_COLOURS: Record<NavHazard, string> = {
   wreck: '#ff7a59', uxo: '#ff5a5a', firing: '#ff5a5a', submarine: '#ff5a5a', obstruction: '#ff9d5c', adrift: '#ff9d5c',
   light: '#ffc940', navaid: '#ffc940', buoy: '#ffc940',
-  structure: '#e8d36a', cable: '#e8d36a', survey: '#e8d36a', works: '#e8d36a', towing: '#e8d36a',
+  structure: '#e8d36a', platform: '#e8d36a', cable: '#e8d36a', cable_telecom: '#e8d36a', cable_power: '#e8d36a', pipeline: '#e8d36a', pipeline_gas: '#e8d36a', survey: '#e8d36a', works: '#e8d36a', towing: '#e8d36a',
   sar: '#ff7ac8', ice: '#9fdcff', general: '#d7dee6',
 };
 

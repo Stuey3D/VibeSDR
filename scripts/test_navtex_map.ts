@@ -2,7 +2,7 @@
 // both draw from it): the sanitiser, co-sited letters as one site, the why list, the schedule slot, the app's pins.
 //   npx tsx scripts/test_navtex_map.ts
 import { navSanitise, navSites, navWhy, navName, navSlot, navLabel, navCard, navItems, navStatus, navRangeOf, navSince } from '../src/services/navtexMap';
-import { navWarnSanitise, navWarnSummary, navWarnLabel, navWarnVisible, navWarnItems, navWarnCard, navWarnWhy, navWarnPoint, navBuilding,
+import { navWarnSanitise, navWarnSummary, navWarnLabel, navWarnVisible, navWarnItems, navWarnCard, navWarnWhy, navWarnPoint, navBuilding, navMetListed, navMetRowWords,
          navMetSanitise, navFcLabel, navMetVisible, navMetItems, navMetCard, navLayersOf } from '../src/services/navtexWarn';
 import { NAV_GLYPHS, NAV_HAZARDS, navGlyphSvg, navHazardMarker } from '../src/services/navtexIcons';
 
@@ -59,7 +59,8 @@ eq('the summary: our words, the message\'s own word and language — never "tran
 eq('…English wording: just ours', navWarnSummary({ cls: 'wreck', unlit: false, hit: '', lang: '' }), 'Wreck');
 eq('the label tags a cancelled one', navWarnLabel(w2), 'EA46 · Firing or military exercise · cancelled');
 eq('an area\'s marker at its centre, a route\'s at its middle point', [navWarnPoint(w2.pts, 'area'), [w3.lat, w3.lon]], [[50.5, 1.5], [50.5, 1.5]]);
-eq('the time filter: ALL shows the cancelled (faded), 24 H only what stands', [navWarnVisible(wr, 'all').length, navWarnVisible(wr, '24h').length], [3, 2]);
+// ★★ LATEST WINS (Stuart, 2026-11-01): a cancelled warning is drawn under NO filter, ALL included
+eq('the time filter: a cancelled warning is not drawn under 24 H, nor under ALL', [navWarnVisible(wr, 'all').map((w) => w.id), navWarnVisible(wr, '24h').map((w) => w.id)], [['EA45', 'EA48'], ['EA45', 'EA48']]);
 const wi = navWarnItems(wr!.list, wr!.now, 'web');
 eq('items: clustered, a shape for the area and the route, faded grey when cancelled', [wi.every((i) => i._cl === 'w'), wi[1]._sh?.kind, wi[2]._sh?.kind, wi[1]._sh?.faded, /opacity:0.42/.test(wi[1]._ic.html)], [true, 'area', 'route', true, true]);
 const wc = navWarnCard(w1, wr!.now);
@@ -79,7 +80,55 @@ eq('met: the clean areas kept', mr?.areas.map((a) => a.id), ['thames', 'dover'])
 eq('the label', navFcLabel(mr!.areas[0].fc[0]), 'SW 6–8 · GALES · ROUGH');
 eq('…a single force, fog', navFcLabel(mr!.areas[1].fc[0]), 'N 3 · SMOOTH · FOG');
 eq('…a gale word in another language: the flag only', navFcLabel({ ...mr!.areas[0].fc[0], gale: 8, native: true, fmin: 5, fmax: 6 }), 'SW 5–6 · GALE WORD · ROUGH');
-eq('only the latest is drawn; over a day old = faded under ALL, hidden otherwise', [mr!.areas[1].stale, navMetVisible(mr, 'all').length, navMetVisible(mr, '7d').length], [true, 2, 1]);
+eq('only the latest is drawn; over a day old = not drawn under any filter (ALL too), listed as "no current forecast"',
+   [mr!.areas[1].stale, navMetVisible(mr, 'all').length, navMetVisible(mr, '7d').length, navMetListed(mr).length, navMetRowWords(mr!.areas[1])], [true, 1, 1, 2, 'no current forecast']);
+// ★★ THAMES: last week's SEVERE GALE 9 and today's SW 4–5 → only SW 4–5, under every filter
+{
+  const now = 1793560000;
+  const th = navMetSanitise({ now, stale: 86400, areas: [{ id: 'thames', name: 'Thames', lat: 52.2, lon: 2.3, kind: 's', fc: [
+    { t: now - 3600, dir: 'SW', fmin: 4, fmax: 5, gale: 0, sea: 3, vis: 4, f: 'today.txt', txt: 'SOUTHWEST 4 OR 5.' },
+    { t: now - 7 * 86400, dir: 'SW', fmin: 9, fmax: 9, gale: 9, sea: 6, vis: 3, f: 'lastweek.txt', txt: 'SOUTHWEST SEVERE GALE 9.' }] }] });
+  for (const rng of ['1h', '24h', '7d', '30d', 'all']) {
+    const items = navMetItems(navMetVisible(th, rng), now, 'web');
+    eq(`Thames under ${rng}: only SW 4–5 is drawn (never last week's SEVERE GALE 9)`, [items.length, /SW 4–5/.test(items[0]?._ic.html ?? ''), /SEVERE/.test(items[0]?._ic.html ?? '')], [1, true, false]);
+  }
+  const old = navMetSanitise({ now, stale: 86400, areas: [{ id: 'thames', name: 'Thames', lat: 52.2, lon: 2.3, kind: 's', fc: [
+    { t: now - 7 * 86400, dir: 'SW', fmin: 9, fmax: 9, gale: 9, sea: 6, vis: 3, f: 'lastweek.txt', txt: 'SOUTHWEST SEVERE GALE 9.' }] }] });
+  eq('…and when last week’s gale is all there is: nothing drawn, not even under ALL', navMetItems(navMetVisible(old, 'all'), now).length, 0);
+}
+// ★★ v6: superseded and re-issued warnings; named lists; the new classes
+{
+  const now = 1793560000;
+  const r = navWarnSanitise({ now, warnings: [
+    { id: 'GA23', khz: 518, first: now - 7200, last: now - 7200, n: 1, cls: 'buoy', f: 'm1.txt', pts: [[53.8333, 1]], supersededBy: 'GA24', expired: 1 },
+    { id: 'GA24', khz: 518, first: now - 3600, last: now - 3600, n: 1, cls: 'buoy', f: 'm2.txt', pts: [[53.8667, 1.0833]] },
+    { id: 'PA11', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'platform', f: 'pa.txt', pts: [[54.1167, 4.0017], [53.6833, 3.7333], [53.4567, 4.2317]],
+      items: [{ n: 'F16-A', d: 'NAV AIDS UNRELIABLE', u: 1 }, { n: 'K6-N', d: 'FOGHORN INOPERATIVE', u: 0 }, { n: 'L10-B', d: 'BLACK OUT', u: 1 }] },
+    { id: 'GA30', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'pipeline_gas', f: 'g.txt', pts: [[53, 2]] },
+    { id: 'GA31', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'submarine', f: 's.txt', pts: [[53, 3]] },
+  ] });
+  for (const rng of ['24h', 'all']) eq(`a re-issued warning with a moved position (${rng}): only the new position is drawn`,
+    navWarnVisible(r, rng).filter((w) => w.id.startsWith('GA2')).map((w) => [w.id, w.lat]), [['GA24', 53.8667]]);
+  const its = navWarnItems(navWarnVisible(r, 'all'), now, 'web').filter((x) => x.key.startsWith('w:PA11'));
+  eq('PA11\'s three platforms: three markers, each its name and defect, the first keeps the warning\'s key',
+     its.map((x) => [x.key, x._lb, x.lat]), [['w:PA11:' + (now - 600), 'F16-A · NAV AIDS UNRELIABLE', 54.1167], [`w:PA11:${now - 600}:1`, 'K6-N · FOGHORN INOPERATIVE', 53.6833], [`w:PA11:${now - 600}:2`, 'L10-B · BLACK OUT', 53.4567]]);
+  eq('…the unlit mark per item (F16-A and L10-B, not K6-N); no shape across the North Sea', [its.map((x) => /M11 5l3.2-3.2/.test(x._ic.html)), its.every((x) => !x._sh)], [[true, false, true], true]);
+  eq('…each card names its item and shares the warning', [/K6-N — FOGHORN INOPERATIVE/.test(its[1]._cd), /PA11/.test(its[1]._cd)], [true, true]);
+  eq('the new classes keep their own words (gas pipeline, submarine operations)', navWarnVisible(r, 'all').filter((w) => w.id === 'GA30' || w.id === 'GA31').map((w) => navWarnSummary(w)), ['Gas pipeline', 'Submarine operations']);
+  eq('the gas flame stays blue on a faded marker too', /fill="#3d9bff"/.test(navHazardMarker('pipeline_gas', false, true).html), true);
+  eq('the platform carries the unlit mark', /M11 5l3.2-3.2/.test(navHazardMarker('platform', true, false).html), true);
+  eq('the legend lists the five cables and pipelines and the platform', ['cable', 'cable_telecom', 'cable_power', 'pipeline', 'pipeline_gas', 'platform'].every((k) => NAV_HAZARDS.some((h) => h.id === k)), true);
+}
+// ★★ the tidied station card: essentials, then "More"
+{
+  const st = navSanitise({ now: 1793560000, rx: { lat: 52.3, lon: -1.5 }, stations: [{ b1: 'E', name: 'Niton', iso: 'GB', country: 'United Kingdom', lat: 50.58, lon: -1.25, conf: 'confident', km: 195, khz: [518],
+    first: 1793000000, last: 1793559000, n: 40, uniq: 12, outright: 30, inSlot: 38, share: 6, subj: { A: 20, B: 10 }, ev: { series: 5 }, recent: [{ t: 1793559000, id: 'EA45', f: 'a.txt' }], near: [{ name: 'Niton', iso: 'GB', km: 195 }] }] });
+  const card = navCard(navSites(st)[0], 'web');
+  const [ess, more] = card.split('<details');
+  eq('station card: the essentials before "More" (name, letters + band, distance, last heard, messages, top why)',
+     [/Niton/.test(ess), /E · 518 kHz · 195 km/.test(ess), /Last heard 17 min ago · 40 messages \(12 different\)/.test(ess), (ess.match(/· Named|· Its warning|· Ended|· Nearest/g) || []).length <= 3], [true, true, true, true]);
+  eq('…first heard, kinds and newest ids under "More"', [/<summary[^>]*>More<\/summary>/.test(more), /First heard/.test(more), /Newest: EA45/.test(more), /First heard/.test(ess)], [true, true, true, false]);
+}
 const mi = navMetItems(mr!.areas, mr!.now, 'web');
 eq('the gale label in the warning colour', [/#5a1414/.test(mi[0]._ic.html), /#5a1414/.test(mi[1]._ic.html)], [true, false]);
 eq('the met card: forecast, history, station, the text slot', [/Earlier forecasts/.test(navMetCard(mr!.areas[0], mr!.now)), /Niton/.test(navMetCard(mr!.areas[0], mr!.now)), /nvTx/.test(navMetCard(mr!.areas[0], mr!.now))], [true, true, true]);

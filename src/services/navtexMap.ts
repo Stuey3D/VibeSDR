@@ -71,7 +71,12 @@ export const NAV_RANGES = [
   { id: '30d', label: '30 DAYS', words: 'Heard in the last 30 days', sec: 30 * 86400 },
   { id: 'all', label: 'ALL', words: 'Every message still in the gallery', sec: 0 },
 ];
-export const NAV_RANGE_HINT = 'ALL is every NAVTEX message still in the gallery — the oldest go when it is full.';
+/** ★★ LATEST WINS (Stuart, 2026-11-01): the filter picks WHICH stations, warnings and sea areas are shown, by when they were
+ *  last heard; each is drawn as its latest message says — never a cancelled, replaced or expired warning, never an old
+ *  forecast. The hint must not promise them under ALL. */
+export const NAV_RANGE_HINT = 'The filter picks what is shown by when it was last heard; each is drawn as its latest message says. '
+  + 'Cancelled, replaced and expired warnings and forecasts over a day old are not drawn (their messages stay in the gallery). '
+  + 'ALL is every NAVTEX message still in the gallery — the oldest go when it is full.';
 export function navRangeOf(saved: string | null | undefined): string { return NAV_RANGES.some((r) => r.id === saved) ? (saved as string) : 'all'; }
 /** The query's `since` (seconds back; 0 = everything). */
 export function navSince(range: string): number { return NAV_RANGES.find((r) => r.id === range)?.sec ?? 0; }
@@ -188,24 +193,34 @@ export function navWhy(s: NavStation): string[] {
   if (s.cands && s.cands.length > 1) out.push('Could be ' + s.cands.map((c) => `${c.name}${c.km !== undefined ? ` (${kmTxt(c.km)} km)` : ''}`).join(' or '));
   return out;
 }
-/** The card: the site (name, country, distance, first / last heard), then each LETTER: its band, how sure, how many
- *  messages (and how many different), their kinds, its newest ids, and WHY it is placed here. */
+/** ★★ The card (Stuart, 2026-11-01: tidied — it was a wall of text). THE ESSENTIALS FIRST: the name, its letters and
+ *  bands, the distance, last heard, how many messages, and the top three reasons it is placed here. EVERYTHING ELSE —
+ *  first heard, each letter's own counts, kinds, newest ids and full why — under a "More" disclosure (a <details>, so it
+ *  works the same in the web page and the app's map). */
 export function navCard(g: NavSite, wrap: 'web' | 'app' = 'web'): string {
   const lines: string[] = [];
-  lines.push(`<b>${escN(navName(g.name, g.conf))}</b>, ${escN(g.country)}${g.km !== undefined ? ` · ${escN(kmTxt(g.km))} km from the receiver` : ''}`);
-  lines.push(`first heard ${utc(g.first)} · last heard ${utc(g.last)} UTC (${navAgo(g.seen)})`);
+  const bands = g.khz.map((k) => `${k}`).join(' + ');
+  lines.push(`<div class="t"><b>${escN(navName(g.name, g.conf))}</b>${g.country ? `, ${escN(g.country)}` : ''}</div>`);
+  lines.push(`<div>${escN(lettersOf(g))} · ${escN(bands)} kHz${g.km !== undefined ? ` · ${escN(kmTxt(g.km))} km` : ''}</div>`);
+  lines.push(`<div>Last heard ${navAgo(g.seen)} · ${g.n} ${g.n === 1 ? 'message' : 'messages'}${g.uniq !== g.n ? ` (${g.uniq} different)` : ''}</div>`);
+  // ★ the top reasons — the busiest letter's strongest evidence (navWhy is strongest first)
+  const top = g.letters[0] ? navWhy(g.letters[0]).slice(0, 3) : [];
+  if (top.length) lines.push(`<div class="why" style="margin-top:4px">${top.map((w) => `· ${escN(w)}`).join('<br>')}</div>`);
+  const more: string[] = [];
+  more.push(`First heard ${utc(g.first)} UTC · last heard ${utc(g.last)} UTC`);
   for (const s of g.letters) {
     const kinds = Object.entries(s.subj).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${navtexSubject(k) ?? k} ${n}`);
-    lines.push(`<b>${escN(s.b1)}</b> · ${s.khz.map((k) => `${k} kHz`).join(' + ')} · ${s.n} received, ${s.uniq} different`
+    more.push(`<b>${escN(s.b1)}</b> · ${s.khz.map((k) => `${k} kHz`).join(' + ')} · ${s.n} received, ${s.uniq} different`
       + `${s.conf !== 'confident' ? ` · ${escN(CONF_WORDS[s.conf])}` : ''}`);
-    for (const w of navWhy(s)) lines.push('&nbsp;&nbsp;· ' + escN(w));
-    if (kinds.length) lines.push('&nbsp;&nbsp;' + escN(kinds.join(' · ')));
+    for (const w of navWhy(s)) more.push('&nbsp;&nbsp;· ' + escN(w));
+    if (kinds.length) more.push('&nbsp;&nbsp;' + escN(kinds.join(' · ')));
     // ★ each id once (a warning is repeated every slot until cancelled): its newest reception
     const seenIds = new Set<string>();
     const fresh = s.recent.filter((r) => (seenIds.has(r.id) ? false : (seenIds.add(r.id), true)));
-    if (fresh.length) lines.push('&nbsp;&nbsp;Newest: ' + fresh.slice(0, 6).map((r) => `${escN(r.id)} ${utc(r.t).slice(5)}`).join(' · '));
+    if (fresh.length) more.push('&nbsp;&nbsp;Newest: ' + fresh.slice(0, 6).map((r) => `${escN(r.id)} ${utc(r.t).slice(5)}`).join(' · '));
   }
-  const body = lines.join('<br>');
+  lines.push(`<details class="navMore" style="margin-top:6px"><summary style="cursor:pointer;font-weight:700">More</summary><div style="margin-top:4px">${more.join('<br>')}</div></details>`);
+  const body = lines.join('');
   return wrap === 'app' ? `<div class="trkCard"><div style="white-space:normal;max-width:320px">${body}</div></div>` : `<div class="pop">${body}</div>`;
 }
 /** The list (the web's TrackView rows / the app's TrackLiveList rows): nearest first, one row a site. */

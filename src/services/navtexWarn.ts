@@ -16,7 +16,8 @@ const okLat = (v: unknown) => num(v) !== undefined && Math.abs(v as number) <= 9
 const okLon = (v: unknown) => num(v) !== undefined && Math.abs(v as number) <= 180;
 function esc(v: string): string { return String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string)); }
 const utc = (t: number) => { const d = new Date(t * 1000); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`; };
-const CLASSES = ['wreck', 'navaid', 'buoy', 'structure', 'firing', 'uxo', 'cable', 'survey', 'obstruction', 'adrift', 'works', 'towing', 'sar', 'ice', 'general'];
+const CLASSES = ['wreck', 'navaid', 'buoy', 'structure', 'platform', 'firing', 'submarine', 'uxo', 'cable', 'cable_telecom', 'cable_power', 'pipeline', 'pipeline_gas',
+  'survey', 'obstruction', 'adrift', 'works', 'towing', 'sar', 'ice', 'general'];
 
 // ── the warnings ─────────────────────────────────────────────────────────────────────────────────────────────────────
 export interface NavWarn {
@@ -24,9 +25,14 @@ export interface NavWarn {
   expired: boolean; cancelled: boolean; cancelledBy: string; cancelAt: number; validTo: number; ufn: boolean;
   cls: string; f: string; series: string; hit: string; lang: string; pts: Array<[number, number]>; shape: '' | 'area' | 'route';
   issued: number; st: string; sc: string; iso: string; q: string;
+  /** ★ v6: replaced by a newer message (REPLACES, or its number re-issued) — never drawn */
+  superseded: boolean; supersededBy: string;
+  /** ★ v6: a list of named items ("FOLLOWING PLATFORMS HAVE DEFECTS:") — one per point, each its own marker */
+  items: NavItem[];
   /** the marker's point: an area's centre, a route's middle point, else the first position */
   lat: number; lon: number;
 }
+export interface NavItem { n: string; d: string; u: boolean }
 export interface NavWarnReport { now: number; total: number; shown: number; receptions: number; warnings: number; live: number; indexed: number; pending: number; list: NavWarn[] }
 
 /** A report from the wire, cut to its fields. */
@@ -41,6 +47,8 @@ export function navWarnSanitise(j: any): NavWarnReport | null {
     if (!id) continue;
     const shape = w.shape === 'area' && pts.length >= 3 ? 'area' : w.shape === 'route' && pts.length >= 2 ? 'route' : '';
     const at = navWarnPoint(pts, shape);
+    const items: NavItem[] = Array.isArray(w.items) && w.items.length === pts.length && !shape
+      ? w.items.slice(0, 24).map((x: any) => ({ n: str(x?.n, 40), d: str(x?.d, 60), u: x?.u === 1 || x?.u === true })) : [];
     const first = num(w.first) ?? 0;
     list.push({
       key: `w:${id}:${first}`, id, khz: num(w.khz) ?? 0, first, last: num(w.last) ?? first, n: num(w.n) ?? 1, lost: Math.max(0, num(w.lost) ?? 0),
@@ -49,6 +57,7 @@ export function navWarnSanitise(j: any): NavWarnReport | null {
       cls: CLASSES.includes(w.cls) ? w.cls : 'general', f: str(w.f, 80), series: str(w.series, 40), hit: str(w.hit, 40), lang: str(w.lang, 3),
       pts, shape, issued: num(w.issued) ?? 0, st: str(w.st, 40), sc: ['confident', 'likely', 'ambiguous'].includes(w.sc) ? w.sc : '', iso: /^[A-Z]{2}$/.test(w.iso) ? w.iso : '',
       q: str(w.q, 80), lat: at[0], lon: at[1],
+      superseded: !!w.supersededBy, supersededBy: /^[A-Z]{2}\d{2}$/.test(w.supersededBy) ? w.supersededBy : '', items,
     });
   }
   return { now: num(j.now) ?? Math.floor(Date.now() / 1000), total: num(j.total) ?? list.length, shown: num(j.shown) ?? list.length, receptions: num(j.receptions) ?? 0,
@@ -65,11 +74,12 @@ export function navWarnHazard(w: Pick<NavWarn, 'cls'>): NavHazard {
   return w.cls === 'navaid' ? 'light' : (CLASSES.includes(w.cls) ? w.cls : 'general') as NavHazard;
 }
 const HAZ_WORDS: Record<string, string> = {
-  wreck: 'Wreck', navaid: 'Light or navigation aid', buoy: 'Buoy or beacon', structure: 'Wind turbine or platform', firing: 'Firing or military exercise',
-  uxo: 'Mine or unexploded ordnance', cable: 'Cable or pipeline', survey: 'Survey work', obstruction: 'Obstruction, shoal or anchoring',
+  wreck: 'Wreck', navaid: 'Light or navigation aid', buoy: 'Buoy or beacon', structure: 'Wind farm or turbine', platform: 'Oil or gas platform, rig or wellhead',
+  firing: 'Firing or military exercise', submarine: 'Submarine operations', uxo: 'Mine or unexploded ordnance', cable: 'Cable (its kind not stated)',
+  cable_telecom: 'Telecom cable', cable_power: 'Power cable', pipeline: 'Pipeline', pipeline_gas: 'Gas pipeline', survey: 'Survey work', obstruction: 'Obstruction, shoal or anchoring',
   adrift: 'Adrift — a container, debris or a derelict', works: 'Works, dredging or diving', towing: 'A tow', sar: 'Search and rescue', ice: 'Ice', general: 'Navigational warning',
 };
-const UNLIT_WORDS: Record<string, string> = { navaid: 'Unlit light', buoy: 'Buoy, its light unlit', structure: 'Wind turbine or platform, its light out' };
+const UNLIT_WORDS: Record<string, string> = { navaid: 'Unlit light', buoy: 'Buoy, its light unlit', structure: 'Wind turbine, its light out', platform: 'Platform, unlit' };
 export const NAV_LANGS: Record<string, string> = { fr: 'French', es: 'Spanish', it: 'Italian', de: 'German', nl: 'Dutch', hr: 'Croatian', el: 'Greek', pt: 'Portuguese', et: 'Estonian', pl: 'Polish' };
 /** ★★ The one-line summary: our words for the class, and the message's own word when it was not English — "Unlit light
  *  (from French: FEU ETEINT)". Never called a translation. */
@@ -77,13 +87,17 @@ export function navWarnSummary(w: Pick<NavWarn, 'cls' | 'unlit' | 'hit' | 'lang'
   const words = (w.unlit && UNLIT_WORDS[w.cls]) || (w.unlit ? `${HAZ_WORDS[w.cls] ?? HAZ_WORDS.general} — a light out` : HAZ_WORDS[w.cls] ?? HAZ_WORDS.general);
   return w.hit && NAV_LANGS[w.lang] ? `${words} (from ${NAV_LANGS[w.lang]}: ${w.hit})` : words;
 }
-export function navWarnFaded(w: NavWarn): boolean { return w.expired || w.cancelled; }
-/** "expired" / "cancelled" / "" — the tag on a faded marker. */
-export function navWarnTag(w: NavWarn): string { return w.cancelled ? 'cancelled' : w.expired ? 'expired' : ''; }
-/** ★ The time filter: ALL shows the expired and the cancelled, faded; a shorter range only what still stands. */
-export function navWarnVisible(r: NavWarnReport | null, range: string): NavWarn[] {
+/** No longer in force: cancelled, replaced by a newer message, or expired. */
+export function navWarnFaded(w: NavWarn): boolean { return w.expired || w.cancelled || w.superseded; }
+/** "cancelled" / "superseded" / "expired" / "" — why a warning is no longer in force. */
+export function navWarnTag(w: NavWarn): string { return w.cancelled ? 'cancelled' : w.superseded ? 'superseded' : w.expired ? 'expired' : ''; }
+/** ★★ LATEST WINS (Stuart, 2026-11-01: "even if we filter by all messages the map shows the icons based on the last received
+ *  message"). The time filter (the server's `since`) chooses WHICH warnings are in view, by when they were last heard;
+ *  what is drawn is their latest state — so a cancelled, superseded or expired warning is never drawn, under ANY filter,
+ *  ALL included. Its history stays in the station's card and the gallery. `range` is kept for the callers' symmetry. */
+export function navWarnVisible(r: NavWarnReport | null, _range?: string): NavWarn[] {
   if (!r) return [];
-  return range === 'all' ? r.list : r.list.filter((w) => !navWarnFaded(w));
+  return r.list.filter((w) => !navWarnFaded(w));
 }
 export function navWarnLabel(w: NavWarn): string {
   const short = navWarnSummary({ ...w, hit: '', lang: '' }).split(' — ')[0].split(',')[0];
@@ -104,8 +118,10 @@ export function navWarnWhy(w: NavWarn, now: number): string[] {
   else out.push('Its icon: no hazard word this map knows — the general warning');
   out.push(w.shape === 'area' ? `Drawn as an area: the text names an area through its ${w.pts.length} points`
     : w.shape === 'route' ? `Drawn as a line: the text names a route or line through its ${w.pts.length} points`
+    : w.items.length ? `One of ${w.items.length} named in a list, each its own marker`
     : w.pts.length > 1 ? `${w.pts.length} positions, each its own point (the text names no area or route)` : 'One position');
-  if (w.cancelledBy) out.push(`Cancelled by ${w.cancelledBy}`);
+  if (w.supersededBy) out.push(`Superseded by ${w.supersededBy}`);
+  else if (w.cancelledBy) out.push(`Cancelled by ${w.cancelledBy}`);
   else if (w.cancelled && w.cancelAt) out.push(`Cancelled at ${utc(w.cancelAt)} UTC, as it said it would be`);
   else if (w.expired) out.push(w.validTo ? `Expired: its own window ended ${utc(w.validTo)} UTC`
     : w.ufn ? 'Expired: "until further notice", but not heard for 30 days' : `Expired: not heard for ${Math.round((now - w.last) / 3600)} h (72 h without a repeat)`);
@@ -118,10 +134,12 @@ const flagOf = (iso: string) => (/^[A-Z]{2}$/.test(iso) ? String.fromCodePoint(.
 export function navWarnTitle(w: NavWarn): string { return `${w.id} · ${w.st || 'NAVTEX'} ${flagOf(w.iso)}`.trim(); }
 /** ★ The card. The full gallery text is fetched when it opens, into `.nvTx` (data-f = the gallery file), with the
  *  gallery's own TRANSLATE in `.nvTr` (shown only where it can translate) and its note in `.nvTrNote`. */
-export function navWarnCard(w: NavWarn, now: number, wrap: 'web' | 'app' = 'web'): string {
+export function navWarnCard(w: NavWarn, now: number, wrap: 'web' | 'app' = 'web', item?: NavItem): string {
   const h = navWarnHazard(w), faded = navWarnFaded(w);
   const c = faded ? '#9aa6b2' : NAV_HAZARD_COLOURS[h];
+  const unlit = item ? item.u : w.unlit;
   const rows: Array<[string, string]> = [];
+  if (item) rows.push(['Item', [item.n, item.d].filter(Boolean).join(' — ')]);
   rows.push(['Warning', [w.id, w.series, w.khz ? `${w.khz} kHz` : ''].filter(Boolean).join(' · ')]);
   if (w.issued) rows.push(['Issued', `${utc(w.issued)} UTC (its own date-time group)`]);
   rows.push(['First heard', `${utc(w.first)} UTC`]);
@@ -131,7 +149,7 @@ export function navWarnCard(w: NavWarn, now: number, wrap: 'web' | 'app' = 'web'
   rows.push(['Best copy', w.q || (w.lost ? `${w.lost} characters lost` : 'no errors')]);
   const tag = navWarnTag(w);
   const lines: string[] = [];
-  lines.push(`<div class="t" style="display:flex;gap:8px;align-items:center">${navGlyphSvg(h, 20, c, w.unlit)}<b>${esc(navWarnSummary(w))}</b></div>`);
+  lines.push(`<div class="t" style="display:flex;gap:8px;align-items:center">${navGlyphSvg(h, 20, c, unlit)}<b>${esc(navWarnSummary({ ...w, unlit }))}</b></div>`);
   if (tag) lines.push(`<div style="color:#ffb37a;font-weight:700;letter-spacing:.04em">${esc(tag.toUpperCase())}</div>`);
   for (const [k, v] of rows) lines.push(`<div class="r"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`);
   for (const y of navWarnWhy(w, now)) lines.push(`<div class="r"><span class="k">Why</span><span class="v">${esc(y)}</span></div>`);
@@ -146,16 +164,27 @@ export function navTextBlock(file: string, title: string): string {
     + `<pre class="nvTx raw" data-f="${esc(file)}" style="white-space:pre-wrap;max-height:220px;overflow:auto;margin:0">Loading the message…</pre>`
     + `<div class="nvTrNote" hidden style="color:#ffd34d;font-size:11px;margin-top:3px"></div></div>`;
 }
-/** A warning on the map: its icon (faded under ALL when expired or cancelled), its shape, clustered when zoomed out. */
+/** A warning on the map: its icon, its shape, clustered when zoomed out. ★ v6: a named list ("FOLLOWING PLATFORMS HAVE
+ *  DEFECTS:") is one marker an ITEM — its own name, defect and unlit mark, the warning's id, dates and text shared (the
+ *  first keeps the warning's key, so the list row finds it). */
 export function navWarnItems(list: NavWarn[], now: number, wrap: 'web' | 'app' = 'web') {
-  return list.map((w) => {
+  return list.flatMap((w) => {
     const h = navWarnHazard(w), faded = navWarnFaded(w);
-    return {
+    if (w.items.length && w.items.length === w.pts.length) {
+      return w.items.map((it, i) => ({
+        key: i ? `${w.key}:${i}` : w.key, lat: w.pts[i][0], lon: w.pts[i][1], _ic: navHazardMarker(h, it.u, faded),
+        _lb: `${it.n || w.id}${it.d ? ` · ${it.d}` : ''}`, _cd: navWarnCard(w, now, wrap, it), _h: w.n,
+        _rk: (faded ? 0 : 1e5) + Math.min(w.last, 4e9) / 1e5, _cl: 'w',
+        _aria: `Warning ${w.id}, ${it.n}${it.d ? `: ${it.d}` : ''}. ${navWarnSummary({ ...w, unlit: it.u })}. Press Enter for its card.`,
+        _sh: undefined, _f: w.f,
+      }));
+    }
+    return [{
       key: w.key, lat: w.lat, lon: w.lon, _ic: navHazardMarker(h, w.unlit, faded), _lb: navWarnLabel(w), _cd: navWarnCard(w, now, wrap),
       _h: w.n, _rk: (faded ? 0 : 1e5) + Math.min(w.last, 4e9) / 1e5, _cl: 'w', _aria: navWarnAria(w),
       _sh: w.shape || w.pts.length > 1 ? { kind: w.shape || 'points', pts: w.pts, colour: faded ? '#9aa6b2' : NAV_HAZARD_COLOURS[h], faded } : undefined,
       _f: w.f,
-    };
+    }];
   });
 }
 /** "Building the map from 4 515 saved messages… 42 %" while the server's backfill runs. */
@@ -164,11 +193,11 @@ export function navBuilding(r: { live: number; indexed: number; pending: number 
   const pct = r.live > 0 ? Math.min(99, Math.floor((100 * r.indexed) / r.live)) : 0;
   return `Building the map from ${r.live.toLocaleString('en-GB')} saved messages… ${pct} %`;
 }
-export function navWarnStatus(r: NavWarnReport | null, range: string): string {
+export function navWarnStatus(r: NavWarnReport | null, range?: string): string {
   if (!r) return '';
   const vis = navWarnVisible(r, range);
-  const cur = vis.filter((w) => !navWarnFaded(w)).length;
-  return `${vis.length} ${vis.length === 1 ? 'warning' : 'warnings'}${range === 'all' && cur !== vis.length ? ` (${cur} current)` : ''}`
+  const gone = r.list.length - vis.length;
+  return `${vis.length} ${vis.length === 1 ? 'warning' : 'warnings'} in force${gone ? ` (${gone} cancelled, replaced or expired — not drawn)` : ''}`
     + (r.total > r.shown ? ` · the newest ${r.shown.toLocaleString('en-GB')} of ${r.total.toLocaleString('en-GB')}` : '');
 }
 
@@ -211,32 +240,41 @@ export function navFcLabel(f: NavFc): string {
   return [navFcWind(f), g, sea, vis].filter(Boolean).join(' · ') || 'forecast';
 }
 export function navFcGale(f: NavFc): boolean { return f.gale >= 8; }
-export function navMetVisible(r: NavMetReport | null, range: string): NavArea[] {
+/** ★★ LATEST WINS: an area draws ONLY its newest forecast, under every filter, ALL included — and none at all when that is
+ *  over a day old (a superseded or stale forecast is never shown as the conditions now; the card keeps the history). */
+export function navMetVisible(r: NavMetReport | null, _range?: string): NavArea[] {
   if (!r) return [];
-  return range === 'all' ? r.areas : r.areas.filter((a) => !a.stale);
+  return r.areas.filter((a) => !a.stale);
 }
+/** The list keeps every area heard in the range — a stale one says "no current forecast", never its old conditions. */
+export function navMetListed(r: NavMetReport | null): NavArea[] { return r ? r.areas : []; }
+/** The list row's words: the newest forecast, or "no current forecast" when it is over a day old. */
+export function navMetRowWords(a: NavArea): string { return a.stale ? 'no current forecast' : navFcLabel(a.fc[0]); }
 /** The label as a marker: a small pill — the area's name over its forecast, gale or worse in the warning colour; an old
  *  forecast (over a day) faded. */
 export function navMetIcon(a: NavArea): { html: string; w: number; h: number } {
   const f = a.fc[0], lab = navFcLabel(f), gale = navFcGale(f);
   const w = Math.round(Math.max(a.name.length * 6.0, lab.length * 6.4) + 14), h = 30;
   const bg = gale ? '#5a1414' : 'rgba(12,22,34,.88)', bd = gale ? '#ff6b5a' : '#5d8fb8', fg = gale ? '#ffd2c8' : '#cfe6ff';
+  // ★ a stale area is never drawn (navMetVisible); should one reach here it says so, never its old conditions
+  if (a.stale) return { html: `<div style="width:${Math.round(a.name.length * 6 + 14)}px;height:16px;box-sizing:border-box;border:1px dashed #5d8fb8;border-radius:6px;background:rgba(12,22,34,.7);opacity:.5;font:500 9px/14px ui-monospace,Menlo,monospace;color:#cfe6ff;text-align:center">${esc(a.name.toUpperCase())}</div>`, w: Math.round(a.name.length * 6 + 14), h: 16 };
   return {
     html: `<div style="width:${w}px;height:${h}px;box-sizing:border-box;border:1px solid ${bd};border-radius:6px;background:${bg};opacity:${a.stale ? 0.45 : 1};`
       + `font:600 10px/12px ui-monospace,Menlo,Consolas,monospace;color:${fg};padding:2px 6px;white-space:nowrap;overflow:hidden;text-align:center">`
-      + `<div style="font-weight:500;opacity:.75;font-size:9px">${esc(a.name.toUpperCase())}${a.stale ? ' · OLD' : ''}</div>${esc(lab)}</div>`,
+      + `<div style="font-weight:500;opacity:.75;font-size:9px">${esc(a.name.toUpperCase())}</div>${esc(lab)}</div>`,
     w, h,
   };
 }
 export function navMetAria(a: NavArea): string {
   const f = a.fc[0];
-  return `Sea area ${a.name}: ${navFcLabel(f)}, heard ${utc(f.t)} UTC${a.stale ? ', more than a day old' : ''}. Press Enter for the forecast.`;
+  return a.stale ? `Sea area ${a.name}: no current forecast. Press Enter for the last one heard.`
+    : `Sea area ${a.name}: ${navFcLabel(f)}, heard ${utc(f.t)} UTC. Press Enter for the forecast.`;
 }
 export function navMetCard(a: NavArea, now: number, wrap: 'web' | 'app' = 'web'): string {
   const f = a.fc[0];
   const lines: string[] = [];
   lines.push(`<div class="t"><b>${esc(a.name)}</b> · ${esc(a.kind === 'i' ? 'inshore waters' : a.kind === 'n' ? 'sea area' : 'shipping forecast area')}</div>`);
-  if (a.stale) lines.push(`<div style="color:#ffb37a;font-weight:700">OVER A DAY OLD — no newer forecast heard</div>`);
+  if (a.stale) lines.push(`<div style="color:#ffb37a;font-weight:700">NO CURRENT FORECAST — the newest heard is over a day old; shown for the record</div>`);
   const row = (k: string, v: string) => lines.push(`<div class="r"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`);
   row('Forecast', navFcLabel(f));
   if (f.fmin >= 0 || f.dir) row('Wind', `${navFcWind(f)}${f.gale >= 8 && !f.native ? ` — ${GALE[Math.min(12, f.gale)].toLowerCase()}` : ''}`);
@@ -265,7 +303,7 @@ export function navMetItems(areas: NavArea[], now: number, wrap: 'web' | 'app' =
 }
 export function navMetStatus(r: NavMetReport | null, range: string): string {
   if (!r) return '';
-  const v = navMetVisible(r, range), g = v.filter((a) => navFcGale(a.fc[0]) && !a.stale).length;
+  const v = navMetVisible(r, range), g = v.filter((a) => navFcGale(a.fc[0])).length;
   return `${v.length} sea ${v.length === 1 ? 'area' : 'areas'}${g ? ` (${g} gale or worse)` : ''}`;
 }
 
