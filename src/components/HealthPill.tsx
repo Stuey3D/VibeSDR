@@ -83,8 +83,8 @@ const clampLevel = (n: number): number => Math.max(0, Math.min(3, Math.round(n) 
 type GlyphName = 'cpu' | 'ram' | 'temp' | 'snailFire' | 'snailBolt' | 'snail';
 
 /** ★ THE TORTOISE (Stuart, 2026-11-01) — neck, head and two legs; the shell's height differs per glyph. */
-const TORTOISE_NECK = 'M11.6 11.2l1.1-1';
-const TORTOISE_LEGS = 'M3.4 12v2M9.6 12v2M1.5 12.2l-1.1 .9';
+const TORTOISE_NECK = 'M11.5 11.7l1.2-.6';
+const TORTOISE_LEGS = 'M3.4 12v2M9.6 12v2M1.4 11.8l-1-.9';
 const TORTOISE_FLAME = 'M6.5 0.9c.4 1.5 2.4 2.3 2.4 4.3a2.4 2.4 0 0 1-4.8 0c0-.9.5-1.6 1-2 .1.7.5 1.1.9 1.2-.3-1.2-.1-2.5.5-3.5z';
 /** ★ The shell's plates — small solid hexagons (a red-footed tortoise, Stuart's photo): 3 under a flame or
  *  bolt, 5 when the shell has the box to itself. */
@@ -147,7 +147,7 @@ function glyphBody(name: GlyphName, color: string) {
           <Path d="M1.2 12a5.3 4.4 0 0 1 10.6 0z" />
           <Path d={TORTOISE_HEX_FIRE} fill={color} stroke="none" />
           <Path d={TORTOISE_NECK} />
-          <Circle cx={13.7} cy={9.2} r={1.4} />
+          <Circle cx={13.9} cy={10.6} r={1.35} />
           <Path d={TORTOISE_LEGS} />
           <Path d={TORTOISE_FLAME} fill={color} strokeWidth={0.6} />
         </>
@@ -158,7 +158,7 @@ function glyphBody(name: GlyphName, color: string) {
           <Path d="M1.2 12a5.3 4.6 0 0 1 10.6 0z" />
           <Path d={TORTOISE_HEX_BOLT} fill={color} stroke="none" />
           <Path d={TORTOISE_NECK} />
-          <Circle cx={13.7} cy={9.2} r={1.4} />
+          <Circle cx={13.9} cy={10.6} r={1.35} />
           <Path d={TORTOISE_LEGS} />
           <Path d={TORTOISE_BOLT} fill={color} strokeWidth={0.6} />
         </>
@@ -169,7 +169,7 @@ function glyphBody(name: GlyphName, color: string) {
           <Path d="M1.2 12a5.3 7.4 0 0 1 10.6 0z" />
           <Path d={TORTOISE_HEX_PLAIN} fill={color} stroke="none" />
           <Path d={TORTOISE_NECK} />
-          <Circle cx={13.7} cy={9.2} r={1.4} />
+          <Circle cx={13.9} cy={10.6} r={1.35} />
           <Path d={TORTOISE_LEGS} />
         </>
       );
