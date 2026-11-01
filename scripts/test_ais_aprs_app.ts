@@ -164,7 +164,8 @@ ok('APRS hint names the channel', app.aprsHintText(1200, 144.8e6).includes('144.
 // ── the app's wiring (source checks) ──
 const src = (p: string) => readFileSync(new URL('../' + p, import.meta.url), 'utf8');
 const dc = src('src/services/DecoderClient.ts');
-ok('DecoderClient: aprs is a decoder name', /DecoderName[^;]*'aprs'/.test(dc));
+// ★ comments are dropped first: the union's line comments (PAGING's "AUTO; only on…") may hold a ';'.
+ok('DecoderClient: aprs is a decoder name', /DecoderName[^;]*'aprs'/.test(dc.replace(/\/\/[^\n]*/g, '')));
 ok('DecoderClient: attaches extension aprs with its baud', /case 'aprs':[^\n]*extension_name: 'aprs'/.test(dc));
 ok('DecoderClient: aprs_list and aprs_packet only while APRS is attached', /aprs_list[\s\S]{0,200}this\.active !== 'aprs'/.test(dc));
 const vc = src('src/services/VibeServerClient.ts');
@@ -185,7 +186,8 @@ ok('Gallery: AIS and APRS chips (the web\'s)', /id: 'ais', label: 'AIS'/.test(ga
 const about = src('src/components/AboutOverlay.tsx');
 ok('About: the V12 note names AIS and APRS', /AIS/.test(about) && /APRS/.test(about));
 const tour = src('src/screens/SDRScreen.tsx');
-ok('Tour: the Mode card names AIS and EXIT AIS', /NDB and AIS, which take the whole receiver[^']*EXIT AIS/.test(tour));
+// ★ 53b94f5c0 reworded the card ("DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver").
+ok('Tour: the Mode card names AIS and EXIT AIS', /NDB and AIS wherever that receiver can run them, and they take the whole receiver[^']*AIS opens a map of the ships[^']*EXIT AIS/.test(tour));
 ok('Tour: the Mode card names APRS and its MAP', /APRS \(packet stations, with MAP in its box\)/.test(tour));
 
 console.log(`${fails ? 'FAIL' : 'ok'}  test_ais_aprs_app — ${passes} passed, ${fails} failed`);
