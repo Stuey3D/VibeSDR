@@ -84,7 +84,7 @@ type GlyphName = 'cpu' | 'ram' | 'temp' | 'snailFire' | 'snailBolt' | 'snail';
 
 /** ★ THE TORTOISE (Stuart, 2026-11-01) — neck, head and two legs; the shell's height differs per glyph. */
 const TORTOISE_NECK = 'M11.5 11.7l1.2-.6';
-const TORTOISE_LEGS = 'M3.4 12v2M9.6 12v2M1.4 11.8l-1-1.15';
+const TORTOISE_LEGS = 'M3.4 12v2M9.6 12v2M1.7 11.7l-1.3.6';
 const TORTOISE_FLAME = 'M6.5 0.9c.4 1.5 2.4 2.3 2.4 4.3a2.4 2.4 0 0 1-4.8 0c0-.9.5-1.6 1-2 .1.7.5 1.1.9 1.2-.3-1.2-.1-2.5.5-3.5z';
 /** ★ The shell's plates — small solid hexagons (a red-footed tortoise, Stuart's photo): 3 under a flame or
  *  bolt, 5 when the shell has the box to itself. */
