@@ -23533,7 +23533,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  to date from its live view (at most 400 newly saved messages parsed a request — the first opening of a big
              *  gallery is the BACKFILL, answered with "pending" so the map says "Building … %"), then one marker per
              *  warning, the newest 1 000 with a position. Compacted when a third of its lines are messages since evicted. */
-            if (path == "/vibeserver/gallery/navtex-warnings.json") {
+            if (path == "/vibeserver/gallery/navtex-warnings.json" || path == "/vibeserver/gallery/navtex-met.json") {
                 static std::mutex wMtx;
                 std::lock_guard<std::mutex> wl(wMtx);
                 long since = std::max(0L, std::atol(qv("since").c_str()));
@@ -23554,10 +23554,40 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 };
                 std::unordered_set<uint64_t> live; size_t lines = 0;
                 const vibe::navwarn::LiveFn each = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
-                const auto sr = vibe::navwarn::sync(idx, each, readText, 400, &live, &lines);
-                if (lines > 64 && lines > live.size() + live.size() / 2) vibe::navwarn::compact(idx, live);
+                // ★ stage 3: a forecast's areas are parsed once, beside its index line (gallery/navtex-met.idx)
+                const std::string metIdx = g.dir() + "/navtex-met.idx";
+                const auto sr = vibe::navwarn::sync(idx, each, readText, 400, &live, &lines, metIdx);
+                if (lines > 64 && lines > live.size() + live.size() / 2) { vibe::navwarn::compact(idx, live); vibe::navmet::compact(metIdx, live); }
+                /* ★ the card's station ("Suspected …", "?") and decode quality: the stations map's own placement of each
+                 *  message (navmap::scan), cached while the gallery is unchanged — one scan per new message, not per poll */
+                static std::string placedStamp;
+                static std::unordered_map<uint64_t, vibe::navmap::Placed> placed;
+                {
+                    struct stat st{};
+                    const std::string gi = g.dir() + "/index.jsonl";
+                    const std::string stamp = ::stat(gi.c_str(), &st) == 0 ? std::to_string((long long)st.st_mtime) + ":" + std::to_string((long long)st.st_size) : std::string();
+                    if (stamp != placedStamp) {
+                        placed.clear();
+                        const vibe::navmap::EachLine el = [&g](const std::function<void(const std::string&)>& fn) { g.forEachLive("navtex", fn); };
+                        const auto keys = vibe::navwarn::seriesKeys(idx);
+                        const vibe::navmap::SeriesOf seriesOf = [&keys](const std::string& f) { auto it = keys.find(vibe::navwarn::nameHash(f)); return it == keys.end() ? std::string() : it->second; };
+                        (void)vibe::navmap::scan(el, g_bgLat.load(), g_bgLon.load(), 0, readText, seriesOf, &placed);
+                        placedStamp = stamp;
+                    }
+                }
+                if (path == "/vibeserver/gallery/navtex-met.json") {
+                    const auto mq = vibe::navmet::query(metIdx, live, since ? now - since : 0);
+                    const vibe::navmet::StationOf so = [&](const std::string& f) {
+                        auto it = placed.find(vibe::navmap::fileHash(f));
+                        return it == placed.end() ? std::pair<std::string, std::string>() : std::make_pair(it->second.name, it->second.conf);
+                    };
+                    std::string j = vibe::navmet::toJson(mq, now, so);
+                    j.insert(1, "\"pending\":" + std::to_string(sr.pending) + ",\"indexed\":" + std::to_string(sr.indexed) + ",");
+                    reply("200 OK", "application/json", j);
+                    return;
+                }
                 const auto q = vibe::navwarn::query(idx, live, since ? now - since : 0, now);
-                reply("200 OK", "application/json", vibe::navwarn::toJson(q, now, sr));
+                reply("200 OK", "application/json", vibe::navwarn::toJson(q, now, sr, &placed));
                 return;
             }
             const std::string pre = "/vibeserver/gallery/file/";

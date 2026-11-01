@@ -64,8 +64,11 @@ import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioC
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
-import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
+import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, navName, NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY,
          type NavReport } from '../services/navtexMap';
+import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetItems,
+         navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../services/navtexWarn';
+import { NAV_HAZARD_COLOURS } from '../services/navtexIcons';
 import { ismNeighbours, ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
          ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmCap, type IsmReport, type IsmGalNode } from '../services/ism';
 import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
@@ -2730,6 +2733,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [navMapOpen, setNavMapOpen] = useState(false);
   const [navReport, setNavReport] = useState<NavReport | null>(null);
   const [navRange, setNavRange] = useState('all');
+  /* ★★ V12 2026-11-01 stages 2 and 3: the WARNINGS and the MET LABELS on the same map, each a layer (remembered). */
+  const [navWarnRep, setNavWarnRep] = useState<NavWarnReport | null>(null);
+  const [navMetRep, setNavMetRep] = useState<NavMetReport | null>(null);
+  const [navLayers, setNavLayers] = useState<NavLayers>(navLayersOf(null));
+  useEffect(() => { AsyncStorage.getItem('lsv_nav_map_layers').then((v) => setNavLayers(navLayersOf(v))).catch(() => {}); }, []);
   const [navAvail, setNavAvail] = useState(false);
   const navFromGallery = useRef(false);
   useEffect(() => { AsyncStorage.getItem('lsv_nav_map_range').then((v) => setNavRange(navRangeOf(v))).catch(() => {}); }, []);
@@ -10815,14 +10823,31 @@ export default function SDRScreen({ route, navigation }: Props) {
       return r.ok ? navSanitise(await r.json()) : null;
     } catch { return null; }
   }, [connectBase, radioAuthSuffix, route.params.authSuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const navGet = useCallback(async <T,>(path: string, range: string, clean: (j: any) => T | null): Promise<T | null> => {
+    try {
+      const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/gallery/${path}?since=${navSince(range)}`,
+                                         radioAuthSuffix || route.params.authSuffix || ''), { cache: 'no-store' } as any);
+      return r.ok ? clean(await r.json()) : null;
+    } catch { return null; }
+  }, [connectBase, radioAuthSuffix, route.params.authSuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
+  /* ★ LIVE: every 30 s while open, every 2 s while the server is still building its warnings index (the backfill: 400
+   *  saved messages a request) — new or updated warnings pulse, the map is never reloaded. */
   useEffect(() => {
     if (!navMapOpen) return;
-    let live = true;
-    const go = () => { void navFetch(navRange).then((r) => { if (live && r) setNavReport(r); }); };
-    go();
-    const t = setInterval(go, 30_000);
-    return () => { live = false; clearInterval(t); };
-  }, [navMapOpen, navRange, navFetch]);
+    let live = true, t: ReturnType<typeof setTimeout> | null = null;
+    const go = async () => {
+      const w = navLayers.warnings || navLayers.weather ? await navGet('navtex-warnings.json', navRange, navWarnSanitise) : null;
+      const m = navLayers.weather ? await navGet('navtex-met.json', navRange, navMetSanitise) : null;
+      const r = await navFetch(navRange);
+      if (!live) return;
+      if (r) setNavReport(r);
+      if (w) setNavWarnRep(w);
+      if (m) setNavMetRep(m);
+      t = setTimeout(() => { void go(); }, w && w.pending > 0 ? 2000 : 30_000);
+    };
+    void go();
+    return () => { live = false; if (t) clearTimeout(t); };
+  }, [navMapOpen, navRange, navFetch, navGet, navLayers]);
   // ★ MAP in the NAVTEX box only where this server holds NAVTEX in its gallery (asked once per NAVTEX box opening)
   useEffect(() => {
     if (activeDecoder !== 'navtex') return;
@@ -10830,12 +10855,42 @@ export default function SDRScreen({ route, navigation }: Props) {
     void navFetch('all').then((r) => { if (live) setNavAvail(!!r && r.stations.length > 0); });
     return () => { live = false; };
   }, [activeDecoder, navFetch]);
-  const navTrk = useMemo(() => ({
-    items: navItems(navReport), rows: navListRows(navReport), status: navStatus(navReport), empty: NAV_EMPTY, focus: '',
-    trail: () => Promise.resolve([] as [number, number][]),
-    ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
-    onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
-  }), [navReport, navRange]);
+  const navTrk = useMemo(() => {
+    const now = navWarnRep?.now ?? navMetRep?.now ?? navReport?.now ?? Math.floor(Date.now() / 1000);
+    const warns = navLayers.warnings ? navWarnVisible(navWarnRep, navRange) : [];
+    const areas = navLayers.weather ? navMetVisible(navMetRep, navRange) : [];
+    const ago = (sec: number) => (sec < 3600 ? `${Math.round(sec / 60)} min` : sec < 86400 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} d`);
+    const rows = [
+      ...(navLayers.stations ? navListRows(navReport) : []),
+      ...areas.slice().sort((a, b) => Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t).map((a) => ({
+        key: a.key, colour: navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8', flag: '', name: a.name, second: navFcLabel(a.fc[0]), sp: '', trend: 0 as const,
+        range: '', brg: '', noPos: false, age: ago(Math.max(0, now - a.fc[0].t)), em: false })),
+      ...warns.slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300).map((w) => ({
+        key: w.key, colour: navWarnTag(w) ? '#9aa6b2' : NAV_HAZARD_COLOURS[w.cls === 'navaid' ? 'light' : (w.cls as keyof typeof NAV_HAZARD_COLOURS)] ?? '#d7dee6', flag: '',
+        name: `${w.id} · ${navWarnSummary({ ...w, hit: '', lang: '' })}`, second: [w.st ? navName(w.st, w.sc) : '', navWarnTag(w)].filter(Boolean).join(' · '),
+        sp: '', trend: 0 as const, range: '', brg: '', noPos: false, age: ago(Math.max(0, now - w.last)), em: false })),
+    ];
+    const building = navBuilding(navWarnRep);
+    return {
+      items: [...(navLayers.stations ? navItems(navReport) : []), ...navMetItems(areas, now, 'app'), ...navWarnItems(warns, now, 'app')],
+      rows, empty: NAV_EMPTY, focus: '',
+      status: [navLayers.stations ? navStatus(navReport) : '', navLayers.warnings ? navWarnStatus(navWarnRep, navRange) : '', navLayers.weather ? navMetStatus(navMetRep, navRange) : '', building].filter(Boolean).join(' · '),
+      note: building,
+      trail: () => Promise.resolve([] as [number, number][]),
+      ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
+      onRange: (id: string) => { setNavRange(id); AsyncStorage.setItem('lsv_nav_map_range', id).catch(() => {}); },
+      toggles: NAV_LAYERS, toggled: navLayers as Record<string, boolean>,
+      onToggle: (id: string, on: boolean) => setNavLayers((cur) => { const nx = { ...cur, [id]: on }; AsyncStorage.setItem('lsv_nav_map_layers', JSON.stringify(nx)).catch(() => {}); return nx; }),
+      // ★ a card's gallery text, with the read auth (the gallery viewer's own fetch)
+      cardText: async (f: string) => {
+        try {
+          const r = await fetch(withReadAuth(`${connectBase.replace(/\/+$/, '')}/vibeserver/gallery/file/${encodeURIComponent(f)}`, radioAuthSuffix || route.params.authSuffix || ''), { cache: 'no-store' } as any);
+          return r.ok ? { ok: true, text: await r.text() } : { ok: false, text: 'This message is no longer in the gallery (it keeps the newest).' };
+        } catch { return { ok: false, text: 'Could not reach the server.' }; }
+      },
+      translateTo: txTarget,
+    };
+  }, [navReport, navWarnRep, navMetRep, navRange, navLayers, connectBase, radioAuthSuffix, txTarget]);   // eslint-disable-line react-hooks/exhaustive-deps
   const closeNavMap = useCallback(() => {
     setNavMapOpen(false);
     if (navFromGallery.current) { navFromGallery.current = false; setGalleryOpen(true); }   // ★ back to the gallery it came from

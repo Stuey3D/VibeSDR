@@ -225,8 +225,11 @@ export function navStatus(r: NavReport | null): string {
 export const NAV_EMPTY = 'No NAVTEX message in the gallery for this time — the map fills as messages arrive (a listener’s decoder or background decoding).';
 
 /** ★ The app's pins and rows (MapOverlay kind 'navtex' / TrackLiveList) — one a site. */
-export function navItems(r: NavReport | null) {
-  return navSites(r).map((g) => ({ key: g.key, lat: g.lat, lon: g.lon, _ic: navIcon(g), _lb: navLabel(g), _cd: navCard(g, 'app'), _h: g.n, _rk: navRank(g), _arc: true }));
+export function navItems(r: NavReport | null, wrap: 'web' | 'app' = 'app') {
+  return navSites(r).map((g) => ({ key: g.key, lat: g.lat, lon: g.lon, _ic: navIcon(g), _lb: navLabel(g), _cd: navCard(g, wrap), _h: g.n,
+                                   // ★ stations outrank the warnings and the met labels when names collide
+                                   _rk: 1e12 + navRank(g), _arc: true,
+                                   _aria: `Station ${navLabel(g)}, ${g.n} messages, last heard ${navAgo(g.seen)}. Press Enter for its card.` }));
 }
 const ageShort = (sec: number) => (sec < 3600 ? `${Math.round(sec / 60)} min` : sec < 86400 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} d`);
 export function navListRows(r: NavReport | null) {

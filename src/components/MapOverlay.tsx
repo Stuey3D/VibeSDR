@@ -79,6 +79,9 @@ import AdsbLiveList from './AdsbLiveList';
 import { TRACK_LAYER_JS } from '../generated/trackLayerSource';
 import { TRACK_CARD_CSS, AIS_COLOURS, type TrackItem, type TrackRow } from '../services/tracks';
 import TrackLiveList from './TrackLiveList';
+import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
+import { langName } from '../services/transcriber';
+import { NAV_HAZARDS, NAV_HAZARD_COLOURS, navGlyphSvg } from '../services/navtexIcons';
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's HH:MM:SS UTC (the slot's start)
@@ -156,7 +159,13 @@ interface MapOverlayProps {
           /** Find this item when the map opens (a row tapped in the APRS box); '' = none. */
           focus?: string;
           /** ★ V12 the time filter (TrackLiveList's keys): the ranges offered, the one chosen, and the screen's handler. */
-          ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void; rangeHint?: string } | null;
+          ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void; rangeHint?: string;
+          /** ★★ V12 2026-11-01 the NAVTEX map: its layer keys, a card's gallery text (fetched when it opens), and TRANSCRIBE's
+           *  TRANSLATE TO for the gallery's own TRANSLATE in the card ('' = the phone's language). */
+          toggles?: Array<{ id: string; label: string; words: string }>; toggled?: Record<string, boolean>; onToggle?: (id: string, on: boolean) => void;
+          cardText?: (file: string) => Promise<{ ok: boolean; text: string }>; translateTo?: string;
+          /** a line over the map (the warnings index being built) — '' = none */
+          note?: string } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
   /** ★ V12 drawn over the map, last (on top): the second server's card (Stuart, 2026-10-30: "the 2nd server chip control
@@ -228,7 +237,7 @@ function buildHtml(
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
   const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' ? 'AIS SHIP MAP'
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'dsc' ? 'DSC POSITIONS' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'navtex' ? 'NAVTEX · STATIONS RECEIVED' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'dsc' ? 'DSC POSITIONS' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'navtex' ? 'NAVTEX MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" style="vertical-align:middle;opacity:0.8"><path d="M12 9 L8 22 M12 9 L16 22 M9.5 17 L14.5 17" stroke="rgba(255,190,40,0.9)" stroke-width="1.6" fill="none" stroke-linecap="round"/><circle cx="12" cy="7" r="1.8" fill="rgba(255,190,40,0.9)"/><path d="M7.5 3.5 A6 6 0 0 0 7.5 10.5 M16.5 3.5 A6 6 0 0 1 16.5 10.5" stroke="rgba(255,190,40,0.7)" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`
@@ -551,6 +560,14 @@ ${isSpots ? `
       <div class="lg-row"><span>?</span><span>Not certain which station</span></div>
       <div class="lg-row"><span>&#9711;</span><span>Dashed rim = likely</span></div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
+      <div class="lg-sec">WARNINGS</div>
+      ${NAV_HAZARDS.map((h) => `<div class="lg-row"><span>${navGlyphSvg(h.id, 14, NAV_HAZARD_COLOURS[h.id])}</span><span>${esc(h.words)}</span></div>`).join('')}
+      <div class="lg-row"><span>${navGlyphSvg('light', 14, NAV_HAZARD_COLOURS.light, true)}</span><span>Light not working (the unlit mark)</span></div>
+      <div class="lg-row"><span>&#9675;</span><span>Faded = expired or cancelled (ALL only)</span></div>
+      <div class="lg-row"><span>&#9312;</span><span>A number = warnings gathered; tap to zoom in</span></div>
+      <div class="lg-sec">WEATHER</div>
+      <div class="lg-row"><span style="color:#cfe6ff">&#9645;</span><span>Latest forecast per sea area</span></div>
+      <div class="lg-row"><span style="color:#ff6b5a">&#9645;</span><span>Gale or worse</span></div>
       ` : kind === 'dsc' ? `
       <div class="lg-sec">DSC POSITIONS</div>
       ${DSC_PIN_COLOURS.map((c, i) => `<div class="lg-row"><span class="lg-dot" style="background:${c};"></span><span>${['routine', 'safety', 'urgency', 'distress'][i]}</span></div>`).reverse().join('')}
@@ -1534,6 +1551,17 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'){
         heard:function(it){return it&&it._h?Number(it._h)||0:0;},
         labelRank:function(it){return it&&it._rk!=null?Number(it._rk)||0:0;},
         arc:function(it){return !!(it&&it._arc);},
+        shape:function(it){return it&&it._sh?it._sh:null;},
+        cluster:function(it){return it&&it._cl?String(it._cl):'';},
+        clusterZoom:8,clusterAlways:['m'],
+        aria:function(it){return it&&(it._aria||it._lb)?String(it._aria||it._lb):'';},
+        onCard:function(k,el){
+          // ★ V12 the NAVTEX cards: the gallery text is React Native's to fetch (the read auth), and so is TRANSLATE
+          var pre=el.querySelector('.nvTx');if(!pre)return;
+          var f=pre.getAttribute('data-f')||'';var b=el.querySelector('.nvTr');
+          if(b)b.addEventListener('click',function(){trkPost({t:'trkTr',f:f});});
+          trkPost({t:'trkCard',f:f,title:b?(b.getAttribute('data-title')||''):''});
+        },
         labelZoom:KIND==='ism'?6:KIND==='navtex'?3:undefined,focusZoom:KIND==='ism'?11:KIND==='navtex'?6:undefined,
         trail:function(key,done){
           trkWait[key]=done;trkPost({t:'trkTrail',key:String(key)});
@@ -1557,6 +1585,20 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'){
   /* ★ A row chosen (the live list, or the APRS box before the map was up): before the first items, when they come. */
   window.__trkFocus=function(k){try{var l=trkMake();if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
   window.__trkListW=function(w,h){document.documentElement.style.setProperty('--adsbListW',(Math.max(0,Number(w)||0))+'px');};
+  /* ★ V12 the NAVTEX cards: the text React Native fetched, TRANSLATE drawn when the phone can, and what it gave. Set as
+   *  TEXT (textContent) — never parsed as HTML. */
+  function trkCardEls(f){var c=document.querySelector('.vtl-card');if(!c)return null;var pre=c.querySelector('.nvTx');
+    if(!pre||pre.getAttribute('data-f')!==f)return null;return {pre:pre,b:c.querySelector('.nvTr'),n:c.querySelector('.nvTrNote')};}
+  window.__trkCardText=function(f,text){var e=trkCardEls(f);if(e)e.pre.textContent=String(text);};
+  window.__trkCardTrOk=function(f,words){var e=trkCardEls(f);if(e&&e.b){e.b.hidden=false;e.b.setAttribute('aria-label',String(words||'Translate'));}};
+  window.__trkCardTr=function(f,text,note,showing,busy){var e=trkCardEls(f);if(!e)return;
+    if(text!=null)e.pre.textContent=String(text);
+    if(e.b){e.b.textContent=busy?'TRANSLATING\u2026':showing?'ORIGINAL':'TRANSLATE';e.b.classList.toggle('on',!!showing);}
+    if(e.n){e.n.textContent=String(note||'');e.n.hidden=!note;}};
+  window.__trkNote=function(t){var n=document.getElementById('trkNote');
+    if(!t){if(n)n.remove();return;}
+    if(!n){n=document.createElement('div');n.id='trkNote';n.style.cssText='position:absolute;left:50%;top:56px;transform:translateX(-50%);background:rgba(10,14,20,.9);color:#dfe7ef;padding:6px 10px;border-radius:6px;z-index:950;font:12px ui-monospace,Menlo,monospace;pointer-events:none';document.body.appendChild(n);}
+    n.textContent=String(t);};
   var fitBtn=document.getElementById('snap');
   if(fitBtn)fitBtn.addEventListener('click',function(){try{var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}});
   if(window.__pendingTrk){window.__trkPush(window.__pendingTrk);window.__pendingTrk=null;}
@@ -2051,6 +2093,47 @@ export default function MapOverlay(
    *  (a ship's name can never become source). Parked in __pendingTrk until the page's handler exists. */
   const isTrkKind = kind === 'ais' || kind === 'aprs' || kind === 'dsc' || kind === 'ism' || kind === 'navtex';
   const trkRef = useRef(trk); trkRef.current = trk;
+  /* ★★ V12 2026-11-01 THE NAVTEX CARDS' TEXT AND TRANSLATE: the page asks for a card's gallery file (only one of the
+   *  items' own, by its safe name), React Native fetches it (the read auth) and sends it back as TEXT; then the gallery's
+   *  own TRANSLATE plan (services/galleryTranslatePlan — GalleryOverlay's) decides whether the key is drawn, and runs it. */
+  const cardTr = useRef(new Map<string, { text: string; plan: GalleryTrPlan | null; done: string | null; showing: boolean; busy: boolean; note: string }>());
+  const pageCall = (fn: string, ...args: unknown[]) => {
+    const lit = args.map((a) => JSON.stringify(a ?? null).replace(new RegExp(String.fromCharCode(0x2028), 'g'), '\\u2028').replace(new RegExp(String.fromCharCode(0x2029), 'g'), '\\u2029')).join(',');
+    webRef.current?.injectJavaScript(`window.${fn}&&window.${fn}(${lit});true;`);
+  };
+  const onTrkCard = (f: string, title: string) => {
+    const t = trkRef.current;
+    if (!t?.cardText || !/^[A-Za-z0-9._-]{1,80}$/.test(f) || !t.items.some((i) => i._f === f)) return;
+    const have = cardTr.current.get(f);
+    if (have) { pageCall('__trkCardText', f, have.showing && have.done != null ? have.done : have.text); if (have.plan) { pageCall('__trkCardTrOk', f, `Translate from ${langName(have.plan.source)}`); pageCall('__trkCardTr', f, null, have.showing ? galleryTranslateBanner(have.plan) : have.note, have.showing, false); } return; }
+    void t.cardText(f).then(async (r) => {
+      pageCall('__trkCardText', f, r.text);
+      if (!r.ok) return;
+      const st = { text: r.text, plan: null as GalleryTrPlan | null, done: null as string | null, showing: false, busy: false, note: '' };
+      if (cardTr.current.size > 100) cardTr.current.clear();
+      cardTr.current.set(f, st);
+      st.plan = await planGalleryTranslate(r.text, 'navtex', title, t.translateTo ?? '').catch(() => null);
+      if (st.plan) pageCall('__trkCardTrOk', f, `Translate from ${langName(st.plan.source)}`);
+    }).catch(() => pageCall('__trkCardText', f, 'Could not reach the server.'));
+  };
+  const onTrkTr = async (f: string) => {
+    const st = cardTr.current.get(f);
+    if (!st?.plan || st.busy) return;
+    if (st.done != null) {
+      st.showing = !st.showing;
+      pageCall('__trkCardTr', f, st.showing ? st.done : st.text, st.showing ? `${galleryTranslateBanner(st.plan)}${st.note ? ' · ' + st.note : ''}` : '', st.showing, false);
+      return;
+    }
+    st.busy = true; pageCall('__trkCardTr', f, null, '', false, true);
+    const r = await runGalleryTranslate(st.plan).catch(() => ({ ok: false, text: '', note: 'The translation did not work on this phone.' }));
+    st.busy = false;
+    if (!r.ok) { st.note = r.note; pageCall('__trkCardTr', f, null, r.note, false, false); return; }
+    st.done = r.text; st.showing = true; st.note = r.note;
+    pageCall('__trkCardTr', f, r.text, `${galleryTranslateBanner(st.plan)}${r.note ? ' · ' + r.note : ''}`, true, false);
+  };
+  useEffect(() => { if (!visible) cardTr.current.clear(); }, [visible]);
+  // ★ the line over the map (the warnings index being built)
+  useEffect(() => { if (visible && kind === 'navtex') pageCall('__trkNote', trk?.note ?? ''); }, [visible, kind, trk?.note]);   // eslint-disable-line react-hooks/exhaustive-deps
   const pushTrk = (items?: TrackItem[]) => {
     if (!isTrkKind || !items) return;
     const lit = JSON.stringify(JSON.stringify(items))
@@ -2193,6 +2276,8 @@ export default function MapOverlay(
               setTrkSel(typeof k === 'string' && k.length <= 40 ? k : null);
               return;
             }
+            if (m && (m as any).t === 'trkCard') { onTrkCard(String((m as any).f ?? '').slice(0, 80), String((m as any).title ?? '').slice(0, 80)); return; }
+            if (m && (m as any).t === 'trkTr') { void onTrkTr(String((m as any).f ?? '').slice(0, 80)); return; }
             if (m && (m as any).t === 'trkTrail') {
               const k = String((m as any).key ?? '').slice(0, 40);
               const answer = (pts: [number, number][]) => {
@@ -2317,6 +2402,7 @@ export default function MapOverlay(
         {isTrkKind && !!trk && !!pageUri && !packError && (
           <TrackLiveList title={kind === 'ais' ? 'SHIPS' : kind === 'dsc' ? 'CALLS' : kind === 'ism' ? 'NODES' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
+                         toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
                          safety={trk.safety} onFocus={trkFocus} selected={trkSel} onFootprint={trkFootprint}
                          ink={ink} areaW={winW} areaH={winH}

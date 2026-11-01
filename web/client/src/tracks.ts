@@ -333,6 +333,11 @@ const CSS = `
 .trkTop .rng .btn:first-child{border-radius:6px 0 0 6px;margin-left:0}
 .trkTop .rng .btn:last-child{border-radius:0 6px 6px 0}
 .trkTop .rng .btn[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
+.trkTop .tgl .btn[aria-pressed="true"]{background:#7fc8ff;border-color:#7fc8ff}
+.trkCard .nvTr{background:#1d2a36;color:#e3eaf1;border:1px solid #3c5266;border-radius:5px;font:600 11px ui-monospace,Menlo,monospace;padding:3px 8px;cursor:pointer}
+.trkCard .nvTr.on{background:#ffd34d;color:#111;border-color:#ffd34d}
+.trkCard .nvTr:focus-visible{outline:2px solid #ffd34d}
+.trkList .sec{padding:4px 10px;font:700 10px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.06em;color:#7f93a7;background:#0d151c;border-bottom:1px solid #151f29}
 .trkMapHost{position:relative;flex:1 1 auto;min-height:0}
 .trkMapHost .trkNote{position:absolute;left:50%;top:12px;transform:translateX(-50%);background:rgba(10,14,20,.9);padding:6px 10px;border-radius:6px;z-index:800;font-size:12px}
 .trkList{position:absolute;left:10px;bottom:calc(10px + env(safe-area-inset-bottom));z-index:700;width:min(430px,calc(100% - 20px));
@@ -406,6 +411,17 @@ export interface TrackViewOpts {
   range?: string;
   onRange?: (id: string) => void;
   rangeHint?: string;
+  /** ★★ V12 2026-11-01 THE NAVTEX MAP's layers (Stations · Warnings · Weather): toggle keys in the top bar. */
+  toggles?: Array<{ id: string; label: string; words: string }>;
+  toggled?: Record<string, boolean>;
+  onToggle?: (id: string, on: boolean) => void;
+  /** ★ passed to the layer (tracklayer.js): an item's shape, its cluster group, the words a screen reader says, the card drawn. */
+  shape?: (it: any) => any;
+  cluster?: (it: any) => string;
+  clusterZoom?: number;
+  clusterAlways?: string[];
+  aria?: (it: any) => string;
+  onCard?: (key: string, el: HTMLElement) => void;
 }
 export class TrackView {
   readonly root: HTMLElement;
@@ -433,6 +449,8 @@ export class TrackView {
     r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
       + (o.ranges?.length ? `<span class="rng" role="group" aria-label="Show what was heard in the last…" title="${esc(o.rangeHint || '')}">`
          + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
+      + (o.toggles?.length ? `<span class="rng tgl" role="group" aria-label="Layers">`
+         + o.toggles.map((x) => `<button class="btn" type="button" data-tgl="${esc(x.id)}" aria-pressed="${o.toggled?.[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
       + `<span class="st"></span><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></div>`
       + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span>${esc(o.listTitle)}</span> <span class="n">0</span>`
       + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="rows"></div></div></div>`;
@@ -451,6 +469,13 @@ export class TrackView {
         for (const o2 of Array.from(r.querySelectorAll('[data-rng]'))) o2.setAttribute('aria-pressed', String(o2 === b));
         o.onRange?.(id);
         this.refit = true;
+      };
+    }
+    for (const b of Array.from(r.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
+      b.onclick = () => {
+        const on = b.getAttribute('aria-pressed') !== 'true';
+        b.setAttribute('aria-pressed', String(on));
+        o.onToggle?.(b.dataset.tgl || '', on);
       };
     }
     const hd = r.querySelector('.hd') as HTMLElement;
@@ -487,6 +512,8 @@ export class TrackView {
   private select(k: string) { this.layer?.select(k || null); this.markSel(k); }
   private wantFocus = '';
   private refit = false;
+  /** ★ The card again from its item (a fetched text arrived for it). */
+  refreshCard() { try { this.layer?.refreshCard?.(); } catch (e) { console.error('[tracks] card', e); } }
   /** Select an item and fly to it (a row tapped outside the map, e.g. the APRS box). Before the map is up: when it is. */
   focus(key: string): boolean {
     if (!this.layer) { this.wantFocus = key; return false; }
@@ -583,6 +610,7 @@ export class TrackView {
     this.layer = w.VibeTrackLayer.create(map, L, {
       receiver: this.rx, icon: this.o.icon, label: this.o.label, card: this.o.card, trail: this.o.trail,
       labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard, labelRank: this.o.labelRank, arc: this.o.arc,
+      shape: this.o.shape, cluster: this.o.cluster, clusterZoom: this.o.clusterZoom, clusterAlways: this.o.clusterAlways, aria: this.o.aria, onCard: this.o.onCard,
       onSelect: (k: string | null) => this.markSel(k || ''),
     });
     if (this.pending) { this.layer.update(this.pending); this.pending = null; }

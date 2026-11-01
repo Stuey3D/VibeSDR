@@ -96,11 +96,23 @@ try {
   ok(new RegExp(`${nSites} sites · ${all.stations.length} stations · ${all.messages} messages`).test(row), `…which counts them: ${row.slice(0, 140)}`);
   console.log('   screenshot', await shot('navtex-gallery-row.png'));
   await ev(`document.querySelector('#galList .galNav .galMap').click()`);
-  ok(await until(`!!${view} && ${view}.querySelectorAll('.trkRow').length === ${nSites}`, 10000), `MAP: the sites in its list (${await ev(`${view} ? ${view}.querySelectorAll('.trkRow').length : 0`)})`);
+  // ★ the first opening of a big gallery: the warnings index is built while the map is up, and the map says so
+  if (keep.length > 400) {
+    ok(await until(`/Building the map from [\\d,]+ saved messages… \\d+ %/.test(${view}?.querySelector('.trkNote')?.textContent || '')`, 15000),
+       `the backfill is shown: "${await ev(`${view}?.querySelector('.trkNote')?.textContent || ''`)}"`);
+    console.log('   screenshot', await shot('navtex-map-building.png'));
+    const tb = Date.now();
+    ok(await until(`!${view}?.querySelector('.trkNote')`, 180000), `…and the note goes when it is built (${Math.round((Date.now() - tb) / 1000)} s, 2 s polls)`);
+  }
+  // ★ the list holds stations, the weather and the warnings (section heads); count only the stations' rows here
+  const stationRows = `(() => { const out = []; for (const el of ${view}.querySelectorAll('.trkList .rows > *')) { if (el.classList.contains('sec')) { if (out.sec) break; out.sec = el.textContent; continue; } if (el.classList.contains('trkRow')) out.push(el); } return out; })()`;
+  ok(await until(`!!${view} && ${stationRows}.length === ${nSites}`, 20000), `MAP: the sites in its list (${await ev(`${view} ? ${stationRows}.length : 0`)})`);
   ok(await until(`document.querySelectorAll('.vtl-mk').length >= ${nSites}`, 15000), `a marker per site: ${await ev(`document.querySelectorAll('.vtl-mk').length`)}`);
   await sleep(4000);
   const arcs = Number(await ev(`document.querySelector('[data-vtl-arcs]')?.getAttribute('data-vtl-arcs') || 0`));
   ok(arcs === nSites, `one great-circle line from the receiver to each site: ${arcs}`);
+  ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
+     === 'STATIONS:true WARNINGS:true WEATHER:true', 'the layers: STATIONS · WARNINGS · WEATHER, all on');
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
      === '1 H:false 24 H:false 7 DAYS:false 30 DAYS:false ALL:true', 'the time filter: five ranges, ALL by default (a received-stations view)');
   const st = await ev(`${view}.querySelector('.st').textContent`);
@@ -111,19 +123,104 @@ try {
   ok(dc.o === 0, `no two shown names overlap (${dc.n} shown)`);
   console.log('   screenshot', await shot('navtex-map.png'));
   // a station's card
-  await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Oostende|Cullercoats|Niton/.test(x.textContent)); r && r.click(); })()`);
+  await ev(`(() => { const r = ${stationRows}.find(x => /Oostende|Cullercoats|Niton/.test(x.textContent)); r && r.click(); })()`);
   await sleep(2500);
   const card = await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`);
-  ok(/Named by the message itself or its station label: \d+ of \d+ messages/.test(card) && /Nearest [A-Z] station on \d+(\.\d)? kHz/.test(card) && /schedule slot/.test(card) && !/\d+ %/.test(card), `the why, in plain words: ${(card.match(/Named by[^·]*|Ended inside[^·]*/g) || []).join(' | ')}`);
+  ok(/Named by the message itself or its station label: \d+ of \d+ messages?/.test(card) && /Nearest [A-Z] station on \d+(\.\d)? kHz/.test(card) && /schedule slot/.test(card) && !/\d+ %/.test(card), `the why, in plain words: ${(card.match(/Named by[^·]*|Ended inside[^·]*/g) || []).join(' | ')}`);
   ok(/first heard \d{4}-\d\d-\d\d/.test(card) && /[A-Z] · \d+(\.\d)? kHz · \d+ received, \d+ different/.test(card) && /Newest: [A-Z]{2}\d\d/.test(card), `a station's card: ${card.slice(0, 220)}`);
   ok(/Niton/.test(card) ? (card.match(/ · \d+(\.\d)? kHz · \d+ received/g) || []).length >= 2 : true, 'a co-sited card lists each of its letters');
   console.log('   screenshot', await shot('navtex-map-station.png'));
+  console.log('── the warnings ──');
+  const tw = Date.now();
+  const W = await fetch(`${H}/vibeserver/gallery/navtex-warnings.json`).then((r) => r.json());
+  const wms = Date.now() - tw;
+  const shapes = W.warnings.reduce((o, w) => { const k = w.shape || (w.pts.length > 1 ? 'points' : 'one'); o[k] = (o[k] || 0) + 1; return o; }, {});
+  const withSt = W.warnings.filter((w) => w.st).length, withQ = W.warnings.filter((w) => w.q).length, faded = W.warnings.filter((w) => w.expired).length;
+  const specific = W.warnings.filter((w) => w.cls !== 'general').length;
+  console.log(`   ${W.receptions} receptions → ${W.warnings.length ? W.total : 0} warnings with a position (${W.live} messages live, ${W.indexed} indexed, ${W.pending} pending; ${wms} ms)`);
+  console.log(`   classes ${JSON.stringify(W.classes)}; shapes ${JSON.stringify(shapes)}; station ${withSt}, quality ${withQ}, expired/cancelled ${faded}, a specific icon ${specific}`);
+  ok(W.pending === 0 && W.indexed === W.live, 'the index is built: every live message indexed');
+  ok(W.warnings.length > 0 && withSt > W.warnings.length * 0.7, `the card's station for most (${withSt} of ${W.warnings.length})`);
+  ok(withQ > W.warnings.length * 0.5, `…and the decode quality (${withQ})`);
+  ok(!JSON.stringify(W.classes).includes('"met"'), 'a forecast is never a warning marker');
+  const M = await fetch(`${H}/vibeserver/gallery/navtex-met.json`).then((r) => r.json());
+  const gales = M.areas.filter((a) => a.fc[0].gale >= 8).length;
+  console.log(`   met: ${M.areas.length} sea areas with a forecast, ${gales} gale or worse in their latest; history up to ${Math.max(0, ...M.areas.map((a) => a.fc.length))}`);
+  ok(M.areas.length > 0 && M.areas.every((a) => a.fc.length >= 1 && a.fc.every((f, i) => !i || f.t <= a.fc[i - 1].t)), 'the latest forecast per area first, its history after');
+  // the page: markers, shapes, clusters
+  await ev(`${view}.querySelector('.fit').click()`); await sleep(2500);
+  const clusters = Number(await ev(`document.querySelector('[data-vtl-clusters]')?.getAttribute('data-vtl-clusters') || 0`));
+  const nShapes = Number(await ev(`document.querySelector('[data-vtl-shapes]')?.getAttribute('data-vtl-shapes') || 0`));
+  const markers = Number(await ev(`document.querySelectorAll('.vtl-mk').length`));
+  console.log(`   on the map: ${markers} markers, ${clusters} gathered, ${nShapes} shapes`);
+  ok(nShapes === W.warnings.filter((w) => w.pts.length > 1).length, `a shape for every multi-point warning (${nShapes})`);
+  if (W.warnings.length > 60) ok(clusters > 0 && await ev(`document.querySelectorAll('.vtl-mk.vtl-clhid').length > 0`), `zoomed out, warnings gathered into numbered markers (${clusters})`);
+  ok(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => !e.classList.contains('vtl-clhid')).every(e => e.getAttribute('role') === 'button' && e.tabIndex === 0 && (e.getAttribute('aria-label') || '').length > 8)`),
+     'every marker is a button in the tab order, with its words');
+  console.log('   screenshot', await shot('navtex-map-warnings.png'));
+  // a cluster: Enter zooms in to it
+  if (clusters) {
+    const z0 = await ev(`(() => { const e = [...document.querySelectorAll('.vtl-mk')].find(x => { const b = x.querySelector('.vtl-cl'); return b && !b.hidden; }); if (!e) return ''; e.focus(); return e.getAttribute('aria-label'); })()`);
+    console.log('   screenshot', await shot('navtex-map-clusters.png'));
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter' });
+    await sleep(1500);
+    ok(/gathered/.test(z0), `a gathered marker says so: "${String(z0).slice(0, 90)}"`);
+  }
+  // a warning's card, from a non-English message when there is one
+  const pick = W.warnings.find((w) => w.hit && w.st && !w.expired) || W.warnings.find((w) => w.st && !w.expired) || W.warnings[0];
+  const key = `w:${pick.id}:${pick.first}`;
+  await ev(`(() => { const r = ${view}.querySelector('.trkRow[data-key="${key}"]'); r && r.click(); return !!r; })()`);
+  ok(await until(`/Best copy/.test((document.querySelector('.vtl-card:not([hidden])') || {}).textContent || '')`, 8000), `a warning's card opens from its row (${pick.id})`);
+  ok(await until(`(() => { const p = document.querySelector('.vtl-card:not([hidden]) .nvTx'); return p && !/^Loading/.test(p.textContent) && /ZCZC|NAVTEX/.test(p.textContent); })()`, 8000), '…its full gallery text, fetched when it opened');
+  const wcard = await ev(`document.querySelector('.vtl-card:not([hidden])').textContent`);
+  ok(new RegExp(pick.id).test(wcard) && /First heard\s*\d{4}-\d\d-\d\d/.test(wcard) && /Last heard/.test(wcard) && /\d+ times? here/.test(wcard), 'the card: id, first / last heard, times heard');
+  ok(/Station/.test(wcard) && (pick.sc === 'likely' ? /Suspected /.test(wcard) : pick.sc === 'ambiguous' ? /\?/.test(wcard) : true), `…the station as the server says (${pick.sc}: ${pick.st})`);
+  if (pick.hit) ok(new RegExp(`\\(from [A-Z][a-z]+: ${pick.hit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)`).test(wcard) && !/translat/i.test(wcard.split('The message')[0]), `the summary names the message's own word, never as a translation: ${(wcard.match(/\(from [^)]*\)/) || [''])[0]}`);
+  console.log('   screenshot', await shot('navtex-map-warning-card.png'));
+  // keyboard: a marker by Enter → its card, the focus in it; Escape → closed, the focus back
+  await ev(`${view}.querySelector('.vtl-card .vtl-x')?.click()`);
+  await ev(`(() => { const e = [...document.querySelectorAll('.vtl-mk[role=button]')].find(x => !x.classList.contains('vtl-clhid') && !(x.querySelector('.vtl-cl') && !x.querySelector('.vtl-cl').hidden)); e && e.focus(); })()`);
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter' });
+  ok(await until(`!!document.querySelector('.vtl-card:not([hidden])') && document.querySelector('.vtl-card').contains(document.activeElement)`, 4000), 'keyboard: Enter on a marker opens its card and moves the focus into it');
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape' });
+  ok(await until(`!document.querySelector('.vtl-card:not([hidden])') && document.activeElement?.classList.contains('vtl-mk')`, 4000), '…Escape closes it, the focus back on the marker');
+  // the weather
+  if (M.areas.length) {
+    const ar = M.areas.slice().sort((a, b) => (b.fc[0].gale >= 8) - (a.fc[0].gale >= 8))[0];
+    await ev(`(() => { const r = ${view}.querySelector('.trkRow[data-key="m:${ar.id}"]'); r && r.click(); })()`);
+    ok(await until(`/Earlier forecasts|Forecast/.test((document.querySelector('.vtl-card:not([hidden])') || {}).textContent || '')`, 6000), `a sea area's card: ${ar.name}`);
+    const mc = await ev(`document.querySelector('.vtl-card:not([hidden])').textContent`);
+    ok(/Station/.test(mc) && /Heard/.test(mc), `…its forecast, when heard and the station: ${mc.slice(0, 160)}`);
+    await sleep(800);
+    console.log('   screenshot', await shot('navtex-map-met.png'));
+    await ev(`${view}.querySelector('.vtl-card .vtl-x')?.click()`);
+  }
+  // layers off and on
+  const before = Number(await ev(`document.querySelectorAll('.vtl-mk').length`));
+  await ev(`${view}.querySelector('[data-tgl="warnings"]').click()`); await sleep(1800);
+  const without = Number(await ev(`document.querySelectorAll('.vtl-mk').length`));
+  ok(without < before && Number(await ev(`document.querySelector('[data-vtl-shapes]')?.getAttribute('data-vtl-shapes') || 0`)) === 0, `WARNINGS off: ${before} → ${without} markers, no shapes`);
+  ok(await ev(`localStorage.getItem('vibesdr.navMapLayers')`) === JSON.stringify({ stations: true, warnings: false, weather: true }), '…remembered');
+  await ev(`${view}.querySelector('[data-tgl="weather"]').click()`); await sleep(1500);
+  await ev(`${view}.querySelector('.fit').click()`); await sleep(1500);
+  console.log('   screenshot', await shot('navtex-map-stations-only.png'));
+  await ev(`${view}.querySelector('[data-tgl="weather"]').click()`); await ev(`${view}.querySelector('[data-tgl="warnings"]').click()`);
+  await sleep(2500);
+  // LIVE: a new warning while the map is open pulses, the map not reloaded
+  await ev(`(() => { window.__navMarker = 1; const of = window.fetch; window.fetch = async (u, o) => { const r = await of(u, o); if (!String(u).includes('navtex-warnings.json')) return r;
+    const j = await r.json(); j.warnings.unshift({ id: 'ZZ99', khz: 518, first: j.now, last: j.now, n: 1, lost: 0, unlit: 0, expired: 0, cls: 'wreck', f: 'none.txt', pts: [[51.2, 1.6]] });
+    return new Response(JSON.stringify(j), { headers: { 'content-type': 'application/json' } }); }; })()`);
+  await ev(`${view}.querySelector('[data-rng="all"]').click()`);
+  ok(await until(`!!document.querySelector('.vtl-mk.vtl-pulse') && window.__navMarker === 1`, 12000), 'LIVE: a new warning appears pulsing, without the map being reloaded');
   // 7 DAYS by keyboard
   await ev(`${view}.querySelector('[data-rng="7d"]').focus()`);
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter' });
   const wk = await fetch(`${H}/vibeserver/gallery/navtex-stations.json?since=${7 * 86400}`).then((r) => r.json());
-  ok(await until(`${view}.querySelectorAll('.trkRow').length === ${sitesOf(wk)}`, 6000), `7 DAYS (keyboard): ${sitesOf(wk)} sites`);
+  ok(await until(`${stationRows}.length === ${sitesOf(wk)}`, 15000), `7 DAYS (keyboard): ${sitesOf(wk)} sites`);
   ok(await ev(`localStorage.getItem('vibesdr.navMapRange') === '7d'`), '…remembered');
   await ev(`${view}.querySelector('[data-rng="all"]').click()`);
   await sleep(1500);

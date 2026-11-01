@@ -26,6 +26,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace vibe {
@@ -224,7 +225,33 @@ struct Named { int64_t t; double band; char b1; const navtex::Station* st; };
  *  warnings index; "" when unknown). A named message carrying it gives its AUTHORITY to an undecided or start-lost message
  *  with the same key — the authority's transmitter on that band (Corsen sends A on 518 and E on 490). LIKELY. */
 using SeriesOf = std::function<std::string(const std::string& file)>;
-struct Ctx { Runs runs; std::vector<Named> named; std::map<std::string, const navtex::Station*> links; const SeriesOf* seriesOf = nullptr; };
+/** ★ V12 2026-11-01 the WARNINGS layer's card: which station each message was placed at (the station this map draws — its
+ *  name and how sure, exactly as the stations card says it) and the decode quality its title recorded ("no errors",
+ *  "12 repaired", "3 lost", "gaps: 1 (36 s)"). Keyed by fileHash(file). */
+struct Placed { std::string name, iso, conf, q; };
+inline uint64_t fileHash(const std::string& s) { uint64_t h = 1469598103934665603ull; for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; } return h; }
+/** The quality words at the end of a gallery title, or "". */
+inline std::string titleQuality(const std::string& title) {
+    const size_t p = title.rfind(" \xc2\xb7 ");
+    if (p == std::string::npos) return std::string();
+    std::string q = title.substr(p + 4);
+    if (q == "no errors" || q.find("repaired") != std::string::npos || q.find(" lost") != std::string::npos || q.compare(0, 5, "gaps:") == 0) {
+        // ★ every quality part ("gaps: 1 (7 s) · 52 repaired · 3 lost"), not only the last
+        size_t a = p;
+        for (;;) {
+            const size_t b = title.rfind(" \xc2\xb7 ", a == 0 ? 0 : a - 1);
+            if (b == std::string::npos || b >= a) break;
+            const std::string part = title.substr(b + 4, a - b - 4);
+            if (part.find("repaired") != std::string::npos || part.find(" lost") != std::string::npos || part.compare(0, 5, "gaps:") == 0) { q = part + " \xc2\xb7 " + q; a = b; }
+            else break;
+        }
+        return q.substr(0, 80);
+    }
+    return std::string();
+}
+struct Ctx { Runs runs; std::vector<Named> named; std::map<std::string, const navtex::Station*> links; const SeriesOf* seriesOf = nullptr;
+             std::unordered_map<uint64_t, std::string>* fileKey = nullptr;   ///< ★ file → its station's key (the warnings card)
+             std::unordered_map<uint64_t, std::string>* fileQ = nullptr; };   ///< ★ file → its title's quality words
 /** The station `name`'s transmitter on `band` (its letter there), or nullptr. */
 inline const navtex::Station* txOn(const navtex::Station* s, double band) {
     size_t n = 0; const navtex::Station* t = navtex::stations(n);
@@ -296,6 +323,7 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     if (!jnum(line, "t", t) || !jnum(line, "hz", hz) || !jstr(line, "title", title)) return;
     jstr(line, "f", file);
     res.scanned++;
+    if (ctx && ctx->fileQ && !file.empty()) { const std::string q = titleQuality(title); if (!q.empty()) (*ctx->fileQ)[fileHash(file)] = q; }
     if ((int64_t)t < since) return;
     Title ti = parseTitle(title);
     const navtex::Station* lostSt = nullptr;
@@ -411,6 +439,7 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     auto it = by.find(key);
     if (it == by.end()) { if (by.size() >= kMaxStations) { res.unplaced++; return; } it = by.emplace(key, Agg{}).first; }
     Agg& a = it->second;
+    if (ctx && ctx->fileKey && !file.empty()) (*ctx->fileKey)[fileHash(file)] = key;
     if (!a.n) { a.st = st; a.cands = cands; a.conf = conf; a.b1 = ti.b1; a.name = st->name; a.iso = st->iso; a.country = st->country; a.first = (int64_t)t; }
     else if (conf == "confident") a.conf = "confident";                    // ★ any confident copy settles it
     a.n++;
@@ -453,8 +482,11 @@ inline EachLine fileLines(const std::string& path) {
  *  is DEFERRED (the line kept, at most kDefer) and read after the walk — `each` may hold the Store's lock. */
 static constexpr size_t kDefer = 4000;
 inline Result scan(const EachLine& each, double rxLat, double rxLon, int64_t since, const ReadText& readText = nullptr,
-                   const SeriesOf& seriesOf = nullptr) {
+                   const SeriesOf& seriesOf = nullptr, std::unordered_map<uint64_t, Placed>* placed = nullptr) {
     Ctx ctx; ctx.seriesOf = &seriesOf;
+    std::unordered_map<uint64_t, std::string> fileKey, fileQ;
+    std::map<std::string, std::string> remap;   // ★ a pair folded into its named station: old key → the station's
+    if (placed) { ctx.fileKey = &fileKey; ctx.fileQ = &fileQ; }
     Result res;
     std::map<std::string, Agg> by;
     std::vector<std::string> later, lost;
@@ -492,7 +524,18 @@ inline Result scan(const EachLine& each, double rxLat, double rxLon, int64_t sin
         for (auto& r : a.recent) home->recent.push_back(r);
         std::sort(home->recent.begin(), home->recent.end(), [](const Recent& x, const Recent& y) { return x.t > y.t; });
         if (home->recent.size() > kRecent) home->recent.resize(kRecent);
+        if (placed) for (auto& h2 : by) if (&h2.second == home) { remap[it->first] = h2.first; break; }
         it = by.erase(it);
+    }
+    if (placed) {
+        for (const auto& fk : fileKey) {
+            auto r = remap.find(fk.second);
+            auto a = by.find(r == remap.end() ? fk.second : r->second);
+            if (a == by.end()) continue;
+            Placed p; p.name = a->second.name; p.iso = a->second.iso; p.conf = a->second.conf;
+            (*placed)[fk.first] = p;
+        }
+        for (const auto& q : fileQ) (*placed)[q.first].q = q.second;
     }
     for (auto& kv : by) res.stations.push_back(std::move(kv.second));
     std::sort(res.stations.begin(), res.stations.end(), [](const Agg& x, const Agg& y) { return x.last > y.last; });

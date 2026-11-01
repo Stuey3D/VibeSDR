@@ -456,7 +456,9 @@ export function aprsApplyPacket(l: AprsList | null, trails: Map<string, [number,
 /** ★ An item for the shared layer: its key, position and — worked out HERE, so the page carries no copy of these rules —
  *  its icon (`_ic`), label (`_lb`) and card (`_cd`). Items without a position are not on the map; an APRS object its
  *  owner removed is not either (the web's). */
-export interface TrackItem { key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string; /** ★ a count that grows when heard again — the layer pulses it */ _h?: number; /** ★ label rank (declutter) */ _rk?: number; /** ★ a great-circle line from the receiver */ _arc?: boolean }
+export interface TrackItem { key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string;
+  /** ★ V12 the NAVTEX map: a shape under it, its cluster group, its screen-reader words, the gallery file its card shows */
+  _sh?: unknown; _cl?: string; _aria?: string; _f?: string; /** ★ a count that grows when heard again — the layer pulses it */ _h?: number; /** ★ label rank (declutter) */ _rk?: number; /** ★ a great-circle line from the receiver */ _arc?: boolean }
 export function aisItems(r: AisReport | null, rx: LatLon | null): TrackItem[] {
   if (!r) return [];
   return r.vessels.filter((v) => v.lat != null && v.lon != null)
@@ -474,4 +476,7 @@ export const TRACK_CARD_CSS = '.trkCard .t{font-size:13px;margin:0 18px 6px 0;co
   + '.trkCard .k{color:#8596a7}.trkCard .v{color:#e3eaf1;word-break:break-word}'
   + '.trkCard .raw{margin-top:6px;padding:5px 6px;background:#0d151c;border-radius:4px;color:#9fb0c2;font-size:11px;word-break:break-all}'
   + '.trkCard i.up{color:#6dd36d;font-style:normal}.trkCard i.dn{color:#ff8a6b;font-style:normal}.trkCard .flag{font-size:14px}'
+  // ★ V12 the NAVTEX cards' TRANSLATE (the gallery's key) — tracks.ts's web rule
+  + '.trkCard .nvTr{background:#1d2a36;color:#e3eaf1;border:1px solid #3c5266;border-radius:5px;font:600 11px ui-monospace,Menlo,monospace;padding:4px 9px}'
+  + '.trkCard .nvTr.on{background:#ffd34d;color:#111;border-color:#ffd34d}.trkCard .nvTr[hidden]{display:none}'
   + '@media (max-width:520px){.vtl-card{top:6px !important;right:6px !important;left:52px;max-width:none !important;max-height:30% !important;font-size:11px !important}}';

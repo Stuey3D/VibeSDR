@@ -24,8 +24,11 @@ import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
-import { navSanitise, navIcon, navLabel, navCard, navRows, navStatus, navRank, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName,
-         NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation, type NavSite } from '../../../src/services/navtexMap';
+import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName, navItems,
+         NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
+import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetItems,
+         navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
+import { NAV_HAZARD_COLOURS } from '../../../src/services/navtexIcons';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -8802,45 +8805,133 @@ function ismMapOpen(key = '') {
  *  line from the receiver, its distance, first / last heard, how many messages, their kinds, the newest ids. Opened from
  *  the NAVTEX box's MAP and the gallery. ★ LIVE: refetched every 30 s while open (the server caches; a scan of the index
  *  only when it changed), so a message saved by a listener's decoder or background decoding appears, pulsing. */
-const NAV_RANGE_KEY = 'vibesdr.navMapRange';
+const NAV_RANGE_KEY = 'vibesdr.navMapRange', NAV_LAYERS_KEY = 'vibesdr.navMapLayers';
 let navView: TrackView | null = null;
-let navTimer: ReturnType<typeof setInterval> | null = null;
+let navTimer: ReturnType<typeof setTimeout> | null = null;
 let navRange = navRangeOf((() => { try { return localStorage.getItem(NAV_RANGE_KEY); } catch { return null; } })());
+let navLayers: NavLayers = navLayersOf((() => { try { return localStorage.getItem(NAV_LAYERS_KEY); } catch { return null; } })());
+let navLast: { st: NavReport | null; w: NavWarnReport | null; m: NavMetReport | null } = { st: null, w: null, m: null };
 async function navFetch(range: string): Promise<NavReport | null> {
   try {
     const r = await fetch(galUrl(`/vibeserver/gallery/navtex-stations.json?since=${navSince(range)}`), { cache: 'no-store' });
     return r.ok ? navSanitise(await r.json()) : null;
   } catch { return null; }
 }
-function navRowsHtml(r: NavReport): string {
-  if (!r.stations.length) return `<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`;
-  return navRows(r).map(({ g, second, range }) => `<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
-    + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(navName(g.name, g.conf))}</b><small>${escapeHtml(second)}</small></span>`
-    + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`).join('');
+/* ★★ V12 2026-11-01 stages 2 and 3: the WARNINGS (navtex-warnings.json) and the MET LABELS (navtex-met.json) on the same
+ *  map, each a layer (STATIONS · WARNINGS · WEATHER, remembered). The first opening on a big gallery is the server's
+ *  BACKFILL: each request indexes 400 more saved messages, so while it says "pending" the map asks again every 2 s and
+ *  says "Building the map from N saved messages… X %". */
+async function navFetchJson<T>(path: string, range: string, clean: (j: any) => T | null): Promise<T | null> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery/${path}?since=${navSince(range)}`), { cache: 'no-store' });
+    return r.ok ? clean(await r.json()) : null;
+  } catch { return null; }
+}
+async function navFetchAll(range: string) {
+  // ★ one after another: the warnings request does the backfill the met request then reads
+  const w = navLayers.warnings || navLayers.weather ? await navFetchJson('navtex-warnings.json', range, navWarnSanitise) : null;
+  const m = navLayers.weather ? await navFetchJson('navtex-met.json', range, navMetSanitise) : null;
+  const st = await navFetch(range);
+  return { st, w, m };
+}
+/** The gallery texts a card shows (one fetch a message while the map is open). */
+const navTexts = new Map<string, string>();
+let navCardSeq = 0;
+function navCardFill(_key: string, el: HTMLElement) {
+  const pre = el.querySelector('.nvTx') as HTMLElement | null;
+  if (!pre) return;
+  const f = pre.dataset.f || '';
+  const btn = el.querySelector('.nvTr') as HTMLButtonElement | null, note = el.querySelector('.nvTrNote') as HTMLElement | null;
+  const seq = ++navCardSeq;
+  const show = (text: string, okText: boolean) => {
+    if (seq !== navCardSeq || !pre.isConnected) return;
+    pre.textContent = text;
+    if (okText && btn && note) void translateSetup({ kind: 'navtex', title: btn.dataset.title || '', body: text, btn, textEl: pre, note, alive: () => seq === navCardSeq && pre.isConnected });
+  };
+  const have = navTexts.get(f);
+  if (have != null) { show(have, true); return; }
+  void fetch(galUrl(`/vibeserver/gallery/file/${encodeURIComponent(f)}`), { cache: 'no-store' })
+    .then(async (r) => { if (!r.ok) { show('This message is no longer in the gallery (it keeps the newest).', false); return; }
+                         const t = await r.text(); if (navTexts.size > 200) navTexts.clear(); navTexts.set(f, t); show(t, true); })
+    .catch(() => show('Could not reach the server.', false));
+}
+function navRowsHtml(r: NavReport | null, w: NavWarnReport | null, m: NavMetReport | null): string {
+  const out: string[] = [];
+  const sec = (t: string) => `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`;
+  if (navLayers.stations && r) {
+    if (navLayers.warnings || navLayers.weather) out.push(sec('STATIONS'));
+    if (!r.stations.length) out.push(`<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`);
+    for (const { g, second, range } of navRows(r)) out.push(`<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
+      + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(navName(g.name, g.conf))}</b><small>${escapeHtml(second)}</small></span>`
+      + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
+  }
+  if (navLayers.weather && m) {
+    const areas = navMetVisible(m, navRange).slice().sort((a, b) => Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t);
+    if (areas.length) out.push(sec('WEATHER — LATEST PER SEA AREA'));
+    for (const a of areas) out.push(`<div class="trkRow${a.stale ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(a.key)}">`
+      + `<span class="id"><b><i class="sw" style="background:${navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8'}"></i>${escapeHtml(a.name)}</b><small>${escapeHtml(navFcLabel(a.fc[0]))}</small></span>`
+      + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, m.now - a.fc[0].t)))}</span></div>`);
+  }
+  if (navLayers.warnings && w) {
+    const list = navWarnVisible(w, navRange).slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300);
+    if (list.length) out.push(sec('WARNINGS'));
+    for (const x of list) out.push(`<div class="trkRow${navWarnTag(x) ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
+      + `<span class="id"><b><i class="sw" style="background:${navWarnTag(x) ? '#9aa6b2' : NAV_HAZARD_COLOURS[x.cls === 'navaid' ? 'light' : (x.cls as keyof typeof NAV_HAZARD_COLOURS)] ?? '#d7dee6'}"></i>${escapeHtml(x.id)} · ${escapeHtml(navWarnSummary({ ...x, hit: '', lang: '' }))}</b>`
+      + `<small>${escapeHtml([x.st ? navName(x.st, x.sc) : '', navWarnTag(x)].filter(Boolean).join(' · '))}</small></span>`
+      + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, w.now - x.last)))}</span></div>`);
+  }
+  return out.join('');
+}
+function navDraw() {
+  if (!navView) return;
+  const { st: r, w, m } = navLast;
+  const rx = myPos() ?? r?.rx ?? null;
+  const now = w?.now ?? m?.now ?? r?.now ?? Math.floor(Date.now() / 1000);
+  const items: any[] = [];
+  if (navLayers.stations) items.push(...navItems(r, 'web'));
+  if (navLayers.weather) items.push(...navMetItems(navMetVisible(m, navRange), now, 'web'));
+  if (navLayers.warnings) items.push(...navWarnItems(navWarnVisible(w, navRange), now, 'web'));
+  const building = navBuilding(w);
+  const status = [navLayers.stations ? navStatus(r) : '', navLayers.warnings ? navWarnStatus(w, navRange) : '', navLayers.weather ? navMetStatus(m, navRange) : '', building]
+    .filter(Boolean).join(' · ');
+  navView.update(items, navRowsHtml(r, w, m), status, items.length, rx);
+  navView.note(building);
 }
 async function navMapOpen() {
-  const draw = (r: NavReport | null) => {
-    if (!navView) return;
-    const rx = myPos() ?? r?.rx ?? null;
-    const sites = navSites(r);   // ★ co-sited letters are one marker
-    navView.update(sites, r ? navRowsHtml(r) : '', navStatus(r), sites.length, rx);
-  };
   if (!navView) navView = new TrackView({
-    title: 'NAVTEX · stations received', exitLabel: 'CLOSE MAP', listTitle: 'STATIONS',
-    onExit: () => { navView?.hide(); if (navTimer) { clearInterval(navTimer); navTimer = null; } },
-    icon: navIcon, label: navLabel, card: (g: NavSite) => navCard(g), labelZoom: 3, focusZoom: 6, heard: (g: NavSite) => g.n,
-    labelRank: navRank, arc: () => true,
+    title: 'NAVTEX', exitLabel: 'CLOSE MAP', listTitle: 'NAVTEX',
+    onExit: () => { navView?.hide(); if (navTimer) { clearTimeout(navTimer); navTimer = null; } },
+    icon: (it) => it._ic, label: (it) => it._lb, card: (it) => it._cd, labelZoom: 3, focusZoom: 6, heard: (it) => it._h ?? 0,
+    labelRank: (it) => it._rk ?? 0, arc: (it) => !!it._arc,
+    shape: (it) => it._sh, cluster: (it) => it._cl || '', clusterZoom: 8, clusterAlways: ['m'], aria: (it) => it._aria || it._lb || '',
+    onCard: navCardFill,
     ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
-    onRange: (id) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navFetch(id).then(draw); },
+    onRange: (id) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true); },
+    toggles: NAV_LAYERS, toggled: navLayers,
+    onToggle: (id, on) => {
+      navLayers = { ...navLayers, [id]: on };
+      try { localStorage.setItem(NAV_LAYERS_KEY, JSON.stringify(navLayers)); } catch { /* private */ }
+      navDraw(); void navPoll(true);
+    },
   });
   navView.show(myPos());
-  draw(null);
-  draw(await navFetch(navRange));
-  if (navTimer) clearInterval(navTimer);
-  navTimer = setInterval(async () => {
-    if (!navView?.open) { if (navTimer) clearInterval(navTimer); navTimer = null; return; }
-    draw(await navFetch(navRange));
-  }, 30_000);
+  navLast = { st: null, w: null, m: null };
+  navDraw();
+  await navPoll(true);
+}
+/** ★ LIVE: every 30 s while open (2 s while the server is still building the index) — a message saved by a listener's
+ *  decoder or background decoding appears, pulsing, without the map being reloaded. */
+let navPollSeq = 0;
+async function navPoll(now = false) {
+  if (navTimer) { clearTimeout(navTimer); navTimer = null; }
+  if (!navView?.open) return;
+  const seq = ++navPollSeq;
+  if (now) navView.note(navBuilding(navLast.w) || '');
+  const got = await navFetchAll(navRange);
+  if (seq !== navPollSeq || !navView?.open) return;
+  navLast = { st: got.st ?? navLast.st, w: got.w ?? (navLayers.warnings || navLayers.weather ? navLast.w : null), m: got.m ?? (navLayers.weather ? navLast.m : null) };
+  navDraw();
+  navTimer = setTimeout(() => { void navPoll(); }, navLast.w && navLast.w.pending > 0 ? 2000 : 30_000);
 }
 /** ★ MAP is drawn only where it has something to show (AGENTS.md: no dead control) — this server keeps NAVTEX items. */
 let navMapAvail: boolean | null = null;
@@ -16283,13 +16374,19 @@ const langLabel = (id: string) => { try { return new Intl.DisplayNames([navigato
 async function galTranslateSetup(it: GalleryItem, body: string) {
   galTrReset();
   const seq = galTrSeq;
+  await translateSetup({ kind: it.k, title: it.title, body, btn: $('galTr') as HTMLButtonElement, textEl: $('galText'), note: $('galTrNote'), alive: () => seq === galTrSeq });
+}
+/** ★ The gallery's TRANSLATE, wherever a gallery text is shown (the viewer; the NAVTEX map's cards): its key, the text
+ *  it swaps, the note under it, and whether that text is still the one shown (`alive`). */
+async function translateSetup(o: { kind: string; title: string; body: string; btn: HTMLButtonElement; textEl: HTMLElement; note: HTMLElement; alive: () => boolean }) {
+  const { body, btn, note } = o;
   const TR = (globalThis as any).Translator, LD = (globalThis as any).LanguageDetector;
   if (!TR?.availability || !TR?.create) return;
   const target = (navigator.language || '').split('-')[0];
-  const lines = galleryTranslateLines(body, it.k);
+  const lines = galleryTranslateLines(body, o.kind);
   const text = galleryTranslatableText(lines);
   if (!text || !target) return;
-  const hint = galleryHintLanguage(it.title);
+  const hint = galleryHintLanguage(o.title);
   let source = '';
   try {   // ★ the browser's detector only when it is already here — a download needs the user's press
     if (LD?.availability && (await LD.availability()) === 'available') {
@@ -16298,19 +16395,18 @@ async function galTranslateSetup(it: GalleryItem, body: string) {
     }
   } catch { /* no detector: the stopwords */ }
   source = source || galleryGuessLanguage(text, hint);
-  if (seq !== galTrSeq || !galleryCanTranslate(lines, source, target)) return;
+  if (!o.alive() || !galleryCanTranslate(lines, source, target)) return;
   let avail = 'unavailable';
   try { avail = await TR.availability({ sourceLanguage: source, targetLanguage: target }); } catch { /* unavailable */ }
-  if (seq !== galTrSeq || avail === 'unavailable') return;
+  if (!o.alive() || avail === 'unavailable') return;
   let done: string | null = null, showing = false, busy = false;
-  const btn = $('galTr') as HTMLButtonElement, note = $('galTrNote');
   btn.hidden = false;
   btn.title = `Translate from ${langLabel(source)} into ${langLabel(target)}, in this browser`;
   btn.onclick = async () => {
     if (busy) return;
     if (done != null) {
       showing = !showing;
-      $('galText').textContent = showing ? done : body;
+      o.textEl.textContent = showing ? done : body;
       btn.textContent = showing ? 'ORIGINAL' : 'TRANSLATE'; btn.classList.toggle('on', showing); note.hidden = !showing;
       return;
     }
@@ -16318,16 +16414,16 @@ async function galTranslateSetup(it: GalleryItem, body: string) {
     try {
       const tr = await TR.create({ sourceLanguage: source, targetLanguage: target });
       const r = await galleryTranslate(lines, target, async (t) => ({ ok: true, text: await tr.translate(t) }));
-      if (seq !== galTrSeq) return;
+      if (!o.alive()) return;
       if (!r.done) throw new Error(r.reason || 'nothing translated');
       done = r.text; showing = true;
-      $('galText').textContent = done;
+      o.textEl.textContent = done;
       btn.textContent = 'ORIGINAL'; btn.classList.add('on');
       note.textContent = `MACHINE TRANSLATION \u00b7 ${langLabel(source)} \u2192 ${langLabel(target)} \u00b7 in this browser`
         + (r.failed ? ` \u00b7 ${r.failed} line${r.failed === 1 ? '' : 's'} left as received` : '');
       note.hidden = false;
     } catch (e: any) {
-      if (seq !== galTrSeq) return;
+      if (!o.alive()) return;
       btn.textContent = 'TRANSLATE';
       note.textContent = `This browser could not translate it (${String(e?.message ?? e)}).`; note.hidden = false;
     } finally { busy = false; }

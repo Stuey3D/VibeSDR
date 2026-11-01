@@ -21,6 +21,7 @@
 // ★ Bounded: a request answers the newest kMaxMarkers warnings ("showing the newest 1,000 of N"), groups ≤ kMaxGroups.
 #pragma once
 #include "vibe_navtex_map.h"
+#include "vibe_navtex_met.h"   // ★ the met labels: a forecast's areas are parsed once, beside its index line
 
 #include <algorithm>
 #include <cctype>
@@ -30,6 +31,8 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <regex>
 #include <string>
 #include <unordered_map>
@@ -44,14 +47,23 @@ static constexpr size_t kMaxGroups = 20000;
 static constexpr int64_t kExpireSec = 72 * 3600;
 static constexpr int64_t kReuseSec = 30 * 86400;
 static constexpr size_t kMaxPts = 24;
-static constexpr int kVersion = 3;   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
+static constexpr const char* kPrefix = "v4\t";   // ★ kVersion's line prefix
+static constexpr int kVersion = 4;   // ★ 4 (2026-11-01): + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
 
 // ── the hazard classes (the Lenovo's 3 924 messages decided them — scripts/navtex-survey numbers in the commit) ─────────
 /** Conservative keyword rules on the message body, whole words, in this order (the first that matches wins); when none
  *  does, "general" — never a guess. B2 decides SAR (D), ice (C) and met (B, E). `unlit` is a MODIFIER: a structure or a
  *  buoy whose light has failed is that icon with the unlit mark. */
 struct Class { std::string id; bool unlit = false; std::string hit, lang; };
-inline bool word(const std::string& U, const char* re) { return std::regex_search(U, std::regex(re)); }
+/** ★ Every pattern compiled ONCE (2026-11-01: a regex built per message per rule was most of the backfill's time — and a
+ *  Pi 2 builds them ten times slower). Keyed by the literal's address: the patterns are string literals. */
+inline const std::regex& rx(const char* re) {
+    static std::mutex mu; static std::unordered_map<const char*, std::unique_ptr<std::regex>> m;
+    std::lock_guard<std::mutex> lk(mu);
+    auto& r = m[re]; if (!r) r.reset(new std::regex(re));
+    return *r;
+}
+inline bool word(const std::string& U, const char* re) { return std::regex_search(U, rx(re)); }
 /** ★★ THE MULTILINGUAL LEXICON (2026-11-01; Stuart: "can we translate navtex messages so we can put the icons on the map
  *  correctly"). Not a translation — the words a hazard is written with in the languages the Lenovo's 4 514 messages and
  *  the UberSDR's 1 041 are in (English, then Italian, Dutch, Croatian, Spanish, German, French, Greek, Portuguese,
@@ -121,14 +133,17 @@ inline Class classify(char b2, const std::string& text) {
     const size_t nn = U.find("NNNN"); if (nn != std::string::npos) U.resize(nn);
     Class c;
     std::smatch m;
-    for (const auto& r : unlitRules()) if (std::regex_search(U, m, std::regex(r.re))) { c.unlit = true; if (std::string(r.lang) != "en") { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; } break; }
+    for (const auto& r : unlitRules()) if (std::regex_search(U, m, rx(r.re))) { c.unlit = true; if (std::string(r.lang) != "en") { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; } break; }
     if (b2 == 'C') { c.id = "ice"; return c; }
+    if (b2 == 'B' || b2 == 'E') { c.id = "met"; return c; }   // ★ a forecast or a met warning: the WEATHER layer's, never a hazard icon
     for (const auto& r : rules()) {
         if (b2 == 'D' && std::string(r.cls) != "sar") { c.id = "sar"; return c; }
-        if (std::regex_search(U, m, std::regex(r.re))) {
+        if (std::regex_search(U, m, rx(r.re))) {
             if (std::string(r.cls) == "adrift" && word(U, R"(\b(BUOY|BOUEE|BOYA|BOA|TONNE|BOEI)\b[^.\n]{0,30}\b(ADRIFT|A LA DERIVE|A LA DERIVA|ALLA DERIVA|TREIBEND|DRIJVEND)\b)")) continue;   // ★ a buoy adrift is a navaid
             c.id = r.cls;
             if (std::string(r.lang) != "en" && c.hit.empty()) { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; }
+            // ★ a navaid that is a BUOY or a beacon (any language's word for it) draws the buoy, not the lighthouse
+            if (c.id == "navaid" && word(U, R"(\b(BUOYS?|BEACONS?|LANBY|LIGHT ?FLOAT|BOUEES?|BALISES?|BOYAS?|BALIZAS?|BOA|BOE|MEDA|TONNEN?|BAKEN|BOEIEN?|BAKENS?|BOJA|PLUTAC\w*|SIMADOUR[AE]S?|\w+BOEI(EN)?|\w+TONNEN?)\b)")) c.id = "buoy";   // ★ compounds: LICHTBOEI, LEUCHTTONNE
             return c;
         }
     }
@@ -228,22 +243,22 @@ inline Cancels cancelsOf(const std::string& b, int64_t t) {
  *  018 18.4'E" (an apostrophe minutes mark, the words LAT / LONG) → "40 23.4N 018 18.4E". Nothing else is changed. */
 /** ★ A Greek warning (transliterated): its own words. Only then are Greek hemisphere letters read. */
 inline bool greek(const std::string& U) {
-    return std::regex_search(U, std::regex(R"(\b(STATHMOS|STATHMOY|PERIOCHI|PERIOXH|NISOS|NISOY|AKRA|AKROTIRIO|LIMENAS|LIMANI|THALASSIA|PROSOXI|NAYTILIA)\b)"));
+    return std::regex_search(U, rx(R"(\b(STATHMOS|STATHMOY|PERIOCHI|PERIOXH|NISOS|NISOY|AKRA|AKROTIRIO|LIMENAS|LIMANI|THALASSIA|PROSOXI|NAYTILIA)\b)"));
 }
 inline std::string posText(const std::string& b) {
     std::string U = navtex::upperAscii(b);
     /* ★★ GREEK hemisphere letters — B (Βόρειο) north, N (Νότιο) SOUTH, A (Ανατολικό) east, D/Δ (Δυτικό) west: "35-28.30B
      *  024-14.10A". ONLY in a message identified as Greek by its own words (an English "N" is north). */
     if (greek(U)) {
-        U = std::regex_replace(U, std::regex(R"((\b\d{2}-\d{2}(?:[.,]\d{1,3})?)\s?N\b)"), "$1\x01");   // south first (N would read as north)
-        U = std::regex_replace(U, std::regex(R"((\b\d{2}-\d{2}(?:[.,]\d{1,3})?)\s?B\b)"), "$1N");
-        U = std::regex_replace(U, std::regex(R"((\b\d{3}-\d{2}(?:[.,]\d{1,3})?)\s?A\b)"), "$1E");
-        U = std::regex_replace(U, std::regex(R"((\b\d{3}-\d{2}(?:[.,]\d{1,3})?)\s?D\b)"), "$1W");
+        U = std::regex_replace(U, rx(R"((\b\d{2}-\d{2}(?:[.,]\d{1,3})?)\s?N\b)"), "$1\x01");   // south first (N would read as north)
+        U = std::regex_replace(U, rx(R"((\b\d{2}-\d{2}(?:[.,]\d{1,3})?)\s?B\b)"), "$1N");
+        U = std::regex_replace(U, rx(R"((\b\d{3}-\d{2}(?:[.,]\d{1,3})?)\s?A\b)"), "$1E");
+        U = std::regex_replace(U, rx(R"((\b\d{3}-\d{2}(?:[.,]\d{1,3})?)\s?D\b)"), "$1W");
         for (auto& c : U) if (c == '\x01') c = 'S';
     }
-    U = std::regex_replace(U, std::regex(R"((\d)'([NSEW])\b)"), "$1$2");
-    U = std::regex_replace(U, std::regex(R"(\bLAT\.?\s+(\d))"), "$1");
-    U = std::regex_replace(U, std::regex(R"(([NS])\s+LONG\.?\s+(\d))"), "$1 $2");
+    U = std::regex_replace(U, rx(R"((\d)'([NSEW])\b)"), "$1$2");
+    U = std::regex_replace(U, rx(R"(\bLAT\.?\s+(\d))"), "$1");
+    U = std::regex_replace(U, rx(R"(([NS])\s+LONG\.?\s+(\d))"), "$1 $2");
     return U;
 }
 /** ★★ THE WARNING'S OWN WINDOW (2026-11-01): "APO 01 IAN 26 EOS 31 DEK 26", "FROM 01 NOV TO 15 NOV 2026", "DU 01 NOV AU
@@ -262,7 +277,7 @@ inline int monthOf(const std::string& m) {
 inline Window windowOf(const std::string& b, int64_t t) {
     Window w;
     const std::string U = navtex::upperAscii(b);
-    if (std::regex_search(U, std::regex(R"(\bUNTIL FURTHER NOTICE\b|\bUFN\b|\bJUSQU.A NOUVEL AVIS\b|\bHASTA NUEVO AVISO\b|\bFINO A NUOVO AVVISO\b|\bBIS AUF WEITERES\b|\bTOT NADER BERICHT\b|\bMECHRI NEOTERAS\b)"))) w.ufn = true;
+    if (std::regex_search(U, rx(R"(\bUNTIL FURTHER NOTICE\b|\bUFN\b|\bJUSQU.A NOUVEL AVIS\b|\bHASTA NUEVO AVISO\b|\bFINO A NUOVO AVVISO\b|\bBIS AUF WEITERES\b|\bTOT NADER BERICHT\b|\bMECHRI NEOTERAS\b)"))) w.ufn = true;
     static const std::regex range(R"(\b(FROM|APO|DU|DESDE|DAL|VOM|VAN)\s+(\d{1,2})(?:\d{4})?\s*(?:UTC\s*)?([A-Z]{3,4})?\s*(\d{2}|\d{4})?\s+(TO|EOS|AU|HASTA|AL|BIS|TOT|TILL|UNTIL|THRU)\s+(\d{1,2})(?:\d{4})?\s*(?:UTC\s*)?([A-Z]{3,4})\.?\s*(\d{2}|\d{4})?\b)");
     std::smatch m;
     if (std::regex_search(U, m, range)) {
@@ -294,6 +309,39 @@ inline uint64_t textHash(const std::string& b) {
 /** Error characters: '*' / '_' the decoder printed for what it lost. */
 inline int lostChars(const std::string& b) { int n = 0; for (char c : b) n += c == '*' || c == '_'; return n; }
 
+/** ★★ WHAT THE POINTS ARE (2026-11-01, the map's lines and areas): the text's own words. An AREA ("AREA BOUNDED BY",
+ *  "WITHIN AREA", "ZONE", "ZONA", "GEBIET", "GEBIED", "PODRUCJE") with three points or more = a polygon; a ROUTE ("ALONG",
+ *  "ROUTE", "TRACK", "LINE JOINING", "BETWEEN … AND", cable or pipeline LAYING, a tow FROM … TO) with two or more = a
+ *  line; otherwise separate points. 'a' / 'r' / '' — never guessed from the points' layout. */
+inline char shapeOf(const std::string& b, size_t npts) {
+    if (npts < 2) return 0;
+    const std::string U = navtex::upperAscii(b);
+    static const std::regex area(R"(\bAREAS? (BOUNDED|ENCLOSED|DEFINED|BETWEEN|WITHIN)\b|\bBOUNDED BY\b|\bWITHIN (AN |THE )?AREA\b|\bIN (AN |THE )?AREA\b|\bAREA:|\bZONES?\b|\bPOLYGON\b|\bZONA\b|\bGEBIET\b|\bGEBIED\b|\bPODRUCJ\w*\b|\bPERIOCHI\b|\bSECTOR\b)");
+    static const std::regex route(R"(\bALONG\b|\bROUTE\b|\bTRACK\b|\bLINE (JOINING|BETWEEN|CONNECTING)\b|\bJOINING\b|\b(CABLE|PIPE ?LINE|PIPE)[ -]?(LAYING|LAY|ROUTE)\b|\bLE LONG\b|\bTRAJET\b|\bDERROTA\b|\bROTTA\b|\bTRASA\b|\bLINIE\b|\bLIJN\b|\bLINEA\b)");
+    if (npts >= 3 && std::regex_search(U, area)) return 'a';
+    if (std::regex_search(U, route)) return 'r';
+    if (npts >= 3 && std::regex_search(U, rx(R"(\bAREA\b)"))) return 'a';
+    return 0;
+}
+/** The message's own date-time group in its first lines — "301500 UTC OCT 26", "011234 UTC NOV 26", "010710 UTC OCT" —
+ *  as UTC seconds, or 0. The year from the message time when it is not given (and across a new year). */
+inline int64_t issuedOf(const std::string& b, int64_t t) {
+    const std::string head = navtex::upperAscii(b.substr(0, 160));
+    static const std::regex dtg(R"((?:^|\n)\s*(\d{2})(\d{2})(\d{2})\s*(?:UTC|Z)\s+([A-Z]{3})\.?(?:\s+(\d{2}|\d{4}))?)");
+    std::smatch m;
+    if (!std::regex_search(head, m, dtg)) return 0;
+    const int mo = monthOf(m[4]);
+    const int d = std::atoi(m[1].str().c_str()), hh = std::atoi(m[2].str().c_str()), mi = std::atoi(m[3].str().c_str());
+    if (mo < 0 || d < 1 || d > 31 || hh > 23 || mi > 59) return 0;
+    std::time_t tt = (std::time_t)t; std::tm g{}; gmtime_r(&tt, &g);
+    std::tm e{}; e.tm_mday = d; e.tm_mon = mo; e.tm_hour = hh; e.tm_min = mi;
+    const std::string y = m[5].str();
+    e.tm_year = y.empty() ? g.tm_year : (y.size() == 2 ? 100 + std::atoi(y.c_str()) : std::atoi(y.c_str()) - 1900);
+    int64_t at = (int64_t)timegm(&e);
+    if (y.empty() && at > t + 2 * 86400) { e.tm_year--; at = (int64_t)timegm(&e); }   // ★ a December message heard in January
+    return at > t - 400LL * 86400 && at < t + 2 * 86400 ? at : 0;   // ★ a garbled group is dropped, never shown
+}
+
 // ── one index line ───────────────────────────────────────────────────────────────────────────────────────────────────
 struct Entry {
     std::string file, id, cls, series, cIds, cSeries;   // cIds / cSeries: what it cancels, space-separated
@@ -303,6 +351,7 @@ struct Entry {
     std::vector<std::pair<double, double>> pts;
     std::string hit, lang;   // ★ the native word that classified it, and its language (the card's summary)
     int64_t validTo = 0; bool ufn = false;   // ★ its own window's end; "until further notice"
+    char shape = 0; int64_t issued = 0;       // ★ v4: 'a' area / 'r' route / 0 points; its own date-time group
 };
 inline uint64_t nameHash(const std::string& s) { uint64_t h = 1469598103934665603ull; for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; } return h; }
 /** v1 \t file \t t \t khz \t id \t hash(hex) \t lost \t class \t unlit \t series \t cancelIds \t cancelSeries \t cancelAt \t pts */
@@ -314,13 +363,15 @@ inline std::string format(const Entry& e) {
     o += e.cls + "\t" + (e.unlit ? "1" : "0") + "\t" + e.series + "\t" + e.cIds + "\t" + e.cSeries + "\t" + std::to_string((long long)e.cancelAt) + "\t";
     for (size_t i = 0; i < e.pts.size(); ++i) { std::snprintf(b, sizeof b, "%s%.4f,%.4f", i ? ";" : "", e.pts[i].first, e.pts[i].second); o += b; }
     std::string hit = e.hit; for (auto& ch : hit) if (ch == '\t' || ch == '\n') ch = ' ';
-    return o + "\t" + hit + "\t" + e.lang + "\t" + std::to_string((long long)e.validTo) + "\t" + (e.ufn ? "1" : "0") + "\n";
+    return o + "\t" + hit + "\t" + e.lang + "\t" + std::to_string((long long)e.validTo) + "\t" + (e.ufn ? "1" : "0")
+         + "\t" + (e.shape ? std::string(1, e.shape) : std::string()) + "\t" + std::to_string((long long)e.issued) + "\n";
 }
 inline bool parse(const std::string& l, Entry& e) {
     std::vector<std::string> f; size_t p = 0;
     for (;;) { const size_t q = l.find('\t', p); if (q == std::string::npos) { f.push_back(l.substr(p)); break; } f.push_back(l.substr(p, q - p)); p = q + 1; }
-    if (f.size() != 18 || f[0] != "v" + std::to_string(kVersion)) return false;
+    if (f.size() != 20 || f[0] != "v" + std::to_string(kVersion)) return false;
     e.hit = f[14]; e.lang = f[15]; e.validTo = std::atoll(f[16].c_str()); e.ufn = f[17] == "1";
+    e.shape = f[18] == "a" ? 'a' : f[18] == "r" ? 'r' : 0; e.issued = std::atoll(f[19].c_str());
     e.file = f[1]; e.t = std::atoll(f[2].c_str()); e.khz = std::atof(f[3].c_str()); e.id = f[4];
     e.hash = std::strtoull(f[5].c_str(), nullptr, 16); e.lost = std::atoi(f[6].c_str()); e.cls = f[7]; e.unlit = f[8] == "1";
     e.series = f[9]; e.cIds = f[10]; e.cSeries = f[11]; e.cancelAt = std::atoll(f[12].c_str());
@@ -370,8 +421,23 @@ inline Entry fromMessage(const std::string& file, int64_t t, double hz, const st
         }
         pts.swap(keep);
     }
+    /* ★ One point of a list far from all the others ("24-20.6N" among seven at 64°N — a 6 read as a 2): with three or
+     *  more, a point further than 300 km and five times the list's own spread from its median is damage, not a corner. */
+    if (pts.size() >= 3) {
+        std::vector<double> la, lo; for (auto& p : pts) { la.push_back(p.first); lo.push_back(p.second); }
+        std::nth_element(la.begin(), la.begin() + la.size() / 2, la.end()); std::nth_element(lo.begin(), lo.begin() + lo.size() / 2, lo.end());
+        const double mla = la[la.size() / 2], mlo = lo[lo.size() / 2];
+        std::vector<double> d; for (auto& p : pts) d.push_back(navtex::km(p.first, p.second, mla, mlo));
+        std::vector<double> ds = d; std::nth_element(ds.begin(), ds.begin() + ds.size() / 2, ds.end());
+        const double lim = std::max(300.0, 5 * ds[ds.size() / 2]);
+        std::vector<std::pair<double, double>> keep;
+        for (size_t i = 0; i < pts.size(); ++i) if (d[i] <= lim) keep.push_back(pts[i]);
+        pts.swap(keep);
+    }
     if (pts.size() > kMaxPts) pts.resize(kMaxPts);
     e.pts = pts;
+    e.shape = shapeOf(b, e.pts.size());
+    e.issued = issuedOf(b, t);
     return e;
 }
 
@@ -382,13 +448,13 @@ struct SyncResult { size_t live = 0, indexed = 0, added = 0, pending = 0; };
 /** ★ Bring the index up to date: every live NAVTEX item not yet in it is parsed (at most `budget` this call) and APPENDED.
  *  One sequential read of the index (the names' hashes), one walk of the live view, one append. */
 inline SyncResult sync(const std::string& idxPath, const LiveFn& live, const TextFn& text, size_t budget,
-                       std::unordered_set<uint64_t>* liveNames = nullptr, size_t* idxLines = nullptr) {
+                       std::unordered_set<uint64_t>* liveNames = nullptr, size_t* idxLines = nullptr, const std::string& metPath = std::string()) {
     SyncResult r;
     std::unordered_set<uint64_t> have;
     if (FILE* f = std::fopen(idxPath.c_str(), "r")) {
         char buf[8192];
         while (std::fgets(buf, sizeof buf, f)) {
-            const char* t1 = std::strchr(buf, '\t'); if (!t1 || std::strncmp(buf, "v3\t", 3) != 0) continue;
+            const char* t1 = std::strchr(buf, '\t'); if (!t1 || std::strncmp(buf, kPrefix, std::strlen(kPrefix)) != 0) continue;
             const char* t2 = std::strchr(t1 + 1, '\t'); if (!t2) continue;
             have.insert(nameHash(std::string(t1 + 1, t2)));
             if (idxLines) ++*idxLines;
@@ -406,9 +472,17 @@ inline SyncResult sync(const std::string& idxPath, const LiveFn& live, const Tex
         if (todo.size() < budget) todo.push_back({f, (int64_t)t, hz}); else r.pending++;
     });
     if (todo.empty()) return r;
-    std::string out;
-    for (const auto& d : todo) { out += format(fromMessage(d.file, d.t, d.hz, text(d.file))); r.added++; }
+    std::string out, met;
+    // ★ the met index is rebuilt with this one: a fresh warnings index (none of this version's lines) starts it again
+    if (!metPath.empty() && have.empty()) if (FILE* f = std::fopen(metPath.c_str(), "w")) std::fclose(f);
+    for (const auto& d : todo) {
+        const std::string tx = text(d.file);
+        const Entry e = fromMessage(d.file, d.t, d.hz, tx);
+        out += format(e); r.added++;
+        if (!metPath.empty() && e.cls == "met") for (const auto& a : navmet::parse(body(tx))) met += navmet::format(d.file, d.t, a);
+    }
     if (FILE* f = std::fopen(idxPath.c_str(), "a")) { std::fwrite(out.data(), 1, out.size(), f); std::fclose(f); }
+    if (!met.empty()) if (FILE* f = std::fopen(metPath.c_str(), "a")) { std::fwrite(met.data(), 1, met.size(), f); std::fclose(f); }
     r.indexed += r.added;
     if (idxLines) *idxLines += r.added;
     return r;
@@ -430,7 +504,7 @@ inline bool compact(const std::string& idxPath, const std::unordered_set<uint64_
     std::unordered_set<uint64_t> wrote;
     char buf[8192];
     while (std::fgets(buf, sizeof buf, f)) {
-        const char* t1 = std::strchr(buf, '\t'); if (!t1 || std::strncmp(buf, "v3\t", 3) != 0) continue;
+        const char* t1 = std::strchr(buf, '\t'); if (!t1 || std::strncmp(buf, kPrefix, std::strlen(kPrefix)) != 0) continue;
         const char* t2 = std::strchr(t1 + 1, '\t'); if (!t2) continue;
         const uint64_t h = nameHash(std::string(t1 + 1, t2));
         if (!liveNames.count(h) || !wrote.insert(h).second) continue;
@@ -448,6 +522,7 @@ struct Group {
     uint32_t n = 0; std::vector<std::pair<double, double>> pts;
     std::string cancelledBy;                  // the id that cancelled it
     std::string hit, lang; int64_t validTo = 0; bool ufn = false;
+    char shape = 0; int64_t issued = 0;
 };
 struct Query {
     std::vector<Group> shown;                 // newest first, ≤ kMaxMarkers
@@ -503,8 +578,9 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
             g.n++; g.first = std::min(g.first, e.t); g.last = std::max(g.last, e.t);
             if (e.lost < g.lost || (e.lost == g.lost && e.pts.size() > g.pts.size())) {   // ★ the best copy is shown
                 g.lost = e.lost; g.best = e.file; g.pts = e.pts; g.cls = e.cls; g.unlit = e.unlit; g.series = e.series; g.hash = e.hash;
-                g.hit = e.hit; g.lang = e.lang;
+                g.hit = e.hit; g.lang = e.lang; g.shape = e.shape;
             }
+            if (e.issued && (!g.issued || e.issued < g.issued)) g.issued = e.issued;
             if (e.cancelAt) g.cancelAt = e.cancelAt;
             if (e.validTo) g.validTo = std::max(g.validTo, e.validTo);
             g.ufn = g.ufn || e.ufn;
@@ -532,7 +608,7 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
     }
     q.groups = gs.size();
     std::vector<size_t> withPos;
-    for (size_t i = 0; i < gs.size(); ++i) if (!gs[i].pts.empty()) { withPos.push_back(i); q.byClass[gs[i].cls]++; }
+    for (size_t i = 0; i < gs.size(); ++i) if (!gs[i].pts.empty() && gs[i].cls != "met") { withPos.push_back(i); q.byClass[gs[i].cls]++; }
     q.withPos = withPos.size();
     std::sort(withPos.begin(), withPos.end(), [&](size_t a, size_t b) { return gs[a].last > gs[b].last; });
     q.total = withPos.size();
@@ -540,7 +616,9 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
     (void)now;
     return q;
 }
-inline std::string toJson(const Query& q, int64_t now, const SyncResult& s) {
+/** ★ `placed`: the stations map's placement of each message (navmap::scan's Placed) — the card's station and decode
+ *  quality. Absent = neither sent. */
+inline std::string toJson(const Query& q, int64_t now, const SyncResult& s, const std::unordered_map<uint64_t, navmap::Placed>* placed = nullptr) {
     char b[320];
     std::snprintf(b, sizeof b, "{\"now\":%lld,\"total\":%zu,\"shown\":%zu,\"receptions\":%zu,\"warnings\":%zu,\"live\":%zu,\"indexed\":%zu,\"pending\":%zu,\"classes\":{",
                   (long long)now, q.total, q.shown.size(), q.receptions, q.groups, s.live, s.indexed, s.pending);
@@ -561,6 +639,16 @@ inline std::string toJson(const Query& q, int64_t now, const SyncResult& s) {
         if (g.validTo) { std::snprintf(b, sizeof b, ",\"validTo\":%lld", (long long)g.validTo); o += b; }
         if (g.ufn) o += ",\"ufn\":1";
         if (!g.hit.empty()) o += ",\"hit\":\"" + navmap::jesc(g.hit) + "\",\"lang\":\"" + navmap::jesc(g.lang) + "\"";
+        if (g.shape) { o += ",\"shape\":\""; o += g.shape == 'a' ? "area" : "route"; o += "\""; }
+        if (g.issued) { std::snprintf(b, sizeof b, ",\"issued\":%lld", (long long)g.issued); o += b; }
+        if (!g.cancelledBy.empty() || (g.cancelAt && g.cancelAt <= now)) o += ",\"cancelled\":1";
+        if (placed) {
+            auto p = placed->find(navmap::fileHash(g.best));
+            if (p != placed->end()) {
+                if (!p->second.name.empty()) o += ",\"st\":\"" + navmap::jesc(p->second.name) + "\",\"sc\":\"" + navmap::jesc(p->second.conf) + "\",\"iso\":\"" + navmap::jesc(p->second.iso) + "\"";
+                if (!p->second.q.empty()) o += ",\"q\":\"" + navmap::jesc(p->second.q) + "\"";
+            }
+        }
         o += ",\"pts\":[";
         for (size_t k = 0; k < g.pts.size(); ++k) { std::snprintf(b, sizeof b, "%s[%.4f,%.4f]", k ? "," : "", g.pts[k].first, g.pts[k].second); o += b; }
         o += "]}";

@@ -58,7 +58,8 @@ int main(int argc, char** argv) {
         ok(t.id == "structure" && t.unlit, "a turbine with its light inoperative: structure + unlit");
         const auto lh = navwarn::classify('A', "LIGHTHOUSE OF S. CATALDO OF LECCE I.L. 3612 (E2192),\nIN POSITION:\nLAT 40 23.4'N\nIS NOT WORKING.");
         ok(lh.id == "navaid" && lh.unlit, "LIGHTHOUSE … IS NOT WORKING: navaid + unlit");
-        ok(c("BUOY MISSING") == "navaid" && c("RACON INOPERATIVE") == "navaid" && c("FOGHORN OUT OF ORDER") == "navaid", "BUOY / RACON / FOGHORN → navaid");
+        ok(c("BUOY MISSING") == "buoy" && c("RACON INOPERATIVE") == "navaid" && c("FOGHORN OUT OF ORDER") == "navaid", "BUOY → buoy (the buoy icon); RACON / FOGHORN → navaid");
+        ok(c("KUSTROUTE OOSTENDE\nLICHTBOEI BA-E 51-14.77N 002-55.42E\nLICHT GEDOOFD") == "buoy", "NL: LICHTBOEI (a compound) → buoy");
         ok(c("CONTAINERS LOST OVERBOARD") == "adrift" && c("DERELICT YACHT ADRIFT") == "adrift", "CONTAINERS LOST / DERELICT → adrift");
         ok(c("CABLE LAYING OPERATIONS") == "cable" && c("SEISMIC SURVEY") == "survey" && c("TOW IN PROGRESS") == "towing", "cable, survey, towing");
         ok(c("VESSEL OVERDUE", 'D') == "sar" && c("ANYTHING", 'D') == "sar", "B2 = D or OVERDUE → sar");
@@ -73,13 +74,13 @@ int main(int argc, char** argv) {
         k = cl("AVURNAV BREST 370/26\nOUESSANT\nZONE D'EXCLUSION\nPROJET CELTIC INTERCONNECTOR\nOPERATIONS CABLIERES\nPOSE DE CABLES SOUS-MARINS");
         ok(k.id == "cable", "FR: POSE DE CABLES SOUS-MARINS → cable");
         k = cl("FEU ETEINT\nBOUEE CARDINALE NORD");
-        ok(k.id == "navaid" && k.unlit && k.lang == "fr" && k.hit.find("ETEINT") != std::string::npos, "FR: FEU ETEINT, BOUEE → navaid + unlit, from French: " + k.hit);
-        ok(cl("BOYA APAGADA EN POSICION").unlit && cl("BOYA APAGADA EN POSICION").id == "navaid", "ES: BOYA APAGADA → navaid + unlit");
+        ok(k.id == "buoy" && k.unlit && k.lang == "fr" && k.hit.find("ETEINT") != std::string::npos, "FR: FEU ETEINT, BOUEE → buoy + unlit, from French: " + k.hit);
+        ok(cl("BOYA APAGADA EN POSICION").unlit && cl("BOYA APAGADA EN POSICION").id == "buoy", "ES: BOYA APAGADA → buoy + unlit");
         ok(cl("FANALE SPENTO").id == "navaid" && cl("FANALE SPENTO").unlit, "IT: FANALE SPENTO → navaid + unlit");
         ok(cl("RELITTO PERICOLOSO").id == "wreck" && cl("PECIO EN POSICION").id == "wreck" && cl("EPAVE DANGEREUSE").id == "wreck", "IT/ES/FR wreck words");
         ok(cl("ESERCITAZIONI DI TIRO").id == "firing" && cl("SCHIESSUEBUNGEN").id == "firing", "IT/DE firing words");
         ok(cl("STATHMOS KERKYRA AR.MIN 227/25\n1. ASKISEIS PYRON AEROSKAFON APO 01 IAN 26 EOS 31 DEK 26").id == "firing", "EL: ASKISEIS PYRON → firing");
-        ok(cl("ORDIGNO BELLICO RINVENUTO").id == "uxo" && cl("PARCO EOLICO OFFSHORE").id == "structure" && cl("BOA ALLA DERIVA").id == "navaid", "IT: uxo, wind farm; a buoy adrift is a navaid");
+        ok(cl("ORDIGNO BELLICO RINVENUTO").id == "uxo" && cl("PARCO EOLICO OFFSHORE").id == "structure" && cl("BOA ALLA DERIVA").id == "buoy", "IT: uxo, wind farm; a buoy adrift is a buoy");
         ok(cl("CONTAINER ALLA DERIVA").id == "adrift", "IT: something else adrift → adrift");
         const auto wd = navwarn::windowOf("1. ASKISEIS PYRON AEROSKAFON APO 01 IAN 26 EOS 31 DEK 26", 1793488800);
         ok(wd.to > 0 && wd.to - 1798761540 < 86400 && wd.to >= 1798675200, "EL window APO 01 IAN 26 EOS 31 DEK 26 → ends 31 Dec 2026");
@@ -100,6 +101,23 @@ int main(int argc, char** argv) {
         ok(self.at > 1793500000 && self.at - 1793500000 < 40 * 86400, "CANCEL THIS MESSAGE 302200 UTC NOV: an end time");
         const auto ua = navwarn::fromMessage("ua30.txt", 1793488800, 517500, "ZCZC UA30\nMONDOLFO RADIO\nCOASTAL WARNING 510/26 OCT 24 (CANCELED)\nLIGHTHOUSE … IS NOT WORKING.\nLAT 40 23.4'N LONG 018 18.4'E\nCOSTAVURNAV 510/26 OCT 24 IS CANCELED\nNNNN");
         ok(ua.cls == "cancel" && ua.cSeries.find("510/26") != std::string::npos, "UA30 '510/26 … IS CANCELED': a cancellation of 510/26, not a hazard to plot");
+    }
+    std::printf("── the shape the text names, its date-time group ──\n");
+    {
+        ok(navwarn::shapeOf("CABLE LAYING OPERATIONS ALONG A LINE JOINING 51-00N 001-00E 51-10N 001-20E", 2) == 'r', "cable laying ALONG A LINE JOINING (2 points): a ROUTE");
+        ok(navwarn::shapeOf("AREA BOUNDED BY 50-00N 001-00W 50-10N 001-00W 50-10N 000-50W", 3) == 'a', "AREA BOUNDED BY (3 points): an AREA");
+        ok(navwarn::shapeOf("ZONE DE TIRS 47-00N 003-00W 47-10N 003-00W 47-10N 002-50W 47-00N 002-50W", 4) == 'a', "French ZONE (4 points): an AREA");
+        ok(navwarn::shapeOf("1. WRECK 50-00N 001-00W\n2. BUOY 50-10N 001-05W", 2) == 0, "two numbered items, no area or route words: separate points");
+        ok(navwarn::shapeOf("AREA BOUNDED BY 50-00N 001-00W", 1) == 0, "one point: never a shape");
+        ok(navwarn::shapeOf("WITHIN AREA 50-00N 001-00W 50-10N 001-00W", 2) != 'a', "an area with only two points is not a polygon");
+        const int64_t t = 1793488800;   // 2026-11-01 01:20 UTC
+        ok(navwarn::issuedOf("301500 UTC OCT 26\nWZ 1/26", t) == 1793372400, "301500 UTC OCT 26 → 2026-10-30 15:00 UTC");
+        ok(navwarn::issuedOf("010710 UTC OCT\nOOSTENDERADIO", t) > 0, "010710 UTC OCT (no year): read against the message year");
+        ok(navwarn::issuedOf("311899 UTC OCT 26", t) == 0 && navwarn::issuedOf("WZ 649/26", t) == 0, "a garbled group or none: 0 (never shown)");
+    }
+    {
+        const auto na = navwarn::fromMessage("na84.txt", 1793488800, 517500, "ZCZC NA84\nAREA BOUNDED BY POSITIONS:\n64-20.3N 011-15.8E\n64-22.1N 011-19.3E\n64-22.8N 011-20.4E\n64-23.7N 011-19.0E\n24-20.6N 011-14.6E\nNNNN");
+        ok(na.pts.size() == 4 && na.shape == 'a', "NA84: '24-20.6N' among four at 64°N (a 6 read as a 2) is dropped; the area keeps its four corners");
     }
     std::printf("── one marker per warning ──\n");
     {
@@ -141,6 +159,7 @@ int main(int argc, char** argv) {
         ok(find("EA49", -1) == nullptr, "an item the gallery evicted is not on the map");
         const navwarn::Group* ea48 = find("EA48", -1);
         ok(ea48 && ea48->pts.size() == 4 && ea48->cls == "firing", "a firing area: four points");
+        ok(ea48 && ea48->shape == 'a', "…'FIRING EXERCISES IN AREA' + 4 points: drawn as an AREA (a polygon)");
         const std::string j = navwarn::toJson(q, T + 30000, s2);
         ok(j.find("\"id\":\"EA46\"") != std::string::npos && j.find("\"expired\":1") != std::string::npos, "the JSON marks the cancelled one expired");
         const auto q2 = navwarn::query(idx, names, 0, T + 30000 + 80 * 3600);

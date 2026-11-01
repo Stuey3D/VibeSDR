@@ -50,6 +50,10 @@ export interface TrackLiveListProps {
   onRange?: (id: string) => void;
   /** What ALL (or the ranges offered) mean here — said to a screen reader on each key. */
   rangeHint?: string;
+  /** ★★ V12 2026-11-01 THE NAVTEX MAP's layers (STATIONS · WARNINGS · WEATHER): on/off keys under the ranges. */
+  toggles?: Array<{ id: string; label: string; words: string }>;
+  toggled?: Record<string, boolean>;
+  onToggle?: (id: string, on: boolean) => void;
 }
 const RANGE_H = 30;
 
@@ -72,7 +76,7 @@ export default function TrackLiveList(p: TrackLiveListProps) {
   const innerH = p.areaH - p.insets.top - p.insets.bottom;
   const width = adsbListWidth(innerW);
   const safety = p.safety ?? [];
-  const extra = STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0);
+  const extra = STATUS_H + safety.length * SAFETY_LINE_H + (p.ranges?.length && open ? RANGE_H : 0) + (p.toggles?.length && open ? RANGE_H : 0);
   const fit = adsbListRowsFit(innerH - extra);
   const shown = Math.max(1, Math.min(fit, p.rows.length || 1));
   const height = LIST_HEAD_H + extra + shown * LIST_ROW_H;
@@ -96,6 +100,14 @@ export default function TrackLiveList(p: TrackLiveListProps) {
             <View style={s.ranges} accessibilityRole="radiogroup">
               {p.ranges.map((x) => <RangeKey key={x.id} s={s} label={x.label} words={`${x.words}${p.rangeHint ? '. ' + p.rangeHint : ''}`}
                                              on={p.range === x.id} onPress={() => p.onRange?.(x.id)} />)}
+            </View>
+          </NavRow>
+        )}
+        {open && !!p.toggles?.length && (
+          <NavRow>
+            <View style={s.ranges}>
+              {p.toggles.map((x) => <ToggleKey key={x.id} s={s} label={x.label} words={x.words}
+                                               on={p.toggled?.[x.id] !== false} onPress={() => p.onToggle?.(x.id, p.toggled?.[x.id] === false)} />)}
             </View>
           </NavRow>
         )}
@@ -144,6 +156,18 @@ function RangeKey({ s, label, words, on, onPress }: { s: S; label: string; words
   return (
     <TouchableOpacity ref={viewRef as never} style={[s.rKey, on && s.rKeyOn]} onPress={onPress} activeOpacity={0.7}
                       accessibilityRole="radio" accessibilityState={{ checked: on }} accessibilityLabel={words}>
+      <Text style={[s.rTxt, on && s.rTxtOn]}>{label}</Text>
+      <NavRing on={focused} color={ring} radius={5} />
+    </TouchableOpacity>
+  );
+}
+
+function ToggleKey({ s, label, words, on, onPress }: { s: S; label: string; words: string; on: boolean; onPress: () => void }) {
+  const { focused, viewRef } = useNavButton(onPress);
+  const { ring } = useNavFocus();
+  return (
+    <TouchableOpacity ref={viewRef as never} style={[s.rKey, on && s.tKeyOn]} onPress={onPress} activeOpacity={0.7}
+                      accessibilityRole="switch" accessibilityState={{ checked: on }} accessibilityLabel={words}>
       <Text style={[s.rTxt, on && s.rTxtOn]}>{label}</Text>
       <NavRing on={focused} color={ring} radius={5} />
     </TouchableOpacity>
@@ -217,6 +241,7 @@ const makeStyles = (ink: { x: string; k: string; kt: string }) => StyleSheet.cre
             borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: `rgba(${ink.k},0.18)` },
   rKey:   { height: 22, justifyContent: 'center', paddingHorizontal: 7, borderRadius: 5, borderWidth: 1, borderColor: `rgba(${ink.k},0.35)` },
   rKeyOn: { backgroundColor: '#ffd34d', borderColor: '#ffd34d' },
+  tKeyOn: { backgroundColor: '#7fc8ff', borderColor: '#7fc8ff' },
   rTxt:   { fontFamily: F, fontSize: 10, letterSpacing: 0.8, color: `rgba(${ink.x},0.85)` },
   rTxtOn: { color: '#111' },
   empty:  { fontFamily: F, fontSize: 12, color: `rgba(${ink.x},0.60)`, padding: 10, lineHeight: 17 },

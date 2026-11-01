@@ -25,9 +25,9 @@ import { ModeLabel } from './ModeIcon';
 import { withReadAuth } from '../services/vibeAuth';
 import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
-import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
-         galleryTranslateLines, type GalleryTrLine } from '../utils/galleryTranslate';
-import { detectTextLanguage, langName, textTranslateInfo, translateText } from '../services/transcriber';
+import { langName } from '../services/transcriber';
+// ★ the translate key's plan and run, shared with the NAVTEX map's cards (MapOverlay) — one implementation
+import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
 import { ismIsNodeCard, ismNodesParse, ismGalMerge, ismNodeCardBand, type IsmGalNode } from '../services/ism';
 import { navSanitise, type NavReport } from '../services/navtexMap';
 
@@ -89,7 +89,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   const [text, setText] = useState('');
   const [textOk, setTextOk] = useState(false);
   // ★ TRANSLATE: the plan (what is sent, from what, into what), the result, which is shown, and what to say.
-  const [trPlan, setTrPlan] = useState<{ lines: GalleryTrLine[]; source: string; target: string } | null>(null);
+  const [trPlan, setTrPlan] = useState<GalleryTrPlan | null>(null);
   const [trText, setTrText] = useState<string | null>(null);
   const [showTr, setShowTr] = useState(false);
   const [trBusy, setTrBusy] = useState(false);
@@ -176,30 +176,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
     setTrPlan(null); setTrText(null); setShowTr(false); setTrBusy(false); setTrNote('');
     if (!open || !textOk || !text || isImage(open)) return;
     let dead = false;
-    void (async () => {
-      const info = await textTranslateInfo();
-      if (dead || !info.available) return;
-      const target = translateTo || info.deviceLanguage || '';
-      const lines = galleryTranslateLines(text, open.k);
-      const body = galleryTranslatableText(lines);
-      if (!body || !target) return;
-      const hint = galleryHintLanguage(open.title);
-      const guess = galleryGuessLanguage(body, hint);
-      // ★ iOS: NaturalLanguage reads it, with the station's language and the stopword guess as its priors.
-      const source = (info.detect ? await detectTextLanguage(body, [hint, guess].filter(Boolean)) : '') || guess;
-      if (!dead && galleryCanTranslate(lines, source, target)) setTrPlan({ lines, source, target });
-    })();
+    void planGalleryTranslate(text, open.k, open.title, translateTo).then((pl) => { if (!dead && pl) setTrPlan(pl); }).catch(() => {});
     return () => { dead = true; };
   }, [open, text, textOk, translateTo]);
   const onTranslate = async () => {
     if (!trPlan || trBusy) return;
     if (trText != null) { setShowTr(v => !v); return; }
     setTrBusy(true); setTrNote('');
-    const r = await galleryTranslate(trPlan.lines, trPlan.target, (t) => translateText(t, trPlan.source, trPlan.target));
+    const r = await runGalleryTranslate(trPlan);
     setTrBusy(false);
-    if (!r.done) { setTrNote(r.reason || 'The translation did not work on this phone.'); return; }
+    if (!r.ok) { setTrNote(r.note); return; }
     setTrText(r.text); setShowTr(true);
-    setTrNote(r.failed ? `${r.failed} line${r.failed === 1 ? '' : 's'} left as received${r.reason ? ` (${r.reason})` : ''}` : '');
+    setTrNote(r.note);
   };
   const close = () => { setOpen(null); onClose(); };
 
@@ -237,7 +225,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                 <>
                   {(showTr || !!trNote) && (
                     <Text style={s.trNote}>
-                      {(showTr && trPlan ? `MACHINE TRANSLATION · ${langName(trPlan.source)} → ${langName(trPlan.target)} · on this device` : '')
+                      {(showTr && trPlan ? galleryTranslateBanner(trPlan) : '')
                        + (showTr && trNote ? ' · ' : '') + trNote}
                     </Text>
                   )}
