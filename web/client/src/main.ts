@@ -13170,12 +13170,16 @@ const HEALTH_ICONS: Record<string, string> = {
   cpu:  '<rect x="4.5" y="4.5" width="7" height="7" rx="1"/><path d="M6.5 1.8v2.7M9.5 1.8v2.7M6.5 11.5v2.7M9.5 11.5v2.7M1.8 6.5h2.7M1.8 9.5h2.7M11.5 6.5h2.7M11.5 9.5h2.7"/>',
   ram:  '<rect x="1.8" y="4.5" width="12.4" height="7" rx="1"/><path d="M4.6 11.5v2.2M8 11.5v2.2M11.4 11.5v2.2M5 7v2M8 7v2M11 7v2"/>',
   temp: '<path d="M8 2.6a1.7 1.7 0 0 1 1.7 1.7v4.4a3 3 0 1 1-3.4 0V4.3A1.7 1.7 0 0 1 8 2.6z"/><circle cx="8" cy="11.4" r="1.2" fill="currentColor" stroke="none"/>',
-  /* ★★★ TWO SNAILS, AND THE DIFFERENCE IS THE CAUSE (Stuart): flames = thermal, bolt = power limit.
-   *  A plain snail says only "slow" and leaves the owner guessing, and the two causes want opposite
-   *  fixes — cool it down, or find a better supply. */
-  snailFire: '<circle cx="6.3" cy="9.6" r="3.3"/><path d="M6.3 9.6a1.2 1.2 0 1 1 1.2-1.2"/><path d="M1.5 13.4h9.8a2.3 2.3 0 0 0 2.3-2.3V9.4"/><path d="M13.6 9.4l-.8-2M13.6 9.4l1-1.8"/><g stroke-width="1.2"><path d="M4.1 5.6c-.8-.8-.4-1.8.2-2.5.1.7.6 1 .5 1.9"/><path d="M6.3 5.2c-1-1.1-.4-2.5.4-3.6.2 1.1.9 1.6.6 3"/><path d="M8.5 5.7c-.7-.7-.3-1.6.3-2.2.1.7.6.9.4 1.8"/></g>',
-  snailBolt: '<circle cx="6.3" cy="9.6" r="3.3"/><path d="M6.3 9.6a1.2 1.2 0 1 1 1.2-1.2"/><path d="M1.5 13.4h9.8a2.3 2.3 0 0 0 2.3-2.3V9.4"/><path d="M13.6 9.4l-.8-2M13.6 9.4l1-1.8"/><path d="M6.6 5.4L5.2 2.2h2.6L6.6 4.4h1.8L5.6 7.2l1-1.8z" stroke-width="1.2"/>',
-  snail:     '<circle cx="6.5" cy="8.2" r="4"/><path d="M6.5 8.2a1.4 1.4 0 1 1 1.4-1.4"/><path d="M1.5 13.4h9.8a2.3 2.3 0 0 0 2.3-2.3V9.4"/><path d="M13.6 9.4l-.8-2M13.6 9.4l1-1.8"/>',
+  /* ★★★ TWO TORTOISES, AND THE DIFFERENCE IS THE CAUSE (Stuart): flame = thermal, bolt = power limit.
+   *  A plain tortoise says only "slow" and leaves the owner guessing, and the two causes want opposite
+   *  fixes — cool it down, or find a better supply.
+   *  ★ A TORTOISE, NOT THE SNAIL (Stuart, 2026-11-01, chosen from a 16–48 px sheet): plain domed shell,
+   *    ONE SOLID flame, a SOLID bolt — the outline bolt read as a triangle and the three flame tongues
+   *    as clutter at 16 px. The keys keep their old names so nothing else has to move.
+   *  ✗ Same `d` strings as src/components/HealthPill.tsx — change both or neither. */
+  snailFire: '<path d="M1.2 12a5.3 4.4 0 0 1 10.6 0z"/><path d="M11.6 11.2l1.1-1"/><circle cx="13.7" cy="9.2" r="1.4"/><path d="M3.4 12v2M9.6 12v2"/><path d="M6.5 0.9c.4 1.5 2.4 2.3 2.4 4.3a2.4 2.4 0 0 1-4.8 0c0-.9.5-1.6 1-2 .1.7.5 1.1.9 1.2-.3-1.2-.1-2.5.5-3.5z" fill="currentColor" stroke-width="0.6"/>',
+  snailBolt: '<path d="M1.2 12a5.3 4.6 0 0 1 10.6 0z"/><path d="M11.6 11.2l1.1-1"/><circle cx="13.7" cy="9.2" r="1.4"/><path d="M3.4 12v2M9.6 12v2"/><path d="M8.4 0.8L4.9 4.2h2.4L5.5 7.2l3.6-3.6H6.7z" fill="currentColor" stroke-width="0.6"/>',
+  snail:     '<path d="M1.2 12a5.3 7.4 0 0 1 10.6 0z"/><path d="M11.6 11.2l1.1-1"/><circle cx="13.7" cy="9.2" r="1.4"/><path d="M3.4 12v2M9.6 12v2"/>',
 };
 
 /* ★★★ BLEND ALONG THE LADDER RATHER THAN SNAP BETWEEN RUNGS (Stuart, 2026-09-26: "can the icons

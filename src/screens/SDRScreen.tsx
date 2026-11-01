@@ -13083,10 +13083,10 @@ export default function SDRScreen({ route, navigation }: Props) {
       target: tourRef('linkMeter') },
     // ★ The SERVER side of the same question — read together with the card above (Stuart, 2026-09-28:
     //   the pill is for owners at a glance, and for listeners to tell the server from their own link).
-    //   The snails (2026-09-30): Stuart asked for them to be explained here — fire = heat, bolt = power,
+    //   The tortoises (snails until 2026-11-01) (2026-09-30): Stuart asked for them to be explained here — fire = heat, bolt = power,
     //   both read from the hardware, never guessed. On a server that draws no pill the card is centred.
     { id: 'health', title: 'Is the server coping?',
-      body: 'The SERVER HEALTH pill shows how the receiver itself is doing — its processor, memory, temperature and power. If the audio breaks up, read it with the connection bars: a struggling pill means the server is the problem, a healthy pill with poor bars means it is the link. A snail means the server is busy but running slower than it should: a snail with flames means it is too hot and has slowed itself down to cool off, a snail with a lightning bolt means its power supply cannot keep up. A plain snail means it has slowed down and cannot tell why. Flick the card to the right to tuck it into the screen edge — its tab keeps the colour — and tap the tab to bring it back.',
+      body: 'The SERVER HEALTH pill shows how the receiver itself is doing — its processor, memory, temperature and power. If the audio breaks up, read it with the connection bars: a struggling pill means the server is the problem, a healthy pill with poor bars means it is the link. A tortoise means the server is busy but running slower than it should: a tortoise with a flame means it is too hot and has slowed itself down to cool off, a tortoise with a lightning bolt means its power supply cannot keep up. A plain tortoise means it has slowed down and cannot tell why. Flick the card to the right to tuck it into the screen edge — its tab keeps the colour — and tap the tab to bring it back.',
       target: tourRef('healthPill') },
     // ★★ THIS CARD USED TO BE WRONG, and a tour that misdirects is worse than no tour: it sends
     //    someone hunting through the cog for a noise-reduction slider that is not there, and they

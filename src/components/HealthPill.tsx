@@ -82,8 +82,11 @@ const clampLevel = (n: number): number => Math.max(0, Math.min(3, Math.round(n) 
  * redraw here would quietly fork the two clients' glyphs.                                          */
 type GlyphName = 'cpu' | 'ram' | 'temp' | 'snailFire' | 'snailBolt' | 'snail';
 
-const SNAIL_BODY = 'M1.5 13.4h9.8a2.3 2.3 0 0 0 2.3-2.3V9.4';
-const SNAIL_HORNS = 'M13.6 9.4l-.8-2M13.6 9.4l1-1.8';
+/** ★ THE TORTOISE (Stuart, 2026-11-01) — neck, head and two legs; the shell's height differs per glyph. */
+const TORTOISE_NECK = 'M11.6 11.2l1.1-1';
+const TORTOISE_LEGS = 'M3.4 12v2M9.6 12v2';
+const TORTOISE_FLAME = 'M6.5 0.9c.4 1.5 2.4 2.3 2.4 4.3a2.4 2.4 0 0 1-4.8 0c0-.9.5-1.6 1-2 .1.7.5 1.1.9 1.2-.3-1.2-.1-2.5.5-3.5z';
+const TORTOISE_BOLT = 'M8.4 0.8L4.9 4.2h2.4L5.5 7.2l3.6-3.6H6.7z';
 
 function Glyph({ name, color }: { name: GlyphName; color: string }) {
   return (
@@ -125,42 +128,41 @@ function glyphBody(name: GlyphName, color: string) {
           <Circle cx={8} cy={11.4} r={1.2} fill={color} stroke="none" />
         </>
       );
-    /* ★★★ TWO SNAILS, AND THE DIFFERENCE IS THE CAUSE (Stuart, 2026-09-25): "snail on fire =
-     *  thermal throttle, snail with a lightning bolt = power limit throttled." A plain snail says
-     *  only "slow" and leaves the owner guessing — and the two causes want opposite fixes: cool it
-     *  down, or find a better supply/cable. The plain snail survives only for a cap whose cause
-     *  nothing reports. */
-    case 'snailFire':  // shell shrunk to make room for three flame tongues at stroke 1.2
+    /* ★★★ TWO TORTOISES, AND THE DIFFERENCE IS THE CAUSE (Stuart, 2026-09-25): "on fire = thermal
+     *  throttle, with a lightning bolt = power limit throttled." A plain one says only "slow" and leaves
+     *  the owner guessing — and the two causes want opposite fixes: cool it down, or find a better
+     *  supply/cable. The plain one survives only for a cap whose cause nothing reports.
+     *  ★ A TORTOISE, NOT THE SNAIL (Stuart, 2026-11-01, from a 16–48 px sheet): plain domed shell, ONE
+     *    SOLID flame, a SOLID bolt — the outline bolt read as a triangle, three tongues as clutter. The
+     *    glyph names keep "snail" so nothing else moves. ✗ Same `d` strings as HEALTH_ICONS in
+     *    web/client/src/main.ts — change both or neither. */
+    case 'snailFire':
       return (
         <>
-          <Circle cx={6.3} cy={9.6} r={3.3} />
-          <Path d="M6.3 9.6a1.2 1.2 0 1 1 1.2-1.2" />
-          <Path d={SNAIL_BODY} />
-          <Path d={SNAIL_HORNS} />
-          <G strokeWidth={1.2}>
-            <Path d="M4.1 5.6c-.8-.8-.4-1.8.2-2.5.1.7.6 1 .5 1.9" />
-            <Path d="M6.3 5.2c-1-1.1-.4-2.5.4-3.6.2 1.1.9 1.6.6 3" />
-            <Path d="M8.5 5.7c-.7-.7-.3-1.6.3-2.2.1.7.6.9.4 1.8" />
-          </G>
+          <Path d="M1.2 12a5.3 4.4 0 0 1 10.6 0z" />
+          <Path d={TORTOISE_NECK} />
+          <Circle cx={13.7} cy={9.2} r={1.4} />
+          <Path d={TORTOISE_LEGS} />
+          <Path d={TORTOISE_FLAME} fill={color} strokeWidth={0.6} />
         </>
       );
-    case 'snailBolt':  // ★ its own bolt, drawn where the flames were — ✗ not the battery's, rescaled
+    case 'snailBolt':
       return (
         <>
-          <Circle cx={6.3} cy={9.6} r={3.3} />
-          <Path d="M6.3 9.6a1.2 1.2 0 1 1 1.2-1.2" />
-          <Path d={SNAIL_BODY} />
-          <Path d={SNAIL_HORNS} />
-          <Path d="M6.6 5.4L5.2 2.2h2.6L6.6 4.4h1.8L5.6 7.2l1-1.8z" strokeWidth={1.2} />
+          <Path d="M1.2 12a5.3 4.6 0 0 1 10.6 0z" />
+          <Path d={TORTOISE_NECK} />
+          <Circle cx={13.7} cy={9.2} r={1.4} />
+          <Path d={TORTOISE_LEGS} />
+          <Path d={TORTOISE_BOLT} fill={color} strokeWidth={0.6} />
         </>
       );
-    case 'snail':      // a cap is observed but nothing says why — bigger shell, no cause marking
+    case 'snail':      // a cap is observed but nothing says why — taller shell, no cause marking
       return (
         <>
-          <Circle cx={6.5} cy={8.2} r={4} />
-          <Path d="M6.5 8.2a1.4 1.4 0 1 1 1.4-1.4" />
-          <Path d={SNAIL_BODY} />
-          <Path d={SNAIL_HORNS} />
+          <Path d="M1.2 12a5.3 7.4 0 0 1 10.6 0z" />
+          <Path d={TORTOISE_NECK} />
+          <Circle cx={13.7} cy={9.2} r={1.4} />
+          <Path d={TORTOISE_LEGS} />
         </>
       );
   }
