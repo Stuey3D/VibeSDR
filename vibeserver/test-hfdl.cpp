@@ -17,6 +17,112 @@ static int g_pass = 0, g_fail = 0;
 #define CHECK(c, ...) do { if (c) ++g_pass; else { ++g_fail; std::printf("   FAIL %s:%d: ", __FILE__, __LINE__); std::printf(__VA_ARGS__); std::printf("\n"); } } while (0)
 using vibehfdl::cf32;
 
+static uint64_t g_digest = 1469598103934665603ull;
+static void dig(const void* p, size_t n) { const uint8_t* b = static_cast<const uint8_t*>(p); for (size_t i = 0; i < n; ++i) g_digest = (g_digest ^ b[i]) * 1099511628211ull; }
+
+// ── the transmitter (tests): MPDU bytes → code → interleave → scramble → the burst's symbols ──────────────────────
+static void putCrc(std::vector<uint8_t>& b, size_t from) {
+    uint16_t c = 0xFFFF;
+    for (size_t i = from; i < b.size(); ++i) { c ^= b[i]; for (int k = 0; k < 8; ++k) c = (c & 1) ? uint16_t((c >> 1) ^ 0x8408) : uint16_t(c >> 1); }
+    c ^= 0xFFFF; b.push_back(uint8_t(c)); b.push_back(uint8_t(c >> 8));
+}
+/** A downlink MPDU with one LPDU: performance data (flight, position) — `lat`/`lon` in degrees. */
+static std::vector<uint8_t> perfMpdu(int ac, int gs, const char* flight, double lat, double lon) {
+    std::vector<uint8_t> l = { 0x0D, 0xFF, 0xD1 };
+    for (int i = 0; i < 6; ++i) l.push_back(uint8_t(flight[i]));
+    const uint32_t la = uint32_t(int32_t(std::lround(lat / 180.0 * 0x7FFFF))) & 0xFFFFF, lo = uint32_t(int32_t(std::lround(lon / 180.0 * 0x7FFFF))) & 0xFFFFF;
+    l.push_back(uint8_t(la)); l.push_back(uint8_t(la >> 8)); l.push_back(uint8_t(((la >> 16) & 0xF) | ((lo & 0xF) << 4)));
+    l.push_back(uint8_t(lo >> 4)); l.push_back(uint8_t(lo >> 12));
+    while (l.size() < 1 + 47) l.push_back(uint8_t(l.size()));
+    putCrc(l, 0);
+    std::vector<uint8_t> m = { 0x07, uint8_t(gs), uint8_t(ac), 0x00, 0x01, 0x00, uint8_t(l.size() - 1) };
+    putCrc(m, 0);
+    m.insert(m.end(), l.begin(), l.end());
+    return m;
+}
+static std::vector<float> burstSymbols(int mode, const std::vector<uint8_t>& mpdu, std::vector<cf32>& sym) {
+    const vibehfdl::Mode md = vibehfdl::modeOf(mode);
+    const int nData = md.segments * vibehfdl::kDataLen, coded = nData * md.bitsPerSym, info = coded / md.rate;
+    std::vector<int> bits((size_t)info, 0);
+    for (size_t i = 0; i < mpdu.size() * 8 && int(i) < info - 6; ++i) bits[i] = (mpdu[i / 8] >> (i % 8)) & 1;
+    std::vector<int> c;
+    int r = 0;
+    for (int b : bits) {
+        r = ((r << 1) | b) & 127;
+        const int c0 = __builtin_popcount(r & 0x6D) & 1, c1 = __builtin_popcount(r & 0x4F) & 1;
+        if (md.rate == 4) { c.push_back(c0); c.push_back(c0); c.push_back(c1); c.push_back(c1); } else { c.push_back(c0); c.push_back(c1); }
+    }
+    const auto order = vibehfdl::deinterleaveOrder(coded, md.colShift);
+    std::vector<int> tx((size_t)coded);
+    for (int i = 0; i < coded; ++i) tx[size_t(order[size_t(i)])] = c[size_t(i)];
+    sym.clear();
+    for (int i = 0; i < 448; ++i) sym.push_back(cf32((i & 1) ? 1.f : -1.f, 0));      // a pre-key (content irrelevant here)
+    const auto& A = vibehfdl::aSeq();
+    for (int k = 0; k < 2 * vibehfdl::kALen; ++k) sym.push_back(cf32(A[size_t(k % vibehfdl::kALen)], 0));
+    for (int k = 0; k < vibehfdl::kM1Len; ++k) sym.push_back(cf32(vibehfdl::m1Sym(mode, k), 0));
+    for (int k = 0; k < vibehfdl::kM2Len; ++k) sym.push_back(cf32(vibehfdl::m1Sym(mode, k), 0));
+    for (int k = 0; k < 9 * vibehfdl::kTLen; ++k) sym.push_back(cf32(vibehfdl::tSym(k % vibehfdl::kTLen), 0));
+    vibehfdl::Scrambler scr;
+    const int M = 1 << md.bitsPerSym;
+    size_t ci = 0;
+    for (int s = 0; s < md.segments; ++s) {
+        for (int k = 0; k < vibehfdl::kDataLen; ++k) {
+            int lab = 0;
+            for (int b = 0; b < md.bitsPerSym; ++b) lab = (lab << 1) | tx[ci++];
+            int idx = 0; for (int i = 0; i < M; ++i) if ((i ^ (i >> 1)) == lab) idx = i;   // the Gray label's point
+            cf32 v = std::polar(1.0f, float(idx) * 2 * float(M_PI) / M);
+            if (md.bitsPerSym == 1) v = cf32(lab ? -1.f : 1.f, 0);
+            if (scr.next()) v = -v;
+            sym.push_back(v);
+        }
+        for (int k = 0; k < vibehfdl::kTLen; ++k) sym.push_back(cf32(vibehfdl::tSym(k), 0));
+    }
+    return {};
+}
+/** The symbols at 4 samples a symbol, root-raised-cosine α 0.31, a carrier offset, a second path, noise. */
+static void modulate(const std::vector<cf32>& sym, std::vector<cf32>& out, double fOff, double snrDb, double echoDb, int echoDelay, std::mt19937& rng) {
+    const double a = 0.31;
+    auto rrc = [&](double t) {
+        if (std::fabs(t) < 1e-9) return 1 - a + 4 * a / M_PI;
+        if (std::fabs(std::fabs(4 * a * t) - 1) < 1e-6) return a / std::sqrt(2.0) * ((1 + 2 / M_PI) * std::sin(M_PI / (4 * a)) + (1 - 2 / M_PI) * std::cos(M_PI / (4 * a)));
+        return (std::sin(M_PI * t * (1 - a)) + 4 * a * t * std::cos(M_PI * t * (1 + a))) / (M_PI * t * (1 - 16 * a * a * t * t));
+    };
+    const size_t pre = 4000, n = sym.size() * 4 + 2 * pre;
+    out.assign(n, cf32(0, 0));
+    const float eg = float(std::pow(10.0, echoDb / 20));
+    for (size_t k = 0; k < sym.size(); ++k)
+        for (int j = -32; j <= 32; ++j) {
+            const long i = long(pre + k * 4) + j;
+            const float h = float(rrc(j / 4.0)) * 0.5f;
+            out[size_t(i)] += sym[k] * h;
+            if (echoDelay && i + echoDelay < long(n)) out[size_t(i + echoDelay)] += sym[k] * h * eg * cf32(0.6f, 0.8f);
+        }
+    double sp = 0; for (size_t k = 0; k < sym.size(); ++k) sp += std::norm(out[pre + k * 4]);
+    sp /= sym.size();
+    const float sigma = float(std::sqrt(sp / std::pow(10.0, snrDb / 10) / 2));
+    std::normal_distribution<float> g(0, sigma);
+    for (size_t i = 0; i < n; ++i) out[i] = out[i] * std::polar(1.0f, float(2 * M_PI * fOff * i / vibehfdl::kWorkRate)) + cf32(g(rng), g(rng));
+}
+static int synthOnce(int mode, double snr, double fOff, double echoDb, int echoDelay, uint32_t seed) {
+    std::mt19937 rng(seed);
+    char flt[7]; std::snprintf(flt, sizeof flt, "TST%03u", seed % 1000);
+    auto mp = perfMpdu(int(seed % 200) + 1, 6, flt, 51.5, -1.25);
+    std::vector<cf32> sym, x;
+    burstSymbols(mode, mp, sym);
+    modulate(sym, x, fOff, snr, echoDb, echoDelay, rng);
+    vibehfdl::Demod d(vibehfdl::kWorkRate);
+    int good = 0;
+    for (size_t o = 0; o < x.size(); o += 4096)
+        d.feed(x.data() + o, int(std::min<size_t>(4096, x.size() - o)), [&](const vibehfdl::Message& m) {
+            if (m.flight == flt && std::fabs(m.lat - 51.5) < 1e-3) ++good;
+            dig(m.flight.data(), m.flight.size());
+        });
+    // the decoder holds a burst until its longest possible end: flush with silence
+    std::vector<cf32> z(4096, cf32(0, 0));
+    for (int i = 0; i < 10; ++i) d.feed(z.data(), 4096, [&](const vibehfdl::Message& m) { if (m.flight == flt) ++good; });
+    return good > 0;
+}
+
 static void printMsg(const vibehfdl::Message& m) {
     std::printf("%8.2f %.0f kHz %4d bps %c snr %4.1f f %+5.1f | %s %s%d -> %s%d %s", m.t, m.hz / 1e3, vibehfdl::bitRate(m.mode), m.mode < 4 ? 'S' : 'D', m.snrDb, m.freqErrHz,
                 m.downlink ? "DN" : "UP", m.downlink ? "AC" : "GS", m.srcId, m.downlink ? "GS" : "AC", m.dstId, m.typeName.c_str());
@@ -28,7 +134,7 @@ static void printMsg(const vibehfdl::Message& m) {
     std::printf("\n");
 }
 
-struct RefMsg { double time; int freqKhz; int rate; std::string flight, reg, label, type, text; int src; bool matched = false; };
+struct RefMsg { double time; int freqKhz; int rate; std::string flight, reg, label, type, text, icao; int src; bool matched = false; };
 static std::string jstr(const std::string& l, const char* key) {
     const std::string k = std::string("\"") + key + "\":";
     size_t p = l.find(k); if (p == std::string::npos) return "";
@@ -60,7 +166,7 @@ static int wav(int argc, char** argv) {
             RefMsg m;
             m.time = std::atof(jstr(l, "time").c_str()); m.freqKhz = std::atoi(jstr(l, "freq_khz").c_str()); m.rate = std::atoi(jstr(l, "bit_rate").c_str());
             m.flight = jstr(l, "flight"); m.reg = jstr(l, "reg"); m.label = jstr(l, "label"); m.type = jstr(l, "msg_type"); m.text = jstr(l, "msg_text");
-            m.src = std::atoi(jstr(l, "src_id").c_str());
+            m.src = std::atoi(jstr(l, "src_id").c_str()); m.icao = jstr(l, "src_icao");
             ref.push_back(m);
         }
         if (rf) std::fclose(rf);
@@ -91,14 +197,20 @@ static int wav(int argc, char** argv) {
                     (unsigned long long)s.noM1, (unsigned long long)s.bursts, (unsigned long long)s.crcBad, (unsigned long long)s.messages);
     }
     if (!ref.empty()) {
-        // a reference message is matched by frequency, time (±4 s) and its flight / registration / type
+        // ★ a reference message is matched by frequency, aircraft id, type, and (when both have one) flight / registration /
+        //   ICAO address, its time within 3 s of our burst's start (the add-on stamps the slot the burst began in)
         int matched = 0;
+        std::vector<bool> used(got.size(), false);
         for (auto& r : ref) {
-            for (auto& m : got) {
-                const double t = refStart + m.t;
-                if (std::lround(m.hz / 1e3) != r.freqKhz || std::fabs(t - r.time) > 6) continue;
-                const bool same = (!r.flight.empty() && r.flight == m.flight) || (!r.reg.empty() && m.hasAcars && r.reg == m.acars.reg) || r.type == m.typeName;
-                if (same && m.downlink && m.srcId == r.src) { r.matched = true; break; }
+            for (size_t gi = 0; gi < got.size(); ++gi) {
+                const auto& m = got[gi];
+                if (used[gi]) continue;
+                if (std::lround(m.hz / 1e3) != r.freqKhz || std::fabs(refStart + m.t - r.time) > 3) continue;
+                if (!m.downlink || m.srcId != r.src || r.type != m.typeName) continue;
+                char ic[8]; std::snprintf(ic, sizeof ic, "%06X", m.icao);
+                const bool idOk = (!r.flight.empty() && !m.flight.empty() && r.flight == m.flight) || (!r.reg.empty() && m.hasAcars && r.reg == m.acars.reg) ||
+                                  (!r.icao.empty() && m.icao && r.icao == ic) || (r.flight.empty() && m.flight.empty()) || (r.icao.empty() && !r.flight.empty() && m.icao);
+                if (idOk) { r.matched = true; used[gi] = true; break; }
             }
             matched += r.matched;
             if (!r.matched) std::printf("   reference not decoded: %.0f %d kHz %d bps AC%d %s %s %s\n", r.time - refStart, r.freqKhz, r.rate, r.src, r.type.c_str(), r.flight.c_str(), r.reg.c_str());
@@ -114,10 +226,20 @@ int main(int argc, char** argv) {
     if (const char* t = std::getenv("HFDL_TUNE")) {
         auto& T = vibehfdl::tuning(); std::string s(t);
         auto vf = [&](const char* k, float& v) { const size_t p = s.find(k); if (p != std::string::npos) v = float(std::atof(s.c_str() + p + std::strlen(k))); };
-        vf("coh=", T.minCoh); vf("ts=", T.tSpan); vf("det=", T.detQ); vf("mu=", T.mu); vf("pa=", T.pllA); vf("pb=", T.pllB);
+        vf("coh=", T.minCoh); vf("ts=", T.tSpan); vf("det=", T.detQ); vf("pair=", T.detPair); vf("mu=", T.mu); vf("pa=", T.pllA); vf("pb=", T.pllB);
         { const size_t q = s.find("taps="); if (q != std::string::npos) T.eqTaps = std::atoi(s.c_str() + q + 5); }
     }
     if (argc > 1 && !std::strcmp(argv[1], "--wav")) return wav(argc, argv);
+    if (argc > 1 && !std::strcmp(argv[1], "--sens")) {
+        const int mode = argc > 2 ? std::atoi(argv[2]) : 0;
+        const double echo = argc > 3 ? std::atof(argv[3]) : -99;
+        if (argc > 4) { std::printf("%d\n", synthOnce(mode, std::atof(argv[4]), 3.0, echo, echo > -90 ? 5 : 0, 177)); return 0; }
+        for (double snr = -6; snr <= 12; snr += 2) {
+            int ok = 0; for (int i = 0; i < 10; ++i) ok += synthOnce(mode, snr, 3.0, echo, echo > -90 ? 5 : 0, uint32_t(i * 77 + snr * 10 + 100));
+            std::printf("mode %d SNR %+3.0f dB: %d of 10\n", mode, snr, ok);
+        }
+        return 0;
+    }
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

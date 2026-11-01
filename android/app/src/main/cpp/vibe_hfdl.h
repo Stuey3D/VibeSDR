@@ -74,7 +74,7 @@ inline Mode modeOf(int m) {
 }
 inline int bitRate(int m) { static const int r[4] = { 300, 600, 1200, 1800 }; return r[m & 3]; }
 
-struct Tuning { float minCoh = 0.25f, tSpan = 4.0f; float detQ = 0.55f; float mu = 0.03f; float pllA = 0.05f, pllB = 0.002f; int eqTaps = 15; bool scrambleOld = true; };
+struct Tuning { float minCoh = 0.25f, tSpan = 4.0f; float detQ = 0.3f, detPair = 0.8f; float mu = 0.03f; float pllA = 0.05f, pllB = 0.002f; int eqTaps = 15; bool scrambleOld = true; };
 inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("HFDL_DEBUG") != nullptr; return d; }
 
@@ -334,16 +334,22 @@ private:
             D += bb_[size_t(k)] * dif_[ix]; sa += difAbs_[ix];
         }
         const float q = sa > 0 ? std::abs(D) / sa : 0;
+        qh_[size_t(n & (kRing - 1))] = q;
+        /* ★★ THE PAIR, NOT ONE A. A1 and A2 are the same 127 symbols back to back, so the true A2 end has Q there AND
+         *  508 samples (127 symbols) before; a partial overlap with the pre-key, an impulse or a level step (the
+         *  "phantom" detections on both 6535 and 6619 at once) has one or neither. P = Q(n) + Q(n−508) is held over
+         *  256 samples and its peak taken (a strong burst used to commit 36 symbols early on the first crossing). */
+        const float q1 = qh_[size_t((n - 4 * kALen) & (kRing - 1))];
+        const float pq = q + q1;
         if (cand_) {
-            if (q > bestQ_) { bestQ_ = q; bestN_ = n; }
-            if (n - bestN_ > 8) {
-                // ★ A1 or A2? A2's peak is 127 symbols after A1's, so a burst is first seen at A1 — but if the
-                //   correlator was quiet then (fading), it may be A2. Assume A1; process_() checks the other way.
+            if (pq > bestQ_) { bestQ_ = pq; bestN_ = n; bestW_ = std::arg(D); }
+            if (n - bestN_ > 256) {   // ★ 64 symbols: a strong burst's partial overlaps with the pre-key peak before the true one
                 st_.detections++;
-                startBurst_(bestN_);
+                coarseW_ = bestW_;                 // ★ the carrier's step a symbol, from the differential correlator
+                startBurst_(bestN_ - 4 * kALen);   // A1's end
                 cand_ = false;
             }
-        } else if (q > tuning().detQ) { cand_ = true; bestQ_ = q; bestN_ = n; }
+        } else if (pq > tuning().detPair && std::min(q, q1) > tuning().detQ) { cand_ = true; bestQ_ = pq; bestN_ = n; bestW_ = std::arg(D); }
     }
 
     /** The burst's samples from 2 symbols before A1's first symbol, to the longest frame's end (refined in process_). */
@@ -379,7 +385,7 @@ private:
                 cf32 c(0, 0);
                 for (int k = 0; k < 16; ++k) {
                     const int idx = s * 16 + k;
-                    const cf32 v = at_(t0 + 4.0 * idx);
+                    const cf32 v = at_(t0 + 4.0 * idx) * std::polar(1.0f, -coarseW_ * float(idx));   // the coarse frequency out
                     c += v * float(A[size_t(idx % kALen)]);
                     mag += std::abs(v);
                 }
@@ -390,7 +396,7 @@ private:
             if (coh > bestCoh) {
                 bestCoh = coh; bestT = t0;
                 cf32 r(0, 0); for (int s = 1; s < 15; ++s) r += seg[s] * std::conj(seg[s - 1]);
-                bestF = std::arg(r) / 16.0;                 // rad a symbol
+                bestF = coarseW_ + std::arg(r) / 16.0;      // rad a symbol: coarse + the segments' slope
             }
         }
         if (bestCoh < tuning().minCoh) { if (debug()) std::fprintf(stderr, "  [hfdl ch%d t=%.2f] A coherence %.2f: no burst\n", chan_, burstT_, bestCoh); return; }
@@ -469,13 +475,18 @@ private:
         // through the data: decision-directed on data, trained on every probe
         std::vector<cf32> dsyms; dsyms.reserve(size_t(nData));
         float noise = 0; int noiseN = 0;
+        std::vector<float> segErr;   // the probe error a segment (debug)
+        float segAcc = 0; int segN = 0;
         const int M = 1 << md.bitsPerSym;
         Scrambler scr;
         for (int k = kPreambleKnown; k < total; ++k) {
             auto [o, e2] = eqOut(k, phi);
             const float ref = known(k);
             cf32 dsym;
-            if (ref != 0) { dsym = cf32(ref, 0); noise += std::norm(o - dsym); ++noiseN; }
+            if (ref != 0) {
+                dsym = cf32(ref, 0); noise += std::norm(o - dsym); ++noiseN;
+                segAcc += std::norm(o - dsym); if (++segN == kTLen) { segErr.push_back(segAcc / kTLen); segAcc = 0; segN = 0; }
+            }
             else {
                 // the nearest point of the constellation (the scrambler's π is a point of every PSK used)
                 const float a = std::arg(o);
@@ -528,6 +539,8 @@ private:
             std::fprintf(stderr, "  [hfdl ch%d t=%.2f] mode %d (%d bit/s %c), A coh %.2f, M1 %.2f/%.2f, f %+.1f Hz, probe SNR %.1f dB, bytes:", chan_, burstT_, mode,
                          bitRate(mode), mode < 4 ? 'S' : 'D', bestCoh, bestM, second, bestF / (2 * M_PI) * kSymRate, snr);
             for (size_t i = 0; i < 24 && i < bytes.size(); ++i) std::fprintf(stderr, " %02x", bytes[i]);
+            std::fprintf(stderr, "\n     probe error (dB) a segment:");
+            for (float e : segErr) std::fprintf(stderr, " %.0f", 10 * std::log10(e + 1e-9f));
             std::fprintf(stderr, "\n");
         }
         auto msgs = parseMpdu(bytes.data(), bytes.size());
@@ -545,10 +558,10 @@ private:
     std::vector<cf32> rs_, y_;
     std::unique_ptr<vibedsp::FirDecimator> lp_;
     cf32 ring_[kRing] = {}, dif_[kRing] = {};
-    float difAbs_[kRing] = {};
+    float difAbs_[kRing] = {}, qh_[kRing] = {};
     float bb_[126];
     int64_t n_ = 0;
-    bool cand_ = false; float bestQ_ = 0; int64_t bestN_ = 0;
+    bool cand_ = false; float bestQ_ = 0, bestW_ = 0, coarseW_ = 0; int64_t bestN_ = 0;
     bool inBurst_ = false; int need_ = 0, burstOff_ = 0, cool_ = 0; double burstT_ = 0;
     std::vector<cf32> burst_;
     Stats st_;
