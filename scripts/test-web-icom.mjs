@@ -165,11 +165,12 @@ try {
                              ['.rtlOnly', 'bias-T / digital AGC / direct sampling'], ['.rtlRspOnly', 'ppm'], ['#rspCtls', 'the RSP panel'],
                              ['.sqlBlock', 'our squelch'], ['#nbxRow', 'our noise blanker'], ['#iqRow', 'raw IQ out'],
                              ['#nfmVoiceRow', 'NFM voice'], ['#deemphSeg', 'de-emphasis'], ['#stereoBtn', 'stereo/IMS/CEQ/NB processing'],
-                             ['#wfRateSeg', 'the spectrum data rate (fps tiers)'], ['#mPanelLock', 'the VFO-centre lock']]) {
+                             ['#mPanelLock', 'the VFO-centre lock']]) {
+    // ★ No '#wfRateSeg': ca18ad08f (GitHub #57) removed the waterfall DATA RATE row for everybody — the speed keys decide it.
     ok((await p.js(`(${HIDDEN_JS})(${JSON.stringify(sel)})`)) === true, `hidden on an Icom: ${what}`);
   }
   ok(await p.js(`(() => { document.body.classList.remove("icom"); const d = (el) => !!el && getComputedStyle(el).display !== "none";
-      const back = d(document.getElementById("rowGain")) && d(document.querySelector(".sqlBlock")) && d(document.getElementById("wfRateSeg").closest(".mrow"))
+      const back = d(document.getElementById("rowGain")) && d(document.querySelector(".sqlBlock"))
         && d(document.getElementById("deemphSeg").closest(".mrow")); document.body.classList.add("icom"); return back; })()`),
      'and they come back the moment the page is not on an Icom (one class, nothing left hidden)');
   ok(await p.wait(`document.getElementById("mMode").textContent.trim() === "USB-D"`), `the card’s mode readout is the radio’s (USB-D)`);
