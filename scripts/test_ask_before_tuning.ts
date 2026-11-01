@@ -55,8 +55,15 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
   const web = fs.readFileSync(new URL('../web/client/src/spectrum.ts', import.meta.url), 'utf8');
   for (const [name, src] of [['app', app], ['web', web]] as const) {
     ok(/this\.tuneLocked = askLocked\(ask\)/.test(src), `${name}: the lock comes from the dial message, through parseAsk`);
+    // ★ The gate must come before the method's first send. A fixed 900-character window stopped fitting once the web's
+    //   tune() grew VFO B's branch ahead of it (387ff7cd4) — a watch aim moves nothing shared, so it needs no ask.
     const gated = ['tune(', 'setMode(', 'setBandwidth('].every((m) => {
-      const i = src.indexOf(`\n  ${m}`); return i >= 0 && src.slice(i, i + 900).includes('askBlocked()');
+      const i = src.indexOf(`\n  ${m}`); if (i < 0) return false;
+      const body = src.slice(i, src.indexOf('\n  }', i));
+      const g = body.indexOf('askBlocked()');
+      // every send except VFO B's own watch aim (sendWatchAim — B's channel, nothing shared) waits for the gate
+      const sends = [...body.matchAll(/this\.(?!sendWatchAim)\w*[sS]end\w*\(|\.send\(/g)].map((x) => x.index!);
+      return g >= 0 && sends.every((x) => x > g);
     });
     ok(gated, `${name}: tune / setMode / setBandwidth all ask the gate first`);
   }
@@ -68,8 +75,9 @@ const ok = (c: boolean, what: string) => { c ? pass++ : fail++; console.log(`   
   const shim = read('android/app/src/main/cpp/local_sdr_shim.cpp');
   const s = shim.indexOf('kGated = {'), e = shim.indexOf('};', s);
   const server = [...shim.slice(s, e).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1])
-    // ★ 'adsb' and 'ism' (V12) are dial moves like 'dab': the client gates them in adsb()/ism() with askBlocked, not by this list.
-    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'adsb', 'ism', 'iqtune'].includes(t)).sort();
+    // ★ 'adsb', 'ism', 'ndb', 'ais' and 'mode_resume' (V12) are dial moves like 'dab': the client gates them in adsb()/ism()/
+    //   ndb()/ais()/modeResume() with askBlocked, not by this list (NDB/AIS e41b23dee+, mode_resume 8b63720b9).
+    .filter((t) => !['tune', 'mode', 'bandwidth', 'dab', 'dab_service', 'adsb', 'ism', 'ndb', 'ais', 'mode_resume', 'iqtune'].includes(t)).sort();
   const jr = read('spike/WristSDR/WristSDR/UberClient.swift');
   const js = jr.indexOf('askSharedSettings: Set<String> = ['), je = jr.indexOf(']', js + 40);
   const jrList = [...jr.slice(js, je).matchAll(/"([A-Za-z_]+)"/g)].map((m) => m[1]).sort();
