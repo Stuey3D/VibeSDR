@@ -226,7 +226,8 @@ int main(int argc, char** argv) {
     if (const char* t = std::getenv("HFDL_TUNE")) {
         auto& T = vibehfdl::tuning(); std::string s(t);
         auto vf = [&](const char* k, float& v) { const size_t p = s.find(k); if (p != std::string::npos) v = float(std::atof(s.c_str() + p + std::strlen(k))); };
-        vf("coh=", T.minCoh); vf("ts=", T.tSpan); vf("det=", T.detQ); vf("pair=", T.detPair); vf("mu=", T.mu); vf("pa=", T.pllA); vf("pb=", T.pllB);
+        vf("coh=", T.minCoh); vf("ts=", T.tSpan); vf("det=", T.detQ); vf("pair=", T.detPair); { const size_t q = s.find("retry="); if (q != std::string::npos) T.retries = std::atoi(s.c_str() + q + 6); }
+        { const size_t q = s.find("seg="); if (q != std::string::npos) T.segSigma = std::atoi(s.c_str() + q + 4) != 0; } vf("mu=", T.mu); vf("pa=", T.pllA); vf("pb=", T.pllB);
         { const size_t q = s.find("taps="); if (q != std::string::npos) T.eqTaps = std::atoi(s.c_str() + q + 5); }
     }
     if (argc > 1 && !std::strcmp(argv[1], "--wav")) return wav(argc, argv);

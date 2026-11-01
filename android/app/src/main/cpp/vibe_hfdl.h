@@ -74,7 +74,7 @@ inline Mode modeOf(int m) {
 }
 inline int bitRate(int m) { static const int r[4] = { 300, 600, 1200, 1800 }; return r[m & 3]; }
 
-struct Tuning { float minCoh = 0.25f, tSpan = 4.0f; float detQ = 0.3f, detPair = 0.8f; float mu = 0.03f; float pllA = 0.05f, pllB = 0.002f; int eqTaps = 15; bool scrambleOld = true; };
+struct Tuning { int retries = 0; float minCoh = 0.25f, tSpan = 4.0f; float detQ = 0.3f, detPair = 0.8f; float mu = 0.06f; float pllA = 0.05f, pllB = 0.002f; int eqTaps = 11; bool scrambleOld = true; bool segSigma = true; };
 inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("HFDL_DEBUG") != nullptr; return d; }
 
@@ -426,124 +426,150 @@ private:
         const Mode md = modeOf(mode);
         const int nData = md.segments * kDataLen;
         const int total = kPreambleKnown + md.segments * (kDataLen + kTLen);
-        // 3. the equaliser over the whole burst: taps on half-symbol spacing (2 samples at 4 a symbol)
-        const int L = std::max(5, tuning().eqTaps | 1), C = L / 2;
-        std::vector<cf32> w(size_t(L), cf32(0, 0));
-        w[size_t(C)] = cf32(1, 0);
-        float phi = phi0, dphi = float(bestF);
-        const float mu = tuning().mu, pa = tuning().pllA, pb = tuning().pllB;
-        // the known symbol at burst position k (preamble), or 0 for data
-        auto known = [&](int k) -> float {
-            if (k < kALen) return A[size_t(k)];
-            if (k < 2 * kALen) return A[size_t(k - kALen)];
-            if (k < 2 * kALen + kM1Len) return m1Sym(mode, k - 2 * kALen);
-            if (k < 2 * kALen + kM1Len + kM2Len) return m1Sym(mode, k - 2 * kALen - kM1Len);
-            if (k < kPreambleKnown) return tSym((k - 2 * kALen - kM1Len - kM2Len) % kTLen);
-            const int r = (k - kPreambleKnown) % (kDataLen + kTLen);
-            return r >= kDataLen ? tSym(r - kDataLen) : 0.0f;
-        };
-        std::vector<cf32> x((size_t)L);
-        auto eqOut = [&](int k, float ph) {
-            const double tc = bestT + 4.0 * k;
-            float e2 = 0;
-            for (int j = 0; j < L; ++j) { x[size_t(j)] = at_(tc + 2.0 * (j - C)) * std::polar(1.0f, -ph); e2 += std::norm(x[size_t(j)]); }
-            cf32 o(0, 0);
-            for (int j = 0; j < L; ++j) o += w[size_t(j)] * x[size_t(j)];
-            return std::make_pair(o, e2);
-        };
-        auto adapt = [&](cf32 o, cf32 dsym, float e2) {
-            const cf32 e = dsym - o;
-            const float g = mu / (e2 + 1e-9f);
-            for (int j = 0; j < L; ++j) w[size_t(j)] += g * e * std::conj(x[size_t(j)]);
-        };
-        // the scale: equaliser output amplitude on the known symbols → normalise to unit symbols
-        float amp = 0; for (int k = 0; k < 2 * kALen; ++k) amp += std::abs(sym(k));
-        amp /= (2 * kALen);
-        for (auto& c : w) c /= amp + 1e-12f;
-        // train twice over the known preamble (non-causal: the burst is buffered)
-        for (int pass = 0; pass < 2; ++pass) {
-            float p = phi0, dp = float(bestF);
-            for (int k = 0; k < kPreambleKnown; ++k) {
-                auto [o, e2] = eqOut(k, p);
-                const float ref = known(k);
-                adapt(o, cf32(ref, 0), e2);
-                const float pe = std::arg(o * ref);
-                p += dp + pa * pe; dp += pb * pe;
-            }
-            if (pass == 1) { phi = p; dphi = dp; }
-        }
-        // through the data: decision-directed on data, trained on every probe
-        std::vector<cf32> dsyms; dsyms.reserve(size_t(nData));
-        float noise = 0; int noiseN = 0;
-        std::vector<float> segErr;   // the probe error a segment (debug)
-        float segAcc = 0; int segN = 0;
-        const int M = 1 << md.bitsPerSym;
-        Scrambler scr;
-        for (int k = kPreambleKnown; k < total; ++k) {
-            auto [o, e2] = eqOut(k, phi);
-            const float ref = known(k);
-            cf32 dsym;
-            if (ref != 0) {
-                dsym = cf32(ref, 0); noise += std::norm(o - dsym); ++noiseN;
-                segAcc += std::norm(o - dsym); if (++segN == kTLen) { segErr.push_back(segAcc / kTLen); segAcc = 0; segN = 0; }
-            }
-            else {
-                // the nearest point of the constellation (the scrambler's π is a point of every PSK used)
-                const float a = std::arg(o);
-                const int idx = int(std::lround(a / (2 * float(M_PI) / M)));
-                dsym = std::polar(1.0f, float(idx) * 2 * float(M_PI) / M);
-                dsyms.push_back(o);
-            }
-            adapt(o, dsym, e2);
-            const float pe = std::arg(o * std::conj(dsym));
-            phi += dphi + pa * pe; dphi += pb * pe;
-        }
-        const float sigma2 = noiseN ? noise / noiseN : 0.5f;
-        // 4. soft bits: descramble (a π turn when the scrambler gives 1), BPSK/QPSK/8PSK soft values, + = 0
-        std::vector<float> coded;
-        coded.reserve(size_t(nData * md.bitsPerSym));
-        for (cf32 o : dsyms) {
-            if (scr.next()) o = -o;
-            if (md.bitsPerSym == 1) coded.push_back(2 * o.real() / sigma2);
-            else {
-                // ★ QPSK / 8PSK: max-log soft bits for natural Gray-coded PSK (point i at i·2π/M, label gray(i)).
-                //   UNVERIFIED on air — the reference recordings hold only 300 and 600 bit/s.
-                float best0[3] = { -1e30f, -1e30f, -1e30f }, best1[3] = { -1e30f, -1e30f, -1e30f };
-                for (int i = 0; i < M; ++i) {
-                    const cf32 pt = std::polar(1.0f, float(i) * 2 * float(M_PI) / M);
-                    const float met = -std::norm(o - pt) / sigma2;
-                    const int lab = i ^ (i >> 1);
-                    for (int b = 0; b < md.bitsPerSym; ++b) {
-                        float& slot = ((lab >> (md.bitsPerSym - 1 - b)) & 1) ? best1[b] : best0[b];
-                        slot = std::max(slot, met);
-                    }
+        /* ★★ IF THE CRC SAYS NO, TRY AGAIN DIFFERENTLY. The burst is buffered, so a failed decode costs only another
+         *  equaliser pass (~4000 symbols × 11 taps): the second step size and length, and the timing half a sample
+         *  either way. The CRC-16 of every MPDU header and LPDU is the judge; the first variant that passes wins. */
+        float snr = 0;
+        auto attempt = [&](float muV, int tapsV, double tShift) -> std::vector<Message> {
+            // 3. the equaliser over the whole burst: taps on half-symbol spacing (2 samples at 4 a symbol)
+            const int L = std::max(5, tapsV | 1), C = L / 2;
+            std::vector<cf32> w(size_t(L), cf32(0, 0));
+            w[size_t(C)] = cf32(1, 0);
+            float phi = phi0, dphi = float(bestF);
+            const float mu = muV, pa = tuning().pllA, pb = tuning().pllB;
+            const double tB = bestT + tShift;
+            // the known symbol at burst position k (preamble), or 0 for data
+            auto known = [&](int k) -> float {
+                if (k < kALen) return A[size_t(k)];
+                if (k < 2 * kALen) return A[size_t(k - kALen)];
+                if (k < 2 * kALen + kM1Len) return m1Sym(mode, k - 2 * kALen);
+                if (k < 2 * kALen + kM1Len + kM2Len) return m1Sym(mode, k - 2 * kALen - kM1Len);
+                if (k < kPreambleKnown) return tSym((k - 2 * kALen - kM1Len - kM2Len) % kTLen);
+                const int r = (k - kPreambleKnown) % (kDataLen + kTLen);
+                return r >= kDataLen ? tSym(r - kDataLen) : 0.0f;
+            };
+            std::vector<cf32> x((size_t)L);
+            auto eqOut = [&](int k, float ph) {
+                const double tc = tB + 4.0 * k;
+                float e2 = 0;
+                for (int j = 0; j < L; ++j) { x[size_t(j)] = at_(tc + 2.0 * (j - C)) * std::polar(1.0f, -ph); e2 += std::norm(x[size_t(j)]); }
+                cf32 o(0, 0);
+                for (int j = 0; j < L; ++j) o += w[size_t(j)] * x[size_t(j)];
+                return std::make_pair(o, e2);
+            };
+            auto adapt = [&](cf32 o, cf32 dsym, float e2) {
+                const cf32 e = dsym - o;
+                const float g = mu / (e2 + 1e-9f);
+                for (int j = 0; j < L; ++j) w[size_t(j)] += g * e * std::conj(x[size_t(j)]);
+            };
+            // the scale: equaliser output amplitude on the known symbols → normalise to unit symbols
+            float amp = 0; for (int k = 0; k < 2 * kALen; ++k) amp += std::abs(sym(k));
+            amp /= (2 * kALen);
+            for (auto& c : w) c /= amp + 1e-12f;
+            // train twice over the known preamble (non-causal: the burst is buffered)
+            for (int pass = 0; pass < 2; ++pass) {
+                float p = phi0, dp = float(bestF);
+                for (int k = 0; k < kPreambleKnown; ++k) {
+                    auto [o, e2] = eqOut(k, p);
+                    const float ref = known(k);
+                    adapt(o, cf32(ref, 0), e2);
+                    const float pe = std::arg(o * ref);
+                    p += dp + pa * pe; dp += pb * pe;
                 }
-                for (int b = 0; b < md.bitsPerSym; ++b) coded.push_back(best0[b] - best1[b]);
+                if (pass == 1) { phi = p; dphi = dp; }
             }
-        }
-        const std::vector<int> order = deinterleaveOrder(int(coded.size()), md.colShift);
-        std::vector<float> v;
-        v.reserve(coded.size());
-        for (int idx : order) v.push_back(coded[size_t(idx)]);
-        if (md.rate == 4) {   // each coded bit sent twice: add the pair
-            std::vector<float> c2(v.size() / 2);
-            for (size_t i = 0; i < c2.size(); ++i) c2[i] = v[2 * i] + v[2 * i + 1];
-            v.swap(c2);
-        }
-        const auto bits = viterbi27(v);
-        std::vector<uint8_t> bytes((bits.size() + 7) / 8, 0);
-        for (size_t i = 0; i < bits.size(); ++i) bytes[i / 8] |= uint8_t(bits[i] << (i % 8));
-        st_.pdus++;
-        const float snr = 10 * std::log10(1.0f / (sigma2 + 1e-12f));
-        if (debug()) {
-            std::fprintf(stderr, "  [hfdl ch%d t=%.2f] mode %d (%d bit/s %c), A coh %.2f, M1 %.2f/%.2f, f %+.1f Hz, probe SNR %.1f dB, bytes:", chan_, burstT_, mode,
-                         bitRate(mode), mode < 4 ? 'S' : 'D', bestCoh, bestM, second, bestF / (2 * M_PI) * kSymRate, snr);
-            for (size_t i = 0; i < 24 && i < bytes.size(); ++i) std::fprintf(stderr, " %02x", bytes[i]);
-            std::fprintf(stderr, "\n     probe error (dB) a segment:");
-            for (float e : segErr) std::fprintf(stderr, " %.0f", 10 * std::log10(e + 1e-9f));
-            std::fprintf(stderr, "\n");
-        }
-        auto msgs = parseMpdu(bytes.data(), bytes.size());
+            // through the data: decision-directed on data, trained on every probe
+            std::vector<cf32> dsyms; dsyms.reserve(size_t(nData));
+            float noise = 0; int noiseN = 0;
+            std::vector<float> segErr;   // the probe error a segment (debug)
+            float segAcc = 0; int segN = 0;
+            const int M = 1 << md.bitsPerSym;
+            Scrambler scr;
+            for (int k = kPreambleKnown; k < total; ++k) {
+                auto [o, e2] = eqOut(k, phi);
+                const float ref = known(k);
+                cf32 dsym;
+                if (ref != 0) {
+                    dsym = cf32(ref, 0); noise += std::norm(o - dsym); ++noiseN;
+                    segAcc += std::norm(o - dsym); if (++segN == kTLen) { segErr.push_back(segAcc / kTLen); segAcc = 0; segN = 0; }
+                }
+                else {
+                    // the nearest point of the constellation (the scrambler's π is a point of every PSK used)
+                    const float a = std::arg(o);
+                    const int idx = int(std::lround(a / (2 * float(M_PI) / M)));
+                    dsym = std::polar(1.0f, float(idx) * 2 * float(M_PI) / M);
+                    dsyms.push_back(o);
+                }
+                adapt(o, dsym, e2);
+                const float pe = std::arg(o * std::conj(dsym));
+                phi += dphi + pa * pe; dphi += pb * pe;
+            }
+            const float sigma2 = noiseN ? noise / noiseN : 0.5f;
+            /* ★★ THE NOISE A SEGMENT, NOT A BURST. HF fades: a segment in a fade carries wrong decisions as confidently as
+             *  good ones if one σ² is used for the whole burst. Each 30-symbol data block takes the mean of the probe errors
+             *  either side of it (the 9th preamble T before the first) — the soft values then say how far to trust it. */
+            std::vector<float> segSig(size_t(md.segments), sigma2);
+            if (tuning().segSigma && !segErr.empty()) {
+                const float pre = segErr.size() > size_t(md.segments) ? segErr[segErr.size() - size_t(md.segments) - 1] : segErr.front();
+                for (int g = 0; g < md.segments; ++g) {
+                    const size_t after = segErr.size() - size_t(md.segments) + size_t(g);
+                    const float b = g == 0 ? pre : segErr[after - 1], a = after < segErr.size() ? segErr[after] : b;
+                    segSig[size_t(g)] = std::max(0.05f, 0.5f * (a + b));
+                }
+            }
+            // 4. soft bits: descramble (a π turn when the scrambler gives 1), BPSK/QPSK/8PSK soft values, + = 0
+            std::vector<float> coded;
+            coded.reserve(size_t(nData * md.bitsPerSym));
+            for (size_t di = 0; di < dsyms.size(); ++di) {
+                cf32 o = dsyms[di];
+                const float sg = segSig[di / kDataLen];
+                if (scr.next()) o = -o;
+                if (md.bitsPerSym == 1) coded.push_back(2 * o.real() / sg);
+                else {
+                    // ★ QPSK / 8PSK: max-log soft bits for natural Gray-coded PSK (point i at i·2π/M, label gray(i)).
+                    //   UNVERIFIED on air — the reference recordings hold only 300 and 600 bit/s.
+                    float best0[3] = { -1e30f, -1e30f, -1e30f }, best1[3] = { -1e30f, -1e30f, -1e30f };
+                    for (int i = 0; i < M; ++i) {
+                        const cf32 pt = std::polar(1.0f, float(i) * 2 * float(M_PI) / M);
+                        const float met = -std::norm(o - pt) / sg;
+                        const int lab = i ^ (i >> 1);
+                        for (int b = 0; b < md.bitsPerSym; ++b) {
+                            float& slot = ((lab >> (md.bitsPerSym - 1 - b)) & 1) ? best1[b] : best0[b];
+                            slot = std::max(slot, met);
+                        }
+                    }
+                    for (int b = 0; b < md.bitsPerSym; ++b) coded.push_back(best0[b] - best1[b]);
+                }
+            }
+            const std::vector<int> order = deinterleaveOrder(int(coded.size()), md.colShift);
+            std::vector<float> v;
+            v.reserve(coded.size());
+            for (int idx : order) v.push_back(coded[size_t(idx)]);
+            if (md.rate == 4) {   // each coded bit sent twice: add the pair
+                std::vector<float> c2(v.size() / 2);
+                for (size_t i = 0; i < c2.size(); ++i) c2[i] = v[2 * i] + v[2 * i + 1];
+                v.swap(c2);
+            }
+            const auto bits = viterbi27(v);
+            std::vector<uint8_t> bytes((bits.size() + 7) / 8, 0);
+            for (size_t i = 0; i < bits.size(); ++i) bytes[i / 8] |= uint8_t(bits[i] << (i % 8));
+            st_.pdus++;
+            snr = 10 * std::log10(1.0f / (sigma2 + 1e-12f));
+            if (debug()) {
+                std::fprintf(stderr, "  [hfdl ch%d t=%.2f] mode %d (%d bit/s %c), A coh %.2f, M1 %.2f/%.2f, f %+.1f Hz, probe SNR %.1f dB, bytes:", chan_, burstT_, mode,
+                             bitRate(mode), mode < 4 ? 'S' : 'D', bestCoh, bestM, second, bestF / (2 * M_PI) * kSymRate, snr);
+                for (size_t i = 0; i < 24 && i < bytes.size(); ++i) std::fprintf(stderr, " %02x", bytes[i]);
+                std::fprintf(stderr, "\n     probe error (dB) a segment:");
+                for (float e : segErr) std::fprintf(stderr, " %.0f", 10 * std::log10(e + 1e-9f));
+                std::fprintf(stderr, "\n");
+            }
+
+            return parseMpdu(bytes.data(), bytes.size());
+        };
+        struct V { float mu; int taps; double dt; };
+        const V vars[4] = { { tuning().mu, tuning().eqTaps, 0.0 }, { 0.03f, 15, 0.0 }, { tuning().mu, tuning().eqTaps, 0.5 }, { tuning().mu, tuning().eqTaps, -0.5 } };
+        std::vector<Message> msgs;
+        for (int vi = 0; vi < (tuning().retries ? 4 : 1) && msgs.empty(); ++vi) msgs = attempt(vars[vi].mu, vars[vi].taps, vars[vi].dt);
         if (msgs.empty()) st_.crcBad++;
         for (auto& m : msgs) {
             m.channel = chan_; m.hz = hz_; m.t = burstT_; m.mode = mode; m.snrDb = snr;
