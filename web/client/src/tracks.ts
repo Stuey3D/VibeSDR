@@ -420,6 +420,9 @@ export interface TrackViewOpts {
   /** ★ V12 2026-11-01: a KEY — a folded panel, bottom-right of the map, listing what each icon means (rows of HTML). The
    *  labels give way when the map is busy or zoomed out (the declutter), so the icons alone must still be readable. */
   legend?: string;
+  /** ★ the basemap PROFILE (vibemap-style.js "vibesdr:profiles"): 'marine' for sea maps — ports, no airports or runways
+   *  (Stuart, 2026-11-01: "the airports are on the map layer but we need the ports instead"). Default: everything. */
+  profile?: string;
   /** ★★ V12 2026-11-01 THE NAVTEX MAP's layers (Stations · Warnings · Weather): toggle keys in the top bar. */
   toggles?: Array<{ id: string; label: string; words: string }>;
   toggled?: Record<string, boolean>;
@@ -592,6 +595,7 @@ export class TrackView {
       if (my !== this.gen) return;
       try {
         const vm = w.VibeMapGL.createNow(holder, { style: kit.style, load: mapglLoad, base: kit.base, rangeBase: kit.base, detail: kit.detail,
+                                                   ...(this.o.profile ? { profile: this.o.profile } : {}),
                                                    center: rx ? [rx.lon, rx.lat] : [0, 30], zoom: rx ? 7 : 1.5 });
         if (vm) {
           this.vm = vm;
@@ -615,7 +619,7 @@ export class TrackView {
     if (my !== this.gen) return;
     // ★ the shared map data (coastlines, places) — as AdsbMap draws it under Leaflet
     if (!w.VibeMap) { try { const { VIBEMAP_JS } = await loadVibemapSource(); if (my !== this.gen) return; if (!w.VibeMap) runSource(VIBEMAP_JS); } catch (e) { console.error('[tracks] vibemap', e); } }
-    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/' });
+    if (w.VibeMap) w.VibeMap.attach(this.lmap, { dataBase: '/mapdata/v1/', ...(this.o.profile ? { profile: this.o.profile } : {}) });
     this.attach(this.lmap, L);
   }
   private attach(map: any, L: any) {

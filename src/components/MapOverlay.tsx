@@ -700,7 +700,7 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
       window.ReactNativeWebView.postMessage(JSON.stringify({t:'mgrange',id:id,off:off,len:len}));
       setTimeout(function(){if(window.__mgWait[id]){delete window.__mgWait[id];res(null);}},10000);});}:null;
     GLVM=VibeMapGL.createNow(document.getElementById('lmap'),{style:VM_STYLE,load:glLoad,base:'${glBase}',detailRange:detailRange,
-      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb')?'aero':'spots'),center:[0,30],zoom:1});
+      profile:((KIND==='hfdl'||KIND==='adsb'||KIND==='ndb')?'aero':(KIND==='navtex'||KIND==='ais'||KIND==='dsc')?'marine':'spots'),center:[0,30],zoom:1});
     if(GLVM){window.L=VibeMapGLCompat.install(GLVM);window.__GL=true;
       // ★ Belt to the CSS braces above: no native selection or drag ever starts on this page.
       ['selectstart','dragstart'].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{capture:true});});
@@ -930,7 +930,9 @@ var VM = window.__GL ? null : VibeMap.attach(map, {
    *  resolves to the FILESYSTEM ROOT — /mapdata/v1/... — which exists nowhere and fails silently,
    *  one layer at a time, exactly the quiet blank this rework exists to end. */
   dataBase: 'mapdata/v1/',
-  profile: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb') ? 'aero' : 'spots'
+  profile: (KIND === 'hfdl' || KIND === 'adsb' || KIND === 'ndb') ? 'aero'
+    // ★ sea maps show PORTS, not airports (Stuart, 2026-11-01: "we need the ports instead, so felixstowe dover etc")
+    : (KIND === 'navtex' || KIND === 'ais' || KIND === 'dsc') ? 'marine' : 'spots'
 });
 /* ★★★ THE STARTUP TILE WARM-UP IS GONE. It fetched 21 tiles from OpenStreetMap on every
  *  map open to hide the black gaps during a flyTo — and it did not hide them, because the arc
