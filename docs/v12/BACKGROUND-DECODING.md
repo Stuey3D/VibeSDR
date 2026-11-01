@@ -103,10 +103,17 @@ Setup → Server holds the gallery settings:
 ## The gallery
 
 `vibe_gallery.h`. One directory per machine, `<data dir>/gallery`, written by every radio process on the machine. The
-index, `index.jsonl`, has one line per item and is changed only under `flock(<dir>/.lock)`.
+index, `index.jsonl`, is append-only (an item, an item's new line `"re":1|2`, a removal `{"x":…}`) and is changed
+only under `flock(<dir>/.lock)`. It is read in 64 KB pieces into a 16-byte-an-item table, never whole; a page costs one
+`pread()` per item shown. It is compacted (streamed) when its dead lines pass an eighth of the live index.
 
-- **Bounded.** The owner's size is enforced on every write by deleting the oldest items first. An RTTY run still being
-  written is never deleted. The index is capped at 5000 lines and is rewritten (never grown) when items are evicted.
+- **Bounded by the owner's size, and only by it** (2026-11-01, Stuart: "we want the limit to be the assigned space").
+  Everything is kept until the space is full; then the oldest items go first. The space counts the index file too. An
+  RTTY run still being written is never deleted. Eviction is fair: each kind keeps its newest 50 while anything else can
+  go, so a night of NAVTEX cannot push out the last WEFAX charts. There is no item cap; a 1,000,000-item backstop
+  exists only against a corrupt or runaway index, and is logged loudly if it is ever hit.
+- **Counts per kind.** `gallery.json` carries `"kinds":{"navtex":{"n":…,"b":…},…}` and `"indexBytes"`; the footer says
+  the filter's count and size, then the whole gallery.
 - **Never a write per character.** NAVTEX is written once per message. RTTY is written once a minute or every 8 KB. A
   picture is written once, when it is complete.
 - **Partial items.** A message or picture cut off — by a listener arriving, a profile switch, a new start tone before
@@ -142,8 +149,8 @@ index, `index.jsonl`, has one line per item and is changed only under `flock(<di
     oldest first like everything else. A run that began or ended inside an hour writes the part it heard, marked
     partial, with its minutes ("40 of the hour's 60 minutes"); a run stopped and restarted within one hour (a listener
     came and went) leaves two partial cards for it. Midnight is just an hour boundary.
-  - **The cost, stated:** each rewrite of the last-10 card rewrites `index.jsonl` whole (about 250 bytes an item —
-    125 KB for 500 items, 1.2 MB at the 5000 cap), at most once a minute per FT8 VFO and not at all on a quiet band.
+  - **The cost, stated:** each rewrite of the last-10 card appends one line to `index.jsonl` (about 250 bytes; the
+    index is never rewritten for it), at most once a minute per FT8 VFO and not at all on a quiet band.
     The hourly cards are one small append each.
   The admin line's live count is still the run's ("142 spots, 23 countries so far").
 - **Pictures** are written as PNG by `vibe_png.h`, using `vibe_gzip.h`'s deflate, so no new library is needed.

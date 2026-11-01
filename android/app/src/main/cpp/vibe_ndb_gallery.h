@@ -18,8 +18,8 @@
 //        heard, marked partial, with its minutes. Evicted oldest first like everything else.
 //    Each lists the beacons heard with their idents, kHz, how many minutes each was heard, best SNR, distance and
 //    bearing, country and station. Fed by the SAME heard() the day's log is (the service's confirmed beacons, at most
-//    once a minute each) — no second store of NDB readings. The cost, stated as FT8's: each last-10 rewrite rewrites
-//    index.jsonl whole, at most once a minute; the hourly cards are one small append each.
+//    once a minute each) — no second store of NDB readings. The cost, stated as FT8's: each last-10 rewrite appends one
+//    index line (never the index rewritten), at most once a minute; the hourly cards are one small append each.
 //
 // ★★ NEVER A WRITE PER BEACON (the RAM-buffered rule of every continuous decoder here, ISM's included): the card is
 //    rewritten at most once a minute and only when something changed; the map at most every ten minutes. A power cut

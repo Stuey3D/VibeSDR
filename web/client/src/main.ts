@@ -73,7 +73,7 @@ import { limiter } from '../../../src/utils/limit';
 import { addToHist, crispLevels, crispLine, fillLostLines, newHist } from '../../../src/utils/wefaxCrisp';
 import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, RTTY_WEATHER, type RttyParity } from '../../../src/utils/rttySpec';
-import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../../../src/utils/galleryPager';
+import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots, type GalleryKinds } from '../../../src/utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines } from '../../../src/utils/galleryTranslate';
@@ -16116,7 +16116,7 @@ async function renderGallery(page = galPage) {
   pager.hidden = true;
   try {
     let r = await fetch(galUrl(`/vibeserver/gallery.json?${galleryPageQuery(page, galKind)}`), { cache: 'no-store' });
-    type GJ = { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number; total?: number };
+    type GJ = { items?: GalleryItem[]; enabled?: boolean; error?: string; count?: number; usedBytes?: number; total?: number; kinds?: GalleryKinds };
     let j = await r.json() as GJ;
     let paged = typeof j.total === 'number';
     if (r.ok && !j.error && !paged) {   // ★ an older server: its newest 300, no pages
@@ -16129,8 +16129,10 @@ async function renderGallery(page = galPage) {
     host.innerHTML = '';
     if (!r.ok || j.error) { host.innerHTML = ''; note.textContent = j.error || 'This server has no gallery.'; return; }
     const items = j.items || [];
+    // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
+    const chip = galKind ? $('galFilter').querySelector(`[data-kind="${galKind}"]`) : null;
     note.textContent = j.enabled === false ? 'This server keeps no gallery.'
-      : `${j.count ?? items.length} item${(j.count ?? items.length) === 1 ? '' : 's'} on this server · ${formatSize(j.usedBytes || 0)}. Times are UTC.`;
+      : galleryFooter(j, galKind, (chip?.textContent || galKind).trim(), formatSize, items.length);
     if (!items.length) {
       const row = document.createElement('div'); row.className = 'sres';
       const n = document.createElement('span'); n.className = 'n';

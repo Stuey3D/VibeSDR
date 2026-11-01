@@ -88,7 +88,9 @@ static ismgal::DayLog::Options opts(int64_t* clock, const char* origin = "live",
     o.clock = [clock] { return *clock; };
     return o;
 }
-static std::string index(const std::string& dir) { return slurp(dir + "/index.jsonl"); }
+// ★ The LIVE index (each item's current line) — index.jsonl itself is append-only since 2026-11-01 (a card's rewrite
+//   appends its new line; vibe_gallery.h "The store").
+static std::string index(const std::string& dir) { gallery::Store s; s.setDir(dir); return s.indexText(); }
 static std::string itemText(gallery::Store& st, const std::string& name) { std::string b; st.readItem(name, b); return b; }
 
 int main() {

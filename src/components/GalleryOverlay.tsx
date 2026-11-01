@@ -23,7 +23,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
 import { ModeLabel } from './ModeIcon';
 import { withReadAuth } from '../services/vibeAuth';
-import { galleryClampPage, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
+import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots } from '../utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines, type GalleryTrLine } from '../utils/galleryTranslate';
@@ -111,8 +111,9 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
       if (paged && page > n && j.total > 0) { setPage(n); return; }   // ★ the gallery shrank under us
       setItems(Array.isArray(j.items) ? j.items : []);
       listRef.current?.scrollToOffset({ offset: 0, animated: false });
+      // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
       setNote(j.enabled === false ? 'This server keeps no gallery.'
-        : `${j.count ?? 0} item${j.count === 1 ? '' : 's'} on this server · ${size(j.usedBytes || 0)}. Times are UTC.`);
+        : galleryFooter(j, kind, KINDS.find((k) => k.id === kind)?.label || kind.toUpperCase(), size));
     } catch { setItems([]); setNote('This server has no gallery (it may need updating).'); }
   }, [b, kind, page, readAuth]);
   // ★ Loaded on opening, a filter and a page — NOT on BACK from an item (the list under it is still there).

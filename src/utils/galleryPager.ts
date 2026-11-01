@@ -38,3 +38,32 @@ export function galleryPagerSlots(page: number, count: number): Array<number | '
 
 /** "Page 2 of 14". */
 export function galleryPageLabel(page: number, count: number): string { return `Page ${page} of ${count}`; }
+
+// ── The footer: what is SHOWN, counted (2026-11-01) ─────────────────────────────────────────────────────────────────
+// ★★ The Lenovo's footer said "5000 items on this server · 9.7 MB" whatever the filter: "I cannot tell you exactly how
+//    many NAVTEX messages there are". With a filter, its kind's count and size come first, then the whole gallery:
+//    "1,234 NAVTEX items · 2.1 MB — 5,000 items on this server · 9.7 MB. Times are UTC." With ALL, the whole only.
+//    gallery.json's "kinds" ({"navtex":{"n":1234,"b":2202009},…}, vibe_gallery.h listJson) carries the counts; an older
+//    server without it still says the filter's count (its paged "total"), just without the size.
+
+/** 1234 → "1,234". */
+export function galleryCount(n: number): string {
+  return String(Math.max(0, Math.round(n || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+export type GalleryKinds = Record<string, { n: number; b: number }>;
+
+/** The gallery's footer line. `kind` '' = ALL; `label` is the filter chip's own word ("NAVTEX"). */
+export function galleryFooter(
+  j: { count?: number; usedBytes?: number; total?: number; kinds?: GalleryKinds },
+  kind: string, label: string, size: (bytes: number) => string, shown = 0,
+): string {
+  const all = j.count ?? shown;
+  const whole = `${galleryCount(all)} item${all === 1 ? '' : 's'} on this server · ${size(j.usedBytes || 0)}`;
+  if (!kind) return `${whole}. Times are UTC.`;
+  const k = j.kinds?.[kind];
+  const n = k ? k.n : j.kinds ? 0 : j.total;
+  if (typeof n !== 'number') return `${whole}. Times are UTC.`;
+  const part = `${galleryCount(n)} ${label} item${n === 1 ? '' : 's'}${k || j.kinds ? ` · ${size(k ? k.b : 0)}` : ''}`;
+  return `${part} — ${whole}. Times are UTC.`;
+}

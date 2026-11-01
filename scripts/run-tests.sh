@@ -170,6 +170,10 @@ flags_for() {
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
+    # ★★★ THE GALLERY'S STORE at any size (vibe_gallery.h, 2026-11-01): the owner's SIZE is the limit (no 5,000 cap), the
+    #     index counted inside it, per-kind counts, oldest-first eviction fair between kinds, append-only + compaction,
+    #     two processes on one folder, the 1,000,000 backstop. ~2 s.
+    test-gallery-store)    echo "-O2 -lpthread" ;;
     # ★★ V12 NDB skimmer (decoders/ndb_skimmer.h, vibe_ndb_*.h): the vote, one beacon at +10/-5 dB on both tones and A1A,
     #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
     #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
