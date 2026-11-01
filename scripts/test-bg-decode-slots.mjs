@@ -95,6 +95,9 @@ try {
   ok(/VFO 3 \(518\.5 kHz NAVTEX\) paused — a listener needed a decoder slot/.test(LA()), '★ on radio A exactly the LOWEST VFO (3) paused');
   ok(!/VFO [12] \(.*\) paused/.test(LA()), '...VFOs 1 and 2 kept running');
   console.log('── the listener leaves ──');
+  // ★ d93ad592d: sockets that just drop are a HELD session (a suspended phone) — its decoder runs on and keeps its slot
+  //   for up to 3 min. Leaving on purpose (`leave`, the app's back-to-the-list) is never held: the slot frees at once.
+  spec.send({ type: 'leave' }); await sleep(200);
   dx.close(); spec.close();
   ok(await until(() => /VFO 3 \(518\.5 kHz NAVTEX\) resumed/.test(LA()), 8000), '★ the slot frees: VFO 3 resumes');
 } catch (e) {

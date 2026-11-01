@@ -145,6 +145,9 @@ try {
   const users = info.users ?? info.listeners ?? info.clients;
   ok(users === 1 || users === undefined, `★ the user count shows only the real listener (${JSON.stringify(users)})`);
   ok(!/moving the radio/.test(s.L()) && !/the radio moved to/.test(s.L()), 'still no centre move with a listener on');
+  // ★ d93ad592d: a socket that just drops is a HELD session whose place stays counted for up to 3 min — `leave` (on
+  //   purpose) is never held, so the user slot frees at once.
+  l1.send({ type: 'leave' }); await sleep(200);
   l1.close();
   ok(await until(() => /VFO 3 \(518\.5 kHz NAVTEX\) resumed/.test(s.L()), 8000), '★ the listener leaves: VFO 3 resumes');
   // ★ A VFO outside the locked range is refused at the save, in words.
