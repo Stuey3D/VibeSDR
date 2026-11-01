@@ -8905,6 +8905,8 @@ async function navMapOpen() {
     icon: (it) => it._ic, label: (it) => it._lb, card: (it) => it._cd, labelZoom: 3, focusZoom: 6, heard: (it) => it._h ?? 0,
     labelRank: (it) => it._rk ?? 0, arc: (it) => !!it._arc,
     shape: (it) => it._sh, cluster: (it) => it._cl || '', clusterZoom: 8, clusterAlways: ['m'], aria: (it) => it._aria || it._lb || '',
+    // ★ the declutter's priority: the selected item, stations, warnings, then the weather labels — which give way first
+    yieldGroups: ['m'],
     onCard: navCardFill,
     ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
     onRange: (id) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true); },

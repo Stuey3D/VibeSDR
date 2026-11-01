@@ -127,7 +127,11 @@ try {
   await sleep(2500);
   const card = await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`);
   ok(/Named by the message itself or its station label: \d+ of \d+ messages?/.test(card) && /Nearest [A-Z] station on \d+(\.\d)? kHz/.test(card) && /schedule slot/.test(card) && !/\d+ %/.test(card), `the why, in plain words: ${(card.match(/Named by[^·]*|Ended inside[^·]*/g) || []).join(' | ')}`);
-  ok(/first heard \d{4}-\d\d-\d\d/.test(card) && /[A-Z] · \d+(\.\d)? kHz · \d+ received, \d+ different/.test(card) && /Newest: [A-Z]{2}\d\d/.test(card), `a station's card: ${card.slice(0, 220)}`);
+  ok(/First heard \d{4}-\d\d-\d\d/.test(card) && /[A-Z] · \d+(\.\d)? kHz · \d+ received, \d+ different/.test(card) && /Newest: [A-Z]{2}\d\d/.test(card), `a station's card: ${card.slice(0, 220)}`);
+  // ★ the tidied card (2026-11-01): the essentials shown, the rest under a closed "More"
+  const ess = JSON.parse(await ev(`JSON.stringify((() => { const c = document.querySelector('.vtl-card:not([hidden])'); const d = c && c.querySelector('details.navMore');
+    const vis = c ? [...c.querySelectorAll('.pop > div')].map(x => x.textContent).join(' | ') : ''; return { more: !!d && !d.open, vis, h: c ? c.getBoundingClientRect().height : 0 }; })())`));
+  ok(ess.more && /Last heard .* · \d+ messages?/.test(ess.vis) && /kHz/.test(ess.vis) && !/First heard/.test(ess.vis), `the card's essentials first, "More" closed: ${ess.vis.slice(0, 200)} (${Math.round(ess.h)} px tall)`);
   ok(/Niton/.test(card) ? (card.match(/ · \d+(\.\d)? kHz · \d+ received/g) || []).length >= 2 : true, 'a co-sited card lists each of its letters');
   console.log('   screenshot', await shot('navtex-map-station.png'));
   console.log('── the warnings ──');
@@ -153,11 +157,57 @@ try {
   const nShapes = Number(await ev(`document.querySelector('[data-vtl-shapes]')?.getAttribute('data-vtl-shapes') || 0`));
   const markers = Number(await ev(`document.querySelectorAll('.vtl-mk').length`));
   console.log(`   on the map: ${markers} markers, ${clusters} gathered, ${nShapes} shapes`);
-  ok(nShapes === W.warnings.filter((w) => w.pts.length > 1).length, `a shape for every multi-point warning (${nShapes})`);
-  if (W.warnings.length > 60) ok(clusters > 0 && await ev(`document.querySelectorAll('.vtl-mk.vtl-clhid').length > 0`), `zoomed out, warnings gathered into numbered markers (${clusters})`);
-  ok(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => !e.classList.contains('vtl-clhid')).every(e => e.getAttribute('role') === 'button' && e.tabIndex === 0 && (e.getAttribute('aria-label') || '').length > 8)`),
+  // ★★ LATEST WINS: only what is in force is drawn — under ALL too; a named list is a marker an item, with no shape
+  const drawn = W.warnings.filter((w) => !w.expired && !w.cancelled && !w.supersededBy);
+  const lists = drawn.filter((w) => Array.isArray(w.items) && w.items.length === w.pts.length && !w.shape);
+  console.log(`   in force ${drawn.length} of ${W.warnings.length} (cancelled ${W.cancelledN}, superseded ${W.supersededN}, expired ${W.expiredN}); named lists ${lists.length} → ${lists.reduce((n, w) => n + w.items.length, 0)} markers`);
+  ok(nShapes === drawn.filter((w) => w.pts.length > 1 && !lists.includes(w)).length, `a shape for every multi-point warning in force, none for a named list (${nShapes})`);
+  ok(await ev(`![...document.querySelectorAll('.vtl-mk')].some(e => /cancelled|superseded|expired/.test(e.getAttribute('aria-label') || ''))`), 'ALL draws no cancelled, superseded or expired warning');
+  ok(await ev(`[...document.querySelectorAll('.trkRow')].every(r => !/cancelled|superseded|· expired/.test(r.textContent))`), '…nor lists one');
+  for (const w of lists.slice(0, 3)) {
+    const n = Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => (e.getAttribute('aria-label') || '').includes('Warning ${w.id}, ')).length`));
+    ok(n === w.items.length, `${w.id}'s named list: ${n} markers, one an item (${w.items.map((x) => x.n).join(', ')})`);
+  }
+  if (drawn.length > 60) ok(clusters > 0 && await ev(`document.querySelectorAll('.vtl-mk.vtl-clhid').length > 0`), `zoomed out, warnings gathered into numbered markers (${clusters})`);
+  ok(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => !e.classList.contains('vtl-clhid') && !e.classList.contains('vtl-yhid')).every(e => e.getAttribute('role') === 'button' && e.tabIndex === 0 && (e.getAttribute('aria-label') || '').length > 8)`),
      'every marker is a button in the tab order, with its words');
   console.log('   screenshot', await shot('navtex-map-warnings.png'));
+  // ★★ DECLUTTER (2026-11-01): all three layers on, over the UK — the weather labels give way to station names and
+  //    warnings; nothing shown overlaps. At the default zoom (fitted on the UK) and one zoom out.
+  const overlaps = `JSON.stringify((() => { const hit = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    const shown = (e) => e && getComputedStyle(e).display !== 'none' && !e.closest('.vtl-clhid') && !e.closest('.vtl-yhid');
+    const mks = [...document.querySelectorAll('.vtl-mk')].filter(shown);
+    const met = mks.filter(m => /^Sea area/.test(m.getAttribute('aria-label') || '')).map(m => m.querySelector('.vtl-ic').getBoundingClientRect());
+    const other = mks.filter(m => !/^Sea area/.test(m.getAttribute('aria-label') || '')).map(m => m.querySelector('.vtl-ic').getBoundingClientRect());
+    const names = [...document.querySelectorAll('.vtl-mk .vtl-lb')].filter(x => shown(x) && !x.classList.contains('vtl-lbhide') && x.closest('.vtl-labels')).map(x => x.getBoundingClientRect());
+    let o = 0; for (const r of met) { for (const q of other) if (hit(r, q)) o++; for (const q of names) if (hit(r, q)) o++; }
+    return { o, met: met.length, other: other.length, names: names.length, yielded: Number(document.querySelector('[data-vtl-yielded]')?.getAttribute('data-vtl-yielded') || 0) };
+  })())`;
+  for (const look of ['default', 'zoomout', 'uk']) {
+    await ev(`(() => { const x = document.querySelector('.vtl-card:not([hidden]) .vtl-x'); x && x.click(); })()`); await sleep(400);
+    await ev(`${view}.querySelector('.fit').click()`); await sleep(1800);   // ★ the default: the view as it opens, fitted
+    if (look === 'zoomout') { await ev(`(() => { const b = document.querySelector('.maplibregl-ctrl-zoom-out, .leaflet-control-zoom-out'); b && b.click(); })()`); await sleep(1500); }
+    if (look === 'uk') {   // ★ the crowded UK close up: focus a UK station (the view's own focus zoom), its card closed
+      await ev(`(() => { const r = ${stationRows}.find(x => /Cullercoats/.test(x.textContent)); r && r.click(); })()`); await sleep(1800);
+      await ev(`(() => { const x = document.querySelector('.vtl-card:not([hidden]) .vtl-x'); x && x.click(); })()`); await sleep(600);
+    }
+    const d = JSON.parse(await ev(overlaps));
+    ok(d.o === 0, `declutter (${look}): ${d.met} weather labels shown, ${d.yielded} gave way, ${d.other} other markers, ${d.names} names — no weather label over a marker or a name (${d.o})`);
+    console.log('   screenshot', await shot(`navtex-map-declutter-${look}.png`));
+  }
+  // ★ the v6 icons on the map: the platforms (most of them unlit) and the cables and pipelines — each opened from its row
+  for (const [name, re] of [['platforms', /^platform$/], ['cables', /^(cable|cable_telecom|pipeline|pipeline_gas)$/], ['power-cables', /^cable_power$/]]) {
+    const w = drawn.filter((x) => re.test(x.cls)).sort((a, b) => (b.items?.length || 0) - (a.items?.length || 0) || Number(b.unlit) - Number(a.unlit))[0];
+    if (!w) { console.log(`   (no ${name} in force in this set)`); continue; }
+    await ev(`(() => { const r = [...document.querySelectorAll('.trkRow')].find(x => x.dataset.key === ${JSON.stringify(`w:${w.id}:${w.first}`)}); r && r.click(); })()`); await sleep(2200);
+    await ev(`(() => { const x = document.querySelector('.vtl-card:not([hidden]) .vtl-x'); x && x.click(); })()`); await sleep(700);
+    // ★ close enough that the warnings stand apart (below zoom 8 they gather into numbered markers)
+    for (let z = 0; z < 2; z++) { await ev(`(() => { const b = document.querySelector('.maplibregl-ctrl-zoom-in, .leaflet-control-zoom-in'); b && b.click(); })()`); await sleep(1200); }
+    const kinds = JSON.stringify(drawn.filter((x) => re.test(x.cls)).map((x) => x.cls + (x.unlit ? '+unlit' : '')));
+    ok(Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => (e.getAttribute('aria-label') || '').startsWith('Warning ${w.id}')).length`)) >= 1, `${name} on the map: ${w.id} (${kinds})`);
+    console.log('   screenshot', await shot(`navtex-map-${name}.png`));
+  }
+  await ev(`${view}.querySelector('.fit').click()`); await sleep(1500);
   // a cluster: Enter zooms in to it
   if (clusters) {
     const z0 = await ev(`(() => { const e = [...document.querySelectorAll('.vtl-mk')].find(x => { const b = x.querySelector('.vtl-cl'); return b && !b.hidden; }); if (!e) return ''; e.focus(); return e.getAttribute('aria-label'); })()`);
@@ -189,7 +239,12 @@ try {
   ok(await until(`!document.querySelector('.vtl-card:not([hidden])') && document.activeElement?.classList.contains('vtl-mk')`, 4000), '…Escape closes it, the focus back on the marker');
   // the weather
   if (M.areas.length) {
-    const ar = M.areas.slice().sort((a, b) => (b.fc[0].gale >= 8) - (a.fc[0].gale >= 8))[0];
+    // ★ a CURRENT forecast (one over a day old is listed as "no current forecast" and never drawn — latest wins)
+    const cur = M.areas.filter((a) => M.now - a.fc[0].t <= M.stale);
+    const stale = M.areas.filter((a) => M.now - a.fc[0].t > M.stale);
+    if (stale.length) ok(await ev(`!document.querySelector('.vtl-mk[aria-label^="Sea area ${stale[0].name}:"]') && /no current forecast/.test(${view}.querySelector('.trkRow[data-key="m:${stale[0].id}"]')?.textContent || '')`),
+      `${stale[0].name}'s newest forecast is over a day old: not drawn, listed as "no current forecast" (${stale.length} such areas)`);
+    const ar = (cur.length ? cur : M.areas).slice().sort((a, b) => (b.fc[0].gale >= 8) - (a.fc[0].gale >= 8))[0];
     await ev(`(() => { const r = ${view}.querySelector('.trkRow[data-key="m:${ar.id}"]'); r && r.click(); })()`);
     ok(await until(`/Earlier forecasts|Forecast/.test((document.querySelector('.vtl-card:not([hidden])') || {}).textContent || '')`, 6000), `a sea area's card: ${ar.name}`);
     const mc = await ev(`document.querySelector('.vtl-card:not([hidden])').textContent`);

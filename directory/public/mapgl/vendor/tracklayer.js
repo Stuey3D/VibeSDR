@@ -31,6 +31,8 @@
  *       cluster: function (item) { return 'w'; },     // ★ items of one group gather into a numbered marker when zoomed out
  *       clusterZoom: 8,                               //   below this Leaflet zoom (a gathered marker zooms in when chosen)
  *       clusterAlways: ['m'],                         //   groups that gather at every zoom where their icons overlap
+ *       yieldGroups: ['m'],                           // ★ groups whose ICONS give way: hidden where they would cover a
+ *                                                     //   higher item's icon or a placed name (the selected one stays)
  *       aria:    function (item) { return '…'; },     // ★ a marker is a button (keyboard, gamepad, TV focus): its words
  *       onCard:  function (key, el) {}                // ★ the card was drawn (or redrawn): the host fills what it fetches
  *   layer.update(items)   // [{key, lat, lon, …}] — the whole list each time; items without a position are skipped
@@ -76,6 +78,7 @@
     '.vtl-mk:focus-visible .vtl-ic,.vtl-mk.vtl-kf .vtl-ic{outline:2px solid #ffd34d;outline-offset:2px;border-radius:50%}',
     // ★ CLUSTERS: the gathered markers are hidden, the one standing for them carries the count
     '.vtl-mk.vtl-clhid{display:none !important}',
+    '.vtl-mk.vtl-yhid{display:none !important}',
     '.vtl-mk .vtl-cl{position:absolute;right:-7px;top:-7px;min-width:15px;height:15px;padding:0 3px;box-sizing:border-box;border-radius:8px;',
     'background:#ffd34d;color:#111;font:700 10px/15px ui-monospace,Menlo,Consolas,monospace;text-align:center;pointer-events:none;',
     'box-shadow:0 0 0 1.5px #0b1420}',
@@ -176,22 +179,45 @@
       });
       cont.setAttribute('data-vtl-clusters', String(nHeads));
     }
+    /* ★★ YIELDING GROUPS (2026-11-01, the NAVTEX map with all three layers on: the weather pills sat over station names and
+     *  warning numbers). The priority is the selected item, then the host's labelRank (stations over warnings), and an
+     *  item in opts.yieldGroups (the weather labels) LAST: its icon is no obstacle to anyone's name, and it is hidden
+     *  wherever it would cover a higher item's icon or a name already placed — the selected one always stands. */
+    var yieldG = opts.yieldGroups || [];
+    function yields(e) { return !!(yieldG.length && opts.cluster && yieldG.indexOf(opts.cluster(e.item)) >= 0); }
     function declutter() {
       if (destroyed) return;
       clusterPass();
       var on = cont.classList.contains('vtl-labels');
-      var arr = [], icons = [];
+      var arr = [], icons = [], yl = [];
       items.forEach(function (e, k) {
         if (e.gone || e.clHid) return;
         var el = elOf(e.mk);
         if (!el) return;
         var lb = el.querySelector('.vtl-lb'), ic = el.querySelector('.vtl-ic');
         if (lb) { lb.classList.remove('vtl-lbhide'); lb.classList.remove('vtl-lbl'); }
+        if (yields(e)) { el.classList.remove('vtl-yhid'); if (ic) yl.push({ k: k, el: el, ic: ic, rank: k === sel ? Infinity : (opts.labelRank ? Number(opts.labelRank(e.item)) || 0 : 0) }); return; }
         if (ic) icons.push({ k: k, r: ic.getBoundingClientRect() });
         if (lb && on) arr.push({ k: k, lb: lb, rank: k === sel ? Infinity : (opts.labelRank ? Number(opts.labelRank(e.item)) || 0 : 0) });
       });
-      if (!on) return;
       if (rxMk) { var re = elOf(rxMk); if (re) icons.push({ k: '', r: re.getBoundingClientRect() }); }
+      var yieldPass = function (placedNames) {
+        yl.sort(function (a, b) { return b.rank - a.rank; });
+        var kept = [], nHid = 0;
+        for (var i = 0; i < yl.length; i++) {
+          var y = yl[i], r = y.ic.getBoundingClientRect(), bad = false;
+          if (r.width && y.rank !== Infinity) {
+            for (var m = 0; !bad && m < icons.length; m++) if (hit(r, icons[m].r)) bad = true;
+            for (var n = 0; !bad && n < placedNames.length; n++) if (hit(r, placedNames[n])) bad = true;
+            for (var q = 0; !bad && q < kept.length; q++) if (hit(r, kept[q])) bad = true;
+          }
+          y.el.classList.toggle('vtl-yhid', bad);
+          y.el.tabIndex = bad ? -1 : 0;
+          if (bad) nHid++; else kept.push(r);
+        }
+        cont.setAttribute('data-vtl-yielded', String(nHid));
+      };
+      if (!on) { yieldPass([]); return; }
       arr.sort(function (a, b) { return b.rank - a.rank; });
       var placed = [];
       var clash = function (a, r) {
@@ -211,6 +237,7 @@
         }
         placed.push(r);
       }
+      yieldPass(placed);
     }
     map.on('moveend', declutterSoon);
     map.on('movestart', nogOn); map.on('zoomstart', nogOn);

@@ -297,7 +297,8 @@ export function navMetItems(areas: NavArea[], now: number, wrap: 'web' | 'app' =
   return areas.map((a) => ({
     key: a.key, lat: a.lat, lon: a.lon, _ic: navMetIcon(a), _lb: '', _cd: navMetCard(a, now, wrap), _h: a.repeats + a.fc.length,
     // ★ overlapping labels gather (any zoom): a gale first, then the newest, then the open sea before the inshore stretches
-    _rk: (navFcGale(a.fc[0]) ? 4e9 : 2e9) - (a.stale ? 1e9 : 0) + a.fc[0].t / 10 + (a.kind === 's' ? 1e8 : 0), _cl: 'm',
+    // ★ …and BELOW every warning (≥ 1e5) and station (1e12): the weather labels give way first (tracklayer yieldGroups)
+    _rk: (navFcGale(a.fc[0]) ? 6e4 : 3e4) - (a.stale ? 2e4 : 0) + a.fc[0].t / 1e6 + (a.kind === 's' ? 1e4 : 0), _cl: 'm',
     _aria: navMetAria(a), _f: a.fc[0].f, _t: a.fc[0].t,
   }));
 }

@@ -420,6 +420,8 @@ export interface TrackViewOpts {
   cluster?: (it: any) => string;
   clusterZoom?: number;
   clusterAlways?: string[];
+  /** ★ groups whose icons give way to every other item and name (tracklayer.js yieldGroups — the NAVTEX weather labels) */
+  yieldGroups?: string[];
   aria?: (it: any) => string;
   onCard?: (key: string, el: HTMLElement) => void;
 }
@@ -610,7 +612,7 @@ export class TrackView {
     this.layer = w.VibeTrackLayer.create(map, L, {
       receiver: this.rx, icon: this.o.icon, label: this.o.label, card: this.o.card, trail: this.o.trail,
       labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard, labelRank: this.o.labelRank, arc: this.o.arc,
-      shape: this.o.shape, cluster: this.o.cluster, clusterZoom: this.o.clusterZoom, clusterAlways: this.o.clusterAlways, aria: this.o.aria, onCard: this.o.onCard,
+      shape: this.o.shape, cluster: this.o.cluster, clusterZoom: this.o.clusterZoom, clusterAlways: this.o.clusterAlways, yieldGroups: this.o.yieldGroups, aria: this.o.aria, onCard: this.o.onCard,
       onSelect: (k: string | null) => this.markSel(k || ''),
     });
     if (this.pending) { this.layer.update(this.pending); this.pending = null; }

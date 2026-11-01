@@ -1553,7 +1553,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'||KIND==='navtex'){
         arc:function(it){return !!(it&&it._arc);},
         shape:function(it){return it&&it._sh?it._sh:null;},
         cluster:function(it){return it&&it._cl?String(it._cl):'';},
-        clusterZoom:8,clusterAlways:['m'],
+        clusterZoom:8,clusterAlways:['m'],yieldGroups:['m'],
         aria:function(it){return it&&(it._aria||it._lb)?String(it._aria||it._lb):'';},
         onCard:function(k,el){
           // ★ V12 the NAVTEX cards: the gallery text is React Native's to fetch (the read auth), and so is TRANSLATE
