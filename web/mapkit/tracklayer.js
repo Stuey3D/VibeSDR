@@ -21,7 +21,9 @@
  *       trail: function (key, done) { done([[lat, lon], …]); },                  // its track so far (async; may be null)
  *       onSelect: function (key | null) {},                                       // the selection changed ON THE MAP
  *       labelZoom: 11,                                                            // Leaflet zoom from which labels show
- *       focusZoom: 10 });                                                         // focus(key) zooms in at least this far
+ *       focusZoom: 10,                                                            // focus(key) zooms in at least this far
+ *       heard: function (item) { return 12; } });                                 // ★ a count that grows when the item is heard
+ *                                                                                 //   again: a new item, or a higher count, pulses
  *   layer.update(items)   // [{key, lat, lon, …}] — the whole list each time; items without a position are skipped
  *   layer.focus(key) · layer.select(key | null) · layer.fit() · layer.setReceiver(lat, lon) · layer.destroy()
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
@@ -133,7 +135,9 @@
             // ★ fade in on the next frame (a marker placed at opacity 0, then shown)
             setTimeout(function () { var el2 = elOf(m); if (el2) el2.classList.remove('vtl-new'); }, 30);
           })(k, mk);
-          items.set(k, { mk: mk, item: it, sig: ic.sig, lat: it.lat, lon: it.lon });
+          items.set(k, { mk: mk, item: it, sig: ic.sig, lat: it.lat, lon: it.lon, heard: opts.heard ? opts.heard(it) : 0 });
+          // ★ LIVE: an item that arrives after the map was first drawn pulses (the first batch does not — it is history)
+          if (fitted) pulse(k);
         } else {
           if (e.gone) { e.gone = false; setCls(e.mk, 'vtl-gone', false); }
           if (e.lat !== it.lat || e.lon !== it.lon) { e.mk.setLatLng([it.lat, it.lon]); e.lat = it.lat; e.lon = it.lon; }
@@ -142,6 +146,7 @@
             e.sig = ic.sig;
           }
           e.item = it;
+          if (opts.heard) { var h = opts.heard(it); if (h > e.heard) { e.heard = h; pulse(k); } else e.heard = h; }
         }
         if (k === sel) {
           if (trailPts && trailKey === k) {
@@ -200,14 +205,20 @@
       } else card.hidden = true;
       if (fromMap && opts.onSelect) { try { opts.onSelect(key); } catch (err) { console.error('[tracklayer] onSelect', err); } }
     }
+    function pulse(key) {
+      var e = items.get(String(key));
+      if (!e) return;
+      setTimeout(function () { var cur = items.get(String(key)); if (cur) setCls(cur.mk, 'vtl-pulse', true); }, 40);
+      clearTimeout(e.pulseT);
+      e.pulseT = setTimeout(function () { var cur = items.get(String(key)); if (cur) setCls(cur.mk, 'vtl-pulse', false); }, 3600);
+    }
     function focus(key) {
       var e = items.get(String(key));
       if (!e) return false;
       select(String(key), false);
       var z = Math.max(map.getZoom(), opts.focusZoom || 10);
       map.flyTo([e.lat, e.lon], z, { duration: 0.9 });
-      setCls(e.mk, 'vtl-pulse', true);
-      setTimeout(function () { var cur = items.get(String(key)); if (cur) setCls(cur.mk, 'vtl-pulse', false); }, 3600);
+      pulse(key);
       return true;
     }
     function fit() {

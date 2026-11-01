@@ -241,6 +241,18 @@ eq('pressure cycles psi → kPa → bar → psi', [app.nextPressure('psi'), app.
   eq('the gallery card: first / last heard, times, background-and-live', /heard in the background and live[\s\S]*first heard 09:00 · last heard 12:01 UTC · 14 times/.test(web.ismGalCard(gw.nodes[0], gw.rx)), true);
   eq('gallery status', web.ismGalStatus(gw.nodes, gw.rx), app.ismGalStatus(ga.nodes, ga.rx));
   eq('…words', /^3 nodes heard · 1 repeater · furthest Benson 7\d km$/.test(web.ismGalStatus(gw.nodes, gw.rx)), true);
+  // ── the time filter ──
+  eq('ranges, both', [app.ISM_RANGES.map((r) => r.id), app.ISM_LIVE_RANGES.map((r) => r.id)], [web.ISM_RANGES.map((r) => r.id), ['1h', '24h']]);
+  eq('in range: 1 h keeps the fresh, 24 h the day', [web.ismInRange(wn.devices, '1h').map((d) => d.key), web.ismInRange(wn.devices, '24h').map((d) => d.key)], [['n1', 'n3'], ['n1', 'n2', 'n3']]);
+  eq('defaults: 24 h live, ALL in the gallery; a live map never takes 7 days', [web.ismRangeOf(null, true), web.ismRangeOf(null, false), web.ismRangeOf('7d', true), app.ismRangeOf('30d', false)], ['24h', 'all', '24h', '30d']);
+  const day2 = '11:00:00 · 08:00:00 · 3× · background · MeshCore · repeater · Benson · 01020304 · 51.622300, -1.102800 · 6 · 7.0 · 869.618\n';
+  const c2 = web.ismNodesParse('Each node, most recent first (…):\n' + day2, D - 86400, D + 86000).nodes;
+  const mg = web.ismGalMerge([gw.nodes, c2], D + 86000);
+  const bm = mg.find((n) => n.name === 'Benson')!;
+  eq('merging two days: one Benson, 17 times, first heard the day before, background + live', [mg.length, bm.count, bm.first - D, bm.origin], [3, 17, -86400 + 8 * 3600, 'both']);
+  eq('…a stable key from network + id', bm.key, 'c:01020304');
+  eq('…the app merges the same', JSON.stringify(app.ismGalMerge([ga.nodes, app.ismNodesParse('Each node, most recent first (…):\n' + day2, D - 86400, D + 86000).nodes], D + 86000)), JSON.stringify(mg));
+  eq('the band of a card', [web.ismNodeCardBand('ismnodes-868-2026-11-01'), web.ismNodeCardBand('ismsum-868-2026-11-01')], ['868', '']);
   eq('the MAP key is drawn for ismnodes- items only', [web.ismIsNodeCard({ s: 'ismnodes-868-2025-11-01' }), web.ismIsNodeCard({ s: 'ismsum-868-x' }), web.ismIsNodeCard({})], [true, false, false]);
 }
 

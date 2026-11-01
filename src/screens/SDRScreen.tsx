@@ -64,8 +64,8 @@ import { MODE_BANDWIDTHS, type SDRStatus, type SDRMode, type RdsExt, type RadioC
 import AdvRdsPanel from '../components/AdvRdsPanel';
 import DabPanel from '../components/DabPanel';
 import IsmPanel from '../components/IsmPanel';
-import { ismNeighbours, ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus,
-         type IsmCap, type IsmReport, type IsmGalNode } from '../services/ism';
+import { ismNeighbours, ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
+         ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmCap, type IsmReport, type IsmGalNode } from '../services/ism';
 import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../services/wholeModeResume';
 // ★ V12 held session: the "VibeSDR paused" note (docs/v12/BACKGROUND-DECODING.md, "The held session")
@@ -2719,7 +2719,23 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [ismFocus, setIsmFocus] = useState('');
   /** ★ V12 2026-11-01: a gallery "stations received" card on the ISM map (GalleryOverlay MAP); CLOSE MAP goes back to the
    *  gallery. Its own data — not a live report — so ISM need not be running. */
-  const [ismGal, setIsmGal] = useState<{ title: string; nodes: IsmGalNode[]; rx: { lat: number; lon: number } | null } | null>(null);
+  const [ismGal, setIsmGal] = useState<{ title: string; nodes: IsmGalNode[]; rx: { lat: number; lon: number } | null;
+                                         refresh: (() => Promise<IsmGalNode[] | null>) | null } | null>(null);
+  /* ★★ V12 2026-11-01 THE TIME FILTER (the web's ismMapRange / ismGalRange): 24 h live, ALL in the gallery, remembered. */
+  const [ismRange, setIsmRange] = useState('24h');
+  const [ismGalRange, setIsmGalRange] = useState('all');
+  useEffect(() => {
+    AsyncStorage.multiGet(['lsv_ism_map_range', 'lsv_ism_gal_range']).then((kv) => {
+      setIsmRange(ismRangeOf(kv[0][1], true)); setIsmGalRange(ismRangeOf(kv[1][1], false));
+    }).catch(() => {});
+  }, []);
+  // ★ LIVE in the gallery's map: today's card fetched again each minute while the map is open
+  useEffect(() => {
+    if (!ismGal?.refresh) return;
+    const f = ismGal.refresh;
+    const t = setInterval(() => { void f().then((n) => { if (n) setIsmGal((g) => (g && g.refresh === f ? { ...g, nodes: n } : g)); }); }, 60_000);
+    return () => clearInterval(t);
+  }, [ismGal?.refresh]);
   const [aprsFocus, setAprsFocus] = useState('');
   /** ★ V12 DSC: the box's MAP — the positions sent, on the track layer (MapOverlay 'dsc'), opened on the call pressed. */
   const [dscMapOpen, setDscMapOpen] = useState(false);
@@ -10760,16 +10776,25 @@ export default function SDRScreen({ route, navigation }: Props) {
     status: `${dscCalls.filter((c) => c.lat !== null).length} of ${dscCalls.length} calls sent a position`,
     empty: DSC_MAP_EMPTY, focus: dscFocus, trail: () => Promise.resolve([] as [number, number][]),
   }), [dscCalls, trkRx?.lat, trkRx?.lon, dscFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
-  const ismTrk = useMemo(() => ({
-    items: ismMapItems(ismReport, trkRx), rows: ismMapRows(ismReport, trkRx), status: ismMapStatus(ismReport, trkRx),
-    empty: ISM_MAP_EMPTY, focus: ismFocus, trail: () => Promise.resolve([] as [number, number][]),
-  }), [ismReport, trkRx?.lat, trkRx?.lon, ismFocus]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const ismTrk = useMemo(() => {
+    // ★ a link to a node outside the chosen range shows 24 h, so the node asked for is there
+    const range = ismFocus && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === ismFocus), ismRange).length ? '24h' : ismRange;
+    const r = ismReport ? { ...ismReport, devices: ismInRange(ismReport.devices, range) } : null;
+    return {
+      items: ismMapItems(r, trkRx), rows: ismMapRows(r, trkRx), status: ismMapStatus(r, trkRx),
+      empty: ISM_MAP_EMPTY, focus: ismFocus, trail: () => Promise.resolve([] as [number, number][]),
+      ranges: ISM_LIVE_RANGES, range, rangeHint: ISM_RANGE_HINT_LIVE,
+      onRange: (id: string) => { setIsmRange(id); setIsmFocus(''); AsyncStorage.setItem('lsv_ism_map_range', id).catch(() => {}); },
+    };
+  }, [ismReport, trkRx?.lat, trkRx?.lon, ismFocus, ismRange]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ismGalTrk = useMemo(() => {
     const rx = trkRx ?? ismGal?.rx ?? null;
-    const nodes = ismGal?.nodes ?? [];
-    return { items: ismGalItems(nodes, rx), rows: ismGalRows(nodes, rx), status: ismGalStatus(nodes, rx),
-             empty: 'This card holds no node with a position.', focus: '', trail: () => Promise.resolve([] as [number, number][]) };
-  }, [ismGal, trkRx?.lat, trkRx?.lon]);   // eslint-disable-line react-hooks/exhaustive-deps
+    const nodes = ismInRange(ismGal?.nodes ?? [], ismGalRange);
+    return { items: ismGalItems(nodes, rx), rows: ismGalRows(nodes, rx), status: `${ismGalStatus(nodes, rx)}${ismGal ? ' · ' + ismGal.title.split(' · ').slice(2).join(' · ') : ''}`,
+             empty: 'Nothing heard with a position in this time.', focus: '', trail: () => Promise.resolve([] as [number, number][]),
+             ranges: ISM_RANGES, range: ismGalRange, rangeHint: ISM_RANGE_HINT_GAL,
+             onRange: (id: string) => { setIsmGalRange(id); AsyncStorage.setItem('lsv_ism_gal_range', id).catch(() => {}); } };
+  }, [ismGal, trkRx?.lat, trkRx?.lon, ismGalRange]);   // eslint-disable-line react-hooks/exhaustive-deps
   const closeIsmMap = useCallback(() => {
     if (ismGal) { setIsmGal(null); setGalleryOpen(true); return; }   // ★ back to the gallery it came from
     setIsmMapOpen(false); setIsmFocus('');
@@ -14729,7 +14754,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         readAuth={radioAuthSuffix || route.params.authSuffix || ''}
         translateTo={txTarget}
         onClose={() => setGalleryOpen(false)}
-        onNodesMap={IS_APPLE_TV ? null : (title, nodes, rx) => { setGalleryOpen(false); setIsmGal({ title, nodes, rx }); }}
+        onNodesMap={IS_APPLE_TV ? null : (title, nodes, rx, refresh) => { setGalleryOpen(false); setIsmGal({ title, nodes, rx, refresh }); }}
       />
       <RecordingsOverlay
         visible={recordingsOpen}

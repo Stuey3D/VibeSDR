@@ -21,7 +21,8 @@ import { readLook, browserSolidDefault, applyControlLook, BG_SWATCHES, BTN_SWATC
 import { SpectrumClient, MODE_BANDWIDTHS, WFM_MIN_BW_HZ, type SDRMode, type DabState, type AdsbReport } from './spectrum';
 import { adsbListHtml, adsbStatus, adsbOnMap, adsbFurthest, adsbFurthestHtml, adsbChipHtml, adsbLongestTracked, adsbNewest, adsbCaptureWarning, cleanHex, AdsbMap, adsbImageBase } from './adsb';
 import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel, ismMapCard, ismMapRows, ismMapStatus,
-         ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, type IsmGalNode } from './ism';
+         ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismInRange, ismRangeOf, ismGalMerge,
+         ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
@@ -8771,13 +8772,24 @@ function onIsmReport(r: IsmReport | null) {
  *  Meshtastic and MeshCore nodes today — the receiver and range rings; CLOSE MAP goes back to the list. ISM carries on
  *  under it either way. */
 let ismMapView: TrackView | null = null;
+const ISM_RANGE_LIVE_KEY = 'vibesdr.ismMapRange', ISM_RANGE_GAL_KEY = 'vibesdr.ismGalRange';
+const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* private window */ } };
+let ismMapRange = ismRangeOf(lsGet(ISM_RANGE_LIVE_KEY), true);
 /** ★ `key`: a node's position link in the list (Stuart, 2026-11-01: "make the coordinates clickable") — the map opens on
  *  it, selected, pulsing, its card open. Empty = the MAP key: every node, fitted. */
 function ismMapOpen(key = '') {
   if (!ismMapView) ismMapView = new TrackView({
     title: 'ISM · mesh nodes', exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => ismMapView?.hide(),
-    icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()), labelZoom: 6, focusZoom: 11,
+    icon: ismMapIcon, label: ismMapLabel, card: (d) => ismMapCard(d, myPos()), labelZoom: 6, focusZoom: 11, heard: ismMapHeard,
+    ranges: ISM_LIVE_RANGES, range: ismMapRange, rangeHint: ISM_RANGE_HINT_LIVE,
+    onRange: (id) => { ismMapRange = id; lsSet(ISM_RANGE_LIVE_KEY, id); ismMapRender(); },
   });
+  // ★ a link to a node outside the chosen range widens it, so the node asked for is there
+  if (key && ismReport && !ismInRange(ismReport.devices.filter((d) => d.key === key), ismMapRange).length) {
+    ismMapRange = '24h';
+    for (const b of Array.from(ismMapView.root.querySelectorAll('[data-rng]'))) b.setAttribute('aria-pressed', String((b as HTMLElement).dataset.rng === '24h'));
+  }
   ismMapView.show(myPos());
   ismMapRender();
   if (key) ismMapView.focus(key);
@@ -8787,22 +8799,62 @@ function ismMapOpen(key = '') {
  *  "ismnodes-…" (vibe_ism_gallery.h) has MAP: its table, on the same map view and the same icons as the live ISM map —
  *  each node with first / last heard, times heard, and whether it was heard in the background or live. */
 let ismGalView: TrackView | null = null;
-async function ismGalMapOpen(f: string, day: number, title: string) {
-  let body = '';
-  try { const r = await fetch(galUrl(`/vibeserver/gallery/file/${encodeURIComponent(f)}`), { cache: 'no-store' }); body = r.ok ? await r.text() : ''; } catch { /* below */ }
-  const { nodes, rx: cardRx } = ismNodesParse(body, day, Math.floor(Date.now() / 1000));
+let ismGalTimer: ReturnType<typeof setInterval> | null = null;
+/** ★ The band's day cards still in the gallery (newest first, at most 31): MAP merges them, and the time filter picks. */
+async function ismGalCards(band: string): Promise<GalleryItem[]> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery.json?kind=ism&limit=1000`), { cache: 'no-store' });
+    const j = r.ok ? await r.json() as { items?: GalleryItem[] } : {};
+    return (j.items ?? []).filter((it) => ismIsNodeCard(it) && ismNodeCardBand(it.s) === band).sort((a, b) => b.t - a.t).slice(0, 31);
+  } catch { return []; }
+}
+async function ismGalFetch(it: GalleryItem): Promise<{ nodes: IsmGalNode[]; rx: { lat: number; lon: number } | null } | null> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery/file/${encodeURIComponent(it.f)}`), { cache: 'no-store' });
+    return r.ok ? ismNodesParse(await r.text(), it.t, Math.floor(Date.now() / 1000)) : null;
+  } catch { return null; }
+}
+async function ismGalMapOpen(it0: GalleryItem) {
+  const band = ismNodeCardBand(it0.s);
+  // ★ every day card of the band (the one pressed among them); fetched one at a time — a live server
+  const cards = band ? await ismGalCards(band) : [];
+  if (!cards.some((c) => c.f === it0.f)) cards.unshift(it0);
+  const per = new Map<string, IsmGalNode[]>();
+  let cardRx: { lat: number; lon: number } | null = null;
+  for (const c of cards) { const p = await ismGalFetch(c); if (p) { per.set(c.f, p.nodes); cardRx = cardRx ?? p.rx; } }
   const rx = myPos() ?? cardRx;
+  let range = ismRangeOf(lsGet(ISM_RANGE_GAL_KEY), false);
+  const days = new Set(cards.map((c) => Math.floor(c.t / 86400))).size;
+  const draw = () => {
+    const all = ismGalMerge([...per.values()], Math.floor(Date.now() / 1000));
+    const nodes = ismInRange(all, range);
+    ismGalView?.update(nodes, ismGalRows(nodes, rx), per.size ? `${ismGalStatus(nodes, rx)} · ${days} ${days === 1 ? 'day' : 'days'} in the gallery` : 'This item is no longer on the server.', nodes.length, rx);
+  };
   ismGalView?.destroy();
+  if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; }
+  const close = () => { if (ismGalTimer) { clearInterval(ismGalTimer); ismGalTimer = null; } ismGalView?.destroy(); ismGalView = null; };
+  const t = `LoRa nodes heard · ${band ? band + ' MHz' : ''}`;
   ismGalView = new TrackView({
-    title: title.length > 60 ? title.slice(0, 58) + '…' : title, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: () => { ismGalView?.destroy(); ismGalView = null; },
-    icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx), labelZoom: 6, focusZoom: 11,
+    title: t, exitLabel: 'CLOSE MAP', listTitle: 'NODES', onExit: close,
+    icon: ismMapIcon, label: ismMapLabel, card: (d: IsmGalNode) => ismGalCard(d, rx), labelZoom: 6, focusZoom: 11, heard: ismMapHeard,
+    ranges: ISM_RANGES, range, rangeHint: ISM_RANGE_HINT_GAL,
+    onRange: (id) => { range = id; lsSet(ISM_RANGE_GAL_KEY, id); draw(); },
   });
   ismGalView.show(rx);
-  ismGalView.update(nodes, ismGalRows(nodes, rx), body ? ismGalStatus(nodes, rx) : 'This item is no longer on the server.', nodes.length, rx);
+  draw();
+  /* ★ LIVE: today's card is rewritten at most once a minute while ISM runs (a listener, or background decoding) — while
+   *  this map is open it is fetched again each minute, and a node heard since pulses (the layer's `heard`). */
+  const today = cards.find((c) => Math.floor(c.t / 86400) === Math.floor(Date.now() / 86400000));
+  if (today) ismGalTimer = setInterval(async () => {
+    if (!ismGalView?.open) { if (ismGalTimer) clearInterval(ismGalTimer); ismGalTimer = null; return; }
+    const p = await ismGalFetch(today);
+    if (p) { per.set(today.f, p.nodes); draw(); }
+  }, 60_000);
 }
 function ismMapRender() {
   if (!ismMapView?.open) return;
-  const r = ismReport;
+  const r0 = ismReport;
+  const r = r0 ? { ...r0, devices: ismInRange(r0.devices, ismMapRange) } : null;   // ★ the time filter
   const items = r ? r.devices.filter(ismOnMap) : [];
   ismMapView.update(items, r ? ismMapRows(r, myPos()) : '', ismMapStatus(r, myPos()), items.length, myPos());
 }
@@ -16056,7 +16108,7 @@ async function renderGallery(page = galPage) {
       if (ismIsNodeCard(it)) {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
         mb.title = 'Every node this card holds, on the map'; mb.setAttribute('aria-label', `Show the nodes heard on the map: ${it.title}`);
-        mb.onclick = (e) => { e.stopPropagation(); void ismGalMapOpen(it.f, it.t, it.title); };
+        mb.onclick = (e) => { e.stopPropagation(); void ismGalMapOpen(it); };
         mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
         row.appendChild(mb);
       }

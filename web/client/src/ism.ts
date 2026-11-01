@@ -537,6 +537,8 @@ export function ismMapIcon(d: IsmDevice): { html: string; w: number; h: number }
   const ring = d.approx ? `<circle cx="11" cy="11" r="10.6" fill="none" stroke="${c}" stroke-width="1" stroke-dasharray="2 2"/>` : '';
   return { html: `<svg width="24" height="24" viewBox="-1 -1 24 24" style="opacity:${op}" aria-hidden="true">${shape}${GLYPH[t] || GLYPH.companion}${ring}</svg>`, w: 24, h: 24 };
 }
+/** ★ What the layer pulses on: a node heard again (its packet count grew). */
+export function ismMapHeard(d: IsmDevice): number { return d.count; }
 export function ismMapLabel(d: IsmDevice): string {
   const n = d.long || d.short || d.name || d.node || d.key;
   return d.approx ? `${n} (approximate)` : n;
@@ -556,10 +558,18 @@ export function ismMapRows(r: IsmReport, rx: { lat: number; lon: number } | null
   if (!items.length) return `<div class="trkEmpty">Nothing heard with a position yet — mesh nodes send theirs every 15 min to an hour.</div>`;
   const withKm = items.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat!, d.lon!) : null }));
   if (rx) withKm.sort((a, b) => a.k!.km - b.k!.km);
-  return withKm.map(({ d, k }) => `<div class="trkRow" tabindex="0" data-key="${escM(d.key)}"><b>${escM(ismMapLabel(d))}</b> `
-    + `<span style="opacity:.75">${escM(ismNetName(d.kind))} ${escM(NODE_TYPE_WORD[ismNodeType(d)])}${k ? ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}` : ''}`
-    + ` · ${escM(ismAgo(d.seen))}${d.hops !== undefined ? ` · ${d.hops === 0 ? 'first-hand' : d.hops + ' hop' + (d.hops === 1 ? '' : 's')}` : ''}`
-    + `${d.battPct !== undefined && d.battPct <= 100 ? ` · ${d.battPct} %` : ''} · ${d.snr.toFixed(0)} dB</span></div>`).join('');
+  return withKm.map(({ d, k }) => {
+    const second = [`${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, d.hops !== undefined ? (d.hops === 0 ? 'first-hand' : `${d.hops} hop${d.hops === 1 ? '' : 's'}`) : '',
+                    d.battPct !== undefined && d.battPct <= 100 ? `${d.battPct} %` : '', `${d.snr.toFixed(0)} dB`].filter(Boolean).join(' · ');
+    return trkRowHtml(d, second, k, ismAgo(d.seen));
+  }).join('');
+}
+/** ★ One row of the map's list in the shared list's own markup (tracks.ts aprsRows): name over a second line, range, age. */
+function trkRowHtml(d: IsmDevice, second: string, k: { km: number; brg: number } | null, age: string): string {
+  const where = k ? `${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km <span class="brg">${compass(k.brg)}</span>` : '';
+  return `<div class="trkRow" role="button" tabindex="0" data-key="${escM(d.key)}">`
+    + `<span class="id"><b><i class="sw" style="background:${MAP_COLOURS[d.kind] || '#ffb833'}"></i>${escM(ismMapLabel(d))}</b><small>${escM(second)}</small></span>`
+    + `<span class="sp"></span><span class="rg">${where}</span><span class="ag">${escM(age)}</span></div>`;
 }
 /** The map's status line: how many on the map, of which repeaters, the furthest. */
 export function ismMapStatus(r: IsmReport | null, rx: { lat: number; lon: number } | null): string {
@@ -641,10 +651,8 @@ export function ismGalRows(nodes: IsmGalNode[], rx: { lat: number; lon: number }
   if (!nodes.length) return `<div class="trkEmpty">This card holds no node with a position.</div>`;
   const withKm = nodes.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat!, d.lon!) : null }));
   if (rx) withKm.sort((a, b) => a.k!.km - b.k!.km);
-  return withKm.map(({ d, k }) => `<div class="trkRow" tabindex="0" data-key="${escM(d.key)}"><b>${escM(ismMapLabel(d))}</b> `
-    + `<span class="tag">${ORIGIN_TAG[d.origin] || ''}</span> `
-    + `<span style="opacity:.75">${escM(ismNetName(d.kind))} ${escM(NODE_TYPE_WORD[ismNodeType(d)])}${k ? ` · ${k.km < 10 ? k.km.toFixed(1) : Math.round(k.km)} km ${compass(k.brg)}` : ''}`
-    + ` · ${d.count}× · ${hhmm(d.first)}–${hhmm(d.last)}</span></div>`).join('');
+  return withKm.map(({ d, k }) => trkRowHtml(d, [ORIGIN_TAG[d.origin] || '', `${ismNetName(d.kind)} ${NODE_TYPE_WORD[ismNodeType(d)]}`, `${d.count}×`,
+                                                   `${hhmm(d.first)}–${hhmm(d.last)} UTC`].filter(Boolean).join(' · '), k, hhmm(d.last))).join('');
 }
 export function ismGalStatus(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null): string {
   const rep = nodes.filter((d) => ismNodeType(d) === 'repeater').length;
@@ -655,4 +663,51 @@ export function ismGalStatus(nodes: IsmGalNode[], rx: { lat: number; lon: number
     far = ` · furthest ${who} ${best < 10 ? best.toFixed(1) : Math.round(best)} km`;
   }
   return `${nodes.length} ${nodes.length === 1 ? 'node' : 'nodes'} heard${rep ? ` · ${rep} ${rep === 1 ? 'repeater' : 'repeaters'}` : ''}${far}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★ V12 2026-11-01 THE TIME FILTER (Stuart: "filter the map based on last hour last day last week last month all
+//  time"). The live map holds what the receiver keeps — 24 h (vibe_lora_track.h kMeshKeepSec) — so it offers 1 H and
+//  24 H only (no key whose every use is a no-op); the gallery's map merges the day cards still in the gallery and offers
+//  all five. A choice is remembered per map (web: localStorage; app: AsyncStorage).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+export const ISM_RANGES = [
+  { id: '1h', label: '1 H', words: 'Heard in the last hour', sec: 3600 },
+  { id: '24h', label: '24 H', words: 'Heard in the last 24 hours', sec: 86400 },
+  { id: '7d', label: '7 DAYS', words: 'Heard in the last 7 days', sec: 7 * 86400 },
+  { id: '30d', label: '30 DAYS', words: 'Heard in the last 30 days', sec: 30 * 86400 },
+  { id: 'all', label: 'ALL', words: 'Everything still in the gallery', sec: Infinity },
+];
+export const ISM_LIVE_RANGES = ISM_RANGES.slice(0, 2);
+export const ISM_RANGE_HINT_LIVE = 'The receiver keeps 24 hours of nodes; the GALLERY keeps the days before.';
+export const ISM_RANGE_HINT_GAL = 'ALL is every day still in the gallery — the oldest go when it is full.';
+/** The rows heard within the range (`seen` = seconds since last heard). */
+export function ismInRange<T extends { seen: number }>(rows: T[], range: string): T[] {
+  const r = ISM_RANGES.find((x) => x.id === range);
+  return !r || !isFinite(r.sec) ? rows : rows.filter((d) => d.seen <= r.sec);
+}
+/** A remembered choice, or the default (24 h live, ALL in the gallery). */
+export function ismRangeOf(saved: string | null | undefined, live: boolean): string {
+  const ok = (live ? ISM_LIVE_RANGES : ISM_RANGES).some((r) => r.id === saved);
+  return ok ? (saved as string) : live ? '24h' : 'all';
+}
+/** ★ Several day cards → one node per network + id (or name): first heard the earliest, last heard the latest (its
+ *  position, name and radio side the latest), times heard summed, background / live merged. Bounded: 2000 nodes. */
+export function ismGalMerge(cards: IsmGalNode[][], nowSec: number): IsmGalNode[] {
+  const by = new Map<string, IsmGalNode>();
+  for (const c of cards) for (const n of c) {
+    const k = `${n.kind}|${n.node || n.name}`;
+    const had = by.get(k);
+    if (!had) { if (by.size < 2000) by.set(k, { ...n }); continue; }
+    const newer = n.last > had.last ? n : had;
+    by.set(k, { ...newer, first: Math.min(had.first, n.first), last: Math.max(had.last, n.last), count: had.count + n.count,
+                origin: had.origin === n.origin ? had.origin : 'both' });
+  }
+  // ★ a STABLE key (network + id): a card fetched again must not move a marker to another node
+  return [...by.entries()].map(([k, n]) => ({ ...n, key: `${n.kind === "meshcore" ? "c" : "t"}:${n.node || n.name}`.slice(0, 40), seen: Math.max(0, nowSec - n.last), age: Math.max(0, nowSec - n.first) }));
+}
+/** The band a "stations received" card is for ("ismnodes-868-2026-11-01" → "868"). */
+export function ismNodeCardBand(s: string | undefined): string {
+  const m = /^ismnodes-([^-]+)-\d{4}-\d\d-\d\d$/.exec(s || '');
+  return m ? m[1] : '';
 }

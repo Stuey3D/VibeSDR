@@ -240,6 +240,13 @@ tool now builds with it, and so does `test-bench-decoders` in `scripts/run-tests
   868 MHz · date: N nodes heard · R repeaters · furthest X km): every positioned node with first / last heard, times heard
   and background / live / both, rewritten at most once a minute, read back after a restart or a listener arriving over
   background decoding, 500 nodes at most. Its MAP (web and app gallery) draws it on the same map.
+- **Time filter** (Stuart: "filter the map based on last hour last day last week last month all time"): the live map
+  offers 1 H · 24 H (the receiver keeps 24 h — longer keys would be no-ops); the gallery's MAP merges every day card of
+  the band still in the gallery (≤ 31 fetched, one at a time; nodes merged by network + id) and offers 1 H · 24 H ·
+  7 DAYS · 30 DAYS · ALL ("ALL is every day still in the gallery"). Defaults 24 H / ALL, remembered. Storage: a node row
+  is ~150 bytes, so 1000 nodes ≈ 150 KB per day card (capped at 500 nodes ≈ 75 KB/day); RAM ~100 KB at the cap.
+- **Live:** the ISM report already streams every 1–5 s; a node new to an open map, or heard again (its count grew),
+  pulses (tracklayer `heard`). A gallery map open on today's card fetches it again each minute (its write cadence).
 - Copy: the About V12 note and the receiver tour's mode card mention the networks, MESSAGES and MAP.
 
 ---

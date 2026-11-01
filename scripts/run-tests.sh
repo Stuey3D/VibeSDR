@@ -1379,6 +1379,10 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   VIBE_LORA_CLIP="$OUT/lora-clip.u8" node scripts/test-web-lora.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 the ISM map (2026-11-01): icons by type, approximate people, position links, the time filter, a live push,
+  #    the gallery's "stations received" MAP — fake nodes added to the real reports in the page, a seeded gallery.
+  VIBE_LORA_CLIP="$OUT/lora-clip.u8" VIBE_LORA_NODES_BIN="$OUT/test-lora-nodes" node scripts/test-web-ism-map.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/lora-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-lora build'; notrun=$((notrun+1))

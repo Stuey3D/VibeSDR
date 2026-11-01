@@ -403,9 +403,9 @@ export function ismMapCard(d: IsmDevice, rx: { lat: number; lon: number } | null
 }
 export const ISM_MAP_EMPTY = 'Nothing heard with a position yet — mesh nodes send theirs every 15 min to an hour.';
 /** The pins: every row with a position. ★ `_lb` is plain text — the layer escapes it. */
-export function ismMapItems(r: IsmReport | null, rx: { lat: number; lon: number } | null): Array<{ key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string }> {
+export function ismMapItems(r: IsmReport | null, rx: { lat: number; lon: number } | null): Array<{ key: string; lat: number; lon: number; _ic: { html: string; w: number; h: number }; _lb: string; _cd: string; _h: number }> {
   if (!r) return [];
-  return r.devices.filter(ismOnMap).map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismMapCard(d, rx) }));
+  return r.devices.filter(ismOnMap).map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismMapCard(d, rx), _h: d.count }));
 }
 type MapRow = { key: string; colour: string; flag: string; name: string; second: string; sp: string; trend: -1 | 0 | 1; range: string; brg: string; noPos: boolean; age: string; em: boolean };
 /** The live list (TrackRow's shape): nearest first when the receiver's position is known, else newest first. */
@@ -498,7 +498,7 @@ export function ismGalCard(d: IsmGalNode, rx: { lat: number; lon: number } | nul
 }
 const ORIGIN_TAG: Record<string, string> = { background: 'BG', live: 'LIVE', both: 'BG + LIVE' };
 export function ismGalItems(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null) {
-  return nodes.map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismGalCard(d, rx) }));
+  return nodes.map((d) => ({ key: d.key, lat: d.lat as number, lon: d.lon as number, _ic: ismMapIcon(d), _lb: ismMapLabel(d), _cd: ismGalCard(d, rx), _h: d.count }));
 }
 export function ismGalRows(nodes: IsmGalNode[], rx: { lat: number; lon: number } | null): MapRow[] {
   const rows = nodes.map((d) => ({ d, k: rx ? rangeKm(rx, d.lat as number, d.lon as number) : null }));
@@ -519,4 +519,51 @@ export function ismGalStatus(nodes: IsmGalNode[], rx: { lat: number; lon: number
     far = ` · furthest ${who} ${best < 10 ? best.toFixed(1) : Math.round(best)} km`;
   }
   return `${nodes.length} ${nodes.length === 1 ? 'node' : 'nodes'} heard${rep ? ` · ${rep} ${rep === 1 ? 'repeater' : 'repeaters'}` : ''}${far}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//  ★★ V12 2026-11-01 THE TIME FILTER (Stuart: "filter the map based on last hour last day last week last month all
+//  time"). The live map holds what the receiver keeps — 24 h (vibe_lora_track.h kMeshKeepSec) — so it offers 1 H and
+//  24 H only (no key whose every use is a no-op); the gallery's map merges the day cards still in the gallery and offers
+//  all five. A choice is remembered per map (web: localStorage; app: AsyncStorage).
+// ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+export const ISM_RANGES = [
+  { id: '1h', label: '1 H', words: 'Heard in the last hour', sec: 3600 },
+  { id: '24h', label: '24 H', words: 'Heard in the last 24 hours', sec: 86400 },
+  { id: '7d', label: '7 DAYS', words: 'Heard in the last 7 days', sec: 7 * 86400 },
+  { id: '30d', label: '30 DAYS', words: 'Heard in the last 30 days', sec: 30 * 86400 },
+  { id: 'all', label: 'ALL', words: 'Everything still in the gallery', sec: Infinity },
+];
+export const ISM_LIVE_RANGES = ISM_RANGES.slice(0, 2);
+export const ISM_RANGE_HINT_LIVE = 'The receiver keeps 24 hours of nodes; the GALLERY keeps the days before.';
+export const ISM_RANGE_HINT_GAL = 'ALL is every day still in the gallery — the oldest go when it is full.';
+/** The rows heard within the range (`seen` = seconds since last heard). */
+export function ismInRange<T extends { seen: number }>(rows: T[], range: string): T[] {
+  const r = ISM_RANGES.find((x) => x.id === range);
+  return !r || !isFinite(r.sec) ? rows : rows.filter((d) => d.seen <= r.sec);
+}
+/** A remembered choice, or the default (24 h live, ALL in the gallery). */
+export function ismRangeOf(saved: string | null | undefined, live: boolean): string {
+  const ok = (live ? ISM_LIVE_RANGES : ISM_RANGES).some((r) => r.id === saved);
+  return ok ? (saved as string) : live ? '24h' : 'all';
+}
+/** ★ Several day cards → one node per network + id (or name): first heard the earliest, last heard the latest (its
+ *  position, name and radio side the latest), times heard summed, background / live merged. Bounded: 2000 nodes. */
+export function ismGalMerge(cards: IsmGalNode[][], nowSec: number): IsmGalNode[] {
+  const by = new Map<string, IsmGalNode>();
+  for (const c of cards) for (const n of c) {
+    const k = `${n.kind}|${n.node || n.name}`;
+    const had = by.get(k);
+    if (!had) { if (by.size < 2000) by.set(k, { ...n }); continue; }
+    const newer = n.last > had.last ? n : had;
+    by.set(k, { ...newer, first: Math.min(had.first, n.first), last: Math.max(had.last, n.last), count: had.count + n.count,
+                origin: had.origin === n.origin ? had.origin : 'both' });
+  }
+  // ★ a STABLE key (network + id): a card fetched again must not move a marker to another node
+  return [...by.entries()].map(([k, n]) => ({ ...n, key: `${n.kind === "meshcore" ? "c" : "t"}:${n.node || n.name}`.slice(0, 40), seen: Math.max(0, nowSec - n.last), age: Math.max(0, nowSec - n.first) }));
+}
+/** The band a "stations received" card is for ("ismnodes-868-2026-11-01" → "868"). */
+export function ismNodeCardBand(s: string | undefined): string {
+  const m = /^ismnodes-([^-]+)-\d{4}-\d\d-\d\d$/.exec(s || '');
+  return m ? m[1] : '';
 }

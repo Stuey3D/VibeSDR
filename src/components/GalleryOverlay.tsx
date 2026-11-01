@@ -28,7 +28,7 @@ import { galleryOriginTag, galleryOriginWords } from '../utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines, type GalleryTrLine } from '../utils/galleryTranslate';
 import { detectTextLanguage, langName, textTranslateInfo, translateText } from '../services/transcriber';
-import { ismIsNodeCard, ismNodesParse, type IsmGalNode } from '../services/ism';
+import { ismIsNodeCard, ismNodesParse, ismGalMerge, ismNodeCardBand, type IsmGalNode } from '../services/ism';
 
 export interface GalleryItem {
   f: string; k: string; o: string; t: number; hz: number; m: string; d: string; p: string; r: string;
@@ -71,7 +71,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   /** ★★ V12 2026-11-01 (Stuart: "being able to open up the map in the Gallery … we can see which stations we received"):
    *  a day's "stations received" card (slot "ismnodes-…", vibe_ism_gallery.h) has MAP — its nodes, handed to the screen's
    *  ISM map. Absent where there is no map (Apple TV): no key. */
-  onNodesMap?: ((title: string, nodes: IsmGalNode[], rx: { lat: number; lon: number } | null) => void) | null;
+  onNodesMap?: ((title: string, nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, refresh: (() => Promise<IsmGalNode[] | null>) | null) => void) | null;
 }) {
   const pt = usePopupTheme();
   const s = useMemo(() => makeStyles(pt), [pt]);
@@ -117,12 +117,35 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   useEffect(() => { if (!visible) { setOpen(null); setPage(1); } }, [visible]);
 
   const fileUrl = (it: GalleryItem) => withReadAuth(`${b}/vibeserver/gallery/file/${encodeURIComponent(it.f)}`, readAuth);
+  /* ★ MAP: every day card of the band still in the gallery (the web's ismGalMapOpen — at most 31, one fetch at a time),
+   *  merged; the screen's time filter picks. Today's card is offered for a refresh each minute (it is rewritten that often
+   *  while ISM runs). */
   const nodesMap = async (it: GalleryItem) => {
     try {
-      const r = await fetch(fileUrl(it), { cache: 'no-store' } as any);
-      if (!r.ok) { setNote('This item is no longer on the server (the gallery is full and keeps the newest).'); return; }
-      const { nodes, rx } = ismNodesParse(await r.text(), it.t, Math.floor(Date.now() / 1000));
-      onNodesMap?.(it.title, nodes, rx);
+      const band = ismNodeCardBand(it.s);
+      let cards: GalleryItem[] = [];
+      try {
+        const l = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?kind=ism&limit=1000`, readAuth), { cache: 'no-store' } as any);
+        const j = l.ok ? await l.json() as { items?: GalleryItem[] } : {};
+        cards = (j.items ?? []).filter((c) => ismIsNodeCard(c) && ismNodeCardBand(c.s) === band).sort((x, y) => y.t - x.t).slice(0, 31);
+      } catch { /* the one pressed, below */ }
+      if (!cards.some((c) => c.f === it.f)) cards.unshift(it);
+      const per = new Map<string, IsmGalNode[]>();
+      let rx: { lat: number; lon: number } | null = null;
+      const one = async (c: GalleryItem) => {
+        const r = await fetch(fileUrl(c), { cache: 'no-store' } as any);
+        if (!r.ok) return false;
+        const p = ismNodesParse(await r.text(), c.t, Math.floor(Date.now() / 1000));
+        per.set(c.f, p.nodes); rx = rx ?? p.rx;
+        return true;
+      };
+      for (const c of cards) await one(c).catch(() => false);
+      if (!per.size) { setNote('This item is no longer on the server (the gallery is full and keeps the newest).'); return; }
+      const merged = () => ismGalMerge([...per.values()], Math.floor(Date.now() / 1000));
+      const today = cards.find((c) => Math.floor(c.t / 86400) === Math.floor(Date.now() / 86400000));
+      const days = new Set(cards.map((c) => Math.floor(c.t / 86400))).size;
+      onNodesMap?.(`LoRa nodes heard · ${band} MHz · ${days} ${days === 1 ? 'day' : 'days'} in the gallery`, merged(), rx,
+                   today ? async () => ((await one(today).catch(() => false)) ? merged() : null) : null);
     } catch { setNote('Could not reach the server.'); }
   };
   const isImage = (it: GalleryItem) => /\.png$/i.test(it.f);

@@ -152,7 +152,9 @@ interface MapOverlayProps {
           /** One item's track for its card: [lat, lon] oldest first ([] = none). */
           trail: (key: string) => Promise<[number, number][]>;
           /** Find this item when the map opens (a row tapped in the APRS box); '' = none. */
-          focus?: string } | null;
+          focus?: string;
+          /** ★ V12 the time filter (TrackLiveList's keys): the ranges offered, the one chosen, and the screen's handler. */
+          ranges?: Array<{ id: string; label: string; words: string }>; range?: string; onRange?: (id: string) => void; rangeHint?: string } | null;
   /** ★ The screen's safe-area insets, MEASURED BY THE PARENT — the hook reads 0 inside a Modal (BrowserOverlay). */
   safeInsets?: { top: number; bottom: number; left: number; right: number };
   /** ★ V12 drawn over the map, last (on top): the second server's card (Stuart, 2026-10-30: "the 2nd server chip control
@@ -1518,6 +1520,8 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'){
         icon:function(it){return it&&it._ic?it._ic:{html:'',w:20,h:20};},
         label:function(it){return it&&it._lb?String(it._lb):'';},
         card:function(it){return it&&it._cd?String(it._cd):'';},
+        heard:function(it){return it&&it._h?Number(it._h)||0:0;},
+        labelZoom:KIND==='ism'?6:undefined,focusZoom:KIND==='ism'?11:undefined,
         trail:function(key,done){
           trkWait[key]=done;trkPost({t:'trkTrail',key:String(key)});
           setTimeout(function(){if(trkWait[key]===done){delete trkWait[key];done([]);}},8000);
@@ -1535,6 +1539,7 @@ if(KIND==='ais'||KIND==='aprs'||KIND==='dsc'||KIND==='ism'){
       if(trkWantFocus){var k=trkWantFocus;trkWantFocus=null;setTimeout(function(){try{l.focus(k);}catch(e){}},80);}
     }catch(e){console.error('tracks: bad report',e);}
   };
+  window.__trkFit=function(){try{var l=trkMake();if(l)l.fit();}catch(e){console.error('tracks fit',e);}};
   window.__trkTrail=function(key,pts){var d=trkWait[key];if(!d)return;delete trkWait[key];d(Array.isArray(pts)?pts:[]);};
   /* ★ A row chosen (the live list, or the APRS box before the map was up): before the first items, when they come. */
   window.__trkFocus=function(k){try{var l=trkMake();if(!l||!l.focus(String(k)))trkWantFocus=String(k);}catch(e){console.error('tracks focus',e);}};
@@ -2298,6 +2303,8 @@ export default function MapOverlay(
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
           <TrackLiveList title={kind === 'ais' ? 'SHIPS' : kind === 'dsc' ? 'CALLS' : kind === 'ism' ? 'NODES' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
+                         ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
+                         onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
                          safety={trk.safety} onFocus={trkFocus} selected={trkSel} onFootprint={trkFootprint}
                          ink={ink} areaW={winW} areaH={winH}
                          insets={safeInsets ?? { top: 0, bottom: 0, left: 0, right: 0 }} />
