@@ -46,7 +46,7 @@ static constexpr uint8_t kUw[16] = { 0b000, 0b010, 0b011, 0b110, 0b000, 0b001, 0
 inline int grayOf(int k) { return k ^ (k >> 1); }
 inline int stepOf(int g) { int k = g; for (int s = g >> 1; s; s >>= 1) k ^= s; return k & 7; }
 
-struct Tuning { bool rrc = false; bool erasures = true; bool gardner = true; bool coherent = true; float pllA = 0.15f, pllB = 0.004f; float syncQ = 0.75f; float freqGain = 0.03f; float tGain = 0.01f; };
+struct Tuning { float rxBw = 5000.f, rxTr = 4000.f; int rxKind = 0; bool rrc = false; bool erasures = true; bool gardner = true; bool coherent = true; float pllA = 0.15f, pllB = 0.004f; float syncQ = 0.75f; float freqGain = 0.03f; float tGain = 0.01f; };
 inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("VDL2_DEBUG") != nullptr; return d; }
 
@@ -133,9 +133,22 @@ public:
             else v = (std::sin(M_PI * t * (1 - a)) + 4 * a * t * std::cos(M_PI * t * (1 + a))) / (M_PI * t * (1 - (4 * a * t) * (4 * a * t)));
             h.push_back(float(v));
         }
-        if (!tuning().rrc) { h.assign(1, 1.0f); }
-        float s = 0; for (float v : h) s += v * v;
-        for (float& v : h) v /= std::sqrt(s);
+        /* ★★ MEASURED: THE TRANSMIT PULSE IS A FULL RAISED COSINE, so a root-raised-cosine here leaves ISI (±0.5-step
+         *  residuals on a 33 dB burst, its FCS failed). Without a filter the channeliser's slice passes 3.6× the symbol
+         *  rate of noise (5.5 dB more than needed); the RC itself (the textbook matched filter) is worse still (RC·RC is not
+         *  Nyquist). A plain low-pass between the two wins — flat to 5 kHz, shut by 9 kHz (−6 dB at 7 kHz), swept on both
+         *  recordings: no filter 301 / 126 frames, 9/3 kHz 311 / 132, 7/4 347 / 142, 6/4 363 / 153, 5/4 381 / 159,
+         *  4.5/4 362 / 151 (Pi 500 / Pi 2). */
+        if (tuning().rxKind == 1) {   // the transmit pulse itself (raised cosine, α 0.6): the matched filter, with ISI
+            h.clear();
+            for (int i = -4 * kSps; i <= 4 * kSps; ++i) {
+                const double t = double(i) / kSps, x = 4 * a * a * t * t;
+                const double sc = i == 0 ? 1 : std::sin(M_PI * t) / (M_PI * t);
+                h.push_back(float(std::fabs(1 - x) < 1e-6 ? M_PI / 4 * std::sin(M_PI / (2 * a)) / (M_PI / (2 * a)) : sc * std::cos(M_PI * a * t) / (1 - x)));
+            }
+            float s = 0; for (float v : h) s += v; for (float& v : h) v /= s;
+        } else if (!tuning().rrc) h = vibedsp::designLowpass(double(tuning().rxBw + 0.5f * tuning().rxTr) / kWorkRate, double(tuning().rxTr) / kWorkRate, true);
+        else { float s = 0; for (float v : h) s += v * v; for (float& v : h) v /= std::sqrt(s); }
         mf_.reset(new vibedsp::FirDecimator(h, 1));
         // the unique word's expected step between symbols i−1 and i (i = 0: from the ramp-up's 000)
         for (int i = 0; i < 16; ++i) {
