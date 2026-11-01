@@ -937,6 +937,28 @@ async function resolveMovingLocation(): Promise<MovingLocation | null> {
   }
 }
 
+/**
+ * ★★★ "USE THIS PHONE'S LOCATION" FOR THE HOME LOCATION (Stuart, 2026-11-01: "we have the option to update
+ *     it as we move about but no use device location for initial location"). A one-shot look-up behind the
+ *     Home button: the phone's coarse fix → the SAME town rule as a moving server (placeFrom, else
+ *     regionFrom), and the PLACE's own centre is what gets stored — never the fix. The owner sees the name in
+ *     the box before anything is published. Does not touch lastMoving (that is the moving server's state).
+ *  Returns null with a reason the screen can show.
+ */
+export async function homeFromDevice(): Promise<
+    { ok: true; loc: ServerLocation; region: boolean } | { ok: false; why: 'nofix' | 'lookup' }> {
+  const fix = await getUserLocation();
+  if (!fix) return { ok: false, why: 'nofix' };
+  try {
+    const p = placeFrom(await nominatimReverse(fix, 13, true))
+           ?? regionFrom(await nominatimReverse(fix, 8, false));
+    if (!p) return { ok: false, why: 'lookup' };
+    return { ok: true, loc: { lat: p.lat, lon: p.lon, label: p.label }, region: p.region };
+  } catch {
+    return { ok: false, why: 'lookup' };
+  }
+}
+
 export async function getResolvedServerLocation():
     Promise<{ lat: number; lon: number; grid: string; label?: string; country?: string } | null> {
   try {

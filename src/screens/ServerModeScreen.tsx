@@ -108,7 +108,7 @@ import {
   setServerLocationMode, getManualServerLocation, LOC_KEY, LOCMODE_KEY,
   LOC_MOVING_KEY, setServerLocationMoving, migrateDeviceMode, watchLocationWhileServing,
   getResolvedServerLocation,
-  setManualServerLocation, resolveLocation, publishLocation,
+  setManualServerLocation, resolveLocation, publishLocation, homeFromDevice,
   getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive, rateGuardState, rateGuardClear,
   type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
@@ -1013,6 +1013,33 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [locCity, setLocCity]     = useState('');
   /** ★★ "Update this server's location as I move about" — vibeServer.ts resolveMovingLocation. Default OFF. */
   const [locMoving, setLocMoving] = useState(false);
+  /** ★ "Use this phone's location" for HOME — busy while the one-shot look-up runs; a line saying what it found. */
+  const [homeFinding, setHomeFinding] = useState(false);
+  const [homeNote, setHomeNote] = useState<string | null>(null);
+  const pickHomeFromPhone = useCallback(async () => {
+    if (homeFinding) return;
+    setHomeFinding(true);
+    setHomeNote('Finding the nearest town\u2026');
+    try {
+      const r = await homeFromDevice();
+      if (!r.ok) {
+        setHomeNote(r.why === 'nofix'
+          ? 'This phone could not give a location \u2014 allow location for VibeSDR, or type a town or grid locator instead.'
+          : 'The nearest town could not be looked up (it needs an internet connection) \u2014 type a town or grid locator instead.');
+        return;
+      }
+      // ★★ The PLACE's centre is stored — the same town rule as a moving server — and the box shows its
+      //    name, so Start sees known.label === city and does not geocode it again.
+      await setManualServerLocation(r.loc);
+      setLocCity(r.loc.label ?? '');
+      setLocMode('manual');
+      setHomeNote(r.region
+        ? `No large town nearby, so home is the general region: ${r.loc.label}. Your exact position is not stored or published.`
+        : `Home set to ${r.loc.label}, the nearest large town. Your exact position is not stored or published.`);
+    } finally {
+      setHomeFinding(false);
+    }
+  }, [homeFinding]);
 
   /** ★ Did the saved settings actually load? False after a storage failure — the controls below are then
    *  DEFAULTS, not the owner's choices, and must not be written back over what is still on disk. */
@@ -2716,9 +2743,19 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               {(['off', 'manual'] as LocationMode[]).map(m => (
                 <Pill key={m} C={C} F={F} active={locMode === m}
                   label={m === 'off' ? 'Not set' : 'Enter city'}
-                  onPress={() => setLocMode(m)} />
+                  onPress={() => { setLocMode(m); setHomeNote(null); }} />
               ))}
             </View>
+            <View style={styles.pillRow}>
+              {/* ★★★ HOME FROM THE PHONE, one shot (Stuart, 2026-11-01). Not a mode — it fills "Enter city"
+                  with the nearest large town, which the owner can see and change. */}
+              <Pill C={C} F={F} active={false}
+                label={homeFinding ? 'Finding\u2026' : 'Use this phone\u2019s location'}
+                onPress={() => { void pickHomeFromPhone(); }} />
+            </View>
+            {homeNote ? (
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 4 }]}>{homeNote}</Text>
+            ) : null}
             {locMode === 'manual' && (
               <TextInput value={locCity} onChangeText={setLocCity}
                 placeholder="Town, or grid locator (Northampton / IO92nh)" placeholderTextColor={C.placeholderDim}

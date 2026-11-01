@@ -138,7 +138,7 @@ export async function getUserLocation(): Promise<{ lat: number; lon: number } | 
           // ★ Also the MOVING VibeServer's source (vibeServer.ts resolveMovingLocation), so the reason says so.
           title: 'Approximate location',
           message: 'VibeSDR uses your approximate location to sort the server list by distance and to align the map for local SDR decodes; that stays on this device. '
-            + "If you serve with \u201cUpdate this server's location as I move about\u201d turned on, it is also used to find the nearest large village, town or city, and only that place is published \u2014 never where you actually are.",
+            + "If you serve with \u201cUpdate this server's location as I move about\u201d turned on, or press \u201cUse this phone\u2019s location\u201d for the server's home, it is also used to find the nearest large village, town or city, and only that place is published \u2014 never where you actually are.",
           buttonPositive: 'OK',
         },
       );
