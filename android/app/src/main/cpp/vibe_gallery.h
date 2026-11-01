@@ -922,6 +922,8 @@ struct NavtexMsg {
     int gaps = 0; int64_t gapMs = 0;   // ★ fades survived (navtex.ts navtexGapMarker) — shown in the text and the title
     /** ★ V12 beta 4: "B · Oostende, Belgium 🇧🇪" when the station could be named (navtex::label), else empty → "Station B". */
     std::string station;
+    /** ★ 2026-11-01: why that station — plain English, this message's evidence (navtex::Resolution::why), in the file. */
+    std::vector<std::string> why;
 };
 
 class NavtexAsm {
@@ -999,8 +1001,9 @@ public:
     }
     /** "Station G · Met warning · #98 · 2 repaired" — navtexTitle(); "B · Oostende, Belgium 🇧🇪 · …" once m.station is set. */
     static std::string title(const NavtexMsg& m) {
-        if (m.startLost) return "Start lost";
         const std::string mid = "\xc2\xb7";
+        // ★ 2026-11-01: a start-lost message its own text names (navtex::startLostLabel) — "Start lost · N · Suspected Piombino…"
+        if (m.startLost) return m.station.empty() ? std::string("Start lost") : "Start lost " + mid + " " + m.station;
         std::string t = !m.station.empty() ? m.station
                       : std::string("Station ") + (m.id.size() == 4 && m.id[0] >= 'A' && m.id[0] <= 'Z' ? std::string(1, m.id[0]) : "?");
         t += " " + mid + " " + subject(m.id.size() == 4 ? m.id[1] : '?');
@@ -1019,6 +1022,7 @@ public:
         std::string head = "NAVTEX \xc2\xb7 " + title(m) + "\nReceived " + utcStamp(m.startedAt, "%Y-%m-%d %H:%M UTC");
         if (!m.haveFec && m.chars > 0) head += " \xc2\xb7 " + std::to_string((int)std::lround(100.0 * m.lost / m.chars)) + "% of characters lost";
         if (!where.empty()) head += "\n" + where;
+        if (!m.why.empty()) { head += "\nWhy: "; for (size_t i = 0; i < m.why.size(); i++) head += (i ? "; " : "") + m.why[i]; }
         std::string body = m.startLost ? "[start lost]" : "ZCZC " + (m.id.empty() ? std::string("????") : m.id);
         if (!m.text.empty()) body += "\n" + m.text;
         body += m.endLost ? "\n[end lost]" : "\nNNNN";

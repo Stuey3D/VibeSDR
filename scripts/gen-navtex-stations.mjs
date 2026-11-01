@@ -192,6 +192,648 @@ const LANG_COUNTRY = { it: ['IT', 'Italy'], de: ['DE', 'Germany'], sv: ['SE', 'S
 // ★ "<NAME> RADIO" lines that are not a station's name.
 const GENERIC = ['COAST', 'COASTAL', 'COAST GUARD', 'MARITIME', 'NAVTEX', 'THIS IS', 'PORT', 'MRCC', 'MRSC', 'CROSS', 'THE', 'NAVAREA'];
 
+// ★★★ 2026-11-01 — ADDITIVE CLUES (the rule above is PROVEN and stays as it is; these only tighten its weak spots):
+//   SELF-ID, FUZZY, KNOWN NAMES ONLY. "<NAME> RADIO" (RADIO itself one letter off: "MTNDOOFO AADIO"), "STATHMOS <NAME>"
+//     (Greek: "STATHMOS IRAKLEIOY"), "NAVTEX<NAME>" ("NAVTEXJAHAMBURG (NCC)") is matched against the TABLE's names only,
+//     within an edit distance scaled to the name's length: ⌊len/4⌋ on its own ("MTNDOOFO" → MONDOLFO, 2), ⌊len×0.4⌋ only
+//     when the content backs the station's country — its issuer series or its language ("CONDOGNO" → MONDOLFO, 3, with
+//     COSTAVURNAV and Italian). The best name must be strictly closer than any other. A name that matches nothing is
+//     IGNORED — the title never shows a station the table does not have ("Condogno Radio, Italy?" was one).
+//   ISSUER SERIES — a CHOICE among the label's own candidates, never a name in its own right (stations relay each other's:
+//     Oostende sends WZ, Niton AVURNAV). Matched at a word start, one letter wrong in a phrase of 10+ letters. `strong` =
+//     a warning SERVICE (may correct a header letter, below); a sea area or forecast heading only chooses.
+//   GARBLED POSITIONS CARRY NO WEIGHT — a position further than a NAVTEX service area (serviceMf / serviceHf km) from every
+//     transmitter using the letter on the band is damage ("02-44.67N" for 62-44.67N), dropped before the score sees it.
+//   DISTANCE SANITY — a candidate past farKm on MF is named only on its name in the text or positions that fit it.
+//   A CORRUPTED HEADER LETTER — when the self-ID or a strong series points to ONE station whose transmitter on this band
+//     uses another letter, and the message started OUTSIDE the header letter's slots (each letter: 10 minutes every 4
+//     hours, A at 00:00, B at 00:10 … X at 03:50) but INSIDE that transmitter's: "Suspected <station>", on its letter.
+//     A two-letter header ("ZCZC VL") whose 2nd letter is that station's is said too (the letters shifted).
+//   CONFIDENCE — confident (the plain name), likely ("Suspected <name>"), ambiguous ("<a> or <b>?"); the WHY is plain
+//     English, per message (a language line only when THIS message is in that language), never a score.
+const SERIES = [
+  // [phrase, iso, station name ('' = any in that country), strong, what the why line calls it]
+  ['COSTAVURNAV', 'IT', '', true, 'Italian warning series COSTAVURNAV'],
+  ['AVURNAV BREST', 'FR', 'Corsen', true, 'French warning series AVURNAV BREST'],
+  ['AVURNAV CHERBOURG', 'FR', '', true, 'French warning series AVURNAV CHERBOURG'],
+  ['ESTONIAN NAV', 'EE', 'Tallinn', true, 'Estonian navigational warning series'],
+  ['SWEDISH NAV', 'SE', '', true, 'Swedish navigational warning series'],
+  ['NORWEGIAN NAV', 'NO', '', true, 'Norwegian navigational warning series'],
+  ['DANISH NAV', 'DK', '', true, 'Danish navigational warning series'],
+  ['NCC HAMBURG', 'DE', '', true, 'German warning service NCC Hamburg'],
+  ['HAMBURG NCC', 'DE', '', true, 'German warning service NCC Hamburg'],
+  ['DEUTSCHE BUCHT', 'DE', '', false, 'German sea area Deutsche Bucht'],
+  ['GERMAN BIGHT', 'DE', '', false, 'German sea area German Bight'],
+  ['WESTLICHE OSTSEE', 'DE', '', false, 'German sea area Westliche Ostsee'],
+  ['SEEWETTERVORHERSAGE', 'DE', '', false, 'German sea forecast (Seewetterbericht)'],
+];
+const LANG_NAME = { en: 'English', nl: 'Dutch', de: 'German', fr: 'French', es: 'Spanish', pt: 'Portuguese', it: 'Italian',
+                    no: 'Norwegian', da: 'Danish', sv: 'Swedish', pl: 'Polish' };
+const W2 = { serviceMf: 3000, serviceHf: 5000, farKm: 8000, slotEarly: 120, slotLate: 720, nearEarly: 300, nearLate: 1500 };
+
+const TS_EXTRA = String.raw`
+// ── ★★★ 2026-11-01: THE ADDITIVE CLUES (the generator's header explains each) — baseResolve above is the proven rule ──
+type SeriesRow = readonly [string, string, string, boolean, string];
+const SERIES: readonly SeriesRow[] = @@SERIES@@;
+const LANG_NAME: Record<string, string> = @@LANG_NAME@@;
+const W2 = @@W2@@ as const;
+
+/** Levenshtein distance. ★ The server's lev() is this. */
+function lev(a: string, b: string): number {
+  let prev: number[] = [];
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    const cur: number[] = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1), prev[j] + 1, cur[j - 1] + 1);
+    prev = cur;
+  }
+  return prev[b.length];
+}
+/** The fewest edits that make 'w' out of some stretch of 'hay' — starting anywhere, or (wordStart) only at a word's start. */
+function levSub(hay: string, w: string, wordStart: boolean): number {
+  const BIG = 1000000;
+  let prev: number[] = [];
+  for (let j = 0; j <= hay.length; j++) prev[j] = !wordStart || j === 0 || hay[j - 1] === ' ' ? 0 : BIG;
+  for (let i = 1; i <= w.length; i++) {
+    const cur: number[] = [prev[0] + 1];
+    for (let j = 1; j <= hay.length; j++) cur[j] = Math.min(prev[j - 1] + (w[i - 1] === hay[j - 1] ? 0 : 1), prev[j] + 1, cur[j - 1] + 1);
+    prev = cur;
+  }
+  let best = BIG;
+  for (let j = 0; j <= hay.length; j++) best = Math.min(best, prev[j]);
+  return best;
+}
+function median(xs: number[]): number {
+  const ds = [...xs].sort((x, y) => x - y);
+  return ds.length % 2 ? ds[(ds.length - 1) / 2] : (ds[ds.length / 2 - 1] + ds[ds.length / 2]) / 2;
+}
+
+/** ★ GARBLED POSITIONS CARRY NO WEIGHT: a position further than a service area from every transmitter using the letter
+ *  on the band is damage ("02-44.67N" for 62-44.67N) — dropped, never counted against anyone. */
+function sanePositions(pos: Array<[number, number]>, b1: string, band: number, sid: NavtexSelfId | null): Array<[number, number]> {
+  const lim = band > 1000 ? W2.serviceHf : W2.serviceMf;
+  // ★ …or from the station the message names itself: its own positions are not damage
+  const tx = NAVTEX_STATIONS.filter((s) => (s.b1 === b1 && s.khz === band) || (sid !== null && letters(s.name) === sid.L));
+  return pos.filter(([pa, po]) => tx.some((s) => km(s.lat, s.lon, pa, po) <= lim));
+}
+
+/** The issuer series and sea areas the text carries (SERIES order; one wrong letter in a 10+ letter phrase), and the UK's
+ *  "WZ 649/26" at a line's start. */
+export function navtexSeries(text: string): SeriesRow[] {
+  const U = text.toUpperCase();
+  const hay = U.replace(/[^A-Z]+/g, ' ');
+  const out: SeriesRow[] = [];
+  for (const sr of SERIES) if (levSub(hay, sr[0], true) <= (letters(sr[0]).length >= 10 ? 1 : 0)) out.push(sr);
+  for (const l of U.split('\n')) if (/^\s*WZ [0-9]/.test(l)) { out.push(['WZ', 'GB', '', false, 'UK warning series WZ']); break; }
+  return out;
+}
+
+/** The station a message names ITSELF, matched to a name the TABLE has (fuzzy), or null. */
+export interface NavtexSelfId { L: string; row: NavtexStation; raw: string; exact: boolean; d: number; close: boolean }
+let NAMES: Array<[string, NavtexStation]> | null = null;
+function tableNames(): Array<[string, NavtexStation]> {
+  if (!NAMES) {
+    const seen = new Map<string, NavtexStation>();
+    for (const s of NAVTEX_STATIONS) { const L = letters(s.name); if (L.length >= 4 && !seen.has(L)) seen.set(L, s); }
+    NAMES = [...seen];
+  }
+  return NAMES;
+}
+/** The self-ID lines in the first lines: [the name's letters, the line, match inside it]. */
+function selfIdTokens(text: string): Array<[string, string, boolean]> {
+  const lines = text.toUpperCase().split('\n').map((l) => l.replace(/[\r\t]/g, ' ').trim()).filter((l) => l.length > 0);
+  const from = lines.length && lines[0].startsWith('ZCZC') ? 1 : 0;
+  const out: Array<[string, string, boolean]> = [];
+  for (let i = from; i < lines.length && i < from + NAVTEX_WEIGHTS.nameLines; i++) {
+    let l = lines[i];
+    while (l.length && '.,:;'.includes(l[l.length - 1])) l = l.slice(0, -1);
+    if (l.length > 40) continue;
+    const ws = l.split(' ').filter((w) => w.length > 0);
+    const last = ws.length ? ws[ws.length - 1] : '';
+    let name = '';
+    if (l.endsWith('RADIO')) name = l.slice(0, l.length - 5);
+    else if (l.endsWith('NAVTEX')) name = l.slice(0, l.length - 6);
+    else if (ws.length >= 2 && last.length === 5 && lev(last, 'RADIO') <= 1) name = ws.slice(0, -1).join(' ');
+    if (name) {
+      const n = name.split(' ').filter((w) => w.length > 0).join(' ').replace(/^[^A-Z]+/, '');
+      if (!GENERIC.includes(n) && letters(n).length >= 4) out.push([letters(n), lines[i], false]);
+    }
+    if (ws.length >= 2 && lev(letters(ws[0]), 'STATHMOS') <= 1 && letters(ws[1]).length >= 4) out.push([letters(ws[1]), ws[0] + ' ' + ws[1], false]);
+    const k = l.indexOf('NAVTEX');
+    if (k >= 0) { const m = /^[A-Z]+/.exec(l.slice(k + 6)); if (m && m[0].length >= 4) out.push([m[0], lines[i], true]); }
+  }
+  return out;
+}
+export function navtexSelfId(text: string, langs: string[] = navtexLanguages(text), ser: SeriesRow[] = navtexSeries(text)): NavtexSelfId | null {
+  for (const [tok, raw, sub] of selfIdTokens(text)) {
+    let best = 1000000, second = 1000000, bestL = '', row: NavtexStation | null = null;
+    for (const [L, s] of tableNames()) {
+      const d = sub ? levSub(tok, L, false) : lev(tok, L);
+      if (d < best) { second = best; best = d; bestL = L; row = s; } else if (d < second) second = d;
+    }
+    if (!row || second <= best) continue;
+    const close = bestL.length >= 5 ? Math.floor(bestL.length / 4) : 0;
+    const loose = bestL.length >= 6 ? Math.floor(bestL.length * 0.4) : close;
+    const iso = row.iso;
+    const backed = ser.some((h) => h[1] === iso) || (langs.length > 0 && (LANGS[iso] ?? []).some((l) => langs.includes(l)));
+    if (best <= close || (best <= loose && backed)) return { L: bestL, row, raw, exact: best === 0, d: best, close: best <= close };
+  }
+  return null;
+}
+
+/** Inside letter b1's 10-minute slots (every 4 hours from A 00:00), 'early' s before to 'late' s after the slot's start. */
+function slotIn(b1: string, utc: number, early: number, late: number): boolean {
+  if (!(b1 >= 'A' && b1 <= 'X') || !Number.isFinite(utc)) return false;
+  const start = (b1.charCodeAt(0) - 65) * 600;
+  const d = ((((Math.floor(utc) % 14400) - start) % 14400) + 14400) % 14400;
+  return d <= late || d >= 14400 - early;
+}
+function langLine(iso: string, langs: string[]): string[] {
+  const l = (LANGS[iso] ?? []).find((x) => langs.includes(x));
+  return l ? ['Written in ' + LANG_NAME[l]] : [];
+}
+function cleanRaw(s: string): string { return s.replace(/\s+/g, ' ').trim(); }
+
+interface Clues { band: number; langs: string[]; ser: SeriesRow[]; sid: NavtexSelfId | null; pos: Array<[number, number]>; t: string }
+function clues(b1: string, band: number, text: string): Clues {
+  const langs = navtexLanguages(text);
+  const ser = navtexSeries(text);
+  const sid = navtexSelfId(text, langs, ser);
+  return { band, langs, ser, sid, pos: sanePositions(navtexPositions(text), b1, band, sid), t: letters(text) };
+}
+/** The plain-English evidence for station s from THIS message. */
+function whyFor(s: NavtexStation, c: Clues): string[] {
+  const w: string[] = [];
+  if (c.sid && c.sid.L === letters(s.name)) w.push(c.sid.exact ? 'Identifies itself: “' + cleanRaw(c.sid.raw) + '”'
+                                                               : 'Identifies itself as ' + s.name + ' (“' + cleanRaw(c.sid.raw) + '”)');
+  else if (letters(s.name).length >= 5 && c.t.includes(letters(s.name))) w.push('Names ' + s.name + ' in the text');
+  const sh = c.ser.find((h) => h[1] === s.iso && (!h[2] || h[2] === s.name));
+  if (sh) w.push(sh[4]);
+  if (c.pos.length && median(c.pos.map(([pa, po]) => km(s.lat, s.lon, pa, po))) <= NAVTEX_WEIGHTS.posFitKm) w.push('Positions in the text lie near ' + s.name);
+  w.push(...langLine(s.iso, c.langs));
+  return w;
+}
+/** ★ A CORRUPTED HEADER LETTER: the self-ID or a strong series points to ONE station whose transmitter on this band uses
+ *  another letter, and the message started outside b1's slots but inside that transmitter's. */
+function headerFix(b1: string, utc: number, hdr: string, c: Clues): { row: NavtexStation; why: string[] } | null {
+  if (!Number.isFinite(utc) || slotIn(b1, utc, W2.nearEarly, W2.nearLate)) return null;
+  const cands = NAVTEX_STATIONS.filter((s) => s.b1 === b1 && s.khz === c.band);
+  let rows: NavtexStation[] = [], because = '';
+  if (c.sid) {
+    const L = c.sid.L;
+    if (cands.some((x) => letters(x.name) === L)) return null;
+    rows = NAVTEX_STATIONS.filter((s) => s.khz === c.band && letters(s.name) === L);
+    because = c.sid.row.name + ' identifies itself';
+  } else {
+    const h = c.ser.find((x) => x[3] && !cands.some((y) => y.iso === x[1]));
+    if (!h) return null;
+    rows = NAVTEX_STATIONS.filter((s) => s.khz === c.band && s.iso === h[1] && (!h[2] || h[2] === s.name));
+    because = 'the ' + h[4] + ' points to ' + (rows.length ? rows[0].country : 'another country');
+  }
+  rows = rows.filter((s) => s.b1 !== b1 && slotIn(s.b1, utc, W2.slotEarly, W2.slotLate));
+  if (rows.length !== 1) return null;
+  const row = rows[0];
+  const why = ['Header letter looks corrupted: started outside ' + b1 + '’s slots; ' + because];
+  if (hdr.length >= 2 && hdr[1] === row.b1) why.push('The header’s letters look shifted: “' + hdr.slice(0, 2) + '” — ' + row.b1 + ' is ' + row.name + '’s letter');
+  return { row, why: why.concat(whyFor(row, c).filter((w) => !why.some((x) => x.includes(w)))) };
+}
+function one(row: NavtexStation, lat: number, lon: number, conf: 'confident' | 'likely', why: string[]): NavtexResolution {
+  const here = Number.isFinite(lat) && Number.isFinite(lon);
+  const d = here ? km(lat, lon, row.lat, row.lon) : NaN;
+  return { stations: [row], km: [d], dx: here && d > (row.khz > 1000 ? NAVTEX_WEIGHTS.reachHf : NAVTEX_WEIGHTS.reachMf), conf, why };
+}
+
+/** Which station sent letter 'b1', heard on 'dialHz' at a server at 'lat'/'lon' (NaN = unknown), judged from the message
+ *  'text', started at 'utc' (UTC seconds; NaN = unknown) with header 'hdr' ("JA12", or the two letters left of "ZCZC VL").
+ *  null = the letter only. */
+export function navtexResolve(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = '', utc = NaN, hdr = ''): NavtexResolution | null {
+  const band = navtexBandKhz(dialHz);
+  if (!b1 || !/^[A-Z]$/.test(b1) || band == null) return null;
+  const c = clues(b1, band, text);
+  const base = baseResolve(b1, dialHz, lat, lon, text, c.sid);
+  const here = Number.isFinite(lat) && Number.isFinite(lon);
+  // 1. one station, as the proven rule names it — unless it is past farKm on MF without its name or positions
+  if (base && base.stations.length === 1) {
+    const s = base.stations[0];
+    const far = here && band < 1000 && base.km[0] > W2.farKm;
+    if (!far || base.named || base.posWin) {
+      const w = whyFor(s, c);
+      if (base.priorOnly || !w.length) w.push('Nearest station using ' + s.b1 + ' on ' + band + ' kHz' + (here ? ' (' + kmText(base.km[0]) + ' km)' : ''));
+      // ★ a loose self-ID (content-backed) that DECIDED it is likely; one the rule reaches without it stays confident
+      let conf: 'confident' | 'likely' = 'confident';
+      if (base.fuzzy && c.sid && !c.sid.close) {
+        const b0 = baseResolve(b1, dialHz, lat, lon, text, null);
+        if (!(b0 && b0.stations.length === 1 && b0.stations[0] === s)) conf = 'likely';
+      }
+      return { stations: base.stations, km: base.km, dx: base.dx, conf, why: w };
+    }
+  }
+  // 2. a corrupted header letter
+  const fix = headerFix(b1, utc, hdr, c);
+  if (fix) return one(fix.row, lat, lon, 'likely', fix.why);
+  // 3. a known station names itself and is none of the candidates
+  if (base && base.text && c.sid) {
+    return { stations: [], km: [], dx: false, text: base.text, conf: 'likely',
+             why: whyFor(c.sid.row, c).concat([c.sid.row.name + ' is not listed on ' + b1 + ' at ' + band + ' kHz']) };
+  }
+  // 4. undecided: the issuer series, a choice among the candidates
+  const cands = NAVTEX_STATIONS.filter((s) => s.b1 === b1 && s.khz === band);
+  for (const h of c.ser) {
+    const hit = cands.filter((s) => s.iso === h[1] && (!h[2] || h[2] === s.name));
+    if (hit.length === 1) return one(hit[0], lat, lon, 'likely', whyFor(hit[0], c));
+  }
+  // 5. too close to call
+  if (base && base.stations.length === 2) {
+    const [a, b] = base.stations;
+    return { stations: base.stations, km: base.km, dx: false, conf: 'ambiguous',
+             why: ['Two stations use ' + b1 + ' on ' + band + ' kHz: ' + a.name + (here ? ' (' + kmText(base.km[0]) + ' km)' : '') + ' and ' + b.name + (here ? ' (' + kmText(base.km[1]) + ' km)' : '')] };
+  }
+  return null;
+}
+
+/** ★ Diagnostic for the Lenovo replay: the station a corrupted-header reading WOULD give, whatever the rule decided. */
+export function navtexHeaderFixProbe(b1: string, dialHz: number, text: string, utc: number, hdr = ''): string | null {
+  const band = navtexBandKhz(dialHz);
+  if (band == null || !/^[A-Z]$/.test(b1)) return null;
+  const f = headerFix(b1, utc, hdr, clues(b1, band, text));
+  return f ? f.row.name : null;
+}
+
+/** ★ A message whose start was lost: its station only from its own text — a surviving "ZCZC VL" fragment through the rule
+ *  (never on the distance alone), else a self-ID or strong series whose station is the ONE on this band in its slot.
+ *  Always likely. null = say nothing. */
+export function navtexStartLostResolve(dialHz: number, lat: number, lon: number, text: string, utc = NaN): NavtexResolution | null {
+  const band = navtexBandKhz(dialHz);
+  if (band == null) return null;
+  const first = (text.split('\n').find((l) => l.trim().length > 0) ?? '').toUpperCase();
+  const m = /(?:ZCZC|(?<!Z)CZC|ZCZ(?!C)) ?([A-Z])([A-Z])?(?![A-Z])/.exec(first);
+  if (m) {
+    const r = navtexResolve(m[1], dialHz, lat, lon, text, utc, m[1] + (m[2] ?? ''));
+    // ★ only on the message's own text — a self-ID, a series, a name, positions — never distance or language alone
+    const textual = (r?.why ?? []).some((w) => !w.startsWith('Nearest station') && !w.startsWith('Written in') && !w.startsWith('Two stations'));
+    if (r && (r.stations.length === 1 || r.text) && textual)
+      return { ...r, conf: 'likely', why: ['Start of the message lost'].concat(r.why ?? []) };
+    return null;
+  }
+  const c = clues('A', band, text);
+  let rows: NavtexStation[] = [];
+  if (c.sid) rows = NAVTEX_STATIONS.filter((s) => s.khz === band && letters(s.name) === c.sid!.L);
+  else { const h = c.ser.find((x) => x[3]); if (h) rows = NAVTEX_STATIONS.filter((s) => s.khz === band && s.iso === h[1] && (!h[2] || h[2] === s.name)); }
+  rows = rows.filter((s) => slotIn(s.b1, utc, W2.slotEarly, W2.slotLate));
+  if (rows.length !== 1) return null;
+  return one(rows[0], lat, lon, 'likely', ['Start of the message lost; it started in ' + rows[0].b1 + '’s slot'].concat(whyFor(rows[0], c)));
+}
+/** "E · Suspected Mondolfo, Italy 🇮🇹" for a start-lost message, or null. */
+export function navtexStartLostLabel(dialHz: number, lat: number, lon: number, text: string, utc = NaN): string | null {
+  const r = navtexStartLostResolve(dialHz, lat, lon, text, utc);
+  if (!r) return null;
+  const m = /(?:ZCZC|(?<!Z)CZC|ZCZ(?!C)) ?([A-Z])([A-Z])?(?![A-Z])/.exec((text.split('\n').find((l) => l.trim().length > 0) ?? '').toUpperCase());
+  return navtexLabelOf(r.stations.length ? r.stations[0].b1 : m ? m[1] : '?', r);
+}
+`
+  .replace('@@SERIES@@', JSON.stringify(SERIES)).replace('@@LANG_NAME@@', JSON.stringify(LANG_NAME)).replace('@@W2@@', JSON.stringify(W2));
+
+const CPP_PRE = String.raw`// ── ★★★ 2026-11-01: THE ADDITIVE CLUES — the same as navtexStations.generated.ts (the generator's header explains each) ──
+struct SeriesRow { const char* phrase; const char* iso; const char* name; bool strong; const char* what; };
+inline const std::vector<SeriesRow>& seriesRows() {
+    static const std::vector<SeriesRow> t = {
+@@SERIES@@
+    };
+    return t;
+}
+inline const char* langName(const std::string& l) {
+@@LANG_NAME@@
+    return "";
+}
+constexpr double kServiceMfKm = @@serviceMf@@, kServiceHfKm = @@serviceHf@@, kFarKm = @@farKm@@;
+constexpr int kSlotEarly = @@slotEarly@@, kSlotLate = @@slotLate@@, kNearEarly = @@nearEarly@@, kNearLate = @@nearLate@@;
+
+/** lev(): Levenshtein distance. */
+inline int lev(const std::string& a, const std::string& b) {
+    std::vector<int> prev(b.size() + 1), cur(b.size() + 1);
+    for (size_t j = 0; j <= b.size(); j++) prev[j] = (int)j;
+    for (size_t i = 1; i <= a.size(); i++) {
+        cur[0] = (int)i;
+        for (size_t j = 1; j <= b.size(); j++) cur[j] = std::min({ prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1), prev[j] + 1, cur[j - 1] + 1 });
+        std::swap(prev, cur);
+    }
+    return prev[b.size()];
+}
+/** levSub(): the fewest edits that make w out of some stretch of hay — anywhere, or (wordStart) only at a word's start. */
+inline int levSub(const std::string& hay, const std::string& w, bool wordStart) {
+    const int BIG = 1000000;
+    std::vector<int> prev(hay.size() + 1), cur(hay.size() + 1);
+    for (size_t j = 0; j <= hay.size(); j++) prev[j] = !wordStart || j == 0 || hay[j - 1] == ' ' ? 0 : BIG;
+    for (size_t i = 1; i <= w.size(); i++) {
+        cur[0] = prev[0] + 1;
+        for (size_t j = 1; j <= hay.size(); j++) cur[j] = std::min({ prev[j - 1] + (w[i - 1] == hay[j - 1] ? 0 : 1), prev[j] + 1, cur[j - 1] + 1 });
+        std::swap(prev, cur);
+    }
+    int best = BIG; for (int v : prev) best = std::min(best, v);
+    return best;
+}
+/** navtexSeries(): the series and sea areas the text carries, and "WZ 649/26" at a line's start. */
+inline std::vector<SeriesRow> seriesHits(const std::string& text) {
+    const std::string U = upperAscii(text);
+    std::string hay; bool sp = false;
+    for (char c : U) { if (c >= 'A' && c <= 'Z') { hay += c; sp = false; } else if (!sp) { hay += ' '; sp = true; } }
+    while (!hay.empty() && hay[0] == ' ') hay.erase(0, 1);
+    while (!hay.empty() && hay.back() == ' ') hay.pop_back();
+    std::vector<SeriesRow> out;
+    for (const auto& sr : seriesRows()) if (levSub(hay, sr.phrase, true) <= (letters(sr.phrase).size() >= 10 ? 1 : 0)) out.push_back(sr);
+    size_t p = 0;
+    while (p <= U.size()) {
+        size_t e = U.find('\n', p); if (e == std::string::npos) e = U.size();
+        size_t q = p; while (q < e && (U[q] == ' ' || U[q] == '\t' || U[q] == '\r')) q++;
+        if (q + 3 < e && U.compare(q, 3, "WZ ") == 0 && U[q + 3] >= '0' && U[q + 3] <= '9') { out.push_back({ "WZ", "GB", "", false, "UK warning series WZ" }); break; }
+        p = e + 1;
+    }
+    return out;
+}
+/** navtexSelfId(): the station a message names ITSELF, matched to a name the TABLE has. */
+struct SelfId { std::string L; const Station* row = nullptr; std::string raw; bool exact = false, close = false; int d = 0; };
+inline const std::vector<std::pair<std::string, const Station*>>& tableNames() {
+    static const std::vector<std::pair<std::string, const Station*>> t = [] {
+        std::vector<std::pair<std::string, const Station*>> o;
+        size_t n = 0; const Station* s = stations(n);
+        for (size_t i = 0; i < n; i++) {
+            const std::string L = letters(s[i].name);
+            if (L.size() < 4) continue;
+            bool seen = false; for (auto& e : o) if (e.first == L) seen = true;
+            if (!seen) o.push_back({ L, &s[i] });
+        }
+        return o;
+    }();
+    return t;
+}
+struct SidTok { std::string tok, raw; bool sub; };
+inline std::vector<SidTok> selfIdTokens(const std::string& text) {
+    std::vector<std::string> lines; std::string cur;
+    const std::string s = upperAscii(text);
+    auto trim = [](std::string x) { size_t a = 0, b = x.size(); while (a < b && x[a] == ' ') a++; while (b > a && x[b - 1] == ' ') b--; return x.substr(a, b - a); };
+    for (size_t i = 0; i <= s.size(); i++) {
+        if (i == s.size() || s[i] == '\n') { const std::string t = trim(cur); if (!t.empty()) lines.push_back(t); cur.clear(); }
+        else cur += (s[i] == '\r' || s[i] == '\t') ? ' ' : s[i];
+    }
+    std::vector<SidTok> out;
+    const size_t from = !lines.empty() && lines[0].compare(0, 4, "ZCZC") == 0 ? 1 : 0;
+    for (size_t i = from; i < lines.size() && i < from + @@nameLines@@; i++) {
+        std::string l = lines[i];
+        while (!l.empty() && std::strchr(".,:;", l.back()) && l.back() != 0) l.pop_back();
+        if (l.size() > 40) continue;
+        std::vector<std::string> ws; { std::string w; for (char c : l + " ") { if (c == ' ') { if (!w.empty()) ws.push_back(w); w.clear(); } else w += c; } }
+        const std::string last = ws.empty() ? std::string() : ws.back();
+        auto ends = [&](const char* x) { const size_t n = std::strlen(x); return l.size() >= n && l.compare(l.size() - n, n, x) == 0; };
+        std::string name; bool have = false;
+        if (ends("RADIO")) { name = l.substr(0, l.size() - 5); have = true; }
+        else if (ends("NAVTEX")) { name = l.substr(0, l.size() - 6); have = true; }
+        else if (ws.size() >= 2 && last.size() == 5 && lev(last, "RADIO") <= 1) { for (size_t k = 0; k + 1 < ws.size(); k++) { if (k) name += ' '; name += ws[k]; } have = true; }
+        if (have) {
+            std::string n, w;
+            for (char c : name + " ") { if (c == ' ') { if (!w.empty()) { if (!n.empty()) n += ' '; n += w; w.clear(); } } else w += c; }
+            size_t a = 0; while (a < n.size() && !(n[a] >= 'A' && n[a] <= 'Z')) a++;
+            n = n.substr(a);
+            bool generic = false; for (auto* g : genericNames()) if (n == g) generic = true;
+            if (!generic && letters(n).size() >= 4) out.push_back({ letters(n), lines[i], false });
+        }
+        if (ws.size() >= 2 && lev(letters(ws[0]), "STATHMOS") <= 1 && letters(ws[1]).size() >= 4) out.push_back({ letters(ws[1]), ws[0] + " " + ws[1], false });
+        const size_t k = l.find("NAVTEX");
+        if (k != std::string::npos) {
+            std::string m; for (size_t j = k + 6; j < l.size() && l[j] >= 'A' && l[j] <= 'Z'; j++) m += l[j];
+            if (m.size() >= 4) out.push_back({ m, lines[i], true });
+        }
+    }
+    return out;
+}
+inline SelfId selfId(const std::string& text, const std::vector<std::string>& langs, const std::vector<SeriesRow>& ser) {
+    for (const auto& tk : selfIdTokens(text)) {
+        int best = 1000000, second = 1000000; std::string bestL; const Station* row = nullptr;
+        for (const auto& e : tableNames()) {
+            const int d = tk.sub ? levSub(tk.tok, e.first, false) : lev(tk.tok, e.first);
+            if (d < best) { second = best; best = d; bestL = e.first; row = e.second; } else if (d < second) second = d;
+        }
+        if (!row || second <= best) continue;
+        const int close = bestL.size() >= 5 ? (int)(bestL.size() / 4) : 0;
+        const int loose = bestL.size() >= 6 ? (int)std::floor(bestL.size() * 0.4) : close;
+        bool backed = false;
+        for (auto& h : ser) if (std::strcmp(h.iso, row->iso) == 0) backed = true;
+        if (!langs.empty()) for (auto& l : isoLangs(row->iso)) if (std::find(langs.begin(), langs.end(), l) != langs.end()) backed = true;
+        if (best <= close || (best <= loose && backed)) { SelfId r; r.L = bestL; r.row = row; r.raw = tk.raw; r.exact = best == 0; r.d = best; r.close = best <= close; return r; }
+    }
+    return SelfId();
+}
+/** ★ Garbled positions carry no weight: further than a service area from every transmitter using the letter on the band
+ *  (or from the station naming itself) = damage, dropped. */
+inline std::vector<std::pair<double, double>> sanePositions(const std::vector<std::pair<double, double>>& pos, char b1, double band, const SelfId* sid) {
+    const double lim = band > 1000 ? kServiceHfKm : kServiceMfKm;
+    size_t n = 0; const Station* t = stations(n);
+    std::vector<std::pair<double, double>> out;
+    for (auto& p : pos) {
+        bool ok = false;
+        for (size_t i = 0; i < n && !ok; i++)
+            if ((t[i].b1 == b1 && t[i].khz == band) || (sid && !sid->L.empty() && letters(t[i].name) == sid->L)) ok = km(t[i].lat, t[i].lon, p.first, p.second) <= lim;
+        if (ok) out.push_back(p);
+    }
+    return out;
+}
+inline bool slotIn(char b1, double utc, int early, int late) {
+    if (b1 < 'A' || b1 > 'X' || !std::isfinite(utc)) return false;
+    const long long start = (long long)(b1 - 'A') * 600;
+    const long long d = ((((long long)std::floor(utc) % 14400) - start) % 14400 + 14400) % 14400;
+    return d <= late || d >= 14400 - early;
+}
+
+`
+  .replace('@@SERIES@@', SERIES.map(([p, iso, n, st, w]) => `        { ${JSON.stringify(p)}, "${iso}", ${JSON.stringify(n)}, ${st}, ${JSON.stringify(w)} },`).join('\n'))
+  .replace('@@LANG_NAME@@', Object.entries(LANG_NAME).map(([l, n]) => `    if (l == "${l}") return "${n}";`).join('\n'))
+  .replace(/@@(serviceMf|serviceHf|farKm|slotEarly|slotLate|nearEarly|nearLate)@@/g, (_, k) => String(W2[k])).replace('@@nameLines@@', String(W.nameLines));
+const CPP_POST = String.raw`
+// ── ★★★ 2026-11-01: the wrapper — confidence, the why, a corrupted header letter (navtexResolve, the same steps) ──
+struct Clues { double band = 0; std::vector<std::string> langs; std::vector<SeriesRow> ser; SelfId sid; std::vector<std::pair<double, double>> pos; std::string t; };
+inline Clues clues(char b1, double band, const std::string& text) {
+    Clues c; c.band = band; c.langs = languages(text); c.ser = seriesHits(text); c.sid = selfId(text, c.langs, c.ser);
+    c.pos = sanePositions(positions(text), b1, band, &c.sid); c.t = letters(text);
+    return c;
+}
+inline std::string cleanRaw(const std::string& s) {
+    std::string o; bool sp = false;
+    for (char c : s) { if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { sp = !o.empty(); continue; } if (sp) o += ' '; sp = false; o += c; }
+    return o;
+}
+/** whyFor(): the plain-English evidence for station s from THIS message. */
+inline std::vector<std::string> whyFor(const Station* s, const Clues& c) {
+    std::vector<std::string> w;
+    const std::string L = letters(s->name);
+    if (!c.sid.L.empty() && c.sid.L == L)
+        w.push_back(c.sid.exact ? "Identifies itself: \xe2\x80\x9c" + cleanRaw(c.sid.raw) + "\xe2\x80\x9d"
+                                : std::string("Identifies itself as ") + s->name + " (\xe2\x80\x9c" + cleanRaw(c.sid.raw) + "\xe2\x80\x9d)");
+    else if (L.size() >= 5 && c.t.find(L) != std::string::npos) w.push_back(std::string("Names ") + s->name + " in the text");
+    for (auto& h : c.ser) if (std::strcmp(h.iso, s->iso) == 0 && (!*h.name || std::strcmp(h.name, s->name) == 0)) { w.push_back(h.what); break; }
+    if (!c.pos.empty() && medianKm(s->lat, s->lon, c.pos) <= kPosFitKm) w.push_back(std::string("Positions in the text lie near ") + s->name);
+    for (auto& l : isoLangs(s->iso)) if (std::find(c.langs.begin(), c.langs.end(), l) != c.langs.end()) { w.push_back(std::string("Written in ") + langName(l)); break; }
+    return w;
+}
+/** headerFix(): a corrupted header letter — see navtexResolve. nullptr = none. */
+inline const Station* headerFix(char b1, double utc, const std::string& hdr, const Clues& c, std::vector<std::string>& why) {
+    if (!std::isfinite(utc) || slotIn(b1, utc, kNearEarly, kNearLate)) return nullptr;
+    size_t n = 0; const Station* t = stations(n);
+    auto isCand = [&](const Station& s) { return s.b1 == b1 && s.khz == c.band; };
+    std::vector<const Station*> rows; std::string because;
+    if (!c.sid.L.empty()) {
+        for (size_t i = 0; i < n; i++) if (isCand(t[i]) && letters(t[i].name) == c.sid.L) return nullptr;
+        for (size_t i = 0; i < n; i++) if (t[i].khz == c.band && letters(t[i].name) == c.sid.L) rows.push_back(&t[i]);
+        because = std::string(c.sid.row->name) + " identifies itself";
+    } else {
+        const SeriesRow* h = nullptr;
+        for (auto& x : c.ser) {
+            if (!x.strong) continue;
+            bool covered = false; for (size_t i = 0; i < n; i++) if (isCand(t[i]) && std::strcmp(t[i].iso, x.iso) == 0) covered = true;
+            if (!covered) { h = &x; break; }
+        }
+        if (!h) return nullptr;
+        for (size_t i = 0; i < n; i++) if (t[i].khz == c.band && std::strcmp(t[i].iso, h->iso) == 0 && (!*h->name || std::strcmp(h->name, t[i].name) == 0)) rows.push_back(&t[i]);
+        because = std::string("the ") + h->what + " points to " + (rows.empty() ? std::string("another country") : std::string(rows[0]->country));
+    }
+    std::vector<const Station*> in;
+    for (auto r : rows) if (r->b1 != b1 && slotIn(r->b1, utc, kSlotEarly, kSlotLate)) in.push_back(r);
+    if (in.size() != 1) return nullptr;
+    const Station* row = in[0];
+    why.push_back(std::string("Header letter looks corrupted: started outside ") + b1 + "\xe2\x80\x99" "s slots; " + because);
+    if (hdr.size() >= 2 && hdr[1] == row->b1)
+        why.push_back("The header\xe2\x80\x99" "s letters look shifted: \xe2\x80\x9c" + hdr.substr(0, 2) + "\xe2\x80\x9d \xe2\x80\x94 " + std::string(1, row->b1) + " is " + row->name + "\xe2\x80\x99" "s letter");
+    const size_t keep = why.size();
+    for (auto& w : whyFor(row, c)) { bool dup = false; for (size_t k = 0; k < keep; k++) if (why[k].find(w) != std::string::npos) dup = true; if (!dup) why.push_back(w); }
+    return row;
+}
+inline Resolution one(const Station* row, double lat, double lon, const char* conf, std::vector<std::string> why) {
+    Resolution r;
+    const bool here = std::isfinite(lat) && std::isfinite(lon);
+    const double d = here ? km(lat, lon, row->lat, row->lon) : NAN;
+    r.stations = { row }; r.km = { d }; r.dx = here && d > (row->khz > 1000 ? kReachHfKm : kReachMfKm); r.conf = conf; r.why = std::move(why);
+    return r;
+}
+/** navtexResolve(): the proven rule (baseResolve), then the additive clues. utc = when the message started (UTC s, NaN =
+ *  unknown); hdr = its header ("JA12", or "VL" from a short "ZCZC VL"). */
+inline Resolution resolveAll(char b1, double dialHz, double lat, double lon, const std::string& text = "", double utc = NAN, const std::string& hdr = "") {
+    Resolution none;
+    const double band = bandKhz(dialHz);
+    if (b1 < 'A' || b1 > 'Z' || band == 0) return none;
+    const Clues c = clues(b1, band, text);
+    Base f;
+    Resolution base = baseResolve(b1, dialHz, lat, lon, text, c.sid.L.empty() ? nullptr : &c.sid, f);
+    const bool here = std::isfinite(lat) && std::isfinite(lon);
+    char bb[32]; std::snprintf(bb, sizeof bb, "%g", band);
+    // 1. one station, as the proven rule names it — unless past kFarKm on MF without its name or positions
+    if (base.stations.size() == 1) {
+        const Station* s = base.stations[0];
+        const bool far = here && band < 1000 && base.km[0] > kFarKm;
+        if (!far || f.named || f.posWin) {
+            std::vector<std::string> w = whyFor(s, c);
+            if (f.priorOnly || w.empty()) w.push_back(std::string("Nearest station using ") + s->b1 + " on " + bb + " kHz" + (here ? " (" + kmText(base.km[0]) + " km)" : std::string()));
+            std::string conf = "confident";
+            if (f.fuzzy && !c.sid.L.empty() && !c.sid.close) {
+                Base f0; const Resolution b0 = baseResolve(b1, dialHz, lat, lon, text, nullptr, f0);
+                if (!(b0.stations.size() == 1 && b0.stations[0] == s)) conf = "likely";
+            }
+            base.conf = conf; base.why = w;
+            return base;
+        }
+    }
+    // 2. a corrupted header letter
+    { std::vector<std::string> w; if (const Station* fx = headerFix(b1, utc, hdr, c, w)) return one(fx, lat, lon, "likely", w); }
+    // 3. a known station names itself and is none of the candidates
+    if (!base.textName.empty() && !c.sid.L.empty()) {
+        base.conf = "likely";
+        base.why = whyFor(c.sid.row, c);
+        base.why.push_back(std::string(c.sid.row->name) + " is not listed on " + b1 + " at " + bb + " kHz");
+        return base;
+    }
+    // 4. undecided: the issuer series, a choice among the candidates
+    size_t n = 0; const Station* t = stations(n);
+    for (auto& h : c.ser) {
+        const Station* hit = nullptr; int k = 0;
+        for (size_t i = 0; i < n; i++)
+            if (t[i].b1 == b1 && t[i].khz == band && std::strcmp(t[i].iso, h.iso) == 0 && (!*h.name || std::strcmp(h.name, t[i].name) == 0)) { hit = &t[i]; k++; }
+        if (k == 1) return one(hit, lat, lon, "likely", whyFor(hit, c));
+    }
+    // 5. too close to call
+    if (base.stations.size() == 2) {
+        base.conf = "ambiguous";
+        base.why = { std::string("Two stations use ") + b1 + " on " + bb + " kHz: " + base.stations[0]->name + (here ? " (" + kmText(base.km[0]) + " km)" : std::string())
+                     + " and " + base.stations[1]->name + (here ? " (" + kmText(base.km[1]) + " km)" : std::string()) };
+        return base;
+    }
+    return none;
+}
+/** navtexHeaderFixProbe(): the station a corrupted-header reading WOULD give, whatever the rule decided (diagnostics). */
+inline const Station* headerFixProbe(char b1, double dialHz, const std::string& text, double utc, const std::string& hdr = "") {
+    const double band = bandKhz(dialHz);
+    if (b1 < 'A' || b1 > 'Z' || band == 0) return nullptr;
+    std::vector<std::string> w;
+    return headerFix(b1, utc, hdr, clues(b1, band, text), w);
+}
+/** The first non-blank line's "ZCZC VL" fragment: its letters, or "" (navtexStartLostResolve's regex). */
+inline std::string headerFragment(const std::string& text) {
+    const std::string U = upperAscii(text);
+    size_t p = 0; std::string first;
+    while (p <= U.size()) { size_t e = U.find('\n', p); if (e == std::string::npos) e = U.size(); std::string l = U.substr(p, e - p);
+        bool blank = true; for (char c : l) if (c != ' ' && c != '\t' && c != '\r') blank = false;
+        if (!blank) { first = l; break; } p = e + 1; }
+    for (size_t i = 0; i < first.size(); i++) {
+        size_t j = std::string::npos;
+        if (first.compare(i, 4, "ZCZC") == 0) j = i + 4;
+        else if ((first.compare(i, 3, "CZC") == 0 && (i == 0 || first[i - 1] != 'Z')) || (first.compare(i, 3, "ZCZ") == 0 && (i + 3 >= first.size() || first[i + 3] != 'C'))) j = i + 3;
+        if (j == std::string::npos) continue;
+        if (j < first.size() && first[j] == ' ') j++;
+        if (j >= first.size() || first[j] < 'A' || first[j] > 'Z') continue;
+        std::string h(1, first[j]);
+        if (j + 1 < first.size() && first[j + 1] >= 'A' && first[j + 1] <= 'Z') {
+            if (j + 2 < first.size() && first[j + 2] >= 'A' && first[j + 2] <= 'Z') continue;   // a word, not a header
+            h += first[j + 1];
+        }
+        return h;
+    }
+    return std::string();
+}
+/** navtexStartLostResolve(): a message whose start was lost — its station only from its own text. Always likely. */
+inline Resolution startLostResolve(double dialHz, double lat, double lon, const std::string& text, double utc = NAN) {
+    Resolution none;
+    const double band = bandKhz(dialHz);
+    if (band == 0) return none;
+    const std::string h = headerFragment(text);
+    if (!h.empty()) {
+        Resolution r = resolveAll(h[0], dialHz, lat, lon, text, utc, h);
+        bool textual = false;
+        for (auto& w : r.why) if (w.compare(0, 15, "Nearest station") != 0 && w.compare(0, 10, "Written in") != 0 && w.compare(0, 12, "Two stations") != 0) textual = true;
+        if ((r.stations.size() == 1 || !r.textName.empty()) && textual) { r.conf = "likely"; r.why.insert(r.why.begin(), "Start of the message lost"); return r; }
+        return none;
+    }
+    const Clues c = clues('A', band, text);
+    size_t n = 0; const Station* t = stations(n);
+    std::vector<const Station*> rows;
+    if (!c.sid.L.empty()) { for (size_t i = 0; i < n; i++) if (t[i].khz == band && letters(t[i].name) == c.sid.L) rows.push_back(&t[i]); }
+    else {
+        const SeriesRow* h2 = nullptr; for (auto& x : c.ser) if (x.strong) { h2 = &x; break; }
+        if (h2) for (size_t i = 0; i < n; i++) if (t[i].khz == band && std::strcmp(t[i].iso, h2->iso) == 0 && (!*h2->name || std::strcmp(h2->name, t[i].name) == 0)) rows.push_back(&t[i]);
+    }
+    std::vector<const Station*> in; for (auto r : rows) if (slotIn(r->b1, utc, kSlotEarly, kSlotLate)) in.push_back(r);
+    if (in.size() != 1) return none;
+    std::vector<std::string> w = { std::string("Start of the message lost; it started in ") + in[0]->b1 + "\xe2\x80\x99" "s slot" };
+    for (auto& x : whyFor(in[0], c)) w.push_back(x);
+    return one(in[0], lat, lon, "likely", w);
+}
+/** The gallery's test: one station named, or a station named by its own message (never the "or" pair). */
+inline bool nameable(char b1, double dialHz, double lat, double lon, const std::string& text = "", double utc = NAN, const std::string& hdr = "") {
+    const Resolution r = resolveAll(b1, dialHz, lat, lon, text, utc, hdr);
+    return r.stations.size() == 1 || !r.textName.empty();
+}
+/** navtexStation(): the station when ONE can be named, else nullptr. */
+inline const Station* resolve(char b1, double dialHz, double lat, double lon, const std::string& text = "", double utc = NAN, const std::string& hdr = "") {
+    const Resolution r = resolveAll(b1, dialHz, lat, lon, text, utc, hdr);
+    return r.stations.size() == 1 ? r.stations[0] : nullptr;
+}
+`;
+
 const HEAD = `GENERATED by scripts/gen-navtex-stations.mjs from scripts/navtex-stations/navtex-stations.json. Do not edit.
 // Source: ${src.source}
 // Edition: ${src.edition}
@@ -214,7 +856,6 @@ export const NAVTEX_REACH_HF_KM = ${W.reachHf};
 export const NAVTEX_WEIGHTS = ${JSON.stringify(W)} as const;
 const STOP: Record<string, readonly string[]> = ${JSON.stringify(STOP)};
 const LANGS: Record<string, readonly string[]> = ${JSON.stringify(LANGS)};
-const LANG_COUNTRY: Record<string, readonly [string, string]> = ${JSON.stringify(LANG_COUNTRY)};
 const GENERIC: readonly string[] = ${JSON.stringify(GENERIC)};
 
 function km(la1: number, lo1: number, la2: number, lo2: number): number {
@@ -303,16 +944,6 @@ export function navtexTextName(text: string): [string, string] | null {
   }
   return null;
 }
-/** "MONDOLFO" + "RADIO" → "Mondolfo Radio". */
-function titleCase(s: string): string {
-  let o = '';
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    o += i === 0 || s[i - 1] === ' ' || s[i - 1] === '-' || s[i - 1] === "'" ? c : c.toLowerCase();
-  }
-  return o;
-}
-
 /** A station the TABLE does not have, named by its own message. */
 export interface NavtexTextStation { name: string; iso: string; country: string }
 
@@ -326,34 +957,22 @@ export interface NavtexResolution {
   km: number[];
   /** Beyond ordinary reach of the receiving server — the title says "DX". */
   dx: boolean;
+  /** ★ 2026-11-01: confident (the plain name), likely ("Suspected <name>"), ambiguous (the pair). */
+  conf?: 'confident' | 'likely' | 'ambiguous';
+  /** ★ Why, in plain English, for THIS message (strongest first) — never a score. */
+  why?: string[];
 }
+interface BaseResolution extends NavtexResolution { named: boolean; fuzzy: boolean; posWin: boolean; priorOnly: boolean }
 
-/** Where a station the table does not have is: a station of that name elsewhere in the table (another letter or
- *  band) gives its own name and country; else the country of the table station nearest the message's positions
- *  (median, within posCountryKm), if the text's language — when there is one — is spoken there; else a language spoken
- *  in only one NAVTEX country; else no country. */
-function textStation(tn: [string, string], pos: Array<[number, number]>, langs: string[]): NavtexTextStation {
-  const own = NAVTEX_STATIONS.find((s) => letters(s.name) === letters(tn[0]));
-  if (own) return { name: own.name, iso: own.iso, country: own.country };
-  const name = titleCase(tn[0] + ' ' + tn[1]);
-  if (pos.length) {
-    let best: NavtexStation | null = null, bestMed = Infinity;
-    for (const s of NAVTEX_STATIONS) {
-      const ds = pos.map(([pa, po]) => km(s.lat, s.lon, pa, po)).sort((x, y) => x - y);
-      const med = ds.length % 2 ? ds[(ds.length - 1) / 2] : (ds[ds.length / 2 - 1] + ds[ds.length / 2]) / 2;
-      if (med < bestMed) { bestMed = med; best = s; }
-    }
-    if (best && bestMed <= NAVTEX_WEIGHTS.posCountryKm && (!langs.length || (LANGS[best.iso] ?? []).some((l) => langs.includes(l))))
-      return { name, iso: best.iso, country: best.country };
-  }
-  const only = langs.length === 1 ? LANG_COUNTRY[langs[0]] : undefined;
-  if (only) return { name, iso: only[0], country: only[1] };
-  return { name, iso: '', country: '' };
+/** ★ (b) The station a message names itself, when it is none of the candidates — always a station the TABLE has (the
+ *  fuzzy self-ID matches known names only; an unknown name is ignored, 2026-11-01). */
+function textStation(sid: NavtexSelfId): NavtexTextStation {
+  return { name: sid.row.name, iso: sid.row.iso, country: sid.row.country };
 }
 
 /** Which station sent letter \`b1\`, heard on \`dialHz\` at a server at \`lat\`/\`lon\` (NaN = unknown), judged from the
  *  message \`text\`. null = the letter only. */
-export function navtexResolve(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = ''): NavtexResolution | null {
+function baseResolve(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text: string, sid: NavtexSelfId | null): BaseResolution | null {
   if (!b1 || !/^[A-Z]$/.test(b1)) return null;
   const band = navtexBandKhz(dialHz);
   if (band == null) return null;
@@ -363,12 +982,13 @@ export function navtexResolve(b1: string | null | undefined, dialHz: number, lat
   const here = Number.isFinite(lat) && Number.isFinite(lon);
   const reach = band > 1000 ? W.reachHf : W.reachMf;
   const t = letters(text);
-  const pos = navtexPositions(text);
+  const pos = sanePositions(navtexPositions(text), b1, band, sid);
   const langs = navtexLanguages(text);
   const scored = cands.map((s) => {
     const d = here ? km(lat, lon, s.lat, s.lon) : NaN;
     let sc = here ? 1 / (1 + (d / W.priorKm) ** 2) : 1;
-    const named = letters(s.name).length >= 5 && t.includes(letters(s.name));
+    const exact = letters(s.name).length >= 5 && t.includes(letters(s.name));
+    const named = exact || (sid !== null && letters(s.name) === sid.L);   // ★ + the fuzzy self-ID (known names only)
     if (named) sc *= W.named;
     let med = Infinity;
     if (pos.length) {
@@ -378,7 +998,7 @@ export function navtexResolve(b1: string | null | undefined, dialHz: number, lat
     }
     const speaks = langs.length > 0 && (LANGS[s.iso] ?? []).some((l) => langs.includes(l));
     if (speaks) sc *= band === 490 ? W.lang490 : W.langOther;
-    return { s, d, sc, named, med, speaks };
+    return { s, d, sc, named, exact, med, speaks };
   }).sort((x, y) => y.sc - x.sc || x.s.name.localeCompare(y.s.name));
   const named = scored.some((x) => x.named);
   const posFit = pos.length > 0 && scored.some((x) => x.med <= W.posFitKm);
@@ -386,22 +1006,26 @@ export function navtexResolve(b1: string | null | undefined, dialHz: number, lat
   //    "Corsen, France"). Only when the message ALSO rules every candidate out — positions that fit none of them, or,
   //    with no positions, a language none of them speaks. Positions that fit a candidate always keep it: a station
   //    may send another language (Niton's T on 490 is French), and language alone never outweighs the table.
-  const tn = navtexTextName(text);
-  if (tn && !named && !scored.some((x) => letters(x.s.name) === letters(tn[0]))) {
-    const contradicted = !posFit && (pos.length > 0 || (langs.length > 0 && !scored.some((x) => x.speaks)));
-    if (contradicted) return { stations: [], km: [], dx: false, text: textStation(tn, pos, langs) };
+  const contradicted = !posFit && (pos.length > 0 || (langs.length > 0 && !scored.some((x) => x.speaks)));
+  if (sid && !named && !scored.some((x) => letters(x.s.name) === sid.L)) {
+    if (contradicted) return { stations: [], km: [], dx: false, text: textStation(sid), named: false, fuzzy: false, posWin: false, priorOnly: false };
   }
+  // ★ a "<NAME> RADIO" the table does not know, and the text rules every candidate out: the letter only — the name is
+  //   NEVER shown (2026-11-01: "Condogno Radio, Italy?" was a station that does not exist)
+  if (!sid && !named && contradicted && navtexTextName(text)) return null;
   if (pos.length && !posFit && !named) return null;            // ★ positions nowhere near any candidate: not one of them
   const evidence = named || posFit || scored.some((x) => x.speaks);
   const best = scored[0], next = scored[1];
   if (!evidence && (!here || !(best.d <= reach))) return null;   // ★ no evidence and nothing near: the letter only
-  if (!next || best.sc >= W.clear * next.sc) return { stations: [best.s], km: [best.d], dx: here && best.d > reach };
-  return { stations: [best.s, next.s], km: [best.d, next.d], dx: false };
+  const flags = { named: best.named, fuzzy: best.named && !best.exact && !(sid && sid.exact), posWin: best.med <= W.posFitKm, priorOnly: !evidence };
+  if (!next || best.sc >= W.clear * next.sc) return { stations: [best.s], km: [best.d], dx: here && best.d > reach, ...flags };
+  return { stations: [best.s, next.s], km: [best.d, next.d], dx: false, ...flags };
 }
+${TS_EXTRA}
 
 /** The station, when ONE can be named — or null. */
-export function navtexStation(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = ''): NavtexStation | null {
-  const r = navtexResolve(b1, dialHz, lat, lon, text);
+export function navtexStation(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = '', utc = NaN, hdr = ''): NavtexStation | null {
+  const r = navtexResolve(b1, dialHz, lat, lon, text, utc, hdr);
   return r && r.stations.length === 1 ? r.stations[0] : null;
 }
 
@@ -423,13 +1047,17 @@ export function navtexFlag(iso: string): string {
 
 /** "B · Oostende, Belgium 🇧🇪", "R · Isabella, United States 🇺🇸 · DX 6,700 km", "W · Corsen 🇫🇷 or Valentia 🇮🇪?", or
  *  "Station B" when the station cannot be named. */
-export function navtexStationLabel(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = ''): string {
-  const r = navtexResolve(b1, dialHz, lat, lon, text);
+export function navtexStationLabel(b1: string | null | undefined, dialHz: number, lat: number, lon: number, text = '', utc = NaN, hdr = ''): string {
+  return navtexLabelOf(b1, navtexResolve(b1, dialHz, lat, lon, text, utc, hdr));
+}
+/** The label of a resolution: "E · Mondolfo, Italy 🇮🇹" (confident), "E · Suspected Mondolfo, Italy 🇮🇹" (likely — on the
+ *  STATION's letter when the header's looked corrupted), "W · Corsen 🇫🇷 or Valentia 🇮🇪?", or "Station B". */
+export function navtexLabelOf(b1: string | null | undefined, r: NavtexResolution | null): string {
   if (!r) return b1 ? \`Station \${b1}\` : 'Station ?';
-  if (r.text) return \`\${b1} \\u00b7 \${r.text.name}\${r.text.country ? \`, \${r.text.country} \${navtexFlag(r.text.iso)}\` : ''}?\`;
+  if (r.text) return \`\${b1} \\u00b7 Suspected \${r.text.name}\${r.text.country ? \`, \${r.text.country} \${navtexFlag(r.text.iso)}\` : ''}\`;
   const [a, b] = r.stations;
   if (b) return \`\${a.b1} \\u00b7 \${a.name} \${navtexFlag(a.iso)} or \${b.name} \${navtexFlag(b.iso)}?\`;
-  return \`\${a.b1} \\u00b7 \${a.name}, \${a.country} \${navtexFlag(a.iso)}\${r.dx ? \` \\u00b7 DX \${kmText(r.km[0])} km\` : ''}\`;
+  return \`\${a.b1} \\u00b7 \${r.conf === 'likely' ? 'Suspected ' : ''}\${a.name}, \${a.country} \${navtexFlag(a.iso)}\${r.dx ? \` \\u00b7 DX \${kmText(r.km[0])} km\` : ''}\`;
 }
 `;
 
@@ -614,47 +1242,33 @@ inline double medianKm(double la, double lo, const std::vector<std::pair<double,
     return ds.size() % 2 ? ds[(ds.size() - 1) / 2] : (ds[ds.size() / 2 - 1] + ds[ds.size() / 2]) / 2;
 }
 
-/** navtexResolve(): 0 stations = the letter only (or, with textName set, a station the table does not have, named by its
- *  own message); 1 = named; 2 = too close to call. */
+${CPP_PRE}/** baseResolve() — the PROVEN rule (navtexResolve's baseResolve): 0 stations = the letter only (or, with textName set, a
+ *  station the table has on another letter or band, naming itself); 1 = named; 2 = too close to call. */
 struct Resolution { std::vector<const Station*> stations; std::vector<double> km; bool dx = false;
-                    std::string textName, textIso, textCountry; };
-/** navtexResolve's textStation(): where a station the table does not have is. */
-inline void textStation(Resolution& r, const std::pair<std::string, std::string>& tn,
-                        const std::vector<std::pair<double, double>>& pos, const std::vector<std::string>& langs) {
-    size_t n = 0; const Station* t = stations(n);
-    const std::string want = letters(tn.first);
-    for (size_t i = 0; i < n; i++) if (letters(t[i].name) == want) { r.textName = t[i].name; r.textIso = t[i].iso; r.textCountry = t[i].country; return; }
-    r.textName = titleCase(tn.first + " " + tn.second);
-    if (!pos.empty()) {
-        const Station* best = nullptr; double bestMed = INFINITY;
-        for (size_t i = 0; i < n; i++) { const double m = medianKm(t[i].lat, t[i].lon, pos); if (m < bestMed) { bestMed = m; best = &t[i]; } }
-        bool spoken = langs.empty();
-        if (best) for (auto& l : isoLangs(best->iso)) if (std::find(langs.begin(), langs.end(), l) != langs.end()) spoken = true;
-        if (best && bestMed <= ${W.posCountryKm} && spoken) { r.textIso = best->iso; r.textCountry = best->country; return; }
-    }
-    if (langs.size() == 1) {
-${Object.entries(LANG_COUNTRY).map(([l, [iso, c]]) => `        if (langs[0] == "${l}") { r.textIso = "${iso}"; r.textCountry = "${c}"; return; }`).join('\n')}
-    }
-}
-inline Resolution resolveAll(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
+                    std::string textName, textIso, textCountry;
+                    std::string conf;                 ///< ★ "confident" | "likely" ("Suspected …") | "ambiguous" | "" (none)
+                    std::vector<std::string> why; };  ///< ★ plain English, THIS message's evidence, strongest first
+struct Base { bool named = false, fuzzy = false, posWin = false, priorOnly = false; };
+inline Resolution baseResolve(char b1, double dialHz, double lat, double lon, const std::string& text, const SelfId* sid, Base& f) {
     Resolution r;
     if (b1 < 'A' || b1 > 'Z') return r;
     const double band = bandKhz(dialHz);
     if (band == 0) return r;
     size_t n = 0; const Station* t = stations(n);
-    struct Sc { const Station* s; double d, sc, med; bool named, speaks; };
+    struct Sc { const Station* s; double d, sc, med; bool named, speaks, exact; };
     std::vector<Sc> c;
     const bool here = std::isfinite(lat) && std::isfinite(lon);
     const double reach = band > 1000 ? kReachHfKm : kReachMfKm;
     const std::string tl = letters(text);
-    const auto pos = positions(text);
+    const auto pos = sanePositions(positions(text), b1, band, sid);
     const auto langs = languages(text);
     for (size_t i = 0; i < n; i++) {
         if (t[i].b1 != b1 || t[i].khz != band) continue;
-        Sc x{ &t[i], here ? km(lat, lon, t[i].lat, t[i].lon) : NAN, 1, INFINITY, false, false };
+        Sc x{ &t[i], here ? km(lat, lon, t[i].lat, t[i].lon) : NAN, 1, INFINITY, false, false, false };
         x.sc = here ? 1.0 / (1.0 + std::pow(x.d / kPriorKm, 2)) : 1.0;
         const std::string nl = letters(t[i].name);
-        x.named = nl.size() >= 5 && tl.find(nl) != std::string::npos;
+        x.exact = nl.size() >= 5 && tl.find(nl) != std::string::npos;
+        x.named = x.exact || (sid && nl == sid->L);   // ★ + the fuzzy self-ID (known names only)
         if (x.named) x.sc *= kNamed;
         if (!pos.empty()) {
             std::vector<double> ds; for (auto& p : pos) ds.push_back(km(t[i].lat, t[i].lon, p.first, p.second));
@@ -674,30 +1288,22 @@ inline Resolution resolveAll(char b1, double dialHz, double lat, double lon, con
     bool named = false, posFit = false, speaks = false;
     for (auto& x : c) { named |= x.named; posFit |= !pos.empty() && x.med <= kPosFitKm; speaks |= x.speaks; }
     // ★★ (b) the message names a station that is none of the candidates and rules them all out (navtexResolve).
-    const auto tn = textName(text);
-    if (!tn.first.empty() && !named) {
-        bool isCand = false; const std::string want = letters(tn.first);
-        for (auto& x : c) if (letters(x.s->name) == want) isCand = true;
-        const bool contradicted = !posFit && (!pos.empty() || (!langs.empty() && !speaks));
-        if (!isCand && contradicted) { textStation(r, tn, pos, langs); return r; }
+    const bool contradicted = !posFit && (!pos.empty() || (!langs.empty() && !speaks));
+    if (sid && !named) {
+        bool isCand = false;
+        for (auto& x : c) if (letters(x.s->name) == sid->L) isCand = true;
+        if (!isCand && contradicted) { r.textName = sid->row->name; r.textIso = sid->row->iso; r.textCountry = sid->row->country; return r; }
     }
+    // ★ an unknown "<NAME> RADIO" and the text rules every candidate out: the letter only — the name is never shown
+    if (!sid && !named && contradicted && !textName(text).first.empty()) return r;
     if (!pos.empty() && !posFit && !named) return r;
     const bool evidence = named || posFit || speaks;
     const Sc& best = c[0];
     if (!evidence && (!here || !(best.d <= reach))) return r;
+    f.named = best.named; f.fuzzy = best.named && !best.exact && !(sid && sid->exact); f.posWin = best.med <= kPosFitKm; f.priorOnly = !evidence;
     if (c.size() == 1 || best.sc >= kClear * c[1].sc) { r.stations = { best.s }; r.km = { best.d }; r.dx = here && best.d > reach; return r; }
     r.stations = { best.s, c[1].s }; r.km = { best.d, c[1].d };
     return r;
-}
-/** The gallery's test: one station named, or a station named by its own message (never the "or" pair). */
-inline bool nameable(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
-    const Resolution r = resolveAll(b1, dialHz, lat, lon, text);
-    return r.stations.size() == 1 || !r.textName.empty();
-}
-/** navtexStation(): the station when ONE can be named, else nullptr. */
-inline const Station* resolve(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
-    const Resolution r = resolveAll(b1, dialHz, lat, lon, text);
-    return r.stations.size() == 1 ? r.stations[0] : nullptr;
 }
 inline std::string kmText(double d) {
     std::string s = std::to_string((long long)(std::llround(d / 100.0) * 100));
@@ -717,19 +1323,31 @@ inline std::string flag(const char* iso) {
     return o;
 }
 
-/** navtexStationLabel(): "B · Oostende, Belgium 🇧🇪", "… · DX 6,700 km", "W · Corsen 🇫🇷 or Valentia 🇮🇪?", or "Station B". */
-inline std::string label(char b1, double dialHz, double lat, double lon, const std::string& text = "") {
-    const Resolution r = resolveAll(b1, dialHz, lat, lon, text);
+${CPP_POST}
+/** navtexLabelOf(): "E · Mondolfo, Italy 🇮🇹" (confident), "E · Suspected Mondolfo, Italy 🇮🇹" (likely — on the STATION's
+ *  letter when the header's looked corrupted), "W · Corsen 🇫🇷 or Valentia 🇮🇪?", or "Station B". */
+inline std::string labelOf(char b1, const Resolution& r) {
     if (!r.textName.empty())
-        return std::string(1, b1) + " \\xc2\\xb7 " + r.textName + (r.textCountry.empty() ? std::string() : ", " + r.textCountry + " " + flag(r.textIso.c_str())) + "?";
+        return std::string(1, b1) + " \\xc2\\xb7 Suspected " + r.textName + (r.textCountry.empty() ? std::string() : ", " + r.textCountry + " " + flag(r.textIso.c_str()));
     if (r.stations.empty()) return std::string("Station ") + (b1 >= 'A' && b1 <= 'Z' ? std::string(1, b1) : "?");
     const Station* a = r.stations[0];
     if (r.stations.size() == 2) {
         const Station* b = r.stations[1];
         return std::string(1, a->b1) + " \\xc2\\xb7 " + a->name + " " + flag(a->iso) + " or " + b->name + " " + flag(b->iso) + "?";
     }
-    return std::string(1, a->b1) + " \\xc2\\xb7 " + a->name + ", " + a->country + " " + flag(a->iso)
+    return std::string(1, a->b1) + " \\xc2\\xb7 " + (r.conf == "likely" ? "Suspected " : "") + a->name + ", " + a->country + " " + flag(a->iso)
          + (r.dx ? " \\xc2\\xb7 DX " + kmText(r.km[0]) + " km" : std::string());
+}
+/** navtexStationLabel(). utc = when the message started (UTC s); hdr = its header ("JA12"). */
+inline std::string label(char b1, double dialHz, double lat, double lon, const std::string& text = "", double utc = NAN, const std::string& hdr = "") {
+    return labelOf(b1, resolveAll(b1, dialHz, lat, lon, text, utc, hdr));
+}
+/** navtexStartLostLabel(): "N · Suspected Piombino, Italy 🇮🇹" for a start-lost message, or "" (say nothing). */
+inline std::string startLostLabel(double dialHz, double lat, double lon, const std::string& text, double utc = NAN) {
+    const Resolution r = startLostResolve(dialHz, lat, lon, text, utc);
+    if (r.stations.empty() && r.textName.empty()) return std::string();
+    const std::string h = headerFragment(text);
+    return labelOf(!r.stations.empty() ? r.stations[0]->b1 : !h.empty() ? h[0] : '?', r);
 }
 
 } // namespace navtex

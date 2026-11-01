@@ -426,12 +426,13 @@ static void navtexStations() {
           "I SISTEMI DI AUSILIO ALLA NAVIGAZIONE ISTALLATI NON SONO FUNZIONANTI\nNNNN";
       ok(L('E', 489500, MONDOLFO) == "E \xc2\xb7 Mondolfo, Italy " + IT, "\xe2\x98\x85 the Mondolfo message \xe2\x86\x92 Mondolfo, Italy: " + L('E', 489500, MONDOLFO));
       std::string ancona = MONDOLFO; ancona.replace(ancona.find("ZCZC EA17"), 9, "ZCZC TA17"); ancona.replace(ancona.find("MONDOLFO RADIO"), 14, "ANCONA RADIO");
-      ok(L('T', 489500, ancona) == "T \xc2\xb7 Ancona Radio, Italy " + IT + "?", "(b) not in the table, named by its text, positions + Italian rule out Niton/Tarifa: " + L('T', 489500, ancona));
-      ok(L('T', 489500, "ZCZC TA17\nANCONA RADIO\nI SISTEMI DI AUSILIO ALLA NAVIGAZIONE NON SONO FUNZIONANTI SULLE PIATTAFORME") == "T \xc2\xb7 Ancona Radio, Italy " + IT + "?",
-         "(b) Italian, no positions \xe2\x86\x92 Italy from the language");
-      ok(L('T', 489500, "ZCZC TA17\nWIDGET RADIO\nGALE WARNING\nSTORM IN 30-00N 040-00W") == "T \xc2\xb7 Widget Radio?", "(b) no sound country \xe2\x86\x92 the name only");
-      ok(L('M', 517500, "ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E") == "M \xc2\xb7 Oostende, Belgium \xf0\x9f\x87\xa7\xf0\x9f\x87\xaa?",
-         "(b) a table station on another letter names itself");
+      // ★ 2026-11-01: a name the table does not have is NEVER shown ("Condogno Radio, Italy?" did not exist) — the letter only
+      ok(L('T', 489500, ancona) == "Station T", "(b) not in the table, positions + Italian rule out Niton/Tarifa \xe2\x86\x92 the letter only: " + L('T', 489500, ancona));
+      ok(L('T', 489500, "ZCZC TA17\nANCONA RADIO\nI SISTEMI DI AUSILIO ALLA NAVIGAZIONE NON SONO FUNZIONANTI SULLE PIATTAFORME") == "Station T",
+         "(b) Italian, no positions, an unknown name \xe2\x86\x92 the letter only");
+      ok(L('T', 489500, "ZCZC TA17\nWIDGET RADIO\nGALE WARNING\nSTORM IN 30-00N 040-00W").find("Widget") == std::string::npos, "(b) never 'Widget Radio'");
+      ok(L('M', 517500, "ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E") == "M \xc2\xb7 Suspected Oostende, Belgium \xf0\x9f\x87\xa7\xf0\x9f\x87\xaa",
+         "(b) a table station on another letter names itself \xe2\x86\x92 Suspected");
       ok(starts(L('T', 489500, "ZCZC TA17\nWIDGET RADIO\nTHE BUOY IS MISSING AND WILL BE REPLACED FROM MONDAY"), "T \xc2\xb7 Niton, United Kingdom"), "(b) English Niton speaks \xe2\x86\x92 Niton");
       ok(starts(L('T', 489500, "ZCZC TA17\nWIDGET RADIO\nWRECK 50-30N 001-10W"), "T \xc2\xb7 Niton, United Kingdom"), "(b) positions that fit Niton \xe2\x86\x92 Niton");
       const std::string NITON_FR = "ZCZC TA45\n230800 UTC OCT 26\nORIGINE METEO-FRANCE\nBULLETIN METEOROLOGIQUE SPECIAL POUR LA MANCHE\n"
@@ -440,7 +441,8 @@ static void navtexStations() {
       ok(starts(L('T', 489500, NITON_FR + "\n49-50N 001-20W 50-10.5N 000-30.0E"), "T \xc2\xb7 Niton, United Kingdom"), "Niton T French with Channel positions");
       ok(starts(L('S', 517500, "NCC-HAMBURG\nNAUT. WARN."), "S \xc2\xb7 Hamburg, Germany"), "S 518 = Hamburg (supplement)");
       ok(starts(L('S', 4209500, "GREEK NAVTEX 4209.5\n35-20N 025-10E"), "S \xc2\xb7 Irakleio, Greece"), "HF 4209.5 letter from the supplement");
-      ok(navtex::nameable('T', 489500, LA, LO, ancona) && !navtex::nameable('W', 517500, LA, LO, ""), "the gallery names a self-named station, never the 'or' pair");
+      ok(navtex::nameable('M', 517500, LA, LO, "ZCZC MA01\nOOSTENDERADIO\nWRAK OP POSITIE 51-14.13N 002-54.22E") && !navtex::nameable('W', 517500, LA, LO, ""),
+         "the gallery names a self-named station, never the 'or' pair");
       auto p = navtex::positions(" 44 31.4N A   012 30.6E  GARIBALDI A");
       ok(p.size() == 1 && std::fabs(p[0].first - 44.5233) < 0.01 && std::fabs(p[0].second - 12.51) < 0.01 && navtex::positions("51-10N AND 002-00E").empty(),
          "ITA2: a lost '-' printed as A between the halves; a word is not"); }

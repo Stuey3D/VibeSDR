@@ -104,9 +104,13 @@ int main(int argc, char** argv) {
         //   item, placed by its neighbour in E's slot — Corsen (likely).
         {
             const std::string ea14 = read("20261101-004012-navtex-489k5-cc32.txt");
-            const auto r14 = navtex::resolveAll('E', 489500, LA, LO, ea14);
+            navtex::Base bf;
+            const auto r14 = navtex::baseResolve('E', 489500, LA, LO, ea14, nullptr, bf);
             ok(r14.stations.size() == 2 && std::string(r14.stations[0]->name) == "Corsen" && std::string(r14.stations[1]->name) == "Mondolfo",
-               "EA14 (AVURNAV BREST): the label's pair, Corsen or Mondolfo — the label is left as it is");
+               "EA14 (AVURNAV BREST): the proven rule's pair, Corsen or Mondolfo");
+            const auto w14 = navtex::resolveAll('E', 489500, LA, LO, ea14);
+            ok(w14.stations.size() == 1 && std::string(w14.stations[0]->name) == "Corsen" && w14.conf == "likely",
+               "…the label (2026-11-01) now takes the series among those two: Suspected Corsen");
             ok(navmap::seriesPick(ea14, r14.stations) && std::string(navmap::seriesPick(ea14, r14.stations)->name) == "Corsen",
                "…the series AVURNAV BREST ('AVURNAVKBREST', one letter off) picks Corsen among them");
             ok(!navmap::seriesPick("WZ 649/26\nLUNDY.", r14.stations), "…and WZ (the UK's) picks neither French nor Italian candidate");
@@ -130,6 +134,72 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < n; ++i) if (tb[i].b1 == 'B' && tb[i].khz == 518) pool.push_back(&tb[i]);
             const navtex::Station* sp = navmap::seriesPick(t, pool);
             ok((r.stations.size() == 1 && std::string(r.stations[0]->name) == "Bodo") || (sp && std::string(sp->name) == "Bodo"), "BA43 (NORWEGIAN NAV. WARNING, 67-46N 014-24E) → Bodø");
+        }
+        // ★★★ 2026-11-01 — THE DECODER'S OWN LABEL (navtex::resolveAll + labelOf, as vibe_bgdecode.h titles a message), with
+        //     its start time and header: the fuzzy self-ID (known names only), a corrupted header letter, the issuer
+        //     series, garbled positions at no weight. scripts/test_navtex.ts runs the same cases through the clients' copy.
+        {
+            struct Msg { std::string id, text; double utc = NAN, hz = 0; };
+            auto msg = [&](const std::string& f) {
+                Msg m; const std::string raw = read(f);
+                const size_t k = raw.find(" kHz"); const size_t ls = raw.rfind('\n', k);
+                if (k != std::string::npos) m.hz = std::atof(raw.substr(ls + 1, k - ls - 1).c_str()) * 1000.0;
+                std::tm t{}; t.tm_year = std::atoi(f.substr(0, 4).c_str()) - 1900; t.tm_mon = std::atoi(f.substr(4, 2).c_str()) - 1; t.tm_mday = std::atoi(f.substr(6, 2).c_str());
+                t.tm_hour = std::atoi(f.substr(9, 2).c_str()); t.tm_min = std::atoi(f.substr(11, 2).c_str()); t.tm_sec = std::atoi(f.substr(13, 2).c_str());
+                m.utc = (double)timegm(&t);
+                const size_t z = raw.find("\n\nZCZC "); if (z == std::string::npos) return m;
+                const size_t e1 = raw.find('\n', z + 2); m.id = raw.substr(z + 7, e1 - z - 7);
+                size_t e2 = raw.find("\nNNNN", e1); if (e2 == std::string::npos) e2 = raw.find("\n[end lost]", e1);
+                m.text = raw.substr(e1 + 1, (e2 == std::string::npos ? raw.size() : e2) - e1 - 1);
+                return m;
+            };
+            auto lab = [&](const Msg& m) { return navtex::labelOf(m.id[0], navtex::resolveAll(m.id[0], m.hz, LA, LO, m.text, m.utc, m.id)); };
+            auto has = [](const std::string& s, const char* x) { return s.find(x) != std::string::npos; };
+            const std::string IT = "Italy \xf0\x9f\x87\xae\xf0\x9f\x87\xb9";
+            { const Msg m = msg("20261025-164259-navtex-489k5-7503.txt"); const auto r = navtex::resolveAll(m.id[0], m.hz, LA, LO, m.text, m.utc, m.id);
+              const std::string l = navtex::labelOf(m.id[0], r);
+              ok(l == "E \xc2\xb7 Suspected Mondolfo, " + IT, "7503 (BD12, 'CONDOGNO RADIO', 16:42 — outside B's slots, inside E's) \xe2\x86\x92 Suspected Mondolfo: " + l);
+              ok(!has(l, "Condogno") && r.conf == "likely", "\xe2\x80\xa6never the station that does not exist ('Condogno Radio')");
+              ok(!r.why.empty() && r.why[0] == "Header letter looks corrupted: started outside B\xe2\x80\x99s slots; Mondolfo identifies itself", "\xe2\x80\xa6the why: " + (r.why.empty() ? std::string() : r.why[0])); }
+            { const Msg m = msg("20261025-004258-navtex-489k5-f890.txt"); const auto r = navtex::resolveAll(m.id[0], m.hz, LA, LO, m.text, m.utc, m.id);
+              ok(navtex::labelOf('E', r) == "E \xc2\xb7 Mondolfo, " + IT && r.conf == "confident", "f890 (EA12, 'MONDOLFO RADIO') stays confident Mondolfo: " + navtex::labelOf('E', r)); }
+            { const Msg m = msg("20261024-221012-navtex-517k5-7e1e.txt"); const std::string l = lab(m);
+              ok(has(l, "N \xc2\xb7 ") && has(l, "Orlandet, Norway"), "7e1e (NA79, NORWEGIAN NAV. WARNING, '02-44.67N' garbled) \xe2\x86\x92 \xc3\x98rlandet: " + l); }
+            for (const char* f : { "20261027-220142-navtex-517k5-278a.txt", "20261028-220041-navtex-517k5-f67c.txt" }) {
+                const Msg m = msg(f); const std::string l = lab(m);
+                ok(l == "M \xc2\xb7 Suspected Jel\xc3\xb8y, Norway \xf0\x9f\x87\xb3\xf0\x9f\x87\xb4", std::string(f).substr(28, 4) + " (MA05, NORWEGIAN NAV. WARNING, a garbled position) \xe2\x86\x92 Suspected Jel\xc3\xb8y: " + l);
+            }
+            { const Msg m = msg("20261101-004012-navtex-489k5-cc32.txt"); const std::string l = lab(m);
+              ok(l == "E \xc2\xb7 Suspected Corsen, France \xf0\x9f\x87\xab\xf0\x9f\x87\xb7", "cc32 (EA14, AVURNAV BREST): the label's pair settled by the series \xe2\x86\x92 Suspected Corsen: " + l); }
+            auto at = [](int y, int mo, int d, int h, int mi, int sec) { std::tm t{}; t.tm_year = y - 1900; t.tm_mon = mo - 1; t.tm_mday = d; t.tm_hour = h; t.tm_min = mi; t.tm_sec = sec; return (double)timegm(&t); };
+            { const std::string t = "240040 UTC OCT 26\nMTNDOOFO AADIO\n\nCOSTAVURNAV 396/26 AGO 30\nMAR ADRIATICO CENTRALE - TERMOLI.\nIL FARO RISULTA NON FUNZIONANTE.";
+              const std::string l = navtex::labelOf('J', navtex::resolveAll('J', 489500, LA, LO, t, at(2026, 10, 24, 0, 43, 0), "JA12"));
+              ok(l == "E \xc2\xb7 Suspected Mondolfo, " + IT, "synthetic JA12 'MTNDOOFO AADIO', 490, 00:43 \xe2\x86\x92 Suspected Mondolfo (E): " + l);
+              const std::string l2 = navtex::label('J', 489500, LA, LO, t);
+              ok(!has(l2, "Talcahuano"), "\xe2\x80\xa6" "and with no time, never Talcahuano, Chile (12,000 km): " + l2); }
+            { const std::string t = "NCC-AMBURG\nNAV. WARN. NO. 563\nGERMAN BIGHT\nWINDPARK BUTENDIEK LIGHTS UNRELIABLE";
+              const auto r = navtex::resolveAll('C', 517500, LA, LO, t, at(2026, 10, 5, 23, 1, 15), "CS");
+              const std::string l = navtex::labelOf('C', r);
+              ok(l == "S \xc2\xb7 Suspected Hamburg, Germany \xf0\x9f\x87\xa9\xf0\x9f\x87\xaa", "synthetic 'ZCZC CS' NCC-AMBURG, 518, 23:01 \xe2\x86\x92 Suspected Hamburg (S): " + l);
+              ok(!has(l, "Odes") && r.why.size() > 1 && has(r.why[1], "shifted"), "\xe2\x80\xa6never Odesa; the letters look shifted (CS)"); }
+            { const std::string t = "180550 NAVTEXJAHAMBURG (NCC)\nSEEWETTERVORHERSAGE\nVORHERSAGE FUER SONNTAG:\nDEUTSCHE BUCHT\nNE 4 BIS 5, SEE ZTW. 3M.\nWESTLICHE OSTSEE\nOST 4, SPAETER 5 UND DIE SEE";
+              const std::string l = navtex::labelOf('V', navtex::resolveAll('V', 489500, LA, LO, t, at(2026, 10, 18, 5, 50, 51), "VL"));
+              ok(l == "L \xc2\xb7 Suspected Hamburg, Germany \xf0\x9f\x87\xa9\xf0\x9f\x87\xaa", "synthetic 'ZCZC VL' NAVTEXJAHAMBURG, 490, 05:50 \xe2\x86\x92 Suspected Hamburg (L), never Yarmouth: " + l);
+              const std::string sl = navtex::startLostLabel(489500, LA, LO, "ZCZC VL\n" + t, at(2026, 10, 18, 5, 50, 51));
+              ok(sl == l, "\xe2\x80\xa6the same as a start-lost message whose text begins 'ZCZC VL': " + sl); }
+            { const std::string t = "NORWEGIAN NAV. WARNING 356/2026\nCHART 67\nAREA ANDHOLMFJORDEN\nMAALOEY-SKARHOLMEN LIGHTHOUSE 67-46.08N 014-24.08E IS UNLIT.";
+              const std::string l = navtex::labelOf('B', navtex::resolveAll('B', 517500, LA, LO, t, at(2026, 10, 8, 4, 10, 41), "BA43"));
+              ok(has(l, "B \xc2\xb7 Bodo, Norway") && !has(l, "Algiers"), "synthetic BA43 (Norwegian, 67-46N 014-24E) \xe2\x86\x92 Bod\xc3\xb8, never Algiers: " + l); }
+            { const std::string t = "281446 UTC SEP 26\nNORWEGIAN NAV. WARNING 347/2026\nCHART 84\nAREA GIBOSTAD\nNORDGRUNNEN LIGHT 69-21.40N 018-05.84E IS UNLIT.";
+              const auto r = navtex::resolveAll('B', 517500, LA, LO, t, at(2026, 10, 7, 0, 15, 47), "BA41");
+              ok(has(navtex::labelOf('B', r), "B \xc2\xb7 Bodo, Norway") && r.conf == "confident", "UberSDR's BA41 (clean, Gibostad 69-21N 018-05E) \xe2\x86\x92 Bod\xc3\xb8, confident, never Algiers: " + navtex::labelOf('B', r)); }
+            { const std::string g1 = "STATHMOS IRAKLEIOY AR.MIN 370/26\nKRITIKO PELAGOS", g2 = "STATHMOS KERKYRA AR.MIN 227/25\nIONIO PELAGOS";
+              ok(has(navtex::label('Q', 489500, LA, LO, g1), "Q \xc2\xb7 Irakleio, Greece"), "'STATHMOS IRAKLEIOY' (Greek genitive) \xe2\x86\x92 Irakleio");
+              ok(has(navtex::label('P', 489500, LA, LO, g2), "P \xc2\xb7 Kerkyra, Greece"), "'STATHMOS KERKYRA' \xe2\x86\x92 Kerkyra");
+              ok(navtex::selfId("STATHMOS I_AKLEIO AR.MUN. 223/26", {}, {}).L == "IRAKLEIO", "'STATHMOS I_AKLEIO' (a lost letter) \xe2\x86\x92 Irakleio"); }
+            { const std::string none = navtex::label('T', 489500, LA, LO, "ZCZC TA17\nWIDGET RADIO\nMAR ADRIATICO 44-31N 012-30E\nI SISTEMI DI AUSILIO NON SONO FUNZIONANTI SULLE PIATTAFORME");
+              ok(none == "Station T", "an unknown '<NAME> RADIO' is never shown \xe2\x80\x94 the letter only: " + none);
+              ok(navtex::selfId("MONDOLFO RADIO", {}, {}).L == "MONDOLFO" && navtex::selfId("PHIT RADIO", {}, {}).L.empty(), "'PHIT RADIO' (2 off SPLIT, nothing backing it) is ignored"); }
         }
         const std::string j = navmap::toJson(res, LA, LO, 1793560000);
         ok(j.find("\"stations\":[") != std::string::npos && j.find("\"rx\":{\"lat\":52.3020") != std::string::npos && j.size() < 200000, "the JSON: stations, the receiver, bounded (" + std::to_string(j.size()) + " B)");

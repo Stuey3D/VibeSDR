@@ -77,7 +77,7 @@ import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, ga
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines } from '../../../src/utils/galleryTranslate';
-import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
+import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
 import { SLANT_STEP, chartAlignStep, drawnAlign, parseAlign, wefaxAlignKey, wefaxFormat, wefaxOffset, wefaxPreset, type ChartAlignState, type WefaxAlign } from '../../../src/utils/wefaxAlign';
 import { channelExcessDb, SQL_NEAR_CEIL_DB, SQL_NEAR_SMOOTH } from '../../../src/services/squelchNeighbours';
 import { SqlAutoTrack } from '../../../src/utils/sqlAutoTrack';
@@ -12236,6 +12236,8 @@ function renderNavtex() {
   view.classList.toggle('has', !!shown);
   if (shown) {
     $('nvTitle').textContent = navtexTitle(shown, nvPlace());
+    // ★ 2026-11-01: why that station — plain English, this message's evidence (hover)
+    $('nvTitle').title = navtexStationWhy(shown, nvPlace()).join('\n');
     const pct = navtexLostPct(shown);
     // ★ Where it is, under the title too — on a phone the header's status is the first thing squeezed out.
     $('nvMeta').textContent = [nvViewPrev ? 'PREVIOUS' : !shown.done ? 'RECEIVING' : 'STANDING BY',

@@ -93,6 +93,8 @@ int main(int argc, char** argv) {
         // ★ a number is NOT unique across issuers: a Greek warning's 370/26 is not AVURNAV BREST 370/26
         ok(navwarn::seriesKey(navwarn::seriesOf("STATHMOS IRAKLEIOY\nNAVTEX 370/26\nPERIOCHI")) != navwarn::seriesKey(navwarn::seriesOf("AVURNAV BREST 370/26"))
            && navwarn::seriesKey("370/26").empty(), "the Greek 370/26 does not link to AVURNAV BREST 370/26; a bare number links nothing");
+        ok(navwarn::seriesKey(navwarn::seriesOf("STATHMOS IRAKLEIOY AR.MIN 370/26\nKRITIKO PELAGOS")) != navwarn::seriesKey(navwarn::seriesOf("AVURNAV BREST 370/26")),
+           "'STATHMOS IRAKLEIOY AR.MIN 370/26' (Greek, one line) does not link to Corsen's AVURNAV BREST 370/26");
         ok(navwarn::seriesKey(navwarn::seriesOf("AVURNAV BREST 370/26")) == navwarn::seriesKey(navwarn::seriesOf("AVUCNAV BREST 370/26")), "AVURNAV / AVUCNAV BREST 370/26: one key");
         const auto cx = navwarn::cancelsOf("1. SANDETTIE WEST BUOY MISSING.\n2. CANCEL WZ 476/26 (EA77)(VA08).", 1793500000);
         ok(cx.ids.size() == 2 && cx.ids[0] == "EA77" && cx.series.size() == 1 && navwarn::seriesKey(cx.series[0]) == "WZ|476/26", "CANCEL WZ 476/26 (EA77)(VA08): ids EA77 VA08, series WZ 476/26");
