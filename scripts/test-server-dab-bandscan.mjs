@@ -228,8 +228,15 @@ try {
   d.send({ type: 'dab_scan', on: 1 });
   ok(await d.until(() => d.errors.length), 'a hand-sent scan request is answered…');
   ok(/single-listener radio/.test(d.errors[0] || '') && !d.scans.some((m) => m.running), `…with a refusal in words ("${d.errors[0]}")`);
+  // ★ d93ad592d: a socket that just drops is a HELD session (3 min, counted as listening) — this listener leaves on
+  //   purpose (`leave`, never held), so the radio goes idle after the ordinary leave grace.
+  d.send({ type: 'leave' }); await sleep(200);
   d.ws.close();
-  await sleep(7000);   // ★ the leave grace — the radio goes idle
+  // ★ the leave grace — the radio goes idle. It was a flat 5 s; since 2026-10-27 (modeLeaveGraceS) a whole-radio mode
+  //   waits the owner's idle grace, capped at 60 s, for its last listener to come back — so wait for the leave itself.
+  { const t0 = Date.now(); const mark = fs.readFileSync(sharedLog, 'utf8').length;
+    while (Date.now() - t0 < 75000 && !/\[DAB\] mode OFF: radio back at/.test(fs.readFileSync(sharedLog, 'utf8').slice(mark))) await sleep(500);
+    await sleep(1000); }
 
   // ── E. the owner at the setup endpoint ──
   console.log('E. the owner scans from setup, on the idle radio');
