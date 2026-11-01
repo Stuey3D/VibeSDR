@@ -173,6 +173,7 @@ struct Agg {
     uint64_t folded = 0;                               ///< messages whose label was a pair, settled by this station's own confident copies
     // ── ★ the WHY (the card's reasons, 2026-11-01) ──
     uint64_t outright = 0;                             ///< messages whose label named this station outright
+    std::map<std::string, uint64_t> ev;                ///< ★ how the others were placed: text / series / link / run / neighbour / dx / night
     uint64_t inSlot = 0;                               ///< messages saved inside the letter's transmit slot (slotFits)
 };
 /** ★★ THE NAVTEX SCHEDULE (IMO NAVTEX Manual / ITU-R M.540; NGA Pub. 117 lists the same plan): each letter transmits for
@@ -196,6 +197,11 @@ struct Result {
     std::vector<Agg> stations;                         ///< most recently heard first
     uint64_t messages = 0, unplaced = 0, scanned = 0;
     uint64_t byRun = 0;                                ///< undecided labels settled by their transmission run
+    uint64_t bySeries = 0;                             ///< …by the issuing authority's series among the candidates
+    uint64_t byText = 0, byDx = 0, byNight = 0;        ///< …by the message's own text, the night-time nearest, the time of day
+    uint64_t generic = 0, pairs = 0;                   ///< "Station X" titles and the label's pairs seen
+    uint64_t bySeriesLink = 0, linkClash = 0;          ///< settled as the same warning number as a named message; numbers two authorities used
+    uint64_t startLost = 0, startLostPlaced = 0;       ///< "Start lost" items, and those placed by their run
     int64_t oldest = 0;
 };
 
@@ -211,8 +217,79 @@ inline std::string runKey(char b1, double band, int64_t t) {
     return std::string(1, b1) + "|" + std::to_string((int)band) + "|" + std::to_string((long long)((t - start) / 14400));
 }
 using Runs = std::map<std::string, const navtex::Station*>;
+/** A message whose label named its station outright: when, on which band, which letter — what a "Start lost" item
+ *  (its header gone) is matched against: the named message beside it in the same slot. */
+struct Named { int64_t t; double band; char b1; const navtex::Station* st; };
+/** ★★ THE SAME WARNING ON ANOTHER TRANSMITTER: a file's series key ("BRE|370/26" — vibe_navtex_warn.h seriesKey, from the
+ *  warnings index; "" when unknown). A named message carrying it gives its AUTHORITY to an undecided or start-lost message
+ *  with the same key — the authority's transmitter on that band (Corsen sends A on 518 and E on 490). LIKELY. */
+using SeriesOf = std::function<std::string(const std::string& file)>;
+struct Ctx { Runs runs; std::vector<Named> named; std::map<std::string, const navtex::Station*> links; const SeriesOf* seriesOf = nullptr; };
+/** The station `name`'s transmitter on `band` (its letter there), or nullptr. */
+inline const navtex::Station* txOn(const navtex::Station* s, double band) {
+    size_t n = 0; const navtex::Station* t = navtex::stations(n);
+    for (size_t i = 0; i < n; ++i) if (t[i].khz == band && std::strcmp(t[i].name, s->name) == 0 && std::fabs(t[i].lat - s->lat) < 0.5) return &t[i];
+    return nullptr;
+}
+
+/** ★★ ISSUING-AUTHORITY SERIES (2026-11-01) — the header a warning service puts on its own messages. ONLY where the label
+ *  could not decide, and ONLY to choose among the label's own candidates (never a station the table does not offer):
+ *  stations relay each other's series (Oostende sends WZ, Niton AVURNAV, Varberg Danish warnings — 264 of 2 290 named
+ *  Lenovo messages), so a series is a clue to the CANDIDATE that issues it, not a name. Tolerant of one wrong letter
+ *  ("AVUCNAV", "AVURNAVKBREST"). `name` empty = any candidate in that country. */
+struct Series { const char* word; const char* place; const char* iso; const char* name; };
+inline const std::vector<Series>& series() {
+    static const std::vector<Series> t = {
+        {"AVURNAV", "BREST", "FR", "Corsen"},          // Préfecture maritime de l'Atlantique (CROSS Corsen)
+        {"AVURNAV", "CHERBOURG", "FR", ""},            // Manche et mer du Nord
+        {"ESTONIAN", "NAV", "EE", "Tallinn"},
+        {"SWEDISH", "NAV", "SE", ""},
+        {"NORWEGIAN", "NAV", "NO", ""},
+        {"DANISH", "NAV", "DK", ""},
+        {"COSTAVURNAV", "", "IT", ""},
+        {"OOSTENDERADIO", "", "BE", "Oostende"}, {"OOSTENDRADIO", "", "BE", "Oostende"},
+    };
+    return t;
+}
+/** `w` in the text, at most one letter wrong (same length), at a word start. */
+inline bool fuzzy(const std::string& U, const char* w, size_t* end = nullptr) {
+    const size_t n = std::strlen(w);
+    for (size_t i = 0; i + n <= U.size(); ++i) {
+        if (i && std::isalpha((unsigned char)U[i - 1])) continue;
+        int bad = 0;
+        for (size_t k = 0; k < n && bad <= 1; ++k) bad += U[i + k] != w[k];
+        if (bad <= 1) { if (end) *end = i + n; return true; }
+    }
+    return false;
+}
+/** The candidate a series clue names, or nullptr (no clue, or it fits none / more than one). */
+inline const navtex::Station* seriesPick(const std::string& text, const std::vector<const navtex::Station*>& cands) {
+    if (cands.empty() || text.empty()) return nullptr;
+    const std::string U = navtex::upperAscii(text);
+    for (const auto& sr : series()) {
+        size_t e = 0;
+        if (!fuzzy(U, sr.word, &e)) continue;
+        if (*sr.place) { const size_t from = e; const std::string rest = U.substr(from, 24); if (!fuzzy(rest, sr.place) && rest.find(sr.place) == std::string::npos) continue; }
+        const navtex::Station* hit = nullptr; int n = 0;
+        for (auto c : cands) if (std::strcmp(c->iso, sr.iso) == 0 && (!*sr.name || std::strcmp(c->name, sr.name) == 0)) { hit = c; ++n; }
+        if (n == 1) return hit;
+    }
+    // ★ "WZ 649/26" at a line's start: the UK's series
+    for (size_t p = 0; p < U.size(); p = U.find('\n', p) + 1) {
+        size_t q = p; while (q < U.size() && U[q] == ' ') ++q;
+        if (U.compare(q, 3, "WZ ") == 0 && q + 3 < U.size() && std::isdigit((unsigned char)U[q + 3])) {
+            const navtex::Station* hit = nullptr; int n = 0;
+            for (auto c : cands) if (std::strcmp(c->iso, "GB") == 0) { hit = c; ++n; }
+            if (n == 1) return hit;
+            break;
+        }
+        if (U.find('\n', p) == std::string::npos) break;
+    }
+    return nullptr;
+}
 inline void take(std::map<std::string, Agg>& by, Result& res, const std::string& line, double rxLat, double rxLon, int64_t since,
-                 const ReadText& readText = nullptr, Runs* runs = nullptr, bool settle = false) {
+                 const ReadText& readText = nullptr, Runs* runs = nullptr, bool settle = false, std::vector<Named>* named = nullptr,
+                 Ctx* ctx = nullptr) {
     if (line.find("\"k\":\"navtex\"") == std::string::npos) return;
     double t = 0, hz = 0;
     std::string title, file;
@@ -220,7 +297,38 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     jstr(line, "f", file);
     res.scanned++;
     if ((int64_t)t < since) return;
-    const Title ti = parseTitle(title);
+    Title ti = parseTitle(title);
+    const navtex::Station* lostSt = nullptr;
+    const std::string skey = ctx && ctx->seriesOf && *ctx->seriesOf ? (*ctx->seriesOf)(file) : std::string();
+    bool bySeriesLink = false;
+    // ★ undecided or start lost, and the same warning number was carried by a named message: its authority's transmitter
+    if (settle && ctx && !skey.empty() && (ti.generic || ti.pair || !ti.b1) && (int64_t)t >= since) {
+        const auto it = ctx->links.find(skey);
+        if (it != ctx->links.end() && it->second) {
+            if (const navtex::Station* tx = txOn(it->second, navtex::bandKhz(hz)))
+                if (!ti.b1 || tx->b1 == ti.b1) { lostSt = tx; ti.b1 = tx->b1; bySeriesLink = true; if (title.compare(0, 10, "Start lost") == 0) { res.startLost++; res.startLostPlaced++; } }
+        }
+    }
+    if (!lostSt && !ti.b1 && title.compare(0, 10, "Start lost") == 0) {
+        res.startLost++;
+        /* ★★ A START-LOST ITEM (its ZCZC header damaged or missed): the station of the message beside it — a message named
+         *  outright on the same band within 12 minutes, in that letter's slot; a surviving "ZCZC EA" fragment must agree.
+         *  Only when every such neighbour is ONE station. LIKELY, never confident. */
+        if (settle && named && (int64_t)t >= since) {
+            char frag = 0;
+            const std::string text = readText && !file.empty() ? readText(file) : std::string();
+            const size_t z = text.find("ZCZC ");
+            if (z != std::string::npos && z + 5 < text.size() && std::isupper((unsigned char)text[z + 5])) frag = text[z + 5];
+            const double bnd = navtex::bandKhz(hz);
+            const navtex::Station* one = nullptr; char b1 = 0; bool clash = false;
+            for (const auto& nm : *named) {
+                if (nm.band != bnd || std::llabs(nm.t - (int64_t)t) > 12 * 60 || !slotFits(nm.b1, (int64_t)t) || (frag && nm.b1 != frag)) continue;
+                if (one && one != nm.st) clash = true;
+                one = nm.st; b1 = nm.b1;
+            }
+            if (one && !clash) { lostSt = one; ti.b1 = b1; res.startLostPlaced++; }
+        }
+    }
     if (!ti.b1) { res.unplaced++; return; }
     res.messages++;
     if (!res.oldest || (int64_t)t < res.oldest) res.oldest = (int64_t)t;
@@ -228,11 +336,16 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     const navtex::Station* st = nullptr;
     std::vector<const navtex::Station*> cands;
     std::string conf;
-    bool byRun = false;
+    if (settle && ti.generic) res.generic++;
+    if (settle && ti.pair) res.pairs++;
+    std::string why;         // ★ the evidence that placed an undecided message (the card's plain-English lines)
+    bool fromText = false;   // ★ settled by the message's own text (the resolver with it, or its series): a neighbour may lean on it
+    bool byRun = lostSt != nullptr;
+    if (lostSt) { st = lostSt; conf = "likely"; why = bySeriesLink ? "link" : "neighbour"; }
     // ★ the label could not decide, but its run did: a message in the same slot window named the station outright
-    if (settle && runs && (ti.pair || ti.generic)) {
+    if (!lostSt && settle && runs && (ti.pair || ti.generic)) {
         const auto it = runs->find(runKey(ti.b1, band, (int64_t)t));
-        if (it != runs->end() && it->second) { st = it->second; conf = "likely"; byRun = true; }
+        if (it != runs->end() && it->second) { st = it->second; conf = "likely"; byRun = true; why = "run"; }
     }
     if (byRun) {
         // settled by the run (above)
@@ -246,7 +359,7 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
             const std::string text = readText && !file.empty() ? readText(file) : std::string();
             const auto r = navtex::resolveAll(ti.b1, hz, rxLat, rxLon, text);
             cands = r.stations;
-            if (r.stations.size() == 1) { st = r.stations[0]; conf = "likely"; cands.clear(); }   // ★ the table now names it
+            if (r.stations.size() == 1) { st = r.stations[0]; conf = "likely"; cands.clear(); res.byText++; fromText = true; why = "text"; }   // ★ the table now names it
             /* ★ "Station F": nothing on that letter and band within ground-wave reach, so the label named none. Sky wave
              *  at night carries 518/490 kHz thousands of km (Nick's Canadian catches): every station on the letter and
              *  band, nearest first, out to kDxKm, those the time of day allows. One, or one clearly nearest (half the
@@ -260,24 +373,38 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
                         if (d <= kDxKm && plausible(&tb[k], rxLat, rxLon, (int64_t)t)) all.push_back({d, &tb[k]});
                     }
                 std::sort(all.begin(), all.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
-                if (all.size() == 1 || (all.size() > 1 && all[0].first <= 0.5 * all[1].first)) { st = all[0].second; conf = "likely"; cands.clear(); }
+                if (all.size() == 1 || (all.size() > 1 && all[0].first <= 0.5 * all[1].first)) { st = all[0].second; conf = "likely"; cands.clear(); res.byDx++; why = "dx"; }
                 else for (size_t k = 0; k < all.size() && k < 2; ++k) cands.push_back(all[k].second);
             }
+        }
+        // ★ the label could not decide: the issuing authority's series, among its own candidates
+        if (!st && !cands.empty()) {
+            std::vector<const navtex::Station*> pool = cands;
+            if (pool.size() < 2 && band) { pool.clear(); size_t n = 0; const navtex::Station* tb = navtex::stations(n);
+                for (size_t k = 0; k < n; ++k) if (tb[k].b1 == ti.b1 && tb[k].khz == band) pool.push_back(&tb[k]); }
+            const std::string text = readText && !file.empty() ? readText(file) : std::string();
+            if (const navtex::Station* sp = seriesPick(text, pool)) { st = sp; conf = "likely"; res.bySeries++; cands.clear(); fromText = true; why = "series"; }
         }
         // ★ the label could not decide: what the time of day rules out
         if (!st) {
             std::vector<const navtex::Station*> ok;
             for (auto c : cands) if (plausible(c, rxLat, rxLon, (int64_t)t)) ok.push_back(c);
-            if (ok.size() == 1 && cands.size() > 1) { st = ok[0]; conf = "likely"; }
+            if (ok.size() == 1 && cands.size() > 1) { st = ok[0]; conf = "likely"; res.byNight++; why = "night"; }
             else if (!cands.empty()) { st = cands[0]; conf = "ambiguous"; }
         }
     }
     if (!st) { res.unplaced++; return; }
+    if (named && ((conf == "confident" && !ti.textNamed) || fromText) && named->size() < 200000) named->push_back({(int64_t)t, band, ti.b1, st});
+    if (ctx && !skey.empty() && conf == "confident" && !ti.textNamed) {
+        auto& l = ctx->links[skey];
+        if (!l) l = st; else if (std::strcmp(l->name, st->name) != 0) { l = nullptr; res.linkClash++; }   // ★ two authorities: no link
+    }
+    if (bySeriesLink) res.bySeriesLink++;
     if (runs && conf == "confident" && !ti.textNamed) {
         auto& slot = (*runs)[runKey(ti.b1, band, (int64_t)t)];
         if (!slot) slot = st; else if (slot != st) slot = nullptr;   // ★ two stations in one window: no inheritance
     }
-    if (byRun) res.byRun++;
+    if (byRun && !lostSt) res.byRun++;
     const std::string key = conf == "ambiguous"
         ? std::string("?") + ti.b1 + "|" + std::to_string((int)band) + "|" + cands[0]->name + "|" + (cands.size() > 1 ? cands[1]->name : "")
         : std::string(1, ti.b1) + "|" + st->name;
@@ -288,6 +415,7 @@ inline void take(std::map<std::string, Agg>& by, Result& res, const std::string&
     else if (conf == "confident") a.conf = "confident";                    // ★ any confident copy settles it
     a.n++;
     if (conf == "confident" && !ti.textNamed) a.outright++;
+    if (!why.empty()) a.ev[why]++;
     if (slotFits(ti.b1, (int64_t)t)) a.inSlot++;
     a.khz.insert(band ? band : hz / 1000.0);
     if ((int64_t)t < a.first) a.first = (int64_t)t;
@@ -324,19 +452,24 @@ inline EachLine fileLines(const std::string& path) {
 /** ★ Fold the NAVTEX messages heard since `since` per station. A title the label could not name whose text is wanted
  *  is DEFERRED (the line kept, at most kDefer) and read after the walk — `each` may hold the Store's lock. */
 static constexpr size_t kDefer = 4000;
-inline Result scan(const EachLine& each, double rxLat, double rxLon, int64_t since, const ReadText& readText = nullptr) {
+inline Result scan(const EachLine& each, double rxLat, double rxLon, int64_t since, const ReadText& readText = nullptr,
+                   const SeriesOf& seriesOf = nullptr) {
+    Ctx ctx; ctx.seriesOf = &seriesOf;
     Result res;
     std::map<std::string, Agg> by;
-    std::vector<std::string> later;
+    std::vector<std::string> later, lost;
     Runs runs;
+    std::vector<Named> named;
     // ★ pass 1: every title that names its station (and records its run); the undecided ones — "Station F", a pair —
     //   are kept (≤ kDefer) for pass 2, after every run is known
     each([&](const std::string& l) {
-        const bool undecided = l.find("\"title\":\"Station ") != std::string::npos || l.find("? \xc2\xb7 ") != std::string::npos;
-        if (undecided && later.size() < kDefer) { later.push_back(l); return; }
-        take(by, res, l, rxLat, rxLon, since, nullptr, &runs, false);
+        const bool undecided = l.find("\"title\":\"Station ") != std::string::npos || l.find("? \xc2\xb7 ") != std::string::npos
+                            || l.find("\"title\":\"Start lost") != std::string::npos;
+        if (undecided && later.size() + lost.size() < kDefer) { (l.find("\"title\":\"Start lost") != std::string::npos ? lost : later).push_back(l); return; }
+        take(by, res, l, rxLat, rxLon, since, nullptr, &runs, false, &named, &ctx);
     });
-    for (const auto& l : later) take(by, res, l, rxLat, rxLon, since, readText, &runs, true);
+    for (const auto& l : later) take(by, res, l, rxLat, rxLon, since, readText, &runs, true, &named, &ctx);
+    for (const auto& l : lost) take(by, res, l, rxLat, rxLon, since, readText, &runs, true, &named, &ctx);   // ★ last: every neighbour known
     /* ★ A PAIR SETTLED BY THE REST OF THE HISTORY: "M · Jeløy or …?" when Jeløy on that letter and band has been named
      *  outright (or likely, from its messages' own text) by other messages, and no other candidate has — the pair's
      *  messages join it (counted as `folded`). Otherwise the pair stays a "?". */
@@ -352,6 +485,7 @@ inline Result scan(const EachLine& each, double rxLat, double rxLon, int64_t sin
         if (homes != 1) home = nullptr;
         if (!home) { ++it; continue; }
         home->n += a.n; home->folded += a.n; home->night += a.night; home->inSlot += a.inSlot;
+        for (auto& e : a.ev) home->ev[e.first] += e.second;
         home->first = std::min(home->first, a.first); home->last = std::max(home->last, a.last);
         for (auto& i : a.ids) home->ids.insert(i);
         for (auto& s2 : a.subj) home->subj[s2.first] += s2.second;
@@ -409,6 +543,9 @@ inline std::string toJson(const Result& r, double rxLat, double rxLon, int64_t n
             std::snprintf(b, sizeof b, ",\"outright\":%llu,\"inSlot\":%llu,\"share\":%d", (unsigned long long)a.outright,
                           (unsigned long long)a.inSlot, sharing(a.b1, band));
             o += b;
+            o += ",\"ev\":{";
+            bool fe = true; for (auto& e : a.ev) { if (!fe) o += ','; fe = false; o += "\"" + e.first + "\":" + std::to_string((unsigned long long)e.second); }
+            o += "}";
             if (std::isfinite(rxLat)) {
                 size_t n = 0; const navtex::Station* t = navtex::stations(n);
                 std::vector<std::pair<double, const navtex::Station*>> near;

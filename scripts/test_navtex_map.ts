@@ -1,7 +1,7 @@
 // test_navtex_map.ts — V12 the NAVTEX stations map's client rule (src/services/navtexMap.ts — the web client and the app
 // both draw from it): the sanitiser, co-sited letters as one site, the why list, the schedule slot, the app's pins.
 //   npx tsx scripts/test_navtex_map.ts
-import { navSanitise, navSites, navWhy, navSlot, navLabel, navCard, navItems, navStatus, navRangeOf, navSince } from '../src/services/navtexMap';
+import { navSanitise, navSites, navWhy, navName, navSlot, navLabel, navCard, navItems, navStatus, navRangeOf, navSince } from '../src/services/navtexMap';
 
 let passes = 0, fails = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -27,10 +27,13 @@ eq('…a site sums its letters and keeps both bands', [sites[0].n, sites[0].khz]
 eq('the label: "Niton · E I K · 195 km"', navLabel(sites[0]), 'Niton · E I K · 195 km');
 eq('…a "?" site says so', navLabel(sites[2]).startsWith('Corsen? · E'), true);
 eq('the schedule slot: A 00:00, E 00:40, M 02:00, X 03:50', ['A', 'E', 'M', 'X'].map(navSlot), ['00:00', '00:40', '02:00', '03:50']);
-const why = navWhy(r.stations[0]);
-eq('the why: named, the letter shared, the slot, the night', [/named in 100 %/.test(why[0]), /2 stations use letter E on 518 kHz — nearest Niton 195 km, then Far 2,400 km/.test(why[1]),
-   /90 % ended inside E’s schedule slot \(00:40 UTC/.test(why[2]), /10 % heard with the path in darkness/.test(why[3])], [true, true, true, true]);
-eq('the why of a "?": the candidates by distance', navWhy(r.stations[5]).some((w) => /could be Corsen \d+ % or Valentia \d+ %/.test(w)), true);
+const why = navWhy(r.stations[0]).join(' | ');
+eq('the why, in plain words and counts — never a score', [/Named by the message itself or its station label: 10 of 10 messages/.test(why),
+   /Ended inside E’s schedule slot \(00:40 UTC, every 4 h\): 9 of 10/.test(why), /Nearest E station on 518 kHz: Niton, 195 km \(next Far, 2,400 km\) — 2 stations share this letter/.test(why),
+   /Heard with the path in darkness: 1 of 10/.test(why), !/%/.test(why)], [true, true, true, true, true]);
+eq('the why of a "?": its candidates', navWhy(r.stations[5]).some((w) => /Could be Corsen \(520 km\) or Valentia \(648 km\)/.test(w)), true);
+eq('labels: plain / Suspected / ?', [navName('Niton', 'confident'), navName('Tallinn', 'likely'), navName('Corsen', 'ambiguous')], ['Niton', 'Suspected Tallinn', 'Corsen?']);
+eq('a run-settled station says so', navWhy({ ...r.stations[0], ev: { run: 3, series: 1 } }).slice(1, 3), ['Its warning service is named in the text (e.g. AVURNAV BREST, ESTONIAN NAV WARN): 1 of 10 messages', 'Part of the same broadcast run as a message naming it: 3 of 10 messages']);
 const card = navCard(sites[0]);
 eq('the card lists each letter with its band and counts', (card.match(/<b>[A-Z]<\/b> · \d+ kHz · \d+ received, \d+ different/g) || []).length, 3);
 eq('the card escapes what came off the air', /<script/.test(navCard({ ...sites[0], name: '<script>' })), false);

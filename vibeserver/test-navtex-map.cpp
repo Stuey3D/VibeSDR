@@ -97,16 +97,24 @@ int main(int argc, char** argv) {
         ok(tl && std::fabs(tl->st->lat - 59.5) < 0.01, "…at Pub. 117's Tallinn position");
         bool sorted = true; for (size_t i = 1; i < res.stations.size(); ++i) if (res.stations[i - 1].last < res.stations[i].last) sorted = false;
         ok(sorted, "most recently heard first");
-        // ★ EA14 on 490 kHz, 2026-11-01 00:40 UTC — "AVURNAV BREST … IROISE - OUESSANT …": a French warning, Corsen's. The
-        //   label could not decide between the two E stations on 490 (Corsen 520 km, Mondolfo 1,406 km: no positions, too
-        //   few French words to count as the language), and the map does not guess either: a "?" with Corsen, the nearer,
-        //   first — the issuing authority's series name is not used, because stations relay each other's series (measured:
-        //   264 of 2 290 named messages carry another country's series, e.g. Oostende sending WZ).
+        // ★★ EA14 on 490 kHz, 2026-11-01 00:40 UTC — "AVURNAVKBREST _02/26 … IROISE - OESSANT - PAZENN …": the label's own
+        //   pair, Corsen (520 km) or Mondolfo (1,406 km) — no positions, too few French words for the language. The map's
+        //   ADDITIVE clue, the issuing authority's series among those two candidates, picks Corsen (likely).
+        //   EA81, 40 s later on the same band, its header damaged ("QPPWZCZC EA"), "AVUCNAV BREST 370/26": a Start-lost
+        //   item, placed by its neighbour in E's slot — Corsen (likely).
         {
             const std::string ea14 = read("20261101-004012-navtex-489k5-cc32.txt");
             const auto r14 = navtex::resolveAll('E', 489500, LA, LO, ea14);
             ok(r14.stations.size() == 2 && std::string(r14.stations[0]->name) == "Corsen" && std::string(r14.stations[1]->name) == "Mondolfo",
-               "EA14 (AVURNAV BREST): the label's pair, Corsen (520 km) or Mondolfo (1,406 km) — not one station named");
+               "EA14 (AVURNAV BREST): the label's pair, Corsen or Mondolfo — the label is left as it is");
+            ok(navmap::seriesPick(ea14, r14.stations) && std::string(navmap::seriesPick(ea14, r14.stations)->name) == "Corsen",
+               "…the series AVURNAV BREST ('AVURNAVKBREST', one letter off) picks Corsen among them");
+            ok(!navmap::seriesPick("WZ 649/26\nLUNDY.", r14.stations), "…and WZ (the UK's) picks neither French nor Italian candidate");
+            const navmap::Agg* co = find('E', "Corsen");
+            bool has14 = false, has81 = false;
+            if (co) for (auto& rc : co->recent) { has14 |= rc.id == "EA14"; has81 |= rc.file == "20261101-004052-navtex-489k5-783f.txt"; }
+            ok(co && has14, "EA14 is on the map at Corsen");
+            ok(co && has81 && res.startLostPlaced >= 1, "EA81 (start lost, 'AVUCNAV BREST') inherits Corsen from EA14 beside it");
         }
         const std::string j = navmap::toJson(res, LA, LO, 1793560000);
         ok(j.find("\"stations\":[") != std::string::npos && j.find("\"rx\":{\"lat\":52.3020") != std::string::npos && j.size() < 200000, "the JSON: stations, the receiver, bounded (" + std::to_string(j.size()) + " B)");

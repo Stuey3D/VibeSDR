@@ -24,7 +24,7 @@ import { IsmBox, type IsmReport, type IsmBand, ismOnMap, ismMapIcon, ismMapLabel
          ismIsNodeCard, ismNodesParse, ismGalCard, ismGalRows, ismGalStatus, ismMapHeard, ismMapRank, ismInRange, ismRangeOf, ismGalMerge,
          ismNodeCardBand, ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmGalNode } from './ism';
 import { NdbView, NDB_DLG_CSS, type NdbReport } from './ndb';
-import { navSanitise, navIcon, navLabel, navCard, navRows, navStatus, navRank, navRangeOf, navSince, navSiteColour, navSites, navRowAge,
+import { navSanitise, navIcon, navLabel, navCard, navRows, navStatus, navRank, navRangeOf, navSince, navSiteColour, navSites, navRowAge, navName,
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation, type NavSite } from '../../../src/services/navtexMap';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
@@ -8815,7 +8815,7 @@ async function navFetch(range: string): Promise<NavReport | null> {
 function navRowsHtml(r: NavReport): string {
   if (!r.stations.length) return `<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`;
   return navRows(r).map(({ g, second, range }) => `<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
-    + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(g.name + (g.conf === 'ambiguous' ? '?' : ''))}</b><small>${escapeHtml(second)}</small></span>`
+    + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(navName(g.name, g.conf))}</b><small>${escapeHtml(second)}</small></span>`
     + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`).join('');
 }
 async function navMapOpen() {

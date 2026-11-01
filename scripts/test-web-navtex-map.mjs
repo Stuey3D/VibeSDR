@@ -114,7 +114,7 @@ try {
   await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /Oostende|Cullercoats|Niton/.test(x.textContent)); r && r.click(); })()`);
   await sleep(2500);
   const card = await ev(`(document.querySelector('.vtl-card:not([hidden])') || {}).textContent || ''`);
-  ok(/named in \d+ % of its messages/.test(card) && /stations? uses? letter [A-Z] on \d+(\.\d)? kHz/.test(card) && /schedule slot/.test(card), `the why: ${(card.match(/named in[^·]*|\d+ % ended[^·]*/g) || []).join(' | ')}`);
+  ok(/Named by the message itself or its station label: \d+ of \d+ messages/.test(card) && /Nearest [A-Z] station on \d+(\.\d)? kHz/.test(card) && /schedule slot/.test(card) && !/\d+ %/.test(card), `the why, in plain words: ${(card.match(/Named by[^·]*|Ended inside[^·]*/g) || []).join(' | ')}`);
   ok(/first heard \d{4}-\d\d-\d\d/.test(card) && /[A-Z] · \d+(\.\d)? kHz · \d+ received, \d+ different/.test(card) && /Newest: [A-Z]{2}\d\d/.test(card), `a station's card: ${card.slice(0, 220)}`);
   ok(/Niton/.test(card) ? (card.match(/ · \d+(\.\d)? kHz · \d+ received/g) || []).length >= 2 : true, 'a co-sited card lists each of its letters');
   console.log('   screenshot', await shot('navtex-map-station.png'));

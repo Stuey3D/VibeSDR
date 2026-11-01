@@ -207,7 +207,10 @@ flags_for() {
     test-lora-nodes)       echo "-O2 -lpthread" ;;
     # ★★ V12 the NAVTEX map (2026-11-01): gallery titles read back, the stations placed by the label's own resolver, the
     #    time of day / history / message text where it could not decide, the fold, the real fixture set. Fast.
-    test-navtex-map)       echo "-O2" ;;
+    test-navtex-map)       echo "-O2 -lpthread" ;;
+    # ★★ V12 the NAVTEX map's warnings (2026-11-01): strict positions (garbled ones refused, LAT/LONG, Greek hemispheres),
+    #    the multilingual hazard lexicon, series / cancellations / windows, one marker per warning, the index. Fast.
+    test-navtex-warn)      echo "-O2 -lpthread" ;;
     *)               echo "" ;;
   esac
 }
