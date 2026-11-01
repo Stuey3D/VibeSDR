@@ -18,6 +18,7 @@
 #pragma once
 #include "vibe_avi_front.h"
 #include "vibe_vdl2_fec.h"
+#include "vibe_vdl2_simd.h"
 #include "vibe_acars.h"
 
 #include <algorithm>
@@ -27,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <numeric>
 #include <memory>
 #include <string>
 #include <vector>
@@ -217,6 +219,43 @@ private:
         hist_.resize(size_t(HB) + size_t(n));
         std::copy(z, z + n, hist_.begin() + HB);
         rs_.clear();
+        /* ★ A RATIONAL RATE (every rate the front end makes: 37.5 → 42 kS/s is 28/25, 32 → 42 is 21/16): the output
+         *  positions repeat every L outputs, so each phase has its own EXACT taps, the position is an integer count of
+         *  1/L samples (no double → int per output), and the 12-tap dot product is vibevdl2::dot12 (NEON / SSE2). */
+        if (ratL_ == 0) {
+            const long long fi = std::llround(fs_), wi = std::llround(kWorkRate);
+            const long long g = std::gcd(fi, wi);
+            if (std::fabs(fs_ - double(fi)) < 1e-6 && NT == 12 && wi / g <= 1024) {
+                ratL_ = int(wi / g); ratM_ = int(fi / g);
+                rt_.resize(size_t(ratL_) * 12);
+                auto bessel0 = [](double x) { double s = 1, t = 1; for (int k = 1; k < 25; ++k) { t *= (x / (2 * k)) * (x / (2 * k)); s += t; } return s; };
+                const double beta = double(tuning().kaiserBeta);
+                for (int r = 0; r < ratL_; ++r) {
+                    const double mu = double(r) / ratL_;
+                    double sum = 0, v[12];
+                    for (int j = 0; j < 12; ++j) {
+                        const double t = double(j - 5) - mu, sc = std::fabs(t) < 1e-9 ? 1.0 : std::sin(M_PI * t) / (M_PI * t), q = t / 6.0;
+                        v[j] = sc * (std::fabs(q) <= 1 ? bessel0(beta * std::sqrt(1 - q * q)) / bessel0(beta) : 0); sum += v[j];
+                    }
+                    for (int j = 0; j < 12; ++j) rt_[size_t(r * 12 + j)] = float(v[j] / sum);
+                }
+            } else ratL_ = -1;
+        }
+        if (ratL_ > 0) {
+            rs_.resize(size_t(double(n) * ratL_ / ratM_) + 4);
+            size_t k = 0;
+            // ★ base + r/L, stepped by M/L without a divide (a 64-bit divide per output was 20 % of VDL2 on ARMv7)
+            while (rBase_ < n) {
+                rs_[k++] = dot12(rt_.data() + rPh_ * 12, hist_.data() + rBase_);
+                rPh_ += ratM_;
+                while (rPh_ >= ratL_) { rPh_ -= ratL_; ++rBase_; }
+            }
+            rs_.resize(k);
+            rBase_ -= n;
+            std::copy(hist_.end() - HB, hist_.end(), hist_.begin());
+            hist_.resize(size_t(HB));
+            return;
+        }
         // output k sits at input position pos (relative to hist_[3] = the first of the last-call's tail): taps hist_[i..i+7]
         while (pos_ < double(n)) {
             const int i = int(pos_);
@@ -235,6 +274,7 @@ private:
     std::vector<float> pt_;
     std::vector<cf32> hist_;
     double pos_ = 0;
+    int ratL_ = 0, ratM_ = 1, rBase_ = 0, rPh_ = 0; std::vector<float> rt_;
     bool passThrough_ = false;
     static constexpr int kRing = 512;      // samples kept (12 ms)
     cf32 at_(int64_t n) const { return ring_[size_t(n & (kRing - 1))]; }
@@ -248,10 +288,15 @@ private:
     template <class Out> void sample_(cf32 v, Out& out) {
         const int64_t n = ++n_;
         ring_[size_t(n & (kRing - 1))] = v;
-        // the lag-4 product (one symbol), kept for the sync correlator
-        const cf32 p = v * std::conj(at_(n - kSps));
-        prod_[size_t(n & (kRing - 1))] = p;
-        absP_[size_t(n & (kRing - 1))] = std::sqrt(std::norm(p));   // ★ not std::abs: hypotf was 2.3 % of the VDL2 bench on its own
+        /* ★ THE LAG PRODUCTS AND THE SYNC CORRELATOR RUN IN GROUPS OF FOUR SAMPLES (NEON / SSE2: lagProd4, corr16x4).
+         *  A group is worked when its last sample arrives, so the search sees each sample up to 3 samples late — the same
+         *  numbers, decided a little later; the first data symbol is still ≥ 1 sample in the future then. Groups are
+         *  4-aligned and every lag is a multiple of 4, so no group crosses the ring's end. */
+        const bool groupDone = (n & 3) == 3;
+        if (groupDone) {
+            const size_t g0 = size_t((n - 3) & (kRing - 1)), gl = size_t((n - 3 - kSps) & (kRing - 1));
+            lagProd4(&ring_[g0], &ring_[gl], &prod_[g0], &absP_[g0]);
+        }
         /* power gate: 64-sample energy against the MEAN of the quiet windows (it was a minimum-tracker over 16 samples:
          *  noise's own spread kept it crossing 2.5× its low tail, and the sync search ran 97 % of the time on an idle
          *  channel — 54 % of the VDL2 bench). A burst is ≥ 3 dB over the channel's noise here; the hold covers 4
@@ -267,20 +312,23 @@ private:
             pw_ = 0; pwN_ = 0;
         }
         ++st_.samples;
-        if (state_ == kSearch) { if (active_) { ++st_.searched; search_(n); } return; }
+        if (state_ == kSearch) {
+            if (!groupDone) return;
+            if (!active_ && !cand_) return;
+            st_.searched += 4;
+            int g[16];
+            for (int i = 0; i < 16; ++i) g[i] = int((n - 3 - int64_t(kSps) * (15 - i)) & (kRing - 1));
+            float dr[4], di[4], sm[4], mn[4];
+            corr16x4(prod_, absP_, g, uwConj_, dr, di, sm, mn);
+            for (int l = 0; l < 4 && state_ == kSearch; ++l) searchAt_(n - 3 + l, cf32(dr[l], di[l]), sm[l], mn[l]);
+            return;
+        }
         if (state_ == kData && double(n) >= nextT_ + 1.0) symbol_(out);
     }
 
     /** ★ SYNC: D(n) = Σ_i prod(n − 4·(15−i))·conj(step_i); Q = |D| / Σ|prod|. A burst = Q above the threshold at its peak
      *  (the sample after shows it falling). */
-    void search_(int64_t n) {
-        cf32 d(0, 0); float s = 0, mn = 1e30f;
-        for (int i = 0; i < 16; ++i) {
-            const int64_t m = n - int64_t(kSps) * (15 - i);
-            d += prod_[size_t(m & (kRing - 1))] * uwConj_[i];
-            const float a = absP_[size_t(m & (kRing - 1))];
-            s += a; mn = std::min(mn, a);
-        }
+    void searchAt_(int64_t n, cf32 d, float s, float mn) {
         /* ★★ EVERY STEP MUST BE THERE. |D|/Σ|p| alone is ~1 whenever ONE product dominates — the burst's own leading
          *  edge, where one symbol × another is far above the noise × noise terms (it synced 40 000 times on noise and
          *  edges in the first run). A real unique word has all sixteen products of a similar size. */
@@ -502,8 +550,8 @@ private:
     cf32 h_[4] = {};
     std::vector<cf32> rs_, y_;
     std::unique_ptr<vibedsp::FirDecimator> mf_;
-    cf32 ring_[kRing] = {}, prod_[kRing] = {};
-    float absP_[kRing] = {};
+    alignas(16) cf32 ring_[kRing] = {}, prod_[kRing] = {};
+    alignas(16) float absP_[kRing] = {};
     cf32 uwConj_[16];
     int64_t n_ = 0, syncAt_ = 0;
     float pw_ = 0, floor_ = 0, lastPw_ = 0; int pwN_ = 0, active_ = 0;
