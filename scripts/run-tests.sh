@@ -59,7 +59,7 @@ flags_for() {
     test-multipath-meter)  echo "-O2 -I $VDSP -I $KISS" ;;
     # ★★★ Our own gain step through the real chain (2026-10-19): the smoother + the pipeline's guard,
     #     every case run with and without the step on the same noise seed. Optimised: ~30 runs of 8 s.
-    test-gain-step)        echo "-O2 -I $VDSP -I $KISS" ;;
+    test-gain-step|test-rsp-vibeagc) echo "-O2 -I $VDSP -I $KISS" ;;
     # ★ A cost RATIO: optimised like the shipping build, or the idle side is all loop overhead.
     test-gain-step-cost)   echo "-O2" ;;
     # ★ The Advanced RDS instrument (MpxMeasure) against a signal of known deviation, at several
@@ -229,7 +229,7 @@ deps_for() {
     test-stereo-highblend) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
-    test-gain-step) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
+    test-gain-step|test-rsp-vibeagc) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
                               $VDSP/resampler.cpp $VDSP/ddc.cpp $VDSP/channelizer.cpp $VDSP/iqclean.cpp \
                               $VDSP/zoomspec.cpp $KISS/kiss_fft.c $KISS/kiss_fftr.c $VDSP/third_party/pffft/pffft.c" ;;
     test-multipath-meter) echo "$VDSP/pipeline.cpp $VDSP/amsync.cpp $VDSP/autobw.cpp $VDSP/mpxmeasure.cpp $VDSP/stereo.cpp $VDSP/rds.cpp $VDSP/fft.cpp \
