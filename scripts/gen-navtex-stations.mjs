@@ -54,7 +54,11 @@ const COUNTRY = {
   'Vietnam': ['VN'],
 };
 // ★ A typo in the source that would hide the station from its own text ("NCC-HAMBURG"): corrected here, in the open.
-const NAME_FIX = { 'Haburg': 'Hamburg' };
+// ★★ 2026-11-01 (Stuart): the German station is shown as PINNEBERG — the transmitter site, the name the international
+//    lists use (Pub. 117's own entry reads "Haburg (DDH-49)", the NCC Hamburg service). "HAMBURG" stays an ALIAS (NAME_ALIAS
+//    below), so "NCC-HAMBURG", "NAVTEX HAMBURG (NCC)" still name it in a message's text and self-ID.
+const NAME_FIX = { 'Haburg': 'Pinneberg' };
+const NAME_ALIAS = { Pinneberg: ['HAMBURG'] };
 
 /** "Oostende (OST)" → "Oostende"; "Portsmouth/ CAMSLANT (NMN)" → "Portsmouth"; "Point Reyes RCF (San Francisco)
  *  CAMSPAC (NMC)" → "Point Reyes". The call sign and the controlling station are not what a listener calls it. */
@@ -89,8 +93,8 @@ const POSITION_FIX = { 'Saudanes': [66.186, -18.952], 'Limnos': [39.906, 25.181]
 //          Island G on 490 [WP] (no position) / G on 518. Not added: what [WP] marks inactive (Kelibia T 518, Constanța
 //          L 490, Bahía Blanca D 490, Kaohsiung P 518 — Casablanca M 518, also inactive there, stays from Pub. 117);
 //          Guayaquil M 518 (no position).
-//   Where [WP] names a transmitter site for a Pub. 117 station (Pinneberg for Hamburg, Punta Arenas for Magallanes,
-//   Serapeum for Ismailia) the Pub. 117 name is kept, so a message naming its station ("NCC-HAMBURG") still matches.
+//   Where [WP] names a transmitter site for a Pub. 117 station (Punta Arenas for Magallanes, Serapeum for Ismailia) the
+//   Pub. 117 name is kept. Germany is shown as Pinneberg (2026-11-01), with "HAMBURG" an alias (NAME_ALIAS).
 const SUPPLEMENT = [
   // Italy: [WP] lists a newer network than Pub. 117 2021 (Rome R, Cagliari T, Trieste U, Augusta V on 518).
   { name: 'Mondolfo', country: 'Italy', lat: 43.748, lon: 13.142, tx: [['E', 490], ['U', 518]],
@@ -106,7 +110,7 @@ const SUPPLEMENT = [
     evidence: '[WP], and Pub. 117\'s own France section; its 300C table says W (kept)' },
   { name: 'La Garde', country: 'France', lat: 43.104, lon: 5.991, tx: [['W', 518]], evidence: '[WP] (Pub. 117: S 490 only)' },
   // Germany — Pub. 117 lists Hamburg's S on 518 with no frequency (left out of its table); [WP] gives 518, at Pinneberg.
-  { name: 'Hamburg', country: 'Germany', lat: 53.673, lon: 9.809, tx: [['S', 518]], evidence: '[WP] (transmitter at Pinneberg)' },
+  { name: 'Pinneberg', country: 'Germany', lat: 53.673, lon: 9.809, tx: [['S', 518]], evidence: '[WP] (Pinneberg, the NCC Hamburg service)' },
   // Norway — the Oslofjord/Skagerrak station; explains the Lenovo's "tonight's M" (a Skagerrak warning on M 518).
   { name: 'Jeløy', country: 'Norway', lat: 59.436, lon: 10.589, tx: [['M', 518]], evidence: '[WP]' },
   // Greece — a national (490) service Pub. 117 does not list.
@@ -237,6 +241,16 @@ type SeriesRow = readonly [string, string, string, boolean, string];
 const SERIES: readonly SeriesRow[] = @@SERIES@@;
 const LANG_NAME: Record<string, string> = @@LANG_NAME@@;
 const W2 = @@W2@@ as const;
+/** ★ Other names a station goes by in its own messages ("HAMBURG" for Pinneberg) — matched like its name, shown as its name. */
+const NAME_ALIAS: Record<string, readonly string[]> = @@NAME_ALIAS@@;
+/** The letters a station is matched by: its name, then its aliases. */
+function nameKeys(s: NavtexStation): string[] { return [letters(s.name), ...(NAME_ALIAS[s.name] ?? [])]; }
+/** The station's own name for a name or an alias ("Hamburg" → "Pinneberg"); the name itself when it is neither. */
+export function navtexCanonicalName(name: string): string {
+  const L = letters(name);
+  for (const s of NAVTEX_STATIONS) if (nameKeys(s).includes(L)) return s.name;
+  return name;
+}
 
 /** Levenshtein distance. ★ The server's lev() is this. */
 function lev(a: string, b: string): number {
@@ -294,7 +308,7 @@ let NAMES: Array<[string, NavtexStation]> | null = null;
 function tableNames(): Array<[string, NavtexStation]> {
   if (!NAMES) {
     const seen = new Map<string, NavtexStation>();
-    for (const s of NAVTEX_STATIONS) { const L = letters(s.name); if (L.length >= 4 && !seen.has(L)) seen.set(L, s); }
+    for (const s of NAVTEX_STATIONS) for (const L of nameKeys(s)) if (L.length >= 4 && !seen.has(L)) seen.set(L, s);
     NAMES = [...seen];
   }
   return NAMES;
@@ -329,14 +343,16 @@ export function navtexSelfId(text: string, langs: string[] = navtexLanguages(tex
     let best = 1000000, second = 1000000, bestL = '', row: NavtexStation | null = null;
     for (const [L, s] of tableNames()) {
       const d = sub ? levSub(tok, L, false) : lev(tok, L);
-      if (d < best) { second = best; best = d; bestL = L; row = s; } else if (d < second) second = d;
+      // ★ an alias and the name are ONE station: only another station is a rival
+      if (d < best) { if (!row || letters(row.name) !== letters(s.name)) second = best; best = d; bestL = L; row = s; }
+      else if (d < second && (!row || letters(row.name) !== letters(s.name))) second = d;
     }
     if (!row || second <= best) continue;
     const close = bestL.length >= 5 ? Math.floor(bestL.length / 4) : 0;
     const loose = bestL.length >= 6 ? Math.floor(bestL.length * 0.4) : close;
     const iso = row.iso;
     const backed = ser.some((h) => h[1] === iso) || (langs.length > 0 && (LANGS[iso] ?? []).some((l) => langs.includes(l)));
-    if (best <= close || (best <= loose && backed)) return { L: bestL, row, raw, exact: best === 0, d: best, close: best <= close };
+    if (best <= close || (best <= loose && backed)) return { L: letters(row.name), row, raw, exact: best === 0, d: best, close: best <= close };
   }
   return null;
 }
@@ -366,7 +382,10 @@ function whyFor(s: NavtexStation, c: Clues): string[] {
   const w: string[] = [];
   if (c.sid && c.sid.L === letters(s.name)) w.push(c.sid.exact ? 'Identifies itself: “' + cleanRaw(c.sid.raw) + '”'
                                                                : 'Identifies itself as ' + s.name + ' (“' + cleanRaw(c.sid.raw) + '”)');
-  else if (letters(s.name).length >= 5 && c.t.includes(letters(s.name))) w.push('Names ' + s.name + ' in the text');
+  else {
+    const k = nameKeys(s).find((L) => L.length >= 5 && c.t.includes(L));
+    if (k) w.push('Names ' + (k === letters(s.name) ? s.name : k[0] + k.slice(1).toLowerCase()) + ' in the text');
+  }
   const sh = c.ser.find((h) => h[1] === s.iso && (!h[2] || h[2] === s.name));
   if (sh) w.push(sh[4]);
   if (c.pos.length && median(c.pos.map(([pa, po]) => km(s.lat, s.lon, pa, po))) <= NAVTEX_WEIGHTS.posFitKm) w.push('Positions in the text lie near ' + s.name);
@@ -491,7 +510,7 @@ export function navtexStartLostLabel(dialHz: number, lat: number, lon: number, t
   return navtexLabelOf(r.stations.length ? r.stations[0].b1 : m ? m[1] : '?', r);
 }
 `
-  .replace('@@SERIES@@', JSON.stringify(SERIES)).replace('@@LANG_NAME@@', JSON.stringify(LANG_NAME)).replace('@@W2@@', JSON.stringify(W2));
+  .replace('@@SERIES@@', JSON.stringify(SERIES)).replace('@@LANG_NAME@@', JSON.stringify(LANG_NAME)).replace('@@W2@@', JSON.stringify(W2)).replace('@@NAME_ALIAS@@', JSON.stringify(NAME_ALIAS));
 
 const CPP_PRE = String.raw`// ── ★★★ 2026-11-01: THE ADDITIVE CLUES — the same as navtexStations.generated.ts (the generator's header explains each) ──
 struct SeriesRow { const char* phrase; const char* iso; const char* name; bool strong; const char* what; };
@@ -504,6 +523,19 @@ inline const std::vector<SeriesRow>& seriesRows() {
 inline const char* langName(const std::string& l) {
 @@LANG_NAME@@
     return "";
+}
+/** ★ Other names a station goes by in its own messages ("HAMBURG" for Pinneberg) — matched like its name. */
+inline std::vector<std::string> nameKeys(const Station* s) {
+    std::vector<std::string> k = { letters(s->name) };
+@@NAME_ALIAS@@
+    return k;
+}
+/** navtexCanonicalName(): the station's own name for a name or an alias ("Hamburg" → "Pinneberg"). */
+inline std::string canonicalName(const std::string& name) {
+    const std::string L = letters(name);
+    size_t n = 0; const Station* t = stations(n);
+    for (size_t i = 0; i < n; i++) for (auto& k : nameKeys(&t[i])) if (k == L) return t[i].name;
+    return name;
 }
 constexpr double kServiceMfKm = @@serviceMf@@, kServiceHfKm = @@serviceHf@@, kFarKm = @@farKm@@;
 constexpr int kSlotEarly = @@slotEarly@@, kSlotLate = @@slotLate@@, kNearEarly = @@nearEarly@@, kNearLate = @@nearLate@@;
@@ -556,8 +588,7 @@ inline const std::vector<std::pair<std::string, const Station*>>& tableNames() {
     static const std::vector<std::pair<std::string, const Station*>> t = [] {
         std::vector<std::pair<std::string, const Station*>> o;
         size_t n = 0; const Station* s = stations(n);
-        for (size_t i = 0; i < n; i++) {
-            const std::string L = letters(s[i].name);
+        for (size_t i = 0; i < n; i++) for (const auto& L : nameKeys(&s[i])) {
             if (L.size() < 4) continue;
             bool seen = false; for (auto& e : o) if (e.first == L) seen = true;
             if (!seen) o.push_back({ L, &s[i] });
@@ -610,7 +641,10 @@ inline SelfId selfId(const std::string& text, const std::vector<std::string>& la
         int best = 1000000, second = 1000000; std::string bestL; const Station* row = nullptr;
         for (const auto& e : tableNames()) {
             const int d = tk.sub ? levSub(tk.tok, e.first, false) : lev(tk.tok, e.first);
-            if (d < best) { second = best; best = d; bestL = e.first; row = e.second; } else if (d < second) second = d;
+            // ★ an alias and the name are ONE station: only another station is a rival
+            const bool same = row && letters(row->name) == letters(e.second->name);
+            if (d < best) { if (!same) second = best; best = d; bestL = e.first; row = e.second; }
+            else if (d < second && !same) second = d;
         }
         if (!row || second <= best) continue;
         const int close = bestL.size() >= 5 ? (int)(bestL.size() / 4) : 0;
@@ -618,7 +652,7 @@ inline SelfId selfId(const std::string& text, const std::vector<std::string>& la
         bool backed = false;
         for (auto& h : ser) if (std::strcmp(h.iso, row->iso) == 0) backed = true;
         if (!langs.empty()) for (auto& l : isoLangs(row->iso)) if (std::find(langs.begin(), langs.end(), l) != langs.end()) backed = true;
-        if (best <= close || (best <= loose && backed)) { SelfId r; r.L = bestL; r.row = row; r.raw = tk.raw; r.exact = best == 0; r.d = best; r.close = best <= close; return r; }
+        if (best <= close || (best <= loose && backed)) { SelfId r; r.L = letters(row->name); r.row = row; r.raw = tk.raw; r.exact = best == 0; r.d = best; r.close = best <= close; return r; }
     }
     return SelfId();
 }
@@ -645,6 +679,7 @@ inline bool slotIn(char b1, double utc, int early, int late) {
 
 `
   .replace('@@SERIES@@', SERIES.map(([p, iso, n, st, w]) => `        { ${JSON.stringify(p)}, "${iso}", ${JSON.stringify(n)}, ${st}, ${JSON.stringify(w)} },`).join('\n'))
+  .replace('@@NAME_ALIAS@@', Object.entries(NAME_ALIAS).map(([n, al]) => `    if (std::strcmp(s->name, ${JSON.stringify(n)}) == 0) { ${al.map((a) => `k.push_back(${JSON.stringify(a)});`).join(' ')} }`).join('\n'))
   .replace('@@LANG_NAME@@', Object.entries(LANG_NAME).map(([l, n]) => `    if (l == "${l}") return "${n}";`).join('\n'))
   .replace(/@@(serviceMf|serviceHf|farKm|slotEarly|slotLate|nearEarly|nearLate)@@/g, (_, k) => String(W2[k])).replace('@@nameLines@@', String(W.nameLines));
 const CPP_POST = String.raw`
@@ -667,7 +702,11 @@ inline std::vector<std::string> whyFor(const Station* s, const Clues& c) {
     if (!c.sid.L.empty() && c.sid.L == L)
         w.push_back(c.sid.exact ? "Identifies itself: \xe2\x80\x9c" + cleanRaw(c.sid.raw) + "\xe2\x80\x9d"
                                 : std::string("Identifies itself as ") + s->name + " (\xe2\x80\x9c" + cleanRaw(c.sid.raw) + "\xe2\x80\x9d)");
-    else if (L.size() >= 5 && c.t.find(L) != std::string::npos) w.push_back(std::string("Names ") + s->name + " in the text");
+    else for (const auto& k : nameKeys(s)) if (k.size() >= 5 && c.t.find(k) != std::string::npos) {
+        std::string shown = k == L ? std::string(s->name) : k.substr(0, 1);
+        if (k != L) for (size_t j = 1; j < k.size(); j++) shown += (char)std::tolower((unsigned char)k[j]);
+        w.push_back("Names " + shown + " in the text"); break;
+    }
     for (auto& h : c.ser) if (std::strcmp(h.iso, s->iso) == 0 && (!*h.name || std::strcmp(h.name, s->name) == 0)) { w.push_back(h.what); break; }
     if (!c.pos.empty() && medianKm(s->lat, s->lon, c.pos) <= kPosFitKm) w.push_back(std::string("Positions in the text lie near ") + s->name);
     for (auto& l : isoLangs(s->iso)) if (std::find(c.langs.begin(), c.langs.end(), l) != c.langs.end()) { w.push_back(std::string("Written in ") + langName(l)); break; }
@@ -987,7 +1026,7 @@ function baseResolve(b1: string | null | undefined, dialHz: number, lat: number,
   const scored = cands.map((s) => {
     const d = here ? km(lat, lon, s.lat, s.lon) : NaN;
     let sc = here ? 1 / (1 + (d / W.priorKm) ** 2) : 1;
-    const exact = letters(s.name).length >= 5 && t.includes(letters(s.name));
+    const exact = nameKeys(s).some((L) => L.length >= 5 && t.includes(L));   // ★ + its aliases ("HAMBURG" for Pinneberg)
     const named = exact || (sid !== null && letters(s.name) === sid.L);   // ★ + the fuzzy self-ID (known names only)
     if (named) sc *= W.named;
     let med = Infinity;
@@ -1267,7 +1306,7 @@ inline Resolution baseResolve(char b1, double dialHz, double lat, double lon, co
         Sc x{ &t[i], here ? km(lat, lon, t[i].lat, t[i].lon) : NAN, 1, INFINITY, false, false, false };
         x.sc = here ? 1.0 / (1.0 + std::pow(x.d / kPriorKm, 2)) : 1.0;
         const std::string nl = letters(t[i].name);
-        x.exact = nl.size() >= 5 && tl.find(nl) != std::string::npos;
+        x.exact = false; for (const auto& k : nameKeys(&t[i])) if (k.size() >= 5 && tl.find(k) != std::string::npos) x.exact = true;   // ★ + aliases
         x.named = x.exact || (sid && nl == sid->L);   // ★ + the fuzzy self-ID (known names only)
         if (x.named) x.sc *= kNamed;
         if (!pos.empty()) {

@@ -332,7 +332,7 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('B', 489500) === 'B · Oostende, Belgium \u{1F1E7}\u{1F1EA}', 'B on 490 from Moulton = Oostende, Belgium + flag: ' + L('B', 489500));
   ok(L('U', 489500).startsWith('U · Cullercoats, United Kingdom'), 'U on 490 = Cullercoats');
   ok(L('A', 489500).startsWith('A · Malin Head, Ireland'), 'A on 490 = Malin Head');
-  ok(L('L', 489500).startsWith('L · Hamburg, Germany'), 'L on 490 = Hamburg (731 km)');
+  ok(L('L', 489500).startsWith('L · Pinneberg, Germany'), 'L on 490 = Pinneberg (731 km)');
   ok(L('G', 517500).startsWith('G · Cullercoats, United Kingdom'), 'G on 518 = Cullercoats');
   ok(L('V', 517500).startsWith('V · Oostende, Belgium'), 'V on 518 = Oostende');
   ok(L('L', 517500).startsWith('L · Rogaland, Norway'), 'L on 518 = Rogaland (813 km): ' + L('L', 517500));
@@ -358,11 +358,11 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('R', 517500) === 'Station R' || !L('R', 517500).includes('Isabella'), 'the same letter with no evidence never names Isabella from the UK');
   ok(L('M', 517500, 'SWEDISH NAV WARN 1/26\nSKAGERRAK. KOSTER.\nSOUTH CARDINAL MARK MISSING\nPSN 58-41.9N 010-51.2E').startsWith('M \u00b7 Jeløy, Norway'),
      "tonight's M: a Swedish warning, positions in the Skagerrak — Jeløy (supplement), 85 km from them; Pub. 117 2021 had no M near");
-  ok(L('L', 489500, 'NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E').startsWith('L \u00b7 Hamburg, Germany'), 'German comma decimals parse');
+  ok(L('L', 489500, 'NCC-HAMBURG\nNAUT. WARN. NR. 520\nMUNITIONSFUNDE AUF POSITION 54-19,2N 005-44,2E').startsWith('L \u00b7 Pinneberg, Germany'), 'German comma decimals parse');
   ok(L('J', 517500, 'SWEDISH NAV WARN 225/26\nBOTHNIAN SEA. 60-40.1N 017-55.0E') .startsWith('J \u00b7 Stockholm, Sweden'), 'J with a Baltic position → Stockholm');
   ok(L('B', 489500, '', NaN, NaN) === 'Station B', 'no server position → the letter only');
   ok(L('B', 489500, 'OOSTENDERADIO NAV WARNING', NaN, NaN).startsWith('B · Oostende'), 'no position, but the text names it');
-  ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).startsWith('L · Hamburg'), 'the text wins wherever the server is');
+  ok(L('L', 489500, 'NCC-HAMBURG', -33.9, 18.4).startsWith('L · Pinneberg'), 'the text wins wherever the server is');
   ok(L('B', 4209500) === 'Station B', 'HF 4209.5: Pub. 117 lists no HF letters — the letter only');
   ok(L('B', 10_000_000) === 'Station B', 'not on a NAVTEX channel → the letter only');
   ok(L('B', 489500, '', -33.9, 18.4) === 'Station B', 'B on 490 from Cape Town: no evidence, nothing near');
@@ -394,7 +394,7 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
   ok(L('T', 489500, NITON_FR.replace('ORIGINE METEO-FRANCE', 'CROSS RADIO')).startsWith('T \u00b7 Niton'), '"CROSS RADIO" is not a station name');
   // the supplement's other fixes
   ok(L('U', 517500, 'ZCZC UA03\nMONDOLFO RADIO\nNAV WARNING').startsWith('U \u00b7 Mondolfo, Italy'), 'U 518 naming Mondolfo → Mondolfo (supplement; Trieste kept)');
-  ok(L('S', 517500, 'NCC-HAMBURG\nNAUT. WARN.').startsWith('S \u00b7 Hamburg, Germany'), 'S 518 = Hamburg (Pub. 117 gave no frequency)');
+  ok(L('S', 517500, 'NCC-HAMBURG\nNAUT. WARN.').startsWith('S \u00b7 Pinneberg, Germany'), 'S 518 = Pinneberg (Pub. 117 gave no frequency)');
   ok(L('S', 4209500, 'GREEK NAVTEX 4209.5\n35-20N 025-10E').startsWith('S \u00b7 Irakleio, Greece'), 'HF 4209.5: a Wikipedia letter, with a fitting position');
   // ★★★ 2026-11-01 — the additive clues: the same cases as vibeserver/test-navtex-map.cpp (the server's copy)
   {
@@ -424,11 +424,14 @@ const E2 = 'ON 48-20N 005-10W\r\r\nCANCEL THIS MSG 041200 UTC OCT\r\r\n';
     ok(!L('J', 489500, JA).includes('Talcahuano'), '…with no time, never Talcahuano: ' + L('J', 489500, JA));
     const CS = 'NCC-AMBURG\nNAV. WARN. NO. 563\nGERMAN BIGHT\nWINDPARK BUTENDIEK LIGHTS UNRELIABLE';
     const rcs = R('C', 517500, CS, S('2026-10-05T23:01:15Z'), 'CS');
-    ok(navtexLabelOf('C', rcs) === 'S · Suspected Hamburg, ' + DE && !!rcs?.why?.[1]?.includes('shifted'), "synthetic 'ZCZC CS' NCC-AMBURG 23:01 → Suspected Hamburg (S), never Odesa");
+    ok(navtexLabelOf('C', rcs) === 'S · Suspected Pinneberg, ' + DE && !!rcs?.why?.[1]?.includes('shifted'), "synthetic 'ZCZC CS' NCC-AMBURG 23:01 → Suspected Pinneberg (S), never Odesa");
     const VL = '180550 NAVTEXJAHAMBURG (NCC)\nSEEWETTERVORHERSAGE\nVORHERSAGE FUER SONNTAG:\nDEUTSCHE BUCHT\nNE 4 BIS 5, SEE ZTW. 3M.\nWESTLICHE OSTSEE\nOST 4, SPAETER 5 UND DIE SEE';
     const lvl = navtexStationLabel('V', 489500, LA, LO, VL, S('2026-10-18T05:50:51Z'), 'VL');
-    ok(lvl === 'L · Suspected Hamburg, ' + DE, "synthetic 'ZCZC VL' NAVTEXJAHAMBURG 05:50 → Suspected Hamburg (L), never Yarmouth: " + lvl);
+    ok(lvl === 'L · Suspected Pinneberg, ' + DE, "synthetic 'ZCZC VL' NAVTEXJAHAMBURG 05:50 → Suspected Pinneberg (L), never Yarmouth: " + lvl);
     ok(navtexStartLostLabel(489500, LA, LO, 'ZCZC VL\n' + VL, S('2026-10-18T05:50:51Z')) === lvl, '…the same for a start-lost message beginning ZCZC VL');
+    const LA61 = 'NCCTAHAMBURG\nNAUT. AAN. NR. 606\nSUEDLICHE OSTSEE\nWINDPARK \'BALTIC EAGLE\'';
+    const r61 = R('L', 489500, LA61, S('2026-11-01T17:50:16Z'), 'LA61');
+    ok(navtexLabelOf('L', r61) === 'L \u00b7 Pinneberg, ' + DE && r61?.conf === 'confident', "UberSDR's LA61 (NCCTAHAMBURG, 490) → Pinneberg on L, confident: " + navtexLabelOf('L', r61));
     const BA43 = 'NORWEGIAN NAV. WARNING 356/2026\nCHART 67\nAREA ANDHOLMFJORDEN\nMAALOEY-SKARHOLMEN LIGHTHOUSE 67-46.08N 014-24.08E IS UNLIT.';
     ok(/^B · Bodo, Norway/.test(navtexStationLabel('B', 517500, LA, LO, BA43, S('2026-10-08T04:10:41Z'), 'BA43')), 'synthetic BA43 → Bodø, never Algiers');
     const BA41 = '281446 UTC SEP 26\nNORWEGIAN NAV. WARNING 347/2026\nCHART 84\nAREA GIBOSTAD\nNORDGRUNNEN LIGHT 69-21.40N 018-05.84E IS UNLIT.';

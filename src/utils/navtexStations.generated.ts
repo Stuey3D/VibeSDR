@@ -138,8 +138,8 @@ export const NAVTEX_STATIONS: readonly NavtexStation[] = [
   { b1: 'K', khz: 518, name: "Murmansk", iso: 'RU', country: "Russia", lat: 68.767, lon: 32.967 },
   { b1: 'K', khz: 518, name: "Niton", iso: 'GB', country: "United Kingdom", lat: 50.583, lon: -1.3 },
   { b1: 'K', khz: 518, name: "Puerto Montt", iso: 'CL', country: "Chile", lat: -41.5, lon: -72.967 },
-  { b1: 'L', khz: 490, name: "Hamburg", iso: 'DE', country: "Germany", lat: 53.667, lon: 9.817 },
   { b1: 'L', khz: 490, name: "Magallanes", iso: 'CL', country: "Chile", lat: -52.948, lon: -71.057 },
+  { b1: 'L', khz: 490, name: "Pinneberg", iso: 'DE', country: "Germany", lat: 53.667, lon: 9.817 },
   { b1: 'L', khz: 518, name: "Archangel", iso: 'RU', country: "Russia", lat: 64.55, lon: 40.533 },
   { b1: 'L', khz: 518, name: "Ayora", iso: 'EC', country: "Ecuador", lat: -0.717, lon: -90.317 },
   { b1: 'L', khz: 518, name: "Hong Kong", iso: 'CN', country: "China", lat: 22.217, lon: 114.25 },
@@ -200,9 +200,9 @@ export const NAVTEX_STATIONS: readonly NavtexStation[] = [
   { b1: 'R', khz: 518, name: "Saudanes", iso: 'IS', country: "Iceland", lat: 66.186, lon: -18.952 },
   { b1: 'S', khz: 490, name: "Iqaluit", iso: 'CA', country: "Canada", lat: 63.717, lon: -68.55 },
   { b1: 'S', khz: 490, name: "La Garde", iso: 'FR', country: "France", lat: 43.1, lon: 5.983 },
-  { b1: 'S', khz: 518, name: "Hamburg", iso: 'DE', country: "Germany", lat: 53.673, lon: 9.809 },
   { b1: 'S', khz: 518, name: "Lagos", iso: 'NG', country: "Nigeria", lat: 6.433, lon: 3.317 },
   { b1: 'S', khz: 518, name: "Paita", iso: 'PE', country: "Peru", lat: -5.083, lon: -81.117 },
+  { b1: 'S', khz: 518, name: "Pinneberg", iso: 'DE', country: "Germany", lat: 53.673, lon: 9.809 },
   { b1: 'S', khz: 518, name: "Sandakan", iso: 'MY', country: "Malaysia", lat: 5.9, lon: 118 },
   { b1: 'S', khz: 4209.5, name: "Irakleio", iso: 'GR', country: "Greece", lat: 35.323, lon: 25.749 },
   { b1: 'T', khz: 490, name: "Niton", iso: 'GB', country: "United Kingdom", lat: 50.583, lon: -1.3 },
@@ -394,7 +394,7 @@ function baseResolve(b1: string | null | undefined, dialHz: number, lat: number,
   const scored = cands.map((s) => {
     const d = here ? km(lat, lon, s.lat, s.lon) : NaN;
     let sc = here ? 1 / (1 + (d / W.priorKm) ** 2) : 1;
-    const exact = letters(s.name).length >= 5 && t.includes(letters(s.name));
+    const exact = nameKeys(s).some((L) => L.length >= 5 && t.includes(L));   // ★ + its aliases ("HAMBURG" for Pinneberg)
     const named = exact || (sid !== null && letters(s.name) === sid.L);   // ★ + the fuzzy self-ID (known names only)
     if (named) sc *= W.named;
     let med = Infinity;
@@ -434,6 +434,16 @@ type SeriesRow = readonly [string, string, string, boolean, string];
 const SERIES: readonly SeriesRow[] = [["COSTAVURNAV","IT","",true,"Italian warning series COSTAVURNAV"],["AVURNAV BREST","FR","Corsen",true,"French warning series AVURNAV BREST"],["AVURNAV CHERBOURG","FR","",true,"French warning series AVURNAV CHERBOURG"],["ESTONIAN NAV","EE","Tallinn",true,"Estonian navigational warning series"],["SWEDISH NAV","SE","",true,"Swedish navigational warning series"],["NORWEGIAN NAV","NO","",true,"Norwegian navigational warning series"],["DANISH NAV","DK","",true,"Danish navigational warning series"],["NCC HAMBURG","DE","",true,"German warning service NCC Hamburg"],["HAMBURG NCC","DE","",true,"German warning service NCC Hamburg"],["DEUTSCHE BUCHT","DE","",false,"German sea area Deutsche Bucht"],["GERMAN BIGHT","DE","",false,"German sea area German Bight"],["WESTLICHE OSTSEE","DE","",false,"German sea area Westliche Ostsee"],["SEEWETTERVORHERSAGE","DE","",false,"German sea forecast (Seewetterbericht)"]];
 const LANG_NAME: Record<string, string> = {"en":"English","nl":"Dutch","de":"German","fr":"French","es":"Spanish","pt":"Portuguese","it":"Italian","no":"Norwegian","da":"Danish","sv":"Swedish","pl":"Polish"};
 const W2 = {"serviceMf":3000,"serviceHf":5000,"farKm":8000,"slotEarly":120,"slotLate":720,"nearEarly":300,"nearLate":1500} as const;
+/** ★ Other names a station goes by in its own messages ("HAMBURG" for Pinneberg) — matched like its name, shown as its name. */
+const NAME_ALIAS: Record<string, readonly string[]> = {"Pinneberg":["HAMBURG"]};
+/** The letters a station is matched by: its name, then its aliases. */
+function nameKeys(s: NavtexStation): string[] { return [letters(s.name), ...(NAME_ALIAS[s.name] ?? [])]; }
+/** The station's own name for a name or an alias ("Hamburg" → "Pinneberg"); the name itself when it is neither. */
+export function navtexCanonicalName(name: string): string {
+  const L = letters(name);
+  for (const s of NAVTEX_STATIONS) if (nameKeys(s).includes(L)) return s.name;
+  return name;
+}
 
 /** Levenshtein distance. ★ The server's lev() is this. */
 function lev(a: string, b: string): number {
@@ -491,7 +501,7 @@ let NAMES: Array<[string, NavtexStation]> | null = null;
 function tableNames(): Array<[string, NavtexStation]> {
   if (!NAMES) {
     const seen = new Map<string, NavtexStation>();
-    for (const s of NAVTEX_STATIONS) { const L = letters(s.name); if (L.length >= 4 && !seen.has(L)) seen.set(L, s); }
+    for (const s of NAVTEX_STATIONS) for (const L of nameKeys(s)) if (L.length >= 4 && !seen.has(L)) seen.set(L, s);
     NAMES = [...seen];
   }
   return NAMES;
@@ -526,14 +536,16 @@ export function navtexSelfId(text: string, langs: string[] = navtexLanguages(tex
     let best = 1000000, second = 1000000, bestL = '', row: NavtexStation | null = null;
     for (const [L, s] of tableNames()) {
       const d = sub ? levSub(tok, L, false) : lev(tok, L);
-      if (d < best) { second = best; best = d; bestL = L; row = s; } else if (d < second) second = d;
+      // ★ an alias and the name are ONE station: only another station is a rival
+      if (d < best) { if (!row || letters(row.name) !== letters(s.name)) second = best; best = d; bestL = L; row = s; }
+      else if (d < second && (!row || letters(row.name) !== letters(s.name))) second = d;
     }
     if (!row || second <= best) continue;
     const close = bestL.length >= 5 ? Math.floor(bestL.length / 4) : 0;
     const loose = bestL.length >= 6 ? Math.floor(bestL.length * 0.4) : close;
     const iso = row.iso;
     const backed = ser.some((h) => h[1] === iso) || (langs.length > 0 && (LANGS[iso] ?? []).some((l) => langs.includes(l)));
-    if (best <= close || (best <= loose && backed)) return { L: bestL, row, raw, exact: best === 0, d: best, close: best <= close };
+    if (best <= close || (best <= loose && backed)) return { L: letters(row.name), row, raw, exact: best === 0, d: best, close: best <= close };
   }
   return null;
 }
@@ -563,7 +575,10 @@ function whyFor(s: NavtexStation, c: Clues): string[] {
   const w: string[] = [];
   if (c.sid && c.sid.L === letters(s.name)) w.push(c.sid.exact ? 'Identifies itself: “' + cleanRaw(c.sid.raw) + '”'
                                                                : 'Identifies itself as ' + s.name + ' (“' + cleanRaw(c.sid.raw) + '”)');
-  else if (letters(s.name).length >= 5 && c.t.includes(letters(s.name))) w.push('Names ' + s.name + ' in the text');
+  else {
+    const k = nameKeys(s).find((L) => L.length >= 5 && c.t.includes(L));
+    if (k) w.push('Names ' + (k === letters(s.name) ? s.name : k[0] + k.slice(1).toLowerCase()) + ' in the text');
+  }
   const sh = c.ser.find((h) => h[1] === s.iso && (!h[2] || h[2] === s.name));
   if (sh) w.push(sh[4]);
   if (c.pos.length && median(c.pos.map(([pa, po]) => km(s.lat, s.lon, pa, po))) <= NAVTEX_WEIGHTS.posFitKm) w.push('Positions in the text lie near ' + s.name);

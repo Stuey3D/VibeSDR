@@ -140,7 +140,8 @@ inline Title parseTitle(const std::vector<std::string>& f, bool lostStart) {
 // ── the stations ─────────────────────────────────────────────────────────────────────────────────────────────────────
 inline const navtex::Station* byName(char b1, double band, const std::string& name, bool anyBand) {
     size_t n = 0; const navtex::Station* t = navtex::stations(n);
-    const std::string want = navtex::letters(name);
+    // ★ an older title's name for the station ("Hamburg", before 2026-11-01) → the one the table shows (Pinneberg)
+    const std::string want = navtex::letters(navtex::canonicalName(name));
     if (want.empty()) return nullptr;
     for (size_t k = 0; k < n; ++k) if (t[k].b1 == b1 && (anyBand || t[k].khz == band) && navtex::letters(t[k].name) == want) return &t[k];
     if (anyBand) for (size_t k = 0; k < n; ++k) if (navtex::letters(t[k].name) == want) return &t[k];

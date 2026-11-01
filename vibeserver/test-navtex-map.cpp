@@ -180,13 +180,16 @@ int main(int argc, char** argv) {
             { const std::string t = "NCC-AMBURG\nNAV. WARN. NO. 563\nGERMAN BIGHT\nWINDPARK BUTENDIEK LIGHTS UNRELIABLE";
               const auto r = navtex::resolveAll('C', 517500, LA, LO, t, at(2026, 10, 5, 23, 1, 15), "CS");
               const std::string l = navtex::labelOf('C', r);
-              ok(l == "S \xc2\xb7 Suspected Hamburg, Germany \xf0\x9f\x87\xa9\xf0\x9f\x87\xaa", "synthetic 'ZCZC CS' NCC-AMBURG, 518, 23:01 \xe2\x86\x92 Suspected Hamburg (S): " + l);
+              ok(l == "S \xc2\xb7 Suspected Pinneberg, Germany \xf0\x9f\x87\xa9\xf0\x9f\x87\xaa", "synthetic 'ZCZC CS' NCC-AMBURG, 518, 23:01 \xe2\x86\x92 Suspected Pinneberg (S): " + l);
               ok(!has(l, "Odes") && r.why.size() > 1 && has(r.why[1], "shifted"), "\xe2\x80\xa6never Odesa; the letters look shifted (CS)"); }
             { const std::string t = "180550 NAVTEXJAHAMBURG (NCC)\nSEEWETTERVORHERSAGE\nVORHERSAGE FUER SONNTAG:\nDEUTSCHE BUCHT\nNE 4 BIS 5, SEE ZTW. 3M.\nWESTLICHE OSTSEE\nOST 4, SPAETER 5 UND DIE SEE";
               const std::string l = navtex::labelOf('V', navtex::resolveAll('V', 489500, LA, LO, t, at(2026, 10, 18, 5, 50, 51), "VL"));
-              ok(l == "L \xc2\xb7 Suspected Hamburg, Germany \xf0\x9f\x87\xa9\xf0\x9f\x87\xaa", "synthetic 'ZCZC VL' NAVTEXJAHAMBURG, 490, 05:50 \xe2\x86\x92 Suspected Hamburg (L), never Yarmouth: " + l);
+              ok(l == "L \xc2\xb7 Suspected Pinneberg, Germany \xf0\x9f\x87\xa9\xf0\x9f\x87\xaa", "synthetic 'ZCZC VL' NAVTEXJAHAMBURG, 490, 05:50 \xe2\x86\x92 Suspected Pinneberg (L), never Yarmouth: " + l);
               const std::string sl = navtex::startLostLabel(489500, LA, LO, "ZCZC VL\n" + t, at(2026, 10, 18, 5, 50, 51));
               ok(sl == l, "\xe2\x80\xa6the same as a start-lost message whose text begins 'ZCZC VL': " + sl); }
+            { const auto r = navtex::resolveAll('L', 489500, LA, LO, "NCCTAHAMBURG\nNAUT. AAN. NR. 606\nSUEDLICHE OSTSEE\nWINDPARK 'BALTIC EAGLE'", at(2026, 11, 1, 17, 50, 16), "LA61");
+              ok(navtex::labelOf('L', r) == "L \xc2\xb7 Pinneberg, Germany \xf0\x9f\x87\xa9\xf0\x9f\x87\xaa" && r.conf == "confident", "UberSDR's LA61 (NCCTAHAMBURG, 490) \xe2\x86\x92 Pinneberg on L, confident: " + navtex::labelOf('L', r));
+              ok(navmap::byName('L', 490, "Hamburg", false) && std::string(navmap::byName('L', 490, "Hamburg", false)->name) == "Pinneberg", "an older 'Hamburg' title is placed at Pinneberg"); }
             { const std::string t = "NORWEGIAN NAV. WARNING 356/2026\nCHART 67\nAREA ANDHOLMFJORDEN\nMAALOEY-SKARHOLMEN LIGHTHOUSE 67-46.08N 014-24.08E IS UNLIT.";
               const std::string l = navtex::labelOf('B', navtex::resolveAll('B', 517500, LA, LO, t, at(2026, 10, 8, 4, 10, 41), "BA43"));
               ok(has(l, "B \xc2\xb7 Bodo, Norway") && !has(l, "Algiers"), "synthetic BA43 (Norwegian, 67-46N 014-24E) \xe2\x86\x92 Bod\xc3\xb8, never Algiers: " + l); }

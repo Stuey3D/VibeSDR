@@ -150,8 +150,8 @@ inline const Station* stations(size_t& n) {
         { 'K', 518.0, "Murmansk", "RU", "Russia", 68.767, 32.967 },
         { 'K', 518.0, "Niton", "GB", "United Kingdom", 50.583, -1.3 },
         { 'K', 518.0, "Puerto Montt", "CL", "Chile", -41.5, -72.967 },
-        { 'L', 490.0, "Hamburg", "DE", "Germany", 53.667, 9.817 },
         { 'L', 490.0, "Magallanes", "CL", "Chile", -52.948, -71.057 },
+        { 'L', 490.0, "Pinneberg", "DE", "Germany", 53.667, 9.817 },
         { 'L', 518.0, "Archangel", "RU", "Russia", 64.55, 40.533 },
         { 'L', 518.0, "Ayora", "EC", "Ecuador", -0.717, -90.317 },
         { 'L', 518.0, "Hong Kong", "CN", "China", 22.217, 114.25 },
@@ -212,9 +212,9 @@ inline const Station* stations(size_t& n) {
         { 'R', 518.0, "Saudanes", "IS", "Iceland", 66.186, -18.952 },
         { 'S', 490.0, "Iqaluit", "CA", "Canada", 63.717, -68.55 },
         { 'S', 490.0, "La Garde", "FR", "France", 43.1, 5.983 },
-        { 'S', 518.0, "Hamburg", "DE", "Germany", 53.673, 9.809 },
         { 'S', 518.0, "Lagos", "NG", "Nigeria", 6.433, 3.317 },
         { 'S', 518.0, "Paita", "PE", "Peru", -5.083, -81.117 },
+        { 'S', 518.0, "Pinneberg", "DE", "Germany", 53.673, 9.809 },
         { 'S', 518.0, "Sandakan", "MY", "Malaysia", 5.9, 118 },
         { 'S', 4209.5, "Irakleio", "GR", "Greece", 35.323, 25.749 },
         { 'T', 490.0, "Niton", "GB", "United Kingdom", 50.583, -1.3 },
@@ -498,6 +498,19 @@ inline const char* langName(const std::string& l) {
     if (l == "pl") return "Polish";
     return "";
 }
+/** ★ Other names a station goes by in its own messages ("HAMBURG" for Pinneberg) — matched like its name. */
+inline std::vector<std::string> nameKeys(const Station* s) {
+    std::vector<std::string> k = { letters(s->name) };
+    if (std::strcmp(s->name, "Pinneberg") == 0) { k.push_back("HAMBURG"); }
+    return k;
+}
+/** navtexCanonicalName(): the station's own name for a name or an alias ("Hamburg" → "Pinneberg"). */
+inline std::string canonicalName(const std::string& name) {
+    const std::string L = letters(name);
+    size_t n = 0; const Station* t = stations(n);
+    for (size_t i = 0; i < n; i++) for (auto& k : nameKeys(&t[i])) if (k == L) return t[i].name;
+    return name;
+}
 constexpr double kServiceMfKm = 3000, kServiceHfKm = 5000, kFarKm = 8000;
 constexpr int kSlotEarly = 120, kSlotLate = 720, kNearEarly = 300, kNearLate = 1500;
 
@@ -549,8 +562,7 @@ inline const std::vector<std::pair<std::string, const Station*>>& tableNames() {
     static const std::vector<std::pair<std::string, const Station*>> t = [] {
         std::vector<std::pair<std::string, const Station*>> o;
         size_t n = 0; const Station* s = stations(n);
-        for (size_t i = 0; i < n; i++) {
-            const std::string L = letters(s[i].name);
+        for (size_t i = 0; i < n; i++) for (const auto& L : nameKeys(&s[i])) {
             if (L.size() < 4) continue;
             bool seen = false; for (auto& e : o) if (e.first == L) seen = true;
             if (!seen) o.push_back({ L, &s[i] });
@@ -603,7 +615,10 @@ inline SelfId selfId(const std::string& text, const std::vector<std::string>& la
         int best = 1000000, second = 1000000; std::string bestL; const Station* row = nullptr;
         for (const auto& e : tableNames()) {
             const int d = tk.sub ? levSub(tk.tok, e.first, false) : lev(tk.tok, e.first);
-            if (d < best) { second = best; best = d; bestL = e.first; row = e.second; } else if (d < second) second = d;
+            // ★ an alias and the name are ONE station: only another station is a rival
+            const bool same = row && letters(row->name) == letters(e.second->name);
+            if (d < best) { if (!same) second = best; best = d; bestL = e.first; row = e.second; }
+            else if (d < second && !same) second = d;
         }
         if (!row || second <= best) continue;
         const int close = bestL.size() >= 5 ? (int)(bestL.size() / 4) : 0;
@@ -611,7 +626,7 @@ inline SelfId selfId(const std::string& text, const std::vector<std::string>& la
         bool backed = false;
         for (auto& h : ser) if (std::strcmp(h.iso, row->iso) == 0) backed = true;
         if (!langs.empty()) for (auto& l : isoLangs(row->iso)) if (std::find(langs.begin(), langs.end(), l) != langs.end()) backed = true;
-        if (best <= close || (best <= loose && backed)) { SelfId r; r.L = bestL; r.row = row; r.raw = tk.raw; r.exact = best == 0; r.d = best; r.close = best <= close; return r; }
+        if (best <= close || (best <= loose && backed)) { SelfId r; r.L = letters(row->name); r.row = row; r.raw = tk.raw; r.exact = best == 0; r.d = best; r.close = best <= close; return r; }
     }
     return SelfId();
 }
@@ -661,7 +676,7 @@ inline Resolution baseResolve(char b1, double dialHz, double lat, double lon, co
         Sc x{ &t[i], here ? km(lat, lon, t[i].lat, t[i].lon) : NAN, 1, INFINITY, false, false, false };
         x.sc = here ? 1.0 / (1.0 + std::pow(x.d / kPriorKm, 2)) : 1.0;
         const std::string nl = letters(t[i].name);
-        x.exact = nl.size() >= 5 && tl.find(nl) != std::string::npos;
+        x.exact = false; for (const auto& k : nameKeys(&t[i])) if (k.size() >= 5 && tl.find(k) != std::string::npos) x.exact = true;   // ★ + aliases
         x.named = x.exact || (sid && nl == sid->L);   // ★ + the fuzzy self-ID (known names only)
         if (x.named) x.sc *= kNamed;
         if (!pos.empty()) {
@@ -737,7 +752,11 @@ inline std::vector<std::string> whyFor(const Station* s, const Clues& c) {
     if (!c.sid.L.empty() && c.sid.L == L)
         w.push_back(c.sid.exact ? "Identifies itself: \xe2\x80\x9c" + cleanRaw(c.sid.raw) + "\xe2\x80\x9d"
                                 : std::string("Identifies itself as ") + s->name + " (\xe2\x80\x9c" + cleanRaw(c.sid.raw) + "\xe2\x80\x9d)");
-    else if (L.size() >= 5 && c.t.find(L) != std::string::npos) w.push_back(std::string("Names ") + s->name + " in the text");
+    else for (const auto& k : nameKeys(s)) if (k.size() >= 5 && c.t.find(k) != std::string::npos) {
+        std::string shown = k == L ? std::string(s->name) : k.substr(0, 1);
+        if (k != L) for (size_t j = 1; j < k.size(); j++) shown += (char)std::tolower((unsigned char)k[j]);
+        w.push_back("Names " + shown + " in the text"); break;
+    }
     for (auto& h : c.ser) if (std::strcmp(h.iso, s->iso) == 0 && (!*h.name || std::strcmp(h.name, s->name) == 0)) { w.push_back(h.what); break; }
     if (!c.pos.empty() && medianKm(s->lat, s->lon, c.pos) <= kPosFitKm) w.push_back(std::string("Positions in the text lie near ") + s->name);
     for (auto& l : isoLangs(s->iso)) if (std::find(c.langs.begin(), c.langs.end(), l) != c.langs.end()) { w.push_back(std::string("Written in ") + langName(l)); break; }
