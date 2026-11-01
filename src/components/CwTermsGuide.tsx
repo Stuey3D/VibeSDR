@@ -21,6 +21,7 @@ import {
 } from './PopupShell';
 import { CW_GUIDE_INTRO, CW_GUIDE_RST_LINE, CW_KIND_LABEL, matchCwLookalikes, searchCwTerms } from '../utils/cwVocab';
 import { QRZ_SIGN_IN_NOTE } from '../utils/cwFormat';
+import { scrollLane } from '../constants/popupTokens';
 
 export default function CwTermsGuide({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { theme: t } = useTheme();
@@ -80,7 +81,7 @@ export default function CwTermsGuide({ visible, onClose }: { visible: boolean; o
           />
         </View>
         <PopupWindow style={s.bodyWrap} metalStyle={s.bodyWin}>
-        <ScrollView ref={scroll} style={s.body} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 20 }}>
+        <ScrollView ref={scroll} style={s.body} keyboardShouldPersistTaps="handled" contentContainerStyle={[{ paddingBottom: 20 }, scrollLane]}>
           {!q.trim() && (
             <View style={s.sec}>
               <Text style={[s.para, { fontFamily: ff }]}>{CW_GUIDE_INTRO}</Text>
