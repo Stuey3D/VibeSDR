@@ -168,12 +168,21 @@ inline double bandDcCentre(double sampleRate, int fftSize, double dialHz, double
         return (const BandDcZone*)nullptr;
     };
     // a DC at `p` must leave every slice inside the capture (the slices are cut from it)
-    auto holds = [&](double p) {
-        for (const BandDcZone& s : slices)
-            if (!captureHolds(sampleRate, p, 0.5 * (s.loHz + s.hiHz), s.hiHz - s.loHz)) return false;
+    // ★★ …every slice it CAN hold (strict = false). A narrow capture cannot hold a band's far extras at all wherever it sits
+    //    (300 kS/s on 2 m: the main slice at 144.16 and the WSPR / MSK144 extras at 144.49 / 144.36, 400 kHz apart; 70 cm's
+    //    Q65 and MSK144 extras since 8fa07987b / f8e691200) — that is the mode's "out" chip, not ours. Demanding them too
+    //    made EVERY way out fail, and the DC was left ON FT8 (test-band-dc). So: first every slice (strict, as before);
+    //    when no place does that, the slices the capture holds where it is now — none of those is ever given up.
+    auto holds = [&](double p, bool strict) {
+        for (const BandDcZone& s : slices) {
+            const double sc = 0.5 * (s.loHz + s.hiHz), sw = s.hiHz - s.loHz;
+            if (!strict && !captureHolds(sampleRate, dc, sc, sw)) continue;
+            if (!captureHolds(sampleRate, p, sc, sw)) return false;
+        }
         return true;
     };
     const std::vector<BandDcZone> tiers[2] = { merged(cut), merged(modes) };
+    for (int strict = 1; strict >= 0; --strict)
     for (int pass = 0; pass < 2; ++pass) {              // ★ pass 0 inside the caller's bounds, pass 1 without them
         for (const std::vector<BandDcZone>& z : tiers) {
             const BandDcZone* in = inside(z, dc);
@@ -184,7 +193,7 @@ inline double bandDcCentre(double sampleRate, int fftSize, double dialHz, double
             for (double p : cand) {
                 const double c = p - hwOffsetHz;
                 if (pass == 0 && (c < loHz || c > hiHz)) continue;
-                if (!holds(p)) continue;
+                if (!holds(p, strict != 0)) continue;
                 if (!std::isfinite(best) || std::fabs(p - dc) < std::fabs(best - dc)) best = p;
             }
             if (std::isfinite(best)) return best - hwOffsetHz;
