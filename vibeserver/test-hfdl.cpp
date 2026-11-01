@@ -226,8 +226,7 @@ int main(int argc, char** argv) {
     if (const char* t = std::getenv("HFDL_TUNE")) {
         auto& T = vibehfdl::tuning(); std::string s(t);
         auto vf = [&](const char* k, float& v) { const size_t p = s.find(k); if (p != std::string::npos) v = float(std::atof(s.c_str() + p + std::strlen(k))); };
-        vf("coh=", T.minCoh); vf("ts=", T.tSpan); vf("det=", T.detQ); vf("pair=", T.detPair); { const size_t q = s.find("retry="); if (q != std::string::npos) T.retries = std::atoi(s.c_str() + q + 6); }
-        { const size_t q = s.find("seg="); if (q != std::string::npos) T.segSigma = std::atoi(s.c_str() + q + 4) != 0; } vf("mu=", T.mu); vf("pa=", T.pllA); vf("pb=", T.pllB);
+        vf("coh=", T.minCoh); vf("ts=", T.tSpan); vf("det=", T.detQ); vf("pair=", T.detPair); { const size_t q = s.find("seg="); if (q != std::string::npos) T.segSigma = std::atoi(s.c_str() + q + 4) != 0; } vf("mu=", T.mu); vf("pa=", T.pllA); vf("pb=", T.pllB);
         { const size_t q = s.find("taps="); if (q != std::string::npos) T.eqTaps = std::atoi(s.c_str() + q + 5); }
     }
     if (argc > 1 && !std::strcmp(argv[1], "--wav")) return wav(argc, argv);
@@ -241,6 +240,99 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
+    const bool quick = argc > 1 && !std::strcmp(argv[1], "--quick");
+    std::mt19937 rng(9);
+
+    std::printf("1. the coding layers\n");
+    {
+        vibehfdl::Scrambler s; std::vector<int> a, b;
+        for (int i = 0; i < 120; ++i) a.push_back(s.next());
+        for (int i = 0; i < 120; ++i) b.push_back(s.next());
+        CHECK(a == b, "the scrambler restarts every 120 data symbols");
+        int ones = 0; for (int v : a) ones += v;
+        CHECK(ones > 40 && ones < 80, "scrambler balance %d/120", ones);
+        for (int m = 0; m < 8; ++m) {
+            const vibehfdl::Mode md = vibehfdl::modeOf(m);
+            const int total = md.segments * vibehfdl::kDataLen * md.bitsPerSym;
+            auto o = vibehfdl::deinterleaveOrder(total, md.colShift);
+            std::vector<int> c(o.begin(), o.end()); std::sort(c.begin(), c.end());
+            bool perm = true; for (int i = 0; i < total; ++i) perm &= c[size_t(i)] == i;
+            CHECK(perm, "mode %d: the deinterleaver reads every value once (%d)", m, total);
+        }
+        // Viterbi: a random block through the encoder and back, clean and with 4 % of the coded bits flipped
+        for (int noisy = 0; noisy < 2; ++noisy) {
+            std::vector<uint8_t> in(500); for (auto& v : in) v = uint8_t(rng() & 1);
+            for (int i = 0; i < 6; ++i) in.push_back(0);
+            std::vector<float> soft; int r = 0, flips = 0;
+            for (uint8_t bt : in) {
+                r = ((r << 1) | bt) & 127;
+                for (int poly : { 0x6D, 0x4F }) {
+                    int c = __builtin_popcount(r & poly) & 1;
+                    float v = c ? -1.f : 1.f;
+                    if (noisy && rng() % 25 == 0) { v = -v * 0.3f; ++flips; }
+                    soft.push_back(v);
+                }
+            }
+            auto out = vibehfdl::viterbi27(soft);
+            CHECK(out == in, "Viterbi %s (%d flips)", noisy ? "with errors" : "clean", flips);
+        }
+        // the PDU check and the coordinates
+        auto mp = perfMpdu(42, 6, "TST001", 51.5, -1.25);
+        auto msgs = vibehfdl::parseMpdu(mp.data(), mp.size());
+        CHECK(msgs.size() == 1 && msgs[0].flight == "TST001" && std::fabs(msgs[0].lat - 51.5) < 1e-3 && std::fabs(msgs[0].lon + 1.25) < 1e-3 && msgs[0].srcId == 42,
+              "MPDU round trip");
+        mp[10] ^= 0x10;
+        CHECK(vibehfdl::parseMpdu(mp.data(), mp.size()).empty(), "a damaged LPDU is refused");
+        // a real header off the air (8977 kHz, 21:58:14): 07 03 d1 00 01 00 2b + its CRC 6b 76
+        const uint8_t real[8] = { 0x07, 0x03, 0xD1, 0x00, 0x01, 0x00, 0x2B, 0x6B };
+        uint8_t rh[9]; std::memcpy(rh, real, 8); rh[8] = 0x76;
+        CHECK(vibehfdl::crcOk(rh, 7), "the real MPDU header's CRC");
+    }
+
+    std::printf("2. synthetic bursts (RRC 0.31, 3 Hz offset; SNR in the symbol bandwidth): decoded of %d\n", quick ? 4 : 10);
+    {
+        const int N = quick ? 4 : 10;
+        for (int mode : { 0, 1, 2, 3, 4 }) {
+            std::printf("   mode %d (%4d bit/s %c):", mode, vibehfdl::bitRate(mode), mode < 4 ? 'S' : 'D');
+            for (double snr : { -4.0, 0.0, 4.0, 10.0 }) {
+                int ok = 0; for (int i = 0; i < N; ++i) ok += synthOnce(mode, snr, 3.0, -99, 0, uint32_t(1000 + i * 31 + mode * 7 + int(snr)));
+                std::printf("  %+3.0f dB %2d", snr, ok);
+                if (snr >= 4 && mode != 3) CHECK(ok >= N - 1, "mode %d at %.0f dB: %d of %d", mode, snr, ok, N);
+                if (snr >= 10) CHECK(ok >= N - 1, "mode %d at %.0f dB: %d of %d", mode, snr, ok, N);
+            }
+            std::printf("\n");
+        }
+        int ok = 0; for (int i = 0; i < N; ++i) ok += synthOnce(0, 2.0, -12.0, -3.0, 5, uint32_t(500 + i));
+        std::printf("   300 bit/s, a second path 3 dB down 1.25 symbols late, -12 Hz, 2 dB: %d of %d\n", ok, N);
+        CHECK(ok >= N - 2, "multipath %d of %d", ok, N);
+    }
+
+    std::printf("3. noise only: %s at 7200 S/s, zero messages\n", quick ? "2 min" : "20 min");
+    {
+        vibehfdl::Demod d(vibehfdl::kWorkRate);
+        std::normal_distribution<float> g(0, 0.1f);
+        std::vector<cf32> blk(7200);
+        int got = 0;
+        for (int s = 0; s < (quick ? 120 : 1200); ++s) {
+            for (auto& v : blk) v = cf32(g(rng), g(rng));
+            d.feed(blk.data(), int(blk.size()), [&](const vibehfdl::Message&) { ++got; });
+        }
+        std::printf("   %d messages (detections %llu, bursts worked %llu)\n", got, (unsigned long long)d.stats().detections, (unsigned long long)d.stats().bursts);
+        CHECK(got == 0, "noise gave %d messages", got);
+    }
+
+    std::printf("4. CPU: one channel (a listener's dial) at 12 kS/s in, 10 min of noise\n");
+    {
+        vibehfdl::Demod d(12000);
+        std::normal_distribution<float> g(0, 0.1f);
+        std::vector<cf32> blk(12000);
+        for (auto& v : blk) v = cf32(g(rng), g(rng));
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int s = 0; s < 600; ++s) d.feed(blk.data(), int(blk.size()), [&](const vibehfdl::Message&) {});
+        const double el = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        std::printf("   %.3f s for 600 s = %.3f %% of a core here\n", el, 100 * el / 600);
+    }
+    std::printf("digest %016llx\n", (unsigned long long)g_digest);
     std::printf("%d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

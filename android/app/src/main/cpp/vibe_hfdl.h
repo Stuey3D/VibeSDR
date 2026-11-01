@@ -74,7 +74,7 @@ inline Mode modeOf(int m) {
 }
 inline int bitRate(int m) { static const int r[4] = { 300, 600, 1200, 1800 }; return r[m & 3]; }
 
-struct Tuning { int retries = 0; float minCoh = 0.25f, tSpan = 4.0f; float detQ = 0.3f, detPair = 0.8f; float mu = 0.06f; float pllA = 0.05f, pllB = 0.002f; int eqTaps = 11; bool scrambleOld = true; bool segSigma = true; };
+struct Tuning { float minCoh = 0.25f, tSpan = 4.0f; float detQ = 0.3f, detPair = 0.8f; float mu = 0.06f; float pllA = 0.05f, pllB = 0.002f; int eqTaps = 11; bool scrambleOld = true; bool segSigma = true; };
 inline Tuning& tuning() { static Tuning t; return t; }
 inline bool debug() { static const bool d = std::getenv("HFDL_DEBUG") != nullptr; return d; }
 
@@ -426,9 +426,7 @@ private:
         const Mode md = modeOf(mode);
         const int nData = md.segments * kDataLen;
         const int total = kPreambleKnown + md.segments * (kDataLen + kTLen);
-        /* ★★ IF THE CRC SAYS NO, TRY AGAIN DIFFERENTLY. The burst is buffered, so a failed decode costs only another
-         *  equaliser pass (~4000 symbols × 11 taps): the second step size and length, and the timing half a sample
-         *  either way. The CRC-16 of every MPDU header and LPDU is the judge; the first variant that passes wins. */
+        // (a retry on a CRC failure — a second step size, the timing ±½ sample — was measured to find nothing: 4373649ef)
         float snr = 0;
         auto attempt = [&](float muV, int tapsV, double tShift) -> std::vector<Message> {
             // 3. the equaliser over the whole burst: taps on half-symbol spacing (2 samples at 4 a symbol)
@@ -566,10 +564,7 @@ private:
 
             return parseMpdu(bytes.data(), bytes.size());
         };
-        struct V { float mu; int taps; double dt; };
-        const V vars[4] = { { tuning().mu, tuning().eqTaps, 0.0 }, { 0.03f, 15, 0.0 }, { tuning().mu, tuning().eqTaps, 0.5 }, { tuning().mu, tuning().eqTaps, -0.5 } };
-        std::vector<Message> msgs;
-        for (int vi = 0; vi < (tuning().retries ? 4 : 1) && msgs.empty(); ++vi) msgs = attempt(vars[vi].mu, vars[vi].taps, vars[vi].dt);
+        std::vector<Message> msgs = attempt(tuning().mu, tuning().eqTaps, 0.0);
         if (msgs.empty()) st_.crcBad++;
         for (auto& m : msgs) {
             m.channel = chan_; m.hz = hz_; m.t = burstT_; m.mode = mode; m.snrDb = snr;
