@@ -22,7 +22,7 @@ import { adminTicketQuery, inAdminMode, saveAdminTicket } from './adminticket';
 import { loadMapGLScripts, mapglLoad, probeMapGL } from './mapgl';
 import { loadVibemapSource } from './chunkCache';
 import { loadLeafletInto } from './leafletAsset';
-import { pushBack } from './gamepad';
+import { pushBack, padRehighlight } from './gamepad';
 import { betaConfirmText, updateButton, updateOfferText, type UpdateState } from './updateOffer';
 import { bgLines } from './adminBg';
 /* ★ Evaluate the shared renderer once into this page — same string the app injects and the
@@ -1058,6 +1058,21 @@ function kickSelect(session: string): string {
   }</select>`;
 }
 
+/** ★★ THE CONTROLLER'S HIGHLIGHT SURVIVES A REDRAW. The listener, waiting and landing-page tables are rebuilt on every
+ *  poll, and the highlight is a class on an element that is about to be replaced: a redraw landing while it sat on a
+ *  row's DISCONNECT / for-how-long / BLOCK IP left it on the detached copy, so it vanished until the next press (found
+ *  by test-web-gamepad-admin once each row grew the for-how-long list, beta49). Found again by its place: the same
+ *  control, counted in the redrawn container. Never a way to move the highlight (padRehighlight). */
+const PAD_CONTROLS = 'button, input:not([type=hidden]), select, a[href]';
+function keepPadHighlight(el: HTMLElement, draw: () => void) {
+  const hi = el.querySelector<HTMLElement>('.gpFocus');
+  const at = hi ? [...el.querySelectorAll<HTMLElement>(PAD_CONTROLS)].indexOf(hi) : -1;
+  draw();
+  if (at < 0 || !hi || hi.isConnected) return;
+  const again = el.querySelectorAll<HTMLElement>(PAD_CONTROLS)[at];
+  if (again) padRehighlight(again);
+}
+
 function renderSessions(s: any) {
   renderQueue(s.queue ?? []);
   renderVisitors(s.visitors ?? [],
@@ -1075,7 +1090,7 @@ function renderSessions(s: any) {
   // ★ Never yank a dropdown the owner is using: this table is redrawn every poll, and redrawing
   //   it would close the "for how long" list in their hand. The next poll after they choose draws.
   if (tb.contains(document.activeElement) && document.activeElement?.tagName === 'SELECT') return;
-  tb.innerHTML = list.map((c) => `<tr>
+  keepPadHighlight(tb, () => { tb.innerHTML = list.map((c) => `<tr>
     <td>${withFlag(c.cc, c.ip || '—')}</td>
     <td>${c.radio ? esc(c.radio) : '<span class="dim">—</span>'}</td>
     <td>${esc(mhz(c.vfoHz))}</td>
@@ -1119,7 +1134,7 @@ function renderSessions(s: any) {
       <button class="btn" data-ban="${esc(c.ip)}">BLOCK IP</button>
       ${c.net ? `<button class="btn" data-banasn="${esc(c.net.split(' ')[0])}"
                          data-netname="${esc(c.net)}">BLOCK NETWORK</button>` : ''}
-    </td></tr>`).join('');
+    </td></tr>`).join(''); });
 }
 
 // ── Bans ──────────────────────────────────────────────────────────────────────────────────────
