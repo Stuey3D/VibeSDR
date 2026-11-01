@@ -47,8 +47,8 @@ static constexpr size_t kMaxGroups = 20000;
 static constexpr int64_t kExpireSec = 72 * 3600;
 static constexpr int64_t kReuseSec = 30 * 86400;
 static constexpr size_t kMaxPts = 24;
-static constexpr const char* kPrefix = "v5\t";   // ★ kVersion's line prefix
-static constexpr int kVersion = 5;   // ★ 5 (2026-11-01): the submarine class (was folded into firing). 4: + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
+static constexpr const char* kPrefix = "v6\t";   // ★ kVersion's line prefix
+static constexpr int kVersion = 6;   // ★ 6 (2026-11-01): cables/pipelines in five, platforms, named lists (one marker an item), REPLACES. 5: the submarine class (was folded into firing). 4: + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
 
 // ── the hazard classes (the Lenovo's 3 924 messages decided them — scripts/navtex-survey numbers in the commit) ─────────
 /** Conservative keyword rules on the message body, whole words, in this order (the first that matches wins); when none
@@ -97,19 +97,48 @@ inline const std::vector<Rule>& rules() {
         {"adrift", "en", R"(\bADRIFT\b|\bDRIFTING\b|\bDERELICT\b|\bCONTAINERS? (LOST|OVERBOARD)\b|\bFLOATING (OBJECT|DEBRIS|LOG|TIMBER)S?\b)"},
         {"adrift", "fr", R"(\bA LA DERIVE\b)"}, {"adrift", "es", R"(\bA LA DERIVA\b)"}, {"adrift", "it", R"(\bALLA DERIVA\b)"},
         {"adrift", "de", R"(\bTREIBEND\w*\b)"}, {"adrift", "nl", R"(\bDRIJVEND\w*\b)"}, {"adrift", "hr", R"(\bPLUTA\w*\b)"},
-        {"structure", "en", R"(\bWIND ?FARMS?\b|\bWIND ?TURBINES?\b|\bTURBINES?\b|\bPLATFORMS?\b|\bDRILLING RIGS?\b|\bRIGS?\b|\bOFFSHORE INSTALLATIONS?\b|\bMET(EOROLOGICAL)? MASTS?\b|\bJACK.?UP\b|\bFPSO\b|\bWELLHEAD\b)"},
-        {"structure", "fr", R"(\bPARC EOLIEN\b|\bEOLIENNES?\b|\bPLATE.?FORMES?\b)"}, {"structure", "es", R"(\bPARQUE EOLICO\b|\bPLATAFORMAS?\b)"},
-        {"structure", "it", R"(\bPARCO EOLICO\b|\bPIATTAFORM[AE]\b)"}, {"structure", "de", R"(\bWINDPARKS?\b|\bWINDENERGIE\w*\b|\bPLATTFORM\w*\b)"},
-        {"structure", "nl", R"(\bWINDPARKS?\b|\bWINDTURBINES?\b|\bPLATFORMS?\b)"}, {"structure", "hr", R"(\bPLATFORM[AEU]\b)"},
+        // ★ v6 (2026-11-01, Stuart): WIND FARMS stay `structure`; oil and gas PLATFORMS, drilling RIGS (towed ones too) and
+        //   WELLHEADS are `platform` — their own icon (a steel jacket and derrick), most of them "UNLIT AND ALL NAVAIDS
+        //   INOPERATIVE". RIG is a whole word (never TRIG / BRIGHT / RIGHT / ORIGIN). "CONSULT NEARBY OFFSHORE PLATFORMS"
+        //   (an anchoring notice) is not one — classify() strips that phrase before these rules look.
+        {"structure", "en", R"(\bWIND ?FARMS?\b|\bWIND ?TURBINES?\b|\bTURBINES?\b|\bMET(EOROLOGICAL)? MASTS?\b)"},
+        {"structure", "fr", R"(\bPARC EOLIEN\b|\bEOLIENNES?\b)"}, {"structure", "es", R"(\bPARQUE EOLICO\b|\bAEROGENERADOR\w*\b)"},
+        {"structure", "it", R"(\bPARCO EOLICO\b|\bAEROGENERATOR\w*\b)"}, {"structure", "de", R"(\bWINDPARKS?\b|\bWINDENERGIE\w*\b|\bWINDKRAFT\w*\b)"},
+        {"structure", "nl", R"(\bWINDPARKS?\b|\bWINDTURBINES?\b|\bWINDMOLEN\w*\b)"},
+        {"platform", "en", R"(\bPLATFORMS?\b|\bDRILLING RIGS?\b|\bJACK.?UP( RIGS?)?\b|\bRIGS?\b|\bWELL ?HEADS?\b|\bFPSO\b|\bOFFSHORE INSTALLATIONS?\b|\b(SUSPENDED|ABANDONED) WELLS?\b)"},
+        {"platform", "fr", R"(\bPLATE.?FORMES?\b|\bTETES? DE PUITS\b)"}, {"platform", "es", R"(\bPLATAFORMAS?\b|\bCABEZA DE POZO\b)"},
+        {"platform", "it", R"(\bPIATTAFORM[AE]\b|\bTESTA POZZO\b)"}, {"platform", "de", R"(\bPLATTFORM\w*\b|\bBOHRINSEL\w*\b)"},
+        {"platform", "nl", R"(\bBOORPLATFORM\w*\b|\bBOOREILAND\w*\b|\bPLATFORMS?\b)"}, {"platform", "hr", R"(\bPLATFORM[AEU]\b)"},
         {"navaid", "en", R"(\bBUOYS?\b|\bBEACONS?\b|\bLIGHTHOUSE\b|\bLIGHT ?VESSEL\b|\bLIGHT ?FLOAT\b|\bLANBY\b|\bRACON\b|\bDGNSS\b|\bDGPS\b|\bAIS\b|\bFOG ?SIGNAL\b|\bFOGHORN\b|\bLEADING LIGHTS?\b|\bLIGHTS?\b)"},
         {"navaid", "fr", R"(\bBOUEES?\b|\bBALISES?\b|\bPHARES?\b|\bFEUX?\b)"}, {"navaid", "es", R"(\bBOYAS?\b|\bBALIZAS?\b|\bFAROS?\b|\bLUZ\b)"},
         {"navaid", "it", R"(\bBOA\b|\bBOE\b|\bMEDA\b|\bFARO\b|\bFANALE\b|\bLUCE\b)"}, {"navaid", "de", R"(\bTONNEN?\b|\bBAKEN\b|\bLEUCHTFEUER\b|\bFEUER\b)"},
         {"navaid", "nl", R"(\bBOEIEN?\b|\bBAKENS?\b|\bVUURTOREN\b|\bLICHT\b|\bMISTHOORN\b)"}, {"navaid", "hr", R"(\bPLUTAC\w*\b|\bSVJETIONIK\w*\b|\bSVJETL\w*\b|\bBOJA\b)"},
         {"navaid", "el", R"(\bFAROS\b|\bFANOS\b|\bSIMADOUR[AE]S?\b)"},
-        {"cable", "en", R"(\bCABLES?\b|\bPIPELINES?\b|\bPIPE.?LAYING\b)"}, {"cable", "fr", R"(\bCABLES? SOUS.?MARINS?\b|\bCANALISATION\b)"},
-        {"cable", "es", R"(\bCANALIZACION\b|\bCABLE SUBMARINO\b|\bTUBERIA\b)"}, {"cable", "it", R"(\bCAV[OI]\b|\bCONDOTT[AE]\b|\bGASDOTTO\b|\bOLEODOTTO\b)"},
-        {"cable", "de", R"(\bKABEL\w*\b|\bROHRLEITUNG\w*\b|\bPIPELINE\b)"}, {"cable", "nl", R"(\bKABELS?\b|\bPIJPLEIDING\w*\b|\bLEIDING\w*\b)"},
-        {"cable", "hr", R"(\bKABEL\w*\b|\bCJEVOVOD\w*\b)"}, {"cable", "el", R"(\bKALOD(IO|IA|IOY)\b)"},
+        // ★★ v6 (2026-11-01, Stuart): CABLES AND PIPELINES IN FIVE — gas pipeline, power cable, telecom cable, pipeline, and a
+        //   cable whose kind the text does not say — from the message's own words, the specific ones FIRST. A "submarine
+        //   cable" stays a cable (the submarine rule refuses it). "KEEP A SAFE DISTANCE OF 2 CABLES" is a distance — classify()
+        //   rewrites a number of cables to CBLS before these rules look.
+        {"pipeline_gas", "en", R"(\bGAS ?PIPE ?LINES?\b|\bGAS ?PIPES?\b|\bGAS TRUNK ?LINES?\b)"}, {"pipeline_gas", "fr", R"(\bGAZODUCS?\b)"},
+        {"pipeline_gas", "it", R"(\bGASDOTT[OI]\b|\bMETANODOTT[OI]\b)"}, {"pipeline_gas", "es", R"(\bGASODUCTOS?\b)"},
+        {"pipeline_gas", "de", R"(\bGASLEITUNG\w*\b|\bGASPIPELINE\w*\b|\bERDGAS\w*\b)"}, {"pipeline_gas", "nl", R"(\bGASLEIDING\w*\b|\bAARDGAS\w*\b)"},
+        {"pipeline_gas", "hr", R"(\bPLINOVOD\w*\b)"},
+        {"cable_power", "en", R"(\bPOWER ?CABLES?\b|\bEXPORT CABLES?\b|\bINTER-?ARRAY\b|\bINTERCONNECTORS?\b|\bHVDC\b|\bHVAC CABLES?\b|\bELECTRIC(AL)? CABLES?\b|\bHIGH.?VOLTAGE CABLES?\b)"},
+        {"cable_power", "fr", R"(\bCABLES? ELECTRIQUES?\b|\bLIAISON ELECTRIQUE\b|\bRACCORDEMENT ELECTRIQUE\b)"},
+        {"cable_power", "it", R"(\bCAV[OI] ELETTRIC[OI]\b|\bELETTRODOTT[OI]\b)"}, {"cable_power", "es", R"(\bCABLES? ELECTRICOS?\b|\bTENDIDO ELECTRICO\b)"},
+        {"cable_power", "de", R"(\bSTROMKABEL\w*\b|\bENERGIEKABEL\w*\b|\bHOCHSPANNUNGSKABEL\w*\b)"},
+        {"cable_power", "nl", R"(\bHOOGSPANNINGSKABEL\w*\b|\bSTROOMKABEL\w*\b|\bEXPORTKABEL\w*\b)"}, {"cable_power", "hr", R"(\bENERGETSK\w* KABEL\w*\b)"},
+        {"cable_telecom", "en", R"(\bTELECOM(MUNICATIONS?)? CABLES?\b|\bFIB(RE|ER)[- ]?OPTICS?\b|\bDATA CABLES?\b|\bTELEPHONE CABLES?\b|\bCOMMUNICATIONS? CABLES?\b)"},
+        {"cable_telecom", "fr", R"(\bFIBRES? OPTIQUES?\b|\bCABLES? (DE )?TELECOM\w*\b)"}, {"cable_telecom", "it", R"(\bFIBRA OTTICA\b|\bCAV[OI] (DI )?TELECOMUNICAZION\w*\b)"},
+        {"cable_telecom", "es", R"(\bFIBRA OPTICA\b|\bCABLES? DE TELECOMUNICACION\w*\b)"}, {"cable_telecom", "de", R"(\bGLASFASER\w*\b|\bDATENKABEL\w*\b|\bTELEKOMMUNIKATIONSKABEL\w*\b)"},
+        {"cable_telecom", "nl", R"(\bGLASVEZEL\w*\b|\bTELECOMKABEL\w*\b)"},
+        {"pipeline", "en", R"(\b\w*PIPE ?LINES?\b|\bPIPE.?LAYING\b|\bOUTFALL PIPES?\b)"}, {"pipeline", "fr", R"(\bOLEODUCS?\b|\bCANALISATIONS?\b)"},
+        {"pipeline", "es", R"(\bOLEODUCTOS?\b|\bTUBERIAS?\b|\bCANALIZACION\w*\b)"}, {"pipeline", "it", R"(\bCONDOTT[AE]\b|\bOLEODOTT[OI]\b)"},
+        {"pipeline", "de", R"(\bROHRLEITUNG\w*\b)"}, {"pipeline", "nl", R"(\bPIJPLEIDING\w*\b|\bZINKERLEIDING\w*\b|\bLEIDINGEN\b)"},
+        {"pipeline", "hr", R"(\bCJEVOVOD\w*\b)"},
+        {"cable", "en", R"(\bCABLES?\b)"}, {"cable", "fr", R"(\bCABLES? SOUS.?MARINS?\b)"},
+        {"cable", "es", R"(\bCABLE SUBMARINO\b)"}, {"cable", "it", R"(\bCAV[OI]\b)"},
+        {"cable", "nl", R"(\bKABELWERK\w*\b|\bKABELS?\b)"}, {"cable", "de", R"(\bKABEL\w*\b)"},
+        {"cable", "hr", R"(\bKABEL\w*\b)"}, {"cable", "el", R"(\bKALOD(IO|IA|IOY)\b)"},
         {"survey", "en", R"(\bSURVEY(S|ING)?\b|\bSEISMIC\b|\bHYDROGRAPHIC\b|\bTOWED ARRAY\b)"}, {"survey", "fr", R"(\bLEVES? HYDROGRAPHIQUES?\b|\bSISMIQUE\b)"},
         {"survey", "es", R"(\bLEVANTAMIENTO\b|\bSISMIC[OA]\b)"}, {"survey", "it", R"(\bRILIEV[OI]\b|\bSISMIC[AH]E?\b)"}, {"survey", "de", R"(\bVERMESSUNG\w*\b)"},
         {"survey", "nl", R"(\bPEILING\w*\b|\bSURVEYWERK\w*\b)"}, {"survey", "hr", R"(\bHIDROGRAF\w*\b)"},
@@ -138,6 +167,16 @@ inline Class classify(char b2, const std::string& text) {
     std::string U = navtex::upperAscii(text);
     const size_t z = U.find("ZCZC"); if (z != std::string::npos) U = U.substr(z);
     const size_t nn = U.find("NNNN"); if (nn != std::string::npos) U.resize(nn);
+    // ★ v6: "KEEP A SAFE DISTANCE OF 2 CABLES", "2 KABELS AFSTAND" — a distance, not a cable
+    U = std::regex_replace(U, rx(R"(\b(\d+(?:[.,]\d+)?|ONE|TWO|THREE|FOUR|FIVE|SIX|TEN)\s*(CABLES?|CABLE LENGTHS?|KABELS?|ENCABLURES?)\b)"), "$1 CBLS");
+    // ★ v6: "CONSULT NEARBY OFFSHORE PLATFORMS" (an anchoring notice) names no platform hazard
+    //   (and its garbled tail "…ORE PLATFORMS TO VERIFY THAT YOUR INTENDED ANCHORAGE")
+    const std::string Up = std::regex_replace(U, rx(R"(\bCONSULT(\s+\w+){0,3}\s+PLATFORMS?\b|\bPLATFORMS? TO VERIFY\b)"), "CONSULT");
+    // ★ v6: "A PIPELINE … MARKED WITH NORTH CARDINAL BUOY 'JDN'" — the hazard is the pipeline; the buoy only marks it. The
+    //   navaid rules do not read what follows MARKED WITH / MARKED BY.
+    const std::string Un = std::regex_replace(U, rx(R"(\b(MARKED|MARKS|MARKING)\s+(WITH|BY)\b[^.\n]{0,50})"), "MARKED");
+    // ★ v6: Spanish "TENDIDO DE CABLE SUBMARINO" is an undersea cable, never a submarine (the French had this already)
+    const std::string Us = std::regex_replace(U, rx(R"(\b(CABLES?|TUBERIAS?|CONDUCCION(ES)?|EMISARIOS?)\s+SUBMARIN[OA]S?\b)"), "$1");
     Class c;
     std::smatch m;
     for (const auto& r : unlitRules()) if (std::regex_search(U, m, rx(r.re))) { c.unlit = true; if (std::string(r.lang) != "en") { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; } break; }
@@ -145,12 +184,14 @@ inline Class classify(char b2, const std::string& text) {
     if (b2 == 'B' || b2 == 'E') { c.id = "met"; return c; }   // ★ a forecast or a met warning: the WEATHER layer's, never a hazard icon
     for (const auto& r : rules()) {
         if (b2 == 'D' && std::string(r.cls) != "sar") { c.id = "sar"; return c; }
-        if (std::regex_search(U, m, rx(r.re))) {
+        const std::string cls = r.cls;
+        const std::string& in = cls == "platform" ? Up : cls == "navaid" ? Un : cls == "submarine" ? Us : U;
+        if (std::regex_search(in, m, rx(r.re))) {
             if (std::string(r.cls) == "adrift" && word(U, R"(\b(BUOY|BOUEE|BOYA|BOA|TONNE|BOEI)\b[^.\n]{0,30}\b(ADRIFT|A LA DERIVE|A LA DERIVA|ALLA DERIVA|TREIBEND|DRIJVEND)\b)")) continue;   // ★ a buoy adrift is a navaid
             c.id = r.cls;
             if (std::string(r.lang) != "en" && c.hit.empty()) { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; }
             // ★ a navaid that is a BUOY or a beacon (any language's word for it) draws the buoy, not the lighthouse
-            if (c.id == "navaid" && word(U, R"(\b(BUOYS?|BEACONS?|LANBY|LIGHT ?FLOAT|BOUEES?|BALISES?|BOYAS?|BALIZAS?|BOA|BOE|MEDA|TONNEN?|BAKEN|BOEIEN?|BAKENS?|BOJA|PLUTAC\w*|SIMADOUR[AE]S?|\w+BOEI(EN)?|\w+TONNEN?)\b)")) c.id = "buoy";   // ★ compounds: LICHTBOEI, LEUCHTTONNE
+            if (c.id == "navaid" && word(Un, R"(\b(BUOYS?|BEACONS?|LANBY|LIGHT ?FLOAT|BOUEES?|BALISES?|BOYAS?|BALIZAS?|BOA|BOE|MEDA|TONNEN?|BAKEN|BOEIEN?|BAKENS?|BOJA|PLUTAC\w*|SIMADOUR[AE]S?|\w+BOEI(EN)?|\w+TONNEN?)\b)")) c.id = "buoy";   // ★ compounds: LICHTBOEI, LEUCHTTONNE
             return c;
         }
     }
@@ -203,14 +244,15 @@ inline std::string wordBefore(const std::string& s, size_t at) {
     size_t b = e; while (b > 0 && std::isalpha((unsigned char)s[b - 1])) --b;
     return s.substr(b, e - b);
 }
-struct Cancels { std::vector<std::string> series, ids; int64_t at = 0; bool self = false; };
+struct Cancels { std::vector<std::string> series, ids, replaces; int64_t at = 0; bool self = false; };
 /** "CANCEL WZ 476/26 (EA77)(VA08)" → series 476/26, ids EA77 VA08; "CANCEL THIS MSG 302200 UTC NOV" → at (UTC s, the
  *  month and day of the message year — resolved against the message time `t`). */
 inline Cancels cancelsOf(const std::string& b, int64_t t) {
     Cancels c;
     const std::string U = navtex::upperAscii(b);
     static const std::regex line(R"((CANCEL|ANNULE|ANULA|ANNULLA|AUFGEHOBEN|VERVALT|AKYRON|PONISTAVA)[^\n]*)"), ser(R"(\b(\d{1,4})\s?/\s?(\d{2}|\d{4})\b)"), id(R"(\(([A-Z]{2}\d{2})\))"),
-                            self(R"(CANCEL THIS (MSG|MESSAGE|WARNING)\s+(\d{2})(\d{2})(\d{2})\s*(UTC|Z)?\s*([A-Z]{3}))");
+                            self(R"((?:CANCEL|AND) THIS (MSG|MESSAGE|WARNING)\.?\s+(\d{2})(\d{2})(\d{2})\s*(UTC|Z)?\s*([A-Z]{3}))"),
+                            selfNow(R"((?:CANCEL|AND) THIS (MSG|MESSAGE|WARNING)\b(?!\.?\s*((AT|ON)\s+)?\d))");
     for (auto it = std::sregex_iterator(U.begin(), U.end(), line); it != std::sregex_iterator(); ++it) {
         const std::string l = it->str();
         std::smatch m;
@@ -225,8 +267,8 @@ inline Cancels cancelsOf(const std::string& b, int64_t t) {
                 if (at < t - 180 * 86400) { e.tm_year++; at = (int64_t)timegm(&e); }   // ★ across a new year
                 c.at = at;
             }
-            continue;
-        }
+            // ★ v6: no `continue` — "CANCEL WZ 621/26 AND THIS MSG 302200 UTC OCT" names a series too (read below)
+        } else if (std::regex_search(l, m, selfNow)) c.self = true;   // ★ v6: "CANCEL WZ 621/26 (GA12) AND THIS MSG." — a notice, never a hazard
         for (auto s2 = std::sregex_iterator(l.begin(), l.end(), ser); s2 != std::sregex_iterator(); ++s2) {
             std::string y = (*s2)[2]; if (y.size() == 4) y = y.substr(2);
             const std::string w = wordBefore(l, (size_t)s2->position(0));
@@ -243,6 +285,17 @@ inline Cancels cancelsOf(const std::string& b, int64_t t) {
         const std::string w = wordBefore(U, (size_t)it->position(0));
         if (c.series.size() < 8) c.series.push_back((w.empty() ? std::string() : w + " ") + std::string((*it)[1]) + "/" + y);
         c.self = true;
+    }
+    // ★★ v6 (Stuart: "the icons are based on the latest received message"): "THIS MESSAGE REPLACES WZ 612/26", "REMPLACE
+    //   AVURNAV 370/26", "SUSTITUYE", "SOSTITUISCE", "ERSETZT", "VERVANGT" — the warning it names is SUPERSEDED, not drawn
+    static const std::regex repl(R"(\b(REPLACES|REPLACING|SUPERSEDES|REMPLACE|SUSTITUYE|SOSTITUISCE|ERSETZT|VERVANGT)\b[^\n]{0,40})");
+    for (auto it = std::sregex_iterator(U.begin(), U.end(), repl); it != std::sregex_iterator(); ++it) {
+        const std::string l = it->str();
+        for (auto s2 = std::sregex_iterator(l.begin(), l.end(), ser); s2 != std::sregex_iterator(); ++s2) {
+            std::string y = (*s2)[2]; if (y.size() == 4) y = y.substr(2);
+            const std::string w = wordBefore(l, (size_t)s2->position(0));
+            if (c.replaces.size() < 8) c.replaces.push_back((w.empty() ? std::string() : w + " ") + std::string((*s2)[1]) + "/" + y);
+        }
     }
     return c;
 }
@@ -316,6 +369,59 @@ inline uint64_t textHash(const std::string& b) {
 /** Error characters: '*' / '_' the decoder printed for what it lost. */
 inline int lostChars(const std::string& b) { int n = 0; for (char c : b) n += c == '*' || c == '_'; return n; }
 
+/** ★★ v6 A LIST OF NAMED ITEMS (2026-11-01, Stuart): "FOLLOWING PLATFORMS HAVE DEFECTS:" then one line an item —
+ *  "K6-N 53-41.0N 003-44.0E FOGHORN INOPERATIVE". Each is its OWN marker with its own name and defect (never one shape
+ *  across the North Sea). Strict: every position of the message is on a line of its own (one position a line, two lines
+ *  or more), and each line has words besides its position (a corner list "A) 51-00N 002-00E" has none). The words
+ *  before the position are its name, after it its defect; `u` when the defect says its light is out. */
+struct Item { std::string name, defect; bool unlit = false; };
+inline std::string itemClean(std::string s, size_t cap) {
+    for (auto& ch : s) if (ch == '|' || ch == '~' || ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
+    s = std::regex_replace(s, rx(R"(^[\s,;:.\-]*(\d{1,2}[.)]\s*|[A-Z][)]\s*)?)"), "");
+    s = std::regex_replace(s, rx(R"(\b(IN )?(POSITION|POSN|PSN|POS)\b:?\s*$)"), "");
+    s = std::regex_replace(s, rx(R"(\s+)"), " ");
+    while (!s.empty() && (s.back() == ' ' || s.back() == ',' || s.back() == '.' || s.back() == ';' || s.back() == ':' || s.back() == '-')) s.pop_back();
+    while (!s.empty() && (s[0] == ' ' || s[0] == ',' || s[0] == '-' || s[0] == ':')) s.erase(0, 1);
+    if (s.size() > cap) s.resize(cap);
+    return s;
+}
+inline bool meaningful(const std::string& s) {
+    static const std::regex filler(R"(^(AND|OR|TO|FROM|AT|IN|THE|BETWEEN|THEN|POSITION|POS|PSN|LAT|LONG|N|S|E|W)$)");
+    std::string w; int letters = 0;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i < s.size() && std::isalnum((unsigned char)s[i])) { w += s[i]; continue; }
+        if (!w.empty() && !std::regex_match(w, filler)) for (char ch : w) letters += std::isalpha((unsigned char)ch) ? 1 : 0;
+        w.clear();
+    }
+    return letters >= 2;
+}
+inline std::vector<Item> namedItems(const std::string& b, size_t nAll) {
+    std::vector<Item> out;
+    if (nAll < 2) return out;
+    static const std::regex coord(R"(\d{1,3}[- ]?\d{1,2}(?:[.,]\d{1,3})?\s?[NSEW]\b)");
+    size_t p = 0;
+    const std::string U = navtex::upperAscii(b);
+    while (p <= U.size()) {
+        const size_t e = U.find('\n', p);
+        const std::string line = U.substr(p, e == std::string::npos ? std::string::npos : e - p);
+        p = e == std::string::npos ? U.size() + 1 : e + 1;
+        const std::string pl = posText(line);
+        const size_t n = navtex::positions(pl).size();
+        if (n == 0) continue;
+        if (n > 1) return {};
+        auto it = std::sregex_iterator(pl.begin(), pl.end(), coord);
+        size_t a = std::string::npos, z = 0;
+        for (; it != std::sregex_iterator(); ++it) { if (a == std::string::npos) a = (size_t)it->position(0); z = (size_t)(it->position(0) + it->length(0)); }
+        if (a == std::string::npos) return {};
+        Item i; i.name = itemClean(pl.substr(0, a), 40); i.defect = itemClean(pl.substr(z), 60);
+        if (!meaningful(i.name + " " + i.defect)) return {};
+        if (i.name.empty()) { i.name = i.defect; i.defect.clear(); }
+        i.unlit = std::regex_search(i.defect.empty() ? i.name : i.defect, rx(R"(\bUNLIT\b|\bBLACK ?OUT\b|\bEXTINGUISHED\b|\bLIGHTS?\b[^,;]{0,20}\b(INOPERATIVE|UNRELIABLE|OUT|FAILED|DEFECTIVE)\b|\bNAV ?AIDS?\b[^,;]{0,20}\b(INOPERATIVE|UNRELIABLE)\b|\bETEINTS?\b|\bSPENT[OA]\b|\bGEDOOFD\b|\bAPAGAD[OA]\b)"));
+        out.push_back(i);
+    }
+    if (out.size() != nAll) return {};
+    return out;
+}
 /** ★★ WHAT THE POINTS ARE (2026-11-01, the map's lines and areas): the text's own words. An AREA ("AREA BOUNDED BY",
  *  "WITHIN AREA", "ZONE", "ZONA", "GEBIET", "GEBIED", "PODRUCJE") with three points or more = a polygon; a ROUTE ("ALONG",
  *  "ROUTE", "TRACK", "LINE JOINING", "BETWEEN … AND", cable or pipeline LAYING, a tow FROM … TO) with two or more = a
@@ -359,8 +465,27 @@ struct Entry {
     std::string hit, lang;   // ★ the native word that classified it, and its language (the card's summary)
     int64_t validTo = 0; bool ufn = false;   // ★ its own window's end; "until further notice"
     char shape = 0; int64_t issued = 0;       // ★ v4: 'a' area / 'r' route / 0 points; its own date-time group
+    std::string rSeries;                       // ★ v6: what it REPLACES (';'-separated series)
+    std::vector<Item> items;                   // ★ v6: a named list — one per point, in the points' order
 };
 inline uint64_t nameHash(const std::string& s) { uint64_t h = 1469598103934665603ull; for (unsigned char c : s) { h ^= c; h *= 1099511628211ull; } return h; }
+/** name~defect~u|… — the named list's index field (itemClean took '|' '~' tab and newline out) */
+inline std::string itemsField(const std::vector<Item>& v) {
+    std::string o;
+    for (size_t i = 0; i < v.size(); ++i) o += (i ? "|" : "") + v[i].name + "~" + v[i].defect + "~" + (v[i].unlit ? "1" : "0");
+    return o;
+}
+inline std::vector<Item> itemsOf(const std::string& f) {
+    std::vector<Item> v; size_t p = 0;
+    while (p < f.size()) {
+        size_t q = f.find('|', p); if (q == std::string::npos) q = f.size();
+        const std::string one = f.substr(p, q - p);
+        const size_t a = one.find('~'), b2 = a == std::string::npos ? a : one.find('~', a + 1);
+        if (a != std::string::npos && b2 != std::string::npos) { Item i; i.name = one.substr(0, a); i.defect = one.substr(a + 1, b2 - a - 1); i.unlit = one.substr(b2 + 1) == "1"; v.push_back(i); }
+        p = q + 1;
+    }
+    return v;
+}
 /** v1 \t file \t t \t khz \t id \t hash(hex) \t lost \t class \t unlit \t series \t cancelIds \t cancelSeries \t cancelAt \t pts */
 inline std::string format(const Entry& e) {
     char b[160];
@@ -371,12 +496,14 @@ inline std::string format(const Entry& e) {
     for (size_t i = 0; i < e.pts.size(); ++i) { std::snprintf(b, sizeof b, "%s%.4f,%.4f", i ? ";" : "", e.pts[i].first, e.pts[i].second); o += b; }
     std::string hit = e.hit; for (auto& ch : hit) if (ch == '\t' || ch == '\n') ch = ' ';
     return o + "\t" + hit + "\t" + e.lang + "\t" + std::to_string((long long)e.validTo) + "\t" + (e.ufn ? "1" : "0")
-         + "\t" + (e.shape ? std::string(1, e.shape) : std::string()) + "\t" + std::to_string((long long)e.issued) + "\n";
+         + "\t" + (e.shape ? std::string(1, e.shape) : std::string()) + "\t" + std::to_string((long long)e.issued)
+         + "\t" + e.rSeries + "\t" + itemsField(e.items) + "\n";
 }
 inline bool parse(const std::string& l, Entry& e) {
     std::vector<std::string> f; size_t p = 0;
     for (;;) { const size_t q = l.find('\t', p); if (q == std::string::npos) { f.push_back(l.substr(p)); break; } f.push_back(l.substr(p, q - p)); p = q + 1; }
-    if (f.size() != 20 || f[0] != "v" + std::to_string(kVersion)) return false;
+    if (f.size() != 22 || f[0] != "v" + std::to_string(kVersion)) return false;
+    e.rSeries = f[20]; e.items = itemsOf(f[21]);
     e.hit = f[14]; e.lang = f[15]; e.validTo = std::atoll(f[16].c_str()); e.ufn = f[17] == "1";
     e.shape = f[18] == "a" ? 'a' : f[18] == "r" ? 'r' : 0; e.issued = std::atoll(f[19].c_str());
     e.file = f[1]; e.t = std::atoll(f[2].c_str()); e.khz = std::atof(f[3].c_str()); e.id = f[4];
@@ -413,20 +540,23 @@ inline Entry fromMessage(const std::string& file, int64_t t, double hz, const st
     for (auto& s : cx.ids) e.cIds += (e.cIds.empty() ? "" : " ") + s;
     for (auto& s : cx.series) e.cSeries += (e.cSeries.empty() ? "" : ";") + s;   // ★ ';' — a series holds a space
     e.cancelAt = cx.at;
+    for (auto& s : cx.replaces) e.rSeries += (e.rSeries.empty() ? "" : ";") + s;
     auto pts = navtex::positions(posText(b));
+    // ★ v6: a named list — kept beside its points through the filters below (a dropped point drops its item)
+    std::vector<Item> items = shapeOf(b, pts.size()) == 0 ? namedItems(b, pts.size()) : std::vector<Item>();
     /* ★ A position with a digit lost ("02-44.67N" for 62-44.67N in a Norwegian chart area) can still parse. Not plotted
      *  when it is further than a NAVTEX service area (3 000 km MF, 5 000 km HF) from EVERY transmitter using this letter on
      *  this band — such a point is damage, not a hazard; it carries no weight either way. */
     if (e.b1 && e.khz) {
         size_t n = 0; const navtex::Station* tb = navtex::stations(n);
         const double reach = e.khz > 1000 ? 5000 : 3000;
-        std::vector<std::pair<double, double>> keep;
+        std::vector<std::pair<double, double>> keep; std::vector<Item> ik;
         for (auto& p : pts) {
             bool nearOne = false, any = false;
             for (size_t i = 0; i < n && !nearOne; ++i) if (tb[i].b1 == e.b1 && tb[i].khz == e.khz) { any = true; nearOne = navtex::km(p.first, p.second, tb[i].lat, tb[i].lon) <= reach; }
-            if (nearOne || !any) keep.push_back(p);
+            if (nearOne || !any) { if (!items.empty()) ik.push_back(items[(size_t)(&p - &pts[0])]); keep.push_back(p); }
         }
-        pts.swap(keep);
+        pts.swap(keep); if (!items.empty()) items.swap(ik);
     }
     /* ★ One point of a list far from all the others ("24-20.6N" among seven at 64°N — a 6 read as a 2): with three or
      *  more, a point further than 300 km and five times the list's own spread from its median is damage, not a corner. */
@@ -437,13 +567,16 @@ inline Entry fromMessage(const std::string& file, int64_t t, double hz, const st
         std::vector<double> d; for (auto& p : pts) d.push_back(navtex::km(p.first, p.second, mla, mlo));
         std::vector<double> ds = d; std::nth_element(ds.begin(), ds.begin() + ds.size() / 2, ds.end());
         const double lim = std::max(300.0, 5 * ds[ds.size() / 2]);
-        std::vector<std::pair<double, double>> keep;
-        for (size_t i = 0; i < pts.size(); ++i) if (d[i] <= lim) keep.push_back(pts[i]);
-        pts.swap(keep);
+        std::vector<std::pair<double, double>> keep; std::vector<Item> ik;
+        for (size_t i = 0; i < pts.size(); ++i) if (d[i] <= lim) { keep.push_back(pts[i]); if (!items.empty()) ik.push_back(items[i]); }
+        pts.swap(keep); if (!items.empty()) items.swap(ik);
     }
     if (pts.size() > kMaxPts) pts.resize(kMaxPts);
-    e.pts = pts;
+    if (items.size() > pts.size()) items.resize(pts.size());
+    if (items.size() < 2) items.clear();
+    e.pts = pts; e.items = items;
     e.shape = shapeOf(b, e.pts.size());
+    if (e.shape) e.items.clear();
     e.issued = issuedOf(b, t);
     return e;
 }
@@ -530,11 +663,15 @@ struct Group {
     std::string cancelledBy;                  // the id that cancelled it
     std::string hit, lang; int64_t validTo = 0; bool ufn = false;
     char shape = 0; int64_t issued = 0;
+    int64_t newest = 0; int newestLost = 0;  // ★ v6: the newest copy (its content is what is drawn)
+    std::vector<Item> items;
+    std::string supersededBy;                 // ★ v6: the id of the newer message that replaced it (a REPLACES, or a re-issue)
 };
 struct Query {
     std::vector<Group> shown;                 // newest first, ≤ kMaxMarkers
     size_t total = 0, receptions = 0, withPos = 0, live = 0, indexed = 0, pending = 0, groups = 0;
     std::map<std::string, size_t> byClass;
+    size_t cancelled = 0, superseded = 0, expired = 0;   // ★ v6: of the warnings with a position — none of them drawn
 };
 inline bool samePts(const std::vector<std::pair<double, double>>& a, const std::vector<std::pair<double, double>>& b) {
     if (a.empty() || a.size() != b.size()) return false;
@@ -547,8 +684,8 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
     Query q;
     std::vector<Group> gs;
     std::multimap<std::string, size_t> byId;            // id → groups
-    std::map<std::string, size_t> bySeries;             // "b1|series" → group (the newest)
-    struct Cx { std::string ids, series; char b1; int64_t t; std::string by; };
+    std::multimap<std::string, size_t> bySeries;        // series key → every group carrying it
+    struct Cx { std::string ids, series, repl; char b1; int64_t t; std::string by; };
     std::vector<Cx> cxs;
     FILE* f = std::fopen(idxPath.c_str(), "r");
     if (f) {
@@ -566,7 +703,7 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
             if (!liveNames.count(nh) || !seen.insert(nh).second) continue;   // ★ evicted from the gallery, or a duplicate line
             if (e.t < since || e.id.empty()) continue;
             q.receptions++;
-            if (!e.cIds.empty() || !e.cSeries.empty()) cxs.push_back({e.cIds, e.cSeries, e.b1, e.t, e.id});
+            if (!e.cIds.empty() || !e.cSeries.empty() || !e.rSeries.empty()) cxs.push_back({e.cIds, e.cSeries, e.rSeries, e.b1, e.t, e.id});
             if (e.cls == "cancel") continue;   // ★ a cancellation is applied below, never a marker
             // ★ the same warning: same id, same text — or a garbled copy (same id, same positions) within 30 days
             size_t gi = SIZE_MAX;
@@ -583,18 +720,23 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
             }
             Group& g = gs[gi];
             g.n++; g.first = std::min(g.first, e.t); g.last = std::max(g.last, e.t);
-            if (e.lost < g.lost || (e.lost == g.lost && e.pts.size() > g.pts.size())) {   // ★ the best copy is shown
-                g.lost = e.lost; g.best = e.file; g.pts = e.pts; g.cls = e.cls; g.unlit = e.unlit; g.series = e.series; g.hash = e.hash;
-                g.hit = e.hit; g.lang = e.lang; g.shape = e.shape;
-            }
+            // ★★ v6 LATEST WINS (Stuart: "the icons are based on the latest received message"): what is DRAWN — the class,
+            //    the points, the shape, the named list, the unlit mark — is the NEWEST copy's. The text shown is the newest
+            //    copy's too, unless it is garbled: then the copy with the fewest lost characters.
+            if (e.t >= g.newest) {
+                g.newest = e.t; g.newestLost = e.lost;
+                g.pts = e.pts; g.cls = e.cls; g.unlit = e.unlit; g.shape = e.shape; g.items = e.items; g.hit = e.hit; g.lang = e.lang; g.hash = e.hash;
+                if (!seriesKey(e.series).empty() || g.series.empty()) g.series = e.series;
+                if (e.lost == 0 || e.lost <= g.lost) { g.lost = e.lost; g.best = e.file; }
+            } else if (e.lost < g.lost && g.newestLost > 0) { g.lost = e.lost; g.best = e.file; }   // ★ a cleaner older copy's text
             if (e.issued && (!g.issued || e.issued < g.issued)) g.issued = e.issued;
             if (e.cancelAt) g.cancelAt = e.cancelAt;
             if (e.validTo) g.validTo = std::max(g.validTo, e.validTo);
             g.ufn = g.ufn || e.ufn;
-            if (!seriesKey(g.series).empty()) bySeries[seriesKey(g.series)] = gi;   // ★ the authority's number, whoever relayed it
         }
         std::fclose(f);
     }
+    for (size_t i = 0; i < gs.size(); ++i) { const std::string k = seriesKey(gs[i].series); if (!k.empty()) bySeries.insert({k, i}); }   // ★ the authority's number, whoever relayed it
     // ★ cancellations: by NAVTEX id (named in brackets), or by the series number of the same station's earlier message
     for (const auto& c : cxs) {
         size_t p = 0;
@@ -604,31 +746,64 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
             for (auto it = range.first; it != range.second; ++it) if (gs[it->second].last <= c.t && gs[it->second].cancelledBy.empty()) gs[it->second].cancelledBy = c.by;
             if (sp == std::string::npos) break; p = sp + 1;
         }
-        p = 0;
-        while (p < c.series.size()) {
-            const size_t sp = c.series.find(';', p); const std::string s = c.series.substr(p, sp == std::string::npos ? std::string::npos : sp - p);
-            // ★ "WZ 476/26" with its word (a bare number names no authority: skipped)
-            auto it = bySeries.find(seriesKey(s));
-            if (it != bySeries.end() && gs[it->second].last <= c.t && gs[it->second].cancelledBy.empty()) gs[it->second].cancelledBy = c.by;
-            if (sp == std::string::npos) break; p = sp + 1;
+        // ★ "WZ 476/26" with its word (a bare number names no authority: skipped). v6: every group carrying it, not just one.
+        for (int pass = 0; pass < 2; ++pass) {
+            const std::string& list = pass ? c.repl : c.series;
+            p = 0;
+            while (p < list.size()) {
+                const size_t sp = list.find(';', p); const std::string s = list.substr(p, sp == std::string::npos ? std::string::npos : sp - p);
+                const std::string k = seriesKey(s);
+                auto range = k.empty() ? std::make_pair(bySeries.end(), bySeries.end()) : bySeries.equal_range(k);
+                for (auto it = range.first; it != range.second; ++it) {
+                    Group& g = gs[it->second];
+                    if (g.id == c.by || g.first > c.t || !g.cancelledBy.empty() || !g.supersededBy.empty()) continue;
+                    if (pass) g.supersededBy = c.by; else if (g.last <= c.t) g.cancelledBy = c.by;
+                }
+                if (sp == std::string::npos) break; p = sp + 1;
+            }
+        }
+    }
+    // ★★ v6 RE-ISSUED: the same authority's number heard again with a DIFFERENT text (a new id, or a changed position) —
+    //    only the newest version is drawn. Same station letter, or (another station relaying it) a position within 100 km.
+    for (auto it = bySeries.begin(); it != bySeries.end();) {
+        auto range = bySeries.equal_range(it->first);
+        std::vector<size_t> v; for (auto j = range.first; j != range.second; ++j) v.push_back(j->second);
+        it = range.second;
+        if (v.size() < 2) continue;
+        std::sort(v.begin(), v.end(), [&](size_t a, size_t b) { return gs[a].newest > gs[b].newest; });
+        for (size_t k = 1; k < v.size(); ++k) {
+            Group& old = gs[v[k]];
+            if (!old.supersededBy.empty()) continue;
+            for (size_t j = 0; j < k; ++j) {
+                const Group& nw = gs[v[j]];
+                bool near = nw.b1 == old.b1;
+                for (size_t a = 0; !near && a < nw.pts.size(); ++a) for (size_t b2 = 0; !near && b2 < old.pts.size(); ++b2)
+                    near = navtex::km(nw.pts[a].first, nw.pts[a].second, old.pts[b2].first, old.pts[b2].second) <= 100;
+                if (near && nw.newest > old.newest) { old.supersededBy = nw.id; break; }
+            }
         }
     }
     q.groups = gs.size();
     std::vector<size_t> withPos;
-    for (size_t i = 0; i < gs.size(); ++i) if (!gs[i].pts.empty() && gs[i].cls != "met") { withPos.push_back(i); q.byClass[gs[i].cls]++; }
+    for (size_t i = 0; i < gs.size(); ++i) if (!gs[i].pts.empty() && gs[i].cls != "met") {
+        withPos.push_back(i); q.byClass[gs[i].cls]++;
+        const Group& g = gs[i];
+        if (!g.cancelledBy.empty() || (g.cancelAt && g.cancelAt <= now)) q.cancelled++;
+        else if (!g.supersededBy.empty()) q.superseded++;
+        else if (g.validTo ? now > g.validTo : g.ufn ? now - g.last > kReuseSec : now - g.last > kExpireSec) q.expired++;
+    }
     q.withPos = withPos.size();
     std::sort(withPos.begin(), withPos.end(), [&](size_t a, size_t b) { return gs[a].last > gs[b].last; });
     q.total = withPos.size();
     for (size_t k = 0; k < withPos.size() && k < kMaxMarkers; ++k) q.shown.push_back(gs[withPos[k]]);
-    (void)now;
     return q;
 }
 /** ★ `placed`: the stations map's placement of each message (navmap::scan's Placed) — the card's station and decode
  *  quality. Absent = neither sent. */
 inline std::string toJson(const Query& q, int64_t now, const SyncResult& s, const std::unordered_map<uint64_t, navmap::Placed>* placed = nullptr) {
-    char b[320];
-    std::snprintf(b, sizeof b, "{\"now\":%lld,\"total\":%zu,\"shown\":%zu,\"receptions\":%zu,\"warnings\":%zu,\"live\":%zu,\"indexed\":%zu,\"pending\":%zu,\"classes\":{",
-                  (long long)now, q.total, q.shown.size(), q.receptions, q.groups, s.live, s.indexed, s.pending);
+    char b[420];
+    std::snprintf(b, sizeof b, "{\"now\":%lld,\"total\":%zu,\"shown\":%zu,\"receptions\":%zu,\"warnings\":%zu,\"live\":%zu,\"indexed\":%zu,\"pending\":%zu,\"cancelledN\":%zu,\"supersededN\":%zu,\"expiredN\":%zu,\"classes\":{",
+                  (long long)now, q.total, q.shown.size(), q.receptions, q.groups, s.live, s.indexed, s.pending, q.cancelled, q.superseded, q.expired);
     std::string o = b;
     bool f1 = true; for (auto& c : q.byClass) { if (!f1) o += ','; f1 = false; o += "\"" + c.first + "\":" + std::to_string(c.second); }
     o += "},\"warnings\":[";
@@ -637,7 +812,7 @@ inline std::string toJson(const Query& q, int64_t now, const SyncResult& s, cons
         if (i) o += ',';
         const bool cancelled = !g.cancelledBy.empty() || (g.cancelAt && g.cancelAt <= now);
         // ★ its own window when it gave one; "until further notice" 30 days unheard; else 72 h unheard
-        const bool expired = cancelled || (g.validTo ? now > g.validTo : g.ufn ? now - g.last > kReuseSec : now - g.last > kExpireSec);
+        const bool expired = cancelled || !g.supersededBy.empty() || (g.validTo ? now > g.validTo : g.ufn ? now - g.last > kReuseSec : now - g.last > kExpireSec);
         std::snprintf(b, sizeof b, "{\"id\":\"%s\",\"khz\":%g,\"first\":%lld,\"last\":%lld,\"n\":%u,\"lost\":%d,\"unlit\":%d,\"expired\":%d,\"cls\":\"",
                       navmap::jesc(g.id).c_str(), g.khz, (long long)g.first, (long long)g.last, g.n, g.lost, g.unlit ? 1 : 0, expired ? 1 : 0);
         o += b; o += navmap::jesc(g.cls) + "\",\"f\":\"" + navmap::jesc(g.best) + "\",\"series\":\"" + navmap::jesc(g.series) + "\"";
@@ -649,6 +824,12 @@ inline std::string toJson(const Query& q, int64_t now, const SyncResult& s, cons
         if (g.shape) { o += ",\"shape\":\""; o += g.shape == 'a' ? "area" : "route"; o += "\""; }
         if (g.issued) { std::snprintf(b, sizeof b, ",\"issued\":%lld", (long long)g.issued); o += b; }
         if (!g.cancelledBy.empty() || (g.cancelAt && g.cancelAt <= now)) o += ",\"cancelled\":1";
+        if (!g.supersededBy.empty()) o += ",\"supersededBy\":\"" + navmap::jesc(g.supersededBy) + "\"";
+        if (!g.items.empty() && g.items.size() == g.pts.size()) {   // ★ v6: a named list — one marker an item
+            o += ",\"items\":[";
+            for (size_t k = 0; k < g.items.size(); ++k) o += std::string(k ? "," : "") + "{\"n\":\"" + navmap::jesc(g.items[k].name) + "\",\"d\":\"" + navmap::jesc(g.items[k].defect) + "\",\"u\":" + (g.items[k].unlit ? "1" : "0") + "}";
+            o += "]";
+        }
         if (placed) {
             auto p = placed->find(navmap::fileHash(g.best));
             if (p != placed->end()) {

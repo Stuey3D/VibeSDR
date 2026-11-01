@@ -64,7 +64,7 @@ int main(int argc, char** argv) {
         ok(c("DIVED SUBMARINE EXERCISES IN PROGRESS") == "submarine" && c("SUBFACTS AND GUNFACTS") == "submarine" && c("SUBMARINE TORPEDO FIRING") == "submarine", "submarine operations → submarine, before torpedo/firing");
         ok(c("EXERCICES SOUS-MARINS") == "submarine" && c("U-BOOT UEBUNG") == "submarine" && c("ESERCITAZIONI SOMMERGIBILI") == "submarine", "FR/DE/IT submarines");
         ok(c("GUNNERY FIRING EXERCISES") == "firing", "gunnery without a submarine stays firing");
-        ok(c("SUBMARINE CABLE REPAIR") == "cable" && c("POSE DE CABLES SOUS-MARINS") == "cable" && c("SUBMARINE PIPELINE") == "cable", "an undersea CABLE or PIPELINE is never a submarine");
+        ok(c("SUBMARINE CABLE REPAIR") == "cable" && c("POSE DE CABLES SOUS-MARINS") == "cable" && c("SUBMARINE PIPELINE") == "pipeline", "an undersea CABLE or PIPELINE is never a submarine");
         ok(c("CABLE LAYING OPERATIONS") == "cable" && c("SEISMIC SURVEY") == "survey" && c("TOW IN PROGRESS") == "towing", "cable, survey, towing");
         ok(c("VESSEL OVERDUE", 'D') == "sar" && c("ANYTHING", 'D') == "sar", "B2 = D or OVERDUE → sar");
         ok(c("GALE WARNING", 'B') == "met" && c("ICE", 'C') == "ice", "B2 = B → met; C → ice");
@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
         auto k = cl("OOSTENDERADIO MSI 327/26\nAPPROACH ZEEBRUGGE\nWESTERN PIER\nFOGHORN OUT OF ORDER");
         ok(k.id == "navaid", "EN: FOGHORN OUT OF ORDER → navaid");
         k = cl("AVURNAV BREST 370/26\nOUESSANT\nZONE D'EXCLUSION\nPROJET CELTIC INTERCONNECTOR\nOPERATIONS CABLIERES\nPOSE DE CABLES SOUS-MARINS");
-        ok(k.id == "cable", "FR: POSE DE CABLES SOUS-MARINS → cable");
+        ok(k.id == "cable_power", "FR: PROJET CELTIC INTERCONNECTOR … POSE DE CABLES SOUS-MARINS → a POWER cable (v6: the interconnector says what it carries)");
         k = cl("FEU ETEINT\nBOUEE CARDINALE NORD");
         ok(k.id == "buoy" && k.unlit && k.lang == "fr" && k.hit.find("ETEINT") != std::string::npos, "FR: FEU ETEINT, BOUEE → buoy + unlit, from French: " + k.hit);
         ok(cl("BOYA APAGADA EN POSICION").unlit && cl("BOYA APAGADA EN POSICION").id == "buoy", "ES: BOYA APAGADA → buoy + unlit");
@@ -158,7 +158,7 @@ int main(int argc, char** argv) {
         const auto q = navwarn::query(idx, names, 0, T + 30000);
         auto find = [&](const char* id, int64_t first) -> const navwarn::Group* { for (auto& g : q.shown) if (g.id == id && (first < 0 || g.first == first)) return &g; return nullptr; };
         const navwarn::Group* ea45 = find("EA45", T);
-        ok(ea45 && ea45->n == 3 && ea45->lost == 0 && ea45->best == "a1", "EA45 heard 3 times (a repeat, a garbled copy) = ONE marker, the clean copy shown");
+        ok(ea45 && ea45->n == 3 && ea45->lost == 0 && ea45->best == "a2", "EA45 heard 3 times (a repeat, a garbled copy) = ONE marker; the newest CLEAN copy's text shown (v6), never the garbled newest");
         ok(find("EA45", T - 40 * 86400) != nullptr, "EA45 forty days earlier, another text: a different warning");
         const navwarn::Group* ea46 = find("EA46", -1);
         ok(ea46 && ea46->cancelledBy == "EA47", "EA46 cancelled by EA47 ('CANCEL WZ 650/26 (EA46)')");
@@ -174,6 +174,92 @@ int main(int argc, char** argv) {
         ok(lines == ms.size() && navwarn::compact(idx, names), "compaction runs");
         size_t after = 0; navwarn::sync(idx, each, text, 3, nullptr, &after);
         ok(after == live.size(), "…and drops the evicted item's line (" + std::to_string(after) + " lines)");
+    }
+    std::printf("── v6: cables and pipelines in five, platforms ──\n");
+    {
+        auto c = [](const char* t, char b2 = 'A') { return navwarn::classify(b2, t).id; };
+        ok(c("CABLE LAYING OPERATIONS BY VESSEL") == "cable" && c("SUBMARINE CABLE REPAIR") == "cable", "a cable whose kind is not said → cable");
+        ok(c("AIRDRAFT FOR OVERHEAD POWER CABLE IN NORDFJORDEN") == "cable_power" && c("EXPORT CABLE INSTALLATION") == "cable_power"
+           && c("INTER-ARRAY CABLE LAY") == "cable_power" && c("ACCESSORY WORKS RELATED TO THE HVDC CONNECTION PROJECT") == "cable_power", "POWER / EXPORT / INTER-ARRAY / HVDC → cable_power (before works)");
+        ok(c("POSE DE CABLE ELECTRIQUE") == "cable_power" && c("POSA CAVO ELETTRICO") == "cable_power" && c("STROMKABEL VERLEGUNG") == "cable_power"
+           && c("HOOGSPANNINGSKABEL") == "cable_power" && c("DEPOSITO DE SACOS PARA TENDIDO ELECTRICO") == "cable_power", "FR / IT / DE / NL / ES power-cable words → cable_power");
+        ok(c("FIBRE OPTIC CABLE LAYING") == "cable_telecom" && c("TELECOMMUNICATIONS CABLE REPAIR") == "cable_telecom" && c("POSE DE FIBRE OPTIQUE") == "cable_telecom"
+           && c("FIBRA OTTICA") == "cable_telecom" && c("GLASFASERKABEL") == "cable_telecom", "telecom / fibre-optic (EN FR IT DE) → cable_telecom");
+        ok(c("ANCHORAGE PROHIBITED AREA GAS PIPELINE WARNING") == "pipeline_gas" && c("GAZODUC") == "pipeline_gas" && c("GASDOTTO") == "pipeline_gas"
+           && c("GASODUCTO") == "pipeline_gas" && c("ERDGASLEITUNG") == "pipeline_gas" && c("AARDGASLEIDING") == "pipeline_gas", "gas pipeline (EN FR IT ES DE NL) → pipeline_gas");
+        ok(c("UNDERWATERPIPELINE RAVERSIJDE ESTABLISHED") == "pipeline" && c("ZINKERLEIDING LOMBARDSIJDE") == "pipeline" && c("OLEODUC") == "pipeline"
+           && c("CONDOTTA SOTTOMARINA") == "pipeline" && c("ROHRLEITUNG") == "pipeline" && c("PIJPLEIDING") == "pipeline", "pipeline (EN, the Belgian run-together word, NL ZINKERLEIDING, FR IT DE NL) → pipeline");
+        ok(c("POSE DE CABLES SOUS-MARINS") == "cable" && c("SUBMARINE CABLES") == "cable" && c("SUBMARINE POWER CABLE") == "cable_power", "SUBMARINE CABLE stays a cable (never a submarine), and says its kind when it does");
+        ok(c("NAVIGATION RESTRICTED. KEEP A SAFE DISTANCE OF 2 CABLES.") == "general" && c("MINIMUM 2 KABELS AFSTAND") == "general", "'a safe distance of 2 CABLES' is a distance, not a cable");
+        const auto p1 = navwarn::classify('A', "HUMBER.\nINNER CROMER KNOLL.\nPLATFORM BLYTHE 53-14.5N 001-26.8E UNLIT AND ALL NAVAIDS INOPERATIVE.");
+        ok(p1.id == "platform" && p1.unlit, "PLATFORM BLYTHE … UNLIT AND ALL NAVAIDS INOPERATIVE → platform + unlit");
+        ok(c("PETRO GIANT DRILLING RIG TO BE TOWED FROM 55-27.34N 018-09.34E") == "platform", "a drilling rig under tow → platform (before towing)");
+        ok(c("SUSPENDED WELLHEAD 57-00N 001-00E") == "platform" && c("JACK-UP RIG ON LOCATION") == "platform" && c("FPSO ON STATION") == "platform", "WELLHEAD / JACK-UP / FPSO → platform");
+        ok(c("PLATEFORME PETROLIERE") == "platform" && c("PIATTAFORMA") == "platform" && c("PLATAFORMA") == "platform" && c("BOORPLATFORM") == "platform", "FR / IT / ES / NL platform words");
+        ok(c("WIND FARM CONSTRUCTION") == "structure" && c("WIND TURBINE T12 LIGHT INOPERATIVE") == "structure", "a wind farm stays structure");
+        ok(c("THE RIGHT TRIGONOMETRIC ORIGIN IS BRIGHT") == "general", "RIG is a whole word: never RIGHT, TRIG, ORIGIN, BRIGHT");
+        ok(c("UNDERWATERPIPELINE RAVERSIJDE ESTABLISHED BETWEEN BEACH\nAND 51-13.294N 002-51.385E\nMARKED WITH NORTH CARDINAL BUOY 'JDN'") == "pipeline",
+           "a pipeline MARKED WITH a buoy is the pipeline (the buoy only marks it)");
+        ok(c("ANCHOR AND CHAIN LOST IN POS 51-19-22N 002-35-15E MARKED WITH A WHITE BUOY") == "obstruction" && c("NORTH CARDINAL BUOY MISSING") == "buoy", "…an anchor lost, marked with a buoy, is the obstruction; a buoy missing is still a buoy");
+        ok(c("OPERACIONES DE TENDIDO DE CABLE SUBMARINO") == "cable" && c("EJERCICIOS CON SUBMARINOS") == "submarine", "ES: CABLE SUBMARINO is a cable, never a submarine; SUBMARINOS alone is");
+        ok(c("IT IS REQUIRED TO CONSULT NEARBY OFFSHORE PLATFORMS TO VERIFY YOUR ANCHORAGE. DAMAGE TO SUBSEA GAS PIPELINES") == "pipeline_gas", "'CONSULT NEARBY OFFSHORE PLATFORMS' (an anchoring notice) is not a platform");
+    }
+    std::printf("── v6: a list of named platforms = a marker each ──\n");
+    {
+        const char* pa = "ZCZC PA11\n231717 UTC OCT 26\nMSI 269/26\nNORTH SEA DUTCH EEZ\nFOLLOWING PLATFORMS HAVE DEFECTS: \nF16-A 54-07.0N 004-00.1E NAV AIDS UNRELIABLE\n"
+                         "K6-N 53-41.0N 003-44.0E FOGHORN INOPERATIVE\nL10-B 53-27.4N 004-13.9E BLACK OUT\nN7-FA-1 53-30N 006-14E FOGHORN INOPERATIVE\n"
+                         "K15-FA1 53-14N 003-59E UNLIT\nK12-G 53-21.3N 003-59.0E NAV AIDS UNRELIABLE\nCANCEL MSI 267/26\nNNNN";
+        const auto e = navwarn::fromMessage("pa11.txt", 1793500000, 517500, pa);
+        ok(e.cls == "platform" && e.shape == 0 && e.pts.size() == 6 && e.items.size() == 6, "PA11's six platforms: platform, separate points (never an area), six named items");
+        ok(e.items.size() == 6 && e.items[0].name == "F16-A" && e.items[0].defect == "NAV AIDS UNRELIABLE" && e.items[1].name == "K6-N" && e.items[1].defect == "FOGHORN INOPERATIVE",
+           "…each its own name and defect (F16-A: NAV AIDS UNRELIABLE; K6-N: FOGHORN INOPERATIVE)");
+        ok(e.items.size() == 6 && e.items[2].unlit && e.items[4].unlit && e.items[0].unlit && !e.items[1].unlit && !e.items[3].unlit,
+           "…the unlit mark per item: BLACK OUT, UNLIT, NAV AIDS UNRELIABLE yes; FOGHORN INOPERATIVE no");
+        navwarn::Entry back; ok(navwarn::parse(navwarn::format(e).substr(0, navwarn::format(e).size() - 1), back) && back.items.size() == 6 && back.items[5].name == "K12-G", "…the items survive the index line");
+        const auto corners = navwarn::fromMessage("cx.txt", 1793500000, 517500, "ZCZC EA50\nWZ 700/26\nA) 51-00.0N 001-00.0E\nB) 51-10.0N 001-00.0E\nC) 51-10.0N 001-10.0E\nNNNN");
+        ok(corners.items.empty(), "a corner list (A) B) C) and nothing else) is not a named list");
+        const auto ar = navwarn::fromMessage("ar.txt", 1793500000, 517500, "ZCZC EA51\nWZ 701/26\nFIRING IN AREA BOUNDED BY\nALPHA 51-00.0N 001-00.0E\nBRAVO 51-10.0N 001-00.0E\nCHARLIE 51-10.0N 001-10.0E\nNNNN");
+        ok(ar.shape == 'a' && ar.items.empty(), "an AREA BOUNDED BY with named corners stays an area");
+    }
+    std::printf("── v6: latest wins (cancelled, replaced, re-issued) ──\n");
+    {
+        char tmpl[] = "/tmp/navwarn-v6-XXXXXX"; const std::string dir = mkdtemp(tmpl), idx = dir + "/navtex-warn.idx";
+        const int64_t T = 1793400000;
+        struct M { std::string f; int64_t t; std::string text; };
+        std::vector<M> ms = {
+            {"w1", T,             "ZCZC GA20\nWZ 621/26\nHUMBER.\nWRECK 53-30.0N 001-00.0E.\nNNNN"},
+            {"w2", T + 86400,     "ZCZC GA31\nWZ 640/26\nHUMBER.\nCANCEL WZ 621/26 AND THIS MSG.\nNNNN"},                                     // cancels w1
+            {"r1", T,             "ZCZC GA21\nWZ 622/26\nHUMBER.\nOBSTRUCTION 53-40.0N 001-00.0E.\nNNNN"},
+            {"r2", T + 7200,      "ZCZC GA22\nWZ 641/26\nHUMBER.\nTHIS MESSAGE REPLACES WZ 622/26.\nOBSTRUCTION 53-41.0N 001-02.0E.\nNNNN"},  // replaces r1
+            {"m1", T,             "ZCZC GA23\nWZ 623/26\nHUMBER.\nBUOY 53-50.0N 001-00.0E MISSING.\nNNNN"},
+            {"m2", T + 3 * 3600,  "ZCZC GA24\nWZ 623/26\nHUMBER.\nBUOY 53-52.0N 001-05.0E MISSING.\nNNNN"},                                     // re-issued, moved
+            {"k1", T + 86400,     "ZCZC GA25\nWZ 624/26\nHUMBER.\nCANCEL WZ 999/26 (GA99) AND THIS MSG. PLATFORM 49/26C 53-00.0N 001-00.0E NORMAL CONDITIONS RESTORED.\nNNNN"},
+        };
+        const navwarn::LiveFn each = [&](const std::function<void(const std::string&)>& fn) {
+            for (auto& m : ms) fn("{\"f\":\"" + m.f + "\",\"k\":\"navtex\",\"t\":" + std::to_string((long long)m.t) + ",\"hz\":517500,\"title\":\"x\"}");
+        };
+        const navwarn::TextFn text = [&](const std::string& f) { for (auto& m : ms) if (m.f == f) return m.text; return std::string(); };
+        std::unordered_set<uint64_t> names; navwarn::SyncResult s;
+        do { s = navwarn::sync(idx, each, text, 100, &names); } while (s.pending);
+        const auto q = navwarn::query(idx, names, 0, T + 86400 + 60);
+        auto find = [&](const char* id) -> const navwarn::Group* { for (auto& g : q.shown) if (g.id == id) return &g; return nullptr; };
+        const auto* w1 = find("GA20"); ok(w1 && !w1->cancelledBy.empty(), "WZ 621/26 cancelled by 'CANCEL WZ 621/26 AND THIS MSG.' (no bracketed id)");
+        ok(!find("GA31"), "…and the cancelling message itself is no marker ('AND THIS MSG' with no date-time)");
+        const auto* r1 = find("GA21"); ok(r1 && r1->supersededBy == "GA22", "'THIS MESSAGE REPLACES WZ 622/26' supersedes it");
+        const auto* m1 = find("GA23"); const auto* m2 = find("GA24");
+        ok(m1 && m2 && m1->supersededBy == "GA24" && m2->supersededBy.empty() && std::fabs(m2->pts[0].first - 53.8667) < 0.01, "WZ 623/26 re-issued with a moved position: only the newest (53-52.0N) stands");
+        ok(!find("GA25"), "'CANCEL WZ … AND THIS MSG. PLATFORM … NORMAL CONDITIONS RESTORED': a notice, not a platform marker");
+        const std::string js = navwarn::toJson(q, T + 86400 + 60, s);
+        ok(js.find("\"supersededBy\":\"GA22\"") != std::string::npos && js.find("\"cancelledN\":1") != std::string::npos && js.find("\"supersededN\":2") != std::string::npos,
+           "the JSON says superseded / cancelled (and counts them) — the clients draw neither");
+        // ★ the newest copy's content is drawn: the same id and points, a newer copy with another class
+        auto x1 = navwarn::fromMessage("n1", T, 517500, "ZCZC GA40\nWZ 650/26\nBUOY 53-00.0N 002-00.0E MISSING.\nNNNN");
+        auto x2 = navwarn::fromMessage("n2", T + 3600, 517500, "ZCZC GA40\nWZ 650/26\nWRECK MARKED BY BUOY 53-00.0N 002-00.0E.\nNNNN");
+        const std::string idx2 = dir + "/b.idx";
+        if (FILE* f = std::fopen(idx2.c_str(), "w")) { const std::string a = navwarn::format(x1) + navwarn::format(x2); std::fwrite(a.data(), 1, a.size(), f); std::fclose(f); }
+        std::unordered_set<uint64_t> nm = {navwarn::nameHash("n1"), navwarn::nameHash("n2")};
+        const auto q2 = navwarn::query(idx2, nm, 0, T + 7200);
+        ok(q2.shown.size() == 1 && q2.shown[0].cls == "wreck" && q2.shown[0].best == "n2", "one warning, two copies: the NEWEST copy's class (wreck) and text are drawn");
     }
     std::printf("── the real fixtures (Stuart's Lenovo) ──\n");
     {
