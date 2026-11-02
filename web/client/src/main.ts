@@ -30,6 +30,10 @@ import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, n
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
 import { NAV_HAZARD_COLOURS, NAV_HAZARDS, navGlyphSvg } from '../../../src/services/navtexIcons';
+// ★★ V12 2026-11-02 THE SHIPPING MAP — the rules both clients share (docs/v12/SHIPPING-MAP.md)
+import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
+         dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
+         type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -8807,12 +8811,18 @@ function ismMapOpen(key = '') {
  *  line from the receiver, its distance, first / last heard, how many messages, their kinds, the newest ids. Opened from
  *  the NAVTEX box's MAP and the gallery. ★ LIVE: refetched every 30 s while open (the server caches; a scan of the index
  *  only when it changed), so a message saved by a listener's decoder or background decoding appears, pulsing. */
-const NAV_RANGE_KEY = 'vibesdr.navMapRange', NAV_LAYERS_KEY = 'vibesdr.navMapLayers';
+const NAV_RANGE_KEY = 'vibesdr.navMapRange', NAV_LAYERS_KEY = 'vibesdr.navMapLayers', SHIP_LAYERS_KEY = 'vibesdr.shipMapLayers';
 let navView: TrackView | null = null;
 let navTimer: ReturnType<typeof setTimeout> | null = null;
 let navRange = navRangeOf((() => { try { return localStorage.getItem(NAV_RANGE_KEY); } catch { return null; } })());
-let navLayers: NavLayers = navLayersOf((() => { try { return localStorage.getItem(NAV_LAYERS_KEY); } catch { return null; } })());
-let navLast: { st: NavReport | null; w: NavWarnReport | null; m: NavMetReport | null } = { st: null, w: null, m: null };
+/* ★★ V12 2026-11-02 THE SHIPPING MAP (src/services/shippingMap.ts, docs/v12/SHIPPING-MAP.md) — the NAVTEX map became ONE
+ *  map of everything maritime this server holds: SHIPS (the live AIS report and the gallery's ship store, which any
+ *  radio here writes), DSC (the box's calls and the gallery's pinned alerts), and the NAVTEX STATIONS, WARNINGS and
+ *  WEATHER. Opened from NAVTEX's MAP, a DSC call's MAP, the gallery's rows — each with its own layer first — and AIS
+ *  mode's own map gains the other layers. A layer with no data here is absent (no toggle). */
+let shipLayers: ShipLayers = shipLayersOf(lsGet(SHIP_LAYERS_KEY), lsGet(NAV_LAYERS_KEY));
+let shipFocus: ShipFocus = 'navtex';
+let navLast: { st: NavReport | null; w: NavWarnReport | null; m: NavMetReport | null; ships: StoredShips | null; dscG: DscPin2[] } = { st: null, w: null, m: null, ships: null, dscG: [] };
 async function navFetch(range: string): Promise<NavReport | null> {
   try {
     const r = await fetch(galUrl(`/vibeserver/gallery/navtex-stations.json?since=${navSince(range)}`), { cache: 'no-store' });
@@ -8830,11 +8840,28 @@ async function navFetchJson<T>(path: string, range: string, clean: (j: any) => T
   } catch { return null; }
 }
 async function navFetchAll(range: string) {
-  // ★ one after another: the warnings request does the backfill the met request then reads
-  const w = navLayers.warnings || navLayers.weather ? await navFetchJson('navtex-warnings.json', range, navWarnSanitise) : null;
-  const m = navLayers.weather ? await navFetchJson('navtex-met.json', range, navMetSanitise) : null;
+  // ★ one after another (a live server): the warnings request does the backfill the met request then reads. Every layer
+  //   is asked for whether it is shown or not — what each has decides which toggles exist (no dead controls).
+  const w = await navFetchJson('navtex-warnings.json', range, navWarnSanitise);
+  const m = await navFetchJson('navtex-met.json', range, navMetSanitise);
   const st = await navFetch(range);
-  return { st, w, m };
+  const ships = await shipStoreFetch(range);
+  const dscG = await dscGalFetch();
+  return { st, w, m, ships, dscG };
+}
+/** ★ The ship store (vibe_ais_store.h) — every radio's AIS, kept in the gallery. Null from a server without one (404). */
+async function shipStoreFetch(range: string): Promise<StoredShips | null> {
+  try {
+    const r = await fetch(galUrl(`/vibeserver/gallery/ais-ships.json?since=${navSince(range)}&limit=1000&tracks=1`), { cache: 'no-store' });
+    return r.ok ? storeSanitise(await r.json()) : null;
+  } catch { return null; }
+}
+/** ★ The gallery's pinned DSC items (distress and urgency alerts from any radio here). */
+async function dscGalFetch(): Promise<DscPin2[]> {
+  try {
+    const r = await fetch(galUrl('/vibeserver/gallery.json?kind=dsc&limit=300'), { cache: 'no-store' });
+    return r.ok ? dscPinsFromGallery(await r.json()) : [];
+  } catch { return []; }
 }
 /** The gallery texts a card shows (one fetch a message while the map is open). */
 const navTexts = new Map<string, string>();
@@ -8857,86 +8884,160 @@ function navCardFill(_key: string, el: HTMLElement) {
                          const t = await r.text(); if (navTexts.size > 200) navTexts.clear(); navTexts.set(f, t); show(t, true); })
     .catch(() => show('Could not reach the server.', false));
 }
-function navRowsHtml(r: NavReport | null, w: NavWarnReport | null, m: NavMetReport | null): string {
-  const out: string[] = [];
-  const sec = (t: string) => `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>`;
-  if (navLayers.stations && r) {
-    if (navLayers.warnings || navLayers.weather) out.push(sec('STATIONS'));
-    if (!r.stations.length) out.push(`<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`);
-    for (const { g, second, range } of navRows(r)) out.push(`<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
-      + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(navName(g.name, g.conf))}</b><small>${escapeHtml(second)}</small></span>`
-      + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
-  }
-  if (navLayers.weather && m) {
-    // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
-    const areas = navMetListed(m).slice().sort((a, b) => Number(a.stale) - Number(b.stale) || Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t);
-    if (areas.length) out.push(sec('WEATHER — LATEST PER SEA AREA'));
-    for (const a of areas) out.push(`<div class="trkRow${a.stale ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(a.key)}">`
-      + `<span class="id"><b><i class="sw" style="background:${a.stale ? '#9aa6b2' : navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8'}"></i>${escapeHtml(a.name)}</b><small>${escapeHtml(navMetRowWords(a))}</small></span>`
-      + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, m.now - a.fc[0].t)))}</span></div>`);
-  }
-  if (navLayers.warnings && w) {
-    const list = navWarnVisible(w, navRange).slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300);
-    if (list.length) out.push(sec('WARNINGS'));
-    for (const x of list) out.push(`<div class="trkRow${navWarnTag(x) ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
-      + `<span class="id"><b><i class="sw" style="background:${navWarnTag(x) ? '#9aa6b2' : NAV_HAZARD_COLOURS[x.cls === 'navaid' ? 'light' : (x.cls as keyof typeof NAV_HAZARD_COLOURS)] ?? '#d7dee6'}"></i>${escapeHtml(x.id)} · ${escapeHtml(navWarnSummary({ ...x, hit: '', lang: '' }))}</b>`
-      + `<small>${escapeHtml([x.st ? navName(x.st, x.sc) : '', navWarnTag(x)].filter(Boolean).join(' · '))}</small></span>`
-      + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, w.now - x.last)))}</span></div>`);
-  }
-  return out.join('');
+function trkRowHtml(x: { key: string; colour: string; name: string; second: string; sp: string; range: string; brg: string; age: string; noPos: boolean; em: boolean }): string {
+  return `<div class="trkRow${x.noPos ? ' nopos' : ''}${x.em ? ' em' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
+    + `<span class="id"><b><i class="sw" style="background:${x.colour}"></i>${escapeHtml(x.name)}</b><small>${escapeHtml(x.second)}</small></span>`
+    + `<span class="sp">${escapeHtml(x.sp)}</span><span class="rg">${escapeHtml(x.range)}${x.brg ? ` <span class="brg">${escapeHtml(x.brg)}</span>` : ''}</span><span class="ag">${escapeHtml(x.age)}</span></div>`;
 }
-function navDraw() {
-  if (!navView) return;
+/** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
+function shipDscPins(now: number): DscPin2[] {
+  return dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls.list as any), navLast.dscG), navSince(navRange), now);
+}
+/** What each layer has on this server now (it decides which toggles are drawn). */
+function shipHave(now: number): ShipHave {
+  const w = navLast.w;
+  return {
+    ships: shipShips(aisOn ? aisReport as any : null, navLast.ships, navSince(navRange)).length, dsc: shipDscPins(now).length,
+    stations: navLast.st?.stations.length ?? 0, warnings: w ? w.list.length + w.pending : 0, weather: navLast.m?.areas.length ?? 0, aisMode: aisOn,
+  };
+}
+/** ★ The KEY for the layers this map has: ships and DSC glyphs, the NAVTEX hazards, the weather arrows. */
+function shipKeyHtml(present: ShipLayerId[]): string {
+  let h = shipLegendHtml(present);
+  if (present.includes('warnings')) h += NAV_HAZARDS.map((x) => `<div class="kr">${navGlyphSvg(x.id, 16, NAV_HAZARD_COLOURS[x.id])}<span>${escapeHtml(x.words)}</span></div>`).join('');
+  if (present.includes('weather')) h += windLegendRows().map(([g, w]) => `<div class="kr">${g}<span>${escapeHtml(w)}</span></div>`).join('');
+  return h;
+}
+/** ★★ ONE COMPOSITION for both views: the items, the RECEIVED list (a section per layer shown) and the status line.
+ *  `liveView`: AIS mode's own view — its live ships are drawn by that view exactly as before (raw vessels), so only the
+ *  store's ships it is not hearing now are added here. */
+function shipCompose(focus: ShipFocus, liveView: boolean) {
   const { st: r, w, m } = navLast;
   const rx = myPos() ?? r?.rx ?? null;
   const now = w?.now ?? m?.now ?? r?.now ?? Math.floor(Date.now() / 1000);
-  const items: any[] = [];
-  if (navLayers.stations) items.push(...navItems(r, 'web'));
-  if (navLayers.weather) items.push(...navMetItems(navMetVisible(m, navRange), now, 'web'));
-  if (navLayers.warnings) items.push(...navWarnItems(navWarnVisible(w, navRange), now, 'web'));
+  const present = shipLayersPresent(shipHave(now), focus);
+  const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);
+  const items: any[] = [], out: string[] = [], status: string[] = [];
+  const many = present.length > 1;
+  const sec = (t: string) => (many ? `<div class="sec" role="heading" aria-level="3">${escapeHtml(t)}</div>` : '');
+  for (const id of present) {
+    if (!on(id)) continue;
+    if (id === 'ships') {
+      const live = aisOn ? aisReport as any : null;
+      const all = shipShips(live, navLast.ships, navSince(navRange));
+      const extra = liveView ? all.filter((v) => !live || !live.vessels.some((x: any) => x.mmsi === v.mmsi)) : all;
+      items.push(...shipItems(extra, rx));
+      if (liveView) {
+        if (extra.length) { out.push(sec('SHIPS — FROM THE SHIP STORE')); out.push(...shipRows(extra, rx).map(trkRowHtml)); }
+      } else {
+        out.push(sec('SHIPS'));
+        out.push(all.length ? shipRows(all, rx).map(trkRowHtml).join('') : `<div class="trkEmpty">No ship in this time — ships come from AIS (a listener in AIS mode, or a background AIS profile).</div>`);
+        const s = shipStatus(all, navLast.ships, live); if (s) status.push(s);
+      }
+    } else if (id === 'dsc') {
+      const pins = shipDscPins(now);
+      items.push(...dscPinItems(pins, rx, now, 'web'));
+      out.push(sec('DSC'));
+      out.push(pins.length ? dscPinRows(pins, rx, now).map(trkRowHtml).join('') : `<div class="trkEmpty">No DSC call with a position in this time.</div>`);
+      const s = dscStatus(pins); if (s) status.push(s);
+    } else if (id === 'stations' && r) {
+      items.push(...navItems(r, 'web'));
+      out.push(sec('NAVTEX STATIONS'));
+      if (!r.stations.length) out.push(`<div class="trkEmpty">${escapeHtml(NAV_EMPTY)}</div>`);
+      for (const { g, second, range } of navRows(r)) out.push(`<div class="trkRow" role="button" tabindex="0" data-key="${escapeHtml(g.key)}">`
+        + `<span class="id"><b><i class="sw" style="background:${navSiteColour(g)}"></i>${escapeHtml(navName(g.name, g.conf))}</b><small>${escapeHtml(second)}</small></span>`
+        + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
+      status.push(navStatus(r));
+    } else if (id === 'weather' && m) {
+      items.push(...navMetItems(navMetVisible(m, navRange), now, 'web'));
+      // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
+      const areas = navMetListed(m).slice().sort((a, b) => Number(a.stale) - Number(b.stale) || Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t);
+      if (areas.length) out.push(sec('WEATHER — LATEST PER SEA AREA'));
+      for (const a of areas) out.push(`<div class="trkRow${a.stale ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(a.key)}">`
+        + `<span class="id"><b><i class="sw" style="background:${a.stale ? '#9aa6b2' : navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8'}"></i>${escapeHtml(a.name)}</b><small>${escapeHtml(navMetRowWords(a))}</small></span>`
+        + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, m.now - a.fc[0].t)))}</span></div>`);
+      status.push(navMetStatus(m, navRange));
+    } else if (id === 'warnings' && w) {
+      items.push(...navWarnItems(navWarnVisible(w, navRange), now, 'web'));
+      const list = navWarnVisible(w, navRange).slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300);
+      if (list.length) out.push(sec('WARNINGS'));
+      for (const x of list) out.push(`<div class="trkRow${navWarnTag(x) ? ' nopos' : ''}" role="button" tabindex="0" data-key="${escapeHtml(x.key)}">`
+        + `<span class="id"><b><i class="sw" style="background:${navWarnTag(x) ? '#9aa6b2' : NAV_HAZARD_COLOURS[x.cls === 'navaid' ? 'light' : (x.cls as keyof typeof NAV_HAZARD_COLOURS)] ?? '#d7dee6'}"></i>${escapeHtml(x.id)} · ${escapeHtml(navWarnSummary({ ...x, hit: '', lang: '' }))}</b>`
+        + `<small>${escapeHtml([x.st ? navName(x.st, x.sc) : '', navWarnTag(x)].filter(Boolean).join(' · '))}</small></span>`
+        + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, w.now - x.last)))}</span></div>`);
+      status.push(navWarnStatus(w, navRange));
+    }
+  }
   const building = navBuilding(w);
-  const status = [navLayers.stations ? navStatus(r) : '', navLayers.warnings ? navWarnStatus(w, navRange) : '', navLayers.weather ? navMetStatus(m, navRange) : '', building]
-    .filter(Boolean).join(' · ');
-  navView.update(items, navRowsHtml(r, w, m), status, items.length, rx);
-  navView.note(building);
+  if (building) status.push(building);
+  return { items, rows: out.join(''), status: status.filter(Boolean).join(' · '), present, rx, building };
 }
-async function navMapOpen() {
-  if (!navView) navView = new TrackView({
-    title: 'NAVTEX', profile: 'marine', exitLabel: 'CLOSE MAP', listTitle: 'RECEIVED',
-    onExit: () => { navView?.hide(); if (navTimer) { clearTimeout(navTimer); navTimer = null; } },
-    icon: (it) => it._ic, label: (it) => it._lb, card: (it) => it._cd, labelZoom: 3, focusZoom: 6, heard: (it) => it._h ?? 0,
-    labelRank: (it) => it._rk ?? 0, arc: (it) => !!it._arc,
-    shape: (it) => it._sh, cluster: (it) => it._cl || '', clusterZoom: 8, clusterAlways: ['m'], aria: (it) => it._aria || it._lb || '',
+function shipSetChrome(v: TrackView, present: ShipLayerId[]) {
+  v.setToggles(shipToggles(present), shipLayers);
+  v.setLegend(shipKeyHtml(present));
+}
+function navDraw() {
+  if (aisView?.open) aisRender();
+  if (!navView?.open) return;
+  const c = shipCompose(shipFocus, false);
+  shipSetChrome(navView, c.present);
+  navView.update(c.items, c.rows, c.status, c.items.length, c.rx);
+  navView.note(c.building);
+}
+/** ★ The view options both shipping views share: items carry their own icon, label and card (_ic, _lb, _cd); AIS mode's
+ *  live ships are raw vessels and use the AIS layer's own. */
+function shipViewOpts() {
+  return {
+    icon: (it: any) => it._ic ?? aisIcon(it), label: (it: any) => it._lb ?? aisName(it), card: (it: any) => it._cd ?? aisCard(it, myPos()),
+    heard: (it: any) => it._h ?? 0, labelRank: (it: any) => it._rk ?? 0, arc: (it: any) => !!it._arc,
+    shape: (it: any) => it._sh, cluster: (it: any) => it._cl || '', clusterZoom: 8, clusterAlways: ['m'], aria: (it: any) => it._aria || it._lb || '',
     // ★ the declutter's priority: the selected item, stations, warnings, then the weather labels — which give way first
     yieldGroups: ['m'],
     onCard: navCardFill,
     ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
-    onRange: (id) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } void navPoll(true); },
-    // ★ the KEY (Stuart, 2026-11-01: "do we need a legend for the icons") — the same list and glyphs as the app's legend
-    legend: NAV_HAZARDS.map((h) => `<div class="kr">${navGlyphSvg(h.id, 16, NAV_HAZARD_COLOURS[h.id])}<span>${escapeHtml(h.words)}</span></div>`).join(''),
-    toggles: NAV_LAYERS, toggled: navLayers,
-    onToggle: (id, on) => {
-      navLayers = { ...navLayers, [id]: on };
-      try { localStorage.setItem(NAV_LAYERS_KEY, JSON.stringify(navLayers)); } catch { /* private */ }
-      navDraw(); void navPoll(true);
+    onRange: (id: string) => { navRange = id; try { localStorage.setItem(NAV_RANGE_KEY, id); } catch { /* private */ } navView?.setRange?.(id); aisView?.setRange?.(id); void navPoll(true); },
+    onToggle: (id: string, on: boolean) => {
+      shipLayers = { ...shipLayers, [id]: on };
+      try { localStorage.setItem(SHIP_LAYERS_KEY, JSON.stringify(shipLayers)); } catch { /* private */ }
+      navDraw();
     },
+    // ★ a ship from the store: its stored track (a live ship asks the server for its full one — AIS mode's own trail)
+    trail: (key: string, done: (pts: [number, number][]) => void) => {
+      const m = Number(key.startsWith('s:') ? key.slice(2) : key);
+      if (!(m > 0)) { done([]); return; }
+      if (!key.startsWith('s:') && aisOn && spec) { aisTrailWait.set(m, done); spec.aisTrail(m); return; }
+      done(navLast.ships?.pts.get(m) ?? []);
+    },
+  };
+}
+/** ★★ Open the SHIPPING MAP with `focus`'s layer first (NAVTEX's MAP: 'navtex'; a DSC call: 'dsc'; an AIS gallery row:
+ *  'ships'), on `key` when given (a DSC call pressed). */
+async function navMapOpen(focus: ShipFocus = 'navtex', key = '') {
+  shipFocus = focus;
+  if (!navView) navView = new TrackView({
+    title: SHIPPING_TITLE, profile: 'marine', exitLabel: 'CLOSE MAP', listTitle: 'RECEIVED',
+    onExit: () => { navView?.hide(); if (navTimer && !aisView?.open) { clearTimeout(navTimer); navTimer = null; } },
+    labelZoom: 3, focusZoom: 6,
+    ...shipViewOpts(),
   });
   navView.show(myPos());
-  navLast = { st: null, w: null, m: null };
+  navLast = { st: null, w: null, m: null, ships: null, dscG: [] };
   navDraw();
   await navPoll(true);
+  if (key) navView.focus(key);
 }
 /** ★ LIVE: every 30 s while open (2 s while the server is still building the index) — a message saved by a listener's
- *  decoder or background decoding appears, pulsing, without the map being reloaded. */
+ *  decoder or background decoding appears, pulsing, without the map being reloaded. AIS mode's map polls too (its
+ *  NAVTEX, DSC and stored ships; its live ships come every second over the socket). */
 let navPollSeq = 0;
 async function navPoll(now = false) {
   if (navTimer) { clearTimeout(navTimer); navTimer = null; }
-  if (!navView?.open) return;
+  if (!navView?.open && !aisView?.open) return;
   const seq = ++navPollSeq;
-  if (now) navView.note(navBuilding(navLast.w) || '');
+  if (now) navView?.note(navBuilding(navLast.w) || '');
   const got = await navFetchAll(navRange);
-  if (seq !== navPollSeq || !navView?.open) return;
-  navLast = { st: got.st ?? navLast.st, w: got.w ?? (navLayers.warnings || navLayers.weather ? navLast.w : null), m: got.m ?? (navLayers.weather ? navLast.m : null) };
+  if (seq !== navPollSeq || (!navView?.open && !aisView?.open)) return;
+  navLast = { st: got.st ?? navLast.st, w: got.w ?? navLast.w, m: got.m ?? navLast.m, ships: got.ships ?? navLast.ships, dscG: got.dscG.length ? got.dscG : navLast.dscG };
   navDraw();
   navTimer = setTimeout(() => { void navPoll(); }, navLast.w && navLast.w.pending > 0 ? 2000 : 30_000);
 }
@@ -9037,13 +9138,16 @@ function aisUiOn() {
   syncAudioQuiet();
   if (spec) spec.aisHeld = true;
   closePanels();
+  /* ★★ V12 2026-11-02: AIS mode's map IS the SHIPPING MAP (title, the RECEIVED list, the time filter, the layers) — its
+   *  live ships exactly as before (EXIT AIS gives the receiver back), and the NAVTEX, DSC and stored-ship layers beside
+   *  them where this server has them. */
   if (!aisView) aisView = new TrackView({
-    title: 'AIS · 161.975 + 162.025 MHz', profile: 'marine', exitLabel: 'EXIT AIS', listTitle: 'SHIPS', onExit: () => aisSetMode(false),
-    icon: aisIcon, label: aisName, card: (v) => aisCard(v, myPos()),
-    trail: (key, done) => { const m = Number(key); if (!(m > 0) || !spec) { done([]); return; } aisTrailWait.set(m, done); spec.aisTrail(m); },
+    title: `${SHIPPING_TITLE} · AIS 161.975 + 162.025 MHz`, profile: 'marine', exitLabel: 'EXIT AIS', listTitle: 'RECEIVED', onExit: () => aisSetMode(false),
+    ...shipViewOpts(),
   });
   aisView.show(myPos());
   aisRender();
+  void navPoll(true);
 }
 function aisUiOff() {
   aisOn = false;
@@ -9071,9 +9175,16 @@ function aisSetMode(on: boolean) {
 function aisRender() {
   if (!aisView) return;
   const r = aisReport;
-  const items = r ? r.vessels.filter((v) => v.lat != null && v.lon != null).map((v) => ({ ...v, key: String(v.mmsi) })) : [];
-  aisView.update(items, r ? aisRows(r, myPos()) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>',
-                 aisStatus(r), r ? r.vessels.length : 0, myPos(), r ? aisSafetyHtml(r) : '');
+  const items: any[] = r ? r.vessels.filter((v) => v.lat != null && v.lon != null).map((v) => ({ ...v, key: String(v.mmsi) })) : [];
+  // ★ the other layers (stored ships not heard now, DSC, NAVTEX) — the SHIPPING MAP's own composition
+  const c = shipCompose('ships', true);
+  shipSetChrome(aisView, c.present);
+  const live = r ? aisRows(r, myPos()) : '<div class="trkEmpty">Listening on 161.975 and 162.025 MHz — ships appear as they are heard.</div>';
+  const many = c.present.length > 1;
+  const rows = (many && shipOn('ships', c.present, shipLayers) ? '<div class="sec" role="heading" aria-level="3">SHIPS — HEARD NOW</div>' : '')
+    + (shipOn('ships', c.present, shipLayers) ? live : '') + c.rows;
+  aisView.update(shipOn('ships', c.present, shipLayers) ? [...items, ...c.items] : c.items, rows,
+                 [aisStatus(r), c.status].filter(Boolean).join(' · '), r ? r.vessels.length : 0, myPos(), r ? aisSafetyHtml(r) : '');
 }
 /** ★ A report (on) or the server's `ais_off` (null). */
 function onAisReport(r: AisReport | null) {
@@ -12014,7 +12125,7 @@ const dscCalls = new DscCalls();
 function renderDsc() {
   renderDscRows($('dscRows'), dscCalls.list,
     'listening — each DSC call appears here as it is decoded. A few an hour on each frequency; most are test calls '
-    + 'to coast stations and their acknowledgements.', (c) => openDscMap([c]));
+    + 'to coast stations and their acknowledgements.', (c) => { void navMapOpen('dsc', `d:${c.id}:${c.rf}`); });   // ★ V12 2026-11-02 the SHIPPING MAP, DSC first
 }
 /** ★ A channel key: tune it as a DSC receiver does, and re-attach so the decoder's tones follow. */
 function dscTune(ch: { hz: number; vhf: boolean }) {
@@ -16273,8 +16384,16 @@ async function renderGallery(page = galPage) {
       if (typeof it.plat === 'number' && typeof it.plon === 'number' && Math.abs(it.plat) <= 90 && Math.abs(it.plon) <= 180) {
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
         mb.title = 'Show the position this call sent';
-        const pin: DscPin = { lat: it.plat, lon: it.plon, label: it.title, level: it.lv ?? 0 };
-        mb.onclick = (e) => { e.stopPropagation(); openPinsMap([pin]); };
+        // ★ V12 2026-11-02: on the SHIPPING MAP, DSC first, on this call (beside the ships and the NAVTEX layers)
+        mb.onclick = (e) => { e.stopPropagation(); void navMapOpen('dsc', `d:g:${it.f}`); };
+        row.appendChild(mb);
+      }
+      // ★ V12 2026-11-02 an AIS day (its log or its card): MAP opens the SHIPPING MAP with the ships first
+      if (it.k === 'ais') {
+        const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
+        mb.title = 'The ships, on the SHIPPING MAP'; mb.setAttribute('aria-label', 'Show the ships on the shipping map');
+        mb.onclick = (e) => { e.stopPropagation(); void navMapOpen('ships'); };
+        mb.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); };
         row.appendChild(mb);
       }
       // ★ V12 a day's "stations received" (LoRa / MeshCore nodes with positions): MAP, on the ISM map
@@ -16299,14 +16418,14 @@ async function renderGallery(page = galPage) {
         const f = document.createElement('span'); f.className = 'f'; f.textContent = 'NAVTEX';
         const n = document.createElement('span'); n.className = 'n';
         const far = nr.stations.reduce((b, x) => (x.km !== undefined && x.km > (b?.km ?? 0) ? x : b), null as NavStation | null);
-        n.appendChild(document.createTextNode(`NAVTEX · stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
+        n.appendChild(document.createTextNode(`SHIPPING MAP · NAVTEX stations received: ${navSites(nr).length} sites · ${nr.stations.length} stations · ${nr.messages} messages`
           + (far ? ` · furthest ${far.name} ${Math.round(far.km!).toLocaleString('en-GB')} km` : '')));
         n.appendChild(document.createElement('br'));
         const src = document.createElement('span'); src.className = 'src';
         src.textContent = 'Every NAVTEX message in this gallery, by the station that sent it — a listener’s decoder and background decoding';
         n.appendChild(src);
         const mb = document.createElement('button'); mb.className = 'btn galMap'; mb.textContent = 'MAP';
-        mb.title = 'The NAVTEX stations received, on the map'; mb.setAttribute('aria-label', 'NAVTEX stations received, on the map');
+        mb.title = 'The NAVTEX stations received, on the SHIPPING MAP'; mb.setAttribute('aria-label', 'NAVTEX stations received, on the shipping map');
         mb.onclick = (e) => { e.stopPropagation(); void navMapOpen(); };
         row.onclick = () => void navMapOpen();
         row.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void navMapOpen(); } };

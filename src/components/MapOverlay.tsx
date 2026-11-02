@@ -29,7 +29,6 @@
 
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import { DIGI_MODE_STYLE, DIGI_MARKER_RIM, digiModeStyle } from '../utils/digiModes';
-import { DSC_PIN_COLOURS } from '../services/dsc';   // ★ V12 DSC's map legend
 import { AppState, Linking, Modal, StyleSheet, View, Text, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { useOverlay } from './PanelNav';
 import { NavCard, CardKey } from './NavCard';
@@ -82,6 +81,7 @@ import TrackLiveList from './TrackLiveList';
 import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
 import { langName } from '../services/transcriber';
 import { NAV_HAZARDS, NAV_HAZARD_COLOURS, navGlyphSvg } from '../services/navtexIcons';
+import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/shippingMap';   // ★ V12 2026-11-02 the SHIPPING MAP
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's HH:MM:SS UTC (the slot's start)
@@ -236,8 +236,9 @@ function buildHtml(
    *  signal-strength dots, the band colours, the aircraft's yellow selection ring and its signal meter. The
    *  near-black page tint per map (amber-black HFDL, green-black spots) is a background, kept. */
   const T = { bg: aero ? '#090602' : '#060906', x: ink.x, k: ink.k, kt: ink.kt };
-  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' ? 'AIS SHIP MAP'
-    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'dsc' ? 'DSC POSITIONS' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'navtex' ? 'NAVTEX MAP' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
+  // ★★ V12 2026-11-02: AIS mode's map, DSC's MAP and NAVTEX's MAP are ONE map — the SHIPPING MAP (shippingMap.ts)
+  const TITLE = isHfdl ? 'HFDL AIRCRAFT MAP' : isAdsb ? 'ADS-B AIRCRAFT MAP' : isNdb ? 'NDB BEACONS' : kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? SHIPPING_TITLE
+    : kind === 'aprs' ? 'APRS STATION MAP' : kind === 'ism' ? 'ISM · MESH NODES' : kind === 'digi' ? 'DIGITAL SPOTS MAP' : 'CW SPOTS MAP';
   const CNT_ICON = isNdb
     // ★ V12 NDB: a beacon mast with its radiating arcs — the count beside it is the beacons IDENTIFIED
     ? `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" style="vertical-align:middle;opacity:0.8"><path d="M12 9 L8 22 M12 9 L16 22 M9.5 17 L14.5 17" stroke="rgba(255,190,40,0.9)" stroke-width="1.6" fill="none" stroke-linecap="round"/><circle cx="12" cy="7" r="1.8" fill="rgba(255,190,40,0.9)"/><path d="M7.5 3.5 A6 6 0 0 0 7.5 10.5 M16.5 3.5 A6 6 0 0 1 16.5 10.5" stroke="rgba(255,190,40,0.7)" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`
@@ -532,12 +533,6 @@ ${isSpots ? `
       <div class="lg-row"><span style="color:#e0b020">&#9646;&#9646;</span><span>&lt; 20 dB</span></div>
       <div class="lg-row"><span style="color:#33cc44">&#9646;&#9646;&#9646;</span><span>20 dB and over &middot; dim = not heard this minute</span></div>
       <div class="lg-row"><span>&#9711;</span><span>Range rings in nautical miles</span></div>
-      ` : kind === 'ais' ? `
-      <div class="lg-sec">AIS SHIPS</div>
-      ${Object.entries(AIS_COLOURS).map(([f, c]) => `<div class="lg-row"><span class="lg-dot" style="background:${c};"></span><span>${f === 'hsc' ? 'high-speed craft' : f}</span></div>`).join('')}
-      <div class="lg-row"><span class="lg-dot" style="background:#ff3b3b;"></span><span>distress beacon</span></div>
-      <div class="lg-row"><span>&#9670;</span><span>Aid to navigation (dashed = virtual)</span></div>
-      <div class="lg-row"><span>&#9679;</span><span>A dot = still; a hull points along its heading</span></div>
       ` : kind === 'aprs' ? `
       <div class="lg-sec">APRS STATIONS</div>
       <div class="lg-row"><span class="lg-dot" style="background:#59c26b;"></span><span>station</span></div>
@@ -552,7 +547,12 @@ ${isSpots ? `
       <div class="lg-row"><span class="lg-dot" style="background:#ff9f43;"></span><span>MeshCore</span></div>
       <div class="lg-row"><span>&#9711;</span><span>Hollow = not heard for 15 min</span></div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
-      ` : kind === 'navtex' ? `
+      ` : kind === 'navtex' || kind === 'ais' || kind === 'dsc' ? `
+      <div class="lg-sec">SHIPS (AIS)</div>
+      ${Object.entries(AIS_COLOURS).map(([f, c]) => `<div class="lg-row"><span class="lg-dot" style="background:${c};"></span><span>${f === 'hsc' ? 'high-speed craft' : f}</span></div>`).join('')}
+      ${shipLegendRows(['ships']).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
+      <div class="lg-sec">DSC POSITIONS</div>
+      ${shipLegendRows(['dsc']).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
       <div class="lg-sec">NAVTEX · STATIONS RECEIVED</div>
       <div class="lg-row"><span class="lg-dot" style="background:#4fc3f7;"></span><span>518 kHz (international)</span></div>
       <div class="lg-row"><span class="lg-dot" style="background:#c792ea;"></span><span>490 kHz (national)</span></div>
@@ -566,12 +566,9 @@ ${isSpots ? `
       <div class="lg-row"><span>&#9675;</span><span>Faded = expired or cancelled (ALL only)</span></div>
       <div class="lg-row"><span>&#9312;</span><span>A number = warnings gathered; tap to zoom in</span></div>
       <div class="lg-sec">WEATHER</div>
-      <div class="lg-row"><span style="color:#cfe6ff">&#9645;</span><span>Latest forecast per sea area</span></div>
+      ${windLegendRows().map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
+      <div class="lg-row"><span style="color:#cfe6ff">&#9645;</span><span>Latest forecast per sea area (an older server: no arrow)</span></div>
       <div class="lg-row"><span style="color:#ff6b5a">&#9645;</span><span>Gale or worse</span></div>
-      ` : kind === 'dsc' ? `
-      <div class="lg-sec">DSC POSITIONS</div>
-      ${DSC_PIN_COLOURS.map((c, i) => `<div class="lg-row"><span class="lg-dot" style="background:${c};"></span><span>${['routine', 'safety', 'urgency', 'distress'][i]}</span></div>`).reverse().join('')}
-      <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
       ` : isAdsb ? `
       <div class="lg-sec">ADS-B 1090</div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
@@ -2402,7 +2399,7 @@ export default function MapOverlay(
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList title={kind === 'ais' ? 'SHIPS' : kind === 'dsc' ? 'CALLS' : kind === 'ism' ? 'NODES' : kind === 'navtex' ? 'RECEIVED' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
+          <TrackLiveList title={kind === 'ais' || kind === 'dsc' || kind === 'navtex' ? 'RECEIVED' : kind === 'ism' ? 'NODES' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}

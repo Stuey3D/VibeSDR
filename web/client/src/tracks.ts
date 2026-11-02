@@ -340,6 +340,7 @@ const CSS = `
 .trkTop .rng .btn:last-child{border-radius:0 6px 6px 0}
 .trkTop .rng .btn[aria-pressed="true"]{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkTop .tgl .btn[aria-pressed="true"]{background:#7fc8ff;border-color:#7fc8ff}
+.trkTop .rng[hidden],.trkKey[hidden]{display:none}
 .trkCard .nvTr{background:#1d2a36;color:#e3eaf1;border:1px solid #3c5266;border-radius:5px;font:600 11px ui-monospace,Menlo,monospace;padding:3px 8px;cursor:pointer}
 .trkCard .nvTr.on{background:#ffd34d;color:#111;border-color:#ffd34d}
 .trkCard .nvTr:focus-visible{outline:2px solid #ffd34d}
@@ -463,12 +464,13 @@ export class TrackView {
     r.innerHTML = `<div class="trkTop"><button class="btn exit" type="button">${esc(o.exitLabel)}</button><span class="ttl">${esc(o.title)}</span>`
       + (o.ranges?.length ? `<span class="rng" role="group" aria-label="Show what was heard in the last…" title="${esc(o.rangeHint || '')}">`
          + o.ranges.map((x) => `<button class="btn" type="button" data-rng="${esc(x.id)}" aria-pressed="${x.id === o.range}" aria-label="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
-      + (o.toggles?.length ? `<span class="rng tgl" role="group" aria-label="Layers">`
-         + o.toggles.map((x) => `<button class="btn" type="button" data-tgl="${esc(x.id)}" aria-pressed="${o.toggled?.[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('') + '</span>' : '')
+      // ★ V12 2026-11-02 the SHIPPING MAP: the layer row is always in the page (hidden when empty) — setToggles() redraws it
+      //   as layers gain or lose data on this server (a layer with nothing is absent, never an empty toggle)
+      + `<span class="rng tgl" role="group" aria-label="Layers"${o.toggles?.length ? '' : ' hidden'}></span>`
       + `<span class="st"></span><button class="btn fit" type="button" title="Fit every ${esc(o.listTitle.toLowerCase())} on the map">FIT</button></div>`
       + `<div class="trkMapHost"><div class="trkList"><div class="hd" role="button" tabindex="0"><span>${esc(o.listTitle)}</span> <span class="n">0</span>`
       + `<button class="mn" type="button" aria-label="Minimise the list">▾</button></div><div class="safety" hidden></div><div class="rows"></div></div>`
-      + (o.legend ? `<details class="trkKey"><summary>KEY</summary><div class="kb">${o.legend}</div></details>` : '')
+      + `<details class="trkKey"${o.legend ? '' : ' hidden'}><summary>KEY</summary><div class="kb">${o.legend || ''}</div></details>`
       + `</div>`;
     this.root = r;
     this.mapHost = r.querySelector('.trkMapHost') as HTMLElement;
@@ -487,13 +489,7 @@ export class TrackView {
         this.refit = true;
       };
     }
-    for (const b of Array.from(r.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
-      b.onclick = () => {
-        const on = b.getAttribute('aria-pressed') !== 'true';
-        b.setAttribute('aria-pressed', String(on));
-        o.onToggle?.(b.dataset.tgl || '', on);
-      };
-    }
+    this.setToggles(o.toggles ?? [], o.toggled ?? {});
     const hd = r.querySelector('.hd') as HTMLElement;
     const toggle = () => this.setMin(!this.list.classList.contains('min'));
     hd.onclick = toggle;
@@ -507,6 +503,36 @@ export class TrackView {
     this.setMin(min, false);
   }
   get open() { return !this.root.hidden; }
+  private tglSig = '';
+  /** ★★ V12 2026-11-02 the layer toggles, redrawn (only when they changed — a poll must not steal a focused button). */
+  setToggles(toggles: Array<{ id: string; label: string; words: string }>, toggled: Record<string, boolean>) {
+    const host = this.root.querySelector('.tgl') as HTMLElement;
+    const sig = JSON.stringify([toggles.map((x) => x.id), toggles.map((x) => toggled[x.id] !== false)]);
+    if (sig === this.tglSig) return;
+    this.tglSig = sig;
+    host.hidden = !toggles.length;
+    host.innerHTML = toggles.map((x) => `<button class="btn" type="button" data-tgl="${esc(x.id)}" aria-pressed="${toggled[x.id] !== false}" aria-label="${esc(x.words)}" title="${esc(x.words)}">${esc(x.label)}</button>`).join('');
+    for (const b of Array.from(host.querySelectorAll('[data-tgl]')) as HTMLButtonElement[]) {
+      b.onclick = () => {
+        const on = b.getAttribute('aria-pressed') !== 'true';
+        b.setAttribute('aria-pressed', String(on));
+        this.o.onToggle?.(b.dataset.tgl || '', on);
+      };
+    }
+  }
+  /** ★ V12 2026-11-02: the time filter's pressed button, from outside (the two shipping views share one filter). */
+  setRange(id: string) {
+    for (const b of Array.from(this.root.querySelectorAll('[data-rng]')) as HTMLElement[]) b.setAttribute('aria-pressed', String(b.dataset.rng === id));
+  }
+  private keySig = '';
+  /** ★★ V12 2026-11-02 the KEY, redrawn — it lists the glyphs of the layers this map has (ships, DSC, hazards, arrows). */
+  setLegend(html: string) {
+    if (html === this.keySig) return;
+    this.keySig = html;
+    const d = this.root.querySelector('.trkKey') as HTMLElement;
+    d.hidden = !html;
+    (d.querySelector('.kb') as HTMLElement).innerHTML = html;
+  }
   private setMin(min: boolean, save = true) {
     this.list.classList.toggle('min', min);
     (this.list.querySelector('.mn') as HTMLElement).textContent = min ? '▴' : '▾';

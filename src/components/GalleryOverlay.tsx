@@ -66,7 +66,7 @@ export function galleryWhen(t: number): string {
 export function galleryFreq(hz: number): string { return hz < 30e6 ? `${(hz / 1e3).toFixed(1)} kHz` : `${(hz / 1e6).toFixed(4)} MHz`; }
 function size(b: number): string { return b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : b >= 1024 ? `${Math.round(b / 1024)} KB` : `${b} B`; }
 
-export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap, onNavtexMap }: {
+export default function GalleryOverlay({ visible, base, readAuth = '', translateTo = '', onClose, onNodesMap, onNavtexMap, onShipMap }: {
   /** TRANSCRIBE's TRANSLATE TO ('' = off → the phone's own language). */
   visible: boolean; base: string; readAuth?: string; translateTo?: string; onClose: () => void;
   /** ★★ V12 2026-11-01 (Stuart: "being able to open up the map in the Gallery … we can see which stations we received"):
@@ -75,6 +75,9 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   onNodesMap?: ((title: string, nodes: IsmGalNode[], rx: { lat: number; lon: number } | null, refresh: (() => Promise<IsmGalNode[] | null>) | null) => void) | null;
   /** ★★ V12 2026-11-01: the NAVTEX stations received — a standing row on the first page of ALL / NAVTEX with MAP. */
   onNavtexMap?: (() => void) | null;
+  /** ★★ V12 2026-11-02 THE SHIPPING MAP from a row: a DSC call's pinned position (DSC first, on that call) or an AIS day
+   *  (the ships first). The keys are shippingMap.ts's (a gallery DSC pin is "d:g:<file>"). */
+  onShipMap?: ((focus: 'dsc' | 'ships', key: string) => void) | null;
 }) {
   const pt = usePopupTheme();
   const s = useMemo(() => makeStyles(pt), [pt]);
@@ -282,7 +285,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                                       style={s.row}>
                       <Text style={s.freq}>NAVTEX</Text>
                       <View style={{ flex: 1 }}>
-                        <Text style={s.name}>{`NAVTEX · stations received: ${navSum.stations.length} stations · ${navSum.messages} messages`}</Text>
+                        <Text style={s.name}>{`SHIPPING MAP · NAVTEX stations received: ${navSum.stations.length} stations · ${navSum.messages} messages`}</Text>
                         <Text style={s.dim}>Every NAVTEX message in this gallery, by the station that sent it</Text>
                       </View>
                       <View style={[s.key, s.mapKey]}><Text style={s.keyText}>MAP</Text></View>
@@ -300,6 +303,18 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
                         {/* ★ only the parts an item has (an ISM day has no demodulator) — the web client's rule */}
                         <Text style={s.dim}>{[galleryWhen(it.t), (it.m || '').toUpperCase(), it.d, it.p, it.r, size(it.bytes)].filter((x) => !!x).join(' · ')}</Text>
                       </View>
+                      {!!onShipMap && it.k === 'dsc' && typeof it.plat === 'number' && typeof it.plon === 'number' && (
+                        <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel={`Show this call's position on the shipping map: ${it.title}`}
+                                          onPress={() => onShipMap('dsc', `d:g:${it.f}`)}>
+                          <Text style={s.keyText}>MAP</Text>
+                        </TouchableOpacity>
+                      )}
+                      {!!onShipMap && it.k === 'ais' && (
+                        <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel="Show the ships on the shipping map"
+                                          onPress={() => onShipMap('ships', '')}>
+                          <Text style={s.keyText}>MAP</Text>
+                        </TouchableOpacity>
+                      )}
                       {!!onNodesMap && ismIsNodeCard(it) && (
                         <TouchableOpacity style={[s.key, s.mapKey]} accessibilityRole="button" accessibilityLabel={`Show the nodes heard on the map: ${it.title}`}
                                           onPress={() => { void nodesMap(it); }}>
