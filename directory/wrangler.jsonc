@@ -52,6 +52,8 @@
   //     (vs_nonce/vs_auth — a reusable hour-long session proof — vs_admin_nonce/vs_admin_auth, and
   //     an older directory's vs_admin_ticket). The Worker logs one line per request itself instead —
   //     host, path, method, status, country, never the query — so traffic stays measurable.
-  //  ★ Sampling stays at 1: console logs (that line, and errors) are still wanted for every request.
-  "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "enabled": true, "invocation_logs": false } }
+  //  ★ Sampling was 1 (every request's line and error kept) until 2026-10-29 — see below.
+  // ★ 10 % of requests (Stuart, 2026-10-29: Cloudflare Observability is priced by volume from 2026-12-01) — every
+  //   VibeServer checks in here, so logging every request was most of the account's log volume.
+  "observability": { "enabled": true, "head_sampling_rate": 0.1, "logs": { "enabled": true, "invocation_logs": false } }
 }
