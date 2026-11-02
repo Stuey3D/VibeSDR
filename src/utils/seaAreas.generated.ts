@@ -583,7 +583,7 @@ export const SEA_AREA_ROWS: ReadonlyArray<[string, string, string, string, numbe
 ["us-pmz029","o","us","Offshore Chiapas E of 94W",14.542,-93.241,"km^brvDxAaGzBYJzChMiX^]{EfIpTw[jTiUw@n@f@qAcA@nAc@\\sBo@fCh@Zve@uf@djBdnB"],
 ["us-pmz028","o","us","Oaxaca E of Puerto Angel out 300 nm including the Gulf of Tehuantepec",13.565,-95.916,"km^brvD~kEE|cCviCee@|pBqi@fnB}dFaoEy@cCXyJcHcPuAwJ{DoKUyGwAeCuBYy@}C{@o@Oj@i@sF{@^WgYu@hU{@}@p@cH_A}Ez@lGiAbFwHsJLkAbEkCdAvAl@[wD{Fv@}D~B~@zB`FtAmRrHqWmCfB_@~BrAiCkCrGJcBwA`CUbG|@wBcB`Gg@j@FqBw@nBJ_A}AJ]oAtBoAdBuFaA}D|D_A"],
 ["us-anz835","o","us","Cape Fear to 31N to 1000 FM",31.804,-77.991,"{u`A~usCzP_k@nD~QrR`UtvAfz@da@`BVtgEkKkCoM{KeA_DmFiCc[we@gc@w~@oLqIwFac@uCcHkIqMeZwQc@_M~@sU"],
-["us-anz833","o","us","Cape Hatteras to Cape Fear to 100 NM Offshore.",33.931,-75.157,"{q`A`{qCzL|M{P~j@gHoVwUuSoCuEcEeUgIoP}KsKhOoYxCbA~XbUrN`X"],
+["us-anz833","o","us","Cape Hatteras to Cape Fear to 100 NM Offshore",33.931,-75.157,"{q`A`{qCzL|M{P~j@gHoVwUuSoCuEcEeUgIoP}KsKhOoYxCbA~XbUrN`X"],
 ["us-anz830","o","us","Currituck Beach Light to Cape Hatteras to 100 NM offshore",34.754,-74.186,"k|bAfkoC~S`HiOnYoLwF_XkEkPcAcLt@zN_[|L@"],
 ["us-anz825","o","us","Baltimore Canyon to Cape Charles Light to 100 NM offshore",37.164,-74.196,"}fgA~koClPjK{Fz`@sFn@oUkMwV{T_WiO~DgTtVpBzSfI"],
 ["us-anz828","o","us","Cape Charles Light to Currituck Beach Light to 100 NM offshore",36.319,-74.243,"y}dAbdoC~OB{N~ZuY~M_SnF_QnBzF{`@xXwK"],

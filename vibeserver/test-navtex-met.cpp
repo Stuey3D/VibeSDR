@@ -175,6 +175,44 @@ int main(int argc, char** argv) {
         ok(j.find("\"wind\":{\"k\":\"a\",\"bf\":7,\"sev\":1,\"from\":225.0,\"to\":45.0,\"chg\":\"veer\",\"k2\":\"a\",\"bf2\":8,\"sev2\":2,\"from2\":270.0,\"to2\":90.0}") != std::string::npos,
            "the met JSON carries the arrows: " + j.substr(j.find("\"wind\"") == std::string::npos ? 0 : j.find("\"wind\"")));
     }
+    std::printf("── sea areas: matching (the SHIPPING MAP's outlines, 2026-11-02) ──\n");
+    {
+        auto H = [](const char* l) { return navmet::headingAreas(l); };
+        auto is = [](const std::vector<std::string>& v, std::initializer_list<const char*> want) {
+            if (v.size() != want.size()) return false;
+            size_t i = 0; for (const char* w : want) if (v[i++] != w) return false;
+            return true;
+        };
+        ok(is(H("DOVER, WIGHT, PORTLAND"), { "dover", "wight", "portland" }), "\"DOVER, WIGHT, PORTLAND\": three, in order");
+        ok(is(H("DOVER, WIGHT AND PORTLAND."), { "dover", "wight", "portland" }), "a ',' and 'and' list");
+        ok(is(H("FORTIES & CROMARTY / FORTH"), { "forties", "cromarty", "forth" }), "'&' and '/' lists");
+        ok(is(H("NORTH UTSIRE SOUTH UTSIRE"), { "nutsire", "sutsire" }), "two two-word names back to back");
+        ok(is(H("N UTSIRE, S UTSIRE, FAROES, SE ICELAND"), { "nutsire", "sutsire", "faeroes", "seiceland" }), "aliases: N/S UTSIRE, FAROES, SE ICELAND");
+        ok(is(H("TRAFALGAR"), { "trafalgar" }) && is(H("FITZROY."), { "fitzroy" }), "Trafalgar, FitzRoy");
+        ok(H("DOVER, WIGHT, PORTLAND AND THE NORTH SEA").empty(), "a list with a word that is no area is not a heading");
+        // beyond the UK: the generated table (vibe_sea_areas.generated.h), appended to the same areas()
+        ok(is(H("GEORGES BANK"), { "ca-003250" }), "ECCC: GEORGES BANK (Canada)");
+        ok(is(H("GEORGES BANK BETWEEN 68W AND THE HAGUE LINE-"), { "us-anz900" }), "NWS: the longer name wins over GEORGES BANK, its trailing hyphen dropped");
+        ok(is(H("LAHAVE BANK, BROWNS BANK AND GEORGES BANK."), { "ca-003270", "ca-003240", "ca-003250" }), "ECCC: a list of banks with ',' and 'and'");
+        ok(H("CENTRAL").empty() && H("EAST COAST").empty() && H("SOUTH COAST").empty(), "too generic to be a heading anywhere (CENTRAL, EAST COAST)");
+        ok(is(H("ANZ800-031000-"), { "us-anz800" }), "a UGC line: ANZ800-031000-");
+        ok(is(H("AMZ650>652-031015-"), { "us-amz650", "us-amz651" }), "a UGC range: AMZ650>652 (652 is no zone: skipped)");
+        ok(is(H("HELGOLAND"), { "de-hel" }) && is(H("NORDFRIESISCHE KUESTE"), { "de-nof" }) && is(H("NORTH FRISIAN COAST"), { "de-nof" }), "DWD: Helgoland, Nordfriesische Kueste / North Frisian Coast");
+        ok(navmet::areaById("us-anz800") && navmet::areaById("ca-003250") && navmet::areaById("dogger"), "every table's areas are in areas()");
+        // a whole NWS bulletin as NAVTEX carries it: the UGC line, the name, the first period in KNOTS
+        const auto v = navmet::parse("ANZ800-031000-\nGULF OF MAINE TO THE HAGUE LINE-\n345 AM EST MON NOV 2 2026\n"
+                                     ".TODAY...SW WINDS 10 TO 15 KT. SEAS 3 TO 5 FT.\n.TONIGHT...W WINDS 35 TO 40 KT. SEAS 12 TO 16 FT.\n$$\n");
+        const navmet::Fc* g = of(v, "us-anz800");
+        ok(g && g->fmin == 3 && g->fmax == 4 && g->gale == 0, "NWS knots: 10 TO 15 KT is force 3–4, not 10 (and no gale)" + (g ? " — " + std::to_string(g->fmin) + "–" + std::to_string(g->fmax) + " gale " + std::to_string(g->gale) : std::string(" — none")));
+        ok(g && g->sea == 4, "NWS seas in feet: 5 FT is moderate (" + std::to_string(g ? g->sea : -9) + ")");
+        ok(g && g->block.find("TONIGHT") == std::string::npos, "only the first period is read (.TONIGHT ends it)");
+        const navmet::Wind w = g ? navmet::windOf(*g) : navmet::Wind();
+        ok(w.kind == 'a' && w.bf == 4 && w.sev == 0 && std::fabs(w.from - 225) < 0.1, "NWS arrow: SW force 4 (from the knots)");
+        const auto v2 = navmet::parse("ANZ805-031000-\nGEORGES BANK BETWEEN CAPE COD AND 68W NORTH OF 1000 FM-\n.TODAY...NW WINDS 35 TO 45 KT. SEAS 14 TO 20 FT.\n");
+        const navmet::Fc* g2 = of(v2, "us-anz805");
+        ok(g2 && g2->fmax == 9 && g2->gale >= 8, "NWS 35 TO 45 KT: force 8–9, a gale (red)");
+        ok(navmet::knotsBf("WIND SW 6 TO 8").first < 0, "no knots, no conversion (a Beaufort forecast is untouched)");
+    }
     std::printf("── a real set ──\n");
     {
         const std::string index = argc > 2 ? argv[1] : "scripts/navtex-fixtures/index.jsonl";

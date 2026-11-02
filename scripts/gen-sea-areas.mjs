@@ -206,7 +206,7 @@ function buildUk(land) {
   }
   return out;
 }
-const TITLE = (s) => s.replace(/\s+/g, ' ').trim();
+const TITLE = (s) => s.replace(/\s+/g, ' ').trim().replace(/[.,;:]+$/, '');
 function outerRings(rings) {
   // shapefile outer rings run clockwise (negative signed area here); holes are dropped
   const o = rings.filter((r) => signedArea(r) < 0);
@@ -255,7 +255,10 @@ function matchOf(a) {
   const m = new Set();
   const add = (s) => { const u = ASCII(s); if (u.length >= 4 && !GENERIC.has(u) && !/^\d/.test(u)) m.add(u); };
   if (a.src === 'ca') { add(a.name); add(a.name.replace(/\s+-\s+/g, ' ')); }
-  if (a.src === 'us') { add(a.name); add(a.name.replace(/\s+out\s+\d+\s+NM$/i, '')); }
+  if (a.src === 'us') {
+    // ★ the 2025 rename: a bulletin (or a saved message) from before it says GULF OF MEXICO
+    for (const n of [a.name, a.name.replace(/Gulf of America/gi, 'Gulf of Mexico')]) { add(n); add(n.replace(/\s+out\s+\d+\s+NM$/i, '')); }
+  }
   if (a.src === 'de') {
     add(a.name); add(a.name.replace(/Küste/, 'Kueste'));
     const EN = { nof: 'NORTH FRISIAN COAST', osf: 'EAST FRISIAN COAST', hel: 'HELGOLAND|HELIGOLAND', elm: 'ELBE AND WESER ESTUARIES|ELBE-/WESERMUENDUNG|ELBE- UND WESERMUENDUNG', flf: 'FLENSBURG TO FEHMARN', fer: 'EAST OF FEHMARN TO RUEGEN|EAST OF FEHMARN TO RUGEN', osr: 'EAST OF RUEGEN|EAST OF RUGEN' };
