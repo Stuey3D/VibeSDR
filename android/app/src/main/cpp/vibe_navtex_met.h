@@ -243,31 +243,38 @@ inline int visLevel(const std::string& s) {
 }
 inline bool visStart(const std::string& s) { static const std::regex re(R"(^(VISIBILITY:?\s*|VIS:?\s*)?(GOOD|VERY GOOD|MODERATE|MOD|POOR|VERY POOR|FOG)\b)"); return std::regex_search(s, re); }
 
+/** ★ "NO GALES", "GALES NOT EXPECTED", "GALE WARNINGS: NONE" are not gales — removed before anything is read. */
+inline std::string cleanNeg(const std::string& s) {
+    static const std::regex neg(R"(\bNO (SEVERE )?GALES?\b|\b(SEVERE )?GALES? (ARE )?NOT (EXPECTED|EXP)\b|\bGALE WARNINGS?:? (NONE|NIL)\b|\bNO GALE WARNINGS?\b|\bNO STORMS?\b|\b(SEVERE )?GALES? (NOW |HAS |HAVE )?(CEASED|ENDED)\b|\bNO LONGER\b[^.]*)");
+    return std::regex_replace(s, neg, " ");
+}
+/** ★ The WIND sentence of a block's sentences: the first with a direction word and a force (0–12), or a gale word. -1: none. */
+inline int windSentence(const std::vector<std::string>& ss) {
+    static const std::regex force(R"((^|[\s,(])(\d{1,2})(?=($|[\s,.)-])))"), word(R"([A-Z-]+)"), galeAny(R"(\b(GALE|STORM|HURRICANE)\b)");
+    for (size_t i = 0; i < ss.size(); ++i) {
+        const std::string s = cleanNeg(ss[i]);
+        bool hasDir = false;
+        for (auto it = std::sregex_iterator(s.begin(), s.end(), word); it != std::sregex_iterator(); ++it) if (dirAbbr(it->str())) { hasDir = true; break; }
+        bool hasForce = false;
+        for (auto it = std::sregex_iterator(s.begin(), s.end(), force); it != std::sregex_iterator(); ++it) { const int n = std::atoi((*it)[2].str().c_str()); if (n >= 0 && n <= 12) hasForce = true; }
+        if ((hasDir && hasForce) || std::regex_search(s, galeAny)) return (int)i;
+    }
+    return -1;
+}
+
 /** One area block → its forecast fields. */
 inline Fc read(const std::string& id, const std::string& block) {
     Fc f; f.area = id;
     std::string b = block; if (b.size() > kBlockMax) b.resize(kBlockMax);
     f.block = norm(b);
     const auto ss = sentences(block);
-    // ★ "NO GALES", "GALES NOT EXPECTED", "GALE WARNINGS: NONE" are not gales
-    auto clean = [](const std::string& s) {
-        static const std::regex neg(R"(\bNO (SEVERE )?GALES?\b|\b(SEVERE )?GALES? (ARE )?NOT (EXPECTED|EXP)\b|\bGALE WARNINGS?:? (NONE|NIL)\b|\bNO GALE WARNINGS?\b|\bNO STORMS?\b|\b(SEVERE )?GALES? (NOW |HAS |HAVE )?(CEASED|ENDED)\b|\bNO LONGER\b[^.]*)");
-        return std::regex_replace(s, neg, " ");
-    };
-    int wi = -1;
-    static const std::regex force(R"((^|[\s,(])(\d{1,2})(?=($|[\s,.)-])))"), word(R"([A-Z-]+)"), galeAny(R"(\b(GALE|STORM|HURRICANE)\b)"),
+    auto clean = [](const std::string& s) { return cleanNeg(s); };
+    static const std::regex force(R"((^|[\s,(-])(\d{1,2})(?=($|[\s,.)-])))"), word(R"([A-Z-]+)"),
         unit(R"(^\s*(HPA|MB|M\b|METER|METRE|NM|MILES|KM|UTC|Z\b|KT|KNOTS|HOURS|HR|DEG|N\b|S\b|E\b|W\b))"),
         g12(R"(\bHURRICANE\b)"), g11(R"(\bVIOLENT STORM\b)"), g10(R"(\bSTORM\b)"), g9(R"(\bSEVERE GALES?\b)"), g8(R"(\bGALES?\b)"),
         native(R"(\bCOUP DE VENT\b|\bTEMPORAL\b|\bBURRASCA\b|\bSTURM\w*\b|\bOLUJ\w*\b|\bSTORMVARSEL\b)"),
         waveS(R"(\bWAVE ?HEIGHTS?\b|^SEA:|\bSEA STATE\b)"), metres(R"((\d+(?:[.,]\d+)?)\s*(METERS?|METRES?|M)\b)"), decimal(R"((\d+[.,]\d+))");
-    for (size_t i = 0; i < ss.size() && wi < 0; ++i) {
-        const std::string s = clean(ss[i]);
-        bool hasDir = false;
-        for (auto it = std::sregex_iterator(s.begin(), s.end(), word); it != std::sregex_iterator(); ++it) if (dirAbbr(it->str())) { hasDir = true; break; }
-        bool hasForce = false;
-        for (auto it = std::sregex_iterator(s.begin(), s.end(), force); it != std::sregex_iterator(); ++it) { const int n = std::atoi((*it)[2].str().c_str()); if (n >= 0 && n <= 12) hasForce = true; }
-        if ((hasDir && hasForce) || std::regex_search(s, galeAny)) wi = (int)i;
-    }
+    const int wi = windSentence(ss);
     if (wi >= 0) {
         const std::string s = clean(ss[wi]);
         for (auto it = std::sregex_iterator(s.begin(), s.end(), word); it != std::sregex_iterator(); ++it) if (const char* d = dirAbbr(it->str())) { f.dir = d; break; }
@@ -285,7 +292,9 @@ inline Fc read(const std::string& id, const std::string& block) {
     }
     // ★ gale words anywhere in the block (negations removed); a force of 8+ is a gale too
     {
-        const std::string all = clean(f.block);
+        // ★ V12 2026-11-02: a NEAR GALE is force 7, not a gale (the Lenovo set: "SW 5, OCNL NEAR GALE 7" read as GALES)
+        static const std::regex nearGale(R"(\bNEAR GALES?\b)");
+        const std::string all = std::regex_replace(clean(f.block), nearGale, "FORCE");
         if (std::regex_search(all, g12)) f.gale = 12;
         else if (std::regex_search(all, g11)) f.gale = 11;
         else if (std::regex_search(all, g10)) f.gale = 10;
@@ -324,6 +333,144 @@ inline Fc read(const std::string& id, const std::string& block) {
     }
     f.wx = w;
     return f;
+}
+
+// ── V12 2026-11-02 THE SHIPPING MAP's WEATHER ARROWS ────────────────────────────────────────────────────────────────
+/* ★★ Stuart (2026-11-02): "rather than just the labels is it possible to have arrows in the direction of the weather/sea
+ *  state so E 4-6 have the arrow pointing and being bigger or smaller and red for severe". Read from the SAME wind
+ *  sentence read() takes the direction and force from (windSentence), never a second parse of the forecast:
+ *    · the wind's FROM is the forecast's compass word ("SW 6-8" blows from the south-west); the arrow points DOWNWIND
+ *      (towards the north-east), as a wind arrow on a chart does;
+ *    · "N OR NW" (two neighbouring points) is the point between them;
+ *    · the force is the UPPER bound of what the first wind says ("4 TO 6, OCCASIONALLY 7" → 7) — a gale word without
+ *      a figure counts as its force (GALE 8 … HURRICANE 12);
+ *    · VARIABLE / VRB and CYCLONIC have no direction: their own glyph, never an arrow;
+ *    · a CHANGE (VEERING, BACKING, BECOMING / BECMG, THEN) gives the LATER wind: its direction and its forces after
+ *      the word ("VEERING W 6 TO 8 LATER"); no direction after it = no second arrow (we never guess one);
+ *    · severity: 0 below force 7, 1 at 7 (amber), 2 at gale 8 and above or any gale word (red). */
+struct Wind {
+    char kind = 0;          ///< 'a' an arrow · 'v' variable · 'c' cyclonic · 0 nothing to draw
+    double from = -1;       ///< degrees the wind comes FROM (an arrow only)
+    int bf = -1, sev = 0;   ///< Beaufort (the upper bound) · 0 normal · 1 amber (7) · 2 red (gale 8+)
+    char kind2 = 0;         ///< the later wind, as `kind` (0 = no change, or no direction given for it)
+    double from2 = -1;
+    int bf2 = -1, sev2 = 0;
+    char chg = 0;           ///< 'v' veering · 'b' backing · 'c' becoming / then
+    double to() const { return from < 0 ? -1 : std::fmod(from + 180.0, 360.0); }
+    double to2() const { return from2 < 0 ? -1 : std::fmod(from2 + 180.0, 360.0); }
+};
+/** A compass word's degrees ("SW" → 225); -1 for VRB / CYC / not a point. */
+inline double compassDeg(const char* abbr) {
+    static const char* p[16] = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
+    if (!abbr) return -1;
+    for (int i = 0; i < 16; ++i) if (std::strcmp(abbr, p[i]) == 0) return i * 22.5;
+    return -1;
+}
+inline int windSeverity(int bf, int gale) { return (bf >= 8 || gale >= 8) ? 2 : bf == 7 ? 1 : 0; }
+/** ★ The arrows for one area's forecast (its stored block — the index keeps it). */
+inline Wind windOf(const Fc& f) {
+    Wind w;
+    const auto ss = sentences(f.block);
+    const int wi = windSentence(ss);
+    if (wi < 0) return w;
+    const std::string s = cleanNeg(ss[(size_t)wi]);
+    // tokens: words and figures, in order
+    static const std::regex tok(R"([A-Z][A-Z-]*|\d+(?:[.,]\d+)?)"),
+        unit(R"(^\s*(HPA|MB|M\b|METER|METRE|NM|MILES|KM|UTC|Z\b|KT|KNOTS|HOURS|HR|DEG|N\b|S\b|E\b|W\b))");   // ★ read()'s own list
+    struct T { std::string s; size_t at, end; };
+    std::vector<T> t;
+    for (auto it = std::sregex_iterator(s.begin(), s.end(), tok); it != std::sregex_iterator(); ++it) t.push_back({ it->str(), (size_t)it->position(0), (size_t)(it->position(0) + it->length(0)) });
+    auto isChange = [](const std::string& x, char& c) {
+        if (x == "VEERING" || x == "VEER" || x == "VEERS" || x == "VEERED") { c = 'v'; return true; }
+        if (x == "BACKING" || x == "BACK" || x == "BACKS" || x == "BACKED") { c = 'b'; return true; }
+        if (x == "BECOMING" || x == "BECMG" || x == "BECOME" || x == "BECOMES" || x == "THEN") { c = 'c'; return true; }
+        return false;
+    };
+    auto galeForce = [](const std::string& x, const std::string& prev) {
+        if (x == "HURRICANE") return 12;
+        if (x == "STORM") return prev == "VIOLENT" ? 11 : 10;
+        if (x == "GALE" || x == "GALES") return prev == "SEVERE" ? 9 : prev == "NEAR" ? 7 : 8;   // ★ a NEAR GALE is 7
+        return -1;
+    };
+    // one wind's direction: the first compass word, "X OR Y" (neighbours) → the point between
+    struct One { char kind = 0; double from = -1; int bf = -1; };
+    auto readOne = [&](size_t a, size_t b) {
+        One o;
+        for (size_t i = a; i < b; ++i) {
+            const char* d = dirAbbr(t[i].s);
+            if (!d) continue;
+            if (std::strcmp(d, "VRB") == 0) { o.kind = 'v'; }
+            else if (std::strcmp(d, "CYC") == 0) { o.kind = 'c'; }
+            else {
+                o.kind = 'a'; o.from = compassDeg(d);
+                if (i + 2 < b && t[i + 1].s == "OR") {
+                    const double d2 = compassDeg(dirAbbr(t[i + 2].s));
+                    if (d2 >= 0) {
+                        double diff = std::fmod(d2 - o.from + 540.0, 360.0) - 180.0;   // −180…180
+                        if (std::fabs(diff) <= 90.0) o.from = std::fmod(o.from + diff / 2.0 + 360.0, 360.0);
+                    }
+                }
+            }
+            break;
+        }
+        for (size_t i = a; i < b; ++i) {
+            const std::string& x = t[i].s;
+            if (std::isdigit((unsigned char)x[0])) {
+                if (x.size() > 2 || x.find_first_of(".,") != std::string::npos) continue;   // 2.5 (metres), 1012, 1200: not a force
+                if (std::regex_search(s.substr(t[i].end, 8), unit)) continue;      // 1012 HPA, 5 KM, 1200 UTC
+                // ★ the force figure's own boundaries, as read() takes them: never a time (10:00) or a part of a word
+                const char pre = t[i].at ? s[t[i].at - 1] : ' ', post = t[i].end < s.size() ? s[t[i].end] : ' ';
+                if (!std::strchr(" ,(-", pre) || !std::strchr(" ,.)-", post)) continue;
+                const int n = std::atoi(x.c_str());
+                if (n >= 0 && n <= 12) o.bf = std::max(o.bf, n);
+            } else {
+                const int g = galeForce(x, i > a ? t[i - 1].s : std::string());
+                if (g > 0) o.bf = std::max(o.bf, g);
+            }
+        }
+        return o;
+    };
+    size_t cut = t.size(); char chg = 0;
+    // ★ the change word must come AFTER the first wind's direction ("BECOMING CYCLONIC" with nothing before it is the wind)
+    bool seenDir = false;
+    for (size_t i = 0; i < t.size(); ++i) {
+        if (dirAbbr(t[i].s)) seenDir = true;
+        char c = 0;
+        if (seenDir && isChange(t[i].s, c)) { cut = i; chg = c; break; }
+    }
+    const One a = readOne(0, cut);
+    w.kind = a.kind; w.from = a.from;
+    w.bf = a.bf >= 0 ? a.bf : f.fmax >= 0 ? f.fmax : (f.gale >= 8 && !f.galeNative ? f.gale : -1);
+    w.sev = windSeverity(w.bf, 0);
+    if (!w.kind && w.bf < 0) return Wind();
+    if (cut < t.size()) {
+        const One b = readOne(cut + 1, t.size());
+        w.chg = chg;
+        if (b.kind) {
+            w.kind2 = b.kind; w.from2 = b.from;
+            w.bf2 = b.bf >= 0 ? b.bf : w.bf;
+            w.sev2 = windSeverity(w.bf2, 0);
+        }
+    }
+    // ★ each arrow is coloured by its OWN force (SW 7 veering W 8: amber, then red). But a gale the arrows do not carry —
+    //   a gale word in another sentence of the block, or another language's gale word — makes the first one red: the
+    //   label says GALE, and the arrow must not look calmer than it.
+    if (f.gale >= 8 && w.bf < 8 && !(w.kind2 && w.bf2 >= 8)) w.sev = 2;
+    return w;
+}
+inline std::string windJson(const Wind& w) {
+    if (!w.kind && w.bf < 0) return std::string();
+    char b[256];
+    std::string o = ",\"wind\":{";
+    std::snprintf(b, sizeof b, "\"k\":\"%c\",\"bf\":%d,\"sev\":%d", w.kind ? w.kind : 'n', w.bf, w.sev);
+    o += b;
+    if (w.kind == 'a') { std::snprintf(b, sizeof b, ",\"from\":%.1f,\"to\":%.1f", w.from, w.to()); o += b; }
+    if (w.chg) { std::snprintf(b, sizeof b, ",\"chg\":\"%s\"", w.chg == 'v' ? "veer" : w.chg == 'b' ? "back" : "becoming"); o += b; }
+    if (w.kind2) {
+        std::snprintf(b, sizeof b, ",\"k2\":\"%c\",\"bf2\":%d,\"sev2\":%d", w.kind2, w.bf2, w.sev2); o += b;
+        if (w.kind2 == 'a') { std::snprintf(b, sizeof b, ",\"from2\":%.1f,\"to2\":%.1f", w.from2, w.to2()); o += b; }
+    }
+    return o + "}";
 }
 
 /** ★ A forecast's text → its areas' forecasts (the first block for each area). */
@@ -469,6 +616,7 @@ inline std::string fcJson(const Line& l, const StationOf& st) {
     std::string o = b;
     if (l.f.galeNative) o += ",\"native\":1";
     o += ",\"dir\":\"" + jesc(l.f.dir) + "\",\"wx\":\"" + jesc(l.f.wx) + "\",\"f\":\"" + jesc(l.file) + "\",\"txt\":\"" + jesc(l.f.block) + "\"";
+    o += windJson(windOf(l.f));   // ★ V12 2026-11-02 the SHIPPING MAP's weather arrows
     if (st) { const auto s = st(l.file); if (!s.first.empty()) o += ",\"st\":\"" + jesc(s.first) + "\",\"sc\":\"" + jesc(s.second) + "\""; }
     return o + "}";
 }

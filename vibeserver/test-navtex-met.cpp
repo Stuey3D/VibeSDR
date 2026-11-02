@@ -116,11 +116,71 @@ int main(int argc, char** argv) {
         const auto q2 = navmet::query(met, fewer, 0);
         ok(q2.size() == 1 && q2[0].hist[0].f.gale == 0, "the gallery evicted the newer two: the older forecast is the latest again");
     }
+    std::printf("── wind arrows (the SHIPPING MAP, 2026-11-02) ──\n");
+    {
+        auto W = [](const std::string& block) { navmet::Fc f = navmet::read("thames", block); return navmet::windOf(f); };
+        auto near = [](double a, double b) { return std::fabs(a - b) < 0.01; };
+        auto w = W("SW 6 TO 8. ROUGH. RAIN. MODERATE.");
+        ok(w.kind == 'a' && near(w.from, 225) && near(w.to(), 45) && w.bf == 8 && w.sev == 2, "SW 6 TO 8: from 225, the arrow points downwind to 45, force 8 (the upper bound), RED");
+        w = W("E 4 TO 6. SLIGHT.");
+        ok(w.kind == 'a' && near(w.from, 90) && near(w.to(), 270) && w.bf == 6 && w.sev == 0 && !w.kind2, "E 4 TO 6: to the west, force 6, normal ink, no change");
+        { const auto f = navmet::read("thames", "E 4-6. SLIGHT."); const auto x = navmet::windOf(f);
+          ok(f.fmin == 4 && f.fmax == 6 && x.bf == 6 && near(x.to(), 270), "E 4-6 (a dash range): the label reads 4–6 and the arrow force 6 (Stuart's example)"); }
+        { const auto f = navmet::read("thames", "SW 5, OCNL NEAR GALE 7. ROUGH."); const auto x = navmet::windOf(f);
+          ok(f.gale == 0 && x.bf == 7 && x.sev == 1, "OCNL NEAR GALE 7: force 7, amber — a near gale is not a gale"); }
+        { const auto x = W("WEST GALE 8 FROM 26 OCTOBER 10:00 UTC TO 14:00 UTC.");
+          ok(x.bf == 8, "a date and a time (26 OCTOBER 10:00 UTC) are never a force"); }
+        w = W("NORTHERLY 5 TO 7. MODERATE.");
+        ok(w.kind == 'a' && near(w.from, 0) && near(w.to(), 180) && w.bf == 7 && w.sev == 1, "NORTHERLY 5 TO 7: to the south, 7 is AMBER");
+        w = W("SOUTHWESTERLY 4 OR 5, OCCASIONALLY 6.");
+        ok(w.kind == 'a' && near(w.from, 225) && w.bf == 6, "SOUTHWESTERLY 4 OR 5, OCCASIONALLY 6: from 225, force 6");
+        const char* pts[16] = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
+        bool all = true;
+        for (int i = 0; i < 16; ++i) { const auto x = W(std::string(pts[i]) + " 5."); if (x.kind != 'a' || !near(x.from, i * 22.5)) all = false; }
+        ok(all, "all sixteen compass points N … NNW, from 0 to 337.5");
+        const char* words[8] = { "NORTHERLY", "NORTHEASTERLY", "EASTERLY", "SOUTHEASTERLY", "SOUTHERLY", "SOUTHWESTERLY", "WESTERLY", "NORTHWESTERLY" };
+        all = true;
+        for (int i = 0; i < 8; ++i) { const auto x = W(std::string(words[i]) + " 5."); if (x.kind != 'a' || !near(x.from, i * 45.0)) all = false; }
+        ok(all, "NORTHERLY … NORTHWESTERLY, every eighth");
+        w = W("N OR NW 4 TO 6.");
+        ok(w.kind == 'a' && near(w.from, 337.5), "N OR NW: the point between (337.5)");
+        w = W("NE OR E 3 OR 4.");
+        ok(w.kind == 'a' && near(w.from, 67.5), "NE OR E: 67.5");
+        w = W("VARIABLE 2 OR 3. SMOOTH.");
+        ok(w.kind == 'v' && w.bf == 3 && w.sev == 0 && w.from < 0, "VARIABLE 2 OR 3: its own glyph, no direction, force 3");
+        w = W("CYCLONIC 6 TO GALE 8. VERY ROUGH.");
+        ok(w.kind == 'c' && w.bf == 8 && w.sev == 2, "CYCLONIC 6 TO GALE 8: the cyclonic glyph, RED");
+        w = W("SOUTHWEST 5 TO 7, VEERING WEST 6 TO 8 LATER. ROUGH.");
+        ok(w.kind == 'a' && near(w.from, 225) && w.bf == 7 && w.sev == 1, "…VEERING WEST 6 TO 8 LATER: the first wind SW 7 (amber)");
+        ok(w.chg == 'v' && w.kind2 == 'a' && near(w.from2, 270) && near(w.to2(), 90) && w.bf2 == 8 && w.sev2 == 2, "…and the later wind: veering, from W, force 8, red");
+        w = W("SW 4 OR 5, BACKING SE 5 TO 7.");
+        ok(w.chg == 'b' && w.bf == 5 && w.kind2 == 'a' && near(w.from2, 135) && w.bf2 == 7 && w.sev2 == 1, "BACKING SE 5 TO 7: SW 5, then from SE 7");
+        w = W("VRB 2 TO 4, BECMG N OR NW 4 TO 6 BUT LTR IN THAMES, OCNL 7 LTR IN E.");
+        ok(w.kind == 'v' && w.bf == 4 && w.chg == 'c' && w.kind2 == 'a' && near(w.from2, 337.5) && w.bf2 == 7, "VRB 2 TO 4, BECMG N OR NW 4 TO 6 … OCNL 7: variable 4, becoming from NNW 7");
+        w = W("WEST 6, VEERING LATER.");
+        ok(w.kind == 'a' && w.chg == 'v' && !w.kind2, "VEERING with no direction: no second arrow (never guessed)");
+        w = W("SOUTHWEST SEVERE GALE 9 TO VIOLENT STORM 11.");
+        ok(w.kind == 'a' && w.bf == 11 && w.sev == 2, "SEVERE GALE 9 TO VIOLENT STORM 11: force 11, red");
+        w = W("WEST HURRICANE FORCE.");
+        ok(w.kind == 'a' && w.bf == 12 && w.sev == 2, "a gale word without a figure counts as its force (HURRICANE 12)");
+        w = W("NW 3 TO 5. PRESSURE 1012 HPA.");
+        ok(w.bf == 5, "a pressure figure is never a force");
+        w = W("NO GALES. NW 3 OR 4. SLIGHT.");
+        ok(w.kind == 'a' && w.bf == 4 && w.sev == 0, "NO GALES is not a gale: normal ink");
+        w = W("SMOOTH. GOOD.");
+        ok(w.kind == 0 && w.bf < 0 && navmet::windJson(w).empty(), "no wind sentence: nothing drawn, no wind key");
+        // the JSON the clients draw
+        navmet::Line l; l.file = "m1"; l.t = 1; l.f = navmet::read("thames", "SOUTHWEST 5 TO 7, VEERING WEST 6 TO 8 LATER. ROUGH.");
+        const std::string j = navmet::fcJson(l, nullptr);
+        ok(j.find("\"wind\":{\"k\":\"a\",\"bf\":7,\"sev\":1,\"from\":225.0,\"to\":45.0,\"chg\":\"veer\",\"k2\":\"a\",\"bf2\":8,\"sev2\":2,\"from2\":270.0,\"to2\":90.0}") != std::string::npos,
+           "the met JSON carries the arrows: " + j.substr(j.find("\"wind\"") == std::string::npos ? 0 : j.find("\"wind\"")));
+    }
     std::printf("── a real set ──\n");
     {
         const std::string index = argc > 2 ? argv[1] : "scripts/navtex-fixtures/index.jsonl";
         const std::string files = argc > 2 ? argv[2] : "scripts/navtex-fixtures/files";
         size_t msgs = 0, metMsgs = 0, withArea = 0, fcs = 0, wind = 0, sea = 0, vis = 0, gale = 0, nat = 0, uk = 0;
+        size_t arrows = 0, vrbcyc = 0, changes = 0, arrowForceOff = 0;
         std::map<std::string, size_t> perArea;
         const auto t0 = std::chrono::steady_clock::now();
         navmap::fileLines(index)([&](const std::string& l) {
@@ -138,6 +198,8 @@ int main(int argc, char** argv) {
             for (auto& x : v) {
                 fcs++; perArea[x.area]++;
                 wind += x.fmin >= 0; sea += x.sea >= 0; vis += x.vis >= 0; gale += x.gale >= 8; nat += x.galeNative;
+                { const auto aw = navmet::windOf(x); arrows += aw.kind == 'a'; vrbcyc += aw.kind == 'v' || aw.kind == 'c'; changes += aw.kind2 != 0;
+                  if (x.fmin >= 0 && aw.kind == 'a' && aw.bf != x.fmax && aw.chg == 0 && ++arrowForceOff <= 4) std::printf("    differs: arrow %d label %d: %s\n", aw.bf, x.fmax, x.block.substr(0, 200).c_str()); }
                 const auto* a = navmet::areaById(x.area); uk += a && a->kind != 'n';
             }
         });
@@ -152,6 +214,9 @@ int main(int argc, char** argv) {
         std::printf("    most forecast:%s\n", top.c_str());
         ok(metMsgs == 0 || withArea > 0, "the set's forecasts give area labels");
         ok(fcs == 0 || wind * 10 >= fcs * 8, "a wind for at least 80 % of area forecasts");
+        std::printf("    arrows %zu, variable/cyclonic %zu, with a later wind %zu\n", arrows, vrbcyc, changes);
+        ok(fcs == 0 || (arrows + vrbcyc) * 10 >= wind * 9, "an arrow or a variable/cyclonic glyph for at least 90 % of the winds read");
+        ok(arrowForceOff == 0, "with no change, the arrow's force is the label's upper force (" + std::to_string(arrowForceOff) + " differ)");
     }
     std::printf("%d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
