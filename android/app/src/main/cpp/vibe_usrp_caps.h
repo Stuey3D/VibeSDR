@@ -223,7 +223,8 @@ inline std::string ownerImageDir() {
     return "/etc/vibeserver/uhd-images";
 #endif
 }
-constexpr size_t kFpgaMin = 256 * 1024, kFpgaMax = 16 * 1024 * 1024;     // a B2xx bitstream is 2-10 MB
+constexpr size_t kFpgaMin = 1024 * 1024, kFpgaMax = 16 * 1024 * 1024;    // a B2xx bitstream is 2-10 MB
+constexpr size_t kHeadBytes = 256;                                        // how much of the start is judged
 constexpr size_t kFwMin = 16 * 1024, kFwMax = 2 * 1024 * 1024;           // the FX3 firmware hex is ~0.5 MB
 /** The size the upload may be, before a byte is read: "" = fine, else the refusal in words. */
 inline std::string refuseImageSize(const std::string& name, size_t bytes) {
@@ -234,21 +235,56 @@ inline std::string refuseImageSize(const std::string& name, size_t bytes) {
     if (bytes > hi) return std::string("that file is too large to be ") + (fw ? "the FX3 firmware" : "an FPGA image") + " (" + std::to_string(bytes) + " bytes)";
     return "";
 }
-/** The first bytes of an upload: "" = plausible, else the refusal in words. ★ It cannot PROVE an FPGA image is the
- *  right one — only the radio can — but it catches the usual mistakes: the zip it came in, a web page saved instead
- *  of the file, an .img (an EEPROM image for flashing tools, which UHD never loads) given as the firmware. */
+/* ★★★ WHAT A FILE IS, FROM ITS FIRST BYTES (a tester's clone image, 2026-11-02, and Ettus's own):
+ *   · a Xilinx bitstream carries the SYNC WORD AA 99 55 66 after a run of FF padding, early in the file;
+ *   · a 7-SERIES one (Artix-7 / Kintex-7 — the clone boards) has the BUS-WIDTH DETECT pattern 00 00 00 BB 11 22 00 44
+ *     before the sync word; a SPARTAN-6 one (a genuine B200 / B210 / B200mini / B205mini) has not;
+ *   · UHD loads the FX3 firmware as INTEL HEX (text, every record starting ':'); a Cypress boot image (.img, "CY" at
+ *     the front) is for flashing the board's EEPROM with Cypress's tools, and UHD cannot load one. */
+enum class ImageKind { Unknown, Spartan6, Series7, IntelHex, Fx3Img };
+inline ImageKind classifyImage(const unsigned char* b, size_t n) {
+    if (n >= 2 && b[0] == 'C' && b[1] == 'Y') return ImageKind::Fx3Img;
+    size_t i = 0;
+    while (i < n && (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n')) i++;
+    if (i < n && b[i] == ':') return ImageKind::IntelHex;
+    const size_t lim = n < kHeadBytes ? n : kHeadBytes;
+    bool busWidth = false;
+    for (size_t k = 0; k + 4 <= lim; k++) {
+        if (k + 8 <= lim && b[k] == 0x00 && b[k + 1] == 0x00 && b[k + 2] == 0x00 && b[k + 3] == 0xBB
+            && b[k + 4] == 0x11 && b[k + 5] == 0x22 && b[k + 6] == 0x00 && b[k + 7] == 0x44) busWidth = true;
+        if (b[k] == 0xAA && b[k + 1] == 0x99 && b[k + 2] == 0x55 && b[k + 3] == 0x66)
+            return busWidth ? ImageKind::Series7 : ImageKind::Spartan6;
+    }
+    return ImageKind::Unknown;
+}
+inline const char* imageKindWords(ImageKind k) {
+    switch (k) {
+        case ImageKind::Series7:  return "7-series (Kintex/Artix) image \xe2\x80\x94 for clone boards";
+        case ImageKind::Spartan6: return "Spartan-6 image \xe2\x80\x94 a genuine B2xx's";
+        case ImageKind::IntelHex: return "FX3 firmware (Intel HEX)";
+        case ImageKind::Fx3Img:   return "FX3 boot image (.img)";
+        default:                  return "not recognised";
+    }
+}
+/** The first bytes of an upload: "" = acceptable, else the refusal in words. ★ It cannot PROVE an FPGA image is the
+ *  right one — only the radio can — but only a plausible Xilinx bitstream goes in as an FPGA image and only Intel HEX
+ *  as the firmware, so the usual mistakes (the zip it came in, a web page saved instead of the file, the firmware
+ *  under the FPGA's name, an EEPROM .img) are refused before the radio meets them. */
 inline std::string refuseImageHead(const std::string& name, const unsigned char* b, size_t n) {
-    if (n >= 2 && b[0] == 'P' && b[1] == 'K') return "that is a zip archive — unzip it and upload the file inside";
-    if (n >= 2 && b[0] == 0x1f && b[1] == 0x8b) return "that is a gzip archive — unpack it and upload the file inside";
+    if (n >= 2 && b[0] == 'P' && b[1] == 'K') return "that is a zip archive \xe2\x80\x94 unzip it and upload the file inside";
+    if (n >= 2 && b[0] == 0x1f && b[1] == 0x8b) return "that is a gzip archive \xe2\x80\x94 unpack it and upload the file inside";
+    const ImageKind k = classifyImage(b, n);
+    if (name == "usrp_b200_fw.hex") {
+        if (k == ImageKind::IntelHex) return "";
+        if (k == ImageKind::Fx3Img) return "that is an FX3 boot image (.img), for flashing the board's EEPROM with Cypress's tools \xe2\x80\x94 UHD loads the firmware only as Intel HEX (.hex); most clones need Ettus's firmware anyway, which VibeServer already has";
+        return "that is not FX3 firmware: UHD loads it as an Intel HEX text file, which starts with ':'";
+    }
+    if (k == ImageKind::Spartan6 || k == ImageKind::Series7) return "";
+    if (k == ImageKind::IntelHex || k == ImageKind::Fx3Img) return "that is FX3 firmware, not an FPGA image \xe2\x80\x94 choose usrp_b200_fw.hex as its name, or pick the FPGA .bin";
     size_t i = 0;
     while (i < n && (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n' || b[i] == 0xEF || b[i] == 0xBB || b[i] == 0xBF)) i++;
-    if (name == "usrp_b200_fw.hex") {
-        if (i >= n || b[i] != ':') return "the FX3 firmware UHD loads is an Intel HEX text file (it starts with ':'); this is not one — an .img is for flashing the board, not for UHD";
-        return "";
-    }
-    if (i < n && b[i] == '<') return "that is a web page or XML, not an FPGA image — save the file itself, not the page it is on";
-    if (i < n && b[i] == ':') return "that is an Intel HEX file (firmware), not an FPGA image";
-    return "";
+    if (i < n && b[i] == '<') return "that is a web page or XML, not an FPGA image \xe2\x80\x94 save the file itself, not the page it is on";
+    return "that is not a Xilinx FPGA bitstream (no sync word AA995566 near its start) \xe2\x80\x94 an FPGA image for a B2xx is a raw .bin";
 }
 /** ★★ THE CLONE'S FAILURE, SAID AS WHAT TO DO. A board whose FPGA is not the part Ettus's image is built for fails
  *  the FPGA load (UHD: "fx3 is in state 5", or a timeout / failure loading or initialising the FPGA). The owner

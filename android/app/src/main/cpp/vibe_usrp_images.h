@@ -88,8 +88,8 @@ public:
         if (fd_ < 0) { err = "no upload in progress"; return false; }
         if (got_ + n > total_) { err = "more bytes than were announced"; abort(); return false; }
         if (!headChecked_) {
-            head_.insert(head_.end(), b, b + std::min(n, (size_t)64 - std::min(head_.size(), (size_t)64)));
-            if (head_.size() >= 64 || got_ + n == total_) {
+            head_.insert(head_.end(), b, b + std::min(n, usrpcaps::kHeadBytes - std::min(head_.size(), usrpcaps::kHeadBytes)));
+            if (head_.size() >= usrpcaps::kHeadBytes || got_ + n == total_) {
                 err = usrpcaps::refuseImageHead(name_, head_.data(), head_.size());
                 if (!err.empty()) { abort(); return false; }
                 headChecked_ = true;
