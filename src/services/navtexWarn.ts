@@ -9,6 +9,7 @@
 // ★ Everything in a report came off the air or the gallery: every string is escaped where it meets HTML.
 import { navName, navAgo } from './navtexMap';
 import { NAV_HAZARD_COLOURS, navHazardMarker, navGlyphSvg, type NavHazard } from './navtexIcons';
+import { navWindSanitise, windSvg, windLabel, windColour, windWords, type NavWind } from './navtexWind';   // ★ V12 2026-11-02 the weather arrows
 
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 const str = (v: unknown, n: number): string => (typeof v === 'string' ? v.slice(0, n) : '');
@@ -202,7 +203,9 @@ export function navWarnStatus(r: NavWarnReport | null, range?: string): string {
 }
 
 // ── the met labels ───────────────────────────────────────────────────────────────────────────────────────────────────
-export interface NavFc { t: number; dir: string; fmin: number; fmax: number; gale: number; native: boolean; sea: number; vis: number; wx: string; f: string; txt: string; st: string; sc: string }
+export interface NavFc { t: number; dir: string; fmin: number; fmax: number; gale: number; native: boolean; sea: number; vis: number; wx: string; f: string; txt: string; st: string; sc: string;
+  /** ★ V12 2026-11-02 the SHIPPING MAP's weather arrows (vibe_navtex_met.h windOf) — null from an older server */
+  wind: NavWind | null }
 export interface NavArea { key: string; id: string; name: string; lat: number; lon: number; kind: string; repeats: number; fc: NavFc[]; stale: boolean }
 export interface NavMetReport { now: number; stale: number; pending: number; indexed: number; areas: NavArea[] }
 export function navMetSanitise(j: any): NavMetReport | null {
@@ -217,6 +220,7 @@ export function navMetSanitise(j: any): NavMetReport | null {
       t: f.t, dir: /^[A-Z]{1,3}$/.test(f.dir) ? f.dir : '', fmin: num(f.fmin) ?? -1, fmax: num(f.fmax) ?? -1, gale: num(f.gale) ?? 0, native: !!f.native,
       sea: num(f.sea) ?? -1, vis: num(f.vis) ?? -1, wx: str(f.wx, 60), f: str(f.f, 80), txt: str(f.txt, 500), st: str(f.st, 40),
       sc: ['confident', 'likely', 'ambiguous'].includes(f.sc) ? f.sc : '',
+      wind: navWindSanitise(f.wind),
     }));
     if (!fc.length) continue;
     areas.push({ key: `m:${id}`, id, name: str(a.name, 50), lat: a.lat, lon: a.lon, kind: str(a.kind, 1), repeats: num(a.repeats) ?? 0, fc, stale: now - fc[0].t > staleSec });
@@ -254,6 +258,25 @@ export function navMetRowWords(a: NavArea): string { return a.stale ? 'no curren
  *  forecast (over a day) faded. */
 export function navMetIcon(a: NavArea): { html: string; w: number; h: number } {
   const f = a.fc[0], lab = navFcLabel(f), gale = navFcGale(f);
+  /* ★★ V12 2026-11-02 THE WEATHER ARROW (navtexWind.ts): where the server read a wind, the area's point carries an arrow
+   *  pointing downwind, sized by force, coloured by severity (ink · amber 7 · red gale 8+), a faint second one for a
+   *  later wind, and the compact label "6–8 · ROUGH" with the area's name above. Centred on the point: the name above
+   *  and the label below the arrow take the same height, so the icon's centre IS the arrow's. */
+  if (!a.stale && f.wind && (f.wind.k !== 'n' || f.wind.k2)) {
+    const ws = windSvg(f.wind);
+    if (ws.svg) {
+      const words = windLabel(f, f.wind), name = a.name.toUpperCase();
+      const colour = windColour(Math.max(f.wind.sev, f.wind.sev2, gale ? 2 : 0) as 0 | 1 | 2);
+      const w = Math.round(Math.max(ws.size, name.length * 5.6 + 8, words.length * 6.2 + 10)), h = ws.size + 28;
+      const txt = (t: string, size: number, weight: number, col: string, op: number) => `<div style="height:14px;font:${weight} ${size}px/14px ui-monospace,Menlo,Consolas,monospace;`
+        + `color:${col};opacity:${op};white-space:nowrap;text-align:center;text-shadow:0 0 3px #0b1420,0 0 2px #0b1420">${esc(t)}</div>`;
+      return {
+        html: `<div class="nvWind" style="width:${w}px;height:${h}px;display:flex;flex-direction:column;align-items:center">`
+          + txt(name, 9, 500, '#cfe6ff', 0.8) + `<div style="width:${ws.size}px;height:${ws.size}px">${ws.svg}</div>` + txt(words, 10, 700, colour, 1) + `</div>`,
+        w, h,
+      };
+    }
+  }
   const w = Math.round(Math.max(a.name.length * 6.0, lab.length * 6.4) + 14), h = 30;
   const bg = gale ? '#5a1414' : 'rgba(12,22,34,.88)', bd = gale ? '#ff6b5a' : '#5d8fb8', fg = gale ? '#ffd2c8' : '#cfe6ff';
   // ★ a stale area is never drawn (navMetVisible); should one reach here it says so, never its old conditions
@@ -268,7 +291,7 @@ export function navMetIcon(a: NavArea): { html: string; w: number; h: number } {
 export function navMetAria(a: NavArea): string {
   const f = a.fc[0];
   return a.stale ? `Sea area ${a.name}: no current forecast. Press Enter for the last one heard.`
-    : `Sea area ${a.name}: ${navFcLabel(f)}, heard ${utc(f.t)} UTC. Press Enter for the forecast.`;
+    : `Sea area ${a.name}: ${navFcLabel(f)}${f.wind && (f.wind.k !== 'n' || f.wind.k2) ? ` (${windWords(f.wind)})` : ''}, heard ${utc(f.t)} UTC. Press Enter for the forecast.`;
 }
 export function navMetCard(a: NavArea, now: number, wrap: 'web' | 'app' = 'web'): string {
   const f = a.fc[0];
@@ -278,6 +301,7 @@ export function navMetCard(a: NavArea, now: number, wrap: 'web' | 'app' = 'web')
   const row = (k: string, v: string) => lines.push(`<div class="r"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`);
   row('Forecast', navFcLabel(f));
   if (f.fmin >= 0 || f.dir) row('Wind', `${navFcWind(f)}${f.gale >= 8 && !f.native ? ` — ${GALE[Math.min(12, f.gale)].toLowerCase()}` : ''}`);
+  if (f.wind && (f.wind.k !== 'n' || f.wind.k2)) row('Arrows', windWords(f.wind));
   if (f.native) row('Gale', 'a gale word in another language — its force was not read');
   if (f.sea >= 0) row('Sea', SEA[f.sea]);
   if (f.wx) row('Weather', f.wx);
