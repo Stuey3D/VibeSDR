@@ -143,6 +143,7 @@ import { mergeJttySpot, jttyTuneFor, jttyDialsReachable, type JttySignal, type J
 import { mergeDscCall, dscParams, dscTuneFor, dscChannelsReachable, dscPanelChannels, dscBandLabel, dscChannelsForDial, dscChannelOn, dscTuneOffer, dscKeyTitle,
          dscItems, dscListRows, dscKey, DSC_MAP_EMPTY, type DscCall } from '../services/dsc';
 // ★★ V12 2026-11-02 THE SHIPPING MAP — AIS, DSC and NAVTEX on one map, the rules the web shares (docs/v12/SHIPPING-MAP.md)
+import { seaCompose, seaAreasFor, seaPlaceMet } from '../services/seaAreas';   // ★ V12 2026-11-02 the SEA AREAS
 import { shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus,
          type ShipLayers, type ShipLayerId, type ShipFocus, type StoredShips, type DscPin } from '../services/shippingMap';
@@ -10909,12 +10910,15 @@ export default function SDRScreen({ route, navigation }: Props) {
     const vessels = shipShips(live, shipStore);
     const pins = dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls), dscGal), now);
     const present = shipLayersPresent({ ships: vessels.length, dsc: pins.length, stations: navReport?.stations.length ?? 0,
-      warnings: navWarnRep ? navWarnRep.list.length + navWarnRep.pending : 0, weather: navMetRep?.areas.length ?? 0, aisMode: aisOn }, focus);
+      warnings: navWarnRep ? navWarnRep.list.length + navWarnRep.pending : 0, weather: navMetRep?.areas.length ?? 0, aisMode: aisOn,
+      areas: seaAreasFor(rx, navMetRep).length }, focus);
     const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);
+    // ★ the SEA AREAS (services/seaAreas.ts — the web's shipCompose draws the same): outlines + names; the tint is WEATHER's
+    const sea = on('areas') ? seaCompose(rx, navMetRep, on('weather'), 'app').items : [];
     const extra = liveView && live ? vessels.filter((v) => !live.vessels.some((x) => x.mmsi === v.mmsi)) : vessels;
     return {
       present, on, now,
-      items: [...(on('ships') ? shipItems(extra, rx) : []), ...(on('dsc') ? dscPinItems(pins, rx, now, 'app') : [])],
+      items: [...sea, ...(on('ships') ? shipItems(extra, rx) : []), ...(on('dsc') ? dscPinItems(pins, rx, now, 'app') : [])],
       rows: [...(on('ships') ? shipRows(extra, rx) : []), ...(on('dsc') ? dscPinRows(pins, rx, now) : [])],
       status: [on('ships') && !liveView ? shipStatus(vessels, shipStore, live) : '', on('dsc') ? dscStatus(pins) : ''].filter(Boolean).join(' · '),
       toggles: shipToggles(present),
@@ -10926,7 +10930,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     const navL = { stations: sc.on('stations'), warnings: sc.on('warnings'), weather: sc.on('weather') };
     const now = sc.now;
     const warns = navL.warnings ? navWarnVisible(navWarnRep, navRange) : [];
-    const areas = navL.weather ? navMetVisible(navMetRep, navRange) : [];
+    const areas = navL.weather ? seaPlaceMet(navMetVisible(navMetRep, navRange)) : [];   // ★ the arrow inside its area's outline
     // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
     const listed = navL.weather ? navMetListed(navMetRep) : [];
     const ago = (sec: number) => (sec < 3600 ? `${Math.round(sec / 60)} min` : sec < 86400 ? `${Math.round(sec / 3600)} h` : `${Math.round(sec / 86400)} d`);
@@ -10972,7 +10976,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     return {
       ...aisTrk,
       items: [...(shipsOn ? aisTrk.items : []), ...sc.items, ...(navL.stations ? navItems(navReport) : []),
-              ...(navL.weather ? navMetItems(navMetVisible(navMetRep, navRange), now, 'app') : []), ...(navL.warnings ? navWarnItems(navWarnVisible(navWarnRep, navRange), now, 'app') : [])],
+              ...(navL.weather ? navMetItems(seaPlaceMet(navMetVisible(navMetRep, navRange)), now, 'app') : []), ...(navL.warnings ? navWarnItems(navWarnVisible(navWarnRep, navRange), now, 'app') : [])],
       rows: [...(shipsOn ? aisTrk.rows : []), ...sc.rows, ...(navL.stations ? navListRows(navReport) : [])],
       status: [aisTrk.status, sc.status, navL.warnings ? navWarnStatus(navWarnRep, navRange) : '', navL.weather ? navMetStatus(navMetRep, navRange) : ''].filter(Boolean).join(' · '),
       ranges: NAV_RANGES, range: navRange, rangeHint: NAV_RANGE_HINT,
