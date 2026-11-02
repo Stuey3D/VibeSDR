@@ -42,6 +42,12 @@ int main() {
     ok(!nameForUsbId(0x04b4, 0x00f3), "a bare Cypress FX3 bootloader is not claimed as a USRP");
     ok(displayName("B210", "30AD2C1") == "Ettus USRP B210 (30AD2C1)", "display name carries the serial");
     ok(displayName("", "") == "Ettus USRP B2xx", "no model, no serial — still a name, never empty");
+    // ★★ 2026-11-02, a tester's B210 clone: the descriptor read "30AA038 ?" and the Setup page refused it.
+    ok(cleanSerial("30AA038 ?") == "30AA038", "a clone's serial with a space and a '?' after it is its leading part");
+    ok(cleanSerial("30AD2C1") == "30AD2C1", "a clean serial is unchanged");
+    ok(cleanSerial("  F5A3B2\x01junk") == "F5A3B2", "leading blanks dropped, cut at the first byte a serial cannot hold");
+    ok(cleanSerial("???") == "", "all junk: no serial (found by type alone)");
+    ok(cleanSerial(std::string(100, 'A')).size() == 64, "never longer than a config serial may be");
 
     std::printf("== sample rates\n");
     const auto r2 = ratesFor(2), r3 = ratesFor(3), r0 = ratesFor(0);

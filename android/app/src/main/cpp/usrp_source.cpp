@@ -69,7 +69,7 @@ std::vector<Found> walk(bool readSerials) {
             if (libusb_open(list[i], &h) == 0 && h) {
                 unsigned char buf[128] = {0};
                 const int k = libusb_get_string_descriptor_ascii(h, d.iSerialNumber, buf, sizeof buf - 1);
-                if (k > 0) f.serial.assign((const char*)buf, (size_t)k);
+                if (k > 0) f.serial = usrpcaps::cleanSerial(std::string((const char*)buf, (size_t)k));   // ★ "30AA038 ?" → "30AA038"
                 libusb_close(h);
             }
         }
@@ -165,10 +165,15 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
         uhd::device_addr_t hint;
         hint["type"] = "b200";
         hint["fw"] = fw;
-        if (!f.serial.empty()) hint["serial"] = f.serial;
+        /* ★★ Matched by the CLEANED serial, never by handing UHD ours: UHD reads the descriptor itself and a clone's may
+         *    carry junk after the serial ("30AA038 ?"), which an exact hint would never match. Every B2xx is found, then
+         *    the one whose cleaned serial is ours is taken; with no serial (or a single radio) the first. */
         const uhd::device_addrs_t found = uhd::device::find(hint, uhd::device::USRP);
         if (found.empty()) { err = "the USRP did not answer (is another program using it?)"; return false; }
         uhd::device_addr_t addr = found.front();
+        if (!f.serial.empty())
+            for (const auto& a : found)
+                if (a.has_key("serial") && usrpcaps::cleanSerial(a["serial"]) == f.serial) { addr = a; break; }
         const std::string product = addr.has_key("product") ? addr["product"] : "";
         const char* fpgaName = usrpcaps::fpgaFileFor(product);
         if (!fpgaName) { err = "this USRP reports itself as '" + product + "', which VibeServer has no FPGA image for"; return false; }
@@ -180,7 +185,8 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
         impl_->usrp = uhd::usrp::multi_usrp::make(addr);
         auto& u = *impl_->usrp;
         model_  = product;
-        serial_ = addr.has_key("serial") ? addr["serial"] : f.serial;
+        serial_ = addr.has_key("serial") ? usrpcaps::cleanSerial(addr["serial"]) : f.serial;
+        if (serial_.empty()) serial_ = f.serial;
         impl_->nChans = std::max<size_t>(1, u.get_rx_num_channels());
         std::vector<std::vector<std::string>> socks;
         for (size_t c = 0; c < impl_->nChans; c++) socks.push_back(u.get_rx_antennas(c));
