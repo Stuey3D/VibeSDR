@@ -150,11 +150,14 @@ else, **VibeServer Lite** is the server on its own for Android TV boxes, old pho
 | **Airspy R2 / Mini** | ✅ | ✅ |
 | **HackRF One** | ✅ | ✅ |
 | **SDRplay RSP**: needs SDRplay's own API installed | ✅ | ✕ |
+| **Ettus USRP B200 / B210 / B200mini** (V12, experimental): Linux amd64 / arm64 and the Mac, USB 3 | ✅ | ✕ |
 
 **SDRplay is desktop-only** because the RSP API is SDRplay's closed-source library and there is no
 Android build of it. On a phone, use one of the others. The **HackRF** and **Airspy R2 / Mini**
 drivers were proven with testers who own them (see [Credits](#credits)) rather than on hardware
-here, and reports are always welcome.
+here, and reports are always welcome. The **USRP** driver (V12) has not yet met a radio at all: it
+needs a USB 3 port and a Linux amd64 / arm64 machine or a Mac, and brings its own driver and
+firmware, so there is nothing to install. See [docs/v12/USRP.md](docs/v12/USRP.md).
 
 Optionally publish your receiver to the [public directory](https://vibeserver.vibesdr.net) through
 a Cloudflare tunnel. Your home address is never exposed.
@@ -266,6 +269,9 @@ was **used** (bundled, linked or fetched) or **learned** (read as a reference, n
 | **libairspyhf** — Airspy | BSD-3-Clause | Airspy HF+ driver; patched for Android USB handles |
 | **libairspy** — Airspy (Vernoux, Touil, Gilmour) | BSD-3-Clause + MIT (IQ converter, filters) | Airspy R2 / Mini driver, unmodified |
 | **libhackrf** — Great Scott Gadgets | BSD-3-Clause (library source) | HackRF driver; patched to open from a USB fd |
+| **UHD 4.9.0.1** — Ettus Research / National Instruments | GPL-3.0-or-later | VibeServer on Linux amd64 / arm64 and macOS (V12): the USRP B2xx driver, B2xx only, linked statically, unmodified (one build-list edit: `vibeserver/linux/build-uhd.sh`) |
+| **USRP B2xx FPGA images and FX3 firmware** — Ettus Research | LGPL-3.0 (FPGA, `fpga/usrp3`), GPL-3.0-or-later (FX3 firmware, built with Cypress's FX3 SDK) | Shipped unmodified with the USRP driver, the exact images UHD 4.9.0.1's manifest names; source at the UHD v4.9.0.1 tag |
+| **Boost 1.83** — the Boost authors | BSL-1.0 | Linked statically as part of the USRP driver (chrono, date_time, filesystem, program_options, serialization, thread) |
 | **OpenRSP** — the OpenRSP authors ([openrsp.dev](https://openrsp.dev)) | GPL-3.0-or-later | VibeServer on Linux (amd64, arm64, armhf): the SDRplay RSP driver — API library, device service and USB bridge firmware — built from `vendor/openrsp` (see `VIBESDR-CHANGES` there). Its API headers are what every build compiles against. Not affiliated with SDRplay Ltd |
 | **SDRplay API** — SDRplay Ltd | proprietary | Never bundled. Loaded at runtime only where the owner installed it (macOS; or Linux, where an installed SDRplay service is used in preference to the bundled one) |
 | **KissFFT** — Mark Borgerding | BSD-3-Clause | The FFT inside VibeDSP (and inside ft8_lib) |

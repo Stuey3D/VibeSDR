@@ -11,6 +11,15 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="03eb", ATTRS{idProduct}=="800c", MODE="0660"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="60a1", MODE="0660", GROUP="plugdev"
 # HackRF One (libhackrf, driver "hackrf")
 SUBSYSTEM=="usb", ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="6089", MODE="0660", GROUP="plugdev"
+# Ettus USRP B200 / B210 / B200mini / B205mini / B206mini (UHD, driver "usrp" — V12, EXPERIMENTAL; amd64 / arm64 only).
+# ★ The SAME ids before and after the firmware load (the FX3 re-enumerates under 2500:00xx again), so one rule covers
+#   both moments. NI-branded boards are 3923:7813 (B200) and 3923:7814 (B210). The ids are UHD's (b200_iface.hpp).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2500", ATTRS{idProduct}=="0020", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2500", ATTRS{idProduct}=="0021", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2500", ATTRS{idProduct}=="0022", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2500", ATTRS{idProduct}=="0023", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3923", ATTRS{idProduct}=="7813", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="3923", ATTRS{idProduct}=="7814", MODE="0660", GROUP="plugdev"
 # SDRplay RSP1 / RSP1A / RSP2 / RSPduo / RSPdx / RSP1B / RSPdx-R2 — for the bundled OpenRSP service
 # (vibeserver-rsp.service), which runs as `vibeserver` in plugdev rather than as root. The product IDs
 # are the ones OpenRSP's own rules list (vendor/openrsp/system/linux/66-sdrplay.rules).

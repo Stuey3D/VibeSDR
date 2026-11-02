@@ -347,6 +347,8 @@ const CREDITS: { name: string; detail: string; url?: string }[] = [
     detail: 'The Airspy R2 and Mini driver. Copyright (C) 2013-2016 Benjamin Vernoux, Youssef Touil and Ian Gilmour; airspy.c, airspy.h and airspy_commands.h are BSD-3-Clause, and the IQ converter and filter sources (iqconverter_float.c, iqconverter_int16.c, filters.h) are MIT. Bundled unmodified. Redistributed with those notices and their disclaimers of warranty; the Airspy name is not used to endorse or promote VibeSDR.' },
   { name: 'libhackrf — Great Scott Gadgets (BSD-3-Clause)',
     detail: 'The HackRF One driver, for HackRF support in VibeServer. Copyright (c) 2012-2022 Great Scott Gadgets, Jared Boone and Benjamin Vernoux. Bundled as a patched copy: upstream has no way to open a radio from a USB file descriptor, which is the only way an Android app is allowed to open one at all.' },
+  { name: 'UHD 4.9.0.1 — Ettus Research / National Instruments (GPL-3.0-or-later)',
+    detail: 'The Ettus USRP B200 / B210 / B200mini driver, for USRP support in VibeServer on Linux (amd64, arm64) and the Mac. Built with only the B2xx driver, linked statically and unmodified, with Boost 1.83 (BSL-1.0). The USRP’s FPGA images (LGPL-3.0) and FX3 firmware (GPL-3.0-or-later) ship with it, exactly as Ettus publishes them for this release. Not in the iPhone, iPad or Android apps.' },
   { name: 'OpenRSP (GPL-3.0-or-later)',
     detail: 'The SDRplay RSP driver in VibeServer on Linux — API library, device service and USB bridge firmware, from openrsp.dev. Not affiliated with SDRplay Ltd.' },
   { name: 'SDRplay — SDRplay Ltd',

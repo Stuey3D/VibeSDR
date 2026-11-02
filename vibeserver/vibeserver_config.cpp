@@ -1,4 +1,5 @@
 #include "vibeserver_config.h"
+#include "vibe_usrp_caps.h"   // ★ V12: a new USRP's default rate (header-only, no UHD)
 #include <vector>
 #include <algorithm>
 #include <set>
@@ -1036,7 +1037,9 @@ bool applySdrChange(ServerConfig& cfg, const std::string& action, const std::str
         // ★★ ITS OWN RATE, not the RTL default (Stuart's HF+, 2026-10-10: added at 2.4 MS/s, which an HF+ cannot do;
         //    the setup page then offered that first). The first rate each driver's own list offers.
         nr.rate = newDriver == "airspyhf" ? 912000 : newDriver == "sdrplay" ? 2000000 : newDriver == "hackrf" ? 2000000
-                : newDriver == "airspy" ? 2500000 : nr.rate;
+                : newDriver == "airspy" ? 2500000
+                // ★ V12 USRP B2xx: the host's default (vibe_usrp_caps.h — 2.4 MS/s on arm64, 4 on x86-64 / the Mac)
+                : newDriver == "usrp" ? (int)vibe::usrpcaps::defaultRate(vibe::usrpcaps::thisHost()) : nr.rate;
         nr.label = newLabel.empty() ? newDriver : newLabel;
         nr.enabled = true;       // ★ they plugged it in and pressed ADD: that is "serve it"
         nr.configured = false;   // ★ …but it goes on air only once its tab is saved, as everywhere
