@@ -34,6 +34,8 @@ import { useOverlay } from './PanelNav';
 import { NavCard, CardKey } from './NavCard';
 import { useCoversScreen } from '../hooks/useScreenCovered';
 import { WebView } from 'react-native-webview';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { isMacHost } from '../services/macAudio';
 import { CABBR } from '../assets/countryAbbr';
 import { type SpotRow } from '../services/DecoderClient';
 import { ensureMapPack, writeMapPage } from '../services/mapPack';
@@ -714,6 +716,22 @@ if(GL_OK&&window.VibeMapGL&&window.VibeMapGLCompat&&VM_STYLE){
 var map=L.map('lmap',{zoomControl:false,attributionControl:true,fadeAnimation:true,zoomAnimation:true,markerZoomAnimation:true,preferCanvas:true})
   .setView([30,0],2);
 L.control.zoom({position:'bottomright'}).addTo(map);
+/* ★★ THE MAC'S TRACKPAD PINCH (Stuart, 2026-11-02: "pinch to zoom not working on it … it appears to be a mac only
+ *  issue", every map in the iPad app on a Mac; the +/- keys work). There a pinch reaches the web view as neither touches
+ *  nor WebKit gesture events, so neither MapLibre nor vibemapgl's gesture handler ever saw it. The app catches the pinch
+ *  natively (MapOverlay, Mac only) and drives these: the zoom at the start, then start-zoom + log2(scale) around the
+ *  point under the fingers — the same rule vibemapgl uses for Safari's gesture events. GPU map or Leaflet alike. */
+(function(){
+  var z0=null;
+  function lp(x,y){var e=document.getElementById('lmap'),r=e?e.getBoundingClientRect():{left:0,top:0};return [x-r.left,y-r.top];}
+  window.__vsPinchStart=function(){var g=map._gl;z0=g?g.getZoom():map.getZoom();};
+  window.__vsPinch=function(sc,x,y){
+    if(z0==null||!(sc>0))return;var g=map._gl,p=lp(x,y),z=z0+Math.log2(sc);
+    if(g){g.easeTo({zoom:z,around:g.unproject(p),duration:0});}
+    else if(map.setZoomAround){map.setZoomAround(map.containerPointToLatLng(p),z,{animate:false});}
+  };
+  window.__vsPinchEnd=function(){z0=null;};
+})();
 /* ★★★ A TILE CACHE, BECAUSE THE FLYOVER IS WHAT MAKES THIS MAP DIFFERENT. Leaflet's keepBuffer
  *  holds a skirt around the CURRENT view and nothing else: zoom in and the world tiles are
  *  destroyed, zoom back out and they are fetched again over the network, which is the black you
@@ -2169,7 +2187,8 @@ export default function MapOverlay(
       onRequestClose={onClose}
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
     >
-      <View style={mo.root}>
+      {/* ★ A Modal is its own native root: the Mac's pinch detector below needs a gesture root inside it. */}
+      <MacRoot style={mo.root}>
         {/* ★ Until the pack is unpacked and the page written there is nothing to show. A WebView
             pointed at a file that does not exist yet renders a blank white document, which is
             indistinguishable from the map being broken. */}
@@ -2180,6 +2199,7 @@ export default function MapOverlay(
             </Text>
           </View>
         ) : !pageUri ? null : (
+        <MacPinch webRef={webRef}>
         <WebView
           ref={webRef}
           // baseUrl gives the document the INSTANCE's origin so in-page
@@ -2378,6 +2398,7 @@ export default function MapOverlay(
             }
           }}
         />
+        </MacPinch>
         )}
         {/* ★★ V12 THE ADS-B LIVE LIST, bottom-left over the map — RN-drawn so the pad and keyboard reach it
             (AdsbLiveList's note). Only once the page is there: before that there is no map to find anything on. */}
@@ -2433,7 +2454,7 @@ export default function MapOverlay(
           </View>
         )}
         {overlay}
-      </View>
+      </MacRoot>
     </Modal>
   );
 }
@@ -2452,3 +2473,25 @@ const mo = StyleSheet.create({
   discBtnAlt:{ backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(80,200,80,0.55)' },
   discBtnAltTxt: { color: 'rgba(120,240,120,0.9)', fontSize: 13, letterSpacing: 0.5 },
 });
+
+
+/* ★★ THE MAC'S TRACKPAD PINCH — see window.__vsPinch in the page. On the iPad app on a Mac a pinch reaches the WebView as
+ *  neither touches nor WebKit gesture events, so the map never zoomed (Stuart, 2026-11-02: every map, the iPhone fine).
+ *  React Native's gesture handler does get it: on a Mac ONLY, a Pinch around the WebView sends the scale and the focal
+ *  point into the page, which zooms its map (GPU or Leaflet) around that point. Everywhere else these are plain pass-
+ *  throughs and the WebView's own touch pinch is untouched. */
+const MAC_PINCH = isMacHost();
+function MacRoot({ style, children }: { style: any; children: React.ReactNode }) {
+  return MAC_PINCH ? <GestureHandlerRootView style={style}>{children}</GestureHandlerRootView> : <View style={style}>{children}</View>;
+}
+function MacPinch({ webRef, children }: { webRef: React.RefObject<WebView | null>; children: React.ReactNode }) {
+  const pinch = useMemo(() => Gesture.Pinch().runOnJS(true)
+    .onBegin(() => { webRef.current?.injectJavaScript('window.__vsPinchStart&&window.__vsPinchStart();true;'); })
+    .onUpdate((e) => {
+      const sc = Number.isFinite(e.scale) ? e.scale : 1, x = Number.isFinite(e.focalX) ? e.focalX : 0, y = Number.isFinite(e.focalY) ? e.focalY : 0;
+      webRef.current?.injectJavaScript('window.__vsPinch&&window.__vsPinch(' + sc.toFixed(4) + ',' + x.toFixed(1) + ',' + y.toFixed(1) + ');true;');
+    })
+    .onFinalize(() => { webRef.current?.injectJavaScript('window.__vsPinchEnd&&window.__vsPinchEnd();true;'); }), [webRef]);
+  if (!MAC_PINCH) return <>{children}</>;
+  return <GestureDetector gesture={pinch}><View style={{ flex: 1 }} collapsable={false}>{children}</View></GestureDetector>;
+}

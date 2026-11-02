@@ -187,7 +187,8 @@ const about = src('src/components/AboutOverlay.tsx');
 ok('About: the V12 note names AIS and APRS', /AIS/.test(about) && /APRS/.test(about));
 const tour = src('src/screens/SDRScreen.tsx');
 // ★ 53b94f5c0 reworded the card ("DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver").
-ok('Tour: the Mode card names AIS and EXIT AIS', /NDB and AIS wherever that receiver can run them, and they take the whole receiver[^']*AIS opens a map of the ships[^']*EXIT AIS/.test(tour));
+// ★ 2026-11-02: AIS opens the SHIPPING MAP (the ships beside the NAVTEX / DSC / sea-area layers) — the card says so.
+ok('Tour: the Mode card names AIS and EXIT AIS', /NDB and AIS wherever that receiver can run them, and they take the whole receiver[^']*AIS opens the SHIPPING MAP with the ships[^']*EXIT AIS/.test(tour));
 ok('Tour: the Mode card names APRS and its MAP', /APRS \(packet stations, with MAP in its box\)/.test(tour));
 
 console.log(`${fails ? 'FAIL' : 'ok'}  test_ais_aprs_app — ${passes} passed, ${fails} failed`);
