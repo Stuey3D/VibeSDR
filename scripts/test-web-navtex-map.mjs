@@ -34,6 +34,13 @@ const lines = fs.readFileSync(path.join(SET, 'index.jsonl'), 'utf8').split('\n')
 const keep = [];
 for (const l of lines) { const j = JSON.parse(l); const src = path.join(SET, 'files', j.f); if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(gal, j.f)); keep.push(l); } }
 keep.reverse();   // ★ the gallery's index is oldest first; gallery.json (where the set came from) is newest first
+// ★ V12 2026-11-02: the curated fixtures (heard 2026-11-01) are moved to end an hour ago, so the test does not rot with the
+//   calendar — a forecast over a day old is never drawn (latest wins), and the sea area's card checks below need a current
+//   one. A real set (VIBE_NAVTEX_SET) keeps its own times.
+if (!process.env.VIBE_NAVTEX_SET) {
+  const tMax = Math.max(...keep.map((l) => JSON.parse(l).t)), nowS = Math.floor(Date.now() / 1000);
+  for (let i = 0; i < keep.length; i++) { const j = JSON.parse(keep[i]); j.t = j.t - tMax + nowS - 3600; keep[i] = JSON.stringify(j); }
+}
 fs.writeFileSync(path.join(gal, 'index.jsonl'), keep.join('\n') + '\n');
 console.log(`   a gallery of ${keep.length} NAVTEX messages`);
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'NAVTEX map web test', locator: 'IO92nh', adminPass: 'nav-map-admin',
@@ -258,7 +265,8 @@ try {
   await ev(`${view}.querySelector('[data-tgl="warnings"]').click()`); await sleep(1800);
   const without = Number(await ev(`document.querySelectorAll('.vtl-mk').length`));
   ok(without < before && Number(await ev(`document.querySelector('[data-vtl-shapes]')?.getAttribute('data-vtl-shapes') || 0`)) === 0, `WARNINGS off: ${before} → ${without} markers, no shapes`);
-  ok(await ev(`localStorage.getItem('vibesdr.navMapLayers')`) === JSON.stringify({ stations: true, warnings: false, weather: true }), '…remembered');
+  // ★ V12 2026-11-02: the SHIPPING MAP keeps its layers under its own key (every layer, the NAVTEX ones among them)
+  ok(/"warnings":false/.test(await ev(`localStorage.getItem('vibesdr.shipMapLayers') || ''`)) && /"stations":true/.test(await ev(`localStorage.getItem('vibesdr.shipMapLayers') || ''`)), '…remembered');
   await ev(`${view}.querySelector('[data-tgl="weather"]').click()`); await sleep(1500);
   await ev(`${view}.querySelector('.fit').click()`); await sleep(1500);
   console.log('   screenshot', await shot('navtex-map-stations-only.png'));

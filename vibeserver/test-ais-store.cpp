@@ -275,7 +275,23 @@ static void testProfile() {
     CHECK(bg::toJson(plain).find("ais") == std::string::npos, "an ordinary profile writes no \"ais\" key (older settings read back unchanged)");
 }
 
-int main() {
+int main(int argc, char** argv) {
+    // ★ `test-ais-store --write <gallery dir>`: three ships in the Solent with tracks, heard now (the web map test's fixture)
+    if (argc > 2 && std::string(argv[1]) == "--write") {
+        const uint32_t now = (uint32_t)vibe::gallery::nowUtc();
+        std::vector<st::Rec> v;
+        const char* names[3] = { "SOLENT TRADER", "ISLAND FERRY", "NAB PILOT" };
+        for (uint32_t i = 0; i < 3; ++i) {
+            st::Rec r = ship(235100001 + i, now - 60 * i, 50.75 + i * 0.02, -1.2 + i * 0.05, names[i]);
+            r.stype = i == 1 ? 60 : i == 2 ? 50 : 70;
+            r.nTrk = 3;
+            for (int k = 0; k < 3; ++k) r.trk[k] = { now - 60 * i - 600 * (2 - k), st::e7(50.74 + i * 0.02 + k * 0.004), st::e7(-1.21 + i * 0.05) };
+            v.push_back(r);
+        }
+        const size_t n = st::write(argv[2], 100ull << 20, v);
+        std::printf("wrote %zu ships to %s/%s\n", n, argv[2], st::kFile);
+        return n == 3 ? 0 : 1;
+    }
     std::printf("test-ais-store — the ship store for the SHIPPING MAP\n");
     testProfile();
     testRoundTrip();

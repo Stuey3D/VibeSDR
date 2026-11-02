@@ -1410,6 +1410,10 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   #    text and TRANSLATE, keyboard focus, live pulse) and the met labels, from a gallery of real NAVTEX (scripts/navtex-fixtures)
   node scripts/test-web-navtex-map.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 2026-11-02 THE SHIPPING MAP: the NAVTEX fixtures + a ship store (test-ais-store --write) + a DSC distress call —
+  #    the layers present, ships / DSC / arrows on the map, the KEY, a ship's card, DSC first from the gallery's DSC row
+  VIBE_AIS_STORE_BIN="$OUT/test-ais-store" node scripts/test-web-shipping-map.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/lora-clip.u8"
 else
   echo '   not run — needs VIBESERVER_BIN and the test-lora build'; notrun=$((notrun+1))

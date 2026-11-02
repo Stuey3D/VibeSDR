@@ -426,7 +426,7 @@ public:
             if (refresh(dir)) {
                 const Cache& c = cache_;
                 indexBytes = c.parsed;
-                total = c.live; used = c.used + c.parsed;   // ★ the index counts inside the assigned space
+                total = c.live; used = c.used + c.parsed + sideBytes(dir);   // ★ the index (and V12 the ship store) count inside the assigned space
                 int want = -2;                                                // -2 = all
                 if (!kind.empty()) { want = -1; for (size_t k = 0; k < c.kinds.size(); k++) if (c.kinds[k] == kind) want = (int)k; }
                 matched = want == -2 ? c.live : want < 0 ? 0 : c.kindN[(size_t)want];

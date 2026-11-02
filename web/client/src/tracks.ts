@@ -529,7 +529,8 @@ export class TrackView {
   setLegend(html: string) {
     if (html === this.keySig) return;
     this.keySig = html;
-    const d = this.root.querySelector('.trkKey') as HTMLElement;
+    const d = this.root.querySelector('.trkKey') as HTMLElement | null;
+    if (!d) return;
     d.hidden = !html;
     (d.querySelector('.kb') as HTMLElement).innerHTML = html;
   }
@@ -600,7 +601,9 @@ export class TrackView {
     this.vm = null;
     try { this.lmap?.remove(); } catch (e) { console.error('[tracks] Leaflet remove', e); }
     this.lmap = null;
-    for (const el of Array.from(this.mapHost.children)) if (el !== this.list) el.remove();
+    // ★ V12 2026-11-02: the KEY stays (it is the view's, not the map's) — it was removed here, so a map closed and opened
+    //   again had no KEY (and setLegend found nothing to fill)
+    for (const el of Array.from(this.mapHost.children)) if (el !== this.list && !el.classList.contains('trkKey')) el.remove();
     this.mapHost.className = 'trkMapHost';
     this.lastRows = ''; this.sel = ''; this.pending = null;
   }
