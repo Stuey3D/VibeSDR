@@ -10,8 +10,11 @@
 //    gallery's pinned DSC alerts from any radio), STATIONS · WARNINGS · WEATHER (the NAVTEX map's, unchanged).
 //  · A layer with no data on this server is ABSENT — no toggle at all (AGENTS.md: no dead controls). The layer the map
 //    was opened for (NAVTEX's MAP → the NAVTEX layers, DSC's MAP → DSC, AIS mode → SHIPS) is always there, and first.
-//  · The time filter (1 h / 24 h / 7 d / 30 d / all) applies to every layer; latest-message-wins stays the NAVTEX
-//    layers' own rule; a ship is drawn as its latest report says (live wins over the store, per MMSI).
+//  · ★★ THE TIME FILTER (1 h / 24 h / 7 d / 30 d / all) IS NAVTEX'S (Stuart, 2026-11-02: "the time selections 1hr 24hr
+//    etc refer to Navtex and not AIS/DSC"). It chooses the NAVTEX stations / warnings / forecasts only. Ships and DSC have
+//    their own fixed rules, below: a ship is drawn while it is recent (SHIP_KEEP_SEC; faded past an hour), a DSC call for
+//    a day (DSC_KEEP_SEC) — a distress or urgency call for a week (DSC_ALERT_KEEP_SEC). Latest-message-wins stays the
+//    NAVTEX layers' own rule; a ship is drawn as its latest report says (live wins over the store, per MMSI).
 import { esc, rangeBearing, compass8, ago, aisIcon, aisName, aisCard, aisListRows, aisSanitise,
          type AisVessel, type AisReport, type LatLon, type TrackItem, type TrackRow } from './tracks';
 import { NAV_LAYERS } from './navtexWarn';
@@ -83,12 +86,16 @@ export function storeSanitise(j: any): StoredShips | null {
   const n = (x: unknown) => (isFinite(Number(x)) ? Number(x) : 0);
   return { now: n(j.now), count: n(j.count), total: n(j.total), off: !!j.off, vessels: r ? r.vessels : [], pts };
 }
-/** ★ The ships to draw: the live report's (every one — it is now) and the store's heard within the range, not already
- *  live. `rangeSec` 0 = all. Live first, then the store newest first. */
-export function shipShips(live: AisReport | null, store: StoredShips | null, rangeSec: number): AisVessel[] {
+/** ★ Ships and DSC keep their OWN time rules — never the NAVTEX time filter (see the header). */
+export const SHIP_KEEP_SEC = 6 * 3600;
+export const DSC_KEEP_SEC = 24 * 3600;
+export const DSC_ALERT_KEEP_SEC = 7 * 24 * 3600;
+/** ★ The ships to draw: the live report's (every one — it is now) and the store's heard within SHIP_KEEP_SEC, not
+ *  already live. Live first, then the store newest first. */
+export function shipShips(live: AisReport | null, store: StoredShips | null): AisVessel[] {
   const out: AisVessel[] = live ? live.vessels.slice() : [];
   const have = new Set(out.map((v) => v.mmsi));
-  if (store) for (const v of store.vessels) if (!have.has(v.mmsi) && (!rangeSec || v.seen <= rangeSec)) { out.push(v); have.add(v.mmsi); }
+  if (store) for (const v of store.vessels) if (!have.has(v.mmsi) && v.seen <= SHIP_KEEP_SEC) { out.push(v); have.add(v.mmsi); }
   return out;
 }
 /** A ship heard over an hour ago is drawn faded (it may have moved on); the card says when. */
@@ -142,8 +149,9 @@ export function dscPinsMerge(live: DscPin[], gal: DscPin[]): DscPin[] {
   for (const g of gal) if (!out.some((p) => Math.abs(p.t - g.t) <= 120 && Math.abs(p.lat - g.lat) < 1e-3 && Math.abs(p.lon - g.lon) < 1e-3)) out.push(g);
   return out.sort((a, b) => b.t - a.t);
 }
-export function dscInRange(pins: DscPin[], rangeSec: number, now: number): DscPin[] {
-  return rangeSec ? pins.filter((p) => now - p.t <= rangeSec) : pins;
+/** ★ DSC's own rule: a call for a day, a distress or urgency call (level ≥ 2) for a week. `now` and `p.t` in seconds. */
+export function dscInRange(pins: DscPin[], now: number): DscPin[] {
+  return pins.filter((p) => now - p.t <= (p.level >= 2 ? DSC_ALERT_KEEP_SEC : DSC_KEEP_SEC));
 }
 const DSC_WORDS = ['call', 'safety', 'URGENCY', 'DISTRESS'];
 /** ★ The DSC glyph — a map pin (not a hull, not a dot), its level's colour; distress bigger, with a ring. */

@@ -10906,8 +10906,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     const now = navWarnRep?.now ?? navMetRep?.now ?? navReport?.now ?? Math.floor(Date.now() / 1000);
     const rx = trkRx ?? navReport?.rx ?? null;
     const live = aisOn ? aisReport : null;
-    const vessels = shipShips(live, shipStore, navSince(navRange));
-    const pins = dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls), dscGal), navSince(navRange), now);
+    const vessels = shipShips(live, shipStore);
+    const pins = dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls), dscGal), now);
     const present = shipLayersPresent({ ships: vessels.length, dsc: pins.length, stations: navReport?.stations.length ?? 0,
       warnings: navWarnRep ? navWarnRep.list.length + navWarnRep.pending : 0, weather: navMetRep?.areas.length ?? 0, aisMode: aisOn }, focus);
     const on = (id: ShipLayerId) => shipOn(id, present, shipLayers);

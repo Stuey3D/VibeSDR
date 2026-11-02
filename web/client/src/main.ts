@@ -8891,13 +8891,13 @@ function trkRowHtml(x: { key: string; colour: string; name: string; second: stri
 }
 /** ★ The DSC positions shown: this listener's DSC box and the gallery's, within the time filter. */
 function shipDscPins(now: number): DscPin2[] {
-  return dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls.list as any), navLast.dscG), navSince(navRange), now);
+  return dscInRange(dscPinsMerge(dscPinsFromCalls(dscCalls.list as any), navLast.dscG), now);
 }
 /** What each layer has on this server now (it decides which toggles are drawn). */
 function shipHave(now: number): ShipHave {
   const w = navLast.w;
   return {
-    ships: shipShips(aisOn ? aisReport as any : null, navLast.ships, navSince(navRange)).length, dsc: shipDscPins(now).length,
+    ships: shipShips(aisOn ? aisReport as any : null, navLast.ships).length, dsc: shipDscPins(now).length,
     stations: navLast.st?.stations.length ?? 0, warnings: w ? w.list.length + w.pending : 0, weather: navLast.m?.areas.length ?? 0, aisMode: aisOn,
   };
 }
@@ -8924,7 +8924,7 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
     if (!on(id)) continue;
     if (id === 'ships') {
       const live = aisOn ? aisReport as any : null;
-      const all = shipShips(live, navLast.ships, navSince(navRange));
+      const all = shipShips(live, navLast.ships);
       const extra = liveView ? all.filter((v) => !live || !live.vessels.some((x: any) => x.mmsi === v.mmsi)) : all;
       items.push(...shipItems(extra, rx));
       if (liveView) {

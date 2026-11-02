@@ -42,16 +42,15 @@ const store = storeSanitise({ now: 1000, count: 3, total: 3, vessels: [
 ] })!;
 eq('the store sanitised: three ships, the broken ones dropped, the track kept', [store.vessels.length, store.pts.get(235000001)?.length], [3, 2]);
 const live = { type: 'ais', vessels: [{ mmsi: 235000001, kind: 'A', name: 'LIVE ONE', lat: 50.81, lon: -1.29, seen: 2, age: 950, posAge: 2, count: 12 }] } as any;
-let v = shipShips(live, store, 0);
-eq('ALL: the live ship wins over its stored copy, then the store', v.map((x) => x.name), ['LIVE ONE', 'OLD SHIP', 'DAY OLD']);
-v = shipShips(live, store, 3600);
-eq('1 h: only what was heard in the hour (the live one is now)', v.map((x) => x.name), ['LIVE ONE']);
-v = shipShips(null, store, 86400);
-eq('24 h with no AIS here: the store alone', v.map((x) => x.name), ['LIVE ONE (stored)', 'OLD SHIP']);
-const it = shipItems(shipShips(null, store, 0), { lat: 50.8, lon: -1.3 });
+// ★★ Ships keep their OWN rule — never the NAVTEX time filter (Stuart, 2026-11-02): the store's ships heard within 6 h.
+let v = shipShips(live, store);
+eq('the live ship wins over its stored copy, then the store within 6 h (DAY OLD is not drawn)', v.map((x) => x.name), ['LIVE ONE', 'OLD SHIP']);
+v = shipShips(null, store);
+eq('no AIS here: the store alone, the same 6 h', v.map((x) => x.name), ['LIVE ONE (stored)', 'OLD SHIP']);
+const it = shipItems(shipShips(null, store), { lat: 50.8, lon: -1.3 });
 yes('a ship heard over an hour ago is drawn faded', it[1]._ic.html.startsWith('<div style="opacity:.45">') && !it[0]._ic.html.startsWith('<div style="opacity'));
 yes('ship keys never collide with the NAVTEX keys', it.every((x) => x.key.startsWith('s:')));
-eq('the rows: nearest first', shipRows(shipShips(null, store, 0), { lat: 50.8, lon: -1.3 }).map((r) => r.name), ['LIVE ONE (stored)', 'OLD SHIP', 'DAY OLD']);
+eq('the rows: nearest first', shipRows(shipShips(null, store), { lat: 50.8, lon: -1.3 }).map((r) => r.name), ['LIVE ONE (stored)', 'OLD SHIP']);
 eq('a server with the store switched off', storeSanitise({ vessels: [], count: 0, total: 0, off: 1 })?.off, true);
 
 console.log('── DSC: the box and the gallery ──');
@@ -69,7 +68,10 @@ const gal = dscPinsFromGallery({ items: [
 eq('the gallery: the pinned DSC items only', gal.map((p) => [p.who, p.level, p.f]), [['232001234', 3, 'dsc-1.txt'], ['227000001', 2, 'dsc-2.txt'], ['', 0, '']]);
 const both = dscPinsMerge(live2, gal);
 eq('the same call heard both ways is ONE pin (box + gallery alert within 2 min)', both.length, 3);
-eq('the time filter: the last 5 min at t=1000 keeps 999 and 801, not 400', dscInRange(both, 300, 1000).map((p) => p.t), [999, 801]);
+// ★★ DSC's OWN rule, never the NAVTEX filter: a call for a day, a distress / urgency call for a week.
+eq('within the day: every call', dscInRange(both, 1000).map((p) => p.t), [999, 801, 400]);
+eq('two days on: the ordinary call has gone, the distress and the urgency stay', dscInRange(both, 1000 + 2 * 86400).map((p) => p.t), [999, 400]);
+eq('eight days on: none', dscInRange(both, 1000 + 8 * 86400).length, 0);
 const dItems = dscPinItems(both, null, 1000);
 yes('a distress pin is bigger and ringed, ranked above everything', dItems[0]._ic.w === 30 && dItems[0]._ic.html.includes('SOS') && (dItems[0] as any)._rk > 2e13);
 yes('the DSC glyph is a pin, not a ship', dscIcon(0).html.includes('<path d="M11 2 C7 2'));
