@@ -52,6 +52,18 @@ fs.writeFileSync(path.join(gal, fcF), 'NAVTEX · G · Cullercoats, United Kingdo
   + 'HUMBER\nSOUTHWEST 5 TO 7. ROUGH. SHOWERS. GOOD.\nNNNN\n');
 keep.push(JSON.stringify({ f: fcF, k: 'navtex', o: 'background', t: now - 60, hz: 517500, m: 'usb', d: 'navtex', p: 'Profile 1', r: 'Test radio',
   title: 'G · Cullercoats, United Kingdom 🇬🇧 · Weather forecast · #99', bytes: 300 }));
+// ★ V12 2026-11-02 (pass 2) beyond the UK: a Rogaland forecast with a gale for INNER SKAGERRAK (MET Norway's outline), a
+//   Valentia one naming a chain of headlands at force 7 (Met Éireann's stretches, amber) and a Niton one with a gale
+//   for BISCAY — for the screenshots over France / Biscay and Norway / Skagerrak
+const pass2 = [
+  ['20261102-105000-navtex-517k5-0a01.txt', 'L · Rogaland, Norway 🇳🇴 · Weather forecast · #98', 'ZCZC LE98\nWEATHER BULLETIN ISSUED BY NORWEGIAN METEOROLOGICAL INSTITUTE\n  FORECAST VALID NEXT 36 HOURS:\n  INNER SKAGERRAK\nSW GALE 8, OCNL SEVERE GALE 9. ROUGH. RAIN, MOD.\n  OUTER SKAGERRAK\nSW 6. MOD. DRY, GOOD.\nNNNN\n', 70],
+  ['20261102-104000-navtex-517k5-0a02.txt', 'W · Valentia, Ireland 🇮🇪 · Weather forecast · #97', 'ZCZC WE97\nVALENTIA COAST GUARD\nFORECAST FOR ROCHES POINT TO SLYNE HEAD TO MALIN HEAD\nWIND: SOUTHWESTERLY FORCE 5 TO 7.\nWEATHER: RAIN.\nVISIBILITY: MODERATE.\nOUTLOOK FOR A FURTHER 24 HOURS\nNNNN\n', 80],
+  ['20261102-103000-navtex-490k-0a03.txt', 'E · Niton, United Kingdom 🇬🇧 · Weather forecast · #96', 'ZCZC EE96\nSHIPPING FORECAST ISSUED BY THE MET OFFICE\n\nBISCAY\nSOUTHWEST GALE 8 TO STORM 10. VERY HIGH. RAIN. POOR.\nNNNN\n', 90],
+];
+for (const [f, title, body, ago] of pass2) {
+  fs.writeFileSync(path.join(gal, f), `NAVTEX · ${title}\nReceived now\n517.500 kHz USB\n\n${body}`);
+  keep.push(JSON.stringify({ f, k: 'navtex', o: 'background', t: now - ago, hz: 517500, m: 'usb', d: 'navtex', p: 'Profile 1', r: 'Test radio', title, bytes: body.length + 60 }));
+}
 fs.writeFileSync(path.join(gal, 'index.jsonl'), keep.join('\n') + '\n');
 execFileSync(STORE, ['--write', gal], { stdio: 'ignore' });
 console.log(`   a gallery of ${keep.length - 1} NAVTEX messages, one DSC distress call and a ship store`);
@@ -143,6 +155,51 @@ try {
   const gale = await ev(`(() => { const e = [...document.querySelectorAll('.vtl-mk:not(.vtl-yhid):not(.vtl-clhid):not(.vtl-zhid)')].find(x => /^Sea area Humber/.test(x.getAttribute('aria-label') || '') && x.querySelector('.nvWind svg')); return e ? e.textContent.replace(/\\s+/g, ' ').trim() : ''; })()`);
   ok(/HUMBER/i.test(gale) && /7/.test(gale), `Humber's near-gale arrow drawn inside its amber area: "${gale}"`);
   console.log('   screenshot', await shot('sea-areas-close.png'));
+  // ★ V12 2026-11-02 (pass 2) over France / Biscay and over Norway / Skagerrak: one step out, the map dragged (a real
+  //   mouse drag, as a person pans) until the area's marker is in the middle
+  ok(await until(`${aria('/Inner Skagerrak sea area: gale in force/')}.length === 1`, 5000), 'Inner Skagerrak (MET Norway\'s outline): a gale — red');
+  ok(await until(`${aria('/^Biscay sea area: gale in force/')}.length === 1`, 3000), 'Biscay: a gale (storm 10) — red');
+  ok(await until(`${aria('/^(Loop Head to Slyne Head|Mizen Head to Valentia) sea area: near gale/')}.length === 2`, 3000), 'the Irish stretches of a ROCHES POINT TO SLYNE HEAD TO MALIN HEAD forecast at force 7: amber');
+  await ev(`(() => { const v = ${view}; const b = [...document.querySelectorAll('.maplibregl-ctrl-zoom-out, .leaflet-control-zoom-out')].find(x => v.contains(x)); b && b.click(); })()`);
+  await sleep(1500);
+  const centreOn = async (re) => {
+    for (let k = 0; k < 4; k++) {
+      const r = JSON.parse(await ev(`JSON.stringify((() => { const v = ${view}; const host = v.querySelector('.maplibregl-map, .leaflet-container') || v; const hb = host.getBoundingClientRect();
+        const e = [...v.querySelectorAll('.vtl-mk')].find(x => ${re}.test(x.getAttribute('aria-label') || '') && x.getBoundingClientRect().width > 0);
+        if (!e) return null; const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2, cx: hb.left + hb.width / 2, cy: hb.top + hb.height / 2 }; })())`));
+      if (!r) return false;
+      if (Math.abs(r.x - r.cx) < 40 && Math.abs(r.y - r.cy) < 40) return true;
+      // drag from the middle by the marker's offset, in steps (MapLibre and Leaflet both pan on a mouse drag)
+      const x0 = r.cx, y0 = r.cy, dx = r.cx - r.x, dy = r.cy - r.y;
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: x0, y: y0, button: 'left', clickCount: 1 });
+      for (let s = 1; s <= 12; s++) { await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x0 + (dx * s) / 12, y: y0 + (dy * s) / 12, button: 'left', buttons: 1 }); await sleep(16); }
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x0 + dx, y: y0 + dy, button: 'left', clickCount: 1 });
+      await sleep(1200);
+    }
+    return true;
+  };
+  // ★ the names ON SCREEN (inside the map's box), not every marker the layer holds
+  const visibleNames = async () => JSON.parse(await ev(`JSON.stringify((() => { const v = ${view}; const hb = (v.querySelector('.maplibregl-map, .leaflet-container') || v).getBoundingClientRect();
+    return [...v.querySelectorAll('.vtl-mk:not(.vtl-zhid):not(.vtl-yhid)')].filter(e => { const b = e.getBoundingClientRect(); return b.width > 0 && b.left >= hb.left && b.right <= hb.right && b.top >= hb.top && b.bottom <= hb.bottom; })
+      .map(e => e.textContent.trim()).filter(t => /^[A-Z][A-Z .'-]{2,40}$/.test(t)); })())`));
+  ok(await centreOn('/Biscay/'), 'the map panned to Biscay');
+  await sleep(1000);
+  const nb = await visibleNames();
+  console.log('   names over France / Biscay:', nb.slice(0, 20).join(', '));
+  ok(nb.length >= 3, `names drawn over France / Biscay (${nb.length})`);
+  console.log('   screenshot', await shot('sea-areas-biscay.png'));
+  // ★ the Skagerrak's own markers are its forecasts' arrows (they may give way to a station's name): pan on Fisher's name,
+  //   or Rogaland's station, then one step in
+  ok(await centreOn('/^Fisher sea area|Rogaland/'), 'the map panned to the Skagerrak');
+  await ev(`(() => { const v = ${view}; const b = [...document.querySelectorAll('.maplibregl-ctrl-zoom-in, .leaflet-control-zoom-in')].find(x => v.contains(x)); b && b.click(); })()`);
+  await sleep(1800);
+  await sleep(1000);
+  const nn = await visibleNames();
+  console.log('   names over Norway / Skagerrak:', nn.slice(0, 20).join(', '));
+  ok(nn.some((t) => /^(EAST-TAMPEN|STOREGGA|OUTER SKAGERRAK|FROEYA BANK|HALTEN BANK|FISHER|VIKING|NORTH UTSIRE|SOUTH UTSIRE)$/.test(t)), 'MET Norway / North Sea names drawn over Norway');
+  const shapes2 = Number(await ev(`Number(document.querySelector('.trkView:not([hidden]) [data-vtl-chart]')?.getAttribute('data-vtl-chart') || 0)`));
+  ok(shapes2 >= 31, `outlines drawn (${shapes2})`);
+  console.log('   screenshot', await shot('sea-areas-skagerrak.png'));
   // a stored ship's card
   await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /ISLAND FERRY/.test(x.textContent)); r && r.click(); })()`);
   await sleep(2000);
