@@ -89,7 +89,7 @@ export function seaLabel(a: SeaArea): string {
   if (a.src === 'us') return a.kind === 'o' && a.name.length <= 26 ? a.name : a.id.slice(3).toUpperCase();
   return a.name;
 }
-const SRC_WORDS: Record<string, string> = { uk: 'Met Office shipping forecast area', us: 'NOAA NWS marine zone', ca: 'Environment Canada marine forecast area', de: 'DWD coastal area' };
+const SRC_WORDS: Record<string, string> = { uk: 'Met Office shipping forecast area', us: 'NOAA NWS marine zone', ca: 'Environment Canada marine forecast area', de: 'DWD coastal area', no: 'MET Norway sea forecast area', ie: 'Met Éireann coastal area (a descriptive outline, not an official boundary)', es: 'AEMET coastal zone (to 20 NM)' };
 export const SEA_NAME_ZOOM = { s: 4, o: 5, c: 8 } as const;
 export const SEA_LINE_ZOOM = { s: 0, o: 3, c: 6 } as const;
 export function seaNameIcon(a: SeaArea): { html: string; w: number; h: number } {

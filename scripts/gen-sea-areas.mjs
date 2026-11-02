@@ -388,6 +388,12 @@ function build(src) {
     if (big.length) rings = big;
     if (!rings.length) continue;
     const [lon, lat] = labelPoint(rings, land);
+    // ★ V12 2026-11-02 (pass 2) a label never on land (labelPoint falls back to the centroid when no sea point is found):
+    //   the sources added in pass 2 fail the build; the older ones are reported
+    if (land.some((L) => lon >= L.bb[0] && lon <= L.bb[2] && lat >= L.bb[1] && lat <= L.bb[3] && pointInRing([lon, lat], L.r))) {
+      if (['no', 'ie', 'es'].includes(a.src)) throw new Error(`${a.id}: its label point (${lat}, ${lon}) is on land`);
+      console.warn(`  ${a.id}: label point on Natural Earth land (${lat}, ${lon})`);
+    }
     areas.push({ id: a.id, src: a.src, kind: a.kind, name: a.name || null, ugc: a.ugc || null, lat, lon, rings: rings.map(encodeRing), match: a.src === 'uk' ? [] : matchOf(a) });
   }
   return areas;
