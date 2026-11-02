@@ -152,7 +152,7 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
   /* ★★★ A CONTROLLER OR KEYBOARD HAS NO HOLD (Stuart, 2026-10-30: "when controller and keyboard is detected simply put
    *  the balance controls in the chip all the time and then the navigation moves to the control and left/right adjusts
    *  it. move up again selects the collapse button"). Driving by keys, the card shows its balance whenever it is out; the
-   *  slider is a highlight stop of its own — left / right move it a tenth at a time (ScreenNav screenNavAdjust), Enter
+   *  slider is a highlight stop of its own — left / right move it a twentieth (2 dB) at a time (ScreenNav screenNavAdjust), Enter
    *  centres it, and UP goes to the collapse key ‹. */
   const tuckNow = () => {
     Animated.timing(x, { toValue: offRef.current, duration: 200, useNativeDriver: true }).start(() => setTucked(true));
@@ -166,7 +166,7 @@ export default function DualServerCard({ myId, top, onSwap, boxOpen = false, saf
   const navLive = keys && !tucked && !ended;
   useEffect(() => {
     screenNavAdjust('dualBal', navLive ? (step) => {
-      const b = Math.max(-1, Math.min(1, Math.round((balRef.current + step * 0.1) * 10) / 10));
+      const b = Math.max(-1, Math.min(1, Math.round((balRef.current + step * 0.05) * 20) / 20));   // ★ 2 dB a press (dualMix BALANCE_RANGE_DB)
       setDualBalance(Math.abs(b) < 0.05 ? 0 : b, true);
     } : undefined);
     screenNavLink('dualBal', navLive ? { up: 'dualTuck' } : undefined);

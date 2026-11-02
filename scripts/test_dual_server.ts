@@ -86,6 +86,15 @@ console.log('balance');
   ok(near(balanceGains(1).s1, 0) && balanceGains(1).s2 === 1, 'full lean silences the other (without disconnecting)');
   ok(near(balanceGains(-1).s2, 0) && balanceGains(-1).s1 === 1, 'and the other way');
   ok(clampBalance(NaN) === 0 && clampBalance(7) === 1 && clampBalance(-9) === -1, 'clamped, NaN = even');
+  // ★★ EVEN IN dB (Stuart, 2026-11-02: more granularity for a loud DAB/FM against a quiet AM): every part of the travel
+  //    is worth the same dB, 0 at the dead zone's edge to −40 at the end snap — the 10–20 dB cut is a quarter of a half-track.
+  const dB = (x: number) => 20 * Math.log10(balanceGains(x).s1);
+  ok(Math.abs(dB(0.041)) < 0.1 && Math.abs(dB(0.959) + 40) < 0.1, `0 dB at the dead zone, −40 dB at the end snap (${dB(0.041).toFixed(1)} / ${dB(0.959).toFixed(1)})`);
+  const steps = [0.2, 0.4, 0.6, 0.8].map((x) => dB(x + 0.05) - dB(x));
+  ok(steps.every((d) => Math.abs(d - steps[0]) < 0.01), `equal dB for equal travel (${steps.map((d) => d.toFixed(2)).join(' ')} dB per 0.05)`);
+  ok(Math.abs(dB(0.5) + 20) < 0.01, 'half way = −20 dB (the server test-watch says the same)');
+  const at = (want: number) => 0.04 + (0.92 * -want) / 40;
+  ok(at(-20) - at(-10) > 0.2, `the 10–20 dB cut spans ${((at(-20) - at(-10)) * 100).toFixed(0)} % of a half-track (the cos taper gave it 14 %)`);
 }
 
 console.log('ears');

@@ -343,13 +343,13 @@ int main() {
 
     std::printf("── 10b. THE A ⟷ B BALANCE: the two-server rule, a level before placement, stereo and mono, no click ──\n");
     {
-        const float h = 0.70710678f;   // cos(π/4)
+        const float h = 0.1f;   // ★ 0.5 = half way from the dead zone to the end snap = −20 dB (even in dB, 2026-11-02)
         auto near = [](float a, float b) { return std::fabs(a - b) < 1e-5f; };
         BalanceGains g;
         g = balanceGains(-1.0f);  ok(near(g.a, 1) && near(g.b, 0), "−1: all A (B silent)");
-        g = balanceGains(-0.5f);  ok(near(g.a, 1) && near(g.b, h), "−0.5: A as it is, B down to cos(π/4)");
+        g = balanceGains(-0.5f);  ok(near(g.a, 1) && near(g.b, h), "−0.5: A as it is, B down by half the 40 dB range");
         g = balanceGains(0.0f);   ok(near(g.a, 1) && near(g.b, 1), "0: both as they are — the balance never raises");
-        g = balanceGains(0.5f);   ok(near(g.a, h) && near(g.b, 1), "+0.5: A down to cos(π/4), B as it is");
+        g = balanceGains(0.5f);   ok(near(g.a, h) && near(g.b, 1), "+0.5: A down by half the 40 dB range, B as it is");
         g = balanceGains(1.0f);   ok(near(g.a, 0) && near(g.b, 1), "+1: all B");
         g = balanceGains(0.03f);  ok(near(g.a, 1) && near(g.b, 1), "dead zone: 0.03 IS even");
         g = balanceGains(-0.97f); ok(near(g.a, 1) && near(g.b, 0), "end snap: −0.97 IS all A");

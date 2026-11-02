@@ -70,8 +70,8 @@ export function clampBalance(b: number): number {
 }
 
 /**
- * ★ THE BALANCE NEVER RAISES ANYONE — it only lowers the server you are leaning AWAY from (cos taper, so the middle of
- *   the travel is gentle and the ends are decisive). Even = both at their own level, exactly as with no balance at all;
+ * ★ THE BALANCE NEVER RAISES ANYONE — it only lowers the server you are leaning AWAY from (even in dB — see
+ *   BALANCE_RANGE_DB below). Even = both at their own level, exactly as with no balance at all;
  *   a full lean silences the other server without disconnecting it.
  * ★ Small dead zone round the middle: a finger lifting off a slider always moves it a hair, and "nearly even" should be
  *   EVEN, not 0.999. ★ And at the ENDS: a finger at the end of a 120-pt track lands at 0.97, and "nearly all server 1"
@@ -82,11 +82,21 @@ export function clampBalance(b: number): number {
  *  for line in vibe_watch.h (kBalanceMidDead / kBalanceEndSnap / balanceGains) and applies them in PanMixer. Change both. */
 export const BALANCE_MID_DEAD = 0.04;
 export const BALANCE_END_SNAP = 0.96;
+/* ★★★ EVEN IN DECIBELS (Stuart, 2026-11-02: "the balance control needs a bit more granularity to it to balance a loud
+ *  DAB/FM signal from one server and a quieter AM signal from another"). The cos taper put the useful cut — 10 to 20 dB,
+ *  a loud broadcast station against a quiet AM / SSB one — in the last 14 % of a half-track (cos = 0.32 at 0.80, 0.10 at
+ *  0.94), a few points of finger on the card's short track, and silence just past it. Now every part of the travel is
+ *  worth the same number of dB: 0 dB at the edge of the dead zone, down to BALANCE_RANGE_DB at the end snap, then
+ *  silence — ~0.4 dB per 1 % of a half-track, 2 dB per key step (DualServerCard / AudioSheet). */
+export const BALANCE_RANGE_DB = 40;
+export function balanceCutDb(x: number): number {
+  return -BALANCE_RANGE_DB * (x - BALANCE_MID_DEAD) / (BALANCE_END_SNAP - BALANCE_MID_DEAD);
+}
 export function balanceGains(balance: number): { s1: number; s2: number } {
   let b = clampBalance(balance);
   if (Math.abs(b) < BALANCE_MID_DEAD) b = 0;
   else if (Math.abs(b) > BALANCE_END_SNAP) b = Math.sign(b);
-  const taper = (x: number) => (x >= 1 ? 0 : Math.cos(x * (Math.PI / 2)));
+  const taper = (x: number) => (x >= 1 ? 0 : x <= 0 ? 1 : Math.pow(10, balanceCutDb(x) / 20));
   return { s1: b > 0 ? taper(b) : 1, s2: b < 0 ? taper(-b) : 1 };
 }
 

@@ -300,17 +300,24 @@ struct Ramp {
  *  ONE RULE, MANY READERS: this is src/services/dualMix.ts balanceGains / clampBalance / BALANCE_MID_DEAD /
  *  BALANCE_END_SNAP, mirrored line for line — the two-server balance, here for VFO A and VFO B. Change both together.
  *  balance −1 (all A) … 0 (even) … +1 (all B). It NEVER RAISES anything — it only lowers the VFO leaned away from, on a
- *  cos taper (gentle in the middle, decisive at the ends); a dead zone round the middle ("nearly even" IS even) and a
+ *  taper even in dB (0 → −40 dB over the travel, then silence); a dead zone round the middle ("nearly even" IS even) and a
  *  snap at the ends ("nearly all A" IS all A). Out-of-range or NaN → clamped / even. */
 constexpr float kBalanceMidDead = 0.04f;
 constexpr float kBalanceEndSnap = 0.96f;
+constexpr float kBalanceRangeDb = 40.0f;
 inline float clampBalance(float b) { return std::isfinite(b) ? std::max(-1.0f, std::min(1.0f, b)) : 0.0f; }
 struct BalanceGains { float a = 1, b = 1; };
 inline BalanceGains balanceGains(float balance) {
     float b = clampBalance(balance);
     if (std::fabs(b) < kBalanceMidDead) b = 0;
     else if (std::fabs(b) > kBalanceEndSnap) b = b > 0 ? 1.0f : -1.0f;
-    auto taper = [](float x) { return x >= 1.0f ? 0.0f : std::cos(x * 1.57079633f); };
+    // ★★★ even in dB (Stuart, 2026-11-02 — dualMix.ts BALANCE_RANGE_DB): 0 dB at the dead zone's edge, −40 dB at the end
+    //    snap, then silence. The cos taper had the useful 10–20 dB cut in a sliver at the end of the travel.
+    auto taper = [](float x) {
+        if (x >= 1.0f) return 0.0f;
+        if (x <= 0.0f) return 1.0f;
+        return std::pow(10.0f, -kBalanceRangeDb * (x - kBalanceMidDead) / (kBalanceEndSnap - kBalanceMidDead) / 20.0f);
+    };
     BalanceGains g;
     g.a = b > 0 ? taper(b) : 1.0f;
     g.b = b < 0 ? taper(-b) : 1.0f;
