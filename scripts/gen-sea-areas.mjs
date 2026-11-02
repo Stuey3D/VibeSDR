@@ -62,6 +62,7 @@ export const SOURCES = {
   de: { name: 'DWD', what: 'German coastal warning areas', licence: 'GeoNutzV / Datenlizenz Deutschland – Namensnennung 2.0', attribution: 'Deutscher Wetterdienst, © GeoBasis-DE / BKG 2021 (Daten modifiziert)' },
   no: { name: 'MET Norway', what: 'Norwegian sea forecast areas (Skagerrak, North Sea, Norwegian Sea and Barents Sea banks)', licence: 'NLOD 2.0 / CC BY 4.0', attribution: 'Based on data from MET Norway' },
   ie: { name: 'Met Éireann', what: 'Irish coastal sea areas, headland to headland (descriptive polygons)', licence: 'CC BY 4.0', attribution: 'Met Éireann sea-area polygons (CC BY 4.0)' },
+  es: { name: 'AEMET', what: 'Spanish coastal zones to 20 NM (Meteoalerta v6)', licence: 'AEMET nota legal (reuse, citing AEMET); IGN BDLJE CC BY 4.0', attribution: '© AEMET; derived from BDLJE CC-BY ign.es © Instituto Geográfico Nacional de España' },
 };
 
 // ── geometry ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -311,6 +312,37 @@ function buildIe(src) {
   if (out.length !== IE_HEADLANDS.length) throw new Error('met.ie: ' + out.length + ' coastal stretches, expected ' + IE_HEADLANDS.length);
   return out.sort((x, y) => (x.id < y.id ? -1 : 1));
 }
+/** ★ UTM (WGS 84) → [lon, lat]: the inverse transverse Mercator series (Snyder, "Map Projections — A Working Manual",
+ *  USGS Professional Paper 1395, eq. 8-17 … 8-25) — sub-metre over a zone, far finer than our 0.001° storage. */
+function utmToLonLat(E, N, zone, north = true) {
+  const a = 6378137, f = 1 / 298.257223563, k0 = 0.9996, e2 = f * (2 - f), ep2 = e2 / (1 - e2);
+  const x = E - 500000, y = north ? N : N - 10000000;
+  const M = y / k0, mu = M / (a * (1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 ** 3 / 256));
+  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+  const p1 = mu + (3 * e1 / 2 - 27 * e1 ** 3 / 32) * Math.sin(2 * mu) + (21 * e1 * e1 / 16 - 55 * e1 ** 4 / 32) * Math.sin(4 * mu)
+    + (151 * e1 ** 3 / 96) * Math.sin(6 * mu) + (1097 * e1 ** 4 / 512) * Math.sin(8 * mu);
+  const C1 = ep2 * Math.cos(p1) ** 2, T1 = Math.tan(p1) ** 2, N1 = a / Math.sqrt(1 - e2 * Math.sin(p1) ** 2);
+  const R1 = a * (1 - e2) / (1 - e2 * Math.sin(p1) ** 2) ** 1.5, D = x / (N1 * k0);
+  const lat = p1 - (N1 * Math.tan(p1) / R1) * (D * D / 2 - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * D ** 4 / 24
+    + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * D ** 6 / 720);
+  const lon = (D - (1 + 2 * T1 + C1) * D ** 3 / 6 + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * D ** 5 / 120) / Math.cos(p1);
+  return [((zone - 1) * 6 - 180 + 3) + lon / toRad, lat / toRad];
+}
+/** ★ V12 2026-11-02 (pass 2) AEMET's coastal zones (Meteoalerta v6, "zonas meteorológicas costeras hasta 20 millas
+ *  náuticas", AEMET-meteoalerta-delimitacion-zonas.zip): 51 zones, the Peninsula, the Balearics, the Canaries, Ceuta
+ *  and Melilla. UTM 30N (EPSG:32630, the Canaries too) → WGS 84 here; the .dbf is ISO-8859-15. Reuse under AEMET's
+ *  nota legal (cite AEMET as the source) and IGN's CC BY (BDLJE). Islands inside a zone are holes: dropped (an outline,
+ *  not a land mask). AEMET's high-seas areas (Finisterre, Cantábrico, Porto, Alborán …) have no open geometry. */
+function buildEs(src) {
+  const out = [];
+  for (const x of readShapefile(path.join(src, 'aemet/AEMET-meteoalerta-delimitacion-zonas/AEMET-meteoalerta-v6-zonas-costeras-32630'), 'latin1')) {
+    const code = String(x.props.COD_Z || ''), nom = TITLE(String(x.props.NOM_Z || '').replace(/^Costa\s*-\s*/, ''));
+    if (!/^\d{6}C$/.test(code) || !nom) continue;
+    const rings = outerRings(x.rings).map((r) => r.map(([E, N]) => utmToLonLat(E, N, 30)));
+    out.push({ id: 'es-' + code.toLowerCase(), src: 'es', kind: 'c', name: nom, prov: TITLE(String(x.props.NOM_PROV || '')), rings });
+  }
+  return out;
+}
 
 // ── the names a heading uses (the met parser's "match") ──────────────────────────────────────────────────────────
 const ASCII = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'SS').toUpperCase().replace(/['`’]/g, '').replace(/\s+/g, ' ').trim();
@@ -336,6 +368,9 @@ function matchOf(a) {
     if (a.nb) { const nb = a.nb.replace(/ø/g, 'oe').replace(/Ø/g, 'OE').replace(/å/g, 'aa').replace(/Å/g, 'AA').replace(/æ/g, 'ae').replace(/Æ/g, 'AE'); add(nb); add(nb.replace(/-/g, ' ')); }
   }
   if (a.src === 'ie') add(a.name);
+  // ★ AEMET: the zone's name as a Spanish coastal bulletin heads it ("LITORAL GADITANO", "ESTRECHO"); a one-word name
+  //   that is a common word or a place name (MENORCA, LANZAROTE, CEUTA …) is still that zone's
+  if (a.src === 'es') add(a.name);
   return [...m];
 }
 
@@ -345,7 +380,7 @@ const MIN_AREA = { s: 0, o: 0.004, c: 0.002, i: 0, n: 0 };   // ★ specks (squa
 function build(src) {
   const land = loadLand(src);
   const uk = buildUk(land);
-  const raw = [...uk, ...buildUs(src), ...buildCa(src), ...buildDe(src), ...buildNo(src, new Set(uk.map((a) => ASCII(a.name)))), ...buildIe(src)];
+  const raw = [...uk, ...buildUs(src), ...buildCa(src), ...buildDe(src), ...buildNo(src, new Set(uk.map((a) => ASCII(a.name)))), ...buildIe(src), ...buildEs(src)];
   const areas = [];
   for (const a of raw) {
     let rings = a.rings.map((r) => simplifyRing(r, TOL[a.kind])).filter(Boolean);

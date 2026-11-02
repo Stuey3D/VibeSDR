@@ -21,3 +21,7 @@ mkdir -p "$D/metno" "$D/metie"
 curl -fsSL -A "VibeSDR gen-sea-areas (vibesdr.net)" -o "$D/metno/sea_en.json" https://api.met.no/weatherapi/textforecast/3.0/sea_en.json
 curl -fsSL -A "VibeSDR gen-sea-areas (vibesdr.net)" -o "$D/metno/sea_no.json" https://api.met.no/weatherapi/textforecast/3.0/sea_no.json
 curl -fsSL -o "$D/metie/sea-areas.geojson" https://opendata2.met.ie/opendata2/sea_area_polys/sea-areas.geojson
+# AEMET's Meteoalerta zone delimitation (the coastal zones to 20 NM are one shapefile in it)
+mkdir -p "$D/aemet"
+curl -fsSL -o "$D/aemet/zonas.zip" https://www.aemet.es/documentos/es/eltiempo/prediccion/avisos/plan_meteoalerta/AEMET-meteoalerta-delimitacion-zonas.zip
+unzip -oq "$D/aemet/zonas.zip" -d "$D/aemet"
