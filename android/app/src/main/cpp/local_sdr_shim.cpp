@@ -21409,7 +21409,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const size_t sp0 = reqLine.find(' ');
             const std::string path0 = sp0 == std::string::npos ? "/" :
                 reqLine.substr(sp0 + 1, reqLine.find(' ', sp0 + 1) - sp0 - 1);
-            const bool ok =
+            bool ok =
                    path0 == "/" || path0.rfind("/?", 0) == 0
                 || path0.rfind("/setup", 0) == 0
                 || path0.rfind("/vibeserver.json", 0) == 0
@@ -21470,6 +21470,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★★ The web client's scripts (vibe_web_page.h). The page the door serves loads
                 //    them from /vs/ — a radio's page from /r/<id>/vs/, which the radio answers.
                 || path0.rfind("/vs/", 0) == 0;
+            /* ★★★ A RADIO'S IMAGE UPLOAD WHEN THAT RADIO IS NOT ANSWERING — THE DOOR TAKES IT (the first real clone, a
+             *  tester's Kintex-7 B210, 2026-11-02: "firmware upload through setup does not seem to work: Refused (503)").
+             *  The Setup page sends /r/<serial>/vibeserver/usrp-images, and a clone whose stock FPGA will not load has no
+             *  running process — so the upload that would make it run met "That radio is not answering". The image
+             *  folder is the MACHINE's (vibe_usrp_images.h), so here the door answers it itself: the /r/<x> prefix is
+             *  dropped and the request carries on to the door's own handler, which saves; the radio's restart (every few
+             *  seconds while it is failing) then loads the new image. A running radio never reaches this line — the
+             *  router hands it the request first and it reopens at once. */
+            if (!ok && path0.rfind("/r/", 0) == 0) {
+                const size_t seg = path0.find('/', 3);
+                if (seg != std::string::npos && path0.compare(seg, 23, "/vibeserver/usrp-images") == 0
+                    && (path0.size() == seg + 23 || path0[seg + 23] == '?')) {
+                    const size_t sp1 = reqLine.find(' '), sp2 = reqLine.find(' ', sp1 + 1);
+                    reqLine = reqLine.substr(0, sp1 + 1) + path0.substr(seg) + (sp2 == std::string::npos ? std::string() : reqLine.substr(sp2));
+                    ok = true;
+                    LOGI("USRP images: radio %s is not answering — the front door takes the request itself", path0.substr(3, seg - 3).c_str());
+                }
+            }
             /* ★★ WHILE THE POCKET HOTSPOT IS UP, A PATH WE DO NOT SERVE MAY STILL BE A PHONE'S
              *  CONNECTIVITY CHECK — /hotspot-detect.html for captive.apple.com, reaching us through
              *  the DNS hijack. Which one it is depends on the Host header, which has not been read

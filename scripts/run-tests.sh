@@ -1106,6 +1106,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── background decoding through the front door (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-bg-decode-frontdoor.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 USRP (2026-11-02): a clone's FPGA image uploaded through /r/<serial>/… while that radio is NOT running — the
+#    front door takes it (the tester's "Refused (503)"); every other path of the down radio still 503s.
+printf '\n\033[1m── a USRP image upload through the front door, the radio down (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-usrp-images-frontdoor.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ LISTENERS FIRST ACROSS THE BOX (Stuart, 2026-10-22): two radio processes, 3 slots; radio A's background holds them all;
 #     a listener on radio B starts a decoder at once and exactly A's lowest VFO pauses; it resumes when the listener goes.
 printf '\n\033[1m── background decoding gives way to listeners, lowest VFO first (end to end) ──\033[0m\n'
