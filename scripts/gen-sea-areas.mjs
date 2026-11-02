@@ -60,6 +60,8 @@ export const SOURCES = {
   us: { name: 'NOAA NWS', what: 'US coastal and offshore marine zones', licence: 'Public domain (US Government)', attribution: 'NOAA NWS marine zones' },
   ca: { name: 'ECCC', what: 'Canadian marine forecast areas', licence: 'Open Government Licence – Canada', attribution: 'Contains information licensed under the Open Government Licence – Canada (ECCC)' },
   de: { name: 'DWD', what: 'German coastal warning areas', licence: 'GeoNutzV / Datenlizenz Deutschland – Namensnennung 2.0', attribution: 'Deutscher Wetterdienst, © GeoBasis-DE / BKG 2021 (Daten modifiziert)' },
+  no: { name: 'MET Norway', what: 'Norwegian sea forecast areas (Skagerrak, North Sea, Norwegian Sea and Barents Sea banks)', licence: 'NLOD 2.0 / CC BY 4.0', attribution: 'Based on data from MET Norway' },
+  ie: { name: 'Met Éireann', what: 'Irish coastal sea areas, headland to headland (descriptive polygons)', licence: 'CC BY 4.0', attribution: 'Met Éireann sea-area polygons (CC BY 4.0)' },
 };
 
 // ── geometry ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -252,6 +254,64 @@ function buildDe(src) {
   return out;
 }
 
+/** ★ V12 2026-11-02 (pass 2) MET Norway's sea forecast areas: textforecast 3.0 sea_en.json (the English names NAVTEX
+ *  Rogaland / Ørlandet / Bodø / Vardø forecasts use) with sea_no.json's Norwegian names (the same features, same order).
+ *  Left out: the areas the UK set already has (Viking, the Utsires, Forties/Fladen, Fisher — the Met Office's outline
+ *  stays), and the grid and abbreviation areas (A1 … F3, Deep D4, LiD, YP, MJ, BWH …) — codes, not names a heading
+ *  says in words; the open-ocean Barents / Greenland Sea grid would bury the banks' names. */
+function buildNo(src, ukNames) {
+  const en = JSON.parse(fs.readFileSync(path.join(src, 'metno/sea_en.json'), 'utf8')).features;
+  const no = JSON.parse(fs.readFileSync(path.join(src, 'metno/sea_no.json'), 'utf8')).features;
+  const out = [];
+  const seen = new Set();
+  en.forEach((f, i) => {
+    const name = TITLE(f.properties.area || '');
+    if (!name || /^(DEEP |DYPE )?[A-F]\d$/i.test(name) || /^[A-Za-z]{2,3}$/.test(name)) return;
+    if (ukNames.has(ASCII(name)) || ASCII(name) === 'FORTIES') return;
+    const same = no[i] && JSON.stringify(no[i].geometry.coordinates[0][0]) === JSON.stringify(f.geometry.coordinates[0][0]);
+    const nb = same ? TITLE(no[i].properties.area || '') : '';
+    const id = 'no-' + ASCII(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (seen.has(id)) return; seen.add(id);
+    const g = f.geometry; const polys = g.type === 'MultiPolygon' ? g.coordinates : [g.coordinates];
+    out.push({ id, src: 'no', kind: 'o', name, nb, rings: polys.map((pp) => pp[0]) });
+  });
+  return out;
+}
+/** ★ V12 2026-11-02 (pass 2) Met Éireann's sea-area warning polygons (data.gov.ie "Met Éireann Sea Area warning
+ *  polygons", CC BY 4.0): the coast from headland to headland, out to the coastal forecast's limit. Met Éireann calls
+ *  them descriptive ("a general visual representation … not precise or officially defined geographical boundaries") —
+ *  the card and the doc say so. The two Irish Sea polygons are left out: a forecast's "IRISH SEA" is the Met Office
+ *  shipping area of that name, already drawn. The file's short names ("Malin-Fair") become the headlands' full names,
+ *  the forecast's own words ("MALIN HEAD TO FAIR HEAD"); the met parser chains them ("ROCHES POINT TO SLYNE HEAD TO
+ *  MALIN HEAD" is every stretch between, the way round the coast the forecast goes). */
+export const IE_HEADLANDS = [
+  // clockwise round Ireland from Malin Head: [the file's short name, the forecast's name]
+  ['Malin', 'Malin Head'], ['Fair', 'Fair Head'], ['Belfast', 'Belfast Lough'], ['Strang', 'Strangford Lough'],
+  ['Carl', 'Carlingford Lough'], ['Howth', 'Howth Head'], ['Wicklow', 'Wicklow Head'], ['Carns', 'Carnsore Point'],
+  ['Hook', 'Hook Head'], ['Dungarvan', 'Dungarvan'], ['Roches', 'Roches Point'], ['Mizen', 'Mizen Head'],
+  ['Valentia', 'Valentia'], ['Loop', 'Loop Head'], ['Slyne', 'Slyne Head'], ['Erris', 'Erris Head'],
+  ['Rossan', 'Rossan Point'], ['BloodyF', 'Bloody Foreland'],
+];
+function buildIe(src) {
+  const j = JSON.parse(fs.readFileSync(path.join(src, 'metie/sea-areas.geojson'), 'utf8'));
+  // ★ the file's own spellings: "Carling-Howth", "Dungarval-Roches"
+  const short = (s) => s.toLowerCase().replace(/^carling$/, 'carl').replace(/^dungarval$/, 'dungarvan');
+  const ix = new Map(IE_HEADLANDS.map(([k], i) => [k.toLowerCase(), i]));
+  const out = [];
+  for (const f of j.features) {
+    const n = String(f.properties.NAME || '');
+    if (/^IrishSea/i.test(n)) continue;
+    const [a, b] = n.split('-').map(short);
+    const i = ix.get(a), k = ix.get(b);
+    if (i === undefined || k === undefined || k !== (i + 1) % IE_HEADLANDS.length) throw new Error('met.ie: unexpected area ' + n);
+    const name = IE_HEADLANDS[i][1] + ' to ' + IE_HEADLANDS[k][1];
+    const g = f.geometry; const polys = g.type === 'MultiPolygon' ? g.coordinates : [g.coordinates];
+    out.push({ id: 'ie-' + String(i).padStart(2, '0') + '-' + IE_HEADLANDS[i][0].toLowerCase(), src: 'ie', kind: 'c', name, rings: polys.map((pp) => pp[0]) });
+  }
+  if (out.length !== IE_HEADLANDS.length) throw new Error('met.ie: ' + out.length + ' coastal stretches, expected ' + IE_HEADLANDS.length);
+  return out.sort((x, y) => (x.id < y.id ? -1 : 1));
+}
+
 // ── the names a heading uses (the met parser's "match") ──────────────────────────────────────────────────────────
 const ASCII = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'SS').toUpperCase().replace(/['`’]/g, '').replace(/\s+/g, ' ').trim();
 // ★ too generic to be a heading on its own anywhere in the world (a line "CENTRAL" or "EAST COAST" elsewhere must not
@@ -270,6 +330,12 @@ function matchOf(a) {
     const EN = { nof: 'NORTH FRISIAN COAST', osf: 'EAST FRISIAN COAST', hel: 'HELGOLAND|HELIGOLAND', elm: 'ELBE AND WESER ESTUARIES|ELBE-/WESERMUENDUNG|ELBE- UND WESERMUENDUNG', flf: 'FLENSBURG TO FEHMARN', fer: 'EAST OF FEHMARN TO RUEGEN|EAST OF FEHMARN TO RUGEN', osr: 'EAST OF RUEGEN|EAST OF RUGEN' };
     const e = EN[a.id.slice(3)]; if (e) for (const s of e.split('|')) add(s);
   }
+  if (a.src === 'no') {
+    add(a.name); add(a.name.replace(/-/g, ' '));
+    // ★ the Norwegian name, folded as a NAVTEX printer writes it (ø → OE, å → AA, æ → AE)
+    if (a.nb) { const nb = a.nb.replace(/ø/g, 'oe').replace(/Ø/g, 'OE').replace(/å/g, 'aa').replace(/Å/g, 'AA').replace(/æ/g, 'ae').replace(/Æ/g, 'AE'); add(nb); add(nb.replace(/-/g, ' ')); }
+  }
+  if (a.src === 'ie') add(a.name);
   return [...m];
 }
 
@@ -278,7 +344,8 @@ const TOL = { s: 0.02, o: 0.02, c: 0.012, i: 0.01, n: 0.02 };
 const MIN_AREA = { s: 0, o: 0.004, c: 0.002, i: 0, n: 0 };   // ★ specks (square degrees) dropped — never a whole area
 function build(src) {
   const land = loadLand(src);
-  const raw = [...buildUk(land), ...buildUs(src), ...buildCa(src), ...buildDe(src)];
+  const uk = buildUk(land);
+  const raw = [...uk, ...buildUs(src), ...buildCa(src), ...buildDe(src), ...buildNo(src, new Set(uk.map((a) => ASCII(a.name)))), ...buildIe(src)];
   const areas = [];
   for (const a of raw) {
     let rings = a.rings.map((r) => simplifyRing(r, TOL[a.kind])).filter(Boolean);

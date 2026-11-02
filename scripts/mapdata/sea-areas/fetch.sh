@@ -14,3 +14,10 @@ unzip -oq "$D/nws/mz.zip" -d "$D/nws/mz"
 unzip -oq "$D/nws/oz.zip" -d "$D/nws/oz"
 unzip -oq "$D/ne/land.zip" -d "$D/ne/land"
 unzip -oq "$D/eccc/water.zip" 'water_MarStdZone_coarse_unproj.*' -d "$D/eccc/w"
+# V12 2026-11-02 (pass 2): MET Norway's sea forecast areas (textforecast 3.0 — the polygons travel with today's text;
+# only the polygons and names are kept) and Met Éireann's sea-area warning polygons. api.met.no asks for an identifying
+# User-Agent.
+mkdir -p "$D/metno" "$D/metie"
+curl -fsSL -A "VibeSDR gen-sea-areas (vibesdr.net)" -o "$D/metno/sea_en.json" https://api.met.no/weatherapi/textforecast/3.0/sea_en.json
+curl -fsSL -A "VibeSDR gen-sea-areas (vibesdr.net)" -o "$D/metno/sea_no.json" https://api.met.no/weatherapi/textforecast/3.0/sea_no.json
+curl -fsSL -o "$D/metie/sea-areas.geojson" https://opendata2.met.ie/opendata2/sea_area_polys/sea-areas.geojson

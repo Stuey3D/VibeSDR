@@ -3,7 +3,7 @@
 // 'o' offshore / marine forecast area, 'c' coastal zone; rings: polylines at 0.001° (Google's encoding), space-separated.
 // A UK area's name is the met table's own (vibe_navtex_met.h), copied here by the generator.
 /* eslint-disable */
-export const SEA_AREA_SOURCES: Record<string, { name: string; what: string; licence: string; attribution: string }> = {"uk":{"name":"Met Office","what":"UK shipping forecast areas (boundary points; coast from Natural Earth)","licence":"facts (corner points); Natural Earth public domain","attribution":"Sea areas: Met Office definitions"},"us":{"name":"NOAA NWS","what":"US coastal and offshore marine zones","licence":"Public domain (US Government)","attribution":"NOAA NWS marine zones"},"ca":{"name":"ECCC","what":"Canadian marine forecast areas","licence":"Open Government Licence – Canada","attribution":"Contains information licensed under the Open Government Licence – Canada (ECCC)"},"de":{"name":"DWD","what":"German coastal warning areas","licence":"GeoNutzV / Datenlizenz Deutschland – Namensnennung 2.0","attribution":"Deutscher Wetterdienst, © GeoBasis-DE / BKG 2021 (Daten modifiziert)"}};
+export const SEA_AREA_SOURCES: Record<string, { name: string; what: string; licence: string; attribution: string }> = {"uk":{"name":"Met Office","what":"UK shipping forecast areas (boundary points; coast from Natural Earth)","licence":"facts (corner points); Natural Earth public domain","attribution":"Sea areas: Met Office definitions"},"us":{"name":"NOAA NWS","what":"US coastal and offshore marine zones","licence":"Public domain (US Government)","attribution":"NOAA NWS marine zones"},"ca":{"name":"ECCC","what":"Canadian marine forecast areas","licence":"Open Government Licence – Canada","attribution":"Contains information licensed under the Open Government Licence – Canada (ECCC)"},"de":{"name":"DWD","what":"German coastal warning areas","licence":"GeoNutzV / Datenlizenz Deutschland – Namensnennung 2.0","attribution":"Deutscher Wetterdienst, © GeoBasis-DE / BKG 2021 (Daten modifiziert)"},"no":{"name":"MET Norway","what":"Norwegian sea forecast areas (Skagerrak, North Sea, Norwegian Sea and Barents Sea banks)","licence":"NLOD 2.0 / CC BY 4.0","attribution":"Based on data from MET Norway"},"ie":{"name":"Met Éireann","what":"Irish coastal sea areas, headland to headland (descriptive polygons)","licence":"CC BY 4.0","attribution":"Met Éireann sea-area polygons (CC BY 4.0)"}};
 export const SEA_AREA_ROWS: ReadonlyArray<[string, string, string, string, number, number, string]> = [
 ["viking","s","uk","Viking",59.567,2,"ocvB??_yFf{C??~xF"],
 ["nutsire","s","uk","North Utsire",59.92,4.795,"ocvB_yF?o}@x@{Ci@{BpApApCCoCn@A|DtEaCPkDl@BuAiAt@g@HqEmBmB_AgHp@^PqBl@hJnAFhAfFnCaJpAi@U|BxA}BcAbDt@g@Gn@cDfCmDtQPjBvCmKf@g@MxBrD}GsA|GnE{JkCwNiCK?uBwBgDJe@~A|@[kDdFlAlFEhBvBGbJyDrIjBhCzCyBLnFjAhAz@mDFpBjA?XuGlBlDKaGr@~AvBsEkDiFmHsEf@MwAaEhAjChF|DeAyBpAdA?{Ev@~Gt@SZz@n@aBoCkKdAdDvAi@v@x@t@uDhAzE`BuCaA_@?gD{FFe@}B_EaDf@yEm@}AmAV_BaBYjCg@sFeD|BtB}Al@oCcG{WtClET_CuHqUbDfF?yKt@t@JfPtDhHxEbD~J~AiJMsHyE]pGdGxQhDvB`@dCtD{@oBoHpAcA`CpPtBzB`@eAh@Tx@nK`Bx@v@`EMwCx@LvBiFe@cDkCmBbDdAf@gC}DkRZf@|DzNg@lGfApDhBfCAiGh@??rDzAdABjAmBK[zHrG~AbAdEkA?_AmCeIAfCpDbAu@pAZkBt@@rAjEzGf@qA\\xB`Dg@hD}DQcAqBm@~Eq@Is@uC@s@y@`EEj@yD}A}A{BQ[n@Ms@bDuBrAj@_BaDUuH{CvCf@rGg@cBsAWp@oAa@cB}Bh@YqAvBgDBuNz@tOxA?rA}Bi@{Ai@r@w@[v@wAqB{FiK}HbGvCcAgR`BxQ`DjBlAnGpBrBg@}BbAcAA_D}@u@~@iAXlHlAiCmB_IDgHHrGjBpH~EbI@iFvAtMjA^~AuBf@iFdAvCrBuByD{FmBc\\hC|YbDpG~AyBZ{EMnGkF|MfAjFzBf@{E?{BhIjBR]sA?|aB"],
@@ -764,5 +764,41 @@ export const SEA_AREA_ROWS: ReadonlyArray<[string, string, string, string, numbe
 ["de-osr","c","de","Östlich Rügen",54.46,13.973,"gfjB_jZ?f^zLzB`AlBd@J~A{AGwLd@gA|@@lBnEz@?lAaAPkCrBsDJt@bAn@v@MOfA?k@]PEhBu@oBLdD{@_Cd@lCm@lAn@|EpBpCDjAd@MIuB`@KX|@m@`E?u@y@Wl@~B_@lCu@F\\nBk@_@Dy@]~ATr@n@FFuBfAcBHiCfByADsAh@jBk@wCP}@h@xA\\_BbBmABkAcAv@e@uGkAaDVg@Zb@bBoE|An@j@hA`FuInAlDj@d@ZWDmAdC_F~@eGFaDs@_Bj@qA{FpBMr@AjHz@xDA`@a@q@Un@~@z@SpCa@Om@sDm@[eBrAs@Y@mBlBHm@KGwBVZPy@_CEKjAeBdA?jBzAQ[Zv@nBsAe@r@vCY|@iC{AsB~B_@oAHo@zBcBvBcIjFqKib@{@ woiBadY`Bo@d@aAQaBl@t@\\qA?bA`@FPwB_@ZIeAU~@q@o@IxAmDM\\zByBxDx@h@n@vD^yAx@_@kAJy@uBD[jBr@"],
 ["de-osf","c","de","Ostfriesische Küste",53.731,6.845,"_nhBinN?x_@hG~iArNmJdCsNrEyOdFcEZoKrC?iD_CSvMo@x@uFs@o@m@kA\\~@aCm@mAwA|AoDoH]uCTiK}AyWTkFn@NtAk@My@bBeBGs@`@MF^xA_Af@ZR`ElAOj@y@GgBdBiDcA}BeDa@IhDyBUgAeCwElJ"],
 ["de-hel","c","de","Helgoland",54.19,7.808,"m_iBufOqF|XfE~WvQ??qY"],
-["de-elm","c","de","Elbe-/Wesermündung",54.065,8.455,"gaiBcyOx@lQlPjWdPoKtH}OTsF|AwAk@c@iCjCuDt@oHcDgAaBkCoPqBrA]~Ak@uCTcDg@m@Op@Ke@wBbBRjCs@`A_Ad@mAw@cCGUdGZ~@"]
+["de-elm","c","de","Elbe-/Wesermündung",54.065,8.455,"gaiBcyOx@lQlPjWdPoKtH}OTsF|AwAk@c@iCjCuDt@oHcDgAaBkCoPqBrA]~Ak@uCTcDg@m@Op@Ke@wBbBRjCs@`A_Ad@mAw@cCGUdGZ~@"],
+["no-inner-skagerrak","o","no","Inner Skagerrak",58.496,10.157,"_yoB_rSwf@lkBwU_b@sI_YcFgu@pEuNtd@uOp\\}S"],
+["no-outer-skagerrak","o","no","Outer Skagerrak",57.696,8.853,"uqnB{sO}e@nbAgKr[k@iB\\_`@gGkg@eRcd@vf@mkBvFbTz@tObFhJtMrLhDhIEzVjBdK"],
+["no-storegga-halten-bank-to-greenwich-meridian","o","no","Storegga-Halten Bank to Greenwich Meridian",64.099,2.121,"s}}BqdOdX~nAtj@luBdw@~`EEb|By{B?"],
+["no-halten-bank","o","no","Halten Bank",64.61,8.816,"q}}B{wSzd@`cAlObd@c\\pyBgXmoA"],
+["no-froeya-bank","o","no","Froeya Bank",63.98,7.127,"ig|BunP`Prb@bFpE`Krd@zNbWqd@dgCsj@qtB"],
+["no-storegga","o","no","Storegga",63.076,4.775,"aszBggMpGfOnRpq@jd@|kAin@~zD{v@yaE"],
+["no-east-tampen","o","no","East-Tampen",61.857,2.805,"sqxBowH`AbCbJlInXtLlS~D~QE?|vEe|B?G_}@"],
+["no-outer-vestfjord","o","no","Outer Vestfjord",67.607,13.581,"_naC__Xin@fKgYqg@qG_h@iAsk@nF}OnO|^lHkAbIfJ"],
+["no-kildin-bank","o","no","Kildin Bank",70.265,34.644,"wziCkydAnd@cmAbmA~bBihA|hGii@y~G"],
+["no-sklinna-bank","o","no","Sklinna Bank",65.428,10.768,"kf_C_pRkNooBvj@~WnKjH?bmA"],
+["no-traena-bank","o","no","Traena Bank",66.283,11.059,"kf_C_pRc|@?oI_nD~Wja@f^b["],
+["no-roest-bank","o","no","Roest Bank",67.232,11.312,"anaCu~WpItmDgbB?zJwtD~V`XpDaE"],
+["no-vesteraalsbank","o","no","Vesteraalsbank",68.419,12.442,"wfdC_pRcrA_dIvFumAbU|oAnMle@rq@peB"],
+["no-banks-outside-troms","o","no","Banks outside Troms",70.355,17.818,"}rhCmth@pF|gAx@pz@tEjd@vQ`e@tLnNhOhpAwFtmAsNwcA_Xod@i_@nF"],
+["no-tromsoeflaket","o","no","Tromsoeflaket",71.432,18.71,"ybiCww_@eoAj_Ag^??wrFvfBw|D|Hpm@rLzd@"],
+["no-hjelmsoey-bank","o","no","Hjelmsoey Bank",71.832,23.183,"_llCswe@gEnK?{tHrpAkjArD`qBnOlpA"],
+["no-north-cape-bank","o","no","North Cape Bank",71.977,26.83,"grlCwvw@jsA`wA`Avt@yCp{@spAjjA"],
+["no-north-bank","o","no","North Bank",71.563,31.103,"grlCqb~@nvAyuEhi@x~G_Qt|@uW~vBwAdd@ksAawA"],
+["ie-00-malin","c","ie","Malin Head to Fair Head",55.584,-6.366,"wbkB`jMk_@`IlEib@sG{`@l@uQpOuYb[jUaDdFdAjHsB`I|F`Im@tL"],
+["ie-01-fair","c","ie","Fair Head to Belfast Lough",55.138,-5.598,"qrkBpaJpTeXlMqJhU~]rBvQoJgKkCzAsGjMgKrB"],
+["ie-02-belfast","c","ie","Belfast Lough to Strangford Lough",54.634,-5.142,"eshBzkHwOzi@YcAkCeAqOnEqTuYlRcSze@?"],
+["ie-03-strang","c","ie","Strangford Lough to Carlingford Lough",54.003,-5.403,"}ciBvvIvO{i@~O|OjMpOkZ~j@cAoEiC{A}FuG"],
+["ie-04-carl","c","ie","Carlingford Lough to Howth Head",53.55,-5.73,"afgBjmIj@?cA~j@oEbA_DcAeSxIkHzFdA_QlW}j@"],
+["ie-05-howth","c","ie","Howth Head to Wicklow Head",53.125,-5.677,"udgBjmIpWqBvI?}K|j@kHrBkMzA"],
+["ie-06-wicklow","c","ie","Wicklow Head to Carnsore Point",52.358,-5.863,"aofBvuJlMgj@vQdAhU`ItLdSwVl_@WeAwDdFiC{A}FkMoEl@aI{A"],
+["ie-07-carns","c","ie","Carnsore Point to Hook Head",51.934,-6.373,"saeBrjKvVo\\VeAfKhb@zAhPib@`Im@cNbAmM"],
+["ie-08-hook","c","ie","Hook Head to Dungarvan",51.86,-7.103,"{{dBdhLz`@kH?vQzFrY_c@xIwDgPhC{NmM{AlMsB"],
+["ie-09-dungarvan","c","ie","Dungarvan to Roches Point",51.606,-7.806,"cvdBlxMde@}KtL`m@_^tG_DqOaDaDm@aDT{FiCuG"],
+["ie-10-roches","c","ie","Roches Point to Mizen Head",51.223,-9.363,"kcdBnaOz`@sGxNjy@hCzr@y`@eAeAsf@iCkHm@mRaDsBzAyIoEU|AaD"],
+["ie-11-mizen","c","ie","Mizen Head to Valentia",51.312,-10.324,"oncBteRpa@Tm@zN{Ff]mZl_@a[cm@xIaDoEaI`Dm@wDsa@pOxh@?_QuGy[pJhU"],
+["ie-12-valentia","c","ie","Valentia to Loop Head",52.483,-10.635,"qjdB`fSrYbm@{`@lRy[kHiU}]jMit@nRwDm@zS~C~PtGvDkCam@"],
+["ie-13-loop","c","ie","Loop Head to Slyne Head",53.041,-10.176,"gweBlkRuLzr@{N?eSjMm@_u@pJuYl@}K{Am_@|F?TvQjHfKl@gFxI|F"],
+["ie-14-slyne","c","ie","Slyne Head to Erris Head",53.842,-10.556,"{kgBbyRdA~t@cI|Awz@kHxNmq@fKbA_D{FhH}AcAvQfKwV{AeShCm@vD`V`DTl@dSrGkM"],
+["ie-15-erris","c","ie","Erris Head to Rossan Point",54.598,-9.984,"eaiBxtRcNtp@dAl@aVmd@Tuk@_DsGxNwc@`Dkl@vQb`@m@bdA"],
+["ie-16-rossan","c","ie","Rossan Point to Bloody Foreland",55.028,-8.89,"y{iBlhPuL~b@q\\y[iPc[v^_QrGlMbN}F"],
+["ie-17-bloodyf","c","ie","Bloody Foreland to Malin Head",55.473,-7.926,"kyjBx`Ou^rT?_^yIib@vc@aIl@lR`D|K"]
 ];
