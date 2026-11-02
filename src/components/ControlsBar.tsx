@@ -1071,9 +1071,12 @@ const DotUnit = React.memo(function DotUnit({ unit, freqDotFont, columnW }: {
  *  any other squeeze: a clipped digit reads, a speck does not. */
 const DISPLAY_TEXT = { allowFontScaling: false, minimumFontScale: 0.6 } as const;
 function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFontSize, pillPadH, pillPadV, gap, shared,
-  winH, land = false, fill = false }: {
+  winH, land = false, fill = false, extra = 0 }: {
   freqStr: string; unit: string; chanTag: string | null; freqFontSize: number; freqWidth: number;
   unitFontSize: number; pillPadH: number; pillPadV: number; gap: number; shared: boolean;
+  /** ★ Points the phone portrait window took from the panel's bezel (PortraitBar `bezelBack`): the digits /
+   *  tubes grow by it instead of sitting at the §4.1 size in a taller window (Stuart, 2026-11-02). */
+  extra?: number;
   /** ★ The LED / analogue frequency window (§4.1): its height, which the deck's fixed block decided
    *  (48 / 38 / 46 / 35 at scale 1). Absent = the bar's pill, sized from the text as before. The
    *  compact window takes the §4.1 digit / tube sizes and FILLS its width. */
@@ -1097,7 +1100,7 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   const tagW = chanTag ? Math.round(Math.max(unitFontSize * 0.72 * 0.62 * Math.max(chanTag.length, 15), unitW)) : 0;
   const labelW = Math.max(unitW, tagW);
   // The Doto digits' size (dot): the unit field's dots are set on their pitch.
-  const dotSize = fill ? H : compact ? s.r(land ? 22 : shared ? 23 : 27) : s.r(shared ? 24 : 28);
+  const dotSize = fill ? H : compact ? s.r(land ? 22 : shared ? 23 : 27) + extra : s.r(shared ? 24 : 28);
   const dotFont = Math.min(dotSize, Math.floor((H - 2) / 1.1));
   const label = (
     // ★ flexShrink 0 + one line: in a narrow Mac window the column was squeezed and "MHz" broke as "MH" / "z"
@@ -1131,14 +1134,17 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
     // ★★★ The LED / analogue window: 22 × 36 tubes (shared 18 × 29), bar = false, the window's full
     //   width. The TUBE shrinks to the window, never the other way (§7 TRAP) — the smallest case is
     //   analogue + shared = 35 pt against a 37 pt design stack (test_faceplate_meters.ts).
+    const design = land ? TUBE_DESIGN.meterLand : shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter;
+    const stackH = design.th + PIP_H + COLLAR_SHOWN + 2 * CLEAR;
     return (
       <NixieTubes hz={ro.hz} unit={ro.unit} layout={ro.layout}
-        design={land ? TUBE_DESIGN.meterLand : shared ? TUBE_DESIGN.meterShared : TUBE_DESIGN.meter} bar={false}
+        design={design} bar={false}
         // ★ fill: the stack (glass + pip + collar + clearance) is the window's height; the width still fits it.
-        scale={fill ? H / (TUBE_DESIGN.meterLand.th + PIP_H + COLLAR_SHOWN + 2 * CLEAR) : s.scale}
-        // ★ grow: landscape only — the centre window has room either side, so a 10-tube radio's tubes take it
-        //   (Stuart, 2026-10-16). Still never wider than the window.
-        radius={8} reserveRight={labelW} grow={land} style={{ flex: 1, height: H, minWidth: 0 }}>
+        //   `extra` (the phone portrait window grown into the bezel): the same — the tubes take the taller window.
+        scale={fill ? H / (TUBE_DESIGN.meterLand.th + PIP_H + COLLAR_SHOWN + 2 * CLEAR) : extra > 0 ? Math.max(s.scale, H / stackH) : s.scale}
+        // ★ grow: landscape, and the grown portrait window — the window has room either side, so a 10-tube radio's
+        //   tubes take it (Stuart, 2026-10-16 / 11-02). Still never wider than the window.
+        radius={8} reserveRight={labelW} grow={land || extra > 0} style={{ flex: 1, height: H, minWidth: 0 }}>
         {label}
       </NixieTubes>
     );
@@ -1161,7 +1167,7 @@ function DisplayFreq({ freqStr, unit, chanTag, freqFontSize, freqWidth, unitFont
   //   centred in the full-width window; the bar pill keeps its own sizes.
   const cellBox: ViewStyle = compact ? { flex: 1, minWidth: 0, alignItems: 'center' }
                                      : { width: winW, flexShrink: 1, minWidth: 0 };
-  const segH = fill ? H - 6 : compact ? Math.min(s.r(land ? 23 : shared ? 25 : 29), H - 4) : s.r(shared ? 27 : 30);
+  const segH = fill ? H - 6 : compact ? Math.min(s.r(land ? 23 : shared ? 25 : 29) + extra, H - 4) : s.r(shared ? 27 : 30);
   return (
     <View style={[{ flexDirection: 'row', alignItems: 'stretch', height: H, paddingHorizontal: pillPadH, gap,
                     flexShrink: 1, minWidth: 0 }, compact && { flex: 1 }]}>
@@ -1684,7 +1690,7 @@ function FreqModePill({ freqStr, unit, chanTag = null, chanMain = false, modeLab
  * The bar deck keeps FreqModePill inside the bar, exactly as today (§4.2).
  */
 function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain, modeLabel, snrText, signalActive, bus,
-  meterMode, fmStereo = false, onFreqTap, onModeTap, sharedTuner = null, tight = false, freqWidth }: any) {
+  meterMode, fmStereo = false, onFreqTap, onModeTap, sharedTuner = null, tight = false, freqWidth, extra = 0 }: any) {
   /* ★ `land` (a LandscapeLayout, §9): the same column in the landscape band — the mockup's `fvL`
    *  sizes (digits 25, tubes 15 × 27, Doto 22, 7-segment 23) and the mode box's type shrunk to the
    *  window, the LED strip at 9 / 6.5 (or unlabelled), the edgewise card in its 24 pt window. */
@@ -1697,7 +1703,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
   const winBg = dk.style === 'nixie' ? '#060403' : dk.style === 'hyper' ? '#0a0807' : '#050505';
   const unitFont = L ? Math.min(s.r(11), Math.max(8, Math.floor(dl.freqH * 0.42))) : s.r(11);
   // §4.1 "digits 32 (shared 27)" — capped by the window it has to sit in. Landscape: 25 (§9).
-  const digit = L ? L.digit : Math.min(s.r(shared ? 27 : 32), Math.floor((dl.freqH - 4) / 1.12));
+  const digit = L ? L.digit : Math.min(s.r(shared ? 27 : 32) + extra, Math.floor((dl.freqH - 4) / 1.12));
   /* ★★★ THE MODE BOX FITS ITS LABEL ON ONE LINE (Stuart, 2026-10-01: "USB:" / "RTTY" / "S9+1" in a
    *  fixed 70 pt box beside a window with lots of spare width). The default deck's rule, applied here:
    *  70 pt is the MINIMUM and the box grows to the label, out of the frequency window (which flexes —
@@ -1718,7 +1724,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
       {sharedTuner && (
         <View style={[cd.banner, { height: dl.bannerH, marginBottom: dl.bannerGap }]}
               accessibilityRole="text" accessibilityLabel={sharedBannerLabel(sharedTuner)}>
-          <Text style={[cd.bannerTxt, { fontFamily: dk.bannerFont, fontSize: s.f(10.5) * fp.screen.sizeK,
+          <Text style={[cd.bannerTxt, { fontFamily: dk.bannerFont, fontSize: s.f(10.5) * fp.screen.sizeK * (L ? 1 : Math.max(1, dl.bannerH / s.r(DECK.bannerH))),
                         color: sharedTuner.alone ? dk.bannerFree : dk.bannerAsk,
                         textShadowColor: fp.chassis.plate ? dk.glow : 'transparent' }, screenOneWeight(fp.screen)]}
                 numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
@@ -1757,7 +1763,7 @@ function CompactDisplay({ dl, land, meterKind, freqStr, unit, chanTag, chanMain,
             <DisplayFreq freqStr={freqStr} unit={unit} chanTag={chanTag} freqFontSize={digit}
               freqWidth={freqWidth} unitFontSize={unitFont} pillPadH={s.r(6)}
               pillPadV={L ? Math.max(2, Math.round(dl.freqH * 0.16)) : s.r(7)}
-              gap={s.r(6)} shared={shared} winH={dl.freqH} land={!!L} />
+              gap={s.r(6)} shared={shared} winH={dl.freqH} land={!!L} extra={extra} />
           )}
         </TouchableOpacity>
         <TouchableOpacity ref={mergeRefs(tourRef('modeBtn'), screenNavRef('modeBtn', onModeTap))} onPress={onModeTap} activeOpacity={0.80} hitSlop={8}
@@ -1877,7 +1883,8 @@ const MeterHousing = React.memo(function MeterHousing({ kind, height, shared, li
       ) : (
         // §4.5: a 28 pt window in the 34 pt housing (padding 3; 2 with the shared banner).
         <View style={{ padding: s.r(shared ? DECK.edgePadShared : DECK.edgePad) }}>
-          <EdgeMeter bus={scaled} unit={unit} height={s.r(DECK.edgeWindow)} onFault={onFault} />
+          {/* ★ height − padding = the 28 pt window at the §4.1 housing; taller when the portrait deck grows it */}
+          <EdgeMeter bus={scaled} unit={unit} height={height - 2 * s.r(shared ? DECK.edgePadShared : DECK.edgePad)} onFault={onFault} />
         </View>
       ))}
     </View>
@@ -2288,6 +2295,34 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   const bannerOut  = !!stack?.bannerOut
                      || (!pStack && !dl.compact && !!sharedDial && !barFitsBanner(dl.displayH, FREQ_FONT, PILL_PAD_V));
 
+  /* ★★ THE READOUT TAKES THE BEZEL (Stuart, 2026-11-02, iPhone, analogue + Nixie on a shared server: "the bezel
+   *  around the frequency and signal meter is a bit much and feels like wasted space … expanding the frequency and
+   *  signal meters to fit"). Phone portrait, LED / analogue deck: the panel's padding round the display column
+   *  (the plate's 14 pt top and sides, black's 12 pt under it) comes down to 6 pt, and the column takes it — the
+   *  frequency window grows (and its tubes / digits with it), the analogue meter takes a share and runs nearer
+   *  the edges ("it doesnt matter too much if the analog VU meter touches the sides"). The LED strip keeps its
+   *  own padding inside the housing (LedVu padX: "an LED wont be on the edge of a real stereo") and its height —
+   *  its window does not scale. The plate, the keys and the drums do not move: the outer card is the same size. */
+  const bz = React.useMemo(() => {
+    const none = { grow: 0, top: 0, bottom: 0, side: 0, freq: 0, dl };
+    if (!dl.compact || s.isTablet || !plateInset) return none;
+    const keep = s.r(6);
+    const top = Math.max(0, plateInset.top - keep), bottom = gloss ? Math.max(0, s.r(12) - keep) : 0;
+    const side = Math.max(0, plateInset.h - keep);
+    const grow = top + bottom;
+    if (grow <= 0 && side <= 0) return none;
+    /* ★ "the dragging on the corner trick that youd do to a window" (Stuart): the WHOLE column scales by one factor —
+     *  banner, gaps, frequency window and the analogue meter — rather than one part taking all of it. The LED strip
+     *  is the exception (an LED does not get bigger): its housing keeps its height and the window takes that share. */
+    const k = (dl.displayH + grow) / dl.displayH;
+    const bannerH = Math.round(dl.bannerH * k), bannerGap = Math.round(dl.bannerGap * k), meterGap = Math.round(dl.meterGap * k);
+    const housingH = meterKind === 'edge' ? Math.round(dl.housingH * k) : dl.housingH;
+    const displayH = dl.displayH + grow;
+    const freqH = displayH - bannerH - bannerGap - meterGap - housingH;
+    return { grow, top, bottom, side, freq: Math.max(0, freqH - dl.freqH),
+             dl: { ...dl, displayH, bannerH, bannerGap, meterGap, housingH, freqH } };
+  }, [dl, s, plateInset, gloss, meterKind]);
+
   return (
     <View style={{ gap: ROW_GAP }}>
 
@@ -2295,16 +2330,17 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           ★ On black it sits on the GLOSS ACRYLIC PANEL, which runs to the plate's top and side edges
             (Deck.mockup `displayPanel`: margin −14, padding 14 14 12) with its trim line beneath. */}
       <View style={gloss ? { marginHorizontal: -plateInset.h, marginTop: -plateInset.top,
-                             paddingHorizontal: plateInset.h, paddingTop: plateInset.top,
-                             paddingBottom: s.r(12) } : undefined}>
+                             paddingHorizontal: plateInset.h - bz.side, paddingTop: plateInset.top - bz.top,
+                             paddingBottom: s.r(12) - bz.bottom }
+                         : bz.grow ? { marginHorizontal: -bz.side, marginTop: -bz.top } : undefined}>
       {gloss && <GlossPanel radius={plateInset.radius} squareBottom />}
       {bannerOut && <SharedBanner st={sharedDial!} fontSize={sharedBannerFont(FREQ_FONT)} tight={tight} />}
       {dl.compact ? (
-        <CompactDisplay dl={dl} meterKind={meterKind}
+        <CompactDisplay dl={bz.dl} meterKind={meterKind}
           freqStr={freqStr} unit={unit} chanTag={chanTag} chanMain={chanMain} modeLabel={modeLabel} snrText={snrText}
           signalActive={signalActive} bus={bus} meterMode={meterMode} fmStereo={fmStereo}
           onFreqTap={onFreqTap} onModeTap={onModeTap} sharedTuner={sharedDial ?? null} tight={tight}
-          freqWidth={FREQ_W} />
+          freqWidth={FREQ_W} extra={bz.freq} />
       ) : pStack ? (
       <View style={{ height: dl.displayH, gap: P_GAP }} onLayout={(e: any) => setSigW(e.nativeEvent.layout.width)}>
         {bannerIn && <SharedBanner st={sharedDial!} fontSize={sharedBannerFont(FREQ_FONT)} tight={tight} />}
