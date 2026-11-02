@@ -156,6 +156,37 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'v', text: 'v' });
   await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'v' });
   ok(await until(`${AB}.sel === 'B'`, 2000), 'V swaps to B');
+  // ── ★★★ THE VIEW FOLLOWS THE SELECTED VFO (Stuart, 2026-11-02): zoomed in and unlocked, B tuned past the view's edge
+  //   slides the view (never the radio, never A) as far as the radio's window allows; switching VFOs moves the view
+  //   between the two.
+  {
+    const S = `window.__vibeWf().spec`;
+    const b0 = await ev(`${AB}.b.frequency`), bb0 = await ev(`${S}.view.binBandwidth || ${S}.cfg.binBandwidth`);
+    const wlo = await ev(`${AB}.state.lo`), whi = await ev(`${AB}.state.hi`);
+    await ev(`(${S}.followVfo = false, 0)`);
+    await ev(`(${S}.zoom(${aHz}, ${bb0} / 8), 0)`);
+    ok(await until(`Math.abs(${S}.viewCenterHz() - ${aHz}) < ${bb0} && ${S}.spanHz() < (${whi} - ${wlo}) / 4`, 4000),
+       `zoomed in on A (span ${Math.round(await ev(`${S}.spanHz()`))} Hz of a ${whi - wlo} Hz window)`);
+    const span = await ev(`${S}.spanHz()`);
+    const nTune = await ev(`window.__sent.filter(s => s.includes('"type":"tune"')).length`);
+    const want = Math.round(Math.min(whi - 1000, aHz + span * 0.8));
+    await ev(`(${S}.tune(${want}), 0)`);
+    ok(await until(`Math.abs(${S}.viewCenterHz() - ${want}) < ${span} * 0.5 && ${S}.viewCenterHz() !== ${aHz}`, 4000),
+       `unlocked: B past the view's edge (${want}) brings the view with it (centre ${Math.round(await ev(`${S}.viewCenterHz()`))})`);
+    ok((await ev(`${AB}.a.frequency`)) === aHz, '…A stays where it is');
+    ok((await ev(`window.__sent.filter(s => s.includes('"type":"tune"')).length`)) === nTune, '…and no tune moved the dial');
+    await ev(`(${S}.tune(${whi - 500}), 0)`);
+    await sleep(800);
+    const cEdge = await ev(`${S}.viewCenterHz()`);
+    ok(cEdge <= whi - span / 2 + bb0 && cEdge + span / 2 >= whi - 500, `B at the window's edge: the view goes as far as the capture lets it and no further (centre ${Math.round(cEdge)}, edge ${whi})`);
+    await ev(`(${S}.selectVfo('A'), 0)`);
+    ok(await until(`Math.abs(${S}.viewCenterHz() - ${aHz}) < ${span} * 0.5`, 4000), `switching to A moves the view back to A (centre ${Math.round(await ev(`${S}.viewCenterHz()`))})`);
+    await ev(`(${S}.selectVfo('B'), 0)`);
+    ok(await until(`Math.abs(${S}.viewCenterHz() - ${cEdge}) < ${span} * 0.5`, 4000), '…and to B moves it to B again');
+    ok((await ev(`${AB}.a.frequency`)) === aHz, '…A never moved');
+    await ev(`(${S}.tune(${b0}), ${S}.zoom(${aHz}, ${bb0}), ${S}.followVfo = true, 0)`);
+    await sleep(800);
+  }
   // ── the audio panel's STEREO switch
   await click('#mAudio');
   ok(await until(`document.getElementById('abStereoRow') && !document.getElementById('abStereoRow').hidden && document.getElementById('abStereoBtn').textContent === 'ON'`, 3000),
@@ -188,16 +219,16 @@ await session('on', {}, async ({ ev, send, shot, until, click }) => {
   await shot('audio-balance');
   await ev(`(() => { const s = document.getElementById('abBal'); s.value = '-0.5'; s.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()`);
   ok(await until(`${sentWatch}.some(m => m.balance === -0.5 && m.id === undefined)`, 2000), 'sliding it sends {watch, balance:-0.5}');
-  ok(await until(`${AB}.state.bal === -0.5 && document.getElementById('abBalVal').textContent === 'B -3 dB'`, 3000),
+  ok(await until(`${AB}.state.bal === -0.5 && document.getElementById('abBalVal').textContent === 'B -20 dB'   /* ★ even in dB: half way = −20 (2026-11-02) */`, 3000),
      `the server holds it, and the row says B is turned down ("${await ev(`document.getElementById('abBalVal').textContent`)}")`);
   ok(await ev(`(() => { try { return Object.keys(localStorage).some(k => { try { return JSON.parse(localStorage.getItem(k)).abBalance === -0.5; } catch { return false; } }); } catch { return 'n/a'; } })()`) !== false,
      'remembered on this device');
-  // the controller's / keyboard's step: gamepad.ts adjust() is stepUp + an input event — a tenth
+  // the controller's / keyboard's step: gamepad.ts adjust() is stepUp + an input event — a twentieth (2 dB, 2026-11-02)
   await ev(`(() => { const s = document.getElementById('abBal'); s.stepUp(); s.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()`);
-  ok(await until(`${AB}.state.bal === -0.4`, 3000), 'a step right (the pad / keyboard adjust) moves it a tenth: −0.4');
+  ok(await until(`${AB}.state.bal === -0.45`, 3000), 'a step right (the pad / keyboard adjust) moves it a twentieth: −0.45');
   // ★ in MONO too (Stuart: "the balance also applies if the user is in Mono mode too") — the server keeps it with stereo off
   await click('#abStereoBtn');
-  ok(await until(`${AB}.state.stereo === false && ${AB}.state.bal === -0.4`, 3000), 'VFO STEREO off: the balance stays (a level, before placement)');
+  ok(await until(`${AB}.state.stereo === false && ${AB}.state.bal === -0.45`, 3000), 'VFO STEREO off: the balance stays (a level, before placement)');
   await click('#abStereoBtn');
   await click('#abBalEven');
   ok(await until(`${sentWatch}.some(m => m.balance === 0) && ${AB}.state.bal === 0 && document.getElementById('abBalVal').textContent === 'EVEN'`, 3000), 'EVEN centres it');

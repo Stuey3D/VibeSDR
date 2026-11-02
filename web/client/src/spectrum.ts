@@ -860,8 +860,24 @@ export class SpectrumClient {
     this.swapLive();
     this.abSel = v;
     this.tunePacer.cancel();
-    if (this.followVfo && this.frequency) this.zoom(this.frequency, this.view.binBandwidth || this.cfg.binBandwidth);
+    // ★★★ Zoomed in, the view moves to the VFO just selected (Stuart, 2026-11-02: "switching between the VFO's moves
+    //   the window back and forth between the 2 if zoomed in") — inside the radio's window, so the radio never moves.
+    this.viewToVfo(true);
     this.cb.onWatch?.();
+  }
+  /** ★★★ The view to the SELECTED VFO (the app's VibeServerWsClient._followB, the same rule). `force` = locked, a
+   *  recentre or a VFO switch; otherwise only when the VFO would leave the view. The centre is held inside the radio's
+   *  window (watch lo–hi), so the whole view stays inside the capture: VFO A stays where it is and the window slides as
+   *  far as the capture lets B go (Stuart: "the window moves as far as the spectrum will allow B to go before A needs
+   *  to be retuned"). Zoomed out to the whole window, it has nowhere to go and nothing is sent. */
+  private viewToVfo(force: boolean) {
+    if (!this.frequency || this.icomSpans) return;
+    const bb = this.view.binBandwidth || this.cfg.binBandwidth, span = this.spanHz(), c = this.viewCenterHz();
+    if (!bb || !(span > 0) || !(c > 0)) return;
+    if (!force && Math.abs(this.frequency - c) <= span / 2) return;
+    const w = this.watchState; let centre = this.frequency;
+    if (w && w.hi > w.lo) centre = w.hi - w.lo <= span ? (w.lo + w.hi) / 2 : Math.max(w.lo + span / 2, Math.min(w.hi - span / 2, centre));
+    if (Math.abs(centre - c) >= bb) this.zoom(Math.round(centre), bb);
   }
   swapVfo() { this.selectVfo(this.abSel === 'A' ? 'B' : 'A'); }
   /** ★★★ TUNE VFO `v` WHICHEVER VFO THE CONTROLS TUNE (decode on either VFO, 2026-10-27). The decoder box tunes the VFO
@@ -1997,10 +2013,11 @@ export class SpectrumClient {
       if (frequency) this.frequency = Math.round(frequency);
       if (mode && mode !== this.mode) { this.setMode(mode); }
       else this.sendWatchAim(false);
-      if ((this.followVfo || opts?.recenter) && !this.icomSpans) {
-        const bb = this.view.binBandwidth || this.cfg.binBandwidth;
-        if (bb) this.zoom(this.frequency, bb);
-      }
+      /* ★★★ THE VIEW FOLLOWS THE SELECTED VFO (Stuart, 2026-11-02 — the app's VibeServerWsClient._followB, the same
+       *  rule): locked, it follows B; unlocked, it stays put until B would leave it. The server keeps VFO A's channel
+       *  in view itself, not a watch channel, so B's edge is ours. The view's centre is held inside the radio's window
+       *  (watch lo–hi), so following B asks nothing of the radio and VFO A is never moved by it. */
+      this.viewToVfo(this.followVfo || !!opts?.recenter);
       return;
     }
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked

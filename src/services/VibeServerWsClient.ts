@@ -548,10 +548,18 @@ export abstract class VibeServerWsClient {
 
   /** Tune to a new frequency (and optionally mode). Sends to native audio WS + spectrum WS. */
   tune(frequency: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
-    /* ★★ V12 VFO A/B: with B selected, the tune controls drive VFO B — the server's watch channel. Never the radio:
-     *  no recentre, no pan, no zoom (on a one-listener radio a pan can move the capture under VFO A), and B outside
-     *  the window comes back REFUSED with the window in the note (handleWatch). See vfoAB.ts. */
-    if (this.ab.bTuned) { this.ab.tuneB(frequency, mode); return; }
+    /* ★★ V12 VFO A/B: with B selected, the tune controls drive VFO B — the server's watch channel, never the radio's
+     *  dial; B outside the window comes back REFUSED with the window in the note (handleWatch). See vfoAB.ts.
+     *  ★★★ THE VIEW FOLLOWS THE SELECTED VFO (Stuart, 2026-11-02: "when B is being controlled the Spectrum window is
+     *    anchored to A and when you attempt to tune B will disappear off screen"). The same rule as A's below —
+     *    locked: the view follows B; unlocked: it stays put until B would leave it — but the view is held INSIDE the
+     *    radio's current window (_followB), so following B can never move the capture under VFO A. */
+    if (this.ab.bTuned) {
+      const prevB = this.status.frequency;
+      this.ab.tuneB(frequency, mode);
+      this._followB(frequency, prevB, mode, opts);
+      return;
+    }
     if (this.askBlocked()) return;       // ★★ ask before tuning — see tuneLocked
     if (this.dabHeld || this.adsbHeld || this.ismHeld || this.ndbHeld || this.aisHeld) return;   // ★ see dabHeld — the multiplex IS the tuning
     const prevFreq = this.status.frequency;   // ★ read BEFORE it is overwritten — see sameSpot below
@@ -615,6 +623,35 @@ export abstract class VibeServerWsClient {
       if (bb) this.zoom(frequency, bb);
       else    this.pan(frequency); // no geometry known yet — let server keep its bin_bw
     }
+  }
+
+  /** ★★★ VFO B's view follow (see tune()): A's rule — locked / recenter / beyond the view, never for a tune to the same
+   *  spot — with the view's centre clamped so the whole view stays inside the radio's present window (the watch
+   *  state's lo–hi, else the capture), which B itself is held inside. A view inside the capture asks nothing of the
+   *  radio, so VFO A is never moved or lost by it. Also the switch between the VFOs (abSelect, recenter): either VFO. */
+  private _followB(frequency: number | undefined, prev: number, mode?: SDRMode, opts?: { recenter?: boolean }) {
+    if (!frequency) return;
+    const sameSpot = Math.abs(frequency - prev) < 1 && !mode;
+    if (sameSpot && !opts?.recenter) return;
+    const bb = this.view.binBandwidth || this.status.binBandwidth;
+    const viewSpan = bb ? bb * (this.status.binCount || 0) : 0;
+    const refCentre = this.view.centerHz || this.status.centerHz;
+    if (!bb || !(viewSpan > 0) || !(refCentre > 0)) return;
+    const beyondView = Math.abs(frequency - refCentre) > viewSpan * 0.5;   // ★ the edge, as A
+    if (!(this.followVfo || opts?.recenter || beyondView)) return;
+    const st = this.ab.state;
+    let lo = st && st.hi > st.lo ? st.lo : 0, hi = st && st.hi > st.lo ? st.hi : 0;
+    if (!(hi > lo)) {
+      const cap = Number(this.status.bwHz) || 0, c = Number(this.status.centerHz) || 0;
+      if (cap > 0 && c > 0) { lo = c - cap / 2; hi = c + cap / 2; }
+    }
+    let centre = frequency;
+    if (hi > lo) {
+      const half = viewSpan / 2;
+      centre = hi - lo <= viewSpan ? (lo + hi) / 2 : Math.max(lo + half, Math.min(hi - half, frequency));
+    }
+    if (Math.abs(centre - refCentre) < Math.max(1, bb)) return;
+    this.zoom(Math.round(centre), bb);
   }
 
   /** Locked (true) = view follows the VFO. See SDRBackend.setFollowMode. */
@@ -934,6 +971,10 @@ export abstract class VibeServerWsClient {
     // ★ The meter follows the selected VFO: B's level from `watch` (twice a second), A's from `sig`.
     const b = vfoB(this.ab.state);
     if (v === 'B' && b) { this.sigChanDb = b.lvl; this.sigAt = Date.now(); }
+    // ★★★ …and, zoomed in, the view moves to the VFO just selected (Stuart, 2026-11-02: "switching between the VFO's
+    //   moves the window back and forth between the 2 if zoomed in") — held inside the radio's window, so neither
+    //   VFO's switch ever moves the radio.
+    this._followB(this.status.frequency, NaN, undefined, { recenter: true });
     this.callbacks.onStatus({ ...this.status });
     this._abNotify();
   }
