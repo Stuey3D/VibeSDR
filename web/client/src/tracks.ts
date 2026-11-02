@@ -653,6 +653,9 @@ export class TrackView {
   }
   private attach(map: any, L: any) {
     const w = window as any;
+    // ★ A handle for drivers (scripts/test-web-navtex-map.mjs — the close-up coast check), like window.__vibeWf: the map of
+    //   the track view last opened. Read-only use; nothing in the page reads it.
+    w.__vibeTrkMap = map;
     this.layer = w.VibeTrackLayer.create(map, L, {
       receiver: this.rx, icon: this.o.icon, label: this.o.label, card: this.o.card, trail: this.o.trail,
       labelZoom: this.o.labelZoom, focusZoom: this.o.focusZoom, heard: this.o.heard, labelRank: this.o.labelRank, arc: this.o.arc,

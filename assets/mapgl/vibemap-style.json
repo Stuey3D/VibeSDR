@@ -308,7 +308,11 @@
    "minzoom": 6,
    "paint": {
     "fill-color": "#3c5a3f"
-   }
+   },
+   "filter": [
+    "has",
+    "coast"
+   ]
   },
   {
    "id": "islands",

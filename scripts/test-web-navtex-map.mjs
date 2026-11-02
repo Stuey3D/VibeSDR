@@ -53,6 +53,9 @@ await sleep(400);
 const MAPGL = path.join(dir, 'mapgl'); fs.mkdirSync(MAPGL);
 for (const n of fs.readdirSync(path.join(root, 'directory/public/mapgl'))) fs.symlinkSync(path.join(root, 'directory/public/mapgl', n), path.join(MAPGL, n));
 fs.copyFileSync(path.join(root, 'web/mapkit/vibemap-style.json'), path.join(MAPGL, 'vibemap-style.json'));
+const DETAIL = process.env.VIBE_DETAIL_PACK && fs.existsSync(process.env.VIBE_DETAIL_PACK) ? process.env.VIBE_DETAIL_PACK : '';
+// ★ The detail pack lives in the DATA dir (vibe_mapgl.h: <data>/mapgl/vibemap-detail.pmtiles) — linked in when given.
+if (DETAIL) { fs.mkdirSync(path.join(dir, 'data', 'mapgl'), { recursive: true }); fs.symlinkSync(DETAIL, path.join(dir, 'data', 'mapgl', 'vibemap-detail.pmtiles')); }
 const env = { ...process.env, VIBESERVER_MAPGL_DIR: MAPGL, VIBESERVER_MAPDATA_DIR: path.join(root, 'assets/mapdata'), VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'), VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
 const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', '2400000', '--freq', '518000', '--mode', 'usb', '--users', '1'],
                   { env, stdio: ['ignore', fs.openSync(path.join(dir, 'server.log'), 'w'), 'ignore'] });
@@ -202,6 +205,24 @@ try {
     ok(d.o === 0, `declutter (${look}): ${d.met} weather labels shown, ${d.yielded} gave way, ${d.other} other markers, ${d.names} names — no weather label over a marker or a name (${d.o})`);
     console.log('   screenshot', await shot(`navtex-map-declutter-${look}.png`));
   }
+  /* ★★ THE CLOSE-UP COAST (Stuart, 2026-11-02: "some of the alert markers are on land" — Belgian buoys 0.5 km off the beach
+   *  drawn ashore). With the detail pack installed (VIBE_DETAIL_PACK=<path to vibemap-detail.pmtiles>), the map zoomed to
+   *  the KYCN buoy (BA15: 51-09.88N 002-43.00E) must paint SEA there: the detail land fill takes only the OSM coast's land,
+   *  never the coarser country shapes in the same layer. Not run without the pack (it is a 169 MB download). */
+  if (DETAIL) {
+    await ev(`(() => { const x = document.querySelector('.vtl-card:not([hidden]) .vtl-x'); x && x.click(); })()`); await sleep(300);
+    await ev(`(() => { const m = window.__vibeTrkMap, g = m && m._gl; if (g) g.jumpTo({ center: [2.7167, 51.1647], zoom: 12 }); return !!g; })()`);
+    await sleep(3500);
+    const px = JSON.parse(await ev(`(() => { const g = window.__vibeTrkMap && window.__vibeTrkMap._gl; if (!g) return 'null';
+      const p = g.project([2.7167, 51.1647]), f = g.queryRenderedFeatures([p.x, p.y]).filter(f => f.layer && /^land-/.test(f.layer.id)).map(f => f.layer.id);
+      const q = g.project([2.80, 51.10]), f2 = g.queryRenderedFeatures([q.x, q.y]).filter(f => f.layer && /^land-/.test(f.layer.id)).map(f => f.layer.id);
+      const all = g.queryRenderedFeatures([p.x, p.y]).map(f => (f.layer && f.layer.id) + '/' + (f.sourceLayer || '') + '/' + JSON.stringify(f.properties).slice(0, 60));
+      return JSON.stringify({ buoy: f, inland: f2, z: g.getZoom(), all }); })()`));
+    console.log('   at the buoy:', JSON.stringify(px && px.all));
+    ok(!!px && px.buoy.length === 0, `close-up (z${px && px.z.toFixed(1)}): the KYCN buoy, 0.5 km off the Belgian beach, is drawn at SEA (land layers there: ${px && JSON.stringify(px.buoy)})`);
+    ok(!!px && px.inland.length > 0, `…and a point inland of Koksijde is drawn as land (${px && JSON.stringify(px.inland)})`);
+    console.log('   screenshot', await shot('navtex-map-belgian-coast.png'));
+  } else console.log('   not run  the close-up coast check — set VIBE_DETAIL_PACK to a vibemap-detail.pmtiles');
   // ★ the v6 icons on the map: the platforms (most of them unlit) and the cables and pipelines — each opened from its row
   for (const [name, re] of [['platforms', /^platform$/], ['cables', /^(cable|cable_telecom|pipeline|pipeline_gas)$/], ['power-cables', /^cable_power$/]]) {
     const w = drawn.filter((x) => re.test(x.cls)).sort((a, b) => (b.items?.length || 0) - (a.items?.length || 0) || Number(b.unlit) - Number(a.unlit))[0];
