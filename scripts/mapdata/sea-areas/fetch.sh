@@ -25,3 +25,8 @@ curl -fsSL -o "$D/metie/sea-areas.geojson" https://opendata2.met.ie/opendata2/se
 mkdir -p "$D/aemet"
 curl -fsSL -o "$D/aemet/zonas.zip" https://www.aemet.es/documentos/es/eltiempo/prediccion/avisos/plan_meteoalerta/AEMET-meteoalerta-delimitacion-zonas.zip
 unzip -oq "$D/aemet/zonas.zip" -d "$D/aemet"
+# JMA's regional marine forecast areas (地方海上予報区). The zip stores Shift-JIS file names with backslashes: extract
+# with Python's zipfile and keep the three files as jma/marine.{shp,dbf,shx}.
+mkdir -p "$D/jma"
+curl -fsSL -o "$D/jma/marine.zip" https://www.data.jma.go.jp/developer/gis/20190125_AreaMarineAJ_GIS.zip
+python3 -I -c 'import sys,zipfile,os; z=zipfile.ZipFile(sys.argv[1]); [open(os.path.join(sys.argv[2],"marine"+os.path.splitext(n)[1].lower()),"wb").write(z.read(n)) for n in z.namelist() if os.path.splitext(n)[1].lower() in (".shp",".dbf",".shx")]' "$D/jma/marine.zip" "$D/jma"

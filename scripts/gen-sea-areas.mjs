@@ -62,6 +62,13 @@ export const SOURCES = {
   de: { name: 'DWD', what: 'German coastal warning areas', licence: 'GeoNutzV / Datenlizenz Deutschland – Namensnennung 2.0', attribution: 'Deutscher Wetterdienst, © GeoBasis-DE / BKG 2021 (Daten modifiziert)' },
   no: { name: 'MET Norway', what: 'Norwegian sea forecast areas (Skagerrak, North Sea, Norwegian Sea and Barents Sea banks)', licence: 'NLOD 2.0 / CC BY 4.0', attribution: 'Based on data from MET Norway' },
   ie: { name: 'Met Éireann', what: 'Irish coastal sea areas, headland to headland (descriptive polygons)', licence: 'CC BY 4.0', attribution: 'Met Éireann sea-area polygons (CC BY 4.0)' },
+  nz: { name: 'MetService NZ / Fiji Met Service', what: 'METAREA XIV high-seas areas (limits as broadcast)', licence: 'facts (the limits in the broadcast bulletin)', attribution: 'High-seas area limits as broadcast by MetService (NZ) and Fiji Met Service' },
+  za: { name: 'SAWS', what: 'METAREA VII high-seas areas (limits as broadcast)', licence: 'facts (the limits in the broadcast bulletin)', attribution: 'High-seas area limits as broadcast by the South African Weather Service' },
+  re: { name: 'Météo-France La Réunion', what: 'METAREA VII (east) high-seas areas (limits as broadcast)', licence: 'facts (the limits in the broadcast bulletin)', attribution: 'High-seas area limits as broadcast by Météo-France La Réunion' },
+  ar: { name: 'SMN Argentina', what: 'METAREA VI high-seas areas (limits as broadcast)', licence: 'facts (the limits in the broadcast bulletin)', attribution: 'High-seas area limits as broadcast by the Servicio Meteorológico Nacional (Argentina)' },
+  cl: { name: 'DIRECTEMAR Chile', what: 'METAREA XV high-seas areas (limits as broadcast)', licence: 'facts (the limits in the broadcast bulletin)', attribution: 'High-seas area limits as broadcast by the Armada de Chile (DIRECTEMAR)' },
+  au: { name: 'Bureau of Meteorology', what: 'METAREA X South Eastern high-seas area (limits as broadcast; coast from Natural Earth)', licence: 'facts (the limits in IDY10210); Natural Earth public domain', attribution: 'High-seas area limits as broadcast by the Bureau of Meteorology (IDY10210)' },
+  jp: { name: 'JMA', what: 'Japanese regional marine forecast areas (地方海上予報区)', licence: 'JMA site terms (Public Data License 1.0): attribution, processed', attribution: '出典：気象庁ホームページ（地方海上予報区 GIS データを加工して作成）' },
   es: { name: 'AEMET', what: 'Spanish coastal zones to 20 NM (Meteoalerta v6)', licence: 'AEMET nota legal (reuse, citing AEMET); IGN BDLJE CC BY 4.0', attribution: '© AEMET; derived from BDLJE CC-BY ign.es © Instituto Geográfico Nacional de España' },
 };
 
@@ -213,6 +220,78 @@ function buildUk(land) {
     if (!names.has(a.id)) throw new Error('uk-shipping.json: ' + a.id + ' is not in the met table');
     out.push({ id: a.id, src: 'uk', kind: 's', name: names.get(a.id), rings: [ring] });
   }
+  return out;
+}
+/** ★ V12 2026-11-02 (pass 2) HIGH-SEAS SUB-AREAS from the limits the issuing services broadcast
+ *  (scripts/mapdata/sea-areas/high-seas-subareas.json — the bulletin's own words kept beside each). A box or a ring of
+ *  corners; a 'coast' area's consecutive corners on the same land follow the coast between them (the UK method), the
+ *  way round that gives the SMALLER area (the sea beside the coast, never the continent). A box must not lie over a
+ *  continent: the build fails if one does (an island inside a box is fine — Kerguelen, South Georgia, the Falklands). */
+function buildHighSeas(land) {
+  const def = JSON.parse(fs.readFileSync(path.join(DIR, 'high-seas-subareas.json'), 'utf8'));
+  const big = land.filter((L) => Math.abs(signedArea(L.r)) > 60);   // continents (and Greenland, Borneo …), sq. degrees
+  const snap = (p) => {
+    let best = null;
+    for (const L of big) {
+      const [a, b, c, d] = L.bb;
+      if (p[0] < a - 2 || p[0] > c + 2 || p[1] < b - 2 || p[1] > d + 2) continue;
+      let bi = -1, bd = Infinity;
+      for (let i = 0; i < L.r.length; i++) { const q = L.r[i]; if (Math.abs(q[1] - p[1]) > 1.5 || Math.abs(q[0] - p[0]) > 1.5) continue; const dk = km(p, q); if (dk < bd) { bd = dk; bi = i; } }
+      if (bi >= 0 && bd <= 120 && (!best || bd < best.d)) best = { L, i: bi, d: bd };
+    }
+    return best;
+  };
+  const out = [];
+  for (const a of def.areas) {
+    let ring;
+    if (a.box) { const [s, n, w, e] = a.box; ring = [[w, n], [e, n], [e, s], [w, s]]; }
+    else ring = a.ring.map((p) => p.slice());
+    if (a.coast) {
+      const snaps = ring.map(snap);
+      const n = ring.length;
+      let built = [];
+      for (let k = 0; k < n; k++) {
+        const sp = snaps[k], sq = snaps[(k + 1) % n];
+        built.push(sp ? sp.L.r[sp.i] : ring[k]);
+        if (sp && sq && sp.L === sq.L) {
+          const N = sp.L.r.length, i = sp.i, j = sq.i;
+          const fwd = [], back = [];
+          for (let s = 1; s < (j - i + N) % N; s++) fwd.push(sp.L.r[(i + s) % N]);
+          for (let s = 1; s < (i - j + N) % N; s++) back.push(sp.L.r[(i - s + N) % N]);
+          const rest = (path) => [...built, ...path, ...ring.slice(k + 1)];
+          built.push(...(Math.abs(signedArea(rest(fwd))) <= Math.abs(signedArea(rest(back))) ? fwd : back));
+        }
+      }
+      ring = built;
+    } else {
+      // ★ never a box over a continent: a continent's coast point inside the box fails the build
+      for (const L of big) {
+        const [x0, y0, x1, y1] = L.bb, [bx0, by0, bx1, by1] = bbox(ring);
+        if (x1 < bx0 || x0 > bx1 || y1 < by0 || y0 > by1) continue;
+        if (L.r.some((q) => pointInRing(q, ring))) throw new Error(`high-seas-subareas.json: ${a.id} lies over a continent — give its coast`);
+      }
+    }
+    out.push({ id: a.id, src: a.src, kind: 'o', name: a.name, rings: [ring] });
+  }
+  return out;
+}
+/** ★ V12 2026-11-02 (pass 2) JMA's regional marine forecast areas (地方海上予報区, data.jma.go.jp/developer/gis —
+ *  20190125_AreaMarineAJ_GIS.zip), used under the JMA site terms (the Public Data License 1.0: attribution, and a note
+ *  that the data were processed). The file holds two levels: a parent (code …00) is the union of its children — only
+ *  the children are drawn, so no area is drawn twice (a parent with no children, 対馬海峡, is its own). The names are
+ *  JMA's own, in Japanese; they are not heading forms (no NAVTEX forecast we decode names them), so the met parser's
+ *  table does not carry them. */
+function buildJp(src) {
+  const all = readShapefile(path.join(src, 'jma/marine'));
+  const codes = all.map((x) => String(x.props.code || ''));
+  const out = [];
+  all.forEach((x, i) => {
+    const c = codes[i];
+    if (!/^\d{4}$/.test(c)) return;
+    const parent = c.endsWith('00') && codes.some((d) => d !== c && d.slice(0, 2) === c.slice(0, 2));
+    if (parent) return;
+    out.push({ id: 'jp-' + c, src: 'jp', kind: 'o', name: String(x.props.name || c), rings: outerRings(x.rings) });
+  });
   return out;
 }
 const TITLE = (s) => s.replace(/\s+/g, ' ').trim().replace(/[.,;:]+$/, '');
@@ -380,9 +459,17 @@ const MIN_AREA = { s: 0, o: 0.004, c: 0.002, i: 0, n: 0 };   // ★ specks (squa
 function build(src) {
   const land = loadLand(src);
   const uk = buildUk(land);
-  const raw = [...uk, ...buildUs(src), ...buildCa(src), ...buildDe(src), ...buildNo(src, new Set(uk.map((a) => ASCII(a.name)))), ...buildIe(src), ...buildEs(src)];
+  const raw = [...uk, ...buildUs(src), ...buildCa(src), ...buildDe(src), ...buildNo(src, new Set(uk.map((a) => ASCII(a.name)))), ...buildIe(src), ...buildEs(src), ...buildHighSeas(land), ...buildJp(src)];
   const areas = [];
   for (const a of raw) {
+    // ★ V12 2026-11-02 (pass 2) AN AREA ACROSS 180°: one side's longitudes are moved by 360° so the ring is one piece
+    //   and its box is the area's own (two Aleutian zones had a box of −180…180 and were "near" every receiver at their
+    //   latitude — London's included). The side with more points keeps its numbers.
+    const all = a.rings.flat();
+    if (all.some((p) => p[0] > 90) && all.some((p) => p[0] < -90) && !all.some((p) => Math.abs(p[0]) < 90)) {
+      const east = all.filter((p) => p[0] > 0).length >= all.length / 2;
+      a.rings = a.rings.map((r) => r.map(([x, y]) => [east ? (x < 0 ? x + 360 : x) : (x > 0 ? x - 360 : x), y]));
+    }
     let rings = a.rings.map((r) => simplifyRing(r, TOL[a.kind])).filter(Boolean);
     const big = rings.filter((r) => Math.abs(signedArea(r)) >= MIN_AREA[a.kind]);
     if (big.length) rings = big;

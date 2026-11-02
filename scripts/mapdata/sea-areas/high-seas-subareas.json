@@ -1,0 +1,38 @@
+{
+  "about": "GMDSS high-seas forecast SUB-AREAS whose limits the issuing service states as latitudes and longitudes in its own broadcast bulletin (facts, typed in 2026-11-02 from the bulletin sets WMO WWMIWS serves at wwmiws.wmo.int/index.php/metareas/bulletinset_download/<METAREA>/txt; BoM's from ftp.bom.gov.au/anon/gen/fwo/IDY10210.txt). Each 'def' is the bulletin's own words. 'box' = [south, north, west, east] in degrees (E positive; a box across 180° gives east > 180). 'ring' = corner points [lon, lat] in order. 'coast': consecutive corners on the same land follow Natural Earth's coastline between them (the UK method). Left out (and why) in gen-sea-areas.mjs: an area bounded by 'the ice edge', by an unnamed coast ('WEST COAST', 'EAST COAST'), or a box the bulletin gives over a continent without saying where the coast cuts it.",
+  "sources": {
+    "nz": "MetService (New Zealand) high-seas forecasts for METAREA XIV; the ISLANDS area by Fiji Meteorological Service",
+    "za": "South African Weather Service high-seas forecasts for METAREA VII",
+    "re": "Météo-France La Réunion high-seas forecasts for METAREA VII (east)",
+    "ar": "Servicio Meteorológico Nacional (Argentina) high-seas forecasts for METAREA VI",
+    "cl": "Servicio Meteorológico de la Armada de Chile (DIRECTEMAR) high-seas forecasts for METAREA XV",
+    "au": "Bureau of Meteorology high-seas forecast IDY10210 (METAREA X, South Eastern Area)"
+  },
+  "areas": [
+    { "id": "nz-islands", "src": "nz", "name": "Islands", "def": "EQUATOR TO 25S BETWEEN 160E AND 120W.", "box": [-25, 0, 160, 240] },
+    { "id": "nz-subtropic", "src": "nz", "name": "Subtropic", "def": "Area from 25S to 40S, western boundary from 40S 163E to 29S 170E then to 25S 170E, eastern boundary 170W.", "ring": [[170, -25], [190, -25], [190, -40], [163, -40], [170, -29]] },
+    { "id": "nz-forties", "src": "nz", "name": "Forties", "def": "Area from 40S to 55S, western boundary from 40S 163E to 45S 160E then to 55S 160E, eastern boundary 170W.", "ring": [[163, -40], [190, -40], [190, -55], [160, -55], [160, -45]] },
+    { "id": "nz-pacific", "src": "nz", "name": "Pacific", "def": "Area from 25S to 55S and 170W to 120W.", "box": [-55, -25, 190, 240] },
+    { "id": "za-ascension", "src": "za", "name": "Ascension", "def": "ASCENSION (06S/15S, 00E/20W)", "box": [-15, -6, -20, 0] },
+    { "id": "za-sthelena", "src": "za", "name": "St Helena", "def": "ST HELENA (15S/30S, 00E/20W)", "box": [-30, -15, -20, 0] },
+    { "id": "za-tristan", "src": "za", "name": "Tristan", "def": "TRISTAN (30S/40S, 00E/20W)", "box": [-40, -30, -20, 0] },
+    { "id": "za-marionfortieseast", "src": "za", "name": "Marion Forties East", "def": "MARION FORTIES EAST (40S/50S, 35E/50E)", "box": [-50, -40, 35, 50] },
+    { "id": "re-wam", "src": "re", "name": "WAM", "def": "WAM (30S/40S, 50E/65E)", "box": [-40, -30, 50, 65] },
+    { "id": "re-ams", "src": "re", "name": "AMS", "def": "AMS (30S/40S, 65E/80E)", "box": [-40, -30, 65, 80] },
+    { "id": "re-cro", "src": "re", "name": "CRO", "def": "CRO (40S/50S, 50E/65E)", "box": [-50, -40, 50, 65] },
+    { "id": "re-ker", "src": "re", "name": "KER", "def": "KER (40S/50S, 65E/80E)", "box": [-50, -40, 65, 80] },
+    { "id": "ar-north", "src": "ar", "name": "North Area", "def": "NORTH AREA (35S- 40S AND 20W- 55W)", "box": [-40, -35, -55, -20] },
+    { "id": "ar-centraleast", "src": "ar", "name": "Central East Area", "def": "CENTRAL EAST AREA (40S- 50S AND 20W- 40W)", "box": [-50, -40, -40, -20] },
+    { "id": "ar-centralwest", "src": "ar", "name": "Central West Area", "def": "CENTRAL WEST AREA (40S- 50S AND 40W- 60W)", "box": [-50, -40, -60, -40] },
+    { "id": "ar-southeast", "src": "ar", "name": "South East Area", "def": "SOUTH EAST AREA (50S- 60S AND 20W- 40W)", "box": [-60, -50, -40, -20] },
+    { "id": "ar-southwest", "src": "ar", "name": "South West Area", "def": "SOUTH WEST AREA (50S- 60S AND 40W- 60W)", "box": [-60, -50, -60, -40] },
+    { "id": "ar-drake", "src": "ar", "name": "Drake Area", "def": "DRAKE AREA (55S- 60S AND 60W- 67W)", "box": [-60, -55, -67, -60] },
+    { "id": "cl-southwest", "src": "cl", "name": "Southwest Area", "def": "SOUTHWEST AREA (LAT 45 TO 60 SOUTH AND LONG 95 TO 120 WEST)", "box": [-60, -45, -120, -95] },
+    { "id": "cl-southeast", "src": "cl", "name": "Southeast Area", "def": "SOUTHEAST AREA (LAT 45 TO 60 SOUTH AND LONG 81 TO 95 WEST)", "box": [-60, -45, -95, -81] },
+    { "id": "cl-northwest", "src": "cl", "name": "Northwest Area", "def": "NORTHWEST AREA (LAT 18 TO 30 SOUTH AND LONG 95 TO 120 WEST)", "box": [-30, -18, -120, -95] },
+    { "id": "cl-northeast", "src": "cl", "name": "Northeast Area", "def": "NORTHEAST AREA (LAT 18 TO 30 SOUTH AND LONG 76 TO 95 WEST)", "box": [-30, -18, -95, -76] },
+    { "id": "cl-centralwest", "src": "cl", "name": "Central West Area", "def": "CENTRAL WEST AREA (LAT 30 TO 45 SOUTH AND LONG 95 TO 120 WEST)", "box": [-45, -30, -120, -95] },
+    { "id": "cl-centraleast", "src": "cl", "name": "Central East Area", "def": "CENTRAL EAST AREA (LAT 30 TO 45 SOUTH AND LONG 78 TO 95 WEST)", "box": [-45, -30, -95, -78] },
+    { "id": "au-southeastern", "src": "au", "name": "South Eastern Area", "def": "SOUTH EASTERN AREA: COAST AT 25S TO 25S170E TO 29S170E TO 45S160E TO 50S160E TO 50S129E TO COAST AT 129E", "coast": true, "ring": [[153.15, -25.0], [170, -25], [170, -29], [160, -45], [160, -50], [129, -50], [129, -31.7]] }
+  ]
+}

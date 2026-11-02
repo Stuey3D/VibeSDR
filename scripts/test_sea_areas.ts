@@ -71,7 +71,7 @@ console.log('── pass 2: Norway, Ireland, Spain ──');
   // ★ no overlaps that break the tint: within one source an area's label point is in no other area of that source (a
   //   tinted area never colours its neighbour's name)
   const clash: string[] = [];
-  for (const src of ['uk', 'no', 'ie', 'es', 'de']) {
+  for (const src of ['uk', 'no', 'ie', 'es', 'de', 'jp', 'nz', 'za', 're', 'ar', 'cl', 'au']) {
     const set = of(src);
     for (const a of set) for (const b of set) if (a !== b && b.rings.some((r) => inRing([a.lat, a.lon], r))) clash.push(`${a.id} in ${b.id}`);
   }
@@ -89,13 +89,27 @@ console.log('── pass 2: Norway, Ireland, Spain ──');
   ok(it && it._mz === 8 && it._sh.minZoom === 6, 'an Irish stretch: outline from zoom 6, name from zoom 8');
   ok(/MET Norway/.test(seaAttribution(seaAreasFor({ lat: 60.39, lon: 5.32 }, null))) && /Met Éireann/.test(seaAttribution(seaAreasFor({ lat: 51.9, lon: -8.47 }, null))) && /AEMET/.test(seaAttribution(cadiz)), 'attribution: MET Norway, Met Éireann, AEMET where their areas are drawn');
 }
+console.log('── pass 2: JMA and the high-seas sub-areas as broadcast ──');
+{
+  const all = seaAreas();
+  const jp = all.filter((a) => a.src === 'jp');
+  ok(jp.length >= 30 && !all.some((a) => a.id === 'jp-1000' || a.id === 'jp-2000') && !!seaAreaById('jp-5000'), `JMA: ${jp.length} areas, children only (no parent drawn twice; 対馬海峡 is its own)`);
+  const ae = seaAreaById('au-southeastern')!;
+  ok(ae.bbox[2] <= -24.9 && ae.bbox[1] >= 128.9 && ae.rings[0].length > 100, `BoM South Eastern Area: the coast followed the south way round (bbox ${ae.bbox.join(', ')})`);
+  const isl = seaAreaById('nz-islands')!;
+  ok(isl.bbox[1] === 160 && isl.bbox[3] === 240, 'MetService/Fiji ISLANDS crosses 180° in one piece (160E to 120W = 240)');
+  ok(seaAreasFor({ lat: -36.85, lon: 174.76 }, null).some((a) => a.src === 'nz'), 'an Auckland receiver: METAREA XIV areas within reach');
+  ok(seaAreasFor({ lat: -33.92, lon: 18.42 }, null).some((a) => a.src === 'za'), 'a Cape Town receiver: SAWS areas within reach');
+  ok(['nz', 'za', 're', 'ar', 'cl', 'au', 'jp'].every((s) => /\S/.test(seaAttribution(all.filter((a) => a.src === s)))), 'every new source has its attribution line');
+}
 console.log('── presence: absent where no area is near ──');
 {
-  const london = { lat: 51.5, lon: -0.1 }, tokyo = { lat: 35.6, lon: 139.7 }, halifax = { lat: 44.65, lon: -63.57 };
-  const nUk = seaAreasFor(london, null).length, nJp = seaAreasFor(tokyo, null).length;
+  const london = { lat: 51.5, lon: -0.1 }, tokyo = { lat: 35.6, lon: 139.7 }, astana = { lat: 51.17, lon: 71.45 }, halifax = { lat: 44.65, lon: -63.57 };
+  const nUk = seaAreasFor(london, null).length, nJp = seaAreasFor(tokyo, null).filter((a) => a.src === 'jp').length, nKz = seaAreasFor(astana, null).length;
   ok(nUk >= 31 && nUk < 120, `a London receiver: the UK and nearby areas (${nUk})`);
-  ok(nJp === 0, 'a Tokyo receiver: none — no SEA AREAS toggle');
-  ok(seaAreasFor(tokyo, { areas: [{ id: 'dogger', lat: 0, lon: 0, stale: false, fc: [] }] }).length === 1, 'a forecast names an area far away: that one is drawn');
+  ok(nKz === 0, `an Astana receiver (inland Asia): none — no SEA AREAS toggle (${nKz})`);
+  ok(nJp >= 20, `a Tokyo receiver: JMA's marine forecast areas since pass 2 (${nJp})`);
+  ok(seaAreasFor(astana, { areas: [{ id: 'dogger', lat: 0, lon: 0, stale: false, fc: [] }] }).length === 1, 'a forecast names an area far away: that one is drawn');
   const nHx = seaAreasFor(halifax, null);
   ok(nHx.some((a) => a.src === 'ca') && nHx.some((a) => a.src === 'us'), `Halifax: Canadian and US areas (${nHx.length})`);
   const base = { ships: 0, dsc: 0, stations: 1, warnings: 0, weather: 1, aisMode: false };

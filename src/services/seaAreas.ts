@@ -99,7 +99,7 @@ export function seaNameIcon(a: SeaArea): { html: string; w: number; h: number } 
     + `text-align:center;white-space:nowrap;text-shadow:0 0 3px #04101c,0 0 2px #04101c;opacity:.9">${esc(t)}</div>` };
 }
 export function seaCard(a: SeaArea, sev: 0 | 1 | 2, hasFc: boolean, wrap: 'web' | 'app' = 'web'): string {
-  const rows = [`<div class="t"><b>${esc(a.name.toUpperCase())}</b></div>`, `<div class="r"><span class="k">Area</span><span class="v">${esc(SRC_WORDS[a.src] || 'sea area')}</span></div>`];
+  const rows = [`<div class="t"><b>${esc(a.name.toUpperCase())}</b></div>`, `<div class="r"><span class="k">Area</span><span class="v">${esc(SRC_WORDS[a.src] || SEA_AREA_SOURCES[a.src]?.what || 'sea area')}</span></div>`];
   if (a.src === 'us') rows.push(`<div class="r"><span class="k">Zone</span><span class="v">${esc(a.id.slice(3).toUpperCase())}</span></div>`);
   rows.push(`<div class="r"><span class="k">Forecast</span><span class="v">${esc(hasFc ? (sev === 2 ? 'GALE in force — the forecast is on the map' : sev === 1 ? 'near gale (7) — the forecast is on the map' : 'current — the forecast is on the map') : 'none heard for this area')}</span></div>`);
   const body = rows.join('');
