@@ -61,6 +61,9 @@ public:
     static std::string deviceName(int index);
     /** The USB serial (the B2xx EEPROM's), "" when it could not be read (held by someone else). */
     static std::string deviceSerial(int index);
+    /** ★ V12: the folder holding the images the package ships ("" if the install is broken) — what an owner's or a
+     *  system file is compared against. */
+    static std::string shippedImageDir();
 
     bool open(int index, double sampleRateHz, double centreHz, int gainTenthDb, std::string& err);
     void close();
@@ -147,6 +150,7 @@ public:
     static int  deviceCount() { return 0; }
     static std::string deviceName(int) { return ""; }
     static std::string deviceSerial(int) { return ""; }
+    static std::string shippedImageDir() { return ""; }
     bool open(int, double, double, int, std::string& err) { err = "this VibeServer build has no USRP support"; return false; }
     void close() {}
     bool isOpen() const { return false; }

@@ -315,6 +315,8 @@ std::string toJson(const Config& c) {
     S("antennaPort", c.antennaPort); B("antennaPortLocked", c.antennaPortLocked);
     S("antennaMap", c.antennaMap);
     B("rspHdr", c.rspHdr); B("rspAmNotch", c.rspAmNotch); B("rspExtRef", c.rspExtRef);
+    S("usrpClock", c.usrpClock); S("usrpTime", c.usrpTime);   // ★ V12 USRP owner options
+    B("usrpDcOffset", c.usrpDcOffset); B("usrpIqBalance", c.usrpIqBalance); N("usrpRxBw", c.usrpRxBw);
     S("icomPort", c.icomPort); N("icomBaud", c.icomBaud); N("icomCiv", c.icomCiv); S("icomAudio", c.icomAudio);
     N("icomScopeSpeed", c.icomScopeSpeed); B("icomOwnerLock", c.icomOwnerLock); B("icomRfOpen", c.icomRfOpen); B("icomTtyOk", c.icomTtyOk);
     B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget); B("rfAgc", c.rfAgc); B("rspDabDecim", c.rspDabDecim); N("rfAgcStart", c.rfAgcStart); N("rspVibeAgc", c.rspVibeAgc); N("agcSet", c.agcSet); B("agcSetLock", c.agcSetLock);
@@ -406,6 +408,9 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     getBool(s, "rspHdr", c.rspHdr);
     getBool(s, "rspAmNotch", c.rspAmNotch);
     getBool(s, "rspExtRef", c.rspExtRef);
+    getStr(s, "usrpClock", c.usrpClock); getStr(s, "usrpTime", c.usrpTime);   // ★ V12 USRP owner options
+    getBool(s, "usrpDcOffset", c.usrpDcOffset); getBool(s, "usrpIqBalance", c.usrpIqBalance);
+    if (getNum(s, "usrpRxBw", d)) c.usrpRxBw = std::max(0, (int)d);
     getStr(s, "icomPort", c.icomPort); getStr(s, "icomAudio", c.icomAudio);
     if (getNum(s, "icomBaud", d)) c.icomBaud = (int)d;
     if (getNum(s, "icomCiv", d)) c.icomCiv = (int)d;
@@ -538,6 +543,10 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
      *  only one of them updated. `rfNotch` two fields down is the template they should have
      *  followed from the start. */
     B("rspHdr", r.rspHdr); B("rspAmNotch", r.rspAmNotch); B("rspExtRef", r.rspExtRef);
+    // ★ V12 USRP owner options — read AND written (radioToJson below)
+    S("usrpClock", r.usrpClock); S("usrpTime", r.usrpTime);
+    B("usrpDcOffset", r.usrpDcOffset); B("usrpIqBalance", r.usrpIqBalance); I("usrpRxBw", r.usrpRxBw);
+    if (r.usrpRxBw < 0) r.usrpRxBw = 0;
     S("icomPort", r.icomPort); I("icomBaud", r.icomBaud); I("icomCiv", r.icomCiv); S("icomAudio", r.icomAudio);   // ★ Icom, read AND written
     I("icomScopeSpeed", r.icomScopeSpeed); B("icomOwnerLock", r.icomOwnerLock); B("icomRfOpen", r.icomRfOpen); B("icomTtyOk", r.icomTtyOk);
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
@@ -622,6 +631,8 @@ std::string radioToJson(const RadioConfig& r) {
      *  only one of them updated. `rfNotch` two fields down is the template they should have
      *  followed from the start. */
     B("rspHdr", r.rspHdr); B("rspAmNotch", r.rspAmNotch); B("rspExtRef", r.rspExtRef);
+    S("usrpClock", r.usrpClock); S("usrpTime", r.usrpTime);   // ★ V12 USRP owner options — see the reader
+    B("usrpDcOffset", r.usrpDcOffset); B("usrpIqBalance", r.usrpIqBalance); N("usrpRxBw", r.usrpRxBw);
     S("icomPort", r.icomPort); N("icomBaud", r.icomBaud); N("icomCiv", r.icomCiv); S("icomAudio", r.icomAudio);   // ★ Icom, read AND written
     N("icomScopeSpeed", r.icomScopeSpeed); B("icomOwnerLock", r.icomOwnerLock); B("icomRfOpen", r.icomRfOpen); B("icomTtyOk", r.icomTtyOk);
     // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
@@ -751,6 +762,8 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.antennaPort = one.antennaPort; r.antennaPortLocked = one.antennaPortLocked;
     r.antennaMap = one.antennaMap;
     r.rspHdr = one.rspHdr; r.rspAmNotch = one.rspAmNotch; r.rspExtRef = one.rspExtRef;
+    r.usrpClock = one.usrpClock; r.usrpTime = one.usrpTime; r.usrpDcOffset = one.usrpDcOffset;
+    r.usrpIqBalance = one.usrpIqBalance; r.usrpRxBw = one.usrpRxBw;
     r.icomPort = one.icomPort; r.icomBaud = one.icomBaud; r.icomCiv = one.icomCiv; r.icomAudio = one.icomAudio;
     r.icomScopeSpeed = one.icomScopeSpeed; r.icomOwnerLock = one.icomOwnerLock; r.icomRfOpen = one.icomRfOpen; r.icomTtyOk = one.icomTtyOk;
     r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc; r.rspDabDecim = one.rspDabDecim; r.rfAgcStart = one.rfAgcStart; r.rspVibeAgc = one.rspVibeAgc;
@@ -1240,6 +1253,8 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     if (!r.antennaMap.empty())  c.antennaMap  = r.antennaMap;
     if (r.antennaPortLocked)    c.antennaPortLocked = true;
     c.rspHdr = r.rspHdr; c.rspAmNotch = r.rspAmNotch; c.rspExtRef = r.rspExtRef;
+    c.usrpClock = r.usrpClock; c.usrpTime = r.usrpTime; c.usrpDcOffset = r.usrpDcOffset;   // ★ V12 USRP owner options
+    c.usrpIqBalance = r.usrpIqBalance; c.usrpRxBw = r.usrpRxBw;
     c.icomPort = r.icomPort; c.icomBaud = r.icomBaud; c.icomCiv = r.icomCiv; c.icomAudio = r.icomAudio;
     c.icomScopeSpeed = r.icomScopeSpeed; c.icomOwnerLock = r.icomOwnerLock; c.icomRfOpen = r.icomRfOpen; c.icomTtyOk = r.icomTtyOk;
     c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc; c.rspDabDecim = r.rspDabDecim; c.rfAgcStart = r.rfAgcStart; c.rspVibeAgc = r.rspVibeAgc;

@@ -88,16 +88,16 @@ std::vector<Found> walk(bool readSerials) {
 std::vector<std::string> imageDirs() {
     std::vector<std::string> d;
     if (const char* e = std::getenv("VIBE_UHD_IMAGES_DIR")) if (*e) d.push_back(e);   // tests / a developer
+    // ★ The owner's override folder (a clone's own FPGA image, uploaded from the Setup page) — usrpcaps::ownerImageDir:
+    //   /etc/vibeserver/uhd-images on Linux, Application Support on the Mac.
+    d.push_back(usrpcaps::ownerImageDir());
 #if defined(__APPLE__)
-    if (const char* h = std::getenv("HOME")) d.push_back(std::string(h) + "/Library/Application Support/VibeServer/uhd-images");
     char exe[PATH_MAX] = {0}; uint32_t sz = sizeof exe;
     if (_NSGetExecutablePath(exe, &sz) == 0) {
         std::string dir(exe); dir = dir.substr(0, dir.find_last_of('/'));
         d.push_back(dir + "/../Resources/uhd-images");   // VibeServer.app/Contents/MacOS → Contents/Resources
         d.push_back(dir + "/uhd-images");                // a bare build-tree binary
     }
-#else
-    d.push_back("/etc/vibeserver/uhd-images");          // the owner's override (a clone's own FPGA image)
 #endif
     d.push_back(VIBE_UHD_IMAGES_DIR);                    // what the package ships
     return d;
@@ -140,6 +140,17 @@ struct UsrpSource::Impl {
 };
 
 UsrpSource::UsrpSource() : impl_(new Impl) {}
+
+std::string UsrpSource::shippedImageDir() {
+    // ★ The images the PACKAGE ships — the search list without the test variable and the owner's override folder.
+    const std::string owner = usrpcaps::ownerImageDir();
+    const char* env = std::getenv("VIBE_UHD_IMAGES_DIR");
+    for (const auto& d : imageDirs()) {
+        if (d == owner || (env && d == env)) continue;
+        if (usrpcaps::fileExists(d + "/" + usrpcaps::firmwareFile())) return d;
+    }
+    return "";
+}
 UsrpSource::~UsrpSource() { close(); delete impl_; }
 
 int UsrpSource::deviceCount() { return (int)walk(false).size(); }
@@ -167,6 +178,7 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
     /* ★ NO setenv("UHD_IMAGES_DIR") here, deliberately: both images are passed by ABSOLUTE path below (UHD takes an
      *   existing path as-is, before any search), and setenv in a running multi-threaded server races every getenv.
      *   The directory UHD would search otherwise is compiled into libuhd (build-uhd.sh) as ours. */
+    std::string product;   // ★ outside the try: a failed FPGA load names the file the board needs (cloneFpgaAdvice)
     try {
         /* ★★ find() BY SERIAL, with our firmware: it loads the FX3 firmware if the radio has none yet, waits for the
          *    re-enumeration, and reports the PRODUCT (B200 / B210 / B200mini / B205mini) from the EEPROM — which is
@@ -178,12 +190,12 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
          *    carry junk after the serial ("30AA038 ?"), which an exact hint would never match. Every B2xx is found, then
          *    the one whose cleaned serial is ours is taken; with no serial (or a single radio) the first. */
         const uhd::device_addrs_t found = uhd::device::find(hint, uhd::device::USRP);
-        if (found.empty()) { err = "the USRP did not answer (is another program using it?)"; return false; }
+        if (found.empty()) { err = usrpcaps::busyAdvice("", /*foundNone=*/true); return false; }
         uhd::device_addr_t addr = found.front();
         if (!f.serial.empty())
             for (const auto& a : found)
                 if (a.has_key("serial") && usrpcaps::cleanSerial(a["serial"]) == f.serial) { addr = a; break; }
-        const std::string product = addr.has_key("product") ? addr["product"] : "";
+        product = addr.has_key("product") ? addr["product"] : "";
         const char* fpgaName = usrpcaps::fpgaFileFor(product);
         if (!fpgaName) { err = "this USRP reports itself as '" + product + "', which VibeServer has no FPGA image for"; return false; }
         const std::string fpga = usrpcaps::resolveImage(fpgaName, dirs);
@@ -248,7 +260,11 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
         // ★ The reference first (before any tuning), then the corrections; the bandwidth rides setSampleRate below.
         applyOptionsLocked(/*atOpen=*/true);
     } catch (const std::exception& e) {
-        err = std::string("USRP: ") + e.what();
+        /* ★★ A CLONE'S FPGA LOAD FAILING is said as what to do (upload its maker's image, and which file), not as
+         *    UHD's internals; anything else keeps UHD's own words. Either way it reaches the radio's status. */
+        std::string advice = usrpcaps::cloneFpgaAdvice(e.what(), product);
+        if (advice.empty()) advice = usrpcaps::busyAdvice(e.what(), false);
+        err = advice.empty() ? std::string("USRP: ") + e.what() : advice;
         impl_->usrp.reset();
         return false;
     }

@@ -10,6 +10,7 @@
 #pragma once
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <sys/stat.h>
@@ -193,6 +194,92 @@ inline std::string resolveImage(const std::string& file, const std::vector<std::
         if (fileExists(p)) return p;
     }
     return "";
+}
+
+// ── the BOARD'S OWN images: the owner's override folder (V12, 2026-11-02 — a tester's clone) ────────────────────
+/* ★★★ A CLONE THAT IS NOT ETTUS'S DESIGN NEEDS ITS MAKER'S FPGA IMAGE (the Artix-7 "LibreSDR B210/B220 mini" boards;
+ *     a tester's B210 clone: "this unit requires non-official firmware, as it is not an official Ettus product").
+ *     We do NOT ship such images (no stated licence, no source we can point to) — the OWNER uploads the one their
+ *     seller provides, from the Setup page, into the override folder resolveImage searches first.
+ *  ★★ THE NAME IS OURS, NEVER THE CLIENT'S: the owner picks which of UHD's own file names it is (a closed list), and
+ *     the bytes are written under exactly that name — so no path, no "..", nothing else in the folder can be named. */
+inline const std::vector<std::string>& ownerImageNames() {
+    static const std::vector<std::string> n = {
+        "usrp_b210_fpga.bin", "usrp_b200_fpga.bin", "usrp_b200mini_fpga.bin", "usrp_b205mini_fpga.bin", "usrp_b200_fw.hex" };
+    return n;
+}
+inline bool ownerImageName(const std::string& n) {
+    for (const auto& x : ownerImageNames()) if (x == n) return true;
+    return false;
+}
+/** The owner's override folder. ★ VIBE_UHD_OVERRIDE_DIR first (tests). Linux: /etc/vibeserver/uhd-images —
+ *  /etc/vibeserver belongs to the daemon and is in both units' ReadWritePaths. The Mac: Application Support. */
+inline std::string ownerImageDir() {
+    if (const char* e = std::getenv("VIBE_UHD_OVERRIDE_DIR")) if (*e) return e;
+#if defined(__APPLE__)
+    if (const char* h = std::getenv("HOME")) if (*h) return std::string(h) + "/Library/Application Support/VibeServer/uhd-images";
+    return "";
+#else
+    return "/etc/vibeserver/uhd-images";
+#endif
+}
+constexpr size_t kFpgaMin = 256 * 1024, kFpgaMax = 16 * 1024 * 1024;     // a B2xx bitstream is 2-10 MB
+constexpr size_t kFwMin = 16 * 1024, kFwMax = 2 * 1024 * 1024;           // the FX3 firmware hex is ~0.5 MB
+/** The size the upload may be, before a byte is read: "" = fine, else the refusal in words. */
+inline std::string refuseImageSize(const std::string& name, size_t bytes) {
+    if (!ownerImageName(name)) return "that is not one of the file names UHD loads for a B2xx";
+    const bool fw = name == "usrp_b200_fw.hex";
+    const size_t lo = fw ? kFwMin : kFpgaMin, hi = fw ? kFwMax : kFpgaMax;
+    if (bytes < lo) return std::string("that file is too small to be ") + (fw ? "the FX3 firmware" : "an FPGA image") + " (" + std::to_string(bytes) + " bytes)";
+    if (bytes > hi) return std::string("that file is too large to be ") + (fw ? "the FX3 firmware" : "an FPGA image") + " (" + std::to_string(bytes) + " bytes)";
+    return "";
+}
+/** The first bytes of an upload: "" = plausible, else the refusal in words. ★ It cannot PROVE an FPGA image is the
+ *  right one — only the radio can — but it catches the usual mistakes: the zip it came in, a web page saved instead
+ *  of the file, an .img (an EEPROM image for flashing tools, which UHD never loads) given as the firmware. */
+inline std::string refuseImageHead(const std::string& name, const unsigned char* b, size_t n) {
+    if (n >= 2 && b[0] == 'P' && b[1] == 'K') return "that is a zip archive — unzip it and upload the file inside";
+    if (n >= 2 && b[0] == 0x1f && b[1] == 0x8b) return "that is a gzip archive — unpack it and upload the file inside";
+    size_t i = 0;
+    while (i < n && (b[i] == ' ' || b[i] == '\t' || b[i] == '\r' || b[i] == '\n' || b[i] == 0xEF || b[i] == 0xBB || b[i] == 0xBF)) i++;
+    if (name == "usrp_b200_fw.hex") {
+        if (i >= n || b[i] != ':') return "the FX3 firmware UHD loads is an Intel HEX text file (it starts with ':'); this is not one — an .img is for flashing the board, not for UHD";
+        return "";
+    }
+    if (i < n && b[i] == '<') return "that is a web page or XML, not an FPGA image — save the file itself, not the page it is on";
+    if (i < n && b[i] == ':') return "that is an Intel HEX file (firmware), not an FPGA image";
+    return "";
+}
+/** ★★ THE CLONE'S FAILURE, SAID AS WHAT TO DO. A board whose FPGA is not the part Ettus's image is built for fails
+ *  the FPGA load (UHD: "fx3 is in state 5", or a timeout / failure loading or initialising the FPGA). The owner
+ *  needs one sentence, not UHD's internals: which file to upload, and where. "" = not that failure. */
+inline std::string cloneFpgaAdvice(const std::string& uhdMessage, const std::string& product) {
+    std::string m = uhdMessage;
+    for (auto& ch : m) ch = (char)((ch >= 'A' && ch <= 'Z') ? ch + 32 : ch);
+    const bool fx3State = m.find("fx3 is in state") != std::string::npos;
+    const bool fpgaLoad = m.find("fpga") != std::string::npos &&
+        (m.find("load") != std::string::npos || m.find("timed out") != std::string::npos || m.find("timeout") != std::string::npos
+         || m.find("failed to init") != std::string::npos || m.find("state") != std::string::npos);
+    if (!fx3State && !fpgaLoad) return "";
+    const char* f = fpgaFileFor(product);
+    const std::string file = f ? f : "usrp_b210_fpga.bin";
+    return "This board needs its maker's FPGA image \xe2\x80\x94 upload " + file +
+           " in Setup \xe2\x86\x92 this radio (Board's own firmware / FPGA image). UHD said: " + uhdMessage;
+}
+
+/** ★★ ANOTHER PROGRAM HAS THE RADIO — said plainly, with what to do. A B2xx held by another process (OpenWebRX+'s
+ *  owrx_connector through SoapyUHD, a SoapyRemote server, GNU Radio, uhd_fft) cannot be claimed: UHD's find comes back
+ *  empty, or the claim fails with libusb's BUSY / ACCESS. `foundNone` = find() answered nothing at all. "" = not that. */
+inline std::string busyAdvice(const std::string& uhdMessage, bool foundNone) {
+    std::string m = uhdMessage;
+    for (auto& ch : m) ch = (char)((ch >= 'A' && ch <= 'Z') ? ch + 32 : ch);
+    const bool busy = foundNone || m.find("busy") != std::string::npos || m.find("claim") != std::string::npos
+                   || m.find("resource temporarily unavailable") != std::string::npos || m.find("access denied") != std::string::npos
+                   || m.find("libusb_error_access") != std::string::npos;
+    if (!busy) return "";
+    return "Another program is using this USRP \xe2\x80\x94 stop it first (OpenWebRX+ / owrx_connector, a SoapyRemote "
+           "server, GNU Radio or uhd_fft), and VibeServer takes the radio within seconds."
+           + (uhdMessage.empty() ? std::string() : " UHD said: " + uhdMessage);
 }
 
 // ── the owner's radio options (V12, 2026-11-02: "can you add the missing options too please" — Stuart) ────────

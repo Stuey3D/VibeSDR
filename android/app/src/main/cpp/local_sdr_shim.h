@@ -869,6 +869,14 @@ public:
      *  on Android. On a build without UHD it fails at once ("no USRP support"), never reaching a radio. */
     int startUsrp(int index, double centerFreq, double sampleRate, int gainTenthDb,
                   int fftSize, double fftRate, const std::string& mode, std::string& err);
+    /** ★★ V12 the USRP's OWNER options (vibe_usrp_caps.h Options; config usrpClock / usrpTime / usrpDcOffset /
+     *  usrpIqBalance / usrpRxBw). Remembered for the next startUsrp and applied NOW to a running USRP; inert on any
+     *  other radio and on a build without UHD. Set by the daemon from the config only — no listener message. */
+    void setUsrpOptions(const std::string& clock, const std::string& time, bool dcOffset, bool iqBalance,
+                               double rxBwHz);
+    /** ★ V12: close and reopen this process's USRP (the owner changed its image files). False with `err` when it
+     *  did not come back; false with an empty `err` when this process is not running a USRP. */
+    bool reopenUsrp(std::string& err);
     int startAirspyHf(int index, double centerFreq, double sampleRate, int gainTenthDb,
                       int fftSize, double fftRate, const std::string& mode, std::string& err);
     /** ★ Start an Airspy HF+ from a USB file descriptor — Android's only route in. Reached

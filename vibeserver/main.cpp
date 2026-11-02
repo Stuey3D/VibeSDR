@@ -42,6 +42,7 @@
 #include "icom_transport.h"    // ★ listUsbIcoms — an Icom found by its USB serial, without a byte sent
 #include "hackrf_source.h"
 #include "usrp_source.h"   // ★ V12 Ettus USRP B2xx (inline stub on a build without UHD)
+#include "vibe_usrp_caps.h"   // ★ V12 the USRP owner options' save check (validateSaved)
 #include "airspy_source.h"
 #include "sdrplay_source.h"
 
@@ -1984,6 +1985,10 @@ int main(int argc, char** argv) {
     if (o.rspHdr)     LocalSdrShim::instance().setRspHdr(true);
     if (o.rspAmNotch) LocalSdrShim::instance().setRspAmNotch(true);
     if (o.rspExtRef)  LocalSdrShim::instance().setRspExtRef(true);
+    /* ★ V12 the USRP's owner options, before the radio opens (the reference clock precedes tuning) — inert on any other
+     *  radio. From g_runtimeConfig: these have no command-line flag, so the effective config is their only source. */
+    LocalSdrShim::instance().setUsrpOptions(g_runtimeConfig.usrpClock, g_runtimeConfig.usrpTime, g_runtimeConfig.usrpDcOffset,
+                                 g_runtimeConfig.usrpIqBalance, g_runtimeConfig.usrpRxBw);
     LocalSdrShim::setVibeServerDabAgc(o.dabAgcOverride, o.dabAgcTarget);
     LocalSdrShim::setVibeServerRfAgc(o.rfAgc);
     LocalSdrShim::setVibeServerRspDabDecim(o.rspDabDecim);
@@ -2355,6 +2360,20 @@ int main(int argc, char** argv) {
                 const size_t close = j.rfind('}');
                 if (!ic.empty() && close != std::string::npos) j.insert(close, ",\"icomStatus\":{" + ic + "}");
             }
+            /* ★★ V12 AND WHY A USRP IS NOT RUNNING — the clone that needs its maker's FPGA image ("upload
+             *    usrp_b210_fpga.bin in Setup → this radio"), another program holding it: the radio's process wrote it
+             *    into the status file (usrp_source.cpp words it for the owner); the USRP card shows it. */
+            {
+                std::string us;
+                for (const auto& r : out.radios) {
+                    if (r.driver != "usrp") continue;
+                    const RadioStatus st = radioStatusRead(r.serial);
+                    if (!st.present || st.detail.empty()) continue;
+                    us += std::string(us.empty() ? "" : ",") + "\"" + jsonEscape(r.serial) + "\":\"" + jsonEscape(st.detail) + "\"";
+                }
+                const size_t close = j.rfind('}');
+                if (!us.empty() && close != std::string::npos) j.insert(close, ",\"usrpStatus\":{" + us + "}");
+            }
             return j;
         },
         [](const std::string& json, std::string& err) -> bool {
@@ -2428,6 +2447,16 @@ int main(int argc, char** argv) {
             /* ★★ A SINGLE-RADIO box caps a profile at its decoder slots (Stuart, 2026-10-22) — nothing competes for them
              *  there; on a multi-radio box background takes whatever is free, listeners first (BgRegistry). Counted as the
              *  setup page counts its radio tabs: the enabled radios. */
+            /* ★★ V12 THE USRP's OWNER OPTIONS ARE REFUSED AT THE SAVE IN WORDS when their SHAPE is wrong (a name VibeServer
+             *  does not know, an impossible bandwidth). Whether THIS radio has the choice is the radio's to say at open —
+             *  the save may be for a radio that is not running — and a refusal there reaches its status (optionsNote). */
+            for (const auto& r : next.radios) {
+                if (r.driver != "usrp") continue;
+                vibe::usrpcaps::Options uo;
+                uo.clock = r.usrpClock; uo.time = r.usrpTime; uo.rxBwHz = r.usrpRxBw;
+                const std::string ue = vibe::usrpcaps::validateSaved(uo);
+                if (!ue.empty()) { err = (r.label.empty() ? r.driver : r.label) + " \xe2\x80\x94 " + ue; return false; }
+            }
             int enabledRadios = 0;
             for (const auto& r : next.radios) if (r.enabled) ++enabledRadios;
             const int slotCap = enabledRadios <= 1 ? (next.decoderMax > 0 ? next.decoderMax : LocalSdrShim::decoderDefaultMax()) : 0;
@@ -2490,6 +2519,9 @@ int main(int argc, char** argv) {
                     { std::string be; LocalSdrShim::setBackgroundDecoding(r.bgDecode, be); g_bgLastApplied = r.bgDecode; }
                     LocalSdrShim::setGalleryRadioLabel(r.label.empty() ? r.driver : r.label);
                     LocalSdrShim::instance().setRspAntennaMap(g_runtimeConfig.antennaMap);
+                    // ★ V12 the USRP's owner options, live: a new reference / correction / bandwidth with no restart.
+                    LocalSdrShim::instance().setUsrpOptions(g_runtimeConfig.usrpClock, g_runtimeConfig.usrpTime, g_runtimeConfig.usrpDcOffset,
+                                                 g_runtimeConfig.usrpIqBalance, g_runtimeConfig.usrpRxBw);
                     LocalSdrShim::instance().setAntennaLocked(g_runtimeConfig.antennaPortLocked);
                     // ★ In the same breath as the gain ceilings, for the same reason: both are
                     //   the owner's per-band rules and a path that applies one without the

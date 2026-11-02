@@ -21,6 +21,7 @@
 #include "airspy_source.h"
 #include "usrp_source.h"   // ★ V12: Ettus USRP B2xx — the header's inline stub on every build without UHD
 #include "vibe_usrp_caps.h"
+#include "vibe_usrp_images.h"   // ★ V12: the owner's image folder (a clone's own FPGA image) — /vibeserver/usrp-images
 
 // Android builds the USB/librtlsdr local-hardware path; iOS builds only the
 // RTL-TCP path (no USB host SDR on iOS). The USB code stays compiled on iOS via a
@@ -21426,6 +21427,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ The pocket image's Wi-Fi + first-run routes — the MACHINE's network, not a radio's.
                 || path0.rfind("/vibeserver/pocket/", 0) == 0
                 || path0.rfind("/vibeserver/benchmark", 0) == 0
+                // ★ V12: the owner's USRP image folder is the MACHINE's — and the radio may not be running at all
+                //   (a clone whose FPGA would not load), so the door must be able to take the upload itself.
+                || path0.rfind("/vibeserver/usrp-images", 0) == 0
                 || path0.rfind("/vibeserver/admin", 0) == 0
                 || path0.rfind("/vibeserver/conditions", 0) == 0
                 // ★★ V12: the GALLERY is the machine's — one directory every radio writes into (vibe_gallery.h).
@@ -22468,6 +22472,111 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                           "Cache-Control: no-store\r\nConnection: close\r\nContent-Length: "
                           + std::to_string(j.size()) + "\r\n\r\n" + j);
             sock->close();
+            return;
+
+        } else if (reqLine.rfind("GET /vibeserver/usrp-images", 0) == 0 ||
+                   reqLine.rfind("POST /vibeserver/usrp-images", 0) == 0) {
+            /* ★★★ V12 THE BOARD'S OWN FIRMWARE / FPGA IMAGE (vibe_usrp_images.h) — ADMIN ONLY, by the same gate as
+             *     the config endpoints. GET lists the owner's folder; POST ?op=put&name=<UHD's file name> takes the
+             *     raw file as the body (16 MB at most, streamed to disk, never held whole); POST ?op=remove&name=…
+             *     deletes one. The name must be one of UHD's own (a closed list) — never a path from the client.
+             *  ★ Answered by whichever process gets it: a radio process running the USRP reopens it at once; the
+             *    front door (the radio not running — typically a clone whose FPGA would not load) just saves, and the
+             *    radio's own restart picks the file up within seconds. */
+            const bool isPost = reqLine.rfind("POST", 0) == 0;
+            auto reply = [&](int code, const char* status, const std::string& body) {
+                sock->sendstr("HTTP/1.1 " + std::to_string(code) + " " + status +
+                              "\r\nContent-Type: application/json\r\nCache-Control: no-store"
+                              "\r\nConnection: close\r\nContent-Length: " +
+                              std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            std::string secret;
+            { std::lock_guard<std::mutex> lk(g_vsAdminMtx); secret = g_vsAdminSecret; }
+            const std::string ip = sock->peerAddress();
+            const VsAdminProof pr = vsAdminProof(secret, reqLine);
+            if (!pr.ok || g_vsAuthState.blocked(ip)) {
+                if (!secret.empty() && pr.guessable) g_vsAuthState.recordFail(ip);
+                reply(401, "Unauthorized", "{\"error\":\"admin password required\"}");
+                return;
+            }
+            g_vsAuthState.recordOk(ip);
+            const std::string dir = vibe::usrpcaps::ownerImageDir();
+            auto listing = [&](const std::string& extra) {
+                return "{\"dir\":\"" + jsonEscape(dir) + "\",\"files\":" + vibe::usrpimages::listJson(dir) + extra + "}";
+            };
+            auto qparam = [&](const char* key) -> std::string {
+                const size_t sp1 = reqLine.find(' '), sp2 = reqLine.find(' ', sp1 + 1);
+                const std::string target = reqLine.substr(sp1 + 1, sp2 == std::string::npos ? std::string::npos : sp2 - sp1 - 1);
+                const std::string k = std::string(key) + "=";
+                size_t at = target.find('?');
+                while (at != std::string::npos) {
+                    const size_t s0 = at + 1;
+                    if (target.compare(s0, k.size(), k) == 0) {
+                        const size_t e = target.find('&', s0);
+                        return target.substr(s0 + k.size(), e == std::string::npos ? std::string::npos : e - s0 - k.size());
+                    }
+                    at = target.find('&', s0);
+                }
+                return "";
+            };
+            /* ★★ THIS COMPUTER'S OWN UHD IMAGES (vibe_usrp_images.h systemDirs) — looked at only when the owner asks
+             *    (?scan=1), never at open; each B2xx file compared with the copy we ship. */
+            const std::string shipped = vibe::UsrpSource::shippedImageDir();
+            if (!isPost) {
+                if (qparam("scan") == "1") {
+                    const auto sd = vibe::usrpimages::systemDirs();
+                    reply(200, "OK", listing(vibe::usrpimages::scanJson(sd, vibe::usrpimages::scanSystem(sd, shipped))));
+                } else reply(200, "OK", listing(""));
+                return;
+            }
+            const std::string op = qparam("op"), name = qparam("name");
+            std::string err;
+            bool changed = false;
+            if (op == "adopt") {
+                // ★ `from` is an INDEX into the folders this server found itself — never a path from the client.
+                const std::string fs = qparam("from");
+                const size_t from = (!fs.empty() && fs.size() < 4 && fs.find_first_not_of("0123456789") == std::string::npos)
+                                    ? (size_t)std::stoul(fs) : (size_t)-1;
+                const auto copied = vibe::usrpimages::adopt(vibe::usrpimages::systemDirs(), from, name, dir, shipped, err);
+                if (copied.empty()) { reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
+                changed = true;
+                for (const auto& c : copied)
+                    LOGI("USRP image %s copied from this computer's UHD images into %s by %s", c.c_str(), dir.c_str(), ip.c_str());
+            } else if (op == "remove") {
+                if (!vibe::usrpimages::remove(dir, name, err)) { reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
+                changed = true;
+                LOGI("USRP image %s removed from %s by %s", name.c_str(), dir.c_str(), ip.c_str());
+            } else if (op == "put") {
+                vibe::usrpimages::Writer w;
+                if (contentLength <= 0 || !w.begin(dir, name, (size_t)contentLength, err)) {
+                    if (err.empty()) err = "no file was sent";
+                    reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}");
+                    return;
+                }
+                std::vector<uint8_t> chunk(64 * 1024);
+                long long left = contentLength;
+                while (left > 0) {
+                    const int n = sock->recv(chunk.data(), (size_t)std::min<long long>(left, (long long)chunk.size()), false, 10000);
+                    if (n <= 0) break;
+                    if (!w.write(chunk.data(), (size_t)n, err)) break;
+                    left -= n;
+                }
+                if (!err.empty() || !w.finish(err)) { reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}"); return; }
+                changed = true;
+                LOGI("USRP image %s (%lld bytes) saved to %s by %s", name.c_str(), contentLength, dir.c_str(), ip.c_str());
+            } else {
+                reply(400, "Bad Request", "{\"error\":\"op must be put or remove\"}");
+                return;
+            }
+            std::string extra;
+            if (changed) {
+                std::string rerr;
+                const bool reopened = LocalSdrShim::instance().reopenUsrp(rerr);
+                extra = std::string(",\"reopened\":") + (reopened ? "true" : "false");
+                if (!rerr.empty()) extra += ",\"openError\":\"" + jsonEscape(rerr) + "\"";
+            }
+            reply(200, "OK", listing(extra));
             return;
 
         } else if (reqLine.rfind("GET /vibeserver/benchmark", 0) == 0 ||
@@ -33332,6 +33441,9 @@ static DesiredDsp g_dsp;
  *  remembered across an Impl rebuild so a re-open does not silently go back to port A. */
 static std::mutex  g_rspAntMtx;
 static std::string g_rspAntenna;
+/** ★ V12 the USRP's owner options (setUsrpOptions) — remembered across an Impl rebuild, like the aerial above. */
+static std::mutex  g_usrpOptMtx;
+static vibe::usrpcaps::Options g_usrpOpts;
 /** ★ Owner's switch: 0 = any listener may change the aerial, 1 = admin only. See vsAntennaLocked. */
 static std::atomic<int> g_antennaLocked{0};
 /** ★ The owner's per-band aerial list, verbatim as typed — "0-30MHz Antenna C, 30-150MHz A,
@@ -36964,6 +37076,8 @@ int LocalSdrShim::startUsrp(int index,
     impl->lastGainTenthDb = gainTenthDb;
 
     impl->usrp = std::make_unique<vibe::UsrpSource>();
+    // ★ V12 the owner's options, before the open applies them (reference clock first of all — it precedes tuning).
+    { std::lock_guard<std::mutex> lk(g_usrpOptMtx); impl->usrp->setOptions(g_usrpOpts); }
     Impl* self = impl;
     // ★ cf32 from UHD's own converter — the float path the HF+ and HackRF use.
     impl->usrp->setSink([self](const float* iq, int n) {
@@ -41773,6 +41887,7 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
         c.rates = u.sampleRates();
         c.antennas = u.antennas(); c.antenna = u.antenna();
         c.antennaLocked = vsAntennaLocked();
+        u.fillOptionView(c);   // ★ V12 the owner's options: what the radio offers, what is in force, ref/GPS lock
         return vibe::usrpcaps::capsJson(c);
     }
     if (!p->useSdrplay()) {
@@ -42054,6 +42169,40 @@ void LocalSdrShim::setBiasT(bool v)         { g_dsp.rspBiasT.store(v ? 1 : 0);
  *  reason: remember in g_dsp FIRST so a choice survives the next Impl, then write it if the radio
  *  is here. GitHub #29 is the antenna; the others were found beside it, all present in the API
  *  and reachable from nowhere. */
+/* ★★ V12 THE USRP's OWNER OPTIONS — stored for the next start, applied to a running USRP at once (UsrpSource refuses
+ *  in words what the radio does not have). Under modeMtx like every other hardware write; then the hwinfo goes out so
+ *  the Setup page and the clients see what is now in force. */
+void LocalSdrShim::setUsrpOptions(const std::string& clock, const std::string& time, bool dcOffset, bool iqBalance,
+                                  double rxBwHz) {
+    vibe::usrpcaps::Options o;
+    o.clock = clock; o.time = time; o.dcOffset = dcOffset; o.iqBalance = iqBalance; o.rxBwHz = rxBwHz > 0 ? rxBwHz : 0;
+    { std::lock_guard<std::mutex> lk(g_usrpOptMtx); g_usrpOpts = o; }
+    if (!p || !p->useUsrp() || !p->usrp) return;
+    { VIBE_HW_LOCK(); p->usrp->setOptions(o); }
+    broadcastHwInfo();
+}
+/* ★ V12: the owner uploaded or removed one of the radio's image files — open it again so UHD loads what is there now.
+ *  The watchdog's deep reopen, on demand: devMtx then modeMtx, the documented order; the RX port put back. */
+bool LocalSdrShim::reopenUsrp(std::string& err) {
+    err.clear();
+    if (!p || !p->useUsrp() || !p->usrp) return false;
+    bool ok = false;
+    {
+        std::lock_guard<std::recursive_mutex> dlk(p->devMtx);
+        std::lock_guard<std::recursive_mutex> mlk(p->modeMtx);
+        const double phys = p->rtlCenter.load() + p->hwOffsetHz();
+        const std::string ant = p->usrp->antenna();
+        p->usrp->stop();
+        p->usrp->close();
+        ok = p->usrp->open(p->usrpIndex, p->sampleRate, phys, p->lastGainTenthDb, err);
+        if (ok && !ant.empty()) p->usrp->setAntenna(ant);
+        ok = ok && p->usrp->start(err);
+    }
+    LOGI("USRP reopened for new image files: %s", ok ? "ok" : err.c_str());
+    broadcastHwInfo();
+    return ok;
+}
+
 void LocalSdrShim::setRspAntenna(const std::string& port) {
     { std::lock_guard<std::mutex> lk(g_rspAntMtx); g_rspAntenna = port; }
     /* ★ V12: and the USRP B2xx's RX ports — the same {type:"antenna"} message, the same remembered `antennaPort`.
