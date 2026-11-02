@@ -124,7 +124,7 @@ try {
   ok(await ev(`!!document.querySelector('#mModeMenu #bwHi')`), '5. the mode picker carries the bandwidth row');
   await ev(`(() => { const hi = document.querySelector('#mModeMenu #bwHi'); hi.value = '3000'; hi.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   await sleep(300);
-  await ev(`document.querySelector('#mModeMenu .mModeClose')?.click()`);
+  await ev(`document.querySelector('#mModeMenu .mModeClose:last-child')?.click()   /* ★ the CLOSE row — the wiki / QRZ / CW-guide keys share the class */`);
   await sleep(150);
   const narrow = await bw();
   ok(JSON.stringify(narrow) === '[-3000,3000]', `5. narrowed to ±3 kHz before saving (${JSON.stringify(narrow)})`);
@@ -148,6 +148,29 @@ try {
   ok(JSON.stringify(await bw()) === '[-3000,3000]', `5. bookmark restored ±3 kHz (${JSON.stringify(await bw())})`);
   const hiVal = await ev(`document.getElementById('bwHi').value`);
   ok(hiVal === '3000', `5. and the slider shows it (${hiVal})`);
+
+  // ★★ 6. THE MODE MENU SCROLLS ON A SHORT PHONE SCREEN (Stuart, 2026-11-02, the web client on a phone: "the demodulator
+  //    list is so long and it cannot be scrolled"). 390 × 340 (a phone on its side, the browser's bars showing): the menu stays
+  //    inside the screen, holds more than it shows, and a finger drag on it scrolls it without closing it.
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 340, deviceScaleFactor: 2, mobile: true });
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  await sleep(800);
+  await ev(`document.getElementById('mMode').click()`);
+  await sleep(400);
+  const mm = JSON.parse(await ev(`(() => { const m = document.getElementById('mModeMenu'); if (!m) return 'null'; const r = m.getBoundingClientRect();
+    return JSON.stringify({ top: r.top, bottom: r.bottom, h: innerHeight, sh: m.scrollHeight, ch: m.clientHeight, x: r.left + r.width / 2, y: r.top + r.height * 0.7 }); })()`));
+  ok(!!mm && mm.top >= 0 && mm.bottom <= mm.h + 0.5, `6. the mode menu stays on a 340 px screen (top ${mm && Math.round(mm.top)}, bottom ${mm && Math.round(mm.bottom)} of ${mm && mm.h})`);
+  ok(!!mm && mm.sh > mm.ch, `6. …it holds more than the screen shows, so it scrolls (${mm && mm.sh} px in ${mm && mm.ch})`);
+  if (mm) {
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: mm.x, y: mm.y }] });
+    for (let k = 1; k <= 8; k++) { await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: mm.x, y: mm.y - k * 30 }] }); await sleep(16); }
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(500);
+  }
+  const mmTop = await ev(`document.getElementById('mModeMenu')?.scrollTop || 0`);
+  ok(mmTop > 40, `6. a finger drag scrolls it (scrollTop ${Math.round(mmTop)})`);
+  ok(await ev(`!!document.getElementById('mModeMenu')`), '6. …and does not close it');
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
 
   ok(uncaught.length === 0, `no uncaught exception (${uncaught.length})${uncaught.length ? ': ' + uncaught.slice(0, 3).join(' | ') : ''}`);
   try { await send('Browser.close'); } catch (e) { console.error(e); }

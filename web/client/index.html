@@ -870,7 +870,17 @@ body.icomFollow #mZoomDial { opacity: 0.35; }
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.7);
   font: inherit; font-size: clamp(12px, 3.4vw, 16px);
   min-width: min(92vw, 340px); max-width: 92vw;
+  /* ★★ IT SCROLLS (Stuart, 2026-11-02, the web client on a phone: "the demodulator list is so long and it cannot be
+     scrolled either, the decoder sub menu can be scrolled but the demodulators cannot"). With the bandwidth row, the
+     AM-sync and DRM extras and the wiki / QRZ / CW-guide keys the menu is taller than a phone screen, and it had no
+     height limit — the CLOSE row and the last demodulators sat off the screen. Now: never taller than the screen
+     between its safe areas, scrolling inside itself; pan-y claims the vertical swipe (#app is pan-x pan-y, the same
+     trap as #searchResults) and contain stops a flick at the end from moving the page under it. */
+  max-height: calc(100dvh - 16px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+  overflow-y: auto; touch-action: pan-y; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  box-sizing: border-box;
 }
+#mModeMenu > * { flex-shrink: 0; }
 .mModeGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
 /* ★ The bandwidth row (parked in #bwHome, moved in while the picker is open) needs a heading
    here: in a popup a bare pair of sliders could be anything. */

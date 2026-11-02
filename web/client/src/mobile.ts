@@ -487,10 +487,12 @@ export function initMobileControls(deps: MobileDeps) {
     // Anchored to the pill, and flipped above it when there is no room below — on a
     // phone the pill sits near the bottom, so "below" is almost never where it fits.
     const r = $('mPill').getBoundingClientRect();
-    const h = menu.offsetHeight;
+    const h = menu.offsetHeight;   // ★ already capped to the screen by the CSS max-height — it scrolls inside
     const top = r.top - h - 8 > 0 ? r.top - h - 8 : Math.min(r.bottom + 8, innerHeight - h - 8);
     menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - menu.offsetWidth - 8))}px`;
     menu.style.top = `${Math.max(8, top)}px`;
+    // ★ The selected demodulator in view when it opens on a short screen (the list may start scrolled).
+    menu.querySelector<HTMLElement>('.mModeOpt.on')?.scrollIntoView({ block: 'nearest' });
 
     const close = () => {
       // ★ Put the bandwidth row back before the menu is destroyed, or it is removed with it
