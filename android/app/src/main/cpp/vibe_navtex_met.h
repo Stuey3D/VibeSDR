@@ -30,6 +30,11 @@
 //    stays the UK's; the generated areas are APPENDED to it (ONE table — areas()), each with the heading forms its
 //    forecasts use, and a US zone also by its UGC code ("ANZ800-031000-"). A hand-made entry wins a name both have.
 //    NWS winds are in KNOTS ("SW WINDS 10 TO 15 KT"): converted to Beaufort (knotsBf) — never read as force 10.
+// ★★ V12 2026-11-02 PASS 2: MET Norway's sea areas (their English and Norwegian names), Met Éireann's coastal stretches
+//    (a heading names a CHAIN of headlands — headingAreas), AEMET's coastal zones; the Dutch / German / French names of
+//    Thames, Dover and German Bight on the UK rows. Still not matched: the Baltic areas (SMHI's outlines wait on a licence
+//    question, and those forecasts give the wind in m/s — read as Beaufort they would be wrong) and the French and
+//    Spanish high-seas areas (Antifer, Pazenn, Finisterre, Cantábrico … — no open outline).
 #pragma once
 #include "vibe_navtex_stations.h"
 #include "vibe_sea_areas.generated.h"

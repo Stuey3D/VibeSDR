@@ -25,13 +25,49 @@
 //   · DE   — Deutscher Wetterdienst coastal warning areas (dwd:Warngebiete_Kueste, maps.dwd.de GeoServer WFS).
 //            DWD open data under the GeoNutzV (Datenlizenz Deutschland – Namensnennung 2.0); geometry
 //            "© GeoBasis-DE / BKG 2021 (Daten modifiziert)". The Elbe river stretch is left out.
+//   ── V12 2026-11-02, PASS 2 (Stuart: "yes please can you look for as many as you can please") ──
+//   · NO   — MET Norway sea forecast areas: api.met.no/weatherapi/textforecast/3.0/sea_en.json + sea_no.json (the
+//            polygons travel with the day's forecast text; only geometry and names kept). NLOD 2.0 and CC BY 4.0
+//            (api.met.no/doc/License): "Credit should be given to The Norwegian Meteorological Institute, shortened
+//            MET Norway" — "Based on data from MET Norway".
+//   · IE   — Met Éireann Sea Area warning polygons (data.gov.ie dataset sea-area-warning-polygons,
+//            opendata2.met.ie/opendata2/sea_area_polys/sea-areas.geojson). CC BY 4.0. Met Éireann: "descriptive …
+//            not precise or officially defined geographical boundaries" — the card says so.
+//   · ES   — AEMET Meteoalerta v6 coastal zones to 20 NM (AEMET-meteoalerta-delimitacion-zonas.zip). AEMET nota legal
+//            (aemet.es/es/nota_legal: reuse incl. transformation, commercial or not, citing AEMET) and IGN's CC BY
+//            ("Obra derivada de BDLJE 2017-02-28 CC-BY ign.es © Instituto Geográfico Nacional de España").
+//   · JP   — JMA 地方海上予報区 (data.jma.go.jp/developer/gis/20190125_AreaMarineAJ_GIS.zip). JMA site terms
+//            (jma.go.jp/jma/kishou/info/coment.html: the Public Data License 1.0 unless marked otherwise) — "出典：
+//            気象庁ホームページ" and a note that the data were processed.
+//   · NZ ZA RE AR CL AU — high-seas sub-areas whose limits the issuing service BROADCASTS as latitudes/longitudes
+//            (MetService/Fiji METAREA XIV, SAWS and Météo-France La Réunion VII, SMN Argentina VI, DIRECTEMAR Chile XV,
+//            BoM X South Eastern IDY10210): facts, typed into scripts/mapdata/sea-areas/high-seas-subareas.json with
+//            the bulletin's own words beside each (bulletin sets from WMO WWMIWS, wwmiws.wmo.int).
 //   ✗ NOT INCLUDED, and why (docs/v12/SHIPPING-MAP.md keeps this list):
-//     · UK inshore waters stretches, Irish coastal areas (Met Éireann) — defined as headland-to-headland strips out to
-//       12 / 10 NM; we have the headlands but not a buffer we trust yet. Their LABEL POINTS stay in vibe_navtex_met.h.
-//     · Australia (BoM IDM00001/IDM00003) — the files carry no Creative Commons statement, and the Bureau's default
-//       terms forbid supplying them to others or commercial use. Not used.
-//     · Norway (MET Norway), the Netherlands (KNMI), France (Météo-France), DWD's offshore Seegebiete (Deutsche Bucht,
-//       Westliche Ostsee …) — no open boundary set or published corner list found (2026-11-02).
+//     · UK inshore waters stretches — a 12 NM strip between headlands; still no buffer we trust (their LABEL POINTS stay
+//       in vibe_navtex_met.h). Met Éireann's polygons (above) show the way: an official strip set, not one we derive.
+//     · Australia's coastal waters (BoM IDM00003, 81 zones) and other high-seas areas (IDM00015) — the files carry no
+//       Creative Commons statement; the Bureau's default terms: "You must not supply it to any other person or use it
+//       for any commercial purpose." Only the South Eastern high-seas area is drawn, from the limits BoM broadcasts.
+//       Western / Northern / North Eastern: boxes the bulletin gives over the continent without saying where the
+//       coast cuts them; Southern: "to ice edge".
+//     · Sweden / the Baltic (SMHI sea districts, opendata-download-warnings.smhi.se/ibww/api/version/1/metadata/
+//       area.json — 18 districts, Skagerrak … Bay of Bothnia): the file sits under SMHI's impact-based-warning terms,
+//       "Informationen får inte ändras" (must not be changed) — simplifying the outlines may be a change. ASK SMHI.
+//       (Also: those forecasts give the wind in m/s — the parser would need to convert before matching them.)
+//     · France (Météo-France BMS large / côte zones): no geometry (the data.gouv.fr BMS dataset maps bulletin headers
+//       to zone names only; the zones are drawn as images) and no published corner coordinates. TAMISE and PAS DE
+//       CALAIS are read as Thames and Dover; Antifer, Casquets, Ouessant, Pazenn, Yeu, Rochebonne are not drawn.
+//     · Spain's high-seas areas (Finisterre, Cantábrico, Porto, Alborán …), Portugal (IPMA), Italy (meteomar areas),
+//       Croatia (DHMZ), Greece, Malta, Turkey, the Black Sea, the Netherlands (KNMI — the Dutch EEZ forecast names UK
+//       areas, already drawn), Denmark (DMI), Finland (FMI: only the warnings in force carry polygons), the Baltic
+//       states, Iceland, Poland, DWD's offshore Seegebiete: no open boundary set or official corner list found.
+//     · MeteoAlarm / EUMETNET geocodes (marine EMMA_IDs): the API needs a token; terms not confirmed.
+//     · The 21 METAREAs themselves: WMO-No. 558 Appendix I.1 gives their limits, much of them "along the coast" or a
+//       frontier — not drawn yet (a coast-following build like the UK's; the sub-areas above are drawn).
+//     · New Zealand coastal areas, Brazil (CHM areas Alfa … Hotel), India (IMD), Pakistan, Hong Kong, Singapore,
+//       Philippines, South Africa's coastal: named coastal points only, or no open geometry. NWS high seas (hz): five
+//       ocean-sized polygons no NAVTEX heading names — left out as before.
 //
 // ★ SIZE: polygons simplified (Douglas–Peucker, per kind) and stored as delta-encoded polylines at 0.001°; the
 //   generator prints the sizes. Holes and specks are dropped (an outline, not a land mask).

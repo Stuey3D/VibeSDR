@@ -67,13 +67,33 @@ Stuart (2026-11-02): *"can we add the shipping lanes and shipping zones to the m
 | US (564 zones) | NOAA NWS marine zones, coastal `mz16ap26` + offshore `oz16ap26` | public domain | Great Lakes and the 5 high-seas basins left out |
 | Canada (158 areas) | ECCC MSC Geography Package 6.15.0, `water_MarStdZone_coarse` | Open Government Licence – Canada | Atlantic, Pacific, Arctic; Great Lakes and inland waters left out |
 | Germany (7 areas) | DWD `dwd:Warngebiete_Kueste` (GeoServer WFS) | GeoNutzV (Datenlizenz Deutschland – Namensnennung 2.0), © GeoBasis-DE / BKG 2021 | the Elbe river stretch left out |
+| **Pass 2 (2026-11-02, branch `v12-sea-areas-2`):** | | | |
+| Norway (18) | MET Norway textforecast 3.0 `sea_en.json` + `sea_no.json` (api.met.no) | NLOD 2.0 / CC BY 4.0 — "Based on data from MET Norway" | Inner/Outer Skagerrak, East-Tampen, Storegga, the banks to North Bank; Norwegian names as match forms. Viking/Utsires/Forties/Fisher keep the Met Office outline; grid codes (A1…F3, LiD …) left out |
+| Ireland (18) | Met Éireann sea-area warning polygons (data.gov.ie, opendata2.met.ie `sea-areas.geojson`) | CC BY 4.0 | the coast headland to headland; Met Éireann calls them descriptive, not official boundaries (the card says so); its two Irish Sea polygons left out (the Met Office area is the forecast's IRISH SEA) |
+| Spain (51) | AEMET Meteoalerta v6 coastal zones to 20 NM (`AEMET-meteoalerta-delimitacion-zonas.zip`) | AEMET nota legal (reuse incl. transformation, cite AEMET) + IGN BDLJE CC BY | UTM 30N → WGS 84 in the generator; Peninsula, Balearics, Canaries, Ceuta, Melilla |
+| Japan (37) | JMA 地方海上予報区 GIS (`20190125_AreaMarineAJ_GIS.zip`) | JMA site terms = Public Data License 1.0 (attribution, "processed") | children only (a parent is their union); Japanese names, not in the met table |
+| High-seas sub-areas (25) | limits as BROADCAST: MetService/Fiji (XIV: Islands, Subtropic, Forties, Pacific), SAWS (VII: Ascension, St Helena, Tristan, Marion Forties East), Météo-France La Réunion (WAM, AMS, CRO, KER), SMN Argentina (VI: six oceanic), DIRECTEMAR Chile (XV: six), BoM IDY10210 (X: South Eastern, coast from Natural Earth) | facts, typed into `high-seas-subareas.json` beside the bulletin's words (bulletin sets from WMO WWMIWS) | areas bounded by the ice edge, an unnamed coast, or a box over a continent are left out (the build fails on one) |
 
 - **Not sourced (and why):** UK inshore waters and the Irish coastal areas (Met Éireann) — headland-to-headland strips out
   to 12 / 10 NM; the headlands are known but a coastal buffer we trust is not built yet, so they keep their label points
   only · Australia (BoM IDM00001/3) — no Creative Commons statement on the spatial files, and the Bureau's default terms
   forbid supplying them on or commercial use · Norway (MET Norway), the Netherlands (KNMI), France (Météo-France) and
   DWD's offshore Seegebiete (Deutsche Bucht, Westliche Ostsee …) — no open boundary set or published corner list found.
-- **Size:** `seaAreas.generated.ts` 213 KB (UK 8.6 KB of outline, US 80 KB, CA 58 KB, DE 1.5 KB; 0.001° polylines,
+- **Not sourced after pass 2 (2026-11-02) — the full list with reasons is in `gen-sea-areas.mjs`'s header:** UK inshore
+  (no buffer we trust) · Australia's coastal waters and the other high-seas areas (BoM files: "You must not supply it to
+  any other person…"; Western/Northern/North Eastern given as boxes over the continent; Southern "to ice edge") ·
+  **Sweden/Baltic** (SMHI's 18 sea districts exist as JSON, but under the impact-based-warning terms "Informationen får
+  inte ändras" — ask SMHI whether simplified outlines are allowed; those forecasts are in m/s, which the parser would
+  have to convert) · France (Météo-France: zone names only, maps as images, no coordinates — TAMISE / PAS DE CALAIS read
+  as Thames / Dover) · Spain's high-seas areas, Portugal, Italy, Croatia, Greece, Malta, Turkey, Black Sea, KNMI, DMI,
+  FMI (only warnings in force carry polygons), Baltic states, Iceland, Poland, DWD Seegebiete · MeteoAlarm (token) ·
+  the 21 METAREAs themselves (WMO-No. 558 App. I.1 limits, much of them "along the coast" — a coast build not done yet) ·
+  NZ coastal, Brazil, India, Pakistan, Hong Kong, Singapore, Philippines, South Africa's coast (named points only, or no
+  open geometry).
+- **Size (pass 2):** `seaAreas.generated.ts` 239.5 KB (+27 KB: NO 0.6, IE 0.8, ES 4.4, JP 7.7, boxes 0.5, AU 1.9 KB of
+  outline; the rest names and rows); `vibe_sea_areas.generated.h` 115.8 KB (+8.7 KB). Bug fixed: two Aleutian NWS zones
+  across 180° had a box of −180…180 and counted as "near" every receiver at 51–53° N (London had them).
+- **Size (pass 1):** `seaAreas.generated.ts` 213 KB (UK 8.6 KB of outline, US 80 KB, CA 58 KB, DE 1.5 KB; 0.001° polylines,
   Douglas–Peucker 0.012–0.02°); `vibe_sea_areas.generated.h` 107 KB (names and match forms only).
 - **Drawing (`src/services/seaAreas.ts`, through `tracklayer.js`):** an item per area — its name the icon (small capitals,
   `_y` yields to every other icon and name, `_mz` from zoom 4 UK / 5 offshore / 8 US coastal), its outline the shape (thin,
@@ -146,6 +166,25 @@ radio C (DSC)        ──► gallery DSC alerts (plat/plon) ──────
 | `scripts/test-web-ais-aprs.mjs`, `test_navtex_map.ts`, `test_ais_aprs_app.ts`, `test-navtex-warn`, `test-navtex-map`, `test-gallery-store`, `test-ism-gallery`, `test-bgdecode`, `test-ais` | unchanged, pass |
 
 ## RESUME HERE
+
+- **SEA AREAS PASS 2 (branch `v12-sea-areas-2`, from `v12-experimental` 84340f3b3, 2026-11-02) — built and tested on this
+  Mac; nothing pushed, merged or published:** MET Norway (18), Met Éireann (18), AEMET coastal (51), JMA (37) and 25
+  high-seas sub-areas as broadcast (NZ/Fiji, SAWS, La Réunion, Argentina, Chile, BoM South Eastern) — sources above.
+  **Matching** (`vibe_navtex_met.h`): the Irish coast as a CHAIN of headlands ("ROCHES POINT TO SLYNE HEAD TO MALIN HEAD
+  [AND FOR THE IRISH SEA]" = every stretch between, the shorter way round); Norway's English and Norwegian names; THEEMS,
+  DEUTSCHE BUCHT, TAMISE, PAS DE CALAIS on Thames / German Bight / Dover; EN / ET join a list; Inner/Outer Skagerrak's
+  hand-made label rows retired for MET Norway's outlines (ids `no-inner-skagerrak`, `no-outer-skagerrak`);
+  `vibe_navtex_warn.h kVersion 9` rebuilds every met index once. JMA and the high-seas boxes are map-only (no heading
+  forms). **Native code changed: run `build_ios.sh` before an iOS build.**
+  Tests: `test-navtex-met` 98 (+18; the Lenovo set now gives 271 messages with an area, was 231, and 1147 area forecasts,
+  was 1017; arrow force = label force everywhere), `test_sea_areas.ts` 59 (+21: counts, no duplicate UK areas, the UTM
+  reprojection, no label inside a same-source neighbour, the Irish chain links round the island, reach from Bergen /
+  Cork / Cádiz / Auckland / Cape Town, none in inland Asia, 180° in one piece, attribution), `test-web-shipping-map.mjs`
+  36 (+8, headless Edge --mute-audio; screenshots `sea-areas-biscay.png`, `sea-areas-skagerrak.png` beside the UK ones),
+  `test_shipping_map.ts` 48, `test_navtex_map.ts` 55. The generator fails the build if a pass-2 label falls on land.
+  **Owed:** an app device run; a run over the Lenovo's real gallery at kVersion 9; SMHI's answer on the Baltic districts
+  (then m/s winds); the METAREAs themselves (coast build); UK inshore strips; Inner Skagerrak's MET Norway outline is
+  coarse (13 points) and cuts the coast near the Oslofjord — as published.
 
 - **SEA AREAS (branch `v12-sea-areas`, from `v12-experimental` c967cb58e, 2026-11-02) — built and tested on this Mac:**
   dataset + generator, the met parser's table extended (UGC, knots, feet), web + app drawing, KEY, About, tour copy.
