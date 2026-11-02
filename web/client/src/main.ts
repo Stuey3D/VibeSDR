@@ -8902,7 +8902,7 @@ function navDraw() {
 }
 async function navMapOpen() {
   if (!navView) navView = new TrackView({
-    title: 'NAVTEX', profile: 'marine', exitLabel: 'CLOSE MAP', listTitle: 'NAVTEX',
+    title: 'NAVTEX', profile: 'marine', exitLabel: 'CLOSE MAP', listTitle: 'RECEIVED',
     onExit: () => { navView?.hide(); if (navTimer) { clearTimeout(navTimer); navTimer = null; } },
     icon: (it) => it._ic, label: (it) => it._lb, card: (it) => it._cd, labelZoom: 3, focusZoom: 6, heard: (it) => it._h ?? 0,
     labelRank: (it) => it._rk ?? 0, arc: (it) => !!it._arc,

@@ -2402,7 +2402,7 @@ export default function MapOverlay(
         )}
         {/* ★★ V12 THE AIS / APRS LIVE LIST — AdsbLiveList's corner and reasons (TrackLiveList). */}
         {isTrkKind && !!trk && !!pageUri && !packError && (
-          <TrackLiveList title={kind === 'ais' ? 'SHIPS' : kind === 'dsc' ? 'CALLS' : kind === 'ism' ? 'NODES' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
+          <TrackLiveList title={kind === 'ais' ? 'SHIPS' : kind === 'dsc' ? 'CALLS' : kind === 'ism' ? 'NODES' : kind === 'navtex' ? 'RECEIVED' : 'STATIONS'} rows={trk.rows} status={trk.status} empty={trk.empty}
                          ranges={trk.ranges} range={trk.range} rangeHint={trk.rangeHint}
                          toggles={trk.toggles} toggled={trk.toggled} onToggle={trk.onToggle}
                          onRange={trk.onRange ? (id) => { trk.onRange?.(id); setTimeout(() => webRef.current?.injectJavaScript('window.__trkFit&&window.__trkFit();true;'), 400); } : undefined}
