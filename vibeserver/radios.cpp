@@ -4,6 +4,8 @@
 #include "sdrplay_source.h"
 #include "hackrf_source.h"
 #include "airspy_source.h"
+#include "usrp_source.h"
+#include "vibe_usrp_caps.h"
 #include "icom_transport.h"
 #include <algorithm>
 #include "sdr_presence.h"   // sysfsClaimedCounts
@@ -120,6 +122,21 @@ std::vector<DetectedRadio> detectRadios() {
         }
     }
 
+    /* ★★ V12: ETTUS USRP B2xx — LAST, after the Icom, so no existing flat index moves (EXPERIMENTAL, usrp_source.h).
+     *  Our own claim-free descriptor walk, NOT uhd::device::find(), which loads firmware into every B2xx it meets.
+     *  Absent from the build (armhf, i386) = deviceCount() 0, so this loop does not run and nothing is offered. */
+    {
+        const int nUsrp = UsrpSource::deviceCount();
+        for (int i = 0; i < nUsrp; i++) {
+            DetectedRadio r;
+            r.driver = "usrp";
+            r.name   = UsrpSource::deviceName(i);
+            r.serial = UsrpSource::deviceSerial(i);
+            r.driverIndex = i;
+            out.push_back(r);
+        }
+    }
+
     for (size_t i = 0; i < out.size(); i++) out[i].index = (int)i;
     return out;
 }
@@ -158,6 +175,7 @@ UsbBusCounts usbBusCounts() {
             else if (d.idVendor == 0x1d50 && (d.idProduct == 0x6089 || d.idProduct == 0x604b
                                               || d.idProduct == 0xcc15)) c.hackrf++;
             else if (d.idVendor == 0x1d50 && d.idProduct == 0x60a1) c.airspy++;
+            else if (usrpcaps::nameForUsbId(d.idVendor, d.idProduct)) c.usrp++;   // ★ V12 B2xx (vibe_usrp_caps.h)
         }
         libusb_free_device_list(list, 1);
     }
@@ -168,7 +186,7 @@ UsbBusCounts usbBusCounts() {
 #if defined(__linux__)
     // ★★ WHO HAS CLAIMED WHAT, from sysfs — never by asking the device. See sysfsClaimedCounts.
     c.claimedOk = sysfsClaimedCounts("/sys/bus/usb/devices", c.claimedSdrplay, c.claimedAirspyhf,
-                                     c.claimedHackrf, c.claimedAirspy);
+                                     c.claimedHackrf, c.claimedAirspy, &c.claimedUsrp);
 #endif
     return c;
 }

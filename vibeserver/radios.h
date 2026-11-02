@@ -18,7 +18,7 @@
 namespace vibe {
 
 struct DetectedRadio {
-    std::string driver;    // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental) | "airspy" (R2/Mini) | "icom" (receive only)
+    std::string driver;    // "rtlsdr" | "sdrplay" | "airspyhf" | "hackrf" (experimental) | "airspy" (R2/Mini) | "icom" (receive only) | "usrp" (V12, experimental)
     std::string name;      // human-readable, as the driver describes it
     std::string serial;    // as the DRIVER reports it; may be empty, and may not be unique
     int         index = 0; // position in this flat list — what `--radio N` takes
@@ -51,6 +51,7 @@ bool serialsCollide(const std::vector<DetectedRadio>& radios);
 struct UsbBusCounts {
     bool ok = false;
     int rtlsdr = 0, sdrplay = 0, airspyhf = 0, hackrf = 0, airspy = 0;
+    int usrp = 0;   // ★ V12 Ettus USRP B2xx — 2500:0020-0023, 3923:7813/7814 (vibe_usrp_caps.h)
     /** -1 for an unknown driver or a failed walk — "no witness". */
     int forDriver(const std::string& driver) const {
         if (!ok) return -1;
@@ -59,6 +60,7 @@ struct UsbBusCounts {
         if (driver == "airspyhf") return airspyhf;
         if (driver == "hackrf")   return hackrf;
         if (driver == "airspy")   return airspy;
+        if (driver == "usrp")     return usrp;
         return -1;
     }
     /** ★★★ HOW MANY OF EACH KIND SOME PROCESS HAS CLAIMED — Linux only, read from sysfs: an
@@ -69,12 +71,14 @@ struct UsbBusCounts {
      *    (macOS, no sysfs, or an RTL). */
     bool claimedOk = false;
     int claimedSdrplay = 0, claimedAirspyhf = 0, claimedHackrf = 0, claimedAirspy = 0;
+    int claimedUsrp = 0;
     int claimedForDriver(const std::string& driver) const {
         if (!claimedOk) return -1;
         if (driver == "sdrplay")  return claimedSdrplay;
         if (driver == "airspyhf") return claimedAirspyhf;
         if (driver == "hackrf")   return claimedHackrf;
         if (driver == "airspy")   return claimedAirspy;
+        if (driver == "usrp")     return claimedUsrp;
         return -1;
     }
 };

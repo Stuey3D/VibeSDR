@@ -41,6 +41,7 @@
 #include "airspyhf_source.h"
 #include "icom_transport.h"    // ★ listUsbIcoms — an Icom found by its USB serial, without a byte sent
 #include "hackrf_source.h"
+#include "usrp_source.h"   // ★ V12 Ettus USRP B2xx (inline stub on a build without UHD)
 #include "airspy_source.h"
 #include "sdrplay_source.h"
 
@@ -2446,7 +2447,7 @@ int main(int argc, char** argv) {
                 const bool ismOk = r.driver != "airspyhf" && r.driver != "icom";
                 // ★★ V12 2026-10-27: an NDB skimmer VFO only where the radio reaches LF — an HF+ or an RSP, an RTL only with
                 //    direct sampling on or automatic (the same rule as the mode's own capability, vsNdbReach).
-                const bool rtlLike = r.driver != "airspyhf" && r.driver != "sdrplay" && r.driver != "icom" && r.driver != "hackrf" && r.driver != "airspy";
+                const bool rtlLike = r.driver != "airspyhf" && r.driver != "sdrplay" && r.driver != "icom" && r.driver != "hackrf" && r.driver != "airspy" && r.driver != "usrp";
                 const bool ndbOk = r.driver == "airspyhf" || r.driver == "sdrplay" || (rtlLike && (r.autoDirectSampling || r.directSampling > 0));
                 if (!parsed || !vibe::bg::validate(bc, rate, be, cap, locked ? r.lockFreq : 0, ismOk, ndbOk)) {
                     err = (r.label.empty() ? r.driver : r.label) + " \xe2\x80\x94 " + be;
@@ -3759,6 +3760,11 @@ int main(int argc, char** argv) {
             else if (drv == "airspy")
                 port = shim.startAirspy(drvIdx, o.freq, o.rate, o.gain,
                                         o.fftSize, o.fftRate, o.mode, err);
+            /* ★ V12: THE ETTUS USRP B2xx, the seventh source — named, never left to the dongle's `else`. On a build
+             *  without UHD (armhf, i386) startUsrp fails at once with words, and detectRadios never lists one there. */
+            else if (drv == "usrp")
+                port = shim.startUsrp(drvIdx, o.freq, o.rate, o.gain,
+                                      o.fftSize, o.fftRate, o.mode, err);
             else if (drv == "airspyhf")
                 port = shim.startAirspyHf(drvIdx, o.freq, o.rate, o.gain,
                                           o.fftSize, o.fftRate, o.mode, err);
@@ -3832,6 +3838,13 @@ int main(int argc, char** argv) {
         // ★★★ AND THE ICOM, appended after the R2/Mini in detectRadios() — so it is tested first here.
         const int nAsp = vibe::AirspySource::deviceCount();
         const auto icoms = icom::listUsbIcoms();
+        // ★ V12: AND THE USRP B2xx, appended after the Icom in detectRadios() — so it is tested first of all here.
+        const int nBeforeUsrp = nRtl + nRsp + nAhf + nHrf + nAsp + (int)icoms.size();
+        if (o.radio >= nBeforeUsrp && o.radio < nBeforeUsrp + vibe::UsrpSource::deviceCount()) {
+            std::printf("VibeServer: using USRP %d (experimental)\n", o.radio - nBeforeUsrp);
+            port = shim.startUsrp(o.radio - nBeforeUsrp, o.freq, o.rate, o.gain,
+                                  o.fftSize, o.fftRate, o.mode, err);
+        } else
         if (o.radio >= nRtl + nRsp + nAhf + nHrf + nAsp
             && o.radio < nRtl + nRsp + nAhf + nHrf + nAsp + (int)icoms.size()) {
             const auto& u = icoms[(size_t)(o.radio - nRtl - nRsp - nAhf - nHrf - nAsp)];
@@ -3909,6 +3922,14 @@ int main(int argc, char** argv) {
         std::printf("VibeServer: SDRplay RSP detected\n");
         port = shim.startSdrplay(0, o.freq, o.rate, o.gain,
                                  o.fftSize, o.fftRate, o.mode, err);
+    } else if (!o.deviceGiven && vibe::UsrpSource::deviceCount() > 0 && rtlsdr_get_device_count() == 0
+                              && vibe::HackRfSource::deviceCount() == 0) {
+        /* ★ V12: THE USRP B2xx, LAST IN THE CHAIN — the HackRF's rule: an experimental driver nobody here can test is
+         *  reached only when it is the only radio on the machine (every other driver has its own branch above, and the
+         *  dongle is the final `else`, so its count is tested explicitly — "else means dongle" from the other side). */
+        std::printf("VibeServer: USRP detected (experimental)\n");
+        port = shim.startUsrp(0, o.freq, o.rate, o.gain,
+                              o.fftSize, o.fftRate, o.mode, err);
     } else {
         port = shim.start(-(o.device + 1), 0, 0, o.freq, o.rate, o.gain,
                           o.fftSize, o.fftRate, o.mode, err);

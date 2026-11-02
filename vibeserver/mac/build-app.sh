@@ -224,7 +224,22 @@ HRFLIB=$(grep -m1 '^HACKRF_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
 #    objects. The cache now holds build-deps.sh's archives (VIBE_MAC_DEPS forces them), and the gate
 #    at the end FAILS the build if a package-manager path ever reaches this link line again.
 # ★ The link inputs are written down so the gate can check exactly what was linked.
-printf '%s\n' $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"} \
+# ★★★ AND UHD (the USRP B2xx, V12) — the seventh reader of the radio list. CMakeLists.txt writes the whole link
+#     (-force_load libuhd.a + the Boost archives) into VIBE_UHD_LINK; empty = a build without USRP support.
+#     force_load, not a plain archive: UHD registers its B2xx driver from a static initialiser nothing names.
+# ★★ AND THE V12 CODECS — FAAD2 (DRM build + the vibedab_-prefixed DAB+ build) and libxaac. CMakeLists.txt links them
+#    into the core PUBLICly, and this hand-written line never named them, so the app failed with undefined NeAACDec* /
+#    vibedab_* / ixheaacd_dec_api (found 2026-11-02 building v12-usrp; the engine, linked by CMake, was fine).
+CODECS=()
+for v in FAAD2_LIB FAAD2_DAB_LIB XAAC_LIB; do
+  f="$(grep -m1 "^$v:" "$BUILD/CMakeCache.txt" | cut -d= -f2-)"
+  [ -n "$f" ] && [ -f "$f" ] && CODECS+=("$f")
+done
+LIBS="$LIBS ${CODECS[*]}"
+UHDLINK=()
+UHDLINK_S="$(grep -m1 '^VIBE_UHD_LINK:' "$BUILD/CMakeCache.txt" | cut -d= -f2-)"
+[ -z "$UHDLINK_S" ] || IFS=';' read -r -a UHDLINK <<<"$UHDLINK_S"
+printf '%s\n' $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"} ${UHDLINK[@]+"${UHDLINK[@]}"} \
   > "$LOGS/swift-link-inputs.txt"
 
 swiftc \
@@ -236,7 +251,7 @@ swiftc \
   "$MAC/EibiStations.swift" \
   "$MAC/FullMode.swift" \
   "$MAC/RspDriver.swift" \
-  $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"} \
+  $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"} ${UHDLINK[@]+"${UHDLINK[@]}"} \
   -lc++ \
   `# ★ ONE RULE, TWO READERS: CMakeLists.txt links these for vibeserver/dab-offline; this line is the app's own.` \
   `# AudioToolbox + CoreAudio: the DAB+ decoder fallback in vibe_dab_aacdec.h (5.0.0 broke here without them).` \
@@ -278,6 +293,17 @@ fi
 for f in LICENSE.libxaac NOTICE.libxaac; do
   if [ -f "$DEPS/prefix/share/licences/$f" ]; then cp "$DEPS/prefix/share/licences/$f" "$APP/Contents/Resources/$f"; fi
 done
+# ★★★ THE USRP B2xx IMAGES (V12, docs/v12/USRP.md) — firmware + FPGA, pinned to UHD 4.9.0.1's manifest by
+#     build-uhd.sh. usrp_source.cpp finds them at <exe>/../Resources/uhd-images; nothing is downloaded on a user's Mac.
+#  ★ Only when the build linked UHD (VIBE_UHD_LINK) — images without the driver would be 14 MB of nothing.
+if [ ${#UHDLINK[@]} -gt 0 ]; then
+  [ -s "$DEPS/uhd/images/usrp_b200_fw.hex" ] || { echo "!! $DEPS/uhd/images has no USRP firmware"; exit 1; }
+  mkdir -p "$APP/Contents/Resources/uhd-images"
+  cp "$DEPS/uhd/images/"* "$APP/Contents/Resources/uhd-images/"
+  for f in LICENSE.uhd LICENSE.uhd-fpga LICENSE_1_0.txt.boost IMAGES.txt; do
+    if [ -f "$DEPS/uhd/share/licences/$f" ]; then cp "$DEPS/uhd/share/licences/$f" "$APP/Contents/Resources/uhd-images/"; fi
+  done
+fi
 cp "$ROOT/vendor/openrsp/VIBESDR-CHANGES" "$APP/Contents/Resources/openrsp/VIBESDR-CHANGES"
 cp "$MAC/README.openrsp" "$APP/Contents/Resources/openrsp/README.openrsp"
 ( cd "$APP/Contents/Resources/openrsp/firmware/own" && shasum -a 256 -c manifest.sha256 >/dev/null ) \
@@ -352,6 +378,10 @@ echo "==> Built $APP"
 GATE=(--app "$APP")
 for a in $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"}; do
   GATE+=(--archive "$a")
+done
+# ★ V12: and UHD's archives (libuhd.a, Boost) — the same minimum-macOS check as every other linked archive.
+for a in ${UHDLINK[@]+"${UHDLINK[@]}"}; do
+  case "$a" in *.a) GATE+=(--archive "$a") ;; esac
 done
 for l in core.log engine.log swift.log; do GATE+=(--ldlog "$LOGS/$l"); done
 GATE+=(--linkinput "$BUILD/CMakeFiles/vibeserver.dir/link.txt"

@@ -294,6 +294,32 @@ if stamp_ok libxaac "$XAAC_STAMP" "$PREFIX/lib/libxaacdec.a"; then echo "==> lib
   echo "$XAAC_STAMP" > "$PREFIX/.stamp-libxaac"
 fi
 
+# ── UHD 4.9.0.1 (Ettus USRP B2xx only) + Boost 1.83 subset + the B2xx images — V12, docs/v12/USRP.md ────────────
+# ★★★ PLUG AND PLAY (Stuart, 2026-11-02): a USRP needs nothing installed beside the app. ../linux/build-uhd.sh is the
+#     one builder for the Mac and Linux (amd64/arm64); it fetches the pinned source and images (SHA-256 checked, the
+#     images against UHD's own manifest) and leaves libuhd.a + the Boost archives + images/ in $DEPS/uhd, which
+#     CMakeLists.txt (VIBE_UHD_PREFIX) links and build-app.sh copies to Resources/uhd-images.
+# ★ Its own prefix, not $PREFIX: 180 MB of Boost headers have no business on every other library's include path.
+# ★ GPL-3.0-or-later (UHD) / LGPL-3.0 (FPGA images) / BSL-1.0 (Boost) — the licences go to Resources with the images.
+UHD_SCRIPT="$MAC/../linux/build-uhd.sh"
+UHD_OUT="$DEPS/uhd"
+UHD_STAMP="uhd script=$(shasum -a 256 "$UHD_SCRIPT" | cut -c1-16) libusb=$USB_VER min=$MIN arch=$ARCH $CCVER"
+if [ "${FORCE:-0}" != 1 ] && [ -s "$UHD_OUT/lib/libuhd.a" ] && [ -f "$UHD_OUT/.stamp" ] && [ "$(cat "$UHD_OUT/.stamp")" = "$UHD_STAMP" ]; then
+  echo "==> UHD (USRP B2xx): up to date"
+else
+  echo "==> UHD (USRP B2xx): building for macOS $MIN"
+  # ★ The download cache is deps/src like every other piece, so a rebuild is offline.
+  CXX="$CXX" AR=/usr/bin/ar RANLIB=/usr/bin/ranlib NM=/usr/bin/nm UHD_B2_TOOLSET=clang \
+  UHD_CMAKE_EXTRA="-DCMAKE_OSX_DEPLOYMENT_TARGET=$MIN -DCMAKE_OSX_ARCHITECTURES=$ARCH -DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local;/opt/local" \
+  JOBS="$JOBS" bash "$UHD_SCRIPT" "$SRC" "$PREFIX" "$UHD_OUT" "/Applications/VibeServer.app/Contents/Resources/uhd-images" \
+    >"$WORK/uhd.log" 2>&1 || { tail -40 "$WORK/uhd.log"; echo "!! UHD build failed"; exit 1; }
+  tail -1 "$WORK/uhd.log"
+  check_log "$WORK/uhd.log"
+  verify_archive "$UHD_OUT/lib/libuhd.a"
+  rm -f "$WORK/uhd.log"
+  echo "$UHD_STAMP" > "$UHD_OUT/.stamp"
+fi
+
 # ── cloudflared 2026.10.4, compiled ───────────────────────────────────────────────────────────
 # ★★★ Cloudflare's darwin release binary is minos 15.0 (their CI links it with a macOS 15 SDK
 #     through cgo), so on a macOS 14 Mac the tunnel switch starts nothing. Compiled here with

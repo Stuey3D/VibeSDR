@@ -865,6 +865,10 @@ public:
                     int fftSize, double fftRate, const std::string& mode, std::string& err);
     int startAirspyFd(int fd, double centerFreq, double sampleRate, int gainTenthDb,
                       int fftSize, double fftRate, const std::string& mode, std::string& err);
+    /** ★ V12: Ettus USRP B2xx — EXPERIMENTAL, desktop amd64/arm64/Mac only (usrp_source.h). No Fd twin: not offered
+     *  on Android. On a build without UHD it fails at once ("no USRP support"), never reaching a radio. */
+    int startUsrp(int index, double centerFreq, double sampleRate, int gainTenthDb,
+                  int fftSize, double fftRate, const std::string& mode, std::string& err);
     int startAirspyHf(int index, double centerFreq, double sampleRate, int gainTenthDb,
                       int fftSize, double fftRate, const std::string& mode, std::string& err);
     /** ★ Start an Airspy HF+ from a USB file descriptor — Android's only route in. Reached
@@ -1028,6 +1032,7 @@ public:
     bool isAirspyHf() const;      // cancels + restarts the IQ stream (auto FFT size)
     bool isHackRf() const;        // EXPERIMENTAL — three manual gain stages, and no AGC at all
     bool isAirspy() const;        // Airspy R2 / Mini — preset gain curves, its own stage AGCs
+    bool isUsrp() const;          // V12 Ettus USRP B2xx — EXPERIMENTAL, one gain, the AD9361's AGC, RX ports
     void setFftRate(double fps);          // LIVE spectrum frame rate (power saving); audio unaffected
     void setDeemphasis(double tau);       // FM de-emphasis time constant (0=off, 50e-6, 75e-6)
     void setNfmVoice(bool on);            // NFM audio: true = Voice (300 Hz-3 kHz), false = Raw (flat)

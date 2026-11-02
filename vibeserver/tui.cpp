@@ -29,6 +29,7 @@
 
 #include "vibeserver_config.h"
 #include "radios.h"
+#include "usrp_source.h"   // ★ V12: compiledIn() — whether this build names the USRP at all
 #include "vibeserver_api.h"
 
 namespace {
@@ -113,6 +114,10 @@ std::string radioLine() {
     //    looking for a hardware fault that is not there.
     // ★ HackRF (1d50:6089) and Airspy R2/Mini (1d50:60a1) by ID as well as by name: both sit
     //   under the OpenMoko vendor ID, and an old usb.ids may not name either.
+    // ★ V12: and an Ettus USRP B2xx (2500:0020-0023, NI 3923:7813/7814) — only where this build drives one.
+    if (vibe::UsrpSource::compiledIn())
+        return run("lsusb 2>/dev/null | grep -iE 'airspy|sdrplay|rtl|realtek|1df7|hackrf|1d50:6089|1d50:60a1|ettus|2500:002[0-3]|3923:781[34]' "
+                   "| sed 's/.*ID [0-9a-f:]* //' | head -1");
     return run("lsusb 2>/dev/null | grep -iE 'airspy|sdrplay|rtl|realtek|1df7|hackrf|1d50:6089|1d50:60a1' "
                "| sed 's/.*ID [0-9a-f:]* //' | head -1");
 }
@@ -275,7 +280,10 @@ bool runWizard(vsconfig::Config& cfg, std::vector<vibe::DetectedRadio>& radios,
         if (radios.empty()) {
             message(4, 2, "No radio detected.");
             mvprintw(6, 2, "Plug an SDR into this machine, then press  r  to look again.");
-            mvprintw(7, 2, "Supported: RTL-SDR, Airspy HF+, Airspy R2/Mini, SDRplay RSP, HackRF.");
+            // ★ V12: the USRP is named only where this build can drive one (amd64 / arm64) — never offered on a Pi 2.
+            mvprintw(7, 2, vibe::UsrpSource::compiledIn()
+                ? "Supported: RTL-SDR, Airspy HF+, Airspy R2/Mini, SDRplay RSP, HackRF, Ettus USRP B2xx (experimental)."
+                : "Supported: RTL-SDR, Airspy HF+, Airspy R2/Mini, SDRplay RSP, HackRF.");
             attron(A_BOLD); mvprintw(9, 2, "r = look again    q = quit"); attroff(A_BOLD);
             refresh();
             int c = getch();

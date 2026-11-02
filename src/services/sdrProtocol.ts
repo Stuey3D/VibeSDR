@@ -278,7 +278,13 @@ export interface RadioCaps {
   /** ★ HackRF stage ranges, dB, as the server publishes them (absent from an older server). */
   lnaMax?: number; lnaStep?: number; vgaMax?: number; vgaStep?: number;
   hrfAmp?: boolean; hrfLna?: boolean; hrfVga?: boolean; hrfBiasT?: boolean;
+  /** ★ The radio has an automatic gain of its OWN in hardware (HackRF: false). On a USRP B2xx: the AD9361's AGC. */
   hwAgc?: boolean;
+  // ── ★ V12: Ettus USRP B2xx (driver === 'usrp', EXPERIMENTAL — docs/v12/USRP.md) ──
+  /* One gain (the generic `gains` list in hwinfo, read from the radio), its own AGC (`hwAgc` + `agcOn`), and its RX
+   * sockets as `antennas` (EMPTY on a radio with one choice). Everything here is read from the radio by the server;
+   * the client holds no USRP constants. `usb` is the link the radio reports (2 or 3; 0 unknown). */
+  agcOn?: boolean; usb?: number; serial?: string; experimental?: boolean; noTunerBw?: boolean; hasBiasT?: boolean;
   // ── SDRplay RSP ──
   lnaStates?: number;
   ifGrMin?: number; ifGrMax?: number;

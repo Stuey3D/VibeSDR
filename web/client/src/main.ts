@@ -19062,6 +19062,10 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
    *  ★ Caught before the tester met it: an Airspy Mini came up first power-on in the APP, where
    *    the panel exists, and the web client would have handed the same person dead controls. */
   const isAsp = caps?.driver === 'airspy';
+  /* ★ V12: THE ETTUS USRP B2xx (EXPERIMENTAL) — named, so it cannot fall through to the dongle's controls. One gain,
+   *  the radio's own list (hwinfo `gains`), so the generic slider stays; every dongle-only row (PPM, bias-T, the
+   *  RTL2832 digital AGC, direct sampling) goes. Its RX sockets come through the generic antenna menu (`antennas`). */
+  const isUsrp = caps?.driver === 'usrp';
   $<HTMLElement>('rspCtls').hidden = !isRsp;
   if (!isRsp) rspAgcClear();   // ★ the AGC readout belongs to an SDRplay only — never left standing over another radio
   $<HTMLElement>('ahfCtls').hidden = !isAhf;
@@ -19085,10 +19089,10 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   // PER BILLION, and two frequency-correction controls disagreeing about units is exactly the
   // "which one is real?" confusion the RSP bias-T duplication caused.
   for (const el of Array.from(document.querySelectorAll('.rtlOnly')) as HTMLElement[])
-    el.hidden = isRsp || isAhf || isHrf || isAsp;
+    el.hidden = isRsp || isAhf || isHrf || isAsp || isUsrp;
   // ★★ …except frequency correction, which an RSP has too (the server always applied it to one; this hid it).
   for (const el of Array.from(document.querySelectorAll('.rtlRspOnly')) as HTMLElement[])
-    el.hidden = isAhf || isHrf || isAsp;
+    el.hidden = isAhf || isHrf || isAsp || isUsrp;
   /* ★★★ WHAT THIS RECEIVER'S OWNER ACTUALLY SET, under the control that obeys it — and, on a V4 or
    *  V4L, that the control is not needed at all. Both come from hwinfo (autoDs / dsBelowHz / ds),
    *  which had to be taught to send them: `dsActive` alone says what the hardware is doing this
@@ -19152,7 +19156,10 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
    *  radio's main control. VibeAGC is the row that goes: it is RTL-only, shaped against a tuner
    *  that behaves nothing like this one, and an AUTO button that does nothing is the exact fault
    *  AGENTS.md names. */
-  if (autoRow) autoRow.hidden = isRsp || isAhf || isHrf || isAsp;
+  /* ★ V12 USRP: the AUTO row is VibeAGC's (painted from hwinfo `agc`, titled as VibeSDR's loop), and VibeAGC does not
+   *  drive this radio — so it goes, rather than standing as a button that names the wrong AGC. The radio's own AD9361
+   *  AGC is the app panel's switch (radio.hwAgc / agcOn); a web switch for it is a follow-up (docs/v12/USRP.md). */
+  if (autoRow) autoRow.hidden = isRsp || isAhf || isHrf || isAsp || isUsrp;
   // ★ THE PROTECTED CONTROLS ARE BUILT HERE, so the lock has to be re-applied here. The
   // Airspy and RSP panels only exist once the radio has announced itself, which happens AFTER
   // the admin state is first resolved — so applying it only at connect left the per-radio

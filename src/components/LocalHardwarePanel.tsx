@@ -1439,6 +1439,30 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                 you know what is on the end of the coax.
               </Text>
             </>
+          ) : p.radio?.driver === 'usrp' ? (
+            /* ★★ V12: ETTUS USRP B2xx — EXPERIMENTAL. ONE gain (the radio's own 0-76 dB list, from hwinfo `gains`)
+             *  and ITS OWN AGC — the AD9361's, not VibeAGC, so the dongle slider's "VibeAGC" button would name the
+             *  wrong loop. A plain slider, and an AGC switch only when the radio said it has one (hwAgc). Moving
+             *  the slider is a manual gain: the server switches the radio's AGC off as it sets it. */
+            <>
+              <Text style={styles.section}>GAIN — {p.radio?.model || 'USRP'}</Text>
+              <GainSlider gains={cappedGains} gainTenthDb={p.gainTenthDb} auto={!!p.radio?.agcOn}
+                          onAuto={p.onAuto} onGain={p.onGain} vibeAgc={false} modeButtons={false}
+                          ink={gainSliderInk(gt)} />
+              {!!p.radio?.hwAgc && (
+                <View style={styles.toggleRow}>
+                  <Text style={styles.toggleLabel}>The radio's own AGC (AD9361)</Text>
+                  <Switch value={!!p.radio?.agcOn} onValueChange={(v) => p.onAuto(v)}
+                    trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.agcOn ? K.gold : '#ccc'} />
+                </View>
+              )}
+              <Text style={styles.note}>
+                Experimental. {p.radio?.agcOn
+                  ? 'The radio is setting its own gain — move the slider to take it back by hand.'
+                  : 'Manual gain. Bring it up until signals are clear of the noise and no further.'}
+                {p.radio?.usb === 2 ? ' This radio is on a USB 2 port: rates stop at 8 MS/s.' : ''}
+              </Text>
+            </>
           ) : p.radio?.noHwGain ? (
             /* ★ A RELAYED rtl_tcp stream: its server sent no gains, so there is no tuner to steer. */
             <Text style={[styles.note, { marginTop: 12 }]}>
