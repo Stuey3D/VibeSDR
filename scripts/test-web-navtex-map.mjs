@@ -119,7 +119,7 @@ try {
   const arcs = Number(await ev(`document.querySelector('[data-vtl-arcs]')?.getAttribute('data-vtl-arcs') || 0`));
   ok(arcs === nSites, `one great-circle line from the receiver to each site: ${arcs}`);
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
-     === 'STATIONS:true WARNINGS:true WEATHER:true', 'the layers: STATIONS · WARNINGS · WEATHER, all on');
+     === 'STATIONS:true WARNINGS:true WEATHER:true SEA AREAS:true', 'the layers: STATIONS · WARNINGS · WEATHER · SEA AREAS (2026-11-02), all on');
   ok(JSON.parse(await ev(`JSON.stringify([...${view}.querySelectorAll('[data-rng]')].map(b => b.textContent + ':' + b.getAttribute('aria-pressed')))`)).join(' ')
      === '1 H:false 24 H:false 7 DAYS:false 30 DAYS:false ALL:true', 'the time filter: five ranges, ALL by default (a received-stations view)');
   const st = await ev(`${view}.querySelector('.st').textContent`);
@@ -176,7 +176,7 @@ try {
     ok(n === w.items.length, `${w.id}'s named list: ${n} markers, one an item (${w.items.map((x) => x.n).join(', ')})`);
   }
   if (drawn.length > 60) ok(clusters > 0 && await ev(`document.querySelectorAll('.vtl-mk.vtl-clhid').length > 0`), `zoomed out, warnings gathered into numbered markers (${clusters})`);
-  ok(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => !e.classList.contains('vtl-clhid') && !e.classList.contains('vtl-yhid')).every(e => e.getAttribute('role') === 'button' && e.tabIndex === 0 && (e.getAttribute('aria-label') || '').length > 8)`),
+  ok(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => !e.classList.contains('vtl-clhid') && !e.classList.contains('vtl-yhid') && !e.classList.contains('vtl-zhid')).every(e => e.getAttribute('role') === 'button' && e.tabIndex === 0 && (e.getAttribute('aria-label') || '').length > 8)`),
      'every marker is a button in the tab order, with its words');
   console.log('   screenshot', await shot('navtex-map-warnings.png'));
   // ★★ DECLUTTER (2026-11-01): all three layers on, over the UK — the weather labels give way to station names and

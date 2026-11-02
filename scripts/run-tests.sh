@@ -623,6 +623,7 @@ if npx tsx scripts/test_navtex_map.ts; then pass=$((pass+1)); else fail=$((fail+
 # ★★ V12 2026-11-02 THE SHIPPING MAP's client rules (src/services/shippingMap.ts, navtexWind.ts): which layers are present,
 #    ships from the live report and the store, DSC pins from the box and the gallery, the time filter, the KEY, the arrows
 if npx tsx scripts/test_shipping_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_sea_areas.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 APP PARITY 2 (2026-10-26): the app's PSK / JTTY / DSC boxes against the web's own modules — dials, channels, parsers,
 #    order, merges, where a tap tunes, the attach parameters, hints and colours, which keys a radio can reach.
 if npx tsx scripts/test_psk_jtty_dsc_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

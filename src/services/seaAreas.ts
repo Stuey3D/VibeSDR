@@ -116,8 +116,10 @@ export function seaAreaItems(areas: SeaArea[], fcBy: Map<string, SeaFc>, wrap: '
       key: `a:${a.id}`, lat: a.lat, lon: a.lon, _ic: ic, _lb: '', _cd: seaCard(a, sev, !!f, wrap),
       _sh: { kind: 'area', rings: a.rings, sig: a.id, colour: col, weight: sev ? 1.6 : 0.8, opacity: sev ? 0.9 : 0.5, fillOpacity: sev === 2 ? 0.2 : sev === 1 ? 0.15 : 0,
              minZoom: sev ? 0 : SEA_LINE_ZOOM[a.kind] },
-      _mz: SEA_NAME_ZOOM[a.kind], _y: true, _rk: -1e6 + (a.kind === 's' ? 2 : a.kind === 'o' ? 1 : 0),
-      _aria: `Sea area ${a.name}${sev === 2 ? ': gale in force' : sev === 1 ? ': near gale' : ''}. Press Enter for the card.`,
+      // ★ an area with a forecast: its own marker never shows (the forecast's is the button), only its outline
+      _mz: f ? 99 : SEA_NAME_ZOOM[a.kind], _y: true, _nofit: true, _rk: -1e6 + (a.kind === 's' ? 2 : a.kind === 'o' ? 1 : 0),
+      // ★ the NAME first ("Dogger sea area"): a forecast's marker says "Sea area Dogger: …" — the two never read alike
+      _aria: `${a.name} sea area${sev === 2 ? ': gale in force' : sev === 1 ? ': near gale' : ''}. Press Enter for the card.`,
     };
   });
 }

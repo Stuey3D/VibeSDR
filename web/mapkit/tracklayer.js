@@ -38,6 +38,7 @@
  *   ★ V12 2026-11-02 (the SEA AREAS): an item may carry, without any option —
  *       _mz: 5        its icon shows from this Leaflet zoom only (a sea area's name drops before its outline)
  *       _y: true      its icon YIELDS like a yieldGroups item (hidden where it would cover a higher icon or a name)
+ *       _nofit: true  it never widens the first view (fit) and never pulses on arrival — the chart, not something heard
  *     and a shape may be { kind: 'area', rings: [[[lat, lon], …], …], minZoom, weight, fillOpacity, sig } — several
  *     rings (an area in parts), drawn from minZoom, 'sig' standing for the geometry when comparing (no re-stringify).
  *   layer.update(items)   // [{key, lat, lon, …}] — the whole list each time; items without a position are skipped
@@ -368,7 +369,11 @@
         shapes.set(k, { sig: sig, layers: made });
       });
       shapes.forEach(function (v, k) { if (!want.has(k)) { v.layers.forEach(function (l) { try { l.remove(); } catch (err) { /* gone */ } }); shapes.delete(k); } });
-      cont.setAttribute('data-vtl-shapes', String(shapes.size));
+      // ★ the chart's shapes (_nofit: the sea areas) counted apart from what was heard
+      var nChart = 0;
+      shapes.forEach(function (v, k) { var e = items.get(k); if (e && e.item && e.item._nofit) nChart++; });
+      cont.setAttribute('data-vtl-shapes', String(shapes.size - nChart));
+      cont.setAttribute('data-vtl-chart', String(nChart));
     }
     function update(list) {
       if (destroyed) return;
@@ -394,7 +399,7 @@
           items.set(k, { mk: mk, item: it, sig: ic.sig, lat: it.lat, lon: it.lon, heard: opts.heard ? opts.heard(it) : 0, w: ic.w, h: ic.h });
           decorate(k);
           // ★ LIVE: an item that arrives after the map was first drawn pulses (the first batch does not — it is history)
-          if (fitted) pulse(k);
+          if (fitted && !it._nofit) pulse(k);
         } else {
           if (e.gone) { e.gone = false; setCls(e.mk, 'vtl-gone', false); }
           if (e.lat !== it.lat || e.lon !== it.lon) { e.mk.setLatLng([it.lat, it.lon]); e.lat = it.lat; e.lon = it.lon; }
@@ -499,7 +504,8 @@
     }
     function fit() {
       var pts = [];
-      items.forEach(function (e) { if (!e.gone) pts.push([e.lat, e.lon]); });
+      // ★ V12 2026-11-02 an item marked _nofit (a sea area: the chart, not something heard) never widens the first view
+      items.forEach(function (e) { if (!e.gone && !(e.item && e.item._nofit)) pts.push([e.lat, e.lon]); });
       if (rx) pts.push([rx.lat, rx.lon]);
       if (!pts.length) return;
       if (pts.length === 1) { map.setView(pts[0], 10); return; }
