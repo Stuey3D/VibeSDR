@@ -34,6 +34,7 @@ import { NAV_HAZARD_COLOURS, NAV_HAZARDS, navGlyphSvg } from '../../../src/servi
 import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
          type ShipLayers, type ShipLayerId, type ShipFocus, type ShipHave, type StoredShips, type DscPin as DscPin2 } from '../../../src/services/shippingMap';
+import { seaCompose, seaAreasFor, seaPlaceMet, seaLegendHtml, seaAttribution } from '../../../src/services/seaAreas';   // ★ V12 the SEA AREAS
 import { TrackView, aisIcon, aisName, aisCard, aisRows, aisStatus, aisSafetyHtml, aprsIcon, aprsName, aprsCard, aprsRows, aprsStatus, aprsSanitise, type AisReport, type AprsList } from './tracks';
 import { AudioPlayer } from './audio';
 import { guard, noteFault, faultSummary, faultTotal } from '../../../src/services/faultLog';
@@ -8899,6 +8900,7 @@ function shipHave(now: number): ShipHave {
   return {
     ships: shipShips(aisOn ? aisReport as any : null, navLast.ships).length, dsc: shipDscPins(now).length,
     stations: navLast.st?.stations.length ?? 0, warnings: w ? w.list.length + w.pending : 0, weather: navLast.m?.areas.length ?? 0, aisMode: aisOn,
+    areas: seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m).length,
   };
 }
 /** ★ The KEY for the layers this map has: ships and DSC glyphs, the NAVTEX hazards, the weather arrows. */
@@ -8906,6 +8908,7 @@ function shipKeyHtml(present: ShipLayerId[]): string {
   let h = shipLegendHtml(present);
   if (present.includes('warnings')) h += NAV_HAZARDS.map((x) => `<div class="kr">${navGlyphSvg(x.id, 16, NAV_HAZARD_COLOURS[x.id])}<span>${escapeHtml(x.words)}</span></div>`).join('');
   if (present.includes('weather')) h += windLegendRows().map(([g, w]) => `<div class="kr">${g}<span>${escapeHtml(w)}</span></div>`).join('');
+  if (present.includes('areas')) h += seaLegendHtml(present.includes('weather'), seaAttribution(seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m)));
   return h;
 }
 /** ★★ ONE COMPOSITION for both views: the items, the RECEIVED list (a section per layer shown) and the status line.
@@ -8949,7 +8952,7 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
         + `<span class="sp"></span><span class="rg">${escapeHtml(range)}</span><span class="ag">${escapeHtml(navRowAge(g.seen))}</span></div>`);
       status.push(navStatus(r));
     } else if (id === 'weather' && m) {
-      items.push(...navMetItems(navMetVisible(m, navRange), now, 'web'));
+      items.push(...navMetItems(seaPlaceMet(navMetVisible(m, navRange)), now, 'web'));   // ★ the arrow inside its area's outline
       // ★ the list keeps a sea area whose newest forecast is over a day old — as "no current forecast", never its old conditions
       const areas = navMetListed(m).slice().sort((a, b) => Number(a.stale) - Number(b.stale) || Number(navFcGale(b.fc[0])) - Number(navFcGale(a.fc[0])) || b.fc[0].t - a.fc[0].t);
       if (areas.length) out.push(sec('WEATHER — LATEST PER SEA AREA'));
@@ -8957,6 +8960,10 @@ function shipCompose(focus: ShipFocus, liveView: boolean) {
         + `<span class="id"><b><i class="sw" style="background:${a.stale ? '#9aa6b2' : navFcGale(a.fc[0]) ? '#ff6b5a' : '#5d8fb8'}"></i>${escapeHtml(a.name)}</b><small>${escapeHtml(navMetRowWords(a))}</small></span>`
         + `<span class="sp"></span><span class="rg"></span><span class="ag">${escapeHtml(navRowAge(Math.max(0, m.now - a.fc[0].t)))}</span></div>`);
       status.push(navMetStatus(m, navRange));
+    } else if (id === 'areas') {
+      // ★ V12 2026-11-02 the SEA AREAS: outlines and names; the tint (amber 7, red gale) is the WEATHER layer's, so only
+      //   while it is drawn. No rows in the RECEIVED list — the areas are the chart, not something heard.
+      items.push(...seaCompose(rx, m ?? null, on('weather'), 'web').items);
     } else if (id === 'warnings' && w) {
       items.push(...navWarnItems(navWarnVisible(w, navRange), now, 'web'));
       const list = navWarnVisible(w, navRange).slice().sort((a, b) => Number(!!navWarnTag(a)) - Number(!!navWarnTag(b)) || b.last - a.last).slice(0, 300);

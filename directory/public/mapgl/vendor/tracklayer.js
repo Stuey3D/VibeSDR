@@ -35,6 +35,12 @@
  *                                                     //   higher item's icon or a placed name (the selected one stays)
  *       aria:    function (item) { return '…'; },     // ★ a marker is a button (keyboard, gamepad, TV focus): its words
  *       onCard:  function (key, el) {}                // ★ the card was drawn (or redrawn): the host fills what it fetches
+ *   ★ V12 2026-11-02 (the SEA AREAS): an item may carry, without any option —
+ *       _mz: 5        its icon shows from this Leaflet zoom only (a sea area's name drops before its outline)
+ *       _y: true      its icon YIELDS like a yieldGroups item (hidden where it would cover a higher icon or a name)
+ *       _nofit: true  it never widens the first view (fit) and never pulses on arrival — the chart, not something heard
+ *     and a shape may be { kind: 'area', rings: [[[lat, lon], …], …], minZoom, weight, fillOpacity, sig } — several
+ *     rings (an area in parts), drawn from minZoom, 'sig' standing for the geometry when comparing (no re-stringify).
  *   layer.update(items)   // [{key, lat, lon, …}] — the whole list each time; items without a position are skipped
  *   layer.focus(key) · layer.select(key | null) · layer.fit() · layer.setReceiver(lat, lon) · layer.refreshCard() · layer.destroy()
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
@@ -79,6 +85,7 @@
     // ★ CLUSTERS: the gathered markers are hidden, the one standing for them carries the count
     '.vtl-mk.vtl-clhid{display:none !important}',
     '.vtl-mk.vtl-yhid{display:none !important}',
+    '.vtl-mk.vtl-zhid{display:none !important}',
     '.vtl-mk .vtl-cl{position:absolute;right:-7px;top:-7px;min-width:15px;height:15px;padding:0 3px;box-sizing:border-box;border-radius:8px;',
     'background:#ffd34d;color:#111;font:700 10px/15px ui-monospace,Menlo,Consolas,monospace;text-align:center;pointer-events:none;',
     'box-shadow:0 0 0 1.5px #0b1420}',
@@ -184,16 +191,20 @@
      *  item in opts.yieldGroups (the weather labels) LAST: its icon is no obstacle to anyone's name, and it is hidden
      *  wherever it would cover a higher item's icon or a name already placed — the selected one always stands. */
     var yieldG = opts.yieldGroups || [];
-    function yields(e) { return !!(yieldG.length && opts.cluster && yieldG.indexOf(opts.cluster(e.item)) >= 0); }
+    function yields(e) { return !!((e.item && e.item._y) || (yieldG.length && opts.cluster && yieldG.indexOf(opts.cluster(e.item)) >= 0)); }
     function declutter() {
       if (destroyed) return;
       clusterPass();
       var on = cont.classList.contains('vtl-labels');
-      var arr = [], icons = [], yl = [];
+      var arr = [], icons = [], yl = [], z = map.getZoom();
       items.forEach(function (e, k) {
         if (e.gone || e.clHid) return;
         var el = elOf(e.mk);
         if (!el) return;
+        // ★ V12 2026-11-02 an icon with a minimum zoom (a sea area's name) is no obstacle while it is hidden
+        var zh = !!(e.item && e.item._mz && z < e.item._mz && k !== sel);
+        el.classList.toggle('vtl-zhid', zh);
+        if (zh) { el.tabIndex = -1; return; }
         var lb = el.querySelector('.vtl-lb'), ic = el.querySelector('.vtl-ic');
         if (lb) { lb.classList.remove('vtl-lbhide'); lb.classList.remove('vtl-lbl'); }
         if (yields(e)) { el.classList.remove('vtl-yhid'); if (ic) yl.push({ k: k, el: el, ic: ic, rank: k === sel ? Infinity : (opts.labelRank ? Number(opts.labelRank(e.item)) || 0 : 0) }); return; }
@@ -243,6 +254,7 @@
     map.on('movestart', nogOn); map.on('zoomstart', nogOn);
     map.on('moveend', nogOff); map.on('zoomend', nogOff);
     map.on('zoomend', zoomed);
+    map.on('zoomend', function () { syncShapes(); });
     zoomed();
 
     function iconFor(it, selected) {
@@ -334,27 +346,34 @@
     var shapes = new Map();
     function syncShapes() {
       if (!opts.shape) return;
-      var want = new Set();
+      var want = new Set(), z = map.getZoom();
       items.forEach(function (e, k) {
         if (e.gone) return;
         var sh = opts.shape(e.item);
-        if (!sh || !sh.pts || sh.pts.length < 2) return;
+        if (!sh || ((!sh.pts || sh.pts.length < 2) && !(sh.rings && sh.rings.length))) return;
+        if (sh.minZoom && z < sh.minZoom && k !== sel) return;   // ★ a coastal zone's outline only close in
         want.add(k);
-        var sig = JSON.stringify(sh) + (k === sel ? '|s' : '');
+        var sig = (sh.sig ? sh.sig + '|' + sh.colour + '|' + sh.weight + '|' + sh.fillOpacity + '|' + !!sh.faded : JSON.stringify(sh)) + (k === sel ? '|s' : '');
         var cur = shapes.get(k);
         if (cur && cur.sig === sig) return;
         if (cur) cur.layers.forEach(function (l) { try { l.remove(); } catch (err) { /* gone */ } });
-        var st = { color: sh.colour || '#ffd34d', weight: k === sel ? 2.6 : 1.6, opacity: sh.faded ? 0.45 : 0.9, interactive: false };
+        var st = { color: sh.colour || '#ffd34d', weight: k === sel ? 2.6 : (sh.weight || 1.6), opacity: sh.faded ? 0.45 : (sh.opacity || 0.9), interactive: false };
         if (sh.faded) st.dashArray = '4 4';
         var made = [];
-        if (sh.kind === 'area') made.push(L.polygon(sh.pts, Object.assign({ fill: true, fillColor: st.color, fillOpacity: sh.faded ? 0.05 : 0.14 }, st)));
+        var fo = sh.fillOpacity != null ? sh.fillOpacity : sh.faded ? 0.05 : 0.14;
+        if (sh.kind === 'area' && sh.rings) sh.rings.forEach(function (r) { made.push(L.polygon(r, Object.assign({ fill: fo > 0, fillColor: st.color, fillOpacity: fo }, st))); });
+        else if (sh.kind === 'area') made.push(L.polygon(sh.pts, Object.assign({ fill: true, fillColor: st.color, fillOpacity: fo }, st)));
         else if (sh.kind === 'route') made.push((L.polyline || L.polygon)(sh.pts, Object.assign({ fill: false }, st)));
         else if (L.circleMarker) sh.pts.forEach(function (p) { made.push(L.circleMarker(p, { radius: 3, color: st.color, weight: 1, opacity: st.opacity, fillColor: st.color, fillOpacity: sh.faded ? 0.3 : 0.8, interactive: false })); });
         made.forEach(function (l) { l.addTo(map); });
         shapes.set(k, { sig: sig, layers: made });
       });
       shapes.forEach(function (v, k) { if (!want.has(k)) { v.layers.forEach(function (l) { try { l.remove(); } catch (err) { /* gone */ } }); shapes.delete(k); } });
-      cont.setAttribute('data-vtl-shapes', String(shapes.size));
+      // ★ the chart's shapes (_nofit: the sea areas) counted apart from what was heard
+      var nChart = 0;
+      shapes.forEach(function (v, k) { var e = items.get(k); if (e && e.item && e.item._nofit) nChart++; });
+      cont.setAttribute('data-vtl-shapes', String(shapes.size - nChart));
+      cont.setAttribute('data-vtl-chart', String(nChart));
     }
     function update(list) {
       if (destroyed) return;
@@ -380,7 +399,7 @@
           items.set(k, { mk: mk, item: it, sig: ic.sig, lat: it.lat, lon: it.lon, heard: opts.heard ? opts.heard(it) : 0, w: ic.w, h: ic.h });
           decorate(k);
           // ★ LIVE: an item that arrives after the map was first drawn pulses (the first batch does not — it is history)
-          if (fitted) pulse(k);
+          if (fitted && !it._nofit) pulse(k);
         } else {
           if (e.gone) { e.gone = false; setCls(e.mk, 'vtl-gone', false); }
           if (e.lat !== it.lat || e.lon !== it.lon) { e.mk.setLatLng([it.lat, it.lon]); e.lat = it.lat; e.lon = it.lon; }
@@ -485,7 +504,8 @@
     }
     function fit() {
       var pts = [];
-      items.forEach(function (e) { if (!e.gone) pts.push([e.lat, e.lon]); });
+      // ★ V12 2026-11-02 an item marked _nofit (a sea area: the chart, not something heard) never widens the first view
+      items.forEach(function (e) { if (!e.gone && !(e.item && e.item._nofit)) pts.push([e.lat, e.lon]); });
       if (rx) pts.push([rx.lat, rx.lon]);
       if (!pts.length) return;
       if (pts.length === 1) { map.setView(pts[0], 10); return; }

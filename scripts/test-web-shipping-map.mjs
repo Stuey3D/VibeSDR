@@ -5,6 +5,8 @@
 //   · the map's title, its layers (SHIPS · DSC · STATIONS · WARNINGS · WEATHER — only those with data), each layer's
 //     markers, the weather drawn as arrows, the KEY with ship / DSC / arrow rows, a ship's card
 //   · the gallery's DSC row opens the map with DSC FIRST, on that call; an empty layer is never a toggle
+//   · ★ the SEA AREAS (2026-11-02): the toggle, the outlines, the names in capitals, a GALE forecast's area tinted red
+//     with its arrow inside, the KEY rows; a screenshot over the UK (sea-areas-uk.png)
 //   VIBESERVER_BIN=… VIBE_AIS_STORE_BIN=…/test-ais-store [VIBE_SHOT_DIR=…] node scripts/test-web-shipping-map.mjs
 import net from 'node:net';
 import fs from 'node:fs';
@@ -43,6 +45,13 @@ const dscF = '20261102-120000-dsc-2187k5-a1b2.txt';
 fs.writeFileSync(path.join(gal, dscF), 'DSC DISTRESS · heard now on 2187.5 kHz\n\nDISTRESS 232001234 sinking 50°10′N 001°10′W\n');
 keep.push(JSON.stringify({ f: dscF, k: 'dsc', o: 'background', t: now - 120, hz: 2187500, m: 'usb', d: 'dsc', p: 'Profile 1', r: 'Test radio',
   title: 'DSC DISTRESS 232001234 sinking', plat: 50.1667, plon: -1.1667, lv: 3 }));
+// ★ the SEA AREAS: a shipping forecast with a GALE for Dogger and a near gale for Humber (newest, so it wins)
+const fcF = '20261102-110000-navtex-517k5-5ea5.txt';
+fs.writeFileSync(path.join(gal, fcF), 'NAVTEX · G · Cullercoats, United Kingdom 🇬🇧 · Weather forecast · #99\nReceived now\n517.500 kHz USB\n\nZCZC GE99\n'
+  + 'SHIPPING FORECAST ISSUED BY THE MET OFFICE\n\nDOGGER\nSOUTHWEST 7 TO SEVERE GALE 9, VEERING WEST GALE 8 LATER. VERY ROUGH OR HIGH. RAIN. MODERATE OR POOR.\n'
+  + 'HUMBER\nSOUTHWEST 5 TO 7. ROUGH. SHOWERS. GOOD.\nNNNN\n');
+keep.push(JSON.stringify({ f: fcF, k: 'navtex', o: 'background', t: now - 60, hz: 517500, m: 'usb', d: 'navtex', p: 'Profile 1', r: 'Test radio',
+  title: 'G · Cullercoats, United Kingdom 🇬🇧 · Weather forecast · #99', bytes: 300 }));
 fs.writeFileSync(path.join(gal, 'index.jsonl'), keep.join('\n') + '\n');
 execFileSync(STORE, ['--write', gal], { stdio: 'ignore' });
 console.log(`   a gallery of ${keep.length - 1} NAVTEX messages, one DSC distress call and a ship store`);
@@ -102,7 +111,7 @@ try {
   await ev(`document.querySelector('#galList .galNav .galMap').click()`);
   ok(await until(`!!${view} && ${view}.querySelector('.ttl').textContent === 'SHIPPING MAP'`, 8000), `the title: ${await ev(`${view}?.querySelector('.ttl')?.textContent`)}`);
   const tg = `JSON.stringify([...${view}.querySelectorAll('[data-tgl]')].map(b => b.textContent))`;
-  ok(await until(`${tg} === JSON.stringify(['STATIONS','WARNINGS','WEATHER','SHIPS','DSC'])`, 15000), `the layers, NAVTEX first (opened from NAVTEX's row): ${await ev(tg)}`);
+  ok(await until(`${tg} === JSON.stringify(['STATIONS','WARNINGS','WEATHER','SHIPS','DSC','SEA AREAS'])`, 15000), `the layers, NAVTEX first (opened from NAVTEX's row), SEA AREAS last: ${await ev(tg)}`);
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^(SOLENT TRADER|ISLAND FERRY|NAB PILOT):/.test(e.getAttribute('aria-label') || '')).length === 3`, 10000), 'the three stored ships on the map');
   ok(await until(`[...document.querySelectorAll('.vtl-mk')].some(e => /^DSC DISTRESS from MMSI 232001234/.test(e.getAttribute('aria-label') || '') && e.innerHTML.includes('SOS'))`, 5000), 'the DSC distress pin, with SOS');
   const arrows = Number(await ev(`[...document.querySelectorAll('.vtl-mk')].filter(e => /^Sea area/.test(e.getAttribute('aria-label') || '') && e.querySelector('.nvWind svg g[transform^="rotate("]')).length`));
@@ -111,7 +120,29 @@ try {
   ok(rows.includes('SHIPS') && rows.includes('DSC') && rows.includes('NAVTEX STATIONS'), `the RECEIVED list covers what is shown: ${rows.join(' · ')}`);
   const key = await ev(`${view}.querySelector('.trkKey .kb').textContent`);
   ok(/Ship under way/.test(key) && /DSC DISTRESS position/.test(key) && /points DOWNWIND/.test(key) && /Gale force 8 or more: red/.test(key), 'the KEY: ships, DSC and the arrows beside the hazards');
+  ok(/Sea area tinted red: a gale/.test(key) && /Sea areas: Met Office definitions/.test(key), 'the KEY: the sea-area outline, amber and red rows, and the sources');
   console.log('   screenshot', await shot('shipping-map.png'));
+  console.log('── the sea areas ──');
+  const aria = (re) => `[...document.querySelectorAll('.vtl-mk')].filter(e => ${re}.test(e.getAttribute('aria-label') || ''))`;
+  ok(Number(await ev(`${aria('/^(Viking|Dogger|Wight|Plymouth|Portland|Thames|Fastnet|Malin) sea area/')}.length`)) === 8, 'the UK areas on the map (Viking, Dogger, Wight, Plymouth …)');
+  ok(await until(`${aria('/^Dogger sea area: gale in force/')}.length === 1`, 8000), 'Dogger: a gale in force (its severe gale 9 forecast)');
+  ok(await until(`${aria('/^Humber sea area: near gale/')}.length === 1`, 3000), 'Humber: near gale (force 7) — amber');
+  const shapes = Number(await ev(`Number(document.querySelector('.trkView:not([hidden]) [data-vtl-chart]')?.getAttribute('data-vtl-chart') || 0)`));
+  ok(shapes >= 31, `the sea-area outlines drawn, counted apart from the warnings (${shapes} shapes)`);
+  // over the UK, close enough for the names (zoom 5): the map is the layer's; zoom it through the GPU map's own control
+  const zoomed = await ev(`(() => { const m = window.__vtlMap || null; const v = ${view}; const host = v && v.querySelector('.maplibregl-map, .leaflet-container'); const gl = host && (host.__gl || null);
+    const b = [...document.querySelectorAll('.maplibregl-ctrl-zoom-in, .leaflet-control-zoom-in')].find(x => v.contains(x)); for (let i = 0; i < 1 && b; i++) b.click(); return !!b; })()`);
+  await sleep(1500);
+  const names = JSON.parse(await ev(`JSON.stringify([...document.querySelectorAll('.vtl-mk:not(.vtl-zhid):not(.vtl-yhid)')].map(e => e.textContent.trim()).filter(t => /^(VIKING|FORTIES|FISHER|PORTLAND|PLYMOUTH|FASTNET|MALIN|IRISH SEA|SHANNON|LUNDY|SOLE|ROCKALL|HEBRIDES|BAILEY|THAMES|DOVER|WIGHT|TYNE|FORTH|CROMARTY|FAIR ISLE|FAEROES|BISCAY|GERMAN BIGHT)$/.test(t)))`));
+  ok(names.length >= 3, `names in capitals at their label points (zoom-in ${zoomed}): ${names.join(', ')}`);
+  console.log('   screenshot', await shot('sea-areas-uk.png'));
+  // one step closer: the forecasts' arrows inside their outlines (Humber's near gale in its amber area; Dogger's red area
+  // runs off the top — its own arrow is there, giving way to the Cullercoats name at the step before)
+  await ev(`(() => { const v = ${view}; const b = [...document.querySelectorAll('.maplibregl-ctrl-zoom-in, .leaflet-control-zoom-in')].find(x => v.contains(x)); b && b.click(); })()`);
+  await sleep(2500);
+  const gale = await ev(`(() => { const e = [...document.querySelectorAll('.vtl-mk:not(.vtl-yhid):not(.vtl-clhid):not(.vtl-zhid)')].find(x => /^Sea area Humber/.test(x.getAttribute('aria-label') || '') && x.querySelector('.nvWind svg')); return e ? e.textContent.replace(/\\s+/g, ' ').trim() : ''; })()`);
+  ok(/HUMBER/i.test(gale) && /7/.test(gale), `Humber's near-gale arrow drawn inside its amber area: "${gale}"`);
+  console.log('   screenshot', await shot('sea-areas-close.png'));
   // a stored ship's card
   await ev(`(() => { const r = [...${view}.querySelectorAll('.trkRow')].find(x => /ISLAND FERRY/.test(x.textContent)); r && r.click(); })()`);
   await sleep(2000);

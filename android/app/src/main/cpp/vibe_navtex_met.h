@@ -24,8 +24,15 @@
 //    A gale word in another language (COUP DE VENT, TEMPORAL, BURRASCA, STURM, OLUJA…) sets only the GALE flag.
 // ★ Parsed ONCE, when the message is indexed (vibe_navtex_warn.h sync): gallery/navtex-met.idx, one line per area per
 //   message (never the whole text). The query keeps the live lines (the gallery's own view), the latest per area.
+// ★★ V12 2026-11-02 THE SEA AREAS (docs/v12/SHIPPING-MAP.md): the map now DRAWS the areas — the UK shipping forecast
+//    areas built from the Met Office's corner points, and beyond the UK the open zone sets (NOAA NWS coastal and offshore
+//    zones, ECCC marine areas, DWD coastal areas — scripts/gen-sea-areas.mjs, licences in its header). The table below
+//    stays the UK's; the generated areas are APPENDED to it (ONE table — areas()), each with the heading forms its
+//    forecasts use, and a US zone also by its UGC code ("ANZ800-031000-"). A hand-made entry wins a name both have.
+//    NWS winds are in KNOTS ("SW WINDS 10 TO 15 KT"): converted to Beaufort (knotsBf) — never read as force 10.
 #pragma once
 #include "vibe_navtex_stations.h"
+#include "vibe_sea_areas.generated.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,7 +58,7 @@ static constexpr size_t kBlockMax = 420;
  *  forms a heading uses ('|'-separated); an inshore stretch matches its "<HEADLAND> TO <HEADLAND>" start. */
 struct Area { const char* id; const char* name; double lat, lon; char kind; const char* match; };
 inline const std::vector<Area>& areas() {
-    static const std::vector<Area> a = {
+    static std::vector<Area> a = {
         // ── UK shipping forecast areas (label points ours) ──
         {"viking", "Viking", 60.0, 2.2, 's', "VIKING"},
         {"nutsire", "North Utsire", 60.1, 4.1, 's', "NORTH UTSIRE|N UTSIRE|NORTH-UTSIRE"},
@@ -109,7 +116,50 @@ inline const std::vector<Area>& areas() {
         {"n-outerskagerrak", "Outer Skagerrak", 57.9, 8.2, 'n', "OUTER SKAGERRAK|OUTER-SKAGERRAK"},
         {"n-belgiancoast", "Belgian coast", 51.35, 2.75, 'n', "BELGIAN COAST"},
     };
+    // ★ V12 2026-11-02 the generated sea areas, appended once (after the hand-made table, so a name both carry is ours)
+    static const bool appended = [] {
+        size_t n = 0; const GenArea* g = generatedAreas(n);
+        for (size_t i = 0; i < n; ++i) a.push_back({ g[i].id, g[i].name, g[i].lat, g[i].lon, g[i].kind, g[i].match });
+        return true;
+    }();
+    (void)appended;
     return a;
+}
+/** ★ A US zone by its UGC code ("ANZ800") → its id, or nullptr. */
+inline const char* areaByUgc(const std::string& code) {
+    static const std::unordered_map<std::string, const char*> m = [] {
+        std::unordered_map<std::string, const char*> o;
+        size_t n = 0; const GenArea* g = generatedAreas(n);
+        for (size_t i = 0; i < n; ++i) if (g[i].ugc && *g[i].ugc) o[g[i].ugc] = g[i].id;
+        return o;
+    }();
+    const auto it = m.find(code);
+    return it == m.end() ? nullptr : it->second;
+}
+/** ★ The list-matching index: every non-inshore heading form, by its first word — a heading line is only compared with
+ *  the forms that start as it does (the table is ~800 areas since the sea areas; a Pi 2 rebuilds the index from every
+ *  saved message). */
+struct MatchIdx { std::unordered_map<std::string, std::vector<std::pair<std::string, const Area*>>> byFirst; };
+inline const MatchIdx& matchIdx() {
+    static const MatchIdx ix = [] {
+        MatchIdx o;
+        for (const auto& a : areas()) {
+            if (a.kind == 'i') continue;
+            std::string m = a.match; size_t p = 0;
+            while (p <= m.size()) {
+                const size_t e = m.find('|', p);
+                const std::string one = m.substr(p, e == std::string::npos ? std::string::npos : e - p);
+                if (!one.empty()) {
+                    const size_t sp = one.find_first_of(" ,.&/:");
+                    o.byFirst[one.substr(0, sp)].push_back({ one, &a });
+                }
+                if (e == std::string::npos) break;
+                p = e + 1;
+            }
+        }
+        return o;
+    }();
+    return ix;
 }
 
 /** One area's forecast, from one message. Levels: gale 0 / 8–12 (8 = native GALE flag too); sea -1 unknown, 0 calm …
@@ -140,7 +190,28 @@ inline std::vector<std::string> headingAreas(std::string l) {
     l = norm(l);
     static const std::regex tag(R"(\s*-?\s*\((SWW|GW|SW)\)\s*$)");
     l = std::regex_replace(l, tag, "");
-    while (!l.empty() && (l.back() == ':' || l.back() == '.' || l.back() == ',' || l.back() == ' ')) l.pop_back();
+    // ★ V12 2026-11-02 an NWS bulletin's UGC line names its zones: "ANZ800-031000-", "AMZ650>652-031015-"
+    {
+        static const std::regex ugc(R"(^([A-Z]{2}Z)(\d{3}(?:[->]\d{3})*)-\d{6}-?$)");
+        std::smatch m;
+        if (std::regex_match(l, m, ugc)) {
+            const std::string pre = m[1], list = m[2];
+            int prev = -1; char join = '-';
+            for (size_t p = 0; p + 3 <= list.size();) {
+                const int n = std::atoi(list.substr(p, 3).c_str());
+                const int from = join == '>' && prev >= 0 ? prev + 1 : n;
+                for (int k = from; k <= n && k - from < 200; ++k) {
+                    char code[16]; std::snprintf(code, sizeof code, "%s%03d", pre.c_str(), k);
+                    if (const char* id = areaByUgc(code)) if (std::find(out.begin(), out.end(), id) == out.end()) out.push_back(id);
+                }
+                prev = n; p += 3;
+                if (p < list.size()) { join = list[p]; ++p; }
+            }
+            return out;
+        }
+    }
+    // ★ an NWS zone-name line ends in a hyphen ("GULF OF MAINE TO THE HAGUE LINE-")
+    while (!l.empty() && (l.back() == ':' || l.back() == '.' || l.back() == ',' || l.back() == ' ' || l.back() == '-')) l.pop_back();
     if (l.size() < 4 || l.size() > 120) return out;
     // ★ inshore stretches: the start of the line
     for (const auto& a : areas()) {
@@ -162,17 +233,12 @@ inline std::vector<std::string> headingAreas(std::string l) {
         if (rest.empty()) break;
         if (rest.compare(0, 4, "AND ") == 0) { rest.erase(0, 4); continue; }
         size_t best = 0; const Area* hit = nullptr;
-        for (const auto& a : areas()) {
-            if (a.kind == 'i') continue;
-            std::string m = a.match; size_t p = 0;
-            while (p <= m.size()) {
-                const size_t e = m.find('|', p);
-                const std::string one = m.substr(p, e == std::string::npos ? std::string::npos : e - p);
-                if (one.size() > best && rest.compare(0, one.size(), one) == 0 && (rest.size() == one.size() || std::strchr(" ,.&/:", rest[one.size()]))) { best = one.size(); hit = &a; }
-                if (e == std::string::npos) break;
-                p = e + 1;
+        const auto it = matchIdx().byFirst.find(rest.substr(0, rest.find_first_of(" ,.&/:")));
+        if (it != matchIdx().byFirst.end())
+            for (const auto& c : it->second) {
+                const std::string& one = c.first;
+                if (one.size() > best && rest.compare(0, one.size(), one) == 0 && (rest.size() == one.size() || std::strchr(" ,.&/:", rest[one.size()]))) { best = one.size(); hit = c.second; }
             }
-        }
         if (!hit) { out.clear(); return out; }
         if (std::find(out.begin(), out.end(), hit->id) == out.end()) out.push_back(hit->id);
         rest.erase(0, best);
@@ -248,6 +314,24 @@ inline std::string cleanNeg(const std::string& s) {
     static const std::regex neg(R"(\bNO (SEVERE )?GALES?\b|\b(SEVERE )?GALES? (ARE )?NOT (EXPECTED|EXP)\b|\bGALE WARNINGS?:? (NONE|NIL)\b|\bNO GALE WARNINGS?\b|\bNO STORMS?\b|\b(SEVERE )?GALES? (NOW |HAS |HAVE )?(CEASED|ENDED)\b|\bNO LONGER\b[^.]*)");
     return std::regex_replace(s, neg, " ");
 }
+/** ★ V12 2026-11-02 KNOTS (NWS, some European services): "SW WINDS 10 TO 15 KT", "W 25 KNOTS" → the Beaufort forces
+ *  of the figures given in knots, lowest first and highest; {-1,-1} when the sentence gives no wind in knots. */
+inline int beaufortOfKnots(int kt) {
+    static const int up[12] = { 0, 3, 6, 10, 16, 21, 27, 33, 40, 47, 55, 63 };
+    for (int b = 0; b < 12; ++b) if (kt <= up[b]) return b;
+    return 12;
+}
+inline std::pair<int, int> knotsBf(const std::string& s) {
+    static const std::regex re(R"((^|[\s,(])(\d{1,3})(?:\s*(?:TO|-|OR)\s*(\d{1,3}))?\s*(KT|KTS|KNOTS)\b)");
+    int lo = -1, hi = -1;
+    for (auto it = std::sregex_iterator(s.begin(), s.end(), re); it != std::sregex_iterator(); ++it) {
+        const int a = beaufortOfKnots(std::atoi((*it)[2].str().c_str()));
+        const int b = (*it)[3].matched ? beaufortOfKnots(std::atoi((*it)[3].str().c_str())) : a;
+        if (lo < 0) lo = std::min(a, b);
+        hi = std::max(hi, std::max(a, b));
+    }
+    return { lo, hi };
+}
 /** ★ The WIND sentence of a block's sentences: the first with a direction word and a force (0–12), or a gale word. -1: none. */
 inline int windSentence(const std::vector<std::string>& ss) {
     static const std::regex force(R"((^|[\s,(])(\d{1,2})(?=($|[\s,.)-])))"), word(R"([A-Z-]+)"), galeAny(R"(\b(GALE|STORM|HURRICANE)\b)");
@@ -257,6 +341,7 @@ inline int windSentence(const std::vector<std::string>& ss) {
         for (auto it = std::sregex_iterator(s.begin(), s.end(), word); it != std::sregex_iterator(); ++it) if (dirAbbr(it->str())) { hasDir = true; break; }
         bool hasForce = false;
         for (auto it = std::sregex_iterator(s.begin(), s.end(), force); it != std::sregex_iterator(); ++it) { const int n = std::atoi((*it)[2].str().c_str()); if (n >= 0 && n <= 12) hasForce = true; }
+        if (!hasForce && hasDir && knotsBf(s).first >= 0) hasForce = true;   // ★ V12 2026-11-02 "NW WINDS 35 TO 45 KT"
         if ((hasDir && hasForce) || std::regex_search(s, galeAny)) return (int)i;
     }
     return -1;
@@ -289,6 +374,9 @@ inline Fc read(const std::string& id, const std::string& block) {
             f.fmax = std::max(f.fmax, n);
         }
         if (f.fmin < 0) f.fmax = -1;
+        // ★ V12 2026-11-02 a wind in knots: its figures are knots, not forces ("10 TO 15 KT" is force 3–4, not 10)
+        const auto kb = knotsBf(s);
+        if (kb.first >= 0) { f.fmin = kb.first; f.fmax = kb.second; }
     }
     // ★ gale words anywhere in the block (negations removed); a force of 8+ is a gale too
     {
@@ -315,6 +403,14 @@ inline Fc read(const std::string& id, const std::string& block) {
         for (auto it = std::sregex_iterator(ss[i].begin(), ss[i].end(), decimal); it != std::sregex_iterator(); ++it) { std::string v = (*it)[1]; std::replace(v.begin(), v.end(), ',', '.'); const double d = std::atof(v.c_str()); if (d < 20) mx = std::max(mx, d); }
         if (mx >= 0) f.sea = std::max(f.sea, seaFromMetres(mx));
         if (si < 0) si = (int)i;
+    }
+    // ★ V12 2026-11-02 NWS seas in feet ("SEAS 3 TO 5 FT")
+    if (f.sea < 0) {
+        static const std::regex feet(R"(\bSEAS\s+(?:AROUND\s+|UP TO\s+)?(\d{1,2})(?:\s*(?:TO|-)\s*(\d{1,2}))?\s*(FT|FEET)\b)");
+        for (size_t i = 0; i < ss.size(); ++i) {
+            std::smatch m;
+            if (std::regex_search(ss[i], m, feet)) { const int ft = std::atoi((m[2].matched ? m[2] : m[1]).str().c_str()); f.sea = seaFromMetres(ft * 0.3048); break; }
+        }
     }
     // ★ visibility: the last sentence (after the sea) that starts with a visibility word
     int vi = -1;
@@ -428,6 +524,8 @@ inline Wind windOf(const Fc& f) {
                 if (g > 0) o.bf = std::max(o.bf, g);
             }
         }
+        // ★ V12 2026-11-02 a wind in knots: the force is the knots' Beaufort, as read() takes it
+        if (a < b) { const auto kb = knotsBf(s.substr(t[a].at, t[b - 1].end - t[a].at)); if (kb.second >= 0) o.bf = kb.second; }
         return o;
     };
     size_t cut = t.size(); char chg = 0;
@@ -514,6 +612,15 @@ inline std::vector<Fc> parse(const std::string& body) {
         {
             static const std::regex other(R"(^[A-Z][A-Z -]{2,30}:?$)");
             if (!cur.empty() && std::regex_search(U, other) && (raw.compare(0, 2, "  ") == 0 || U.back() == ':')) { flush(); continue; }
+        }
+        // ★ V12 2026-11-02 an NWS bulletin's periods: ".TODAY...", ".TONIGHT..." — the first period is read, the next ends it
+        {
+            static const std::regex period(R"(^\.[A-Z][A-Z ]{1,24}\.\.\.)");
+            if (!cur.empty() && std::regex_search(U, period)) {
+                bool had = false;
+                for (size_t p = 0; p < block.size();) { const size_t e = block.find('\n', p); const std::string ln = norm(block.substr(p, e == std::string::npos ? std::string::npos : e - p)); if (std::regex_search(ln, period)) { had = true; break; } if (e == std::string::npos) break; p = e + 1; }
+                if (had) { flush(); continue; }
+            }
         }
         if (!cur.empty()) { if (!block.empty()) block += "\n"; block += raw; }
     }

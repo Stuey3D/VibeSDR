@@ -82,6 +82,7 @@ import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type
 import { langName } from '../services/transcriber';
 import { NAV_HAZARDS, NAV_HAZARD_COLOURS, navGlyphSvg } from '../services/navtexIcons';
 import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/shippingMap';   // ★ V12 2026-11-02 the SHIPPING MAP
+import { seaLegendRows } from '../services/seaAreas';   // ★ V12 2026-11-02 the SEA AREAS
 import { useFaceplate } from '../contexts/FaceplateContext';
 import { controlsText } from '../constants/decoderTokens';
 import { FMT_SPOT_TIME_JS } from '../utils/spotTime';   // ★ the spot card's HH:MM:SS UTC (the slot's start)
@@ -569,6 +570,9 @@ ${isSpots ? `
       ${windLegendRows().map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
       <div class="lg-row"><span style="color:#cfe6ff">&#9645;</span><span>Latest forecast per sea area (an older server: no arrow)</span></div>
       <div class="lg-row"><span style="color:#ff6b5a">&#9645;</span><span>Gale or worse</span></div>
+      <div class="lg-sec">SEA AREAS</div>
+      ${seaLegendRows(true).map(([g, w]) => `<div class="lg-row"><span>${g}</span><span>${esc(w)}</span></div>`).join('')}
+      <div class="lg-row"><span></span><span style="opacity:.7">Sea areas: Met Office definitions (coast: Natural Earth) · NOAA NWS marine zones · ECCC (Open Government Licence – Canada) · DWD, © GeoBasis-DE / BKG 2021</span></div>
       ` : isAdsb ? `
       <div class="lg-sec">ADS-B 1090</div>
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>

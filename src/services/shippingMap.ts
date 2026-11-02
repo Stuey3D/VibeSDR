@@ -23,25 +23,27 @@ import { DSC_PIN_COLOURS, type DscCall } from './dsc';
 export const SHIPPING_TITLE = 'SHIPPING MAP';
 
 // ── the layers ─────────────────────────────────────────────────────────────────────────────────────────────────────
-export type ShipLayerId = 'ships' | 'dsc' | 'stations' | 'warnings' | 'weather';
+export type ShipLayerId = 'ships' | 'dsc' | 'stations' | 'warnings' | 'weather' | 'areas';
 export type ShipLayers = Record<ShipLayerId, boolean>;
 export type ShipFocus = 'ships' | 'dsc' | 'navtex';
 export const SHIP_LAYERS: Array<{ id: ShipLayerId; label: string; words: string }> = [
   { id: 'ships', label: 'SHIPS', words: 'Show the ships (AIS)' },
   { id: 'dsc', label: 'DSC', words: 'Show the positions sent in DSC calls' },
   ...(NAV_LAYERS as Array<{ id: ShipLayerId; label: string; words: string }>),
+  // ★ V12 2026-11-02 the SEA AREAS (services/seaAreas.ts): their own toggle beside WEATHER — geography, not weather
+  { id: 'areas', label: 'SEA AREAS', words: 'Show the sea areas (the shipping forecast areas and the marine forecast zones)' },
 ];
 /** Saved toggles (every layer on by default). The NAVTEX map's own saved toggles are read too, so a listener who switched
  *  WEATHER off there finds it off here. */
 export function shipLayersOf(saved: string | null | undefined, navSaved?: string | null): ShipLayers {
-  const d: ShipLayers = { ships: true, dsc: true, stations: true, warnings: true, weather: true };
+  const d: ShipLayers = { ships: true, dsc: true, stations: true, warnings: true, weather: true, areas: true };
   for (const s of [navSaved, saved]) {
     try { const j = s ? JSON.parse(s) : null; if (j && typeof j === 'object') for (const k of Object.keys(d) as ShipLayerId[]) if (typeof j[k] === 'boolean') d[k] = j[k]; } catch { /* default */ }
   }
   return d;
 }
 /** ★ What each layer has on this server now (counts, not the data). */
-export interface ShipHave { ships: number; dsc: number; stations: number; warnings: number; weather: number; aisMode: boolean }
+export interface ShipHave { ships: number; dsc: number; stations: number; warnings: number; weather: number; aisMode: boolean; areas?: number }
 const FOCUS_LAYERS: Record<ShipFocus, ShipLayerId[]> = { ships: ['ships'], dsc: ['dsc'], navtex: ['stations', 'warnings', 'weather'] };
 /** ★★ LAYERS WITH NO DATA ARE ABSENT: the layers drawn as toggles, in order — the opened layer first. The opened layer is
  *  always there (it is what the listener asked for; its empty words say why it is empty), and SHIPS always is in AIS mode. */
@@ -57,6 +59,8 @@ export function shipLayersPresent(have: ShipHave, focus: ShipFocus): ShipLayerId
     if (have.warnings > 0) add('warnings');
     if (have.weather > 0) add('weather');
   }
+  // ★ the SEA AREAS: present when an area lies within reach of this map (seaAreasNear) — last, after the weather
+  if ((have.areas ?? 0) > 0) add('areas');
   return out;
 }
 /** The toggles for the view (the map's TOGGLES row), in the order present. One layer alone draws no toggle row at all. */
@@ -229,6 +233,7 @@ export function shipLegendRows(present: ShipLayerId[]): Array<[string, string]> 
 export function shipLegendHtml(present: ShipLayerId[]): string {
   return shipLegendRows(present).map(([g, w]) => `<div class="kr">${g}<span>${esc(w)}</span></div>`).join('');
 }
+export { seaLegendRows } from './seaAreas';
 /** The weather arrows' KEY rows (the WEATHER layer). */
 export function windLegendRows(): Array<[string, string]> {
   const arrow = (col: string, len: number, sw: number) => `<svg width="22" height="22" viewBox="0 0 22 22"><g transform="rotate(45 11 11)"><line x1="11" y1="${11 + len / 2}" x2="11" y2="${11 - len / 2 + 4}" stroke="${col}" stroke-width="${sw}" stroke-linecap="round"/><path d="M11 ${11 - len / 2} L7.5 ${11 - len / 2 + 6} L14.5 ${11 - len / 2 + 6} Z" fill="${col}"/></g></svg>`;
