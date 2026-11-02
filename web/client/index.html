@@ -816,7 +816,7 @@ html[data-frontdoor] #splashListeners { display: none !important; }
 body.askLocked #mVfoDial, body.askLocked #mVfoDown, body.askLocked #mVfoUp, body.askLocked #mMode, body.askLocked #bwLo, body.askLocked #bwHi, body.askLocked #bwHome,
 /* ★★ and the receiver settings the others hear (Stuart, 2026-10-21: "lock gain too") — main.ts ASK_SHIELD_SEL */
 body.askLocked #rowGain, body.askLocked #rspCtls, body.askLocked #ahfCtls, body.askLocked #aspCtls,
-body.askLocked #hrfCtls, body.askLocked #rowTunerBw, body.askLocked #rowRate, body.askLocked #agc,
+body.askLocked #hrfCtls, body.askLocked #usrpCtls, body.askLocked #rowTunerBw, body.askLocked #rowRate, body.askLocked #agc,
 body.askLocked #dsSeg, body.askLocked #antSeg, body.askLocked #rspAntSeg, body.askLocked #nr, body.askLocked #notch,
 body.askLocked #deemphSeg, body.askLocked #stereoBtn, body.askLocked #wspBtn, body.askLocked #imsBtn,
 body.askLocked #ceqBtn, body.askLocked #autoBwBtn, body.askLocked #bwAuto, body.askLocked #nbBtn, body.askLocked #nbxBtn,
@@ -828,7 +828,7 @@ body.askLocked #nfmVoiceBtn { opacity: 0.35; }
    code can un-hide one of them, and the next radio gets them all back the moment it is not an Icom (main.ts). */
 body.icom .icomHide, body.icom #rowRate, body.icom #rateLocked, body.icom #rowGain, body.icom #rowAgc,
 body.icom #rowTunerBw, body.icom .rtlOnly, body.icom .rtlRspOnly, body.icom #rspCtls, body.icom #ahfCtls,
-body.icom #hrfCtls, body.icom #aspCtls, body.icom #nbxRow, body.icom #nfmVoiceRow, body.icom #iqRow,
+body.icom #hrfCtls, body.icom #usrpCtls, body.icom #aspCtls, body.icom #nbxRow, body.icom #nfmVoiceRow, body.icom #iqRow,
 body.icom #iqNote, body.icom #mSqlLine, body.icom #mModeMenu .mBwSep:not(.icomFilSep), body.icom #mModeMenu .bwRow { display: none !important; }
 /* ★★ Listeners follow the radio (the owner lock): the tuning controls are dimmed — visibly locked, not missing —
    and a touch says why (main.ts onIcomFollowLocked). Same look as ask-before-tuning's lock. */
@@ -5971,6 +5971,20 @@ select.btn { padding: 6px 8px; }
        DEFAULT TO 0 GAIN AND PREAMP, those things have a bad habit of blowing up their preamps."
        Coming up from nothing costs a quiet waterfall; coming up hot on an unknown aerial can cost
        the radio. -->
+  <!-- ★★ V12 ETTUS USRP B2xx — EXPERIMENTAL. The radio's OWN AGC (the AD9361's), the same switch the app has: drawn only
+       when the radio accepted AGC (hwinfo radio.hwAgc), and named for what it is — NOT VibeSDR's AGC (VibeAGC does not
+       drive this radio, so its AUTO row is hidden for a USRP). The gain slider above takes it back by hand. The
+       reference line is the owner's Setup choice, read-only, shown only when it is not the internal clock. -->
+  <div id="usrpCtls" hidden>
+    <div class="mrow" id="usrpAgcRow">
+      <label>RADIO AGC</label>
+      <div class="seg"><button class="btn" id="usrpAgc" title="The USRP's own automatic gain, in its AD9361 chip — not VibeSDR's AGC. Moving the gain slider turns it off.">OFF</button></div>
+    </div>
+    <div class="mrow" id="usrpRefRow" hidden>
+      <label>REFERENCE</label>
+      <span class="val" id="usrpRef" style="opacity:.8"></span>
+    </div>
+  </div>
   <div id="hrfCtls" hidden>
     <div class="mrow">
       <label>HACKRF</label>

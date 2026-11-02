@@ -952,7 +952,7 @@ function nudgeAsk() {
  *  direct sampling, the antenna, and the shared DSP (NR, notch, de-emphasis, stereo, the blankers, IMS / CEQ /
  *  auto-bandwidth, NFM voice). Squelch, the waterfall and the raw-IQ / uncompressed rows are this listener's own. */
 const ASK_SHIELD_SEL = '#mVfoDial, #mVfoDown, #mVfoUp, #mMode, #bwLo, #bwHi, #bwHome, '
-  + '#rowGain, #rspCtls, #ahfCtls, #aspCtls, #hrfCtls, #rowTunerBw, #rowRate, #agc, #dsSeg, #antSeg, #rspAntSeg, '
+  + '#rowGain, #rspCtls, #ahfCtls, #aspCtls, #hrfCtls, #usrpCtls, #rowTunerBw, #rowRate, #agc, #dsSeg, #antSeg, #rspAntSeg, '
   + '#nr, #notch, #deemphSeg, #stereoBtn, #wspBtn, #imsBtn, #ceqBtn, #autoBwBtn, #nbBtn, #nbxBtn, #nfmVoiceBtn';
 /** ★★ THE DIMMED CONTROLS DO NOT TUNE — a touch on one is the reach that nudges. Captured before the drum, the step
  *  keys and the passband sliders see it, and only while the server says this listener is locked. The spectrum click,
@@ -17469,6 +17469,9 @@ function applyGainLocked() {
     //   have no single gain slider, and this must not un-hide them there.
     if (r && hwGainLocked) r.hidden = true;
   }
+  // ★ V12 USRP: the radio's own AGC is a gain control too — a locked gain takes it with the slider.
+  const ua = document.getElementById('usrpAgcRow') as HTMLElement | null;
+  if (ua && hwGainLocked) ua.hidden = true;
   // The HackRF's stages live in one block, which is the whole of its gain UI.
   const hrf = document.getElementById('hrfCtls') as HTMLElement | null;
   if (hrf && hwGainLocked) hrf.hidden = true;
@@ -19083,6 +19086,37 @@ function applyHrfLock() {
   }
 }
 
+/** ★★ V12 USRP B2xx: the radio's OWN AGC switch (the AD9361's) — the app panel's rules exactly: drawn only when the
+ *  radio accepted AGC (radio.hwAgc), lit from radio.agcOn, ON = the slider's AUTO end on the wire ({gain, auto}), OFF =
+ *  back to the slider's gain. And the reference the owner chose in Setup, read-only, only when it is not internal. */
+function applyUsrpCaps(caps: import('./spectrum').RadioCaps | null) {
+  const row = document.getElementById('usrpAgcRow') as HTMLElement | null;
+  const btn = document.getElementById('usrpAgc') as HTMLButtonElement | null;
+  if (row) row.hidden = !caps?.hwAgc;
+  if (btn) {
+    const on = !!caps?.hwAgc && !!caps?.agcOn;
+    btn.classList.toggle('on', on);
+    btn.textContent = on ? 'ON' : 'OFF';
+    btn.onclick = () => {
+      const want = !btn.classList.contains('on');
+      btn.classList.toggle('on', want);
+      btn.textContent = want ? 'ON' : 'OFF';
+      if (want) spec!.setHwGain(0, true);
+      else spec!.setHwGain(hwGains[Number($<HTMLInputElement>('gain').value)] ?? 0, false);
+    };
+  }
+  const refRow = document.getElementById('usrpRefRow') as HTMLElement | null;
+  const ref = document.getElementById('usrpRef');
+  const clk = caps?.clock || '';
+  if (refRow) refRow.hidden = !(Array.isArray(caps?.clockSources) && caps!.clockSources!.length && clk && clk !== 'internal');
+  if (ref) {
+    const name = clk === 'gpsdo' ? 'GPSDO' : clk === 'external' ? 'External 10 MHz' : clk;
+    const lock = caps?.refLocked === true ? ' · locked' : caps?.refLocked === false ? ' · NOT locked' : '';
+    const gps = caps?.gpsdo ? (caps?.gpsLocked === true ? ' · GPS locked' : caps?.gpsLocked === false ? ' · no GPS lock' : '') : '';
+    ref.textContent = name + lock + gps;
+  }
+}
+
 function applyHrfCaps(caps: import('./spectrum').RadioCaps | null) {
   if (caps?.driver !== 'hackrf') return;
   /* ★★★ THE RADIO'S OWN STATE WINS OVER THE PANEL'S, for the two switches. The server opens
@@ -19197,6 +19231,7 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   $<HTMLElement>('ahfCtls').hidden = !isAhf;
   $<HTMLElement>('hrfCtls').hidden = !isHrf;
   $<HTMLElement>('aspCtls').hidden = !isAsp;
+  { const u = document.getElementById('usrpCtls'); if (u) u.hidden = !isUsrp; }
   // ★★★ NO SAMPLE-RATE PICKER ON AN HF+. Its rate is fixed at open, because changing it on a
   //     LIVE radio is a path no other SDR client takes: SDR++ (mainline and Brown) grey the
   //     control out while running, gr-osmosdr sets it once at construction, and OpenWebRX is
@@ -19284,7 +19319,7 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
    *  AGENTS.md names. */
   /* ★ V12 USRP: the AUTO row is VibeAGC's (painted from hwinfo `agc`, titled as VibeSDR's loop), and VibeAGC does not
    *  drive this radio — so it goes, rather than standing as a button that names the wrong AGC. The radio's own AD9361
-   *  AGC is the app panel's switch (radio.hwAgc / agcOn); a web switch for it is a follow-up (docs/v12/USRP.md). */
+   *  AGC is the RADIO AGC switch in #usrpCtls (applyUsrpCaps), the same one the app panel has. */
   if (autoRow) autoRow.hidden = isRsp || isAhf || isHrf || isAsp || isUsrp;
   // ★ THE PROTECTED CONTROLS ARE BUILT HERE, so the lock has to be re-applied here. The
   // Airspy and RSP panels only exist once the radio has announced itself, which happens AFTER
@@ -19296,6 +19331,7 @@ function applyRadioCaps(caps: import('./spectrum').RadioCaps | null) {
   if (isAsp) { applyAspCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
   if (isAhf) { applyAhfCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
   if (isHrf) { applyHrfCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
+  if (isUsrp) { applyUsrpCaps(caps); refreshAdminRow(); applyGainLocked(); return; }
   if (!isRsp) { applyGainLocked(); return; }
 
   const n = rspLnaN ?? caps?.lnaStates ?? 10;

@@ -1462,6 +1462,15 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                   : 'Manual gain. Bring it up until signals are clear of the noise and no further.'}
                 {p.radio?.usb === 2 ? ' This radio is on a USB 2 port: rates stop at 8 MS/s.' : ''}
               </Text>
+              {/* ★ V12: the REFERENCE the owner chose in the server's Setup page — read-only here, and only when the radio
+               *  offers a choice and it is not the internal clock (nothing to say otherwise). */}
+              {!!p.radio?.clockSources?.length && !!p.radio?.clock && p.radio.clock !== 'internal' && (
+                <Text style={styles.note}>
+                  Reference: {p.radio.clock === 'gpsdo' ? 'GPSDO' : p.radio.clock === 'external' ? 'external 10 MHz' : p.radio.clock}
+                  {p.radio.refLocked === true ? ' — locked' : p.radio.refLocked === false ? ' — NOT locked' : ''}
+                  {p.radio.gpsdo ? (p.radio.gpsLocked === true ? ' · GPS locked' : p.radio.gpsLocked === false ? ' · no GPS lock yet' : '') : ''}
+                </Text>
+              )}
             </>
           ) : p.radio?.noHwGain ? (
             /* ★ A RELAYED rtl_tcp stream: its server sent no gains, so there is no tuner to steer. */
