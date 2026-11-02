@@ -289,6 +289,15 @@ struct Config {
     bool icomOwnerLock = true, icomRfOpen = false, icomTtyOk = false;
     bool rspAmNotch = false;    ///< RSPduo: AM broadcast notch on the Hi-Z port
     bool rspExtRef = false;     ///< RSP2/Duo: 24 MHz reference output
+    /* ★★ V12 ETTUS USRP B2xx — the owner's radio options (vibe_usrp_caps.h Options). Read only by a USRP; offered by
+     *  the Setup page only where the running radio reported them; enforced in UsrpSource (a choice the radio did not
+     *  list is refused in words and its default kept). No listener message reaches them.
+     *   usrpClock / usrpTime  "" (internal, UHD's default) | "internal" | "external" | "gpsdo"
+     *   usrpDcOffset / usrpIqBalance  the AD9361's automatic corrections — ON by default, as UHD has them
+     *   usrpRxBw  the analogue RX bandwidth in Hz; 0 = AUTO (follows the sample rate) */
+    std::string usrpClock, usrpTime;
+    bool usrpDcOffset = true, usrpIqBalance = true;
+    int  usrpRxBw = 0;
     /* ★ DAB drops the IF AGC target for OFDM peak headroom — see kDabAgcSetPoint in the shim.
      *  On by default because a breaking-up ensemble on a receiver whose figures look perfect is
      *  the worst kind of fault to leave on by omission; the target itself is adjustable for an
@@ -584,6 +593,10 @@ struct RadioConfig {
      *  the per-band preset is antennaMap (names) and the lock antennaPortLocked, shared with the RSP's sockets. */
     std::string antennaSwitch;
     bool   rspHdr = false, rspAmNotch = false, rspExtRef = false;
+    // ★ V12 USRP B2xx owner options — see Config::usrpClock. Carried with its neighbours at every copy site.
+    std::string usrpClock, usrpTime;
+    bool   usrpDcOffset = true, usrpIqBalance = true;
+    int    usrpRxBw = 0;
     // ★ Icom — see the note on Config::icomPort. Carried with its neighbours at every copy site.
     std::string icomPort = "usb", icomAudio = "auto";
     int    icomBaud = 115200, icomCiv = 0, icomScopeSpeed = 0;

@@ -285,6 +285,11 @@ export interface RadioCaps {
    * sockets as `antennas` (EMPTY on a radio with one choice). Everything here is read from the radio by the server;
    * the client holds no USRP constants. `usb` is the link the radio reports (2 or 3; 0 unknown). */
   agcOn?: boolean; usb?: number; serial?: string; experimental?: boolean; noTunerBw?: boolean; hasBiasT?: boolean;
+  /* ★ V12 the USRP's OWNER options (set in the server's Setup page, never by a listener): each present only where the
+   *  radio reported it. The app shows the reference read-only; the rest is the Setup page's. */
+  clockSources?: string[]; timeSources?: string[]; clock?: string; time?: string; refLocked?: boolean;
+  gpsdo?: boolean; gpsLocked?: boolean; dcOffset?: boolean; dcOffsetOn?: boolean; iqBalance?: boolean; iqBalanceOn?: boolean;
+  rxBwRange?: number[]; rxBwChoices?: number[]; rxBwAuto?: boolean; rxBwHz?: number; optionsNote?: string;
   // ── SDRplay RSP ──
   lnaStates?: number;
   ifGrMin?: number; ifGrMax?: number;

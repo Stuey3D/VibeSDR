@@ -265,6 +265,7 @@ deps_for() {
     #    not build is not a suite that passes, it is one nobody is running. Caught 2026-09-21.
     test-fir-simd)      echo "$VDSP/ddc.cpp" ;;
     test-config-radios) echo "$SRC/vibeserver_config.cpp" ;;
+    test-usrp-caps)     echo "$SRC/vibeserver_config.cpp" ;;   # ★ V12: the USRP owner options round-trip through vsconfig
     # ★ No $KISS here: the ft8 C objects (cobjs_for) already carry kiss_fft, and two copies do not link — nor pffft,
     #   which they carry too since monitor.c's STFT runs through it (2026-10-25).
     # ★ V12 2026-10-27: test-bg-ndb — the same, plus the NDB skimmer (the background NDB skimmer VFO, vibe_bgdecode_ndb.h)
@@ -428,6 +429,9 @@ fi
 #   because that page is what a new owner meets first.
 printf '\n\033[1m── setup page ──\033[0m\n'
 if node scripts/check-setup-page.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★ V12 the USRP's owner options and its radio AGC, hwinfo → Setup page / app / web, from fake capability objects.
+printf '\n\033[1m── USRP options (hwinfo → controls) ──\033[0m\n'
+if node scripts/check-usrp-options.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ The August RTL stutter fixes (gain write off modeMtx/the DSP, one transfer, the client's hwinfo
 #     signature skip) — a gain change must never again stall the audio. See check-gain-write-path.mjs.
 printf '\n\033[1m── RSP hwinfo -> controls, per model ──\033[0m\n'

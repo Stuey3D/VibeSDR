@@ -295,6 +295,10 @@ export interface RadioCaps {
   amNotchOn?: boolean;
   extRef?: boolean;         // has a 24 MHz reference output
   extRefOn?: boolean;
+  /* ★ V12 USRP B2xx (driver 'usrp'): the radio's OWN AGC (the AD9361's — not VibeAGC), offered only when the radio
+   *  accepted it (hwAgc), and its reference as the owner set it in Setup (read-only here). */
+  hwAgc?: boolean; agcOn?: boolean;
+  clockSources?: string[]; clock?: string; refLocked?: boolean; gpsdo?: boolean; gpsLocked?: boolean;
   /** ★ VibeAGC (SDRplay): the owner's choice (0 auto · 1 VibeAGC · 2 the SDRplay's own) and what AUTO resolves to with
    *  this server's driver — the radio menu's AGC row (2026-10-30). Absent from an older server: no row is drawn. */
   vagcMode?: number; vagcAuto?: boolean;
