@@ -155,10 +155,9 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
     const auto dirs = imageDirs();
     const std::string fw = usrpcaps::resolveImage(usrpcaps::firmwareFile(), dirs);
     if (fw.empty()) { err = "the USRP firmware (usrp_b200_fw.hex) is missing from this install — reinstall VibeServer"; return false; }
-    /* ★ UHD_IMAGES_DIR too, for any lookup UHD makes that we did not foresee — pointed at the directory holding OUR
-     *   firmware, so it is never the owner's own UHD install of a different release (whose FPGA compat number would
-     *   not match this libuhd). */
-    { const std::string d = fw.substr(0, fw.find_last_of('/')); ::setenv("UHD_IMAGES_DIR", d.c_str(), 1); }
+    /* ★ NO setenv("UHD_IMAGES_DIR") here, deliberately: both images are passed by ABSOLUTE path below (UHD takes an
+     *   existing path as-is, before any search), and setenv in a running multi-threaded server races every getenv.
+     *   The directory UHD would search otherwise is compiled into libuhd (build-uhd.sh) as ours. */
     try {
         /* ★★ find() BY SERIAL, with our firmware: it loads the FX3 firmware if the radio has none yet, waits for the
          *    re-enumeration, and reports the PRODUCT (B200 / B210 / B200mini / B205mini) from the EEPROM — which is

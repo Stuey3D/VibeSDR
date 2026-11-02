@@ -370,6 +370,10 @@ GATE=(--app "$APP")
 for a in $LIBS "$RTLSDR" "$USBLIB" "$OPUSLIB" ${AHFLIB:+"$AHFLIB"} ${HRFLIB:+"$HRFLIB"}; do
   GATE+=(--archive "$a")
 done
+# ★ V12: and UHD's archives (libuhd.a, Boost) — the same minimum-macOS check as every other linked archive.
+for a in ${UHDLINK[@]+"${UHDLINK[@]}"}; do
+  case "$a" in *.a) GATE+=(--archive "$a") ;; esac
+done
 for l in core.log engine.log swift.log; do GATE+=(--ldlog "$LOGS/$l"); done
 GATE+=(--linkinput "$BUILD/CMakeFiles/vibeserver.dir/link.txt"
        --linkinput "$BUILD/CMakeFiles/vibeserver_core.dir/flags.make"
