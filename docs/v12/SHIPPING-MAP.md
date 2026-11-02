@@ -114,6 +114,6 @@ radio C (DSC)        ──► gallery DSC alerts (plat/plon) ──────
   store is (`Store::sideBytes` lists side files; adding them there is one line, but changes NAVTEX's proven accounting).
 - Not built: an APRS layer; per-radio attribution of a stored ship (which radio heard it); a DSC layer from the DSC day
   logs (only pinned alerts and the box's own calls carry positions today).
-- Nothing pushed, merged, published or triggered. The worktree has untracked symlinks `node_modules` → the main
-  checkout's and `vibeserver/mac/deps` → `~/VibeSDR-v12`'s (FAAD2 is not in the main checkout's deps) — delete them
-  before reusing the worktree.
+- Nothing pushed, merged, published or triggered. The worktree's server was built with its `vibeserver/mac/deps`
+  pointed at `~/VibeSDR-v12`'s prefix (FAAD2 is not in the main checkout's deps; the link has been removed); an ignored
+  `node_modules` symlink to the main checkout's is left in the worktree for tsc / tsx.
