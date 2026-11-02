@@ -26,7 +26,8 @@
 //      choosing the TX/RX socket only RECEIVES on it; nothing here can transmit.
 //   4. SAMPLES ARRIVE AS FLOAT. The stream is "fc32" on the host, "sc16" over the wire: UHD's own converter (SSE2 /
 //      NEON, with a generic fallback, inside libuhd) does the int16 → float step, so there is no new hot loop of ours
-//      to vectorise. The AD9361's own DC-offset and IQ-balance tracking are switched on at open.
+//      to vectorise. The AD9361's own DC-offset and IQ-balance tracking are on at open (UHD's default) unless the
+//      owner switched them off (setOptions).
 //   5. THE RATE IS CONTINUOUS (UHD picks the master clock), so the list is chosen, not enumerated: vibe_usrp_caps.h,
 //      capped by the USB link speed the device reports (USB 2 carries far less than USB 3).
 #pragma once
@@ -34,6 +35,7 @@
 #include <functional>
 #include <string>
 #include <vector>
+#include "vibe_usrp_caps.h"   // ★ header-only policy (Options, OptionCaps, CapsView) — the stub needs it too
 
 namespace vibe {
 
@@ -103,8 +105,21 @@ public:
     /** ★ Drop buffers without tearing the stream down, for the idle saver. */
     void setPaused(bool paused);
 
+    /** ★★ V12 THE OWNER'S OPTIONS (vibe_usrp_caps.h Options): reference clock, time source, the AD9361's DC-offset and
+     *  IQ-balance correction, the analogue RX bandwidth. Stored for the next open() and applied NOW when the radio is
+     *  open. A choice this radio did not report is refused in words (optionsNote in the view) and its default kept —
+     *  never guessed. Survives close()/open() on the same object (the watchdog's and lend/take-back's reopen). */
+    void setOptions(const usrpcaps::Options& o);
+    usrpcaps::Options options() const;
+    /** What the open radio reported it can do — all false / empty before open. */
+    usrpcaps::OptionCaps optionCaps() const;
+    /** The options half of the hwinfo view: capability, the radio's own answer now (sensors read, cached ~3 s), and any
+     *  refusal. */
+    void fillOptionView(usrpcaps::CapsView& c) const;
+
 private:
     bool rebuildStream(std::string& err);   // (re)make the RX streamer for the current channel
+    void applyOptionsLocked(bool atOpen);   // ★ caller holds impl_->mtx and the radio is made
     struct Impl;
     Impl*   impl_ = nullptr;
     IqSink  sink_;
@@ -158,6 +173,10 @@ public:
     uint64_t takeOverflows() { return 0; }
     double secondsSinceLastRx() const { return 1e9; }
     void setPaused(bool) {}
+    void setOptions(const usrpcaps::Options&) {}
+    usrpcaps::Options options() const { return {}; }
+    usrpcaps::OptionCaps optionCaps() const { return {}; }
+    void fillOptionView(usrpcaps::CapsView&) const {}
 };
 
 #endif

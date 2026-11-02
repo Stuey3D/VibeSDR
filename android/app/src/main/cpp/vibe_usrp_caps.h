@@ -195,6 +195,113 @@ inline std::string resolveImage(const std::string& file, const std::vector<std::
     return "";
 }
 
+// ── the owner's radio options (V12, 2026-11-02: "can you add the missing options too please" — Stuart) ────────
+/* ★★★ FOUR OWNER SETTINGS, PER RADIO, AND EACH OFFERED ONLY WHERE THE RADIO SAYS SO (AGENTS.md: no dead control):
+ *   · the REFERENCE CLOCK and the TIME SOURCE — internal, external (10 MHz + PPS on the SMA sockets), GPSDO;
+ *   · the AD9361's automatic DC-OFFSET and IQ-BALANCE correction (UHD's default: both on);
+ *   · the ANALOGUE RX BANDWIDTH — AUTO (follows the sample rate) or a fixed figure inside the radio's own range.
+ *  They are the OWNER's (Setup page, config.json per radio); no listener message reaches them. usrp_source.cpp asks
+ *  the radio what it has and applies them; every decision about what to offer and what to refuse is here, so it is
+ *  tested from fake capability lists (vibeserver/test-usrp-caps.cpp). */
+struct Options {
+    std::string clock;            // "" = UHD's default (internal) | "internal" | "external" | "gpsdo"
+    std::string time;             // the same names
+    bool   dcOffset  = true;      // ★ UHD's default, kept: an owner switches it OFF, never has to switch it on
+    bool   iqBalance = true;
+    double rxBwHz    = 0;         // 0 = AUTO (the span); otherwise a fixed analogue bandwidth, Hz
+    bool operator==(const Options& o) const {
+        return clock == o.clock && time == o.time && dcOffset == o.dcOffset && iqBalance == o.iqBalance && rxBwHz == o.rxBwHz;
+    }
+};
+/** What the OPEN radio reported it can do — filled by usrp_source.cpp from UHD, by the test from fake lists. */
+struct OptionCaps {
+    std::vector<std::string> clockSources, timeSources;   // ★ already shaped by sourceChoices — empty = no choice
+    bool   gpsdo = false;          // a GPSDO is FITTED (the gps_locked sensor exists), not merely supported
+    bool   refSensor = false;      // the radio has a ref_locked sensor
+    bool   dcOffset = false, iqBalance = false;           // the radio accepts the automatic switch
+    double bwLo = 0, bwHi = 0;     // get_rx_bandwidth_range
+    bool   bwAdjustable = false;   // ★ bwRangeUseful(bwLo, bwHi)
+};
+inline bool knownSource(const std::string& s) { return s.empty() || s == "internal" || s == "external" || s == "gpsdo"; }
+/** ★ "A GPSDO is fitted" = the radio publishes a gps_locked sensor. UHD lists "gpsdo" as a clock source on every
+ *  full-size B200/B210 whether or not the board carries one, so the source list alone cannot be trusted for it. */
+inline bool hasGpsdo(const std::vector<std::string>& sensorNames) {
+    for (const auto& n : sensorNames) if (n == "gps_locked") return true;
+    return false;
+}
+/** The choices the owner is OFFERED, from what the radio REPORTED (get_clock_sources / get_time_sources): only the
+ *  three VibeServer knows how to describe, in a fixed order, "gpsdo" only with a GPSDO fitted — and EMPTY when that
+ *  leaves fewer than two, so no selector is drawn for a radio with nothing to choose. ("none", "mimo" and any later
+ *  UHD name are dropped: nothing an owner of a receiver needs.) */
+inline std::vector<std::string> sourceChoices(const std::vector<std::string>& reported, bool gpsdoFitted) {
+    std::vector<std::string> out;
+    for (const char* want : {"internal", "external", "gpsdo"}) {
+        if (std::string(want) == "gpsdo" && !gpsdoFitted) continue;
+        for (const auto& r : reported) if (r == want) { out.push_back(want); break; }
+    }
+    if (out.size() < 2) out.clear();
+    return out;
+}
+inline const char* sourceWords(const std::string& s) {
+    return s == "external" ? "external (10 MHz / PPS on the SMA sockets)" : s == "gpsdo" ? "the GPSDO" : "internal";
+}
+/** "" = fine; otherwise the refusal, in words. ★ An empty / "internal" choice is always fine: it is what every
+ *  radio does with no setting at all, so it can never be refused. */
+inline std::string refuseSource(const std::string& want, const std::vector<std::string>& choices, const char* what) {
+    if (want.empty() || want == "internal") return "";
+    if (!knownSource(want)) return std::string("'") + want + "' is not a " + what + " VibeServer knows";
+    for (const auto& c : choices) if (c == want) return "";
+    if (want == "gpsdo") return std::string("this radio has no GPSDO fitted, so the ") + what + " stays internal";
+    return std::string("this radio does not offer ") + sourceWords(want) + " as its " + what + ", so it stays internal";
+}
+/** ★ A B200mini / B205mini routes ONE SMA to either the 10 MHz or the PPS — UHD refuses external for both. Said
+ *  before the radio is asked, in words, and the time source is the one given up (the clock is what tuning needs). */
+inline std::string refuseCombination(const std::string& model, const std::string& clock, const std::string& time) {
+    const bool mini = model.find("mini") != std::string::npos;
+    if (mini && clock == "external" && time == "external")
+        return "a " + model + " has one reference socket: it can take the external 10 MHz or the PPS, not both — the time source stays internal";
+    return "";
+}
+/** ★ "Non-trivial": a range at least 1 MHz wide. Anything narrower is a radio whose filter cannot really be moved,
+ *  and a control over it would do nothing an owner could hear. */
+inline bool bwRangeUseful(double lo, double hi) { return hi > lo && lo >= 0 && (hi - lo) >= 1e6; }
+/** The fixed bandwidths offered, inside the radio's range — the rates this server runs at plus the AD9361's
+ *  common filter widths. An empty list when the range is not useful. */
+inline std::vector<uint32_t> bwChoices(double lo, double hi) {
+    std::vector<uint32_t> out;
+    if (!bwRangeUseful(lo, hi)) return out;
+    static const uint32_t ladder[] = { 200000u, 500000u, 1000000u, 1500000u, 2000000u, 2500000u, 3000000u, 4000000u,
+                                       5000000u, 6000000u, 8000000u, 10000000u, 12000000u, 16000000u, 20000000u,
+                                       28000000u, 40000000u, 56000000u };
+    for (uint32_t b : ladder) if (b >= lo - 1 && b <= hi + 1) out.push_back(b);
+    return out;
+}
+inline std::string refuseBw(double want, const OptionCaps& c) {
+    if (want <= 0) return "";
+    if (!c.bwAdjustable) return "this radio's analogue bandwidth cannot be set, so it follows the sample rate";
+    if (want < c.bwLo - 1 || want > c.bwHi + 1) {
+        char b[160];
+        std::snprintf(b, sizeof b, "%.3f MHz is outside this radio's analogue bandwidth (%.3f-%.3f MHz), so it follows the sample rate",
+                      want / 1e6, c.bwLo / 1e6, c.bwHi / 1e6);
+        return b;
+    }
+    return "";
+}
+/** The analogue bandwidth to set: the owner's fixed figure when it is allowed, otherwise the span (AUTO). */
+inline double bwFor(const Options& o, double rate, const OptionCaps& c) {
+    return (o.rxBwHz > 0 && refuseBw(o.rxBwHz, c).empty()) ? o.rxBwHz : rate;
+}
+/** ★★ THE SAVE'S CHECK, with no radio to ask (the Setup page may save a radio that is not running): only the SHAPE
+ *  — names VibeServer knows, a bandwidth that is 0 or a real AD9361 figure. Whether THIS radio has the choice is
+ *  decided at open, against what it reports, and a refusal is then said in its status (optionsNote). */
+inline std::string validateSaved(const Options& o) {
+    if (!knownSource(o.clock)) return "the reference clock must be internal, external or gpsdo";
+    if (!knownSource(o.time))  return "the time source must be internal, external or gpsdo";
+    if (o.rxBwHz != 0 && !(o.rxBwHz >= 100e3 && o.rxBwHz <= 61.44e6))
+        return "the analogue bandwidth must be AUTO or between 0.1 and 61.44 MHz";
+    return "";
+}
+
 // ── the radio object in hwinfo ────────────────────────────────────────────────────────────────────────────────
 /** Everything radioCapsJson says about a USRP, as plain data — filled from UsrpSource by the shim, and from a stub
  *  by vibeserver/test-usrp-caps.cpp, so the wire shape is tested without a radio. */
@@ -207,6 +314,14 @@ struct CapsView {
     std::vector<std::string> antennas;    // empty = one choice = no selector
     std::string antenna;
     bool antennaLocked = false;
+    // ★ The owner's options: what the radio CAN do (oc) and what it IS doing now — read back from the radio.
+    OptionCaps oc;
+    std::string clock, time;              // the radio's own answer (get_clock_source / get_time_source)
+    int  refLocked = -1, gpsLocked = -1;  // -1 = no such sensor (or not meaningful: an internal reference)
+    bool dcOffsetOn = false, iqBalanceOn = false;
+    double rxBwHz = 0;                    // the analogue bandwidth in force
+    bool rxBwAuto = true;
+    std::string optionsNote;              // a saved choice the radio refused, in words ("" = none)
 };
 inline std::string jsonQ(const std::string& s) {
     std::string o = "\"";
@@ -236,6 +351,36 @@ inline std::string capsJson(const CapsView& c) {
     j += "]";
     if (!c.antennas.empty()) j += ",\"antenna\":" + jsonQ(c.antenna);
     j += std::string(",\"antennaLocked\":") + (c.antennaLocked ? "true" : "false");
+    /* ★★ THE OWNER'S OPTIONS — each key only when the radio reported the capability, so a client can draw exactly
+     *    what exists and nothing else. Capability and state travel together (the bias-T lesson). */
+    auto list = [&](const char* k, const std::vector<std::string>& v) {
+        j += std::string(",\"") + k + "\":[";
+        for (size_t i = 0; i < v.size(); ++i) { if (i) j += ','; j += jsonQ(v[i]); }
+        j += "]";
+    };
+    list("clockSources", c.oc.clockSources);
+    list("timeSources", c.oc.timeSources);
+    if (!c.clock.empty()) j += ",\"clock\":" + jsonQ(c.clock);
+    if (!c.time.empty())  j += ",\"time\":" + jsonQ(c.time);
+    if (c.refLocked >= 0) j += std::string(",\"refLocked\":") + (c.refLocked ? "true" : "false");
+    j += std::string(",\"gpsdo\":") + (c.oc.gpsdo ? "true" : "false");
+    if (c.oc.gpsdo && c.gpsLocked >= 0) j += std::string(",\"gpsLocked\":") + (c.gpsLocked ? "true" : "false");
+    j += std::string(",\"dcOffset\":") + (c.oc.dcOffset ? "true" : "false");
+    if (c.oc.dcOffset) j += std::string(",\"dcOffsetOn\":") + (c.dcOffsetOn ? "true" : "false");
+    j += std::string(",\"iqBalance\":") + (c.oc.iqBalance ? "true" : "false");
+    if (c.oc.iqBalance) j += std::string(",\"iqBalanceOn\":") + (c.iqBalanceOn ? "true" : "false");
+    if (c.oc.bwAdjustable) {
+        char b[96];
+        std::snprintf(b, sizeof b, ",\"rxBwRange\":[%.0f,%.0f]", c.oc.bwLo, c.oc.bwHi);
+        j += b;
+        j += ",\"rxBwChoices\":[";
+        const auto bc = bwChoices(c.oc.bwLo, c.oc.bwHi);
+        for (size_t i = 0; i < bc.size(); ++i) { if (i) j += ','; j += std::to_string(bc[i]); }
+        j += "]";
+        j += std::string(",\"rxBwAuto\":") + (c.rxBwAuto ? "true" : "false");
+    }
+    if (c.rxBwHz > 0) { char b[48]; std::snprintf(b, sizeof b, ",\"rxBwHz\":%.0f", c.rxBwHz); j += b; }
+    if (!c.optionsNote.empty()) j += ",\"optionsNote\":" + jsonQ(c.optionsNote);
     j += ",\"hasBiasT\":false,\"noDirectSampling\":true,\"noTunerBw\":true,\"experimental\":true}";
     return j;
 }
