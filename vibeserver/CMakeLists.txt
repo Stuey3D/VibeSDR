@@ -737,6 +737,7 @@ endif()
 set(VIBE_UHD_LINK "" CACHE STRING "" FORCE)   # ★ build-app.sh reads this: the Swift app's link line is hand-written
 if(_usrp_arch_ok AND _uhd AND EXISTS "${_uhd}/lib/libuhd.a")
   message(STATUS "UHD (USRP B2xx, EXPERIMENTAL): ${_uhd}")
+  set(VIBE_USRP_BUILT TRUE)
   target_sources(vibeserver_core PRIVATE "${CPP_DIR}/usrp_source.cpp")
   set(_usrp_inc "${_uhd}/include")
   if(VIBE_DEPS_PREFIX)
@@ -937,6 +938,12 @@ target_link_libraries(vibeserver PRIVATE vibeserver_core)
 add_executable(test-radio-api "${CMAKE_CURRENT_SOURCE_DIR}/test-radio-api.cpp")
 vibe_sanitize(test-radio-api)
 target_link_libraries(test-radio-api PRIVATE vibeserver_core)
+# ★ V12 USRP: the B2xx policy + hwinfo shape, and — only where UHD is linked — "no USRP here" answered cleanly by the
+#   real source (scripts/run-tests.sh builds the same file header-only, against the stub).
+if(VIBE_USRP_BUILT)
+  add_executable(test-usrp-caps "${CMAKE_CURRENT_SOURCE_DIR}/test-usrp-caps.cpp")
+  target_link_libraries(test-usrp-caps PRIVATE vibeserver_core)
+endif()
 
 # ★ Header-only and dependency-free on purpose: the rule it guards (never emit a byte a browser
 #   will hang up over) belongs to the wire, not to any one radio, so its test must be runnable

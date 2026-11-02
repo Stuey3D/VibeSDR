@@ -86,7 +86,7 @@ public:
     bool hasHwAgc() const { return hasAgc_; }
     bool hwAgc() const { return agcOn_; }
 
-    /** "A: RX2", "A: TX/RX", and on a B210 "B: RX2", "B: TX/RX" — the labels printed on the case, with the channel.
+    /** "RX2", "TX/RX" — and on a B210 "RX2 (A)", "TX/RX (A)", "RX2 (B)", "TX/RX (B)": the case's labels, with the channel.
      *  ★ EMPTY on a radio with only one choice, so no selector is drawn for it (AGENTS.md). */
     const std::vector<std::string>& antennas() const { return antennas_; }
     std::string antenna() const;

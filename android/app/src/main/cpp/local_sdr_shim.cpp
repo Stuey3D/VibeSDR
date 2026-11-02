@@ -20,6 +20,7 @@
 #include "hackrf_source.h"
 #include "airspy_source.h"
 #include "usrp_source.h"   // ★ V12: Ettus USRP B2xx — the header's inline stub on every build without UHD
+#include "vibe_usrp_caps.h"
 
 // Android builds the USB/librtlsdr local-hardware path; iOS builds only the
 // RTL-TCP path (no USB host SDR on iOS). The USB code stays compiled on iOS via a
@@ -5546,6 +5547,7 @@ static bool  vsApplyAutoNotch(SdrplaySource* sdrp, double hz);
 /** ★ The owner's per-band aerial list, and the rule that follows from it at a frequency.
  *  Forward-declared for the same reason as its neighbours — the retune path sits above it. */
 static void  vsApplyAutoAntenna(SdrplaySource* sdrp, double hz);
+static void  vsApplyAutoAntennaUsrp(vibe::UsrpSource* u, double hz);   // ★ V12 USRP B2xx
 
 /* ══ WHICH FRONT-END NOTCHES SUIT THIS FREQUENCY ══════════════════════════════════════════════
  * ★★★ THE RSP's NOTCHES ARE ANALOGUE AND AHEAD OF THE TUNER, so they protect the whole front end
@@ -29132,6 +29134,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *  bands that also had a gain ceiling; it is called here too now, for the same reason.) */
         vsApplyAutoExtAntenna(hz);
         if (useSdrplay() && sdrp) vsApplyAutoAntenna(sdrp.get(), hz);
+        if (useUsrp() && usrp)    vsApplyAutoAntennaUsrp(usrp.get(), hz);   // ★ V12: the same rule, its RX ports
         const int cap = LocalSdrShim::gainCapAt(hz);
         // ★★★ TELL THE CLIENTS WHEN THE CEILING CHANGES — including when it goes AWAY. hwinfo is
         //     otherwise sent once, on connect, so a listener who tunes from HF into FM would keep
@@ -33309,15 +33312,24 @@ static int   vsDesiredDabNotch()   { return g_dsp.rspDabNotch.load(); }
  *  ★ An unknown port name is dropped by SdrplaySource, which knows the sockets; a typo in the map
  *    therefore leaves the aerial alone rather than guessing at the nearest.
  *  ✗ UNTESTED ON HARDWARE — no multi-aerial RSP here. */
+static void vsApplyAutoAntennaFrom(const std::string& now, double hz);
 static void vsApplyAutoAntenna(SdrplaySource* sdrp, double hz) {
     if (!sdrp || hz <= 0) return;
+    vsApplyAutoAntennaFrom(sdrp->antenna(), hz);
+}
+/** ★ V12: the same per-band rule for a USRP B2xx's RX ports — "0-400MHz RX2, 400MHz+ TX/RX", or on a B210 "RX2 (B)".
+ *  setRspAntenna routes to the USRP when one is running, and UsrpSource refuses a label it does not have. */
+static void vsApplyAutoAntennaUsrp(vibe::UsrpSource* u, double hz) {
+    if (!u || hz <= 0 || u->antennas().empty()) return;
+    vsApplyAutoAntennaFrom(u->antenna(), hz);
+}
+static void vsApplyAutoAntennaFrom(const std::string& now, double hz) {
     std::string map;
     { std::lock_guard<std::mutex> lk(g_rspAntMtx); map = g_antennaMap; }
     if (map.empty()) return;                       // manual: the owner has not asked for this
     const auto rules = vibebands::parseAntennaList(map);
     const std::string want = vibebands::antennaAt(rules, hz);
     if (want.empty()) return;                      // no rule covers here — leave it where it is
-    const std::string now = sdrp->antenna();
     if (want == now) return;
     /* ★ Case-insensitively equal counts as equal: the owner types "antenna c" and the radio calls
      *  it "C", and switching the aerial back and forth on every tick over a capital letter would
@@ -41663,29 +41675,18 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
      *     · antennas: the (channel, socket) list — EMPTY on a radio with one choice, so no selector;
      *     · no bias-T, no direct sampling, no tuner IF filter (UHD sets the analogue filter to the span). */
     if (p->useUsrp()) {
+        // ★ One writer for the shape (vibe_usrp_caps.h capsJson), filled here from the live radio — and from a stub in
+        //   vibeserver/test-usrp-caps.cpp, so the wire contract is tested without hardware.
         auto& u = *p->usrp;
-        auto q = [](const std::string& x) { return "\"" + Impl::jsonEscape(x) + "\""; };
-        std::string j = ",\"radio\":{\"driver\":\"usrp\",\"model\":" + q("USRP " + (u.model().empty() ? std::string("B2xx") : u.model()));
-        j += ",\"serial\":" + q(u.serial());
-        j += std::string(",\"hwAgc\":") + (u.hasHwAgc() ? "true" : "false");
-        j += std::string(",\"agcOn\":") + (u.hwAgc() ? "true" : "false");
-        j += ",\"gain\":" + std::to_string(u.gainTenthDb());
-        j += ",\"usb\":" + std::to_string(u.usbSpeed());
-        char rng[96];
-        std::snprintf(rng, sizeof rng, ",\"ranges\":[[%.0f,%.0f]]", u.freqMinHz(), u.freqMaxHz());
-        j += rng;
-        j += ",\"rates\":[";
-        { const auto& rl = u.sampleRates();
-          for (size_t i = 0; i < rl.size(); ++i) { if (i) j += ','; j += std::to_string(rl[i]); } }
-        j += "]";
-        j += ",\"antennas\":[";
-        { const auto& a = u.antennas();
-          for (size_t i = 0; i < a.size(); ++i) { if (i) j += ','; j += q(a[i]); } }
-        j += "]";
-        if (!u.antennas().empty()) j += ",\"antenna\":" + q(u.antenna());
-        j += std::string(",\"antennaLocked\":") + (vsAntennaLocked() ? "true" : "false");
-        j += ",\"hasBiasT\":false,\"noDirectSampling\":true,\"noTunerBw\":true,\"experimental\":true}";
-        return j;
+        vibe::usrpcaps::CapsView c;
+        c.model = u.model(); c.serial = u.serial();
+        c.hasAgc = u.hasHwAgc(); c.agcOn = u.hwAgc();   // ★ the gain itself rides hwinfo's generic `gain`
+        c.usbSpeed = u.usbSpeed();
+        c.fminHz = u.freqMinHz(); c.fmaxHz = u.freqMaxHz();
+        c.rates = u.sampleRates();
+        c.antennas = u.antennas(); c.antenna = u.antenna();
+        c.antennaLocked = vsAntennaLocked();
+        return vibe::usrpcaps::capsJson(c);
     }
     if (!p->useSdrplay()) {
         // ★ Name the dongle too. The client had nothing to show for a receiver, which is an

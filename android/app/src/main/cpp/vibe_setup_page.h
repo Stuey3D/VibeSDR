@@ -3399,7 +3399,8 @@ function gainIsDb() {
    *     nothing on screen to say so.
    *  ★ Only the RSP is not in dB: its limit is an RF POSITION, which is why this function exists
    *    at all. */
-  return d === "rtl" || d === "rtlsdr" || d === "hackrf";
+  // ★ V12: the USRP B2xx too — its one gain element is in tenths of a dB, the dongle's spelling (setGain in the shim).
+  return d === "rtl" || d === "rtlsdr" || d === "hackrf" || d === "usrp";
 }
 /** ★★★ THE AIRSPY R2 / MINI SPEAKS A PRESET POSITION, 0-21 — not dB and not an RSP position.
  *  Its gain is Airspy's own linearity/sensitivity curve: one index that libairspy turns into the
@@ -3654,6 +3655,9 @@ function gainSteps() {
     return out;
   }
   if (HW && Array.isArray(HW.gains) && HW.gains.length) return HW.gains;
+  /* ★ V12 USRP: its steps are the RADIO's (get_rx_gain_range), published in HW.gains while it runs. Offline there is
+   *  nothing honest to draw a slider over — never the dongle's table — so the box stands alone until it is running. */
+  if ((radio().driver || "") === "usrp") return [];
   return R820T_GAINS;
 }
 function wireGainSlider(sliderId, boxId) {
@@ -3703,9 +3707,13 @@ function renderGain() {
    *     server's lock refuses the manual stages but neither forces those AGCs on nor stops a
    *     listener switching them off — a lock that does not lock is not drawn (AGENTS.md). */
   const isAsp = drv === "airspy";
+  /* ★ V12 USRP B2xx: one gain in dB, so it gets what the server enforces for every dB radio — a starting gain
+   *  (applyRestGain -> setGain), per-band ceilings and the per-band lock (applyGainCapForFreq's default branch, in
+   *  tenths). NOT the AGC lock: nothing on the server holds the AD9361's AGC on, so a lock would not lock. */
+  const isUsrp = drv === "usrp";
   // ★★ SHOWN ONLY WHERE THE CONTROL EXISTS. An HF+ has no gain to cap, so offering a ceiling box
   //    for it would be a setting that does nothing — the exact fault AGENTS.md has a rule about.
-  $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf || isHrf || isAsp));
+  $("gainCard").classList.toggle("hide", !(isRtl || isRsp || isHf || isHrf || isAsp || isUsrp));
   // ★★★ THE RTL'S AGC SWITCH WAS NEVER SHOWN AT ALL. The row was added with class="hide" and no
   //     line was ever written to take it off, so "VibeSDR Custom AGC for RTL-SDR" has been in the
   //     page, correct and invisible, since the day it was added — Stuart, 2026-08-21, trying to
@@ -3721,7 +3729,7 @@ function renderGain() {
   // ★ RSP only — it is the only driver here with a settable AGC target.
   $("agcSetRow").classList.toggle("hide", !isRsp);
   $("agcSetLockRow").classList.toggle("hide", !isRsp);
-  $("gainRestRow").classList.toggle("hide", !(isRtl || isRsp || isAsp));
+  $("gainRestRow").classList.toggle("hide", !(isRtl || isRsp || isAsp || isUsrp));
   // ★ Remembered, because layoutLockedRadio() also hides this row (a pinned window has no other
   //   bands) and must not UNHIDE it on a radio that never had per-band ceilings to begin with.
   //   Two independent reasons to hide one row need one place that knows both.
@@ -3734,8 +3742,8 @@ function renderGain() {
    *     mixer — the only pre-mixer stage is the RF amp, which is owner-only already — so the sum
    *     is what drives the converter, and capping them separately would allow twice what was
    *     asked for. The server enforces the same sum in hackrf_control. */
-  $("gainLimitRow").dataset.avail = (isRtl || isRsp || isHrf || isAsp) ? "1" : "0";
-  $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp || isHrf || isAsp));
+  $("gainLimitRow").dataset.avail = (isRtl || isRsp || isHrf || isAsp || isUsrp) ? "1" : "0";
+  $("gainLimitRow").classList.toggle("hide", !(isRtl || isRsp || isHrf || isAsp || isUsrp));
   /* ★★★ THE PER-BAND IF FILTER IS THE R820T's, AND ONLY A DONGLE HAS ONE. It is written by the
    *     hardware writer through rtlsdr_set_tuner_bandwidth, which drives a USB dongle and nothing
    *     else — so on an RSP, a HackRF or an Airspy the menu accepted a width, drew it in the chip,
@@ -3771,7 +3779,7 @@ function renderGain() {
   //   ★★ NOT loaded from the radio: it belongs to the ENTRY being added, not to the receiver, so
   //      it starts clear each time rather than inheriting the last band's answer.
   // ★ The Airspy R2 / Mini gets its own LIMIT / LOCK choice and its curve picker instead.
-  $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf));
+  $("gainLockRow").classList.toggle("hide", !(isRtl || isRsp || isHrf || isUsrp));
   $("gainAspLockRow").classList.toggle("hide", !isAsp);
   $("gainCurve").classList.toggle("hide", !isAsp);
   $("gainAspNote").classList.toggle("hide", !isAsp);
@@ -4073,6 +4081,11 @@ const DRIVER_HW = {
    *  ★ biasT true: 4.5 V on the aerial socket, routed by setBiasTee to setAirspyBiasT. */
   airspy:   { rates: [2500000, 3000000, 6000000, 10000000],
               biasT: true,  rfNotch: false, lnaState: false },
+  /* ★ V12 ETTUS USRP B2xx — EXPERIMENTAL. Offline (no process running it) the USB-2-safe list from vibe_usrp_caps.h
+   *  ratesFor(2); once it is running the radio's OWN list replaces this one, as for every radio here — and on a USB 3
+   *  link that list goes on to 10, 12.5 and 16 MS/s. No bias-T, no notches, no LNA states. */
+  usrp:     { rates: [1000000, 2000000, 2400000, 3200000, 4000000, 5000000, 8000000],
+              biasT: false, rfNotch: false, lnaState: false },
 };
 
 /** ★★★ WHAT THIS PARTICULAR RSP HAS (2026-10-22). The RSP family does not share a front end: the RSP1 has no
@@ -4342,6 +4355,14 @@ async function renderHw() {
     if (ports.length) Object.defineProperty(r, "antennas", { value: ports, enumerable: false, configurable: true, writable: true });
     paintAntPortCard();
     renderAntBands();
+  }
+  /* ★ V12 USRP B2xx: ITS RX PORTS, FROM THE RADIO — only while it is running (hw.radio, radioCapsJson). There is no
+   *  model table to fall back on: a B200 and a B210 share a USB id, so an offline guess at "two channels" would be
+   *  a guess. One port (or none known) = no card, as for every single-socket radio. */
+  if (((hw && hw.driver) || r.driver) === "usrp") {
+    const ports = (hw && hw.radio && Array.isArray(hw.radio.antennas)) ? hw.radio.antennas : [];
+    if (ports.length) Object.defineProperty(r, "antennas", { value: ports, enumerable: false, configurable: true, writable: true });
+    paintAntPortCard();
   }
   // ★ Where THIS tab's radio answers — the DAB landing's scan must reach the radio, not the door.
   HW_PREFIX = mine ? "" : "/r/" + encodeURIComponent(r.serial || "");
@@ -4686,6 +4707,23 @@ async function renderHw() {
         or Lock &mdash; in that band listeners get only that mode's slider.
         <br>It covers 24&ndash;1800&nbsp;MHz. There is no direct sampling to switch and VibeSDR's
         own AGC is not used on it.</div>`;
+  } else if (drv === "usrp") {
+    /* ★★ V12 ETTUS USRP B2xx — EXPERIMENTAL, said here because the person reading this page is the one who will
+     *    conclude the radio is broken. One gain, the AD9361's own AGC, and its RX sockets as the antenna choice —
+     *    every figure the receiver page draws comes from the radio itself (hwinfo), none from this page. */
+    el.innerHTML = `
+      <p class="hint"><b>USRP support is experimental.</b> It has been written from Ettus's documentation and
+        the UHD library's interface, and nobody on the VibeSDR side has run it against a radio yet. Please report
+        what it does.</p>
+      <div class="hint">A B200, B210 or B200mini has <b>one</b> gain control, 0&ndash;76&nbsp;dB, and its
+        <b>own automatic gain</b> in the AD9361 &mdash; the AUTO end of the receiver page's gain slider. Its
+        receive sockets (<b>RX2</b> and <b>TX/RX</b>, and on a B210 both channels, A and B) are the
+        <b>antenna</b> choice on the receiver page. VibeServer only ever receives: choosing TX/RX never
+        transmits.
+        <br>It covers 50&nbsp;MHz&ndash;6&nbsp;GHz &mdash; no HF without an upconverter. Its driver and its
+        firmware come with VibeServer; there is nothing to install.
+        <br><b>Use a USB&nbsp;3 port.</b> On USB&nbsp;2 the rates stop at 8&nbsp;MS/s, and a B210 may need its
+        own power supply.</div>`;
   } else {
     /* ★★★ NO GAIN SELECT HERE. It sat directly above a note saying "Gain is not set here", and
      *     both were true: the select saved a number the client's live controls then overrode.
@@ -4734,6 +4772,11 @@ async function renderHw() {
        that pays for it. Bring the LNA up until the signal is clear of the noise and no further,
        and leave the RF amp off unless the band is genuinely quiet. It is also 8-bit, so it has far
        less headroom than the other radios here.`
+    : drv === "usrp"
+    ? `It opens on the <b>gain in its settings</b> &mdash; a <b>starting gain</b> in Gain limits below, or 0&nbsp;dB
+       with none set &mdash; and goes back to it whenever the last listener leaves. Coming UP to a working gain
+       from the quiet side is the safe direction on an aerial we know nothing about. The radio's own AGC is the
+       AUTO end of the receiver page's slider.`
     : `<b>Signals will look weak until you do.</b> This receiver starts at the tuner's
        <b>lowest gain</b>, deliberately, and never uses the tuner's own automatic gain &mdash; that
        mode is unreliable across RTL tuners and is known to misbehave on the v4. We know nothing
@@ -4744,7 +4787,7 @@ async function renderHw() {
    *     sits above VibeAGC with a lock beside it. This card used to carry two paragraphs about
    *     where gain is NOT set, above a select that set it (Stuart, 2026-09-15: "double
    *     settings"). Only a radio with something of its own to say keeps a note here. */
-  if (drv === "airspyhf" || drv === "hackrf" || drv === "airspy")
+  if (drv === "airspyhf" || drv === "hackrf" || drv === "airspy" || drv === "usrp")
     el.innerHTML += `<div class="note">${startState}</div>`;
   { const card = el.closest(".card"); if (card) card.classList.toggle("hide", !el.innerHTML.trim()); }
 
@@ -6151,7 +6194,7 @@ function bgNdbBlocked() {
 function bgNdbOk() {
   const r0 = bgRadio || {};
   const drv = String(r0.driver || "");
-  if (drv === "icom" || drv === "hackrf" || drv === "airspy") return false;
+  if (drv === "icom" || drv === "hackrf" || drv === "airspy" || drv === "usrp") return false;   // ★ V12 USRP: 50 MHz floor
   if (bgNdbBlocked()) return false;
   const hw = typeof HW !== "undefined" ? HW : null;
   if (hw && typeof hw.ndbHw === "boolean" && !hw.offline) return hw.ndbHw;

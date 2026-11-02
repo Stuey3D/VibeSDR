@@ -116,9 +116,12 @@ inline int nearestGain(const std::vector<int>& list, int tenth) {
  *  ★★★ A RADIO WITH ONE CHOICE PUBLISHES NONE (empty list), so the client draws no selector — "a control whose
  *      every use is a no-op" (AGENTS.md). */
 struct Port { size_t chan; std::string socket; };
+/* ★★ "RX2 (A)", NOT "A: RX2". The owner's per-band aerial list (vibe_bands.h parseAntennaList) splits a rule at its
+ *    LAST colon — "0-400MHz A: RX2" would read as the band "0-400MHz A" — so a label must never contain one. The
+ *    socket first, the channel in brackets, the way the case reads. */
 inline std::string portLabel(size_t chan, size_t nChans, const std::string& socket) {
     if (nChans <= 1) return socket;
-    return std::string(1, (char)('A' + (chan < 26 ? chan : 25))) + ": " + socket;
+    return socket + " (" + std::string(1, (char)('A' + (chan < 26 ? chan : 25))) + ")";
 }
 /** `sockets[c]` = get_rx_antennas(c) for every channel c. */
 inline std::vector<Port> ports(const std::vector<std::vector<std::string>>& sockets) {
@@ -172,6 +175,51 @@ inline std::string resolveImage(const std::string& file, const std::vector<std::
         if (fileExists(p)) return p;
     }
     return "";
+}
+
+// ── the radio object in hwinfo ────────────────────────────────────────────────────────────────────────────────
+/** Everything radioCapsJson says about a USRP, as plain data — filled from UsrpSource by the shim, and from a stub
+ *  by vibeserver/test-usrp-caps.cpp, so the wire shape is tested without a radio. */
+struct CapsView {
+    std::string model, serial;            // model as UHD reports it ("B210"); "" = unknown
+    bool hasAgc = false, agcOn = false;
+    int usbSpeed = 0;
+    double fminHz = 0, fmaxHz = 0;
+    std::vector<uint32_t> rates;
+    std::vector<std::string> antennas;    // empty = one choice = no selector
+    std::string antenna;
+    bool antennaLocked = false;
+};
+inline std::string jsonQ(const std::string& s) {
+    std::string o = "\"";
+    for (char c : s) {
+        if (c == '"' || c == '\\') { o += '\\'; o += c; }
+        else if ((unsigned char)c < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", (unsigned char)c); o += b; }
+        else o += c;
+    }
+    return o + "\"";
+}
+/** The `,"radio":{…}` fragment radioCapsJson appends. ★★ What it HAS and what it has NOT, said explicitly so no
+ *  client draws a dead control (AGENTS.md): no bias-T, no direct sampling, no tuner IF filter. The gain list is
+ *  hwinfo's generic `gains` (getTunerGains), not repeated here. */
+inline std::string capsJson(const CapsView& c) {
+    std::string j = ",\"radio\":{\"driver\":\"usrp\",\"model\":" + jsonQ("USRP " + (c.model.empty() ? std::string("B2xx") : c.model));
+    j += ",\"serial\":" + jsonQ(c.serial);
+    j += std::string(",\"hwAgc\":") + (c.hasAgc ? "true" : "false");
+    j += std::string(",\"agcOn\":") + (c.hasAgc && c.agcOn ? "true" : "false");
+    j += ",\"usb\":" + std::to_string(c.usbSpeed);
+    char rng[96];
+    std::snprintf(rng, sizeof rng, ",\"ranges\":[[%.0f,%.0f]]", c.fminHz, c.fmaxHz);
+    j += rng;
+    j += ",\"rates\":[";
+    for (size_t i = 0; i < c.rates.size(); ++i) { if (i) j += ','; j += std::to_string(c.rates[i]); }
+    j += "],\"antennas\":[";
+    for (size_t i = 0; i < c.antennas.size(); ++i) { if (i) j += ','; j += jsonQ(c.antennas[i]); }
+    j += "]";
+    if (!c.antennas.empty()) j += ",\"antenna\":" + jsonQ(c.antenna);
+    j += std::string(",\"antennaLocked\":") + (c.antennaLocked ? "true" : "false");
+    j += ",\"hasBiasT\":false,\"noDirectSampling\":true,\"noTunerBw\":true,\"experimental\":true}";
+    return j;
 }
 
 }  // namespace usrpcaps
