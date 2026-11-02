@@ -81,7 +81,9 @@ async function start(p) {
   //   until it is gone, pressing its button with a real tap whenever it is up.
   const GATE_UP = `(() => { const g = document.getElementById("audioGate"); return !!g && g.isConnected && g.style.display !== "none" && getComputedStyle(g).display !== "none"; })()`;
   for (let i = 0; i < 40; i++) {
-    if (!(await p.js(GATE_UP))) { await sleep(250); if (!(await p.js(GATE_UP))) break; continue; }
+    // ★ "gone" must outlast the page's own 1 s showAudioGate tick (main.ts: setInterval(showAudioGate, 1000)) — after a
+    //   reload the gate is often (re)drawn by that tick, after a 250 ms double look had already called it gone.
+    if (!(await p.js(GATE_UP))) { await sleep(1300); if (!(await p.js(GATE_UP))) break; continue; }
     // "Press anywhere to start listening" — but NOT on its other buttons (View tutorial, the Transparency switch): find a
     //   spot on the gate whose top element is the gate itself or its START text, never a button.
     const g = await p.js(`(() => { const gate = document.getElementById("audioGate"); const r = gate.getBoundingClientRect();
@@ -218,6 +220,8 @@ try {
   await p.js(`location.reload(); 1`);
   ok(await start(p), "(reloaded)");
   await sleep(600);
+  // ★ "still OFF" means nothing if the gate is what hides the label: the test point must be on the canvas first.
+  ok(await p.until(hitIsCanvas(wx, wy), 5000), "(after the reload the test point is on the waterfall canvas, not the gate)");
   await p.mouse("mouseMoved", wx, wy); await p.mouse("mouseMoved", wx + 2, wy);
   let reShown = false;
   for (let i = 0; i < 6; i++) { await sleep(40); reShown ||= await p.js(SHOWN); }
