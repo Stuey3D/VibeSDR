@@ -47,8 +47,8 @@ static constexpr size_t kMaxGroups = 20000;
 static constexpr int64_t kExpireSec = 72 * 3600;
 static constexpr int64_t kReuseSec = 30 * 86400;
 static constexpr size_t kMaxPts = 24;
-static constexpr const char* kPrefix = "v8\t";   // ★ kVersion's line prefix
-static constexpr int kVersion = 8;   // ★ 8 (2026-11-02): rebuilds the met index — the SEA AREAS beyond the UK (NWS zones by name or UGC line, ECCC areas, DWD coastal areas) and winds in knots. 7 (2026-11-02): rebuilds the met index — a force range written "4-5" now reads its upper figure (the SHIPPING MAP arrows). 6 (2026-11-01): cables/pipelines in five, platforms, named lists (one marker an item), REPLACES. 5: the submarine class (was folded into firing). 4: + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
+static constexpr const char* kPrefix = "v9\t";   // ★ kVersion's line prefix
+static constexpr int kVersion = 9;   // ★ 9 (2026-11-02, pass 2): rebuilds the met index — MET Norway's sea areas and Met Éireann's coastal stretches (a chain of headlands), Inner/Outer Skagerrak's ids, the Dutch/German/French names (THEEMS, DEUTSCHE BUCHT, TAMISE, PAS DE CALAIS). 8 (2026-11-02): rebuilds the met index — the SEA AREAS beyond the UK (NWS zones by name or UGC line, ECCC areas, DWD coastal areas) and winds in knots. 7 (2026-11-02): rebuilds the met index — a force range written "4-5" now reads its upper figure (the SHIPPING MAP arrows). 6 (2026-11-01): cables/pipelines in five, platforms, named lists (one marker an item), REPLACES. 5: the submarine class (was folded into firing). 4: + the shape the text names, its date-time group   // ★ the index's format: a line of another version is ignored (and the index rebuilt)
 
 // ── the hazard classes (the Lenovo's 3 924 messages decided them — scripts/navtex-survey numbers in the commit) ─────────
 /** Conservative keyword rules on the message body, whole words, in this order (the first that matches wins); when none
