@@ -72,7 +72,13 @@ mkdir -p "$B/boost" && tar -xjf "$CACHE/boost_${BOOST_VER//./_}.tar.bz2" -C "$B/
 # ★★ b2 itself is built with the HOST compiler (bootstrap), the libraries with the TARGET one: a user-config.jam names
 #    $CXX as toolset "<UHD_B2_TOOLSET>-vibe", so a cross g++ and the Mac's clang++ are the same one line.
 # ★ CXXFLAGS (the caller's arch / deployment-target flags) go in as cxxflags; -fvisibility stays Boost's default.
-( cd "$B/boost" && ./bootstrap.sh >"$B/boost-bootstrap.log" 2>&1 ) || { tail -30 "$B/boost-bootstrap.log"; echo "!! Boost bootstrap failed"; exit 1; }
+# ★★ FOUND ON THE FIRST CROSS RUN (amd64 from an arm64 container, 2026-11-02): bootstrap.sh builds b2 with $CXX if it
+#    is set — the TARGET's cross g++ — so b2 came out for the wrong machine and "Failed to build B2 build engine". b2 is a
+#    host tool: bootstrap it with the caller's compiler variables cleared and the HOST's own toolset named.
+HOST_B2_TOOLSET=gcc; [ "$(uname -s)" = Darwin ] && HOST_B2_TOOLSET=clang
+( cd "$B/boost" && env -u CC -u CXX -u CFLAGS -u CXXFLAGS -u LDFLAGS -u AR -u RANLIB \
+    ./bootstrap.sh --with-toolset="$HOST_B2_TOOLSET" >"$B/boost-bootstrap.log" 2>&1 ) \
+  || { tail -30 "$B/boost-bootstrap.log"; echo "!! Boost bootstrap failed"; exit 1; }
 CXX_ONLY="${CXX%% *}"; CXX_REST="${CXX#"$CXX_ONLY"}"
 echo "using $UHD_B2_TOOLSET : vibe : $CXX_ONLY : <archiver>$AR ;" > "$B/boost/user-config.jam"
 ( cd "$B/boost" && ./b2 -q -d0 -j"$JOBS" --user-config="$B/boost/user-config.jam" toolset="$UHD_B2_TOOLSET-vibe" \
