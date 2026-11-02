@@ -299,10 +299,10 @@ gateway beacon, compressed position, and a Mic-E jeep, "Off Duty") — **a singl
   released; APRS in CLIENT DECODERS (PACKET + TUNE, AprsView, the station map). `src/services/tracks.ts` mirrors the
   web's rules (scripts/test_ais_aprs_app.ts). Owed: a device run; an AIS box for Apple TV.
 - **Background decoding:** APRS works as a background VFO's decoder through the host (its gallery tap is wired), but the
-  setup page's decoder list for a VFO does not offer APRS yet, and an **AIS background profile** (as ISM's `"ism"`
-  profile) is not built — `bgAis_` is in place and always false.
-- **The setup page's "Modes and decoders" switches** do not list AIS and APRS yet; the server honours `ais`/`aprs` in
-  `blockedModes` already.
+  setup page's decoder list for a VFO does not offer APRS yet. The **AIS background profile** (`"ais":true`, beside ISM's
+  `"ism"`) is BUILT (2026-11-02) — with the ship store and the SHIPPING MAP: docs/v12/SHIPPING-MAP.md.
+- **The setup page's "Modes and decoders" switches** list AIS (with "AIS: keep the ships for the SHIPPING MAP" under it)
+  and APRS (2026-10-31 / 2026-11-02).
 - APRS on the **GPU map** draws via the Leaflet-shaped adapter (`vibemapgl-compat.js` gained `polyline`); only the Leaflet
   fallback was exercised in the headless tests (no map pack in the test server).
 - AIS on a radio whose capture is far below 162.000 (e.g. an owner's tuning offset) is handled by the front end's NCO

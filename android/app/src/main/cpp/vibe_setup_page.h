@@ -2771,6 +2771,10 @@ const BLOCKABLE = [
   { id: "jtty",   label: "JTTY" },
   /* ★ V12 AIS (ships, a whole-radio mode on 162 MHz) and APRS (amateur packet stations, a decoder on NFM / USB). */
   { id: "ais",    label: "AIS ships" },
+  /* ★★ V12 2026-11-02 the SHIP STORE (vibe_ais_store.h): the ships AIS heard, kept in the gallery for the SHIPPING MAP
+   *  (every radio on this server shows them, with nobody in AIS). Ticked = kept; off = the store is neither written nor
+   *  served. Under AIS: nothing to keep without it. */
+  { id: "aisstore", label: "AIS: keep the ships for the SHIPPING MAP (in the gallery)", parent: "ais" },
   { id: "aprs",   label: "APRS" },
   /* ★ ADS-B (aircraft on 1090 MHz, a whole-radio mode) — the server enforced "adsb"; the page never offered it. */
   { id: "adsb",   label: "ADS-B aircraft" },
@@ -6174,6 +6178,17 @@ const BG_ISM_BANDS = [
   { id: "868", label: "868 MHz SRD \u2014 sensors and meters (EU: LaCrosse, Bresser, Fine Offset; water, heat and gas meters)" },
   { id: "915", label: "915 MHz (US: LaCrosse, Ambient, Fine Offset)" },
 ];
+/* ★★ V12 2026-11-02 — MAY A PROFILE HERE DECODE AIS (ships on 162 MHz, the whole radio)? Only where the radio reaches
+ *  162 MHz (not an Airspy HF+, not an Icom — the server's vsAisReach), it is not locked (background never moves a locked
+ *  radio), and the owner has not switched AIS off. The same rule the save enforces (vibe_bgdecode_config.h validate). */
+function bgAisOk() {
+  const r0 = bgRadio || {};
+  const drv = String(r0.driver || "");
+  if (drv === "airspyhf" || drv === "icom") return false;
+  if (r0.mode === "locked" && r0.lockFreq > 0) return false;
+  try { if (typeof modeBlockSet === "function" && modeBlockSet().has("ais")) return false; } catch (e) { /* no mode list on this page */ }
+  return true;
+}
 function bgIsmBands() {
   const r0 = bgRadio || {};
   const drv = String(r0.driver || "");
@@ -6219,6 +6234,8 @@ function bgLoad(r) {
                    return { hz: +v.hz || 0, mode: BG_DEMODS[v.mode] ? v.mode : "usb", dec: v.dec || "navtex" }; }) };
         // ★ only an ISM profile carries "ism" — an ordinary one saves back exactly as it came
         if (typeof p.ism === "string" && p.ism) { q.ism = p.ism; q.centre = 0; q.vfos = []; }
+        // ★ V12 2026-11-02: only an AIS profile carries "ais"
+        else if (p.ais === true) { q.ais = true; q.centre = 0; q.vfos = []; }
         // ★ V12 2026-10-27: an older whole-radio NDB profile is the VFO profile it now is — the band's middle as its RF
         //   centre and ONE NDB skimmer VFO (the server converts it the same way when it reads it)
         else if (p.ndb === true) { q.centre = BG_NDB_LEGACY_CENTRE; q.vfos = [{ hz: 0, mode: "usb", dec: "ndb-skim" }]; }
@@ -6253,7 +6270,7 @@ function bgCollect() {
   bgModel.on = !!($("bgOn") && $("bgOn").checked);
   bgModel.waitMin = parseFloat(($("bgWait") || {}).value) || 5;
   // ★ Off with nothing set up stores nothing at all — the radio's entry stays as it was before this existed.
-  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim"; }); })) return "";
+  if (!bgModel.on && !bgModel.profiles.some(function (p) { return p.ism || p.ais || p.centre > 0 || p.vfos.some(function (v) { return v.hz > 0 || v.dec === "ndb-skim"; }); })) return "";
   bgModel.keepInRange = !($("bgKeepInRange") && !$("bgKeepInRange").checked);
   const out = { on: bgModel.on, waitMin: bgModel.waitMin, profiles: bgModel.profiles };
   if (!bgModel.keepInRange) out.keepInRange = false;    // ★ absent = on, as the server reads it
@@ -6344,22 +6361,37 @@ function bgRender() {
      *  sees why it does not run (the server refuses the save in words too). */
     // \u2605 V12 2026-10-27: NDB is not a profile kind any more \u2014 it is a VFO decoder ("NDB skimmer (summary)", below)
     const ismBands = bgIsmBands();
-    if (ismBands.length || p.ism) {
+    const aisOk = bgAisOk();   // ★ V12 2026-11-02: AIS ships, a whole-radio profile like ISM
+    if (ismBands.length || p.ism || aisOk || p.ais) {
       const kl = el("label"); kl.appendChild(el("span", { class: "lbl" }, "Decodes"));
       const ks = el("select", { class: "bgKind", style: "max-width:320px" });
       ks.appendChild(el("option", { value: "vfo" }, "Stations on VFOs (RF centre + VFOs)"));
       if (ismBands.length) ks.appendChild(el("option", { value: "ism" }, "ISM sensors on a whole band"));
-      ks.value = p.ism && ismBands.length ? "ism" : "vfo";
+      if (aisOk) ks.appendChild(el("option", { value: "ais" }, "AIS ships (161.975 + 162.025 MHz)"));
+      ks.value = p.ism && ismBands.length ? "ism" : p.ais && aisOk ? "ais" : "vfo";
       ks.onchange = function () {
         if (ks.value === "ism") {
           const land = ismBands.filter(function (b) { return b.id === "433"; })[0] || ismBands[0];
-          p.ism = land.id; p.centre = 0; p.vfos = [];
-        } else { delete p.ism; if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); }
+          delete p.ais; p.ism = land.id; p.centre = 0; p.vfos = [];
+        } else if (ks.value === "ais") {
+          delete p.ism; p.ais = true; p.centre = 0; p.vfos = [];
+        } else { delete p.ism; delete p.ais; if (!p.vfos.length) p.vfos.push({ hz: 0, mode: "usb", dec: "navtex" }); }
         bgRender();
       };
       kl.appendChild(ks); card.appendChild(kl);
     }
-    if (p.ism) {
+    if (p.ais) {
+      if (!aisOk) {
+        card.appendChild(el("div", { class: "hint", style: "color:#ff8a7d" }, "This profile decodes AIS, which this radio cannot do"
+          + (locked ? " \u2014 its range is locked, and background decoding never moves a locked radio." : " \u2014 it does not reach 162 MHz, or AIS is switched off on it.")
+          + " Choose \u201cStations on VFOs\u201d or delete the profile."));
+      } else {
+        card.appendChild(el("div", { class: "hint bgAisNote" }, "AIS takes the whole radio onto 162.000 MHz and decodes every ship on both "
+          + "channels \u2014 so it runs only while nobody is listening, and stops the moment anybody connects. The ships (each one\u2019s "
+          + "latest report and a short track) are kept in the gallery for the SHIPPING MAP, which every radio on this server can show, "
+          + "beside NAVTEX and DSC. Each day\u2019s AIS log and summary go to the gallery too."));
+      }
+    } else if (p.ism) {
       if (!ismBands.length) {
         card.appendChild(el("div", { class: "hint", style: "color:#ff8a7d" }, "This profile decodes ISM, which this radio cannot do"
           + (locked ? " \u2014 its range is locked, and background decoding never moves a locked radio." : ".")

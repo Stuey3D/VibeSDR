@@ -52,7 +52,10 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'same', label: 'EAS / SAME' }, { id: 'selcal', label: 'SELCAL' },
   { id: 'mfsk', label: 'MFSK, Olivia, Contestia, THOR' }, { id: 'hell', label: 'Feld Hell (Hellschreiber)' },
   { id: 'ndb', label: 'NDB beacons' }, { id: 'jtty', label: 'JTTY' },
-  { id: 'ais', label: 'AIS ships' }, { id: 'aprs', label: 'APRS' },
+  { id: 'ais', label: 'AIS ships' },
+  // ★★ V12 2026-11-02 the ship store for the SHIPPING MAP (vibe_ais_store.h) — under AIS, as on the setup page
+  { id: 'aisstore', label: 'AIS: keep the ships for the SHIPPING MAP (in the gallery)', parent: 'ais' },
+  { id: 'aprs', label: 'APRS' },
   { id: 'adsb', label: 'ADS-B aircraft' },
 ];
 /** The list as drawn: BLOCKABLE plus one switch per digital-spots mode under "spots", before Band — `spots-<mode>` off.
@@ -80,7 +83,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
 /** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'adsb', 'drm', 'tone',
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'aisstore', 'adsb', 'drm', 'tone',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,

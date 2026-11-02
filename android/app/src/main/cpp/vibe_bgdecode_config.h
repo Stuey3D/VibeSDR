@@ -36,9 +36,15 @@ struct Profile {
     /* ★ V12 2026-10-27 — there is no whole-radio NDB profile any more (Stuart chose the VFO list: the NDB skimmer is a VFO
      *  decoder, "ndb-skim", running beside NAVTEX and FT8 on the same capture). An older saved "ndb":true profile is
      *  CONVERTED on parse into a VFO profile with that one entry, centred on the band (kNdbLegacyCentreHz) — see parse(). */
+    /** ★★ V12 2026-11-02 — AN AIS PROFILE (Stuart: "one set for Navtex and another for AIS … all ships and forecasts etc on
+     *  one map"). AIS is a whole-radio mode on 162.000 MHz (both channels at once, vibe_ais.h): such a profile has no RF
+     *  centre or VFOs; with nobody here it enters the listener's own AIS mode, and the ships go to the gallery's ship
+     *  store (vibe_ais_store.h) and the day's AIS log, labelled background. Stored as "ais":true. */
+    bool ais = false;
     bool allDay() const { return fromMin == toMin; }
     bool isIsm() const { return !ism.empty(); }
-    bool isWhole() const { return isIsm(); }   ///< a whole-radio mode (ISM), not VFOs
+    bool isAis() const { return ais && ism.empty(); }
+    bool isWhole() const { return isIsm() || isAis(); }   ///< a whole-radio mode (ISM, AIS), not VFOs
 };
 struct Config {
     bool on = false;
@@ -219,6 +225,7 @@ inline bool parse(const std::string& json, Config& out, std::string& err) {
             if (f < 0 || t < 0) { err = "background decoding: a profile time is not HH:MM"; return false; }
             p.fromMin = f; p.toMin = t;
             p.ism = pj.str("ism", "");
+            if (const auto* ai = pj.get("ais")) p.ais = ai->kind == antswitch::Json::Bool && ai->b && p.ism.empty();
             bool legacyNdb = false;
             if (const auto* nd = pj.get("ndb")) legacyNdb = nd->kind == antswitch::Json::Bool && nd->b;
             if (const auto* vs = pj.get("vfos"); vs && vs->kind == antswitch::Json::Arr)
@@ -263,6 +270,7 @@ inline std::string toJson(const Config& c) {
         o += "]";
         // ★ V12 2026-10-25: absent on an ordinary profile, so older settings read back unchanged (the page's own order)
         if (p.isIsm()) o += ",\"ism\":\"" + gallery::jsonEsc(p.ism) + "\"";
+        if (p.isAis()) o += ",\"ais\":true";   // ★ V12 2026-11-02: absent on every other profile
         o += "}";
     }
     return o + "]}";
@@ -308,7 +316,8 @@ static inline std::string khz(double hz) { char b[32]; std::snprintf(b, sizeof b
  *  reaches the CHOSEN band through the owner's own allow/block ranges is the radio's to say when the profile runs.
  *  `ndbOk` false: this radio reaches no LF (an RTL without direct sampling, a HackRF, an Airspy R2/Mini, an Icom) — an
  *  NDB skimmer VFO is refused there, in words. */
-inline bool validate(const Config& c, double rate, std::string& err, int slotCap = 0, double lockCentre = 0, bool ismOk = true, bool ndbOk = true) {
+/** `aisOk` false (V12 2026-11-02): this radio cannot run AIS (it does not reach 162 MHz — an Airspy HF+, an Icom). */
+inline bool validate(const Config& c, double rate, std::string& err, int slotCap = 0, double lockCentre = 0, bool ismOk = true, bool ndbOk = true, bool aisOk = true) {
     if (c.profiles.size() > kMaxProfiles) { err = "background decoding: at most " + std::to_string(kMaxProfiles) + " profiles"; return false; }
     if (c.on && c.profiles.empty()) { err = "background decoding is on but has no profile — add one, or switch it off"; return false; }
     for (size_t i = 0; i < c.profiles.size(); i++) {
@@ -328,6 +337,22 @@ inline bool validate(const Config& c, double rate, std::string& err, int slotCap
             if (rate > 0 && rate < vibeism::kMinRateHz) {
                 char t[200];
                 std::snprintf(t, sizeof t, "%s: ISM needs a capture of 0.9 MS/s or more \xe2\x80\x94 this radio runs at %.3f MS/s", name.c_str(), rate / 1e6);
+                err = t; return false;
+            }
+            continue;
+        }
+        // ★★ AN AIS PROFILE: the radio onto 162.000 MHz in AIS mode. It MOVES the radio, so never on a locked radio, and
+        //    it needs the capture AIS needs (≥ 96 kS/s — every radio that reaches 162 MHz runs faster than that).
+        if (p.isAis()) {
+            if (!aisOk) { err = name + ": this radio cannot tune to 162 MHz, so it cannot decode AIS"; return false; }
+            if (lockCentre > 0) {
+                err = name + ": AIS puts the radio on 162.000 MHz, and this radio's range is locked \xe2\x80\x94 "
+                      "background decoding never moves a locked radio. Unlock it, or choose VFOs inside its range.";
+                return false;
+            }
+            if (rate > 0 && rate < 96000) {
+                char t[200];
+                std::snprintf(t, sizeof t, "%s: AIS needs a capture of 96 kS/s or more \xe2\x80\x94 this radio runs at %.3f MS/s", name.c_str(), rate / 1e6);
                 err = t; return false;
             }
             continue;

@@ -130,6 +130,7 @@
 #include "vibe_ndb_service.h"   // ★★ V12 2026-10-26: NDB skimmer — every beacon in the LF band, idents by consensus (docs/v12/NDB-SKIMMER.md)
 #include "vibe_ndb_gallery.h"   //    …and its day in the gallery: the heard log and the map
 #include "vibe_ais_service.h"   // ★★ V12 AIS (both VHF channels, M.1371) — our own decoder, docs/v12/AIS-APRS.md
+#include "vibe_ais_store.h"     // ★★ V12 2026-11-02 the ship store in the shared gallery (the SHIPPING MAP, docs/v12/SHIPPING-MAP.md)
 #include "vibe_aprs.h"           // ★ V12 APRS — the region's frequency for the capability (the decoder itself: vibe_decoder_host.h)
 #include "vibe_station_log.h"   // ★ V12 AIS + APRS in the gallery — the day's messages + a summary card of stations
 #include "vibe_rate_guard.h"    // ★ a radio that falls over at a rate a mode boosted it to — see g_rateGuard
@@ -15118,6 +15119,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         return std::make_shared<vibestation::DayLog>(g, o);
     }
 
+    /** ★★ V12 2026-11-02 — THE SHIP STORE's writer (vibe_ais_store.h): the ships that changed, every 30 s and when AIS
+     *  stops, merged into <gallery>/ais-ships.dat under the gallery's lock — which every radio on the machine shares, so
+     *  the SHIPPING MAP on any of them draws them. Kept on the same terms as the day's AIS log: only where the gallery
+     *  keeps anything, a listener's AIS only while the owner keeps listeners' decodes, and not where the owner switched
+     *  the ship store off ("aisstore", under AIS on the Modes and decoders list). Runs on the AIS thread, never the DSP's. */
+    vibeais::Service::StoreFn aisMakeStore() {
+        if (frontDoorOnly || decoderOnly) return nullptr;
+        auto& g = vibe::gallery::shared();
+        if (!g.enabled() || vsModeBlocked("aisstore")) return nullptr;
+        if (aisOrigin_ != "background" && !g_gallerySaveLive.load()) return nullptr;
+        return [](std::vector<vibeais::Vessel>&& changed, double svcNow) {
+            auto& gs = vibe::gallery::shared();
+            if (!gs.enabled() || vsModeBlocked("aisstore")) return;
+            const int64_t wall = vibe::gallery::nowUtc();
+            std::vector<vibeais::store::Rec> recs; recs.reserve(changed.size());
+            for (const auto& v : changed) recs.push_back(vibeais::store::fromVessel(v, svcNow, wall));
+            const size_t n = vibeais::store::write(gs.dir(), gs.limitBytes(), recs);
+            if (n) gs.fit();
+        };
+    }
+
     void sendAisAll() {
         std::string r = g_ais.report();
         const int curG = g_gainTarget.load(std::memory_order_relaxed);
@@ -15182,6 +15204,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         viewCenter.store(hw);
         noteHwMoved();
         g_ais.stop();
+        g_ais.setStore(aisMakeStore());
         g_ais.start(hw, rate, /*keepList=*/false, aisMakeLog());
         tuneHw(logical);
         zoomFactor.store(1.0);
@@ -23589,6 +23612,29 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *  folded per station from the index (streamed line by line), placed by the label every client already shows.
              *  ?since=<seconds back> (0 / absent = everything still in the gallery). The same read rule as the gallery.
              *  ★ Cached 20 s per `since` while the index is unchanged (a map that polls costs one scan per change). */
+            /* ★★ V12 2026-11-02 THE SHIPPING MAP — the SHIPS (vibe_ais_store.h): every ship any radio on this machine heard
+             *  in AIS (a listener's or a background profile's), its latest state and a short track, from the shared
+             *  gallery's ship store. ?since=<seconds back> (0 / absent = all) · ?range=<km from the receiver> · ?tracks=1 ·
+             *  ?limit= (newest first). The same read rule as the gallery. "off":1 where the owner switched AIS or its ship
+             *  store off — the map then draws no SHIPS layer from the store at all. */
+            if (path == "/vibeserver/gallery/ais-ships.json") {
+                if (vsModeBlocked("ais") || vsModeBlocked("aisstore")) { reply("200 OK", "application/json", "{\"vessels\":[],\"count\":0,\"total\":0,\"off\":1}"); return; }
+                long since = std::max(0L, std::atol(qv("since").c_str()));
+                if (since > 400L * 86400) since = 0;
+                const int64_t now = vibe::gallery::nowUtc();
+                vibeais::store::Query q;
+                q.sinceUtc = since ? now - since : 0;
+                q.rangeKm = std::max(0.0, std::atof(qv("range").c_str()));
+                q.rxLat = g_bgLat.load(); q.rxLon = g_bgLon.load();
+                if (q.rxLat == 0 && q.rxLon == 0) { q.rxLat = NAN; q.rxLon = NAN; }
+                q.tracks = qv("tracks") == "1";
+                const long lim = std::atol(qv("limit").c_str());
+                if (lim > 0) q.limit = (size_t)std::min<long>(lim, vibeais::store::kMaxCap);
+                size_t total = 0;
+                const auto v = vibeais::store::read(g.dir(), q, &total);
+                reply("200 OK", "application/json", vibeais::store::toJson(v, now, q.tracks, total));
+                return;
+            }
             if (path == "/vibeserver/gallery/navtex-stations.json") {
                 static std::mutex cMtx;
                 static std::map<long, std::pair<std::string, std::string>> cache;   // since → (stamp, json)
@@ -29907,9 +29953,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ An ISM profile runs only with nobody here, on a radio it may move (see bgIsm_) — otherwise it waits, and the
         //    radio is not even woken for it.
         if (prof.isWhole()) {
-            if (bgLocked()) { bgIsmRefuse(idx, "this radio's range is locked \xe2\x80\x94 background decoding never moves a locked radio onto an ISM band"); return; }
+            if (bgLocked()) { bgIsmRefuse(idx, prof.isAis() ? "this radio's range is locked \xe2\x80\x94 background decoding never moves a locked radio onto 162 MHz"
+                                                            : "this radio's range is locked \xe2\x80\x94 background decoding never moves a locked radio onto an ISM band"); return; }
             if (!move || listenerOn) return;
-            bgIsmStartLocked(cfg, idx);
+            if (prof.isAis()) bgAisStartLocked(cfg, idx); else bgIsmStartLocked(cfg, idx);
             return;
         }
         resumeCaptureIdle(/*fromBg=*/true);       // ★ a parked or released radio is taken back first
@@ -29945,7 +29992,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     }
     /** ★ The due ISM profile cannot run here now: said once in the log (and on the admin page), tried again in a minute. */
     void bgIsmRefuse(int idx, const std::string& why) {
-        if (why != bgIsmWhy_) LOGI("background decoding: profile %d (ISM) cannot run \xe2\x80\x94 %s", idx + 1, why.c_str());
+        if (why != bgIsmWhy_) LOGI("background decoding: profile %d (a whole-radio profile) cannot run \xe2\x80\x94 %s", idx + 1, why.c_str());
         bgIsmWhy_ = why;
         bgNotBefore_ = nowSecs() + 60;
     }
@@ -29982,6 +30029,35 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bgProfile_ = idx;
         bgGen_ = g_bgCfgGen.load();
     }
+    /** ★★ V12 2026-11-02 — Start an AIS profile: the radio onto 162.000 MHz in the listener's own AIS mode, the ships to the
+     *  gallery's ship store and the day's AIS log as background's. Caller holds bgOpMtx_, and nobody is here. ISM's
+     *  shape exactly: a listener arriving ends it through AIS's own door (aisLeave), which gives the radio back as found. */
+    void bgAisStartLocked(const vibe::bg::Config& cfg, int idx) {
+        const auto& prof = cfg.profiles[(size_t)idx];
+        // ★ another whole-radio mode still on (inside its leave grace): wait for its own leave — never enter over it
+        if (g_adsbMode.load() || g_dabMode.load() || g_ndbMode.load() || (g_ismMode.load() && !bgIsm_) || (g_aisMode.load() && !bgAis_) || modeLeaveDueAt.load() > 0.0) return;
+        const std::string why = vsAisWhyNot();
+        if (!why.empty()) { bgIsmRefuse(idx, why); return; }
+        resumeCaptureIdle(/*fromBg=*/true);
+        if (radioReleased.load()) {
+            LOGI("background decoding: profile %d (AIS) is due but another program has the radio \xe2\x80\x94 trying again in 60 s", idx + 1);
+            bgNotBefore_ = nowSecs() + 60; return;
+        }
+        if (bgSaved_.valid) { bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio); bgSaved_.valid = false; }
+        bgIsmWhy_.clear();
+        LOGI("background decoding: nobody here for %.0f s \xe2\x80\x94 profile %d puts the radio on 162.000 MHz (AIS: every ship, to the "
+             "gallery's ship store); it goes back to %.3f kHz when somebody arrives", vsBgWaitSec(cfg), idx + 1, audioFreq.load() / 1e3);
+        aisOrigin_ = "background"; aisProfile_ = "Profile " + std::to_string(idx + 1);
+        aisEnter();
+        if (!g_aisMode.load()) { bgIsmRefuse(idx, "AIS did not start on this radio"); aisOrigin_ = "live"; aisProfile_.clear(); return; }
+        bgAis_ = true;
+        { vibe::bg::Config one; one.profiles = { prof }; bgProfileJson_ = vibe::bg::toJson(one); }
+        bgActive_.store(true);
+        bgMoved_ = true;
+        bgWanted_.store(true);
+        bgProfile_ = idx;
+        bgGen_ = g_bgCfgGen.load();
+    }
     /** Stop it, and (if `restore`) put the radio back where it was before background decoding moved it. Caller holds
      *  bgOpMtx_. The runner's taps write what they held as they stop — a message cut off is kept, marked partial. */
     void bgStopLocked(const char* why, bool restore) {
@@ -29992,6 +30068,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 bgIsm_ = false;
                 ismLeave(false);
                 LOGI("background decoding stopped — %s (ISM: the radio is back where it was)", why);
+            } else if (bgAis_) {
+                // ★ V12 2026-11-02 AIS's own door: the service stops (the ship store and the day's log written), the radio
+                //   goes back to exactly where aisEnter found it.
+                bgAis_ = false;
+                aisLeave(false);
+                LOGI("background decoding stopped — %s (AIS: the radio is back where it was)", why);
             } else {
                 bgRun_.stop(false);
                 LOGI("background decoding stopped — %s", why);
@@ -30029,7 +30111,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::lock_guard<std::mutex> op(bgOpMtx_);
         bgEmptySince_ = 0; bgLoggedWait_ = false;
         // ★★ ISM is the whole capture: nothing of it is "in range" of a listener's dial — it ends, through its own door.
-        if (bgIsm_) { bgStopLocked(who, true); return; }
+        if (bgIsm_ || bgAis_) { bgStopLocked(who, true); return; }
         if (bgActive_.load() && (bgLocked() || cfg.keepInRange)) {
             if (bgSaved_.valid) {
                 bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio);
@@ -30114,6 +30196,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (lg) j += ",\"today\":\"" + vibe::gallery::jsonEsc(lg->brief()) + "\"";
             }
             j += "}";
+        } else if (shownP >= 0 && (size_t)shownP < cfg.profiles.size() && cfg.profiles[(size_t)shownP].isAis()) {
+            // ★★ V12 2026-11-02 an AIS profile: the ships on the list now, and the ship store's size on disk
+            j += ",\"ais\":{";
+            if (active && bgAis_) j += "\"ships\":" + std::to_string((unsigned long long)g_ais.vesselCount()) + ",";
+            j += "\"storeBytes\":" + std::to_string((unsigned long long)vibeais::store::bytesOnDisk(vibe::gallery::shared().dir())) + "}";
         } else if (active) j += ",\"runner\":" + bgRun_.statusJson();
         return j + "}";
     }
@@ -30180,7 +30267,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ── somebody here (unlocked) ──
         if (anyone) {
             bgWanted_.store(false); bgEmptySince_ = 0; bgLoggedWait_ = false;
-            if (bgIsm_) { bgStopLocked("a listener arrived", true); return; }   // ★ belt and braces — see bgStopForListener
+            if (bgIsm_ || bgAis_) { bgStopLocked("a listener arrived", true); return; }   // ★ belt and braces — see bgStopForListener
             if (!cfg.keepInRange) { if (bgActive_.load() || bgSaved_.valid) bgStopLocked("a listener arrived", true); return; }
             if (bgSaved_.valid) {   // ★ belt and braces: an arrival the connect path did not see — give the dial back first
                 bgPlace(bgSaved_.centre, bgSaved_.view, bgSaved_.audio); bgSaved_.valid = false; bgMoved_ = false;

@@ -327,6 +327,15 @@ public:
     }
     /** The run is finished: it may now be evicted like anything else. */
     void close(const std::string& name) { std::lock_guard<std::mutex> lk(m_); open_.erase(name); }
+    /** ★★ V12 2026-11-02: a side store grew (sideBytes — the AIS ship store): the oldest items go until the gallery fits
+     *  the owner's space again. The same eviction an add runs, with nothing new to keep. */
+    void fit() {
+        std::string dir; uint64_t limit;
+        { std::lock_guard<std::mutex> lk(m_); dir = dir_; limit = limit_; }
+        if (dir.empty() || limit == 0) return;
+        Lock fl(dir);
+        evictLocked(dir, limit, openNames());
+    }
     /** ★ 2026-10-23: the standing card for `m.slot` on this radio, origin, profile and dial — the newest if a crash left
      *  more than one — HELD OPEN (never evicted) until close(). "" when there is none (the caller creates it). */
     /** `anyOrigin` (ISM's daily log and summary, 2026-10-25: "one file per UTC day per band"): background decoding and
@@ -417,7 +426,7 @@ public:
             if (refresh(dir)) {
                 const Cache& c = cache_;
                 indexBytes = c.parsed;
-                total = c.live; used = c.used + c.parsed;   // ★ the index counts inside the assigned space
+                total = c.live; used = c.used + c.parsed + sideBytes(dir);   // ★ the index (and V12 the ship store) count inside the assigned space
                 int want = -2;                                                // -2 = all
                 if (!kind.empty()) { want = -1; for (size_t k = 0; k < c.kinds.size(); k++) if (c.kinds[k] == kind) want = (int)k; }
                 matched = want == -2 ? c.live : want < 0 ? 0 : c.kindN[(size_t)want];
@@ -513,7 +522,16 @@ public:
         if (dir.empty()) return 0;
         Lock fl(dir, true);
         std::lock_guard<std::mutex> ck(cacheMtx_);
-        return refresh(dir) ? cache_.used + cache_.parsed : 0;
+        return refresh(dir) ? cache_.used + cache_.parsed + sideBytes(dir) : 0;
+    }
+    /** ★★ V12 2026-11-02 — the gallery's SIDE STORES: files beside the index that are not items but are the owner's space
+     *  all the same (vibe_ais_store.h's ais-ships.dat, bounded by construction to a 32nd of the space). Counted by
+     *  usedBytes() and by eviction, so items + index + side stores never pass the owner's size. */
+    static uint64_t sideBytes(const std::string& dir) {
+        if (dir.empty()) return 0;
+        uint64_t n = 0;
+        for (const char* f : { "ais-ships.dat" }) { struct stat st{}; if (::stat((dir + "/" + f).c_str(), &st) == 0 && S_ISREG(st.st_mode)) n += (uint64_t)st.st_size; }
+        return n;
     }
     /** Items the gallery holds now. */
     size_t itemCount() const {
@@ -816,7 +834,9 @@ private:
         Cache& c = cache_;
         std::set<uint32_t> keepH; for (auto& k : keep) keepH.insert(nameHash(k));
         std::string tomb;
-        auto over = [&] { return c.used + c.liveIdx + reserve(limit) > limit || c.live > maxItems; };
+        // ★★ V12 2026-11-02: the side stores beside the index (the AIS ship store) are inside the owner's space too
+        const uint64_t side = sideBytes(dir);
+        auto over = [&] { return c.used + c.liveIdx + side + reserve(limit) > limit || c.live > maxItems; };
         if (c.live > maxItems && !backstopLogged_.exchange(true))
             std::fprintf(stderr, "[gallery] !!!! BACKSTOP HIT: %zu items in %s (backstop %zu) — the index is corrupt or a writer is"
                                  " running away; the oldest are being removed. Normal use never gets here: the size limit governs.\n",

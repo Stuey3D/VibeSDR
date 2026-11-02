@@ -166,7 +166,7 @@ flags_for() {
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
-    test-ais|test-aprs)    echo "-O2 -lpthread" ;;
+    test-ais|test-aprs|test-ais-store) echo "-O2 -lpthread" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
@@ -353,7 +353,7 @@ deps_for() {
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
-    test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
+    test-ais|test-aprs|test-ais-store) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
     test-drm|test-drm-signal) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
     test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;
@@ -620,6 +620,9 @@ if npx tsx scripts/test_ism_app.ts; then pass=$((pass+1)); else fail=$((fail+1))
 # ★★ V12 the NAVTEX map's client rules (src/services/navtexMap.ts, navtexWarn.ts, navtexIcons.ts): sites, the why, the slot,
 #    the app's pins; the warnings (summary, why, shapes, faded, the card); the met labels; the layers; the icons
 if npx tsx scripts/test_navtex_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 2026-11-02 THE SHIPPING MAP's client rules (src/services/shippingMap.ts, navtexWind.ts): which layers are present,
+#    ships from the live report and the store, DSC pins from the box and the gallery, the time filter, the KEY, the arrows
+if npx tsx scripts/test_shipping_map.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12 APP PARITY 2 (2026-10-26): the app's PSK / JTTY / DSC boxes against the web's own modules — dials, channels, parsers,
 #    order, merges, where a tap tunes, the attach parameters, hints and colours, which keys a radio can reach.
 if npx tsx scripts/test_psk_jtty_dsc_app.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
@@ -1406,6 +1409,10 @@ if [ -x "$OUT/test-lora" ] && [ -n "${VIBESERVER_BIN:-}" ]; then
   # ★★ V12 the NAVTEX map (2026-11-01): the stations received, the warnings (icons, shapes, clusters, the card with its
   #    text and TRANSLATE, keyboard focus, live pulse) and the met labels, from a gallery of real NAVTEX (scripts/navtex-fixtures)
   node scripts/test-web-navtex-map.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+  # ★★ V12 2026-11-02 THE SHIPPING MAP: the NAVTEX fixtures + a ship store (test-ais-store --write) + a DSC distress call —
+  #    the layers present, ships / DSC / arrows on the map, the KEY, a ship's card, DSC first from the gallery's DSC row
+  VIBE_AIS_STORE_BIN="$OUT/test-ais-store" node scripts/test-web-shipping-map.mjs; rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
   rm -f "$OUT/lora-clip.u8"
 else

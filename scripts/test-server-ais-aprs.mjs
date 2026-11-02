@@ -63,25 +63,53 @@ function ws(port, pathq) {
 const jsons = (st, type) => st.txt.filter((t) => t.includes(`"type":"${type}"`)).map((t) => JSON.parse(t));
 const lastOf = (st, type) => { const a = jsons(st, type); return a[a.length - 1] || null; };
 
-async function server(clip, centre, args, tag) {
+async function server(clip, centre, args, tag, radioExtra = {}, envExtra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vs-${tag}-`));
   for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     configured: true, name: 'AIS/APRS test', locator: 'IO92nh', adminPass: 'aisaprs-test-admin',
-    radios: [{ serial: `${tag}-test`, label: 'Test radio', enabled: true, configured: true, users: 1 }],
+    radios: [{ serial: `${tag}-test`, label: 'Test radio', enabled: true, configured: true, users: 1, ...radioExtra }],
   }));
   const rtlPort = await freePort(), port = await freePort();
   const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
                                        '--hf', clip, '--hf-centre', String(centre)], { stdio: 'ignore' });
   await sleep(400);
   const env = { ...process.env, VIBESERVER_CONFIG: path.join(dir, 'config.json'), VIBESERVER_DATA_DIR: path.join(dir, 'data'),
-                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run') };
+                VIBESERVER_RUNTIME_DIR: path.join(dir, 'run'), ...envExtra };
   const log = fs.openSync(path.join(dir, 'server.log'), 'w');
   const srv = spawn(BIN, ['--tcp', `127.0.0.1:${rtlPort}`, '--port', String(port), '--rate', String(RATE), ...args], { env, stdio: ['ignore', log, log] });
   const status = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   await until(async () => !!(await status()), 15000);
   const gallery = async () => { try { const r = await fetch(`http://127.0.0.1:${port}/vibeserver/gallery.json`, { signal: AbortSignal.timeout(3000) }); return await r.json(); } catch { return null; } };
   return { port, dir, status, gallery, stop: () => { srv.kill('SIGTERM'); rtl.kill('SIGTERM'); } };
+}
+
+// ── 0. V12 2026-11-02 an AIS BACKGROUND PROFILE: nobody here → AIS mode → the ship store; a listener → it ends ─────────
+{
+  console.log('── background decoding: an AIS profile (the SHIPPING MAP) ──');
+  const S = await server(AIS, 162000000, ['--freq', '96100000', '--mode', 'wfm', '--users', '1'], 'aisbg',
+    { bgDecode: JSON.stringify({ on: true, waitMin: 0, profiles: [{ centre: 0, from: '00:00', to: '00:00', vfos: [], ais: true }] }) }, { VIBESERVER_BG_WAIT_SEC: '1' });
+  const L = () => { try { return fs.readFileSync(path.join(S.dir, 'server.log'), 'utf8'); } catch { return ''; } };
+  try {
+    ok(await until(() => /profile 1 puts the radio on 162\.000 MHz \(AIS/.test(L()), 20000), 'nobody here: background decoding puts the radio on 162.000 MHz');
+    ok(await until(() => /\[AIS\] mode ON/.test(L()), 5000), '…through AIS mode itself ("[AIS] mode ON")');
+    // ★ the service hands the changed ships to the store every 30 s
+    let j = null;
+    ok(await until(async () => { try { j = await (await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery/ais-ships.json`)).json(); } catch { j = null; } return !!j && j.count >= 5; }, 50000),
+       `the ship store fills with nobody listening (${j && j.count} ships)`);
+    const sp = ws(S.port, '/ws/user-spectrum?user_session_id=aisbg01&bins=256&proto=1');
+    await until(() => sp.open, 3000);
+    ok(await until(() => /background decoding stopped — a listener arrived \(AIS: the radio is back where it was\)/.test(L()), 6000), 'a listener arrives: background AIS stops (listeners win)');
+    ok(await until(() => { const c = lastOf(sp, 'config'); return !!c && Math.abs(c.vfo - 96.1e6) < 1 && c.mode === 'wfm'; }, 6000), `…and lands on the radio's own dial (${JSON.stringify(lastOf(sp, 'config') && lastOf(sp, 'config').vfo)})`);
+    await sleep(1500);
+    ok(!sp.txt.some((m) => m.includes('"type":"ais","centre"')), 'the listener is sent no AIS report (they are not in AIS)');
+    const g = await S.gallery();
+    const items = (g && (g.items || g)) || [];
+    ok(items.some((i) => i.k === 'ais' && i.o === 'background'), 'the day\'s AIS log is labelled background');
+    const j2 = await (await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery/ais-ships.json`)).json().catch(() => null);
+    ok(j2 && j2.count >= 5, `the store still serves the ships with AIS off (${j2 && j2.count})`);
+    sp.close();
+  } finally { S.stop(); }
 }
 
 // ── 1. AIS mode ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -119,6 +147,25 @@ async function server(clip, centre, args, tag) {
     await sleep(800);
     const back = lastOf(sp, 'config');
     ok(back && before && Math.abs(back.vfo - before.vfo) < 1 && back.mode === before.mode, `the receiver given back (vfo ${back && back.vfo} ${back && back.mode} vs ${before && before.vfo} ${before && before.mode})`);
+    /* ★★ V12 2026-11-02 THE SHIP STORE (vibe_ais_store.h): AIS stopping hands the ships to the gallery's store, which
+     *  any radio serves for the SHIPPING MAP — the same ships, their names, a track; the file inside the gallery's space. */
+    {
+      let shipsJ = null;
+      await until(async () => { try { shipsJ = await (await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery/ais-ships.json?tracks=1`)).json(); } catch { shipsJ = null; } return !!shipsJ && shipsJ.count >= 5; }, 6000);
+      const sv = shipsJ ? shipsJ.vessels : [];
+      ok(sv.length >= 5 && sv.filter((x) => /^TEST SHIP \d+$/.test(x.name || '') && x.lat != null && x.stored === 1).length >= 5,
+         `the ship store holds the ships after AIS stops (${sv.length}: ${sv.map((x) => x.name || x.mmsi).join(', ')})`);
+      const s0 = sv.find((x) => x.name === 'TEST SHIP 0');
+      ok(s0 && s0.flag === 'GB' && s0.family === 'cargo' && s0.dest === 'SOUTHAMPTON' && Array.isArray(s0.pts) && s0.pts.length >= 1, `a stored ship: ${s0 && s0.line} (track ${s0 && s0.pts && s0.pts.length})`);
+      await sleep(3000);   // ★ AIS stopped a moment ago: the ships were heard up to then
+      const r1 = await (await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery/ais-ships.json?since=2`)).json().catch(() => null);
+      const r9 = await (await fetch(`http://127.0.0.1:${S.port}/vibeserver/gallery/ais-ships.json?since=3600`)).json().catch(() => null);
+      ok(r1 && r1.count === 0 && r9 && r9.count === sv.length, `the time filter: none heard in the last 2 s, all in the hour (${r1 && r1.count}, ${r9 && r9.count})`);
+      ok(fs.existsSync(path.join(S.dir, 'data', 'gallery', 'ais-ships.dat')), 'the store is a file in the shared gallery directory');
+      const gj = await S.gallery();
+      const used = gj && gj.usedBytes, dat = fs.statSync(path.join(S.dir, 'data', 'gallery', 'ais-ships.dat')).size;
+      ok(typeof used === 'number' && used >= dat, `counted inside the gallery's size (used ${used} ≥ store ${dat})`);
+    }
     const g = await S.gallery();
     const items = (g && (g.items || g)) || [];
     const ais = Array.isArray(items) ? items.filter((i) => (i.k || i.kind) === 'ais') : [];
