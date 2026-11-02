@@ -428,8 +428,10 @@ for (const [label, args] of [['range-locked (users 2)', ['--users', '2', '--lock
     dx.keepBin = true;
     await sleep(400);
     dx.send({ type: 'audio_extension_attach', extension_name: 'wefax', lpm: 120, image_width: 1809, carrier: 1900, deviation: 400, use_phasing: false });
-    await sleep(2000);
     const lines = () => dx.bin.filter((b) => b.length === 9 + 1809).length;
+    // ★ Wait for the lines rather than a fixed 2 s: the first line lands ~1.5-2 s after the attach, then two a second
+    //   (120 lpm), so a 2 s sleep caught 1 line on a loaded run (measured 2026-11-02: 0 at 1 s, 1-2 at 2 s, 4 at 3 s).
+    await until(() => lines() >= 2, 6000);
     ok(lines() >= 2, `WEFAX on VFO A is drawing (${lines()} lines)`);
     L.spec.send({ type: 'watch', id: 1, frequency: A_HZ, mode: 'am' });
     await until(() => lastWatch(L.spec) && lastWatch(L.spec).chans.length === 1, 3000);
