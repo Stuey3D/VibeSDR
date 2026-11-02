@@ -15,9 +15,14 @@ Ettus's documentation and UHD's published C++ API, and has never been run agains
   no-device test run under emulation (see "Sizes"); the full amd64 *package* has not been built, because that happens
   on the Lenovo, which is a live server. The first real amd64 package comes out of the normal publish route.
 * **Next:** a volunteer with a B210 (or a B200mini) runs the test list at the bottom. Nothing else is blocked.
-* Open follow-ups (small, none blocking): a web-client switch for the AD9361 AGC (the app has one; the web hides
-  VibeAGC's AUTO row on a USRP rather than mislabel it); measure the 250 kHz DC guard on real hardware; measure the
-  CPU per rate on a Pi 4 / Pi 5 and set the arm64 default from that.
+* **`v12-usrp-options` (2026-11-02, on top):** the owner's radio options (reference clock / time source, DC-offset and
+  IQ-balance correction, analogue RX bandwidth), the web client's RADIO AGC switch, the **board's own firmware / FPGA
+  image** section (upload, or copy from this computer's own UHD images), and plain words for a clone's failed FPGA
+  load and for a radio another program holds. See "Owner options" and "Board's own image" below. Built and tested on
+  the Mac (dev build with UHD: `test-usrp-caps` 160/160; header-only 158/158; `check-usrp-options.mjs`); untested on a
+  radio, like the rest.
+* Open follow-ups (small, none blocking): measure the 250 kHz DC guard on real hardware; measure the CPU per rate on a
+  Pi 4 / Pi 5 and set the arm64 default from that.
 
 ## What it is, in one paragraph
 
@@ -56,13 +61,66 @@ untouched — they include the header and get the stub.
 | Tuning | 50 MHz – 6 GHz, the range the device reports (`get_rx_freq_range`); a 250 kHz DC guard (the HackRF's — the AD9361 is zero-IF) |
 | Rates | 1, 2, 2.4, 3.2, 4, 5, 8 MS/s on USB 2; + 10, 12.5, 16 MS/s on USB 3. Default for a new radio: 2.4 MS/s on arm64, 4 MS/s on x86-64 / Mac. The default is set by the host, the list never is (the owner can always choose) |
 | Gain | ONE element, the device's own range (`get_rx_gain_range`: 0–76 dB in 1 dB steps), on the generic slider; per-band ceilings, per-band lock and a starting gain from the Setup page |
-| AGC | the AD9361's own, as AUTO (negative gain) — only when the radio accepted `set_rx_agc` at open; otherwise no AUTO is offered. Not VibeAGC |
+| AGC | the AD9361's own, as AUTO (negative gain) — only when the radio accepted `set_rx_agc` at open; otherwise no AUTO is offered. Not VibeAGC. A switch for it in the app's panel and the web client's **RADIO AGC** row |
+| Owner options | reference clock + time source, DC-offset / IQ-balance correction, analogue bandwidth — Setup page, per radio, each only where the radio reports it (below) |
 | RX ports | `RX2` and `TX/RX`; on a B210 `RX2 (A)`, `TX/RX (A)`, `RX2 (B)`, `TX/RX (B)` (switching channel rebuilds the stream). Through the generic `{type:"antenna"}` message and `antennaPort`, the owner's antenna lock, and the per-band aerial list ("0-400MHz RX2, 400MHz+ TX/RX"). **VibeServer never creates a TX stream: choosing TX/RX only receives on it.** |
-| Not offered (it has none) | bias-T, direct sampling, a tuner IF filter (UHD sets the analogue filter to the span), the RTL digital AGC, PPM, the NDB skimmer (50 MHz floor) |
+| Not offered (it has none) | bias-T, direct sampling, a listener's tuner IF filter (the analogue filter follows the span, or the owner's fixed figure), the RTL digital AGC, PPM, the NDB skimmer (50 MHz floor) |
 | Watchdog | the HackRF's escalation: restart the stream, then close + reopen by index with gain and RX port put back. UHD overflows ('O') counted as USB holes (`usbDrops`) |
 | Lend / take back | release closes the radio, reacquire reopens it — like every other desktop radio |
-| Samples | `fc32` on the host, `sc16` on the wire: **UHD's own converter** (SSE2 / NEON with a generic fallback, inside libuhd) does int16 → float, so there is no new hot loop of ours to vectorise. The AD9361's DC-offset and IQ-balance tracking are switched on |
+| Samples | `fc32` on the host, `sc16` on the wire: **UHD's own converter** (SSE2 / NEON with a generic fallback, inside libuhd) does int16 → float, so there is no new hot loop of ours to vectorise. The AD9361's DC-offset and IQ-balance tracking are on (UHD's default) unless the owner switches them off |
 | Threads | our receive thread takes the IQ rung (`vibeIqThread`) — Network > Audio > Spectrum > Decoders is unchanged. UHD's own libusb event thread runs at the default priority (not reachable from outside UHD) |
+
+## Owner options (Setup page → the radio's tab → Radio options)
+
+Per radio, in `config.json` (`usrpClock`, `usrpTime`, `usrpDcOffset`, `usrpIqBalance`, `usrpRxBw`), set only from the
+Setup page (admin) — no listener message reaches them. Applied before the radio opens and again, live, on a save.
+**Each control is drawn only from what the running radio reported**; with the radio not running the card says when
+they appear and the saved values are kept.
+
+| Option | Appears when | Values | Notes |
+|---|---|---|---|
+| Reference clock | `get_clock_sources` gives at least two of internal / external / gpsdo | internal (default), external (10 MHz on REF), GPSDO | **GPSDO only with a GPSDO fitted** — the `gps_locked` mboard sensor exists (UHD lists "gpsdo" on every full-size B200/B210 whether a board is fitted or not). Lock shown from `ref_locked` (not on internal) |
+| Time source (PPS) | `get_time_sources` likewise | internal, external, GPSDO | timestamps only; a mini cannot take external for both clock and time (one SMA) — refused in words, time stays internal |
+| DC-offset correction | the radio has the `dc_offset/enable` property | on (default) / off | `set_rx_dc_offset(bool)` |
+| IQ-balance correction | the radio has `iq_balance/enable` | on (default) / off | `set_rx_iq_balance(bool)` |
+| Analogue bandwidth | `get_rx_bandwidth_range` is at least 1 MHz wide (0.2–56 MHz on an AD9361) | AUTO (follows the sample rate) or a fixed figure from the radio's range | AUTO is what UHD does |
+
+A saved choice the radio does not have (a GPSDO on a board without one, a bandwidth outside its range) is **refused
+in words** — `optionsNote` in hwinfo, shown on the Setup card, and in the log — and the radio's default kept. The
+save itself refuses only a bad shape (an unknown name, an impossible bandwidth). hwinfo's `radio` object carries
+`clockSources`, `timeSources`, `clock`, `time`, `refLocked`, `gpsdo`, `gpsLocked`, `dcOffset(On)`, `iqBalance(On)`,
+`rxBwRange`, `rxBwChoices`, `rxBwAuto`, `rxBwHz`, `optionsNote` — each only where it applies. The app and the web
+client show the reference read-only when it is not internal.
+
+## Board's own image (Setup page → the radio's tab → Board's own firmware / FPGA image)
+
+For a clone that is not Ettus's design. **We still ship no third-party image** (no stated licence). The owner either
+**uploads** the file their seller provides, or presses **Use this computer's UHD images…**, which — only then, never
+at open — looks in `/usr/share/uhd/images`, `/usr/share/uhd/*/images`, `/usr/local/share/uhd/images`,
+`/opt/homebrew/share/uhd/images` and the service's `UHD_IMAGES_DIR`, lists the B2xx files there (size, date, its kind,
+and whether it is byte-for-byte the same as ours), and copies the one chosen (with the FX3 firmware from the same
+folder only when that differs from ours). An old genuine-board image in a system folder can carry another UHD
+release's FPGA compatibility number, which is why it is never searched silently.
+
+* Written into the override folder (`/etc/vibeserver/uhd-images` — /etc/vibeserver belongs to the daemon and is in both
+  units' `ReadWritePaths`; the Mac: `~/Library/Application Support/VibeServer/uhd-images`) under **UHD's own file name**,
+  chosen from a closed list (`usrp_b210_fpga.bin`, `usrp_b200_fpga.bin`, `usrp_b200mini_fpga.bin`,
+  `usrp_b205mini_fpga.bin`, `usrp_b200_fw.hex`) — never a path from the client. Streamed to a temporary file
+  (`O_EXCL|O_NOFOLLOW`), fsync'd, renamed; a refused or short upload leaves the old file as it was.
+* **Checked before it is kept:** an FPGA image must be a Xilinx bitstream — the sync word `AA 99 55 66` within the
+  first 256 bytes, 1–16 MB — and is named by family: **7-series (Kintex/Artix)** when the bus-width detect
+  `00 00 00 BB 11 22 00 44` comes before the sync word (a clone board's), **Spartan-6** otherwise (a genuine B2xx's).
+  The firmware must be Intel HEX (UHD loads nothing else); a Cypress `.img` (`CY…`) is recognised and refused in words.
+  A zip, a saved web page or the firmware under the FPGA's name are refused in words.
+* After a change the radio process running the USRP reopens it at once; if the radio was not running (the clone that
+  would not load), the front door saves the file and the radio's own restart picks it up within seconds.
+* Endpoint: `/vibeserver/usrp-images` (admin): `GET` list (`?scan=1` adds this computer's UHD images), `POST
+  ?op=put&name=…` (raw body), `?op=remove&name=…`, `?op=adopt&from=<index>&name=…` (`from` indexes the server's own scan).
+
+**Words for the owner** (in the radio's status, shown on its Setup card): a failed FPGA load in the clone way
+("fx3 is in state 5", an FPGA load timeout) → *"This board needs its maker's FPGA image — upload usrp_b210_fpga.bin in
+Setup → this radio"* (the file follows the product); nothing answering, or a BUSY / claim failure → *"Another program
+is using this USRP — stop it first (OpenWebRX+ / owrx_connector, a SoapyRemote server, GNU Radio or uhd_fft)"*.
 
 ## Plug and play — what ships and where
 
@@ -70,7 +128,7 @@ untouched — they include the header and get the stub.
 |---|---|---|
 | driver | static in `/usr/bin/vibeserver` | static in `vibeserver-engine` and the app binary |
 | images | `/usr/share/vibeserver/uhd-images/` | `Contents/Resources/uhd-images/` |
-| owner override (a clone's own FPGA image) | `/etc/vibeserver/uhd-images/` | `~/Library/Application Support/VibeServer/uhd-images/` |
+| owner override (a clone's own FPGA image — uploaded from the Setup page, or copied from this computer's UHD images) | `/etc/vibeserver/uhd-images/` | `~/Library/Application Support/VibeServer/uhd-images/` |
 | licences | `/usr/share/doc/vibeserver/LICENSE.uhd`, `LICENSE.uhd-fpga`, `LICENSE_1_0.txt.boost`, `IMAGES.txt` | beside the images |
 | USB access | `99-vibeserver-sdr.rules` (plugdev) | — |
 
@@ -117,13 +175,14 @@ redistribution of firmware built with it for their parts; we redistribute Ettus'
 |---|---|---|
 | Full-size "B210" clones that copy Ettus's design (Spartan-6 **XC6SLX150**, AD9361, Cypress CYUSB3014) | same part as a real B210 | **Should be** — same FPGA part, same FX3, so our stock images are the right bitstream. Not confirmed by anyone here; this is what a tester's report settles |
 | "B200mini"-style clones (Spartan-6 LX75, AD9364) | same part as a B200mini | **Should be**, on the same reasoning |
-| **LibreSDR "B210 mini" / "B220 mini"** (Artix-7 **XC7A100T** / **XC7A200T**, AD9361, FX3) — the common AliExpress/eBay "B210 mini" | Artix-7, NOT the Spartan-6 the stock image is built for | **No.** They enumerate as 2500:0020 and identify as a B210 (the stock firmware is fine), but the stock B210 FPGA image cannot load into an Artix-7 — UHD reports `fx3 is in state 5`. They need a third-party `usrp_b210_fpga.bin` built for their FPGA, which we do **not** ship (no stated licence, no build we can point to). The owner can drop one into the override directory above, and VibeServer then uses it with our firmware. The XC7A100T and XC7A200T boards need different images |
+| **Kintex-7 "USRP_B210" clone** (a tester's, serial 30AA038) | 7-series, NOT the Spartan-6 | **Replace `usrp_b210_fpga.bin` only** (the seller's image, a 7-series bitstream; the FX3 firmware stays Ettus's — the seller's own instructions). Works with stock UHD: the tester runs it today under OpenWebRX+ with Debian's UHD. Upload it in Setup, or use "Use this computer's UHD images" |
+| **LibreSDR "B210 mini" / "B220 mini"** (Artix-7 **XC7A100T** / **XC7A200T**, AD9361, FX3) — the common AliExpress/eBay "B210 mini" | Artix-7, NOT the Spartan-6 the stock image is built for | **No.** They enumerate as 2500:0020 and identify as a B210 (the stock firmware is fine), but the stock B210 FPGA image cannot load into an Artix-7 — UHD reports `fx3 is in state 5`. They need a third-party `usrp_b210_fpga.bin` built for their FPGA, which we do **not** ship (no stated licence, no build we can point to). The owner uploads it in Setup (or drops it into the override directory above), and VibeServer then uses it with our firmware. The XC7A100T and XC7A200T boards need different images |
 
-So: genuine Ettus/NI B200, B210, B200mini, B205mini — plug and play. Spartan-6 copies — expected to be. Artix-7
-"LibreSDR" boards — one file from their seller or community, put in one directory; nothing else to install.
+So: genuine Ettus/NI B200, B210, B200mini, B205mini — plug and play. Spartan-6 copies — expected to be. Artix-7 /
+Kintex-7 boards — one file from their seller, uploaded on the Setup page; nothing else to install.
 
-When an image will not load, the error reaches the owner in words through the radio's status (UHD's own message,
-prefixed "USRP:"), never "download the images".
+When an image will not load, the error reaches the owner in words through the radio's status — for the clone
+failure, which file to upload and where; otherwise UHD's own message, prefixed "USRP:" — never "download the images".
 
 ## CPU and USB
 
@@ -161,11 +220,13 @@ Build time: Boost + UHD add about two minutes to the build image's deps layer on
 | `vibeserver/CMakeLists.txt` | UHD block: host-class gate, whole-archive link, images + licences installed, strict on release builds |
 | `vibeserver/mac/build-app.sh` | the Swift app's link line (`VIBE_UHD_LINK`) and `Resources/uhd-images` |
 | `android/app/src/main/cpp/usrp_source.{h,cpp}` | the source (UHD as a library; the header's inline stub elsewhere) |
-| `android/app/src/main/cpp/vibe_usrp_caps.h` | every decision: ids, rates, default, gain list, ports + labels, image resolution, the hwinfo shape |
+| `android/app/src/main/cpp/vibe_usrp_caps.h` | every decision: ids, rates, default, gain list, ports + labels, image resolution, the owner options (what is offered, what is refused), image names / sizes / the bitstream classifier, the clone and busy wording, the hwinfo shape |
+| `android/app/src/main/cpp/vibe_usrp_images.h` | the owner's image folder: atomic write, list, remove; this computer's UHD images (scan, compare, adopt) |
 | `android/app/src/main/cpp/local_sdr_shim.cpp` | `startUsrp` and every "name every source" site |
 | `vibeserver/radios.cpp`, `main.cpp`, `vibeserver_api.cpp`, `sdr_presence.h` | the radio list, start by serial / index / discovery, the Mac Simple-mode list, bus + claimed counts |
 | `vibe_setup_page.h`, `LocalHardwarePanel.tsx`, `web/client/src/main.ts` | Setup page, app panel, web client — all branch on `driver === "usrp"` |
 | `vibeserver/test-usrp-caps.cpp` | the test (run-tests.sh header-only against the stub; CMake target with UHD) |
+| `scripts/check-usrp-options.mjs` | the Setup card, app panel and web client drawn from fake hwinfo |
 
 ## Android (later) — research only
 
@@ -241,5 +302,20 @@ power supply if it has one.**
    **DAB** (2.048 MS/s) and **ADS-B** (rate boost) on it.
 10. **Setup page:** the USRP's tab shows the experimental note, starting gain / ceilings / lock, and the aerial card
     with its ports once running; no bias-T, no direct sampling, no NDB skimmer.
+11. **Radio options (Setup, radio running):** report which appear. A B210 with no GPSDO: Reference clock offers
+    Internal / External only — **no GPSDO**; with one fitted, GPSDO appears with its lock state. Feed 10 MHz into REF,
+    choose External, save: "Now: External … locked" (and "NOT locked" with the cable pulled). Untick DC-offset
+    correction: the DC spike at the centre of the waterfall appears; tick it: gone. Untick IQ balance: mirror images
+    of strong signals rise. Analogue bandwidth: AUTO, then 1 MHz at 4 MS/s — the waterfall's edges dim; back to AUTO.
+    Restart the server: every choice is still there.
+12. **Radio AGC (web client):** the radio menu shows **RADIO AGC** (not on any other radio); ON = the radio sets its
+    own gain, the gain slider takes it back by hand. Same as the app's switch.
+13. **A clone's own FPGA image:** with the stock image the clone should fail with "This board needs its maker's FPGA
+    image — upload usrp_b210_fpga.bin in Setup → this radio". Either upload the seller's `usrp_b210_fpga.bin` (it is
+    listed as "7-series (Kintex/Artix) image — for clone boards"), or press **Use this computer's UHD images…** and pick
+    the one OpenWebRX+ uses (it shows "differs from VibeServer's"). The radio opens within seconds. Remove it: back to
+    our image (and the clone failure). Try uploading a zip or the wrong file: refused in words, nothing changed.
+14. **Another program holding it:** start OpenWebRX+ (or `uhd_fft`) on the radio first, then VibeServer: its status
+    says "Another program is using this USRP — stop it first …". Stop OpenWebRX+: VibeServer takes it.
 
 Report: the log from start to first audio (`journalctl -u 'vibeserver@*' -b`), and `/vibeserver/hardware` for the radio.
