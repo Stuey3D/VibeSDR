@@ -7,7 +7,9 @@ Ettus's documentation and UHD's published C++ API, and has never been run agains
 ## RESUME HERE
 
 * Everything below is committed on `v12-usrp`, nothing pushed, merged or published.
-* Built and tested here: **Mac arm64** (dev build, `test-usrp-caps` 71/71 with UHD linked, `--list-radios` clean) and
+* Built and tested here: **Mac arm64** (dev build, `test-usrp-caps` 71/71 with UHD linked, `--list-radios` clean; the
+  full `.app` from `build-app.sh --no-copy` — the B2xx driver in both binaries, `Resources/uhd-images` present, the
+  macOS-14 gate PASSED for libuhd.a and every Boost archive; not signed, notarised or installed) and
   **Linux arm64** (the real package recipe, `Dockerfile.build` + `build-deb.sh`, native in colima — see "Sizes").
   **Linux amd64**: UHD, Boost and `usrp_source.cpp` cross-built for x86-64 from the same `build-uhd.sh` and the
   no-device test run under emulation (see "Sizes"); the full amd64 *package* has not been built, because that happens

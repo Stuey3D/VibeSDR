@@ -227,6 +227,15 @@ HRFLIB=$(grep -m1 '^HACKRF_LIB:' "$BUILD/CMakeCache.txt" | cut -d= -f2)
 # ★★★ AND UHD (the USRP B2xx, V12) — the seventh reader of the radio list. CMakeLists.txt writes the whole link
 #     (-force_load libuhd.a + the Boost archives) into VIBE_UHD_LINK; empty = a build without USRP support.
 #     force_load, not a plain archive: UHD registers its B2xx driver from a static initialiser nothing names.
+# ★★ AND THE V12 CODECS — FAAD2 (DRM build + the vibedab_-prefixed DAB+ build) and libxaac. CMakeLists.txt links them
+#    into the core PUBLICly, and this hand-written line never named them, so the app failed with undefined NeAACDec* /
+#    vibedab_* / ixheaacd_dec_api (found 2026-11-02 building v12-usrp; the engine, linked by CMake, was fine).
+CODECS=()
+for v in FAAD2_LIB FAAD2_DAB_LIB XAAC_LIB; do
+  f="$(grep -m1 "^$v:" "$BUILD/CMakeCache.txt" | cut -d= -f2-)"
+  [ -n "$f" ] && [ -f "$f" ] && CODECS+=("$f")
+done
+LIBS="$LIBS ${CODECS[*]}"
 UHDLINK=()
 UHDLINK_S="$(grep -m1 '^VIBE_UHD_LINK:' "$BUILD/CMakeCache.txt" | cut -d= -f2-)"
 [ -z "$UHDLINK_S" ] || IFS=';' read -r -a UHDLINK <<<"$UHDLINK_S"
