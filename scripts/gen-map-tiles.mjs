@@ -138,32 +138,18 @@ for (const [name, lon, lat, rank, local] of load('tier0', 'countrylabels'))
   emit('vibemap-basic', 'countrylabels', [0, MAXZ], { type: 'Point', coordinates: [lon, lat] }, { name, rank, local: local || '' });
 for (const [name, lon, lat, rank, kind] of load('tier0', 'regions'))
   emit('vibemap-basic', 'regions', [0, MAXZ], { type: 'Point', coordinates: [lon, lat] }, { name, rank, kind: kind || '' });
-/* ★★ PORTS BY HARBOUR SIZE. The pack's ports carry [name, lon, lat, country] — no importance at all, so
- *  today's map drew the first 80 in the FILE that fell in view (Normandy's, never Britain's). The World
- *  Port Index does record Harbor Size (L / M / S / V); the pack dropped it. Read here from the same cached
- *  source with the same row filter as gen-map-data.mjs buildPorts, so the SET is identical and only the
- *  size is added. Large from Leaflet z5, medium z6, small z7, very small z9 — a NEW rule, since today's
- *  map had nothing to base one on. */
-{
-  const csvPath = path.join(root, '.mapdata-cache/ports.csv');
-  const parseCsv = (t) => { const rows = []; let row = [], f = '', q = false;
-    for (let i = 0; i < t.length; i++) { const c = t[i];
-      if (q) { if (c === '"') { if (t[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
-      else if (c === '"') q = true; else if (c === ',') { row.push(f); f = ''; }
-      else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
-      else f += c; }
-    if (f || row.length) { row.push(f); rows.push(row); } return rows; };
-  const rows = parseCsv(readFileSync(csvPath, 'utf8')), h = rows[0];
-  const ix = (n) => h.findIndex((x) => x.trim() === n);
-  const iName = ix('Main Port Name'), iLat = ix('Latitude'), iLon = ix('Longitude'), iSize = ix('Harbor Size');
-  const minZ = { L: 5, M: 6, S: 7, V: 9 };
-  for (const r of rows.slice(1)) {
-    const name = (r[iName] || '').trim(), lat = Number(r[iLat]), lon = Number(r[iLon]);
-    if (!name || !Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
-    const size = ((r[iSize] || '').trim()[0] || 'V').toUpperCase();
-    emit('vibemap-basic', 'ports', [minZ[size] ?? 9, MAXZ], { type: 'Point', coordinates: [Math.round(lon * 1e3) / 1e3, Math.round(lat * 1e3) / 1e3] },
-         { name, size: 'LMSV'.indexOf(size) >= 0 ? 'LMSV'.indexOf(size) : 3 });
-  }
+/* ★★ PORTS BY CLASS — the pack's 5th field (gen-map-data.mjs buildPorts, 2026-11-02): 0 MAJOR (scripts/mapdata/
+ *  major-ports.json — Felixstowe, Rotterdam, Singapore …, which the WPI's harbour-size grade under-rates), then the
+ *  WPI Harbor Size 1 Large · 2 Medium · 3 Small · 4 Very Small. Read from the PACK, not the CSV, so both renderers
+ *  draw one set with one class each. Majors from z4, large z5, medium z6, small z7, very small z9 — the small ones
+ *  are the first to go as you zoom out, as the airports' are (Stuart). `size` keeps its name: the style sorts and
+ *  sizes on it. */
+//  ★ `pri` = the symbol-sort-key: the class, and within the majors their order in the list (Felixstowe before Harwich,
+//    1 km apart — the first listed wins the collision).
+for (const [name, lon, lat, , cls, rank] of load('tier1', 'ports')) {
+  const size = Number.isInteger(cls) ? cls : 4;
+  const pri = size * 1000 + (size === 0 && Number.isInteger(rank) ? rank : 0);
+  emit('vibemap-basic', 'ports', [[4, 5, 6, 7, 9][size] ?? 9, MAXZ], { type: 'Point', coordinates: [lon, lat] }, { name, size, pri });
 }
 /* ★★ THE MAIDENHEAD GRID, as vibemap.js drawGrid draws it: fields (20 x 10 deg) from Leaflet z3 to z5,
  *  squares (2 x 1 deg) from z6. Lines carry `level`; labels sit at each cell's centre. Pure arithmetic,

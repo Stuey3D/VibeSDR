@@ -709,15 +709,61 @@
    "minzoom": 4,
    "layout": {
     "icon-image": "vs-port",
-    "icon-size": 0.75,
+    "icon-size": [
+     "match",
+     [
+      "get",
+      "size"
+     ],
+     0,
+     0.95,
+     1,
+     0.82,
+     2,
+     0.72,
+     0.62
+    ],
     "text-field": [
      "get",
      "name"
     ],
     "text-font": [
-     "JetBrains Mono Regular"
+     "case",
+     [
+      "==",
+      [
+       "get",
+       "size"
+      ],
+      0
+     ],
+     [
+      "literal",
+      [
+       "JetBrains Mono Bold"
+      ]
+     ],
+     [
+      "literal",
+      [
+       "JetBrains Mono Regular"
+      ]
+     ]
     ],
-    "text-size": 9,
+    "text-size": [
+     "match",
+     [
+      "get",
+      "size"
+     ],
+     0,
+     12,
+     1,
+     10,
+     2,
+     9,
+     8
+    ],
     "text-optional": true,
     "text-variable-anchor": [
      "left",
@@ -728,15 +774,52 @@
     "text-radial-offset": 0.7,
     "text-justify": "auto",
     "symbol-sort-key": [
-     "get",
-     "size"
+     "coalesce",
+     [
+      "get",
+      "pri"
+     ],
+     [
+      "*",
+      [
+       "get",
+       "size"
+      ],
+      1000
+     ]
     ]
    },
    "paint": {
-    "icon-color": "#6fc3d6",
-    "icon-opacity": 0.62,
-    "text-color": "#6fc3d6",
-    "text-opacity": 0.62
+    "icon-color": "#4db2ff",
+    "icon-opacity": [
+     "match",
+     [
+      "get",
+      "size"
+     ],
+     0,
+     1,
+     1,
+     0.9,
+     2,
+     0.8,
+     0.62
+    ],
+    "text-color": "#4db2ff",
+    "text-opacity": [
+     "match",
+     [
+      "get",
+      "size"
+     ],
+     0,
+     1,
+     1,
+     0.9,
+     2,
+     0.8,
+     0.62
+    ]
    }
   },
   {

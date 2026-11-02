@@ -138,9 +138,16 @@
   .apLbl.med { font-size: 10px !important; opacity: 0.88; }
   .apLbl.small { opacity: 0.62; }
   .apLbl.heli { color: #9fb3c8; opacity: 0.55; }
-  .ptLbl .g { font-style: normal; opacity: 0.8; margin-right: 2px; }
-  .ptLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #6fc3d6; opacity: 0.62;
+  /* ★★ PORTS AS THE AIRPORTS (Stuart, 2026-11-02: "the Anchor and Port label needs to be a more prominant blue like
+   *  the airports are in yellow" · "the majors being a more bold larger label and the minors being smaller and also
+   *  the first ones to fade when zooming out"). The pack's class: 0 major (scripts/mapdata/major-ports.json), then the
+   *  WPI's 1 large · 2 medium · 3 small · 4 very small. Same blue as the GPU style (vibemap-style.json ports). */
+  .ptLbl .g { font-style: normal; opacity: 0.85; margin-right: 2px; }
+  .ptLbl { font: 9px ui-monospace, Menlo, monospace !important; color: #4db2ff; opacity: 0.8;
            white-space: nowrap; text-shadow: 0 0 3px #000, 0 0 3px #000; margin: -4px 0 0 4px; }
+  .ptLbl.major { font-size: 12px !important; font-weight: 700; opacity: 1; letter-spacing: 0.5px; }
+  .ptLbl.large { font-size: 10px !important; opacity: 0.9; }
+  .ptLbl.minor { font-size: 8px !important; opacity: 0.62; }
   .ctyLbl i { display: block; font-style: normal; text-transform: none; letter-spacing: 0.4px;
               font-size: 9px; opacity: 0.66; }
   .ctyLbl { font: 10px ui-monospace, "SF Mono", Menlo, Consolas, monospace !important;
@@ -1307,12 +1314,19 @@
           iconSize: [0, 0], iconAnchor: [0, 0],
         }) }).addTo(airportLayer).bindTooltip(esc(name || code));
       }
-      if (z < 6 || !P.ports) return;
-      for (const [name, lon, lat] of pick(ports || [], box, CAP.ports, () => 0)) {
+      if (z < 5 || !P.ports) return;
+      // ★★ By class, as the GPU pack: majors from z5, large z6, medium z7, small z8, very small z10 (Leaflet zooms —
+      //    the GPU's 4/5/6/7/9 plus one), so the small ones are the first to go as you zoom out; and the cap keeps the
+      //    most important first (the class is the rank), never the first 80 in the file.
+      const clsOf = (r) => (Number.isInteger(r[4]) ? r[4] : 4);
+      const priOf = (r) => clsOf(r) * 1000 + (clsOf(r) === 0 && Number.isInteger(r[5]) ? r[5] : 0);   // ★ majors in list order
+      const ptMinZ = [5, 6, 7, 8, 10];
+      for (const r of pick(ports || [], box, CAP.ports, priOf, (r) => z >= ptMinZ[clsOf(r)])) {
+        const [name, lon, lat] = r, c = clsOf(r);
         // ★ A ship for a sea port -- the same reasoning as the aeroplane: the symbol says what KIND
         //   of thing this is before the name is read, which matters on a map carrying five kinds.
         L.marker([lat, lon], { icon: L.divIcon({
-          className: 'ptLbl', html: '<i class="g">⚓</i>' + esc(name),
+          className: 'ptLbl' + (c === 0 ? ' major' : c === 1 ? ' large' : c >= 3 ? ' minor' : ''), html: '<i class="g">⚓</i>' + esc(name),
           iconSize: [0, 0], iconAnchor: [0, 0],
         }) }).addTo(portLayer);
       }

@@ -38,6 +38,7 @@
  *   header lookup and every layer count is asserted before a byte is written.
  */
 import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { readDbf, eachPolygon } from './lib/shapefile.mjs';
 import { readEtopo, buildRelief, encodePng, rasteriseBiomes, sliceRelief, MERC_LAT } from './lib/relief.mjs';
 import { execFileSync } from 'node:child_process';
@@ -846,6 +847,17 @@ function buildPorts(csv, dp) {
   const iLat = col(h, ['Latitude', 'latitude'], 'ports');
   const iLon = col(h, ['Longitude', 'longitude'], 'ports');
   const iCc = col(h, ['Country Code', 'countryCode', 'Country'], 'ports');
+  /* ★★ EACH PORT'S CLASS — the 5th field (Stuart, 2026-11-02: "do the same thing we do for airports with the majors
+   *  being a more bold larger label and the minors being smaller and also the first ones to fade when zooming out").
+   *  0 = MAJOR (scripts/mapdata/major-ports.json — the WPI grades harbour SIZE, not traffic: Felixstowe is "Very
+   *  Small" there), else the WPI Harbor Size: 1 Large · 2 Medium · 3 Small · 4 Very Small (blank = 4). A major's
+   *  `label` replaces the WPI name (Antwerpen -> Antwerp); a major the WPI lacks is added from its lon/lat.
+   *  ★ Every listed major must match EXACTLY ONE row — a renamed WPI entry fails the build, never silently drops. */
+  const iSize = h.findIndex((x) => x.trim() === 'Harbor Size');
+  const majors = JSON.parse(readFileSync(path.join(root, 'scripts/mapdata/major-ports.json'), 'utf8')).ports;
+  const majorAt = new Map(), hit = new Map();
+  for (const m of majors) if (m.wpi) majorAt.set(`${m.wpi}|${m.cc}`, m);
+  const SIZE = { L: 1, M: 2, S: 3, V: 4 };
   const out = [];
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
@@ -855,9 +867,22 @@ function buildPorts(csv, dp) {
     const name = (row[iName] || '').trim();
     if (!name || !Number.isFinite(lat) || !Number.isFinite(lon)) continue;
     if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
-    out.push([name, round(lon, dp), round(lat, dp), (row[iCc] || '').trim().slice(0, 2)]);
+    const cc = (row[iCc] || '').trim();
+    const m = majorAt.get(`${name}|${cc}`);
+    if (m) hit.set(m, (hit.get(m) || 0) + 1);
+    const cls = m ? 0 : (SIZE[((iSize >= 0 ? row[iSize] : '') || '').trim().charAt(0).toUpperCase()] ?? 4);
+    out.push([m?.label || name, round(lon, dp), round(lat, dp), cc.slice(0, 2), cls, m ? majors.indexOf(m) : 0]);
+  }
+  for (const m of majors) {
+    if (m.wpi) { if (hit.get(m) !== 1) die(`ports: major "${m.wpi}" (${m.cc}) matched ${hit.get(m) || 0} WPI rows, not 1 — fix scripts/mapdata/major-ports.json.`); }
+    else if (Number.isFinite(m.lon) && Number.isFinite(m.lat) && m.label) out.push([m.label, round(m.lon, dp), round(m.lat, dp), String(m.cc || '').slice(0, 2), 0, majors.indexOf(m)]);
+    else die(`ports: major ${JSON.stringify(m)} has neither a wpi name nor label + lon/lat.`);
   }
   if (!out.length) die('ports: no usable rows.');
+  // ★ Majors first, then L, M, S, V: the renderer's cap keeps the head of the list, so the order IS the priority.
+  //   ★ 6th field = a major's place in major-ports.json (0 for the rest): when two majors collide — Felixstowe and
+  //     Harwich are 1 km apart — the one listed first wins, so the list is written most important first.
+  out.sort((a, b) => a[4] - b[4] || a[5] - b[5]);
   return out;
 }
 

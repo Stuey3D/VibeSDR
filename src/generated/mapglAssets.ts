@@ -5,8 +5,8 @@
  * ★★ MAPGL_VERSION is a CONTENT HASH (scripts/lib/mapgl-manifest.mjs): change any byte of the pack and the
  *    app copies it again. check-map-overlay.mjs fails when this file is stale. */
 /* eslint-disable */
-export const MAPGL_BYTES = 26213502;
-export const MAPGL_VERSION = "26213502-75-aeb649129720";
+export const MAPGL_BYTES = 26235659;
+export const MAPGL_VERSION = "26235659-75-85b59a177469";
 export const MAPGL_FILES: ReadonlyArray<readonly [string, number]> = [
   ["fonts/JetBrains Mono Bold/0-255.pbf", require("../../assets/mapgl/fonts/JetBrains_Mono_Bold/0-255.pbf")],
   ["fonts/JetBrains Mono Bold/1024-1279.pbf", require("../../assets/mapgl/fonts/JetBrains_Mono_Bold/1024-1279.pbf")],
