@@ -55,13 +55,61 @@ console.log('── the dataset ──');
   const size = fs.statSync('src/utils/seaAreas.generated.ts').size;
   ok(size < 260 * 1024, `the bundled file is modest (${(size / 1024).toFixed(0)} KB)`);
 }
+console.log('── pass 2: Norway, Ireland, Spain ──');
+{
+  const all = seaAreas();
+  const of = (src: string) => all.filter((a) => a.src === src);
+  ok(of('no').length >= 15 && !!seaAreaById('no-inner-skagerrak') && !!seaAreaById('no-froeya-bank') && !!seaAreaById('no-east-tampen'), `MET Norway: ${of('no').length} areas (Inner Skagerrak, Froeya Bank, East-Tampen …)`);
+  ok(!all.some((a) => a.src === 'no' && /^(viking|north utsire|south utsire|forties|fisher)$/i.test(a.name)), 'MET Norway: no second Viking / Utsire / Forties / Fisher (the Met Office outline is the one)');
+  ok(!all.some((a) => a.src === 'no' && /^(deep )?[a-f]\d$/i.test(a.name)), "MET Norway: the grid codes (A1 … F3) are not drawn");
+  ok(of('ie').length === 18 && seaAreaById('ie-00-malin')!.name === 'Malin Head to Fair Head', 'Met Éireann: the 18 coastal stretches, named headland to headland');
+  ok(of('es').length === 51 && /gaditano/i.test(seaAreaById('es-611103c')!.name), "AEMET: the 51 coastal zones (Litoral gaditano …)");
+  // ★ the reprojection (UTM 30N → WGS 84): Spain's zones lie off Spain, the Canaries' off the Canaries
+  const gad = seaAreaById('es-611103c')!, lz = seaAreaById('es-659101c')!;
+  ok(gad.lat > 35.8 && gad.lat < 36.9 && gad.lon > -6.8 && gad.lon < -5.7, `Litoral gaditano lies off Cádiz (${gad.lat}, ${gad.lon})`);
+  ok(lz.lat > 28.7 && lz.lat < 29.6 && lz.lon > -14.0 && lz.lon < -13.2, `Lanzarote's zone lies round Lanzarote (${lz.lat}, ${lz.lon})`);
+  // ★ no overlaps that break the tint: within one source an area's label point is in no other area of that source (a
+  //   tinted area never colours its neighbour's name)
+  const clash: string[] = [];
+  for (const src of ['uk', 'no', 'ie', 'es', 'de', 'jp', 'nz', 'za', 're', 'ar', 'cl', 'au']) {
+    const set = of(src);
+    for (const a of set) for (const b of set) if (a !== b && b.rings.some((r) => inRing([a.lat, a.lon], r))) clash.push(`${a.id} in ${b.id}`);
+  }
+  ok(clash.length === 0, 'within a source, no label lies inside a neighbour' + (clash.length ? ': ' + clash.slice(0, 6).join(', ') : ''));
+  // ★ the Irish stretches run round the coast: each ends where the next begins (the parser's chain)
+  const ie = of('ie').sort((x, y) => (x.id < y.id ? -1 : 1));
+  ok(ie.every((a, i) => a.name.split(' to ')[1] === ie[(i + 1) % ie.length].name.split(' to ')[0]), 'Ireland: the 18 stretches link end to start, round the island');
+  // ★ the reach rule with the denser set: a Bergen receiver gets Norway's areas, a Cork one the Irish coast, Cádiz Spain's
+  ok(seaAreasFor({ lat: 60.39, lon: 5.32 }, null).some((a) => a.src === 'no'), 'Bergen: MET Norway areas within reach');
+  ok(seaAreasFor({ lat: 51.9, lon: -8.47 }, null).filter((a) => a.src === 'ie').length === 18, 'Cork: all 18 Irish stretches');
+  const cadiz = seaAreasFor({ lat: 36.53, lon: -6.29 }, null);
+  ok(cadiz.some((a) => a.id === 'es-611103c'), `Cádiz: its coastal zones (${cadiz.filter((a) => a.src === 'es').length} Spanish)`);
+  // ★ declutter: a coastal zone's NAME appears from zoom 8 and its outline from 6 — names drop before outlines
+  const it = seaCompose({ lat: 51.9, lon: -8.47 }, null, false).items.find((x: any) => x.key === 'a:ie-10-roches');
+  ok(it && it._mz === 8 && it._sh.minZoom === 6, 'an Irish stretch: outline from zoom 6, name from zoom 8');
+  ok(/MET Norway/.test(seaAttribution(seaAreasFor({ lat: 60.39, lon: 5.32 }, null))) && /Met Éireann/.test(seaAttribution(seaAreasFor({ lat: 51.9, lon: -8.47 }, null))) && /AEMET/.test(seaAttribution(cadiz)), 'attribution: MET Norway, Met Éireann, AEMET where their areas are drawn');
+}
+console.log('── pass 2: JMA and the high-seas sub-areas as broadcast ──');
+{
+  const all = seaAreas();
+  const jp = all.filter((a) => a.src === 'jp');
+  ok(jp.length >= 30 && !all.some((a) => a.id === 'jp-1000' || a.id === 'jp-2000') && !!seaAreaById('jp-5000'), `JMA: ${jp.length} areas, children only (no parent drawn twice; 対馬海峡 is its own)`);
+  const ae = seaAreaById('au-southeastern')!;
+  ok(ae.bbox[2] <= -24.9 && ae.bbox[1] >= 128.9 && ae.rings[0].length > 100, `BoM South Eastern Area: the coast followed the south way round (bbox ${ae.bbox.join(', ')})`);
+  const isl = seaAreaById('nz-islands')!;
+  ok(isl.bbox[1] === 160 && isl.bbox[3] === 240, 'MetService/Fiji ISLANDS crosses 180° in one piece (160E to 120W = 240)');
+  ok(seaAreasFor({ lat: -36.85, lon: 174.76 }, null).some((a) => a.src === 'nz'), 'an Auckland receiver: METAREA XIV areas within reach');
+  ok(seaAreasFor({ lat: -33.92, lon: 18.42 }, null).some((a) => a.src === 'za'), 'a Cape Town receiver: SAWS areas within reach');
+  ok(['nz', 'za', 're', 'ar', 'cl', 'au', 'jp'].every((s) => /\S/.test(seaAttribution(all.filter((a) => a.src === s)))), 'every new source has its attribution line');
+}
 console.log('── presence: absent where no area is near ──');
 {
-  const london = { lat: 51.5, lon: -0.1 }, tokyo = { lat: 35.6, lon: 139.7 }, halifax = { lat: 44.65, lon: -63.57 };
-  const nUk = seaAreasFor(london, null).length, nJp = seaAreasFor(tokyo, null).length;
+  const london = { lat: 51.5, lon: -0.1 }, tokyo = { lat: 35.6, lon: 139.7 }, astana = { lat: 51.17, lon: 71.45 }, halifax = { lat: 44.65, lon: -63.57 };
+  const nUk = seaAreasFor(london, null).length, nJp = seaAreasFor(tokyo, null).filter((a) => a.src === 'jp').length, nKz = seaAreasFor(astana, null).length;
   ok(nUk >= 31 && nUk < 120, `a London receiver: the UK and nearby areas (${nUk})`);
-  ok(nJp === 0, 'a Tokyo receiver: none — no SEA AREAS toggle');
-  ok(seaAreasFor(tokyo, { areas: [{ id: 'dogger', lat: 0, lon: 0, stale: false, fc: [] }] }).length === 1, 'a forecast names an area far away: that one is drawn');
+  ok(nKz === 0, `an Astana receiver (inland Asia): none — no SEA AREAS toggle (${nKz})`);
+  ok(nJp >= 20, `a Tokyo receiver: JMA's marine forecast areas since pass 2 (${nJp})`);
+  ok(seaAreasFor(astana, { areas: [{ id: 'dogger', lat: 0, lon: 0, stale: false, fc: [] }] }).length === 1, 'a forecast names an area far away: that one is drawn');
   const nHx = seaAreasFor(halifax, null);
   ok(nHx.some((a) => a.src === 'ca') && nHx.some((a) => a.src === 'us'), `Halifax: Canadian and US areas (${nHx.length})`);
   const base = { ships: 0, dsc: 0, stations: 1, warnings: 0, weather: 1, aisMode: false };

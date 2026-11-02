@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 
 /** [{ props, rings: [[[lon, lat], …], …] }] — every part of a polygon record as a ring (outer rings and holes alike;
  *  the caller tells them apart by winding when it needs to). */
-export function readShapefile(base) {
+export function readShapefile(base, enc = 'utf8') {   // enc: the .dbf's text encoding ('latin1' for ISO-8859-1/15 files such as AEMET's)
   const shp = readFileSync(base + '.shp'), dbf = readFileSync(base + '.dbf');
-  const props = readDbf(dbf);
+  const props = readDbf(dbf, enc);
   const out = [];
   let o = 100, i = 0;
   while (o + 8 <= shp.length) {
@@ -30,7 +30,7 @@ export function readShapefile(base) {
   }
   return out;
 }
-export function readDbf(b) {
+export function readDbf(b, enc = 'utf8') {
   const n = b.readUInt32LE(4), hlen = b.readUInt16LE(8), rlen = b.readUInt16LE(10);
   const fields = [];
   for (let o = 32; o < hlen - 1 && b[o] !== 0x0d; o += 32) {
@@ -40,7 +40,7 @@ export function readDbf(b) {
   for (let r = 0; r < n; r++) {
     let o = hlen + r * rlen + 1;
     const row = {};
-    for (const f of fields) { row[f.name] = b.toString('utf8', o, o + f.len).trim(); o += f.len; }
+    for (const f of fields) { row[f.name] = b.toString(enc, o, o + f.len).trim(); o += f.len; }
     rows.push(row);
   }
   return rows;

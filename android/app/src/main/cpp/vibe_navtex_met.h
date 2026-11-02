@@ -30,6 +30,11 @@
 //    stays the UK's; the generated areas are APPENDED to it (ONE table — areas()), each with the heading forms its
 //    forecasts use, and a US zone also by its UGC code ("ANZ800-031000-"). A hand-made entry wins a name both have.
 //    NWS winds are in KNOTS ("SW WINDS 10 TO 15 KT"): converted to Beaufort (knotsBf) — never read as force 10.
+// ★★ V12 2026-11-02 PASS 2: MET Norway's sea areas (their English and Norwegian names), Met Éireann's coastal stretches
+//    (a heading names a CHAIN of headlands — headingAreas), AEMET's coastal zones; the Dutch / German / French names of
+//    Thames, Dover and German Bight on the UK rows. Still not matched: the Baltic areas (SMHI's outlines wait on a licence
+//    question, and those forecasts give the wind in m/s — read as Beaufort they would be wrong) and the French and
+//    Spanish high-seas areas (Antifer, Pazenn, Finisterre, Cantábrico … — no open outline).
 #pragma once
 #include "vibe_navtex_stations.h"
 #include "vibe_sea_areas.generated.h"
@@ -69,10 +74,10 @@ inline const std::vector<Area>& areas() {
         {"tyne", "Tyne", 55.2, -0.5, 's', "TYNE"},
         {"dogger", "Dogger", 54.8, 2.2, 's', "DOGGER"},
         {"fisher", "Fisher", 56.6, 5.6, 's', "FISHER"},
-        {"gbight", "German Bight", 54.5, 6.6, 's', "GERMAN BIGHT|GERMANBIGHT"},
+        {"gbight", "German Bight", 54.5, 6.6, 's', "GERMAN BIGHT|GERMANBIGHT|DEUTSCHE BUCHT"},
         {"humber", "Humber", 53.7, 1.7, 's', "HUMBER"},
-        {"thames", "Thames", 52.2, 2.3, 's', "THAMES"},
-        {"dover", "Dover", 50.95, 1.35, 's', "DOVER"},
+        {"thames", "Thames", 52.2, 2.3, 's', "THAMES|THEEMS|TAMISE"},
+        {"dover", "Dover", 50.95, 1.35, 's', "DOVER|PAS DE CALAIS"},
         {"wight", "Wight", 50.3, -1.0, 's', "WIGHT"},
         {"portland", "Portland", 50.0, -2.8, 's', "PORTLAND"},
         {"plymouth", "Plymouth", 49.6, -4.6, 's', "PLYMOUTH"},
@@ -112,9 +117,9 @@ inline const std::vector<Area>& areas() {
         {"i-shetland", "Shetland Isles", 60.35, -0.9, 'i', "SHETLAND ISLES|SHETLAND"},
         {"i-channelislands", "Channel Islands", 49.35, -2.35, 'i', "CHANNEL ISLANDS"},
         // ── neighbours (the names as the forecasts use them; label points ours) ──
-        {"n-innerskagerrak", "Inner Skagerrak", 58.7, 10.2, 'n', "INNER SKAGERRAK|INNER-SKAGERRAK"},
-        {"n-outerskagerrak", "Outer Skagerrak", 57.9, 8.2, 'n', "OUTER SKAGERRAK|OUTER-SKAGERRAK"},
-        {"n-belgiancoast", "Belgian coast", 51.35, 2.75, 'n', "BELGIAN COAST"},
+        // ★ V12 2026-11-02 (pass 2) Inner and Outer Skagerrak left this table: MET Norway's own outlines carry them now
+        //   (no-inner-skagerrak, no-outer-skagerrak, generated). The Belgian coast has no open outline yet.
+        {"n-belgiancoast", "Belgian coast", 51.35, 2.75, 'n', "BELGIAN COAST|BELGISCHE KUST"},
     };
     // ★ V12 2026-11-02 the generated sea areas, appended once (after the hand-made table, so a name both carry is ours)
     static const bool appended = [] {
@@ -226,12 +231,63 @@ inline std::vector<std::string> headingAreas(std::string l) {
             p = e + 1;
         }
     }
+    // ★ V12 2026-11-02 (pass 2) THE IRISH COAST AS A CHAIN OF HEADLANDS (Met Éireann / Valentia, Malin Head NAVTEX):
+    //   "ROCHES POINT TO SLYNE HEAD TO MALIN HEAD [AND FOR THE IRISH SEA]" — every stretch between each pair of
+    //   headlands, the SHORTER way round the coast (Roches Point → Mizen Head → … → Slyne Head, not by the east). The
+    //   stretches are the generated ie-* areas ("MALIN HEAD TO FAIR HEAD"), linked end to start; a name that is not one
+    //   of their headlands fails the whole line, as a list does.
+    {
+        struct Seg { std::string a, b; const char* id; };
+        static const std::vector<Seg> segs = [] {
+            std::vector<Seg> v;
+            for (const auto& a : areas()) {
+                if (std::strncmp(a.id, "ie-", 3) != 0) continue;
+                const std::string m = a.match; const size_t bar = m.find('|'); const std::string one = m.substr(0, bar);
+                const size_t to = one.find(" TO ");
+                if (to != std::string::npos) v.push_back({ one.substr(0, to), one.substr(to + 4), a.id });
+            }
+            return v;
+        }();
+        std::string s = l;
+        bool irishSea = false;
+        for (const char* tail : { " AND FOR THE IRISH SEA", " AND THE IRISH SEA", " AND IRISH SEA" }) {
+            const size_t n = std::strlen(tail);
+            if (s.size() > n && s.compare(s.size() - n, n, tail) == 0) { s.resize(s.size() - n); irishSea = true; break; }
+        }
+        std::vector<std::string> names;
+        for (size_t p = 0;;) { const size_t q = s.find(" TO ", p); names.push_back(s.substr(p, q == std::string::npos ? std::string::npos : q - p)); if (q == std::string::npos) break; p = q + 4; }
+        const auto at = [&](const std::string& h) { for (size_t i = 0; i < segs.size(); ++i) if (segs[i].a == h) return (int)i; return -1; };
+        bool all = names.size() >= 2 && !segs.empty();
+        for (const auto& n : names) if (at(n) < 0) { all = false; break; }
+        if (all) {
+            std::vector<std::string> ids;
+            const int N = (int)segs.size();
+            for (size_t k = 0; k + 1 < names.size() && all; ++k) {
+                // the ring: segs[i] runs from headland i to headland i+1 only when the table is in coast order — walk it
+                // by names so the order of the generated rows does not matter
+                int i = at(names[k]); std::vector<const char*> fwd; bool okF = false;
+                for (int step = 0; step < N; ++step) { fwd.push_back(segs[i].id); if (segs[i].b == names[k + 1]) { okF = true; break; } i = at(segs[i].b); if (i < 0) break; }
+                int j = at(names[k + 1]); std::vector<const char*> back; bool okB = false;
+                for (int step = 0; step < N; ++step) { back.push_back(segs[j].id); if (segs[j].b == names[k]) { okB = true; break; } j = at(segs[j].b); if (j < 0) break; }
+                const std::vector<const char*>* use = okF && (!okB || fwd.size() <= back.size()) ? &fwd : okB ? &back : nullptr;
+                if (!use) { all = false; break; }
+                for (const char* id : *use) if (std::find(ids.begin(), ids.end(), id) == ids.end()) ids.push_back(id);
+            }
+            if (all && !ids.empty()) {
+                out = ids;
+                if (irishSea) out.push_back("irishsea");
+                return out;
+            }
+        }
+    }
     // ★ a list of shipping areas: consumed whole, longest name first
     std::string rest = l;
     for (;;) {
         while (!rest.empty() && (rest[0] == ' ' || rest[0] == ',' || rest[0] == '.' || rest[0] == '&' || rest[0] == '/')) rest.erase(0, 1);
         if (rest.empty()) break;
         if (rest.compare(0, 4, "AND ") == 0) { rest.erase(0, 4); continue; }
+        // ★ V12 2026-11-02 (pass 2) "AND" in Dutch and French: "THEEMS, DOVER EN BELGISCHE KUST", "… ET ANTIFER"
+        if (rest.compare(0, 3, "EN ") == 0 || rest.compare(0, 3, "ET ") == 0) { rest.erase(0, 3); continue; }
         size_t best = 0; const Area* hit = nullptr;
         const auto it = matchIdx().byFirst.find(rest.substr(0, rest.find_first_of(" ,.&/:")));
         if (it != matchIdx().byFirst.end())

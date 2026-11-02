@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
     {
         const auto v = navmet::parse("  INNER SKAGERRAK\nVRB 5. SLT. DRY, GOOD, BECMG OCNL RAIN, MOD.\n  FISHER\nN 6. SLT TO ROUGH. OCNL RAIN, MOD.\n  EAST-TAMPEN\nVRB 4. MOD. RAIN, MOD.\n");
         const auto* fi = of(v, "fisher");
-        ok(of(v, "n-innerskagerrak") && fi && fi->dir == "N" && fi->fmax == 6 && fi->sea == 5, "Norwegian layout: FISHER N 6, ROUGH");
+        ok(of(v, "no-inner-skagerrak") && of(v, "no-east-tampen") && fi && fi->dir == "N" && fi->fmax == 6 && fi->sea == 5, "Norwegian layout: FISHER N 6, ROUGH (and Inner Skagerrak, East-Tampen — MET Norway's areas since pass 2)");
         ok(fi && fi->block.find("TAMPEN") == std::string::npos, "an area we do not hold (EAST-TAMPEN) ends the block before it");
     }
     {
@@ -212,6 +212,39 @@ int main(int argc, char** argv) {
         const navmet::Fc* g2 = of(v2, "us-anz805");
         ok(g2 && g2->fmax == 9 && g2->gale >= 8, "NWS 35 TO 45 KT: force 8–9, a gale (red)");
         ok(navmet::knotsBf("WIND SW 6 TO 8").first < 0, "no knots, no conversion (a Beaufort forecast is untouched)");
+    }
+    std::printf("── V12 pass 2: Norway, Ireland, the other languages' names ──\n");
+    {
+        auto H = [](const char* s) { return navmet::headingAreas(s); };
+        auto is = [](const std::vector<std::string>& v, std::vector<std::string> w) { return v == w; };
+        // MET Norway (Rogaland / Ørlandet NAVTEX headings, indented)
+        ok(is(H("  INNER SKAGERRAK"), { "no-inner-skagerrak" }) && is(H("  OUTER SKAGERRAK"), { "no-outer-skagerrak" }), "MET Norway: Inner / Outer Skagerrak (their outline now, not a label point)");
+        ok(is(H("  EAST-TAMPEN"), { "no-east-tampen" }) && is(H("  FROEYA BANK"), { "no-froeya-bank" }) && is(H("  HALTEN BANK"), { "no-halten-bank" }) && is(H("  STOREGGA"), { "no-storegga" }), "MET Norway: East-Tampen, Froeya Bank, Halten Bank, Storegga");
+        ok(is(H("  STOREGGA-HALTEN BANK TO GREENWICH MERIDIAN"), { "no-storegga-halten-bank-to-greenwich-meridian" }), "the longest name wins: STOREGGA-HALTEN BANK TO GREENWICH MERIDIAN is not Storegga");
+        ok(is(H("FROEYABANKEN"), { "no-froeya-bank" }) && is(H("AUST-TAMPEN"), { "no-east-tampen" }), "the Norwegian names, folded as a printer writes them (Frøyabanken, Aust-Tampen)");
+        ok(is(H("  VIKING"), { "viking" }) && is(H("  NORTH UTSIRE"), { "nutsire" }), "Viking and the Utsires stay the Met Office's (one area, one outline)");
+        ok(H("A1").empty() && H("DEEP D4").empty(), "MET Norway's grid codes are not headings");
+        // Met Éireann's coast as a chain of headlands
+        ok(is(H("MALIN HEAD TO FAIR HEAD"), { "ie-00-malin" }), "Ireland: one stretch by its headlands");
+        ok(is(H("ROCHES POINT TO SLYNE HEAD TO MALIN HEAD"), { "ie-10-roches", "ie-11-mizen", "ie-12-valentia", "ie-13-loop", "ie-14-slyne", "ie-15-erris", "ie-16-rossan", "ie-17-bloodyf" }), "Ireland: ROCHES POINT TO SLYNE HEAD TO MALIN HEAD — the west coast, every stretch between");
+        {
+            const auto v = H("MALIN HEAD TO WICKLOW HEAD TO ROCHES POINT AND FOR THE IRISH SEA");
+            ok(v.size() == 11 && v.front() == "ie-00-malin" && v[9] == "ie-09-dungarvan" && v.back() == "irishsea", "Ireland: MALIN HEAD TO WICKLOW HEAD TO ROCHES POINT AND FOR THE IRISH SEA — the east and south coasts and the Irish Sea (" + std::to_string(v.size()) + ")");
+        }
+        ok(is(H("CARNSORE POINT TO WICKLOW HEAD"), { "ie-06-wicklow" }), "Ireland: the shorter way round, whichever order the headlands come in");
+        ok(H("MALIN HEAD TO DUBLIN").empty() && H("ERRIS HEAD TO WICKLOW HEAD, BECOMING CONFINED").empty(), "a name that is no headland, or prose: not a heading");
+        ok(is(H("LOUGH FOYLE TO CARLINGFORD LOUGH - (SWW)"), { "i-foyle-carlingford" }), "the Met Office's inshore stretch is still the inshore stretch");
+        // the other languages' names for areas we draw
+        ok(is(H("THEEMS, DOVER EN BELGISCHE KUST"), { "thames", "dover", "n-belgiancoast" }), "Oostende (Dutch): THEEMS, DOVER EN BELGISCHE KUST");
+        ok(is(H("DEUTSCHE BUCHT"), { "gbight" }), "Hamburg (German): DEUTSCHE BUCHT is German Bight");
+        ok(is(H("TAMISE, PAS DE CALAIS."), { "thames", "dover" }), "Météo-France: TAMISE, PAS DE CALAIS (Thames, Dover)");
+        ok(H("TAMISE, PAS DE CALAIS, ANTIFER.").empty(), "…but a list with an area we do not hold (Antifer) is still no heading");
+        const auto v = navmet::parse("FORECAST FOR ROCHES POINT TO SLYNE HEAD TO MALIN HEAD\nWIND: SOUTH TO SOUTHEASTERLY FORCE 6 OR 7 AND GUSTY, TOUCHING GALE FORCE 8 AT TIMES.\n"
+                                     "WEATHER: CLOUDY WITH OUTBREAKS OF RAIN.\nVISIBILITY: MODERATE OR POOR.\nFORECAST FOR MALIN HEAD TO WICKLOW HEAD TO ROCHES POINT AND FOR THE IRISH SEA\n"
+                                     "WIND: SOUTHEASTERLY FORCE 5 OR 6.\nWEATHER: CLOUDY TO FAIR.\nOUTLOOK FOR A FURTHER 24 HOURS\nNNNN\n");
+        const navmet::Fc* a = of(v, "ie-13-loop"); const navmet::Fc* b = of(v, "ie-05-howth"); const navmet::Fc* c = of(v, "irishsea");
+        ok(a && a->dir == "S" && a->fmin == 6 && a->gale >= 8, "a Valentia forecast: Loop Head to Slyne Head S 6–8, a gale");
+        ok(b && b->dir == "SE" && b->fmax == 6 && b->gale == 0 && c && c->fmax == 6, "…and Howth Head to Wicklow Head and the Irish Sea SE 5–6");
     }
     std::printf("── a real set ──\n");
     {

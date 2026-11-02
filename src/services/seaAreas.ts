@@ -89,7 +89,7 @@ export function seaLabel(a: SeaArea): string {
   if (a.src === 'us') return a.kind === 'o' && a.name.length <= 26 ? a.name : a.id.slice(3).toUpperCase();
   return a.name;
 }
-const SRC_WORDS: Record<string, string> = { uk: 'Met Office shipping forecast area', us: 'NOAA NWS marine zone', ca: 'Environment Canada marine forecast area', de: 'DWD coastal area' };
+const SRC_WORDS: Record<string, string> = { uk: 'Met Office shipping forecast area', us: 'NOAA NWS marine zone', ca: 'Environment Canada marine forecast area', de: 'DWD coastal area', no: 'MET Norway sea forecast area', ie: 'Met Éireann coastal area (a descriptive outline, not an official boundary)', es: 'AEMET coastal zone (to 20 NM)' };
 export const SEA_NAME_ZOOM = { s: 4, o: 5, c: 8 } as const;
 export const SEA_LINE_ZOOM = { s: 0, o: 3, c: 6 } as const;
 export function seaNameIcon(a: SeaArea): { html: string; w: number; h: number } {
@@ -99,7 +99,7 @@ export function seaNameIcon(a: SeaArea): { html: string; w: number; h: number } 
     + `text-align:center;white-space:nowrap;text-shadow:0 0 3px #04101c,0 0 2px #04101c;opacity:.9">${esc(t)}</div>` };
 }
 export function seaCard(a: SeaArea, sev: 0 | 1 | 2, hasFc: boolean, wrap: 'web' | 'app' = 'web'): string {
-  const rows = [`<div class="t"><b>${esc(a.name.toUpperCase())}</b></div>`, `<div class="r"><span class="k">Area</span><span class="v">${esc(SRC_WORDS[a.src] || 'sea area')}</span></div>`];
+  const rows = [`<div class="t"><b>${esc(a.name.toUpperCase())}</b></div>`, `<div class="r"><span class="k">Area</span><span class="v">${esc(SRC_WORDS[a.src] || SEA_AREA_SOURCES[a.src]?.what || 'sea area')}</span></div>`];
   if (a.src === 'us') rows.push(`<div class="r"><span class="k">Zone</span><span class="v">${esc(a.id.slice(3).toUpperCase())}</span></div>`);
   rows.push(`<div class="r"><span class="k">Forecast</span><span class="v">${esc(hasFc ? (sev === 2 ? 'GALE in force — the forecast is on the map' : sev === 1 ? 'near gale (7) — the forecast is on the map' : 'current — the forecast is on the map') : 'none heard for this area')}</span></div>`);
   const body = rows.join('');

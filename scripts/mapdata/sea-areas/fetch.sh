@@ -14,3 +14,19 @@ unzip -oq "$D/nws/mz.zip" -d "$D/nws/mz"
 unzip -oq "$D/nws/oz.zip" -d "$D/nws/oz"
 unzip -oq "$D/ne/land.zip" -d "$D/ne/land"
 unzip -oq "$D/eccc/water.zip" 'water_MarStdZone_coarse_unproj.*' -d "$D/eccc/w"
+# V12 2026-11-02 (pass 2): MET Norway's sea forecast areas (textforecast 3.0 — the polygons travel with today's text;
+# only the polygons and names are kept) and Met Éireann's sea-area warning polygons. api.met.no asks for an identifying
+# User-Agent.
+mkdir -p "$D/metno" "$D/metie"
+curl -fsSL -A "VibeSDR gen-sea-areas (vibesdr.net)" -o "$D/metno/sea_en.json" https://api.met.no/weatherapi/textforecast/3.0/sea_en.json
+curl -fsSL -A "VibeSDR gen-sea-areas (vibesdr.net)" -o "$D/metno/sea_no.json" https://api.met.no/weatherapi/textforecast/3.0/sea_no.json
+curl -fsSL -o "$D/metie/sea-areas.geojson" https://opendata2.met.ie/opendata2/sea_area_polys/sea-areas.geojson
+# AEMET's Meteoalerta zone delimitation (the coastal zones to 20 NM are one shapefile in it)
+mkdir -p "$D/aemet"
+curl -fsSL -o "$D/aemet/zonas.zip" https://www.aemet.es/documentos/es/eltiempo/prediccion/avisos/plan_meteoalerta/AEMET-meteoalerta-delimitacion-zonas.zip
+unzip -oq "$D/aemet/zonas.zip" -d "$D/aemet"
+# JMA's regional marine forecast areas (地方海上予報区). The zip stores Shift-JIS file names with backslashes: extract
+# with Python's zipfile and keep the three files as jma/marine.{shp,dbf,shx}.
+mkdir -p "$D/jma"
+curl -fsSL -o "$D/jma/marine.zip" https://www.data.jma.go.jp/developer/gis/20190125_AreaMarineAJ_GIS.zip
+python3 -I -c 'import sys,zipfile,os; z=zipfile.ZipFile(sys.argv[1]); [open(os.path.join(sys.argv[2],"marine"+os.path.splitext(n)[1].lower()),"wb").write(z.read(n)) for n in z.namelist() if os.path.splitext(n)[1].lower() in (".shp",".dbf",".shx")]' "$D/jma/marine.zip" "$D/jma"
