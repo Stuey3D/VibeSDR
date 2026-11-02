@@ -2448,7 +2448,9 @@ int main(int argc, char** argv) {
                 //    direct sampling on or automatic (the same rule as the mode's own capability, vsNdbReach).
                 const bool rtlLike = r.driver != "airspyhf" && r.driver != "sdrplay" && r.driver != "icom" && r.driver != "hackrf" && r.driver != "airspy";
                 const bool ndbOk = r.driver == "airspyhf" || r.driver == "sdrplay" || (rtlLike && (r.autoDirectSampling || r.directSampling > 0));
-                if (!parsed || !vibe::bg::validate(bc, rate, be, cap, locked ? r.lockFreq : 0, ismOk, ndbOk)) {
+                // ★★ V12 2026-11-02: an AIS profile only where the radio reaches 162 MHz (vsAisReach: not an HF+, not an Icom)
+                const bool aisOk = r.driver != "airspyhf" && r.driver != "icom";
+                if (!parsed || !vibe::bg::validate(bc, rate, be, cap, locked ? r.lockFreq : 0, ismOk, ndbOk, aisOk)) {
                     err = (r.label.empty() ? r.driver : r.label) + " \xe2\x80\x94 " + be;
                     return false;
                 }

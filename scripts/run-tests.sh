@@ -166,7 +166,7 @@ flags_for() {
     # ★★ V12 ISM (vibe_ism*.h): every protocol on its source's worked examples, then encoded from the published specs into
     #    noisy IQ at 1–10 MS/s through the real front end; drift, SNR, pure noise, the privacy rule on the JSON, a CPU row.
     test-ism)              echo "-O2 -lpthread" ;;
-    test-ais|test-aprs)    echo "-O2 -lpthread" ;;
+    test-ais|test-aprs|test-ais-store) echo "-O2 -lpthread" ;;
     # ★★ V12 ISM IN THE GALLERY (vibe_ism_gallery.h, 2026-10-25): the day's log (the line, the RAM buffer, the fold, parts),
     #    the summary card, one file per UTC day per band, a restart, the privacy rule in every file, the ISM profile config.
     test-ism-gallery)      echo "-O2 -lpthread" ;;
@@ -353,7 +353,7 @@ deps_for() {
     test-sstv-quality)  echo "$VDSP/ddc.cpp android/app/src/main/cpp/decoders/sstv_decoder.cpp" ;;   # ★ ddc: the host carries APRS (V12)
     # ★★ V12 AIS + APRS (docs/v12/AIS-APRS.md): published worked examples, every message type, the modems at many SNRs,
     #    ten minutes of noise per modem with zero frames. The vibedsp FIR/NCO (NEON / SSE2) are what they run on.
-    test-ais|test-aprs) echo "$VDSP/ddc.cpp" ;;
+    test-ais|test-aprs|test-ais-store) echo "$VDSP/ddc.cpp" ;;
     test-wefax-phasing) echo "android/app/src/main/cpp/decoders/wefax_decoder.cpp" ;;
     test-drm|test-drm-signal) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp" ;;   # ★ pffft + kiss from cobjs_for
     test-drm-faad) echo "android/app/src/main/cpp/decoders/drm/drm_receiver.cpp $VDSP/fft.cpp $FAAD_LIB $XAAC_LIB" ;;

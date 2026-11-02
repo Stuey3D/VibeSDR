@@ -16,6 +16,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -61,6 +62,7 @@ struct Vessel {
     struct Pt { double t, lat, lon; };
     std::deque<Pt> trail;
     std::string logLine, loggedName; double loggedAt = -1e9;
+    double storedAt = -1, storedTrailT = -1;   ///< ★ V12 the ship store (vibe_ais_store.h): what was last handed to it
 };
 
 inline std::string displayName(const Vessel& v) {
@@ -119,13 +121,24 @@ public:
         queue_.clear(); queued_ = 0; dropped_ = 0;
         if (!keepList) { t0_ = std::chrono::steady_clock::now(); ships_.clear(); msgs_ = 0; perCh_[0] = perCh_[1] = 0; repaired_ = 0; other_ = 0; safety_.clear(); rateWin_.clear(); }
         cap_.reset(rateHz, now());
+        storeLast_ = now();
         run_ = true;
         worker_ = std::thread([this] { loop(); });
     }
+    /** ★★ V12 2026-11-02 THE SHIP STORE (vibe_ais_store.h): every kStoreEverySec, and when AIS stops, the ships that
+     *  changed since the last hand-over are COPIED out (the state and the trail points since) and given to `fn` with
+     *  the service's lock RELEASED — the disk write never holds up feed() (the DSP thread). Null = no store (the owner
+     *  keeps no gallery, or switched the ship store off). Set before start(). */
+    using StoreFn = std::function<void(std::vector<Vessel>&& changed, double svcNow)>;
+    static constexpr double kStoreEverySec = 30;
+    void setStore(StoreFn fn) { std::lock_guard<std::mutex> lk(mtx_); storeFn_ = std::move(fn); storeLast_ = now(); }
+    /** ★ For tests: hand over now. */
+    void flushStoreForTest() { flushStore_(); }
     void stop() {
         { std::lock_guard<std::mutex> lk(mtx_); if (!run_) return; run_ = false; }
         cv_.notify_all();
         if (worker_.joinable()) worker_.join();
+        flushStore_();
         std::shared_ptr<vibestation::Sink> s;
         { std::lock_guard<std::mutex> lk(mtx_); s.swap(sink_); }
         if (s) s->finish();
@@ -171,7 +184,7 @@ public:
         for (const auto& kv : ships_) v.push_back(&kv.second);
         std::sort(v.begin(), v.end(), [](const Vessel* a, const Vessel* c) { return a->last > c->last; });
         bool first = true;
-        for (const Vessel* s : v) { if (!first) o += ','; first = false; vesselJson_(*s, t, o); }
+        for (const Vessel* s : v) { if (!first) o += ','; first = false; vesselJson(*s, t, o); }
         o += "],\"safety\":[";
         for (size_t i = 0; i < safety_.size(); ++i) {
             if (i) o += ',';
@@ -234,8 +247,34 @@ private:
                     health_.clipFrac = clipSeen_ ? double(clipN_) / double(clipSeen_) : 0; clipN_ = clipSeen_ = 0;
                 }
                 prune_(t);
+                if (storeFn_ && t - storeLast_ >= kStoreEverySec) { lk.unlock(); flushStore_(); lk.lock(); }
             }
         }
+    }
+    /** The changed ships out to the store — copied under the lock, written without it. */
+    void flushStore_() {
+        StoreFn fn; std::vector<Vessel> out; double t;
+        {
+            std::lock_guard<std::mutex> lk(mtx_);
+            if (!storeFn_) return;
+            fn = storeFn_; t = now(); storeLast_ = t;
+            for (auto& kv : ships_) {
+                Vessel& v = kv.second;
+                if (v.last <= v.storedAt) continue;
+                Vessel c;   // ★ the state without the hour-long trail: only the points since the last hand-over
+                c.mmsi = v.mmsi; c.kind = v.kind; c.name = v.name; c.callsign = v.callsign; c.dest = v.dest; c.imo = v.imo;
+                c.shipType = v.shipType; c.nav = v.nav; c.heading = v.heading; c.rot = v.rot; c.atonType = v.atonType; c.altM = v.altM;
+                c.lat = v.lat; c.lon = v.lon; c.sog = v.sog; c.cog = v.cog; c.draught = v.draught;
+                c.bow = v.bow; c.stern = v.stern; c.port = v.port; c.stbd = v.stbd;
+                c.etaMonth = v.etaMonth; c.etaDay = v.etaDay; c.etaHour = v.etaHour; c.etaMin = v.etaMin;
+                c.virt = v.virt; c.offPos = v.offPos; c.first = v.first; c.last = v.last; c.posAt = v.posAt; c.count = v.count; c.ch = v.ch;
+                for (const auto& p : v.trail) if (p.t > v.storedTrailT) c.trail.push_back(p);
+                if (!v.trail.empty()) v.storedTrailT = v.trail.back().t;
+                v.storedAt = v.last;
+                out.push_back(std::move(c));
+            }
+        }
+        if (!out.empty()) fn(std::move(out), t);
     }
 
     void accept_(int ch, const RawFrame& f, double t, std::vector<vibestation::Heard>* heard = nullptr) {
@@ -326,7 +365,9 @@ private:
             ships_.erase(old);
         }
     }
-    static void vesselJson_(const Vessel& v, double t, std::string& o) {
+public:
+    /** One vessel in the report's shape (also the ship store's — vibe_ais_store.h toJson). */
+    static void vesselJson(const Vessel& v, double t, std::string& o) {
         o += "{\"mmsi\":" + std::to_string(v.mmsi) + ",\"kind\":\"" + v.kind + "\"";
         auto str = [&](const char* k, const std::string& s) { if (!s.empty()) { o += ",\""; o += k; o += "\":\"" + jsonEsc(s) + "\""; } };
         auto num = [&](const char* k, double x, int dp) { if (x == x) { o += ",\""; o += k; o += "\":" + fmtNum(x, dp); } };
@@ -352,6 +393,7 @@ private:
                       v.ch ? "B" : "A", v.level, v.snr, t - v.last, t - v.first, v.posAt >= 0 ? t - v.posAt : -1.0, v.count, v.trail.size());
         o += b;
     }
+private:
 
     struct Safety { double t; uint32_t mmsi; std::string name, text; uint32_t to; };
     std::mutex mtx_;
@@ -372,6 +414,8 @@ private:
     std::vector<Safety> safety_;
     Health health_;
     std::shared_ptr<vibestation::Sink> sink_;
+    StoreFn storeFn_;
+    double storeLast_ = 0;
 };
 
 /** ★ AIS's gain: ISM's rule — start 60 % up the radio's own list, step down when the capture clips, back up after two
