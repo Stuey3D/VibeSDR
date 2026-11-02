@@ -41,9 +41,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config file ca-certificates curl bzip2 \
       libncursesw5-dev \
       dpkg-dev apt-utils gnupg git rsync xz-utils \
-      python3-minimal \
+      python3-minimal python3-mako unzip \
       sdcc \
     && rm -rf /var/lib/apt/lists/*
+# ★★ python3-mako + unzip BUILD THE USRP DRIVER (V12, 2026-11-02 — build-uhd.sh, docs/v12/USRP.md): UHD generates
+#    source with Mako at configure time, and the B2xx images arrive as zip archives. Host tools only; nothing of
+#    either reaches the package. Without mako UHD's configure turns its library OFF and the amd64 / arm64 build stops.
 # ★★ python3-minimal IS NOT OPTIONAL SCENERY: scripts/build-mapdata-deb.sh reads the map data's own
 #    index.json to decide what goes in the optional detail package. bookworm-SLIM has no python3 and
 #    no jq, and a package list parsed with grep is exactly the thing that ships a dataset missing a
@@ -66,7 +69,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   takes EVERY path from it (VIBE_LINUX_DEPS) — a missing file is a configure error, not a fallback.
 # ★ Same versions as vibeserver/mac/build-deps.sh, verified inside the script (SHA-256 for the
 #   tarballs, the full commit for rtl-sdr, the V4L strings, no udev symbols).
-COPY build-deps.sh build-libxaac.sh librtlsdr-cancel-wait.patch /opt/
+COPY build-deps.sh build-libxaac.sh build-uhd.sh librtlsdr-cancel-wait.patch /opt/
 COPY faad2-patches /opt/faad2-patches
 COPY xaac-patches /opt/xaac-patches
 # ★ Two compile jobs, niced: the Mac overheats and the Lenovo is a live receiver.

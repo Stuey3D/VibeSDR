@@ -12,7 +12,7 @@ RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-i
       build-essential crossbuild-essential-arm64 cmake pkg-config file ca-certificates curl \
       libncursesw5-dev:arm64 libc6:arm64 bzip2 \
       dpkg-dev apt-utils gnupg git rsync xz-utils binutils-aarch64-linux-gnu \
-      sdcc \
+      sdcc python3-mako unzip \
     && rm -rf /var/lib/apt/lists/*
 # ★★★ sdcc BUILDS THE RSP BRIDGE FIRMWARE (OpenRSP, 2026-10-21): vendor/openrsp/firmware/src is 8051 C,
 #     compiled here into the three images the bundled RSP service uploads. A host tool, architecture-free;
@@ -20,7 +20,7 @@ RUN dpkg --add-architecture arm64 && apt-get update && apt-get install -y --no-i
 #     byte for byte (SHA-256 checked against openrsp_3.15.2-20_arm64.deb).
 # ★★ The SDRplay headers are NO LONGER STAGED here: the API headers are OpenRSP's, in vendor/openrsp/include.
 COPY arm64-toolchain.cmake /opt/arm64-toolchain.cmake
-COPY build-deps.sh build-libxaac.sh librtlsdr-cancel-wait.patch /opt/
+COPY build-deps.sh build-libxaac.sh build-uhd.sh librtlsdr-cancel-wait.patch /opt/
 COPY faad2-patches /opt/faad2-patches
 COPY xaac-patches /opt/xaac-patches
 # ★ Two compile jobs, niced: the Lenovo is a live receiver (build-debs-remote.sh passes DEPS_NICE=19).

@@ -705,6 +705,89 @@ else()
   message(STATUS "libhackrf: not found — building without HackRF support")
 endif()
 
+# ── UHD: Ettus USRP B200 / B210 / B200mini / B205mini (EXPERIMENTAL, V12 2026-11-02 — docs/v12/USRP.md) ────────
+# ★★★ PLUG AND PLAY (Stuart): nothing to install beside VibeServer — no uhd-host, no uhd_images_downloader, no
+#     SoapySDR. linux/build-uhd.sh (run by linux/ and mac/build-deps.sh) builds UHD 4.9.0.1 with every device but
+#     the B2xx compiled out, STATIC, plus the Boost subset it needs, and fetches the B2xx firmware + FPGA images
+#     pinned to that release's manifest. They are linked in / shipped here.
+# ★★★ HIGH-END HOSTS ONLY (Stuart, 2026-11-02): Linux x86-64, Linux aarch64 and the Mac (arm64). NOT armhf / ARMv6
+#     (a Pi 2 is far below what a B2xx's rates need) and NOT i386 — keyed on the POINTER SIZE as well as the
+#     processor, because the i386 package is built in a container whose uname still says x86_64 (see VIBE_X86_32).
+#     Off those three, usrp_source.h compiles to its inline stub: zero devices, nothing offered, no dead control.
+# ★★ WHOLE-ARCHIVE. UHD registers each device driver from a static initialiser in b200_impl.cpp that nothing
+#    references by name, so a plain static link silently drops the B2xx driver and every find() returns nothing.
+#    --whole-archive (Linux) / -force_load (macOS) keeps it; the archive holds only B2xx code, so nothing else rides.
+# ★★ ONLY usrp_source.cpp SEES UHD's AND BOOST's HEADERS (a source-file include path, not the core's): 180 MB of
+#    Boost on every translation unit's search path is how an unrelated file ends up including the wrong header.
+set(VIBE_UHD_PREFIX "" CACHE PATH "UHD prefix from linux/build-uhd.sh (default: <deps prefix>/uhd, or the Mac's deps/uhd)")
+set(_usrp_arch_ok FALSE)
+if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND (APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|aarch64|arm64)$")
+  set(_usrp_arch_ok TRUE)
+endif()
+if(APPLE AND CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+  set(_usrp_arch_ok FALSE)   # ★ the Mac app is arm64 only (build-app.sh); UHD is built for that alone
+endif()
+set(_uhd "${VIBE_UHD_PREFIX}")
+if(NOT _uhd AND VIBE_LINUX_SELFCONTAINED)
+  set(_uhd "${VIBE_LINUX_DEPS}/uhd")
+elseif(NOT _uhd AND APPLE AND VIBE_MAC_DEPS)
+  get_filename_component(_uhd "${VIBE_MAC_DEPS}/../uhd" ABSOLUTE)
+endif()
+set(VIBE_UHD_LINK "" CACHE STRING "" FORCE)   # ★ build-app.sh reads this: the Swift app's link line is hand-written
+if(_usrp_arch_ok AND _uhd AND EXISTS "${_uhd}/lib/libuhd.a")
+  message(STATUS "UHD (USRP B2xx, EXPERIMENTAL): ${_uhd}")
+  target_sources(vibeserver_core PRIVATE "${CPP_DIR}/usrp_source.cpp")
+  set(_usrp_inc "${_uhd}/include")
+  if(VIBE_DEPS_PREFIX)
+    list(APPEND _usrp_inc "${VIBE_DEPS_PREFIX}/include/libusb-1.0")
+  else()
+    find_path(LIBUSB_INC_USRP libusb.h PATH_SUFFIXES libusb-1.0 HINTS /opt/homebrew/include /usr/local/include /usr/include)
+    list(APPEND _usrp_inc "${LIBUSB_INC_USRP}")
+  endif()
+  set_source_files_properties("${CPP_DIR}/usrp_source.cpp" PROPERTIES INCLUDE_DIRECTORIES "${_usrp_inc}")
+  # ★ PUBLIC: the shim includes usrp_source.h too, and must see the real class rather than the stub.
+  target_compile_definitions(vibeserver_core PUBLIC VIBE_HAVE_USRP)
+  if(APPLE)
+    set_source_files_properties("${CPP_DIR}/usrp_source.cpp" PROPERTIES COMPILE_DEFINITIONS "VIBE_UHD_IMAGES_DIR=\"\"")
+  else()
+    set_source_files_properties("${CPP_DIR}/usrp_source.cpp" PROPERTIES
+        COMPILE_DEFINITIONS "VIBE_UHD_IMAGES_DIR=\"${CMAKE_INSTALL_PREFIX}/share/vibeserver/uhd-images\"")
+  endif()
+  set(_uhd_boost "")
+  foreach(_b filesystem thread chrono date_time serialization program_options atomic)
+    if(NOT EXISTS "${_uhd}/lib/libboost_${_b}.a")
+      message(FATAL_ERROR "${_uhd} has no lib/libboost_${_b}.a — rebuild it (linux/build-uhd.sh)")
+    endif()
+    list(APPEND _uhd_boost "${_uhd}/lib/libboost_${_b}.a")
+  endforeach()
+  if(APPLE)
+    target_link_libraries(vibeserver_core PUBLIC "-Wl,-force_load,${_uhd}/lib/libuhd.a" ${_uhd_boost})
+    set(VIBE_UHD_LINK "-Xlinker;-force_load;-Xlinker;${_uhd}/lib/libuhd.a;${_uhd_boost}" CACHE STRING "" FORCE)
+  else()
+    target_link_libraries(vibeserver_core PUBLIC
+        "-Wl,--whole-archive" "${_uhd}/lib/libuhd.a" "-Wl,--no-whole-archive" ${_uhd_boost} ${CMAKE_DL_LIBS})
+  endif()
+  # ★★ THE IMAGES AND THEIR LICENCES TRAVEL WITH THE PACKAGE (Linux; build-app.sh copies them into the Mac app).
+  if(UNIX AND NOT APPLE)
+    file(GLOB _uhd_images "${_uhd}/images/*")
+    install(FILES ${_uhd_images} DESTINATION share/vibeserver/uhd-images)
+    foreach(_l LICENSE.uhd LICENSE.uhd-fpga LICENSE_1_0.txt.boost IMAGES.txt)
+      if(EXISTS "${_uhd}/share/licences/${_l}")
+        install(FILES "${_uhd}/share/licences/${_l}" DESTINATION share/doc/vibeserver)
+      endif()
+    endforeach()
+  endif()
+elseif(_usrp_arch_ok AND VIBESERVER_STRICT_RADIOS AND (VIBE_LINUX_SELFCONTAINED OR (APPLE AND VIBE_MAC_DEPS)))
+  # ★★★ Same guard as the HackRF: the one volunteer who can test a USRP cannot tell a missing driver from a broken one.
+  message(FATAL_ERROR "No UHD at '${_uhd}' (lib/libuhd.a), and VIBESERVER_STRICT_RADIOS is on — this host class ships "
+                      "USRP support. Rebuild the deps (linux/build-deps.sh, or mac/build-deps.sh).")
+elseif(_usrp_arch_ok)
+  message(STATUS "UHD: not found — building without USRP support (dev build; -DVIBE_UHD_PREFIX=<prefix> to add it)")
+else()
+  message(STATUS "UHD: not built for this architecture — USRP support is amd64 / arm64 / Mac only")
+endif()
+
 find_library(AIRSPYHF_LIB NAMES airspyhf libairspyhf.a HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 find_path(AIRSPYHF_INC libairspyhf/airspyhf.h HINTS /opt/homebrew/include /usr/local/include /usr/include)
 if(AIRSPYHF_VENDORED)

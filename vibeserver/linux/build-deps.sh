@@ -6,6 +6,7 @@
 # Run inside the build images (Dockerfile.build, Dockerfile.cross-armhf, Dockerfile.cross-arm64). Output:
 #   <prefix>/lib/{libusb-1.0.a,libopus.a,librtlsdr.a,libfaad_drm.a,libfaad_dab.a,libxaacdec.a}
 #   <prefix>/include/{libusb-1.0/libusb.h,opus/*.h,rtl-sdr.h,rtl-sdr_export.h}
+#   <prefix>/uhd/{lib,include,images,share}  UHD (USRP B2xx) + Boost + the B2xx images — amd64 / arm64 only (build-uhd.sh)
 #   <prefix>/BUILT-FROM                  what went in, one line per library
 # — the same layout vibeserver/mac/build-deps.sh produces, so CMake treats the two prefixes alike.
 #
@@ -56,7 +57,7 @@ XAAC_SHA=f467a6e5bcf3941ce5d1a4d811442835fba7eb3744ae986f3ea37e110584b611   # = 
 HOSTOPT=(); CMAKE_TC=(); OPUS_EXTRA=()
 case "$PROFILE" in
   native)
-    export CC=gcc AR=ar RANLIB=ranlib NM=nm
+    export CC=gcc CXX=g++ AR=ar RANLIB=ranlib NM=nm
     case "$(dpkg --print-architecture)" in
       # ★ The i386 package's SSE2 floor — VIBE_X86_32_FLAGS' default in CMakeLists.txt. Debian's i386
       #   compiler would otherwise build x87 floating point, slower AND not what the binary assumes.
@@ -89,7 +90,7 @@ case "$PROFILE" in
     # ★★ arm64 CROSS from the Lenovo's amd64 container (2026-10-18) — arm64-toolchain.cmake. NO arch flags:
     #    the native arm64 build had none, so this is Debian's armv8-a default exactly as before (the
     #    Cortex-A53 floor). Opus's configure finds aarch64 NEON intrinsics the same way it did natively.
-    export CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar RANLIB=aarch64-linux-gnu-ranlib NM=aarch64-linux-gnu-nm
+    export CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ AR=aarch64-linux-gnu-ar RANLIB=aarch64-linux-gnu-ranlib NM=aarch64-linux-gnu-nm
     ARCHFLAGS=""
     HOSTOPT=(--host=aarch64-linux-gnu)
     CMAKE_TC=(-DCMAKE_TOOLCHAIN_FILE=/opt/arm64-toolchain.cmake)
@@ -278,6 +279,26 @@ ASCC="$XAAC_ASCC" bash "$(cd "$(dirname "$0")" && pwd)/build-libxaac.sh" "$WORK/
   || { tail -30 "$WORK/xaac.log"; echo "!! libxaac build failed"; exit 1; }
 tail -1 "$WORK/xaac.log"
 
+# ── UHD 4.9.0.1 (Ettus USRP B2xx only) + Boost 1.83 subset + the B2xx images — V12, docs/v12/USRP.md ────────────
+# ★★★ HIGH-END ONLY (Stuart, 2026-11-02): amd64 and arm64. NOT armhf / ARMv6 (a Pi 2 cannot carry a B2xx's rates and
+#     USB 3 is what the radio needs) and NOT i386 — there the package simply has no USRP support, and
+#     CMakeLists.txt compiles none (no prefix/uhd = no USRP source, no control offered).
+# ★★ Plug and play: libuhd.a and the images go into $PREFIX/uhd; CMakeLists.txt links the one and installs the other
+#    to /usr/share/vibeserver/uhd-images — compiled into libuhd as its images directory too. Nothing is downloaded
+#    on an owner's machine. See build-uhd.sh for the pins (source, Boost and every image SHA-256-checked).
+UHD_BUILT=""
+UHD_ARCH="$PROFILE"; [ "$PROFILE" = native ] && UHD_ARCH="$(dpkg --print-architecture)"
+case "$UHD_ARCH" in
+  amd64|arm64)
+    UHD_TC=""; [ "$PROFILE" = arm64 ] && UHD_TC="-DCMAKE_TOOLCHAIN_FILE=/opt/arm64-toolchain.cmake"
+    CXXFLAGS="-O2 $ARCHFLAGS" UHD_B2_TOOLSET=gcc UHD_CMAKE_TC="$UHD_TC" JOBS="$JOBS" \
+      bash "$(cd "$(dirname "$0")" && pwd)/build-uhd.sh" "$WORK/uhd-cache" "$PREFIX" "$PREFIX/uhd" /usr/share/vibeserver/uhd-images \
+      >"$WORK/uhd.log" 2>&1 || { tail -40 "$WORK/uhd.log"; echo "!! UHD build failed"; exit 1; }
+    tail -1 "$WORK/uhd.log"
+    UHD_BUILT="$(head -1 "$PREFIX/uhd/BUILT-FROM")" ;;
+  *) echo "==> UHD: not built for $UHD_ARCH (USRP is amd64 / arm64 only)" ;;
+esac
+
 # ── every object for the architecture the profile promises ───────────────────────────────────
 X="$WORK/x"; mkdir -p "$X"
 for a in libusb-1.0 libopus librtlsdr libfaad_drm libfaad_dab libxaacdec; do
@@ -292,6 +313,12 @@ for a in libusb-1.0 libopus librtlsdr libfaad_drm libfaad_dab libxaacdec; do
     done
   fi
 done
+# ★ And libuhd.a, where it was built — the cross arm64 profile must not have produced host objects.
+if [ -n "$UHD_BUILT" ] && [ -n "$WANT_FILE" ]; then
+  rm -rf "$X"/*; ( cd "$X" && "$AR" x "$PREFIX/uhd/lib/libuhd.a" )
+  bad="$(file "$X"/*.o | count -v "$WANT_FILE")"
+  [ "$bad" -eq 0 ] || { echo "!! libuhd.a: $bad objects are not $WANT_FILE"; exit 1; }
+fi
 
 { echo "libusb $USB_VER sha256 $USB_SHA (no udev)"
   echo "libopus $OPUS_VER sha256 $OPUS_SHA ${OPUS_EXTRA[*]}"
@@ -299,6 +326,7 @@ done
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_drm, float, GPL-2.0-or-later; VibeSDR patches:${FAAD_SERIES:- none})"
   echo "faad2 $FAAD_VER sha256 $FAAD_SHA (libfaad_dab: the plain build, globals prefixed vibedab_, float, GPL-2.0-or-later; $FAAD_DAB_OPT; VibeSDR patches:${FAAD_SERIES:- none})"
   echo "libxaac $XAAC_VER sha256 $XAAC_SHA (decoder only, $XAAC_VARIANT code path, Apache-2.0; VibeSDR patches: $XAAC_PATCH_LIST)"
+  [ -z "$UHD_BUILT" ] || echo "$UHD_BUILT"
   echo "profile $PROFILE, CFLAGS '$CFLAGS', $CCVER"; } > "$PREFIX/BUILT-FROM"
 ls -l "$PREFIX/lib"
 echo "==> deps ($PROFILE): done"
