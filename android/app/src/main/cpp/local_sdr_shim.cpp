@@ -19,6 +19,7 @@
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
 #include "airspy_source.h"
+#include "usrp_source.h"   // ★ V12: Ettus USRP B2xx — the header's inline stub on every build without UHD
 
 // Android builds the USB/librtlsdr local-hardware path; iOS builds only the
 // RTL-TCP path (no USB host SDR on iOS). The USB code stays compiled on iOS via a
@@ -6413,6 +6414,10 @@ struct LocalSdrShim::Impl {
     /** ★ Airspy R2 / Mini — a different library from the HF+ above (see airspy_source.h). */
     std::unique_ptr<vibe::AirspySource> asp;
     int aspIndex = -1;
+    /** ★ V12: Ettus USRP B2xx — EXPERIMENTAL, desktop amd64/arm64/Mac only (usrp_source.h). One gain element, the
+     *  AD9361's own AGC as AUTO, RX ports as an antenna list. Last everywhere, like every driver added after the first. */
+    std::unique_ptr<vibe::UsrpSource> usrp;
+    int usrpIndex = 0;
     int  sdrpIndex = 0;
     int  ahfIndex  = 0;
     int  hrfIndex  = 0;
@@ -6484,6 +6489,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     bool useAirspyHf() const { return (bool)ahf; }
     bool useHackRf()   const { return (bool)hrf; }
     bool useAirspy()   const { return (bool)asp; }
+    bool useUsrp()     const { return (bool)usrp; }
     // ── ★★★ ICOM (driver "icom", receive only) ─────────────────────────────────────────────
     // ★★ NOT IN anySource(), DELIBERATELY. That guard opens the IQ setters (rate, gain, direct
     //    sampling …) and every one of them would then fall to "else means dongle" against a radio
@@ -6519,7 +6525,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  ★ `dev` last, because it is the one that is NOT a smart pointer and reads as "a dongle". */
     bool anySource() const {
         return useSpy() || useTcp() || useSdrplay() || useAirspyHf()
-            || useHackRf() || useAirspy() || (bool)dev;
+            || useHackRf() || useAirspy() || useUsrp() || (bool)dev;
     }
     std::vector<int> spyGains;             // device gain table (tenths dB)
     int lastGainTenthDb = -1;              // re-applied across a stream restart
@@ -7165,6 +7171,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          * ★★ Re-try only after auditing every reader of hwOffsetHz for driver assumptions. The
          *    failure is silent on a waterfall — the peak is still drawn in the right place. */
         if (useHackRf()) return HW_OFFSET_HACKRF_HZ;
+        /* ★ V12: A USRP B2xx IS DIRECT CONVERSION TOO (the AD9361 is zero-IF). Its own DC tracking takes most of the
+         *  LO leakage out, but a residual spike at the centre is the usual B2xx picture, so it gets the HackRF's guard:
+         *  250 kHz clears a WFM channel, and the slowest rate offered (1 MS/s) still leaves it inside the span.
+         *  REASONED, NOT MEASURED — no B2xx here; this constant is the one thing to change. */
+        if (useUsrp()) return HW_OFFSET_HACKRF_HZ;
         /* ★★ AN RTL_TCP DONGLE HAS THE SAME DC SPIKE AS A USB ONE (Stuart, 2026-10-27: "Can you apply the offset for
          *  RTL_tcp too please"). rtl_tcp only moves the dongle's samples over the network; the tuner, its LO leakage and
          *  the spike are the same, so it gets the same 15 kHz. Until now it had none, and a listener with the VFO Centre
@@ -7988,6 +7999,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else if (useAirspyHf()) ahf->setFrequency((double)hz);
         else if (useHackRf())   hrf->setFrequency((double)hz);
         else if (useAirspy())   asp->setFrequency((double)hz);
+        else if (useUsrp())     usrp->setFrequency((double)hz);
         // ★★★ HANDED OFF, NOT PERFORMED. This runs under modeMtx (see above, and
         //     flushPendingDongle() which calls it from the DSP loop itself), so doing the control
         //     transfer here blocked demodulation for its whole duration. Everything the rest of
@@ -10399,6 +10411,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (!out.empty()) return out;
             }
             return "";
+        }
+        /* ★ V12: AND THE USRP B2xx — its own list (vibe_usrp_caps.h: capped by the USB link the radio reports), never
+         *  the dongle's below. Descending, like every other list here. */
+        if (useUsrp()) {
+            const auto& rl = usrp->sampleRates();
+            std::string out;
+            for (size_t i = rl.size(); i-- > 0; ) { if (!out.empty()) out += ","; out += std::to_string(rl[i]); }
+            return out;
         }
         /* ★ 2 048 000 ADDED (2026-09-08). It was never offered for the RTL "for some reason"
          *  (Stuart) — and it is the one rate that lets the DAB question be MEASURED: whether the
@@ -20518,6 +20538,13 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             for (size_t i = rl.size(); i-- > 0; ) out.push_back((double)rl[i]);
             return out;
         }
+        /* ★ V12: the USRP B2xx's own list — the SAME vector supportedRatesImpl() reads (one fact, two audiences). */
+        if (useUsrp()) {
+            std::vector<double> out;
+            const auto& rl = usrp->sampleRates();
+            for (size_t i = rl.size(); i-- > 0; ) out.push_back((double)rl[i]);
+            return out;
+        }
         /* ★ 2 048 000 is here to MATCH supportedRatesImpl(), which has offered it since 2026-09-08
          *  ("it was never offered for the RTL for some reason" — Stuart) and is the rate that lets
          *  the DAB question be measured. The two lists had drifted; see the note there. */
@@ -22186,9 +22213,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const bool hf  = !noRadio && LocalSdrShim::instance().isAirspyHf();
             const bool hrf = !noRadio && LocalSdrShim::instance().isHackRf();
             const bool asp = !noRadio && LocalSdrShim::instance().isAirspy();   // ★ R2/Mini: was reported "rtl" (2026-09-28)
+            const bool usr = !noRadio && LocalSdrShim::instance().isUsrp();     // ★ V12 USRP B2xx — named, never "rtl"
             const bool lost = noRadio || deviceLost.load();
             std::string j = std::string("{\"driver\":\"")
-                          + (lost ? "none" : useIcom() ? "icom" : rsp ? "sdrplay" : hf ? "airspyhf" : hrf ? "hackrf" : asp ? "airspy" : "rtl")
+                          + (lost ? "none" : useIcom() ? "icom" : rsp ? "sdrplay" : hf ? "airspyhf" : hrf ? "hackrf" : asp ? "airspy" : usr ? "usrp" : "rtl")
                           + "\",\"present\":" + (lost ? "false" : "true")
                           + ",\"rates\":[" + supportedRates() + "]"
                           // ★ What the dongle calls itself, so the setup page can warn that a
@@ -22241,6 +22269,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
              *     (`radio`, radioCapsJson — one writer for both), so the page shows each control only on the models
              *     that have it, with its current state, and the antenna card gets its list of ports. */
             if (rsp && !lost) j += LocalSdrShim::instance().radioCapsJson();
+            // ★ V12: and the USRP's — its RX-port list (antennas) and tuning range, for the page's antenna card.
+            else if (usr && !lost) j += LocalSdrShim::instance().radioCapsJson();
             j += ",\"bands\":[";
             {
                 const auto& bs = vibebands::namedBands();
@@ -29051,6 +29081,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
          *    queue and the DSP never parked. Same treatment as the HF+ and the HackRF: keep the
          *    stream, drop the buffers at the source (which still stamps liveness for the watchdog). */
         else if (useAirspy())   { asp->setPaused(true); }
+        else if (useUsrp())     { usrp->setPaused(true); }   // ★ V12 USRP: the same — keep the stream, drop at the source
         else {
             // ★★★ THE DONGLE IS NO LONGER STOPPED — IT IS IGNORED. Cancelling the async
             // stream and restarting it is what crashed the server, and the "fix" below was
@@ -30749,6 +30780,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         else if (useAirspyHf()) { ahf->setPaused(false); }
         else if (useHackRf())   { hrf->setPaused(false); }
         else if (useAirspy())   { asp->setPaused(false); }   // ★ see pauseCaptureIdle
+        else if (useUsrp())     { usrp->setPaused(false); }  // ★ V12 USRP
         else          { idleDiscard.store(false); }   // never stopped; just start wanting it again
         // ★★ AND RESET THE DSP. Restarting the capture alone leaves every recursive
         // state holding values from before the pause — filters, the pilot PLL, and the
@@ -32125,6 +32157,11 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     const double age = asp->secondsSinceLastRx();
                     if (age < 1e8) last = std::max(last, nowSecs() - age);
                 }
+                // ★ V12: and the USRP B2xx — idle-parked at the source as well.
+                if (useUsrp() && usrp) {
+                    const double age = usrp->secondsSinceLastRx();
+                    if (age < 1e8) last = std::max(last, nowSecs() - age);
+                }
                 /* ★★ A RADIO BEING RETUNED IS ALLOWED A LONGER PAUSE. 3 s of silence is the
                  *    unplugged-dongle figure; an RSP that had a tuner write inside the last 3 s
                  *    gets 8 s before it is called stalled, so a block-stepping burst is never
@@ -32247,7 +32284,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                           || (useHackRf() && hrf)
                                           // ★ And the R2 / Mini: its own source object, its own
                                           //   stop/start, nothing of librtlsdr's.
-                                          || (useAirspy() && asp));
+                                          || (useAirspy() && asp)
+                                          // ★ V12: and the USRP B2xx — its own stop/start/reopen below.
+                                          || (useUsrp() && usrp));
                 if (recoverable) {
                     /* ★★★ NEVER TWO STREAM RESTARTS INSIDE TEN SECONDS. 2026-09-15 19:48 on the
                      *     Lenovo: a block-stepping burst (13 multiplexes in 8 s) stalled the RSP,
@@ -32307,6 +32346,27 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                  deep ? "reopening the device" : "re-initialising the stream",
                                  srcRestarts);
                             ok = deep ? sdrp->reopen(rerr) : sdrp->restartStream(rerr);
+                        } else if (useUsrp() && usrp) {
+                            /* ★ V12 USRP B2xx — the HackRF's escalation, named rather than left to fall into "the rest":
+                             *  restart the stream on the handle we hold, then after two goes close and reopen by index
+                             *  (which reloads firmware and FPGA if the radio lost power), putting the gain and the RX port
+                             *  back. Under devMtx then modeMtx, the documented order. Desktop only — no fd path. */
+                            const bool deep = srcRestarts > 2;
+                            std::lock_guard<std::recursive_mutex> dlk(devMtx);
+                            std::lock_guard<std::recursive_mutex> mlk(modeMtx);
+                            const double phys = rtlCenter.load() + hwOffsetHz();
+                            LOGE("no IQ for 3s on a USRP — %s (attempt %d)",
+                                 deep ? "reopening the device" : "restarting the stream", srcRestarts);
+                            usrp->stop();
+                            if (deep) {
+                                const std::string ant = usrp->antenna();
+                                usrp->close();
+                                ok = usrp->open(usrpIndex, sampleRate, phys, lastGainTenthDb, rerr);
+                                if (ok && !ant.empty()) usrp->setAntenna(ant);
+                                ok = ok && usrp->start(rerr);
+                            } else {
+                                ok = usrp->start(rerr);
+                            }
                         } else if ((useHackRf() && hrf) || (useAirspy() && asp)) {
                             /* ★★★ NAMED, NOT "THE REST". The HackRF was admitted to `recoverable`
                              *     above and then fell into the HF+ branch below, which calls
@@ -32436,7 +32496,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *     STATIC at idle on 2026-10-05 with nothing in the log to say why. The other radios park
                  *     at their source and have their own watchdog above; network sources really do stop. */
                 const bool dongle = !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf() && !useHackRf()
-                                    && !useAirspy();
+                                    && !useAirspy() && !useUsrp();
                 const bool expectingIq = !radioReleased.load() && (!captureIdle.load() || dongle);
                 // ★★★ EVERY VISITOR LOOKS LIKE LOCALHOST? THEN SOMETHING IS PROXYING AND WE DO NOT KNOW.
         //     A tunnel or a reverse proxy connects from 127.0.0.1, and loopback is EXEMPT from the
@@ -32512,6 +32572,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                                 // ★ And the R2 / Mini — left to findOurDevice() (librtlsdr), a
                                 //   stalled R2 was declared gone for good.
                                 : useAirspy()   ? (asp  ? !usbFdDead.load() : vibe::AirspySource::deviceCount() > 0)
+                                // ★ V12: and the USRP — its own descriptor walk, never librtlsdr's.
+                                : useUsrp()     ? (usrp ? true : vibe::UsrpSource::deviceCount() > 0)
                                                 : (findOurDevice() >= 0);
                 if (back == deviceLost.load()) {      // state changed
                     deviceLost.store(!back);
@@ -32521,7 +32583,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                  *  usbFdDead. Only a dongle opened from a descriptor ever sets it, so every other source
                  *  passes straight through. The reopen below then waits for Kotlin's fresh fd. */
                 if (!back && !useTcp() && !useSpy() && !useSdrplay() && !useAirspyHf() && !useHackRf()
-                          && !useAirspy())
+                          && !useAirspy() && !useUsrp())
                     releaseDeadUsb();
 
                 // ★★★ AND NOW WE CAN ACTUALLY REOPEN IT. The note above says why this used to be
@@ -33376,6 +33438,15 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
         if (g_dsp.rspAmNotch.load() >= 0)  impl->sdrp->setAmNotch(g_dsp.rspAmNotch.load() != 0);
         if (g_dsp.rspExtRef.load()  >= 0)  impl->sdrp->setExtRefOut(g_dsp.rspExtRef.load() != 0);
     }
+    /* ★ V12 USRP B2xx: the RX port the owner chose (the same remembered `antennaPort` the RSP uses — one setting,
+     *  whichever radio has sockets). A name this radio does not have is refused by UsrpSource, never guessed. */
+    if (impl->useUsrp() && impl->usrp) {
+        std::string ant;
+        { std::lock_guard<std::mutex> lk(g_rspAntMtx); ant = g_rspAntenna; }
+        if (!ant.empty() && !impl->usrp->setAntenna(ant))
+            LOGI("USRP: the saved aerial '%s' is not one of this radio's ports — left on %s", ant.c_str(),
+                 impl->usrp->antenna().empty() ? "its only port" : impl->usrp->antenna().c_str());
+    }
     if (impl->useAirspyHf() && impl->ahf) {
         if (g_dsp.ahfAtt.load()     >= 0) impl->ahf->setAttenuation(g_dsp.ahfAtt.load());
         if (g_dsp.ahfLna.load()     >= 0) impl->ahf->setLna(g_dsp.ahfLna.load() != 0);
@@ -34062,7 +34133,8 @@ std::string LocalSdrShim::adminStatusJson() {
            + ",\"driver\":\"" + (lost ? "none" : isIcom() ? "icom" : isSdrplay() ? "sdrplay"
                                               : isAirspyHf() ? "airspyhf"
                                               : isHackRf()   ? "hackrf"
-                                              : isAirspy()   ? "airspy" : "rtl") + "\"";   // ★ R2/Mini was "rtl" (2026-09-28)
+                                              : isAirspy()   ? "airspy"
+                                              : isUsrp()     ? "usrp" : "rtl") + "\"";   // ★ R2/Mini was "rtl" (2026-09-28)
         // ★★ AND WHAT THE OWNER HAS TO DO ABOUT IT, when only a hand on the cable will fix it (2026-10-05).
         //    The card said "unplugged or has failed" — true, and no help to an owner whose radio is still
         //    plugged in and wedged. Omitted when there is nothing to say.
@@ -35072,7 +35144,8 @@ static vibebands::Ranges vsTunableRanges() {
 
     auto& shim = LocalSdrShim::instance();
     const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf"
-                          : shim.isHackRf() ? "hackrf" : shim.isAirspy() ? "airspy" : "rtl";   // ★ R2/Mini was "rtl" (2026-09-28)
+                          : shim.isHackRf() ? "hackrf" : shim.isAirspy() ? "airspy"
+                          : shim.isUsrp() ? "usrp" : "rtl";   // ★ R2/Mini was "rtl" (2026-09-28)
     const vibebands::Ranges hw = vibebands::driverCoverage(drv);
     if (hw.empty()) return {};
     // ★ vsPermittedRanges returns EMPTY to mean "the owner set no lists", which is the opposite of
@@ -35196,7 +35269,7 @@ static bool vsNdbReach(double& lo, double& hi) {
     if (g_icomOn.load()) return false;
     auto& shim = LocalSdrShim::instance();
     vibebands::Ranges t;
-    const bool rtl = !shim.isSdrplay() && !shim.isAirspyHf() && !shim.isHackRf() && !shim.isAirspy();
+    const bool rtl = !shim.isSdrplay() && !shim.isAirspyHf() && !shim.isHackRf() && !shim.isAirspy() && !shim.isUsrp();
     if (rtl) {
         if (!(g_autoDs.load() || g_dsNow.load() > 0)) return false;
         const vibebands::Ranges hw = { { 0.0, 14.4e6 } };
@@ -36768,6 +36841,83 @@ int LocalSdrShim::startHackRfCommon(int index, int fd,
     return chosen;
 }
 
+/* ── ★ V12: Ettus USRP B2xx (EXPERIMENTAL — usrp_source.h, docs/v12/USRP.md) ───────────────────────────────────
+ * ★★ THE HackRF's LIFECYCLE, line for line (sink before open, engine before start, listener before the accept
+ *    thread), on its own source class — the same reasons apply whatever the radio. Desktop only: no fd path.
+ * ★ The radio decides the rate (nearestRate from the list its USB link allows), and the open tunes to the LOGICAL
+ *   centre + hwOffsetHz(), as every other open does. */
+int LocalSdrShim::startUsrp(int index,
+                            double centerFreq, double sampleRate, int gainTenthDb,
+                            int fftSize, double fftRate, const std::string& mode,
+                            std::string& err) {
+    (void)fftSize;
+    if (!vibe::UsrpSource::compiledIn()) { err = "this VibeServer build has no USRP support (amd64, arm64 and the Mac only)"; return -1; }
+    std::lock_guard<std::mutex> life(g_lifecycle);
+    if (p) { LOGI("stale shim found on USRP start — tearing down"); stopLocked(); }
+    auto* impl = new Impl();
+    impl->fftRate = fftRate;
+    impl->baseFftRate = fftRate;
+    impl->recomputeEngineRate();
+    impl->rtlCenter.store(centerFreq);
+    impl->viewCenter.store(centerFreq);
+    impl->audioFreq.store(centerFreq);
+    impl->mode = mode.empty() ? "wfm" : mode;
+    impl->lastGainTenthDb = gainTenthDb;
+
+    impl->usrp = std::make_unique<vibe::UsrpSource>();
+    Impl* self = impl;
+    // ★ cf32 from UHD's own converter — the float path the HF+ and HackRF use.
+    impl->usrp->setSink([self](const float* iq, int n) {
+        self->lastIqAt.store(Impl::nowSecs(), std::memory_order_relaxed);
+        // ★ UHD's overflow count ('O') is the USB link or the host falling behind: a gap, like libairspy's drops.
+        //   UHD says THAT samples were lost, not how many — so these are holes (events) with no sample count.
+        const uint64_t lost = self->usrp->takeOverflows();
+        if (lost) noteUsbDrop(0, lost);
+        self->enqueueIqFloat(iq, n, /*blockIfFull=*/false, /*gapBefore=*/lost != 0);
+    });
+    const double physCentre = centerFreq + impl->hwOffsetHz();
+    if (!impl->usrp->open(index, sampleRate, physCentre, gainTenthDb, err)) { delete impl; return -1; }
+    impl->usrpIndex = index;
+    impl->sampleRate = (double)impl->usrp->nearestRate(sampleRate);
+    impl->fftSize = fftSizeForRate(impl->sampleRate);
+    impl->startEngine();
+    impl->buildAudio();
+
+    if (!impl->usrp->start(err)) {
+        impl->teardownAudio(); impl->rx.stop();
+        impl->usrp->close(); delete impl; return -1;
+    }
+
+    int chosen = -1;
+    if (int want = g_vsPort.load(); want > 0) {
+        try { impl->listener = net::listen(bindHost(), want); chosen = want; }
+        catch (...) { impl->listener = nullptr; }
+    } else {
+        for (int p2 = 48000; p2 < 48050; p2++) {
+            try { impl->listener = net::listen(bindHost(), p2); chosen = p2; break; }
+            catch (...) { impl->listener = nullptr; }
+        }
+    }
+    if (!impl->listener) {
+        err = g_vsPort.load() > 0
+            ? "port " + std::to_string(g_vsPort.load()) + " is already in use — choose another"
+            : "no free port in 48000-48049";
+        impl->teardownAudio(); impl->rx.stop();
+        impl->usrp->close(); delete impl; return -1;
+    }
+    impl->port = chosen;
+    impl->serverRunning.store(true);
+    impl->acceptThread = std::thread([impl]{ impl->acceptLoop(); });
+    impl->startDspThread();
+
+    p = impl;
+    LocalSdrShim::applyDesiredDsp(impl);   // ★ includes the saved RX port (antennaPort)
+    impl->startHotplugWatch();
+    LOGI("USRP %s started (EXPERIMENTAL): index=%d center=%.0f rate=%.0f usb=%d port=%d",
+         impl->usrp->model().c_str(), index, centerFreq, impl->sampleRate, impl->usrp->usbSpeed(), chosen);
+    return chosen;
+}
+
 /* ── Airspy R2 / Mini ────────────────────────────────────────────────────────────────────────
  * ★★ THE SAME TRIO AS THE HackRF ABOVE, on a different source class (airspy_source.h): the same
  *    lifecycle, the same "tune to centre + offset at OPEN", and the same "the radio decides the
@@ -37542,6 +37692,7 @@ void LocalSdrShim::stopLocked() {
     // ★ Stopped and closed explicitly, in the same place every other source is — the note above
     //   records what leaving it to member-destruction order cost the Airspy.
     if (impl->useHackRf())   { impl->hrf->stop(); impl->hrf->close(); }
+    if (impl->useUsrp())     { impl->usrp->stop(); impl->usrp->close(); }   // ★ V12 USRP, the same rule
     // ★★★ CANCEL, KEEP CANCELLING, AND NEVER WAIT FOR EVER.
     //
     //  ★★★ THE HANG THIS FIXES, measured on the Moto (2026-08-20): the accept thread had gone,
@@ -38095,6 +38246,16 @@ void LocalSdrShim::setGain(int gainTenthDb) {
         p->lastGainTenthDb = gainTenthDb;
         p->sdrp->setGainTenthDb(gainTenthDb);
         LOGI("gain (RSP): %s", gainTenthDb < 0 ? "auto" : std::to_string(gainTenthDb / 10.0).c_str());
+        return;
+    }
+    /* ★ V12 USRP B2xx: one gain element in tenths; negative = the AD9361's own AGC when the radio accepted it at open
+     *  (UsrpSource::hasHwAgc) — otherwise AUTO is not offered at all (hwAgc false in the caps), and a stray -1 is 0 dB.
+     *  VibeAGC is RTL-only and is not wired to this radio (nobody here can listen to it work). */
+    if (p->useUsrp()) {
+        p->lastGainTenthDb = gainTenthDb;
+        p->usrp->setGainTenthDb(gainTenthDb);
+        LOGI("gain (USRP): %s", gainTenthDb < 0 ? (p->usrp->hasHwAgc() ? "the AD9361's AGC" : "0 dB (no AGC on this radio)")
+                                                : std::to_string(gainTenthDb / 10.0).c_str());
         return;
     }
     if (!p->dev) return;
@@ -39889,6 +40050,7 @@ bool LocalSdrShim::releaseRadio() {
      *  stop(), not setPaused(): the device is about to be CLOSED, and libairspy stops by ending
      *  the transfer; reacquireRadio() start()s it again with every setting re-stated (applyAll). */
     const bool asp = impl->useAirspy();
+    const bool usr = impl->useUsrp();   // ★ V12 USRP B2xx — named, or it could not be lent out at all
 
     /* ★★★ AN HF+ OPENED FROM AN ANDROID DESCRIPTOR IS PARKED, NEVER RELEASED (2026-10-05). Releasing
      *     closes it, and the only way back is reacquireRadio()'s ahf->open(ahfIndex) — and ahfIndex is
@@ -39917,6 +40079,7 @@ bool LocalSdrShim::releaseRadio() {
     else if (ahf) impl->ahf->setPaused(true);
     else if (hrf) impl->hrf->setPaused(true);
     else if (asp) impl->asp->stop();
+    else if (usr) impl->usrp->stop();
     else if (impl->dev) { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     joinOnce(impl->rtlThread, "reader");
     impl->stopDspThread();
@@ -39935,6 +40098,7 @@ bool LocalSdrShim::releaseRadio() {
         else if (ahf) { impl->ahf->stop(); impl->ahf->close(); }
         else if (hrf) { impl->hrf->stop(); impl->hrf->close(); }
         else if (asp) { impl->asp->stop(); impl->asp->close(); }
+        else if (usr) { impl->usrp->stop(); impl->usrp->close(); }
         else if (impl->dev) { rtlsdr_close(impl->dev); impl->dev = nullptr; }
         impl->restarting.store(false);
     }
@@ -40052,6 +40216,11 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         //   the owner set. open() records them and start() re-states them (applyAll).
         ok = impl->asp->open(impl->aspIndex, impl->sampleRate,
                              impl->rtlCenter.load() + impl->hwOffsetHz(), -1, err);
+    } else if (impl->useUsrp()) {
+        /* ★ V12 USRP B2xx: reopen by index with the gain the owner had (one element, so the number IS the setting);
+         *  the RX port is put back by applyDesiredDsp below. + hwOffsetHz(), like every other open of it. */
+        ok = impl->usrp->open(impl->usrpIndex, impl->sampleRate,
+                              impl->rtlCenter.load() + impl->hwOffsetHz(), impl->lastGainTenthDb, err);
     } else {
         // ★ BY SERIAL, NOT BY INDEX — findOurDevice refuses to grab a DIFFERENT dongle that has
         //   taken our slot while we were away. With three radios on one machine that matters.
@@ -40151,6 +40320,13 @@ bool LocalSdrShim::reacquireRadio(std::string& err) {
         impl->asp->start(e2);
         LocalSdrShim::applyDesiredDsp(impl);
     }
+    // ★ V12 USRP: CLOSED on release, so started again — never launchCapture(), which is librtlsdr's.
+    else if (impl->useUsrp()) {
+        std::string e2;
+        impl->usrp->setPaused(false);
+        LocalSdrShim::applyDesiredDsp(impl);   // the RX port, before the stream starts
+        impl->usrp->start(e2);
+    }
     else          impl->launchCapture();
     LOGI("radio REACQUIRED");
     impl->notifyDeviceState();
@@ -40244,6 +40420,13 @@ void LocalSdrShim::setBiasTee(bool on) {
         setAirspyBiasT(on);
         g_biasTeeOn.store(on);
         LOGI("bias-tee (Airspy): %s", on ? "ON — DC on the feedline" : "off");
+        return;
+    }
+    /* ★ V12: A USRP B2xx HAS NO BIAS-T. Its caps say so (hasBiasT false) and no page draws the switch for it; a
+     *  config `biasT` carried over from a dongle arrives here and is refused out loud rather than "remembered". */
+    if (p->useUsrp()) {
+        g_biasTeeOn.store(false);
+        if (on) LOGI("bias-tee: a USRP B2xx has none — ignored");
         return;
     }
     /* ★★★ AND THE SDRplay RSP (2026-10-22) — the same "else means dongle" hole, found by the RSP audit. The
@@ -40596,6 +40779,7 @@ int LocalSdrShim::startIcom(const IcomStart& o, std::string& err) {
 }
 bool LocalSdrShim::isHackRf()   const { return p && p->useHackRf(); }
 bool LocalSdrShim::isAirspy()   const { return p && p->useAirspy(); }
+bool LocalSdrShim::isUsrp()     const { return p && p->useUsrp(); }
 
 /**
  * ★★★ EVERYTHING THIS LOOP HAS LEARNED IS ABOUT ONE SIGNAL AT ONE FREQUENCY AT ONE SAMPLE RATE.
@@ -40960,6 +41144,8 @@ void LocalSdrShim::setSampleRate(double rate) {
      *  stops and restarts the stream itself. Nothing to pause — it does its own quiescing, and
      *  its start() re-states frequency, gains, bias-T and packing afterwards. */
     else if (asp) { /* handled below by AirspySource::setSampleRate */ }
+    // ★ V12 USRP: UsrpSource::setSampleRate stops and restarts its own stream (UHD re-picks the master clock).
+    else if (impl->useUsrp()) { impl->usrp->setPaused(true); }
     else          { impl->restarting.store(true); rtlsdr_cancel_async(impl->dev); }
     // ★★ AND A NET UNDER BOTH JOINS. The lock above removes the race we know about; this keeps a
     //    future one from killing the APP rather than the operation. It logs, because a swallowed
@@ -41088,6 +41274,14 @@ void LocalSdrShim::setSampleRate(double rate) {
          *    force. */
         impl->asp->setSampleRate(rate);
         actual = impl->asp->nearestRate(rate);
+    } else if (impl->useUsrp()) {
+        /* ★ V12 USRP: the device HERE, before the engine is built (the same ordering as every radio above), and the
+         *  figure in force asked of the source — the list is ours, so a request between rungs is rounded. The
+         *  AD9361's analogue filter follows the rate inside UsrpSource. Then re-tuned: a new master clock re-derives
+         *  the DDC, so the centre is stated again rather than trusted to survive. */
+        impl->usrp->setSampleRate(rate);
+        actual = impl->usrp->nearestRate(rate);
+        impl->usrp->setFrequency(impl->rtlCenter.load() + impl->hwOffsetHz());
     } else {
         rtlsdr_set_sample_rate(impl->dev, (uint32_t)rate);
         rtlsdr_reset_buffer(impl->dev);
@@ -41133,6 +41327,7 @@ void LocalSdrShim::setSampleRate(double rate) {
      *  radio cannot fall into the `else` and be handed launchCapture() + rtlsdr's restarting
      *  flag — "else means dongle" is the fault this whole function is a monument to. */
     else if (asp) { /* AirspySource restarted itself */ }
+    else if (impl->useUsrp()) { impl->usrp->setPaused(false); }   // ★ V12 USRP: its own stream restarted above
     else {
         impl->launchCapture();
         impl->restarting.store(false);   // back to normal: a stop now really is an unplug
@@ -41244,6 +41439,9 @@ std::vector<int> LocalSdrShim::getTunerGains() {
     /* ★ An Airspy R2/Mini has no discrete tuner table either: gain is a 0-21 PRESET curve across
      *  three stages. The slider is drawn from those 22 positions — see AirspySource. */
     if (p->useAirspy()) return vibe::AirspySource::gainListTenthDb();
+    /* ★ V12 USRP B2xx: the device's own range (get_rx_gain_range — 0-76 dB in 1 dB steps on the AD9361), in tenths.
+     *  Read at open, never assumed, and never the dongle's table below. */
+    if (p->useUsrp()) return p->usrp->gainListTenthDb();
     // ★ An RSP has NO discrete tuner-gain table to read: gain is an LNA state plus a
     // continuous IF gain reduction. The client's slider needs SOMETHING to offer, so present
     // a linear 0-49 dB scale — which is exactly the range setGainTenthDb maps onto IF
@@ -41453,6 +41651,40 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
                     + ",\"locked\":" + (l.locked ? "true" : "false") + "}";
         }
         j += ",\"hasBiasT\":true,\"hasPacking\":true,\"noDirectSampling\":true}";
+        return j;
+    }
+    /* ★★★ V12: THE USRP B2xx, BEFORE THE DONGLE BRANCH — the RTL branch below is `if (!useSdrplay())`, so a driver with
+     *     no branch here is announced as a dongle and drawn with dongle controls (the HF+'s July fault, and the
+     *     HackRF note above). Everything here is READ FROM THE RADIO at open — model, serial, tuning range, gain
+     *     range, ports, the AGC and the USB link — so the app and the web page need no USRP constants of their own.
+     *  ★★ WHAT IT HAS, AND WHAT IT HAS NOT, said explicitly so nothing dead is drawn (AGENTS.md):
+     *     · ONE gain: the generic slider, from `gains` in hwinfo (getTunerGains) — no stage sliders;
+     *     · hwAgc: the AD9361's own AGC, only when the radio accepted it — the slider's AUTO end;
+     *     · antennas: the (channel, socket) list — EMPTY on a radio with one choice, so no selector;
+     *     · no bias-T, no direct sampling, no tuner IF filter (UHD sets the analogue filter to the span). */
+    if (p->useUsrp()) {
+        auto& u = *p->usrp;
+        auto q = [](const std::string& x) { return "\"" + Impl::jsonEscape(x) + "\""; };
+        std::string j = ",\"radio\":{\"driver\":\"usrp\",\"model\":" + q("USRP " + (u.model().empty() ? std::string("B2xx") : u.model()));
+        j += ",\"serial\":" + q(u.serial());
+        j += std::string(",\"hwAgc\":") + (u.hasHwAgc() ? "true" : "false");
+        j += std::string(",\"agcOn\":") + (u.hwAgc() ? "true" : "false");
+        j += ",\"gain\":" + std::to_string(u.gainTenthDb());
+        j += ",\"usb\":" + std::to_string(u.usbSpeed());
+        char rng[96];
+        std::snprintf(rng, sizeof rng, ",\"ranges\":[[%.0f,%.0f]]", u.freqMinHz(), u.freqMaxHz());
+        j += rng;
+        j += ",\"rates\":[";
+        { const auto& rl = u.sampleRates();
+          for (size_t i = 0; i < rl.size(); ++i) { if (i) j += ','; j += std::to_string(rl[i]); } }
+        j += "]";
+        j += ",\"antennas\":[";
+        { const auto& a = u.antennas();
+          for (size_t i = 0; i < a.size(); ++i) { if (i) j += ','; j += q(a[i]); } }
+        j += "]";
+        if (!u.antennas().empty()) j += ",\"antenna\":" + q(u.antenna());
+        j += std::string(",\"antennaLocked\":") + (vsAntennaLocked() ? "true" : "false");
+        j += ",\"hasBiasT\":false,\"noDirectSampling\":true,\"noTunerBw\":true,\"experimental\":true}";
         return j;
     }
     if (!p->useSdrplay()) {
@@ -41736,6 +41968,15 @@ void LocalSdrShim::setBiasT(bool v)         { g_dsp.rspBiasT.store(v ? 1 : 0);
  *  and reachable from nowhere. */
 void LocalSdrShim::setRspAntenna(const std::string& port) {
     { std::lock_guard<std::mutex> lk(g_rspAntMtx); g_rspAntenna = port; }
+    /* ★ V12: and the USRP B2xx's RX ports — the same {type:"antenna"} message, the same remembered `antennaPort`.
+     *  A label the radio does not have is refused by UsrpSource (never guessed). Switching CHANNEL on a B210 rebuilds
+     *  the stream, so it takes modeMtx like every other hardware write. */
+    if (p && p->useUsrp()) {
+        VIBE_HW_LOCK();
+        if (p->usrp->setAntenna(port)) LOGI("USRP RX port -> %s", port.c_str());
+        else LOGI("USRP: '%s' is not one of this radio's RX ports — ignored", port.c_str());
+        return;
+    }
     if (!p || !p->useSdrplay()) return;
     VIBE_HW_LOCK(); p->sdrp->setAntenna(port);
     LOGI("RSP antenna -> %s", port.c_str());

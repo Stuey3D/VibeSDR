@@ -11,6 +11,7 @@
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
 #include "airspy_source.h"
+#include "usrp_source.h"   // ★ V12 USRP B2xx — the Mac app's Simple mode lists it last
 #include "radios.h"
 #include "directory.h"
 #include "mapgl_curl.h"
@@ -178,7 +179,17 @@ int vs_start(const VsConfig* cfg, char* errOut, int errCap) {
     const int nRsp = vibe::SdrplaySource::deviceCount();
     const int nAhf = vibe::AirspyHfSource::deviceCount();
     const int nHrf = vibe::HackRfSource::deviceCount();
+    const int nAsp = vibe::AirspySource::deviceCount();
     const char* mode = cfg->mode ? cfg->mode : "wfm";
+    /* ★ V12: the USRP B2xx, appended AFTER the R2/Mini in vs_device_count — so tested first, above its range. */
+    if (cfg->deviceIndex >= nRtl + nRsp + nAhf + nHrf + nAsp) {
+        const int p = LocalSdrShim::instance().startUsrp(
+            cfg->deviceIndex - nRtl - nRsp - nAhf - nHrf - nAsp, cfg->centreHz, cfg->sampleRate,
+            cfg->gainTenthDb, cfg->fftSize, cfg->fftRate, mode, err);
+        if (p <= 0) { copyStr(errOut, errCap, err.empty() ? "could not start" : err); g_port = 0; return -1; }
+        g_port = p;
+        return p;
+    }
     /* ★★★ THE SAME ORDER AS detectRadios(): RTL, RSP, HF+, HackRF, Airspy R2/Mini. Until
      *     2026-09-28 this stopped at the HF+, so on a Mac a HackRF or an R2 was not in the list at
      *     all — and anything past the HF+ range would have been handed to startAirspyHf with an
@@ -311,7 +322,8 @@ int vs_device_count(void) {
     return rtlCount() + vibe::SdrplaySource::deviceCount()
                       + vibe::AirspyHfSource::deviceCount()
                       + vibe::HackRfSource::deviceCount()
-                      + vibe::AirspySource::deviceCount();
+                      + vibe::AirspySource::deviceCount()
+                      + vibe::UsrpSource::deviceCount();   // ★ V12, last: no existing index moves
 }
 
 const char* vs_device_name(int index) {
@@ -319,6 +331,11 @@ const char* vs_device_name(int index) {
     const int nRsp = vibe::SdrplaySource::deviceCount();
     const int nAhf = vibe::AirspyHfSource::deviceCount();
     const int nHrf = vibe::HackRfSource::deviceCount();
+    const int nAsp = vibe::AirspySource::deviceCount();
+    if (index >= nRtl + nRsp + nAhf + nHrf + nAsp) {
+        g_deviceName = vibe::UsrpSource::deviceName(index - nRtl - nRsp - nAhf - nHrf - nAsp);
+        return g_deviceName.c_str();
+    }
     if (index >= nRtl + nRsp + nAhf + nHrf) {
         g_deviceName = vibe::AirspySource::deviceName(index - nRtl - nRsp - nAhf - nHrf);
         return g_deviceName.c_str();

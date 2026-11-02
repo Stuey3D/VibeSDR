@@ -568,6 +568,9 @@ inline Ranges driverCoverage(const std::string& driver) {
     // ★ Airspy R2 / Mini: 24 - 1800 MHz (R820T2 tuner, no HF without an upconverter). Until
     //   2026-09-28 it reached here as "rtl" and claimed medium wave it cannot hear.
     if (driver == "airspy")   return { {24.0e6, 1.8e9} };
+    // ★ V12 Ettus USRP B2xx: 50 MHz - 6 GHz — UHD 4.9.0.1's AD9361 range (ad9361_ctrl.hpp get_rf_freq_range). No HF,
+    //   no FM-below-50 without an upconverter. A running radio publishes the range IT reports (radioCapsJson).
+    if (driver == "usrp")     return { {50.0e6, 6.0e9} };
     // ★ An Icom (receive only): the IC-7300's receive range — the only model served so far (icom_models.h;
     //   every other Icom is refused at open). A running radio publishes its own model's ranges.
     if (driver == "icom")     return { {30.0e3, 74.8e6} };

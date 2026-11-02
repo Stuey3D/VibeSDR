@@ -88,8 +88,13 @@ inline Presence decidePresence(const std::string& driver, const std::string& ser
  *    rtlsdr_open's LIBUSB_ERROR_BUSY instead.
  *  ★ Header-only and root-parameterised so the test can point it at a fake tree.
  *  Returns false when the directory cannot be read (= unknown). */
-inline bool sysfsClaimedCounts(const std::string& root, int& sdrplay, int& airspyhf, int& hackrf, int& airspy) {
+/*  ★ V12: `usrp` (optional, so the existing callers are unchanged) counts Ettus B2xx — vibe_usrp_caps.h's IDs, restated
+ *    here so this header stays free of every driver header. */
+inline bool sysfsClaimedCounts(const std::string& root, int& sdrplay, int& airspyhf, int& hackrf, int& airspy,
+                               int* usrp = nullptr) {
     sdrplay = airspyhf = hackrf = airspy = 0;
+    int usrpN = 0;
+    struct Fill { int* to; int& n; ~Fill() { if (to) *to = n; } } fill{usrp, usrpN};
     DIR* d = ::opendir(root.c_str());
     if (!d) return false;
     std::vector<std::string> names;
@@ -111,6 +116,8 @@ inline bool sysfsClaimedCounts(const std::string& root, int& sdrplay, int& airsp
         else if (vid == 0x03eb && pid == 0x800c) slot = &airspyhf;
         else if (vid == 0x1d50 && (pid == 0x6089 || pid == 0x604b || pid == 0xcc15)) slot = &hackrf;
         else if (vid == 0x1d50 && pid == 0x60a1) slot = &airspy;
+        else if ((vid == 0x2500 && pid >= 0x0020 && pid <= 0x0023) || (vid == 0x3923 && (pid == 0x7813 || pid == 0x7814)))
+            slot = &usrpN;   // ★ V12 USRP B2xx
         if (!slot) continue;
         for (const auto& itf : names) {
             if (itf.rfind(dev + ":", 0) != 0) continue;
