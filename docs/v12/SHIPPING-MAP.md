@@ -48,6 +48,50 @@ ONE map, titled **SHIPPING MAP**, in the web client and the app, with layers swi
   "NEAR GALE 7" was flagged GALES. `vibe_navtex_warn.h kVersion 7` rebuilds the met index once per server (the existing
   backfill — the map says "Building the map from N saved messages…").
 
+## The SEA AREAS (branch `v12-sea-areas`, 2026-11-02)
+
+Stuart (2026-11-02): *"can we add the shipping lanes and shipping zones to the map too?"* … *"worldwide if possible"* …
+*"the things like Dogger, Wight Plymouth etc"*.
+
+- **One dataset, three readers:** `scripts/gen-sea-areas.mjs` (sources + licences in its header) →
+  `src/utils/seaAreas.generated.ts` (web client and app) and `android/app/src/main/cpp/vibe_sea_areas.generated.h`
+  (the met parser). Its inputs: `scripts/mapdata/sea-areas/uk-shipping.json` (the UK corner points, typed in),
+  `fetch.sh` (the downloads, not committed) and `sea-areas.cache.json` (the processed polygons, committed — `--check` and
+  a rebuild of the readers need no network). Not GPU tiles: `gen-map-tiles.mjs` builds the 243 MB basemap pack that
+  ships separately; a forecast overlay that changes with the forecast does not belong in it.
+- **Sources and licences:**
+
+| Region | Source | Licence | What |
+|---|---|---|---|
+| UK (31 areas, Viking … SE Iceland, Trafalgar) | Met Office boundary corner points (2002 revision), typed from M. Stubbs' tabulation of them; Wikipedia only to corroborate single entries | facts (coordinates); coast between two corners on one coast from Natural Earth 1:10m land (public domain) | polygons, our label points |
+| US (564 zones) | NOAA NWS marine zones, coastal `mz16ap26` + offshore `oz16ap26` | public domain | Great Lakes and the 5 high-seas basins left out |
+| Canada (158 areas) | ECCC MSC Geography Package 6.15.0, `water_MarStdZone_coarse` | Open Government Licence – Canada | Atlantic, Pacific, Arctic; Great Lakes and inland waters left out |
+| Germany (7 areas) | DWD `dwd:Warngebiete_Kueste` (GeoServer WFS) | GeoNutzV (Datenlizenz Deutschland – Namensnennung 2.0), © GeoBasis-DE / BKG 2021 | the Elbe river stretch left out |
+
+- **Not sourced (and why):** UK inshore waters and the Irish coastal areas (Met Éireann) — headland-to-headland strips out
+  to 12 / 10 NM; the headlands are known but a coastal buffer we trust is not built yet, so they keep their label points
+  only · Australia (BoM IDM00001/3) — no Creative Commons statement on the spatial files, and the Bureau's default terms
+  forbid supplying them on or commercial use · Norway (MET Norway), the Netherlands (KNMI), France (Météo-France) and
+  DWD's offshore Seegebiete (Deutsche Bucht, Westliche Ostsee …) — no open boundary set or published corner list found.
+- **Size:** `seaAreas.generated.ts` 213 KB (UK 8.6 KB of outline, US 80 KB, CA 58 KB, DE 1.5 KB; 0.001° polylines,
+  Douglas–Peucker 0.012–0.02°); `vibe_sea_areas.generated.h` 107 KB (names and match forms only).
+- **Drawing (`src/services/seaAreas.ts`, through `tracklayer.js`):** an item per area — its name the icon (small capitals,
+  `_y` yields to every other icon and name, `_mz` from zoom 4 UK / 5 offshore / 8 US coastal), its outline the shape (thin,
+  several rings, a US coastal zone's from zoom 6), `_nofit` (never widens the first view, never pulses, counted apart in
+  `data-vtl-chart`). An area with a current forecast has no marker of its own: the forecast's arrow (moved to the area's
+  label point, inside its outline — `seaPlaceMet`) names it. Tint: **amber** at force 7, **red** at a gale 8+ (forecast
+  words, force, or either arrow) — only while WEATHER is drawn, and never from a stale forecast.
+- **Its own toggle, SEA AREAS, after WEATHER** — not inside it: the outlines are geography (which area is that ship in?),
+  useful with no forecast; the tint is the weather's. **Present only where an area is within reach** (`seaAreasNear`: the
+  receiver within 2600 km of a UK area, 2000 of an offshore one, 700 of a US coastal zone, or a forecast names one) — a
+  server in Japan gets no toggle.
+- **KEY:** the outline, amber and red rows and the sources line (web `shipKeyHtml`, app MapOverlay legend).
+- **Matching (`vibe_navtex_met.h`, extended, not a second table):** `areas()` appends the generated areas after the
+  hand-made UK rows (a name both carry stays ours); a first-word index serves the heading match. An NWS bulletin's UGC
+  line names its zones (`ANZ800-031000-`, ranges with `>`); winds in **knots** are converted to Beaufort (`knotsBf` —
+  "10 TO 15 KT" is force 3–4, never 10); seas in feet; `.TODAY...` is read, `.TONIGHT...` ends the block. Generic
+  names (CENTRAL, EAST COAST …) are never headings. `vibe_navtex_warn.h kVersion 8` re-reads every server's forecasts once.
+
 ## The AIS background profile and the ship store (server)
 
 - **Setup → the radio → Background decoding → "Decodes: AIS ships (161.975 + 162.025 MHz)"** (`"ais":true`), beside ISM's
@@ -103,6 +147,20 @@ radio C (DSC)        ──► gallery DSC alerts (plat/plon) ──────
 
 ## RESUME HERE
 
+- **SEA AREAS (branch `v12-sea-areas`, from `v12-experimental` c967cb58e, 2026-11-02) — built and tested on this Mac:**
+  dataset + generator, the met parser's table extended (UGC, knots, feet), web + app drawing, KEY, About, tour copy.
+  Tests: `test-navtex-met` 80 (+21 matching; the fixture set reads exactly as before), `test_sea_areas.ts` 38 (new),
+  `test-web-shipping-map.mjs` 28 (+6, screenshots `sea-areas-uk.png`, `sea-areas-close.png`), `test-web-navtex-map.mjs`
+  48, `test_shipping_map.ts` 48, `test_navtex_map.ts` 55, `test-navtex-warn` 113, `test-navtex-map` 58. A server built
+  from the worktree (`vibeserver/build`, deps from `~/VibeSDR-v12/vibeserver/mac/deps/prefix`).
+  **Owed:** an app device run (tsc clean; the WebView gets the same items); a run over the Lenovo's real gallery (the
+  index rebuild at kVersion 8, and whether any European forecast's figures now read as knots — only a figure followed by
+  KT/KNOTS is); the iOS prebuilt DSP lib (`build_ios.sh`) for the iPhone's own server; the mapdata/apt side needs nothing.
+  **Not built:** UK inshore and Irish coastal polygons (a 12 / 10 NM strip between headlands), Norway/KNMI/Météo-France/
+  DWD offshore (no open data found), BoM (licence), shipping LANES (Stuart's first ask — traffic separation schemes are on
+  charts, not open data we found; not attempted). At zoom 5 a gale area's arrow can give way to a station's name (the
+  existing rule: weather yields first) — the red tint still shows; consider letting a GALE arrow outrank station names.
+  The sources sit at the foot of the KEY, not on the basemap's attribution control.
 - **Owed, not done:** an app device run (tsc is clean; the app was not run on a phone — the MapOverlay legend is one
   static SHIPPING legend for kinds navtex/ais/dsc, not trimmed to the layers present as the web's KEY is); a visual
   review of the arrows at close zoom over the UK (the headless test checks they are drawn and rotated; the declutter
