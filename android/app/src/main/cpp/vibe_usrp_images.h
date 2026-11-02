@@ -25,6 +25,17 @@ namespace usrpimages {
 
 struct Entry { std::string name; long long bytes = 0; long long mtime = 0; };
 
+/** What a file on disk is (usrpcaps::classifyImage on its first bytes) — shown beside it, so an owner can tell a
+ *  7-series clone image from a Spartan-6 one at a glance. */
+inline usrpcaps::ImageKind kindOfFile(const std::string& path) {
+    unsigned char b[usrpcaps::kHeadBytes];
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return usrpcaps::ImageKind::Unknown;
+    const size_t n = std::fread(b, 1, sizeof b, f);
+    std::fclose(f);
+    return usrpcaps::classifyImage(b, n);
+}
+
 /** What is in the owner's folder — only files under UHD's names (anything else there is not ours to show). */
 inline std::vector<Entry> list(const std::string& dir) {
     std::vector<Entry> out;
@@ -42,7 +53,8 @@ inline std::string listJson(const std::string& dir) {
     for (const auto& e : list(dir)) {
         if (!first) j += ',';
         first = false;
-        j += "{\"name\":" + usrpcaps::jsonQ(e.name) + ",\"bytes\":" + std::to_string(e.bytes) + ",\"mtime\":" + std::to_string(e.mtime) + "}";
+        j += "{\"name\":" + usrpcaps::jsonQ(e.name) + ",\"bytes\":" + std::to_string(e.bytes) + ",\"mtime\":" + std::to_string(e.mtime)
+           + ",\"kind\":" + usrpcaps::jsonQ(usrpcaps::imageKindWords(kindOfFile(dir + "/" + e.name))) + "}";
     }
     return j + "]";
 }
@@ -207,7 +219,8 @@ inline std::string scanJson(const std::vector<std::string>& dirs, const std::vec
         if (i) j += ',';
         j += "{\"from\":" + std::to_string(f.dirIndex) + ",\"dir\":" + usrpcaps::jsonQ(f.dir) + ",\"name\":" + usrpcaps::jsonQ(f.name)
            + ",\"bytes\":" + std::to_string(f.bytes) + ",\"mtime\":" + std::to_string(f.mtime)
-           + ",\"same\":" + (f.sameAsShipped < 0 ? "null" : f.sameAsShipped ? "true" : "false") + "}";
+           + ",\"same\":" + (f.sameAsShipped < 0 ? "null" : f.sameAsShipped ? "true" : "false")
+           + ",\"kind\":" + usrpcaps::jsonQ(usrpcaps::imageKindWords(kindOfFile(f.dir + "/" + f.name))) + "}";
     }
     return j + "]";
 }

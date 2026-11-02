@@ -11,10 +11,14 @@
 //   this machine" must be a clean answer, not a hang, an exception or a firmware download.
 #include "usrp_source.h"
 #include "vibe_usrp_caps.h"
+#include "vibe_usrp_images.h"
+#include "vibeserver_config.h"
 #include "vibe_bands.h"
 #include "sdr_presence.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <dirent.h>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -151,6 +155,244 @@ int main() {
         ok(has(j3, "\"antennas\":[]") && !has(j3, "\"antenna\":"), "one socket: an EMPTY list and no `antenna` field");
         c.serial = "a\"b\\c";
         ok(has(capsJson(c), "\"serial\":\"a\\\"b\\\\c\""), "device-supplied strings are escaped");
+    }
+
+    std::printf("== owner options: what is offered (fake capability lists)\n");
+    {
+        const std::vector<std::string> b210Clock = {"internal", "external", "gpsdo"};   // UHD lists gpsdo on every B210
+        ok(hasGpsdo({"ref_locked", "gps_locked", "gps_time"}) && !hasGpsdo({"ref_locked"}), "a GPSDO is fitted only with a gps_locked sensor");
+        const auto noG = sourceChoices(b210Clock, false), withG = sourceChoices(b210Clock, true);
+        ok(noG.size() == 2 && noG[0] == "internal" && noG[1] == "external", "no GPSDO fitted → no GPSDO choice, though UHD lists it");
+        ok(withG.size() == 3 && withG[2] == "gpsdo", "a GPSDO fitted → offered");
+        ok(sourceChoices({"internal"}, false).empty(), "one source = NO selector");
+        ok(sourceChoices({}, true).empty(), "nothing reported = nothing offered");
+        ok(sourceChoices({"none", "internal", "external", "mimo"}, false) == std::vector<std::string>({"internal", "external"}),
+           "UHD's other names (none, mimo) are not offered");
+        ok(refuseSource("", noG, "reference clock").empty() && refuseSource("internal", {}, "reference clock").empty(),
+           "internal / unset is never refused, even with no choice");
+        ok(refuseSource("external", noG, "reference clock").empty(), "a listed source is accepted");
+        ok(has(refuseSource("gpsdo", noG, "reference clock"), "no GPSDO fitted"), "a GPSDO asked of a board without one is refused in words",
+           refuseSource("gpsdo", noG, "reference clock"));
+        ok(has(refuseSource("external", {}, "time source"), "does not offer"), "a source the radio did not list is refused in words");
+        ok(has(refuseSource("bogus", noG, "reference clock"), "not a reference clock"), "an unknown name is refused");
+        ok(has(refuseCombination("B200mini", "external", "external"), "one reference socket"), "a mini cannot take external for both");
+        ok(refuseCombination("B210", "external", "external").empty(), "a B210 can (separate REF and PPS sockets)");
+
+        ok(!bwRangeUseful(0, 0) && !bwRangeUseful(56e6, 56e6) && !bwRangeUseful(1e6, 1.5e6), "a trivial bandwidth range is no control");
+        ok(bwRangeUseful(200e3, 56e6), "the AD9361's 0.2-56 MHz range is a control");
+        ok(bwChoices(0, 0).empty(), "trivial range → no bandwidth choices");
+        const auto bc = bwChoices(200e3, 56e6);
+        ok(!bc.empty() && bc.front() == 200000u && bc.back() == 56000000u, "choices span the radio's own range");
+        bool inside = true; for (auto b : bwChoices(1e6, 10e6)) inside = inside && b >= 1000000u && b <= 10000000u;
+        ok(inside, "never a choice outside the range");
+        OptionCaps oc; oc.bwLo = 200e3; oc.bwHi = 56e6; oc.bwAdjustable = true;
+        Options o; o.rxBwHz = 5e6;
+        ok(refuseBw(5e6, oc).empty() && bwFor(o, 2.4e6, oc) == 5e6, "a fixed bandwidth inside the range is used");
+        o.rxBwHz = 0;
+        ok(bwFor(o, 2.4e6, oc) == 2.4e6, "AUTO follows the sample rate");
+        o.rxBwHz = 80e6;
+        ok(has(refuseBw(80e6, oc), "outside") && bwFor(o, 4e6, oc) == 4e6, "outside the range: refused in words, AUTO used");
+        OptionCaps fixedBw;
+        o.rxBwHz = 5e6;
+        ok(has(refuseBw(5e6, fixedBw), "cannot be set") && bwFor(o, 4e6, fixedBw) == 4e6, "a radio with no bandwidth control: AUTO, said");
+
+        Options saved;
+        ok(validateSaved(saved).empty(), "the defaults pass the save");
+        ok(saved.dcOffset && saved.iqBalance, "DC-offset and IQ-balance correction default ON (UHD's default)");
+        saved.clock = "gpsdo"; saved.time = "external"; saved.rxBwHz = 10e6;
+        ok(validateSaved(saved).empty(), "known names and a real bandwidth pass the save (the RADIO decides if it has them)");
+        saved.clock = "/etc/passwd";
+        ok(!validateSaved(saved).empty(), "an unknown clock name is refused at the save");
+        saved.clock = ""; saved.rxBwHz = 1;
+        ok(!validateSaved(saved).empty(), "an impossible bandwidth is refused at the save");
+    }
+
+    std::printf("== owner options in hwinfo (stubbed view)\n");
+    {
+        CapsView c;
+        c.model = "B210"; c.rates = ratesFor(3);
+        const std::string none = capsJson(c);
+        ok(has(none, "\"clockSources\":[]") && has(none, "\"gpsdo\":false") && has(none, "\"dcOffset\":false")
+           && !has(none, "\"dcOffsetOn\"") && !has(none, "rxBwRange") && !has(none, "refLocked") && !has(none, "\"clock\":"),
+           "a radio that reported nothing: empty lists, false capabilities, no state — nothing to draw", none);
+        c.oc.clockSources = {"internal", "external"}; c.oc.timeSources = {"internal", "external"};
+        c.oc.dcOffset = c.oc.iqBalance = true; c.oc.bwLo = 200e3; c.oc.bwHi = 56e6; c.oc.bwAdjustable = true; c.oc.refSensor = true;
+        c.clock = "external"; c.time = "internal"; c.refLocked = 1; c.dcOffsetOn = true; c.iqBalanceOn = false;
+        c.rxBwHz = 2.4e6; c.rxBwAuto = true; c.optionsNote = "this radio has no GPSDO fitted, so the reference clock stays internal";
+        const std::string j = capsJson(c);
+        ok(has(j, "\"clockSources\":[\"internal\",\"external\"]") && has(j, "\"clock\":\"external\"") && has(j, "\"refLocked\":true"),
+           "the clock choices, the clock in force and its lock");
+        ok(has(j, "\"dcOffset\":true,\"dcOffsetOn\":true") && has(j, "\"iqBalance\":true,\"iqBalanceOn\":false"), "correction capability + state together");
+        ok(has(j, "\"rxBwRange\":[200000,56000000]") && has(j, "\"rxBwChoices\":[200000,") && has(j, "\"rxBwAuto\":true") && has(j, "\"rxBwHz\":2400000"),
+           "the bandwidth range, choices, AUTO and the figure in force");
+        ok(has(j, "\"optionsNote\":\"this radio has no GPSDO"), "a refusal travels in words");
+        ok(!has(j, "gpsLocked"), "no GPSDO = no GPS lock field");
+        c.oc.gpsdo = true; c.gpsLocked = 0;
+        ok(has(capsJson(c), "\"gpsdo\":true,\"gpsLocked\":false"), "a GPSDO fitted: its lock state");
+    }
+
+    std::printf("== owner options persisted per radio (vsconfig)\n");
+    {
+        vsconfig::RadioConfig r;
+        ok(r.usrpClock.empty() && r.usrpDcOffset && r.usrpIqBalance && r.usrpRxBw == 0, "a new radio: internal, both corrections on, AUTO");
+        r.serial = "30AA038"; r.driver = "usrp";
+        r.usrpClock = "external"; r.usrpTime = "gpsdo"; r.usrpDcOffset = false; r.usrpIqBalance = true; r.usrpRxBw = 5000000;
+        vsconfig::ServerConfig s; s.radios.push_back(r);
+        const std::string js = vsconfig::toJson(s);
+        vsconfig::ServerConfig back; std::string e;
+        ok(vsconfig::fromJson(js, back, e) && back.radios.size() == 1, "the machine config round-trips", e);
+        if (!back.radios.empty()) {
+            const auto& b = back.radios[0];
+            ok(b.usrpClock == "external" && b.usrpTime == "gpsdo" && !b.usrpDcOffset && b.usrpIqBalance && b.usrpRxBw == 5000000,
+               "every USRP option survives the save and the load");
+            const vsconfig::Config eff = vsconfig::effectiveFor(back, b);
+            ok(eff.usrpClock == "external" && !eff.usrpDcOffset && eff.usrpRxBw == 5000000, "and reaches the radio's effective config");
+        }
+        vsconfig::ServerConfig old; std::string e2;
+        ok(vsconfig::fromJson("{\"radios\":[{\"serial\":\"X1\",\"driver\":\"usrp\"}]}", old, e2) && !old.radios.empty()
+           && old.radios[0].usrpDcOffset && old.radios[0].usrpIqBalance && old.radios[0].usrpClock.empty(),
+           "a config written before these existed reads as the defaults", e2);
+    }
+
+    std::printf("== the board's own image: names, sizes, contents\n");
+    {
+        ok(ownerImageName("usrp_b210_fpga.bin") && ownerImageName("usrp_b200_fw.hex"), "UHD's own names are accepted");
+        ok(!ownerImageName("../usrp_b210_fpga.bin") && !ownerImageName("/etc/passwd") && !ownerImageName("usrp_b210_fpga.bin.bak")
+           && !ownerImageName(""), "nothing else is a name — never a path");
+        ok(refuseImageSize("usrp_b210_fpga.bin", 5207532).empty(), "a 5.2 MB 7-series clone image is a plausible size");
+        ok(refuseImageSize("usrp_b210_fpga.bin", 4224356).empty(), "Ettus's 4.2 MB Spartan-6 image is a plausible size");
+        ok(!refuseImageSize("usrp_b210_fpga.bin", 500000).empty() && !refuseImageSize("usrp_b210_fpga.bin", 17u << 20).empty(),
+           "an FPGA image below 1 MB or above 16 MB is refused");
+        ok(refuseImageSize("usrp_b200_fw.hex", 514346).empty() && !refuseImageSize("usrp_b200_fw.hex", 9u << 20).empty(),
+           "the FX3 firmware's own size bounds");
+        // ★ synthetic heads — never the tester's file (it has no licence to be in the repo)
+        std::vector<unsigned char> s7(256, 0xFF), s6(256, 0xFF);
+        const unsigned char bw[8] = {0x00, 0x00, 0x00, 0xBB, 0x11, 0x22, 0x00, 0x44}, sync[4] = {0xAA, 0x99, 0x55, 0x66};
+        std::copy(bw, bw + 8, s7.begin() + 0x20); std::copy(sync, sync + 4, s7.begin() + 0x30);
+        std::copy(sync, sync + 4, s6.begin() + 0x10);
+        ok(classifyImage(s7.data(), s7.size()) == ImageKind::Series7, "FF, the bus-width detect, FF, the sync word = 7-series");
+        ok(classifyImage(s6.data(), s6.size()) == ImageKind::Spartan6, "FF then the sync word, no bus-width detect = Spartan-6");
+        ok(has(imageKindWords(ImageKind::Series7), "7-series (Kintex/Artix)") && has(imageKindWords(ImageKind::Spartan6), "Spartan-6"),
+           "both are named for the owner");
+        ok(refuseImageHead("usrp_b210_fpga.bin", s7.data(), s7.size()).empty() && refuseImageHead("usrp_b210_fpga.bin", s6.data(), s6.size()).empty(),
+           "either bitstream is accepted as an FPGA image");
+        std::vector<unsigned char> late(512, 0xFF); std::copy(sync, sync + 4, late.begin() + 300);
+        ok(!refuseImageHead("usrp_b210_fpga.bin", late.data(), late.size()).empty(), "a sync word past the first 256 bytes is not a bitstream");
+        const unsigned char zip[] = "PK\x03\x04rest", html[] = "  <!doctype html>", hex[] = ":0400000000000000FC\n",
+                            img[] = "CY\x1c\xb0rest", junk[] = "\x01\x02\x03\x04\x05\x06\x07\x08";
+        ok(has(refuseImageHead("usrp_b210_fpga.bin", zip, sizeof zip - 1), "zip"), "a zip is refused, saying unzip it");
+        ok(has(refuseImageHead("usrp_b210_fpga.bin", html, sizeof html - 1), "web page"), "a saved web page is refused");
+        ok(has(refuseImageHead("usrp_b210_fpga.bin", junk, sizeof junk - 1), "not a Xilinx FPGA bitstream"), "anything else is refused in words");
+        ok(has(refuseImageHead("usrp_b210_fpga.bin", hex, sizeof hex - 1), "FX3 firmware"), "firmware under the FPGA's name is refused");
+        ok(refuseImageHead("usrp_b200_fw.hex", hex, sizeof hex - 1).empty(), "Intel HEX is accepted as the firmware");
+        ok(classifyImage(img, sizeof img - 1) == ImageKind::Fx3Img && has(refuseImageHead("usrp_b200_fw.hex", img, sizeof img - 1), "Intel HEX"),
+           "an FX3 .img is recognised by its CY signature and refused (UHD loads only .hex)");
+        ok(!refuseImageHead("usrp_b200_fw.hex", s7.data(), s7.size()).empty(), "a bitstream is not firmware");
+    }
+
+    std::printf("== the board's own image: the folder (write, list, remove)\n");
+    {
+        char tmpl[] = "/tmp/vibe-usrp-own-XXXXXX";
+        const char* d = mkdtemp(tmpl);
+        if (d) {
+            const std::string dir = std::string(d) + "/uhd-images";   // ★ created by the first write
+            std::vector<unsigned char> img(2u << 20, 0x5A);
+            std::fill(img.begin(), img.begin() + 0x20, 0xFF);
+            const unsigned char bw[8] = {0x00, 0x00, 0x00, 0xBB, 0x11, 0x22, 0x00, 0x44}, sync[4] = {0xAA, 0x99, 0x55, 0x66};
+            std::copy(bw, bw + 8, img.begin() + 0x20); std::fill(img.begin() + 0x28, img.begin() + 0x30, 0xFF);
+            std::copy(sync, sync + 4, img.begin() + 0x30);
+            std::string err;
+            {
+                vibe::usrpimages::Writer w;
+                bool okw = w.begin(dir, "usrp_b210_fpga.bin", img.size(), err);
+                for (size_t off = 0; okw && off < img.size(); off += 7000)
+                    okw = w.write(img.data() + off, std::min<size_t>(7000, img.size() - off), err);
+                ok(okw && w.finish(err), "a 7-series image is written in pieces and saved", err);
+            }
+            const auto l = vibe::usrpimages::list(dir);
+            ok(l.size() == 1 && l[0].name == "usrp_b210_fpga.bin" && l[0].bytes == (long long)img.size(), "it is listed under UHD's name");
+            ok(has(vibe::usrpimages::listJson(dir), "7-series"), "the listing says what it is");
+            ok(resolveImage("usrp_b210_fpga.bin", {dir, "/nonexistent"}) == dir + "/usrp_b210_fpga.bin", "and the image search finds it first");
+            {
+                vibe::usrpimages::Writer w;
+                std::vector<unsigned char> bad(2u << 20, 0x00);
+                bool okw = w.begin(dir, "usrp_b210_fpga.bin", bad.size(), err);
+                okw = okw && w.write(bad.data(), bad.size(), err);
+                ok(!okw && has(err, "not a Xilinx"), "a bad replacement is refused…", err);
+            }
+            ok(vibe::usrpimages::sameFile(dir + "/usrp_b210_fpga.bin", dir + "/usrp_b210_fpga.bin") == 1
+               && vibe::usrpimages::list(dir).size() == 1 && vibe::usrpimages::list(dir)[0].bytes == (long long)img.size(),
+               "…and the good one is left exactly as it was");
+            {
+                DIR* dd = opendir(dir.c_str()); int n = 0;
+                while (dd) { struct dirent* de = readdir(dd); if (!de) break; if (de->d_name[0] != '.' || std::string(de->d_name).size() > 2) n++; }
+                if (dd) closedir(dd);
+                ok(n == 1, "no temporary file is left behind");
+            }
+            {
+                vibe::usrpimages::Writer w;
+                ok(!w.begin(dir, "../escape.bin", 2u << 20, err), "a client-supplied path is never a name", err);
+                bool okw = w.begin(dir, "usrp_b210_fpga.bin", img.size(), err);
+                okw = okw && w.write(img.data(), 100000, err);
+                ok(okw && !w.finish(err) && has(err, "ended early"), "a short upload is refused", err);
+            }
+            ok(!vibe::usrpimages::remove(dir, "config.json", err), "remove refuses anything but UHD's names");
+            ok(vibe::usrpimages::remove(dir, "usrp_b210_fpga.bin", err) && vibe::usrpimages::list(dir).empty(), "remove takes it away");
+            ok(vibe::usrpimages::remove(dir, "usrp_b210_fpga.bin", err), "removing what is not there is not an error");
+
+            std::printf("== this computer's UHD images (fake root)\n");
+            const std::string root = std::string(d) + "/root", ship = std::string(d) + "/ship";
+            mkdir(ship.c_str(), 0755); mkdir(root.c_str(), 0755);
+            for (const char* p : {"/usr", "/usr/share", "/usr/share/uhd", "/usr/share/uhd/images", "/usr/share/uhd/4.6.0", "/usr/share/uhd/4.6.0/images",
+                                  "/usr/local", "/usr/local/share", "/usr/local/share/uhd"})
+                mkdir((root + p).c_str(), 0755);
+            auto put = [](const std::string& p, const std::vector<unsigned char>& b) { FILE* f = std::fopen(p.c_str(), "wb"); std::fwrite(b.data(), 1, b.size(), f); std::fclose(f); };
+            std::vector<unsigned char> fw(100000, 'A'); fw[0] = ':';
+            std::vector<unsigned char> fw2 = fw; fw2[500] = 'B';
+            std::vector<unsigned char> s6(2u << 20, 0xFF); std::copy(sync, sync + 4, s6.begin() + 0x10);
+            put(ship + "/usrp_b200_fw.hex", fw); put(ship + "/usrp_b210_fpga.bin", s6);
+            put(root + "/usr/share/uhd/images/usrp_b210_fpga.bin", img);          // the clone's image — differs from ours
+            put(root + "/usr/share/uhd/images/usrp_b200_fw.hex", fw);             // the same firmware as ours
+            put(root + "/usr/share/uhd/4.6.0/images/usrp_b210_fpga.bin", s6);     // a genuine image — the same as ours
+            put(root + "/usr/share/uhd/4.6.0/images/usrp_b200_fw.hex", fw2);      // older firmware — differs
+            put(root + "/usr/share/uhd/images/README", fw);                        // not ours to list
+            unsetenv("UHD_IMAGES_DIR");
+            const auto sd = vibe::usrpimages::systemDirs(root);
+            ok(sd.size() == 2 && sd[0] == root + "/usr/share/uhd/images" && sd[1] == root + "/usr/share/uhd/4.6.0/images",
+               "the system folders found: /usr/share/uhd/images and /usr/share/uhd/<version>/images; a missing one skipped",
+               sd.empty() ? "" : sd[0]);
+            setenv("UHD_IMAGES_DIR", "/usr/share/uhd/images:/opt/none", 1);
+            ok(vibe::usrpimages::systemDirs(root).size() == 2, "UHD_IMAGES_DIR is looked at, and a folder already listed is not listed twice");
+            unsetenv("UHD_IMAGES_DIR");
+            const auto sf = vibe::usrpimages::scanSystem(sd, ship);
+            ok(sf.size() == 4, "four B2xx files; a README is not one", std::to_string(sf.size()));
+            int diffs = 0, sames = 0;
+            for (const auto& f : sf) { if (f.sameAsShipped == 0) diffs++; if (f.sameAsShipped == 1) sames++; }
+            ok(diffs == 2 && sames == 2, "each compared byte-for-byte with what VibeServer ships");
+            const std::string sj = vibe::usrpimages::scanJson(sd, sf);
+            ok(has(sj, "\"same\":false") && has(sj, "\"same\":true") && has(sj, "7-series") && has(sj, "\"from\":1"), "the scan's JSON", sj.substr(0, 200));
+            auto copied = vibe::usrpimages::adopt(sd, 0, "usrp_b210_fpga.bin", dir, ship, err);
+            ok(copied.size() == 1 && copied[0] == "usrp_b210_fpga.bin", "adopting the clone image copies it — and NOT the firmware beside it, which is ours already", err);
+            vibe::usrpimages::remove(dir, "usrp_b210_fpga.bin", err);
+            copied = vibe::usrpimages::adopt(sd, 1, "usrp_b210_fpga.bin", dir, ship, err);
+            ok(copied.size() == 2 && copied[1] == "usrp_b200_fw.hex", "from a folder whose firmware differs, the firmware comes too");
+            ok(vibe::usrpimages::adopt(sd, 9, "usrp_b210_fpga.bin", dir, ship, err).empty() && has(err, "not one of"), "a folder index we did not list is refused");
+            ok(vibe::usrpimages::adopt(sd, 0, "../../etc/shadow", dir, ship, err).empty(), "and a name that is not UHD's");
+            std::string rm = "rm -rf '" + std::string(d) + "'"; (void)!std::system(rm.c_str());
+        }
+    }
+
+    std::printf("== the owner is told what to do\n");
+    {
+        const std::string a = cloneFpgaAdvice("RuntimeError: fx3 is in state 5", "B210");
+        ok(has(a, "needs its maker's FPGA image") && has(a, "upload usrp_b210_fpga.bin in Setup") && has(a, "fx3 is in state 5"),
+           "a clone's FPGA load failure says which file to upload, and where", a);
+        ok(has(cloneFpgaAdvice("b200: FPGA load timed out", "B200mini"), "usrp_b200mini_fpga.bin"), "the file follows the product");
+        ok(cloneFpgaAdvice("LookupError: KeyError: No devices found", "B210").empty(), "another failure is not mistaken for it");
+        const std::string b = busyAdvice("", true);
+        ok(has(b, "Another program is using this USRP") && has(b, "OpenWebRX+"), "nothing answering = another program has it, said plainly", b);
+        ok(has(busyAdvice("usb claim interface failed: LIBUSB_ERROR_BUSY", false), "stop it first"), "a BUSY claim is the same answer");
+        ok(busyAdvice("ValueError: bad rate", false).empty(), "an unrelated error keeps UHD's own words");
     }
 
     std::printf("== sysfs claimed counts (fake tree)\n");

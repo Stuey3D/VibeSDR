@@ -4092,6 +4092,161 @@ const DRIVER_HW = {
               biasT: false, rfNotch: false, lnaState: false },
 };
 
+/* ★★★ V12 THE USRP's OWNER OPTIONS (vibe_usrp_caps.h) — reference clock, time source, the AD9361's DC-offset and
+ *  IQ-balance correction, the analogue RX bandwidth. EVERY control is drawn from the RUNNING radio's own answer
+ *  (hw.radio): a list the radio did not report is not drawn, a GPSDO that is not fitted is not offered, a bandwidth
+ *  range too narrow to matter gets no control (AGENTS.md: no dead control). With the radio not running nothing is
+ *  guessed — the page says when they appear, and the saved values are kept untouched (collectRadio sends only what
+ *  is drawn). Pure: (radio caps, saved radio) → HTML, so scripts/check-usrp-options.mjs tests it from fake caps. */
+function usrpOptsHtml(rc, r) {
+  const e = (t) => String(t == null ? "" : t).replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  r = r || {};
+  if (!rc || rc.driver !== "usrp")
+    return `<div class="hint">The reference clock, the DC-offset and IQ-balance corrections and the analogue bandwidth
+      appear here while this radio is running &mdash; they are read from the radio itself, so nothing is offered that
+      it might not have.</div>`;
+  const words = { internal: "Internal", external: "External (10 MHz / PPS on the SMA sockets)", gpsdo: "GPSDO" };
+  const sel = (id, list, cur) => `<select id="${id}">` + list.map((v) =>
+    `<option value="${e(v)}"${v === cur ? " selected" : ""}>${e(words[v] || v)}</option>`).join("") + `</select>`;
+  let h = "";
+  const cs = Array.isArray(rc.clockSources) ? rc.clockSources : [];
+  const ts = Array.isArray(rc.timeSources) ? rc.timeSources : [];
+  if (cs.length) {
+    const lock = rc.refLocked === true ? ` <span style="color:var(--good)">&mdash; locked</span>`
+               : rc.refLocked === false ? ` <span style="color:var(--bad)">&mdash; NOT locked: check the 10 MHz on the REF socket</span>` : "";
+    h += `<div class="row"><label for="usrpClock">Reference clock</label>${sel("usrpClock", cs, r.usrpClock || "internal")}</div>`
+       + `<div class="hint">Now: ${e(words[rc.clock] || rc.clock || "internal")}${lock}</div>`;
+  }
+  if (ts.length)
+    h += `<div class="row"><label for="usrpTime">Time source (PPS)</label>${sel("usrpTime", ts, r.usrpTime || "internal")}</div>`
+       + `<div class="hint">Now: ${e(words[rc.time] || rc.time || "internal")}. It only timestamps the samples; a receiver rarely needs it.</div>`;
+  if (rc.gpsdo)
+    h += `<div class="hint">GPSDO fitted &mdash; ${rc.gpsLocked === true ? `<span style="color:var(--good)">GPS locked</span>`
+         : rc.gpsLocked === false ? `<span style="color:var(--warn)">no GPS lock yet (it needs a sky view and a few minutes)</span>` : "lock state unknown"}</div>`;
+  const tick = (id, label, on, hint) => `<div class="row"><label for="${id}">${label}</label>`
+    + `<input type="checkbox" id="${id}"${on ? " checked" : ""} style="width:16px;height:16px;accent-color:var(--amber)"></div>`
+    + `<div class="hint">${hint}</div>`;
+  if (rc.dcOffset)
+    h += tick("usrpDcOffset", "Automatic DC-offset correction", r.usrpDcOffset !== false,
+              "The AD9361 removes its own DC spike. On by default; switch it off only to see the raw spike."
+              + (rc.dcOffsetOn === false ? " <b>Off now.</b>" : ""));
+  if (rc.iqBalance)
+    h += tick("usrpIqBalance", "Automatic IQ-balance correction", r.usrpIqBalance !== false,
+              "The AD9361 corrects its own I/Q imbalance, which keeps mirror images down. On by default.");
+  const bc = Array.isArray(rc.rxBwChoices) ? rc.rxBwChoices : [];
+  if (Array.isArray(rc.rxBwRange) && bc.length) {
+    const cur = Number(r.usrpRxBw) || 0;
+    const opts = [`<option value="0"${cur ? "" : " selected"}>AUTO &mdash; follows the sample rate</option>`]
+      .concat(bc.map((b) => `<option value="${b}"${b === cur ? " selected" : ""}>${(b / 1e6).toFixed(b % 1e6 ? 1 : 0)} MHz</option>`));
+    if (cur && !bc.includes(cur)) opts.push(`<option value="${cur}" selected>${(cur / 1e6).toFixed(3)} MHz (saved)</option>`);
+    h += `<div class="row"><label for="usrpRxBw">Analogue bandwidth</label><select id="usrpRxBw">${opts.join("")}</select></div>`
+       + `<div class="hint">The AD9361's filter in front of the converter. AUTO sets it to the span, so nothing outside what is
+          drawn folds in. Narrower than the span dims the edges; wider lets strong signals outside it alias in.`
+       + (rc.rxBwHz ? ` Now: ${(rc.rxBwHz / 1e6).toFixed(3)} MHz.` : "") + `</div>`;
+  }
+  if (rc.optionsNote) h += `<div class="hint" style="color:var(--warn)">${e(rc.optionsNote)}</div>`;
+  if (!h) h = `<div class="hint">This radio reported no reference, correction or bandwidth choices.</div>`;
+  return h;
+}
+/** Only the USRP options that are DRAWN go into the save — a radio that did not report one keeps its saved value. */
+function usrpCollect() {
+  const o = {};
+  if ($("usrpClock")) o.usrpClock = $("usrpClock").value === "internal" ? "" : $("usrpClock").value;
+  if ($("usrpTime")) o.usrpTime = $("usrpTime").value === "internal" ? "" : $("usrpTime").value;
+  if ($("usrpDcOffset")) o.usrpDcOffset = $("usrpDcOffset").checked;
+  if ($("usrpIqBalance")) o.usrpIqBalance = $("usrpIqBalance").checked;
+  if ($("usrpRxBw")) o.usrpRxBw = parseInt($("usrpRxBw").value || "0", 10) || 0;
+  return o;
+}
+
+/* ★★★ V12 THE BOARD'S OWN FIRMWARE / FPGA IMAGE (vibe_usrp_images.h, /vibeserver/usrp-images) — for a clone that is
+ *  not Ettus's design and needs its maker's FPGA image. We ship none of those; the owner uploads theirs, or copies
+ *  the one this computer's own UHD already uses. Written under UHD's own file name into the override folder, which
+ *  is searched before our images, one file at a time. The radio opens again after a change. */
+const USRP_IMG_NAMES = ["usrp_b210_fpga.bin", "usrp_b200_fpga.bin", "usrp_b200mini_fpga.bin", "usrp_b205mini_fpga.bin", "usrp_b200_fw.hex"];
+/** The file a radio most likely needs, from what it calls itself — "USRP B200mini" → usrp_b200mini_fpga.bin. */
+function usrpImgGuess(model) {
+  const m = String(model || "").replace(/^USRP\s+/i, "").toLowerCase();
+  if (m === "b200") return "usrp_b200_fpga.bin";
+  if (m === "b200mini") return "usrp_b200mini_fpga.bin";
+  if (m === "b205mini" || m === "b206mini") return "usrp_b205mini_fpga.bin";
+  return "usrp_b210_fpga.bin";   // ★ B210, and the pre-open "B200/B210" — the clone boards all call themselves B210
+}
+function usrpImgSize(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.round(n / 1024) + " KB"; }
+function usrpImgHtml(st, why, model, scan) {
+  const e = (t) => String(t == null ? "" : t).replace(/[&<>"']/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const guess = usrpImgGuess(model);
+  let h = `<div class="sectionTitle" style="margin-top:14px"><b>Board's own firmware / FPGA image</b></div>
+    <div class="hint">Only for a board that is not Ettus's own design (an AliExpress &ldquo;B210&rdquo; with an Artix-7 or
+      Kintex-7 FPGA, for instance), whose seller supplies its own FPGA image. A genuine Ettus or NI board needs nothing
+      here. The file is kept in <code>${e((st && st.dir) || "the override folder")}</code> and used in place of ours.</div>`;
+  if (why) h += `<div class="hint" style="color:var(--warn)">This radio is not running: ${e(why)}</div>`;
+  const files = (st && Array.isArray(st.files)) ? st.files : [];
+  h += files.length
+    ? files.map((f) => `<div class="row"><span><b>${e(f.name)}</b> &middot; ${e(f.kind || "")} &middot; ${usrpImgSize(f.bytes)} &middot; ${e(new Date(f.mtime * 1000).toLocaleString())}</span>`
+        + `<button type="button" class="btn" onclick="usrpImgRemove('${e(f.name)}')">Remove</button></div>`).join("")
+    : `<div class="hint">No image of the board's own &mdash; VibeServer's are in use.</div>`;
+  h += `<div class="row"><select id="usrpImgName">` + USRP_IMG_NAMES.map((n) =>
+         `<option value="${n}"${n === guess ? " selected" : ""}>${n}</option>`).join("") + `</select>`
+     + `<input type="file" id="usrpImgFile" accept=".bin,.hex"><button type="button" class="btn" onclick="usrpImgUpload()">Upload</button></div>`
+     + `<div class="row"><button type="button" class="btn" onclick="usrpImgScan()">Use this computer's UHD images&hellip;</button></div>`;
+  if (scan) {
+    const list = Array.isArray(scan.system) ? scan.system : [];
+    const dirs = Array.isArray(scan.systemDirs) ? scan.systemDirs : [];
+    h += !dirs.length ? `<div class="hint">No UHD images folder on this computer (looked in /usr/share/uhd/images, /usr/share/uhd/*/images,
+           /usr/local/share/uhd/images and the service's UHD_IMAGES_DIR).</div>`
+       : !list.length ? `<div class="hint">No B2xx images in ${dirs.map(e).join(", ")}.</div>`
+       : list.map((f) => `<div class="row"><span><b>${e(f.name)}</b> in ${e(f.dir)} &middot; ${e(f.kind || "")} &middot; ${usrpImgSize(f.bytes)} &middot; `
+           + `${e(new Date(f.mtime * 1000).toLocaleDateString())} &middot; `
+           + (f.same === true ? "the same as VibeServer's" : f.same === false ? "<b>differs from VibeServer's</b>" : "nothing to compare with")
+           + `</span>` + (f.same === true ? "" : `<button type="button" class="btn" onclick="usrpImgAdopt(${Number(f.from)}, '${e(f.name)}')">Use this one</button>`)
+           + `</div>`).join("");
+  }
+  h += `<div class="hint" id="usrpImgMsg"></div>`;
+  return h;
+}
+let USRP_IMG_SCAN = null;
+async function usrpImgLoad(scan) {
+  const box = $("usrpImg");
+  if (!box) return;
+  const r = radio(), why = (cfg && cfg.usrpStatus && r && cfg.usrpStatus[r.serial]) || "";
+  const model = (HW && HW.radio && HW.radio.driver === "usrp" && HW.radio.model) || (r && (r.label || r.name)) || "";
+  let st = null;
+  try {
+    const q = await authQueryFor(HW_PREFIX);
+    const res = await fetch(`${HW_PREFIX}/vibeserver/usrp-images?${scan ? "scan=1&" : ""}${q}`, {cache:"no-store"});
+    st = await res.json();
+    if (scan) USRP_IMG_SCAN = st;
+  } catch (e) { st = null; }
+  box.innerHTML = usrpImgHtml(st, why, model, scan ? USRP_IMG_SCAN : null);
+}
+async function usrpImgPost(qs, body) {
+  const msg = $("usrpImgMsg");
+  if (msg) msg.textContent = body ? "Uploading…" : "Working…";
+  try {
+    const q = await authQueryFor(HW_PREFIX);
+    const res = await fetch(`${HW_PREFIX}/vibeserver/usrp-images?${qs}&${q}`,
+                            {method: "POST", body: body || "", headers: {"Content-Type": "application/octet-stream"}});
+    const j = await res.json().catch(() => ({}));
+    await usrpImgLoad(!!USRP_IMG_SCAN);
+    const m2 = $("usrpImgMsg");
+    if (m2) m2.textContent = !res.ok ? (j.error || ("Refused (" + res.status + ")."))
+      : j.reopened ? "Saved — the radio opened again with it."
+      : j.openError ? "Saved, but the radio did not open: " + j.openError
+      : "Saved. The radio will use it the next time it starts (within a few seconds if it is retrying).";
+  } catch (e) { if (msg) msg.textContent = "Could not reach the server."; }
+}
+function usrpImgUpload() {
+  const f = $("usrpImgFile") && $("usrpImgFile").files[0];
+  if (!f) { const m = $("usrpImgMsg"); if (m) m.textContent = "Choose the file first."; return; }
+  usrpImgPost(`op=put&name=${encodeURIComponent($("usrpImgName").value)}`, f);
+}
+function usrpImgRemove(name) { usrpImgPost(`op=remove&name=${encodeURIComponent(name)}`); }
+function usrpImgAdopt(from, name) { usrpImgPost(`op=adopt&from=${from}&name=${encodeURIComponent(name)}`); }
+function usrpImgScan() { usrpImgLoad(true); }
+
 /** ★★★ WHAT THIS PARTICULAR RSP HAS (2026-10-22). The RSP family does not share a front end: the RSP1 has no
  *  notches and no bias-T, HDR is the dx family's, the AM notch the Duo's, the 24 MHz reference the RSP2's and the
  *  Duo's. The page drew all of them for every RSP. Now: the RADIO's own answer when its process is running
@@ -4727,7 +4882,15 @@ async function renderHw() {
         <br>It covers 50&nbsp;MHz&ndash;6&nbsp;GHz &mdash; no HF without an upconverter. Its driver and its
         firmware come with VibeServer; there is nothing to install.
         <br><b>Use a USB&nbsp;3 port.</b> On USB&nbsp;2 the rates stop at 8&nbsp;MS/s, and a B210 may need its
-        own power supply.</div>`;
+        own power supply.
+        <br>Below: its <b>reference clock</b> and <b>time source</b> (internal, the 10&nbsp;MHz / PPS sockets, or a fitted
+        GPSDO), the AD9361's own <b>DC-offset and IQ-balance</b> correction, and its <b>analogue bandwidth</b> &mdash;
+        each only where this radio reports it, read while it is running. A board that is not Ettus's own design can be
+        given <b>its maker's FPGA image</b> at the bottom.</div>
+      <div class="sectionTitle" style="margin-top:14px"><b>Radio options</b></div>
+      <div id="usrpOpts">${usrpOptsHtml(hw && hw.radio, r)}</div>
+      <div id="usrpImg"></div>`;
+    setTimeout(() => { usrpImgLoad(false); }, 0);
   } else {
     /* ★★★ NO GAIN SELECT HERE. It sat directly above a note saying "Gain is not set here", and
      *     both were true: the select saved a number the client's live controls then overrode.
@@ -6746,6 +6909,8 @@ function collectRadio() {
        : DRIVER_HW[drv] && DRIVER_HW[drv].biasT ? {biasT: $("biasT").checked} : {}),
     ...(drv === "rtl" || drv === "rtlsdr" || drv === "sdrplay" ? {ppm: parseInt($("ppm").value || "0", 10)} : {}),
     ...(drv === "airspyhf" ? {ppb: parseInt($("ppb").value || "0", 10)} : {}),
+    // ★ V12 the USRP's owner options — only the ones its running radio reported (usrpCollect reads what is drawn).
+    ...(drv === "usrp" ? usrpCollect() : {}),
     // ★ An Icom's own settings — only for an Icom, so no other radio's config ever carries them.
     ...(drv === "icom" ? {
       icomBaud: parseInt($("icomBaud").value, 10) || 115200,
