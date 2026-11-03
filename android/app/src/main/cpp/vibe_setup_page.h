@@ -2063,6 +2063,14 @@ function renderBench(j) {
       + `<td style="padding:3px 0;border-bottom:1px solid var(--line);text-align:right;color:${benchGradeColour(r.grade)}">${esc(pct)}</td>`;
     rows.appendChild(tr);
   }
+  /* ★★ V12 WHAT DID NOT RUN, AND WHY (vibe_benchmark_hw.h — Stuart, 2026-11-03: "no point testing DAB if the user only
+   *  has an AirSpy HF"). Listed, never dropped: a row the radios here cannot use says so, and its default is unchanged. */
+  for (const n of (BENCH.notRun || [])) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td style="padding:3px 6px 3px 0;border-bottom:1px solid var(--line);color:var(--dim)">${esc(benchNotRunLabel(n.id))}</td>`
+      + `<td style="padding:3px 0;border-bottom:1px solid var(--line);text-align:right;color:var(--dim)">${esc(String(n.why || "not run"))}</td>`;
+    rows.appendChild(tr);
+  }
   tbl.classList.remove("hide");
   const bits = [];
   if (BENCH.recommendRate) bits.push("Recommended sample rate: <b>" + (BENCH.recommendRate / 1e6).toFixed(3) + " MS/s</b>");
@@ -2089,11 +2097,49 @@ function renderBench(j) {
     bits.push("LoRa on every channel measured <b>" + Math.round(lall.pct) + "%</b> of a core at its busiest thread here, so it"
               + " starts off \u2014 LoRa still decodes its default channels");
   }
+  /* ★★★ V12 THE WIDE CAPTURE RATES, IN WORDS (vibe_benchmark_wide.h): each rate the radios here offer (or could be
+   *  offered) at 8 MS/s and up — whether this machine keeps up, judged by its HOTTEST THREAD against one core, as a
+   *  locked range (the fixed cost of the capture, then the cost of each listener) and as a full radio. The USRP's rates
+   *  above 16 MS/s are offered only up to the highest rate that kept up here (vibe_usrp_caps.h ratesFor). */
+  const cap = BENCH.capture;
+  if (cap && Array.isArray(cap.rates) && cap.rates.length) {
+    const mhz = hz => (Math.round(hz / 1e4) / 100).toString() + " MS/s";
+    const lines = cap.rates.map(v => {
+      const lk = v.lockedHottestPct >= 0
+        ? (v.lockedOk ? "keeps up as a locked range (" + Math.round(v.lockedHottestPct) + "% of a core at its busiest thread; "
+                        + "each WFM listener adds about " + Math.round(Math.max(0, v.perListenerPct)) + "%"
+                        + (v.lockedUsers ? ", " + v.lockedUsers + " measured" : "") + ")"
+                      : "too slow here as a locked range (" + Math.round(v.lockedHottestPct) + "% of a core at its busiest thread)")
+        : "not measured as a locked range";
+      const fr = v.fullHottestPct >= 0 ? (v.fullOk ? "keeps up as a full radio (" + Math.round(v.fullHottestPct) + "%)"
+                                                   : "too slow as a full radio (" + Math.round(v.fullHottestPct) + "%)") : "";
+      return "<b>" + esc(mhz(v.hz)) + "</b>: this machine " + esc(lk) + (fr ? "; " + esc(fr) : "");
+    });
+    bits.push("Wide capture rates:<br>" + lines.join("<br>"));
+    if (cap.lockedMaxHz > 0 || cap.fullMaxHz > 0)
+      bits.push("A USRP on USB&nbsp;3 is offered rates up to <b>" + esc(mhz(cap.lockedMaxHz)) + "</b> as a locked range and <b>"
+                + esc(mhz(cap.fullMaxHz)) + "</b> as a full radio on this machine. A rate already in use stays offered.");
+  }
   const red = (BENCH.rows || []).filter(r => r.grade === "red").map(r => r.label || r.id);
   if (red.length) bits.push("Too heavy for this box: <b>" + red.map(esc).join(", ") + "</b>");
   adv.innerHTML = bits.join("<br>");
   adv.classList.toggle("hide", !bits.length);
   benchApplyDefaults();
+}
+
+/** ★ A "not run" row's name, from its id — the row never ran, so it has no label of its own. */
+function benchNotRunLabel(id) {
+  const k = String(id || "");
+  const names = { dab: "DAB+", adsb: "ADS-B", "spot_*": "Digital spots (every mode)", lk_wfm: "Locked range, per WFM listener",
+                  auto_wfm: "AUTO bandwidth, added per WFM listener", rdsx_2048: "WFM + Advanced RDS", zoom_2048: "WFM + keep-sharp zoom",
+                  nfm_2048: "NFM", am_2048: "AM", ssb_2048: "SSB" };
+  if (names[k]) return names[k];
+  let m = /^wfm_(\d+)$/.exec(k);
+  if (m) return "WFM stereo @ " + (Number(m[1]) / 1000) + " MS/s";
+  m = /^lr_(\d+)_(\d+)$/.exec(k);
+  if (m) return "Locked range @ " + (Number(m[1]) / 1000) + " MS/s, " + m[2] + " WFM listener" + (m[2] === "1" ? "" : "s");
+  if (k.indexOf("dec_") === 0) return "Decoder: " + k.slice(4).toUpperCase();
+  return k;
 }
 
 /** ★★ What the measurement CHANGES. Only ever tightens a setting the owner has not already tightened further,
@@ -4087,7 +4133,8 @@ const DRIVER_HW = {
               biasT: true,  rfNotch: false, lnaState: false },
   /* ★ V12 ETTUS USRP B2xx — EXPERIMENTAL. Offline (no process running it) the USB-2-safe list from vibe_usrp_caps.h
    *  ratesFor(2); once it is running the radio's OWN list replaces this one, as for every radio here — and on a USB 3
-   *  link that list goes on to 10, 12.5 and 16 MS/s. No bias-T, no notches, no LNA states. */
+   *  link that list goes on to 10, 12.5 and 16 MS/s, then 20 / 25 / 28 / 30.72 / 32 MS/s up to what this machine's
+   *  benchmark kept up at (V12 2026-11-03 — the rate gate). No bias-T, no notches, no LNA states. */
   usrp:     { rates: [1000000, 2000000, 2400000, 3200000, 4000000, 5000000, 8000000],
               biasT: false, rfNotch: false, lnaState: false },
 };

@@ -8,6 +8,7 @@
 //   · which image FILE is loaded — an owner's override first, then the one the package ships.
 // usrp_source.cpp asks these and does the hardware writes itself.
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -91,15 +92,44 @@ inline Host thisHost() {
     return Host::X86_64;
 #endif
 }
-inline std::vector<uint32_t> ratesFor(int usbSpeed) {
+/** ★★★ THE WIDE RATES, BEHIND THE BENCHMARK (V12, 2026-11-03 — a tester's B210 on an 11th-gen i7, wanting 82–108 MHz,
+ *  the whole FM band with the Dutch pirate end, in ONE locked-range capture: 26 MHz of band → 30.72 MS/s).
+ *  ★ What the B2xx does (UHD's B200 manual and b200_impl.cpp): the AD9361's master clock (MCR) runs up to 61.44 MHz with
+ *    one channel streaming (30.72 MHz with two); with no MCR given — we give none — UHD picks the highest MCR that is
+ *    the rate times a power of two, and the FPGA's halfbands decimate to the rate. So 20 → MCR 40 (÷2), 25 → 50 (÷2),
+ *    28 → 56 (÷2), 30.72 → 61.44 (÷2), 32 → 32 (÷1, the AD9361's own filters only). All five are clean.
+ *  ★ The link: sc16 is 4 bytes a sample — 30.72 MS/s is 123 MB/s and 32 MS/s 128 MB/s, inside USB 3's ~500 MB/s and
+ *    inside what Ettus quotes for one channel over USB 3 (56 MHz of bandwidth, 61.44 MS/s on a good controller). 32 is
+ *    the top offered: past it the server's FFT cap (32768 bins) leaves under 1 kHz of resolution per bin and a listener's
+ *    channel the same, and nothing here has been measured that fast.
+ *  ★★ OFFERED ONLY WHEN THIS MACHINE'S BENCHMARK SAYS ITS FRONT END KEEPS UP AT THAT RATE WITH HEADROOM — `gateHz`, the
+ *     highest rate the saved benchmark passed (vibe_benchmark_wide.h; the locked-range verdict for a locked radio, the
+ *     full-radio one otherwise). 0 = never measured: none of these. USB 3 only. ★ AND NEVER HIDING ONE IN USE: `keepHz`
+ *     (the radio's saved rate or locked rate) stays offered even if a later benchmark says no — the default is set by the
+ *     benchmark, the owner's choice is never taken away. */
+inline const std::vector<uint32_t>& gatedRates() {
+    static const std::vector<uint32_t> g = { 20000000u, 25000000u, 28000000u, 30720000u, 32000000u };
+    return g;
+}
+inline std::vector<uint32_t> ratesFor(int usbSpeed, double gateHz = 0, double keepHz = 0) {
     static const uint32_t all[] = { 1000000u, 2000000u, 2400000u, 3200000u, 4000000u, 5000000u,
                                     8000000u, 10000000u, 12500000u, 16000000u };
     // ★ Unknown speed (0) is treated as USB 2 — the conservative reading, never the optimistic one.
     const uint32_t top = usbSpeed >= 3 ? 16000000u : 8000000u;
     std::vector<uint32_t> out;
     for (uint32_t r : all) if (r <= top) out.push_back(r);
+    if (usbSpeed >= 3)
+        for (uint32_t r : gatedRates())
+            if ((gateHz > 0 && r <= gateHz + 0.5) || (keepHz > 0 && std::fabs((double)r - keepHz) < 1.0)) out.push_back(r);
     return out;
 }
+/** ★ The gate's verdict, set once from the saved benchmark (main.cpp, at start-up and after a run) and read when a radio
+ *  opens (usrp_source.cpp). Two figures: the LOCKED-RANGE front end (the channeliser + its listeners) and the FULL-RADIO
+ *  one (the shared pipeline); a radio is judged by the one it runs. 0 = no verdict (never measured, or too slow). */
+struct RateGate { double lockedHz = 0, fullHz = 0; bool locked = false; };
+inline RateGate& rateGate() { static RateGate g; return g; }
+/** The figure THIS radio is judged by: the locked-range one for a locked-range radio, the full-radio one otherwise. */
+inline double gateHzFor(const RateGate& g) { return g.locked ? g.lockedHz : g.fullHz; }
 inline uint32_t defaultRate(Host h) { return h == Host::Arm64 ? 2400000u : 4000000u; }
 /** Nearest offered rate to `hz`; `hz` <= 0 = the host's default (a fresh radio with no saved rate). */
 inline uint32_t nearestRate(const std::vector<uint32_t>& rates, double hz, Host h) {
@@ -445,6 +475,8 @@ struct CapsView {
     double rxBwHz = 0;                    // the analogue bandwidth in force
     bool rxBwAuto = true;
     std::string optionsNote;              // a saved choice the radio refused, in words ("" = none)
+    // ★ V12 the rate gate (ratesFor): the highest wide rate this machine's benchmark passed, and which path judged it
+    double gateHz = 0; bool gateLocked = false;
 };
 inline std::string jsonQ(const std::string& s) {
     std::string o = "\"";
@@ -474,6 +506,14 @@ inline std::string capsJson(const CapsView& c) {
     j += "]";
     if (!c.antennas.empty()) j += ",\"antenna\":" + jsonQ(c.antenna);
     j += std::string(",\"antennaLocked\":") + (c.antennaLocked ? "true" : "false");
+    /* ★★ V12 THE RATE GATE, said (2026-11-03): on USB 3 the rates above 16 MS/s are offered only up to what THIS
+     *  machine's benchmark kept up at with headroom (`maxHz`, 0 = not measured, or too slow), judged by the locked-range
+     *  path for a locked-range radio and the full-radio one otherwise. The Setup page says it in words. */
+    if (c.usbSpeed >= 3) {
+        char g[128];
+        std::snprintf(g, sizeof g, ",\"rateGate\":{\"maxHz\":%.0f,\"by\":\"%s\"}", c.gateHz, c.gateLocked ? "locked" : "full");
+        j += g;
+    }
     /* ★★ THE OWNER'S OPTIONS — each key only when the radio reported the capability, so a client can draw exactly
      *    what exists and nothing else. Capability and state travel together (the bias-T lesson). */
     auto list = [&](const char* k, const std::vector<std::string>& v) {

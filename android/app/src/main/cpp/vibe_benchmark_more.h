@@ -705,7 +705,11 @@ inline Row loraRealTimeRow(const char* id, const char* label, double budgetUnits
 inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, const std::function<void(const std::string&)>& step,
                                            int* countOnly = nullptr) {
     std::vector<Row> rows;
-    auto run = [&](const std::string& label, const std::function<Row()>& f) {
+    auto run = [&](std::string id, const std::string& label, const std::function<Row()>& f) {
+        // ★ V12 THE BENCHMARK TAILORED TO THE RADIOS HERE (vibe_benchmark_hw.h): a row no radio here can use is not run —
+        //   not counted, not timed; the caller lists it as "not run" with the reason. Ids are lower-case (spot_*).
+        for (auto& ch : id) ch = (char)std::tolower((unsigned char)ch);
+        if (rowSkipped(id)) return;
         if (countOnly) { ++*countOnly; return; }
         if (step) step(label);
         const double w0 = wallNow();
@@ -716,35 +720,35 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     const std::string attach = "{\"type\":\"audio_extension_attach\",";
 
     // ── a listener's decoders, on 48 kHz audio ──
-    run("Decoder: RTTY AUTO", [&] {
+    run("dec_rttyauto", "Decoder: RTTY AUTO", [&] {
         auto a = rttyText("RYRYRYRY CQ CQ DE G4ABC G4ABC THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG\r\n", 1500);
         addNoise(a, 0.05f, 1);
         return hostAudioRow("dec_rttyauto", "Decoder: RTTY AUTO", "fsk", attach + "\"extension_name\":\"fsk\",\"auto\":true}", a, Count::Chars);
     });
-    run("Decoder: CW", [&] {
+    run("dec_cw", "Decoder: CW", [&] {
         return hostAudioRow("dec_cw", "Decoder: CW", "cw", attach + "\"extension_name\":\"cw\"}", cwSignal("CQ CQ DE G4ABC G4ABC K   "), Count::Chars);
     });
-    run("Decoder: CW skimmer", [&] {
+    run("dec_cwskim", "Decoder: CW skimmer", [&] {
         return hostIqRow("dec_cwskim", "Decoder: CW skimmer (48 kHz)", "cwskim", attach + "\"extension_name\":\"cwskim\",\"width\":48000}",
                          clipNamed(clips, "cw40"), "cw_signals");
     });
-    run("Decoder: PSK31", [&] {
+    run("dec_psk", "Decoder: PSK31", [&] {
         return hostAudioRow("dec_psk", "Decoder: PSK31", "psk", attach + "\"extension_name\":\"psk\",\"center_frequency\":1000}",
                             pskSignal("CQ CQ DE G4ABC G4ABC PSE K ", 48000), Count::Chars);
     });
-    run("Decoder: PSK skimmer", [&] {
+    run("dec_pskskim", "Decoder: PSK skimmer", [&] {
         return hostIqRow("dec_pskskim", "Decoder: PSK skimmer (48 kHz)", "pskskim", attach + "\"extension_name\":\"pskskim\",\"width\":48000}",
                          clipNamed(clips, "psk20"), "psk_signals");
     });
-    run("Decoder: JTTY", [&] {
+    run("dec_jtty", "Decoder: JTTY", [&] {
         return hostAudioRow("dec_jtty", "Decoder: JTTY", "jtty", attach + "\"extension_name\":\"jtty\"}", jttyMessage("CQ G4ABC IO91", 48000, 1000), Count::Any);
     });
-    run("Decoder: SITOR-A", [&] {
+    run("dec_sitora", "Decoder: SITOR-A", [&] {
         const auto L = sitorsynth::makeLink("002320204", "364775427", "GOOD MORNING THIS IS A TEST +?", "QSL +?", "73 +?", 4, 7);
         return hostAudioRow("dec_sitora", "Decoder: SITOR-A", "sitora", attach + "\"extension_name\":\"sitora\",\"center_frequency\":1000}",
                             sitorsynth::render(L, 48000, 1000, 15, -6, 1), Count::Chars);
     });
-    run("Decoder: DSC", [&] {
+    run("dec_dsc", "Decoder: DSC", [&] {
         // ★ A test call (ITU-R M.493 format 120, category safety, "test" 118, EOS 117) — the decoder's own test case
         std::vector<int> s{ 120 };
         dsc::build::mmsi(s, "002320004"); s.push_back(108); dsc::build::mmsi(s, "232001234"); s.push_back(118); s.push_back(126);
@@ -755,28 +759,28 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         addNoise(a, 0.05f, 2);
         return hostAudioRow("dec_dsc", "Decoder: DSC (MF/HF)", "dsc", attach + "\"extension_name\":\"dsc\",\"band\":\"hf\"}", a, Count::Any);
     });
-    run("Decoder: EAS / SAME", [&] {
+    run("dec_same", "Decoder: EAS / SAME", [&] {
         auto a = sameAlert("ZCZC-WXR-TOR-024031-024033+0030-3041345-KLWX/NWS-");
         addNoise(a, 0.05f, 3);
         return hostAudioRow("dec_same", "Decoder: EAS / SAME", "same", attach + "\"extension_name\":\"same\"}", a, Count::Any);
     });
-    run("Decoder: SELCAL", [&] {
+    run("dec_selcal", "Decoder: SELCAL", [&] {
         auto a = selcalCall("AFHL");
         addNoise(a, 0.05f, 4);
         return hostAudioRow("dec_selcal", "Decoder: SELCAL", "selcal", attach + "\"extension_name\":\"selcal\"}", a, Count::Any);
     });
-    run("Decoder: MFSK, Olivia, Contestia, THOR", [&] {
+    run("dec_mfsk", "Decoder: MFSK, Olivia, Contestia, THOR", [&] {
         auto a = textModeSynth(TextModeDecoder::Family::Mfsk, "mfsk16", "CQ CQ DE G4ABC G4ABC PSE K\n", 48000, 1500);
         addNoise(a, 0.1f, 5);
         return hostAudioRow("dec_mfsk", "Decoder: MFSK / Olivia / Contestia / THOR (AUTO)", "mfsk",
                             attach + "\"extension_name\":\"mfsk\",\"mode\":\"auto\"}", a, Count::Chars);
     });
-    run("Decoder: Feld Hell", [&] {
+    run("dec_hell", "Decoder: Feld Hell", [&] {
         auto a = feldHellSynth("CQ CQ DE G4ABC G4ABC K ", 48000, 1000);
         addNoise(a, 0.05f, 6);
         return hostAudioRow("dec_hell", "Decoder: Feld Hell", "hell", attach + "\"extension_name\":\"hell\"}", a, Count::Lines);
     });
-    run("Decoder: APRS", [&] {
+    run("dec_aprs", "Decoder: APRS", [&] {
         auto a = aprsPacket("M0ABC", 9, "!5049.00N/00118.00W>VibeSDR benchmark");
         auto b = aprsPacket("G4ABC", 7, "!5130.00N/00007.00W-test");
         a.insert(a.end(), b.begin(), b.end());
@@ -787,7 +791,7 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     /* ★★ PAGING — ANDROID LOCAL HARDWARE ONLY (the define is the Android library's), so the row exists only on the build
      *  that offers the decoder (AGENTS.md: never show what cannot work here). SYNTHETIC ONLY: paging frequencies carry
      *  private messages, so no recording of one is ever used. FLEX 1600, our own transmitter, on the channel IQ. */
-    run("Decoder: Paging", [&] {
+    run("dec_paging", "Decoder: Paging", [&] {
         Row r; r.id = "dec_paging"; r.label = "Decoder: Paging (POCSAG / FLEX, AUTO)";
         auto peer = std::make_shared<CountPeer>();
         DecoderHost::Env env; env.dialHz = [] { return 153.0e6; };
@@ -818,7 +822,7 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     // ── the digital-spots modes, each its own engine (FT8 and FT4 are the dec_ft8 row) ──
     for (const auto& m : digi::modes()) {
         if (m.name == "FT8" || m.name == "FT4") continue;
-        run("Digital spots: " + m.name, [&] {
+        run("spot_" + m.name, "Digital spots: " + m.name, [&] {
             double utc0 = kSpotT0, pace = 0; bool sig = true;
             const auto a = spotAudio(m, utc0, pace, sig);
             return engineRow(m, a, utc0, pace, sig);
@@ -826,7 +830,7 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     }
 
     // ── whole-radio modes ──
-    run("Decoder: NDB beacons", [&] {
+    run("dec_ndb", "Decoder: NDB beacons", [&] {
         Row r; r.id = "dec_ndb"; r.label = "Decoder: NDB beacons";
         const DecClip* c = clipNamed(clips, "ndb");
         if (!c) { r.label += " (no clip)"; return r; }
@@ -849,7 +853,7 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         s.stop();
         return r;
     });
-    run("Decoder: AIS", [&] {
+    run("dec_ais", "Decoder: AIS", [&] {
         Row r; r.id = "dec_ais"; r.label = "Decoder: AIS ships @ 2.4 MS/s";
         const double fs = 2.4e6;
         std::vector<std::complex<float>> x((size_t)fs);   // ★ one second, looped
@@ -909,7 +913,7 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         return r;
     });
     auto ismRow = [&](const char* id, const char* label, const char* clipId, const char* bandId) {
-        run(label, [&] {
+        run(id, label, [&] {
             Row r; r.id = id; r.label = label;
             const DecClip* c = clipNamed(clips, clipId);
             const vibeism::Band* band = nullptr;
@@ -944,14 +948,14 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
     ismRow("dec_wmbus", "Decoder: ISM meters (wM-Bus) @ 2.4 MS/s (868 MHz)", "ism868", "868");
     // ★★ LoRa on every channel the 868 capture holds (the owner's "lora+all") — dec_lora's sibling (the default channels,
     //    one of the first eight). Its grade decides whether "every channel" starts ticked on a fresh setup.
-    run("Decoder: LoRa (868, every channel)", [&] {
+    run("dec_lora_all", "Decoder: LoRa (868, every channel)", [&] {
         Row r = loraRealTimeRow("dec_lora_all", "Decoder: LoRa (868, every channel)", INFINITY);
         r.ms = -1;   // ★ run() times the row itself
         return r;
     });
 
     // ── a listener's own filters (per listener, on their DSP thread — no decoder slot) ──
-    run("CTCSS / DCS tone ID", [&] {
+    run("dec_tone", "CTCSS / DCS tone ID", [&] {
         Row r; r.id = "dec_tone"; r.label = "CTCSS / DCS tone ID (per NFM listener)";
         const double fs = 32000;   // ★ an NFM listener's channel at 2.048 MS/s (the benchmark's own geometry)
         std::vector<std::complex<float>> x((size_t)(fs * 4));
@@ -980,7 +984,7 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         return r;
     });
     auto audioFilterRow = [&](const char* id, const char* label, bool nr) {
-        run(label, [&] {
+        run(id, label, [&] {
             Row r; r.id = id; r.label = label;
             std::vector<float> a((size_t)48000 * 4);
             std::mt19937 g(10); std::normal_distribution<float> d(0.f, 0.05f);

@@ -25,6 +25,7 @@
 #include "vibe_health.h"
 #include "vibe_benchmark_decoders.h"   // ★ every decoder timed, and how many at once (B6)
 #include "vibe_benchmark_more.h"       // ★ …every decoder after the first eight, and the defaults rule (2026-10-31)
+#include "vibe_benchmark_hw.h"         // ★ V12 which rows the radios HERE can use (2026-11-03)
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -82,7 +83,11 @@ namespace benchdetail {
 using vibedsp::cf32;
 using vibedsp::RxPipeline;
 
-/** CPU seconds per thread of this process, by thread id. Linux / Android: /proc/self/task/<tid>/stat. */
+#if defined(__APPLE__)
+inline std::map<long, std::string>& macNames() { static std::map<long, std::string> m; return m; }
+inline std::mutex& macNamesMutex() { static std::mutex m; return m; }
+#endif
+/** CPU seconds per thread of this process, by thread id. Linux / Android: /proc/self/task/<tid>/stat; the Mac: Mach. */
 inline std::map<long, double> threadCpu() {
     std::map<long, double> out;
 #if defined(__linux__) || defined(__ANDROID__)
@@ -102,6 +107,12 @@ inline std::map<long, double> threadCpu() {
         }
         closedir(d);
     }
+#elif defined(__APPLE__)
+    /* ★★ V12 (2026-11-03): THE MAC TOO. This read nothing on macOS, so every row there counted the feeding thread alone
+     *  — a pipeline's workers, a listener's demodulator, its Opus encode, all invisible, and the Mac's figures read low.
+     *  The decoder rows' own Mach reader (benchdec::threadTimes) already does it; its names are kept for threadName. */
+    std::lock_guard<std::mutex> lk(macNamesMutex());
+    for (const auto& kv : benchdec::threadTimes()) { out[(long)kv.first] = kv.second.sec; macNames()[(long)kv.first] = kv.second.name; }
 #endif
     return out;
 }
@@ -109,6 +120,10 @@ inline std::string threadName(long tid) {
 #if defined(__linux__) || defined(__ANDROID__)
     char path[96]; snprintf(path, sizeof path, "/proc/self/task/%ld/comm", tid);
     if (FILE* f = fopen(path, "r")) { char b[64] = {0}; if (fgets(b, sizeof b, f)) { fclose(f); std::string s(b); while (!s.empty() && s.back() == '\n') s.pop_back(); return s; } fclose(f); }
+#elif defined(__APPLE__)
+    std::lock_guard<std::mutex> lk(macNamesMutex());
+    auto it = macNames().find(tid);
+    if (it != macNames().end() && !it->second.empty()) return it->second;
 #endif
     return "thread";
 }
@@ -168,6 +183,7 @@ inline std::vector<cf32> nbSignal(double fs, double seconds, double offset) {
 
 struct Result { std::string id, label; double rate = 0, pct = 0; std::string hottest;
                 int decoded = -1, ms = -1;   // ★ decoder rows: what was decoded; every row: its wall time
+                long dropped = -1;           // ★ V12 wide rows: IQ buffers / listener blocks lost (0 = it kept up)
                 std::vector<std::pair<std::string, double>> threads; };   // every thread's own % — see runOne
 
 static void noAudio(void*, const float*, int, int, int) {}
@@ -343,6 +359,9 @@ inline Result runListener(const std::string& id, const std::string& label, doubl
 
 inline const char* grade(double pct) { return pct < 0 ? "none" : pct < 70 ? "green" : pct <= 85 ? "amber" : "red"; }
 } // namespace benchdetail
+} // namespace vibe
+#include "vibe_benchmark_wide.h"   // ★ V12 the wide capture rates, measured (2026-11-03)
+namespace vibe {
 
 /** ★★ UPLINK, in kB/s — the other half of "how many listeners" (Stuart, 2026-09-19: a box in deepest Brazil may have
  *  CPU to spare and no bandwidth). ~4 MB posted to the directory's /api/speedtest, which reads and discards it; curl
@@ -367,8 +386,36 @@ inline double measureUplinkKBps() {
 inline std::string runBenchmark(const std::function<void(int, int, const std::string&)>& progress = nullptr,
                                 double secondsPerScenario = 4.0, double uplinkKBps = -2,
                                 const std::function<std::vector<benchdetail::Result>()>& moreRows = nullptr,
-                                int moreRowSteps = 2, const std::string& decoderClip = "") {
+                                int moreRowSteps = 2, const std::string& decoderClip = "",
+                                const benchhw::Hw& hw = benchhw::Hw()) {
     const double benchT0 = benchdec::rowClock();
+    /* ★★★ V12 THE RUN TAILORED TO THE RADIOS HERE (vibe_benchmark_hw.h — Stuart, 2026-11-03). `hw` empty = no radio
+     *  configured = every row, as before. A row skipped is listed in `notRun` with the reason, never dropped silently,
+     *  and what it would have set keeps its existing default. The decoder runners ask benchdec::rowSkipped. */
+    std::vector<std::pair<std::string, std::string>> notRun;
+    auto gated = [&](const std::string& id) {
+        const benchhw::Gate g = benchhw::gateRow(hw, id);
+        if (!g.run) notRun.push_back({ id, g.why });
+        return !g.run;
+    };
+    benchdec::rowSkipFn() = [&hw](const std::string& id) { return !benchhw::gateRow(hw, id).run; };
+    struct SkipReset { ~SkipReset() { benchdec::rowSkipFn() = nullptr; } } skipReset;
+    // The decoder rows' own ids, for the "not run" list (their runners skip them silently — the list is said here).
+    for (const char* id : { "dec_rtty", "dec_navtex", "dec_wefax", "dec_sstv", "dec_time", "dec_ft8", "dec_ft8band", "dec_lora",
+                            "dec_rttyauto", "dec_cw", "dec_cwskim", "dec_psk", "dec_pskskim", "dec_jtty", "dec_sitora", "dec_dsc",
+                            "dec_same", "dec_selcal", "dec_mfsk", "dec_hell", "dec_aprs", "dec_paging", "dec_ndb", "dec_ais",
+                            "dec_ism", "dec_wmbus", "dec_lora_all", "dec_tone", "dec_nr", "dec_notch", "dab", "adsb" })
+        (void)gated(id);
+    if (benchhw::gateNeed(hw, benchhw::Need::Spots).run == false) notRun.push_back({ "spot_*", benchhw::gateNeed(hw, benchhw::Need::Spots).why });
+    // ★ The hosts' DAB (2 steps) and ADS-B (2) rows: not counted when they will not run, so the bar still ends at its end.
+    if (moreRows) {
+        if (!benchhw::gateRow(hw, "dab").run) moreRowSteps -= 2;
+        if (!benchhw::gateRow(hw, "adsb").run) moreRowSteps -= 2;
+        moreRowSteps = std::max(0, moreRowSteps);
+    }
+    const std::vector<double> wide = benchhw::wideRates(hw);
+    // ★ The wide rows' steps: a full-radio row and three locked-range rows per rate.
+    const int wideSteps = 4 * (int)wide.size();
     /* ★★ THIS THREAD PLAYS vibe-dsp — it feeds every scenario (runOne) and runs the decoder rows — so it flushes
      *  denormals as the served one does (vibeAudioThread). Without it the bench would charge a quiet signal's
      *  denormals to a box whose server never pays them. See vibedsp/vibe_denormals.h. */
@@ -386,7 +433,9 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         //   bandwidth rows; the first 8 decoder rows and every row after them (counted by a dry run of the same list, so a
         //   new decoder cannot leave the bar short); DAB's 2 + ADS-B's 2 where the host adds them. (It said 6 decoder rows
         //   after two more had joined — the bar ran past its end.)
-        p.steps.store(1 + 1 + 7 + 1 + 4 + 7 + 4 + 8 + benchdec::moreDecoderSteps() + (moreRows ? moreRowSteps : 0));
+        // ★ V12: the standard and decoder rows count whether or not they run (a skipped one is a step done at once);
+        //   the wide rows add their own.
+        p.steps.store(1 + 1 + 7 + 1 + 4 + 7 + 4 + 8 + benchdec::moreDecoderSteps() + (moreRows ? moreRowSteps : 0) + wideSteps);
         { std::lock_guard<std::mutex> lk(p.m); p.label = "starting"; }
     }
     /* ★★★ FIRST, WHILE THE MACHINE IS COOLEST: the all-core clock calibration the throttle snail is
@@ -409,6 +458,8 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     if (!RxPipeline::workerInit()) RxPipeline::workerInit() = [](const char* n) {
 #if defined(__linux__) || defined(__ANDROID__)
         pthread_setname_np(pthread_self(), n);
+#elif defined(__APPLE__)
+        pthread_setname_np(n);
 #else
         (void)n;
 #endif
@@ -425,15 +476,40 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
     const int N = (int)(sizeof sc / sizeof sc[0]);
     std::vector<Result> res;
     std::map<double, std::vector<cf32>> fmCache, nbCache;
+    /* ★★ V12 WHICH OF THEM RUN, AND AT WHAT RATE. The three WFM RATE rows run only at a rate a radio here offers (an RSP
+     *  offers none of 1.024 / 2.048 / 2.4 exactly but 2.048; an HF+ none of them). The FEATURE rows — Advanced RDS, NFM,
+     *  AM, SSB — measure a feature, not a rate: they run at the rate nearest 2.048 MS/s that a radio here offers (an HF+:
+     *  912 kS/s), the id kept (it is what the defaults rule reads) and the label saying the real rate. */
+    auto rateFor = [&](const Sc& c, std::string& label) -> double {
+        if (hw.radios.empty()) return c.fs;
+        const std::string id = c.id;
+        if (gated(id)) return 0;
+        const bool rateRow = id.rfind("wfm_", 0) == 0;
+        if (rateRow) {
+            if (benchhw::rateOffered(hw, c.fs, false)) return c.fs;
+            notRun.push_back({ id, "not run \u2014 no radio here offers " + benchhw::rateWords(c.fs) });
+            return 0;
+        }
+        const double fs = benchhw::nearestOffered(hw, c.fs, c.fm ? benchhw::Need::Wfm : benchhw::Need::None);
+        if (fs <= 0) { notRun.push_back({ id, "not run \u2014 no radio here offers a capture rate" }); return 0; }
+        if (std::fabs(fs - c.fs) > 1) {
+            const std::string from = "@ " + benchhw::rateWords(c.fs), to = "@ " + benchhw::rateWords(fs);
+            const auto at = label.find(from);
+            if (at != std::string::npos) label.replace(at, from.size(), to);
+        }
+        return fs;
+    };
     for (int i = 0; i < N; ++i) {
-        benchStep(sc[i].label);
-        if (progress) progress(i, N, sc[i].label);
+        std::string label = sc[i].label;
+        const double fs = rateFor(sc[i], label);
+        benchStep(label);
+        if (progress) progress(i, N, label);
+        if (fs <= 0) continue;
         auto& cache = sc[i].fm ? fmCache : nbCache;
-        if (!cache.count(sc[i].fs))
-            cache[sc[i].fs] = sc[i].fm ? fmStation(sc[i].fs, 1.0, 200000.0) : nbSignal(sc[i].fs, 1.0, 200000.0);
+        if (!cache.count(fs))
+            cache[fs] = sc[i].fm ? fmStation(fs, 1.0, 200000.0) : nbSignal(fs, 1.0, 200000.0);
         const double t0 = benchdec::rowClock();
-        res.push_back(runOne(sc[i].id, sc[i].label, sc[i].fs, sc[i].mode, sc[i].bw, cache[sc[i].fs],
-                             secondsPerScenario, sc[i].rds));
+        res.push_back(runOne(sc[i].id, label, fs, sc[i].mode, sc[i].bw, cache[fs], secondsPerScenario, sc[i].rds));
         res.back().ms = (int)std::lround(1000.0 * (benchdec::rowClock() - t0));
     }
     /* ★★★ KEEP-SHARP ZOOM (Stuart, 2026-10-29: "add it into the initial setup benchmark and then enable it or disable
@@ -442,15 +518,19 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
      *  OFF only when this grades RED (vibe_setup_page.h benchApplyDefaults, ServerModeScreen.tsx applyBench).
      *  Pi 2 live, 2026-10-29: 151 % → 186 % of one core for the whole process while zooming, audio and feed clean. */
     {
-        const char* zl = "WFM + keep-sharp zoom @ 2.048 MS/s";
+        std::string zl = "WFM + keep-sharp zoom @ 2.048 MS/s";
+        const Sc zsc{ "zoom_2048", "", 2048000, M::WFM, 200000, true, false };
+        const double fz = rateFor(zsc, zl);
         benchStep(zl);
         if (progress) progress(N - 1, N, zl);
-        if (!fmCache.count(2048000)) fmCache[2048000] = fmStation(2048000, 1.0, 200000.0);
-        const double tz = benchdec::rowClock();
-        res.push_back(runOne("zoom_2048", zl, 2048000, M::WFM, 200000, fmCache[2048000], secondsPerScenario,
-                             false, 25000.0));
-        res.back().ms = (int)std::lround(1000.0 * (benchdec::rowClock() - tz));
+        if (fz > 0) {
+            if (!fmCache.count(fz)) fmCache[fz] = fmStation(fz, 1.0, 200000.0);
+            const double tz = benchdec::rowClock();
+            res.push_back(runOne("zoom_2048", zl, fz, M::WFM, 200000, fmCache[fz], secondsPerScenario, false, 25000.0));
+            res.back().ms = (int)std::lround(1000.0 * (benchdec::rowClock() - tz));
+        }
     }
+    fmCache.clear(); nbCache.clear();   // ★ up to ~50 MB of test signal at the higher rates: not held through the rest
     /* ★★★ LOCKED RANGE — THE LISTENER'S WHOLE CHAIN, NOT JUST ITS DEMODULATOR (2026-09-19).
      *  This timed a bare RxPipeline at channel rate, and on a Pi 2 read 3.4 % for an NFM listener the live
      *  server cost ~7 %. The missing half is the CHANNEL EXTRACT: the listener's own inverse transform, cut
@@ -479,6 +559,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         for (const auto& l : lk) {
             benchStep(l.label);
             if (progress) progress(N, N, l.label);
+            if (gated(l.id)) continue;   // ★ V12: a WFM listener only where a radio here reaches broadcast FM
             int chanBins = 64;
             const double need = std::max(l.bw * 2.5, 24000.0);
             while (chanBins < fftSize && fs * chanBins / fftSize < need) chanBins <<= 1;
@@ -543,6 +624,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
          *  the listener's), so these rows set nothing — they say what it costs. A difference of two measurements: a
          *  figure under the noise reads 0. */
         auto autoRow = [&](const char* id, const char* label, M mode, double bw, const std::vector<cf32>& iq) {
+            if (gated(id)) { benchStep(label); return; }
             const bool wfm = mode == M::WFM;
             Result on = listener(id, label, mode, bw, iq, [wfm](RxPipeline& p) {
                 if (wfm) p.setAutoBandwidth(110000.0); else p.setAmAutoBandwidth(true); });
@@ -594,12 +676,29 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         }
     }
     if (moreRows) { if (progress) progress(N, N, "DAB+"); for (auto& r : moreRows()) res.push_back(r); }
+    /* ★★★ V12 THE WIDE CAPTURE RATES (vibe_benchmark_wide.h) — only where a radio here offers, or could be offered, 8 MS/s
+     *  or more. Last, after everything a smaller box measures, so a machine without such a radio runs exactly what it
+     *  did. The verdicts are the USRP's rate gate (vibe_usrp_caps.h ratesFor). */
+    std::vector<benchwide::WideVerdict> wideV;
+    if (!wide.empty()) {
+        auto stepFn = [&](const std::string& l) { benchStep(l); if (progress) progress(N, N, l); };
+        const size_t before = notRun.size();
+        wideV = benchwide::runWideRows(wide, secondsPerScenario, res, notRun, stepFn);
+        // ★ A rate not run is a step not taken — move the bar on so it still ends at its end.
+        for (size_t k = before; k < notRun.size(); ++k) benchStep("");
+    }
     if (progress) progress(N, N, "done");
     { auto& p = benchProgress(); p.step.store(p.steps.load()); { std::lock_guard<std::mutex> lk(p.m); p.label = "done"; } }
     // ★ The recommended rate: the highest WFM rate that grades green, never below 1.024 MS/s.
     double rec = 1024000;
+    bool anyWfmRate = hw.radios.empty();
+    // ★ The standard rows only (2.4 MS/s and below): the wide rows' verdict is the "capture" block below, per radio path.
+    for (const auto& r : res) if (r.id.rfind("wfm_", 0) == 0 && r.rate <= 2400000) anyWfmRate = true;
     for (const auto& r : res)
-        if (r.id.rfind("wfm_", 0) == 0 && r.pct < 70 && r.rate > rec) rec = r.rate;
+        if (r.id.rfind("wfm_", 0) == 0 && r.rate <= 2400000 && r.pct < 70 && r.rate > rec) rec = r.rate;
+    // ★★ V12: no WFM rate row ran (no radio here offers one of those rates): no recommendation, rather than 1.024 MS/s
+    //    for a radio that cannot do it. The setup page reads 0 as "none".
+    if (!anyWfmRate) rec = 0;
     // ★ Locked range: every listener is a demodulator of their own, so the ceiling is how many fit in one core's
     //   green budget. An ESTIMATE from the single-listener figure, labelled as one.
     // ★ Spare cores = all but the one the shared front (vibe-dsp) holds; each gets the green budget (70 %).
@@ -619,6 +718,7 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         j += b;
         if (res[i].decoded >= 0) j += "\"decoded\":" + std::to_string(res[i].decoded) + ",";
         if (res[i].ms >= 0) j += "\"ms\":" + std::to_string(res[i].ms) + ",";
+        if (res[i].dropped >= 0) j += "\"dropped\":" + std::to_string(res[i].dropped) + ",";
         j += "\"threads\":{";
         for (size_t t = 0; t < res[i].threads.size(); ++t) {
             snprintf(b, sizeof b, "%s\"%s\":%.1f", t ? "," : "", res[i].threads[t].first.c_str(), res[i].threads[t].second);
@@ -627,6 +727,43 @@ inline std::string runBenchmark(const std::function<void(int, int, const std::st
         j += "}}";
     }
     j += "],\"recommendRate\":" + std::to_string((long long)rec);
+    /* ★★★ V12 WHAT DID NOT RUN, AND WHY ("not run — no radio here reaches Band III (174–240 MHz)") — every row the
+     *  radios here cannot use, so the table can say so rather than look short. */
+    {
+        j += ",\"notRun\":[";
+        for (size_t k = 0; k < notRun.size(); ++k) {
+            std::string why;
+            for (char c : notRun[k].second) { if (c == '"' || c == '\\') why += '\\'; why += c; }
+            j += std::string(k ? "," : "") + "{\"id\":\"" + notRun[k].first + "\",\"why\":\"" + why + "\"}";
+        }
+        j += "]";
+        if (!hw.radios.empty()) {
+            j += ",\"radios\":[";
+            for (size_t k = 0; k < hw.radios.size(); ++k) j += std::string(k ? "," : "") + "\"" + hw.radios[k].driver + "\"";
+            j += "]";
+        }
+    }
+    /* ★★★ V12 THE CAPTURE VERDICT — the rate gate's input (vibe_usrp_caps.h ratesFor), per wide rate: the locked-range
+     *  path (fixed cost = the hotter of intake and front end with one listener; per listener; the hottest thread; how
+     *  many of 1 / 5 / 10 listeners fitted) and the full-radio path. `lockedMaxHz` / `fullMaxHz`: the highest rate each
+     *  kept up at with headroom (hottest thread <= 70 % of a core, nothing dropped). */
+    if (!wideV.empty()) {
+        double lmax = 0, fmax = 0;
+        benchwide::gateFrom(wideV, lmax, fmax);
+        char b[256];
+        std::snprintf(b, sizeof b, ",\"capture\":{\"lockedMaxHz\":%.0f,\"fullMaxHz\":%.0f,\"headroomPct\":%.0f,\"rates\":[",
+                      lmax, fmax, benchwide::kHeadroomPct);
+        j += b;
+        for (size_t k = 0; k < wideV.size(); ++k) {
+            const auto& v = wideV[k];
+            std::snprintf(b, sizeof b, "%s{\"hz\":%.0f,\"lockedOk\":%s,\"lockedHottestPct\":%.1f,\"lockedThread\":\"%s\","
+                          "\"fixedPct\":%.1f,\"perListenerPct\":%.1f,\"lockedUsers\":%d,\"fullOk\":%s,\"fullHottestPct\":%.1f}",
+                          k ? "," : "", v.hz, v.lockedOk ? "true" : "false", v.lockedHottest, v.lockedThread.c_str(),
+                          v.fixedPct, v.perListenerPct, v.lockedUsers, v.fullOk ? "true" : "false", v.fullHottest);
+            j += b;
+        }
+        j += "]}";
+    }
     j += ",\"cores\":" + std::to_string(cores);
     // ★ The all-core clock this run calibrated the throttle snail to (MHz), or absent when it was
     //   already calibrated at setup or the machine has no cpufreq to read.

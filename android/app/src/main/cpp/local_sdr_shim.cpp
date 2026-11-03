@@ -27349,6 +27349,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else if (iqQueuedSamples >= iqMaxSamples) {
                     dropOldestLocked();
                 }
+            } else {
+                /* ★★★ BOUNDED BY TIME ON THE USB PATH TOO (V12, 2026-11-03 — the wide rates). With no jitter buffer set
+                 *  (every float radio: the HF+, HackRF, Airspy, USRP) this queue had NO bound at all: a DSP thread that fell
+                 *  behind grew it without limit — at 30.72 MS/s that is 245 MB of IQ a second, an OOM within seconds on
+                 *  anything (memory rule: no OOM, ever). The u8 path above caps at 8 buffers; float buffers are far
+                 *  smaller and vary by radio, so this caps by TIME: a quarter of a second at the running rate (at least
+                 *  262144 samples), oldest dropped and counted — the same hole the u8 path makes, said the same way. */
+                const size_t cap = std::max<size_t>(262144, (size_t)(sampleRate > 0 ? sampleRate * 0.25 : 0));
+                while (iqQueuedSamples >= cap && !iqQueue.empty()) {
+                    g_iqDrops.fetch_add(1, std::memory_order_relaxed);
+                    g_iqLastDropAt.store((double)vsNowEpoch(), std::memory_order_relaxed);
+                    g_pipelineDisturbedAt.store(nowSecs(), std::memory_order_relaxed);
+                    static double lastDropLog = 0;
+                    const double nd = nowSecs();
+                    if (nd - lastDropLog > 2.0) { lastDropLog = nd; LOGI("IQ overrun — dropping a buffer (the DSP thread is behind)"); }
+                    dropOldestLocked();
+                }
             }
             iqQueuedSamples += v.size();
             iqQueue.push_back(IqBuf{std::move(v), gapBefore || std::exchange(iqGapNext, false)});
@@ -41906,6 +41923,7 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
         c.antennas = u.antennas(); c.antenna = u.antenna();
         c.antennaLocked = vsAntennaLocked();
         u.fillOptionView(c);   // ★ V12 the owner's options: what the radio offers, what is in force, ref/GPS lock
+        c.gateHz = vibe::usrpcaps::gateHzFor(vibe::usrpcaps::rateGate()); c.gateLocked = vibe::usrpcaps::rateGate().locked;
         return vibe::usrpcaps::capsJson(c);
     }
     if (!p->useSdrplay()) {

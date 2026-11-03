@@ -159,6 +159,7 @@ inline std::string ensureDabClip(const std::string& cacheDir,
 inline std::vector<benchdetail::Result> runDabRows(const std::string& clipPath, double seconds) {
     std::vector<benchdetail::Result> out;
     DabClip clip;
+    if (benchdec::rowSkipped("dab")) return out;   // ★ V12: no radio here reaches Band III (vibe_benchmark_hw.h)
     if (clipPath.empty() || !loadDabClip(clipPath, clip)) return out;
     // ★ These are the slowest rows (each is fed in real time, warm-up included), so they say so — see benchStep.
     benchStep("DAB+");
