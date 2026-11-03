@@ -2692,6 +2692,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [ismTall, setIsmTall] = useState(false);
   useEffect(() => { AsyncStorage.getItem('lsv_ism_tall').then(v => { if (v === '1') setIsmTall(true); }).catch(() => {}); }, []);
   const onIsmTall = useCallback((v: boolean) => { setIsmTall(v); AsyncStorage.setItem('lsv_ism_tall', v ? '1' : '0').catch(() => {}); }, []);
+  const [drmTall, setDrmTall] = useState(false);
+  useEffect(() => { AsyncStorage.getItem('lsv_drm_tall').then(v => { if (v === '1') setDrmTall(true); }).catch(() => {}); }, []);
+  const onDrmTall = useCallback((v: boolean) => { setDrmTall(v); AsyncStorage.setItem('lsv_drm_tall', v ? '1' : '0').catch(() => {}); }, []);
   useEffect(() => { ismOnRef.current = ismOn; }, [ismOn]);
   /** ★ Everything ISM leaves behind, in one place — EXIT, the key, a mode pick, the server's ism_off. */
   const ismUiOff = useCallback((keepBox = false) => {
@@ -14634,7 +14637,7 @@ export default function SDRScreen({ route, navigation }: Props) {
       <RotateFade>
       {status.mode === 'drm' && !activeDecoder && !spotsKind && !ismBoxOpen && !dabOn && (
         <PanelBoundary name="DRM" onClose={() => setDrmState(null)}>
-        <DrmPanel state={drmState} topLimit={boxTopLimit}
+        <DrmPanel state={drmState} topLimit={boxTopLimit} topSafe={boxTopSafe} tall={drmTall} onTall={onDrmTall}
                   bottomOffset={pillBottom + 8 + (!controlsHidden && vtsBarH ? vtsBarH + 6 : 0) + noticeStackH} />
         </PanelBoundary>
       )}

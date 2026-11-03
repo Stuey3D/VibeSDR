@@ -34,17 +34,23 @@ import { drmView, drmViewText, drmSignalRows, DRM_LIGHT_ON, DRM_LIGHT_OFF, DRM_S
 
 /** Wide enough for the signal line on one row on a tablet; a phone's window narrows it (DecoderShell). */
 const DRM_MAX_W = 560;
+const DRM_BIG_W = 760;   // ★ BIG: the ISM box's width
 
 export interface DrmPanelProps {
   state: DrmState | null;
   bottomOffset: number;
   /** ★ The highest the box may reach (the screen's boxTopLimit, as the DAB and ISM boxes get it) — sizes the Signal pane. */
   topLimit?: number;
+  /** ★ The highest BIG may reach (the screen's boxTopSafe, as the ISM and DAB boxes get it). */
+  topSafe?: number;
+  /** ★ BIG / SMALL, remembered by the screen (lsv_drm_tall) like the ISM box's. */
+  tall?: boolean;
+  onTall?: (v: boolean) => void;
 }
 
 type NavKey = { key: string; row: number };
 
-export default function DrmPanel({ state, bottomOffset, topLimit }: DrmPanelProps) {
+export default function DrmPanel({ state, bottomOffset, topLimit, topSafe, tall: tallPref = false, onTall }: DrmPanelProps) {
   const tk = useDecoderTokens();
   const s = useDecoderStyles(makeStyles);
   const { height: winH } = useWindowDimensions();
@@ -58,22 +64,31 @@ export default function DrmPanel({ state, bottomOffset, topLimit }: DrmPanelProp
 
   // ★ The Signal pane's height: up to the screen's limit (the DAB/ISM boxes' arithmetic), else a fixed 200 like ISM's
   const HEADER_H = 46;
-  const bodyH = Math.round(topLimit != null
-    ? Math.max(120, winH - bottomOffset - topLimit - HEADER_H - decoderBodyInset(tk)) : 200);
+  const smallBody = topLimit != null
+    ? Math.max(120, winH - bottomOffset - topLimit - HEADER_H - decoderBodyInset(tk)) : 200;
+  /* ★★ BIG (Stuart 2026-11-03: "the DRM decoder box has lost the ability to make it big") — the ISM/DAB boxes' key: up
+   *  to the status row and wider, offered only where it gains 40 pt. It sizes the Signal pane; the station pane is short
+   *  and keeps its own height, only the width grows. */
+  const bigBody = topSafe != null
+    ? Math.max(120, winH - bottomOffset - topSafe - HEADER_H - decoderBodyInset(tk))
+    : Math.max(120, winH - bottomOffset - 300);
+  const bigUseful = !!onTall && bigBody >= smallBody + 40;
+  const tall = tallPref && bigUseful;
+  const bodyH = Math.round(tall ? bigBody : smallBody);
 
   // ── pad / keyboard ──
   const ring = useNavFocus().ring;
   const [grab, setGrab] = useState(false);
   useEffect(() => { if (grab) captureRegion('drm'); else if (capturedRegion() === 'drm') captureRegion(null); }, [grab]);
   useEffect(() => () => { if (capturedRegion() === 'drm') captureRegion(null); }, []);
-  const keys: NavKey[] = [{ key: 'pane', row: 0 }, { key: 'min', row: 0 }];
+  const keys: NavKey[] = [{ key: 'pane', row: 0 }, ...(bigUseful ? [{ key: 'big', row: 0 }] : []), { key: 'min', row: 0 }];
   if (sig) rows.forEach((r, i) => { if (!('h' in r)) keys.push({ key: `r:${i}`, row: keys.length }); });
   const nav = useRef(keys); nav.current = keys;
   const listRef = useRef<ScrollView | null>(null);
   const rowY = useRef<Record<number, number>>({});
   const focus = useListNav(
     grab, keys.length,
-    (i) => { const k = nav.current[i]?.key; if (k === 'pane') togglePane(); else if (k === 'min') setMin((m) => !m); },
+    (i) => { const k = nav.current[i]?.key; if (k === 'pane') togglePane(); else if (k === 'big') onTall?.(!tall); else if (k === 'min') setMin((m) => !m); },
     (i) => {
       const k = nav.current[i]?.key;
       if (!k || !k.startsWith('r:')) return;
@@ -88,7 +103,7 @@ export default function DrmPanel({ state, bottomOffset, topLimit }: DrmPanelProp
   const tone = (t?: DrmTone) => (t === 'ok' ? tk.good : t === 'warn' ? tk.warn : t === 'bad' ? tk.bad : tk.value);
 
   return (
-    <DecoderShell bottom={bottomOffset} maxWidth={DRM_MAX_W} borderColor={grab ? ring : undefined}>
+    <DecoderShell bottom={bottomOffset} maxWidth={tall ? DRM_BIG_W : DRM_MAX_W} tall={tall} borderColor={grab ? ring : undefined}>
       {/* ★ A place the screen's highlight can land: Enter takes the keys into the box. */}
       <View pointerEvents="none" style={StyleSheet.absoluteFill} ref={screenNavRef('drmBox', () => setGrab(true))} />
       <DecoderHeader onPress={() => setMin((m) => !m)}>
@@ -100,6 +115,8 @@ export default function DrmPanel({ state, bottomOffset, topLimit }: DrmPanelProp
         <DecoderKey active={pane === 'signal'} onPress={togglePane} style={hl('pane')}
                     label={pane === 'signal' ? 'STATION' : 'SIGNAL'}
                     accessibilityLabel={pane === 'signal' ? 'Back to the station box' : 'Advanced signal information'} />
+        {bigUseful && !min && <DecoderKey active={tall} onPress={() => onTall?.(!tall)} label={tall ? 'SMALL' : 'BIG'} style={hl('big')}
+                                          accessibilityLabel={tall ? 'Make the DRM box smaller' : 'Make the DRM box bigger'} />}
         <DecoderKey label={min ? 'SHOW' : 'MIN'} onPress={() => setMin((m) => !m)} style={hl('min')}
                     accessibilityLabel={min ? 'Show the DRM box' : 'Fold the DRM box to its title'} />
       </DecoderHeader>
@@ -147,7 +164,7 @@ export default function DrmPanel({ state, bottomOffset, topLimit }: DrmPanelProp
         <DecoderBody>
           {/* ★ The web's #drmSignal: a small heading per group, amber label, the value in its traffic-light colour where it
               has a nominal range. Each row carries its plain-English explanation as its accessibility hint (the web's tooltip). */}
-          <ScrollView ref={listRef} style={{ maxHeight: bodyH }} contentContainerStyle={[scrollLane, s.pane]} showsVerticalScrollIndicator>
+          <ScrollView ref={listRef} style={{ maxHeight: bodyH, ...(tall ? { height: bodyH } : null) }} contentContainerStyle={[scrollLane, s.pane]} showsVerticalScrollIndicator>
             {rows.map((r, i) => ('h' in r
               ? <Text key={`h${i}`} style={[s.section, { color: tk.label }]}>{r.h}</Text>
               : (
