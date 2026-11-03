@@ -1449,13 +1449,18 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               <GainSlider gains={cappedGains} gainTenthDb={p.gainTenthDb} auto={!!p.radio?.agcOn}
                           onAuto={p.onAuto} onGain={p.onGain} vibeAgc={false} modeButtons={false}
                           ink={gainSliderInk(gt)} />
-              {!!p.radio?.hwAgc && (
-                <View style={styles.toggleRow}>
+              {!!p.radio?.hwAgc && (() => {
+                // ★ A pad or key reaches it too: Enter flips it, the row carries the ring (the bias-T row's pattern).
+                const on = slot(() => p.onAuto(!p.radio?.agcOn));
+                return (
+                <View style={[styles.toggleRow, on && kbNav && { borderColor: focusC.ring, borderWidth: 2, borderRadius: 8 }]}>
                   <Text style={styles.toggleLabel}>The radio's own AGC (AD9361)</Text>
+                  {/* nav-registered: the row above is this switch's slot (Enter toggles), ring on the row */}
                   <Switch value={!!p.radio?.agcOn} onValueChange={(v) => p.onAuto(v)}
                     trackColor={{ true: K.abtn, false: '#444' }} thumbColor={p.radio?.agcOn ? K.gold : '#ccc'} />
                 </View>
-              )}
+                );
+              })()}
               <Text style={styles.note}>
                 Experimental. {p.radio?.agcOn
                   ? 'The radio is setting its own gain — move the slider to take it back by hand.'
