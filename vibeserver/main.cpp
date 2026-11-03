@@ -3589,7 +3589,7 @@ int main(int argc, char** argv) {
             }
         }
         vibebands::defaultRegion() = vibebands::ituRegion(lat, lon, have);
-        LocalSdrShim::setBandRegion(vibebands::defaultRegion());
+        LocalSdrShim::setBandRegion(vibebands::defaultRegion(), have);
     }
     // ★ Tell the shim whether THIS radio is the one drawing the spectrogram, so the idle park can
     //   leave it alone. The nomination lives in the machine config; a radio that is releasing when

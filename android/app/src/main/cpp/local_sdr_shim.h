@@ -525,7 +525,13 @@ public:
     static const char* stopStage();
     /** ITU region (1/2/3) for the named band presets — derived from where the owner says the
      *  receiver is. See vibe_bands.h: the allocations genuinely differ between regions. */
-    static void setBandRegion(int region);
+    /** ★ V12 `known` = from a position the owner gave (coordinates or locator). Only a known region sets the region
+     *  defaults of the decoder switches (vibe_decoder_reach.h); an unknown one keeps Region 1's band plan and switches
+     *  nothing off. */
+    static void setBandRegion(int region, bool known = true);
+    /** ★ V12 `{"region":N,"regionDefaults":[{"id","why"}]}` — the region defaults that are OFF here (vibe_decoder_reach.h),
+     *  for the app's own server screen; `{}` when the region is unknown. The same words vibeserver.json carries. */
+    static std::string regionDefaultsJson();
     /** ★★★ SAVE A LIVE SETTING THE ADMIN JUST CHANGED, without restarting.
      *  Distinct from the config SET handler on purpose: that one is the setup page pressing Save,
      *  and it restarts to apply — correct there, absurd for someone nudging the RF gain while
@@ -1017,6 +1023,9 @@ public:
     void setConverter(double offsetHz, double inputLoHz, double inputHiHz);
     /** The converter's LO, for the one other place that must know: the published tuning range. */
     double converterOffsetHz() const;
+    /** ★ V12 …and the passband it declares (hi <= lo = none), for the decoder reach (vibe_decoder_reach.h). */
+    double converterInputLoHz() const;
+    double converterInputHiHz() const;
     void setBiasTee(bool on);
     void setAgc(bool on);                 // RTL2832 digital AGC
     void setDirectSampling(int mode);     // 0=off, 1=I, 2=Q (not needed on Blog V4)

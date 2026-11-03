@@ -833,6 +833,7 @@ async function loadAudioPolicy(httpBase: string) {
   tmCaps = {};                 // ★ …nor the MFSK keyboard modes
   hellCap = false;             // ★ …nor FELD HELL
   jttyCap = false;             // ★ …nor JTTY
+  decWhy = {};                 // ★ …and no decoder out of reach until this radio says so
   spotBandCap = null;          // ★ …nor a Band spots button
   landingStepDone = false;
   firstConfigDone = false;
@@ -873,26 +874,29 @@ async function loadAudioPolicy(httpBase: string) {
     ismReadCap(j);               // ★ ISM (V12): the same three states, and the bands THIS radio reaches — see ismReadCap
     ndbReadCap(j);               // ★ NDB (V12): the same three states
     aisReadCap(j);               // ★ AIS (V12): the same three states — absent where the radio cannot reach 162 MHz
-    aprsCap = j.aprs === true;   // ★ APRS (V12): this server's own decoder on the listener's NFM / SSB audio
+    // ★★★ DECODER REACH (V12, vibe_decoder_reach.h): a fixed-frequency decoder THIS radio cannot tune comes back false WITH
+    //     its reason — the key stays, greyed, and a press says why (never hidden, never live). Read first: the caps use it.
+    decWhy = parseDecWhy(j);
+    aprsCap = j.aprs === true || !!decWhy.aprs;   // ★ APRS (V12): this server's own decoder on the listener's NFM / SSB audio
     if (typeof j.aprsHz === 'number' && j.aprsHz > 0) aprsHz = j.aprsHz;
     { const b = document.querySelector('#decodersPanel [data-dec="aprs"]') as HTMLElement | null; if (b) b.hidden = !aprsCap || blockedModes.has('aprs'); }
-    cwCap = j.cw === true;       // ★ CW (V12): this server's own decoder and skimmer
+    cwCap = j.cw === true || !!decWhy.cw;       // ★ CW (V12): this server's own decoder and skimmer
     spotsReadCap(j);             // ★ DIGITAL SPOTS (V12): the modes this server decodes, and Band mode's bands — see spotsReadCap
     { const b = document.querySelector('#decodersPanel [data-dec="cw"]') as HTMLElement | null;
       if (b) b.hidden = !cwCap || blockedModes.has('cw'); }
-    pskCap = j.psk === true;     // ★ PSK31/63 (V12): this server's own decoder and skimmer
+    pskCap = j.psk === true || !!decWhy.psk;     // ★ PSK31/63 (V12): this server's own decoder and skimmer
     { const b = document.querySelector('#decodersPanel [data-dec="psk"]') as HTMLElement | null;
       if (b) b.hidden = !pskCap || blockedModes.has('psk'); }
-    dscCap = j.dsc === true;     // ★ DSC (V12): maritime Digital Selective Calling, decoded by this server
+    dscCap = j.dsc === true || !!decWhy.dsc;     // ★ DSC (V12): maritime Digital Selective Calling, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="dsc"]') as HTMLElement | null;
       if (b) b.hidden = !dscCap || blockedModes.has('dsc'); }
     sitoraCap = j.sitora === true;   // ★ SITOR-A (V12): the maritime ARQ teleprinter, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="sitora"]') as HTMLElement | null;
       if (b) b.hidden = !sitoraCap || blockedModes.has('sitora'); }
-    sameCap = j.same === true;       // ★ EAS / SAME (V12): US alert headers, decoded by this server
+    sameCap = j.same === true || !!decWhy.same;       // ★ EAS / SAME (V12): US alert headers, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="same"]') as HTMLElement | null;
       if (b) b.hidden = !sameCap || blockedModes.has('same'); }
-    selcalCap = j.selcal === true;   // ★ SELCAL (V12): the aeronautical selective call, decoded by this server
+    selcalCap = j.selcal === true || !!decWhy.selcal;   // ★ SELCAL (V12): the aeronautical selective call, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="selcal"]') as HTMLElement | null;
       if (b) b.hidden = !selcalCap || blockedModes.has('selcal'); }
     for (const fam of TEXT_FAMILIES) {   // ★ MFSK / OLIVIA / THOR (V12): a family where the server lists it, with its choices
@@ -903,9 +907,10 @@ async function loadAudioPolicy(httpBase: string) {
     hellCap = j.hell === true;   // ★ FELD HELL (V12): drawn by this server, read by eye
     { const b = document.querySelector('#decodersPanel [data-dec="hell"]') as HTMLElement | null;
       if (b) b.hidden = !hellCap || blockedModes.has('hell'); }
-    jttyCap = j.jtty === true;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
+    jttyCap = j.jtty === true || !!decWhy.jtty;   // ★ JTTY (V12): the WSJT-X 3.2 keyboard mode, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="jtty"]') as HTMLElement | null;
       if (b) b.hidden = !jttyCap || blockedModes.has('jtty'); }
+    decWhyPaint();   // ★ V12 decoder reach: greyed with the reason (NAVTEX included — a client decoder, drawn unless blocked)
     dabBoost = j.dabBoost === true;
     dabBoostUseful = j.dabBoostUseful === true;
     // ★★★ IS THE DIAL SHARED? Needed BEFORE the first config arrives, because the very first
@@ -12895,6 +12900,8 @@ function initDecoders(host: string, auth: AuthState) {
     b.onclick = () => {
       const mode = b.dataset.dec as 'rtty' | 'navtex' | 'wefax' | 'sstv' | 'rds' | 'cw' | 'psk' | 'aprs' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'jtty';
       if (activeDec === mode) { stopDecoder(); return; }
+      // ★★★ V12 out of this radio's reach: the press says why and starts nothing (decWhyPaint draws the key greyed)
+      if (decWhy[mode]) { showPill(`${(b.textContent || mode).trim()} unavailable \u2014 ${decWhy[mode]}`, 8000); return; }
       // ★★★ V12: the decoder runs on the VFO selected NOW (decode on either VFO) — Advanced RDS is always A's (no VFO B on FM)
       decVfo = mode === 'rds' ? 'A' : abStartVfo();
       activeDec = mode;
@@ -13503,8 +13510,40 @@ function soleDecoder(): { id: string; label: string; on: boolean; press: () => v
   return { id: b.dataset.dec || '', label: (b.textContent || '').trim(), on: b.classList.contains('on'), press: () => b.click() };
 }
 
+/* ★★★ V12 DECODER REACH (vibe_decoder_reach.h) — id → the server's reason, for each fixed-frequency decoder this radio cannot
+ *  tune (SAME on a radio locked to 88–96 MHz, NAVTEX on one with no HF). The key is drawn GREYED with the reason as its
+ *  title and label (hover, focus, a screen reader), and a press shows the reason (touch, pad, keyboard) — never hidden,
+ *  never live. An owner's block still hides it (it is false with no reason). */
+let decWhy: Record<string, string> = {};
+const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty'];
+function parseDecWhy(j: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!j || typeof j !== 'object') return out;
+  for (const id of REACH_DECODERS) {
+    const w = j[id + 'Why'];
+    if (j[id] === false && typeof w === 'string' && w.trim()) out[id] = w.trim().slice(0, 200);
+  }
+  return out;
+}
+function decWhyPaint() {
+  for (const b of Array.from(document.querySelectorAll('#decodersPanel [data-dec]')) as HTMLElement[]) {
+    const id = (b.dataset.dec || '').toLowerCase();
+    const why = decWhy[id];
+    b.classList.toggle('unreach', !!why);
+    if (why) {
+      b.setAttribute('aria-disabled', 'true');
+      b.title = why;
+      b.setAttribute('aria-label', `${(b.textContent || id).trim()}, unavailable: ${why}`);
+      b.dataset.reachWhy = '1';
+    } else if (b.dataset.reachWhy) {
+      b.removeAttribute('aria-disabled'); b.removeAttribute('aria-label'); b.title = ''; delete b.dataset.reachWhy;
+    }
+  }
+}
+
 function syncDecButtons() {
   syncCwPlain();   // ★ V12 the CW box's PLAIN key follows the decoder (CW only)
+  decWhyPaint();
   for (const b of Array.from($('decodersPanel').querySelectorAll('[data-dec]')) as HTMLButtonElement[]) {
     b.classList.toggle('on', b.dataset.dec === activeDec);
   }

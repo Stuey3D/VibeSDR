@@ -1100,6 +1100,11 @@ add_executable(test-bench-hw "${CMAKE_CURRENT_SOURCE_DIR}/test-bench-hw.cpp")
 target_include_directories(test-bench-hw PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-bench-hw)
 add_test(NAME bench-hw COMMAND test-bench-hw)
+# ★ V12 2026-11-03: which decoders a radio can reach, and the region defaults of the owner's switches (vibe_decoder_reach.h)
+add_executable(test-decoder-reach "${CMAKE_CURRENT_SOURCE_DIR}/test-decoder-reach.cpp")
+target_include_directories(test-decoder-reach PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-decoder-reach)
+add_test(NAME decoder-reach COMMAND test-decoder-reach)
 # ★★★ VibeAGC FOR SDRplay (vibe_rsp_vibeagc.h, 2026-10-30): the combined IF + RF loop closed against a simulated RSP
 #     (Band II next to a +20 dB neighbour, weak HF, DAB, a signal arriving, the DAB rapid-step repro, fades, a rung
 #     bigger than its prior, a stalled stream) — and its writes through the real gainstep.h + RxPipeline: IF steps

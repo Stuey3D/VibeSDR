@@ -391,6 +391,9 @@ object VibeLocalSDR {
     /** The server's own band list, so the phone's limiter uses the edges the server enforces. */
     fun bandsJson(): String { ensureLoaded(); return nativeBandsJson() }
     private external fun nativeBandsJson(): String
+    /** ★ V12 the region defaults of the decoder switches — see LocalSdrShim::regionDefaultsJson. */
+    fun regionDefaultsJson(): String { ensureLoaded(); return nativeRegionDefaultsJson() }
+    private external fun nativeRegionDefaultsJson(): String
 
     /** VibeServer: serve the shim's spectrum/audio WS on the LAN, not just loopback.
      *  Call before startSpectrum(). */

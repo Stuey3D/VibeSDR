@@ -3148,7 +3148,10 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 .decGroupHead .modeIco { margin-right: 0; width: 13px; height: 13px; }
 .decGroup .btnRow { margin-top: 6px; }
 .btn.dimFar:not(.on) { opacity: 0.4; }
-#wholeRadio .btn.dis { opacity: 0.45; border-style: dashed; }   /* refused by the server, still drawn while ON (mode menu's rule) */
+#wholeRadio .btn.dis { opacity: 0.45; border-style: dashed; }
+/* ★★★ V12 a decoder this radio cannot tune (vibe_decoder_reach.h) — the refused-key look; still focusable and pressable,
+   so the press (touch, pad, keyboard) says why. Never hidden. */
+#decodersPanel .btn.unreach { opacity: 0.45; border-style: dashed; }   /* refused by the server, still drawn while ON (mode menu's rule) */
 .subPanel {
   margin: 6px 0 10px; padding: 8px 10px;
   border: 1px solid var(--bar-border); border-radius: 8px;

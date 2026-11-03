@@ -2848,9 +2848,27 @@ function modeOffAncestor(tree, id, off) {
   return null;
 }
 
-/** The blocked list as a Set of ids, from this radio's CSV. */
+/** The owner's own list as a Set of ids, exactly as saved — the one every EDIT reads and writes back. */
+function modeOwnerSet() {
+  return new Set(String(radio().blockedModes || "").split(/[,;\s]+/).filter(Boolean).map(t => t.toLowerCase()));
+}
+/** ★★ V12 (2026-11-03) THE REGION DEFAULTS of this page's switches — vibeserver.json regionDefaults, from where the
+ *  owner says the server is (vibe_decoder_reach.h): id → the words shown beside the switch. SAME is off by default
+ *  outside the Americas, DAB off by default in them. Only a DEFAULT: the owner's tick always wins — off is the id in the
+ *  list as ever, ON against the default is "+id". Empty when the region is unknown (an older server, no position). */
+let REGION_DEFAULTS = {};
+/** True when `id` is off here only because of its region default (the owner has said nothing either way). */
+function modeRegionOff(id, own) {
+  const o = own || modeOwnerSet();
+  return !!REGION_DEFAULTS[id] && !o.has(id) && !o.has("+" + id);
+}
+/** The list as the server ENFORCES it — the owner's, plus each region default the owner has said nothing about, minus
+ *  the "+id" words (they only mean "not off"). Every question "is X off?" reads this. */
 function modeBlockSet() {
-  return new Set(String(radio().blockedModes || "").split(/[,;\s]+/).filter(Boolean));
+  const own = modeOwnerSet(), out = new Set();
+  for (const t of own) if (t[0] !== "+") out.add(t);
+  for (const id of Object.keys(REGION_DEFAULTS)) if (modeRegionOff(id, own)) out.add(id);
+  return out;
 }
 
 /** ★★★ CAN THIS MACHINE DECODE AAC AT ALL? Set from /vibeserver.json's dabDecoder — see
@@ -2868,6 +2886,11 @@ async function readDabDecoder() {
     const j = await (await fetch("/vibeserver.json", {cache:"no-store"})).json();
     if (Array.isArray(j.spotModes)) SPOT_MODES = j.spotModes.filter(m => typeof m === "string").map(m => m.replace(/[^0-9A-Za-z+-]/g, "").slice(0, 12)).filter(Boolean).slice(0, 16);
     if (typeof j.dabDecoder === "boolean") DAB_DECODER = j.dabDecoder;
+    // ★★ V12 the region defaults (absent on an older server or with no position: then nothing is off by default)
+    REGION_DEFAULTS = {};
+    if (Array.isArray(j.regionDefaults)) for (const d of j.regionDefaults)
+      if (d && typeof d.id === "string" && typeof d.why === "string")
+        REGION_DEFAULTS[d.id.replace(/[^0-9a-z+-]/g, "").slice(0, 16)] = d.why.slice(0, 200);
     // ★★ V12 LoRa's channel counts per band (the "every channel" hint) — absent on an older server, then nothing is said
     if (Array.isArray(j.loraChannels)) LORA_CHANNELS = j.loraChannels.filter(c => c && typeof c.band === "string")
       .map(c => ({ band: c.band.replace(/[^0-9]/g, "").slice(0, 4), plan: c.plan | 0, fit: c.fit | 0, defaults: c.defaults | 0, run: c.run | 0 }));
@@ -2911,12 +2934,16 @@ function modeBlockRender() {
      *  package (Stuart, 2026-09-11). A tick box that cannot deliver is the fault AGENTS.md names:
      *  branch on what the machine has, or leave it out. */
     const dead = m.id === "dab" && !DAB_DECODER;
-    const ticked = m.on ? off.has(m.id) : !off.has(m.id);
+    const ticked = m.on ? modeOwnerSet().has(m.id) : !off.has(m.id);
+    // ★★ V12 a region default: the reason beside the switch, said whichever way the owner has set it
+    const rd = !m.on && REGION_DEFAULTS[m.id];
     return `<label class="row modeBox" style="gap:6px;flex:0 0 auto;align-items:center`
     + (dead ? ";opacity:.5" : "") + `"${dead ? ' title="this server has no DAB+ audio decoder"' : ""}>`
     + `<input type="checkbox" data-mode="${esc(m.id)}"${m.on ? ' data-on="1"' : ""}${ticked ? " checked" : ""}`
     + (dead ? " disabled" : "") + `>`
-    + `<span class="lbl">${esc(m.label)}</span></label>`;
+    + `<span class="lbl">${esc(m.label)}</span>`
+    + (rd ? `<span class="hint modeRegionWhy" data-region-why="${esc(m.id)}" style="margin:0">${esc(rd)}</span>` : "")
+    + `</label>`;
   };
   const draw = (m) => {
     if (m.node) return `<div data-node="${esc(m.node)}" style="flex:1 1 100%"></div>`;
@@ -2943,13 +2970,17 @@ function modeBlockRender() {
     + `</div>`);
   host.querySelectorAll("input[data-mode]").forEach(el => {
     el.addEventListener("change", () => {
-      const set = modeBlockSet();
+      const set = modeOwnerSet();
       // ★ CHECKED means OFFERED. The stored list is what is switched OFF, which is the shorter
       //   list on almost every receiver and the one the server enforces.
       // ★★ …EXCEPT a "+" option (data-on: "lora+all"), which is IN the list when ticked. Unticking removes that one
       //    token and nothing else — it must never fall through the inversion above.
-      if (el.dataset.on) { if (el.checked) set.add(el.dataset.mode); else set.delete(el.dataset.mode); }
-      else if (el.checked) set.delete(el.dataset.mode); else set.add(el.dataset.mode);
+      // ★★ V12 a REGION-DEFAULT switch (SAME outside the Americas, DAB in them): the owner's tick is recorded either
+      //    way — "+id" on, "id" off — so their choice is never overwritten by the default.
+      const id = el.dataset.mode;
+      if (el.dataset.on) { if (el.checked) set.add(id); else set.delete(id); }
+      else if (el.checked) { set.delete(id); if (REGION_DEFAULTS[id]) set.add("+" + id); }
+      else { set.delete("+" + id); set.add(id); }
       radio().blockedModes = [...set].join(",");
       modeBlockSummary();
       if (!el.dataset.on) dabLandOnBlockedChange(el.dataset.mode, !el.checked);
@@ -3334,7 +3365,7 @@ function dabLandInit() {
 function bandModeRender() {
   const wrap = $("bandModeWrap"), host = $("bandModeList");
   if (!wrap || !host) return;
-  const set = modeBlockSet();
+  const set = modeOwnerSet();
   // ★★ Drawn wherever this server has Band (spotModes); with Band or Digital spots off it stays, GREYED with the reason
   //    (modeTreeGrey) — the owner's word per mode is still theirs to read (never hidden).
   const show = SPOT_MODES.length > 0;
@@ -3350,7 +3381,7 @@ function bandModeRender() {
   }).join("");
   host.querySelectorAll("select[data-bandmode]").forEach(el => {
     el.addEventListener("change", () => {
-      const s = modeBlockSet(), id = el.dataset.bandmode;
+      const s = modeOwnerSet(), id = el.dataset.bandmode;
       s.delete("spotsband-" + id); s.delete("spotsband+" + id);
       if (el.value === "off") s.add("spotsband-" + id);
       if (el.value === "always") s.add("spotsband+" + id);
@@ -3363,7 +3394,7 @@ function bandModeRender() {
 function modeBlockSummary() {
   const el = $("modeBlockNote");
   if (!el) return;
-  const all = [...modeBlockSet()];
+  const all = [...modeBlockSet()];   // ★ as enforced: region defaults in, the owner's "+id" words out
   const tree = modeTree();
   // ★ "+" tokens are options switched ON (lora+all), and Band's per-mode words have their own sentence
   const isOn = id => tree.some(m => m.id === id && m.on);
@@ -3371,8 +3402,9 @@ function modeBlockSummary() {
   const name = (id) => (tree.find(m => m.id === id) || { label: id }).label;
   const band = all.filter(id => /^spotsband[+-]/.test(id))
     .map(id => id.slice(10).toUpperCase() + (id[9] === "-" ? " off" : " always"));
+  const own = modeOwnerSet();
   el.textContent = (off.length
-    ? `Switched off: ${off.map(name).join(", ")}.`
+    ? `Switched off: ${off.map(id => name(id) + (modeRegionOff(id, own) ? " (by default in this region)" : "")).join(", ")}.`
     : "Everything this radio can do is offered.")
     + (band.length ? ` Band spots: ${band.join(", ")}.` : "")
     + (all.includes("lora+all") ? " LoRa listens on every channel." : "");

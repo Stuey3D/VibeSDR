@@ -1690,6 +1690,13 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeGainStepsJson(JNIEnv* env, jobject) {
     return env->NewStringUTF(j.c_str());
 }
 
+/** ★ V12 the region defaults of the decoder switches (vibe_decoder_reach.h) — ServerModeScreen draws the reason beside
+ *  each one and keeps the owner's explicit choice ("+same" on / "same" off). `{}` = region unknown. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRegionDefaultsJson(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::regionDefaultsJson().c_str());
+}
+
 /** The server's OWN band list, so the phone's band limiter cannot drift from the edges the
  *  server enforces — the same reason the setup page takes its bands from the server. */
 extern "C" JNIEXPORT jstring JNICALL

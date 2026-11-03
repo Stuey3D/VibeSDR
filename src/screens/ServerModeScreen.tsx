@@ -445,6 +445,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   };
 
   const [bands, setBands] = useState<Band[]>([]);
+  /** ★★ V12 (2026-11-03) THE REGION DEFAULTS of the decoder switches, from the engine (LocalSdrShim::regionDefaultsJson,
+   *  the setup page's vibeserver.json regionDefaults — ONE TABLE, vibe_decoder_reach.h): id → the words shown beside the
+   *  switch. SAME off by default outside the Americas, DAB off by default in them. Only a DEFAULT — the owner's tap always
+   *  wins: off is the id in the list as ever, ON against the default is "+id". Empty = region unknown (no position). */
+  const [regionDefaults, setRegionDefaults] = useState<Record<string, string>>({});
   const [allowRanges, setAllowRanges] = useState('');
   const [blockRanges, setBlockRanges] = useState('');
   /** Modes and decoders switched off on this receiver, comma separated — see BLOCKABLE. */
@@ -1298,6 +1303,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             if (raw) { const b = JSON.parse(raw); if (Array.isArray(b)) setBands(b); }
           } catch { /* the band chips simply do not appear */ }
         })();
+        void (async () => {
+          try {
+            const raw = await (NativeModules as any).VibeLocalSDR?.getRegionDefaults?.();
+            const j = raw ? JSON.parse(raw) : null;
+            const out: Record<string, string> = {};
+            if (j && Array.isArray(j.regionDefaults)) for (const d of j.regionDefaults)
+              if (d && typeof d.id === 'string' && typeof d.why === 'string') out[d.id.replace(/[^0-9a-z+-]/g, '').slice(0, 16)] = d.why.slice(0, 200);
+            setRegionDefaults(out);
+          } catch { /* an older engine: no region defaults, nothing off by default */ }
+        })();
         // ★ The block list comes from the ENGINE's table — the stored value is an index into it.
         void (async () => {
           try { setDabBlocks(await getDabBlocks()); }
@@ -1752,7 +1767,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const adsbLandOn = adsbLandOffered && landingAdsb;
   const adsbKeepOn = adsbLandOn && adsbKeep;
   // ★ One landing at a time: with ADS-B chosen the DAB toggle steps aside (the engine lets ADS-B win the same way).
-  const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !adsbLandOn;
+  // ★ V12 …or off by its region default (the Americas) with the owner not having switched it on ("+dab")
+  const dabRegionOff = !!regionDefaults.dab && !dabBlockedNow(blockedModes)
+    && !blockedModes.split(/[,;\s]+/).some((t) => t.toLowerCase() === '+dab');
+  const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !dabRegionOff && !adsbLandOn;
   const dabLandOn = dabLandOffered && landingDabCh >= 0 && landingDabCh < dabBlocks.length;
   const runDabScan = async () => {
     const ch = landingDabCh;
@@ -4045,15 +4063,23 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   /* ★★★ THE TREE (2026-10-31) — the setup page's, drawn the same way: a decoder's options indented under
                    *  its switch, greyed with the reason while it is off (never hidden). */
                   const tree = modeTree().filter((m) => !(isIcom && ICOM_NEVER_MODES.includes(m.id)));
-                  const off = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean));
+                  const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
+                  // ★★ V12 off here only by its REGION DEFAULT — the owner has said nothing either way
+                  const regionOff = (id: string) => !!regionDefaults[id] && !own.has(id) && !own.has('+' + id);
+                  // ★ the list as the server ENFORCES it: the owner's, plus the region defaults, minus the "+id" words
+                  const off = new Set([...own].filter((t) => t[0] !== '+'));
+                  for (const id of Object.keys(regionDefaults)) if (regionOff(id)) off.add(id);
                   const kids = (id: string) => tree.filter((m) => m.parent === id);
                   const toggle = (m: ModeEntry) => {
-                    const set = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean));
+                    const set = new Set(own);
                     // ★ CHECKED means OFFERED (the CSV lists what is OFF) — except a "+" option, IN the CSV when on.
                     //   Turning one off removes that token and nothing else.
-                    const wasOff = m.on ? !set.has(m.id) : set.has(m.id);
+                    // ★★ V12 a REGION-DEFAULT switch records the owner's word either way ("+id" on, "id" off), so the
+                    //    default never overwrites it.
+                    const wasOff = m.on ? !set.has(m.id) : off.has(m.id);
                     if (m.on) { if (wasOff) set.add(m.id); else set.delete(m.id); }
-                    else if (wasOff) set.delete(m.id); else set.add(m.id);
+                    else if (wasOff) { set.delete(m.id); if (regionDefaults[m.id]) set.add('+' + m.id); }
+                    else { set.delete('+' + m.id); set.add(m.id); }
                     const v = [...set].join(',');
                     setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
                     // ★★★ BLOCKING DAB REMOVES THE DAB LANDING STATION — and says so.
@@ -4099,7 +4125,13 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     }
                     const k = kids(m.id);
                     const self = !m.on && off.has(m.id) ? m : null;
-                    const box = m.id === 'lora+all' ? (
+                    const rdWhy = !m.on ? regionDefaults[m.id] : undefined;
+                    const box = rdWhy ? (
+                      <View key={m.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
+                        {chip(m, inert)}
+                        <Text style={[styles.hint, { color: C.textDim, fontFamily: F, flexShrink: 1 }]}>{rdWhy}</Text>
+                      </View>
+                    ) : m.id === 'lora+all' ? (
                       <View key={m.id} style={{ flexBasis: '100%', gap: 4 }}>
                         {chip(m, inert)}
                         <Text style={[styles.hint, { color: C.textDim, fontFamily: F, opacity: inert ? 0.45 : 1 }]}>

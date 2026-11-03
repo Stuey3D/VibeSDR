@@ -1449,6 +1449,17 @@ if [ -x "$OUT/test-ais" ] && [ -x "$OUT/test-aprs" ] && [ -n "${VIBESERVER_BIN:-
 else
   echo '   not run — needs VIBESERVER_BIN and the test-ais / test-aprs builds'; notrun=$((notrun+1))
 fi
+
+# ★★★ V12 DECODER REACH + REGION DEFAULTS (vibe_decoder_reach.h): the real server on a fake rtl_tcp — a locked range greys
+#     every fixed-frequency decoder WITH its reason and refuses an attach; SAME / DAB off by their region default (never
+#     greyed), the owner's "+same" back on, no position = no default. Needs VIBESERVER_BIN (exit 3 = not run). Silent.
+printf '\n\033[1m── decoder reach + region defaults (end to end: the server) ──\033[0m\n'
+node scripts/test-server-decoder-reach.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+node scripts/test-web-decoder-reach.mjs; rc=$?   # ★ …and the web client's greyed keys (headless Edge, --mute-audio)
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+npx tsx scripts/test_decoder_reach_clients.ts; rc=$?   # ★ …and the clients' gating (the app's keys, the Setup page's real list functions)
+if [ $rc -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The ship/station layer's generated copies (web client, app, /mapgl/vendor) match web/mapkit/tracklayer.js.
 if node scripts/gen-tracklayer-source.mjs --check; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
