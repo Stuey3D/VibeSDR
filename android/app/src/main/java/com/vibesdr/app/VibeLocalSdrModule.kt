@@ -144,6 +144,18 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         try { VibeLocalSDR.setAntennaBands(ranges, filters) } catch (t: Throwable) { Log.w("VibeLocalSDR", "setAntennaBands: ${t.message}") }
     }
 
+    /** ★ V12 the served radio's hwinfo `radio` object as JSON ("" when nothing is served) — the ports the screen names. */
+    @ReactMethod
+    fun radioCaps(promise: Promise) {
+        try { promise.resolve(VibeLocalSDR.radioCaps()) } catch (t: Throwable) { promise.resolve("") }
+    }
+
+    /** ★ V12 the owner's per-port antenna names, applied NOW on a running server (a save on the server screen). */
+    @ReactMethod
+    fun setAntennaPortNames(json: String) {
+        try { VibeLocalSDR.setAntennaPortNames(json) } catch (t: Throwable) { Log.w("VibeLocalSDR", "setAntennaPortNames: ${t.message}") }
+    }
+
     /** ★ Apply the switch, the per-band aerial list and the lock NOW, on a running server (a save on the server screen). */
     @ReactMethod
     fun setAntennaSwitch(json: String, map: String, locked: Boolean) {

@@ -437,6 +437,10 @@ object VibeLocalSDR {
     fun antSwitchSearch(host: String, port: Int): String { ensureLoaded(); return nativeAntSwitchSearch(host, port) }
     /** ★ What the aerial covers / filters fitted — the shared text format (utils/antennaBands.ts). */
     fun setAntennaBands(ranges: String, filters: String) { ensureLoaded(); nativeSetAntennaBands(ranges, filters) }
+    /** ★ V12 the owner's names for the radio's own antenna ports — a JSON object keyed by port ("" = none). */
+    fun setAntennaPortNames(json: String) { ensureLoaded(); nativeSetAntennaPortNames(json) }
+    /** ★ V12 the running radio's hwinfo `radio` JSON ("" when not serving) — never loads the library just to ask. */
+    fun radioCaps(): String = if (loaded) nativeRadioCaps() else ""
     /** Pin the CENTRE (Hz) — the captured window everyone shares. 0 = follows the listener. */
     fun setVibeServerLockedCentre(hz: Double) { ensureLoaded(); nativeSetVibeServerLockedCentre(hz) }
     /** Real bins at deep zoom instead of interpolation. Without it a shared radio goes blocky. */
@@ -486,6 +490,8 @@ object VibeLocalSDR {
     private external fun nativeSetAntennaSwitch(json: String, map: String, locked: Boolean)
     private external fun nativeAntSwitchSearch(host: String, port: Int): String
     private external fun nativeSetAntennaBands(ranges: String, filters: String)
+    private external fun nativeSetAntennaPortNames(json: String)
+    private external fun nativeRadioCaps(): String
     private external fun nativeSetVibeServerLandingInfo(antenna: String, icon: String, message: String,
                                                         linkUrl: String, linkLabel: String)
     private external fun nativeSetVibeServerLockedCentre(hz: Double)
