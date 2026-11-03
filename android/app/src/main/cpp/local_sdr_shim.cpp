@@ -198,6 +198,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_admin_ticket.h"
 #include "vibe_airspy_limit.h"      // the owner's per-band limit on an Airspy R2 / Mini
 #include "vibe_bands.h"             // the ban list, the connection log and the machine's vitals
+#include "vibe_decoder_reach.h"      // ★ V12 which fixed-frequency decoders this radio reaches, and the region defaults
 #include "vibe_chat_share.h"        // ★ "share a station" in the canned chat: validate, name, say
 #include "vibe_tune_etiquette.h"    // ★★ "Ask before tuning": who may move a shared dial (docs/TUNING-ETIQUETTE.md)
 #include "vibe_watch.h"            // ★★ V12 VFO A/B: a listener's watch channels (docs/v12/VFO-AB.md)
@@ -1609,7 +1610,13 @@ static std::atomic<bool>   g_dabRetuneAfterRebuild{false};
  *    'am', 'usb', 'lsb', 'cwu', 'cwl') plus 'dab', so the list reads the way a person would
  *    write it. */
 static std::mutex          g_vsBlockedModesMtx;
+/* ★★ V12 (2026-11-03) TWO LISTS: the owner's own (g_vsBlockedModesOwner, as saved — "+same" = the owner switched a
+ *  region-default-off decoder ON), and the one enforced (g_vsBlockedModesCsv) = the owner's plus each REGION DEFAULT that
+ *  is off here and that the owner has said nothing about (vibe_decoder_reach.h effectiveBlocked). Recomputed whenever
+ *  either the list or the region changes, so every reader below sees one list and needs no change. */
 static std::string         g_vsBlockedModesCsv;
+static std::string         g_vsBlockedModesOwner;
+static int                 g_vsRegionKnown = 0;   // ★ the ITU region from the owner's position; 0 = unknown (no default)
 
 /** ★ Hex of a fixed length range — the shape every broadcast identifier has (PI 4, ECC 2, EId 4, SId 4 or 8). */
 static bool isHexLen(const std::string& v, size_t lo, size_t hi) {
@@ -1697,6 +1704,7 @@ static std::string vsIsmWhyNot();    // "" = ISM can run here now — see its de
 static bool vsIsmReach(const vibeism::Band& b);   // this radio can tune the whole of the band
 static bool vsAisReach();            // ★ V12 AIS: this radio reaches 162 MHz (and is not an HF+ / an Icom) — by vsIsmReach
 static std::string vsAisWhyNot();    // "" = AIS can run here now
+static std::string vsDecoderWhyNot(const std::string& id, const vibereach::Reach* reach = nullptr);   // ★ V12 "" = this radio reaches that fixed-frequency decoder (vibe_decoder_reach.h)
 static bool vsIsmAnyBand();          // ★ false = ISM is not offered AT ALL (the HF+): no control, no reason
 static bool vsNdbReach(double& lo, double& hi);   // the part of the NDB band this radio reaches ("" = none worth offering)
 static std::string vsNdbWhyNot();    // "" = NDB can run here now
@@ -26955,6 +26963,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     LOGI("decoder %s refused — the server owner has switched it off on this receiver", ext.c_str());
                     continue;
                 }
+                /* ★★ V12 DECODER REACH: a fixed-frequency decoder this radio cannot tune is refused with the same words its
+                 *  greyed key shows (vibe_decoder_reach.h) — an old client or a hand-rolled tool cannot make it live. */
+                {
+                    const std::string key = ext == "cwskim" ? "cw" : ext == "pskskim" ? "psk" : ext;
+                    const std::string why = vsDecoderWhyNot(key);
+                    if (!why.empty()) {
+                        LOGI("decoder %s refused — %s", ext.c_str(), why.c_str());
+                        sendDecoderRefusal(sock, "decoder", ext, "unreachable", why);
+                        continue;
+                    }
+                }
                 /* ★★★ PAGING: THE PHONE'S OWN APP ON THE PHONE'S OWN RADIO, NOTHING ELSE (Stuart's spec). Refused unless
                  *  the engine may run it here (not serving, a USB radio) AND this socket is loopback; never on VFO B. */
                 if (ext == "paging") {
@@ -35321,7 +35340,8 @@ void LocalSdrShim::setVibeServerRawIq(int mode, int maxUsers, int lanMaxHz) {
 /** ★ Modes and decoders the owner has switched off on this receiver — see g_vsBlockedModesCsv. */
 void LocalSdrShim::setVibeServerBlockedModes(const std::string& csv) {
     std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
-    g_vsBlockedModesCsv = csv;
+    g_vsBlockedModesOwner = csv;
+    g_vsBlockedModesCsv = vibereach::effectiveBlocked(csv, g_vsRegionKnown);
 }
 
 void LocalSdrShim::setVibeServerLockedCentre(double hz) { g_vsLockedCentre.store(hz > 0 ? hz : 0.0); }
@@ -35365,9 +35385,23 @@ void LocalSdrShim::setProvidesSpectrogram(bool on) { g_vsProvidesSpectrogram.sto
 void LocalSdrShim::noteProcessExiting() { g_vsProcessExiting.store(true); }
 const char* LocalSdrShim::stopStage() { return g_vsStopStage.load(); }
 
-void LocalSdrShim::setBandRegion(int region) {
+void LocalSdrShim::setBandRegion(int region, bool known) {
     vibebands::defaultRegion() = (region >= 1 && region <= 3) ? region : 1;
-    LOGI("band plan: ITU region %d", vibebands::defaultRegion());
+    LOGI("band plan: ITU region %d%s", vibebands::defaultRegion(), known ? "" : " (position not given)");
+    /* ★★ V12 the region defaults of the owner's decoder switches (SAME off outside Region 2, DAB off in Region 2) — ONLY
+     *  from a position the owner gave. vibebands falls back to Region 1 for its band plan; a default switch-off must not
+     *  rest on a guess, so an unknown position switches nothing off. */
+    std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
+    g_vsRegionKnown = known ? vibebands::defaultRegion() : 0;
+    g_vsBlockedModesCsv = vibereach::effectiveBlocked(g_vsBlockedModesOwner, g_vsRegionKnown);
+    for (const auto& d : vibereach::regionDefaults())
+        if (vibereach::regionOff(d.id, g_vsRegionKnown)) LOGI("region default: %s off unless the owner switches it on", d.id);
+}
+
+std::string LocalSdrShim::regionDefaultsJson() {
+    std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx);
+    const std::string j = vibereach::regionJson(g_vsRegionKnown);
+    return j.empty() ? std::string("{}") : "{" + j.substr(1) + "}";
 }
 
 void LocalSdrShim::setVibeServerTuneLimits(const std::string& allowCsv, const std::string& blockCsv) {
@@ -35594,6 +35628,46 @@ static std::string vsAisWhyNot() {
     return {};
 }
 
+/* ★★★ V12 DECODER REACH (2026-11-03) — vibe_decoder_reach.h. What this radio can tune, for the fixed-frequency decoders
+ *  (SAME, DSC, APRS, NAVTEX, SELCAL; CW / PSK / JTTY by the amateur bands): a LOCKED window is the window (vsTunableRanges,
+ *  centre ± rate/2 — the same set the directory publishes); otherwise the driver's coverage through the converter in
+ *  front of it and the owner's allow / block lists, with an RTL's HF only where it has a path there (direct sampling, or
+ *  a V4's own upconverter — an RTL whose model is unknown keeps its table, never greyed on a guess). An Icom: its model's
+ *  ranges. Stuart, 2026-11-03, a USRP locked to 88–96 MHz offering SAME: "what is SAME?" */
+static vibereach::Reach vsDecoderReach() {
+    vibereach::Reach r;
+    if (g_icomOn.load()) { r.ranges = vsTunableRanges(); return r; }
+    if (g_vsLockedCentre.load() > 0.0 && g_vsLockedRate.load() > 0.0) { r.ranges = vsTunableRanges(); r.locked = true; return r; }
+    auto& shim = LocalSdrShim::instance();
+    const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf"
+                          : shim.isHackRf() ? "hackrf" : shim.isAirspy() ? "airspy"
+                          : shim.isUsrp() ? "usrp" : "rtl";
+    int rtlHf = 1;
+    if (drv == "rtl") {
+        const std::string m = shim.deviceModel();
+        rtlHf = (g_autoDs.load() || g_dsNow.load() > 0) ? 2 : (m.empty() || m.find("V4") != std::string::npos) ? 1 : 0;
+    }
+    std::string allow, block;
+    { std::lock_guard<std::mutex> lk(g_vsTuneLimitMtx); allow = g_vsAllowCsv; block = g_vsBlockCsv; }
+    r.ranges = vibereach::reachRanges(drv, shim.converterOffsetHz(), shim.converterInputLoHz(), shim.converterInputHiHz(),
+                                      rtlHf, allow, block);
+    return r;
+}
+/** Why fixed-frequency decoder `id` cannot run on this radio, in words with the numbers — "" when it can, when it is not
+ *  in the table, or when the owner has switched it off (the owner's block wins, with its own behaviour and words). */
+static std::string vsDecoderWhyNot(const std::string& id, const vibereach::Reach* reach) {
+    if (vsModeBlocked(id) || !vibereach::entry(id)) return {};
+    return vibereach::whyNot(id, reach ? *reach : vsDecoderReach());
+}
+/** ★ hwinfo's pair for a fixed-frequency decoder: `,"id":true` live · `,"id":false` the owner switched it off (hidden, as
+ *  ever) · `,"id":false,"idWhy":"…"` this radio cannot reach it (GREYED with the reason — the ais / aisWhy shape). */
+static std::string vsDecoderCapJson(const char* id, const vibereach::Reach& reach) {
+    if (vsModeBlocked(id)) return std::string(",\"") + id + "\":false";
+    const std::string why = vsDecoderWhyNot(id, &reach);
+    if (why.empty()) return std::string(",\"") + id + "\":true";
+    return std::string(",\"") + id + "\":false,\"" + id + "Why\":\"" + vibereach::jsonEsc(why) + "\"";
+}
+
 /* ★★ V12 DIGITAL SPOTS: BAND (2026-10-26) — decoders/digi_bands.h. The bands this radio can sit on in Band mode: every
  *  band a registered mode has a dial on, kept only where the radio tunes the WHOLE span (an HF+ never lists 70 cm, an RTL
  *  without direct sampling lists no HF). An Icom's audio is not IQ: no band at all, and so no Band button (AGENTS.md: a
@@ -35764,26 +35838,35 @@ static std::string vsSpotBandsJson(const std::vector<vibe::digi::Span>& spans) {
 }
 
 static std::string vsTunableJson() {
+    // ★★ V12 the region defaults of the owner's decoder switches, for the Setup page (vibe_decoder_reach.h regionJson) —
+    //    machine-level, so sent even where no radio range is known (the front door). Nothing when the region is unknown.
+    std::string region;
+    { std::lock_guard<std::mutex> lk(g_vsBlockedModesMtx); region = vibereach::regionJson(g_vsRegionKnown); }
     const vibebands::Ranges t = vsTunableRanges();
-    if (t.empty()) return {};
-    std::string j = ",\"tunable\":" + vibebands::toJson(t);
+    if (t.empty()) return region;
+    std::string j = region + ",\"tunable\":" + vibebands::toJson(t);
+    /* ★★★ V12 DECODER REACH (vibe_decoder_reach.h): each fixed-frequency decoder this radio cannot tune is sent false WITH
+     *  ITS REASON (`<id>Why`) — every client greys the key and says why; never hidden, never live. Asked once here. */
+    const vibereach::Reach reach = vsDecoderReach();
     // ★ Whether to OFFER DAB at all. The client must not draw a control whose every use is a
     //   no-op (AGENTS.md), and only the server knows the effective limits.
     j += std::string(",\"dab\":") + (vsDabCapable() ? "true" : "false");
     /* ★★ CW (V12, 2026-10-25): this server's own CW decoder and skimmer (decoders/cw_skimmer.h). Absent on an older server,
      *  so its clients draw no CW button there; false where the owner has blocked CW on this receiver. */
-    j += std::string(",\"cw\":") + (vsModeBlocked("cw") ? "false" : "true");
+    j += vsDecoderCapJson("cw", reach);
     /* ★★ PSK31/63 (V12, 2026-10-26): this server's own PSK decoder and skimmer (decoders/psk_skimmer.h) — as "cw". */
-    j += std::string(",\"psk\":") + (vsModeBlocked("psk") ? "false" : "true");
+    j += vsDecoderCapJson("psk", reach);
     /* ★★ DSC (V12, 2026-10-26): maritime Digital Selective Calling (decoders/dsc_decoder.h). Absent on an older server, so
      *  its clients draw no DSC button there; false where the owner has blocked it on this receiver. */
-    j += std::string(",\"dsc\":") + (vsModeBlocked("dsc") ? "false" : "true");
+    j += vsDecoderCapJson("dsc", reach);
     // ★ V12 SITOR-A (2026-10-29): the maritime ARQ teleprinter, decoded by the server (vibe_sitora_run.h)
     j += std::string(",\"sitora\":") + (vsModeBlocked("sitora") ? "false" : "true");
     // ★ V12 EAS / SAME (2026-10-31): the US alert headers on the listener's audio (decoders/same_decoder.h)
-    j += std::string(",\"same\":") + (vsModeBlocked("same") ? "false" : "true");
+    j += vsDecoderCapJson("same", reach);
     // ★ V12 SELCAL (2026-10-31): the aeronautical selective call on the listener's audio (decoders/selcal_decoder.h)
-    j += std::string(",\"selcal\":") + (vsModeBlocked("selcal") ? "false" : "true");
+    j += vsDecoderCapJson("selcal", reach);
+    // ★ V12 NAVTEX (518 / 490 / 4209.5 kHz) — a client decoder, so absent on an older server (live there, as ever)
+    j += vsDecoderCapJson("navtex", reach);
     /* ★ V12 THE MFSK KEYBOARD MODES (2026-10-31): MFSK16/32, OLIVIA, CONTESTIA and THOR on the listener's audio
      *  (decoders/textmodes.h) — ONE key, "mfsk" (Stuart: "if it makes it easier for users then add it"). Its choices
      *  travel as data (AUTO first, each with its family), so a client draws FAMILY then MODE (src/services/autoModes.ts). */
@@ -35802,7 +35885,7 @@ static std::string vsTunableJson() {
 #endif
     /* ★★ JTTY (V12, 2026-10-26): the WSJT-X 3.2 keyboard mode, every JTTY signal in the passband (decoders/jtty_decoder.h).
      *  Absent on an older server, so its clients draw no JTTY button there; false where the owner has blocked it. */
-    j += std::string(",\"jtty\":") + (vsModeBlocked("jtty") ? "false" : "true");
+    j += vsDecoderCapJson("jtty", reach);
     /* ★ ADS-B: offered, or shown DISABLED WITH ITS REASON — never hidden (a missing control reads as a missing
      *   feature). `adsbWhy` is absent when it can run. Not offered at all where the radio cannot reach 1090 MHz. */
     {
@@ -35877,7 +35960,7 @@ static std::string vsTunableJson() {
         j += std::string(",\"ais\":") + (why.empty() ? "true" : "false");
         if (!why.empty()) j += ",\"aisWhy\":\"" + dabEscape(why) + "\"";
     }
-    j += std::string(",\"aprs\":") + (vsModeBlocked("aprs") ? "false" : "true");
+    j += vsDecoderCapJson("aprs", reach);
     { char f[64]; std::snprintf(f, sizeof f, ",\"aprsHz\":%.0f", vibeaprs::regionalHz(g_bgLat.load(), g_bgLon.load())); j += f; }
     /* ★★ V12 DIGITAL SPOTS (2026-10-26): the modes this server decodes (the clients' list filter, Mode column and map
      *  legend come from here, never a list of their own), and BAND mode — `spotsBand` offered or false with `spotsBandWhy`,
@@ -36020,6 +36103,7 @@ static std::string vsTunableJson() {
             else if (k == "ndb") { if (!vsNdbWhyNot().empty()) continue; }
             else if (k == "ais") { if (!vsAisReach() || !vsAisWhyNot().empty()) continue; }
             else if (vsModeBlocked(k)) continue;
+            else if (vibereach::entry(k) && !vsDecoderWhyNot(k, &reach).empty()) continue;   // ★ V12 out of this radio's reach
             if (k == "rds" && vsModeBlocked("wfm")) continue;   // no FM, no RDS of any kind
             m += (first ? "\"" : ",\"") + k + "\""; first = false;
         }
@@ -36647,6 +36731,12 @@ void LocalSdrShim::setLocationJson(const std::string& json) {
     double lat = 0, lon = 0;
     const bool haveLL = jsonNum(json, "lat", lat) && jsonNum(json, "lon", lon) && (lat != 0.0 || lon != 0.0);
     if (haveLL) setReceiverPosition(lat, lon);
+#if defined(__ANDROID__)
+    /* ★★ V12 (2026-11-03) AND THE ITU REGION, on the app's own server — the Linux and Mac servers set it from their
+     *  config in main.cpp; nothing on Android ever did, so it stayed Region 1 and unknown. Known here = the region
+     *  defaults of the decoder switches apply (vibe_decoder_reach.h: SAME off outside Region 2, DAB off in it). */
+    if (haveLL) setBandRegion(vibebands::ituRegion(lat, lon, true), true);
+#endif
     /* ★ US or not, for rbdsCallsign: the owner's country when they gave one, else a position inside the lower 48,
      *  Alaska or Hawaii. Wrong either way costs only an "(unverified)" label a settled name replaces. */
     const std::string iso = jsonStr(json, "iso");
@@ -40619,6 +40709,12 @@ void LocalSdrShim::setConverter(double offsetHz, double inputLoHz, double inputH
 
 double LocalSdrShim::converterOffsetHz() const {
     return p ? p->convOffsetHz.load(std::memory_order_relaxed) : 0.0;
+}
+double LocalSdrShim::converterInputLoHz() const {
+    return p ? p->convInLoHz.load(std::memory_order_relaxed) : 0.0;
+}
+double LocalSdrShim::converterInputHiHz() const {
+    return p ? p->convInHiHz.load(std::memory_order_relaxed) : 0.0;
 }
 
 void LocalSdrShim::setPpm(int ppm) {

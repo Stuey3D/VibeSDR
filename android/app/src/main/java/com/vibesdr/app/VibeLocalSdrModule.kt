@@ -1524,6 +1524,11 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         try { promise.resolve(VibeLocalSDR.bandsJson()) }
         catch (t: Throwable) { promise.reject("bands", t) }
     }
+    /** ★ V12 the region defaults of the decoder switches (SAME off outside the Americas, DAB off in them) — JSON. */
+    @ReactMethod fun getRegionDefaults(promise: Promise) {
+        try { promise.resolve(VibeLocalSDR.regionDefaultsJson()) }
+        catch (t: Throwable) { promise.reject("region", t) }
+    }
 
     @ReactMethod fun startDecoderService(promise: Promise) { promise.resolve(VibeLocalSDR.startDecoderService()) }
     @ReactMethod fun feedDecoderPcm(b64: String, rate: Double) { VibeLocalSDR.feedDecoderPcm(b64, rate) }
