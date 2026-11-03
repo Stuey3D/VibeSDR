@@ -233,7 +233,8 @@ inline int exeBaseCb(struct dl_phdr_info* info, size_t, void* out) {
 /** Install once, early in main(). `version` must outlive the process (a string literal). */
 inline void install(const char* version) {
 #if defined(__SANITIZE_ADDRESS__)
-    /* ★★ THE MEMORY-CHECK BUILD (vibeserver-asan, 2026-11-03) KEEPS AddressSanitizer's OWN HANDLER. ASan reports a
+    /* ★★ AN AddressSanitizer BUILD (a developer's sanitised run; once the shipped memory-check binary, removed
+     *  2026-11-03) KEEPS AddressSanitizer's OWN HANDLER. ASan reports a
      *  SIGSEGV with a symbolised stack of every frame and the shadow memory around the address — more than this file
      *  can — and installing ours over it would replace that report with a shorter one. */
     (void)version;

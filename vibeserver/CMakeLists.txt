@@ -51,32 +51,6 @@ if(VIBE_SANITIZE)
                     -fno-omit-frame-pointer -g)
   message(STATUS "VIBE_SANITIZE=ON — tests and dab-offline carry ASan + UBSan (the server does NOT)")
 endif()
-# ── ★★★ THE MEMORY-CHECK BUILD — THE ONE EXCEPTION TO "NEVER THE SERVER" (2026-11-03) ─────────
-# A USRP clone's radio process died within a second of every start, inside calloc on a heap that
-# something had already corrupted — and the crash names the VICTIM, never the author. The tester
-# cannot run a debugger, so the package carries a second, AddressSanitizer build of the server
-# (/usr/lib/vibeserver/diag/vibeserver-asan) that the admin page's "Check this radio's memory" runs
-# for 60 s in place of the radio's normal process (vibeserver-maintenance `memcheck`). ASan stops at
-# the first bad write with the writer's stack — the author, named.
-#  ★★ Never the shipped /usr/bin/vibeserver: this is a SEPARATE configure (build-deb.sh's build-asan),
-#     and nothing runs it but that one action. The slowness above is accepted for 60 s.
-#  ★★ -static-libasan: the .deb's Depends stays adduser, curl, gzip, libc6 — no libasan8 package.
-#  ★ -g1 (line tables only): GCC's libasan symbolises in process from them (libbacktrace), so the
-#    report names file:line with no llvm-symbolizer on the box, at a fraction of -g's size; -gz
-#    compresses those sections on disk (libbacktrace reads them compressed — linux/test-asan-harness.sh).
-#  ★ Instruments OUR code and the vendored drivers (HackRF, Airspy, OpenRSP's client half) — not the
-#    prebuilt libraries in /opt/vibe-deps (UHD, libusb, …). A bad write from inside UHD is not caught
-#    AT the write; ASan's allocator keeps its metadata apart from the chunks, so such a crash may
-#    simply not happen under it — which is itself a finding (see the memcheck report's header).
-option(VIBESERVER_ASAN "Build vibeserver itself with AddressSanitizer (the diagnostics binary)" OFF)
-if(VIBESERVER_ASAN)
-  if(APPLE OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    message(FATAL_ERROR "VIBESERVER_ASAN is the Linux package's GCC build (it links libasan statically)")
-  endif()
-  add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g1 -gz)
-  add_link_options(-fsanitize=address -static-libasan -gz)
-  message(STATUS "VIBESERVER_ASAN=ON — the SERVER carries AddressSanitizer (the diagnostics binary only)")
-endif()
 function(vibe_sanitize tgt)
   if(VIBE_SANITIZE)
     target_compile_options(${tgt} PRIVATE ${VIBE_SAN_OPTS})
@@ -363,11 +337,6 @@ add_executable(vibeserver
     #   file exists, so every other install carries it and never runs a line of it.
     "${CMAKE_CURRENT_SOURCE_DIR}/pocket.cpp"
     $<$<BOOL:${CURSES_FOUND}>:${CMAKE_CURRENT_SOURCE_DIR}/tui.cpp>)
-if(VIBESERVER_ASAN)
-  # ★ ASan's options, baked in (linux/asan_options.c), and a banner so the report says which binary it was.
-  target_sources(vibeserver PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/linux/asan_options.c")
-  target_compile_definitions(vibeserver PRIVATE VIBESERVER_ASAN_BUILD=1)
-endif()
 if(CURSES_FOUND)
   target_compile_definitions(vibeserver PRIVATE VIBE_HAVE_TUI)
   target_include_directories(vibeserver PRIVATE ${CURSES_INCLUDE_DIRS})
@@ -461,7 +430,6 @@ endif()
 #    lib/vibeserver/armv6, and postinst installs it on a CPU without NEON. ONE FILE since 2026-10-18 —
 #    librtlsdr is linked in, so there is no ARMv6 librtlsdr.so beside it any more (and no RPATH).
 set(VIBE_ARMV6_STAGE "" CACHE PATH "Directory holding an ARMv6 vibeserver to ship too")
-set(VIBE_ASAN_STAGE "" CACHE PATH "Directory holding the AddressSanitizer vibeserver to ship as diag/vibeserver-asan")
 
 find_library(RTLSDR_LIB NAMES rtlsdr HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
 find_library(USB_LIB    NAMES usb-1.0 HINTS /opt/homebrew/lib /usr/local/lib /usr/lib)
@@ -1126,12 +1094,6 @@ add_test(NAME agc-record COMMAND test-agc-record)
 add_executable(test-diag-scrub "${CMAKE_CURRENT_SOURCE_DIR}/test-diag-scrub.cpp")
 vibe_sanitize(test-diag-scrub)
 add_test(NAME diag-scrub COMMAND test-diag-scrub)
-# ★★ "Check this radio's memory" (vibe_memcheck.h, 2026-11-03): the serial alphabet the endpoint and the daemon hold a
-#    memcheck request to, the listener count read from a radio's /vibeserver.json, the helper's "still running" marker.
-add_executable(test-memcheck-action "${CMAKE_CURRENT_SOURCE_DIR}/test-memcheck-action.cpp")
-target_include_directories(test-memcheck-action PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../android/app/src/main/cpp")
-vibe_sanitize(test-memcheck-action)
-add_test(NAME memcheck-action COMMAND test-memcheck-action)
 # ★★★ The tunnel address (tunnel_url.h, 2026-10-27): cloudflared's "failed to request quick Tunnel: Post
 #     \"https://api.trycloudflare.com/tunnel\"" line is never an address (Kiko's TV box recycled on it every 15 s).
 add_executable(test-tunnel-url "${CMAKE_CURRENT_SOURCE_DIR}/test-tunnel-url.cpp")
@@ -1275,14 +1237,6 @@ if(UNIX AND NOT APPLE)
   #    VIBE_LINUX_DEPS block), so an upgrade simply removes the old file and nothing points at it.
   if(VIBE_ARMV6_STAGE)
     install(PROGRAMS "${VIBE_ARMV6_STAGE}/vibeserver" DESTINATION lib/vibeserver/armv6)
-  endif()
-  # ★★ THE MEMORY-CHECK BINARY (amd64 + arm64 only — see VIBESERVER_ASAN above and build-deb.sh), built by a
-  #    separate configure and handed in here as a finished file. Run only by vibeserver-maintenance `memcheck`.
-  if(VIBE_ASAN_STAGE)
-    if(NOT EXISTS "${VIBE_ASAN_STAGE}/vibeserver")
-      message(FATAL_ERROR "VIBE_ASAN_STAGE=${VIBE_ASAN_STAGE} has no vibeserver in it")
-    endif()
-    install(PROGRAMS "${VIBE_ASAN_STAGE}/vibeserver" DESTINATION lib/vibeserver/diag RENAME vibeserver-asan)
   endif()
   install(FILES linux/vibeserver.service DESTINATION lib/systemd/system)
 # ★ The per-radio template and the reconciler that starts the second and later radios.
