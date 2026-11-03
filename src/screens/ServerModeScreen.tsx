@@ -3,6 +3,8 @@ import { clampPortName, portLabel, portNamesFrom } from '../utils/antennaPortNam
 import { DIGI_MODE_STYLE } from '../utils/digiModes';   // ★ V12 the digital-spots modes (per-mode switches)
 import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
+import BackgroundDecodingSetup from '../components/BackgroundDecodingSetup';
+import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps } from '../services/bgDecode';
 import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } from '../services/antennaSwitch';
 /** ★★ THE GATE (Stuart, 2026-10-09: "pushed to [Chicopee] as a test — if it works it ships as V11, if not gated off for
  *  V12"). false hides the antenna-switch setup; a server already configured keeps working AND keeps the section, so its
@@ -115,6 +117,7 @@ import {
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation, homeFromDevice,
   getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive, rateGuardState, rateGuardClear,
+  getBackgroundCaps, validateBackgroundDecoding, galleryDisk,
   type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
@@ -285,6 +288,12 @@ const K = {
   fmDefaults: 'vs_fmdefaults',
   /** ★ An Icom's five settings (icomPhoneFields), one JSON value — see the ICOM TRANSCEIVER card. */
   icom: 'vs_icom',
+  /** ★★★ V12 background decoding — the radio's profiles, exactly RadioConfig::bgDecode's JSON ('' = none). */
+  bgDecode: 'vs_bgdecode',
+  /** ★★ V12 the gallery — size (MB), may everyone see it, are listeners' decodes kept. Absent = 100 / yes / yes. */
+  galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
+  /** ★★ V12 VibeAGC for SDRplay (0 automatic, 1 on, 2 off). */
+  rspVibeAgc: 'vs_rspvibeagc',
 };
 
 /** ★★★ HOW LONG THE SETTINGS SCREEN WAITS FOR A DAB QUICK SCAN, and the number its hint QUOTES — one
@@ -469,6 +478,20 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [dabRateBoost, setDabRateBoost] = useState(false);
   /** ★★ V12 VFO A/B — may listeners add a second VFO (B)? On unless the owner says no (the server's default too). */
   const [vfoB, setVfoB] = useState(true);
+  /** ★★★ V12 BACKGROUND DECODING — this radio's profiles (services/bgDecode; stored as RadioConfig::bgDecode's JSON),
+   *  what the engine on this phone offers for them (null = an engine without it: the card is not drawn), the
+   *  engine's own sentence when it would refuse them, and an epoch that remounts the editor when a stored value lands. */
+  const [bgModel, setBgModel] = useState<BgModel>(() => emptyBgModel());
+  const [bgCaps, setBgCaps] = useState<BgCaps | null>(null);
+  const [bgProblem, setBgProblem] = useState('');
+  const [bgEpoch, setBgEpoch] = useState(0);
+  /** ★★ V12 THE GALLERY — the Setup page's defaults: 100 MB, everyone may see it, listeners' decodes kept. */
+  const [galleryMb, setGalleryMb] = useState(100);
+  const [galleryPublic, setGalleryPublic] = useState(true);
+  const [gallerySaveLive, setGallerySaveLive] = useState(true);
+  const [galDisk, setGalDisk] = useState<{ freeBytes: number; usedBytes: number } | null>(null);
+  /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with the OpenRSP driver), 1 on, 2 off — drawn only for an RSP. */
+  const [rspVibeAgc, setRspVibeAgc] = useState(0);
   /* ★★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h), read from the engine's record on mount. While
    *  one is recorded the switch is drawn off and disabled, and the saved choice is turned off too — the engine turned
    *  it off, and this screen's copy would otherwise send it back at the next Start. */
@@ -823,6 +846,39 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                      : radio?.driver === 'sdrplay'  ? '8 MS/s'
                      : radio?.driver === 'airspy'   ? '10 MS/s'
                      : '2.4 MHz';
+
+  /* ★★★ V12 BACKGROUND DECODING — what this radio may do with nobody listening. The engine's own decoder table and Band
+   *  list (getBackgroundCaps), what the radio reaches by its driver (bgReach — vibeserver/main.cpp's save rules; the
+   *  screen is drawn while the server is STOPPED, so there is no running radio to ask), and what the owner switched off
+   *  under Modes and decoders (the setup page's modeBlockSet: the owner's list plus the region defaults). */
+  useEffect(() => { void getBackgroundCaps().then((j) => setBgCaps(parseBgCaps(j))); }, [radio?.driver]);
+  useEffect(() => { void galleryDisk().then(setGalDisk); }, []);
+  const bgDriver = radio?.driver ?? 'rtl';
+  const bgOff = (() => {
+    const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
+    const off = new Set([...own].filter((t) => t[0] !== '+'));
+    for (const id of Object.keys(regionDefaults)) if (!own.has(id) && !own.has('+' + id)) off.add(id);
+    return off;
+  })();
+  const bgR = bgReach(bgDriver, autoDs, directSampling === 'off' ? 0 : 1);
+  const bgReachNow = { ismOk: bgR.ismOk && !bgOff.has('ism'), aisOk: bgR.aisOk && !bgOff.has('ais'),
+                       ndbOk: bgR.ndbOk && !bgOff.has('ndb') };
+  // ★ The rate the radio runs at: the pinned one, else what Start sends (serverConfig: rate || 2.4 MS/s; an HF+ its full 912 kHz)
+  const bgRate = rate > 0 ? rate : bgDriver === 'airspyhf' ? 912_000 : 2_400_000;
+  const bgLockCentre = advanced && radioUseEff === 'locked' && lockedCentre > 0 ? lockedCentre : 0;
+  const bgSlotCap = decoderMax > 0 ? decoderMax : (bgCaps?.decoderSlotsDefault ?? 0);
+  const bgJson = collectBg(bgModel);
+  const onBgChange = (m: BgModel) => { setBgModel(m); void AsyncStorage.setItem(K.bgDecode, collectBg(m)); };
+  /* ★ The engine's save rule, as the owner edits — the Setup page refuses a save in these words, so this screen says them
+   *  under the profiles and Start refuses the same profiles (start()). */
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(() => {
+      void validateBackgroundDecoding(bgJson, bgRate, bgSlotCap, bgLockCentre, bgReachNow)
+        .then((e) => { if (alive) setBgProblem(e); });
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [bgJson, bgRate, bgSlotCap, bgLockCentre, bgReachNow.ismOk, bgReachNow.aisOk, bgReachNow.ndbOk]);
 
   // ★★★ THE ORDER AN OWNER SETS A LOCKED RECEIVER IN, which is not the order the page grew in.
   //     A pinned window is defined by its CENTRE and its WIDTH together — the centre says where
@@ -1301,6 +1357,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const bmd = g(K.blockedModes); if (bmd != null) setBlockedModes(bmd); }
           { const dbb = g(K.dabRateBoost); if (dbb != null) setDabRateBoost(dbb === '1'); }
           { const vb = g(K.vfoB); if (vb != null) setVfoB(vb !== '0'); }
+          // ★★ V12 background decoding + the gallery. Absent = off / the Setup page's defaults (100 MB, yes, yes).
+          { const bd = g(K.bgDecode); if (bd != null) { setBgModel(parseBg(bd)); setBgEpoch((e) => e + 1); } }
+          { const gm = g(K.galleryMb); if (gm != null && gm !== '' && Number.isFinite(Number(gm))) setGalleryMb(Math.max(0, Number(gm))); }
+          { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
+          { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
+          { const rv = g(K.rspVibeAgc); if (rv === '1' || rv === '2' || rv === '0') setRspVibeAgc(Number(rv)); }
           // ★★ The engine's record of a fall-over at a boosted rate — it switches the saved choice off here too.
           rateGuardState().then((st) => {
             setRateGuard(st);
@@ -1897,6 +1959,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
+    bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc,   // ★★ V12 — read here, never stale
   };
 
   /* ★★★ THE CONFIG THE SERVER STARTS WITH, BUILT IN ONE PLACE (2026-09-29). Start sends it, and so does
@@ -1942,6 +2005,12 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     adsbKeepRunning: !!live.current.landingAdsb && !!live.current.adsbKeep,
     fmDefaults: live.current.fmDef,
     radioLabel: live.current.radioLabel,
+    // ★★★ V12 background decoding (RadioConfig::bgDecode) and the gallery — VibeServerBoot applies them on every start.
+    //     Never sent to the private DAB scan engine's profiles (privateScanConfig drops bgDecode).
+    bgDecode: live.current.bgJson,
+    galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
+    // ★ Only an RSP's — 0 (automatic) on any other radio, so a choice saved while an RSP was plugged in cannot ride along.
+    rspVibeAgc: radio?.driver === 'sdrplay' ? live.current.rspVibeAgc : 0,
     /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
      *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
      *  check for the WHOLE literal, so every setting here could be misspelled or unknown to
@@ -2069,6 +2138,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingDabCh, String(live.current.landingDabCh)], [K.landingDabSid, String(live.current.landingDabSid)],
       [K.landingDabSvc, live.current.landingDabSvc], [K.radioLabel, live.current.radioLabel],
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
+      [K.bgDecode, live.current.bgJson], [K.galleryMb, String(live.current.galleryMb)],
+      [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
+      [K.rspVibeAgc, String(live.current.rspVibeAgc)],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -2090,6 +2162,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       }
     }
     await setServerLocationMode(locMode);
+
+    /* ★★ V12 BACKGROUND PROFILES THE ENGINE WOULD REFUSE ARE REFUSED HERE TOO — the Setup page will not save them, and a
+     *  server started with them would quietly run none (the engine keeps its old settings and logs why). Its own words. */
+    if (live.current.bgProblem) {
+      setStarting(false);
+      setError('Background Decoding — ' + live.current.bgProblem
+        + ' Change the profile under WHEN NOBODY IS LISTENING, or switch Background Decoding off.');
+      return;
+    }
 
     try {
       const info = await startVibeServer(serverConfigRef.current(n));
@@ -2950,6 +3031,60 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   — a reboot needs the dongle replugged by hand, and Samsung ships scheduled
                   restarts ON, which kills an unattended receiver every few days. */}
 
+            {/* ★★ V12 THE GALLERY (2026-10-22) — what the decoders heard: background decoding's, and a listener's own.
+                The Setup page's Server tab, its words; the size is the limit (the oldest go first) with the space left
+                on this device beside it. Drawn for every radio, as on the Setup page: a listener's own decodes go there
+                too. VibeServerBoot applies it (setGallery) on every start. */}
+            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>GALLERY</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Gallery size</Text>
+                <TextInput
+                  value={String(galleryMb)}
+                  onChangeText={(t) => {
+                    const v = Math.max(0, Math.min(100000, parseInt(t.replace(/[^0-9]/g, ''), 10) || 0));
+                    setGalleryMb(v); AsyncStorage.setItem(K.galleryMb, String(v));
+                  }}
+                  keyboardType="number-pad" placeholderTextColor={C.placeholderDim}
+                  style={[styles.input, { width: 96, textAlign: 'center', color: C.text, borderColor: C.border, fontFamily: F }]} />
+                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>MB</Text>
+                {!!galDisk && galDisk.freeBytes > 0 && (
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+                    {(galDisk.freeBytes / 1073741824).toFixed(1) + ' GB free on this device'
+                      + (galDisk.usedBytes > 0 ? ' · the gallery holds ' + (galDisk.usedBytes >= 1048576
+                        ? (galDisk.usedBytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(galDisk.usedBytes / 1024)) + ' KB') : '')}
+                  </Text>
+                )}
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                NAVTEX messages, RTTY and later charts and pictures, kept for anyone to look back through (the GALLERY
+                button in the decoders menu). The gallery keeps everything until this space is full, then removes the
+                oldest items first, so the newest night is always there. There is no limit on the number of items, only
+                on the space (which counts the gallery{'’'}s own index too). 0 keeps nothing. On a small phone or an SD
+                card a modest figure is kind to it: 100 MB holds about 50,000 NAVTEX messages.
+              </Text>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                  Everyone may see the gallery
+                </Text>
+                <Switch value={galleryPublic}
+                  onValueChange={(v) => { setGalleryPublic(v); AsyncStorage.setItem(K.galleryPublic, v ? '1' : '0'); }}
+                  trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+              </View>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                  Keep listeners{'’'} decodes in the gallery too
+                </Text>
+                <Switch value={gallerySaveLive}
+                  onValueChange={(v) => { setGallerySaveLive(v); AsyncStorage.setItem(K.gallerySaveLive, v ? '1' : '0'); }}
+                  trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                Off: only background decoding is kept. Each item says whether it was decoded in the background or by a
+                listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.
+              </Text>
+            </View>
+
             {/* Web server. Turning this OFF means a browser gets nothing — only the
                 VibeSDR app can connect. It's the blunt lock for a server you don't
                 want a stranger stumbling into via a URL. */}
@@ -3769,6 +3904,22 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     + 'flatter battery, and the only way to draw the 24-hour spectrogram.'}
               </Text>
             </View>
+
+            {/* ★★★ V12 BACKGROUND DECODING (Stuart, 2026-10-22) — beside the power save, as on the Setup page's Radio tab:
+                the same question, what this radio does when nobody is listening. The Setup page's editor and words
+                (components/BackgroundDecodingSetup), the engine's own decoders. Not on an Icom: one physical receiver,
+                no IQ to cut channels from (AGENTS.md — not drawn where it cannot work). Not drawn at all on an engine
+                that does not offer it (bgCaps null), never drawn empty. */}
+            {!isIcom && !!bgCaps && (
+              <View key={`bg${bgEpoch}`} style={[styles.card, { borderColor: C.border }]}>
+                <BackgroundDecodingSetup C={C} F={F} model={bgModel} onChange={onBgChange} caps={bgCaps}
+                  driver={bgDriver} ismOk={bgReachNow.ismOk} aisOk={bgReachNow.aisOk} ndbOk={bgReachNow.ndbOk}
+                  ndbBlocked={bgOff.has('ndb')} bandOk={!bgOff.has('spots') && !bgOff.has('spotsband')}
+                  dscOk={!bgOff.has('dsc')} rate={bgRate} lockCentre={bgLockCentre}
+                  users={advanced ? maxUsers : 1} decoderMax={decoderMax}
+                  adsbKeeps={landingAdsb && adsbKeep} problem={bgProblem} />
+              </View>
+            )}
 
             {/* ★★★ KEEP RADIO ALIVE (2026-10-06). Stuart's idea and his wording — "use if USB ports go into powersave
                 mode when no traffic detected" — after the Sony dropped its dongle in standby and the five-minute rule

@@ -1485,6 +1485,41 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetVfoB(JNIEnv*, jobject, jboolean on) {
     vibe::LocalSdrShim::setVibeServerVfoB(on == JNI_TRUE);   // ★★ V12 VFO A/B — the owner's switch
 }
+/* ★★ V12 BACKGROUND DECODING + THE GALLERY on the Android server (ServerModeScreen → VibeServerBoot) — the same engine
+ *  calls vibeserver/main.cpp makes: the radio's profiles (RadioConfig::bgDecode's JSON), the gallery's directory, size and
+ *  two switches, the radio's label on each item and the serial kept out of them. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetBackgroundDecoding(JNIEnv* env, jobject, jstring json) {
+    std::string err;
+    vibe::LocalSdrShim::setBackgroundDecoding(jstr(env, json), err);
+    return env->NewStringUTF(err.c_str());   // ★ "" = applied; else why not (the old settings stay)
+}
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetGallery(JNIEnv* env, jobject, jstring dir, jdouble limitMb,
+                                                   jboolean publicRead, jboolean saveLive, jstring label, jstring serial) {
+    const std::string s = jstr(env, serial);
+    std::vector<std::string> serials;
+    if (!s.empty()) serials.push_back(s);
+    vibe::LocalSdrShim::setGalleryRedact(serials);   // ★★★ before the label: a serial never reaches an item
+    vibe::LocalSdrShim::setGallery(jstr(env, dir), (double)limitMb, publicRead == JNI_TRUE, saveLive == JNI_TRUE);
+    vibe::LocalSdrShim::setGalleryRadioLabel(jstr(env, label));
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeBackgroundCaps(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::backgroundCapsJson().c_str());
+}
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeValidateBackgroundDecoding(JNIEnv* env, jobject, jstring json, jdouble rate,
+        jint slotCap, jdouble lockCentre, jboolean ismOk, jboolean ndbOk, jboolean aisOk) {
+    const std::string e = vibe::LocalSdrShim::validateBackgroundDecoding(jstr(env, json), (double)rate, (int)slotCap,
+        (double)lockCentre, ismOk == JNI_TRUE, ndbOk == JNI_TRUE, aisOk == JNI_TRUE);
+    return env->NewStringUTF(e.c_str());
+}
+/* ★★ V12 VibeAGC for SDRplay — the owner's choice (0 automatic: on with the OpenRSP driver, 1 on, 2 off), RadioConfig::rspVibeAgc. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetRspVibeAgc(JNIEnv*, jobject, jint choice) {
+    vibe::LocalSdrShim::setVibeServerRspVibeAgc((int)choice);
+}
 /* ★★★ A RADIO THAT FELL OVER AT A RATE A MODE BOOSTED TO — the same guard as the daemon's (vibe_rate_guard.h), kept in
  *  the app's files dir. setRateGuardBase BEFORE setDabPolicy: a marker left by a run that died at a boosted rate turns
  *  the rate switch off there. */

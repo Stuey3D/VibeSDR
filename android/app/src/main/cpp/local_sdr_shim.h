@@ -345,6 +345,12 @@ public:
     /** ★★ V12 BACKGROUND DECODING (vibe_bgdecode.h): this radio's profiles, as RadioConfig::bgDecode stores them. Live.
      *  @return false (and `err`) when the JSON does not parse — the old settings stay. */
     static bool setBackgroundDecoding(const std::string& json, std::string& err);
+    /** ★★ V12 what a background-decoding editor may offer here — the engine's own decoder table (ids, labels,
+     *  demodulators, tones), the ISM band ids, the Band list and the decoder slots — for the Android server screen. */
+    static std::string backgroundCapsJson();
+    /** ★★ V12 the Setup page's save rule for background decoding ("" = good, else the engine's sentence). */
+    static std::string validateBackgroundDecoding(const std::string& json, double rate, int slotCap, double lockCentre,
+                                                  bool ismOk, bool ndbOk, bool aisOk);
     /** ★★ THE GALLERY (vibe_gallery.h): its directory (shared by every radio on the machine), the owner's size in MB
      *  (0 = keep nothing), whether listeners may read it, and whether a listener's own decodes are kept. */
     static void setGallery(const std::string& dir, double limitMb, bool publicRead, bool saveLive);

@@ -150,6 +150,35 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         try { promise.resolve(VibeLocalSDR.radioCaps()) } catch (t: Throwable) { promise.resolve("") }
     }
 
+    /** ★★ V12 what the background-decoding editor may offer (the engine's decoder table, ISM ids, Band list, slots). */
+    @ReactMethod
+    fun backgroundCaps(promise: Promise) {
+        try { promise.resolve(VibeLocalSDR.backgroundCaps()) } catch (t: Throwable) { promise.resolve("") }
+    }
+
+    /** ★★ V12 the Setup page's save rule for background decoding — "" = good, else the engine's own sentence. */
+    @ReactMethod
+    fun validateBackgroundDecoding(json: String, rate: Double, slotCap: Double, lockCentre: Double,
+                                   ismOk: Boolean, ndbOk: Boolean, aisOk: Boolean, promise: Promise) {
+        try {
+            promise.resolve(VibeLocalSDR.validateBackgroundDecoding(json, rate, slotCap.toInt(), lockCentre, ismOk, ndbOk, aisOk))
+        } catch (t: Throwable) { promise.resolve("") }
+    }
+
+    /** ★★ V12 the gallery's disk: free space where it lives and what it holds now (bytes) — the size box says both. */
+    @ReactMethod
+    fun galleryDisk(promise: Promise) {
+        try {
+            val dir = VibeServerBoot.galleryDir(reactContext.filesDir)
+            var used = 0L
+            if (dir.exists()) dir.walkTopDown().forEach { if (it.isFile) used += it.length() }
+            val m = Arguments.createMap()
+            m.putDouble("freeBytes", reactContext.filesDir.usableSpace.toDouble())
+            m.putDouble("usedBytes", used.toDouble())
+            promise.resolve(m)
+        } catch (t: Throwable) { promise.resolve(null) }
+    }
+
     /** ★ V12 the owner's per-port antenna names, applied NOW on a running server (a save on the server screen). */
     @ReactMethod
     fun setAntennaPortNames(json: String) {

@@ -150,6 +150,16 @@ export type VibeServerConfig = {
   vfoB?: number;
   /** ★★ ADS-B at 2.56 MS/s on an RTL — its own switch, not tied to dabRateBoost. Never the default. */
   adsb256?: boolean;
+  /** ★★★ V12 BACKGROUND DECODING — this radio's profiles as ONE JSON string, exactly RadioConfig::bgDecode
+   *  (vibe_bgdecode_config.h parse/toJson; services/bgDecode.ts writes it). '' = none — off, as before it existed. */
+  bgDecode?: string;
+  /** ★★ V12 THE GALLERY — the owner's size in MB (0 keeps nothing; default 100), may everyone see it (default yes), are
+   *  listeners' own decodes kept too (default yes). The Setup page's galleryMb / galleryPublic / gallerySaveLive. */
+  galleryMb?: number;
+  galleryPublic?: boolean;
+  gallerySaveLive?: boolean;
+  /** ★★ V12 VibeAGC for SDRplay — 0 automatic (on with the OpenRSP driver), 1 on, 2 off (RadioConfig::rspVibeAgc). */
+  rspVibeAgc?: number;
   /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
    *  (-1 = leave alone), and whether the AGC is locked on. */
   gainLimits?: string;
@@ -341,6 +351,12 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     dabRateBoost: cfg.dabRateBoost === true,
     vfoB: cfg.vfoB === 0 ? 0 : 1,
     adsb256: cfg.adsb256 === true,
+    // ★★ V12 background decoding + the gallery, at definite values on every start (VibeServerBoot applies them)
+    bgDecode: cfg.bgDecode ?? '',
+    galleryMb: cfg.galleryMb != null && cfg.galleryMb >= 0 ? cfg.galleryMb : 100,
+    galleryPublic: cfg.galleryPublic !== false,
+    gallerySaveLive: cfg.gallerySaveLive !== false,
+    rspVibeAgc: cfg.rspVibeAgc === 1 || cfg.rspVibeAgc === 2 ? cfg.rspVibeAgc : 0,
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,
     agcLock: cfg.agcLock ?? false,
@@ -470,6 +486,25 @@ export async function rateGuardState(): Promise<RateGuardState | null> {
 export async function rateGuardClear(): Promise<RateGuardState | null> {
   if (!Local?.rateGuardClear) return null;
   try { return JSON.parse(String(await Local.rateGuardClear())) as RateGuardState; } catch { return null; }
+}
+
+/** ★★ V12 what the background-decoding editor may offer — the engine's own answer (LocalSdrShim::backgroundCapsJson),
+ *  as its raw JSON ('' = an engine without it: the editor is then not drawn, never drawn empty). */
+export async function getBackgroundCaps(): Promise<string> {
+  if (!Local?.backgroundCaps) return '';
+  try { return String(await Local.backgroundCaps()); } catch { return ''; }
+}
+/** ★★ V12 the Setup page's save rule for background decoding: '' = good, else the engine's own sentence. */
+export async function validateBackgroundDecoding(json: string, rate: number, slotCap: number, lockCentre: number,
+                                                 reach: { ismOk: boolean; ndbOk: boolean; aisOk: boolean }): Promise<string> {
+  if (!json || !Local?.validateBackgroundDecoding) return '';
+  try { return String(await Local.validateBackgroundDecoding(json, rate, slotCap, lockCentre, reach.ismOk, reach.ndbOk, reach.aisOk)); }
+  catch { return ''; }
+}
+/** ★★ V12 the gallery's disk on this device: free space and what the gallery holds now (bytes). */
+export async function galleryDisk(): Promise<{ freeBytes: number; usedBytes: number } | null> {
+  if (!Local?.galleryDisk) return null;
+  try { return (await Local.galleryDisk()) ?? null; } catch { return null; }
 }
 
 /**

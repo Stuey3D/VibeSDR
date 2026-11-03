@@ -171,6 +171,18 @@ object VibeServerBoot {
      *   the engine has no index to look the descriptor up from itself.
      */
     fun usbModelName(dev: android.hardware.usb.UsbDevice): String {
+        // ★★ V12: remembered for the gallery — the label on each item when the owner named nothing, and the serial
+        //    the gallery strips from every item (applyAndStart → setGallery). Every caller asks this right before starting.
+        lastUsbSerial = try { (dev.serialNumber ?: "").trim() } catch (_: Throwable) { "" }
+        val name = usbModelNameOf(dev)
+        lastUsbModel = name
+        return name
+    }
+    @Volatile private var lastUsbModel = ""
+    @Volatile private var lastUsbSerial = ""
+    /** ★★ V12 where the gallery lives — one radio per phone, so one folder (vibe_gallery.h writes inside it). */
+    fun galleryDir(filesDir: File): File = File(filesDir, "gallery")
+    private fun usbModelNameOf(dev: android.hardware.usb.UsbDevice): String {
         val product = (dev.productName ?: "").trim()
         val maker   = (dev.manufacturerName ?: "").trim()
         if (product.isEmpty()) return ""
@@ -199,7 +211,9 @@ object VibeServerBoot {
         for (k in listOf("pin", "adminPassword", "mode", "landingDabChannel", "landingDabSid", "landingDabService",
                          "landingAdsb", "adsbKeepRunning",
                          "lockedCentre", "lockedRate", "rateLock", "sessionLimitMin", "idleKickMin",
-                         "batteryPauseAt", "rawIq", "rawIqMax", "uncompressedAudio"))
+                         "batteryPauseAt", "rawIq", "rawIqMax", "uncompressedAudio",
+                         // ★ V12: a private scan never runs the owner's background profiles (it is nobody's idle radio)
+                         "bgDecode"))
             c.remove(k)
         c.put("advertise", false)
         c.put("maxUsers", 1)
@@ -304,6 +318,19 @@ object VibeServerBoot {
         VibeLocalSDR.setDabMemoryPath(File(filesDir, "vibe_dab_memory.txt").absolutePath)
         // ★ The owner's name for the radio ("SDR display name"); blank = the USB port's name, as before.
         VibeLocalSDR.setRadioLabel(cfg.s("radioLabel").trim())
+        /* ★★★ V12 BACKGROUND DECODING AND THE GALLERY (Server mode → WHEN NOBODY IS LISTENING / GALLERY) — the calls
+         *  vibeserver/main.cpp makes from the radio's bgDecode and the server's galleryMb / galleryPublic / gallerySaveLive.
+         *  Always applied to a definite value, so a profile from a previous run can never outlive the config: absent =
+         *  "" = off. The gallery's defaults are the Setup page's (100 MB, everyone may see it, listeners' decodes kept). */
+        VibeLocalSDR.setGallery(galleryDir(filesDir).absolutePath, cfg.n("galleryMb", 100.0).coerceAtLeast(0.0),
+                                cfg.b("galleryPublic", true), cfg.b("gallerySaveLive", true),
+                                cfg.s("radioLabel").trim().ifEmpty { lastUsbModel }, lastUsbSerial)
+        run {
+            val why = VibeLocalSDR.setBackgroundDecoding(cfg.s("bgDecode"))
+            if (why.isNotEmpty()) Log.w(TAG, "background decoding not applied: $why")
+        }
+        // ★★ V12 VibeAGC for SDRplay — the owner's choice; absent = 0 = automatic (on with the OpenRSP driver).
+        VibeLocalSDR.setRspVibeAgc(cfg.i("rspVibeAgc", 0).coerceIn(0, 2))
 
         // ── ★★★ ADVANCED MODE ───────────────────────────────────────────────────────────────────
         // ★★ Always applied to a DEFINITE value, never "only when advanced". A limit left set from
