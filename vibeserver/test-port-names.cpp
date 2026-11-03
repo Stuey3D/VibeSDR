@@ -100,6 +100,21 @@ int main() {
         check(pn::display(n, "RX2 (A)") == "FM Yagi \xC2\xB7 RX2 (A)", "FM Yagi · RX2 (A) — no nested brackets");
         check(pn::display(n, "TX/RX") == "TX/RX", "a port with no name reads as the port");
     }
+    // 7. into hwinfo (withNames) — only beside a listed port, never twice
+    {
+        const std::string names = pn::toJson(pn::parse("{\"RX2 (A)\":\"Discone\"}"));
+        const std::string usrp = "{\"driver\":\"usrp\",\"rates\":[1000000],\"antennas\":[\"RX2 (A)\",\"TX/RX (A)\"],\"antenna\":\"RX2 (A)\"}";
+        const std::string withN = pn::withNames(usrp, names);
+        check(withN.find(",\"antennaNames\":{\"RX2 (A)\":\"Discone\"}}") != std::string::npos, "a USRP's caps gain antennaNames: " + withN);
+        check(pn::withNames(withN, names) == withN, "…never twice");
+        const std::string rtl = "{\"driver\":\"rtl\",\"antennas\":[],\"gains\":[0,9]}";
+        check(pn::withNames(rtl, names) == rtl, "a radio with one input (empty antennas) gets none — nothing to name on screen");
+        check(pn::withNames("{\"driver\":\"airspyhf\"}", names) == "{\"driver\":\"airspyhf\"}", "a radio with no antennas list gets none");
+        check(pn::withNames(usrp, "") == usrp && pn::withNames(usrp, "{}") == usrp, "no names: caps unchanged");
+        const std::string rsp = "{\"driver\":\"sdrplay\",\"antennas\":[\"A\",\"B\",\"Hi-Z\"],\"antenna\":\"A\",\"antennaLocked\":false}";
+        check(pn::withNames(rsp, pn::toJson(pn::parse("{\"Hi-Z\":\"Long wire\"}"))).find("\"antennaNames\":{\"Hi-Z\":\"Long wire\"}") != std::string::npos,
+              "an RSP2 gets them the same way — every driver that lists ports");
+    }
     std::printf(fails ? "\n%d FAILED\n" : "\nall passed\n", fails);
     return fails ? 1 : 0;
 }
