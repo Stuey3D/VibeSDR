@@ -196,7 +196,7 @@ def run_action(action, stable_list=STABLE_INSTALLER, keyring=True, beta_on=False
               .replace("/usr/share/keyrings/vibesdr.gpg", kr)
               .replace("/proc/cmdline", cmdline)
               .replace("/etc/vibeserver-pocket/enabled", os.path.join(tmp, "no-pocket"))
-              .replace('dd if="$REQ" bs=96 count=1 iflag=nofollow,nonblock', 'head -c 96 "$REQ"'))
+              .replace('dd if="$REQ" bs=32 count=1 iflag=nofollow,nonblock', 'head -c 32 "$REQ"'))
         ms = os.path.join(tmp, "maint.sh")
         open(ms, "w").write(s)
         env = dict(os.environ, PATH=b + os.pathsep + os.environ["PATH"])

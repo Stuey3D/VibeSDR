@@ -99,21 +99,7 @@ def main():
     ok("BEFORE-REBOOT" in kl and "KEPT-LINE" in kl and kl.index("OLDER-ROTATED-LINE") < kl.index("BEFORE-REBOOT"),
        "★★★ the Wi-Fi log kept on the settings partition is in the file — the rotated half first (oldest first)")
     ok(PSK not in kl, "…and scrubbed like everything else (a password planted in a kept line is gone)")
-    # ★★ the newest memory check (vibeserver-maintenance memcheck, 2026-11-03), whole, above the journal, scrubbed
-    mcd = os.path.join(tmp, "mc"); os.makedirs(mcd)
-    t0 = vd.bundle(**dict(kw, memcheck_glob=os.path.join(mcd, "memcheck-*.txt")))
-    ok("==== memory check" in t0 and "(none run" in t0, "no memory check yet: the section says so")
-    old_r, new_r = os.path.join(mcd, "memcheck-31A0B7C-20261103-100000.txt"), os.path.join(mcd, "memcheck-31A0B7C-20261103-110000.txt")
-    open(old_r, "w").write("VibeServer memory check — OLDER-REPORT\nresult:   no memory error in 60 s\n")
-    open(new_r, "w").write("VibeServer memory check — NEWER-REPORT\nresult:   FOUND A MEMORY ERROR\n"
-                           "==12==ERROR: AddressSanitizer: heap-buffer-overflow\nadmin %s\n" % ADMIN)
-    os.utime(old_r, (1000, 1000)); os.utime(new_r, (2000, 2000))
-    tm = vd.bundle(**dict(kw, memcheck_glob=os.path.join(mcd, "memcheck-*.txt")))
-    msec = tm.split("==== memory check")[1].split("\n==== ")[0]
-    ok("NEWER-REPORT" in msec and "heap-buffer-overflow" in msec and "OLDER-REPORT" not in tm,
-       "★★ the NEWEST memory-check report is in the file, whole, and only that one")
-    ok(tm.index("==== memory check") < tm.index("==== journal, last 24 h"), "…above the journal")
-    ok(ADMIN not in tm, "…and scrubbed like everything else")
+    ok("==== memory check" not in text, "no memory-check section (that diagnostic was removed, 2026-11-03)")
     # an ordinary (not Portable) server: no Wi-Fi sections, never NetworkManager's secrets
     calls.clear()
     kw2 = dict(kw, pocket_marker=os.path.join(tmp, "absent"))

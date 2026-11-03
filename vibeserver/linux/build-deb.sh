@@ -90,74 +90,11 @@ if [ "$ARCH" = armhf ]; then
   mkdir -p /build/armv6-stage && cp build-armv6/vibeserver /build/armv6-stage/
 fi
 
-# ── amd64 / arm64: the MEMORY-CHECK binary first, packaged as lib/vibeserver/diag/vibeserver-asan ──
-# ★★★ (2026-11-03) An AddressSanitizer build of the same server, run only by the admin page's "Check this radio's
-#     memory" (vibeserver-maintenance memcheck) — see VIBESERVER_ASAN in CMakeLists.txt. Same tree, same deps, same
-#     STRICT_RADIOS, its own build directory, only the one target. libasan is linked STATICALLY, so Depends is
-#     unchanged; checked below and again on the finished package.
-# ★★ amd64 and arm64 ONLY, and said so: on armhf and i386 ASan's shadow memory takes a large share of a 32-bit
-#    address space and of a 1 GB box's RAM, and a radio that crashes there would be checked on a 64-bit machine.
-# ★★ NEVER SKIPPED QUIETLY: a failure to configure, link or verify it stops the package build (fail), exactly like
-#    the main binary. A PGO profiling run builds no package, so it builds no ASan binary either.
-# ★★ amd64 ONLY for now (Stuart's call, 2026-11-03): the ASan binary is ~40 MB in the package and is for one USRP
-#    hunt on an x86 box; arm64 owners (the Pis) would download it for nothing. VIBE_ASAN_ARCHES widens it again.
-ASAN_ARCHES="${VIBE_ASAN_ARCHES:-amd64}"
-ASAN_LINE="not built ($ARCH — memory-check build only for: $ASAN_ARCHES)"
-ASAN_CMAKE=()
-if [ "$PGO" != generate ] && [[ " $ASAN_ARCHES " == *" $ARCH "* ]]; then
-  # ★ -O2 (not the release -O3): the stacks stay close to the source, and the DSP keeps real time — vibedsp sets its
-  #   own -O3 per target either way. -g1 comes from VIBESERVER_ASAN; no PGO profile (it is the other binary's).
-  nice -n 19 cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV="$REV" \
-        -DVIBESERVER_STRICT_RADIOS=ON -DVIBESERVER_ASAN=ON "${CROSS[@]}" \
-        "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG" "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG" > "$OUT/cmake-asan.log" 2>&1 \
-    || { tail -30 "$OUT/cmake-asan.log"; fail "the memory-check (ASan) build did not configure"; }
-  nice -n 19 cmake --build build-asan --target vibeserver -j"$JOBS" > "$OUT/build-asan.log" 2>&1 \
-    || { tail -30 "$OUT/build-asan.log"; fail "the memory-check (ASan) build failed — UHD/Boost/static libs under -fsanitize=address?"; }
-  A=build-asan/vibeserver
-  case "$(file -b "$A")" in *"$WANT_ELF"*) ;; *) fail "the ASan binary is not $WANT_ELF: $(file -b "$A")" ;; esac
-  [ "$(strings "$A" | count -e 'AddressSanitizer')" -gt 0 ] || fail "build-asan/vibeserver has no AddressSanitizer in it"
-  [ "$(strings "$A" | count -F 'MEMORY-CHECK BUILD')" -gt 0 ] || fail "build-asan/vibeserver has no memory-check banner (VIBESERVER_ASAN_BUILD)"
-  [ "$(readelf -d "$A" | count -E 'NEEDED.*lib(asan|ubsan|stdc\+\+|gcc_s)')" -eq 0 ] \
-    || fail "the ASan binary needs a shared sanitizer/C++ runtime: $(readelf -d "$A" | grep NEEDED | tr -s ' ' | tr '\n' ' ')"
-  # ★ It must START: a static libasan that cannot map its shadow on this kernel would only be found on the tester's box.
-  #   --version-style flags are not universal here, so `--help` (prints usage, exits) under a timeout; a cross build
-  #   cannot run its own output, which is said rather than skipped silently.
-  if [ ${#CROSS[@]} -eq 0 ]; then
-    timeout 20 "$A" --help > "$OUT/asan-help.log" 2>&1 || true
-    # ★★ A BUILD HOST WITH 32-BIT mmap RANDOMISATION (Ubuntu 24.04's 6.8 kernel — the Lenovo, 2026-11-03) cannot start a
-    #    GCC 12 ASan binary at all: it dies before main with no message (the known shadow-mapping limit, fixed in later
-    #    libasan). Docker forbids `setarch -R` here, so on such a host the start is NOT checked — said in build-info,
-    #    never silent. The owner's box runs it under `setarch -R` (vibeserver-maintenance memcheck), which works anywhere.
-    RNDB=$(cat /proc/sys/vm/mmap_rnd_bits 2>/dev/null || echo 0)
-    if [ "$(count -F 'MEMORY-CHECK BUILD' "$OUT/asan-help.log")" -gt 0 ]; then
-      # ★★ …and the recipe CATCHES what it is for: a heap overflow on a named thread, reported at the write, symbolised.
-      bash linux/test-asan-harness.sh > "$OUT/asan-harness.log" 2>&1 \
-        || { tail -20 "$OUT/asan-harness.log"; fail "the ASan recipe did not catch the test harness's heap overflow"; }
-      ASAN_RUN="started here; harness overflow caught"
-    elif [ "$RNDB" -gt 28 ]; then
-      echo "  ! the ASan binary cannot start on this build host (vm.mmap_rnd_bits=$RNDB > 28) — start NOT checked here"
-      ASAN_RUN="NOT started here: build host vm.mmap_rnd_bits=$RNDB (> 28, GCC 12 ASan's limit); runs under setarch -R"
-    else
-      tail -20 "$OUT/asan-help.log"; fail "the ASan binary does not start (no banner from --help, vm.mmap_rnd_bits=$RNDB)"
-    fi
-  else
-    ASAN_RUN="cross-built, NOT started here"
-  fi
-  # ★★ GITHUB REFUSES ANY FILE OVER 100 MB (2026-11-03: the amd64 .deb with the 75 MB ASan binary came to 105.75 MB and
-  #    the apt push was rejected). The packaged copy drops its DWARF line tables — ASan still names every function from
-  #    the symbol table, with module+offset — and the UNSTRIPPED one stays in the build output (asan-unstripped) for
-  #    addr2line -Cfie against those offsets.
-  cp "$A" "$OUT/vibeserver-asan-unstripped"
-  mkdir -p /build/asan-stage && objcopy --strip-debug "$A" /build/asan-stage/vibeserver
-  ASAN_LINE="lib/vibeserver/diag/vibeserver-asan $(( $(stat -c %s "$A") / 1048576 )) MB ($ASAN_RUN)"
-  ASAN_CMAKE=(-DVIBE_ASAN_STAGE=/build/asan-stage)
-fi
-
 # ── the package build ───────────────────────────────────────────────────────────────────────────
 # ★ The WHOLE tree, not --target vibeserver: cpack's install step builds `all` anyway — single-job and with
 #   its output hidden in cpack.log — so a narrow target only moves the cost somewhere slower.
 nice -n 19 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV="$REV" \
-      -DVIBESERVER_STRICT_RADIOS=ON "${CROSS[@]}" ${ASAN_CMAKE[@]+"${ASAN_CMAKE[@]}"} \
+      -DVIBESERVER_STRICT_RADIOS=ON "${CROSS[@]}" \
       ${CF:+"-DCMAKE_C_FLAGS=$CF" "-DCMAKE_CXX_FLAGS=$CF"} \
       ${VIBE_X86_32_FLAGS:+"-DVIBE_X86_32_FLAGS=$VIBE_X86_32_FLAGS"} > "$OUT/cmake.log"
 nice -n 19 cmake --build build "${TARGET[@]}" -j"$JOBS" > "$OUT/build.log" 2>&1 \
@@ -267,18 +204,11 @@ if [ -d "$X/usr/share/vibeserver/uhd-images" ]; then
     || grep -r -q -F 'VIBE_UHD_IMAGES_DIR="/usr/share/vibeserver/uhd-images"' build/CMakeFiles 2>/dev/null \
     || fail "the package ships /usr/share/vibeserver/uhd-images but usrp_source.cpp was not compiled to look there"
 fi
-# ★★ THE MEMORY-CHECK BINARY IS IN IT where it was built, and nowhere it was not — the admin page offers "Check this
-#    radio's memory" only where the file exists, so a package missing it would quietly lose the button.
-if [ ${#ASAN_CMAKE[@]} -gt 0 ]; then
-  [ -x "$X/usr/lib/vibeserver/diag/vibeserver-asan" ] || fail "no usr/lib/vibeserver/diag/vibeserver-asan in the package"
-  cmp -s "$X/usr/lib/vibeserver/diag/vibeserver-asan" /build/asan-stage/vibeserver || fail "the packaged vibeserver-asan is not the one just built"
-  [ "$(strings "$X/usr/bin/vibeserver" | count -F 'MEMORY-CHECK BUILD')" -eq 0 ] || fail "usr/bin/vibeserver is the ASan build"
-else
-  [ ! -e "$X/usr/lib/vibeserver/diag/vibeserver-asan" ] || fail "vibeserver-asan in a package that did not build it"
-fi
+# ★ The memory-check (AddressSanitizer) build that beta57/58 carried is gone (2026-11-03, its job done: the USRP
+#   recv(&bp) stack overwrite, fixed in beta58). It cost ~40 MB per package; never let it creep back in.
+[ ! -e "$X/usr/lib/vibeserver/diag" ] || fail "usr/lib/vibeserver/diag is in the package — the memory-check build was removed"
 {
   echo "package   $(basename "$DEB") — $(( $(stat -c %s "$DEB") / 1048576 )) MB"
-  echo "memcheck  $ASAN_LINE"
   echo "Depends   $DEPENDS"
   echo "ELF files $ELVES, all $WANT_ELF; highest GLIBC_ version needed: $MAXG"
   echo "vibeserver: $(file -b "$X/usr/bin/vibeserver" 2>/dev/null || echo '?')"
