@@ -348,9 +348,15 @@ bool UsrpSource::start(std::string& err) {
         impl_->buf.assign(maxN * 2, 0.0f);
         uhd::rx_metadata_t md;
         while (impl_->run.load(std::memory_order_relaxed)) {
-            void* bp = impl_->buf.data();
+            /* ★★★ THE BUFFER ITSELF, NEVER &pointer (the first real B210, 2026-11-03 — found by the memory-check build:
+             *     "SEGV … usrp_source.cpp:353", every start, within a second). recv() takes uhd::ref_vector<void*>, and its
+             *     one-pointer constructor treats ITS ARGUMENT as the channel's buffer: given `&bp` (a void**) it took the
+             *     address of the local `bp` as the buffer and wrote each block of samples over this thread's STACK —
+             *     smashing the locals (the streamer's shared_ptr among them) and the heap beside them. The float*
+             *     goes straight in. */
+            float* const bp = impl_->buf.data();
             size_t n = 0;
-            try { n = rx->recv(&bp, maxN, md, 0.2); }
+            try { n = rx->recv(bp, maxN, md, 0.2); }
             catch (const std::exception& e) { std::fprintf(stderr, "VibeServer: USRP recv: %s\n", e.what()); break; }
             if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_OVERFLOW) { impl_->overflows.fetch_add(1, std::memory_order_relaxed); continue; }
             if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT) continue;
@@ -379,9 +385,9 @@ void UsrpSource::stop() {
     std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
     if (impl_->rx) {
         try {
-            uhd::rx_metadata_t md; void* bp = impl_->buf.data();
+            uhd::rx_metadata_t md; float* const bp = impl_->buf.data();   // ★ the buffer itself — see the loop above
             const size_t maxN = impl_->buf.size() / 2;
-            for (int i = 0; i < 50 && maxN && impl_->rx->recv(&bp, maxN, md, 0.01) > 0; i++) {}
+            for (int i = 0; i < 50 && maxN && impl_->rx->recv(bp, maxN, md, 0.01) > 0; i++) {}
         } catch (const std::exception&) {}
     }
 }

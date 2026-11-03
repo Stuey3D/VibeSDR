@@ -88,5 +88,14 @@ const html = read('web/client/index.html');
 ok(/id="usrpCtls" hidden/.test(html) && /not VibeSDR's AGC/.test(html), 'web: the switch is named as the radio\'s own, not VibeSDR\'s');
 ok(/body\.askLocked #usrpCtls/.test(html) && /#usrpCtls/.test(web.match(/ASK_SHIELD_SEL = [^;]*;/)[0]), 'web: shielded with the other receiver settings');
 
+// ★★★ recv() TAKES THE BUFFER ITSELF (2026-11-03, the first real B210): uhd::ref_vector's one-pointer constructor takes
+//     its argument AS the buffer, so recv(&ptr, …) wrote samples over the receive thread's stack. Never the address of a
+//     pointer, in any recv() call.
+{
+  const us = read('android/app/src/main/cpp/usrp_source.cpp').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+  const bad = us.match(/recv\(\s*&/g) || [];
+  ok(bad.length === 0 && /recv\(\s*bp\b/.test(us), `usrp_source.cpp: every recv() is given the buffer itself, never &pointer (${bad.length} bad)`);
+}
+
 console.log(fails ? `\n${fails} FAILED` : '\nall USRP option checks pass');
 process.exit(fails ? 1 : 0);
