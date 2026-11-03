@@ -16800,7 +16800,10 @@ function toggle(id: string, apply: (on: boolean) => void, prefKey?: string, init
     if (push) apply(on);
   };
   el.onclick = () => {
-    on = !on; recentPress.set(id, Date.now()); run(true);
+    /* ★★ FROM THE BUTTON, NOT FROM THIS CLOSURE. setToggleTo paints a server report onto the button without touching
+     *  `on`, so after the server said OFF the closure still held ON and the first press sent OFF again — a press that
+     *  did nothing, and a second one needed to change anything (the CEQ hunt, 2026-11-03). */
+    on = !el.classList.contains('on'); recentPress.set(id, Date.now()); run(true);
     if (prefKey) savePref(prefKey, on);
   };
   run(pushOnInit);
@@ -17042,33 +17045,39 @@ function buildMenu() {
     'nr');
 
   toggle('notch', (on) => spec!.setNotch(on), 'notch');
+  /* ★★★ THE BROADCAST FM ROW IS READ, NEVER ASSERTED (2026-11-03) — pushOnInit=false on all five, like AUTO BW below.
+   *  They are the SERVER's (vibe_fm_defaults.h: the owner's defaults or the last listener's), and this used to send the
+   *  stored value of each the moment the page loaded. The first paint is the server's own default; the state report
+   *  overwrites it within a second. */
   toggle('stereoBtn', (on) => {
     // ★ "ST", not "ON". Beside NR / IMS / CEQ / NB a bare "ON" names nothing — the eye reads four
     //   labelled buttons and one that could belong to any of them, or to the row (Stuart).
     $('stereoBtn').textContent = on ? 'ST ON' : 'ST OFF';
     spec!.setStereo(on);
-  }, 'stereo', true);
-  // ★ Defaults ON (the `true`), like stereo itself: it only acts on a signal that needs it, so a
-  //   listener who never opens this panel should get the better sound.
+  }, 'stereo', true, /*pushOnInit=*/false);
+  // ★ First paint OFF: the server's default since 2026-11-03 (Saber — NR off until somebody wants it).
   toggle('wspBtn', (on) => {
     $('wspBtn').textContent = on ? 'NR ON' : 'NR OFF';
     spec!.setWeakProc(on);
-  }, 'wsp', true);
+  }, 'wsp', false, /*pushOnInit=*/false);
   // ★ IMS is its OWN switch. NR works on noise, IMS works on a neighbour, and measured they want
   //   opposite actions — so one button for both would leave a listener unable to tell which of the
   //   two was helping (Stuart: "where is the IMS button to toggle it?").
   toggle('imsBtn', (on) => {
     $('imsBtn').textContent = on ? 'IMS ON' : 'IMS OFF';
     spec!.setIms(on);
-  }, 'ims', true);
+  }, 'ims', true, /*pushOnInit=*/false);
   toggle('ceqBtn', (on) => {
     $('ceqBtn').textContent = on ? 'CEQ ON' : 'CEQ OFF';
     spec!.setCeq(on);
-  }, 'ceq', true);
+  }, 'ceq', true, /*pushOnInit=*/false);
   toggle('nbBtn', (on) => {
     $('nbBtn').textContent = on ? 'NB ON' : 'NB OFF';
     spec!.setNoiseBlanker(on);
-  }, 'nb', true);
+  }, 'nb', true, /*pushOnInit=*/false);
+  // ★ toggle() writes a bare ON/OFF when it does not push — put the row's own labels back for the first paint.
+  for (const [id, w] of [['stereoBtn', 'ST'], ['wspBtn', 'NR'], ['imsBtn', 'IMS'], ['ceqBtn', 'CEQ'], ['nbBtn', 'NB']] as const)
+    $(id).textContent = `${w} ${$(id).classList.contains('on') ? 'ON' : 'OFF'}`;
   // ★ The audio-menu NOISE BLANKER — its own state, every mode but WFM. Off until chosen.
   toggle('nbxBtn', (on) => { spec!.setNoiseBlankerHf(on); }, 'nbx', false, false);
   // ★ The listener's own choice, remembered and restored like stereo. Voice is the default.
@@ -17339,13 +17348,16 @@ function pushSettingsToServer() {
   if (sqlAutoPref !== undefined && sqlAutoPref !== sqlAuto) setSquelchAuto(sqlAutoPref, false);
   const nr = num('nr');             if (nr !== undefined) spec.setNr(nr > 0, nrStrength(nr));
   const notch = bool('notch');      if (notch !== undefined) spec.setNotch(notch);
-  const stereo = bool('stereo');    if (stereo !== undefined) spec.setStereo(stereo);
-  const wsp = bool('wsp');          if (wsp !== undefined) spec.setWeakProc(wsp);
-  const ims = bool('ims');          if (ims !== undefined) spec.setIms(ims);
-  const ceq = bool('ceq');          if (ceq !== undefined) spec.setCeq(ceq);
-  const nb = bool('nb');            if (nb !== undefined) spec.setNoiseBlanker(nb);
+  /* ★★★ NOT THE BROADCAST FM ROW — DE-EMPHASIS, ST, NR, IMS, CEQ, NB (2026-11-03). This re-sent this browser's saved
+   *  value of each on EVERY connect, and that is why Stuart kept finding servers with CEQ OFF: one listener switched
+   *  it off, the browser saved it, and every visit after re-asserted it — on a one-pipeline radio straight into the
+   *  shared DSP, so the whole server stayed CEQ OFF for everybody. Worse, setToggleTo SAVES the server's report, so
+   *  any browser that had merely SEEN it off caught the habit and passed it on: the setting spread like a cold.
+   *  ★★ The SERVER decides these now (vibe_fm_defaults.h): the owner's defaults or the last listener's, by the
+   *     owner's choice in Setup, and a reload of this tab gets its own settings back from the server (same session).
+   *     The client only sends one when the listener PRESSES it — the shared-dial contract. NFM Voice stays: it is
+   *     not part of the row, and its restore is guarded (onDspState re-states it only if the server disagrees). */
   const nfmV = bool('nfmVoice');    if (nfmV !== undefined) spec.setNfmVoice(nfmV);
-  const deemph = num('deemph');     if (deemph !== undefined) spec.setDeemph(deemph * 1e-6);
   // ★★★ HARDWARE SETTINGS ARE THE OWNER'S, AND ONLY AN ADMIN MAY SEND THEM. Everything above this
   //     line is THIS listener's own processing — squelch, noise reduction, de-emphasis — and is
   //     rightly restored on every connect. PPM, bias-T, the tuner AGC and direct sampling are

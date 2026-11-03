@@ -1397,7 +1397,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   //     does not draw at all. That is the AGENTS.md rule: a control that cannot work on this
   //     receiver should not be there, rather than sitting inert and making the FEATURE look broken.
   const [vibeFmDsp, setVibeFmDsp] = useState(false);
-  const [fmNr,  setFmNr]  = useState(true);
+  const [fmNr,  setFmNr]  = useState(false);   // ★ NR OFF by default (2026-11-03) — the server says otherwise if its owner does
   const [fmIms, setFmIms] = useState(true);
   // ★ Server-wide and DEFAULTS ON, matching the server's own default and the web client's button.
   const [fmAutoBw, setFmAutoBw] = useState(false);   // ★★ first paint only — the server reports the current mode's AUTO (off by default outside WFM)
@@ -1523,10 +1523,19 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  radio nobody has set these on — behaves exactly as it did. They are pushed to the radio
        *  further down, once the client is up: see the effect that re-asserts them on connect. */
       const bl = (v: unknown, dflt: boolean) => (typeof v === 'boolean' ? v : dflt);
+      /* ★★ ONLY WHAT WAS ACTUALLY SAVED IS STATED (2026-11-03). Asserting a default for a key never saved overrode the
+       *  OWNER's Broadcast FM defaults (Setup, vibe_fm_defaults.h) with this app's built-in ones — NR came back ON on a
+       *  server whose owner had chosen OFF. `saved` marks which of these the radio should be told; the rest are the
+       *  server's to say, and onFmDsp paints them. */
       const fmWant = {
-        wsp: bl(prefs.fmNr, true),   ims: bl(prefs.fmIms, true),
+        wsp: bl(prefs.fmNr, false),  ims: bl(prefs.fmIms, true),
         ceq: bl(prefs.fmCeq, true),  nb:  bl(prefs.fmNb, true),
         nbx: bl(prefs.fmNbx, false), autobw: bl(prefs.fmAutoBw, true),
+        saved: {
+          wsp: typeof prefs.fmNr === 'boolean',  ims: typeof prefs.fmIms === 'boolean',
+          ceq: typeof prefs.fmCeq === 'boolean', nb:  typeof prefs.fmNb === 'boolean',
+          nbx: typeof prefs.fmNbx === 'boolean', autobw: typeof prefs.fmAutoBw === 'boolean',
+        },
       };
       /* ★★★ KEPT IN A REF, NOT ONLY IN STATE, BECAUSE hwinfo WILL OVERWRITE THE STATE. onFmDsp
        *  paints these six from what the RADIO reports — deliberately, they are sticky and shared —
@@ -1970,7 +1979,8 @@ export default function SDRScreen({ route, navigation }: Props) {
    *  connection. Both live outside React state because hwinfo overwrites the state — see the
    *  restore that fills this in. */
   const fmWantRef = useRef<{ wsp: boolean; ims: boolean; ceq: boolean; nb: boolean;
-                             nbx: boolean; autobw: boolean } | null>(null);
+                             nbx: boolean; autobw: boolean;
+                             saved: { wsp: boolean; ims: boolean; ceq: boolean; nb: boolean; nbx: boolean; autobw: boolean } } | null>(null);
   const fmWantSent = useRef(false);
   /** ★★★ THE AIRSPY'S GAIN MODE, REMEMBERED — 0 sensitive, 1 linear, 2 free.
    *
@@ -2030,15 +2040,22 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (!want) return;
     fmWantSent.current = true;
     const c = fmClient();
-    c?.setWeakProc?.(want.wsp); c?.setIms?.(want.ims); c?.setCeq?.(want.ceq);
-    c?.setNoiseBlanker?.(want.nb); c?.setNoiseBlankerHf?.(want.nbx);
+    const sv = want.saved;   // ★ only what this device actually saved — see the restore
+    if (sv.wsp) c?.setWeakProc?.(want.wsp);
+    if (sv.ims) c?.setIms?.(want.ims);
+    if (sv.ceq) c?.setCeq?.(want.ceq);
+    if (sv.nb)  c?.setNoiseBlanker?.(want.nb);
+    if (sv.nbx) c?.setNoiseBlankerHf?.(want.nbx);
     /* ★★ V12 (2026-10-31): `autobw` is the CURRENT mode's AUTO on the server — WFM's TEF-style one, or the passband AUTO
      *  of AM / SSB / CW, which starts OFF (Stuart: "a new untested option"). The remembered A-BW is FM's, so it is stated
      *  only when this connection starts in WFM; anywhere else the server's own default (off) stands. */
     const m0 = client.current?.getStatus().mode;
-    if (m0 === 'wfm' || m0 === 'fm') { c?.setAutoBw?.(want.autobw); setFmAutoBw(want.autobw); }
-    setFmNr(want.wsp); setFmIms(want.ims); setFmCeq(want.ceq);
-    setFmNb(want.nb); setFmNbx(want.nbx);
+    if ((m0 === 'wfm' || m0 === 'fm') && sv.autobw) { c?.setAutoBw?.(want.autobw); setFmAutoBw(want.autobw); }
+    if (sv.wsp) setFmNr(want.wsp);
+    if (sv.ims) setFmIms(want.ims);
+    if (sv.ceq) setFmCeq(want.ceq);
+    if (sv.nb)  setFmNb(want.nb);
+    if (sv.nbx) setFmNbx(want.nbx);
   }, [isLocal, vibeFmDsp, fmClient, route.params.localHost]);
 
   // Mirrored into a ref so the per-frame meter emit can decide whether the gate is closed without
