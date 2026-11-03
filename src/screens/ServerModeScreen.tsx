@@ -1103,9 +1103,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     if (!running) return;
     const t = setTimeout(() => {
       const f = serverFields(antSwitch);
-      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaSwitch?.(f.antennaSwitch, f.antennaMap, f.antennaLocked); } catch {}
-      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaBands?.(antRanges, antFilters); } catch {}
-      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaPortNames?.(antNames); } catch {}
+      try { (NativeModules as any).VibeLocalSDR?.setAntennaSwitch?.(f.antennaSwitch, f.antennaMap, f.antennaLocked); } catch {}
+      try { (NativeModules as any).VibeLocalSDR?.setAntennaBands?.(antRanges, antFilters); } catch {}
+      try { (NativeModules as any).VibeLocalSDR?.setAntennaPortNames?.(antNames); } catch {}
     }, 800);
     return () => clearTimeout(t);
   }, [antSwitch, antRanges, antFilters, antNames, running]);
@@ -1117,7 +1117,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     let alive = true;
     const read = async () => {
       let caps: any = null;
-      try { const j = await (NativeModules as any).VibeLocalSdrModule?.radioCaps?.(); caps = j ? JSON.parse(j) : null; } catch { caps = null; }
+      try { const j = await (NativeModules as any).VibeLocalSDR?.radioCaps?.(); caps = j ? JSON.parse(j) : null; } catch { caps = null; }
       if (!alive || !caps || caps.antennaSwitch) return;
       const ports = Array.isArray(caps.antennas) ? caps.antennas.filter((x: unknown) => typeof x === 'string') as string[] : [];
       if (ports.length < 2) return;
