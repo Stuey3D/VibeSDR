@@ -4606,6 +4606,7 @@ async function renderHw() {
     const ports = (hw && hw.radio && Array.isArray(hw.radio.antennas)) ? hw.radio.antennas : [];
     if (ports.length) Object.defineProperty(r, "antennas", { value: ports, enumerable: false, configurable: true, writable: true });
     paintAntPortCard();
+    renderAntBands();
   } else if (((hw && hw.driver) || r.driver) !== "sdrplay" && hw && hw.radio && !hw.radio.antennaSwitch
              && Array.isArray(hw.radio.antennas) && hw.radio.antennas.length > 1) {
     /* ★ V12 ANY OTHER RADIO THAT LISTS PORTS — the same card, from the same hwinfo list, so a driver that publishes its
@@ -4613,6 +4614,7 @@ async function renderHw() {
      *  up: then `antennas` are the switch's antennas, which have their own names in the switch section. */
     Object.defineProperty(r, "antennas", { value: hw.radio.antennas, enumerable: false, configurable: true, writable: true });
     paintAntPortCard();
+    renderAntBands();
   }
   // ★ Where THIS tab's radio answers — the DAB landing's scan must reach the radio, not the door.
   HW_PREFIX = mine ? "" : "/r/" + encodeURIComponent(r.serial || "");
@@ -5784,7 +5786,10 @@ function paintAntPortNames(r, ports) {
     box.value = typeof names[port] === "string" ? names[port] : "";
     box.setAttribute("aria-label", "Name for port " + port);
     box.addEventListener("input", () => antPortNameEdit(r, port, box.value));
-    box.addEventListener("change", () => { antPortNameEdit(r, port, box.value); box.value = antPortNamesOf(r)[port] || ""; });
+    box.addEventListener("change", () => {
+      antPortNameEdit(r, port, box.value); box.value = antPortNamesOf(r)[port] || "";
+      renderAntBands();   // ★ the per-band socket pickers read the names too
+    });
     row.appendChild(tag); row.appendChild(box);
     host.appendChild(row);
   }
@@ -5796,11 +5801,14 @@ function renderAntBands() {
   const r = radio();                       // ★ captured: every handler below edits THIS radio
   const m = antRowsFor(r);
   const ports = Array.isArray(r.antennas) ? r.antennas : [];
+  // ★ V12 the owner's port names: "Discone (A)" in the picker, the PORT still what is stored (antPortLabel, escaped).
+  const pnames = antPortNamesOf(r);
+  const portOpt = (p) => pnames[p] ? antPortLabel(p, pnames) : "Socket " + p;
   // ★ A socket picker only where there is more than one socket — a choice of one is not a control.
   const portSel = (row) => ports.length > 1
     ? `<select data-f="port" aria-label="Which aerial socket">`
       + `<option value="">Any socket</option>`
-      + ports.map(p => `<option value="${esc(p)}"${p === row.port ? " selected" : ""}>Socket ${esc(p)}</option>`).join("")
+      + ports.map(p => `<option value="${esc(p)}"${p === row.port ? " selected" : ""}>${esc(portOpt(p))}</option>`).join("")
       + (row.port && ports.indexOf(row.port) < 0 ? `<option value="${esc(row.port)}" selected>${esc(row.port)}</option>` : "")
       + `</select>` : "";
   const unitSel = (row) => `<select data-f="unit" aria-label="Units">`

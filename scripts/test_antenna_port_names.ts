@@ -39,6 +39,8 @@ pg.antPortNameEdit(r, 'A', '');
 pg.antPortNameEdit(r, 'B', '   ');
 ok(r.antennaNames === '', 'clearing every box stores nothing at all');
 ok(/antennaNames: radio\(\)\.antennaNames \|\| ""/.test(page), 'the setup page saves antennaNames with the radio');
+ok(/const portOpt = \(p\) => pnames\[p\] \? antPortLabel\(p, pnames\)/.test(page) && /\$\{esc\(portOpt\(p\)\)\}/.test(page),
+   'the per-band socket pickers read the same names (escaped), and still store the port');
 
 console.log(`   ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
