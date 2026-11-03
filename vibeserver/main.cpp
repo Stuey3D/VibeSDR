@@ -286,6 +286,7 @@ struct Opts {
      *  together in both directions so none can be forgotten by half. */
     std::string antennaPort;
     bool        antennaPortLocked = false;
+    vibefm::Defaults fm;                 // ★ the owner's Broadcast FM defaults (vibe_fm_defaults.h) — carried both ways below
     std::string antennaMap;
     bool        rspHdr = false;
     // ★ Icom (driver "icom") — see vibeserver_config.h Config::icomPort. --icom <port> starts one directly.
@@ -653,6 +654,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     // ★ The aerial (GitHub #29) — carried in BOTH directions with its neighbours. A field copied
     //   one way only is the fault this file already records, and it is silent both ways.
     o.antennaPort = c.antennaPort; o.antennaPortLocked = c.antennaPortLocked;
+    o.fm = c.fm;
     o.antennaMap = c.antennaMap;
     o.rspHdr = c.rspHdr; o.rspAmNotch = c.rspAmNotch; o.rspExtRef = c.rspExtRef;
     o.icomPort = c.icomPort; o.icomBaud = c.icomBaud; o.icomCiv = c.icomCiv; o.icomAudio = c.icomAudio;
@@ -691,6 +693,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
     c.autoNotch = o.autoNotch; c.userNotch = o.userNotch;
     c.antennaPort = o.antennaPort; c.antennaPortLocked = o.antennaPortLocked;
+    c.fm = o.fm;
     c.antennaMap = o.antennaMap;
     c.rspHdr = o.rspHdr; c.rspAmNotch = o.rspAmNotch; c.rspExtRef = o.rspExtRef;
     c.icomPort = o.icomPort; c.icomBaud = o.icomBaud; c.icomCiv = o.icomCiv; c.icomAudio = o.icomAudio;
