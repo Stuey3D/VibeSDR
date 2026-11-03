@@ -553,6 +553,9 @@ if python3 vibeserver/linux/pocket/test_pocket_seal.py; then pass=$((pass+1)); e
 # ★★★ RECEIVE BETA UPDATES (2026-10-22). The root helper's beta-on / beta-off / update-stable with apt stubbed, and the
 #     choice of what Update VibeServer installs (beta on/off × installed × listed, the downgrade back to stable included).
 if python3 vibeserver/linux/test_vibeserver_maintenance.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ vibeserver-radios' unit-name guard (root, systemctl) is unchanged, and the serial an Icom is given
+#     ("IC-7300 03001234" → "IC-7300_03001234", vibe_serial.h) passes it — the IC-7300 that never started, 2026-11-03.
+if python3 vibeserver/linux/test_vibeserver_radios.py; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ …what the admin page says about it, and which action its button sends (updateOffer.ts).
 if node --no-warnings scripts/test_update_offer.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ …and the apt repository's two suites: a beta publish never touches stable (and the reverse), one revision never

@@ -704,6 +704,11 @@ and say in the tour that zoom = the radio's span.
    the CP2102), read from sysfs on Linux with nothing opened and nothing sent. A CP2102 that does not name an
    Icom is never touched (GPS units, programming leads). An owner can still point `icomPort` at any port. The
    radio must then answer `19 00` with a model we know, or it is refused.
+   ★★ **Its CONFIG serial is `IC-7300_03001234`** (2026-11-03, a real 7300 on a Pi 4 that never appeared): the
+   space cannot be a config serial or a `vibeserver@<serial>` unit name, so `vibe::configSerial`
+   (`vibe_serial.h`) turns each byte outside `[A-Za-z0-9._:-]` into `_` — the same thing udev does in
+   `/dev/serial/by-id`. The number is kept, so two 7300s stay two radios; the raw string still names the model
+   and the Setup page reads "Icom IC-7300 (03001234)". A config that held the raw form is migrated on read.
 3. **The discovery chain never auto-picks an Icom.** With no radio configured, VibeServer still picks the
    SDRs it always did; a transceiver is served only when the owner chose it (setup's radio list, `--radio`,
    or `--icom`).

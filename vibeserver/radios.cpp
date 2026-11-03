@@ -7,6 +7,7 @@
 #include "usrp_source.h"
 #include "vibe_usrp_caps.h"
 #include "icom_transport.h"
+#include "vibe_serial.h"      // ★ configSerial — what a radio is known by in the config
 #include <algorithm>
 #include "sdr_presence.h"   // sysfsClaimedCounts
 #if __has_include(<libusb.h>)
@@ -29,7 +30,9 @@ std::vector<DetectedRadio> detectRadios() {
         //   different dongles and tells the owner nothing about which one they are looking at.
         if (rtlsdr_get_device_usb_strings(i, mfr, prd, ser) == 0 && prd[0]) {
             r.name = mfr[0] ? (std::string(mfr) + " " + prd) : std::string(prd);
-            r.serial = ser;
+            // ★★ CLEANED, like the Icom's (vibe_serial.h): an EEPROM serial is free text — `rtl_eeprom -s "my dongle"`
+            //    writes a space validSerial refuses, so that dongle could never be added. A stock serial is unchanged.
+            r.serial = configSerial(ser);
         } else {
             const char* n = rtlsdr_get_device_name(i);
             r.name = n ? n : "RTL-SDR";
@@ -114,9 +117,13 @@ std::vector<DetectedRadio> detectRadios() {
         for (const auto& u : icom::listUsbIcoms()) {
             DetectedRadio r;
             r.driver = "icom";
-            r.name = "Icom " + (u.model.empty() ? std::string("radio") : u.model)
-                   + (u.serial.empty() ? std::string() : " (" + u.serial + ")");
-            r.serial = u.serial.empty() ? u.path : u.serial;
+            /* ★★★ THE CONFIG SERIAL, NOT THE RAW ONE (2026-11-03, a real IC-7300 on a Pi 4): the USB serial is
+             *     "IC-7300 03001234" with a SPACE, which validSerial and vibeserver-radios' unit-name check both
+             *     refuse, so the radio could never be added or started. It is "IC-7300_03001234" here
+             *     (icom::configSerialOf) — the number kept, so two 7300s stay two radios. The name reads the raw
+             *     string: "Icom IC-7300 (03001234)". */
+            r.name = icom::displayNameOf(u);
+            r.serial = icom::configSerialOf(u);
             r.driverIndex = k++;
             out.push_back(r);
         }
@@ -137,7 +144,14 @@ std::vector<DetectedRadio> detectRadios() {
         }
     }
 
-    for (size_t i = 0; i < out.size(); i++) out[i].index = (int)i;
+    for (size_t i = 0; i < out.size(); i++) {
+        out[i].index = (int)i;
+        /* ★★ EVERY SERIAL LEAVES HERE IN THE CONFIG FORM (vibe_serial.h) — a backstop for any driver whose own
+         *  string could one day carry a byte the config, the status files and systemd cannot hold. Every serial
+         *  seen so far (RTL, RSP, HF+, HackRF, R2/Mini, USRP) already fits and passes through unchanged; the Icom's
+         *  and an RTL's free-text EEPROM serial are cleaned above, where they are read. */
+        out[i].serial = configSerial(out[i].serial);
+    }
     return out;
 }
 

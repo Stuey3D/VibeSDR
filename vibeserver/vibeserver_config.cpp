@@ -1,6 +1,7 @@
 #include "vibeserver_config.h"
 #include "vibe_usrp_caps.h"   // ★ V12: a new USRP's default rate (header-only, no UHD)
 #include "vibe_port_names.h"   // ★ V12: the owner's per-port antenna names (header-only)
+#include "vibe_serial.h"       // ★ configSerial — a serial with a space (an Icom's) migrated on read
 #include <vector>
 #include <algorithm>
 #include <set>
@@ -541,6 +542,18 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     auto B = [&](const char* k, bool& dst)        { if (getBool(j, k, b)) dst = b; };
 
     S("serial", r.serial); S("driver", r.driver); S("usbPath", r.usbPath); S("label", r.label);
+    /* ★★★ A SERIAL THE CONFIG CANNOT HOLD IS MIGRATED ON READ (2026-11-03, the IC-7300 whose USB serial is
+     *     "IC-7300 03001234"). validSerial refused it on sdr-change, but three other writers never asked: the TUI's
+     *     setup and its 'd' adopt (straight from detectRadios), a settings POST (merged by serial below) and a hand
+     *     edit. Such an entry could never start — vibeserver-radios refuses the unit name — and would never again
+     *     match the radio, which detectRadios now reports in the config form. So it is read in that form
+     *     (vibe::configSerial: '_' for each byte outside the alphabet, the number kept) and the next save writes it
+     *     so. A serial that already fits is untouched. Both readers (a file load and a POST) pass through here, and
+     *     the merge by serial folds a raw and a cleaned copy of the same radio into one. */
+    if (!r.serial.empty() && !validSerial(r.serial)) {
+        const std::string c = vibe::configSerial(r.serial);
+        if (validSerial(c)) r.serial = c;
+    }
     // ★ This radio's own PIN — see RadioConfig::pin. Read AND written (below): a field in only one
     //   of the two is the fault this file already records, and it is silent both ways.
     S("pin", r.pin);
