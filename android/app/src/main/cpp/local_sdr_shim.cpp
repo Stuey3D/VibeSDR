@@ -15,7 +15,6 @@
 
 #include "local_sdr_shim.h"
 #include "vibe_fork.h"
-#include "vibe_memcheck.h"   // ★ the admin action memcheck <serial>: the serial alphabet (2026-11-03)
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
 #include "hackrf_source.h"
@@ -5520,7 +5519,6 @@ static LocalSdrShim::AdminActionFn g_vsAdminActionFn;
 static LocalSdrShim::AdminLogFn    g_vsAdminLogFn;
 static LocalSdrShim::AdminDiagFn   g_vsAdminDiagFn;      // ★ guarded by g_vsConfigMtx — see setAdminDiagnosticsHandler
 static LocalSdrShim::UpdateOfferFn g_vsUpdateOfferFn;    // ★ guarded by g_vsConfigMtx — Linux daemon only (beta updates)
-static LocalSdrShim::MemcheckRadiosFn g_vsMemcheckRadiosFn;   // ★ guarded by g_vsConfigMtx — Linux daemon only (memcheck)
 static LocalSdrShim::GeoIpFn       g_vsGeoIpFn;
 /** ★ Station artwork by PI/ECC/frequency (RadioDNS). Declared with the other handlers rather than
  *  beside its setter, because the ENDPOINT that reads it is thousands of lines above that. */
@@ -23121,17 +23119,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 return;
             }
             if (isPost && what == "action") {
-                std::string act = jsonStr(body, "action");
-                /* ★★ ONE ACTION TAKES AN ARGUMENT: memcheck, the radio's serial (2026-11-03). Joined as "memcheck <serial>"
-                 *  for the daemon's handler, only after the serial is held to the serial alphabet here — and the daemon
-                 *  and the root helper each check it again against the radios in the settings before using it. */
-                if (act == "memcheck") {
-                    const std::string serial = jsonStr(body, "serial");
-                    if (!vibememcheck::serialOk(serial)) {
-                        reply(400, "Bad Request", "{\"error\":\"memcheck needs the serial of one of this server's radios\"}"); return;
-                    }
-                    act += " " + serial;
-                }
+                const std::string act = jsonStr(body, "action");
                 std::string err;
                 if (!LocalSdrShim::instance().adminAction(act, err)) {
                     reply(400, "Bad Request", "{\"error\":\"" + jsonEscape(err) + "\"}"); return;
@@ -34555,10 +34543,6 @@ std::string LocalSdrShim::adminStatusJson() {
     { LocalSdrShim::UpdateOfferFn fn;
       { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsUpdateOfferFn; }
       if (fn) { const std::string u = fn(); if (!u.empty()) j += ",\"updates\":" + u; } }
-    // ★★ CHECK THIS RADIO'S MEMORY (2026-11-03): the radios the picker may offer, from the daemon. Absent elsewhere.
-    { LocalSdrShim::MemcheckRadiosFn fn;
-      { std::lock_guard<std::mutex> lk(g_vsConfigMtx); fn = g_vsMemcheckRadiosFn; }
-      if (fn) { const std::string m = fn(); if (!m.empty()) j += ",\"memcheck\":" + m; } }
     // ★ The GPU map's optional High Detail pack (vibe_mapgl.h). Present on EVERY platform —
     //   `available:false` is how the page learns this server cannot download it.
     j += ",\"mapglDetail\":" + vibemapgl::statusJson();
@@ -35198,16 +35182,13 @@ bool LocalSdrShim::adminAction(const std::string& action, std::string& err) {
     //     diagnostics"). The advertised list is matched as WHOLE comma-separated names (a substring
     //     match let "restart" through inside "sdrplay-restart"), and the daemon checks its own
     //     list again before writing the request.
-    // ★ "memcheck <serial>": the NAME is what is offered; the argument was checked by the endpoint.
-    const std::string name = action.substr(0, action.find(' '));
-    if (name.size() != action.size() && name != "memcheck") { err = "only memcheck takes an argument"; return false; }
     { std::lock_guard<std::mutex> lk(g_vsMaintMtx);
       bool offered = false;
       size_t a = 0;
       while (a <= g_vsMaintActions.size()) {
           size_t b = g_vsMaintActions.find(',', a);
           if (b == std::string::npos) b = g_vsMaintActions.size();
-          if (g_vsMaintActions.compare(a, b - a, name) == 0 && !name.empty()) { offered = true; break; }
+          if (g_vsMaintActions.compare(a, b - a, action) == 0 && !action.empty()) { offered = true; break; }
           a = b + 1;
       }
       if (!offered) {
@@ -35227,10 +35208,6 @@ void LocalSdrShim::setAdminDiagnosticsHandler(AdminDiagFn fn) {
 void LocalSdrShim::setUpdateOfferHandler(UpdateOfferFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);
     g_vsUpdateOfferFn = std::move(fn);
-}
-void LocalSdrShim::setMemcheckRadiosHandler(MemcheckRadiosFn fn) {
-    std::lock_guard<std::mutex> lk(g_vsConfigMtx);
-    g_vsMemcheckRadiosFn = std::move(fn);
 }
 void LocalSdrShim::setAdminLogHandler(AdminLogFn fn) {
     std::lock_guard<std::mutex> lk(g_vsConfigMtx);

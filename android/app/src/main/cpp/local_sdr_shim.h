@@ -438,12 +438,6 @@ public:
      *  helper wrote), never remembered. "" = say nothing. Only the Linux daemon installs one. */
     using UpdateOfferFn = std::function<std::string()>;
     static void setUpdateOfferHandler(UpdateOfferFn fn);
-    /** ★★ CHECK THIS RADIO'S MEMORY (2026-11-03): a JSON object for the admin status, `memcheck` —
-     *  {"radios":[{"serial","label","paused"}],"last":"<the newest report's result line>","lastAt":<epoch>} — every
-     *  radio in the settings that has been set up, paused ones too. "" = say nothing. Only the Linux daemon installs
-     *  one, and only where the package carries the memory-check build. */
-    using MemcheckRadiosFn = std::function<std::string()>;
-    static void setMemcheckRadiosHandler(MemcheckRadiosFn fn);
 
     /** ★★ IP -> ISO-3166 country, for the flags beside listeners and the top-countries tally.
      *  Registered by the DAEMON, which owns the dataset (see vibeserver/geoip.cpp for why it is
