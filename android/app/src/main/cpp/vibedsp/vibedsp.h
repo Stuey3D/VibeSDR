@@ -3812,6 +3812,7 @@ private:
     float lmrHiCutHz_ = 15000.0f;            // current L-R corner, smoothed toward the target
     float lmrHiCutY_  = 0.0f;                // one-pole state for the L-R high-cut
     float blendSnrDb_ = 99.0f;               // smoothed pilot-to-guard-band ratio, dB
+    float blockSec_   = 0.032f;              // ★ this call's length in seconds — the smoothers run in TIME (glideCorner)
     float imsBlendHz_ = 0.0f;                // ★ IMS's own contribution — see imsBlendHz()
     long  pilotOddSamples_ = 0;              // ★ live probe — channel samples present-but-unlocked, see pipeline.cpp
     long  pilotOddLogged_ = 0;               // ★ …and where the last line was written, so it is once a second

@@ -35,13 +35,27 @@ namespace vibedsp {
  *    reasoning as the noise meter's own attack and release, and the opposite way round from a
  *    compressor, deliberately.
  *
- * ★ Per BLOCK, not per sample, so the rates are in blocks: at ~8 ms a block, 0.02 is roughly half
- *   a second to close and 0.005 about two seconds to open.
+ * ★★★ IN TIME, NOT IN BLOCKS (2026-11-03). The design was "at ~8 ms a block, 0.02 is roughly half a second to close
+ *     and 0.005 about two seconds to open" — but the rates were applied per CALL. A call is one radio packet: an RTL hands over 32 ms
+ *     (rtlBufLenForRate), an RSP or an Airspy a millisecond or two. So the same station on a small-packet radio
+ *     closed and opened its corners 10-30x faster, chasing the wobble of the S/N reading — measured with
+ *     bench-wsp-strong on real programme: 81 corner moves in 27 s at 1 ms packets against 2 at 32 ms, on the SAME
+ *     signal. That is pumping, and it is what a listener hears as the NR making "weird audio". The coefficients now mean
+ *     what the design said, in TIME, on every radio: ~0.4 s to close, ~1.6 s to open, and the S/N they steer by
+ *     smoothed over ~0.16 s. After the fix the same run moves the corner 0-4 times in 27 s at any packet size.
+ *  ★ The 8 ms reference is also the block the WFM tests are written at (test-gain-step, test-multipath-meter), so
+ *    their measured behaviour is unchanged; an RTL (32 ms) now glides at the designed speed rather than 4x slower.
  */
-inline float glideCorner(float now, float want) {
+constexpr float kRefBlockSec = 0.008f;
+/** A per-call smoothing coefficient designed for an 8 ms call, for a call of `blockSec`. */
+inline float perTime(float kAtRef, float blockSec) {
+    if (!(blockSec > 0.0f)) return kAtRef;
+    return 1.0f - std::pow(1.0f - kAtRef, blockSec / kRefBlockSec);
+}
+inline float glideCorner(float now, float want, float blockSec) {
     constexpr float kSlack = 600.0f;    // Hz — below this, hold still
     if (std::fabs(want - now) < kSlack) return now;
-    const float k = (want < now) ? 0.02f : 0.005f;
+    const float k = perTime((want < now) ? 0.02f : 0.005f, blockSec);
     return now + k * (want - now);
 }
 
@@ -1381,6 +1395,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
         // ★ Still WFM-only: the 15-19 kHz gap it reads is a property of the FM multiplex and
         //   means nothing on AM or SSB.
         if (mode_ == Mode::WFM) {
+            blockSec_ = chFs_ > 0.0 ? (float)(nc / chFs_) : 0.032f;   // ★ this call's length in TIME — see glideCorner
             mpxNoise_.process(demodBuf_.data(), nc, /*measure=*/!gainOnset);   // ★ a gain step is not noise
             if (mpxNoise_.ready()) {
                 const float noise = mpxNoise_.level();
@@ -1437,7 +1452,8 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
                 if (pilotUsable && !gainOnset) {
                     const float snr = (noise > 1e-9f) ? (pilot / noise) : 1e6f;
                     const float db  = 20.0f * std::log10(std::max(snr, 1e-6f));
-                    blendSnrDb_ += 0.05f * (db - blendSnrDb_);
+                    // ★ In TIME — see glideCorner: 0.05 per 8 ms, ~0.16 s, whatever the radio's packet size
+                    blendSnrDb_ += perTime(0.05f, blockSec_) * (db - blendSnrDb_);
                     if (!std::isfinite(blendSnrDb_)) blendSnrDb_ = 99.0f;
                 }
             }
@@ -1474,7 +1490,7 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
             //    that only a test could separate them — and the test failed immediately.
             if (lmrHiCutHz_ < 14000.0f) wantCut = std::max(wantCut, lmrHiCutHz_ * 1.25f);
             wantCut = std::min(wantCut, 15000.0f);
-            audioHiCutHz_ = glideCorner(audioHiCutHz_, wantCut);
+            audioHiCutHz_ = glideCorner(audioHiCutHz_, wantCut, blockSec_);
             if (!std::isfinite(audioHiCutHz_)) audioHiCutHz_ = 15000.0f;
         } else {
             audioHiCutHz_ = 15000.0f;
@@ -1768,12 +1784,12 @@ void RxPipeline::demodTail_(std::vector<cf32>& chB, int nc, bool gap, float guar
                 // ★★★ MOVE SLOWLY. A corner that chases the signal sample-by-sample turns fading
                 //     into PUMPING, which listeners notice far more readily than the hiss it is
                 //     removing — the same lesson as the audio jitter buffer. Roughly a second.
-                lmrHiCutHz_ = glideCorner(lmrHiCutHz_, want);
+                lmrHiCutHz_ = glideCorner(lmrHiCutHz_, want, blockSec_);
                 if (!std::isfinite(lmrHiCutHz_)) lmrHiCutHz_ = kWide;
             } else if (!weakProcOn_.load(std::memory_order_relaxed)
                        && !imsOn_.load(std::memory_order_relaxed)) {
                 // Both switched off by the listener — glide open, because that IS the instruction.
-                lmrHiCutHz_ = glideCorner(lmrHiCutHz_, 15000.0f);
+                lmrHiCutHz_ = glideCorner(lmrHiCutHz_, 15000.0f, blockSec_);
             } else {
                 // ★★★ HOLD. DO NOT OPEN. This branch used to rush the corner to 15 kHz at full
                 //     speed whenever the pilot was not locked — and on a marginal signal the lock
