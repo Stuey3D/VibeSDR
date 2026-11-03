@@ -18,12 +18,12 @@ let pass = 0, fail = 0;
 const ok = (c, what) => { c ? pass++ : fail++; console.log(`   ${c ? 'ok  ' : 'FAIL'} ${what}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res) => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)); }); });
-const FIXED = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty'];
+const FIXED = ['same', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty'];
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-reach-web-'));
 for (const d of ['data', 'run', 'edge']) fs.mkdirSync(path.join(dir, d));
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Reach web test', locator: 'IO92nh', adminPass: 'reach-web-admin',
-  radios: [{ serial: 'reach-web', label: 'Test radio', enabled: true, configured: true, users: 4, blockedModes: '+same' }] }));
+  radios: [{ serial: 'reach-web', label: 'Test radio', enabled: true, configured: true, users: 4, blockedModes: '+same,wefax,sstv,dsc' }] }));
 const rtlPort = await freePort(), port = await freePort(), dbg = await freePort();
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', '2400000'], { stdio: 'ignore' });
 await sleep(400);
@@ -68,6 +68,14 @@ try {
     const r = JSON.parse(await ev(`JSON.stringify((() => { const b = document.querySelector('#decodersPanel [data-dec="${d}"]'); return b ? { hidden: b.hidden, un: b.classList.contains('unreach'), dis: b.getAttribute('aria-disabled'), title: b.title } : null; })())`) || 'null');
     ok(!!r && !r.hidden && r.un && r.dis === 'true' && /^Outside this radio's locked range \(90\.8–93\.2 MHz\)/.test(r.title), `${d}: drawn, greyed, "${r && r.title}"`);
   }
+  // ★★ OWNER-BLOCKED = NO GHOST BUTTONS (Stuart 2026-11-03): a decoder the owner switched off is never drawn — not greyed,
+  //    not dimmed — whether or not this radio could reach it (DSC is also out of reach here: the owner's block wins).
+  for (const d of ['wefax', 'sstv', 'dsc']) {
+    const g = JSON.parse(await ev(`JSON.stringify((() => { const b = document.querySelector('#decodersPanel [data-dec="${d}"]'); if (!b) return { gone: true }; const cs = getComputedStyle(b); return { gone: b.hidden || cs.display === 'none' || cs.visibility === 'hidden' || b.offsetParent === null, un: b.classList.contains('unreach') }; })())`) || 'null');
+    ok(!!g && g.gone, `${d} (owner-blocked): no button at all${g && g.un ? ' — but it carries the greyed class' : ''}`);
+  }
+  const ghostOpt = await ev(`[...document.querySelectorAll('.mModeOpt')].filter(x => x.offsetParent !== null && /^(WEFAX|SSTV|DSC)\b/.test(x.textContent.trim())).map(x => x.textContent.trim()).join(',')`);
+  ok(!ghostOpt, `…and none in the mode menu either ("${ghostOpt}")`);
   const rt = JSON.parse(await ev(`JSON.stringify((() => { const b = document.querySelector('#decodersPanel [data-dec="rtty"]'); return b ? { hidden: b.hidden, un: b.classList.contains('unreach') } : null; })())`) || 'null');
   ok(!!rt && !rt.hidden && !rt.un, 'RTTY (works on whatever is tuned): untouched');
   // ★ every tab of the panel, so a screenshot shows the greyed keys wherever they sit
