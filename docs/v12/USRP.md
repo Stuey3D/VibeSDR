@@ -23,6 +23,8 @@ Ettus's documentation and UHD's published C++ API, and has never been run agains
   radio, like the rest.
 * Open follow-ups (small, none blocking): measure the 250 kHz DC guard on real hardware; measure the CPU per rate on a
   Pi 4 / Pi 5 and set the arm64 default from that.
+* **`v12-bench-hw` (2026-11-03, on top of `v12-experimental`):** the wide rates 20 / 25 / 28 / 30.72 / 32 MS/s on USB 3,
+  offered behind this machine's benchmark — see "Wide rates" below.
 
 ## What it is, in one paragraph
 
@@ -59,7 +61,7 @@ untouched — they include the header and get the stub.
 | Enumeration | our own claim-free libusb descriptor walk (2500:0020–0023, 3923:7813/7814) — never `uhd::device::find`, which loads firmware into every B2xx it meets. Listed **last**, after the Icom, so no existing `--radio N` index moves. Name "Ettus USRP B200/B210 (serial)" before opening (one PID covers both), the real model once open |
 | Open | `uhd::device::find` by serial with our firmware path → the product from the EEPROM → our FPGA image for it → `multi_usrp::make` with both paths explicit (absolute, so UHD searches nothing). Our directory is also compiled into libuhd as its images directory, so an owner's own UHD install of another release is never used |
 | Tuning | 50 MHz – 6 GHz, the range the device reports (`get_rx_freq_range`); a 250 kHz DC guard (the HackRF's — the AD9361 is zero-IF) |
-| Rates | 1, 2, 2.4, 3.2, 4, 5, 8 MS/s on USB 2; + 10, 12.5, 16 MS/s on USB 3. Default for a new radio: 2.4 MS/s on arm64, 4 MS/s on x86-64 / Mac. The default is set by the host, the list never is (the owner can always choose) |
+| Rates | 1, 2, 2.4, 3.2, 4, 5, 8 MS/s on USB 2; + 10, 12.5, 16 MS/s on USB 3; + **20, 25, 28, 30.72, 32 MS/s on USB 3 up to what this machine's benchmark kept up at** (see "Wide rates" below). Default for a new radio: 2.4 MS/s on arm64, 4 MS/s on x86-64 / Mac. The default is set by the host, the list never is (the owner can always choose) |
 | Gain | ONE element, the device's own range (`get_rx_gain_range`: 0–76 dB in 1 dB steps), on the generic slider; per-band ceilings, per-band lock and a starting gain from the Setup page |
 | AGC | the AD9361's own, as AUTO (negative gain) — only when the radio accepted `set_rx_agc` at open; otherwise no AUTO is offered. Not VibeAGC. A switch for it in the app's panel and the web client's **RADIO AGC** row |
 | Owner options | reference clock + time source, DC-offset / IQ-balance correction, analogue bandwidth — Setup page, per radio, each only where the radio reports it (below) |
@@ -189,12 +191,93 @@ failure, which file to upload and where; otherwise UHD's own message, prefixed "
 * The B2xx's master clock runs 220 kHz – 61.44 MHz (UHD's AD9361 limits); UHD picks it to suit the rate, and the FPGA
   decimates, so any rate in our list is native — no host-side resampling to reach it.
 * USB 2 carries 53 MB/s by UHD's figure (≈13 MS/s at 4 bytes per complex sample, overflows well before that on a
-  shared bus) — hence the 8 MS/s cap. USB 3 carries 500 MB/s; our 16 MS/s cap is the host's limit, not the link's.
+  shared bus) — hence the 8 MS/s cap. USB 3 carries 500 MB/s; above 16 MS/s the limit is the host's DSP, so those
+  rates are offered behind the benchmark (next section).
 * Our DSP costs scale with the rate. On a Pi 4 / Pi 5 the default is 2.4 MS/s (what every other radio here is tuned
   around); x86-64 and Apple silicon start at 4 MS/s. **Not measured on a B2xx** — the per-rate CPU is to be measured
   on a Pi 4 / Pi 5 by the first tester, and the arm64 default set from that.
 * Overflows are counted (`usbDrops` in the status probe). Rising overflows at a given rate = lower the rate, or move to
   a USB 3 port that is not shared with a disk.
+
+## Wide rates — measured, then offered (V12, 2026-11-03, branch `v12-bench-hw`)
+
+The tester's B210 on an 11th-gen i7 wants **82–108 MHz in one locked-range capture** — the whole FM band with the
+Dutch pirate end, served to many listeners (each listener's channel cut from the one capture, ka9q-style). 26 MHz of
+band needs **30.72 MS/s** (centred on 95 MHz a 30.72 MS/s lock tunes 79.64–110.36 MHz; 28 MS/s just covers it with
+1 MHz spare each side; 25 does not).
+
+**What the B2xx does.** UHD picks the master clock (MCR) when none is given (we give none): the highest MCR ≤ 61.44 MHz
+(one channel streaming; 30.72 with two) that is the rate × a power of two, and the FPGA's halfbands decimate to it.
+20 → MCR 40 (÷2), 25 → 50, 28 → 56, **30.72 → 61.44 (÷2)**, 32 → 32 (÷1). All clean; no host resampling. sc16 is
+4 bytes a sample: 30.72 MS/s = 123 MB/s, 32 MS/s = 128 MB/s, inside USB 3 and inside Ettus's one-channel USB 3 figure
+(56 MHz of bandwidth). **32 MS/s is the top offered**: past it the server's FFT cap (32768 bins) leaves under 1 kHz a
+bin, and nothing faster has been measured.
+
+**The gate** (`vibe_usrp_caps.h ratesFor(usb, gateHz, keepHz)`): on USB 3 the five gated rates are offered only up to
+`gateHz` — the highest rate this machine's saved benchmark passed — judged by the **locked-range** path for a radio set
+to locked range with more than one listener, the **full-radio** path otherwise (`rateGate().locked`, set by main.cpp
+from the radio's own config). Never on USB 2, never with no benchmark (0 = shut), never on armhf / i386 (no UHD there —
+and `vsBenchHw` leaves a USRP out of a build without it). **A rate in use is kept** (`keepHz` = the rate the radio is
+opened at): a later, slower benchmark never takes away a rate the owner chose. The verdict is read from
+`benchmark.json` at start-up (`vsApplyRateGate`, before the radio opens) and again after every run (the radio is then
+reacquired, which rebuilds its list). hwinfo's USRP object carries `rateGate:{maxHz, by}`; the Setup page's benchmark
+card says each rate in words ("30.72 MS/s: this machine keeps up as a locked range (23% of a core at its busiest
+thread; each WFM listener adds about 8%)").
+
+**A pass** = the hottest thread ≤ 70 % of one core AND nothing dropped (IQ buffers or listener blocks), in real time.
+Scored by the hottest thread, never the total (Stuart: "so we don't run into the saturation of 1 core issue").
+
+### Measured on the Mac (M5 Pro, 15 cores), `vibeserver-bench`, real time, Opus encode on
+
+Locked range — the hottest thread is the **front end** (vibe-dsp: capture cleaner + the shared 32768-point forward FFT
++ the block hand-out + the wide waterfall row) at every rate:
+
+| Rate | front end (hottest), 1 listener | intake (sc16→fc32 + queue copy) | per WFM listener (extract + WFM + RDS + Opus) | 10 listeners, whole process | full radio (shared pipeline), hottest |
+|---|---|---|---|---|---|
+| 8 MS/s | 6.9 % | 2.0 % | 5–6 % | 70 % | 1.6 % |
+| 10 MS/s | 10.6 % | 2.9 % | 7.3 % | 87 % | 1.9 % |
+| 16 MS/s | 13.9 % | 3.9 % | 5.8 % | 76 % | 2.6 % |
+| 20 MS/s | 16.6 % | 4.7 % | 6.9 % | 92 % | 2.8 % |
+| 25 MS/s | 19.6 % | 5.5 % | 6.5 % | 89 % | 3.5 % |
+| **28 MS/s** | **21.8 %** | 6.1 % | 7.3 % | 98 % | 3.6 % |
+| **30.72 MS/s** | **22.7 %** (24.4 % with 10 listeners) | 6.3 % | 7.5 % | 103–108 % | 3.9 % |
+| 32 MS/s | 23.6 % | 6.6 % | 6.0 % | 94 % | 4.0 % |
+
+Gate on this Mac: **locked range 32 MS/s, full radio 32 MS/s** — every rate passes with a wide margin. No listener
+block and no IQ buffer was dropped at any rate with 10 listeners.
+
+**Where the front end's time goes at 30.72 MS/s** (A/B with `VIBE_BENCH_NOCLEAN` / `VIBE_BENCH_NOWIDE`): the capture
+cleaner ≈ 1.6 % of a core, the wide waterfall row ≈ 0 (80 rows a second), so ≈ 20 % is the forward FFT and its block
+assembly (1250 transforms of 32768 points a second). That is the stage that would saturate one core first.
+
+**Expected on the tester's 11th-gen i7** (not measured — an estimate from single-core speed, roughly half an M5 Pro
+P-core for this SSE2/NEON-class code): at 30.72 MS/s the front end ≈ 40–50 % of a core, the intake ≈ 12 % (UHD's own
+converter is SIMD and does that half), each WFM listener ≈ 15 %; 10 listeners ≈ 2 cores in all, spread over the
+listeners' own threads. Inside the gate's 70 % — the benchmark on the i7 is what decides it.
+
+**On arm64 (Pi 5 class)** the same front end is likely 3–5× the Mac's figure — 30.72 MS/s would be near or over one
+core and the gate would stop lower (16–20 MS/s). The split that would raise it is the forward FFT itself: consecutive
+overlap-save blocks are independent, so two FFT workers taking alternate blocks, with the hand-out kept in block order
+(the phase reference travels with the block index), would halve the hottest thread. Not built — no stage saturates on
+the machines measured, and it touches the live channeliser. Next if a Pi 5 tester asks for wide rates.
+
+### Nothing else caps the rate (checked 2026-11-03)
+
+* `fftSizeForRate` caps at 32768 (rate/75 Hz a bin wanted): 30.72 MS/s → 937.5 Hz a bin; a WFM listener's channel is
+  1024 bins = 960 kHz (chanBinsFor: 2.5 × 200 kHz). The wire is OUT_BINS 4096 / 1024 by default — unchanged.
+* **The float IQ queue had no bound at all** (every float radio: HF+, HackRF, Airspy, USRP — `iqMaxSamples` 0): a DSP
+  thread that fell behind grew it without limit, 245 MB a second at 30.72 MS/s. Now capped at a quarter-second of the
+  running rate (≥ 262144 samples), oldest dropped and counted like the u8 path's.
+* The USRP's `recv` was one packet (~2000 samples) a hand-off — 15 000 queue pushes and DSP-loop turns a second at
+  30.72 MS/s. Now ~5 ms of samples (≤ 262144), sized to the rate.
+* Listener block queues: `listenerQueueBlocks` (~40 ms, ≤ 64 blocks of 256 KB, shared between listeners) — bounded.
+* The CW-skimmer wide tap (`vibe_wide_tap.h`) holds up to 0.5 s at the capture rate — 123 MB at 30.72 MS/s — but runs
+  only on a one-pipeline radio, never a locked range. ✗ Not resized here; a full-radio USRP at 30.72 with a skimmer on
+  would hold that much. Follow-up.
+* The locked range itself: no usable-fraction rule refuses it — `vsTunableRanges` is `lockFreq ± lockRate / 2`, so
+  82–108 at 30.72 is accepted. ✗ **Untested on hardware:** the edges of a 30.72 MS/s capture sit in the halfband's
+  roll-off (82 and 108 MHz are at 85 % of the span); a listener at the very ends may hear them a dB or so down. 32 MS/s
+  (81 % of the span) gives more margin if the gate allows it. The tester should report the level at 82.0 and 107.9.
 
 ## Sizes
 
