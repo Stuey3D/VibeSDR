@@ -805,6 +805,8 @@ if node --no-warnings scripts/test_dial_echo.ts; then pass=$((pass+1)); else fai
 # ★★ THE ANTENNA SWITCH SETUP RULES (2026-10-09): what Lite's screen / the setup page send the server.
 if node --no-warnings scripts/test_antenna_switch_cfg.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 if node --no-warnings scripts/test_antenna_bands_presets.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 THE OWNER'S PORT NAMES, the clients' half (antennaPortNames.ts + the setup page's copy) — test-port-names.cpp is the server's.
+if node --no-warnings scripts/test_antenna_port_names.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A RADIO WITH ITS OWN PIN IS NEVER OPENED WITHOUT IT (2026-10-09, Buddy → the Pi 500's Airspy, blank screen).
 if node --no-warnings scripts/test_radio_pin_paths.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ TUNE PACING ON THE CLIENT (tunePace.ts, Stuart 2026-10-05: "if the server's CPU is reporting that it is
@@ -1151,6 +1153,11 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     antennas in hwinfo, read-back, break before make, per-band preset, the owner's lock, the admin-only search.
 printf '\n\033[1m── the external antenna switch (end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-antenna-switch.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 THE OWNER'S NAMES FOR THE RADIO'S OWN PORTS (2026-11-03): from config.json cleaned and bounded, back out of the
+#     config API escaped, none in hwinfo for a one-input dongle, a port it lacks changes nothing, and a save renames LIVE.
+printf '\n\033[1m── antenna port names (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-antenna-port-names.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ BULK BOOKMARK IMPORT (2026-10-09, the 1,478-row UK ATC list took minutes one POST at a time): POST /bookmarks/import

@@ -1087,6 +1087,11 @@ body.wifiFirst .wifiFirstOnly { display: block; }
         <div id="antPortCard" style="display:none;border-top:1px solid var(--line);margin-top:14px;padding-top:12px">
           <span class="lbl" style="display:block">Aerial socket</span>
           <p class="why" id="antPortsNote" style="margin-top:4px"></p>
+          <!-- ★★ V12 A NAME FOR EACH PORT (2026-11-03, a tester's four-port USRP: "you should be able to add a name to each
+               of them"). One box per port the RADIO lists (hwinfo `antennas`), so every multi-input radio has it and a
+               new driver gets it free. Listeners then read "Discone (RX2)". Saved as `antennaNames`; edited straight onto
+               the radio object (antPortNameEdit), so a tab switch cannot drop what was typed. -->
+          <div id="antPortNames"></div>
           <label><span class="lbl">Switch aerial by band</span>
             <input type="text" id="antennaMap" maxlength="300"
                    placeholder="0-30MHz Antenna C, 30-150MHz Antenna A, 150MHz+ antenna B">
@@ -4601,6 +4606,13 @@ async function renderHw() {
     const ports = (hw && hw.radio && Array.isArray(hw.radio.antennas)) ? hw.radio.antennas : [];
     if (ports.length) Object.defineProperty(r, "antennas", { value: ports, enumerable: false, configurable: true, writable: true });
     paintAntPortCard();
+  } else if (((hw && hw.driver) || r.driver) !== "sdrplay" && hw && hw.radio && !hw.radio.antennaSwitch
+             && Array.isArray(hw.radio.antennas) && hw.radio.antennas.length > 1) {
+    /* ★ V12 ANY OTHER RADIO THAT LISTS PORTS — the same card, from the same hwinfo list, so a driver that publishes its
+     *  inputs gets the socket card and its port names with nothing added here. Never while an external switch is set
+     *  up: then `antennas` are the switch's antennas, which have their own names in the switch section. */
+    Object.defineProperty(r, "antennas", { value: hw.radio.antennas, enumerable: false, configurable: true, writable: true });
+    paintAntPortCard();
   }
   // ★ Where THIS tab's radio answers — the DAB landing's scan must reach the radio, not the door.
   HW_PREFIX = mine ? "" : "/r/" + encodeURIComponent(r.serial || "");
@@ -5716,6 +5728,66 @@ function paintAntPortCard() {
     : "";
   if ($("antennaMap")) $("antennaMap").value = r.antennaMap || "";
   if ($("antennaPortLocked")) $("antennaPortLocked").checked = !!r.antennaPortLocked;
+  paintAntPortNames(r, ports.length > 1 ? ports : []);
+}
+
+/* ★★ V12 THE OWNER'S NAME FOR EACH PORT. The rule is vibe_port_names.h's (the server cleans and bounds it again on save);
+ *  the label rule is src/utils/antennaPortNames.ts portLabel (scripts/test_antenna_port_names.ts checks this copy). */
+const ANT_PORT_NAME_MAX = 40;   // bytes, as the server counts
+function antPortNamesOf(r) {
+  try { const j = r.antennaNames ? JSON.parse(r.antennaNames) : {}; return (j && typeof j === "object" && !Array.isArray(j)) ? j : {}; }
+  catch (e) { return {}; }
+}
+function antPortLabel(port, names) {
+  const n = names && typeof names[port] === "string" ? names[port].trim() : "";
+  if (!n) return port;
+  return /\)$/.test(port) ? n + " \u00b7 " + port : n + " (" + port + ")";
+}
+function antPortNameClamp(t) {
+  let out = "", bytes = 0;
+  for (const ch of String(t).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")) {
+    const b = new TextEncoder().encode(ch).length;
+    if (bytes + b > ANT_PORT_NAME_MAX) break;
+    out += ch; bytes += b;
+  }
+  return out;
+}
+function antPortNameEdit(r, port, value) {
+  const names = antPortNamesOf(r);
+  const v = antPortNameClamp(value).replace(/\s+/g, " ").trim();
+  if (v) names[port] = v; else delete names[port];
+  r.antennaNames = Object.keys(names).length ? JSON.stringify(names) : "";
+}
+function paintAntPortNames(r, ports) {
+  const host = $("antPortNames");
+  if (!host) return;
+  host.innerHTML = "";
+  if (!ports.length) return;
+  const names = antPortNamesOf(r);
+  const head = document.createElement("span");
+  head.className = "lbl"; head.style.display = "block"; head.style.marginTop = "8px";
+  head.textContent = "Name each port (optional)";
+  host.appendChild(head);
+  const why = document.createElement("p");
+  why.className = "why"; why.style.margin = "2px 0 6px";
+  why.textContent = "What is plugged into it \u2014 listeners then pick \u201c" + antPortLabel(ports[0], { [ports[0]]: "Discone" })
+                  + "\u201d rather than the bare socket. Leave a box empty to show just the port.";
+  host.appendChild(why);
+  for (const port of ports) {
+    const row = document.createElement("label");
+    row.style.display = "flex"; row.style.gap = "8px"; row.style.alignItems = "center"; row.style.margin = "4px 0";
+    const tag = document.createElement("span");
+    tag.style.minWidth = "92px"; tag.style.color = "var(--dim)";
+    tag.textContent = port;   // ★ textContent: a port name is the driver's, a name is the owner's — neither is HTML
+    const box = document.createElement("input");
+    box.type = "text"; box.maxLength = ANT_PORT_NAME_MAX; box.placeholder = "e.g. Discone";
+    box.value = typeof names[port] === "string" ? names[port] : "";
+    box.setAttribute("aria-label", "Name for port " + port);
+    box.addEventListener("input", () => antPortNameEdit(r, port, box.value));
+    box.addEventListener("change", () => { antPortNameEdit(r, port, box.value); box.value = antPortNamesOf(r)[port] || ""; });
+    row.appendChild(tag); row.appendChild(box);
+    host.appendChild(row);
+  }
 }
 
 function renderAntBands() {
@@ -6889,6 +6961,8 @@ function collectRadio() {
     //   object (antCommit), so this only carries it — there is no form field to read back.
     antennaRanges: radio().antennaRanges || "",
     antennaFilters: radio().antennaFilters || "",
+    // ★ V12 the owner's per-port names — edited straight onto the radio (antPortNameEdit), carried here.
+    antennaNames: radio().antennaNames || "",
     // ★ The radio's display name. Empty is sent as empty on purpose: the server refills it from
     //   the device's own name (see the save handler in main.cpp) — that IS "no name = default".
     label: ($("radioName").value || "").trim(),
