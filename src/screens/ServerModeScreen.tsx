@@ -3060,8 +3060,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 )}
               </View>
               <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
-                NAVTEX messages, RTTY and later charts and pictures, kept for anyone to look back through (the GALLERY
-                button in the decoders menu). The gallery keeps everything until this space is full, then removes the
+                NAVTEX messages, RTTY and later charts and pictures, kept for anyone to look back through (GALLERY under
+                VIEWS {'—'} Mode {'→'} VIEWS in the app, VIEWS in the web page{'’'}s DECODERS menu). The gallery keeps everything until this space is full, then removes the
                 oldest items first, so the newest night is always there. There is no limit on the number of items, only
                 on the space (which counts the gallery{'’'}s own index too). 0 keeps nothing. On a small phone or an SD
                 card a modest figure is kind to it: 100 MB holds about 50,000 NAVTEX messages.
