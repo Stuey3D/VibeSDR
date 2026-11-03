@@ -866,6 +866,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     setNdbCap(undefined);   // ★ V12 NDB
     setAisCap(undefined);           // ★ V12 AIS / APRS — cleared first, as every per-radio answer
     setAprsCap({ on: false, hz: 144.8e6 });
+    setDecWhy({});   // ★ V12 decoder reach: a new radio says its own
     setAntBands(null);
     if ((route.params.serverType ?? 'ubersdr') !== 'vibeserver') return;
     fetchOccupancy(connectBase.replace(/\/+$/, ''))
@@ -874,7 +875,11 @@ export default function SDRScreen({ route, navigation }: Props) {
         setDabCapable(o?.dab === true);
         setCwCapable(o?.cw === true);   // ★ V12 CW — the same per-radio answer
         // ★ V12 PSK31/63, JTTY, DSC — the same per-radio answer; and where it can be tuned (which channel keys draw)
-        setPskCapable(o?.psk === true); setJttyCapable(o?.jtty === true); setDscCapable(o?.dsc === true); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true); setSelcalCapable(o?.selcal === true);
+        // ★★★ V12 DECODER REACH: a decoder this radio cannot tune comes back false WITH its reason — its key stays, greyed
+        const dw = o?.decWhy ?? {};
+        setDecWhy(dw);
+        setCwCapable(o?.cw === true || !!dw.cw);
+        setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal);
         setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
         // ★ V12 MFSK / OLIVIA / THOR: a family is offered where its flag is true; its choices are the server's list
         setTmModes({ mfsk: o?.mfsk === true ? (o?.mfskModes ?? []) : undefined });   // ★ ONE key: MFSK, OLIVIA, CONTESTIA, THOR
@@ -2548,6 +2553,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dscCapable, setDscCapable] = useState(false);
   const [sitoraCapable, setSitoraCapable] = useState(false);   // ★ V12 SITOR-A: this VibeServer decodes it
   const [sameCapable, setSameCapable] = useState(false);       // ★ V12 EAS / SAME: this VibeServer decodes it
+  /** ★★★ V12 DECODER REACH (vibe_decoder_reach.h): id → why, for each fixed-frequency decoder THIS radio cannot tune — drawn
+   *  greyed with the reason (never hidden, never live). */
+  const [decWhy, setDecWhy] = useState<Record<string, string>>({});
   const [selcalCapable, setSelcalCapable] = useState(false);   // ★ V12 SELCAL: this VibeServer decodes it
   const [hellCapable, setHellCapable] = useState(false);       // ★ V12 FELD HELL: this VibeServer draws it
   /** ★ V12 MFSK / OLIVIA / THOR: each family this VibeServer offers, with its choices (AUTO first); absent = not offered. */
@@ -15132,6 +15140,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           sitoraAvail: sitoraCapable && !!(client.current as any)?.isVibe,
           sameAvail: sameCapable && !!(client.current as any)?.isVibe,
           selcalAvail: selcalCapable && !!(client.current as any)?.isVibe,
+          decWhy: (client.current as any)?.isVibe ? decWhy : undefined,
+          onDecWhy: (label: string, why: string) => { markInteract(); appAlert(`${label} unavailable`, why); },
           hellAvail: hellCapable && !!(client.current as any)?.isVibe,   // ★ V12 FELD HELL
           tmModes: (client.current as any)?.isVibe ? tmModes : {}, tmMode, onTextMode,
           // ★★★ V12 PAGING: Android, the phone's OWN radio (a loopback session — not a VibeServer, rtl_tcp or SpyServer), and
@@ -15156,7 +15166,7 @@ export default function SDRScreen({ route, navigation }: Props) {
           },
           /* ★★ V12 APRS — only where the radio's vibeserver.json says "aprs": true (an older server: no key). TUNE puts the
            *  dial on the region's channel in NFM, or 10.1476 MHz USB — a listener's own tune. */
-          aprsAvail: aprsCap.on && !!(client.current as any)?.isVibe,
+          aprsAvail: (aprsCap.on || !!decWhy.aprs) && !!(client.current as any)?.isVibe,
           aprsBaud, aprsHz: aprsCap.hz, onAprsBaud,
           onAprsTune: () => { const t = aprsTuneFor(aprsBaudRef.current, aprsCap.hz); markInteract(); onDecTuneHz(t.hz, t.mode as SDRMode); },
         } : null}

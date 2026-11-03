@@ -484,10 +484,27 @@ export interface ServerOccupancy {
   ais?: AisCap;
   /** ★ V12 APRS: the server's own packet decoder (`on`), and the region's VHF channel. */
   aprs?: { on: boolean; hz: number };
+  /** ★★★ V12 DECODER REACH (vibe_decoder_reach.h): fixed-frequency decoders this radio CANNOT TUNE — id → the server's
+   *  reason (`<id>Why`). Such a key is drawn greyed with that reason, never hidden, never live. Empty on an older server. */
+  decWhy?: Record<string, string>;
   /** ★ Raw IQ out: the owner's policy and the slots. Absent on an older server. */
   rawIq?: 'off' | 'local' | 'public';
   rawIqMax?: number;
   rawIqActive?: number;
+}
+
+/** ★★★ V12 the decoders vibe_decoder_reach.h can grey for reach — the server sends `"<id>": false, "<id>Why": "…"`. */
+export const REACH_DECODERS = ['same', 'dsc', 'aprs', 'navtex', 'selcal', 'cw', 'psk', 'jtty'] as const;
+/** id → reason, for each fixed-frequency decoder this radio cannot reach. A reason is honoured only beside `<id>: false`
+ *  (an owner's block sends false with no reason — that key stays hidden, as ever). */
+export function parseDecoderReach(j: any): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!j || typeof j !== 'object') return out;
+  for (const id of REACH_DECODERS) {
+    const why = j[id + 'Why'];
+    if (j[id] === false && typeof why === 'string') { const w = cleanText(why, 200); if (w) out[id] = w; }
+  }
+  return out;
 }
 
 /** Ask a VibeServer whether it is free. Returns null for anything that is not a VibeServer or
@@ -552,6 +569,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       ndb:       parseNdbCapability(j),   // ★ V12 NDB — absent where this radio reaches no LF
       ais:       parseAisCapability(j),
       aprs:      parseAprsCapability(j),
+      decWhy:    parseDecoderReach(j),
     };
   } catch { return null; }
   finally { clearTimeout(t); }

@@ -35629,15 +35629,24 @@ static std::string vsAisWhyNot() {
 }
 
 /* ★★★ V12 DECODER REACH (2026-11-03) — vibe_decoder_reach.h. What this radio can tune, for the fixed-frequency decoders
- *  (SAME, DSC, APRS, NAVTEX, SELCAL; CW / PSK / JTTY by the amateur bands): a LOCKED window is the window (vsTunableRanges,
- *  centre ± rate/2 — the same set the directory publishes); otherwise the driver's coverage through the converter in
+ *  (SAME, DSC, APRS, NAVTEX, SELCAL; CW / PSK / JTTY by the amateur bands): a LOCKED range is its window (centre ± rate/2,
+ *  the rangeLo / rangeHi vibeserver.json publishes — no new usable fraction invented here); otherwise the driver's coverage through the converter in
  *  front of it and the owner's allow / block lists, with an RTL's HF only where it has a path there (direct sampling, or
  *  a V4's own upconverter — an RTL whose model is unknown keeps its table, never greyed on a guess). An Icom: its model's
  *  ranges. Stuart, 2026-11-03, a USRP locked to 88–96 MHz offering SAME: "what is SAME?" */
 static vibereach::Reach vsDecoderReach() {
     vibereach::Reach r;
     if (g_icomOn.load()) { r.ranges = vsTunableRanges(); return r; }
-    if (g_vsLockedCentre.load() > 0.0 && g_vsLockedRate.load() > 0.0) { r.ranges = vsTunableRanges(); r.locked = true; return r; }
+    /* ★ A LOCKED RANGE (the owner's centre on a multi-listener radio — the rule vsAdsbWhyNot / vsAisWhyNot use): its window
+     *  is the centre ± half the rate — the owner's pinned rate, else the one it runs at (the rangeLo / rangeHi it publishes). */
+    {
+        const double lockC = g_vsLockedCentre.load(std::memory_order_relaxed);
+        if (lockC > 0.0 && g_vsMaxUsers.load(std::memory_order_relaxed) > 1) {
+            const double lockR = g_vsLockedRate.load() > 0.0 ? g_vsLockedRate.load() : LocalSdrShim::instance().captureSpanHz();
+            if (lockR > 0.0) { r.ranges = { { lockC - lockR / 2.0, lockC + lockR / 2.0 } }; r.locked = true; }
+            return r;   // ★ rate not known yet: unknown reach, nothing greyed on a guess
+        }
+    }
     auto& shim = LocalSdrShim::instance();
     const std::string drv = shim.isSdrplay() ? "sdrplay" : shim.isAirspyHf() ? "airspyhf"
                           : shim.isHackRf() ? "hackrf" : shim.isAirspy() ? "airspy"

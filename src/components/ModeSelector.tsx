@@ -514,6 +514,11 @@ interface ModeSelectorProps {
     sameAvail?: boolean;
     /** ★★ V12 SELCAL — only where `"selcal": true` (the aeronautical selective call, ICAO's 32 tones). */
     selcalAvail?: boolean;
+    /** ★★★ V12 DECODER REACH (2026-11-03, vibe_decoder_reach.h): a fixed-frequency decoder this radio CANNOT TUNE (a locked
+     *  range, the driver's coverage) — the server's `<id>Why`. Its key is drawn GREYED, never hidden and never live: a press
+     *  (touch, pad, keyboard) says why through `onDecWhy` instead of starting it. */
+    decWhy?: Partial<Record<string, string>>;
+    onDecWhy?: (label: string, why: string) => void;
     /** ★★ V12 FELD HELL — only where `"hell": true` (drawn by the server, read by eye: the picture box). */
     hellAvail?: boolean;
     /** ★★ V12 MFSK / OLIVIA / THOR — a family is offered where the server lists it (`<family>Modes`, AUTO first: its keys). */
@@ -767,6 +772,10 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /* ★★ V12 DIMMED, NEVER DISABLED (Stuart): a key whose usual frequencies are nowhere near the dial is drawn at 40 % — and
    *  stays fully tappable (an unset upconverter puts HF at 130 MHz). A lit / running key is never dimmed. */
   const DIM = { opacity: 0.4 };
+  /* ★★★ V12 OUT OF REACH (vibe_decoder_reach.h) — the ADS-B / AIS refused-key look: dimmed, dashed on the flat chassis, and
+   *  still pressable so the press explains (memory: disabled_control_reads_as_absent). */
+  const UNREACH = { opacity: 0.45 };
+  const UNREACH_FLAT = { opacity: 0.45, borderStyle: 'dashed' as const };
   // ★ And every key of a tab that is not the dial's band (an HF dial looking at VHF: none of it applies where you are).
   //   Called only while rendering the groups, after decTab (below) is set.
   const dimOf = (id: string, lit: boolean) => !lit && decoderDim(id, dialHz ?? NaN, decTab);
@@ -798,18 +807,21 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   /** ★ A server decoder's key (CW, PSK, JTTY, DSC): lit while it is the decoder, filled while it runs. */
   const srvKey = (id: 'cw' | 'psk' | 'jtty' | 'dsc' | 'sitora' | 'same' | 'selcal' | 'mfsk' | 'hell' | 'paging' | 'aprs', label: string, a11y: string) => {
     const dc = decoderControls!;
-    const active = dc.decMode === id && dc.decOn;
-    const lit = dc.decMode === id;
+    // ★★ V12 out of this radio's reach: greyed, and a press says why (never starts it)
+    const why = dc.decWhy?.[id];
+    const active = !why && dc.decMode === id && dc.decOn;
+    const lit = !why && dc.decMode === id;
+    const press = why ? () => dc.onDecWhy?.(label, why) : () => dc.onDecToggle(id);
     return (
-      <NavItem key={id} onPress={() => dc.onDecToggle(id)}>{(navFocused, navRef) => pt.metal ? (
-        <MetalKey navRef={navRef} focused={navFocused} label={label} active={lit} pip onPress={() => dc.onDecToggle(id)} iconId={id} stack={stackIco}
-          style={dimOf(id, lit) ? DIM : undefined} />
+      <NavItem key={id} onPress={press}>{(navFocused, navRef) => pt.metal ? (
+        <MetalKey navRef={navRef} focused={navFocused} label={label} active={lit} pip onPress={press} iconId={id} stack={stackIco}
+          style={why ? UNREACH : dimOf(id, lit) ? DIM : undefined} />
       ) : (
-      <TouchableOpacity ref={navRef as any} accessibilityLabel={a11y} accessibilityState={{ selected: lit }}
+      <TouchableOpacity ref={navRef as any} accessibilityLabel={why ? `${label}, unavailable: ${why}` : a11y} accessibilityState={{ selected: lit, disabled: !!why }}
         style={[st.btn, { borderColor: lit ? dec : t.btnBorder, paddingVertical: icoPad },
-                active && { backgroundColor: decBg }, dimOf(id, lit) && DIM,
+                active && { backgroundColor: decBg }, dimOf(id, lit) && DIM, why && UNREACH_FLAT,
                 navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
-        onPress={() => dc.onDecToggle(id)} activeOpacity={0.8}>
+        onPress={press} activeOpacity={0.8}>
         <ModeLabel id={id} stack={stackIco} color={lit ? dec : t.btnText}
                    style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: lit ? dec : t.btnText }]}>{label}</ModeLabel>
       </TouchableOpacity>
@@ -920,19 +932,23 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     );
   };
   const clientKey = (k: DecId) => {
-                const active = decoderControls!.decMode === k && decoderControls!.decOn;
-                const selected = decoderControls!.decMode === k && !decoderControls!.decOn;
+                // ★★ V12 out of this radio's reach (NAVTEX on a radio with no HF): greyed, a press says why
+                const why = decoderControls!.decWhy?.[k];
+                const active = !why && decoderControls!.decMode === k && decoderControls!.decOn;
+                const selected = !why && decoderControls!.decMode === k && !decoderControls!.decOn;
                 const dim = dimOf(k, active || selected);
+                const press = why ? () => decoderControls!.onDecWhy?.(k.toUpperCase(), why) : () => decoderControls!.onDecToggle(k);
                 return (
-                  <NavItem key={k} onPress={() => decoderControls!.onDecToggle(k)}>{(navFocused, navRef) => pt.metal ? (
+                  <NavItem key={k} onPress={press}>{(navFocused, navRef) => pt.metal ? (
                     <MetalKey navRef={navRef} focused={navFocused} label={k.toUpperCase()} active={active || selected} pip
-                      onPress={() => decoderControls!.onDecToggle(k)} iconId={k} stack={stackIco} style={dim ? DIM : undefined} />
+                      onPress={press} iconId={k} stack={stackIco} style={why ? UNREACH : dim ? DIM : undefined} />
                   ) : (
                   <TouchableOpacity ref={navRef as any}
+                    accessibilityLabel={why ? `${k.toUpperCase()}, unavailable: ${why}` : undefined}
                     style={[st.btn, { borderColor: (active || selected) ? dec : t.btnBorder, paddingVertical: icoPad },
-                            active && { backgroundColor: decBg }, dim && DIM,
+                            active && { backgroundColor: decBg }, dim && DIM, why && UNREACH_FLAT,
                             navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
-                    onPress={() => decoderControls!.onDecToggle(k)} activeOpacity={0.8}>
+                    onPress={press} activeOpacity={0.8}>
                     <ModeLabel id={k} stack={stackIco} color={(active || selected) ? dec : t.btnText}
                                style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: (active || selected) ? dec : t.btnText }]}>
                       {k.toUpperCase()}
