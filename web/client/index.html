@@ -4900,6 +4900,22 @@ select.btn { padding: 6px 8px; }
       to us if something is not working. It never contains passwords, but it does contain this server&rsquo;s
       addresses and network names &mdash; only send it to people you trust.
     </p>
+    <!-- ★★★ CHECK THIS RADIO'S MEMORY (2026-11-03): for a radio whose process crashes. The root helper runs the package's
+         memory-check build (AddressSanitizer) in that radio's place for 60 s and keeps its report for the diagnostics
+         file. Offered only where the package carries that build (amd64 / arm64), the picker only the radios in this
+         server's settings. -->
+    <div class="aActions" id="memcheckRow" hidden>
+      <select id="memcheckRadio" aria-label="Radio to check"></select>
+      <button class="btn" id="actMemcheck">CHECK THIS RADIO&rsquo;S MEMORY (60 S, DIAGNOSTICS)</button>
+    </div>
+    <p class="dim wrap aNote" id="memcheckNote" hidden>
+      <b>Check this radio&rsquo;s memory</b> is for a radio that keeps crashing. It stops that radio, runs a special
+      memory-checking copy of VibeServer on it for up to 60&nbsp;seconds, saves what it finds, and then puts the radio
+      back as it was (a paused radio stays paused). Anyone listening to that radio would be cut off, so it only runs
+      while nobody is. The check runs slower than normal and may stutter &mdash; that is expected. Afterwards press
+      <b>Download diagnostics</b>: the report is in that file.
+    </p>
+    <p class="dim wrap aNote" id="memcheckLast" hidden></p>
     <!-- ★★ TWO INDEPENDENT SCHEDULES, not one with a scope switch. A VibeServer update is one
          small package we build and can sensibly be daily; a full system upgrade is bigger and
          occasionally wants attention, so it suits a weekly slot. One schedule would force the

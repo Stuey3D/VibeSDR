@@ -91,6 +91,8 @@
 #include "vibe_mapgl.h"   // the GPU map's files and its optional detail pack
 #include "mapgl_curl.h"   // the High Detail Maps downloader (shared with Mac Simple mode)
 #include "diag_scrub.h"   // ★ the daemon's own scrub of the diagnostics file before it is downloaded
+#include "vibe_memcheck.h"   // ★ the memcheck action: its serial, the radio's listener count (2026-11-03)
+#include <sys/socket.h>
 
 // ★ Declared out here on purpose: the anonymous namespace below closes long before
 //   reapRadios() is defined, so a declaration inside it would be a DIFFERENT function
@@ -1578,6 +1580,35 @@ static void publishLocation(const Opts& o, const vsmoveloc::Place* mv) {
     }
 }
 
+/* ★ ONE GET TO ANOTHER PROCESS ON THIS MACHINE (127.0.0.1:<port>), 2 s at most, 64 KB at most — the memory check asks a
+ *  radio's own process how many are listening (its public /vibeserver.json). "" when nothing answers. The User-Agent
+ *  is the directory's self-poll name, so the radio does not count this as a visitor. */
+static std::string loopbackGet(int port, const char* path) {
+    if (port <= 0 || port > 65535) return "";
+#if defined(MSG_NOSIGNAL)
+    const int kNoSigPipe = MSG_NOSIGNAL;
+#else
+    const int kNoSigPipe = 0;   // macOS: SO_NOSIGPIPE would be the way; this path is Linux-only in use
+#endif
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return "";
+    struct timeval tv{ 2, 0 };
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+    sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    std::string out;
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof a) == 0) {
+        const std::string req = std::string("GET ") + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                                "User-Agent: VibeServer-directory (memcheck)\r\nConnection: close\r\n\r\n";
+        if (::send(fd, req.data(), req.size(), kNoSigPipe) == (ssize_t)req.size()) {
+            char b[4096]; ssize_t n;
+            while (out.size() < 65536 && (n = ::recv(fd, b, sizeof b, 0)) > 0) out.append(b, (size_t)n);
+        }
+    }
+    ::close(fd);
+    return out;
+}
+
 int main(int argc, char** argv) {
     g_argv = argv;
     /* ★★ FIRST, so nothing can die unrecorded (2026-10-06): the Pi 2 segfaulted four times in DAB in
@@ -1586,6 +1617,12 @@ int main(int argc, char** argv) {
     vibecrash::install(VIBESERVER_VERSION_STR);
 #else
     vibecrash::install("dev");
+#endif
+#ifdef VIBESERVER_ASAN_BUILD
+    /* ★★ THE MEMORY-CHECK BUILD SAYS SO, first line of its output — a report from it must never be read as the normal
+     *  server's, and the normal server's journal must never be mistaken for this. See linux/asan_options.c. */
+    std::fprintf(stderr, "VibeServer: MEMORY-CHECK BUILD (AddressSanitizer) — slower than the normal server; "
+                         "for diagnosis only (vibeserver-maintenance memcheck)\n");
 #endif
     /* ★ Denormals flushed on the main thread too, straight after the crash handler: Linux copies MXCSR/FPCR
      *  into every thread created after this, so a radio library's own thread (libairspy's consumer, the RSP
@@ -1626,6 +1663,26 @@ int main(int argc, char** argv) {
                 if (!r.enabled || !r.configured) continue;
                 if (r.serial.empty()) continue;   // ★ cannot name a unit after nothing
                 std::printf("%s\n", r.serial.c_str());
+            }
+            return 0;
+        }
+        /* ★★ WHICH RADIOS A MEMORY CHECK MAY BE RUN ON, AND WHICH UNIT SERVES EACH (vibeserver-maintenance memcheck,
+         *  2026-11-03). "<serial> <unit>" per line: every radio in the settings with a serial that has been set up —
+         *  PAUSED ONES TOO (enabled=false): the point is to diagnose a radio that crashes, and an owner pauses exactly
+         *  that radio. The unit is `vibeserver` for the one radio a Simple-mode machine serves from its main service,
+         *  `vibeserver@<serial>` for every other. Asked of the binary, as the unprivileged user, for the same reasons as
+         *  --list-secondary-radios: the root helper never parses the daemon's JSON itself. */
+        if (std::string(argv[i]) == "--list-memcheck-radios") {
+            const char* e = getenv("VIBESERVER_CONFIG");
+            const std::string path = (e && *e) ? e : vsconfig::defaultPath();
+            vsconfig::ServerConfig srv; std::string err;
+            if (!vsconfig::loadServer(path, srv, err)) return 0;
+            const int primary = vsconfig::needsFrontDoor(srv) ? -1 : vsconfig::primaryRadio(srv);
+            for (size_t k = 0; k < srv.radios.size(); k++) {
+                const auto& r = srv.radios[k];
+                if (!r.configured || r.serial.empty()) continue;
+                std::printf("%s %s\n", r.serial.c_str(),
+                            (int)k == primary && r.enabled ? "vibeserver" : ("vibeserver@" + r.serial).c_str());
             }
             return 0;
         }
@@ -3566,7 +3623,11 @@ int main(int argc, char** argv) {
     //    Same rule as AGENTS.md: remove a control that cannot work rather than leave it visible.
 #if defined(__linux__) && !defined(__ANDROID__)
     // ★ beta-on / beta-off / update-stable: the "Receive beta updates" tick-box and its way back (2026-10-22).
-    LocalSdrShim::setMaintenanceActions("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics,beta-on,beta-off,update-stable");
+    /* ★★ memcheck — "Check this radio's memory" (2026-11-03) — only where the package carries the AddressSanitizer
+     *  build (amd64 and arm64; not armhf or i386). Offered by the file's presence, so a package without it never
+     *  draws the button: see vibe_memcheck.h and vibeserver-maintenance memcheck. */
+    LocalSdrShim::setMaintenanceActions(std::string("restart,reboot,shutdown,update-check,update,update-all,maps-install,maps-remove,mapgl-detail-install,mapgl-detail-remove,diagnostics,beta-on,beta-off,update-stable")
+        + (::access("/usr/lib/vibeserver/diag/vibeserver-asan", X_OK) == 0 ? ",memcheck" : ""));
 #else
     LocalSdrShim::setMaintenanceActions("");   // no section at all, rather than an empty one
 #endif
@@ -4629,6 +4690,51 @@ int main(int argc, char** argv) {
         j += ",\"checked\":" + std::to_string(checked.empty() ? 0LL : std::atoll(checked.c_str())) + "}";
         return j;
     });
+    /* ★★★ CHECK THIS RADIO'S MEMORY (2026-11-03): the picker's radios — every radio in the settings that has been set up,
+     *  PAUSED ONES TOO (the one an owner pauses is the one that crashes) — and the newest report's result line, which the
+     *  root helper writes on line 2 of /var/lib/vibeserver-maint/diag/memcheck-*.txt (root:vibeserver 0640, read with
+     *  O_NOFOLLOW). Nothing at all where the package has no memory-check build, so the page draws no button. */
+    LocalSdrShim::setMemcheckRadiosHandler([]() -> std::string {
+        if (::access("/usr/lib/vibeserver/diag/vibeserver-asan", X_OK) != 0) return "";
+        vsconfig::ServerConfig sc; std::string e;
+        if (!vsconfig::loadServer(g_configPath, sc, e)) sc = g_serverConfig;
+        std::string j = "{\"radios\":[";
+        bool first = true;
+        for (size_t i : vsconfig::displayOrder(sc)) {
+            const auto& r = sc.radios[i];
+            if (!r.configured || !vibememcheck::serialOk(r.serial)) continue;
+            if (!first) j += ",";
+            first = false;
+            j += "{\"serial\":\"" + jsonEscape(r.serial) + "\",\"label\":\"" + jsonEscape(r.label.empty() ? r.driver : r.label)
+               + "\",\"paused\":" + (r.enabled ? "false" : "true") + "}";
+        }
+        j += "]";
+        std::string newest; time_t newestAt = 0;
+        if (DIR* d = ::opendir("/var/lib/vibeserver-maint/diag")) {
+            while (dirent* de = ::readdir(d)) {
+                const std::string n = de->d_name;
+                if (n.rfind("memcheck-", 0) != 0 || n.size() < 13 || n.compare(n.size() - 4, 4, ".txt") != 0) continue;
+                struct stat st{};
+                const std::string p = "/var/lib/vibeserver-maint/diag/" + n;
+                if (::lstat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode) && st.st_mtime >= newestAt) { newestAt = st.st_mtime; newest = p; }
+            }
+            ::closedir(d);
+        }
+        if (!newest.empty()) {
+            const int fd = ::open(newest.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+            if (fd >= 0) {
+                char buf[2048]; const ssize_t n = ::read(fd, buf, sizeof buf - 1); ::close(fd);
+                std::istringstream in(std::string(buf, n > 0 ? (size_t)n : 0));
+                std::string l1, l2; std::getline(in, l1); std::getline(in, l2);
+                if (l2.rfind("result:", 0) == 0) {
+                    const size_t k = l2.find_first_not_of(' ', 7);
+                    j += ",\"last\":\"" + jsonEscape(l1 + " — " + (k == std::string::npos ? std::string() : l2.substr(k))) + "\"";
+                    j += ",\"lastAt\":" + std::to_string((long long)newestAt);
+                }
+            }
+        }
+        return j + "}";
+    });
 #endif
 
     LocalSdrShim::setAdminLogHandler([](std::string& text, bool& running, int& exitCode) {
@@ -4709,6 +4815,52 @@ int main(int argc, char** argv) {
                                           "beta-on", "beta-off", "update-stable" };
         bool known = false;
         for (const char* a : kActions) if (action == a) { known = true; break; }
+        /* ★★★ memcheck <serial> — "Check this radio's memory" (2026-11-03). The one action with an argument, so it is
+         *  checked here before any request is written: the serial must be a radio IN THE SETTINGS (paused ones too —
+         *  that is the radio worth checking), nobody may be listening to it (its process is stopped for 60 s), and no
+         *  other maintenance action may be running. The request carries the SETTINGS' copy of the serial. */
+        std::string request = action;
+        {
+            std::string want;
+            if (vibememcheck::parseAction(action, want)) {
+                if (::access("/usr/lib/vibeserver/diag/vibeserver-asan", X_OK) != 0) {
+                    err = "this package has no memory-check build (amd64 and arm64 only)"; return false;
+                }
+                vsconfig::ServerConfig sc; std::string e;
+                if (!vsconfig::loadServer(g_configPath, sc, e)) sc = g_serverConfig;
+                int idx = -1;
+                for (size_t k = 0; k < sc.radios.size(); k++)
+                    if (sc.radios[k].configured && !sc.radios[k].serial.empty() && sc.radios[k].serial == want) { idx = (int)k; break; }
+                if (idx < 0) { err = "no radio with that serial in this server's settings"; return false; }
+                const std::string& serial = sc.radios[(size_t)idx].serial;
+                // ★ Listeners: our own count when it is OUR radio; otherwise its process's public /vibeserver.json on
+                //   this machine. Nothing answering = nobody can be listening (it is down — likely the crash itself).
+                int n = 0;
+                if (!g_amFrontDoor.load() && serial == g_myRadioSerial) n = LocalSdrShim::instance().listenerCount();
+                else n = vibememcheck::listenersIn(loopbackGet(vsconfig::portForRadio(sc, (size_t)idx), "/vibeserver.json"));
+                if (n > 0) {
+                    err = "this radio has " + std::to_string(n) + (n == 1 ? " listener" : " listeners")
+                        + " — the check stops it for a minute; try again when nobody is listening";
+                    return false;
+                }
+                struct stat rq{};
+                if (::lstat("/var/lib/vibeserver/maintenance.request", &rq) == 0) { err = "another maintenance action is waiting to start"; return false; }
+                {
+                    // ★ A log with no end marker is a run in progress — unless it is old: a run cut off by a power
+                    //   cut never writes one, and must not refuse every memory check for ever after.
+                    struct stat ls{};
+                    std::ifstream lf("/var/lib/vibeserver-maint/maintenance.log");
+                    std::stringstream ss; ss << lf.rdbuf();
+                    if (vibememcheck::logShowsRunning(ss.str())
+                        && ::stat("/var/lib/vibeserver-maint/maintenance.log", &ls) == 0
+                        && std::time(nullptr) - (std::time_t)ls.st_mtime < 900) {
+                        err = "another maintenance action is still running"; return false;
+                    }
+                }
+                request = "memcheck " + serial;
+                known = true;
+            }
+        }
         if (!known) { err = "unknown action: " + action; return false; }
 
         // ★ The helper is what makes any of this possible; if it is not installed, say that
@@ -4729,7 +4881,7 @@ int main(int argc, char** argv) {
             err = "could not write the maintenance request (is /var/lib/vibeserver writable?)";
             return false;
         }
-        fputs(action.c_str(), f);
+        fputs(request.c_str(), f);
         fclose(f);
         if (rename(tmp.c_str(), path.c_str()) != 0) {
             remove(tmp.c_str());
