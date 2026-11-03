@@ -26,6 +26,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "vibe_serial.h"   // ★ configSerialOf — an Icom's serial carries a space
 
 namespace icom {
 
@@ -64,6 +65,38 @@ struct UsbIcom {
     bool cdcAcm = false;     ///< native USB (VID 0c26) rather than a CP210x
 };
 std::vector<UsbIcom> listUsbIcoms();
+
+/** ★★★ THE SERIAL THIS RADIO IS KNOWN BY IN THE CONFIG — vibe::configSerial of the USB serial, so
+ *  "IC-7300 03001234" is "IC-7300_03001234" (vibe_serial.h: the space cannot be a config key or a
+ *  systemd unit name, and the number after it is what tells two 7300s apart). No USB serial at all =
+ *  the socket path, as before. Everything that STORES or MATCHES an Icom uses this; the raw `serial`
+ *  is kept for modelBySerial and the name. */
+inline std::string configSerialOf(const UsbIcom& u) {
+    return u.serial.empty() ? u.path : vibe::configSerial(u.serial);
+}
+
+/** "Icom IC-7300 (03001234)" — the model once, then the radio's own number, read off the RAW serial.
+ *  A serial that does not start with the model is shown whole. */
+inline std::string displayNameOf(const UsbIcom& u) {
+    std::string n = "Icom " + (u.model.empty() ? std::string("radio") : u.model);
+    std::string tail = u.serial;
+    if (!u.model.empty() && tail.compare(0, u.model.size(), u.model) == 0) {
+        tail.erase(0, u.model.size());
+        while (!tail.empty() && (tail[0] == ' ' || tail[0] == '_' || tail[0] == '-')) tail.erase(0, 1);
+        while (!tail.empty() && tail.back() == ' ') tail.pop_back();
+    }
+    if (!tail.empty()) n += " (" + tail + ")";
+    return n;
+}
+
+/** The radio on the bus whose CONFIG serial is `want`, or null. Compared by the cleaned form on BOTH
+ *  sides, so a config written with either spelling finds the radio. */
+inline const UsbIcom* findByConfigSerial(const std::vector<UsbIcom>& list, const std::string& want) {
+    if (want.empty()) return nullptr;
+    const std::string w = vibe::configSerial(want);
+    for (const auto& u : list) if (configSerialOf(u) == w) return &u;
+    return nullptr;
+}
 
 /** "usb" (the first Icom found), "usb:<bus>-<ports>", a /dev path (tty — needs ttyOk), or "fd:<n>".
  *  ★★ "fd:<n>" IS ANDROID'S DOOR (plan Phase 4): an app may not enumerate USB, so UsbManager opens the radio and

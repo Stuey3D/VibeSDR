@@ -40,6 +40,7 @@
 #include "vibedsp/vibe_denormals.h"   // ★ FTZ/DAZ inherited by every thread — see main()
 #include "airspyhf_source.h"
 #include "icom_transport.h"    // ★ listUsbIcoms — an Icom found by its USB serial, without a byte sent
+#include "vibe_serial.h"       // ★ configSerial — a radio's serial in the form the config and systemd can hold
 #include "hackrf_source.h"
 #include "usrp_source.h"   // ★ V12 Ettus USRP B2xx (inline stub on a build without UHD)
 #include "vibe_usrp_caps.h"   // ★ V12 the USRP owner options' save check (validateSaved)
@@ -460,7 +461,9 @@ bool parse(int argc, char** argv, Opts& o) {
         //     while the demo itself was pinned to `--radio 1`.
         //   ★ Anything non-numeric is a serial. Serials are what the config file stores.
         else if (a == "--radio") {
-            const std::string v = need(i);
+            // ★ The CONFIG form (vibe_serial.h): a person may paste the radio's own "IC-7300 03001234".
+            //   Unchanged for every serial that already fits — and for an index.
+            const std::string v = vibe::configSerial(need(i));
             o.useUsb = true; o.radioGiven = true;
             // ★★★ A SERIAL FIRST, AN INDEX ONLY IF IT IS NOT ONE. RTL serials are ALL DIGITS —
             //     "00000003" on this Pi, "00000001" from the factory — so "numeric means index"
@@ -492,7 +495,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--radio-serial") {
             o.useUsb = true; o.radioGiven = true;
             o.radio = -1;
-            o.radioSerial = need(i);
+            o.radioSerial = vibe::configSerial(need(i));   // ★ the config form; a no-op for one that fits
         }
         /* ★★★ AN ICOM, NAMED DIRECTLY (receive only — docs/ICOM-SUPPORT-PLAN.md). The front door names an
          *     Icom by `--radio-serial` like any radio (detectRadios lists it); this is for a person or a
@@ -1335,7 +1338,9 @@ static std::vector<std::string> rtlSerialsOnBus() {
     const uint32_t n = rtlsdr_get_device_count();
     for (uint32_t i = 0; i < n; ++i) {
         char sn[256] = {0};
-        if (rtlsdr_get_device_usb_strings(i, nullptr, nullptr, sn) == 0) out.push_back(sn);
+        // ★ The CONFIG form (vibe_serial.h), as detectRadios() gives it — the pending marker and the config are
+        //   in that form, and this list is put into JSON unescaped by the status handler.
+        if (rtlsdr_get_device_usb_strings(i, nullptr, nullptr, sn) == 0) out.push_back(vibe::configSerial(sn));
     }
     return out;
 }
@@ -3205,7 +3210,7 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < n; ++i) {
             char sn[256] = {0};
             if (rtlsdr_get_device_usb_strings(i, nullptr, nullptr, sn) == 0
-                && (oldSerial.empty() || oldSerial == sn)) { index = (int)i; break; }
+                && (oldSerial.empty() || oldSerial == vibe::configSerial(sn))) { index = (int)i; break; }   // ★ config form
         }
         bool ok = false;
         if (index < 0) msg = "could not find this dongle on the USB bus.";
@@ -3826,11 +3831,17 @@ int main(int argc, char** argv) {
                 /* ★★★ THE SIXTH SOURCE, AND NOT AN IQ ONE. Named, never inferred — "else means dongle"
                  *     would start an RTL capture against an Icom's index. The radio is found again by
                  *     its USB serial (which carries the model), unless the owner pinned a port. */
-                std::string where = o.icomPort;
-                if (where.empty() || where == "usb")
-                    for (const auto& u : icom::listUsbIcoms())
-                        if (u.serial == o.radioSerial) { where = u.path; break; }
-                port = startIcomFrom(o, where.empty() ? "usb" : where, o.radioSerial, err);
+                /* ★★ Matched by the CONFIG serial ("IC-7300_03001234" — icom::configSerialOf), never the raw USB one,
+                 *    which carries a space; and the RAW one is what names the model (modelBySerial). */
+                std::string where = o.icomPort, rawSerial = o.radioSerial;
+                {
+                    const auto icoms = icom::listUsbIcoms();
+                    if (const icom::UsbIcom* u = icom::findByConfigSerial(icoms, o.radioSerial)) {
+                        if (where.empty() || where == "usb") where = u->path;
+                        if (!u->serial.empty()) rawSerial = u->serial;
+                    }
+                }
+                port = startIcomFrom(o, where.empty() ? "usb" : where, rawSerial, err);
             } else
             if (drv == "hackrf")
                 port = shim.startHackRf(drvIdx, o.freq, o.rate, o.gain,

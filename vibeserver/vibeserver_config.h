@@ -1011,7 +1011,9 @@ std::vector<size_t> displayOrder(const ServerConfig& cfg);
 /** ★★ A SERIAL WE WILL PUT IN A FILE NAME OR HAND TO systemctl. The SAME alphabet
  *  vibeserver-radios' valid_serial() enforces: ^[A-Za-z0-9_:][A-Za-z0-9._:-]{0,63}$ — so a serial
  *  this accepts is one the reconcile will actually start, and nothing with a slash, a space or a
- *  leading '-' ever reaches either. */
+ *  leading '-' ever reaches either.
+ *  ★★ A radio whose OWN serial does not fit (an Icom's "IC-7300 03001234") is not refused here — it is
+ *     given one that does by vibe::configSerial (vibe_serial.h) in detectRadios() and on config read. */
 bool validSerial(const std::string& serial);
 
 /** ★★★ THE SETUP PAGE'S "SOMETHING CHANGED ON THE USB BUS" ACTIONS, as pure edits of the config so
