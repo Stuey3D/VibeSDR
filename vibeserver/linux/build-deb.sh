@@ -143,7 +143,12 @@ if [ "$PGO" != generate ] && [[ " $ASAN_ARCHES " == *" $ARCH "* ]]; then
   else
     ASAN_RUN="cross-built, NOT started here"
   fi
-  mkdir -p /build/asan-stage && cp "$A" /build/asan-stage/vibeserver
+  # ★★ GITHUB REFUSES ANY FILE OVER 100 MB (2026-11-03: the amd64 .deb with the 75 MB ASan binary came to 105.75 MB and
+  #    the apt push was rejected). The packaged copy drops its DWARF line tables — ASan still names every function from
+  #    the symbol table, with module+offset — and the UNSTRIPPED one stays in the build output (asan-unstripped) for
+  #    addr2line -Cfie against those offsets.
+  cp "$A" "$OUT/vibeserver-asan-unstripped"
+  mkdir -p /build/asan-stage && objcopy --strip-debug "$A" /build/asan-stage/vibeserver
   ASAN_LINE="lib/vibeserver/diag/vibeserver-asan $(( $(stat -c %s "$A") / 1048576 )) MB ($ASAN_RUN)"
   ASAN_CMAKE=(-DVIBE_ASAN_STAGE=/build/asan-stage)
 fi
@@ -290,4 +295,6 @@ cp "$DEB" "$OUT/"
 # ★ The container runs as root; a root-owned file or directory under ~/vibeout stops the next run from
 #   emptying it (rm -rf), and the && chain over there would then skip the whole build without saying so.
 chmod -R a+rwX "$OUT"
+# ★ GitHub's per-file limit is 100 MB; the apt repository lives there. Fail here, not at the push.
+[ "$(stat -c %s "$OUT/$(basename "$DEB")")" -lt 99000000 ] || fail "$(basename "$DEB") is over 99 MB — GitHub refuses files over 100 MB"
 echo "==> [$ARCH] $(basename "$DEB")"
