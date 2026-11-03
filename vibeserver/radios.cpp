@@ -144,7 +144,14 @@ std::vector<DetectedRadio> detectRadios() {
         }
     }
 
-    for (size_t i = 0; i < out.size(); i++) out[i].index = (int)i;
+    for (size_t i = 0; i < out.size(); i++) {
+        out[i].index = (int)i;
+        /* ★★ EVERY SERIAL LEAVES HERE IN THE CONFIG FORM (vibe_serial.h) — a backstop for any driver whose own
+         *  string could one day carry a byte the config, the status files and systemd cannot hold. Every serial
+         *  seen so far (RTL, RSP, HF+, HackRF, R2/Mini, USRP) already fits and passes through unchanged; the Icom's
+         *  and an RTL's free-text EEPROM serial are cleaned above, where they are read. */
+        out[i].serial = configSerial(out[i].serial);
+    }
     return out;
 }
 

@@ -82,6 +82,10 @@ def script_test():
         # ★ What a config holding one cleaned Icom, one RTL and a (hand-edited, never migrated) raw serial would list.
         open(stub_vs, "w").write("#!/bin/sh\nprintf '%s\\n' 'IC-7300_03001234' '00000003' 'IC-7300 03005678'\n")
         os.chmod(stub_vs, 0o755)
+        # ★ As root (a build container) the script lists through `runuser -u vibeserver --`; no such user here.
+        ru = os.path.join(b, "runuser")
+        open(ru, "w").write('#!/bin/sh\nwhile [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\nshift\nexec "$@"\n')
+        os.chmod(ru, 0o755)
         sc = os.path.join(b, "systemctl")
         open(sc, "w").write("#!/bin/sh\necho \"$*\" >> '%s'\n" % log)
         os.chmod(sc, 0o755)
