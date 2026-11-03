@@ -1456,6 +1456,10 @@ fi
 printf '\n\033[1m── decoder reach + region defaults (end to end: the server) ──\033[0m\n'
 node scripts/test-server-decoder-reach.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+node scripts/test-web-decoder-reach.mjs; rc=$?   # ★ …and the web client's greyed keys (headless Edge, --mute-audio)
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+npx tsx scripts/test_decoder_reach_clients.ts; rc=$?   # ★ …and the clients' gating (the app's keys, the Setup page's real list functions)
+if [ $rc -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★ The ship/station layer's generated copies (web client, app, /mapgl/vendor) match web/mapkit/tracklayer.js.
 if node scripts/gen-tracklayer-source.mjs --check; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
