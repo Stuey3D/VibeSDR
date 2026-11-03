@@ -145,6 +145,22 @@ try {
 
   console.log('── 4. Band already lit, DAB entered, Band pressed again ──');
   ok(await intoDab(), 'back into DAB with Band lit');
+  {   // ★★ V12 hop keys (2026-11-03, Stuart's DAB screenshot): the arrows name the blocks either side, the CURRENT block is
+      //    bold over the glyph, and a press moves it at once
+    const lab = async () => JSON.parse(await ev(`JSON.stringify({ cur: document.getElementById('mTuneCur')?.textContent, hid: document.getElementById('mTuneCur')?.hidden,
+      d: document.getElementById('mStepCapD')?.textContent, u: document.getElementById('mStepCapU')?.textContent,
+      say: document.getElementById('mTuneGlyph')?.getAttribute('aria-label'),
+      bold: getComputedStyle(document.getElementById('mTuneCur')).fontWeight })`));
+    ok(await until(`/^\\d{1,2}[A-N]$/.test(document.getElementById('mTuneCur')?.textContent || '')`, 8000), 'DAB: a block over the glyph');
+    const a = await lab();
+    ok(a.hid === false && Number(a.bold) >= 700 && !!a.d && !!a.u, `DAB: ${a.d} ‹ ${a.cur} › ${a.u}, bold ${a.bold}`);
+    ok(a.say === `Block ${a.cur}. Previous ${a.d}, next ${a.u}`, `DAB spoken: ${a.say}`);
+    await trustedClick('#mVfoUp');
+    const b = await lab();
+    ok(b.cur === a.u && b.d === a.cur, `DAB: the press moves the current block at once (${a.cur} → ${b.cur})`);
+    await trustedClick('#mVfoDown');
+    await sleep(1500);   // ★ there and back: the stepper sends nothing
+  }
   ok(await waitLog(() => dabOnLines() > onsBefore, 8000), 'the server says DAB ON');
   await sleep(2500);
   const offsBefore = dabOffLines();

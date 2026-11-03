@@ -42,7 +42,7 @@ import { Canvas, Path, Skia, BlurMask, Image as SkImageNode, PaintStyle, StrokeC
 import * as Haptics from 'expo-haptics';
 import { getControlHaptics } from './controlHaptics';
 import { buildGlyphPath } from './DrumWheel';
-import { DomeKey, DomeIcon, type IconStroke } from './DomeKey';
+import { DomeKey, DomeIcon, DomeText, type IconStroke } from './DomeKey';
 import { WellFace } from './DrumWell';
 import DisplayFontText from './DisplayFontText';
 import { glowPaint, imageBuild, makeSprite, useSharedSprite } from './glowSprite';
@@ -229,6 +229,10 @@ interface Props {
    *  now the keys give up a little height for the row (tunerKeysLayout `label`), the well stays its
    *  size, and the etched glyph is back between them. */
   centreLabel?: string;
+  /** ★★ V12 (2026-11-03): DAB, ISM and DIGI BAND — the current one in the same row as `centreLabel`, BOLD after its dim
+   *  legend ("MUX 11C" / "ISM 868" / "BAND 40m"), and where each key goes ON the key, small over its chevron (`prev` on
+   *  ‹, `next` on ›: the web's mStepCap). services/hopKeys.ts hopStrip. Wins over `centreLabel` if both are given. */
+  centreStrip?: { legend: string; prev?: string; cur: string; next?: string; spoken: string };
   /** ★★ THE LAMP IS OFF (Stuart, 2026-10-07: zoom in DAB, where it does nothing). The keys still press, sink,
    *  click and step exactly as ever — "users can fiddle, just like the real thing" — but nothing lights them:
    *  no panel-gap light, the legends are the unlit engraving (LAMP_OFF_LEGEND), and the etched glyph between
@@ -256,7 +260,7 @@ function legendStrokes(type: TunerKeyType, dir: -1 | 1): IconStroke[] {
 
 export default function TunerKeys({
   type, height, onStep, sweepRate, onSweepStep, width: widthProp = 0, style, disabled = false,
-  landscape = false, centreLabel, lampOff = false, abLetter = null, onAbPress,
+  landscape = false, centreLabel, centreStrip, lampOff = false, abLetter = null, onAbPress,
 }: Props) {
   const [measuredW, setMeasuredW] = useState(widthProp);
   const W = widthProp > 0 ? widthProp : measuredW;
@@ -278,7 +282,7 @@ export default function TunerKeys({
   const onDown = useCallback((dir: -1 | 1) => { if (!disabled) press(dir); }, [press, disabled]);
   const onUp   = useCallback(() => release(), [release]);
 
-  const hasLabel = centreLabel != null;
+  const hasLabel = centreLabel != null || centreStrip != null;
   const L = useMemo(() => tunerKeysLayout(W, H, landscape, s.r, hasLabel), [W, H, landscape, s.r, hasLabel]);
   const glyphPath = useMemo(
     () => buildGlyphPath(type === 'vfo', L.glyphCx, L.glyphCy, L.glyphSz),
@@ -364,17 +368,23 @@ export default function TunerKeys({
         const fs   = Math.max(7, L.labelH - 2);
         const glow = lit ? { textShadowColor: fp.controls.glow, textShadowRadius: 4,
                              textShadowOffset: { width: 0, height: 0 } } : null;
+        const txt = { fontFamily: fp.keyLegend.font, fontSize: fs, lineHeight: L.labelH, letterSpacing: 0.5,
+                      includeFontPadding: false, textAlign: 'center' as const };
+        /* ★★★ V12 (Stuart, 2026-11-03 — DAB, ISM, DIGI BAND; he had been misreading the keys and stopping one block
+         *  short): the CURRENT one, BOLD and at full brightness after its dim legend ("MUX 11C" / "ISM 868" / "BAND
+         *  40m"); where each key goes is on the key itself (below). services/hopKeys.ts. */
+        const legendWord = centreStrip ? centreStrip.legend : 'MUX';
+        const current = centreStrip ? centreStrip.cur : centreLabel;
         return (
           <View pointerEvents="none"
-                accessible accessibilityLabel={`Multiplex ${centreLabel}`}
+                accessible accessibilityLabel={centreStrip ? centreStrip.spoken : `Multiplex ${centreLabel}`}
                 style={{ position: 'absolute', left: L.pad, right: L.pad, top: L.labelY, height: L.labelH,
                          flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
                          overflow: 'hidden', opacity: dim }}>
             <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}
-                  style={{ color: fp.controls.core, fontFamily: fp.keyLegend.font, fontSize: fs, lineHeight: L.labelH,
-                           letterSpacing: 0.5, includeFontPadding: false, ...glow }}>
-              <Text style={{ color: G(0.7), fontSize: Math.max(6, fs * 0.72), letterSpacing: 1 }}>MUX  </Text>
-              {centreLabel}
+                  style={{ color: fp.controls.core, ...txt, ...glow }}>
+              <Text style={{ color: G(0.7), fontSize: Math.max(6, fs * 0.72), letterSpacing: 1, fontWeight: '400' }}>{legendWord}  </Text>
+              <Text style={{ color: fp.controls.hot ?? fp.controls.core, fontWeight: '700' }}>{current}</Text>
             </Text>
           </View>
         );
@@ -401,13 +411,39 @@ export default function TunerKeys({
             // ★ Up to the label row, not over it: tapping "MUX 12B" to read it must not step the multiplex.
             hitSlop={{ top: L.keyY - (L.labelY + L.labelH), bottom: L.pad, left: dir === 1 ? 4 : L.pad, right: dir === 1 ? L.pad : 4 }}
             accessibilityLabel={
-              type === 'vfo'
+              type === 'vfo' && centreStrip && (dir === 1 ? centreStrip.next : centreStrip.prev) != null
+                ? (dir === 1 ? `Next, ${centreStrip.next}` : `Previous, ${centreStrip.prev}`)
+                : type === 'vfo'
                 ? (dir === 1 ? 'Tune up' : 'Tune down')
                 : (dir === 1 ? 'Zoom in' : 'Zoom out')
             }
             accessibilityHint="Press for one step, hold to sweep">
-            {p => <DomeIcon size={iconSz} k={iconSz / 24} strokes={dir === 1 ? strokes.hi : strokes.lo}
-                            progress={p} legend={legend} />}
+            {p => {
+              /* ★★★ V12 WHERE THIS KEY GOES, ON THE KEY (Stuart, 2026-11-03 — the web's mStepCap: "11B" over ‹, "11D"
+               *  over ›): small and dim over the chevron, so the arrow still reads as an arrow and the current one over
+               *  the pair is plainly the brighter. The chevron gives up the caption's height; the key does not grow. */
+              const cap = centreStrip ? (dir === 1 ? centreStrip.next : centreStrip.prev) : undefined;
+              const icon = (sz: number) => <DomeIcon size={sz} k={sz / 24} strokes={dir === 1 ? strokes.hi : strokes.lo}
+                                                     progress={p} legend={legend} />;
+              if (cap == null) return icon(iconSz);
+              const capFs = Math.max(7, Math.min(s.r(10), capH * 0.26));
+              return (
+                <View pointerEvents="none" style={{ alignItems: 'center', justifyContent: 'center' }}>
+                  {/* ★ The key's own legend type (DomeText: the chassis's legend colour, the silver engraving's shade,
+                      the press flare), dimmed — as the web's .mStepCap is (opacity .62). Unlit: the unlit engraving. */}
+                  <View style={{ opacity: lampOff ? 1 : 0.62, maxWidth: L.keyW - 4 }}>
+                    {lampOff
+                      ? <Text numberOfLines={1} style={{ color: LAMP_OFF_INK, fontFamily: fp.keyLegend.font, fontSize: capFs,
+                                                         lineHeight: capFs + 1, includeFontPadding: false, textAlign: 'center' }}>{cap}</Text>
+                      : <DomeText progress={p} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}
+                                  style={{ fontSize: capFs, lineHeight: capFs + 1, includeFontPadding: false, textAlign: 'center' }}>
+                          {cap}
+                        </DomeText>}
+                  </View>
+                  {icon(Math.max(9, Math.min(iconSz, capH - capFs - 6)))}
+                </View>
+              );
+            }}
           </DomeKey>
         </View>
       ))}

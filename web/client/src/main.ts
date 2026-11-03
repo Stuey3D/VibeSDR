@@ -70,6 +70,7 @@ import { lockedWindow as sharedLockedWindow } from '../../../src/utils/tuneWindo
 import { buildBookmarkHoverIndex, bookmarkAt, newBookmarkHit, type BookmarkHoverIndex } from '../../../src/utils/bookmarkHover';
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
+import { hopStrip, ismHopIndex, ismHopStrip, spotsHopIndex, spotsHopStrip, spotsShortName, type HopStrip } from '../../../src/services/hopKeys';
 import { parseDabScan, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
          type DabScanState } from '../../../src/services/dabBandScan';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
@@ -8630,11 +8631,35 @@ function ismNeighbours(): { prev: IsmBand | null; next: IsmBand | null } {
   if (i < 0) return { prev: null, next: null };
   return { prev: i > 0 ? bands[i - 1] : null, next: i < bands.length - 1 ? bands[i + 1] : null };
 }
+/* ★★★ V12 2026-11-03 — DAB'S STEPPER FOR ISM TOO (src/services/hopKeys.ts; the app's ismStep, the same rule): the band
+ *  over the glyph moves ON THE PRESS and the server is sent the band the user STOPPED on, once, by id ({"band":"868"},
+ *  which the server takes while the mode runs). It sent `step: ±1` per press — a retune each, the label waiting on the
+ *  report. Clamped, as this page's DAB arrows are. A report naming the band we LEFT is held off the label for
+ *  DAB_ASK_HOLD_MS (dabAsk's rule, display only); a refusal snaps back when that runs out. */
+let ismHopIdx = -1;   // the band the arrows show while a burst settles or an ask is unanswered; -1 = the report's
+const ismAsk = new DabAskGuard();
+let ismStepper: { n: number; s: DabBlockStepper } | null = null;
+function ismStepperFor(n: number): DabBlockStepper {
+  if (ismStepper?.n === n) return ismStepper.s;
+  ismStepper?.s.cancel();
+  const s = new DabBlockStepper(n, (i) => {
+    const b = ismCap?.bands[i];
+    if (!b || !ismOn) { ismHopIdx = -1; syncDialTips(); return; }
+    ismAsk.sent(i, ismHopIndex(ismCap, ismReport), Date.now());
+    audio?.holdHealing(6000);
+    spec?.ism(true, { band: b.id });
+  }, (i) => { ismHopIdx = i; syncDialTips(); }, DAB_STEP_SETTLE_MS, undefined, 'clamp');
+  ismStepper = { n, s };
+  return s;
+}
+function ismHopReset() { ismStepper?.s.cancel(); ismAsk.clear(); ismHopIdx = -1; }
+/** The ISM arrows' and current band's labels (syncDialTips). */
+function ismWebStrip(): HopStrip | undefined { return ismHopStrip(ismCap, ismReport, ismHopIdx, 'clamp'); }
 function ismStep(d: number) {
-  const n = ismNeighbours();
-  if ((d < 0 && !n.prev) || (d > 0 && !n.next)) return;   // ★ clamped, as the server is — no dead send
-  audio?.holdHealing(6000);
-  spec?.ism(true, { step: d });
+  const bands = ismCap?.bands ?? [];
+  const cur = ismHopIdx >= 0 ? ismHopIdx : ismHopIndex(ismCap, ismReport);
+  if (cur < 0 || bands.length < 2 || !d) return;
+  ismStepperFor(bands.length).step(cur, d < 0 ? -1 : 1);   // ★ clamped: at an end nothing is shown or sent
 }
 function ismLockControls(on: boolean) {
   const why = 'Held in ISM — the view is the whole band';
@@ -8666,6 +8691,7 @@ function ismUiOff() {
   ismOn = false;
   syncAudioQuiet();
   ismReport = null;
+  ismHopReset();   // ★ V12: a burst still settling goes with the mode — never a band sent after it
   if (spec) spec.ismHeld = false;
   ismBox?.hide();
   ismMapView?.hide();   // ★ the map is ISM's view: leaving ISM closes it
@@ -8783,7 +8809,13 @@ function onIsmReport(r: IsmReport | null) {
   const n = ismNeighbours();
   ismBox?.update(r, { down: !!n.prev, up: !!n.next });
   ismMapRender();
-  if (bandChanged) { syncDialTips(); renderFreq(); }
+  // ★ V12: the band the arrows show lets go to the server's once it names ours, the hold runs out, or a third band shows
+  //   somebody else moved the dial — never mid-burst (see ismStepperFor).
+  let hopLet = false;
+  if (ismHopIdx >= 0 && (ismStepper?.s.pending() ?? -1) < 0 && ismAsk.accept(ismHopIndex(ismCap, r), Date.now())) {
+    ismHopIdx = -1; hopLet = true;
+  }
+  if (bandChanged || hopLet) { syncDialTips(); renderFreq(); }
 }
 /* ★★ V12 THE ISM MAP (Stuart, 2026-10-27: "add a map button to the ISM decoder to switch to a Map view for the nodes etc").
  *  The box's MAP opens the shared map view (tracks.ts TrackView, APRS's) with everything ISM lists that has a position —
@@ -11000,6 +11032,18 @@ function initSearch() {
  *  they DO and by how much, which also answers what the step button is for — the least obvious control on the
  *  card. Touch clients never see a title; this costs them nothing. The glyphs between the arrows stay bare and
  *  dimmed (.mDialGlyph, opacity .6) so they read as labels, not a third button. */
+/** ★★ V12 the current block / band over the radio glyph (index.html #mTuneCur), or nothing outside DAB / ISM / DIGI BAND.
+ *  The glyph span carries the screen reader's line: "Block 11C. Previous 11B, next 11D". */
+function dialCur(s: HopStrip | undefined) {
+  const el = document.getElementById('mTuneCur');
+  const glyph = document.getElementById('mTuneGlyph');
+  if (!el || !glyph) return;
+  el.hidden = !s;
+  el.textContent = s ? s.cur : '';
+  glyph.classList.toggle('cur', !!s);
+  if (s) { glyph.setAttribute('role', 'img'); glyph.setAttribute('aria-label', s.spoken); glyph.title = s.spoken; }
+  else { glyph.removeAttribute('role'); glyph.removeAttribute('aria-label'); glyph.title = 'Tune'; }
+}
 function syncDialTips() {
   const st = formatStep(step);
   const t = (id: string, s: string) => { const e = document.getElementById(id); if (e) e.title = s; };
@@ -11008,6 +11052,14 @@ function syncDialTips() {
    *  size that means nothing there (Stuart, 2026-09-20: "for DAB could we show the block number in its place").
    *  ★ Blank at the ends of Band III: dabTune clamps rather than wrapping, so there is nowhere to go and a name
    *    promising otherwise would be a lie. */
+  /* ★★ V12 (Stuart, 2026-11-03 — he had been stopping one block short): the arrows name where each goes, and the CURRENT
+   *  block / band is bold over the radio glyph between them — the app's design and the web's, ONE rule
+   *  (src/services/hopKeys.ts hopStrip, clamped here as the arrows are). Moves on the press (dabChannel / ismHopIdx /
+   *  the dial), and back when the server's word wins. */
+  dialCur(dabOn ? hopStrip(DAB_BLOCKS.map((b) => b.name), dabChannel, 'MUX', 'Block', undefined, 'clamp')
+    : ismOn ? ismWebStrip()
+    : bandHere() && spotBandCap ? spotsHopStrip(spotBandCap.bands, spec?.frequency ?? 0, -1, 'clamp')
+    : undefined);
   if (dabOn) {
     const prev = dabChannel > 0 ? DAB_BLOCKS[dabChannel - 1] : null;
     const next = dabChannel >= 0 && dabChannel < DAB_BLOCKS.length - 1 ? DAB_BLOCKS[dabChannel + 1] : null;
@@ -11024,13 +11076,29 @@ function syncDialTips() {
    *  their titles say why — written here too, because this runs after every step change. */
   /* ★ IN ISM THE ARROWS STEP BANDS: they name the band each will take you to, blank at the ends (the server clamps). */
   if (ismOn) {
-    const { prev, next } = ismNeighbours();
+    // ★ V12: from the band the arrows are ON (a burst moves it on the press — ismHopIdx), else the report's
+    const bands = ismCap?.bands ?? [];
+    const at = ismHopIdx >= 0 ? ismHopIdx : bands.findIndex((b) => b.id === ismReport?.band);
+    const prev = at > 0 ? bands[at - 1] : null;
+    const next = at >= 0 && at < bands.length - 1 ? bands[at + 1] : null;
     cap('mStepCapD', prev ? prev.id : ''); cap('mStepCapU', next ? next.id : '');
     t('mVfoDown', prev ? `Previous ISM band — ${prev.name}` : 'The lowest ISM band this radio reaches');
     t('mVfoUp',   next ? `Next ISM band — ${next.name}` : 'The highest ISM band this radio reaches');
     t('mStep', 'Tuning step — not used in ISM, where the arrows step the band');
     t('mZoomOut', 'Zoom is held in ISM — the band is the whole view');
     t('mZoomIn',  'Zoom is held in ISM — the band is the whole view');
+    return;
+  }
+  /* ★ V12 IN DIGI BAND THE ARROWS STEP BANDS (bandSpotsStep, clamped): they name the band each goes to, as DAB's and ISM's
+   *  do, blank at the ends. Only while the controls tune the VFO Band runs on (bandHere). */
+  if (bandHere() && spotBandCap) {
+    const bands = spotBandCap.bands;
+    const at = spotsHopIndex(bands, spec?.frequency ?? 0);
+    const prev = at > 0 ? bands[at - 1] : null;
+    const next = at >= 0 && at < bands.length - 1 ? bands[at + 1] : null;
+    cap('mStepCapD', prev ? spotsShortName(prev) : ''); cap('mStepCapU', next ? spotsShortName(next) : '');
+    t('mVfoDown', prev ? `Previous band — ${prev.name}` : 'The lowest band this radio reaches');
+    t('mVfoUp',   next ? `Next band — ${next.name}` : 'The highest band this radio reaches');
     return;
   }
   if (adsbOn) {
@@ -11638,6 +11706,7 @@ function bandSpotsUi(on: boolean) {
   spotsBandRender();
   if ($('decBox').classList.contains('open') && decoders?.spotsEnabled) $('decTitle').textContent = spotsTitle();
   renderFreq();
+  syncDialTips();   // ★ V12: in Band the arrows name the bands and the current one sits over the glyph (and back out)
 }
 /* ★★ V12 BAND GOVERNOR (2026-10-27): WHICH MODES ARE LIVE. In Band the server decodes a mode only while its window has
  *  something in it and the box has the CPU (decoders/digi_governor.h) — so the header says, per mode, what it is doing:
@@ -18501,6 +18570,7 @@ function cardFreqPlain(hz: number): { main: string; fine: string; unit: string }
 
 function renderFreq() {
   if (!spec) return;
+  if (bandSpots) syncDialTips();   // ★ V12: in Band the arrows' band names and the current band follow the dial
   updateVts();
   updateMediaSession();
   const hz = Math.round(spec.frequency);
@@ -20203,6 +20273,7 @@ function abPaint() {
     key.title = `VFO ${spec.abSel} — the controls tune VFO ${spec.abSel}. Press to switch to VFO ${spec.abSel === 'A' ? 'B' : 'A'}.`;
   }
   if (glyph) glyph.hidden = on;
+  syncDialTips();   // ★ V12: Band's band names follow the selected VFO (bandHere)
   const row = document.getElementById('abStereoRow');
   if (row) row.hidden = spec.watchMax < 1;
   const sb = document.getElementById('abStereoBtn');

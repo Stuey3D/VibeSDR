@@ -67,6 +67,9 @@ const STEPS: Step[] = [
           ? 'Use [[−]] and [[+]] to step the Icom\u2019s own scope span, one setting at a time — the waterfall is the '
             + 'radio\u2019s scope, so it cannot zoom finer than the radio shows.'
           : 'Use [[−]] and [[+]] to zoom the spectrum and waterfall.')
+        // ★★ V12 hop keys (2026-11-03): in DAB, ISM and DIGI BAND the arrows step blocks / bands — say what the labels mean.
+        + ' In DAB, ISM and DIGI BAND, [[‹]] and [[›]] step one multiplex or band instead: each names the one it goes to, '
+        + 'and the one you are on is shown above the radio sign between them.'
         // ★★ V12 VFO A/B — WHERE IT IS (AGENTS.md copy rule): switched on in the step button's menu, switched between with
         //    the A/B key that then sits between ‹ and ›, the ears by frequency.
         + (abOffered()

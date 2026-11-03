@@ -768,6 +768,14 @@ html[data-frontdoor] #splashListeners { display: none !important; }
   display: flex; align-items: center; justify-content: center;
   min-width: 2.6em; opacity: 0.6; color: var(--ctl-glyph, var(--btn-text));
 }
+/* ★★ V12 THE CURRENT BLOCK / BAND over the glyph (DAB, ISM, DIGI BAND — main.ts syncDialTips): bold and at full
+   brightness, so it reads as "this is what is tuned" next to the arrows' dim names (.mStepCap, opacity .62). The glyph
+   keeps its own dim; the span is the column, so the bar does not grow (the caption takes the arrows' caption size). */
+.mDialGlyph.cur { flex-direction: column; gap: 0.08em; opacity: 1; }
+.mDialGlyph.cur .mGlyph { opacity: 0.6; height: 0.95em; }
+.mDialCur { font-size: 0.72em; line-height: 1; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap;
+            color: var(--phosphor, var(--btn-text)); }
+.mDialCur[hidden] { display: none; }
 /* ★★ V12 VFO A/B — the A/B KEY in the glyph's place (index: #mAbKey). Lit in the SELECTED VFO's own needle colour
    (--abcol, set by main.ts abPaint) so the key and the bright needle say the same thing; the letter cross-fades with
    the needles (~200 ms). Same width as the glyph it replaces, so the dial does not move when A/B is switched on. */
@@ -4446,7 +4454,9 @@ select.btn { padding: 6px 8px; }
              TUNING menu's toggle — the step menu here); the glyph comes back when it is off. Display font, like the
              other main controls. -->
         <button class="mAbKey" id="mAbKey" hidden title="VFO A/B — which VFO the controls tune. Press to switch." aria-label="Switch VFO">A</button>
-        <span class="mDialGlyph" id="mTuneGlyph" title="Tune"><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
+        <!-- ★★ V12 (2026-11-03): in DAB, ISM and DIGI BAND the CURRENT block / band, bold, above the glyph (main.ts
+             syncDialTips) — the arrows already name where each goes (mStepCap). Stuart had been stopping one short. -->
+        <span class="mDialGlyph" id="mTuneGlyph" title="Tune"><span class="mDialCur" id="mTuneCur" hidden></span><svg class="mGlyph" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1L11.5 4.5"/><rect x="1.5" y="4.5" width="11" height="8" rx="1.2"/><circle cx="4.5" cy="9" r="2"/></svg></span>
         <button class="mBtn mVfoBtn" id="mVfoUp" aria-label="Tune up"><span class="mStepCap" id="mStepCapU" aria-hidden="true"></span>&rsaquo;</button>
       </div>
 

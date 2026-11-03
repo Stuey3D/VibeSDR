@@ -783,6 +783,9 @@ if node --no-warnings scripts/test_dab_share_services.ts; then pass=$((pass+1));
 # ★★ DAB tuning keys: a burst of presses is ONE block change on the server (the one stopped on), and
 #    leaving DAB drops the DAB station from the VTS (Stuart, 2026-10-05 — both).
 if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 hop keys: DAB, ISM and DIGI BAND own the tune keys (the drum swapped, the preference untouched), the current
+#    block / band and its neighbours as labelled, wrap at the ends, one send per burst (Stuart, 2026-11-03).
+if npx tsx scripts/test_hop_keys.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12: the DAB band scan's result list (app + web share src/services/dabBandScan.ts).
 if node --no-warnings scripts/test_dab_band_scan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09): none on the everyday pad, only the dial's band while a

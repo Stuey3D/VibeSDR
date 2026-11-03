@@ -70,7 +70,7 @@ import { navSanitise, navItems, navListRows, navStatus, navRangeOf, navSince, na
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../services/navtexWarn';
 import { NAV_HAZARD_COLOURS } from '../services/navtexIcons';
-import { ismNeighbours, ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
+import { ismMapItems, ismMapRows, ismMapStatus, ISM_MAP_EMPTY, ismGalItems, ismGalRows, ismGalStatus, ismInRange, ismRangeOf,
          ISM_RANGES, ISM_LIVE_RANGES, ISM_RANGE_HINT_LIVE, ISM_RANGE_HINT_GAL, type IsmCap, type IsmReport, type IsmGalNode } from '../services/ism';
 import { NdbTracks, type NdbCap, type NdbFound, type NdbReport, type NdbStats } from '../services/ndb';   // ★ V12 NDB
 import { WholeModeResume, holdLapsed, WHOLE_LABEL, type WholeKind, type ResumeStep } from '../services/wholeModeResume';
@@ -92,8 +92,11 @@ import { dabServiceStereo, type DabState } from '../services/dabTypes';
 import { type DabScanState } from '../services/dabBandScan';
 import { adsbToAircraft, adsbCaptureWarning, adsbGainView, type AdsbCap, type AdsbReport } from '../services/adsbTypes';
 import { DabBlockStepper, DabAskGuard, liveStationAfterDab, dabExitAction } from '../services/dabStepper';
+import { hopKeysMode, hopVfoKeys, HOP_SWEEP_PER_SEC, ismHopIndex, ismHopStrip, spotsHopIndex, spotsHopNext, spotsHopStrip, dabHopStrip } from '../services/hopKeys';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../utils/dabQuality';
 import { DAB_BLOCKS, dabBlockIndex } from '../services/dabBlocks';
+/** The block names the DAB keys show (hopKeys.ts dabHopStrip) — built once. */
+const DAB_BLOCK_NAMES: readonly string[] = DAB_BLOCKS.map((b) => b.name);
 import { resolveVibeAdminAuth, verifyVibePin, resolveRadioAuth, withReadAuth } from '../services/vibeAuth';
 import { buildShareLink } from '../linking/DeepLinkHandler';
 import { createBackend } from '../services/backendFactory';
@@ -156,7 +159,7 @@ import { drmOffered, type DrmState } from '../services/drm';
 import { amSyncOffered, amSyncReadout, AM_SYNC_LABEL, AM_SYNC_NAME, isAmFamily, type AmSyncId, type AmSyncState } from '../services/amSync';   // ★ V12
 import { autoBwOffered, type BwAutoState } from '../services/bwAuto';   // ★★ V12 the AUTO key by the passband sliders
 import { spotsTitleText, spotsBandHint, type SpotsBandCap, type SpotModeState } from '../services/spotsBand';
-import { landingSpotBand, spotBandAt, stepSpotBand, bandPassband } from '../utils/digiModes';
+import { landingSpotBand, bandPassband } from '../utils/digiModes';
 import { type DecoderImageHandle }                     from '../components/DecoderImageCanvas';
 import { registerIqCode } from '../services/iqPairing';
 import AntennaBandNotice from '../components/AntennaBandNotice';
@@ -2699,6 +2702,7 @@ export default function SDRScreen({ route, navigation }: Props) {
   /** ★ Everything ISM leaves behind, in one place — EXIT, the key, a mode pick, the server's ism_off. */
   const ismUiOff = useCallback((keepBox = false) => {
     ismOnRef.current = false;
+    ismHopReset();   // ★ V12 hop keys: a burst still settling, or an unanswered ask, goes with the mode
     setIsmOn(false); setIsmReport(null); setIsmMapOpen(false);   // ★ V12: the map is ISM's view — leaving ISM closes it
     if (!keepBox) { setIsmBoxOpen(false); setIsmError(undefined); }
   }, []);
@@ -3123,20 +3127,52 @@ export default function SDRScreen({ route, navigation }: Props) {
     if (leave) c?.ism?.(false);
     ismUiOff();
   }, [ismUiOff]);   // eslint-disable-line react-hooks/exhaustive-deps
-  /** ★ One band up or down — the box's arrows and every tune gesture while in ISM. Clamped here as the server clamps, so
-   *  a press at an end sends nothing (no dead send). */
+  /** ★ One band up or down — the box's arrows and every tune gesture while in ISM (keys, wheel / trackpad, pad, the
+   *  lock-screen skip).
+   *  ★★★ V12 2026-11-03 — DAB'S STEPPER, EXACTLY (services/hopKeys.ts, Stuart: "modes that switch frequencies like DAB
+   *  blocks do so ISM … need to have the drum replaced with the buttons like we do for DAB"). It sent `step: ±1` per
+   *  press — a whole retune each, the label waiting on the server's report. Now the label (the strip over the keys) moves
+   *  ON THE PRESS and the server is sent the band the user STOPPED on, once, by id (`{"band":"868"}`, which ismControl
+   *  takes while the mode runs) — dabStepper's settle. ★ WRAPS, as DAB does in the app (it was clamped, as the server
+   *  clamps a `step`; a band id needs no clamp). ★ The band the server reports during the ask is held off for
+   *  DAB_ASK_HOLD_MS (DabAskGuard, display only) — a refused band snaps back when that runs out. */
   const ismReportRef = useRef<IsmReport | null>(null);
   ismReportRef.current = ismReport;
   const ismCapRef = useRef<IsmCap | undefined>(undefined);
   ismCapRef.current = ismCap;
+  /** The band the keys show while a burst settles or an ask is unanswered (index into ismCap.bands), else -1. */
+  const [ismHopIdx, setIsmHopIdx] = useState(-1);
+  const ismHopIdxRef = useRef(-1);
+  const ismAskGuard = useRef(new DabAskGuard());
+  const ismStepper = useRef<{ n: number; s: DabBlockStepper } | null>(null);
+  const ismStepperFor = (n: number): DabBlockStepper => {
+    if (ismStepper.current?.n === n) return ismStepper.current.s;
+    ismStepper.current?.s.cancel();
+    const s = new DabBlockStepper(n, (i) => {
+      const c = client.current, b = ismCapRef.current?.bands[i];
+      if (!c?.ism || !b || !ismOnRef.current) { ismHopIdxRef.current = -1; setIsmHopIdx(-1); return; }
+      ismAskGuard.current.sent(i, ismHopIndex(ismCapRef.current, ismReportRef.current), Date.now());
+      c.ism(true, { band: b.id });
+    }, (i) => { ismHopIdxRef.current = i; setIsmHopIdx(i); });
+    ismStepper.current = { n, s };
+    return s;
+  };
+  const ismHopReset = () => {
+    ismStepper.current?.s.cancel(); ismAskGuard.current.clear();
+    ismHopIdxRef.current = -1; setIsmHopIdx(-1);
+  };
   const ismStep = useCallback((d: number) => {
     const c = client.current;
     if (!c?.ism || !ismOnRef.current || !d) return;
-    const n = ismNeighbours(ismCapRef.current, ismReportRef.current);
-    if ((d < 0 && !n.prev) || (d > 0 && !n.next)) return;
+    const bands = ismCapRef.current?.bands ?? [];
+    if (bands.length < 2) return;
+    // ★ From the band a burst is heading for, else the one the report names (a press before the first report: nothing to
+    //   step from, so nothing is sent — the server lands the mode itself).
+    const cur = ismHopIdxRef.current >= 0 ? ismHopIdxRef.current : ismHopIndex(ismCapRef.current, ismReportRef.current);
+    if (cur < 0) return;
     if (askGate()) return;
     markMove();
-    c.ism(true, { step: d > 0 ? 1 : -1 });
+    ismStepperFor(bands.length).step(cur, d > 0 ? 1 : -1);
   }, []);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /** ★★ ENTER OR LEAVE NDB — the key in the demodulator sheet (toggleAdsb's rules): pressed while the mode runs with its
@@ -3346,6 +3382,9 @@ export default function SDRScreen({ route, navigation }: Props) {
   const spotsVfoRef = useRef<VfoId>('A');
   const [decVfo, setDecVfo] = useState<VfoId>('A');
   const [spotsVfo, setSpotsVfo] = useState<VfoId>('A');
+  /** ★★ V12 HOP KEYS (services/hopKeys.ts): the mode whose decoder moves the radio itself and so owns the tune keys —
+   *  DAB, ISM, DIGI BAND (on the VFO it runs on) — or null (the user's own drum / keys). */
+  const hopMode = hopKeysMode({ dab: dabOn, ism: ismOn, spotsBand: spotsBandOn, spotsOnActiveVfo: !abOn || abActive === spotsVfo });
   const earOrder = useRef(new EarOrder());
   const [vfoStereo, setVfoStereoState] = useState(true);
   const vfoStereoRef = useRef(true);
@@ -7026,6 +7065,12 @@ export default function SDRScreen({ route, navigation }: Props) {
         if (!ismOnRef.current) { ismOnRef.current = true; setIsmBoxOpen(true); setIsmError(undefined); }
         setIsmOn(true);
         setIsmReport(r);
+        /* ★ V12 hop keys: the band the keys show lets go to the server's once the server names the band we asked for,
+         *  the hold runs out (a refused band snaps back) or somebody else moves the dial — never mid-burst. */
+        if (ismHopIdxRef.current >= 0 && (ismStepper.current?.s.pending() ?? -1) < 0
+            && ismAskGuard.current.accept(ismHopIndex(ismCapRef.current, r), Date.now())) {
+          ismHopIdxRef.current = -1; setIsmHopIdx(-1);
+        }
       },
       /* ★ V12 NDB: a report (its arrival MEANS NDB is on — the map opens on the transition, as ADS-B's), ndb_off (null), or
        *  a refusal (the map that opened on the press closes; the reason as an alert, after the modal has gone). */
@@ -9594,6 +9639,8 @@ export default function SDRScreen({ route, navigation }: Props) {
     // ★ A held key in DAB walks the LABEL (nothing is sent until release + settle) — slow enough to
     //   read each block name as it passes; at the frequency ceiling 38 blocks went by in a second.
     if (dabOnRef.current) return DAB_SWEEP_BLOCKS_PER_SEC;
+    // ★ V12 ISM and DIGI BAND walk their bands at the same pace (services/hopKeys.ts) — not the frequency ceiling.
+    if (ismOnRef.current || (spotsBandOnRef.current && !(abInfoRef.current?.on && abActiveRef.current !== spotsVfoRef.current))) return HOP_SWEEP_PER_SEC;
     const c = client.current;
     const v = c?.getView();
     const span = (v?.binBandwidth || 0) * (v?.binCount || 0);
@@ -10337,24 +10384,50 @@ export default function SDRScreen({ route, navigation }: Props) {
       bandSpotsGo(b.hz, b.id);
     });
   }, [stopSpots, closeDecoder, startSpotFlush, bandSpotsGo, radioKeySuffix, abStartVfo]);   // eslint-disable-line react-hooks/exhaustive-deps
-  /** One band up or down — clamped at the ends, never wrapped (DAB's and ISM's rule); at an end it says so. */
+  /** One band up or down — every tune gesture while Band runs (keys, wheel / trackpad, pad, the lock-screen skip).
+   *  ★★★ V12 2026-11-03 — DAB'S STEPPER, EXACTLY (services/hopKeys.ts): the band the keys show moves ON THE PRESS and the
+   *  radio is tuned to the band the user STOPPED on, once, after dabStepper's settle — a run of presses had been a tune
+   *  (and a restart of every mode's decoder on the band) per press. ★ WRAPS, as DAB does in the app (it was clamped,
+   *  with "the lowest band" said at an end; the web and the server keep the clamp). */
+  const [spotsHopIdx, setSpotsHopIdx] = useState(-1);
+  const spotsHopIdxRef = useRef(-1);
+  const spotsStepper = useRef<{ n: number; s: DabBlockStepper } | null>(null);
+  const spotsStepperFor = (n: number): DabBlockStepper => {
+    if (spotsStepper.current?.n === n) return spotsStepper.current.s;
+    spotsStepper.current?.s.cancel();
+    const s = new DabBlockStepper(n, (i) => {
+      spotsHopIdxRef.current = -1; setSpotsHopIdx(-1);
+      const b = spotsBandCapRef.current?.bands[i];
+      if (!b || !spotsBandOnRef.current) return;
+      bandSpotsGoRef.current(b.hz, b.id);   // ★ its readout and drawn span follow from the tune, as before
+    }, (i) => { spotsHopIdxRef.current = i; setSpotsHopIdx(i); });
+    spotsStepper.current = { n, s };
+    return s;
+  };
+  const bandSpotsGoRef = useRef(bandSpotsGo);
+  bandSpotsGoRef.current = bandSpotsGo;
+  useEffect(() => () => spotsStepper.current?.s.cancel(), []);
+  // ★ Band stopped (or moved to the other VFO): a burst still settling goes with it — never a tune after the mode has gone.
+  useEffect(() => {
+    if (!spotsBandOn) { spotsStepper.current?.s.cancel(); spotsHopIdxRef.current = -1; setSpotsHopIdx(-1); }
+  }, [spotsBandOn]);
   bandSpotsStepRef.current = (dir: number) => {
     const cap = spotsBandCapRef.current;
     if (!cap || !spotsBandOnRef.current) return false;
     // ★★ VFO A/B: only while the controls tune the VFO Band runs on — the other VFO's arrows tune it, as ever
     if (abInfoRef.current?.on && abActiveRef.current !== spotsVfoRef.current) return false;
+    if (!dir || !cap.bands.length) return true;
     const dial = client.current?.getStatus().frequency ?? 0;
-    const i = stepSpotBand(cap.bands, dial, dir);
-    if (i < 0) return true;
-    const b = cap.bands[i];
-    const cur = spotBandAt(cap.bands, dial);
-    if (cur && cur.id === b.id) {
-      setDecoderStatus(dir < 0 ? `${b.name} is the lowest band this radio reaches` : `${b.name} is the highest band this radio reaches`);
-      return true;
-    }
+    const st = spotsStepperFor(cap.bands.length);
+    const from = st.pending() >= 0 ? st.pending() : spotsHopIndex(cap.bands, dial);
+    const to = spotsHopNext(cap.bands, dial, dir, from);
+    if (to < 0) return true;
     if (askGate()) return true;
     markMove();
-    bandSpotsGo(b.hz, b.id);
+    // ★ Between bands (an exact frequency typed off them) the press goes straight to the nearest band that way — there is
+    //   no band to count steps from; every press after that is on a band and goes through the stepper.
+    if (from < 0) { const b = cap.bands[to]; bandSpotsGo(b.hz, b.id); return true; }
+    st.step(from, dir < 0 ? -1 : 1);
     return true;
   };
   /** ★ V12 DSC MAP — the positions on this server's map (the track layer), found on the call pressed. Not on Apple TV (no
@@ -13168,8 +13241,8 @@ export default function SDRScreen({ route, navigation }: Props) {
       body: 'Tap the frequency readout to type one in directly (Hz, kHz or MHz). The same card holds your bookmarks — switch with the TUNE | BOOKMARKS header. Save where you are, search your bookmarks and the band plan together, and keep them for this server or all of them. On a VibeServer the TUNE side also has VFO A/B: a second frequency on the same radio, heard at the same time — the lower one in your left ear, the higher in your right. While it is on, the A/B key — between the tune keys, or in the tune drum\'s window — chooses which one the controls tune. Under the speaker button each VFO then has its own squelch row, with its own AUTO SQUELCH and a MUTE (the other VFO moves to both ears), and under them a BALANCE between A and B to turn the louder one down; VFO STEREO there puts both in both ears instead. A decoder or spots run on the VFO selected when you start them — decode on one, listen on the other; the decoding VFO says DEC. Not on FM broadcast, and not while two servers are playing — two channels at a time, never three.',
       target: tourRef('freqBox') },
     { id: 'mode', title: 'Demodulator & bandwidth',
-      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers them, synchronous AM sits beside AM — SAM (locked to the carrier, so selective fading does not distort), SAM-U and SAM-L (one sideband, away from a neighbour), ECSS-U and ECSS-L (the same lock with an SSB-style filter) and AM-ST (AM Stereo, C-QUAM compatible: the stereo rings light while its pilot is received). Where the server offers it for the mode you are in, AUTO sits above SYNC between the bandwidth sliders: the receiver sets the width itself (SSB to the voice being sent, CW round the keyed tone, AM away from a neighbour, FM narrower for a weak station) and the sliders show what it chose. In AM, SSB and CW it starts off — tap AUTO to try it. Move a slider and AUTO switches off. DRM sits beside AM too: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on 433 or 868 MHz in a box over the waterfall, with EXIT ISM in it — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map (tap a node\u2019s position in the list to open the map on it; a companion node is a person, so it is placed only to within about 1 km); NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens the SHIPPING MAP with the ships heard on 162 MHz \u2014 and, where this server has them, the NAVTEX stations, warnings and weather, the sea areas and the DSC positions beside them \u2014 with its RECEIVED list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX \u2014 with MAP, the SHIPPING MAP: the stations this server has received, the warnings, the weather as wind arrows, the SEA AREAS (Dogger, Wight, Plymouth and the rest, Norway’s sea areas, Ireland’s and Spain’s coastal areas, Japan’s marine forecast areas, the US, Canadian and German marine zones, and high-seas areas in the southern oceans) outlined and named \u2014 red under a gale, amber at force 7 \u2014 and the ships and DSC positions it holds \u2014, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK \u2014 one key for MFSK16/32, OLIVIA, CONTESTIA and THOR: AUTO names the one it finds, and FAMILY and MODE under the key pick one by hand when AUTO cannot lock \u2014, HELL \u2014 Feld Hell (Hellschreiber), drawn as it is heard: the strips build up in the picture box a page at a time and you read them, with PREV for the page before \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG and FLEX, the protocol and rate found by AUTO and named in the box, with PROTOCOL (and RATE for POCSAG) under the key for when AUTO cannot lock; the speaker is muted while it runs, and pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). A decoder key this receiver cannot use \u2014 its frequencies are outside what the radio can tune, a locked range say \u2014 stays greyed: tap it to read why. Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB; a call that sent a position has MAP, on the SHIPPING MAP), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard \u2014 a day\u2019s LoRa nodes card has its own MAP; the SHIPPING MAP row at the top, and MAP on a DSC call with a position or an AIS day, open the SHIPPING MAP) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
-      body: 'Spin the drum to move up and down the band. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
+      body: 'Tap here to pick how the signal is decoded — AM, SSB (USB/LSB), CW, NFM/WFM and more — and to set the filter bandwidth. Where a VibeServer offers them, synchronous AM sits beside AM — SAM (locked to the carrier, so selective fading does not distort), SAM-U and SAM-L (one sideband, away from a neighbour), ECSS-U and ECSS-L (the same lock with an SSB-style filter) and AM-ST (AM Stereo, C-QUAM compatible: the stereo rings light while its pilot is received). Where the server offers it for the mode you are in, AUTO sits above SYNC between the bandwidth sliders: the receiver sets the width itself (SSB to the voice being sent, CW round the keyed tone, AM away from a neighbour, FM narrower for a weak station) and the sliders show what it chose. In AM, SSB and CW it starts off — tap AUTO to try it. Move a slider and AUTO switches off. DRM sits beside AM too: digital shortwave, with a box over the waterfall naming the station — SIGNAL in its header shows the reception in detail. On a VibeServer the same sheet has DAB, ADS-B, ISM, NDB and AIS wherever that receiver can run them, and they take the whole receiver: ADS-B opens a full-screen map of the aircraft heard on 1090 MHz, with a live list in the corner, and EXIT ADS-B at the top gives the receiver back; ISM lists the weather stations, tyre sensors, doorbells and key fobs heard on the ISM bands this receiver reaches (433 and 868 MHz, or 315 and 915 MHz in the Americas) in a box over the waterfall, with EXIT ISM in it, and the tune keys step from band to band — and on 868 MHz the Meshtastic and MeshCore mesh nodes, their public messages and LoRaWAN devices, with MAP in the box\u2019s header to see the nodes on a map (tap a node\u2019s position in the list to open the map on it; a companion node is a person, so it is placed only to within about 1 km); NDB (on a radio that reaches the LF beacon band) opens a map of every aircraft beacon heard, each with a signal meter, with the list of beacons and their Morse idents in the corner and EXIT NDB at the top; AIS opens the SHIPPING MAP with the ships heard on 162 MHz \u2014 and, where this server has them, the NAVTEX stations, warnings and weather, the sea areas and the DSC positions beside them \u2014 with its RECEIVED list in the corner and EXIT AIS at the top. In DECODERS below, those whole-radio keys — and DIGI BAND — sit first, under TUNES THE RADIO ITSELF: each moves the radio to its own frequencies and opens its own view. The rest are sorted by band — HF and VHF tabs (and UHF when a decoder there is offered), opening on the band you are tuned to — and within a band by use, each with its icon: Aviation (the HFDL map, and SELCAL \u2014 the two-tone calls to aircraft, shown as their code, on HF and VHF), Maritime (NAVTEX \u2014 with MAP, the SHIPPING MAP: the stations this server has received, the warnings, the weather as wind arrows, the SEA AREAS (Dogger, Wight, Plymouth and the rest, Norway’s sea areas, Ireland’s and Spain’s coastal areas, Japan’s marine forecast areas, the US, Canadian and German marine zones, and high-seas areas in the southern oceans) outlined and named \u2014 red under a gale, amber at force 7 \u2014 and the ships and DSC positions it holds \u2014, DSC, SITOR-A, WEFAX), Amateur (DIGI SPOTS, CW, PSK, RTTY, JTTY, MFSK \u2014 one key for MFSK16/32, OLIVIA, CONTESTIA and THOR: AUTO names the one it finds, and FAMILY and MODE under the key pick one by hand when AUTO cannot lock \u2014, HELL \u2014 Feld Hell (Hellschreiber), drawn as it is heard: the strips build up in the picture box a page at a time and you read them, with PREV for the page before \u2014, SSTV, APRS)' + (Platform.OS === 'android' ? ', Paging (PAGE, on VHF and UHF — on Android with a radio plugged into the phone only: pagers on POCSAG and FLEX, the protocol and rate found by AUTO and named in the box, with PROTOCOL (and RATE for POCSAG) under the key for when AUTO cannot lock; the speaker is muted while it runs, and pages are shown in the box and never saved)' : '') + ' and Utility or Broadcast (TIME, ADV RDS, SAME \u2014 the US emergency alert headers heard on NOAA Weather Radio, each alert shown once with its event, areas and times). A decoder key this receiver cannot use \u2014 its frequencies are outside what the radio can tune, a locked range say \u2014 stays greyed: tap it to read why. Every key is one size, left-justified under its heading, and a decoder\u2019s options open on the row just under its own key, on a shaded tab joined to it. Where the server has them that includes CW (one signal, or a skimmer across 24–96 kHz), PSK (the same, across 6–24 kHz), JTTY, DSC (maritime calls: its options and its box hold the channels to tune \u2014 the distress ones and the routine ones of the band you are on, each tuned 1.7 kHz below in USB; a call that sent a position has MAP, on the SHIPPING MAP), SITOR-A (the maritime ARQ teleprinter: both stations of a link, each under its own label) and APRS (packet stations, with MAP in its box). Under every tab sits the SCANNER — search a range, scan your bookmarks, or tag conversations to hop between — which opens in the decoder box. Below DECODERS, VIEWS holds MAP, GALLERY (what the server\u2019s decoders heard \u2014 a day\u2019s LoRa nodes card has its own MAP; the SHIPPING MAP row at the top, and MAP on a DSC call with a position or an AIS day, open the SHIPPING MAP) and TRANSCRIBE (speech to text on this device; callsigns heard \u2014 spelled phonetically or plainly \u2014 become links to their QRZ.com page) — and an OpenWebRX\u2019s MAP and FILES, or an UberSDR\u2019s HFDL, DIGI and CW maps. Where the server offers it, DIGI BAND reads a whole band\u2019s digital frequencies at once, and the tune keys then step from band to band. In DAB, on a radio set up for one listener, SCAN ALL DAB BLOCKS at the foot of the station list finds every multiplex the aerial hears and bookmarks its stations. With the VFO FREE on a VibeServer, a small red DC Spike label marks the radio\u2019s DC spike, and WHAT IS THE DC SPIKE? under the SIGNAL ID WIKI key in this sheet explains it. Under the wiki key, QRZ.COM opens the callsign lookup site and CW TERMS GUIDE explains the codes heard in Morse (QTH, 73, RST and the rest); in the CW, PSK, JTTY and digital spots lists and the TRANSCRIBE captions, tap a callsign to open its QRZ.com page, and in the CW box EXPLAIN shows the Morse in plain English (RAW goes back).',      target: tourRef('modeBtn') },    { id: 'drum', title: 'Fine-tune with the VFO drum',
+      body: 'Spin the drum to move up and down the band. In DAB, ISM and DIGI BAND, where the receiver moves itself between blocks or bands, the drum gives way to two tune keys: each press steps one, the one you are on is lit above them, and each key names the one it goes to. Your own drum comes back when you leave. The right-hand wheel zooms the waterfall — on an Icom transceiver it steps through the radio\u2019s own scope spans instead.',
       target: tourRef('vfoDrum') },
     // ★ VFO A/B is NOT in this sheet any more — it moved to the frequency card (the 'freq' card above says so).
     { id: 'step', title: 'Step rate',
@@ -14269,8 +14342,15 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  block lit ABOVE the keys so the swap reads as intended. Only the TUNING control: zoom
            *  keeps the user's own drum/keys (and stays locked in DAB as before). Leaving DAB hands back
            *  `vfoKeys` untouched — the preference is never written. */
-          vfoKeys={vfoKeys || dabOn}
-          vfoMuxLabel={dabOn ? (dabBlock >= 0 ? DAB_BLOCKS[dabBlock].name : '—') : undefined}
+          /* ★★★ V12 (2026-11-03) AND THE SAME IN ISM AND DIGI BAND (Stuart: "any modes that switch frequencies like DAB
+           *  blocks do so ISM and All band digi spots need to have the drum replaced with the buttons like we do for DAB").
+           *  services/hopKeys.ts: hopVfoKeys only READS the preference. The current block / band is bold over the keys and
+           *  where each key goes is on the key ("MUX 11C", 11B ‹ › 11D — Stuart's design, the web's too). */
+          vfoKeys={hopVfoKeys(vfoKeys, hopMode)}
+          vfoHopStrip={hopMode === 'dab' ? dabHopStrip(DAB_BLOCK_NAMES, dabBlock)
+            : hopMode === 'ism' ? ismHopStrip(ismCap, ismReport, ismHopIdx)
+            : hopMode === 'spots' && spotsBandCap ? spotsHopStrip(spotsBandCap.bands, status.frequency, spotsHopIdx)
+            : undefined}
           /* ★★ V12 VFO A/B: the A/B key between the tune keys / the A/B key in the drum's window (tap; a hold elsewhere in it too). */
           vfoAB={abOn ? abActive : null}
           onVfoSwap={onVfoSwap}
@@ -14652,8 +14732,10 @@ export default function SDRScreen({ route, navigation }: Props) {
           on={ismOn}
           onExit={exitIsm}
           onStep={ismStep}
-          canDown={!!ismNeighbours(ismCap, ismReport).prev}
-          canUp={!!ismNeighbours(ismCap, ismReport).next}
+          /* ★ V12 hop keys: the box's arrows are ismStep too, which now WRAPS (the app's DAB rule) — live wherever there is
+           *  another band to go to, and only once the report has said where the radio is. */
+          canDown={(ismCap?.bands.length ?? 0) > 1 && ismHopIndex(ismCap, ismReport) >= 0}
+          canUp={(ismCap?.bands.length ?? 0) > 1 && ismHopIndex(ismCap, ismReport) >= 0}
           tall={ismTall} onTall={onIsmTall}
           topLimit={boxTopLimit} topSafe={boxTopSafe}
           onMap={IS_APPLE_TV ? null : (key?: string) => { markInteract(); setIsmFocus(key ?? ''); setIsmMapOpen(true); }}

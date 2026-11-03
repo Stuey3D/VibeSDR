@@ -276,6 +276,17 @@ try {
   await trustedClick('#mVfoDown');
   ok(await until(`/20 m BAND/.test((document.getElementById('mChan')||{}).textContent||'')`, 5000), `▼: back to 20 m ("${await chan()}")`);
   ok(Math.abs((await freqHz()) - CENTRE) <= 20, `the dial is 20 m's centre again (${await freqHz()})`);
+  {   // ★★ V12 hop keys (2026-11-03): the current band bold over the glyph, the band either side on its arrow — names only
+    const ids = st.spotBands.map((b) => b.id), i20 = ids.indexOf('20m');
+    const nm = (b) => b ? b.name.replace(/\s+/g, '') : '';
+    const want = { cur: '20m', d: nm(st.spotBands[i20 - 1]), u: nm(st.spotBands[i20 + 1]) };
+    const lab = JSON.parse(await ev(`JSON.stringify({ cur: document.getElementById('mTuneCur')?.textContent, hid: document.getElementById('mTuneCur')?.hidden,
+      d: document.getElementById('mStepCapD')?.textContent, u: document.getElementById('mStepCapU')?.textContent,
+      say: document.getElementById('mTuneGlyph')?.getAttribute('aria-label') })`));
+    ok(lab.cur === want.cur && lab.hid === false, `the current band over the glyph: ${lab.cur}`);
+    ok(lab.d === want.d && lab.u === want.u, `the arrows name the bands either side: ${lab.d} ‹ › ${lab.u} (want ${want.d} ‹ › ${want.u})`);
+    ok(lab.say === `Band 20m. Previous ${want.d || 'none'}, next ${want.u || 'none'}`, `spoken: ${lab.say}`);
+  }
 
   console.log('── the map, coloured by mode — opened, closed and opened AGAIN ──');
   // ★★ 2026-10-27 (Stuart, the app's DIGITAL SPOTS MAP: "dots are missing their numbers, i saw them once but then never
