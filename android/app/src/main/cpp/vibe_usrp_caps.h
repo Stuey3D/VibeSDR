@@ -45,11 +45,11 @@ inline const char* nameForUsbId(uint16_t vid, uint16_t pid) {
     return nullptr;
 }
 /** "Ettus USRP B210 (30AD2C1)" — model from the PID (or the opened radio), serial in brackets when there is one. */
-/* ★★ A SERIAL WE CAN USE (2026-11-02, the first real B210, a tester's clone: "Ettus USRP B200/B210 (30AA038 ?), serial
- *  30AA038 ?" and ADD AS A NEW RADIO refused "that is not a usable serial"). libusb's ASCII descriptor read turns any byte
- *  it cannot show into '?', and this board's descriptor carries "30AA038", a space and such a byte. The serial is its
+/* ★★ A SERIAL WE CAN USE (2026-11-02, the first real B210, a tester's clone: "Ettus USRP B200/B210 (31A0B7C ?), serial
+ *  31A0B7C ?" and ADD AS A NEW RADIO refused "that is not a usable serial"). libusb's ASCII descriptor read turns any byte
+ *  it cannot show into '?', and this board's descriptor carries "31A0B7C", a space and such a byte. The serial is its
  *  leading run of the characters a config serial may hold ([A-Za-z0-9._:-], vsconfig::validSerial) — cut at the first
- *  other one, so "30AA038 ?" is "30AA038" everywhere (the Setup page, the config, matching the radio when it opens). */
+ *  other one, so "31A0B7C ?" is "31A0B7C" everywhere (the Setup page, the config, matching the radio when it opens). */
 inline std::string cleanSerial(const std::string& raw) {
     std::string out;
     size_t i = 0;

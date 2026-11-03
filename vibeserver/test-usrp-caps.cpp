@@ -46,8 +46,8 @@ int main() {
     ok(!nameForUsbId(0x04b4, 0x00f3), "a bare Cypress FX3 bootloader is not claimed as a USRP");
     ok(displayName("B210", "30AD2C1") == "Ettus USRP B210 (30AD2C1)", "display name carries the serial");
     ok(displayName("", "") == "Ettus USRP B2xx", "no model, no serial — still a name, never empty");
-    // ★★ 2026-11-02, a tester's B210 clone: the descriptor read "30AA038 ?" and the Setup page refused it.
-    ok(cleanSerial("30AA038 ?") == "30AA038", "a clone's serial with a space and a '?' after it is its leading part");
+    // ★★ 2026-11-02, a tester's B210 clone: the descriptor read "31A0B7C ?" and the Setup page refused it.
+    ok(cleanSerial("31A0B7C ?") == "31A0B7C", "a clone's serial with a space and a '?' after it is its leading part");
     ok(cleanSerial("30AD2C1") == "30AD2C1", "a clean serial is unchanged");
     ok(cleanSerial("  F5A3B2\x01junk") == "F5A3B2", "leading blanks dropped, cut at the first byte a serial cannot hold");
     ok(cleanSerial("???") == "", "all junk: no serial (found by type alone)");
@@ -235,7 +235,7 @@ int main() {
     {
         vsconfig::RadioConfig r;
         ok(r.usrpClock.empty() && r.usrpDcOffset && r.usrpIqBalance && r.usrpRxBw == 0, "a new radio: internal, both corrections on, AUTO");
-        r.serial = "30AA038"; r.driver = "usrp";
+        r.serial = "31A0B7C"; r.driver = "usrp";
         r.usrpClock = "external"; r.usrpTime = "gpsdo"; r.usrpDcOffset = false; r.usrpIqBalance = true; r.usrpRxBw = 5000000;
         vsconfig::ServerConfig s; s.radios.push_back(r);
         const std::string js = vsconfig::toJson(s);

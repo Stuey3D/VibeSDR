@@ -13,7 +13,7 @@ let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('   ok   ' + m); } else { fail++; console.log('   FAIL ' + m); } };
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-usrpfd-'));
 for (const d of ['data', 'run', 'imgs']) fs.mkdirSync(path.join(dir, d));
-const P = await freePort(), ADMIN = 'fd-admin-pass', SER = '30AA038';
+const P = await freePort(), ADMIN = 'fd-admin-pass', SER = '31A0B7C';
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'USRP door test', adminPass: ADMIN, port: P,
   radios: [{ serial: SER, driver: 'usrp', label: 'USRP', enabled: true, configured: true, users: 4, rate: 4000000 }] }));
 const env = { ...process.env, VIBESERVER_NO_RADIO_SPAWN: '1', VIBE_UHD_OVERRIDE_DIR: path.join(dir, 'imgs'),

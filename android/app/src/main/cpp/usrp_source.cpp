@@ -70,7 +70,7 @@ std::vector<Found> walk(bool readSerials) {
             if (libusb_open(list[i], &h) == 0 && h) {
                 unsigned char buf[128] = {0};
                 const int k = libusb_get_string_descriptor_ascii(h, d.iSerialNumber, buf, sizeof buf - 1);
-                if (k > 0) f.serial = usrpcaps::cleanSerial(std::string((const char*)buf, (size_t)k));   // ★ "30AA038 ?" → "30AA038"
+                if (k > 0) f.serial = usrpcaps::cleanSerial(std::string((const char*)buf, (size_t)k));   // ★ "31A0B7C ?" → "31A0B7C"
                 libusb_close(h);
             }
         }
@@ -193,7 +193,7 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
         hint["type"] = "b200";
         hint["fw"] = fw;
         /* ★★ Matched by the CLEANED serial, never by handing UHD ours: UHD reads the descriptor itself and a clone's may
-         *    carry junk after the serial ("30AA038 ?"), which an exact hint would never match. Every B2xx is found, then
+         *    carry junk after the serial ("31A0B7C ?"), which an exact hint would never match. Every B2xx is found, then
          *    the one whose cleaned serial is ours is taken; with no serial (or a single radio) the first. */
         const uhd::device_addrs_t found = uhd::device::find(hint, uhd::device::USRP);
         if (found.empty()) { err = usrpcaps::busyAdvice("", /*foundNone=*/true); return false; }

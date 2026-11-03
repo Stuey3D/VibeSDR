@@ -51,7 +51,7 @@ for (const k of ['usrpClock', 'usrpTime', 'usrpDcOffset', 'usrpIqBalance', 'usrp
 
 // ── the image section ──
 ok(f.usrpImgGuess('USRP B200mini') === 'usrp_b200mini_fpga.bin' && f.usrpImgGuess('USRP B210') === 'usrp_b210_fpga.bin'
-   && f.usrpImgGuess('Ettus USRP B200/B210 (30AA038)') === 'usrp_b210_fpga.bin', 'the file name a radio needs, from what it calls itself');
+   && f.usrpImgGuess('Ettus USRP B200/B210 (31A0B7C)') === 'usrp_b210_fpga.bin', 'the file name a radio needs, from what it calls itself');
 const img = f.usrpImgHtml({ dir: '/etc/vibeserver/uhd-images', files: [{ name: 'usrp_b210_fpga.bin', bytes: 5207532, mtime: 1, kind: '7-series (Kintex/Artix) image — for clone boards' }] },
                           'This board needs its maker\'s FPGA image — upload usrp_b210_fpga.bin', 'USRP B210', null);
 ok(/usrp_b210_fpga\.bin/.test(img) && /7-series/.test(img) && /Remove/.test(img), 'the owner\'s file is listed with its kind and a Remove button');
