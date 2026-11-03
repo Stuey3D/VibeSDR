@@ -35683,7 +35683,10 @@ static std::string vsDecoderCapJson(const char* id, const vibereach::Reach& reac
  *  control that cannot work on this radio is not drawn). */
 static std::vector<vibe::digi::Span> vsSpotSpans() {
     if (g_icomOn.load()) return {};
-    const vibebands::Ranges t = vsTunableRanges();
+    /* ★★ V12 (2026-11-03) A LOCKED RANGE IS ITS WINDOW here too (vsDecoderReach): vsTunableRanges falls back to the whole
+     *  coverage when the owner pinned the centre but not the rate, so a radio locked to FM still listed every HF band. */
+    const vibereach::Reach rr = vsDecoderReach();
+    const vibebands::Ranges t = rr.locked ? rr.ranges : vsTunableRanges();
     return vibe::digi::reachableSpans(vibe::digi::modes(), [&](double lo, double hi) {
         for (const auto& x : t) if (double(x.lo) <= lo && double(x.hi) >= hi) return true;
         return false;

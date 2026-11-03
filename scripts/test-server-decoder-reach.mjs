@@ -150,6 +150,7 @@ const rd = (st, id) => (st && Array.isArray(st.regionDefaults) ? st.regionDefaul
     ok(st && st.sameWhy === 'Outside this radio\'s locked range (90.8–93.2 MHz) — SAME is at 162.400–162.550 MHz', 'SAME\'s reason, word for word');
     ok(st && Array.isArray(st.modes) && FIXED.every((id) => !st.modes.includes(id)), `none of them in the offer (${JSON.stringify(st && st.modes)})`);
     ok(st && st.modes.includes('rtty') && st.modes.includes('wfm'), 'RTTY and WFM still offered (not fixed-frequency)');
+    ok(st && st.spotsBand === undefined && st.spotBands === undefined, `no Band spots: no amateur band inside the window (${JSON.stringify(st && st.spotsBand)})`);
     // ★ an attach is refused with the same words
     const dx = ws(S.port, '/ws/dxcluster?user_session_id=reach01');
     await until(() => dx.open, 3000);

@@ -33,7 +33,9 @@ const RATE = 960000;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-webalerts-'));
 for (const d of ['data', 'run']) fs.mkdirSync(path.join(dir, d));
 fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ configured: true, name: 'Alerts web test', locator: 'IO92nh', adminPass: 'walr-admin',
-  radios: [{ serial: 'walr', label: 'Test radio', enabled: true, configured: true }] }));
+  // ★ V12 (2026-11-03) a UK locator puts SAME OFF BY DEFAULT (vibe_decoder_reach.h region defaults) — "+same" is the
+  //   owner switching it on, which is what this test needs
+  radios: [{ serial: 'walr', label: 'Test radio', enabled: true, configured: true, blockedModes: '+same' }] }));
 const rtlPort = await freePort(), port = await freePort(), cdp = await freePort();
 const rtl = spawn(process.execPath, [path.join(root, 'vibeserver/fake-rtl-tcp.mjs'), '--port', String(rtlPort), '--rate', String(RATE),
                                      '--hf', CLIP, '--hf-centre', '8894500'], { stdio: 'ignore' });
