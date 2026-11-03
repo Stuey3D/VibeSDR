@@ -57,6 +57,12 @@ eq('wrap, no list', hopWrap(3, 0), -1);
 eq('strip: one band, no neighbours', hopStrip(['433'], 0, 'ISM', 'Band'), { legend: 'ISM', cur: '433', spoken: 'Band 433' });
 eq('strip: off the list', hopStrip(['a', 'b'], -1, 'BAND', 'Band', '7.300'), { legend: 'BAND', cur: '7.300', spoken: 'Band 7.300' });
 eq('strip: empty list', hopStrip([], 0, 'MUX', 'Block'), undefined);
+// ★ The web's arrows clamp: the key at an end names nothing (its syncDialTips rule) and is read as "none".
+eq('clamp: bottom', hopStrip(['a', 'b', 'c'], 0, 'BAND', 'Band', undefined, 'clamp'),
+   { legend: 'BAND', cur: 'a', next: 'b', spoken: 'Band a. Previous none, next b' });
+eq('clamp: top', hopStrip(['a', 'b', 'c'], 2, 'BAND', 'Band', undefined, 'clamp'),
+   { legend: 'BAND', prev: 'b', cur: 'c', spoken: 'Band c. Previous b, next none' });
+eq('clamp: middle as wrap', hopStrip(['a', 'b', 'c'], 1, 'BAND', 'Band', undefined, 'clamp')?.spoken, 'Band b. Previous a, next c');
 
 // ── DAB: Stuart's own example, and the ends of Band III wrap (the app's DAB rule) ──────────────────────────────────────
 {

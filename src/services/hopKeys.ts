@@ -26,7 +26,10 @@
  *
  * Pure, so scripts/test_hop_keys.ts drives it.
  */
-import type { IsmBand, IsmCap, IsmReport } from './ism';
+/** Only what the keys read — the app's (services/ism.ts) and the web's ISM types both fit. */
+type IsmBand = { id: string };
+type IsmCap = { bands: readonly IsmBand[] };
+type IsmReport = { band?: string; custom?: number; centre: number };
 import type { SpotBand } from '../utils/digiModes';
 
 /** Which hopping mode owns the tune keys now, or null (the user's own drum / keys). DAB first: it is entered and left
@@ -55,8 +58,11 @@ export function hopWrap(i: number, n: number): number {
 /** What the keys show: the current one (lit over the pair, after its `legend`), where each key goes (`prev` on ‹, `next`
  *  on ›; absent with fewer than two to step between), and the screen reader's line: "Block 11C. Previous 11B, next 11D". */
 export interface HopStrip { legend: string; prev?: string; cur: string; next?: string; spoken: string }
+/** `edges` 'clamp' is the WEB's rule (its arrows stop at the ends): the key at an end names nothing, and is read as
+ *  "Previous: none". The app wraps. */
+export type Edges = 'wrap' | 'clamp';
 export function hopStrip(names: readonly string[], i: number, legend: string, what: 'Block' | 'Band',
-                         curText?: string): HopStrip | undefined {
+                         curText?: string, edges: Edges = 'wrap'): HopStrip | undefined {
   const n = names.length;
   if (!n) return undefined;
   if (i < 0 || i >= n) {
@@ -66,15 +72,17 @@ export function hopStrip(names: readonly string[], i: number, legend: string, wh
   }
   const cur = curText ?? names[i];
   if (n < 2) return { legend, cur, spoken: `${what} ${cur}` };
-  const prev = names[hopWrap(i - 1, n)], next = names[hopWrap(i + 1, n)];
-  return { legend, prev, cur, next, spoken: `${what} ${cur}. Previous ${prev}, next ${next}` };
+  const wrap = edges === 'wrap';
+  const prev = wrap || i > 0 ? names[hopWrap(i - 1, n)] : undefined;
+  const next = wrap || i < n - 1 ? names[hopWrap(i + 1, n)] : undefined;
+  return { legend, prev, cur, next, spoken: `${what} ${cur}. Previous ${prev ?? 'none'}, next ${next ?? 'none'}` };
 }
 
 /* ── DAB ─────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 /** DAB over Band III's blocks (DAB_BLOCKS names, "5A" … "13F"); `block` = the block the keys are on (dabBlock — the
  *  stepper moves it on the press). Not known yet: "—", no neighbours. */
-export function dabHopStrip(names: readonly string[], block: number): HopStrip | undefined {
-  return hopStrip(names, block, 'MUX', 'Block');
+export function dabHopStrip(names: readonly string[], block: number, edges: Edges = 'wrap'): HopStrip | undefined {
+  return hopStrip(names, block, 'MUX', 'Block', undefined, edges);
 }
 
 /* ── ISM ─────────────────────────────────────────────────────────────────────────────────────────────────────────── */
@@ -87,12 +95,13 @@ export function ismHopIndex(cap: IsmCap | undefined | null, r: IsmReport | null)
 }
 /** ISM. `pending` = the band a burst of presses (or an ask the server has not answered) is on, else -1. An exact
  *  frequency put on the capture (`custom`) is shown as itself ("433.420"), with the band it sits in's neighbours. */
-export function ismHopStrip(cap: IsmCap | undefined | null, r: IsmReport | null, pending: number): HopStrip | undefined {
+export function ismHopStrip(cap: IsmCap | undefined | null, r: IsmReport | null, pending: number,
+                            edges: Edges = 'wrap'): HopStrip | undefined {
   if (!cap || !cap.bands.length) return undefined;
   const names = cap.bands.map(ismShortName);
-  if (pending >= 0 && pending < names.length) return hopStrip(names, pending, 'ISM', 'Band');
+  if (pending >= 0 && pending < names.length) return hopStrip(names, pending, 'ISM', 'Band', undefined, edges);
   if (!r) return { legend: 'ISM', cur: '—', spoken: 'Band not known yet' };
-  return hopStrip(names, ismHopIndex(cap, r), 'ISM', 'Band', r.custom ? (r.centre / 1e6).toFixed(3) : undefined);
+  return hopStrip(names, ismHopIndex(cap, r), 'ISM', 'Band', r.custom ? (r.centre / 1e6).toFixed(3) : undefined, edges);
 }
 
 /* ── DIGI BAND ───────────────────────────────────────────────────────────────────────────────────────────────────── */
@@ -115,9 +124,10 @@ export function spotsHopNext(bands: readonly SpotBand[], dialHz: number, dir: nu
   return n - 1;
 }
 /** DIGI BAND, from the burst's band if one is in flight, else the dial's. Between bands: the dial in MHz. */
-export function spotsHopStrip(bands: readonly SpotBand[], dialHz: number, pending: number): HopStrip | undefined {
+export function spotsHopStrip(bands: readonly SpotBand[], dialHz: number, pending: number,
+                              edges: Edges = 'wrap'): HopStrip | undefined {
   if (!bands.length) return undefined;
   const names = bands.map(spotsShortName);
   const i = pending >= 0 && pending < bands.length ? pending : spotsHopIndex(bands, dialHz);
-  return hopStrip(names, i, 'BAND', 'Band', i < 0 && dialHz > 0 ? (dialHz / 1e6).toFixed(3) : undefined);
+  return hopStrip(names, i, 'BAND', 'Band', i < 0 && dialHz > 0 ? (dialHz / 1e6).toFixed(3) : undefined, edges);
 }
