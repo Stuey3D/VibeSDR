@@ -202,6 +202,29 @@ int main() {
         ok(!t && err.find("Android or Linux") != std::string::npos, "fd:7 refused cleanly where usbfs does not exist: " + err);
 #endif
     }
+    // ★★★ THE SERIAL WITH A SPACE (2026-11-03, a real IC-7300 on a Pi 4 that never started). The radio is stored and
+    //     matched as "IC-7300_03001234"; the RAW "IC-7300 03001234" names the model. Both must work as the hint, and
+    //     two 7300s must stay two radios. (Made-up numbers; test-config-radios covers the config side.)
+    std::printf("── the Icom's config serial ──\n");
+    {
+        UsbIcom a, b;
+        a.path = "usb:1-1.2"; a.serial = "IC-7300 03001234"; a.model = "IC-7300";
+        b.path = "usb:1-1.3"; b.serial = "IC-7300 03005678"; b.model = "IC-7300";
+        ok(configSerialOf(a) == "IC-7300_03001234", "config serial: " + configSerialOf(a));
+        ok(configSerialOf(a) != configSerialOf(b), "two 7300s, two config serials");
+        ok(displayNameOf(b) == "Icom IC-7300 (03005678)", "name: " + displayNameOf(b));
+        const std::vector<UsbIcom> bus = {a, b};
+        const UsbIcom* hit = findByConfigSerial(bus, configSerialOf(b));
+        ok(hit && hit->serial == "IC-7300 03005678", "the cleaned config serial finds the raw radio on the bus");
+        for (const char* hint : {"IC-7300 03001234", "IC-7300_03001234"}) {
+            FakeIcomRadio fake;
+            IcomSource src; std::string err; IcomConfig c = cfgTone(); c.modelHint = hint;
+            const bool opened = src.open(c, err, makeMemoryTransport(&fake));
+            ok(opened && std::string(src.model().name) == "IC-7300",
+               std::string("opens and identifies an IC-7300 with the hint \"") + hint + "\"" + (opened ? "" : ": " + err));
+            src.close();
+        }
+    }
     std::printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

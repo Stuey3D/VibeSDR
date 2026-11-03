@@ -7,6 +7,9 @@
 // never catch that, so the first thing here is a REAL old-format file.
 #include "vibeserver_config.h"
 #include "sdr_presence.h"
+#include "vibe_serial.h"      // ★ configSerial — an Icom's "IC-7300 03001234" as a config serial
+#include "icom_transport.h"   // ★ configSerialOf / displayNameOf / findByConfigSerial (inline; nothing to link)
+#include "icom_models.h"      // ★ modelBySerial reads the RAW serial
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -627,6 +630,120 @@ int main() {
         ok(!validSerial("") && !validSerial("-x") && !validSerial(".x") && !validSerial("a/b")
            && !validSerial("a b") && !validSerial("a@b") && !validSerial(std::string(65, 'a')),
            "★ empty, leading -/., slash, space, @, over 64 are refused");
+    }
+
+    // ★★★ THE IC-7300 THAT NEVER APPEARED (2026-11-03, a Pi 4). Its CP2102's USB serial is "IC-7300 <number>" with a
+    //     SPACE; validSerial and vibeserver-radios both refused it, so the radio could not be added or started. It is
+    //     now known by vibe::configSerial's form everywhere it is stored or matched. (Made-up numbers, 0300xxxx.)
+    std::printf("\nAn Icom's serial with a space: cleaned, kept unique, matched, migrated\n");
+    {
+        using vibe::configSerial;
+        const std::string raw1 = "IC-7300 03001234", raw2 = "IC-7300 03005678";
+        ok(configSerial(raw1) == "IC-7300_03001234", "★★★ \"IC-7300 03001234\" → \"IC-7300_03001234\" (replaced, not cut)",
+           configSerial(raw1));
+        ok(validSerial(configSerial(raw1)), "★★★ …and passes validSerial");
+        ok(configSerial(raw1) != configSerial(raw2), "★★ two 7300s stay two radios — the number after the space is kept");
+        ok(configSerial("00000001") == "00000001" && configSerial("240513CA60") == "240513CA60"
+           && configSerial("3b52ab5dac9d3f4b") == "3b52ab5dac9d3f4b" && configSerial("a1:b2_c3.d-4") == "a1:b2_c3.d-4"
+           && configSerial("usb:1-1.2") == "usb:1-1.2",
+           "★ every serial that already fits is unchanged (no config, status file or unit moves)");
+        ok(configSerial("  IC-7300 03001234 \n") == "IC-7300_03001234", "padding is dropped, not turned into '_'");
+        ok(configSerial("-x") == "_x" && configSerial(".x") == "_x" && validSerial(configSerial("-x")),
+           "a leading '-' or '.' becomes '_' (never an option, never a relative path)");
+        ok(configSerial(std::string(100, 'A')).size() == 64, "never longer than 64");
+        ok(configSerial("my dongle") == "my_dongle", "an RTL EEPROM serial with a space is cleaned the same way");
+        ok(configSerial("") == "" && configSerial("   ") == "", "nothing → nothing (no identity, as before)");
+        // ★ Whatever goes in, what comes out is either empty or something validSerial — and so systemd — accepts.
+        bool allOk = true; std::string bad;
+        const char* odd[] = {"a/b", "a@b", "a\\b", "$(id)", "a;b", "x\x01y", "\xc3\xa9t\xc3\xa9", "IC-7300\t1", "@", "/"};
+        for (const char* s : odd) { const std::string c = configSerial(s); if (!c.empty() && !validSerial(c)) { allOk = false; bad = s; } }
+        ok(allOk, "★ junk in → a valid serial (or none) out, every time", bad);
+
+        // The radio on the bus vs the config: raw on one side, cleaned on the other.
+        icom::UsbIcom a, b;
+        a.path = "usb:1-1.2"; a.serial = raw1; a.model = "IC-7300";
+        b.path = "usb:1-1.3"; b.serial = raw2; b.model = "IC-7300";
+        ok(icom::configSerialOf(a) == "IC-7300_03001234", "icom::configSerialOf is the config form");
+        icom::UsbIcom noSer; noSer.path = "usb:3-2"; noSer.model = "IC-7300";
+        ok(icom::configSerialOf(noSer) == "usb:3-2" && validSerial(icom::configSerialOf(noSer)),
+           "no USB serial → the socket path, as before");
+        ok(icom::displayNameOf(a) == "Icom IC-7300 (03001234)", "★ the name reads naturally: \"Icom IC-7300 (03001234)\"",
+           icom::displayNameOf(a));
+        icom::UsbIcom odd1; odd1.serial = "XYZ 1"; odd1.path = "usb:1-4";
+        ok(icom::displayNameOf(odd1) == "Icom radio (XYZ 1)", "a serial without the model is shown whole");
+        const std::vector<icom::UsbIcom> bus = {a, b};
+        const icom::UsbIcom* hit = icom::findByConfigSerial(bus, "IC-7300_03005678");
+        ok(hit && hit->path == "usb:1-1.3", "★★★ the config serial finds ITS radio on the bus — the second 7300, not the first");
+        hit = icom::findByConfigSerial(bus, raw1);
+        ok(hit && hit->path == "usb:1-1.2", "a raw serial (typed by a person) finds it too");
+        ok(!icom::findByConfigSerial(bus, "IC-7300_03009999") && !icom::findByConfigSerial(bus, ""),
+           "an unknown or empty serial finds nothing (never 'the first Icom')");
+        ok(icom::modelBySerial(a.serial.c_str()) && icom::modelBySerial(icom::configSerialOf(a).c_str()),
+           "the model is read off the raw serial — and the cleaned one still names it");
+
+        // ADD from the Setup page: the found list now carries the cleaned serial, which sdr-change accepts.
+        ServerConfig s;
+        ok(!applySdrChange(s, "add", raw1, "", "icom", "", err), "the raw serial is still refused by sdr-change (the guard stays)");
+        ok(applySdrChange(s, "add", icom::configSerialOf(a), "", "icom", icom::displayNameOf(a), err),
+           "★★★ ADD with the cleaned serial is accepted", err);
+        ok(applySdrChange(s, "add", icom::configSerialOf(b), "", "icom", icom::displayNameOf(b), err),
+           "★★ …and a second 7300 is its own radio", err);
+        ok(s.radios.size() == 2 && s.radios[0].serial != s.radios[1].serial, "two radios, two serials");
+        // …and the Setup page's detected list sees it as known, so it is not offered twice.
+        using vibe::DetectedRadio;
+        DetectedRadio da; da.driver = "icom"; da.serial = icom::configSerialOf(a);
+        DetectedRadio db; db.driver = "icom"; db.serial = icom::configSerialOf(b);
+        ok(vibe::decidePresence("icom", s.radios[0].serial, {da, db}, -1, 0) == vibe::Presence::Attached,
+           "★★ radioPresence: the configured Icom is ATTACHED (matched by the cleaned serial)");
+        ok(da.serial != db.serial, "two 7300s do not collide (serialsCollide compares exactly these)");
+        bool known = false; for (const auto& r : s.radios) if (r.serial == db.serial) known = true;
+        ok(known, "the detected list matches it to its config entry (not offered as new again)");
+
+        // ★★★ MIGRATION: the TUI, a settings POST or a hand edit could have saved the raw form (none of them asked
+        //     validSerial). It is read in the config form, and a raw + cleaned pair folds into one radio.
+        ServerConfig m;
+        ok(fromJson("{\"radios\":[{\"serial\":\"IC-7300 03001234\",\"driver\":\"icom\",\"label\":\"Shack\"}]}", m, err),
+           "a config holding the raw serial loads", err);
+        ok(m.radios.size() == 1 && m.radios[0].serial == "IC-7300_03001234",
+           "★★★ …and the serial is migrated to the config form", m.radios.empty() ? "" : m.radios[0].serial);
+        ServerConfig back;
+        ok(fromJson(toJson(m), back, err) && back.radios.size() == 1 && back.radios[0].serial == "IC-7300_03001234"
+           && back.radios[0].label == "Shack", "it saves and reloads cleaned, settings kept");
+        ok(fromJson("{\"radios\":[{\"serial\":\"IC-7300 03001234\",\"label\":\"New\"}]}", back, err)
+           && back.radios.size() == 1 && back.radios[0].label == "New",
+           "★ a POST with the raw serial merges INTO the cleaned radio, never a duplicate");
+        ServerConfig rtl;
+        ok(fromJson("{\"radios\":[{\"serial\":\"00000001\"},{\"serial\":\"240513CA60\"}]}", rtl, err)
+           && rtl.radios.size() == 2 && rtl.radios[0].serial == "00000001" && rtl.radios[1].serial == "240513CA60",
+           "a serial that already fits is not touched by the migration");
+
+        // ★★ AND THE SAME CHECK vibeserver-radios RUNS AS ROOT, in real bash, on what configSerial makes.
+        //    The function is extracted from the script itself, so a drift between the two fails here.
+        //    (test_vibeserver_radios.py covers the script's own refusals and its full reconcile.)
+        FILE* f = std::fopen("vibeserver/linux/vibeserver-radios", "r");
+        if (!f) {
+            std::printf("   (skipped the bash check: run from the repo root to find vibeserver-radios)\n");
+        } else {
+            std::string sh; char buf[4096]; size_t n;
+            while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) sh.append(buf, n);
+            std::fclose(f);
+            const size_t a0 = sh.find("valid_serial() {"), a1 = a0 == std::string::npos ? a0 : sh.find("\n}\n", a0);
+            ok(a1 != std::string::npos, "valid_serial() found in vibeserver-radios");
+            if (a1 != std::string::npos) {
+                char path[] = "/tmp/vs-serial-XXXXXX";
+                const int fd = mkstemp(path);
+                std::string prog = sh.substr(a0, a1 + 3 - a0);
+                for (const std::string& c : {configSerial(raw1), configSerial(raw2), configSerial("my dongle"),
+                                             configSerial("-x"), configSerial(std::string(100, 'A'))})
+                    prog += "valid_serial '" + c + "' || { echo 'REFUSED " + c + "'; exit 1; }\n";
+                prog += "valid_serial 'IC-7300 03001234' && { echo 'RAW ACCEPTED'; exit 1; }\nexit 0\n";
+                const bool wrote = fd >= 0 && ::write(fd, prog.data(), prog.size()) == (ssize_t)prog.size();
+                if (fd >= 0) ::close(fd);
+                const int rc = wrote ? std::system((std::string("bash ") + path).c_str()) : -1;
+                ::unlink(path);
+                ok(rc == 0, "★★★ bash valid_serial accepts every cleaned serial and still refuses the raw one");
+            }
+        }
     }
 
     // ★★★ STUART'S HARD RULE: a radio LENT to another program, or held by anything else, is NEVER
