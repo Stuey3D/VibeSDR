@@ -1523,6 +1523,14 @@ Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerLandingAdsb(JNIEnv*, jobjec
     vibe::LocalSdrShim::setVibeServerLandingAdsb(land == JNI_TRUE, keep == JNI_TRUE);
 }
 /** ★ The radio's display name ("SDR display name"); empty = the name from the USB port. */
+/** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN — the server config's JSON (its fm* keys are read, the
+ *  rest ignored). See LocalSdrShim::setVibeServerFmDefaults. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetVibeServerFmDefaults(JNIEnv* env, jobject, jstring json) {
+    const char* c = json ? env->GetStringUTFChars(json, nullptr) : nullptr;
+    vibe::LocalSdrShim::setVibeServerFmDefaults(c ? c : "{}");
+    if (c) env->ReleaseStringUTFChars(json, c);
+}
 extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetRadioLabel(JNIEnv* env, jobject, jstring name) {
     const char* c = name ? env->GetStringUTFChars(name, nullptr) : nullptr;

@@ -47,6 +47,14 @@ size_t findKey(const std::string& s, const std::string& key) {
     return std::string::npos;
 }
 
+/** ★ The Broadcast FM defaults through findKey, so the keys count as ASKED (see t_keysAsked) and are never kept
+ *  twice as "unknown"; the values themselves are read by vibefm::fromJson, the one reader. */
+void fmFromJson(const std::string& s, vibefm::Defaults& d) {
+    for (const char* k : { "fmDeemph", "fmStereo", "fmNr", "fmIms", "fmCeq", "fmAutoBw", "fmNb", "fmRemember" })
+        (void)findKey(s, k);
+    vibefm::fromJson(s, d);
+}
+
 std::string unescape(const std::string& in) {
     std::string out;
     for (size_t i = 0; i < in.size(); i++) {
@@ -304,6 +312,7 @@ std::string toJson(const Config& c) {
     N("landingDabChannel", c.landingDabChannel); N("landingDabSid", c.landingDabSid);
     S("landingDabService", c.landingDabService);
     B("landingAdsb", c.landingAdsb); B("adsbKeepRunning", c.adsbKeepRunning);   // ★ V12 — see Config::landingAdsb
+    j += "  " + vibefm::toJson(c.fm) + ",\n";   // ★ Broadcast FM defaults — see Config::fm
     N("users", c.users); N("maxBw", c.maxBw); N("maxFps", c.maxFps); N("fftRate", c.fftRate);
     N("uncompressed", c.uncompressed);
     B("releaseWhenIdle", c.releaseWhenIdle);
@@ -390,6 +399,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
                 if (getNum(s, "landingDabSid", v))     c.landingDabSid = (int)v; }
     getStr(s, "landingDabService", c.landingDabService);
     getBool(s, "landingAdsb", c.landingAdsb); getBool(s, "adsbKeepRunning", c.adsbKeepRunning);
+    fmFromJson(s, c.fm);   // ★ Broadcast FM defaults — see Config::fm
     if (getNum(s, "users", d))       c.users = (int)d;
     if (getNum(s, "maxBw", d))       c.maxBw = d;
     { const bool hm = getNum(s, "maxFps", d);  if (hm) c.maxFps = d;
@@ -577,6 +587,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     I("landingDabChannel", r.landingDabChannel); I("landingDabSid", r.landingDabSid);
     S("landingDabService", r.landingDabService);
     B("landingAdsb", r.landingAdsb); B("adsbKeepRunning", r.adsbKeepRunning);   // ★ V12 — read AND written
+    fmFromJson(j, r.fm);   // ★ Broadcast FM defaults — read AND written (radioToJson)
     S("allowRanges", r.allowRanges); S("blockRanges", r.blockRanges);
     S("gainLimits", r.gainLimits); S("ifBwLimits", r.ifBwLimits); I("restGain", r.restGain); I("agcLock", r.agcLock);
     // ★ The three that turn a ceiling into a setting — added to BOTH writers, see the note below.
@@ -652,6 +663,7 @@ std::string radioToJson(const RadioConfig& r) {
     N("landingDabChannel", r.landingDabChannel); N("landingDabSid", r.landingDabSid);
     S("landingDabService", r.landingDabService);
     B("landingAdsb", r.landingAdsb); B("adsbKeepRunning", r.adsbKeepRunning);   // ★ V12 — see the reader
+    o += vibefm::toJson(r.fm) + ",";   // ★ Broadcast FM defaults — see the reader
     // ★★★ THE BAND LISTS MUST TRAVEL. There are TWO radio writers — one for the file and one for
     //     the config API — and only the file one had these. The setup page reads the API, so the
     //     lists it showed were always empty and the ones it saved were always blank: an owner set
@@ -751,6 +763,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.landingDabChannel = one.landingDabChannel; r.landingDabSid = one.landingDabSid;
     r.landingDabService = one.landingDabService;
     r.landingAdsb = one.landingAdsb; r.adsbKeepRunning = one.adsbKeepRunning;
+    r.fm = one.fm;   // ★ Broadcast FM defaults
     r.users = one.users; r.maxBw = one.maxBw; r.maxFps = one.maxFps; r.fftRate = one.fftRate;
     r.uncompressed = one.uncompressed;
     r.releaseWhenIdle = one.releaseWhenIdle;
@@ -1229,6 +1242,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.landingDabChannel = r.landingDabChannel; c.landingDabSid = r.landingDabSid;
     c.landingDabService = r.landingDabService;
     c.landingAdsb = r.landingAdsb; c.adsbKeepRunning = r.adsbKeepRunning;   // ★ V12 — or the worker never sees them
+    c.fm = r.fm;   // ★ Broadcast FM defaults — or the worker never sees them
     // ★★★ AN UNLOCKED RADIO STARTS WHERE ITS LISTENERS WILL. A locked radio's centre is the
     //     owner's fixed window and must not move. An unlocked one has no window to protect, and
     //     leaving the capture on `freq` meant the radio sat on a band nobody was going to use —

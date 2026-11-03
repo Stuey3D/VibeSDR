@@ -1225,8 +1225,9 @@ struct HardwareSheet: View {
         //     they want OPPOSITE actions — narrowing the IF costs up to 10 dB against noise and
         //     gains 10 dB against a close neighbour — so one combined control would be wrong as
         //     well as unhelpful.
-        // ★★ ALL FOUR ARE ON BY DEFAULT AND EACH DECLINES TO ACT unless its own measurements say it
-        //    will help, so a strong station is untouched. The switches exist for A/B — which on a
+        // ★★ EACH DECLINES TO ACT unless its own measurements say it will help, so a strong station is untouched.
+        //    Where each STARTS is the server's (the owner's Broadcast FM defaults, 2026-11-03 — NR off unless the
+        //    owner sets it on); these rows show what the server reports. The switches exist for A/B — which on a
         //    wrist is exactly the right size of job: three taps to hear what the receiver is doing.
         // ★ Shown only when the server says it HAS them (hasFmDsp). An older VibeServer never
         //   reports them and this section does not draw, rather than offering dead controls — the

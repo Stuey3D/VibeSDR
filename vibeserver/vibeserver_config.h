@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include "vibe_fm_defaults.h"   // ★ the owner's Broadcast FM defaults (flat fm* keys) — see Config::fm
 
 namespace vsconfig {
 
@@ -262,6 +263,11 @@ struct Config {
      *  ★ Locked is the same shape as userNotch above: shared hardware an owner may keep to
      *    themselves. Default UNLOCKED, because a personal receiver should not ask its owner for a
      *    password to use their own switch. */
+    /* ★★★ THE BROADCAST FM DEFAULTS, AND REMEMBER vs RETURN (Stuart, 2026-11-03) — vibe_fm_defaults.h has the rules.
+     *  Stored as flat keys fmDeemph (-1 by region, 0, 50, 75), fmStereo, fmNr, fmIms, fmCeq, fmAutoBw, fmNb, fmRemember,
+     *  read and written ONLY through vibefm::fromJson / toJson so no copy site can drop one. Absent = today's
+     *  behaviour except NR, which starts OFF. Per radio, like every other front-end default. */
+    vibefm::Defaults fm;
     std::string antennaPort;
     bool antennaPortLocked = false;
     /* ★★★ THE AERIAL THAT FOLLOWS THE DIAL. Written the way an owner writes the allowed bands:
@@ -585,6 +591,7 @@ struct RadioConfig {
     int         agcLock  = -1;  ///< 1 = AGC forced on, listener may not turn it off (RSP, HF+).
     bool   rfNotch = false, dabNotch = false, zoomSpectrum = true;   // ★ see the per-radio copy
     bool   autoNotch = false, userNotch = true;   // ★ see the note on the per-radio copy
+    vibefm::Defaults fm;                          // ★ Broadcast FM defaults — see Config::fm
     std::string antennaPort;                      // ★ port NAME — see the note in Config
     bool   antennaPortLocked = false;
     std::string antennaMap;                       // ★ per-band aerial list — see the note in Config

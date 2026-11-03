@@ -1224,6 +1224,42 @@ body.wifiFirst .wifiFirstOnly { display: block; }
             </select></label>
         </div>
       </div>
+      <!-- ★★★ BROADCAST FM DEFAULTS, AND REMEMBER vs RETURN (Stuart, 2026-11-03: "can the Broadcast FM options be able to
+           be set by the owner in the setup and have an option so that the server either remembers what the last user
+           set or defaults back to the server set defaults"). Per radio; the rules are vibe_fm_defaults.h and the server
+           enforces them — listeners still change these for themselves in the audio menu's BROADCAST FM row. Not drawn
+           for an Icom (it demodulates in the radio) or where WFM is blocked: a control with nothing to act on is worse
+           than none (AGENTS.md). -->
+      <div class="card" id="fmDefCard">
+        <h2>Broadcast FM defaults</h2>
+        <p class="why">What a listener starts with in the BROADCAST FM row of the audio menu. They can still change any
+          of these for themselves.</p>
+        <label><span class="lbl">FM de-emphasis</span>
+          <select id="fmDeemph">
+            <option value="-1">By region (50&nbsp;&micro;s, or 75&nbsp;&micro;s in the Americas)</option>
+            <option value="50">50&nbsp;&micro;s</option>
+            <option value="75">75&nbsp;&micro;s</option>
+            <option value="0">Off</option>
+          </select></label>
+        <div class="hint" id="fmDeemphHint"></div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px">
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmStereo"> <span>ST &mdash; stereo</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmNr"> <span>NR &mdash; weak-signal noise treatment</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmIms"> <span>IMS &mdash; multipath suppression</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmCeq"> <span>CEQ &mdash; channel equaliser</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmAutoBw"> <span>AUTO BW &mdash; automatic bandwidth</span></label>
+          <label style="display:flex;align-items:center;gap:8px"><input type="checkbox" id="fmNb"> <span>NB &mdash; noise blanker</span></label>
+        </div>
+        <div class="hint">Out of the box everything is on except NR, which only helps a weak, hissy station.
+          AUTO BW applies where listeners share one dial; on a locked range each listener's channel has its own width.</div>
+        <div style="margin-top:12px">
+          <label style="display:flex;align-items:center;gap:10px"><input type="radio" name="fmPolicy" id="fmReturn">
+            <span>Return to these defaults for each new listener</span></label>
+          <label style="display:flex;align-items:center;gap:10px;margin-top:6px"><input type="radio" name="fmPolicy" id="fmRemember">
+            <span>Remember the last listener&rsquo;s settings</span></label>
+        </div>
+        <div class="hint" id="fmPolicyHint"></div>
+      </div>
       <div class="card">
       <h2>Time limit</h2>
       <p class="why">How long one listener may keep this radio.</p>
@@ -2847,6 +2883,56 @@ function modeOffAncestor(tree, id, off) {
   }
   return null;
 }
+
+/* ★★ THE BROADCAST FM DEFAULTS CARD (vibe_fm_defaults.h). Absent keys show the server's own defaults — the same ones it
+ *  runs with: de-emphasis by region, NR off, everything else on, RETURN. The note under the choice says exactly when
+ *  "return" happens on THIS radio's sharing mode, because the answer differs (shared dial vs locked range). */
+function fmDefRender(r) {
+  if (!$("fmDefCard")) return;
+  const drv = String((r && r.driver) || "");
+  const blocked = modeBlockSet().has("wfm");
+  $("fmDefCard").classList.toggle("hide", drv === "icom" || blocked);
+  const dv = [0, 50, 75].includes(Number(r.fmDeemph)) ? String(Number(r.fmDeemph)) : "-1";
+  $("fmDeemph").value = dv;
+  $("fmStereo").checked = r.fmStereo !== false;
+  $("fmNr").checked     = r.fmNr === true;
+  $("fmIms").checked    = r.fmIms !== false;
+  $("fmCeq").checked    = r.fmCeq !== false;
+  $("fmAutoBw").checked = r.fmAutoBw !== false;
+  $("fmNb").checked     = r.fmNb !== false;
+  $("fmRemember").checked = r.fmRemember === true;
+  $("fmReturn").checked   = r.fmRemember !== true;
+  fmDefHints();
+}
+function fmDefHints() {
+  if (!$("fmDefCard")) return;
+  const locked = radio().mode === "locked";
+  const many = (parseInt($("users") ? $("users").value : "1", 10) || 1) > 1;
+  $("fmDeemphHint").textContent = $("fmDeemph").value === "-1"
+    ? "Follows the receiver's location: 75 µs in the Americas (ITU Region 2), 50 µs everywhere else." : "";
+  $("fmPolicyHint").textContent = $("fmRemember").checked
+    ? (locked && many
+        ? "Each new listener's channel starts from the last settings anyone chose. After the server restarts, from these defaults."
+        : "The radio keeps whatever the last listener left, the way a shared tuner does. After the server restarts, these defaults.")
+    : (locked && many
+        ? "Every new listener's channel starts with these. Nobody else's channel is ever changed. Reloading the page keeps your own settings."
+        : many
+          ? "When someone connects and nobody else is listening, the radio goes back to these. Someone joining while others listen changes nothing. Reloading the page keeps your own settings."
+          : "Each new listener starts with these. Reloading the page keeps your own settings.");
+}
+function fmDefCollect() {
+  if (!$("fmDefCard") || $("fmDefCard").classList.contains("hide")) return {};   // ★ a hidden card sends nothing
+  return {
+    fmDeemph: Number($("fmDeemph").value),
+    fmStereo: $("fmStereo").checked, fmNr: $("fmNr").checked, fmIms: $("fmIms").checked,
+    fmCeq: $("fmCeq").checked, fmAutoBw: $("fmAutoBw").checked, fmNb: $("fmNb").checked,
+    fmRemember: $("fmRemember").checked,
+  };
+}
+document.addEventListener("change", function (e) {
+  const id = e.target && e.target.id;
+  if (id === "fmDeemph" || id === "fmRemember" || id === "fmReturn" || id === "users") fmDefHints();
+});
 
 /** The owner's own list as a Set of ids, exactly as saved — the one every EDIT reads and writes back. */
 function modeOwnerSet() {
@@ -5923,6 +6009,7 @@ function fill() {
   $("demodMode").value = r.demodMode || "am";
   $("users").value = r.users || 1;
   dabLandRender();
+  fmDefRender(r);
 
   if ($("biasT")) $("biasT").checked = !!r.biasT;
   if ($("ppm"))   $("ppm").value = r.ppm != null ? r.ppm : 0;
@@ -6883,6 +6970,7 @@ function collectRadio() {
     // ★★ V12 — edited straight onto the radio (adsbLandShow); keep-running never without the landing.
     landingAdsb: !!radio().landingAdsb,
     adsbKeepRunning: !!radio().landingAdsb && !!radio().adsbKeepRunning,
+    ...fmDefCollect(),   // ★ the Broadcast FM defaults card
     antenna: ($("antenna").value || "").trim(),
     antennaIcon: antIconSel,
     // ★ The aerial's ranges and filters: the rows write the finished text straight onto the radio

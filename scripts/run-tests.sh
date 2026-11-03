@@ -293,6 +293,8 @@ deps_for() {
     test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
     # ★★★ Going back from a V12 beta keeps V12's settings: unknown config keys survive a load + save (11.0.10-4).
     test-config-keep)   echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h) and their config round trip.
+    test-fm-defaults)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
     # ★★★ An admin read must never hold the connection log's lock while it works (Pi 2 IQ overruns
     #     with the admin page open, 2026-10-01). Header-only; slow resolvers make it CPU-independent.
@@ -1255,6 +1257,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 #     included). Same VIBESERVER_BIN rule; the web page half wants Edge. ~45 s.
 printf '\n\033[1m── shared dial: nobody echoes another listener’s tune (server + app rule + served page, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node --no-warnings scripts/test-dial-echo.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ THE OWNER'S BROADCAST FM DEFAULTS (2026-11-03): the setup card, a fresh server (NR off), owner-set defaults, RETURN and
+#     REMEMBER on a shared dial and a locked range, and the served page NOT re-asserting a remembered CEQ OFF (why Stuart
+#     kept finding servers with CEQ off). Same VIBESERVER_BIN rule; the page half wants Edge (muted). ~60 s.
+printf '\n\033[1m── Broadcast FM defaults: remember / return (server + setup card + served page, end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-fm-defaults.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ ADMIN (Stuart, 2026-10-18: "in the admin menu there is no way to navigate it with the controller"): the highlight goes
 #    into the panel and stays there, carries on after the tables redraw, and ○ closes it.

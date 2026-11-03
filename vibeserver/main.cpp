@@ -284,6 +284,7 @@ struct Opts {
      *  together in both directions so none can be forgotten by half. */
     std::string antennaPort;
     bool        antennaPortLocked = false;
+    vibefm::Defaults fm;                 // ★ the owner's Broadcast FM defaults (vibe_fm_defaults.h) — carried both ways below
     std::string antennaMap;
     bool        rspHdr = false;
     // ★ Icom (driver "icom") — see vibeserver_config.h Config::icomPort. --icom <port> starts one directly.
@@ -651,6 +652,7 @@ void applyConfig(const vsconfig::Config& c, Opts& o) {
     // ★ The aerial (GitHub #29) — carried in BOTH directions with its neighbours. A field copied
     //   one way only is the fault this file already records, and it is silent both ways.
     o.antennaPort = c.antennaPort; o.antennaPortLocked = c.antennaPortLocked;
+    o.fm = c.fm;
     o.antennaMap = c.antennaMap;
     o.rspHdr = c.rspHdr; o.rspAmNotch = c.rspAmNotch; o.rspExtRef = c.rspExtRef;
     o.icomPort = c.icomPort; o.icomBaud = c.icomBaud; o.icomCiv = c.icomCiv; o.icomAudio = c.icomAudio;
@@ -689,6 +691,7 @@ void configFromOpts(const Opts& o, vsconfig::Config& c) {
     c.rfNotch = o.rfNotch; c.dabNotch = o.dabNotch; c.zoomSpectrum = o.zoomSpectrum;
     c.autoNotch = o.autoNotch; c.userNotch = o.userNotch;
     c.antennaPort = o.antennaPort; c.antennaPortLocked = o.antennaPortLocked;
+    c.fm = o.fm;
     c.antennaMap = o.antennaMap;
     c.rspHdr = o.rspHdr; c.rspAmNotch = o.rspAmNotch; c.rspExtRef = o.rspExtRef;
     c.icomPort = o.icomPort; c.icomBaud = o.icomBaud; c.icomCiv = o.icomCiv; c.icomAudio = o.icomAudio;
@@ -2072,6 +2075,8 @@ int main(int argc, char** argv) {
                                           uint32_t(std::max(0, g_runtimeConfig.landingDabSid)));
     // ★★ V12: ADS-B as the landing, and "keep it running when nobody is connected" — see Config::landingAdsb.
     LocalSdrShim::setVibeServerLandingAdsb(g_runtimeConfig.landingAdsb, g_runtimeConfig.adsbKeepRunning);
+    // ★★ The owner's Broadcast FM defaults and REMEMBER / RETURN (vibe_fm_defaults.h) — before anyone can connect.
+    LocalSdrShim::setVibeServerFmDefaults("{" + vibefm::toJson(g_runtimeConfig.fm) + "}");
 
     // ── ★★★ mDNS: ADVERTISE THE NAME THE OWNER CHOSE ────────────────────────────────────────
     // This was STORED and never acted on — main.cpp never called startMdns at all, so the Linux
@@ -2326,6 +2331,7 @@ int main(int argc, char** argv) {
                 r.landingDabChannel = c.landingDabChannel; r.landingDabSid = c.landingDabSid;
                 r.landingDabService = c.landingDabService;
                 r.landingAdsb = c.landingAdsb; r.adsbKeepRunning = c.adsbKeepRunning;
+                r.fm = c.fm;   // ★ Broadcast FM defaults
                 r.users = c.users; r.maxBw = c.maxBw; r.maxFps = c.maxFps; r.fftRate = c.fftRate;
                 r.uncompressed = c.uncompressed;
                 r.releaseWhenIdle = c.releaseWhenIdle;
@@ -2592,6 +2598,9 @@ int main(int argc, char** argv) {
                     LocalSdrShim::setVibeServerLandingDab(g_runtimeConfig.landingDabChannel,
                                                           uint32_t(std::max(0, g_runtimeConfig.landingDabSid)));
                     LocalSdrShim::setVibeServerLandingAdsb(g_runtimeConfig.landingAdsb, g_runtimeConfig.adsbKeepRunning);
+                    // ★ The Broadcast FM defaults too — read at a NEW session, so nobody is disturbed (the shim
+                    //   applies them to the radio now only when nobody is listening).
+                    LocalSdrShim::setVibeServerFmDefaults("{" + vibefm::toJson(g_runtimeConfig.fm) + "}");
                     std::printf("VibeServer: gain limits/rest gain/AGC lock applied live "
                                 "(rest=%d, agcLock=%d)\n", g_runtimeConfig.restGain,
                                 g_runtimeConfig.agcLock);
@@ -3398,6 +3407,7 @@ int main(int argc, char** argv) {
             r.landingDabChannel = disk.landingDabChannel; r.landingDabSid = disk.landingDabSid;
             r.landingDabService = disk.landingDabService;
             r.landingAdsb = disk.landingAdsb; r.adsbKeepRunning = disk.adsbKeepRunning;
+            r.fm = disk.fm;   // ★ Broadcast FM defaults
             r.users = disk.users; r.maxBw = disk.maxBw; r.maxFps = disk.maxFps;
             r.fftRate = disk.fftRate; r.uncompressed = disk.uncompressed;
             r.releaseWhenIdle = disk.releaseWhenIdle;
@@ -4797,6 +4807,9 @@ int main(int argc, char** argv) {
                                     lastAdsb = a;
                                 }
                             }
+                            /* ★ The Broadcast FM defaults, re-read like the ADS-B landing: a front-door save must reach
+                             *  the process that owns the radio. The shim ignores an unchanged set (no memory is lost). */
+                            if (mine) LocalSdrShim::setVibeServerFmDefaults("{" + vibefm::toJson(mine->fm) + "}");
                             LocalSdrShim::setGalleryRedact(gallerySerials(fresh));
                             const std::string gk = std::to_string(fresh.galleryMb) + (fresh.galleryPublic ? "p" : "-") + (fresh.gallerySaveLive ? "l" : "-");
                             if (gk != lastGallery) {

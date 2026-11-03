@@ -93,6 +93,7 @@ import {
 // ★ On a TV the remote must be able to move PAST a text field — see TvTextInput (Kiko, Android 6 box).
 import TextInput from '../components/TvTextInput';
 import ExportLogsLink from '../components/ExportLogs';
+import { FM_DEFAULTS, fmPolicyWords, readFmDefaults, type FmDefaults } from '../services/fmDefaults';
 import LiteUpdate from '../components/LiteUpdate';   // ★ draws nothing outside VibeServer Lite
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -278,6 +279,8 @@ const K = {
   landingDabCh: 'vs_landingdabch', landingDabSid: 'vs_landingdabsid', landingDabSvc: 'vs_landingdabsvc',
   landingAdsb: 'vs_landingadsb', adsbKeep: 'vs_adsbkeep',
   radioLabel: 'vs_radiolabel',
+  /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h), one JSON value — see FmDefaults. */
+  fmDefaults: 'vs_fmdefaults',
   /** ★ An Icom's five settings (icomPhoneFields), one JSON value — see the ICOM TRANSCEIVER card. */
   icom: 'vs_icom',
 };
@@ -696,6 +699,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [dabLandNote, setDabLandNote]     = useState('');
   /** ★ "SDR display name" — the radio's name in the server and directory listings. '' = the USB port's. */
   const [radioLabel, setRadioLabel]       = useState('');
+  /* ★★ BROADCAST FM DEFAULTS (Stuart, 2026-11-03) — the same card as the browser's Setup page, and the same defaults the
+   *  engine runs with when nothing is set: de-emphasis by region, NR off, the rest on, RETURN. */
+  const [fmDef, setFmDefState] = useState<FmDefaults>(FM_DEFAULTS);
+  const setFmDef = (patch: Partial<FmDefaults>) => setFmDefState((was) => {
+    const next = { ...was, ...patch };
+    AsyncStorage.setItem(K.fmDefaults, JSON.stringify(next)).catch(() => {});
+    return next;
+  });
   /** ★★ BIAS-T LIVES HERE, not only in the client's hardware panel. On a phone acting as the
    *  server there may be no client attached at all — and a powered loop needs its DC before the
    *  first listener arrives, not after one turns up and unlocks the hardware (Stuart, 2026-08-17:
@@ -1237,6 +1248,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const sw = parseSwitchCfg(s(K.antSwitch)); antSwitchSaved.current = sw.enabled; setAntSwitch(sw); }
           setAntRanges(s(K.antRanges)); setAntFilters(s(K.antFilters));
           setRadioLabel(s(K.radioLabel));
+          { const fd = g(K.fmDefaults); if (fd) setFmDefState(readFmDefaults(fd)); }
           { const ch = s(K.landingDabCh);
             if (ch !== '' && Number.isFinite(Number(ch))) setLandingDabCh(Number(ch)); }
           setLandingDabSid(Number(s(K.landingDabSid)) || 0);
@@ -1852,7 +1864,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     limitSoft, askFirst, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters,
-    landingAdsb, adsbKeep,
+    landingAdsb, adsbKeep, fmDef,
   };
 
   /* ★★★ THE CONFIG THE SERVER STARTS WITH, BUILT IN ONE PLACE (2026-09-29). Start sends it, and so does
@@ -1896,6 +1908,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★★ V12 — keep-running never without the landing; the engine ignores both where ADS-B cannot run.
     landingAdsb: !!live.current.landingAdsb,
     adsbKeepRunning: !!live.current.landingAdsb && !!live.current.adsbKeep,
+    fmDefaults: live.current.fmDef,
     radioLabel: live.current.radioLabel,
     /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
      *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
@@ -3136,6 +3149,53 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {radioUseEff === 'locked' && rateBlock}
             {/* ★★ NOT ON AN ICOM: the server never tunes it (plan, decision 7) — a new listener hears wherever its
                 owner left it — so a landing frequency would be a setting that does nothing. */}
+            {/* ★★★ BROADCAST FM DEFAULTS — what a listener starts with in the audio menu's BROADCAST FM row, and whether the
+                server remembers the last listener's or returns to these (vibe_fm_defaults.h; the browser's Setup page has
+                the same card). Not on an Icom (it demodulates in the radio) or with WFM blocked: nothing to act on. */}
+            {!isIcom && !blockedModes.split(/[,;\s]+/).includes('wfm') && (<>
+            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>BROADCAST FM DEFAULTS</Text>
+            <View style={[styles.card, { borderColor: C.border, marginBottom: 8 }]}>
+              <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>FM de-emphasis</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                {([[-1, 'By region'], [50, '50 µs'], [75, '75 µs'], [0, 'Off']] as const).map(([v, l]) => (
+                  <TouchableOpacity key={v} onPress={() => setFmDef({ deemphUs: v })}
+                    style={[styles.card, { paddingVertical: 6, paddingHorizontal: 10, marginBottom: 0,
+                                           borderColor: fmDef.deemphUs === v ? C.keySelBorder : C.border,
+                                           backgroundColor: fmDef.deemphUs === v ? C.keySelBg : 'transparent' }]}>
+                    <Text style={{ color: fmDef.deemphUs === v ? C.keySel : C.key, fontFamily: F, fontSize: 13 }}>{l}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              {fmDef.deemphUs === -1 && (
+                <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                  75 µs in the Americas (ITU Region 2), 50 µs everywhere else — from the receiver's location.
+                </Text>
+              )}
+              {([['stereo', 'ST — stereo'], ['nr', 'NR — weak-signal noise treatment'], ['ims', 'IMS — multipath suppression'],
+                 ['ceq', 'CEQ — channel equaliser'], ['autobw', 'AUTO BW — automatic bandwidth'], ['nb', 'NB — noise blanker']] as const)
+                .map(([k, l]) => (
+                <View key={k} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                  <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>{l}</Text>
+                  <Switch value={fmDef[k]} onValueChange={(v) => setFmDef({ [k]: v } as Partial<FmDefaults>)} />
+                </View>
+              ))}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                Out of the box everything is on except NR, which only helps a weak, hissy station. Listeners can still
+                change any of these for themselves.
+              </Text>
+              {([[false, 'Return to these defaults for each new listener'], [true, 'Remember the last listener\u2019s settings']] as const)
+                .map(([v, l]) => (
+                <TouchableOpacity key={String(v)} onPress={() => setFmDef({ remember: v })}
+                  style={[styles.card, { marginTop: 8, marginBottom: 0, borderColor: fmDef.remember === v ? C.keySelBorder : C.border,
+                                         backgroundColor: fmDef.remember === v ? C.keySelBg : 'transparent' }]}>
+                  <Text style={{ color: fmDef.remember === v ? C.keySel : C.key, fontFamily: F, fontSize: 13 }}>{l}</Text>
+                </TouchableOpacity>
+              ))}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                {fmPolicyWords(fmDef.remember, radioUseEff === 'locked' && maxUsers > 1, maxUsers > 1)}
+              </Text>
+            </View>
+            </>)}
             {!isIcom && (<>
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>WHERE LISTENERS START</Text>
             {/* ★★★ A DAB STATION AS THE LANDING — Stuart's words, 2026-09-28: "just above the entry for
