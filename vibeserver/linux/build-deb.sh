@@ -99,9 +99,12 @@ fi
 #    address space and of a 1 GB box's RAM, and a radio that crashes there would be checked on a 64-bit machine.
 # ★★ NEVER SKIPPED QUIETLY: a failure to configure, link or verify it stops the package build (fail), exactly like
 #    the main binary. A PGO profiling run builds no package, so it builds no ASan binary either.
-ASAN_LINE="not built ($ARCH — amd64 and arm64 only)"
+# ★★ amd64 ONLY for now (Stuart's call, 2026-11-03): the ASan binary is ~40 MB in the package and is for one USRP
+#    hunt on an x86 box; arm64 owners (the Pis) would download it for nothing. VIBE_ASAN_ARCHES widens it again.
+ASAN_ARCHES="${VIBE_ASAN_ARCHES:-amd64}"
+ASAN_LINE="not built ($ARCH — memory-check build only for: $ASAN_ARCHES)"
 ASAN_CMAKE=()
-if [ "$PGO" != generate ] && { [ "$ARCH" = amd64 ] || [ "$ARCH" = arm64 ]; }; then
+if [ "$PGO" != generate ] && [[ " $ASAN_ARCHES " == *" $ARCH "* ]]; then
   # ★ -O2 (not the release -O3): the stacks stay close to the source, and the DSP keeps real time — vibedsp sets its
   #   own -O3 per target either way. -g1 comes from VIBESERVER_ASAN; no PGO profile (it is the other binary's).
   nice -n 19 cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV="$REV" \
