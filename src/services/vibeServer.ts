@@ -8,6 +8,7 @@ import { bookmarkPassband, parseBookmarksAny } from './userBookmarks';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AndroidConnectedRadio } from './androidIcom';
 import type { RateGuardState } from './rateGuard';
+import { FM_DEFAULTS, fmDefaultsKeys, type FmDefaults } from './fmDefaults';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
 // audio + waterfall over a WebSocket, ~25x lighter than raw RTL-TCP IQ). The
@@ -135,6 +136,9 @@ export type VibeServerConfig = {
    *  ignored by the server where ADS-B cannot run on the radio. */
   landingAdsb?: boolean;
   adsbKeepRunning?: boolean;
+  /** ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h). Sent to the engine as its config's
+   *  flat fm* keys; absent = the engine's defaults (de-emphasis by region, NR off, the rest on, RETURN). */
+  fmDefaults?: FmDefaults;
   /** ★ The radio's display name ("SDR display name"). '' = the name from the USB port. */
   radioLabel?: string;
   /** ★ The rate switch: "change the sample rate when a mode needs it" — DAB 2.048 MS/s, ADS-B 2.4 — the base rate
@@ -330,6 +334,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     landingDabService: cfg.landingDabService ?? '',
     landingAdsb: cfg.landingAdsb === true,
     adsbKeepRunning: cfg.landingAdsb === true && cfg.adsbKeepRunning === true,
+    ...fmDefaultsKeys(cfg.fmDefaults ?? FM_DEFAULTS),   // ★ on EVERY start, at definite values, like its neighbours
     radioLabel: (cfg.radioLabel ?? '').trim(),
     dabRateBoost: cfg.dabRateBoost === true,
     vfoB: cfg.vfoB === 0 ? 0 : 1,
