@@ -27,7 +27,7 @@ type ModeEntry = { id: string; label: string; parent?: string; on?: boolean; nod
  *  as vibe_setup_page.h BLOCKABLE — ids, parents, labels (ONE LIST, TWO READERS). A decoder's options are drawn indented
  *  directly UNDER it (`parent`); with the parent off they stay, greyed with the reason — never hidden. `on: true` is a "+"
  *  token IN the CSV when ticked ("lora+all"); `node` is one of this screen's own controls drawn there (DAB's label scan).
- *  ★ The page's "Band, mode by mode" list (spotsband±mode) is the setup page's alone: this screen never had it. */
+ *  ★ V12 2026-11-03: the page's "Band, mode by mode" list (spotsband±mode) is here too — the `bandModes` node under Band. */
 const BLOCKABLE: ModeEntry[] = [
   { id: 'wfm', label: 'WFM' }, { id: 'rds', label: 'Advanced RDS', parent: 'wfm' },
   { id: 'nfm', label: 'NFM' }, { id: 'tone', label: 'CTCSS / DCS tone ID', parent: 'nfm' },
@@ -44,6 +44,9 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'spots', label: 'Digital spots / map' },
   // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
   { id: 'spotsband', label: 'Band: a whole band at once', parent: 'spots' },
+  /* ★★ V12 THE BAND GOVERNOR, MODE BY MODE (decoders/digi_governor.h) — the setup page's bandModes node: Auto / Always /
+   *  Off per mode, stored in this same CSV ("spotsband-psk" off in Band, "spotsband+wspr" always). Under Band. */
+  { id: 'bandModes', label: '', parent: 'spotsband', node: 'bandModes' },
   /* ★★ V12 (2026-10-31): every decoder the server has, as on the setup page. The benchmark times each one and starts a
    *  switch OFF where its decoder measured below green (applyBench) — so every such switch must be HERE, or the owner
    *  could not switch it back on from this screen (Stuart: "never hide any controls"). */
@@ -86,7 +89,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
 /** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'aisstore', 'adsb', 'drm', 'tone',
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'aisstore', 'adsb', 'drm', 'tone',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
@@ -3745,6 +3748,29 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               </Text>
             ) : null /* ★ an RSP1: simply no bias-T, and nothing to say about it */}
 
+            {/* ★★ V12 VibeAGC (SDRplay) — the Setup page's choice (RadioConfig::rspVibeAgc), drawn ONLY for an RSP (AGENTS.md:
+                a control for one radio is not drawn on the others). VibeServerBoot applies it on every start. */}
+            {radio?.driver === 'sdrplay' && (<>
+              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>VIBEAGC (SDRPLAY)</Text>
+              {([
+                [0, 'Automatic — on with the OpenRSP driver'],
+                [1, 'On'],
+                [2, 'Off — the RSP’s own IF AGC'],
+              ] as const).map(([v, label]) => (
+                <OptRow key={v} C={C} F={F} active={rspVibeAgc === v} label={label}
+                  onPress={() => { setRspVibeAgc(v); AsyncStorage.setItem(K.rspVibeAgc, String(v)); }} />
+              ))}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                Our own gain control for both stages of the RSP, in place of the API{'’'}s IF AGC: it measures the
+                converter level from the samples itself, moves the IF in small steps that are smoothed out of the audio, and
+                takes RF gain out first whenever the front end is being driven hard {'—'} a strong neighbour can overload
+                the RSP long before the wanted station is loud. Automatic runs it only with the OpenRSP driver (the one this
+                app uses). If the driver ever rejects a gain write, VibeAGC hands back to the RSP{'’'}s own AGC and says
+                why in the log. You can also switch it live from the radio menu (the AGC row in the hardware panel, once the
+                protected settings are unlocked); the choice here is what the server starts with.
+              </Text>
+            </>)}
+
             {/* ★★ TIME LIMIT — only earns its place on a PUBLIC receiver. */}
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>TIME LIMIT PER LISTENER</Text>
             {([[0, 'Unlimited'], [15, '15 minutes'], [30, '30 minutes'],
@@ -4392,6 +4418,50 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                               setDabScanLabels(v); AsyncStorage.setItem(K.dabScanLabels, String(v));
                               (NativeModules as any).VibeLocalSDR?.setDabScanLabels?.(v);   // ★★ applied now as well as saved
                             }} />
+                        </View>
+                      );
+                    }
+                    if (m.node === 'bandModes') {
+                      /* ★★ V12 Band, mode by mode — the setup page's bandModeRender: Auto lets the governor decide, Always
+                       *  decodes the mode every period, Off never runs it in Band. Greyed with its switch, never hidden. */
+                      const modes = Object.keys(DIGI_MODE_STYLE);
+                      if (!modes.length) return null;
+                      const word = (id: string) => (own.has('spotsband-' + id) ? 'off' : own.has('spotsband+' + id) ? 'always' : 'auto');
+                      const pick = (id: string, w: 'auto' | 'always' | 'off') => {
+                        const s = new Set(own);
+                        s.delete('spotsband-' + id); s.delete('spotsband+' + id);
+                        if (w === 'off') s.add('spotsband-' + id);
+                        if (w === 'always') s.add('spotsband+' + id);
+                        const v = [...s].join(',');
+                        setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
+                      };
+                      return (
+                        <View key={m.id} style={{ flexBasis: '100%', gap: 6, opacity: inert ? 0.45 : 1 }}>
+                          <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                            Digital spots: Band, mode by mode. Band reads every mode on a band at once. To keep that affordable
+                            it decodes a mode only while its window has something in it, drops depth (extra passes) before it
+                            drops a mode, and when the CPU is short it drops the least-used modes first. Auto lets it decide.
+                            Always decodes the mode every period, even when its window looks empty and even over budget. Off
+                            never runs it in Band. Listeners see each mode{'’'}s state in the spots box.
+                          </Text>
+                          {modes.map((sm) => {
+                            const id = sm.toLowerCase(), w = word(id);
+                            return (
+                              <View key={id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <Text style={{ color: C.text, fontFamily: F, fontSize: 12, minWidth: 48 }}>{sm}</Text>
+                                {(['auto', 'always', 'off'] as const).map((o) => (
+                                  <TouchableOpacity key={o} disabled={!!inert} onPress={() => pick(id, o)}
+                                    accessibilityLabel={`${sm} in Band: ${o}`}
+                                    style={{ paddingVertical: 5, paddingHorizontal: 9, borderRadius: 6, borderWidth: 1,
+                                             borderColor: w === o ? C.keyBorderAct : C.keyBorder }}>
+                                    <Text style={{ color: w === o ? C.keyAct : C.keyQuiet, fontFamily: F, fontSize: 12 }}>
+                                      {o === 'auto' ? 'Auto' : o === 'always' ? 'Always' : 'Off'}
+                                    </Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
+                            );
+                          })}
                         </View>
                       );
                     }
