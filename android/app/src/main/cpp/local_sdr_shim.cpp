@@ -15,6 +15,7 @@
 
 #include "local_sdr_shim.h"
 #include "vibe_fork.h"
+#include "vibe_fm_defaults.h"   // ★ the owner's Broadcast FM defaults + REMEMBER / RETURN (2026-11-03)
 #include "vibe_memcheck.h"   // ★ the admin action memcheck <serial>: the serial alphabet (2026-11-03)
 #include "sdrplay_source.h"
 #include "airspyhf_source.h"
@@ -1148,6 +1149,35 @@ static std::atomic<uint32_t> g_vsLandingDabSid{0};
 // ★★ V12: ADS-B as the landing, and keep it running with nobody here — LocalSdrShim::setVibeServerLandingAdsb.
 static std::atomic<bool>     g_vsLandingAdsb{false};
 static std::atomic<bool>     g_vsAdsbKeep{false};
+/* ★★ THE OWNER'S BROADCAST FM DEFAULTS AND WHO GETS THEM — LocalSdrShim::setVibeServerFmDefaults, vibe_fm_defaults.h.
+ *  g_fm holds the rules and the listeners' recent choices; every use is under g_fmMtx, and the region is read at the
+ *  moment of use (the band plan's ITU region is settled at start, possibly after the defaults arrive). Unconfigured
+ *  (an app-only radio, an older config) it holds the code's defaults — the same ones the setup page shows. */
+static std::mutex            g_fmMtx;
+static vibefm::Memory        g_fm;
+static bool                  g_fmConfigured = false;   // guarded by g_fmMtx
+static vibefm::State vsFmOwner() {
+    std::lock_guard<std::mutex> lk(g_fmMtx);
+    g_fm.setRegion(vibebands::defaultRegion());
+    return g_fm.owner();
+}
+static bool vsFmSharedArrival(const std::string& session, int othersOn, vibefm::State& out) {
+    std::lock_guard<std::mutex> lk(g_fmMtx);
+    g_fm.setRegion(vibebands::defaultRegion());
+    return g_fm.sharedArrival(session, othersOn, out);
+}
+static vibefm::State vsFmChannelStart(const std::string& session) {
+    std::lock_guard<std::mutex> lk(g_fmMtx);
+    g_fm.setRegion(vibebands::defaultRegion());
+    return g_fm.channelStart(session);
+}
+static void vsFmNote(const std::string& session, const vibefm::State& st) {
+    std::lock_guard<std::mutex> lk(g_fmMtx);
+    g_fm.note(session, st);
+}
+static bool vsFmRemember() { std::lock_guard<std::mutex> lk(g_fmMtx); return g_fm.remember(); }
+/** Writes the shared pipeline's DESIRED record (g_dsp — defined further down) so a freshly built Impl starts there. */
+static void vsFmRecordDesired(const vibefm::State& st);
 /** ★ The owner's display name for this radio (Android's "SDR display name") — see setRadioLabel. */
 static std::mutex            g_vsRadioLabelMtx;
 static std::string           g_vsRadioLabel;
@@ -6720,9 +6750,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     // Audio noise reduction (self-contained spectral subtraction). Mono only;
     // off by default. No external resources → can't fail to init.
     std::atomic<bool>  nrOn{false};
-    // ★ Weak-signal processing (high-blend + audio high-cut). Defaults ON: it only ever acts on a
-    //   signal that needs it, so a listener who never touches it should get the better sound.
-    std::atomic<bool>  weakProcOn{true};
+    // ★ Weak-signal processing (high-blend + audio high-cut) — the Broadcast FM "NR". ★★ OFF by default since
+    //   2026-11-03 (Saber: "wouldn't it be a better idea to have the NR be off until someone enables it?"); the
+    //   owner may make it ON in Setup (vibe_fm_defaults.h), and the configured value is replayed onto every Impl.
+    std::atomic<bool>  weakProcOn{false};
     std::atomic<bool>  imsOn{true};        // adaptive IF — a neighbour, not noise
     std::atomic<bool>  ceqOn{true};        // blind channel equaliser — a reflection
     std::atomic<bool>  nbOn{true};         // noise blanker — impulses (Broadcast FM row)
@@ -8745,7 +8776,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         //     anything, which is the WORST version of this bug because it looks like it is
         //     working". Seeded from the server's configured values when the listener arrives, so
         //     the owner still sets the house default and only this listener can change it.
-        std::atomic<bool> wspOn{true}, imsOn{true}, ceqOn{true}, nbOn{true}, nbxOn{false};
+        std::atomic<bool> wspOn{false}, imsOn{true}, ceqOn{true}, nbOn{true}, nbxOn{false};   // ★ seeded at arrival — vsFmChannelStart
         /** ★★ V12 THIS LISTENER'S AUTO (bandwidth) — the AUTO key by the passband sliders. Per listener where each has
          *  their own pipeline; ON for a new listener (a joiner inherits nobody's choice). See the `autobw` handler. */
         std::atomic<bool> autoBwOn{false};   // ★★ OFF by default (2026-10-31) — see g_autoBwPassOn
@@ -16939,6 +16970,54 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  `cut:false` = back to the listener's. Display only — a client never sends them back as a bandwidth.
      *  Built once per pipeline and sent on a change, ~once a second (sendFmMetaAll). ADDITIVE: an older client
      *  ignores the type. */
+    /* ★★ THE BROADCAST FM ROW AS ONE STATE (vibe_fm_defaults.h) — read off the shared pipeline or a listener's own
+     *  channel, and put back onto either. The owner's defaults and REMEMBER / RETURN are decided by g_fm; these only
+     *  move the values. AUTO BW is WFM's TEF-style one, which exists only on the shared pipeline (autoBwModes). */
+    vibefm::State fmSharedState() {
+        vibefm::State s;
+        s.deemphTau = vsDesiredDeemph(); s.stereo = vsDesiredStereo();
+        s.nr = weakProcOn.load(); s.ims = imsOn.load(); s.ceq = ceqOn.load(); s.nb = nbOn.load();
+        s.autobw = g_autoBwOn.load(std::memory_order_relaxed);
+        return s;
+    }
+    static vibefm::State fmChannelState(const ClientDsp& c) {
+        vibefm::State s;
+        s.deemphTau = c.deempTau >= 0 ? c.deempTau : 50e-6; s.stereo = c.stereoOn.load();
+        s.nr = c.wspOn.load(); s.ims = c.imsOn.load(); s.ceq = c.ceqOn.load(); s.nb = c.nbOn.load();
+        s.autobw = g_autoBwOn.load(std::memory_order_relaxed);
+        return s;
+    }
+    /** ★ Onto the ONE shared pipeline — only ever called with nobody else on it (see vibefm::Memory::sharedArrival). */
+    void fmApplyShared(const vibefm::State& s) {
+        const vibefm::State was = fmSharedState();
+        vsFmRecordDesired(s);   // ★ g_dsp first, so a reopen racing this lands on the same values
+        weakProcOn.store(s.nr); rx.setWeakSignalProc(s.nr);
+        imsOn.store(s.ims);     rx.setIms(s.ims);
+        ceqOn.store(s.ceq);     rx.setCeq(s.ceq);
+        nbOn.store(s.nb);       rx.setNoiseBlanker(s.nb);
+        if (std::fabs(was.deemphTau - s.deemphTau) > 1e-9) LocalSdrShim::instance().setDeemphasis(s.deemphTau);
+        if (was.stereo != s.stereo) LocalSdrShim::instance().setStereoEnabled(s.stereo);
+        if (!s.autobw) g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
+    }
+    /** ★ Onto a listener's own channel as it is built; clientRetune() puts these on the pipeline it makes. */
+    static void fmApplyChannel(ClientDsp& c, const vibefm::State& s) {
+        c.wspOn.store(s.nr); c.imsOn.store(s.ims); c.ceqOn.store(s.ceq); c.nbOn.store(s.nb);
+        c.deempTau = s.deemphTau; c.stereoOn.store(s.stereo);
+    }
+    /** ★ A listener changed one of the row: remember what they now run (theirs, and "the last listener's"). */
+    void fmNote(const std::shared_ptr<net::Socket>& sock) {
+        const std::string ses = sessionOfSock(sock.get());
+        auto dsp = dspFor(sock);
+        vsFmNote(ses, dsp ? fmChannelState(*dsp) : fmSharedState());
+    }
+    static std::string fmDescribe(const vibefm::State& s) {
+        char b[160];
+        std::snprintf(b, sizeof b, "de-emphasis %.0f us, ST %s, NR %s, IMS %s, CEQ %s, AUTO BW %s, NB %s",
+                      s.deemphTau * 1e6, s.stereo ? "on" : "off", s.nr ? "on" : "off", s.ims ? "on" : "off",
+                      s.ceq ? "on" : "off", s.autobw ? "on" : "off", s.nb ? "on" : "off");
+        return b;
+    }
+
     /** ★★ The shared pipeline's AUTO for a mode: WFM's TEF-style one, or the passband AUTO (see g_autoBwPassOn). */
     static bool sharedAutoBwFor(const std::string& md) {
         return paramsFor(md).kind == ModeParams::WFM ? g_autoBwOn.load() : g_autoBwPassOn.load();
@@ -18080,7 +18159,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 double tau;
                 // ★ SECONDS on the wire — see vibeserver_wire_units_seconds. A value in
                 //   microseconds here is 1000x wrong and sounds like no de-emphasis at all.
-                if (jsonNum(msg, "tau", tau) && me->rx) { me->deempTau = tau; me->rx->setDeemphasis(tau); }
+                if (jsonNum(msg, "tau", tau) && me->rx) { me->deempTau = tau; me->rx->setDeemphasis(tau); fmNote(sock); }
                 return;
             }
             if (type == "nfmvoice") {
@@ -18095,6 +18174,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 const bool on = jsonOn(msg);
                 me->stereoOn.store(on);
                 if (me->rx) me->rx->setStereoEnabled(on);
+                fmNote(sock);
                 return;
             }
         }
@@ -20322,10 +20402,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 //   happens to own right now — the next mode change replaces that pipeline.
                 ((*dsp).*slot).store(on);
                 if (dsp->rx) ((*dsp->rx).*setter)(on);
+                fmNote(sock);   // ★ theirs, and "the last listener's" (vibe_fm_defaults.h)
                 return;
             }
             (rx.*setter)(on);
             if (shared) shared->store(on);
+            /* ★★ AND INTO THE DESIRED RECORD, or the next fresh Impl (a reopen, a rate change) forgets it —
+             *  applyDesiredDsp replays g_dsp, and this path never wrote it. */
+            vsFmRecordDesired(fmSharedState());
+            fmNote(sock);
         };
         /* ★ NAMED IN THE LOG, because these six were dead on a local dongle for two releases and
          *  nothing said so — the switch moved, the audio did not, and there was no way to tell
@@ -20387,6 +20472,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (paramsFor(md).kind == ModeParams::WFM) {
                 g_autoBwOn.store(on, std::memory_order_relaxed);
                 if (!on) g_autoBwNowHz.store(0.0, std::memory_order_relaxed);
+                fmNote(sock);   // ★ part of the Broadcast FM row (vibe_fm_defaults.h)
             } else {
                 g_autoBwPassOn.store(on, std::memory_order_relaxed);
                 rx.setAmAutoBandwidth(on);
@@ -20434,12 +20520,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (type == "deemph") {
             if (!sharedGate("de-emphasis")) return;
             // tau in SECONDS (0 = off, 50e-6 or 75e-6).
-            if (jsonNum(msg, "tau", v)) LocalSdrShim::instance().setDeemphasis(v);
+            if (jsonNum(msg, "tau", v)) { LocalSdrShim::instance().setDeemphasis(v); fmNote(sock); }
             return;
         }
         if (type == "stereo") {
             if (!sharedGate("stereo")) return;
-            LocalSdrShim::instance().setStereoEnabled(jsonOn(msg)); return;
+            LocalSdrShim::instance().setStereoEnabled(jsonOn(msg)); fmNote(sock); return;
         }
         // Live spectrum frame rate — the client throttles this when the user goes
         // idle, so an unattended (solar/battery) server stops burning CPU and
@@ -25567,6 +25653,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     LOGI("new session — landing on %.3f kHz %s", hz / 1e3,
                          lm.empty() ? mode.c_str() : lm.c_str());
             }
+            /* ★★★ THE OWNER'S BROADCAST FM DEFAULTS ON ONE SHARED PIPELINE (a shared dial, or a one-listener radio) —
+             *  vibe_fm_defaults.h. RETURN: a session arriving with NOBODY ELSE on gets the owner's defaults (or, a reload,
+             *  its own last settings). REMEMBER: the dial keeps what the last listener left. A joiner on an occupied dial
+             *  is never touched — the shared-dial contract: the server says what the dial is, the client has no vote.
+             *  ★ Before the config and hwinfo go out, so the arriving client paints what it will hear. An Icom
+             *    demodulates in the radio, so it has no Broadcast FM row to set. */
+            if (firstOfSession && !perClientDsp() && !useIcom()) {
+                vibefm::State st;
+                if (vsFmSharedArrival(session, othersAtArrival, st)) {
+                    if (st != fmSharedState()) {
+                        fmApplyShared(st);
+                        LOGI("new session — Broadcast FM back to %s", fmDescribe(st).c_str());
+                    }
+                }
+            }
             // ★★★ THIS LISTENER'S OWN CHANNEL — STILL RUNNING, IF THEIR AUDIO KEPT IT ALIVE.
             //     A pocketed app closed only its spectrum socket; its channel played on. Take it
             //     back rather than build another (see adoptChannel, 2026-10-05). The landing above
@@ -25587,9 +25688,14 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (perClientDsp() && !adopted) {
                 auto c = std::make_shared<ClientDsp>();
                 c->owner = this;
-                // ★ The owner's configured defaults are what a new listener starts from.
-                c->wspOn.store(weakProcOn.load()); c->imsOn.store(imsOn.load());
-                c->ceqOn.store(ceqOn.load());      c->nbOn.store(nbOn.load());
+                /* ★★ THE BROADCAST FM ROW THIS LISTENER STARTS WITH (vibe_fm_defaults.h): RETURN — the owner's
+                 *  defaults; REMEMBER — the last values anyone set; either way a returning session (a reload) gets
+                 *  its own back. It used to copy the shared pipeline's atomics, which on a locked range nobody but
+                 *  the app's JNI ever wrote, so the owner had no say and a listener's choice was lost on F5. */
+                { const vibefm::State st = vsFmChannelStart(session);
+                  fmApplyChannel(*c, st);
+                  LOGI("listener %s: Broadcast FM starts at %s (%s)", session.empty() ? "(anon)" : session.c_str(),
+                       fmDescribe(st).c_str(), vsFmRemember() ? "remember" : "return to the owner's defaults"); }
                 c->nbxOn.store(nbxOn.load());
                 // ★ The credential proved at the handshake belongs to THIS listener. The accept
                 //   path settled it into the radio-wide flag a few lines earlier (it is still the
@@ -33420,7 +33526,7 @@ struct DesiredDsp {
     std::atomic<bool>   nrOn{false};        // Impl::nrOn
     std::atomic<float>  nrStrength{-1.0f};  // <0 = never set, so leave the engine alone
     std::atomic<bool>   notchOn{false};     // Impl::notchOn
-    std::atomic<bool>   weakProcOn{true};   // Impl::weakProcOn — replayed onto a fresh Impl
+    std::atomic<bool>   weakProcOn{false};  // Impl::weakProcOn — replayed onto a fresh Impl (★ OFF by default, 2026-11-03)
     std::atomic<bool>   imsOn{true};        // Impl::imsOn
     std::atomic<bool>   ceqOn{true};        // Impl::ceqOn
     std::atomic<bool>   nbOn{true};         // Impl::nbOn
@@ -33655,6 +33761,11 @@ static bool  vsAntennaLocked()     { return g_antennaLocked.load() != 0; }
 static float vsDesiredNrStrength() { return g_dsp.nrStrength.load(); }
 static double vsDesiredDeemph()    { return g_dsp.deempTau.load(); }
 static bool  vsDesiredStereo()     { return g_dsp.stereoOn.load(); }
+static void vsFmRecordDesired(const vibefm::State& st) {
+    g_dsp.deempTau.store(st.deemphTau); g_dsp.stereoOn.store(st.stereo);
+    g_dsp.weakProcOn.store(st.nr); g_dsp.imsOn.store(st.ims); g_dsp.ceqOn.store(st.ceq); g_dsp.nbOn.store(st.nb);
+    g_autoBwOn.store(st.autobw, std::memory_order_relaxed);
+}
 static int   vsDesiredRspBiasT()   { return g_dsp.rspBiasT.load(); }
 
 // Replay the listener's choices onto a freshly built Impl. ★ Call this at EVERY `p = impl`
@@ -33667,6 +33778,14 @@ void LocalSdrShim::applyDesiredDsp(LocalSdrShim::Impl* impl) {
     impl->nrOn.store(g_dsp.nrOn.load());
     impl->notchOn.store(g_dsp.notchOn.load());
     impl->rx.setStereoEnabled(g_dsp.stereoOn.load());
+    /* ★★★ AND THE FOUR BROADCAST-FM TREATMENTS, WHICH THIS NEVER REPLAYED. They lived only on the Impl, so every fresh
+     *  Impl (a rate change, a USB nudge, the stall watchdog's reopen) quietly put NR/IMS/CEQ/NB back to the code's
+     *  defaults under whoever had set them — "remember the last listener's settings" could not have worked across a
+     *  reopen. g_dsp now carries them (the listener's change and the owner's defaults both write it). */
+    impl->weakProcOn.store(g_dsp.weakProcOn.load()); impl->rx.setWeakSignalProc(g_dsp.weakProcOn.load());
+    impl->imsOn.store(g_dsp.imsOn.load());           impl->rx.setIms(g_dsp.imsOn.load());
+    impl->ceqOn.store(g_dsp.ceqOn.load());           impl->rx.setCeq(g_dsp.ceqOn.load());
+    impl->nbOn.store(g_dsp.nbOn.load());             impl->rx.setNoiseBlanker(g_dsp.nbOn.load());
     impl->deempTau = g_dsp.deempTau.load();
     impl->rx.setDeemphasis(impl->deempTau);
     impl->rx.setNfmVoice(g_nfmVoiceShared.load());
@@ -36549,6 +36668,25 @@ void LocalSdrShim::setVibeServerLandingDab(int ch, uint32_t sid) {
     g_vsLandingDabSid.store(ok ? sid : 0, std::memory_order_relaxed);
     if (ok) LOGI("[DAB] landing station: block %s, service 0x%X", vibedab::kBandIII[ch].name, unsigned(sid));
     else if (ch >= 0) LOGI("[DAB] landing station ignored — block index %d is not a Band III block", ch);
+}
+void LocalSdrShim::setVibeServerFmDefaults(const std::string& json) {
+    vibefm::Defaults d;
+    vibefm::fromJson(json, d);
+    vibefm::State st;
+    { std::lock_guard<std::mutex> lk(g_fmMtx);
+      // ★ An UNCHANGED set is not a restart: re-reading the same config must not forget anybody's settings.
+      if (g_fmConfigured && g_fm.defaults() == d) return;
+      g_fm.configure(d, vibebands::defaultRegion());
+      g_fmConfigured = true;
+      st = g_fm.owner(); }
+    // ★ The desired record first, so the radio's next (or first) Impl starts on the owner's values.
+    vsFmRecordDesired(st);
+    LOGI("Broadcast FM defaults: %s%s — %s", d.deemphUs < 0 ? "(de-emphasis by region) " : "",
+         Impl::fmDescribe(st).c_str(), d.remember ? "REMEMBER the last listener's settings"
+                                                  : "RETURN to these for each new listener");
+    /* ★★ And the running radio — but ONLY with nobody on it (never under someone), and only its one shared pipeline:
+     *  on a locked range every listener has their own channel and the new defaults reach the next one to arrive. */
+    { auto* P = instance().p; if (P && !P->perClientDsp() && !P->useIcom() && P->specListenerCount() == 0) P->fmApplyShared(st); }
 }
 void LocalSdrShim::setVibeServerLandingAdsb(bool land, bool keepRunning) {
     // ★ Keep-running is a refinement of the landing, never on its own: the page shows it only beneath the choice.

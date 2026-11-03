@@ -294,6 +294,10 @@ object VibeServerBoot {
         //    ignores both where ADS-B cannot run on this radio (vsAdsbWhyNot), so a blocked ADS-B never lands either.
         val adsbLand = cfg.b("landingAdsb", false)
         VibeLocalSDR.setVibeServerLandingAdsb(adsbLand, adsbLand && cfg.b("adsbKeepRunning", false))
+        // ★★ The owner's Broadcast FM defaults (fmDeemph, fmStereo, fmNr, fmIms, fmCeq, fmAutoBw, fmNb) and REMEMBER /
+        //    RETURN (fmRemember) — the engine reads those keys off the config itself (vibe_fm_defaults.h), so there is no
+        //    second list here to fall out of step. Absent = the defaults (NR off, the rest on, de-emphasis by region).
+        VibeLocalSDR.setVibeServerFmDefaults(cfg.toString())
         // ★★ The multiplex (and station) it was LEFT on, surviving a restart — see the JNI note.
         VibeLocalSDR.setDabMemoryPath(File(filesDir, "vibe_dab_memory.txt").absolutePath)
         // ★ The owner's name for the radio ("SDR display name"); blank = the USB port's name, as before.

@@ -6,6 +6,7 @@
 //   move an occupied dial, and the reload that must not lose a listener's own choice.
 
 #include "vibe_fm_defaults.h"
+#include "vibeserver_config.h"
 
 #include <cstdio>
 #include <string>
@@ -104,6 +105,31 @@ int main() {
         ok(!m.known("s0", out) && m.known("s199", out), "only the most recent sessions are kept (no unbounded map)");
         m.note("", ceqOff);   // an older client with no session id
         ok(!m.known("", out), "no session id = no per-session memory");
+    }
+
+    std::printf("the config carries them per radio (both writers, both readers, the worker's copy)\n");
+    {
+        vsconfig::ServerConfig c;
+        vsconfig::RadioConfig r; r.serial = "00000001"; r.driver = "rtl";
+        r.fm.nr = true; r.fm.ceq = false; r.fm.deemphUs = 75; r.fm.remember = true;
+        c.radios.push_back(r);
+        vsconfig::RadioConfig r2; r2.serial = "00000002"; r2.driver = "rtl";   // untouched: the defaults
+        c.radios.push_back(r2);
+        const std::string j = vsconfig::toJson(c);
+        vsconfig::ServerConfig back; std::string err;
+        ok(vsconfig::fromJson(j, back, err) && back.radios.size() == 2, "the saved server config loads");
+        ok(back.radios.size() == 2 && back.radios[0].fm == r.fm, "radio 1 keeps its owner's choices");
+        ok(back.radios.size() == 2 && back.radios[1].fm == vibefm::Defaults{}, "radio 2 keeps the defaults");
+        ok(j.find("\"fmCeq\"") != std::string::npos, "the keys are in the file, so a hand-editor can find them");
+        // ★ and the worker (one radio's process) sees them — effectiveFor builds its Config
+        if (back.radios.size() == 2) {
+            const vsconfig::Config w = vsconfig::effectiveFor(back, back.radios[0]);
+            ok(w.fm == r.fm, "effectiveFor hands them to the radio's process");
+        }
+        // ★ a patch that does not mention them leaves them alone
+        vsconfig::ServerConfig p = back;
+        ok(vsconfig::fromJson("{\"name\":\"Attic\"}", p, err) && p.radios.size() == 2 && p.radios[0].fm == r.fm,
+           "a patch about something else does not reset them");
     }
 
     std::printf(failures ? "\nFAILED (%d)\n" : "\nall passed\n", failures);

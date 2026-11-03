@@ -293,6 +293,8 @@ deps_for() {
     test-config-durable) echo "$SRC/vibeserver_config.cpp" ;;
     # ★★★ Going back from a V12 beta keeps V12's settings: unknown config keys survive a load + save (11.0.10-4).
     test-config-keep)   echo "$SRC/vibeserver_config.cpp" ;;
+    # ★★ The owner's Broadcast FM defaults + REMEMBER / RETURN (vibe_fm_defaults.h) and their config round trip.
+    test-fm-defaults)   echo "$SRC/vibeserver_config.cpp" ;;
     test-connlog)       echo "" ;;
     # ★★★ An admin read must never hold the connection log's lock while it works (Pi 2 IQ overruns
     #     with the admin page open, 2026-10-01). Header-only; slow resolvers make it CPU-independent.

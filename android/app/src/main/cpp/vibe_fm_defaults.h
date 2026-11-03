@@ -143,6 +143,8 @@ public:
         haveLast_ = false;      // ★ a (re)configure is a start: begin from the owner's word
         ses_.clear();
     }
+    /** ★ The region only decides a BY-REGION de-emphasis; changing it forgets nobody. */
+    void setRegion(int ituRegion) { region_ = ituRegion; }
     const Defaults& defaults() const { return d_; }
     State owner() const { return resolve(d_, region_); }
     bool remember() const { return d_.remember; }

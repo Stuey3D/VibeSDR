@@ -333,6 +333,9 @@ object VibeLocalSDR {
     fun setVibeServerLandingAdsb(land: Boolean, keepRunning: Boolean) { ensureLoaded(); nativeSetVibeServerLandingAdsb(land, keepRunning) }
     private external fun nativeSetVibeServerLandingAdsb(land: Boolean, keepRunning: Boolean)
     /** ★ The radio's display name ("SDR display name"); "" = the name from the USB port. */
+    /** ★★ The owner's Broadcast FM defaults and REMEMBER / RETURN: the config JSON (its fm* keys). */
+    fun setVibeServerFmDefaults(json: String) { ensureLoaded(); nativeSetVibeServerFmDefaults(json) }
+    private external fun nativeSetVibeServerFmDefaults(json: String)
     fun setRadioLabel(name: String) { ensureLoaded(); nativeSetRadioLabel(name) }
     private external fun nativeSetRadioLabel(name: String)
     /** ★ The Band III block list, from the receiver's own table: `[{"name":"5A","hz":…},…]`. */

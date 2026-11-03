@@ -762,6 +762,11 @@ public:
      *  meaningful with `land`). Both ignored where ADS-B cannot run on this radio (vsAdsbWhyNot). See the landing block
      *  in the spectrum accept path and adsbKeepTick for the precedence against DAB, background decoding and the park. */
     static void setVibeServerLandingAdsb(bool land, bool keepRunning);
+    /** ★★ THE OWNER'S BROADCAST FM DEFAULTS, AND WHETHER THE SERVER REMEMBERS OR RETURNS (vibe_fm_defaults.h).
+     *  `json` is a flat object with the config's fm* keys (fmDeemph, fmStereo, fmNr, fmIms, fmCeq, fmAutoBw, fmNb,
+     *  fmRemember); absent keys take the defaults. An UNCHANGED set is ignored, so re-applying a config forgets
+     *  nobody's settings. The running radio takes them now only if nobody is listening — never under someone. */
+    static void setVibeServerFmDefaults(const std::string& json);
     /** ★ The radio's DISPLAY NAME ("SDR display name" — Linux's `label`), for a host that has no
      *  front door to publish it (Android). Empty = the name from the USB port, exactly as before.
      *  Published in /vibeserver.json as `radioLabel` only when set, so the directory publisher can
