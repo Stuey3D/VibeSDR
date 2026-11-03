@@ -21,6 +21,7 @@
 
 #if defined(__linux__)
 #include <csignal>
+#include <dlfcn.h>
 #include <cstdint>
 #include <cstring>
 #include <execinfo.h>
@@ -34,6 +35,11 @@
 namespace vibecrash {
 
 inline uintptr_t& exeBase() { static uintptr_t b = 0; return b; }
+/* ★★ THE EXECUTABLE'S CODE RANGE (2026-11-03, the first real USRP: a fault inside libc, from the 'vibe-usrp' thread,
+ *  and backtrace() printed NOTHING — the build links libgcc statically, so glibc's backtrace has no unwinder to load).
+ *  Known at install; the stack scan below keeps only words that point into it. */
+inline uintptr_t& exeTextLo() { static uintptr_t v = 0; return v; }
+inline uintptr_t& exeTextHi() { static uintptr_t v = 0; return v; }
 inline const char*& versionStr() { static const char* v = "?"; return v; }
 
 inline void put(const char* s) { if (s) { ssize_t r = ::write(2, s, std::strlen(s)); (void)r; } }
@@ -74,6 +80,35 @@ inline void putAddr(const char* label, uintptr_t a) {
     if (a && exeBase() && a >= exeBase()) { put(" (exe+"); putHex(a - exeBase()); put(")"); }
 }
 
+/* ★★ WHICH LOADED OBJECT AN ADDRESS IS IN — "libc.so.6+0x…" (the offset inside it, symbolised with the box's own
+ *  libc: `gdb -batch -ex 'info symbol 0x…' /lib/x86_64-linux-gnu/libc.so.6`) and, where the object exports one, the
+ *  nearest symbol's name via dladdr. Not strictly async-signal-safe; this is the last thing the process does. */
+struct ModHit { uintptr_t a; uintptr_t base; const char* name; };
+inline int modCb(struct dl_phdr_info* info, size_t, void* vp) {
+    ModHit* h = static_cast<ModHit*>(vp);
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        const auto& ph = info->dlpi_phdr[i];
+        if (ph.p_type != PT_LOAD) continue;
+        const uintptr_t lo = uintptr_t(info->dlpi_addr + ph.p_vaddr), hi = lo + ph.p_memsz;
+        if (h->a >= lo && h->a < hi) { h->base = uintptr_t(info->dlpi_addr); h->name = info->dlpi_name; return 1; }
+    }
+    return 0;
+}
+inline void putWhere(const char* label, uintptr_t a) {
+    if (!a) return;
+    put(label); putHex(a);
+    ModHit h{ a, 0, nullptr };
+    ::dl_iterate_phdr(modCb, &h);
+    if (h.name) {
+        put(" in "); put(h.name[0] ? h.name : "vibeserver"); put("+"); putHex(a - h.base);
+        Dl_info di{};
+        if (::dladdr(reinterpret_cast<void*>(a), &di) && di.dli_sname) {
+            put(" <"); put(di.dli_sname); put("+"); putHex(a - uintptr_t(di.dli_saddr)); put(">");
+        }
+    }
+    put("\n");
+}
+
 inline void handler(int sig, siginfo_t* si, void* uc) {
     static volatile sig_atomic_t entered = 0;
     if (entered) return;              // a second thread faulting meanwhile: the first one's report stands
@@ -88,10 +123,32 @@ inline void handler(int sig, siginfo_t* si, void* uc) {
     put(" version "); put(versionStr()); put("\n");
     put("VibeServer CRASH:"); putAddr(" pc ", pc); putAddr(" lr ", lr); put(" sp "); putHex(sp);
     put(" exe-base "); putHex(exeBase()); put("\n");
+    putWhere("VibeServer CRASH: pc ", pc);
+#if defined(__x86_64__)
+    if (uc) {   // ★ the argument registers — a memcpy's dest/src/len are rdi/rsi/rdx
+        const ucontext_t* u = static_cast<const ucontext_t*>(uc);
+        put("VibeServer CRASH: rdi "); putHex(uintptr_t(u->uc_mcontext.gregs[REG_RDI]));
+        put(" rsi "); putHex(uintptr_t(u->uc_mcontext.gregs[REG_RSI]));
+        put(" rdx "); putHex(uintptr_t(u->uc_mcontext.gregs[REG_RDX]));
+        put(" rcx "); putHex(uintptr_t(u->uc_mcontext.gregs[REG_RCX]));
+        put(" rbp "); putHex(uintptr_t(u->uc_mcontext.gregs[REG_RBP])); put("\n");
+    }
+#endif
     put("VibeServer CRASH: backtrace (addr2line -Cfe /usr/bin/vibeserver <exe+offset>):\n");
     void* frames[48];
     const int n = ::backtrace(frames, 48);
     ::backtrace_symbols_fd(frames, n, 2);
+    /* ★★ THE STACK SCAN — the frames backtrace() could not walk: every word of the faulting thread's stack (from sp,
+     *  up to 16 KB) that points into OUR code, as exe+offset, oldest last. Return addresses dominate; an odd function
+     *  pointer may appear too — read it as "these functions were on the way here". At most 40. */
+    if (sp && exeTextHi() > exeTextLo()) {
+        put("VibeServer CRASH: stack scan (return addresses into vibeserver, nearest first):\n");
+        int shown = 0;
+        for (uintptr_t p = sp & ~uintptr_t(7); p < sp + 16384 && shown < 40; p += sizeof(uintptr_t)) {
+            const uintptr_t w = *reinterpret_cast<const uintptr_t*>(p);
+            if (w >= exeTextLo() && w < exeTextHi()) { put("  exe+"); putHex(w - exeBase()); put("\n"); shown++; }
+        }
+    }
     put("VibeServer CRASH: end of report\n");
     /* ★ SA_RESETHAND has put the default action back. A fault returns into the faulting instruction,
      *  which faults again and kills the process exactly as before (status=11, a core if allowed);
@@ -102,6 +159,14 @@ inline void handler(int sig, siginfo_t* si, void* uc) {
 inline int exeBaseCb(struct dl_phdr_info* info, size_t, void* out) {
     // ★ The first object dl_iterate_phdr reports is the executable itself (empty name).
     *static_cast<uintptr_t*>(out) = uintptr_t(info->dlpi_addr);
+    // ★ …and its executable segment's range, for the stack scan.
+    for (int i = 0; i < info->dlpi_phnum; i++) {
+        const auto& ph = info->dlpi_phdr[i];
+        if (ph.p_type == PT_LOAD && (ph.p_flags & PF_X)) {
+            exeTextLo() = uintptr_t(info->dlpi_addr + ph.p_vaddr);
+            exeTextHi() = exeTextLo() + ph.p_memsz;
+        }
+    }
     return 1;
 }
 
