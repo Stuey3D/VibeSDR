@@ -376,7 +376,15 @@ memcheck() {
   { echo "# Written by vibeserver-maintenance memcheck; removed when the check ends (and gone at the next boot)."
     echo "[Service]"
     echo "ExecStart="
-    echo "ExecStart=/usr/bin/timeout --kill-after=10 60 $MC_ASAN $args"
+    # ★★ setarch -R: a GCC 12 ASan binary cannot start where the kernel randomises mmap with more than 28 bits (Ubuntu
+    #    24.04's 6.8 kernel uses 32) — this run alone goes without address randomisation. The unit's LockPersonality=
+    #    would refuse that, so it is lifted for this run only (the drop-in is removed when the check ends).
+    if command -v setarch >/dev/null 2>&1; then
+      echo "ExecStart=$(command -v setarch) $(uname -m) -R /usr/bin/timeout --kill-after=10 60 $MC_ASAN $args"
+      echo "LockPersonality=no"
+    else
+      echo "ExecStart=/usr/bin/timeout --kill-after=10 60 $MC_ASAN $args"
+    fi
     echo "Restart=no"
     echo "LogRateLimitIntervalSec=0"
   } > "$MC_DROP/zz-vibeserver-memcheck.conf"

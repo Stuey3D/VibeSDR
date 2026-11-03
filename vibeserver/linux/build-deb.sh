@@ -124,12 +124,22 @@ if [ "$PGO" != generate ] && [[ " $ASAN_ARCHES " == *" $ARCH "* ]]; then
   #   cannot run its own output, which is said rather than skipped silently.
   if [ ${#CROSS[@]} -eq 0 ]; then
     timeout 20 "$A" --help > "$OUT/asan-help.log" 2>&1 || true
-    [ "$(count -F 'MEMORY-CHECK BUILD' "$OUT/asan-help.log")" -gt 0 ] \
-      || { tail -20 "$OUT/asan-help.log"; fail "the ASan binary does not start (no banner from --help)"; }
-    # ★★ …and the recipe CATCHES what it is for: a heap overflow on a named thread, reported at the write, symbolised.
-    bash linux/test-asan-harness.sh > "$OUT/asan-harness.log" 2>&1 \
-      || { tail -20 "$OUT/asan-harness.log"; fail "the ASan recipe did not catch the test harness's heap overflow"; }
-    ASAN_RUN="started here; harness overflow caught"
+    # ★★ A BUILD HOST WITH 32-BIT mmap RANDOMISATION (Ubuntu 24.04's 6.8 kernel — the Lenovo, 2026-11-03) cannot start a
+    #    GCC 12 ASan binary at all: it dies before main with no message (the known shadow-mapping limit, fixed in later
+    #    libasan). Docker forbids `setarch -R` here, so on such a host the start is NOT checked — said in build-info,
+    #    never silent. The owner's box runs it under `setarch -R` (vibeserver-maintenance memcheck), which works anywhere.
+    RNDB=$(cat /proc/sys/vm/mmap_rnd_bits 2>/dev/null || echo 0)
+    if [ "$(count -F 'MEMORY-CHECK BUILD' "$OUT/asan-help.log")" -gt 0 ]; then
+      # ★★ …and the recipe CATCHES what it is for: a heap overflow on a named thread, reported at the write, symbolised.
+      bash linux/test-asan-harness.sh > "$OUT/asan-harness.log" 2>&1 \
+        || { tail -20 "$OUT/asan-harness.log"; fail "the ASan recipe did not catch the test harness's heap overflow"; }
+      ASAN_RUN="started here; harness overflow caught"
+    elif [ "$RNDB" -gt 28 ]; then
+      echo "  ! the ASan binary cannot start on this build host (vm.mmap_rnd_bits=$RNDB > 28) — start NOT checked here"
+      ASAN_RUN="NOT started here: build host vm.mmap_rnd_bits=$RNDB (> 28, GCC 12 ASan's limit); runs under setarch -R"
+    else
+      tail -20 "$OUT/asan-help.log"; fail "the ASan binary does not start (no banner from --help, vm.mmap_rnd_bits=$RNDB)"
+    fi
   else
     ASAN_RUN="cross-built, NOT started here"
   fi
