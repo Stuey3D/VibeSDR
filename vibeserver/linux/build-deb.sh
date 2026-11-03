@@ -106,7 +106,7 @@ if [ "$PGO" != generate ] && { [ "$ARCH" = amd64 ] || [ "$ARCH" = arm64 ]; }; th
   #   own -O3 per target either way. -g1 comes from VIBESERVER_ASAN; no PGO profile (it is the other binary's).
   nice -n 19 cmake -S . -B build-asan -DCMAKE_BUILD_TYPE=Release -DVIBESERVER_DEB_REV="$REV" \
         -DVIBESERVER_STRICT_RADIOS=ON -DVIBESERVER_ASAN=ON "${CROSS[@]}" \
-        "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG" "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG" > "$OUT/cmake-asan.log" \
+        "-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG" "-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG" > "$OUT/cmake-asan.log" 2>&1 \
     || { tail -30 "$OUT/cmake-asan.log"; fail "the memory-check (ASan) build did not configure"; }
   nice -n 19 cmake --build build-asan --target vibeserver -j"$JOBS" > "$OUT/build-asan.log" 2>&1 \
     || { tail -30 "$OUT/build-asan.log"; fail "the memory-check (ASan) build failed — UHD/Boost/static libs under -fsanitize=address?"; }
@@ -123,7 +123,10 @@ if [ "$PGO" != generate ] && { [ "$ARCH" = amd64 ] || [ "$ARCH" = arm64 ]; }; th
     timeout 20 "$A" --help > "$OUT/asan-help.log" 2>&1 || true
     [ "$(count -F 'MEMORY-CHECK BUILD' "$OUT/asan-help.log")" -gt 0 ] \
       || { tail -20 "$OUT/asan-help.log"; fail "the ASan binary does not start (no banner from --help)"; }
-    ASAN_RUN="started here"
+    # ★★ …and the recipe CATCHES what it is for: a heap overflow on a named thread, reported at the write, symbolised.
+    bash linux/test-asan-harness.sh > "$OUT/asan-harness.log" 2>&1 \
+      || { tail -20 "$OUT/asan-harness.log"; fail "the ASan recipe did not catch the test harness's heap overflow"; }
+    ASAN_RUN="started here; harness overflow caught"
   else
     ASAN_RUN="cross-built, NOT started here"
   fi

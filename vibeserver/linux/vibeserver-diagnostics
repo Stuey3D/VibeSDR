@@ -42,6 +42,9 @@ JOIN_HISTORY = "/var/lib/vibeserver-pocket/join-history.json"
 #     these two capped files on the settings partition are the only Wi-Fi evidence from before the last reboot/update.
 WIFI_LOG = "/var/lib/vibeserver-pocket/wifi-log.txt"
 RADIO_STATUS_GLOB = "/run/vibeserver/radio-status-*.json"
+# ★★ THE NEWEST MEMORY CHECK (vibeserver-maintenance memcheck, 2026-11-03) — written by root in root's own directory.
+MEMCHECK_GLOB = "/var/lib/vibeserver-maint/diag/memcheck-*.txt"
+MEMCHECK_MAX = 2 * 1024 * 1024        # ★ the helper caps each report at 2 MB; read no more than that
 JOURNAL_MAX = 3 * 1024 * 1024          # ★ the journal section's cap (the newest lines kept); a phone carries the file
 UNITS = ("vibeserver*", "vibeserver-pocket*", "vibeserver-radios*", "vibeserver-maintenance*",
          "NetworkManager*", "avahi-daemon*", "sdrplay*")
@@ -151,7 +154,7 @@ def redact(text, secrets):
 
 def bundle(run=run, conf_paths=(SERVER_CONF, DIRECTORY_STATE), pocket_marker=POCKET_MARKER, pocket_state=POCKET_STATE,
            join_history=JOIN_HISTORY, status_glob=RADIO_STATUS_GLOB, server_conf=SERVER_CONF, now=None,
-           wifi_log=WIFI_LOG):
+           wifi_log=WIFI_LOG, memcheck_glob=MEMCHECK_GLOB):
     now = now or time.time()
     portable = os.path.exists(pocket_marker)
     out = []
@@ -215,6 +218,13 @@ def bundle(run=run, conf_paths=(SERVER_CONF, DIRECTORY_STATE), pocket_marker=POC
         sec("wi-fi log kept across reboots (oldest first; NetworkManager, wpa_supplicant, kernel Wi-Fi, vibeserver-pocket)")
         kept = "".join(read_text(p) or "" for p in (wifi_log + ".1", wifi_log)).rstrip()
         out.append(kept or "(none kept yet)")
+    # ★★ "Check this radio's memory" — the NEWEST report, whole (it is already bounded), ABOVE the journal so a long
+    #    journal can never push it out of a file someone has to scroll. Absent = say so, plainly.
+    mc = sorted((p for p in glob.glob(memcheck_glob) if os.path.isfile(p) and not os.path.islink(p)),
+                key=lambda p: os.path.getmtime(p))
+    sec("memory check (newest of %d)" % len(mc) if mc else "memory check")
+    out.append((read_text(mc[-1], MEMCHECK_MAX) or "(empty)").rstrip() if mc else
+               "(none run — the admin page's Check this radio's memory makes one)")
     rc, journal = run(["journalctl", "--since", "-24h", "--no-pager", "-o", "short-iso"]
                       + sum((["-u", u] for u in UNITS), []), timeout=90)
     journal = journal or ""

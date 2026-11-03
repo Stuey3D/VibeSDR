@@ -62,7 +62,8 @@ endif()
 #     and nothing runs it but that one action. The slowness above is accepted for 60 s.
 #  ★★ -static-libasan: the .deb's Depends stays adduser, curl, gzip, libc6 — no libasan8 package.
 #  ★ -g1 (line tables only): GCC's libasan symbolises in process from them (libbacktrace), so the
-#    report names file:line with no llvm-symbolizer on the box, at a fraction of -g's size.
+#    report names file:line with no llvm-symbolizer on the box, at a fraction of -g's size; -gz
+#    compresses those sections on disk (libbacktrace reads them compressed — linux/test-asan-harness.sh).
 #  ★ Instruments OUR code and the vendored drivers (HackRF, Airspy, OpenRSP's client half) — not the
 #    prebuilt libraries in /opt/vibe-deps (UHD, libusb, …). A bad write from inside UHD is not caught
 #    AT the write; ASan's allocator keeps its metadata apart from the chunks, so such a crash may
@@ -72,8 +73,8 @@ if(VIBESERVER_ASAN)
   if(APPLE OR NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     message(FATAL_ERROR "VIBESERVER_ASAN is the Linux package's GCC build (it links libasan statically)")
   endif()
-  add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g1)
-  add_link_options(-fsanitize=address -static-libasan)
+  add_compile_options(-fsanitize=address -fno-omit-frame-pointer -g1 -gz)
+  add_link_options(-fsanitize=address -static-libasan -gz)
   message(STATUS "VIBESERVER_ASAN=ON — the SERVER carries AddressSanitizer (the diagnostics binary only)")
 endif()
 function(vibe_sanitize tgt)
@@ -1120,6 +1121,12 @@ add_test(NAME agc-record COMMAND test-agc-record)
 add_executable(test-diag-scrub "${CMAKE_CURRENT_SOURCE_DIR}/test-diag-scrub.cpp")
 vibe_sanitize(test-diag-scrub)
 add_test(NAME diag-scrub COMMAND test-diag-scrub)
+# ★★ "Check this radio's memory" (vibe_memcheck.h, 2026-11-03): the serial alphabet the endpoint and the daemon hold a
+#    memcheck request to, the listener count read from a radio's /vibeserver.json, the helper's "still running" marker.
+add_executable(test-memcheck-action "${CMAKE_CURRENT_SOURCE_DIR}/test-memcheck-action.cpp")
+target_include_directories(test-memcheck-action PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../android/app/src/main/cpp")
+vibe_sanitize(test-memcheck-action)
+add_test(NAME memcheck-action COMMAND test-memcheck-action)
 # ★★★ The tunnel address (tunnel_url.h, 2026-10-27): cloudflared's "failed to request quick Tunnel: Post
 #     \"https://api.trycloudflare.com/tunnel\"" line is never an address (Kiko's TV box recycled on it every 15 s).
 add_executable(test-tunnel-url "${CMAKE_CURRENT_SOURCE_DIR}/test-tunnel-url.cpp")
