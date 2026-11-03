@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -86,7 +88,9 @@ inline Radio radioFor(const std::string& driver, double converterOffsetHz = 0, d
         if (lo < 0) lo = 0;
         if (hi > lo) r.ranges.push_back({ lo, hi });
     }
-    r.rates = liveRates.empty() ? offlineRates(r.driver, usbSpeed) : liveRates;
+    // ★ A USRP whose link is not known yet (it is read when the radio opens) is MEASURED at the USB 3 rates — the
+    //   measurement costs only time; what is OFFERED still waits for the link (vibe_usrp_caps.h ratesFor).
+    r.rates = liveRates.empty() ? offlineRates(r.driver, (r.driver == "usrp" && usbSpeed == 0) ? 3 : usbSpeed) : liveRates;
     r.wideCandidates = wideCandidates(r.driver, usbSpeed);
     r.locked = locked;
     r.ds = directSampling;
@@ -112,8 +116,10 @@ inline bool offers(const Radio& r, double hz) {
     for (double v : r.rates) if (std::fabs(v - hz) < 1.0) return true;
     return false;
 }
-/** ★ HF: below 30 MHz. An RTL reaches it by its coverage table (a V4's own upconverter, or direct sampling). */
-inline bool hasHf(const Radio& r) { return touches(r, 100e3, 30e6); }
+/** ★ HF for the HF decoders: below 24 MHz, where RTTY, WEFAX, NAVTEX, SITOR and the HF skimmers live (an R820T tuner
+ *  starts at 24 MHz, so an R2 or a bare dongle hears only 10 m — that counts for digital spots, below). An RTL reaches it
+ *  by its coverage table (a V4 has its own upconverter; a V3 direct sampling). */
+inline bool hasHf(const Radio& r) { return touches(r, 100e3, 24e6); }
 
 /** Every requirement a row can have. */
 enum class Need {
@@ -161,7 +167,7 @@ inline Gate gateNeed(const Hw& hw, Need n) {
                 return no("no radio here reaches AIS (162 MHz)");
             break;
         case Need::Hf:
-            if (!any([](const Radio& r) { return hasHf(r); })) return no("no radio here reaches HF (below 30 MHz)");
+            if (!any([](const Radio& r) { return hasHf(r); })) return no("no radio here reaches HF (below 24 MHz)");
             break;
         case Need::Navtex:
             if (!any([](const Radio& r) { return touches(r, 489e3, 519e3) && (r.driver != "rtl" || r.ds); }))
@@ -189,7 +195,7 @@ inline Gate gateNeed(const Hw& hw, Need n) {
                 return no("no radio here reaches an ISM band (433 / 868 / 915 MHz)");
             break;
         case Need::Spots:
-            if (!any([](const Radio& r) { return hasHf(r) || touches(r, 50e6, 54e6) || touches(r, 144e6, 148e6); }))
+            if (!any([](const Radio& r) { return hasHf(r) || touches(r, 28e6, 29.7e6) || touches(r, 50e6, 54e6) || touches(r, 144e6, 148e6); }))
                 return no("no radio here reaches a digital-spots band (HF, 6 m or 2 m)");
             break;
     }
@@ -256,6 +262,24 @@ inline std::vector<double> wideRates(const Hw& hw) {
 }
 /** Any radio here set to locked range (the channeliser path — the gate judges such a radio by the locked-range rows). */
 inline bool anyLocked(const Hw& hw) { for (const auto& r : hw.radios) if (r.locked) return true; return false; }
+
+/** ★★ THE GATE'S INPUT, read back from a saved benchmark (benchmark.json beside the config): the "capture" block's
+ *  lockedMaxHz / fullMaxHz. false (both 0) = no such block — never measured wide, so nothing above the base list. */
+inline bool gateFromBenchJson(const std::string& j, double& lockedHz, double& fullHz) {
+    lockedHz = fullHz = 0;
+    const size_t c = j.find("\"capture\":{");
+    if (c == std::string::npos) return false;
+    auto num = [&](const char* key, double& out) {
+        const size_t k = j.find(key, c);
+        if (k == std::string::npos) return false;
+        out = std::atof(j.c_str() + k + std::strlen(key));
+        return true;
+    };
+    const bool a = num("\"lockedMaxHz\":", lockedHz), b = num("\"fullMaxHz\":", fullHz);
+    if (!(lockedHz > 0)) lockedHz = 0;
+    if (!(fullHz > 0)) fullHz = 0;
+    return a && b;
+}
 
 /** "28 MS/s" / "30.72 MS/s" / "912 kS/s" — a rate as the owner reads it. */
 inline std::string rateWords(double hz) {

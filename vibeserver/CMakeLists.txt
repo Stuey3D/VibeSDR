@@ -1063,6 +1063,11 @@ add_executable(test-rsp-caps "${CMAKE_CURRENT_SOURCE_DIR}/test-rsp-caps.cpp")
 target_include_directories(test-rsp-caps PRIVATE "${CPP_DIR}")
 vibe_sanitize(test-rsp-caps)
 add_test(NAME rsp-caps COMMAND test-rsp-caps)
+# ★★ V12 the benchmark tailored to the radios here, and the USRP's rate gate (vibe_benchmark_hw.h, vibe_usrp_caps.h).
+add_executable(test-bench-hw "${CMAKE_CURRENT_SOURCE_DIR}/test-bench-hw.cpp")
+target_include_directories(test-bench-hw PRIVATE "${CPP_DIR}")
+vibe_sanitize(test-bench-hw)
+add_test(NAME bench-hw COMMAND test-bench-hw)
 # ★★★ VibeAGC FOR SDRplay (vibe_rsp_vibeagc.h, 2026-10-30): the combined IF + RF loop closed against a simulated RSP
 #     (Band II next to a +20 dB neighbour, weak HF, DAB, a signal arriving, the DAB rapid-step repro, fades, a rung
 #     bigger than its prior, a stalled stream) — and its writes through the real gainstep.h + RxPipeline: IF steps

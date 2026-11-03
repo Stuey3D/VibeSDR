@@ -41923,6 +41923,7 @@ std::string LocalSdrShim::radioCapsJsonCore() const {
         c.antennas = u.antennas(); c.antenna = u.antenna();
         c.antennaLocked = vsAntennaLocked();
         u.fillOptionView(c);   // ★ V12 the owner's options: what the radio offers, what is in force, ref/GPS lock
+        c.gateHz = vibe::usrpcaps::gateHzFor(vibe::usrpcaps::rateGate()); c.gateLocked = vibe::usrpcaps::rateGate().locked;
         return vibe::usrpcaps::capsJson(c);
     }
     if (!p->useSdrplay()) {

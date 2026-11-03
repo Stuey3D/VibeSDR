@@ -1042,6 +1042,36 @@ static std::string vsBenchLoad() {
     std::fclose(f);
     return out;
 }
+/** ★★★ V12 THE RADIOS THE BENCHMARK IS TAILORED TO (vibe_benchmark_hw.h — Stuart, 2026-11-03): every radio in the
+ *  config as it is NOW on disk (the file is the one shared truth — see the config handler), with its converter, its
+ *  direct sampling and whether it is a locked-range, multi-listener radio. None configured = an empty set = the full
+ *  run. ★ A USRP is left out of a build without UHD (armhf, i386): it cannot open there, so its wide rates are not
+ *  this machine's question. */
+static vibe::benchhw::Hw vsBenchHw() {
+    vsconfig::ServerConfig sc;
+    { std::string e; if (g_configPath.empty() || !vsconfig::loadServer(g_configPath, sc, e)) sc = g_serverConfig; }
+    vibe::benchhw::Hw hw;
+    for (const auto& r : sc.radios) {
+        if (r.driver.empty()) continue;
+#if !defined(VIBE_HAVE_USRP)
+        if (r.driver == "usrp") continue;
+#endif
+        const bool locked = r.mode == vsconfig::Mode::LockedRange && r.lockFreq > 0 && r.users > 1;
+        hw.radios.push_back(vibe::benchhw::radioFor(r.driver, r.converterOffsetHz, r.converterInputLoHz,
+                                                    r.converterInputHiHz, r.directSampling > 0 || r.autoDirectSampling,
+                                                    0, locked));
+    }
+    return hw;
+}
+/** ★★ V12 THE USRP's RATE GATE from the saved benchmark (vibe_usrp_caps.h ratesFor): the highest rate this machine kept
+ *  up at with headroom, locked-range and full-radio; `locked` picks which one THIS radio process is judged by. Set at
+ *  start-up (before the radio opens) and after every run (the radio is then reacquired, which re-reads it). */
+static void vsApplyRateGate(bool locked) {
+    double l = 0, f = 0;
+    vibe::benchhw::gateFromBenchJson(vsBenchLoad(), l, f);
+    auto& g = vibe::usrpcaps::rateGate();
+    g.lockedHz = l; g.fullHz = f; g.locked = locked;
+}
 
             std::atomic<bool> g_restartRequested{false};
             /** ★ Earliest moment the restart may happen, so the HTTP reply can drain first. */
@@ -1912,6 +1942,7 @@ int main(int argc, char** argv) {
     LocalSdrShim::setVibeServerLimits(o.maxBw, o.maxFps);
     LocalSdrShim::setVibeServerLockedRate(o.lockRate);
     LocalSdrShim::setVibeServerRateLock(o.rateLock);
+    vsApplyRateGate(o.lockFreq > 0 && o.users > 1);   // ★ V12 the USRP's wide rates, from the saved benchmark — before it opens
     /* ★★★ A RADIO THAT FELL OVER AT A RATE A MODE BOOSTED TO (vibe_rate_guard.h), beside the config, by serial (one per
      *  radio on a multi-radio box). BEFORE the rate switch is applied: a marker left by a run that died at a boosted rate
      *  switches it off. */
@@ -2225,14 +2256,18 @@ int main(int argc, char** argv) {
                 auto& shim = LocalSdrShim::instance();
                 const bool held = shim.isRunning() && !shim.radioIsReleased();
                 const bool released = held && shim.releaseRadio();
-                const std::string clip = vibe::ensureDabClip(vsBenchDir());
-                const std::string adsbClip = vibe::ensureAdsbClip(vsBenchDir());
+                /* ★★ V12 TAILORED TO THE RADIOS HERE: a clip no row here will use is not even fetched (DAB's and
+                 *  ADS-B's are tens of MB — a box with only an HF+ has no business downloading them). */
+                const vibe::benchhw::Hw hw = vsBenchHw();
+                const std::string clip = vibe::benchhw::gateRow(hw, "dab").run ? vibe::ensureDabClip(vsBenchDir()) : std::string();
+                const std::string adsbClip = vibe::benchhw::gateRow(hw, "adsb").run ? vibe::ensureAdsbClip(vsBenchDir()) : std::string();
                 const std::string decoderClip = vibe::ensureDecoderClip(vsBenchDir());   // ★ the skimmers', NDB's and ISM's real band
                 const std::string j = vibe::runBenchmark(nullptr, 6.0, -2,
                                                          [&] { auto r = vibe::runDabRows(clip, 6.0);
                                                                for (auto& a : vibe::runAdsbRows(adsbClip, 6.0)) r.push_back(a);
-                                                               return r; }, 4, decoderClip);
+                                                               return r; }, 4, decoderClip, hw);
                 vsBenchSave(j);
+                vsApplyRateGate(vibe::usrpcaps::rateGate().locked);   // ★ the reacquire below re-reads it
                 if (released) {
                     /* ★★★ GIVE THE DEVICE TIME TO LET GO, AND KEEP ASKING. An immediate reacquire lost the race
                      *  with libusb releasing the interface — `usb_claim_interface error -6` (BUSY), and the

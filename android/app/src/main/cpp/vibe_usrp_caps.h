@@ -475,6 +475,8 @@ struct CapsView {
     double rxBwHz = 0;                    // the analogue bandwidth in force
     bool rxBwAuto = true;
     std::string optionsNote;              // a saved choice the radio refused, in words ("" = none)
+    // ★ V12 the rate gate (ratesFor): the highest wide rate this machine's benchmark passed, and which path judged it
+    double gateHz = 0; bool gateLocked = false;
 };
 inline std::string jsonQ(const std::string& s) {
     std::string o = "\"";
@@ -504,6 +506,14 @@ inline std::string capsJson(const CapsView& c) {
     j += "]";
     if (!c.antennas.empty()) j += ",\"antenna\":" + jsonQ(c.antenna);
     j += std::string(",\"antennaLocked\":") + (c.antennaLocked ? "true" : "false");
+    /* ★★ V12 THE RATE GATE, said (2026-11-03): on USB 3 the rates above 16 MS/s are offered only up to what THIS
+     *  machine's benchmark kept up at with headroom (`maxHz`, 0 = not measured, or too slow), judged by the locked-range
+     *  path for a locked-range radio and the full-radio one otherwise. The Setup page says it in words. */
+    if (c.usbSpeed >= 3) {
+        char g[128];
+        std::snprintf(g, sizeof g, ",\"rateGate\":{\"maxHz\":%.0f,\"by\":\"%s\"}", c.gateHz, c.gateLocked ? "locked" : "full");
+        j += g;
+    }
     /* ★★ THE OWNER'S OPTIONS — each key only when the radio reported the capability, so a client can draw exactly
      *    what exists and nothing else. Capability and state travel together (the bias-T lesson). */
     auto list = [&](const char* k, const std::vector<std::string>& v) {
