@@ -159,6 +159,7 @@ inline std::string ensureDecoderClip(const std::string& cacheDir,
 /** Both ADS-B rows — 2.4 and 3.0 MS/s — or none if no clip. Ids adsb_2400 / adsb_3000, from each record's own rate. */
 inline std::vector<benchdetail::Result> runAdsbRows(const std::string& clipPath, double seconds) {
     std::vector<benchdetail::Result> out;
+    if (benchdec::rowSkipped("adsb")) return out;   // ★ V12: no radio here reaches 1090 MHz (vibe_benchmark_hw.h)
     if (clipPath.empty()) return out;
     const auto clips = loadAdsbClips(clipPath);
     for (const auto& c : clips) {

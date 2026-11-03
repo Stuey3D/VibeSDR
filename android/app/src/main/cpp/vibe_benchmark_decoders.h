@@ -218,6 +218,12 @@ inline void settleCpu(double capSec) {
     }
 }
 
+/** ★★ V12 THE BENCHMARK TAILORED TO THE RADIOS HERE (vibe_benchmark_hw.h, 2026-11-03): a row whose id this says true
+ *  for is not run at all — runBenchmark sets it for the length of one run and lists every skipped row as "not run" with
+ *  the reason. Unset = every row (no radio configured, and every caller before this existed). */
+inline std::function<bool(const std::string&)>& rowSkipFn() { static std::function<bool(const std::string&)> f; return f; }
+inline bool rowSkipped(const std::string& id) { const auto& f = rowSkipFn(); return f && f(id); }
+
 /** Every decoder row. `seconds` scales the text/image rows; FT8 always runs one whole slot pair. */
 inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(const std::string&)>& step) {
     std::vector<Row> rows;
@@ -226,21 +232,21 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
     auto chunked = [](const std::vector<int16_t>& v, int blk, const std::function<void(const int16_t*, int)>& f) {
         for (size_t o = 0; o < v.size(); o += (size_t)blk) f(v.data() + o, (int)std::min<size_t>((size_t)blk, v.size() - o));
     };
-    {
+    if (!rowSkipped("dec_rtty")) {
         t0 = rowClock(); if (step) step("Decoder: RTTY");
         const auto sig = fsk(s, 1000, 170, 45.45, 1);
         FskDecoder d(48000, 1000, 170, 45.45, "5N1.5", "ITA2", false);
         rows.push_back({ "dec_rtty", "Decoder: RTTY", timeIt(s, [&] { chunked(sig, 960, [&](const int16_t* p, int n) { d.process(p, n); }); }, [] {}) });
         rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
     }
-    {
+    if (!rowSkipped("dec_navtex")) {
         t0 = rowClock(); if (step) step("Decoder: NAVTEX");
         const auto sig = fsk(s, 500, 170, 100, 2);
         FskDecoder d(48000, 500, 170, 100, "4/7", "CCIR476", false);
         rows.push_back({ "dec_navtex", "Decoder: NAVTEX", timeIt(s, [&] { chunked(sig, 960, [&](const int16_t* p, int n) { d.process(p, n); }); }, [] {}) });
         rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
     }
-    {
+    if (!rowSkipped("dec_wefax")) {
         t0 = rowClock(); if (step) step("Decoder: WEFAX");
         const auto sig = wefax(s);
         WefaxDecoder::Config c; c.usePhasing = false; c.autoStart = false; c.autoStop = false;
@@ -248,7 +254,7 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
         rows.push_back({ "dec_wefax", "Decoder: WEFAX", timeIt(s, [&] { chunked(sig, 960, [&](const int16_t* p, int n) { d.process(p, n); }); }, [] {}) });
         rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
     }
-    {
+    if (!rowSkipped("dec_sstv")) {
         t0 = rowClock(); if (step) step("Decoder: SSTV");
         const double ss = std::max(s, 8.0);
         const auto sig = sstv(ss);
@@ -262,14 +268,14 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
         rows.push_back({ "dec_sstv", modes.load() ? "Decoder: SSTV" : "Decoder: SSTV (listening)", pct });
         rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
     }
-    {
+    if (!rowSkipped("dec_time")) {
         t0 = rowClock(); if (step) step("Decoder: time signals");
         const auto sig = timeSignal(s);
         TimeDecoder d(48000, TimeDecoder::Station::MSF);
         rows.push_back({ "dec_time", "Decoder: time signals (MSF, DCF77, RWM, WWV, WWVB, JJY)", timeIt(s, [&] { chunked(sig, 960, [&](const int16_t* p, int n) { d.process(p, n); }); }, [] {}) });
         rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
     }
-    {
+    if (!rowSkipped("dec_ft8")) {
         t0 = rowClock(); if (step) step("Decoder: FT8 + FT4");
         /* ★ The spotter cuts UTC slots by each block's CAPTURE time (2026-10-05), so the band is fed with
          *  stamps of its own: sample 0 on a slot boundary, as if heard in real time. No clock is touched.
@@ -301,6 +307,7 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
          *  ★ Not counted as the HEAVIEST decoder for the decoder limit (vibe_benchmark.h): Band is one slot, and where it
          *    is too heavy it is off by default — letting it lower every other decoder's limit would punish the boxes it
          *    is not running on. */
+        if (!rowSkipped("dec_ft8band")) {
         t0 = rowClock(); if (step) step("Decoder: digital spots, Band");
         const digi::Span* best = nullptr; digi::Span keep; size_t most = 0;
         for (const auto& b : digi::bands()) {
@@ -327,6 +334,7 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
             rows.back().ms = (int)std::lround(1000.0 * (rowClock() - t0));
         }
     }
+    }
     {
         /* ★★ V12 LoRa (vibe_lora_service.h): ISM mode's 868 default channels (LoRaWAN 868.1/.3/.5 at SF7-12, Meshtastic
          *  LongFast, MeshCore) through the THREADED engine, fed in real time — vibe_benchmark_more.h loraRealTimeRow.
@@ -335,8 +343,10 @@ inline std::vector<Row> runDecoderRows(double seconds, const std::function<void(
          *     with no thread over ~55 %. The engine's own total (the three threads) stays in the row's detail, and THAT is
          *     what sets how many more channels run (vibelora::budgetFromBench via the shim's vsLoraBenchPct) — the same
          *     quantity the inline figure was, so the governor's arithmetic is unchanged. The default set is never hidden. */
+        if (!rowSkipped("dec_lora")) {
         if (step) step("Decoder: LoRa (868 default channels)");
         rows.push_back(loraRealTimeRow("dec_lora", "Decoder: LoRa (868 default channels)", 0.0));
+        }
     }
     return rows;
 }

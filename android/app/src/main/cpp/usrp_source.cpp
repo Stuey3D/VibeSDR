@@ -229,7 +229,9 @@ bool UsrpSource::open(int index, double sampleRateHz, double centreHz, int gainT
         // ★ Link speed AFTER find(): the firmware has re-enumerated the radio by now, so this is the real link.
         usbSpeed_ = 0;
         for (const auto& g : walk(false)) if (g.vid == f.vid && g.pid == f.pid) { usbSpeed_ = std::max(usbSpeed_, g.speed); }
-        rates_ = usrpcaps::ratesFor(usbSpeed_);
+        /* ★★ V12 THE RATE GATE (vibe_usrp_caps.h ratesFor): on USB 3, the rates above 16 MS/s that THIS machine's saved
+         *  benchmark passed — and the rate asked for, kept offered whatever the benchmark says (never hide one in use). */
+        rates_ = usrpcaps::ratesFor(usbSpeed_, usrpcaps::gateHzFor(usrpcaps::rateGate()), sampleRateHz);
         // ★ AGC: present on a B2xx, but asked, not assumed — a refusal simply means no AUTO is offered.
         hasAgc_ = false;
         try { u.set_rx_agc(false, c); hasAgc_ = true; } catch (const std::exception&) { hasAgc_ = false; }
@@ -335,7 +337,14 @@ bool UsrpSource::start(std::string& err) {
         uhd::rx_streamer::sptr rx;
         { std::lock_guard<std::recursive_mutex> lk(impl_->mtx); rx = impl_->rx; }
         if (!rx) return;
-        const size_t maxN = std::max<size_t>(rx->get_max_num_samps(), 1024);
+        /* ★★ ~5 ms A HAND-OFF, SIZED TO THE RATE (V12, 2026-11-03 — the wide rates). One packet's worth (~2000 samples)
+         *  per recv was 15 000 hand-offs a second at 30.72 MS/s, each a queue push and a whole DSP-loop iteration (its
+         *  lock, its ticks, the capture cleaner's call) — overhead that grows with the rate and buys nothing. recv() fills
+         *  the buffer across packets (one_packet false), so a bigger buffer is simply fewer, larger hand-offs. Bounded:
+         *  at most 262144 samples (2 MB), never fewer than one packet. */
+        const size_t pkt = std::max<size_t>(rx->get_max_num_samps(), 1024);
+        const size_t want = impl_->rate > 0 ? (size_t)(impl_->rate * 0.005) : pkt;
+        const size_t maxN = std::max(pkt, std::min<size_t>(want, 262144));
         impl_->buf.assign(maxN * 2, 0.0f);
         uhd::rx_metadata_t md;
         while (impl_->run.load(std::memory_order_relaxed)) {
