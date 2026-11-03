@@ -6,6 +6,7 @@
  * an explicit host:port.
  */
 
+import { portLabel, portNamesFrom } from '../../../src/utils/antennaPortNames';
 import { portableReady, masterView, honourReset, onVibeDomain, saveViewForAll, VIEW_KEYS } from './portable';
 import { lanOfferFromPage, lanHopAtBoot, offerLanOnSplash } from './lanHop';
 import { isWfSpeedSetting, loadWfSpeed, speedNumbers, DATA_FLOOR_FPS, dataModeFromWebRate, linkModeFor, lowDataRungFor, type DataMode, type WfSpeedSetting } from '../../../src/assets/wfSpeedCap.ts';
@@ -19433,12 +19434,15 @@ function renderAntenna(caps: import('./spectrum').RadioCaps | null) {
   if (!show) { note.hidden = true; return; }
   const locked = !!caps?.antennaLocked && !(srvAdminProtected ? adminUnlocked : true);
   $<HTMLElement>('antLocked').hidden = !caps?.antennaLocked;
+  // ★ V12 the owner's names for the radio's own ports ("Discone (RX2)") — read only; the PORT is what is sent.
+  const portNames = portNamesFrom(caps?.antennaNames);
   for (const name of names) {
     const b = document.createElement('button');
     b.className = 'btn' + (name === caps?.antenna ? ' on' : '');
-    b.textContent = name;
+    const label = portLabel(name, portNames);
+    b.textContent = label;   // ★ textContent: the owner's text is never parsed as HTML
     b.disabled = locked;
-    b.title = locked ? 'The owner has fixed the aerial for this receiver' : `Switch to ${name}`;
+    b.title = locked ? 'The owner has fixed the aerial for this receiver' : `Switch to ${label}`;
     b.onclick = () => { if (!locked) spec?.send({ type: 'antenna', antenna: name }); };
     seg.appendChild(b);
   }

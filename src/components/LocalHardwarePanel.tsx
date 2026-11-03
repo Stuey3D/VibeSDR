@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { portLabel, portNamesFrom } from '../utils/antennaPortNames';
 import {
   Modal, View, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
   KeyboardAvoidingView, Platform, Animated,
@@ -1123,7 +1124,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
                       options={p.radio.antennas}
                       value={p.radio.antenna ?? p.radio.antennas[0]}
                       onChange={(v) => p.onRspAntenna?.(String(v))}
-                      fmt={(v) => String(v)} />
+                      fmt={(v) => portLabel(String(v), portNamesFrom(p.radio?.antennaNames))} />
                   </View>
                   <Text style={styles.note}>
                     {p.radio.antennaLocked && !isAdmin

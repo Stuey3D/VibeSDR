@@ -286,6 +286,8 @@ export interface RadioCaps {
   antennas?: string[];      // the ports this model actually has; <2 = nothing to choose
   antenna?: string;         // the one selected now
   antennaLocked?: boolean;  // the owner pinned it — admin only
+  /** ★ V12 the owner's names for these ports, keyed by port ({"RX2":"Discone"}) — src/utils/antennaPortNames.ts. */
+  antennaNames?: Record<string, string>;
   /** ★ Present when the aerials come from an external switch (2026-10-09): connected to its broker, and whether the
    *  read-back is clear ("ok"), unknown, or shows several on at once. */
   antennaSwitch?: { connected: boolean; state: 'ok' | 'unknown' | 'several'; error?: string };

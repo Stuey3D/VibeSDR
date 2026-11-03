@@ -47,6 +47,7 @@
 #include "vibe_hwinfo.h"
 #include "vibe_mqtt.h"        // ★ the external antenna switch (2026-10-09) — see g_ext below
 #include "vibe_antswitch.h"
+#include "vibe_port_names.h"  // ★ V12 the owner's names for the radio's own antenna ports — see g_portNamesJson
 #include "vibe_gzip.h"
 #include "vibe_rsp_init_gate.h" // ★ the AGC-initialising indicator's ending — it cannot wedge (2026-10-06)
 #include "vibe_rsp_rail_step.h" // ★ the RF loop's open-loop test — a rail must show in OUR peak (2026-10-16)
@@ -33507,6 +33508,9 @@ static DesiredDsp g_dsp;
  *  remembered across an Impl rebuild so a re-open does not silently go back to port A. */
 static std::mutex  g_rspAntMtx;
 static std::string g_rspAntenna;
+/** ★ V12 the owner's names for the radio's OWN ports (RadioConfig::antennaNames), as vibe_port_names.h toJson wrote them —
+ *  cleaned, bounded and escaped once, at the setter; radioCapsJson adds them to hwinfo as `antennaNames`. Same lock. */
+static std::string g_portNamesJson;
 /** ★ V12 the USRP's owner options (setUsrpOptions) — remembered across an Impl rebuild, like the aerial above. */
 static std::mutex  g_usrpOptMtx;
 static vibe::usrpcaps::Options g_usrpOpts;
@@ -41856,6 +41860,15 @@ int LocalSdrShim::rfGainPositions() const {
 std::string LocalSdrShim::radioCapsJson() const {
     std::string j = radioCapsJsonCore();
     const std::string ext = vsExtAntennaFields();
+    /* ★★ V12 THE OWNER'S NAMES FOR THE RADIO'S OWN PORTS (vibe_port_names.h), for EVERY driver whose branch above listed
+     *    `antennas` — keyed by those same port names, so a driver that publishes its ports gets naming with nothing more.
+     *    `antennaNames`, an object; the clients read "Discone (RX2)" from it and still SEND the port. Not while an external
+     *    switch is set up: then `antennas` are the switch's own (already named), and these would name nothing on screen. */
+    if (ext.empty()) {
+        std::string names;
+        { std::lock_guard<std::mutex> lk(g_rspAntMtx); names = g_portNamesJson; }
+        j = vibe::portnames::withNames(j, names);
+    }
     if (ext.empty() || j.empty() || j.back() != '}') return j;
     const size_t a = j.find(",\"antennas\":[");
     if (a != std::string::npos) {
@@ -42384,6 +42397,15 @@ void LocalSdrShim::setRspAntenna(const std::string& port) {
     if (!p || !p->useSdrplay()) return;
     VIBE_HW_LOCK(); p->sdrp->setAntenna(port);
     LOGI("RSP antenna -> %s", port.c_str());
+}
+/* ★ V12 the owner's per-port names — from the config at start and on every setup save (main.cpp), so a rename reaches every
+ *  listener's selector at once. Normalised HERE as well as on load: whatever calls this, only clean bounded text goes out. */
+void LocalSdrShim::setAntennaPortNames(const std::string& blob) {
+    const std::string clean = vibe::portnames::normalise(blob);
+    bool changed;
+    { std::lock_guard<std::mutex> lk(g_rspAntMtx); changed = clean != g_portNamesJson; g_portNamesJson = clean; }
+    if (changed) LOGI("antenna port names: %s", clean.empty() ? "(none)" : clean.c_str());
+    if (changed && p) broadcastHwInfo();
 }
 void LocalSdrShim::setRspAntennaMap(const std::string& csv) {
     { std::lock_guard<std::mutex> lk(g_rspAntMtx); g_antennaMap = csv; }

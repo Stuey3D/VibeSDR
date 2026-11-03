@@ -139,6 +139,18 @@ inline std::string normalise(const std::string& blob) {
     return n.empty() ? std::string() : toJson(n);
 }
 
+/** hwinfo's radio object with `antennaNames` added — only when the radio LISTED ports (a non-empty `antennas` array:
+ *  every driver's branch publishes one, empty for a radio with one input) and there are names. `namesJson` is toJson's
+ *  output (already escaped); anything else leaves `caps` as it was. */
+inline std::string withNames(const std::string& caps, const std::string& namesJson) {
+    if (namesJson.size() < 2 || namesJson == "{}" || caps.empty() || caps.back() != '}') return caps;
+    if (caps.find(",\"antennas\":[\"") == std::string::npos && caps.find("{\"antennas\":[\"") == std::string::npos) return caps;
+    if (caps.find("\"antennaNames\":") != std::string::npos) return caps;   // never twice
+    std::string out = caps;
+    out.insert(out.size() - 1, ",\"antennaNames\":" + namesJson);
+    return out;
+}
+
 /** The owner's name for a port, or "". Exact match — the keys are the driver's own port names. */
 inline std::string nameFor(const Names& n, const std::string& port) {
     for (const auto& e : n) if (e.first == port) return e.second;

@@ -316,6 +316,9 @@ public:
     /** ★ The aerial's ranges and filters, as the owner's text — see RadioConfig::antennaRanges.
      *  Published on /vibeserver.json for the clients to parse; empty = omitted. */
     void setAntennaBands(const std::string& ranges, const std::string& filters);
+    /** ★ V12 the owner's names for the radio's own antenna PORTS — RadioConfig::antennaNames, a JSON object keyed by the
+     *  port names hwinfo `antennas` lists. Published in hwinfo as `antennaNames` (vibe_port_names.h); "" = none. */
+    void setAntennaPortNames(const std::string& json);
     void setLandingInfo(const std::string& antenna, const std::string& message,
                         const std::string& linkUrl, const std::string& linkLabel);
     void setOccupancyRegistry(const std::string& dir, const std::string& serial,
