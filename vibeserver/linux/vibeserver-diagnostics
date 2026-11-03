@@ -175,6 +175,15 @@ def bundle(run=run, conf_paths=(SERVER_CONF, DIRECTORY_STATE), pocket_marker=POC
                                 "cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null"])
     cmd("services", ["sh", "-c", "systemctl --no-pager --plain list-units 'vibeserver*' 'sdrplay*' 2>/dev/null | head -n 40"])
     cmd("usb", ["sh", "-c", "lsusb 2>/dev/null || ls /sys/bus/usb/devices 2>/dev/null"])
+    # ★ AN ICOM IS FOUND BY THE SERIAL ITS USB CHIP REPORTS ("IC-7300 0300…") — a Silicon Labs CP210x (10c4) or a
+    #   native-USB Icom (0c26). lsusb does not show that string, and a chip that does not name the radio is skipped
+    #   on purpose, so this is the line that says why one "did not show up" (Saber's Pi 4, 2026-11-03).
+    cmd("usb serial chips", ["sh", "-c",
+        "for d in /sys/bus/usb/devices/*; do [ -f \"$d/idVendor\" ] || continue; v=$(cat \"$d/idVendor\"); "
+        "case \"$v\" in 10c4|0c26) echo \"$(basename \"$d\") $v:$(cat \"$d/idProduct\") "
+        "product=\\\"$(cat \"$d/product\" 2>/dev/null)\\\" serial=\\\"$(cat \"$d/serial\" 2>/dev/null)\\\" "
+        "driver=$(basename \"$(readlink \"$d\"/*:1.0/driver 2>/dev/null)\" 2>/dev/null)\";; esac; done; "
+        "echo; ls -l /dev/serial/by-id/ 2>/dev/null || echo '(no /dev/serial/by-id)'"])
     sec("server config (secrets removed)")
     out.append((read_text(server_conf) or "(not readable)").strip())
     for pth in sorted(glob.glob(status_glob))[:8]:
