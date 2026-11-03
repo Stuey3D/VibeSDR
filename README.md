@@ -30,6 +30,7 @@ browser. It takes about five minutes, and the more of us who do it, the better t
 | 📱 **[VibeSDR on the App Store](https://apps.apple.com/gb/app/vibesdr/id6786344049)** | iPhone, iPad and Apple Silicon Macs, with the Apple Watch remote (Buddy) included. |
 | ⌚ **[VibeSDR Jr on the App Store](https://apps.apple.com/gb/app/vibesdr-jr/id6795507029)** | The standalone Apple Watch receiver: its own connection, its own audio, no phone. |
 | 🤖 **[Android APK](https://github.com/Stuey3D/VibeSDR/releases)** | VibeSDR for Android, straight from GitHub. No Google account needed, and registered to a verified developer, so it installs without the 24-hour wait Android now puts on apps from unverified ones. |
+| ▶️ **[Google Play (testing)](https://play.google.com/apps/testing/net.vibesdr.app)** | VibeSDR for Android from the Play Store. Join the test with your Google account, then install it from Play; it keeps itself up to date from then on. |
 | 🖥 **[VibeServer](#share-your-radio)** | `apt` for Linux, a notarised Mac app, Raspberry Pi card images, and VibeServer Lite for Android. |
 | 💬 **[Discord](https://discord.gg/pr9EjUUBCA)** | Where the testing, the bug reports and the DX chat happen. |
 | 🌐 **[vibesdr.net](https://vibesdr.net)** · **[demo receiver](https://demo.vibesdr.net)** | The site, and our own radio to try right now. |
