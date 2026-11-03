@@ -132,8 +132,11 @@ echo "SUMMARY: AddressSanitizer: heap-buffer-overflow usrp_source.cpp:412 in Usr
 ''' % calls)
         lister = os.path.join(b, "vibeserver-lister")
         open(lister, "w").write("#!/bin/sh\n[ \"$1\" = --list-memcheck-radios ] && printf '%s'\n" % listing.replace("\n", "\\n"))
-        for tool in ("chgrp", "flock", "dpkg-query", "runuser"):
+        for tool in ("chgrp", "flock", "dpkg-query"):
             open(os.path.join(b, tool), "w").write("#!/bin/sh\necho \"%s $*\" >> \"%s\"\nexit 0\n" % (tool, calls))
+        # ★ runuser (the listing, when the test itself runs as root — a container): recorded, then the command run as is.
+        open(os.path.join(b, "runuser"), "w").write(
+            "#!/bin/sh\necho \"runuser $*\" >> \"%s\"\nwhile [ \"$1\" != -- ]; do shift; done; shift\nexec \"$@\"\n" % calls)
         for f in os.listdir(b):
             os.chmod(os.path.join(b, f), 0o755)
         asan = os.path.join(tmp, "vibeserver-asan")
