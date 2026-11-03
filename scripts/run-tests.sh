@@ -678,6 +678,12 @@ if node scripts/check-icom-app-gates.mjs; then pass=$((pass+1)); else fail=$((fa
 # ★★ …and the app's OWN server screen (ServerModeScreen, Lite too): the five icom* keys = what VibeIcom.prepareStart reads, the
 #     baud list = the setup page's, every IQ card hidden for an Icom, the Icom card drawn, nothing that transmits.
 if node scripts/check-icom-servermode.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 ANDROID ↔ SETUP PAGE PARITY: every Setup-page control is on the phone's server screen (app + Lite) with the
+#     engine applying it, or listed as not ported with why — Background Decoding sat on the Setup page from beta3
+#     with the phone never hearing of it. A new Setup control fails here until it is classified.
+if node scripts/check-android-settings-parity.mjs; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ …and the model behind the phone's Background Decoding editor: the bgDecode JSON both ways, the window rules.
+if node --no-warnings scripts/test_bg_decode_model.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ LAN DISCOVERY (mdnsBrowse.ts): SEARCH AGAIN and the return from the background really restart the browse; stale rows go (Stuart 2026-10-20).
 if node --no-warnings scripts/test_mdns_browse.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ PER-SERVER CERTIFICATE PINS (tlsPin.ts, GitHub #52): the key, the fingerprint, what a certificate says, and which
