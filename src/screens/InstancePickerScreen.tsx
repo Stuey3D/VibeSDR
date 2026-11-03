@@ -120,6 +120,7 @@ import { isDeepLinkActive, whenInitialLinkChecked } from '../linking/deepLinkSta
 import { parseSdrUrl } from '../linking/SdrLinkHandler';
 import { watchTargetPending } from '../services/watchBoot';
 import { watchProvider } from '../services/watchProvider';
+import { isMacHost } from '../services/macAudio';
 import { findVibeServerPort } from '../services/vibeServer';
 import { Favourite, getFavourites, toggleFavourite, setFavouriteServerType,
          saveFavourites, registerFavouriteVisit,
@@ -552,7 +553,11 @@ export default function InstancePickerScreen({ navigation, route }: Props) {
         //   besides App.tsx's background-boot check (that one can lose the race / misread AppState),
         //   so gate it here too, synchronously before the navigate. Sit on the picker and tell the
         //   wrist we're closed; only an explicit Reopen (or genuine foreground) revives us.
-        if (await watchProvider.wasClosedByUser()) {
+        /* ★★★ NEVER ON A MAC (Stuart 2026-11-03: "just stays on server list and every open"). Every quit on a Mac
+         *  runs applicationWillTerminate, which set this latch — and a Mac app OPENS already active, so the AppState
+         *  'change' that clears it never fires before this line. The default server never opened again. A Mac has
+         *  no watch to relaunch it headless, so the hijack this guards against cannot happen there. */
+        if (!isMacHost() && await watchProvider.wasClosedByUser()) {
           watchProvider.setPhoneStatus('closed');
           return;
         }

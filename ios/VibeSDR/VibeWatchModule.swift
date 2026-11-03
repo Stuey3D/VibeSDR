@@ -234,9 +234,15 @@ class VibeWatchModule: RCTEventEmitter, WCSessionDelegate {
   }
 
   @objc static func appWillTerminate() {
-    UserDefaults.standard.set(true, forKey: closedKey)
     let s = WCSession.default
-    guard WCSession.isSupported(), s.activationState == .activated else { return }
+    /* ★★★ THE LATCH IS ONLY FOR A PHONE A WATCH CAN RELAUNCH (2026-11-03). Set on every quit, it stopped the Mac
+     *  (no watch, and it opens already active, so nothing cleared it) auto-connecting to the default server on
+     *  EVERY open. No paired watch with Buddy installed → nothing can relaunch us headless → no latch. */
+    guard WCSession.isSupported(), s.activationState == .activated, s.isPaired, s.isWatchAppInstalled else {
+      UserDefaults.standard.set(false, forKey: closedKey)
+      return
+    }
+    UserDefaults.standard.set(true, forKey: closedKey)
     s.transferUserInfo(["k": "goodbye"])
     if s.isReachable { s.sendMessage(["k": "goodbye"], replyHandler: nil, errorHandler: nil) }
     /* ★★★ AND CORRECT THE THING THE WATCH READS WHEN NOBODY IS AWAKE. The application context
