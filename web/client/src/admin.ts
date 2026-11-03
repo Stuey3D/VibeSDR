@@ -1662,7 +1662,6 @@ async function refresh() {
         const el = document.getElementById(id);
         if (el) el.hidden = !offered.includes(act);
       }
-      renderMemcheck(offered.includes('memcheck') && st.memcheck && typeof st.memcheck === 'object' ? st.memcheck : null);
       // ★ The scheduler is only meaningful where an update action exists to schedule.
       const sched = document.getElementById('updSchedRow');
       const schedAll = document.getElementById('updSchedAllRow');
@@ -1779,89 +1778,6 @@ async function refresh() {
 //    that — never what this page last asked for — so a download started from another browser, or
 //    finished while this one was closed, reads correctly. The panel's 2-second refresh IS the poll.
 // ★ Stuart's wording, one sentence and one button: what is true, and the one thing to do about it.
-/* ── ★★★ CHECK THIS RADIO'S MEMORY (2026-11-03) ─────────────────────────────────────────────────────────────────────
- *  For a radio whose process keeps crashing: the root helper runs the package's memory-check build (AddressSanitizer) in
- *  that radio's place for 60 s and keeps the report for Download diagnostics. The picker lists ONLY the radios the
- *  server sent (every one in its settings, paused ones too), and nothing at all where the package has no such build.
- *  ★ Asked of the MACHINE (machineBase + a ticket), not of this radio's process: the radio checked may be the one this
- *    page was opened from, and its process is stopped for the minute — so the log is followed from the machine too. */
-type MemcheckState = { radios?: Array<{ serial: string; label: string; paused: boolean }>; last?: string };
-let memcheckBusy = false;
-function renderMemcheck(m: MemcheckState | null) {
-  const row = document.getElementById('memcheckRow');
-  const note = document.getElementById('memcheckNote');
-  const sel = document.getElementById('memcheckRadio') as HTMLSelectElement | null;
-  const radios = Array.isArray(m?.radios) ? m!.radios! : [];
-  const show = !!m && radios.length > 0;
-  if (row) row.hidden = !show;
-  if (note) note.hidden = !show;
-  if (!show || !sel) return;
-  const keep = sel.value;
-  const want = radios.map((r) => `${r.serial}|${r.label}|${r.paused}`).join(',');
-  if (sel.dataset.list !== want) {
-    sel.dataset.list = want;
-    sel.textContent = '';
-    for (const r of radios) {
-      const o = document.createElement('option');
-      o.value = String(r.serial);
-      o.textContent = `${r.label || r.serial} (${r.serial})${r.paused ? ' — paused' : ''}`;
-      sel.appendChild(o);
-    }
-    if (radios.some((r) => r.serial === keep)) sel.value = keep;
-  }
-  const last = document.getElementById('memcheckLast');
-  if (last) { last.hidden = !m?.last; last.textContent = m?.last ? `Last check: ${m.last}` : ''; }
-  const btn = document.getElementById('actMemcheck') as HTMLButtonElement | null;
-  if (btn) btn.disabled = memcheckBusy;
-}
-
-async function memcheckClick(msg: (id: string, text: string) => void) {
-  const sel = document.getElementById('memcheckRadio') as HTMLSelectElement | null;
-  const btn = document.getElementById('actMemcheck') as HTMLButtonElement | null;
-  const serial = sel?.value ?? '';
-  if (!serial || memcheckBusy) return;
-  const label = sel?.selectedOptions[0]?.textContent ?? serial;
-  if (!window.confirm(`Check the memory of ${label}?\n\n`
-      + 'That radio stops for up to a minute while a memory-checking copy of VibeServer runs on it, then it is put back '
-      + 'as it was. It only runs while nobody is listening to that radio. If this page is served by that radio, it will '
-      + 'stop answering for about a minute.')) return;
-  memcheckBusy = true;
-  if (btn) btn.disabled = true;
-  const box = document.getElementById('actLog');
-  const mlog = async (): Promise<any> => {
-    const r = await fetch(`${machineBase()}/vibeserver/admin/maintenance-log?${await qCached()}`, { cache: 'no-store' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    return r.json();
-  };
-  try {
-    let before = '';
-    try { before = String((await mlog()).text ?? ''); } catch { /* none */ }
-    const r = await fetch(`${machineBase()}/vibeserver/admin/action?${await qCached()}`,
-                          { method: 'POST', body: JSON.stringify({ action: 'memcheck', serial }) });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-    msg('actMsg', 'Checking the radio’s memory… (up to a minute and a half)');
-    let done = false, exitCode = 0;
-    // ★ Up to 3 min: 60 s of run, the stop and start either side, and a front door that is itself restarting.
-    for (let i = 0; i < 90 && !done; i++) {
-      await new Promise((res) => setTimeout(res, 2000));
-      let l: any;
-      try { l = await mlog(); } catch { continue; }       // ★ this radio's process may be the one stopped
-      const text = String(l.text ?? '');
-      if (box && text && text !== before) { box.hidden = false; box.textContent = text; box.scrollTop = box.scrollHeight; }
-      if (!l.running && text && text !== before) { done = true; exitCode = Number(l.exitCode) || 0; }
-    }
-    if (!done) msg('actMsg', 'The memory check did not report back in time. Press Download diagnostics in a minute.');
-    else msg('actMsg', exitCode ? `The memory check could not run (exit ${exitCode}) — the log above says why.`
-                                : 'Memory check finished. Press Download diagnostics to save the report.');
-  } catch (e) {
-    msg('actMsg', (e as Error).message);
-  } finally {
-    memcheckBusy = false;
-    if (btn) btn.disabled = false;
-  }
-}
-
 type MapglAction = 'mapgl-detail-install' | 'mapgl-detail-remove' | '';
 let mapglAction: MapglAction = '';
 let mapglBytes = 0;
@@ -2435,7 +2351,6 @@ export function initAdmin(getHost: () => string, getPassword: () => string) {
     + 'OS upgrade can occasionally need attention and nobody will be watching.'));
   $('actRestart')?.addEventListener('click', () => act('restart', 'Restart VibeServer?'));
   $('mapglDetailBtn')?.addEventListener('click', () => void mapglDetailClick(msg));
-  $('actMemcheck')?.addEventListener('click', () => void memcheckClick(msg));
   $('adsbDataCheck')?.addEventListener('click', () => void adsbDataAction('adsb-data-check', 'Checking for aircraft-data updates — this line says when it is done.', msg));
   $('adsbDataUpd')?.addEventListener('change', (e) => {
     const on = (e.target as HTMLInputElement).checked;
