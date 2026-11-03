@@ -671,6 +671,10 @@ export interface ControlsBarProps {
    *  where SDRScreen also forces the VFO control to the keys (the drum's flicks retuned the
    *  multiplex faster than the server could re-acquire). The zoom control keeps the user's choice. */
   vfoMuxLabel?: string;
+  /** ★★ V12 DAB / ISM / DIGI BAND (2026-11-03): the current block or band bold in `vfoMuxLabel`'s row, and where each key
+   *  goes on the key itself — set while any of the three runs; SDRScreen forces the keys then (services/hopKeys.ts).
+   *  Wins over `vfoMuxLabel`. */
+  vfoHopStrip?: { legend: string; prev?: string; cur: string; next?: string; spoken: string };
   /** ★★ V12 VFO A/B: the VFO the tune controls act on while A/B is on ('A' | 'B'), null/absent = off. The keys get an
    *  A/B key between them, the drum a letter beside its radio glyph (and a press-and-hold on the window switches). */
   vfoAB?: 'A' | 'B' | null;
@@ -2156,7 +2160,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
   dspNr, dspNb, dspAn,
   onVfoDelta, onBwDelta, clock, isRecording, recTime, chatUnread, csDisabled, chatOff, singleDrum, menuAsBack, vfoNoInertia,
   readOnly, sharedDial, storms, adminMode, vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate,
-  vfoMuxLabel, vfoAB, onVfoSwap, onControlRects, plateInset }: any) {
+  vfoMuxLabel, vfoHopStrip, vfoAB, onVfoSwap, onControlRects, plateInset }: any) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const handbackFlash = useHandbackFlash();
 
@@ -2213,7 +2217,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
    *  TUNE = keys, ‹ › / − + are keys in the 60 pt well (44 pt; 36 under DAB's MUX label); the menu keys are capped
    *  at that and the display takes back the room. Drums are the whole 60 pt well — nothing to cap against. */
   const tuneKeyH   = IS_TV || !(vfoKeys || (zoomKeys && !singleDrum)) ? undefined
-    : Math.min(vfoKeys ? tunerKeysLayout(0, DRUM_H, false, s.r, vfoMuxLabel != null).keyH : Infinity,
+    : Math.min(vfoKeys ? tunerKeysLayout(0, DRUM_H, false, s.r, (vfoMuxLabel != null || vfoHopStrip != null)).keyH : Infinity,
                zoomKeys && !singleDrum ? tunerKeysLayout(0, DRUM_H, false, s.r, false).keyH : Infinity);
   const dl0        = portraitDeck({ cap: isCap, meter: meterKind, shared: !!sharedDial, tablet: s.isTablet,
                                     rowGap: ROW_GAP, r: s.r, maxKey: tuneKeyH });
@@ -2451,7 +2455,7 @@ function PortraitBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, con
           }} />
         <ControlSlot style={{ flex: 1, opacity: askDim(sharedDial) }} report={r => onControlRects?.({ vfo: r })}>
           {vfoKeys
-            ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} centreLabel={vfoMuxLabel}
+            ? <TunerKeys type="vfo" height={DRUM_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} centreLabel={vfoMuxLabel} centreStrip={vfoHopStrip}
                          abLetter={vfoAB} onAbPress={onVfoSwap} />
             : <DrumWheel type="vfo" height={DRUM_H} onDelta={onVfoDelta} noInertia={vfoNoInertia}
                          vfoLetter={vfoAB} onTrapHold={onVfoSwap} />}
@@ -2577,7 +2581,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
    *  it and worked; its twin did not, which is why it survived review: the same JSX, one bar broken.
    *  ★★ A destructured prop list is a hand-maintained copy of the props — anything the body uses must be in it. */
   sharedDial,
-  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, vfoAB, onVfoSwap, onDrumAnchors }: any) {
+  vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, vfoHopStrip, vfoAB, onVfoSwap, onDrumAnchors }: any) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const handbackFlash = useHandbackFlash();
   const recPulse = useRecPulse(isRecording);   // ★ the AUDIO key breathes while recording, as in portrait
@@ -2703,7 +2707,7 @@ function LandscapeBar({ freqStr, unit, chanTag, chanMain, modeLabel, snrText, co
       <View ref={tourRef('vfoDrum')} style={{ flex: 1, minWidth: s.r(80) }}>
         <ControlSlot style={{ flex: 1, opacity: askDim(sharedDial) }} report={onVfoRect}>
         {vfoKeys
-          ? <TunerKeys type="vfo" height={BAND_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} centreLabel={vfoMuxLabel} landscape
+          ? <TunerKeys type="vfo" height={BAND_H} onStep={onVfoStep ?? noStep} sweepRate={vfoSweepRate} centreLabel={vfoMuxLabel} centreStrip={vfoHopStrip} landscape
                        abLetter={vfoAB} onAbPress={onVfoSwap} />
           : <DrumWheel type="vfo" height={BAND_H} onDelta={onVfoDelta} noInertia={vfoNoInertia}
                        vfoLetter={vfoAB} onTrapHold={onVfoSwap} />}
@@ -3264,6 +3268,7 @@ function ControlsBar({
   onZoomSweep,
   vfoSweepRate,
   vfoMuxLabel,
+  vfoHopStrip,
   vfoAB = null, onVfoSwap,
   onControlRects, onDrumAnchors, onDeckFrame,
   /* ★★★ AND THE FIVE THE BARS NEED. They are declared in ControlsBarProps and were arriving from SDRScreen,
@@ -3421,7 +3426,7 @@ function ControlsBar({
     csDisabled: chatShareDisabled,
     chatOff: chatShareDisabled || chatDisabled,
     singleDrum, menuAsBack, vfoNoInertia,
-    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, vfoAB, onVfoSwap, onControlRects, onDrumAnchors,
+    vfoKeys, zoomKeys, onVfoStep, onZoomStep, onZoomSweep, vfoSweepRate, vfoMuxLabel, vfoHopStrip, vfoAB, onVfoSwap, onControlRects, onDrumAnchors,
     /* ★★★ FIVE PROPS THE BARS DESTRUCTURE AND NEVER RECEIVED (Stuart, 2026-09-20: "no shared dial notification
      *  above the frequency"). ControlsBar took them, the bars declared them, and NOTHING carried them across
      *  this object — so `sharedDial` was undefined in both bars and the shared-tuner banner could not draw on
