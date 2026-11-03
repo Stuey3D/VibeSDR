@@ -7,6 +7,7 @@
  *   Reset Interface Settings
  */
 
+import { portLabel, portNamesFrom } from '../utils/antennaPortNames';
 import StationLogo from './StationLogo';
 import { usePadField } from './ControllerKeyboard';
 import { NavCtx, NavRow, NavSlot, usePanelNav, useNavButton, useNavRange, useListNav, noteTouchInteraction, revealIn, useKeyboardMode, useFullKeyboardAccessSuspected, NAV_ADJUST } from './PanelNav';
@@ -259,6 +260,8 @@ export interface MenuSheetProps {
   antennaInUse?: string;
   antennaLocked?: boolean;
   antennaNote?: string;
+  /** ★ V12 the owner's names for the radio's own ports (hwinfo `antennaNames`) — shown, never sent. */
+  antennaNames?: Record<string, string>;
   onAntenna?: (name: string) => void;
   /** RTL-TCP session — footer shows the RTL-TCP icon + label (vs USB for direct). */
   isTcp?:          boolean;
@@ -1310,7 +1313,7 @@ function MenuSheetBody({
   userBookmarks = [], currentFreq = 0, currentMode = '',
   onAddBookmark, onDeleteBookmark, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onClose, onBack, onLocalHardware, radioModel, isTcp, onAdminLink,
-  antennas, antennaInUse, antennaLocked, antennaNote, onAntenna,
+  antennas, antennaInUse, antennaLocked, antennaNote, antennaNames, onAntenna,
   adminSet = false, adminOk = false, adminRefused = false, adminFailReason = null, onAdminUnlock,
   onResetSettings, onReplayTour, onDisplaySettings,
   serverVersion = null, isVibeServer = false, onAbout, onRecordings, pocketWifi = null,
@@ -1642,10 +1645,14 @@ function MenuSheetBody({
             {!!antennas && antennas.length >= 2 && !!onAntenna && (<>
               <SectionLabel label="ANTENNA" icon="hardware" />
               <BtnRow>
-                {antennas.map((a) => (
-                  <Btn key={a} label={a} active={a === antennaInUse} onPress={antennaLocked ? () => {} : () => onAntenna(a)}
-                       a11y={antennaLocked ? `${a} — the owner has fixed the aerial` : `Switch to ${a}`} />
-                ))}
+                {antennas.map((a) => {
+                  // ★ V12 "Discone (RX2)" when the owner named the port; the PORT is still what is sent.
+                  const lbl = portLabel(a, portNamesFrom(antennaNames));
+                  return (
+                  <Btn key={a} label={lbl} active={a === antennaInUse} onPress={antennaLocked ? () => {} : () => onAntenna(a)}
+                       a11y={antennaLocked ? `${lbl} — the owner has fixed the aerial` : `Switch to ${lbl}`} />
+                  );
+                })}
               </BtnRow>
               {(antennaLocked || !!antennaNote) && (
                 <Text style={{ color: C.notice, fontSize: 11, marginTop: 4, marginHorizontal: 4 }}>

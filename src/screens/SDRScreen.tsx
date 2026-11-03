@@ -14748,6 +14748,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         /* ★ The ANTENNA section — from the radio's own report (hwinfo). Locked = greyed unless this session is admin. */
         antennas={radioCaps?.antennas}
         antennaInUse={radioCaps?.antenna}
+        antennaNames={radioCaps?.antennaNames}
         antennaLocked={!!radioCaps?.antennaLocked && !adminOk}
         antennaNote={radioCaps?.antennaSwitch
           ? (!radioCaps.antennaSwitch.connected ? `The antenna switch is not answering${radioCaps.antennaSwitch.error ? ` (${radioCaps.antennaSwitch.error})` : ''}.`

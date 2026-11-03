@@ -1,5 +1,6 @@
 #include "vibeserver_config.h"
 #include "vibe_usrp_caps.h"   // ★ V12: a new USRP's default rate (header-only, no UHD)
+#include "vibe_port_names.h"   // ★ V12: the owner's per-port antenna names (header-only)
 #include <vector>
 #include <algorithm>
 #include <set>
@@ -565,6 +566,8 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     S("antennaRanges", r.antennaRanges); S("antennaFilters", r.antennaFilters);
     S("antennaSwitch", r.antennaSwitch);                         // ★ the external switch — written in radioToJson too
     if (r.antennaSwitch.size() > 4000) r.antennaSwitch.clear();  // a corrupt or hostile blob is dropped, never half-applied
+    // ★ V12 the owner's per-port names — read AND written (radioToJson). Cleaned and bounded here, whatever the file says.
+    S("antennaNames", r.antennaNames); r.antennaNames = vibe::portnames::normalise(r.antennaNames);
     //   Cut at the last whole entry (`;`), so a clamp never leaves half a name or half a UTF-8 glyph.
     for (std::string* t : { &r.antennaRanges, &r.antennaFilters }) {
         if (t->size() <= 800) continue;
@@ -651,6 +654,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     S("antennaRanges", r.antennaRanges); S("antennaFilters", r.antennaFilters);   // ★ see the reader
     S("antennaSwitch", r.antennaSwitch);                                             // ★ see the reader
+    S("antennaNames", r.antennaNames);                                               // ★ see the reader
     B("enabled", r.enabled); B("configured", r.configured);
     N("order", r.order);
     N("port", r.port);

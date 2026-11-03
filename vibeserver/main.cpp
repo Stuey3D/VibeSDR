@@ -2556,6 +2556,8 @@ int main(int argc, char** argv) {
                     LocalSdrShim::setGainLimits(g_runtimeConfig.gainLimits);
                     // ★ The aerials, live (2026-10-09): the external switch, the per-band aerial list and the lock.
                     applyAntennaSwitch(r.antennaSwitch);
+                    // ★ V12 the owner's per-port antenna names, live — every listener's selector re-reads hwinfo.
+                    LocalSdrShim::instance().setAntennaPortNames(r.antennaNames);
                     // ★★ V12 background decoding, live — the tick picks it up within two seconds (validated above).
                     { std::string be; LocalSdrShim::setBackgroundDecoding(r.bgDecode, be); g_bgLastApplied = r.bgDecode; }
                     LocalSdrShim::setGalleryRadioLabel(r.label.empty() ? r.driver : r.label);
@@ -4369,6 +4371,8 @@ int main(int argc, char** argv) {
                                                  mine ? mine->antennaFilters : std::string());
         // ★ The external antenna switch (2026-10-09) — per radio; also applied live on a save (applyAntennaSwitch).
         applyAntennaSwitch(mine ? mine->antennaSwitch : std::string());
+        // ★ V12 the owner's names for the radio's own ports — per radio, like the bands above; live on a save too.
+        LocalSdrShim::instance().setAntennaPortNames(mine ? mine->antennaNames : std::string());
         // ★ Per radio, like the limit it modifies — a shared 30-listener receiver and a
         //   one-at-a-time dongle want different answers to "is the limit a deadline".
         LocalSdrShim::instance().setSessionLimitSoft(mine ? mine->sessionLimitSoft : false);

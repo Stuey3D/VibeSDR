@@ -599,6 +599,11 @@ struct RadioConfig {
      *  "pass","antennas":[{"name","cmd","state","on","off"}]}. Empty = none. Applied by LocalSdrShim::setAntennaSwitch;
      *  the per-band preset is antennaMap (names) and the lock antennaPortLocked, shared with the RSP's sockets. */
     std::string antennaSwitch;
+    /** ★ V12 the owner's NAME for each of the radio's own antenna PORTS (2026-11-03) — {"RX2 (A)":"Discone","Hi-Z":
+     *  "Long wire"}, keyed by the port names the driver publishes in hwinfo `antennas`; a JSON object kept as a string, like
+     *  antennaSwitch. Normalised on load (android/app/src/main/cpp/vibe_port_names.h: 16 ports, 40-byte names, cleaned).
+     *  Per PORT on the radio itself — never the external switch's antennas, which carry their own names. Empty = none. */
+    std::string antennaNames;
     bool   rspHdr = false, rspAmNotch = false, rspExtRef = false;
     // ★ V12 USRP B2xx owner options — see Config::usrpClock. Carried with its neighbours at every copy site.
     std::string usrpClock, usrpTime;

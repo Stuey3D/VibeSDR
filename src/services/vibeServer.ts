@@ -112,6 +112,8 @@ export type VibeServerConfig = {
   /** ★ The external antenna switch (JSON), the per-band aerial list (names) and the owner's lock — services/antennaSwitch.ts. */
   antennaSwitch?: string;
   antennaMap?: string;
+  /** ★ V12 the owner's names for the radio's own ports — a JSON object as a string ({"RX2":"Discone"}). */
+  antennaNames?: string;
   antennaLocked?: boolean;
   /** The owner's standing message on the landing screen, and an optional link.
    *  ★ NOT the transient maintenance notice: this one stays up. http/https only — the server

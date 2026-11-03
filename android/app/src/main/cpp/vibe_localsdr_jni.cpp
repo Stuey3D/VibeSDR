@@ -586,6 +586,18 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeSetAntennaBands(JNIEnv* env, jobject, jstring ranges, jstring filters) {
     vibe::LocalSdrShim::instance().setAntennaBands(jstr(env, ranges), jstr(env, filters));
 }
+/* ★ V12 the owner's names for the radio's own antenna PORTS (vibe_port_names.h) — Lite and the app's server mode, the same
+ *  setter main.cpp calls; cleaned and bounded inside it, and every listener's selector re-reads hwinfo. */
+extern "C" JNIEXPORT void JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeSetAntennaPortNames(JNIEnv* env, jobject, jstring json) {
+    vibe::LocalSdrShim::instance().setAntennaPortNames(jstr(env, json));
+}
+/** ★ V12 the running radio's hwinfo `radio` object (radioCapsJson) — "" when nothing is served. The server screen reads
+ *  its `antennas` (the ports to name) from here: the app knows no radio's ports of its own. */
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vibesdr_app_VibeLocalSDR_nativeRadioCaps(JNIEnv* env, jobject) {
+    return env->NewStringUTF(vibe::LocalSdrShim::instance().radioCapsJson().c_str());
+}
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibesdr_app_VibeLocalSDR_nativeAntSwitchSearch(JNIEnv* env, jobject, jstring host, jint port) {
     const std::string j = vibe::LocalSdrShim::antSwitchSearch(jstr(env, host), int(port), 3000);

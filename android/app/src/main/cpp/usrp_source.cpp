@@ -2,6 +2,7 @@
 // ★ Compiled ONLY when VIBE_HAVE_USRP (vibeserver/CMakeLists.txt); every other build uses the header's inline stub.
 // ★ Clean-room: written from UHD's published API (uhd::usrp::multi_usrp, uhd::rx_streamer, uhd::device::find) and
 //   libusb's; UHD is used as a library, nothing is copied from any SDR application.
+#include <functional>
 #include "usrp_source.h"
 
 #if defined(VIBE_HAVE_USRP)
@@ -458,33 +459,73 @@ std::string UsrpSource::antenna() const {
     return usrpcaps::portLabel(impl_->port.chan, impl_->nChans, impl_->port.socket);
 }
 
+/* ★★★ A PORT CHANGE ON A RUNNING RADIO IS DONE THE WAY AN OPEN DOES IT (V12, 2026-11-03 — a tester's B210 clone: "I see
+ *     it in the menu, but selecting does not work"; after a restart the same port worked).
+ *  What the live path did differently from start-up, and what this now does instead:
+ *   1. ★ A SOCKET change (RX2 <-> TX/RX on one channel) went to set_rx_antenna UNDER THE RUNNING STREAMER and nothing
+ *      else. On the B2xx the socket is an RF switch driven by the FPGA's ATR registers (b200_impl::update_atrs), and
+ *      the cases that work — a cold open after a restart, an idle release taken back — set the port before (or while
+ *      re-creating) the streamer (get_rx_stream -> update_enables -> update_atrs). So the stream is now stopped and
+ *      released, the port set, the radio re-tuned on it, and the stream made again: one path, the proven one.
+ *   2. ★ A CHANNEL move (A <-> B on a B210) ran its whole re-statement — antenna, rate, bandwidth, tune, gain — in ONE
+ *      try block, so the first refusal skipped every later step and the new channel came up on UHD's defaults (not
+ *      tuned, no gain). At start-up the open sequence and the landing tune that follow re-state the same things and
+ *      hid it; live, nothing came after. Each step now stands on its own and says what failed.
+ *   3. ★ And the radio is ASKED which socket it is on afterwards (get_rx_antenna), so the journal says what the
+ *      hardware reports rather than what was requested.
+ *  Costs one short gap in the IQ on a deliberate port change — the gap a channel move always had. Choosing the port
+ *  already in use never restarts anything (applyDesiredDsp re-states the saved port after every open). */
 bool UsrpSource::setAntenna(const std::string& label) {
     usrpcaps::Port want;
     if (!usrpcaps::portFor(impl_->ports, impl_->nChans, label, want)) return false;
-    const bool chanMoves = want.chan != impl_->port.chan;
-    const bool wasRunning = impl_->run.load();
-    if (chanMoves && wasRunning) stop();
     {
         std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
         if (!impl_->usrp) return false;
-        try {
-            impl_->port = want;
-            const size_t c = want.chan;
-            impl_->usrp->set_rx_antenna(want.socket, c);
-            if (chanMoves) {
-                // ★ The other channel starts from nothing: put rate, tuning and gain back on IT.
-                impl_->usrp->set_rx_rate(impl_->rate, c);
-                try { impl_->usrp->set_rx_bandwidth(usrpcaps::bwFor(impl_->opts, impl_->rate, impl_->oc), c); } catch (const std::exception&) {}
-                impl_->usrp->set_rx_freq(uhd::tune_request_t(impl_->centre), c);
+        if (want.chan == impl_->port.chan && want.socket == impl_->port.socket) {
+            // ★ Already there by our account — tell the radio anyway (cheap, no stream change); never a restart.
+            try { impl_->usrp->set_rx_antenna(want.socket, want.chan); } catch (const std::exception&) {}
+            return true;
+        }
+    }
+    const bool chanMoves = want.chan != impl_->port.chan;
+    const bool wasRunning = impl_->run.load();
+    if (wasRunning) stop();
+    {
+        std::lock_guard<std::recursive_mutex> lk(impl_->mtx);
+        if (!impl_->usrp) return false;
+        // ★ Release the old streamer before anything is set: UHD counts a live streamer's channel as streaming
+        //   (max_chan_count, update_enables), so the old channel must not still be "on" while the new one is set up.
+        impl_->rx.reset();
+        impl_->port = want;
+        const size_t c = want.chan;
+        auto step = [&](const char* what, const std::function<void()>& fn) {
+            try { fn(); }
+            catch (const std::exception& e) { std::fprintf(stderr, "VibeServer: USRP %s for %s: %s\n", what, label.c_str(), e.what()); }
+        };
+        step("antenna", [&] { impl_->usrp->set_rx_antenna(want.socket, c); });
+        if (chanMoves) {
+            // ★ The other channel starts from nothing: put rate, bandwidth, gain and the corrections back on IT.
+            step("rate", [&] { impl_->usrp->set_rx_rate(impl_->rate, c); });
+            step("bandwidth", [&] { impl_->usrp->set_rx_bandwidth(usrpcaps::bwFor(impl_->opts, impl_->rate, impl_->oc), c); });
+            step("gain", [&] {
                 if (agcOn_ && hasAgc_) impl_->usrp->set_rx_agc(true, c);
                 else { if (hasAgc_) impl_->usrp->set_rx_agc(false, c); impl_->usrp->set_rx_gain(gainTenth_ / 10.0, c); }
-                // ★ The owner's corrections, on the new channel too (only where the radio has the switch).
-                try { if (impl_->oc.dcOffset)  impl_->usrp->set_rx_dc_offset(impl_->opts.dcOffset, c); } catch (const std::exception&) {}
-                try { if (impl_->oc.iqBalance) impl_->usrp->set_rx_iq_balance(impl_->opts.iqBalance, c); } catch (const std::exception&) {}
-            }
-        } catch (const std::exception& e) { std::fprintf(stderr, "VibeServer: USRP antenna %s: %s\n", label.c_str(), e.what()); }
+            });
+            // ★ The owner's corrections, on the new channel too (only where the radio has the switch).
+            if (impl_->oc.dcOffset)  step("DC offset",  [&] { impl_->usrp->set_rx_dc_offset(impl_->opts.dcOffset, c); });
+            if (impl_->oc.iqBalance) step("IQ balance", [&] { impl_->usrp->set_rx_iq_balance(impl_->opts.iqBalance, c); });
+        }
+        // ★ Re-tuned on every port change: the front end's band and LO follow a tune, on whichever channel is now in use.
+        if (impl_->centre > 0) step("tune", [&] { impl_->usrp->set_rx_freq(uhd::tune_request_t(impl_->centre), c); });
+        std::string now;
+        try { now = impl_->usrp->get_rx_antenna(c); } catch (const std::exception&) {}
+        std::fprintf(stderr, "VibeServer: USRP RX port -> %s (the radio reports %s on channel %c)\n", label.c_str(),
+                     now.empty() ? "nothing" : now.c_str(), (char)('A' + (c < 26 ? c : 25)));
     }
-    if (chanMoves && wasRunning) { std::string e; start(e); }
+    if (wasRunning) {
+        std::string e;
+        if (!start(e)) std::fprintf(stderr, "VibeServer: USRP stream after the port change: %s\n", e.c_str());
+    }
     return true;
 }
 

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { clampPortName, portLabel, portNamesFrom } from '../utils/antennaPortNames';
 import { DIGI_MODE_STYLE } from '../utils/digiModes';   // ★ V12 the digital-spots modes (per-mode switches)
 import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
@@ -260,6 +261,7 @@ const K = {
   decoderMax: 'vs_decodermax',
   lockedCentre: 'vs_lockedcentre', zoomSpectrum: 'vs_zoomspec', spectrogram: 'vs_spectrogram',
   idleGrace: 'vs_idlegrace', antenna: 'vs_antenna', antennaIcon: 'vs_antennaicon', antSwitch: 'vs_antswitch', antRanges: 'vs_antranges', antFilters: 'vs_antfilters',
+  antNames: 'vs_antnames', antPorts: 'vs_antports',   // ★ V12 per-port names, and the ports the radio last listed
   adminPw: 'vs_adminpw', uncomp: 'vs_uncompressed', limitMin: 'vs_sessionlimit',
   advanced: 'vs_advanced', maxUsers: 'vs_maxusers',
   allowRanges: 'vs_allow', blockRanges: 'vs_block', blockedModes: 'vs_blockedmodes',
@@ -379,6 +381,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   /** ★ What the aerial covers / which filters are fitted (2026-10-09) — the shared text format (utils/antennaBands.ts). */
   const [antRanges, setAntRanges] = useState('');
   const [antFilters, setAntFilters] = useState('');
+  /** ★ V12 the owner's name for each of the radio's own ports (`antennaNames`, a JSON object keyed by port) and the
+   *  ports themselves — FROM THE RADIO (the running engine's hwinfo `antennas`), remembered so they can be edited while
+   *  stopped. The app knows no radio's ports of its own. */
+  const [antNames, setAntNames] = useState('');
+  const [antPorts, setAntPorts] = useState<string[]>([]);
   /**
    * ★★★ HOW WILL THIS RADIO BE USED — and it is asked FIRST in Advanced, because it decides which
    *     of the questions below even apply. A shared radio has a locked range and a listener count;
@@ -1098,9 +1105,32 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       const f = serverFields(antSwitch);
       try { (NativeModules as any).VibeLocalSdrModule?.setAntennaSwitch?.(f.antennaSwitch, f.antennaMap, f.antennaLocked); } catch {}
       try { (NativeModules as any).VibeLocalSdrModule?.setAntennaBands?.(antRanges, antFilters); } catch {}
+      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaPortNames?.(antNames); } catch {}
     }, 800);
     return () => clearTimeout(t);
-  }, [antSwitch, antRanges, antFilters, running]);
+  }, [antSwitch, antRanges, antFilters, antNames, running]);
+  /* ★ V12 THE PORTS TO NAME, FROM THE RADIO — the engine's hwinfo `antennas` while it serves (every 3 s, like the Icom's
+   *  facts; a reading identical to the last changes nothing). Fewer than two = nothing to name. While an external
+   *  switch is set up `antennas` are the switch's own (already named), so they are not taken. */
+  useEffect(() => {
+    if (!running) return;
+    let alive = true;
+    const read = async () => {
+      let caps: any = null;
+      try { const j = await (NativeModules as any).VibeLocalSdrModule?.radioCaps?.(); caps = j ? JSON.parse(j) : null; } catch { caps = null; }
+      if (!alive || !caps || caps.antennaSwitch) return;
+      const ports = Array.isArray(caps.antennas) ? caps.antennas.filter((x: unknown) => typeof x === 'string') as string[] : [];
+      if (ports.length < 2) return;
+      setAntPorts((prev) => {
+        if (prev.join('\n') === ports.join('\n')) return prev;
+        void AsyncStorage.setItem(K.antPorts, JSON.stringify(ports));
+        return ports;
+      });
+    };
+    void read();
+    const t = setInterval(() => { void read(); }, 3000);
+    return () => { alive = false; clearInterval(t); };
+  }, [running]);
   const [status, setStatus]   = useState<VibeServerStatus | null>(null);
   /** The mDNS hostname the responder actually TOOK — "vibesdr-moto-g35", or with a "-2"
    *  suffix if another phone on the LAN already had the name. Asked for after the server
@@ -1247,6 +1277,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           setAntennaIcon(s(K.antennaIcon));
           { const sw = parseSwitchCfg(s(K.antSwitch)); antSwitchSaved.current = sw.enabled; setAntSwitch(sw); }
           setAntRanges(s(K.antRanges)); setAntFilters(s(K.antFilters));
+          setAntNames(s(K.antNames));
+          { try { const ap = JSON.parse(s(K.antPorts) || '[]'); if (Array.isArray(ap)) setAntPorts(ap.filter((x: unknown) => typeof x === 'string')); } catch {} }
           setRadioLabel(s(K.radioLabel));
           { const fd = g(K.fmDefaults); if (fd) setFmDefState(readFmDefaults(fd)); }
           { const ch = s(K.landingDabCh);
@@ -1863,7 +1895,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   live.current = {
     limitSoft, askFirst, idleKick, lockedCentre, zoomSpec, spectrogram, idleGrace,
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
-    landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters,
+    landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
   };
 
@@ -1939,6 +1971,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     // ★ The external antenna switch: antennaSwitch / antennaMap / antennaLocked — VibeServerBoot applies them.
     ...serverFields(live.current.antSwitch),
     antennaRanges: live.current.antRanges, antennaFilters: live.current.antFilters,
+    antennaNames: live.current.antNames,   // ★ V12 — VibeServerBoot applies it (setAntennaPortNames)
     landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
     // ★★ Locked mode only. In single-user mode the centre follows the listener, which is what
     //    the phone has always done and is right for one person retuning the radio themselves.
@@ -2020,6 +2053,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.lockedCentre, String(live.current.lockedCentre)],
       [K.zoomSpectrum, live.current.zoomSpec ? '1' : '0'], [K.spectrogram, live.current.spectrogram ? '1' : '0'],
       [K.idleGrace, String(live.current.idleGrace)], [K.antenna, live.current.antenna], [K.antennaIcon, live.current.antennaIcon], [K.antSwitch, JSON.stringify(live.current.antSwitch)], [K.antRanges, live.current.antRanges], [K.antFilters, live.current.antFilters],
+      [K.antNames, live.current.antNames],
       [K.allowRanges, allowRanges], [K.blockRanges, blockRanges],
       [K.blockedModes, blockedModes], [K.dabRateBoost, dabRateBoost ? '1' : '0'], [K.vfoB, vfoB ? '1' : '0'],
       [K.adsb256, adsb256 ? '1' : '0'],
@@ -3651,6 +3685,33 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {/* ★★ What it covers and which filters are fitted (Stuart, 2026-10-09: "no option to say it has an FM filter"). */}
             <AntennaBandsEditor ranges={antRanges} filters={antFilters} C={C} F={F}
               onChange={(r, f) => { setAntRanges(r); setAntFilters(f); }} />
+            {/* ★★ V12 A NAME FOR EACH OF THE RADIO'S OWN PORTS — one box per port the radio listed (hwinfo `antennas`), for
+                every driver with more than one input. Listeners then pick "Discone (RX2)". Not with an external switch:
+                its antennas are named in the switch section above. Applied live while serving. */}
+            {antPorts.length >= 2 && !antSwitch.enabled && (<>
+              <Text style={[styles.hint, { color: C.text, fontFamily: F, marginTop: 12 }]}>Name each port (optional)</Text>
+              {antPorts.map((port) => {
+                const names = portNamesFrom((() => { try { return JSON.parse(antNames || '{}'); } catch { return {}; } })());
+                return (
+                  <View key={port} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                    <Text style={{ color: C.textDim, fontFamily: F, minWidth: 92 }}>{port}</Text>
+                    <TextInput value={names[port] ?? ''} placeholder="e.g. Discone" placeholderTextColor={C.placeholderDim}
+                      accessibilityLabel={`Name for port ${port}`}
+                      onChangeText={(t) => {
+                        const next: Record<string, string> = { ...names };
+                        const v = clampPortName(t);
+                        if (v.trim()) next[port] = v; else delete next[port];
+                        setAntNames(Object.keys(next).length ? JSON.stringify(next) : '');
+                      }}
+                      style={[styles.input, { flex: 1, color: C.text, fontFamily: F, borderColor: C.border }]} />
+                  </View>
+                );
+              })}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                What is plugged into each socket. Listeners see "{portLabel(antPorts[0], { [antPorts[0]]: 'Discone' })}" instead of
+                the bare port; an empty box shows just the port.
+              </Text>
+            </>)}
             </>)}
 
             {/* ★★★ POWER DOWN WHEN NOBODY IS LISTENING — ON by default, and it never lets the
