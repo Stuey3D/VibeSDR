@@ -487,6 +487,26 @@ int main() {
         const std::string& got = big.radios.empty() ? std::string() : big.radios[0].antennaRanges;
         ok(!got.empty() && got.size() <= 800 && got.substr(got.size() - 6) == "metres",
            "★ ...clamped to 800 characters at an entry boundary", std::to_string(got.size()));
+
+        // ★★ V12 the owner's per-PORT names (vibe_port_names.h): round trip, kept apart from `antenna`, and cleaned on load.
+        RadioConfig u; u.serial = "31A0B7C"; u.driver = "usrp"; u.configured = true; u.antenna = "Roof mast";
+        u.antennaNames = "{\"RX2 (A)\":\"Discone\",\"TX/RX (A)\":\"FM \\\"Yagi\\\"\"}";
+        ServerConfig us; us.configured = true; us.fullMode = true; us.radios = {u};
+        ServerConfig usBack;
+        ok(fromJson(toJson(us), usBack, err) && usBack.radios.size() == 1, "a radio with port names saves and loads", err);
+        ok(usBack.radios[0].antennaNames == u.antennaNames, "★★ the port names survive the writer — quotes and all",
+           usBack.radios[0].antennaNames);
+        ok(usBack.radios[0].antenna == "Roof mast", "…and the aerial description beside them is its own field");
+        ServerConfig dirty;
+        ok(fromJson("{\"name\":\"x\",\"radios\":[{\"serial\":\"S3\",\"driver\":\"sdrplay\","
+                    "\"antennaNames\":\"{\\\"A\\\":\\\"  Long\\\\twire  \\\",\\\"B\\\":\\\"\\\"}\"}]}", dirty, err),
+           "a radio with untidy port names loads", err);
+        ok(!dirty.radios.empty() && dirty.radios[0].antennaNames == "{\"A\":\"Long wire\"}",
+           "★ ...cleaned on load (tab → space, trimmed, the empty name dropped)",
+           dirty.radios.empty() ? "" : dirty.radios[0].antennaNames);
+        ServerConfig junk;
+        ok(fromJson("{\"name\":\"x\",\"radios\":[{\"serial\":\"S4\",\"driver\":\"usrp\",\"antennaNames\":\"not json\"}]}", junk, err)
+           && !junk.radios.empty() && junk.radios[0].antennaNames.empty(), "★ a malformed blob loads as no names", err);
     }
 
     // ★★★ THE USB-CHANGE ACTIONS (Stuart, 2026-10-04): a radio that has gone away is REMOVED or
