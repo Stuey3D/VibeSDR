@@ -32,14 +32,7 @@ if [ -L "$REQ" ]; then rm -f "$REQ"; exit 0; fi
 
 # ★ dd iflag=nofollow: the -L test above and this read are two moments, and a link swapped in
 #   between them must make the read FAIL, not follow. nonblock so a FIFO cannot hang root here.
-# ★★ ONE ARGUMENT, FOR ONE ACTION (memcheck <serial>, 2026-11-03). The request is "<action>" or "<action> <word>": the
-#    action is still filtered to a-z and '-', and the word to a serial's alphabet — and the word is NEVER used as it
-#    arrives. memcheck looks it up in the radios the binary itself lists (memcheck_unit_for) and uses the listed value;
-#    every other action ignores it. 96 bytes: the longest action plus a 64-character serial.
-raw=$(dd if="$REQ" bs=96 count=1 iflag=nofollow,nonblock 2>/dev/null | head -n 1 | tr -cd 'A-Za-z0-9._: -' || true)
-action=$(printf '%s' "${raw%% *}" | tr -cd 'a-z-')
-arg=""
-case "$raw" in *" "*) arg=$(printf '%s' "${raw#* }" | tr -cd 'A-Za-z0-9._:-') ;; esac
+action=$(dd if="$REQ" bs=32 count=1 iflag=nofollow,nonblock 2>/dev/null | tr -cd 'a-z-' || true)
 
 # ★★★ EVERYTHING THIS SCRIPT PRINTS GOES SOMEWHERE THE ADMIN PAGE CAN READ IT.
 # Without this the output existed only in the journal, which the daemon cannot read (it is
@@ -271,165 +264,6 @@ say_offer() {
   esac
 }
 
-# ★★★ CHECK THIS RADIO'S MEMORY (memcheck <serial>, 2026-11-03). A USRP clone's radio process died within a second of
-#     every start inside calloc, on a heap something had ALREADY corrupted — the crash names the victim, never the
-#     author, and the tester has no terminal. This runs the package's AddressSanitizer build of the server
-#     (diag/vibeserver-asan) in place of that radio's normal process, for 60 s, IN THE RADIO'S OWN UNIT — same user,
-#     sandbox, devices, RuntimeDirectory and arguments, because only ExecStart is swapped, by a drop-in in /run (gone at
-#     the next boot whatever happens). ASan stops at the first bad write and names the code that made it.
-#  ★★ THE SERIAL IS NEVER TAKEN FROM THE REQUEST. It must match the serial alphabet AND be one the binary lists
-#     (--list-memcheck-radios, run as the unprivileged user — root never parses the daemon's JSON), and the VALUE USED
-#     afterwards is the listed one. A path, an option, a unit name or anything unlisted is refused before systemctl.
-#  ★★ THE RADIO IS LEFT AS IT WAS: running (or restarting) before → started again; stopped (PAUSED in the settings, or
-#     stopped by hand) → it is run anyway (that is the radio worth diagnosing) and left stopped.
-#  ★ One at a time (a lock in /run); the daemon also refuses it while that radio has listeners or another action runs.
-#  ★★ THE REPORT LIVES IN ROOT'S DIRECTORY, /var/lib/vibeserver-maint/diag — not the daemon's /var/lib/vibeserver,
-#     where a link planted by a compromised daemon could redirect root's write (the 2026-10-03 rule for the log). The
-#     daemon reads it there (root:vibeserver 0640); the diagnostics file includes the newest one.
-# >>> memcheck_lib
-MC_ASAN=/usr/lib/vibeserver/diag/vibeserver-asan
-MC_DIR=$LOGDIR/diag
-MC_LOCK=/run/vibeserver-memcheck.lock
-MC_MAX=2097152          # ★ the report's cap, 2 MB: the head (start-up) and the tail (ASan's report) both kept
-mc_valid_serial() { [[ "$1" =~ ^[A-Za-z0-9_:][A-Za-z0-9._:-]{0,63}$ ]]; }
-# ★ The radios the binary lists, as the unprivileged user (see vibeserver-radios for why).
-mc_list() {
-  if [ "$(id -u)" = 0 ]; then runuser -u vibeserver -- /usr/bin/vibeserver --list-memcheck-radios 2>/dev/null
-  else /usr/bin/vibeserver --list-memcheck-radios 2>/dev/null; fi
-}
-# ★ "<serial> <unit>" for the asked-for serial, from the list on stdin, every field checked again; nothing = refused.
-mc_unit_for() {
-  local want="$1" s u
-  mc_valid_serial "$want" || return 1
-  while read -r s u _; do
-    mc_valid_serial "$s" || continue
-    [ "$s" = "$want" ] || continue
-    if [ "$u" = vibeserver ] || [ "$u" = "vibeserver@$s" ]; then echo "$s $u"; return 0; fi
-  done
-  return 1
-}
-# ★ The unit's own arguments, read back from systemd (root-owned unit files), with ONLY the binary swapped. Every
-#   word is held to a plain alphabet (no %, no quotes, no spaces) and the binary must be /usr/bin/vibeserver; anything
-#   else and the package's own default for that unit is used instead.
-mc_args_for() {   # $1 unit $2 serial; ExecStart= text on stdin
-  local unit="$1" serial="$2" es w ok=""
-  local -a words=()
-  es=$(sed -n 's/.*argv\[\]=\([^;]*\);.*/\1/p' | head -n 1)
-  # ★ read -a splits on blanks and never globs — a '*' in a unit file is a word to refuse, not a file list for root.
-  read -r -a words <<< "$es" || true
-  set -- ${words[@]+"${words[@]}"}
-  if [ "${1:-}" = /usr/bin/vibeserver ]; then
-    shift; ok=1
-    for w in "$@"; do [[ "$w" =~ ^[A-Za-z0-9._/:=@+,-]+$ ]] || { ok=""; break; }; done
-    if [ -n "$ok" ]; then echo "$*"; return 0; fi
-  fi
-  if [ "$unit" = vibeserver ]; then echo "--config /etc/vibeserver/vibeserver.conf"
-  else echo "--config /etc/vibeserver/vibeserver.conf --radio-serial $serial"; fi
-}
-# ★ Running, or about to be (a crash-looping unit sits in activating/auto-restart): start it again afterwards.
-mc_was_running() { case "$1" in active|activating|reloading|deactivating) return 0 ;; *) return 1 ;; esac; }
-# ★ What the run says, in one line, for the log and the top of the report.
-mc_verdict() {   # $1 output file  $2 main exit status
-  if grep -q -m1 'ERROR: AddressSanitizer' "$1" 2>/dev/null; then
-    echo "FOUND A MEMORY ERROR — AddressSanitizer stopped the server at the first bad access; its report is below"
-  elif [ "$2" = 124 ] || [ "$2" = 137 ]; then
-    echo "no memory error in 60 s — AddressSanitizer saw nothing wrong while the radio ran"
-  elif grep -q -m1 'AddressSanitizer' "$1" 2>/dev/null; then
-    echo "AddressSanitizer printed something but no ERROR line — read the report below"
-  else
-    echo "the server stopped after a short run (exit $2) without a memory error — read the output below"
-  fi
-}
-# <<< memcheck_lib
-MC_U=""; MC_DROP=""; MC_PRIOR=""
-# ★★ Whatever happens from here, the drop-in goes and the radio is put back as it was.
-mc_restore() {
-  rm -f "$MC_DROP/zz-vibeserver-memcheck.conf"; rmdir "$MC_DROP" 2>/dev/null || true
-  systemctl daemon-reload; systemctl reset-failed "$MC_U" 2>/dev/null || true
-  if mc_was_running "$MC_PRIOR"; then log "starting $MC_U again (it was $MC_PRIOR)"; systemctl start "$MC_U" || log "!! $MC_U did not start again"
-  else log "leaving $MC_U stopped (it was $MC_PRIOR)"; fi
-}
-memcheck() {
-  local serial="$1" line unit ts out raw inv args st i
-  log "checking a radio's memory (60 s, AddressSanitizer)"
-  [ -x "$MC_ASAN" ] || { log "!! this package has no memory-check binary ($MC_ASAN) — amd64 and arm64 only"; exit 1; }
-  mc_valid_serial "$serial" || { log "!! that is not a radio serial"; exit 1; }
-  line=$(mc_list | mc_unit_for "$serial") || { log "!! no radio with that serial in this server's settings"; exit 1; }
-  serial=${line%% *}; unit=${line#* }; MC_U="$unit.service"
-  exec 9>"$MC_LOCK"
-  flock -n 9 || { log "!! another memory check is already running"; exit 1; }
-  install -d -o root -g vibeserver -m 0750 "$MC_DIR" 2>/dev/null || install -d -m 0750 "$MC_DIR"
-  [ -L "$MC_DIR" ] && { log "!! $MC_DIR is a link — refused"; exit 1; }
-  ts=$(date +%Y%m%d-%H%M%S)
-  out="$MC_DIR/memcheck-$serial-$ts.txt"; raw="$out.raw"
-  MC_DROP="/run/systemd/system/$MC_U.d"
-  # ★ A drop-in left by a run that was cut off (power, OOM) goes first, so its ExecStart is never read as the unit's.
-  rm -f "$MC_DROP/zz-vibeserver-memcheck.conf"; systemctl daemon-reload
-  MC_PRIOR=$(systemctl is-active "$MC_U" 2>/dev/null || true)
-  args=$(systemctl show -p ExecStart --value "$MC_U" 2>/dev/null | mc_args_for "$unit" "$serial")
-  log "radio $serial — unit $MC_U, $MC_PRIOR before; arguments: $args"
-  # ★ finish() reads $? for the DONE marker, so the action's own status is put back before it runs.
-  trap 'mc_rc=$?; mc_restore; (exit $mc_rc); finish' EXIT
-  systemctl stop "$MC_U" 2>/dev/null || true
-  mkdir -p "$MC_DROP"
-  # ★ ExecStartPre (the governor) stays; Restart=no, so a crash is one run, not five; the journal never throttles it.
-  { echo "# Written by vibeserver-maintenance memcheck; removed when the check ends (and gone at the next boot)."
-    echo "[Service]"
-    echo "ExecStart="
-    # ★★ setarch -R: a GCC 12 ASan binary cannot start where the kernel randomises mmap with more than 28 bits (Ubuntu
-    #    24.04's 6.8 kernel uses 32) — this run alone goes without address randomisation. The unit's LockPersonality=
-    #    would refuse that, so it is lifted for this run only (the drop-in is removed when the check ends).
-    if command -v setarch >/dev/null 2>&1; then
-      echo "ExecStart=$(command -v setarch) $(uname -m) -R /usr/bin/timeout --kill-after=10 60 $MC_ASAN $args"
-      echo "LockPersonality=no"
-    else
-      echo "ExecStart=/usr/bin/timeout --kill-after=10 60 $MC_ASAN $args"
-    fi
-    echo "Restart=no"
-    echo "LogRateLimitIntervalSec=0"
-  } > "$MC_DROP/zz-vibeserver-memcheck.conf"
-  systemctl daemon-reload
-  systemctl reset-failed "$MC_U" 2>/dev/null || true
-  log "running the memory-check build for up to 60 s…"
-  systemctl start "$MC_U" || log "!! $MC_U did not start under the memory check"
-  inv=$(systemctl show -p InvocationID --value "$MC_U" 2>/dev/null | tr -cd '0-9a-f')
-  for i in $(seq 1 90); do
-    case "$(systemctl is-active "$MC_U" 2>/dev/null)" in active|activating|deactivating) sleep 1 ;; *) break ;; esac
-  done
-  st=$(systemctl show -p ExecMainStatus --value "$MC_U" 2>/dev/null | tr -cd '0-9')
-  journalctl --sync 2>/dev/null || sleep 1
-  rm -f "$raw"
-  if [ -n "$inv" ]; then journalctl --no-pager -o cat "_SYSTEMD_INVOCATION_ID=$inv" > "$raw" 2>/dev/null || true
-  else journalctl --no-pager -o cat -u "$MC_U" --since "-90s" > "$raw" 2>/dev/null || true; fi
-  {
-    echo "VibeServer memory check — radio $serial, $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-    echo "result:   $(mc_verdict "$raw" "${st:-?}")"
-    echo "package:  $(dpkg-query -W -f='${Version}' vibeserver 2>/dev/null || echo '?') $(uname -m)"
-    echo "unit:     $MC_U (was $MC_PRIOR), exit status ${st:-?}"
-    echo "ran:      $MC_ASAN $args   (under timeout 60, as the unit's user and sandbox)"
-    echo "frames:   each is file:line where the binary's line tables say, and always (module+0xoffset);"
-    echo "          by hand: addr2line -Cfie $MC_ASAN 0xoffset"
-    echo "note:     the prebuilt libraries (UHD, libusb) are not instrumented: a bad write made INSIDE them is not"
-    echo "          caught at the write, and may not crash under ASan at all — 'no error' with a radio that crashes"
-    echo "          normally points there."
-    echo
-    echo "==== the server's output (stdout + stderr) ===="
-    if [ "$(stat -c %s "$raw" 2>/dev/null || echo 0)" -le "$MC_MAX" ]; then cat "$raw"
-    else head -c $((MC_MAX / 4)) "$raw"; echo; echo "…(cut: the middle of a long run)…"; tail -c $((MC_MAX * 3 / 4)) "$raw"; fi
-  } > "$out.tmp" 2>/dev/null
-  rm -f "$raw"
-  chmod 0640 "$out.tmp"; chgrp vibeserver "$out.tmp" 2>/dev/null || true
-  mv -f "$out.tmp" "$out"
-  # ★ The newest five, no more.
-  ls -1t "$MC_DIR"/memcheck-*.txt 2>/dev/null | tail -n +6 | while IFS= read -r f; do rm -f -- "$f"; done
-  echo
-  sed -n '2p' "$out"
-  # ★ The heart of it on the admin page too: ASan's error block (its first 60 lines) and its SUMMARY.
-  grep -A60 -m1 'ERROR: AddressSanitizer' "$out" | head -n 60 || true
-  grep -m1 '^SUMMARY: AddressSanitizer' "$out" || true
-  log "report saved ($(( $(stat -c %s "$out" 2>/dev/null || echo 0) / 1024 )) KB) — Download diagnostics includes it"
-}
-
 case "$action" in
   restart)      log "restarting vibeserver";     systemctl restart vibeserver ;;
   # ★ Asked for by the server's own stall watchdog, not by a button: sdrplay_apiService stopped
@@ -567,7 +401,5 @@ case "$action" in
                 fi
                 chgrp vibeserver "$DIAG.tmp" 2>/dev/null || true
                 mv -f "$DIAG.tmp" "$DIAG" && log "diagnostics ready ($(( $(stat -c %s "$DIAG" 2>/dev/null || echo 0) / 1024 )) KB)" ;;
-  # ★★★ CHECK THIS RADIO'S MEMORY — see memcheck() above. The serial is looked up, never used as sent.
-  memcheck)     memcheck "$arg" ;;
   *)            log "ignoring unknown action '$action'"; exit 0 ;;
 esac

@@ -136,6 +136,23 @@ case "$1" in
     #   link, never its target.
     rm -f /var/lib/vibeserver/maintenance.log
 
+    # ── 1c. What beta57/58's "Check this radio's memory" may have left behind ─
+    # ★★ That diagnostic (vibeserver-maintenance memcheck + diag/vibeserver-asan) is gone. A check cut off part-way
+    #    (power, OOM, this very upgrade) could leave its ExecStart drop-in in /run, which would keep that radio running
+    #    the removed ASan binary — i.e. not at all — until the next boot. Remove every one, the lock, and the reports
+    #    (nothing reads them any more; up to 10 MB). The daemon-reload in section 3 takes the drop-ins out of effect.
+    #    rm -f on a link removes the link, never its target; /run/systemd/system and the diag directory are root's.
+    for MCD in /run/systemd/system/vibeserver.service.d /run/systemd/system/vibeserver@*.service.d; do
+      [ -d "$MCD" ] && [ ! -L "$MCD" ] || continue
+      rm -f "$MCD/zz-vibeserver-memcheck.conf"
+      rmdir "$MCD" 2>/dev/null || true
+    done
+    rm -f /run/vibeserver-memcheck.lock
+    if [ -d "$MAINT/diag" ] && [ ! -L "$MAINT/diag" ]; then
+      rm -f "$MAINT"/diag/memcheck-*.txt "$MAINT"/diag/memcheck-*.txt.raw "$MAINT"/diag/memcheck-*.txt.tmp
+      rmdir "$MAINT/diag" 2>/dev/null || true
+    fi
+
     # ── 2. USB access without root ───────────────────────────────────────────
     # ★ The rules file is installed by the package; udev must be told to re-read it, or the
     #   radio stays root-only until reboot — which on a headless box in a cupboard reads as
