@@ -100,6 +100,12 @@ std::vector<std::string> imageDirs() {
     }
 #endif
     d.push_back(VIBE_UHD_IMAGES_DIR);                    // what the package ships
+#if !defined(__APPLE__)
+    // ★★ Both Linux homes, whatever was compiled in: the package's /usr/share, and a source install's /usr/local/share.
+    //    A binary that looked only in /usr/local/share failed on every packaged install (2026-11-03, the first B210).
+    for (const char* alt : { "/usr/share/vibeserver/uhd-images", "/usr/local/share/vibeserver/uhd-images" })
+        if (std::find(d.begin(), d.end(), std::string(alt)) == d.end()) d.push_back(alt);
+#endif
     return d;
 }
 

@@ -193,6 +193,17 @@ while IFS= read -r f; do
   [ "$(strings "$f" | count -i -e ffmpeg -e ffprobe)" -eq 0 ] || FF_ELF="$FF_ELF ${f#"$X"}"
 done < <(find "$X" -type f)
 [ -z "$FF_ELF" ] || fail "these binaries still refer to ffmpeg:$FF_ELF"
+# ★★★ THE USRP IMAGES ARE WHERE THE BINARY LOOKS (2026-11-03, the first real B210: the package shipped them in
+#     /usr/share/vibeserver/uhd-images but the binary looked in /usr/local/share/… — "usrp_b200_fw.hex is missing",
+#     700 restarts). Where the package carries the images, the binary must name that same folder and the firmware must be
+#     in it; else the build fails here rather than on an owner's machine.
+if [ -d "$X/usr/share/vibeserver/uhd-images" ]; then
+  [ -f "$X/usr/share/vibeserver/uhd-images/usrp_b200_fw.hex" ] || fail "uhd-images is in the package but usrp_b200_fw.hex is not"
+  # ★ judged from the build's own compile line, not by grepping the binary (a short constant string may be built in code)
+  grep -r -q -F 'VIBE_UHD_IMAGES_DIR=\"/usr/share/vibeserver/uhd-images\"' build/CMakeFiles 2>/dev/null \
+    || grep -r -q -F 'VIBE_UHD_IMAGES_DIR="/usr/share/vibeserver/uhd-images"' build/CMakeFiles 2>/dev/null \
+    || fail "the package ships /usr/share/vibeserver/uhd-images but usrp_source.cpp was not compiled to look there"
+fi
 {
   echo "package   $(basename "$DEB")"
   echo "Depends   $DEPENDS"

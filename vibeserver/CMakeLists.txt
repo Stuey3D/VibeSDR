@@ -28,7 +28,7 @@ project(vibeserver VERSION 12.0.0 LANGUAGES CXX C)
 #     reader of the line above (android CMake, lite gradle, mac/build-app.sh): the package becomes
 #     11.0.0~b1, which dpkg sorts ABOVE 5.6.x and BELOW 11.0.0, so both upgrades are clean.
 #     ★ Empty it for the release. Never publish a ~ version AFTER its release — it would sort below it.
-set(VIBESERVER_PRERELEASE "beta54")
+set(VIBESERVER_PRERELEASE "beta55")
 
 # ── ★★★ SANITISER BUILDS FOR THE TESTS AND THE OFFLINE REPLAY ────────────────────────────────
 #
@@ -752,8 +752,13 @@ if(_usrp_arch_ok AND _uhd AND EXISTS "${_uhd}/lib/libuhd.a")
   if(APPLE)
     set_source_files_properties("${CPP_DIR}/usrp_source.cpp" PROPERTIES COMPILE_DEFINITIONS "VIBE_UHD_IMAGES_DIR=\"\"")
   else()
+    # ★★★ THE FOLDER THE PACKAGE INSTALLS TO, NOT CMAKE_INSTALL_PREFIX (the first real USRP, a tester's B210 on Debian 13,
+    #     2026-11-03: "the USRP firmware (usrp_b200_fw.hex) is missing from this install", 700 restarts). The .deb puts
+    #     the images in /usr/share/vibeserver/uhd-images (build-deps.sh / build-uhd.sh, and libuhd's own compiled-in
+    #     images dir), but the package build never sets CMAKE_INSTALL_PREFIX, so this said /usr/local/share/… — a folder
+    #     nothing ever writes. usrp_source.cpp also tries both (imageDirs).
     set_source_files_properties("${CPP_DIR}/usrp_source.cpp" PROPERTIES
-        COMPILE_DEFINITIONS "VIBE_UHD_IMAGES_DIR=\"${CMAKE_INSTALL_PREFIX}/share/vibeserver/uhd-images\"")
+        COMPILE_DEFINITIONS "VIBE_UHD_IMAGES_DIR=\"/usr/share/vibeserver/uhd-images\"")
   endif()
   set(_uhd_boost "")
   foreach(_b filesystem thread chrono date_time serialization program_options atomic)
