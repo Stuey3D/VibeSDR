@@ -146,8 +146,12 @@ int main(int argc, char** argv) {
         ok(nr.kind == vibendb::Match::Near && nr.n.ident() == "WOD", "WOT on 352 kHz is ≈ WOD (one letter off)");
         const auto cand = vibendb::match(352000, "", true, lat, lon);
         ok(cand.kind == vibendb::Match::Candidate && !cand.others.empty(), "no ident: the nearest on the frequency is a candidate, the rest ranked");
-        const auto un = vibendb::match(353499, "EME", true, lat, lon);
-        ok(un.kind != vibendb::Match::Exact, "EME (heard, in no source we may bundle) is never matched to another beacon");
+        // ★ An ident no source lists is never matched to ANOTHER beacon. (EME was the example until 2026-11-04, when our own
+        //   receptions put it in the list — scripts/ndb-heard.json — so it is matched to ITSELF now, below.)
+        const auto un = vibendb::match(353499, "QXZ", true, lat, lon);
+        ok(un.kind != vibendb::Match::Exact, "an ident in no source (QXZ on 353.5) is never matched to another beacon");
+        const auto em = vibendb::match(353499, "EME", true, lat, lon);
+        ok(em.kind == vibendb::Match::Exact && em.n.ident() == "EME", "EME on 353.5 is matched to itself (our own receptions)");
         const auto f = vibendb::nearest(lat, lon, 5);
         ok(f.size() == 5 && f[0].km <= f[4].km, "Find NDB: nearest first");
         ok(!vibendb::nearest(lat, lon, 10, "woodley").empty(), "Find NDB: by name");
@@ -161,7 +165,7 @@ int main(int argc, char** argv) {
            std::string("the credit names every source: ") + vibendb::kNavaidCredit);
         ok(m.n.source().find("OurAirports") == 0, "WOD's position is OurAirports' (" + m.n.source() + ")");
         // ★★ V12 2026-11-04 scripts/ndb-heard.json — beacons heard for hours on Stuart's receivers that no bundled source lists.
-        for (auto bc : { std::make_pair(362500.0, "SND"), std::make_pair(388500.0, "CDF"), std::make_pair(393000.0, "EMW") }) {
+        for (auto bc : { std::make_pair(362500.0, "SND"), std::make_pair(388500.0, "CDF"), std::make_pair(393000.0, "EMW"), std::make_pair(353500.0, "EME") }) {
             const auto hm = vibendb::match(bc.first, bc.second, false, 0, 0);
             ok(hm.kind == vibendb::Match::Exact && hm.n.source().find("heard") == 0,
                std::string(bc.second) + " is listed now, from our own receptions (" + hm.n.source() + ")");

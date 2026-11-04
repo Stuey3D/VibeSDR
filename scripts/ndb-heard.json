@@ -21,6 +21,13 @@
       "airport": "EGNX",
       "name": "East Midlands",
       "heard": "Stuart's RSP1A (IO92) 124 h and RX888, 2026-10-26 to 11-04"
+    },
+    {
+      "ident": "EME",
+      "khz": 353.5,
+      "airport": "EGNX",
+      "name": "East Midlands",
+      "heard": "Stuart's RX888 (UberSDR, IO92) 12/12 repeats over 30 min 2026-11-04, and RSP1A cards"
     }
   ]
 }
