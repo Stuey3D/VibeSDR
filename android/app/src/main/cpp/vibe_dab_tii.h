@@ -256,7 +256,12 @@ private:
             TiiHit h;
             h.mainId = p; h.subId = c;
             const float mean4 = (v[idx[0]] + v[idx[1]] + v[idx[2]] + v[idx[3]]) / 4.0f;
-            h.strength = 10.0f * std::log10(mean4 / float(noisePair + 1e-20));
+            /* ★★ THE FIGURE IS OVER THE TRUE NOISE (Stuart, 2026-11-04: "if our SNR figures are wrong
+             *  because we measure them wrong please fix them"). The DECISION above still uses the
+             *  odd-carrier reference, untouched — what it accepts is exactly what it accepted — but that
+             *  reference holds TII carriers (the top), so as a figure it read Daventry 15.8 dB on 12B
+             *  against 33 on 11D. Now every hit, either path, is its mean over the quartile noise. */
+            h.strength = 10.0f * std::log10(mean4 / float(noiseQ_ / frames_ + 1e-20));
             hits_.push_back(h);
             taken[c] = true;
         }
