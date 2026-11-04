@@ -154,11 +154,15 @@ eq(icomBanner({ ...r, tx: true }), 'The radio is transmitting — receive paused
 yes(icomBanner({ ...r, linkUp: false }).startsWith('The radio is not answering'), 'link-down banner');
 eq(icomBanner({ ...r, tx: true, linkUp: false }), 'The radio is transmitting — receive paused', 'TX outranks link-down');
 eq(icomBanner(r), '', 'no banner normally');
+eq(icomBanner({ ...r, linkUp: false, linkWhy: 'Switching the radio on — about a minute' }), 'Switching the radio on — about a minute',
+   '★ the server\'s own words for a switched-off / switching-on radio');
 
 // ── setup (the same fields + defaults as the setup page's Icom card) ──
-eq(icomSettingsFrom({}), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomOwnerLock: true, icomRfOpen: false,
+eq(icomSettingsFrom({}), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomTuneLock: false, icomPowerOn: false, icomRfOpen: false,
                            icomAudio: 'auto', icomPort: 'usb', icomTtyOk: false }, 'setup defaults = the setup page\'s');
-eq(icomSettingsFrom({ icomOwnerLock: false, icomRfOpen: true, icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2 }).icomOwnerLock, false, 'owner lock off read back');
+eq(icomSettingsFrom({ icomTuneLock: true, icomRfOpen: true, icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2 }).icomTuneLock, true, 'tune lock ON read back');
+eq(icomSettingsFrom({ icomOwnerLock: true }).icomTuneLock, false, '★ the OLD key (always written, default true) is not read: every Icom starts open');
+eq(icomSettingsFrom({ icomPowerOn: true }).icomPowerOn, true, 'power-on over CI-V read back');
 eq(icomSettingsFrom({ icomScopeSpeed: 7 }).icomScopeSpeed, 0, 'a junk scope speed = fast');
 eq([parseCivHex('94'), parseCivHex(''), parseCivHex('a4'), parseCivHex('zz'), parseCivHex('123')], [0x94, 0, 0xa4, null, null], 'CI-V hex');
 eq([fmtCivHex(0x94), fmtCivHex(0), fmtCivHex(0x5)], ['94', '', '05'], 'CI-V hex out');
@@ -168,25 +172,25 @@ eq(pickIcomSerial(CFG, 'http://h:48000'), 'IC-7300 03001234', 'the one Icom on a
 eq(pickIcomSerial(CFG, 'http://h:48000/r/IC-7300%2003001234'), 'IC-7300 03001234', 'the serial from /r/<serial>');
 eq(pickIcomSerial(CFG, 'http://h:48000/r/nope'), null, 'a serial not in the config');
 eq(pickIcomSerial({ radios: [{ serial: 'a', driver: 'icom' }, { serial: 'b', driver: 'icom' }] }, 'http://h'), null, 'two Icoms and no serial: do not guess');
-const saved = withIcomSettings(CFG, 'IC-7300 03001234', { ...icomSettingsFrom({}), icomOwnerLock: false })!;
-eq((saved.radios as any[])[1].icomOwnerLock, false, 'the one field changed');
+const saved = withIcomSettings(CFG, 'IC-7300 03001234', { ...icomSettingsFrom({}), icomTuneLock: true })!;
+eq((saved.radios as any[])[1].icomTuneLock, true, 'the one field changed');
 eq([saved.adminPass, saved.name, (saved.radios as any[])[0]], ['secret', 'x', { serial: 'a', driver: 'rtl' }], '★ everything else as read (the password survives the round trip)');
-eq((CFG.radios[1] as any).icomOwnerLock, undefined, 'the config read is not mutated');
+eq((CFG.radios[1] as any).icomTuneLock, undefined, 'the config read is not mutated');
 eq(withIcomSettings(CFG, 'zz', icomSettingsFrom({})), null, 'unknown serial');
 eq(preflightLines({ passed: false, verified: false, summary: '', items: [{ name: 'USB SEND', value: 'RTS', ok: false, gate: true, where: 'MENU > SET > Connectors > USB SEND' }] }),
    [{ ok: false, text: 'USB SEND: RTS — change it at MENU > SET > Connectors > USB SEND' }], 'a failing item names the menu path');
 
 // ── a phone serving its own Icom (ServerModeScreen) ──
-eq(icomPhoneFields(null), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomOwnerLock: true, icomRfOpen: false },
-   'phone defaults = the setup page\'s, ★ owner lock ON');
-eq(Object.keys(icomPhoneFields({})), [...ICOM_PHONE_KEYS], 'exactly the five keys Android reads, nothing else');
-eq(icomPhoneFields({ icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomOwnerLock: false, icomRfOpen: true, icomAudio: 'x', icomPort: '/dev/x', icomTtyOk: true }),
-   { icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomOwnerLock: false, icomRfOpen: true },
+eq(icomPhoneFields(null), { icomBaud: 115200, icomCiv: 0, icomScopeSpeed: 0, icomTuneLock: false, icomPowerOn: false },
+   'phone defaults = the setup page\'s, ★ tune lock OFF, power-on OFF');
+eq(Object.keys(icomPhoneFields({})), [...ICOM_PHONE_KEYS], 'exactly the five keys Android reads, nothing else (no icomRfOpen: the SDR gain rules apply)');
+eq(icomPhoneFields({ icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomTuneLock: true, icomRfOpen: true, icomPowerOn: true, icomAudio: 'x', icomPort: '/dev/x', icomTtyOk: true }),
+   { icomBaud: 19200, icomCiv: 0x94, icomScopeSpeed: 2, icomTuneLock: true, icomPowerOn: true },
    'stored values kept; audio/port/serial-device dropped (not settings on a phone)');
 eq(icomPhoneFields({ icomBaud: 12345 }).icomBaud, 115200, 'a baud the radio\'s menu does not offer → 115200');
 eq(icomPhoneFields({ icomCiv: 999, icomScopeSpeed: 7 }), { ...icomPhoneFields(null), icomCiv: 0xff, icomScopeSpeed: 0 }, 'out-of-range values clamped / defaulted');
 eq(icomPhoneFields('garbage'), icomPhoneFields(null), 'a damaged store → defaults');
-eq(icomPhoneFields({ icomOwnerLock: 'no' }).icomOwnerLock, true, '★ only an explicit false unlocks the radio');
+eq(icomPhoneFields({ icomTuneLock: 'yes' }).icomTuneLock, false, '★ only an explicit true locks the radio');
 eq(icomPresence(null), 'none', 'nothing plugged in');
 eq(icomPresence({ driver: 'rtl' }), 'none', 'a dongle');
 eq(icomPresence({ driver: 'icom', icomConfirmed: true }), 'icom', 'named by its USB strings');

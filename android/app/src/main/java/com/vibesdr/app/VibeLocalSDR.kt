@@ -259,8 +259,8 @@ object VibeLocalSDR {
 
     // ── ★★★ AN ICOM, RECEIVE ONLY (docs/ICOM-SUPPORT-PLAN.md Phase 4) — see VibeIcom.kt and icom_source.h ──────────
     /** The owner's Icom settings for the next startSpectrum of an Icom's USB port (start() routes it to the Icom). */
-    fun setIcomNext(baud: Int, civAddr: Int, ownerLock: Boolean, rfOpen: Boolean, scopeSpeed: Int, serial: String) {
-        ensureLoaded(); nativeSetIcomNext(baud, civAddr, ownerLock, rfOpen, scopeSpeed, serial)
+    fun setIcomNext(baud: Int, civAddr: Int, ownerLock: Boolean, rfOpen: Boolean, scopeSpeed: Int, serial: String, powerOn: Boolean) {
+        ensureLoaded(); nativeSetIcomNext(baud, civAddr, ownerLock, rfOpen, scopeSpeed, serial, powerOn)
     }
     /** One AudioRecord block, `frames` × `channels` int16 at the START of a DIRECT buffer. Dropped unless an Icom
      *  wants audio. No-op when nothing is loaded. */
@@ -273,7 +273,7 @@ object VibeLocalSDR {
     fun icomAudioWanted(): Boolean = loaded && nativeIcomAudioWanted()
     /** The running Icom's hwinfo `radio` object as JSON, or "" (no Icom, or nothing loaded). */
     fun icomFacts(): String = if (loaded) nativeIcomFacts() else ""
-    private external fun nativeSetIcomNext(baud: Int, civAddr: Int, ownerLock: Boolean, rfOpen: Boolean, scopeSpeed: Int, serial: String)
+    private external fun nativeSetIcomNext(baud: Int, civAddr: Int, ownerLock: Boolean, rfOpen: Boolean, scopeSpeed: Int, serial: String, powerOn: Boolean)
     private external fun nativeIcomPushPcm(buf: java.nio.ByteBuffer, frames: Int, channels: Int, rate: Int)
     private external fun nativeIcomAudioState(describe: String, problem: String)
     private external fun nativeIcomAudioWanted(): Boolean

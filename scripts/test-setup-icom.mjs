@@ -66,7 +66,7 @@ const hw = { driver: 'icom', radio: { driver: 'icom', model: 'IC-7300', civ: '94
   preflight: { passed: false, verified: false, summary: 'VibeServer will not start this radio, because it could transmit: USB SEND is RTS',
                items: [{ name: 'USB SEND', value: 'RTS', ok: false, gate: true, where: 'MENU > SET > Connectors > USB SEND/Keying > USB SEND' },
                        { name: 'VOX', value: 'OFF', ok: true, gate: true, where: 'the VOX key' }] } } };
-const r = { serial: 'IC-7300 03001234', driver: 'icom', label: 'Icom', icomBaud: 19200, icomOwnerLock: undefined, icomCiv: 0x94 };
+const r = { serial: 'IC-7300 03001234', driver: 'icom', label: 'Icom', icomBaud: 19200, icomTuneLock: undefined, icomCiv: 0x94 };
 page.cfg = { radios: [r] };
 page.icomRender(hw, r, 'icom');
 ok(!hidden('icomCard'), 'an Icom shows the Icom card');
@@ -74,7 +74,8 @@ ok(['rangeCard', 'gainCard', 'radioHwCard', 'radioStartCard', 'startCard'].every
 ok($el('icomModel').innerHTML.includes('IC-7300') && $el('icomModel').innerHTML.includes('DTR/RTS held low'), 'model, address and the DTR/RTS fact are shown');
 ok($el('icomPreflight').innerHTML.includes('change it at <b>MENU &gt; SET &gt; Connectors'), 'a failed preflight item names the exact menu item to change');
 ok($el('icomBaud').value === '19200', 'the saved baud is shown (19200)');
-ok($el('icomOwnerLock').checked === true, 'owner lock defaults ON when the config has never said');
+ok($el('icomTuneLock').checked === false, '"Only I may tune this radio" defaults OFF when the config has never said');
+ok($el('icomPowerOn').checked === false, '"Power on the radio over CI-V" defaults OFF');
 ok($el('icomCiv').value === '94', 'CI-V address shown as hex');
 
 page.cfg = { radios: [r], icomStatus: { 'IC-7300 03001234': 'VibeServer will not start this radio, because it could transmit: VOX is ON' } };

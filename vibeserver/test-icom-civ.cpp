@@ -22,6 +22,7 @@ static void ok(bool cond, const char* what, const std::string& extra = "") {
     if (failures < 40) std::printf("   FAIL %s %s\n", what, extra.c_str());
 }
 static void okv(bool cond, const char* what) { ok(cond, what); std::printf("   %s %s\n", cond ? "ok  " : "FAIL", what); }
+static void okv(bool cond, const std::string& what) { okv(cond, what.c_str()); }
 
 static civ::Policy policy7300() {
     civ::Policy p;
@@ -238,6 +239,28 @@ int main() {
     okv(civ::mayTransmit(civ::build::setLevel(0x94, 0x02, 255), p) == civ::Verdict::Ok, "14 02 0255");
     okv(civ::mayTransmit(civ::build::readScope(0x94, 0x15), p) == civ::Verdict::Ok, "27 15 00 — span read");
     okv(civ::mayTransmit(civ::build::readScope(0x94, 0x10), p) == civ::Verdict::Ok, "27 10 — scope read");
+
+    // ── 4b. POWER ON (18 01) — its own builder and its own exact check; mayTransmit still refuses every 18 ──
+    {
+        const int bauds[] = {115200, 57600, 38400, 19200, 9600, 4800};
+        const int want[]  = {150, 75, 50, 25, 13, 7};   // IC-7300 Full Manual §19, footnote *3 on 18 01
+        for (int i = 0; i < 6; i++) {
+            okv(civ::power::wakePreambleFor(bauds[i]) == want[i], "wake preamble at " + std::to_string(bauds[i]) + " = " + std::to_string(want[i]) + " FE");
+            const civ::power::Wake w = civ::power::powerOn(0x94, bauds[i]);
+            okv(w.n == want[i] + 7 && w.b[w.n - 3] == 0x18 && w.b[w.n - 2] == 0x01 && w.b[w.n - 1] == 0xFD
+                && civ::power::mayWake(w, p, bauds[i]), "powerOn builds FE x" + std::to_string(want[i]) + " + FE FE 94 E0 18 01 FD, and mayWake passes it");
+            okv(civ::mayTransmit(w.b, w.n, p) != civ::Verdict::Ok, "  … and mayTransmit still refuses it (" + std::to_string(bauds[i]) + ")");
+        }
+        const civ::power::Wake w = civ::power::powerOn(0x94, 115200);
+        okv(!civ::power::mayWake(w, p, 19200), "a 115200 wake is not a 19200 wake (preamble count is exact)");
+        { civ::power::Wake x = w; x.b[x.n - 2] = 0x00; okv(!civ::power::mayWake(x, p, 115200), "★ FE run + 18 00 (power OFF) is REFUSED"); }
+        { civ::power::Wake x = w; x.b[x.n - 2] = 0x02; okv(!civ::power::mayWake(x, p, 115200), "FE run + 18 02 refused"); }
+        { civ::power::Wake x = w; x.b[x.n - 5] = 0x98; okv(!civ::power::mayWake(x, p, 115200), "a wake to another address refused"); }
+        { civ::power::Wake x = w; x.b[10] = 0x00; okv(!civ::power::mayWake(x, p, 115200), "a broken FE run refused"); }
+        { civ::power::Wake x = w; x.b[x.n - 3] = 0x1C; x.b[x.n - 2] = 0x00;
+          okv(!civ::power::mayWake(x, p, 115200), "FE run + 1C 00 refused (only 18 01 rides a wake)"); }
+        okv(!civ::power::mayWake(civ::build::readFreq(0x94).b, civ::build::readFreq(0x94).n, p, 115200), "an ordinary frame is not a wake");
+    }
 
     // ── 5. BCD and the parser ────────────────────────────────────────────────────────────────
     { uint8_t b[5]; civ::freqToBcd(14074000, b);

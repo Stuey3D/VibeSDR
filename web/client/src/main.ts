@@ -780,6 +780,12 @@ function icomRefresh() {
   const root = document.getElementById('icomCtls');
   if (root) renderIcomPanel(root, ic, adminUnlocked, {
     send: (f) => { if (spec && !spec.sendIcomControl(icomR, f)) showPill('This radio does not offer that setting', 4000); },
+    power: (a) => {
+      if (!spec || !icomR) return;
+      if (a === 'off' && !confirm(`Switch the ${icomR.model || 'radio'} off? Listeners lose it until it is switched back on.`)) return;
+      spec.sendIcomPower(a);
+      showPill(a === 'off' ? 'Switching the radio off…' : 'Switching the radio on — about a minute', 4000);
+    },
   });
   // ★ The picker's FIL row, if it is open, follows the radio too.
   const fr = document.getElementById('mIcomFil');

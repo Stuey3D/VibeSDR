@@ -3,7 +3,7 @@ import { portLabel, portNamesFrom } from '../utils/antennaPortNames';
 import {
   Modal, View, Text, TextInput, TouchableOpacity, TouchableWithoutFeedback, ScrollView,
   KeyboardAvoidingView, Platform, Animated,
-  Switch, StyleSheet, Pressable,
+  Switch, StyleSheet, Pressable, Alert,
 } from 'react-native';
 import { DecoderTitle, DecoderKey, DecoderSurface, DECODER_FONT } from './DecoderShell';
 import { decoderTokensFor } from '../constants/decoderTokens';
@@ -176,6 +176,8 @@ export interface LocalHardwarePanelProps {
   icom?: IcomRadio | null;
   /** Sends `icom_control` (VibeServerWsClient.icomControl — only values the radio listed survive). */
   onIcomControl?: (f: IcomControlFields) => void;
+  /** ★ The ADMIN's RADIO ON / RADIO OFF (`icom_power`) — drawn for the signed-in admin only. */
+  onIcomPower?: (action: 'on' | 'off') => void;
   /** ★ Where the owner's Icom setup lives (IcomSetupCard, drawn under the controls for a SIGNED-IN admin only):
    *  the front door's base, this radio's base, and the admin credential the app already holds. */
   icomSetup?: { doorBase: string; connectBase: string; authQ: string; onOpenSetupPage?: () => void };
@@ -724,7 +726,7 @@ export default function LocalHardwarePanel(p: LocalHardwarePanelProps) {
               — none of it exists on a transceiver that hands us demodulated audio, and an inert copy would teach
               the owner the FEATURE is broken (AGENTS.md). "Else means dongle": this test comes FIRST. */}
           {p.icom ? (
-            <IcomSection icom={p.icom} admin={!!p.adminOk} onControl={p.onIcomControl} slot={slot}
+            <IcomSection icom={p.icom} admin={!!p.adminOk} onControl={p.onIcomControl} onPower={p.onIcomPower} slot={slot}
                          styles={styles} K={K}
                          setup={p.adminOk && p.icomSetup
                            ? <IcomSetupCard icom={p.icom} styles={styles} K={K} {...p.icomSetup} /> : null} />
@@ -1861,8 +1863,8 @@ const lhpCache = new WeakMap<PopupTokens, ReturnType<typeof makeLhpStyles>>();
  *     — its STATE is, as a read-only line, so a listener still sees what the radio is doing (the house rule:
  *     hidden, not greyed; and the contract: never let a refused control bounce).
  *  ★ No transmit control exists here or anywhere — the server reports canTransmit:false and has no TX path. */
-function IcomSection({ icom, admin, onControl, slot, styles, K, setup }: {
-  icom: IcomRadio; admin: boolean; onControl?: (f: IcomControlFields) => void;
+function IcomSection({ icom, admin, onControl, onPower, slot, styles, K, setup }: {
+  icom: IcomRadio; admin: boolean; onControl?: (f: IcomControlFields) => void; onPower?: (action: 'on' | 'off') => void;
   slot: (run: () => void) => boolean; styles: ReturnType<typeof makeLhpStyles>;
   K: { gold: string; abtn: string; fill: string }; setup?: React.ReactNode;
 }) {
@@ -1991,6 +1993,19 @@ function IcomSection({ icom, admin, onControl, slot, styles, K, setup }: {
       </Text>
     )}
     {!mayRf && <Text style={styles.note}>The owner sets this radio&rsquo;s RF controls.</Text>}
+    {/* ★★ RADIO ON / RADIO OFF — the ADMIN's alone: drawn only for them (never greyed for a listener), and only where
+        the server takes `icom_power`. Off asks first — every listener loses the radio. */}
+    {admin && !!icom.power?.canSwitch && !!onPower && (<>
+      <Text style={styles.section}>POWER</Text>
+      <Seg slot={slot} options={['on', 'off'] as ('on' | 'off')[]} value={(icom.linkUp ? 'on' : 'off') as 'on' | 'off'}
+           fmt={(v) => (v === 'on' ? 'RADIO ON' : 'RADIO OFF')}
+           disabled={(v) => (v === 'on' ? icom.linkUp : !icom.linkUp)}
+           onChange={(v) => {
+             if (v === 'on') { onPower('on'); return; }
+             Alert.alert(`Switch the ${icom.model || 'radio'} off?`, 'Listeners lose it until it is switched back on.',
+               [{ text: 'Cancel', style: 'cancel' }, { text: 'Switch off', style: 'destructive', onPress: () => onPower('off') }]);
+           }} />
+    </>)}
     {setup}
   </>);
 }

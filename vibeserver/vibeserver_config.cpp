@@ -329,7 +329,7 @@ std::string toJson(const Config& c) {
     S("usrpClock", c.usrpClock); S("usrpTime", c.usrpTime);   // ★ V12 USRP owner options
     B("usrpDcOffset", c.usrpDcOffset); B("usrpIqBalance", c.usrpIqBalance); N("usrpRxBw", c.usrpRxBw);
     S("icomPort", c.icomPort); N("icomBaud", c.icomBaud); N("icomCiv", c.icomCiv); S("icomAudio", c.icomAudio);
-    N("icomScopeSpeed", c.icomScopeSpeed); B("icomOwnerLock", c.icomOwnerLock); B("icomRfOpen", c.icomRfOpen); B("icomTtyOk", c.icomTtyOk);
+    N("icomScopeSpeed", c.icomScopeSpeed); B("icomTuneLock", c.icomTuneLock); B("icomRfOpen", c.icomRfOpen); B("icomTtyOk", c.icomTtyOk); B("icomPowerOn", c.icomPowerOn);
     B("dabAgcOverride", c.dabAgcOverride); N("dabAgcTarget", c.dabAgcTarget); B("rfAgc", c.rfAgc); B("rspDabDecim", c.rspDabDecim); N("rfAgcStart", c.rfAgcStart); N("rspVibeAgc", c.rspVibeAgc); N("agcSet", c.agcSet); B("agcSetLock", c.agcSetLock);
     S("cpuGovernor", c.cpuGovernor);
     S("trustedProxies", c.trustedProxies);
@@ -427,7 +427,7 @@ bool fromJson(const std::string& s, Config& c, std::string& err, bool validate) 
     if (getNum(s, "icomBaud", d)) c.icomBaud = (int)d;
     if (getNum(s, "icomCiv", d)) c.icomCiv = (int)d;
     if (getNum(s, "icomScopeSpeed", d)) c.icomScopeSpeed = (int)d;
-    getBool(s, "icomOwnerLock", c.icomOwnerLock); getBool(s, "icomRfOpen", c.icomRfOpen); getBool(s, "icomTtyOk", c.icomTtyOk);
+    getBool(s, "icomTuneLock", c.icomTuneLock); getBool(s, "icomRfOpen", c.icomRfOpen); getBool(s, "icomTtyOk", c.icomTtyOk); getBool(s, "icomPowerOn", c.icomPowerOn);
     getBool(s, "dabAgcOverride", c.dabAgcOverride);
     if (getNum(s, "dabAgcTarget", d)) c.dabAgcTarget = (int)d;
     getBool(s, "rfAgc", c.rfAgc);
@@ -572,7 +572,7 @@ void radioFromJson(const std::string& j, RadioConfig& r) {
     B("usrpDcOffset", r.usrpDcOffset); B("usrpIqBalance", r.usrpIqBalance); I("usrpRxBw", r.usrpRxBw);
     if (r.usrpRxBw < 0) r.usrpRxBw = 0;
     S("icomPort", r.icomPort); I("icomBaud", r.icomBaud); I("icomCiv", r.icomCiv); S("icomAudio", r.icomAudio);   // ★ Icom, read AND written
-    I("icomScopeSpeed", r.icomScopeSpeed); B("icomOwnerLock", r.icomOwnerLock); B("icomRfOpen", r.icomRfOpen); B("icomTtyOk", r.icomTtyOk);
+    I("icomScopeSpeed", r.icomScopeSpeed); B("icomTuneLock", r.icomTuneLock); B("icomRfOpen", r.icomRfOpen); B("icomTtyOk", r.icomTtyOk); B("icomPowerOn", r.icomPowerOn);
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
     // ★ The aerial's ranges and filters (2026-10-06) — read here AND written in radioToJson. Clamped
     //   rather than refused: an over-long list keeps its first entries instead of vanishing.
@@ -663,7 +663,7 @@ std::string radioToJson(const RadioConfig& r) {
     S("usrpClock", r.usrpClock); S("usrpTime", r.usrpTime);   // ★ V12 USRP owner options — see the reader
     B("usrpDcOffset", r.usrpDcOffset); B("usrpIqBalance", r.usrpIqBalance); N("usrpRxBw", r.usrpRxBw);
     S("icomPort", r.icomPort); N("icomBaud", r.icomBaud); N("icomCiv", r.icomCiv); S("icomAudio", r.icomAudio);   // ★ Icom, read AND written
-    N("icomScopeSpeed", r.icomScopeSpeed); B("icomOwnerLock", r.icomOwnerLock); B("icomRfOpen", r.icomRfOpen); B("icomTtyOk", r.icomTtyOk);
+    N("icomScopeSpeed", r.icomScopeSpeed); B("icomTuneLock", r.icomTuneLock); B("icomRfOpen", r.icomRfOpen); B("icomTtyOk", r.icomTtyOk); B("icomPowerOn", r.icomPowerOn);
     // ★ The aerial. Written HERE as well as read above — the setup page reads this writer, and
     //   the note further down records what a field in only one of them costs.
     S("antenna", r.antenna); S("antennaIcon", r.antennaIcon);
@@ -798,7 +798,7 @@ void migrateSingleRadio(const std::string& json, ServerConfig& out) {
     r.usrpClock = one.usrpClock; r.usrpTime = one.usrpTime; r.usrpDcOffset = one.usrpDcOffset;
     r.usrpIqBalance = one.usrpIqBalance; r.usrpRxBw = one.usrpRxBw;
     r.icomPort = one.icomPort; r.icomBaud = one.icomBaud; r.icomCiv = one.icomCiv; r.icomAudio = one.icomAudio;
-    r.icomScopeSpeed = one.icomScopeSpeed; r.icomOwnerLock = one.icomOwnerLock; r.icomRfOpen = one.icomRfOpen; r.icomTtyOk = one.icomTtyOk;
+    r.icomScopeSpeed = one.icomScopeSpeed; r.icomTuneLock = one.icomTuneLock; r.icomRfOpen = one.icomRfOpen; r.icomTtyOk = one.icomTtyOk; r.icomPowerOn = one.icomPowerOn;
     r.dabAgcOverride = one.dabAgcOverride; r.dabAgcTarget = one.dabAgcTarget; r.rfAgc = one.rfAgc; r.rspDabDecim = one.rspDabDecim; r.rfAgcStart = one.rfAgcStart; r.rspVibeAgc = one.rspVibeAgc;
     r.agcSet = one.agcSet; r.agcSetLock = one.agcSetLock;
     r.allowRanges = one.allowRanges; r.blockRanges = one.blockRanges;
@@ -1290,7 +1290,7 @@ Config effectiveFor(const ServerConfig& s, const RadioConfig& r) {
     c.usrpClock = r.usrpClock; c.usrpTime = r.usrpTime; c.usrpDcOffset = r.usrpDcOffset;   // ★ V12 USRP owner options
     c.usrpIqBalance = r.usrpIqBalance; c.usrpRxBw = r.usrpRxBw;
     c.icomPort = r.icomPort; c.icomBaud = r.icomBaud; c.icomCiv = r.icomCiv; c.icomAudio = r.icomAudio;
-    c.icomScopeSpeed = r.icomScopeSpeed; c.icomOwnerLock = r.icomOwnerLock; c.icomRfOpen = r.icomRfOpen; c.icomTtyOk = r.icomTtyOk;
+    c.icomScopeSpeed = r.icomScopeSpeed; c.icomTuneLock = r.icomTuneLock; c.icomRfOpen = r.icomRfOpen; c.icomTtyOk = r.icomTtyOk; c.icomPowerOn = r.icomPowerOn;
     c.dabAgcOverride = r.dabAgcOverride; c.dabAgcTarget = r.dabAgcTarget; c.rfAgc = r.rfAgc; c.rspDabDecim = r.rspDabDecim; c.rfAgcStart = r.rfAgcStart; c.rspVibeAgc = r.rspVibeAgc;
     c.agcSet = r.agcSet; c.agcSetLock = r.agcSetLock;
     c.allowRanges = r.allowRanges; c.blockRanges = r.blockRanges;

@@ -1,6 +1,7 @@
 // fake-icom — a pretend IC-7300 on a pseudo-terminal, for testing VibeServer end to end with no radio.
 //
-//   fake-icom [--echo] [--no-transceive] [--usb-send N] [--vox] [--baud B]
+//   fake-icom [--echo] [--no-transceive] [--usb-send N] [--vox] [--baud B] [--off]
+//       --off: start SWITCHED OFF (USB present, CI-V silent); wakes on FE-preamble + 18 01. stdin "power 0|1" = its key.
 //       Opens a pty, prints "FAKE_ICOM_PTY <path>" and serves CI-V on it (icom_fake_radio.h): answers
 //       reads, accepts the allowed writes, streams a synthetic 475-point scope paced at the baud rate.
 //       Point VibeServer at it:  vibeserver --icom <path> --icom-tty-ok --icom-audio tone
@@ -68,6 +69,7 @@ int main(int argc, char** argv) {
         else if (a == "--usb-send" && i + 1 < argc) r.usbSend = (uint8_t)std::atoi(argv[++i]);
         else if (a == "--vox") r.vox = true;
         else if (a == "--baud" && i + 1 < argc) r.baud = std::atoi(argv[++i]);
+        else if (a == "--off") r.powered = false;
         else { std::fprintf(stderr, "usage: see the comment at the top of tools/icom/fake-icom.cpp\n"); return 2; }
     }
     const int m = posix_openpt(O_RDWR | O_NOCTTY);
@@ -86,10 +88,13 @@ int main(int argc, char** argv) {
             unsigned long long hz = 0; int v = 0;
             if (std::sscanf(line, "knob %llu", &hz) == 1) r.turnKnob(hz);
             else if (std::sscanf(line, "tx %d", &v) == 1) r.tx = v != 0;
+            else if (std::sscanf(line, "power %d", &v) == 1) { if (v) r.switchOnByHand(); else r.switchOffByHand(); }
             else if (!std::strncmp(line, "quit", 4)) break;
-            std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u span=%u tx=%d\n",
+            std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u span=%u tx=%d powered=%d wakes=%llu offs=%llu att=%u preamp=%u agc=%u rf=%d\n",
                         (unsigned long long)r.framesIn.load(), (unsigned long long)r.violations.load(),
-                        (unsigned long long)r.sweepsOut.load(), (unsigned long long)r.freq, r.mode, r.dataOn, r.spanHalf * 2, (int)r.tx.load());
+                        (unsigned long long)r.sweepsOut.load(), (unsigned long long)r.freq, r.mode, r.dataOn, r.spanHalf * 2, (int)r.tx.load(),
+                        (int)r.powered.load(), (unsigned long long)r.wakesSeen.load(), (unsigned long long)r.powerOffs.load(),
+                        r.att, r.preamp, r.agc, r.rf);
             std::fflush(stdout);
         }
         run.store(false);

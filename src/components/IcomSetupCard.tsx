@@ -192,8 +192,8 @@ export function IcomFacts({ icom, styles, audio = true, portNote = true }:
 
     <Text style={styles.fieldLbl}>Who may tune</Text>
     <Text style={styles.note}>
-      {icom.ownerLock ? 'Listeners follow the radio — only you tune it.' : 'Listeners may tune the radio.'}{' '}
-      {icom.rfOpen ? 'Listeners may change its RF settings.' : 'Its RF settings are yours alone.'}
+      {icom.ownerLock ? 'Only you tune this radio — listeners follow it.' : 'Listeners tune it under this server’s ordinary dial rules.'}{' '}
+      {icom.rfOpen ? 'Listeners may change its RF settings (the same rules as any radio\u2019s gain).' : 'Its RF settings are yours alone right now (a locked receiver, the AGC lock or a fixed gain).'}
     </Text>
   </>);
 }
@@ -201,7 +201,7 @@ export function IcomFacts({ icom, styles, audio = true, portNote = true }:
 /**
  * The owner's settings, in the setup page's names and order.
  * @param phone true = a phone serving its own radio: only the five keys Android's server reads (VibeIcom.prepareStart —
- *              icomBaud, icomCiv, icomScopeSpeed, icomOwnerLock, icomRfOpen). Its audio is Android's AudioRecord on the
+ *              icomBaud, icomCiv, icomScopeSpeed, icomTuneLock, icomRfOpen). Its audio is Android's AudioRecord on the
  *              radio's USB input and its port is the USB device the owner allowed, so audio/port/serial-device are
  *              not settings there and are not drawn (AGENTS.md: no control that does nothing).
  */
@@ -231,16 +231,23 @@ export function IcomSettingsFields({ form, civTxt, onCivTxt, onSet, styles, ink,
     <Text style={styles.fieldLbl}>Scope speed</Text>
     <IcomChoice styles={styles} opts={[0, 1, 2] as const} value={form.icomScopeSpeed as 0 | 1 | 2} fmt={(v) => ICOM_SCOPE_SPEED_NAMES[v]} onPick={(v) => onSet('icomScopeSpeed', v)} />
     <View style={styles.toggleRow}>
-      <Text style={[styles.toggleLabel, { flex: 1 }]}>Listeners follow the radio &mdash; only you tune it</Text>
-      <Switch value={form.icomOwnerLock} onValueChange={(v) => onSet('icomOwnerLock', v)}
-              trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomOwnerLock ? ink.thumbOn : ink.thumbOff} />
+      <Text style={[styles.toggleLabel, { flex: 1 }]}>Only I may tune this radio</Text>
+      <Switch value={form.icomTuneLock} onValueChange={(v) => onSet('icomTuneLock', v)}
+              trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomTuneLock ? ink.thumbOn : ink.thumbOff} />
     </View>
-    <Text style={styles.note}>This only protects the radio once an admin password is set.</Text>
+    <Text style={styles.note}>Off: the radio follows this server&rsquo;s ordinary dial rules, like any other radio. On: only
+      you tune it (signed in as admin). This only protects the radio once an admin password is set.</Text>
+    <Text style={styles.note}>ATT, preamp, AGC, RF gain, NB, NR and ANF follow the same rules as any radio&rsquo;s gain:
+      free on a personal receiver, yours on a locked one, and your AGC lock or a fixed gain keeps ATT, preamp and RF gain yours.</Text>
     <View style={styles.toggleRow}>
-      <Text style={[styles.toggleLabel, { flex: 1 }]}>Listeners may change ATT, preamp, AGC, RF gain, NB, NR and ANF</Text>
-      <Switch value={form.icomRfOpen} onValueChange={(v) => onSet('icomRfOpen', v)}
-              trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomRfOpen ? ink.thumbOn : ink.thumbOff} />
+      <Text style={[styles.toggleLabel, { flex: 1 }]}>Power on the radio over CI-V</Text>
+      <Switch value={form.icomPowerOn} onValueChange={(v) => onSet('icomPowerOn', v)}
+              trackColor={{ true: ink.trackOn, false: ink.trackOff }} thumbColor={form.icomPowerOn ? ink.thumbOn : ink.thumbOff} />
     </View>
+    <Text style={styles.note}>When the radio is not answering, VibeServer sends its CI-V Power ON command (at most every 30
+      seconds), then checks USB SEND, USB Keying and VOX as always. It needs the radio&rsquo;s 13.8 V supply on, the USB
+      cable in, and a fixed CI-V USB Baud Rate. With Power down the radio on, it also switches the radio off when nobody
+      has listened for a while, and on again when somebody connects. Off: VibeServer waits for you to switch it on.</Text>
     {!phone && (<>
       <Text style={styles.fieldLbl}>Receive audio</Text>
       <Input value={form.icomAudio} onChangeText={(t) => onSet('icomAudio', t)} autoCapitalize="none" autoCorrect={false}

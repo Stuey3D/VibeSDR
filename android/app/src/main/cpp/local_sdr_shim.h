@@ -917,8 +917,9 @@ public:
         std::string port = "usb", audio = "auto", modelHint;
         int baud = 115200, civAddr = 0, scopeSpeed = 0;
         bool ttyOk = false;
-        bool ownerLock = true;   ///< "Listeners follow the radio": only the admin tunes
-        bool rfOpen = false;     ///< listeners may change ATT/preamp/AGC/RF gain/NB/NR/ANF
+        bool ownerLock = false;  ///< "Only I may tune this radio" (config icomTuneLock, default OFF since 2026-11-04)
+        bool powerOn = false;    ///< "Power on the radio over CI-V" (config icomPowerOn) — see icom::IcomConfig::powerOn
+        bool rfOpen = false;     ///< ★ IGNORED since 2026-11-04 — an Icom's RF settings follow the SDRs' gain rules
         double freqHint = 0;
     };
     int startIcom(const IcomStart& o, std::string& err);

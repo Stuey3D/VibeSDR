@@ -263,6 +263,7 @@ export const ASK_SHARED_SETTINGS = new Set<string>([
   'gain', 'agc', 'rsp_control', 'rsp_agc_restart', 'ahf_control', 'airspy_control', 'hackrf_control', 'antenna',
   'tunerbw', 'sampleRate', 'directSampling',
   'nr', 'notch', 'deemph', 'stereo', 'nfmvoice', 'wsp', 'nb', 'nbx', 'ceq', 'ims', 'autobw',
+  'icom_control',   // ★ an Icom's own controls — the same rule as every radio's front end (2026-11-04)
 ]);
 
 

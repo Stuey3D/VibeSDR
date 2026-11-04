@@ -963,14 +963,36 @@ body.wifiFirst .wifiFirstOnly { display: block; }
           <select id="icomScopeSpeed"><option value="0">Fast</option><option value="1">Mid</option><option value="2">Slow</option></select>
           <div class="hint">The radio&rsquo;s own sweep speed. Slow sweeps are smoother and leave more of the serial line for tuning.</div></label>
         <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
-          <input type="checkbox" id="icomOwnerLock" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Listeners follow the radio &mdash; only you tune it</span></label>
-        <div class="hint" id="icomLockHint">On: listeners hear whatever you are on and cannot retune your radio
-          mid-QSO. You tune from the radio or from VibeSDR signed in as admin. <b>This only protects the radio once an
+          <input type="checkbox" id="icomTuneLock" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Only I may tune this radio</span></label>
+        <div class="hint" id="icomLockHint">Off (the default): the radio follows this server&rsquo;s ordinary dial rules,
+          like any other radio &mdash; a single listener tunes it; on a shared server everyone shares the dial, with
+          <b>Ask before tuning</b> if you have it on. On: listeners hear whatever you are on and cannot retune your radio
+          mid-QSO; you tune from the radio or from VibeSDR signed in as admin. <b>This only protects the radio once an
           admin password is set</b> &mdash; without one, anyone can sign in as admin.</div>
+        <div class="hint" style="margin-top:12px">ATT, preamp, AGC, RF gain, NB, NR and ANF follow the same rules as any
+          radio&rsquo;s gain: listeners may change them on a personal receiver; on a locked (shared) receiver only you
+          can; and your <b>AGC lock</b> or a <b>fixed gain</b> on a band keeps ATT, preamp and RF gain yours.</div>
+        <!-- ★★ POWER (2026-11-04, Saber: other software switches his IC-7300 on, so VibeServer often starts while it is
+             off). VibeServer waits quietly for a switched-off radio whatever this says; this only decides whether it may
+             SEND the power-on. Manual: IC-7300 Full Manual §19, command 18 01, footnote *3 (the FE preamble). -->
         <label style="display:flex;gap:8px;align-items:center;margin-top:12px">
-          <input type="checkbox" id="icomRfOpen" style="width:16px;height:16px;accent-color:var(--amber)">
-          <span>Listeners may change ATT, preamp, AGC, RF gain, NB, NR and ANF</span></label>
+          <input type="checkbox" id="icomPowerOn" style="width:16px;height:16px;accent-color:var(--amber)">
+          <span>Power on the radio over CI-V</span></label>
+        <div class="hint">When VibeServer finds the radio not answering, it sends the IC-7300&rsquo;s CI-V
+          <b>Power ON</b> command (18 01, after the run of FE bytes the manual asks for) at most once every 30 seconds,
+          then waits for it to start and checks USB SEND, USB Keying and VOX as always. It only works while the radio
+          still has its 13.8 V supply and the USB cable connected, with <b>CI-V USB Baud Rate</b> set to the same fixed
+          speed as here (a radio that is off cannot detect &ldquo;Auto&rdquo;). If you switch the radio off at its front
+          panel while VibeServer is running, this switches it back on within about 30 seconds &mdash; use
+          <b>Radio off</b> below instead. With <b>Power down the radio</b> on (when nobody is listening), this also
+          switches the radio <b>off</b> once nobody has listened for that long, and on again when somebody connects.
+          Untick it and VibeServer never sends a power command by itself; it waits, and starts the radio when you
+          switch it on.</div>
+        <div id="icomPowerRow" style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <button type="button" class="btn" id="icomRadioOn">Radio on</button>
+          <button type="button" class="btn" id="icomRadioOff">Radio off</button>
+          <span class="hint" id="icomPowerMsg"></span></div>
         <label><span class="lbl">Receive audio</span>
           <input id="icomAudio" placeholder="auto">
           <div class="hint"><b>auto</b> finds the radio&rsquo;s own USB audio next to its CI-V port. <b>none</b> serves the
@@ -4591,6 +4613,24 @@ function govOffer() {
  *  has no sample rate, no gain table, no window to lock and no bias-T, and a card full of dead controls would
  *  read as a broken radio (AGENTS.md). The facts come from the radio itself (hw.radio = the same object as
  *  hwinfo's); the settings from this radio's config entry. */
+/* ★★ RADIO ON / RADIO OFF (the owner's; this page is the admin's). Off asks first: listeners lose the radio. */
+async function icomPower(action) {
+  const name = ($("icomModel") && $("icomModel").querySelector("b") && $("icomModel").querySelector("b").textContent) || "the radio";
+  if (action === "off" && !confirm(`Switch the ${name} off? Listeners lose it until it is switched back on.`)) return;
+  const msg = $("icomPowerMsg");
+  try {
+    const res = await fetch(`/vibeserver/icom/power?action=${action}`, {method: "POST", cache: "no-store"});
+    const j = await res.json().catch(() => ({}));
+    if (msg) msg.textContent = j.ok ? (action === "off" ? "Switching it off\u2026" : "Switching it on \u2014 about a minute\u2026") : (j.error || "Not sent");
+  } catch (e) { if (msg) msg.textContent = "Could not reach the server"; }
+  setTimeout(() => { try { renderHw(); } catch (e) {} }, 3000);
+}
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  if (t && t.id === "icomRadioOn") icomPower("on");
+  if (t && t.id === "icomRadioOff") icomPower("off");
+});
+
 function icomRender(hw, r, drv) {
   const isIcom = drv === "icom";
   const card = $("icomCard");
@@ -4618,7 +4658,13 @@ function icomRender(hw, r, drv) {
     const rows = (pf.items || []).map((it) =>
       `<div style="display:flex;gap:8px"><span style="color:${it.ok ? "var(--good)" : "var(--bad)"}">${it.ok ? "&#10003;" : "&#10007;"}</span>`
       + `<span><b>${esc(it.name)}</b>: ${esc(it.value)}${it.ok ? "" : ` &mdash; change it at <b>${esc(it.where)}</b>`}</span></div>`).join("");
-    $("icomPreflight").innerHTML = `<div style="color:${pf.passed ? "var(--good)" : "var(--bad)"}">${esc(pf.summary)}</div>${rows}`;
+    // ★★ A SWITCHED-OFF RADIO IS A STATE, NOT A FAULT: what it is doing first, then the CI-V hint (or the preflight).
+    const down = ic.linkUp === false && ic.linkWhy;
+    $("icomPreflight").innerHTML = (down ? `<div style="color:var(--warn)"><b>${esc(ic.linkWhy)}</b></div>`
+        + (ic.linkHint ? `<div class="hint">${esc(ic.linkHint)}</div>` : "") : "")
+      + (pf.ran === false && down ? "" : `<div style="color:${pf.passed ? "var(--good)" : "var(--bad)"}">${esc(pf.summary)}</div>${rows}`);
+    const on = $("icomRadioOn"), off = $("icomRadioOff");
+    if (on && off) { on.disabled = ic.linkUp !== false; off.disabled = ic.linkUp === false; }
   } else {
     // ★ Not running: usually the preflight refused it, and the reason is in the radio's status line.
     const why = (cfg && cfg.icomStatus && r && cfg.icomStatus[r.serial]) || "";
@@ -4631,8 +4677,8 @@ function icomRender(hw, r, drv) {
   set("icomBaud", String(r.icomBaud || 115200));
   set("icomCiv", r.icomCiv ? Number(r.icomCiv).toString(16).toUpperCase() : "");
   set("icomScopeSpeed", String(r.icomScopeSpeed || 0));
-  set("icomOwnerLock", r.icomOwnerLock !== false);
-  set("icomRfOpen", !!r.icomRfOpen);
+  set("icomTuneLock", !!r.icomTuneLock);   // ★ default OFF (2026-11-04): the ordinary dial rules
+  set("icomPowerOn", !!r.icomPowerOn);
   set("icomAudio", r.icomAudio || "auto");
   set("icomPort", r.icomPort || "usb");
   set("icomTtyOk", !!r.icomTtyOk);
@@ -7271,8 +7317,8 @@ function collectRadio() {
       icomBaud: parseInt($("icomBaud").value, 10) || 115200,
       icomCiv: parseInt($("icomCiv").value || "0", 16) || 0,
       icomScopeSpeed: parseInt($("icomScopeSpeed").value, 10) || 0,
-      icomOwnerLock: $("icomOwnerLock").checked,
-      icomRfOpen: $("icomRfOpen").checked,
+      icomTuneLock: $("icomTuneLock").checked,
+      icomPowerOn: $("icomPowerOn").checked,
       icomAudio: ($("icomAudio").value || "auto").trim(),
       icomPort: ($("icomPort").value || "usb").trim(),
       icomTtyOk: $("icomTtyOk").checked,
