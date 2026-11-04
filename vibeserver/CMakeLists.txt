@@ -1171,6 +1171,14 @@ add_executable(test-dab-faad-queue "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-faad-qu
 target_include_directories(test-dab-faad-queue PRIVATE "${CPP_DIR}")
 target_compile_options(test-dab-faad-queue PRIVATE -O3 -ffp-contract=fast)
 target_link_libraries(test-dab-faad-queue PRIVATE vibeserver_core)
+# ★ test-dab-tii-air: TII off REAL captures (11D, 10D, 12B) through the DabService with the UK directory — the
+#   sites named per verdict. Exit 3 (NOT RUN) without ~/VibeSDR-test-audio/dab/tii.
+add_executable(test-dab-tii-air "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-tii-air.cpp")
+target_include_directories(test-dab-tii-air PRIVATE "${CPP_DIR}")
+target_compile_options(test-dab-tii-air PRIVATE -O3 -ffp-contract=fast)
+target_link_libraries(test-dab-tii-air PRIVATE vibeserver_core)
+add_test(NAME dab-tii-air COMMAND test-dab-tii-air)
+set_tests_properties(dab-tii-air PROPERTIES SKIP_RETURN_CODE 3)
 
 # ★ dab-unitlog: one DAB+ service's access units, CRC failures and lost super frames off a captured multiplex — the
 #   input test-dab-faad replays through FAAD2 (dev tool; real recordings stay in ~/VibeSDR-test-audio/dab).

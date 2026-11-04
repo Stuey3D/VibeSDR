@@ -959,6 +959,24 @@ public:
         out = jsonLocked_();
         return true;
     }
+    /** ★★ THE TII LIST AS REPORTED: the detector's own hits, plus its shared combs (several sites on
+     *  one Sub Id) resolved against the directory's codes for THIS ensemble — or, where the directory
+     *  has none for it, offered as candidates (vibe_dab_tii.h). The codes are read once per ensemble;
+     *  the resolving is a few pattern checks per shared comb, at report time. Caller holds m_. */
+    std::vector<TiiHit> tiiHitsLocked_(const Ensemble& e) {
+        std::vector<TiiHit> hits = rx_.tii();
+        const auto& shared = rx_.tiiShared();
+        if (shared.empty()) return hits;
+        if (tiiCodesDb_ != txdb_ || tiiCodesEcc_ != e.ecc || tiiCodesEid_ != e.eid) {
+            tiiCodesDb_ = txdb_; tiiCodesEcc_ = e.ecc; tiiCodesEid_ = e.eid;
+            tiiCodes_ = (txdb_ && e.ecc >= 0 && e.eid) ? txdb_->tiiCodes(e.ecc, e.eid) : std::vector<bool>();
+            tiiHaveCodes_ = std::find(tiiCodes_.begin(), tiiCodes_.end(), true) != tiiCodes_.end();
+        }
+        tiiResolveShared(shared, tiiHaveCodes_,
+                         [&](int m, int s) { const size_t i = size_t(m * 24 + s); return i < tiiCodes_.size() && tiiCodes_[i]; },
+                         hits);
+        return hits;
+    }
     std::string jsonLocked_(ReportParts* parts = nullptr) {
         // ★ Byte ranges of the sections that leave the LIVE report (see ReportParts), in the legacy string.
         size_t dsA = 0, dsB = 0, scA = 0, scB = 0, licA = 0, licB = 0, svA = 0;
@@ -1166,8 +1184,9 @@ public:
                 j += cb;
                 dg2B = j.size();
                 const auto& td = rx_.tiiDiag();
-                char db[96];
-                snprintf(db, sizeof db, ",\"tiiDiag\":{\"comb\":%d,\"f4s\":%.1f,\"f45\":%.2f,\"frames\":%d}", td.comb, td.fourthOverSigma, td.fourthOverFifth, td.frames);
+                char db[160];
+                snprintf(db, sizeof db, ",\"tiiDiag\":{\"comb\":%d,\"f4s\":%.1f,\"f45\":%.2f,\"frames\":%d,\"act\":%d,\"n\":%u}",
+                         td.comb, td.fourthOverSigma, td.fourthOverFifth, td.frames, td.active, td.verdicts);
                 j += db;
                 /* ★ The raw linkage table (FIG 0/6) and frequency table (FIG 0/21), for the DX pane and
                  *  for seeing what a multiplex actually signals. Small: a few sets of a few ids. */
@@ -1348,10 +1367,13 @@ public:
              *  the null's noise. The figure a DX-er wants beside the ensemble name. */
             j += ",\"tii\":[";
             bool f1 = true;
-            for (const auto& h : rx_.tii()) {
-                char tb[96];
+            for (const auto& h : tiiHitsLocked_(e)) {
+                char tb[112];
+                /* ★ `c`: 1 = resolved from a shared Sub Id by the directory, 2 = one of several
+                 *  candidates on a shared Sub Id (no directory for this ensemble). Absent = measured. */
                 snprintf(tb, sizeof tb, "%s{\"main\":%d,\"sub\":%d,\"db\":%.1f", f1 ? "" : ",", h.mainId, h.subId, h.strength);
                 j += tb; f1 = false;
+                if (h.from != kTiiClean) { snprintf(tb, sizeof tb, ",\"c\":%d", int(h.from)); j += tb; }
                 /* ★ Named from the country's directory when there is one for this ensemble's ECC;
                  *  nearest site when the code is reused; distance only when we know where we are. */
                 if (txdb_ && e.ecc >= 0) {
@@ -2852,6 +2874,12 @@ private:
     std::vector<float>  ddcOut_;
     const DabTxDb* txdb_ = nullptr;
     double rxLat_ = NAN, rxLon_ = NAN;
+    // ★ The directory's TII codes for the ensemble being reported (tiiHitsLocked_), cached by ensemble.
+    const DabTxDb*    tiiCodesDb_  = nullptr;
+    int               tiiCodesEcc_ = -2;
+    int               tiiCodesEid_ = -1;
+    std::vector<bool> tiiCodes_;
+    bool              tiiHaveCodes_ = false;
     uint32_t sid_ = 0, want_ = 0;
 };
 

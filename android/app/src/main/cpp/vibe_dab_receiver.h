@@ -790,6 +790,8 @@ public:
     const std::vector<uint8_t>& impulseResponse() const { return ir_; }
     /** The transmitters identified from the null symbol — Main Id / Sub Id / dB above the noise. */
     const std::vector<TiiHit>& tii() const { return tii_.hits(); }
+    /** ★ Combs lit on more than four blocks (a shared Sub Id): the service resolves them with the directory. */
+    const std::vector<TiiShared>& tiiShared() const { return tii_.shared(); }
     const TiiDetector::Diag& tiiDiag() const { return tii_.diag(); }
     /** Where the last push() found the null, or -1. The caller must consume THROUGH the frame it
      *  decoded, not a fixed amount from the front — see DabService::feed. */

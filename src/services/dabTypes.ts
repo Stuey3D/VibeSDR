@@ -38,7 +38,10 @@ export interface DabState {
   mp2Mode?: number;
   ecc?: number; cif?: number; mci?: boolean; nsvc?: number;
   /** Transmitter Identification: which transmitters of the SFN the null symbol says we hear. */
-  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean }[];
+  /*  ★ `c` (2026-11-04): 1 = resolved from a SHARED Sub Id (several sites on one comb) by the transmitter
+   *    directory; 2 = one of several candidates on a shared Sub Id where no directory covers the ensemble.
+   *    Absent = measured on its own. */
+  tii?: { main: number; sub: number; db: number; site?: string; area?: string; km?: number; lat?: number; lon?: number; ambiguous?: boolean; c?: number }[];
   /** Signal analysis: MER (dB), raw MSC bit error rate, PRS impulse response (128 x uint8 dB
    *  bins, 4 samples each, 255 = peak), constellation (192 int8 x,y pairs, ideal radius 60). */
   mer?: number; mscBer?: number; irPeak?: number; ir?: number[]; iq?: number[];
@@ -81,7 +84,7 @@ export interface DabState {
   slide?: { seq: number; mime: string; bytes: number; name: string; h?: string };   // ★ h: dab=2 only — see dabSlide.ts
   motGroups?: number; motCrcFail?: number; motObjects?: number;
   spi?: { sid: number; packets: number; groups: number; crcFail: number; lost: number; dir: boolean; named: number; complete: number; logoSvcs: number };
-  tiiDiag?: { comb: number; f4s: number; f45: number; frames: number };
+  tiiDiag?: { comb: number; f4s: number; f45: number; frames: number; act?: number; n?: number };
   aacRateHz?: number; aacCh?: number; aacServerSide?: boolean;
   dropped?: number;
   /** Set (to the length snprintf wanted) when the server had to send a stub instead of the block. */

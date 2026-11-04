@@ -409,14 +409,19 @@ let txChannel = '';
 let txOrder = 0;
 function rememberTransmitters(d: DabState): Array<{ t: DabTx; lost: boolean }> {
   if (d.channel !== txChannel) { txSeen.clear(); txChannel = d.channel; }
+  /* ★ A CANDIDATE (c 2: one of several on a shared Sub Id, no directory to choose by) is shown while it
+   *  is offered and never remembered — a "not received" line for a guess would be clutter. Same in
+   *  dabTxRemember (web). */
   for (const t of d.tii ?? []) {
+    if (t.c === 2) continue;
     const k = `${t.main}/${t.sub}`;
     const e = txSeen.get(k);
     if (e) e.t = t; else txSeen.set(k, { t, order: txOrder++ });
   }
   const live = new Set((d.tii ?? []).map(t => `${t.main}/${t.sub}`));
   return [...txSeen.values()].sort((a, b) => a.order - b.order)
-    .map(e => ({ t: e.t, lost: !live.has(`${e.t.main}/${e.t.sub}`) }));
+    .map(e => ({ t: e.t, lost: !live.has(`${e.t.main}/${e.t.sub}`) }))
+    .concat((d.tii ?? []).filter(t => t.c === 2).map(t => ({ t, lost: false })));
 }
 
 export interface DabPanelProps {
@@ -856,8 +861,9 @@ export default function DabPanel(p: DabPanelProps) {
             : DASH} />
           {/* ★ TII — the transmitters behind the ensemble, with how far each stands above the
               null's noise. And when there are none, SAY WHY: a null symbol with no TII energy at
-              all is a multiplex that does not transmit identification (Digital One on 11D,
-              measured 2026-09-07), not a receiver that has failed to find it. */}
+              all is a multiplex that does not transmit identification, not a receiver that has
+              failed to find it. ★ 11D was cited here (2026-09-07) — wrongly: it does carry TII, which
+              the detector could not read until 2026-11-04 (vibe_dab_tii.h, the top). */}
           {/* ★★★ TRANSMITTER LINES THAT DO NOT BOUNCE — the same memory the web client keeps. A site
               is remembered for the life of the multiplex; while unheard its line stays, dimmed and
               marked, rather than vanishing and letting the Ofcom record take its place (Stuart:
@@ -866,7 +872,10 @@ export default function DabPanel(p: DabPanelProps) {
             ? txLines.map((e, i) => (
                 <Row key={`${e.t.main}.${e.t.sub}`} label={i === 0 ? 'Transmitters' : ''}
                      value={`${e.t.main.toString(16).toUpperCase()}/${e.t.sub.toString(16).toUpperCase().padStart(2, '0')}`
-                          + (e.t.site ? ` · ${e.t.site}` : '')
+                          /* ★ ≈ = resolved from a shared Sub Id by the directory; "one of several" = a
+                              candidate with no directory to choose by (vibe_dab_tii.h). Same words as the web. */
+                          + (e.t.site ? ` · ${e.t.c === 1 ? '≈ ' : ''}${e.t.site}` : '')
+                          + (e.t.c === 2 ? ' · one of several on a shared Sub Id' : '')
                           + (e.t.area && e.t.area !== e.t.site ? ` (${e.t.area})` : '')
                           + (e.t.km !== undefined && e.t.km >= 0 ? ` · ${(e.t.km * 0.621371).toFixed(e.t.km < 16 ? 1 : 0)} mi` : '')
                           + (e.lost ? ' · not received' : ` · ${e.t.db.toFixed(1).padStart(4, '\u2007')} dB`)

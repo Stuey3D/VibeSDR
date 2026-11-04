@@ -228,7 +228,8 @@ public:
     }
     /** ★ THE LICENSED SITES FOR AN ENSEMBLE — a regulator's record, not a measurement. Shown beside
      *  the air's own TII so a reader can see both: an ensemble whose null symbol carries no TII
-     *  (11D, Digital One, measured 2026-09-07) or one sending the generic small-scale code 01/05
+     *  (11D was thought to be one, 2026-09-07 — it was the detector; fixed 2026-11-04, vibe_dab_tii.h)
+     *  or one sending the generic small-scale code 01/05
      *  still has a known transmitter. Stuart: "is that knowledge something we can add to the panel".
      *  Nearest first when the receiver's position is known.
      *  ★ `block` is the block we are tuned to ("12C"): a by-block source (no EIds) matches on the
@@ -258,6 +259,23 @@ public:
             }
         if (havePos) std::sort(out.begin(), out.end(), [](const Site& a, const Site& b) { return a.km < b.km; });
         if (out.size() > maxN) out.resize(maxN);
+        return out;
+    }
+    /** ★ Every TII code the directory holds for this ensemble, as bits main * 24 + sub — what a shared
+     *  comb is resolved against (tiiResolveShared, vibe_dab_tii.h). None set = no TII record here:
+     *  rows without a code (by-block sources, ČTÚ) never count. One pass; the caller caches it. */
+    static constexpr int kTiiCodeBits = 70 * 24;
+    std::vector<bool> tiiCodes(int ecc, uint16_t eid) const {
+        std::vector<bool> out(kTiiCodeBits, false);
+        auto set = [&](int m, int s) { if (m >= 0 && m < 70 && s > 0 && s < 24) out[size_t(m * 24 + s)] = true; };
+        for (const auto& r : loaded_)
+            if (eccMatches(r.ecc, ecc) && r.eid == eid) set(r.mainId, r.subId);
+        for (const auto& t : builtin_) if (t.ecc == ecc)
+            for (size_t i = 0; i < t.n; ++i) {
+                const DabTx& r = t.rows[i];
+                if ((r.flags & kDabTxByBlock) || r.subId == 0) continue;
+                if (r.eid == eid) set(r.mainId, r.subId);
+            }
         return out;
     }
     bool hasCountry(int ecc) const {

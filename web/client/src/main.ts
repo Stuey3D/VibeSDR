@@ -7537,9 +7537,10 @@ function dabRender() {
          *  line — see dabTxRemember. A list that wrapped and grew and shrank with every block made
          *  everything below it jump ("it keeps bouncing", Stuart, 2026-09-07). */
         ? dabTxRows(d, row)
-        /* ★ Say WHY when there is nothing: a null symbol with no TII energy at all (Digital One,
-         *  11D, measured 2026-09-07: the best comb at 0.6 of the noise against a 4x test) is a
-         *  multiplex that does not transmit identification, not a receiver that has not found it. */
+        /* ★ Say WHY when there is nothing: a null symbol with no TII energy at all is a multiplex
+         *  that does not transmit identification, not a receiver that has not found it. ★ 11D was
+         *  cited here (2026-09-07) — wrongly: it does carry TII, which the detector could not read
+         *  until 2026-11-04 (vibe_dab_tii.h, the top). Same note in the app's DabPanel. */
         : row('Transmitters', !d.locked ? '—'
             : (d.tiiDiag && d.tiiDiag.frames > 0 && d.tiiDiag.f4s < 2 ? 'none transmitted — no TII in the null symbol' : 'none identified yet')))
     /* ★ The regulator's licence record for this ensemble — ONLY when the air gives nothing to go on:
@@ -7886,7 +7887,11 @@ let dabTxOrder = 0;
 function dabTxRemember(d: DabState): Array<{ t: DabTx; lost: boolean }> {
   const now = Date.now();
   if (d.channel !== dabTxChannel) { dabTxSeen.clear(); dabTxChannel = d.channel; }
+  /* ★ A CANDIDATE (c 2: one of several on a shared Sub Id, no directory to choose by) is shown while it
+   *  is offered and never remembered — a "not received" line for a guess would be clutter. Same in the
+   *  app's rememberTransmitters. */
   for (const t of d.tii ?? []) {
+    if (t.c === 2) continue;
     const k = `${t.main}/${t.sub}`;
     const e = dabTxSeen.get(k);
     if (e) { e.t = t; e.last = now; } else dabTxSeen.set(k, { t, last: now, order: dabTxOrder++ });
@@ -7901,7 +7906,8 @@ function dabTxRemember(d: DabState): Array<{ t: DabTx; lost: boolean }> {
   void now;
   const live = new Set((d.tii ?? []).map(t => `${t.main}/${t.sub}`));
   return [...dabTxSeen.values()].sort((a, b) => a.order - b.order)
-    .map(e => ({ t: e.t, lost: !live.has(`${e.t.main}/${e.t.sub}`) }));
+    .map(e => ({ t: e.t, lost: !live.has(`${e.t.main}/${e.t.sub}`) }))
+    .concat((d.tii ?? []).filter(t => t.c === 2).map(t => ({ t, lost: false })));
 }
 function dabTxRows(d: DabState, row: (k: string, v: string) => string): string {
   /* ★ The level sits OUTSIDE the marquee: it changes with every block, and a value that changes
@@ -7924,7 +7930,10 @@ function dabTxText(t: NonNullable<DabState['tii']>[number]): string {
   /* ★ 01/05 is the generic code many small-scale DAB operators leave in place rather than the one
    *  they were licensed (Stuart, 2026-09-07, having read up on it) — so an unmatched 01/05 is
    *  named as that, not left looking like an unknown site. */
-  const name = t.site ? escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '')
+  /* ★ ≈ = resolved from a shared Sub Id by the directory; "one of several" = a candidate with no directory
+   *  to choose by (vibe_dab_tii.h, 2026-11-04). Same words as the app. */
+  const name = t.site ? (t.c === 1 ? '≈ ' : '') + escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '')
+             : t.c === 2 ? `${code} · one of several on a shared Sub Id`
              : (t.main === 1 && t.sub === 5 ? `${code} · generic small-scale code, not set by the operator` : code);
   const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
   return `${name}${dist} · ${t.db.toFixed(0)} dB${t.site ? ` <span style="opacity:.5">${code}</span>` : ''}`;
@@ -7932,7 +7941,10 @@ function dabTxText(t: NonNullable<DabState['tii']>[number]): string {
 /** The same in two parts: the text that scrolls (stable) and the level that changes every block. */
 function dabTxParts(t: NonNullable<DabState['tii']>[number]): { text: string; level: string } {
   const code = `${t.main.toString(16).toUpperCase().padStart(2, '0')}/${t.sub.toString(16).toUpperCase().padStart(2, '0')}`;
-  const name = t.site ? escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '')
+  /* ★ ≈ = resolved from a shared Sub Id by the directory; "one of several" = a candidate with no directory
+   *  to choose by (vibe_dab_tii.h, 2026-11-04). Same words as the app. */
+  const name = t.site ? (t.c === 1 ? '≈ ' : '') + escapeHtml(t.site) + (t.area && t.area !== t.site ? ` (${escapeHtml(t.area)})` : '') + (t.ambiguous ? ' ?' : '')
+             : t.c === 2 ? `${code} · one of several on a shared Sub Id`
              : (t.main === 1 && t.sub === 5 ? `${code} · generic small-scale code, not set by the operator` : code);
   const dist = t.km !== undefined && t.km >= 0 ? ` · ${(t.km * 0.621371).toFixed(t.km < 16 ? 1 : 0)} mi (${t.km.toFixed(t.km < 10 ? 1 : 0)} km)` : '';
   /* ★ The code scrolls with the name; only the level is fixed, so every level lines up on the right

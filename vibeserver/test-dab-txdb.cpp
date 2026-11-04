@@ -59,6 +59,16 @@ int main() {
         auto d1 = db.sitesFor(0xE1, 0xC181, cLat, cLon, 4, "11D");
         CHECK(!d1.empty() && d1[0].src == kDabSrcOfcom, "Digital One lists Ofcom rows");
         CHECK(std::string(dabTxSourceLabel(kDabSrcOfcom)) == "Ofcom record", "label reads Ofcom record");
+        // ── ★ the codes a shared TII comb is resolved against (2026-11-04): D1's Sub 6 holds both
+        //    Wellingborough 23/6 and Aylesbury 22/6; a by-block source (BAKOM) contributes none ──
+        {
+            const auto codes = db.tiiCodes(0xE1, 0xC181);
+            CHECK(codes.size() == size_t(DabTxDb::kTiiCodeBits), "one bit per main x sub");
+            CHECK(codes[23 * 24 + 6] && codes[22 * 24 + 6] && codes[23 * 24 + 2], "D1: 23/6, 22/6 and Daventry's 23/2 are known codes");
+            CHECK(!codes[40 * 24 + 6], "…and 40/6 is not");
+            const auto ch = db.tiiCodes(0xE1, 0x4FFE);
+            CHECK(std::find(ch.begin(), ch.end(), true) == ch.end(), "a by-block (no TII) source gives no codes");
+        }
         // ── another country's ECC never sees Swiss or UK rows ──
         CHECK(db.sitesFor(0xE0, 0x4FFE, zLat, zLon, 4, "12C").empty(), "ECC E0 (e.g. Germany) gets none of E1's rows");
     }
