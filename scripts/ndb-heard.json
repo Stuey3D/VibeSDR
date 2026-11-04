@@ -70,6 +70,13 @@
       "airport": "LFQT",
       "name": "Merville",
       "heard": "Stuart's RSP1A 68 h + RX888 (confirmed in 30 min) and NickB 19 dB, 2026-10-28 to 11-04; Merville's second beacon (MVC 327 is the other)"
+    },
+    {
+      "ident": "WSN",
+      "khz": 378.0,
+      "airport": "EDWT",
+      "name": "Weser",
+      "heard": "Stuart's RSP1A 41 h and NickB 20 dB, 2026-10-28 to 11-04. An EN-ROUTE beacon, not a locator: positioned at Blexen (EDWT), the nearest airfield, which may be ~30 km from the transmitter"
     }
   ]
 }

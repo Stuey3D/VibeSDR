@@ -308,8 +308,9 @@ async function heard() {
     await writeFile(f, text);
   });
   const ap = new Map();
+  // ★ By OurAirports' own ident AND by ICAO / GPS code: a small field's ident can be "DE-0113" with EDWT only as its code.
   for (const r of csvObjects(await readFile(file, 'utf8'), ['ident', 'latitude_deg', 'longitude_deg', 'iso_country'], 'airports.csv'))
-    ap.set((r.ident || '').toUpperCase(), r);
+    for (const k of [r.ident, r.icao_code, r.gps_code]) { const u = (k || '').toUpperCase().trim(); if (u && !ap.has(u)) ap.set(u, r); }
   const recs = [];
   for (const b of j.beacons) {
     const a = ap.get(String(b.airport).toUpperCase());
