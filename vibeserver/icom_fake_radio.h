@@ -62,11 +62,16 @@ public:
     uint32_t spanHalf = 25000;
     uint64_t fixedLo = 14000000, fixedHi = 14350000;
     uint8_t speed = 0;
+    /// ★ > 0: sweeps a second, whatever the speed setting — a real IC-7300 on a busy or slower USB link draws
+    ///   ~4 a second (Saber's, beta63: 3.9 fps), not the fake's flat-out 8–30.
+    double fps = 0;
 
     FakeIcomRadio() { const Model* m = modelByAddr(0x94); policyModel_ = m; }
 
     bool gone() const override { return unplugged.load(); }
 
+    /** The owner presses the scope's CENT/FIX key on the radio (0 centre, 1 fixed at fixedLo..fixedHi). */
+    void scopeModeByHand(uint8_t m) { std::lock_guard<std::mutex> lk(mtx_); scopeMode = m ? 1 : 0; }
     /** The owner presses the radio's own POWER key. */
     void switchOnByHand()  { std::lock_guard<std::mutex> lk(mtx_); powered = true; bootAt_ = 0; }
     void switchOffByHand() { std::lock_guard<std::mutex> lk(mtx_); powered = false; out_.clear(); scopeOn = scopeData = false; }
@@ -76,6 +81,13 @@ public:
         std::lock_guard<std::mutex> lk(mtx_);
         freq = hz;
         if (transceive) { std::vector<uint8_t> d(5); civ::freqToBcd(hz, d.data()); reply(civ::kBroadcast, 0x00, d); }
+    }
+
+    /** The owner presses a MODE key on the radio (06 byte; DATA off). Broadcast as 01 when transceive is on. */
+    void pressMode(uint8_t m) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        mode = m; dataOn = 0;
+        if (transceive) reply(civ::kBroadcast, 0x01, {m, fil});
     }
 
     void fromController(const uint8_t* b, int n) override {
@@ -126,7 +138,7 @@ private:
         lastT_ = t;
         if (scopeOn && scopeData && answer && powered && !unplugged.load() && out_.size() < 64 && t >= nextSweep_) {
             emitSweep();
-            nextSweep_ = t + (speed == 0 ? 1.0 / 30 : speed == 1 ? 1.0 / 15 : 1.0 / 8);
+            nextSweep_ = t + (fps > 0 ? 1.0 / fps : speed == 0 ? 1.0 / 30 : speed == 1 ? 1.0 / 15 : 1.0 / 8);
         }
     }
 
@@ -143,7 +155,8 @@ private:
         // A few stations at fixed radio frequencies, amplitude above the floor (0-160 scale).
         struct C { double hz, w, a; };
         static const C cs[] = {{14074000, 1500, 55}, {14100000, 150, 95}, {14230000, 1200, 45},
-                               {7074000, 1500, 60}, {14060000, 80, 70}, {3615000, 2500, 50}};
+                               {7074000, 1500, 60}, {14060000, 80, 70}, {3615000, 2500, 50},
+                               {14150000, 150, 90}};   // ★ 50 kHz above 14.100: the axis test's second marker
         double a = 0;
         for (const C& c : cs) { const double x = (f - c.hz) / c.w; a += c.a * std::exp(-x * x); }
         return a;

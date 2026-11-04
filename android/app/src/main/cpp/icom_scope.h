@@ -107,7 +107,9 @@ inline void sweepToWire(const Sweep& s, int outBins, uint8_t* out, int ampMax, d
     const int n = s.n;
     if (n <= 0) { std::memset(out, 1, (size_t)outBins); return; }
     for (int i = 0; i < outBins; i++) {
-        const int signedOut = (i <= outBins / 2) ? i : i - outBins;
+        // ★ Wire bin n/2 is the LOW edge: the client rotates by n/2 (spectrum.ts), so display bin 0 <- wire n/2, as an
+        //   FFT's -fs/2 bin. (It used to be read as +n/2, which put the TOP-edge point in the leftmost column.)
+        const int signedOut = (i < outBins / 2) ? i : i - outBins;
         // Fraction of the span this output bin covers: [x0, x1) of 0..1
         const double x0 = 0.5 + ((double)signedOut - 0.5) / (double)outBins;
         const double x1 = x0 + 1.0 / (double)outBins;

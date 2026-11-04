@@ -108,6 +108,15 @@ int main() {
         ok(row[512] == icom::ampToWire(30, 160, 80.0), "the band edge is bin n/2");
         ok(icom::ampToWire(160, 160, 80.0) == 256 - 130 + 80 - 0 || icom::ampToWire(160, 160, 80.0) == 206, "full scale lands at -50 dB on the wire (byte 206)");
         ok(icom::ampToWire(0, 160, 80.0) == 126, "zero lands at the -130 dB floor (byte 126)");
+        // ★ THE EDGES ARE NOT SWAPPED: the client rotates by n/2 (display 0 <- wire n/2), so wire n/2 is the LOW edge
+        //   and the top-edge point never lands in the leftmost column (it did, before 2026-11-04).
+        {
+            icom::ScopeAssembler e; int de = 0;
+            for (auto& d : usbSweep(0, 14074000, 25000, [](int i) { return i == 474 ? 150 : i == 0 ? 90 : 30; })) de += e.feed(d.data(), (int)d.size());
+            std::vector<uint8_t> r(1024); icom::sweepToWire(e.out(), 1024, r.data(), 160, 80.0);
+            ok(de == 1 && r[512] == icom::ampToWire(90, 160, 80.0), "wire bin n/2 (display bin 0) is the LOW-edge point");
+            ok(r[511] == icom::ampToWire(150, 160, 80.0), "wire bin n/2-1 (display bin n-1) is the TOP-edge point");
+        }
         // ★ downsampling keeps a ONE-POINT carrier (peak-hold), upsampling never invents a value
         std::vector<uint8_t> small(64);
         icom::ScopeAssembler a2; int d2 = 0;
