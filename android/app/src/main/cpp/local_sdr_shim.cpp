@@ -34463,6 +34463,10 @@ void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publi
     g_gallerySaveLive.store(saveLive);
     LOGI("gallery: %s, %.0f MB, %s, listeners' decodes %s", g.dir().empty() ? "(no directory)" : g.dir().c_str(), limitMb,
          publicRead ? "visible to everyone" : "hidden", saveLive ? "kept" : "not kept");
+    // ★★ V12 2026-11-04: ONCE per server (a marker in the folder), before any NDB writer starts — the all-dot / all-dash
+    //    unlisted idents (data carriers read as Morse) on the cards already written are set aside (vibe_ndb_gallery_clean.h).
+    //    After the first pass this is one stat().
+    vibe::ndbgal::cleanUniformIdents(g);
 }
 void LocalSdrShim::setGalleryRadioLabel(const std::string& label) { vibe::gallery::shared().setRadioLabel(label); }
 void LocalSdrShim::setGalleryRedact(const std::vector<std::string>& serials) { vibe::gallery::shared().setRedact(serials); }

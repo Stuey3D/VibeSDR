@@ -1,0 +1,8 @@
+NDB heard log · 2026-10-27 (UTC)
+Heard by a listener in NDB mode.
+Updated 22:51 UTC. An ident is listed only once several of its repeats agreed. Stations, countries and positions: OurAirports (public domain); a beacon not in that list shows its ident alone.
+
+1 beacon identified · furthest: BHX Birmingham 62 km
+
+Each beacon, most recently heard first (last heard · first heard · ident · kHz · best SNR · distance · bearing · country · station):
+22:51:05 · 07:08:54 · BHX · 406.000 kHz · 12 dB · 62 km · 285° WNW · GB · Birmingham

@@ -67,6 +67,15 @@ struct Match {
     std::vector<Navaid> others;   // the rest on the frequency, nearest first (the "four on freq" list, at most 6)
 };
 
+/** ★★ V12 2026-11-04 — AN IDENT OF ONLY DOTS (E I S H 5) OR ONLY DASHES (T M O 0), one character or more: what a
+ *  marine DGPS / data carrier read as Morse looks like (EEI, IEE, ES, SE … clustered on 283.5–290 and 348.5–350 kHz).
+ *  Shared by the skimmer's vote and the gallery's one-time clean-up (vibe_ndb_gallery_clean.h). On its own it proves
+ *  nothing — a published beacon may have such an ident; the clean-up also needs "not in the published list". */
+inline bool uniformIdent(const std::string& id) {
+    if (id.empty()) return false;
+    return id.find_first_not_of("EISH5") == std::string::npos || id.find_first_not_of("TMO0") == std::string::npos;
+}
+
 /** One letter different, same length (≈). */
 inline bool oneOff(const std::string& a, const std::string& b) {
     if (a.size() != b.size() || a.size() < 2) return false;

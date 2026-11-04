@@ -1,0 +1,11 @@
+NDB summary · 190–535 kHz · background decoding (Profile 1)
+The last 10 minutes: 2026-11-04 17:26 – 17:36 UTC (refreshed every minute; the hourly cards are the record)
+
+Beacons heard:     3
+Furthest:          BHX Birmingham — 62 km WNW
+Best SNR:          BHX 13 dB
+
+Each beacon, lowest frequency first (ident · kHz · minutes heard · best SNR · distance · bearing · country · station):
+OX     · 367.499 kHz · heard 8 min · best 5 dB · 62 km · 210° SSW · GB · Oxford
+EMW    · 392.996 kHz · heard 7 min · best 2 dB · - · - · - · (not in the published list)
+BHX    · 406.001 kHz · heard 10 min · best 13 dB · 62 km · 285° WNW · GB · Birmingham
