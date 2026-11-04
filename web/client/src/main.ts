@@ -16443,6 +16443,9 @@ const galOriginTag = galleryOriginTag, galOriginWords = galleryOriginWords;
  *  focused again (keyboard, D-pad and controller land where they left). An older server without pages answers with no
  *  "total": then the list is its newest 300, as before, and no pager is drawn. */
 let galPage = 1;
+/** ★ V12 2026-11-04 the last page count the server gave — the pager survives an empty page or a failed request (Stuart:
+ *  "trying to go back pages … the page buttons disappeared"): one dropped fetch must never strand the list without them. */
+let galPages = 1;
 let galScroll = 0;
 let galOpenedRow = -1;
 async function renderGallery(page = galPage) {
@@ -16462,10 +16465,15 @@ async function renderGallery(page = galPage) {
       j = await r.json() as GJ;
     }
     const pages = paged ? galleryPageCount(j.total!) : 1;
+    galPages = pages;
     if (paged && page > pages && j.total! > 0) { void renderGallery(pages); return; }   // ★ the gallery shrank under us
     galPage = paged ? galleryClampPage(page, pages) : 1;
     host.innerHTML = '';
-    if (!r.ok || j.error) { host.innerHTML = ''; note.textContent = j.error || 'This server has no gallery.'; return; }
+    if (!r.ok || j.error) {
+      host.innerHTML = ''; note.textContent = j.error || 'This server has no gallery.';
+      if (galPages > 1 && r.status !== 404) renderGalleryPager(galPages);   // ★ a failed page keeps the pager (retry / go back)
+      return;
+    }
     const items = j.items || [];
     // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
     const chip = galKind ? $('galFilter').querySelector(`[data-kind="${galKind}"]`) : null;
@@ -16475,7 +16483,9 @@ async function renderGallery(page = galPage) {
       const row = document.createElement('div'); row.className = 'sres';
       const n = document.createElement('span'); n.className = 'n';
       n.textContent = galKind ? 'Nothing from this decoder yet.' : 'Nothing decoded yet — background decoding fills this while nobody listens.';
-      row.appendChild(n); host.appendChild(row); return;
+      row.appendChild(n); host.appendChild(row);
+      if (paged && pages > 1) renderGalleryPager(pages);   // ★ an emptied page still offers the way back
+      return;
     }
     items.forEach((it, idx) => {
       const row = document.createElement('div'); row.className = 'sres';
@@ -16552,7 +16562,9 @@ async function renderGallery(page = galPage) {
     if (paged && pages > 1) renderGalleryPager(pages);
   } catch {
     host.innerHTML = '';
-    note.textContent = 'This server has no gallery (it may need updating).';
+    // ★ A dropped request on a gallery we have already paged is not "no gallery": say so and keep the pager.
+    if (galPages > 1) { note.textContent = 'That page did not load — try again, or pick another page.'; renderGalleryPager(galPages); }
+    else note.textContent = 'This server has no gallery (it may need updating).';
   }
 }
 /** "‹ Newer · 1 … 6 7 8 … 14 · Older ›" and "Page 7 of 14" — buttons, so every input reaches them. */

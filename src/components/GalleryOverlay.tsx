@@ -17,7 +17,7 @@
  *   (utils/galleryTranslate.ts). Shown in place, marked MACHINE TRANSLATION, ORIGINAL toggles back. Drawn only when the
  *   phone can translate, the language is known and is not already the target.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, Linking, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { usePopupTheme, scrollLane, type PopupTokens } from './PopupShell';
@@ -98,6 +98,8 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
   const [trBusy, setTrBusy] = useState(false);
   const [trNote, setTrNote] = useState('');
 
+  // ★ read in load's catch without making load depend on it (a dependency would refetch on every page-count change)
+  const pagesRef = useRef(1); pagesRef.current = pages;
   const load = useCallback(async () => {
     setItems(null); setNote('');
     try {
@@ -108,7 +110,9 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
         r = await fetch(withReadAuth(`${b}/vibeserver/gallery.json?limit=300${kind ? `&kind=${kind}` : ''}`, readAuth), { cache: 'no-store' } as any);
         j = await r.json();
       }
-      if (!r.ok || j?.error) { setItems([]); setPages(1); setNote(String(j?.error || 'This server has no gallery.')); return; }
+      // ★ V12 2026-11-04 a failed PAGE keeps the pager (Stuart: "trying to go back pages … the page buttons disappeared") —
+      //   only a server with no gallery at all (404) loses it. Same rule as the web client.
+      if (!r.ok || j?.error) { setItems([]); if (r.status === 404) setPages(1); setNote(String(j?.error || 'This server has no gallery.')); return; }
       const n = paged ? galleryPageCount(j.total) : 1;
       setPages(n);
       if (paged && page > n && j.total > 0) { setPage(n); return; }   // ★ the gallery shrank under us
@@ -117,7 +121,7 @@ export default function GalleryOverlay({ visible, base, readAuth = '', translate
       // ★★ The footer counts what is SHOWN (galleryPager.ts galleryFooter): the filter's kind, then the whole gallery.
       setNote(j.enabled === false ? 'This server keeps no gallery.'
         : galleryFooter(j, kind, KINDS.find((k) => k.id === kind)?.label || kind.toUpperCase(), size));
-    } catch { setItems([]); setNote('This server has no gallery (it may need updating).'); }
+    } catch { setItems([]); setNote(pagesRef.current > 1 ? 'That page did not load — try again, or pick another page.' : 'This server has no gallery (it may need updating).'); }
   }, [b, kind, page, readAuth]);
   // ★ Loaded on opening, a filter and a page — NOT on BACK from an item (the list under it is still there).
   useEffect(() => { if (visible) void load(); }, [visible, load]);
