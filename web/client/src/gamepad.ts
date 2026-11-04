@@ -85,6 +85,52 @@ let autoTaken = '';
 let grabDepth = 0;                              // backStack depth when the box took the D-pad (see back)                             // the data-navauto token already taken (once per appearance)
 const held = new Map<string, number>();        // action → when it next repeats (ms)
 const tuneJog = new Jog(30), zoomJog = new Jog(45);
+// ★★★ V12 WHAT IS DRIVING THE RECEIVER (Stuart, 2026-11-04: "if gamepad, keyboard, remote control detected the tune
+//    and zoom controls … disappear, if I revert back to touchscreen or trackpad/mouse then they … back"). The LAST
+//    input: 'pad' or 'keyboard' (a TV remote's D-pad arrives as keys) = driven; null = a hand (touch, mouse, trackpad).
+//    The hand side is the controller keyboard's own tracker (padKeyboard.ts inputSource → 'touch' on every
+//    pointerdown), and a pad press is the same notePadInput() — so the two features agree on "using a pad".
+//    ★ A key counts only when it DRIVES something here (it reached act(), or V for A/B) — never a character typed
+//      into a box: typing a frequency or a chat line on a desktop is not "switching to the keyboard".
+//    ★ A mouse WHEEL / trackpad scroll and a mouse really MOVED (movementX/Y, so the synthetic move a browser fires
+//      when the layout shifts under a parked cursor never counts) are a hand too — inputSource never sees those.
+//    ★ The last pad unplugged while the pad was the driver: a hand again.
+//    ★ THE START (Stuart: on the R36S "they dont show at all unless i plug a mouse into it"): a device with NO touch
+//      and NO fine pointer (a handheld, a TV box) starts driven, as does ?input=pad (the kiosk image's hint) or a pad
+//      the browser already shows at load. Everything else starts as a hand, keys out.
+type Drive = 'pad' | 'keyboard' | null;
+/** ★ A PAD-FIRST device: no hand to fall back to (no touch, no fine pointer), or the kiosk said so (?input=pad). Such
+ *  a device starts driven, and unplugging its pad does not bring the keys back — only a mouse or touch really used. */
+const padFirst: boolean = (() => {
+  try { const u = new URLSearchParams(location.search).get('input'); if (u === 'pad') return true; } catch { /* no URL */ }
+  try {
+    const mq = (q: string) => typeof matchMedia === 'function' && matchMedia(q).matches;
+    const touch = (navigator.maxTouchPoints ?? 0) > 0 || mq('(any-pointer: coarse)');
+    return !touch && !mq('(any-pointer: fine)');
+  } catch { return false; }   // no media queries: assume a hand
+})();
+function startDrive(): Drive {
+  if (padFirst) return 'pad';
+  try { if (new URLSearchParams(location.search).get('input') === 'keyboard') return 'keyboard'; } catch { /* no URL */ }
+  try { if (navigator.getGamepads && [...navigator.getGamepads()].some(Boolean)) return 'pad'; } catch { /* no API */ }
+  return null;
+}
+let driven: Drive = startDrive();
+const driveSubs = new Set<(d: Drive) => void>();
+function setDriven(v: Drive) {
+  if (v === driven) return;
+  driven = v;
+  driveSubs.forEach((f) => { try { f(v); } catch { /* a listener's fault */ } });
+}
+/** What is driving the receiver now: a pad, a keyboard / remote, or null (a hand — touch, mouse, trackpad). */
+export function driveInput(): Drive { return driven; }
+/** Told whenever driveInput() changes. */
+export function onDriveInput(f: (d: Drive) => void): () => void {
+  driveSubs.add(f);
+  return () => { driveSubs.delete(f); };
+}
+let mouseTravel = 0;   // px a real mouse has moved since the page was last driven (see the header above)
+const MOUSE_TRAVEL = 12;
 const lastButtons = new Map<number, boolean[]>();   // per pad: what was down last frame (to see a press, not a hold)
 const lastSticks = new Map<number, boolean[]>();    // per pad: which sticks were past STICK_USE last frame
 // ★ Buttons that were down when the keyboard opened or closed: ignored until let go, so the press that opened it never
@@ -201,7 +247,9 @@ function move(dir: Dir) {
   if (adjusting && current && (dir === 'left' || dir === 'right')) { adjust(dir === 'right' ? 1 : -1); return; }
   const list = candidates(root);
   const cur = current && root.contains(current) && visible(current) ? current : null;
-  const from = cur ? box(cur) : current && !current.isConnected ? lastBox : null;   // redrawn under the highlight
+  // ★ Redrawn under the highlight (detached), or HIDDEN under it (the tune / zoom keys tucked away while a pad or keyboard drives —
+  //   padTuck): carry on from where it stood, never back to the top of the page.
+  const from = cur ? box(cur) : current && (!current.isConnected || root.contains(current)) ? lastBox : null;
   const i = pickNext(from, list.map(box), dir);
   if (i >= 0) highlight(list[i]);
   else if (!from && list.length) highlight(list[0]);
@@ -292,6 +340,7 @@ function onKey(e: KeyboardEvent) {
   // ★★ V12 VFO A/B — the one extra key: V swaps A↔B. Never while typing, never with a modifier, never repeated.
   if ((e.key === 'v' || e.key === 'V') && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && !typingIn(e.target) && !padKbOpen()) {
     hooks?.swapVfo?.();
+    setDriven('keyboard'); mouseTravel = 0;
     return;
   }
   const a = keyAction(e.key, { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey });
@@ -314,6 +363,7 @@ function onKey(e: KeyboardEvent) {
   // ★ Arrows start from it, so Tab and the arrows share one place on the page…
   if (keyDir(a) && focused && focused !== current && visible(focused)) highlight(focused);
   e.preventDefault();
+  setDriven('keyboard'); mouseTravel = 0;
   act(a);
   // ★ …and once the highlight has moved on, focus does not linger behind it (a button keeps focus after a click), or
   //   the next Enter would press the old control instead of the highlighted one.
@@ -368,7 +418,7 @@ function toast(text: string) {
 function poll() {
   if (!running) return;
   const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) as Gamepad[] : [];
-  if (!pads.length) { running = false; highlight(null); return; }
+  if (!pads.length) { running = false; highlight(null); if (driven === 'pad' && !padFirst) setDriven(null); return; }
   padKbCheckField();
   for (const gp of pads) {
     const prof = padProfile(gp.axes.length, forcedProfile());
@@ -380,7 +430,7 @@ function poll() {
     const sticks = [Math.hypot(gp.axes[0] ?? 0, gp.axes[1] ?? 0) > STICK_USE, Math.hypot(gp.axes[2] ?? 0, gp.axes[3] ?? 0) > STICK_USE];
     const sWas = lastSticks.get(gp.index) ?? [false, false];
     lastSticks.set(gp.index, sticks);
-    if (rising.some(Boolean) || sticks.some((v, i) => v && !sWas[i])) notePadInput();
+    if (rising.some(Boolean) || sticks.some((v, i) => v && !sWas[i])) { notePadInput(); setDriven('pad'); mouseTravel = 0; }
     // ★★ A PAD PRESS WHILE A TEXT BOX HAS THE CURSOR (kbHandover: system / in place + pad).
     if (rising.some(Boolean) && padWhileTyping(rising[prof === 'buttons' ? B_L1 : B_EAST])) suppressHeld();
     const btn = (i: number) => {
@@ -498,8 +548,23 @@ export function initGamepad(h: GamepadHooks): void {
     el.blur();
     if (running) highlight(el);
   });
+  // ★ A pad-first device (see padFirst): the pad IS the input from the start, for the controller keyboard too.
+  if (padFirst) inputSource.set('pad');
   const start = () => { if (!running) { running = true; requestAnimationFrame(poll); } };
   window.addEventListener('gamepadconnected', start);
+  // ★ The last pad unplugged: in use no longer (poll() notices too, but only while it runs).
+  window.addEventListener('gamepaddisconnected', () => {
+    if (driven === 'pad' && !padFirst && !(navigator.getGamepads && [...navigator.getGamepads()].some(Boolean))) setDriven(null);
+  });
+  // ★ A hand: padKeyboard.ts sets 'touch' on every pointerdown (a tap, a click, a trackpad tap) …
+  inputSource.subscribe((src) => { if (src === 'touch') setDriven(null); });
+  // … a wheel or trackpad scroll, and a mouse that has really travelled (never the browser's synthetic move).
+  window.addEventListener('wheel', () => { if (driven) setDriven(null); }, { passive: true, capture: true });
+  window.addEventListener('pointermove', (e) => {
+    if (!driven || e.pointerType !== 'mouse') return;
+    mouseTravel += Math.abs(e.movementX || 0) + Math.abs(e.movementY || 0);
+    if (mouseTravel >= MOUSE_TRAVEL) { mouseTravel = 0; setDriven(null); }
+  }, { passive: true, capture: true });
   // ★ A pad already connected before the page loaded announces itself only on its first press — poll once to see.
   if (navigator.getGamepads && [...navigator.getGamepads()].some(Boolean)) start();
 }

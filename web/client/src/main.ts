@@ -53,7 +53,7 @@ import { parseIcomRadio, mergeIcomStatus, icomMayTune, icomFollowNote, icomModeL
          sMeter, icomFilterWidths, fmtWidth, type IcomRadio, type IcomStatus } from '../../../src/services/icomRadio';
 import { renderIcomPanel, icomPassband } from './icomUi';
 import { initPocketConn } from './pocketConn';
-import { initGamepad, pushBack, activePadLayout, padRehighlight } from './gamepad';
+import { initGamepad, pushBack, activePadLayout, padRehighlight, driveInput, onDriveInput } from './gamepad';
 import { initPadKeyboard, kbField } from './padKeyboard';
 import { showPadGuide } from './padGuide';
 import { startTutorial, tutorialSeen, endTutorial } from './tutorial';
@@ -17514,6 +17514,10 @@ function buildMenu() {
   /* ★ FREQUENCY AT POINTER — local to this browser like the wheel (not a VIEW_KEY: it is about the
    *  mouse in front of you, not the look of the waterfall). Only offered where there IS a mouse. */
   toggle('ptrFreqTg', (on) => { ptrFreqOn = on; if (!on) hidePtrFreq(); }, 'ptrFreq', true);
+  /* ★★★ V12 TUCK AWAY TUNE AND ZOOM KEYS while a pad, keyboard or remote drives (Stuart, 2026-11-04) — MENU → GAME
+   *  CONTROLLER. Default ON; local to this browser (it is about the device in your hands, not the look of the waterfall). */
+  toggle('padTuckTg', (on) => { padTuckOn = on; padTuckSync(); }, 'padTuck', true);
+  onDriveInput(padTuckSync);
   const showPtrRow = () => { $('rowPtrFreq').hidden = !HOVER_MQ?.matches; };
   showPtrRow();
   HOVER_MQ?.addEventListener?.('change', showPtrRow);
@@ -20594,6 +20598,15 @@ function initVfoAB() {
   // ★ A mono output device (a single speaker) is invisible to the server — say so, and both VFOs go to both ears.
   setInterval(() => { if (spec && audio) { spec.setAbMonoOut(audio.outputChannels < 2); abPaint(); } }, 2000);
   abPaint();
+}
+
+/** ★★★ V12 THE TUNE AND ZOOM KEYS FADE OUT WHILE A PAD, KEYBOARD OR REMOTE DRIVES (index.html body.padTuck — the
+ *  look and the fade are all CSS). Tucked only while the GAME CONTROLLER switch is ON (default) AND gamepad.ts says
+ *  the receiver is being driven (driveInput: the last input was a pad press, a key that did something, or this is a
+ *  pad-first device / ?input=pad). A touch, a click, a wheel or a real mouse move brings them back. */
+let padTuckOn = true;
+function padTuckSync() {
+  document.body.classList.toggle('padTuck', padTuckOn && driveInput() !== null);
 }
 
 function initKeyboard() {

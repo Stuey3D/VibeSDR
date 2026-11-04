@@ -41,8 +41,8 @@ type Step = {
   ids: string[];
   /** Names the control, so the panel and the glow cannot be read as belonging to different
    *  things — the tour is text in one corner and motion in another, and only the title joins
-   *  them up. */
-  title: string;
+   *  them up. ★ Or a function of the page (the controller-in-use card). */
+  title: string | (() => string);
   /** ★ Text, or a function of the receiver — an Icom's zoom is the radio's span ladder, so the card says so. */
   body: string | (() => string);
 };
@@ -52,16 +52,33 @@ const onVagcRow = (): boolean => { const r = document.getElementById('rowRspVagc
 const onIcom = () => document.body.classList.contains('icom');
 /** ★★ V12 VFO A/B is offered here (main.ts abPaint shows the audio panel's STEREO row only where hwinfo says watch). */
 const abOffered = () => document.getElementById('abStereoRow')?.hidden === false;
+/** ★★★ V12: a pad, keyboard or remote is driving and the tune / zoom keys are tucked away (main.ts padTuckSync, index.html
+ *  body.padTuck) — the card must not send anyone hunting for ‹ › and − + that are not there (AGENTS.md). */
+const padTuck = () => document.body.classList.contains('padTuck');
 
 // ★ Ids are the card's (#mcard) — the only control surface. (A retired desktop bar once carried
 //   look-alike ids; pointing at one lit up a bar nobody could see. It has since been deleted.)
 const STEPS: Step[] = [
   {
     ids: ['mVfoDown', 'mVfoUp', 'mStep', 'mZoomOut', 'mZoomIn'],
-    title: 'Tuning and zoom — ‹ ›, the step button, − and +',
+    title: () => (padTuck() ? 'Tuning and zoom — your controller and the step button' : 'Tuning and zoom — ‹ ›, the step button, − and +'),
     // ★★ ON AN ICOM ZOOM IS THE RADIO'S OWN SCOPE SPAN (±2.5 kHz to ±500 kHz on an IC-7300) — one press, one rung.
     //    There is nothing finer to zoom into: the scope has 475 points. Say so, or a listener hunts for more.
-    body: () => 'These are your main controls. Use [[‹]] and [[›]] to move the dial by the amount shown '
+    body: () => (padTuck()
+          ? 'These are your main controls. While a game controller, a keyboard or a remote is driving, the ‹ › tune keys '
+            + 'and the − + zoom keys are tucked away to make room — touch the screen or use a mouse and they come back '
+            + '(MENU, GAME CONTROLLER, TUCK AWAY TUNE AND ZOOM KEYS turns this off). A controller tunes and zooms itself — '
+            + 'the face buttons, or the two sticks turned; SELECT opens the guide to say which. A keyboard tunes with < and > '
+            + 'and zooms with − and +. Each tune '
+            + 'moves the dial by the amount shown on the step button [[@mStep]] — press it to change the step. '
+            + (onIcom() ? 'Zoom steps the Icom\u2019s own scope span, one setting at a time.' : '')
+            + ' In DAB, ISM and DIGI BAND, tuning steps one multiplex or band instead.'
+            + (abOffered()
+              ? ' The step button\u2019s menu also turns on VFO A/B: a second VFO on the same radio, heard at the same '
+                + 'time — the lower frequency in your left ear, the higher in your right. A tap of START (or \u25B3 with '
+                + 'two sticks, or V on a keyboard) switches which VFO you tune. Not on FM broadcast.'
+              : '')
+          : 'These are your main controls. Use [[‹]] and [[›]] to move the dial by the amount shown '
         + 'on the step button [[@mStep]] — press it to change the step. '
         + (onIcom()
           ? 'Use [[−]] and [[+]] to step the Icom\u2019s own scope span, one setting at a time — the waterfall is the '
@@ -78,7 +95,7 @@ const STEPS: Step[] = [
             + '[[‹]] and [[›]] picks which VFO these controls tune (or tap the other needle; V on a keyboard). A decoder '
             + 'or the spots run on the VFO selected when you start them, so you can decode on one and listen on the other; '
             + 'the decoding VFO says DEC on its needle. Not on FM broadcast.'
-          : ''),
+          : '')),
   },
   {
     // ★ The demodulator "button" is the MODE readout inside the pill — mobile.ts binds
@@ -299,7 +316,7 @@ function render() {
   head.className = 'tutHead';
   const title = document.createElement('span');
   title.className = 'tutTitle';
-  title.textContent = s.title;
+  title.textContent = typeof s.title === 'function' ? s.title() : s.title;
   const count = document.createElement('span');
   count.className = 'tutCount';
   // ★ Counted over the steps that are ACTUALLY being shown on this receiver, not over all five —
