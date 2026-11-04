@@ -153,13 +153,19 @@ int main(int argc, char** argv) {
         ok(!vibendb::nearest(lat, lon, 10, "woodley").empty(), "Find NDB: by name");
 
         // ★★ The merged sources (scripts/gen-ndb-navaids.mjs): every record names its source, every source is used.
-        size_t per[3] = { 0, 0, 0 }; bool srcOk = true;
-        for (size_t i = 0; i < vibendb::kNavaidCount; ++i) { if (vibendb::kNavaids[i].src < 3) ++per[vibendb::kNavaids[i].src]; else srcOk = false; }
-        ok(srcOk && per[0] > 4000 && per[1] > 200 && per[2] > 50, "every beacon names its source: OurAirports " + std::to_string(per[0]) +
+        size_t per[4] = { 0, 0, 0, 0 }; bool srcOk = true;
+        for (size_t i = 0; i < vibendb::kNavaidCount; ++i) { if (vibendb::kNavaids[i].src < 4) ++per[vibendb::kNavaids[i].src]; else srcOk = false; }
+        ok(srcOk && per[0] > 4000 && per[1] > 200 && per[2] > 50 && per[3] >= 3, "every beacon names its source: OurAirports " + std::to_string(per[0]) +
            ", FAA " + std::to_string(per[1]) + ", OpenStreetMap " + std::to_string(per[2]));
         ok(std::strstr(vibendb::kNavaidCredit, "OurAirports") && std::strstr(vibendb::kNavaidCredit, "FAA") && std::strstr(vibendb::kNavaidCredit, "OpenStreetMap"),
            std::string("the credit names every source: ") + vibendb::kNavaidCredit);
         ok(m.n.source().find("OurAirports") == 0, "WOD's position is OurAirports' (" + m.n.source() + ")");
+        // ★★ V12 2026-11-04 scripts/ndb-heard.json — beacons heard for hours on Stuart's receivers that no bundled source lists.
+        for (auto bc : { std::make_pair(362500.0, "SND"), std::make_pair(388500.0, "CDF"), std::make_pair(393000.0, "EMW") }) {
+            const auto hm = vibendb::match(bc.first, bc.second, false, 0, 0);
+            ok(hm.kind == vibendb::Match::Exact && hm.n.source().find("heard") == 0,
+               std::string(bc.second) + " is listed now, from our own receptions (" + hm.n.source() + ")");
+        }
         ok(vibendb::match(342500, "NWI", true, lat, lon).n.source().find("OpenStreetMap") != std::string::npos, "NWI (Norwich) comes from OpenStreetMap");
 
         // ★★ A capture too narrow for the band goes where the listed beacons near the SERVER are (Stuart, 2026-10-29).

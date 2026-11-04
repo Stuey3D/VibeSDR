@@ -1,0 +1,26 @@
+{
+  "about": "NDBs HEARD on VibeSDR receivers, identified by ear and by the skimmer, that no bundled source lists. Each record is our own reception: the ident and the frequency as measured; the position is the named airport's reference point from OurAirports airports.csv (public domain) — a locator sits on the approach, a few km from it. Lowest position precedence: any public source that lists the beacon wins. Add only beacons heard for hours, on more than one receiver or day.",
+  "beacons": [
+    {
+      "ident": "SND",
+      "khz": 362.5,
+      "airport": "EGMC",
+      "name": "Southend",
+      "heard": "Stuart's RSP1A (IO92) 21 h and RX888, 2026-10-26 to 11-04"
+    },
+    {
+      "ident": "CDF",
+      "khz": 388.5,
+      "airport": "EGFF",
+      "name": "Cardiff",
+      "heard": "Stuart's RSP1A (IO92) 125 h, 2026-10-27 to 11-04"
+    },
+    {
+      "ident": "EMW",
+      "khz": 393.0,
+      "airport": "EGNX",
+      "name": "East Midlands",
+      "heard": "Stuart's RSP1A (IO92) 124 h and RX888, 2026-10-26 to 11-04"
+    }
+  ]
+}

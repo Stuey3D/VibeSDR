@@ -60,10 +60,12 @@ const SOURCES = [
   { key: 'ourairports', credit: 'OurAirports (public domain)' },
   { key: 'faa', credit: 'FAA NASR (US Government, public domain)' },
   { key: 'osm', credit: '© OpenStreetMap contributors (ODbL)' },
+  { key: 'heard', credit: 'heard on VibeSDR receivers (positions: OurAirports airports, public domain)' },
 ];
-const S_OA = 0, S_FAA = 1, S_OSM = 2;
-/** Position precedence: lower wins. */
-const RANK = { [S_FAA]: 0, [S_OA]: 1, [S_OSM]: 2 };
+const S_OA = 0, S_FAA = 1, S_OSM = 2, S_HEARD = 3;
+/** Position precedence: lower wins. ★ Our own receptions last: any public source that lists a beacon wins. */
+const RANK = { [S_FAA]: 0, [S_OA]: 1, [S_OSM]: 2, [S_HEARD]: 3 };
+const SRC_OA_AIRPORTS = 'https://davidmegginson.github.io/ourairports-data/airports.csv';
 
 /** OSM elements whose own tags say they were copied from a hobbyist beacon list: left out (see the header). */
 const HOBBYIST = /jdg\.it|classaxe|ndblist|rwwfinder|dxinfocentre|beaconworld|mil-airfields|ndb\.?list|radiobeacon/i;
@@ -154,12 +156,15 @@ async function faa() {
     if (!cycles.length) die('FAA NASR: no current cycle on the subscription page — the page has changed shape');
     const cyc = cycles.at(-1);
     const page = await (await get(SRC_FAA_INDEX + cyc)).text();
-    const zipUrl = (page.match(/https:\/\/nfdc\.faa\.gov\/webContent\/28DaySub\/extra\/[^"]*_NAV_CSV\.zip/) || [])[0];
+    // ★ 2026-11-04 the cycle page no longer offers the per-type NAV_CSV.zip, only one CSV bundle (…/extra/29_Oct_2026_CSV.zip,
+    //   ~22 MB) whose NAV_BASE.csv is the same file. Either is accepted; the per-type one is preferred while it exists.
+    const zipUrl = (page.match(/https:\/\/nfdc\.faa\.gov\/webContent\/28DaySub\/extra\/[^"]*_NAV_CSV\.zip/) || [])[0]
+                || (page.match(/https:\/\/nfdc\.faa\.gov\/webContent\/28DaySub\/extra\/[^"]*_CSV\.zip/) || [])[0];
     if (!zipUrl) die(`FAA NASR ${cyc}: no NAV_CSV.zip link — the page has changed shape`);
     const zip = Buffer.from(await (await get(zipUrl)).arrayBuffer());
     const zf = f + '.zip';
     await writeFile(zf, zip);
-    const csv = execFileSync('unzip', ['-p', zf, 'NAV_BASE.csv'], { maxBuffer: 64 << 20 });
+    const csv = execFileSync('unzip', ['-p', zf, '*NAV_BASE.csv'], { maxBuffer: 64 << 20 });
     if (csv.length < 100000) die(`FAA NAV_BASE.csv is only ${csv.length} bytes — the source has changed shape`);
     await writeFile(f, csv);
   });
@@ -289,15 +294,43 @@ function merge(lists) {
   return { all, far, refined };
 }
 
+// ── 3 HEARD (scripts/ndb-heard.json) ─────────────────────────────────────────────────────────────────────────────────
+/** ★★ V12 2026-11-04 OUR OWN RECEPTIONS — the beacons the bundled lists miss (Southend SND, Cardiff CDF, East Midlands EMW,
+ *  Norwich NWI: heard for 20–125 hours on Stuart's receivers, "not in the published list"). The fact a beacon is on the
+ *  air on that frequency is OUR measurement; the position is the airport's reference point from OurAirports airports.csv
+ *  (public domain) — no hobbyist list and no copied publication. Lowest precedence, so a public source wins the day it
+ *  lists one. */
+async function heard() {
+  const j = JSON.parse(await readFile(path.join(root, 'scripts/ndb-heard.json'), 'utf8'));
+  const { file, date } = await cached('airports.csv', async (f) => {
+    const text = await (await get(SRC_OA_AIRPORTS)).text();
+    if (text.length < 1000000) die(`airports.csv is only ${text.length} bytes — the source has changed shape`);
+    await writeFile(f, text);
+  });
+  const ap = new Map();
+  for (const r of csvObjects(await readFile(file, 'utf8'), ['ident', 'latitude_deg', 'longitude_deg', 'iso_country'], 'airports.csv'))
+    ap.set((r.ident || '').toUpperCase(), r);
+  const recs = [];
+  for (const b of j.beacons) {
+    const a = ap.get(String(b.airport).toUpperCase());
+    if (!a) die(`ndb-heard.json: airport ${b.airport} (for ${b.ident}) is not in airports.csv`);
+    const khz = Number(b.khz), lat = Number(a.latitude_deg), lon = Number(a.longitude_deg), ident = String(b.ident).toUpperCase();
+    if (!okKhz(khz) || !IDENT.test(ident) || !Number.isFinite(lat) || !Number.isFinite(lon)) die(`ndb-heard.json: bad record ${JSON.stringify(b)}`);
+    recs.push({ src: S_HEARD, hz: Math.round(khz * 1000), ident, name: String(b.name || '').slice(0, 48), cc: (a.iso_country || '').slice(0, 2).toUpperCase(), lat, lon });
+  }
+  return { recs, date };
+}
+
 // ── build ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const oa = await ourAirports();
 const fa = await faa();
 const os = await osm();
-const { all: recs, far, refined } = merge([oa.recs, fa.recs, os.recs]);
+const hd = await heard();
+const { all: recs, far, refined } = merge([oa.recs, fa.recs, os.recs, hd.recs]);
 recs.sort((a, b) => a.hz - b.hz || a.ident.localeCompare(b.ident) || a.lat - b.lat);
-const dates = [oa.date, fa.date, os.date];
-const counts = [0, 0, 0], only = [0, 0, 0];
-for (const r of recs) { counts[r.src]++; for (let i = 0; i < 3; i++) if (r.srcs === 1 << i) only[i]++; }
+const dates = [oa.date, fa.date, os.date, hd.date];
+const counts = SOURCES.map(() => 0), only = SOURCES.map(() => 0);
+for (const r of recs) { counts[r.src]++; for (let i = 0; i < SOURCES.length; i++) if (r.srcs === 1 << i) only[i]++; }
 
 // one name blob, de-duplicated
 const names = new Map(); let blob = '\\000'; let off = 1;   // offset 0 = "" (★ NUL as \000: a digit after it stays a digit)
