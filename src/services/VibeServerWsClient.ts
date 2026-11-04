@@ -3019,6 +3019,8 @@ export abstract class VibeServerWsClient {
       }
       // ★★ V12: may this listener scan Band III for DAB? Absent (an older server, a shared radio, UberSDR) = no SCAN key.
       this.callbacks.onDabScanOk?.(msg.dabScan === true);
+      // ★★★ V12: the DX LOG key beside GALLERY — absent (an older server, the owner's view lock) = no key.
+      this.callbacks.onDxLogOk?.(msg.dxLog === true);
       if (typeof msg.adminSet === 'boolean') {
         this.adminSet = msg.adminSet;
         this.adminOkNow = msg.adminOk === true;

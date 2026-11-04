@@ -477,6 +477,8 @@ interface ModeSelectorProps {
     adsbAvail?: boolean; adsbWhy?: string; adsbOn?: boolean; onAdsb?: () => void;
     /** ★★ V12 THE GALLERY — what a VibeServer's decoders heard (GalleryOverlay). Only on a VibeServer. */
     galleryAvail?: boolean; onGallery?: () => void;
+    /** ★★★ V12 the server's DX LOG (its idle DX scanner), drawn beside GALLERY — only where hwinfo offers it. */
+    dxLogAvail?: boolean; onDxLog?: () => void;
     /** ★★ V12 CW — a VibeServer's own decoder: ONE SIGNAL (the passband) or SKIMMER (a 24/48/96 kHz segment centred on
      *  the dial). Only where the server's vibeserver.json says `"cw": true`; its settings drop in under the row. */
     /** ★★ V12 ISM — the same kind of key as ADS-B (a whole-radio mode) and the same three states: absent (`ismAvail`
@@ -709,6 +711,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
   if (owrxPages) { addLegend('MAP', 'map'); addLegend('FILES', 'files'); }
   for (const m of serverMapKeys) addLegend(m.label, m.icon);
   if (decoderControls?.galleryAvail) addLegend('GALLERY');
+  if (decoderControls?.dxLogAvail) addLegend('DX LOG');
   if (txShown) addLegend(TX_SHORT);   // ★ the grid is sized by the SHORT legend — TRANSCRIBE fits itself in (txFit)
   if (spotsShown && spotsControls) {
     if (!spotsInBands) addLegend(spotsControls.band ? 'SPOTS: SINGLE' : SPOTS_LEGEND, 'spots');
@@ -985,6 +988,23 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
                   onPress={() => decoderControls!.onGallery?.()} activeOpacity={0.8}>
                   <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>
                     GALLERY
+                  </Text>
+                </TouchableOpacity>
+                )}</NavItem>
+  );
+  // ★★★ V12 THE DX LOG, the gallery's twin (Stuart: "The DX Log should live next to the gallery")
+  const dxLogKey = () => (
+              <NavItem key="dxlog" onPress={() => decoderControls!.onDxLog?.()}>{(navFocused, navRef) => pt.metal ? (
+                  <MetalKey navRef={navRef} focused={navFocused} label="DX LOG" active={false}
+                    onPress={() => decoderControls!.onDxLog?.()} />
+                ) : (
+                <TouchableOpacity ref={navRef as any} accessibilityLabel="DX log"
+                  accessibilityHint="The FM and DAB stations this server's DX scanner heard while nobody was listening"
+                  style={[st.btn, { borderColor: t.btnBorder, paddingVertical: 10 },
+                          navFocused && { borderColor: focusC.ring, borderWidth: 2 }]}
+                  onPress={() => decoderControls!.onDxLog?.()} activeOpacity={0.8}>
+                  <Text numberOfLines={1} style={[st.btnText, { fontFamily: t.font, fontSize: 13, color: t.btnText }]}>
+                    DX LOG
                   </Text>
                 </TouchableOpacity>
                 )}</NavItem>
@@ -1601,6 +1621,7 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
     ...serverMapKeys.map((m) => ({ id: `srvmap-${m.kind}`, node: viewKey(`srvmap-${m.kind}`, m.label, m.icon,
                                                                          () => onServerMap!(m.kind), m.a11y) })),
     { id: 'gallery', node: decoderControls?.galleryAvail ? galleryKey() : null },
+    { id: 'dxlog', node: decoderControls?.dxLogAvail ? dxLogKey() : null },
     { id: 'transcribe', node: txShown ? transcribeKey : null },
   ].filter(v => !!v.node);
   /* The spots section's own toggles that are not views (an UberSDR's CW SPOTS and STT; DIGITAL SPOTS / BAND where the

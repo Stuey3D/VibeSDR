@@ -230,6 +230,8 @@ import BrowserOverlay from '../components/BrowserOverlay';
 import AboutOverlay from '../components/AboutOverlay';
 import RecordingsOverlay from '../components/RecordingsOverlay';
 import GalleryOverlay from '../components/GalleryOverlay';   // ★★ V12: a VibeServer's gallery
+import DxLogOverlay from '../components/DxLogOverlay';       // ★★★ V12: a VibeServer's DX log (beside the gallery)
+import { dxNewAlerts, type DxAlert } from '../utils/dxLog';
 import { usePocketWifi } from '../hooks/usePocketWifi';
 import { IS_TV, IS_APPLE_TV } from '../utils/tv';
 import { STEP_833, airbandStepFrom, snapToStep, airbandChannel, airbandEntry, airbandPassband,
@@ -2547,6 +2549,11 @@ export default function SDRScreen({ route, navigation }: Props) {
   /* ★★ V12 DAB BAND SCAN (M7EIW, 2026-10-26): the server's answer for this socket (hwinfo `dabScan`) and the last
    *  `dab_scan`. The panel draws SCAN only with dabScanOk — never inferred here (no hardcoded settings vs a server). */
   const [dabScanOk, setDabScanOk] = useState(false);
+  // ★★★ V12 THE DX LOG: hwinfo `dxLog`, the overlay, and this device's opt-in alerts (per server: the last seq shown)
+  const [dxLogOk, setDxLogOk] = useState(false);
+  const [dxLogOpen, setDxLogOpen] = useState(false);
+  const [dxAlertsOn, setDxAlertsOn] = useState(false);
+  useEffect(() => { AsyncStorage.getItem('vibesdr.dxAlerts').then((v) => setDxAlertsOn(v === '1')).catch(() => {}); }, []);
   const [dabScan, setDabScan] = useState<DabScanState | null>(null);
   const [dabOn, setDabOn] = useState(false);            // we have ASKED for DAB (see dabBoxOpen)
   /* ★★★ THE DAB RECEPTION METER (Stuart, 2026-10-06) — what the signal bar shows in DAB: can this multiplex be
@@ -6940,6 +6947,7 @@ export default function SDRScreen({ route, navigation }: Props) {
        *  it has ended; `why` is the server's refusal, which is an explanation and not an error —
        *  showing it as one would put a red card over a receiver that is working perfectly. */
       onDabScanOk: (ok) => { if (!destroyed.current) setDabScanOk(ok); },
+      onDxLogOk: (ok) => { if (!destroyed.current) setDxLogOk(ok); },   // ★★★ V12 the DX LOG key
       onDabScan: (st) => {
         if (destroyed.current) return;
         // ★ A refusal arrives as a not-running state with `error` — shown in the pane's line, in the server's words.
@@ -11362,6 +11370,33 @@ export default function SDRScreen({ route, navigation }: Props) {
   const onVtsTimedEnd = useCallback((key: number) => setVtsNotif((n) => (n && n.key === key ? null : n)), []);
   // ★ Publish it for the socket callbacks, which are wired before this exists — see the ref.
   showVtsNoticeRef.current = showVtsNotice;
+  /* ★★★ V12 DX LOG ALERTS — per user and opt-in (the DX LOG's "Tell me about new DX here", this device). Once a minute while
+   *  connected to a server that offers a DX log: new DX and new openings of known DX only (the server never alerts on
+   *  locals, suspects or a new server's first-day baseline), each shown once in the VTS. The first poll on a server only
+   *  records where its alerts are, so nothing older than this visit is announced. */
+  useEffect(() => {
+    if (!dxLogOk || !dxAlertsOn) return;
+    let dead = false;
+    const key = `vibesdr.dxAlertSeq:${connectBase}`;
+    const b = connectBase.replace(/\/+$/, '');
+    const poll = async () => {
+      try {
+        let seen = Number((await AsyncStorage.getItem(key)) ?? '-1');
+        const r = await fetch(withReadAuth(`${b}/vibeserver/dxlog/alerts?since=${Math.max(0, seen)}`, radioAuthSuffix || route.params.authSuffix || ''), { cache: 'no-store' } as any);
+        if (!r.ok || dead) return;
+        const j = await r.json() as { alertSeq?: number; alerts?: DxAlert[] };
+        if (seen < 0) { await AsyncStorage.setItem(key, String(j.alertSeq || 0)); return; }
+        const fresh = dxNewAlerts(j.alerts || [], seen);
+        if (!fresh.length || dead) return;
+        seen = fresh[fresh.length - 1].seq;
+        await AsyncStorage.setItem(key, String(seen));
+        showVtsNoticeRef.current?.(fresh.length === 1 ? fresh[0].text : `${fresh[fresh.length - 1].text} (+${fresh.length - 1} more in the DX LOG)`, 12000);
+      } catch { /* offline — next minute */ }
+    };
+    void poll();
+    const t = setInterval(() => { void poll(); }, 60_000);
+    return () => { dead = true; clearInterval(t); };
+  }, [dxLogOk, dxAlertsOn, connectBase, radioAuthSuffix]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ★ The gain-at-minimum warning, in the bar. `showGainMinWarning` already encodes the whole
    *  policy — once per connection, and gone the instant the gain moves — so this only forwards
@@ -15059,6 +15094,16 @@ export default function SDRScreen({ route, navigation }: Props) {
       </PanelBoundary>
       <FkaSplash onOpenHelp={() => setKeyHelpOpen(true)} />
       <PanelBoundary name="Recordings" onClose={() => setRecordingsOpen(false)} resetKey={recordingsOpen}>
+      <DxLogOverlay
+        visible={dxLogOpen}
+        base={connectBase}
+        readAuth={radioAuthSuffix || route.params.authSuffix || ''}
+        ownerQuery={adminAuthQRef.current}
+        alertsOn={dxAlertsOn}
+        onAlerts={(on) => { setDxAlertsOn(on); AsyncStorage.setItem('vibesdr.dxAlerts', on ? '1' : '0').catch(() => {}); }}
+        onTune={(t) => { if (t.kind === 'fm') onSearchTune(t.hz, 'wfm'); else dabGoTo(t.hz, t.sid); }}
+        onClose={() => setDxLogOpen(false)}
+      />
       <GalleryOverlay
         visible={galleryOpen}
         base={connectBase}
@@ -15206,6 +15251,10 @@ export default function SDRScreen({ route, navigation }: Props) {
            *  only: nothing else keeps one, and a key that opens an empty list there would be a dead control. */
           galleryAvail: !!(client.current as any)?.isVibe,
           onGallery: () => { markInteract(); setModeSelOpen(false); setGalleryOpen(true); },
+          /* ★★★ V12 THE DX LOG, beside GALLERY (Stuart: "The DX Log should live next to the gallery") — only where the
+           *  server's hwinfo offers it (its idle DX scanner is on, and the owner has not locked viewing). */
+          dxLogAvail: dxLogOk && !!(client.current as any)?.isVibe,
+          onDxLog: () => { markInteract(); setModeSelOpen(false); setDxLogOpen(true); },
           /* ★★ V12 CW — the server's own decoder and skimmer, only where its vibeserver.json says `"cw": true` (an older
            *  server, or the owner's switch off, draws no key: AGENTS.md, no dead control). */
           cwAvail: cwCapable && !!(client.current as any)?.isVibe,

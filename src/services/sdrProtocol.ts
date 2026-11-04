@@ -426,6 +426,8 @@ export interface SDRCallbacks {
    *  dabBandScan.ts), and hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
   onDabScan?:   (s: import('./dabBandScan').DabScanState) => void;
   onDabScanOk?: (ok: boolean) => void;
+  /** ★★★ V12 THE DX LOG, VIBESERVER-ONLY: hwinfo `dxLog` — does this server keep a DX log THIS listener may see? */
+  onDxLogOk?: (ok: boolean) => void;
   /** ★ V12 ADS-B, VIBESERVER-ONLY like onDab: a report about once a second while the receiver is in
    *  the mode (its arrival MEANS it is on — open the box); null = it ended; `err` = the refusal. */
   onAdsb?:      (r: AdsbReport | null, err?: string) => void;
