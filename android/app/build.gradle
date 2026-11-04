@@ -105,7 +105,7 @@ android {
         // ★ V12's first Android beta (2026-10-29) took 596, but V11 11.0.16 shipped as 596 too (Play + GitHub), so
         //   V12 beta60 (2026-11-03, first V12 GitHub prerelease) is 597 and installs over it. V11 and V12 share ONE
         //   sequence on Play — the next of either takes 598.
-        versionCode 597
+        versionCode 598
         versionName "12.0.0"
 
         // ★ The memory diagnostics build (VibeDiag.kt): `./gradlew -PvibeDiag=true :app:assembleCurrentRelease`.
