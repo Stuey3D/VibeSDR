@@ -340,6 +340,7 @@ public:
             if (isNew && makeRoom()) {
                 Entry e; e.id = nextId_++; e.dab = true; e.key = k; e.block = block; e.blockName = hit->blockName;
                 e.eid = hit->eid; e.tiiMain = hit->tiiMain; e.tiiSub = hit->tiiSub; e.firstHeard = now;
+                e.khz = (int)std::lround(hit->hz / 1e3);   // ★ the block's centre — a client tunes it without a table of its own
                 e.cls = bootstrapping(now) ? Cls::Provisional : Cls::Dx;
                 entries_[e.id] = e; byKey_[k] = e.id; id = e.id; ++vr.newEntries;
             } else if (!isNew) id = it->second;
@@ -415,7 +416,7 @@ public:
             for (size_t i = 0; i < e.psVariants.size(); ++i) j += (i ? ",\"" : "\"") + esc(e.psVariants[i]) + "\"";
             j += "]";
         } else {
-            std::snprintf(b, sizeof b, ",\"block\":\"%s\",\"eid\":\"%04X\",\"ecc\":%d", esc(e.blockName).c_str(), (unsigned)e.eid, e.ecc); j += b;
+            std::snprintf(b, sizeof b, ",\"block\":\"%s\",\"freqKhz\":%d,\"eid\":\"%04X\",\"ecc\":%d", esc(e.blockName).c_str(), e.khz, (unsigned)e.eid, e.ecc); j += b;
             j += ",\"ensemble\":\"" + esc(e.ensLabel) + "\",\"services\":[";
             for (size_t i = 0; i < e.services.size(); ++i)
                 j += std::string(i ? "," : "") + "{\"sid\":" + std::to_string(e.services[i].first) + ",\"label\":\"" + esc(e.services[i].second) + "\"}";

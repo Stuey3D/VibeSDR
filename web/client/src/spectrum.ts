@@ -671,6 +671,8 @@ export interface SpectrumCallbacks {
   onDabScan?: (m: unknown) => void;
   /** ★★ V12: hwinfo `dabScan` — may THIS listener scan (a single-user radio, or the admin)? */
   onDabScanOk?: (ok: boolean) => void;
+  /** ★★★ V12: hwinfo `dxLog` — does this server keep a DX log THIS listener may see? Absent = no DX LOG key. */
+  onDxLogOk?: (ok: boolean) => void;
   /** ★ ADS-B (V12, docs/v12/ADSB.md): the aircraft report, once a second while the receiver is in ADS-B
    *  and at once on joining — its arrival MEANS ADS-B is on. null = the server left ADS-B (`adsb_off`). */
   onAdsb?: (r: AdsbReport | null) => void;
@@ -1650,6 +1652,7 @@ export class SpectrumClient {
       case 'hwinfo':
         this.cb.onDcSpike?.(Number(msg.dcHz) || 0, Number(msg.rfCentre) || 0);   // ★ V12 beta25 — absent dcHz = no spike to show
         this.cb.onDabScanOk?.(msg.dabScan === true);   // ★ absent (an older server, a shared radio) = no SCAN key
+        this.cb.onDxLogOk?.(msg.dxLog === true);       // ★★★ V12 the DX LOG key beside GALLERY — absent = not drawn
         // ★★ V12 VFO A/B: how many watch channels a listener may add here. Absent (an older server) = 0 = no toggle.
         // ★★★ …and whether it takes the A ⟷ B balance; re-sent here so a reconnect keeps the listener's balance.
         { const wb = msg.watchBal === true;

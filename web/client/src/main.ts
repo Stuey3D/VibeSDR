@@ -86,6 +86,8 @@ import { tuneHintLabel } from '../../../src/utils/tuneHint';
 import { rttyFraming, RTTY_WEATHER, type RttyParity } from '../../../src/utils/rttySpec';
 import { galleryClampPage, galleryFooter, galleryPageCount, galleryPageLabel, galleryPageQuery, galleryPagerSlots, type GalleryKinds } from '../../../src/utils/galleryPager';
 import { galleryOriginTag, galleryOriginWords } from '../../../src/utils/galleryOrigin';
+import { DX_SORTS, dxEmptyLine, dxFooter, dxNewAlerts, dxPageCount, dxQuery, dxSubline, dxSuspectLine, dxTags, dxTitle,
+         dxTuneTarget, dxWhen, dxWhere, type DxAlert, type DxEntry, type DxPage, type DxSort } from '../../../src/utils/dxLog';
 import { galleryCanTranslate, galleryGuessLanguage, galleryHintLanguage, galleryTranslatableText, galleryTranslate,
          galleryTranslateLines } from '../../../src/utils/galleryTranslate';
 import { NavtexAssembler, navtexBody, navtexFileName, navtexFileText, navtexLostPct, navtexStationWhy, navtexTitle, type NavtexPlace } from '../../../src/utils/navtex';
@@ -1785,6 +1787,7 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     onModeResume: (kind, ok, why) => wholeResumeDo(wholeResume.answered(kind, ok, why, Date.now())),
     onDabScan: (m: unknown) => dabScanOnMessage(m),
     onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); },
+    onDxLogOk: (ok: boolean) => { dxLogOk = ok; dxLogSyncBtn(); },   // ★★★ V12 the DX LOG key beside GALLERY
     onDab: (d: DabState) => {
       if (!d) {
         /* ★★★ THE SERVER LEFT DAB WITHOUT US — the last listener went, or the owner took the
@@ -11483,7 +11486,7 @@ async function attachBookmarkLogo(row: HTMLElement, name: string, itu?: string, 
 // you can only dismiss with its own CLOSE button is a modal that traps people.
 
 const PANELS = ['menu', 'audioPanel', 'decodersPanel', 'recordingsPanel',
-                'bookmarksPanel', 'freqPanel', 'chatPanel', 'padGuide', 'galleryPanel'];
+                'bookmarksPanel', 'freqPanel', 'chatPanel', 'padGuide', 'galleryPanel', 'dxLogPanel'];
 
 /** `reopenChat` = a share pick abandoned this way brings the chat back (see endSharePick). Only togglePanel
  *  passes false: opening another panel is the user moving on, and the chat must not reappear beside it. */
@@ -13102,6 +13105,7 @@ function initDecoders(host: string, auth: AuthState) {
   $('mapBtn').onclick = openSpotsMap;
   $('sfMap').onclick = openSpotsMap;   // ★ the same map, from the spots box's header (syncSpotsMapKey)
   initGallery();   // ★★ V12: the GALLERY key in this menu — see initGallery
+  initDxLog();     // ★★★ V12: the DX LOG key beside it — see initDxLog
 
 
   // Output box chrome.
@@ -16695,6 +16699,190 @@ function initGallery() {
       void renderGallery(1);
     };
   }
+}
+
+/* ── ★★★ V12 THE DX LOG (2026-11-04 — docs/v12/DX-SCANNER.md) ─────────────────────────────────────────────────────────
+ *  Beside GALLERY in VIEWS (Stuart: "The DX Log should live next to the gallery"), drawn only where hwinfo says `dxLog`.
+ *  What the server's idle DX scanner heard on FM and DAB: DX only by default, SHOW LOCALS / SHOW SUSPECTS, four sorts,
+ *  LIVE NOW, 25 a page; a row opens its openings, TUNE goes there (the server's own rules for the shared dial apply),
+ *  BOOKMARK (the owner) copies it into the bookmarks. src/utils/dxLog.ts is the rule, shared with the app.
+ *  ★ Alerts are per user and opt-in: "Tell me about new DX here" (this browser), shown in the VTS like a server notice. */
+let dxLogOk = false;
+let dxBand: '' | 'FM' | 'DAB' = '';
+let dxShowLocal = false, dxShowSuspect = false;
+let dxSort: DxSort = 'last';
+let dxPage = 1;
+let dxLast: DxPage | null = null;
+let dxAlertTimer: number | null = null;
+const DX_ALERT_KEY = 'vibesdr.dxAlerts', DX_ALERT_SEEN = 'vibesdr.dxAlertSeq';
+function dxLogSyncBtn() {
+  $('dxLogBtn').hidden = !dxLogOk;
+  if (!dxLogOk && isPanelOpen('dxLogPanel')) $('dxLogPanel').classList.remove('open');
+  dxAlertsArm();
+}
+function dxAlertsOn(): boolean { try { return localStorage.getItem(DX_ALERT_KEY) === '1'; } catch { return false; } }
+function dxAlertSeqKey(): string { return `${DX_ALERT_SEEN}:${currentHost}`; }
+/** ★ Poll the server's alerts once a minute while connected and opted in — new DX and new openings of known DX only
+ *  (the server never alerts on locals, suspects or the first day's baseline). Each shown once, in the VTS. */
+function dxAlertsArm() {
+  if (dxAlertTimer != null) { clearInterval(dxAlertTimer); dxAlertTimer = null; }
+  if (!dxLogOk || !dxAlertsOn()) return;
+  const poll = async () => {
+    try {
+      let seen = Number(localStorage.getItem(dxAlertSeqKey()) || '-1');
+      const r = await fetch(galUrl(`/vibeserver/dxlog/alerts?since=${Math.max(0, seen)}`), { cache: 'no-store' });
+      if (!r.ok) return;
+      const j = await r.json() as { alertSeq: number; alerts: DxAlert[] };
+      // ★ The first poll on a server only records where its alerts are — nothing older than this visit is announced.
+      if (seen < 0) { localStorage.setItem(dxAlertSeqKey(), String(j.alertSeq || 0)); return; }
+      const fresh = dxNewAlerts(j.alerts || [], seen);
+      if (!fresh.length) return;
+      seen = fresh[fresh.length - 1].seq;
+      localStorage.setItem(dxAlertSeqKey(), String(seen));
+      const text = fresh.length === 1 ? fresh[0].text : `${fresh[fresh.length - 1].text} (+${fresh.length - 1} more in the DX LOG)`;
+      vtsClearNotice('dx'); vtsNotice('dx', text, '', 12000);
+    } catch { /* offline — next minute */ }
+  };
+  void poll();
+  dxAlertTimer = window.setInterval(() => { void poll(); }, 60_000);
+}
+async function renderDxLog(page = dxPage) {
+  const host = $('dxList'), note = $('dxNote'), pager = $('dxPager');
+  $('dxView').hidden = true; host.hidden = false; $('dxFilter').hidden = false; $('dxSortRow').hidden = false;
+  host.innerHTML = '<div class="sres"><span class="n">Loading…</span></div>';
+  pager.hidden = true;
+  let j: DxPage | null = null;
+  try {
+    const r = await fetch(galUrl(`/vibeserver/dxlog.json?${dxQuery({ band: dxBand, showLocal: dxShowLocal, showSuspect: dxShowSuspect, sort: dxSort, page })}`), { cache: 'no-store' });
+    j = await r.json() as DxPage;
+    if (!r.ok || j.error) { host.innerHTML = ''; note.textContent = j.error || 'This server keeps no DX log.'; return; }
+  } catch { host.innerHTML = ''; note.textContent = 'Could not reach the server.'; return; }
+  dxLast = j;
+  const pages = dxPageCount(j.total);
+  if (page > pages && j.total > 0) { void renderDxLog(pages); return; }
+  dxPage = Math.min(Math.max(1, page), pages);
+  host.innerHTML = '';
+  note.textContent = dxFooter(j, j.entries.length);
+  if (!j.entries.length) {
+    const row = document.createElement('div'); row.className = 'sres';
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = dxEmptyLine(j, dxShowLocal);
+    row.appendChild(n); host.appendChild(row); return;
+  }
+  for (const e of j.entries) {
+    const row = document.createElement('div'); row.className = 'sres';
+    if (e.class === 'suspect') row.classList.add('dxSuspect');
+    row.tabIndex = 0; row.setAttribute('role', 'button');
+    const f = document.createElement('span'); f.className = 'f'; f.textContent = dxWhere(e);
+    const n = document.createElement('span'); n.className = 'n';
+    n.appendChild(document.createTextNode(dxTitle(e)));
+    for (const t of dxTags(e)) { const s = document.createElement('span'); s.className = t === 'LIVE NOW' ? 'tag dxLive' : 'tag'; s.textContent = t; n.appendChild(s); }
+    n.appendChild(document.createElement('br'));
+    const src = document.createElement('span'); src.className = 'src'; src.textContent = dxSubline(e, j.now);
+    n.appendChild(src);
+    const sus = dxSuspectLine(e);
+    if (sus) { n.appendChild(document.createElement('br')); const w = document.createElement('span'); w.className = 'src'; w.textContent = sus; n.appendChild(w); }
+    row.appendChild(f); row.appendChild(n);
+    const open = () => { void openDxEntry(e.id); };
+    row.onclick = open;
+    row.onkeydown = (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); open(); } };
+    host.appendChild(row);
+  }
+  if (pages > 1) {
+    pager.innerHTML = '';
+    const go = (p: number) => { void renderDxLog(p).then(() => { $('dxLogPanel').scrollTop = 0; }); };
+    const btn = (label: string, p: number, dis: boolean) => {
+      const b = document.createElement('button'); b.className = 'btn'; b.textContent = label; b.disabled = dis; b.onclick = () => go(p); pager.appendChild(b);
+    };
+    btn('‹ NEWER', dxPage - 1, dxPage <= 1);
+    const lab = document.createElement('span'); lab.className = 'gap'; lab.textContent = `Page ${dxPage} of ${pages}`; pager.appendChild(lab);
+    btn('OLDER ›', dxPage + 1, dxPage >= pages);
+    pager.hidden = false;
+  }
+}
+let dxOpenId = -1;
+async function openDxEntry(id: number) {
+  dxOpenId = id;
+  $('dxList').hidden = true; $('dxFilter').hidden = true; $('dxSortRow').hidden = true; $('dxPager').hidden = true; $('dxView').hidden = false;
+  $('dxLogPanel').scrollTop = 0;
+  const body = $('dxViewBody'); body.textContent = 'Loading…';
+  $('dxViewMeta').textContent = '';
+  let e: DxEntry | null = null;
+  try {
+    const r = await fetch(galUrl(`/vibeserver/dxlog/entry?id=${id}`), { cache: 'no-store' });
+    const j = await r.json() as { entry?: DxEntry; error?: string };
+    e = j.entry || null;
+    if (!e) { body.textContent = j.error || 'This entry is no longer in the log.'; return; }
+  } catch { body.textContent = 'Could not reach the server.'; return; }
+  if (dxOpenId !== id) return;
+  $('dxViewMeta').textContent = `${dxWhere(e)}${e.band === 'FM' ? ' MHz' : ''} · ${dxTitle(e)} · ${dxSubline(e)}`;
+  body.innerHTML = '';
+  const para = (t: string) => { if (!t) return; const p = document.createElement('p'); p.textContent = t; body.appendChild(p); };
+  para(dxSuspectLine(e));
+  if (e.band === 'FM' && e.psVariants && e.psVariants.length > 1) para(`PS seen: ${e.psVariants.join(' · ')}`);
+  if (e.band === 'DAB' && e.services && e.services.length) para(`Services: ${e.services.map((s) => s.label).join(' · ')}`);
+  para(`First heard ${dxWhen(e.firstHeard)} · present in ${Math.round((e.presence || 0) * 100)} % of its sweeps this week`);
+  const tbl = document.createElement('table');
+  const hdr = document.createElement('tr');
+  for (const h of ['OPENING', 'UNTIL', 'HEARD', 'PEAK']) { const th = document.createElement('th'); th.textContent = h; hdr.appendChild(th); }
+  tbl.appendChild(hdr);
+  for (const o of e.openingList || []) {
+    const tr = document.createElement('tr');
+    for (const v of [dxWhen(o.start), dxWhen(o.end), `${o.detections}×`, `${Math.round(o.peakSnrDb)} dB`]) { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); }
+    tbl.appendChild(tr);
+  }
+  body.appendChild(tbl);
+  const tgt = dxTuneTarget(e);
+  ($('dxTune') as HTMLButtonElement).hidden = !tgt;
+  $('dxTune').onclick = () => {
+    if (!tgt) return;
+    if (tgt.kind === 'fm') tuneTo({ frequency: tgt.hz, mode: 'wfm', name: dxTitle(e!), source: 'server' } as SearchResult);
+    else dabGoTo(tgt.hz, tgt.sid);
+    closePanels();
+  };
+  const canPromote = !!(dxLast?.canPromote || adminUnlocked);
+  const pb = $('dxPromote') as HTMLButtonElement;
+  pb.hidden = !canPromote;
+  pb.textContent = e.promoted ? 'BOOKMARKED' : 'BOOKMARK';
+  pb.disabled = !!e.promoted;
+  pb.title = 'Copy this station into the server’s bookmarks (frequency, name and mode)';
+  pb.onclick = async () => {
+    pb.disabled = true;
+    try {
+      const q = await resolveAdminOverride(httpBase(currentHost), adminPassword);
+      const r = await fetch(P(`/vibeserver/dxlog/promote?id=${id}${q ? `&${q}` : ''}`), { method: 'POST' });
+      const j = await r.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      if (r.ok && j.ok) { pb.textContent = 'BOOKMARKED'; bmRefreshedAt = 0; refreshServerBookmarks(); }
+      else { pb.disabled = false; vtsNotice('dx', j.error || 'Only the server owner can add bookmarks.', '', 6000); }
+    } catch { pb.disabled = false; }
+  };
+}
+function initDxLog() {
+  $('dxLogBtn').onclick = () => { togglePanel('dxLogPanel'); if (isPanelOpen('dxLogPanel')) { dxPage = 1; void renderDxLog(1); } };
+  $('dxClose').onclick = () => $('dxLogPanel').classList.remove('open');
+  $('dxBack').onclick = () => { void renderDxLog(dxPage); };
+  for (const b of Array.from($('dxFilter').querySelectorAll('[data-band]')) as HTMLButtonElement[]) {
+    b.onclick = () => {
+      dxBand = (b.dataset.band || '') as '' | 'FM' | 'DAB';
+      for (const o of Array.from($('dxFilter').querySelectorAll('[data-band]'))) o.classList.toggle('on', o === b);
+      void renderDxLog(1);
+    };
+  }
+  const tog = (id: string, get: () => boolean, set: (v: boolean) => void) => {
+    const b = $(id) as HTMLButtonElement;
+    b.onclick = () => { set(!get()); b.classList.toggle('on', get()); b.setAttribute('aria-pressed', String(get())); void renderDxLog(1); };
+  };
+  tog('dxShowLocal', () => dxShowLocal, (v) => { dxShowLocal = v; });
+  tog('dxShowSuspect', () => dxShowSuspect, (v) => { dxShowSuspect = v; });
+  const sortRow = $('dxSortRow');
+  sortRow.innerHTML = '';
+  for (const s of DX_SORTS) {
+    const b = document.createElement('button'); b.className = 'btn' + (s.id === dxSort ? ' on' : ''); b.textContent = s.label;
+    b.onclick = () => { dxSort = s.id; for (const o of Array.from(sortRow.children)) o.classList.toggle('on', o === b); void renderDxLog(1); };
+    sortRow.appendChild(b);
+  }
+  const al = $('dxAlerts') as HTMLInputElement;
+  al.checked = dxAlertsOn();
+  al.onchange = () => { try { localStorage.setItem(DX_ALERT_KEY, al.checked ? '1' : '0'); } catch { /* private mode */ } dxAlertsArm(); };
 }
 
 async function renderRecordings() {
