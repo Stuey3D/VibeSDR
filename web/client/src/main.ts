@@ -120,8 +120,11 @@ import {
   loadStations, loadBookmarks, getBookmarks, getStations, addBookmark, removeBookmark,
   exportBookmarks, importBookmarks, search, type SearchResult,
   loadServerBookmarks, getServerBookmarks, saveToServer, removeFromServer, setTunableWindow,
-  setBookmarkAdminAuth,
+  setBookmarkAdminAuth, editOnServer, editBookmark,
 } from './search';
+import {
+  checkBookmarkEdit, bookmarkEditForm, fillFromDial, bookmarkModeChoices, type BookmarkEditForm,
+} from '../../../src/utils/bookmarkEdit';   // ★★ V12 bookmark EDIT (discussion #59) — shared with the app
 import { parseBookmarksAny } from '../../../src/services/userBookmarks';
 import { shareFromBookmark, type ShareOut } from '../../../src/services/chatShare';
 import { mpxPowerParts } from '../../../src/services/mpxPower';
@@ -1103,6 +1106,12 @@ function refreshAdminRow() {
       const el = document.getElementById(id) as HTMLButtonElement | null;
       if (el) el.hidden = gated;
     }
+    // ★★ …and the per-row EDIT / ✕ on the receiver's list (V12, discussion #59), which are drawn per row — so the
+    //    open list is redrawn, and an edit of a receiver row left open by an idle re-lock is closed.
+    //    ★ Read off the DOM, not `bmEditing`: this runs from the first config, before that `let` is initialised.
+    const edForm = document.getElementById('bmEdit');
+    if (gated && edForm && !edForm.hidden && edForm.dataset.kind === 'server') closeBookmarkEdit();
+    if (isPanelOpen('bookmarksPanel')) renderBookmarks();
   }
   // ★★★ AND THE PAGE ITSELF MUST CLOSE. Leaving it open after a re-lock would leave DISCONNECT
   //     and BLOCK buttons on screen that the server will now refuse — the exact "drawn, enabled
@@ -11237,6 +11246,7 @@ function initBookmarks() {
     renderBookmarks();
   };
   $('bmAdd').onclick = addNow;
+  initBookmarkEdit();
   nameEl.onkeydown = (e) => { if (e.key === 'Enter') { void addNow(); e.preventDefault(); } };
 
   // Save on the RECEIVER — shared with every client, and it survives this browser.
@@ -11305,6 +11315,103 @@ function initBookmarks() {
       $('bmMsg').textContent = err instanceof Error ? err.message : 'Import failed';
     }
     $<HTMLInputElement>('bmFile').value = '';
+  };
+}
+
+/** ★★ MAY THIS SESSION WRITE THE RECEIVER'S BOOKMARKS? The same rule as ADD TO SERVER (refreshAdminRow): the owner
+ *  signed in, or a receiver with no admin password at all. Everything that writes the server list — add, import, delete,
+ *  EDIT — is drawn only when this is true; the server enforces it regardless (vsAdminHttpOk). */
+function bmServerWritable(): boolean { return !srvAdminProtected || adminUnlocked; }
+
+/* ★★ EDIT A BOOKMARK (V12, GitHub discussion #59, Gesiima). One form, two lists, kept apart:
+ *    • YOUR bookmarks (this browser) — always yours to edit;
+ *    • the RECEIVER's — the owner's list, shared with everyone, so editing one is admin-only like adding and deleting.
+ *  Name, frequency (MHz, as the list shows it), mode, and the passband or "the mode's default". The rules are
+ *  src/utils/bookmarkEdit.ts — the app uses the same — and when the server refuses, its own words are shown. */
+let bmEditing: { local: boolean; heard: boolean; old: { name: string; frequency: number; sid?: number } } | null = null;
+
+function bmEditRead(): BookmarkEditForm {
+  return {
+    name: $<HTMLInputElement>('bmEditName').value,
+    freqText: $<HTMLInputElement>('bmEditFreq').value, unit: 'mhz',
+    mode: $<HTMLSelectElement>('bmEditMode').value,
+    defaultPassband: $<HTMLInputElement>('bmEditDefBw').checked,
+    lowText: $<HTMLInputElement>('bmEditLo').value, highText: $<HTMLInputElement>('bmEditHi').value,
+  };
+}
+function bmEditWrite(f: BookmarkEditForm) {
+  $<HTMLInputElement>('bmEditName').value = f.name;
+  $<HTMLInputElement>('bmEditFreq').value = f.freqText;
+  const sel = $<HTMLSelectElement>('bmEditMode');
+  sel.innerHTML = bookmarkModeChoices(f.mode)
+    .map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m.toUpperCase())}</option>`).join('');
+  sel.value = f.mode;
+  $<HTMLInputElement>('bmEditDefBw').checked = f.defaultPassband;
+  $<HTMLInputElement>('bmEditLo').value = f.lowText;
+  $<HTMLInputElement>('bmEditHi').value = f.highText;
+  bmEditBwState();
+}
+/** The edges are greyed (and skipped by Tab) while "the mode's default" is ticked — they would not be saved. */
+function bmEditBwState() {
+  const def = $<HTMLInputElement>('bmEditDefBw').checked;
+  for (const id of ['bmEditLo', 'bmEditHi']) $<HTMLInputElement>(id).disabled = def;
+  $('bmEditBwRow').style.opacity = def ? '0.45' : '';
+}
+
+function openBookmarkEdit(b: { name: string; frequency: number; mode?: string; local: boolean; heard?: boolean;
+                               bwLo?: number | null; bwHi?: number | null; sid?: number }) {
+  if (!b.local && !bmServerWritable()) return;
+  bmEditing = { local: b.local, heard: !!b.heard, old: { name: b.name, frequency: b.frequency, sid: b.sid } };
+  $('bmEditTitle').textContent = b.local ? 'EDIT YOUR BOOKMARK' : 'EDIT THE RECEIVER’S BOOKMARK';
+  const note = $('bmEditNote');
+  note.hidden = b.local;
+  note.textContent = b.local ? ''
+    : b.heard ? 'This station was found automatically. Saving makes it a bookmark saved by you: it stops expiring, and what the receiver hears will not rename it. Everyone who listens sees the change.'
+    : 'Saved on the receiver — everyone who listens sees the change.';
+  bmEditWrite(bookmarkEditForm({ name: b.name, frequency: b.frequency, mode: b.mode,
+                                 bandwidth_low: b.bwLo, bandwidth_high: b.bwHi }, 'mhz'));
+  $('bmEditMsg').textContent = '';
+  $('bmEdit').dataset.kind = b.local ? 'local' : 'server';
+  $('bmEdit').hidden = false;
+  $('bmEdit').scrollIntoView({ block: 'nearest' });
+  $<HTMLInputElement>('bmEditName').focus();
+}
+function closeBookmarkEdit() {
+  bmEditing = null;
+  $('bmEdit').hidden = true;
+  $('bmEditMsg').textContent = '';
+}
+
+function initBookmarkEdit() {
+  $<HTMLInputElement>('bmEditDefBw').onchange = bmEditBwState;
+  $('bmEditCancel').onclick = () => closeBookmarkEdit();
+  // ★ "Use what I'm listening to now" — the small-correction case: tune it right, then take the dial's frequency, mode
+  //   and passband. The name stays as it was.
+  $('bmEditDial').onclick = () => {
+    if (!spec) return;
+    bmEditWrite(fillFromDial(bmEditRead(), { frequency: spec.frequency, mode: spec.mode,
+                                             bandwidthLow: spec.bandwidthLow, bandwidthHigh: spec.bandwidthHigh }));
+  };
+  $<HTMLFormElement>('bmEdit').onsubmit = async (e) => {
+    e.preventDefault();
+    const ed = bmEditing;
+    if (!ed) return;
+    const r = checkBookmarkEdit(bmEditRead());
+    if (!r.ok) { $('bmEditMsg').textContent = r.error; return; }
+    const saveBtn = $<HTMLButtonElement>('bmEditSave');
+    saveBtn.disabled = true;
+    try {
+      if (ed.local) {
+        await editBookmark(ed.old, r.value);
+      } else {
+        if (!bmServerWritable()) { $('bmEditMsg').textContent = 'Sign in as admin to edit the receiver’s bookmarks.'; return; }
+        const res = await editOnServer(ed.old, r.value);
+        if (!res.ok) { $('bmEditMsg').textContent = res.error || 'The receiver refused the edit.'; return; }
+      }
+      closeBookmarkEdit();
+      $('bmMsg').textContent = ed.local ? `Saved "${r.value.name}"` : `Saved "${r.value.name}" on the receiver`;
+      renderBookmarks();
+    } finally { saveBtn.disabled = false; }
   };
 }
 
@@ -11424,16 +11531,30 @@ function renderBookmarkRows(host: HTMLElement, rows: Array<{
       });
       $('bookmarksPanel').classList.remove('open');
     };
+    // ★★ EDIT and ✕ only where this session may make the change: yours always; the receiver's only for the owner (a
+    //    listener is never offered a write the server will refuse — an inert control reads as a broken feature).
+    //    Not while picking a station for the chat: that is a chooser.
+    const mayWrite = b.local || bmServerWritable();
+    if (mayWrite && !sharePickDone) {
+      const ed = document.createElement('button');
+      ed.className = 'btn bmEditBtn';
+      ed.textContent = 'EDIT';
+      ed.title = b.local ? 'Edit this bookmark' : 'Edit this bookmark on the receiver (admin)';
+      ed.setAttribute('aria-label', `Edit ${b.name}`);
+      ed.onclick = (e) => { e.stopPropagation(); openBookmarkEdit({ ...b, sid: isDab ? b.sid : undefined }); };
+      row.appendChild(ed);
+    }
     const del = document.createElement('button');
     del.className = 'btn';
     del.textContent = '✕';
+    del.setAttribute('aria-label', `Delete ${b.name}`);
     del.onclick = async (e) => {
       e.stopPropagation();
       if (b.local) await removeBookmark(b.name, b.frequency);
       else await removeFromServer(b.frequency, isDab ? b.sid : undefined);
       renderBookmarks();
     };
-    row.appendChild(del);
+    if (mayWrite) row.appendChild(del);
     host.appendChild(row);
 
     // Logo, lazily — for BOTH kinds. Local bookmarks were skipped on the theory that

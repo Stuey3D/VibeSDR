@@ -1338,6 +1338,12 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── the controller keyboard on the served page (simulated pad, end to end) ──\033[0m\n'
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-pad-keyboard.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★ V12 EDIT A BOOKMARK in the web client (discussion #59): yours always, the receiver's only as admin (no EDIT / ✕ for
+#    a listener), prefill, "use what I'm listening to now", a rule refused in words, a learned row moved on the server,
+#    the server's own refusal shown, Enter on EDIT and in a field. Edge, muted, the page just built. ~40 s.
+printf '\n\033[1m── bookmark edit on the served page (end to end) ──\033[0m\n'
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-web-bookmark-edit.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 
 # ★★ FREQUENCY AT THE POINTER (Kiko, 2026-10-16, "like OpenWebRX"): a MOUSE over the waterfall/spectrum shows the
 #     frequency a click there tunes to (and the click agrees), hides on leave/press, never on touch; the menu switch
