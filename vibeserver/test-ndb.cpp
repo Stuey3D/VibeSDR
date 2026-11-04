@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
            std::string("the credit names every source: ") + vibendb::kNavaidCredit);
         ok(m.n.source().find("OurAirports") == 0, "WOD's position is OurAirports' (" + m.n.source() + ")");
         // ★★ V12 2026-11-04 scripts/ndb-heard.json — beacons heard for hours on Stuart's receivers that no bundled source lists.
-        for (auto bc : { std::make_pair(362500.0, "SND"), std::make_pair(388500.0, "CDF"), std::make_pair(393000.0, "EMW"), std::make_pair(353500.0, "EME"), std::make_pair(340000.0, "HAW"), std::make_pair(327000.0, "MVC") }) {
+        for (auto bc : { std::make_pair(362500.0, "SND"), std::make_pair(388500.0, "CDF"), std::make_pair(393000.0, "EMW"), std::make_pair(353500.0, "EME"), std::make_pair(340000.0, "HAW"), std::make_pair(327000.0, "MVC"), std::make_pair(347000.0, "NQY") }) {
             const auto hm = vibendb::match(bc.first, bc.second, false, 0, 0);
             ok(hm.kind == vibendb::Match::Exact && hm.n.source().find("heard") == 0,
                std::string(bc.second) + " is listed now, from our own receptions (" + hm.n.source() + ")");
