@@ -121,6 +121,7 @@ import {
   setManualServerLocation, resolveLocation, publishLocation, homeFromDevice,
   getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive, rateGuardState, rateGuardClear,
   getBackgroundCaps, validateBackgroundDecoding, galleryDisk,
+  dabBandScanStart, dabBandScanState, dabBandScanCancel, dabBandScanSupported, type DabBandScan,
   type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
@@ -297,6 +298,8 @@ const K = {
   galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
   /** ★★ V12 VibeAGC for SDRplay (0 automatic, 1 on, 2 off). */
   rspVibeAgc: 'vs_rspvibeagc',
+  /** ★ The wide impulse blanker (0 off, 1 auto below 30 MHz, 2 on). Absent = 1, the server's default. */
+  nbWide: 'vs_nbwide',
 };
 
 /** ★★★ HOW LONG THE SETTINGS SCREEN WAITS FOR A DAB QUICK SCAN, and the number its hint QUOTES — one
@@ -495,6 +498,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [galDisk, setGalDisk] = useState<{ freeBytes: number; usedBytes: number } | null>(null);
   /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with the OpenRSP driver), 1 on, 2 off — drawn only for an RSP. */
   const [rspVibeAgc, setRspVibeAgc] = useState(0);
+  /** ★ The wide impulse blanker: 0 off, 1 auto (below 30 MHz — the Setup page's and the server's default), 2 on. */
+  const [nbWide, setNbWide] = useState(1);
   /* ★★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h), read from the engine's record on mount. While
    *  one is recorded the switch is drawn off and disabled, and the saved choice is turned off too — the engine turned
    *  it off, and this screen's copy would otherwise send it back at the next Start. */
@@ -725,6 +730,27 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [dabBlocks, setDabBlocks]         = useState<DabBlock[]>([]);
   const [dabStations, setDabStations]     = useState<Record<number, { sid: number; label: string }[]>>({});
   const [dabScanBusy, setDabScanBusy]     = useState(false);
+  /** ★★ V12 the owner's DAB band scan — the engine's state, and busy until the radio is put away again. */
+  const [dabBand, setDabBand]             = useState<DabBandScan | null>(null);
+  const [dabBandBusy, setDabBandBusy]     = useState(false);
+  const bandScanRef = useRef(false);
+  useEffect(() => {
+    if (!dabBandBusy) return;
+    let alive = true;
+    const t = setInterval(() => {
+      void dabBandScanState().then(({ scan, busy }) => {
+        if (!alive) return;
+        if (scan) setDabBand(scan);
+        if (!busy && !(scan && scan.running)) {
+          bandScanRef.current = false; setDabBandBusy(false);
+          // ★ what it found becomes each block's station list here too (the setup page's dabLandStations)
+          if (scan?.found?.length)
+            setDabStations((prev) => { const n = { ...prev }; for (const h of scan.found!) n[h.channel] = (h.services || []).slice(); return n; });
+        }
+      });
+    }, 1000);
+    return () => { alive = false; clearInterval(t); };
+  }, [dabBandBusy]);
   const [dabScanSecs, setDabScanSecs]     = useState(0);
   /** ★ What the scan is doing (native), shown beside the seconds — see dabScanPhase(). */
   const [dabScanStage, setDabScanStage]   = useState('');
@@ -1366,6 +1392,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
           { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
           { const rv = g(K.rspVibeAgc); if (rv === '1' || rv === '2' || rv === '0') setRspVibeAgc(Number(rv)); }
+          { const nb = g(K.nbWide); if (nb === '0' || nb === '1' || nb === '2') setNbWide(Number(nb)); }
           // ★★ The engine's record of a fall-over at a boosted rate — it switches the saved choice off here too.
           rateGuardState().then((st) => {
             setRateGuard(st);
@@ -1881,7 +1908,18 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     && !blockedModes.split(/[,;\s]+/).some((t) => t.toLowerCase() === '+dab');
   const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !dabRegionOff && !adsbLandOn;
   const dabLandOn = dabLandOffered && landingDabCh >= 0 && landingDabCh < dabBlocks.length;
+  /* ── ★★★ V12 THE OWNER'S DAB BAND SCAN — "Scan all DAB blocks" (the Setup page's dabBandRender). Every Band III block
+   *  on the idle radio, results as they come, every station found added to this server's bookmarks. Offered where DAB
+   *  can run here and is not switched off (the setup page: dabLandHwCan && !blocked) — the landing need not be on. */
+  const dabBandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !dabRegionOff && dabBandScanSupported();
+  const runDabBandScan = async () => {
+    if (bandScanRef.current || dabScanBusy) return;
+    bandScanRef.current = true; setDabBandBusy(true); setDabBand({ running: true, done: 0, total: 0, found: [] });
+    try { await dabBandScanStart(serverConfigRef.current(name.trim() || 'VibeSDR')); }
+    catch (e: any) { setDabBand({ running: false, error: e?.message ?? String(e) }); bandScanRef.current = false; setDabBandBusy(false); }
+  };
   const runDabScan = async () => {
+    if (bandScanRef.current) return;   // ★ one scan at a time — the band scan holds the radio
     const ch = landingDabCh;
     const b = dabBlocks[ch];
     if (!b || dabScanBusy) return;
@@ -1962,7 +2000,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
-    bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc,   // ★★ V12 — read here, never stale
+    bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
   };
 
   /* ★★★ THE CONFIG THE SERVER STARTS WITH, BUILT IN ONE PLACE (2026-09-29). Start sends it, and so does
@@ -2014,6 +2052,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
     // ★ Only an RSP's — 0 (automatic) on any other radio, so a choice saved while an RSP was plugged in cannot ride along.
     rspVibeAgc: radio?.driver === 'sdrplay' ? live.current.rspVibeAgc : 0,
+    nbWide: live.current.nbWide,   // ★ VibeServerBoot: setNbWide(cfg "nbWide"), auto when absent
     /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
      *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
      *  check for the WHOLE literal, so every setting here could be misspelled or unknown to
@@ -2085,6 +2124,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   serverConfigRef.current = serverConfig;
 
   const start = useCallback(async () => {
+    /* ★★ V12 the owner's DAB band scan holds the radio in a private engine — Start waits for it (or Cancel). */
+    if (bandScanRef.current) {
+      Alert.alert('A DAB scan is running', 'Wait for "Scan all DAB blocks" to finish, or cancel it, then start the server.');
+      return;
+    }
     /* ★★★ NEVER WRITE DEFAULTS OVER SETTINGS WE COULD NOT READ. If the load failed, every control on this
      *  screen is a default rather than the owner's choice, and this multiSet would make that permanent — which
      *  is how "it lost my preferences" becomes true instead of merely looking true. */
@@ -2143,7 +2187,7 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
       [K.bgDecode, live.current.bgJson], [K.galleryMb, String(live.current.galleryMb)],
       [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
-      [K.rspVibeAgc, String(live.current.rspVibeAgc)],
+      [K.rspVibeAgc, String(live.current.rspVibeAgc)], [K.nbWide, String(live.current.nbWide)],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -3493,6 +3537,66 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {!!dabLandNote && (
               <Text style={[styles.hint, { color: C.warn, fontFamily: F, marginBottom: 8 }]}>{dabLandNote}</Text>
             )}
+            {/* ★★ V12 THE DAB BAND SCAN, FOR THE OWNER (Stuart, 2026-10-26: "DAB scan I will add for initial setup") — the
+                Setup page's words. The engine walks every Band III block (dabBandScanRun); here the radio is opened for
+                it on a private loopback engine (the server is stopped while this screen shows), as the quick scan does. */}
+            {dabBandOffered && (() => {
+              const s = dabBand, running = dabBandBusy;
+              const found = (s?.found ?? []).slice().sort((a, b) => a.channel - b.channel);
+              const ens = found.length, st = found.reduce((a, h) => a + (h.services || []).length, 0);
+              const pl = (n: number, w: string) => n + ' ' + (n === 1 ? w : w === 'multiplex' ? 'multiplexes' : w + 's');
+              const msg = !s
+                ? 'Steps through all 41 Band III blocks (about two minutes, longer for each multiplex found) while nobody is '
+                  + 'listening, and adds every station found to this server’s bookmarks.'
+                : s.error ? 'Scan not started: ' + s.error
+                : running ? (s.total ? `Scanning ${s.done} / ${s.total} blocks${s.current ? ' · ' + s.current : ''}` : 'Starting the radio for the scan…')
+                    + (ens ? ` — ${pl(ens, 'multiplex')} so far` : '')
+                : s.finished ? (s.cancelled ? `Scan stopped at ${s.done} / ${s.total}${s.why ? ' (' + s.why.replace(/^stopped — /, '') + ')' : ''} — ` : '')
+                    + (ens ? `${pl(ens, 'multiplex')}, ${pl(st, 'station')} — ${pl(s.added || 0, 'station')} added to bookmarks.`
+                           : (s.cancelled ? 'nothing found yet.' : `No DAB found on any of the ${s.total} blocks. Check the aerial is up and connected.`))
+                : (s.why || '');
+              return (
+                <View style={[styles.card, { borderColor: C.border, marginBottom: 8 }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>Find the DAB multiplexes this aerial hears</Text>
+                    <TouchableOpacity onPress={() => { void runDabBandScan(); }} disabled={running || dabScanBusy}
+                      style={[styles.regen, { borderColor: C.border, opacity: running || dabScanBusy ? 0.5 : 1 }]}>
+                      <Text style={{ color: C.key, fontFamily: F, fontSize: 13 }}>Scan all DAB blocks</Text>
+                    </TouchableOpacity>
+                    {running && (
+                      <TouchableOpacity onPress={() => { void dabBandScanCancel(); }}
+                        style={[styles.regen, { borderColor: C.border }]}>
+                        <Text style={{ color: C.key, fontFamily: F, fontSize: 13 }}>Cancel</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>{msg}</Text>
+                  {found.map((h) => {
+                    const word = h.fib > 0.9 ? 'STRONG' : h.fib > 0.6 ? 'GOOD' : 'WEAK';
+                    return (
+                      <View key={h.channel} style={{ borderTopWidth: 1, borderTopColor: C.border, paddingTop: 6, gap: 3 }}>
+                        <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>
+                          {`${h.block}  ${h.ensemble || 'Unnamed multiplex'}  · ${(h.hz / 1e6).toFixed(3)} MHz · ${pl((h.services || []).length, 'station')} · ${word}`}
+                        </Text>
+                        {!!(h.services || []).length && (
+                          <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+                            {h.services.map((v) => v.label).join(' · ')}
+                          </Text>
+                        )}
+                        {dabLandOn && !running && (
+                          <TouchableOpacity onPress={() => { setDabLanding(h.channel, 0, ''); setDabScanMsg(''); }}
+                            style={[styles.regen, { borderColor: h.channel === landingDabCh ? C.keySelBorder : C.border, marginLeft: 0, alignSelf: 'flex-start' }]}>
+                            <Text style={{ color: h.channel === landingDabCh ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>
+                              {`Use ${h.block} as the landing block`}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              );
+            })()}
             {!dabLandOffered && landingDabCh >= 0 && !dabBlockedNow(blockedModes) && (
               <Text style={[styles.hint, { color: C.warn, fontFamily: F, marginBottom: 8 }]}>
                 {`This radio cannot reach DAB with these settings, so its DAB landing station will not be used \u2014 listeners will start on ${plainLandingWords()} instead.`}
@@ -3768,6 +3872,25 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                 app uses). If the driver ever rejects a gain write, VibeAGC hands back to the RSP{'’'}s own AGC and says
                 why in the log. You can also switch it live from the radio menu (the AGC row in the hardware panel, once the
                 protected settings are unlocked); the choice here is what the server starts with.
+              </Text>
+            </>)}
+
+            {/* ★★ THE WIDE IMPULSE BLANKER (RadioConfig::nbWide: 0 off, 1 auto below 30 MHz — the default, 2 on), the Setup
+                page's words. VibeServerBoot has always applied cfg "nbWide"; the screen never sent it, so every phone ran
+                the default. Not on an Icom: it blanks the IQ capture, which an Icom does not send (AGENTS.md). */}
+            {!isIcom && (<>
+              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>IMPULSE NOISE BLANKER</Text>
+              {([[0, 'Off'], [1, 'Auto (below 30 MHz)'], [2, 'On']] as const).map(([v, label]) => (
+                <OptRow key={v} C={C} F={F} active={nbWide === v} label={label}
+                  onPress={() => { setNbWide(v); AsyncStorage.setItem(K.nbWide, String(v)); }} />
+              ))}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                Blanks impulse noise {'—'} distant lightning, power-line hash, ignition, switch-mode supplies {'—'} on
+                the whole capture, before the waterfall and before any listener{'’'}s channel, so everybody benefits at
+                once. Impulses are microseconds long and wideband, which is why this works far better here than after a
+                channel filter has smeared them. On a clean signal it blanks nothing. Auto engages it only when the radio is
+                below 30 MHz: on a strong VHF broadcast band a blanker trades clicks for damage. Each listener also has their
+                own blanker on their own channel, in the audio menu.
               </Text>
             </>)}
 

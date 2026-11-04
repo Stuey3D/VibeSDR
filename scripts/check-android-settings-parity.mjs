@@ -43,7 +43,6 @@ const TABLE = [
   N(['rfNotch', 'dabNotch', 'rspAmNotch', 'rspHdr', 'rspExtRef', 'rspDabDecim', 'rfAgc', 'autoNotch', 'userNotch',
      'dabAgcOverride', 'dabAgcTarget', 'agcSet', 'agcSetLock', 'ppb', 'antennaPortLocked', 'antennaMap'],
     'GAP (pre-V12): the Setup page\'s SDRplay card never reached the phone; the engine\'s defaults apply. Listed in docs/v12/ANDROID-SETTINGS-PARITY.md as left'),
-  N(['nbWide'], 'GAP (pre-V12): VibeServerBoot reads nbWide but the screen has no control — the engine\'s default (auto, HF only) applies'),
 
   // ── SERVER ──
   P(['mdns', 'name'], 'K.advertise'),
@@ -94,6 +93,7 @@ const TABLE = [
   // ── ★★★ V12 BACKGROUND DECODING (the reason this test exists) ──
   P(['bgOn', 'bgWait', 'bgKeepInRange'], 'Background Decoding', 'bgDecode'),
   P(['rspVibeAgc'], 'VIBEAGC (SDRPLAY)', 'rspVibeAgc'),
+  P(['nbWide'], 'IMPULSE NOISE BLANKER', 'nbWide'),
 ];
 
 console.log('Android server screen ↔ the Setup page\'s settings');
@@ -140,6 +140,17 @@ ok(/\[K\.bgDecode, live\.current\.bgJson\]/.test(S0), 'Start persists the profil
 ok(/live\.current\.bgProblem/.test(S0), 'Start refuses profiles the engine would refuse');
 ok(/!isIcom && !!bgCaps && \(/.test(S0), 'not drawn on an Icom, nor on an engine without it (never drawn empty)');
 ok(/NativeModules as any\)\.VibeLocalSDR\b/.test(S0) && !/NativeModules as any\)\.VibeLocalSdrModule/.test(S0), 'the screen calls the native module by its real name, VibeLocalSDR');
+
+// ── 5. the owner's DAB band scan ("Scan all DAB blocks", a button — not an input, so not in the id table) ──
+ok(PAGE.includes('id="dabBandScan"') && S0.includes('Scan all DAB blocks') && S0.includes('Find the DAB multiplexes this aerial hears'),
+   'Scan all DAB blocks: on the server screen, in the Setup page\'s words');
+ok(/@ReactMethod\s+fun dabBandScanStart/.test(MOD) && /@ReactMethod\s+fun dabBandScanState/.test(MOD) && /@ReactMethod\s+fun dabBandScanCancel/.test(MOD),
+   'the bridge exports dabBandScanStart / State / Cancel (@ReactMethod)');
+ok(/\/vibeserver\/dab-bandscan/.test(MOD) && /privateScanConfig\(owner\)/.test(MOD.slice(MOD.indexOf('fun dabBandScanStart'))),
+   'the band scan is the ENGINE\'s (GET /vibeserver/dab-bandscan), on the owner\'s radio in a private engine when stopped');
+ok(/bandScanRef\.current\) \{\s*Alert\.alert\('A DAB scan is running'/.test(S0), 'Start waits for (or cancels) a running band scan');
+// ── 6. numbers from the app's map are read as numbers (toHashMap gives Doubles; optString(1.0) is "1.0") ──
+ok(!/cfg\.s\("[A-Za-z]+"\)\.toIntOrNull\(\)/.test(BOOT), 'VibeServerBoot never reads a number through optString().toIntOrNull()');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

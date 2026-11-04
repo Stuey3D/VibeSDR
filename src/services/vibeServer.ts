@@ -160,6 +160,8 @@ export type VibeServerConfig = {
   gallerySaveLive?: boolean;
   /** ★★ V12 VibeAGC for SDRplay — 0 automatic (on with the OpenRSP driver), 1 on, 2 off (RadioConfig::rspVibeAgc). */
   rspVibeAgc?: number;
+  /** ★ The wide impulse blanker on the whole capture: 0 off, 1 auto below 30 MHz (default), 2 on (RadioConfig::nbWide). */
+  nbWide?: number;
   /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
    *  (-1 = leave alone), and whether the AGC is locked on. */
   gainLimits?: string;
@@ -357,6 +359,7 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     galleryPublic: cfg.galleryPublic !== false,
     gallerySaveLive: cfg.gallerySaveLive !== false,
     rspVibeAgc: cfg.rspVibeAgc === 1 || cfg.rspVibeAgc === 2 ? cfg.rspVibeAgc : 0,
+    nbWide: cfg.nbWide === 0 || cfg.nbWide === 2 ? cfg.nbWide : 1,
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,
     agcLock: cfg.agcLock ?? false,
@@ -476,6 +479,30 @@ export async function dabScanOutcome(): Promise<DabScanOutcome | null> {
 export async function dabQuickScan(block: string, known: boolean, cfg: VibeServerConfig): Promise<DabScanResult> {
   if (!Local?.dabQuickScan) return { ok: false, why: 'this build cannot scan' };
   return JSON.parse(await Local.dabQuickScan(block, known, JSON.stringify(nativeServerConfig(cfg)))) as DabScanResult;
+}
+
+/** ★★★ V12 THE OWNER'S DAB BAND SCAN ("Scan all DAB blocks") — the engine's GET /vibeserver/dab-bandscan, on the running
+ *  server or on the owner's radio in a private loopback engine (VibeLocalSdrModule.dabBandScanStart). The state is the
+ *  engine's own JSON (dabBandJsonLocked). */
+export type DabBandHit = { block: string; channel: number; hz: number; ensemble: string; fib: number; complete?: boolean;
+                           services: { sid: number; label: string }[] };
+export type DabBandScan = { running: boolean; done?: number; total?: number; current?: string; added?: number;
+                            cancelled?: boolean; finished?: boolean; why?: string; error?: string; found?: DabBandHit[] };
+export const dabBandScanSupported = () => !!Local?.dabBandScanStart;
+export async function dabBandScanStart(cfg: VibeServerConfig): Promise<void> {
+  if (!Local?.dabBandScanStart) return;
+  await Local.dabBandScanStart(JSON.stringify(nativeServerConfig(cfg)));
+}
+/** The latest state, and `busy` while the radio is still being put away (null = no scan yet). */
+export async function dabBandScanState(): Promise<{ scan: DabBandScan | null; busy: boolean }> {
+  if (!Local?.dabBandScanState) return { scan: null, busy: false };
+  try {
+    const r = await Local.dabBandScanState();
+    return { scan: r?.json ? JSON.parse(String(r.json)) as DabBandScan : null, busy: !!r?.busy };
+  } catch { return { scan: null, busy: false }; }
+}
+export async function dabBandScanCancel(): Promise<void> {
+  try { await Local?.dabBandScanCancel?.(); } catch { /* nothing running */ }
 }
 
 /** ★★★ A radio that fell over at a rate a mode boosted to (src/services/rateGuard.ts reads it). */

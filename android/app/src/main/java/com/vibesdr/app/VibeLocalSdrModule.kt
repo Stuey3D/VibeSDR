@@ -640,6 +640,100 @@ class VibeLocalSdrModule(private val reactContext: ReactApplicationContext) :
         } catch (t: Throwable) { promise.reject("rate_guard", t.message ?: "$t") }
     }
 
+    /* ★★★ V12 THE OWNER'S DAB BAND SCAN — "Scan all DAB blocks" (the Setup page's, Stuart 2026-10-26: "DAB scan I will
+     *  add for initial setup"). The ENGINE does it (GET /vibeserver/dab-bandscan — local_sdr_shim.cpp dabBandScanRun:
+     *  every Band III block on the idle radio, each station found added to the server's bookmarks). This only gets it a
+     *  radio, exactly as dabQuickScan does: the running server over loopback if serving; otherwise the owner's radio on
+     *  a PRIVATE loopback-only engine (privateScanConfig) for the length of the scan, stopped and closed at the end. The
+     *  bookmarks it adds go to the same vibe_bookmarks.json the real server loads, so listeners find them.
+     *  ★ The state is the engine's own JSON (dabBandJsonLocked), kept here for the screen's once-a-second poll. */
+    @Volatile private var bandScanJson: String = ""
+    @Volatile private var bandScanPort = 0
+    @Volatile private var bandScanBusy = false
+
+    private fun dabBandHttp(port: Int, q: String): String {
+        val c = java.net.URL("http://127.0.0.1:$port/vibeserver/dab-bandscan" + (if (q.isEmpty()) "" else "?$q"))
+            .openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = 3000; c.readTimeout = 8000
+        c.setRequestProperty("User-Agent", "VibeServer-setup")
+        try {
+            val code = c.responseCode
+            val body = (if (code in 200..299) c.inputStream else c.errorStream)?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code !in 200..299) throw java.io.IOException("the server answered $code")
+            return body
+        } finally { c.disconnect() }
+    }
+    private fun bandScanFail(why: String) {
+        bandScanJson = org.json.JSONObject().apply { put("running", false); put("finished", false); put("error", why) }.toString()
+    }
+
+    @ReactMethod
+    fun dabBandScanStart(ownerConfigJson: String, promise: Promise) {
+        if (bandScanBusy) { promise.resolve(bandScanJson); return }
+        bandScanBusy = true
+        bandScanJson = "{\"running\":true,\"done\":0,\"total\":0,\"found\":[]}"
+        promise.resolve(bandScanJson)   // ★ at once: the screen polls dabBandScanState
+        Thread {
+            try {
+                val st = org.json.JSONObject(VibeLocalSDR.getVibeServerStatus())
+                val livePort = if (st.optBoolean("running", false)) st.optInt("port", 0) else 0
+                val poll = { port: Int ->
+                    bandScanPort = port
+                    var j = org.json.JSONObject(dabBandHttp(port, "start=1"))
+                    bandScanJson = j.toString()
+                    while (j.optBoolean("running", false)) {
+                        Thread.sleep(1000)
+                        j = org.json.JSONObject(dabBandHttp(port, ""))
+                        bandScanJson = j.toString()
+                    }
+                    bandScanPort = 0
+                }
+                if (livePort > 0) { poll(livePort); return@Thread }
+                val mgr = usbManager ?: run { bandScanFail("USB service unavailable"); return@Thread }
+                val dev = mgr.deviceList.values.firstOrNull { isLocalRadio(it) }
+                    ?: run { bandScanFail("No SDR found — plug the radio in to scan"); return@Thread }
+                if (!mgr.hasPermission(dev)) { bandScanFail("Allow this app to use the radio (start the server once), then scan again"); return@Thread }
+                stopSpectrumInternal()
+                val conn = mgr.openDevice(dev) ?: run { bandScanFail("The radio could not be opened"); return@Thread }
+                try {
+                    val owner = try { org.json.JSONObject(ownerConfigJson) } catch (t: Throwable) {
+                        bandScanFail("The scan was not given the server's settings: ${t.message}"); return@Thread
+                    }
+                    val cfg = VibeServerBoot.privateScanConfig(owner)
+                    VibeLocalSDR.setUsbModelName(VibeServerBoot.usbModelName(dev))
+                    val port = VibeServerBoot.applyAndStart(cfg, conn.fileDescriptor, dev.vendorId, dev.productId,
+                                                            reactContext.filesDir, serveOnLan = false,
+                                                            keepRadioAlive = VibeServerBoot.keepRadioAlive(reactContext, owner))
+                    if (port <= 0) { bandScanFail("The radio would not start for the scan"); return@Thread }
+                    Log.i(TAG, "DAB band scan: private engine on the owner's settings, port $port")
+                    poll(port)
+                } finally {
+                    bandScanPort = 0
+                    try { VibeLocalSDR.stopSpectrumSync() } catch (t: Throwable) { Log.w(TAG, "band scan: stop failed: ${t.message}") }
+                    try { conn.close() } catch (t: Throwable) { Log.w(TAG, "band scan: close failed: ${t.message}") }
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "DAB band scan: ${t.message}")
+                bandScanFail(t.message ?: "$t")
+            } finally { bandScanBusy = false }
+        }.start()
+    }
+    /** The scan's state — the engine's JSON ("" before any scan). `busy` is ours: the radio is still being put away. */
+    @ReactMethod
+    fun dabBandScanState(promise: Promise) {
+        val m = Arguments.createMap()
+        m.putString("json", bandScanJson); m.putBoolean("busy", bandScanBusy)
+        promise.resolve(m)
+    }
+    @ReactMethod
+    fun dabBandScanCancel(promise: Promise) {
+        val port = bandScanPort
+        Thread {
+            try { if (port > 0) dabBandHttp(port, "cancel=1") } catch (t: Throwable) { Log.w(TAG, "band scan cancel: ${t.message}") }
+            promise.resolve(true)
+        }.start()
+    }
+
     private fun dabScanHttp(port: Int, block: String, known: Boolean): String {
         val url = java.net.URL("http://127.0.0.1:$port/vibeserver/dab-scan?block=" +
             java.net.URLEncoder.encode(block, "UTF-8") + (if (known) "&known=1" else ""))

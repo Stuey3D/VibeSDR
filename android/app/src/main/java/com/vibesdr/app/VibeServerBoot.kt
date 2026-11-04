@@ -380,12 +380,16 @@ object VibeServerBoot {
             // ★ Decoders at once (B6). Absent/0 = this device's default — applied on EVERY start, so a
             //   limit from a previous run can never outlive the config that set it.
             VibeLocalSDR.setDecoderMax(cfg.i("decoderMax", 0).coerceAtLeast(0))
-            VibeLocalSDR.setRawIq(cfg.s("rawIq").toIntOrNull() ?: 0, cfg.s("rawIqMax").toIntOrNull() ?: 0,
-                                  cfg.s("rawIqLanMaxHz").toIntOrNull() ?: 0)
+            /* ★★★ READ AS NUMBERS (cfg.i), NOT optString().toIntOrNull() (2026-11-04). The app's map arrives through
+             *  ReadableMap.toHashMap, where every number is a DOUBLE, and org.json's optString of 1.0 is "1.0" —
+             *  toIntOrNull() of that is null, so a fresh Start fell back to the default every time: VFO B could never be
+             *  switched off, raw IQ never on, the blanker never changed. A crash restore re-parses the stored JSON
+             *  (where 1.0 is written "1"), which is why it only ever went wrong on the ordinary path. cfg.i takes both. */
+            VibeLocalSDR.setRawIq(cfg.i("rawIq", 0), cfg.i("rawIqMax", 0), cfg.i("rawIqLanMaxHz", 0))
             // ★ Wide impulse blanker — off / auto (HF only) / on; auto when unset.
-            VibeLocalSDR.setNbWide(cfg.s("nbWide").toIntOrNull() ?: 1)
+            VibeLocalSDR.setNbWide(cfg.i("nbWide", 1).coerceIn(0, 2))
             // ★★ V12 VFO A/B — the owner's switch; on when unset.
-            VibeLocalSDR.setVfoB((cfg.s("vfoB").toIntOrNull() ?: 1) != 0)
+            VibeLocalSDR.setVfoB(cfg.i("vfoB", 1) != 0)
             // ★★★ THE RESTING GAIN IS NOT AN ADVANCED SETTING, AND GATING IT ON `adv` THREW IT AWAY.
             //     The server screen offers STARTING GAIN in BOTH modes — deliberately, and its own
             //     comment says so ("One control, one value — it was not duplicated into Advanced")
