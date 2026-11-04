@@ -103,6 +103,16 @@ int main() {
             CHECK(h.size() == 1 && h[0].mainId == 11 && h[0].subId == 1 && h[0].from == kTiiClean, "one standard transmitter: one clean hit");
             CHECK(det.shared().empty(), "…and no shared comb");
             CHECK(det.diag().active == 4 && det.diag().comb == 1, "Diag: the comb, four blocks lit");
+            /* ★ ONE FIGURE, TWO PATHS (2026-11-04, "if our SNR figures are wrong because we measure them wrong
+             *  please fix them"): the same transmitter found by the original test (standard phase) and by
+             *  the new path (own phase) reads the same dB — both over the quartile noise. Before, the
+             *  original's odd-carrier reference held the TII itself and read ~11 dB low on 12B. */
+            TiiDetector own; frames({ {11, 1, 1.0f, true} }, 0.25f, own);
+            const auto& h2 = own.hits();
+            printf("  same site, two paths: %.1f dB (original test)  %.1f dB (new path)\n", h.empty() ? 0.f : h[0].strength, h2.empty() ? 0.f : h2[0].strength);
+            CHECK(!h.empty() && h2.size() == 1 && std::fabs(h[0].strength - h2[0].strength) < 1.0f, "★ the original test and the new path agree on the dB");
+            // amplitude 1 per carrier against noise 0.25 per component (power 0.125): the true figure is 9.0 dB
+            CHECK(!h.empty() && std::fabs(h[0].strength - 9.03f) < 1.0f, "…and it is the true carrier-to-noise figure, 9 dB");
         }
         // ★ The 11D fault: each carrier with its own phase. The original test rejects it; the new one names it.
         {
