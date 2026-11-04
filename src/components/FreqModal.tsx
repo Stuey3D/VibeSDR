@@ -19,6 +19,10 @@ import { airbandEntry } from '../utils/airband';
 import { useListNav, revealIn, noteTouchInteraction, useNavFocus } from './PanelNav';
 import { usePadField } from './ControllerKeyboard';
 import { bookmarkFreqLabel } from '../utils/bookmarkName';
+import {
+  checkBookmarkEdit, bookmarkEditForm, fillFromDial, bookmarkModeChoices,
+  type BookmarkEditForm, type BookmarkEditValue,
+} from '../utils/bookmarkEdit';
 import { addKeyListener } from '../utils/hardwareKeys';
 import { tuneCardItems, type TuneCardKey } from '../utils/freqCardNav';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -133,6 +137,14 @@ interface FreqModalProps {
   onAddServerBookmark?:     (name: string) => Promise<string>;
   onImportToServer?:        (text: string, onProgress?: (done: number, total: number) => void) => Promise<string>;
   onPickImportFileToServer?: (onProgress?: (done: number, total: number) => void) => Promise<string>;
+  /** ★★ V12 EDIT (GitHub discussion #59) — one form (name, frequency, mode, passband or the mode's default), two lists:
+   *  YOUR bookmarks (`onEditBookmark`, always offered), and the RECEIVER's (`onEditServerBookmark`, present only while
+   *  the admin password is held — absent = no EDIT on those rows). The server one resolves null when saved, or the
+   *  refusal in the server's words. Rules: src/utils/bookmarkEdit.ts, shared with the web client. */
+  onEditBookmark?:       (old: UserBookmark, v: BookmarkEditValue) => void;
+  onEditServerBookmark?: (old: ServerBookmark, v: BookmarkEditValue) => Promise<string | null>;
+  /** The dial's passband right now, for "use what I'm listening to now" (null = the mode default). */
+  currentPassband?:      [number, number] | null;
   /** ★★★ PICK MODE — the chat's "Check out [Bookmark]" (Stuart, 2026-10-01). Present = the card opens
    *  on BOOKMARKS and a row is CHOSEN, not tuned: search (yours, the receiver's, EiBi) and ON THIS
    *  SERVER work exactly as always, and the pick goes back to the chat as a draft to send. No TUNE tab,
@@ -233,6 +245,7 @@ export default function FreqModal({
   eibiEnabled = true, onEibiToggle, userBookmarks = [],
   onAddBookmark, onDeleteBookmark, onToggleBookmarkSync, onExportBookmarks, onImportBookmarks, onPickImportFile,
   onPickShare, vfoAB = false, onVfoAB,
+  onEditBookmark, onEditServerBookmark, currentPassband = null,
 }: FreqModalProps) {
   const focusC = useNavFocus();   // ★ focus ring: white on green controls (Stuart, 2026-10-12)
   const picking = !!onPickShare;
@@ -469,6 +482,48 @@ export default function FreqModal({
     getValue: () => bmNameRefV.current,
     setValue: (v) => setBmName(v.slice(0, 60)),
   });
+  // ── ★★ V12 EDIT A BOOKMARK (discussion #59) — the form opens UNDER the row it edits. `key` says which row. ──
+  const [bmEdit, setBmEdit] = useState<{ server: boolean; key: string; heard: boolean; old: any } | null>(null);
+  const [bmForm, setBmForm] = useState<BookmarkEditForm | null>(null);
+  const bmFormRef = useRef(bmForm); bmFormRef.current = bmForm;
+  const [bmEditMsg, setBmEditMsg] = useState('');
+  const [bmEditBusy, setBmEditBusy] = useState(false);
+  const edNameRef = useRef<TextInput | null>(null), edFreqRef = useRef<TextInput | null>(null);
+  const edLoRef = useRef<TextInput | null>(null), edHiRef = useRef<TextInput | null>(null);
+  const patchBmForm = (p: Partial<BookmarkEditForm>) => setBmForm((f) => (f ? { ...f, ...p } : f));
+  const edNameField = usePadField({ ref: edNameRef, mode: 'text', title: 'Bookmark name',
+    getValue: () => bmFormRef.current?.name ?? '', setValue: (v) => patchBmForm({ name: v.slice(0, 60) }) });
+  const edFreqField = usePadField({ ref: edFreqRef, mode: 'text', title: 'Frequency',
+    getValue: () => bmFormRef.current?.freqText ?? '', setValue: (v) => patchBmForm({ freqText: v }) });
+  const edLoField = usePadField({ ref: edLoRef, mode: 'text', title: 'Passband low edge (Hz)',
+    getValue: () => bmFormRef.current?.lowText ?? '', setValue: (v) => patchBmForm({ lowText: v }) });
+  const edHiField = usePadField({ ref: edHiRef, mode: 'text', title: 'Passband high edge (Hz)',
+    getValue: () => bmFormRef.current?.highText ?? '', setValue: (v) => patchBmForm({ highText: v }) });
+  const ownKey = (b: UserBookmark) => `own|${b.name}|${b.frequency}|${b.scope}`;
+  const srvKey = (b: ServerBookmark) => `srv|${b.frequency}|${b.sid ?? -1}`;
+  const startBmEdit = (server: boolean, b: any) => {
+    setBmEdit({ server, key: server ? srvKey(b) : ownKey(b), heard: server && b.manual === false, old: b });
+    setBmForm(bookmarkEditForm(b, unit));
+    setBmEditMsg('');
+  };
+  const closeBmEdit = () => { setBmEdit(null); setBmForm(null); setBmEditMsg(''); };
+  // ★ The receiver's EDIT goes when the admin password does (an idle re-lock): an open form for one of its rows closes.
+  useEffect(() => { if (bmEdit?.server && !onEditServerBookmark) closeBmEdit(); }, [bmEdit, onEditServerBookmark]);
+  const saveBmEdit = async () => {
+    const ed = bmEdit, f = bmFormRef.current;
+    if (!ed || !f || bmEditBusy) return;
+    const r = checkBookmarkEdit(f);
+    if (!r.ok) { setBmEditMsg(r.error); return; }
+    if (!ed.server) { onEditBookmark?.(ed.old, r.value); closeBmEdit(); setBmImportMsg(`Saved "${r.value.name}".`); return; }
+    if (!onEditServerBookmark) { setBmEditMsg('Sign in as admin to edit the receiver’s bookmarks.'); return; }
+    setBmEditBusy(true);
+    try {
+      const err = await onEditServerBookmark(ed.old, r.value);
+      if (err) { setBmEditMsg(err); return; }
+      closeBmEdit();
+      setBmImportMsg(`Saved "${r.value.name}" on the receiver.`);
+    } finally { setBmEditBusy(false); }
+  };
   const freqField = usePadField({
     ref: inputRef, mode: 'frequency', title: 'Frequency',
     getValue: () => valueRef.current,
@@ -596,6 +651,89 @@ export default function FreqModal({
       </TouchableOpacity>
     );
   };
+
+  /** ★★ THE EDIT FORM, drawn under the row being edited (`key`) — nothing for any other row. Every field and key takes a
+   *  slot in the pane's order (bmSlot / BmBtn), so the D-pad and a keyboard reach all of it. */
+  const editFormFor = (key: string) => {
+    if (!bmEdit || bmEdit.key !== key || !bmForm) return null;
+    const f = bmForm;
+    const field = (ref: React.RefObject<TextInput | null>, pad: ReturnType<typeof usePadField>, value: string,
+                   set: (v: string) => void, placeholder: string, opts: { numeric?: boolean; disabled?: boolean; label: string }) => {
+      const { on, ref: slotRef } = bmSlot(() => { if (!opts.disabled) pad.open(); });
+      return (
+        <TextInput ref={(r: any) => { (ref as any).current = r; slotRef(r); }}
+          style={[st.searchInput, { color: winC, fontFamily: ff, flex: 1, marginBottom: 6, opacity: opts.disabled ? 0.4 : 1,
+                                    borderColor: on ? focusC.ring : (pt.metal ? pt.window.border : bdrDim), borderWidth: on ? 2 : 1 },
+                  st.inputMetal]}
+          editable={!opts.disabled} value={value} onChangeText={set} placeholder={placeholder} placeholderTextColor={winDim}
+          autoCorrect={false} autoCapitalize="none" accessibilityLabel={opts.label}
+          keyboardType={opts.numeric ? 'numbers-and-punctuation' : 'default'} returnKeyType="done" onSubmitEditing={() => { void saveBmEdit(); }}
+          {...pad.fieldProps} />
+      );
+    };
+    return (
+      <View style={st.bmEditBox}>
+        <Text style={[st.bmSub, { color: plateDim, marginTop: 0 }]}>
+          {bmEdit.server ? 'EDIT THE RECEIVER’S BOOKMARK' : 'EDIT YOUR BOOKMARK'}
+        </Text>
+        {bmEdit.server && (
+          <Text style={[st.bmMsg, { color: plateDim }]}>
+            {bmEdit.heard
+              ? 'Found automatically. Saving makes it a bookmark saved by you: it stops expiring, and what the receiver hears will not rename it. Everyone who listens sees the change.'
+              : 'Saved on the receiver — everyone who listens sees the change.'}
+          </Text>
+        )}
+        {field(edNameRef, edNameField, f.name, (v) => patchBmForm({ name: v.slice(0, 60) }), 'Name', { label: 'Bookmark name' })}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {field(edFreqRef, edFreqField, f.freqText, (v) => patchBmForm({ freqText: v }), 'Frequency', { numeric: true, label: `Frequency in ${unit}` })}
+          <Text style={[st.bmSegText, { color: dimText, marginBottom: 6 }]}>{unit === 'mhz' ? 'MHz' : unit === 'khz' ? 'kHz' : 'Hz'}</Text>
+        </View>
+        <Text style={[st.bmHint, { color: plateDim }]}>MODE</Text>
+        <View style={st.bmModeWrap}>
+          {bookmarkModeChoices(f.mode).map((m) => (
+            <BmBtn key={m} style={[st.bmModeKey, { borderColor: f.mode === m ? bdrBrt : bdrDim }]} label={m.toUpperCase()}
+                   active={f.mode === m} pip onPress={() => patchBmForm({ mode: m })}>
+              <Text style={[st.bmSegText, { color: f.mode === m ? keyOn : dimText }]}>{m.toUpperCase()}</Text>
+            </BmBtn>
+          ))}
+        </View>
+        <BmBtn style={[st.bmSeg, { borderColor: f.defaultPassband ? bdrBrt : bdrDim, marginTop: 4, marginBottom: 6 }]}
+               label={f.defaultPassband ? 'PASSBAND: THE MODE’S DEFAULT' : 'PASSBAND: SET BELOW (HZ)'} active={f.defaultPassband} pip
+               onPress={() => patchBmForm({ defaultPassband: !f.defaultPassband })}>
+          <Text style={[st.bmSegText, { color: f.defaultPassband ? keyOn : dimText }]}>
+            {f.defaultPassband ? 'PASSBAND: THE MODE’S DEFAULT' : 'PASSBAND: SET BELOW (HZ)'}
+          </Text>
+        </BmBtn>
+        {!f.defaultPassband && (
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            {field(edLoRef, edLoField, f.lowText, (v) => patchBmForm({ lowText: v }), 'low, e.g. -5000', { numeric: true, label: 'Passband low edge, hertz' })}
+            {field(edHiRef, edHiField, f.highText, (v) => patchBmForm({ highText: v }), 'high, e.g. 5000', { numeric: true, label: 'Passband high edge, hertz' })}
+          </View>
+        )}
+        <BmBtn style={[st.bmBtn, { borderColor: bdrDim, marginBottom: 6 }]} label="USE WHAT I’M LISTENING TO"
+               onPress={() => patchBmForm(fillFromDial(f, { frequency: currentHz, mode: currentMode,
+                 bandwidthLow: currentPassband?.[0] ?? null, bandwidthHigh: currentPassband?.[1] ?? null }))}>
+          <Text style={[st.bmBtnText, { color: dimText }]}>USE WHAT I’M LISTENING TO</Text>
+        </BmBtn>
+        {!!bmEditMsg && <Text style={[st.bmMsg, { color: '#ff9a7a', fontStyle: 'normal' }]} accessibilityLiveRegion="polite">{bmEditMsg}</Text>}
+        <View style={st.bmSegRow}>
+          <BmBtn style={[st.bmSeg, { borderColor: bdrBrt }]} label={bmEditBusy ? 'SAVING…' : 'SAVE'} primary
+                 disabled={bmEditBusy} onPress={() => { void saveBmEdit(); }}>
+            <Text style={[st.bmSegText, { color: keyOn }]}>{bmEditBusy ? 'SAVING…' : 'SAVE'}</Text>
+          </BmBtn>
+          <BmBtn style={[st.bmSeg, { borderColor: bdrDim }]} label="CANCEL" onPress={closeBmEdit}>
+            <Text style={[st.bmSegText, { color: dimText }]}>CANCEL</Text>
+          </BmBtn>
+        </View>
+      </View>
+    );
+  };
+  /** The EDIT key on a row: small, beside ✕. */
+  const editKey = (onPress: () => void, name: string) => (
+    <BmBtn style={[st.bmEditKey, { borderColor: bdrDim }]} onPress={onPress} accessibilityLabel={`Edit ${name}`}>
+      <Text style={[st.bmSegText, { color: winDim }]}>EDIT</Text>
+    </BmBtn>
+  );
 
   // Read through a ref so the listener above never captures a stale `value`.
   const confirmRef = useRef(confirm); confirmRef.current = confirm;
@@ -1141,9 +1279,15 @@ export default function FreqModal({
                     const go = () => { tuneBm(b); onClose(); };
                     const { on, ref: slotRef } = bmSlot(go);
                     const tag = b.manual === undefined ? '' : (b.manual ? 'SAVED' : 'LEARNT');
+                    // ★★ V12 EDIT — the receiver's rows only while the admin password is held (onEditServerBookmark), and
+                    //    only rows the server marks as its own list (`manual` present = a VibeServer); never in pick mode.
+                    const mayEdit = !picking && !!onEditServerBookmark && b.manual !== undefined;
                     return (
-                      <TouchableOpacity key={`srv${i}`} ref={slotRef} activeOpacity={0.7}
-                        style={[st.searchRow, on && { backgroundColor: focusC.tint(0.16) }]}
+                      <React.Fragment key={`srv${i}`}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      {/* nav-registered: the row's slot is bmSlot(go) above */}
+                      <TouchableOpacity ref={slotRef} activeOpacity={0.7}
+                        style={[st.searchRow, { flex: 1 }, on && { backgroundColor: focusC.tint(0.16) }]}
                         onPress={go}>
                         <Text style={[st.searchFreq, { color: winC }]}>{fmtFreq(b.frequency)}</Text>
                         <Text style={[st.searchMode, { color: winDim }]}>{(b.mode ?? '—').toUpperCase()}</Text>
@@ -1153,6 +1297,10 @@ export default function FreqModal({
                         </Text>
                         {tag ? <Text style={[st.searchMode, { color: winDim }]}>{tag}</Text> : null}
                       </TouchableOpacity>
+                      {mayEdit && editKey(() => startBmEdit(true, b), b.name)}
+                      </View>
+                      {mayEdit && editFormFor(srvKey(b))}
+                      </React.Fragment>
                     );
                   })}
                   </PopupWindow>
@@ -1221,7 +1369,8 @@ export default function FreqModal({
               {userBookmarks.length === 0 && <Text style={[st.bmMsg, { color: plateDim }]}>No bookmarks yet — tune somewhere good and save it.</Text>}
               <PopupWindow metalStyle={userBookmarks.length ? st.listWin : st.listWinEmpty}>
               {userBookmarks.map((b: UserBookmark, i: number) => (
-                <View key={`${b.name}|${b.frequency}|${i}`} style={st.bmSaveRow}>
+                <React.Fragment key={`${b.name}|${b.frequency}|${i}`}>
+                <View style={st.bmSaveRow}>
                   <BmBtn style={{ flex: 1 }} activeOpacity={0.7} onPress={() => {
                     if (onPickShare) onPickShare(b);
                     else onSearchTune?.(b.frequency, b.mode, false, false, bookmarkPassband(b));
@@ -1243,8 +1392,12 @@ export default function FreqModal({
                       </Text>
                     </TouchableOpacity>
                   )}
+                  {/* ★★ V12 EDIT — your own bookmarks, always (not in pick mode: that is a chooser). */}
+                  {!picking && !!onEditBookmark && editKey(() => startBmEdit(false, b), b.name)}
                   {!picking && <TouchableOpacity hitSlop={8} onPress={() => onDeleteBookmark?.(b)}><Text style={[st.bmDel, { color: winDim }]}>✕</Text></TouchableOpacity>}
                 </View>
+                {!picking && !!onEditBookmark && editFormFor(ownKey(b))}
+                </React.Fragment>
               ))}
               </PopupWindow>
 
@@ -1373,6 +1526,10 @@ const makeSt = (pt: PopupTokens) => StyleSheet.create({
   bmSegText:    { fontSize: 11, fontWeight: '600' },
   bmBtn:        { borderWidth: 1, borderRadius: 4, paddingVertical: 9, alignItems: 'center', marginBottom: 8 },
   bmBtnText:    { fontSize: 12, fontWeight: '700' },
+  bmEditBox:    { borderWidth: 1, borderColor: pt.metal ? 'rgba(255,255,255,0.18)' : pt.ink.divider, borderRadius: 6, padding: 8, marginVertical: 6 },
+  bmEditKey:    { borderWidth: 1, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 4, marginLeft: 4 },
+  bmModeWrap:   { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginBottom: 4 },
+  bmModeKey:    { borderWidth: 1, borderRadius: 4, paddingHorizontal: 7, paddingVertical: 5, alignItems: 'center', minWidth: 48 },
   bmSaveRow:    { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: pt.metal ? 'rgba(255,255,255,0.10)' : pt.ink.divider },
   bmName2:      { fontSize: 13, fontWeight: '600' },
   bmFreq2:      { fontSize: 10, marginTop: 1 },

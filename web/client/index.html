@@ -1832,6 +1832,21 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 .bmHeadH { color: var(--unit); font-size: 10px; opacity: 0.75; margin-left: auto;
            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 560px) { .bmHeadH { display: none; } }
+/* ★★ THE EDIT FORM (V12, discussion #59) — inside the bookmarks panel, above the list it edits. */
+#bmEdit { border: 1px solid var(--btn-border); border-radius: 6px; padding: 8px 10px; margin: 6px 0; display: flex; flex-direction: column; gap: 6px; }
+#bmEdit[hidden] { display: none; }
+.bmEditT { color: var(--freq); font-size: 10px; letter-spacing: 1.5px; font-weight: 700; }
+.bmEditRow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11px; }
+.bmEditRow > span:first-child { min-width: 7.5em; color: var(--unit); }
+.bmEditRow input.btn, .bmEditRow select.btn { flex: 1 1 8em; min-width: 6em; text-align: left; }
+.bmEditRow input[type=checkbox] { width: 16px; height: 16px; }
+#bmEditBwRow { flex-wrap: nowrap; }
+#bmEditBwRow input.btn { flex: 1 1 0; min-width: 0; }
+@media (max-width: 560px) { .bmEditRow > span:first-child { min-width: 6em; } }
+#bmEditMsg { color: #ff9a7a; white-space: normal; }
+#bmEditMsg:empty { display: none; }
+#bmEditNote { white-space: normal; line-height: 1.35; }
+.sres .bmEditBtn { margin-left: 4px; }
 /* Everything from here is pushed to the right edge, so BOOKMARKS lands directly
    under the search box above it and the two rows line up. */
 .pushRight { margin-left: auto; }
@@ -5770,6 +5785,32 @@ select.btn { padding: 6px 8px; }
     <input type="file" id="bmFile" accept=".json,.yaml,.yml,.txt" hidden>
   </div>
   <div id="bmMsg" class="lbl"></div>
+  <!-- ★★ EDIT A BOOKMARK (V12, discussion #59): one form for yours and, for the owner, the receiver's. Filled by
+       openBookmarkEdit (main.ts); the rules are src/utils/bookmarkEdit.ts, shared with the app. -->
+  <form id="bmEdit" hidden autocomplete="off">
+    <div class="bmEditT" id="bmEditTitle">EDIT BOOKMARK</div>
+    <div class="lbl" id="bmEditNote" hidden></div>
+    <label class="bmEditRow"><span>Name</span>
+      <input id="bmEditName" class="btn" maxlength="60" spellcheck="false"></label>
+    <label class="bmEditRow"><span>Frequency</span>
+      <input id="bmEditFreq" class="btn" inputmode="decimal" spellcheck="false"><span class="lbl">MHz</span></label>
+    <label class="bmEditRow"><span>Mode</span>
+      <select id="bmEditMode" class="btn"></select></label>
+    <label class="bmEditRow"><input type="checkbox" id="bmEditDefBw"><span>Use the mode's default passband</span></label>
+    <div class="bmEditRow" id="bmEditBwRow">
+      <span>Passband (Hz)</span>
+      <input id="bmEditLo" class="btn" inputmode="numeric" placeholder="low, e.g. -5000" aria-label="Passband low edge, hertz">
+      <input id="bmEditHi" class="btn" inputmode="numeric" placeholder="high, e.g. 5000" aria-label="Passband high edge, hertz">
+    </div>
+    <div class="mrow" style="gap:6px">
+      <button type="button" class="btn" id="bmEditDial" title="Frequency, mode and passband from the dial; the name stays">USE WHAT I'M LISTENING TO</button>
+    </div>
+    <div class="mrow" style="gap:6px">
+      <button type="submit" class="btn" id="bmEditSave">SAVE</button>
+      <button type="button" class="btn" id="bmEditCancel">CANCEL</button>
+    </div>
+    <div id="bmEditMsg" class="lbl" role="alert"></div>
+  </form>
   <div id="bmList"></div>
 </div>
 

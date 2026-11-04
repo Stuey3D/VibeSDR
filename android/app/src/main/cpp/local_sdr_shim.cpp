@@ -78,6 +78,7 @@
 #include <cmath>
 #include "vibe_decfeed_resampler.h"
 #include "vibe_bm_names.h"
+#include "vibe_bm_edit.h"
 #include <climits>
 #include <condition_variable>
 #include <cstdint>
@@ -1956,7 +1957,9 @@ struct LearnedBm {
      *  The first half of the two-visit removal — see vibedab::reconcilePlan. Persisted as `"missedAt"` only when set. */
     long long   missedAt = 0;
 };
-enum { kNameProvisional = 0, kNameGuess = 1, kNameHeard = 2, kNameRadioDns = 3 };
+/* ★★ kNameOwner (V12, discussion #59): the owner EDITED this row — ranked above every learned source, so nothing heard
+ *  off the air or looked up renames it (see bmEdit). On the wire as "nameSrc":4; clients treat ≥ 2 as a settled name. */
+enum { kNameProvisional = 0, kNameGuess = 1, kNameHeard = 2, kNameRadioDns = 3, kNameOwner = 4 };
 /**
  * A station we've seen but don't trust yet.
  *
@@ -2593,6 +2596,56 @@ static void bmAddManual(double hz, const std::string& name, const std::string& m
                         bool hasBw = false, int bwLo = 0, int bwHi = 0) {
     std::lock_guard<std::mutex> lk(g_bmMtx);
     if (bmPutManualLocked(hz, name, mode, hasBw, bwLo, bwHi)) bmSaveLocked();
+}
+
+/** ★★ EDIT ONE ROW IN PLACE, OR MOVE IT (V12, GitHub discussion #59): `POST /bookmarks?was=<old Hz>[&was_sid=]&frequency=…`.
+ *  The old row goes and the new one is written under ONE lock and ONE save, so no reader — and no crash — ever sees the
+ *  bookmark twice or not at all. Validation (vibe_bm_edit.h) has already passed. Returns "" or the refusal in words, with
+ *  `status` set to the HTTP status to answer with.
+ *  ★★★ AN EDIT IS THE OWNER'S WORD. The row becomes manual (a learned RDS/DAB/scanned station the owner corrects stops
+ *     being learned: it never expires and "Clear learned" leaves it), and its name is marked kNameOwner, above every
+ *     learned source — bmLearn's refinement and the RadioDNS lookup both stop at a name ranked above theirs, and the DAB
+ *     learner and band scan never touch a manual row, so a later learn for the same frequency cannot clobber it.
+ *  ★ A DAB service that stays DAB keeps its service identity (sid/eid/ecc) and so its key; changing its mode drops it.
+ *  ★ Moving onto a frequency that already holds a DIFFERENT bookmark is refused, not merged: replacing someone's row by
+ *    retyping a frequency would lose it silently. */
+static std::string bmEdit(double wasHz, int wasSid, const vibe::bmedit::Fields& f, const std::string& name,
+                          const std::string& mode, int& status) {
+    std::lock_guard<std::mutex> lk(g_bmMtx);
+    const long long oldKey = bmKeyFor(wasHz, wasSid);
+    auto it = g_bookmarks.find(oldKey);
+    if (it == g_bookmarks.end()) {
+        status = 404;
+        return "That bookmark is no longer on the server (removed, or it expired) — reload the list.";
+    }
+    const LearnedBm old = it->second;
+    const bool keepDab = mode == "dab" && old.sid > 0;
+    const long long newKey = bmKeyFor(f.hz, keepDab ? old.sid : -1);
+    if (newKey != oldKey) {
+        const auto clash = g_bookmarks.find(newKey);
+        if (clash != g_bookmarks.end()) {
+            char mhz[32]; std::snprintf(mhz, sizeof mhz, "%.6g MHz", double(clash->second.hz ? clash->second.hz : newKey) / 1e6);
+            status = 409;
+            return std::string("There is already a bookmark at ") + mhz + " (\"" + clash->second.name
+                   + "\") — edit or delete that one instead.";
+        }
+    }
+    LearnedBm b;
+    b.name = name;
+    b.hz = (long long)llround(f.hz);
+    b.mode = mode;
+    if (f.hasBw) { b.hasBw = true; b.bwLo = f.lo; b.bwHi = f.hi; }
+    b.pi = -1;
+    if (keepDab) { b.sid = old.sid; b.eid = old.eid; b.ecc = old.ecc; }
+    b.lastHeard = (long long)time(nullptr);
+    b.manual = true;
+    b.nameSrc = kNameOwner;
+    g_bookmarks.erase(oldKey);
+    g_bmPending.erase(bmKey(wasHz));      // ★ a half-learned sighting of the old row must not re-create it
+    g_bookmarks[newKey] = b;
+    bmSaveLocked();
+    status = 200;
+    return "";
 }
 
 /** ★★ BULK IMPORT — a JSON array of {frequency, name, mode?, bandwidth_low?, bandwidth_high?}, written with ONE save
@@ -24902,6 +24955,34 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             if (!vsAdminHttpOk(sock, reqLine)) return;   // it already sent 401
 
             const bool remove = (reqLine.rfind("DELETE", 0) == 0);
+            /* ★★ EDIT (V12, discussion #59): `was=<old Hz>` turns the add into an edit of THAT row — validated first,
+             *  then moved/rewritten under one lock and one save (bmEdit). Refusals are 4xx with {"error":"…"} in words
+             *  the client shows as they are. Additive: a client that never sends `was` gets exactly the old add. */
+            const std::string wasQ = remove ? std::string() : queryParam(reqLine, "was");
+            if (!wasQ.empty()) {
+                auto replyJson = [&](int code, const std::string& body) {
+                    const char* st = code == 200 ? "200 OK" : code == 404 ? "404 Not Found"
+                                   : code == 409 ? "409 Conflict" : "400 Bad Request";
+                    sock->sendstr(std::string("HTTP/1.1 ") + st + "\r\nContent-Type: application/json\r\n"
+                                  "Access-Control-Allow-Origin: *\r\nCache-Control: no-store\r\nConnection: close\r\n"
+                                  "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                    sock->close();
+                };
+                const double wasHz = atof(wasQ.c_str());
+                const std::string wasSidQ = queryParam(reqLine, "was_sid");
+                const std::string eName = bmClean(urlDecode(queryParam(reqLine, "name")), 64);
+                std::string eMode;
+                for (char c : urlDecode(queryParam(reqLine, "mode"))) if (eMode.size() < 16) eMode += (char)std::tolower((unsigned char)c);
+                vibe::bmedit::Fields f;
+                std::string why = !(wasHz > 0) ? std::string("Which bookmark? `was` must be its current frequency in hertz.")
+                    : vibe::bmedit::check(queryParam(reqLine, "frequency"), eName, eMode, vsModeKnown(eMode),
+                                          queryParam(reqLine, "bandwidth_low"), queryParam(reqLine, "bandwidth_high"), f);
+                int code = 400;
+                if (why.empty()) why = bmEdit(wasHz, wasSidQ.empty() ? -1 : atoi(wasSidQ.c_str()), f, eName, eMode, code);
+                if (!why.empty()) { replyJson(code, "{\"error\":\"" + bmEsc(why) + "\"}"); return; }
+                replyJson(200, bmJson());
+                return;
+            }
             double hz = atof(queryParam(reqLine, "frequency").c_str());
             std::string name = urlDecode(queryParam(reqLine, "name"));
             if (hz <= 0) {

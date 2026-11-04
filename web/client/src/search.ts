@@ -22,6 +22,9 @@ import {
   loadUserBookmarks, saveUserBookmarks, exportBookmarksJSON,
   parseBookmarksAny, mergeBookmarks, type UserBookmark,
 } from '../../../src/services/userBookmarks';
+import {
+  serverEditQuery, serverEditError, serverLeftOldRow, applyPersonalEdit, type BookmarkEditValue,
+} from '../../../src/utils/bookmarkEdit';
 import { portableReady, masterBookmarks, saveBookmarks, portableWasReset } from './portable';
 import { BAND_PLAN } from '../../../src/constants/bandPlan';
 import type { SDRMode } from './spectrum';
@@ -190,6 +193,37 @@ export async function removeFromServer(frequency: number, sid?: number): Promise
     }
     return true;
   } catch { return false; }
+}
+
+/** ★★ EDIT one of the RECEIVER's bookmarks (V12, discussion #59) — POST /bookmarks?was=…, admin-gated like add/delete.
+ *  `old` is the row as listed (its frequency, and its sid for a DAB service). Answers the server's refusal in its own
+ *  words. ★ An OLDER server ignores `was` and ADDS the new row beside the old one; when its answer still holds the old
+ *  row after a move, the old one is deleted here, so the edit lands either way. */
+export async function editOnServer(old: { frequency: number; sid?: number }, v: BookmarkEditValue): Promise<{ ok: boolean; error?: string }> {
+  if (!bmHost) return { ok: false, error: 'Not connected to a receiver.' };
+  try {
+    const qs = await adminQs(authQs());
+    const sep = qs ? '&' : '?';
+    const r = await fetch(`${httpBase(bmHost)}/bookmarks${qs}${sep}${serverEditQuery(old, v)}`, { method: 'POST' });
+    const text = await r.text();
+    if (!r.ok) return { ok: false, error: serverEditError(r.status, text) };
+    let arr: any = null;
+    try { arr = JSON.parse(text); } catch { /* keep the list we have */ }
+    if (Array.isArray(arr)) {
+      serverBookmarks = safeList(arr).map((s: any) => ({ ...s, source: 'server' as const }));
+      if (serverLeftOldRow(arr, old, v)) await removeFromServer(old.frequency, old.sid);
+    }
+    return { ok: true };
+  } catch { return { ok: false, error: 'Could not reach the receiver.' }; }
+}
+
+/** ★ EDIT one of YOUR bookmarks (this browser's list), everything else on it kept — and the portable copy follows. */
+export async function editBookmark(old: { name: string; frequency: number }, v: BookmarkEditValue): Promise<void> {
+  const row = bookmarks.find((b) => b.name === old.name && b.frequency === old.frequency);
+  if (!row) return;
+  bookmarks = applyPersonalEdit(bookmarks, row, v);
+  await saveUserBookmarks(bookmarks);
+  void saveBookmarks(bookmarks);
 }
 
 /** Pull the server's station list. Absent/offline is fine — we degrade. */
