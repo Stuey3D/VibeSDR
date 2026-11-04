@@ -66,9 +66,14 @@ inline const Model* models(int& n) {
          {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x07, 0x08, 0x01, 0x00}, 10,
          {0x00, 0x20}, 2, 2, 1,
          {2500, 5000, 10000, 25000, 50000, 100000, 250000, 500000}, 8,
-         {{{0x00, 0x89}, "USB SEND", "MENU > SET > Connectors > USB SEND/Keying > USB SEND", true},
-          {{0x00, 0x90}, "USB Keying (CW)", "MENU > SET > Connectors > USB SEND/Keying > USB Keying (CW)", true},
-          {{0x00, 0x91}, "USB Keying (RTTY)", "MENU > SET > Connectors > USB SEND/Keying > USB Keying (RTTY)", true},
+         /* ★★★ 1A 05 0078 / 0079 / 0080 — the IC-7300 CI-V reference (Full Manual, 1A 05 table): "USB transmission
+          *     control line", "USB CW keying line", "USB RTTY (FSK) line", each 00 OFF / 01 DTR / 02 RTS. These were
+          *     0089/0090/0091 until 2026-11-04, which are the SCREEN SAVER, OPENING MESSAGE and its TEXT — the first
+          *     real IC-7300 (a tester's, Pi 4) was refused as "USB SEND is set (3)" (screen saver 60 min), "USB Keying
+          *     (CW) is DTR" (opening message on) and "(RTTY) is set (78)" ('N' of its text). Reads only, never writes. */
+         {{{0x00, 0x78}, "USB SEND", "MENU > SET > Connectors > USB SEND/Keying > USB SEND", true},
+          {{0x00, 0x79}, "USB Keying (CW)", "MENU > SET > Connectors > USB SEND/Keying > USB Keying (CW)", true},
+          {{0x00, 0x80}, "USB Keying (RTTY)", "MENU > SET > Connectors > USB SEND/Keying > USB Keying (RTTY)", true},
           {{0x00, 0x67}, "DATA MOD", "MENU > SET > Connectors > DATA MOD", false}}, 4,
          /*menuVerified=*/false,
          {{"ssb", {3000, 2400, 1800}}, {"cw", {1200, 500, 250}}, {"rtty", {2400, 500, 250}},

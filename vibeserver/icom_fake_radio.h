@@ -220,7 +220,12 @@ private:
         case 0x1A:
             if (d[0] == 0x05 && len == 3) {
                 const int item = civ::bcdBigToInt(d + 1, 2);
-                const int v = item == 89 ? usbSend : item == 90 ? keyCw : item == 91 ? keyRtty : item == 67 ? dataMod : -1;
+                /* ★★★ The IC-7300's real numbers (CI-V reference, 1A 05): 0078 USB SEND, 0079 USB Keying (CW), 0080 USB Keying
+                 *     (RTTY). 0089-0091 answer as a real radio does — screen saver 60 min, opening message ON, its text 'N…' —
+                 *     the exact values that refused the first real IC-7300 (2026-11-04) when the table read those by mistake,
+                 *     so a regression to the old numbers fails preflight here instead of on someone's radio. */
+                const int v = item == 78 ? usbSend : item == 79 ? keyCw : item == 80 ? keyRtty : item == 67 ? dataMod
+                            : item == 89 ? 3 : item == 90 ? 1 : item == 91 ? 78 : -1;
                 if (v < 0) ng(); else u({0x05, d[1], d[2], (uint8_t)v});
             } else if (d[0] == 0x06) { if (len == 1) u({0x06, dataOn, dataOn ? fil : (uint8_t)0}); else { dataOn = d[1]; ok(); } }
             else if (d[0] == 0x03) { if (len == 1) u({0x03, 0x30}); else ok(); }
