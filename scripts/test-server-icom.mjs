@@ -110,6 +110,11 @@ try {
   const vj = await getJson(port, '/vibeserver.json');
   ok(JSON.stringify(vj.tunable) === '[[30000,74800000]]', `/vibeserver.json: tunable is the IC-7300's receive range (${JSON.stringify(vj.tunable)})`);
   ok(vj.dab === false, 'and DAB is not offered');
+  // ★★ V12 what one demodulated audio channel cannot do is not offered (vibe_icom_decode.h)
+  ok(vj.skim === false, 'the CW / PSK SKIMMER is not offered (skim:false — ONE SIGNAL only)');
+  ok(Array.isArray(vj.modes) && !vj.modes.includes('drm') && vj.modes.includes('ft8') && vj.modes.includes('rtty'),
+     `DRM is not offered (the 7300's widest SSB filter is 3.6 kHz); FT8 and RTTY are (${(vj.modes || []).join(',')})`);
+  ok(!('spotsBand' in vj), 'nor Band spots (an IQ slice)');
 
   const sid = 'icom0001-aaaa', sid2 = 'icom0002-bbbb';
   const a = ws(port, `/ws/user-spectrum?user_session_id=${sid}&bins=512`);
@@ -369,6 +374,108 @@ await phase(['--off'], ['--users', '2', '--icom-power-on'], async (pt, st) => {
       srv2.kill('SIGTERM'); await sleep(400);
       try { fake2.stdin.write('quit\n'); } catch {}
       fake2.kill('SIGTERM');
+    }
+  }
+}
+// ── ★★★ V12 PHASE 3: A DECODER ON AN ICOM (vibe_icom_decode.h). The owner's radio is in USB FIL2 on 14.074; FT8 off the
+//    air (Stuart's library, 2026-10-25 20:44, 20 m) is the "radio's USB audio", cut to start on a slot boundary and
+//    started on one. The listener tuned the dial and presses DIGITAL SPOTS, as on an SDR: the radio goes to FIL1 (the
+//    widest), the DIAL STAYS, the audio stays audible, the known calls are decoded, and stopping puts FIL2 back. Then
+//    RTTY pressed with the radio in CW: USB, the radio moved 1000 Hz below what the listener sees, the readout unchanged
+//    — and CW and the dial come back on stop. A second listener without tune rights (owner lock) cannot start a decoder
+//    that changes the mode; the SKIMMER is refused. Skipped — and said so — without ffmpeg or the library.
+{
+  const src = path.join(os.homedir(), 'VibeSDR-test-audio', 'ft8', 'ft8_20m_14074000_20261025T2044.wav');
+  const wav = path.join(dir, 'ft8_48k.wav');
+  let haveWav = false;
+  if (fs.existsSync(src)) {
+    // start_utc 1792961117.188 (its .log): 2.188 s into a slot — cut 12.812 s so the file starts ON a boundary
+    try { (await import('node:child_process')).execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-ss', '12.812', '-t', '75', '-i', src,
+      '-ar', '48000', '-ac', '1', '-c:a', 'pcm_s16le', wav]); haveWav = fs.existsSync(wav); } catch { haveWav = false; }
+  }
+  if (!haveWav) {
+    console.log(`   not run — the Icom decoder phase needs ffmpeg and ${src}`);
+  } else {
+    console.log('── a decoder on the Icom: the radio set for it, the dial kept, put back after ──');
+    const fake3 = spawn(FAKE, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let out3 = ''; fake3.stdout.on('data', (d) => { out3 += d.toString(); });
+    await until(() => /FAKE_ICOM_PTY (\S+)/.test(out3), 3000);
+    const pty3 = (out3.match(/FAKE_ICOM_PTY (\S+)/) || [])[1];
+    const stats3 = async () => {
+      const n0 = out3.length; fake3.stdin.write('stats\n');
+      await until(() => out3.slice(n0).includes('FAKE_ICOM_STATS'), 2000);
+      const m = out3.slice(n0).match(/FAKE_ICOM_STATS (.*)/);
+      const o = {}; if (m) for (const kv of m[1].trim().split(' ')) { const [k, v] = kv.split('='); o[k] = Number(v); }
+      return o;
+    };
+    fake3.stdin.write('mode 1 0 2\n');   // ★ the owner's front panel: USB, DATA off, FIL2
+    ok(await until(async () => { const s = await stats3(); return s.mode === 1 && s.data === 0 && s.fil === 2; }, 2000), 'the radio starts in USB FIL2 on 14.074');
+    const port3 = await freePort();
+    const log3Path = path.join(dir, 'server3.log');
+    // ★ The wav source starts at open (~0.3 s after spawn): spawn just before a 15 s boundary so the file's slot is the clock's.
+    const lead = 400, wait = (15000 - (Date.now() % 15000) - lead + 15000) % 15000;
+    await sleep(wait);
+    const srv3 = spawn(BIN, ['--icom', pty3, '--icom-tty-ok', '--icom-audio', `wav:${wav}`, '--port', String(port3), '--users', '4', '--idle-grace', '0'],
+                       { env, stdio: ['ignore', fs.openSync(log3Path, 'w'), fs.openSync(log3Path, 'a')] });
+    const read3 = () => fs.readFileSync(log3Path, 'utf8');
+    try {
+      ok(await until(() => getJson(port3, '/vibeserver.json').then((j) => !!j), 8000), 'server up, the radio\'s audio from the FT8 recording');
+      const sidA = 'icom0004-dddd', sidB = 'icom0005-eeee';
+      const spA = ws(port3, `/ws/user-spectrum?user_session_id=${sidA}&bins=256`);
+      const auA = ws(port3, `/ws/audio?user_session_id=${sidA}`);
+      const dxA = ws(port3, `/ws/dxcluster?user_session_id=${sidA}`);
+      const spB = ws(port3, `/ws/user-spectrum?user_session_id=${sidB}&bins=256`);
+      const dxB = ws(port3, `/ws/dxcluster?user_session_id=${sidB}`);
+      await until(() => spA.last('config') && spB.last('config'), 4000);
+      // ── a listener without tune rights (the owner lock, on by default) ──
+      dxB.send({ type: 'subscribe_digital_spots' });
+      ok(await until(() => dxB.last('decoder_refused')?.reason === 'icom', 3000),
+         `★ a listener without tune rights cannot start spots that change the radio's filter: "${dxB.last('decoder_refused')?.message || ''}"`);
+      ok((await stats3()).fil === 2, 'and the radio is untouched (FIL2)');
+      dxB.send({ type: 'audio_extension_attach', extension_name: 'cwskim', width: 48000 });
+      ok(await until(() => dxB.last('decoder_refused')?.ext === 'cwskim', 3000), `the CW SKIMMER is refused on an Icom: "${dxB.last('decoder_refused')?.message || ''}"`);
+      // ── the owner (signed in) presses DIGITAL SPOTS ──
+      spA.send({ type: 'admin_unlock', nonce: '', token: '' });
+      ok(await until(() => spA.txt.some((m) => m.t.includes('"type":"admin","ok":true')), 2000), 'the owner signs in');
+      const au0 = auA.binBytes;
+      dxA.send({ type: 'subscribe_digital_spots' });
+      ok(await until(async () => { const s = await stats3(); return s.fil === 1 && s.mode === 1; }, 3000), '★ spots started: the radio goes to FIL1 (the widest), still USB');
+      let s3 = await stats3();
+      ok(s3.freq === 14074000 && s3.data === 0, `★ the dial is NOT moved (${s3.freq}), and DATA is not switched on`);
+      const spots = () => dxA.txt.map((m) => { try { const j = JSON.parse(m.t); return j.type === 'digital_spot' ? j.data : null; } catch { return null; } })
+        .filter((d) => d && d.mode === 'FT8');
+      ok(await until(() => new Set(spots().map((d) => d.callsign)).size >= 2, 50000),
+         `★ FT8 decoded from the radio's audio: ${[...new Set(spots().map((d) => d.callsign))].slice(0, 6).join(' ')}`);
+      ok(spots().length > 0 && spots().every((d) => d.frequency >= 14074000 && d.frequency <= 14077200 && d.band === '20m'),
+         `each spot filed on the radio's dial + its audio offset (${spots().slice(0, 3).map((d) => d.frequency).join(', ')})`);
+      ok(auA.binBytes - au0 > 20000, `and the listener still HEARS the radio while it decodes (${auA.binBytes - au0} audio bytes), as on an SDR`);
+      dxA.send({ type: 'unsubscribe_digital_spots' });
+      ok(await until(async () => (await stats3()).fil === 2, 3000), '★ spots stopped: FIL2 is back');
+      s3 = await stats3();
+      ok(s3.mode === 1 && s3.data === 0 && s3.freq === 14074000, 'USB, DATA off, 14.074 — as the owner left it');
+      // ── RTTY pressed with the radio in CW: the dial means the SIGNAL there ──
+      fake3.stdin.write('mode 3 0 2\n');   // CW FIL2, on 14.074
+      ok(await until(() => spA.last('config')?.radioMode === 'cw', 3000), 'the owner puts the radio in CW FIL2');
+      dxA.send({ type: 'audio_extension_attach', extension_name: 'fsk', center_frequency: 1000, shift: 170, baud_rate: 45.45 });
+      ok(await until(async () => { const s = await stats3(); return s.mode === 1 && s.fil === 1 && s.freq === 14073000; }, 3000),
+         '★ RTTY from CW: USB FIL1, the radio 1000 Hz below the dial so the signal tuned comes out at the decoder\'s 1000 Hz');
+      ok(await until(() => spA.last('config')?.vfo === 14074000 && spA.last('icom')?.freq === 14074000, 3000),
+         `★ and the readout is what the listener tuned: config vfo ${spA.last('config')?.vfo}, status ${spA.last('icom')?.freq}`);
+      spA.send({ type: 'tune', frequency: 14075000 });
+      ok(await until(async () => (await stats3()).freq === 14074000, 3000), 'a tune to 14.075 while it runs moves the radio to 14.074 (the pitch kept)');
+      ok(await until(() => spA.last('config')?.vfo === 14075000, 3000), 'and the readout says 14.075');
+      dxA.send({ type: 'audio_extension_detach' });
+      ok(await until(async () => { const s = await stats3(); return s.mode === 3 && s.fil === 2 && s.freq === 14075000; }, 3000),
+         '★ RTTY stopped: CW FIL2 back, the radio on the 14.075 the listener sees');
+      ok(await until(() => spA.last('config')?.vfo === 14075000 && spA.last('config')?.radioMode === 'cw', 3000), 'and the readout did not jump');
+      ok(/icom decoder: spots — the radio to usb FIL1/.test(read3()) && /icom decoder: fsk stopped — the radio back to cw FIL2/.test(read3()), 'the server log says what it set and what it put back');
+      const st3 = await stats3();
+      ok(st3.violations === 0, `★★★ the fake radio saw ZERO disallowed frames (${st3.frames} frames)`);
+      for (const s of [spA, auA, dxA, spB, dxB]) s.close();
+    } finally {
+      srv3.kill('SIGTERM'); await sleep(400);
+      try { fake3.stdin.write('quit\n'); } catch {}
+      fake3.kill('SIGTERM');
     }
   }
 }

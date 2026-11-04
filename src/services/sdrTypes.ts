@@ -448,6 +448,8 @@ export interface ServerOccupancy {
   /** ★ V12 CW (docs/v12/CW-SKIMMER.md): this server runs its own CW decoder and skimmer ('cw' / 'cwskim'). False or
    *  absent (an older server, or the owner switched CW off) = no CW key — a decoder the server lacks is a dead control. */
   cw?: boolean;
+  /** ★ V12 false = no SKIMMER view for CW / PSK (an Icom: one demodulated audio channel, no IQ). Absent = offered. */
+  skim?: boolean;
   /** ★ V12 PSK31/63, JTTY, DSC (docs/v12/PSK.md, JTTY.md, DSC.md): this server's own decoders. False or absent = no key. */
   psk?: boolean;
   jtty?: boolean;
@@ -550,6 +552,7 @@ export async function fetchOccupancy(baseUrl: string, timeoutMs = 2500):
       dab:       j.dab === true,
       adsb:      parseAdsbCapability(j),
       cw:        j.cw === true,
+      skim:      j.skim !== false,
       psk:       j.psk === true,
       jtty:      j.jtty === true,
       dsc:       j.dsc === true,

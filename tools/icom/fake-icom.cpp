@@ -6,7 +6,7 @@
 //       Opens a pty, prints "FAKE_ICOM_PTY <path>" and serves CI-V on it (icom_fake_radio.h): answers
 //       reads, accepts the allowed writes, streams a synthetic 475-point scope paced at the baud rate.
 //       Point VibeServer at it:  vibeserver --icom <path> --icom-tty-ok --icom-audio tone
-//       Commands on stdin (one per line): "knob <hz>"  "tx 1" / "tx 0"  "scopemode 0|1" (CENT/FIX key)  "modekey <06 byte>"  "stats"  "quit".
+//       Commands on stdin (one per line): "knob <hz>"  "mode <06 byte> <data 0/1> <fil>"  "tx 1" / "tx 0"  "scopemode 0|1" (CENT/FIX key)  "modekey <06 byte>"  "power 0|1"  "stats"  "quit".
 //       ★ Every frame it receives is judged by the allow-list AND a crude transmit detector; each
 //         violation prints "FAKE_ICOM_VIOLATION <hex>" and is counted in "FAKE_ICOM_STATS".
 //
@@ -93,10 +93,11 @@ int main(int argc, char** argv) {
             else if (std::sscanf(line, "modekey %d", &v) == 1) r.pressMode((uint8_t)v);
             else if (std::sscanf(line, "scopemode %d", &v) == 1) r.scopeModeByHand((uint8_t)v);
             else if (std::sscanf(line, "power %d", &v) == 1) { if (v) r.switchOnByHand(); else r.switchOffByHand(); }
+            else if (unsigned mm = 0, dd = 0, ff = 0; std::sscanf(line, "mode %u %u %u", &mm, &dd, &ff) == 3) r.turnMode((uint8_t)mm, (uint8_t)dd, (uint8_t)ff);
             else if (!std::strncmp(line, "quit", 4)) break;
-            std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u span=%u tx=%d powered=%d wakes=%llu offs=%llu att=%u preamp=%u agc=%u rf=%d\n",
+            std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u fil=%u span=%u tx=%d powered=%d wakes=%llu offs=%llu att=%u preamp=%u agc=%u rf=%d\n",
                         (unsigned long long)r.framesIn.load(), (unsigned long long)r.violations.load(),
-                        (unsigned long long)r.sweepsOut.load(), (unsigned long long)r.freq, r.mode, r.dataOn, r.spanHalf * 2, (int)r.tx.load(),
+                        (unsigned long long)r.sweepsOut.load(), (unsigned long long)r.freq, r.mode, r.dataOn, r.fil, r.spanHalf * 2, (int)r.tx.load(),
                         (int)r.powered.load(), (unsigned long long)r.wakesSeen.load(), (unsigned long long)r.powerOffs.load(),
                         r.att, r.preamp, r.agc, r.rf);
             std::fflush(stdout);

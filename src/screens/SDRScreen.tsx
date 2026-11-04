@@ -865,6 +865,7 @@ export default function SDRScreen({ route, navigation }: Props) {
     let dead = false;
     setDabCapable(false);
     setCwCapable(false);
+    setSkimCapable(true);
     setPskCapable(false); setJttyCapable(false); setDscCapable(false); setSitoraCapable(false); setSameCapable(false); setSelcalCapable(false); setTmModes({}); setHellCapable(false); setPagingModes([]); setRadioTunable([]);
     setSpotModesSrv(undefined); setSpotsBandCap(undefined); setDrmCapable(false); setAmSyncCap([]); setAutoBwModes([]); setBwAutoState(null);
     setAdsbCap(undefined);
@@ -885,6 +886,7 @@ export default function SDRScreen({ route, navigation }: Props) {
         const dw = o?.decWhy ?? {};
         setDecWhy(dw);
         setCwCapable(o?.cw === true || !!dw.cw);
+        setSkimCapable(o?.skim !== false);   // ★ V12 an Icom: CW / PSK are ONE SIGNAL only
         setPskCapable(o?.psk === true || !!dw.psk); setJttyCapable(o?.jtty === true || !!dw.jtty); setDscCapable(o?.dsc === true || !!dw.dsc); setSitoraCapable(o?.sitora === true); setSameCapable(o?.same === true || !!dw.same); setSelcalCapable(o?.selcal === true || !!dw.selcal);
         setHellCapable(o?.hell === true);   // ★ V12 FELD HELL — drawn by this server
         // ★ V12 MFSK / OLIVIA / THOR: a family is offered where its flag is true; its choices are the server's list
@@ -2576,6 +2578,8 @@ export default function SDRScreen({ route, navigation }: Props) {
   const [dabCapable, setDabCapable] = useState(false);  // the SERVER decides — /vibeserver.json
   /** ★ V12 CW: this radio's server runs its own CW decoder + skimmer (`"cw": true`, per radio). No word = no CW key. */
   const [cwCapable, setCwCapable] = useState(false);
+  /** ★ V12 false = this radio has no SKIMMER view (an Icom: `"skim": false`) — CW / PSK are ONE SIGNAL only. */
+  const [skimCapable, setSkimCapable] = useState(true);
   const [pskCapable, setPskCapable] = useState(false);
   const [jttyCapable, setJttyCapable] = useState(false);
   const [dscCapable, setDscCapable] = useState(false);
@@ -6532,6 +6536,13 @@ export default function SDRScreen({ route, navigation }: Props) {
     AsyncStorage.setItem('lsv_psk_view', skim ? 'skim' : 'one').catch(() => {});
     if (activeDecRef.current === 'psk') openDecoder('psk');
   }, [openDecoder]);
+  /* ★★ V12 no SKIMMER on this radio (an Icom): a remembered SKIMMER view is used as ONE SIGNAL here — not saved, so the
+   *  listener's own choice comes back on the next SDR. */
+  useEffect(() => {
+    if (skimCapable) return;
+    if (cwSkimRef.current) { cwSkimRef.current = false; setCwSkim(false); }
+    if (pskSkimRef.current) { pskSkimRef.current = false; setPskSkim(false); }
+  }, [skimCapable, cwSkim, pskSkim]);
   const onPskWidth = useCallback((w: number) => {
     const v = pskWidthOf(w);
     pskWidthRef.current = v; setPskWidth(v);
@@ -15339,6 +15350,7 @@ export default function SDRScreen({ route, navigation }: Props) {
             setModeSelOpen(false);
             toggleNdb();
           },
+          skimAvail: skimCapable,
           cwSkim, cwWidth, onCwView, onCwWidth,
           /* ★★ V12 PSK31/63, JTTY, DSC — the server's own decoders, each only where its vibeserver.json says so. The JTTY
            *  bands and DSC channels drawn are only those this radio can be tuned to (the web's initJttyDials /

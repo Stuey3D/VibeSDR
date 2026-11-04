@@ -911,6 +911,17 @@ async function loadAudioPolicy(httpBase: string) {
     pskCap = j.psk === true || !!decWhy.psk;     // ★ PSK31/63 (V12): this server's own decoder and skimmer
     { const b = document.querySelector('#decodersPanel [data-dec="psk"]') as HTMLElement | null;
       if (b) b.hidden = !pskCap || blockedModes.has('psk'); }
+    /* ★★ V12 `skim`:false (an Icom — one demodulated audio channel, no IQ): the CW / PSK keys are ONE SIGNAL only, so the
+     *  VIEW row is not drawn (AGENTS.md) and a SKIMMER left selected goes back to ONE SIGNAL. Absent = as ever. */
+    {
+      const skimOk = j.skim !== false;
+      for (const [seg, v] of [['cwView', 'cwview'], ['pskView', 'pskview']] as const) {
+        const row = document.getElementById(seg)?.closest('.mrow') as HTMLElement | null;
+        if (row) row.hidden = !skimOk;
+        if (!skimOk && ((seg === 'cwView' && cwSkim) || (seg === 'pskView' && pskSkim)))
+          (document.querySelector(`#${seg} [data-${v}="one"]`) as HTMLButtonElement | null)?.click();
+      }
+    }
     dscCap = j.dsc === true || !!decWhy.dsc;     // ★ DSC (V12): maritime Digital Selective Calling, decoded by this server
     { const b = document.querySelector('#decodersPanel [data-dec="dsc"]') as HTMLElement | null;
       if (b) b.hidden = !dscCap || blockedModes.has('dsc'); }

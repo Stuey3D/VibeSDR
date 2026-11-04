@@ -207,6 +207,7 @@ static void vsSendSetupPage(const std::shared_ptr<net::Socket>& sock) {
 #include "vibe_tune_etiquette.h"    // ★★ "Ask before tuning": who may move a shared dial (docs/TUNING-ETIQUETTE.md)
 #include "vibe_watch.h"            // ★★ V12 VFO A/B: a listener's watch channels (docs/v12/VFO-AB.md)
 #include "vibe_vfo_dc.h"           // ★★ V12: a FREE VFO's DC spike moved out of its way (vfoDcPlace)
+#include "vibe_icom_decode.h"      // ★★ V12: the mode / filter an Icom needs for a decoder to hear its signal
 #if VIBE_HAVE_ICOM
 #include "icom_source.h"            // ★★★ an Icom transceiver as a RECEIVER (docs/ICOM-SUPPORT-PLAN.md)
 #endif
@@ -6760,6 +6761,21 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     std::atomic<double> icomSpanHz{0.0};   ///< the scope's span — what displaySpan() is on an Icom
     bool icomTuneLock = false;   // ★ tuning follows the ordinary dial rules unless the owner locks it
     std::string icomRadioMode;             ///< the radio's own mode name ("usbd", "rtty") — under modeMtx
+    /* ★★ V12 A DECODER'S HOLD ON THE RADIO (vibe_icom_decode.h): what the radio was before a decoder changed its mode /
+     *  filter (and, from CW / RTTY, moved it by the decoder's pitch), so stopping the decoder puts it all back. Under
+     *  icomDecMtx. `icomDecOff` is an atomic: every reader of the dial adds it (shown = radio + offset). */
+    struct IcomDecHold {
+        bool on = false;
+        std::string ext;          ///< the decoder holding it ("fsk", "spots", …)
+        std::string savedMode;    ///< the radio's mode before the first decoder
+        int savedFil = 0;
+        std::string setMode;      ///< the mode we put it in (a different one reported later = somebody changed it)
+        bool seen = false;        ///< the radio has reported setMode at least once
+        double at = 0;            ///< when it was set (nowSecs) — the housekeeping tick leaves a fresh one alone
+    };
+    std::mutex icomDecMtx;
+    IcomDecHold icomDec;
+    std::atomic<long> icomDecOff{0};
     std::vector<stereo_t> icomPack;        ///< PCM → onAudio(); grows once, never per block
     std::vector<uint8_t> icomFrame;        ///< one SPEC frame; grows once per wire width
     double icomLastCentre = 0, icomLastSpan = 0, icomStatusAt = 0;
@@ -18030,7 +18046,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::snprintf(b, sizeof b,
             "{\"type\":\"icom\",\"freq\":%llu,\"mode\":\"%s\",\"fil\":%d,\"sRaw\":%d,\"sDbOverS9\":%.1f,"
             "\"tx\":%s,\"link\":%s,\"fps\":%.1f,\"span\":%u,\"scopeMode\":\"%s\"}",
-            (unsigned long long)st.freq, st.mode.c_str(), st.fil, st.sRaw, sDb,
+            (unsigned long long)(st.freq ? (long long)st.freq + icomDecOff.load() : 0), st.mode.c_str(), st.fil, st.sRaw, sDb,
             st.tx ? "true" : "false", st.linkUp ? "true" : "false", st.sweepsPerSec,
             (unsigned)(st.spanHalfHz * 2), st.scopeMode ? "fixed" : "centre");
         return b;
@@ -18040,7 +18056,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!icom) return;
         const icom::RadioState st = icom->state();
         if (what & (icom::IcomSource::kFreq | icom::IcomSource::kMode)) {
-            if (st.freq) audioFreq.store((double)st.freq);   // ★ the decoders' dial (FT8 spots = dial + offset)
+            if (what & icom::IcomSource::kMode) icomDecSawMode(st.mode);
+            // ★ The dial the listener sees: the radio's, plus a decoder's pitch move (icomDecOff, 0 almost always).
+            if (st.freq) audioFreq.store((double)st.freq + (double)icomDecOff.load());
             {
                 std::lock_guard<std::recursive_mutex> lk(modeMtx);
                 icomRadioMode = st.mode;
@@ -18107,6 +18125,118 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         }
         onAudio(icomPack.data(), frames, 1);
     }
+    /* ★★ V12 DECODERS ON AN ICOM (vibe_icom_decode.h). The listener tunes the signal and presses the decoder, as on an SDR;
+     *  the decoder reads the radio's audio (feedShared), which they go on hearing. All the server adds is the radio's
+     *  mode / filter — and from CW / RTTY a move by the decoder's pitch — so that audio holds the signal, then puts it
+     *  back when the decoder stops. Only the non-TX CI-V writes every listener's tune already uses (04/06, 05, 1A 06). */
+    /** The plan's mode in words for a refusal ("USB, FIL1"). */
+    static std::string icomDecWords(const vibeicomdec::Plan& pl, const std::string& base) {
+        std::string m = pl.mode.empty() ? base : pl.mode;
+        for (auto& c : m) c = char(std::toupper((unsigned char)c));
+        if (m.size() == 4 && m[3] == 'D') m = m.substr(0, 3) + "-D";
+        return m + (pl.fil > 0 ? ", FIL" + std::to_string(pl.fil) : std::string());
+    }
+    /** ★ Put the radio back as the first decoder found it — unless somebody has changed its mode since (then the radio's
+     *  new mode is THEIRS, and only the hold is dropped). Under icomDecMtx. */
+    void icomDecRestoreLocked() {
+        if (!icomDec.on) return;
+        const icom::RadioState st = icom->state();
+        const long off = icomDecOff.load();
+        std::string why;
+        if (st.mode == icomDec.setMode || !icomDec.seen) {
+            if (!icom->setMode(icomDec.savedMode, icomDec.savedFil, why)) LOGI("icom decoder: restore refused — %s", why.c_str());
+            if (off && st.freq && !icom->tune((uint64_t)((long long)st.freq + off), why)) LOGI("icom decoder: restore tune refused — %s", why.c_str());
+            LOGI("icom decoder: %s stopped — the radio back to %s FIL%d", icomDec.ext.c_str(), icomDec.savedMode.c_str(), icomDec.savedFil);
+        } else LOGI("icom decoder: %s stopped — the mode was changed meanwhile (%s), left as it is", icomDec.ext.c_str(), st.mode.c_str());
+        icomDecOff.store(0);
+        icomDec = IcomDecHold{};
+    }
+    /** ★ Set the radio for `ext` from the state the first decoder found (base). Under icomDecMtx. */
+    void icomDecApplyLocked(const std::string& ext, const vibeicomdec::Plan& pl, const std::string& baseMode, int baseFil) {
+        const icom::RadioState st = icom->state();
+        const long oldOff = icomDecOff.load();
+        const uint64_t shown = st.freq ? (uint64_t)((long long)st.freq + oldOff) : 0;
+        if (!pl.changes()) { icomDecRestoreLocked(); return; }
+        std::string why;
+        const std::string want = pl.mode.empty() ? baseMode : pl.mode;
+        const int fil = pl.fil > 0 ? pl.fil : baseFil;
+        if (!icom->setMode(want, fil, why)) { LOGI("icom decoder: %s — mode refused: %s", ext.c_str(), why.c_str()); return; }
+        if (pl.offsetHz != oldOff && shown) {
+            icomDecOff.store(pl.offsetHz);
+            if (!icom->tune((uint64_t)((long long)shown - pl.offsetHz), why)) LOGI("icom decoder: tune refused — %s", why.c_str());
+        }
+        if (!icomDec.on) { icomDec.savedMode = baseMode; icomDec.savedFil = baseFil; }
+        icomDec.on = true; icomDec.ext = ext; icomDec.setMode = want; icomDec.seen = st.mode == want; icomDec.at = nowSecs();
+        LOGI("icom decoder: %s — the radio to %s FIL%d%s (was %s FIL%d)", ext.c_str(), want.c_str(), fil,
+             pl.offsetHz ? (" moved " + std::to_string(-pl.offsetHz) + " Hz, the readout unchanged").c_str() : "", baseMode.c_str(), baseFil);
+    }
+    /** ★ May the listener behind DECODER socket `sock` change this radio's mode? The owner lock's rule (icomControl). The
+     *  admin sign-in lives on the listener's SPECTRUM socket, so their session finds it there. */
+    bool icomDecMayTune(const std::shared_ptr<net::Socket>& sock) {
+        if (!icomOwnerLock) return true;
+        if (!sock) return false;
+        if (icomAdmin(sock)) return true;
+        std::string sess;
+        { std::lock_guard<std::mutex> lk(clientMtx); auto it = dxSockSession.find(sock.get()); if (it != dxSockSession.end()) sess = it->second; }
+        if (sess.empty()) return false;
+        for (auto& c : allSpecClients()) {
+            if (!c) continue;
+            std::string s2;
+            { std::lock_guard<std::mutex> lk(clientMtx); auto it = sockSession.find(c.get()); if (it != sockSession.end()) s2 = it->second; }
+            if (s2 == sess && icomAdmin(c)) return true;
+        }
+        return false;
+    }
+    /** ★★ A decoder `ext` is starting from `sock` with attach message `msg`. "" = go (the radio set as it needs), else the
+     *  words of a refusal: not possible on one audio channel, or a change of mode under the owner lock (starting a
+     *  decoder that changes the mode is a mode change — the same permission as the mode keys). */
+    std::string icomDecStart(const std::shared_ptr<net::Socket>& sock, const std::string& ext, const std::string& msg) {
+        if (!useIcom()) return {};
+        double cf = 0;
+        if (!jsonNum(msg, "center_frequency", cf) && ext == "psk") jsonNum(msg, "centre", cf);
+        const bool mayTune = icomDecMayTune(sock);   // ★ before the hold's lock (it takes clientMtx)
+        std::lock_guard<std::mutex> lk(icomDecMtx);
+        const icom::RadioState st = icom->state();
+        const std::string baseMode = icomDec.on ? icomDec.savedMode : st.mode;
+        const int baseFil = icomDec.on ? icomDec.savedFil : st.fil;
+        const vibeicomdec::Plan pl = vibeicomdec::plan(ext, baseMode, baseFil, vibeicomdec::audioCentreFor(ext, cf));
+        if (!pl.ok) return "Not on this radio \xe2\x80\x94 " + pl.why;
+        if (icomDec.on && icomDec.ext == ext) return {};      // the same decoder again: a mirror, a reconnect
+        if (!pl.changes() && !icomDec.on) return {};          // the radio already delivers it: nothing to change
+        if (pl.changes() && !mayTune)
+            return "This decoder needs the radio in " + icomDecWords(pl, baseMode)
+                 + " \xe2\x80\x94 the owner has set this radio so that listeners follow it, so only the owner can change that";
+        icomDecApplyLocked(ext, pl, baseMode, baseFil);
+        return {};
+    }
+    /** ★ Is the hold still somebody's? Run after a detach / unsubscribe and every housekeeping tick (a socket that just
+     *  went, a decoder reaped): no decoder → the radio back; another one still running → set for that one instead. */
+    void icomDecReconcile(bool tick = false) {
+        if (!useIcom()) return;
+        std::string text, spots;
+        if (auto h = decoders_.shared()) { text = h->name(); if (h->spotsOn() && h->spotsScope() == "single") spots = "spots"; }
+        std::lock_guard<std::mutex> lk(icomDecMtx);
+        if (!icomDec.on) return;
+        if (tick && nowSecs() - icomDec.at < 3.0) return;   // ★ set a moment ago: its decoder is still starting
+        if ((!text.empty() && icomDec.ext == text) || (!spots.empty() && icomDec.ext == spots)) return;
+        const std::string next = !text.empty() ? text : spots;
+        if (next.empty()) { icomDecRestoreLocked(); return; }
+        const vibeicomdec::Plan pl = vibeicomdec::plan(next, icomDec.savedMode, icomDec.savedFil, vibeicomdec::audioCentreFor(next, 0));
+        icomDecApplyLocked(next, pl, icomDec.savedMode, icomDec.savedFil);
+    }
+    /** ★ The radio reported a mode: ours confirmed, or somebody else's (then the hold is theirs no longer). */
+    void icomDecSawMode(const std::string& m) {
+        std::lock_guard<std::mutex> lk(icomDecMtx);
+        if (!icomDec.on || m.empty()) return;
+        if (m == icomDec.setMode) { icomDec.seen = true; return; }
+        if (!icomDec.seen) return;
+        LOGI("icom decoder: the mode was changed to %s while %s ran — the decoder's hold dropped", m.c_str(), icomDec.ext.c_str());
+        icomDecOff.store(0);
+        icomDec = IcomDecHold{};
+    }
+#else
+    std::string icomDecStart(const std::shared_ptr<net::Socket>&, const std::string&, const std::string&) { return {}; }
+    void icomDecReconcile(bool = false) {}
 #endif
     /** ★★★ AN ICOM'S CONTROLS — every message that would move the radio, judged HERE and turned into
      *  allow-listed CI-V by IcomSource (never raw bytes from a client). Returns true when handled.
@@ -18229,7 +18359,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             }
             double hz = 0;
             if (type == "tune" && jsonNum(msg, "frequency", hz) && hz > 0) {
-                if (!icom->tune((uint64_t)llround(hz), why)) refuse(why);
+                // ★ shown = radio + a decoder's pitch move (icomDecOff): the listener tunes what they see.
+                if (!icom->tune((uint64_t)llround(hz - (double)icomDecOff.load()), why)) refuse(why);
                 else {
                     std::lock_guard<std::mutex> lk(clientMtx);
                     auto it = sockSession.find(sock.get());
@@ -27650,7 +27781,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             double hz = 0; std::string md;
             return watchBOf(session, hz, md) ? hz : audioFreq.load();
         };
-        else if (session.empty()) e.dialHz = [this] { return audioFreq.load(); };
+        // ★ An Icom moved by a decoder's pitch (icomDecOff): the audio is the RADIO's dial's, not the readout's.
+        else if (session.empty()) e.dialHz = [this] { return audioFreq.load() - (double)icomDecOff.load(); };
         else e.dialHz = [this, session] {
             // ★ THIS listener's dial. A spot's RF frequency is dial + audio offset, and on a per-VFO
             //   radio the shared audioFreq is somebody else's — every spot would be filed wrong.
@@ -27874,6 +28006,16 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                         "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
                     continue;
                 }
+                /* ★★ V12 AN ICOM: the radio's mode / filter for this decoder (vibe_icom_decode.h) — or a refusal in words: not
+                 *  possible on one audio channel, or a mode change the owner lock does not allow this listener. */
+                if (useIcom()) {
+                    const std::string why = icomDecStart(sock, ext, payload);
+                    if (!why.empty()) {
+                        LOGI("decoder %s refused on the Icom — %s", ext.c_str(), why.c_str());
+                        sendDecoderRefusal(sock, "decoder", ext, "icom", why);
+                        continue;
+                    }
+                }
                 syncPeerA();
                 // ★★ V12 beta24: a held session's decoder socket coming back names where it left (its gap mark), so the
                 //    pictures finished while it was away come before the one in progress (DecoderHost::replayTo)
@@ -27884,9 +28026,10 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (r == DecoderHost::Start::Refused) {
                     LOGI("decoder %s refused — all %d decoder slots on this server are in use", ext.c_str(), vsDecoderSlots().max());
                     sendDecoderRefusal(sock, "decoder", ext, "limit", decoderLimitMessage(vsDecoderSlots().max()));
+                    icomDecReconcile();   // ★ an Icom set for a decoder that did not start goes back
                     continue;
                 }
-                if (r == DecoderHost::Start::Unknown) continue;
+                if (r == DecoderHost::Start::Unknown) { icomDecReconcile(); continue; }
                 textA = true; syncPeerA();
                 // ★★★ AND WHO STARTED IT, for the admin table — on the one-pipeline host only; a
                 //     listener's own host is theirs by construction.
@@ -27905,6 +28048,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (textB && hostB) { hostB->stop(); textB = false; }   // ★ the decoder this socket runs on VFO B
                 else if (host) host->stop();
                 textA = false; syncPeerA();
+                icomDecReconcile();   // ★ an Icom goes back as the decoder found it
                 sendText(sock, "{\"type\":\"audio_extension_detached\"}");
             } else if (type == "subscribe_digital_spots") {
                 /* ★ The owner's switch, enforced where the decoder is started — the menus hide
@@ -27943,12 +28087,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 } else if (!host) {
                     sendDecoderRefusal(sock, "spots", "ft8", "no_session",
                         "This page is out of date for this server \xe2\x80\x94 reload it to use the decoders.");
+                } else if (const std::string iw = useIcom() ? icomDecStart(sock, "spots", payload) : std::string(); !iw.empty()) {
+                    // ★★ V12 AN ICOM: the radio's mode / filter for the spots, or why not (vibe_icom_decode.h)
+                    LOGI("digital spots refused on the Icom — %s", iw.c_str());
+                    sendDecoderRefusal(sock, "spots", "ft8", "icom", iw);
                 } else {
                     DecoderHost::Start sr = host->startSpots(scope);
                     if (sr == DecoderHost::Start::Refused && !decoderOnly && bgYieldForListener()) sr = host->startSpots(scope);
                     if (sr == DecoderHost::Start::Refused) {
                         LOGI("digital spots refused — all %d decoder slots on this server are in use", vsDecoderSlots().max());
                         sendDecoderRefusal(sock, "spots", "ft8", "limit", decoderLimitMessage(vsDecoderSlots().max()));
+                        icomDecReconcile();
                     } else {
                         spotsA = true; syncPeerA();
                         if (!perVfo) {
@@ -27963,6 +28112,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 if (spotsB && hostB) { hostB->stopSpots(); spotsB = false; }   // ★ the spots this socket runs on VFO B
                 else if (host) host->stopSpots();
                 spotsA = false; syncPeerA();
+                icomDecReconcile();
             }
             // chat / cw-spot / subscribe_chat messages are ignored (no server here).
         }
@@ -34719,7 +34869,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 enforceAdminIdle();
                 enforceIdleListeners();
                 reapDecoderOrphans();
-                holdTick();            // ★ V12: held sessions that have run out, given way or been ended — finished
+                icomDecReconcile(true);  // ★ V12: an Icom set for a decoder nobody runs any more goes back
+                holdTick();           // ★ V12: held sessions that have run out, given way or been ended — finished
                 askTick();             // ★ ask before tuning: the 15 s window, the 5-minute NO, people coming and going
             }
         });
@@ -37394,6 +37545,9 @@ static std::string vsTunableJson() {
     j += vsDecoderCapJson("cw", reach);
     /* ★★ PSK31/63 (V12, 2026-10-26): this server's own PSK decoder and skimmer (decoders/psk_skimmer.h) — as "cw". */
     j += vsDecoderCapJson("psk", reach);
+    /* ★★ V12 THE SKIMMERS read IQ across a segment; an Icom gives one demodulated audio channel, so its CW and PSK keys
+     *  draw ONE SIGNAL only (`skim`:false — absent everywhere else, so every older client and every SDR is unchanged). */
+    if (g_icomOn.load()) j += ",\"skim\":false";
     /* ★★ DSC (V12, 2026-10-26): maritime Digital Selective Calling (decoders/dsc_decoder.h). Absent on an older server, so
      *  its clients draw no DSC button there; false where the owner has blocked it on this receiver. */
     j += vsDecoderCapJson("dsc", reach);
@@ -37635,6 +37789,9 @@ static std::string vsTunableJson() {
             const std::string k = id;
             // ★ an Icom demodulates in the radio: our synchronous AM family does not exist there (AGENTS.md)
             if ((k == "sam" || k == "sau" || k == "sal" || k == "ecssu" || k == "ecssl" || k == "amst") && g_icomOn.load()) continue;
+            /* ★★ V12 NOR DRM: it needs ≥ 4.5 kHz of RF with its phase intact, and the IC-7300's widest SSB filter is 3.6 kHz
+             *  (AM's 10 kHz goes through an envelope detector) — vibe_icom_decode.h. Never offered rather than never decoding. */
+            if (k == "drm" && g_icomOn.load()) continue;
             if (k == "dab") { if (!vsDabCapable()) continue; }
             else if (k == "adsb") { if (!vsAdsbWhyNot().empty()) continue; }
             else if (k == "ism") { if (!vsIsmAnyBand() || !vsIsmWhyNot().empty()) continue; }
