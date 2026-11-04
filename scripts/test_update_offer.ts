@@ -57,6 +57,10 @@ ok('back-to-stable with no version is never sent', updateButton({ offer: 'back-t
 // ── The question before the tick changes anything ─────────────────────────────────────────────
 ok('ticking says nothing installs until UPDATE is pressed', /Nothing is installed until/.test(betaConfirmText(true)));
 ok('unticking says how to get back', /BACK TO STABLE/.test(betaConfirmText(false)));
+// ★ V12 2026-11-04: a beta63 box said "Up to date (12.0.0~beta48-1 …)" — the daemon now reads dpkg and says recheck
+ok('installed changed since the check (recheck): names the version now running, asks for a check',
+   updateOfferText({ beta: true, offer: '', stale: true, recheck: true, installed: '12.0.0~beta63-1' })
+     === 'This server now runs 12.0.0~beta63-1 — press CHECK FOR UPDATES to see whether anything newer is out.');
 
 console.log(fails ? `\n${fails} FAILED, ${passes} passed` : `update offer: all ${passes} passed`);
 process.exit(fails ? 1 : 0);

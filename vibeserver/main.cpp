@@ -25,6 +25,7 @@
 #include <map>
 #include <cctype>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -4683,8 +4684,43 @@ int main(int argc, char** argv) {
                 else if (k == "checked") checked = v;
             }
         }
-        const bool stale = !offer.empty() && fBeta != (beta ? "1" : "0");
+        bool stale = !offer.empty() && fBeta != (beta ? "1" : "0");
+        /* ★★★ THE INSTALLED VERSION IS READ FROM dpkg, NOT FROM THE OFFER FILE (V12, 2026-11-04 — a beta63 server's
+         *  page said "Up to date (12.0.0~beta48-1, beta updates on)"). The file is written only when the helper runs
+         *  an action, so an upgrade that did not end in the helper's own write_offer — apt by hand, the one-line
+         *  installer, or an `update` whose package restart took the helper down before its last line — left the
+         *  page quoting the version it replaced, for ever. /var/lib/dpkg/status is world-readable and is the truth;
+         *  it is re-read only when it changes (mtime), so the 2 s admin poll costs a stat.
+         *  ★ When the two disagree, the offer was worked out for ANOTHER version: an offer of exactly what is now
+         *    installed has been taken ("none"); anything else is unknown until CHECK FOR UPDATES ("recheck"). */
+        {
+            static std::mutex mtx; static time_t seenMtime = 0; static std::string seenVer;
+            struct stat ds{};
+            std::lock_guard<std::mutex> lk(mtx);
+            if (::stat("/var/lib/dpkg/status", &ds) == 0 && ds.st_mtime != seenMtime) {
+                seenMtime = ds.st_mtime; seenVer.clear();
+                std::ifstream f("/var/lib/dpkg/status");
+                std::string line; bool ours = false;
+                while (std::getline(f, line)) {
+                    if (line.rfind("Package: ", 0) == 0) ours = line == "Package: vibeserver";
+                    else if (ours && line.rfind("Version: ", 0) == 0) {
+                        for (char c : line.substr(9))
+                            if (std::isalnum((unsigned char)c) || c == '.' || c == '+' || c == '~' || c == ':' || c == '-') seenVer += c;
+                        break;
+                    }
+                }
+            }
+            if (!seenVer.empty() && seenVer != installed) {
+                if (!installed.empty()) {
+                    if ((offer == "beta" || offer == "stable") && version == seenVer) { offer = "none"; version.clear(); }
+                    else if (!offer.empty()) { offer.clear(); version.clear(); stale = true; }
+                }
+                installed = seenVer;
+            }
+        }
+        const bool recheck = stale && fBeta == (beta ? "1" : "0");
         std::string j = std::string("{\"beta\":") + (beta ? "true" : "false");
+        if (recheck) j += ",\"recheck\":true";   // ★ additive: an older page reads it as the plain stale line
         j += ",\"installed\":\"" + installed + "\"";
         j += ",\"offer\":\"" + (stale ? std::string() : offer) + "\"";
         j += ",\"version\":\"" + (stale ? std::string() : version) + "\"";
