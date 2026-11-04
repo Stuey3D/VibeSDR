@@ -271,6 +271,7 @@ struct Opts {
     // ★★ V12: background decoding for a server run from the command line, and the tests — the same JSON the setup page
     //    stores in RadioConfig::bgDecode. Overrides the config's. --gallery-mb likewise (-1 = the config's).
     std::string bgDecode;
+    std::string dxScan;          // ★★★ V12 --dx-scan JSON: the idle DX scanner (RadioConfig::dxScan), overriding the config's
     int         galleryMb = -1;
     // ★ RSP front-end notches. OFF unless the operator asks: the RF notch covers broadcast FM.
     double      idleGrace = 300.0;   // seconds before an unattended radio idle-parks
@@ -542,6 +543,7 @@ bool parse(int argc, char** argv, Opts& o) {
         else if (a == "--zoom-spectrum")    o.zoomSpectrum = true;
         else if (a == "--ask-before-tuning") o.askBeforeTuning = true;
         else if (a == "--bg-decode")      o.bgDecode        = need(i);
+        else if (a == "--dx-scan")        o.dxScan          = need(i);
         else if (a == "--gallery-mb")     o.galleryMb       = std::atoi(need(i));
         else if (a == "--idle-grace") o.idleGrace = std::atof(need(i));
         else if (a == "--rf-notch")   o.rfNotch  = true;
@@ -1014,6 +1016,13 @@ std::vector<std::string> gallerySerials(const vsconfig::ServerConfig& c) {
     std::vector<std::string> v; for (const auto& r : c.radios) if (!r.serial.empty()) v.push_back(r.serial); return v;
 }
 std::string g_bgLastApplied;   // ★ V12: the bgDecode this radio process last applied (see the main loop's watch)
+std::string g_dxLastApplied;   // ★★★ V12: …and the dxScan (the idle DX scanner)
+/** ★★★ V12: this radio's DX log file — one per radio, beside the gallery in the data dir. */
+static std::string dxLogFileFor(const std::string& serial) {
+    std::string k;
+    for (char c : serial) if (std::isalnum((unsigned char)c) || c == '-' || c == '_') k += c;
+    return vsDataDir() + "/dxlog" + (k.empty() ? std::string() : "-" + k) + ".json";
+}
 std::string g_configPath; vsconfig::Config g_runtimeConfig;
             /** ★ The WHOLE machine, so the setup page can show a tab per radio. This process runs
              *  exactly one of them (g_myRadioSerial); the rest it only reads and writes on their
@@ -2583,6 +2592,7 @@ int main(int argc, char** argv) {
                     LocalSdrShim::instance().setAntennaPortNames(r.antennaNames);
                     // ★★ V12 background decoding, live — the tick picks it up within two seconds (validated above).
                     { std::string be; LocalSdrShim::setBackgroundDecoding(r.bgDecode, be); g_bgLastApplied = r.bgDecode; }
+                    { std::string de; LocalSdrShim::setDxScan(r.dxScan, de); g_dxLastApplied = r.dxScan; }   // ★★★ V12 DX scanner, live
                     LocalSdrShim::setGalleryRadioLabel(r.label.empty() ? r.driver : r.label);
                     LocalSdrShim::instance().setRspAntennaMap(g_runtimeConfig.antennaMap);
                     // ★ V12 the USRP's owner options, live: a new reference / correction / bandwidth with no restart.
@@ -2639,6 +2649,8 @@ int main(int argc, char** argv) {
                 if (pi >= 0 && pi < (int)next.radios.size()) {
                     std::string be; LocalSdrShim::setBackgroundDecoding(next.radios[(size_t)pi].bgDecode, be);
                     g_bgLastApplied = next.radios[(size_t)pi].bgDecode;
+                    std::string de; LocalSdrShim::setDxScan(next.radios[(size_t)pi].dxScan, de);
+                    g_dxLastApplied = next.radios[(size_t)pi].dxScan;
                 }
             }
             if (next.configured) LocalSdrShim::setConfigured(true);
@@ -4415,6 +4427,14 @@ int main(int argc, char** argv) {
             const std::string bj = !o.bgDecode.empty() ? o.bgDecode : (mine ? mine->bgDecode : std::string());
             if (!bj.empty() && !frontDoorOnly) LocalSdrShim::setBackgroundDecoding(bj, be);
             g_bgLastApplied = bj;
+            // ★★★ V12 THE IDLE DX SCANNER: this radio's settings (--dx-scan for the tests) and its log file
+            const std::string dj = !o.dxScan.empty() ? o.dxScan : (mine ? mine->dxScan : std::string());
+            if (!frontDoorOnly) {
+                std::string de;
+                if (!dj.empty()) LocalSdrShim::setDxScan(dj, de);
+                LocalSdrShim::setDxLogFile(dxLogFileFor(mine ? mine->serial : std::string()));
+            }
+            g_dxLastApplied = dj;
             LocalSdrShim::setGallery(vsDataDir() + "/gallery", o.galleryMb >= 0 ? o.galleryMb : g_serverConfig.galleryMb,
                                      g_serverConfig.galleryPublic, g_serverConfig.gallerySaveLive);
             LocalSdrShim::setGalleryRedact(gallerySerials(g_serverConfig));   // ★★★ before the label: a serial never reaches an item
@@ -4818,6 +4838,12 @@ int main(int argc, char** argv) {
                             if (!mine && g_myRadioSerial.empty() && !fresh.radios.empty()) {
                                 const int pi = vsconfig::primaryRadio(fresh);
                                 if (pi >= 0 && pi < (int)fresh.radios.size()) mine = &fresh.radios[(size_t)pi];
+                            }
+                            if (mine && o.dxScan.empty() && mine->dxScan != g_dxLastApplied) {   // ★★★ V12 the DX scanner, the same way
+                                g_dxLastApplied = mine->dxScan;
+                                std::string de;
+                                LocalSdrShim::setDxScan(mine->dxScan, de);
+                                std::printf("VibeServer: DX scanner settings re-read from %s\n", g_configPath.c_str());
                             }
                             if (mine && o.bgDecode.empty() && mine->bgDecode != g_bgLastApplied) {
                                 g_bgLastApplied = mine->bgDecode;

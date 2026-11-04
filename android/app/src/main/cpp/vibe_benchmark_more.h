@@ -44,6 +44,7 @@
 #include "decoders/audio_nr.h"
 #include "decoders/auto_notch.h"
 #include "vibe_ndb_service.h"
+#include "vibe_dxscan_fm.h"          // ★★★ V12 the idle DX scanner's FM hop (the dec_dxscan row)
 #include "vibe_ais_service.h"
 #include "vibe_ism_service.h"
 #include "vibe_hdlc.h"
@@ -639,6 +640,7 @@ inline RowRule ruleFor(const std::string& id) {
         { "dec_ism",      { "ism",    true,  false } }, { "dec_wmbus",    { "ism",    false, false } },
         { "dec_tone",     { "",       false, false } }, { "dec_nr",       { "",       false, false } },
         { "dec_notch",    { "",       false, false } },
+        { "dec_dxscan",   { "",       false, false } },   // ★★★ V12 the DX scanner: flagged, never switched off (no BLOCKABLE switch)
     };
     for (const auto& e : t) if (id == e.id) return e.r;
     if (id.rfind("spot_", 0) == 0) return { "spots", false, true };   // ★ every digital-spots mode: inside "Digital spots"
@@ -851,6 +853,67 @@ inline std::vector<Row> runMoreDecoderRows(const std::vector<DecClip>& clips, co
         s.buildReportForTest();
         r.decoded = s.identifiedNow();
         s.stop();
+        return r;
+    });
+    /* ★★★ V12 THE IDLE DX SCANNER'S FM HOP (vibe_dxscan_fm.h) — 8 broadcast stations with RDS in one 2.4 MS/s capture, every
+     *  one decoded at once (the spectrum, a channel per station from one forward FFT, the discriminator, the pilot loop, the
+     *  RDS front end), across the hop's worker threads. % of a core over the signal fed, in real time. The scanner reads
+     *  it as its budget: a box that measured red decodes the stations in ROUNDS (dxPeakBudget), and the setup page says
+     *  "not recommended" beside the switch — never hidden. ★ The capture is synthesised once (1 s, looped). */
+    run("dec_dxscan", "Decoder: DX scanner, FM sweep (8 stations @ 2.4 MS/s)", [&] {
+        Row r; r.id = "dec_dxscan"; r.label = "Decoder: DX scanner, FM sweep (8 stations @ 2.4 MS/s)";
+        const double fs = 2.4e6, centre = 98.95e6;
+        const size_t n = (size_t)fs;
+        std::vector<std::complex<float>> iq(n, std::complex<float>(0, 0));
+        { std::mt19937 g(11); std::normal_distribution<float> d(0.f, 0.002f); for (auto& v : iq) v = { d(g), d(g) }; }
+        static const double offs[8] = { -850e3, -650e3, -450e3, -150e3, 50e3, 250e3, 550e3, 750e3 };
+        // ★ each station: a mono programme, the pilot and RDS group 0A with real checkwords on 57 kHz (vibe_benchmark.h's
+        //   fmStation, with its own PI), so the row measures the decoder doing its whole job
+        auto enc = [](uint16_t data, int off) { const uint16_t cw = vibedsp::RdsDecoder::checkword(data) ^ vibedsp::RdsDecoder::OFFSET[off];
+                                                return ((uint32_t)data << 10) | cw; };
+        for (int s = 0; s < 8; ++s) {
+            std::vector<int> bits;
+            const char* PS = "DXBENCH ";
+            for (int addr = 0; addr < 4; ++addr) {
+                const uint32_t blk[4] = { enc((uint16_t)(0xC200 + s), 0), enc((uint16_t)(addr & 3), 1), enc(0x1234, 2),
+                                          enc((uint16_t)(((uint8_t)PS[addr * 2] << 8) | (uint8_t)PS[addr * 2 + 1]), 4) };
+                for (int b = 0; b < 4; ++b) for (int k = 25; k >= 0; --k) bits.push_back((blk[b] >> k) & 1);
+            }
+            std::vector<int> m(bits.size()); int prev = 0;
+            for (size_t k = 0; k < bits.size(); ++k) { m[k] = prev ^ bits[k]; prev = m[k]; }
+            const double a = 0.1 + 0.05 * (s % 3);
+            double ph = 0;
+            for (size_t i = 0; i < n; ++i) {
+                const double t = i / fs;
+                const long kb = (long)std::floor(t * 1187.5);
+                const double manch = (((t * 1187.5 - kb) < 0.5) ? 1.0 : -1.0) * (m[(size_t)kb % m.size()] ? 1.0 : -1.0);
+                const double mpx = 0.5 * std::cos(2 * M_PI * (800.0 + 100 * s) * t) + 0.09 * std::cos(2 * M_PI * 19000.0 * t)
+                                 + 0.045 * manch * std::cos(2 * M_PI * 57000.0 * t);
+                ph += 2 * M_PI * (offs[s] + 75000.0 * mpx) / fs;
+                if (ph > M_PI) ph -= 2 * M_PI; else if (ph < -M_PI) ph += 2 * M_PI;
+                iq[i] += std::complex<float>((float)(a * std::cos(ph)), (float)(a * std::sin(ph)));
+            }
+        }
+        vibe::dx::FmHopEngine e;
+        vibe::dx::FmHopEngine::Params p;
+        p.rateHz = fs; p.centreHz = centre; p.dcHz = centre; p.rasterKhz = 100;
+        p.loHz = 98.1e6; p.hiHz = 99.8e6; p.dwellSec = 3.0; p.minDwellSec = 3.0;   // ★ the whole dwell, always — a fair cost
+        const double c0 = processCpu(), w0 = wallNow();
+        e.start(p);
+        double fedSec = 0; size_t pos = 0;
+        const size_t blk = (size_t)(fs / 100);
+        while (e.running() && fedSec < 30) {   // ★ 30 s of signal is a backstop only: the hop ends after its dwell
+            while (e.running() && e.queuedSec() > 0.25) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            const size_t k = std::min(blk, n - pos);
+            e.feed(iq.data() + pos, (int)k);
+            pos = (pos + k) % n; fedSec += (double)k / fs;
+        }
+        e.abort();
+        r.pct = 100.0 * (processCpu() - c0) / std::max(0.5, p.settleSec + p.specSec + p.dwellSec);
+        int ids = 0;
+        for (const auto& h : e.results()) if (h.pi && vibe::dx::fmConfirmed(h.groups, h.psComplete)) ++ids;
+        r.decoded = ids;
+        r.ms = (int)((wallNow() - w0) * 1000);
         return r;
     });
     run("dec_ais", "Decoder: AIS", [&] {

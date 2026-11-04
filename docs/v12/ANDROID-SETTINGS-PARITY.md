@@ -43,6 +43,13 @@ nothing told it to. This branch ports them, end to end, plus the other V12 setti
 | Keep listeners' decodes in the gallery too | `gallerySaveLive` | **ports** | Default on. |
 | (gallery directory, radio label, serial redaction) | — | **ports** | `VibeServerBoot` → `setGallery(files/gallery, …)`, label = SDR display name or the USB model, the USB serial kept out of every item (as `main.cpp`'s `gallerySerials`). |
 | (private DAB scan engine) | `bgDecode` | — | `privateScanConfig` drops `bgDecode`: a scan never runs the owner's profiles. |
+| **DX Scanner** (switch) — V12 2026-11-04 | `RadioConfig::dxScan` → `on` | **ports** | RADIO SETTINGS → WHEN NOBODY IS LISTENING, under Background Decoding (Setup: Radio tab, under Background Decoding). `components/DxScanSetup.tsx`; one JSON blob as the Setup page saves it. **Lite too** — the brief allowed Lite to ship without it, but the engine is the same shim and the benchmark's `dec_dxscan` row already makes a weak box sweep in smaller steps, so leaving it out would only take the feature away. Not drawn on an Icom. |
+| DX Scanner: bands (FM and DAB / FM only / DAB only) | `dxScan.bands` | **ports** | Not offered on an Airspy HF+ (FM only — it cannot hold a DAB multiplex), as on the Setup page. |
+| DX Scanner: start after nobody has listened for [N] | `dxScan.waitMin` | **ports** | The same seven choices; a stored odd value is kept and shown. Default 5 min. |
+| DX Scanner: FM channel raster 100 / 50 kHz | `dxScan.raster` | **ports** | Only while FM is swept; with the hop count at the radio's rate. |
+| DX Scanner: only the owner may view the DX Log | `dxScan.viewAdmin` | **ports** | Default off (open). |
+| (DX scanner's log file) | — | **ports** | `VibeServerBoot` → `setDxLogFile(files/dxlog.json)` (main.cpp: `data/dxlog[-serial].json`). |
+| (private DAB scan engine) | `dxScan` | — | `privateScanConfig` drops `dxScan` too. |
 
 Applied: on every start (`VibeServerBoot.applyAndStart` — Start, crash restore, Lite). The settings screen is only shown
 while the server is stopped, so "live" here is the next Start; the engine's tick picks a new profile up within two seconds.

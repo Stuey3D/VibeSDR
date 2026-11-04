@@ -213,7 +213,9 @@ object VibeServerBoot {
                          "lockedCentre", "lockedRate", "rateLock", "sessionLimitMin", "idleKickMin",
                          "batteryPauseAt", "rawIq", "rawIqMax", "uncompressedAudio",
                          // ★ V12: a private scan never runs the owner's background profiles (it is nobody's idle radio)
-                         "bgDecode"))
+                         "bgDecode",
+                         // ★★★ V12: …nor the DX scanner (the owner's scan is the screen's, and borrows the radio briefly)
+                         "dxScan"))
             c.remove(k)
         c.put("advertise", false)
         c.put("maxUsers", 1)
@@ -328,6 +330,13 @@ object VibeServerBoot {
         run {
             val why = VibeLocalSDR.setBackgroundDecoding(cfg.s("bgDecode"))
             if (why.isNotEmpty()) Log.w(TAG, "background decoding not applied: $why")
+        }
+        /* ★★★ V12 THE IDLE DX SCANNER (Server mode → WHEN NOBODY IS LISTENING → DX Scanner) — main.cpp's setDxScan and its
+         *  log file (one per radio there; the phone serves one). Always a definite value: absent = "" = off. */
+        VibeLocalSDR.setDxLogFile(File(filesDir, "dxlog.json").absolutePath)
+        run {
+            val why = VibeLocalSDR.setDxScan(cfg.s("dxScan"))
+            if (why.isNotEmpty()) Log.w(TAG, "DX scanner not applied: $why")
         }
         // ★★ V12 VibeAGC for SDRplay — the owner's choice; absent = 0 = automatic (on with the OpenRSP driver).
         VibeLocalSDR.setRspVibeAgc(cfg.i("rspVibeAgc", 0).coerceIn(0, 2))

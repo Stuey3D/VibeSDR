@@ -1436,6 +1436,10 @@ public:
         // Reporting it separately means a DXer sees an identification where the old
         // all-or-nothing path showed an empty box (Stuart, 2026-07-26).
         void (*pi)(void* ctx, uint16_t pi) = nullptr;
+        /** ★ V12 DX SCANNER (vibe_dxscan_fm.h): EVERY group whose block A passed its checkword, with that PI — `clean` is 1
+         *  when block A needed no correction. Before any trust or confirmation, so a caller can apply its OWN rule (the DX
+         *  log's "PI in at least 3 CRC-valid groups in one dwell"). Unset everywhere else: one null test per group. */
+        void (*group)(void* ctx, uint16_t pi, int clean) = nullptr;
     };
     void setCallbacks(const Callbacks& c) { cb_ = c; }
     void reset();
@@ -1455,6 +1459,8 @@ public:
     // is how a good station ends up reporting a two-character name. So only the best
     // hypothesis is allowed to speak, judged on these.
     bool synced() const { return synced_; }
+    /** ★ V12 DX scanner: a whole PS has been assembled on this station (all four segments — never one group). */
+    bool psComplete() const { return psCommitted_; }
     int  recentGood() const;          // good blocks within the last kRateWindow
     void pushBit(int bit);            // one recovered data bit (post differential)
 

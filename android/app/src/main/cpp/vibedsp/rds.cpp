@@ -618,6 +618,12 @@ void RdsDemod::configure(double mpxRate, const RdsDecoder::Callbacks& cb) {
             if (sl->self->bestIdx() == sl->idx && sl->self->user_.ecc)
                 sl->self->user_.ecc(sl->self->user_.ctx, pi, e);
         };
+        // ★ V12 DX scanner: the group hook only where somebody asked for it — no trampoline at all otherwise
+        route.group = !cb.group ? nullptr : +[](void* c, uint16_t pi, int clean) {
+            auto* sl = (Slot*)c;
+            if (sl->self->bestIdx() == sl->idx && sl->self->user_.group)
+                sl->self->user_.group(sl->self->user_.ctx, pi, clean);
+        };
         dec_[p].setCallbacks(route);
     }
     reset();
@@ -1335,6 +1341,7 @@ void RdsDecoder::parseGroup() {
     trustedB_ = (blkRepair_[1] == 0);
     const bool piConfirmed = (piSeen_ && pi == piLast_) || (!haveA && pi == piConfirmedVal_);
     if (haveA) { piLast_ = pi; piSeen_ = true; }
+    if (haveA && cb_.group) cb_.group(cb_.ctx, pi, blkRepair_[0] == 0 ? 1 : 0);   // ★ V12 DX scanner (see Callbacks::group)
     if (!trusted && !piConfirmed) return;
 
     // ★ PI FIRST — reported the moment it is confirmed, without waiting for a name.

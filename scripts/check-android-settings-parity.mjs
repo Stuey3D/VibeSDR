@@ -16,7 +16,7 @@ const PAGE = read('android/app/src/main/cpp/vibe_setup_page.h');
 const SCREEN = read('src/screens/ServerModeScreen.tsx')
   + read('src/components/BackgroundDecodingSetup.tsx') + read('src/components/BandLimitEditor.tsx')
   + read('src/components/AntennaBandsEditor.tsx') + read('src/components/IcomSetupCard.tsx') + read('src/services/icomRadio.ts')
-  + read('src/components/RspSetupCard.tsx');
+  + read('src/components/RspSetupCard.tsx') + read('src/components/DxScanSetup.tsx');
 const VS = read('src/services/vibeServer.ts') + read('src/services/rspCard.ts');
 const BOOT = read('android/app/src/main/java/com/vibesdr/app/VibeServerBoot.kt');
 const KT = BOOT + read('android/app/src/main/java/com/vibesdr/app/VibeIcom.kt');
@@ -91,6 +91,8 @@ const TABLE = [
   P(['idleGrace'], 'Power down the radio', 'idleGraceSec'),
   // ── ★★★ V12 BACKGROUND DECODING (the reason this test exists) ──
   P(['bgOn', 'bgWait', 'bgKeepInRange'], 'Background Decoding', 'bgDecode'),
+  // ★★★ V12 the idle DX scanner (components/DxScanSetup) — one JSON blob, RadioConfig::dxScan; Lite too (the same engine)
+  P(['dxOn', 'dxWait', 'dxBands', 'dxRaster', 'dxViewAdmin'], 'Only the owner may view the DX Log', 'dxScan'),
   P(['rspVibeAgc'], 'VibeAGC (SDRplay)', 'rspVibeAgc'),
   P(['nbWide'], 'IMPULSE NOISE BLANKER', 'nbWide'),
   // ── the SDRplay card (Stuart 2026-11-04: "all the ones currently in Linux go to android") and the HF+ calibration ──
@@ -142,7 +144,12 @@ const SHIM = read('android/app/src/main/cpp/local_sdr_shim.cpp');
 const MOD = read('android/app/src/main/java/com/vibesdr/app/VibeLocalSdrModule.kt');
 ok(/VibeLocalSDR\.setBackgroundDecoding\(cfg\.s\("bgDecode"\)\)/.test(BOOT), 'VibeServerBoot applies bgDecode on every start');
 ok(/VibeLocalSDR\.setGallery\(galleryDir\(filesDir\)/.test(BOOT), 'VibeServerBoot points the gallery at files/gallery on every start');
-ok(/"bgDecode"\)\)/.test(BOOT.slice(BOOT.indexOf('fun privateScanConfig'), BOOT.indexOf('fun privateScanConfig') + 1500)), 'the private DAB scan engine never runs the owner\'s profiles');
+{
+  const priv = BOOT.slice(BOOT.indexOf('fun privateScanConfig'), BOOT.indexOf('fun privateScanConfig') + 1700);
+  ok(/"bgDecode",?/.test(priv) && /\.remove\(k\)/.test(priv), 'the private DAB scan engine never runs the owner\'s profiles');
+  ok(/"dxScan"\)\)/.test(priv), '…nor the owner\'s DX scanner (V12)');
+  ok(/VibeLocalSDR\.setDxScan\(cfg\.s\("dxScan"\)\)/.test(BOOT) && /VibeLocalSDR\.setDxLogFile\(/.test(BOOT), 'VibeServerBoot applies dxScan and the DX log file on every start');
+}
 ok(JNI.includes('nativeSetBackgroundDecoding') && JNI.includes('nativeSetGallery') && JNI.includes('nativeBackgroundCaps') && JNI.includes('nativeValidateBackgroundDecoding'), 'JNI: background decoding, gallery, caps and the save rule');
 ok(/@ReactMethod\s+fun backgroundCaps/.test(MOD) && /@ReactMethod\s+fun validateBackgroundDecoding/.test(MOD) && /@ReactMethod\s+fun galleryDisk/.test(MOD), 'the bridge exports backgroundCaps / validateBackgroundDecoding / galleryDisk (@ReactMethod)');
 ok(SHIM.includes('LocalSdrShim::backgroundCapsJson') && /vibe::bg::decoders\(\)/.test(SHIM.slice(SHIM.indexOf('LocalSdrShim::backgroundCapsJson'))), 'the editor\'s decoders are the ENGINE\'s table (vibe::bg::decoders), not a list in the app');

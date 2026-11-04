@@ -207,6 +207,7 @@ inline Gate gateNeed(const Hw& hw, Need n) {
 inline Need needFor(const std::string& id) {
     auto is = [&](const char* p) { return id.rfind(p, 0) == 0; };
     if (is("wfm_") || is("rdsx_") || is("zoom_") || id == "lk_wfm" || id == "auto_wfm") return Need::Wfm;
+    if (id == "dec_dxscan") return Need::Wfm;   // ★★★ V12 the DX scanner's FM sweep: only where a radio reaches Broadcast FM
     if (id == "dab" || is("dab_")) return Need::Dab;
     if (is("adsb")) return Need::Adsb;
     if (id == "dec_ais") return Need::Ais;

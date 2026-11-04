@@ -1971,7 +1971,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
 /* Panels are centred POP-UPS, not side drawers — a full-height drawer holding
    five sliders is mostly empty space. Sized to their content, capped at 80vh.
    The huge box-shadow spread is the backdrop dim (no extra element needed). */
-#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel, #galleryPanel {
+#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel, #galleryPanel, #dxLogPanel {
   position: fixed; top: 50%; left: 50%; z-index: 51;
   width: min(92vw, 520px); max-height: 82vh; overflow-y: auto;
   background: var(--ov-panel98, rgba(8,6,2,0.98)); border: 1px solid var(--btn-border);
@@ -1983,7 +1983,7 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
   transition: opacity .14s ease-out, transform .14s ease-out, visibility .14s;
 }
 #menu.open, #bookmarksPanel.open, #decodersPanel.open, #chatPanel.open,
-#recordingsPanel.open, #audioPanel.open, #freqPanel.open, #galleryPanel.open {
+#recordingsPanel.open, #audioPanel.open, #freqPanel.open, #galleryPanel.open, #dxLogPanel.open {
   opacity: 1; visibility: visible;
   transform: translate(-50%, -50%) scale(1);
 }
@@ -1997,13 +1997,32 @@ input[type=range] { accent-color: var(--amber); width: 8em; min-width: 4em; }
      (#splash, the audio gate) reserve both edges so the centre stays the centre.
      ★ Every overflow-y: auto container belongs in this list — scripts/test-web-scrollbar-lane.mjs
        measures them with classic scrollbars forced on. */
-#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel, #galleryPanel,
+#menu, #bookmarksPanel, #decodersPanel, #recordingsPanel, #audioPanel, #freqPanel, #chatPanel, #galleryPanel, #dxLogPanel,
 #galText, #searchResults, #chatLog, #decText, #cwPlainText, #decBody, #rdsPanel, #adminPanelBody, #actLog, #cwGuideList {
   scrollbar-gutter: stable;
 }
 #splash { scrollbar-gutter: stable both-edges; }
 /* Wider ones: bookmarks/recordings/decoders list real content. */
-#bookmarksPanel, #recordingsPanel, #decodersPanel, #galleryPanel { width: min(94vw, 640px); }
+#bookmarksPanel, #recordingsPanel, #decodersPanel, #galleryPanel, #dxLogPanel { width: min(94vw, 640px); }
+/* ★★★ V12 THE DX LOG — the gallery's rows and pager; a Suspect is greyed (shown, never alerted). */
+#dxList .sres { cursor: pointer; flex-wrap: wrap; }
+#dxList .sres:focus-visible { outline: 2px solid var(--freq); outline-offset: -2px; }
+#dxList .sres.dxSuspect { opacity: 0.55; }
+#dxList .sres .n { white-space: normal; }
+#dxList .tag { font-size: 10px; letter-spacing: 1px; color: var(--unit); border: 1px solid var(--btn-border);
+               border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+#dxList .tag.dxLive { color: #0c0f0c; background: var(--btn-active-tx); border-color: var(--btn-active-tx); }
+#dxNote, #dxAlertRow { font-size: 11px; }
+#dxAlertRow[hidden], #dxNote[hidden] { display: none !important; }
+#dxAlertRow input { width: 14px; height: 14px; }
+#dxPager, #dxFilter, #dxSortRow { flex-wrap: wrap; align-items: center; gap: 6px; }
+#dxPager { margin-top: 8px; }
+#dxPager .gap { color: var(--unit); padding: 0 2px; }
+#dxViewBody table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+#dxViewBody td, #dxViewBody th { padding: 3px 6px 3px 0; border-bottom: 1px solid var(--btn-border); text-align: left; }
+#dxViewBody th { color: var(--text-dim); font-weight: normal; letter-spacing: 0.08em; }
+#dxViewBody p { margin: 6px 0; font-size: 12px; }
+#dxViewMeta { font-size: 13px; margin: 6px 0; }
 /* ★★ V12 THE GALLERY — what this server's decoders heard, newest first; a NAVTEX message opens inline. */
 #galList .sres { cursor: pointer; flex-wrap: wrap; }
 #galList .sres:focus-visible { outline: 2px solid var(--freq); outline-offset: -2px; }
@@ -5326,6 +5345,9 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="mapBtn" title="The spots on a map — opens in a new tab">MAP</button>
       <!-- ★★ V12: what this SERVER's decoders have heard — background decoding and listeners' — kept on the server. -->
       <button class="btn" id="galleryBtn" title="What this server's decoders have heard — background decoding while nobody listened, and listeners' own">GALLERY</button>
+      <!-- ★★★ V12 THE DX LOG, beside the GALLERY (Stuart: "The DX Log should live next to the gallery"): the stations the
+           server's idle DX scanner heard on FM and DAB. Shown only where the server offers it (hwinfo dxLog). -->
+      <button class="btn" id="dxLogBtn" hidden title="The FM and DAB stations this server's DX scanner heard while nobody was listening — Sporadic-E, tropo and meteor scatter">DX LOG</button>
     </div>
     <!-- ★ One section, one switch: the owner's "Digital spots / map" entry hides the whole of it (and VIEWS' MAP).
          ★ V12: its keys live in the decoder groups (DIGITAL SPOTS in Amateur, BAND in TUNES THE RADIO ITSELF) and the MAP in
@@ -5650,6 +5672,40 @@ select.btn { padding: 6px 8px; }
     <img id="galImg" alt="" hidden>
   </div>
   <p class="hint" id="galNote"></p>
+</div>
+
+<!-- ★★★ V12 THE DX LOG (2026-11-04, docs/v12/DX-SCANNER.md): what the server's idle DX scanner heard on Broadcast FM (by
+     RDS PI) and DAB (by multiplex). DX only by default; SHOW LOCALS / SHOW SUSPECTS widen it; four sorts; LIVE NOW on what
+     the current or last sweep heard; a row tunes; PROMOTE (the owner) copies it into the bookmarks. src/utils/dxLog.ts is
+     the one rule for this page and the app. -->
+<div id="dxLogPanel">
+  <div id="menuHead">
+    <span>DX LOG</span>
+    <button class="btn" id="dxClose">CLOSE</button>
+  </div>
+  <div class="btnRow" id="dxFilter">
+    <button class="btn on" data-band="">ALL</button>
+    <button class="btn" data-band="FM">FM</button>
+    <button class="btn" data-band="DAB">DAB</button>
+    <button class="btn" id="dxShowLocal" aria-pressed="false">SHOW LOCALS</button>
+    <button class="btn" id="dxShowSuspect" aria-pressed="false">SHOW SUSPECTS</button>
+  </div>
+  <div class="btnRow" id="dxSortRow" role="group" aria-label="Sort"></div>
+  <div id="dxList"></div>
+  <div class="btnRow" id="dxPager" hidden></div>
+  <div id="dxView" hidden>
+    <div class="btnRow">
+      <button class="btn" id="dxBack">&#8592; BACK</button>
+      <button class="btn" id="dxTune">TUNE</button>
+      <button class="btn" id="dxPromote" hidden>BOOKMARK</button>
+    </div>
+    <div class="hint" id="dxViewMeta"></div>
+    <div id="dxViewBody"></div>
+  </div>
+  <label class="hint" id="dxAlertRow" style="display:flex;gap:8px;align-items:center;margin-top:10px">
+    <input type="checkbox" id="dxAlerts" style="accent-color:var(--amber)">
+    <span>Tell me about new DX here (this browser)</span></label>
+  <p class="hint" id="dxNote"></p>
 </div>
 
 <div id="recordingsPanel">

@@ -150,6 +150,8 @@
 #include "decoders/tone_id.h"         // ★ V12: CTCSS / DCS tone ID on NFM (its own discriminator on the channel IQ)
 #include "vibe_decoder_host.h"       // ★ per-listener decoders + the box-wide decoder slots (B6)
 #include "vibe_drm_listener.h"       // ★ V12 DRM: a per-listener mode — the OFDM receiver + the OS audio decoder
+#include "vibe_dxscan.h"            // ★★★ V12: the idle DX scanner — the log and its rules (2026-11-04)
+#include "vibe_dxscan_fm.h"         // ★★★ V12: …and its FM hop (RDS on every station of one capture)
 #include "vibe_bgdecode.h"          // ★★ V12: background decoding + the gallery (2026-10-22) — see the header
 #include "vibe_bgdecode_ndb.h"      // ★★ V12: …its NDB skimmer VFO (the listener's NDB service, fed the runner's slice)
 #include "vibe_log_latch.h"         // ★ on-change logging: LogLatch, AudioAudit (B6)
@@ -1747,6 +1749,7 @@ static std::string vsSpotsBandWhyNot();
 static int vsBandOverride(const std::string& mode);   // ★ V12 Band governor: the owner's +1 Always / −1 Off / 0 Auto
 static double vsBandBudgetUnits();                    // ★ …and the benchmark's budget in FT8 units (∞ = none)
 static double vsLoraBenchPct();                       // ★ V12 LoRa: the benchmark's dec_lora row (% of a core; −1 = none)
+static double vsDxBenchPct();                         // ★★★ V12 DX scanner: the benchmark's dec_dxscan row (% of a core; −1 = none)
 static bool vsDabCapableHw();   // ★ the same, ignoring the owner's block — see its definition
 // ★ Forward-declared alongside vsDabCapable for the same reason: the DAB entry path refuses
 //   thousands of lines above the definition, and it needs to name WHICH restriction bit.
@@ -6155,6 +6158,49 @@ static std::atomic<bool>   g_gallerySaveLive{true};   // ★ keep a LISTENER's d
 static std::atomic<bool>   g_galleryPublic{true};     // ★ the gallery is everyone's to read unless the owner says not
 // ★ This server's position, for the FT8 summary's "furthest" (setReceiverPosition). NaN = none set.
 static std::atomic<double> g_bgLat{NAN}, g_bgLon{NAN};
+
+// ── ★★★ THE IDLE DX SCANNER (V12, 2026-11-04 — vibe_dxscan.h, docs/v12/DX-SCANNER.md) ────────────────────────────────
+// The owner's settings for THIS radio (RadioConfig::dxScan, live on a save), and THIS radio's DX log — in memory, written
+// to g_dxLogPath every ~5 minutes when it changed and at shutdown (never per detection: SD-card wear). The scanner itself
+// is Impl::dxTick / dxLoop, "just another background task": the same idle wait, the same hand-back on arrival.
+static std::mutex          g_dxMtx;
+static vibe::dx::Config    g_dxCfg;
+static std::mutex          g_dxLogMtx;            // ★ the log, the file path and the flush clock
+static vibe::dx::Log       g_dxLog;
+static std::string         g_dxLogPath;
+static bool                g_dxLogLoaded = false;
+static double              g_dxLogFlushedAt = 0;
+static std::atomic<bool>   g_dxDabScan{false};    // ★ the DAB band scan is running in DX mode — the learn-on-air path holds off
+/** Load the log once (under g_dxLogMtx). A missing or unreadable file starts a fresh one — and its bootstrap. */
+static void dxLogLoadLocked() {
+    if (g_dxLogLoaded || g_dxLogPath.empty()) return;
+    g_dxLogLoaded = true;
+    std::string text;
+    if (FILE* f = std::fopen(g_dxLogPath.c_str(), "rb")) {
+        char b[65536]; size_t n;
+        while ((n = std::fread(b, 1, sizeof b, f)) > 0 && text.size() < (32u << 20)) text.append(b, n);
+        std::fclose(f);
+    }
+    vibe::dx::Log l;
+    if (!text.empty() && l.fromFileJson(text)) {
+        g_dxLog = std::move(l);
+        LOGI("DX log: %zu entries from %s", g_dxLog.size(), g_dxLogPath.c_str());
+    } else {
+        g_dxLog = vibe::dx::Log((int64_t)time(nullptr));
+        if (!text.empty()) LOGE("DX log: %s is not a DX log (%zu bytes) — starting a new one", g_dxLogPath.c_str(), text.size());
+    }
+}
+/** ★ Written whole to a temp file and renamed over the old one, so a power cut leaves the previous log intact. */
+static void dxLogFlushLocked(const char* why) {
+    if (g_dxLogPath.empty() || !g_dxLog.dirty()) return;
+    const std::string tmp = g_dxLogPath + ".tmp", j = g_dxLog.toFileJson();
+    FILE* f = std::fopen(tmp.c_str(), "wb");
+    if (!f) { LOGE("DX log: cannot write %s", tmp.c_str()); return; }
+    const bool ok = std::fwrite(j.data(), 1, j.size(), f) == j.size();
+    std::fclose(f);
+    if (ok && std::rename(tmp.c_str(), g_dxLogPath.c_str()) == 0) { g_dxLog.clean(); LOGI("DX log: %zu entries written (%s, %zu bytes)", g_dxLog.size(), why, j.size()); }
+    else { std::remove(tmp.c_str()); LOGE("DX log: writing %s failed", g_dxLogPath.c_str()); }
+}
 /** ★ TEST-ONLY knobs, read from the environment so no build differs from the one that ships:
  *  VIBESERVER_BG_WAIT_SEC overrides the owner's wait; VIBESERVER_BG_TEST_CLOCK names a file holding "HH:MM" that
  *  stands in for the UTC clock (a profile boundary is then a file write, not a night's wait). */
@@ -15786,7 +15832,30 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     static constexpr double kNoLockS = 2.0, kWeakLockS = 8.0, kFalseLockS = 3.0, kUnconfirmedS = 6.0, kMaxBlockS = 16.0;
     static constexpr float  kWeakNullDb = 5.0f;
     static constexpr int    kScanSeedStepsDefault = 2;   // rungs under the ceiling before any empty block has been seen
+    /* ★★★ THE DX SCANNER'S DAB SWEEP IS THIS SCAN, IN DX MODE (V12, 2026-11-04 — Stuart: "DAB scanning is already built
+     *  too, we just need to tweak it to be a DX scanner so for DAB it can take a little longer to adjust the gain etc to
+     *  try and pull a multiplex in as best as it can"). The same blocks, the same gain entry (the scan's noise gain, the
+     *  remembered gain), the same ordinary DAB pipeline — so the same weak-signal lock. What DX mode changes, and ONLY
+     *  when dabDx_.on (the owner's band scan runs exactly as before):
+     *    - it starts at the DX cursor, not 5A, and reports every COMPLETED block to the DX log (onBlock) — a block cut
+     *      short by a listener is never reported;
+     *    - it writes NO bookmarks and reconciles none (the DX log is kept apart from the bookmarks — the brief's
+     *      non-goal), and the ordinary learn-on-air path is held off while it runs (g_dxDabScan);
+     *    - the dwell is LONGER where anything is there, so the AGC can settle on a weak multiplex before it is judged:
+     *      kDx* below. Weak-multiplex pull-in beats sweep speed here; an empty block still costs only kDxNoLockS.
+     *    - a block is done once its ensemble label and service list are complete — the FIC is all the DX log needs
+     *      (no confirmation over several samples: that is the bookmarks' rule, not the log's). */
+    static constexpr double kDxNoLockS = 2.5, kDxWeakLockS = 15.0, kDxFalseLockS = 6.0, kDxMaxBlockS = 30.0, kDxQuietS = 4.0;
+    struct DabDxRun {
+        bool on = false;
+        int  startIdx = 0;
+        std::function<void(int idx, const vibe::dx::DabHit* hit, double secs)> onBlock;
+    };
+    DabDxRun dabDx_;
     void dabBandScanRun(bool fromSetup, int prevCh, uint32_t prevSid) {
+        const bool dx = dabDx_.on;
+        const double noLockS = dx ? kDxNoLockS : kNoLockS, weakLockS = dx ? kDxWeakLockS : kWeakLockS,
+                     falseLockS = dx ? kDxFalseLockS : kFalseLockS, maxBlockS = dx ? kDxMaxBlockS : kMaxBlockS;
         struct Done { ~Done() { g_dabScanActive.store(false); } } done;
         const double t0 = nowSecs();
         const std::set<long long> bmBefore = bmDabKeys();
@@ -15796,15 +15865,15 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         bool cancelled = false, entered = !fromSetup;
         std::string stopWhy;
         if (fromSetup) {
-            resumeCaptureIdle();
+            resumeCaptureIdle(/*fromBg=*/dx);   // ★ DX mode: the scanner's own borrow — it must not stop the scanner
             if (radioReleased.load()) stopWhy = "another program on this server has the radio just now";
             else {
-                handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":0}");
+                handleControl(nullptr, "{\"type\":\"dab\",\"on\":1,\"channel\":" + std::to_string(dx ? std::max(0, dabDx_.startIdx) : 0) + "}");
                 entered = g_dabMode.load(std::memory_order_relaxed);
                 if (!entered) stopWhy = "the radio would not open Band III";
             }
         }
-        for (size_t idx = 0; entered && idx < vibedab::kBandIIICount; ++idx) {
+        for (size_t idx = dx ? (size_t)std::max(0, dabDx_.startIdx) : 0; entered && idx < vibedab::kBandIIICount; ++idx) {
             if (g_dabScanCancel.load() || stopping.load() || !g_dabMode.load(std::memory_order_relaxed)) { cancelled = true; break; }
             { std::lock_guard<std::mutex> lk(g_dabBandMtx); g_dabBand.current = int(idx); }
             dabBandBroadcast();
@@ -15843,13 +15912,20 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 // ★ …and so does a block the AGC had to CUT for: noise at the scan's noise gain is never cut, so a cut means
                 //   power on this block — a strong ensemble still being brought into range, or a neighbour's.
                 if (lastGainTenthDb < gainAtStart - 5 || g_adcClipRun.load(std::memory_order_relaxed) > 0) cutSeen = true;
-                if (!everLocked && t > kNoLockS && !((q.nullDepthDb >= kWeakNullDb || cutSeen) && t <= kWeakLockS)) break;
-                if (everLocked && fibAt < 0 && t - lockAt > kFalseLockS) { everLocked = false; break; }
+                if (!everLocked && t > noLockS && !((q.nullDepthDb >= kWeakNullDb || cutSeen) && t <= weakLockS)) break;
+                if (everLocked && fibAt < 0 && t - lockAt > falseLockS) { everLocked = false; break; }
                 rows = g_dab.playableAudio(&complete);
                 bool labelled = !rows.empty();
                 for (const auto& r : rows) if (r.label.find_first_not_of(' ') == std::string::npos) { labelled = false; break; }
                 if (rows.size() != lastN) { lastN = rows.size(); lastChange = t; }
                 if (complete && labelled && completeAt < 0) completeAt = t;
+                // ★★ DX MODE: the FIC has said what this block is — the label and every service named. Done.
+                if (dx) {
+                    if (complete && labelled && fibAt >= 0 && !g_dab.ensembleLabel().empty()) break;
+                    if (labelled && fibAt >= 0 && t - lastChange > kDxQuietS && t > 6.0) break;
+                    if (t > maxBlockS) break;
+                    continue;
+                }
                 // ★ The confirmation is sampled twice a second over the LEARNABLE list (every complete service, the
                 //   set the bookmarks are reconciled by), not every 100 ms — samples must span FIC cycles to mean anything.
                 if (t - lastConfirm >= 0.5) {
@@ -15885,7 +15961,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             // ★ An empty block the AGC did not have to cut for is noise alone: where it settled is the noise gain.
             if (!found && !cutSeen && lastGainTenthDb >= gainAtStart) scanSeedSteps = g_ovlSteps.load(std::memory_order_relaxed);
             int added = 0, removed = 0;
-            if (found) {
+            if (dx) {
+                // ★★ THE DX LOG'S VIEW OF THIS BLOCK (a COMPLETED visit — a cancelled one broke out above). The EId and ECC
+                //    from the FIC's service rows (else the receiver's report), TII from the receiver's report: the strongest
+                //    transmitter, when the signal carried enough of it (weak DX often has none — brief §6).
+                vibe::dx::DabHit dh;
+                dh.block = int(idx); dh.blockName = vibedab::kBandIII[idx].name; dh.hz = double(vibedab::kBandIII[idx].centreHz);
+                dh.label = ens; dh.snrDb = q.merDb; dh.fibRate = q.fibRate; dh.fibOk = fibAt >= 0 ? 1 : 0;
+                dh.services = hit.services;
+                const auto learn = g_dab.learnable();
+                if (!learn.empty()) { dh.eid = uint32_t(std::max(0, learn.front().eid)); dh.ecc = learn.front().ecc; }
+                // ★★ brief §6: logged on the FIRST CRC-valid FIB carrying an EId — no label or service list needed. A weak
+                //    multiplex that gave a FIB but never named itself in the dwell is still a DX catch (12D with noise
+                //    added: a FIB at 5.9 s, no labels by 30 s — the owner's scan had left at 3.4 s).
+                if (everLocked && fibAt >= 0) dabDxReportExtras(dh);
+                const bool dxFound = found || (everLocked && fibAt >= 0 && dh.eid != 0);
+                if (dabDx_.onBlock) dabDx_.onBlock(int(idx), dxFound ? &dh : nullptr, nowSecs() - tb);
+            } else if (found) {
                 const double hz = double(vibedab::kBandIII[idx].centreHz);
                 if (q.fibRate > 0.9f) dabEnsRemember(int(idx), ens);   // ★ the ensemble memory's own bar
                 added = bmScanDab(hz, bm, &bmBefore);
@@ -16158,7 +16250,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             const double tnow = Impl::nowSecs();
             std::vector<vibedab::DabService::LearnRow> learnRows;
             // ★ Never WAIT for the decoder here: this is vibe-dsp. A busy decoder means "next block".
-            if (tnow - lastDabLearn_ >= 5.0 && g_dab.learnableTry(learnRows)) {
+            // ★★★ V12: not while the DX scanner sweeps DAB — its finds go to the DX log, never the bookmarks (the brief's non-goal)
+            if (tnow - lastDabLearn_ >= 5.0 && !g_dxDabScan.load(std::memory_order_relaxed) && g_dab.learnableTry(learnRows)) {
                 lastDabLearn_ = tnow;
                 const double hz = double(g_dab.centreHz());
                 for (const auto& r : learnRows) bmLearnDab(hz, r.eid, r.ecc, r.sid, r.label);
@@ -21142,6 +21235,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
           j += std::string(",\"adminOk\":")  + (adminNow(sock) ? "true" : "false"); }
         // ★★ V12: may THIS listener scan Band III for DAB (dabBandScanWhyNot)? Absent = no, so an older server draws nothing.
         if (dabBandScanWhyNot(sock).empty()) j += ",\"dabScan\":true";
+        // ★★★ V12: the DX Log is offered here (dxLogOffered) — absent = no DX LOG key; an older client never looks for it
+        if (dxLogOffered(adminNow(sock))) j += ",\"dxLog\":true";
         // ★★ THE COUNTDOWN NEEDS A DEADLINE AT CONNECT, not just the two warnings. The first
         // cut drove the client's timer ENTIRELY from session_warning at T-120 and T-30 — so on
         // a 30-minute limit the listener saw nothing at all for 28 minutes and concluded the
@@ -23892,6 +23987,105 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // GET /vibeserver/gallery/file/<name>[?download=1]      — one item, inline (a .txt shown in the page) or saved.
         // ★★★ A name is only ever LOOKED UP (Store::resolve: the safe alphabet, listed in the index, opened O_NOFOLLOW).
         // ★ Everyone's to read (Stuart) unless the owner switched it off — then the owner, with the password, still can.
+        // ── ★★★ V12: THE DX LOG (vibe_dxscan.h, docs/v12/DX-SCANNER.md) — ADDITIVE: no older client asks for any of it ──────
+        // GET  /vibeserver/dxlog.json[?band=FM|DAB&local=1&suspect=1&sort=last|first|peak|times&offset=&limit=]
+        //                                                   — the log, filtered and paged (≤ 100); default DX only
+        // GET  /vibeserver/dxlog/entry?id=N                 — one entry with its openings (newest first)
+        // GET  /vibeserver/dxlog/alerts?since=SEQ           — alerts newer than SEQ (each client keeps its own; alerts are opt-in)
+        // POST /vibeserver/dxlog/promote?id=N               — OWNER: copy it into the bookmarks (frequency, name, mode)
+        // POST /vibeserver/dxlog/clear                      — OWNER: empty the log (promoted entries are kept)
+        // ★ Reading is gated like the gallery (the PIN), and by the owner's "admin lock on viewing" (dxScan.viewAdmin).
+        //   Writing is the bookmarks' rule: changing the receiver for everybody is the owner's (vsAdminHttpOk).
+        } else if (reqLine.rfind("GET /vibeserver/dxlog", 0) == 0 || reqLine.rfind("POST /vibeserver/dxlog", 0) == 0) {
+            if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
+            auto reply = [&](const char* status, const std::string& body) {
+                sock->sendstr(std::string("HTTP/1.1 ") + status + "\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
+                              "X-Content-Type-Options: nosniff\r\nConnection: close\r\nContent-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body);
+                sock->close();
+            };
+            const bool post = reqLine.rfind("POST", 0) == 0;
+            const size_t sp0 = reqLine.find(' ');
+            const size_t sp = reqLine.find(' ', sp0 + 1);
+            const std::string target = reqLine.substr(sp0 + 1, sp == std::string::npos ? std::string::npos : sp - sp0 - 1);
+            const size_t qm = target.find('?');
+            const std::string path = target.substr(0, qm), query = qm == std::string::npos ? "" : target.substr(qm + 1);
+            auto qv = [&](const char* k) {
+                const std::string key = std::string(k) + "=";
+                size_t p = 0;
+                while ((p = query.find(key, p)) != std::string::npos) {
+                    if (p == 0 || query[p - 1] == '&') { const size_t e = query.find('&', p); return query.substr(p + key.size(), e == std::string::npos ? std::string::npos : e - p - key.size()); }
+                    p += key.size();
+                }
+                return std::string();
+            };
+            vibe::dx::Config cfg;
+            { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
+            if (cfg.viewAdmin && !adminOkFor(reqLine, sock)) { reply("403 Forbidden", "{\"ok\":false,\"error\":\"the owner keeps this server's DX log private\"}"); return; }
+            if (post && !vsAdminHttpOk(sock, reqLine)) { sock->close(); return; }   // ★ it already said 401
+            const int64_t utc = (int64_t)time(nullptr);
+            if (!post && path == "/vibeserver/dxlog.json") {
+                vibe::dx::Log::Query q;
+                q.showLocal = qv("local") == "1"; q.showSuspect = qv("suspect") == "1";
+                const std::string band = qv("band"); if (band == "FM" || band == "DAB") q.band = band;
+                const std::string sort = qv("sort"); if (sort == "first" || sort == "peak" || sort == "times") q.sort = sort;
+                q.offset = std::max(0, std::atoi(qv("offset").c_str()));
+                const int lim = std::atoi(qv("limit").c_str()); q.limit = lim > 0 ? std::min(100, lim) : 50;
+                std::string j;
+                { std::lock_guard<std::mutex> lk(g_dxLogMtx); dxLogLoadLocked(); j = g_dxLog.listJson(q, utc); }
+                // ★ and what the scanner is: on, the bands, the raster — the client draws from the server (no hardcoded settings)
+                // ★ canPromote: vsAdminHttpOk's own answer, without its 401 (no password set, the host itself, or the owner's proof)
+                bool owner;
+                { std::string sec; { std::lock_guard<std::mutex> lk(g_vsAdminMtx); sec = g_vsAdminSecret; }
+                  owner = sec.empty() || isLoopback(sock->peerAddress()) || adminOkFor(reqLine, sock); }
+                j.insert(j.size() - 1, ",\"scanner\":" + vibe::dx::toJson(cfg) + ",\"canPromote\":" + (owner ? "true" : "false"));
+                reply("200 OK", j); return;
+            }
+            if (!post && path == "/vibeserver/dxlog/entry") {
+                const int id = std::atoi(qv("id").c_str());
+                std::string j;
+                { std::lock_guard<std::mutex> lk(g_dxLogMtx); dxLogLoadLocked(); if (const auto* e = g_dxLog.find(id)) j = g_dxLog.entryJson(*e, true); }
+                if (j.empty()) reply("404 Not Found", "{\"ok\":false,\"error\":\"no such entry\"}");
+                else reply("200 OK", "{\"ok\":true,\"entry\":" + j + "}");
+                return;
+            }
+            if (!post && path == "/vibeserver/dxlog/alerts") {
+                std::string j;
+                { std::lock_guard<std::mutex> lk(g_dxLogMtx); dxLogLoadLocked(); j = g_dxLog.alertsJson((uint32_t)std::strtoul(qv("since").c_str(), nullptr, 10)); }
+                reply("200 OK", j); return;
+            }
+            if (post && path == "/vibeserver/dxlog/promote") {
+                const int id = std::atoi(qv("id").c_str());
+                vibe::dx::Entry e;
+                bool have = false;
+                { std::lock_guard<std::mutex> lk(g_dxLogMtx); dxLogLoadLocked(); if (const auto* x = g_dxLog.find(id)) { e = *x; have = true; } }
+                if (!have) { reply("404 Not Found", "{\"ok\":false,\"error\":\"no such entry\"}"); return; }
+                std::string bm;
+                if (!e.dab) {
+                    // ★ FM: frequency, the name (the last PS, else the PI) and WFM — a manual bookmark, never expiring
+                    char nm[32]; std::snprintf(nm, sizeof nm, "PI %04X", e.pi);
+                    bmAddManual(e.khz * 1000.0, e.psLast.empty() ? std::string(nm) : e.psLast, "wfm");
+                    bm = "fm:" + std::to_string(e.khz);
+                } else {
+                    // ★ DAB: every service the ensemble named, on its block (the band scan's own bookmark rows)
+                    const double hz = e.block >= 0 && e.block < (int)vibedab::kBandIIICount ? double(vibedab::kBandIII[e.block].centreHz) : 0.0;
+                    std::vector<DabScanBmRow> rows;
+                    for (const auto& sv : e.services) rows.push_back({ sv.first, sv.second, int(e.eid), e.ecc });
+                    if (hz <= 0 || rows.empty()) { reply("400 Bad Request", "{\"ok\":false,\"error\":\"this multiplex named no services to bookmark\"}"); return; }
+                    bmScanDab(hz, rows, nullptr);
+                    bm = "dab:" + e.blockName + ":" + std::to_string(e.eid);
+                }
+                { std::lock_guard<std::mutex> lk(g_dxLogMtx); g_dxLog.setPromoted(id, bm); }
+                LOGI("DX log: entry %d (%s) promoted to the bookmarks by %s", id, e.key.c_str(), sock->peerAddress().c_str());
+                reply("200 OK", "{\"ok\":true,\"promoted\":\"" + vibe::dx::esc(bm) + "\"}"); return;
+            }
+            if (post && path == "/vibeserver/dxlog/clear") {
+                int n;
+                { std::lock_guard<std::mutex> lk(g_dxLogMtx); dxLogLoadLocked(); n = g_dxLog.clear(); dxLogFlushLocked("cleared by the owner"); }
+                LOGI("DX log: cleared by %s (%d entries; promoted ones kept)", sock->peerAddress().c_str(), n);
+                reply("200 OK", "{\"ok\":true,\"removed\":" + std::to_string(n) + "}"); return;
+            }
+            reply("404 Not Found", "{\"ok\":false,\"error\":\"unknown DX log request\"}");
+            return;
         } else if (reqLine.rfind("GET /vibeserver/gallery", 0) == 0) {
             if (!vsPinHttpOk(sock, reqLine)) { sock->close(); return; }
             auto reply = [&](const char* status, const char* ctype, const std::string& body, const std::string& extra = "") {
@@ -29308,6 +29502,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             feedClientChannels(buf.data(), (int)buf.size());
             // ★★ V12 background decoding: a COPY into its own bounded queue, nothing more on this thread.
             if (bgActive_.load(std::memory_order_relaxed)) bgRun_.feedIq(buf.data(), (int)buf.size());
+            // ★★★ V12 the DX scanner's FM hop: the same — a copy into its own bounded queue (vibe_dxscan_fm.h)
+            if (dxFmFeed_.load(std::memory_order_relaxed)) dxFm_.feed(buf.data(), (int)buf.size());
             // ★★ V12: a CW skimmer on a ONE-PIPELINE radio — its own slice, cut off this thread (vibe_wide_tap.h).
             if (!perClientDsp()) skimTapFeed(buf.data(), (int)buf.size());
             {
@@ -30328,6 +30524,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
      *  VFOs inside the window the radio has NOW (a listener is on, or the window is locked). Caller holds bgOpMtx_. */
     void bgStartLocked(const vibe::bg::Config& cfg, int idx, bool move = true, bool listenerOn = false) {
         const auto& prof = cfg.profiles[(size_t)idx];
+        if (move && !listenerOn) dxYieldToBg();   // ★★★ V12: a due profile comes before the DX scanner
         // ★★ An ISM profile runs only with nobody here, on a radio it may move (see bgIsm_) — otherwise it waits, and the
         //    radio is not even woken for it.
         if (prof.isWhole()) {
@@ -30386,6 +30583,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         std::string why = vsIsmWhyNot();
         if (why.empty() && !ismReach(*b)) why = std::string("this radio cannot tune the whole of the ") + b->name + " band (check its allowed ranges)";
         if (!why.empty()) { bgIsmRefuse(idx, why); return; }
+        dxYieldToBg();                            // ★★★ V12: a due profile comes before the DX scanner
         resumeCaptureIdle(/*fromBg=*/true);       // ★ a parked or released radio is taken back first
         if (radioReleased.load()) {
             LOGI("background decoding: profile %d (ISM) is due but another program has the radio \xe2\x80\x94 trying again in 60 s", idx + 1);
@@ -30416,6 +30614,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (g_adsbMode.load() || g_dabMode.load() || g_ndbMode.load() || (g_ismMode.load() && !bgIsm_) || (g_aisMode.load() && !bgAis_) || modeLeaveDueAt.load() > 0.0) return;
         const std::string why = vsAisWhyNot();
         if (!why.empty()) { bgIsmRefuse(idx, why); return; }
+        dxYieldToBg();                            // ★★★ V12: a due profile comes before the DX scanner
         resumeCaptureIdle(/*fromBg=*/true);
         if (radioReleased.load()) {
             LOGI("background decoding: profile %d (AIS) is due but another program has the radio \xe2\x80\x94 trying again in 60 s", idx + 1);
@@ -30693,6 +30892,368 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         bgStartLocked(cfg, want, true, false);
+    }
+
+    // ── ★★★ V12 THE IDLE DX SCANNER (2026-11-04 — vibe_dxscan.h, docs/v12/DX-SCANNER.md) ───────────────────────────────
+    /* Stuart's brief: when a radio is idle, sweep Broadcast FM and DAB Band III slowly and keep what is heard in a DX LOG.
+     *  "Just another background task" — the arbitration is background decoding's, unchanged:
+     *    - it runs only with NOBODY here, after the owner's wait (default 5 min), and holds the idle park off meanwhile;
+     *    - a listener arriving stops it on the connect path (resumeCaptureIdle → dxStopForListener), BEFORE the newcomer
+     *      is told anything: the hop in progress is thrown away (never logged) and the radio goes back to exactly the
+     *      dial it was left on;
+     *    - a background-decoding profile that is due comes first (bgStartLocked stops the scanner), and so does ADS-B kept
+     *      running; it never moves a LOCKED radio, never runs on an Icom, never starts on battery below the threshold;
+     *    - FM: one hop at a time through bgPlace (the same ordinary tune background decoding uses), the IQ copied off the
+     *      DSP thread into the hop engine (vibe_dxscan_fm.h, its own threads at decoder priority);
+     *    - DAB: the owner's own band scan (dabBandScanRun) in DX MODE — longer dwell where anything is there, no bookmarks.
+     *  The resume cursor and the log are the model's (vibe_dxscan.h); this is only the radio's side. */
+    std::mutex            dxOpMtx_;                 // ★ one start/stop at a time — the tick, an arrival, a profile
+    std::thread           dxThread_;
+    std::atomic<bool>     dxRunning_{false}, dxCancel_{false}, dxWanted_{false}, dxFmFeed_{false};
+    std::atomic<double>   dxEmptySince_{0.0};
+    double                dxNotBefore_ = 0, dxEvalAt_ = 0;
+    bool                  dxLoggedWait_ = false;
+    std::thread::id       dxThreadId_{};
+    vibe::dx::FmHopEngine dxFm_;
+    struct { bool valid = false; double centre = 0, view = 0, audio = 0; } dxSaved_;
+    std::mutex            dxStatMtx_;
+    std::string           dxNow_, dxLast_, dxWhy_, dxDabWhy_;
+    double                dxHopWall_ = 0, dxHopCpu_ = 0; int dxHopPeaks_ = 0, dxHopRounds_ = 0;
+    double                dxDabBlockSecs_ = 0; int dxDabBlocks_ = 0;
+    double                dxSweepStartFm_ = 0, dxSweepSecsFm_ = 0, dxSweepStartDab_ = 0, dxSweepSecsDab_ = 0;
+
+    /** Why the scanner may not run on this radio now ("" = it may). In words — the admin line shows it. */
+    std::string dxWhyNot(const vibe::dx::Config& c) {
+        if (!c.any()) return "switched off";
+        if (frontDoorOnly || decoderOnly) return "not a radio process";
+        if (useIcom()) return "not on an Icom radio (it has no IQ to sweep)";
+        if (bgLocked()) return "this radio's range is locked \xe2\x80\x94 the DX scanner never moves a locked radio";
+        if (adsbKeepHolds()) return "ADS-B is kept running on this radio when nobody is connected";
+        if (bgActive_.load() || bgSaved_.valid || bgWanted_.load()) return "background decoding has the idle radio (its profiles come first)";
+        const int lv = g_vsBatteryLevel.load();
+        if (lv >= 0 && !g_vsBatteryCharging.load() && (g_vsBatteryPaused.load() || lv < std::max(g_vsBatteryResumeAt.load(), g_vsBatteryPauseAt.load() + 10)))
+            return "on battery at " + std::to_string(lv) + " % \xe2\x80\x94 the DX scanner waits for the charger";
+        const bool fm = c.fm && !vsModeBlocked("wfm"), dab = c.dab && !vsModeBlocked("dab") && vsDabCapable();
+        if (!fm && !dab) return c.fm && !c.dab ? "Broadcast FM is switched off on this receiver"
+                              : !c.fm && c.dab ? (vsModeBlocked("dab") ? "DAB is switched off on this receiver" : "this radio cannot do DAB")
+                              : "neither band can be scanned here (FM switched off, DAB unavailable)";
+        return "";
+    }
+    /** The benchmark's word on the FM hop: % of a core for 8 stations in real time (dec_dxscan) → peaks per round. */
+    int dxPeakBudget() {
+        const double pct = vsDxBenchPct();
+        if (!(pct > 0)) return 64;
+        return std::max(2, std::min(64, (int)std::floor(8.0 * 150.0 / pct)));   // ★ aim at ~1.5 cores while nobody listens
+    }
+    double dxWaitSec(const vibe::dx::Config& c) {
+        if (const char* e = std::getenv("VIBESERVER_DX_WAIT_SEC"); e && *e) return std::max(0.0, std::atof(e));   // ★ TEST-ONLY
+        return c.waitMin * 60.0;
+    }
+    /** ★★ SOMEBODY ARRIVED (resumeCaptureIdle, the connect path): stop, throw the hop away, give the dial back. */
+    void dxStopForListener(const char* who) {
+        dxWanted_.store(false);
+        dxEmptySince_.store(0.0);
+        if (!dxRunning_.load() && !dxSaved_.valid) return;
+        dxStop(who, true);
+    }
+    /** Stop the scanner (and, if `restore`, put the radio back where it was before the first hop moved it). Bounded: the
+     *  loop looks at dxCancel_ every 50 ms; a DAB sweep sees g_dabScanCancel within 100 ms and hands DAB back itself. */
+    void dxStop(const std::string& why, bool restore) {
+        if (std::this_thread::get_id() == dxThreadId_) return;   // ★ never from its own thread (a DAB entry inside a sweep)
+        std::lock_guard<std::mutex> op(dxOpMtx_);
+        const bool was = dxRunning_.load();
+        std::string doing;
+        { std::lock_guard<std::mutex> lk(dxStatMtx_); doing = dxNow_; }
+        if (was || dxThread_.joinable()) {
+            dxCancel_.store(true);
+            if (g_dxDabScan.load()) g_dabScanCancel.store(true);
+            if (dxThread_.joinable()) dxThread_.join();
+        }
+        if (was) LOGI("DX scanner: stopped \xe2\x80\x94 %s%s", why.c_str(), doing.empty() ? "" : (" (" + doing + " discarded)").c_str());
+        { std::lock_guard<std::mutex> lk(dxStatMtx_); dxNow_.clear(); }
+        if (restore && dxSaved_.valid) {
+            if (!g_dabMode.load()) {
+                bgPlace(dxSaved_.centre, dxSaved_.view, dxSaved_.audio);
+                LOGI("DX scanner: the radio is back on %.3f kHz (centre %.3f), where it was left", dxSaved_.audio / 1e3, dxSaved_.centre / 1e3);
+            }
+            dxSaved_.valid = false;
+        }
+    }
+    /** ★ Background decoding's profile is due: it comes first (called at each of its starts). */
+    void dxYieldToBg() { if (dxRunning_.load() || dxSaved_.valid) dxStop("a background decoding profile is due", true); }
+    /** Shutdown: stop without touching the radio (the teardown owns it), and write the log. */
+    void dxShutdown() {
+        dxCancel_.store(true);
+        if (g_dxDabScan.load()) g_dabScanCancel.store(true);
+        { std::lock_guard<std::mutex> op(dxOpMtx_); if (dxThread_.joinable() && std::this_thread::get_id() != dxThreadId_) dxThread_.join(); }
+        std::lock_guard<std::mutex> lk(g_dxLogMtx);
+        dxLogFlushLocked("shutdown");
+    }
+
+    /** ★★ THE TICK — after bgTick, every two seconds, on the housekeeping thread. */
+    void dxTick() {
+        if (stopping.load() || frontDoorOnly || decoderOnly) return;
+        vibe::dx::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
+        const double now = nowSecs();
+        {
+            std::lock_guard<std::mutex> lk(g_dxLogMtx);
+            if (cfg.on) dxLogLoadLocked();
+            g_dxLog.setGapMin(cfg.gapMin);
+            if (now - g_dxLogFlushedAt >= 300) { g_dxLogFlushedAt = now; dxLogFlushLocked("the 5-minute flush"); }
+            if (now >= dxEvalAt_ && g_dxLogLoaded) { dxEvalAt_ = now + 60; g_dxLog.evaluate((int64_t)time(nullptr)); }
+        }
+        bool anyone;
+        { std::lock_guard<std::mutex> lk(clientMtx); anyone = bgSomeoneHereLocked(); }
+        std::string why = dxWhyNot(cfg);
+        // ★ another whole-radio mode still on (a listener's DAB/ISM/AIS/ADS-B/NDB in its leave grace): wait for its own leave
+        if (why.empty() && !dxRunning_.load() && (g_dabMode.load() || g_adsbMode.load() || g_ismMode.load() || g_aisMode.load()
+                                                  || g_ndbMode.load() || modeLeaveDueAt.load() > 0.0))
+            why = "waiting for the last listener's mode to close";
+        { std::lock_guard<std::mutex> lk(dxStatMtx_); dxWhy_ = why; }
+        if (!why.empty() || anyone) {
+            if (dxRunning_.load() || dxSaved_.valid) dxStop(!why.empty() ? why : std::string("a listener is on"), true);
+            dxWanted_.store(false); dxLoggedWait_ = false;
+            if (anyone) dxEmptySince_.store(0.0); else if (dxEmptySince_.load() <= 0) dxEmptySince_.store(now);
+            return;
+        }
+        if (dxEmptySince_.load() <= 0) dxEmptySince_.store(now);
+        dxWanted_.store(true);          // ★ the park is held off: parking a radio to wake it in a minute is waste and risk
+        if (dxRunning_.load()) return;
+        const double wait = dxWaitSec(cfg);
+        if (!dxLoggedWait_) {
+            dxLoggedWait_ = true;
+            LOGI("DX scanner: nobody here \xe2\x80\x94 the sweep starts in %.0f s unless somebody arrives",
+                 std::max(0.0, wait - (now - dxEmptySince_.load())));
+        }
+        if (now - dxEmptySince_.load() < wait || now < dxNotBefore_) return;
+        dxStart();
+    }
+    void dxStart() {
+        std::lock_guard<std::mutex> op(dxOpMtx_);
+        if (dxRunning_.load()) return;
+        if (dxThread_.joinable()) dxThread_.join();
+        resumeCaptureIdle(/*fromBg=*/true);   // ★ a parked radio is taken back (fromBg: it must not stop us)
+        if (radioReleased.load()) {
+            LOGI("DX scanner: due, but another program has the radio \xe2\x80\x94 trying again in 60 s");
+            dxNotBefore_ = nowSecs() + 60; return;
+        }
+        if (!dxSaved_.valid) dxSaved_ = { true, rtlCenter.load(), viewCenter.load(), audioFreq.load() };
+        LOGI("DX scanner: nobody here for %.0f s \xe2\x80\x94 sweeping (the radio goes back to %.3f kHz when somebody arrives)",
+             nowSecs() - dxEmptySince_.load(), dxSaved_.audio / 1e3);
+        dxCancel_.store(false);
+        dxRunning_.store(true);
+        dxThread_ = std::thread([this] { dxLoop(); });
+    }
+
+    /** The FM hops this radio can make now, inside the owner's permitted bands. */
+    std::vector<vibe::dx::FmHopPlan> dxFmPlan(const vibe::dx::Config& c) {
+        auto plan = vibe::dx::planFm(sampleRate, c.rasterKhz);
+        const vibebands::Ranges perm = vsPermittedRanges(vibebands::Ranges{{0.0, 2.0e9}});
+        if (perm.empty()) return plan;
+        std::vector<vibe::dx::FmHopPlan> out;
+        for (const auto& h : plan) if (vibebands::allows(perm, h.loHz) || vibebands::allows(perm, h.hiHz) || vibebands::allows(perm, h.centreHz)) out.push_back(h);
+        return out;
+    }
+
+    void dxLoop() {
+        vibeBulkThread("vibe-dxscan");   // ★ only the sequencing — the decoding runs on the hop engine's own threads
+        dxThreadId_ = std::this_thread::get_id();
+        struct Done { Impl* s; ~Done() { s->dxFmFeed_.store(false); s->dxThreadId_ = std::thread::id(); s->dxRunning_.store(false); } } done{ this };
+        bool dabOk = true;
+        dxDabWhy_.clear();
+        while (!dxCancel_.load() && !stopping.load()) {
+            vibe::dx::Config cfg;
+            { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
+            if (!cfg.any()) break;
+            const bool fmOn = cfg.fm && !vsModeBlocked("wfm");
+            const auto plan = fmOn ? dxFmPlan(cfg) : std::vector<vibe::dx::FmHopPlan>{};
+            const int nDab = (cfg.dab && dabOk && !vsModeBlocked("dab") && vsDabCapable()) ? int(vibedab::kBandIIICount) : 0;
+            vibe::dx::Config eff = cfg; eff.fm = !plan.empty(); eff.dab = nDab > 0;
+            if (!eff.fm && !eff.dab) { LOGI("DX scanner: nothing this radio can sweep now%s", dxDabWhy_.empty() ? "" : (" (DAB: " + dxDabWhy_ + ")").c_str()); break; }
+            vibe::dx::Job job;
+            { std::lock_guard<std::mutex> lk(g_dxLogMtx); dxLogLoadLocked(); job = vibe::dx::nextJob(g_dxLog, eff, plan, nDab); }
+            if (job.dab) { if (!dxDabSweep(eff, job.index)) dabOk = false; continue; }
+            dxFmHop(eff, plan, job);
+        }
+    }
+
+    /** ★ ONE FM HOP: tune, settle, decode, commit — or, cut short, nothing at all. */
+    void dxFmHop(const vibe::dx::Config& cfg, const std::vector<vibe::dx::FmHopPlan>& plan, const vibe::dx::Job& job) {
+        const auto& hop = plan[(size_t)job.index];
+        const double off = hwOffsetHz();
+        const double centre = hop.centreHz - off;   // ★ so the capture's DC lands where the plan put it (off the raster)
+        {
+            std::lock_guard<std::mutex> lk(dxStatMtx_);
+            char b[96]; std::snprintf(b, sizeof b, "FM hop %d of %zu (%.1f\xe2\x80\x93%.1f MHz)", job.index + 1, plan.size(), hop.loHz / 1e6, hop.hiHz / 1e6);
+            dxNow_ = b;
+        }
+        if (job.index == 0) dxSweepStartFm_ = nowSecs();
+        if (dxCancel_.load()) return;
+        bgPlace(centre, centre, hop.centreHz);
+        vibe::dx::FmHopEngine::Params p;
+        p.rateHz = sampleRate; p.centreHz = rtlCenter.load() + off; p.dcHz = p.centreHz;
+        p.rasterKhz = cfg.rasterKhz; p.loHz = hop.loHz; p.hiHz = hop.hiHz;
+        p.peaksPerRound = dxPeakBudget();
+        if (const char* e = std::getenv("VIBESERVER_DX_DWELL_SEC"); e && *e) p.dwellSec = std::max(0.5, std::atof(e));   // ★ TEST-ONLY
+        dxFm_.start(p);
+        dxFmFeed_.store(true);
+        const double t0 = nowSecs();
+        while (!dxFm_.done() && !dxCancel_.load() && !stopping.load() && nowSecs() - t0 < p.dwellSec * 8 + 20)
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        dxFmFeed_.store(false);
+        const bool ok = dxFm_.done() && !dxCancel_.load() && !stopping.load();
+        dxFm_.abort();
+        if (!ok) {
+            if (!dxCancel_.load() && !stopping.load()) LOGI("DX scanner: FM hop %.1f\xe2\x80\x93%.1f MHz timed out \xe2\x80\x94 discarded", hop.loHz / 1e6, hop.hiHz / 1e6);
+            return;   // ★★ CUT SHORT: thrown away, the cursor does not move — the next idle period does this hop again
+        }
+        const vibebands::Ranges perm = vsPermittedRanges(vibebands::Ranges{{0.0, 2.0e9}});
+        std::vector<vibe::dx::FmHit> hits;
+        for (const auto& h : dxFm_.results()) if (perm.empty() || vibebands::allows(perm, h.khz * 1e3)) hits.push_back(h);
+        const auto st = dxFm_.stats();
+        vibe::dx::VisitResult vr;
+        int confirmed = 0;
+        std::string names;
+        for (const auto& h : hits) if (h.pi && vibe::dx::fmConfirmed(h.groups, h.psComplete)) {
+            ++confirmed;
+            char b[48]; std::snprintf(b, sizeof b, "%s%.1f %04X", names.empty() ? "" : ", ", h.khz / 1e3, h.pi); names += b;
+        }
+        const int64_t utc = (int64_t)time(nullptr);
+        bool wrapped;
+        {
+            std::lock_guard<std::mutex> lk(g_dxLogMtx);
+            vr = g_dxLog.commitFm((int)std::lround(hop.loHz / 1e3), (int)std::lround(hop.hiHz / 1e3), (int)std::lround(p.dcHz / 1e3), cfg.rasterKhz, hits, utc);
+            const uint32_t sw = g_dxLog.sweeps(false);
+            vibe::dx::advance(g_dxLog, cfg, job, plan, cfg.dab ? int(vibedab::kBandIIICount) : 0);
+            wrapped = g_dxLog.sweeps(false) != sw;
+        }
+        std::string line;
+        {
+            std::lock_guard<std::mutex> lk(dxStatMtx_);
+            dxHopWall_ = st.wallSec; dxHopCpu_ = st.cpuSec; dxHopPeaks_ = st.peaks; dxHopRounds_ = st.rounds;
+            char b[320];
+            std::snprintf(b, sizeof b, "FM %.1f\xe2\x80\x93%.1f MHz: %d peak(s), %d identified%s%s in %.1f s", hop.loHz / 1e6, hop.hiHz / 1e6,
+                          st.peaks, confirmed, names.empty() ? "" : " (", names.empty() ? "" : (names + ")").c_str(), st.wallSec);
+            dxLast_ = line = b;
+            if (wrapped && dxSweepStartFm_ > 0) dxSweepSecsFm_ = nowSecs() - dxSweepStartFm_;
+        }
+        LOGI("DX scanner: %s \xe2\x80\x94 %d new, %d new opening(s), %d alert(s), %d suspect; %d worker(s), %.2f s CPU%s",
+             line.c_str(), vr.newEntries, vr.newOpenings, vr.alerts, vr.suspects, st.workers, st.cpuSec,
+             st.droppedBlocks ? (", " + std::to_string(st.droppedBlocks) + " IQ block(s) dropped").c_str() : "");
+    }
+
+    /** ★ THE DAB SWEEP: the owner's band scan, in DX mode, from the cursor to the end of Band III. false = DAB cannot run
+     *  here (the reason in dxDabWhy_) — the loop carries on with FM alone this session. */
+    bool dxDabSweep(const vibe::dx::Config& cfg, int startIdx) {
+        const std::string why = dabBandScanWhyNot(nullptr);
+        if (!why.empty()) { dxDabWhy_ = why; LOGI("DX scanner: DAB skipped \xe2\x80\x94 %s", why.c_str()); return false; }
+        if (g_dabScanActive.exchange(true)) { std::this_thread::sleep_for(std::chrono::seconds(1)); return true; }
+        g_dabScanCancel.store(false);
+        g_dabScanNoRestore.store(false);
+        {
+            std::lock_guard<std::mutex> lk(g_dabBandMtx);
+            g_dabBand = DabBandScanState{};
+            g_dabBand.running = true; g_dabBand.by = "dxscan";
+            g_dabBand.total = int(vibedab::kBandIIICount); g_dabBand.startedAt = nowSecs();
+        }
+        if (startIdx == 0) dxSweepStartDab_ = nowSecs();
+        { std::lock_guard<std::mutex> lk(dxStatMtx_); dxNow_ = std::string("DAB from ") + vibedab::kBandIII[startIdx].name; }
+        LOGI("DX scanner: DAB from %s (DX mode \xe2\x80\x94 no bookmarks)", vibedab::kBandIII[startIdx].name);
+        dabDx_.on = true;
+        dabDx_.startIdx = startIdx;
+        dabDx_.onBlock = [this, cfg](int idx, const vibe::dx::DabHit* hit, double secs) {
+            const int64_t utc = (int64_t)time(nullptr);
+            vibe::dx::VisitResult vr;
+            bool wrapped;
+            const auto plan = cfg.fm ? dxFmPlan(cfg) : std::vector<vibe::dx::FmHopPlan>{};
+            {
+                std::lock_guard<std::mutex> lk(g_dxLogMtx);
+                vr = g_dxLog.commitDab(idx, hit, utc);
+                vibe::dx::Job j; j.dab = true; j.index = idx;
+                const uint32_t sw = g_dxLog.sweeps(true);
+                vibe::dx::advance(g_dxLog, cfg, j, plan, int(vibedab::kBandIIICount));
+                wrapped = g_dxLog.sweeps(true) != sw;
+            }
+            std::lock_guard<std::mutex> lk(dxStatMtx_);
+            ++dxDabBlocks_; dxDabBlockSecs_ += secs;
+            char b[240];
+            if (hit) std::snprintf(b, sizeof b, "DAB %s: %04X \"%s\", %zu service(s), MER %.1f dB%s in %.1f s", vibedab::kBandIII[idx].name,
+                                   (unsigned)hit->eid, hit->label.c_str(), hit->services.size(), hit->snrDb,
+                                   hit->tiiMain >= 0 ? (" TII " + std::to_string(hit->tiiMain) + "/" + std::to_string(hit->tiiSub)).c_str() : "", secs);
+            else std::snprintf(b, sizeof b, "DAB %s: nothing in %.1f s", vibedab::kBandIII[idx].name, secs);
+            dxLast_ = b;
+            if (idx + 1 < int(vibedab::kBandIIICount)) dxNow_ = std::string("DAB ") + vibedab::kBandIII[idx + 1].name;
+            if (wrapped && dxSweepStartDab_ > 0) dxSweepSecsDab_ = nowSecs() - dxSweepStartDab_;
+            if (hit || vr.newEntries) LOGI("DX scanner: %s \xe2\x80\x94 %d new, %d new opening(s), %d alert(s)", b, vr.newEntries, vr.newOpenings, vr.alerts);
+        };
+        g_dxDabScan.store(true);
+        dabBandScanRun(true, -1, 0);   // ★ blocking; it hands DAB back itself (dabRestore), cancelled or not
+        g_dxDabScan.store(false);
+        dabDx_ = DabDxRun{};
+        return true;
+    }
+    /** ★ What the FIC rows did not carry: the EId / ECC from the receiver's own report, and the strongest TII. */
+    void dabDxReportExtras(vibe::dx::DabHit& h) {
+        const std::string j = g_dab.json();
+        auto num = [&](const char* key) -> long {
+            const size_t at = j.find(key);
+            return at == std::string::npos ? LONG_MIN : std::strtol(j.c_str() + at + std::strlen(key), nullptr, 10);
+        };
+        if (!h.eid) { const long e = num("\"eid\":"); if (e > 0) h.eid = (uint32_t)e; }
+        if (h.ecc < 0) { const long e = num("\"ecc\":"); if (e >= 0) h.ecc = (int)e; }
+        const size_t t = j.find("\"tii\":[");
+        if (t == std::string::npos) return;
+        const size_t te = j.find(']', t);
+        float best = -1e9f;
+        for (size_t at = j.find("{\"main\":", t); at != std::string::npos && at < te; at = j.find("{\"main\":", at + 1)) {
+            const int m = (int)std::strtol(j.c_str() + at + 8, nullptr, 10);
+            const size_t sp = j.find("\"sub\":", at), dp = j.find("\"db\":", at);
+            if (sp == std::string::npos || dp == std::string::npos || sp > te) break;
+            const int sb = (int)std::strtol(j.c_str() + sp + 6, nullptr, 10);
+            const float db = std::strtof(j.c_str() + dp + 5, nullptr);
+            if (db > best && m >= 0 && sb >= 0) { best = db; h.tiiMain = m; h.tiiSub = sb; }
+        }
+    }
+
+    /** ★★ THE ADMIN PAGE'S LINE (adminStatusJson, behind admin auth). */
+    std::string dxStatusJson() {
+        vibe::dx::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
+        const double now = nowSecs();
+        std::string state;
+        std::string j;
+        {
+            std::lock_guard<std::mutex> lk(dxStatMtx_);
+            if (!cfg.any()) state = "off";
+            else if (dxRunning_.load()) state = "scanning";
+            else if (!dxWhy_.empty()) state = "blocked";
+            else if (dxEmptySince_.load() <= 0) state = "listener";
+            else state = "waiting";
+            char b[256];
+            std::snprintf(b, sizeof b, ",\"startsIn\":%.0f,\"hopSecs\":%.2f,\"hopCpu\":%.2f,\"hopPeaks\":%d,\"dabBlockSecs\":%.2f,\"sweepSecsFm\":%.0f,\"sweepSecsDab\":%.0f",
+                          state == "waiting" ? std::max(0.0, dxWaitSec(cfg) - (now - dxEmptySince_.load())) : -1.0,
+                          dxHopWall_, dxHopCpu_, dxHopPeaks_, dxDabBlocks_ ? dxDabBlockSecs_ / dxDabBlocks_ : 0.0, dxSweepSecsFm_, dxSweepSecsDab_);
+            j = "{\"state\":\"" + state + "\",\"why\":\"" + vibe::dx::esc(dxWhy_) + "\",\"now\":\"" + vibe::dx::esc(dxNow_)
+              + "\",\"last\":\"" + vibe::dx::esc(dxLast_) + "\"" + b;
+        }
+        {
+            std::lock_guard<std::mutex> ll(g_dxLogMtx);
+            j += ",\"entries\":" + std::to_string(g_dxLog.size()) + ",\"sweepsFm\":" + std::to_string(g_dxLog.sweeps(false))
+               + ",\"sweepsDab\":" + std::to_string(g_dxLog.sweeps(true));
+        }
+        return j + "}";
+    }
+    /** ★ Is the DX Log offered to THIS socket? Only where the scanner is on (or a log exists), and — if the owner locked
+     *  viewing — only to the admin. hwinfo `dxLog`; absent = no DX LOG button (an older server draws nothing). */
+    bool dxLogOffered(bool admin) {
+        if (frontDoorOnly || decoderOnly || useIcom()) return false;
+        vibe::dx::Config cfg;
+        { std::lock_guard<std::mutex> lk(g_dxMtx); cfg = g_dxCfg; }
+        if (cfg.viewAdmin && !admin) return false;
+        if (cfg.on) return true;
+        std::lock_guard<std::mutex> lk(g_dxLogMtx);
+        return g_dxLog.size() > 0;
     }
 
     /** ★★★ The deferred leave of a whole-radio mode — see "A WHOLE-RADIO MODE OUTLIVES A SOCKET SWAP" at the
@@ -31160,6 +31721,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
     void armIdlePark() {
         // ★★ V12: not while background decoding is due or running — see bgWanted_.
         if (bgWanted_.load()) return;
+        // ★★★ V12: nor while the DX scanner is due or sweeping (dxWanted_)
+        if (dxWanted_.load()) return;
         // ★★ V12: nor while ADS-B is kept running with nobody here — parking would empty the warm table (adsbKeepHolds).
         if (adsbKeepHolds()) return;
         // ★ Applied here rather than when the park FIRES: the radio may be released or paused by
@@ -31193,6 +31756,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         // ★★ V12: a listener arriving ends background decoding FIRST, and gets the dial back (see bgStopForListener).
         //    `fromBg` is background decoding taking the radio back for itself, which must not stop itself.
         if (!fromBg) bgStopForListener("a listener arrived");
+        // ★★★ V12 …and the DX scanner: the hop in progress is thrown away, the dial given back (dxStopForListener)
+        if (!fromBg) dxStopForListener("a listener arrived");
         // ★ A listener is back, so any pending park is off. This runs EARLY in the connect path,
         //   which is exactly what makes the grace period work for a page reload: the park was
         //   only ever scheduled, so it is cancelled before it can happen.
@@ -32493,6 +33058,8 @@ std::atomic<long long> g_rspAgcReinitAt{0};
 
                 // ── ★★ V12: background decoding — before the park, which it holds off while a profile is due ──
                 bgTick();
+                // ── ★★★ V12: the idle DX scanner — after bgTick: a due profile comes first ──
+                dxTick();
                 // ── ★★ V12: ADS-B kept running with nobody here — after bgTick, which has given the dial back by now ──
                 adsbKeepTick();
 
@@ -34563,6 +35130,26 @@ bool LocalSdrShim::setBackgroundDecoding(const std::string& json, std::string& e
     LOGI("background decoding: %s, wait %d s, %zu profile(s)", c.on ? "ON" : "off", c.waitSec, c.profiles.size());
     return true;
 }
+/* ★★★ THE IDLE DX SCANNER (V12, 2026-11-04). Live: the tick reads it every two seconds; switching it off stops a sweep
+ *  and gives the dial back. A config that does not parse leaves the old one. */
+bool LocalSdrShim::setDxScan(const std::string& json, std::string& err) {
+    vibe::dx::Config c;
+    if (!vibe::dx::parseConfig(json, c, err)) { LOGI("DX scanner: %s \xe2\x80\x94 not applied", err.c_str()); return false; }
+    {
+        std::lock_guard<std::mutex> lk(g_dxMtx);
+        if (vibe::dx::toJson(g_dxCfg) == vibe::dx::toJson(c)) return true;
+        g_dxCfg = c;
+    }
+    LOGI("DX scanner: %s, bands %s, wait %d min, FM raster %d kHz, viewing %s", c.on ? "ON" : "off", vibe::dx::bandsWord(c).c_str(),
+         c.waitMin, c.rasterKhz, c.viewAdmin ? "owner only" : "open");
+    return true;
+}
+void LocalSdrShim::setDxLogFile(const std::string& path) {
+    std::lock_guard<std::mutex> lk(g_dxLogMtx);
+    if (path == g_dxLogPath) return;
+    if (g_dxLogLoaded) dxLogFlushLocked("the log moved");
+    g_dxLogPath = path; g_dxLogLoaded = false;
+}
 void LocalSdrShim::setGallery(const std::string& dir, double limitMb, bool publicRead, bool saveLive) {
     auto& g = vibe::gallery::shared();
     g.setDir(dir);
@@ -34796,6 +35383,7 @@ std::string LocalSdrShim::adminStatusJson() {
     j += ",\"terminal\":false";
     // ★★ V12 beta 4: background decoding on this radio, for the admin page's line (Impl::bgStatusJson).
     if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"bgDecode\":" + bi->bgStatusJson();
+    if (Impl* bi = p; bi && !bi->frontDoorOnly && !bi->decoderOnly) j += ",\"dxScan\":" + bi->dxStatusJson();   // ★★★ V12
     return j + "}";
 }
 
@@ -35951,6 +36539,17 @@ static double vsLoraBenchPct() {
     if (any) return sum;
     const size_t pp = row.find("\"pct\":");
     return pp == std::string::npos ? -1 : std::atof(row.c_str() + pp + 6);
+}
+/** ★★★ V12 DX scanner: the dec_dxscan row's % of a core (the FM hop, 8 stations at once, in real time). −1 = no benchmark. */
+static double vsDxBenchPct() {
+    LocalSdrShim::BenchGetFn getFn;
+    { std::lock_guard<std::mutex> lk(g_vsBenchMtx); getFn = g_vsBenchGet; }
+    if (!getFn) return -1;
+    const std::string j = getFn();
+    const size_t at = j.find("\"id\":\"dec_dxscan\"");
+    if (at == std::string::npos) return -1;
+    const size_t pp = j.find("\"pct\":", at);
+    return pp == std::string::npos ? -1 : std::atof(j.c_str() + pp + 6);
 }
 static double vsBandBudgetUnits() {
     LocalSdrShim::BenchGetFn getFn;
@@ -38150,6 +38749,8 @@ void LocalSdrShim::stopLocked() {
      *     running) 1.3 s after that — status=6/ABRT on every settings save. The flag was set
      *     AFTER the clients were stopped, which is exactly too late. */
     impl->stopping.store(true);
+    // ★★★ V12: the DX scanner stops (the radio is the teardown's now) and its log is written — before the DAB wait below.
+    impl->dxShutdown();
     // ★ V12: a DAB band scan sees `stopping` within 100 ms and leaves the radio alone — wait for it (bounded).
     for (int i = 0; i < 30 && g_dabScanActive.load(); ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // ★ TEST KNOB: wedge this stop for good, so a test can watch the standalone server's shutdown
