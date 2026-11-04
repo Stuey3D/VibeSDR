@@ -990,7 +990,7 @@ target_link_libraries(adsb-data-tool PRIVATE Threads::Threads)
 enable_testing()
 
 set(VIBE_DAB_TESTS modes channels prs sync ofdm interleave fec punct fic ficdec msc receiver
-                   resample superframe aac mp2 pad tii epg mot)
+                   resample ddc superframe aac mp2 pad tii epg mot)
 add_custom_target(dab-tests)
 foreach(t ${VIBE_DAB_TESTS})
   add_executable(test-dab-${t} "${CMAKE_CURRENT_SOURCE_DIR}/test-dab-${t}.cpp")
