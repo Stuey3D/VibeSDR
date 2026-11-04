@@ -1722,9 +1722,14 @@ int main(int argc, char** argv) {
          *     argument is two chances to disagree, and the one that is not updated fails silently
          *     by falling back to something plausible. */
         std::string wantSerial;
+        bool wantBySerialFlag = false;   // ★ --radio-serial: the front door's own flag, always a serial, never a position
         for (int k = 1; k + 1 < argc; k++) {
             const std::string a = argv[k];
-            if (a == "--radio" || a == "--radio-serial") { wantSerial = argv[k + 1]; break; }
+            if (a == "--radio" || a == "--radio-serial") {
+                wantSerial = vibe::configSerial(argv[k + 1]);   // ★ the config form, as --radio-serial's parse reads it
+                wantBySerialFlag = a == "--radio-serial";
+                break;
+            }
         }
 
         vsconfig::ServerConfig srv;
@@ -1783,6 +1788,19 @@ int main(int argc, char** argv) {
             const vsconfig::RadioConfig* mine = nullptr;
             if (!wantSerial.empty()) {
                 for (const auto& r : srv.radios) if (r.serial == wantSerial) { mine = &r; break; }
+            }
+            /* ★★★ A RADIO'S OWN PROCESS NEVER BORROWS ANOTHER RADIO'S SETTINGS (2026-11-04, a tester's IC-7300 on a Pi 4).
+             *     `--radio-serial X` with no X in the config used to fall through to "the first ready radio" — his RSP —
+             *     take ITS port and serial, then exit on the RSP's lock: "radio 0000000001 is already being served",
+             *     a line about the wrong radio while the front door logged "handoff … failed" for the right one. Caught
+             *     mid-edit (the setup page saving while the launcher started the unit) it is a non-event; either way the
+             *     answer is a plain sentence naming THIS serial, not an impersonation. The fallback stays for a person
+             *     running `vibeserver` by hand with no radio named, and for `--radio <index>`. */
+            if (!mine && wantBySerialFlag) {
+                std::fprintf(stderr, "VibeServer: radio %s is not in %s (or is being changed there) — not starting it. "
+                                     "Its settings come from the setup page.\n", wantSerial.c_str(), g_configPath.c_str());
+                std::fflush(stderr);
+                std::_Exit(1);
             }
             if (!mine) {
                 for (const auto& r : srv.radios) if (r.enabled && r.configured) { mine = &r; break; }
