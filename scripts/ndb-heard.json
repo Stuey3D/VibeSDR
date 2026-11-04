@@ -63,6 +63,13 @@
       "airport": "EGHQ",
       "name": "Newquay",
       "heard": "Stuart's RSP1A 14 h and NickB 23 dB, 2026-10-28 to 11-04"
+    },
+    {
+      "ident": "MRV",
+      "khz": 404.0,
+      "airport": "LFQT",
+      "name": "Merville",
+      "heard": "Stuart's RSP1A 68 h + RX888 (confirmed in 30 min) and NickB 19 dB, 2026-10-28 to 11-04; Merville's second beacon (MVC 327 is the other)"
     }
   ]
 }
