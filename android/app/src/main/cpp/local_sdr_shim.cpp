@@ -19664,6 +19664,17 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         /* ★★★ V12: THE DAB BAND SCAN from a listener — {"type":"dab_scan","on":1} starts, "on":0 stops (and puts the
          *  radio back on the block it was on). Who may: dabBandScanWhyNot — refused IN WORDS, so an old or hand-written
          *  client on a shared radio is told why rather than ignored. */
+        /* ★★ V12 2026-11-04 THE LAST SCAN'S LIST, FOR ANYONE (Stuart: "change the button's name from scan to multiplexes
+         *  … after the initial scan is complete that way it can be shown on shared VFO servers too"). Read-only: the
+         *  ensembles the last band scan found (names, blocks, quality) — it starts and stops nothing, so it needs no
+         *  permission. Its OWN type, never `dab_scan` with a flag: an older server reads a `dab_scan` with no "on" as
+         *  CANCEL, and an unknown type it simply ignores. */
+        if (type == "dab_scan_get") {
+            std::string j;
+            { std::lock_guard<std::mutex> lk(g_dabBandMtx); j = dabBandJsonLocked(); }
+            sendText(sock, j);
+            return;
+        }
         if (type == "dab_scan") {
             double onV = 0; jsonNum(msg, "on", onV);
             if (onV == 0) {

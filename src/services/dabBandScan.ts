@@ -9,6 +9,7 @@
 //     admin) — never inferred here (the app has no hardcoded settings vs a server).
 //  ★ Text from the air is shown through the caller's own escaping; nothing here builds HTML.
 
+import { FIB_STRONG, FIB_WEAK, MER_STRONG, MER_WEAK } from '../utils/dabQuality';
 export interface DabScanService { sid: number; label: string }
 export interface DabScanHit {
   block: string; channel: number; hz: number; ensemble: string;
@@ -49,9 +50,17 @@ export function dabScanRows(s: DabScanState | null): DabScanHit[] {
 export function dabScanMHz(hz: number): string { return hz > 0 ? `${(hz / 1e6).toFixed(3)} MHz` : ''; }
 
 /** FIC quality in words a listener reads at a glance — the FIB rate, the same measure the ensemble memory uses. */
-export function dabScanQuality(h: DabScanHit): { pct: number; word: 'strong' | 'good' | 'weak' } {
+/** ★★ V12 2026-11-04 THE LIVE PANE'S RULE, NOT A RULE OF ITS OWN (Stuart: "it is incorrectly listing some as strong when
+ *  they are moderate" — Herts Beds Bucks scanned STRONG, then read "Multiplex moderate · MER 12 dB" when tuned). The scan
+ *  graded on the FIB rate alone (> 90 % = strong), and a multiplex decodes its FIC perfectly at an MER that the receiver
+ *  itself calls moderate. Now the worse of the FIB rate and the MER, on dabQuality's own thresholds and in its own words:
+ *  FIB ≥ 99 % / ≥ 90 %, MER ≥ 16 dB / ≥ 10 dB → strong / moderate / weak. A scan hit without an MER is judged on the FIB. */
+export function dabScanQuality(h: DabScanHit): { pct: number; word: 'strong' | 'moderate' | 'weak' } {
   const pct = Math.round(h.fib * 100);
-  return { pct, word: h.fib > 0.9 ? 'strong' : h.fib > 0.6 ? 'good' : 'weak' };
+  const byFib = h.fib >= FIB_STRONG ? 3 : h.fib >= FIB_WEAK ? 2 : 1;
+  const byMer = h.mer > 0 ? (h.mer >= MER_STRONG ? 3 : h.mer >= MER_WEAK ? 2 : 1) : 3;
+  const lvl = Math.min(byFib, byMer);
+  return { pct, word: lvl === 3 ? 'strong' : lvl === 2 ? 'moderate' : 'weak' };
 }
 
 const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;

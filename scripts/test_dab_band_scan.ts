@@ -36,8 +36,11 @@ const err = parseDabScan({ type: 'dab_scan', running: false, error: 'Scanning is
 ok(dabScanLine(err).startsWith('Scanning is only offered'), 'a refusal is shown in its own words');
 ok(dabScanCount(hit('11D', 29, 1)) === '1 station' && dabScanCount(hit('11D', 29, 12)) === '12 stations', 'the count reads naturally');
 ok(dabScanMHz(222064000) === '222.064 MHz', 'the frequency');
-ok(dabScanQuality(hit('a', 1, 1, 0.97)).word === 'strong' && dabScanQuality(hit('a', 1, 1, 0.7)).word === 'good'
-   && dabScanQuality(hit('a', 1, 1, 0.3)).word === 'weak' && dabScanQuality(hit('a', 1, 1, 0.97)).pct === 97, 'quality from the FIB rate');
+ok(dabScanQuality(hit('a', 1, 1, 1.0)).word === 'strong' && dabScanQuality(hit('a', 1, 1, 0.95)).word === 'moderate'
+   && dabScanQuality(hit('a', 1, 1, 0.3)).word === 'weak' && dabScanQuality(hit('a', 1, 1, 0.97)).pct === 97, 'quality from the FIB rate, on the live pane\'s thresholds');
+// ★ Stuart 2026-11-04: Herts Beds Bucks — FIB perfect, MER 12 dB — is MODERATE, as the live pane says, not STRONG
+ok(dabScanQuality({ ...hit('a', 1, 1, 1.0), mer: 12 }).word === 'moderate' && dabScanQuality({ ...hit('a', 1, 1, 1.0), mer: 20 }).word === 'strong'
+   && dabScanQuality({ ...hit('a', 1, 1, 1.0), mer: 8 }).word === 'weak', 'the MER caps the grade: 12 dB moderate, 20 dB strong, 8 dB weak');
 
 console.log('others on the radio');
 ok(dabScanOthersLine(parseDabScan({ type: 'dab_scan', running: true, by: 'admin', done: 4, total: 41, found: [] })).startsWith('The owner is scanning'), 'an admin scan is announced to everybody else');

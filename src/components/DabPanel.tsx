@@ -640,16 +640,21 @@ export default function DabPanel(p: DabPanelProps) {
    *  each ensemble row, and each station of an expanded row — one flat list after the header keys. */
   const canScan = !!p.scanOk && !!p.onScan;
   const scanRows = dabScanRows(p.scan ?? null);
-  type ScanItem = { k: 'ctl' } | { k: 'ens'; block: string } | { k: 'svc'; ch: number; sid?: number };
-  const scanItems: ScanItem[] = pane !== 'scan' ? [] : [{ k: 'ctl' }, ...scanRows.flatMap((h) => [
+  type ScanItem = { k: 'ctl' } | { k: 'again' } | { k: 'ens'; block: string } | { k: 'svc'; ch: number; sid?: number };
+  // ★★ V12 2026-11-04 a finished scan keeps its list (Stuart: "dont know how to get back to this screen after a scan"):
+  //    the foot key REOPENS it, and the scan pane gains SCAN AGAIN beside STATIONS. Same rule as the web client.
+  const haveScan = !!p.scan && !p.scan.running && scanRows.length > 0;
+  const scanItems: ScanItem[] = pane !== 'scan' ? [] : [{ k: 'ctl' }, ...(canScan && !p.scan?.running ? [{ k: 'again' as const }] : []), ...scanRows.flatMap((h) => [
     { k: 'ens' as const, block: h.block },
     ...(scanOpen.has(h.block) ? [{ k: 'svc' as const, ch: h.channel }, ...h.services.map((sv) => ({ k: 'svc' as const, ch: h.channel, sid: sv.sid }))] : []),
   ])];
   const tailKeys = pane === 'stations' && canScan ? 1 : 0;   // the SCAN key after the stations
   const startScan = () => { setScanOpen(new Set()); setPane('scan'); p.onScan?.(true); };
+  const openOrScan = () => { if (haveScan) setPane('scan'); else startScan(); };
   const scanTune = (ch: number, sid?: number) => { setPane('stations'); p.onScanTune?.(ch, sid); };
   const runScanItem = (it: ScanItem) => {
     if (it.k === 'ctl') { if (p.scan?.running) p.onScan?.(false); else setPane('stations'); }
+    else if (it.k === 'again') startScan();
     else if (it.k === 'ens') setScanOpen((o) => dabScanToggle(o, it.block));
     else scanTune(it.ch, it.sid);
   };
@@ -675,7 +680,7 @@ export default function DabPanel(p: DabPanelProps) {
       const { scanItems: si, tailKeys: tk } = dabNav.current;
       const j = i - hk.length - sv.length;
       if (j >= 0 && j < si.length) { runScanItem(si[j]); return; }
-      if (tk && j === si.length) startScan();
+      if (tk && j === si.length) openOrScan();
     },
     (i) => {
       const { hdrKeys: hk, navSvcs: sv } = dabNav.current;
@@ -702,11 +707,13 @@ export default function DabPanel(p: DabPanelProps) {
     let n = 0;
     const idx = () => scanBase + n++;
     const ctlAt = idx();
+    const againAt = canScan && !st?.running ? idx() : -1;
     return (
       <>
         <View style={s.scanTop}>
           <Text style={[s.scanLine, { flex: 1 }]}>{dabScanLine(st) || 'Starting the scan\u2026'}</Text>
           <DecoderKey active onPress={() => runScanItem({ k: 'ctl' })} style={navHl(ctlAt)} label={st?.running ? 'CANCEL' : 'STATIONS'} />
+          {canScan && !st?.running && <DecoderKey onPress={() => runScanItem({ k: 'again' })} style={navHl(againAt)} label="SCAN AGAIN" />}
         </View>
         <View style={s.scanBar}><View style={[s.scanBarFill, { width: `${st && st.total ? Math.round((100 * st.done) / st.total) : 0}%` }]} /></View>
         {!scanRows.length && !!st?.running && <Text style={[s.notice, { color: C.muted }]}>Nothing found yet {'\u2014'} each empty block takes about three seconds.</Text>}
@@ -781,7 +788,8 @@ export default function DabPanel(p: DabPanelProps) {
       {/* ★★ V12: SCAN at the foot of the station list, not in the header — the header's keys already fill an SE in
           Display Zoom, and EXIT DAB must never be pushed off it. Drawn only where the server offers it. */}
       {pane === 'stations' && canScan && (
-        <DecoderKey onPress={startScan} style={[{ alignSelf: 'flex-start', marginTop: 8 }, navHl(scanBase)]} label="SCAN ALL DAB BLOCKS" />
+        <DecoderKey onPress={openOrScan} style={[{ alignSelf: 'flex-start', marginTop: 8 }, navHl(scanBase)]}
+                    label={haveScan ? `LAST SCAN \u00b7 ${scanRows.length} ${scanRows.length === 1 ? 'MULTIPLEX' : 'MULTIPLEXES'}` : 'SCAN ALL DAB BLOCKS'} />
       )}
       {scanPane}
 

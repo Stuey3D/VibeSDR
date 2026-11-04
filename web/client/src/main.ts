@@ -7222,6 +7222,8 @@ function dabScanRender() {
   const stop = document.getElementById('dabScanStop'), back = document.getElementById('dabScanBack');
   if (stop) stop.style.display = s?.running ? '' : 'none';
   if (back) back.style.display = s?.running ? 'none' : '';
+  const again = document.getElementById('dabScanAgain');
+  if (again) again.style.display = s?.running || !dabScanOk ? 'none' : '';
   const bar = pane.querySelector('#dabScanBar b') as HTMLElement | null;
   if (bar) bar.style.width = s && s.total > 0 ? `${Math.round((100 * s.done) / s.total)}%` : '0';
   const list = document.getElementById('dabScanList');
@@ -9708,13 +9710,22 @@ function buildControls() {
   /* ★★ V12: the DAB band scan's keys — SCAN in the header (only where hwinfo `dabScan` says this listener may), and in
    *  its pane CANCEL while it runs (the server puts the radio back on the block it was on) and STATIONS once it ends. */
   { const sb = document.getElementById('dabScanBtn');
-    if (sb) sb.onclick = () => {
+    /* ★★ V12 2026-11-04 SCAN reopens the LAST scan's list when there is one (Stuart: "dont know how to get back to this
+     *  screen after a scan … would be good to see the multiplexes in a list"); SCAN AGAIN in that pane starts a new one.
+     *  No seventh key in the header — a phone has no room for it. */
+    const startScan = () => {
       dabScanMine = true; dabScanOpen = new Set();
       dabScanState = { running: true, by: '', done: 0, total: DAB_BLOCKS.length, current: '', added: 0, cancelled: false,
                        finished: false, secs: 0, seq: 0, found: [] };
       spec?.dabScan(true);
       dabSetPane('scan'); dabScanRender();
     };
+    if (sb) sb.onclick = () => {
+      if (dabScanState && !dabScanState.running && dabScanState.found.length) { dabSetPane('scan'); dabScanRender(); }
+      else startScan();
+    };
+    const again = document.getElementById('dabScanAgain');
+    if (again) again.onclick = startScan;
     const stop = document.getElementById('dabScanStop');
     if (stop) stop.onclick = () => spec?.dabScan(false);
     const back = document.getElementById('dabScanBack');
