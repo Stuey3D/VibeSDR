@@ -249,6 +249,15 @@ eq('live: quiet', app.ndbRowLive(a.beacons[3], NOW * 1000), false);
   eq('feed: the confirmed SND a solid dot, NQY a hollow ring at Newquay, IS nowhere',
      f2.beacons.map((b) => `${b.label}:${b.kind}`), ['SND:match', 'NQY?:sus']);
   eq('feed: the ring at the airfield', [f2.beacons[1].lat, f2.beacons[1].lon], [50.441, -4.995]);
+  // ★ a listener cannot confirm: the server's handler is owner-only before it reads a single field
+  const shim = readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8');
+  const at = shim.indexOf('if (type == "ndb_confirm") {');
+  ok('server: ndb_confirm is behind adminGate first', at > 0 && shim.slice(at, at + 120).includes('if (!adminGate("an NDB confirmation"))')
+     && shim.indexOf('ownerDecide(', at) > shim.indexOf('adminGate(', at));
+  const card = readFileSync(new URL('../src/components/NdbLiveList.tsx', import.meta.url), 'utf8');
+  ok('app card: the keys only for the owner', card.includes("{!!b.sus && owner && !!onDecide && ("));
+  const wv = readFileSync(new URL('../web/client/src/ndb.ts', import.meta.url), 'utf8');
+  ok('web card: the keys only for the owner', wv.includes("(b.sus && owner ? '<div class=\"own\">"));
 }
 
 console.log(`test_ndb_app: ${passes} passed, ${fails} failed`);
