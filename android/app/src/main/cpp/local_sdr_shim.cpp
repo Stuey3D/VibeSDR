@@ -31637,7 +31637,9 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                     if (o.pi == h.pi && std::abs(o.khz - mirror) <= cfg.rasterKhz / 2 && o.levelDb >= h.levelDb + 10.0f) image = true;
                 if (image) continue;
                 auto it = best.find(h.khz);
-                if (it == best.end() || h.snrDb > it->second.snrDb || (h.psComplete && !it->second.psComplete))
+                // ★ a WHOLE PS outranks a stronger sighting without one (it names the bookmark); then the stronger
+                if (it == best.end() || (h.psComplete && !it->second.psComplete)
+                    || (h.psComplete == it->second.psComplete && h.snrDb > it->second.snrDb))
                     best[h.khz] = FmScanHit{ h.khz, h.pi, h.ps, h.psComplete, h.snrDb };
             }
             {

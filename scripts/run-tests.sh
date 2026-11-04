@@ -504,6 +504,11 @@ if node scripts/test-setup-bg-ndb.mjs; then pass=$((pass+1)); else fail=$((fail+
 #     ~3 min. Same VIBESERVER_BIN rule (exit 3 = not run).
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-dx-scan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+# ★★★ V12 THE OWNER'S SCANS (admin page DAB SCAN / FM SCAN) on a shared radio: the FM scan starts with a listener on,
+#     locks them out (server refusal + fm_scan lock), finds the fake dongle's RDS stations into SCANNED bookmarks, puts
+#     the dial back; cancel; dab_scan_get / fm_scan_get. ~2 min. Same VIBESERVER_BIN rule (exit 3 = not run).
+VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-server-owner-scans.mjs; rc=$?
+if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ A TUNNEL A PREVIOUS PROCESS LEFT ON OUR PORT IS RETIRED (2026-10-19, Kiko's four tunnels). Same VIBESERVER_BIN rule.
 VIBESERVER_BIN="${VIBESERVER_BIN:-}" node scripts/test-tunnel-orphan.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
