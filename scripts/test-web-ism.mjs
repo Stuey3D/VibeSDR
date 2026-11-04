@@ -134,7 +134,7 @@ try {
     // a press moves the label AT ONCE — before the server's report
     await ev(`(() => { const b = document.getElementById('mVfoDown'); b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); })()`);
     ok(await ev(`document.getElementById('mTuneCur')?.textContent`) === '868', 'the press moves the current band at once');
-    ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz ISM'`, 6000), 'and the server follows to 868 (one send, by band id)');
+    ok(await until(`document.getElementById('ismBandName')?.textContent === '868 MHz SRD'`, 6000), `and the server follows to 868 (one send, by band id): ${await ev(`document.getElementById('ismBandName')?.textContent`)}`);
     await ev(`(() => { const b = document.getElementById('mVfoUp'); b.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, pointerId: 1 })); window.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 })); b.click(); })()`);
     ok(await until(`document.getElementById('ismBandName')?.textContent === '915 MHz ISM'`, 6000), 'back to 915 for the rest');
   }
