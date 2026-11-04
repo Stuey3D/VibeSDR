@@ -49,6 +49,13 @@
       "airport": "EGNJ",
       "name": "Humberside",
       "heard": "NickB 10 dB 2026-10-30; OSM lists it with no name"
+    },
+    {
+      "ident": "MVC",
+      "khz": 327.0,
+      "airport": "LFQT",
+      "name": "Merville-Calonne",
+      "heard": "Stuart's RSP1A 19 h + RX888 (confirmed in 30 min) and NickB 24 dB, 2026-10-28 to 11-04"
     }
   ]
 }
