@@ -17858,6 +17858,23 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         LOGI("icom decoder: %s — the radio to %s FIL%d%s (was %s FIL%d)", ext.c_str(), want.c_str(), fil,
              pl.offsetHz ? (" moved " + std::to_string(-pl.offsetHz) + " Hz, the readout unchanged").c_str() : "", baseMode.c_str(), baseFil);
     }
+    /** ★ May the listener behind DECODER socket `sock` change this radio's mode? The owner lock's rule (icomControl). The
+     *  admin sign-in lives on the listener's SPECTRUM socket, so their session finds it there. */
+    bool icomDecMayTune(const std::shared_ptr<net::Socket>& sock) {
+        if (!icomOwnerLock) return true;
+        if (!sock) return false;
+        if (icomAdmin(sock)) return true;
+        std::string sess;
+        { std::lock_guard<std::mutex> lk(clientMtx); auto it = dxSockSession.find(sock.get()); if (it != dxSockSession.end()) sess = it->second; }
+        if (sess.empty()) return false;
+        for (auto& c : allSpecClients()) {
+            if (!c) continue;
+            std::string s2;
+            { std::lock_guard<std::mutex> lk(clientMtx); auto it = sockSession.find(c.get()); if (it != sockSession.end()) s2 = it->second; }
+            if (s2 == sess && icomAdmin(c)) return true;
+        }
+        return false;
+    }
     /** ★★ A decoder `ext` is starting from `sock` with attach message `msg`. "" = go (the radio set as it needs), else the
      *  words of a refusal: not possible on one audio channel, or a change of mode under the owner lock (starting a
      *  decoder that changes the mode is a mode change — the same permission as the mode keys). */
@@ -17865,6 +17882,7 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!useIcom()) return {};
         double cf = 0;
         if (!jsonNum(msg, "center_frequency", cf) && ext == "psk") jsonNum(msg, "centre", cf);
+        const bool mayTune = icomDecMayTune(sock);   // ★ before the hold's lock (it takes clientMtx)
         std::lock_guard<std::mutex> lk(icomDecMtx);
         const icom::RadioState st = icom->state();
         const std::string baseMode = icomDec.on ? icomDec.savedMode : st.mode;
@@ -17873,7 +17891,6 @@ std::atomic<long long> g_rspAgcReinitAt{0};
         if (!pl.ok) return "Not on this radio \xe2\x80\x94 " + pl.why;
         if (icomDec.on && icomDec.ext == ext) return {};      // the same decoder again: a mirror, a reconnect
         if (!pl.changes() && !icomDec.on) return {};          // the radio already delivers it: nothing to change
-        const bool mayTune = (sock && icomAdmin(sock)) || !icomOwnerLock;
         if (pl.changes() && !mayTune)
             return "This decoder needs the radio in " + icomDecWords(pl, baseMode)
                  + " \xe2\x80\x94 the owner has set this radio so that listeners follow it, so only the owner can change that";

@@ -58,6 +58,12 @@ public:
 
     bool gone() const override { return unplugged.load(); }
 
+    /** A person presses the radio's own mode / filter keys (01 announced; the DATA flag is read by the 1 s poll). */
+    void turnMode(uint8_t m, uint8_t data, uint8_t f) {
+        std::lock_guard<std::mutex> lk(mtx_);
+        mode = m; dataOn = data; fil = f;
+        if (transceive) reply(civ::kBroadcast, 0x01, {mode, fil});
+    }
     /** A person turns the radio's own knob. */
     void turnKnob(uint64_t hz) {
         std::lock_guard<std::mutex> lk(mtx_);

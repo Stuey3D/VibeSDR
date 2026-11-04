@@ -4,7 +4,7 @@
 //       Opens a pty, prints "FAKE_ICOM_PTY <path>" and serves CI-V on it (icom_fake_radio.h): answers
 //       reads, accepts the allowed writes, streams a synthetic 475-point scope paced at the baud rate.
 //       Point VibeServer at it:  vibeserver --icom <path> --icom-tty-ok --icom-audio tone
-//       Commands on stdin (one per line): "knob <hz>"  "tx 1" / "tx 0"  "stats"  "quit".
+//       Commands on stdin (one per line): "knob <hz>"  "mode <06 byte> <data 0/1> <fil>"  "tx 1" / "tx 0"  "stats"  "quit".
 //       ★ Every frame it receives is judged by the allow-list AND a crude transmit detector; each
 //         violation prints "FAKE_ICOM_VIOLATION <hex>" and is counted in "FAKE_ICOM_STATS".
 //
@@ -86,10 +86,11 @@ int main(int argc, char** argv) {
             unsigned long long hz = 0; int v = 0;
             if (std::sscanf(line, "knob %llu", &hz) == 1) r.turnKnob(hz);
             else if (std::sscanf(line, "tx %d", &v) == 1) r.tx = v != 0;
+            else if (unsigned mm = 0, dd = 0, ff = 0; std::sscanf(line, "mode %u %u %u", &mm, &dd, &ff) == 3) r.turnMode((uint8_t)mm, (uint8_t)dd, (uint8_t)ff);
             else if (!std::strncmp(line, "quit", 4)) break;
-            std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u span=%u tx=%d\n",
+            std::printf("FAKE_ICOM_STATS frames=%llu violations=%llu sweeps=%llu freq=%llu mode=%u data=%u fil=%u span=%u tx=%d\n",
                         (unsigned long long)r.framesIn.load(), (unsigned long long)r.violations.load(),
-                        (unsigned long long)r.sweepsOut.load(), (unsigned long long)r.freq, r.mode, r.dataOn, r.spanHalf * 2, (int)r.tx.load());
+                        (unsigned long long)r.sweepsOut.load(), (unsigned long long)r.freq, r.mode, r.dataOn, r.fil, r.spanHalf * 2, (int)r.tx.load());
             std::fflush(stdout);
         }
         run.store(false);
