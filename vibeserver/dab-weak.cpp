@@ -22,12 +22,18 @@
 //     --sid2 HEX       the second clip's service
 //     --paired 1       wide only: add the noise at the clip's rate BEFORE the up-sampler — the very samples the native run
 //                       gets — so native against wide is an A/B of the two front ends on identical noise
+//     --tii LAT,LON    ★ TII replay (2026-11-04): give the service the compiled-in directory (UK + CH) and this
+//                       receiver position, and print the TII list of every verdict as {"t":…,"tii":[…],"tiiDiag":{…}}.
+//                       "--tii -" = the directory without a position; --tii-nodir 1 = no directory at all (the
+//                       shared-comb CANDIDATES path, as in a country with no published codes)
 //   Prints ONE JSON line per service: lock/label/first-audio times (in CLIP seconds), the final MER, FIB rate, super
 //   frames ok of tried, AUs bad of in, RS lost, and the input's own measured in-band SNR.
 // ★ The clip is STREAMED (as dab-unitlog): nothing whole-file in memory. ★ Paced by back-pressure (never ahead of the
 //   worker), so results do not depend on how busy the machine is.
 #include "vibe_dab_service.h"
 #include "vibe_dab_channels.h"
+#include "vibe_dab_txdb_e1.h"
+#include "vibe_dab_txdb_ch.h"
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -174,7 +180,7 @@ int countServices(const std::string& j) {
 
 struct Watch {
     std::string name; double tLock = -1, tLabel = -1, tAudio = -1, tSvc = -1;
-    double merSum = 0; int merN = 0; std::string last;
+    double merSum = 0; int merN = 0; std::string last, lastTiiDiag;
     void poll(vibedab::DabService& s, double t) {
         std::string j; if (!s.jsonTry(j)) return;
         last = j;
@@ -196,6 +202,7 @@ int main(int argc, char** argv) {
     bool to2048 = false;               //   fake radio's clips (test-server-dab-wide.mjs); --to2048 1 resamples a 2.4 clip to
     double centreOut = 0;              //   2.048 first (the native path's own converter); --centre-out HZ = the header centre
     bool loop = false;
+    const char* tiiPos = nullptr; bool tiiNoDir = false;
     bool paired = false;   // ★ --paired 1: the noise goes in at the CLIP's rate before the up-sampler, so the wide path sees
                            //   exactly the in-band noise the native path does (an A/B of the front ends alone)
     for (int i = 2; i + 1 < argc; i += 2) {
@@ -210,6 +217,8 @@ int main(int argc, char** argv) {
         else if (a == "--paired") paired = std::atoi(v) != 0;
         else if (a == "--loop") loop = std::atoi(v) != 0;   // ★ replay a short clip (the 5.76 s bench clips are seamless loops)
         else if (a == "--write") writePath = v;
+        else if (a == "--tii") tiiPos = v;
+        else if (a == "--tii-nodir") tiiNoDir = std::atoi(v) != 0;
         else if (a == "--to2048") to2048 = std::atoi(v) != 0;
         else if (a == "--centre-out") centreOut = std::atof(v);
         else if (a == "--wide") wide = std::atof(v);
@@ -239,6 +248,14 @@ int main(int argc, char** argv) {
         p->setRfCentre(c.centre - (wide > 0 ? off : 0.0));
         if (ch >= 0) p->setChannel(ch);
         if (s) p->setService(s);
+        if (tiiPos) {
+            static vibedab::DabTxDb db; static bool init = false;
+            if (!init) { init = true; db.addBuiltin(0xE1, vibedab::kDabTx_E1, vibedab::kDabTx_E1_n); db.addBuiltin(0xE1, vibedab::kDabTx_CH, vibedab::kDabTx_CH_n); }
+            if (!tiiNoDir) p->setTxDb(&db);
+            double la = NAN, lo = NAN;
+            if (std::strcmp(tiiPos, "-") != 0) std::sscanf(tiiPos, "%lf,%lf", &la, &lo);
+            p->setReceiverPosition(la, lo);
+        }
         svcs.push_back(std::move(p)); Watch w; w.name = nm; watch.push_back(w);
     };
     addSvc(c1, sid, offset, argv[1]);
@@ -300,7 +317,26 @@ int main(int argc, char** argv) {
             if (!busy) break;
             std::this_thread::sleep_for(microseconds(100));
         }
-        if (fed >= nextPoll) { for (size_t k = 0; k < svcs.size(); ++k) watch[k].poll(*svcs[k], fed); nextPoll = fed + 0.25; }
+        if (fed >= nextPoll) {
+            for (size_t k = 0; k < svcs.size(); ++k) {
+                watch[k].poll(*svcs[k], fed);
+                if (tiiPos) {   // ★ one line per TII verdict: the tiiDiag block changes with every one
+                    const std::string& j = watch[k].last;
+                    auto part = [&](const char* key, char open, char close) {
+                        const size_t a = j.find(key); if (a == std::string::npos) return std::string();
+                        size_t b = j.find(open, a), depth = 0, i = b;
+                        for (; i < j.size(); ++i) { if (j[i] == open) ++depth; else if (j[i] == close && --depth == 0) break; }
+                        return j.substr(b, i - b + 1);
+                    };
+                    const std::string d = part("\"tiiDiag\":", '{', '}');
+                    if (!d.empty() && d != watch[k].lastTiiDiag) {
+                        watch[k].lastTiiDiag = d;
+                        std::printf("{\"t\":%.2f,\"tii\":%s,\"tiiDiag\":%s}\n", fed, part("\"tii\":", '[', ']').c_str(), d.c_str());
+                    }
+                }
+            }
+            nextPoll = fed + (tiiPos ? 0.1 : 0.25);
+        }
     }
     if (wfp) { std::fclose(wfp); for (auto& s : svcs) s->stopWorker(); std::printf("{\"wrote\":\"%s\",\"secs\":%.2f}\n", writePath, fed); return 0; }
     std::this_thread::sleep_for(milliseconds(300));
