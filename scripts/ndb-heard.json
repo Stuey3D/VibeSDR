@@ -1,0 +1,210 @@
+{
+  "about": "NDBs HEARD on VibeSDR receivers, identified by ear and by the skimmer, that no bundled source lists. Each record is our own reception: the ident and the frequency as measured; the position is the named airport's reference point from OurAirports airports.csv (public domain) — a locator sits on the approach, a few km from it. Lowest position precedence: any public source that lists the beacon wins. Add only beacons heard for hours, on more than one receiver or day. A beacon another source lists WITHOUT a name (OSM's NWI, KIM) may be here too: the other source keeps its position and this file supplies the name. Each record added from 2026-11-04 also carries \"identified\": how we know WHICH beacon carries that ident on that frequency — \"confirmed\" (two independent sources tie the ident and frequency to the place) or \"likely\" (one clear source), with the URLs. Those sources are used ONLY to identify the beacon: nothing is copied from them, and the position is still the airport's from OurAirports.",
+  "beacons": [
+    {
+      "ident": "SND",
+      "khz": 362.5,
+      "airport": "EGMC",
+      "name": "Southend",
+      "heard": "Stuart's RSP1A (IO92) 21 h and RX888, 2026-10-26 to 11-04"
+    },
+    {
+      "ident": "CDF",
+      "khz": 388.5,
+      "airport": "EGFF",
+      "name": "Cardiff",
+      "heard": "Stuart's RSP1A (IO92) 125 h, 2026-10-27 to 11-04"
+    },
+    {
+      "ident": "EMW",
+      "khz": 393.0,
+      "airport": "EGNX",
+      "name": "East Midlands",
+      "heard": "Stuart's RSP1A (IO92) 124 h and RX888, 2026-10-26 to 11-04"
+    },
+    {
+      "ident": "EME",
+      "khz": 353.5,
+      "airport": "EGNX",
+      "name": "East Midlands",
+      "heard": "Stuart's RX888 (UberSDR, IO92) 12/12 repeats over 30 min 2026-11-04, and RSP1A cards"
+    },
+    {
+      "ident": "HAW",
+      "khz": 340.0,
+      "airport": "EGNR",
+      "name": "Hawarden",
+      "heard": "NickB (G4IRX) 21 dB 2026-10-30 and Stuart's RSP1A cards"
+    },
+    {
+      "ident": "NWI",
+      "khz": 342.5,
+      "airport": "EGSH",
+      "name": "Norwich",
+      "heard": "Stuart's RSP1A 102 h, NickB 26 dB; OSM lists it with no name"
+    },
+    {
+      "ident": "KIM",
+      "khz": 365.0,
+      "airport": "EGNJ",
+      "name": "Humberside",
+      "heard": "NickB 10 dB 2026-10-30; OSM lists it with no name"
+    },
+    {
+      "ident": "MVC",
+      "khz": 327.0,
+      "airport": "LFQT",
+      "name": "Merville-Calonne",
+      "heard": "Stuart's RSP1A 19 h + RX888 (confirmed in 30 min) and NickB 24 dB, 2026-10-28 to 11-04"
+    },
+    {
+      "ident": "NQY",
+      "khz": 347.0,
+      "airport": "EGHQ",
+      "name": "Newquay",
+      "heard": "Stuart's RSP1A 14 h and NickB 23 dB, 2026-10-28 to 11-04"
+    },
+    {
+      "ident": "MRV",
+      "khz": 404.0,
+      "airport": "LFQT",
+      "name": "Merville",
+      "heard": "Stuart's RSP1A 68 h + RX888 (confirmed in 30 min) and NickB 19 dB, 2026-10-28 to 11-04; Merville's second beacon (MVC 327 is the other)"
+    },
+    {
+      "ident": "WSN",
+      "khz": 378.0,
+      "airport": "EDWT",
+      "name": "Weser",
+      "heard": "Stuart's RSP1A 41 h and NickB 20 dB, 2026-10-28 to 11-04. An EN-ROUTE beacon, not a locator: positioned at Blexen (EDWT), the nearest airfield, which may be ~30 km from the transmitter"
+    },
+    {
+      "ident": "EGT",
+      "khz": 328.5,
+      "airport": "EGAE",
+      "name": "Londonderry",
+      "heard": "Stuart's RSP1A (IO92) 4 cards 2026-11-03 to 11-04 and NickB (G4IRX, Airspy HF+) 13 dB 2026-10-28",
+      "identified": "confirmed: https://airports4xp.info/airport/EGAE (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "OA",
+      "khz": 338.0,
+      "airport": "ESGJ",
+      "name": "Jönköping",
+      "heard": "Stuart's RSP1A (IO92) 2 cards 2026-11-03 (night) and NickB (G4IRX, Airspy HF+) 14 dB 2026-10-28 (night)",
+      "identified": "confirmed: https://airports4xp.info/airport/ESGJ (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "MTZ",
+      "khz": 354.0,
+      "airport": "LFJL",
+      "name": "Metz",
+      "heard": "Stuart's RSP1A (IO92) 4 cards 2026-11-03 and NickB (G4IRX, Airspy HF+) 17 dB 2026-10-28. Positioned at Metz-Nancy-Lorraine (LFJL), whose approach beacons it is listed among; the transmitter is near Metz and may be ~30 km from that airport",
+      "identified": "confirmed: https://airports4xp.info/airport/LFJL (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "VAT",
+      "khz": 367.0,
+      "airport": "LFOK",
+      "name": "Châlons-Vatry",
+      "heard": "Stuart's RSP1A (IO92) 3 cards 2026-11-03 and NickB (G4IRX, Airspy HF+) 15 dB 2026-10-28",
+      "identified": "confirmed: https://airports4xp.info/airport/LFOK (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "BV",
+      "khz": 391.0,
+      "airport": "LFOB",
+      "name": "Beauvais",
+      "heard": "Stuart's RSP1A (IO92) 10 cards 2026-10-30 to 11-03 and NickB (G4IRX, Airspy HF+) 22 dB 2026-10-28 — still on the air (one log calls it decommissioned in 2025)",
+      "identified": "confirmed: https://airports4xp.info/airport/LFOB (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "LRN",
+      "khz": 398.0,
+      "airport": "LFGT",
+      "name": "Lorquin",
+      "heard": "Stuart's RSP1A (IO92) 4 cards 2026-10-30 to 11-04 and NickB (G4IRX, Airspy HF+) 17 dB 2026-10-28. Positioned at Sarrebourg-Buhl (LFGT), the nearest airfield to Lorquin, which may be ~10 km from the transmitter",
+      "identified": "likely: https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only) — Lorquin/Xouaxange; not in the X-Plane nav data for LFGT or LFQP"
+    },
+    {
+      "ident": "AX",
+      "khz": 417.0,
+      "airport": "LFLA",
+      "name": "Auxerre",
+      "heard": "Stuart's RSP1A (IO92) 4 cards 2026-11-03 and NickB (G4IRX, Airspy HF+) 21 dB 2026-10-28",
+      "identified": "confirmed: https://airports4xp.info/airport/LFLA (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "EMT",
+      "khz": 419.0,
+      "airport": "LFSG",
+      "name": "Épinal",
+      "heard": "Stuart's RSP1A (IO92) 10 cards 2026-10-31 to 11-04 and NickB (G4IRX, Airspy HF+) 17 dB 2026-10-28",
+      "identified": "confirmed: https://airports4xp.info/airport/LFSG (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "HB",
+      "khz": 420.0,
+      "airport": "EGAC",
+      "name": "Belfast City",
+      "heard": "Stuart's RSP1A (IO92) 4 cards 2026-10-31 to 11-03 and NickB (G4IRX, Airspy HF+) 18 dB 2026-10-28",
+      "identified": "confirmed: https://airports4xp.info/airport/EGAC (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "PHG",
+      "khz": 424.0,
+      "airport": "LFQP",
+      "name": "Phalsbourg",
+      "heard": "Stuart's RSP1A (IO92) 52 cards (~10 h, best 19 dB) 2026-10-29 to 11-04 and NickB (G4IRX, Airspy HF+) 24 dB 2026-10-28",
+      "identified": "confirmed: https://airports4xp.info/airport/LFQP (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only); https://www.sia.aviation-civile.gouv.fr/media/dvd/eAIP_11_JUN_2026/Atlas-VAC/PDF_AIPparSSection/VAC/AD/AD-2.LFQP.pdf (French AIP, LFQP chart: PHG 424)"
+    },
+    {
+      "ident": "SN",
+      "khz": 430.0,
+      "airport": "LFLN",
+      "name": "Saint-Yan",
+      "heard": "Stuart's RSP1A (IO92) 2 cards 2026-11-03 and NickB (G4IRX, Airspy HF+) 16 dB 2026-10-28",
+      "identified": "confirmed: https://airports4xp.info/airport/LFLN (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "NRD",
+      "khz": 444.0,
+      "airport": "EPIR",
+      "name": "Inowrocław",
+      "heard": "Stuart's RSP1A (IO92) 87 cards (~21 h, best 18 dB, 17–05 UTC: night) 2026-10-28 to 11-04 and NickB (G4IRX, Airspy HF+) 18 dB 2026-10-28",
+      "identified": "confirmed: https://airports4xp.info/airport/EPIR (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only); https://rxx.classaxe.com/en/rww/signals/8658"
+    },
+    {
+      "ident": "SA",
+      "khz": 474.5,
+      "airport": "EPDA",
+      "name": "Darłowo",
+      "heard": "Stuart's RSP1A (IO92) 10 cards (~2 h, best 18 dB, 17–19 UTC) 2026-11-02 to 11-03",
+      "identified": "confirmed: https://airports4xp.info/airport/EPDA (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "NPR",
+      "khz": 488.0,
+      "airport": "EPTM",
+      "name": "Tomaszów Mazowiecki",
+      "heard": "Stuart's RSP1A (IO92) 4 cards 2026-11-03 (night) and NickB (G4IRX, Airspy HF+) 16 dB 2026-10-28 (night)",
+      "identified": "confirmed: https://airports4xp.info/airport/EPTM (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "NK",
+      "khz": 489.0,
+      "airport": "EPKS",
+      "name": "Krzesiny",
+      "heard": "Stuart's RSP1A (IO92) 12 cards (best 12 dB, night) 2026-10-29 to 11-03",
+      "identified": "confirmed: https://airports4xp.info/airport/EPKS (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    },
+    {
+      "ident": "LA",
+      "khz": 514.5,
+      "airport": "LKNA",
+      "name": "Náměšť",
+      "heard": "Stuart's RSP1A (IO92) 5 cards (best 12 dB, night) 2026-11-03 to 11-04. OurAirports still lists LA on its old 563 kHz",
+      "identified": "confirmed: https://airports4xp.info/airport/LKNA (X-Plane 12 nav data, nearby beacons); https://rxx.classaxe.com/en/rww/signals (RWW signal list, DX log: identity only)"
+    }
+  ]
+}

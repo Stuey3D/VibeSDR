@@ -146,20 +146,37 @@ int main(int argc, char** argv) {
         ok(nr.kind == vibendb::Match::Near && nr.n.ident() == "WOD", "WOT on 352 kHz is ≈ WOD (one letter off)");
         const auto cand = vibendb::match(352000, "", true, lat, lon);
         ok(cand.kind == vibendb::Match::Candidate && !cand.others.empty(), "no ident: the nearest on the frequency is a candidate, the rest ranked");
-        const auto un = vibendb::match(353499, "EME", true, lat, lon);
-        ok(un.kind != vibendb::Match::Exact, "EME (heard, in no source we may bundle) is never matched to another beacon");
+        // ★ An ident no source lists is never matched to ANOTHER beacon. (EME was the example until 2026-11-04, when our own
+        //   receptions put it in the list — scripts/ndb-heard.json — so it is matched to ITSELF now, below.)
+        const auto un = vibendb::match(353499, "QXZ", true, lat, lon);
+        ok(un.kind != vibendb::Match::Exact, "an ident in no source (QXZ on 353.5) is never matched to another beacon");
+        for (auto nm : { std::make_pair(342500.0, "NWI"), std::make_pair(365000.0, "KIM") }) {
+            const auto x = vibendb::match(nm.first, nm.second, false, 0, 0);
+            ok(x.kind == vibendb::Match::Exact && !x.n.name().empty(), std::string(nm.second) + " (OSM, nameless) now has a name: " + x.n.name());
+        }
+        const auto em = vibendb::match(353499, "EME", true, lat, lon);
+        ok(em.kind == vibendb::Match::Exact && em.n.ident() == "EME", "EME on 353.5 is matched to itself (our own receptions)");
         const auto f = vibendb::nearest(lat, lon, 5);
         ok(f.size() == 5 && f[0].km <= f[4].km, "Find NDB: nearest first");
         ok(!vibendb::nearest(lat, lon, 10, "woodley").empty(), "Find NDB: by name");
 
         // ★★ The merged sources (scripts/gen-ndb-navaids.mjs): every record names its source, every source is used.
-        size_t per[3] = { 0, 0, 0 }; bool srcOk = true;
-        for (size_t i = 0; i < vibendb::kNavaidCount; ++i) { if (vibendb::kNavaids[i].src < 3) ++per[vibendb::kNavaids[i].src]; else srcOk = false; }
-        ok(srcOk && per[0] > 4000 && per[1] > 200 && per[2] > 50, "every beacon names its source: OurAirports " + std::to_string(per[0]) +
+        size_t per[4] = { 0, 0, 0, 0 }; bool srcOk = true;
+        for (size_t i = 0; i < vibendb::kNavaidCount; ++i) { if (vibendb::kNavaids[i].src < 4) ++per[vibendb::kNavaids[i].src]; else srcOk = false; }
+        ok(srcOk && per[0] > 4000 && per[1] > 200 && per[2] > 50 && per[3] >= 3, "every beacon names its source: OurAirports " + std::to_string(per[0]) +
            ", FAA " + std::to_string(per[1]) + ", OpenStreetMap " + std::to_string(per[2]));
         ok(std::strstr(vibendb::kNavaidCredit, "OurAirports") && std::strstr(vibendb::kNavaidCredit, "FAA") && std::strstr(vibendb::kNavaidCredit, "OpenStreetMap"),
            std::string("the credit names every source: ") + vibendb::kNavaidCredit);
         ok(m.n.source().find("OurAirports") == 0, "WOD's position is OurAirports' (" + m.n.source() + ")");
+        // ★★ V12 2026-11-04 scripts/ndb-heard.json — beacons heard for hours on Stuart's receivers that no bundled source lists.
+        for (auto bc : { std::make_pair(362500.0, "SND"), std::make_pair(388500.0, "CDF"), std::make_pair(393000.0, "EMW"), std::make_pair(353500.0, "EME"), std::make_pair(340000.0, "HAW"), std::make_pair(327000.0, "MVC"), std::make_pair(347000.0, "NQY"), std::make_pair(404000.0, "MRV"), std::make_pair(378000.0, "WSN"),
+                         std::make_pair(328500.0, "EGT"), std::make_pair(338000.0, "OA"), std::make_pair(354000.0, "MTZ"), std::make_pair(367000.0, "VAT"), std::make_pair(391000.0, "BV"), std::make_pair(398000.0, "LRN"),
+                         std::make_pair(417000.0, "AX"), std::make_pair(419000.0, "EMT"), std::make_pair(420000.0, "HB"), std::make_pair(424000.0, "PHG"), std::make_pair(430000.0, "SN"), std::make_pair(444000.0, "NRD"),
+                         std::make_pair(474500.0, "SA"), std::make_pair(488000.0, "NPR"), std::make_pair(489000.0, "NK"), std::make_pair(514500.0, "LA") }) {
+            const auto hm = vibendb::match(bc.first, bc.second, false, 0, 0);
+            ok(hm.kind == vibendb::Match::Exact && hm.n.source().find("heard") == 0,
+               std::string(bc.second) + " is listed now, from our own receptions (" + hm.n.source() + ")");
+        }
         ok(vibendb::match(342500, "NWI", true, lat, lon).n.source().find("OpenStreetMap") != std::string::npos, "NWI (Norwich) comes from OpenStreetMap");
 
         // ★★ A capture too narrow for the band goes where the listed beacons near the SERVER are (Stuart, 2026-10-29).

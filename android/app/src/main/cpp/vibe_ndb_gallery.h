@@ -164,12 +164,12 @@ public:
         Row& r = rows_[key];
         if (r.first == 0) { r.first = t; newBeacon_ = true; }
         r.last = t; r.ident = b.ident; r.hz = b.hz; r.best = r.first == t ? b.snrDb : std::max(r.best, b.snrDb);
-        if (b.listed) { r.name = b.name; r.cc = b.cc; r.km = b.km; r.deg = b.deg; r.lat = b.lat; r.lon = b.lon; }
+        if (b.listed) { r.listed = true; r.name = b.name; r.cc = b.cc; r.km = b.km; r.deg = b.deg; r.lat = b.lat; r.lon = b.lon; }
         dirty_ = true;
         // ★★ …and the hour's card and the last 10 minutes (the FT8 summary's two cards, V12 2026-10-27)
         closeHourIfDue(t);
         Heard h; h.key = key; h.ident = b.ident; h.hz = b.hz; h.snr = b.snrDb; h.t = t;
-        if (b.listed) { h.name = b.name; h.cc = b.cc; h.km = b.km; h.deg = b.deg; }
+        if (b.listed) { h.listed = true; h.name = b.name; h.cc = b.cc; h.km = b.km; h.deg = b.deg; }
         HourRow& hr = hour_[key];
         if (hr.n == 0) { hr.first = t; hr.best = h.snr; }
         hr.info = h; hr.best = std::max(hr.best, h.snr); hr.last = t; ++hr.n;
@@ -215,7 +215,7 @@ public:
     std::string mapPng() const { std::lock_guard<std::mutex> lk(m_); return renderMap(now()); }
 
 private:
-    struct Row { std::string ident, name, cc; double hz = 0, km = -1, deg = 0, lat = NAN, lon = NAN; float best = -99; int64_t first = 0, last = 0; };
+    struct Row { std::string ident, name, cc; bool listed = false; double hz = 0, km = -1, deg = 0, lat = NAN, lon = NAN; float best = -99; int64_t first = 0, last = 0; };
     int64_t now() const { return o_.clock ? o_.clock() : gallery::nowUtc(); }
     std::string date(int64_t day) const { return gallery::utcStamp(day * 86400, "%Y-%m-%d"); }
     gallery::Meta meta(const std::string& slot) const {
@@ -264,7 +264,7 @@ private:
             std::string brg = r->km >= 0 ? std::to_string((long long)std::lround(r->deg)) + "\xc2\xb0 " + vibendb::compass(r->deg) : std::string("-");
             std::snprintf(b, sizeof b, "%s%s%s%s%s%s%.3f kHz%s%.0f dB%s%s%s%s%s%s%s%s", gallery::utcStamp(r->last, "%H:%M:%S").c_str(), kDot,
                           gallery::utcStamp(r->first, "%H:%M:%S").c_str(), kDot, r->ident.c_str(), kDot, r->hz / 1e3, kDot, r->best, kDot,
-                          dist.c_str(), kDot, brg.c_str(), kDot, r->cc.empty() ? "-" : r->cc.c_str(), kDot, r->name.empty() ? "(not in the published list)" : r->name.c_str());
+                          dist.c_str(), kDot, brg.c_str(), kDot, r->cc.empty() ? "-" : r->cc.c_str(), kDot, !r->name.empty() ? r->name.c_str() : r->listed ? "(published, no name)" : "(not in the published list)");
             o += b; o += "\n";
         }
         return o;
@@ -369,7 +369,7 @@ private:
     // ── ★★ the hour's card and the last 10 minutes (V12 2026-10-27) ──────────────────────────────────────────────────
     /** One heard() — what the cards need of it, copied (the day's rows are cleared at midnight; an hour or a window is
      *  not cut there). */
-    struct Heard { std::string key, ident, name, cc; double hz = 0, km = -1, deg = 0; float snr = 0; int64_t t = 0; };
+    struct Heard { std::string key, ident, name, cc; bool listed = false; double hz = 0, km = -1, deg = 0; float snr = 0; int64_t t = 0; };
     struct HourRow { Heard info; float best = -99; int n = 0; int64_t first = 0, last = 0; };
     /** One beacon's line on a summary card: ident · kHz · heard N min · best SNR · distance · bearing · country · station. */
     static std::string line(const HourRow& r) {
@@ -379,7 +379,7 @@ private:
         const std::string brg = h.km >= 0 ? std::to_string((long long)std::lround(h.deg)) + "\xc2\xb0 " + vibendb::compass(h.deg) : std::string("-");
         std::snprintf(b, sizeof b, "%-6s%s%.3f kHz%sheard %d min%sbest %.0f dB%s%s%s%s%s%s%s%s", h.ident.c_str(), kDot, h.hz / 1e3, kDot, r.n, kDot,
                       r.best, kDot, dist.c_str(), kDot, brg.c_str(), kDot, h.cc.empty() ? "-" : h.cc.c_str(), kDot,
-                      h.name.empty() ? "(not in the published list)" : h.name.c_str());
+                      !h.name.empty() ? h.name.c_str() : h.listed ? "(published, no name)" : "(not in the published list)");
         return b;
     }
     /** The figures and the list for a set of beacons (an hour's, or the window's). */
