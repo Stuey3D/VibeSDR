@@ -195,6 +195,7 @@ int main(int argc, char** argv) {
     const char* writePath = nullptr;   // ★ --write F: write the composed stream (u8 VIBEBU81) instead of decoding it — the
     bool to2048 = false;               //   fake radio's clips (test-server-dab-wide.mjs); --to2048 1 resamples a 2.4 clip to
     double centreOut = 0;              //   2.048 first (the native path's own converter); --centre-out HZ = the header centre
+    bool loop = false;
     bool paired = false;   // ★ --paired 1: the noise goes in at the CLIP's rate before the up-sampler, so the wide path sees
                            //   exactly the in-band noise the native path does (an A/B of the front ends alone)
     for (int i = 2; i + 1 < argc; i += 2) {
@@ -207,6 +208,7 @@ int main(int argc, char** argv) {
         else if (a == "--noise") noiseDb = std::atof(v);
         else if (a == "--seed") seed = unsigned(std::atoi(v));
         else if (a == "--paired") paired = std::atoi(v) != 0;
+        else if (a == "--loop") loop = std::atoi(v) != 0;   // ★ replay a short clip (the 5.76 s bench clips are seamless loops)
         else if (a == "--write") writePath = v;
         else if (a == "--to2048") to2048 = std::atoi(v) != 0;
         else if (a == "--centre-out") centreOut = std::atof(v);
@@ -256,7 +258,8 @@ int main(int argc, char** argv) {
     Upsampler up1, up2;
     if (wide > 0) { up1.design(rate, wide); w1.set(offset, wide); if (second) { up2.design(rate, wide); w2.set(offset2, wide); } }
 
-    const size_t blk = size_t(rate / 20);                            // 50 ms of the clip
+    // ★ 50 ms of the clip — or, at 2.048 MS/s, half a DAB frame (98304), so a 60-frame bench clip loops on a frame edge
+    const size_t blk = std::fabs(rate - 2048000.0) < 1.0 ? size_t(98304) : size_t(rate / 20);
     std::vector<float> o1, o2, feedBuf, snrProbe;
     double fed = 0, nextPoll = 0;
     const auto tw0 = steady_clock::now();
@@ -268,7 +271,7 @@ int main(int argc, char** argv) {
         std::fwrite("VIBEBU81", 1, 8, wfp); std::fwrite(&r, 8, 1, wfp); std::fwrite(&cen, 8, 1, wfp); std::fwrite(&sid, 4, 1, wfp);
     }
     while (fed < secs) {
-        if (!c1.read(u, f1, blk)) break;
+        if (!c1.read(u, f1, blk)) { if (!loop) break; c1.skip(0); if (!c1.read(u, f1, blk)) break; }
         m1.run(f1.data(), blk);
         const double sigClip = std::sqrt(density * rate / 2.0);
         if (addNoise && paired && wide > 0) for (float& x : f1) x += float(sigClip) * g(rng);
@@ -287,11 +290,11 @@ int main(int argc, char** argv) {
             wu8.resize(src->size());
             for (size_t i = 0; i < src->size(); ++i) { const float v = (*src)[i] * 127.5f + 127.5f; wu8[i] = uint8_t(v < 0 ? 0 : v > 255 ? 255 : std::lrint(v)); }
             std::fwrite(wu8.data(), 1, wu8.size(), wfp);
-            fed += 0.05;
+            fed += double(blk) / rate;
             continue;
         }
         for (auto& s : svcs) s->feed(feedBuf.data(), feedBuf.size() / 2);
-        fed += 0.05;
+        fed += double(blk) / rate;
         for (int w = 0; w < 400000; ++w) {   // ★ back-pressure: never ahead of any worker
             bool busy = false; for (auto& s : svcs) if (s->backlogForTest() > 0) busy = true;
             if (!busy) break;
@@ -309,12 +312,12 @@ int main(int argc, char** argv) {
         std::printf("{\"clip\":\"%s\",\"path\":\"%s\",\"feedRate\":%.0f,\"noiseDb\":%s,\"snrIn\":%.2f,\"secs\":%.2f,"
                     "\"tLock\":%.2f,\"tLabel\":%.2f,\"tSvcs\":%.2f,\"tAudio\":%.2f,\"label\":\"%s\",\"services\":%d,"
                     "\"mer\":%.2f,\"merAvg\":%.2f,\"mscBer\":%.4f,\"fibRate\":%.3f,\"sfOk\":%.0f,\"sfTried\":%.0f,\"auIn\":%.0f,\"auBad\":%.0f,"
-                    "\"rsFixed\":%.0f,\"rsLost\":%.0f,\"mp2Out\":%.0f,\"mp2Bad\":%.0f,\"frames\":%.0f,\"reacq\":%.0f,\"offsetHz\":%.0f,\"wallS\":%.1f}\n",
+                    "\"rsFixed\":%.0f,\"rsLost\":%.0f,\"mp2In\":%.0f,\"mp2Out\":%.0f,\"mp2Bad\":%.0f,\"frames\":%.0f,\"reacq\":%.0f,\"offsetHz\":%.0f,\"wallS\":%.1f}\n",
                     w.name.substr(w.name.find_last_of('/') + 1).c_str(), wide > 0 ? "wide" : "native", feedRate,
                     addNoise ? std::to_string(noiseDb).c_str() : "null", snrIn, fed,
                     w.tLock, w.tLabel, w.tSvc, w.tAudio, str(j, "label").c_str(), countServices(j),
                     num(j, "mer"), w.merN ? w.merSum / w.merN : NAN, num(j, "mscBer"), num(j, "fibRate"), num(j, "sfOk"), num(j, "sfTried"),
-                    num(j, "auIn"), num(j, "auBad"), num(j, "rsFixed"), num(j, "rsLost"), num(j, "mp2Out"), num(j, "mp2Bad"),
+                    num(j, "auIn"), num(j, "auBad"), num(j, "rsFixed"), num(j, "rsLost"), num(j, "mp2In"), num(j, "mp2Out"), num(j, "mp2Bad"),
                     num(j, "frames"), num(j, "reacquires"), num(j, "offsetHz"),
                     duration<double>(steady_clock::now() - tw0).count());
     }

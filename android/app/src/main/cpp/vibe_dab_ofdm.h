@@ -264,14 +264,42 @@ inline SoftBits dqpskSoftScaled(C32 product, float invAvgMag) {
  *    unchanged. The scalar path below is the reference and what a Pi Zero W (ARMv6, no NEON)
  *    runs; it keeps the same folded arithmetic so it too calls sqrt once per carrier, not four.
  *  ★ VIBE_DAB_SOFT_SCALE and VIBE_DAB_SOFT_MODE=linear remain honoured, read once. */
+/* ★★★ V12 (2026-11-04): THE SOFT BIT IS (|p|/avg)^¾ × 140 — AND THE CLIP WAS COSTING THE WEAK MULTIPLEX.
+ *  The Viterbi's branch metric is LINEAR in the soft values, so the only non-linearity between the demapper and the
+ *  decoder is the int8 clip at ±127 — and at ×200 in the sqrt shape the AVERAGE carrier's component (200·0.707 = 141)
+ *  already sat past it: most bits reached the Viterbi as hard decisions, the soft information of every carrier at or
+ *  above average thrown away. On a weak multiplex — where the soft information is the whole margin — that is a loss.
+ *  ★ WHY ¾. For differential QPSK the exact log-likelihood of a carrier goes as |H|² while its own SNR is low and flattens
+ *    as it rises (the product's noise grows with |H| too), so the right weighting sits between the sqrt shape (|H|) and
+ *    the linear one (|H|²). Measured, not argued — dab-weak, paired noise, real captures and the benchmark's synthetic
+ *    multipath/fade clips (2026-11-04), super frames decoded / MP2 frames good / FIB rate:
+ *        shape      ×      real 12D 8.5 dB  12B 5.0 dB   MP2 UEP 3 dB  weak 12D (48002) FIB  synthetic (5 rows)
+ *        sqrt      200     787 / 6702       161 / 9178   4512 good     0.144, label 13.1 s   the reference
+ *        sqrt       90     —                —            —             —                     lower on 4 of 5
+ *        linear     85    1818 / 2598       618 / 7356   6734          0.371, label 0.85 s   −4…−10 % on 4 of 5 ✗
+ *        ¾         110    1782 / 2742       667 / 7163   6847          0.350, label 0.85 s   −1.8 % on one row ✗
+ *        ¾         140    1762 / 2822       585 / 7485   6509          0.295, label 0.85 s   +0…+13 % on all 5 ✓
+ *    Strong signals (12B, 12D at full strength, the clean bench clip, 2.048 and 2.4 captures): identical, and the raw BER
+ *    still reads 0 where it read 0 (the AGC's "decoding perfectly" test). ★ The linear shape wins the real captures
+ *    outright but loses the synthetic fades: per-symbol normalisation hides a 30 ms −15 dB fade from both, and the
+ *    linear shape is the more over-confident there. ¾ is the one that costs nothing anywhere.
+ *  ★ VIBE_DAB_SOFT_MODE=sqrt|linear|p75 and VIBE_DAB_SOFT_SCALE remain measurement hooks; each mode has its own default
+ *    scale (sqrt 200 — the old setting, exactly — linear 85, p75 140). */
 struct DemapSoftParams {
-    float kScale = 200.0f;
-    bool  linear = false;
+    enum class Mode { Sqrt, Linear, P75 };
+    float kScale = 140.0f;
+    Mode  mode = Mode::P75;
+    bool  linear = false;   // ★ kept for readers of the old flag
     static const DemapSoftParams& get() {
         static const DemapSoftParams p = [] {
             DemapSoftParams q;
+            if (const char* m = std::getenv("VIBE_DAB_SOFT_MODE")) {
+                const std::string s(m);
+                if (s == "linear") { q.mode = Mode::Linear; q.kScale = 85.0f; }
+                else if (s == "sqrt") { q.mode = Mode::Sqrt; q.kScale = 200.0f; }
+            }
             if (const char* e = std::getenv("VIBE_DAB_SOFT_SCALE")) q.kScale = float(atof(e));
-            if (const char* m = std::getenv("VIBE_DAB_SOFT_MODE")) q.linear = std::string(m) == "linear";
+            q.linear = q.mode == Mode::Linear;
             return q;
         }();
         return p;
@@ -344,9 +372,29 @@ inline double dqpskSoftFromProducts(const C32* prod, const float* mag, int K, fl
     const DemapSoftParams& sp = DemapSoftParams::get();
     const float kLin = sp.kScale * invAvg;                         // linear mode: k = kScale/avg
     const float kAmp = sp.kScale * std::sqrt(invAvg);              // sqrt mode:   k = kAmp · rsqrt(mag)
+    // ★ ¾ mode: k = kScale · (mag·invAvg)^¾ / mag = kP75 · mag^(−¼) — one more reciprocal square root per carrier
+    const float kP75 = sp.kScale * std::pow(invAvg, 0.75f);
+    const bool  p75  = sp.mode == DemapSoftParams::Mode::P75;
     const float kR2  = 0.70710678f;
     double err = 0.0;
     int c = 0;
+    /* ★ MEASUREMENT HOOK ONLY (dab-weak, 2026-11-04): VIBE_DAB_SOFT_POW=α — soft ∝ p/|p| · (|p|/avg)^α (0.5 = the sqrt
+     *  shape, 1 = linear). Scalar, slow, never on unless set. */
+    static const float powA = std::getenv("VIBE_DAB_SOFT_POW") ? float(atof(std::getenv("VIBE_DAB_SOFT_POW"))) : -1.0f;
+    if (powA > 0.0f) {
+        for (; c < K; ++c) {
+            const float re = prod[c].real(), im = prod[c].imag(), m = mag[c];
+            if (!(m > 1e-12f)) { softRe[c] = 0; softIm[c] = 0; continue; }
+            const float rm = 1.0f / m;
+            const float k = sp.kScale * std::pow(m * invAvg, powA) * rm;
+            const float vr = re * k, vi = im * k;
+            softRe[c] = int8_t(vr > 127.0f ? 127.0f : vr < -127.0f ? -127.0f : vr);
+            softIm[c] = int8_t(vi > 127.0f ? 127.0f : vi < -127.0f ? -127.0f : vi);
+            const float ar = std::fabs(re) * rm - kR2, ai = std::fabs(im) * rm - kR2;
+            err += double(ar * ar + ai * ai);
+        }
+        return err;
+    }
 #if defined(__ARM_NEON)
     {
         float32x4_t eacc = vdupq_n_f32(0.0f);
@@ -367,7 +415,15 @@ inline double dqpskSoftFromProducts(const C32* prod, const float* mag, int K, fl
                 float32x4_t rs = vrsqrteq_f32(m);
                 rs = vmulq_f32(rs, vrsqrtsq_f32(vmulq_f32(m, rs), rs));
                 rs = vmulq_f32(rs, vrsqrtsq_f32(vmulq_f32(m, rs), rs));
-                k = vmulq_n_f32(rs, kAmp);
+                if (p75) {
+                    // m^(−¼) = sqrt(m^(−½)) = rs · rsqrt(rs); a zero m has rs = inf — masked by `ok` below
+                    float32x4_t rr = vrsqrteq_f32(rs);
+                    rr = vmulq_f32(rr, vrsqrtsq_f32(vmulq_f32(rs, rr), rr));
+                    rr = vmulq_f32(rr, vrsqrtsq_f32(vmulq_f32(rs, rr), rr));
+                    k = vmulq_n_f32(vmulq_f32(rs, rr), kP75);
+                } else {
+                    k = vmulq_n_f32(rs, kAmp);
+                }
             }
             k = vbslq_f32(ok, k, zero);
             const float32x4_t sr = vminq_f32(hi, vmaxq_f32(lo, vmulq_f32(p.val[0], k)));
@@ -398,7 +454,9 @@ inline double dqpskSoftFromProducts(const C32* prod, const float* mag, int K, fl
             const __m128 ok = _mm_cmpgt_ps(m, tiny);
             const __m128 msafe = _mm_max_ps(m, tiny);
             const __m128 rm = _mm_div_ps(_mm_set1_ps(1.0f), msafe);
-            __m128 k = sp.linear ? _mm_set1_ps(kLin) : _mm_div_ps(_mm_set1_ps(kAmp), _mm_sqrt_ps(msafe));
+            __m128 k = sp.linear ? _mm_set1_ps(kLin)
+                     : p75 ? _mm_div_ps(_mm_set1_ps(kP75), _mm_sqrt_ps(_mm_sqrt_ps(msafe)))
+                           : _mm_div_ps(_mm_set1_ps(kAmp), _mm_sqrt_ps(msafe));
             k = _mm_and_ps(ok, k);
             const __m128 sr = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(pr, k)));
             const __m128 si = _mm_min_ps(hi, _mm_max_ps(lo, _mm_mul_ps(pi, k)));
@@ -423,7 +481,7 @@ inline double dqpskSoftFromProducts(const C32* prod, const float* mag, int K, fl
         const float re = prod[c].real(), im = prod[c].imag(), m = mag[c];
         if (!(m > 1e-12f)) { softRe[c] = 0; softIm[c] = 0; continue; }
         const float rm = 1.0f / m;
-        const float k = sp.linear ? kLin : kAmp / std::sqrt(m);
+        const float k = sp.linear ? kLin : p75 ? kP75 / std::sqrt(std::sqrt(m)) : kAmp / std::sqrt(m);
         const float vr = re * k, vi = im * k;
         softRe[c] = int8_t(vr > 127.0f ? 127.0f : vr < -127.0f ? -127.0f : vr);
         softIm[c] = int8_t(vi > 127.0f ? 127.0f : vi < -127.0f ? -127.0f : vi);
