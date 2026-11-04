@@ -15,6 +15,7 @@ mkdirSync(out, { recursive: true });
 const rows = [...NAV_HAZARDS.map((h) => ({ id: h.id, words: h.words, unlit: false })),
   { id: 'light', words: 'Light — UNLIT (the mark)', unlit: true },
   { id: 'buoy', words: 'Buoy — unlit', unlit: true },
+  { id: 'fogsignal', words: 'Fog signal — not working', unlit: true },
   { id: 'structure', words: 'Wind turbine — no light', unlit: true },
   { id: 'platform', words: 'Platform — UNLIT', unlit: true }];
 const ROW = 46, TOP = 56, W = 1040;

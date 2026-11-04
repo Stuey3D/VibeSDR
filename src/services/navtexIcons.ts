@@ -6,10 +6,11 @@
 //    caps and joins, a small filled detail only where a stroke would close up at 16 px. The comparison sheet is
 //    scripts/navtex-icon-sheet.mjs (16 / 24 / 32 px, dark and light, to ~/Desktop/navtex-icons/).
 // ★ `unlit` is a MODIFIER: a light, buoy, structure or platform whose light has failed carries the small UNLIT mark (a lamp
-//    struck through) in its top-right corner. The unlit-light icon is the lighthouse with that mark.
+//    struck through) in its top-right corner. The unlit-light icon is the lighthouse with that mark. ★ v10 on a FOG SIGNAL
+//    the same mark means NOT WORKING (the horn silent) — the server's flag is the one `unlit`.
 // ★ PURE strings — no React Native, no DOM: the web client and the app's map page both draw from here.
 
-export type NavHazard = 'wreck' | 'navaid' | 'light' | 'buoy' | 'structure' | 'platform' | 'firing' | 'submarine' | 'uxo'
+export type NavHazard = 'wreck' | 'navaid' | 'light' | 'buoy' | 'fogsignal' | 'structure' | 'platform' | 'firing' | 'submarine' | 'uxo'
   | 'cable' | 'cable_telecom' | 'cable_power' | 'pipeline' | 'pipeline_gas' | 'survey'
   | 'obstruction' | 'adrift' | 'works' | 'towing' | 'sar' | 'ice' | 'general';
 
@@ -25,6 +26,9 @@ export const NAV_GLYPHS: Record<NavHazard, string> = {
   buoy: '<path d="M5 11.4l1-4h4l1 4z"/><path d="M8 7.4V4"/><circle cx="8" cy="2.9" r="1.1"/><path d="' + WAVE + '"/>',
   // navaid (a beacon or a light not otherwise named) = the lighthouse
   navaid: '',
+  // ★ v10 a FOG SIGNAL (Stuart, 2026-11-04: "one icon we are missing for Navtex and that is the Fog Horn"): a horn on its
+  //   stand — a long cone, its open bell — sounding to the right, two sound arcs (the not-working mark sits over the outer one)
+  fogsignal: '<path d="M1.4 8.3L8.6 5.6v6.6L1.4 9.5z"/><ellipse cx="8.6" cy="8.9" rx="1" ry="3.3"/><path d="M4.4 10.6v3.8M2.6 14.4h3.6"/><path d="M11.4 7.4a2.2 2.2 0 0 1 0 3M13.3 5.8a4.4 4.4 0 0 1 0 6.2"/>',
   // a wind turbine on its tower — hub, three blades
   structure: '<path d="M7.5 14.4l.25-7M8.5 14.4l-.25-7M6.2 14.4h3.6"/><circle cx="8" cy="6.3" r="1"/><path d="M7.6 5.4L6.6 2.4M8.95 6.5l3 .5M7.5 7.1L5.5 9.4"/>',
   // a gun-sight: the range is in use
@@ -76,6 +80,7 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
   { id: 'wreck', words: 'Wreck' },
   { id: 'light', words: 'Light' },
   { id: 'buoy', words: 'Buoy or beacon' },
+  { id: 'fogsignal', words: 'Fog signal (foghorn)' },
   { id: 'structure', words: 'Wind farm or turbine' },
   { id: 'platform', words: 'Oil or gas platform, rig or wellhead' },
   { id: 'firing', words: 'Firing or military exercise' },
@@ -96,11 +101,17 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
   { id: 'general', words: 'Other warning' },
 ];
 
+/** ★ v10 The legend's modifier rows, after the hazards — the same in the web client's key and the app's legend. */
+export const NAV_MARK_ROWS: Array<{ id: NavHazard; words: string }> = [
+  { id: 'light', words: 'Light not working (the unlit mark)' },
+  { id: 'fogsignal', words: 'Fog signal not working (the same mark)' },
+];
+
 /** ★ The family colours (one per icon — the icon itself stays single-colour): danger red-orange, lights amber, work at
  *  sea yellow, rescue pink, ice pale blue, the rest grey-white. Chosen to read on the dark basemap and the light one. */
 export const NAV_HAZARD_COLOURS: Record<NavHazard, string> = {
   wreck: '#ff7a59', uxo: '#ff5a5a', firing: '#ff5a5a', submarine: '#ff5a5a', obstruction: '#ff9d5c', adrift: '#ff9d5c',
-  light: '#ffc940', navaid: '#ffc940', buoy: '#ffc940',
+  light: '#ffc940', navaid: '#ffc940', buoy: '#ffc940', fogsignal: '#ffc940',   // ★ v10 the fog signal: an aid to navigation, the lights' amber
   structure: '#e8d36a', platform: '#e8d36a', cable: '#e8d36a', cable_telecom: '#e8d36a', cable_power: '#e8d36a', pipeline: '#e8d36a', pipeline_gas: '#e8d36a', survey: '#e8d36a', works: '#e8d36a', towing: '#e8d36a',
   sar: '#ff7ac8', ice: '#9fdcff', general: '#d7dee6',
 };

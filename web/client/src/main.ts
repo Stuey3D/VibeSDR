@@ -30,7 +30,7 @@ import { navSanitise, navRows, navStatus, navRangeOf, navSince, navSiteColour, n
          NAV_RANGES, NAV_RANGE_HINT, NAV_EMPTY, type NavReport, type NavStation } from '../../../src/services/navtexMap';
 import { navWarnSanitise, navWarnVisible, navWarnItems, navWarnStatus, navWarnSummary, navWarnTag, navMetSanitise, navMetVisible, navMetListed, navMetRowWords, navMetItems,
          navMetStatus, navFcLabel, navFcGale, navBuilding, navLayersOf, NAV_LAYERS, type NavWarnReport, type NavMetReport, type NavLayers } from '../../../src/services/navtexWarn';
-import { NAV_HAZARD_COLOURS, NAV_HAZARDS, navGlyphSvg } from '../../../src/services/navtexIcons';
+import { NAV_HAZARD_COLOURS, NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg } from '../../../src/services/navtexIcons';
 // ★★ V12 2026-11-02 THE SHIPPING MAP — the rules both clients share (docs/v12/SHIPPING-MAP.md)
 import { SHIPPING_TITLE, shipLayersOf, shipLayersPresent, shipToggles, shipOn, storeSanitise, shipShips, shipItems, shipRows, shipStatus,
          dscPinsFromCalls, dscPinsFromGallery, dscPinsMerge, dscInRange, dscPinItems, dscPinRows, dscStatus, shipLegendHtml, windLegendRows,
@@ -8944,7 +8944,8 @@ function shipHave(now: number): ShipHave {
 /** ★ The KEY for the layers this map has: ships and DSC glyphs, the NAVTEX hazards, the weather arrows. */
 function shipKeyHtml(present: ShipLayerId[]): string {
   let h = shipLegendHtml(present);
-  if (present.includes('warnings')) h += NAV_HAZARDS.map((x) => `<div class="kr">${navGlyphSvg(x.id, 16, NAV_HAZARD_COLOURS[x.id])}<span>${escapeHtml(x.words)}</span></div>`).join('');
+  if (present.includes('warnings')) h += NAV_HAZARDS.map((x) => `<div class="kr">${navGlyphSvg(x.id, 16, NAV_HAZARD_COLOURS[x.id])}<span>${escapeHtml(x.words)}</span></div>`).join('')
+    + NAV_MARK_ROWS.map((x) => `<div class="kr">${navGlyphSvg(x.id, 16, NAV_HAZARD_COLOURS[x.id], true)}<span>${escapeHtml(x.words)}</span></div>`).join('');   // ★ v10 the not-working marks, as the app's legend
   if (present.includes('weather')) h += windLegendRows().map(([g, w]) => `<div class="kr">${g}<span>${escapeHtml(w)}</span></div>`).join('');
   if (present.includes('areas')) h += seaLegendHtml(present.includes('weather'), seaAttribution(seaAreasFor(myPos() ?? navLast.st?.rx ?? null, navLast.m)));
   return h;

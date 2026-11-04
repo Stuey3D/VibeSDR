@@ -4,7 +4,7 @@
 import { navSanitise, navSites, navWhy, navName, navSlot, navLabel, navCard, navItems, navStatus, navRangeOf, navSince } from '../src/services/navtexMap';
 import { navWarnSanitise, navWarnSummary, navWarnLabel, navWarnVisible, navWarnItems, navWarnCard, navWarnWhy, navWarnPoint, navBuilding, navMetListed, navMetRowWords,
          navMetSanitise, navFcLabel, navMetVisible, navMetItems, navMetCard, navLayersOf } from '../src/services/navtexWarn';
-import { NAV_GLYPHS, NAV_HAZARDS, navGlyphSvg, navHazardMarker } from '../src/services/navtexIcons';
+import { NAV_GLYPHS, NAV_HAZARDS, NAV_MARK_ROWS, navGlyphSvg, navHazardMarker } from '../src/services/navtexIcons';
 
 let passes = 0, fails = 0;
 const eq = (what: string, got: unknown, want: unknown) => {
@@ -118,6 +118,33 @@ eq('only the latest is drawn; over a day old = not drawn under any filter (ALL t
   eq('the gas flame stays blue on a faded marker too', /fill="#3d9bff"/.test(navHazardMarker('pipeline_gas', false, true).html), true);
   eq('the platform carries the unlit mark', /M11 5l3.2-3.2/.test(navHazardMarker('platform', true, false).html), true);
   eq('the legend lists the five cables and pipelines and the platform', ['cable', 'cable_telecom', 'cable_power', 'pipeline', 'pipeline_gas', 'platform'].every((k) => NAV_HAZARDS.some((h) => h.id === k)), true);
+}
+// ★★ v10 the FOG SIGNAL (Stuart, 2026-11-04: "the Fog Horn")
+{
+  const now = 1793810000;
+  const r = navWarnSanitise({ now, warnings: [
+    { id: 'EA46', khz: 518, first: now - 600, last: now - 600, n: 3, cls: 'fogsignal', unlit: 1, f: 'gw.txt', pts: [[50.4083, -0.0017]] },
+    { id: 'BA75', khz: 490, first: now - 600, last: now - 600, n: 1, cls: 'fogsignal', unlit: 1, hit: 'MISTHOORN', lang: 'nl', f: 'zb.txt', pts: [[51.33, 3.18]] },
+    { id: 'EA60', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'fogsignal', unlit: 0, f: 'new.txt', pts: [[50.5, -1]] },
+    { id: 'PA26', khz: 518, first: now - 600, last: now - 600, n: 1, cls: 'platform', unlit: 1, f: 'pa.txt', pts: [[53.4567, 4.2317], [53.5, 6.2333], [53.2333, 3.9833]],
+      items: [{ n: 'L10-B', d: 'BLACK OUT', u: 1 }, { n: 'N7-FA-1', d: 'FOGHORN INOPERATIVE', u: 0, fg: 1 }, { n: 'T1', d: 'UNLIT AND FOG SIGNAL INOPERATIVE', u: 1, fg: 1 }] },
+  ] })!;
+  const [gw, zb, nw, pa] = r.list;
+  eq('fogsignal is a class the client keeps (never folded to general)', r.list.map((w) => w.cls), ['fogsignal', 'fogsignal', 'fogsignal', 'platform']);
+  eq('the summary: "Fog signal not working"; the Dutch word kept; a working one just "Fog signal"',
+     [navWarnSummary(gw), navWarnSummary(zb), navWarnSummary(nw)], ['Fog signal not working', 'Fog signal not working (from Dutch: MISTHOORN)', 'Fog signal']);
+  eq('the label', navWarnLabel(gw), 'EA46 · Fog signal not working');
+  eq('the why says "not working", never "a light not working"', [navWarnWhy(gw, now)[0], navWarnWhy(zb, now)[0]], ['Its icon: this message\'s English wording names fog signal, not working', 'Its icon: this message says MISTHOORN (Dutch)']);
+  const horn = NAV_GLYPHS.fogsignal;
+  const wi = navWarnItems([gw, nw], now, 'web');
+  eq('the marker draws the horn, the not-working mark only when it is out, in the lights\' amber',
+     [wi[0]._ic.html.includes(horn), /M11 5l3.2-3.2/.test(wi[0]._ic.html), /M11 5l3.2-3.2/.test(wi[1]._ic.html), /#ffc940/.test(wi[0]._ic.html)], [true, true, false, true]);
+  const its = navWarnItems([pa], now, 'web');
+  eq('a platform list: the foghorn item draws the horn, not working; a light out (with or without its fog signal) the platform, unlit',
+     its.map((x) => [x._ic.html.includes(horn), /M11 5l3.2-3.2/.test(x._ic.html)]), [[false, true], [true, true], [false, true]]);
+  eq('…its card and its words say so', [/Fog signal not working/.test(its[1]._cd), /Fog signal not working/.test(its[1]._aria), /Platform, unlit/.test(its[0]._cd), /Platform, unlit/.test(its[2]._aria)], [true, true, true, true]);
+  eq('the legend lists the fog signal; its not-working row is in the marks', [NAV_HAZARDS.some((h) => h.id === 'fogsignal'), NAV_MARK_ROWS.map((h) => h.id)], [true, ['light', 'fogsignal']]);
+  eq('the glyph is the same language (16 box, stroke 1.4) with the mark', /viewBox="0 0 16 16".*stroke-width="1.4".*M11 5l3.2-3.2/.test(navGlyphSvg('fogsignal', 16, '#fff', true)), true);
 }
 // ★★ the tidied station card: essentials, then "More"
 {
