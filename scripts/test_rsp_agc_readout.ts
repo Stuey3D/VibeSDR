@@ -8,6 +8,7 @@ import { RspAgcWatch, rspAgcCause, rspAgcLine, rspAgcStatus, rspAgcSampleOf, HOL
 
 let fails = 0;
 const ok = (c: boolean, what: string) => { console.log(`  ${c ? 'ok  ' : 'FAIL'} ${what}`); if (!c) fails++; };
+
 console.log('test_rsp_agc_readout');
 
 const healthy = (t: number): RspAgcSample => ({
@@ -57,7 +58,7 @@ const healthy = (t: number): RspAgcSample => ({
   const w = new RspAgcWatch(); let transitions = 0, prev = false;
   for (let t = 0; t < 60_000; t += 100) {
     const on = Math.floor(t / 1000) % 2 === 0;
-    w.push({ ...healthy(t), vmiss: on ? 1 : 0 }, t);
+    w.push({ ...healthy(t), vagc: 1, vblind: on ? 5 : 0 }, t);
     if (w.warn !== prev) { transitions++; prev = w.warn; }
   }
   ok(transitions === 1, `a cause blinking every second gives one steady amber, not a flicker (${transitions} transition)`);
@@ -120,5 +121,14 @@ ok(vagcIfOwner(true) === 'VibeAGC' && vagcIfOwner(false) === 'SDRplay', 'IF AGC 
 ok(vagcTargetText(-20) === '−20 dBFS · set by VibeAGC' && vagcTargetText(undefined) === 'set by VibeAGC'
    && vagcTargetText(-20, true) === '−20 dBFS · VibeAGC',
    'AGC TARGET under VibeAGC: its real target, read-only');
+
+// ★ V12 2026-11-04: a missed gain write is a blip, not a warning — it is counted in the overview line only.
+{
+  const w = new RspAgcWatch();
+  for (let t = 0; t < 30_000; t += 100) w.push({ ...healthy(t), vagc: 1, vwpm: 9, vmiss: 1 }, t);
+  const r = w.read();
+  ok(!r.warn && !r.status.includes('MISSED'), `a missed write raises no amber and no status word (${r.status})`);
+  ok(r.line.includes('1 did not land'), `…and the overview line counts it: ${r.line}`);
+}
 
 process.exit(fails ? 1 : 0);

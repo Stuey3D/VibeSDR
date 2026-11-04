@@ -67,16 +67,18 @@ export function vagcReasonText(code: number | undefined): string {
 
 const dbfs = (v: number) => `${v < 0 ? '−' : ''}${Math.abs(Math.round(v))}`;
 
-/** What is wrong right now, before any hysteresis: [status word, sentence] or null. Priority: hand-back, a missed
- *  write, blind, the rail. */
+/** What is wrong right now, before any hysteresis: [status word, sentence] or null. Priority: hand-back, blind, the
+ *  rail (a missed write is only counted in the line, not a warning). */
 export function rspAgcCause(s: RspAgcSample): [string, string] | null {
   if (!s.ifAgc) return null;                                   // manual gain: nothing automatic to be stuck
   if (s.vst === VST_HANDED_BACK) {
     const r = vagcReasonText(s.vrs);
     return ['AGC HANDED BACK', `VibeAGC handed back to the SDRplay's own IF AGC${r ? ` — ${r}` : ''}`];
   }
-  if ((s.vmiss ?? 0) > 0)
-    return ['WRITE MISSED', `${s.vmiss} gain write${s.vmiss === 1 ? '' : 's'} did not land in the last minute`];
+  /* ★ V12 2026-11-04 A MISSED WRITE IS NOT A WARNING (Stuart: "I dont think we need a big write missed sign here, the
+   *  overview in the menu is enough as this looks like a server major issue when its a minor blip"). One or two gain
+   *  writes a minute that did not land are a blip — they are counted in the overview line (rspAgcLine) instead. A REAL
+   *  fault (3 rejected / not honoured in a row) already hands the AGC back — vrs 13/14 — and that stays amber above. */
   if ((s.vagc ?? 0) === 1 && (s.vblind ?? 0) >= WARN_BLIND_S)
     return ['NO ADC LEVEL', `No fresh ADC level for ${s.vblind} s — the loop cannot see the signal`];
   const rail = s.vrail ?? 0;
@@ -98,7 +100,8 @@ export function rspAgcLine(s: RspAgcSample): string {
              : 'running';                                          // a beta44 server: on, no detail
     const tgt = typeof s.vtgt === 'number' ? ` · target ${dbfs(s.vtgt)}` : '';
     const w = typeof s.vwpm === 'number' ? ` · ${s.vwpm} gain write${s.vwpm === 1 ? '' : 's'} in the last minute` : '';
-    return `VibeAGC: ${st} · ADC ${peak} dBFS${tgt}${w}`;
+    const miss = (s.vmiss ?? 0) > 0 ? ` — ${s.vmiss} did not land` : '';
+    return `VibeAGC: ${st} · ADC ${peak} dBFS${tgt}${w}${miss}`;
   }
   const who = `the SDRplay's own IF AGC${s.rfAgc !== false ? ' + our RF walker' : ''}`;
   const tgt = typeof s.agcSet === 'number' ? ` · target ${dbfs(s.agcSet)}` : '';
