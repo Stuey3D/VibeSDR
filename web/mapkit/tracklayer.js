@@ -425,7 +425,10 @@
         setTimeout(function () { var cur = items.get(k); if (cur && cur.gone) { cur.mk.remove(); items.delete(k); if (sel === k) select(null, true); } }, FADE_OUT_MS + 50);
       });
       if (sel) renderCard();
-      if (!fitted && items.size) { fitted = true; fit(); }
+      /* ★★ V12 2026-11-04 THE FIRST VIEW FITS WHAT WAS HEARD (Stuart: "the maritime map starts zoomed in on the server
+       *  location when it should default to FIT"). The sea areas (_nofit) arrive first, and counting them as items fitted
+       *  the receiver alone: one point, setView(…, 10) — the server's doorstep. Now the first fit waits for a heard item. */
+      if (!fitted && heardCount() > 0) { fitted = true; fit(); }
       syncArcs();
       syncShapes();
       declutterSoon();
@@ -502,13 +505,15 @@
       pulse(key);
       return true;
     }
+    function heardCount() { var n = 0; items.forEach(function (e) { if (!e.gone && !(e.item && e.item._nofit)) n++; }); return n; }
     function fit() {
       var pts = [];
       // ★ V12 2026-11-02 an item marked _nofit (a sea area: the chart, not something heard) never widens the first view
       items.forEach(function (e) { if (!e.gone && !(e.item && e.item._nofit)) pts.push([e.lat, e.lon]); });
       if (rx) pts.push([rx.lat, rx.lon]);
       if (!pts.length) return;
-      if (pts.length === 1) { map.setView(pts[0], 10); return; }
+      // ★ The receiver alone (nothing heard yet) is not a view to zoom into — the map stays as it opened.
+      if (pts.length === 1) { if (!rx || heardCount() > 0) map.setView(pts[0], 10); return; }
       try { map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 12 }); } catch (err) { console.error('[tracklayer] fit', err); }
     }
     function setReceiver(lat, lon) {
