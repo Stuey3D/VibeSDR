@@ -43,7 +43,7 @@ const NICK = { on: true, waitMin: 5, profiles: [{ centre: 500000, from: '00:00',
 // an RTL that is not running (no HW): all four bands by its driver
 let api = mk(null);
 api.bgLoad({ driver: 'rtlsdr', bgDecode: JSON.stringify(NICK) });
-ok(!!sel('bgKind') && sel('bgKind').children.map((o) => o.value).join() === 'vfo,ism', 'an RTL profile offers "Decodes": Stations on VFOs / ISM sensors');
+ok(!!sel('bgKind') && sel('bgKind').children.map((o) => o.value).join() === 'vfo,ism,ais', 'an RTL profile offers "Decodes": Stations on VFOs / ISM sensors / AIS (AIS background decoding, V12)');
 ok(sel('bgKind').value === 'vfo' && vfoRows().length === 2, "Nick's profile shows as VFOs, two rows");
 ok(api.bgCollect() === JSON.stringify(NICK), 'an ordinary profile saves back byte for byte (no "ism" key)');
 sel('bgKind').value = 'ism'; sel('bgKind').onchange();
@@ -77,11 +77,11 @@ api.bgLoad({ driver: 'rtlsdr', mode: 'locked', lockFreq: 433920000, lockRate: 20
 ok(box.text().includes('this radio cannot do') && box.text().includes('locked'), 'a saved ISM profile on a locked radio says plainly why it cannot run');
 blocked = new Set(['ism']);
 api.bgLoad({ driver: 'rtlsdr', bgDecode: JSON.stringify(NICK) });
-ok(!sel('bgKind'), 'ISM switched off for this radio by its owner: not offered');
+ok(!sel('bgKind') || !sel('bgKind').children.some((o) => o.value === 'ism'), 'ISM switched off for this radio by its owner: no ISM in "Decodes" (its other decoders may be offered)');
 blocked = new Set();
 api = mk({ ismHwBands: [] });
 api.bgLoad({ driver: 'rtlsdr', bgDecode: JSON.stringify(NICK) });
-ok(!sel('bgKind'), 'a running radio that reaches no band (its allowed ranges): not offered');
+ok(!sel('bgKind') || !sel('bgKind').children.some((o) => o.value === 'ism'), 'a running radio that reaches no ISM band (its allowed ranges): no ISM in "Decodes" (other decoders it does reach may be offered)');
 
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);

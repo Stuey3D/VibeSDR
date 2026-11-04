@@ -59,7 +59,8 @@ int main() {
         ok(benchhw::anyLocked(hw), "USRP locked: judged by the locked-range rows");
         ok(!runs(hw, "dec_rtty") && !runs(hw, "dec_ndb") && !runs(hw, "dec_wefax"), "USRP: no HF decoders (50 MHz floor)");
         ok(runs(hw, "dab") && runs(hw, "adsb") && runs(hw, "dec_ais") && runs(hw, "lk_wfm"), "USRP: DAB, ADS-B, AIS, WFM run");
-        ok(benchhw::rateOffered(hw, 2400000, false) && !benchhw::rateOffered(hw, 2048000, false), "USRP: wfm_2400 runs, wfm_2048 does not");
+        // ★ V12 2026-11-04 (v12-dab-wide): the USRP offers 2.048 MS/s now — DAB's own rate, so a block change never re-rates it.
+        ok(benchhw::rateOffered(hw, 2400000, false) && benchhw::rateOffered(hw, 2048000, false), "USRP: wfm_2400 and wfm_2048 both run (2.048 offered since the DAB work)");
         Hw u2; u2.radios.push_back(benchhw::radioFor("usrp", 0, 0, 0, false, 2));
         ok(!hasWide(u2, 20e6) && hasWide(u2, 8e6), "USRP on USB 2: 8 MS/s measured, nothing gated above it");
         Hw u0; u0.radios.push_back(benchhw::radioFor("usrp"));
