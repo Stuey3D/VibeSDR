@@ -15930,8 +15930,12 @@ std::atomic<long long> g_rspAgcReinitAt{0};
                 dh.services = hit.services;
                 const auto learn = g_dab.learnable();
                 if (!learn.empty()) { dh.eid = uint32_t(std::max(0, learn.front().eid)); dh.ecc = learn.front().ecc; }
-                if (found && fibAt >= 0) dabDxReportExtras(dh);
-                if (dabDx_.onBlock) dabDx_.onBlock(int(idx), found ? &dh : nullptr, nowSecs() - tb);
+                // ★★ brief §6: logged on the FIRST CRC-valid FIB carrying an EId — no label or service list needed. A weak
+                //    multiplex that gave a FIB but never named itself in the dwell is still a DX catch (12D with noise
+                //    added: a FIB at 5.9 s, no labels by 30 s — the owner's scan had left at 3.4 s).
+                if (everLocked && fibAt >= 0) dabDxReportExtras(dh);
+                const bool dxFound = found || (everLocked && fibAt >= 0 && dh.eid != 0);
+                if (dabDx_.onBlock) dabDx_.onBlock(int(idx), dxFound ? &dh : nullptr, nowSecs() - tb);
             } else if (found) {
                 const double hz = double(vibedab::kBandIII[idx].centreHz);
                 if (q.fibRate > 0.9f) dabEnsRemember(int(idx), ens);   // ★ the ensemble memory's own bar

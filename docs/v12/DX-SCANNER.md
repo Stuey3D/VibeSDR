@@ -207,7 +207,28 @@ core lock**: no WebSocket message was added or changed; an old client never sees
   as JSON (a few KB per entry at the worst, rewritten at most every 5 minutes).
 - **DAB dwell vs pull-in on 12D**: see the table below (`scripts/probe-dx-dab-pullin.mjs`).
 
-DABPULLIN
+12D replayed on 12D only (`scripts/probe-dx-dab-pullin.mjs`), 2.048 MS/s, the capture's own 13.7 counts RMS plus
+Gaussian noise. "Lock / FIB" = seconds into the block; DX mode with the cursor on 12D, the owner's scan walking 5A → 12D.
+
+| extra noise (counts RMS) | DX mode | owner's scan |
+|---|---|---|
+| 0 | "Coventry", 16 services in 6.1 s (lock 0.5, FIB 0.5) | the same in 6.0 s (+16 bookmarks) |
+| 3 | 16 services in 6.2 s (FIB 0.5) | 6.0 s |
+| 5 | 16 services in 6.1 s (FIB 0.6) | 6.0 s |
+| 7 | 16 services in **8.3 s** (FIB 0.6) | 7.0 s |
+| 10 (run 1) | lock 0.6, **FIB at 5.9 s**, no labels by 30 s — *nothing logged by the first build* | gave up at 3.4 s: locked, no FIB in 3 s |
+| 10 (run 2) / 12 | locked, no FIB in the 6 s false-lock window → 6.7 s | locked, no FIB → 3.4–3.6 s |
+| 14, 18 | locked, no FIB → 6.7–6.8 s | 3.4 s |
+
+What this says:
+- Where the multiplex is clean, DX mode costs nothing extra (6 s either way; DX stops once the label and list are in).
+- At the edge, the longer dwell is what catches it: at noise 10 the first FIB came at 5.9 s, after the owner's scan had
+  already left at 3.4 s. That run logged **nothing**, though, because DX mode still waited for labels. Fixed: DX mode now
+  logs on the **first FIB carrying an EId** (brief §6), labels or not.
+- The edge is random. A second run at noise 10 had no FIB inside the 6 s false-lock window. The threshold sits between
+  +1.0 and +1.9 dB of added noise on this capture. `kDxFalseLockS` (6 s) is the knob if field results show FIBs arriving
+  later still.
+- Empty blocks: 2.5–2.7 s each in DX mode (mean 2.6, 40 blocks), so a whole 41-block sweep with one multiplex takes 116 s.
 
 ## Tests
 
