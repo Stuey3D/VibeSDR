@@ -18904,6 +18904,24 @@ std::atomic<long long> g_rspAgcReinitAt{0};
             return;
         }
         if (type == "ndb_stats") { if (sock && g_ndb.running()) sendText(sock, g_ndb.stats()); return; }
+        /* ★★ V12 2026-11-04: the OWNER confirms (or rejects, or forgets) a "Suspected …" clue — OWNER-ONLY (adminGate):
+         *  it names a beacon for every listener from then on. Stored in ndb-confirmed.json (vibe_ndb_db.h); a confirmed
+         *  one is an Exact match on this server. Answered with {"type":"ndb_owner",ok,why,…the decisions}. */
+        if (type == "ndb_confirm") {
+            if (!adminGate("an NDB confirmation")) {
+                if (sock) sendText(sock, "{\"type\":\"ndb_owner\",\"ok\":false,\"why\":\"only the server's owner can confirm a beacon\"}");
+                return;
+            }
+            double hz = 0; jsonNum(msg, "hz", hz);
+            std::string note;
+            const std::string why = vibendb::ownerDecide(jsonStr(msg, "act"), vibendb::cleanText(jsonStr(msg, "ident"), 6), hz,
+                                                         jsonStr(msg, "airfield").substr(0, 8), (long long)std::time(nullptr), note);
+            if (!note.empty()) LOGI("%s", note.c_str());
+            const std::string list = vibendb::ownerBeacons().json();
+            if (sock) sendText(sock, "{\"type\":\"ndb_owner\",\"ok\":" + std::string(why.empty() ? "true" : "false") + ",\"why\":\""
+                                     + vibendb::jsonEsc(why) + "\"," + list.substr(1));
+            return;
+        }
         if (type == "ais") { aisControl(sock, msg); return; }
         // ★★ A returning listener asking for the whole-radio mode it left in back — see modeResume
         if (type == "mode_resume") { modeResume(sock, msg); return; }
@@ -36964,6 +36982,8 @@ void LocalSdrShim::setBookmarksPath(const std::string& path) {
         /* ★ The off-air slideshow store, beside the carousel and the RadioDNS logos: one file per
          *  service, so a station whose picture only exists on air is not re-read on every visit. */
         g_dab.setSlideDir((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/dab-slides");
+        /* ★ V12: the NDBs this server's owner confirmed (or rejected) from the "Suspected …" clue (vibe_ndb_db.h). */
+        vibendb::ownerBeacons().setFile((slash == std::string::npos ? std::string(".") : path.substr(0, slash)) + "/ndb-confirmed.json");
     }
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) return;                       // nothing saved yet — that's fine

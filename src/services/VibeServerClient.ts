@@ -239,6 +239,11 @@ export class VibeServerClient extends VibeServerWsClient {
   ndbFind(q: string, limit = 60) { this.sendSpectrum({ type: 'ndb_find', q: String(q).slice(0, 40), limit }); }
   /** The reception stats (in memory on the server, 7 days); answered by `ndb_stats`. */
   ndbStats() { this.sendSpectrum({ type: 'ndb_stats' }); }
+  /** ★★ V12 2026-11-04: the OWNER's decision on a "Suspected …" beacon (owner-only on the server: adminGate) — confirm makes it
+   *  an Exact match on this server, reject stops that airfield being suggested for ident@frequency, forget undoes either. */
+  ndbConfirm(act: 'confirm' | 'reject' | 'forget', ident: string, hz: number, airfield: string) {
+    this.sendSpectrum({ type: 'ndb_confirm', act, ident: String(ident).slice(0, 6), hz: Math.round(hz), airfield: String(airfield).slice(0, 4) });
+  }
   /* ── V12 AIS (docs/v12/AIS-APRS.md) — ADS-B's pattern: a whole-radio mode entered and left by name; the server puts the
    *  radio on 162.000 MHz, decodes both channels and ignores tune / zoom / mode while it runs. No audio is sent. ── */
   /** ★ Reports after our own `ais off` are ghosts (DabExitGuard, as for DAB, ADS-B and ISM). */

@@ -18,14 +18,19 @@ import { probeMapGL, loadMapGLScripts, mapglLoad } from './mapgl';
 import { loadLeafletInto } from './leafletAsset';
 import { loadVibemapSource } from './chunkCache';
 
-export interface NdbDb { k: 'match' | 'near' | 'cand'; ident: string; name: string; cc: string; hz: number; lat: number; lon: number; km: number; brg: number }
+export interface NdbDb { k: 'match' | 'near' | 'cand'; ident: string; name: string; cc: string; hz: number; lat: number; lon: number; km: number; brg: number; own?: boolean }
+/** ★★ V12 2026-11-04 — the server's "Suspected …" clue for a beacon heard but not in the published list (vibe_ndb_suspect.h):
+ *  the best airfield, the evidence in plain words, up to two runners-up. Never the station — always labelled a suspicion. */
+export interface NdbSus { icao: string; iata: string; name: string; cc: string; lat: number; lon: number; km: number; brg: number; why: string; alt?: { icao: string; name: string; km: number; why: string }[] }
 export interface NdbBeacon {
   id: number; hz: number; snr: number; lvl: number; tone: number; tsnr: number; a1a: boolean; wpm: number;
   ident: string; votes: number; ballots: number; read: string; active: boolean; first: number; last: number; idAt: number; lastId: number;
   db?: NdbDb; alt?: { ident: string; name: string; cc: string; km: number }[]; also?: string[];
   harm?: { id: number; ident: string; hz: number }; copy: string;
+  /** ★ not listed: the suspected airfield · listed but probably wrong (far, yet heard by day): why */
+  sus?: NdbSus; unlikely?: string;
 }
-export interface NdbLog { ident: string; hz: number; name: string; cc: string; km: number; brg: number; lat: number; lon: number; best: number; first: number; last: number }
+export interface NdbLog { ident: string; hz: number; name: string; cc: string; km: number; brg: number; lat: number; lon: number; best: number; first: number; last: number; sus?: NdbSus; unlikely?: string }
 export type NdbQ = 'high' | 'medium' | 'low' | 'poor';
 export interface NdbCopy { s: number; t: number; hz: number; id: number; text: string; q: NdbQ }
 export interface NdbReport {
@@ -43,8 +48,14 @@ const ident = (v: unknown) => str(v, 8).replace(/[^A-Z0-9?]/g, '');
 export function ndbSanitise(m: any): NdbReport | null {
   if (!m || m.type !== 'ndb') return null;
   const db = (d: any): NdbDb | undefined => d && typeof d === 'object' && (d.k === 'match' || d.k === 'near' || d.k === 'cand')
-    ? { k: d.k, ident: ident(d.ident), name: str(d.name, 60), cc: str(d.cc, 2).replace(/[^A-Z]/g, ''), hz: num(d.hz), lat: num(d.lat), lon: num(d.lon), km: num(d.km, -1), brg: num(d.brg) }
+    ? { k: d.k, ident: ident(d.ident), name: str(d.name, 60), cc: str(d.cc, 2).replace(/[^A-Z]/g, ''), hz: num(d.hz), lat: num(d.lat), lon: num(d.lon), km: num(d.km, -1), brg: num(d.brg), ...(d.own === true ? { own: true } : {}) }
     : undefined;
+  const code = (v: unknown, n: number) => str(v, n).replace(/[^A-Z0-9]/g, '');
+  const sus = (x: any): NdbSus | undefined => x && typeof x === 'object' && code(x.icao, 4).length === 4
+    ? { icao: code(x.icao, 4), iata: code(x.iata, 3), name: str(x.name, 60), cc: str(x.cc, 2).replace(/[^A-Z]/g, ''), lat: num(x.lat), lon: num(x.lon), km: num(x.km, -1), brg: num(x.brg), why: str(x.why, 200),
+        ...(Array.isArray(x.alt) ? { alt: x.alt.slice(0, 2).map((a: any) => ({ icao: code(a?.icao, 4), name: str(a?.name, 60), km: num(a?.km, -1), why: str(a?.why, 200) })) } : {}) }
+    : undefined;
+  const extra = (o: any) => ({ ...(sus(o.sus) ? { sus: sus(o.sus) } : {}), ...(typeof o.unlikely === 'string' && o.unlikely ? { unlikely: str(o.unlikely, 200) } : {}) });
   const beacons: NdbBeacon[] = (Array.isArray(m.beacons) ? m.beacons : []).slice(0, 200).map((b: any) => ({
     id: num(b.id), hz: num(b.hz), snr: num(b.snr), lvl: num(b.lvl), tone: num(b.tone), tsnr: num(b.tsnr), a1a: b.a1a === true, wpm: num(b.wpm),
     ident: ident(b.ident), votes: num(b.votes), ballots: num(b.ballots), read: ident(b.read), active: b.active === true,
@@ -52,11 +63,11 @@ export function ndbSanitise(m: any): NdbReport | null {
     alt: Array.isArray(b.alt) ? b.alt.slice(0, 6).map((a: any) => ({ ident: ident(a.ident), name: str(a.name, 60), cc: str(a.cc, 2), km: num(a.km, -1) })) : undefined,
     also: Array.isArray(b.also) ? b.also.slice(0, 4).map(ident) : undefined,
     harm: b.harm && typeof b.harm === 'object' ? { id: num(b.harm.id), ident: ident(b.harm.ident), hz: num(b.harm.hz) } : undefined,
-    copy: str(b.copy, 80).replace(/[^A-Z0-9? ]/g, ''),
+    copy: str(b.copy, 80).replace(/[^A-Z0-9? ]/g, ''), ...extra(b),
   }));
   const log: NdbLog[] = (Array.isArray(m.log) ? m.log : []).slice(0, 300).map((e: any) => ({
     ident: ident(e.ident), hz: num(e.hz), name: str(e.name, 60), cc: str(e.cc, 2), km: num(e.km, -1), brg: num(e.brg),
-    lat: num(e.lat), lon: num(e.lon), best: num(e.best), first: num(e.first), last: num(e.last),
+    lat: num(e.lat), lon: num(e.lon), best: num(e.best), first: num(e.first), last: num(e.last), ...extra(e),
   }));
   const copy: NdbCopy[] = (Array.isArray(m.copy) ? m.copy : []).slice(-200).map((c: any) => ({ s: num(c.s), t: num(c.t), hz: num(c.hz), id: num(c.id), text: str(c.text, 12).replace(/[^A-Z0-9? ]/g, ''),
     q: (c.q === 'high' || c.q === 'medium' || c.q === 'poor' ? c.q : 'low') as NdbQ }));
@@ -93,8 +104,10 @@ export function barsHtml(n: number): string {
 export function ndbIdentCell(b: NdbBeacon): { text: string; cls: string; title: string } {
   if (b.harm) return { text: b.ident || b.harm.ident || '—', cls: 'harm', title: `2nd harmonic of ${b.harm.ident || 'the carrier'} on ${khz(b.harm.hz)} kHz` };
   if (b.ident) {
+    if (b.db?.k === 'match' && b.unlikely) return { text: b.ident, cls: 'unlikely', title: `${b.ident} matches ${b.db.name || b.db.ident} in the published list — but unlikely: ${b.unlikely}` };
     if (b.db?.k === 'match') return { text: `✓ ${b.ident}`, cls: 'conf', title: `${b.ident} read by ${b.votes || 'folded'} agreeing repeats — matches the published beacon` };
     if (b.db?.k === 'near') return { text: `≈ ${b.ident}`, cls: 'near', title: `${b.ident} read by consensus — the published beacon here is ${b.db.ident}` };
+    if (b.sus) return { text: b.ident, cls: 'sus', title: `${b.ident} read by consensus — not in the published list; suspected ${b.sus.name}: ${b.sus.why}` };
     return { text: b.ident, cls: 'unl', title: `${b.ident} read by consensus — not in the published list` };
   }
   if (b.db?.k === 'cand') return { text: `${b.db.ident}?`, cls: 'cand', title: 'Not read yet — the published beacon nearest you on this frequency (a guess)' };
@@ -103,9 +116,21 @@ export function ndbIdentCell(b: NdbBeacon): { text: string; cls: string; title: 
 /** Station · distance + bearing, from the published match (or the candidate's). */
 export function ndbStation(b: NdbBeacon): { name: string; dist: string } {
   const d = b.db;
+  if (!d && b.sus && !b.harm) return { name: `Suspected ${b.sus.name}`, dist: nmText(b.sus.km, b.sus.brg) };
   if (!d) return { name: b.harm ? 'harmonic' : '', dist: '' };
   const fl = flag(d.cc);
-  return { name: `${fl ? fl + ' ' : ''}${d.name}${d.k === 'cand' ? '?' : ''}`, dist: nmText(d.km, d.brg) };
+  return { name: `${fl ? fl + ' ' : ''}${d.name}${d.k === 'cand' ? '?' : ''}${b.unlikely ? ' (unlikely)' : ''}`, dist: nmText(d.km, d.brg) };
+}
+/** ★★ Stuart's words for a suspected beacon (2026-11-04): "Suspected RAF Mildenhall (not on list — confirm?)". The
+ *  "confirm?" is the OWNER's invitation (only they can confirm); a listener reads "unconfirmed". */
+export function ndbSusLabel(s: NdbSus, owner: boolean): string { return `Suspected ${s.name} (not on list — ${owner ? 'confirm?' : 'unconfirmed'})`; }
+/** The suspected beacons' map entries: a HOLLOW ring at the airfield, labelled "IDENT?" — never a solid dot. */
+export function ndbSusFeed(r: NdbReport): { key: string; ident: string; label: string; lat: number; lon: number; bars: number; stale: boolean; kind: 'sus' }[] {
+  const nowMs = (r.now || Date.now() / 1000) * 1000;
+  return ndbRows(r).filter((b) => !b.db && !!b.sus && !b.harm && !(b.sus.lat === 0 && b.sus.lon === 0)).map((b) => {
+    const live = b.active && nowMs - b.last < 60000;
+    return { key: String(b.id), ident: b.ident, label: `${b.ident}?`, lat: b.sus!.lat, lon: b.sus!.lon, bars: ndbBars(b.snr, live), stale: !live, kind: 'sus' as const };
+  });
 }
 /** The four tiles. */
 export function ndbTiles(r: NdbReport): { carriers: string; identified: string; furthest: string; coverage: string } {
@@ -132,7 +157,7 @@ export function ndbRows(r: NdbReport): NdbBeacon[] {
   return r.beacons.filter((b) => b.active || b.ident).sort((a, b) => a.hz - b.hz);
 }
 /** Is this beacon on the map? Only where the published list puts it (✓, ≈, or the candidate). */
-export function ndbOnMap(b: NdbBeacon): boolean { return !!b.db && Number.isFinite(b.db.lat) && Number.isFinite(b.db.lon) && !(b.db.lat === 0 && b.db.lon === 0); }
+export function ndbOnMap(b: NdbBeacon): boolean { return !!b.db && !b.unlikely && Number.isFinite(b.db.lat) && Number.isFinite(b.db.lon) && !(b.db.lat === 0 && b.db.lon === 0); }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 //  THE VIEW — map-first, ADS-B's pattern (Stuart, 2026-10-27): the map is the mode, the live list over its corner, the
@@ -153,6 +178,9 @@ export interface NdbHooks {
   find: (q: string) => void;
   stats: () => void;
   myPos: () => { lat: number; lon: number } | null;
+  /** ★★ V12 2026-11-04: this page holds the server's admin (the OWNER) — only they may confirm a suspected beacon. */
+  owner?: () => boolean;
+  decide?: (act: 'confirm' | 'reject' | 'forget', ident: string, hz: number, airfield: string) => void;
 }
 
 /** ★ The map: our MapLibre map (the 'aero' profile — airports and runways, where the beacons stand) with the NDB layer
@@ -370,7 +398,7 @@ export class NdbView {
     });
     const unheard = this.found.filter((f) => !placed.has(`${f.ident}@${Math.round(f.hz / 500)}`) && f.hz >= r.lo && f.hz <= r.hi)
       .map((f) => ({ lat: f.lat, lon: f.lon, ident: f.ident }));
-    this.map.with((l) => { l.update(beacons, unheard); const rx = this.h.myPos(); if (rx) l.setReceiver(rx.lat, rx.lon); });
+    this.map.with((l) => { l.update([...beacons, ...ndbSusFeed(r)], unheard); const rx = this.h.myPos(); if (rx) l.setReceiver(rx.lat, rx.lon); });
   }
 
   /** A row tapped (or a marker): selected on both, its card open, the list row in view. */
@@ -390,6 +418,7 @@ export class NdbView {
     const card = $('ndbCard');
     if (!b) { card.hidden = true; return; }
     const c = ndbIdentCell(b), st = ndbStation(b);
+    const owner = !!this.h.owner?.() && !!this.h.decide;
     const pts = this.tracks.get(b.id)?.snr ?? [];
     let spark = '';
     if (pts.length > 1) {
@@ -406,8 +435,19 @@ export class NdbView {
       + spark + (words ? `<div class="cp">${words}</div>` : '')
       + (b.alt?.length ? `<div class="dim">Also published on this frequency: ${esc(b.alt.map((a) => `${a.ident} ${a.name}${a.km >= 0 ? ` (${nmText(a.km)})` : ''}`).join(', '))}</div>` : '')
       + (b.harm ? `<div class="dim">2nd harmonic of ${esc(b.harm.ident || '')} on ${khz(b.harm.hz)} kHz</div>` : '')
-      + (!ndbOnMap(b) ? '<div class="dim">Not in the published list — not on the map.</div>' : '');
+      // ★★ the "Suspected …" clue (Stuart's words), its evidence, and for the OWNER only the confirm / reject keys
+      + (b.sus ? `<div class="sus">${esc(ndbSusLabel(b.sus, owner))}</div><div class="dim">${esc(b.sus.why)}</div>` : '')
+      + (b.sus?.alt?.length ? `<div class="dim">Or: ${esc(b.sus.alt.map((a) => `${a.name}${a.km >= 0 ? ` (${nmText(a.km)})` : ''}`).join(', '))}</div>` : '')
+      + (b.sus && owner ? '<div class="own"><button type="button" data-act="confirm">CONFIRM</button> <button type="button" data-act="reject">NOT THIS ONE</button></div>' : '')
+      + (b.unlikely ? `<div class="dim">Unlikely: ${esc(b.unlikely)}.</div>` : '')
+      + (b.db?.own ? '<div class="dim">Not in the published list — confirmed by this server\'s owner.</div>' : '')
+      + (b.db?.own && owner ? '<div class="own"><button type="button" data-act="forget">UNDO CONFIRM</button></div>' : '')
+      + (!ndbOnMap(b) ? `<div class="dim">${b.sus ? 'Not in the published list — on the map as a dashed ring at the suspected airfield.'
+                                             : b.unlikely ? 'Not on the map: probably not that beacon.' : 'Not in the published list — not on the map.'}</div>` : '');
     card.hidden = false;
+    card.querySelectorAll('.own button').forEach((el) => {
+      (el as HTMLButtonElement).onclick = () => this.h.decide?.((el as HTMLElement).dataset.act as 'confirm' | 'reject' | 'forget', b.ident, b.hz, b.sus?.icao ?? '');
+    });
     (card.querySelector('.x') as HTMLButtonElement).onclick = () => { this.sel = 0; this.select(0, true); this.map?.with((l) => l.select('')); };
   }
 

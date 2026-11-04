@@ -209,5 +209,56 @@ eq('live: quiet', app.ndbRowLive(a.beacons[3], NOW * 1000), false);
   ok('gallery: the NDB chip', gal.includes("{ id: 'ndb', label: 'NDB' }"));
 }
 
+/* ── ★★ V12 2026-11-04: the "Suspected …" clue and the "unlikely" flag (vibe_ndb_suspect.h), both readers ── */
+{
+  const sr = {
+    type: 'ndb', centre: 393_000, lo: 255_000, hi: 526_500, now: NOW, carriers: 3, identified: 3, pos: true, beacons: [
+      { id: 21, hz: 347_000, snr: 14, ident: 'NQY', active: true, last: NOW * 1000, lastId: NOW - 5, copy: 'NQY',
+        sus: { icao: 'EGHQ', iata: 'NQY', name: 'Cornwall Airport Newquay', cc: 'GB', lat: 50.441, lon: -4.995, km: 354, brg: 236,
+               why: 'NQY — NQY is its IATA code · 354 km · heard by day', alt: [{ icao: 'x<y>', name: 'Other', km: 400, why: 'w' }, {}, {}] } },
+      { id: 22, hz: 349_970, snr: 4, ident: 'IS', active: true, last: NOW * 1000, lastId: NOW - 5, copy: 'IS',
+        db: { k: 'match', ident: 'IS', name: 'Ishurdi', cc: 'BD', hz: 350_000, lat: 24.15, lon: 89.05, km: 7901, brg: 75 },
+        unlikely: '7901 km away yet heard by day — too far for a daytime beacon: probably a data carrier or another station' },
+      { id: 23, hz: 362_500, snr: 20, ident: 'SND', active: true, last: NOW * 1000, lastId: NOW - 5, copy: 'SND',
+        db: { k: 'match', ident: 'SND', name: 'Southend', cc: 'GB', hz: 362_500, lat: 51.57, lon: 0.69, km: 133, brg: 140, own: true } },
+      { id: 24, hz: 400_000, ident: 'ZZ', active: true, last: NOW * 1000, sus: { icao: 'bad' } },
+    ],
+    log: [{ ident: 'NQY', hz: 347_000, km: -1, sus: { icao: 'EGHQ', name: 'Cornwall Airport Newquay', km: 354, why: 'w' } }, { ident: 'IS', hz: 349_970, unlikely: 'far' }],
+    copy: [],
+  };
+  const w2 = web.ndbSanitise(sr)!, a2 = app.ndbSanitise(sr)!;
+  eq('sus: both sanitisers alike', a2, w2);
+  for (const b of a2.beacons) {
+    eq(`sus: ident cell ${b.id}`, app.ndbIdentCell(b), web.ndbIdentCell(b));
+    eq(`sus: station ${b.id}`, app.ndbStation(b), web.ndbStation(b));
+    eq(`sus: on map ${b.id}`, app.ndbOnMap(b), web.ndbOnMap(b));
+  }
+  eq('sus: the feed alike', app.ndbSusFeed(a2), web.ndbSusFeed(w2));
+  eq('sus: the clue carried', [a2.beacons[0].sus?.icao, a2.beacons[0].sus?.alt?.length, a2.beacons[0].sus?.alt?.[0].icao], ['EGHQ', 2, '']);   // ★ a hostile ICAO code cleaned to nothing
+  eq('sus: a clue without a real ICAO code is dropped', a2.beacons[3].sus, undefined);
+  eq('sus: the log carries the clue and the flag', [a2.log[0].sus?.icao, a2.log[1].unlikely], ['EGHQ', 'far']);
+  eq('sus: the cell', [app.ndbIdentCell(a2.beacons[0]).cls, app.ndbIdentCell(a2.beacons[0]).text], ['sus', 'NQY']);
+  eq('sus: the station is a suspicion, with its distance', app.ndbStation(a2.beacons[0]), { name: 'Suspected Cornwall Airport Newquay', dist: '191 NM SW' });
+  eq('sus: Stuart\'s words, owner', app.ndbSusLabel(a2.beacons[0].sus!, true), 'Suspected Cornwall Airport Newquay (not on list — confirm?)');
+  eq('sus: …and a listener\'s', app.ndbSusLabel(a2.beacons[0].sus!, false), 'Suspected Cornwall Airport Newquay (not on list — unconfirmed)');
+  eq('unlikely: the cell is not ✓', [app.ndbIdentCell(a2.beacons[1]).cls, app.ndbIdentCell(a2.beacons[1]).text], ['unlikely', 'IS']);
+  eq('unlikely: the station says so', app.ndbStation(a2.beacons[1]).name, '🇧🇩 Ishurdi (unlikely)');
+  eq('unlikely: never on the map', app.ndbOnMap(a2.beacons[1]), false);
+  eq('own: the owner-confirmed match is marked', a2.beacons[2].db?.own, true);
+  const f2 = app.ndbMapFeed(a2, []);
+  eq('feed: the confirmed SND a solid dot, NQY a hollow ring at Newquay, IS nowhere',
+     f2.beacons.map((b) => `${b.label}:${b.kind}`), ['SND:match', 'NQY?:sus']);
+  eq('feed: the ring at the airfield', [f2.beacons[1].lat, f2.beacons[1].lon], [50.441, -4.995]);
+  // ★ a listener cannot confirm: the server's handler is owner-only before it reads a single field
+  const shim = readFileSync(new URL('../android/app/src/main/cpp/local_sdr_shim.cpp', import.meta.url), 'utf8');
+  const at = shim.indexOf('if (type == "ndb_confirm") {');
+  ok('server: ndb_confirm is behind adminGate first', at > 0 && shim.slice(at, at + 120).includes('if (!adminGate("an NDB confirmation"))')
+     && shim.indexOf('ownerDecide(', at) > shim.indexOf('adminGate(', at));
+  const card = readFileSync(new URL('../src/components/NdbLiveList.tsx', import.meta.url), 'utf8');
+  ok('app card: the keys only for the owner', card.includes("{!!b.sus && owner && !!onDecide && ("));
+  const wv = readFileSync(new URL('../web/client/src/ndb.ts', import.meta.url), 'utf8');
+  ok('web card: the keys only for the owner', wv.includes("(b.sus && owner ? '<div class=\"own\">"));
+}
+
 console.log(`test_ndb_app: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

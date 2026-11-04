@@ -12,7 +12,7 @@
  *
  *   const layer = VibeNdbLayer.create(mapOrVm, { receiver: {lat,lon}|null, theme: 'dark'|'light',
  *                                               prefs: {rings, unheard, autofit}, onSelect: (key|null) => {} })
- *   layer.update(beacons, unheard)   beacons: [{key, ident, label, lat, lon, bars 0-3, stale, kind}], unheard: [{lat, lon, ident}]
+ *   layer.update(beacons, unheard)   beacons: [{key, ident, label, lat, lon, bars 0-3, stale, kind: match|near|cand|sus (a hollow dashed ring)}], unheard: [{lat, lon, ident}]
  *   layer.select(key) · layer.focus(key) → bool · layer.setReceiver(lat, lon) · layer.setPrefs({...}) · layer.fit()
  *   layer.destroy()
  * ══════════════════════════════════════════════════════════════════════════════════════════════ */
@@ -23,6 +23,8 @@
   /** ★ The meter's colours: ADS-B's list bars (index.html .sig.l1/l2/l3) — one red, two amber, three green. */
   const BAR_ON = { 1: '#e04040', 2: '#e0b020', 3: '#33cc44' };
   /** Bars from an SNR in the skimmer's ≈ 23 Hz bin: < 10 dB one, < 20 dB two, else three; 0 = not heard now. */
+  /** A suspected beacon's ring colour (pale blue: not one of the published beacons' ambers). */
+  const SUS = '#8fc3ff';
   function barsFor(snrDb, live) { if (!live) return 0; return snrDb < 10 ? 1 : snrDb < 20 ? 2 : 3; }
 
   /** The marker: a beacon dot (its kind's colour) and three ascending bars beside it — 34 × 18 CSS px. */
@@ -33,8 +35,14 @@
     x.globalAlpha = stale ? 0.45 : 1;
     const dot = kind === 'cand' ? 'rgba(255,184,51,0.55)' : kind === 'near' ? '#ffe066' : '#ffb000';
     x.beginPath(); x.arc(9, 9, 5.5, 0, 2 * Math.PI); x.fillStyle = 'rgba(0,0,0,0.6)'; x.fill();
-    x.beginPath(); x.arc(9, 9, 4.2, 0, 2 * Math.PI); x.fillStyle = dot; x.fill();
-    x.beginPath(); x.arc(9, 9, 1.5, 0, 2 * Math.PI); x.fillStyle = 'rgba(0,0,0,0.7)'; x.fill();
+    if (kind === 'sus') {
+      // ★ a SUSPECTED beacon (not in the published list — the airfield it is probably named after): a hollow, dashed ring
+      x.setLineDash([2, 1.5]); x.lineWidth = 1.6; x.strokeStyle = SUS;
+      x.beginPath(); x.arc(9, 9, 4.2, 0, 2 * Math.PI); x.stroke(); x.setLineDash([]);
+    } else {
+      x.beginPath(); x.arc(9, 9, 4.2, 0, 2 * Math.PI); x.fillStyle = dot; x.fill();
+      x.beginPath(); x.arc(9, 9, 1.5, 0, 2 * Math.PI); x.fillStyle = 'rgba(0,0,0,0.7)'; x.fill();
+    }
     const hs = [6, 10, 14];
     for (let i = 0; i < 3; i++) {
       const bx = 18 + i * 5, bh = hs[i];
@@ -50,7 +58,9 @@
     for (let i = 0; i < 3; i++) b += '<i style="display:inline-block;width:3px;margin-left:2px;height:' + [6, 10, 14][i] + 'px;background:'
       + (i < bars ? BAR_ON[bars] : 'rgba(255,184,51,0.22)') + '"></i>';
     return '<div style="display:flex;align-items:flex-end;opacity:' + (stale ? 0.45 : 1) + ';transform:translate(-9px,-9px)">'
-      + '<span style="width:9px;height:9px;border-radius:50%;background:' + dot + ';border:1px solid rgba(0,0,0,0.6);margin:0 3px 3px 0"></span>' + b + '</div>';
+      + (kind === 'sus'
+        ? '<span style="width:7px;height:7px;border-radius:50%;border:1.5px dashed ' + SUS + ';margin:0 3px 3px 0"></span>'
+        : '<span style="width:9px;height:9px;border-radius:50%;background:' + dot + ';border:1px solid rgba(0,0,0,0.6);margin:0 3px 3px 0"></span>') + b + '</div>';
   }
   function esc(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 

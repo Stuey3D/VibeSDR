@@ -8752,6 +8752,8 @@ function ndbUiOn() {
     find: (q) => spec?.ndbFind(q, q ? 120 : 300),
     stats: () => spec?.ndbStats(),
     myPos: () => myPos(),
+    owner: () => adminUnlocked,
+    decide: (act, ident, hz, airfield) => spec?.ndbConfirm(act, ident, hz, airfield),
   });
   ndbInerted = [];
   for (const id of ['app', 'vts']) { const el = document.getElementById(id); if (el && !el.inert) { el.inert = true; ndbInerted.push(el); } }

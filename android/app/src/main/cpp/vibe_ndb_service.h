@@ -12,6 +12,7 @@
 #pragma once
 #include "decoders/ndb_skimmer.h"
 #include "vibe_ndb_db.h"
+#include "vibe_ndb_suspect.h"
 #include "vibe_wide_tap.h"
 
 #include <algorithm>
@@ -98,6 +99,10 @@ struct HeardBeacon {
     double hz = 0, lat = NAN, lon = NAN, km = -1, deg = 0;
     float snrDb = 0, toneHz = 0, wpm = 0;
     bool listed = false;
+    std::string unlikely;   ///< a listed match that is probably wrong, and why (vibe_ndb_suspect.h) — never the furthest, no dot
+    // ★ not listed: the best "Suspected …" airfield (vibe_ndb_suspect.h); empty susIcao = no clue
+    std::string susIcao, susName, susWhy;
+    double susKm = -1, susLat = NAN, susLon = NAN;
 };
 class Sink {
 public:
@@ -284,6 +289,12 @@ public:
     void feedSliceForTest(const cf32* x, int n, double rate, double centre) { onSlice(x, n, rate, centre); }
     void setClockForTest(std::function<int64_t()> c) { clock_ = std::move(c); }
     void buildReportForTest() { std::lock_guard<std::mutex> lk(work_); buildReport(); }
+    /** Test seam: the day/night minutes already heard for ident@hz (hours of listening, without hours of IQ). */
+    void seedDayNightForTest(const std::string& ident, double hz, int day, int night) {
+        std::lock_guard<std::mutex> lk(m_);
+        Hist& h = hist_[ident + "@" + std::to_string((long long)std::lround(hz / 500.0))];
+        h.ident = ident; h.hz = hz; h.dn.day = day; h.dn.night = night;
+    }
 
 private:
     int64_t nowUtc() const {
@@ -322,11 +333,35 @@ private:
         double hz = 0;
         Match m;
         int harmOf = 0; std::string harmIdent; double harmHz = 0;
+        std::string unlikely;          // ★ an Exact match that is probably wrong (vibe_ndb_suspect.h)
+        std::vector<Suspect> sus;      // ★ no match: the suspected airfields, best first
+        DayNight dn;
     };
-    struct LogEntry { std::string ident, name, cc; double hz = 0, km = -1, deg = 0, lat = NAN, lon = NAN; float best = -99; int64_t first = 0, last = 0; bool listed = false; int64_t sinkAt = 0; };
+    struct LogEntry { std::string ident, name, cc; double hz = 0, km = -1, deg = 0, lat = NAN, lon = NAN; float best = -99; int64_t first = 0, last = 0; bool listed = false; int64_t sinkAt = 0; std::string unlikely; std::vector<Suspect> sus; };
     struct Hour { std::set<std::string> idents; double farKm = 0; };
-    struct Hist { std::string ident, name, cc; double hz = 0, km = -1; float best = -99; int minutes = 0; int64_t last = 0, lastMin = 0; std::deque<std::pair<int64_t, float>> snr; };
+    struct Hist { std::string ident, name, cc; double hz = 0, km = -1; float best = -99; int minutes = 0; int64_t last = 0, lastMin = 0; std::deque<std::pair<int64_t, float>> snr; DayNight dn; };
+    /** ★ The clue, worked out once per ident@frequency and again only when its day/night class or the owner's
+     *  decisions change (a 10 000-airfield scan is cheap, but not once a second for every row). */
+    struct SusCache { unsigned gen = 0; int cls = -1; std::vector<Suspect> v; };
 
+    /** "sus":{icao,iata,name,cc,lat,lon,km,brg,why[,alt:[{icao,name,km,why}]]} — the best suspected airfield. */
+    static std::string susJson(const std::vector<Suspect>& v, bool alt) {
+        std::string o; char b[700];
+        const Suspect& x = v.front();
+        std::snprintf(b, sizeof b, "{\"icao\":\"%s\",\"iata\":\"%s\",\"name\":\"%s\",\"cc\":\"%s\",\"lat\":%.4f,\"lon\":%.4f,\"km\":%.0f,\"brg\":%.0f,\"why\":\"%s\"",
+                      x.icao().c_str(), x.a->iata, jsonEsc(x.name()).c_str(), jsonEsc(x.cc()).c_str(), x.a->lat, x.a->lon, x.km, x.deg, jsonEsc(x.why).c_str());
+        o += b;
+        if (alt && v.size() > 1) {
+            o += ",\"alt\":[";
+            for (size_t i = 1; i < v.size(); ++i) {
+                std::snprintf(b, sizeof b, "%s{\"icao\":\"%s\",\"name\":\"%s\",\"km\":%.0f,\"why\":\"%s\"}", i > 1 ? "," : "", v[i].icao().c_str(),
+                              jsonEsc(v[i].name()).c_str(), v[i].km, jsonEsc(v[i].why).c_str());
+                o += b;
+            }
+            o += "]";
+        }
+        return o + "}";
+    }
     /** ★ Once a second, on the decoder's thread: match, flag harmonics, update the log and stats, build the JSON. */
     void buildReport() {
         if (!sk_) return;
@@ -353,37 +388,53 @@ private:
         std::vector<HeardBeacon> toSink;
         const int64_t hour = nowS / 3600, minute = nowS / 60;
         int carriers = 0, ident = 0; double far = -1; std::string farIdent;
-        for (const auto& r : rows) {
+        const double sunR = havePos_ ? sunElevationDeg(lat_, lon_, nowS) : 0;   // ★ the receiver's sun: day or night
+        const unsigned ownGen = ownerBeacons().gen();
+        for (auto& r : rows) {
             if (!r.v.active) continue;
             ++carriers;
             if (r.v.ident.empty() || r.harmOf) continue;
             ++ident;
+            const std::string key = r.v.ident + "@" + std::to_string((long long)std::lround(r.hz / 500.0));
+            // ★★ the day/night evidence, the "unlikely" flag and the "Suspected …" clue (vibe_ndb_suspect.h)
+            { auto hi = hist_.find(key); if (hi != hist_.end()) r.dn = hi->second.dn; }
+            if (r.m.kind == Match::Exact && havePos_) r.unlikely = unlikelyWhy(r.m.km, r.dn);
+            if (r.m.kind == Match::None && havePos_ && suspectable(r.v.ident)) {
+                SusCache& c = sus_[key];
+                const int cls = r.dn.byDay() ? 1 : r.dn.nightOnly() ? 2 : 0;
+                if (c.cls != cls || c.gen != ownGen) { c.cls = cls; c.gen = ownGen; c.v = suspects(r.v.ident, r.hz, havePos_, lat_, lon_, r.dn); }
+                r.sus = c.v;
+            }
             // ★ "heard" = a confirmed ident read in the last 2 minutes (a fading beacon stops counting)
             const bool fresh = r.v.lastIdentMs > 0 && sk_->nowMs() - r.v.lastIdentMs < 120000;
             if (!fresh) continue;
-            const std::string key = r.v.ident + "@" + std::to_string((long long)std::lround(r.hz / 500.0));
             LogEntry& e = log_[key];
             const bool listed = r.m.kind == Match::Exact;
             if (e.first == 0) { e.first = nowS; e.ident = r.v.ident; }
-            e.last = nowS; e.hz = r.hz; e.best = std::max(e.best, r.v.snrDb); e.listed = listed;
+            e.last = nowS; e.hz = r.hz; e.best = std::max(e.best, r.v.snrDb); e.listed = listed; e.unlikely = r.unlikely; e.sus = r.sus;
             if (listed) { e.name = r.m.n.name(); e.cc = r.m.n.cc(); e.km = r.m.km; e.deg = r.m.deg; e.lat = r.m.n.lat(); e.lon = r.m.n.lon(); }
-            if (listed && e.km > far) { far = e.km; farIdent = r.v.ident; }
+            // ★ an unlikely match is never the furthest (IS → Ishurdi, 7 901 km, heard all morning)
+            if (listed && r.unlikely.empty() && e.km > far) { far = e.km; farIdent = r.v.ident; }
             Hour& h = hours_[hour];
-            h.idents.insert(key); if (listed) h.farKm = std::max(h.farKm, e.km);
+            h.idents.insert(key); if (listed && r.unlikely.empty()) h.farKm = std::max(h.farKm, e.km);
             Hist& hs = hist_[key];
             hs.ident = r.v.ident; hs.hz = r.hz; hs.name = e.name; hs.cc = e.cc; hs.km = e.km; hs.best = std::max(hs.best, r.v.snrDb); hs.last = nowS;
             if (hs.lastMin != minute) {
                 hs.lastMin = minute; ++hs.minutes;
+                if (havePos_) hs.dn.add(sunR);
                 if (minute % 5 == 0 || hs.snr.empty()) { hs.snr.push_back({ nowS, r.v.snrDb }); while (hs.snr.size() > 288) hs.snr.pop_front(); }
             }
             if (sink_ && nowS - e.sinkAt >= 60) {
                 e.sinkAt = nowS;
                 HeardBeacon hb; hb.ident = r.v.ident; hb.hz = r.hz; hb.snrDb = r.v.snrDb; hb.toneHz = r.v.toneHz; hb.wpm = r.v.wpm; hb.listed = listed;
                 if (listed) { hb.name = e.name; hb.cc = e.cc; hb.lat = e.lat; hb.lon = e.lon; hb.km = e.km; hb.deg = e.deg; }
+                hb.unlikely = r.unlikely;
+                if (!r.sus.empty()) { const Suspect& x = r.sus.front(); hb.susIcao = x.icao(); hb.susName = x.name(); hb.susWhy = x.why; hb.susKm = x.km; hb.susLat = x.a->lat; hb.susLon = x.a->lon; }
                 toSink.push_back(hb);
             }
         }
         while (hours_.size() > 24 * 7) hours_.erase(hours_.begin());
+        if (sus_.size() > 400) sus_.clear();
         while (hist_.size() > 400) { auto old = hist_.begin(); for (auto it = hist_.begin(); it != hist_.end(); ++it) if (it->second.last < old->second.last) old = it; hist_.erase(old); }
         identified_.store(ident);
         // ── coverage: of the published beacons on these frequencies within the furthest one identified, how many ──
@@ -423,11 +474,15 @@ private:
                           (long long)r.v.firstMs, (long long)r.v.lastMs, (long long)r.v.identMs, (long long)r.v.lastIdentMs);
             o += b;
             if (*kind) {
-                std::snprintf(b, sizeof b, ",\"db\":{\"k\":\"%s\",\"ident\":\"%s\",\"name\":\"%s\",\"cc\":\"%s\",\"hz\":%.0f,\"lat\":%.4f,\"lon\":%.4f,\"km\":%.0f,\"brg\":%.0f}",
+                std::snprintf(b, sizeof b, ",\"db\":{\"k\":\"%s\",\"ident\":\"%s\",\"name\":\"%s\",\"cc\":\"%s\",\"hz\":%.0f,\"lat\":%.4f,\"lon\":%.4f,\"km\":%.0f,\"brg\":%.0f",
                               kind, cleanText(r.m.n.ident(), 6).c_str(), jsonEsc(r.m.n.name()).c_str(), jsonEsc(r.m.n.cc()).c_str(), r.m.n.hz(),
                               r.m.n.lat(), r.m.n.lon(), r.m.km, r.m.deg);
                 o += b;
+                o += r.m.n.owner() ? ",\"own\":true}" : "}";
+                if (!r.unlikely.empty()) o += ",\"unlikely\":\"" + jsonEsc(r.unlikely) + "\"";
             }
+            if (!r.sus.empty()) o += ",\"sus\":" + susJson(r.sus, true);
+            if (r.dn.day || r.dn.night) { std::snprintf(b, sizeof b, ",\"dn\":[%d,%d]", r.dn.day, r.dn.night); o += b; }
             if (!r.m.others.empty()) {
                 o += ",\"alt\":[";
                 for (size_t i = 0; i < r.m.others.size() && i < 4; ++i) {
@@ -455,10 +510,13 @@ private:
             std::sort(lv.begin(), lv.end(), [](const LogEntry* a, const LogEntry* b) { return a->last > b->last; });
             for (size_t i = 0; i < lv.size() && i < 200; ++i) {
                 const LogEntry& e = *lv[i];
-                std::snprintf(b, sizeof b, "%s{\"ident\":\"%s\",\"hz\":%.0f,\"name\":\"%s\",\"cc\":\"%s\",\"km\":%.0f,\"brg\":%.0f,\"lat\":%.4f,\"lon\":%.4f,\"best\":%.1f,\"first\":%lld,\"last\":%lld}",
+                std::snprintf(b, sizeof b, "%s{\"ident\":\"%s\",\"hz\":%.0f,\"name\":\"%s\",\"cc\":\"%s\",\"km\":%.0f,\"brg\":%.0f,\"lat\":%.4f,\"lon\":%.4f,\"best\":%.1f,\"first\":%lld,\"last\":%lld",
                               i ? "," : "", cleanText(e.ident, 6).c_str(), e.hz, jsonEsc(e.name).c_str(), jsonEsc(e.cc).c_str(), e.km, e.deg,
                               std::isfinite(e.lat) ? e.lat : 0.0, std::isfinite(e.lon) ? e.lon : 0.0, e.best, (long long)e.first, (long long)e.last);
                 o += b;
+                if (!e.unlikely.empty()) o += ",\"unlikely\":\"" + jsonEsc(e.unlikely) + "\"";
+                if (!e.sus.empty()) o += ",\"sus\":" + susJson(e.sus, false);
+                o += "}";
             }
         }
         o += "],\"copy\":[";
@@ -529,6 +587,7 @@ private:
     unsigned long long copySeq_ = 0;
     std::map<std::string, LogEntry> log_;
     std::map<int64_t, Hour> hours_;
+    std::map<std::string, SusCache> sus_;
     std::map<std::string, Hist> hist_;
     std::atomic<int> identified_{0};
     std::function<int64_t()> clock_;
