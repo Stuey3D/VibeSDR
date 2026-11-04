@@ -498,6 +498,8 @@ interface ModeSelectorProps {
      *  a VibeServer with one shared dial. `onlyScanner`: a backend with no client decoders of ours (OpenWebRX — its own
      *  decoders are demodulators in this sheet) draws the row with the scanner alone. */
     scanAvail?: boolean; scanOn?: boolean; onScan?: () => void; onlyScanner?: boolean;
+    /** ★★ V12 false = no SKIMMER view (an Icom: one demodulated audio channel) — the CW / PSK VIEW rows are not drawn. */
+    skimAvail?: boolean;
     cwAvail?: boolean; cwSkim?: boolean; cwWidth?: number;
     onCwView?: (skim: boolean) => void; onCwWidth?: (w: number) => void;
     /** ★★ V12 PSK31/63 — CW's two views (ONE SIGNAL / SKIMMER over 6/12/24 kHz), only where `"psk": true`. */
@@ -1484,11 +1486,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       /* ★ V12 CW: the web's VIEW and WIDTH rows and its hint (cwList cwHintText). WIDTH only for the skimmer. */
       case 'cw':
         return (<>
+          {dc.skimAvail !== false && (<>
           <SubLabel label="VIEW" />
           <OptRow>
             <SegBtn label="ONE SIGNAL" active={!dc.cwSkim} onPress={() => dc.onCwView?.(false)} />
             <SegBtn label="SKIMMER" active={!!dc.cwSkim} onPress={() => dc.onCwView?.(true)} />
           </OptRow>
+          </>)}
           {!!dc.cwSkim && (<>
             <SubLabel label="WIDTH" />
             <OptRow>{CW_WIDTHS.map((w) => (
@@ -1500,11 +1504,13 @@ export default function ModeSelector({ visible, current, modes, activeDecoder, o
       /* ★ V12 PSK: the web's VIEW and SEGMENT rows and its hint (cwList pskHintText). SEGMENT only for the skimmer. */
       case 'psk':
         return (<>
+          {dc.skimAvail !== false && (<>
           <SubLabel label="VIEW" />
           <OptRow>
             <SegBtn label="ONE SIGNAL" active={!dc.pskSkim} onPress={() => dc.onPskView?.(false)} />
             <SegBtn label="SKIMMER" active={!!dc.pskSkim} onPress={() => dc.onPskView?.(true)} />
           </OptRow>
+          </>)}
           {!!dc.pskSkim && (<>
             <SubLabel label="SEGMENT" />
             <OptRow>{PSK_WIDTHS.map((w) => (
