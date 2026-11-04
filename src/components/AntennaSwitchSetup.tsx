@@ -46,7 +46,7 @@ export default function AntennaSwitchSetup({ value, onChange, C, F }: {
   );
 
   const search = async (host: string, port: number) => {
-    const mod = (NativeModules as any).VibeLocalSdrModule;
+    const mod = (NativeModules as any).VibeLocalSDR;
     if (!mod?.antSwitchSearch) { setWhy('This build cannot search for a switch.'); return; }
     setBusy(true); setWhy(''); setFound(null);
     try {

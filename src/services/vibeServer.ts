@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AndroidConnectedRadio } from './androidIcom';
 import type { RateGuardState } from './rateGuard';
 import { FM_DEFAULTS, fmDefaultsKeys, type FmDefaults } from './fmDefaults';
+import { RSP_DEFAULTS, rspConfigKeys, type RspCard } from './rspCard';
 
 // VibeServer: share this device's USB dongle with server-side DSP (compressed
 // audio + waterfall over a WebSocket, ~25x lighter than raw RTL-TCP IQ). The
@@ -150,6 +151,22 @@ export type VibeServerConfig = {
   vfoB?: number;
   /** ★★ ADS-B at 2.56 MS/s on an RTL — its own switch, not tied to dabRateBoost. Never the default. */
   adsb256?: boolean;
+  /** ★★★ V12 BACKGROUND DECODING — this radio's profiles as ONE JSON string, exactly RadioConfig::bgDecode
+   *  (vibe_bgdecode_config.h parse/toJson; services/bgDecode.ts writes it). '' = none — off, as before it existed. */
+  bgDecode?: string;
+  /** ★★ V12 THE GALLERY — the owner's size in MB (0 keeps nothing; default 100), may everyone see it (default yes), are
+   *  listeners' own decodes kept too (default yes). The Setup page's galleryMb / galleryPublic / gallerySaveLive. */
+  galleryMb?: number;
+  galleryPublic?: boolean;
+  gallerySaveLive?: boolean;
+  /** ★★ V12 VibeAGC for SDRplay — 0 automatic (on with the OpenRSP driver), 1 on, 2 off (RadioConfig::rspVibeAgc). */
+  rspVibeAgc?: number;
+  /** ★ The wide impulse blanker on the whole capture: 0 off, 1 auto below 30 MHz (default), 2 on (RadioConfig::nbWide). */
+  nbWide?: number;
+  /** ★★★ The SDRplay card (services/rspCard.ts) — sent as RadioConfig's flat keys; absent = the defaults. RSP only. */
+  rsp?: RspCard;
+  /** ★★ The Airspy HF+'s calibration, parts per billion (0 = the radio's own). HF+ only. */
+  ppb?: number;
   /** Per-band gain ceilings ("all:250,fm:150"), the gain to return to when everyone leaves
    *  (-1 = leave alone), and whether the AGC is locked on. */
   gainLimits?: string;
@@ -341,6 +358,15 @@ export function nativeServerConfig(cfg: VibeServerConfig): Record<string, unknow
     dabRateBoost: cfg.dabRateBoost === true,
     vfoB: cfg.vfoB === 0 ? 0 : 1,
     adsb256: cfg.adsb256 === true,
+    // ★★ V12 background decoding + the gallery, at definite values on every start (VibeServerBoot applies them)
+    bgDecode: cfg.bgDecode ?? '',
+    galleryMb: cfg.galleryMb != null && cfg.galleryMb >= 0 ? cfg.galleryMb : 100,
+    galleryPublic: cfg.galleryPublic !== false,
+    gallerySaveLive: cfg.gallerySaveLive !== false,
+    rspVibeAgc: cfg.rspVibeAgc === 1 || cfg.rspVibeAgc === 2 ? cfg.rspVibeAgc : 0,
+    nbWide: cfg.nbWide === 0 || cfg.nbWide === 2 ? cfg.nbWide : 1,
+    ...rspConfigKeys(cfg.rsp ?? RSP_DEFAULTS),   // ★ definite on every start — VibeServerBoot.setRspFrontEnd
+    ppb: Number.isFinite(cfg.ppb) ? Math.round(cfg.ppb as number) : 0,
     gainLimits: cfg.gainLimits ?? '',
     restGain: cfg.restGain ?? -1,
     agcLock: cfg.agcLock ?? false,
@@ -462,6 +488,30 @@ export async function dabQuickScan(block: string, known: boolean, cfg: VibeServe
   return JSON.parse(await Local.dabQuickScan(block, known, JSON.stringify(nativeServerConfig(cfg)))) as DabScanResult;
 }
 
+/** ★★★ V12 THE OWNER'S DAB BAND SCAN ("Scan all DAB blocks") — the engine's GET /vibeserver/dab-bandscan, on the running
+ *  server or on the owner's radio in a private loopback engine (VibeLocalSdrModule.dabBandScanStart). The state is the
+ *  engine's own JSON (dabBandJsonLocked). */
+export type DabBandHit = { block: string; channel: number; hz: number; ensemble: string; fib: number; complete?: boolean;
+                           services: { sid: number; label: string }[] };
+export type DabBandScan = { running: boolean; done?: number; total?: number; current?: string; added?: number;
+                            cancelled?: boolean; finished?: boolean; why?: string; error?: string; found?: DabBandHit[] };
+export const dabBandScanSupported = () => !!Local?.dabBandScanStart;
+export async function dabBandScanStart(cfg: VibeServerConfig): Promise<void> {
+  if (!Local?.dabBandScanStart) return;
+  await Local.dabBandScanStart(JSON.stringify(nativeServerConfig(cfg)));
+}
+/** The latest state, and `busy` while the radio is still being put away (null = no scan yet). */
+export async function dabBandScanState(): Promise<{ scan: DabBandScan | null; busy: boolean }> {
+  if (!Local?.dabBandScanState) return { scan: null, busy: false };
+  try {
+    const r = await Local.dabBandScanState();
+    return { scan: r?.json ? JSON.parse(String(r.json)) as DabBandScan : null, busy: !!r?.busy };
+  } catch { return { scan: null, busy: false }; }
+}
+export async function dabBandScanCancel(): Promise<void> {
+  try { await Local?.dabBandScanCancel?.(); } catch { /* nothing running */ }
+}
+
 /** ★★★ A radio that fell over at a rate a mode boosted to (src/services/rateGuard.ts reads it). */
 export async function rateGuardState(): Promise<RateGuardState | null> {
   if (!Local?.rateGuardState) return null;
@@ -470,6 +520,25 @@ export async function rateGuardState(): Promise<RateGuardState | null> {
 export async function rateGuardClear(): Promise<RateGuardState | null> {
   if (!Local?.rateGuardClear) return null;
   try { return JSON.parse(String(await Local.rateGuardClear())) as RateGuardState; } catch { return null; }
+}
+
+/** ★★ V12 what the background-decoding editor may offer — the engine's own answer (LocalSdrShim::backgroundCapsJson),
+ *  as its raw JSON ('' = an engine without it: the editor is then not drawn, never drawn empty). */
+export async function getBackgroundCaps(): Promise<string> {
+  if (!Local?.backgroundCaps) return '';
+  try { return String(await Local.backgroundCaps()); } catch { return ''; }
+}
+/** ★★ V12 the Setup page's save rule for background decoding: '' = good, else the engine's own sentence. */
+export async function validateBackgroundDecoding(json: string, rate: number, slotCap: number, lockCentre: number,
+                                                 reach: { ismOk: boolean; ndbOk: boolean; aisOk: boolean }): Promise<string> {
+  if (!json || !Local?.validateBackgroundDecoding) return '';
+  try { return String(await Local.validateBackgroundDecoding(json, rate, slotCap, lockCentre, reach.ismOk, reach.ndbOk, reach.aisOk)); }
+  catch { return ''; }
+}
+/** ★★ V12 the gallery's disk on this device: free space and what the gallery holds now (bytes). */
+export async function galleryDisk(): Promise<{ freeBytes: number; usedBytes: number } | null> {
+  if (!Local?.galleryDisk) return null;
+  try { return (await Local.galleryDisk()) ?? null; } catch { return null; }
 }
 
 /**

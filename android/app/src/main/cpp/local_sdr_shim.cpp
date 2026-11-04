@@ -35949,6 +35949,61 @@ static std::string vsSpotBandsJson(const std::vector<vibe::digi::Span>& spans) {
     return j;
 }
 
+/* ★★ V12 2026-11-03 — WHAT A BACKGROUND-DECODING EDITOR MAY OFFER ON THIS SERVER, for the Android server screen
+ *  (ServerModeScreen → BackgroundDecodingSetup). The Linux/Mac Setup page draws the same editor from its own copy of the
+ *  decoder table; the phone's screen reads THIS one, so its decoders, their demodulators and tones, the ISM band ids, the
+ *  Band list and the decoder slots are the engine's own (feedback: no hardcoded settings against a server). ONE WRITER:
+ *  vibe::bg::decoders() and vsSpotBandsJson, the same ones the engine runs and hwinfo publishes.
+ *  ★ With a radio open, the Band list is the radio's own (vsSpotSpans); with none (the screen is drawn while the server is
+ *    STOPPED) it is the server's whole list, as the Setup page falls back to the door's — the engine simply never starts a
+ *    Band VFO its radio cannot hold. */
+std::string LocalSdrShim::backgroundCapsJson() {
+    auto esc = [](const char* s) {
+        std::string o;
+        for (const char* p = s; p && *p; ++p) { if (*p == '"' || *p == '\\') o += '\\'; o += *p; }
+        return o;
+    };
+    std::string j = "{\"decoders\":[";
+    bool first = true;
+    for (const auto& d : vibe::bg::decoders()) {
+        j += std::string(first ? "" : ",") + "{\"id\":\"" + esc(d.id) + "\",\"label\":\"" + esc(d.label) + "\",\"modes\":[";
+        first = false;
+        std::string m = d.modes; size_t a = 0; bool f2 = true;
+        while (a <= m.size()) {
+            size_t b = m.find(',', a); if (b == std::string::npos) b = m.size();
+            if (b > a) { j += std::string(f2 ? "\"" : ",\"") + m.substr(a, b - a) + "\""; f2 = false; }
+            a = b + 1;
+        }
+        char t[48]; std::snprintf(t, sizeof t, "],\"tone\":%.0f", d.toneHz); j += t;
+        if (std::string(d.id) == "spots-band") j += ",\"band\":true";
+        if (std::string(d.id) == "ndb-skim")   j += ",\"ndb\":true";
+        j += "}";
+    }
+    j += "],\"ismBands\":[";
+    first = true;
+    for (const auto& b : vibeism::bands()) { j += std::string(first ? "\"" : ",\"") + b.id + "\""; first = false; }
+    j += "]";
+    std::vector<vibe::digi::Span> spans = vsSpotSpans();
+    if (spans.empty()) spans = vibe::digi::reachableSpans(vibe::digi::modes(), [](double, double) { return true; });
+    j += vsSpotBandsJson(spans);
+    j += ",\"maxVfos\":" + std::to_string((int)vibe::bg::kMaxVfos) + ",\"maxProfiles\":" + std::to_string((int)vibe::bg::kMaxProfiles);
+    j += ",\"decoderSlotsDefault\":" + std::to_string(vsDecoderDefaultMax());
+    j += "}";
+    return j;
+}
+/** ★★ The Setup page's save rule (vibeserver/main.cpp's save → vibe::bg::validate), for the Android screen's Start: ""
+ *  when the profiles are good, else the engine's own sentence. The reach flags are the caller's (the same driver rules). */
+std::string LocalSdrShim::validateBackgroundDecoding(const std::string& json, double rate, int slotCap, double lockCentre,
+                                                     bool ismOk, bool ndbOk, bool aisOk) {
+    if (json.empty()) return "";
+    vibe::bg::installBandSpan();
+    vibe::bg::Config c; std::string err;
+    if (!vibe::bg::parse(json, c, err)) return err.empty() ? "background decoding: the settings could not be read" : err;
+    if (!vibe::bg::validate(c, rate, err, (c.keepInRange || lockCentre > 0) ? 0 : slotCap, lockCentre, ismOk, ndbOk, aisOk))
+        return err;
+    return "";
+}
+
 static std::string vsTunableJson() {
     // ★★ V12 the region defaults of the owner's decoder switches, for the Setup page (vibe_decoder_reach.h regionJson) —
     //    machine-level, so sent even where no radio range is known (the front door). Nothing when the region is unknown.
@@ -42409,6 +42464,9 @@ int LocalSdrShim::hackRfLna() const { return (p && p->useHackRf()) ? p->hrf->lna
 int LocalSdrShim::hackRfVga() const { return (p && p->useHackRf()) ? p->hrf->vgaGainDb() : 0; }
 void LocalSdrShim::setAhfCalibrationPpb(int ppb) {
     g_dsp.ahfPpb.store(ppb);
+    // ★ INT32_MIN = "never set" (the Android server screen's 0): forget a previous run's figure and leave the radio's
+    //   own flash calibration alone — writing 0 would override it.
+    if (ppb == INT32_MIN) return;
     if (!p || !p->useAirspyHf()) return;
     VIBE_HW_LOCK(); p->ahf->setCalibrationPpb(ppb);
 }

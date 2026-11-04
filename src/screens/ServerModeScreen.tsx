@@ -3,6 +3,10 @@ import { clampPortName, portLabel, portNamesFrom } from '../utils/antennaPortNam
 import { DIGI_MODE_STYLE } from '../utils/digiModes';   // ★ V12 the digital-spots modes (per-mode switches)
 import AntennaSwitchSetup from '../components/AntennaSwitchSetup';
 import AntennaBandsEditor from '../components/AntennaBandsEditor';
+import BackgroundDecodingSetup from '../components/BackgroundDecodingSetup';
+import RspSetupCard from '../components/RspSetupCard';
+import { RSP_DEFAULTS, readRspCard, rspCaps, type RspCard } from '../services/rspCard';
+import { type BgCaps, type BgModel, bgReach, collectBg, emptyBgModel, parseBg, parseBgCaps } from '../services/bgDecode';
 import { type AntennaSwitchCfg, EMPTY_SWITCH, parseSwitchCfg, serverFields } from '../services/antennaSwitch';
 /** ★★ THE GATE (Stuart, 2026-10-09: "pushed to [Chicopee] as a test — if it works it ships as V11, if not gated off for
  *  V12"). false hides the antenna-switch setup; a server already configured keeps working AND keeps the section, so its
@@ -25,7 +29,7 @@ type ModeEntry = { id: string; label: string; parent?: string; on?: boolean; nod
  *  as vibe_setup_page.h BLOCKABLE — ids, parents, labels (ONE LIST, TWO READERS). A decoder's options are drawn indented
  *  directly UNDER it (`parent`); with the parent off they stay, greyed with the reason — never hidden. `on: true` is a "+"
  *  token IN the CSV when ticked ("lora+all"); `node` is one of this screen's own controls drawn there (DAB's label scan).
- *  ★ The page's "Band, mode by mode" list (spotsband±mode) is the setup page's alone: this screen never had it. */
+ *  ★ V12 2026-11-03: the page's "Band, mode by mode" list (spotsband±mode) is here too — the `bandModes` node under Band. */
 const BLOCKABLE: ModeEntry[] = [
   { id: 'wfm', label: 'WFM' }, { id: 'rds', label: 'Advanced RDS', parent: 'wfm' },
   { id: 'nfm', label: 'NFM' }, { id: 'tone', label: 'CTCSS / DCS tone ID', parent: 'nfm' },
@@ -42,6 +46,9 @@ const BLOCKABLE: ModeEntry[] = [
   { id: 'spots', label: 'Digital spots / map' },
   // ★ V12: Band spots (a whole band at once) — off by default where the benchmark measured it below green (applyBench).
   { id: 'spotsband', label: 'Band: a whole band at once', parent: 'spots' },
+  /* ★★ V12 THE BAND GOVERNOR, MODE BY MODE (decoders/digi_governor.h) — the setup page's bandModes node: Auto / Always /
+   *  Off per mode, stored in this same CSV ("spotsband-psk" off in Band, "spotsband+wspr" always). Under Band. */
+  { id: 'bandModes', label: '', parent: 'spotsband', node: 'bandModes' },
   /* ★★ V12 (2026-10-31): every decoder the server has, as on the setup page. The benchmark times each one and starts a
    *  switch OFF where its decoder measured below green (applyBench) — so every such switch must be HERE, or the owner
    *  could not switch it back on from this screen (Stuart: "never hide any controls"). */
@@ -84,7 +91,7 @@ function modeOffAncestor(tree: ModeEntry[], id: string, off: Set<string>): ModeE
 /** ★ What an Icom can never offer, so its server screen never offers to block it (the rest work on its audio). Band spots
  *  need IQ, which an Icom's audio is not; ISM / LoRa / NDB / AIS / ADS-B / DRM / tone ID need IQ too; the Icom
  *  demodulates the AM family itself. */
-const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'aisstore', 'adsb', 'drm', 'tone',
+const ICOM_NEVER_MODES = ['wfm', 'dab', 'dabScan', 'rds', 'spotsband', 'bandModes', 'ism', 'lora', 'lora+all', 'ndb', 'ais', 'aisstore', 'adsb', 'drm', 'tone',
   'sam', 'sau', 'sal', 'ecssu', 'ecssl', 'amst'];
 import {
   View, Text, TouchableOpacity, ScrollView, ActivityIndicator,
@@ -115,6 +122,8 @@ import {
   getResolvedServerLocation,
   setManualServerLocation, resolveLocation, publishLocation, homeFromDevice,
   getDabBlocks, dabQuickScan, dabScanPhase, dabScanOutcome, setKeepRadioAlive, rateGuardState, rateGuardClear,
+  getBackgroundCaps, validateBackgroundDecoding, galleryDisk,
+  dabBandScanStart, dabBandScanState, dabBandScanCancel, dabBandScanSupported, type DabBandScan,
   type DabBlock, type DabScanResult, type VibeServerConfig,
   type FpsTier, type VibeServerInfo, type VibeServerStatus, type LocationMode,
 } from '../services/vibeServer';
@@ -285,6 +294,18 @@ const K = {
   fmDefaults: 'vs_fmdefaults',
   /** ★ An Icom's five settings (icomPhoneFields), one JSON value — see the ICOM TRANSCEIVER card. */
   icom: 'vs_icom',
+  /** ★★★ V12 background decoding — the radio's profiles, exactly RadioConfig::bgDecode's JSON ('' = none). */
+  bgDecode: 'vs_bgdecode',
+  /** ★★ V12 the gallery — size (MB), may everyone see it, are listeners' decodes kept. Absent = 100 / yes / yes. */
+  galleryMb: 'vs_gallerymb', galleryPublic: 'vs_gallerypublic', gallerySaveLive: 'vs_gallerysavelive',
+  /** ★★ V12 VibeAGC for SDRplay (0 automatic, 1 on, 2 off). */
+  rspVibeAgc: 'vs_rspvibeagc',
+  /** ★ The wide impulse blanker (0 off, 1 auto below 30 MHz, 2 on). Absent = 1, the server's default. */
+  nbWide: 'vs_nbwide',
+  /** ★★★ The SDRplay card (services/rspCard.ts), one JSON value; and the RSP's own hwinfo capabilities as last served. */
+  rsp: 'vs_rsp', rspCaps: 'vs_rspcaps',
+  /** ★★ The Airspy HF+'s calibration, ppb, as typed ('' / 0 = the radio's own). */
+  ppb: 'vs_ppb',
 };
 
 /** ★★★ HOW LONG THE SETTINGS SCREEN WAITS FOR A DAB QUICK SCAN, and the number its hint QUOTES — one
@@ -469,6 +490,29 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [dabRateBoost, setDabRateBoost] = useState(false);
   /** ★★ V12 VFO A/B — may listeners add a second VFO (B)? On unless the owner says no (the server's default too). */
   const [vfoB, setVfoB] = useState(true);
+  /** ★★★ V12 BACKGROUND DECODING — this radio's profiles (services/bgDecode; stored as RadioConfig::bgDecode's JSON),
+   *  what the engine on this phone offers for them (null = an engine without it: the card is not drawn), the
+   *  engine's own sentence when it would refuse them, and an epoch that remounts the editor when a stored value lands. */
+  const [bgModel, setBgModel] = useState<BgModel>(() => emptyBgModel());
+  const [bgCaps, setBgCaps] = useState<BgCaps | null>(null);
+  const [bgProblem, setBgProblem] = useState('');
+  const [bgEpoch, setBgEpoch] = useState(0);
+  /** ★★ V12 THE GALLERY — the Setup page's defaults: 100 MB, everyone may see it, listeners' decodes kept. */
+  const [galleryMb, setGalleryMb] = useState(100);
+  const [galleryPublic, setGalleryPublic] = useState(true);
+  const [gallerySaveLive, setGallerySaveLive] = useState(true);
+  const [galDisk, setGalDisk] = useState<{ freeBytes: number; usedBytes: number } | null>(null);
+  /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with the OpenRSP driver), 1 on, 2 off — drawn only for an RSP. */
+  const [rspVibeAgc, setRspVibeAgc] = useState(0);
+  /** ★ The wide impulse blanker: 0 off, 1 auto (below 30 MHz — the Setup page's and the server's default), 2 on. */
+  const [nbWide, setNbWide] = useState(1);
+  /** ★★★ The SDRplay card — RadioConfig's keys and defaults (services/rspCard). Drawn and sent only for an RSP. */
+  const [rspCard, setRspCard] = useState<RspCard>(() => ({ ...RSP_DEFAULTS }));
+  /** ★ The RSP's own capability object (hwinfo `radio`) as last read while serving — which rows its model has. */
+  const [rspLive, setRspLive] = useState<any>(null);
+  const onRspCard = (c: RspCard) => { setRspCard(c); void AsyncStorage.setItem(K.rsp, JSON.stringify(c)); };
+  /** ★★ The Airspy HF+'s calibration in ppb, as typed. */
+  const [ppbText, setPpbText] = useState('');
   /* ★★★ A stall or crash at a rate a mode boosted to (vibe_rate_guard.h), read from the engine's record on mount. While
    *  one is recorded the switch is drawn off and disabled, and the saved choice is turned off too — the engine turned
    *  it off, and this screen's copy would otherwise send it back at the next Start. */
@@ -699,6 +743,27 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   const [dabBlocks, setDabBlocks]         = useState<DabBlock[]>([]);
   const [dabStations, setDabStations]     = useState<Record<number, { sid: number; label: string }[]>>({});
   const [dabScanBusy, setDabScanBusy]     = useState(false);
+  /** ★★ V12 the owner's DAB band scan — the engine's state, and busy until the radio is put away again. */
+  const [dabBand, setDabBand]             = useState<DabBandScan | null>(null);
+  const [dabBandBusy, setDabBandBusy]     = useState(false);
+  const bandScanRef = useRef(false);
+  useEffect(() => {
+    if (!dabBandBusy) return;
+    let alive = true;
+    const t = setInterval(() => {
+      void dabBandScanState().then(({ scan, busy }) => {
+        if (!alive) return;
+        if (scan) setDabBand(scan);
+        if (!busy && !(scan && scan.running)) {
+          bandScanRef.current = false; setDabBandBusy(false);
+          // ★ what it found becomes each block's station list here too (the setup page's dabLandStations)
+          if (scan?.found?.length)
+            setDabStations((prev) => { const n = { ...prev }; for (const h of scan.found!) n[h.channel] = (h.services || []).slice(); return n; });
+        }
+      });
+    }, 1000);
+    return () => { alive = false; clearInterval(t); };
+  }, [dabBandBusy]);
   const [dabScanSecs, setDabScanSecs]     = useState(0);
   /** ★ What the scan is doing (native), shown beside the seconds — see dabScanPhase(). */
   const [dabScanStage, setDabScanStage]   = useState('');
@@ -823,6 +888,43 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                      : radio?.driver === 'sdrplay'  ? '8 MS/s'
                      : radio?.driver === 'airspy'   ? '10 MS/s'
                      : '2.4 MHz';
+
+  /* ★★★ V12 BACKGROUND DECODING — what this radio may do with nobody listening. The engine's own decoder table and Band
+   *  list (getBackgroundCaps), what the radio reaches by its driver (bgReach — vibeserver/main.cpp's save rules; the
+   *  screen is drawn while the server is STOPPED, so there is no running radio to ask), and what the owner switched off
+   *  under Modes and decoders (the setup page's modeBlockSet: the owner's list plus the region defaults). */
+  useEffect(() => { void getBackgroundCaps().then((j) => setBgCaps(parseBgCaps(j))); }, [radio?.driver]);
+  useEffect(() => { void galleryDisk().then(setGalDisk); }, []);
+  /* ★★ Which SDRplay rows this RSP has: its own hwinfo answer as last served (only if it is the same model plugged in
+   *  now), else its model from the USB name, else everything — the Setup page's rspCaps. */
+  const rspCapsNow = rspCaps(rspLive && (!radio?.model || !rspLive.model || String(radio.model).includes(rspLive.model)) ? rspLive : null,
+                             radio?.model ?? '');
+  const bgDriver = radio?.driver ?? 'rtl';
+  const bgOff = (() => {
+    const own = new Set(blockedModes.split(/[,;\s]+/).filter(Boolean).map((t) => t.toLowerCase()));
+    const off = new Set([...own].filter((t) => t[0] !== '+'));
+    for (const id of Object.keys(regionDefaults)) if (!own.has(id) && !own.has('+' + id)) off.add(id);
+    return off;
+  })();
+  const bgR = bgReach(bgDriver, autoDs, directSampling === 'off' ? 0 : 1);
+  const bgReachNow = { ismOk: bgR.ismOk && !bgOff.has('ism'), aisOk: bgR.aisOk && !bgOff.has('ais'),
+                       ndbOk: bgR.ndbOk && !bgOff.has('ndb') };
+  // ★ The rate the radio runs at: the pinned one, else what Start sends (serverConfig: rate || 2.4 MS/s; an HF+ its full 912 kHz)
+  const bgRate = rate > 0 ? rate : bgDriver === 'airspyhf' ? 912_000 : 2_400_000;
+  const bgLockCentre = advanced && radioUseEff === 'locked' && lockedCentre > 0 ? lockedCentre : 0;
+  const bgSlotCap = decoderMax > 0 ? decoderMax : (bgCaps?.decoderSlotsDefault ?? 0);
+  const bgJson = collectBg(bgModel);
+  const onBgChange = (m: BgModel) => { setBgModel(m); void AsyncStorage.setItem(K.bgDecode, collectBg(m)); };
+  /* ★ The engine's save rule, as the owner edits — the Setup page refuses a save in these words, so this screen says them
+   *  under the profiles and Start refuses the same profiles (start()). */
+  useEffect(() => {
+    let alive = true;
+    const t = setTimeout(() => {
+      void validateBackgroundDecoding(bgJson, bgRate, bgSlotCap, bgLockCentre, bgReachNow)
+        .then((e) => { if (alive) setBgProblem(e); });
+    }, 300);
+    return () => { alive = false; clearTimeout(t); };
+  }, [bgJson, bgRate, bgSlotCap, bgLockCentre, bgReachNow.ismOk, bgReachNow.aisOk, bgReachNow.ndbOk]);
 
   // ★★★ THE ORDER AN OWNER SETS A LOCKED RECEIVER IN, which is not the order the page grew in.
   //     A pinned window is defined by its CENTRE and its WIDTH together — the centre says where
@@ -1103,9 +1205,9 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     if (!running) return;
     const t = setTimeout(() => {
       const f = serverFields(antSwitch);
-      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaSwitch?.(f.antennaSwitch, f.antennaMap, f.antennaLocked); } catch {}
-      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaBands?.(antRanges, antFilters); } catch {}
-      try { (NativeModules as any).VibeLocalSdrModule?.setAntennaPortNames?.(antNames); } catch {}
+      try { (NativeModules as any).VibeLocalSDR?.setAntennaSwitch?.(f.antennaSwitch, f.antennaMap, f.antennaLocked); } catch {}
+      try { (NativeModules as any).VibeLocalSDR?.setAntennaBands?.(antRanges, antFilters); } catch {}
+      try { (NativeModules as any).VibeLocalSDR?.setAntennaPortNames?.(antNames); } catch {}
     }, 800);
     return () => clearTimeout(t);
   }, [antSwitch, antRanges, antFilters, antNames, running]);
@@ -1117,7 +1219,19 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     let alive = true;
     const read = async () => {
       let caps: any = null;
-      try { const j = await (NativeModules as any).VibeLocalSdrModule?.radioCaps?.(); caps = j ? JSON.parse(j) : null; } catch { caps = null; }
+      try { const j = await (NativeModules as any).VibeLocalSDR?.radioCaps?.(); caps = j ? JSON.parse(j) : null; } catch { caps = null; }
+      // ★★ An RSP's own answer to "which rows does this model have" (the Setup page's rspCaps reads the same object),
+      //    remembered for the settings screen, which is only shown while the server is stopped.
+      if (alive && caps && caps.driver === 'sdrplay') {
+        const keep = { driver: 'sdrplay', model: caps.model || '', rfNotch: !!caps.rfNotch, dabNotch: !!caps.dabNotch,
+                       biasT: !!caps.biasT, hdr: !!caps.hdr, amNotch: !!caps.amNotch, extRef: !!caps.extRef,
+                       antennas: Array.isArray(caps.antennas) && !caps.antennaSwitch ? caps.antennas : [] };
+        setRspLive((prev: any) => {
+          if (JSON.stringify(prev) === JSON.stringify(keep)) return prev;
+          void AsyncStorage.setItem(K.rspCaps, JSON.stringify(keep));
+          return keep;
+        });
+      }
       if (!alive || !caps || caps.antennaSwitch) return;
       const ports = Array.isArray(caps.antennas) ? caps.antennas.filter((x: unknown) => typeof x === 'string') as string[] : [];
       if (ports.length < 2) return;
@@ -1301,6 +1415,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
           { const bmd = g(K.blockedModes); if (bmd != null) setBlockedModes(bmd); }
           { const dbb = g(K.dabRateBoost); if (dbb != null) setDabRateBoost(dbb === '1'); }
           { const vb = g(K.vfoB); if (vb != null) setVfoB(vb !== '0'); }
+          // ★★ V12 background decoding + the gallery. Absent = off / the Setup page's defaults (100 MB, yes, yes).
+          { const bd = g(K.bgDecode); if (bd != null) { setBgModel(parseBg(bd)); setBgEpoch((e) => e + 1); } }
+          { const gm = g(K.galleryMb); if (gm != null && gm !== '' && Number.isFinite(Number(gm))) setGalleryMb(Math.max(0, Number(gm))); }
+          { const gp = g(K.galleryPublic); if (gp != null) setGalleryPublic(gp !== '0'); }
+          { const gs = g(K.gallerySaveLive); if (gs != null) setGallerySaveLive(gs !== '0'); }
+          { const rv = g(K.rspVibeAgc); if (rv === '1' || rv === '2' || rv === '0') setRspVibeAgc(Number(rv)); }
+          { const nb = g(K.nbWide); if (nb === '0' || nb === '1' || nb === '2') setNbWide(Number(nb)); }
+          { const rc = g(K.rsp); if (rc != null) setRspCard(readRspCard(rc)); }
+          { const rl = g(K.rspCaps); if (rl) { try { setRspLive(JSON.parse(rl)); } catch { /* re-read at the next serve */ } } }
+          { const pb = g(K.ppb); if (pb != null) setPpbText(pb); }
           // ★★ The engine's record of a fall-over at a boosted rate — it switches the saved choice off here too.
           rateGuardState().then((st) => {
             setRateGuard(st);
@@ -1816,7 +1940,18 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     && !blockedModes.split(/[,;\s]+/).some((t) => t.toLowerCase() === '+dab');
   const dabLandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !dabRegionOff && !adsbLandOn;
   const dabLandOn = dabLandOffered && landingDabCh >= 0 && landingDabCh < dabBlocks.length;
+  /* ── ★★★ V12 THE OWNER'S DAB BAND SCAN — "Scan all DAB blocks" (the Setup page's dabBandRender). Every Band III block
+   *  on the idle radio, results as they come, every station found added to this server's bookmarks. Offered where DAB
+   *  can run here and is not switched off (the setup page: dabLandHwCan && !blocked) — the landing need not be on. */
+  const dabBandOffered = dabLandCapable && !dabBlockedNow(blockedModes) && !dabRegionOff && dabBandScanSupported();
+  const runDabBandScan = async () => {
+    if (bandScanRef.current || dabScanBusy) return;
+    bandScanRef.current = true; setDabBandBusy(true); setDabBand({ running: true, done: 0, total: 0, found: [] });
+    try { await dabBandScanStart(serverConfigRef.current(name.trim() || 'VibeSDR')); }
+    catch (e: any) { setDabBand({ running: false, error: e?.message ?? String(e) }); bandScanRef.current = false; setDabBandBusy(false); }
+  };
   const runDabScan = async () => {
+    if (bandScanRef.current) return;   // ★ one scan at a time — the band scan holds the radio
     const ch = landingDabCh;
     const b = dabBlocks[ch];
     if (!b || dabScanBusy) return;
@@ -1897,6 +2032,8 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     antenna, antennaIcon, landingMsg, landingUrl, landingLbl, rawIq, rawIqMax, rawIqLanMaxHz,
     landingDabCh, landingDabSid, landingDabSvc, radioLabel, decoderMax, antSwitch, antRanges, antFilters, antNames,
     landingAdsb, adsbKeep, fmDef,
+    bgJson, bgProblem, galleryMb, galleryPublic, gallerySaveLive, rspVibeAgc, nbWide,   // ★★ V12 — read here, never stale
+    rspCard, ppbText,
   };
 
   /* ★★★ THE CONFIG THE SERVER STARTS WITH, BUILT IN ONE PLACE (2026-09-29). Start sends it, and so does
@@ -1942,6 +2079,16 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     adsbKeepRunning: !!live.current.landingAdsb && !!live.current.adsbKeep,
     fmDefaults: live.current.fmDef,
     radioLabel: live.current.radioLabel,
+    // ★★★ V12 background decoding (RadioConfig::bgDecode) and the gallery — VibeServerBoot applies them on every start.
+    //     Never sent to the private DAB scan engine's profiles (privateScanConfig drops bgDecode).
+    bgDecode: live.current.bgJson,
+    galleryMb: live.current.galleryMb, galleryPublic: live.current.galleryPublic, gallerySaveLive: live.current.gallerySaveLive,
+    // ★ Only an RSP's — 0 (automatic) on any other radio, so a choice saved while an RSP was plugged in cannot ride along.
+    rspVibeAgc: radio?.driver === 'sdrplay' ? live.current.rspVibeAgc : 0,
+    nbWide: live.current.nbWide,   // ★ VibeServerBoot: setNbWide(cfg "nbWide"), auto when absent
+    // ★★★ The SDRplay card — only an RSP's; the defaults on any other radio, so nothing saved for an RSP rides along.
+    rsp: radio?.driver === 'sdrplay' ? live.current.rspCard : RSP_DEFAULTS,
+    ppb: radio?.driver === 'airspyhf' ? (parseInt(live.current.ppbText, 10) || 0) : 0,
     /* ★★★ NO LONGER A CONDITIONAL SPREAD, and that is the point rather than a tidy-up. A
      *  `...(cond ? {x} : {})` inside an object literal suppresses TypeScript's excess-property
      *  check for the WHOLE literal, so every setting here could be misspelled or unknown to
@@ -1969,7 +2116,14 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
     idleGraceSec: live.current.idleGrace,
     antenna: live.current.antenna, antennaIcon: live.current.antennaIcon,
     // ★ The external antenna switch: antennaSwitch / antennaMap / antennaLocked — VibeServerBoot applies them.
-    ...serverFields(live.current.antSwitch),
+    // ★★ …and on an RSP with no external switch, the card's "Switch aerial by band" + "Only I may change the aerial" —
+    //    the same two keys (RadioConfig::antennaMap / antennaPortLocked → setRspAntennaMap / setAntennaLocked).
+    ...(() => {
+      const f = serverFields(live.current.antSwitch);
+      return radio?.driver === 'sdrplay' && !f.antennaSwitch
+        ? { ...f, antennaMap: live.current.rspCard.antennaMap.trim(), antennaLocked: live.current.rspCard.antennaPortLocked }
+        : f;
+    })(),
     antennaRanges: live.current.antRanges, antennaFilters: live.current.antFilters,
     antennaNames: live.current.antNames,   // ★ V12 — VibeServerBoot applies it (setAntennaPortNames)
     landingMessage: live.current.landingMsg, landingLinkUrl: live.current.landingUrl, landingLinkLabel: live.current.landingLbl,
@@ -2013,6 +2167,11 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
   serverConfigRef.current = serverConfig;
 
   const start = useCallback(async () => {
+    /* ★★ V12 the owner's DAB band scan holds the radio in a private engine — Start waits for it (or Cancel). */
+    if (bandScanRef.current) {
+      Alert.alert('A DAB scan is running', 'Wait for "Scan all DAB blocks" to finish, or cancel it, then start the server.');
+      return;
+    }
     /* ★★★ NEVER WRITE DEFAULTS OVER SETTINGS WE COULD NOT READ. If the load failed, every control on this
      *  screen is a default rather than the owner's choice, and this multiSet would make that permanent — which
      *  is how "it lost my preferences" becomes true instead of merely looking true. */
@@ -2069,6 +2228,10 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       [K.landingDabCh, String(live.current.landingDabCh)], [K.landingDabSid, String(live.current.landingDabSid)],
       [K.landingDabSvc, live.current.landingDabSvc], [K.radioLabel, live.current.radioLabel],
       [K.landingAdsb, live.current.landingAdsb ? '1' : '0'], [K.adsbKeep, live.current.adsbKeep ? '1' : '0'],
+      [K.bgDecode, live.current.bgJson], [K.galleryMb, String(live.current.galleryMb)],
+      [K.galleryPublic, live.current.galleryPublic ? '1' : '0'], [K.gallerySaveLive, live.current.gallerySaveLive ? '1' : '0'],
+      [K.rspVibeAgc, String(live.current.rspVibeAgc)], [K.nbWide, String(live.current.nbWide)],
+      [K.rsp, JSON.stringify(live.current.rspCard)], [K.ppb, live.current.ppbText],
     ]);
     if (Platform.OS === 'android' && Platform.Version >= 33) {
       try { await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS); } catch {}
@@ -2090,6 +2253,15 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
       }
     }
     await setServerLocationMode(locMode);
+
+    /* ★★ V12 BACKGROUND PROFILES THE ENGINE WOULD REFUSE ARE REFUSED HERE TOO — the Setup page will not save them, and a
+     *  server started with them would quietly run none (the engine keeps its old settings and logs why). Its own words. */
+    if (live.current.bgProblem) {
+      setStarting(false);
+      setError('Background Decoding — ' + live.current.bgProblem
+        + ' Change the profile under WHEN NOBODY IS LISTENING, or switch Background Decoding off.');
+      return;
+    }
 
     try {
       const info = await startVibeServer(serverConfigRef.current(n));
@@ -2950,6 +3122,60 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                   — a reboot needs the dongle replugged by hand, and Samsung ships scheduled
                   restarts ON, which kills an unattended receiver every few days. */}
 
+            {/* ★★ V12 THE GALLERY (2026-10-22) — what the decoders heard: background decoding's, and a listener's own.
+                The Setup page's Server tab, its words; the size is the limit (the oldest go first) with the space left
+                on this device beside it. Drawn for every radio, as on the Setup page: a listener's own decodes go there
+                too. VibeServerBoot applies it (setGallery) on every start. */}
+            <Text style={[styles.section, { color: C.section, fontFamily: F }]}>GALLERY</Text>
+            <View style={[styles.card, { borderColor: C.border }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>Gallery size</Text>
+                <TextInput
+                  value={String(galleryMb)}
+                  onChangeText={(t) => {
+                    const v = Math.max(0, Math.min(100000, parseInt(t.replace(/[^0-9]/g, ''), 10) || 0));
+                    setGalleryMb(v); AsyncStorage.setItem(K.galleryMb, String(v));
+                  }}
+                  keyboardType="number-pad" placeholderTextColor={C.placeholderDim}
+                  style={[styles.input, { width: 96, textAlign: 'center', color: C.text, borderColor: C.border, fontFamily: F }]} />
+                <Text style={{ color: C.textDim, fontFamily: F, fontSize: 12 }}>MB</Text>
+                {!!galDisk && galDisk.freeBytes > 0 && (
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+                    {(galDisk.freeBytes / 1073741824).toFixed(1) + ' GB free on this device'
+                      + (galDisk.usedBytes > 0 ? ' · the gallery holds ' + (galDisk.usedBytes >= 1048576
+                        ? (galDisk.usedBytes / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(galDisk.usedBytes / 1024)) + ' KB') : '')}
+                  </Text>
+                )}
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                NAVTEX messages, RTTY and later charts and pictures, kept for anyone to look back through (GALLERY under
+                VIEWS {'—'} Mode {'→'} VIEWS in the app, VIEWS in the web page{'’'}s DECODERS menu). The gallery keeps everything until this space is full, then removes the
+                oldest items first, so the newest night is always there. There is no limit on the number of items, only
+                on the space (which counts the gallery{'’'}s own index too). 0 keeps nothing. On a small phone or an SD
+                card a modest figure is kind to it: 100 MB holds about 50,000 NAVTEX messages.
+              </Text>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                  Everyone may see the gallery
+                </Text>
+                <Switch value={galleryPublic}
+                  onValueChange={(v) => { setGalleryPublic(v); AsyncStorage.setItem(K.galleryPublic, v ? '1' : '0'); }}
+                  trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+              </View>
+              <View style={styles.rowBetween}>
+                <Text style={[styles.value, { color: C.text, fontFamily: F, flex: 1, paddingRight: 12, textAlign: 'left', marginLeft: 0 }]}>
+                  Keep listeners{'’'} decodes in the gallery too
+                </Text>
+                <Switch value={gallerySaveLive}
+                  onValueChange={(v) => { setGallerySaveLive(v); AsyncStorage.setItem(K.gallerySaveLive, v ? '1' : '0'); }}
+                  trackColor={{ false: C.trackOff, true: C.trackOn }} thumbColor={C.thumb} />
+              </View>
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                Off: only background decoding is kept. Each item says whether it was decoded in the background or by a
+                listener. Nothing in the gallery says where this server is beyond what the stations themselves sent.
+              </Text>
+            </View>
+
             {/* Web server. Turning this OFF means a browser gets nothing — only the
                 VibeSDR app can connect. It's the blunt lock for a server you don't
                 want a stranger stumbling into via a URL. */}
@@ -3355,6 +3581,66 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
             {!!dabLandNote && (
               <Text style={[styles.hint, { color: C.warn, fontFamily: F, marginBottom: 8 }]}>{dabLandNote}</Text>
             )}
+            {/* ★★ V12 THE DAB BAND SCAN, FOR THE OWNER (Stuart, 2026-10-26: "DAB scan I will add for initial setup") — the
+                Setup page's words. The engine walks every Band III block (dabBandScanRun); here the radio is opened for
+                it on a private loopback engine (the server is stopped while this screen shows), as the quick scan does. */}
+            {dabBandOffered && (() => {
+              const s = dabBand, running = dabBandBusy;
+              const found = (s?.found ?? []).slice().sort((a, b) => a.channel - b.channel);
+              const ens = found.length, st = found.reduce((a, h) => a + (h.services || []).length, 0);
+              const pl = (n: number, w: string) => n + ' ' + (n === 1 ? w : w === 'multiplex' ? 'multiplexes' : w + 's');
+              const msg = !s
+                ? 'Steps through all 41 Band III blocks (about two minutes, longer for each multiplex found) while nobody is '
+                  + 'listening, and adds every station found to this server’s bookmarks.'
+                : s.error ? 'Scan not started: ' + s.error
+                : running ? (s.total ? `Scanning ${s.done} / ${s.total} blocks${s.current ? ' · ' + s.current : ''}` : 'Starting the radio for the scan…')
+                    + (ens ? ` — ${pl(ens, 'multiplex')} so far` : '')
+                : s.finished ? (s.cancelled ? `Scan stopped at ${s.done} / ${s.total}${s.why ? ' (' + s.why.replace(/^stopped — /, '') + ')' : ''} — ` : '')
+                    + (ens ? `${pl(ens, 'multiplex')}, ${pl(st, 'station')} — ${pl(s.added || 0, 'station')} added to bookmarks.`
+                           : (s.cancelled ? 'nothing found yet.' : `No DAB found on any of the ${s.total} blocks. Check the aerial is up and connected.`))
+                : (s.why || '');
+              return (
+                <View style={[styles.card, { borderColor: C.border, marginBottom: 8 }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <Text style={{ color: C.text, fontFamily: F, fontSize: 13, flex: 1 }}>Find the DAB multiplexes this aerial hears</Text>
+                    <TouchableOpacity onPress={() => { void runDabBandScan(); }} disabled={running || dabScanBusy}
+                      style={[styles.regen, { borderColor: C.border, opacity: running || dabScanBusy ? 0.5 : 1 }]}>
+                      <Text style={{ color: C.key, fontFamily: F, fontSize: 13 }}>Scan all DAB blocks</Text>
+                    </TouchableOpacity>
+                    {running && (
+                      <TouchableOpacity onPress={() => { void dabBandScanCancel(); }}
+                        style={[styles.regen, { borderColor: C.border }]}>
+                        <Text style={{ color: C.key, fontFamily: F, fontSize: 13 }}>Cancel</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>{msg}</Text>
+                  {found.map((h) => {
+                    const word = h.fib > 0.9 ? 'STRONG' : h.fib > 0.6 ? 'GOOD' : 'WEAK';
+                    return (
+                      <View key={h.channel} style={{ borderTopWidth: 1, borderTopColor: C.border, paddingTop: 6, gap: 3 }}>
+                        <Text style={{ color: C.text, fontFamily: F, fontSize: 13 }}>
+                          {`${h.block}  ${h.ensemble || 'Unnamed multiplex'}  · ${(h.hz / 1e6).toFixed(3)} MHz · ${pl((h.services || []).length, 'station')} · ${word}`}
+                        </Text>
+                        {!!(h.services || []).length && (
+                          <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 0 }]}>
+                            {h.services.map((v) => v.label).join(' · ')}
+                          </Text>
+                        )}
+                        {dabLandOn && !running && (
+                          <TouchableOpacity onPress={() => { setDabLanding(h.channel, 0, ''); setDabScanMsg(''); }}
+                            style={[styles.regen, { borderColor: h.channel === landingDabCh ? C.keySelBorder : C.border, marginLeft: 0, alignSelf: 'flex-start' }]}>
+                            <Text style={{ color: h.channel === landingDabCh ? C.keySel : C.key, fontFamily: F, fontSize: 12 }}>
+                              {`Use ${h.block} as the landing block`}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    );
+                  })}
+                </View>
+              );
+            })()}
             {!dabLandOffered && landingDabCh >= 0 && !dabBlockedNow(blockedModes) && (
               <Text style={[styles.hint, { color: C.warn, fontFamily: F, marginBottom: 8 }]}>
                 {`This radio cannot reach DAB with these settings, so its DAB landing station will not be used \u2014 listeners will start on ${plainLandingWords()} instead.`}
@@ -3610,6 +3896,53 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
               </Text>
             ) : null /* ★ an RSP1: simply no bias-T, and nothing to say about it */}
 
+            {/* ★★★ THE SDRplay CARD (Stuart, 2026-11-04: "since SDRPlay is now on android all the sdrplay settings need
+                porting over") — the Setup page's, in its order and words, VibeAGC included (components/RspSetupCard).
+                Drawn ONLY for an RSP (AGENTS.md: a control for one radio is not drawn on the others), and inside it each
+                row only on the models that have it (rspCaps — the radio's own hwinfo answer once it has served, else its
+                model from the USB name). VibeServerBoot applies all of it on every start (setRspFrontEnd). */}
+            {radio?.driver === 'sdrplay' && (<>
+              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>SDRPLAY</Text>
+              <View style={[styles.card, { borderColor: C.border }]}>
+                <RspSetupCard C={C} F={F} card={rspCard} onChange={onRspCard} caps={rspCapsNow}
+                  vibeAgc={rspVibeAgc} onVibeAgc={(v) => { setRspVibeAgc(v); AsyncStorage.setItem(K.rspVibeAgc, String(v)); }} />
+              </View>
+            </>)}
+            {/* ★★ THE AIRSPY HF+'s CALIBRATION in parts per BILLION (RadioConfig::ppb) — the Setup page's "Calibration (ppb)",
+                drawn only for an HF+ (the only radio calibrated that way). 0 = the radio's own. */}
+            {radio?.driver === 'airspyhf' && (<>
+              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>CALIBRATION (PPB)</Text>
+              <TextInput value={ppbText}
+                onChangeText={(t) => {
+                  const clean = t.replace(/[^0-9-]/g, '').replace(/(?!^)-/g, '').slice(0, 7);
+                  setPpbText(clean); AsyncStorage.setItem(K.ppb, clean);
+                }}
+                keyboardType="numbers-and-punctuation" placeholder="0" placeholderTextColor={C.placeholderDim}
+                style={[styles.input, { color: C.text, borderColor: C.border, fontFamily: F, width: 140 }]} />
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                The Airspy HF+ is calibrated in parts per BILLION. 0 unless you have measured it.
+              </Text>
+            </>)}
+
+            {/* ★★ THE WIDE IMPULSE BLANKER (RadioConfig::nbWide: 0 off, 1 auto below 30 MHz — the default, 2 on), the Setup
+                page's words. VibeServerBoot has always applied cfg "nbWide"; the screen never sent it, so every phone ran
+                the default. Not on an Icom: it blanks the IQ capture, which an Icom does not send (AGENTS.md). */}
+            {!isIcom && (<>
+              <Text style={[styles.section, { color: C.section, fontFamily: F }]}>IMPULSE NOISE BLANKER</Text>
+              {([[0, 'Off'], [1, 'Auto (below 30 MHz)'], [2, 'On']] as const).map(([v, label]) => (
+                <OptRow key={v} C={C} F={F} active={nbWide === v} label={label}
+                  onPress={() => { setNbWide(v); AsyncStorage.setItem(K.nbWide, String(v)); }} />
+              ))}
+              <Text style={[styles.hint, { color: C.textDim, fontFamily: F, marginTop: 6 }]}>
+                Blanks impulse noise {'—'} distant lightning, power-line hash, ignition, switch-mode supplies {'—'} on
+                the whole capture, before the waterfall and before any listener{'’'}s channel, so everybody benefits at
+                once. Impulses are microseconds long and wideband, which is why this works far better here than after a
+                channel filter has smeared them. On a clean signal it blanks nothing. Auto engages it only when the radio is
+                below 30 MHz: on a strong VHF broadcast band a blanker trades clicks for damage. Each listener also has their
+                own blanker on their own channel, in the audio menu.
+              </Text>
+            </>)}
+
             {/* ★★ TIME LIMIT — only earns its place on a PUBLIC receiver. */}
             <Text style={[styles.section, { color: C.section, fontFamily: F }]}>TIME LIMIT PER LISTENER</Text>
             {([[0, 'Unlimited'], [15, '15 minutes'], [30, '30 minutes'],
@@ -3769,6 +4102,22 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                     + 'flatter battery, and the only way to draw the 24-hour spectrogram.'}
               </Text>
             </View>
+
+            {/* ★★★ V12 BACKGROUND DECODING (Stuart, 2026-10-22) — beside the power save, as on the Setup page's Radio tab:
+                the same question, what this radio does when nobody is listening. The Setup page's editor and words
+                (components/BackgroundDecodingSetup), the engine's own decoders. Not on an Icom: one physical receiver,
+                no IQ to cut channels from (AGENTS.md — not drawn where it cannot work). Not drawn at all on an engine
+                that does not offer it (bgCaps null), never drawn empty. */}
+            {!isIcom && !!bgCaps && (
+              <View key={`bg${bgEpoch}`} style={[styles.card, { borderColor: C.border }]}>
+                <BackgroundDecodingSetup C={C} F={F} model={bgModel} onChange={onBgChange} caps={bgCaps}
+                  driver={bgDriver} ismOk={bgReachNow.ismOk} aisOk={bgReachNow.aisOk} ndbOk={bgReachNow.ndbOk}
+                  ndbBlocked={bgOff.has('ndb')} bandOk={!bgOff.has('spots') && !bgOff.has('spotsband')}
+                  dscOk={!bgOff.has('dsc')} rate={bgRate} lockCentre={bgLockCentre}
+                  users={advanced ? maxUsers : 1} decoderMax={decoderMax}
+                  adsbKeeps={landingAdsb && adsbKeep} problem={bgProblem} />
+              </View>
+            )}
 
             {/* ★★★ KEEP RADIO ALIVE (2026-10-06). Stuart's idea and his wording — "use if USB ports go into powersave
                 mode when no traffic detected" — after the Sony dropped its dongle in standby and the five-minute rule
@@ -4241,6 +4590,50 @@ export default function ServerModeScreen({ navigation, route, tokens }: Props) {
                               setDabScanLabels(v); AsyncStorage.setItem(K.dabScanLabels, String(v));
                               (NativeModules as any).VibeLocalSDR?.setDabScanLabels?.(v);   // ★★ applied now as well as saved
                             }} />
+                        </View>
+                      );
+                    }
+                    if (m.node === 'bandModes') {
+                      /* ★★ V12 Band, mode by mode — the setup page's bandModeRender: Auto lets the governor decide, Always
+                       *  decodes the mode every period, Off never runs it in Band. Greyed with its switch, never hidden. */
+                      const modes = Object.keys(DIGI_MODE_STYLE);
+                      if (!modes.length) return null;
+                      const word = (id: string) => (own.has('spotsband-' + id) ? 'off' : own.has('spotsband+' + id) ? 'always' : 'auto');
+                      const pick = (id: string, w: 'auto' | 'always' | 'off') => {
+                        const s = new Set(own);
+                        s.delete('spotsband-' + id); s.delete('spotsband+' + id);
+                        if (w === 'off') s.add('spotsband-' + id);
+                        if (w === 'always') s.add('spotsband+' + id);
+                        const v = [...s].join(',');
+                        setBlockedModes(v); AsyncStorage.setItem(K.blockedModes, v);
+                      };
+                      return (
+                        <View key={m.id} style={{ flexBasis: '100%', gap: 6, opacity: inert ? 0.45 : 1 }}>
+                          <Text style={[styles.hint, { color: C.textDim, fontFamily: F }]}>
+                            Digital spots: Band, mode by mode. Band reads every mode on a band at once. To keep that affordable
+                            it decodes a mode only while its window has something in it, drops depth (extra passes) before it
+                            drops a mode, and when the CPU is short it drops the least-used modes first. Auto lets it decide.
+                            Always decodes the mode every period, even when its window looks empty and even over budget. Off
+                            never runs it in Band. Listeners see each mode{'’'}s state in the spots box.
+                          </Text>
+                          {modes.map((sm) => {
+                            const id = sm.toLowerCase(), w = word(id);
+                            return (
+                              <View key={id} style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                <Text style={{ color: C.text, fontFamily: F, fontSize: 12, minWidth: 48 }}>{sm}</Text>
+                                {(['auto', 'always', 'off'] as const).map((o) => (
+                                  <TouchableOpacity key={o} disabled={!!inert} onPress={() => pick(id, o)}
+                                    accessibilityLabel={`${sm} in Band: ${o}`}
+                                    style={{ paddingVertical: 5, paddingHorizontal: 9, borderRadius: 6, borderWidth: 1,
+                                             borderColor: w === o ? C.keyBorderAct : C.keyBorder }}>
+                                    <Text style={{ color: w === o ? C.keyAct : C.keyQuiet, fontFamily: F, fontSize: 12 }}>
+                                      {o === 'auto' ? 'Auto' : o === 'always' ? 'Always' : 'Off'}
+                                    </Text>
+                                  </TouchableOpacity>
+                                ))}
+                              </View>
+                            );
+                          })}
                         </View>
                       );
                     }

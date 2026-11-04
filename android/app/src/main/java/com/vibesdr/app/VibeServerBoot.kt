@@ -171,6 +171,18 @@ object VibeServerBoot {
      *   the engine has no index to look the descriptor up from itself.
      */
     fun usbModelName(dev: android.hardware.usb.UsbDevice): String {
+        // ★★ V12: remembered for the gallery — the label on each item when the owner named nothing, and the serial
+        //    the gallery strips from every item (applyAndStart → setGallery). Every caller asks this right before starting.
+        lastUsbSerial = try { (dev.serialNumber ?: "").trim() } catch (_: Throwable) { "" }
+        val name = usbModelNameOf(dev)
+        lastUsbModel = name
+        return name
+    }
+    @Volatile private var lastUsbModel = ""
+    @Volatile private var lastUsbSerial = ""
+    /** ★★ V12 where the gallery lives — one radio per phone, so one folder (vibe_gallery.h writes inside it). */
+    fun galleryDir(filesDir: File): File = File(filesDir, "gallery")
+    private fun usbModelNameOf(dev: android.hardware.usb.UsbDevice): String {
         val product = (dev.productName ?: "").trim()
         val maker   = (dev.manufacturerName ?: "").trim()
         if (product.isEmpty()) return ""
@@ -199,7 +211,9 @@ object VibeServerBoot {
         for (k in listOf("pin", "adminPassword", "mode", "landingDabChannel", "landingDabSid", "landingDabService",
                          "landingAdsb", "adsbKeepRunning",
                          "lockedCentre", "lockedRate", "rateLock", "sessionLimitMin", "idleKickMin",
-                         "batteryPauseAt", "rawIq", "rawIqMax", "uncompressedAudio"))
+                         "batteryPauseAt", "rawIq", "rawIqMax", "uncompressedAudio",
+                         // ★ V12: a private scan never runs the owner's background profiles (it is nobody's idle radio)
+                         "bgDecode"))
             c.remove(k)
         c.put("advertise", false)
         c.put("maxUsers", 1)
@@ -304,6 +318,30 @@ object VibeServerBoot {
         VibeLocalSDR.setDabMemoryPath(File(filesDir, "vibe_dab_memory.txt").absolutePath)
         // ★ The owner's name for the radio ("SDR display name"); blank = the USB port's name, as before.
         VibeLocalSDR.setRadioLabel(cfg.s("radioLabel").trim())
+        /* ★★★ V12 BACKGROUND DECODING AND THE GALLERY (Server mode → WHEN NOBODY IS LISTENING / GALLERY) — the calls
+         *  vibeserver/main.cpp makes from the radio's bgDecode and the server's galleryMb / galleryPublic / gallerySaveLive.
+         *  Always applied to a definite value, so a profile from a previous run can never outlive the config: absent =
+         *  "" = off. The gallery's defaults are the Setup page's (100 MB, everyone may see it, listeners' decodes kept). */
+        VibeLocalSDR.setGallery(galleryDir(filesDir).absolutePath, cfg.n("galleryMb", 100.0).coerceAtLeast(0.0),
+                                cfg.b("galleryPublic", true), cfg.b("gallerySaveLive", true),
+                                cfg.s("radioLabel").trim().ifEmpty { lastUsbModel }, lastUsbSerial)
+        run {
+            val why = VibeLocalSDR.setBackgroundDecoding(cfg.s("bgDecode"))
+            if (why.isNotEmpty()) Log.w(TAG, "background decoding not applied: $why")
+        }
+        // ★★ V12 VibeAGC for SDRplay — the owner's choice; absent = 0 = automatic (on with the OpenRSP driver).
+        VibeLocalSDR.setRspVibeAgc(cfg.i("rspVibeAgc", 0).coerceIn(0, 2))
+        /* ★★★ THE SDRplay CARD (Server mode → SDRPLAY), the keys and defaults of RadioConfig — vibeserver_config.h: notches
+         *  off, automatic notching off, listeners may toggle them, the model-only filters off, DAB decimation off, RF AGC off,
+         *  a separate DAB AGC target ON at -40 dBFS, the IF AGC target -30 (SDRplay's own) unlocked. Before the radio opens,
+         *  as main.cpp does; every value definite (the process outlives a server). Inert on any radio but an RSP. */
+        VibeLocalSDR.setRspFrontEnd(
+            cfg.b("rfNotch", false), cfg.b("dabNotch", false), cfg.b("autoNotch", false), cfg.b("userNotch", true),
+            cfg.b("rspAmNotch", false), cfg.b("rspHdr", false), cfg.b("rspExtRef", false), cfg.b("rspDabDecim", false),
+            cfg.b("rfAgc", false), cfg.b("dabAgcOverride", true), cfg.i("dabAgcTarget", -40).coerceIn(-60, -10),
+            cfg.i("agcSet", -30).coerceIn(-72, -10), cfg.b("agcSetLock", false))
+        // ★★ The Airspy HF+'s calibration in ppb (0 = the radio's own) — inert on any other radio.
+        VibeLocalSDR.setAhfPpb(cfg.i("ppb", 0))
 
         // ── ★★★ ADVANCED MODE ───────────────────────────────────────────────────────────────────
         // ★★ Always applied to a DEFINITE value, never "only when advanced". A limit left set from
@@ -353,12 +391,16 @@ object VibeServerBoot {
             // ★ Decoders at once (B6). Absent/0 = this device's default — applied on EVERY start, so a
             //   limit from a previous run can never outlive the config that set it.
             VibeLocalSDR.setDecoderMax(cfg.i("decoderMax", 0).coerceAtLeast(0))
-            VibeLocalSDR.setRawIq(cfg.s("rawIq").toIntOrNull() ?: 0, cfg.s("rawIqMax").toIntOrNull() ?: 0,
-                                  cfg.s("rawIqLanMaxHz").toIntOrNull() ?: 0)
+            /* ★★★ READ AS NUMBERS (cfg.i), NOT optString().toIntOrNull() (2026-11-04). The app's map arrives through
+             *  ReadableMap.toHashMap, where every number is a DOUBLE, and org.json's optString of 1.0 is "1.0" —
+             *  toIntOrNull() of that is null, so a fresh Start fell back to the default every time: VFO B could never be
+             *  switched off, raw IQ never on, the blanker never changed. A crash restore re-parses the stored JSON
+             *  (where 1.0 is written "1"), which is why it only ever went wrong on the ordinary path. cfg.i takes both. */
+            VibeLocalSDR.setRawIq(cfg.i("rawIq", 0), cfg.i("rawIqMax", 0), cfg.i("rawIqLanMaxHz", 0))
             // ★ Wide impulse blanker — off / auto (HF only) / on; auto when unset.
-            VibeLocalSDR.setNbWide(cfg.s("nbWide").toIntOrNull() ?: 1)
+            VibeLocalSDR.setNbWide(cfg.i("nbWide", 1).coerceIn(0, 2))
             // ★★ V12 VFO A/B — the owner's switch; on when unset.
-            VibeLocalSDR.setVfoB((cfg.s("vfoB").toIntOrNull() ?: 1) != 0)
+            VibeLocalSDR.setVfoB(cfg.i("vfoB", 1) != 0)
             // ★★★ THE RESTING GAIN IS NOT AN ADVANCED SETTING, AND GATING IT ON `adv` THREW IT AWAY.
             //     The server screen offers STARTING GAIN in BOTH modes — deliberately, and its own
             //     comment says so ("One control, one value — it was not duplicated into Advanced")

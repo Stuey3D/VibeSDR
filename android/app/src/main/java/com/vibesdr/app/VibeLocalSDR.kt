@@ -360,6 +360,45 @@ object VibeLocalSDR {
     /** ★★ V12 VFO A/B — may listeners add a VFO B (default on)? */
     fun setVfoB(on: Boolean) { ensureLoaded(); nativeSetVfoB(on) }
     private external fun nativeSetVfoB(on: Boolean)
+    /** ★★ V12 BACKGROUND DECODING — this radio's profiles (RadioConfig::bgDecode's JSON, "" = none). Live: the engine's
+     *  tick picks it up within two seconds. @return "" when applied, else the reason (the previous settings stay). */
+    fun setBackgroundDecoding(json: String): String { ensureLoaded(); return nativeSetBackgroundDecoding(json) }
+    private external fun nativeSetBackgroundDecoding(json: String): String
+    /** ★★ V12 THE GALLERY — its directory, the owner's size in MB (0 keeps nothing), may everyone see it, are listeners'
+     *  own decodes kept; the radio's label on each item and its serial kept OUT of them. */
+    fun setGallery(dir: String, limitMb: Double, publicRead: Boolean, saveLive: Boolean, label: String, serial: String) {
+        ensureLoaded(); nativeSetGallery(dir, limitMb, publicRead, saveLive, label, serial)
+    }
+    private external fun nativeSetGallery(dir: String, limitMb: Double, publicRead: Boolean, saveLive: Boolean,
+                                          label: String, serial: String)
+    /** ★★ V12 what the background-decoding editor may offer — the engine's own decoder table, ISM ids, Band list, slots. */
+    fun backgroundCaps(): String { ensureLoaded(); return nativeBackgroundCaps() }
+    private external fun nativeBackgroundCaps(): String
+    /** ★★ V12 the Setup page's save rule for background decoding: "" = good, else the engine's sentence. */
+    fun validateBackgroundDecoding(json: String, rate: Double, slotCap: Int, lockCentre: Double,
+                                   ismOk: Boolean, ndbOk: Boolean, aisOk: Boolean): String {
+        ensureLoaded(); return nativeValidateBackgroundDecoding(json, rate, slotCap, lockCentre, ismOk, ndbOk, aisOk)
+    }
+    private external fun nativeValidateBackgroundDecoding(json: String, rate: Double, slotCap: Int, lockCentre: Double,
+                                                          ismOk: Boolean, ndbOk: Boolean, aisOk: Boolean): String
+    /** ★★ V12 VibeAGC for SDRplay: 0 automatic (on with OpenRSP), 1 on, 2 off. */
+    fun setRspVibeAgc(choice: Int) { ensureLoaded(); nativeSetRspVibeAgc(choice) }
+    /** ★★ The Setup page's SDRplay card, at start-up — see nativeSetRspFrontEnd. */
+    fun setRspFrontEnd(rfNotch: Boolean, dabNotch: Boolean, autoNotch: Boolean, userNotch: Boolean, amNotch: Boolean,
+                       hdr: Boolean, extRef: Boolean, dabDecim: Boolean, rfAgc: Boolean, dabAgcOverride: Boolean,
+                       dabAgcTarget: Int, agcSet: Int, agcSetLock: Boolean) {
+        ensureLoaded()
+        nativeSetRspFrontEnd(rfNotch, dabNotch, autoNotch, userNotch, amNotch, hdr, extRef, dabDecim, rfAgc,
+                             dabAgcOverride, dabAgcTarget, agcSet, agcSetLock)
+    }
+    private external fun nativeSetRspFrontEnd(rfNotch: Boolean, dabNotch: Boolean, autoNotch: Boolean, userNotch: Boolean,
+                                              amNotch: Boolean, hdr: Boolean, extRef: Boolean, dabDecim: Boolean,
+                                              rfAgc: Boolean, dabAgcOverride: Boolean, dabAgcTarget: Int, agcSet: Int,
+                                              agcSetLock: Boolean)
+    /** ★★ The Airspy HF+'s calibration, parts per billion (0 = none — the radio's own). */
+    fun setAhfPpb(ppb: Int) { ensureLoaded(); nativeSetAhfPpb(ppb) }
+    private external fun nativeSetAhfPpb(ppb: Int)
+    private external fun nativeSetRspVibeAgc(choice: Int)
 
     /** Per-band gain ceilings, the gain to return to when everyone leaves (-1 = leave alone), and
      *  an AGC lock. ★ Ceilings are enforced on SET, on RETUNE INTO a capped band, at START and at
