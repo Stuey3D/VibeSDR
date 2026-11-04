@@ -31,6 +31,23 @@ int elements(const std::string& s) {
     for (char c : s) n += (int)vibe::cw::morseCode(std::string(1, c)).size();
     return n;
 }
+/** ★★★ ALL DOTS OR ALL DASHES (E I S H 5 / T M O 0) — the Lenovo's RSP1A, 261 hours of background NDB decoding
+ *  (2026-11-04): 160 of the 248 "beacons" not in the published list were readings like EEI, IEE, EIE, ES, SE, every one
+ *  of them clustered on 283.5–290 and 348.5–350 kHz — the marine DGPS band's continuous data and one steady data carrier
+ *  read as Morse dots, for up to ten hours at a time, so more agreeing repeats could never tell them apart. What they
+ *  lack is a beacon's REPEAT CYCLE (the ident every 3.5–30 s, the envelope's autocorrelation): such a reading votes only
+ *  on a carrier whose cycle has been found. ~2 % of published idents are uniform (129 of 6 882: SH, HI, MO, TT…) — they
+ *  still confirm, a few cycles later. The published list is not the judge (it misses many real beacons — SND, EMW, NWI,
+ *  CDF in the same logs). */
+bool uniformMorse(const std::string& s) {
+    if (s.empty()) return false;
+    bool dots = true, dashes = true;
+    for (char c : s) {
+        dots   &= c == 'E' || c == 'I' || c == 'S' || c == 'H' || c == '5';
+        dashes &= c == 'T' || c == 'M' || c == 'O' || c == '0';
+    }
+    return dots || dashes;
+}
 /** ★ A reading that could be an ident at all: four elements or more, at least one character of two or more (a speed read
  *  three times too slow turns every dash into a dot — "EEEE", "ETTE"), and not one letter over and over. */
 bool informative(const std::string& s) {
@@ -1141,7 +1158,10 @@ struct Skimmer::Impl {
         car.copy += (car.copy.empty() ? "" : " ") + w;
         if (car.copy.size() > 80) car.copy.erase(0, car.copy.size() - 80);
         // ★ Ballot first, so a reading that CONFIRMS the ident is already "high"
-        const bool confirmedNow = clean && w.find('?') == std::string::npos && car.vote.add(w, t);
+        // ★★★ uniformMorse: an all-dot / all-dash reading votes only once this carrier's repeat cycle is found.
+        const bool cycleKnown = (car.tone ? car.t : car.c).period > 0;
+        const bool votable = !uniformMorse(w) || cycleKnown;
+        const bool confirmedNow = clean && votable && w.find('?') == std::string::npos && car.vote.add(w, t);
         if (owner->onCopy) {
             Copy c; c.id = car.id; c.offsetHz = offsetOf(w0 + car.bin + car.frac); c.text = w; c.utcMs = t;
             c.q = w.find('?') != std::string::npos ? "poor" : (!car.vote.ident().empty() && w == car.vote.ident()) ? "high" : clean ? "medium" : "low";
