@@ -323,6 +323,8 @@ export interface SDRBackend {
   ndb?(on: boolean): void;
   ndbFind?(q: string, limit?: number): void;
   ndbStats?(): void;
+  /** ★ V12: the owner confirms / rejects / forgets a "Suspected …" beacon (owner-only on the server). */
+  ndbConfirm?(act: 'confirm' | 'reject' | 'forget', ident: string, hz: number, airfield: string): void;
   /** True while the receiver is in NDB. */
   readonly inNdb?: boolean;
   /** ★ V12 AIS on a VibeServer (docs/v12/AIS-APRS.md): the whole radio to 162.000 MHz, both AIS channels decoded on the

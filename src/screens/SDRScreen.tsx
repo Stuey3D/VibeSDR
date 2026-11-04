@@ -15670,6 +15670,8 @@ export default function SDRScreen({ route, navigation }: Props) {
           report: ndbReport, tracks: ndbTracks.current, seq: ndbSeq, found: ndbFound, findResult: ndbFindResult, stats: ndbStats,
           onFind: (q: string) => { client.current?.ndbFind?.(q, q ? 120 : 300); },
           onStats: () => { setNdbStats(null); client.current?.ndbStats?.(); },
+          owner: adminOk,
+          onDecide: (act, ident, hz, airfield) => { client.current?.ndbConfirm?.(act, ident, hz, airfield); },
         } : undefined}
         /* ★★ V12 AIS / APRS: the items (icon, label, card made here), the live list, its status and the AIS safety strip. */
         trk={shownMap === 'ais' ? aisShipTrk : shownMap === 'aprs' ? aprsTrk : shownMap === 'dsc' ? dscTrk : shownMap === 'ism' ? (ismGal ? ismGalTrk : ismTrk) : shownMap === 'navtex' ? navTrk : null}

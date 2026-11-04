@@ -28,7 +28,7 @@ import { scrollLane } from '../constants/popupTokens';
 import { EDGE, MAP_TOPBAR_H, adsbListWidth, parseListOpen } from '../services/adsbList';
 import {
   NDB_BAR_ON, NDB_NO_POS, NDB_Q_COLOURS, flag, khz, ndbBars, ndbByHourOfDay, ndbEmptyText, ndbFoundKey, ndbIdentCell,
-  ndbOnMap, ndbRowLive, ndbRows, ndbStation, ndbStatsCsv, ndbStatText, ndbTiles, nmText, utc,
+  ndbOnMap, ndbRowLive, ndbRows, ndbStation, ndbStatsCsv, ndbStatText, ndbSusLabel, ndbTiles, nmText, utc,
   type NdbBeacon, type NdbCopy, type NdbFound, type NdbMapPrefs, type NdbReport, type NdbStats, type NdbTracks,
 } from '../services/ndb';
 
@@ -44,6 +44,10 @@ export interface NdbOverlay {
   stats: NdbStats | null;
   onFind: (q: string) => void;
   onStats: () => void;
+  /** ★★ V12 2026-11-04: this listener holds the server's admin (the OWNER) — only they may confirm a suspected beacon. */
+  owner?: boolean;
+  /** The owner's decision on a suspected beacon ({"type":"ndb_confirm"}; the server checks the admin again). */
+  onDecide?: (act: 'confirm' | 'reject' | 'forget', ident: string, hz: number, airfield: string) => void;
 }
 
 const OPEN_KEY = 'lsv_ndb_list_open';
@@ -141,7 +145,8 @@ export default function NdbLiveList(p: {
           {!!sel && (
             <View style={[s.card, { left: EDGE + p.insets.left, top: p.insets.top + MAP_TOPBAR_H + EDGE + 36,
                                     maxWidth: Math.min(320, innerW - EDGE * 2 - 44) }]}>
-              <Card s={s} b={sel} words={p.ndb.tracks.words(sel.id)} snr={p.ndb.tracks.snr(sel.id)} onClose={() => p.onSelect(0)} />
+              <Card s={s} b={sel} words={p.ndb.tracks.words(sel.id)} snr={p.ndb.tracks.snr(sel.id)} onClose={() => p.onSelect(0)}
+                    owner={!!p.ndb.owner} onDecide={p.ndb.onDecide} />
             </View>
           )}
         </NavCtx.Provider>
@@ -191,6 +196,8 @@ const identStyle = (cls: string, x: string) => (
   cls === 'conf' ? { color: '#8cff8c', fontWeight: '700' as const }
   : cls === 'near' ? { color: '#ffe066', fontWeight: '700' as const }
   : cls === 'unl' ? { color: '#ffd27a', fontWeight: '700' as const }
+  : cls === 'sus' ? { color: '#8fc3ff', fontWeight: '700' as const }                       // ★ a suspicion: the map ring's blue
+  : cls === 'unlikely' ? { color: `rgba(${x},0.6)`, fontStyle: 'italic' as const }
   : cls === 'cand' ? { color: `rgba(${x},0.6)`, fontStyle: 'italic' as const }
   : cls === 'harm' ? { color: `rgba(${x},0.5)`, textDecorationLine: 'line-through' as const }
   : { color: `rgba(${x},0.45)` });
@@ -256,7 +263,10 @@ function Spark({ s, pts }: { s: S; pts: readonly [number, number][] }) {
   );
 }
 
-function Card({ s, b, words, snr, onClose }: { s: S; b: NdbBeacon; words: readonly NdbCopy[]; snr: readonly [number, number][]; onClose: () => void }) {
+function Card({ s, b, words, snr, onClose, owner, onDecide }: {
+  s: S; b: NdbBeacon; words: readonly NdbCopy[]; snr: readonly [number, number][]; onClose: () => void;
+  owner: boolean; onDecide?: NdbOverlay['onDecide'];
+}) {
   const c = ndbIdentCell(b), st = ndbStation(b);
   return (
     <View>
@@ -273,7 +283,37 @@ function Card({ s, b, words, snr, onClose }: { s: S; b: NdbBeacon; words: readon
       {words.length > 0 && <Words s={s} words={words.slice(-8)} read="" />}
       {!!b.alt?.length && <Text style={s.dim}>{`Also published on this frequency: ${b.alt.map((a) => `${a.ident} ${a.name}${a.km >= 0 ? ` (${nmText(a.km)})` : ''}`).join(', ')}`}</Text>}
       {!!b.harm && <Text style={s.dim}>{`2nd harmonic of ${b.harm.ident || ''} on ${khz(b.harm.hz)} kHz`}</Text>}
-      {!ndbOnMap(b) && <Text style={s.dim}>Not in the published list — not on the map.</Text>}
+      {/* ★★ V12 2026-11-04 — the "Suspected …" clue (vibe_ndb_suspect.h): Stuart's words, the evidence under them, and
+          for the OWNER only the confirm / reject keys (a listener's "unconfirmed" invites nothing) */}
+      {!!b.sus && <Text style={[s.cardTxt, { color: '#8fc3ff' }]}>{ndbSusLabel(b.sus, owner && !!onDecide)}</Text>}
+      {!!b.sus && <Text style={s.dim}>{b.sus.why}</Text>}
+      {!!b.sus?.alt?.length && <Text style={s.dim}>{`Or: ${b.sus.alt.map((a) => `${a.name}${a.km >= 0 ? ` (${nmText(a.km)})` : ''}`).join(', ')}`}</Text>}
+      {!!b.sus && owner && !!onDecide && (
+        <NavRow>
+          <View style={{ flexDirection: 'row', gap: 6, marginTop: 4 }}>
+            <Key s={s} style={s.chip} onPress={() => onDecide('confirm', b.ident, b.hz, b.sus!.icao)}
+                 a11y={`Confirm ${b.ident} is ${b.sus.name}: from now on this server names and places it`}>
+              <Text style={s.chipTxt}>CONFIRM</Text>
+            </Key>
+            <Key s={s} style={s.chip} onPress={() => onDecide('reject', b.ident, b.hz, b.sus!.icao)}
+                 a11y={`Not ${b.sus.name}: never suggest it for ${b.ident} on this frequency again`}>
+              <Text style={s.chipTxt}>NOT THIS ONE</Text>
+            </Key>
+          </View>
+        </NavRow>
+      )}
+      {!!b.unlikely && <Text style={s.dim}>{`Unlikely: ${b.unlikely}.`}</Text>}
+      {!!b.db?.own && <Text style={s.dim}>Not in the published list — confirmed by this server's owner.</Text>}
+      {!!b.db?.own && owner && !!onDecide && (
+        <NavRow>
+          <Key s={s} style={[s.chip, { alignSelf: 'flex-start', marginTop: 4 }]} onPress={() => onDecide('forget', b.ident, b.hz, '')}
+               a11y={`Undo the confirmation of ${b.ident}`}>
+            <Text style={s.chipTxt}>UNDO CONFIRM</Text>
+          </Key>
+        </NavRow>
+      )}
+      {!ndbOnMap(b) && <Text style={s.dim}>{b.sus ? 'Not in the published list — on the map as a dashed ring at the suspected airfield.'
+                                           : b.unlikely ? 'Not on the map: probably not that beacon.' : 'Not in the published list — not on the map.'}</Text>}
     </View>
   );
 }

@@ -1623,6 +1623,12 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 #ndbCard[hidden] { display: none; }
 #ndbCard .t { font-size: 13px; margin-right: 22px; } #ndbCard .t b { letter-spacing: 1px; }
 #ndbCard .t b.conf { color: #5BE36B; } #ndbCard .t b.near { color: #E8C547; } #ndbCard .t b.cand { font-style: italic; color: var(--text-dim); }
+/* ★ V12 2026-11-04: a SUSPECTED beacon (the map's dashed ring, pale blue) and an UNLIKELY match (dim, italic) */
+#ndbList .ndbRow .c.sus, #ndbCard .t b.sus, #ndbCard .sus { color: #8fc3ff; font-weight: 600; }
+#ndbList .ndbRow .c.unlikely, #ndbCard .t b.unlikely { font-style: italic; color: var(--text-dim); }
+#ndbCard .own { margin-top: 5px; display: flex; gap: 6px; }
+#ndbCard .own button { font: 11px ui-monospace, Menlo, monospace; letter-spacing: 0.5px; padding: 3px 8px; border-radius: 6px; cursor: pointer;
+  background: rgba(143, 195, 255, 0.12); color: #8fc3ff; border: 1px solid rgba(143, 195, 255, 0.45); }
 #ndbCard .x { all: unset; position: absolute; top: 6px; right: 9px; cursor: pointer; color: rgba(255, 184, 51, 0.7); padding: 2px 4px; }
 #ndbCard .spark { width: 100%; height: 30px; display: block; margin-top: 4px; }
 #ndbCard .cp { margin-top: 3px; font-size: 12px; word-break: break-all; }

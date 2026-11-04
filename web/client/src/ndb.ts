@@ -178,6 +178,9 @@ export interface NdbHooks {
   find: (q: string) => void;
   stats: () => void;
   myPos: () => { lat: number; lon: number } | null;
+  /** ★★ V12 2026-11-04: this page holds the server's admin (the OWNER) — only they may confirm a suspected beacon. */
+  owner?: () => boolean;
+  decide?: (act: 'confirm' | 'reject' | 'forget', ident: string, hz: number, airfield: string) => void;
 }
 
 /** ★ The map: our MapLibre map (the 'aero' profile — airports and runways, where the beacons stand) with the NDB layer
@@ -415,6 +418,7 @@ export class NdbView {
     const card = $('ndbCard');
     if (!b) { card.hidden = true; return; }
     const c = ndbIdentCell(b), st = ndbStation(b);
+    const owner = !!this.h.owner?.() && !!this.h.decide;
     const pts = this.tracks.get(b.id)?.snr ?? [];
     let spark = '';
     if (pts.length > 1) {
@@ -431,8 +435,19 @@ export class NdbView {
       + spark + (words ? `<div class="cp">${words}</div>` : '')
       + (b.alt?.length ? `<div class="dim">Also published on this frequency: ${esc(b.alt.map((a) => `${a.ident} ${a.name}${a.km >= 0 ? ` (${nmText(a.km)})` : ''}`).join(', '))}</div>` : '')
       + (b.harm ? `<div class="dim">2nd harmonic of ${esc(b.harm.ident || '')} on ${khz(b.harm.hz)} kHz</div>` : '')
-      + (!ndbOnMap(b) ? '<div class="dim">Not in the published list — not on the map.</div>' : '');
+      // ★★ the "Suspected …" clue (Stuart's words), its evidence, and for the OWNER only the confirm / reject keys
+      + (b.sus ? `<div class="sus">${esc(ndbSusLabel(b.sus, owner))}</div><div class="dim">${esc(b.sus.why)}</div>` : '')
+      + (b.sus?.alt?.length ? `<div class="dim">Or: ${esc(b.sus.alt.map((a) => `${a.name}${a.km >= 0 ? ` (${nmText(a.km)})` : ''}`).join(', '))}</div>` : '')
+      + (b.sus && owner ? '<div class="own"><button type="button" data-act="confirm">CONFIRM</button> <button type="button" data-act="reject">NOT THIS ONE</button></div>' : '')
+      + (b.unlikely ? `<div class="dim">Unlikely: ${esc(b.unlikely)}.</div>` : '')
+      + (b.db?.own ? '<div class="dim">Not in the published list — confirmed by this server\'s owner.</div>' : '')
+      + (b.db?.own && owner ? '<div class="own"><button type="button" data-act="forget">UNDO CONFIRM</button></div>' : '')
+      + (!ndbOnMap(b) ? `<div class="dim">${b.sus ? 'Not in the published list — on the map as a dashed ring at the suspected airfield.'
+                                             : b.unlikely ? 'Not on the map: probably not that beacon.' : 'Not in the published list — not on the map.'}</div>` : '');
     card.hidden = false;
+    card.querySelectorAll('.own button').forEach((el) => {
+      (el as HTMLButtonElement).onclick = () => this.h.decide?.((el as HTMLElement).dataset.act as 'confirm' | 'reject' | 'forget', b.ident, b.hz, b.sus?.icao ?? '');
+    });
     (card.querySelector('.x') as HTMLButtonElement).onclick = () => { this.sel = 0; this.select(0, true); this.map?.with((l) => l.select('')); };
   }
 

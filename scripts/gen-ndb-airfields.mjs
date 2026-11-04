@@ -10,14 +10,14 @@
  *    gen-ndb-navaids.mjs's heard() step reads for the positions of our own receptions (one cache file, .mapdata-cache/).
  *
  * ★★ THE FILTER (2026-11-04, measured): large_airport + medium_airport + small_airport that carry a 4-letter ICAO
- *    location indicator (icao_code — gps_code would add 9 000 US strips with FAA-derived K-codes). 10 000 of the 72 000 rows. Why:
+ *    location indicator (icao_code — gps_code would add 9 000 US strips with FAA-derived K-codes). ≈ 10 000 of the 72 000 rows. Why:
  *    – An NDB is an approach / en-route aid published in an AIP; an airfield that has one has an ICAO indicator. The
  *      42 000 small airstrips without one (farm strips, private fields) do not host NDBs — and including them makes
  *      the name-letters clue find a "match" for any three letters (the absurd-match risk, not just size).
  *    – Heliports are left out (23 000 rows, ≈ 400 with an ICAO code): offshore-platform NDBs are in the navaid lists
  *      already, and a helipad named after its hospital is never what a locator is named after.
  *    – Closed airfields, seaplane bases and balloon ports: out.
- *    Each record: ICAO, IATA, name (≤ 40 bytes), country, position, size class. ≈ 0.6 MB of source, ≈ 0.4 MB .rodata
+ *    Each record: ICAO, IATA, name (≤ 40 bytes), country, position, size class. 10 091 records on 2026-11-04: 709 KB of source, ≈ 0.43 MB .rodata (20 B a record + 227 KB of names)
  *    — paged in only when an unlisted ident is heard.
  */
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';

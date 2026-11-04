@@ -2290,6 +2290,10 @@ export class SpectrumClient {
   }
   ndbFind(q: string, limit = 60) { this._send({ type: 'ndb_find', q: String(q).slice(0, 40), limit }); }
   ndbStats() { this._send({ type: 'ndb_stats' }); }
+  /** ★★ V12 2026-11-04: the OWNER's decision on a "Suspected …" beacon (owner-only on the server: adminGate). */
+  ndbConfirm(act: 'confirm' | 'reject' | 'forget', ident: string, hz: number, airfield: string) {
+    this._send({ type: 'ndb_confirm', act, ident: String(ident).slice(0, 6), hz: Math.round(hz), airfield: String(airfield).slice(0, 4) });
+  }
   /** Enter / change band / step / exact frequency / leave. ★ The server owns the band: what it reports is the truth. */
   ism(on: boolean, o: { band?: string; step?: number; hz?: number } = {}) {
     if (this.askBlocked()) return;     // ★★ ask before tuning — ISM takes the whole shared radio
