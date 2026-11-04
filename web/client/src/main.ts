@@ -71,7 +71,7 @@ import { buildBookmarkHoverIndex, bookmarkAt, newBookmarkHit, type BookmarkHover
 import { dabServiceStereo, dabLicensedTail } from '../../../src/services/dabTypes';
 import { DabBlockStepper, DabAskGuard, DAB_STEP_SETTLE_MS } from '../../../src/services/dabStepper';
 import { hopStrip, ismHopIndex, ismHopStrip, spotsHopIndex, spotsHopStrip, spotsShortName, type HopStrip } from '../../../src/services/hopKeys';
-import { parseDabScan, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
+import { parseDabScan, parseFmScan, dabScanKey, dabScanMayTune, scanLocked, scanLockLine, SCAN_LOCK_FLIP_MS, dabScanRows, dabScanLine, dabScanOthersLine, dabScanQuality, dabScanCount, dabScanMHz, dabScanToggle,
          type DabScanState } from '../../../src/services/dabBandScan';
 import { DabQualityMeter, dabWithPlayback, type DabQuality } from '../../../src/utils/dabQuality';
 import { lrDisplay } from '../../../src/services/lrMeter';
@@ -969,16 +969,44 @@ const ASK_SHIELD_SEL = '#mVfoDial, #mVfoDown, #mVfoUp, #mMode, #bwLo, #bwHi, #bw
 function wireAskShield() {
   const sel = ASK_SHIELD_SEL;
   const stop = (e: Event) => {
-    if (!askLocked(askNow)) return;
+    if (!askLocked(askNow) && !scanLockOn) return;   // ★ V12: an owner's scan locks the same controls (scanLockSet)
     const t = e.target as Element | null;
     if (!t || !t.closest || !t.closest(sel)) return;
     e.preventDefault(); e.stopPropagation();
-    if (e.type === 'pointerdown' || e.type === 'keydown') nudgeAsk();
+    if ((e.type === 'pointerdown' || e.type === 'keydown') && !scanLockOn) nudgeAsk();
   };
   for (const ev of ['pointerdown', 'mousedown', 'touchstart', 'click', 'wheel', 'input', 'keydown'])
     document.addEventListener(ev, stop, { capture: true, passive: false });
 }
 if (typeof document !== 'undefined') wireAskShield();
+/* ★★★ V12: THE OWNER'S SCAN LOCK (Stuart, 2026-11-04: "When a server owner has triggered a scan … it should say ADMIN
+ *  Triggered SCAN In Progress, Please Wait and the controls get locked out" — in the SHARED TUNER slot, alternating).
+ *  On while a `dab_scan` / `fm_scan` says running + lock and this page is not the signed-in admin: the shared-tuner
+ *  banner alternates "ADMIN TRIGGERED A SCAN" / "PLEASE WAIT · n / N" (scanLockLine, the app's words too), the ask
+ *  shield's controls are dimmed and stopped, and SpectrumClient refuses tunes. The SERVER refuses them as well
+ *  (scanLockRefuses), so this is only the honest face of it. ★ Lapses on its own if no scan message comes for 45 s
+ *  (a socket that dropped mid-scan must not leave a page locked for ever). */
+let scanLockOn = false, scanLockDone = 0, scanLockTotal = 0, scanLockPhase = 0, scanLockSeen = 0;
+let scanLockTimer: ReturnType<typeof setInterval> | 0 = 0;
+function scanLockSet(on: boolean, done: number, total: number) {
+  const mine = on && !adminUnlocked;
+  scanLockDone = done; scanLockTotal = total; scanLockSeen = Date.now();
+  if (mine !== scanLockOn) {
+    scanLockOn = mine;
+    document.body.classList.toggle('scanLocked', mine);
+    if (spec) spec.scanLocked = mine;
+    if (scanLockTimer) { clearInterval(scanLockTimer); scanLockTimer = 0; }
+    if (mine) {
+      scanLockPhase = 0;
+      scanLockTimer = setInterval(() => {
+        if (Date.now() - scanLockSeen > 45000) { scanLockSet(false, 0, 0); return; }
+        scanLockPhase++; updateSharedBanner();
+      }, SCAN_LOCK_FLIP_MS);
+    }
+    dabScanRender();
+  }
+  updateSharedBanner();
+}
 let bannerSaidTimers: ReturnType<typeof setTimeout>[] = [];
 function flashSharedBanner(text: string) {
   bannerSaidTimers.forEach(clearTimeout);
@@ -1009,6 +1037,13 @@ function updateSharedBanner() {
       return;
     }
   } else ms.classList.remove('icomTx');
+  // ★★ V12: an owner's scan holds the radio — the slot alternates its two lines (scanLockSet), on any radio
+  if (scanLockOn) {
+    ms.hidden = false; ms.classList.remove('alone');
+    ms.textContent = scanLockLine(scanLockPhase, scanLockDone, scanLockTotal);
+    ms.title = 'The owner is scanning this receiver for stations — the controls come back, and the radio returns to where it was, when the scan ends';
+    return;
+  }
   ms.hidden = !srvSharedDial;
   syncMediaSkip();   // ★ the lock-screen ⏮⏭ follow the same count the banner does
   if (!srvSharedDial) return;
@@ -1786,7 +1821,8 @@ function startApp(specUrl: string, audioUrl: string, host: string, auth: AuthSta
     // ★★ The answer to our mode_resume (wholeResumeTick): yes = the reports follow; no = the mode goes, and why is said
     onModeResume: (kind, ok, why) => wholeResumeDo(wholeResume.answered(kind, ok, why, Date.now())),
     onDabScan: (m: unknown) => dabScanOnMessage(m),
-    onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); },
+    onDabScanOk: (ok: boolean) => { dabScanOk = ok; dabScanSyncBtn(); if (dabOn) spec?.dabScanGet(); },   // ★ V12: hwinfo comes on every (re)connect — the kept list with it
+    onFmScan: (m: unknown) => { const s = parseFmScan(m); if (s) scanLockSet(s.running && s.lock, s.done, s.total); },
     onDxLogOk: (ok: boolean) => { dxLogOk = ok; dxLogSyncBtn(); },   // ★★★ V12 the DX LOG key beside GALLERY
     onDab: (d: DabState) => {
       if (!d) {
@@ -7193,7 +7229,11 @@ function dabSetPane(p: 'stations' | 'signal' | 'scan') {
  *  CANCEL). Never greyed: a control the listener may not use is not there (AGENTS.md). */
 function dabScanSyncBtn() {
   const b = document.getElementById('dabScanBtn');
-  if (b) b.style.display = dabOn && dabScanOk && !(dabScanState?.running) ? '' : 'none';
+  // ★★ V12 2026-11-04: MULTIPLEXES (the kept list) for anyone once a scan found something; SCAN only where this listener
+  //    may scan and there is no list yet (dabScanKey — the app's rule too).
+  const k = dabOn ? dabScanKey(dabScanState, dabScanOk) : null;
+  if (b) { b.style.display = k ? '' : 'none'; b.textContent = k === 'multiplexes' ? 'MULTIPLEXES' : 'SCAN';
+           b.title = k === 'multiplexes' ? 'The ensembles the last band scan found' : 'Scan every DAB block for ensembles'; }
 }
 function dabScanOnMessage(m: unknown) {
   const s = parseDabScan(m);
@@ -7205,9 +7245,10 @@ function dabScanOnMessage(m: unknown) {
     return;
   }
   dabScanState = s;
+  scanLockSet(s.running && s.lock === true, s.done, s.total);
   // ★ Somebody else's scan (the admin, on a shared radio): say so once, so nobody thinks the radio has gone mad.
   const others = dabScanOthersLine(s);
-  if (!dabScanMine && others && !dabScanToldOthers) { dabScanToldOthers = true; showOwnerNotice(others); }
+  if (!dabScanMine && others && !s.lock && !dabScanToldOthers) { dabScanToldOthers = true; showOwnerNotice(others); }
   if (!s.running) dabScanToldOthers = false;
   if (dabScanMine && dabOn && dabPane !== 'scan' && s.running) dabSetPane('scan');
   dabScanSyncBtn();
@@ -7220,7 +7261,7 @@ function dabScanRender() {
   const line = document.getElementById('dabScanLine');
   if (line) line.textContent = dabScanLine(s);
   const stop = document.getElementById('dabScanStop'), back = document.getElementById('dabScanBack');
-  if (stop) stop.style.display = s?.running ? '' : 'none';
+  if (stop) stop.style.display = s?.running && dabScanOk ? '' : 'none';
   if (back) back.style.display = s?.running ? 'none' : '';
   const again = document.getElementById('dabScanAgain');
   if (again) again.style.display = s?.running || !dabScanOk ? 'none' : '';
@@ -7233,11 +7274,16 @@ function dabScanRender() {
     list.innerHTML = s?.running ? '<div class="none">Nothing found yet \u2014 each empty block takes about three seconds.</div>' : '';
     return;
   }
+  /* ★★ V12 2026-11-04: a row TUNES only where this listener may tune (dabScanMayTune — a listen-only dial, ask-before-
+   *  tuning or an owner's scan make the list READ-ONLY: the names, no "Tune to", nothing to press). */
+  const mayTune = dabScanMayTune({ dialMode: dialModeNow, admin: adminUnlocked, askLocked: askLocked(askNow), scanLocked: scanLockOn });
   list.innerHTML = rows.map((h) => {
     const q = dabScanQuality(h), open = dabScanOpen.has(h.block);
-    const svcs = open ? `<div class="dabScanSvcs">`
-      + `<div class="dabScanSvc" tabindex="0" role="button" data-ch="${h.channel}" data-sid="0">&#9654; Tune to ${escapeHtml(h.block)}</div>`
-      + h.services.map((sv) => `<div class="dabScanSvc" tabindex="0" role="button" data-ch="${h.channel}" data-sid="${sv.sid}">${escapeHtml(sv.label)}</div>`).join('')
+    const svcs = open ? `<div class="dabScanSvcs${mayTune ? '' : ' ro'}">`
+      + (mayTune ? `<div class="dabScanSvc" tabindex="0" role="button" data-ch="${h.channel}" data-sid="0">&#9654; Tune to ${escapeHtml(h.block)}</div>` : '')
+      + h.services.map((sv) => mayTune
+          ? `<div class="dabScanSvc" tabindex="0" role="button" data-ch="${h.channel}" data-sid="${sv.sid}">${escapeHtml(sv.label)}</div>`
+          : `<div class="dabScanSvc ro">${escapeHtml(sv.label)}</div>`).join('')
       + `</div>` : '';
     return `<div class="dabScanEns"><div class="dabScanHd" tabindex="0" role="button" aria-expanded="${open}" data-blk="${escapeHtml(h.block)}">`
       + `<span class="blk">${escapeHtml(h.block)}</span>`
@@ -7249,7 +7295,7 @@ function dabScanRender() {
   list.querySelectorAll<HTMLElement>('.dabScanHd').forEach((el) => {
     el.onclick = () => { dabScanOpen = dabScanToggle(dabScanOpen, el.dataset.blk || ''); dabScanRender(); };
   });
-  list.querySelectorAll<HTMLElement>('.dabScanSvc').forEach((el) => {
+  list.querySelectorAll<HTMLElement>('.dabScanSvc[role=button]').forEach((el) => {
     // ★ A tap TUNES — that ends a running scan on the server, which leaves the dial where we put it.
     el.onclick = () => {
       const ch = Number(el.dataset.ch), sid = Number(el.dataset.sid);
@@ -8095,6 +8141,7 @@ function dabRememberedChannel(): number {
 function dabUiOn() {
   // ★ Entering DAB changes what the arrows do, so it changes what they must say — see syncDialTips.
   setTimeout(syncDialTips, 0);
+  if (!dabOn) spec?.dabScanGet();   // ★★ V12: the last scan's list (MULTIPLEXES), for anyone — an older server ignores it
   dabOn = true;
   syncStereoLight();   // ★ the service's, not the pilot's — off until the service is known
   wf?.applySettings({ minRangeDb: 15 });   // ★ a DAB block is flat and a few dB up — see SignalProcessorSettings.minRangeDb

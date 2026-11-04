@@ -812,7 +812,7 @@ if node --no-warnings scripts/test_dab_stepper.ts; then pass=$((pass+1)); else f
 #    block / band and its neighbours as labelled, wrap at the ends, one send per burst (Stuart, 2026-11-03).
 if npx tsx scripts/test_hop_keys.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★ V12: the DAB band scan's result list (app + web share src/services/dabBandScan.ts).
-if node --no-warnings scripts/test_dab_band_scan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+if npx tsx scripts/test_dab_band_scan.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
 # ★★★ ANSWERS TO "Anyone know what this is?" (Stuart, 2026-10-09): none on the everyday pad, only the dial's band while a
 #     question is open, every link a Signal Identification Wiki page, every DECODE a decoder we run, the watches agree.
 if node --no-warnings scripts/test_dial_answers.ts; then pass=$((pass+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi

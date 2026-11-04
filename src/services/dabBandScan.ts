@@ -19,6 +19,8 @@ export interface DabScanState {
   running: boolean; by: string; done: number; total: number; current: string;
   added: number; cancelled: boolean; finished: boolean; secs: number; seq: number;
   why?: string; error?: string; found: DabScanHit[];
+  /** ★ V12: an OWNER's scan holding the radio — listeners locked out while it runs (absent on an older server). */
+  lock?: boolean;
 }
 
 const num = (v: unknown, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
@@ -37,7 +39,7 @@ export function parseDabScan(m: any): DabScanState | null {
   return {
     running: m.running === true, by: str(m.by), done: num(m.done), total: num(m.total), current: str(m.current),
     added: num(m.added), cancelled: m.cancelled === true, finished: m.finished === true, secs: num(m.secs), seq: num(m.seq),
-    why: str(m.why) || undefined, error: str(m.error) || undefined, found,
+    why: str(m.why) || undefined, error: str(m.error) || undefined, found, lock: m.lock === true,
   };
 }
 
@@ -95,4 +97,75 @@ export function dabScanToggle(open: ReadonlySet<string>, block: string): Set<str
   const n = new Set(open);
   if (n.has(block)) n.delete(block); else n.add(block);
   return n;
+}
+
+/* ── ★★★ V12 2026-11-04: THE KEY, THE LIST, AND THE OWNER'S SCAN LOCK — one rule for both clients ──────────────────────
+ *  Stuart: "change the button's name from scan to multiplexes or ensembles after the initial scan is complete that way it
+ *  can be shown on shared VFO servers too". The server keeps the last scan's list and gives it to anyone who asks
+ *  (`dab_scan_get`); whether this listener may START one is still the server's `dabScan` answer, never inferred here. */
+
+/** The `lock` flag the server sets while an OWNER's scan holds the radio (absent on an older server = never locked). */
+export function scanLocked(m: unknown): boolean {
+  const x = m as { running?: unknown; lock?: unknown } | null;
+  return !!x && x.running === true && x.lock === true;
+}
+
+/** What the DAB box's scan key is, for this listener:
+ *    'multiplexes' — the last scan found at least one ensemble and none is running: opens the kept list, for ANYONE
+ *                    (a shared radio's listeners too, who cannot scan);
+ *    'scan'        — no list yet, and this listener may scan (hwinfo `dabScan`);
+ *    null          — not drawn (no list and no permission, or a scan is running — its own pane has CANCEL). */
+export function dabScanKey(s: DabScanState | null, mayScan: boolean): 'multiplexes' | 'scan' | null {
+  if (s?.running) return null;
+  if (s && s.found.length > 0) return 'multiplexes';
+  return mayScan ? 'scan' : null;
+}
+
+/** May a tap on a row of the list TUNE for this listener? The server's own answers only: not on a listen-only
+ *  (spectator) dial unless they are its unlocked admin, not while ask-before-tuning holds them, not while an owner's
+ *  scan has the radio. Where it may not, the list is shown READ-ONLY (no tune affordance at all). */
+export function dabScanMayTune(o: { dialMode: string; admin: boolean; askLocked: boolean; scanLocked: boolean }): boolean {
+  if (o.admin) return true;
+  if (o.scanLocked || o.askLocked) return false;
+  return o.dialMode !== 'spectator';
+}
+
+/** ★★ THE SHARED-TUNER SLOT'S WORDS WHILE AN OWNER'S SCAN HOLDS THE RADIO (Stuart: "it should say ADMIN Triggered SCAN
+ *  In Progress, Please Wait" — then: not a separate banner, it ALTERNATES in the shared-tuner message slot). `phase`
+ *  flips every SCAN_LOCK_FLIP_MS; the progress rides on the second line ("PLEASE WAIT · 12 / 41"). */
+export const SCAN_LOCK_FLIP_MS = 2000;
+export function scanLockLine(phase: number, done = 0, total = 0): string {
+  return phase % 2 === 0 ? 'ADMIN TRIGGERED A SCAN' : `PLEASE WAIT${total > 0 ? ` · ${done} / ${total}` : ''}`;
+}
+
+/* ── ★★ V12: THE OWNER'S FM SCAN (`fm_scan`) — the admin page's progress and result line ─────────────────────────────── */
+export interface FmScanHit { khz: number; pi: string; ps: string; psComplete: boolean; snr: number }
+export interface FmScanState {
+  running: boolean; by: string; done: number; total: number; current: string; added: number;
+  cancelled: boolean; finished: boolean; secs: number; seq: number; lock: boolean; why?: string; error?: string; found: FmScanHit[];
+}
+export function parseFmScan(m: any): FmScanState | null {
+  if (!m || m.type !== 'fm_scan') return null;
+  const found: FmScanHit[] = Array.isArray(m.found) ? m.found.map((h: any) => ({
+    khz: num(h?.khz), pi: str(h?.pi), ps: str(h?.ps).trim(), psComplete: h?.psComplete === true, snr: num(h?.snr),
+  })).filter((h: FmScanHit) => h.khz > 0 && h.pi) : [];
+  return {
+    running: m.running === true, by: str(m.by), done: num(m.done), total: num(m.total), current: str(m.current),
+    added: num(m.added), cancelled: m.cancelled === true, finished: m.finished === true, secs: num(m.secs), seq: num(m.seq),
+    lock: m.lock === true, why: str(m.why) || undefined, error: str(m.error) || undefined, found,
+  };
+}
+/** "Scanning FM 3 / 12 hops · 92.1–94.3 MHz — 7 stations so far" / "14 FM stations — 9 added to bookmarks". */
+export function fmScanLine(s: FmScanState | null): string {
+  if (!s) return '';
+  if (s.error) return s.error;
+  const n = s.found.length;
+  if (s.running) return `Scanning FM ${s.done} / ${s.total} hops${s.current ? ` · ${s.current}` : ''}`
+                      + (n ? ` — ${plural(n, 'station')} so far` : '');
+  if (!s.finished) return '';
+  const tail = `${plural(s.added, 'station')} added to bookmarks`;
+  if (s.cancelled) return `FM scan stopped${s.why ? ` (${s.why.replace(/^stopped — /, '')})` : ''} at ${s.done} / ${s.total} — `
+                        + `${plural(n, 'station')}, ${tail}`;
+  return n ? `${plural(n, 'FM station')} with RDS — ${tail}`
+           : `No FM station with RDS found across the band${s.why ? ` (${s.why})` : ''}. Check the aerial is up and connected.`;
 }

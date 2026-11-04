@@ -829,6 +829,15 @@ body.askLocked #dsSeg, body.askLocked #antSeg, body.askLocked #rspAntSeg, body.a
 body.askLocked #deemphSeg, body.askLocked #stereoBtn, body.askLocked #wspBtn, body.askLocked #imsBtn,
 body.askLocked #ceqBtn, body.askLocked #autoBwBtn, body.askLocked #bwAuto, body.askLocked #nbBtn, body.askLocked #nbxBtn,
 body.askLocked #nfmVoiceBtn { opacity: 0.35; }
+/* ★★ V12: AN OWNER'S SCAN holds the radio (main.ts scanLockSet) — the same controls, locked the same way; the shared-tuner
+   slot says why ("ADMIN TRIGGERED A SCAN" / "PLEASE WAIT"). */
+body.scanLocked #mVfoDial, body.scanLocked #mVfoDown, body.scanLocked #mVfoUp, body.scanLocked #mMode, body.scanLocked #bwLo,
+body.scanLocked #bwHi, body.scanLocked #bwHome, body.scanLocked #rowGain, body.scanLocked #rspCtls, body.scanLocked #ahfCtls,
+body.scanLocked #aspCtls, body.scanLocked #hrfCtls, body.scanLocked #usrpCtls, body.scanLocked #rowTunerBw, body.scanLocked #rowRate,
+body.scanLocked #agc, body.scanLocked #dsSeg, body.scanLocked #antSeg, body.scanLocked #rspAntSeg, body.scanLocked #nr,
+body.scanLocked #notch, body.scanLocked #deemphSeg, body.scanLocked #stereoBtn, body.scanLocked #wspBtn, body.scanLocked #imsBtn,
+body.scanLocked #ceqBtn, body.scanLocked #autoBwBtn, body.scanLocked #bwAuto, body.scanLocked #nbBtn, body.scanLocked #nbxBtn,
+body.scanLocked #nfmVoiceBtn { opacity: 0.35; }
 /* ★★★ AN ICOM (driver "icom", RECEIVE ONLY): everything the IQ path powers does not exist on this radio — the sample
    rate, the gain table and VibeAGC, the IF filter, direct sampling, bias-T, ppm, the other radios' panels, OUR squelch
    and noise blanker, the broadcast-FM processing, raw IQ and the locked-centre switch. HIDDEN,
@@ -1685,6 +1694,7 @@ body.adsbMap #srvHealth, body.adsbMap #srvBattery { top: calc(var(--adsbTopH, 48
 .dabScanSvc { padding:6px 6px; cursor:pointer; border-radius:4px; color:var(--btn-text); font-size:12px;
               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .dabScanSvc:hover { background: var(--btn-active-bg); }
+.dabScanSvc.ro { cursor:default; opacity:.85; } .dabScanSvc.ro:hover { background:none; }   /* ★ V12: read-only list (dabScanMayTune) */
 #dabScanList .none { padding:10px 6px; font-size:11.5px; opacity:.7; }
 .dabHead { display:flex; align-items:center; gap:12px; padding:4px 0 8px; border-bottom:1px solid var(--btn-border); margin-bottom:4px; }
 .dabHeadLogo { width:56px; height:56px; object-fit:contain; border-radius:8px; background:rgba(255,255,255,0.05); flex:0 0 auto; }
@@ -3702,6 +3712,10 @@ a.qrz:hover { text-decoration-thickness: 2px; }
 #mapglDetailBar { height: 4px; max-width: 420px; margin: 0 0 8px; border-radius: 2px;
                   background: var(--btn-bg); border: 1px solid var(--btn-border); overflow: hidden; }
 #mapglDetailBar i { display: block; height: 100%; width: 0; background: var(--amber); transition: width .4s; }
+/* ★ V12: the owner's scans (admin.ts renderScans) — one row per radio, the bar while a scan runs */
+.admScanRow { margin: 8px 0; } .admScanRow p { margin: 4px 0; }
+.admScanBar { height: 4px; max-width: 420px; margin: 6px 0; border-radius: 2px; background: rgba(127,127,127,.25); overflow: hidden; }
+.admScanBar i { display: block; height: 100%; width: 0; background: var(--amber); transition: width .4s; }
 
 #actLog.done  { color: var(--btn-text); }
 #actLog.failed { border-color: rgba(224,80,80,0.6); color: #ff8b7d; }
@@ -4900,6 +4914,17 @@ select.btn { padding: 6px 8px; }
       <button class="btn" id="actClearLogos">CLEAR STATION LOGO CACHE</button>
       <button class="btn" id="actClearManual">CLEAR MANUAL BOOKMARKS</button>
     </div>
+    <!-- ★★★ V12 THE OWNER'S SCANS (Stuart, 2026-11-04: "in here is where there should be a button for FM scan and DAB scan
+         so a server admin can trigger a scan on a server"). One row per radio, drawn by admin.ts renderScans from the
+         radio's own answer (GET /vibeserver/admin/bandscan): DAB SCAN / FM SCAN only where that radio can scan now (else
+         the reason in words), CANCEL and the progress while one runs, the result line after. -->
+    <div id="admScans"></div>
+    <p class="dim wrap aNote" id="admScansNote" hidden>
+      <b>DAB scan</b> walks every Band III block; <b>FM scan</b> sweeps 87.5&ndash;108 MHz and reads each station's RDS.
+      Every station found is kept as a scanned bookmark (a year unheard). Anybody listening is moved with the radio while
+      it scans &mdash; their controls are locked and their shared-tuner line says an admin triggered a scan &mdash; and the
+      radio goes back to where it was when the scan ends.
+    </p>
     <p class="dim">Stations are learned from RDS and DAB as people listen, and from a DAB band scan (kept a year
        unheard rather than 30 days) — clearing learned stations takes all three, so a multiplex that has swapped a
        station is re-learned clean. Artwork is looked up once
