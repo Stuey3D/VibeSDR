@@ -39,7 +39,7 @@ function els() {
   const e = {};
   const mk = () => ({ disabled: false, checked: false, style: { opacity: '', display: '' },
     _hide: false, classList: { toggle(c, on) { if (c === 'hide') e._last._hide = !!on; } } });
-  for (const id of ['dabRateBoost', 'dabRateBoostRow', 'dabRateBoostNote', 'dabRateBoostNo', 'adsb256Box', 'adsb256', 'adsb256Row']) e[id] = mk();
+  for (const id of ['dabRateBoost', 'dabRateBoostRow', 'dabRateBoostNote', 'dabRateBoostNo', 'dabWideNote', 'adsb256Box', 'adsb256', 'adsb256Row']) e[id] = mk();
   return e;
 }
 function run(r, HW = null) {
@@ -51,6 +51,12 @@ function run(r, HW = null) {
 
 let e = run({ driver: 'rtlsdr', dabRateBoost: true });
 ok(!e.dabRateBoost.disabled && e.dabRateBoost.checked, 'RTL, switch saved on → live and ticked');
+// ★ V12 wide-rate DAB (dabPlanFor): the "keeps its span" note is the USRP's alone — on any other radio DAB still re-rates
+ok(e.dabWideNote._hide === true, 'RTL: no wide-rate DAB note (DAB takes 2.048 there)');
+e = run({ driver: 'usrp' });
+ok(e.dabWideNote._hide === false, 'USRP: the note says DAB keeps a span wider than 2.5 MS/s');
+e = run({ driver: 'airspyhf' });
+ok(e.dabWideNote._hide === true, 'Airspy HF+: no wide-rate DAB note');
 e = run({ driver: 'rtlsdr' });
 ok(!e.dabRateBoost.checked, 'nothing saved → unticked (never the default)');
 e = run({ driver: 'airspyhf', dabRateBoost: true });

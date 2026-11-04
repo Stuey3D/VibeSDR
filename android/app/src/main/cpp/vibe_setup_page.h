@@ -1792,6 +1792,11 @@ body.wifiFirst .wifiFirstOnly { display: block; }
          one gets it even when the span above is narrower or locked, and the radio goes back to this span when the
          mode ends. Unticked, a mode is offered only when this span is already enough. Worth it on a small machine
          run at 1.024 MS/s to keep FM light.</div>
+      <!-- ★★ V12 WIDE-RATE DAB (2026-11-04, local_sdr_shim.cpp dabPlanFor): a USRP set wider than 2.5 MS/s keeps its span
+           for DAB. Said only for a USRP — on every other radio DAB still takes 2.048 MS/s as the note above says. -->
+      <div class="note hide" id="dabWideNote">On this USRP, DAB keeps the span above when it is wider than 2.5 MS/s:
+         the multiplex is taken out of the capture in software, the waterfall keeps showing the whole span, and a change
+         to another multiplex inside it does not touch the radio. Below 2.5 MS/s DAB takes 2.048 MS/s.</div>
       <!-- ★★ ADS-B AT 2.56 MS/s — AN RTL ONLY, NEVER THE DEFAULT (Stuart, 2026-10-24: "a simple use 2.56MSPS sample
            rate for ADSB (May Drop some Samples)" — his OpenWebRX ADS-B rate). HIDDEN on every other radio (AGENTS.md:
            an RSP or HackRF takes 3 MS/s anyway). Its own switch: it does not need the one above. -->
@@ -4258,7 +4263,7 @@ const DRIVER_HW = {
    *  ratesFor(2); once it is running the radio's OWN list replaces this one, as for every radio here — and on a USB 3
    *  link that list goes on to 10, 12.5 and 16 MS/s, then 20 / 25 / 28 / 30.72 / 32 MS/s up to what this machine's
    *  benchmark kept up at (V12 2026-11-03 — the rate gate). No bias-T, no notches, no LNA states. */
-  usrp:     { rates: [1000000, 2000000, 2400000, 3200000, 4000000, 5000000, 8000000],
+  usrp:     { rates: [1000000, 2000000, 2048000, 2400000, 3200000, 4000000, 5000000, 8000000],   // ★ 2.048: DAB's own (V12 2026-11-04)
               biasT: false, rfNotch: false, lnaState: false },
 };
 
@@ -4473,6 +4478,7 @@ function modeRateShow(r) {
   // ★ RTL only — a local dongle ("rtl"/"rtlsdr") or one read over rtl_tcp. The flag is kept in the config either
   //   way (the server ignores it off an RTL); only the control is not drawn where it cannot act.
   const drv = String(r.driver || "");
+  $("dabWideNote").classList.toggle("hide", !(can && drv === "usrp"));   // ★ V12: wide-rate DAB is the USRP's (dabPlanFor)
   const rtl = drv === "rtl" || drv === "rtlsdr" || drv === "rtl_tcp" || drv === "rtltcp";
   $("adsb256Box").classList.toggle("hide", !(can && rtl));
   const live = can && rtl;

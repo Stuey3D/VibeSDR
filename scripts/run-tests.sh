@@ -305,6 +305,9 @@ deps_for() {
     test-tune-pace)     echo "" ;;
     # ★★★ …and DAB block steps through the same hold (2026-10-21): a burst re-acquires on its last block.
     test-dab-block-pace) echo "" ;;
+    # ★★ V12 wide-rate DAB (vibe_dab_ddc.h): 17 capture rates × block offsets, aliases swept to the capture's edge, and
+    #    its cost table — optimised, or the sweep takes minutes and the cost line means nothing.
+    test-dab-ddc) echo "-O2" ;;
     # ★★★ The shared chain's passband edges in config (vibe_room_passband.h, 2026-10-17): a listener's
     #     sliders follow the room's, in the mode they were chosen in.
     test-room-passband) echo "" ;;
@@ -1637,6 +1640,17 @@ if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notr
 printf '\n\033[1m── DAB exit (end to end) ──\033[0m\n'
 node scripts/test-server-dab-exit.mjs; rc=$?
 if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+
+# ★★★ V12 DAB BLOCK CHANGES, TIMED (2026-11-04 — a wide USRP "killed after a few tunes"; multiplex changes "slow and a bit
+#     unreliable" on the Sony + V4). WIDE: a 6.4 MS/s capture holding two real multiplexes — every change inside the span
+#     sends the radio nothing, locks, labels and plays, the waterfall never stops. NATIVE: 2.048 MS/s, a different
+#     recording per block — every change locks and plays, one tune each, no re-rate. Real clips from
+#     ~/VibeSDR-test-audio/dab/bench (dab-weak --write): NOT RUN without them. Same VIBESERVER_BIN rule.
+for m in wide native; do
+  printf '\n\033[1m── DAB block changes, %s (end to end) ──\033[0m\n' "$m"
+  DAB_WIDE_MODE=$m node --max-old-space-size=512 scripts/test-server-dab-wide.mjs; rc=$?
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); elif [ $rc -eq 3 ]; then notrun=$((notrun+1)); else fail=$((fail+1)); echo "!!!! SUITE FAILED (the one whose output is just above)"; fi
+done
 
 # ★★★ A STOP THAT LANDS ON A DAB START STILL STOPS (Pi 500, 2026-10-16: a settings save, a listener asking for
 #     DAB in the same second, "Stopping…" and then 90 s until systemd's SIGKILL): a rate change held open across
