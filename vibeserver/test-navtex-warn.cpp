@@ -219,9 +219,17 @@ int main(int argc, char** argv) {
            "VA28 EAST ANGLIA ONE … TURBINE FOG SIGNALS INOPERATIVE → fogsignal (before the wind farm)");
         // ★ THE PRECEDENCE RULE: the light out as well → the light's own class with the unlit mark
         const auto both = cl("HUMBER.\nINNER DOWSING WIND FARM.\nTURBINE 53-12.8N 000-26.0E UNLIT AND FOG SIGNAL INOPERATIVE.");
-        ok(both.id == "structure" && both.unlit, "Inner Dowsing TURBINE … UNLIT AND FOG SIGNAL INOPERATIVE → structure + unlit (the light is out too)");
+        ok(both.id == "structure" && both.unlit && both.fog, "Inner Dowsing TURBINE … UNLIT AND FOG SIGNAL INOPERATIVE → structure + unlit + fog (the pill)");
+        {
+            const auto e = navwarn::fromMessage("id.txt", 1793768765, 517500, "ZCZC EA30\nWZ 642/26\nHUMBER.\nINNER DOWSING WIND FARM.\nTURBINE 53-12.8N 000-26.0E UNLIT AND FOG SIGNAL INOPERATIVE.\nNNNN");
+            navwarn::Entry back; const std::string line = navwarn::format(e);
+            ok(e.cls == "structure" && e.unlit && e.fog && navwarn::parse(line.substr(0, line.size() - 1), back) && back.unlit && back.fog, "…both flags survive the index line (unlit field 3)");
+            const auto g = navwarn::fromMessage("gw.txt", 1793768765, 517500, "ZCZC EA46\nWZ 655/26\nWIGHT.\nGREENWICH LIGHT VESSEL 50-24.5N 000-00.1W FOG SIGNAL INOPERATIVE.\nNNNN");
+            ok(g.cls == "fogsignal" && g.unlit && !g.fog, "…the horn alone is never the pill");
+            ok(!cl("TURBINE T1 UNLIT.").fog && !cl("FOG SIGNAL INOPERATIVE").fog, "…a light alone or a fog signal alone: no pill");
+        }
         const auto lf = cl("LIGHTHOUSE X LIGHT AND FOG SIGNAL INOPERATIVE.");
-        ok(lf.id == "navaid" && lf.unlit, "LIGHT AND FOG SIGNAL INOPERATIVE → the lighthouse, unlit (names both)");
+        ok(lf.id == "navaid" && lf.unlit && lf.fog, "LIGHT AND FOG SIGNAL INOPERATIVE → the lighthouse, unlit + fog (the pill)");
         ok(is("LIGHTHOUSE OF PUNTA X FOG SIGNAL INOPERATIVE.", true), "a LIGHTHOUSE whose fog signal is out → fogsignal (the lighthouse rule never reads the fog's defect)");
         ok(cl("LIGHTHOUSE OF PUNTA X UNLIT.").id == "navaid", "…a lighthouse whose light is out stays the lighthouse");
         // the English forms

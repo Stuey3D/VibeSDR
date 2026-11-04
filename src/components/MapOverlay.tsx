@@ -82,7 +82,7 @@ import { TRACK_CARD_CSS, AIS_COLOURS, type TrackItem, type TrackRow } from '../s
 import TrackLiveList from './TrackLiveList';
 import { planGalleryTranslate, runGalleryTranslate, galleryTranslateBanner, type GalleryTrPlan } from '../services/galleryTranslatePlan';
 import { langName } from '../services/transcriber';
-import { NAV_HAZARDS, NAV_HAZARD_COLOURS, NAV_MARK_ROWS, navGlyphSvg } from '../services/navtexIcons';
+import { NAV_HAZARDS, NAV_HAZARD_COLOURS, NAV_MARK_ROWS, navGlyphSvg, navMarkRowSvg } from '../services/navtexIcons';
 import { SHIPPING_TITLE, shipLegendRows, windLegendRows } from '../services/shippingMap';   // ★ V12 2026-11-02 the SHIPPING MAP
 import { seaLegendRows } from '../services/seaAreas';   // ★ V12 2026-11-02 the SEA AREAS
 import { useFaceplate } from '../contexts/FaceplateContext';
@@ -565,7 +565,7 @@ ${isSpots ? `
       <div class="lg-row"><span>&#8962;</span><span>Your receiver</span></div>
       <div class="lg-sec">WARNINGS</div>
       ${NAV_HAZARDS.map((h) => `<div class="lg-row"><span>${navGlyphSvg(h.id, 14, NAV_HAZARD_COLOURS[h.id])}</span><span>${esc(h.words)}</span></div>`).join('')}
-      ${NAV_MARK_ROWS.map((h) => `<div class="lg-row"><span>${navGlyphSvg(h.id, 14, NAV_HAZARD_COLOURS[h.id], true)}</span><span>${esc(h.words)}</span></div>`).join('')}
+      ${NAV_MARK_ROWS.map((h) => `<div class="lg-row"><span>${navMarkRowSvg(h, 14)}</span><span>${esc(h.words)}</span></div>`).join('')}
       <div class="lg-row"><span>&#9675;</span><span>Faded = expired or cancelled (ALL only)</span></div>
       <div class="lg-row"><span>&#9312;</span><span>A number = warnings gathered; tap to zoom in</span></div>
       <div class="lg-sec">WEATHER</div>

@@ -102,9 +102,10 @@ export const NAV_HAZARDS: Array<{ id: NavHazard; words: string }> = [
 ];
 
 /** ★ v10 The legend's modifier rows, after the hazards — the same in the web client's key and the app's legend. */
-export const NAV_MARK_ROWS: Array<{ id: NavHazard; words: string }> = [
+export const NAV_MARK_ROWS: Array<{ id: NavHazard; words: string; pair?: boolean }> = [
   { id: 'light', words: 'Light not working (the unlit mark)' },
   { id: 'fogsignal', words: 'Fog signal not working (the same mark)' },
+  { id: 'light', words: 'Light and fog signal not working', pair: true },
 ];
 
 /** ★ The family colours (one per icon — the icon itself stays single-colour): danger red-orange, lights amber, work at
@@ -130,13 +131,42 @@ export function navGlyphSvg(h: NavHazard, px: number, colour: string, unlit = fa
     + ` stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}${unlit ? navUnlitMark(bg) : ''}</svg>`;
 }
 
+/** The glyph as the marker draws it (scaled 0.95, `x` across), its unlit / not-working mark knocked out of the marker's ground. */
+function markerGlyph(h: NavHazard, unlit: boolean, c: string, x: number): string {
+  const body = unlit && (h === 'light' || h === 'navaid') ? LIGHT_DARK : NAV_GLYPHS[h];
+  return `<g transform="translate(${x} 4.4) scale(0.95)" fill="none" color="${c}" stroke="${c}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}${unlit ? navUnlitMark('#0b1420') : ''}</g>`;
+}
+/** ★★ v10 THE PILL (Stuart, 2026-11-04): the light AND its fog signal both out — "TURBINE … UNLIT AND FOG SIGNAL
+ *  INOPERATIVE". The round marker stretched to two icon widths: the warning's own icon unlit (the turbine, the platform,
+ *  the lighthouse …) beside the horn not working, each in its own colour, the rim in the light's. 44 × 24, centred on the
+ *  point like every marker (the track layer anchors, hit-tests and declutters by the icon's own w / h). */
+export function navPairMarker(h: NavHazard, faded: boolean): { html: string; w: number; h: number } {
+  const c = faded ? '#9aa6b2' : NAV_HAZARD_COLOURS[h], c2 = faded ? '#9aa6b2' : NAV_HAZARD_COLOURS.fogsignal;
+  const rim = faded ? ' stroke-dasharray="2.4 1.8"' : '';
+  return {
+    html: `<svg width="44" height="24" viewBox="0 0 44 24" aria-hidden="true" style="opacity:${faded ? 0.42 : 1}"><rect x="1" y="1" width="42" height="22" rx="11" fill="#0b1420" stroke="${c}" stroke-width="1.3"${rim}/>`
+      + `${markerGlyph(h, true, c, 4.4)}${markerGlyph('fogsignal', true, c2, 24.4)}</svg>`,
+    w: 44, h: 24,
+  };
+}
+/** The pair as a standalone SVG (the legend, a card): the icon unlit and the horn not working, side by side. */
+export function navPairSvg(h: NavHazard, px: number, colour: string, bg = '#0b1420', colour2 = NAV_HAZARD_COLOURS.fogsignal): string {
+  const one = (g: NavHazard, col: string) => navGlyphSvg(g, px, col, true, bg).replace('<svg xmlns="http://www.w3.org/2000/svg" ', '<svg ');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${Math.round(px * 2.25)}" height="${px}" viewBox="0 0 ${Math.round(px * 2.25)} ${px}">`
+    + one(h, colour).replace('<svg ', '<svg x="0" ') + one('fogsignal', colour2).replace('<svg ', `<svg x="${Math.round(px * 1.25)}" `) + '</svg>';
+}
+/** A legend row's picture: one glyph with its mark, or the pair. */
+export function navMarkRowSvg(r: { id: NavHazard; pair?: boolean }, px: number, bg = '#0b1420'): string {
+  return r.pair ? navPairSvg(r.id, px, NAV_HAZARD_COLOURS[r.id], bg) : navGlyphSvg(r.id, px, NAV_HAZARD_COLOURS[r.id], true, bg);
+}
+
 /** ★ THE MAP MARKER: the glyph on a dark disc rimmed in its colour (so it reads on any basemap), 24 px. Faded (expired,
  *  cancelled) = 40 % and a dashed grey rim. */
-export function navHazardMarker(h: NavHazard, unlit: boolean, faded: boolean): { html: string; w: number; h: number } {
+export function navHazardMarker(h: NavHazard, unlit: boolean, faded: boolean, fog = false): { html: string; w: number; h: number } {
+  if (fog && unlit && h !== 'fogsignal') return navPairMarker(h, faded);
   const c = faded ? '#9aa6b2' : NAV_HAZARD_COLOURS[h];
   const rim = faded ? ' stroke-dasharray="2.4 1.8"' : '';
-  const body = unlit && (h === 'light' || h === 'navaid') ? LIGHT_DARK : NAV_GLYPHS[h];
-  const glyph = `<g transform="translate(4.4 4.4) scale(0.95)" fill="none" color="${c}" stroke="${c}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}${unlit ? navUnlitMark('#0b1420') : ''}</g>`;
+  const glyph = markerGlyph(h, unlit, c, 4.4);
   return {
     html: `<svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" style="opacity:${faded ? 0.42 : 1}"><circle cx="12" cy="12" r="11" fill="#0b1420" stroke="${c}" stroke-width="1.3"${rim}/>${glyph}</svg>`,
     w: 24, h: 24,

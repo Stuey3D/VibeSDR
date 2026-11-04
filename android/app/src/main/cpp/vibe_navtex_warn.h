@@ -54,7 +54,9 @@ static constexpr int kVersion = 10;   // ★ 10 (2026-11-04): the FOG SIGNAL cla
 /** Conservative keyword rules on the message body, whole words, in this order (the first that matches wins); when none
  *  does, "general" — never a guess. B2 decides SAR (D), ice (C) and met (B, E). `unlit` is a MODIFIER: a structure or a
  *  buoy whose light has failed is that icon with the unlit mark. */
-struct Class { std::string id; bool unlit = false; std::string hit, lang; };
+/** ★ v10 `fog`: the light is out AND its fog signal too ("TURBINE … UNLIT AND FOG SIGNAL INOPERATIVE") — the class stays
+ *  the light's, unlit, and the marker is the PILL: that icon unlit beside the horn not working (Stuart, 2026-11-04). */
+struct Class { std::string id; bool unlit = false, fog = false; std::string hit, lang; };
 /** ★ Every pattern compiled ONCE (2026-11-01: a regex built per message per rule was most of the backfill's time — and a
  *  Pi 2 builds them ten times slower). Keyed by the literal's address: the patterns are string literals. */
 inline const std::regex& rx(const char* re) {
@@ -101,10 +103,10 @@ inline const std::vector<Rule>& rules() {
         //    referring to fog horn not working"). A FOG SIGNAL — the horn, diaphone or siren on a lighthouse, a light
         //    vessel, a pier, a turbine or a platform. BEFORE structure / platform / navaid, so "EAST ANGLIA ONE OFFSHORE WIND
         //    FARM. TURBINE FOG SIGNALS INOPERATIVE" and "GREENWICH LIGHT VESSEL … FOG SIGNAL INOPERATIVE" draw the horn.
-        //    ★ THE PRECEDENCE RULE (classify()): the horn only when the LIGHT is not also out. "TURBINE … UNLIT AND FOG SIGNAL
-        //    INOPERATIVE" stays the turbine with the unlit mark — a dark structure is the bigger hazard, and the card's text
-        //    names the fog signal; with no structure named it is the lighthouse, unlit (the navaid rule keeps its FOG SIGNAL
-        //    words for that). A fog signal's own defect never counts as the light's (fogMask()). Its `unlit` flag then
+        //    ★ THE PRECEDENCE RULE (classify()): the horn alone only when the LIGHT is not also out. Both out ("TURBINE …
+        //    UNLIT AND FOG SIGNAL INOPERATIVE", "LIGHT AND FOG SIGNAL INOPERATIVE") keeps the light's own class, unlit, with
+        //    `fog` set — the clients draw the PILL, that icon unlit beside the horn (Stuart's call, 2026-11-04); with no
+        //    structure named it is the lighthouse (the navaid rule keeps its FOG SIGNAL words for that). A fog signal's own defect never counts as the light's (fogMask()). Its `unlit` flag then
         //    means NOT WORKING ("Fog signal not working"). FOG alone (a forecast, visibility IN FOG) is never one; a SOUND
         //    SIGNAL only with its defect. Words: en / nl seen on the air (the Lenovo, 2026-11-04: FOG SIGNAL(S), FOGHORN,
         //    MISTHOORN BUITEN DIENST); fr / de / es / it / pt / hr are the lights lists' usual terms, not yet heard here.
@@ -223,6 +225,7 @@ inline Class classify(char b2, const std::string& text) {
     const std::string Uf = fogOut ? fogMask(U) : U;
     for (const auto& r : unlitRules()) if (std::regex_search(Uf, m, rx(r.re))) { c.unlit = true; if (std::string(r.lang) != "en") { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; } break; }
     if (fogOut && !c.unlit && lightAndFogOut(Uf)) c.unlit = true;
+    c.fog = fogOut && c.unlit;   // ★ both out: the pill (cleared below when the horn alone wins)
     if (b2 == 'C') { c.id = "ice"; return c; }
     if (b2 == 'B' || b2 == 'E') { c.id = "met"; return c; }   // ★ a forecast or a met warning: the WEATHER layer's, never a hazard icon
     for (const auto& r : rules()) {
@@ -232,7 +235,7 @@ inline Class classify(char b2, const std::string& text) {
         if (cls == "fogsignal" && (!fogAny || c.unlit)) continue;   // ★ v10: the light is out too → the light's own class + unlit
         if (std::regex_search(in, m, rx(r.re))) {
             if (cls == "fogsignal") {   // ★ v10: `unlit` = the fog signal NOT WORKING; the hit is its own words, never the light's
-                c.id = cls; c.unlit = fogOut; c.hit.clear(); c.lang.clear();
+                c.id = cls; c.unlit = fogOut; c.fog = false; c.hit.clear(); c.lang.clear();
                 if (std::string(r.lang) != "en") { c.hit = m.str(0).substr(0, 40); c.lang = r.lang; }
                 return c;
             }
@@ -514,7 +517,7 @@ inline int64_t issuedOf(const std::string& b, int64_t t) {
 struct Entry {
     std::string file, id, cls, series, cIds, cSeries;   // cIds / cSeries: what it cancels, space-separated
     int64_t t = 0, cancelAt = 0; double khz = 0;
-    uint64_t hash = 0; int lost = 0; bool unlit = false;
+    uint64_t hash = 0; int lost = 0; bool unlit = false, fog = false;   // fog: light AND fog signal out (v10)
     char b1 = 0, b2 = 0;
     std::vector<std::pair<double, double>> pts;
     std::string hit, lang;   // ★ the native word that classified it, and its language (the card's summary)
@@ -547,7 +550,7 @@ inline std::string format(const Entry& e) {
     std::string o = "v" + std::to_string(kVersion) + "\t" + e.file;
     std::snprintf(b, sizeof b, "\t%lld\t%g\t%s\t%016llx\t%d\t", (long long)e.t, e.khz, e.id.c_str(), (unsigned long long)e.hash, e.lost);
     o += b;
-    o += e.cls + "\t" + (e.unlit ? "1" : "0") + "\t" + e.series + "\t" + e.cIds + "\t" + e.cSeries + "\t" + std::to_string((long long)e.cancelAt) + "\t";
+    o += e.cls + "\t" + (e.unlit ? (e.fog ? "3" : "1") : "0") + "\t" + e.series + "\t" + e.cIds + "\t" + e.cSeries + "\t" + std::to_string((long long)e.cancelAt) + "\t";
     for (size_t i = 0; i < e.pts.size(); ++i) { std::snprintf(b, sizeof b, "%s%.4f,%.4f", i ? ";" : "", e.pts[i].first, e.pts[i].second); o += b; }
     std::string hit = e.hit; for (auto& ch : hit) if (ch == '\t' || ch == '\n') ch = ' ';
     return o + "\t" + hit + "\t" + e.lang + "\t" + std::to_string((long long)e.validTo) + "\t" + (e.ufn ? "1" : "0")
@@ -562,7 +565,7 @@ inline bool parse(const std::string& l, Entry& e) {
     e.hit = f[14]; e.lang = f[15]; e.validTo = std::atoll(f[16].c_str()); e.ufn = f[17] == "1";
     e.shape = f[18] == "a" ? 'a' : f[18] == "r" ? 'r' : 0; e.issued = std::atoll(f[19].c_str());
     e.file = f[1]; e.t = std::atoll(f[2].c_str()); e.khz = std::atof(f[3].c_str()); e.id = f[4];
-    e.hash = std::strtoull(f[5].c_str(), nullptr, 16); e.lost = std::atoi(f[6].c_str()); e.cls = f[7]; e.unlit = f[8] == "1";
+    e.hash = std::strtoull(f[5].c_str(), nullptr, 16); e.lost = std::atoi(f[6].c_str()); e.cls = f[7]; e.unlit = f[8] == "1" || f[8] == "3"; e.fog = f[8] == "3";   // ★ v10: 3 = the light and its fog signal out
     e.series = f[9]; e.cIds = f[10]; e.cSeries = f[11]; e.cancelAt = std::atoll(f[12].c_str());
     if (e.id.size() == 4) { e.b1 = e.id[0]; e.b2 = e.id[1]; }
     std::string pts = f[13];
@@ -587,7 +590,7 @@ inline Entry fromMessage(const std::string& file, int64_t t, double hz, const st
     if (e.id.size() == 4) { e.b1 = e.id[0]; e.b2 = e.id[1]; }
     const std::string b = body(text);
     e.hash = textHash(b); e.lost = lostChars(b);
-    const Class c = classify(e.b2, b); e.cls = c.id; e.unlit = c.unlit; e.hit = c.hit; e.lang = c.lang;
+    const Class c = classify(e.b2, b); e.cls = c.id; e.unlit = c.unlit; e.fog = c.fog; e.hit = c.hit; e.lang = c.lang;
     e.series = seriesOf(b);
     const Cancels cx = cancelsOf(b, t);
     if (cx.self) e.cls = "cancel";   // ★ a cancellation: applied, never plotted
@@ -713,7 +716,7 @@ inline bool compact(const std::string& idxPath, const std::unordered_set<uint64_
 struct Group {
     std::string id, cls, series, best;       // best = the file of the best copy
     char b1 = 0, b2 = 0; double khz = 0;
-    int64_t first = 0, last = 0, cancelAt = 0; uint64_t hash = 0; int lost = 1 << 30; bool unlit = false;
+    int64_t first = 0, last = 0, cancelAt = 0; uint64_t hash = 0; int lost = 1 << 30; bool unlit = false, fog = false;
     uint32_t n = 0; std::vector<std::pair<double, double>> pts;
     std::string cancelledBy;                  // the id that cancelled it
     std::string hit, lang; int64_t validTo = 0; bool ufn = false;
@@ -780,7 +783,7 @@ inline Query query(const std::string& idxPath, const std::unordered_set<uint64_t
             //    copy's too, unless it is garbled: then the copy with the fewest lost characters.
             if (e.t >= g.newest) {
                 g.newest = e.t; g.newestLost = e.lost;
-                g.pts = e.pts; g.cls = e.cls; g.unlit = e.unlit; g.shape = e.shape; g.items = e.items; g.hit = e.hit; g.lang = e.lang; g.hash = e.hash;
+                g.pts = e.pts; g.cls = e.cls; g.unlit = e.unlit; g.fog = e.fog; g.shape = e.shape; g.items = e.items; g.hit = e.hit; g.lang = e.lang; g.hash = e.hash;
                 if (!seriesKey(e.series).empty() || g.series.empty()) g.series = e.series;
                 if (e.lost == 0 || e.lost <= g.lost) { g.lost = e.lost; g.best = e.file; }
             } else if (e.lost < g.lost && g.newestLost > 0) { g.lost = e.lost; g.best = e.file; }   // ★ a cleaner older copy's text
@@ -875,6 +878,7 @@ inline std::string toJson(const Query& q, int64_t now, const SyncResult& s, cons
         if (g.cancelAt) { std::snprintf(b, sizeof b, ",\"cancelAt\":%lld", (long long)g.cancelAt); o += b; }
         if (g.validTo) { std::snprintf(b, sizeof b, ",\"validTo\":%lld", (long long)g.validTo); o += b; }
         if (g.ufn) o += ",\"ufn\":1";
+        if (g.fog && g.unlit) o += ",\"fog\":1";   // ★ v10: the light and its fog signal both out — the pill marker
         if (!g.hit.empty()) o += ",\"hit\":\"" + navmap::jesc(g.hit) + "\",\"lang\":\"" + navmap::jesc(g.lang) + "\"";
         if (g.shape) { o += ",\"shape\":\""; o += g.shape == 'a' ? "area" : "route"; o += "\""; }
         if (g.issued) { std::snprintf(b, sizeof b, ",\"issued\":%lld", (long long)g.issued); o += b; }

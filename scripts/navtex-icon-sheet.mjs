@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { NAV_HAZARDS, NAV_HAZARD_COLOURS, navGlyphSvg, navHazardMarker } from '../src/services/navtexIcons.ts';
+import { NAV_HAZARDS, NAV_HAZARD_COLOURS, navGlyphSvg, navHazardMarker, navPairSvg } from '../src/services/navtexIcons.ts';
 
 const out = process.argv[2] || join(homedir(), 'Desktop', 'navtex-icons');
 mkdirSync(out, { recursive: true });
@@ -17,7 +17,10 @@ const rows = [...NAV_HAZARDS.map((h) => ({ id: h.id, words: h.words, unlit: fals
   { id: 'buoy', words: 'Buoy — unlit', unlit: true },
   { id: 'fogsignal', words: 'Fog signal — not working', unlit: true },
   { id: 'structure', words: 'Wind turbine — no light', unlit: true },
-  { id: 'platform', words: 'Platform — UNLIT', unlit: true }];
+  { id: 'platform', words: 'Platform — UNLIT', unlit: true },
+  { id: 'light', words: 'Light and fog signal — not working', unlit: true, pair: true },
+  { id: 'structure', words: 'Turbine: light + fog signal out', unlit: true, pair: true },
+  { id: 'platform', words: 'Platform: light + fog signal out', unlit: true, pair: true }];
 const ROW = 46, TOP = 56, W = 1040;
 const H = TOP + rows.length * ROW + 20;
 const col = { name: 14, d16: 250, d24: 290, d32: 336, l16: 470, l24: 510, l32: 556, mk: 700, mkf: 760, mkl: 860, mklf: 920 };
@@ -34,12 +37,16 @@ s += `<text x="250" y="40" fill="#9fb0c2" font-size="10">16-unit box · stroke 1
 rows.forEach((r, i) => {
   const y = TOP + i * ROW;
   const c = NAV_HAZARD_COLOURS[r.id];
-  s += `<text x="${col.name}" y="${y + 20}" fill="#000">${r.words}</text><text x="${col.name}" y="${y + 34}" fill="#888" font-size="10">${r.id}${r.unlit ? ' + unlit' : ''}</text>`;
-  const put = (x, px, colour, bg) => { s += `<g transform="translate(${x},${y + (32 - px) / 2 + 4})">${inner(navGlyphSvg(r.id, px, colour, r.unlit, bg))}</g>`; };
-  put(col.d16, 16, c, '#14191f'); put(col.d24, 24, c, '#14191f'); put(col.d32, 32, c, '#14191f');
-  put(col.l16, 16, '#1a1a1a', '#f4f1ea'); put(col.l24, 24, '#1a1a1a', '#f4f1ea'); put(col.l32, 32, '#1a1a1a', '#f4f1ea');
+  s += `<text x="${col.name}" y="${y + 20}" fill="#000">${r.words}</text><text x="${col.name}" y="${y + 34}" fill="#888" font-size="10">${r.id}${r.unlit ? ' + unlit' : ''}${r.pair ? ' + fog (the pill)' : ''}</text>`;
+  const put = (x, px, colour, bg) => { s += `<g transform="translate(${x},${y + (32 - px) / 2 + 4})">${inner(r.pair ? navPairSvg(r.id, px, colour, bg, colour === '#1a1a1a' ? colour : NAV_HAZARD_COLOURS.fogsignal) : navGlyphSvg(r.id, px, colour, r.unlit, bg))}</g>`; };
+  // ★ the pill is two icons wide: 16 and 32 only, so its 32 px fits the column
+  if (r.pair) { put(col.d16, 16, c, '#14191f'); put(col.d24 + 14, 32, c, '#14191f'); put(col.l16, 16, '#1a1a1a', '#f4f1ea'); put(col.l24 + 14, 32, '#1a1a1a', '#f4f1ea'); }
+  else {
+    put(col.d16, 16, c, '#14191f'); put(col.d24, 24, c, '#14191f'); put(col.d32, 32, c, '#14191f');
+    put(col.l16, 16, '#1a1a1a', '#f4f1ea'); put(col.l24, 24, '#1a1a1a', '#f4f1ea'); put(col.l32, 32, '#1a1a1a', '#f4f1ea');
+  }
   for (const [x, faded] of [[col.mk, false], [col.mkf, true], [col.mkl, false], [col.mklf, true]]) {
-    const m = navHazardMarker(r.id, r.unlit, faded);
+    const m = navHazardMarker(r.id, r.unlit, faded, !!r.pair);
     s += `<g transform="translate(${x},${y + 8})">${m.html.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ').replace(/ style="opacity:([\d.]+)"/, ' opacity="$1"')}</g>`;
   }
 });
