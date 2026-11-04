@@ -1,5 +1,5 @@
 {
-  "about": "NDBs HEARD on VibeSDR receivers, identified by ear and by the skimmer, that no bundled source lists. Each record is our own reception: the ident and the frequency as measured; the position is the named airport's reference point from OurAirports airports.csv (public domain) — a locator sits on the approach, a few km from it. Lowest position precedence: any public source that lists the beacon wins. Add only beacons heard for hours, on more than one receiver or day.",
+  "about": "NDBs HEARD on VibeSDR receivers, identified by ear and by the skimmer, that no bundled source lists. Each record is our own reception: the ident and the frequency as measured; the position is the named airport's reference point from OurAirports airports.csv (public domain) — a locator sits on the approach, a few km from it. Lowest position precedence: any public source that lists the beacon wins. Add only beacons heard for hours, on more than one receiver or day. A beacon another source lists WITHOUT a name (OSM's NWI, KIM) may be here too: the other source keeps its position and this file supplies the name.",
   "beacons": [
     {
       "ident": "SND",
@@ -28,6 +28,27 @@
       "airport": "EGNX",
       "name": "East Midlands",
       "heard": "Stuart's RX888 (UberSDR, IO92) 12/12 repeats over 30 min 2026-11-04, and RSP1A cards"
+    },
+    {
+      "ident": "HAW",
+      "khz": 340.0,
+      "airport": "EGNR",
+      "name": "Hawarden",
+      "heard": "NickB (G4IRX) 21 dB 2026-10-30 and Stuart's RSP1A cards"
+    },
+    {
+      "ident": "NWI",
+      "khz": 342.5,
+      "airport": "EGSH",
+      "name": "Norwich",
+      "heard": "Stuart's RSP1A 102 h, NickB 26 dB; OSM lists it with no name"
+    },
+    {
+      "ident": "KIM",
+      "khz": 365.0,
+      "airport": "EGNJ",
+      "name": "Humberside",
+      "heard": "NickB 10 dB 2026-10-30; OSM lists it with no name"
     }
   ]
 }

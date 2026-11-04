@@ -150,6 +150,10 @@ int main(int argc, char** argv) {
         //   receptions put it in the list — scripts/ndb-heard.json — so it is matched to ITSELF now, below.)
         const auto un = vibendb::match(353499, "QXZ", true, lat, lon);
         ok(un.kind != vibendb::Match::Exact, "an ident in no source (QXZ on 353.5) is never matched to another beacon");
+        for (auto nm : { std::make_pair(342500.0, "NWI"), std::make_pair(365000.0, "KIM") }) {
+            const auto x = vibendb::match(nm.first, nm.second, false, 0, 0);
+            ok(x.kind == vibendb::Match::Exact && !x.n.name().empty(), std::string(nm.second) + " (OSM, nameless) now has a name: " + x.n.name());
+        }
         const auto em = vibendb::match(353499, "EME", true, lat, lon);
         ok(em.kind == vibendb::Match::Exact && em.n.ident() == "EME", "EME on 353.5 is matched to itself (our own receptions)");
         const auto f = vibendb::nearest(lat, lon, 5);
@@ -165,7 +169,7 @@ int main(int argc, char** argv) {
            std::string("the credit names every source: ") + vibendb::kNavaidCredit);
         ok(m.n.source().find("OurAirports") == 0, "WOD's position is OurAirports' (" + m.n.source() + ")");
         // ★★ V12 2026-11-04 scripts/ndb-heard.json — beacons heard for hours on Stuart's receivers that no bundled source lists.
-        for (auto bc : { std::make_pair(362500.0, "SND"), std::make_pair(388500.0, "CDF"), std::make_pair(393000.0, "EMW"), std::make_pair(353500.0, "EME") }) {
+        for (auto bc : { std::make_pair(362500.0, "SND"), std::make_pair(388500.0, "CDF"), std::make_pair(393000.0, "EMW"), std::make_pair(353500.0, "EME"), std::make_pair(340000.0, "HAW") }) {
             const auto hm = vibendb::match(bc.first, bc.second, false, 0, 0);
             ok(hm.kind == vibendb::Match::Exact && hm.n.source().find("heard") == 0,
                std::string(bc.second) + " is listed now, from our own receptions (" + hm.n.source() + ")");
