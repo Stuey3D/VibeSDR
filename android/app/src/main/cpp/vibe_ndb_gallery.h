@@ -27,6 +27,7 @@
 #pragma once
 #include "vibe_gallery.h"
 #include "vibe_mapdata.h"
+#include "vibe_ndb_gallery_clean.h"   // ★ kSetAsideHeading — the section the clean-up moved lines to
 #include "vibe_ndb_service.h"
 #include "vibe_png.h"
 
@@ -225,7 +226,7 @@ private:
         return m;
     }
     void openDay(int64_t day) {
-        day_ = day; rows_.clear(); dirty_ = newBeacon_ = false; cardName_.clear(); mapName_.clear();
+        day_ = day; rows_.clear(); setAside_.clear(); dirty_ = newBeacon_ = false; cardName_.clear(); mapName_.clear();
         cardAt_ = mapAt_ = 0;
         cardName_ = store_.adoptSlot(meta("ndbsum-" + date(day_)), /*anyOrigin=*/true);
         mapName_ = store_.adoptSlot(meta("ndbmap-" + date(day_)), /*anyOrigin=*/true);
@@ -267,10 +268,19 @@ private:
                           dist.c_str(), kDot, brg.c_str(), kDot, r->cc.empty() ? "-" : r->cc.c_str(), kDot, !r->name.empty() ? r->name.c_str() : r->listed ? "(published, no name)" : "(not in the published list)");
             o += b; o += "\n";
         }
+        // ★ V12 2026-11-04: the lines the clean-up set aside (vibe_ndb_gallery_clean.h) stay on the card, below the list
+        if (!setAside_.empty()) { o += "\n"; o += kSetAsideHeading; o += "\n"; o += setAside_; }
         return o;
     }
     /** ★ The card is its own record: read the day's rows back after a restart. A row that does not parse is skipped. */
-    void restore(const std::string& b) {
+    void restore(const std::string& whole) {
+        // ★★ V12 2026-11-04: the clean-up's section is NOT the day's list — kept as text, never read back as beacons
+        const size_t sa = whole.find(std::string("\n") + kSetAsideHeading + "\n");
+        if (sa != std::string::npos) {
+            setAside_ = whole.substr(sa + 2 + std::strlen(kSetAsideHeading));
+            if (!setAside_.empty() && setAside_.back() != '\n') setAside_ += '\n';
+        }
+        const std::string b = sa == std::string::npos ? whole : whole.substr(0, sa + 1);
         const size_t at = b.find("Each beacon, most recently heard first");
         if (at == std::string::npos) return;
         auto hms = [&](const std::string& s, int64_t& out) { int h, m, sec; if (std::sscanf(s.c_str(), "%2d:%2d:%2d", &h, &m, &sec) != 3) return false; out = day_ * 86400 + h * 3600 + m * 60 + sec; return true; };
@@ -489,6 +499,7 @@ private:
     int64_t day_ = 0, cardAt_ = 0, mapAt_ = 0;
     std::string cardName_, mapName_;
     std::map<std::string, Row> rows_;
+    std::string setAside_;   // ★ the clean-up's section of the day's card, carried through every rewrite
     // ★ the summary cards
     int64_t start_ = 0, hourFrom_ = 0, rollWrite_ = 0, lastHeard_ = 0;
     std::map<std::string, HourRow> hour_;

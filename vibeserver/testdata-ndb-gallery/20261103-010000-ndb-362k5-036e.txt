@@ -1,0 +1,26 @@
+NDB summary · 190–535 kHz · background decoding (Profile 1)
+2026-11-03 01:00 – 02:00 UTC · the hour
+
+Beacons heard:     18
+Furthest:          CRE Cres — 1389 km ESE
+Best SNR:          ES 25 dB
+
+Each beacon, lowest frequency first (ident · kHz · minutes heard · best SNR · distance · bearing · country · station):
+ES     · 225.001 kHz · heard 5 min · best 25 dB · - · - · - · (not in the published list)
+NWI    · 342.499 kHz · heard 11 min · best 5 dB · 152 km · 74° ENE · GB · (not in the published list)
+IEE    · 349.042 kHz · heard 1 min · best -30 dB · - · - · - · (not in the published list)
+IEE    · 349.979 kHz · heard 17 min · best 0 dB · - · - · - · (not in the published list)
+OX     · 367.499 kHz · heard 36 min · best 5 dB · 62 km · 210° SSW · GB · Oxford
+CDF    · 388.497 kHz · heard 3 min · best 8 dB · - · - · - · (not in the published list)
+CDEN   · 388.499 kHz · heard 2 min · best 7 dB · - · - · - · (not in the published list)
+EMW    · 393.000 kHz · heard 2 min · best 3 dB · - · - · - · (not in the published list)
+MRV    · 404.003 kHz · heard 9 min · best 6 dB · - · - · - · (not in the published list)
+BHX    · 406.001 kHz · heard 60 min · best 12 dB · 62 km · 285° WNW · GB · Birmingham
+BOT    · 406.497 kHz · heard 16 min · best 9 dB · 547 km · 95° E · DE · Bottrop
+BRI    · 414.007 kHz · heard 13 min · best 9 dB · 164 km · 231° SW · GB · Bristol
+MF     · 420.992 kHz · heard 3 min · best 5 dB · 1005 km · 56° NE · SE · (not in the published list)
+GBG    · 425.999 kHz · heard 28 min · best 11 dB · 1340 km · 110° ESE · AT · Gleichenberg
+CRE    · 433.006 kHz · heard 2 min · best 10 dB · 1389 km · 120° ESE · HR · Cres
+NRD    · 444.009 kHz · heard 36 min · best 10 dB · - · - · - · (not in the published list)
+IEE    · 531.245 kHz · heard 2 min · best -5 dB · - · - · - · (not in the published list)
+IEE    · 531.257 kHz · heard 2 min · best -9 dB · - · - · - · (not in the published list)

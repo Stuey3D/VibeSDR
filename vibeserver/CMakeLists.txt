@@ -1025,6 +1025,13 @@ add_executable(test-power-dips "${CMAKE_CURRENT_SOURCE_DIR}/test-power-dips.cpp"
 target_include_directories(test-power-dips PRIVATE "${CPP_DIR}")
 target_link_libraries(test-power-dips PRIVATE Threads::Threads)
 add_test(NAME power-dips COMMAND test-power-dips)
+# ★★ V12 the one-time NDB card clean-up (vibe_ndb_gallery_clean.h, 2026-11-04): all-dot / all-dash unlisted idents set
+#    aside on real cards from the Lenovo's gallery (testdata-ndb-gallery), what the cards derive recomputed, run once.
+add_executable(test-ndb-gallery-clean "${CMAKE_CURRENT_SOURCE_DIR}/test-ndb-gallery-clean.cpp")
+target_include_directories(test-ndb-gallery-clean PRIVATE "${CPP_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+vibe_sanitize(test-ndb-gallery-clean)
+target_link_libraries(test-ndb-gallery-clean PRIVATE Threads::Threads)
+add_test(NAME ndb-gallery-clean COMMAND test-ndb-gallery-clean "${CMAKE_CURRENT_SOURCE_DIR}/testdata-ndb-gallery")
 # ★ The mDNS responder's question parser (2026-10-17): compressed questions — Apple packs several lookups into one
 #   packet — were ignored, so <name>.local resolved only when ours happened to be the first, uncompressed question.
 #   ★ 2026-10-20: and respond() — whole query packets in, whole responses out: A+AAAA → A + NSEC, browse → PTR with

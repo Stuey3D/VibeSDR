@@ -1,0 +1,30 @@
+NDB summary · 190–535 kHz · background decoding (Profile 1)
+2026-11-03 07:00 – 07:44 UTC · 45 of the hour's 60 minutes
+
+Beacons heard:     22
+Furthest:          BRI Bristol — 164 km SW
+Best SNR:          EIE 21 dB
+
+Each beacon, lowest frequency first (ident · kHz · minutes heard · best SNR · distance · bearing · country · station):
+EIE    · 225.001 kHz · heard 2 min · best 21 dB · - · - · - · (not in the published list)
+EIE    · 285.245 kHz · heard 2 min · best 4 dB · - · - · - · (not in the published list)
+EIE    · 289.356 kHz · heard 25 min · best 8 dB · - · - · - · (not in the published list)
+MVC    · 327.000 kHz · heard 1 min · best 7 dB · - · - · - · (not in the published list)
+GST    · 331.002 kHz · heard 44 min · best 8 dB · 100 km · 243° WSW · GB · Gloucestershire
+CAM    · 331.002 kHz · heard 7 min · best 7 dB · - · - · - · (not in the published list)
+CAM    · 332.501 kHz · heard 44 min · best 12 dB · 73 km · 99° E · GB · Cambridge
+NWI    · 342.500 kHz · heard 44 min · best 15 dB · 152 km · 74° ENE · GB · (not in the published list)
+ES     · 349.136 kHz · heard 7 min · best 12 dB · - · - · - · (not in the published list)
+SE     · 349.182 kHz · heard 2 min · best 3 dB · - · - · - · (not in the published list)
+SE     · 349.833 kHz · heard 6 min · best 7 dB · - · - · - · (not in the published list)
+IEE    · 350.026 kHz · heard 9 min · best 4 dB · - · - · - · (not in the published list)
+ES     · 350.097 kHz · heard 4 min · best -0 dB · - · - · - · (not in the published list)
+OX     · 367.500 kHz · heard 45 min · best 12 dB · 62 km · 210° SSW · GB · Oxford
+BZ     · 385.999 kHz · heard 4 min · best 8 dB · 80 km · 219° SW · GB · Brize Norton
+CDF    · 388.500 kHz · heard 43 min · best 9 dB · - · - · - · (not in the published list)
+EMW    · 391.490 kHz · heard 1 min · best -28 dB · - · - · - · (not in the published list)
+EMW    · 393.000 kHz · heard 45 min · best 12 dB · - · - · - · (not in the published list)
+MRV    · 404.002 kHz · heard 32 min · best 10 dB · - · - · - · (not in the published list)
+BHX    · 406.000 kHz · heard 45 min · best 19 dB · 62 km · 285° WNW · GB · Birmingham
+EIE    · 410.003 kHz · heard 2 min · best 0 dB · - · - · - · (not in the published list)
+BRI    · 414.008 kHz · heard 41 min · best 13 dB · 164 km · 231° SW · GB · Bristol

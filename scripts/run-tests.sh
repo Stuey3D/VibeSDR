@@ -178,6 +178,10 @@ flags_for() {
     #    -10 dB by the fold, 5 and 12 WPM, 5 min of noise, the published list (Woodley, ≈, candidates, Find NDB), the
     #    service's report and a harmonic, the gallery's card and map and a restart. ~40 s.
     test-ndb)              echo "-O2 -lpthread -I tools/ndb-bench -I $VDSP -I $KISS" ;;
+    # ★★ V12 the one-time NDB card clean-up (vibe_ndb_gallery_clean.h, 2026-11-04): all-dot / all-dash unlisted idents set
+    #    aside on REAL cards (vibeserver/testdata-ndb-gallery), counts / furthest / best / titles recomputed, the marker,
+    #    an open card skipped, the day's writer keeping the section after a restart. Fast.
+    test-ndb-gallery-clean) echo "-O2 -lpthread" ;;
     # ★★ V12 DRM (decoders/drm/, docs/v12/DRM.md): the standard's tables, the coding layer, the test transmitter through annex
     #    B's channels in every robustness mode (every frame byte-checked), ±1.2 kHz / ±30 ppm, 10 min of noise + an AM signal =
     #    nothing, the audio framing, a CPU row. VIBE_TEST_AUDIO adds RRI off air (drm/). Optimised: ~2 min.

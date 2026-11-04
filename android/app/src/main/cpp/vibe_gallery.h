@@ -383,6 +383,69 @@ public:
         { std::lock_guard<std::mutex> ck(cacheMtx_); if (!refresh(dir) || findLive(dir, name, true) < 0) return false; }
         return appendLine(dir, indexLine(m, name, radio, 1));
     }
+    /** ★ The items a writer in THIS process holds open (create / adoptSlot, until close) — a migration leaves them be. */
+    std::set<std::string> heldOpen() const { return openNames(); }
+    /** ★ V12 2026-11-04 (the NDB clean-up, vibe_ndb_gallery_clean.h): the live items of one kind, OLDEST FIRST — their
+     *  names only (~40 bytes each), so a migration can then read and rewrite them one at a time. */
+    std::vector<std::string> names(const std::string& kind) const {
+        std::vector<std::string> out;
+        const std::string dir = this->dir();
+        if (dir.empty()) return out;
+        Lock fl(dir, true);
+        std::lock_guard<std::mutex> ck(cacheMtx_);
+        if (!refresh(dir)) return out;
+        int want = -1;
+        for (size_t k = 0; k < cache_.kinds.size(); k++) if (cache_.kinds[k] == kind) want = (int)k;
+        if (want < 0) return out;
+        const int fd = openIndex(dir);
+        if (fd < 0) return out;
+        std::string l;
+        for (size_t i = cache_.firstLive; i < cache_.rows.size(); i++) {
+            const Row& r = cache_.rows[i];
+            if ((r.flags & kDead) || r.kind != (uint8_t)want || !lineAt(fd, r, l)) continue;
+            const std::string f = lineStr(l, "f");
+            if (safeName(f)) out.push_back(f);
+        }
+        ::close(fd);
+        return out;
+    }
+    /** ★ V12 2026-11-04: an item's text rewritten WHERE IT STANDS with a new title, every other field of its index line
+     *  kept exactly as its writer made it — time, origin, profile, radio, slot, download name, partial (a migration
+     *  must not need the writer's Meta, nor this process's radio label). tmp + rename, ONE line appended (",\"re\":1").
+     *  False when it is gone. */
+    bool rewrite(const std::string& name, const std::string& title, const std::string& body) {
+        if (!safeName(name)) return false;
+        std::string dir; uint64_t limit;
+        { std::lock_guard<std::mutex> lk(m_); dir = dir_; limit = limit_; }
+        if (dir.empty() || limit == 0) return false;
+        Lock fl(dir);
+        std::string l;
+        {
+            std::lock_guard<std::mutex> ck(cacheMtx_);
+            if (!refresh(dir)) return false;
+            const long i = findLive(dir, name, true);
+            const int fd = i >= 0 ? openIndex(dir) : -1;
+            const bool got = fd >= 0 && lineAt(fd, cache_.rows[(size_t)i], l);
+            if (fd >= 0) ::close(fd);
+            if (!got) return false;
+        }
+        while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+        l = stripRe(l);
+        const size_t t = l.find("\"title\":\"");
+        if (t == std::string::npos || l.empty() || l.back() != '}') return false;
+        size_t e = t + 9;
+        while (e < l.size() && l[e] != '"') e += l[e] == '\\' ? 2 : 1;
+        if (e >= l.size()) return false;
+        l = l.substr(0, t + 9) + jsonEsc(printable(title, 120)) + l.substr(e);
+        l = l.substr(0, l.size() - 1) + ",\"re\":1}\n";
+        struct stat st{};
+        if (::stat((dir + "/" + name).c_str(), &st) != 0) return false;
+        const std::string tmpf = dir + "/." + name + ".tmp";
+        if (!writeFile(tmpf, body, false) || ::rename(tmpf.c_str(), (dir + "/" + name).c_str()) != 0) { ::unlink(tmpf.c_str()); return false; }
+        appendLine(dir, l);
+        evictLocked(dir, limit, openNames());
+        return true;
+    }
     /** ★ An item's whole text, for a writer that rebuilds its state from what it wrote (ISM's summary after a restart).
      *  Capped at `cap` bytes. False when it is not ours or not there. */
     bool readItem(const std::string& name, std::string& out, size_t cap = 4u << 20) const {
